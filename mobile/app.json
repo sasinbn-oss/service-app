@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Service App",
+    "slug": "service-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "แอปนี้ต้องใช้ตำแหน่ง GPS เพื่อยืนยันการรายงานตัวเข้าสาขา"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "แอปนี้ต้องใช้ตำแหน่ง GPS เพื่อยืนยันการรายงานตัวเข้าสาขา"
+        }
+      ]
+    ]
+  }
+}

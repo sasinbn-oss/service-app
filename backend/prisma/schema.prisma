@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// SQLite has no native enum support in Prisma; roles/statuses are plain
+// strings constrained by application code (see src/utils/constants.ts).
+
+model User {
+  id            Int             @id @default(autoincrement())
+  employeeCode  String          @unique
+  name          String
+  phone         String?
+  passwordHash  String
+  role          String          @default("EMPLOYEE")
+  createdAt     DateTime        @default(now())
+  vehicleLogs   VehicleLog[]
+  branchCheckIns BranchCheckIn[]
+  workLogs      WorkLog[]
+}
+
+model Vehicle {
+  id           Int           @id @default(autoincrement())
+  plateNumber  String        @unique
+  brand        String?
+  model        String?
+  type         String?
+  status       String        @default("AVAILABLE")
+  createdAt    DateTime      @default(now())
+  logs         VehicleLog[]
+}
+
+model VehicleLog {
+  id            Int               @id @default(autoincrement())
+  vehicleId     Int
+  vehicle       Vehicle           @relation(fields: [vehicleId], references: [id])
+  userId        Int
+  user          User              @relation(fields: [userId], references: [id])
+  purpose       String
+  destination   String?
+  startMileage  Int
+  endMileage    Int?
+  startedAt     DateTime          @default(now())
+  endedAt       DateTime?
+  status        String            @default("ONGOING")
+}
+
+model Branch {
+  id            Int             @id @default(autoincrement())
+  name          String
+  code          String          @unique
+  address       String?
+  latitude      Float
+  longitude     Float
+  radiusMeters  Int             @default(200)
+  createdAt     DateTime        @default(now())
+  checkIns      BranchCheckIn[]
+  workLogs      WorkLog[]
+}
+
+model BranchCheckIn {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id])
+  branchId        Int
+  branch          Branch   @relation(fields: [branchId], references: [id])
+  latitude        Float
+  longitude       Float
+  distanceMeters  Float
+  withinRadius    Boolean
+  note            String?
+  checkedInAt     DateTime @default(now())
+}
+
+model WorkLog {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  user            User      @relation(fields: [userId], references: [id])
+  workDate        DateTime
+  taskDescription String
+  hoursSpent      Float?
+  branchId        Int?
+  branch          Branch?   @relation(fields: [branchId], references: [id])
+  createdAt       DateTime  @default(now())
+}
