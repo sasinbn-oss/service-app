@@ -15,7 +15,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "seed": "ts-node prisma/seed.ts",
-    "import:parts": "ts-node scripts/import-spare-parts.ts"
+    "import:parts": "ts-node scripts/import-spare-parts.ts",
+    "preview:flow": "ts-node scripts/preview-flowchart.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
