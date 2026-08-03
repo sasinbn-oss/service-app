@@ -33,9 +33,13 @@ export default function MainNavigator() {
       screenOptions={{
         headerStyle: { backgroundColor: colors.card },
         headerTintColor: colors.text,
+        headerTitleStyle: { fontSize: 17, fontWeight: "700" },
+        headerShadowVisible: false,
+        contentStyle: { backgroundColor: colors.background },
       }}
     >
-      <Stack.Screen name="Home" component={HomeScreen} options={{ title: "หน้าหลัก" }} />
+      {/* Home draws its own header with the account row and section tabs. */}
+      <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
 
       <Stack.Screen
         name="GuideList"

@@ -11,7 +11,7 @@ import {
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, radius, shadow } from "../theme";
 import { TroubleshootingGuide } from "../types";
 import { MainStackParamList } from "../navigation/types";
 
@@ -129,8 +129,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
-    padding: 12,
+    borderRadius: radius.md,
+    padding: 14,
     fontSize: 16,
   },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingBottom: 8 },
@@ -150,8 +150,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.card,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
+    ...shadow.card,
     padding: 16,
     marginBottom: 12,
   },

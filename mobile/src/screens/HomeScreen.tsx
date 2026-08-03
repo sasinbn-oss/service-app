@@ -1,10 +1,10 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { colors } from "../theme";
+import { colors, radius, shadow, spacing } from "../theme";
 import { MainStackParamList } from "../navigation/types";
 
 type Props = NativeStackScreenProps<MainStackParamList, "Home">;
@@ -15,71 +15,158 @@ type ScreenName = {
   [K in keyof MainStackParamList]: MainStackParamList[K] extends undefined ? K : never;
 }[keyof MainStackParamList];
 
-interface Feature {
+type TabKey = "work" | "history" | "admin";
+
+interface Entry {
   screen: ScreenName;
   label: string;
   description: string;
   icon: string;
-  history?: { screen: ScreenName; label: string };
+  tint: string;
+  /** Shows the pending-approval count on the review queue. */
+  badge?: "pendingRequests";
 }
 
-const features: Feature[] = [
+const workEntries: Entry[] = [
   {
     screen: "FlowList",
     label: "วินิจฉัยอาการเสีย",
     description: "ตอบใช่/ไม่ทีละขั้น พร้อมผังวงจร",
     icon: "🔧",
-    history: { screen: "GuideList", label: "ดูคู่มือแบบข้อความ" },
+    tint: colors.primarySoft,
   },
   {
     screen: "SparePartList",
     label: "รายการอะไหล่",
     description: "ค้นหารหัส ยี่ห้อ และรูปอะไหล่",
     icon: "⚙️",
+    tint: "#f1f5f9",
   },
   {
     screen: "BranchCheckIn",
     label: "รายงานตัวเข้าสาขา",
     description: "ยืนยันตำแหน่งด้วย GPS",
     icon: "📍",
-    history: { screen: "BranchHistory", label: "ดูประวัติการรายงานตัว" },
+    tint: colors.dangerSoft,
   },
   {
     screen: "WorkLogForm",
     label: "บันทึกการทำงาน",
     description: "ลงงานที่ทำในแต่ละวัน",
     icon: "📝",
-    history: { screen: "WorkLogHistory", label: "ดูประวัติการทำงาน" },
+    tint: colors.warningSoft,
   },
   {
     screen: "VehicleCheckIn",
     label: "ลงทะเบียนใช้รถ",
     description: "เช็คอิน / คืนรถ พร้อมเลขไมล์",
     icon: "🚗",
-    history: { screen: "VehicleHistory", label: "ดูประวัติการใช้รถ" },
+    tint: colors.successSoft,
   },
   {
     screen: "ConsumableRequest",
     label: "เบิกของใช้สิ้นเปลือง",
     description: "ขอเบิกของจากออฟฟิศ",
     icon: "📦",
-    history: { screen: "MyConsumableRequests", label: "ดูสถานะการเบิกของ" },
+    tint: "#f3e8ff",
   },
 ];
 
-const adminActions: { screen: ScreenName; label: string }[] = [
-  { screen: "ReviewRequests", label: "อนุมัติคำขอเบิก" },
-  { screen: "ManageFlows", label: "ตรวจสอบผังวินิจฉัย" },
-  { screen: "ManageGuides", label: "จัดการคู่มือแก้ปัญหา" },
-  { screen: "ManageSpareParts", label: "จัดการข้อมูลอะไหล่" },
-  { screen: "ManageConsumables", label: "จัดการของใช้สิ้นเปลือง" },
-  { screen: "ManageVehicles", label: "จัดการข้อมูลรถ" },
-  { screen: "ManageBranches", label: "จัดการข้อมูลสาขา" },
+const historyEntries: Entry[] = [
+  {
+    screen: "BranchHistory",
+    label: "ประวัติการรายงานตัว",
+    description: "สาขาที่เข้าไปและเวลาที่บันทึก",
+    icon: "📍",
+    tint: colors.dangerSoft,
+  },
+  {
+    screen: "WorkLogHistory",
+    label: "ประวัติการทำงาน",
+    description: "งานที่ลงบันทึกย้อนหลัง",
+    icon: "📝",
+    tint: colors.warningSoft,
+  },
+  {
+    screen: "VehicleHistory",
+    label: "ประวัติการใช้รถ",
+    description: "การเบิกใช้และคืนรถ",
+    icon: "🚗",
+    tint: colors.successSoft,
+  },
+  {
+    screen: "MyConsumableRequests",
+    label: "ประวัติการเบิกของ",
+    description: "สถานะคำขอเบิกของคุณ",
+    icon: "📦",
+    tint: "#f3e8ff",
+  },
+  {
+    screen: "GuideList",
+    label: "คู่มือแบบข้อความ",
+    description: "คู่มือแก้ปัญหาที่เขียนเอง",
+    icon: "📖",
+    tint: colors.primarySoft,
+  },
+];
+
+const adminEntries: Entry[] = [
+  {
+    screen: "ReviewRequests",
+    label: "อนุมัติคำขอเบิก",
+    description: "ตรวจและอนุมัติคำขอของพนักงาน",
+    icon: "✅",
+    tint: colors.successSoft,
+    badge: "pendingRequests",
+  },
+  {
+    screen: "ManageFlows",
+    label: "ตรวจสอบผังวินิจฉัย",
+    description: "เติมเส้นทางที่นำเข้าไม่สมบูรณ์",
+    icon: "🧭",
+    tint: colors.primarySoft,
+  },
+  {
+    screen: "ManageGuides",
+    label: "จัดการคู่มือแก้ปัญหา",
+    description: "เพิ่ม แก้ไข ลบหัวข้อคู่มือ",
+    icon: "📖",
+    tint: colors.primarySoft,
+  },
+  {
+    screen: "ManageSpareParts",
+    label: "จัดการข้อมูลอะไหล่",
+    description: "เพิ่มอะไหล่และอัปโหลดรูป",
+    icon: "⚙️",
+    tint: "#f1f5f9",
+  },
+  {
+    screen: "ManageConsumables",
+    label: "จัดการของใช้สิ้นเปลือง",
+    description: "รายการของและจำนวนคงเหลือ",
+    icon: "📦",
+    tint: "#f3e8ff",
+  },
+  {
+    screen: "ManageVehicles",
+    label: "จัดการข้อมูลรถ",
+    description: "ทะเบียนและสถานะรถ",
+    icon: "🚗",
+    tint: colors.successSoft,
+  },
+  {
+    screen: "ManageBranches",
+    label: "จัดการข้อมูลสาขา",
+    description: "พิกัดและรัศมีของแต่ละสาขา",
+    icon: "🏢",
+    tint: colors.warningSoft,
+  },
 ];
 
 export default function HomeScreen({ navigation }: Props) {
   const { user, logout } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const [tab, setTab] = useState<TabKey>("work");
   const [pendingCount, setPendingCount] = useState(0);
 
   useFocusEffect(
@@ -92,122 +179,193 @@ export default function HomeScreen({ navigation }: Props) {
     }, [isAdmin])
   );
 
+  const tabs = useMemo(
+    () =>
+      [
+        { key: "work" as const, label: "งานช่าง" },
+        { key: "history" as const, label: "ประวัติ" },
+        ...(isAdmin ? [{ key: "admin" as const, label: "หลังบ้าน" }] : []),
+      ],
+    [isAdmin]
+  );
+
+  const entries =
+    tab === "work" ? workEntries : tab === "history" ? historyEntries : adminEntries;
+
+  const initial = user?.name?.trim().charAt(0).toUpperCase() || "?";
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <View style={styles.container}>
       <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.greeting}>สวัสดี, {user?.name}</Text>
-          <Text style={styles.role}>{isAdmin ? "ผู้ดูแลระบบ" : "พนักงาน"}</Text>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{initial}</Text>
         </View>
-        <TouchableOpacity onPress={logout}>
-          <Text style={styles.logout}>ออกจากระบบ</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.greeting} numberOfLines={1}>
+            {user?.name}
+          </Text>
+          <View style={styles.rolePill}>
+            <Text style={styles.roleText}>{isAdmin ? "ผู้ดูแลระบบ" : "ช่างเทคนิค"}</Text>
+          </View>
+        </View>
+        <TouchableOpacity onPress={logout} style={styles.logoutButton}>
+          <Text style={styles.logoutText}>ออกจากระบบ</Text>
         </TouchableOpacity>
       </View>
 
-      {features.map((feature) => (
-        <View key={feature.screen} style={styles.card}>
-          <TouchableOpacity
-            style={styles.cardMain}
-            onPress={() => navigation.navigate(feature.screen)}
-          >
-            <Text style={styles.icon}>{feature.icon}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardLabel}>{feature.label}</Text>
-              <Text style={styles.cardDescription}>{feature.description}</Text>
-            </View>
-            <Text style={styles.chevron}>›</Text>
-          </TouchableOpacity>
-          {feature.history && (
+      <View style={styles.tabBar}>
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
             <TouchableOpacity
-              style={styles.historyLink}
-              onPress={() => navigation.navigate(feature.history!.screen)}
+              key={t.key}
+              onPress={() => setTab(t.key)}
+              style={[styles.tab, active && styles.tabActive]}
             >
-              <Text style={styles.historyText}>{feature.history.label}</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ))}
-
-      {isAdmin && (
-        <>
-          <Text style={styles.sectionTitle}>สำหรับผู้ดูแลระบบ</Text>
-          {adminActions.map((action) => (
-            <TouchableOpacity
-              key={action.screen}
-              style={styles.adminRow}
-              onPress={() => navigation.navigate(action.screen)}
-            >
-              <Text style={styles.adminLabel}>{action.label}</Text>
-              {action.screen === "ReviewRequests" && pendingCount > 0 && (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{pendingCount}</Text>
+              <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
+              {t.key === "admin" && pendingCount > 0 && (
+                <View style={styles.tabDot}>
+                  <Text style={styles.tabDotText}>{pendingCount}</Text>
                 </View>
               )}
-              <Text style={styles.chevron}>›</Text>
             </TouchableOpacity>
-          ))}
-        </>
-      )}
-    </ScrollView>
+          );
+        })}
+      </View>
+
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {tab === "admin" && (
+          <Text style={styles.sectionNote}>
+            เมนูจัดการข้อมูลหลังบ้าน — มีผลกับผู้ใช้ทุกคนในระบบ
+          </Text>
+        )}
+
+        {entries.map((entry) => (
+          <TouchableOpacity
+            key={entry.screen}
+            style={styles.card}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate(entry.screen)}
+          >
+            <View style={[styles.iconChip, { backgroundColor: entry.tint }]}>
+              <Text style={styles.icon}>{entry.icon}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardLabel}>{entry.label}</Text>
+              <Text style={styles.cardDescription}>{entry.description}</Text>
+            </View>
+            {entry.badge === "pendingRequests" && pendingCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{pendingCount}</Text>
+              </View>
+            )}
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 20, paddingBottom: 32 },
   header: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 20,
-  },
-  greeting: { fontSize: 20, fontWeight: "700", color: colors.text },
-  role: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  logout: { color: colors.danger, fontWeight: "600" },
-  card: {
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
     backgroundColor: colors.card,
-    borderRadius: 12,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  greeting: { fontSize: 17, fontWeight: "700", color: colors.text },
+  rolePill: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    marginTop: 3,
+  },
+  roleText: { fontSize: 11, fontWeight: "700", color: colors.primaryDark },
+  logoutButton: {
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: 12,
-    overflow: "hidden",
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  cardMain: { flexDirection: "row", alignItems: "center", padding: 16, gap: 14 },
-  icon: { fontSize: 26 },
-  cardLabel: { fontSize: 16, fontWeight: "700", color: colors.text },
-  cardDescription: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  chevron: { fontSize: 24, color: colors.textMuted },
-  historyLink: {
-    borderTopWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+  logoutText: { color: colors.danger, fontWeight: "600", fontSize: 13 },
+  tabBar: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.md,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
-  historyText: { fontSize: 13, color: colors.primary, fontWeight: "600" },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.textMuted,
-    marginTop: 20,
-    marginBottom: 10,
-  },
-  adminRow: {
+  tab: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    backgroundColor: colors.card,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    padding: 14,
-    marginBottom: 8,
+    gap: 6,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.background,
   },
-  adminLabel: { flex: 1, fontSize: 15, fontWeight: "600", color: colors.text },
+  tabActive: { backgroundColor: colors.text },
+  tabText: { fontSize: 14, fontWeight: "600", color: colors.textMuted },
+  tabTextActive: { color: "#fff" },
+  tabDot: {
+    minWidth: 18,
+    paddingHorizontal: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.danger,
+    alignItems: "center",
+  },
+  tabDotText: { color: "#fff", fontSize: 11, fontWeight: "700" },
+  content: { padding: spacing.xl, paddingBottom: spacing.xxl },
+  sectionNote: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+  },
+  card: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.lg,
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
+  iconChip: {
+    width: 46,
+    height: 46,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  icon: { fontSize: 22 },
+  cardLabel: { fontSize: 16, fontWeight: "700", color: colors.text },
+  cardDescription: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  chevron: { fontSize: 26, color: colors.textFaint },
   badge: {
     minWidth: 24,
     paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 12,
+    borderRadius: radius.pill,
     backgroundColor: colors.danger,
     alignItems: "center",
   },

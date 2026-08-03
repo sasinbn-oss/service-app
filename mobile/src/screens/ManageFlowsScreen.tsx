@@ -13,7 +13,7 @@ import {
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, shadow } from "../theme";
 import { TroubleshootFlow, TroubleshootFlowSummary, TroubleshootNode } from "../types";
 
 type Picking = { node: TroubleshootNode; answer: "yesKey" | "noKey" } | null;
@@ -203,8 +203,7 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: colors.card,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
+    ...shadow.card,
     padding: 14,
     marginBottom: 10,
   },

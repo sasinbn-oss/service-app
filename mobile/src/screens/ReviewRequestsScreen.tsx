@@ -11,7 +11,7 @@ import {
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, shadow } from "../theme";
 import { ConsumableRequest, RequestStatus } from "../types";
 import StatusBadge from "../components/StatusBadge";
 
@@ -198,8 +198,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.card,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
+    ...shadow.card,
     padding: 16,
     marginBottom: 12,
   },
