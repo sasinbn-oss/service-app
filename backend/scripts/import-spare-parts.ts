@@ -153,21 +153,36 @@ async function saveImage(sparePartId: number, image: ExtractedImage) {
   ]);
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  const filePath = args.find((a) => !a.startsWith("--"));
-  const commit = args.includes("--yes");
-  const imagesFlagIndex = args.indexOf("--images");
-  const imagesDir = imagesFlagIndex >= 0 ? args[imagesFlagIndex + 1] : undefined;
+interface ImportTotals {
+  rows: number;
+  skipped: number;
+  created: number;
+  updated: number;
+  images: number;
+}
 
-  if (!filePath) {
-    console.error("Usage: npm run import:parts -- <file.xlsx> [--yes] [--images <folder>]");
-    process.exit(1);
+// Flags may appear anywhere; everything else is treated as an input file, so
+// several spreadsheets can be imported in one command.
+function parseArgs(argv: string[]) {
+  const files: string[] = [];
+  let commit = false;
+  let imagesDir: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--yes") commit = true;
+    else if (arg === "--images") imagesDir = argv[++i];
+    else if (!arg.startsWith("--")) files.push(arg);
   }
-  if (!fs.existsSync(filePath)) {
-    console.error(`ไม่พบไฟล์: ${path.resolve(filePath)}`);
-    process.exit(1);
-  }
+  return { files, commit, imagesDir };
+}
+
+async function importFile(
+  filePath: string,
+  commit: boolean,
+  imagesDir: string | undefined
+): Promise<ImportTotals> {
+  const totals: ImportTotals = { rows: 0, skipped: 0, created: 0, updated: 0, images: 0 };
 
   const sheet = await readWorkbook(filePath);
   const mapping = detectColumns(sheet.getRow(1));
@@ -189,12 +204,14 @@ async function main() {
   }
   console.log();
 
+  // Skip this file rather than aborting, so one bad sheet cannot stop the rest
+  // of a multi-file import.
   if (mapping.partCode === undefined || mapping.name === undefined) {
     console.error(
-      "หาคอลัมน์รหัสสินค้าหรือชื่อสินค้าไม่เจอ\n" +
-        "กรุณาแก้หัวตารางแถวแรกให้มีคำว่า 'รหัส' และ 'ชื่อ' แล้วรันใหม่"
+      "  ⚠ ข้ามไฟล์นี้: หาคอลัมน์รหัสสินค้าหรือชื่อสินค้าไม่เจอ\n" +
+        "    กรุณาแก้หัวตารางแถวแรกให้มีคำว่า 'รหัส' และ 'ชื่อ'"
     );
-    process.exit(1);
+    return totals;
   }
 
   const rows: ParsedRow[] = [];
@@ -253,17 +270,10 @@ async function main() {
     if (skipped.length > 10) console.log(`  ... และอีก ${skipped.length - 10} แถว`);
   }
 
-  if (!commit) {
-    console.log(
-      "\n── โหมดตรวจสอบ ยังไม่ได้บันทึกลงฐานข้อมูล ──\n" +
-        "ถ้าข้อมูลด้านบนถูกต้องแล้ว ให้รันใหม่โดยเติม --yes ต่อท้าย"
-    );
-    return;
-  }
+  totals.rows = rows.length;
+  totals.skipped = skipped.length;
 
-  let created = 0;
-  let updated = 0;
-  let imagesSaved = 0;
+  if (!commit) return totals;
 
   for (const row of rows) {
     const existing = await prisma.sparePart.findUnique({ where: { partCode: row.partCode } });
@@ -280,17 +290,20 @@ async function main() {
     const part = existing
       ? await prisma.sparePart.update({ where: { partCode: row.partCode }, data })
       : await prisma.sparePart.create({ data: { partCode: row.partCode, ...data } });
-    existing ? updated++ : created++;
+    if (existing) totals.updated++;
+    else totals.created++;
 
     const embedded = embeddedImages.get(row.rowNumber);
     if (embedded) {
       await saveImage(part.id, embedded);
-      imagesSaved++;
+      totals.images++;
     }
   }
 
-  console.log(`\nบันทึกแล้ว: เพิ่มใหม่ ${created} รายการ, อัปเดต ${updated} รายการ`);
-  if (imagesSaved > 0) console.log(`นำเข้ารูปจากในไฟล์ Excel ${imagesSaved} รูป`);
+  console.log(
+    `\nบันทึกแล้ว: เพิ่มใหม่ ${totals.created} รายการ, อัปเดต ${totals.updated} รายการ`
+  );
+  if (totals.images > 0) console.log(`นำเข้ารูปจากในไฟล์ Excel ${totals.images} รูป`);
 
   if (imagesDir) {
     if (!fs.existsSync(imagesDir)) {
@@ -323,9 +336,57 @@ async function main() {
           mimeType: IMAGE_MIME[path.extname(match).toLowerCase()],
         });
         imported++;
+        totals.images++;
       }
       console.log(`นำเข้ารูปจากโฟลเดอร์ ${imported} รูป, ไม่พบรูปสำหรับ ${missing} รายการ`);
     }
+  }
+
+  return totals;
+}
+
+async function main() {
+  const { files, commit, imagesDir } = parseArgs(process.argv.slice(2));
+
+  if (files.length === 0) {
+    console.error(
+      "Usage: npm run import:parts -- <file.xlsx> [file2.xlsx ...] [--yes] [--images <folder>]"
+    );
+    process.exit(1);
+  }
+
+  const missing = files.filter((f) => !fs.existsSync(f));
+  if (missing.length > 0) {
+    for (const f of missing) console.error(`ไม่พบไฟล์: ${path.resolve(f)}`);
+    process.exit(1);
+  }
+
+  const grand: ImportTotals = { rows: 0, skipped: 0, created: 0, updated: 0, images: 0 };
+  for (const file of files) {
+    if (files.length > 1) console.log(`\n${"=".repeat(60)}`);
+    const totals = await importFile(file, commit, imagesDir);
+    grand.rows += totals.rows;
+    grand.skipped += totals.skipped;
+    grand.created += totals.created;
+    grand.updated += totals.updated;
+    grand.images += totals.images;
+  }
+
+  if (files.length > 1) {
+    console.log(`\n${"=".repeat(60)}`);
+    console.log(`รวมทั้งหมด ${files.length} ไฟล์:`);
+    console.log(`  อ่านได้ ${grand.rows} รายการ, ข้าม ${grand.skipped} แถว`);
+    if (commit) {
+      console.log(`  เพิ่มใหม่ ${grand.created} รายการ, อัปเดต ${grand.updated} รายการ`);
+      console.log(`  นำเข้ารูป ${grand.images} รูป`);
+    }
+  }
+
+  if (!commit) {
+    console.log(
+      "\n── โหมดตรวจสอบ ยังไม่ได้บันทึกลงฐานข้อมูล ──\n" +
+        "ถ้าข้อมูลด้านบนถูกต้องแล้ว ให้รันใหม่โดยเติม --yes ต่อท้าย"
+    );
   }
 }
 
