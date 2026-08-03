@@ -104,6 +104,50 @@ model TroubleshootingGuide {
   updatedAt DateTime @updatedAt
 }
 
+// An interactive diagnostic tree imported from a manufacturer flowchart.
+// Technicians answer ใช่/ไม่ at each node until they reach a fix.
+model TroubleshootFlow {
+  id          Int                 @id @default(autoincrement())
+  title       String
+  machineType String?
+  notes       String?
+  // Key of the node the technician starts at.
+  rootKey     String?
+  sourceFile  String?
+  order       Int                 @default(0)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  nodes       TroubleshootNode[]
+  images      TroubleshootImage[]
+}
+
+model TroubleshootNode {
+  id         Int              @id @default(autoincrement())
+  flowId     Int
+  flow       TroubleshootFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  // Stable identifier used by yesKey/noKey; unique within a flow.
+  key        String
+  // QUESTION | ACTION
+  kind       String
+  text       String
+  // Marker such as "(1)" cross-referencing the wiring diagrams.
+  stepNumber String?
+  yesKey     String?
+  noKey      String?
+  order      Int              @default(0)
+
+  @@unique([flowId, key])
+}
+
+model TroubleshootImage {
+  id       Int              @id @default(autoincrement())
+  flowId   Int
+  flow     TroubleshootFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  mimeType String
+  data     Bytes
+  order    Int              @default(0)
+}
+
 model SparePart {
   id          Int      @id @default(autoincrement())
   partCode    String   @unique

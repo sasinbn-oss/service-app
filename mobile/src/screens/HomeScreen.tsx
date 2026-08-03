@@ -25,10 +25,11 @@ interface Feature {
 
 const features: Feature[] = [
   {
-    screen: "GuideList",
-    label: "คู่มือแก้ปัญหา",
-    description: "ค้นหาอาการเสียและวิธีแก้",
+    screen: "FlowList",
+    label: "วินิจฉัยอาการเสีย",
+    description: "ตอบใช่/ไม่ทีละขั้น พร้อมผังวงจร",
     icon: "🔧",
+    history: { screen: "GuideList", label: "ดูคู่มือแบบข้อความ" },
   },
   {
     screen: "SparePartList",
@@ -68,6 +69,7 @@ const features: Feature[] = [
 
 const adminActions: { screen: ScreenName; label: string }[] = [
   { screen: "ReviewRequests", label: "อนุมัติคำขอเบิก" },
+  { screen: "ManageFlows", label: "ตรวจสอบผังวินิจฉัย" },
   { screen: "ManageGuides", label: "จัดการคู่มือแก้ปัญหา" },
   { screen: "ManageSpareParts", label: "จัดการข้อมูลอะไหล่" },
   { screen: "ManageConsumables", label: "จัดการของใช้สิ้นเปลือง" },

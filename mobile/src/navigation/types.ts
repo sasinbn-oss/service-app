@@ -9,6 +9,8 @@ export type MainStackParamList = {
   // 1. Troubleshooting guide
   GuideList: undefined;
   GuideDetail: { id: number };
+  FlowList: undefined;
+  FlowRun: { id: number; title: string };
 
   // 2. Spare part list
   SparePartList: undefined;
@@ -33,6 +35,7 @@ export type MainStackParamList = {
   // Admin
   ReviewRequests: undefined;
   ManageGuides: undefined;
+  ManageFlows: undefined;
   ManageSpareParts: undefined;
   ManageConsumables: undefined;
   ManageVehicles: undefined;

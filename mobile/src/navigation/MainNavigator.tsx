@@ -3,6 +3,8 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import HomeScreen from "../screens/HomeScreen";
 import GuideListScreen from "../screens/GuideListScreen";
 import GuideDetailScreen from "../screens/GuideDetailScreen";
+import FlowListScreen from "../screens/FlowListScreen";
+import FlowRunScreen from "../screens/FlowRunScreen";
 import SparePartListScreen from "../screens/SparePartListScreen";
 import SparePartDetailScreen from "../screens/SparePartDetailScreen";
 import BranchCheckInScreen from "../screens/BranchCheckInScreen";
@@ -15,6 +17,7 @@ import ConsumableRequestScreen from "../screens/ConsumableRequestScreen";
 import MyConsumableRequestsScreen from "../screens/MyConsumableRequestsScreen";
 import ReviewRequestsScreen from "../screens/ReviewRequestsScreen";
 import ManageGuidesScreen from "../screens/ManageGuidesScreen";
+import ManageFlowsScreen from "../screens/ManageFlowsScreen";
 import ManageSparePartsScreen from "../screens/ManageSparePartsScreen";
 import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
@@ -44,6 +47,13 @@ export default function MainNavigator() {
         component={GuideDetailScreen}
         options={{ title: "วิธีแก้ปัญหา" }}
       />
+
+      <Stack.Screen
+        name="FlowList"
+        component={FlowListScreen}
+        options={{ title: "ผังวินิจฉัยทีละขั้น" }}
+      />
+      <Stack.Screen name="FlowRun" component={FlowRunScreen} options={{ title: "วินิจฉัย" }} />
 
       <Stack.Screen
         name="SparePartList"
@@ -109,6 +119,11 @@ export default function MainNavigator() {
         name="ManageGuides"
         component={ManageGuidesScreen}
         options={{ title: "จัดการคู่มือแก้ปัญหา" }}
+      />
+      <Stack.Screen
+        name="ManageFlows"
+        component={ManageFlowsScreen}
+        options={{ title: "ตรวจสอบผังวินิจฉัย" }}
       />
       <Stack.Screen
         name="ManageSpareParts"

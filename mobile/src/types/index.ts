@@ -121,3 +121,40 @@ export interface ConsumableRequest {
   user: Pick<User, "id" | "name" | "employeeCode">;
   reviewedBy?: Pick<User, "id" | "name" | "employeeCode"> | null;
 }
+
+export type FlowNodeKind = "QUESTION" | "ACTION";
+
+export interface TroubleshootNode {
+  id: number;
+  flowId: number;
+  key: string;
+  kind: FlowNodeKind;
+  text: string;
+  stepNumber?: string | null;
+  yesKey?: string | null;
+  noKey?: string | null;
+  order: number;
+}
+
+/** Shape returned by the list endpoint. */
+export interface TroubleshootFlowSummary {
+  id: number;
+  title: string;
+  machineType?: string | null;
+  notes?: string | null;
+  questionCount: number;
+  imageCount: number;
+  incompleteCount: number;
+  isReady: boolean;
+}
+
+export interface TroubleshootFlow {
+  id: number;
+  title: string;
+  machineType?: string | null;
+  notes?: string | null;
+  rootKey?: string | null;
+  sourceFile?: string | null;
+  nodes: TroubleshootNode[];
+  images: { id: number; url: string }[];
+}
