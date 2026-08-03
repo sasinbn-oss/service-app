@@ -148,14 +148,20 @@ npm run import:flow -- "C:\path\DryerTroubleshoot.xlsx" --yes --machine "เค�
 
 ทุก endpoint (ยกเว้น auth และรูปอะไหล่) ต้องแนบ header `Authorization: Bearer <token>`
 
-## Mobile App
+## แอป (ใช้ได้ทั้งมือถือและคอมพิวเตอร์)
+
+โค้ดชุดเดียวกันรันได้ทั้งบนมือถือ (React Native) และบนเบราว์เซอร์ (react-native-web)
 
 ```bash
 cd mobile
 cp .env.example .env       # ตั้งค่า EXPO_PUBLIC_API_URL ให้ชี้ไปที่ backend
 npm install
-npx expo start             # สแกน QR ด้วยแอป Expo Go
+
+npx expo start             # มือถือ: สแกน QR ด้วยแอป Expo Go
+npx expo start --web       # คอม: เปิดในเบราว์เซอร์
 ```
+
+บนคอมจะจำกัดความกว้างเนื้อหาไว้ให้อ่านง่าย ไม่ยืดเต็มจอ ส่วนบนมือถือแสดงเต็มจอเหมือนเดิม
 
 **การตั้งค่า `EXPO_PUBLIC_API_URL`:**
 - ถ้า deploy backend แล้ว ใช้ URL จริง เช่น `https://service-app-xxxx.onrender.com`
@@ -163,6 +169,15 @@ npx expo start             # สแกน QR ด้วยแอป Expo Go
   เพราะมือถือเป็นคนละเครื่อง) และมือถือต้องอยู่ Wi-Fi วงเดียวกัน
 
 หลังแก้ `.env` ทุกครั้งต้องปิด Expo (Ctrl+C) แล้วรัน `npx expo start` ใหม่
+
+### ข้อควรรู้เรื่องเวอร์ชันเว็บ
+
+- `Alert.alert` ของ React Native **ไม่ทำงานบนเบราว์เซอร์** โค้ดจึงเรียกผ่าน `src/utils/alert.ts`
+  ซึ่งสลับไปใช้ `window.confirm` / `window.alert` ให้อัตโนมัติ — ถ้าเขียนหน้าจอใหม่ ให้ใช้ `showAlert`
+  แทน `Alert.alert` เสมอ ไม่งั้นบนเว็บจะกดปุ่มแล้วเงียบไปเฉยๆ
+- GPS บนเบราว์เซอร์ใช้ตำแหน่งจาก Wi-Fi/IP ซึ่งคลาดเคลื่อนกว่ามือถือมาก
+  การรายงานตัวเข้าสาขาจึงควรทำจากมือถือ
+- การอัปโหลดรูปอะไหล่บนเว็บจะเปิดหน้าต่างเลือกไฟล์แทนการเปิดคลังรูป
 
 ### สิทธิ์การใช้งาน
 
@@ -184,6 +199,18 @@ npx expo start             # สแกน QR ด้วยแอป Expo Go
 - ห้ามตั้ง `PORT` เอง — Render กำหนดให้อัตโนมัติ
 
 Render free tier จะพักเซิร์ฟเวอร์เมื่อไม่มีคนใช้งาน ครั้งแรกที่เรียกอาจช้า 30-60 วินาที
+
+**เว็บ (ให้ใช้ผ่านเบราว์เซอร์ ไม่ต้องติดตั้งอะไร):**
+
+```bash
+cd mobile
+npx expo export --platform web      # ได้โฟลเดอร์ dist/ เป็นไฟล์ static
+```
+
+เอาโฟลเดอร์ `dist/` ไปวางบนบริการ static hosting ใดก็ได้ (Render Static Site, Netlify, Vercel, Cloudflare Pages)
+ตั้ง `EXPO_PUBLIC_API_URL` ให้ชี้ไปที่ Render ก่อน export เพราะค่าถูกฝังตอน build
+
+วิธีนี้ช่างเปิดใช้จากเบราว์เซอร์ได้เลยทั้งบนคอมและมือถือ ไม่ต้องติดตั้งแอป และไม่ต้องเปิดคอมของคุณค้างไว้
 
 **Mobile (ไฟล์ APK ติดตั้งบนมือถือ):**
 

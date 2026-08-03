@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -29,7 +29,7 @@ export default function ManageConsumablesScreen() {
     api
       .get<ConsumableItem[]>("/consumables")
       .then((res) => setItems(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -51,7 +51,7 @@ export default function ManageConsumablesScreen() {
 
   async function handleSubmit() {
     if (!form.name) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาระบุชื่อของ");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุชื่อของ");
       return;
     }
     setSubmitting(true);
@@ -69,14 +69,14 @@ export default function ManageConsumablesScreen() {
       resetForm();
       loadItems();
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
   }
 
   function handleDelete(item: ConsumableItem) {
-    Alert.alert("ยืนยันการลบ", `ต้องการลบ "${item.name}" หรือไม่?`, [
+    showAlert("ยืนยันการลบ", `ต้องการลบ "${item.name}" หรือไม่?`, [
       { text: "ยกเลิก", style: "cancel" },
       {
         text: "ลบ",
@@ -87,7 +87,7 @@ export default function ManageConsumablesScreen() {
             if (editingId === item.id) resetForm();
             loadItems();
           } catch (e) {
-            Alert.alert("ผิดพลาด", apiErrorMessage(e));
+            showAlert("ผิดพลาด", apiErrorMessage(e));
           }
         },
       },

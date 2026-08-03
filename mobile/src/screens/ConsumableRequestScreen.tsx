@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -31,7 +31,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
       api
         .get<ConsumableItem[]>("/consumables")
         .then((res) => setItems(res.data))
-        .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+        .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
         .finally(() => setLoading(false));
     }, [])
   );
@@ -47,7 +47,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
 
   async function handleSubmit() {
     if (selectedLines.length === 0) {
-      Alert.alert("ยังไม่ได้เลือกของ", "กรุณาระบุจำนวนของอย่างน้อย 1 รายการ");
+      showAlert("ยังไม่ได้เลือกของ", "กรุณาระบุจำนวนของอย่างน้อย 1 รายการ");
       return;
     }
 
@@ -60,7 +60,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
         .map((line) => items.find((i) => i.id === line.itemId)?.name)
         .filter(Boolean)
         .join(", ");
-      Alert.alert("จำนวนเกินสต็อก", `ของคงเหลือไม่พอสำหรับ: ${names}`);
+      showAlert("จำนวนเกินสต็อก", `ของคงเหลือไม่พอสำหรับ: ${names}`);
       return;
     }
 
@@ -72,12 +72,12 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
       });
       setQuantities({});
       setNote("");
-      Alert.alert("ส่งคำขอแล้ว", "รอหัวหน้าอนุมัติ สามารถติดตามสถานะได้ที่หน้าประวัติการเบิก", [
+      showAlert("ส่งคำขอแล้ว", "รอหัวหน้าอนุมัติ สามารถติดตามสถานะได้ที่หน้าประวัติการเบิก", [
         { text: "ดูสถานะ", onPress: () => navigation.navigate("MyConsumableRequests") },
         { text: "ตกลง" },
       ]);
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }

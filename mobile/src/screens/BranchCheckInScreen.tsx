@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
@@ -35,21 +35,21 @@ export default function BranchCheckInScreen() {
           setBranches(res.data);
           if (res.data.length > 0) setBranchId(res.data[0].id);
         })
-        .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+        .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
         .finally(() => setLoading(false));
     }, [])
   );
 
   async function handleCheckIn() {
     if (!branchId) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาเลือกสาขา");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาเลือกสาขา");
       return;
     }
     setLocating(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("ต้องการสิทธิ์ตำแหน่ง", "กรุณาอนุญาตให้แอปเข้าถึงตำแหน่ง GPS เพื่อรายงานตัว");
+        showAlert("ต้องการสิทธิ์ตำแหน่ง", "กรุณาอนุญาตให้แอปเข้าถึงตำแหน่ง GPS เพื่อรายงานตัว");
         return;
       }
       const position = await Location.getCurrentPositionAsync({
@@ -66,7 +66,7 @@ export default function BranchCheckInScreen() {
       setResult(data);
       setNote("");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setLocating(false);
       setSubmitting(false);

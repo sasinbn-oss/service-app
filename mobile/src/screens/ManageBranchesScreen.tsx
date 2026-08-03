@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -29,7 +29,7 @@ export default function ManageBranchesScreen() {
     api
       .get<Branch[]>("/branches")
       .then((res) => setBranches(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -41,7 +41,7 @@ export default function ManageBranchesScreen() {
 
   async function handleAdd() {
     if (!name || !code || !latitude || !longitude) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาระบุชื่อ รหัสสาขา และพิกัด GPS");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุชื่อ รหัสสาขา และพิกัด GPS");
       return;
     }
     setSubmitting(true);
@@ -60,14 +60,14 @@ export default function ManageBranchesScreen() {
       setRadiusMeters("200");
       loadBranches();
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
   }
 
   function handleDelete(branch: Branch) {
-    Alert.alert("ยืนยันการลบ", `ต้องการลบสาขา ${branch.name} หรือไม่?`, [
+    showAlert("ยืนยันการลบ", `ต้องการลบสาขา ${branch.name} หรือไม่?`, [
       { text: "ยกเลิก", style: "cancel" },
       {
         text: "ลบ",
@@ -77,7 +77,7 @@ export default function ManageBranchesScreen() {
             await api.delete(`/branches/${branch.id}`);
             loadBranches();
           } catch (e) {
-            Alert.alert("ผิดพลาด", apiErrorMessage(e));
+            showAlert("ผิดพลาด", apiErrorMessage(e));
           }
         },
       },

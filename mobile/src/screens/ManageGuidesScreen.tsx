@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -29,7 +29,7 @@ export default function ManageGuidesScreen() {
     api
       .get<TroubleshootingGuide[]>("/guides")
       .then((res) => setGuides(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -56,7 +56,7 @@ export default function ManageGuidesScreen() {
 
   async function handleSubmit() {
     if (!form.category || !form.title || !form.symptom || !form.solution) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณากรอกข้อมูลให้ครบทุกช่อง");
+      showAlert("ข้อมูลไม่ครบ", "กรุณากรอกข้อมูลให้ครบทุกช่อง");
       return;
     }
     setSubmitting(true);
@@ -68,16 +68,16 @@ export default function ManageGuidesScreen() {
       }
       resetForm();
       loadGuides();
-      Alert.alert("สำเร็จ", editingId ? "แก้ไขข้อมูลเรียบร้อย" : "เพิ่มหัวข้อเรียบร้อย");
+      showAlert("สำเร็จ", editingId ? "แก้ไขข้อมูลเรียบร้อย" : "เพิ่มหัวข้อเรียบร้อย");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
   }
 
   function handleDelete(guide: TroubleshootingGuide) {
-    Alert.alert("ยืนยันการลบ", `ต้องการลบหัวข้อ "${guide.title}" หรือไม่?`, [
+    showAlert("ยืนยันการลบ", `ต้องการลบหัวข้อ "${guide.title}" หรือไม่?`, [
       { text: "ยกเลิก", style: "cancel" },
       {
         text: "ลบ",
@@ -88,7 +88,7 @@ export default function ManageGuidesScreen() {
             if (editingId === guide.id) resetForm();
             loadGuides();
           } catch (e) {
-            Alert.alert("ผิดพลาด", apiErrorMessage(e));
+            showAlert("ผิดพลาด", apiErrorMessage(e));
           }
         },
       },

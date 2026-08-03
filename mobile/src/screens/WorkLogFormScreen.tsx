@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -32,13 +32,13 @@ export default function WorkLogFormScreen() {
       api
         .get<Branch[]>("/branches")
         .then((res) => setBranches(res.data))
-        .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)));
+        .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)));
     }, [])
   );
 
   async function handleSubmit() {
     if (!workDate || !taskDescription) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาระบุวันที่และรายละเอียดงาน");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุวันที่และรายละเอียดงาน");
       return;
     }
     setSubmitting(true);
@@ -52,9 +52,9 @@ export default function WorkLogFormScreen() {
       setTaskDescription("");
       setHoursSpent("");
       setWorkDate(todayISODate());
-      Alert.alert("สำเร็จ", "บันทึกข้อมูลการทำงานเรียบร้อย");
+      showAlert("สำเร็จ", "บันทึกข้อมูลการทำงานเรียบร้อย");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }

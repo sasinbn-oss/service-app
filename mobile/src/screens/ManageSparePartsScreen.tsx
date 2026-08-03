@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Image,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
@@ -32,7 +32,7 @@ export default function ManageSparePartsScreen() {
     api
       .get<SparePart[]>("/spare-parts")
       .then((res) => setParts(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -60,7 +60,7 @@ export default function ManageSparePartsScreen() {
 
   async function handleSubmit() {
     if (!form.partCode || !form.name) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาระบุรหัสสินค้าและชื่ออะไหล่");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุรหัสสินค้าและชื่ออะไหล่");
       return;
     }
     setSubmitting(true);
@@ -79,9 +79,9 @@ export default function ManageSparePartsScreen() {
       }
       resetForm();
       loadParts();
-      Alert.alert("สำเร็จ", editingId ? "แก้ไขข้อมูลเรียบร้อย" : "เพิ่มอะไหล่เรียบร้อย");
+      showAlert("สำเร็จ", editingId ? "แก้ไขข้อมูลเรียบร้อย" : "เพิ่มอะไหล่เรียบร้อย");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -90,7 +90,7 @@ export default function ManageSparePartsScreen() {
   async function handlePickImage(part: SparePart) {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงคลังรูปภาพ");
+      showAlert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงคลังรูปภาพ");
       return;
     }
 
@@ -115,16 +115,16 @@ export default function ManageSparePartsScreen() {
         headers: { "Content-Type": "multipart/form-data" },
       });
       loadParts();
-      Alert.alert("สำเร็จ", "อัปโหลดรูปภาพเรียบร้อย");
+      showAlert("สำเร็จ", "อัปโหลดรูปภาพเรียบร้อย");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setUploadingId(null);
     }
   }
 
   function handleDelete(part: SparePart) {
-    Alert.alert("ยืนยันการลบ", `ต้องการลบอะไหล่ "${part.name}" หรือไม่?`, [
+    showAlert("ยืนยันการลบ", `ต้องการลบอะไหล่ "${part.name}" หรือไม่?`, [
       { text: "ยกเลิก", style: "cancel" },
       {
         text: "ลบ",
@@ -135,7 +135,7 @@ export default function ManageSparePartsScreen() {
             if (editingId === part.id) resetForm();
             loadParts();
           } catch (e) {
-            Alert.alert("ผิดพลาด", apiErrorMessage(e));
+            showAlert("ผิดพลาด", apiErrorMessage(e));
           }
         },
       },

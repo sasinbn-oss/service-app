@@ -6,6 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import AuthNavigator from "./src/navigation/AuthNavigator";
 import MainNavigator from "./src/navigation/MainNavigator";
+import AppShell from "./src/components/AppShell";
 import { colors } from "./src/theme";
 
 function RootNavigator() {
@@ -21,7 +22,7 @@ function RootNavigator() {
 
   return (
     <NavigationContainer>
-      {user ? <MainNavigator /> : <AuthNavigator />}
+      <AppShell>{user ? <MainNavigator /> : <AuthNavigator />}</AppShell>
     </NavigationContainer>
   );
 }

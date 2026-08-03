@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Modal,
   Pressable,
@@ -11,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -31,7 +31,7 @@ export default function ManageFlowsScreen() {
     api
       .get<TroubleshootFlowSummary[]>("/troubleshoot-flows")
       .then((res) => setFlows(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -47,7 +47,7 @@ export default function ManageFlowsScreen() {
       const { data } = await api.get<TroubleshootFlow>(`/troubleshoot-flows/${id}`);
       setOpenFlow(data);
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setLoadingFlow(false);
     }
@@ -64,7 +64,7 @@ export default function ManageFlowsScreen() {
       await openDetail(openFlow.id);
       loadFlows();
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSaving(false);
     }

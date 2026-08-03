@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -38,7 +38,7 @@ export default function VehicleCheckInScreen() {
       setActiveLog(activeRes.data ?? null);
       if (vehiclesRes.data.length > 0) setVehicleId(vehiclesRes.data[0].id);
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -52,7 +52,7 @@ export default function VehicleCheckInScreen() {
 
   async function handleStart() {
     if (!vehicleId || !purpose || !startMileage) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาเลือกรถ ระบุวัตถุประสงค์ และเลขไมล์เริ่มต้น");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาเลือกรถ ระบุวัตถุประสงค์ และเลขไมล์เริ่มต้น");
       return;
     }
     setSubmitting(true);
@@ -67,9 +67,9 @@ export default function VehicleCheckInScreen() {
       setDestination("");
       setStartMileage("");
       await loadData();
-      Alert.alert("สำเร็จ", "บันทึกการใช้รถเรียบร้อย");
+      showAlert("สำเร็จ", "บันทึกการใช้รถเรียบร้อย");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -77,7 +77,7 @@ export default function VehicleCheckInScreen() {
 
   async function handleEnd() {
     if (!activeLog || !endMileage) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาระบุเลขไมล์สิ้นสุด");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุเลขไมล์สิ้นสุด");
       return;
     }
     setSubmitting(true);
@@ -85,9 +85,9 @@ export default function VehicleCheckInScreen() {
       await api.post(`/vehicle-logs/${activeLog.id}/end`, { endMileage: Number(endMileage) });
       setEndMileage("");
       await loadData();
-      Alert.alert("สำเร็จ", "คืนรถเรียบร้อยแล้ว");
+      showAlert("สำเร็จ", "คืนรถเรียบร้อยแล้ว");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }

@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -35,7 +35,7 @@ export default function ReviewRequestsScreen() {
     api
       .get<ConsumableRequest[]>(`/consumable-requests${query}`)
       .then((res) => setRequests(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -57,9 +57,9 @@ export default function ReviewRequestsScreen() {
         return next;
       });
       load(filter);
-      Alert.alert("สำเร็จ", action === "approve" ? "อนุมัติคำขอแล้ว" : "ปฏิเสธคำขอแล้ว");
+      showAlert("สำเร็จ", action === "approve" ? "อนุมัติคำขอแล้ว" : "ปฏิเสธคำขอแล้ว");
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setActingId(null);
     }
@@ -69,7 +69,7 @@ export default function ReviewRequestsScreen() {
     const summary = request.items
       .map((l) => `${l.item.name} × ${l.quantity} ${l.item.unit}`)
       .join("\n");
-    Alert.alert(
+    showAlert(
       "ยืนยันการอนุมัติ",
       `อนุมัติคำขอ #${request.id} ของ ${request.user.name}?\n\n${summary}\n\nระบบจะตัดสต็อกทันที`,
       [
@@ -80,7 +80,7 @@ export default function ReviewRequestsScreen() {
   }
 
   function confirmReject(request: ConsumableRequest) {
-    Alert.alert("ยืนยันการปฏิเสธ", `ปฏิเสธคำขอ #${request.id} ของ ${request.user.name}?`, [
+    showAlert("ยืนยันการปฏิเสธ", `ปฏิเสธคำขอ #${request.id} ของ ${request.user.name}?`, [
       { text: "ยกเลิก", style: "cancel" },
       { text: "ปฏิเสธ", style: "destructive", onPress: () => act(request, "reject") },
     ]);

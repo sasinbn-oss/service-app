@@ -1,13 +1,13 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -36,7 +36,7 @@ export default function MyConsumableRequestsScreen() {
   );
 
   function handleCancel(request: ConsumableRequest) {
-    Alert.alert("ยกเลิกคำขอ", "ต้องการยกเลิกคำขอเบิกนี้หรือไม่?", [
+    showAlert("ยกเลิกคำขอ", "ต้องการยกเลิกคำขอเบิกนี้หรือไม่?", [
       { text: "ไม่ยกเลิก", style: "cancel" },
       {
         text: "ยกเลิกคำขอ",
@@ -46,7 +46,7 @@ export default function MyConsumableRequestsScreen() {
             await api.delete(`/consumable-requests/${request.id}`);
             load();
           } catch (e) {
-            Alert.alert("ผิดพลาด", apiErrorMessage(e));
+            showAlert("ผิดพลาด", apiErrorMessage(e));
           }
         },
       },

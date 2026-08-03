@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
@@ -27,7 +27,7 @@ export default function ManageVehiclesScreen() {
     api
       .get<Vehicle[]>("/vehicles")
       .then((res) => setVehicles(res.data))
-      .catch((e) => Alert.alert("ผิดพลาด", apiErrorMessage(e)))
+      .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -39,7 +39,7 @@ export default function ManageVehiclesScreen() {
 
   async function handleAdd() {
     if (!plateNumber) {
-      Alert.alert("ข้อมูลไม่ครบ", "กรุณาระบุทะเบียนรถ");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุทะเบียนรถ");
       return;
     }
     setSubmitting(true);
@@ -50,14 +50,14 @@ export default function ManageVehiclesScreen() {
       setModel("");
       loadVehicles();
     } catch (e) {
-      Alert.alert("ผิดพลาด", apiErrorMessage(e));
+      showAlert("ผิดพลาด", apiErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
   }
 
   function handleDelete(vehicle: Vehicle) {
-    Alert.alert("ยืนยันการลบ", `ต้องการลบรถทะเบียน ${vehicle.plateNumber} หรือไม่?`, [
+    showAlert("ยืนยันการลบ", `ต้องการลบรถทะเบียน ${vehicle.plateNumber} หรือไม่?`, [
       { text: "ยกเลิก", style: "cancel" },
       {
         text: "ลบ",
@@ -67,7 +67,7 @@ export default function ManageVehiclesScreen() {
             await api.delete(`/vehicles/${vehicle.id}`);
             loadVehicles();
           } catch (e) {
-            Alert.alert("ผิดพลาด", apiErrorMessage(e));
+            showAlert("ผิดพลาด", apiErrorMessage(e));
           }
         },
       },
