@@ -4,9 +4,9 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { TroubleshootingGuide } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HistoryStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "GuideDetail">;
+type Props = NativeStackScreenProps<HistoryStackParamList, "GuideDetail">;
 
 export default function GuideDetailScreen({ route }: Props) {
   const { id } = route.params;

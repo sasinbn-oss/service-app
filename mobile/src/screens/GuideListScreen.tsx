@@ -13,9 +13,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors, radius, shadow } from "../theme";
 import { TroubleshootingGuide } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HistoryStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "GuideList">;
+type Props = NativeStackScreenProps<HistoryStackParamList, "GuideList">;
 
 export default function GuideListScreen({ navigation }: Props) {
   const [guides, setGuides] = useState<TroubleshootingGuide[]>([]);

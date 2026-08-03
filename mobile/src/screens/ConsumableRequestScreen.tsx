@@ -10,13 +10,14 @@ import {
 } from "react-native";
 import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { ConsumableItem } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HomeStackParamList, MainTabParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "ConsumableRequest">;
+type Props = NativeStackScreenProps<HomeStackParamList, "ConsumableRequest">;
 
 export default function ConsumableRequestScreen({ navigation }: Props) {
   const [items, setItems] = useState<ConsumableItem[]>([]);
@@ -44,6 +45,13 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
   const selectedLines = Object.entries(quantities)
     .map(([itemId, qty]) => ({ itemId: Number(itemId), quantity: Number(qty) }))
     .filter((line) => line.quantity > 0);
+
+  // The history lives in a sibling tab, so the jump goes through the tab navigator.
+  function goToHistory() {
+    navigation
+      .getParent<BottomTabNavigationProp<MainTabParamList>>()
+      ?.navigate("HistoryTab", { screen: "MyConsumableRequests" } as never);
+  }
 
   async function handleSubmit() {
     if (selectedLines.length === 0) {
@@ -73,7 +81,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
       setQuantities({});
       setNote("");
       showAlert("ส่งคำขอแล้ว", "รอหัวหน้าอนุมัติ สามารถติดตามสถานะได้ที่หน้าประวัติการเบิก", [
-        { text: "ดูสถานะ", onPress: () => navigation.navigate("MyConsumableRequests") },
+        { text: "ดูสถานะ", onPress: goToHistory },
         { text: "ตกลง" },
       ]);
     } catch (e) {

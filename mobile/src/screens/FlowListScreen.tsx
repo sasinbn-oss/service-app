@@ -13,9 +13,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors, radius, shadow } from "../theme";
 import { TroubleshootFlowSummary } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HomeStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "FlowList">;
+type Props = NativeStackScreenProps<HomeStackParamList, "FlowList">;
 
 export default function FlowListScreen({ navigation }: Props) {
   const [flows, setFlows] = useState<TroubleshootFlowSummary[]>([]);

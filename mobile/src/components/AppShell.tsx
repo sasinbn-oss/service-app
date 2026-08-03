@@ -20,9 +20,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, alignItems: "center", backgroundColor: colors.border },
+  // height + overflow pin the shell to the viewport, and minHeight:0 lets the
+  // scrolling content shrink instead of growing and pushing the tab bar off
+  // the bottom of the page.
+  backdrop: {
+    flex: 1,
+    height: "100%",
+    overflow: "hidden",
+    alignItems: "center",
+    backgroundColor: colors.border,
+  },
   column: {
     flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
     width: "100%",
     maxWidth: 820,
     backgroundColor: colors.background,

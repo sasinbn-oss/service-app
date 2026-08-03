@@ -4,9 +4,9 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors } from "../theme";
 import { SparePart } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HomeStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "SparePartDetail">;
+type Props = NativeStackScreenProps<HomeStackParamList, "SparePartDetail">;
 
 export default function SparePartDetailScreen({ route }: Props) {
   const { id } = route.params;

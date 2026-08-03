@@ -14,9 +14,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors, radius, shadow } from "../theme";
 import { SparePart } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HomeStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "SparePartList">;
+type Props = NativeStackScreenProps<HomeStackParamList, "SparePartList">;
 
 export default function SparePartListScreen({ navigation }: Props) {
   const [parts, setParts] = useState<SparePart[]>([]);

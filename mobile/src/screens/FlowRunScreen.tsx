@@ -15,9 +15,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors } from "../theme";
 import { TroubleshootFlow, TroubleshootNode } from "../types";
-import { MainStackParamList } from "../navigation/types";
+import { HomeStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<MainStackParamList, "FlowRun">;
+type Props = NativeStackScreenProps<HomeStackParamList, "FlowRun">;
 
 interface HistoryEntry {
   nodeKey: string;
