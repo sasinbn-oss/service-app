@@ -276,10 +276,13 @@ const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: colors.card,
     borderTopColor: colors.border,
-    // Web gets no safe-area inset, so the bar needs explicit room for the label.
-    height: Platform.OS === "web" ? 76 : undefined,
     paddingTop: 8,
-    paddingBottom: Platform.OS === "web" ? 12 : undefined,
+    // Web gets no safe-area inset, so the bar needs an explicit height to leave
+    // room for the label. These keys must be absent on native rather than set
+    // to undefined: this style is merged over the bar's own computed style, so
+    // an explicit `height: undefined` erases the height React Navigation
+    // derives from the safe-area inset and collapses the bar out of sight.
+    ...(Platform.OS === "web" ? { height: 76, paddingBottom: 12 } : null),
   },
   tabItem: { paddingVertical: 2 },
   // Thai vowel and tone marks sit above the line, so the label needs a taller
