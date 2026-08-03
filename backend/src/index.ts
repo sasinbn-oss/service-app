@@ -7,6 +7,10 @@ import vehicleLogRoutes from "./routes/vehicleLogs";
 import branchRoutes from "./routes/branches";
 import branchCheckInRoutes from "./routes/branchCheckIns";
 import workLogRoutes from "./routes/workLogs";
+import guideRoutes from "./routes/guides";
+import sparePartRoutes from "./routes/spareParts";
+import consumableRoutes from "./routes/consumables";
+import consumableRequestRoutes from "./routes/consumableRequests";
 
 const app = express();
 app.use(cors());
@@ -20,6 +24,10 @@ app.use("/api/vehicle-logs", vehicleLogRoutes);
 app.use("/api/branches", branchRoutes);
 app.use("/api/branch-checkins", branchCheckInRoutes);
 app.use("/api/work-logs", workLogRoutes);
+app.use("/api/guides", guideRoutes);
+app.use("/api/spare-parts", sparePartRoutes);
+app.use("/api/consumables", consumableRoutes);
+app.use("/api/consumable-requests", consumableRequestRoutes);
 
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {

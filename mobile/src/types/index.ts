@@ -68,3 +68,55 @@ export interface WorkLog {
   branch?: Branch | null;
   createdAt: string;
 }
+
+export interface TroubleshootingGuide {
+  id: number;
+  category: string;
+  title: string;
+  symptom: string;
+  solution: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SparePart {
+  id: number;
+  partCode: string;
+  name: string;
+  brand?: string | null;
+  description?: string | null;
+  imageUrl?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConsumableItem {
+  id: number;
+  name: string;
+  unit: string;
+  stockQty: number;
+  createdAt: string;
+}
+
+export type RequestStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export interface ConsumableRequestItem {
+  id: number;
+  requestId: number;
+  itemId: number;
+  quantity: number;
+  item: ConsumableItem;
+}
+
+export interface ConsumableRequest {
+  id: number;
+  userId: number;
+  status: RequestStatus;
+  note?: string | null;
+  createdAt: string;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+  items: ConsumableRequestItem[];
+  user: Pick<User, "id" | "name" | "employeeCode">;
+  reviewedBy?: Pick<User, "id" | "name" | "employeeCode"> | null;
+}

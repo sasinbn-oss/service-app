@@ -25,6 +25,8 @@ model User {
   vehicleLogs   VehicleLog[]
   branchCheckIns BranchCheckIn[]
   workLogs      WorkLog[]
+  consumableRequests ConsumableRequest[] @relation("RequestedBy")
+  reviewedRequests   ConsumableRequest[] @relation("ReviewedBy")
 }
 
 model Vehicle {
@@ -90,4 +92,71 @@ model WorkLog {
   branchId        Int?
   branch          Branch?   @relation(fields: [branchId], references: [id])
   createdAt       DateTime  @default(now())
+}
+
+model TroubleshootingGuide {
+  id        Int      @id @default(autoincrement())
+  category  String
+  title     String
+  symptom   String
+  solution  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SparePart {
+  id          Int      @id @default(autoincrement())
+  partCode    String   @unique
+  name        String
+  brand       String?
+  description String?
+  // Either a full external URL, or a path served by this API
+  // ("/api/spare-parts/:id/image") when a photo was uploaded.
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  image       SparePartImage?
+}
+
+// Uploaded photos live in their own table so listing parts never has to
+// pull image bytes along with the row.
+model SparePartImage {
+  sparePartId Int       @id
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  mimeType    String
+  data        Bytes
+  updatedAt   DateTime  @updatedAt
+}
+
+model ConsumableItem {
+  id           Int                     @id @default(autoincrement())
+  name         String
+  unit         String                  @default("ชิ้น")
+  stockQty     Int                     @default(0)
+  createdAt    DateTime                @default(now())
+  requestItems ConsumableRequestItem[]
+}
+
+model ConsumableRequest {
+  id           Int                     @id @default(autoincrement())
+  userId       Int
+  user         User                    @relation("RequestedBy", fields: [userId], references: [id])
+  // PENDING | APPROVED | REJECTED — stock is deducted when a request is approved.
+  status       String                  @default("PENDING")
+  note         String?
+  createdAt    DateTime                @default(now())
+  reviewedById Int?
+  reviewedBy   User?                   @relation("ReviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  reviewNote   String?
+  items        ConsumableRequestItem[]
+}
+
+model ConsumableRequestItem {
+  id        Int               @id @default(autoincrement())
+  requestId Int
+  request   ConsumableRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  itemId    Int
+  item      ConsumableItem    @relation(fields: [itemId], references: [id])
+  quantity  Int
 }
