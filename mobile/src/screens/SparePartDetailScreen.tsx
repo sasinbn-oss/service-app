@@ -55,6 +55,7 @@ export default function SparePartDetailScreen({ route }: Props) {
       <View style={styles.card}>
         <Row label="รหัสสินค้า" value={part.partCode} />
         <Row label="ยี่ห้อ" value={part.brand ?? "-"} />
+        {part.category ? <Row label="หมวดหมู่" value={part.category} /> : null}
       </View>
 
       {part.description ? (

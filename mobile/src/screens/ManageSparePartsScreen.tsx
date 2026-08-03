@@ -17,7 +17,7 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors } from "../theme";
 import { SparePart } from "../types";
 
-const emptyForm = { partCode: "", name: "", brand: "", description: "" };
+const emptyForm = { partCode: "", name: "", brand: "", category: "", description: "" };
 
 export default function ManageSparePartsScreen() {
   const [parts, setParts] = useState<SparePart[]>([]);
@@ -53,6 +53,7 @@ export default function ManageSparePartsScreen() {
       partCode: part.partCode,
       name: part.name,
       brand: part.brand ?? "",
+      category: part.category ?? "",
       description: part.description ?? "",
     });
   }
@@ -67,6 +68,7 @@ export default function ManageSparePartsScreen() {
       partCode: form.partCode,
       name: form.name,
       brand: form.brand || undefined,
+      category: form.category || undefined,
       description: form.description || undefined,
     };
     try {
@@ -162,6 +164,12 @@ export default function ManageSparePartsScreen() {
           placeholder="ยี่ห้อ"
           value={form.brand}
           onChangeText={(v) => setForm({ ...form, brand: v })}
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="หมวดหมู่ (ไม่บังคับ)"
+          value={form.category}
+          onChangeText={(v) => setForm({ ...form, category: v })}
         />
         <TextInput
           style={[styles.input, styles.multiline]}

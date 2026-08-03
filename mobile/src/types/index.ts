@@ -84,6 +84,7 @@ export interface SparePart {
   partCode: string;
   name: string;
   brand?: string | null;
+  category?: string | null;
   description?: string | null;
   imageUrl?: string | null;
   createdAt: string;

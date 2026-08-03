@@ -14,8 +14,8 @@ const upload = multer({
   limits: { fileSize: MAX_IMAGE_BYTES },
 });
 
-// Search by name (also matches part code and brand so a technician can scan
-// in whichever identifier they have to hand).
+// Search by name (also matches part code, brand and category so a technician
+// can scan in whichever identifier they have to hand).
 router.get("/", requireAuth, async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
@@ -26,6 +26,7 @@ router.get("/", requireAuth, async (req, res) => {
             { name: { contains: search, mode: "insensitive" } },
             { partCode: { contains: search, mode: "insensitive" } },
             { brand: { contains: search, mode: "insensitive" } },
+            { category: { contains: search, mode: "insensitive" } },
           ],
         }
       : undefined,
@@ -57,6 +58,7 @@ const sparePartSchema = z.object({
   partCode: z.string().min(1),
   name: z.string().min(1),
   brand: z.string().optional(),
+  category: z.string().optional(),
   description: z.string().optional(),
   imageUrl: z.string().optional(),
 });

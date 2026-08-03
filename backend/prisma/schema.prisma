@@ -109,6 +109,7 @@ model SparePart {
   partCode    String   @unique
   name        String
   brand       String?
+  category    String?
   description String?
   // Either a full external URL, or a path served by this API
   // ("/api/spare-parts/:id/image") when a photo was uploaded.
