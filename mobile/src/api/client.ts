@@ -1,4 +1,5 @@
 import axios from "axios";
+import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Set EXPO_PUBLIC_API_URL in mobile/.env to the deployed backend, or to your
@@ -27,11 +28,32 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+/**
+ * A deployed web build that still points at localhost was built without
+ * EXPO_PUBLIC_API_URL. That shows up as an ordinary network error, which sends
+ * people hunting in the wrong place, so name the real cause.
+ */
+function isMisconfiguredWebBuild(): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined") return false;
+  const servedLocally = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  return !servedLocally && /localhost|127\.0\.0\.1/.test(API_URL);
+}
+
 export function apiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { error?: unknown } | undefined;
     if (typeof data?.error === "string") return data.error;
     if (data?.error) return JSON.stringify(data.error);
+
+    if (!error.response && isMisconfiguredWebBuild()) {
+      return (
+        "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ เพราะเว็บนี้ถูก build โดยไม่ได้ตั้งค่า EXPO_PUBLIC_API_URL " +
+        "ให้ตั้งค่าเป็น URL ของ backend แล้ว build ใหม่"
+      );
+    }
+    if (!error.response) {
+      return "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต (ถ้าเพิ่งเปิดใช้ครั้งแรกอาจต้องรอเซิร์ฟเวอร์ตื่นสักครู่)";
+    }
     return error.message;
   }
   return "Unexpected error";

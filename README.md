@@ -224,17 +224,36 @@ npx expo start --web       # คอม: เปิดในเบราว์เ�
 
 Render free tier จะพักเซิร์ฟเวอร์เมื่อไม่มีคนใช้งาน ครั้งแรกที่เรียกอาจช้า 30-60 วินาที
 
-**เว็บ (ให้ใช้ผ่านเบราว์เซอร์ ไม่ต้องติดตั้งอะไร):**
+**เว็บ — วิธีที่แนะนำ ใช้ได้ทั้งคอมและมือถือ ไม่ต้องเปิดคอมทิ้งไว้**
+
+deploy เป็นเว็บ static แล้วช่างเปิดจากลิงก์ได้เลย ไม่ต้องติดตั้งแอป ไม่ต้องมี Expo Go
+
+**ตั้งค่าบน Render (Static Site):**
+
+| ช่อง | ค่าที่ใส่ |
+|---|---|
+| Root Directory | `mobile` |
+| Build Command | `npm install && npm run build:web` |
+| Publish Directory | `dist` |
+| Environment Variable | `EXPO_PUBLIC_API_URL` = URL ของ backend เช่น `https://service-app-xxxx.onrender.com` |
+
+**ห้ามลืม `EXPO_PUBLIC_API_URL`** — ค่านี้ถูกฝังลงในไฟล์ตอน build ถ้าไม่ตั้ง แอปจะพยายามต่อ
+`localhost` แล้วใช้งานไม่ได้ (กรณีนี้แอปจะขึ้นข้อความบอกสาเหตุให้ ไม่ปล่อยให้งง)
+แก้ค่านี้ทีหลังต้องกด **Manual Deploy → Clear build cache & deploy** ให้ build ใหม่
+
+ใช้ Netlify / Vercel / Cloudflare Pages ก็ได้ ตั้งค่าเหมือนกัน (ไฟล์ `mobile/public/_redirects`
+มีกฎ SPA rewrite ไว้ให้แล้ว)
+
+build เองในเครื่องก็ได้ ถ้าอยากเอาไฟล์ไปวางเอง:
 
 ```bash
 cd mobile
-npx expo export --platform web      # ได้โฟลเดอร์ dist/ เป็นไฟล์ static
+EXPO_PUBLIC_API_URL="https://service-app-xxxx.onrender.com" npm run build:web
+# ได้โฟลเดอร์ dist/ เป็นไฟล์ static
 ```
 
-เอาโฟลเดอร์ `dist/` ไปวางบนบริการ static hosting ใดก็ได้ (Render Static Site, Netlify, Vercel, Cloudflare Pages)
-ตั้ง `EXPO_PUBLIC_API_URL` ให้ชี้ไปที่ Render ก่อน export เพราะค่าถูกฝังตอน build
-
-วิธีนี้ช่างเปิดใช้จากเบราว์เซอร์ได้เลยทั้งบนคอมและมือถือ ไม่ต้องติดตั้งแอป และไม่ต้องเปิดคอมของคุณค้างไว้
+**ข้อควรรู้:** backend บน Render free tier จะหลับเมื่อไม่มีคนใช้ ครั้งแรกของวันที่เปิดแอป
+อาจรอ 30-60 วินาที ครั้งต่อๆ ไปเร็วปกติ
 
 **Mobile (ไฟล์ APK ติดตั้งบนมือถือ):**
 
