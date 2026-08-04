@@ -81,10 +81,17 @@ async function main() {
   console.log(`  กล่องคำถาม        : ${questions}`);
   console.log(`  กล่องวิธีแก้       : ${actions}`);
   console.log(`  รูปวงจรที่แนบได้   : ${images}`);
+  const relaxed = flows.reduce(
+    (n, f) => n + f.nodes.filter((x) => x.warnings.some((w) => w.includes("ผ่อนเกณฑ์"))).length,
+    0
+  );
   console.log(
     `  คำถามที่ครบทั้ง 2 ทาง: ${resolved}/${questions}` +
       ` (${questions ? Math.round((resolved / questions) * 100) : 0}%)`
   );
+  if (relaxed > 0) {
+    console.log(`  ในจำนวนนี้จับคู่แบบผ่อนเกณฑ์ ${relaxed} จุด — ควรตรวจกับต้นฉบับ`);
+  }
 
   console.log(`\n${"=".repeat(72)}`);
   console.log("รายการหัวข้อ  (ความครบถ้วนของเส้นทาง)");

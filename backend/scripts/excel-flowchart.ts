@@ -96,6 +96,8 @@ const NAVIGATION_RE = /^(ต่อหน้าถัดไป|ต่อจาก
 
 /** An arrow tip this close to a box (in EMU) is touching it. */
 const ENDPOINT_TOLERANCE = 400_000;
+/** Wider reach used only to repair a branch the strict pass left open. */
+const RELAXED_ENDPOINT_TOLERANCE = 1_000_000;
 /** Marker "(1)" this far from a box (EMU) still belongs to it. */
 const MARKER_TOLERANCE = 700_000;
 /** Columns are far wider than rows are tall, so weight them when measuring. */
@@ -380,13 +382,21 @@ function buildFlow(
     });
   }
 
-  const nearestShape = (px: number, py: number) =>
+  const nearestShape = (px: number, py: number, tolerance = ENDPOINT_TOLERANCE) =>
     content
       .map((s) => ({ s, d: distanceToRect(px, py, s.rect) }))
-      .filter((x) => x.d <= ENDPOINT_TOLERANCE)
+      .filter((x) => x.d <= tolerance)
       .sort((a, b) => a.d - b.d)[0]?.s;
 
   const incoming = new Set<string>();
+  const usedArrows = new Set<Arrow>();
+
+  const attach = (node: FlowNode, targetKey: string, answer?: Answer) => {
+    if (answer === "YES" && !node.yesKey) node.yesKey = targetKey;
+    else if (answer === "NO" && !node.noKey) node.noKey = targetKey;
+    else node.otherKeys.push(targetKey);
+    incoming.add(targetKey);
+  };
 
   for (const arrow of sectionArrows) {
     const source = nearestShape(arrow.start.x, arrow.start.y);
@@ -396,11 +406,44 @@ function buildFlow(
     const node = nodes.get(source.key);
     if (!node) continue;
 
-    if (arrow.answer === "YES" && !node.yesKey) node.yesKey = target.key;
-    else if (arrow.answer === "NO" && !node.noKey) node.noKey = target.key;
-    else node.otherKeys.push(target.key);
+    attach(node, target.key, arrow.answer);
+    usedArrows.add(arrow);
+  }
 
-    incoming.add(target.key);
+  // Second pass. Most unresolved branches are an arrow whose tip stops a little
+  // short of the box it points at, so retry those with a wider tolerance — but
+  // only for questions still missing a branch, and only when a single unused
+  // arrow fits, so a relaxed match can never displace a confident one.
+  for (const node of nodes.values()) {
+    if (node.kind !== "QUESTION") continue;
+    if (node.yesKey && node.noKey) continue;
+
+    const shape = content.find((s) => s.key === node.key);
+    if (!shape) continue;
+
+    const candidates = sectionArrows
+      .filter((a) => !usedArrows.has(a))
+      .map((a) => ({ a, d: distanceToRect(a.start.x, a.start.y, shape.rect) }))
+      .filter((x) => x.d <= RELAXED_ENDPOINT_TOLERANCE)
+      .sort((x, y) => x.d - y.d);
+
+    for (const { a } of candidates) {
+      if (node.yesKey && node.noKey) break;
+      const target = nearestShape(a.end.x, a.end.y, RELAXED_ENDPOINT_TOLERANCE);
+      if (!target || target.key === node.key) continue;
+
+      // Without a label, only fill a branch when exactly one side is open —
+      // otherwise there is no way to tell which answer this arrow belongs to.
+      const answer =
+        a.answer ?? (node.yesKey ? "NO" : node.noKey ? "YES" : undefined);
+      if (!answer) continue;
+
+      attach(node, target.key, answer);
+      usedArrows.add(a);
+      node.warnings.push(
+        `ทาง "${answer === "YES" ? "ใช่" : "ไม่"}" จับคู่จากตำแหน่งลูกศรแบบผ่อนเกณฑ์ ควรตรวจกับต้นฉบับ`
+      );
+    }
   }
 
   // A question with only one labelled branch can take the remaining unlabelled
