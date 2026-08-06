@@ -11,7 +11,8 @@ import { Router } from "express";
 import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { assistantTools, runAssistantTool } from "../assistant/tools";
+import { assistantTools, runAssistantTool, GeneratedDocument } from "../assistant/tools";
+import { getDocument } from "../documents/store";
 import { prisma } from "../prisma";
 
 const router = Router();
@@ -47,6 +48,8 @@ function systemPrompt(user: { name: string; employeeCode: string; role: string }
     `กำลังคุยกับ: ${user.name} (รหัส ${user.employeeCode}) ${scope}`,
     "",
     "หน้าที่หลักของคุณคือช่วยร่างเอกสารจากข้อมูลจริงในระบบ เช่น",
+    "- **เอกสารขอโอนสินค้าระหว่างคลัง** — ออกเป็นไฟล์ Word ตามแบบฟอร์มบริษัทได้เลย",
+    "  ใช้เครื่องมือ create_transfer_document เมื่อผู้ใช้บอกคลังต้นทาง ปลายทาง และรายการของ",
     "- รายงานสรุปการทำงานรายวัน/รายสัปดาห์/รายเดือน",
     "- ใบรายงานการซ่อม",
     "- สรุปการเบิกของใช้สิ้นเปลือง",
@@ -85,6 +88,32 @@ router.get("/status", requireAuth, (_req, res) => {
   res.json({ enabled: Boolean(process.env.ANTHROPIC_API_KEY), model: MODEL });
 });
 
+/**
+ * ดาวน์โหลดเอกสารที่ผู้ช่วยสร้างไว้
+ *
+ * ใช้ token ในลิงก์แทน Authorization header เพราะต้องเปิดได้ทั้งจากปุ่มบนเว็บ
+ * และจากเบราว์เซอร์บนมือถือที่แนบ header เองไม่ได้ token สุ่ม 24 ไบต์และหมดอายุ
+ * ใน 2 ชั่วโมง ใครได้ลิงก์ไปก็เปิดได้ในช่วงนั้น — ตั้งใจให้ส่งต่อให้คนอนุมัติได้เลย
+ */
+router.get("/documents/:id", (req, res) => {
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  const doc = token ? getDocument(req.params.id, token) : null;
+  if (!doc) {
+    return res.status(404).json({ error: "ไม่พบเอกสารนี้ หรือลิงก์หมดอายุแล้ว (เก็บไว้ 2 ชั่วโมง)" });
+  }
+
+  res.setHeader("Content-Type", doc.mimeType);
+  // filename* เป็นแบบ RFC 5987 เพื่อให้ชื่อไฟล์ภาษาไทยไม่เพี้ยนตอนดาวน์โหลด
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${doc.asciiFilename}"; filename*=UTF-8''${encodeURIComponent(
+      doc.filename
+    )}`
+  );
+  res.setHeader("Cache-Control", "private, no-store");
+  res.send(doc.data);
+});
+
 router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
   const anthropic = getClient();
   if (!anthropic) {
@@ -108,6 +137,8 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     .map((m) => ({ role: m.role, content: m.content }));
 
   const toolsUsed: string[] = [];
+  const documents: GeneratedDocument[] = [];
+  const context = { userId: req.auth!.userId, role: req.auth!.role, name: user.name };
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -136,6 +167,7 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
         return res.json({
           reply,
           toolsUsed,
+          documents,
           truncated: response.stop_reason === "max_tokens",
         });
       }
@@ -152,7 +184,8 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
           const output = await runAssistantTool(
             block.name,
             (block.input ?? {}) as Record<string, unknown>,
-            req.auth!
+            context,
+            (doc) => documents.push(doc)
           );
           results.push({
             type: "tool_result",

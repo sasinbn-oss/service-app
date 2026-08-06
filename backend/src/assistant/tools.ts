@@ -8,7 +8,21 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "../prisma";
-import { TokenPayload } from "../utils/jwt";
+import { Role } from "../utils/constants";
+import {
+  buildTransferRequestDocx,
+  transferRequestAsciiFilename,
+  transferRequestFilename,
+  TransferItem,
+} from "../documents/transferRequest";
+import { documentPath, saveDocument, StoredDocument } from "../documents/store";
+
+/** ใครกำลังถาม — ใช้ตัดสินสิทธิ์การอ่าน และใส่ชื่อผู้จัดทำลงในเอกสาร */
+export interface AssistantContext {
+  userId: number;
+  role: Role;
+  name: string;
+}
 
 /** Rows returned per tool call. Enough for a monthly report, small enough to stay cheap. */
 const DEFAULT_LIMIT = 50;
@@ -121,7 +135,66 @@ export const assistantTools: Anthropic.Tool[] = [
     description: "ประวัติการใช้รถ พร้อมเลขไมล์เริ่ม/สิ้นสุด ปลายทาง และวัตถุประสงค์",
     input_schema: { type: "object", properties: { ...dateArgs } },
   },
+  {
+    name: "create_transfer_document",
+    description:
+      "สร้างไฟล์ Word 'เอกสารขอโอนสินค้า' ตามแบบฟอร์มบริษัท สำหรับขอโอนอะไหล่ระหว่างคลัง " +
+      "ใช้เมื่อผู้ใช้บอกคลังต้นทาง คลังปลายทาง และรายการของ " +
+      "ระบบจะเทียบรหัสอะไหล่กับฐานข้อมูลให้เอง และเติมชื่อผู้จัดทำจากผู้ใช้ที่ล็อกอินอยู่ " +
+      "ห้ามเดารหัสหรือจำนวนที่ผู้ใช้ไม่ได้บอก ถ้าข้อมูลไม่ครบให้ถามก่อน",
+    input_schema: {
+      type: "object",
+      properties: {
+        fromWarehouse: { type: "string", description: "คลังต้นทาง เช่น คลังลาดพร้าว 94" },
+        toWarehouse: { type: "string", description: "คลังปลายทาง เช่น คลังเชียงใหม่" },
+        items: {
+          type: "array",
+          description: "รายการของที่ขอโอน ตามที่ผู้ใช้ระบุ",
+          items: {
+            type: "object",
+            properties: {
+              code: { type: "string", description: "รหัสสินค้า เช่น SPHB416" },
+              name: { type: "string", description: "ชื่อรายการตามที่ผู้ใช้บอก" },
+              quantity: { type: "number", description: "จำนวน" },
+              unit: { type: "string", description: "หน่วย เช่น ตัว ชิ้น (ไม่ระบุ = ไม่ใส่)" },
+              note: { type: "string", description: "หมายเหตุรายบรรทัด (ไม่บังคับ)" },
+            },
+            required: ["code", "name", "quantity"],
+          },
+        },
+        documentNo: { type: "string", description: "เลขที่เอกสาร ถ้าผู้ใช้ไม่บอกให้เว้นว่าง" },
+        documentDate: { type: "string", description: "วันที่เอกสาร YYYY-MM-DD (ไม่ระบุ = วันนี้)" },
+        note: { type: "string", description: "หมายเหตุท้ายเอกสาร (ไม่บังคับ)" },
+      },
+      required: ["fromWarehouse", "toWarehouse", "items"],
+    },
+  },
 ];
+
+/** เอกสารที่ถูกสร้างระหว่างการสนทนารอบนี้ ส่งกลับให้แอปทำปุ่มดาวน์โหลด */
+export interface GeneratedDocument {
+  id: string;
+  filename: string;
+  path: string;
+  title: string;
+}
+
+function parseItems(raw: unknown): TransferItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      const item = (entry ?? {}) as Record<string, unknown>;
+      const quantity = Number(item.quantity);
+      return {
+        code: String(item.code ?? "").trim(),
+        name: String(item.name ?? "").trim(),
+        quantity: Number.isFinite(quantity) ? quantity : 0,
+        unit: typeof item.unit === "string" ? item.unit.trim() : null,
+        note: typeof item.note === "string" ? item.note.trim() : null,
+      };
+    })
+    .filter((item) => item.code || item.name);
+}
 
 /** Serialised so the model sees ISO dates rather than JS Date objects. */
 type ToolResult = unknown;
@@ -129,13 +202,15 @@ type ToolResult = unknown;
 export async function runAssistantTool(
   name: string,
   input: Record<string, unknown>,
-  auth: TokenPayload
+  ctx: AssistantContext,
+  /** เรียกกลับเมื่อเครื่องมือสร้างไฟล์ขึ้นมา เพื่อให้ route ส่งลิงก์กลับไปให้แอป */
+  onDocument?: (doc: GeneratedDocument) => void
 ): Promise<ToolResult> {
-  const isAdmin = auth.role === "ADMIN";
+  const isAdmin = ctx.role === "ADMIN";
   const limit = clampLimit(input.limit);
   const keyword = typeof input.keyword === "string" ? input.keyword.trim() : "";
   // An EMPLOYEE's queries are pinned to their own rows; only an admin sees the team.
-  const ownRows = isAdmin ? {} : { userId: auth.userId };
+  const ownRows = isAdmin ? {} : { userId: ctx.userId };
 
   switch (name) {
     case "search_work_logs": {
@@ -348,6 +423,78 @@ export async function runAssistantTool(
         ระยะทางกม: l.endMileage != null ? l.endMileage - l.startMileage : null,
         สถานะ: l.status,
       }));
+    }
+
+    case "create_transfer_document": {
+      const from = String(input.fromWarehouse ?? "").trim();
+      const to = String(input.toWarehouse ?? "").trim();
+      const items = parseItems(input.items);
+
+      if (!from || !to) return { error: "ต้องระบุทั้งคลังต้นทางและคลังปลายทาง" };
+      if (items.length === 0) return { error: "ต้องมีรายการของอย่างน้อย 1 รายการ" };
+      const badQty = items.filter((i) => !(i.quantity > 0));
+      if (badQty.length > 0) {
+        return { error: `จำนวนต้องมากกว่า 0: ${badQty.map((i) => i.code).join(", ")}` };
+      }
+
+      // เทียบรหัสกับฐานข้อมูลเพื่อใช้ชื่อทางการ ถ้าไม่เจอก็ยังออกเอกสารให้
+      // แต่บอกกลับไปว่ารหัสไหนไม่มีในระบบ ผู้ใช้จะได้ตรวจก่อนส่งอนุมัติ
+      const known = await prisma.sparePart.findMany({
+        where: { partCode: { in: items.map((i) => i.code).filter(Boolean) } },
+        select: { partCode: true, name: true },
+      });
+      const byCode = new Map(known.map((p) => [p.partCode.toUpperCase(), p.name]));
+      const unknownCodes = items
+        .filter((i) => i.code && !byCode.has(i.code.toUpperCase()))
+        .map((i) => i.code);
+
+      const resolved = items.map((item) => ({
+        ...item,
+        name: byCode.get(item.code.toUpperCase()) ?? item.name,
+      }));
+
+      const data = {
+        fromWarehouse: from,
+        toWarehouse: to,
+        preparedBy: ctx.name,
+        documentNo: typeof input.documentNo === "string" ? input.documentNo.trim() : null,
+        documentDate: typeof input.documentDate === "string" ? input.documentDate : null,
+        note: typeof input.note === "string" ? input.note.trim() : null,
+        items: resolved,
+      };
+
+      const buffer = await buildTransferRequestDocx(data);
+      const filename = transferRequestFilename(data);
+      const stored: StoredDocument = saveDocument({
+        filename,
+        asciiFilename: transferRequestAsciiFilename(data),
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        data: buffer,
+        ownerId: ctx.userId,
+      });
+
+      onDocument?.({
+        id: stored.id,
+        filename,
+        path: documentPath(stored),
+        title: `ขอโอนสินค้า: ${from} → ${to}`,
+      });
+
+      return {
+        สร้างเอกสารแล้ว: true,
+        ชื่อไฟล์: filename,
+        จากคลัง: from,
+        ไปคลัง: to,
+        ผู้จัดทำ: ctx.name,
+        จำนวนรายการ: resolved.length,
+        รายการ: resolved.map((i) => `${i.code} ${i.name} ${i.quantity}${i.unit ? " " + i.unit : ""}`),
+        รหัสที่ยังไม่มีในฐานข้อมูล: unknownCodes.length > 0 ? unknownCodes : null,
+        // ปุ่มดาวน์โหลดขึ้นในแอปเองแล้ว ไม่ต้องพิมพ์ลิงก์ซ้ำในคำตอบ
+        คำแนะนำ:
+          "บอกผู้ใช้ว่าเอกสารพร้อมแล้วและกดปุ่มดาวน์โหลดใต้ข้อความได้เลย " +
+          "ถ้ามีรหัสที่ไม่พบในฐานข้อมูล ให้เตือนให้ตรวจสอบชื่อรายการกับต้นฉบับก่อนส่งอนุมัติ",
+      };
     }
 
     default:

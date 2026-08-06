@@ -11,15 +11,25 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { api, apiErrorMessage } from "../api/client";
+import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { openUrl } from "../utils/share";
 import { useAuth } from "../context/AuthContext";
 import Markdown from "../components/Markdown";
 import { downloadText, shareText } from "../utils/share";
 import { colors, radius, shadow, spacing } from "../theme";
 
+/** ไฟล์ที่ผู้ช่วยสร้างขึ้นระหว่างตอบ เช่น เอกสารขอโอนสินค้า */
+interface GeneratedDocument {
+  id: string;
+  filename: string;
+  path: string;
+  title: string;
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  documents?: GeneratedDocument[];
 }
 
 interface Preset {
@@ -35,6 +45,13 @@ interface Preset {
  * question first.
  */
 const PRESETS: Preset[] = [
+  {
+    label: "เอกสารขอโอนสินค้า",
+    icon: "swap-horizontal",
+    prompt:
+      "ฉันอยากได้เอกสารขอโอนสินค้าระหว่างคลัง ช่วยบอกหน่อยว่าต้องบอกอะไรบ้าง " +
+      "แล้วยกตัวอย่างวิธีพิมพ์รายการให้ดูสั้น ๆ",
+  },
   {
     label: "สรุปงานเดือนนี้",
     icon: "calendar",
@@ -101,13 +118,21 @@ export default function AssistantScreen() {
     setSending(true);
 
     try {
-      const res = await api.post<{ reply: string; truncated?: boolean }>("/assistant/chat", {
-        messages: history,
+      const res = await api.post<{
+        reply: string;
+        truncated?: boolean;
+        documents?: GeneratedDocument[];
+      }>("/assistant/chat", {
+        // ประวัติที่ส่งกลับไปมีแต่บทสนทนา ไม่ต้องแนบข้อมูลไฟล์
+        messages: history.map((m) => ({ role: m.role, content: m.content })),
       });
       const reply = res.data.truncated
         ? `${res.data.reply}\n\n_(เอกสารยาวเกินโควตาหนึ่งครั้ง — พิมพ์ว่า "เขียนต่อ" เพื่อขอส่วนที่เหลือ)_`
         : res.data.reply;
-      setMessages([...history, { role: "assistant", content: reply }]);
+      setMessages([
+        ...history,
+        { role: "assistant", content: reply, documents: res.data.documents },
+      ]);
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
@@ -155,6 +180,15 @@ export default function AssistantScreen() {
               {"\n"}เลือกหัวข้อด้านล่าง หรือพิมพ์สิ่งที่ต้องการได้เลย
             </Text>
 
+            <View style={styles.exampleCard}>
+              <Text style={styles.exampleTitle}>ตัวอย่าง — พิมพ์แบบนี้ได้เลย</Text>
+              <Text style={styles.exampleText}>
+                ขอเอกสารโอนอะไหล่ จากคลังลาดพร้าว 94 ไปคลังเชียงใหม่{"\n"}
+                SPHB416 ELECTRODE, SPARK PKG 3 ตัว{"\n"}
+                SPOS0028 วาล์วน้ำ 4 ทาง Oasis 3 ตัว
+              </Text>
+            </View>
+
             <View style={styles.presetGrid}>
               {presets.map((p) => (
                 <TouchableOpacity
@@ -189,6 +223,25 @@ export default function AssistantScreen() {
           ) : (
             <View key={i} style={styles.assistantBubble}>
               <Markdown content={m.content} />
+
+              {m.documents?.map((doc) => (
+                <TouchableOpacity
+                  key={doc.id}
+                  style={styles.docCard}
+                  activeOpacity={0.7}
+                  onPress={() => openUrl(resolveImageUrl(doc.path)!)}
+                >
+                  <View style={styles.docIcon}>
+                    <Ionicons name="document-text" size={22} color="#2563eb" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.docTitle}>{doc.title}</Text>
+                    <Text style={styles.docName}>{doc.filename}</Text>
+                  </View>
+                  <Ionicons name="download-outline" size={20} color={colors.primary} />
+                </TouchableOpacity>
+              ))}
+
               <View style={styles.actions}>
                 <TouchableOpacity style={styles.action} onPress={() => shareText(m.content)}>
                   <Ionicons
@@ -281,6 +334,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: spacing.xs,
   },
+  exampleCard: {
+    alignSelf: "stretch",
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.lg,
+  },
+  exampleTitle: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.textMuted },
+  exampleText: { fontSize: 13, lineHeight: 22, color: colors.text, marginTop: 4 },
   presetGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -339,6 +403,28 @@ const styles = StyleSheet.create({
   },
   action: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   actionText: { fontSize: 13, lineHeight: 20, color: colors.primary, fontWeight: "600" },
+
+  docCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  docIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.sm,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  docTitle: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.text },
+  docName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
 
   thinking: {
     flexDirection: "row",
