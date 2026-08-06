@@ -12,6 +12,15 @@ export default function HomeScreen({ navigation }: Props) {
 
   const entries: MenuEntry[] = [
     {
+      key: "TransferDocument",
+      label: "เอกสารขอโอนสินค้า",
+      description: "กรอกรายการ แล้วได้ไฟล์ Word ตามฟอร์มบริษัท",
+      icon: "swap-horizontal",
+      tint: "#ccfbf1",
+      iconColor: "#0d9488",
+      onPress: () => navigation.navigate("TransferDocument"),
+    },
+    {
       key: "Assistant",
       label: "ผู้ช่วย AI",
       description: "ถามข้อมูล หรือให้ช่วยออกเอกสารรายงาน",

@@ -12,7 +12,6 @@ import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { assistantTools, runAssistantTool, GeneratedDocument } from "../assistant/tools";
-import { getDocument } from "../documents/store";
 import { prisma } from "../prisma";
 
 const router = Router();
@@ -86,32 +85,6 @@ const chatSchema = z.object({
 /** Lets the app tell "not set up yet" apart from "the call failed". */
 router.get("/status", requireAuth, (_req, res) => {
   res.json({ enabled: Boolean(process.env.ANTHROPIC_API_KEY), model: MODEL });
-});
-
-/**
- * ดาวน์โหลดเอกสารที่ผู้ช่วยสร้างไว้
- *
- * ใช้ token ในลิงก์แทน Authorization header เพราะต้องเปิดได้ทั้งจากปุ่มบนเว็บ
- * และจากเบราว์เซอร์บนมือถือที่แนบ header เองไม่ได้ token สุ่ม 24 ไบต์และหมดอายุ
- * ใน 2 ชั่วโมง ใครได้ลิงก์ไปก็เปิดได้ในช่วงนั้น — ตั้งใจให้ส่งต่อให้คนอนุมัติได้เลย
- */
-router.get("/documents/:id", (req, res) => {
-  const token = typeof req.query.token === "string" ? req.query.token : "";
-  const doc = token ? getDocument(req.params.id, token) : null;
-  if (!doc) {
-    return res.status(404).json({ error: "ไม่พบเอกสารนี้ หรือลิงก์หมดอายุแล้ว (เก็บไว้ 2 ชั่วโมง)" });
-  }
-
-  res.setHeader("Content-Type", doc.mimeType);
-  // filename* เป็นแบบ RFC 5987 เพื่อให้ชื่อไฟล์ภาษาไทยไม่เพี้ยนตอนดาวน์โหลด
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${doc.asciiFilename}"; filename*=UTF-8''${encodeURIComponent(
-      doc.filename
-    )}`
-  );
-  res.setHeader("Cache-Control", "private, no-store");
-  res.send(doc.data);
 });
 
 router.post("/chat", requireAuth, async (req: AuthRequest, res) => {

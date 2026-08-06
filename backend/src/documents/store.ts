@@ -78,5 +78,5 @@ export function getDocument(id: string, token: string): StoredDocument | null {
 
 /** ลิงก์แบบ path เดียว ฝั่งแอปเติม origin ของ backend เอง */
 export function documentPath(doc: StoredDocument): string {
-  return `/api/assistant/documents/${doc.id}?token=${doc.token}`;
+  return `/api/documents/${doc.id}?token=${doc.token}`;
 }

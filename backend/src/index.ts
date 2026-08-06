@@ -13,6 +13,7 @@ import sparePartRoutes from "./routes/spareParts";
 import consumableRoutes from "./routes/consumables";
 import consumableRequestRoutes from "./routes/consumableRequests";
 import assistantRoutes from "./routes/assistant";
+import documentRoutes from "./routes/documents";
 
 const app = express();
 app.use(cors());
@@ -32,6 +33,7 @@ app.use("/api/spare-parts", sparePartRoutes);
 app.use("/api/consumables", consumableRoutes);
 app.use("/api/consumable-requests", consumableRequestRoutes);
 app.use("/api/assistant", assistantRoutes);
+app.use("/api/documents", documentRoutes);
 
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {
