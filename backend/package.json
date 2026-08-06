@@ -20,6 +20,7 @@
     "import:flow": "ts-node scripts/import-troubleshooting.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@prisma/client": "^5.20.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

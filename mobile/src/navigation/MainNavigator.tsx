@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 
 import HomeScreen from "../screens/HomeScreen";
+import AssistantScreen from "../screens/AssistantScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
 import GuideListScreen from "../screens/GuideListScreen";
@@ -66,6 +67,11 @@ function HomeStackNavigator() {
         name="HomeMenu"
         component={HomeScreen}
         options={{ title: "งานช่าง", headerRight: () => <LogoutButton /> }}
+      />
+      <HomeStack.Screen
+        name="Assistant"
+        component={AssistantScreen}
+        options={{ title: "ผู้ช่วย AI" }}
       />
       <HomeStack.Screen
         name="FlowList"

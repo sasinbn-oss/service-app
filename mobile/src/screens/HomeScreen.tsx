@@ -12,6 +12,15 @@ export default function HomeScreen({ navigation }: Props) {
 
   const entries: MenuEntry[] = [
     {
+      key: "Assistant",
+      label: "ผู้ช่วย AI",
+      description: "ถามข้อมูล หรือให้ช่วยออกเอกสารรายงาน",
+      icon: "sparkles",
+      tint: "#ede9fe",
+      iconColor: "#7c3aed",
+      onPress: () => navigation.navigate("Assistant"),
+    },
+    {
       key: "FlowList",
       label: "วินิจฉัยอาการเสีย",
       description: "ตอบใช่/ไม่ทีละขั้น พร้อมผังวงจร",

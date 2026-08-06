@@ -6,6 +6,7 @@ export type AuthStackParamList = {
 /** Tab 1 — the jobs a technician does in the field. */
 export type HomeStackParamList = {
   HomeMenu: undefined;
+  Assistant: undefined;
   FlowList: undefined;
   FlowRun: { id: number; title: string };
   SparePartList: undefined;
