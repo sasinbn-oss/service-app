@@ -9,12 +9,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "../prisma";
 import { Role } from "../utils/constants";
+import { buildTransferRequestDocx } from "../documents/transferRequest";
+import { buildTransferRequestPdf } from "../documents/transferRequestPdf";
 import {
-  buildTransferRequestDocx,
   transferRequestAsciiFilename,
   transferRequestFilename,
   TransferItem,
-} from "../documents/transferRequest";
+} from "../documents/transferContent";
 import { documentPath, saveDocument, StoredDocument } from "../documents/store";
 import { WAREHOUSES } from "../documents/warehouses";
 
@@ -168,6 +169,11 @@ export const assistantTools: Anthropic.Tool[] = [
             },
             required: ["code", "name", "quantity"],
           },
+        },
+        format: {
+          type: "string",
+          enum: ["docx", "pdf"],
+          description: "ชนิดไฟล์ ค่าเริ่มต้นคือ docx (แก้ไขต่อได้) เลือก pdf เมื่อผู้ใช้ขอ PDF",
         },
         documentNo: { type: "string", description: "เลขที่เอกสาร ถ้าผู้ใช้ไม่บอกให้เว้นว่าง" },
         documentDate: { type: "string", description: "วันที่เอกสาร YYYY-MM-DD (ไม่ระบุ = วันนี้)" },
@@ -470,14 +476,19 @@ export async function runAssistantTool(
         items: resolved,
       };
 
-      const buffer = await buildTransferRequestDocx(data);
-      const filename = transferRequestFilename(data);
+      const format = input.format === "pdf" ? "pdf" : "docx";
+      const filename = transferRequestFilename(data, format);
       const stored: StoredDocument = saveDocument({
         filename,
-        asciiFilename: transferRequestAsciiFilename(data),
+        asciiFilename: transferRequestAsciiFilename(data, format),
         mimeType:
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        data: buffer,
+          format === "pdf"
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        data:
+          format === "pdf"
+            ? await buildTransferRequestPdf(data)
+            : await buildTransferRequestDocx(data),
         ownerId: ctx.userId,
       });
 

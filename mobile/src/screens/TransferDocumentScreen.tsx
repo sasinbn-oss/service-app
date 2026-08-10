@@ -29,8 +29,11 @@ interface Line {
   unit: string;
 }
 
+type DocumentFormat = "docx" | "pdf";
+
 interface CreatedDocument {
   filename: string;
+  format: DocumentFormat;
   path: string;
   title: string;
   unknownCodes: string[];
@@ -130,7 +133,8 @@ export default function TransferDocumentScreen() {
   const [results, setResults] = useState<SparePart[]>([]);
   const [searching, setSearching] = useState(false);
 
-  const [submitting, setSubmitting] = useState(false);
+  // เก็บว่ากำลังสร้างไฟล์ชนิดไหนอยู่ เพื่อให้วงกลมหมุนขึ้นเฉพาะปุ่มที่กด
+  const [submitting, setSubmitting] = useState<DocumentFormat | null>(null);
   const [created, setCreated] = useState<CreatedDocument | null>(null);
 
   const fromWarehouse = fromChoice === CUSTOM ? fromCustom : fromChoice;
@@ -218,7 +222,7 @@ export default function TransferDocumentScreen() {
 
   const filledLines = lines.filter((l) => l.name.trim() && Number(l.quantity) > 0);
 
-  async function handleSubmit() {
+  async function handleSubmit(format: DocumentFormat) {
     if (!fromWarehouse.trim() || !toWarehouse.trim()) {
       showAlert("ข้อมูลไม่ครบ", "กรุณาเลือกทั้งคลังต้นทางและคลังปลายทาง");
       return;
@@ -239,17 +243,21 @@ export default function TransferDocumentScreen() {
       showAlert(
         "มีรายการที่ยังไม่ได้ใส่จำนวน",
         `${halfDone.map((l) => l.name || l.code).join(", ")} จะไม่ถูกใส่ในเอกสาร`,
-        [{ text: "ยกเลิก", style: "cancel" }, { text: "ออกเอกสารต่อ", onPress: submit }]
+        [
+          { text: "ยกเลิก", style: "cancel" },
+          { text: "ออกเอกสารต่อ", onPress: () => submit(format) },
+        ]
       );
       return;
     }
-    submit();
+    submit(format);
   }
 
-  async function submit() {
-    setSubmitting(true);
+  async function submit(format: DocumentFormat) {
+    setSubmitting(format);
     try {
       const res = await api.post<CreatedDocument>("/documents/transfer-request", {
+        format,
         fromWarehouse: fromWarehouse.trim(),
         toWarehouse: toWarehouse.trim(),
         documentNo: documentNo.trim() || undefined,
@@ -269,7 +277,7 @@ export default function TransferDocumentScreen() {
     } catch (e) {
       showAlert("ออกเอกสารไม่สำเร็จ", apiErrorMessage(e));
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   }
 
@@ -443,21 +451,42 @@ export default function TransferDocumentScreen() {
           />
         </View>
 
-        <TouchableOpacity
-          style={[styles.submit, submitting && styles.submitDisabled]}
-          onPress={handleSubmit}
-          disabled={submitting}
-          activeOpacity={0.8}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Ionicons name="document-text" size={18} color="#fff" />
-              <Text style={styles.submitText}>ออกเอกสาร Word</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        <Text style={styles.formatHint}>
+          Word แก้ไขต่อได้ · PDF เปิดดูและส่งต่อได้ทันที
+        </Text>
+        <View style={styles.submitRow}>
+          <TouchableOpacity
+            style={[styles.submit, submitting !== null && styles.submitDisabled]}
+            onPress={() => handleSubmit("docx")}
+            disabled={submitting !== null}
+            activeOpacity={0.8}
+          >
+            {submitting === "docx" ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="document-text" size={18} color="#fff" />
+                <Text style={styles.submitText}>ออกเป็น Word</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.submit, styles.submitPdf, submitting !== null && styles.submitDisabled]}
+            onPress={() => handleSubmit("pdf")}
+            disabled={submitting !== null}
+            activeOpacity={0.8}
+          >
+            {submitting === "pdf" ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="document" size={18} color="#fff" />
+                <Text style={styles.submitText}>ออกเป็น PDF</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
 
         {created ? (
           <View style={styles.doneCard}>
@@ -467,13 +496,21 @@ export default function TransferDocumentScreen() {
               onPress={() => openUrl(resolveImageUrl(created.path)!)}
             >
               <View style={styles.docIcon}>
-                <Ionicons name="document-text" size={22} color="#2563eb" />
+                <Ionicons
+                  name={created.format === "pdf" ? "document" : "document-text"}
+                  size={22}
+                  color={created.format === "pdf" ? "#b91c1c" : "#2563eb"}
+                />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.docTitle}>{created.title}</Text>
                 <Text style={styles.docName}>{created.filename}</Text>
               </View>
-              <Ionicons name="download-outline" size={20} color={colors.primary} />
+              <Ionicons
+                name={created.format === "pdf" ? "open-outline" : "download-outline"}
+                size={20}
+                color={colors.primary}
+              />
             </TouchableOpacity>
 
             {created.unknownCodes.length > 0 ? (
@@ -611,7 +648,17 @@ const styles = StyleSheet.create({
   },
   addLineText: { fontSize: 14, lineHeight: 22, color: colors.primary, fontWeight: "600" },
 
+  formatHint: {
+    fontSize: 12,
+    lineHeight: 20,
+    color: colors.textMuted,
+    textAlign: "center",
+    marginBottom: spacing.sm,
+  },
+  submitRow: { flexDirection: "row", gap: spacing.md },
   submit: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -620,6 +667,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingVertical: spacing.lg,
   },
+  submitPdf: { backgroundColor: "#b91c1c" },
   submitDisabled: { backgroundColor: colors.borderStrong },
   submitText: { color: "#fff", fontSize: 16, lineHeight: 26, fontWeight: "700" },
 

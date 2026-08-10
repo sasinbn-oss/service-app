@@ -8,11 +8,12 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { buildTransferRequestDocx } from "../documents/transferRequest";
+import { buildTransferRequestPdf } from "../documents/transferRequestPdf";
 import {
-  buildTransferRequestDocx,
   transferRequestAsciiFilename,
   transferRequestFilename,
-} from "../documents/transferRequest";
+} from "../documents/transferContent";
 import { documentPath, getDocument, saveDocument } from "../documents/store";
 import { WAREHOUSES } from "../documents/warehouses";
 import { prisma } from "../prisma";
@@ -29,9 +30,16 @@ router.get("/warehouses", requireAuth, (_req, res) => {
   res.json({ warehouses: WAREHOUSES });
 });
 
-const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const FORMATS = {
+  docx: {
+    mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    build: buildTransferRequestDocx,
+  },
+  pdf: { mime: "application/pdf", build: buildTransferRequestPdf },
+} as const;
 
 const transferSchema = z.object({
+  format: z.enum(["docx", "pdf"]).default("docx"),
   fromWarehouse: z.string().trim().min(1, "กรุณาระบุคลังต้นทาง"),
   toWarehouse: z.string().trim().min(1, "กรุณาระบุคลังปลายทาง"),
   documentNo: z.string().trim().optional(),
@@ -83,17 +91,19 @@ router.post("/transfer-request", requireAuth, async (req: AuthRequest, res) => {
     })),
   };
 
+  const format = FORMATS[parsed.data.format];
   const stored = saveDocument({
-    filename: transferRequestFilename(data),
-    asciiFilename: transferRequestAsciiFilename(data),
-    mimeType: DOCX_MIME,
-    data: await buildTransferRequestDocx(data),
+    filename: transferRequestFilename(data, parsed.data.format),
+    asciiFilename: transferRequestAsciiFilename(data, parsed.data.format),
+    mimeType: format.mime,
+    data: await format.build(data),
     ownerId: req.auth!.userId,
   });
 
   res.status(201).json({
     id: stored.id,
     filename: stored.filename,
+    format: parsed.data.format,
     path: documentPath(stored),
     title: `ขอโอนสินค้า: ${data.fromWarehouse} → ${data.toWarehouse}`,
     unknownCodes: parsed.data.items
@@ -117,11 +127,14 @@ router.get("/:id", (req, res) => {
   }
 
   res.setHeader("Content-Type", doc.mimeType);
+  // PDF เปิดดูในเบราว์เซอร์ได้เลย จึงส่งแบบ inline ให้ตรวจหน้าเอกสารก่อนแล้วค่อยกดเซฟ
+  // ส่วน Word เบราว์เซอร์เปิดเองไม่ได้อยู่แล้ว ให้ดาวน์โหลดไปตรง ๆ
+  const disposition = doc.mimeType === "application/pdf" ? "inline" : "attachment";
   // filename* เป็นแบบ RFC 5987 เพื่อให้ชื่อไฟล์ภาษาไทยไม่เพี้ยนตอนดาวน์โหลด
   // ส่วน filename= เป็นชื่อสำรองสำหรับตัวโหลดที่อ่านแบบ UTF-8 ไม่ได้
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${doc.asciiFilename}"; filename*=UTF-8''${encodeURIComponent(
+    `${disposition}; filename="${doc.asciiFilename}"; filename*=UTF-8''${encodeURIComponent(
       doc.filename
     )}`
   );
