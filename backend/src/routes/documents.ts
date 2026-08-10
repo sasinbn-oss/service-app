@@ -14,9 +14,20 @@ import {
   transferRequestFilename,
 } from "../documents/transferRequest";
 import { documentPath, getDocument, saveDocument } from "../documents/store";
+import { WAREHOUSES } from "../documents/warehouses";
 import { prisma } from "../prisma";
 
 const router = Router();
+
+/**
+ * รายชื่อคลังสำหรับ dropdown ในแอป
+ *
+ * ให้แอปดึงตอนเปิดหน้าแทนที่จะฝังรายชื่อไว้ในตัวแอป เพิ่มคลังใหม่จึงแก้ที่
+ * backend ไฟล์เดียวแล้ว deploy ไม่ต้อง build แอปใหม่และรอให้ทุกคนอัปเดต
+ */
+router.get("/warehouses", requireAuth, (_req, res) => {
+  res.json({ warehouses: WAREHOUSES });
+});
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 

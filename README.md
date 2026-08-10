@@ -45,6 +45,9 @@ npm run dev                # รันที่ http://localhost:4000
 
 **ฟีเจอร์นี้ไม่ต้องใช้ API key และไม่มีค่าใช้จ่าย** ทำงานได้เลยหลังจาก deploy
 
+- **คลังต้นทาง/ปลายทาง** เลือกจาก dropdown รายชื่อคลังของบริษัท
+  ถ้าเป็นคลังที่ยังไม่มีในรายการ เลือก "อื่น ๆ (พิมพ์เอง)" แล้วพิมพ์ได้
+  เลือกคลังเดียวกันทั้งสองช่องจะถูกเตือนก่อนออกเอกสาร
 - ช่อง **รหัสสินค้า** ค้นจากฐานข้อมูลอะไหล่ได้ พิมพ์รหัสหรือชื่อในช่องค้นหาแล้วกดผลลัพธ์
   ระบบจะเติมรหัสและชื่อทางการให้ ส่วนอะไหล่ที่ยังไม่มีในระบบก็พิมพ์เองในบรรทัดได้
 - **ผู้จัดทำ** เติมจากชื่อผู้ที่ล็อกอินอยู่ ไม่ต้องกรอก
@@ -56,6 +59,10 @@ npm run dev                # รันที่ http://localhost:4000
 
 ผู้ช่วย AI ก็สั่งให้ออกเอกสารใบเดียวกันนี้ได้ (ถ้าเปิดใช้งานไว้) ใช้ตัวประกอบเอกสารชุดเดียวกัน
 ต่างกันแค่ว่าใครเป็นคนกรอกข้อมูล — ไฟล์ที่ได้จึงหน้าตาเหมือนกันทั้งสองทาง
+
+**เพิ่ม/แก้/ลบรายชื่อคลัง** แก้ที่ `backend/src/documents/warehouses.ts` ไฟล์เดียว
+แล้ว deploy backend ใหม่ — แอปดึงรายชื่อผ่าน `GET /api/documents/warehouses` ตอนเปิดหน้า
+จึงไม่ต้อง build แอปใหม่และไม่ต้องรอให้ทุกคนอัปเดตแอป
 
 ไฟล์แม่แบบต้นฉบับที่ใช้อ้างอิงรูปแบบเก็บไว้ที่ `docs/transfer-request-template.docx`
 โค้ดที่ประกอบเอกสารอยู่ที่ `backend/src/documents/transferRequest.ts` — ประกอบขึ้นใหม่
@@ -175,6 +182,7 @@ npx ts-node scripts/diagnose-flowchart.ts "C:\path\DryerTroubleshoot.xlsx"
 - `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`
 
 **เอกสาร**
+- `GET /api/documents/warehouses` — รายชื่อคลังสำหรับ dropdown ในแอป
 - `POST /api/documents/transfer-request` — ส่ง `{ fromWarehouse, toWarehouse, items: [{ code, name, quantity, unit }] }`
   ได้ `{ filename, path, unknownCodes }` กลับมา (ไม่ใช้ AI)
 - `GET /api/documents/:id?token=` — ดาวน์โหลดไฟล์

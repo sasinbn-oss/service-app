@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Picker } from "@react-native-picker/picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { showAlert } from "../utils/alert";
@@ -35,8 +36,73 @@ interface CreatedDocument {
   unknownCodes: string[];
 }
 
-// จำคลังที่พิมพ์ล่าสุดไว้ เพราะโดยมากคนเดิมจะโอนจากคลังเดิมซ้ำ ๆ
+// จำคลังที่เลือกล่าสุดไว้ เพราะโดยมากคนเดิมจะโอนจากคลังเดิมซ้ำ ๆ
 const LAST_ROUTE_KEY = "service-app/last-transfer-route";
+
+/** ค่าที่ใช้ใน Picker เมื่อคลังปลายทางยังไม่มีในรายการ ให้พิมพ์เอง */
+const CUSTOM = "__custom__";
+
+/** คลังที่จำไว้อาจถูกถอดออกจากรายการไปแล้ว กรณีนั้นให้ตกไปอยู่ช่องพิมพ์เอง */
+function restore(
+  saved: string,
+  list: string[],
+  setChoice: (v: string) => void,
+  setCustom: (v: string) => void
+) {
+  if (list.includes(saved)) {
+    setChoice(saved);
+  } else {
+    setChoice(CUSTOM);
+    setCustom(saved);
+  }
+}
+
+/** ช่องเลือกคลัง พร้อมทางออกให้พิมพ์เองถ้าคลังยังไม่มีในรายการ */
+function WarehouseField({
+  label,
+  testPlaceholder,
+  warehouses,
+  choice,
+  custom,
+  onChoice,
+  onCustom,
+}: {
+  label: string;
+  testPlaceholder: string;
+  warehouses: string[];
+  choice: string;
+  custom: string;
+  onChoice: (v: string) => void;
+  onCustom: (v: string) => void;
+}) {
+  return (
+    <>
+      <Text style={styles.label}>{label}</Text>
+      <View style={styles.pickerWrapper}>
+        <Picker
+          selectedValue={choice}
+          onValueChange={(v) => onChoice(String(v))}
+          style={styles.picker}
+        >
+          <Picker.Item label="— เลือกคลัง —" value="" color={colors.textFaint} />
+          {warehouses.map((w) => (
+            <Picker.Item key={w} label={w} value={w} />
+          ))}
+          <Picker.Item label="อื่น ๆ (พิมพ์เอง)" value={CUSTOM} />
+        </Picker>
+      </View>
+      {choice === CUSTOM ? (
+        <TextInput
+          style={styles.input}
+          value={custom}
+          onChangeText={onCustom}
+          placeholder={testPlaceholder}
+          placeholderTextColor={colors.textFaint}
+        />
+      ) : null}
+    </>
+  );
+}
 
 let nextKey = 0;
 const makeLine = (partial: Partial<Line> = {}): Line => ({
@@ -49,8 +115,13 @@ const makeLine = (partial: Partial<Line> = {}): Line => ({
 });
 
 export default function TransferDocumentScreen() {
-  const [fromWarehouse, setFromWarehouse] = useState("");
-  const [toWarehouse, setToWarehouse] = useState("");
+  const [warehouses, setWarehouses] = useState<string[]>([]);
+  // เก็บสิ่งที่เลือกใน Picker แยกจากข้อความที่พิมพ์เอง เพื่อให้สลับไปมาได้
+  // โดยไม่ทำให้ค่าที่พิมพ์ค้างไว้หายไป
+  const [fromChoice, setFromChoice] = useState("");
+  const [fromCustom, setFromCustom] = useState("");
+  const [toChoice, setToChoice] = useState("");
+  const [toCustom, setToCustom] = useState("");
   const [documentNo, setDocumentNo] = useState("");
   const [note, setNote] = useState("");
   const [lines, setLines] = useState<Line[]>([makeLine()]);
@@ -62,17 +133,40 @@ export default function TransferDocumentScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<CreatedDocument | null>(null);
 
+  const fromWarehouse = fromChoice === CUSTOM ? fromCustom : fromChoice;
+  const toWarehouse = toChoice === CUSTOM ? toCustom : toChoice;
+
   useEffect(() => {
-    AsyncStorage.getItem(LAST_ROUTE_KEY)
-      .then((raw) => {
-        if (!raw) return;
+    let cancelled = false;
+
+    async function load() {
+      // ดึงรายชื่อคลังก่อน แล้วค่อยเติมค่าที่จำไว้ เพราะต้องรู้ก่อนว่าคลังที่จำไว้
+      // ยังอยู่ในรายการหรือกลายเป็นคลังที่ต้องพิมพ์เองไปแล้ว
+      let list: string[] = [];
+      try {
+        const res = await api.get<{ warehouses: string[] }>("/documents/warehouses");
+        list = res.data.warehouses;
+      } catch {
+        // ดึงไม่ได้ก็ยังใช้งานต่อได้ด้วยตัวเลือก "พิมพ์เอง"
+      }
+      if (cancelled) return;
+      setWarehouses(list);
+
+      try {
+        const raw = await AsyncStorage.getItem(LAST_ROUTE_KEY);
+        if (!raw || cancelled) return;
         const saved = JSON.parse(raw) as { from?: string; to?: string };
-        setFromWarehouse((v) => v || saved.from || "");
-        setToWarehouse((v) => v || saved.to || "");
-      })
-      .catch(() => {
+        if (saved.from) restore(saved.from, list, setFromChoice, setFromCustom);
+        if (saved.to) restore(saved.to, list, setToChoice, setToCustom);
+      } catch {
         // ค่าที่จำไว้เสียก็แค่เริ่มจากช่องว่าง ไม่ต้องรบกวนผู้ใช้
-      });
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ค้นอะไหล่แบบหน่วงเวลา ไม่ยิงทุกตัวอักษรที่พิมพ์
@@ -126,7 +220,11 @@ export default function TransferDocumentScreen() {
 
   async function handleSubmit() {
     if (!fromWarehouse.trim() || !toWarehouse.trim()) {
-      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุทั้งคลังต้นทางและคลังปลายทาง");
+      showAlert("ข้อมูลไม่ครบ", "กรุณาเลือกทั้งคลังต้นทางและคลังปลายทาง");
+      return;
+    }
+    if (fromWarehouse.trim() === toWarehouse.trim()) {
+      showAlert("คลังซ้ำกัน", "คลังต้นทางกับปลายทางเป็นคลังเดียวกัน กรุณาเลือกใหม่");
       return;
     }
     if (filledLines.length === 0) {
@@ -192,28 +290,36 @@ export default function TransferDocumentScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>คลังต้นทาง / ปลายทาง</Text>
 
-          <Text style={styles.label}>ขอโอนจากคลังสินค้า</Text>
-          <TextInput
-            style={styles.input}
-            value={fromWarehouse}
-            onChangeText={(v) => {
-              setFromWarehouse(v);
+          <WarehouseField
+            label="ขอโอนจากคลังสินค้า"
+            testPlaceholder="พิมพ์ชื่อคลังต้นทาง"
+            warehouses={warehouses}
+            choice={fromChoice}
+            custom={fromCustom}
+            onChoice={(v) => {
+              setFromChoice(v);
               setCreated(null);
             }}
-            placeholder="เช่น คลังลาดพร้าว 94"
-            placeholderTextColor={colors.textFaint}
+            onCustom={(v) => {
+              setFromCustom(v);
+              setCreated(null);
+            }}
           />
 
-          <Text style={styles.label}>ขอรับเข้าคลังสินค้า</Text>
-          <TextInput
-            style={styles.input}
-            value={toWarehouse}
-            onChangeText={(v) => {
-              setToWarehouse(v);
+          <WarehouseField
+            label="ขอรับเข้าคลังสินค้า"
+            testPlaceholder="พิมพ์ชื่อคลังปลายทาง"
+            warehouses={warehouses}
+            choice={toChoice}
+            custom={toCustom}
+            onChoice={(v) => {
+              setToChoice(v);
               setCreated(null);
             }}
-            placeholder="เช่น คลังเชียงใหม่"
-            placeholderTextColor={colors.textFaint}
+            onCustom={(v) => {
+              setToCustom(v);
+              setCreated(null);
+            }}
           />
 
           <Text style={styles.label}>เลขที่เอกสาร (ไม่บังคับ)</Text>
@@ -426,6 +532,30 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   multiline: { minHeight: 72, textAlignVertical: "top" },
+  pickerWrapper: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    marginTop: 4,
+    // ซ่อนมุมของ <select> บนเว็บไม่ให้ล้นออกนอกกรอบที่โค้งไว้
+    overflow: "hidden",
+  },
+  picker: {
+    // เฉพาะเว็บ: react-native-web แปลง Picker เป็น <select> ซึ่งมาพร้อมเส้นขอบ
+    // และช่องไฟของเบราว์เซอร์เอง ทำให้เตี้ยและหน้าตาไม่เข้ากับช่องกรอกอื่น
+    // บน iOS/Android ต้องไม่ใส่คีย์พวกนี้ ไม่งั้นจะไปทับขนาดของวงล้อเลือกค่า
+    ...(Platform.OS === "web"
+      ? {
+          borderWidth: 0,
+          backgroundColor: "transparent",
+          color: colors.text,
+          fontSize: 15,
+          paddingVertical: spacing.md,
+          paddingHorizontal: spacing.md,
+        }
+      : null),
+  },
 
   searchRow: {
     flexDirection: "row",

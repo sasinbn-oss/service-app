@@ -16,6 +16,7 @@ import {
   TransferItem,
 } from "../documents/transferRequest";
 import { documentPath, saveDocument, StoredDocument } from "../documents/store";
+import { WAREHOUSES } from "../documents/warehouses";
 
 /** ใครกำลังถาม — ใช้ตัดสินสิทธิ์การอ่าน และใส่ชื่อผู้จัดทำลงในเอกสาร */
 export interface AssistantContext {
@@ -145,8 +146,14 @@ export const assistantTools: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        fromWarehouse: { type: "string", description: "คลังต้นทาง เช่น คลังลาดพร้าว 94" },
-        toWarehouse: { type: "string", description: "คลังปลายทาง เช่น คลังเชียงใหม่" },
+        fromWarehouse: {
+          type: "string",
+          description: `คลังต้นทาง ใช้ชื่อเต็มตามรายการนี้: ${WAREHOUSES.join(", ")} — ถ้าผู้ใช้พิมพ์ย่อ เช่น "ลาดพร้าว94" ให้เติมให้เป็นชื่อเต็ม`,
+        },
+        toWarehouse: {
+          type: "string",
+          description: `คลังปลายทาง ใช้ชื่อเต็มตามรายการเดียวกับคลังต้นทาง`,
+        },
         items: {
           type: "array",
           description: "รายการของที่ขอโอน ตามที่ผู้ใช้ระบุ",
