@@ -27,6 +27,7 @@ model User {
   workLogs      WorkLog[]
   consumableRequests ConsumableRequest[] @relation("RequestedBy")
   reviewedRequests   ConsumableRequest[] @relation("ReviewedBy")
+  outageNotes        Outage[]
 }
 
 model Vehicle {
@@ -124,6 +125,15 @@ model Outage {
   lastSeenAt DateTime
   // ว่าง = ยังไม่หาย เคสที่เปิดอยู่คือสิ่งที่แดชบอร์ดแสดง
   endedAt    DateTime?
+
+  // สิ่งที่คนกรอกเอง ไฟล์ export ไม่มีให้ — บอกว่าเสียเพราะอะไรและติดอยู่ที่ขั้นไหน
+  // ผูกกับเคส ไม่ใช่กับเครื่อง เคสใหม่จึงเริ่มจากว่างเสมอ ไม่เอาอาการเก่ามาปน
+  symptom      String?
+  // ดูค่าที่ใช้ได้ที่ WORK_STATUSES ใน src/utils/constants.ts
+  workStatus   String?
+  noteUpdatedAt   DateTime?
+  noteUpdatedById Int?
+  noteUpdatedBy   User?     @relation(fields: [noteUpdatedById], references: [id])
 
   @@index([kind, endedAt])
   @@index([branchId, endedAt])

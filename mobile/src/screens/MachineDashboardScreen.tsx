@@ -1,6 +1,8 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -29,10 +31,22 @@ interface OutageRow {
   grade: string | null;
   machineCode?: string;
   machineType?: string;
+  machineBrand?: string | null;
   machineCount?: number;
   startedAt: string;
   slaHours: number;
   breached: boolean;
+  // สองค่านี้คนกรอกเอง ไฟล์ export ไม่มีให้
+  symptom: string | null;
+  workStatus: string | null;
+  workStatusLabel: string | null;
+  noteUpdatedAt: string | null;
+  noteUpdatedBy: string | null;
+}
+
+interface WorkStatusOption {
+  value: string;
+  label: string;
 }
 
 interface DashboardResponse {
@@ -65,6 +79,24 @@ const GRADE_STYLE: Record<string, { color: string; background: string }> = {
   B: { color: "#2563a8", background: "#e2eefb" },
   C: { color: "#6b7280", background: "#eef0f2" },
 };
+
+/**
+ * สีของสถานะ — ให้กวาดตาแล้วรู้ทันทีว่าเคสไหนติดอยู่ที่ใคร
+ * ค่าที่ใช้ได้มาจาก WORK_STATUSES ฝั่ง backend ตรงนี้แค่ให้สีเท่านั้น
+ */
+const STATUS_STYLE: Record<string, { color: string; background: string }> = {
+  WAITING_PARTS: { color: "#92400e", background: "#fef3c7" },
+  WAITING_TECH: { color: "#1d4ed8", background: "#dbeafe" },
+  WAITING_PAYMENT: { color: "#6d28d9", background: "#ede9fe" },
+  WAITING_CUSTOMER: { color: "#a16207", background: "#fef9c3" },
+  IN_PROGRESS: { color: "#047857", background: "#d1fae5" },
+};
+
+const NO_STATUS_STYLE = { color: colors.textFaint, background: colors.border };
+
+function statusStyle(value: string | null) {
+  return value ? STATUS_STYLE[value] ?? NO_STATUS_STYLE : NO_STATUS_STYLE;
+}
 
 /** ชั่วโมงล้วนอ่านยากเมื่อเลยไม่กี่วัน แปลงเป็น "3 วัน 4 ชม." */
 function slaText(hours: number) {
@@ -101,10 +133,14 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const [ownership, setOwnership] = useState<string>("ทั้งหมด");
   const [search, setSearch] = useState("");
   const [breachedOnly, setBreachedOnly] = useState(false);
+  const [workStatus, setWorkStatus] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupKey>("region");
   const [sortKey, setSortKey] = useState<SortKey>("slaHours");
   const [sortAsc, setSortAsc] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const [statusOptions, setStatusOptions] = useState<WorkStatusOption[]>([]);
+  const [editing, setEditing] = useState<OutageRow | null>(null);
 
   const load = useCallback(
     async (opts: { refresh?: boolean } = {}) => {
@@ -119,6 +155,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
               ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
               ...(search.trim() ? { search: search.trim() } : {}),
               ...(breachedOnly ? { breachedOnly: "true" } : {}),
+              ...(workStatus ? { workStatus } : {}),
             },
           }
         );
@@ -130,13 +167,54 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         setRefreshing(false);
       }
     },
-    [tab, ownership, search, breachedOnly]
+    [tab, ownership, search, breachedOnly, workStatus]
   );
 
   useFocusEffect(
     useCallback(() => {
       load();
     }, [load])
+  );
+
+  // รายการสถานะมาจาก backend เพื่อไม่ให้มีสองที่ที่ต้องแก้ตอนเพิ่มสถานะใหม่
+  useEffect(() => {
+    api
+      .get<WorkStatusOption[]>("/machines/work-statuses")
+      .then((res) => setStatusOptions(res.data))
+      .catch(() => setStatusOptions([]));
+  }, []);
+
+  /**
+   * อัปเดตแถวในหน้าเลย ไม่ต้องโหลดใหม่ทั้งตารางเพราะแก้ทีละเคส
+   * ถ้ากำลังกรองด้วยสถานะอยู่แล้วแถวนั้นเปลี่ยนไปไม่ตรงเงื่อนไข ให้หายออกจากรายการ
+   */
+  const applyNote = useCallback(
+    (updated: OutageRow) => {
+      const stillMatches =
+        !workStatus ||
+        (workStatus === "NONE" ? updated.workStatus === null : updated.workStatus === workStatus);
+
+      setData((current) => {
+        if (!current) return current;
+        if (stillMatches) {
+          return { ...current, rows: current.rows.map((r) => (r.id === updated.id ? updated : r)) };
+        }
+        // ตัวเลขสรุปด้านบนต้องลดตามด้วย ไม่งั้นหัวตารางกับจำนวนแถวจะไม่ตรงกัน
+        const rows = current.rows.filter((r) => r.id !== updated.id);
+        return {
+          ...current,
+          rows,
+          summary: {
+            ...current.summary,
+            total: rows.length,
+            COCO: rows.filter((r) => r.ownership === "COCO").length,
+            DODO: rows.filter((r) => r.ownership === "DODO").length,
+            breached: rows.filter((r) => r.breached).length,
+          },
+        };
+      });
+    },
+    [workStatus]
   );
 
   const groups = useMemo(() => {
@@ -324,6 +402,29 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         </View>
       </View>
 
+      <View style={styles.statusFilterRow}>
+        <Text style={styles.sortLabel}>สถานะ</Text>
+        <StatusFilterChip
+          label="ทั้งหมด"
+          active={workStatus === null}
+          onPress={() => setWorkStatus(null)}
+        />
+        <StatusFilterChip
+          label="ยังไม่ระบุ"
+          active={workStatus === "NONE"}
+          onPress={() => setWorkStatus(workStatus === "NONE" ? null : "NONE")}
+        />
+        {statusOptions.map((option) => (
+          <StatusFilterChip
+            key={option.value}
+            label={option.label}
+            tone={STATUS_STYLE[option.value]}
+            active={workStatus === option.value}
+            onPress={() => setWorkStatus(workStatus === option.value ? null : option.value)}
+          />
+        ))}
+      </View>
+
       <View style={styles.sortRow}>
         <Text style={styles.sortLabel}>เรียงตาม</Text>
         <SortButton label="SLA" active={sortKey === "slaHours"} asc={sortAsc} onPress={() => toggleSort("slaHours")} />
@@ -392,11 +493,17 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                 sortKey={sortKey}
                 sortAsc={sortAsc}
                 onSort={toggleSort}
+                onEdit={setEditing}
               />
             ) : (
               <View style={styles.cardList}>
                 {group.rows.map((row) => (
-                  <OutageCard key={row.id} row={row} isMachines={isMachines} />
+                  <OutageCard
+                    key={row.id}
+                    row={row}
+                    isMachines={isMachines}
+                    onEdit={() => setEditing(row)}
+                  />
                 ))}
               </View>
             )
@@ -407,8 +514,179 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       <Text style={styles.footnote}>
         SLA นับตั้งแต่ครั้งแรกที่เจอปัญหานี้ในไฟล์ที่อัปโหลด และหยุดนับเมื่อหายไปจากไฟล์
         · ความละเอียดของเวลาขึ้นกับรอบอัปโหลด (เช้า/บ่าย) · เกิน {slaHours} ชม. ถือว่าเลยกำหนด
+        · แตะที่รายการเพื่อบันทึกอาการและสถานะการดำเนินการ
       </Text>
+
+      <NoteModal
+        row={editing}
+        options={statusOptions}
+        onClose={() => setEditing(null)}
+        onSaved={(updated) => {
+          applyNote(updated);
+          setEditing(null);
+        }}
+      />
     </ScrollView>
+  );
+}
+
+/**
+ * ฟอร์มกรอกอาการและสถานะของเคสหนึ่ง
+ *
+ * ผูกกับเคส ไม่ใช่กับเครื่อง เครื่องเดิมที่ดับรอบใหม่จึงเริ่มจากว่างเสมอ
+ * ไม่มีอาการของรอบก่อนติดมา
+ */
+function NoteModal({
+  row,
+  options,
+  onClose,
+  onSaved,
+}: {
+  row: OutageRow | null;
+  options: WorkStatusOption[];
+  onClose: () => void;
+  onSaved: (row: OutageRow) => void;
+}) {
+  const [symptom, setSymptom] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // เปิดเคสไหนก็ตั้งค่าเริ่มต้นจากเคสนั้น ไม่ใช่ค่าที่ค้างจากเคสก่อนหน้า
+  useEffect(() => {
+    setSymptom(row?.symptom ?? "");
+    setStatus(row?.workStatus ?? null);
+    setError(null);
+  }, [row]);
+
+  if (!row) return null;
+
+  async function save() {
+    if (!row) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await api.patch<{
+        symptom: string | null;
+        workStatus: string | null;
+        workStatusLabel: string | null;
+        noteUpdatedAt: string | null;
+        noteUpdatedBy: string | null;
+      }>(`/machines/outages/${row.id}/note`, { symptom: symptom.trim() || null, workStatus: status });
+      onSaved({ ...row, ...res.data });
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        {/* กันไม่ให้การแตะในกล่องทะลุไปปิด modal */}
+        <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <Text style={styles.modalTitle}>{row.branchName}</Text>
+            <Text style={styles.modalSub}>
+              {row.branchCode}
+              {row.machineCode ? ` · เครื่อง ${row.machineCode}` : ""}
+              {row.machineBrand ? ` · ${row.machineBrand}` : ""}
+              {` · ดับมาแล้ว ${slaText(row.slaHours)}`}
+            </Text>
+
+            <Text style={styles.modalLabel}>อาการที่พบ</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={symptom}
+              onChangeText={setSymptom}
+              placeholder="เช่น ปั๊มน้ำไม่ทำงาน / บอร์ดควบคุมเสีย"
+              placeholderTextColor={colors.textFaint}
+              multiline
+              maxLength={500}
+            />
+
+            <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
+            <View style={styles.modalOptions}>
+              {options.map((option) => {
+                const active = status === option.value;
+                const tone = statusStyle(option.value);
+                return (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.modalOption,
+                      active && { backgroundColor: tone.background, borderColor: tone.color },
+                    ]}
+                    onPress={() => setStatus(active ? null : option.value)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.modalOptionText, active && { color: tone.color }]}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={styles.modalHint}>แตะสถานะที่เลือกอยู่อีกครั้งเพื่อล้างค่า</Text>
+
+            {row.noteUpdatedBy ? (
+              <Text style={styles.modalHint}>
+                แก้ไขล่าสุดโดย {row.noteUpdatedBy} เมื่อ {formatDateTime(row.noteUpdatedAt)} น.
+              </Text>
+            ) : null}
+
+            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalCancel} onPress={onClose} activeOpacity={0.7}>
+                <Text style={styles.modalCancelText}>ยกเลิก</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalSave, saving && styles.modalSaveDisabled]}
+                onPress={save}
+                disabled={saving}
+                activeOpacity={0.7}
+              >
+                {saving ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.modalSaveText}>บันทึก</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function StatusFilterChip({
+  label,
+  active,
+  tone,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  tone?: { color: string; background: string };
+  onPress: () => void;
+}) {
+  const style = tone ?? NO_STATUS_STYLE;
+  return (
+    <TouchableOpacity
+      style={[
+        styles.statusFilterChip,
+        active && { backgroundColor: style.background, borderColor: style.color },
+      ]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Text style={[styles.statusFilterChipText, active && { color: style.color, fontWeight: "700" }]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -491,22 +769,47 @@ function SummaryCard({
   );
 }
 
-function columnsFor(isMachines: boolean): { key: SortKey | null; label: string; width: number }[] {
+/** ช่องที่ตารางแสดงได้ — เรียงตามนี้ทั้งหัวตารางและตัวแถว จึงไม่มีทางหลุดคนละลำดับ */
+type ColumnId =
+  | "branchCode"
+  | "branchName"
+  | "machineCode"
+  | "brand"
+  | "machineCount"
+  | "zone"
+  | "grade"
+  | "sla";
+
+interface Column {
+  id: ColumnId;
+  /** ใส่เมื่อคอลัมน์นั้นกดเรียงได้ */
+  key?: SortKey;
+  label: string;
+  width: number;
+}
+
+/**
+ * ความกว้างรวมต้องพอดีกับความกว้างของหน้า ไม่งั้นคอลัมน์ท้ายจะหลุดออกไปนอกจอ
+ * และต้องเลื่อนตารางไปทางขวาถึงจะเห็น ซึ่งคนใช้จริงจะไม่รู้ว่ามีคอลัมน์นั้นอยู่
+ * อาการกับสถานะจึงไม่ได้เป็นคอลัมน์ แต่ไปอยู่บรรทัดที่สองของแถวแทน
+ */
+function columnsFor(isMachines: boolean): Column[] {
   return isMachines
     ? [
-        { key: "branchCode", label: "รหัสสาขา", width: 92 },
-        { key: "branchName", label: "ชื่อสาขา", width: 236 },
-        { key: "machineCode", label: "เครื่อง", width: 84 },
-        { key: null, label: "ทีมช่าง", width: 110 },
-        { key: null, label: "Grade", width: 66 },
-        { key: "slaHours", label: "ดับมาแล้ว", width: 180 },
+        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 84 },
+        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 192 },
+        { id: "machineCode", key: "machineCode", label: "เครื่อง", width: 76 },
+        { id: "brand", label: "ยี่ห้อเครื่อง", width: 112 },
+        { id: "zone", label: "ทีมช่าง", width: 100 },
+        { id: "grade", label: "Grade", width: 56 },
+        { id: "sla", key: "slaHours", label: "ดับมาแล้ว", width: 160 },
       ]
     : [
-        { key: "branchCode", label: "รหัสสาขา", width: 92 },
-        { key: "branchName", label: "ชื่อสาขา", width: 260 },
-        { key: null, label: "เครื่องในสาขา", width: 96 },
-        { key: null, label: "ทีมช่าง", width: 110 },
-        { key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 190 },
+        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 84 },
+        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 236 },
+        { id: "machineCount", label: "เครื่องในสาขา", width: 100 },
+        { id: "zone", label: "ทีมช่าง", width: 108 },
+        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 176 },
       ];
 }
 
@@ -516,12 +819,14 @@ function OutageTable({
   sortKey,
   sortAsc,
   onSort,
+  onEdit,
 }: {
   rows: OutageRow[];
   isMachines: boolean;
   sortKey: SortKey;
   sortAsc: boolean;
   onSort: (key: SortKey) => void;
+  onEdit: (row: OutageRow) => void;
 }) {
   const columns = columnsFor(isMachines);
   return (
@@ -530,7 +835,7 @@ function OutageTable({
         <View style={styles.tableHeader}>
           {columns.map((column) => (
             <TouchableOpacity
-              key={column.label}
+              key={column.id}
               style={{ width: column.width }}
               disabled={!column.key}
               onPress={() => column.key && onSort(column.key)}
@@ -552,53 +857,102 @@ function OutageTable({
           ))}
         </View>
 
-        {rows.map((row) => {
-          const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
-          return (
-            <View key={row.id} style={[styles.tableRow, row.breached && styles.tableRowBreached]}>
-              <Text style={[styles.cellMono, { width: columns[0].width }]}>{row.branchCode}</Text>
-              <Text style={[styles.cellText, { width: columns[1].width }]}>{row.branchName}</Text>
-              {isMachines ? (
-                <Text style={[styles.cellMono, { width: columns[2].width }]}>
-                  {row.machineCode}
-                </Text>
-              ) : (
-                <Text style={[styles.cellText, { width: columns[2].width }]}>
-                  {row.machineCount ?? "—"}
-                </Text>
-              )}
-              <View style={{ width: columns[3].width }}>
-                <View style={styles.zoneChip}>
-                  <Text style={styles.zoneChipText}>{row.zone ?? "—"}</Text>
+        {rows.map((row) => (
+          <TouchableOpacity
+            key={row.id}
+            style={[styles.tableRow, row.breached && styles.tableRowBreached]}
+            onPress={() => onEdit(row)}
+            activeOpacity={0.6}
+          >
+            <View style={styles.tableRowMain}>
+              {columns.map((column) => (
+                <View key={column.id} style={{ width: column.width }}>
+                  <TableCell column={column.id} row={row} />
                 </View>
-              </View>
-              {isMachines ? (
-                <View style={{ width: columns[4].width }}>
-                  <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
-                    <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>
-                      {row.grade ?? "—"}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
-              <View style={{ width: columns[columns.length - 1].width }}>
-                <Text style={[styles.slaText, row.breached && styles.slaTextBreached]}>
-                  {slaText(row.slaHours)}
-                </Text>
-                <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
-              </View>
+              ))}
             </View>
-          );
-        })}
+            {/* แถวที่ยังไม่มีใครกรอกไม่ขึ้นบรรทัดนี้ ตารางจะได้ไม่ยาวเป็นสองเท่าโดยเปล่าประโยชน์ */}
+            {row.workStatusLabel || row.symptom ? (
+              <View style={[styles.tableRowNote, { paddingLeft: columns[0].width }]}>
+                <NoteLine row={row} />
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        ))}
       </View>
     </ScrollView>
   );
 }
 
-function OutageCard({ row, isMachines }: { row: OutageRow; isMachines: boolean }) {
+function TableCell({ column, row }: { column: ColumnId; row: OutageRow }) {
+  switch (column) {
+    case "branchCode":
+      return <Text style={styles.cellMono}>{row.branchCode}</Text>;
+    case "branchName":
+      return <Text style={styles.cellText}>{row.branchName}</Text>;
+    case "machineCode":
+      return <Text style={styles.cellMono}>{row.machineCode}</Text>;
+    case "brand":
+      return <Text style={styles.cellText}>{row.machineBrand || "—"}</Text>;
+    case "machineCount":
+      return <Text style={styles.cellText}>{row.machineCount ?? "—"}</Text>;
+    case "zone":
+      return (
+        <View style={styles.zoneChip}>
+          <Text style={styles.zoneChipText}>{row.zone ?? "—"}</Text>
+        </View>
+      );
+    case "grade": {
+      const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
+      return (
+        <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
+          <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>{row.grade ?? "—"}</Text>
+        </View>
+      );
+    }
+    case "sla":
+      return (
+        <>
+          <Text style={[styles.slaText, row.breached && styles.slaTextBreached]}>
+            {slaText(row.slaHours)}
+          </Text>
+          <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
+        </>
+      );
+  }
+}
+
+/** ป้ายสถานะกับอาการที่คนกรอกไว้ ใช้ทั้งบรรทัดที่สองของตารางและในการ์ด */
+function NoteLine({ row }: { row: OutageRow }) {
+  const tone = statusStyle(row.workStatus);
+  return (
+    <>
+      {row.workStatusLabel ? (
+        <View style={[styles.statusChip, { backgroundColor: tone.background }]}>
+          <Text style={[styles.statusChipText, { color: tone.color }]}>{row.workStatusLabel}</Text>
+        </View>
+      ) : null}
+      {row.symptom ? <Text style={styles.noteSymptom}>{row.symptom}</Text> : null}
+    </>
+  );
+}
+
+function OutageCard({
+  row,
+  isMachines,
+  onEdit,
+}: {
+  row: OutageRow;
+  isMachines: boolean;
+  onEdit: () => void;
+}) {
   const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
   return (
-    <View style={[styles.card, row.breached && styles.cardBreached]}>
+    <TouchableOpacity
+      style={[styles.card, row.breached && styles.cardBreached]}
+      onPress={onEdit}
+      activeOpacity={0.7}
+    >
       <View style={styles.cardTop}>
         <Text style={styles.cardBranch}>{row.branchName}</Text>
         {row.breached ? (
@@ -633,6 +987,11 @@ function OutageCard({ row, isMachines }: { row: OutageRow; isMachines: boolean }
             <Text style={styles.machineChipText}>{row.machineCount ?? "—"} เครื่อง</Text>
           </View>
         )}
+        {isMachines && row.machineBrand ? (
+          <View style={styles.brandChip}>
+            <Text style={styles.brandChipText}>{row.machineBrand}</Text>
+          </View>
+        ) : null}
         {row.grade ? (
           <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
             <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>{row.grade}</Text>
@@ -651,7 +1010,18 @@ function OutageCard({ row, isMachines }: { row: OutageRow; isMachines: boolean }
         </Text>
         <Text style={styles.cardTimeExact}>· ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
       </View>
-    </View>
+
+      <View style={styles.cardNote}>
+        {row.workStatusLabel || row.symptom ? (
+          <NoteLine row={row} />
+        ) : (
+          <View style={styles.notePlaceholder}>
+            <Ionicons name="create-outline" size={12} color={colors.textFaint} />
+            <Text style={styles.notePlaceholderText}>ยังไม่ระบุสถานะ · แตะเพื่อกรอก</Text>
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -801,6 +1171,23 @@ const styles = StyleSheet.create({
   groupOptionText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   groupOptionTextActive: { color: colors.primary, fontWeight: "700" },
 
+  statusFilterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  statusFilterChip: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingVertical: 3,
+    paddingHorizontal: spacing.md,
+  },
+  statusFilterChipText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+
   sortRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   sortLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   sortButton: {
@@ -867,13 +1254,14 @@ const styles = StyleSheet.create({
   tableHeaderCell: { flexDirection: "row", alignItems: "center", gap: 4 },
   tableHeaderText: { fontSize: 11, lineHeight: 18, color: colors.textMuted, fontWeight: "600" },
   tableRow: {
-    flexDirection: "row",
-    alignItems: "center",
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  // ช่อง SLA มีสองบรรทัด ชิดบนอ่านง่ายกว่าจัดกึ่งกลาง
+  tableRowMain: { flexDirection: "row", alignItems: "flex-start" },
+  tableRowNote: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingTop: 4 },
   tableRowBreached: { backgroundColor: colors.warningSoft },
   cellText: { fontSize: 13, lineHeight: 21, color: colors.text, paddingRight: spacing.sm },
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
@@ -928,6 +1316,15 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
   },
   machineChipText: { fontSize: 11, lineHeight: 18, color: colors.primary, fontWeight: "700" },
+  brandChip: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  brandChipText: { fontSize: 11, lineHeight: 18, color: colors.textMuted },
   gradeChip: {
     borderRadius: radius.sm,
     paddingHorizontal: 8,
@@ -957,4 +1354,94 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
 
   footnote: { fontSize: 11, lineHeight: 20, color: colors.textFaint, marginTop: spacing.xl },
+
+  noteSymptom: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  notePlaceholder: { flexDirection: "row", alignItems: "center", gap: 3 },
+  notePlaceholderText: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
+  statusChip: {
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 1,
+    alignSelf: "flex-start",
+  },
+  statusChipText: { fontSize: 11, lineHeight: 18, fontWeight: "700" },
+  cardNote: {
+    gap: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+  },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.lg,
+  },
+  modalSheet: {
+    width: "100%",
+    maxWidth: 520,
+    maxHeight: "85%",
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+  },
+  modalTitle: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
+  modalSub: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
+  modalLabel: {
+    fontSize: 13,
+    lineHeight: 21,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 14,
+    lineHeight: 22,
+    minHeight: 76,
+    color: colors.text,
+    textAlignVertical: "top",
+  },
+  modalOptions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  modalOption: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.background,
+  },
+  modalOptionText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
+  modalHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
+  modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.sm },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  modalCancel: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.sm,
+  },
+  modalCancelText: { fontSize: 14, lineHeight: 22, color: colors.textMuted, fontWeight: "600" },
+  modalSave: {
+    minWidth: 108,
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.sm,
+  },
+  modalSaveDisabled: { opacity: 0.6 },
+  modalSaveText: { fontSize: 14, lineHeight: 22, color: "#fff", fontWeight: "700" },
 });

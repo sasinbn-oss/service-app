@@ -14,6 +14,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport } from "../machines/import";
+import { WORK_STATUSES, WORK_STATUS_LABELS } from "../utils/constants";
 
 const router = Router();
 
@@ -27,7 +28,46 @@ const listSchema = z.object({
   zone: z.string().optional(),
   search: z.string().optional(),
   breachedOnly: z.enum(["true", "false"]).optional(),
+  // "NONE" คือเคสที่ยังไม่มีใครกรอกสถานะ ซึ่งเป็นกลุ่มที่ต้องตามมากที่สุด
+  workStatus: z.enum([...WORK_STATUSES, "NONE"]).optional(),
 });
+
+function workStatusFilter(value?: string) {
+  if (!value) return {};
+  return value === "NONE" ? { workStatus: null } : { workStatus: value };
+}
+
+/**
+ * ข้อมูลของเคสที่คนกรอกเอง ใช้เหมือนกันทั้งสองแท็บ
+ *
+ * มีสองรูปเพราะ Prisma รับคนละอย่าง — include รับได้เฉพาะ relation
+ * (ฟิลด์ธรรมดาติดมาเองอยู่แล้ว) ส่วน select ต้องระบุครบทุกฟิลด์ที่อยากได้
+ */
+const noteInclude = { noteUpdatedBy: { select: { name: true } } } as const;
+
+const noteSelect = {
+  symptom: true,
+  workStatus: true,
+  noteUpdatedAt: true,
+  ...noteInclude,
+} as const;
+
+function noteFields(o: {
+  symptom: string | null;
+  workStatus: string | null;
+  noteUpdatedAt: Date | null;
+  noteUpdatedBy: { name: string } | null;
+}) {
+  return {
+    symptom: o.symptom,
+    workStatus: o.workStatus,
+    workStatusLabel: o.workStatus
+      ? (WORK_STATUS_LABELS as Record<string, string>)[o.workStatus] ?? o.workStatus
+      : null,
+    noteUpdatedAt: o.noteUpdatedAt,
+    noteUpdatedBy: o.noteUpdatedBy?.name ?? null,
+  };
+}
 
 function branchFilter(query: z.infer<typeof listSchema>) {
   return {
@@ -56,6 +96,7 @@ router.get("/outages", requireAuth, async (req, res) => {
       kind: "MACHINE_OFF",
       endedAt: null,
       ...(query.breachedOnly === "true" ? { startedAt: { lt: breachBefore } } : {}),
+      ...workStatusFilter(query.workStatus),
       branch: branchFilter(query),
       ...(keyword
         ? {
@@ -63,11 +104,14 @@ router.get("/outages", requireAuth, async (req, res) => {
               { branch: { code: { contains: keyword, mode: "insensitive" } } },
               { branch: { name: { contains: keyword, mode: "insensitive" } } },
               { machine: { code: { contains: keyword, mode: "insensitive" } } },
+              { machine: { brand: { contains: keyword, mode: "insensitive" } } },
+              { symptom: { contains: keyword, mode: "insensitive" } },
             ],
           }
         : {}),
     },
     include: {
+      ...noteInclude,
       branch: {
         select: { code: true, name: true, region: true, ownership: true, zone: true, grade: true },
       },
@@ -92,6 +136,7 @@ router.get("/outages", requireAuth, async (req, res) => {
     lastSeenAt: o.lastSeenAt,
     slaHours: Math.floor(hoursSince(o.startedAt, now)),
     breached: o.startedAt < breachBefore,
+    ...noteFields(o),
   }));
 
   res.json({
@@ -121,17 +166,20 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
       kind: "SIGNAL_LOST",
       endedAt: null,
       ...(query.breachedOnly === "true" ? { startedAt: { lt: breachBefore } } : {}),
+      ...workStatusFilter(query.workStatus),
       branch: branchFilter(query),
       ...(keyword
         ? {
             OR: [
               { branch: { code: { contains: keyword, mode: "insensitive" } } },
               { branch: { name: { contains: keyword, mode: "insensitive" } } },
+              { symptom: { contains: keyword, mode: "insensitive" } },
             ],
           }
         : {}),
     },
     include: {
+      ...noteInclude,
       branch: {
         select: {
           id: true,
@@ -161,6 +209,7 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
     lastSeenAt: o.lastSeenAt,
     slaHours: Math.floor(hoursSince(o.startedAt, now)),
     breached: o.startedAt < breachBefore,
+    ...noteFields(o),
   }));
 
   res.json({
@@ -202,6 +251,49 @@ router.get("/overview", requireAuth, async (_req, res) => {
     signalBreached,
     lastImport,
   });
+});
+
+/** ตัวเลือกสถานะการดำเนินการ ให้แอปเอาไปทำปุ่มโดยไม่ต้องฝังรายการไว้เอง */
+router.get("/work-statuses", requireAuth, (_req, res) => {
+  res.json(WORK_STATUSES.map((value) => ({ value, label: WORK_STATUS_LABELS[value] })));
+});
+
+const noteSchema = z.object({
+  symptom: z.string().trim().max(500).nullable().optional(),
+  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+});
+
+/**
+ * บันทึกอาการและสถานะการดำเนินการของเคส
+ *
+ * ช่างที่ไปหน้างานเป็นคนรู้ว่าเสียเพราะอะไรและติดอยู่ที่ขั้นไหน จึงเปิดให้ผู้ใช้ทุกคน
+ * แก้ได้ ไม่จำกัดเฉพาะแอดมิน แต่บันทึกไว้ว่าใครแก้ล่าสุดเมื่อไหร่
+ */
+router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "id ไม่ถูกต้อง" });
+
+  const parsed = noteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (parsed.data.symptom === undefined && parsed.data.workStatus === undefined) {
+    return res.status(400).json({ error: "ไม่มีอะไรให้บันทึก" });
+  }
+
+  const outage = await prisma.outage.findUnique({ where: { id }, select: { id: true } });
+  if (!outage) return res.status(404).json({ error: "ไม่พบเคสนี้" });
+
+  const updated = await prisma.outage.update({
+    where: { id },
+    data: {
+      ...(parsed.data.symptom !== undefined ? { symptom: parsed.data.symptom || null } : {}),
+      ...(parsed.data.workStatus !== undefined ? { workStatus: parsed.data.workStatus } : {}),
+      noteUpdatedAt: new Date(),
+      noteUpdatedById: req.auth!.userId,
+    },
+    select: noteSelect,
+  });
+
+  res.json({ id, ...noteFields(updated) });
 });
 
 /** ประวัติการอัปโหลด */
