@@ -13,6 +13,22 @@ import { showAlert } from "../utils/alert";
 import { canPickFile, pickFile, PickedFile } from "../utils/filePicker";
 import { colors, radius, shadow, spacing } from "../theme";
 
+type Kind = "machines" | "branches";
+
+interface BranchPlan {
+  rowsInFile: number;
+  duplicateRows: number;
+  uniqueRows: number;
+  newBranchCount: number;
+  changedCount: number;
+  changedSample: { code: string; from: string; to: string }[];
+  unchangedCount: number;
+  notInFileCount: number;
+  regions: { name: string; branches: number }[];
+  zones: { name: string; branches: number }[];
+  warnings: string[];
+}
+
 interface ImportPlan {
   rowsInFile: number;
   duplicateRows: number;
@@ -31,21 +47,32 @@ interface ImportPlan {
 }
 
 export default function MachineImportScreen() {
+  const [kind, setKind] = useState<Kind>("machines");
   const [file, setFile] = useState<PickedFile | null>(null);
   const [plan, setPlan] = useState<ImportPlan | null>(null);
+  const [branchPlan, setBranchPlan] = useState<BranchPlan | null>(null);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function send(mode: "preview" | "commit", picked: PickedFile) {
+  async function send<T>(mode: "preview" | "commit", picked: PickedFile): Promise<T> {
     const form = new FormData();
     form.append("file", picked.blob, picked.name);
     form.append("mode", mode);
-    const res = await api.post<{ plan: ImportPlan }>("/machines/import", form, {
+    const path = kind === "machines" ? "/machines/import" : "/branches/import";
+    const res = await api.post<{ plan: T }>(path, form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
     return res.data.plan;
+  }
+
+  function reset() {
+    setFile(null);
+    setPlan(null);
+    setBranchPlan(null);
+    setSaved(false);
+    setError(null);
   }
 
   async function choose() {
@@ -56,11 +83,13 @@ export default function MachineImportScreen() {
 
     setFile(picked);
     setPlan(null);
+    setBranchPlan(null);
     setSaved(false);
     setError(null);
     setChecking(true);
     try {
-      setPlan(await send("preview", picked));
+      if (kind === "machines") setPlan(await send<ImportPlan>("preview", picked));
+      else setBranchPlan(await send<BranchPlan>("preview", picked));
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
@@ -73,7 +102,8 @@ export default function MachineImportScreen() {
     setSaving(true);
     setError(null);
     try {
-      setPlan(await send("commit", file));
+      if (kind === "machines") setPlan(await send<ImportPlan>("commit", file));
+      else setBranchPlan(await send<BranchPlan>("commit", file));
       setSaved(true);
       showAlert("บันทึกแล้ว", "แดชบอร์ดอัปเดตตามไฟล์นี้เรียบร้อย");
     } catch (e) {
@@ -97,11 +127,31 @@ export default function MachineImportScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.kindTabs}>
+        <KindTab
+          active={kind === "machines"}
+          icon="pulse"
+          title="รายงานเครื่อง"
+          subtitle="วันละ 2 ครั้ง"
+          onPress={() => { setKind("machines"); reset(); }}
+        />
+        <KindTab
+          active={kind === "branches"}
+          icon="map-outline"
+          title="ทะเบียนสาขา"
+          subtitle="สัปดาห์ละครั้ง"
+          onPress={() => { setKind("branches"); reset(); }}
+        />
+      </View>
+
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>เลือกไฟล์รายงานเครื่อง</Text>
+        <Text style={styles.cardTitle}>
+          {kind === "machines" ? "เลือกไฟล์รายงานเครื่อง" : "เลือกไฟล์ทะเบียนสาขา"}
+        </Text>
         <Text style={styles.cardHint}>
-          ไฟล์ .xlsx จากระบบ (คอลัมน์ crm_code, num, state, offline) — อัปโหลดวันละ 2 ครั้ง
-          เช้าและบ่าย ระบบจะเทียบกับครั้งก่อนให้เอง
+          {kind === "machines"
+            ? "ไฟล์ .xlsx คอลัมน์ crm_code, num, state, offline — ระบบจะเทียบกับครั้งก่อนให้เอง"
+            : "ไฟล์ .xlsx คอลัมน์ code, ผจกภาค, ทีมช่าง — อัปเดตเฉพาะข้อมูลสาขา ไม่แตะสถานะเครื่อง"}
         </Text>
 
         <TouchableOpacity style={styles.pickButton} onPress={choose} activeOpacity={0.8}>
@@ -131,6 +181,87 @@ export default function MachineImportScreen() {
           <Ionicons name="alert-circle-outline" size={18} color={colors.danger} />
           <Text style={styles.errorText}>{error}</Text>
         </View>
+      ) : null}
+
+      {branchPlan ? (
+        <>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>
+              {saved ? "บันทึกเรียบร้อย" : "ตรวจสอบก่อนบันทึก"}
+            </Text>
+            <Row label="แถวในไฟล์" value={String(branchPlan.rowsInFile)} />
+            {branchPlan.duplicateRows > 0 ? (
+              <Row label="รหัสซ้ำที่ยุบรวม" value={String(branchPlan.duplicateRows)} tone="warning" />
+            ) : null}
+            <View style={styles.divider} />
+            <Row label="สาขาใหม่ที่จะเพิ่ม" value={String(branchPlan.newBranchCount)} tone="success" strong />
+            <Row label="สาขาที่ภาค/ทีมช่างจะเปลี่ยน" value={String(branchPlan.changedCount)} tone="warning" strong />
+            <Row label="สาขาที่ข้อมูลเหมือนเดิม" value={String(branchPlan.unchangedCount)} />
+            <Row label="สาขาในระบบที่ไม่มีในไฟล์" value={`${branchPlan.notInFileCount} (ไม่ถูกแตะ)`} />
+          </View>
+
+          {branchPlan.changedSample.length > 0 ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>ตัวอย่างสาขาที่จะเปลี่ยน</Text>
+              {branchPlan.changedSample.map((c) => (
+                <View key={c.code} style={styles.changeRow}>
+                  <Text style={styles.changeCode}>{c.code}</Text>
+                  <Text style={styles.changeText}>{c.from}</Text>
+                  <Ionicons name="arrow-forward" size={13} color={colors.textFaint} />
+                  <Text style={[styles.changeText, styles.changeTo]}>{c.to}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>ภาค ({branchPlan.regions.length})</Text>
+            {branchPlan.regions.map((r) => (
+              <Row key={r.name} label={r.name} value={`${r.branches} สาขา`} />
+            ))}
+            <View style={styles.divider} />
+            <Text style={styles.cardTitle}>ทีมช่าง ({branchPlan.zones.length})</Text>
+            {branchPlan.zones.slice(0, 30).map((z) => (
+              <Row key={z.name} label={z.name} value={`${z.branches} สาขา`} />
+            ))}
+          </View>
+
+          {branchPlan.warnings.length > 0 ? (
+            <View style={styles.warnCard}>
+              {branchPlan.warnings.map((w, i) => (
+                <View key={i} style={styles.warnRow}>
+                  <Ionicons name="warning-outline" size={16} color="#92400e" />
+                  <Text style={styles.warnText}>{w}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {!saved ? (
+            <TouchableOpacity
+              style={[styles.confirmButton, saving && styles.confirmDisabled]}
+              onPress={confirm}
+              disabled={saving}
+              activeOpacity={0.8}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                  <Text style={styles.confirmText}>ยืนยันบันทึกลงระบบ</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.savedCard}>
+              <Ionicons name="checkmark-circle" size={20} color={colors.success} />
+              <Text style={styles.savedText}>
+                บันทึกแล้ว แดชบอร์ดจัดกลุ่มตามภาคและทีมช่างได้เลย
+              </Text>
+            </View>
+          )}
+        </>
       ) : null}
 
       {plan ? (
@@ -233,6 +364,34 @@ export default function MachineImportScreen() {
   );
 }
 
+function KindTab({
+  active,
+  icon,
+  title,
+  subtitle,
+  onPress,
+}: {
+  active: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.kindTab, active && styles.kindTabActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Ionicons name={icon} size={18} color={active ? colors.primary : colors.textMuted} />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.kindTitle, active && styles.kindTitleActive]}>{title}</Text>
+        <Text style={styles.kindSubtitle}>{subtitle}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 function Row({
   label,
   value,
@@ -280,6 +439,36 @@ const styles = StyleSheet.create({
     textAlign: "center",
     maxWidth: 320,
   },
+
+  kindTabs: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
+  kindTab: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  kindTabActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  kindTitle: { fontSize: 14, lineHeight: 23, fontWeight: "700", color: colors.textMuted },
+  kindTitleActive: { color: colors.primary },
+  kindSubtitle: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
+
+  changeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: 3,
+    flexWrap: "wrap",
+  },
+  changeCode: { fontSize: 12, lineHeight: 20, color: colors.textMuted, minWidth: 56 },
+  changeText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  changeTo: { color: colors.text, fontWeight: "600" },
 
   card: {
     backgroundColor: colors.card,

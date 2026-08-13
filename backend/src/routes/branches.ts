@@ -1,9 +1,45 @@
 import { Router } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin } from "../middleware/auth";
+import {
+  applyBranchImport,
+  parseBranchWorkbook,
+  planBranchImport,
+} from "../machines/branchImport";
 
 const router = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+/**
+ * นำเข้าทะเบียนสาขา (ภาค / ทีมช่าง) จากไฟล์ Excel
+ *
+ * ค่าเริ่มต้นคือโหมดตรวจสอบ ต้องส่ง mode=commit ถึงจะบันทึกจริง
+ * ไฟล์นี้แตะเฉพาะข้อมูลสาขา ไม่ยุ่งกับสถานะเครื่องหรือเคสที่เปิดค้างอยู่
+ */
+router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });
+
+  const commit = req.body?.mode === "commit";
+  try {
+    const parsed = await parseBranchWorkbook(req.file.buffer);
+    if (parsed.errors.length > 0) return res.status(400).json({ error: parsed.errors.join(" / ") });
+    if (parsed.rows.length === 0) return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
+
+    const plan = commit ? await applyBranchImport(parsed) : await planBranchImport(parsed);
+    res.json({ committed: commit, plan });
+  } catch (err) {
+    console.error("Branch import failed:", err);
+    res.status(400).json({
+      error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
+    });
+  }
+});
 
 router.get("/", requireAuth, async (_req, res) => {
   const branches = await prisma.branch.findMany({ orderBy: { name: "asc" } });

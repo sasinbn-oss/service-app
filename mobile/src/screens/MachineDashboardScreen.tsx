@@ -55,7 +55,7 @@ type GroupKey = "ownership" | "region" | "zone";
 const GROUPS: { key: GroupKey; label: string }[] = [
   { key: "ownership", label: "เจ้าของ" },
   { key: "region", label: "ภาค" },
-  { key: "zone", label: "โซน" },
+  { key: "zone", label: "ทีมช่าง" },
 ];
 
 const OWNERSHIPS = ["ทั้งหมด", "COCO", "DODO"] as const;
@@ -101,7 +101,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const [ownership, setOwnership] = useState<string>("ทั้งหมด");
   const [search, setSearch] = useState("");
   const [breachedOnly, setBreachedOnly] = useState(false);
-  const [groupBy, setGroupBy] = useState<GroupKey>("ownership");
+  const [groupBy, setGroupBy] = useState<GroupKey>("region");
   const [sortKey, setSortKey] = useState<SortKey>("slaHours");
   const [sortAsc, setSortAsc] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -145,7 +145,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     const buckets = new Map<string, OutageRow[]>();
     const labelOf = (row: OutageRow) =>
       (groupBy === "ownership" ? row.ownership : groupBy === "region" ? row.region : row.zone) ??
-      (groupBy === "ownership" ? "ไม่ระบุเจ้าของ" : groupBy === "region" ? "ยังไม่ระบุภาค" : "ยังไม่ระบุโซน");
+      (groupBy === "ownership" ? "ไม่ระบุเจ้าของ" : groupBy === "region" ? "ยังไม่ระบุภาค" : "ยังไม่ระบุทีมช่าง");
 
     for (const row of data.rows) {
       const key = labelOf(row);
@@ -497,7 +497,7 @@ function columnsFor(isMachines: boolean): { key: SortKey | null; label: string; 
         { key: "branchCode", label: "รหัสสาขา", width: 92 },
         { key: "branchName", label: "ชื่อสาขา", width: 236 },
         { key: "machineCode", label: "เครื่อง", width: 84 },
-        { key: null, label: "Zone", width: 68 },
+        { key: null, label: "ทีมช่าง", width: 110 },
         { key: null, label: "Grade", width: 66 },
         { key: "slaHours", label: "ดับมาแล้ว", width: 180 },
       ]
@@ -505,7 +505,7 @@ function columnsFor(isMachines: boolean): { key: SortKey | null; label: string; 
         { key: "branchCode", label: "รหัสสาขา", width: 92 },
         { key: "branchName", label: "ชื่อสาขา", width: 260 },
         { key: null, label: "เครื่องในสาขา", width: 96 },
-        { key: null, label: "Zone", width: 68 },
+        { key: null, label: "ทีมช่าง", width: 110 },
         { key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 190 },
       ];
 }
