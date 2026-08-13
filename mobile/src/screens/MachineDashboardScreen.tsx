@@ -42,12 +42,32 @@ interface OutageRow {
   workStatusLabel: string | null;
   noteUpdatedAt: string | null;
   noteUpdatedBy: string | null;
+  parts: NotePart[];
+}
+
+/** อะไหล่ที่เคสหนึ่งรออยู่ — มาจากรายการอะไหล่ในระบบ ไม่ใช่รหัสที่พิมพ์เอง */
+interface NotePart {
+  sparePartId: number;
+  partCode: string;
+  name: string;
+  brand: string | null;
+  quantity: number;
 }
 
 interface WorkStatusOption {
   value: string;
   label: string;
 }
+
+interface SparePartOption {
+  id: number;
+  partCode: string;
+  name: string;
+  brand: string | null;
+}
+
+/** สถานะที่ทำให้ช่องเลือกอะไหล่โผล่ขึ้นมา */
+const WAITING_PARTS = "WAITING_PARTS";
 
 interface DashboardResponse {
   now: string;
@@ -549,6 +569,7 @@ function NoteModal({
 }) {
   const [symptom, setSymptom] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [parts, setParts] = useState<NotePart[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -556,6 +577,7 @@ function NoteModal({
   useEffect(() => {
     setSymptom(row?.symptom ?? "");
     setStatus(row?.workStatus ?? null);
+    setParts(row?.parts ?? []);
     setError(null);
   }, [row]);
 
@@ -572,7 +594,12 @@ function NoteModal({
         workStatusLabel: string | null;
         noteUpdatedAt: string | null;
         noteUpdatedBy: string | null;
-      }>(`/machines/outages/${row.id}/note`, { symptom: symptom.trim() || null, workStatus: status });
+        parts: NotePart[];
+      }>(`/machines/outages/${row.id}/note`, {
+        symptom: symptom.trim() || null,
+        workStatus: status,
+        parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+      });
       onSaved({ ...row, ...res.data });
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -630,6 +657,12 @@ function NoteModal({
             </View>
             <Text style={styles.modalHint}>แตะสถานะที่เลือกอยู่อีกครั้งเพื่อล้างค่า</Text>
 
+            {/* ช่องอะไหล่โผล่เมื่อเลือก "รออะไหล่" และยังโผล่อยู่ถ้าเคยใส่ไว้แล้ว
+                เปลี่ยนสถานะแล้วของที่กรอกไว้จะได้ไม่หายไปเงียบๆ */}
+            {status === WAITING_PARTS || parts.length > 0 ? (
+              <PartPicker parts={parts} onChange={setParts} />
+            ) : null}
+
             {row.noteUpdatedBy ? (
               <Text style={styles.modalHint}>
                 แก้ไขล่าสุดโดย {row.noteUpdatedBy} เมื่อ {formatDateTime(row.noteUpdatedAt)} น.
@@ -659,6 +692,149 @@ function NoteModal({
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+/**
+ * เลือกอะไหล่ที่เคสนี้รออยู่ จากรายการอะไหล่ในระบบ
+ *
+ * ไม่ให้พิมพ์รหัสเอง เพราะรหัสที่พิมพ์มือจะสะกดไม่ตรงกัน แล้วสรุปยอดว่า
+ * ทั้งประเทศค้างอะไหล่ตัวไหนอยู่กี่ตัวไม่ได้
+ */
+function PartPicker({
+  parts,
+  onChange,
+}: {
+  parts: NotePart[];
+  onChange: (next: NotePart[]) => void;
+}) {
+  const [term, setTerm] = useState("");
+  const [results, setResults] = useState<SparePartOption[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+
+  // หน่วงไว้ก่อนยิง ไม่งั้นพิมพ์รหัสเดียวยิงไปสิบครั้ง
+  useEffect(() => {
+    const keyword = term.trim();
+    if (!keyword) {
+      setResults([]);
+      setSearched(false);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      api
+        .get<SparePartOption[]>("/spare-parts", { params: { search: keyword } })
+        .then((res) => setResults(res.data.slice(0, 8)))
+        .catch(() => setResults([]))
+        .finally(() => {
+          setSearching(false);
+          setSearched(true);
+        });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [term]);
+
+  function add(option: SparePartOption) {
+    setTerm("");
+    // เลือกตัวที่มีอยู่แล้วให้บวกจำนวน ไม่ใช่เพิ่มแถวซ้ำ
+    const existing = parts.find((p) => p.sparePartId === option.id);
+    if (existing) {
+      onChange(
+        parts.map((p) => (p.sparePartId === option.id ? { ...p, quantity: p.quantity + 1 } : p))
+      );
+      return;
+    }
+    onChange([
+      ...parts,
+      {
+        sparePartId: option.id,
+        partCode: option.partCode,
+        name: option.name,
+        brand: option.brand,
+        quantity: 1,
+      },
+    ]);
+  }
+
+  function setQuantity(sparePartId: number, text: string) {
+    const digits = text.replace(/[^0-9]/g, "");
+    // ปล่อยให้ว่างระหว่างพิมพ์ได้ ค่อยตีเป็น 1 ตอนบันทึก
+    const value = digits === "" ? 1 : Math.min(999, Math.max(1, Number(digits)));
+    onChange(parts.map((p) => (p.sparePartId === sparePartId ? { ...p, quantity: value } : p)));
+  }
+
+  return (
+    <View style={styles.picker}>
+      <Text style={styles.modalLabel}>อะไหล่ที่รอ</Text>
+
+      {parts.length > 0 ? (
+        <View style={styles.pickedList}>
+          {parts.map((part) => (
+            <View key={part.sparePartId} style={styles.picked}>
+              <View style={styles.pickedText}>
+                <Text style={styles.pickedCode}>{part.partCode}</Text>
+                <Text style={styles.pickedName}>{part.name}</Text>
+              </View>
+              <TextInput
+                style={styles.qtyInput}
+                value={String(part.quantity)}
+                onChangeText={(t) => setQuantity(part.sparePartId, t)}
+                keyboardType="number-pad"
+                maxLength={3}
+                accessibilityLabel={`จำนวน ${part.partCode}`}
+              />
+              <Text style={styles.qtyUnit}>ตัว</Text>
+              <TouchableOpacity
+                onPress={() => onChange(parts.filter((p) => p.sparePartId !== part.sparePartId))}
+                accessibilityLabel={`เอา ${part.partCode} ออก`}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.pickerSearch}>
+        <Ionicons name="search" size={15} color={colors.textFaint} />
+        <TextInput
+          style={styles.pickerInput}
+          value={term}
+          onChangeText={setTerm}
+          placeholder="ค้นหารหัสหรือชื่ออะไหล่"
+          placeholderTextColor={colors.textFaint}
+        />
+        {searching ? <ActivityIndicator size="small" color={colors.textFaint} /> : null}
+      </View>
+
+      {results.length > 0 ? (
+        <View style={styles.pickerResults}>
+          {results.map((option) => (
+            <TouchableOpacity
+              key={option.id}
+              style={styles.pickerResult}
+              onPress={() => add(option)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.pickedCode}>{option.partCode}</Text>
+              <Text style={styles.pickerResultName} numberOfLines={1}>
+                {option.name}
+              </Text>
+              <Ionicons name="add-circle-outline" size={17} color={colors.primary} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      {searched && !searching && results.length === 0 ? (
+        <Text style={styles.modalHint}>
+          ไม่พบอะไหล่ที่ตรงกับ “{term.trim()}” — เพิ่มรายการใหม่ได้ที่เมนูรายการอะไหล่ (แอดมิน)
+          หรือพิมพ์ไว้ในช่องอาการไปก่อน
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -872,7 +1048,7 @@ function OutageTable({
               ))}
             </View>
             {/* แถวที่ยังไม่มีใครกรอกไม่ขึ้นบรรทัดนี้ ตารางจะได้ไม่ยาวเป็นสองเท่าโดยเปล่าประโยชน์ */}
-            {row.workStatusLabel || row.symptom ? (
+            {row.workStatusLabel || row.symptom || row.parts.length > 0 ? (
               <View style={[styles.tableRowNote, { paddingLeft: columns[0].width }]}>
                 <NoteLine row={row} />
               </View>
@@ -922,7 +1098,7 @@ function TableCell({ column, row }: { column: ColumnId; row: OutageRow }) {
   }
 }
 
-/** ป้ายสถานะกับอาการที่คนกรอกไว้ ใช้ทั้งบรรทัดที่สองของตารางและในการ์ด */
+/** ป้ายสถานะ อะไหล่ที่รอ และอาการที่คนกรอกไว้ ใช้ทั้งบรรทัดที่สองของตารางและในการ์ด */
 function NoteLine({ row }: { row: OutageRow }) {
   const tone = statusStyle(row.workStatus);
   return (
@@ -932,6 +1108,15 @@ function NoteLine({ row }: { row: OutageRow }) {
           <Text style={[styles.statusChipText, { color: tone.color }]}>{row.workStatusLabel}</Text>
         </View>
       ) : null}
+      {row.parts.map((part) => (
+        <View key={part.sparePartId} style={styles.partChip}>
+          <Ionicons name="cube-outline" size={11} color={colors.textMuted} />
+          <Text style={styles.partChipText}>
+            {part.partCode}
+            {part.quantity > 1 ? ` ×${part.quantity}` : ""}
+          </Text>
+        </View>
+      ))}
       {row.symptom ? <Text style={styles.noteSymptom}>{row.symptom}</Text> : null}
     </>
   );
@@ -1261,7 +1446,13 @@ const styles = StyleSheet.create({
   },
   // ช่อง SLA มีสองบรรทัด ชิดบนอ่านง่ายกว่าจัดกึ่งกลาง
   tableRowMain: { flexDirection: "row", alignItems: "flex-start" },
-  tableRowNote: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingTop: 4 },
+  tableRowNote: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingTop: 4,
+  },
   tableRowBreached: { backgroundColor: colors.warningSoft },
   cellText: { fontSize: 13, lineHeight: 21, color: colors.text, paddingRight: spacing.sm },
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
@@ -1355,7 +1546,25 @@ const styles = StyleSheet.create({
 
   footnote: { fontSize: 11, lineHeight: 20, color: colors.textFaint, marginTop: spacing.xl },
 
-  noteSymptom: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  // อาการยาวกว่าป้าย ให้กินที่เหลือ แต่ถ้าแคบเกินก็ตกไปบรรทัดใหม่ทั้งก้อน
+  noteSymptom: { flexGrow: 1, flexShrink: 1, flexBasis: 160, fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  partChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  partChipText: {
+    fontSize: 11,
+    lineHeight: 18,
+    color: colors.textMuted,
+    fontWeight: "700",
+  },
   notePlaceholder: { flexDirection: "row", alignItems: "center", gap: 3 },
   notePlaceholderText: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
   statusChip: {
@@ -1366,6 +1575,9 @@ const styles = StyleSheet.create({
   },
   statusChipText: { fontSize: 11, lineHeight: 18, fontWeight: "700" },
   cardNote: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
     gap: spacing.xs,
     borderTopWidth: 1,
     borderTopColor: colors.border,
@@ -1421,6 +1633,70 @@ const styles = StyleSheet.create({
   },
   modalOptionText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
   modalHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
+
+  picker: { gap: spacing.xs },
+  pickedList: { gap: spacing.xs },
+  picked: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  pickedText: { flex: 1, minWidth: 0 },
+  pickedCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  pickedName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  qtyInput: {
+    width: 52,
+    textAlign: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.card,
+    paddingVertical: spacing.xs,
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.text,
+  },
+  qtyUnit: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
+  pickerSearch: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+  },
+  pickerInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: spacing.sm,
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.text,
+  },
+  pickerResults: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    overflow: "hidden",
+  },
+  pickerResult: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  pickerResultName: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.sm },
   modalActions: {
     flexDirection: "row",

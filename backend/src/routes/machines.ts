@@ -43,7 +43,13 @@ function workStatusFilter(value?: string) {
  * มีสองรูปเพราะ Prisma รับคนละอย่าง — include รับได้เฉพาะ relation
  * (ฟิลด์ธรรมดาติดมาเองอยู่แล้ว) ส่วน select ต้องระบุครบทุกฟิลด์ที่อยากได้
  */
-const noteInclude = { noteUpdatedBy: { select: { name: true } } } as const;
+const noteInclude = {
+  noteUpdatedBy: { select: { name: true } },
+  parts: {
+    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true } } },
+    orderBy: { id: "asc" },
+  },
+} as const;
 
 const noteSelect = {
   symptom: true,
@@ -52,12 +58,18 @@ const noteSelect = {
   ...noteInclude,
 } as const;
 
-function noteFields(o: {
+interface NoteShape {
   symptom: string | null;
   workStatus: string | null;
   noteUpdatedAt: Date | null;
   noteUpdatedBy: { name: string } | null;
-}) {
+  parts: {
+    quantity: number;
+    sparePart: { id: number; partCode: string; name: string; brand: string | null };
+  }[];
+}
+
+function noteFields(o: NoteShape) {
   return {
     symptom: o.symptom,
     workStatus: o.workStatus,
@@ -66,6 +78,13 @@ function noteFields(o: {
       : null,
     noteUpdatedAt: o.noteUpdatedAt,
     noteUpdatedBy: o.noteUpdatedBy?.name ?? null,
+    parts: o.parts.map((p) => ({
+      sparePartId: p.sparePart.id,
+      partCode: p.sparePart.partCode,
+      name: p.sparePart.name,
+      brand: p.sparePart.brand,
+      quantity: p.quantity,
+    })),
   };
 }
 
@@ -106,6 +125,9 @@ router.get("/outages", requireAuth, async (req, res) => {
               { machine: { code: { contains: keyword, mode: "insensitive" } } },
               { machine: { brand: { contains: keyword, mode: "insensitive" } } },
               { symptom: { contains: keyword, mode: "insensitive" } },
+              // พิมพ์รหัสอะไหล่เพื่อดูว่ามีเคสไหนรออะไหล่ตัวนี้อยู่บ้าง
+              { parts: { some: { sparePart: { partCode: { contains: keyword, mode: "insensitive" } } } } },
+              { parts: { some: { sparePart: { name: { contains: keyword, mode: "insensitive" } } } } },
             ],
           }
         : {}),
@@ -174,6 +196,8 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
               { branch: { code: { contains: keyword, mode: "insensitive" } } },
               { branch: { name: { contains: keyword, mode: "insensitive" } } },
               { symptom: { contains: keyword, mode: "insensitive" } },
+              { parts: { some: { sparePart: { partCode: { contains: keyword, mode: "insensitive" } } } } },
+              { parts: { some: { sparePart: { name: { contains: keyword, mode: "insensitive" } } } } },
             ],
           }
         : {}),
@@ -261,6 +285,16 @@ router.get("/work-statuses", requireAuth, (_req, res) => {
 const noteSchema = z.object({
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  // ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิมทั้งหมด — ส่ง [] คือล้างอะไหล่ออกให้หมด
+  parts: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(999).default(1),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 /**
@@ -275,25 +309,105 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
 
   const parsed = noteSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (parsed.data.symptom === undefined && parsed.data.workStatus === undefined) {
+  const { symptom, workStatus, parts } = parsed.data;
+  if (symptom === undefined && workStatus === undefined && parts === undefined) {
     return res.status(400).json({ error: "ไม่มีอะไรให้บันทึก" });
   }
 
   const outage = await prisma.outage.findUnique({ where: { id }, select: { id: true } });
   if (!outage) return res.status(404).json({ error: "ไม่พบเคสนี้" });
 
-  const updated = await prisma.outage.update({
-    where: { id },
-    data: {
-      ...(parsed.data.symptom !== undefined ? { symptom: parsed.data.symptom || null } : {}),
-      ...(parsed.data.workStatus !== undefined ? { workStatus: parsed.data.workStatus } : {}),
-      noteUpdatedAt: new Date(),
-      noteUpdatedById: req.auth!.userId,
-    },
-    select: noteSelect,
+  // อะไหล่ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error — ฟอร์มกันไว้แล้วแต่ API ต้องกันเองด้วย
+  const wanted = new Map<number, number>();
+  for (const p of parts ?? []) {
+    wanted.set(p.sparePartId, (wanted.get(p.sparePartId) ?? 0) + p.quantity);
+  }
+
+  if (wanted.size > 0) {
+    const found = await prisma.sparePart.findMany({
+      where: { id: { in: [...wanted.keys()] } },
+      select: { id: true },
+    });
+    const missing = [...wanted.keys()].filter((pid) => !found.some((f) => f.id === pid));
+    if (missing.length > 0) {
+      return res.status(400).json({ error: `ไม่พบอะไหล่รหัสภายใน: ${missing.join(", ")}` });
+    }
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    // แทนที่ทั้งชุด ง่ายกว่าไล่หาว่าอันไหนเพิ่มอันไหนลบ และจำนวนแถวต่อเคสมีไม่กี่แถว
+    if (parts !== undefined) {
+      await tx.outagePart.deleteMany({ where: { outageId: id } });
+      if (wanted.size > 0) {
+        await tx.outagePart.createMany({
+          data: [...wanted].map(([sparePartId, quantity]) => ({ outageId: id, sparePartId, quantity })),
+        });
+      }
+    }
+
+    return tx.outage.update({
+      where: { id },
+      data: {
+        ...(symptom !== undefined ? { symptom: symptom || null } : {}),
+        ...(workStatus !== undefined ? { workStatus } : {}),
+        noteUpdatedAt: new Date(),
+        noteUpdatedById: req.auth!.userId,
+      },
+      select: noteSelect,
+    });
   });
 
   res.json({ id, ...noteFields(updated) });
+});
+
+/**
+ * อะไหล่ที่ค้างอยู่ทั้งหมด รวมยอดข้ามสาขา
+ *
+ * เหตุผลที่เก็บเป็นรหัสอะไหล่จริงแทนที่จะให้พิมพ์เอง — จะได้ตอบได้ว่าตอนนี้
+ * ต้องสั่งอะไรเข้ามาบ้างกี่ตัว โดยไม่ต้องไล่เปิดทีละเคส
+ */
+router.get("/waiting-parts", requireAuth, async (_req, res) => {
+  const rows = await prisma.outagePart.findMany({
+    where: { outage: { endedAt: null } },
+    include: {
+      sparePart: { select: { id: true, partCode: true, name: true, brand: true } },
+      outage: { select: { branch: { select: { code: true, name: true } } } },
+    },
+  });
+
+  const byPart = new Map<
+    number,
+    {
+      sparePartId: number;
+      partCode: string;
+      name: string;
+      brand: string | null;
+      totalQuantity: number;
+      caseCount: number;
+      branches: string[];
+    }
+  >();
+
+  for (const row of rows) {
+    const key = row.sparePart.id;
+    const entry = byPart.get(key) ?? {
+      sparePartId: key,
+      partCode: row.sparePart.partCode,
+      name: row.sparePart.name,
+      brand: row.sparePart.brand,
+      totalQuantity: 0,
+      caseCount: 0,
+      branches: [],
+    };
+    entry.totalQuantity += row.quantity;
+    entry.caseCount += 1;
+    if (!entry.branches.includes(row.outage.branch.code)) entry.branches.push(row.outage.branch.code);
+    byPart.set(key, entry);
+  }
+
+  res.json(
+    [...byPart.values()].sort((a, b) => b.totalQuantity - a.totalQuantity || a.partCode.localeCompare(b.partCode))
+  );
 });
 
 /** ประวัติการอัปโหลด */

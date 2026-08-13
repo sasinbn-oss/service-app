@@ -134,9 +134,28 @@ model Outage {
   noteUpdatedAt   DateTime?
   noteUpdatedById Int?
   noteUpdatedBy   User?     @relation(fields: [noteUpdatedById], references: [id])
+  // อะไหล่ที่เคสนี้รออยู่ ใช้ตอน workStatus = WAITING_PARTS
+  parts        OutagePart[]
 
   @@index([kind, endedAt])
   @@index([branchId, endedAt])
+}
+
+// อะไหล่ที่เคสหนึ่งรออยู่
+//
+// ชี้ไปที่ SparePart แทนที่จะให้พิมพ์รหัสเอง เพราะรหัสที่พิมพ์มือจะสะกดไม่ตรงกัน
+// แล้วรวมยอดว่าทั้งประเทศค้างอะไหล่ตัวไหนอยู่กี่ตัวไม่ได้
+model OutagePart {
+  id          Int       @id @default(autoincrement())
+  outageId    Int
+  outage      Outage    @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  sparePartId Int
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id])
+  quantity    Int       @default(1)
+
+  // อะไหล่ตัวเดิมในเคสเดียวกันมีได้แถวเดียว เพิ่มซ้ำให้ไปบวกจำนวนแทน
+  @@unique([outageId, sparePartId])
+  @@index([sparePartId])
 }
 
 // บันทึกการอัปโหลดแต่ละครั้ง ไว้ดูย้อนหลังว่าตัวเลขที่เปลี่ยนมาจากไฟล์ไหน
@@ -249,6 +268,7 @@ model SparePart {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   image       SparePartImage?
+  outageParts OutagePart[]
 }
 
 // Uploaded photos live in their own table so listing parts never has to
