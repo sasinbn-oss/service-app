@@ -7,6 +7,7 @@ export type AuthStackParamList = {
 export type HomeStackParamList = {
   HomeMenu: undefined;
   MachineDashboard: undefined;
+  MachineImport: undefined;
   TransferDocument: undefined;
   Assistant: undefined;
   FlowList: undefined;

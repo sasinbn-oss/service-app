@@ -8,6 +8,7 @@ import HomeScreen from "../screens/HomeScreen";
 import AssistantScreen from "../screens/AssistantScreen";
 import TransferDocumentScreen from "../screens/TransferDocumentScreen";
 import MachineDashboardScreen from "../screens/MachineDashboardScreen";
+import MachineImportScreen from "../screens/MachineImportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
 import GuideListScreen from "../screens/GuideListScreen";
@@ -73,7 +74,12 @@ function HomeStackNavigator() {
       <HomeStack.Screen
         name="MachineDashboard"
         component={MachineDashboardScreen}
-        options={{ title: "เครื่องที่ดับอยู่" }}
+        options={{ title: "ติดตามเครื่องเสีย" }}
+      />
+      <HomeStack.Screen
+        name="MachineImport"
+        component={MachineImportScreen}
+        options={{ title: "อัปโหลดรายงานเครื่อง" }}
       />
       <HomeStack.Screen
         name="TransferDocument"

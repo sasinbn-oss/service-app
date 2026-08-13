@@ -11,35 +11,54 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 
-interface MachineRow {
+/** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
+interface OutageRow {
   id: number;
-  machineCode: string;
-  type: "WASHER" | "DRYER";
-  status: string;
-  lastTxnAt: string | null;
   branchCode: string;
   branchName: string;
   region: string | null;
   ownership: string | null;
   zone: string | null;
   grade: string | null;
+  machineCode?: string;
+  machineType?: string;
+  machineCount?: number;
+  startedAt: string;
+  slaHours: number;
+  breached: boolean;
 }
 
 interface DashboardResponse {
   now: string;
-  staleHours: number;
-  summary: { total: number; COCO: number; DODO: number; stale: number };
-  rows: MachineRow[];
+  slaHours: number;
+  summary: {
+    total: number;
+    COCO: number;
+    DODO: number;
+    breached: number;
+    machinesAffected?: number;
+  };
+  rows: OutageRow[];
 }
 
-type SortKey = "lastTxnAt" | "branchCode" | "branchName" | "grade" | "machineCode";
+type Tab = "machines" | "signal";
+type SortKey = "slaHours" | "branchCode" | "branchName" | "machineCode";
+type GroupKey = "ownership" | "region" | "zone";
+
+const GROUPS: { key: GroupKey; label: string }[] = [
+  { key: "ownership", label: "เจ้าของ" },
+  { key: "region", label: "ภาค" },
+  { key: "zone", label: "โซน" },
+];
 
 const OWNERSHIPS = ["ทั้งหมด", "COCO", "DODO"] as const;
-const GRADES = ["ทั้งหมด", "A", "B", "C"] as const;
 
 const GRADE_STYLE: Record<string, { color: string; background: string }> = {
   A: { color: "#0b7a68", background: "#dbf3ee" },
@@ -47,17 +66,12 @@ const GRADE_STYLE: Record<string, { color: string; background: string }> = {
   C: { color: "#6b7280", background: "#eef0f2" },
 };
 
-/**
- * ระยะเวลาที่ผ่านมา คิดเทียบกับ "เวลาของเซิร์ฟเวอร์" ที่ส่งมากับข้อมูล
- * ไม่ใช่นาฬิกาของเครื่องผู้ใช้ ซึ่งอาจตั้งผิดหรืออยู่คนละโซนเวลา
- */
-function elapsed(lastTxnAt: string | null, now: string) {
-  if (!lastTxnAt) return { text: "ไม่เคยมีรายการ", minutes: Number.POSITIVE_INFINITY };
-  const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(lastTxnAt)) / 60000));
-  if (minutes < 60) return { text: `${minutes} นาทีที่แล้ว`, minutes };
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return { text: `${hours} ชม.ที่แล้ว`, minutes };
-  return { text: `${Math.floor(hours / 24)} วันที่แล้ว`, minutes };
+/** ชั่วโมงล้วนอ่านยากเมื่อเลยไม่กี่วัน แปลงเป็น "3 วัน 4 ชม." */
+function slaText(hours: number) {
+  if (hours < 24) return `${hours} ชม.`;
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  return rest === 0 ? `${days} วัน` : `${days} วัน ${rest} ชม.`;
 }
 
 function formatDateTime(iso: string | null) {
@@ -70,22 +84,26 @@ function formatDateTime(iso: string | null) {
   });
 }
 
-export default function MachineDashboardScreen() {
-  const { width } = useWindowDimensions();
-  // ตารางเจ็ดคอลัมน์อ่านไม่ได้บนจอมือถือ จอแคบจึงเปลี่ยนเป็นการ์ดแทน
-  const wide = width >= 700;
+type Props = NativeStackScreenProps<HomeStackParamList, "MachineDashboard">;
 
+export default function MachineDashboardScreen({ navigation }: Props) {
+  const { width } = useWindowDimensions();
+  // ตารางหลายคอลัมน์อ่านไม่ได้บนจอมือถือ จอแคบจึงเปลี่ยนเป็นการ์ดแทน
+  const wide = width >= 700;
+  const { user } = useAuth();
+
+  const [tab, setTab] = useState<Tab>("machines");
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [ownership, setOwnership] = useState<string>("ทั้งหมด");
-  const [grade, setGrade] = useState<string>("ทั้งหมด");
   const [search, setSearch] = useState("");
-  const [staleOnly, setStaleOnly] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("lastTxnAt");
-  const [sortAsc, setSortAsc] = useState(true);
+  const [breachedOnly, setBreachedOnly] = useState(false);
+  const [groupBy, setGroupBy] = useState<GroupKey>("ownership");
+  const [sortKey, setSortKey] = useState<SortKey>("slaHours");
+  const [sortAsc, setSortAsc] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const load = useCallback(
@@ -94,15 +112,16 @@ export default function MachineDashboardScreen() {
       else setLoading(true);
       setError(null);
       try {
-        const res = await api.get<DashboardResponse>("/machines", {
-          params: {
-            status: "OFF",
-            ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
-            ...(grade !== "ทั้งหมด" ? { grade } : {}),
-            ...(search.trim() ? { search: search.trim() } : {}),
-            ...(staleOnly ? { staleOnly: "true" } : {}),
-          },
-        });
+        const res = await api.get<DashboardResponse>(
+          tab === "machines" ? "/machines/outages" : "/machines/signal-lost",
+          {
+            params: {
+              ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
+              ...(search.trim() ? { search: search.trim() } : {}),
+              ...(breachedOnly ? { breachedOnly: "true" } : {}),
+            },
+          }
+        );
         setData(res.data);
       } catch (e) {
         setError(apiErrorMessage(e));
@@ -111,7 +130,7 @@ export default function MachineDashboardScreen() {
         setRefreshing(false);
       }
     },
-    [ownership, grade, search, staleOnly]
+    [tab, ownership, search, breachedOnly]
   );
 
   useFocusEffect(
@@ -120,58 +139,53 @@ export default function MachineDashboardScreen() {
     }, [load])
   );
 
-  const staleMinutes = (data?.staleHours ?? 72) * 60;
-
-  const regions = useMemo(() => {
+  const groups = useMemo(() => {
     if (!data) return [];
     const order: string[] = [];
-    const byRegion = new Map<string, MachineRow[]>();
+    const buckets = new Map<string, OutageRow[]>();
+    const labelOf = (row: OutageRow) =>
+      (groupBy === "ownership" ? row.ownership : groupBy === "region" ? row.region : row.zone) ??
+      (groupBy === "ownership" ? "ไม่ระบุเจ้าของ" : groupBy === "region" ? "ยังไม่ระบุภาค" : "ยังไม่ระบุโซน");
+
     for (const row of data.rows) {
-      const key = row.region ?? "ไม่ระบุภาค";
-      if (!byRegion.has(key)) {
-        byRegion.set(key, []);
+      const key = labelOf(row);
+      if (!buckets.has(key)) {
+        buckets.set(key, []);
         order.push(key);
       }
-      byRegion.get(key)!.push(row);
+      buckets.get(key)!.push(row);
     }
 
     const direction = sortAsc ? 1 : -1;
-    const compare = (a: MachineRow, b: MachineRow) => {
-      if (sortKey === "lastTxnAt") {
-        // เครื่องที่ไม่เคยมีรายการเลยคือเคสหนักสุด ให้อยู่หัวรายการเสมอ
-        const av = a.lastTxnAt ? Date.parse(a.lastTxnAt) : 0;
-        const bv = b.lastTxnAt ? Date.parse(b.lastTxnAt) : 0;
-        return (av - bv) * direction;
-      }
+    const compare = (a: OutageRow, b: OutageRow) => {
+      if (sortKey === "slaHours") return (a.slaHours - b.slaHours) * direction;
       return String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? "")) * direction;
     };
 
-    return order.map((name) => {
-      const rows = [...byRegion.get(name)!].sort(compare);
-      return {
-        name,
-        rows,
-        staleCount: rows.filter((r) => elapsed(r.lastTxnAt, data.now).minutes > staleMinutes)
-          .length,
-      };
+    return order.sort().map((name) => {
+      const rows = [...buckets.get(name)!].sort(compare);
+      return { name, rows, breachedCount: rows.filter((r) => r.breached).length };
     });
-  }, [data, sortKey, sortAsc, staleMinutes]);
+  }, [data, groupBy, sortKey, sortAsc]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) setSortAsc((v) => !v);
     else {
       setSortKey(key);
-      setSortAsc(true);
+      setSortAsc(key === "slaHours" ? false : true);
     }
   }
 
-  if (loading && !data) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator color={colors.primary} />
-      </View>
-    );
+  function switchTab(next: Tab) {
+    if (next === tab) return;
+    setTab(next);
+    setData(null);
+    setLoading(true);
+    setCollapsed({});
   }
+
+  const slaHours = data?.slaHours ?? 72;
+  const isMachines = tab === "machines";
 
   return (
     <ScrollView
@@ -182,40 +196,65 @@ export default function MachineDashboardScreen() {
         <RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} />
       }
     >
-      {data ? (
-        <Text style={styles.updatedAt}>อัปเดตล่าสุด {formatDateTime(data.now)} น.</Text>
-      ) : null}
+      <View style={styles.topRow}>
+        {data ? (
+          <Text style={styles.updatedAt}>ข้อมูล ณ {formatDateTime(data.now)} น.</Text>
+        ) : (
+          <View />
+        )}
+        {user?.role === "ADMIN" ? (
+          <TouchableOpacity
+            style={styles.importButton}
+            onPress={() => navigation.navigate("MachineImport")}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="cloud-upload-outline" size={15} color={colors.primary} />
+            <Text style={styles.importButtonText}>อัปโหลดไฟล์</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      <View style={styles.mainTabs}>
+        <MainTab
+          active={isMachines}
+          icon="power"
+          label="เครื่องดับ"
+          count={isMachines ? data?.summary.total : undefined}
+          onPress={() => switchTab("machines")}
+        />
+        <MainTab
+          active={!isMachines}
+          icon="wifi-outline"
+          label="สัญญาณหาย"
+          count={!isMachines ? data?.summary.total : undefined}
+          onPress={() => switchTab("signal")}
+        />
+      </View>
 
       <View style={styles.summaryRow}>
         <SummaryCard
-          label="OFF ทั้งหมด"
+          label={isMachines ? "เครื่องดับ" : "สาขาสัญญาณหาย"}
           value={data?.summary.total ?? 0}
-          color={colors.danger}
-          icon="power"
+          color={isMachines ? colors.danger : colors.warning}
+          icon={isMachines ? "power" : "wifi-outline"}
           wide={wide}
         />
+        <SummaryCard label="COCO" value={data?.summary.COCO ?? 0} color={colors.text} icon="business" wide={wide} />
+        <SummaryCard label="DODO" value={data?.summary.DODO ?? 0} color={colors.text} icon="storefront" wide={wide} />
         <SummaryCard
-          label="COCO"
-          value={data?.summary.COCO ?? 0}
-          color={colors.text}
-          icon="business"
-          wide={wide}
-        />
-        <SummaryCard
-          label="DODO"
-          value={data?.summary.DODO ?? 0}
-          color={colors.text}
-          icon="storefront"
-          wide={wide}
-        />
-        <SummaryCard
-          label={`ดับเกิน ${data?.staleHours ?? 72} ชม.`}
-          value={data?.summary.stale ?? 0}
-          color={colors.warning}
-          icon="time"
+          label={`เลย SLA ${slaHours} ชม.`}
+          value={data?.summary.breached ?? 0}
+          color="#b45309"
+          icon="alert-circle"
           wide={wide}
         />
       </View>
+
+      {!isMachines && data?.summary.machinesAffected ? (
+        <Text style={styles.affected}>
+          กระทบเครื่องรวม {data.summary.machinesAffected} เครื่องใน {data.summary.total} สาขา
+        </Text>
+      ) : null}
 
       <View style={styles.tabs}>
         {OWNERSHIPS.map((option) => (
@@ -239,7 +278,7 @@ export default function MachineDashboardScreen() {
           value={search}
           onChangeText={setSearch}
           onSubmitEditing={() => load()}
-          placeholder="ค้นหา รหัสสาขา / ชื่อสาขา / หมายเลขเครื่อง / zone"
+          placeholder={isMachines ? "ค้นหา รหัสสาขา / ชื่อสาขา / เครื่อง" : "ค้นหา รหัสสาขา / ชื่อสาขา"}
           placeholderTextColor={colors.textFaint}
           returnKeyType="search"
         />
@@ -251,65 +290,49 @@ export default function MachineDashboardScreen() {
       </View>
 
       <View style={styles.filterRow}>
-        {GRADES.map((option) => (
-          <TouchableOpacity
-            key={option}
-            style={[styles.chip, grade === option && styles.chipActive]}
-            onPress={() => setGrade(option)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.chipText, grade === option && styles.chipTextActive]}>
-              {option === "ทั้งหมด" ? "ทุก Grade" : `Grade ${option}`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-
         <TouchableOpacity
-          style={[styles.chip, staleOnly && styles.chipWarning]}
-          onPress={() => setStaleOnly((v) => !v)}
+          style={[styles.chip, breachedOnly && styles.chipWarning]}
+          onPress={() => setBreachedOnly((v) => !v)}
           activeOpacity={0.7}
         >
           <Ionicons
-            name="time-outline"
+            name="alert-circle-outline"
             size={14}
-            color={staleOnly ? "#92400e" : colors.textMuted}
+            color={breachedOnly ? "#92400e" : colors.textMuted}
           />
-          <Text style={[styles.chipText, staleOnly && styles.chipTextWarning]}>
-            เฉพาะดับนาน
+          <Text style={[styles.chipText, breachedOnly && styles.chipTextWarning]}>
+            เฉพาะเลย SLA
           </Text>
         </TouchableOpacity>
+
+        <View style={styles.groupPicker}>
+          <Text style={styles.groupLabel}>กลุ่ม</Text>
+          {GROUPS.map((g) => (
+            <TouchableOpacity
+              key={g.key}
+              style={[styles.groupOption, groupBy === g.key && styles.groupOptionActive]}
+              onPress={() => setGroupBy(g.key)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[styles.groupOptionText, groupBy === g.key && styles.groupOptionTextActive]}
+              >
+                {g.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       <View style={styles.sortRow}>
         <Text style={styles.sortLabel}>เรียงตาม</Text>
-        <TouchableOpacity
-          style={styles.sortButton}
-          onPress={() => toggleSort("lastTxnAt")}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.sortButtonText}>
-            {sortKey === "lastTxnAt" ? "เวลาทำรายการ" : "เวลาทำรายการ"}
-          </Text>
-          <Ionicons
-            name={sortKey === "lastTxnAt" ? (sortAsc ? "arrow-up" : "arrow-down") : "swap-vertical"}
-            size={14}
-            color={sortKey === "lastTxnAt" ? colors.primary : colors.textFaint}
-          />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.sortButton}
+        <SortButton label="SLA" active={sortKey === "slaHours"} asc={sortAsc} onPress={() => toggleSort("slaHours")} />
+        <SortButton
+          label="รหัสสาขา"
+          active={sortKey === "branchCode"}
+          asc={sortAsc}
           onPress={() => toggleSort("branchCode")}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.sortButtonText}>รหัสสาขา</Text>
-          <Ionicons
-            name={
-              sortKey === "branchCode" ? (sortAsc ? "arrow-up" : "arrow-down") : "swap-vertical"
-            }
-            size={14}
-            color={sortKey === "branchCode" ? colors.primary : colors.textFaint}
-          />
-        </TouchableOpacity>
+        />
       </View>
 
       {error ? (
@@ -319,57 +342,61 @@ export default function MachineDashboardScreen() {
         </View>
       ) : null}
 
-      {data && data.rows.length === 0 && !error ? (
-        <View style={styles.emptyCard}>
-          <Ionicons name="checkmark-circle-outline" size={28} color={colors.success} />
-          <Text style={styles.emptyText}>ไม่มีเครื่องที่ตรงกับเงื่อนไขที่เลือก</Text>
+      {loading && !data ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={colors.primary} />
         </View>
       ) : null}
 
-      {regions.map((region) => (
-        <View key={region.name} style={styles.section}>
+      {data && data.rows.length === 0 && !error ? (
+        <View style={styles.emptyCard}>
+          <Ionicons name="checkmark-circle-outline" size={28} color={colors.success} />
+          <Text style={styles.emptyText}>
+            {isMachines ? "ไม่มีเครื่องดับตามเงื่อนไขที่เลือก" : "ไม่มีสาขาที่สัญญาณหาย"}
+          </Text>
+        </View>
+      ) : null}
+
+      {groups.map((group) => (
+        <View key={group.name} style={styles.section}>
           <TouchableOpacity
             style={styles.sectionHeader}
-            onPress={() => setCollapsed((c) => ({ ...c, [region.name]: !c[region.name] }))}
+            onPress={() => setCollapsed((c) => ({ ...c, [group.name]: !c[group.name] }))}
             activeOpacity={0.7}
           >
             <Ionicons
-              name={collapsed[region.name] ? "chevron-forward" : "chevron-down"}
+              name={collapsed[group.name] ? "chevron-forward" : "chevron-down"}
               size={18}
               color={colors.text}
             />
-            <Text style={styles.sectionTitle}>{region.name}</Text>
+            <Text style={styles.sectionTitle}>{group.name}</Text>
             <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{region.rows.length} เครื่อง</Text>
+              <Text style={styles.countBadgeText}>
+                {group.rows.length} {isMachines ? "เครื่อง" : "สาขา"}
+              </Text>
             </View>
             <View style={{ flex: 1 }} />
-            {region.staleCount > 0 ? (
+            {group.breachedCount > 0 ? (
               <View style={styles.staleBadge}>
-                <Ionicons name="time" size={12} color="#92400e" />
-                <Text style={styles.staleBadgeText}>ดับนาน {region.staleCount}</Text>
+                <Ionicons name="alert-circle" size={12} color="#92400e" />
+                <Text style={styles.staleBadgeText}>เลย SLA {group.breachedCount}</Text>
               </View>
             ) : null}
           </TouchableOpacity>
 
-          {!collapsed[region.name] ? (
+          {!collapsed[group.name] ? (
             wide ? (
-              <MachineTable
-                rows={region.rows}
-                now={data!.now}
-                staleMinutes={staleMinutes}
+              <OutageTable
+                rows={group.rows}
+                isMachines={isMachines}
                 sortKey={sortKey}
                 sortAsc={sortAsc}
                 onSort={toggleSort}
               />
             ) : (
               <View style={styles.cardList}>
-                {region.rows.map((row) => (
-                  <MachineCard
-                    key={row.id}
-                    row={row}
-                    now={data!.now}
-                    staleMinutes={staleMinutes}
-                  />
+                {group.rows.map((row) => (
+                  <OutageCard key={row.id} row={row} isMachines={isMachines} />
                 ))}
               </View>
             )
@@ -378,10 +405,65 @@ export default function MachineDashboardScreen() {
       ))}
 
       <Text style={styles.footnote}>
-        แถวที่ดับเกิน {data?.staleHours ?? 72} ชม. ถูกไฮไลต์ไว้เพื่อจัดลำดับความเร่งด่วนในการเข้าซ่อม
-        · รหัสสาขา COCO ขึ้นต้น CO, DODO ขึ้นต้น DO · หมายเลขเครื่อง W คือเครื่องซัก D คือเครื่องอบ
+        SLA นับตั้งแต่ครั้งแรกที่เจอปัญหานี้ในไฟล์ที่อัปโหลด และหยุดนับเมื่อหายไปจากไฟล์
+        · ความละเอียดของเวลาขึ้นกับรอบอัปโหลด (เช้า/บ่าย) · เกิน {slaHours} ชม. ถือว่าเลยกำหนด
       </Text>
     </ScrollView>
+  );
+}
+
+function MainTab({
+  active,
+  icon,
+  label,
+  count,
+  onPress,
+}: {
+  active: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  count?: number;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.mainTab, active && styles.mainTabActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Ionicons name={icon} size={17} color={active ? colors.primary : colors.textMuted} />
+      <Text style={[styles.mainTabText, active && styles.mainTabTextActive]}>{label}</Text>
+      {count !== undefined ? (
+        <View style={[styles.mainTabCount, active && styles.mainTabCountActive]}>
+          <Text style={[styles.mainTabCountText, active && styles.mainTabCountTextActive]}>
+            {count}
+          </Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+function SortButton({
+  label,
+  active,
+  asc,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  asc: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.sortButton} onPress={onPress} activeOpacity={0.7}>
+      <Text style={styles.sortButtonText}>{label}</Text>
+      <Ionicons
+        name={active ? (asc ? "arrow-up" : "arrow-down") : "swap-vertical"}
+        size={14}
+        color={active ? colors.primary : colors.textFaint}
+      />
+    </TouchableOpacity>
   );
 }
 
@@ -409,36 +491,44 @@ function SummaryCard({
   );
 }
 
-const COLUMNS: { key: SortKey | null; label: string; width: number }[] = [
-  { key: "branchCode", label: "รหัสสาขา", width: 96 },
-  { key: "branchName", label: "ชื่อสาขา", width: 240 },
-  { key: null, label: "Zone", width: 72 },
-  { key: "machineCode", label: "เครื่อง", width: 88 },
-  { key: "grade", label: "Grade", width: 72 },
-  { key: null, label: "Status", width: 88 },
-  { key: "lastTxnAt", label: "ทำรายการล่าสุด", width: 168 },
-];
+function columnsFor(isMachines: boolean): { key: SortKey | null; label: string; width: number }[] {
+  return isMachines
+    ? [
+        { key: "branchCode", label: "รหัสสาขา", width: 92 },
+        { key: "branchName", label: "ชื่อสาขา", width: 236 },
+        { key: "machineCode", label: "เครื่อง", width: 84 },
+        { key: null, label: "Zone", width: 68 },
+        { key: null, label: "Grade", width: 66 },
+        { key: "slaHours", label: "ดับมาแล้ว", width: 180 },
+      ]
+    : [
+        { key: "branchCode", label: "รหัสสาขา", width: 92 },
+        { key: "branchName", label: "ชื่อสาขา", width: 260 },
+        { key: null, label: "เครื่องในสาขา", width: 96 },
+        { key: null, label: "Zone", width: 68 },
+        { key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 190 },
+      ];
+}
 
-function MachineTable({
+function OutageTable({
   rows,
-  now,
-  staleMinutes,
+  isMachines,
   sortKey,
   sortAsc,
   onSort,
 }: {
-  rows: MachineRow[];
-  now: string;
-  staleMinutes: number;
+  rows: OutageRow[];
+  isMachines: boolean;
   sortKey: SortKey;
   sortAsc: boolean;
   onSort: (key: SortKey) => void;
 }) {
+  const columns = columnsFor(isMachines);
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
       <View>
         <View style={styles.tableHeader}>
-          {COLUMNS.map((column) => (
+          {columns.map((column) => (
             <TouchableOpacity
               key={column.label}
               style={{ width: column.width }}
@@ -451,11 +541,7 @@ function MachineTable({
                 {column.key ? (
                   <Ionicons
                     name={
-                      sortKey === column.key
-                        ? sortAsc
-                          ? "arrow-up"
-                          : "arrow-down"
-                        : "swap-vertical"
+                      sortKey === column.key ? (sortAsc ? "arrow-up" : "arrow-down") : "swap-vertical"
                     }
                     size={11}
                     color={sortKey === column.key ? colors.primary : colors.border}
@@ -467,35 +553,39 @@ function MachineTable({
         </View>
 
         {rows.map((row) => {
-          const age = elapsed(row.lastTxnAt, now);
-          const stale = age.minutes > staleMinutes;
           const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
           return (
-            <View key={row.id} style={[styles.tableRow, stale && styles.tableRowStale]}>
-              <Text style={[styles.cellMono, { width: COLUMNS[0].width }]}>{row.branchCode}</Text>
-              <Text style={[styles.cellText, { width: COLUMNS[1].width }]}>{row.branchName}</Text>
-              <View style={{ width: COLUMNS[2].width }}>
+            <View key={row.id} style={[styles.tableRow, row.breached && styles.tableRowBreached]}>
+              <Text style={[styles.cellMono, { width: columns[0].width }]}>{row.branchCode}</Text>
+              <Text style={[styles.cellText, { width: columns[1].width }]}>{row.branchName}</Text>
+              {isMachines ? (
+                <Text style={[styles.cellMono, { width: columns[2].width }]}>
+                  {row.machineCode}
+                </Text>
+              ) : (
+                <Text style={[styles.cellText, { width: columns[2].width }]}>
+                  {row.machineCount ?? "—"}
+                </Text>
+              )}
+              <View style={{ width: columns[3].width }}>
                 <View style={styles.zoneChip}>
                   <Text style={styles.zoneChipText}>{row.zone ?? "—"}</Text>
                 </View>
               </View>
-              <Text style={[styles.cellMono, { width: COLUMNS[3].width }]}>{row.machineCode}</Text>
-              <View style={{ width: COLUMNS[4].width }}>
-                <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
-                  <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>
-                    {row.grade ?? "—"}
-                  </Text>
+              {isMachines ? (
+                <View style={{ width: columns[4].width }}>
+                  <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
+                    <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>
+                      {row.grade ?? "—"}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-              <View style={{ width: COLUMNS[5].width }}>
-                <View style={styles.statusChip}>
-                  <Ionicons name="power" size={11} color="#b91c1c" />
-                  <Text style={styles.statusChipText}>{row.status}</Text>
-                </View>
-              </View>
-              <View style={{ width: COLUMNS[6].width }}>
-                <Text style={styles.cellText}>{formatDateTime(row.lastTxnAt)}</Text>
-                <Text style={[styles.cellSub, stale && styles.cellSubStale]}>{age.text}</Text>
+              ) : null}
+              <View style={{ width: columns[columns.length - 1].width }}>
+                <Text style={[styles.slaText, row.breached && styles.slaTextBreached]}>
+                  {slaText(row.slaHours)}
+                </Text>
+                <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
               </View>
             </View>
           );
@@ -505,61 +595,61 @@ function MachineTable({
   );
 }
 
-function MachineCard({
-  row,
-  now,
-  staleMinutes,
-}: {
-  row: MachineRow;
-  now: string;
-  staleMinutes: number;
-}) {
-  const age = elapsed(row.lastTxnAt, now);
-  const stale = age.minutes > staleMinutes;
+function OutageCard({ row, isMachines }: { row: OutageRow; isMachines: boolean }) {
   const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
-
   return (
-    <View style={[styles.card, stale && styles.cardStale]}>
+    <View style={[styles.card, row.breached && styles.cardBreached]}>
       <View style={styles.cardTop}>
         <Text style={styles.cardBranch}>{row.branchName}</Text>
-        <View style={styles.statusChip}>
-          <Ionicons name="power" size={11} color="#b91c1c" />
-          <Text style={styles.statusChipText}>{row.status}</Text>
-        </View>
+        {row.breached ? (
+          <View style={styles.breachChip}>
+            <Ionicons name="alert-circle" size={11} color="#92400e" />
+            <Text style={styles.breachChipText}>เลย SLA</Text>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.cardChips}>
         <View style={styles.zoneChip}>
           <Text style={styles.zoneChipText}>{row.branchCode}</Text>
         </View>
-        <View style={styles.zoneChip}>
-          <Text style={styles.zoneChipText}>{row.zone ?? "—"}</Text>
-        </View>
-        <View style={styles.machineChip}>
-          <Ionicons
-            name={row.type === "DRYER" ? "flame-outline" : "water-outline"}
-            size={12}
-            color={colors.primary}
-          />
-          <Text style={styles.machineChipText}>{row.machineCode}</Text>
-        </View>
-        <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
-          <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>
-            {row.grade ?? "—"}
-          </Text>
-        </View>
+        {row.zone ? (
+          <View style={styles.zoneChip}>
+            <Text style={styles.zoneChipText}>{row.zone}</Text>
+          </View>
+        ) : null}
+        {isMachines ? (
+          <View style={styles.machineChip}>
+            <Ionicons
+              name={row.machineType === "DRYER" ? "flame-outline" : "water-outline"}
+              size={12}
+              color={colors.primary}
+            />
+            <Text style={styles.machineChipText}>{row.machineCode}</Text>
+          </View>
+        ) : (
+          <View style={styles.machineChip}>
+            <Ionicons name="hardware-chip-outline" size={12} color={colors.primary} />
+            <Text style={styles.machineChipText}>{row.machineCount ?? "—"} เครื่อง</Text>
+          </View>
+        )}
+        {row.grade ? (
+          <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
+            <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>{row.grade}</Text>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.cardBottom}>
         <Ionicons
           name="time-outline"
           size={14}
-          color={stale ? "#92400e" : colors.textMuted}
+          color={row.breached ? "#92400e" : colors.textMuted}
         />
-        <Text style={[styles.cardTime, stale && styles.cardTimeStale]}>
-          {age.text}
+        <Text style={[styles.cardTime, row.breached && styles.cardTimeBreached]}>
+          {isMachines ? "ดับมาแล้ว" : "สัญญาณหายมาแล้ว"} {slaText(row.slaHours)}
         </Text>
-        <Text style={styles.cardTimeExact}>· {formatDateTime(row.lastTxnAt)} น.</Text>
+        <Text style={styles.cardTimeExact}>· ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
       </View>
     </View>
   );
@@ -568,10 +658,55 @@ function MachineCard({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
 
+  topRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
   // ตัวอักษรไทยมีสระบนและวรรณยุกต์ lineHeight ต้องสูงกว่า fontSize ชัดเจน
-  updatedAt: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginBottom: spacing.md },
+  updatedAt: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  importButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+  },
+  importButtonText: { fontSize: 12, lineHeight: 20, color: colors.primary, fontWeight: "700" },
+
+  mainTabs: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
+  mainTab: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+  },
+  mainTabActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  mainTabText: { fontSize: 14, lineHeight: 23, fontWeight: "700", color: colors.textMuted },
+  mainTabTextActive: { color: colors.primary },
+  mainTabCount: {
+    minWidth: 26,
+    alignItems: "center",
+    backgroundColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  mainTabCountActive: { backgroundColor: colors.primary },
+  mainTabCountText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  mainTabCountTextActive: { color: "#fff" },
 
   summaryRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   summaryCard: {
@@ -589,6 +724,7 @@ const styles = StyleSheet.create({
   summaryCardWide: { flexGrow: 1, flexBasis: 0, minWidth: 0 },
   summaryLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   summaryValue: { fontSize: 24, lineHeight: 34, fontWeight: "700" },
+  affected: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: spacing.sm },
 
   tabs: {
     flexDirection: "row",
@@ -626,7 +762,13 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
 
-  filterRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -638,11 +780,26 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
   },
-  chipActive: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   chipWarning: { backgroundColor: colors.warningSoft, borderColor: "#fcd34d" },
   chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  chipTextActive: { color: colors.primary },
   chipTextWarning: { color: "#92400e" },
+
+  groupPicker: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingVertical: 3,
+    paddingHorizontal: spacing.sm,
+  },
+  groupLabel: { fontSize: 12, lineHeight: 20, color: colors.textFaint, marginRight: 2 },
+  groupOption: { paddingVertical: 3, paddingHorizontal: spacing.sm, borderRadius: radius.pill },
+  groupOptionActive: { backgroundColor: colors.primarySoft },
+  groupOptionText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  groupOptionTextActive: { color: colors.primary, fontWeight: "700" },
 
   sortRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   sortLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
@@ -658,6 +815,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   sortButtonText: { fontSize: 12, lineHeight: 20, color: colors.text },
+
+  loading: { paddingVertical: spacing.xxl, alignItems: "center" },
 
   section: {
     backgroundColor: colors.card,
@@ -715,17 +874,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  tableRowStale: { backgroundColor: colors.warningSoft },
+  tableRowBreached: { backgroundColor: colors.warningSoft },
   cellText: { fontSize: 13, lineHeight: 21, color: colors.text, paddingRight: spacing.sm },
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
-  cellSubStale: { color: "#92400e", fontWeight: "600" },
-  cellMono: {
-    fontSize: 12,
-    lineHeight: 20,
-    color: colors.textMuted,
-    fontFamily: undefined,
-    paddingRight: spacing.sm,
-  },
+  cellMono: { fontSize: 12, lineHeight: 20, color: colors.textMuted, paddingRight: spacing.sm },
+  slaText: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  slaTextBreached: { color: "#92400e" },
 
   cardList: { padding: spacing.md, gap: spacing.sm },
   card: {
@@ -736,14 +890,25 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.sm,
   },
-  cardStale: { backgroundColor: colors.warningSoft, borderColor: "#fcd34d" },
+  cardBreached: { backgroundColor: colors.warningSoft, borderColor: "#fcd34d" },
   cardTop: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   cardBranch: { flex: 1, fontSize: 14, lineHeight: 23, fontWeight: "700", color: colors.text },
   cardChips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   cardBottom: { flexDirection: "row", alignItems: "center", gap: 4, flexWrap: "wrap" },
   cardTime: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  cardTimeStale: { color: "#92400e" },
+  cardTimeBreached: { color: "#92400e" },
   cardTimeExact: { fontSize: 11, lineHeight: 20, color: colors.textFaint },
+
+  breachChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#fde68a",
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 1,
+  },
+  breachChipText: { fontSize: 11, lineHeight: 18, color: "#92400e", fontWeight: "700" },
 
   zoneChip: {
     backgroundColor: colors.border,
@@ -770,17 +935,6 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   gradeChipText: { fontSize: 11, lineHeight: 18, fontWeight: "700" },
-  statusChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: colors.dangerSoft,
-    borderRadius: radius.pill,
-    paddingHorizontal: 8,
-    paddingVertical: 1,
-    alignSelf: "flex-start",
-  },
-  statusChipText: { fontSize: 11, lineHeight: 18, color: "#b91c1c", fontWeight: "700" },
 
   errorCard: {
     flexDirection: "row",
@@ -802,10 +956,5 @@ const styles = StyleSheet.create({
   },
   emptyText: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
 
-  footnote: {
-    fontSize: 11,
-    lineHeight: 20,
-    color: colors.textFaint,
-    marginTop: spacing.xl,
-  },
+  footnote: { fontSize: 11, lineHeight: 20, color: colors.textFaint, marginTop: spacing.xl },
 });

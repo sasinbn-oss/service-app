@@ -13,8 +13,8 @@ export default function HomeScreen({ navigation }: Props) {
   const entries: MenuEntry[] = [
     {
       key: "MachineDashboard",
-      label: "เครื่องที่ดับอยู่",
-      description: "ดูเครื่องสถานะ OFF แยกตามภาค เรียงตามความเร่งด่วน",
+      label: "ติดตามเครื่องเสีย",
+      description: "เครื่องดับและสาขาสัญญาณหาย พร้อมเวลา SLA",
       icon: "pulse",
       tint: colors.dangerSoft,
       iconColor: colors.danger,

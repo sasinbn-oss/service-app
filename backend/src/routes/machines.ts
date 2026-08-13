@@ -1,181 +1,263 @@
 /**
- * ข้อมูลเครื่องซัก/อบ สำหรับแดชบอร์ดติดตามเครื่องดับ
+ * แดชบอร์ดติดตามปัญหาเครื่อง และการนำเข้าไฟล์ export
  *
- * แดชบอร์ดตอบคำถามเดียว: "ตอนนี้เครื่องไหนดับอยู่ และดับมานานแค่ไหน"
- * การกรองและการจัดกลุ่มทำที่ฝั่งเซิร์ฟเวอร์ทั้งหมด เพราะจำนวนเครื่องจะโตขึ้นเรื่อย ๆ
- * จนส่งทั้งหมดไปให้แอปกรองเองไม่ไหว
+ * มีสองปัญหาที่แยกกันคนละเรื่อง คนละคนแก้ จึงมีสอง endpoint ไม่ใช่รายการเดียวปนกัน
+ *   เครื่องดับ   — รายเครื่อง ช่างไปเปลี่ยนอะไหล่
+ *   สัญญาณหาย   — รายสาขา ทีมเน็ตเวิร์กไปดูเราเตอร์
+ *
+ * เวลาที่ใช้คิด SLA มาจากเคสที่เปิดค้างอยู่ (Outage) ไม่ใช่จากไฟล์
+ * เพราะไฟล์บอกแค่ว่าตอนนี้ใครมีปัญหา ไม่ได้บอกว่าเริ่มเมื่อไหร่
  */
 import { Router } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
-import { requireAuth, requireAdmin } from "../middleware/auth";
+import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
+import { applyImport, parseWorkbook, planImport } from "../machines/import";
 
 const router = Router();
 
-/** เกินกี่ชั่วโมงถือว่า "ดับนาน" — ใช้เป็นค่าตั้งต้น แอปส่งค่าอื่นมาทับได้ */
-const DEFAULT_STALE_HOURS = 72;
+/** เกินกี่ชั่วโมงถือว่าเลย SLA — ตั้งทับได้ด้วย env โดยไม่ต้องแก้โค้ด */
+const SLA_HOURS = Number(process.env.MACHINE_SLA_HOURS) || 72;
 
-const querySchema = z.object({
-  status: z.string().optional(),
+const listSchema = z.object({
   ownership: z.enum(["COCO", "DODO"]).optional(),
   grade: z.enum(["A", "B", "C"]).optional(),
   region: z.string().optional(),
+  zone: z.string().optional(),
   search: z.string().optional(),
-  staleOnly: z.enum(["true", "false"]).optional(),
-  staleHours: z.coerce.number().positive().max(24 * 365).optional(),
+  breachedOnly: z.enum(["true", "false"]).optional(),
 });
 
-router.get("/", requireAuth, async (req, res) => {
-  const parsed = querySchema.safeParse(req.query);
+function branchFilter(query: z.infer<typeof listSchema>) {
+  return {
+    ...(query.ownership ? { ownership: query.ownership } : {}),
+    ...(query.grade ? { grade: query.grade } : {}),
+    ...(query.region ? { region: query.region } : {}),
+    ...(query.zone ? { zone: query.zone } : {}),
+  };
+}
+
+function hoursSince(from: Date, now: Date) {
+  return (now.getTime() - from.getTime()) / 3_600_000;
+}
+
+/** เครื่องที่ดับอยู่ — รายเครื่อง */
+router.get("/outages", requireAuth, async (req, res) => {
+  const parsed = listSchema.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const query = parsed.data;
+  const now = new Date();
+  const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
+  const keyword = query.search?.trim();
 
-  const { status = "OFF", ownership, grade, region, search, staleOnly } = parsed.data;
-  const staleHours = parsed.data.staleHours ?? DEFAULT_STALE_HOURS;
-  const staleBefore = new Date(Date.now() - staleHours * 60 * 60 * 1000);
-
-  const keyword = search?.trim();
-  const machines = await prisma.machine.findMany({
+  const outages = await prisma.outage.findMany({
     where: {
-      ...(status === "ALL" ? {} : { status }),
-      branch: {
-        ...(ownership ? { ownership } : {}),
-        ...(grade ? { grade } : {}),
-        ...(region ? { region } : {}),
-      },
+      kind: "MACHINE_OFF",
+      endedAt: null,
+      ...(query.breachedOnly === "true" ? { startedAt: { lt: breachBefore } } : {}),
+      branch: branchFilter(query),
       ...(keyword
         ? {
             OR: [
-              { code: { contains: keyword, mode: "insensitive" } },
               { branch: { code: { contains: keyword, mode: "insensitive" } } },
               { branch: { name: { contains: keyword, mode: "insensitive" } } },
-              { branch: { zone: { contains: keyword, mode: "insensitive" } } },
+              { machine: { code: { contains: keyword, mode: "insensitive" } } },
             ],
           }
         : {}),
-      // เครื่องที่ไม่เคยมีรายการเลย ถือว่าเข้าข่าย "ดับนาน" ด้วย ไม่ใช่ข้ามไป
-      ...(staleOnly === "true"
-        ? { OR: [{ lastTxnAt: { lt: staleBefore } }, { lastTxnAt: null }] }
+    },
+    include: {
+      branch: {
+        select: { code: true, name: true, region: true, ownership: true, zone: true, grade: true },
+      },
+      machine: { select: { code: true, type: true, brand: true } },
+    },
+    // ดับนานสุดขึ้นก่อน เพราะนั่นคือลำดับที่ควรเข้าไปซ่อม
+    orderBy: { startedAt: "asc" },
+  });
+
+  const rows = outages.map((o) => ({
+    id: o.id,
+    branchCode: o.branch.code,
+    branchName: o.branch.name,
+    region: o.branch.region,
+    ownership: o.branch.ownership,
+    zone: o.branch.zone,
+    grade: o.branch.grade,
+    machineCode: o.machine?.code ?? "",
+    machineType: o.machine?.type ?? "",
+    machineBrand: o.machine?.brand ?? null,
+    startedAt: o.startedAt,
+    lastSeenAt: o.lastSeenAt,
+    slaHours: Math.floor(hoursSince(o.startedAt, now)),
+    breached: o.startedAt < breachBefore,
+  }));
+
+  res.json({
+    now: now.toISOString(),
+    slaHours: SLA_HOURS,
+    summary: {
+      total: rows.length,
+      COCO: rows.filter((r) => r.ownership === "COCO").length,
+      DODO: rows.filter((r) => r.ownership === "DODO").length,
+      breached: rows.filter((r) => r.breached).length,
+    },
+    rows,
+  });
+});
+
+/** สาขาที่สัญญาณหาย — รายสาขา ไม่ใช่รายเครื่อง */
+router.get("/signal-lost", requireAuth, async (req, res) => {
+  const parsed = listSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const query = parsed.data;
+  const now = new Date();
+  const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
+  const keyword = query.search?.trim();
+
+  const outages = await prisma.outage.findMany({
+    where: {
+      kind: "SIGNAL_LOST",
+      endedAt: null,
+      ...(query.breachedOnly === "true" ? { startedAt: { lt: breachBefore } } : {}),
+      branch: branchFilter(query),
+      ...(keyword
+        ? {
+            OR: [
+              { branch: { code: { contains: keyword, mode: "insensitive" } } },
+              { branch: { name: { contains: keyword, mode: "insensitive" } } },
+            ],
+          }
         : {}),
     },
     include: {
       branch: {
         select: {
+          id: true,
           code: true,
           name: true,
           region: true,
           ownership: true,
           zone: true,
           grade: true,
+          _count: { select: { machines: true } },
         },
       },
     },
-    // เรียงจากดับนานสุดก่อน เพราะนั่นคือลำดับที่ควรเข้าไปซ่อม
-    orderBy: [{ lastTxnAt: "asc" }],
+    orderBy: { startedAt: "asc" },
   });
 
-  const rows = machines.map((m) => ({
-    id: m.id,
-    machineCode: m.code,
-    type: m.type,
-    status: m.status,
-    lastTxnAt: m.lastTxnAt,
-    branchCode: m.branch.code,
-    branchName: m.branch.name,
-    region: m.branch.region,
-    ownership: m.branch.ownership,
-    zone: m.branch.zone,
-    grade: m.branch.grade,
+  const rows = outages.map((o) => ({
+    id: o.id,
+    branchCode: o.branch.code,
+    branchName: o.branch.name,
+    region: o.branch.region,
+    ownership: o.branch.ownership,
+    zone: o.branch.zone,
+    grade: o.branch.grade,
+    machineCount: o.branch._count.machines,
+    startedAt: o.startedAt,
+    lastSeenAt: o.lastSeenAt,
+    slaHours: Math.floor(hoursSince(o.startedAt, now)),
+    breached: o.startedAt < breachBefore,
   }));
 
-  const isStale = (r: (typeof rows)[number]) =>
-    r.lastTxnAt === null || r.lastTxnAt < staleBefore;
-
   res.json({
-    // ส่งเวลาของเซิร์ฟเวอร์ไปด้วย เพื่อให้ "ดับมากี่ชั่วโมง" คิดจากนาฬิกาเดียวกัน
-    // ไม่ใช่นาฬิกาเครื่องผู้ใช้ซึ่งอาจตั้งผิดหรือคนละโซนเวลา
-    now: new Date().toISOString(),
-    staleHours,
+    now: now.toISOString(),
+    slaHours: SLA_HOURS,
     summary: {
       total: rows.length,
       COCO: rows.filter((r) => r.ownership === "COCO").length,
       DODO: rows.filter((r) => r.ownership === "DODO").length,
-      stale: rows.filter(isStale).length,
+      breached: rows.filter((r) => r.breached).length,
+      machinesAffected: rows.reduce((sum, r) => sum + r.machineCount, 0),
     },
     rows,
   });
 });
 
-/** รายชื่อภาคและโซนที่มีอยู่จริง ใช้เติมตัวเลือกในแดชบอร์ด */
-router.get("/filters", requireAuth, async (_req, res) => {
-  const branches = await prisma.branch.findMany({
-    where: { machines: { some: {} } },
-    select: { region: true, zone: true },
-  });
-
-  const unique = (values: (string | null)[]) =>
-    [...new Set(values.filter((v): v is string => Boolean(v)))].sort();
+/** ตัวเลขรวมของทั้งสองแท็บ ใช้ตอนเปิดหน้าเพื่อขึ้นตัวเลขบนแท็บ */
+router.get("/overview", requireAuth, async (_req, res) => {
+  const now = new Date();
+  const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
+  const [machineOff, signalLost, machineBreached, signalBreached, lastImport] = await Promise.all([
+    prisma.outage.count({ where: { kind: "MACHINE_OFF", endedAt: null } }),
+    prisma.outage.count({ where: { kind: "SIGNAL_LOST", endedAt: null } }),
+    prisma.outage.count({
+      where: { kind: "MACHINE_OFF", endedAt: null, startedAt: { lt: breachBefore } },
+    }),
+    prisma.outage.count({
+      where: { kind: "SIGNAL_LOST", endedAt: null, startedAt: { lt: breachBefore } },
+    }),
+    prisma.machineImport.findFirst({ orderBy: { createdAt: "desc" } }),
+  ]);
 
   res.json({
-    regions: unique(branches.map((b) => b.region)),
-    zones: unique(branches.map((b) => b.zone)),
+    now: now.toISOString(),
+    slaHours: SLA_HOURS,
+    machineOff,
+    signalLost,
+    machineBreached,
+    signalBreached,
+    lastImport,
   });
 });
 
-const upsertSchema = z.object({
-  machines: z
-    .array(
-      z.object({
-        branchCode: z.string().min(1),
-        machineCode: z.string().min(1),
-        status: z.enum(["ON", "OFF"]),
-        lastTxnAt: z.string().datetime().nullable().optional(),
-      })
-    )
-    .min(1)
-    .max(5000),
+/** ประวัติการอัปโหลด */
+router.get("/imports", requireAuth, async (_req, res) => {
+  const imports = await prisma.machineImport.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+  res.json(imports);
+});
+
+// ไฟล์ export ทั้งไฟล์ราว 100-200KB เก็บในหน่วยความจำระหว่างอ่านพอ ไม่ต้องเขียนลงดิสก์
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
 
 /**
- * อัปเดตสถานะเครื่องเป็นชุด — ปลายทางสำหรับข้อมูลที่มาจากระบบเก็บเงิน
+ * นำเข้าไฟล์ export
  *
- * ตอนนี้ยังต้องมีคนยิงเข้ามาเอง (หรือสคริปต์ที่อ่านไฟล์ export)
- * แยกเป็น endpoint ต่างหากตั้งแต่แรกเพื่อให้เปลี่ยนไปดึงอัตโนมัติทีหลัง
- * โดยไม่ต้องแก้ทั้งแดชบอร์ด
+ * ค่าเริ่มต้นคือโหมดตรวจสอบ ไม่บันทึกอะไรจนกว่าจะส่ง mode=commit
+ * เพราะ "หายจากไฟล์ = ซ่อมเสร็จ" ไฟล์ที่ export ไม่ครบจะปิดเคสทิ้งเป็นร้อย
+ * ต้องให้คนเห็นตัวเลขก่อนเสมอ
  */
-router.post("/sync", requireAuth, requireAdmin, async (req, res) => {
-  const parsed = upsertSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (req: AuthRequest, res) => {
+  if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });
 
-  const branchCodes = [...new Set(parsed.data.machines.map((m) => m.branchCode))];
-  const branches = await prisma.branch.findMany({
-    where: { code: { in: branchCodes } },
-    select: { id: true, code: true },
-  });
-  const byCode = new Map(branches.map((b) => [b.code, b.id]));
-
-  const unknownBranches = branchCodes.filter((c) => !byCode.has(c));
-  const updatable = parsed.data.machines.filter((m) => byCode.has(m.branchCode));
-
-  let updated = 0;
-  for (const m of updatable) {
-    const branchId = byCode.get(m.branchCode)!;
-    const lastTxnAt = m.lastTxnAt ? new Date(m.lastTxnAt) : null;
-    await prisma.machine.upsert({
-      where: { branchId_code: { branchId, code: m.machineCode } },
-      update: { status: m.status, lastTxnAt },
-      create: {
-        branchId,
-        code: m.machineCode,
-        // ตัวอักษรแรกของรหัสเครื่องบอกชนิด W = ซัก, D = อบ
-        type: m.machineCode.trim().toUpperCase().startsWith("D") ? "DRYER" : "WASHER",
-        status: m.status,
-        lastTxnAt,
-      },
-    });
-    updated += 1;
+  const commit = req.body?.mode === "commit";
+  const snapshotAt = req.body?.snapshotAt ? new Date(req.body.snapshotAt) : new Date();
+  if (Number.isNaN(snapshotAt.getTime())) {
+    return res.status(400).json({ error: "รูปแบบเวลา snapshot ไม่ถูกต้อง" });
   }
 
-  res.json({ updated, unknownBranches });
+  try {
+    const parsed = await parseWorkbook(req.file.buffer);
+    if (parsed.errors.length > 0) {
+      return res.status(400).json({ error: parsed.errors.join(" / ") });
+    }
+    if (parsed.rows.length === 0) {
+      return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
+    }
+
+    const plan = commit
+      ? await applyImport(parsed, snapshotAt, {
+          uploadedById: req.auth!.userId,
+          fileName: req.file.originalname,
+        })
+      : await planImport(parsed, snapshotAt);
+
+    res.json({ committed: commit, plan });
+  } catch (err) {
+    console.error("Machine import failed:", err);
+    res.status(400).json({
+      error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
+    });
+  }
 });
 
 export default router;

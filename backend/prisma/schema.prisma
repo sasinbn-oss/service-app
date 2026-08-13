@@ -70,13 +70,17 @@ model Branch {
   region        String?
   // COCO (company owned) | DODO (dealer owned)
   ownership     String?
+  // zone และ grade จะมาจากฐานข้อมูลอีกชุดที่ทำแยก ไฟล์ export ไม่มีสองค่านี้
+  // ตัวนำเข้าจึงไม่แตะค่าเดิม เขียนทับให้ว่างไม่ได้
   zone          String?
-  // Branch tier A | B | C — drives how urgently an outage is treated.
   grade         String?
+  // สถานะสาขาจาก CRM — active | inactive
+  status        String?         @default("active")
   createdAt     DateTime        @default(now())
   checkIns      BranchCheckIn[]
   workLogs      WorkLog[]
   machines      Machine[]
+  outages       Outage[]
 }
 
 // One washer or dryer installed at a branch.
@@ -88,15 +92,58 @@ model Machine {
   code       String
   // WASHER | DRYER
   type       String
-  // ON | OFF — OFF is what the dashboard lists.
+  // ON | OFF — สรุปสถานะล่าสุด เก็บไว้เพื่อความสะดวกในการค้น
+  // ส่วนเวลาที่ใช้คิด SLA อยู่ที่ Outage ซึ่งเป็นตัวจริง
   status     String    @default("ON")
-  // Last time the machine took money. How long ago this was is the whole
-  // signal the dashboard is built on, so it is stored even while ON.
-  lastTxnAt  DateTime?
+  brand      String?
+  // ค่า state ดิบจากไฟล์ export — 0 คือเครื่องดับ ค่าอื่นข้ามตามที่ตกลงกัน
+  stateCode  String?
   updatedAt  DateTime  @updatedAt
+  outages    Outage[]
 
   @@unique([branchId, code])
   @@index([status])
+}
+
+// หนึ่งเคสของปัญหา ตั้งแต่เห็นครั้งแรกจนหายไปจากไฟล์
+//
+// ไฟล์ export บอกแค่ว่า "ตอนนี้ใครมีปัญหา" ไม่ได้บอกว่าเริ่มเมื่อไหร่
+// ระบบจึงต้องจำเอง: เจอในไฟล์ครั้งแรก = เปิดเคส, หายไปจากไฟล์ = ปิดเคส
+// เวลาที่ค้างอยู่ระหว่างนั้นคือ SLA และเคสที่ปิดแล้วกลายเป็นประวัติสำหรับทำรายงาน
+model Outage {
+  id         Int       @id @default(autoincrement())
+  // MACHINE_OFF (เครื่องดับ รายเครื่อง) | SIGNAL_LOST (สัญญาณหาย ทั้งสาขา)
+  kind       String
+  branchId   Int
+  branch     Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // ว่างสำหรับ SIGNAL_LOST เพราะเป็นปัญหาระดับสาขา ไม่ใช่ของเครื่องใดเครื่องหนึ่ง
+  machineId  Int?
+  machine    Machine?  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  startedAt  DateTime
+  // snapshot ล่าสุดที่ยังเห็นปัญหานี้ ใช้บอกว่าของจริงหายไปช่วงไหน
+  lastSeenAt DateTime
+  // ว่าง = ยังไม่หาย เคสที่เปิดอยู่คือสิ่งที่แดชบอร์ดแสดง
+  endedAt    DateTime?
+
+  @@index([kind, endedAt])
+  @@index([branchId, endedAt])
+}
+
+// บันทึกการอัปโหลดแต่ละครั้ง ไว้ดูย้อนหลังว่าตัวเลขที่เปลี่ยนมาจากไฟล์ไหน
+model MachineImport {
+  id             Int      @id @default(autoincrement())
+  uploadedById   Int?
+  fileName       String?
+  // เวลาของ snapshot ที่ใช้เป็นจุดอ้างอิงในการเปิด/ปิดเคส
+  snapshotAt     DateTime
+  rowsInFile     Int
+  duplicateRows  Int
+  branchesTouched Int
+  machinesOff    Int
+  branchesSignalLost Int
+  opened         Int
+  closed         Int
+  createdAt      DateTime @default(now())
 }
 
 model BranchCheckIn {
