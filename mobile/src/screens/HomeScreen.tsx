@@ -12,6 +12,15 @@ export default function HomeScreen({ navigation }: Props) {
 
   const entries: MenuEntry[] = [
     {
+      key: "MachineDashboard",
+      label: "เครื่องที่ดับอยู่",
+      description: "ดูเครื่องสถานะ OFF แยกตามภาค เรียงตามความเร่งด่วน",
+      icon: "pulse",
+      tint: colors.dangerSoft,
+      iconColor: colors.danger,
+      onPress: () => navigation.navigate("MachineDashboard"),
+    },
+    {
       key: "TransferDocument",
       label: "เอกสารขอโอนสินค้า",
       description: "กรอกรายการ แล้วได้ไฟล์ Word ตามฟอร์มบริษัท",

@@ -14,9 +14,15 @@ const branchSchema = z.object({
   name: z.string().min(1),
   code: z.string().min(1),
   address: z.string().optional(),
-  latitude: z.number(),
-  longitude: z.number(),
+  // พิกัดไม่บังคับ สาขาที่ยังไม่ได้ไปวัดพิกัดก็ขึ้นในแดชบอร์ดเครื่องได้
+  // แต่จะรายงานตัวด้วย GPS ไม่ได้จนกว่าจะใส่พิกัด
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
   radiusMeters: z.number().int().positive().optional(),
+  region: z.string().optional(),
+  ownership: z.enum(["COCO", "DODO"]).optional(),
+  zone: z.string().optional(),
+  grade: z.enum(["A", "B", "C"]).optional(),
 });
 
 router.post("/", requireAuth, requireAdmin, async (req, res) => {

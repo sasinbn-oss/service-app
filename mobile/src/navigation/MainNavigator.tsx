@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import HomeScreen from "../screens/HomeScreen";
 import AssistantScreen from "../screens/AssistantScreen";
 import TransferDocumentScreen from "../screens/TransferDocumentScreen";
+import MachineDashboardScreen from "../screens/MachineDashboardScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
 import GuideListScreen from "../screens/GuideListScreen";
@@ -68,6 +69,11 @@ function HomeStackNavigator() {
         name="HomeMenu"
         component={HomeScreen}
         options={{ title: "งานช่าง", headerRight: () => <LogoutButton /> }}
+      />
+      <HomeStack.Screen
+        name="MachineDashboard"
+        component={MachineDashboardScreen}
+        options={{ title: "เครื่องที่ดับอยู่" }}
       />
       <HomeStack.Screen
         name="TransferDocument"

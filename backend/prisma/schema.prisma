@@ -60,12 +60,43 @@ model Branch {
   name          String
   code          String          @unique
   address       String?
-  latitude      Float
-  longitude     Float
+  // Optional because a branch can be on the machine dashboard long before
+  // anyone has stood in it with a phone to record its coordinates. Check-in
+  // only offers branches that have them.
+  latitude      Float?
+  longitude     Float?
   radiusMeters  Int             @default(200)
+  // Grouping used by the machine dashboard.
+  region        String?
+  // COCO (company owned) | DODO (dealer owned)
+  ownership     String?
+  zone          String?
+  // Branch tier A | B | C — drives how urgently an outage is treated.
+  grade         String?
   createdAt     DateTime        @default(now())
   checkIns      BranchCheckIn[]
   workLogs      WorkLog[]
+  machines      Machine[]
+}
+
+// One washer or dryer installed at a branch.
+model Machine {
+  id         Int       @id @default(autoincrement())
+  branchId   Int
+  branch     Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // Label on the machine itself, e.g. W3 (washer) or D12 (dryer).
+  code       String
+  // WASHER | DRYER
+  type       String
+  // ON | OFF — OFF is what the dashboard lists.
+  status     String    @default("ON")
+  // Last time the machine took money. How long ago this was is the whole
+  // signal the dashboard is built on, so it is stored even while ON.
+  lastTxnAt  DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([branchId, code])
+  @@index([status])
 }
 
 model BranchCheckIn {

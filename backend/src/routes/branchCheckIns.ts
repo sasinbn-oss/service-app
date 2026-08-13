@@ -32,6 +32,14 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const branch = await prisma.branch.findUnique({ where: { id: parsed.data.branchId } });
   if (!branch) return res.status(404).json({ error: "Branch not found" });
 
+  // สาขาที่มาจากการนำเข้าอาจยังไม่มีพิกัด เทียบระยะไม่ได้จึงต้องบอกให้ชัด
+  // แทนที่จะคำนวณกับค่าว่างแล้วได้ระยะที่ไม่มีความหมาย
+  if (branch.latitude == null || branch.longitude == null) {
+    return res.status(400).json({
+      error: `สาขา ${branch.name} ยังไม่ได้บันทึกพิกัด กรุณาให้แอดมินตั้งค่าพิกัดก่อนรายงานตัว`,
+    });
+  }
+
   const distance = distanceMeters(
     parsed.data.latitude,
     parsed.data.longitude,
