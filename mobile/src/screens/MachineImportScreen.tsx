@@ -20,7 +20,8 @@ interface ImportPlan {
   machinesOff: number;
   branchesSignalLost: number;
   machinesAtSignalLostBranches: number;
-  newBranches: string[];
+  newBranchCount: number;
+  newBranchSample: string[];
   newMachines: number;
   opening: { machineOff: number; signalLost: number };
   closing: { machineOff: number; signalLost: number };
@@ -177,7 +178,7 @@ export default function MachineImportScreen() {
 
             <View style={styles.divider} />
 
-            <Row label="สาขาใหม่ที่ไม่เคยมี" value={String(plan.newBranches.length)} />
+            <Row label="สาขาใหม่ที่ไม่เคยมี" value={String(plan.newBranchCount)} />
             <Row label="เครื่องใหม่ที่ไม่เคยมี" value={String(plan.newMachines)} />
           </View>
 

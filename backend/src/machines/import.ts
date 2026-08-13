@@ -156,7 +156,10 @@ export interface ImportPlan {
   /** สาขาที่สัญญาณหายทั้งสาขา */
   branchesSignalLost: number;
   machinesAtSignalLostBranches: number;
-  newBranches: string[];
+  /** จำนวนสาขาที่ยังไม่เคยมีในระบบ */
+  newBranchCount: number;
+  /** ตัวอย่างรหัสสาขาใหม่ ไม่ส่งทั้งหมดเพราะครั้งแรกมีเป็นร้อย และหน้าจอใช้แค่จำนวน */
+  newBranchSample: string[];
   newMachines: number;
   opening: { machineOff: number; signalLost: number };
   closing: { machineOff: number; signalLost: number };
@@ -273,7 +276,8 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
       (sum, list) => sum + list.length,
       0
     ),
-    newBranches,
+    newBranchCount: newBranches.length,
+    newBranchSample: newBranches.slice(0, 20),
     newMachines,
     opening: { machineOff: openingMachineOff, signalLost: openingSignal },
     closing: { machineOff: closingMachineOff, signalLost: closingSignal },
@@ -294,61 +298,71 @@ export async function applyImport(
 
   const { offMachines, signalLostBranches } = split(parsed.rows);
 
-  // สร้าง/อัปเดตสาขาและเครื่องก่อน เพื่อให้ทุกเคสมีของให้อ้างถึง
-  const branchIdByCode = new Map<string, number>();
   const seenBranches = new Map<string, SheetRow>();
   for (const row of parsed.rows) if (!seenBranches.has(row.branchCode)) seenBranches.set(row.branchCode, row);
 
-  for (const [code, row] of seenBranches) {
-    const branch = await prisma.branch.upsert({
-      where: { code },
-      // region/zone/grade ไม่อยู่ในไฟล์ปกติ จึงเขียนเฉพาะเมื่อไฟล์ส่งมาจริง
-      update: {
-        name: row.branchName,
-        ...(row.ownership ? { ownership: row.ownership } : {}),
-        ...(row.branchStatus ? { status: row.branchStatus } : {}),
-        ...(row.region ? { region: row.region } : {}),
-        ...(row.zone ? { zone: row.zone } : {}),
-        ...(row.grade ? { grade: row.grade } : {}),
-      },
-      create: {
-        code,
-        name: row.branchName,
-        ownership: row.ownership,
-        status: row.branchStatus ?? "active",
-        region: row.region,
-        zone: row.zone,
-        grade: row.grade,
-      },
-      select: { id: true },
-    });
-    branchIdByCode.set(code, branch.id);
-  }
+  // เขียนสาขาทั้งหมดในคำสั่งเดียวด้วย unnest
+  //
+  // เดิมใช้ upsert ทีละแถว = 320 + 1011 รอบไป-กลับฐานข้อมูล ซึ่งบนเครื่องเดียวกัน
+  // ยังพอไหว แต่กับฐานข้อมูลที่อยู่คนละที่ (เช่น Supabase) แต่ละรอบมีค่า latency
+  // ของตัวเอง รวมกันแล้วกลายเป็นหลายนาที การส่งเป็นอาร์เรย์ชุดเดียวทำให้เหลือรอบเดียว
+  //
+  // COALESCE ทำหน้าที่เดียวกับที่เคยเขียนเป็นเงื่อนไขใน JS: ถ้าไฟล์ไม่ได้ส่งค่ามา
+  // (เป็น null) ให้คงค่าเดิมในฐานข้อมูลไว้ ไม่เขียนทับด้วยค่าว่าง
+  const branchRows = [...seenBranches.values()];
+  const upsertedBranches = await prisma.$queryRaw<{ id: number; code: string }[]>`
+    INSERT INTO "Branch" ("code", "name", "ownership", "status", "region", "zone", "grade")
+    SELECT * FROM unnest(
+      ${branchRows.map((r) => r.branchCode)}::text[],
+      ${branchRows.map((r) => r.branchName)}::text[],
+      ${branchRows.map((r) => r.ownership)}::text[],
+      ${branchRows.map((r) => r.branchStatus ?? "active")}::text[],
+      ${branchRows.map((r) => r.region)}::text[],
+      ${branchRows.map((r) => r.zone)}::text[],
+      ${branchRows.map((r) => r.grade)}::text[]
+    )
+    ON CONFLICT ("code") DO UPDATE SET
+      "name"      = EXCLUDED."name",
+      "ownership" = COALESCE(EXCLUDED."ownership", "Branch"."ownership"),
+      "status"    = COALESCE(EXCLUDED."status",    "Branch"."status"),
+      "region"    = COALESCE(EXCLUDED."region",    "Branch"."region"),
+      "zone"      = COALESCE(EXCLUDED."zone",      "Branch"."zone"),
+      "grade"     = COALESCE(EXCLUDED."grade",     "Branch"."grade")
+    RETURNING "id", "code"
+  `;
+  const branchIdByCode = new Map(upsertedBranches.map((b) => [b.code, b.id]));
 
-  const machineIdByKey = new Map<string, number>();
-  for (const row of parsed.rows) {
-    const branchId = branchIdByCode.get(row.branchCode)!;
-    const isOff = !row.signalLost && row.stateCode === MACHINE_OFF_STATE;
-    const machine = await prisma.machine.upsert({
-      where: { branchId_code: { branchId, code: row.machineCode } },
-      update: {
-        type: row.machineType,
-        brand: row.machineBrand,
-        stateCode: row.stateCode || null,
-        status: isOff ? "OFF" : "ON",
-      },
-      create: {
-        branchId,
-        code: row.machineCode,
-        type: row.machineType,
-        brand: row.machineBrand,
-        stateCode: row.stateCode || null,
-        status: isOff ? "OFF" : "ON",
-      },
-      select: { id: true },
-    });
-    machineIdByKey.set(`${row.branchCode}|${row.machineCode}`, machine.id);
-  }
+  const machineRows = parsed.rows.map((row) => ({
+    branchId: branchIdByCode.get(row.branchCode)!,
+    row,
+    status: !row.signalLost && row.stateCode === MACHINE_OFF_STATE ? "OFF" : "ON",
+  }));
+
+  const upsertedMachines = await prisma.$queryRaw<
+    { id: number; branchId: number; code: string }[]
+  >`
+    INSERT INTO "Machine" ("branchId", "code", "type", "brand", "stateCode", "status", "updatedAt")
+    SELECT t.*, now() FROM unnest(
+      ${machineRows.map((m) => m.branchId)}::int[],
+      ${machineRows.map((m) => m.row.machineCode)}::text[],
+      ${machineRows.map((m) => m.row.machineType)}::text[],
+      ${machineRows.map((m) => m.row.machineBrand)}::text[],
+      ${machineRows.map((m) => m.row.stateCode || null)}::text[],
+      ${machineRows.map((m) => m.status)}::text[]
+    ) AS t
+    ON CONFLICT ("branchId", "code") DO UPDATE SET
+      "type"      = EXCLUDED."type",
+      "brand"     = EXCLUDED."brand",
+      "stateCode" = EXCLUDED."stateCode",
+      "status"    = EXCLUDED."status",
+      "updatedAt" = now()
+    RETURNING "id", "branchId", "code"
+  `;
+
+  const codeByBranchId = new Map([...branchIdByCode].map(([code, id]) => [id, code]));
+  const machineIdByKey = new Map(
+    upsertedMachines.map((m) => [`${codeByBranchId.get(m.branchId)}|${m.code}`, m.id])
+  );
 
   const openOutages = await prisma.outage.findMany({
     where: { endedAt: null },
