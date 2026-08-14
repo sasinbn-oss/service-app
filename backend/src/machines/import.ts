@@ -419,6 +419,7 @@ export async function applyImport(
     select: {
       id: true,
       kind: true,
+      startedAt: true,
       branch: { select: { code: true } },
       machine: { select: { code: true } },
     },
@@ -428,6 +429,14 @@ export async function applyImport(
   const stillOpenBranchCodes = new Set<string>();
   const closingIds: number[] = [];
   const touchingIds: number[] = [];
+  /**
+   * สาขาที่กำลังปิดเคสเครื่องดับ พร้อมเวลาที่เริ่มมีปัญหาครั้งแรกสุด
+   *
+   * ใช้ตอนสาขานั้นถูกย้ายไปเป็นสัญญาณหาย (ดับเกินเกณฑ์ = สายขาด)
+   * ถ้าเปิดเคสใหม่โดยเริ่มนับจากศูนย์ สาขาที่ดับมาแล้วหลายวันจะกลายเป็นเพิ่งเสีย
+   * SLA กับคะแนนหายเกลี้ยง ทั้งที่ปัญหาไม่เคยหาย แค่เปลี่ยนชื่อเรียก
+   */
+  const closingMachineOffSince = new Map<string, Date>();
 
   for (const outage of openOutages) {
     if (outage.kind === "MACHINE_OFF") {
@@ -435,7 +444,13 @@ export async function applyImport(
       if (offMachines.has(key)) {
         stillOpenMachineKeys.add(key);
         touchingIds.push(outage.id);
-      } else closingIds.push(outage.id);
+      } else {
+        closingIds.push(outage.id);
+        const since = closingMachineOffSince.get(outage.branch.code);
+        if (!since || outage.startedAt < since) {
+          closingMachineOffSince.set(outage.branch.code, outage.startedAt);
+        }
+      }
     } else {
       if (signalLostBranches.has(outage.branch.code)) {
         stillOpenBranchCodes.add(outage.branch.code);
@@ -444,18 +459,30 @@ export async function applyImport(
     }
   }
 
-  const opening: { kind: OutageKind; branchId: number; machineId: number | null }[] = [];
+  const opening: {
+    kind: OutageKind;
+    branchId: number;
+    machineId: number | null;
+    startedAt: Date;
+  }[] = [];
   for (const [key, row] of offMachines) {
     if (stillOpenMachineKeys.has(key)) continue;
     opening.push({
       kind: "MACHINE_OFF",
       branchId: branchIdByCode.get(row.branchCode)!,
       machineId: machineIdByKey.get(key)!,
+      startedAt: snapshotAt,
     });
   }
   for (const code of signalLostBranches.keys()) {
     if (stillOpenBranchCodes.has(code)) continue;
-    opening.push({ kind: "SIGNAL_LOST", branchId: branchIdByCode.get(code)!, machineId: null });
+    opening.push({
+      kind: "SIGNAL_LOST",
+      branchId: branchIdByCode.get(code)!,
+      machineId: null,
+      // สาขาที่เพิ่งถูกย้ายมาจากเครื่องดับ ให้นับเวลาต่อจากของเดิม ไม่ใช่เริ่มใหม่
+      startedAt: closingMachineOffSince.get(code) ?? snapshotAt,
+    });
   }
 
   // เขียนการเปลี่ยนสถานะทั้งหมดในทรานแซกชันเดียว ยอดที่แดชบอร์ดอ่านจะได้ไม่เห็นสภาพครึ่ง ๆ
@@ -463,7 +490,7 @@ export async function applyImport(
     prisma.outage.updateMany({ where: { id: { in: closingIds } }, data: { endedAt: snapshotAt } }),
     prisma.outage.updateMany({ where: { id: { in: touchingIds } }, data: { lastSeenAt: snapshotAt } }),
     prisma.outage.createMany({
-      data: opening.map((o) => ({ ...o, startedAt: snapshotAt, lastSeenAt: snapshotAt })),
+      data: opening.map((o) => ({ ...o, lastSeenAt: snapshotAt })),
     }),
     prisma.machineImport.create({
       data: {
