@@ -43,6 +43,7 @@ interface ImportPlan {
   closing: { machineOff: number; signalLost: number };
   stillOpen: { machineOff: number; signalLost: number };
   ignoredRows: number;
+  reclassifiedBranches: { branchCode: string; branchName: string; machinesOff: number }[];
   warnings: string[];
 }
 
@@ -290,6 +291,23 @@ export default function MachineImportScreen() {
               tone="warning"
               strong
             />
+            {plan.reclassifiedBranches.length > 0 ? (
+              <>
+                <Row
+                  label="ในนั้นเป็นสาขาที่ดับเกิน 8 เครื่อง"
+                  value={`${plan.reclassifiedBranches.length} สาขา`}
+                  tone="warning"
+                />
+                {/* บอกให้ครบว่าสาขาไหนบ้าง เพราะการย้ายนี้ปิดใบงานช่างทิ้งหลายใบ
+                    คนกดยืนยันควรเห็นก่อนว่าจะกระทบสาขาไหน */}
+                <Text style={styles.reclassNote}>
+                  ถือว่าสายขาด นับเป็นสัญญาณหายทั้งสาขาแทนเครื่องดับรายตัว —{" "}
+                  {plan.reclassifiedBranches
+                    .map((b) => `${b.branchCode} ${b.branchName} (${b.machinesOff})`)
+                    .join(" · ")}
+                </Text>
+              </>
+            ) : null}
 
             <View style={styles.divider} />
 
@@ -518,6 +536,14 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 14, lineHeight: 23, fontWeight: "600" },
   rowValueStrong: { fontSize: 17, lineHeight: 27, fontWeight: "700" },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: spacing.sm },
+  reclassNote: {
+    fontSize: 12,
+    lineHeight: 20,
+    color: "#92400e",
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+  },
 
   warnCard: {
     gap: spacing.sm,

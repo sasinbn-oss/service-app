@@ -21,14 +21,40 @@ export const WORK_STATUSES = [
   "WAITING_TECH",
   "WAITING_PAYMENT",
   "WAITING_CUSTOMER",
-  "IN_PROGRESS",
 ] as const;
 export type WorkStatus = (typeof WORK_STATUSES)[number];
 
-export const WORK_STATUS_LABELS: Record<WorkStatus, string> = {
+/**
+ * สถานะที่เลิกใช้แล้ว แต่ข้อมูลเก่าที่บันทึกไว้ยังมีอยู่
+ *
+ * เอาออกจากรายการที่เลือกได้เฉยๆ ไม่ได้ลบข้อมูล เคสเก่าจึงยังแสดงป้ายไทยได้ปกติ
+ * และยังกรองหาได้ ถ้าลบทิ้งเลยหน้าจอจะโชว์รหัสอังกฤษดิบๆ แทน
+ */
+export const RETIRED_WORK_STATUSES = ["IN_PROGRESS"] as const;
+
+export const WORK_STATUS_LABELS: Record<string, string> = {
   WAITING_PARTS: "รออะไหล่",
   WAITING_TECH: "รอช่างเข้าแก้ไข",
   WAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   WAITING_CUSTOMER: "รอลูกค้าแจ้งซ่อม",
   IN_PROGRESS: "กำลังดำเนินการ",
 };
+
+/** ค่าที่ยังกรองได้ รวมของเก่าด้วย ต่างจาก WORK_STATUSES ที่เลือกใหม่ได้เท่านั้น */
+export const FILTERABLE_WORK_STATUSES = [...WORK_STATUSES, ...RETIRED_WORK_STATUSES] as const;
+
+/**
+ * คะแนนความรุนแรงของปัญหา
+ *
+ * นับเป็นวันเต็มที่ผ่านไป วันแรกจึงเป็น 0 เกิน 1 วันเป็น 1 เกิน 2 วันเป็น 2
+ * สัญญาณหายคูณ 3 เพราะกระทบทั้งสาขา ไม่ใช่เครื่องเดียว
+ */
+export const SCORE_PER_DAY: Record<string, number> = {
+  MACHINE_OFF: 1,
+  SIGNAL_LOST: 3,
+};
+
+export function outageScore(kind: string, startedAt: Date, now: Date) {
+  const days = Math.floor((now.getTime() - startedAt.getTime()) / 86_400_000);
+  return Math.max(0, days) * (SCORE_PER_DAY[kind] ?? 1);
+}

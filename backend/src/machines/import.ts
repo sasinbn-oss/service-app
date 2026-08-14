@@ -17,6 +17,15 @@ import { prisma } from "../prisma";
 /** ความหมายของค่าในไฟล์ ตามที่ตกลงกับหน้างาน */
 const MACHINE_OFF_STATE = "0";
 
+/**
+ * เครื่องดับพร้อมกันเกินกี่เครื่องในสาขาเดียว ถึงจะถือว่าเป็นสายขาด
+ *
+ * เครื่องหลายตัวพังพร้อมกันในวันเดียวแทบไม่เกิดขึ้น ที่เจอจริงคือสายสัญญาณขาด
+ * หรือไฟดับทั้งสาขา ซึ่งเป็นงานของทีมเน็ตเวิร์ก ไม่ใช่ช่างซ่อมเครื่อง
+ * ถ้าปล่อยไว้จะกลายเป็นใบงานช่างสิบกว่าใบที่ไม่มีใครต้องไปเปลี่ยนอะไหล่เลย
+ */
+const SIGNAL_LOST_MIN_OFF = Number(process.env.MACHINE_OFF_SIGNAL_THRESHOLD) || 8;
+
 export type OutageKind = "MACHINE_OFF" | "SIGNAL_LOST";
 
 export interface SheetRow {
@@ -166,6 +175,8 @@ export interface ImportPlan {
   stillOpen: { machineOff: number; signalLost: number };
   /** แถวที่ไม่เข้าเงื่อนไขทั้งเครื่องดับและสัญญาณหาย — ปกติต้องเป็น 0 */
   ignoredRows: number;
+  /** สาขาที่ดับเกินเกณฑ์ จึงถูกนับเป็นสัญญาณหายแทนเครื่องดับรายตัว */
+  reclassifiedBranches: { branchCode: string; branchName: string; machinesOff: number }[];
   errors: string[];
   warnings: string[];
 }
@@ -174,6 +185,8 @@ interface Split {
   offMachines: Map<string, SheetRow>;
   signalLostBranches: Map<string, SheetRow[]>;
   ignoredRows: number;
+  /** สาขาที่ถูกย้ายจากเครื่องดับรายตัวไปเป็นสัญญาณหาย เพราะดับเกินเกณฑ์ */
+  reclassified: { branchCode: string; branchName: string; machinesOff: number }[];
 }
 
 /**
@@ -199,12 +212,48 @@ function split(rows: SheetRow[]): Split {
     }
   }
 
-  return { offMachines, signalLostBranches, ignoredRows };
+  // สาขาที่ดับเกินเกณฑ์ถือว่าสายขาด ย้ายทั้งสาขาไปเป็นสัญญาณหาย
+  // ทำหลังนับครบทั้งไฟล์ เพราะต้องรู้ยอดรวมต่อสาขาก่อนถึงจะตัดสินได้
+  const offByBranch = new Map<string, SheetRow[]>();
+  for (const row of offMachines.values()) {
+    const list = offByBranch.get(row.branchCode) ?? [];
+    list.push(row);
+    offByBranch.set(row.branchCode, list);
+  }
+
+  const reclassified: Split["reclassified"] = [];
+  for (const [branchCode, branchRows] of offByBranch) {
+    if (branchRows.length <= SIGNAL_LOST_MIN_OFF) continue;
+    // สาขาที่ไฟล์บอกว่า offline อยู่แล้วไม่ต้องย้ายซ้ำ
+    if (signalLostBranches.has(branchCode)) continue;
+
+    reclassified.push({
+      branchCode,
+      branchName: branchRows[0].branchName,
+      machinesOff: branchRows.length,
+    });
+    signalLostBranches.set(branchCode, branchRows);
+    for (const row of branchRows) offMachines.delete(`${branchCode}|${row.machineCode}`);
+  }
+
+  return { offMachines, signalLostBranches, ignoredRows, reclassified };
 }
 
 export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise<ImportPlan> {
-  const { offMachines, signalLostBranches, ignoredRows } = split(parsed.rows);
+  const { offMachines, signalLostBranches, ignoredRows, reclassified } = split(parsed.rows);
   const warnings: string[] = [];
+
+  if (reclassified.length > 0) {
+    const sample = reclassified
+      .slice(0, 3)
+      .map((r) => `${r.branchCode} (${r.machinesOff} เครื่อง)`)
+      .join(", ");
+    warnings.push(
+      `${reclassified.length} สาขาดับเกิน ${SIGNAL_LOST_MIN_OFF} เครื่อง ถือว่าสายขาด ` +
+        `นับเป็นสัญญาณหายทั้งสาขาแทนเครื่องดับรายตัว — ${sample}` +
+        (reclassified.length > 3 ? ` และอีก ${reclassified.length - 3} สาขา` : "")
+    );
+  }
 
   if (parsed.duplicateRows > 0) {
     warnings.push(
@@ -283,6 +332,7 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
     closing: { machineOff: closingMachineOff, signalLost: closingSignal },
     stillOpen: { machineOff: openMachineOffStillThere, signalLost: openSignalStillThere },
     ignoredRows,
+    reclassifiedBranches: reclassified,
     errors: parsed.errors,
     warnings,
   };

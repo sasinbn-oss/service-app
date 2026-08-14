@@ -36,6 +36,7 @@ interface OutageRow {
   startedAt: string;
   slaHours: number;
   breached: boolean;
+  score: number;
   // สองค่านี้คนกรอกเอง ไฟล์ export ไม่มีให้
   symptom: string | null;
   workStatus: string | null;
@@ -43,6 +44,8 @@ interface OutageRow {
   noteUpdatedAt: string | null;
   noteUpdatedBy: string | null;
   parts: NotePart[];
+  /** วันที่ช่างนัดเข้า ใช้ตอนสถานะเป็นรอช่างเข้าแก้ไข — YYYY-MM-DD */
+  scheduledVisitAt: string | null;
 }
 
 /** อะไหล่ที่เคสหนึ่งรออยู่ — มาจากรายการอะไหล่ในระบบ ไม่ใช่รหัสที่พิมพ์เอง */
@@ -66,24 +69,36 @@ interface SparePartOption {
   brand: string | null;
 }
 
-/** สถานะที่ทำให้ช่องเลือกอะไหล่โผล่ขึ้นมา */
+/** สถานะที่ทำให้ช่องเพิ่มเติมโผล่ขึ้นมา */
 const WAITING_PARTS = "WAITING_PARTS";
+const WAITING_TECH = "WAITING_TECH";
+
+interface RegionOption {
+  region: string | null;
+  label: string;
+  cases: number;
+  branches: number;
+}
 
 interface DashboardResponse {
   now: string;
   slaHours: number;
+  /** คะแนนที่บวกให้ต่อหนึ่งวันของแท็บนี้ — เครื่องดับ 1 สัญญาณหาย 3 */
+  scorePerDay: number;
   summary: {
     total: number;
+    branchesAffected: number;
     COCO: number;
     DODO: number;
     breached: number;
+    totalScore: number;
     machinesAffected?: number;
   };
   rows: OutageRow[];
 }
 
 type Tab = "machines" | "signal";
-type SortKey = "slaHours" | "branchCode" | "branchName" | "machineCode";
+type SortKey = "slaHours" | "branchCode" | "branchName" | "machineCode" | "score";
 type GroupKey = "ownership" | "region" | "zone";
 
 const GROUPS: { key: GroupKey; label: string }[] = [
@@ -126,6 +141,15 @@ function slaText(hours: number) {
   return rest === 0 ? `${days} วัน` : `${days} วัน ${rest} ชม.`;
 }
 
+/** YYYY-MM-DD → "20 ส.ค. 69" อ่านง่ายกว่าและสั้นพอจะอยู่ในป้ายเล็กๆ ได้ */
+function thaiDate(ymd: string | null) {
+  if (!ymd) return "—";
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+  return `${d} ${months[m - 1]} ${String((y + 543) % 100).padStart(2, "0")}`;
+}
+
 function formatDateTime(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("th-TH", {
@@ -151,6 +175,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [ownership, setOwnership] = useState<string>("ทั้งหมด");
+  // ภาคเป็นชั้นรองจากเจ้าของ เปลี่ยนเจ้าของแล้วภาคที่เลือกไว้อาจไม่มีอยู่แล้ว จึงล้างทิ้ง
+  const [region, setRegion] = useState<string | null>(null);
+  const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
   const [search, setSearch] = useState("");
   const [breachedOnly, setBreachedOnly] = useState(false);
   const [workStatus, setWorkStatus] = useState<string | null>(null);
@@ -173,6 +200,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           {
             params: {
               ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
+              ...(region ? { region } : {}),
               ...(search.trim() ? { search: search.trim() } : {}),
               ...(breachedOnly ? { breachedOnly: "true" } : {}),
               ...(workStatus ? { workStatus } : {}),
@@ -187,7 +215,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         setRefreshing(false);
       }
     },
-    [tab, ownership, search, breachedOnly, workStatus]
+    [tab, ownership, region, search, breachedOnly, workStatus]
   );
 
   useFocusEffect(
@@ -203,6 +231,28 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       .then((res) => setStatusOptions(res.data))
       .catch(() => setStatusOptions([]));
   }, []);
+
+  /**
+   * รายชื่อภาคดึงแยกจากตาราง ไม่ได้อ่านจากแถวที่แสดงอยู่
+   * ถ้าอ่านจากแถว พอเลือกภาคหนึ่งแล้วรายการจะเหลือภาคเดียว แล้วสลับไปภาคอื่นไม่ได้
+   */
+  useEffect(() => {
+    api
+      .get<RegionOption[]>("/machines/regions", {
+        params: {
+          kind: tab === "machines" ? "MACHINE_OFF" : "SIGNAL_LOST",
+          ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
+        },
+      })
+      .then((res) => setRegionOptions(res.data))
+      .catch(() => setRegionOptions([]));
+  }, [tab, ownership]);
+
+  function chooseOwnership(next: string) {
+    if (next === ownership) return;
+    setOwnership(next);
+    setRegion(null);
+  }
 
   /**
    * อัปเดตแถวในหน้าเลย ไม่ต้องโหลดใหม่ทั้งตารางเพราะแก้ทีละเคส
@@ -257,12 +307,18 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     const direction = sortAsc ? 1 : -1;
     const compare = (a: OutageRow, b: OutageRow) => {
       if (sortKey === "slaHours") return (a.slaHours - b.slaHours) * direction;
+      if (sortKey === "score") return (a.score - b.score) * direction;
       return String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? "")) * direction;
     };
 
     return order.sort().map((name) => {
       const rows = [...buckets.get(name)!].sort(compare);
-      return { name, rows, breachedCount: rows.filter((r) => r.breached).length };
+      return {
+        name,
+        rows,
+        breachedCount: rows.filter((r) => r.breached).length,
+        score: rows.reduce((sum, r) => sum + r.score, 0),
+      };
     });
   }, [data, groupBy, sortKey, sortAsc]);
 
@@ -270,7 +326,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     if (key === sortKey) setSortAsc((v) => !v);
     else {
       setSortKey(key);
-      setSortAsc(key === "slaHours" ? false : true);
+      setSortAsc(key === "slaHours" || key === "score" ? false : true);
     }
   }
 
@@ -278,6 +334,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     if (next === tab) return;
     setTab(next);
     setData(null);
+    setRegion(null);
     setLoading(true);
     setCollapsed({});
   }
@@ -333,12 +390,11 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         <SummaryCard
           label={isMachines ? "เครื่องดับ" : "สาขาสัญญาณหาย"}
           value={data?.summary.total ?? 0}
+          sub={isMachines ? `ใน ${data?.summary.branchesAffected ?? 0} สาขา` : undefined}
           color={isMachines ? colors.danger : colors.warning}
           icon={isMachines ? "power" : "wifi-outline"}
           wide={wide}
         />
-        <SummaryCard label="COCO" value={data?.summary.COCO ?? 0} color={colors.text} icon="business" wide={wide} />
-        <SummaryCard label="DODO" value={data?.summary.DODO ?? 0} color={colors.text} icon="storefront" wide={wide} />
         <SummaryCard
           label={`เลย SLA ${slaHours} ชม.`}
           value={data?.summary.breached ?? 0}
@@ -346,6 +402,16 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           icon="alert-circle"
           wide={wide}
         />
+        <SummaryCard
+          label="คะแนนรวม"
+          value={data?.summary.totalScore ?? 0}
+          sub={`วันละ ${data?.scorePerDay ?? 1} ต่อรายการ`}
+          color="#7c2d12"
+          icon="speedometer"
+          wide={wide}
+        />
+        <SummaryCard label="COCO" value={data?.summary.COCO ?? 0} color={colors.text} icon="business" wide={wide} />
+        <SummaryCard label="DODO" value={data?.summary.DODO ?? 0} color={colors.text} icon="storefront" wide={wide} />
       </View>
 
       {!isMachines && data?.summary.machinesAffected ? (
@@ -359,7 +425,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           <TouchableOpacity
             key={option}
             style={[styles.tab, ownership === option && styles.tabActive]}
-            onPress={() => setOwnership(option)}
+            onPress={() => chooseOwnership(option)}
             activeOpacity={0.7}
           >
             <Text style={[styles.tabText, ownership === option && styles.tabTextActive]}>
@@ -368,6 +434,25 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           </TouchableOpacity>
         ))}
       </View>
+
+      {/* ภาคอยู่ใต้เจ้าของเพราะเป็นชั้นรองลงมา เลือกเจ้าของก่อนแล้วค่อยเจาะเข้าภาค */}
+      {regionOptions.length > 0 ? (
+        <View style={styles.regionRow}>
+          <Text style={styles.sortLabel}>ภาค</Text>
+          <StatusFilterChip label="ทุกภาค" active={region === null} onPress={() => setRegion(null)} />
+          {regionOptions.map((option) => (
+            <StatusFilterChip
+              key={option.label}
+              label={`${option.label} ${option.cases}`}
+              active={region === (option.region ?? "NONE")}
+              onPress={() => {
+                const value = option.region ?? "NONE";
+                setRegion(region === value ? null : value);
+              }}
+            />
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.searchRow}>
         <Ionicons name="search" size={16} color={colors.textFaint} />
@@ -448,6 +533,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       <View style={styles.sortRow}>
         <Text style={styles.sortLabel}>เรียงตาม</Text>
         <SortButton label="SLA" active={sortKey === "slaHours"} asc={sortAsc} onPress={() => toggleSort("slaHours")} />
+        <SortButton label="คะแนน" active={sortKey === "score"} asc={sortAsc} onPress={() => toggleSort("score")} />
         <SortButton
           label="รหัสสาขา"
           active={sortKey === "branchCode"}
@@ -496,6 +582,11 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                 {group.rows.length} {isMachines ? "เครื่อง" : "สาขา"}
               </Text>
             </View>
+            {group.score > 0 ? (
+              <View style={styles.scoreBadge}>
+                <Text style={styles.scoreBadgeText}>{group.score} คะแนน</Text>
+              </View>
+            ) : null}
             <View style={{ flex: 1 }} />
             {group.breachedCount > 0 ? (
               <View style={styles.staleBadge}>
@@ -570,6 +661,7 @@ function NoteModal({
   const [symptom, setSymptom] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [parts, setParts] = useState<NotePart[]>([]);
+  const [visitDate, setVisitDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -578,6 +670,7 @@ function NoteModal({
     setSymptom(row?.symptom ?? "");
     setStatus(row?.workStatus ?? null);
     setParts(row?.parts ?? []);
+    setVisitDate(row?.scheduledVisitAt ?? "");
     setError(null);
   }, [row]);
 
@@ -595,10 +688,12 @@ function NoteModal({
         noteUpdatedAt: string | null;
         noteUpdatedBy: string | null;
         parts: NotePart[];
+        scheduledVisitAt: string | null;
       }>(`/machines/outages/${row.id}/note`, {
         symptom: symptom.trim() || null,
         workStatus: status,
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        scheduledVisitAt: visitDate.trim() || null,
       });
       onSaved({ ...row, ...res.data });
     } catch (e) {
@@ -661,6 +756,10 @@ function NoteModal({
                 เปลี่ยนสถานะแล้วของที่กรอกไว้จะได้ไม่หายไปเงียบๆ */}
             {status === WAITING_PARTS || parts.length > 0 ? (
               <PartPicker parts={parts} onChange={setParts} />
+            ) : null}
+
+            {status === WAITING_TECH || visitDate ? (
+              <VisitDateField value={visitDate} onChange={setVisitDate} />
             ) : null}
 
             {row.noteUpdatedBy ? (
@@ -838,6 +937,60 @@ function PartPicker({
   );
 }
 
+/**
+ * วันที่ช่างนัดเข้าไปแก้
+ *
+ * รับเป็น YYYY-MM-DD แบบเดียวกับหน้าบันทึกงาน จะได้ไม่ต้องพึ่ง date picker
+ * ซึ่งหน้าตาไม่เหมือนกันระหว่างเว็บกับมือถือ ปุ่มลัดช่วยให้เคสส่วนใหญ่กดครั้งเดียวจบ
+ */
+function VisitDateField({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  function shift(days: number) {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    onChange(d.toISOString().slice(0, 10));
+  }
+
+  const valid = value === "" || /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+  return (
+    <View style={styles.picker}>
+      <Text style={styles.modalLabel}>วันที่ช่างจะเข้า</Text>
+      <View style={styles.visitRow}>
+        <TextInput
+          style={[styles.visitInput, !valid && styles.visitInputBad]}
+          value={value}
+          onChangeText={onChange}
+          placeholder="2026-08-20"
+          placeholderTextColor={colors.textFaint}
+          maxLength={10}
+          accessibilityLabel="วันที่ช่างจะเข้า"
+        />
+        {value ? (
+          <TouchableOpacity onPress={() => onChange("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <View style={styles.modalOptions}>
+        <TouchableOpacity style={styles.modalOption} onPress={() => shift(0)} activeOpacity={0.7}>
+          <Text style={styles.modalOptionText}>วันนี้</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.modalOption} onPress={() => shift(1)} activeOpacity={0.7}>
+          <Text style={styles.modalOptionText}>พรุ่งนี้</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.modalOption} onPress={() => shift(7)} activeOpacity={0.7}>
+          <Text style={styles.modalOptionText}>อีก 7 วัน</Text>
+        </TouchableOpacity>
+      </View>
+      {!valid ? (
+        <Text style={styles.modalError}>รูปแบบวันที่ต้องเป็น ปี-เดือน-วัน เช่น 2026-08-20</Text>
+      ) : (
+        <Text style={styles.modalHint}>{value ? thaiDate(value) : "เว้นว่างได้ถ้ายังไม่ได้นัด"}</Text>
+      )}
+    </View>
+  );
+}
+
 function StatusFilterChip({
   label,
   active,
@@ -924,21 +1077,24 @@ function SortButton({
 function SummaryCard({
   label,
   value,
+  sub,
   color,
   icon,
   wide,
 }: {
   label: string;
   value: number;
+  sub?: string;
   color: string;
   icon: keyof typeof Ionicons.glyphMap;
   wide: boolean;
 }) {
   return (
     <View style={[styles.summaryCard, wide ? styles.summaryCardWide : styles.summaryCardNarrow]}>
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={styles.summaryLabel}>{label}</Text>
         <Text style={[styles.summaryValue, { color }]}>{value}</Text>
+        {sub ? <Text style={styles.summarySub}>{sub}</Text> : null}
       </View>
       <Ionicons name={icon} size={24} color={color} style={{ opacity: 0.35 }} />
     </View>
@@ -954,7 +1110,8 @@ type ColumnId =
   | "machineCount"
   | "zone"
   | "grade"
-  | "sla";
+  | "sla"
+  | "score";
 
 interface Column {
   id: ColumnId;
@@ -972,20 +1129,22 @@ interface Column {
 function columnsFor(isMachines: boolean): Column[] {
   return isMachines
     ? [
-        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 84 },
-        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 192 },
-        { id: "machineCode", key: "machineCode", label: "เครื่อง", width: 76 },
-        { id: "brand", label: "ยี่ห้อเครื่อง", width: 112 },
-        { id: "zone", label: "ทีมช่าง", width: 100 },
-        { id: "grade", label: "Grade", width: 56 },
-        { id: "sla", key: "slaHours", label: "ดับมาแล้ว", width: 160 },
+        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 80 },
+        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 170 },
+        { id: "machineCode", key: "machineCode", label: "เครื่อง", width: 70 },
+        { id: "brand", label: "ยี่ห้อเครื่อง", width: 100 },
+        { id: "zone", label: "ทีมช่าง", width: 92 },
+        { id: "grade", label: "Grade", width: 52 },
+        { id: "sla", key: "slaHours", label: "ดับมาแล้ว", width: 150 },
+        { id: "score", key: "score", label: "คะแนน", width: 66 },
       ]
     : [
         { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 84 },
-        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 236 },
-        { id: "machineCount", label: "เครื่องในสาขา", width: 100 },
-        { id: "zone", label: "ทีมช่าง", width: 108 },
-        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 176 },
+        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 228 },
+        { id: "machineCount", label: "เครื่องในสาขา", width: 96 },
+        { id: "zone", label: "ทีมช่าง", width: 104 },
+        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 172 },
+        { id: "score", key: "score", label: "คะแนน", width: 66 },
       ];
 }
 
@@ -1048,7 +1207,7 @@ function OutageTable({
               ))}
             </View>
             {/* แถวที่ยังไม่มีใครกรอกไม่ขึ้นบรรทัดนี้ ตารางจะได้ไม่ยาวเป็นสองเท่าโดยเปล่าประโยชน์ */}
-            {row.workStatusLabel || row.symptom || row.parts.length > 0 ? (
+            {row.workStatusLabel || row.symptom || row.parts.length > 0 || row.scheduledVisitAt ? (
               <View style={[styles.tableRowNote, { paddingLeft: columns[0].width }]}>
                 <NoteLine row={row} />
               </View>
@@ -1095,6 +1254,8 @@ function TableCell({ column, row }: { column: ColumnId; row: OutageRow }) {
           <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
         </>
       );
+    case "score":
+      return <Text style={styles.scoreCell}>{row.score}</Text>;
   }
 }
 
@@ -1117,6 +1278,12 @@ function NoteLine({ row }: { row: OutageRow }) {
           </Text>
         </View>
       ))}
+      {row.scheduledVisitAt ? (
+        <View style={styles.visitChip}>
+          <Ionicons name="calendar-outline" size={11} color="#1d4ed8" />
+          <Text style={styles.visitChipText}>นัด {thaiDate(row.scheduledVisitAt)}</Text>
+        </View>
+      ) : null}
       {row.symptom ? <Text style={styles.noteSymptom}>{row.symptom}</Text> : null}
     </>
   );
@@ -1194,10 +1361,13 @@ function OutageCard({
           {isMachines ? "ดับมาแล้ว" : "สัญญาณหายมาแล้ว"} {slaText(row.slaHours)}
         </Text>
         <Text style={styles.cardTimeExact}>· ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
+        <View style={styles.scoreBadge}>
+          <Text style={styles.scoreBadgeText}>{row.score} คะแนน</Text>
+        </View>
       </View>
 
       <View style={styles.cardNote}>
-        {row.workStatusLabel || row.symptom ? (
+        {row.workStatusLabel || row.symptom || row.parts.length > 0 || row.scheduledVisitAt ? (
           <NoteLine row={row} />
         ) : (
           <View style={styles.notePlaceholder}>
@@ -1279,6 +1449,7 @@ const styles = StyleSheet.create({
   summaryCardWide: { flexGrow: 1, flexBasis: 0, minWidth: 0 },
   summaryLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   summaryValue: { fontSize: 24, lineHeight: 34, fontWeight: "700" },
+  summarySub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
   affected: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: spacing.sm },
 
   tabs: {
@@ -1373,6 +1544,14 @@ const styles = StyleSheet.create({
   },
   statusFilterChipText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
 
+  regionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+
   sortRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   sortLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   sortButton: {
@@ -1458,6 +1637,46 @@ const styles = StyleSheet.create({
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
   cellMono: { fontSize: 12, lineHeight: 20, color: colors.textMuted, paddingRight: spacing.sm },
   slaText: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  scoreCell: {
+    fontSize: 15,
+    lineHeight: 24,
+    fontWeight: "700",
+    color: "#7c2d12",
+    textAlign: "right",
+    paddingRight: spacing.sm,
+  },
+  scoreBadge: {
+    backgroundColor: "#fdf0e6",
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 1,
+  },
+  scoreBadgeText: { fontSize: 11, lineHeight: 18, color: "#7c2d12", fontWeight: "700" },
+  visitChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#dbeafe",
+    borderRadius: radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  visitChipText: { fontSize: 11, lineHeight: 18, color: "#1d4ed8", fontWeight: "700" },
+  visitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  visitInput: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.text,
+  },
+  visitInputBad: { borderColor: colors.danger },
   slaTextBreached: { color: "#92400e" },
 
   cardList: { padding: spacing.md, gap: spacing.sm },

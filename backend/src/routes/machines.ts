@@ -14,7 +14,13 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport } from "../machines/import";
-import { WORK_STATUSES, WORK_STATUS_LABELS } from "../utils/constants";
+import {
+  FILTERABLE_WORK_STATUSES,
+  SCORE_PER_DAY,
+  WORK_STATUSES,
+  WORK_STATUS_LABELS,
+  outageScore,
+} from "../utils/constants";
 
 const router = Router();
 
@@ -29,7 +35,7 @@ const listSchema = z.object({
   search: z.string().optional(),
   breachedOnly: z.enum(["true", "false"]).optional(),
   // "NONE" คือเคสที่ยังไม่มีใครกรอกสถานะ ซึ่งเป็นกลุ่มที่ต้องตามมากที่สุด
-  workStatus: z.enum([...WORK_STATUSES, "NONE"]).optional(),
+  workStatus: z.enum([...FILTERABLE_WORK_STATUSES, "NONE"]).optional(),
 });
 
 function workStatusFilter(value?: string) {
@@ -54,6 +60,7 @@ const noteInclude = {
 const noteSelect = {
   symptom: true,
   workStatus: true,
+  scheduledVisitAt: true,
   noteUpdatedAt: true,
   ...noteInclude,
 } as const;
@@ -61,6 +68,7 @@ const noteSelect = {
 interface NoteShape {
   symptom: string | null;
   workStatus: string | null;
+  scheduledVisitAt: Date | null;
   noteUpdatedAt: Date | null;
   noteUpdatedBy: { name: string } | null;
   parts: {
@@ -74,8 +82,9 @@ function noteFields(o: NoteShape) {
     symptom: o.symptom,
     workStatus: o.workStatus,
     workStatusLabel: o.workStatus
-      ? (WORK_STATUS_LABELS as Record<string, string>)[o.workStatus] ?? o.workStatus
+      ? WORK_STATUS_LABELS[o.workStatus] ?? o.workStatus
       : null,
+    scheduledVisitAt: o.scheduledVisitAt ? isoDate(o.scheduledVisitAt) : null,
     noteUpdatedAt: o.noteUpdatedAt,
     noteUpdatedBy: o.noteUpdatedBy?.name ?? null,
     parts: o.parts.map((p) => ({
@@ -92,13 +101,36 @@ function branchFilter(query: z.infer<typeof listSchema>) {
   return {
     ...(query.ownership ? { ownership: query.ownership } : {}),
     ...(query.grade ? { grade: query.grade } : {}),
-    ...(query.region ? { region: query.region } : {}),
+    // NONE = สาขาที่ยังไม่มีภาคในทะเบียน ต้องกรองหาได้เหมือนกัน
+    ...(query.region ? (query.region === "NONE" ? { region: null } : { region: query.region }) : {}),
     ...(query.zone ? { zone: query.zone } : {}),
   };
 }
 
 function hoursSince(from: Date, now: Date) {
   return (now.getTime() - from.getTime()) / 3_600_000;
+}
+
+/** วันนัดเก็บเป็นวันล้วน ส่งออกเป็น YYYY-MM-DD เพื่อไม่ให้ timezone ของเครื่องคนอ่านเลื่อนวัน */
+function isoDate(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * ตัวเลขสรุปที่ใช้ร่วมกันทั้งสองแท็บ
+ *
+ * นับสาขาด้วย ไม่ใช่แค่จำนวนเคส เพราะ "ดับ 40 เครื่อง" กระจายอยู่ 40 สาขา
+ * กับกระจุกอยู่ 3 สาขา เป็นคนละปัญหาและใช้คนละวิธีแก้
+ */
+function summarise(rows: { ownership: string | null; branchCode: string; breached: boolean; score: number }[]) {
+  return {
+    total: rows.length,
+    branchesAffected: new Set(rows.map((r) => r.branchCode)).size,
+    COCO: rows.filter((r) => r.ownership === "COCO").length,
+    DODO: rows.filter((r) => r.ownership === "DODO").length,
+    breached: rows.filter((r) => r.breached).length,
+    totalScore: rows.reduce((sum, r) => sum + r.score, 0),
+  };
 }
 
 /** เครื่องที่ดับอยู่ — รายเครื่อง */
@@ -158,18 +190,15 @@ router.get("/outages", requireAuth, async (req, res) => {
     lastSeenAt: o.lastSeenAt,
     slaHours: Math.floor(hoursSince(o.startedAt, now)),
     breached: o.startedAt < breachBefore,
+    score: outageScore("MACHINE_OFF", o.startedAt, now),
     ...noteFields(o),
   }));
 
   res.json({
     now: now.toISOString(),
     slaHours: SLA_HOURS,
-    summary: {
-      total: rows.length,
-      COCO: rows.filter((r) => r.ownership === "COCO").length,
-      DODO: rows.filter((r) => r.ownership === "DODO").length,
-      breached: rows.filter((r) => r.breached).length,
-    },
+    scorePerDay: SCORE_PER_DAY.MACHINE_OFF,
+    summary: summarise(rows),
     rows,
   });
 });
@@ -233,17 +262,16 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
     lastSeenAt: o.lastSeenAt,
     slaHours: Math.floor(hoursSince(o.startedAt, now)),
     breached: o.startedAt < breachBefore,
+    score: outageScore("SIGNAL_LOST", o.startedAt, now),
     ...noteFields(o),
   }));
 
   res.json({
     now: now.toISOString(),
     slaHours: SLA_HOURS,
+    scorePerDay: SCORE_PER_DAY.SIGNAL_LOST,
     summary: {
-      total: rows.length,
-      COCO: rows.filter((r) => r.ownership === "COCO").length,
-      DODO: rows.filter((r) => r.ownership === "DODO").length,
-      breached: rows.filter((r) => r.breached).length,
+      ...summarise(rows),
       machinesAffected: rows.reduce((sum, r) => sum + r.machineCount, 0),
     },
     rows,
@@ -282,9 +310,61 @@ router.get("/work-statuses", requireAuth, (_req, res) => {
   res.json(WORK_STATUSES.map((value) => ({ value, label: WORK_STATUS_LABELS[value] })));
 });
 
+/**
+ * ภาคที่มีปัญหาค้างอยู่ พร้อมจำนวน ใช้ทำตัวกรองใต้ COCO/DODO
+ *
+ * แยก endpoint เพราะถ้าดึงจากแถวที่แสดงอยู่ พอเลือกภาคหนึ่งแล้วรายการจะเหลือภาคเดียว
+ * แล้วสลับไปภาคอื่นไม่ได้
+ */
+const regionQuery = z.object({
+  kind: z.enum(["MACHINE_OFF", "SIGNAL_LOST"]).default("MACHINE_OFF"),
+  ownership: z.enum(["COCO", "DODO"]).optional(),
+});
+
+router.get("/regions", requireAuth, async (req, res) => {
+  const parsed = regionQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const outages = await prisma.outage.findMany({
+    where: {
+      kind: parsed.data.kind,
+      endedAt: null,
+      branch: parsed.data.ownership ? { ownership: parsed.data.ownership } : {},
+    },
+    select: { branchId: true, branch: { select: { region: true } } },
+  });
+
+  const byRegion = new Map<string, { cases: number; branches: Set<number> }>();
+  for (const o of outages) {
+    // ภาคว่างรวมเป็นกลุ่มเดียว จะได้กรองหาสาขาที่ทะเบียนยังไม่ครบได้
+    const key = o.branch.region ?? "";
+    const entry = byRegion.get(key) ?? { cases: 0, branches: new Set<number>() };
+    entry.cases += 1;
+    entry.branches.add(o.branchId);
+    byRegion.set(key, entry);
+  }
+
+  res.json(
+    [...byRegion]
+      .map(([region, v]) => ({
+        region: region || null,
+        label: region || "ยังไม่ระบุภาค",
+        cases: v.cases,
+        branches: v.branches.size,
+      }))
+      .sort((a, b) => b.cases - a.cases)
+  );
+});
+
 const noteSchema = z.object({
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  // วันล้วน YYYY-MM-DD ไม่รับเวลา เพราะนัดช่างกันเป็นวัน
+  scheduledVisitAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่ต้องอยู่ในรูปแบบ ปี-เดือน-วัน เช่น 2026-08-20")
+    .nullable()
+    .optional(),
   // ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิมทั้งหมด — ส่ง [] คือล้างอะไหล่ออกให้หมด
   parts: z
     .array(
@@ -309,9 +389,23 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
 
   const parsed = noteSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { symptom, workStatus, parts } = parsed.data;
-  if (symptom === undefined && workStatus === undefined && parts === undefined) {
+  const { symptom, workStatus, parts, scheduledVisitAt } = parsed.data;
+  if (
+    symptom === undefined &&
+    workStatus === undefined &&
+    parts === undefined &&
+    scheduledVisitAt === undefined
+  ) {
     return res.status(400).json({ error: "ไม่มีอะไรให้บันทึก" });
+  }
+
+  // เก็บเป็นเที่ยงคืน UTC ของวันนั้น อ่านกลับมาได้วันเดิมเสมอไม่ว่าเซิร์ฟเวอร์อยู่โซนไหน
+  let visitDate: Date | null | undefined;
+  if (scheduledVisitAt !== undefined) {
+    visitDate = scheduledVisitAt ? new Date(`${scheduledVisitAt}T00:00:00.000Z`) : null;
+    if (visitDate && Number.isNaN(visitDate.getTime())) {
+      return res.status(400).json({ error: "วันที่ไม่ถูกต้อง" });
+    }
   }
 
   const outage = await prisma.outage.findUnique({ where: { id }, select: { id: true } });
@@ -350,6 +444,7 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
       data: {
         ...(symptom !== undefined ? { symptom: symptom || null } : {}),
         ...(workStatus !== undefined ? { workStatus } : {}),
+        ...(visitDate !== undefined ? { scheduledVisitAt: visitDate } : {}),
         noteUpdatedAt: new Date(),
         noteUpdatedById: req.auth!.userId,
       },

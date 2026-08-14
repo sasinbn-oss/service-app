@@ -131,6 +131,9 @@ model Outage {
   symptom      String?
   // ดูค่าที่ใช้ได้ที่ WORK_STATUSES ใน src/utils/constants.ts
   workStatus   String?
+  // วันที่ช่างนัดเข้าไปแก้ ใช้ตอน workStatus = WAITING_TECH
+  // เก็บเป็นวันที่อย่างเดียว ไม่มีเวลา เพราะนัดกันเป็นวัน
+  scheduledVisitAt DateTime?
   noteUpdatedAt   DateTime?
   noteUpdatedById Int?
   noteUpdatedBy   User?     @relation(fields: [noteUpdatedById], references: [id])
