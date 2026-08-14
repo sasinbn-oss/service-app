@@ -13,6 +13,22 @@
  */
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
+import { outageScore } from "../utils/constants";
+
+/** ต้องตรงกับ SLA_HOURS ใน routes/machines.ts — ใช้ตัดสินว่าเคสไหนเลยกำหนดตอน snapshot */
+const SLA_HOURS = Number(process.env.MACHINE_SLA_HOURS) || 72;
+
+interface SnapshotBucket {
+  branchId: number;
+  kind: string;
+  region: string | null;
+  zone: string | null;
+  ownership: string | null;
+  grade: string | null;
+  cases: number;
+  score: number;
+  breached: number;
+}
 
 /** ความหมายของค่าในไฟล์ ตามที่ตกลงกับหน้างาน */
 const MACHINE_OFF_STATE = "0";
@@ -486,13 +502,51 @@ export async function applyImport(
   }
 
   // เขียนการเปลี่ยนสถานะทั้งหมดในทรานแซกชันเดียว ยอดที่แดชบอร์ดอ่านจะได้ไม่เห็นสภาพครึ่ง ๆ
-  await prisma.$transaction([
-    prisma.outage.updateMany({ where: { id: { in: closingIds } }, data: { endedAt: snapshotAt } }),
-    prisma.outage.updateMany({ where: { id: { in: touchingIds } }, data: { lastSeenAt: snapshotAt } }),
-    prisma.outage.createMany({
-      data: opening.map((o) => ({ ...o, lastSeenAt: snapshotAt })),
-    }),
-    prisma.machineImport.create({
+  await prisma.$transaction(async (tx) => {
+    await tx.outage.updateMany({ where: { id: { in: closingIds } }, data: { endedAt: snapshotAt } });
+    await tx.outage.updateMany({ where: { id: { in: touchingIds } }, data: { lastSeenAt: snapshotAt } });
+    await tx.outage.createMany({ data: opening.map((o) => ({ ...o, lastSeenAt: snapshotAt })) });
+
+    // อ่านสภาพหลังกระทบยอดเสร็จ เพื่อตรึงคะแนนของรอบนี้ไว้
+    const openNow = await tx.outage.findMany({
+      where: { endedAt: null },
+      select: {
+        kind: true,
+        branchId: true,
+        startedAt: true,
+        branch: { select: { region: true, zone: true, ownership: true, grade: true } },
+      },
+    });
+
+    const buckets = new Map<string, SnapshotBucket>();
+    const breachBefore = new Date(snapshotAt.getTime() - SLA_HOURS * 3_600_000);
+
+    for (const outage of openNow) {
+      const key = `${outage.branchId}|${outage.kind}`;
+      const bucket = buckets.get(key) ?? {
+        branchId: outage.branchId,
+        kind: outage.kind,
+        region: outage.branch.region,
+        zone: outage.branch.zone,
+        ownership: outage.branch.ownership,
+        grade: outage.branch.grade,
+        cases: 0,
+        score: 0,
+        breached: 0,
+      };
+      bucket.cases += 1;
+      bucket.score += outageScore(outage.kind, outage.startedAt, snapshotAt);
+      if (outage.startedAt < breachBefore) bucket.breached += 1;
+      buckets.set(key, bucket);
+    }
+
+    const rows = [...buckets.values()];
+    const scoreOf = (kind: string) =>
+      rows.filter((r) => r.kind === kind).reduce((sum, r) => sum + r.score, 0);
+    const machineOffScore = scoreOf("MACHINE_OFF");
+    const signalLostScore = scoreOf("SIGNAL_LOST");
+
+    const record = await tx.machineImport.create({
       data: {
         uploadedById: meta.uploadedById,
         fileName: meta.fileName,
@@ -504,9 +558,18 @@ export async function applyImport(
         branchesSignalLost: plan.branchesSignalLost,
         opened: opening.length,
         closed: closingIds.length,
+        machineOffScore,
+        signalLostScore,
+        totalScore: machineOffScore + signalLostScore,
       },
-    }),
-  ]);
+    });
+
+    if (rows.length > 0) {
+      await tx.scoreSnapshot.createMany({
+        data: rows.map((r) => ({ ...r, importId: record.id, snapshotAt })),
+      });
+    }
+  });
 
   return plan;
 }

@@ -83,6 +83,7 @@ model Branch {
   workLogs      WorkLog[]
   machines      Machine[]
   outages       Outage[]
+  scoreSnapshots ScoreSnapshot[]
 }
 
 // One washer or dryer installed at a branch.
@@ -205,7 +206,44 @@ model MachineImport {
   branchesSignalLost Int
   opened         Int
   closed         Int
+  // คะแนนรวม ณ ตอนนั้น เก็บซ้ำไว้ตรงนี้ด้วยเพื่อดึงกราฟแนวโน้มได้ด้วยคิวรีเดียว
+  // โดยไม่ต้องรวมยอดจาก ScoreSnapshot ทีละรอบ
+  machineOffScore    Int   @default(0)
+  signalLostScore    Int   @default(0)
+  totalScore         Int   @default(0)
   createdAt      DateTime @default(now())
+  scoreSnapshots ScoreSnapshot[]
+}
+
+// คะแนนของแต่ละสาขา ณ ตอนที่อัปโหลดไฟล์แต่ละรอบ
+//
+// คะแนนบนแดชบอร์ดคิดสดจากเวลาปัจจุบัน พอเคสปิดไปคะแนนก็หายไปด้วย
+// ตารางนี้ตรึงค่าไว้ทุกรอบอัปโหลด จึงย้อนดูได้ว่าสัปดาห์ที่แล้วภาคไหนหนักกว่ากัน
+//
+// เก็บภาค/ทีมช่าง/เจ้าของ ณ ตอนนั้นติดไปด้วย ไม่ได้อ้างอิงค่าปัจจุบันของสาขา
+// เพราะถ้าอัปโหลดทะเบียนสาขาใหม่แล้วสาขาย้ายภาค รายงานย้อนหลังต้องไม่เปลี่ยนตาม
+model ScoreSnapshot {
+  id         Int            @id @default(autoincrement())
+  importId   Int?
+  import     MachineImport? @relation(fields: [importId], references: [id], onDelete: Cascade)
+  snapshotAt DateTime
+
+  branchId   Int
+  branch     Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  region     String?
+  zone       String?
+  ownership  String?
+  grade      String?
+
+  // MACHINE_OFF | SIGNAL_LOST — แยกกันเพราะคนละทีมรับผิดชอบและคะแนนต่อวันไม่เท่ากัน
+  kind       String
+  cases      Int
+  score      Int
+  breached   Int
+
+  @@unique([importId, branchId, kind])
+  @@index([snapshotAt])
+  @@index([branchId, snapshotAt])
 }
 
 model BranchCheckIn {

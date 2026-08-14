@@ -616,6 +616,88 @@ router.get("/waiting-parts", requireAuth, async (_req, res) => {
   );
 });
 
+const historyQuery = z.object({
+  // จัดกลุ่มตามอะไร — none คือรวมทั้งประเทศเป็นเส้นเดียว
+  groupBy: z.enum(["none", "region", "zone", "ownership"]).default("none"),
+  kind: z.enum(["MACHINE_OFF", "SIGNAL_LOST", "ALL"]).default("ALL"),
+  days: z.coerce.number().int().min(1).max(400).default(60),
+});
+
+/**
+ * คะแนนย้อนหลังจาก snapshot ที่ตรึงไว้ทุกรอบอัปโหลด
+ *
+ * คะแนนบนแดชบอร์ดคิดสดจากเวลาปัจจุบัน พอเคสปิดคะแนนก็หายไปด้วย
+ * ตัวนี้อ่านจากค่าที่ตรึงไว้ จึงย้อนดูได้ว่าแต่ละรอบภาคไหนหนักแค่ไหน
+ */
+router.get("/score-history", requireAuth, async (req, res) => {
+  const parsed = historyQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { groupBy, kind, days } = parsed.data;
+
+  const since = new Date(Date.now() - days * 86_400_000);
+  const snapshots = await prisma.scoreSnapshot.findMany({
+    where: {
+      snapshotAt: { gte: since },
+      ...(kind === "ALL" ? {} : { kind }),
+    },
+    select: {
+      snapshotAt: true,
+      kind: true,
+      region: true,
+      zone: true,
+      ownership: true,
+      cases: true,
+      score: true,
+      breached: true,
+      branchId: true,
+    },
+    orderBy: { snapshotAt: "asc" },
+  });
+
+  // รวมยอดเป็นจุดต่อรอบอัปโหลด แล้วแยกตามกลุ่มที่ขอ
+  const points = new Map<
+    string,
+    { at: Date; group: string | null; score: number; cases: number; breached: number; branches: Set<number> }
+  >();
+
+  for (const row of snapshots) {
+    const group =
+      groupBy === "none"
+        ? null
+        : groupBy === "region"
+          ? row.region
+          : groupBy === "zone"
+            ? row.zone
+            : row.ownership;
+    const key = `${row.snapshotAt.toISOString()}|${group ?? ""}`;
+    const point =
+      points.get(key) ??
+      { at: row.snapshotAt, group, score: 0, cases: 0, breached: 0, branches: new Set<number>() };
+    point.score += row.score;
+    point.cases += row.cases;
+    point.breached += row.breached;
+    point.branches.add(row.branchId);
+    points.set(key, point);
+  }
+
+  res.json({
+    groupBy,
+    kind,
+    days,
+    points: [...points.values()]
+      .map((p) => ({
+        at: p.at,
+        group: p.group,
+        label: p.group ?? (groupBy === "none" ? "ทั้งหมด" : "ยังไม่ระบุ"),
+        score: p.score,
+        cases: p.cases,
+        breached: p.breached,
+        branches: p.branches.size,
+      }))
+      .sort((a, b) => a.at.getTime() - b.at.getTime() || a.label.localeCompare(b.label)),
+  });
+});
+
 /** ประวัติการอัปโหลด */
 router.get("/imports", requireAuth, async (_req, res) => {
   const imports = await prisma.machineImport.findMany({
