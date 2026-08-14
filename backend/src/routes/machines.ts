@@ -14,6 +14,9 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport } from "../machines/import";
+import { dailyReport, monthlyReport, partsReport, weeklyReport } from "../machines/reports";
+import { reportToWorkbook } from "../machines/reportExcel";
+import { documentPath, saveDocument } from "../documents/store";
 import {
   FILTERABLE_WORK_STATUSES,
   SCORE_PER_DAY,
@@ -696,6 +699,62 @@ router.get("/score-history", requireAuth, async (req, res) => {
       }))
       .sort((a, b) => a.at.getTime() - b.at.getTime() || a.label.localeCompare(b.label)),
   });
+});
+
+/**
+ * รายงานสี่ใบ
+ *
+ * ใบเดียวกันเรียกได้สองแบบ — ไม่ใส่ format ได้ JSON ไปขึ้นหน้าจอ
+ * ใส่ format=xlsx ได้ลิงก์ดาวน์โหลด Excel ตัวเลขมาจากฟังก์ชันเดียวกันทั้งสองทาง
+ */
+const reportQuery = z.object({
+  zone: z.string().optional(),
+  region: z.string().optional(),
+  months: z.coerce.number().int().min(1).max(12).optional(),
+  format: z.enum(["json", "xlsx"]).default("json"),
+});
+
+const REPORT_KINDS = ["daily", "weekly", "monthly", "parts"] as const;
+
+async function buildReport(kind: string, q: z.infer<typeof reportQuery>) {
+  if (kind === "daily") return dailyReport({ zone: q.zone, region: q.region });
+  if (kind === "weekly") return weeklyReport();
+  if (kind === "monthly") return monthlyReport({ months: q.months });
+  return partsReport();
+}
+
+/** ชื่อไฟล์ให้คนเปิดในเครื่องแล้วรู้ว่าใบไหนของวันไหน */
+function reportFilename(kind: string, at: Date) {
+  const stamp = at.toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+  const thai: Record<string, string> = {
+    daily: "ใบงานวันนี้",
+    weekly: "สรุปรายสัปดาห์",
+    monthly: "ภาพรวมผู้บริหาร",
+    parts: "อะไหล่ที่ต้องสั่ง",
+  };
+  return { filename: `${thai[kind]}-${stamp}.xlsx`, asciiFilename: `report-${kind}-${stamp}.xlsx` };
+}
+
+router.get("/reports/:kind", requireAuth, async (req: AuthRequest, res) => {
+  const kind = req.params.kind;
+  if (!REPORT_KINDS.includes(kind as (typeof REPORT_KINDS)[number])) {
+    return res.status(404).json({ error: "ไม่มีรายงานชื่อนี้" });
+  }
+  const parsed = reportQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const report = await buildReport(kind, parsed.data);
+  if (parsed.data.format === "json") return res.json(report);
+
+  const data = await reportToWorkbook(report);
+  const names = reportFilename(kind, report.generatedAt);
+  const stored = saveDocument({
+    ...names,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data,
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored) });
 });
 
 /** ประวัติการอัปโหลด */

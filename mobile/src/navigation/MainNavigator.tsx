@@ -9,6 +9,8 @@ import AssistantScreen from "../screens/AssistantScreen";
 import TransferDocumentScreen from "../screens/TransferDocumentScreen";
 import MachineDashboardScreen from "../screens/MachineDashboardScreen";
 import MachineImportScreen from "../screens/MachineImportScreen";
+import ReportsMenuScreen from "../screens/ReportsMenuScreen";
+import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
 import GuideListScreen from "../screens/GuideListScreen";
@@ -75,6 +77,16 @@ function HomeStackNavigator() {
         name="MachineDashboard"
         component={MachineDashboardScreen}
         options={{ title: "ติดตามเครื่องเสีย" }}
+      />
+      <HomeStack.Screen
+        name="ReportsMenu"
+        component={ReportsMenuScreen}
+        options={{ title: "รายงาน" }}
+      />
+      <HomeStack.Screen
+        name="Report"
+        component={ReportScreen}
+        options={({ route }) => ({ title: route.params.title })}
       />
       <HomeStack.Screen
         name="MachineImport"

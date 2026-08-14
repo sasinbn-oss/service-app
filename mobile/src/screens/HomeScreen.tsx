@@ -21,6 +21,15 @@ export default function HomeScreen({ navigation }: Props) {
       onPress: () => navigation.navigate("MachineDashboard"),
     },
     {
+      key: "Reports",
+      label: "รายงาน",
+      description: "ใบงานรายวัน สรุปรายสัปดาห์ ภาพรวมผู้บริหาร และอะไหล่ที่ต้องสั่ง",
+      icon: "document-text",
+      tint: colors.primarySoft,
+      iconColor: colors.primary,
+      onPress: () => navigation.navigate("ReportsMenu"),
+    },
+    {
       key: "TransferDocument",
       label: "เอกสารขอโอนสินค้า",
       description: "กรอกรายการ แล้วได้ไฟล์ Word ตามฟอร์มบริษัท",

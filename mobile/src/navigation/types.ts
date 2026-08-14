@@ -4,8 +4,13 @@ export type AuthStackParamList = {
 };
 
 /** Tab 1 — the jobs a technician does in the field. */
+/** ใบรายงานที่มี — ต้องตรงกับ REPORT_KINDS ฝั่ง backend */
+export type ReportKind = "daily" | "weekly" | "monthly" | "parts";
+
 export type HomeStackParamList = {
   HomeMenu: undefined;
+  ReportsMenu: undefined;
+  Report: { kind: ReportKind; title: string };
   MachineDashboard: undefined;
   MachineImport: undefined;
   TransferDocument: undefined;
