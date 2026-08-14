@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
+import { useWideLayout } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
@@ -163,9 +164,19 @@ function formatDateTime(iso: string | null) {
 type Props = NativeStackScreenProps<HomeStackParamList, "MachineDashboard">;
 
 export default function MachineDashboardScreen({ navigation }: Props) {
+  // หน้านี้เป็นตาราง ขอความกว้างเต็มที่แทนคอลัมน์แคบๆ ที่หน้าฟอร์มใช้
+  useWideLayout();
+
   const { width } = useWindowDimensions();
   // ตารางหลายคอลัมน์อ่านไม่ได้บนจอมือถือ จอแคบจึงเปลี่ยนเป็นการ์ดแทน
   const wide = width >= 700;
+  // จอคอมเต็มๆ ยุบแถบตัวกรองให้เตี้ยลง จะได้เห็นแถวข้อมูลมากขึ้นต่อหนึ่งหน้าจอ
+  const roomy = width >= 1000;
+  /**
+   * ความกว้างที่ตารางมีจริง = ความกว้างหน้าจอ (ไม่เกินเพดานของ AppShell)
+   * ลบ padding ของหน้า ของการ์ดกลุ่ม และเส้นขอบ
+   */
+  const tableWidth = Math.min(width, 1600) - spacing.lg * 2 - spacing.md * 2 - 2;
   const { user } = useAuth();
 
   const [tab, setTab] = useState<Tab>("machines");
@@ -420,7 +431,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         </Text>
       ) : null}
 
-      <View style={styles.tabs}>
+      {/* จอกว้างเอาตัวควบคุมมาต่อกันในบรรทัดเดียว ประหยัดพื้นที่แนวตั้งให้ตารางแทน */}
+      <View style={roomy ? styles.controlBar : undefined}>
+      <View style={[styles.tabs, roomy && styles.inlineControl]}>
         {OWNERSHIPS.map((option) => (
           <TouchableOpacity
             key={option}
@@ -454,7 +467,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         </View>
       ) : null}
 
-      <View style={styles.searchRow}>
+      <View style={[styles.searchRow, roomy && styles.inlineSearch]}>
         <Ionicons name="search" size={16} color={colors.textFaint} />
         <TextInput
           style={styles.searchInput}
@@ -472,7 +485,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         ) : null}
       </View>
 
-      <View style={styles.filterRow}>
+      <View style={[styles.filterRow, roomy && styles.inlineControl]}>
         <TouchableOpacity
           style={[styles.chip, breachedOnly && styles.chipWarning]}
           onPress={() => setBreachedOnly((v) => !v)}
@@ -506,8 +519,10 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           ))}
         </View>
       </View>
+      </View>
 
-      <View style={styles.statusFilterRow}>
+      <View style={roomy ? styles.controlBar : undefined}>
+      <View style={[styles.statusFilterRow, roomy && styles.inlineControl]}>
         <Text style={styles.sortLabel}>สถานะ</Text>
         <StatusFilterChip
           label="ทั้งหมด"
@@ -530,7 +545,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         ))}
       </View>
 
-      <View style={styles.sortRow}>
+      <View style={[styles.sortRow, roomy && styles.inlineControl]}>
         <Text style={styles.sortLabel}>เรียงตาม</Text>
         <SortButton label="SLA" active={sortKey === "slaHours"} asc={sortAsc} onPress={() => toggleSort("slaHours")} />
         <SortButton label="คะแนน" active={sortKey === "score"} asc={sortAsc} onPress={() => toggleSort("score")} />
@@ -540,6 +555,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           asc={sortAsc}
           onPress={() => toggleSort("branchCode")}
         />
+      </View>
       </View>
 
       {error ? (
@@ -605,6 +621,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                 sortAsc={sortAsc}
                 onSort={toggleSort}
                 onEdit={setEditing}
+                available={tableWidth}
               />
             ) : (
               <View style={styles.cardList}>
@@ -1111,7 +1128,8 @@ type ColumnId =
   | "zone"
   | "grade"
   | "sla"
-  | "score";
+  | "score"
+  | "note";
 
 interface Column {
   id: ColumnId;
@@ -1126,8 +1144,8 @@ interface Column {
  * และต้องเลื่อนตารางไปทางขวาถึงจะเห็น ซึ่งคนใช้จริงจะไม่รู้ว่ามีคอลัมน์นั้นอยู่
  * อาการกับสถานะจึงไม่ได้เป็นคอลัมน์ แต่ไปอยู่บรรทัดที่สองของแถวแทน
  */
-function columnsFor(isMachines: boolean): Column[] {
-  return isMachines
+function columnsFor(isMachines: boolean, available: number): Column[] {
+  const columns: Column[] = isMachines
     ? [
         { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 80 },
         { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 170 },
@@ -1146,6 +1164,26 @@ function columnsFor(isMachines: boolean): Column[] {
         { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 172 },
         { id: "score", key: "score", label: "คะแนน", width: 66 },
       ];
+
+  /**
+   * จอกว้างพอ ให้อาการกับสถานะกลับมาเป็นคอลัมน์
+   *
+   * ที่ไปอยู่บรรทัดสองตอนแรกเพราะจอถูกจำกัดไว้ที่ 820px แล้วคอลัมน์ล้นออกนอกจอ
+   * พอมีที่พอ วางเป็นคอลัมน์อ่านง่ายกว่า เพราะสายตากวาดลงตรงๆ ได้ทีละช่อง
+   */
+  if (available >= 1200) columns.push({ id: "note", label: "อาการ / สถานะ", width: 300 });
+
+  // ที่ว่างที่เหลือแบ่งให้ช่องที่ยาวไม่จำกัด อาการก่อนแล้วค่อยชื่อสาขา
+  const grow = (id: ColumnId, max: number) => {
+    const column = columns.find((c) => c.id === id);
+    if (!column) return;
+    const used = columns.reduce((sum, c) => sum + c.width, 0);
+    column.width = Math.min(max, column.width + Math.max(0, available - used));
+  };
+  grow("note", 460);
+  grow("branchName", 460);
+
+  return columns;
 }
 
 function OutageTable({
@@ -1155,6 +1193,7 @@ function OutageTable({
   sortAsc,
   onSort,
   onEdit,
+  available,
 }: {
   rows: OutageRow[];
   isMachines: boolean;
@@ -1162,8 +1201,10 @@ function OutageTable({
   sortAsc: boolean;
   onSort: (key: SortKey) => void;
   onEdit: (row: OutageRow) => void;
+  available: number;
 }) {
-  const columns = columnsFor(isMachines);
+  const columns = columnsFor(isMachines, available);
+  const noteInline = columns.some((c) => c.id === "note");
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
       <View>
@@ -1207,7 +1248,8 @@ function OutageTable({
               ))}
             </View>
             {/* แถวที่ยังไม่มีใครกรอกไม่ขึ้นบรรทัดนี้ ตารางจะได้ไม่ยาวเป็นสองเท่าโดยเปล่าประโยชน์ */}
-            {row.workStatusLabel || row.symptom || row.parts.length > 0 || row.scheduledVisitAt ? (
+            {!noteInline &&
+            (row.workStatusLabel || row.symptom || row.parts.length > 0 || row.scheduledVisitAt) ? (
               <View style={[styles.tableRowNote, { paddingLeft: columns[0].width }]}>
                 <NoteLine row={row} />
               </View>
@@ -1256,6 +1298,12 @@ function TableCell({ column, row }: { column: ColumnId; row: OutageRow }) {
       );
     case "score":
       return <Text style={styles.scoreCell}>{row.score}</Text>;
+    case "note":
+      return (
+        <View style={styles.noteCell}>
+          <NoteLine row={row} />
+        </View>
+      );
   }
 }
 
@@ -1544,6 +1592,16 @@ const styles = StyleSheet.create({
   },
   statusFilterChipText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
 
+  controlBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  inlineControl: { marginTop: 0, alignSelf: "auto" },
+  inlineSearch: { marginTop: 0, flexGrow: 1, flexBasis: 260, minWidth: 0 },
+
   regionRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1637,6 +1695,13 @@ const styles = StyleSheet.create({
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
   cellMono: { fontSize: 12, lineHeight: 20, color: colors.textMuted, paddingRight: spacing.sm },
   slaText: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  noteCell: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingRight: spacing.sm,
+  },
   scoreCell: {
     fontSize: 15,
     lineHeight: 24,
