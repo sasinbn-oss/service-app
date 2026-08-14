@@ -63,6 +63,25 @@ interface WorkStatusOption {
   label: string;
 }
 
+/** หนึ่งครั้งที่มีคนกดบันทึกอาการ/สถานะ */
+interface NoteLog {
+  id: number;
+  by: string;
+  at: string;
+  symptom: string | null;
+  workStatus: string | null;
+  workStatusLabel: string | null;
+  scheduledVisitAt: string | null;
+  partsSummary: string | null;
+  // มีเฉพาะในประวัติรวมของทุกเคส
+  outageId?: number;
+  kind?: string;
+  resolved?: boolean;
+  branchCode?: string;
+  branchName?: string;
+  machineCode?: string | null;
+}
+
 interface SparePartOption {
   id: number;
   partCode: string;
@@ -199,6 +218,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
 
   const [statusOptions, setStatusOptions] = useState<WorkStatusOption[]>([]);
   const [editing, setEditing] = useState<OutageRow | null>(null);
+  const [showActivity, setShowActivity] = useState(false);
 
   const load = useCallback(
     async (opts: { refresh?: boolean } = {}) => {
@@ -368,16 +388,26 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         ) : (
           <View />
         )}
-        {user?.role === "ADMIN" ? (
+        <View style={styles.topActions}>
           <TouchableOpacity
             style={styles.importButton}
-            onPress={() => navigation.navigate("MachineImport")}
+            onPress={() => setShowActivity(true)}
             activeOpacity={0.7}
           >
-            <Ionicons name="cloud-upload-outline" size={15} color={colors.primary} />
-            <Text style={styles.importButtonText}>อัปโหลดไฟล์</Text>
+            <Ionicons name="time-outline" size={15} color={colors.primary} />
+            <Text style={styles.importButtonText}>ประวัติการกรอก</Text>
           </TouchableOpacity>
-        ) : null}
+          {user?.role === "ADMIN" ? (
+            <TouchableOpacity
+              style={styles.importButton}
+              onPress={() => navigation.navigate("MachineImport")}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="cloud-upload-outline" size={15} color={colors.primary} />
+              <Text style={styles.importButtonText}>อัปโหลดไฟล์</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
 
       <View style={styles.mainTabs}>
@@ -645,6 +675,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         · แตะที่รายการเพื่อบันทึกอาการและสถานะการดำเนินการ
       </Text>
 
+      <ActivityModal visible={showActivity} onClose={() => setShowActivity(false)} />
+
       <NoteModal
         row={editing}
         options={statusOptions}
@@ -681,6 +713,7 @@ function NoteModal({
   const [visitDate, setVisitDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<NoteLog[]>([]);
 
   // เปิดเคสไหนก็ตั้งค่าเริ่มต้นจากเคสนั้น ไม่ใช่ค่าที่ค้างจากเคสก่อนหน้า
   useEffect(() => {
@@ -689,6 +722,12 @@ function NoteModal({
     setParts(row?.parts ?? []);
     setVisitDate(row?.scheduledVisitAt ?? "");
     setError(null);
+    setLogs([]);
+    if (!row) return;
+    api
+      .get<NoteLog[]>(`/machines/outages/${row.id}/note-logs`)
+      .then((res) => setLogs(res.data))
+      .catch(() => setLogs([]));
   }, [row]);
 
   if (!row) return null;
@@ -779,9 +818,19 @@ function NoteModal({
               <VisitDateField value={visitDate} onChange={setVisitDate} />
             ) : null}
 
-            {row.noteUpdatedBy ? (
+            {logs.length > 0 ? (
+              <>
+                <Text style={styles.modalLabel}>ประวัติการกรอก ({logs.length} ครั้ง)</Text>
+                <View style={styles.logList}>
+                  {logs.map((log) => (
+                    <NoteLogItem key={log.id} log={log} />
+                  ))}
+                </View>
+              </>
+            ) : row.noteUpdatedBy ? (
               <Text style={styles.modalHint}>
                 แก้ไขล่าสุดโดย {row.noteUpdatedBy} เมื่อ {formatDateTime(row.noteUpdatedAt)} น.
+                {"\n"}(บันทึกไว้ก่อนระบบเริ่มเก็บประวัติ จึงไม่มีรายละเอียดย้อนหลัง)
               </Text>
             ) : null}
 
@@ -1005,6 +1054,113 @@ function VisitDateField({ value, onChange }: { value: string; onChange: (next: s
         <Text style={styles.modalHint}>{value ? thaiDate(value) : "เว้นว่างได้ถ้ายังไม่ได้นัด"}</Text>
       )}
     </View>
+  );
+}
+
+/** หนึ่งบรรทัดของประวัติ ใช้ทั้งในฟอร์มของเคสและในหน้าประวัติรวม */
+function NoteLogItem({ log, showCase }: { log: NoteLog; showCase?: boolean }) {
+  const tone = statusStyle(log.workStatus);
+  return (
+    <View style={styles.logItem}>
+      <View style={styles.logTop}>
+        <Text style={styles.logWho}>{log.by}</Text>
+        <Text style={styles.logWhen}>{formatDateTime(log.at)} น.</Text>
+      </View>
+
+      {showCase && log.branchCode ? (
+        <Text style={styles.logCase}>
+          {log.branchCode} {log.branchName}
+          {log.machineCode ? ` · เครื่อง ${log.machineCode}` : ""}
+          {log.kind === "SIGNAL_LOST" ? " · สัญญาณหาย" : ""}
+          {log.resolved ? " · ปิดเคสแล้ว" : ""}
+        </Text>
+      ) : null}
+
+      <View style={styles.logChips}>
+        {log.workStatusLabel ? (
+          <View style={[styles.statusChip, { backgroundColor: tone.background }]}>
+            <Text style={[styles.statusChipText, { color: tone.color }]}>{log.workStatusLabel}</Text>
+          </View>
+        ) : (
+          <Text style={styles.logCleared}>ล้างสถานะ</Text>
+        )}
+        {log.partsSummary ? (
+          <View style={styles.partChip}>
+            <Ionicons name="cube-outline" size={11} color={colors.textMuted} />
+            <Text style={styles.partChipText}>{log.partsSummary}</Text>
+          </View>
+        ) : null}
+        {log.scheduledVisitAt ? (
+          <View style={styles.visitChip}>
+            <Ionicons name="calendar-outline" size={11} color="#1d4ed8" />
+            <Text style={styles.visitChipText}>นัด {thaiDate(log.scheduledVisitAt)}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      {log.symptom ? <Text style={styles.logSymptom}>{log.symptom}</Text> : null}
+    </View>
+  );
+}
+
+/**
+ * ประวัติการกรอกของทุกเคสรวมกัน
+ *
+ * ตอบว่า "วันนี้มีใครมาอัปเดตอะไรบ้าง" โดยไม่ต้องไล่เปิดทีละเคส
+ */
+function ActivityModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const [logs, setLogs] = useState<NoteLog[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setLoading(true);
+    setError(null);
+    api
+      .get<NoteLog[]>("/machines/note-logs", { params: { limit: 100 } })
+      .then((res) => setLogs(res.data))
+      .catch((e) => setError(apiErrorMessage(e)))
+      .finally(() => setLoading(false));
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <View style={styles.logHeader}>
+            <Text style={styles.modalTitle}>ประวัติการกรอกอาการ/สถานะ</Text>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close" size={22} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modalSub}>ล่าสุด 100 ครั้ง ทุกเคสรวมกัน ใหม่สุดอยู่บนสุด</Text>
+
+          {loading ? (
+            <View style={styles.loading}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : null}
+          {error ? <Text style={styles.modalError}>{error}</Text> : null}
+
+          {!loading && !error && logs.length === 0 ? (
+            <Text style={styles.modalHint}>
+              ยังไม่มีใครกรอกอาการหรือสถานะเลย — แตะที่รายการในแดชบอร์ดเพื่อเริ่มกรอก
+            </Text>
+          ) : null}
+
+          <ScrollView style={{ marginTop: spacing.sm }} keyboardShouldPersistTaps="handled">
+            <View style={styles.logList}>
+              {logs.map((log) => (
+                <NoteLogItem key={log.id} log={log} showCase />
+              ))}
+            </View>
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -1451,6 +1607,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   importButtonText: { fontSize: 12, lineHeight: 20, color: colors.primary, fontWeight: "700" },
+  topActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
 
   mainTabs: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
   mainTab: {
@@ -1917,6 +2074,24 @@ const styles = StyleSheet.create({
   },
   modalOptionText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
   modalHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
+
+  logHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  logList: { gap: spacing.sm },
+  logItem: {
+    gap: spacing.xs,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+  },
+  logTop: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm, flexWrap: "wrap" },
+  logWho: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  logWhen: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
+  logCase: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  logChips: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.xs },
+  logCleared: { fontSize: 11, lineHeight: 19, color: colors.textFaint, fontStyle: "italic" },
+  logSymptom: { fontSize: 12, lineHeight: 20, color: colors.text },
 
   picker: { gap: spacing.xs },
   pickedList: { gap: spacing.xs },

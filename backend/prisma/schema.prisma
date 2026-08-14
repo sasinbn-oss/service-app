@@ -28,6 +28,7 @@ model User {
   consumableRequests ConsumableRequest[] @relation("RequestedBy")
   reviewedRequests   ConsumableRequest[] @relation("ReviewedBy")
   outageNotes        Outage[]
+  outageNoteLogs     OutageNoteLog[]
 }
 
 model Vehicle {
@@ -139,9 +140,38 @@ model Outage {
   noteUpdatedBy   User?     @relation(fields: [noteUpdatedById], references: [id])
   // อะไหล่ที่เคสนี้รออยู่ ใช้ตอน workStatus = WAITING_PARTS
   parts        OutagePart[]
+  noteLogs     OutageNoteLog[]
 
   @@index([kind, endedAt])
   @@index([branchId, endedAt])
+}
+
+// ประวัติว่าใครมากรอกอาการ/สถานะของเคสไหน เมื่อไหร่
+//
+// ฟิลด์ noteUpdatedBy บน Outage บอกได้แค่คนล่าสุด พอมีคนแก้ทับก็ไม่เหลือร่องรอย
+// ว่าก่อนหน้าใครเคยกรอกอะไรไว้ ตารางนี้เก็บทุกครั้งที่กดบันทึกแยกไว้ต่างหาก
+//
+// เก็บเป็น snapshot ของค่าหลังบันทึก ไม่ใช่ส่วนต่าง เพราะอ่านย้อนหลังแล้วเข้าใจ
+// ได้ทันทีว่าตอนนั้นเคสอยู่ในสภาพไหน โดยไม่ต้องไล่ประกอบจากรายการก่อนหน้า
+model OutageNoteLog {
+  id       Int     @id @default(autoincrement())
+  outageId Int
+  outage   Outage  @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  // ว่างได้เผื่อผู้ใช้ถูกลบทีหลัง ประวัติยังต้องอยู่
+  userId   Int?
+  user     User?   @relation(fields: [userId], references: [id])
+
+  symptom          String?
+  workStatus       String?
+  scheduledVisitAt DateTime?
+  // สรุปอะไหล่เป็นข้อความ เช่น "SPOS0002 x8, CB-0305" เก็บ ณ ตอนนั้นเลย
+  // ไม่ผูก relation เพราะถ้าอะไหล่ถูกลบทีหลัง ประวัติต้องยังอ่านออก
+  partsSummary     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([outageId, createdAt])
+  @@index([createdAt])
 }
 
 // อะไหล่ที่เคสหนึ่งรออยู่

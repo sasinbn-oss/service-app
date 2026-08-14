@@ -111,6 +111,14 @@ function hoursSince(from: Date, now: Date) {
   return (now.getTime() - from.getTime()) / 3_600_000;
 }
 
+/** สรุปอะไหล่เป็นบรรทัดเดียวสำหรับเก็บลงประวัติ ว่างเมื่อไม่มีอะไหล่ */
+function partsSummary(parts: NoteShape["parts"]) {
+  if (parts.length === 0) return null;
+  return parts
+    .map((p) => (p.quantity > 1 ? `${p.sparePart.partCode} x${p.quantity}` : p.sparePart.partCode))
+    .join(", ");
+}
+
 /** วันนัดเก็บเป็นวันล้วน ส่งออกเป็น YYYY-MM-DD เพื่อไม่ให้ timezone ของเครื่องคนอ่านเลื่อนวัน */
 function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -439,7 +447,7 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
       }
     }
 
-    return tx.outage.update({
+    const saved = await tx.outage.update({
       where: { id },
       data: {
         ...(symptom !== undefined ? { symptom: symptom || null } : {}),
@@ -450,9 +458,112 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
       },
       select: noteSelect,
     });
+
+    // เก็บทุกครั้งที่กดบันทึก ไม่ใช่แค่คนล่าสุด จะได้ตามได้ว่าใครเคยกรอกอะไรไว้บ้าง
+    await tx.outageNoteLog.create({
+      data: {
+        outageId: id,
+        userId: req.auth!.userId,
+        symptom: saved.symptom,
+        workStatus: saved.workStatus,
+        scheduledVisitAt: saved.scheduledVisitAt,
+        partsSummary: partsSummary(saved.parts),
+      },
+    });
+
+    return saved;
   });
 
   res.json({ id, ...noteFields(updated) });
+});
+
+/** แปลงแถวประวัติเป็นรูปที่หน้าจออ่านได้เลย */
+function noteLogRow(log: {
+  id: number;
+  symptom: string | null;
+  workStatus: string | null;
+  scheduledVisitAt: Date | null;
+  partsSummary: string | null;
+  createdAt: Date;
+  user: { name: string } | null;
+}) {
+  return {
+    id: log.id,
+    by: log.user?.name ?? "ผู้ใช้ที่ถูกลบแล้ว",
+    at: log.createdAt,
+    symptom: log.symptom,
+    workStatus: log.workStatus,
+    workStatusLabel: log.workStatus ? WORK_STATUS_LABELS[log.workStatus] ?? log.workStatus : null,
+    scheduledVisitAt: log.scheduledVisitAt ? isoDate(log.scheduledVisitAt) : null,
+    partsSummary: log.partsSummary,
+  };
+}
+
+const noteLogSelect = {
+  id: true,
+  symptom: true,
+  workStatus: true,
+  scheduledVisitAt: true,
+  partsSummary: true,
+  createdAt: true,
+  user: { select: { name: true } },
+} as const;
+
+/** ประวัติการกรอกของเคสเดียว เก่าสุดอยู่บนสุด อ่านเป็นไทม์ไลน์ */
+router.get("/outages/:id/note-logs", requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "id ไม่ถูกต้อง" });
+
+  const logs = await prisma.outageNoteLog.findMany({
+    where: { outageId: id },
+    select: noteLogSelect,
+    orderBy: { createdAt: "asc" },
+  });
+  res.json(logs.map(noteLogRow));
+});
+
+const activityQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/**
+ * ประวัติการกรอกล่าสุดของทุกเคสรวมกัน
+ *
+ * ตอบคำถามว่า "วันนี้มีใครมาอัปเดตอะไรบ้าง" โดยไม่ต้องเปิดเคสทีละอัน
+ */
+router.get("/note-logs", requireAuth, async (req, res) => {
+  const parsed = activityQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const logs = await prisma.outageNoteLog.findMany({
+    select: {
+      ...noteLogSelect,
+      outage: {
+        select: {
+          id: true,
+          kind: true,
+          endedAt: true,
+          branch: { select: { code: true, name: true } },
+          machine: { select: { code: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    take: parsed.data.limit,
+  });
+
+  res.json(
+    logs.map((log) => ({
+      ...noteLogRow(log),
+      outageId: log.outage.id,
+      kind: log.outage.kind,
+      // เคสที่ปิดไปแล้วยังต้องเห็นในประวัติ แต่ควรรู้ว่าปิดแล้ว
+      resolved: log.outage.endedAt !== null,
+      branchCode: log.outage.branch.code,
+      branchName: log.outage.branch.name,
+      machineCode: log.outage.machine?.code ?? null,
+    }))
+  );
 });
 
 /**
