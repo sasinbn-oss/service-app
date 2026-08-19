@@ -8,6 +8,11 @@ import {
   parseBranchWorkbook,
   planBranchImport,
 } from "../machines/branchImport";
+import {
+  applyCancelledImport,
+  parseCancelledWorkbook,
+  planCancelledImport,
+} from "../machines/cancelledBranchImport";
 
 const router = Router();
 
@@ -35,6 +40,31 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
     res.json({ committed: commit, plan });
   } catch (err) {
     console.error("Branch import failed:", err);
+    res.status(400).json({
+      error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
+    });
+  }
+});
+
+/**
+ * รายชื่อสาขาที่ยกเลิกแล้ว
+ *
+ * แยกจากทะเบียนสาขาเพราะเป็นคนละเรื่องและคนละจังหวะ ทะเบียนบอกว่าใครดูแลสาขาไหน
+ * ไฟล์นี้บอกว่าสาขาไหนไม่มีอยู่แล้ว ซึ่งกระทบถึงการปิดเคสที่ค้างอยู่
+ */
+router.post("/cancelled-import", requireAuth, requireAdmin, upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });
+
+  const commit = req.body?.mode === "commit";
+  try {
+    const parsed = await parseCancelledWorkbook(req.file.buffer);
+    if (parsed.errors.length > 0) return res.status(400).json({ error: parsed.errors.join(" / ") });
+    if (parsed.rows.length === 0) return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
+
+    const plan = commit ? await applyCancelledImport(parsed) : await planCancelledImport(parsed);
+    res.json({ committed: commit, plan });
+  } catch (err) {
+    console.error("Cancelled branch import failed:", err);
     res.status(400).json({
       error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
     });

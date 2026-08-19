@@ -191,6 +191,9 @@ export interface ImportPlan {
   stillOpen: { machineOff: number; signalLost: number };
   /** แถวที่ไม่เข้าเงื่อนไขทั้งเครื่องดับและสัญญาณหาย — ปกติต้องเป็น 0 */
   ignoredRows: number;
+  /** แถวที่ข้ามเพราะสาขาถูกทำเครื่องหมายยกเลิกไว้ */
+  skippedCancelledRows: number;
+  skippedCancelledBranches: number;
   /** สาขาที่ดับเกินเกณฑ์ จึงถูกนับเป็นสัญญาณหายแทนเครื่องดับรายตัว */
   reclassifiedBranches: { branchCode: string; branchName: string; machinesOff: number }[];
   errors: string[];
@@ -255,9 +258,36 @@ function split(rows: SheetRow[]): Split {
   return { offMachines, signalLostBranches, ignoredRows, reclassified };
 }
 
+/**
+ * สาขาที่ทำเครื่องหมายยกเลิกไว้ — ต้องข้ามทุกแถวของสาขาเหล่านี้
+ *
+ * เครื่องของสาขาที่ปิดไปแล้วยังถูก export ออกมาเป็น state 0 ทุกรอบ
+ * ถ้าไม่กันไว้ เคสจะถูกเปิดใหม่ทุกครั้งที่อัปโหลด ต่อให้เพิ่งปิดไปเมื่อวาน
+ */
+async function cancelledBranchCodes(): Promise<Set<string>> {
+  const rows = await prisma.branch.findMany({
+    where: { cancelledAt: { not: null } },
+    select: { code: true },
+  });
+  return new Set(rows.map((r) => r.code));
+}
+
 export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise<ImportPlan> {
-  const { offMachines, signalLostBranches, ignoredRows, reclassified } = split(parsed.rows);
+  const cancelled = await cancelledBranchCodes();
+  const usableRows = parsed.rows.filter((r) => !cancelled.has(r.branchCode));
+  const skippedCancelled = parsed.rows.length - usableRows.length;
+  const skippedCancelledBranches = new Set(
+    parsed.rows.filter((r) => cancelled.has(r.branchCode)).map((r) => r.branchCode)
+  ).size;
+
+  const { offMachines, signalLostBranches, ignoredRows, reclassified } = split(usableRows);
   const warnings: string[] = [];
+
+  if (skippedCancelled > 0) {
+    warnings.push(
+      `ข้าม ${skippedCancelled} แถวจาก ${skippedCancelledBranches} สาขาที่ทำเครื่องหมายยกเลิกไว้แล้ว`
+    );
+  }
 
   if (reclassified.length > 0) {
     const sample = reclassified
@@ -348,6 +378,8 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
     closing: { machineOff: closingMachineOff, signalLost: closingSignal },
     stillOpen: { machineOff: openMachineOffStillThere, signalLost: openSignalStillThere },
     ignoredRows,
+    skippedCancelledRows: skippedCancelled,
+    skippedCancelledBranches,
     reclassifiedBranches: reclassified,
     errors: parsed.errors,
     warnings,
@@ -362,10 +394,14 @@ export async function applyImport(
   const plan = await planImport(parsed, snapshotAt);
   if (plan.errors.length > 0) return plan;
 
-  const { offMachines, signalLostBranches } = split(parsed.rows);
+  const cancelled = await cancelledBranchCodes();
+  const { offMachines, signalLostBranches } = split(
+    parsed.rows.filter((r) => !cancelled.has(r.branchCode))
+  );
 
   const seenBranches = new Map<string, SheetRow>();
-  for (const row of parsed.rows) if (!seenBranches.has(row.branchCode)) seenBranches.set(row.branchCode, row);
+  const liveRows = parsed.rows.filter((r) => !cancelled.has(r.branchCode));
+  for (const row of liveRows) if (!seenBranches.has(row.branchCode)) seenBranches.set(row.branchCode, row);
 
   // เขียนสาขาทั้งหมดในคำสั่งเดียวด้วย unnest
   //
@@ -398,7 +434,7 @@ export async function applyImport(
   `;
   const branchIdByCode = new Map(upsertedBranches.map((b) => [b.code, b.id]));
 
-  const machineRows = parsed.rows.map((row) => ({
+  const machineRows = liveRows.map((row) => ({
     branchId: branchIdByCode.get(row.branchCode)!,
     row,
     status: !row.signalLost && row.stateCode === MACHINE_OFF_STATE ? "OFF" : "ON",
@@ -503,7 +539,11 @@ export async function applyImport(
 
   // เขียนการเปลี่ยนสถานะทั้งหมดในทรานแซกชันเดียว ยอดที่แดชบอร์ดอ่านจะได้ไม่เห็นสภาพครึ่ง ๆ
   await prisma.$transaction(async (tx) => {
-    await tx.outage.updateMany({ where: { id: { in: closingIds } }, data: { endedAt: snapshotAt } });
+    // หายไปจากไฟล์ = ซ่อมเสร็จจริง ต่างจากเคสที่ถูกปิดเพราะสาขายกเลิก
+    await tx.outage.updateMany({
+      where: { id: { in: closingIds } },
+      data: { endedAt: snapshotAt, closeReason: "REPAIRED" },
+    });
     await tx.outage.updateMany({ where: { id: { in: touchingIds } }, data: { lastSeenAt: snapshotAt } });
     await tx.outage.createMany({ data: opening.map((o) => ({ ...o, lastSeenAt: snapshotAt })) });
 

@@ -58,3 +58,22 @@ export function outageScore(kind: string, startedAt: Date, now: Date) {
   const days = Math.floor((now.getTime() - startedAt.getTime()) / 86_400_000);
   return Math.max(0, days) * (SCORE_PER_DAY[kind] ?? 1);
 }
+
+/**
+ * เหตุผลที่เคสถูกปิด
+ *
+ * REPAIRED คือหายไปจากไฟล์เอง = ซ่อมเสร็จจริง มีแค่แบบนี้ที่ควรเอาไปคิดเวลาเฉลี่ย
+ * แบบอื่นคือคนสั่งปิด เพราะไม่มีเครื่องให้ซ่อมแล้ว ไม่ใช่ผลงานของช่าง
+ */
+export const CLOSE_REASONS = ["REPAIRED", "BRANCH_CANCELLED"] as const;
+export type CloseReason = (typeof CLOSE_REASONS)[number];
+
+export const CLOSE_REASON_LABELS: Record<string, string> = {
+  REPAIRED: "ซ่อมเสร็จ",
+  BRANCH_CANCELLED: "สาขายกเลิก",
+};
+
+/** เคสที่นับเป็นงานซ่อมจริง ใช้คิดเวลาเฉลี่ยและ % ปิดทัน SLA */
+export function countsAsRepair(closeReason: string | null) {
+  return closeReason === null || closeReason === "REPAIRED";
+}

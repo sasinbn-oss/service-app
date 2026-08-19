@@ -7,7 +7,7 @@
  * ทุกใบคิดจากเคสที่เปิด/ปิดจริงในฐานข้อมูล ไม่ได้อ่านจากไฟล์ที่อัปโหลดโดยตรง
  */
 import { prisma } from "../prisma";
-import { SCORE_PER_DAY, WORK_STATUS_LABELS, outageScore } from "../utils/constants";
+import { SCORE_PER_DAY, WORK_STATUS_LABELS, countsAsRepair, outageScore } from "../utils/constants";
 
 const SLA_HOURS = Number(process.env.MACHINE_SLA_HOURS) || 72;
 const DAY_MS = 86_400_000;
@@ -258,15 +258,24 @@ export async function monthlyReport(opts: { months?: number } = {}) {
   const since90 = new Date(now.getTime() - 90 * DAY_MS);
   const since180 = new Date(now.getTime() - 180 * DAY_MS);
 
-  const closed = await prisma.outage.findMany({
+  /**
+   * นับเฉพาะเคสที่ซ่อมเสร็จจริง
+   *
+   * เคสที่ถูกปิดเพราะสาขายกเลิกไม่ใช่ผลงานของช่าง เครื่องที่ค้างมา 40 วันแล้วสาขาปิด
+   * ถ้านับรวมจะกลายเป็น "งานซ่อมที่ใช้เวลา 40 วัน" แล้วค่าเฉลี่ยเพี้ยนถาวร
+   */
+  const closedAll = await prisma.outage.findMany({
     where: { endedAt: { gte: since } },
     select: {
       kind: true,
       startedAt: true,
       endedAt: true,
+      closeReason: true,
       branch: { select: { code: true, name: true, region: true, zone: true, ownership: true } },
     },
   });
+  const closed = closedAll.filter((o) => countsAsRepair(o.closeReason));
+  const closedByCancellation = closedAll.length - closed.length;
 
   const hours = (o: { startedAt: Date; endedAt: Date | null }) =>
     ((o.endedAt ?? now).getTime() - o.startedAt.getTime()) / 3_600_000;
@@ -326,6 +335,7 @@ export async function monthlyReport(opts: { months?: number } = {}) {
     hasHistory: closed.length > 0,
     summary: {
       closed: closed.length,
+      closedByCancellation,
       withinSla,
       withinSlaPercent: closed.length ? Math.round((withinSla / closed.length) * 100) : null,
       avgDays: closed.length ? Number(avgDays.toFixed(1)) : null,

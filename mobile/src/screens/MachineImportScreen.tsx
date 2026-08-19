@@ -13,7 +13,20 @@ import { showAlert } from "../utils/alert";
 import { canPickFile, pickFile, PickedFile } from "../utils/filePicker";
 import { colors, radius, shadow, spacing } from "../theme";
 
-type Kind = "machines" | "branches";
+type Kind = "machines" | "branches" | "cancelled";
+
+interface CancelledPlan {
+  rowsInFile: number;
+  duplicateRows: number;
+  uniqueRows: number;
+  toCancel: { code: string; name: string; openCases: number }[];
+  toRestore: { code: string; name: string }[];
+  alreadyCancelled: number;
+  notFound: string[];
+  openCasesToClose: number;
+  errors: string[];
+  warnings: string[];
+}
 
 interface BranchPlan {
   rowsInFile: number;
@@ -52,6 +65,7 @@ export default function MachineImportScreen() {
   const [file, setFile] = useState<PickedFile | null>(null);
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [branchPlan, setBranchPlan] = useState<BranchPlan | null>(null);
+  const [cancelledPlan, setCancelledPlan] = useState<CancelledPlan | null>(null);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -61,7 +75,12 @@ export default function MachineImportScreen() {
     const form = new FormData();
     form.append("file", picked.blob, picked.name);
     form.append("mode", mode);
-    const path = kind === "machines" ? "/machines/import" : "/branches/import";
+    const path =
+      kind === "machines"
+        ? "/machines/import"
+        : kind === "branches"
+          ? "/branches/import"
+          : "/branches/cancelled-import";
     const res = await api.post<{ plan: T }>(path, form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
@@ -72,6 +91,7 @@ export default function MachineImportScreen() {
     setFile(null);
     setPlan(null);
     setBranchPlan(null);
+    setCancelledPlan(null);
     setSaved(false);
     setError(null);
   }
@@ -85,12 +105,14 @@ export default function MachineImportScreen() {
     setFile(picked);
     setPlan(null);
     setBranchPlan(null);
+    setCancelledPlan(null);
     setSaved(false);
     setError(null);
     setChecking(true);
     try {
       if (kind === "machines") setPlan(await send<ImportPlan>("preview", picked));
-      else setBranchPlan(await send<BranchPlan>("preview", picked));
+      else if (kind === "branches") setBranchPlan(await send<BranchPlan>("preview", picked));
+      else setCancelledPlan(await send<CancelledPlan>("preview", picked));
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
@@ -104,7 +126,8 @@ export default function MachineImportScreen() {
     setError(null);
     try {
       if (kind === "machines") setPlan(await send<ImportPlan>("commit", file));
-      else setBranchPlan(await send<BranchPlan>("commit", file));
+      else if (kind === "branches") setBranchPlan(await send<BranchPlan>("commit", file));
+      else setCancelledPlan(await send<CancelledPlan>("commit", file));
       setSaved(true);
       showAlert("บันทึกแล้ว", "แดชบอร์ดอัปเดตตามไฟล์นี้เรียบร้อย");
     } catch (e) {
@@ -143,16 +166,29 @@ export default function MachineImportScreen() {
           subtitle="สัปดาห์ละครั้ง"
           onPress={() => { setKind("branches"); reset(); }}
         />
+        <KindTab
+          active={kind === "cancelled"}
+          icon="close-circle-outline"
+          title="สาขาที่ยกเลิก"
+          subtitle="เมื่อมีสาขาปิด"
+          onPress={() => { setKind("cancelled"); reset(); }}
+        />
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>
-          {kind === "machines" ? "เลือกไฟล์รายงานเครื่อง" : "เลือกไฟล์ทะเบียนสาขา"}
+          {kind === "machines"
+            ? "เลือกไฟล์รายงานเครื่อง"
+            : kind === "branches"
+              ? "เลือกไฟล์ทะเบียนสาขา"
+              : "เลือกไฟล์สาขาที่ยกเลิก"}
         </Text>
         <Text style={styles.cardHint}>
           {kind === "machines"
             ? "ไฟล์ .xlsx คอลัมน์ crm_code, num, state, offline — ระบบจะเทียบกับครั้งก่อนให้เอง"
-            : "ไฟล์ .xlsx คอลัมน์ code, ผจกภาค, ทีมช่าง — อัปเดตเฉพาะข้อมูลสาขา ไม่แตะสถานะเครื่อง"}
+            : kind === "branches"
+              ? "ไฟล์ .xlsx คอลัมน์ code, ผจกภาค, ทีมช่าง — อัปเดตเฉพาะข้อมูลสาขา ไม่แตะสถานะเครื่อง"
+              : "ไฟล์ .xlsx ต้องมีคอลัมน์ code (หรือ รหัสสาขา) พอ — ใส่ ชื่อสาขา และ หมายเหตุ เพิ่มได้"}
         </Text>
 
         <TouchableOpacity style={styles.pickButton} onPress={choose} activeOpacity={0.8}>
@@ -259,6 +295,98 @@ export default function MachineImportScreen() {
               <Ionicons name="checkmark-circle" size={20} color={colors.success} />
               <Text style={styles.savedText}>
                 บันทึกแล้ว แดชบอร์ดจัดกลุ่มตามภาคและทีมช่างได้เลย
+              </Text>
+            </View>
+          )}
+        </>
+      ) : null}
+
+      {cancelledPlan ? (
+        <>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>สรุปก่อนบันทึก</Text>
+            <Row label="รหัสในไฟล์" value={String(cancelledPlan.rowsInFile)} />
+            {cancelledPlan.duplicateRows > 0 ? (
+              <Row label="รหัสซ้ำที่ยุบรวม" value={String(cancelledPlan.duplicateRows)} tone="warning" />
+            ) : null}
+
+            <View style={styles.divider} />
+
+            <Row
+              label="สาขาที่จะทำเครื่องหมายว่ายกเลิก"
+              value={String(cancelledPlan.toCancel.length)}
+              tone="danger"
+              strong
+            />
+            <Row
+              label="เคสที่เปิดค้างอยู่ จะถูกปิดพร้อมกัน"
+              value={String(cancelledPlan.openCasesToClose)}
+              tone="warning"
+              strong
+            />
+            {cancelledPlan.toRestore.length > 0 ? (
+              <Row
+                label="สาขาที่จะเอากลับมาใช้งาน"
+                value={String(cancelledPlan.toRestore.length)}
+                tone="success"
+                strong
+              />
+            ) : null}
+            <Row label="ทำเครื่องหมายไว้อยู่แล้ว" value={String(cancelledPlan.alreadyCancelled)} />
+            {cancelledPlan.notFound.length > 0 ? (
+              <Row label="รหัสที่ไม่มีในระบบ" value={`${cancelledPlan.notFound.length} (ข้ามไป)`} tone="warning" />
+            ) : null}
+          </View>
+
+          {cancelledPlan.toCancel.length > 0 ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>สาขาที่จะยกเลิก</Text>
+              {/* บอกให้ครบว่าสาขาไหนบ้าง เพราะการกดยืนยันจะปิดเคสทิ้งทั้งหมด
+                  คนกดควรเห็นก่อนว่ากระทบสาขาไหน */}
+              {cancelledPlan.toCancel.slice(0, 40).map((b) => (
+                <Text key={b.code} style={styles.sampleRow}>
+                  {b.code} {b.name}
+                  {b.openCases > 0 ? ` — ปิด ${b.openCases} เคส` : " — ไม่มีเคสค้าง"}
+                </Text>
+              ))}
+              {cancelledPlan.toCancel.length > 40 ? (
+                <Text style={styles.sampleRow}>และอีก {cancelledPlan.toCancel.length - 40} สาขา</Text>
+              ) : null}
+            </View>
+          ) : null}
+
+          {cancelledPlan.warnings.length > 0 ? (
+            <View style={styles.warnCard}>
+              {cancelledPlan.warnings.map((w, i) => (
+                <View key={i} style={styles.warnRow}>
+                  <Ionicons name="warning-outline" size={16} color="#92400e" />
+                  <Text style={styles.warnText}>{w}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {!saved ? (
+            <TouchableOpacity
+              style={[styles.confirmButton, saving && styles.confirmDisabled]}
+              onPress={confirm}
+              disabled={saving}
+              activeOpacity={0.8}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                  <Text style={styles.confirmText}>ยืนยันบันทึกลงระบบ</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.savedCard}>
+              <Ionicons name="checkmark-circle" size={20} color={colors.success} />
+              <Text style={styles.savedText}>
+                บันทึกแล้ว รอบอัปโหลดถัดไปจะข้ามสาขาเหล่านี้ให้อัตโนมัติ
               </Text>
             </View>
           )}
@@ -536,6 +664,7 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 14, lineHeight: 23, fontWeight: "600" },
   rowValueStrong: { fontSize: 17, lineHeight: 27, fontWeight: "700" },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: spacing.sm },
+  sampleRow: { fontSize: 13, lineHeight: 22, color: colors.textMuted },
   reclassNote: {
     fontSize: 12,
     lineHeight: 20,
