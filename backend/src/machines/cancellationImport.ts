@@ -28,6 +28,16 @@ export interface CancelledSheetRow {
   restore: boolean;
 }
 
+/**
+ * คอลัมน์ที่ใช้บอกว่าจะกู้คืน ต้องเป็นคอลัมน์ของตัวเอง ห้ามใช้ `status`
+ *
+ * เพราะวิธีที่คนทำไฟล์นี้จริงๆ คือ copy แถวออกมาจากไฟล์รายงานเครื่อง
+ * ซึ่งมีคอลัมน์ status ติดมาด้วยและอ่านเป็น "active" ทุกแถวเสมอ
+ * ถ้าเอา status มาแปลว่าเจตนา ไฟล์ที่ copy มาจะกลายเป็นคำสั่งกู้คืนทั้งไฟล์
+ * คือตรงข้ามกับที่ตั้งใจ และเป็นความผิดพลาดแบบเงียบๆ ที่ไม่มีอะไรเตือน
+ */
+const ACTION_ALIASES = ["action", "คำสั่ง", "การกระทำ", "ดำเนินการ"] as const;
+
 export interface CancelledParseResult {
   rows: CancelledSheetRow[];
   rowsInFile: number;
@@ -39,7 +49,7 @@ const HEADER_ALIASES = {
   code: ["code", "crm_code", "branch_code", "รหัสสาขา", "รหัส"],
   name: ["name", "branch_name", "ชื่อสาขา", "สาขา"],
   note: ["note", "reason", "หมายเหตุ", "เหตุผล"],
-  status: ["status", "สถานะ"],
+  action: ACTION_ALIASES,
   machine: ["num", "machine", "machine_code", "machine_no", "เครื่อง", "หมายเลขเครื่อง", "รหัสเครื่อง"],
 } as const;
 
@@ -54,8 +64,8 @@ function cellText(value: ExcelJS.CellValue): string {
   return String(value);
 }
 
-/** คำที่แปลว่า "เอากลับมาใช้งาน" — เผื่อวันหลังต้องกู้สาขาที่ทำเครื่องหมายผิด */
-const RESTORE_WORDS = ["active", "open", "ใช้งาน", "เปิด", "ปกติ", "กลับมา"];
+/** คำในคอลัมน์ `action` ที่แปลว่า "เอากลับมาใช้งาน" — เผื่อทำเครื่องหมายผิด */
+const RESTORE_WORDS = ["restore", "active", "open", "undo", "ใช้งาน", "เปิด", "ปกติ", "กลับมา", "คืน"];
 
 export async function parseCancelledWorkbook(buffer: Buffer): Promise<CancelledParseResult> {
   const workbook = new ExcelJS.Workbook();
@@ -99,7 +109,7 @@ export async function parseCancelledWorkbook(buffer: Buffer): Promise<CancelledP
     const code = read(row, "code");
     if (!code) continue;
     rowsInFile += 1;
-    const status = read(row, "status").toLowerCase();
+    const action = read(row, "action").toLowerCase();
     const machineCode = read(row, "machine") || null;
     // คีย์รวมหมายเลขเครื่องด้วย แถวสาขาเดียวกันคนละเครื่องจึงไม่ทับกัน
     byCode.set(`${code}|${machineCode ?? ""}`, {
@@ -107,7 +117,7 @@ export async function parseCancelledWorkbook(buffer: Buffer): Promise<CancelledP
       machineCode,
       name: read(row, "name") || null,
       note: read(row, "note") || null,
-      restore: RESTORE_WORDS.some((w) => status.includes(w)),
+      restore: action !== "" && RESTORE_WORDS.some((w) => action.includes(w)),
     });
   }
 
