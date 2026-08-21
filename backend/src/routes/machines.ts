@@ -13,7 +13,7 @@ import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
-import { applyImport, parseWorkbook, planImport } from "../machines/import";
+import { applyImport, parseWorkbook, planImport, resolveSnapshot } from "../machines/import";
 import { dailyReport, monthlyReport, partsReport, weeklyReport } from "../machines/reports";
 import { reportToWorkbook } from "../machines/reportExcel";
 import { documentPath, saveDocument } from "../documents/store";
@@ -783,8 +783,8 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
   if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });
 
   const commit = req.body?.mode === "commit";
-  const snapshotAt = req.body?.snapshotAt ? new Date(req.body.snapshotAt) : new Date();
-  if (Number.isNaN(snapshotAt.getTime())) {
+  const manual = req.body?.snapshotAt ? new Date(req.body.snapshotAt) : null;
+  if (manual && Number.isNaN(manual.getTime())) {
     return res.status(400).json({ error: "รูปแบบเวลา snapshot ไม่ถูกต้อง" });
   }
 
@@ -797,12 +797,17 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
       return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
     }
 
+    // เวลาอ้างอิงมาจากตัวไฟล์ ไม่ใช่เวลาที่กดอัปโหลด อัปโหลดช้าไปสองวัน
+    // SLA ก็ยังต้องนับจากเวลาที่ export ไม่ใช่เวลาที่เพิ่งนึกได้ว่ายังไม่ได้อัป
+    const { snapshotAt, source } = resolveSnapshot(parsed, req.file.originalname, manual);
+
     const plan = commit
       ? await applyImport(parsed, snapshotAt, {
           uploadedById: req.auth!.userId,
           fileName: req.file.originalname,
+          snapshotSource: source,
         })
-      : await planImport(parsed, snapshotAt);
+      : await planImport(parsed, snapshotAt, source);
 
     res.json({ committed: commit, plan });
   } catch (err) {

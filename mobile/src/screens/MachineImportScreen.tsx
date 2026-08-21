@@ -43,7 +43,18 @@ interface BranchPlan {
   warnings: string[];
 }
 
+type SnapshotSource = "column" | "fileName" | "manual" | "uploadTime";
+
+const SNAPSHOT_SOURCE_LABELS: Record<SnapshotSource, string> = {
+  column: "จากคอลัมน์ recorded_at ในไฟล์",
+  fileName: "จากชื่อไฟล์",
+  manual: "กรอกเอง",
+  uploadTime: "เวลาที่อัปโหลด (ไฟล์ไม่มีวันที่)",
+};
+
 interface ImportPlan {
+  snapshotAt: string;
+  snapshotSource: SnapshotSource;
   rowsInFile: number;
   duplicateRows: number;
   uniqueRows: number;
@@ -424,6 +435,19 @@ export default function MachineImportScreen() {
               {saved ? "บันทึกเรียบร้อย" : "ตรวจสอบก่อนบันทึก"}
             </Text>
 
+            {/* วันที่ของรอบนี้เป็นตัวตั้งต้นของ SLA และคะแนน ต้องเห็นก่อนกดยืนยัน */}
+            <Row
+              label="วันที่ของข้อมูล"
+              value={formatThaiDateTime(plan.snapshotAt)}
+              tone={plan.snapshotSource === "uploadTime" ? "warning" : undefined}
+              strong
+            />
+            <Text style={styles.snapshotSource}>
+              {SNAPSHOT_SOURCE_LABELS[plan.snapshotSource]}
+            </Text>
+
+            <View style={styles.divider} />
+
             <Row label="แถวในไฟล์" value={String(plan.rowsInFile)} />
             {plan.duplicateRows > 0 ? (
               <Row
@@ -562,6 +586,17 @@ function KindTab({
   );
 }
 
+/** วันเวลาแบบไทย อ่านจาก ISO ที่ backend ส่งมา แล้วแสดงเป็นเวลากรุงเทพ */
+function formatThaiDateTime(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "-";
+  return at.toLocaleString("th-TH", {
+    timeZone: "Asia/Bangkok",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 function Row({
   label,
   value,
@@ -648,6 +683,13 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   cardTitle: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
+  snapshotSource: {
+    fontSize: 12,
+    lineHeight: 20,
+    color: colors.textMuted,
+    textAlign: "right",
+    marginTop: -spacing.xs,
+  },
   cardHint: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: 4 },
 
   pickButton: {

@@ -64,7 +64,110 @@ export interface ParseResult {
   rows: SheetRow[];
   rowsInFile: number;
   duplicateRows: number;
+  /** เวลาที่ไฟล์ถูก export ตามที่อ่านได้จากคอลัมน์ recorded_at — ว่างถ้าไฟล์ไม่มีคอลัมน์นี้ */
+  recordedAt: Date | null;
   errors: string[];
+}
+
+/** ที่มาของเวลาที่ใช้เป็นจุดอ้างอิงของรอบนี้ เอาไปแสดงในหน้าตรวจสอบก่อนบันทึก */
+export type SnapshotSource = "column" | "fileName" | "manual" | "uploadTime";
+
+export const SNAPSHOT_SOURCE_LABELS: Record<SnapshotSource, string> = {
+  column: "จากคอลัมน์ recorded_at ในไฟล์",
+  fileName: "จากชื่อไฟล์",
+  manual: "กรอกเอง",
+  uploadTime: "เวลาที่อัปโหลด (ไฟล์ไม่มีวันที่)",
+};
+
+/**
+ * เขตเวลาที่ใช้อ่านวันเวลาในไฟล์
+ *
+ * ทั้งคอลัมน์ recorded_at และชื่อไฟล์เขียนเป็นเวลาไทยตามหน้าปัด ไม่มีโซนติดมาด้วย
+ * ตัวเลขชุดเดียวกันจึงต้องแปลงเหมือนกันทั้งสองทาง ไม่งั้นไฟล์เดียวกันจะได้เวลาคนละอย่าง
+ * ขึ้นกับว่าอ่านจากทางไหน
+ */
+const BANGKOK_OFFSET_MS = 7 * 3_600_000;
+
+function bangkokWallClock(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): Date {
+  return new Date(Date.UTC(y, mo - 1, d, h, mi, s) - BANGKOK_OFFSET_MS);
+}
+
+/**
+ * อ่านค่า recorded_at ให้ได้ทั้งกรณีที่ exceljs คืนมาเป็น Date และเป็นข้อความ
+ *
+ * ถ้าเป็น Date แปลว่า exceljs แปลงเลข serial ของ Excel มาให้แล้ว โดยวางตัวเลข
+ * หน้าปัดไว้ในส่วน UTC ตรงๆ จึงต้องอ่านส่วน UTC กลับออกมาเป็นเวลาไทย
+ * ไม่ใช่เอา Date นั้นไปใช้ทั้งดุ้น ซึ่งจะเพี้ยนไป 7 ชั่วโมง
+ */
+function parseRecordedAt(value: ExcelJS.CellValue): Date | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    return bangkokWallClock(
+      value.getUTCFullYear(),
+      value.getUTCMonth() + 1,
+      value.getUTCDate(),
+      value.getUTCHours(),
+      value.getUTCMinutes(),
+      value.getUTCSeconds()
+    );
+  }
+  const text = cellText(value).trim();
+  if (!text) return null;
+  const m = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/
+  );
+  if (m) {
+    return bangkokWallClock(+m[1], +m[2], +m[3], +m[4], +m[5], +(m[6] ?? 0));
+  }
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return bangkokWallClock(+dateOnly[1], +dateOnly[2], +dateOnly[3]);
+  return null;
+}
+
+/**
+ * ดึงวันเวลาออกจากชื่อไฟล์ เช่น machine_offline_20260819_133022.xlsx
+ *
+ * ใช้เมื่อไฟล์ไม่มีคอลัมน์ recorded_at ซึ่งเป็นรูปแบบที่ export ออกมาก่อนหน้านี้
+ * ชื่อไฟล์ที่มีแต่วันไม่มีเวลา ให้ถือเป็นเที่ยงวัน ไม่ใช่เที่ยงคืน เพราะไฟล์ถูก export
+ * ระหว่างวันทำงาน เที่ยงคืนจะทำให้ SLA เดินเกินจริงไปครึ่งวัน
+ */
+export function snapshotFromFileName(fileName: string): Date | null {
+  const withTime = fileName.match(/(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/);
+  if (withTime) {
+    return bangkokWallClock(
+      +withTime[1],
+      +withTime[2],
+      +withTime[3],
+      +withTime[4],
+      +withTime[5],
+      +withTime[6]
+    );
+  }
+  const dateOnly = fileName.match(/(20\d{2})(\d{2})(\d{2})/);
+  if (dateOnly) return bangkokWallClock(+dateOnly[1], +dateOnly[2], +dateOnly[3], 12);
+  return null;
+}
+
+/** แสดงวันเวลาเป็นเวลาไทย ใช้ในข้อความเตือนที่คนอ่าน */
+export function formatBangkok(at: Date): string {
+  return at.toLocaleString("th-TH", {
+    timeZone: "Asia/Bangkok",
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+/** เลือกเวลาอ้างอิงของรอบนี้ ตามลำดับความน่าเชื่อถือ */
+export function resolveSnapshot(
+  parsed: ParseResult,
+  fileName: string,
+  manual: Date | null
+): { snapshotAt: Date; source: SnapshotSource } {
+  if (manual) return { snapshotAt: manual, source: "manual" };
+  if (parsed.recordedAt) return { snapshotAt: parsed.recordedAt, source: "column" };
+  const fromName = snapshotFromFileName(fileName);
+  if (fromName) return { snapshotAt: fromName, source: "fileName" };
+  return { snapshotAt: new Date(), source: "uploadTime" };
 }
 
 /** ชื่อคอลัมน์ที่ยอมรับ เผื่อหัวตารางเปลี่ยนเล็กน้อย */
@@ -82,6 +185,19 @@ const HEADER_ALIASES: Record<keyof SheetRow, string[]> = {
   zone: ["zone", "โซน"],
   grade: ["grade", "เกรด"],
 };
+
+/** คอลัมน์เวลาที่ไฟล์ถูก export — รูปแบบใหม่มีมาให้ ของเก่าไม่มี */
+const RECORDED_AT_ALIASES = [
+  "recorded_at",
+  "recordedat",
+  "recorded",
+  "exported_at",
+  "snapshot_at",
+  "timestamp",
+  "วันที่",
+  "วันเวลา",
+  "เวลาบันทึก",
+];
 
 function cellText(value: ExcelJS.CellValue): string {
   if (value === null || value === undefined) return "";
@@ -103,13 +219,19 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParseResult> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
   const sheet = workbook.worksheets[0];
-  if (!sheet) return { rows: [], rowsInFile: 0, duplicateRows: 0, errors: ["ไฟล์ไม่มีชีตข้อมูล"] };
+  if (!sheet) {
+    return { rows: [], rowsInFile: 0, duplicateRows: 0, recordedAt: null, errors: ["ไฟล์ไม่มีชีตข้อมูล"] };
+  }
 
   const headerRow = sheet.getRow(1);
   const columnOf: Partial<Record<keyof SheetRow, number>> = {};
+  let recordedAtColumn: number | undefined;
   for (let c = 1; c <= sheet.columnCount; c++) {
     const header = cellText(headerRow.getCell(c).value).trim().toLowerCase();
     if (!header) continue;
+    if (recordedAtColumn === undefined && RECORDED_AT_ALIASES.includes(header)) {
+      recordedAtColumn = c;
+    }
     for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
       const key = field as keyof SheetRow;
       if (columnOf[key] === undefined && aliases.includes(header)) columnOf[key] = c;
@@ -122,7 +244,7 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParseResult> {
       errors.push(`ไม่พบคอลัมน์ ${HEADER_ALIASES[required][0]} ในไฟล์`);
     }
   }
-  if (errors.length > 0) return { rows: [], rowsInFile: 0, duplicateRows: 0, errors };
+  if (errors.length > 0) return { rows: [], rowsInFile: 0, duplicateRows: 0, recordedAt: null, errors };
 
   const read = (row: ExcelJS.Row, field: keyof SheetRow): string => {
     const column = columnOf[field];
@@ -133,6 +255,9 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParseResult> {
   // ไฟล์จริงเคยมีสาขาหนึ่งซ้ำ 112 รอบต่อเครื่อง ถ้าไม่ยุบยอดจะเพี้ยนเกือบเท่าตัว
   const byKey = new Map<string, SheetRow>();
   let rowsInFile = 0;
+  // ไฟล์จริงใส่ค่าเดียวกันทุกแถว (เวลาที่กด export) แต่เอาค่ามากสุดไว้ก่อน
+  // เผื่อวันหลังกลายเป็นเวลาของแต่ละเครื่อง จะได้เป็นเวลาที่ข้อมูลใหม่ที่สุด
+  let recordedAt: Date | null = null;
 
   for (let r = 2; r <= sheet.rowCount; r++) {
     const row = sheet.getRow(r);
@@ -140,6 +265,11 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParseResult> {
     const machineCode = read(row, "machineCode");
     if (!branchCode || !machineCode) continue;
     rowsInFile += 1;
+
+    if (recordedAtColumn !== undefined) {
+      const at = parseRecordedAt(row.getCell(recordedAtColumn).value);
+      if (at && (recordedAt === null || at > recordedAt)) recordedAt = at;
+    }
 
     const machineType = read(row, "machineType").toUpperCase();
     byKey.set(`${branchCode}|${machineCode}`, {
@@ -167,12 +297,15 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParseResult> {
     rows: [...byKey.values()],
     rowsInFile,
     duplicateRows: rowsInFile - byKey.size,
+    recordedAt,
     errors,
   };
 }
 
 export interface ImportPlan {
   snapshotAt: Date;
+  /** เอาวันที่มาจากไหน ให้หน้าตรวจสอบบอกคนกดได้ว่ากำลังใช้เวลาไหน */
+  snapshotSource: SnapshotSource;
   rowsInFile: number;
   duplicateRows: number;
   uniqueRows: number;
@@ -292,7 +425,11 @@ function isSkipped(row: SheetRow, cancelled: Set<string>, removed: Set<string>) 
   return cancelled.has(row.branchCode) || removed.has(`${row.branchCode}|${row.machineCode}`);
 }
 
-export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise<ImportPlan> {
+export async function planImport(
+  parsed: ParseResult,
+  snapshotAt: Date,
+  snapshotSource: SnapshotSource = "uploadTime"
+): Promise<ImportPlan> {
   const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
   const usableRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
   const skippedRows = parsed.rows.filter((r) => isSkipped(r, cancelled, removed));
@@ -306,6 +443,25 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
 
   const { offMachines, signalLostBranches, ignoredRows, reclassified } = split(usableRows);
   const warnings: string[] = [];
+
+  /**
+   * กันอัปโหลดย้อนหลัง
+   *
+   * เดิมเวลาอ้างอิงคือเวลาที่กดอัปโหลด จึงเดินหน้าเสมอ พออ่านวันที่จากไฟล์แทน
+   * ไฟล์เก่าที่หยิบมาอัปโหลดผิดจะย้อนเวลากลับ ปิดเคสด้วยเวลาในอดีต และเปิดเคสใหม่
+   * ด้วยเวลาที่เก่ากว่ารอบก่อน ทำให้ SLA กับคะแนนเพี้ยนแบบที่มองไม่เห็น
+   */
+  const latest = await prisma.machineImport.findFirst({
+    orderBy: { snapshotAt: "desc" },
+    select: { snapshotAt: true, fileName: true },
+  });
+  if (latest && snapshotAt < latest.snapshotAt) {
+    warnings.push(
+      `ไฟล์นี้เก่ากว่ารอบล่าสุด — วันที่ในไฟล์คือ ${formatBangkok(snapshotAt)} ` +
+        `แต่รอบล่าสุด (${latest.fileName}) คือ ${formatBangkok(latest.snapshotAt)} ` +
+        `ตรวจว่าหยิบไฟล์ถูกอันหรือไม่ก่อนกดยืนยัน`
+    );
+  }
 
   if (skippedCancelled > 0) {
     const parts: string[] = [];
@@ -387,6 +543,7 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
 
   return {
     snapshotAt,
+    snapshotSource,
     rowsInFile: parsed.rowsInFile,
     duplicateRows: parsed.duplicateRows,
     uniqueRows: parsed.rows.length,
@@ -415,9 +572,9 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
 export async function applyImport(
   parsed: ParseResult,
   snapshotAt: Date,
-  meta: { uploadedById?: number; fileName?: string }
+  meta: { uploadedById?: number; fileName?: string; snapshotSource?: SnapshotSource }
 ): Promise<ImportPlan> {
-  const plan = await planImport(parsed, snapshotAt);
+  const plan = await planImport(parsed, snapshotAt, meta.snapshotSource ?? "uploadTime");
   if (plan.errors.length > 0) return plan;
 
   const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
