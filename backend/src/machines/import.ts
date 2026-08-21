@@ -635,7 +635,8 @@ export async function applyImport(
         data: rows.map((r) => ({ ...r, importId: record.id, snapshotAt })),
       });
     }
-  });
+    // ไฟล์จริงพันกว่าแถว และฐานข้อมูลอยู่คนละเครื่อง ค่าเริ่มต้น 5 วินาทีตึงเกินไป
+  }, { timeout: 30_000, maxWait: 15_000 });
 
   return plan;
 }

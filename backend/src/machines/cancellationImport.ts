@@ -50,7 +50,15 @@ const HEADER_ALIASES = {
   name: ["name", "branch_name", "ชื่อสาขา", "สาขา"],
   note: ["note", "reason", "หมายเหตุ", "เหตุผล"],
   action: ACTION_ALIASES,
-  machine: ["num", "machine", "machine_code", "machine_no", "เครื่อง", "หมายเลขเครื่อง", "รหัสเครื่อง"],
+  machine: [
+    "num",
+    "machine",
+    "machine_code",
+    "machine_no",
+    "เครื่อง",
+    "หมายเลขเครื่อง",
+    "รหัสเครื่อง",
+  ],
 } as const;
 
 function cellText(value: ExcelJS.CellValue): string {
@@ -65,7 +73,17 @@ function cellText(value: ExcelJS.CellValue): string {
 }
 
 /** คำในคอลัมน์ `action` ที่แปลว่า "เอากลับมาใช้งาน" — เผื่อทำเครื่องหมายผิด */
-const RESTORE_WORDS = ["restore", "active", "open", "undo", "ใช้งาน", "เปิด", "ปกติ", "กลับมา", "คืน"];
+const RESTORE_WORDS = [
+  "restore",
+  "active",
+  "open",
+  "undo",
+  "ใช้งาน",
+  "เปิด",
+  "ปกติ",
+  "กลับมา",
+  "คืน",
+];
 
 export async function parseCancelledWorkbook(buffer: Buffer): Promise<CancelledParseResult> {
   const workbook = new ExcelJS.Workbook();
@@ -271,61 +289,119 @@ export async function planCancelledImport(parsed: CancelledParseResult) {
   return buildPlan(parsed);
 }
 
+/** จับกลุ่มตามหมายเหตุ เพื่อยิง updateMany ครั้งเดียวต่อหนึ่งหมายเหตุ ไม่ใช่ต่อหนึ่งแถว */
+function groupByNote<T>(
+  items: T[],
+  noteOf: (item: T) => string | null,
+  keyOf: (item: T) => string
+) {
+  const groups = new Map<string | null, string[]>();
+  for (const item of items) {
+    const note = noteOf(item);
+    const list = groups.get(note);
+    if (list) list.push(keyOf(item));
+    else groups.set(note, [keyOf(item)]);
+  }
+  return groups;
+}
+
 export async function applyCancelledImport(parsed: CancelledParseResult) {
   const plan = await buildPlan(parsed);
   const now = new Date();
   const noteFor = (code: string, machineCode: string | null) =>
-    parsed.rows.find((r) => r.code === code && (r.machineCode ?? null) === machineCode)?.note ?? null;
+    parsed.rows.find((r) => r.code === code && (r.machineCode ?? null) === machineCode)?.note ??
+    null;
 
   const cancelCodes = plan.toCancel.map((b) => b.code);
   const restoreBranchCodes = plan.toRestore.filter((r) => !r.machineCode).map((r) => r.code);
+  const restoreMachines = plan.toRestore.filter((r) => r.machineCode);
 
-  await prisma.$transaction(async (tx) => {
-    // ── ทั้งสาขา ──
-    for (const code of cancelCodes) {
-      await tx.branch.update({
-        where: { code },
-        data: { cancelledAt: now, cancelledNote: noteFor(code, null) },
-      });
-    }
-    if (cancelCodes.length > 0) {
-      // ไม่ใช่ "ซ่อมเสร็จ" เพราะไม่มีใครไปซ่อม สาขาแค่ปิดไป
-      await tx.outage.updateMany({
-        where: { endedAt: null, branch: { code: { in: cancelCodes } } },
-        data: { endedAt: now, closeReason: "BRANCH_CANCELLED" },
-      });
-    }
-    if (restoreBranchCodes.length > 0) {
-      await tx.branch.updateMany({
-        where: { code: { in: restoreBranchCodes } },
-        data: { cancelledAt: null, cancelledNote: null },
-      });
-    }
+  /**
+   * หา id ของเครื่องให้ครบก่อนเปิด transaction
+   *
+   * ตอนแรกวนหาทีละเครื่องข้างใน transaction ซึ่งกลายเป็น 3 query ต่อ 1 เครื่อง
+   * ไฟล์ 21 เครื่องจึงยิงไป 60 กว่ารอบ เกินเพดานเวลา 5 วินาทีของ Prisma
+   * แล้ว transaction ถูกปิดทิ้งกลางคัน ("Transaction not found")
+   * ข้างใน transaction จึงเหลือแต่ updateMany แบบเป็นชุด ไม่มีการวนอ่านอีก
+   */
+  const machineBranchCodes = [
+    ...new Set([...plan.machinesToRemove, ...restoreMachines].map((m) => m.code)),
+  ];
+  const machineRows =
+    machineBranchCodes.length > 0
+      ? await prisma.machine.findMany({
+          where: { branch: { code: { in: machineBranchCodes } } },
+          select: { id: true, code: true, branch: { select: { code: true } } },
+        })
+      : [];
+  const idOf = new Map(machineRows.map((m) => [`${m.branch.code}|${m.code}`, m.id]));
+  const key = (m: { code: string; machineCode: string | null }) => `${m.code}|${m.machineCode}`;
 
-    // ── รายเครื่อง ──
-    for (const m of plan.machinesToRemove) {
-      const machine = await tx.machine.findFirst({
-        where: { code: m.machineCode, branch: { code: m.code } },
-        select: { id: true },
-      });
-      if (!machine) continue;
-      await tx.machine.update({
-        where: { id: machine.id },
-        data: { removedAt: now, removedNote: noteFor(m.code, m.machineCode) },
-      });
-      await tx.outage.updateMany({
-        where: { endedAt: null, machineId: machine.id },
-        data: { endedAt: now, closeReason: "MACHINE_REMOVED" },
-      });
-    }
+  const removeIds = plan.machinesToRemove
+    .map((m) => idOf.get(key(m)))
+    .filter((id): id is number => id !== undefined);
+  const restoreIds = restoreMachines
+    .map((m) => idOf.get(key(m)))
+    .filter((id): id is number => id !== undefined);
 
-    for (const r of plan.toRestore.filter((x) => x.machineCode)) {
-      await tx.machine.updateMany({
-        where: { code: r.machineCode!, branch: { code: r.code } },
-        data: { removedAt: null, removedNote: null },
-      });
-    }
-  });
+  const branchNoteGroups = groupByNote(
+    plan.toCancel,
+    (b) => noteFor(b.code, null),
+    (b) => b.code
+  );
+  const machineNoteGroups = groupByNote(
+    plan.machinesToRemove.filter((m) => idOf.has(key(m))),
+    (m) => noteFor(m.code, m.machineCode),
+    (m) => String(idOf.get(key(m)))
+  );
+
+  await prisma.$transaction(
+    async (tx) => {
+      // ── ทั้งสาขา ──
+      for (const [note, codes] of branchNoteGroups) {
+        await tx.branch.updateMany({
+          where: { code: { in: codes } },
+          data: { cancelledAt: now, cancelledNote: note },
+        });
+      }
+      if (cancelCodes.length > 0) {
+        // ไม่ใช่ "ซ่อมเสร็จ" เพราะไม่มีใครไปซ่อม สาขาแค่ปิดไป
+        await tx.outage.updateMany({
+          where: { endedAt: null, branch: { code: { in: cancelCodes } } },
+          data: { endedAt: now, closeReason: "BRANCH_CANCELLED" },
+        });
+      }
+      if (restoreBranchCodes.length > 0) {
+        await tx.branch.updateMany({
+          where: { code: { in: restoreBranchCodes } },
+          data: { cancelledAt: null, cancelledNote: null },
+        });
+      }
+
+      // ── รายเครื่อง ──
+      for (const [note, ids] of machineNoteGroups) {
+        await tx.machine.updateMany({
+          where: { id: { in: ids.map(Number) } },
+          data: { removedAt: now, removedNote: note },
+        });
+      }
+      if (removeIds.length > 0) {
+        await tx.outage.updateMany({
+          where: { endedAt: null, machineId: { in: removeIds } },
+          data: { endedAt: now, closeReason: "MACHINE_REMOVED" },
+        });
+      }
+
+      if (restoreIds.length > 0) {
+        await tx.machine.updateMany({
+          where: { id: { in: restoreIds } },
+          data: { removedAt: null, removedNote: null },
+        });
+      }
+    },
+    // เผื่อไฟล์ใหญ่และฐานข้อมูลอยู่ไกล ค่าเริ่มต้น 5 วินาทีตึงเกินไปสำหรับงานเป็นชุด
+    { timeout: 30_000, maxWait: 15_000 }
+  );
 
   return plan;
 }
