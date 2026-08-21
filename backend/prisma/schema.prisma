@@ -110,6 +110,12 @@ model Machine {
   brand      String?
   // ค่า state ดิบจากไฟล์ export — 0 คือเครื่องดับ ค่าอื่นข้ามตามที่ตกลงกัน
   stateCode  String?
+  // เครื่องที่ถอดออกไปแล้ว — ว่าง = ยังติดตั้งอยู่
+  //
+  // เหมือน Branch.cancelledAt แต่ระดับเครื่อง สำหรับสาขาที่ยังเปิดอยู่
+  // แต่ถอดเครื่องออกบางตัว ซึ่งเจอบ่อยกว่าปิดทั้งสาขา
+  removedAt  DateTime?
+  removedNote String?
   updatedAt  DateTime  @updatedAt
   outages    Outage[]
 

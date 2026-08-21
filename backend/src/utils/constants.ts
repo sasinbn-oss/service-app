@@ -65,12 +65,13 @@ export function outageScore(kind: string, startedAt: Date, now: Date) {
  * REPAIRED คือหายไปจากไฟล์เอง = ซ่อมเสร็จจริง มีแค่แบบนี้ที่ควรเอาไปคิดเวลาเฉลี่ย
  * แบบอื่นคือคนสั่งปิด เพราะไม่มีเครื่องให้ซ่อมแล้ว ไม่ใช่ผลงานของช่าง
  */
-export const CLOSE_REASONS = ["REPAIRED", "BRANCH_CANCELLED"] as const;
+export const CLOSE_REASONS = ["REPAIRED", "BRANCH_CANCELLED", "MACHINE_REMOVED"] as const;
 export type CloseReason = (typeof CLOSE_REASONS)[number];
 
 export const CLOSE_REASON_LABELS: Record<string, string> = {
   REPAIRED: "ซ่อมเสร็จ",
   BRANCH_CANCELLED: "สาขายกเลิก",
+  MACHINE_REMOVED: "ถอดเครื่องออก",
 };
 
 /** เคสที่นับเป็นงานซ่อมจริง ใช้คิดเวลาเฉลี่ยและ % ปิดทัน SLA */

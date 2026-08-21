@@ -12,7 +12,7 @@ import {
   applyCancelledImport,
   parseCancelledWorkbook,
   planCancelledImport,
-} from "../machines/cancelledBranchImport";
+} from "../machines/cancellationImport";
 
 const router = Router();
 
@@ -47,10 +47,10 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
 });
 
 /**
- * รายชื่อสาขาที่ยกเลิกแล้ว
+ * รายชื่อสาขาหรือเครื่องที่ยกเลิกแล้ว
  *
  * แยกจากทะเบียนสาขาเพราะเป็นคนละเรื่องและคนละจังหวะ ทะเบียนบอกว่าใครดูแลสาขาไหน
- * ไฟล์นี้บอกว่าสาขาไหนไม่มีอยู่แล้ว ซึ่งกระทบถึงการปิดเคสที่ค้างอยู่
+ * ไฟล์นี้บอกว่าอะไรไม่มีอยู่แล้ว ซึ่งกระทบถึงการปิดเคสที่ค้างอยู่
  */
 router.post("/cancelled-import", requireAuth, requireAdmin, upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });

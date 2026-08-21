@@ -20,7 +20,8 @@ interface CancelledPlan {
   duplicateRows: number;
   uniqueRows: number;
   toCancel: { code: string; name: string; openCases: number }[];
-  toRestore: { code: string; name: string }[];
+  machinesToRemove: { code: string; name: string; machineCode: string; openCases: number }[];
+  toRestore: { code: string; name: string; machineCode: string | null }[];
   alreadyCancelled: number;
   notFound: string[];
   openCasesToClose: number;
@@ -188,7 +189,7 @@ export default function MachineImportScreen() {
             ? "ไฟล์ .xlsx คอลัมน์ crm_code, num, state, offline — ระบบจะเทียบกับครั้งก่อนให้เอง"
             : kind === "branches"
               ? "ไฟล์ .xlsx คอลัมน์ code, ผจกภาค, ทีมช่าง — อัปเดตเฉพาะข้อมูลสาขา ไม่แตะสถานะเครื่อง"
-              : "ไฟล์ .xlsx ต้องมีคอลัมน์ code (หรือ รหัสสาขา) พอ — ใส่ ชื่อสาขา และ หมายเหตุ เพิ่มได้"}
+              : "ไฟล์ .xlsx คอลัมน์ code อย่างเดียว = ยกเลิกทั้งสาขา · ใส่คอลัมน์ num (หมายเลขเครื่อง) ด้วย = ถอดเฉพาะเครื่องนั้น"}
         </Text>
 
         <TouchableOpacity style={styles.pickButton} onPress={choose} activeOpacity={0.8}>
@@ -313,8 +314,14 @@ export default function MachineImportScreen() {
             <View style={styles.divider} />
 
             <Row
-              label="สาขาที่จะทำเครื่องหมายว่ายกเลิก"
+              label="สาขาที่จะยกเลิกทั้งสาขา"
               value={String(cancelledPlan.toCancel.length)}
+              tone="danger"
+              strong
+            />
+            <Row
+              label="เครื่องที่จะถอดออก (สาขายังเปิด)"
+              value={String(cancelledPlan.machinesToRemove.length)}
               tone="danger"
               strong
             />
@@ -338,9 +345,26 @@ export default function MachineImportScreen() {
             ) : null}
           </View>
 
+          {cancelledPlan.machinesToRemove.length > 0 ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>เครื่องที่จะถอดออก</Text>
+              {cancelledPlan.machinesToRemove.slice(0, 40).map((m) => (
+                <Text key={`${m.code}-${m.machineCode}`} style={styles.sampleRow}>
+                  {m.code} {m.name} · เครื่อง {m.machineCode}
+                  {m.openCases > 0 ? ` — ปิด ${m.openCases} เคส` : " — ไม่มีเคสค้าง"}
+                </Text>
+              ))}
+              {cancelledPlan.machinesToRemove.length > 40 ? (
+                <Text style={styles.sampleRow}>
+                  และอีก {cancelledPlan.machinesToRemove.length - 40} เครื่อง
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
           {cancelledPlan.toCancel.length > 0 ? (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>สาขาที่จะยกเลิก</Text>
+              <Text style={styles.cardTitle}>สาขาที่จะยกเลิกทั้งสาขา</Text>
               {/* บอกให้ครบว่าสาขาไหนบ้าง เพราะการกดยืนยันจะปิดเคสทิ้งทั้งหมด
                   คนกดควรเห็นก่อนว่ากระทบสาขาไหน */}
               {cancelledPlan.toCancel.slice(0, 40).map((b) => (
@@ -386,7 +410,7 @@ export default function MachineImportScreen() {
             <View style={styles.savedCard}>
               <Ionicons name="checkmark-circle" size={20} color={colors.success} />
               <Text style={styles.savedText}>
-                บันทึกแล้ว รอบอัปโหลดถัดไปจะข้ามสาขาเหล่านี้ให้อัตโนมัติ
+                บันทึกแล้ว รอบอัปโหลดถัดไปจะข้ามรายการเหล่านี้ให้อัตโนมัติ
               </Text>
             </View>
           )}

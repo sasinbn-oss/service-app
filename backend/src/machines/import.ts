@@ -194,6 +194,7 @@ export interface ImportPlan {
   /** แถวที่ข้ามเพราะสาขาถูกทำเครื่องหมายยกเลิกไว้ */
   skippedCancelledRows: number;
   skippedCancelledBranches: number;
+  skippedRemovedMachines: number;
   /** สาขาที่ดับเกินเกณฑ์ จึงถูกนับเป็นสัญญาณหายแทนเครื่องดับรายตัว */
   reclassifiedBranches: { branchCode: string; branchName: string; machinesOff: number }[];
   errors: string[];
@@ -272,21 +273,45 @@ async function cancelledBranchCodes(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.code));
 }
 
+/**
+ * เครื่องที่ถอดออกไปแล้ว โดยสาขายังเปิดอยู่
+ *
+ * เจอบ่อยกว่าปิดทั้งสาขา — เครื่องที่ยกออกไปแล้วยังถูก export ออกมาเป็น state 0
+ * ทุกรอบ ต้องกันแยกเป็นรายเครื่อง ไม่ใช่ตัดทั้งสาขา
+ */
+async function removedMachineKeys(): Promise<Set<string>> {
+  const rows = await prisma.machine.findMany({
+    where: { removedAt: { not: null } },
+    select: { code: true, branch: { select: { code: true } } },
+  });
+  return new Set(rows.map((r) => `${r.branch.code}|${r.code}`));
+}
+
+/** แถวที่ต้องข้าม เพราะสาขายกเลิกหรือเครื่องถูกถอดออกไปแล้ว */
+function isSkipped(row: SheetRow, cancelled: Set<string>, removed: Set<string>) {
+  return cancelled.has(row.branchCode) || removed.has(`${row.branchCode}|${row.machineCode}`);
+}
+
 export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise<ImportPlan> {
-  const cancelled = await cancelledBranchCodes();
-  const usableRows = parsed.rows.filter((r) => !cancelled.has(r.branchCode));
-  const skippedCancelled = parsed.rows.length - usableRows.length;
+  const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
+  const usableRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
+  const skippedRows = parsed.rows.filter((r) => isSkipped(r, cancelled, removed));
+  const skippedCancelled = skippedRows.length;
   const skippedCancelledBranches = new Set(
-    parsed.rows.filter((r) => cancelled.has(r.branchCode)).map((r) => r.branchCode)
+    skippedRows.filter((r) => cancelled.has(r.branchCode)).map((r) => r.branchCode)
   ).size;
+  const skippedRemovedMachines = skippedRows.filter(
+    (r) => !cancelled.has(r.branchCode) && removed.has(`${r.branchCode}|${r.machineCode}`)
+  ).length;
 
   const { offMachines, signalLostBranches, ignoredRows, reclassified } = split(usableRows);
   const warnings: string[] = [];
 
   if (skippedCancelled > 0) {
-    warnings.push(
-      `ข้าม ${skippedCancelled} แถวจาก ${skippedCancelledBranches} สาขาที่ทำเครื่องหมายยกเลิกไว้แล้ว`
-    );
+    const parts: string[] = [];
+    if (skippedCancelledBranches > 0) parts.push(`${skippedCancelledBranches} สาขาที่ยกเลิก`);
+    if (skippedRemovedMachines > 0) parts.push(`${skippedRemovedMachines} เครื่องที่ถอดออกแล้ว`);
+    warnings.push(`ข้าม ${skippedCancelled} แถว — ${parts.join(" และ ")}`);
   }
 
   if (reclassified.length > 0) {
@@ -380,6 +405,7 @@ export async function planImport(parsed: ParseResult, snapshotAt: Date): Promise
     ignoredRows,
     skippedCancelledRows: skippedCancelled,
     skippedCancelledBranches,
+    skippedRemovedMachines,
     reclassifiedBranches: reclassified,
     errors: parsed.errors,
     warnings,
@@ -394,13 +420,13 @@ export async function applyImport(
   const plan = await planImport(parsed, snapshotAt);
   if (plan.errors.length > 0) return plan;
 
-  const cancelled = await cancelledBranchCodes();
+  const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
   const { offMachines, signalLostBranches } = split(
-    parsed.rows.filter((r) => !cancelled.has(r.branchCode))
+    parsed.rows.filter((r) => !isSkipped(r, cancelled, removed))
   );
 
   const seenBranches = new Map<string, SheetRow>();
-  const liveRows = parsed.rows.filter((r) => !cancelled.has(r.branchCode));
+  const liveRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
   for (const row of liveRows) if (!seenBranches.has(row.branchCode)) seenBranches.set(row.branchCode, row);
 
   // เขียนสาขาทั้งหมดในคำสั่งเดียวด้วย unnest
