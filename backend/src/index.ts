@@ -15,6 +15,7 @@ import consumableRequestRoutes from "./routes/consumableRequests";
 import assistantRoutes from "./routes/assistant";
 import documentRoutes from "./routes/documents";
 import machineRoutes from "./routes/machines";
+import workOrderRoutes from "./routes/workOrders";
 
 const app = express();
 app.use(cors());
@@ -36,6 +37,7 @@ app.use("/api/consumable-requests", consumableRequestRoutes);
 app.use("/api/assistant", assistantRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/machines", machineRoutes);
+app.use("/api/work-orders", workOrderRoutes);
 
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {

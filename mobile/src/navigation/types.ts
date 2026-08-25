@@ -13,6 +13,10 @@ export type HomeStackParamList = {
   Report: { kind: ReportKind; title: string };
   MachineDashboard: undefined;
   MachineImport: undefined;
+  WorkOrderList: undefined;
+  // มาจากกระดานได้ ถ้าเปิดจากเคสจะพกรหัสเคสกับข้อความตั้งต้นมาด้วย
+  WorkOrderForm: { outageId?: number; presetTitle?: string; branchCode?: string } | undefined;
+  WorkOrderDetail: { id: number };
   TransferDocument: undefined;
   Assistant: undefined;
   FlowList: undefined;

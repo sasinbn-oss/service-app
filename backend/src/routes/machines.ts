@@ -18,8 +18,10 @@ import { dailyReport, monthlyReport, partsReport, weeklyReport } from "../machin
 import { reportToWorkbook } from "../machines/reportExcel";
 import { documentPath, saveDocument } from "../documents/store";
 import {
+  ACTIVE_WORK_ORDER_STATUSES,
   FILTERABLE_WORK_STATUSES,
   SCORE_PER_DAY,
+  WORK_ORDER_STATUS_LABELS,
   WORK_STATUSES,
   WORK_STATUS_LABELS,
   outageScore,
@@ -78,6 +80,47 @@ interface NoteShape {
     quantity: number;
     sparePart: { id: number; partCode: string; name: string; brand: string | null };
   }[];
+}
+
+/**
+ * ใบงานที่ยังเปิดค้างของแต่ละเคส ดึงทีเดียวแล้วค่อยแปะ ไม่ใช่ query ต่อแถว
+ *
+ * กระดานต้องบอกได้ว่าเคสไหน "ยังไม่มีใครเปิดใบงาน" กับ "เปิดไปแล้ว ใครถืออยู่"
+ * ไม่งั้นจะมีคนเปิดซ้ำ แล้วช่างสองคนขับไปสาขาเดียวกัน
+ */
+interface WorkOrderBadge {
+  id: number;
+  code: string;
+  status: string;
+  statusLabel: string;
+  assignedToName: string | null;
+}
+
+async function activeWorkOrdersFor(outageIds: number[]) {
+  const byOutage = new Map<number, WorkOrderBadge>();
+  if (outageIds.length === 0) return byOutage;
+  const rows = await prisma.workOrder.findMany({
+    where: { outageId: { in: outageIds }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      outageId: true,
+      assignedTo: { select: { name: true } },
+    },
+    orderBy: { id: "desc" },
+  });
+  for (const r of rows) {
+    if (r.outageId === null || byOutage.has(r.outageId)) continue;
+    byOutage.set(r.outageId, {
+      id: r.id,
+      code: r.code,
+      status: r.status,
+      statusLabel: WORK_ORDER_STATUS_LABELS[r.status] ?? r.status,
+      assignedToName: r.assignedTo?.name ?? null,
+    });
+  }
+  return byOutage;
 }
 
 function noteFields(o: NoteShape) {
@@ -186,6 +229,7 @@ router.get("/outages", requireAuth, async (req, res) => {
     orderBy: { startedAt: "asc" },
   });
 
+  const workOrders = await activeWorkOrdersFor(outages.map((o) => o.id));
   const rows = outages.map((o) => ({
     id: o.id,
     branchCode: o.branch.code,
@@ -202,6 +246,7 @@ router.get("/outages", requireAuth, async (req, res) => {
     slaHours: Math.floor(hoursSince(o.startedAt, now)),
     breached: o.startedAt < breachBefore,
     score: outageScore("MACHINE_OFF", o.startedAt, now),
+    workOrder: workOrders.get(o.id) ?? null,
     ...noteFields(o),
   }));
 
@@ -260,6 +305,7 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
     orderBy: { startedAt: "asc" },
   });
 
+  const workOrders = await activeWorkOrdersFor(outages.map((o) => o.id));
   const rows = outages.map((o) => ({
     id: o.id,
     branchCode: o.branch.code,
@@ -268,6 +314,7 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
     ownership: o.branch.ownership,
     zone: o.branch.zone,
     grade: o.branch.grade,
+    workOrder: workOrders.get(o.id) ?? null,
     machineCount: o.branch._count.machines,
     startedAt: o.startedAt,
     lastSeenAt: o.lastSeenAt,

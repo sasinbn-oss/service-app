@@ -15,109 +15,115 @@ datasource db {
 // schema stays portable between database providers.
 
 model User {
-  id            Int             @id @default(autoincrement())
-  employeeCode  String          @unique
-  name          String
-  phone         String?
-  passwordHash  String
-  role          String          @default("EMPLOYEE")
-  createdAt     DateTime        @default(now())
-  vehicleLogs   VehicleLog[]
-  branchCheckIns BranchCheckIn[]
-  workLogs      WorkLog[]
+  id                 Int                 @id @default(autoincrement())
+  employeeCode       String              @unique
+  name               String
+  phone              String?
+  passwordHash       String
+  role               String              @default("EMPLOYEE")
+  createdAt          DateTime            @default(now())
+  vehicleLogs        VehicleLog[]
+  branchCheckIns     BranchCheckIn[]
+  workLogs           WorkLog[]
   consumableRequests ConsumableRequest[] @relation("RequestedBy")
   reviewedRequests   ConsumableRequest[] @relation("ReviewedBy")
   outageNotes        Outage[]
   outageNoteLogs     OutageNoteLog[]
+  createdWorkOrders  WorkOrder[]         @relation("CreatedWorkOrders")
+  assignedWorkOrders WorkOrder[]         @relation("AssignedWorkOrders")
+  closedWorkOrders   WorkOrder[]         @relation("ClosedWorkOrders")
+  workOrderLogs      WorkOrderLog[]
 }
 
 model Vehicle {
-  id           Int           @id @default(autoincrement())
-  plateNumber  String        @unique
-  brand        String?
-  model        String?
-  type         String?
-  status       String        @default("AVAILABLE")
-  createdAt    DateTime      @default(now())
-  logs         VehicleLog[]
+  id          Int          @id @default(autoincrement())
+  plateNumber String       @unique
+  brand       String?
+  model       String?
+  type        String?
+  status      String       @default("AVAILABLE")
+  createdAt   DateTime     @default(now())
+  logs        VehicleLog[]
 }
 
 model VehicleLog {
-  id            Int               @id @default(autoincrement())
-  vehicleId     Int
-  vehicle       Vehicle           @relation(fields: [vehicleId], references: [id])
-  userId        Int
-  user          User              @relation(fields: [userId], references: [id])
-  purpose       String
-  destination   String?
-  startMileage  Int
-  endMileage    Int?
-  startedAt     DateTime          @default(now())
-  endedAt       DateTime?
-  status        String            @default("ONGOING")
+  id           Int       @id @default(autoincrement())
+  vehicleId    Int
+  vehicle      Vehicle   @relation(fields: [vehicleId], references: [id])
+  userId       Int
+  user         User      @relation(fields: [userId], references: [id])
+  purpose      String
+  destination  String?
+  startMileage Int
+  endMileage   Int?
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  status       String    @default("ONGOING")
 }
 
 model Branch {
-  id            Int             @id @default(autoincrement())
-  name          String
-  code          String          @unique
-  address       String?
+  id             Int             @id @default(autoincrement())
+  name           String
+  code           String          @unique
+  address        String?
   // Optional because a branch can be on the machine dashboard long before
   // anyone has stood in it with a phone to record its coordinates. Check-in
   // only offers branches that have them.
-  latitude      Float?
-  longitude     Float?
-  radiusMeters  Int             @default(200)
+  latitude       Float?
+  longitude      Float?
+  radiusMeters   Int             @default(200)
   // Grouping used by the machine dashboard.
-  region        String?
+  region         String?
   // COCO (company owned) | DODO (dealer owned)
-  ownership     String?
+  ownership      String?
   // zone และ grade จะมาจากฐานข้อมูลอีกชุดที่ทำแยก ไฟล์ export ไม่มีสองค่านี้
   // ตัวนำเข้าจึงไม่แตะค่าเดิม เขียนทับให้ว่างไม่ได้
-  zone          String?
-  grade         String?
+  zone           String?
+  grade          String?
   // สถานะสาขาจาก CRM — active | inactive
   //
   // ห้ามใช้ช่องนี้เก็บ "สาขายกเลิก" เพราะตัวนำเข้ารายงานเครื่องเขียนทับทุกรอบ
   // จากคอลัมน์ status ในไฟล์ ซึ่งเป็น active เสมอ ใช้ cancelledAt แทน
-  status        String?         @default("active")
+  status         String?         @default("active")
   // สาขาที่เลิกกิจการแล้ว — ว่าง = ยังเปิดอยู่
   //
   // เครื่องของสาขาที่ปิดไปแล้วยังถูก export ออกมาเป็น state 0 ทุกรอบ
   // ถ้าไม่กันไว้ เคสจะเปิดค้างตลอดกาล สะสม SLA และคะแนนทั้งที่ไม่มีอะไรให้ซ่อม
-  cancelledAt   DateTime?
-  cancelledNote String?
-  createdAt     DateTime        @default(now())
-  checkIns      BranchCheckIn[]
-  workLogs      WorkLog[]
-  machines      Machine[]
-  outages       Outage[]
+  cancelledAt    DateTime?
+  cancelledNote  String?
+  createdAt      DateTime        @default(now())
+  checkIns       BranchCheckIn[]
+  workLogs       WorkLog[]
+  machines       Machine[]
+  outages        Outage[]
   scoreSnapshots ScoreSnapshot[]
+  workOrders     WorkOrder[]
 }
 
 // One washer or dryer installed at a branch.
 model Machine {
-  id         Int       @id @default(autoincrement())
-  branchId   Int
-  branch     Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  id          Int         @id @default(autoincrement())
+  branchId    Int
+  branch      Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
   // Label on the machine itself, e.g. W3 (washer) or D12 (dryer).
-  code       String
+  code        String
   // WASHER | DRYER
-  type       String
+  type        String
   // ON | OFF — สรุปสถานะล่าสุด เก็บไว้เพื่อความสะดวกในการค้น
   // ส่วนเวลาที่ใช้คิด SLA อยู่ที่ Outage ซึ่งเป็นตัวจริง
-  status     String    @default("ON")
-  brand      String?
+  status      String      @default("ON")
+  brand       String?
   // ค่า state ดิบจากไฟล์ export — 0 คือเครื่องดับ ค่าอื่นข้ามตามที่ตกลงกัน
-  stateCode  String?
+  stateCode   String?
   // เครื่องที่ถอดออกไปแล้ว — ว่าง = ยังติดตั้งอยู่
   //
   // เหมือน Branch.cancelledAt แต่ระดับเครื่อง สำหรับสาขาที่ยังเปิดอยู่
   // แต่ถอดเครื่องออกบางตัว ซึ่งเจอบ่อยกว่าปิดทั้งสาขา
-  removedAt  DateTime?
+  removedAt   DateTime?
   removedNote String?
-  updatedAt  DateTime  @updatedAt
-  outages    Outage[]
+  updatedAt   DateTime    @updatedAt
+  outages     Outage[]
+  workOrders  WorkOrder[]
 
   @@unique([branchId, code])
   @@index([status])
@@ -129,19 +135,19 @@ model Machine {
 // ระบบจึงต้องจำเอง: เจอในไฟล์ครั้งแรก = เปิดเคส, หายไปจากไฟล์ = ปิดเคส
 // เวลาที่ค้างอยู่ระหว่างนั้นคือ SLA และเคสที่ปิดแล้วกลายเป็นประวัติสำหรับทำรายงาน
 model Outage {
-  id         Int       @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   // MACHINE_OFF (เครื่องดับ รายเครื่อง) | SIGNAL_LOST (สัญญาณหาย ทั้งสาขา)
-  kind       String
-  branchId   Int
-  branch     Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  kind        String
+  branchId    Int
+  branch      Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
   // ว่างสำหรับ SIGNAL_LOST เพราะเป็นปัญหาระดับสาขา ไม่ใช่ของเครื่องใดเครื่องหนึ่ง
-  machineId  Int?
-  machine    Machine?  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  startedAt  DateTime
+  machineId   Int?
+  machine     Machine?  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  startedAt   DateTime
   // snapshot ล่าสุดที่ยังเห็นปัญหานี้ ใช้บอกว่าของจริงหายไปช่วงไหน
-  lastSeenAt DateTime
+  lastSeenAt  DateTime
   // ว่าง = ยังไม่หาย เคสที่เปิดอยู่คือสิ่งที่แดชบอร์ดแสดง
-  endedAt    DateTime?
+  endedAt     DateTime?
   // ทำไมถึงปิด — ดูค่าที่ใช้ได้ที่ CLOSE_REASONS ใน src/utils/constants.ts
   //
   // ต้องแยก "ซ่อมเสร็จ" ออกจาก "สาขาปิด/ถอดเครื่อง" ไม่งั้นเครื่องที่ค้างมา 40 วัน
@@ -151,18 +157,19 @@ model Outage {
 
   // สิ่งที่คนกรอกเอง ไฟล์ export ไม่มีให้ — บอกว่าเสียเพราะอะไรและติดอยู่ที่ขั้นไหน
   // ผูกกับเคส ไม่ใช่กับเครื่อง เคสใหม่จึงเริ่มจากว่างเสมอ ไม่เอาอาการเก่ามาปน
-  symptom      String?
+  symptom          String?
   // ดูค่าที่ใช้ได้ที่ WORK_STATUSES ใน src/utils/constants.ts
-  workStatus   String?
+  workStatus       String?
   // วันที่ช่างนัดเข้าไปแก้ ใช้ตอน workStatus = WAITING_TECH
   // เก็บเป็นวันที่อย่างเดียว ไม่มีเวลา เพราะนัดกันเป็นวัน
   scheduledVisitAt DateTime?
-  noteUpdatedAt   DateTime?
-  noteUpdatedById Int?
-  noteUpdatedBy   User?     @relation(fields: [noteUpdatedById], references: [id])
+  noteUpdatedAt    DateTime?
+  noteUpdatedById  Int?
+  noteUpdatedBy    User?           @relation(fields: [noteUpdatedById], references: [id])
   // อะไหล่ที่เคสนี้รออยู่ ใช้ตอน workStatus = WAITING_PARTS
-  parts        OutagePart[]
-  noteLogs     OutageNoteLog[]
+  parts            OutagePart[]
+  noteLogs         OutageNoteLog[]
+  workOrders       WorkOrder[]
 
   @@index([kind, endedAt])
   @@index([branchId, endedAt])
@@ -176,12 +183,12 @@ model Outage {
 // เก็บเป็น snapshot ของค่าหลังบันทึก ไม่ใช่ส่วนต่าง เพราะอ่านย้อนหลังแล้วเข้าใจ
 // ได้ทันทีว่าตอนนั้นเคสอยู่ในสภาพไหน โดยไม่ต้องไล่ประกอบจากรายการก่อนหน้า
 model OutageNoteLog {
-  id       Int     @id @default(autoincrement())
+  id       Int    @id @default(autoincrement())
   outageId Int
-  outage   Outage  @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  outage   Outage @relation(fields: [outageId], references: [id], onDelete: Cascade)
   // ว่างได้เผื่อผู้ใช้ถูกลบทีหลัง ประวัติยังต้องอยู่
   userId   Int?
-  user     User?   @relation(fields: [userId], references: [id])
+  user     User?  @relation(fields: [userId], references: [id])
 
   symptom          String?
   workStatus       String?
@@ -215,25 +222,25 @@ model OutagePart {
 
 // บันทึกการอัปโหลดแต่ละครั้ง ไว้ดูย้อนหลังว่าตัวเลขที่เปลี่ยนมาจากไฟล์ไหน
 model MachineImport {
-  id             Int      @id @default(autoincrement())
-  uploadedById   Int?
-  fileName       String?
+  id                 Int             @id @default(autoincrement())
+  uploadedById       Int?
+  fileName           String?
   // เวลาของ snapshot ที่ใช้เป็นจุดอ้างอิงในการเปิด/ปิดเคส
-  snapshotAt     DateTime
-  rowsInFile     Int
-  duplicateRows  Int
-  branchesTouched Int
-  machinesOff    Int
+  snapshotAt         DateTime
+  rowsInFile         Int
+  duplicateRows      Int
+  branchesTouched    Int
+  machinesOff        Int
   branchesSignalLost Int
-  opened         Int
-  closed         Int
+  opened             Int
+  closed             Int
   // คะแนนรวม ณ ตอนนั้น เก็บซ้ำไว้ตรงนี้ด้วยเพื่อดึงกราฟแนวโน้มได้ด้วยคิวรีเดียว
   // โดยไม่ต้องรวมยอดจาก ScoreSnapshot ทีละรอบ
-  machineOffScore    Int   @default(0)
-  signalLostScore    Int   @default(0)
-  totalScore         Int   @default(0)
-  createdAt      DateTime @default(now())
-  scoreSnapshots ScoreSnapshot[]
+  machineOffScore    Int             @default(0)
+  signalLostScore    Int             @default(0)
+  totalScore         Int             @default(0)
+  createdAt          DateTime        @default(now())
+  scoreSnapshots     ScoreSnapshot[]
 }
 
 // คะแนนของแต่ละสาขา ณ ตอนที่อัปโหลดไฟล์แต่ละรอบ
@@ -249,18 +256,18 @@ model ScoreSnapshot {
   import     MachineImport? @relation(fields: [importId], references: [id], onDelete: Cascade)
   snapshotAt DateTime
 
-  branchId   Int
-  branch     Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  region     String?
-  zone       String?
-  ownership  String?
-  grade      String?
+  branchId  Int
+  branch    Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  region    String?
+  zone      String?
+  ownership String?
+  grade     String?
 
   // MACHINE_OFF | SIGNAL_LOST — แยกกันเพราะคนละทีมรับผิดชอบและคะแนนต่อวันไม่เท่ากัน
-  kind       String
-  cases      Int
-  score      Int
-  breached   Int
+  kind     String
+  cases    Int
+  score    Int
+  breached Int
 
   @@unique([importId, branchId, kind])
   @@index([snapshotAt])
@@ -268,29 +275,29 @@ model ScoreSnapshot {
 }
 
 model BranchCheckIn {
-  id              Int      @id @default(autoincrement())
-  userId          Int
-  user            User     @relation(fields: [userId], references: [id])
-  branchId        Int
-  branch          Branch   @relation(fields: [branchId], references: [id])
-  latitude        Float
-  longitude       Float
-  distanceMeters  Float
-  withinRadius    Boolean
-  note            String?
-  checkedInAt     DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  user           User     @relation(fields: [userId], references: [id])
+  branchId       Int
+  branch         Branch   @relation(fields: [branchId], references: [id])
+  latitude       Float
+  longitude      Float
+  distanceMeters Float
+  withinRadius   Boolean
+  note           String?
+  checkedInAt    DateTime @default(now())
 }
 
 model WorkLog {
-  id              Int       @id @default(autoincrement())
+  id              Int      @id @default(autoincrement())
   userId          Int
-  user            User      @relation(fields: [userId], references: [id])
+  user            User     @relation(fields: [userId], references: [id])
   workDate        DateTime
   taskDescription String
   hoursSpent      Float?
   branchId        Int?
-  branch          Branch?   @relation(fields: [branchId], references: [id])
-  createdAt       DateTime  @default(now())
+  branch          Branch?  @relation(fields: [branchId], references: [id])
+  createdAt       DateTime @default(now())
 }
 
 model TroubleshootingGuide {
@@ -348,19 +355,20 @@ model TroubleshootImage {
 }
 
 model SparePart {
-  id          Int      @id @default(autoincrement())
-  partCode    String   @unique
-  name        String
-  brand       String?
-  category    String?
-  description String?
+  id             Int             @id @default(autoincrement())
+  partCode       String          @unique
+  name           String
+  brand          String?
+  category       String?
+  description    String?
   // Either a full external URL, or a path served by this API
   // ("/api/spare-parts/:id/image") when a photo was uploaded.
-  imageUrl    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  image       SparePartImage?
-  outageParts OutagePart[]
+  imageUrl       String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  image          SparePartImage?
+  outageParts    OutagePart[]
+  workOrderParts WorkOrderPart[]
 }
 
 // Uploaded photos live in their own table so listing parts never has to
@@ -404,4 +412,91 @@ model ConsumableRequestItem {
   itemId    Int
   item      ConsumableItem    @relation(fields: [itemId], references: [id])
   quantity  Int
+}
+
+// ใบงานซ่อม — สิ่งที่ช่างถือไปทำ ต่างจาก Outage ที่เป็นสภาพของเครื่อง
+//
+// Outage เปิดและปิดตามไฟล์ export เท่านั้น คนสั่งปิดเองไม่ได้ เพราะไฟล์คือความจริง
+// ว่าเครื่องกลับมาหรือยัง ส่วนใบงานเป็นเรื่องของคน — ใครรับ ไปเมื่อไหร่ ทำอะไรไป
+// สองอย่างนี้จึงปิดคนละเวลาได้ ปิดใบงานแล้วเครื่องยังไม่กลับมาก็เป็นไปได้
+// และต้องเห็นด้วยว่าเป็นแบบนั้น
+model WorkOrder {
+  id     Int    @id @default(autoincrement())
+  // รหัสที่คนอ่าน เช่น WO-00042 — ตั้งจาก id หลังสร้าง จึงไม่มีทางชนกัน
+  code   String @unique
+  // OUTAGE (เปิดจากกระดานติดตาม) | MANUAL (เปิดเอง)
+  source String @default("MANUAL")
+
+  // เคสที่เป็นต้นเรื่อง ว่างได้เพราะใบงานที่เปิดเองไม่ได้มาจากเคสไหน
+  outageId  Int?
+  outage    Outage?  @relation(fields: [outageId], references: [id], onDelete: SetNull)
+  branchId  Int
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // ว่างเมื่อเป็นงานระดับสาขา เช่น สัญญาณหาย ซึ่งไม่ได้เจาะจงเครื่องไหน
+  machineId Int?
+  machine   Machine? @relation(fields: [machineId], references: [id], onDelete: SetNull)
+
+  title    String
+  detail   String?
+  // ดูค่าที่ใช้ได้ที่ WORK_ORDER_PRIORITIES ใน src/utils/constants.ts
+  priority String  @default("NORMAL")
+  // ดูค่าที่ใช้ได้ที่ WORK_ORDER_STATUSES ใน src/utils/constants.ts
+  status   String  @default("OPEN")
+
+  assignedToId Int?
+  assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
+  // วันที่นัดเข้าไปทำ เก็บเป็นวันอย่างเดียว เพราะนัดกันเป็นวัน
+  scheduledAt  DateTime?
+
+  createdById Int?
+  createdBy   User?    @relation("CreatedWorkOrders", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // ── ปิดงาน ──
+  closedAt    DateTime?
+  closedById  Int?
+  closedBy    User?     @relation("ClosedWorkOrders", fields: [closedById], references: [id])
+  // ผลของงาน ไม่ใช่แค่ "ปิดแล้ว" — ดู WORK_ORDER_RESULTS ใน src/utils/constants.ts
+  closeResult String?
+  closeNote   String?
+
+  parts WorkOrderPart[]
+  logs  WorkOrderLog[]
+
+  @@index([status, createdAt])
+  @@index([assignedToId, status])
+  @@index([outageId])
+}
+
+// อะไหล่ที่ใช้จริงตอนปิดงาน ต่างจาก OutagePart ที่เป็นของที่ "รออยู่"
+model WorkOrderPart {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  sparePartId Int
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  quantity    Int       @default(1)
+
+  @@unique([workOrderId, sparePartId])
+}
+
+// ประวัติทุกครั้งที่ใบงานเปลี่ยนมือหรือเปลี่ยนสถานะ
+//
+// เหมือน OutageNoteLog — ช่องบนใบงานบอกได้แค่สภาพล่าสุด พอมีคนแก้ทับ
+// ก็ไม่เหลือร่องรอยว่าใครทำอะไรไว้ก่อนหน้า
+model WorkOrderLog {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId      Int?
+  user        User?     @relation(fields: [userId], references: [id])
+  // CREATED | ASSIGNED | STARTED | CLOSED | CANCELLED | REOPENED | EDITED
+  action      String
+  // สภาพหลังทำรายการนี้ เก็บเป็น snapshot เพื่ออ่านย้อนหลังแล้วเข้าใจได้ทันที
+  status      String
+  note        String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId, createdAt])
 }

@@ -19,6 +19,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { useWideLayout } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
+import PartPicker from "../components/PartPicker";
 import { colors, radius, shadow, spacing } from "../theme";
 
 /** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
@@ -47,6 +48,14 @@ interface OutageRow {
   parts: NotePart[];
   /** วันที่ช่างนัดเข้า ใช้ตอนสถานะเป็นรอช่างเข้าแก้ไข — YYYY-MM-DD */
   scheduledVisitAt: string | null;
+  /** ใบงานที่ยังเปิดค้างของเคสนี้ ว่าง = ยังไม่มีใครเปิด */
+  workOrder: {
+    id: number;
+    code: string;
+    status: string;
+    statusLabel: string;
+    assignedToName: string | null;
+  } | null;
 }
 
 /** อะไหล่ที่เคสหนึ่งรออยู่ — มาจากรายการอะไหล่ในระบบ ไม่ใช่รหัสที่พิมพ์เอง */
@@ -219,6 +228,26 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const [statusOptions, setStatusOptions] = useState<WorkStatusOption[]>([]);
   const [editing, setEditing] = useState<OutageRow | null>(null);
   const [showActivity, setShowActivity] = useState(false);
+
+  /**
+   * ใบงานของเคสหนึ่ง — มีแล้วเปิดดู ยังไม่มีก็ไปหน้าเปิดใบงาน
+   *
+   * ไม่เปิดใบงานให้ทันทีที่กด เพราะยังต้องเลือกความเร่งด่วนกับช่างก่อน
+   * และการกดพลาดบนกระดานที่มีสี่ร้อยแถวไม่ควรสร้างงานจริงขึ้นมาเงียบๆ
+   */
+  const openWorkOrder = useCallback(
+    (row: OutageRow) => {
+      if (row.workOrder) {
+        navigation.navigate("WorkOrderDetail", { id: row.workOrder.id });
+        return;
+      }
+      navigation.navigate("WorkOrderForm", {
+        outageId: row.id,
+        branchCode: row.branchCode,
+      });
+    },
+    [navigation]
+  );
 
   const load = useCallback(
     async (opts: { refresh?: boolean } = {}) => {
@@ -651,6 +680,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                 sortAsc={sortAsc}
                 onSort={toggleSort}
                 onEdit={setEditing}
+                onWorkOrder={openWorkOrder}
                 available={tableWidth}
               />
             ) : (
@@ -661,6 +691,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                     row={row}
                     isMachines={isMachines}
                     onEdit={() => setEditing(row)}
+                    onWorkOrder={() => openWorkOrder(row)}
                   />
                 ))}
               </View>
@@ -866,143 +897,6 @@ function NoteModal({
  * ไม่ให้พิมพ์รหัสเอง เพราะรหัสที่พิมพ์มือจะสะกดไม่ตรงกัน แล้วสรุปยอดว่า
  * ทั้งประเทศค้างอะไหล่ตัวไหนอยู่กี่ตัวไม่ได้
  */
-function PartPicker({
-  parts,
-  onChange,
-}: {
-  parts: NotePart[];
-  onChange: (next: NotePart[]) => void;
-}) {
-  const [term, setTerm] = useState("");
-  const [results, setResults] = useState<SparePartOption[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searched, setSearched] = useState(false);
-
-  // หน่วงไว้ก่อนยิง ไม่งั้นพิมพ์รหัสเดียวยิงไปสิบครั้ง
-  useEffect(() => {
-    const keyword = term.trim();
-    if (!keyword) {
-      setResults([]);
-      setSearched(false);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(() => {
-      api
-        .get<SparePartOption[]>("/spare-parts", { params: { search: keyword } })
-        .then((res) => setResults(res.data.slice(0, 8)))
-        .catch(() => setResults([]))
-        .finally(() => {
-          setSearching(false);
-          setSearched(true);
-        });
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [term]);
-
-  function add(option: SparePartOption) {
-    setTerm("");
-    // เลือกตัวที่มีอยู่แล้วให้บวกจำนวน ไม่ใช่เพิ่มแถวซ้ำ
-    const existing = parts.find((p) => p.sparePartId === option.id);
-    if (existing) {
-      onChange(
-        parts.map((p) => (p.sparePartId === option.id ? { ...p, quantity: p.quantity + 1 } : p))
-      );
-      return;
-    }
-    onChange([
-      ...parts,
-      {
-        sparePartId: option.id,
-        partCode: option.partCode,
-        name: option.name,
-        brand: option.brand,
-        quantity: 1,
-      },
-    ]);
-  }
-
-  function setQuantity(sparePartId: number, text: string) {
-    const digits = text.replace(/[^0-9]/g, "");
-    // ปล่อยให้ว่างระหว่างพิมพ์ได้ ค่อยตีเป็น 1 ตอนบันทึก
-    const value = digits === "" ? 1 : Math.min(999, Math.max(1, Number(digits)));
-    onChange(parts.map((p) => (p.sparePartId === sparePartId ? { ...p, quantity: value } : p)));
-  }
-
-  return (
-    <View style={styles.picker}>
-      <Text style={styles.modalLabel}>อะไหล่ที่รอ</Text>
-
-      {parts.length > 0 ? (
-        <View style={styles.pickedList}>
-          {parts.map((part) => (
-            <View key={part.sparePartId} style={styles.picked}>
-              <View style={styles.pickedText}>
-                <Text style={styles.pickedCode}>{part.partCode}</Text>
-                <Text style={styles.pickedName}>{part.name}</Text>
-              </View>
-              <TextInput
-                style={styles.qtyInput}
-                value={String(part.quantity)}
-                onChangeText={(t) => setQuantity(part.sparePartId, t)}
-                keyboardType="number-pad"
-                maxLength={3}
-                accessibilityLabel={`จำนวน ${part.partCode}`}
-              />
-              <Text style={styles.qtyUnit}>ตัว</Text>
-              <TouchableOpacity
-                onPress={() => onChange(parts.filter((p) => p.sparePartId !== part.sparePartId))}
-                accessibilityLabel={`เอา ${part.partCode} ออก`}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="close-circle" size={20} color={colors.textFaint} />
-              </TouchableOpacity>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
-      <View style={styles.pickerSearch}>
-        <Ionicons name="search" size={15} color={colors.textFaint} />
-        <TextInput
-          style={styles.pickerInput}
-          value={term}
-          onChangeText={setTerm}
-          placeholder="ค้นหารหัสหรือชื่ออะไหล่"
-          placeholderTextColor={colors.textFaint}
-        />
-        {searching ? <ActivityIndicator size="small" color={colors.textFaint} /> : null}
-      </View>
-
-      {results.length > 0 ? (
-        <View style={styles.pickerResults}>
-          {results.map((option) => (
-            <TouchableOpacity
-              key={option.id}
-              style={styles.pickerResult}
-              onPress={() => add(option)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.pickedCode}>{option.partCode}</Text>
-              <Text style={styles.pickerResultName} numberOfLines={1}>
-                {option.name}
-              </Text>
-              <Ionicons name="add-circle-outline" size={17} color={colors.primary} />
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : null}
-
-      {searched && !searching && results.length === 0 ? (
-        <Text style={styles.modalHint}>
-          ไม่พบอะไหล่ที่ตรงกับ “{term.trim()}” — เพิ่มรายการใหม่ได้ที่เมนูรายการอะไหล่ (แอดมิน)
-          หรือพิมพ์ไว้ในช่องอาการไปก่อน
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
 /**
  * วันที่ช่างนัดเข้าไปแก้
  *
@@ -1276,6 +1170,7 @@ function SummaryCard({
 
 /** ช่องที่ตารางแสดงได้ — เรียงตามนี้ทั้งหัวตารางและตัวแถว จึงไม่มีทางหลุดคนละลำดับ */
 type ColumnId =
+  | "workOrder"
   | "branchCode"
   | "branchName"
   | "machineCode"
@@ -1328,6 +1223,8 @@ function columnsFor(isMachines: boolean, available: number): Column[] {
    * พอมีที่พอ วางเป็นคอลัมน์อ่านง่ายกว่า เพราะสายตากวาดลงตรงๆ ได้ทีละช่อง
    */
   if (available >= 1200) columns.push({ id: "note", label: "อาการ / สถานะ", width: 300 });
+  // ใบงานอยู่ท้ายสุดเสมอ เพราะเป็นปุ่มกด ไม่ใช่ข้อมูลที่ต้องกวาดตาอ่าน
+  columns.push({ id: "workOrder", label: "ใบงาน", width: 132 });
 
   // ที่ว่างที่เหลือแบ่งให้ช่องที่ยาวไม่จำกัด อาการก่อนแล้วค่อยชื่อสาขา
   const grow = (id: ColumnId, max: number) => {
@@ -1349,6 +1246,7 @@ function OutageTable({
   sortAsc,
   onSort,
   onEdit,
+  onWorkOrder,
   available,
 }: {
   rows: OutageRow[];
@@ -1357,6 +1255,7 @@ function OutageTable({
   sortAsc: boolean;
   onSort: (key: SortKey) => void;
   onEdit: (row: OutageRow) => void;
+  onWorkOrder: (row: OutageRow) => void;
   available: number;
 }) {
   const columns = columnsFor(isMachines, available);
@@ -1399,7 +1298,11 @@ function OutageTable({
             <View style={styles.tableRowMain}>
               {columns.map((column) => (
                 <View key={column.id} style={{ width: column.width }}>
-                  <TableCell column={column.id} row={row} />
+                  <TableCell
+                    column={column.id}
+                    row={row}
+                    onWorkOrder={() => onWorkOrder(row)}
+                  />
                 </View>
               ))}
             </View>
@@ -1417,8 +1320,18 @@ function OutageTable({
   );
 }
 
-function TableCell({ column, row }: { column: ColumnId; row: OutageRow }) {
+function TableCell({
+  column,
+  row,
+  onWorkOrder,
+}: {
+  column: ColumnId;
+  row: OutageRow;
+  onWorkOrder: () => void;
+}) {
   switch (column) {
+    case "workOrder":
+      return <WorkOrderCell row={row} onPress={onWorkOrder} />;
     case "branchCode":
       return <Text style={styles.cellMono}>{row.branchCode}</Text>;
     case "branchName":
@@ -1493,14 +1406,44 @@ function NoteLine({ row }: { row: OutageRow }) {
   );
 }
 
+/**
+ * ช่องใบงานในตาราง — ปุ่มเปิด หรือป้ายบอกว่าเปิดไปแล้ว
+ *
+ * ต้องเห็นได้จากกระดานว่าเคสไหนมีใบงานแล้ว ไม่งั้นเช้าวันจันทร์จะมีคนเปิดซ้ำ
+ * แล้วช่างสองคนขับไปสาขาเดียวกัน
+ */
+function WorkOrderCell({ row, onPress }: { row: OutageRow; onPress: () => void }) {
+  if (row.workOrder) {
+    return (
+      <TouchableOpacity style={styles.woChip} onPress={onPress} activeOpacity={0.7}>
+        <Ionicons name="clipboard" size={11} color={colors.primaryDark} />
+        <View style={styles.woChipText}>
+          <Text style={styles.woChipCode}>{row.workOrder.code}</Text>
+          <Text style={styles.woChipStatus} numberOfLines={1}>
+            {row.workOrder.assignedToName ?? row.workOrder.statusLabel}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  }
+  return (
+    <TouchableOpacity style={styles.woButton} onPress={onPress} activeOpacity={0.7}>
+      <Ionicons name="add" size={13} color={colors.primary} />
+      <Text style={styles.woButtonText}>สร้างใบงาน</Text>
+    </TouchableOpacity>
+  );
+}
+
 function OutageCard({
   row,
   isMachines,
   onEdit,
+  onWorkOrder,
 }: {
   row: OutageRow;
   isMachines: boolean;
   onEdit: () => void;
+  onWorkOrder: () => void;
 }) {
   const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
   return (
@@ -1580,11 +1523,48 @@ function OutageCard({
           </View>
         )}
       </View>
+
+      <View style={styles.cardWorkOrder}>
+        <WorkOrderCell row={row} onPress={onWorkOrder} />
+      </View>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
+  woButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+    alignSelf: "flex-start",
+  },
+  woButtonText: { fontSize: 11, lineHeight: 19, color: colors.primary, fontWeight: "700" },
+  woChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.pill,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+  },
+  woChipText: { minWidth: 0, flexShrink: 1 },
+  woChipCode: { fontSize: 11, lineHeight: 17, fontWeight: "700", color: colors.primaryDark },
+  woChipStatus: { fontSize: 10, lineHeight: 16, color: colors.primaryDark },
+  cardWorkOrder: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
 

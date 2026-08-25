@@ -21,6 +21,15 @@ export default function HomeScreen({ navigation }: Props) {
       onPress: () => navigation.navigate("MachineDashboard"),
     },
     {
+      key: "WorkOrders",
+      label: "ใบงานซ่อม",
+      description: "เปิดใบงาน มอบหมายช่าง และปิดงานเมื่อทำเสร็จ",
+      icon: "clipboard-outline",
+      tint: colors.primarySoft,
+      iconColor: colors.primary,
+      onPress: () => navigation.navigate("WorkOrderList"),
+    },
+    {
       key: "Reports",
       label: "รายงาน",
       description: "ใบงานรายวัน สรุปรายสัปดาห์ ภาพรวมผู้บริหาร และอะไหล่ที่ต้องสั่ง",

@@ -71,8 +71,29 @@ router.post("/cancelled-import", requireAuth, requireAdmin, upload.single("file"
   }
 });
 
-router.get("/", requireAuth, async (_req, res) => {
-  const branches = await prisma.branch.findMany({ orderBy: { name: "asc" } });
+/**
+ * รายชื่อสาขา
+ *
+ * ไม่ส่ง search มาก็ได้ทั้งหมดเหมือนเดิม เพราะหน้าจัดการสาขาและหน้ารายงานตัว
+ * ต้องการทั้งชุด ส่วนช่องค้นหาในฟอร์มใบงานส่ง search มาเพื่อไม่ต้องดึงพันกว่าแถว
+ * มากรองในเครื่องผู้ใช้
+ */
+router.get("/", requireAuth, async (req, res) => {
+  const keyword = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const branches = await prisma.branch.findMany({
+    where: keyword
+      ? {
+          // สาขาที่ยกเลิกแล้วไม่ควรถูกเลือกไปเปิดใบงานใหม่
+          cancelledAt: null,
+          OR: [
+            { code: { contains: keyword, mode: "insensitive" } },
+            { name: { contains: keyword, mode: "insensitive" } },
+          ],
+        }
+      : {},
+    orderBy: { name: "asc" },
+    ...(keyword ? { take: 20 } : {}),
+  });
   res.json(branches);
 });
 

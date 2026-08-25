@@ -9,6 +9,9 @@ import AssistantScreen from "../screens/AssistantScreen";
 import TransferDocumentScreen from "../screens/TransferDocumentScreen";
 import MachineDashboardScreen from "../screens/MachineDashboardScreen";
 import MachineImportScreen from "../screens/MachineImportScreen";
+import WorkOrderListScreen from "../screens/WorkOrderListScreen";
+import WorkOrderFormScreen from "../screens/WorkOrderFormScreen";
+import WorkOrderDetailScreen from "../screens/WorkOrderDetailScreen";
 import ReportsMenuScreen from "../screens/ReportsMenuScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
@@ -92,6 +95,21 @@ function HomeStackNavigator() {
         name="MachineImport"
         component={MachineImportScreen}
         options={{ title: "อัปโหลดรายงานเครื่อง" }}
+      />
+      <HomeStack.Screen
+        name="WorkOrderList"
+        component={WorkOrderListScreen}
+        options={{ title: "ใบงานซ่อม" }}
+      />
+      <HomeStack.Screen
+        name="WorkOrderForm"
+        component={WorkOrderFormScreen}
+        options={{ title: "เปิดใบงานใหม่" }}
+      />
+      <HomeStack.Screen
+        name="WorkOrderDetail"
+        component={WorkOrderDetailScreen}
+        options={{ title: "ใบงาน" }}
       />
       <HomeStack.Screen
         name="TransferDocument"
