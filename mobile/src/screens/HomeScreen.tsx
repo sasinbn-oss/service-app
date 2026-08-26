@@ -1,7 +1,9 @@
 import React from "react";
+import { StyleSheet, Text } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useAuth } from "../context/AuthContext";
-import { colors } from "../theme";
+import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
+import { colors, spacing } from "../theme";
 import MenuList, { MenuEntry } from "../components/MenuList";
 import { HomeStackParamList } from "../navigation/types";
 
@@ -117,6 +119,36 @@ export default function HomeScreen({ navigation }: Props) {
       title={`สวัสดี, ${user?.name ?? ""}`}
       subtitle="เลือกงานที่ต้องการทำ"
       entries={entries}
+      footer={<BuildLine />}
     />
   );
 }
+
+/**
+ * บอกว่าเว็บที่เปิดอยู่เป็น build ไหน
+ *
+ * เวลาแก้โค้ดแล้วของใหม่ยังไม่ขึ้น จะได้แยกออกว่าโค้ดไม่ทำงาน หรือแค่ยังไม่ได้ deploy
+ * ซึ่งจากหน้าจอเฉยๆ ดูไม่ออก
+ */
+function BuildLine() {
+  if (!BUILD_AT) return null;
+  const at = new Date(BUILD_AT);
+  const when = Number.isNaN(at.getTime())
+    ? BUILD_AT
+    : at.toLocaleString("th-TH", {
+        timeZone: "Asia/Bangkok",
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+  return <Text style={styles.build}>{`รุ่น ${BUILD_COMMIT} · build ${when}`}</Text>;
+}
+
+const styles = StyleSheet.create({
+  build: {
+    fontSize: 11,
+    lineHeight: 19,
+    color: colors.textFaint,
+    textAlign: "center",
+    marginTop: spacing.lg,
+  },
+});

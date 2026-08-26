@@ -19,10 +19,12 @@ interface Props {
   subtitle?: string;
   note?: string;
   entries: MenuEntry[];
+  /** วางท้ายรายการ ใช้กับบรรทัดบอกรุ่นของ build ในหน้าแรก */
+  footer?: React.ReactNode;
 }
 
 /** The shared card list every tab's landing screen is built from. */
-export default function MenuList({ title, subtitle, note, entries }: Props) {
+export default function MenuList({ title, subtitle, note, entries, footer }: Props) {
   return (
     <ScrollView
       style={styles.container}
@@ -60,6 +62,8 @@ export default function MenuList({ title, subtitle, note, entries }: Props) {
           <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
         </TouchableOpacity>
       ))}
+
+      {footer}
     </ScrollView>
   );
 }
