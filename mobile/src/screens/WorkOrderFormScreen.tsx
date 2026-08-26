@@ -18,8 +18,6 @@ import { Ionicons } from "@expo/vector-icons";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
-import DateField from "../components/DateField";
-import PartPicker, { PickedPart } from "../components/PartPicker";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -29,16 +27,11 @@ interface Option {
   value: string;
   label: string;
 }
-interface Technician {
-  id: number;
-  name: string;
-  employeeCode: string;
-}
-
 interface BranchOption {
   id: number;
   code: string;
   name: string;
+  region: string | null;
 }
 
 export default function WorkOrderFormScreen({ navigation, route }: Props) {
@@ -46,35 +39,26 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const fromBoard = outageId !== null;
 
   const [priorities, setPriorities] = useState<Option[]>([]);
-  const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
-  const [technicians, setTechnicians] = useState<Technician[]>([]);
 
   const [branchCode, setBranchCode] = useState(route.params?.branchCode ?? "");
   const [branchResults, setBranchResults] = useState<BranchOption[]>([]);
   const [branchTerm, setBranchTerm] = useState("");
   const [machineCode, setMachineCode] = useState("");
   const [title, setTitle] = useState(route.params?.presetTitle ?? "");
-  const [detail, setDetail] = useState("");
   const [priority, setPriority] = useState("NORMAL");
   const [symptom, setSymptom] = useState("");
-  const [workStatus, setWorkStatus] = useState<string | null>(null);
-  const [waitingParts, setWaitingParts] = useState<PickedPart[]>([]);
-  const [assignedToId, setAssignedToId] = useState<number | null>(null);
-  const [scheduledAt, setScheduledAt] = useState("");
 
+  const [branchRegion, setBranchRegion] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
+  const regionHint = branchRegion ? ` (ภาค${branchRegion})` : "";
+
   useEffect(() => {
     api
-      .get<{ priorities: Option[]; workStatuses: Option[]; technicians: Technician[] }>(
-        "/work-orders/options"
-      )
-      .then((res) => {
-        setPriorities(res.data.priorities);
-        setWorkStatuses(res.data.workStatuses);
-        setTechnicians(res.data.technicians);
-      })
+      .get<{ priorities: Option[] }>("/work-orders/options")
+      .then((res) => setPriorities(res.data.priorities))
       .catch(() => setError("โหลดตัวเลือกไม่สำเร็จ"));
   }, []);
 
@@ -106,18 +90,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     setSaving(true);
     setError(null);
     try {
+      // ส่งเฉพาะสิ่งที่ขั้นนี้รู้ อะไหล่ ช่าง และวันนัดเป็นของขั้นถัดไป
       const body = {
         title: title.trim(),
-        detail: detail.trim() || undefined,
         priority,
-        assignedToId,
-        scheduledAt: scheduledAt || null,
         symptom: symptom.trim() || null,
-        workStatus,
-        waitingParts: waitingParts.map((p) => ({
-          sparePartId: p.sparePartId,
-          quantity: p.quantity,
-        })),
       };
       const res = fromBoard
         ? await api.post(`/work-orders/from-outage/${outageId}`, body)
@@ -182,6 +159,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                         style={styles.result}
                         onPress={() => {
                           setBranchCode(b.code);
+                          setBranchRegion(b.region ?? null);
                           setBranchResults([]);
                         }}
                         activeOpacity={0.7}
@@ -220,19 +198,6 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           accessibilityLabel="เรื่องที่ให้ไปทำ"
         />
 
-        <Text style={styles.label}>รายละเอียดเพิ่มเติม</Text>
-        <TextInput
-          style={[styles.input, styles.multiline]}
-          value={detail}
-          onChangeText={setDetail}
-          placeholder="อาการที่พบ สิ่งที่ต้องเตรียมไป"
-          placeholderTextColor={colors.textFaint}
-          multiline
-          numberOfLines={3}
-          accessibilityLabel="รายละเอียดเพิ่มเติม"
-        />
-
-        {/* อาการกับสถานะ ชุดเดียวกับที่กระดานเคยให้กรอก ตอนนี้กรอกที่นี่ที่เดียว */}
         <Text style={styles.label}>อาการที่พบ</Text>
         <TextInput
           style={[styles.input, styles.multiline]}
@@ -244,36 +209,6 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           numberOfLines={2}
           accessibilityLabel="อาการที่พบ"
         />
-
-        <Text style={styles.label}>สถานะการดำเนินการ</Text>
-        <View style={styles.options}>
-          <TouchableOpacity
-            style={[styles.option, workStatus === null && styles.optionOn]}
-            onPress={() => setWorkStatus(null)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.optionText, workStatus === null && styles.optionTextOn]}>
-              ยังไม่ระบุ
-            </Text>
-          </TouchableOpacity>
-          {workStatuses.map((w) => (
-            <TouchableOpacity
-              key={w.value}
-              style={[styles.option, workStatus === w.value && styles.optionOn]}
-              onPress={() => setWorkStatus(w.value)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.optionText, workStatus === w.value && styles.optionTextOn]}>
-                {w.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* ช่องอะไหล่โผล่เฉพาะตอนรออะไหล่ ไม่งั้นฟอร์มยาวโดยไม่มีเหตุผล */}
-        {workStatus === "WAITING_PARTS" ? (
-          <PartPicker parts={waitingParts} onChange={setWaitingParts} label="รออะไหล่ตัวไหน" />
-        ) : null}
 
         <Text style={styles.label}>ความเร่งด่วน</Text>
         <View style={styles.options}>
@@ -291,32 +226,17 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           ))}
         </View>
 
-        <Text style={styles.label}>มอบหมายช่าง</Text>
-        <View style={styles.options}>
-          <TouchableOpacity
-            style={[styles.option, assignedToId === null && styles.optionOn]}
-            onPress={() => setAssignedToId(null)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.optionText, assignedToId === null && styles.optionTextOn]}>
-              ยังไม่ระบุ
-            </Text>
-          </TouchableOpacity>
-          {technicians.map((t) => (
-            <TouchableOpacity
-              key={t.id}
-              style={[styles.option, assignedToId === t.id && styles.optionOn]}
-              onPress={() => setAssignedToId(t.id)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.optionText, assignedToId === t.id && styles.optionTextOn]}>
-                {t.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        {/*
+          จบแค่นี้ — อะไหล่ ช่าง และวันนัด เป็นของขั้นถัดไปตามสายงาน
+          ถ้าให้กรอกตรงนี้ด้วย คนเปิดใบงานจะต้องรู้เรื่องที่ยังไม่มีใครรู้
+        */}
+        <View style={styles.next}>
+          <Ionicons name="arrow-forward-circle-outline" size={16} color={colors.textMuted} />
+          <Text style={styles.nextText}>
+            เปิดแล้วใบงานจะไปอยู่ที่หัวหน้าภาค{regionHint} เพื่อระบุอะไหล่ที่ต้องใช้
+            จากนั้นแอดมินเช็คคลัง หัวหน้าภาคจ่ายงาน แล้วช่างนัดวันเข้า
+          </Text>
         </View>
-
-        <DateField value={scheduledAt} onChange={setScheduledAt} label="วันที่นัดเข้า" />
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -341,6 +261,15 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
+  next: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    marginTop: spacing.xl,
+  },
+  nextText: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg },
   card: { backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.lg, ...shadow.card },
