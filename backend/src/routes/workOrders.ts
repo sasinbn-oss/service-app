@@ -15,6 +15,9 @@ import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { WAREHOUSES } from "../documents/warehouses";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
+  JOB_TYPES,
+  JOB_TYPE_HINTS,
+  JOB_TYPE_LABELS,
   ROLE_LABELS,
   WORK_ORDER_STAGE_ACTOR,
   WORK_ORDER_STAGE_ORDER,
@@ -148,6 +151,8 @@ function shape(w: WorkOrderRow) {
     id: w.id,
     code: w.code,
     source: w.source,
+    jobType: w.jobType,
+    jobTypeLabel: JOB_TYPE_LABELS[w.jobType] ?? w.jobType,
     title: w.title,
     detail: w.detail,
     status: w.status,
@@ -174,6 +179,8 @@ function shape(w: WorkOrderRow) {
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
       : null,
     closeNote: w.closeNote,
+    // ว่าง = หัวหน้าภาคยังไม่ได้ตัดสิน · false = ไม่ใช้อะไหล่ ข้ามขั้นเช็คคลัง
+    needsParts: w.needsParts,
     // ขั้นนี้รอใคร ให้หน้าจอตัดสินใจได้ว่าจะโชว์ปุ่มอะไรโดยไม่ต้องรู้กติกาเอง
     stageActor: WORK_ORDER_STAGE_ACTOR[w.status] ?? null,
     stageActorLabel: WORK_ORDER_STAGE_ACTOR[w.status]
@@ -316,6 +323,11 @@ router.get("/options", requireAuth, async (_req, res) => {
     // สถานะการดำเนินการของเคส ชุดเดียวกับที่กระดานเคยใช้
     workStatuses: WORK_STATUSES.map((v) => ({ value: v, label: WORK_STATUS_LABELS[v] })),
     warehouses: WAREHOUSES,
+    jobTypes: JOB_TYPES.map((v) => ({
+      value: v,
+      label: JOB_TYPE_LABELS[v],
+      hint: JOB_TYPE_HINTS[v],
+    })),
     // ลำดับขั้นทั้งหมด ให้หน้าจอวาดเส้นทางเดินงานได้โดยไม่ต้องเขียนลำดับซ้ำ
     stages: WORK_ORDER_STAGE_ORDER.map((v) => ({
       value: v,
@@ -361,6 +373,8 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 const createSchema = z.object({
   branchCode: z.string().min(1),
+  jobType: z.enum(JOB_TYPES).default("CM"),
+
   machineCode: z.string().optional(),
   title: z.string().min(1, "ต้องระบุเรื่องที่ให้ไปทำ"),
   detail: z.string().optional(),
@@ -393,6 +407,7 @@ async function createWorkOrder(
     machineId: number | null;
     outageId: number | null;
     source: string;
+    jobType: string;
     title: string;
     detail: string | null;
     priority: string;
@@ -455,6 +470,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       machineId,
       outageId: null,
       source: "MANUAL",
+      jobType: body.jobType,
       title: body.title.trim(),
       detail: body.detail?.trim() || null,
       priority: body.priority,
@@ -472,6 +488,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 });
 
 const fromOutageSchema = z.object({
+  jobType: z.enum(JOB_TYPES).default("CM"),
   title: z.string().optional(),
   detail: z.string().optional(),
   priority: z.enum(WORK_ORDER_PRIORITIES).default("NORMAL"),
@@ -533,6 +550,7 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
       machineId: isSignalLost ? null : outage.machine?.id ?? null,
       outageId,
       source: "OUTAGE",
+      jobType: body.jobType,
       title: body.title?.trim() || defaultTitle,
       // อาการที่เคยกรอกไว้ในเคสติดไปกับใบงานด้วย ช่างจะได้ไม่ต้องเปิดสองที่
       detail: body.detail?.trim() || outage.symptom || null,
@@ -694,8 +712,15 @@ async function guardStage(
   return { id: wo.id, status: wo.status, assignedToId: wo.assignedToId };
 }
 
-/** ขั้น 2 — หัวหน้าภาคระบุอะไหล่ที่ต้องใช้ */
+/**
+ * ขั้น 2 — หัวหน้าภาคตัดสินว่างานนี้ใช้อะไหล่ไหม
+ *
+ * ไม่ใช้อะไหล่ก็มีจริง เช่น เข้าไปประเมินอาการก่อน หรืองานที่แค่ปรับตั้ง
+ * กรณีนั้นข้ามขั้นเช็คคลังไปจัดคิวช่างเลย เพราะไม่มีอะไรให้แอดมินเช็ค
+ * การบังคับให้ผ่านขั้นที่ไม่มีงานทำคือการทำให้ใบงานค้างโดยไม่มีเหตุผล
+ */
 const partsSchema = z.object({
+  needsParts: z.boolean(),
   parts: z
     .array(
       z.object({
@@ -703,8 +728,8 @@ const partsSchema = z.object({
         quantity: z.number().int().min(1).max(999).default(1),
       })
     )
-    .min(1, "ต้องระบุอะไหล่อย่างน้อยหนึ่งรายการ")
-    .max(20),
+    .max(20)
+    .optional(),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -715,16 +740,32 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!(await guardStage(req, res, id, "NEW"))) return;
 
+  const { needsParts, parts, note } = parsed.data;
+  if (needsParts && (!parts || parts.length === 0)) {
+    return res.status(400).json({ error: "บอกว่าต้องใช้อะไหล่ ต้องระบุอย่างน้อยหนึ่งรายการ" });
+  }
+
+  const nextStatus = needsParts ? "PARTS_REQUESTED" : "PARTS_CHECKED";
+
   await prisma.$transaction(async (tx) => {
-    await replaceParts(tx, id, "WAITING", parsed.data.parts);
-    await tx.workOrder.update({ where: { id }, data: { status: "PARTS_REQUESTED" } });
+    // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
+    await replaceParts(tx, id, "WAITING", needsParts ? parts! : []);
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: nextStatus,
+        needsParts,
+        // เลิกรออะไหล่แล้ว ถ้าเคยขึ้นสถานะนี้ไว้จากรอบก่อน
+        ...(needsParts ? {} : { workStatus: null }),
+      },
+    });
     await writeLog(
       tx,
       id,
       req.auth!.userId,
-      "PARTS_REQUESTED",
-      "PARTS_REQUESTED",
-      parsed.data.note || null
+      needsParts ? "PARTS_REQUESTED" : "NO_PARTS",
+      nextStatus,
+      note || (needsParts ? null : "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   });
@@ -894,6 +935,77 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
       "IN_PROGRESS",
       parsed.data.note || `นัดเข้าวันที่ ${parsed.data.scheduledAt}`
     );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+
+/**
+ * ย้อนกลับไปให้หัวหน้าภาคประเมินอะไหล่ใหม่
+ *
+ * ช่างไปถึงหน้างานแล้วพบว่าต้องเปลี่ยนอะไหล่ ทั้งที่ตอนแรกตกลงกันว่าไม่ต้องใช้
+ * หรือของที่เตรียมไปไม่ตรงกับที่เสียจริง กรณีนี้เดินหน้าต่อไม่ได้และปิดงานก็ไม่จบ
+ *
+ * ส่งกลับไปขั้นแรกแทนการปิดแล้วเปิดใบใหม่ เพราะประวัติ เวลาที่ใช้ และเคสที่ผูกอยู่
+ * ต้องอยู่ใบเดียวกัน ไม่งั้นจะดูไม่ออกว่างานนี้ไปมาแล้วกี่รอบ
+ *
+ * ช่างที่ถือใบงานเป็นคนกด เพราะเป็นคนเดียวที่เห็นหน้างาน
+ */
+const rollbackSchema = z.object({
+  reason: z.string().trim().min(1, "ต้องบอกด้วยว่าเจออะไรที่หน้างาน").max(500),
+});
+
+router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+
+  const parsed = rollbackSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      code: true,
+      status: true,
+      assignedToId: true,
+      branch: { select: { region: true } },
+    },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+
+  // ย้อนได้เฉพาะตอนที่งานอยู่ในมือช่างแล้ว ก่อนหน้านั้นยังไม่มีใครไปเห็นหน้างาน
+  if (wo.status !== "ASSIGNED" && wo.status !== "IN_PROGRESS") {
+    return res.status(409).json({
+      error: `${wo.code} ยังไม่ได้อยู่ในมือช่าง — ตอนนี้อยู่ขั้น "${
+        WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status
+      }"`,
+    });
+  }
+  if (
+    req.auth!.role !== "ADMIN" &&
+    wo.assignedToId !== null &&
+    wo.assignedToId !== req.auth!.userId
+  ) {
+    return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: "NEW",
+        // เปิดให้ตัดสินใหม่ ของที่เคยเช็คไว้ไม่ตรงกับที่เจอจริงแล้ว
+        needsParts: null,
+        // ช่างคนเดิมยังติดอยู่กับใบงาน หัวหน้าภาคเปลี่ยนได้ตอนจ่ายงานรอบใหม่
+        scheduledAt: null,
+      },
+    });
+    // ผลเช็คคลังรอบก่อนล้างทิ้ง ไม่งั้นแอดมินจะเห็นว่า "เช็คแล้ว" ทั้งที่ของเปลี่ยนไป
+    await tx.workOrderPart.deleteMany({ where: { workOrderId: id, kind: "WAITING" } });
+    await writeLog(tx, id, req.auth!.userId, "PARTS_ROLLBACK", "NEW", parsed.data.reason);
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   });
 

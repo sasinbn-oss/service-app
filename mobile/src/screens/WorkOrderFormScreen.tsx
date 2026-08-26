@@ -26,6 +26,7 @@ type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderForm">;
 interface Option {
   value: string;
   label: string;
+  hint?: string;
 }
 interface BranchOption {
   id: number;
@@ -39,6 +40,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const fromBoard = outageId !== null;
 
   const [priorities, setPriorities] = useState<Option[]>([]);
+  const [jobTypes, setJobTypes] = useState<Option[]>([]);
+  const [jobType, setJobType] = useState("CM");
 
   const [branchCode, setBranchCode] = useState(route.params?.branchCode ?? "");
   const [branchResults, setBranchResults] = useState<BranchOption[]>([]);
@@ -57,8 +60,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     api
-      .get<{ priorities: Option[] }>("/work-orders/options")
-      .then((res) => setPriorities(res.data.priorities))
+      .get<{ priorities: Option[]; jobTypes: Option[] }>("/work-orders/options")
+      .then((res) => {
+        setPriorities(res.data.priorities);
+        setJobTypes(res.data.jobTypes);
+      })
       .catch(() => setError("โหลดตัวเลือกไม่สำเร็จ"));
   }, []);
 
@@ -92,6 +98,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     try {
       // ส่งเฉพาะสิ่งที่ขั้นนี้รู้ อะไหล่ ช่าง และวันนัดเป็นของขั้นถัดไป
       const body = {
+        jobType,
         title: title.trim(),
         priority,
         symptom: symptom.trim() || null,
@@ -189,13 +196,30 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         )}
 
         <Text style={styles.label}>เรื่องที่ให้ไปทำ</Text>
+        <View style={styles.options}>
+          {jobTypes.map((t) => (
+            <TouchableOpacity
+              key={t.value}
+              style={[styles.option, jobType === t.value && styles.optionOn]}
+              onPress={() => setJobType(t.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.optionText, jobType === t.value && styles.optionTextOn]}>
+                {t.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.jobHint}>{jobTypes.find((t) => t.value === jobType)?.hint ?? ""}</Text>
+
+        <Text style={styles.label}>หัวข้องาน</Text>
         <TextInput
           style={styles.input}
           value={title}
           onChangeText={setTitle}
-          placeholder="เช่น เครื่องอบไม่ร้อน ลูกค้าแจ้งทางไลน์"
+          placeholder="สรุปสั้นๆ ว่าให้ไปทำอะไร"
           placeholderTextColor={colors.textFaint}
-          accessibilityLabel="เรื่องที่ให้ไปทำ"
+          accessibilityLabel="หัวข้องาน"
         />
 
         <Text style={styles.label}>อาการที่พบ</Text>
@@ -261,6 +285,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
+  jobHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
   next: {
     flexDirection: "row",
     gap: spacing.sm,

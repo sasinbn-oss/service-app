@@ -158,6 +158,29 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
   "IN_PROGRESS",
 ] as const;
 
+/**
+ * ประเภทงาน — เรื่องที่ให้ไปทำ
+ *
+ * เป็นตัวเลือกตายตัวไม่ใช่ข้อความอิสระ เพราะต้องเอาไปนับแยกในรายงานได้
+ * ข้อความอิสระที่คนพิมพ์เองจะได้ "งานCM" "CM" "ซ่อม CM" ปนกันจนรวมยอดไม่ได้
+ */
+export const JOB_TYPES = ["CM", "PM", "PROJECT", "PARTS_CLEARING"] as const;
+export type JobType = (typeof JOB_TYPES)[number];
+
+export const JOB_TYPE_LABELS: Record<string, string> = {
+  CM: "งาน CM",
+  PM: "งาน PM",
+  PROJECT: "งาน Project",
+  PARTS_CLEARING: "งานระบายอะไหล่",
+};
+
+export const JOB_TYPE_HINTS: Record<string, string> = {
+  CM: "ซ่อมแก้เมื่อเครื่องเสีย",
+  PM: "บำรุงรักษาตามรอบ",
+  PROJECT: "งานติดตั้งหรือปรับปรุง",
+  PARTS_CLEARING: "ย้ายหรือระบายอะไหล่ระหว่างคลัง",
+};
+
 export const WORK_ORDER_PRIORITIES = ["URGENT", "NORMAL", "LOW"] as const;
 
 export const WORK_ORDER_PRIORITY_LABELS: Record<string, string> = {
@@ -184,6 +207,8 @@ export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
 export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CREATED: "เปิดใบงาน",
   PARTS_REQUESTED: "ระบุอะไหล่ที่ต้องใช้",
+  NO_PARTS: "ระบุว่าไม่ต้องใช้อะไหล่",
+  PARTS_ROLLBACK: "ส่งกลับให้ประเมินอะไหล่ใหม่",
   PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
   ASSIGNED: "จ่ายงานให้ช่าง",
   SCHEDULED: "ช่างนัดวันเข้า",

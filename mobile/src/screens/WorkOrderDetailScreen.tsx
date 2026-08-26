@@ -65,6 +65,9 @@ interface WorkOrder {
   workStatus: string | null;
   workStatusLabel: string | null;
   assignedToId: number | null;
+  jobType: string;
+  jobTypeLabel: string;
+  needsParts: boolean | null;
   stageActor: string | null;
   stageActorLabel: string | null;
   waitingParts: StockPart[];
@@ -110,6 +113,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [editingNote, setEditingNote] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
+  const [rollbackOpen, setRollbackOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +203,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
 
         <View style={styles.divider} />
 
+        <Row label="ประเภทงาน" value={order.jobTypeLabel} />
         <Row label="สาขา" value={`${order.branchCode} · ${order.branchName}`} />
         {order.region ? <Row label="ภาค" value={order.region} /> : null}
         <Row
@@ -319,8 +324,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
         {stages.map((stage, i) => {
           const currentIndex = stages.findIndex((x) => x.value === order.status);
-          const state =
-            order.status === "CANCELLED"
+          // ขั้นเช็คคลังถูกข้ามเมื่อไม่ใช้อะไหล่ ต้องเห็นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
+          const skipped =
+            stage.value === "PARTS_REQUESTED" && order.needsParts === false;
+          const state = skipped
+            ? "skipped"
+            : order.status === "CANCELLED"
               ? "future"
               : i < currentIndex || order.status === "DONE"
                 ? "done"
@@ -331,11 +340,13 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             <View key={stage.value} style={styles.stageRow}>
               <Ionicons
                 name={
-                  state === "done"
-                    ? "checkmark-circle"
-                    : state === "now"
-                      ? "ellipse"
-                      : "ellipse-outline"
+                  state === "skipped"
+                    ? "remove-circle-outline"
+                    : state === "done"
+                      ? "checkmark-circle"
+                      : state === "now"
+                        ? "ellipse"
+                        : "ellipse-outline"
                 }
                 size={16}
                 color={
@@ -350,12 +361,15 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                 style={[
                   styles.stageLabel,
                   state === "now" && styles.stageLabelNow,
-                  state === "future" && styles.stageLabelFuture,
+                  (state === "future" || state === "skipped") && styles.stageLabelFuture,
+                  state === "skipped" && styles.stageLabelSkipped,
                 ]}
               >
                 {stage.label}
               </Text>
-              {stage.actorLabel && state !== "done" ? (
+              {state === "skipped" ? (
+                <Text style={styles.stageActor}>ข้าม — ไม่ใช้อะไหล่</Text>
+              ) : stage.actorLabel && state !== "done" ? (
                 <Text style={styles.stageActor}>{stage.actorLabel}</Text>
               ) : null}
             </View>
@@ -365,48 +379,68 @@ export default function WorkOrderDetailScreen({ route }: Props) {
 
       {!done ? (
         myTurn(order) ? (
-          <View style={styles.actions}>
-            {order.status !== "ASSIGNED" && order.status !== "IN_PROGRESS" ? (
-              <TouchableOpacity
-                style={[styles.action, styles.actionPrimary]}
-                onPress={() => setStageOpen(true)}
-                disabled={busy}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="arrow-forward-circle" size={18} color="#fff" />
-                <Text style={styles.actionPrimaryText}>
-                  {order.status === "NEW"
-                    ? "ระบุอะไหล่ที่ต้องใช้"
-                    : order.status === "PARTS_REQUESTED"
-                      ? "เช็คอะไหล่ในคลัง"
-                      : "จ่ายงานให้ช่าง"}
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <>
-                {order.status === "ASSIGNED" ? (
-                  <TouchableOpacity
-                    style={[styles.action, styles.actionSecondary]}
-                    onPress={() => setStageOpen(true)}
-                    disabled={busy}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-                    <Text style={styles.actionSecondaryText}>นัดวันเข้างาน</Text>
-                  </TouchableOpacity>
-                ) : null}
+          <>
+            <View style={styles.actions}>
+              {order.status !== "ASSIGNED" && order.status !== "IN_PROGRESS" ? (
                 <TouchableOpacity
                   style={[styles.action, styles.actionPrimary]}
-                  onPress={() => setClosing(true)}
+                  onPress={() => setStageOpen(true)}
                   disabled={busy}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="checkmark-done" size={18} color="#fff" />
-                  <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                  <Ionicons name="arrow-forward-circle" size={18} color="#fff" />
+                  <Text style={styles.actionPrimaryText}>
+                    {order.status === "NEW"
+                      ? "ระบุอะไหล่ที่ต้องใช้"
+                      : order.status === "PARTS_REQUESTED"
+                        ? "เช็คอะไหล่ในคลัง"
+                        : "จ่ายงานให้ช่าง"}
+                  </Text>
                 </TouchableOpacity>
-              </>
-            )}
-          </View>
+              ) : (
+                <>
+                  {order.status === "ASSIGNED" ? (
+                    <TouchableOpacity
+                      style={[styles.action, styles.actionSecondary]}
+                      onPress={() => setStageOpen(true)}
+                      disabled={busy}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+                      <Text style={styles.actionSecondaryText}>นัดวันเข้างาน</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    style={[styles.action, styles.actionPrimary]}
+                    onPress={() => setClosing(true)}
+                    disabled={busy}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="checkmark-done" size={18} color="#fff" />
+                    <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+
+            {/*
+              ไปถึงหน้างานแล้วเจอว่าต้องเปลี่ยนอะไหล่ ทั้งที่ตอนแรกตกลงว่าไม่ต้องใช้
+              เดินหน้าต่อไม่ได้และปิดงานก็ไม่จบ จึงต้องมีทางส่งกลับ
+            */}
+            {order.status === "ASSIGNED" || order.status === "IN_PROGRESS" ? (
+              <TouchableOpacity
+                style={styles.rollback}
+                onPress={() => setRollbackOpen(true)}
+                disabled={busy}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
+                <Text style={styles.rollbackText}>
+                  หน้างานต้องเปลี่ยนอะไหล่ — ส่งกลับให้หัวหน้าภาคประเมินใหม่
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
         ) : (
           <View style={[styles.card, styles.waitingCard]}>
             <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
@@ -436,6 +470,16 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           </View>
         ))}
       </View>
+
+      <RollbackModal
+        visible={rollbackOpen}
+        order={order}
+        onCancel={() => setRollbackOpen(false)}
+        onDone={async () => {
+          setRollbackOpen(false);
+          await load();
+        }}
+      />
 
       <StageModal
         visible={stageOpen}
@@ -486,6 +530,95 @@ export default function WorkOrderDetailScreen({ route }: Props) {
  * รวมไว้ตัวเดียวเพราะทั้งสี่ขั้นเป็นเรื่องเดียวกัน คือ "ทำสิ่งที่ค้างอยู่แล้วส่งต่อ"
  * แยกเป็นสี่หน้าจอจะได้โค้ดซ้ำสี่ชุดที่ต้องแก้พร้อมกันทุกครั้ง
  */
+/**
+ * ยืนยันส่งกลับให้ประเมินอะไหล่ใหม่
+ *
+ * บังคับให้บอกเหตุผล เพราะหัวหน้าภาคที่รับกลับมาต้องรู้ว่าเจออะไรที่หน้างาน
+ * ถึงจะระบุอะไหล่ได้ถูก การส่งกลับเปล่าๆ คือโยนงานกลับโดยไม่บอกอะไรเลย
+ */
+function RollbackModal({
+  visible,
+  order,
+  onCancel,
+  onDone,
+}: {
+  visible: boolean;
+  order: WorkOrder;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setReason("");
+    setError(null);
+  }, [visible]);
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/reassess-parts`, { reason: reason.trim() });
+      onDone();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.backdrop}>
+        <View style={styles.modal}>
+          <ScrollView contentContainerStyle={styles.modalBody}>
+            <Text style={styles.modalTitle}>ส่งกลับให้ประเมินอะไหล่ใหม่</Text>
+            <Text style={styles.linkedText}>
+              {order.code} จะกลับไปขั้นแรก ให้หัวหน้าภาคระบุอะไหล่อีกรอบ
+              วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
+            </Text>
+
+            <Text style={styles.modalLabel}>เจออะไรที่หน้างาน</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={reason}
+              onChangeText={setReason}
+              placeholder="เช่น ไปถึงแล้วพบว่าบอร์ดควบคุมไหม้ ต้องเปลี่ยน"
+              placeholderTextColor={colors.textFaint}
+              multiline
+              numberOfLines={3}
+              accessibilityLabel="เจออะไรที่หน้างาน"
+            />
+
+            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+          </ScrollView>
+
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+              <Text style={styles.modalCancelText}>ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalSave, (saving || !reason.trim()) && styles.modalSaveOff]}
+              onPress={submit}
+              disabled={saving || !reason.trim()}
+              activeOpacity={0.8}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.modalSaveText}>ส่งกลับ</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function StageModal({
   visible,
   order,
@@ -501,6 +634,7 @@ function StageModal({
   onCancel: () => void;
   onDone: () => void;
 }) {
+  const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
   const [checks, setChecks] = useState<Record<number, { inStock: boolean | null; warehouse: string | null }>>({});
   const [techId, setTechId] = useState<number | null>(null);
@@ -511,6 +645,7 @@ function StageModal({
 
   useEffect(() => {
     if (!visible) return;
+    setNeedsParts(order.needsParts);
     setParts(order.waitingParts);
     setChecks(
       Object.fromEntries(
@@ -529,7 +664,10 @@ function StageModal({
     try {
       if (order.status === "NEW") {
         await api.post(`/work-orders/${order.id}/parts`, {
-          parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+          needsParts,
+          parts: needsParts
+            ? parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }))
+            : [],
           note: note.trim() || undefined,
         });
       } else if (order.status === "PARTS_REQUESTED") {
@@ -567,7 +705,7 @@ function StageModal({
       return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse);
     });
   const blocked =
-    (order.status === "NEW" && parts.length === 0) ||
+    (order.status === "NEW" && (needsParts === null || (needsParts && parts.length === 0))) ||
     (order.status === "PARTS_CHECKED" && techId === null) ||
     (order.status === "ASSIGNED" && !/^\d{4}-\d{2}-\d{2}$/.test(visit)) ||
     unchecked;
@@ -589,7 +727,37 @@ function StageModal({
             </Text>
 
             {order.status === "NEW" ? (
-              <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
+              <>
+                <Text style={styles.modalLabel}>งานนี้ต้องใช้อะไหล่ไหม</Text>
+                <View style={styles.options}>
+                  <TouchableOpacity
+                    style={[styles.option, needsParts === true && styles.optionOn]}
+                    onPress={() => setNeedsParts(true)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.optionText, needsParts === true && styles.optionTextOn]}>
+                      ใช้อะไหล่
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.option, needsParts === false && styles.optionOn]}
+                    onPress={() => setNeedsParts(false)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.optionText, needsParts === false && styles.optionTextOn]}>
+                      ไม่ใช้อะไหล่
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {needsParts === true ? (
+                  <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
+                ) : needsParts === false ? (
+                  <Text style={styles.linkedText}>
+                    ข้ามขั้นเช็คคลัง ไปจัดคิวช่างเลย — เช่น ให้เข้าไปประเมินอาการก่อน
+                    ถ้าไปถึงแล้วต้องเปลี่ยนอะไหล่ ช่างส่งกลับมาให้ประเมินใหม่ได้
+                  </Text>
+                ) : null}
+              </>
             ) : null}
 
             {order.status === "PARTS_REQUESTED" ? (
@@ -679,8 +847,9 @@ function StageModal({
                       onPress={() => setTechId(t.id)}
                       activeOpacity={0.7}
                     >
+                      {/* ใส่รหัสพนักงานด้วย ชื่อซ้ำกันเกิดขึ้นจริงและกดผิดคนแล้วงานไปผิดมือ */}
                       <Text style={[styles.optionText, techId === t.id && styles.optionTextOn]}>
-                        {t.name}
+                        {t.name} · {t.employeeCode}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -876,6 +1045,7 @@ function CloseModal({
 }) {
   const [result, setResult] = useState("FIXED");
   const [note, setNote] = useState("");
+  const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1008,7 +1178,20 @@ const styles = StyleSheet.create({
   stageLabel: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.text },
   stageLabelNow: { fontWeight: "700", color: colors.primary },
   stageLabelFuture: { color: colors.textFaint },
+  stageLabelSkipped: { textDecorationLine: "line-through" },
   stageActor: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
+  rollback: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    borderRadius: radius.sm,
+    backgroundColor: colors.warningSoft,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  rollbackText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.warning, fontWeight: "600" },
   waitingCard: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   waitingText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },

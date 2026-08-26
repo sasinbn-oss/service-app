@@ -442,8 +442,10 @@ model WorkOrder {
   machineId Int?
   machine   Machine? @relation(fields: [machineId], references: [id], onDelete: SetNull)
 
-  title  String
-  detail String?
+  // ประเภทงาน — ดูค่าที่ใช้ได้ที่ JOB_TYPES ใน src/utils/constants.ts
+  jobType String  @default("CM")
+  title   String
+  detail  String?
 
   // ── อาการและสถานะ — ที่เดียวกับที่เคยกรอกบนกระดาน ──
   //
@@ -463,6 +465,12 @@ model WorkOrder {
   // แอดมินเช็คคลัง → หัวหน้าภาคจ่ายงาน → ช่างนัดวัน → ช่างปิดงาน
   // ข้ามขั้นไม่ได้ ไม่งั้นจะมีใบที่จ่ายให้ช่างทั้งที่ยังไม่รู้ว่ามีอะไหล่หรือเปล่า
   status     String  @default("NEW")
+
+  // งานนี้ต้องใช้อะไหล่ไหม — หัวหน้าภาคเป็นคนตัดสินในขั้นที่ 2
+  //
+  // ว่าง = ยังไม่ได้ตัดสิน · true = ต้องใช้ ไปให้แอดมินเช็คคลังต่อ
+  // false = ไม่ใช้ ข้ามขั้นเช็คคลังไปจัดคิวช่างเลย เช่น เข้าไปประเมินอาการก่อน
+  needsParts Boolean?
 
   assignedToId Int?
   assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
