@@ -436,12 +436,23 @@ model WorkOrder {
   machineId Int?
   machine   Machine? @relation(fields: [machineId], references: [id], onDelete: SetNull)
 
-  title    String
-  detail   String?
+  title  String
+  detail String?
+
+  // ── อาการและสถานะ — ที่เดียวกับที่เคยกรอกบนกระดาน ──
+  //
+  // อยู่ที่ใบงานเพราะคนที่รู้คือช่างที่ถือใบงานไป ไม่ใช่คนที่นั่งดูกระดาน
+  // กระดานยังแสดงค่าเหล่านี้อยู่ แต่ดึงจากใบงานแทนที่จะให้กรอกซ้ำอีกที่
+  //
+  // ค่าที่กรอกที่นี่ถูกคัดลอกไปไว้ที่ Outage ด้วย เพื่อให้ตัวกรอง รายงาน
+  // และประวัติที่อ่านจากเคสอยู่แล้วทำงานต่อได้โดยไม่ต้องรื้อ
+  symptom    String?
+  // ดูค่าที่ใช้ได้ที่ WORK_STATUSES ใน src/utils/constants.ts — ชุดเดียวกับของเคส
+  workStatus String?
   // ดูค่าที่ใช้ได้ที่ WORK_ORDER_PRIORITIES ใน src/utils/constants.ts
-  priority String  @default("NORMAL")
+  priority   String  @default("NORMAL")
   // ดูค่าที่ใช้ได้ที่ WORK_ORDER_STATUSES ใน src/utils/constants.ts
-  status   String  @default("OPEN")
+  status     String  @default("OPEN")
 
   assignedToId Int?
   assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
@@ -477,8 +488,13 @@ model WorkOrderPart {
   sparePartId Int
   sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
   quantity    Int       @default(1)
+  // WAITING (รออะไหล่ตัวนี้อยู่) | USED (ใช้ไปจริงตอนปิดงาน)
+  //
+  // สองอย่างนี้ต่างกันจริง ของที่รอกับของที่ใช้ไม่จำเป็นต้องตรงกัน ช่างอาจไปถึง
+  // แล้วพบว่าเสียคนละจุด ถ้าเก็บรวมกันจะแยกไม่ออกว่ายอดที่ต้องสั่งซื้อคือเท่าไหร่
+  kind        String    @default("USED")
 
-  @@unique([workOrderId, sparePartId])
+  @@unique([workOrderId, sparePartId, kind])
 }
 
 // ประวัติทุกครั้งที่ใบงานเปลี่ยนมือหรือเปลี่ยนสถานะ

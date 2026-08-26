@@ -711,6 +711,10 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       <NoteModal
         row={editing}
         options={statusOptions}
+        onOpenWorkOrder={(r) => {
+          setEditing(null);
+          openWorkOrder(r);
+        }}
         onClose={() => setEditing(null)}
         onSaved={(updated) => {
           applyNote(updated);
@@ -732,11 +736,13 @@ function NoteModal({
   options,
   onClose,
   onSaved,
+  onOpenWorkOrder,
 }: {
   row: OutageRow | null;
   options: WorkStatusOption[];
   onClose: () => void;
   onSaved: (row: OutageRow) => void;
+  onOpenWorkOrder: (row: OutageRow) => void;
 }) {
   const [symptom, setSymptom] = useState("");
   const [status, setStatus] = useState<string | null>(null);
@@ -804,6 +810,34 @@ function NoteModal({
               {` · ดับมาแล้ว ${slaText(row.slaHours)}`}
             </Text>
 
+            {/*
+              เคสที่มีใบงานแล้ว ให้ไปแก้ที่ใบงานที่เดียว
+              สองที่ที่แก้ได้พร้อมกันแปลว่าจะมีอันหนึ่งเก่ากว่าเสมอ แล้วไม่มีใครรู้ว่าอันไหน
+            */}
+            {row.workOrder ? (
+              <View style={styles.fromWo}>
+                <Ionicons name="clipboard-outline" size={16} color={colors.primaryDark} />
+                <View style={styles.fromWoBody}>
+                  <Text style={styles.fromWoTitle}>
+                    เคสนี้มีใบงาน {row.workOrder.code} อยู่แล้ว
+                  </Text>
+                  <Text style={styles.fromWoText}>
+                    อาการและสถานะกรอกที่ใบงาน แล้วกระดานจะดึงมาแสดงให้เอง
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.fromWoButton}
+                    onPress={() => onOpenWorkOrder(row)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.fromWoButtonText}>เปิดใบงาน {row.workOrder.code}</Text>
+                    <Ionicons name="arrow-forward" size={14} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
+
+            {!row.workOrder ? (
+              <>
             <Text style={styles.modalLabel}>อาการที่พบ</Text>
             <TextInput
               style={styles.modalInput}
@@ -848,6 +882,8 @@ function NoteModal({
             {status === WAITING_TECH || visitDate ? (
               <VisitDateField value={visitDate} onChange={setVisitDate} />
             ) : null}
+              </>
+            ) : null}
 
             {logs.length > 0 ? (
               <>
@@ -869,8 +905,9 @@ function NoteModal({
 
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.modalCancel} onPress={onClose} activeOpacity={0.7}>
-                <Text style={styles.modalCancelText}>ยกเลิก</Text>
+                <Text style={styles.modalCancelText}>{row.workOrder ? "ปิด" : "ยกเลิก"}</Text>
               </TouchableOpacity>
+              {row.workOrder ? null : (
               <TouchableOpacity
                 style={[styles.modalSave, saving && styles.modalSaveDisabled]}
                 onPress={save}
@@ -883,6 +920,7 @@ function NoteModal({
                   <Text style={styles.modalSaveText}>บันทึก</Text>
                 )}
               </TouchableOpacity>
+              )}
             </View>
           </ScrollView>
         </Pressable>
@@ -1402,6 +1440,10 @@ function NoteLine({ row }: { row: OutageRow }) {
         </View>
       ) : null}
       {row.symptom ? <Text style={styles.noteSymptom}>{row.symptom}</Text> : null}
+      {/* บอกว่าค่าที่เห็นมาจากใบงาน ไม่ใช่ของที่ใครมากรอกบนกระดาน */}
+      {row.workOrder && (row.symptom || row.workStatusLabel) ? (
+        <Text style={styles.noteSource}>จาก {row.workOrder.code}</Text>
+      ) : null}
     </>
   );
 }
@@ -1532,6 +1574,30 @@ function OutageCard({
 }
 
 const styles = StyleSheet.create({
+  noteSource: { fontSize: 10, lineHeight: 16, color: colors.textFaint },
+  fromWo: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  fromWoBody: { flex: 1, minWidth: 0, gap: 2 },
+  fromWoTitle: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.primaryDark },
+  fromWoText: { fontSize: 12, lineHeight: 20, color: colors.primaryDark },
+  fromWoButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    alignSelf: "flex-start",
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  fromWoButtonText: { fontSize: 12, lineHeight: 20, color: "#fff", fontWeight: "700" },
   woButton: {
     flexDirection: "row",
     alignItems: "center",

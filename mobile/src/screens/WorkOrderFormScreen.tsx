@@ -19,6 +19,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import DateField from "../components/DateField";
+import PartPicker, { PickedPart } from "../components/PartPicker";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -45,6 +46,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const fromBoard = outageId !== null;
 
   const [priorities, setPriorities] = useState<Option[]>([]);
+  const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
 
   const [branchCode, setBranchCode] = useState(route.params?.branchCode ?? "");
@@ -54,6 +56,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [title, setTitle] = useState(route.params?.presetTitle ?? "");
   const [detail, setDetail] = useState("");
   const [priority, setPriority] = useState("NORMAL");
+  const [symptom, setSymptom] = useState("");
+  const [workStatus, setWorkStatus] = useState<string | null>(null);
+  const [waitingParts, setWaitingParts] = useState<PickedPart[]>([]);
   const [assignedToId, setAssignedToId] = useState<number | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
 
@@ -62,9 +67,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     api
-      .get<{ priorities: Option[]; technicians: Technician[] }>("/work-orders/options")
+      .get<{ priorities: Option[]; workStatuses: Option[]; technicians: Technician[] }>(
+        "/work-orders/options"
+      )
       .then((res) => {
         setPriorities(res.data.priorities);
+        setWorkStatuses(res.data.workStatuses);
         setTechnicians(res.data.technicians);
       })
       .catch(() => setError("โหลดตัวเลือกไม่สำเร็จ"));
@@ -104,6 +112,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         priority,
         assignedToId,
         scheduledAt: scheduledAt || null,
+        symptom: symptom.trim() || null,
+        workStatus,
+        waitingParts: waitingParts.map((p) => ({
+          sparePartId: p.sparePartId,
+          quantity: p.quantity,
+        })),
       };
       const res = fromBoard
         ? await api.post(`/work-orders/from-outage/${outageId}`, body)
@@ -217,6 +231,49 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           numberOfLines={3}
           accessibilityLabel="รายละเอียดเพิ่มเติม"
         />
+
+        {/* อาการกับสถานะ ชุดเดียวกับที่กระดานเคยให้กรอก ตอนนี้กรอกที่นี่ที่เดียว */}
+        <Text style={styles.label}>อาการที่พบ</Text>
+        <TextInput
+          style={[styles.input, styles.multiline]}
+          value={symptom}
+          onChangeText={setSymptom}
+          placeholder="เช่น ประตูไม่ล็อก / บอร์ดควบคุมไหม้"
+          placeholderTextColor={colors.textFaint}
+          multiline
+          numberOfLines={2}
+          accessibilityLabel="อาการที่พบ"
+        />
+
+        <Text style={styles.label}>สถานะการดำเนินการ</Text>
+        <View style={styles.options}>
+          <TouchableOpacity
+            style={[styles.option, workStatus === null && styles.optionOn]}
+            onPress={() => setWorkStatus(null)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.optionText, workStatus === null && styles.optionTextOn]}>
+              ยังไม่ระบุ
+            </Text>
+          </TouchableOpacity>
+          {workStatuses.map((w) => (
+            <TouchableOpacity
+              key={w.value}
+              style={[styles.option, workStatus === w.value && styles.optionOn]}
+              onPress={() => setWorkStatus(w.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.optionText, workStatus === w.value && styles.optionTextOn]}>
+                {w.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* ช่องอะไหล่โผล่เฉพาะตอนรออะไหล่ ไม่งั้นฟอร์มยาวโดยไม่มีเหตุผล */}
+        {workStatus === "WAITING_PARTS" ? (
+          <PartPicker parts={waitingParts} onChange={setWaitingParts} label="รออะไหล่ตัวไหน" />
+        ) : null}
 
         <Text style={styles.label}>ความเร่งด่วน</Text>
         <View style={styles.options}>

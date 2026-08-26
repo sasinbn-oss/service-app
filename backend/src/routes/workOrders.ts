@@ -14,6 +14,8 @@ import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
+  WORK_STATUSES,
+  WORK_STATUS_LABELS,
   WORK_ORDER_PRIORITIES,
   WORK_ORDER_PRIORITY_LABELS,
   WORK_ORDER_RESULTS,
@@ -38,6 +40,99 @@ const detailInclude = {
     orderBy: { id: "asc" },
   },
 } as const;
+
+/**
+ * คัดลอกอาการและสถานะจากใบงานไปไว้ที่เคส
+ *
+ * ใบงานเป็นที่ที่คนกรอก แต่ตัวกรองบนกระดาน รายงานอะไหล่ที่ต้องสั่ง และรายงานรายวัน
+ * อ่านจากเคสอยู่แล้ว ถ้าย้ายไปอยู่ที่ใบงานอย่างเดียวต้องรื้อทั้งหมดนั้น
+ * จึงเก็บสำเนาไว้ที่เคสด้วย แล้วให้ใบงานเป็นฝ่ายเขียน
+ *
+ * เขียนประวัติของเคสด้วยทุกครั้ง ประวัติจะได้ต่อเนื่องกับของเดิมที่กรอกบนกระดาน
+ * ไม่ใช่ขาดหายไปตอนที่เริ่มใช้ใบงาน
+ */
+async function syncOutageFromWorkOrder(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  workOrderId: number,
+  userId: number
+) {
+  const wo = await tx.workOrder.findUnique({
+    where: { id: workOrderId },
+    select: {
+      outageId: true,
+      code: true,
+      symptom: true,
+      workStatus: true,
+      scheduledAt: true,
+      parts: {
+        where: { kind: "WAITING" },
+        select: {
+          quantity: true,
+          sparePart: { select: { partCode: true, id: true } },
+        },
+        orderBy: { id: "asc" },
+      },
+    },
+  });
+  if (!wo || wo.outageId === null) return;
+
+  await tx.outage.update({
+    where: { id: wo.outageId },
+    data: {
+      symptom: wo.symptom,
+      workStatus: wo.workStatus,
+      scheduledVisitAt: wo.scheduledAt,
+      noteUpdatedAt: new Date(),
+      noteUpdatedById: userId,
+    },
+  });
+
+  await tx.outagePart.deleteMany({ where: { outageId: wo.outageId } });
+  if (wo.parts.length > 0) {
+    await tx.outagePart.createMany({
+      data: wo.parts.map((p) => ({
+        outageId: wo.outageId!,
+        sparePartId: p.sparePart.id,
+        quantity: p.quantity,
+      })),
+    });
+  }
+
+  const summary =
+    wo.parts.length === 0
+      ? null
+      : wo.parts
+          .map((p) => (p.quantity > 1 ? `${p.sparePart.partCode} x${p.quantity}` : p.sparePart.partCode))
+          .join(", ");
+
+  await tx.outageNoteLog.create({
+    data: {
+      outageId: wo.outageId,
+      userId,
+      symptom: wo.symptom,
+      workStatus: wo.workStatus,
+      scheduledVisitAt: wo.scheduledAt,
+      partsSummary: summary ? `${summary} (${wo.code})` : wo.code,
+    },
+  });
+}
+
+/** แทนที่อะไหล่ของใบงานทั้งชุดเฉพาะประเภทที่ระบุ ไม่แตะอีกประเภท */
+async function replaceParts(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  workOrderId: number,
+  kind: "WAITING" | "USED",
+  parts: { sparePartId: number; quantity: number }[]
+) {
+  await tx.workOrderPart.deleteMany({ where: { workOrderId, kind } });
+  // ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error
+  const merged = new Map<number, number>();
+  for (const p of parts) merged.set(p.sparePartId, (merged.get(p.sparePartId) ?? 0) + p.quantity);
+  if (merged.size === 0) return;
+  await tx.workOrderPart.createMany({
+    data: [...merged].map(([sparePartId, quantity]) => ({ workOrderId, sparePartId, quantity, kind })),
+  });
+}
 
 type WorkOrderRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ include: typeof detailInclude }>>
@@ -74,17 +169,30 @@ function shape(w: WorkOrderRow) {
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
       : null,
     closeNote: w.closeNote,
+    // อาการกับสถานะ — ชุดเดียวกับที่กระดานเคยให้กรอก
+    symptom: w.symptom,
+    workStatus: w.workStatus,
+    workStatusLabel: w.workStatus ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus : null,
     outageId: w.outageId,
     // เคสยังเปิดอยู่ไหมตอนนี้ ใช้เตือนตอนปิดงานว่าเครื่องยังไม่กลับมา
     outageStillOpen: w.outage ? w.outage.endedAt === null : null,
     outageKind: w.outage?.kind ?? null,
-    parts: w.parts.map((p) => ({
-      sparePartId: p.sparePart.id,
-      partCode: p.sparePart.partCode,
-      name: p.sparePart.name,
-      brand: p.sparePart.brand,
-      quantity: p.quantity,
-    })),
+    // อะไหล่ที่รออยู่ กับอะไหล่ที่ใช้ไปจริง เป็นคนละชุด
+    waitingParts: w.parts.filter((p) => p.kind === "WAITING").map(partShape),
+    parts: w.parts.filter((p) => p.kind !== "WAITING").map(partShape),
+  };
+}
+
+function partShape(p: {
+  quantity: number;
+  sparePart: { id: number; partCode: string; name: string; brand: string | null };
+}) {
+  return {
+    sparePartId: p.sparePart.id,
+    partCode: p.sparePart.partCode,
+    name: p.sparePart.name,
+    brand: p.sparePart.brand,
+    quantity: p.quantity,
   };
 }
 
@@ -167,6 +275,8 @@ router.get("/options", requireAuth, async (_req, res) => {
       label: WORK_ORDER_PRIORITY_LABELS[v],
     })),
     results: WORK_ORDER_RESULTS.map((v) => ({ value: v, label: WORK_ORDER_RESULT_LABELS[v] })),
+    // สถานะการดำเนินการของเคส ชุดเดียวกับที่กระดานเคยใช้
+    workStatuses: WORK_STATUSES.map((v) => ({ value: v, label: WORK_STATUS_LABELS[v] })),
     technicians,
   });
 });
@@ -209,6 +319,18 @@ const createSchema = z.object({
   priority: z.enum(WORK_ORDER_PRIORITIES).default("NORMAL"),
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
+  symptom: z.string().trim().max(500).nullable().optional(),
+  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
+  waitingParts: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(999).default(1),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 /**
@@ -228,7 +350,10 @@ async function createWorkOrder(
     priority: string;
     assignedToId: number | null;
     scheduledAt: Date | null;
+    symptom: string | null;
+    workStatus: string | null;
   },
+  waitingParts: { sparePartId: number; quantity: number }[],
   userId: number
 ) {
   return prisma.$transaction(async (tx) => {
@@ -239,7 +364,10 @@ async function createWorkOrder(
       where: { id: created.id },
       data: { code: workOrderCode(created.id) },
     });
+    if (waitingParts.length > 0) await replaceParts(tx, created.id, "WAITING", waitingParts);
     await writeLog(tx, created.id, userId, "CREATED", "OPEN", null);
+    // เคสที่เป็นต้นเรื่องต้องเห็นอาการเดียวกันทันที ไม่ต้องรอให้ใครมากรอกซ้ำ
+    await syncOutageFromWorkOrder(tx, created.id, userId);
     if (data.assignedToId) {
       await writeLog(tx, created.id, userId, "ASSIGNED", "OPEN", null);
     }
@@ -287,7 +415,10 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       priority: body.priority,
       assignedToId: body.assignedToId ?? null,
       scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
+      symptom: body.symptom?.trim() || null,
+      workStatus: body.workStatus ?? null,
     },
+    body.waitingParts ?? [],
     req.auth!.userId
   );
 
@@ -301,6 +432,18 @@ const fromOutageSchema = z.object({
   priority: z.enum(WORK_ORDER_PRIORITIES).default("NORMAL"),
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
+  symptom: z.string().trim().max(500).nullable().optional(),
+  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
+  waitingParts: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(999).default(1),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res) => {
@@ -316,6 +459,7 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
     include: {
       branch: { select: { id: true, code: true, name: true } },
       machine: { select: { id: true, code: true } },
+      parts: { select: { sparePartId: true, quantity: true } },
     },
   });
   if (!outage) return res.status(404).json({ error: "ไม่พบเคสนี้" });
@@ -352,7 +496,11 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
       scheduledAt: body.scheduledAt
         ? new Date(body.scheduledAt)
         : outage.scheduledVisitAt ?? null,
+      // ที่เคยกรอกไว้บนกระดานถูกยกมาเป็นค่าตั้งต้น ไม่ใช่ทิ้งแล้วเริ่มใหม่
+      symptom: body.symptom !== undefined ? body.symptom?.trim() || null : outage.symptom,
+      workStatus: body.workStatus !== undefined ? body.workStatus : outage.workStatus,
     },
+    body.waitingParts ?? outage.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
     req.auth!.userId
   );
 
@@ -369,6 +517,18 @@ const updateSchema = z.object({
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
   status: z.enum(["OPEN", "IN_PROGRESS"]).optional(),
+  symptom: z.string().trim().max(500).nullable().optional(),
+  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
+  waitingParts: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(999).default(1),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
@@ -400,8 +560,22 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
           ? { scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null }
           : {}),
         ...(body.status !== undefined ? { status: body.status } : {}),
+        ...(body.symptom !== undefined ? { symptom: body.symptom?.trim() || null } : {}),
+        ...(body.workStatus !== undefined ? { workStatus: body.workStatus } : {}),
       },
     });
+
+    if (body.waitingParts !== undefined) {
+      await replaceParts(tx, id, "WAITING", body.waitingParts);
+    }
+
+    // อาการ สถานะ อะไหล่ที่รอ และวันนัด เป็นสิ่งที่กระดานแสดง จึงต้องส่งต่อไปที่เคส
+    const touchedNote =
+      body.symptom !== undefined ||
+      body.workStatus !== undefined ||
+      body.waitingParts !== undefined ||
+      body.scheduledAt !== undefined;
+    if (touchedNote) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
 
     const nextStatus = body.status ?? current.status;
     if (body.status === "IN_PROGRESS" && current.status !== "IN_PROGRESS") {
@@ -463,17 +637,8 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       },
     });
 
-    if (body.parts && body.parts.length > 0) {
-      await tx.workOrderPart.deleteMany({ where: { workOrderId: id } });
-      await tx.workOrderPart.createMany({
-        data: body.parts.map((p) => ({
-          workOrderId: id,
-          sparePartId: p.sparePartId,
-          quantity: p.quantity,
-        })),
-        skipDuplicates: true,
-      });
-    }
+    // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
+    if (body.parts !== undefined) await replaceParts(tx, id, "USED", body.parts);
 
     await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", body.note?.trim() || null);
   });

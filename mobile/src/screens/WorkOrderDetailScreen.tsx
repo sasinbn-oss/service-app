@@ -5,7 +5,7 @@
  * หน้านี้จึงเตือนตรงๆ ตอนปิดว่าเครื่องยังไม่กลับมา ไม่ใช่ปล่อยให้เข้าใจผิด
  * ว่ากดปิดแล้วจบ
  */
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -22,6 +22,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
+import DateField from "../components/DateField";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
@@ -60,6 +61,10 @@ interface WorkOrder {
   closedByName: string | null;
   closeResultLabel: string | null;
   closeNote: string | null;
+  symptom: string | null;
+  workStatus: string | null;
+  workStatusLabel: string | null;
+  waitingParts: PickedPart[];
   outageId: number | null;
   outageStillOpen: boolean | null;
   outageKind: string | null;
@@ -77,6 +82,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const { user } = useAuth();
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
+  const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
+  const [editingNote, setEditingNote] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,10 +93,11 @@ export default function WorkOrderDetailScreen({ route }: Props) {
     try {
       const [detail, options] = await Promise.all([
         api.get<WorkOrder>(`/work-orders/${id}`),
-        api.get<{ results: Option[] }>("/work-orders/options"),
+        api.get<{ results: Option[]; workStatuses: Option[] }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
       setResults(options.data.results);
+      setWorkStatuses(options.data.workStatuses);
       setError(null);
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -186,6 +194,47 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
       </View>
 
+      {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
+      <View style={styles.card}>
+        <View style={styles.headRow}>
+          <Text style={styles.sectionTitle}>อาการ / สถานะ</Text>
+          <View style={{ flex: 1 }} />
+          {!done ? (
+            <TouchableOpacity
+              style={styles.editNote}
+              onPress={() => setEditingNote(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={15} color={colors.primary} />
+              <Text style={styles.editNoteText}>แก้ไข</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {order.symptom || order.workStatusLabel || order.waitingParts.length > 0 ? (
+          <>
+            <Row label="อาการ" value={order.symptom ?? "—"} />
+            <Row label="สถานะ" value={order.workStatusLabel ?? "ยังไม่ระบุ"} />
+            {order.waitingParts.length > 0 ? (
+              <Row
+                label="รออะไหล่"
+                value={order.waitingParts
+                  .map((p) => `${p.partCode} × ${p.quantity}`)
+                  .join(" · ")}
+              />
+            ) : null}
+          </>
+        ) : (
+          <Text style={styles.linkedText}>ยังไม่ได้กรอก — กดแก้ไขเพื่อใส่อาการและสถานะ</Text>
+        )}
+
+        {order.outageId !== null ? (
+          <Text style={styles.linkedText}>
+            ค่าที่กรอกที่นี่จะขึ้นบนกระดานติดตามเครื่องเสียของเคสนี้ให้เอง
+          </Text>
+        ) : null}
+      </View>
+
       {order.outageId !== null ? (
         <View style={[styles.card, styles.linked]}>
           <View style={styles.headRow}>
@@ -268,6 +317,17 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         ))}
       </View>
 
+      <NoteModal
+        visible={editingNote}
+        order={order}
+        workStatuses={workStatuses}
+        onCancel={() => setEditingNote(false)}
+        onDone={async () => {
+          setEditingNote(false);
+          await load();
+        }}
+      />
+
       <CloseModal
         visible={closing}
         order={order}
@@ -279,6 +339,138 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         }}
       />
     </ScrollView>
+  );
+}
+
+/**
+ * แก้อาการและสถานะของใบงาน
+ *
+ * ช่องเดียวกับที่กระดานเคยให้กรอก ย้ายมาอยู่ที่นี่เพราะคนที่รู้คือช่างที่ถือใบงาน
+ * ค่าที่บันทึกถูกส่งต่อไปที่เคสให้เอง กระดานจึงไม่ต้องกรอกซ้ำ
+ */
+function NoteModal({
+  visible,
+  order,
+  workStatuses,
+  onCancel,
+  onDone,
+}: {
+  visible: boolean;
+  order: WorkOrder;
+  workStatuses: Option[];
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [symptom, setSymptom] = useState(order.symptom ?? "");
+  const [workStatus, setWorkStatus] = useState<string | null>(order.workStatus);
+  const [parts, setParts] = useState<PickedPart[]>(order.waitingParts);
+  const [visit, setVisit] = useState(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // เปิดฟอร์มใหม่ทุกครั้งให้เห็นค่าล่าสุด ไม่ใช่ค่าที่ค้างจากการเปิดครั้งก่อน
+  useEffect(() => {
+    if (!visible) return;
+    setSymptom(order.symptom ?? "");
+    setWorkStatus(order.workStatus);
+    setParts(order.waitingParts);
+    setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
+    setError(null);
+  }, [visible, order]);
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.patch(`/work-orders/${order.id}`, {
+        symptom: symptom.trim() || null,
+        workStatus,
+        waitingParts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        scheduledAt: visit || null,
+      });
+      onDone();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.backdrop}>
+        <View style={styles.modal}>
+          <ScrollView contentContainerStyle={styles.modalBody}>
+            <Text style={styles.modalTitle}>อาการ / สถานะ · {order.code}</Text>
+
+            <Text style={styles.modalLabel}>อาการที่พบ</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={symptom}
+              onChangeText={setSymptom}
+              placeholder="เช่น ประตูไม่ล็อก / บอร์ดควบคุมไหม้"
+              placeholderTextColor={colors.textFaint}
+              multiline
+              numberOfLines={3}
+              accessibilityLabel="อาการที่พบ"
+            />
+
+            <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
+            <View style={styles.options}>
+              <TouchableOpacity
+                style={[styles.option, workStatus === null && styles.optionOn]}
+                onPress={() => setWorkStatus(null)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.optionText, workStatus === null && styles.optionTextOn]}>
+                  ยังไม่ระบุ
+                </Text>
+              </TouchableOpacity>
+              {workStatuses.map((w) => (
+                <TouchableOpacity
+                  key={w.value}
+                  style={[styles.option, workStatus === w.value && styles.optionOn]}
+                  onPress={() => setWorkStatus(w.value)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.optionText, workStatus === w.value && styles.optionTextOn]}>
+                    {w.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {workStatus === "WAITING_PARTS" ? (
+              <PartPicker parts={parts} onChange={setParts} label="รออะไหล่ตัวไหน" />
+            ) : null}
+
+            {workStatus === "WAITING_TECH" ? (
+              <DateField value={visit} onChange={setVisit} label="วันที่ช่างจะเข้า" />
+            ) : null}
+
+            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+          </ScrollView>
+
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+              <Text style={styles.modalCancelText}>ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalSave, saving && styles.modalSaveOff]}
+              onPress={submit}
+              disabled={saving}
+              activeOpacity={0.8}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.modalSaveText}>บันทึก</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -447,6 +639,8 @@ const styles = StyleSheet.create({
   logAction: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   logMeta: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
   logNote: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
+  editNote: { flexDirection: "row", alignItems: "center", gap: 2 },
+  editNoteText: { fontSize: 13, lineHeight: 21, color: colors.primary, fontWeight: "700" },
 
   backdrop: {
     flex: 1,
