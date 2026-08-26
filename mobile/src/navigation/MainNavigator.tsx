@@ -37,6 +37,7 @@ import ManageSparePartsScreen from "../screens/ManageSparePartsScreen";
 import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
 import ManageBranchesScreen from "../screens/ManageBranchesScreen";
+import ManageUsersScreen from "../screens/ManageUsersScreen";
 
 import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
@@ -249,6 +250,11 @@ function AdminStackNavigator() {
         name="ManageBranches"
         component={ManageBranchesScreen}
         options={{ title: "จัดการข้อมูลสาขา" }}
+      />
+      <AdminStack.Screen
+        name="ManageUsers"
+        component={ManageUsersScreen}
+        options={{ title: "สิทธิ์ผู้ใช้" }}
       />
     </AdminStack.Navigator>
   );

@@ -1,4 +1,16 @@
-export const ROLES = ["EMPLOYEE", "ADMIN"] as const;
+/**
+ * SUPERVISOR = หัวหน้าภาค อยู่ระหว่างช่างกับแอดมินในสายงาน
+ *
+ * ผูกกับภาคผ่าน User.region — เห็นและจัดการเฉพาะใบงานของสาขาในภาคตัวเอง
+ * แอดมินเห็นทุกภาค ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
+ */
+export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN"] as const;
+
+export const ROLE_LABELS: Record<string, string> = {
+  EMPLOYEE: "ช่าง",
+  SUPERVISOR: "หัวหน้าภาค",
+  ADMIN: "แอดมิน",
+};
 export type Role = (typeof ROLES)[number];
 
 export const VEHICLE_STATUSES = ["AVAILABLE", "IN_USE", "MAINTENANCE"] as const;
@@ -86,18 +98,65 @@ export function countsAsRepair(closeReason: string | null) {
  * ส่วนอันนี้บอกว่า "ใบงานเดินไปถึงไหน" (ยังไม่มีใครรับ รับแล้ว ปิดแล้ว)
  * เคสหนึ่งอาจมีใบงานหลายใบตามรอบที่ช่างเข้าไป
  */
-export const WORK_ORDER_STATUSES = ["OPEN", "IN_PROGRESS", "DONE", "CANCELLED"] as const;
+export const WORK_ORDER_STATUSES = [
+  "NEW",
+  "PARTS_REQUESTED",
+  "PARTS_CHECKED",
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "DONE",
+  "CANCELLED",
+] as const;
 export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
 
+/**
+ * ป้ายบอกว่า "ตอนนี้รอใครอยู่" ไม่ใช่ "ทำอะไรไปแล้ว"
+ *
+ * คนเปิดหน้ารายการอยากรู้ว่าใบไหนค้างที่ตัวเอง การเขียนเป็นสิ่งที่รออยู่
+ * ตอบคำถามนั้นได้ทันทีโดยไม่ต้องแปลในหัว
+ */
 export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
-  OPEN: "รอช่างรับงาน",
-  IN_PROGRESS: "ช่างรับแล้ว",
+  NEW: "รอหัวหน้าภาคระบุอะไหล่",
+  PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
+  PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
+  ASSIGNED: "รอช่างนัดวัน",
+  IN_PROGRESS: "รอช่างเข้างาน",
   DONE: "ปิดงานแล้ว",
   CANCELLED: "ยกเลิก",
 };
 
+/** ลำดับของขั้น ใช้ตัดสินว่าใบงานเดินหน้าหรือถอยหลัง */
+export const WORK_ORDER_STAGE_ORDER = [
+  "NEW",
+  "PARTS_REQUESTED",
+  "PARTS_CHECKED",
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "DONE",
+] as const;
+
+/**
+ * ขั้นนี้รอใครทำ — ใช้กั้นสิทธิ์และใช้บอกบนหน้าจอว่าลูกบอลอยู่ที่ใคร
+ *
+ * แอดมินทำแทนได้ทุกขั้น เพราะงานด่วนรอหัวหน้าภาคว่างไม่ได้ แต่ระบบบันทึกไว้
+ * ว่าใครเป็นคนกด ประวัติจึงยังบอกได้ว่าข้ามขั้นตอนปกติไปตอนไหน
+ */
+export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
+  NEW: "SUPERVISOR",
+  PARTS_REQUESTED: "ADMIN",
+  PARTS_CHECKED: "SUPERVISOR",
+  ASSIGNED: "EMPLOYEE",
+  IN_PROGRESS: "EMPLOYEE",
+};
+
 /** สถานะที่ถือว่ายังทำงานอยู่ ใช้กันไม่ให้เปิดใบงานซ้ำกับเคสเดิม */
-export const ACTIVE_WORK_ORDER_STATUSES = ["OPEN", "IN_PROGRESS"] as const;
+export const ACTIVE_WORK_ORDER_STATUSES = [
+  "NEW",
+  "PARTS_REQUESTED",
+  "PARTS_CHECKED",
+  "ASSIGNED",
+  "IN_PROGRESS",
+] as const;
 
 export const WORK_ORDER_PRIORITIES = ["URGENT", "NORMAL", "LOW"] as const;
 
@@ -124,13 +183,26 @@ export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
 
 export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CREATED: "เปิดใบงาน",
-  ASSIGNED: "มอบหมายช่าง",
-  STARTED: "ช่างรับงาน",
+  PARTS_REQUESTED: "ระบุอะไหล่ที่ต้องใช้",
+  PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
+  ASSIGNED: "จ่ายงานให้ช่าง",
+  SCHEDULED: "ช่างนัดวันเข้า",
   CLOSED: "ปิดงาน",
   CANCELLED: "ยกเลิกใบงาน",
   REOPENED: "เปิดงานใหม่",
   EDITED: "แก้ไขใบงาน",
 };
+
+/**
+ * แอดมินทำแทนขั้นของคนอื่นได้ไหม
+ *
+ * ได้ เพราะงานด่วนรอหัวหน้าภาคว่างไม่ได้ แต่ข้ามลำดับไม่ได้ — ต้องทำทีละขั้น
+ * ไม่งั้นจะมีใบงานที่จ่ายให้ช่างทั้งที่ยังไม่มีใครเช็คว่ามีอะไหล่หรือเปล่า
+ */
+export function canActOnStage(role: string, stage: string) {
+  if (role === "ADMIN") return true;
+  return WORK_ORDER_STAGE_ACTOR[stage] === role;
+}
 
 /** รหัสที่คนอ่าน ตั้งจาก id จึงไม่มีทางชนกันและไม่ต้องนับแถวก่อน */
 export function workOrderCode(id: number): string {

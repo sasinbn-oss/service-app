@@ -77,6 +77,15 @@ export default function AdminMenuScreen({ navigation }: Props) {
       onPress: () => navigation.navigate("ManageVehicles"),
     },
     {
+      key: "ManageUsers",
+      label: "สิทธิ์ผู้ใช้",
+      description: "ตั้งช่าง หัวหน้าภาค แอดมิน และภาคที่ดูแล",
+      icon: "people",
+      tint: colors.primarySoft,
+      iconColor: colors.primary,
+      onPress: () => navigation.navigate("ManageUsers"),
+    },
+    {
       key: "ManageBranches",
       label: "จัดการข้อมูลสาขา",
       description: "พิกัดและรัศมีของแต่ละสาขา",

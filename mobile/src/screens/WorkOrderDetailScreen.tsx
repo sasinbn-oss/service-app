@@ -64,7 +64,10 @@ interface WorkOrder {
   symptom: string | null;
   workStatus: string | null;
   workStatusLabel: string | null;
-  waitingParts: PickedPart[];
+  assignedToId: number | null;
+  stageActor: string | null;
+  stageActorLabel: string | null;
+  waitingParts: StockPart[];
   outageId: number | null;
   outageStillOpen: boolean | null;
   outageKind: string | null;
@@ -77,13 +80,36 @@ interface Option {
   label: string;
 }
 
+interface Stage {
+  value: string;
+  label: string;
+  actor: string | null;
+  actorLabel: string | null;
+}
+
+/** อะไหล่พร้อมผลเช็คคลัง — inStock ว่าง = ยังไม่มีใครเช็ค */
+interface StockPart extends PickedPart {
+  inStock: boolean | null;
+  warehouse: string | null;
+}
+
+interface Technician {
+  id: number;
+  name: string;
+  employeeCode: string;
+}
+
 export default function WorkOrderDetailScreen({ route }: Props) {
   const { id } = route.params;
   const { user } = useAuth();
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
+  const [stages, setStages] = useState<Stage[]>([]);
+  const [warehouses, setWarehouses] = useState<string[]>([]);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [editingNote, setEditingNote] = useState(false);
+  const [stageOpen, setStageOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,11 +119,20 @@ export default function WorkOrderDetailScreen({ route }: Props) {
     try {
       const [detail, options] = await Promise.all([
         api.get<WorkOrder>(`/work-orders/${id}`),
-        api.get<{ results: Option[]; workStatuses: Option[] }>("/work-orders/options"),
+        api.get<{
+          results: Option[];
+          workStatuses: Option[];
+          stages: Stage[];
+          warehouses: string[];
+          technicians: Technician[];
+        }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
       setResults(options.data.results);
       setWorkStatuses(options.data.workStatuses);
+      setStages(options.data.stages);
+      setWarehouses(options.data.warehouses);
+      setTechnicians(options.data.technicians);
       setError(null);
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -112,30 +147,20 @@ export default function WorkOrderDetailScreen({ route }: Props) {
     }, [load])
   );
 
-  async function start() {
-    setBusy(true);
-    try {
-      const res = await api.patch<WorkOrder>(`/work-orders/${id}`, { status: "IN_PROGRESS" });
-      setOrder({ ...res.data, logs: order?.logs ?? [] });
-      await load();
-    } catch (e) {
-      showAlert("ทำไม่สำเร็จ", apiErrorMessage(e));
-    } finally {
-      setBusy(false);
+  /**
+   * ปุ่มของขั้นนี้ — ขึ้นเฉพาะเมื่อถึงคิวของคนที่เปิดดูอยู่
+   *
+   * ไม่ขึ้นปุ่มที่กดแล้วโดนปฏิเสธ เพราะปุ่มที่กดไม่ได้คือปุ่มที่ทำให้คนสงสัยว่า
+   * ตัวเองทำอะไรผิด ทั้งที่แค่ยังไม่ถึงคิว
+   */
+  function myTurn(o: WorkOrder) {
+    if (!user) return false;
+    if (user.role === "ADMIN") return true;
+    if (o.stageActor === "EMPLOYEE") {
+      // ช่างที่ถือใบนี้เท่านั้น ไม่ใช่ช่างทุกคน
+      return o.assignedToId === null || o.assignedToId === user.id;
     }
-  }
-
-  async function takeIt() {
-    if (!user) return;
-    setBusy(true);
-    try {
-      await api.patch(`/work-orders/${id}`, { assignedToId: user.id, status: "IN_PROGRESS" });
-      await load();
-    } catch (e) {
-      showAlert("ทำไม่สำเร็จ", apiErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
+    return o.stageActor === user.role;
   }
 
   if (loading) {
@@ -216,12 +241,27 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             <Row label="อาการ" value={order.symptom ?? "—"} />
             <Row label="สถานะ" value={order.workStatusLabel ?? "ยังไม่ระบุ"} />
             {order.waitingParts.length > 0 ? (
-              <Row
-                label="รออะไหล่"
-                value={order.waitingParts
-                  .map((p) => `${p.partCode} × ${p.quantity}`)
-                  .join(" · ")}
-              />
+              <>
+                <Text style={styles.partsHead}>อะไหล่ที่ต้องใช้</Text>
+                {order.waitingParts.map((part) => (
+                  <View key={part.sparePartId} style={styles.partRow}>
+                    <Text style={styles.partCode}>
+                      {part.partCode} × {part.quantity}
+                    </Text>
+                    <Text style={styles.partName} numberOfLines={1}>
+                      {part.name}
+                    </Text>
+                    {/* ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด */}
+                    {part.inStock === null ? (
+                      <Text style={styles.stockPending}>ยังไม่เช็ค</Text>
+                    ) : part.inStock ? (
+                      <Text style={styles.stockIn}>{part.warehouse ?? "มีของ"}</Text>
+                    ) : (
+                      <Text style={styles.stockOut}>หมด</Text>
+                    )}
+                  </View>
+                ))}
+              </>
             ) : null}
           </>
         ) : (
@@ -274,31 +314,111 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         </View>
       ) : null}
 
-      {!done ? (
-        <View style={styles.actions}>
-          {order.status === "OPEN" ? (
-            <TouchableOpacity
-              style={[styles.action, styles.actionSecondary]}
-              onPress={order.assignedToName ? start : takeIt}
-              disabled={busy}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="hand-left-outline" size={18} color={colors.primary} />
-              <Text style={styles.actionSecondaryText}>
-                {order.assignedToName ? "เริ่มทำงาน" : "รับงานนี้"}
+      {/* เส้นทางเดินงาน — เห็นทั้งเส้นว่ามาถึงไหนและเหลืออีกกี่ขั้น */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
+        {stages.map((stage, i) => {
+          const currentIndex = stages.findIndex((x) => x.value === order.status);
+          const state =
+            order.status === "CANCELLED"
+              ? "future"
+              : i < currentIndex || order.status === "DONE"
+                ? "done"
+                : i === currentIndex
+                  ? "now"
+                  : "future";
+          return (
+            <View key={stage.value} style={styles.stageRow}>
+              <Ionicons
+                name={
+                  state === "done"
+                    ? "checkmark-circle"
+                    : state === "now"
+                      ? "ellipse"
+                      : "ellipse-outline"
+                }
+                size={16}
+                color={
+                  state === "done"
+                    ? colors.success
+                    : state === "now"
+                      ? colors.primary
+                      : colors.border
+                }
+              />
+              <Text
+                style={[
+                  styles.stageLabel,
+                  state === "now" && styles.stageLabelNow,
+                  state === "future" && styles.stageLabelFuture,
+                ]}
+              >
+                {stage.label}
               </Text>
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity
-            style={[styles.action, styles.actionPrimary]}
-            onPress={() => setClosing(true)}
-            disabled={busy}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="checkmark-done" size={18} color="#fff" />
-            <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
-          </TouchableOpacity>
-        </View>
+              {stage.actorLabel && state !== "done" ? (
+                <Text style={styles.stageActor}>{stage.actorLabel}</Text>
+              ) : null}
+            </View>
+          );
+        })}
+      </View>
+
+      {!done ? (
+        myTurn(order) ? (
+          <View style={styles.actions}>
+            {order.status !== "ASSIGNED" && order.status !== "IN_PROGRESS" ? (
+              <TouchableOpacity
+                style={[styles.action, styles.actionPrimary]}
+                onPress={() => setStageOpen(true)}
+                disabled={busy}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="arrow-forward-circle" size={18} color="#fff" />
+                <Text style={styles.actionPrimaryText}>
+                  {order.status === "NEW"
+                    ? "ระบุอะไหล่ที่ต้องใช้"
+                    : order.status === "PARTS_REQUESTED"
+                      ? "เช็คอะไหล่ในคลัง"
+                      : "จ่ายงานให้ช่าง"}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <>
+                {order.status === "ASSIGNED" ? (
+                  <TouchableOpacity
+                    style={[styles.action, styles.actionSecondary]}
+                    onPress={() => setStageOpen(true)}
+                    disabled={busy}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+                    <Text style={styles.actionSecondaryText}>นัดวันเข้างาน</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={[styles.action, styles.actionPrimary]}
+                  onPress={() => setClosing(true)}
+                  disabled={busy}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="checkmark-done" size={18} color="#fff" />
+                  <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        ) : (
+          <View style={[styles.card, styles.waitingCard]}>
+            <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
+            <Text style={styles.waitingText}>
+              ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
+              {order.stageActor === "EMPLOYEE" && order.assignedToName
+                ? ` (${order.assignedToName})`
+                : ""}
+              {" "}— ยังไม่ถึงคิวของคุณ
+            </Text>
+          </View>
+        )
       ) : null}
 
       <View style={styles.card}>
@@ -316,6 +436,18 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           </View>
         ))}
       </View>
+
+      <StageModal
+        visible={stageOpen}
+        order={order}
+        warehouses={warehouses}
+        technicians={technicians}
+        onCancel={() => setStageOpen(false)}
+        onDone={async () => {
+          setStageOpen(false);
+          await load();
+        }}
+      />
 
       <NoteModal
         visible={editingNote}
@@ -348,6 +480,261 @@ export default function WorkOrderDetailScreen({ route }: Props) {
  * ช่องเดียวกับที่กระดานเคยให้กรอก ย้ายมาอยู่ที่นี่เพราะคนที่รู้คือช่างที่ถือใบงาน
  * ค่าที่บันทึกถูกส่งต่อไปที่เคสให้เอง กระดานจึงไม่ต้องกรอกซ้ำ
  */
+/**
+ * ปุ่มเดินขั้น — ฟอร์มเปลี่ยนไปตามว่าตอนนี้อยู่ขั้นไหน
+ *
+ * รวมไว้ตัวเดียวเพราะทั้งสี่ขั้นเป็นเรื่องเดียวกัน คือ "ทำสิ่งที่ค้างอยู่แล้วส่งต่อ"
+ * แยกเป็นสี่หน้าจอจะได้โค้ดซ้ำสี่ชุดที่ต้องแก้พร้อมกันทุกครั้ง
+ */
+function StageModal({
+  visible,
+  order,
+  warehouses,
+  technicians,
+  onCancel,
+  onDone,
+}: {
+  visible: boolean;
+  order: WorkOrder;
+  warehouses: string[];
+  technicians: Technician[];
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [parts, setParts] = useState<PickedPart[]>([]);
+  const [checks, setChecks] = useState<Record<number, { inStock: boolean | null; warehouse: string | null }>>({});
+  const [techId, setTechId] = useState<number | null>(null);
+  const [visit, setVisit] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setParts(order.waitingParts);
+    setChecks(
+      Object.fromEntries(
+        order.waitingParts.map((p) => [p.sparePartId, { inStock: p.inStock, warehouse: p.warehouse }])
+      )
+    );
+    setTechId(order.assignedToId);
+    setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
+    setNote("");
+    setError(null);
+  }, [visible, order]);
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      if (order.status === "NEW") {
+        await api.post(`/work-orders/${order.id}/parts`, {
+          parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+          note: note.trim() || undefined,
+        });
+      } else if (order.status === "PARTS_REQUESTED") {
+        await api.post(`/work-orders/${order.id}/parts-check`, {
+          results: order.waitingParts.map((p) => ({
+            sparePartId: p.sparePartId,
+            inStock: checks[p.sparePartId]?.inStock ?? false,
+            warehouse: checks[p.sparePartId]?.warehouse ?? null,
+          })),
+          note: note.trim() || undefined,
+        });
+      } else if (order.status === "PARTS_CHECKED") {
+        await api.post(`/work-orders/${order.id}/assign`, {
+          assignedToId: techId,
+          note: note.trim() || undefined,
+        });
+      } else {
+        await api.post(`/work-orders/${order.id}/schedule`, {
+          scheduledAt: visit,
+          note: note.trim() || undefined,
+        });
+      }
+      onDone();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const unchecked =
+    order.status === "PARTS_REQUESTED" &&
+    order.waitingParts.some((p) => {
+      const c = checks[p.sparePartId];
+      return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse);
+    });
+  const blocked =
+    (order.status === "NEW" && parts.length === 0) ||
+    (order.status === "PARTS_CHECKED" && techId === null) ||
+    (order.status === "ASSIGNED" && !/^\d{4}-\d{2}-\d{2}$/.test(visit)) ||
+    unchecked;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.backdrop}>
+        <View style={styles.modal}>
+          <ScrollView contentContainerStyle={styles.modalBody}>
+            <Text style={styles.modalTitle}>
+              {order.status === "NEW"
+                ? "ระบุอะไหล่ที่ต้องใช้"
+                : order.status === "PARTS_REQUESTED"
+                  ? "เช็คอะไหล่ในคลัง"
+                  : order.status === "PARTS_CHECKED"
+                    ? "จ่ายงานให้ช่าง"
+                    : "นัดวันเข้างาน"}{" "}
+              · {order.code}
+            </Text>
+
+            {order.status === "NEW" ? (
+              <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
+            ) : null}
+
+            {order.status === "PARTS_REQUESTED" ? (
+              <View style={styles.checkList}>
+                {order.waitingParts.map((part) => {
+                  const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
+                  return (
+                    <View key={part.sparePartId} style={styles.checkItem}>
+                      <Text style={styles.checkCode}>
+                        {part.partCode} × {part.quantity}
+                      </Text>
+                      <Text style={styles.checkName}>{part.name}</Text>
+                      <View style={styles.options}>
+                        <TouchableOpacity
+                          style={[styles.option, c.inStock === true && styles.optionOn]}
+                          onPress={() =>
+                            setChecks((v) => ({
+                              ...v,
+                              [part.sparePartId]: { inStock: true, warehouse: c.warehouse },
+                            }))
+                          }
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[styles.optionText, c.inStock === true && styles.optionTextOn]}
+                          >
+                            มีของ
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.option, c.inStock === false && styles.optionOut]}
+                          onPress={() =>
+                            setChecks((v) => ({
+                              ...v,
+                              [part.sparePartId]: { inStock: false, warehouse: null },
+                            }))
+                          }
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[styles.optionText, c.inStock === false && styles.optionTextOut]}
+                          >
+                            หมด
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      {c.inStock === true ? (
+                        <View style={styles.options}>
+                          {warehouses.map((w) => (
+                            <TouchableOpacity
+                              key={w}
+                              style={[styles.option, c.warehouse === w && styles.optionOn]}
+                              onPress={() =>
+                                setChecks((v) => ({
+                                  ...v,
+                                  [part.sparePartId]: { inStock: true, warehouse: w },
+                                }))
+                              }
+                              activeOpacity={0.7}
+                            >
+                              <Text
+                                style={[styles.optionText, c.warehouse === w && styles.optionTextOn]}
+                              >
+                                {w}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+                <Text style={styles.linkedText}>
+                  มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” ให้เอง
+                </Text>
+              </View>
+            ) : null}
+
+            {order.status === "PARTS_CHECKED" ? (
+              <>
+                <Text style={styles.modalLabel}>ช่างที่จะรับงาน</Text>
+                <View style={styles.options}>
+                  {technicians.map((t) => (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[styles.option, techId === t.id && styles.optionOn]}
+                      onPress={() => setTechId(t.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.optionText, techId === t.id && styles.optionTextOn]}>
+                        {t.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            ) : null}
+
+            {order.status === "ASSIGNED" ? (
+              <DateField
+                value={visit}
+                onChange={setVisit}
+                label="วันที่จะเข้างาน"
+                emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
+              />
+            ) : null}
+
+            <Text style={styles.modalLabel}>บันทึกเพิ่มเติม</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={note}
+              onChangeText={setNote}
+              placeholder="ไม่ใส่ก็ได้"
+              placeholderTextColor={colors.textFaint}
+              multiline
+              numberOfLines={2}
+              accessibilityLabel="บันทึกเพิ่มเติม"
+            />
+
+            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+          </ScrollView>
+
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+              <Text style={styles.modalCancelText}>ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalSave, (saving || blocked) && styles.modalSaveOff]}
+              onPress={submit}
+              disabled={saving || blocked}
+              activeOpacity={0.8}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.modalSaveText}>ยืนยัน</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function NoteModal({
   visible,
   order,
@@ -592,6 +979,38 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  partsHead: {
+    fontSize: 13,
+    lineHeight: 21,
+    color: colors.textMuted,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  partRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 3 },
+  partCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  partName: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  stockPending: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
+  stockIn: { fontSize: 11, lineHeight: 19, color: colors.success, fontWeight: "700" },
+  stockOut: { fontSize: 11, lineHeight: 19, color: colors.danger, fontWeight: "700" },
+  checkList: { gap: spacing.md, marginTop: spacing.md },
+  checkItem: {
+    gap: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+  },
+  checkCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  checkName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+  optionTextOut: { color: colors.danger },
+  stageRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 5 },
+  stageLabel: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.text },
+  stageLabelNow: { fontWeight: "700", color: colors.primary },
+  stageLabelFuture: { color: colors.textFaint },
+  stageActor: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
+  waitingCard: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  waitingText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },

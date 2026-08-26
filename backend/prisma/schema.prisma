@@ -21,6 +21,11 @@ model User {
   phone              String?
   passwordHash       String
   role               String              @default("EMPLOYEE")
+  // ภาคที่หัวหน้าภาคคนนี้ดูแล — ตรงกับ Branch.region
+  //
+  // ใช้เฉพาะกับ role SUPERVISOR เพื่อจำกัดว่าเห็นและจัดการใบงานของภาคไหน
+  // แอดมินเห็นทุกภาคจึงไม่ต้องใส่ ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
+  region             String?
   createdAt          DateTime            @default(now())
   vehicleLogs        VehicleLog[]
   branchCheckIns     BranchCheckIn[]
@@ -33,6 +38,7 @@ model User {
   assignedWorkOrders WorkOrder[]         @relation("AssignedWorkOrders")
   closedWorkOrders   WorkOrder[]         @relation("ClosedWorkOrders")
   workOrderLogs      WorkOrderLog[]
+  checkedParts       WorkOrderPart[]     @relation("CheckedWorkOrderParts")
 }
 
 model Vehicle {
@@ -451,8 +457,12 @@ model WorkOrder {
   workStatus String?
   // ดูค่าที่ใช้ได้ที่ WORK_ORDER_PRIORITIES ใน src/utils/constants.ts
   priority   String  @default("NORMAL")
-  // ดูค่าที่ใช้ได้ที่ WORK_ORDER_STATUSES ใน src/utils/constants.ts
-  status     String  @default("OPEN")
+  // ขั้นที่ใบงานเดินไปถึง — ดูค่าที่ใช้ได้ที่ WORK_ORDER_STATUSES
+  //
+  // เดินทีละขั้นตามสายงานจริง: แอดมินเปิดเรื่อง → หัวหน้าภาคระบุอะไหล่ →
+  // แอดมินเช็คคลัง → หัวหน้าภาคจ่ายงาน → ช่างนัดวัน → ช่างปิดงาน
+  // ข้ามขั้นไม่ได้ ไม่งั้นจะมีใบที่จ่ายให้ช่างทั้งที่ยังไม่รู้ว่ามีอะไหล่หรือเปล่า
+  status     String  @default("NEW")
 
   assignedToId Int?
   assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
@@ -493,6 +503,17 @@ model WorkOrderPart {
   // สองอย่างนี้ต่างกันจริง ของที่รอกับของที่ใช้ไม่จำเป็นต้องตรงกัน ช่างอาจไปถึง
   // แล้วพบว่าเสียคนละจุด ถ้าเก็บรวมกันจะแยกไม่ออกว่ายอดที่ต้องสั่งซื้อคือเท่าไหร่
   kind        String    @default("USED")
+
+  // ── ผลการเช็คคลัง เฉพาะของที่ kind = WAITING ──
+  //
+  // ว่าง = ยังไม่มีใครเช็ค · true = มีของ พร้อมบอกว่าอยู่คลังไหน · false = หมด
+  // ถ้ามีตัวไหน false ใบงานจะขึ้นสถานะ "รออะไหล่" ให้เอง
+  inStock     Boolean?
+  // ชื่อคลังที่มีของ ตามรายชื่อใน src/documents/warehouses.ts
+  warehouse   String?
+  checkedAt   DateTime?
+  checkedById Int?
+  checkedBy   User?     @relation("CheckedWorkOrderParts", fields: [checkedById], references: [id])
 
   @@unique([workOrderId, sparePartId, kind])
 }

@@ -50,6 +50,7 @@ export type AdminStackParamList = {
   ManageConsumables: undefined;
   ManageVehicles: undefined;
   ManageBranches: undefined;
+  ManageUsers: undefined;
 };
 
 export type MainTabParamList = {

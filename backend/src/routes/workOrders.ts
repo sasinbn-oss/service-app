@@ -8,12 +8,17 @@
  * ความจริงว่าเครื่องกลับมาหรือยัง ช่างปิดงานแล้วเครื่องยังไม่กลับมาก็มี
  * และต้องเห็นว่าเป็นแบบนั้น ไม่ใช่กลบด้วยการปิดเคสให้อัตโนมัติ
  */
-import { Router } from "express";
+import { Router, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
+import { WAREHOUSES } from "../documents/warehouses";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
+  ROLE_LABELS,
+  WORK_ORDER_STAGE_ACTOR,
+  WORK_ORDER_STAGE_ORDER,
+  canActOnStage,
   WORK_STATUSES,
   WORK_STATUS_LABELS,
   WORK_ORDER_PRIORITIES,
@@ -169,6 +174,11 @@ function shape(w: WorkOrderRow) {
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
       : null,
     closeNote: w.closeNote,
+    // ขั้นนี้รอใคร ให้หน้าจอตัดสินใจได้ว่าจะโชว์ปุ่มอะไรโดยไม่ต้องรู้กติกาเอง
+    stageActor: WORK_ORDER_STAGE_ACTOR[w.status] ?? null,
+    stageActorLabel: WORK_ORDER_STAGE_ACTOR[w.status]
+      ? ROLE_LABELS[WORK_ORDER_STAGE_ACTOR[w.status]] ?? null
+      : null,
     // อาการกับสถานะ — ชุดเดียวกับที่กระดานเคยให้กรอก
     symptom: w.symptom,
     workStatus: w.workStatus,
@@ -185,6 +195,8 @@ function shape(w: WorkOrderRow) {
 
 function partShape(p: {
   quantity: number;
+  inStock?: boolean | null;
+  warehouse?: string | null;
   sparePart: { id: number; partCode: string; name: string; brand: string | null };
 }) {
   return {
@@ -193,6 +205,9 @@ function partShape(p: {
     name: p.sparePart.name,
     brand: p.sparePart.brand,
     quantity: p.quantity,
+    // ว่าง = ยังไม่มีใครเช็ค ต่างจาก false ที่แปลว่าเช็คแล้วและหมด
+    inStock: p.inStock ?? null,
+    warehouse: p.warehouse ?? null,
   };
 }
 
@@ -232,8 +247,28 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
         ? { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } }
         : { status: q.status };
 
+  /**
+   * เห็นเท่าที่เกี่ยวข้องกับตัวเอง
+   *
+   * หัวหน้าภาคเห็นเฉพาะภาคตัวเอง ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเองกับงานที่ยังไม่มีเจ้าของ
+   * แอดมินเห็นทุกใบ รายการที่ยาวเป็นร้อยใบโดยไม่มีอะไรเกี่ยวกับคนอ่านคือรายการที่ไม่มีใครเปิด
+   */
+  const me = await prisma.user.findUnique({
+    where: { id: req.auth!.userId },
+    select: { region: true },
+  });
+  const scope =
+    req.auth!.role === "ADMIN"
+      ? {}
+      : req.auth!.role === "SUPERVISOR"
+        ? { branch: { region: me?.region ?? "\u0000ไม่มีภาค" } }
+        : // ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง เพราะในสายงานนี้งานถูกจ่ายมา
+          // ไม่ใช่ให้เดินไปหยิบเอง รายการที่มีงานของคนอื่นปนคือรายการที่หางานตัวเองไม่เจอ
+          { assignedToId: req.auth!.userId };
+
   const rows = await prisma.workOrder.findMany({
     where: {
+      ...scope,
       ...statusFilter,
       ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
       ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
@@ -264,7 +299,10 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */
 router.get("/options", requireAuth, async (_req, res) => {
+  // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
+  // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
   const technicians = await prisma.user.findMany({
+    where: { role: "EMPLOYEE" },
     select: { id: true, name: true, employeeCode: true },
     orderBy: { name: "asc" },
   });
@@ -277,6 +315,16 @@ router.get("/options", requireAuth, async (_req, res) => {
     results: WORK_ORDER_RESULTS.map((v) => ({ value: v, label: WORK_ORDER_RESULT_LABELS[v] })),
     // สถานะการดำเนินการของเคส ชุดเดียวกับที่กระดานเคยใช้
     workStatuses: WORK_STATUSES.map((v) => ({ value: v, label: WORK_STATUS_LABELS[v] })),
+    warehouses: WAREHOUSES,
+    // ลำดับขั้นทั้งหมด ให้หน้าจอวาดเส้นทางเดินงานได้โดยไม่ต้องเขียนลำดับซ้ำ
+    stages: WORK_ORDER_STAGE_ORDER.map((v) => ({
+      value: v,
+      label: WORK_ORDER_STATUS_LABELS[v],
+      actor: WORK_ORDER_STAGE_ACTOR[v] ?? null,
+      actorLabel: WORK_ORDER_STAGE_ACTOR[v]
+        ? ROLE_LABELS[WORK_ORDER_STAGE_ACTOR[v]] ?? null
+        : null,
+    })),
     technicians,
   });
 });
@@ -358,19 +406,16 @@ async function createWorkOrder(
 ) {
   return prisma.$transaction(async (tx) => {
     const created = await tx.workOrder.create({
-      data: { ...data, code: "", createdById: userId, status: "OPEN" },
+      data: { ...data, code: "", createdById: userId, status: "NEW" },
     });
     const withCode = await tx.workOrder.update({
       where: { id: created.id },
       data: { code: workOrderCode(created.id) },
     });
     if (waitingParts.length > 0) await replaceParts(tx, created.id, "WAITING", waitingParts);
-    await writeLog(tx, created.id, userId, "CREATED", "OPEN", null);
+    await writeLog(tx, created.id, userId, "CREATED", "NEW", null);
     // เคสที่เป็นต้นเรื่องต้องเห็นอาการเดียวกันทันที ไม่ต้องรอให้ใครมากรอกซ้ำ
     await syncOutageFromWorkOrder(tx, created.id, userId);
-    if (data.assignedToId) {
-      await writeLog(tx, created.id, userId, "ASSIGNED", "OPEN", null);
-    }
     return withCode.id;
   });
 }
@@ -516,7 +561,6 @@ const updateSchema = z.object({
   priority: z.enum(WORK_ORDER_PRIORITIES).optional(),
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
-  status: z.enum(["OPEN", "IN_PROGRESS"]).optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(WORK_STATUSES).nullable().optional(),
   // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
@@ -559,7 +603,6 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
         ...(body.scheduledAt !== undefined
           ? { scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null }
           : {}),
-        ...(body.status !== undefined ? { status: body.status } : {}),
         ...(body.symptom !== undefined ? { symptom: body.symptom?.trim() || null } : {}),
         ...(body.workStatus !== undefined ? { workStatus: body.workStatus } : {}),
       },
@@ -577,17 +620,281 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       body.scheduledAt !== undefined;
     if (touchedNote) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
 
-    const nextStatus = body.status ?? current.status;
-    if (body.status === "IN_PROGRESS" && current.status !== "IN_PROGRESS") {
-      await writeLog(tx, id, req.auth!.userId, "STARTED", nextStatus);
-    } else if (
-      body.assignedToId !== undefined &&
-      body.assignedToId !== current.assignedToId
-    ) {
-      await writeLog(tx, id, req.auth!.userId, "ASSIGNED", nextStatus);
-    } else {
-      await writeLog(tx, id, req.auth!.userId, "EDITED", nextStatus);
+    await writeLog(tx, id, req.auth!.userId, "EDITED", current.status);
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+
+// ── การเดินขั้นตามสายงาน ────────────────────────────
+//
+// แต่ละขั้นมีเจ้าของ และเดินได้ทีละขั้นเท่านั้น แอดมินทำแทนได้ทุกขั้นเพราะงานด่วน
+// รอหัวหน้าภาคว่างไม่ได้ แต่ก็ยังข้ามลำดับไม่ได้ ไม่งั้นจะมีใบงานที่จ่ายให้ช่าง
+// ทั้งที่ยังไม่มีใครเช็คว่ามีอะไหล่หรือเปล่า
+
+/**
+ * ตรวจว่าคนนี้ยุ่งกับใบงานนี้ได้ไหม ก่อนดูว่าขั้นถูกหรือเปล่า
+ *
+ * หัวหน้าภาคดูแลเฉพาะภาคตัวเอง ถ้าไม่กันไว้ หัวหน้าภาคใต้จะจ่ายงานภาคเหนือได้
+ * ซึ่งไม่ใช่แค่ผิดสิทธิ์ แต่ทำให้ช่างที่อยู่คนละจังหวัดถูกส่งไปงานที่ไปไม่ถึง
+ */
+async function guardStage(
+  req: AuthRequest,
+  res: Response,
+  id: number,
+  expected: string
+): Promise<{ id: number; status: string; assignedToId: number | null } | null> {
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      assignedToId: true,
+      branch: { select: { region: true } },
+    },
+  });
+  if (!wo) {
+    res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+
+  const role = req.auth!.role;
+  if (role === "SUPERVISOR") {
+    const me = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { region: true },
+    });
+    if (!me?.region || me.region !== wo.branch.region) {
+      res.status(403).json({
+        error: `ใบงานนี้อยู่ภาค${wo.branch.region ?? "ที่ยังไม่ระบุ"} ไม่ใช่ภาคที่คุณดูแล`,
+      });
+      return null;
     }
+  }
+
+  if (wo.status !== expected) {
+    res.status(409).json({
+      error: `${wo.code} อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}" ยังไม่ถึงขั้นนี้`,
+      status: wo.status,
+    });
+    return null;
+  }
+
+  if (!canActOnStage(role, expected)) {
+    const actor = WORK_ORDER_STAGE_ACTOR[expected];
+    res.status(403).json({
+      error: `ขั้นนี้เป็นของ${ROLE_LABELS[actor] ?? actor} ไม่ใช่ของคุณ`,
+    });
+    return null;
+  }
+
+  return { id: wo.id, status: wo.status, assignedToId: wo.assignedToId };
+}
+
+/** ขั้น 2 — หัวหน้าภาคระบุอะไหล่ที่ต้องใช้ */
+const partsSchema = z.object({
+  parts: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(999).default(1),
+      })
+    )
+    .min(1, "ต้องระบุอะไหล่อย่างน้อยหนึ่งรายการ")
+    .max(20),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = partsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!(await guardStage(req, res, id, "NEW"))) return;
+
+  await prisma.$transaction(async (tx) => {
+    await replaceParts(tx, id, "WAITING", parsed.data.parts);
+    await tx.workOrder.update({ where: { id }, data: { status: "PARTS_REQUESTED" } });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "PARTS_REQUESTED",
+      "PARTS_REQUESTED",
+      parsed.data.note || null
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/** ขั้น 3 — แอดมินเช็คว่าอะไหล่แต่ละตัวมีไหม อยู่คลังไหน */
+const partsCheckSchema = z.object({
+  results: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        inStock: z.boolean(),
+        // บังคับเฉพาะตอนบอกว่ามีของ ของที่หมดไม่มีคลังให้ระบุ
+        warehouse: z.string().trim().max(120).nullable().optional(),
+      })
+    )
+    .min(1),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = partsCheckSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!(await guardStage(req, res, id, "PARTS_REQUESTED"))) return;
+
+  const waiting = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: { sparePartId: true },
+  });
+  const need = new Set(waiting.map((w) => w.sparePartId));
+  const answered = new Set(parsed.data.results.map((r) => r.sparePartId));
+  const missing = [...need].filter((pid) => !answered.has(pid));
+  if (missing.length > 0) {
+    return res.status(400).json({ error: "ต้องเช็คให้ครบทุกรายการก่อนจึงจะไปขั้นต่อไปได้" });
+  }
+  for (const r of parsed.data.results) {
+    if (r.inStock && !r.warehouse) {
+      return res.status(400).json({ error: "ของที่มีอยู่ ต้องระบุด้วยว่าอยู่คลังไหน" });
+    }
+    if (r.inStock && r.warehouse && !WAREHOUSES.includes(r.warehouse as never)) {
+      return res.status(400).json({ error: `ไม่รู้จักคลัง "${r.warehouse}"` });
+    }
+  }
+
+  // มีตัวไหนหมด = ทั้งใบต้องรออะไหล่ เพราะช่างไปแล้วก็ซ่อมไม่จบอยู่ดี
+  const anyOut = parsed.data.results.some((r) => !r.inStock);
+  const now = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    for (const r of parsed.data.results) {
+      await tx.workOrderPart.updateMany({
+        where: { workOrderId: id, kind: "WAITING", sparePartId: r.sparePartId },
+        data: {
+          inStock: r.inStock,
+          warehouse: r.inStock ? r.warehouse ?? null : null,
+          checkedAt: now,
+          checkedById: req.auth!.userId,
+        },
+      });
+    }
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: "PARTS_CHECKED",
+        // ของหมดขึ้นรออะไหล่ให้เอง ไม่ต้องรอใครมากดอีกที
+        ...(anyOut ? { workStatus: "WAITING_PARTS" } : {}),
+      },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "PARTS_CHECKED",
+      "PARTS_CHECKED",
+      parsed.data.note ||
+        (anyOut ? "มีอะไหล่ที่หมด — ขึ้นสถานะรออะไหล่" : "อะไหล่ครบทุกรายการ")
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/** ขั้น 4 — หัวหน้าภาคจ่ายงานให้ช่าง */
+const assignSchema = z.object({
+  assignedToId: z.number().int().positive(),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = assignSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!(await guardStage(req, res, id, "PARTS_CHECKED"))) return;
+
+  const tech = await prisma.user.findUnique({
+    where: { id: parsed.data.assignedToId },
+    select: { id: true, name: true },
+  });
+  if (!tech) return res.status(404).json({ error: "ไม่พบช่างคนนี้" });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "ASSIGNED", assignedToId: tech.id },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "ASSIGNED",
+      "ASSIGNED",
+      parsed.data.note || `จ่ายงานให้ ${tech.name}`
+    );
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/** ขั้น 5 — ช่างกำหนดวันที่จะเข้า */
+const scheduleSchema = z.object({
+  scheduledAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่ต้องเป็น ปี-เดือน-วัน"),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = scheduleSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const wo = await guardStage(req, res, id, "ASSIGNED");
+  if (!wo) return;
+
+  // ช่างคนอื่นนัดวันแทนกันไม่ได้ คนที่ถือใบงานคือคนที่รู้ว่าตัวเองว่างวันไหน
+  if (
+    req.auth!.role !== "ADMIN" &&
+    wo.assignedToId !== null &&
+    wo.assignedToId !== req.auth!.userId
+  ) {
+    return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: "IN_PROGRESS",
+        scheduledAt: new Date(`${parsed.data.scheduledAt}T00:00:00.000Z`),
+        // นัดวันแล้ว = รอช่างเข้า ไม่ใช่รออะไหล่อีกต่อไป เว้นแต่ของยังไม่มา
+        ...(parsed.data.note ? {} : {}),
+      },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "SCHEDULED",
+      "IN_PROGRESS",
+      parsed.data.note || `นัดเข้าวันที่ ${parsed.data.scheduledAt}`
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   });
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
@@ -614,7 +921,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 
   const current = await prisma.workOrder.findUnique({
     where: { id },
-    select: { status: true, code: true },
+    select: { status: true, code: true, assignedToId: true },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (current.status === "DONE") {
@@ -622,6 +929,22 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
   if (current.status === "CANCELLED") {
     return res.status(400).json({ error: `${current.code} ถูกยกเลิกไปแล้ว` });
+  }
+  // ปิดได้ตั้งแต่ถูกจ่ายงานแล้ว เผื่อไปถึงหน้างานวันเดียวกันโดยไม่ได้นัดล่วงหน้า
+  if (current.status !== "ASSIGNED" && current.status !== "IN_PROGRESS") {
+    return res.status(409).json({
+      error: `${current.code} ยังไม่ถูกจ่ายให้ช่าง ปิดงานไม่ได้ — ตอนนี้อยู่ขั้น "${
+        WORK_ORDER_STATUS_LABELS[current.status] ?? current.status
+      }"`,
+    });
+  }
+  // คนปิดต้องเป็นคนที่ไปทำ ไม่งั้นใบงานถูกปิดโดยคนที่ไม่รู้ว่าหน้างานเป็นยังไง
+  if (
+    req.auth!.role !== "ADMIN" &&
+    current.assignedToId !== null &&
+    current.assignedToId !== req.auth!.userId
+  ) {
+    return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
   }
 
   const now = new Date();
@@ -688,16 +1011,16 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
 
   const current = await prisma.workOrder.findUnique({ where: { id }, select: { status: true } });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (current.status === "OPEN" || current.status === "IN_PROGRESS") {
+  if (current.status !== "DONE" && current.status !== "CANCELLED") {
     return res.status(400).json({ error: "ใบงานนี้ยังไม่ได้ปิด" });
   }
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
-      data: { status: "OPEN", closedAt: null, closedById: null, closeResult: null },
+      data: { status: "ASSIGNED", closedAt: null, closedById: null, closeResult: null },
     });
-    await writeLog(tx, id, req.auth!.userId, "REOPENED", "OPEN");
+    await writeLog(tx, id, req.auth!.userId, "REOPENED", "ASSIGNED");
   });
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });

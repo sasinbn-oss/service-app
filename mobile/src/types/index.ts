@@ -1,4 +1,4 @@
-export type Role = "EMPLOYEE" | "ADMIN";
+export type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN";
 
 export interface User {
   id: number;
@@ -6,6 +6,8 @@ export interface User {
   name: string;
   phone?: string | null;
   role: Role;
+  /** ภาคที่หัวหน้าภาคดูแล — ว่างสำหรับบทบาทอื่น */
+  region?: string | null;
 }
 
 export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE";

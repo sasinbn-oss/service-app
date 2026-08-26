@@ -3,8 +3,8 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { signToken } from "../utils/jwt";
-import { requireAuth, AuthRequest } from "../middleware/auth";
-import { Role } from "../utils/constants";
+import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
+import { ROLES, Role } from "../utils/constants";
 
 const router = Router();
 
@@ -83,7 +83,59 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
     name: user.name,
     phone: user.phone,
     role: user.role,
+    region: user.region,
   });
+});
+
+/**
+ * จัดการผู้ใช้ — แอดมินเท่านั้น
+ *
+ * ต้องมีหน้านี้เพราะสายงานใบงานพึ่งบทบาท ถ้าตั้งหัวหน้าภาคไม่ได้ ใบงานจะค้าง
+ * อยู่ขั้น "รอหัวหน้าภาคระบุอะไหล่" ตลอดไปโดยไม่มีใครมีสิทธิ์ทำต่อ
+ */
+router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
+  const users = await prisma.user.findMany({
+    select: { id: true, employeeCode: true, name: true, phone: true, role: true, region: true },
+    orderBy: [{ role: "asc" }, { name: "asc" }],
+  });
+  res.json(users);
+});
+
+const userUpdateSchema = z.object({
+  role: z.enum(ROLES).optional(),
+  region: z.string().trim().max(120).nullable().optional(),
+});
+
+router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสผู้ใช้ไม่ถูกต้อง" });
+
+  const parsed = userUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const body = parsed.data;
+
+  // แอดมินคนสุดท้ายลดสิทธิ์ตัวเองไม่ได้ ไม่งั้นจะไม่เหลือใครตั้งสิทธิ์ให้ใครอีกเลย
+  if (body.role && body.role !== "ADMIN") {
+    const target = await prisma.user.findUnique({ where: { id }, select: { role: true } });
+    if (target?.role === "ADMIN") {
+      const admins = await prisma.user.count({ where: { role: "ADMIN" } });
+      if (admins <= 1) {
+        return res.status(400).json({ error: "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน" });
+      }
+    }
+  }
+
+  const updated = await prisma.user.update({
+    where: { id },
+    data: {
+      ...(body.role !== undefined ? { role: body.role } : {}),
+      // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้ง
+      ...(body.region !== undefined ? { region: body.region || null } : {}),
+      ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null } : {}),
+    },
+    select: { id: true, employeeCode: true, name: true, phone: true, role: true, region: true },
+  });
+  res.json(updated);
 });
 
 export default router;
