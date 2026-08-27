@@ -27,6 +27,7 @@ export type HomeStackParamList = {
   WorkLogForm: undefined;
   VehicleCheckIn: undefined;
   ConsumableRequest: undefined;
+  ChangePassword: undefined;
 };
 
 /** Tab 2 — everything the user has already recorded. */

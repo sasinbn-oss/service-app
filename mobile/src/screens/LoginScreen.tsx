@@ -72,8 +72,12 @@ export default function LoginScreen({ navigation }: Props) {
         )}
       </TouchableOpacity>
 
+      {/*
+        สมัครเองได้เฉพาะผู้ใช้คนแรกของระบบ ที่เหลือแอดมินเป็นคนสร้างให้
+        ลิงก์ยังอยู่เพื่อให้ตั้งแอดมินคนแรกได้ตอนติดตั้งใหม่ แต่เขียนให้ตรงว่าใช้เมื่อไหร่
+      */}
       <TouchableOpacity onPress={() => navigation.navigate("Register")}>
-        <Text style={styles.link}>ยังไม่มีบัญชี? ลงทะเบียนที่นี่</Text>
+        <Text style={styles.link}>ตั้งแอดมินคนแรก (ใช้ตอนติดตั้งระบบครั้งแรกเท่านั้น)</Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>
   );

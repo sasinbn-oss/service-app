@@ -26,6 +26,11 @@ model User {
   // ใช้เฉพาะกับ role SUPERVISOR เพื่อจำกัดว่าเห็นและจัดการใบงานของภาคไหน
   // แอดมินเห็นทุกภาคจึงไม่ต้องใส่ ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
   region             String?
+  // ต้องเปลี่ยนรหัสก่อนใช้งาน
+  //
+  // ตั้งเป็น true ตอนแอดมินสร้างบัญชีให้ หรือตอนแอดมินตั้งรหัสใหม่ให้
+  // เพราะรหัสตั้งต้นผ่านมือคนอื่นมาแล้ว จะถือว่าเป็นความลับของเจ้าของบัญชีไม่ได้
+  mustChangePassword Boolean             @default(false)
   createdAt          DateTime            @default(now())
   vehicleLogs        VehicleLog[]
   branchCheckIns     BranchCheckIn[]

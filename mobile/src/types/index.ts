@@ -8,6 +8,8 @@ export interface User {
   role: Role;
   /** ภาคที่หัวหน้าภาคดูแล — ว่างสำหรับบทบาทอื่น */
   region?: string | null;
+  /** true = ยังใช้รหัสตั้งต้นที่แอดมินให้มา ต้องเปลี่ยนก่อนใช้งาน */
+  mustChangePassword?: boolean;
 }
 
 export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE";

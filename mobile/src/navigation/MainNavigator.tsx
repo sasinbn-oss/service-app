@@ -29,6 +29,7 @@ import WorkLogHistoryScreen from "../screens/WorkLogHistoryScreen";
 import VehicleCheckInScreen from "../screens/VehicleCheckInScreen";
 import VehicleHistoryScreen from "../screens/VehicleHistoryScreen";
 import ConsumableRequestScreen from "../screens/ConsumableRequestScreen";
+import ChangePasswordScreen from "../screens/ChangePasswordScreen";
 import MyConsumableRequestsScreen from "../screens/MyConsumableRequestsScreen";
 import ReviewRequestsScreen from "../screens/ReviewRequestsScreen";
 import ManageGuidesScreen from "../screens/ManageGuidesScreen";
@@ -157,6 +158,11 @@ function HomeStackNavigator() {
         name="ConsumableRequest"
         component={ConsumableRequestScreen}
         options={{ title: "เบิกของใช้สิ้นเปลือง" }}
+      />
+      <HomeStack.Screen
+        name="ChangePassword"
+        component={ChangePasswordScreen}
+        options={{ title: "เปลี่ยนรหัสผ่าน" }}
       />
     </HomeStack.Navigator>
   );

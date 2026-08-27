@@ -97,6 +97,22 @@ router.get("/", requireAuth, async (req, res) => {
   res.json(branches);
 });
 
+/**
+ * ภาคทั้งหมดจากทะเบียนสาขา
+ *
+ * ต่างจาก /machines/regions ที่ให้เฉพาะภาคที่มีเคสค้างอยู่ตอนนี้ — ภาคที่หัวหน้าภาค
+ * ดูแลไม่ควรขึ้นกับว่าตอนนี้มีเครื่องเสียอยู่หรือเปล่า ภาคที่ทุกอย่างปกติก็ยังต้องมีหัวหน้า
+ */
+router.get("/regions", requireAuth, async (_req, res) => {
+  const rows = await prisma.branch.groupBy({
+    by: ["region"],
+    where: { region: { not: null }, cancelledAt: null },
+    _count: true,
+    orderBy: { region: "asc" },
+  });
+  res.json(rows.map((r) => ({ name: r.region as string, branches: r._count })));
+});
+
 const branchSchema = z.object({
   name: z.string().min(1),
   code: z.string().min(1),

@@ -9,6 +9,8 @@ interface AuthContextValue {
   login: (employeeCode: string, password: string) => Promise<void>;
   register: (employeeCode: string, name: string, password: string, phone?: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** ใช้โทเคนใบใหม่หลังเปลี่ยนรหัส แล้วดึงข้อมูลผู้ใช้ล่าสุดมาแทน */
+  applyNewToken: (token: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -54,13 +56,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function applyNewToken(token: string) {
+    await AsyncStorage.setItem(TOKEN_KEY, token);
+    const { data } = await api.get<User>("/auth/me");
+    setUser(data);
+  }
+
   async function logout() {
     await AsyncStorage.removeItem(TOKEN_KEY);
     setUser(null);
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, applyNewToken }}>
       {children}
     </AuthContext.Provider>
   );

@@ -104,6 +104,15 @@ export default function HomeScreen({ navigation }: Props) {
       onPress: () => navigation.navigate("VehicleCheckIn"),
     },
     {
+      key: "ChangePassword",
+      label: "เปลี่ยนรหัสผ่าน",
+      description: "ตั้งรหัสผ่านใหม่ของบัญชีตัวเอง",
+      icon: "key",
+      tint: colors.border,
+      iconColor: colors.textMuted,
+      onPress: () => navigation.navigate("ChangePassword"),
+    },
+    {
       key: "ConsumableRequest",
       label: "เบิกของใช้สิ้นเปลือง",
       description: "ขอเบิกของจากออฟฟิศ",
