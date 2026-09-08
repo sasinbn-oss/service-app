@@ -424,8 +424,9 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             </View>
 
             {/*
-              ไปถึงหน้างานแล้วเจอว่าต้องเปลี่ยนอะไหล่ ทั้งที่ตอนแรกตกลงว่าไม่ต้องใช้
-              เดินหน้าต่อไม่ได้และปิดงานก็ไม่จบ จึงต้องมีทางส่งกลับ
+              ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม
+              ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
+              แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
             */}
             {order.status === "ASSIGNED" || order.status === "IN_PROGRESS" ? (
               <TouchableOpacity
@@ -436,7 +437,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               >
                 <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
                 <Text style={styles.rollbackText}>
-                  หน้างานต้องเปลี่ยนอะไหล่ — ส่งกลับให้หัวหน้าภาคประเมินใหม่
+                  จบงานไม่ได้ ต้องเบิกอะไหล่เพิ่ม — เลือกอะไหล่แล้วส่งกลับ
                 </Text>
               </TouchableOpacity>
             ) : null}
@@ -548,12 +549,14 @@ function RollbackModal({
   onDone: () => void;
 }) {
   const [reason, setReason] = useState("");
+  const [parts, setParts] = useState<PickedPart[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
     setReason("");
+    setParts([]);
     setError(null);
   }, [visible]);
 
@@ -561,7 +564,10 @@ function RollbackModal({
     setSaving(true);
     setError(null);
     try {
-      await api.post(`/work-orders/${order.id}/reassess-parts`, { reason: reason.trim() });
+      await api.post(`/work-orders/${order.id}/reassess-parts`, {
+        reason: reason.trim(),
+        parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+      });
       onDone();
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -575,10 +581,10 @@ function RollbackModal({
       <View style={styles.backdrop}>
         <View style={styles.modal}>
           <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>ส่งกลับให้ประเมินอะไหล่ใหม่</Text>
+            <Text style={styles.modalTitle}>ขอเบิกอะไหล่เพิ่ม</Text>
             <Text style={styles.linkedText}>
-              {order.code} จะกลับไปขั้นแรก ให้หัวหน้าภาคระบุอะไหล่อีกรอบ
-              วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
+              {order.code} จะกลับไปขั้นแรกให้หัวหน้าภาคดูรายการที่คุณขอ แล้วส่งต่อให้แอดมิน
+              เช็คคลัง วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
             </Text>
 
             <Text style={styles.modalLabel}>เจออะไรที่หน้างาน</Text>
@@ -592,6 +598,12 @@ function RollbackModal({
               numberOfLines={3}
               accessibilityLabel="เจออะไรที่หน้างาน"
             />
+
+            {/* ช่างเห็นของจริงว่าเสียตรงไหน จึงเลือกเองได้เลย ไม่ต้องรอให้ใครเดาแทน */}
+            <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ขอเบิกเพิ่ม" />
+            <Text style={styles.linkedText}>
+              ยังบอกไม่ได้ว่าต้องใช้ตัวไหน เว้นว่างได้ — หัวหน้าภาคจะเป็นคนระบุแทน
+            </Text>
 
             {error ? <Text style={styles.modalError}>{error}</Text> : null}
           </ScrollView>

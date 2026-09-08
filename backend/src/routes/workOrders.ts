@@ -949,6 +949,10 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
  * ช่างไปถึงหน้างานแล้วพบว่าต้องเปลี่ยนอะไหล่ ทั้งที่ตอนแรกตกลงกันว่าไม่ต้องใช้
  * หรือของที่เตรียมไปไม่ตรงกับที่เสียจริง กรณีนี้เดินหน้าต่อไม่ได้และปิดงานก็ไม่จบ
  *
+ * ช่างเลือกอะไหล่ที่จะเบิกเพิ่มมาด้วยได้ เพราะเป็นคนเดียวที่เห็นของจริงว่าเสียตรงไหน
+ * รายการนั้นถูกเก็บเป็นของที่รออยู่ แล้วเปิดให้หัวหน้าภาคดูก่อนส่งต่อให้แอดมินเช็คคลัง
+ * — ช่างรู้ว่าต้องใช้อะไร หัวหน้าภาครู้ว่าเบิกได้แค่ไหน สองอย่างนี้คนละเรื่องกัน
+ *
  * ส่งกลับไปขั้นแรกแทนการปิดแล้วเปิดใบใหม่ เพราะประวัติ เวลาที่ใช้ และเคสที่ผูกอยู่
  * ต้องอยู่ใบเดียวกัน ไม่งั้นจะดูไม่ออกว่างานนี้ไปมาแล้วกี่รอบ
  *
@@ -956,6 +960,16 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
  */
 const rollbackSchema = z.object({
   reason: z.string().trim().min(1, "ต้องบอกด้วยว่าเจออะไรที่หน้างาน").max(500),
+  // อะไหล่ที่ช่างขอเบิกเพิ่ม ไม่ใส่ก็ได้ ถ้ายังบอกไม่ได้ว่าต้องใช้ตัวไหน
+  parts: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(999).default(1),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) => {
@@ -992,20 +1006,49 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
     return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
   }
 
+  const requested = parsed.data.parts ?? [];
+
+  // ชื่อรหัสอะไหล่ไว้เขียนลงประวัติ ให้อ่านย้อนหลังรู้ว่าช่างขอเบิกอะไรไว้
+  const requestedCodes =
+    requested.length === 0
+      ? []
+      : (
+          await prisma.sparePart.findMany({
+            where: { id: { in: requested.map((p) => p.sparePartId) } },
+            select: { id: true, partCode: true },
+          })
+        ).map((sp) => {
+          const want = requested.find((p) => p.sparePartId === sp.id);
+          return want && want.quantity > 1 ? `${sp.partCode} x${want.quantity}` : sp.partCode;
+        });
+
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
       data: {
         status: "NEW",
-        // เปิดให้ตัดสินใหม่ ของที่เคยเช็คไว้ไม่ตรงกับที่เจอจริงแล้ว
-        needsParts: null,
+        // ช่างระบุของมาแล้ว = ต้องใช้อะไหล่แน่ๆ ไม่ต้องให้ตัดสินซ้ำว่าใช้หรือไม่ใช้
+        // ไม่ได้ระบุมา ก็เปิดให้ตัดสินใหม่ทั้งหมด
+        needsParts: requested.length > 0 ? true : null,
         // ช่างคนเดิมยังติดอยู่กับใบงาน หัวหน้าภาคเปลี่ยนได้ตอนจ่ายงานรอบใหม่
         scheduledAt: null,
       },
     });
-    // ผลเช็คคลังรอบก่อนล้างทิ้ง ไม่งั้นแอดมินจะเห็นว่า "เช็คแล้ว" ทั้งที่ของเปลี่ยนไป
-    await tx.workOrderPart.deleteMany({ where: { workOrderId: id, kind: "WAITING" } });
-    await writeLog(tx, id, req.auth!.userId, "PARTS_ROLLBACK", "NEW", parsed.data.reason);
+
+    /**
+     * แทนที่ของที่รออยู่ด้วยรายการที่ช่างขอ
+     *
+     * แทนที่ ไม่ใช่เพิ่มต่อท้าย เพราะของชุดเดิมถูกเช็คคลังไปแล้วในรอบก่อน
+     * ถ้าเก็บไว้ แอดมินจะเห็นว่า "เช็คแล้ว" ทั้งที่ของที่ต้องใช้เปลี่ยนไปแล้ว
+     * replaceParts สร้างแถวใหม่ ผลเช็คคลังจึงกลับเป็นยังไม่เช็คให้เอง
+     */
+    await replaceParts(tx, id, "WAITING", requested);
+
+    const note =
+      requestedCodes.length > 0
+        ? `${parsed.data.reason} — ขอเบิกเพิ่ม: ${requestedCodes.join(", ")}`
+        : parsed.data.reason;
+    await writeLog(tx, id, req.auth!.userId, "PARTS_ROLLBACK", "NEW", note);
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   });
 
