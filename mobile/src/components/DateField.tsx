@@ -6,7 +6,7 @@
  */
 import React from "react";
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, radius, spacing } from "../theme";
 
 export function thaiDate(ymd: string | null) {

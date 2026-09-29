@@ -7,6 +7,7 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  FlatList,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -15,11 +16,12 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useWideLayout } from "../components/AppShell";
+import { useDebounced } from "../utils/useDebounced";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -80,6 +82,9 @@ export default function WorkOrderListScreen({ navigation }: Props) {
   const [filter, setFilter] = useState<Filter>("ACTIVE");
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState("");
+  // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
+  // ไม่งั้นพิมพ์รหัสใบงานหนึ่งรหัสจะยิงขอข้อมูลเท่าจำนวนตัวอักษร
+  const settledSearch = useDebounced(search);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,7 +97,7 @@ export default function WorkOrderListScreen({ navigation }: Props) {
           params: {
             status: filter,
             ...(mineOnly ? { assignedTo: "me" } : {}),
-            ...(search.trim() ? { search: search.trim() } : {}),
+            ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
           },
         }
       );
@@ -103,7 +108,7 @@ export default function WorkOrderListScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [filter, mineOnly, search]);
+  }, [filter, mineOnly, settledSearch]);
 
   // โหลดใหม่ทุกครั้งที่กลับมาหน้านี้ เพราะเพิ่งไปปิดงานมาแล้วตัวเลขต้องเปลี่ยน
   useFocusEffect(
@@ -186,24 +191,42 @@ export default function WorkOrderListScreen({ navigation }: Props) {
           </Text>
         </View>
       ) : (
-        <ScrollView
+        /*
+          FlatList ไม่ใช่ ScrollView เพราะ ScrollView สร้างการ์ดทุกใบตั้งแต่เปิดหน้า
+          รายการที่เปิดค้างสองร้อยใบจึงต้องวาดสองร้อยใบก่อนภาพแรกจะขึ้น
+          ทั้งที่จอเห็นพร้อมกันได้ห้าใบ — FlatList วาดเฉพาะที่กำลังจะเห็น
+        */
+        <FlatList
+          data={rows}
+          keyExtractor={(row) => String(row.id)}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
-        >
-          {rows.map((row) => (
+          initialNumToRender={8}
+          windowSize={7}
+          removeClippedSubviews
+          renderItem={({ item }) => (
             <WorkOrderCard
-              key={row.id}
-              row={row}
-              onPress={() => navigation.navigate("WorkOrderDetail", { id: row.id })}
+              row={item}
+              onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
             />
-          ))}
-        </ScrollView>
+          )}
+        />
       )}
     </View>
   );
 }
 
-function WorkOrderCard({ row, onPress }: { row: WorkOrderRow; onPress: () => void }) {
+/**
+ * memo ไว้เพราะการ์ดทั้งหน้าถูกวาดใหม่ทุกครั้งที่กดตัวกรองหรือพิมพ์ค้นหา
+ * ทั้งที่แถวส่วนใหญ่เป็นข้อมูลชุดเดิม
+ */
+const WorkOrderCard = React.memo(function WorkOrderCard({
+  row,
+  onPress,
+}: {
+  row: WorkOrderRow;
+  onPress: () => void;
+}) {
   const tone = statusTone(row.status);
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.8}>
@@ -260,7 +283,7 @@ function WorkOrderCard({ row, onPress }: { row: WorkOrderRow; onPress: () => voi
       ) : null}
     </TouchableOpacity>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },

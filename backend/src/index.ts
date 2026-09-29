@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import compression from "compression";
 import cors from "cors";
 import authRoutes from "./routes/auth";
 import vehicleRoutes from "./routes/vehicles";
@@ -20,6 +21,18 @@ import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkR2 } from "./storage/r2";
 
 const app = express();
+
+/**
+ * บีบอัดคำตอบก่อนส่งออก
+ *
+ * คำตอบของระบบนี้เป็น JSON ภาษาไทยที่มีคำซ้ำกันทั้งก้อน (ชื่อสาขา ชื่อภาค
+ * ป้ายสถานะ ชื่อช่อง) ซึ่งเป็นรูปแบบที่ gzip ย่อได้เยอะมาก — กระดานติดตาม
+ * เครื่องเสียลดจากหลักร้อย KB เหลือหลักสิบ
+ *
+ * Render ไม่ได้บีบอัดให้เอง ถ้าไม่ใส่ตรงนี้ก็ส่งดิบทั้งก้อนจริง ๆ
+ * คนที่จ่ายส่วนต่างคือช่างที่เปิดจากหน้างานด้วย 4G ไม่ใช่เซิร์ฟเวอร์
+ */
+app.use(compression());
 app.use(cors());
 app.use(express.json());
 

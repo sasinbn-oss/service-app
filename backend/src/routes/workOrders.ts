@@ -219,6 +219,60 @@ function shape(w: WorkOrderRow) {
   };
 }
 
+/**
+ * หน้ารายการใช้ข้อมูลน้อยกว่าหน้ารายละเอียดมาก
+ *
+ * เดิมรายการดึงชุดเดียวกับหน้ารายละเอียด สะดวกตอนเขียนแต่แพงตอนใช้ —
+ * ใบงานที่เปิดค้างสี่ร้อยใบกลายเป็น JSON เกือบ 400 KB ทั้งที่การ์ดในรายการ
+ * ใช้จริงสิบกว่าช่อง ที่เหลือคือรายการอะไหล่สองชุดต่อใบที่ไม่มีใครเห็น
+ *
+ * ช่างที่เปิดรายการงานจากหน้างานด้วย 4G เป็นคนจ่ายค่านั้น ไม่ใช่เซิร์ฟเวอร์
+ */
+const listSelect = {
+  id: true,
+  code: true,
+  source: true,
+  title: true,
+  status: true,
+  priority: true,
+  scheduledAt: true,
+  createdAt: true,
+  closedAt: true,
+  closeResult: true,
+  branch: { select: { code: true, name: true } },
+  machine: { select: { code: true } },
+  assignedTo: { select: { name: true } },
+  _count: { select: { attachments: true } },
+} as const;
+
+type WorkOrderListRow = Awaited<
+  ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
+>;
+
+function listShape(w: WorkOrderListRow) {
+  return {
+    id: w.id,
+    code: w.code,
+    source: w.source,
+    title: w.title,
+    status: w.status,
+    statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+    priority: w.priority,
+    priorityLabel: WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority,
+    branchCode: w.branch.code,
+    branchName: w.branch.name,
+    machineCode: w.machine?.code ?? null,
+    assignedToName: w.assignedTo?.name ?? null,
+    scheduledAt: w.scheduledAt,
+    createdAt: w.createdAt,
+    closedAt: w.closedAt,
+    closeResultLabel: w.closeResult
+      ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
+      : null,
+    attachmentCount: w._count.attachments,
+  };
+}
+
 function partShape(p: {
   quantity: number;
   inStock?: boolean | null;
@@ -310,7 +364,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
           }
         : {}),
     },
-    include: detailInclude,
+    select: listSelect,
     // ด่วนขึ้นก่อน แล้วเก่าสุดขึ้นก่อน — ลำดับที่ควรหยิบไปทำ
     orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
   });
@@ -318,7 +372,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const counts = await prisma.workOrder.groupBy({ by: ["status"], _count: true });
 
   res.json({
-    rows: rows.map(shape),
+    rows: rows.map(listShape),
     counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
   });
 });

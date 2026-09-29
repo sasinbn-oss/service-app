@@ -12,7 +12,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -21,6 +21,7 @@ import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
 import { colors, radius, shadow, spacing } from "../theme";
+import { useDebounced } from "../utils/useDebounced";
 
 /** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
 interface OutageRow {
@@ -218,6 +219,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const [region, setRegion] = useState<string | null>(null);
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
   const [search, setSearch] = useState("");
+  // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
+  // ไม่งั้นพิมพ์รหัสสาขาหนึ่งรหัสจะยิงขอทั้งตารางเท่าจำนวนตัวอักษร
+  const settledSearch = useDebounced(search);
   const [breachedOnly, setBreachedOnly] = useState(false);
   const [workStatus, setWorkStatus] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupKey>("region");
@@ -261,7 +265,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
             params: {
               ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
               ...(region ? { region } : {}),
-              ...(search.trim() ? { search: search.trim() } : {}),
+              ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
               ...(breachedOnly ? { breachedOnly: "true" } : {}),
               ...(workStatus ? { workStatus } : {}),
             },
@@ -275,7 +279,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         setRefreshing(false);
       }
     },
-    [tab, ownership, region, search, breachedOnly, workStatus]
+    [tab, ownership, region, settledSearch, breachedOnly, workStatus]
   );
 
   useFocusEffect(
@@ -690,8 +694,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                     key={row.id}
                     row={row}
                     isMachines={isMachines}
-                    onEdit={() => setEditing(row)}
-                    onWorkOrder={() => openWorkOrder(row)}
+                    onEdit={setEditing}
+                    onWorkOrder={openWorkOrder}
                   />
                 ))}
               </View>
@@ -1476,7 +1480,13 @@ function WorkOrderCell({ row, onPress }: { row: OutageRow; onPress: () => void }
   );
 }
 
-function OutageCard({
+/**
+ * memo ไว้เพราะแก้อาการของเคสเดียวทำให้ทั้งกระดานถูกวาดใหม่
+ *
+ * รับ row กับ handler ที่คงที่ แทนที่จะรับ arrow function ที่สร้างใหม่ทุกครั้ง
+ * ตอน map — ถ้ารับ arrow function memo จะไม่มีผลเลย เพราะ props เปลี่ยนทุกรอบ
+ */
+const OutageCard = React.memo(function OutageCard({
   row,
   isMachines,
   onEdit,
@@ -1484,14 +1494,14 @@ function OutageCard({
 }: {
   row: OutageRow;
   isMachines: boolean;
-  onEdit: () => void;
-  onWorkOrder: () => void;
+  onEdit: (row: OutageRow) => void;
+  onWorkOrder: (row: OutageRow) => void;
 }) {
   const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
   return (
     <TouchableOpacity
       style={[styles.card, row.breached && styles.cardBreached]}
-      onPress={onEdit}
+      onPress={() => onEdit(row)}
       activeOpacity={0.7}
     >
       <View style={styles.cardTop}>
@@ -1567,11 +1577,11 @@ function OutageCard({
       </View>
 
       <View style={styles.cardWorkOrder}>
-        <WorkOrderCell row={row} onPress={onWorkOrder} />
+        <WorkOrderCell row={row} onPress={() => onWorkOrder(row)} />
       </View>
     </TouchableOpacity>
   );
-}
+});
 
 const styles = StyleSheet.create({
   noteSource: { fontSize: 10, lineHeight: 16, color: colors.textFaint },
