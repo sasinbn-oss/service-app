@@ -1298,6 +1298,7 @@ type AttachmentRow = {
   uploadedAt: Date | null;
   thumbnail: Uint8Array | Buffer | null;
   createdAt: Date;
+  createdById: number | null;
   createdBy: { name: string } | null;
 };
 
@@ -1320,6 +1321,9 @@ function attachmentShape(a: AttachmentRow) {
     available: a.objectKey !== null && a.uploadedAt !== null,
     uploadedAt: a.uploadedAt,
     createdAt: a.createdAt,
+    // ส่ง id มาด้วย ไม่ใช่แค่ชื่อ เพราะในระบบนี้มีคนชื่อซ้ำกันจริง
+    // ถ้าหน้าจอเทียบด้วยชื่อ ช่างสองคนที่ชื่อเหมือนกันจะลบไฟล์ของกันและกันได้
+    createdById: a.createdById,
     createdByName: a.createdBy?.name ?? null,
     thumbnailDataUrl: a.thumbnail
       ? `data:image/jpeg;base64,${Buffer.from(a.thumbnail).toString("base64")}`
@@ -1337,6 +1341,7 @@ const attachmentSelect = {
   uploadedAt: true,
   thumbnail: true,
   createdAt: true,
+  createdById: true,
   createdBy: { select: { name: true } },
 } as const;
 

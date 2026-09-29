@@ -42,6 +42,7 @@ export interface WorkOrderRow {
   createdAt: string;
   closedAt: string | null;
   closeResultLabel: string | null;
+  attachmentCount: number;
 }
 
 type Filter = "ACTIVE" | "OPEN" | "IN_PROGRESS" | "DONE" | "ALL";
@@ -239,6 +240,15 @@ function WorkOrderCard({ row, onPress }: { row: WorkOrderRow; onPress: () => voi
           {row.source === "OUTAGE" ? " · เปิดจากกระดาน" : " · เปิดเอง"}
         </Text>
       </View>
+
+      {/* บอกแค่ว่ามีรูปกี่ไฟล์ ไม่โหลดรูปมาแสดงในรายการ — รายการมีเป็นร้อยใบ
+          คนที่ไล่ดูจะได้รู้ว่าใบไหนมีของให้ดูก่อนกดเข้าไป */}
+      {row.attachmentCount > 0 ? (
+        <View style={styles.metaRow}>
+          <Ionicons name="images-outline" size={13} color={colors.textFaint} />
+          <Text style={styles.meta}>{row.attachmentCount} รูป/วิดีโอ</Text>
+        </View>
+      ) : null}
 
       {row.closedAt ? (
         <View style={styles.metaRow}>

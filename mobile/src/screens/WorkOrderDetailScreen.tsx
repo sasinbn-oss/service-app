@@ -23,6 +23,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
 import DateField from "../components/DateField";
+import WorkOrderAttachments from "../components/WorkOrderAttachments";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
@@ -279,6 +280,13 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           </Text>
         ) : null}
       </View>
+
+      {/*
+        รูปหน้างาน — อยู่ต่อจากอาการเพราะเป็นเรื่องเดียวกัน คือ "เจออะไร"
+        ปิดงานแล้วแนบเพิ่มไม่ได้ ใบที่ปิดแล้วคือบันทึกที่จบไปแล้ว
+        ยกเว้นแอดมินที่ยังต้องเอาของที่ไม่ควรอยู่ในระบบออกได้
+      */}
+      <WorkOrderAttachments workOrderId={order.id} canEdit={!done || user?.role === "ADMIN"} />
 
       {order.outageId !== null ? (
         <View style={[styles.card, styles.linked]}>
