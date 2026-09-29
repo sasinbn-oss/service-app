@@ -216,6 +216,8 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CANCELLED: "ยกเลิกใบงาน",
   REOPENED: "เปิดงานใหม่",
   EDITED: "แก้ไขใบงาน",
+  ATTACHED: "แนบไฟล์",
+  ATTACHMENT_REMOVED: "ลบไฟล์แนบ",
 };
 
 /**
@@ -232,4 +234,56 @@ export function canActOnStage(role: string, stage: string) {
 /** รหัสที่คนอ่าน ตั้งจาก id จึงไม่มีทางชนกันและไม่ต้องนับแถวก่อน */
 export function workOrderCode(id: number): string {
   return `WO-${String(id).padStart(5, "0")}`;
+}
+
+// ── ไฟล์แนบใบงาน ────────────────────────────────────────
+
+export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO"] as const;
+
+export const ATTACHMENT_KIND_LABELS: Record<string, string> = {
+  IMAGE: "รูป",
+  VIDEO: "วิดีโอ",
+};
+
+/**
+ * ชนิดไฟล์ที่รับ
+ *
+ * heic คือรูปจาก iPhone ที่ยังไม่ได้แปลง ต้องรับไว้ด้วยเพราะช่างครึ่งหนึ่งใช้ iPhone
+ * ส่วน quicktime (.mov) คือวิดีโอจาก iPhone เช่นกัน
+ */
+export const ATTACHMENT_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+];
+
+export const ATTACHMENT_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"];
+
+/**
+ * เพดานขนาดไฟล์
+ *
+ * รูปตั้งไว้ 10 MB ทั้งที่แอปย่อให้เหลือหลักแสนไบต์ก่อนส่งอยู่แล้ว เผื่อไว้
+ * เฉพาะกรณีที่การย่อไม่ทำงาน (เช่นเปิดจากเว็บบนเครื่องที่ไม่รองรับ)
+ * ไม่ใช่ขนาดที่ตั้งใจให้ใช้จริง
+ *
+ * วิดีโอตั้งไว้ 60 MB ≈ คลิป 1080p ประมาณหนึ่งนาที ซึ่งพอสำหรับ "ถ่ายให้ดูว่า
+ * เครื่องมันดังแบบนี้" คลิปที่ยาวกว่านั้นไม่ได้ช่วยให้ใครเข้าใจอาการมากขึ้น
+ * แต่ค่าที่เก็บเพิ่มขึ้นตามความยาวตรง ๆ
+ */
+export const MAX_ATTACHMENT_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_ATTACHMENT_VIDEO_BYTES = 60 * 1024 * 1024;
+
+/** รูปย่อที่แอปส่งมาพร้อมไฟล์ ถ้าใหญ่กว่านี้แปลว่าแอปส่งรูปเต็มมาผิดช่อง */
+export const MAX_ATTACHMENT_THUMBNAIL_BYTES = 200 * 1024;
+
+/** กี่ไฟล์ต่อใบงาน — กันคนเผลออัปทั้งอัลบั้ม ไม่ได้กันการใช้งานปกติ */
+export const MAX_ATTACHMENTS_PER_WORK_ORDER = 20;
+
+export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | null {
+  const type = mimeType.split(";")[0].trim().toLowerCase();
+  if (ATTACHMENT_IMAGE_TYPES.includes(type)) return "IMAGE";
+  if (ATTACHMENT_VIDEO_TYPES.includes(type)) return "VIDEO";
+  return null;
 }

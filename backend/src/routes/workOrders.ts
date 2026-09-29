@@ -9,12 +9,27 @@
  * และต้องเห็นว่าเป็นแบบนั้น ไม่ใช่กลบด้วยการปิดเคสให้อัตโนมัติ
  */
 import { Router, Response } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { WAREHOUSES } from "../documents/warehouses";
 import {
+  buildObjectKey,
+  deleteObject,
+  getDownloadUrl,
+  isR2Configured,
+  uploadObject,
+  SIGNED_URL_TTL_SECONDS,
+} from "../storage/r2";
+import {
   ACTIVE_WORK_ORDER_STATUSES,
+  ATTACHMENT_KIND_LABELS,
+  attachmentKindFor,
+  MAX_ATTACHMENTS_PER_WORK_ORDER,
+  MAX_ATTACHMENT_IMAGE_BYTES,
+  MAX_ATTACHMENT_THUMBNAIL_BYTES,
+  MAX_ATTACHMENT_VIDEO_BYTES,
   JOB_TYPES,
   JOB_TYPE_HINTS,
   JOB_TYPE_LABELS,
@@ -47,6 +62,9 @@ const detailInclude = {
     include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true } } },
     orderBy: { id: "asc" },
   },
+  // นับอย่างเดียว ไม่ดึงรูปย่อมาด้วย เพราะรายการใบงานมีเป็นร้อยใบ
+  // ถ้าติดรูปย่อไปทุกใบ หน้ารายการจะโหลดหนักกว่าหน้ารายละเอียดหลายเท่า
+  _count: { select: { attachments: true } },
 } as const;
 
 /**
@@ -197,6 +215,7 @@ function shape(w: WorkOrderRow) {
     // อะไหล่ที่รออยู่ กับอะไหล่ที่ใช้ไปจริง เป็นคนละชุด
     waitingParts: w.parts.filter((p) => p.kind === "WAITING").map(partShape),
     parts: w.parts.filter((p) => p.kind !== "WAITING").map(partShape),
+    attachmentCount: w._count.attachments,
   };
 }
 
@@ -1180,6 +1199,338 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
+});
+
+// ── ไฟล์แนบ ────────────────────────────────────────────
+//
+// รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร ปัจจุบันช่างถ่ายส่งไลน์ ซึ่งหาย
+// ไปกับแชทภายในสองสัปดาห์ พอมีเรื่องต้องย้อนดูก็ไม่เหลืออะไร
+//
+// ไฟล์จริงไปอยู่บน R2 ฐานข้อมูลเก็บแค่ที่อยู่กับรูปย่อ — เหตุผลเต็มอยู่ใน
+// src/storage/r2.ts
+
+const attachmentUploadFields = multer({
+  storage: multer.memoryStorage(),
+  // multer รู้จักแค่เพดานเดียว จึงตั้งไว้ที่ค่าสูงสุด (วิดีโอ) แล้วค่อยเช็ค
+  // เพดานของรูปอีกทีหลังรู้ชนิดไฟล์ ไม่งั้นรูป 50 MB จะผ่านเข้ามาได้
+  limits: { fileSize: MAX_ATTACHMENT_VIDEO_BYTES, files: 2 },
+}).fields([
+  { name: "file", maxCount: 1 },
+  { name: "thumbnail", maxCount: 1 },
+]);
+
+/**
+ * ดักพลาดของ multer เอง
+ *
+ * ถ้าปล่อยให้หลุดไป error handler ของ express คนที่ส่งวิดีโอใหญ่เกินจะได้
+ * หน้า HTML 500 กลับไป แอปอ่านไม่ออก ขึ้นแค่ "เกิดข้อผิดพลาด" ทั้งที่
+ * สาเหตุชัดเจนและบอกเป็นภาษาคนได้
+ */
+function attachmentUpload(req: AuthRequest, res: Response, next: (err?: any) => void) {
+  attachmentUploadFields(req as any, res, (error: any) => {
+    if (!error) return next();
+    if (error?.code === "LIMIT_FILE_SIZE") {
+      const mb = Math.round(MAX_ATTACHMENT_VIDEO_BYTES / 1024 / 1024);
+      return res.status(400).json({ error: `ไฟล์ใหญ่เกิน ${mb} MB` });
+    }
+    if (error?.code === "LIMIT_UNEXPECTED_FILE") {
+      return res.status(400).json({ error: "ส่งไฟล์มาผิดช่อง" });
+    }
+    console.error("attachment upload failed", error);
+    return res.status(400).json({ error: "รับไฟล์ไม่สำเร็จ" });
+  });
+}
+
+/**
+ * ใครยุ่งกับไฟล์แนบของใบงานนี้ได้บ้าง
+ *
+ * ใช้กติกาเดียวกับหน้ารายการ — แอดมินทุกใบ หัวหน้าภาคเฉพาะภาคตัวเอง
+ * ช่างเฉพาะงานที่ถูกจ่ายให้ตัวเอง ถ้าตรงนี้หลวมกว่าหน้ารายการ จะกลายเป็นว่า
+ * ช่างเปิดรูปของใบงานที่ตัวเองมองไม่เห็นได้ด้วยการเดาเลขใบงาน
+ */
+async function loadAttachableWorkOrder(
+  req: AuthRequest,
+  res: Response,
+  id: number
+): Promise<{ id: number; code: string; status: string } | null> {
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      assignedToId: true,
+      branch: { select: { region: true } },
+    },
+  });
+  if (!wo) {
+    res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+
+  const role = req.auth!.role;
+  if (role === "SUPERVISOR") {
+    const me = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { region: true },
+    });
+    if (!me?.region || me.region !== wo.branch.region) {
+      res.status(403).json({
+        error: `ใบงานนี้อยู่ภาค${wo.branch.region ?? "ที่ยังไม่ระบุ"} ไม่ใช่ภาคที่คุณดูแล`,
+      });
+      return null;
+    }
+  } else if (role !== "ADMIN" && wo.assignedToId !== req.auth!.userId) {
+    res.status(403).json({ error: "ใบงานนี้ไม่ได้จ่ายให้คุณ" });
+    return null;
+  }
+
+  return { id: wo.id, code: wo.code, status: wo.status };
+}
+
+type AttachmentRow = {
+  id: number;
+  kind: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  objectKey: string | null;
+  uploadedAt: Date | null;
+  thumbnail: Uint8Array | Buffer | null;
+  createdAt: Date;
+  createdBy: { name: string } | null;
+};
+
+/**
+ * รูปย่อส่งไปกับรายการเลย ไม่แยกเป็นอีก endpoint
+ *
+ * ถ้าแยก หน้าจอต้องยิงเพิ่มอีกรูปละครั้ง และรูปพวกนี้ต้องล็อกอินถึงจะดูได้
+ * แต่ <Image> บนเว็บแนบ header ไม่ได้ จะต้องไปทำลิงก์ชั่วคราวให้รูปย่อด้วย
+ * ทั้งที่มันแค่ไม่กี่สิบ KB — ส่งติดไปเลยจบกว่าและเปิดหน้าได้ไวกว่า
+ */
+function attachmentShape(a: AttachmentRow) {
+  return {
+    id: a.id,
+    kind: a.kind,
+    kindLabel: ATTACHMENT_KIND_LABELS[a.kind] ?? a.kind,
+    fileName: a.fileName,
+    mimeType: a.mimeType,
+    sizeBytes: a.sizeBytes,
+    // false = อัปขึ้น R2 ไม่สำเร็จ เหลือแต่รูปย่อ กดดูไฟล์เต็มไม่ได้
+    available: a.objectKey !== null && a.uploadedAt !== null,
+    uploadedAt: a.uploadedAt,
+    createdAt: a.createdAt,
+    createdByName: a.createdBy?.name ?? null,
+    thumbnailDataUrl: a.thumbnail
+      ? `data:image/jpeg;base64,${Buffer.from(a.thumbnail).toString("base64")}`
+      : null,
+  };
+}
+
+const attachmentSelect = {
+  id: true,
+  kind: true,
+  fileName: true,
+  mimeType: true,
+  sizeBytes: true,
+  objectKey: true,
+  uploadedAt: true,
+  thumbnail: true,
+  createdAt: true,
+  createdBy: { select: { name: true } },
+} as const;
+
+router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+
+  const rows = await prisma.workOrderAttachment.findMany({
+    where: { workOrderId: id },
+    select: attachmentSelect,
+    orderBy: { createdAt: "asc" },
+  });
+  res.json({ rows: rows.map(attachmentShape) });
+});
+
+router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+
+  if (!isR2Configured()) {
+    return res.status(503).json({
+      error: "ยังไม่ได้ตั้งค่าที่เก็บไฟล์ (R2) ให้แจ้งผู้ดูแลระบบก่อนใช้งานส่วนนี้",
+    });
+  }
+
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const file = files?.file?.[0];
+  if (!file) return res.status(400).json({ error: "ไม่พบไฟล์ที่ส่งมา" });
+
+  const kind = attachmentKindFor(file.mimetype);
+  if (!kind) {
+    return res.status(400).json({ error: `ไฟล์ชนิด ${file.mimetype} ยังแนบไม่ได้ — รับเฉพาะรูปกับวิดีโอ` });
+  }
+
+  const limit = kind === "IMAGE" ? MAX_ATTACHMENT_IMAGE_BYTES : MAX_ATTACHMENT_VIDEO_BYTES;
+  if (file.size > limit) {
+    const mb = Math.round(limit / 1024 / 1024);
+    return res.status(400).json({
+      error:
+        kind === "IMAGE"
+          ? `รูปใหญ่เกิน ${mb} MB`
+          : `วิดีโอใหญ่เกิน ${mb} MB — ถ่ายสั้นลงหรือตัดให้เหลือเฉพาะช่วงที่เห็นอาการ`,
+    });
+  }
+
+  const count = await prisma.workOrderAttachment.count({ where: { workOrderId: id } });
+  if (count >= MAX_ATTACHMENTS_PER_WORK_ORDER) {
+    return res
+      .status(400)
+      .json({ error: `ใบงานหนึ่งแนบได้ไม่เกิน ${MAX_ATTACHMENTS_PER_WORK_ORDER} ไฟล์` });
+  }
+
+  const thumb = files?.thumbnail?.[0];
+  // รูปย่อใหญ่ผิดปกติ = แอปส่งรูปเต็มมาผิดช่อง ทิ้งไปดีกว่าเก็บรูป 3 MB
+  // ลงฐานข้อมูลทุกครั้งที่แนบ ซึ่งเป็นสิ่งที่ตั้งใจเลี่ยงตั้งแต่แรก
+  const thumbnail =
+    thumb && thumb.size > 0 && thumb.size <= MAX_ATTACHMENT_THUMBNAIL_BYTES ? thumb.buffer : null;
+
+  const objectKey = buildObjectKey(wo.code, file.originalname || `${kind.toLowerCase()}.bin`);
+
+  /**
+   * อัปไฟล์ก่อน แล้วค่อยบันทึกลงฐานข้อมูล
+   *
+   * ถ้าสลับลำดับ เวลาอัปไม่ผ่านจะเหลือแถวที่ชี้ไปยังไฟล์ที่ไม่มีอยู่จริง
+   * ทางนี้ถ้าอัปไม่ผ่านก็ไม่มีแถวเกิดขึ้นเลย ช่างกดใหม่ได้ทันที
+   * ที่แลกไปคืออาจเหลือไฟล์กำพร้าบน R2 ถ้าฐานข้อมูลล้มพอดี ซึ่งถูกกว่ามาก
+   */
+  try {
+    await uploadObject({ key: objectKey, body: file.buffer, contentType: file.mimetype });
+  } catch (error: any) {
+    console.error("R2 upload failed", error);
+    return res.status(502).json({ error: "อัปไฟล์ขึ้นที่เก็บไม่สำเร็จ ลองใหม่อีกครั้ง" });
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.workOrderAttachment.create({
+      data: {
+        workOrderId: id,
+        kind,
+        fileName: file.originalname || `${kind.toLowerCase()}.bin`,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        objectKey,
+        uploadedAt: new Date(),
+        thumbnail,
+        createdById: req.auth!.userId,
+      },
+      select: attachmentSelect,
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "ATTACHED",
+      wo.status,
+      `${ATTACHMENT_KIND_LABELS[kind] ?? kind}: ${row.fileName}`
+    );
+    return row;
+  });
+
+  res.status(201).json(attachmentShape(created));
+});
+
+/**
+ * ลิงก์เปิดไฟล์เต็ม
+ *
+ * ไม่ได้ส่งไฟล์ผ่านเซิร์ฟเวอร์ตัวเอง เพราะวิดีโอ 50 MB ที่วิ่งผ่าน backend
+ * จะกินแรมและกินเวลาของ request อื่นไปด้วย ให้ R2 ส่งตรงถึงเครื่องคนดูดีกว่า
+ * ลิงก์หมดอายุใน 2 ชั่วโมง เท่ากับลิงก์โหลดเอกสารที่ระบบใช้อยู่
+ */
+router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const attachmentId = Number(req.params.attachmentId);
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) {
+    return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
+  }
+
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+
+  const row = await prisma.workOrderAttachment.findFirst({
+    where: { id: attachmentId, workOrderId: id },
+    select: { objectKey: true, fileName: true, kind: true },
+  });
+  if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
+  if (!row.objectKey) {
+    return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ" });
+  }
+
+  try {
+    const url = await getDownloadUrl(row.objectKey, { fileName: row.fileName, inline: true });
+    res.json({ url, expiresInSeconds: SIGNED_URL_TTL_SECONDS });
+  } catch (error: any) {
+    console.error("R2 presign failed", error);
+    res.status(502).json({ error: "ขอลิงก์เปิดไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง" });
+  }
+});
+
+/**
+ * ลบไฟล์แนบ — คนที่อัปเองหรือแอดมินเท่านั้น
+ *
+ * ไม่ให้ใครก็ได้ลบ เพราะรูปหน้างานเป็นหลักฐาน และคนที่มีเหตุผลจะลบมีแค่สองแบบ
+ * คือคนที่เพิ่งอัปผิดรูป กับแอดมินที่ต้องเอาของที่ไม่ควรอยู่ในระบบออก
+ */
+router.delete("/:id/attachments/:attachmentId", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const attachmentId = Number(req.params.attachmentId);
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) {
+    return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
+  }
+
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+
+  const row = await prisma.workOrderAttachment.findFirst({
+    where: { id: attachmentId, workOrderId: id },
+    select: { id: true, objectKey: true, fileName: true, kind: true, createdById: true },
+  });
+  if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
+
+  if (req.auth!.role !== "ADMIN" && row.createdById !== req.auth!.userId) {
+    return res.status(403).json({ error: "ลบได้เฉพาะไฟล์ที่ตัวเองแนบไว้" });
+  }
+
+  // ลบแถวก่อน แล้วค่อยลบไฟล์ — ถ้าลบไฟล์บน R2 ไม่ผ่านแล้วหยุดไว้แค่นั้น
+  // คนกดจะเห็นว่าไฟล์ยังอยู่ทั้งที่ตั้งใจลบ ส่วนไฟล์ที่ค้างบน R2 ไม่มีใครเปิดถึง
+  // เพราะไม่มีแถวชี้ไปหาแล้ว และจะถูกเก็บกวาดตอนล้างไฟล์เก่าอยู่ดี
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrderAttachment.delete({ where: { id: row.id } });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "ATTACHMENT_REMOVED",
+      wo.status,
+      `${ATTACHMENT_KIND_LABELS[row.kind] ?? row.kind}: ${row.fileName}`
+    );
+  });
+
+  if (row.objectKey) {
+    try {
+      await deleteObject(row.objectKey);
+    } catch (error: any) {
+      console.error("R2 delete failed", error);
+    }
+  }
+
+  res.json({ ok: true });
 });
 
 export default router;

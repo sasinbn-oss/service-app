@@ -15,35 +15,36 @@ datasource db {
 // schema stays portable between database providers.
 
 model User {
-  id                 Int                 @id @default(autoincrement())
-  employeeCode       String              @unique
-  name               String
-  phone              String?
-  passwordHash       String
-  role               String              @default("EMPLOYEE")
+  id                   Int                   @id @default(autoincrement())
+  employeeCode         String                @unique
+  name                 String
+  phone                String?
+  passwordHash         String
+  role                 String                @default("EMPLOYEE")
   // ภาคที่หัวหน้าภาคคนนี้ดูแล — ตรงกับ Branch.region
   //
   // ใช้เฉพาะกับ role SUPERVISOR เพื่อจำกัดว่าเห็นและจัดการใบงานของภาคไหน
   // แอดมินเห็นทุกภาคจึงไม่ต้องใส่ ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
-  region             String?
+  region               String?
   // ต้องเปลี่ยนรหัสก่อนใช้งาน
   //
   // ตั้งเป็น true ตอนแอดมินสร้างบัญชีให้ หรือตอนแอดมินตั้งรหัสใหม่ให้
   // เพราะรหัสตั้งต้นผ่านมือคนอื่นมาแล้ว จะถือว่าเป็นความลับของเจ้าของบัญชีไม่ได้
-  mustChangePassword Boolean             @default(false)
-  createdAt          DateTime            @default(now())
-  vehicleLogs        VehicleLog[]
-  branchCheckIns     BranchCheckIn[]
-  workLogs           WorkLog[]
-  consumableRequests ConsumableRequest[] @relation("RequestedBy")
-  reviewedRequests   ConsumableRequest[] @relation("ReviewedBy")
-  outageNotes        Outage[]
-  outageNoteLogs     OutageNoteLog[]
-  createdWorkOrders  WorkOrder[]         @relation("CreatedWorkOrders")
-  assignedWorkOrders WorkOrder[]         @relation("AssignedWorkOrders")
-  closedWorkOrders   WorkOrder[]         @relation("ClosedWorkOrders")
-  workOrderLogs      WorkOrderLog[]
-  checkedParts       WorkOrderPart[]     @relation("CheckedWorkOrderParts")
+  mustChangePassword   Boolean               @default(false)
+  createdAt            DateTime              @default(now())
+  vehicleLogs          VehicleLog[]
+  branchCheckIns       BranchCheckIn[]
+  workLogs             WorkLog[]
+  consumableRequests   ConsumableRequest[]   @relation("RequestedBy")
+  reviewedRequests     ConsumableRequest[]   @relation("ReviewedBy")
+  outageNotes          Outage[]
+  outageNoteLogs       OutageNoteLog[]
+  createdWorkOrders    WorkOrder[]           @relation("CreatedWorkOrders")
+  assignedWorkOrders   WorkOrder[]           @relation("AssignedWorkOrders")
+  closedWorkOrders     WorkOrder[]           @relation("ClosedWorkOrders")
+  workOrderLogs        WorkOrderLog[]
+  checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
+  workOrderAttachments WorkOrderAttachment[]
 }
 
 model Vehicle {
@@ -495,8 +496,9 @@ model WorkOrder {
   closeResult String?
   closeNote   String?
 
-  parts WorkOrderPart[]
-  logs  WorkOrderLog[]
+  parts       WorkOrderPart[]
+  logs        WorkOrderLog[]
+  attachments WorkOrderAttachment[]
 
   @@index([status, createdAt])
   @@index([assignedToId, status])
@@ -547,6 +549,45 @@ model WorkOrderLog {
   status      String
   note        String?
   createdAt   DateTime  @default(now())
+
+  @@index([workOrderId, createdAt])
+}
+
+// รูปหรือวิดีโอที่แนบมากับใบงาน
+//
+// ไฟล์จริงอยู่บน Cloudflare R2 ไม่ได้อยู่ในฐานข้อมูลนี้ เพราะวิดีโอคลิปเดียว
+// 1 นาทีใหญ่กว่าข้อมูลทั้งระบบรวมกันหลายเท่า และพื้นที่ฐานข้อมูลแพงกว่า
+// พื้นที่เก็บไฟล์มาก — ที่นี่เก็บแค่ที่อยู่ของไฟล์กับรูปย่อ
+//
+// รูปย่อเก็บไว้ที่นี่โดยตั้งใจ (ไม่กี่สิบ KB) เพราะถ้าเก็บแต่ที่อยู่ หน้าใบงานจะเห็น
+// แค่ตัวหนังสือ หัวหน้าภาคที่ไล่ดูยี่สิบใบต้องกดเปิดทีละใบยี่สิบครั้ง
+// และถ้าวันหนึ่งไฟล์บน R2 ถูกย้ายหรือลบ อย่างน้อยยังเหลือภาพให้รู้ว่าเคยมีอะไร
+model WorkOrderAttachment {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  // IMAGE | VIDEO — ดูที่ ATTACHMENT_KINDS ใน src/utils/constants.ts
+  kind      String
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+
+  // ── ที่อยู่ของไฟล์จริงบน R2 ──
+  //
+  // เก็บเป็น key ในถัง (เช่น work-orders/WO-2026-0001/17590000-photo.jpg)
+  // ไม่ได้เก็บเป็น URL เพราะถังไม่ได้เปิดสาธารณะ — รูปในนี้เป็นภาพหน้าร้านลูกค้า
+  // เวลาจะดูต้องขอลิงก์ชั่วคราวจากเซิร์ฟเวอร์ทีละครั้ง ลิงก์หมดอายุใน 2 ชั่วโมง
+  objectKey  String?
+  // ว่าง = อัปขึ้น R2 ไม่สำเร็จ ยังเหลือแต่รูปย่อ ให้ลองใหม่ได้
+  uploadedAt DateTime?
+
+  // รูปย่อ ~20 KB เก็บที่นี่เพื่อให้ใบงานแสดงภาพได้โดยไม่ต้องขอลิงก์ทีละรูป
+  thumbnail Bytes?
+
+  createdById Int?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
 
   @@index([workOrderId, createdAt])
 }
