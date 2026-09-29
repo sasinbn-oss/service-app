@@ -5,7 +5,6 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import Ionicons from "@expo/vector-icons/Ionicons";
 
 import HomeScreen from "../screens/HomeScreen";
-import AssistantScreen from "../screens/AssistantScreen";
 import TransferDocumentScreen from "../screens/TransferDocumentScreen";
 import MachineDashboardScreen from "../screens/MachineDashboardScreen";
 import MachineImportScreen from "../screens/MachineImportScreen";
@@ -117,11 +116,6 @@ function HomeStackNavigator() {
         name="TransferDocument"
         component={TransferDocumentScreen}
         options={{ title: "เอกสารขอโอนสินค้า" }}
-      />
-      <HomeStack.Screen
-        name="Assistant"
-        component={AssistantScreen}
-        options={{ title: "ผู้ช่วย AI" }}
       />
       <HomeStack.Screen
         name="FlowList"

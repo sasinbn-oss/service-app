@@ -18,7 +18,6 @@ export type HomeStackParamList = {
   WorkOrderForm: { outageId?: number; presetTitle?: string; branchCode?: string } | undefined;
   WorkOrderDetail: { id: number };
   TransferDocument: undefined;
-  Assistant: undefined;
   FlowList: undefined;
   FlowRun: { id: number; title: string };
   SparePartList: undefined;

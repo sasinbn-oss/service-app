@@ -20,7 +20,6 @@
     "import:flow": "ts-node scripts/import-troubleshooting.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.115.0",
     "@aws-sdk/client-s3": "^3.1142.0",
     "@aws-sdk/s3-request-presigner": "^3.1142.0",
     "@prisma/client": "^5.20.0",
