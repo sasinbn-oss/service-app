@@ -17,7 +17,7 @@ import documentRoutes from "./routes/documents";
 import machineRoutes from "./routes/machines";
 import workOrderRoutes from "./routes/workOrders";
 import { requireAuth, requireAdmin } from "./middleware/auth";
-import { checkR2 } from "./storage/r2";
+import { checkFileStore } from "./storage/fileStore";
 
 const app = express();
 
@@ -40,12 +40,12 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
 /**
  * เช็คว่าที่เก็บไฟล์แนบต่อได้จริงไหม
  *
- * แยกไว้ต่างหากเพราะเวลาตั้งค่า R2 ผิด อาการที่ผู้ใช้เห็นคือ "อัปรูปไม่ขึ้น"
- * เหมือนกันหมด แต่สาเหตุมีสี่แบบและแก้คนละทาง ตรงนี้บอกว่าพังขั้นไหน
+ * แยกไว้ต่างหากเพราะเวลาตั้งค่าผิด อาการที่ผู้ใช้เห็นคือ "อัปรูปไม่ขึ้น"
+ * เหมือนกันหมด แต่สาเหตุมีหลายแบบและแก้คนละทาง ตรงนี้บอกว่าพังขั้นไหน
  * แอดมินเท่านั้น เพราะคำตอบบอกชื่อถังและสถานะคีย์
  */
 app.get("/health/storage", requireAuth, requireAdmin, async (_req, res) => {
-  res.json(await checkR2());
+  res.json(await checkFileStore());
 });
 
 app.use("/api/auth", authRoutes);

@@ -18,10 +18,10 @@ import {
   buildObjectKey,
   deleteObject,
   getDownloadUrl,
-  isR2Configured,
+  isFileStoreConfigured,
   uploadObject,
   SIGNED_URL_TTL_SECONDS,
-} from "../storage/r2";
+} from "../storage/fileStore";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
@@ -1260,8 +1260,8 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
 // รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร ปัจจุบันช่างถ่ายส่งไลน์ ซึ่งหาย
 // ไปกับแชทภายในสองสัปดาห์ พอมีเรื่องต้องย้อนดูก็ไม่เหลืออะไร
 //
-// ไฟล์จริงไปอยู่บน R2 ฐานข้อมูลเก็บแค่ที่อยู่กับรูปย่อ — เหตุผลเต็มอยู่ใน
-// src/storage/r2.ts
+// ไฟล์จริงไปอยู่บนที่เก็บไฟล์ภายนอก ฐานข้อมูลเก็บแค่ที่อยู่กับรูปย่อ —
+// เหตุผลเต็มอยู่ใน src/storage/fileStore.ts
 
 const attachmentUploadFields = multer({
   storage: multer.memoryStorage(),
@@ -1371,7 +1371,7 @@ function attachmentShape(a: AttachmentRow) {
     fileName: a.fileName,
     mimeType: a.mimeType,
     sizeBytes: a.sizeBytes,
-    // false = อัปขึ้น R2 ไม่สำเร็จ เหลือแต่รูปย่อ กดดูไฟล์เต็มไม่ได้
+    // false = อัปขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ กดดูไฟล์เต็มไม่ได้
     available: a.objectKey !== null && a.uploadedAt !== null,
     uploadedAt: a.uploadedAt,
     createdAt: a.createdAt,
@@ -1418,9 +1418,9 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
-  if (!isR2Configured()) {
+  if (!isFileStoreConfigured()) {
     return res.status(503).json({
-      error: "ยังไม่ได้ตั้งค่าที่เก็บไฟล์ (R2) ให้แจ้งผู้ดูแลระบบก่อนใช้งานส่วนนี้",
+      error: "ยังไม่ได้ตั้งค่าที่เก็บไฟล์ ให้แจ้งผู้ดูแลระบบก่อนใช้งานส่วนนี้",
     });
   }
 
@@ -1467,12 +1467,12 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
    *
    * ถ้าสลับลำดับ เวลาอัปไม่ผ่านจะเหลือแถวที่ชี้ไปยังไฟล์ที่ไม่มีอยู่จริง
    * ทางนี้ถ้าอัปไม่ผ่านก็ไม่มีแถวเกิดขึ้นเลย ช่างกดใหม่ได้ทันที
-   * ที่แลกไปคืออาจเหลือไฟล์กำพร้าบน R2 ถ้าฐานข้อมูลล้มพอดี ซึ่งถูกกว่ามาก
+   * ที่แลกไปคืออาจเหลือไฟล์กำพร้าในถัง ถ้าฐานข้อมูลล้มพอดี ซึ่งถูกกว่ามาก
    */
   try {
     await uploadObject({ key: objectKey, body: file.buffer, contentType: file.mimetype });
   } catch (error: any) {
-    console.error("R2 upload failed", error);
+    console.error("file upload failed", error);
     return res.status(502).json({ error: "อัปไฟล์ขึ้นที่เก็บไม่สำเร็จ ลองใหม่อีกครั้ง" });
   }
 
@@ -1509,7 +1509,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
  * ลิงก์เปิดไฟล์เต็ม
  *
  * ไม่ได้ส่งไฟล์ผ่านเซิร์ฟเวอร์ตัวเอง เพราะวิดีโอ 50 MB ที่วิ่งผ่าน backend
- * จะกินแรมและกินเวลาของ request อื่นไปด้วย ให้ R2 ส่งตรงถึงเครื่องคนดูดีกว่า
+ * จะกินแรมและกินเวลาของ request อื่นไปด้วย ให้ที่เก็บส่งตรงถึงเครื่องคนดูดีกว่า
  * ลิงก์หมดอายุใน 2 ชั่วโมง เท่ากับลิงก์โหลดเอกสารที่ระบบใช้อยู่
  */
 router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthRequest, res) => {
@@ -1535,7 +1535,7 @@ router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthR
     const url = await getDownloadUrl(row.objectKey, { fileName: row.fileName, inline: true });
     res.json({ url, expiresInSeconds: SIGNED_URL_TTL_SECONDS });
   } catch (error: any) {
-    console.error("R2 presign failed", error);
+    console.error("presign failed", error);
     res.status(502).json({ error: "ขอลิงก์เปิดไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง" });
   }
 });
@@ -1566,8 +1566,8 @@ router.delete("/:id/attachments/:attachmentId", requireAuth, async (req: AuthReq
     return res.status(403).json({ error: "ลบได้เฉพาะไฟล์ที่ตัวเองแนบไว้" });
   }
 
-  // ลบแถวก่อน แล้วค่อยลบไฟล์ — ถ้าลบไฟล์บน R2 ไม่ผ่านแล้วหยุดไว้แค่นั้น
-  // คนกดจะเห็นว่าไฟล์ยังอยู่ทั้งที่ตั้งใจลบ ส่วนไฟล์ที่ค้างบน R2 ไม่มีใครเปิดถึง
+  // ลบแถวก่อน แล้วค่อยลบไฟล์ — ถ้าลบไฟล์บนที่เก็บไม่ผ่านแล้วหยุดไว้แค่นั้น
+  // คนกดจะเห็นว่าไฟล์ยังอยู่ทั้งที่ตั้งใจลบ ส่วนไฟล์ที่ค้างในถัง ไม่มีใครเปิดถึง
   // เพราะไม่มีแถวชี้ไปหาแล้ว และจะถูกเก็บกวาดตอนล้างไฟล์เก่าอยู่ดี
   await prisma.$transaction(async (tx) => {
     await tx.workOrderAttachment.delete({ where: { id: row.id } });
@@ -1585,7 +1585,7 @@ router.delete("/:id/attachments/:attachmentId", requireAuth, async (req: AuthReq
     try {
       await deleteObject(row.objectKey);
     } catch (error: any) {
-      console.error("R2 delete failed", error);
+      console.error("file delete failed", error);
     }
   }
 

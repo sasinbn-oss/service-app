@@ -1,5 +1,13 @@
 /**
- * ที่เก็บไฟล์แนบของใบงาน — Cloudflare R2
+ * ที่เก็บไฟล์แนบของใบงาน
+ *
+ * ตอนนี้ชี้ไปที่ Supabase Storage เพราะโปรเจกต์จ่าย Supabase Pro อยู่แล้ว
+ * และแผนนั้นรวมที่เก็บไฟล์ 100 GB กับ bandwidth 250 GB/เดือนมาให้ในตัว
+ * การไปเปิดบัญชีที่เก็บไฟล์อีกเจ้าจึงเพิ่มบิล เพิ่มคีย์ เพิ่มหน้า dashboard
+ * ที่ต้องดูแล โดยไม่ได้พื้นที่เพิ่มในทางปฏิบัติ
+ *
+ * ทั้งไฟล์นี้เป็น S3 มาตรฐาน ไม่มีอะไรผูกกับ Supabase — ย้ายไปเจ้าอื่น
+ * (R2, S3, MinIO) ทำได้ด้วยการเปลี่ยนค่าใน .env ไม่ต้องแก้โค้ด
  *
  * ทำไมไม่เก็บลงฐานข้อมูลเหมือนรูปอะไหล่
  * ---------------------------------------
@@ -7,10 +15,6 @@
  * แต่ไฟล์แนบใบงานคนละเรื่อง — ช่างถ่ายงานละ 3-5 รูป บางงานถ่ายวิดีโอ
  * คลิปเดียว 1 นาทีก็ใหญ่กว่าข้อมูลทั้งระบบรวมกันแล้ว ถ้าเก็บลงฐานข้อมูล
  * ค่าที่เก็บจะแพงขึ้นเป็นร้อยเท่าโดยไม่ได้อะไรกลับมา
- *
- * R2 คิดค่าที่เก็บ $0.015 ต่อ GB ต่อเดือน และไม่คิดค่าโหลดออก (egress)
- * ซึ่งสำคัญกว่าราคาที่เก็บสำหรับงานแบบนี้ เพราะช่างกับหัวหน้าภาคเปิดดูรูป
- * ซ้ำ ๆ ทุกวัน ที่เก็บเจ้าอื่นคิดเงินทุกครั้งที่เปิด
  *
  * ทำไมถังต้องไม่เปิดสาธารณะ
  * ---------------------------
@@ -24,39 +28,38 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
-  HeadBucketCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 /** อายุลิงก์ชั่วคราว — เท่ากับลิงก์โหลดเอกสารในระบบ ให้คนใช้จำง่ายว่า "2 ชั่วโมง" */
 export const SIGNED_URL_TTL_SECONDS = 2 * 60 * 60;
 
-type R2Config = {
-  accountId: string;
+type StorageConfig = {
+  endpoint: string;
+  region: string;
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
-  endpoint: string;
 };
 
 let cachedClient: S3Client | null = null;
 
-function readConfig(): R2Config | null {
-  const accountId = process.env.R2_ACCOUNT_ID?.trim();
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim();
-  const bucket = process.env.R2_BUCKET?.trim();
-  if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
+function readConfig(): StorageConfig | null {
+  const endpoint = process.env.STORAGE_ENDPOINT?.trim();
+  const accessKeyId = process.env.STORAGE_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.STORAGE_SECRET_ACCESS_KEY?.trim();
+  const bucket = process.env.STORAGE_BUCKET?.trim();
+  if (!endpoint || !accessKeyId || !secretAccessKey || !bucket) return null;
 
-  // ปกติ endpoint เดาได้จาก account id แต่เปิดให้ทับได้เผื่อวันหนึ่งย้ายไป
-  // S3-compatible เจ้าอื่น โค้ดทั้งไฟล์นี้เป็น S3 มาตรฐาน ไม่มีอะไรผูกกับ R2
-  const endpoint =
-    process.env.R2_ENDPOINT?.trim() || `https://${accountId}.r2.cloudflarestorage.com`;
+  // Supabase ต้องใช้ region จริงของโปรเจกต์ในการเซ็นลายเซ็น ไม่ใช่ "auto"
+  // แบบที่ R2 ยอมรับ — เซ็นด้วย region ผิดจะโดนปฏิเสธว่าลายเซ็นไม่ถูกต้อง
+  const region = process.env.STORAGE_REGION?.trim() || "us-east-1";
 
-  return { accountId, accessKeyId, secretAccessKey, bucket, endpoint };
+  return { endpoint, region, accessKeyId, secretAccessKey, bucket };
 }
 
-export function isR2Configured(): boolean {
+export function isFileStoreConfigured(): boolean {
   return readConfig() !== null;
 }
 
@@ -64,15 +67,17 @@ function getClient(): { client: S3Client; bucket: string } {
   const config = readConfig();
   if (!config) {
     throw new Error(
-      "ยังไม่ได้ตั้งค่า R2 — ต้องมี R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY และ R2_BUCKET"
+      "ยังไม่ได้ตั้งค่าที่เก็บไฟล์ — ต้องมี STORAGE_ENDPOINT, STORAGE_ACCESS_KEY_ID, STORAGE_SECRET_ACCESS_KEY และ STORAGE_BUCKET"
     );
   }
 
   if (!cachedClient) {
     cachedClient = new S3Client({
-      // R2 ไม่มี region จริง แต่ SDK บังคับให้ใส่ ค่าที่ Cloudflare กำหนดคือ "auto"
-      region: "auto",
+      region: config.region,
       endpoint: config.endpoint,
+      // Supabase รับเฉพาะแบบ path-style (ชื่อถังอยู่ใน path)
+      // ไม่รับแบบ virtual-host ที่เอาชื่อถังไปไว้หน้าโดเมน
+      forcePathStyle: true,
       credentials: {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
@@ -86,7 +91,7 @@ function getClient(): { client: S3Client; bucket: string } {
  * ตัดชื่อไฟล์ให้ปลอดภัย
  *
  * ชื่อไฟล์มาจากมือถือของช่าง มีทั้งภาษาไทย ช่องว่าง วงเล็บ และบางเครื่อง
- * ใส่ path มาเต็ม ๆ ถ้าเอาไปต่อเป็น key ตรง ๆ จะได้โฟลเดอร์แปลก ๆ ใน R2
+ * ใส่ path มาเต็ม ๆ ถ้าเอาไปต่อเป็น key ตรง ๆ จะได้โฟลเดอร์แปลก ๆ ในถัง
  * หรือชนกับไฟล์อื่น ตรงนี้เก็บแค่นามสกุลกับตัวอักษรที่ปลอดภัย
  * ส่วนชื่อจริงที่ช่างเห็นเก็บไว้ในฐานข้อมูล (fileName) ไม่ได้หายไปไหน
  */
@@ -165,56 +170,80 @@ export async function deleteObject(key: string): Promise<void> {
 }
 
 /**
- * เช็คว่าต่อ R2 ได้จริงไหม
+ * เช็คว่าที่เก็บไฟล์ใช้งานได้จริงไหม
  *
  * บอกให้ชัดว่าพังตรงไหน เพราะเวลาตั้งค่าผิดอาการเหมือนกันหมด (อัปไม่ขึ้น)
- * แต่สาเหตุคนละเรื่อง: ยังไม่ใส่ค่า / คีย์ผิด / พิมพ์ชื่อถังผิด / เน็ตออกไม่ได้
+ * แต่สาเหตุคนละเรื่อง: ยังไม่ใส่ค่า / คีย์ผิด / พิมพ์ชื่อถังผิด / region ผิด
  * ถ้าไม่แยกไว้ คนตั้งค่าจะนั่งเดาอยู่เป็นชั่วโมง
+ *
+ * เช็คถึงขั้น "ขอลิงก์ชั่วคราวแล้วเปิดได้จริง" ด้วย ไม่ใช่แค่เขียนไฟล์ได้
+ * เพราะทั้งฟีเจอร์นี้ตั้งอยู่บนลิงก์ชั่วคราว ถ้าผู้ให้บริการไม่รองรับหรือ
+ * เซ็นด้วย region ผิด จะอัปขึ้นได้ปกติแต่ไม่มีใครเปิดรูปดูได้สักคน —
+ * ความพังแบบที่จะไปโผล่ตอนช่างกดรูปหน้างาน ไม่ใช่ตอนตั้งค่า
  */
-export async function checkR2(): Promise<{ ok: boolean; step: string; detail?: string }> {
+export async function checkFileStore(): Promise<{ ok: boolean; step: string; detail?: string }> {
   const config = readConfig();
   if (!config) {
     const missing = [
-      ["R2_ACCOUNT_ID", process.env.R2_ACCOUNT_ID],
-      ["R2_ACCESS_KEY_ID", process.env.R2_ACCESS_KEY_ID],
-      ["R2_SECRET_ACCESS_KEY", process.env.R2_SECRET_ACCESS_KEY],
-      ["R2_BUCKET", process.env.R2_BUCKET],
+      ["STORAGE_ENDPOINT", process.env.STORAGE_ENDPOINT],
+      ["STORAGE_ACCESS_KEY_ID", process.env.STORAGE_ACCESS_KEY_ID],
+      ["STORAGE_SECRET_ACCESS_KEY", process.env.STORAGE_SECRET_ACCESS_KEY],
+      ["STORAGE_BUCKET", process.env.STORAGE_BUCKET],
     ]
       .filter(([, value]) => !value?.trim())
       .map(([name]) => name);
     return { ok: false, step: "ตั้งค่า", detail: `ยังไม่ได้ใส่: ${missing.join(", ")}` };
   }
 
+  const { client, bucket } = getClient();
+
   try {
-    const { client, bucket } = getClient();
-    await client.send(new HeadBucketCommand({ Bucket: bucket }));
+    await client.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
   } catch (error: any) {
     const status = error?.$metadata?.httpStatusCode;
     if (status === 401 || status === 403) {
-      return { ok: false, step: "คีย์", detail: "คีย์ผิดหรือไม่มีสิทธิ์เข้าถังนี้" };
+      return {
+        ok: false,
+        step: "คีย์",
+        detail: `คีย์ผิด ไม่มีสิทธิ์เข้าถังนี้ หรือ region ไม่ตรง (ตอนนี้ตั้งไว้ ${config.region})`,
+      };
     }
     if (status === 404) {
-      return { ok: false, step: "ถัง", detail: `ไม่พบถังชื่อ ${config.bucket}` };
+      return { ok: false, step: "ถัง", detail: `ไม่พบถังชื่อ ${bucket}` };
     }
-    return {
-      ok: false,
-      step: "เชื่อมต่อ",
-      detail: error?.message || "ต่อไปที่ R2 ไม่ได้",
-    };
+    return { ok: false, step: "เชื่อมต่อ", detail: error?.message || "ต่อไปที่ที่เก็บไฟล์ไม่ได้" };
   }
 
-  // ต่อถังได้ไม่ได้แปลว่าเขียนได้ คีย์แบบอ่านอย่างเดียวก็ผ่านขั้นบน
-  // ลองเขียนไฟล์เปล่าแล้วลบทิ้ง เพื่อให้รู้ตั้งแต่ตอนตั้งค่าว่าอัปได้จริง
+  // อ่านถังได้ไม่ได้แปลว่าเขียนได้ คีย์แบบอ่านอย่างเดียวก็ผ่านขั้นบน
   const probeKey = `_healthcheck/${Date.now()}.txt`;
   try {
     await uploadObject({ key: probeKey, body: Buffer.from("ok"), contentType: "text/plain" });
-    await deleteObject(probeKey);
   } catch (error: any) {
     return {
       ok: false,
       step: "สิทธิ์เขียน",
       detail: error?.message || "เขียนไฟล์ลงถังไม่ได้ (คีย์อาจเป็นแบบอ่านอย่างเดียว)",
     };
+  }
+
+  try {
+    const url = await getDownloadUrl(probeKey, { fileName: "healthcheck.txt" });
+    const response = await fetch(url);
+    if (!response.ok) {
+      return {
+        ok: false,
+        step: "ลิงก์ชั่วคราว",
+        detail: `อัปไฟล์ขึ้นได้ แต่เปิดด้วยลิงก์ชั่วคราวไม่ได้ (HTTP ${response.status}) — มักเกิดจาก STORAGE_REGION ไม่ตรงกับ region จริงของโปรเจกต์`,
+      };
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      step: "ลิงก์ชั่วคราว",
+      detail: error?.message || "ขอลิงก์ชั่วคราวไม่สำเร็จ",
+    };
+  } finally {
+    await deleteObject(probeKey).catch(() => {});
   }
 
   return { ok: true, step: "พร้อมใช้งาน" };
