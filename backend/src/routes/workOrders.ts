@@ -25,12 +25,15 @@ import {
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
+  ATTACHMENT_ROLES,
+  ATTACHMENT_ROLE_LABELS,
   attachmentKindFor,
   MAX_ATTACHMENTS_PER_WORK_ORDER,
   MAX_ATTACHMENT_IMAGE_BYTES,
   MAX_ATTACHMENT_THUMBNAIL_BYTES,
   MAX_ATTACHMENT_VIDEO_BYTES,
   JOB_TYPES,
+  MACHINE_MODELS,
   JOB_TYPE_HINTS,
   JOB_TYPE_LABELS,
   ROLE_LABELS,
@@ -47,7 +50,10 @@ import {
   WORK_ORDER_STATUS_LABELS,
   WORK_ORDER_ACTION_LABELS,
   isCompanyBranch,
+  isValidMachineCode,
   isWarrantyExpired,
+  machineTypeFromCode,
+  normaliseMachineCode,
   workOrderCode,
 } from "../utils/constants";
 
@@ -433,6 +439,9 @@ router.get("/options", requireAuth, async (_req, res) => {
       label: JOB_TYPE_LABELS[v],
       hint: JOB_TYPE_HINTS[v],
     })),
+    // รุ่นเครื่องส่งมาจากที่นี่ที่เดียว เพิ่มรุ่นใหม่แล้วแอปเห็นทันทีโดยไม่ต้อง
+    // ปล่อยเวอร์ชันใหม่ — ถ้าฝังไว้ในแอป เครื่องที่ยังไม่อัปเดตจะเลือกรุ่นใหม่ไม่ได้
+    machineModels: MACHINE_MODELS,
     // ลำดับขั้นทั้งหมด ให้หน้าจอวาดเส้นทางเดินงานได้โดยไม่ต้องเขียนลำดับซ้ำ
     stages: WORK_ORDER_STAGE_ORDER.map((v) => ({
       value: v,
@@ -610,7 +619,16 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ถ้าไม่ระบุเครื่อง จะเปิดได้ใบเดียวเท่านั้น" });
   }
 
-  const codes = wanted.map((m) => m.code?.trim()).filter((c): c is string => !!c);
+  const codes = wanted
+    .map((m) => (m.code?.trim() ? normaliseMachineCode(m.code) : null))
+    .filter((c): c is string => !!c);
+
+  const badCode = codes.find((c) => !isValidMachineCode(c));
+  if (badCode) {
+    return res.status(400).json({
+      error: `หมายเลขเครื่อง "${badCode}" ไม่ถูกรูปแบบ — ต้องเป็น W หรือ D ตามด้วยตัวเลข เช่น W3 หรือ D12`,
+    });
+  }
   const duplicate = codes.find((c, i) => codes.indexOf(c) !== i);
   if (duplicate) {
     return res.status(400).json({ error: `เครื่อง ${duplicate} ถูกใส่ซ้ำ` });
@@ -633,14 +651,39 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     select: { id: true, code: true, model: true, removedAt: true },
   });
   const machines = new Map(found.map((m) => [m.code, m]));
+
   for (const code of codes) {
     const machine = machines.get(code);
-    if (!machine) {
-      return res.status(404).json({ error: `ไม่พบเครื่อง ${code} ในสาขา ${body.branchCode}` });
-    }
-    if (machine.removedAt) {
+    if (machine?.removedAt) {
       return res.status(400).json({ error: `เครื่อง ${code} ถูกถอดออกไปแล้ว` });
     }
+  }
+
+  /**
+   * เครื่องที่ยังไม่มีในระบบ ให้สร้างขึ้นมาเลย ไม่ใช่ปฏิเสธ
+   *
+   * เครื่องในระบบมาจากไฟล์รายงานซึ่งมีเฉพาะเครื่องที่เคยดับ เครื่องที่ยังไม่เคย
+   * มีปัญหาจึงไม่เคยถูกบันทึกไว้ — การบอกช่างว่า "ไม่พบเครื่อง W5" ทั้งที่ยืนอยู่
+   * หน้าเครื่องนั้นคือการให้เขาเถียงกับระบบเรื่องสิ่งที่เขาเห็นอยู่กับตา
+   *
+   * ตัวอักษรหน้าของรหัสบอกชนิดเครื่องอยู่แล้ว (W ซัก · D อบ) จึงสร้างได้ครบ
+   * โดยไม่ต้องถามเพิ่ม
+   */
+  const missing = codes.filter((c) => !machines.has(c));
+  if (missing.length > 0) {
+    await prisma.machine.createMany({
+      data: missing.map((code) => ({
+        branchId: branch.id,
+        code,
+        type: machineTypeFromCode(code)!,
+      })),
+      skipDuplicates: true,
+    });
+    const added = await prisma.machine.findMany({
+      where: { branchId: branch.id, code: { in: missing } },
+      select: { id: true, code: true, model: true, removedAt: true },
+    });
+    for (const m of added) machines.set(m.code, m);
   }
 
   /**
@@ -655,7 +698,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     async (tx) => {
       const ids: number[] = [];
       for (const entry of wanted) {
-        const code = entry.code?.trim();
+        const code = entry.code?.trim() ? normaliseMachineCode(entry.code) : undefined;
         const machine = code ? machines.get(code)! : null;
 
         // รุ่นเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง
@@ -1519,6 +1562,7 @@ type AttachmentRow = {
   sizeBytes: number;
   objectKey: string | null;
   uploadedAt: Date | null;
+  role: string | null;
   thumbnail: Uint8Array | Buffer | null;
   createdAt: Date;
   createdById: number | null;
@@ -1537,6 +1581,9 @@ function attachmentShape(a: AttachmentRow) {
     id: a.id,
     kind: a.kind,
     kindLabel: ATTACHMENT_KIND_LABELS[a.kind] ?? a.kind,
+    // ว่าง = รูปหน้างานทั่วไป · NAMEPLATE = รูปป้ายรุ่นบนตัวเครื่อง
+    role: a.role,
+    roleLabel: a.role ? ATTACHMENT_ROLE_LABELS[a.role] ?? a.role : null,
     fileName: a.fileName,
     mimeType: a.mimeType,
     sizeBytes: a.sizeBytes,
@@ -1562,6 +1609,7 @@ const attachmentSelect = {
   sizeBytes: true,
   objectKey: true,
   uploadedAt: true,
+  role: true,
   thumbnail: true,
   createdAt: true,
   createdById: true,
@@ -1623,6 +1671,11 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       .json({ error: `ใบงานหนึ่งแนบได้ไม่เกิน ${MAX_ATTACHMENTS_PER_WORK_ORDER} ไฟล์` });
   }
 
+  // บทบาทมาจากฟอร์ม ส่งมาผิดค่าถือว่าเป็นรูปทั่วไป ไม่ใช่ error —
+  // ไฟล์ที่อัปสำเร็จแล้วไม่ควรถูกทิ้งเพราะป้ายกำกับสะกดผิด
+  const rawRole = typeof req.body?.role === "string" ? req.body.role.trim().toUpperCase() : "";
+  const role = (ATTACHMENT_ROLES as readonly string[]).includes(rawRole) ? rawRole : null;
+
   const thumb = files?.thumbnail?.[0];
   // รูปย่อใหญ่ผิดปกติ = แอปส่งรูปเต็มมาผิดช่อง ทิ้งไปดีกว่าเก็บรูป 3 MB
   // ลงฐานข้อมูลทุกครั้งที่แนบ ซึ่งเป็นสิ่งที่ตั้งใจเลี่ยงตั้งแต่แรก
@@ -1655,6 +1708,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
         sizeBytes: file.size,
         objectKey,
         uploadedAt: new Date(),
+        role,
         thumbnail,
         createdById: req.auth!.userId,
       },

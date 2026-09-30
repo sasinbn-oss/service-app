@@ -50,27 +50,50 @@ interface BranchOption {
   openedAt: string | null;
   warrantyExpiresAt: string | null;
 }
-interface MachineOption {
-  id: number;
-  code: string;
-  type: string;
-  brand: string | null;
-  model: string | null;
+/**
+ * รุ่นเครื่อง — ของจริงมาจาก /work-orders/options ตอนเปิดฟอร์ม
+ *
+ * ที่เขียนไว้ตรงนี้เป็นแค่ค่าสำรองเผื่อโหลดตัวเลือกไม่ทัน จะได้ไม่เจอช่องรุ่นว่างเปล่า
+ * เป็นตัวเลือกตายตัวเพราะต้องนับแยกได้ว่ารุ่นไหนเสียบ่อย และเวลาสั่งอะไหล่
+ * ต้องรู้ว่ารุ่นอะไร ปล่อยให้พิมพ์เองจะได้ "Huebsch" "huebsch" ปนกัน
+ */
+const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Haier", "Maytag"];
+const MODEL_OTHER = "อื่นๆ";
+
+/** รุ่นที่จะส่งไปเซิร์ฟเวอร์ — ที่พิมพ์เองก็เป็นรุ่นเหมือนกัน */
+function resolvedModel(row: MachineRow): string {
+  return (row.model === MODEL_OTHER ? row.modelOther : row.model).trim();
 }
 
 /** หนึ่งแถว = หนึ่งใบงานที่จะถูกเปิด */
 interface MachineRow {
   key: string;
   code: string;
+  /** รุ่นที่เลือกจากรายการ หรือ MODEL_OTHER เมื่อจะพิมพ์เอง */
   model: string;
+  /** ชื่อรุ่นที่พิมพ์เอง ใช้เมื่อ model เป็น MODEL_OTHER */
+  modelOther: string;
   symptom: string;
   files: PickedAttachment[];
+  /** รูปป้ายรุ่นบนตัวเครื่อง ไม่บังคับ */
+  nameplate: PickedAttachment | null;
 }
+
+/** W = เครื่องซัก · D = เครื่องอบ ตัวอักษรหน้าบอกชนิดเครื่องในตัว */
+const MACHINE_CODE_PATTERN = /^[WD]\d{1,4}$/;
 
 let rowSeq = 0;
 function blankRow(): MachineRow {
   rowSeq += 1;
-  return { key: `row-${rowSeq}`, code: "", model: "", symptom: "", files: [] };
+  return {
+    key: `row-${rowSeq}`,
+    code: "",
+    model: "",
+    modelOther: "",
+    symptom: "",
+    files: [],
+    nameplate: null,
+  };
 }
 
 export default function WorkOrderFormScreen({ navigation, route }: Props) {
@@ -91,7 +114,6 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [branchWarrantyAt, setBranchWarrantyAt] = useState<string | null>(null);
   const [branchResults, setBranchResults] = useState<BranchOption[]>([]);
   const [branchTerm, setBranchTerm] = useState("");
-  const [machineOptions, setMachineOptions] = useState<MachineOption[]>([]);
   /**
    * รายละเอียดของประเภทงาน "อื่นๆ" — ไม่ใช่หัวข้องานที่ให้พิมพ์อิสระเหมือนเดิม
    *
@@ -107,6 +129,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    */
   const [rows, setRows] = useState<MachineRow[]>([blankRow()]);
 
+  const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
   const [branchRegion, setBranchRegion] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -117,10 +140,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     api
-      .get<{ priorities: Option[]; jobTypes: Option[] }>("/work-orders/options")
+      .get<{ priorities: Option[]; jobTypes: Option[]; machineModels?: string[] }>(
+        "/work-orders/options"
+      )
       .then((res) => {
         setPriorities(res.data.priorities);
         setJobTypes(res.data.jobTypes);
+        if (res.data.machineModels?.length) setModels(res.data.machineModels);
       })
       .catch(() => setError("โหลดตัวเลือกไม่สำเร็จ"));
   }, []);
@@ -164,38 +190,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     return () => clearTimeout(timer);
   }, [branchTerm, fromBoard]);
 
-  /**
-   * ดึงเครื่องของสาขาทีเดียวตอนเลือกสาขา แล้วกรองในเครื่องต่อแถว
-   *
-   * สาขาหนึ่งมีเครื่องไม่กี่สิบตัว ดึงรอบเดียวถูกกว่ายิงค้นทุกครั้งที่พิมพ์
-   * และทำให้บอกได้ว่าสาขานี้มีเครื่องอะไรบ้าง โดยไม่ต้องให้เดาเอง
-   */
-  useEffect(() => {
-    if (fromBoard || !branchCode) {
-      setMachineOptions([]);
-      return;
-    }
-    api
-      .get<MachineOption[]>(`/branches/${encodeURIComponent(branchCode)}/machines`)
-      .then((res) => setMachineOptions(res.data))
-      .catch(() => setMachineOptions([]));
-  }, [branchCode, fromBoard]);
-
   function patchRow(key: string, patch: Partial<MachineRow>) {
     setRows((current) => current.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  }
-
-  /**
-   * เลือกเครื่องแล้วเติมรุ่นให้ ถ้าเครื่องนั้นเคยบันทึกรุ่นไว้
-   *
-   * ไม่ทับของที่คนกรอกไปแล้ว เพราะถ้ารุ่นในระบบผิดและเขากำลังแก้อยู่
-   * การเติมทับคือการลบสิ่งที่เขาเพิ่งพิมพ์
-   */
-  function chooseMachine(row: MachineRow, machine: MachineOption) {
-    patchRow(row.key, {
-      code: machine.code,
-      model: row.model.trim() ? row.model : machine.model ?? "",
-    });
   }
 
   async function addFile(
@@ -221,6 +217,29 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * รูปป้ายรุ่นเก็บแยกจากรูปอาการ — ช่องเดียวต่อเครื่อง ใส่ใหม่ทับของเก่า
+   *
+   * ไม่บังคับให้ใส่ เพราะบางเครื่องป้ายลอกไปแล้วหรือถ่ายไม่ถึง แต่ถ้าใส่มา
+   * จะช่วยให้คนสั่งอะไหล่รู้รุ่นจริงโดยไม่ต้องเชื่อรุ่นที่คนกรอกเลือกไว้
+   */
+  async function addNameplate(
+    row: MachineRow,
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) {
+    setBusy("กำลังเตรียมรูปป้ายรุ่น");
+    try {
+      const file = await pick(setBusy);
+      if (file) {
+        setRows((current) => current.map((r) => (r.key === row.key ? { ...r, nameplate: file } : r)));
+      }
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** ตรวจก่อนส่ง — บอกให้ชัดว่าแถวไหนขาดอะไร ไม่ใช่แค่ "กรอกไม่ครบ" */
   function validate(): string | null {
     if (jobType === "OTHER" && !otherDetail.trim()) {
@@ -229,7 +248,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     if (!fromBoard && !branchCode.trim()) return "ต้องเลือกสาขา";
     if (fromBoard) return null;
 
-    const codes = rows.map((r) => r.code.trim());
+    const codes = rows.map((r) => r.code.trim().toUpperCase());
     if (codes.some((c) => !c) && rows.length > 1) {
       return "ถ้าไม่ระบุเครื่อง จะเปิดได้ใบเดียวเท่านั้น — ลบแถวที่ว่างออก";
     }
@@ -237,9 +256,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     if (duplicate) return `เครื่อง ${duplicate} ถูกใส่ซ้ำ`;
 
     for (const [i, row] of rows.entries()) {
-      if (row.code.trim() && !row.model.trim()) {
-        return `เครื่องที่ ${i + 1} (${row.code.trim()}) ยังไม่ได้ใส่รุ่น`;
+      const code = codes[i];
+      if (!code) continue;
+      if (!MACHINE_CODE_PATTERN.test(code)) {
+        return `เครื่องที่ ${i + 1} ต้องเป็น W หรือ D ตามด้วยตัวเลข เช่น W1 หรือ D12`;
       }
+      if (!resolvedModel(row)) return `เครื่องที่ ${i + 1} (${code}) ยังไม่ได้ใส่รุ่น`;
     }
     return null;
   }
@@ -269,8 +291,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             ...shared,
             branchCode: branchCode.trim(),
             machines: rows.map((r) => ({
-              code: r.code.trim() || undefined,
-              model: r.model.trim() || null,
+              code: r.code.trim().toUpperCase() || undefined,
+              model: resolvedModel(r) || null,
               symptom: r.symptom.trim() || null,
             })),
           });
@@ -289,16 +311,22 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
        * บอกให้ชัดว่ากี่ไฟล์ที่ไม่ขึ้น แล้วให้ไปแนบซ้ำในใบงานได้
        */
       let failed = 0;
-      const total = rows.reduce((sum, r) => sum + r.files.length, 0);
+      const total = rows.reduce((sum, r) => sum + r.files.length + (r.nameplate ? 1 : 0), 0);
       let sent = 0;
       for (const [i, row] of rows.entries()) {
         const target = orders[i];
         if (!target) break;
-        for (const file of row.files) {
+        // รูปป้ายรุ่นส่งก่อน เพราะเป็นรูปที่ช่วยคนสั่งอะไหล่มากที่สุด
+        // ถ้าเน็ตหลุดกลางทางจะได้ไม่ใช่รูปที่หายไปเป็นอันแรก
+        const queue: { file: PickedAttachment; role?: string }[] = [
+          ...(row.nameplate ? [{ file: row.nameplate, role: "NAMEPLATE" }] : []),
+          ...row.files.map((file) => ({ file })),
+        ];
+        for (const item of queue) {
           sent += 1;
           setBusy(`กำลังส่งไฟล์ ${sent}/${total}`);
           try {
-            await uploadAttachment(target.id, file);
+            await uploadAttachment(target.id, item.file, item.role);
           } catch {
             failed += 1;
           }
@@ -463,12 +491,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             index={i}
             total={rows.length}
             fromBoard={fromBoard}
-            machines={machineOptions}
             busy={busy}
+            models={models}
             onChange={(patch) => patchRow(row.key, patch)}
-            onChooseMachine={(m) => chooseMachine(row, m)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
+            onAddNameplate={(pick) => addNameplate(row, pick)}
           />
         ))}
 
@@ -596,33 +624,31 @@ function MachineCard({
   index,
   total,
   fromBoard,
-  machines,
   busy,
+  models,
   onChange,
-  onChooseMachine,
   onRemove,
   onAddFile,
+  onAddNameplate,
 }: {
   row: MachineRow;
   index: number;
   total: number;
   fromBoard: boolean;
-  machines: MachineOption[];
   busy: string | null;
+  models: string[];
   onChange: (patch: Partial<MachineRow>) => void;
-  onChooseMachine: (machine: MachineOption) => void;
   onRemove: () => void;
   onAddFile: (
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
   ) => void;
+  onAddNameplate: (
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) => void;
 }) {
-  const typed = row.code.trim().toUpperCase();
-  const exact = machines.some((m) => m.code.toUpperCase() === typed);
-  // ขึ้นรายการให้เลือกเฉพาะตอนที่พิมพ์แล้วยังไม่ตรงกับเครื่องไหน
-  // ถ้าตรงแล้วยังขึ้นอยู่ จะบังช่องรุ่นที่ต้องกรอกต่อ
-  const suggestions = typed && !exact
-    ? machines.filter((m) => m.code.toUpperCase().includes(typed)).slice(0, 8)
-    : [];
+  const code = row.code.trim().toUpperCase();
+  // W = เครื่องซัก · D = เครื่องอบ ตัวอักษรหน้าบอกชนิดเครื่องในตัว
+  const badCode = code.length > 0 && !/^[WD]\d{1,4}$/.test(code);
 
   return (
     <View style={[styles.machineCard, fromBoard && styles.machineCardFlat]}>
@@ -633,7 +659,11 @@ function MachineCard({
           </Text>
           <View style={{ flex: 1 }} />
           {total > 1 ? (
-            <TouchableOpacity onPress={onRemove} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity
+              onPress={onRemove}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel={`ลบเครื่องที่ ${index + 1}`}
+            >
               <Ionicons name="trash-outline" size={16} color={colors.danger} />
             </TouchableOpacity>
           ) : null}
@@ -644,9 +674,9 @@ function MachineCard({
         <>
           <Text style={styles.subLabel}>หมายเลขเครื่อง</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, badCode && styles.inputBad]}
             value={row.code}
-            onChangeText={(v) => onChange({ code: v })}
+            onChangeText={(v) => onChange({ code: v.toUpperCase() })}
             placeholder={
               total > 1 ? "เช่น W3 หรือ D12" : "เช่น W3 หรือ D12 — เว้นว่างถ้าเป็นงานทั้งสาขา"
             }
@@ -654,38 +684,84 @@ function MachineCard({
             autoCapitalize="characters"
             accessibilityLabel={`หมายเลขเครื่องที่ ${index + 1}`}
           />
-          {suggestions.length > 0 ? (
-            <View style={styles.results}>
-              {suggestions.map((m) => (
-                <TouchableOpacity
-                  key={m.id}
-                  style={styles.result}
-                  onPress={() => onChooseMachine(m)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.resultCode}>{m.code}</Text>
-                  <Text style={styles.resultName} numberOfLines={1}>
-                    {[m.type === "WASHER" ? "เครื่องซัก" : "เครื่องอบ", m.brand, m.model]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
-          {!row.code.trim() && machines.length > 0 ? (
-            <Text style={styles.machineHint}>สาขานี้มี {machines.length} เครื่อง — พิมพ์เพื่อค้น</Text>
-          ) : null}
+          <Text style={badCode ? styles.machineBad : styles.machineHint}>
+            {badCode
+              ? "ต้องเป็น W หรือ D ตามด้วยตัวเลข เช่น W3 หรือ D12"
+              : "W = เครื่องซัก · D = เครื่องอบ"}
+          </Text>
 
           <Text style={styles.subLabel}>รุ่นของเครื่อง</Text>
-          <TextInput
-            style={styles.input}
-            value={row.model}
-            onChangeText={(v) => onChange({ model: v })}
-            placeholder={row.code.trim() ? "เช่น HC60 — ต้องใส่" : "ใส่เมื่อระบุหมายเลขเครื่อง"}
-            placeholderTextColor={colors.textFaint}
-            accessibilityLabel={`รุ่นของเครื่องที่ ${index + 1}`}
-          />
+          <View style={styles.options}>
+            {[...models, MODEL_OTHER].map((m) => (
+              <TouchableOpacity
+                key={m}
+                style={[styles.option, row.model === m && styles.optionOn]}
+                onPress={() => onChange({ model: m })}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.optionText, row.model === m && styles.optionTextOn]}>{m}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {row.model === MODEL_OTHER ? (
+            <TextInput
+              style={[styles.input, { marginTop: spacing.xs }]}
+              value={row.modelOther}
+              onChangeText={(v) => onChange({ modelOther: v })}
+              placeholder="พิมพ์ชื่อรุ่น"
+              placeholderTextColor={colors.textFaint}
+              accessibilityLabel={`ชื่อรุ่นของเครื่องที่ ${index + 1}`}
+            />
+          ) : null}
+
+          {/*
+            รูปป้ายรุ่นบนตัวเครื่อง ไม่บังคับ — เป็นที่มาของรุ่นที่เลือกไว้
+            เอาไว้ย้อนดูตอนสงสัยว่าใส่รุ่นถูกหรือเปล่า ซึ่งเกิดขึ้นตอนสั่งอะไหล่
+            แล้วของมาไม่ตรง ไม่ใช่ตอนเปิดใบงาน
+          */}
+          <Text style={styles.subLabel}>รูปป้ายรุ่น (ไม่บังคับ)</Text>
+          {row.nameplate ? (
+            <View style={styles.files}>
+              <View style={styles.file}>
+                {row.nameplate.thumbnailUri ? (
+                  <Image source={{ uri: row.nameplate.thumbnailUri }} style={styles.thumb} />
+                ) : (
+                  <View style={[styles.thumb, styles.thumbBlank]}>
+                    <Ionicons name="image-outline" size={24} color={colors.textFaint} />
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={styles.removeFile}
+                  onPress={() => onChange({ nameplate: null })}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`ลบรูปป้ายรุ่นของเครื่องที่ ${index + 1}`}
+                >
+                  <Ionicons name="close" size={13} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : busy ? null : (
+            <View style={styles.fileButtons}>
+              {Platform.OS !== "web" ? (
+                <TouchableOpacity
+                  style={styles.fileButton}
+                  onPress={() => onAddNameplate((stage) => pickImageAttachment(true, stage))}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="camera-outline" size={16} color={colors.primary} />
+                  <Text style={styles.fileButtonText}>ถ่ายป้ายรุ่น</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={styles.fileButton}
+                onPress={() => onAddNameplate((stage) => pickImageAttachment(false, stage))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="images-outline" size={16} color={colors.primary} />
+                <Text style={styles.fileButtonText}>เลือกรูปป้ายรุ่น</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </>
       ) : null}
 
@@ -798,6 +874,8 @@ const styles = StyleSheet.create({
   machineHead: { flexDirection: "row", alignItems: "center", marginBottom: spacing.xs },
   machineTitle: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   machineHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
+  machineBad: { fontSize: 11, lineHeight: 19, color: colors.danger, marginTop: spacing.xs },
+  inputBad: { borderColor: colors.danger },
   subLabel: {
     fontSize: 12,
     lineHeight: 20,

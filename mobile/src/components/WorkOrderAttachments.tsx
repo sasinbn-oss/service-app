@@ -36,6 +36,9 @@ export interface Attachment {
   id: number;
   kind: string;
   kindLabel: string;
+  /** รูปนี้คืออะไร เช่น NAMEPLATE — ว่างคือรูปอาการธรรมดา */
+  role: string | null;
+  roleLabel: string | null;
   fileName: string;
   sizeBytes: number;
   available: boolean;
@@ -168,6 +171,13 @@ export default function WorkOrderAttachments({
                     <Ionicons name="play" size={13} color="#fff" />
                   </View>
                 ) : null}
+                {/* ป้ายบอกว่าเป็นรูปป้ายรุ่น ไม่ใช่รูปอาการ — เวลาสั่งอะไหล่
+                    ต้องหยิบรูปนี้ให้ถูกใบจากกองรูปที่หน้าตาคล้ายกันหมด */}
+                {row.roleLabel ? (
+                  <View style={styles.roleBadge}>
+                    <Text style={styles.roleBadgeText}>{row.roleLabel}</Text>
+                  </View>
+                ) : null}
                 {opening === row.id ? (
                   <View style={styles.tileBusy}>
                     <ActivityIndicator color="#fff" size="small" />
@@ -241,6 +251,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   thumbBlank: { alignItems: "center", justifyContent: "center" },
+  roleBadge: {
+    position: "absolute",
+    left: spacing.xs,
+    top: spacing.xs,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(15,23,42,0.78)",
+  },
+  roleBadgeText: { color: "#fff", fontSize: 10, fontWeight: "700" },
   playBadge: {
     position: "absolute",
     left: spacing.xs,

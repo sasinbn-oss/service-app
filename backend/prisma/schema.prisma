@@ -582,6 +582,12 @@ model WorkOrderAttachment {
 
   // IMAGE | VIDEO — ดูที่ ATTACHMENT_KINDS ใน src/utils/constants.ts
   kind      String
+  // NAMEPLATE = รูปป้ายรุ่นที่ติดอยู่บนเครื่อง · ว่าง = รูปหน้างานทั่วไป
+  //
+  // แยกไว้เพราะสองอย่างนี้ถูกใช้คนละแบบ — รูปหน้างานคือหลักฐานว่าเจออะไร
+  // ส่วนรูปป้ายรุ่นคือที่มาของรุ่นเครื่องที่กรอกไว้ เอาไว้ย้อนดูตอนสงสัยว่า
+  // ใส่รุ่นถูกหรือเปล่า ปนกันแล้วหาไม่เจอ
+  role      String?
   fileName  String
   mimeType  String
   sizeBytes Int

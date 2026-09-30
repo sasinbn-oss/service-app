@@ -147,12 +147,18 @@ export async function pickVideoAttachment(
 }
 
 /** ส่งไฟล์ที่เลือกไว้ขึ้นใบงานที่มีอยู่แล้ว */
-export async function uploadAttachment(workOrderId: number, file: PickedAttachment) {
+export async function uploadAttachment(
+  workOrderId: number,
+  file: PickedAttachment,
+  /** บอกว่ารูปนี้คืออะไร เช่น NAMEPLATE — ไม่ส่งมาคือรูปอาการธรรมดา */
+  role?: string
+) {
   const form = new FormData();
   await appendFile(form, "file", file.uri, file.name, file.type);
   if (file.thumbnailUri) {
     await appendFile(form, "thumbnail", file.thumbnailUri, "thumb.jpg", "image/jpeg");
   }
+  if (role) form.append("role", role);
   await api.post(`/work-orders/${workOrderId}/attachments`, form, {
     headers: { "Content-Type": "multipart/form-data" },
   });

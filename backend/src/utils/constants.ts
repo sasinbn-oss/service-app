@@ -243,6 +243,49 @@ export function canActOnStage(role: string, stage: string) {
 }
 
 /**
+ * รุ่นเครื่องที่มีใช้อยู่
+ *
+ * เป็นตัวเลือกตายตัวเพราะต้องเอาไปนับแยกได้ว่ารุ่นไหนเสียบ่อย และเวลาสั่งอะไหล่
+ * ต้องรู้ว่ารุ่นอะไร — ปล่อยให้พิมพ์เองจะได้ "Huebsch" "huebsch" "ฮิวบช์"
+ * ปนกันจนรวมยอดไม่ได้ เหมือนที่เคยเจอกับประเภทงาน
+ *
+ * OTHER มีไว้สำหรับรุ่นที่ยังไม่อยู่ในรายการ และบังคับให้พิมพ์ชื่อกำกับ
+ */
+export const MACHINE_MODELS = [
+  "Oasis",
+  "Oasis(TC)",
+  "Huebsch",
+  "Haier",
+  "Maytag",
+] as const;
+
+/** ค่าที่ส่งมาแทน "อื่นๆ" — ของจริงคือข้อความที่คนพิมพ์เอง */
+export const MACHINE_MODEL_OTHER = "OTHER";
+
+/**
+ * หมายเลขเครื่อง — W หรือ D ตามด้วยตัวเลข
+ *
+ * W = เครื่องซัก · D = เครื่องอบ ตัวอักษรหน้าจึงบอกชนิดเครื่องได้ในตัว
+ * ไม่ต้องให้คนเลือกซ้ำอีกช่อง
+ */
+const MACHINE_CODE_PATTERN = /^[WD]\d{1,4}$/;
+
+export function normaliseMachineCode(raw: string): string {
+  return raw.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+export function isValidMachineCode(raw: string): boolean {
+  return MACHINE_CODE_PATTERN.test(normaliseMachineCode(raw));
+}
+
+/** ชนิดเครื่องจากตัวอักษรหน้าของรหัส ใช้ตอนต้องสร้างเครื่องที่ยังไม่มีในระบบ */
+export function machineTypeFromCode(raw: string): "WASHER" | "DRYER" | null {
+  const code = normaliseMachineCode(raw);
+  if (!isValidMachineCode(code)) return null;
+  return code.startsWith("W") ? "WASHER" : "DRYER";
+}
+
+/**
  * สาขาบริษัทหรือสาขาแฟรนไชส์ ดูจากรหัสสาขา
  *
  * รหัสขึ้นต้นด้วย C คือสาขาบริษัท เครื่องเป็นของบริษัทเอง จึงไม่มีเรื่องประกัน
@@ -273,6 +316,18 @@ export function workOrderCode(id: number): string {
 // ── ไฟล์แนบใบงาน ────────────────────────────────────────
 
 export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO"] as const;
+
+/**
+ * บทบาทของไฟล์แนบ — ว่างคือรูปหน้างานทั่วไป
+ *
+ * NAMEPLATE คือรูปป้ายรุ่นบนตัวเครื่อง ซึ่งเป็นที่มาของรุ่นที่กรอกไว้
+ * ไม่ใช่หลักฐานของอาการ จึงต้องแยกให้หาเจอ ไม่ใช่ปนอยู่ในกองรูปหน้างาน
+ */
+export const ATTACHMENT_ROLES = ["NAMEPLATE"] as const;
+
+export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
+  NAMEPLATE: "ป้ายรุ่น",
+};
 
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {
   IMAGE: "รูป",
