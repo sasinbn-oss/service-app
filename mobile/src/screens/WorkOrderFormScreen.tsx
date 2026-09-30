@@ -7,6 +7,8 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,6 +20,13 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
+import {
+  MAX_ATTACHMENTS,
+  PickedAttachment,
+  pickImageAttachment,
+  pickVideoAttachment,
+  uploadAttachment,
+} from "../utils/attachments";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -44,6 +53,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [jobType, setJobType] = useState("CM");
 
   const [branchCode, setBranchCode] = useState(route.params?.branchCode ?? "");
+  // เก็บชื่อสาขาไว้ด้วย ไม่ใช่แค่รหัส — คนจำสาขาจากชื่อ ไม่ได้จำจากรหัส
+  // เห็นแต่ "C0006" แล้วไม่มีทางรู้ว่าเลือกถูกใบหรือเปล่าจนกว่าจะเปิดใบงานแล้ว
+  const [branchName, setBranchName] = useState<string | null>(null);
   const [branchResults, setBranchResults] = useState<BranchOption[]>([]);
   const [branchTerm, setBranchTerm] = useState("");
   const [machineCode, setMachineCode] = useState("");
@@ -52,6 +64,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [symptom, setSymptom] = useState("");
 
   const [branchRegion, setBranchRegion] = useState<string | null>(null);
+  const [files, setFiles] = useState<PickedAttachment[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,6 +81,27 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       })
       .catch(() => setError("โหลดตัวเลือกไม่สำเร็จ"));
   }, []);
+
+  /**
+   * เปิดจากกระดาน — รหัสสาขาติดมาแต่ชื่อไม่ได้ติดมาด้วย
+   *
+   * ตามชื่อมาให้ เพราะข้อความ "สาขามาจากเคสให้อัตโนมัติ" ไม่ได้บอกว่าสาขาไหน
+   * คนที่กดเปิดใบงานจากกระดานสิบแถวรวดจะไม่รู้เลยว่ากำลังเปิดให้สาขาอะไร
+   */
+  useEffect(() => {
+    const code = route.params?.branchCode;
+    if (!code) return;
+    api
+      .get<BranchOption[]>("/branches", { params: { search: code } })
+      .then((res) => {
+        const match = res.data.find((b) => b.code === code);
+        if (match) {
+          setBranchName(match.name);
+          setBranchRegion(match.region ?? null);
+        }
+      })
+      .catch(() => undefined);
+  }, [route.params?.branchCode]);
 
   // ค้นสาขาแบบหน่วงไว้ เหมือนตัวเลือกอะไหล่ ไม่งั้นพิมพ์ตัวเดียวยิงหลายรอบ
   useEffect(() => {
@@ -110,12 +145,55 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             branchCode: branchCode.trim(),
             machineCode: machineCode.trim() || undefined,
           });
-      showAlert("เปิดใบงานแล้ว", `${res.data.code} · ${res.data.title}`);
+
+      /**
+       * ไฟล์ส่งตามหลังใบงาน ไม่ได้ส่งไปพร้อมกัน
+       *
+       * เพราะไฟล์ต้องผูกกับใบงาน และใบงานยังไม่มีเลขจนกว่าจะบันทึกเสร็จ
+       * ผลคือถ้าส่งไฟล์ไม่ผ่าน ใบงานยังถูกเปิดไปแล้ว — ซึ่งถูกต้องกว่าการ
+       * ทิ้งทั้งใบเพราะรูปใบเดียวส่งไม่ขึ้น คนกรอกจะได้ไม่ต้องพิมพ์ใหม่ทั้งหมด
+       * บอกให้ชัดว่ารูปไหนไม่ขึ้น แล้วให้ไปแนบซ้ำในใบงานได้
+       */
+      const failed: string[] = [];
+      for (const [i, file] of files.entries()) {
+        setBusy(`กำลังส่งไฟล์ ${i + 1}/${files.length}`);
+        try {
+          await uploadAttachment(res.data.id, file);
+        } catch {
+          failed.push(file.name);
+        }
+      }
+
+      showAlert(
+        "เปิดใบงานแล้ว",
+        failed.length === 0
+          ? `${res.data.code} · ${res.data.title}`
+          : `${res.data.code} · ${res.data.title}\n\nแต่ส่งไฟล์ไม่สำเร็จ ${failed.length} ไฟล์ — แนบใหม่ได้ในใบงาน`
+      );
       navigation.replace("WorkOrderDetail", { id: res.data.id });
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
+      setBusy(null);
+    }
+  }
+
+  async function addFile(
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) {
+    if (files.length >= MAX_ATTACHMENTS) {
+      showAlert("แนบได้ไม่เกิน " + MAX_ATTACHMENTS + " ไฟล์", "ลบไฟล์ที่ไม่ต้องการออกก่อน");
+      return;
+    }
+    setBusy("กำลังเตรียมไฟล์");
+    try {
+      const file = await pick(setBusy);
+      if (file) setFiles((current) => [...current, file]);
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -127,6 +205,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             <Ionicons name="link-outline" size={16} color={colors.primary} />
             <Text style={styles.fromBoardText}>
               เปิดจากเคสบนกระดาน สาขาและเครื่องมาจากเคสให้อัตโนมัติ
+              {branchCode ? `\n${branchCode}${branchName ? ` · ${branchName}` : ""}` : ""}
             </Text>
           </View>
         ) : (
@@ -134,10 +213,19 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             <Text style={styles.label}>สาขา</Text>
             {branchCode ? (
               <View style={styles.chosen}>
-                <Text style={styles.chosenText}>{branchCode}</Text>
+                <View style={styles.chosenBody}>
+                  <Text style={styles.chosenText}>{branchCode}</Text>
+                  {branchName ? (
+                    <Text style={styles.chosenName} numberOfLines={2}>
+                      {branchName}
+                    </Text>
+                  ) : null}
+                </View>
                 <TouchableOpacity
                   onPress={() => {
                     setBranchCode("");
+                    setBranchName(null);
+                    setBranchRegion(null);
                     setBranchTerm("");
                   }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -166,6 +254,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                         style={styles.result}
                         onPress={() => {
                           setBranchCode(b.code);
+                          setBranchName(b.name);
                           setBranchRegion(b.region ?? null);
                           setBranchResults([]);
                         }}
@@ -251,6 +340,83 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         </View>
 
         {/*
+          รูปหน้างานแนบได้ตั้งแต่ตอนเปิด ไม่ต้องรอเปิดใบงานเสร็จแล้วค่อยเข้าไปแนบ
+          เพราะคนที่เปิดใบงานมักยืนอยู่หน้าเครื่องพอดี ถ้าให้ไปแนบทีหลัง
+          กว่าจะกลับมาก็ออกจากร้านแล้ว แล้วรูปนั้นก็ไม่เคยถูกแนบ
+
+          ไฟล์ยังไม่ถูกส่งตอนนี้ รอจนใบงานถูกบันทึกและได้เลขก่อน
+        */}
+        <Text style={styles.label}>รูป / วิดีโอหน้างาน (ไม่บังคับ)</Text>
+        {files.length > 0 ? (
+          <View style={styles.files}>
+            {files.map((file, i) => (
+              <View key={`${file.name}-${i}`} style={styles.file}>
+                {file.thumbnailUri ? (
+                  <Image source={{ uri: file.thumbnailUri }} style={styles.thumb} />
+                ) : (
+                  <View style={[styles.thumb, styles.thumbBlank]}>
+                    <Ionicons
+                      name={file.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                      size={24}
+                      color={colors.textFaint}
+                    />
+                  </View>
+                )}
+                {file.kind === "VIDEO" ? (
+                  <View style={styles.playBadge}>
+                    <Ionicons name="play" size={12} color="#fff" />
+                  </View>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.removeFile}
+                  onPress={() => setFiles((c) => c.filter((_, n) => n !== i))}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="close" size={13} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {busy ? (
+          <View style={styles.busyRow}>
+            <ActivityIndicator color={colors.primary} size="small" />
+            <Text style={styles.busyText}>{busy}…</Text>
+          </View>
+        ) : (
+          <View style={styles.fileButtons}>
+            {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ */}
+            {Platform.OS !== "web" ? (
+              <TouchableOpacity
+                style={styles.fileButton}
+                onPress={() => addFile((stage) => pickImageAttachment(true, stage))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="camera-outline" size={16} color={colors.primary} />
+                <Text style={styles.fileButtonText}>ถ่ายรูป</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.fileButton}
+              onPress={() => addFile((stage) => pickImageAttachment(false, stage))}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="images-outline" size={16} color={colors.primary} />
+              <Text style={styles.fileButtonText}>เลือกรูป</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fileButton}
+              onPress={() => addFile(pickVideoAttachment)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="videocam-outline" size={16} color={colors.primary} />
+              <Text style={styles.fileButtonText}>วิดีโอ</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/*
           จบแค่นี้ — อะไหล่ ช่าง และวันนัด เป็นของขั้นถัดไปตามสายงาน
           ถ้าให้กรอกตรงนี้ด้วย คนเปิดใบงานจะต้องรู้เรื่องที่ยังไม่มีใครรู้
         */}
@@ -271,7 +437,10 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           activeOpacity={0.8}
         >
           {saving ? (
-            <ActivityIndicator color="#fff" />
+            <>
+              <ActivityIndicator color="#fff" />
+              {busy ? <Text style={styles.submitText}>{busy}</Text> : null}
+            </>
           ) : (
             <>
               <Ionicons name="clipboard-outline" size={18} color="#fff" />
@@ -374,7 +543,50 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
   },
-  chosenText: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.primaryDark },
+  chosenBody: { flex: 1, minWidth: 0 },
+  chosenText: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.primaryDark },
+  chosenName: { fontSize: 12, lineHeight: 20, color: colors.primaryDark },
+  files: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
+  file: { position: "relative" },
+  thumb: { width: 88, height: 88, borderRadius: radius.sm, backgroundColor: colors.background },
+  thumbBlank: { alignItems: "center", justifyContent: "center" },
+  playBadge: {
+    position: "absolute",
+    left: spacing.xs,
+    bottom: spacing.xs,
+    width: 20,
+    height: 20,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(15,23,42,0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  removeFile: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: radius.pill,
+    backgroundColor: colors.danger,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fileButtons: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  fileButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.primarySoft,
+  },
+  fileButtonText: { fontSize: 13, lineHeight: 21, fontWeight: "600", color: colors.primary },
+  busyRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  busyText: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
   options: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   option: {
     borderWidth: 1,
