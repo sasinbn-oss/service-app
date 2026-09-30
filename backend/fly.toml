@@ -1,0 +1,47 @@
+# ตั้งค่าสำหรับ Fly.io
+#
+# เลือก Fly เพราะเลือก region ได้ละเอียดที่สุด ซึ่งเป็นเหตุผลเดียวที่ย้ายมา —
+# ต้องให้เซิร์ฟเวอร์อยู่ที่เดียวกับฐานข้อมูล Supabase
+#
+# ตั้งชื่อแอปกับ region ให้ตรงของจริงก่อนใช้:
+#   primary_region  ต้องตรงกับ region ของโปรเจกต์ Supabase
+#     Singapore (ap-southeast-1)   → sin
+#     Tokyo     (ap-northeast-1)   → nrt
+#     Sydney    (ap-southeast-2)   → syd
+#     Frankfurt (eu-central-1)     → fra
+#     Virginia  (us-east-1)        → iad
+#     Oregon    (us-west-1)        → sjc
+#   ดู region ของ Supabase ได้ที่ Project Settings > General
+
+app = "service-app-backend"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # สองบรรทัดนี้คือเหตุผลที่ย้ายมาจาก Render — ห้ามเปลี่ยน
+  #
+  # Fly ปิดเครื่องเองตอนไม่มีคนใช้เพื่อประหยัดเงินถ้าเปิดค่านี้ไว้ ซึ่งจะได้
+  # อาการเดียวกับที่หนีมาเป๊ะ ๆ คือคนแรกของเช้าต้องรอเครื่องตื่น
+  auto_stop_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 1 GB ไม่ใช่ 512 MB เพราะตอนอัปวิดีโอ เซิร์ฟเวอร์อมไฟล์ทั้งก้อนไว้ใน
+  # หน่วยความจำก่อนส่งต่อ คลิป 60 MB สองคนพร้อมกันบนเครื่อง 512 MB เสี่ยงล่ม
+  memory = "1gb"

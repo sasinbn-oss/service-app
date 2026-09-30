@@ -979,6 +979,61 @@ npx expo start --web       # คอม: เปิดในเบราว์เ�
 
 Render free tier จะพักเซิร์ฟเวอร์เมื่อไม่มีคนใช้งาน ครั้งแรกที่เรียกอาจช้า 30-60 วินาที
 
+### ย้าย backend ไปอยู่ region เดียวกับฐานข้อมูล
+
+เหตุผลเดียวที่ต้องย้ายคือ**ระยะทางระหว่างเซิร์ฟเวอร์กับฐานข้อมูล** การเปิดใบงาน
+หนึ่งใบคุยกับฐานข้อมูลประมาณ 13 รอบ ถ้าอยู่คนละทวีปกันที่ 200 ms ต่อรอบ
+คือรอเกือบสามวินาทีทุกครั้งที่กดบันทึก โดยที่โค้ดไม่ได้ผิดอะไรเลย
+
+เช็คก่อนว่าจำเป็นจริงไหมด้วย `GET /health/db` (ดูหัวข้อ "เวลากดบันทึกแล้วช้า")
+ถ้าได้ต่ำกว่า 30 ms อยู่แล้ว ไม่ต้องย้าย
+
+`backend/Dockerfile` รันได้ทุกที่ที่รับ Dockerfile — Fly.io, Railway, Koyeb,
+DigitalOcean หรือแม้แต่ Render เอง **ไม่มีอะไรในโค้ดผูกกับผู้ให้บริการรายไหน**
+
+#### Fly.io (เลือก region ได้ละเอียดที่สุด)
+
+`backend/fly.toml` เตรียมไว้แล้ว แก้ `primary_region` ให้ตรงกับ region ของ Supabase
+(ดูที่ Project Settings → General)
+
+| Supabase | Fly |
+|---|---|
+| Singapore `ap-southeast-1` | `sin` |
+| Tokyo `ap-northeast-1` | `nrt` |
+| Sydney `ap-southeast-2` | `syd` |
+| Frankfurt `eu-central-1` | `fra` |
+| Virginia `us-east-1` | `iad` |
+
+```bash
+cd backend
+fly launch --no-deploy        # ใช้ fly.toml ที่มีอยู่ อย่าให้มันเขียนทับ
+fly secrets set \
+  DATABASE_URL="..." DIRECT_URL="..." JWT_SECRET="..." \
+  STORAGE_ENDPOINT="..." STORAGE_REGION="..." \
+  STORAGE_ACCESS_KEY_ID="..." STORAGE_SECRET_ACCESS_KEY="..." \
+  STORAGE_BUCKET="service-app"
+fly deploy
+```
+
+**อย่าเปลี่ยน `auto_stop_machines = false` กับ `min_machines_running = 1`** ใน `fly.toml`
+— Fly ปิดเครื่องเองตอนไม่มีคนใช้ถ้าเปิดค่านั้น ซึ่งจะได้อาการเดียวกับที่หนีมาจาก Render เป๊ะ ๆ
+
+#### Railway (ย้ายง่ายที่สุด)
+
+ต่อ GitHub แล้วตั้ง Root Directory เป็น `backend` — Railway เห็น Dockerfile แล้วใช้เอง
+ไม่ต้องมีไฟล์ตั้งค่าเพิ่ม เลือก region ตอนสร้าง service และใส่ตัวแปรชุดเดียวกับข้างบน
+
+#### หลังย้ายเสร็จ ต้องทำอีกสองอย่าง
+
+1. **แก้ `EXPO_PUBLIC_API_URL` ให้เป็น URL ใหม่ แล้ว build เว็บใหม่**
+   (Clear build cache & deploy) — ค่านี้ถูกฝังลงไฟล์ตอน build ไม่ได้อ่านตอนเปิดหน้า
+   ถ้าลืม เว็บจะยังยิงไปที่ Render ตัวเก่า
+2. **เปิด `GET /health/db` ด้วยบัญชีแอดมิน** ยืนยันว่าตัวเลขลดลงจริง ถ้ายังสูงอยู่
+   แปลว่า region ที่เลือกยังไม่ตรงกับฐานข้อมูล
+
+หน้าเว็บ (static site) ไม่ต้องย้ายก็ได้ — เป็นไฟล์นิ่ง ไม่มีเรื่อง region เข้ามาเกี่ยว
+ถ้าจะย้ายด้วย Cloudflare Pages กับ Netlify ฟรีทั้งคู่ ตั้งค่าเหมือนกับที่ตั้งบน Render
+
 **เว็บ — วิธีที่แนะนำ ใช้ได้ทั้งคอมและมือถือ ไม่ต้องเปิดคอมทิ้งไว้**
 
 deploy เป็นเว็บ static แล้วช่างเปิดจากลิงก์ได้เลย ไม่ต้องติดตั้งแอป ไม่ต้องมี Expo Go
