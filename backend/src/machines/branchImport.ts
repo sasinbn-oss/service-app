@@ -15,6 +15,8 @@ export interface BranchSheetRow {
   region: string | null;
   zone: string | null;
   grade: string | null;
+  openedAt: Date | null;
+  warrantyExpiresAt: Date | null;
 }
 
 export interface BranchParseResult {
@@ -32,7 +34,41 @@ const HEADER_ALIASES = {
   region: ["ผจกภาค", "region", "ภาค"],
   zone: ["ทีมช่าง", "zone", "โซน", "team"],
   grade: ["grade", "เกรด"],
+  openedAt: ["วันเปิดร้าน", "วันเปิดสาขา", "opened_at", "open_date", "opening_date"],
+  warrantyExpiresAt: ["วันหมดประกัน", "หมดประกัน", "warranty_expires", "warranty_end", "warranty_expiry"],
 } satisfies Record<keyof BranchSheetRow, string[]>;
+
+/**
+ * อ่านวันที่จากเซลล์ ซึ่งมาได้หลายหน้าตา
+ *
+ * Excel ส่งมาเป็น Date object บ้าง ข้อความบ้าง และไฟล์ที่คนไทยทำมักใช้
+ * พ.ศ. — 2569 ไม่ใช่ปีในอนาคตอีกห้าร้อยปี แต่คือ 2026 ถ้าไม่แปลงกลับ
+ * วันหมดประกันจะกลายเป็นยังไม่หมดไปอีกห้าศตวรรษ
+ */
+function cellDate(value: ExcelJS.CellValue): Date | null {
+  if (value === null || value === undefined || value === "") return null;
+
+  const fromBuddhistYear = (d: Date): Date => {
+    if (d.getFullYear() < 2400) return d;
+    return new Date(Date.UTC(d.getFullYear() - 543, d.getMonth(), d.getDate()));
+  };
+
+  if (value instanceof Date) return fromBuddhistYear(value);
+
+  const text = cellText(value).trim();
+  if (!text) return null;
+
+  // dd/mm/yyyy หรือ dd-mm-yyyy ที่คนกรอกเอง
+  const thai = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (thai) {
+    const [, day, month, year] = thai;
+    const y = Number(year);
+    return new Date(Date.UTC(y >= 2400 ? y - 543 : y, Number(month) - 1, Number(day)));
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : fromBuddhistYear(parsed);
+}
 
 function cellText(value: ExcelJS.CellValue): string {
   if (value === null || value === undefined) return "";
@@ -77,6 +113,11 @@ export async function parseBranchWorkbook(buffer: Buffer): Promise<BranchParseRe
     return column === undefined ? "" : cellText(row.getCell(column).value).trim();
   };
 
+  const readDate = (row: ExcelJS.Row, field: keyof BranchSheetRow): Date | null => {
+    const column = columnOf[field];
+    return column === undefined ? null : cellDate(row.getCell(column).value);
+  };
+
   const byCode = new Map<string, BranchSheetRow>();
   const conflicting = new Set<string>();
   let rowsInFile = 0;
@@ -93,6 +134,8 @@ export async function parseBranchWorkbook(buffer: Buffer): Promise<BranchParseRe
       region: read(row, "region") || null,
       zone: read(row, "zone") || null,
       grade: read(row, "grade") || null,
+      openedAt: readDate(row, "openedAt"),
+      warrantyExpiresAt: readDate(row, "warrantyExpiresAt"),
     };
 
     // รหัสเดียวกันมาสองครั้งแล้วภาค/ทีมไม่ตรงกัน แปลว่าต้นทางมีปัญหา
@@ -215,18 +258,23 @@ export async function applyBranchImport(parsed: BranchParseResult): Promise<Bran
   // ต่อท้ายอยู่ ("ถนนอุตรกิจ กระบี่ 00031 KBI009 C0006") ส่วนชื่อที่มาจากรายงานเครื่อง
   // สะอาดกว่าและเป็นชื่อที่ขึ้นบนแดชบอร์ด
   await prisma.$executeRaw`
-    INSERT INTO "Branch" ("code", "name", "region", "zone", "grade")
+    INSERT INTO "Branch" ("code", "name", "region", "zone", "grade", "openedAt", "warrantyExpiresAt")
     SELECT * FROM unnest(
       ${rows.map((r) => r.code)}::text[],
       ${rows.map((r) => r.name || r.code)}::text[],
       ${rows.map((r) => r.region)}::text[],
       ${rows.map((r) => r.zone)}::text[],
-      ${rows.map((r) => r.grade)}::text[]
+      ${rows.map((r) => r.grade)}::text[],
+      ${rows.map((r) => r.openedAt)}::timestamp[],
+      ${rows.map((r) => r.warrantyExpiresAt)}::timestamp[]
     )
     ON CONFLICT ("code") DO UPDATE SET
       "region" = COALESCE(EXCLUDED."region", "Branch"."region"),
       "zone"   = COALESCE(EXCLUDED."zone",   "Branch"."zone"),
-      "grade"  = COALESCE(EXCLUDED."grade",  "Branch"."grade")
+      "grade"  = COALESCE(EXCLUDED."grade",  "Branch"."grade"),
+      -- ไฟล์ที่ไม่มีสองคอลัมน์นี้ต้องไม่ลบค่าที่เคยกรอกไว้ทิ้ง เหมือนกับ zone/grade
+      "openedAt"          = COALESCE(EXCLUDED."openedAt",          "Branch"."openedAt"),
+      "warrantyExpiresAt" = COALESCE(EXCLUDED."warrantyExpiresAt", "Branch"."warrantyExpiresAt")
   `;
 
   return plan;

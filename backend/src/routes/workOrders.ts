@@ -46,13 +46,25 @@ import {
   WORK_ORDER_STATUSES,
   WORK_ORDER_STATUS_LABELS,
   WORK_ORDER_ACTION_LABELS,
+  isCompanyBranch,
+  isWarrantyExpired,
   workOrderCode,
 } from "../utils/constants";
 
 const router = Router();
 
 const detailInclude = {
-  branch: { select: { code: true, name: true, region: true, zone: true, ownership: true } },
+  branch: {
+    select: {
+      code: true,
+      name: true,
+      region: true,
+      zone: true,
+      ownership: true,
+      openedAt: true,
+      warrantyExpiresAt: true,
+    },
+  },
   machine: { select: { code: true, type: true, brand: true, model: true } },
   assignedTo: { select: { id: true, name: true, employeeCode: true } },
   createdBy: { select: { id: true, name: true } },
@@ -191,6 +203,16 @@ function shape(w: WorkOrderRow) {
     region: w.branch.region,
     zone: w.branch.zone,
     ownership: w.branch.ownership,
+    // วันเปิดร้านกับประกัน — คนที่ดูใบงานต้องรู้ก่อนตัดสินใจว่าจะส่งช่างของเราไป
+    // หรือให้ผู้ขายรับผิดชอบ
+    branchOpenedAt: w.branch.openedAt,
+    // สาขาบริษัทไม่มีประกัน ตัดออกตั้งแต่ตรงนี้ ไม่ปล่อยให้หน้าจอไปตัดสินใจเอง
+    // ว่าจะซ่อนไหม ไม่งั้นวันหลังมีหน้าจอที่สามแล้วลืมซ่อน
+    branchIsCompany: isCompanyBranch(w.branch.code),
+    branchWarrantyExpiresAt: isCompanyBranch(w.branch.code) ? null : w.branch.warrantyExpiresAt,
+    branchWarrantyExpired: isCompanyBranch(w.branch.code)
+      ? null
+      : isWarrantyExpired(w.branch.warrantyExpiresAt),
     machineCode: w.machine?.code ?? null,
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
@@ -481,7 +503,16 @@ const createSchema = z.object({
     .min(1)
     .max(20)
     .optional(),
-  title: z.string().min(1, "ต้องระบุเรื่องที่ให้ไปทำ"),
+  /**
+   * ไม่ได้ให้พิมพ์หัวข้องานเองแล้ว — ตั้งจากประเภทงานให้
+   *
+   * ช่องพิมพ์อิสระทำให้ได้ "เครื่องเสีย" "เสีย" "ไปดูหน่อย" ปนกันเป็นร้อยแบบ
+   * โดยที่ไม่มีใครได้อะไรเพิ่มจากมัน — คำอธิบายจริงอยู่ที่อาการของแต่ละเครื่อง
+   * ซึ่งผูกกับเครื่องถูกตัวกว่า
+   *
+   * ยังรับค่าเข้ามา เพราะประเภท "อื่นๆ" ต้องให้คนระบุเอง
+   */
+  title: z.string().trim().max(200).optional(),
   detail: z.string().optional(),
   priority: z.enum(WORK_ORDER_PRIORITIES).default("NORMAL"),
   assignedToId: z.number().int().nullable().optional(),
@@ -499,6 +530,20 @@ const createSchema = z.object({
     .max(20)
     .optional(),
 });
+
+/**
+ * หัวข้อใบงานมาจากประเภทงาน ไม่ได้มาจากช่องพิมพ์
+ *
+ * "อื่นๆ" เป็นข้อยกเว้นเดียวที่ต้องให้คนระบุเอง เพราะชื่อประเภทว่า "อื่นๆ"
+ * ไม่ได้บอกอะไรกับคนที่มาอ่านใบงานทีหลังเลย
+ *
+ * คืน null เมื่อเลือกอื่นๆ แต่ไม่ได้ระบุอะไรมา ให้ผู้เรียกตอบ 400
+ */
+function titleFor(jobType: string, typed: string | undefined): string | null {
+  const given = typed?.trim();
+  if (jobType === "OTHER") return given || null;
+  return given || JOB_TYPE_LABELS[jobType] || jobType;
+}
 
 /**
  * สร้างใบงานแล้วตั้งรหัสจาก id ที่เพิ่งได้
@@ -571,6 +616,11 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: `เครื่อง ${duplicate} ถูกใส่ซ้ำ` });
   }
 
+  const title = titleFor(body.jobType, body.title);
+  if (!title) {
+    return res.status(400).json({ error: "เลือกประเภทงาน \"อื่นๆ\" แล้วต้องระบุรายละเอียดด้วย" });
+  }
+
   /**
    * ตรวจเครื่องให้ครบก่อน แล้วค่อยสร้าง
    *
@@ -623,7 +673,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
               outageId: null,
               source: "MANUAL",
               jobType: body.jobType,
-              title: body.title.trim(),
+              title,
               detail: body.detail?.trim() || null,
               priority: body.priority,
               assignedToId: body.assignedToId ?? null,
@@ -716,6 +766,12 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
     });
   }
 
+  // เลือก "อื่นๆ" จากกระดานก็ต้องระบุรายละเอียดเหมือนกัน
+  const outageTitle = body.jobType === "OTHER" ? body.title?.trim() || null : null;
+  if (body.jobType === "OTHER" && !outageTitle) {
+    return res.status(400).json({ error: "เลือกประเภทงาน \"อื่นๆ\" แล้วต้องระบุรายละเอียดด้วย" });
+  }
+
   const isSignalLost = outage.kind === "SIGNAL_LOST";
   const defaultTitle = isSignalLost
     ? `สัญญาณหายทั้งสาขา ${outage.branch.code}`
@@ -732,7 +788,9 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
           outageId,
           source: "OUTAGE",
           jobType: body.jobType,
-          title: body.title?.trim() || defaultTitle,
+          // ทางกระดานมีหัวข้อตั้งต้นที่บอกเครื่องกับสาขาอยู่แล้ว ซึ่งอ่านรู้เรื่องกว่า
+          // ชื่อประเภทงาน จึงใช้อันนั้นเว้นแต่เลือก "อื่นๆ" ที่คนระบุเองมา
+          title: body.jobType === "OTHER" ? outageTitle! : body.title?.trim() || defaultTitle,
           // อาการที่เคยกรอกไว้ในเคสติดไปกับใบงานด้วย ช่างจะได้ไม่ต้องเปิดสองที่
           detail: body.detail?.trim() || outage.symptom || null,
           priority: body.priority,

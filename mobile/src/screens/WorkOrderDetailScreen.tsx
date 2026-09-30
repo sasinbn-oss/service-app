@@ -27,7 +27,7 @@ import WorkOrderAttachments from "../components/WorkOrderAttachments";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
-import { formatDateTime, statusTone } from "./WorkOrderListScreen";
+import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -52,6 +52,11 @@ interface WorkOrder {
   branchCode: string;
   branchName: string;
   region: string | null;
+  branchOpenedAt: string | null;
+  // ว่างเมื่อเป็นสาขาบริษัท — เซิร์ฟเวอร์ตัดออกให้แล้ว หน้าจอไม่ต้องตัดสินใจเอง
+  branchWarrantyExpiresAt: string | null;
+  branchWarrantyExpired: boolean | null;
+  branchIsCompany: boolean;
   machineCode: string | null;
   machineBrand: string | null;
   machineModel: string | null;
@@ -208,6 +213,35 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Row label="ประเภทงาน" value={order.jobTypeLabel} />
         <Row label="สาขา" value={`${order.branchCode} · ${order.branchName}`} />
         {order.region ? <Row label="ภาค" value={order.region} /> : null}
+        {order.branchOpenedAt ? (
+          <Row label="วันเปิดร้าน" value={formatDate(order.branchOpenedAt)} />
+        ) : null}
+        {/*
+          ประกันเป็นเรื่องของสาขาแฟรนไชส์เท่านั้น สาขาบริษัท (รหัสขึ้นต้นด้วย C)
+          เครื่องเป็นของบริษัทเอง จึงไม่มีอะไรให้พูดถึง
+
+          ต้องเห็นตั้งแต่หน้านี้ เพราะเป็นตัวตัดสินว่าจะส่งช่างของเราไปหรือ
+          ให้ผู้ขายรับผิดชอบ ซึ่งตัดสินกันตอนดูใบงาน ไม่ใช่ตอนไปถึงหน้างานแล้ว
+        */}
+        {order.branchIsCompany ? (
+          <Row label="ประกัน" value="สาขาบริษัท — ไม่มีประกัน" />
+        ) : order.branchWarrantyExpiresAt ? (
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>ประกัน</Text>
+            <Text
+              style={[
+                styles.rowValue,
+                order.branchWarrantyExpired ? styles.warrantyOut : styles.warrantyIn,
+              ]}
+            >
+              {order.branchWarrantyExpired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"}
+              {" · ถึง "}
+              {formatDate(order.branchWarrantyExpiresAt)}
+            </Text>
+          </View>
+        ) : (
+          <Row label="ประกัน" value="ยังไม่ได้บันทึกวันหมดประกัน" />
+        )}
         <Row
           label="เครื่อง"
           value={
@@ -1232,6 +1266,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md, paddingVertical: spacing.xs },
   rowLabel: { width: 120, fontSize: 13, lineHeight: 21, color: colors.textMuted },
   rowValue: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.text, fontWeight: "600" },
+  warrantyIn: { color: colors.success },
+  warrantyOut: { color: colors.danger },
   sectionTitle: {
     fontSize: 14,
     lineHeight: 22,

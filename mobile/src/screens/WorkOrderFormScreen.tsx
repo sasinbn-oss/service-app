@@ -31,6 +31,7 @@ import {
   pickVideoAttachment,
   uploadAttachment,
 } from "../utils/attachments";
+import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -46,6 +47,8 @@ interface BranchOption {
   code: string;
   name: string;
   region: string | null;
+  openedAt: string | null;
+  warrantyExpiresAt: string | null;
 }
 interface MachineOption {
   id: number;
@@ -82,10 +85,20 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   // เก็บชื่อสาขาไว้ด้วย ไม่ใช่แค่รหัส — คนจำสาขาจากชื่อ ไม่ได้จำจากรหัส
   // เห็นแต่ "C0006" แล้วไม่มีทางรู้ว่าเลือกถูกใบหรือเปล่าจนกว่าจะเปิดใบงานแล้ว
   const [branchName, setBranchName] = useState<string | null>(null);
+  // วันเปิดร้านกับวันหมดประกันของสาขาที่เลือก ให้เห็นตั้งแต่ตอนเปิดใบงาน
+  // ไม่ใช่ไปรู้ทีหลังตอนช่างถึงหน้างานแล้วว่าเครื่องยังอยู่ในประกันของผู้ขาย
+  const [branchOpenedAt, setBranchOpenedAt] = useState<string | null>(null);
+  const [branchWarrantyAt, setBranchWarrantyAt] = useState<string | null>(null);
   const [branchResults, setBranchResults] = useState<BranchOption[]>([]);
   const [branchTerm, setBranchTerm] = useState("");
   const [machineOptions, setMachineOptions] = useState<MachineOption[]>([]);
-  const [title, setTitle] = useState(route.params?.presetTitle ?? "");
+  /**
+   * รายละเอียดของประเภทงาน "อื่นๆ" — ไม่ใช่หัวข้องานที่ให้พิมพ์อิสระเหมือนเดิม
+   *
+   * สามประเภทแรกตั้งหัวข้อให้เองจากชื่อประเภท มีแต่ "อื่นๆ" ที่ชื่อประเภท
+   * ไม่ได้บอกอะไรกับคนที่มาอ่านทีหลัง จึงต้องให้ระบุ
+   */
+  const [otherDetail, setOtherDetail] = useState(route.params?.presetTitle ?? "");
   const [priority, setPriority] = useState("NORMAL");
 
   /**
@@ -128,6 +141,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         if (match) {
           setBranchName(match.name);
           setBranchRegion(match.region ?? null);
+          setBranchOpenedAt(match.openedAt ?? null);
+          setBranchWarrantyAt(match.warrantyExpiresAt ?? null);
         }
       })
       .catch(() => undefined);
@@ -208,7 +223,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   /** ตรวจก่อนส่ง — บอกให้ชัดว่าแถวไหนขาดอะไร ไม่ใช่แค่ "กรอกไม่ครบ" */
   function validate(): string | null {
-    if (!title.trim()) return "ต้องระบุเรื่องที่ให้ไปทำ";
+    if (jobType === "OTHER" && !otherDetail.trim()) {
+      return 'เลือกประเภทงาน "อื่นๆ" แล้วต้องระบุรายละเอียดด้วย';
+    }
     if (!fromBoard && !branchCode.trim()) return "ต้องเลือกสาขา";
     if (fromBoard) return null;
 
@@ -237,7 +254,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     setError(null);
     try {
       // ส่งเฉพาะสิ่งที่ขั้นนี้รู้ อะไหล่ ช่าง และวันนัดเป็นของขั้นถัดไป
-      const shared = { jobType, title: title.trim(), priority };
+      // ส่ง title เฉพาะตอนเลือก "อื่นๆ" — ประเภทอื่นเซิร์ฟเวอร์ตั้งหัวข้อให้เอง
+      const shared = {
+        jobType,
+        priority,
+        ...(jobType === "OTHER" ? { title: otherDetail.trim() } : {}),
+      };
       const res = fromBoard
         ? await api.post(`/work-orders/from-outage/${outageId}`, {
             ...shared,
@@ -313,6 +335,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
               เปิดจากเคสบนกระดาน สาขาและเครื่องมาจากเคสให้อัตโนมัติ
               {branchCode ? `\n${branchCode}${branchName ? ` · ${branchName}` : ""}` : ""}
             </Text>
+            {branchCode ? (
+              <BranchFacts
+                code={branchCode}
+                openedAt={branchOpenedAt}
+                warrantyExpiresAt={branchWarrantyAt}
+              />
+            ) : null}
           </View>
         ) : (
           <>
@@ -332,6 +361,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                     setBranchCode("");
                     setBranchName(null);
                     setBranchRegion(null);
+                    setBranchOpenedAt(null);
+                    setBranchWarrantyAt(null);
                     setBranchTerm("");
                     setRows([blankRow()]);
                   }}
@@ -340,6 +371,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                   <Ionicons name="close-circle" size={20} color={colors.textFaint} />
                 </TouchableOpacity>
               </View>
+            ) : null}
+            {branchCode ? (
+              <BranchFacts
+                code={branchCode}
+                openedAt={branchOpenedAt}
+                warrantyExpiresAt={branchWarrantyAt}
+              />
             ) : (
               <>
                 <View style={styles.searchBox}>
@@ -363,6 +401,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                           setBranchCode(b.code);
                           setBranchName(b.name);
                           setBranchRegion(b.region ?? null);
+                          setBranchOpenedAt(b.openedAt ?? null);
+                          setBranchWarrantyAt(b.warrantyExpiresAt ?? null);
                           setBranchResults([]);
                         }}
                         activeOpacity={0.7}
@@ -380,7 +420,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </>
         )}
 
-        <Text style={styles.label}>เรื่องที่ให้ไปทำ</Text>
+        <Text style={styles.label}>ประเภทงาน</Text>
         <View style={styles.options}>
           {jobTypes.map((t) => (
             <TouchableOpacity
@@ -397,15 +437,19 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         </View>
         <Text style={styles.jobHint}>{jobTypes.find((t) => t.value === jobType)?.hint ?? ""}</Text>
 
-        <Text style={styles.label}>หัวข้องาน</Text>
-        <TextInput
-          style={styles.input}
-          value={title}
-          onChangeText={setTitle}
-          placeholder="สรุปสั้นๆ ว่าให้ไปทำอะไร"
-          placeholderTextColor={colors.textFaint}
-          accessibilityLabel="หัวข้องาน"
-        />
+        {jobType === "OTHER" ? (
+          <>
+            <Text style={styles.label}>รายละเอียดงาน</Text>
+            <TextInput
+              style={styles.input}
+              value={otherDetail}
+              onChangeText={setOtherDetail}
+              placeholder="งานอะไร เช่น ติดตั้งป้ายใหม่ / ย้ายเครื่องระหว่างสาขา"
+              placeholderTextColor={colors.textFaint}
+              accessibilityLabel="รายละเอียดงาน"
+            />
+          </>
+        ) : null}
 
         {/*
           เครื่องกับอาการอยู่ด้วยกัน เพราะอาการเป็นของเครื่อง ไม่ใช่ของใบงาน
@@ -493,6 +537,52 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         </TouchableOpacity>
       </View>
     </ScrollView>
+  );
+}
+
+/**
+ * วันเปิดร้านกับสถานะประกันของสาขาที่เลือก
+ *
+ * อยู่ในฟอร์มตั้งแต่ตอนเปิดใบงาน ไม่ใช่ไปโผล่ในใบงานทีหลัง เพราะประกันเป็นตัว
+ * ตัดสินว่าจะส่งช่างของเราไปหรือให้ผู้ขายรับผิดชอบ ซึ่งควรรู้ตั้งแต่ตอนเปิด
+ *
+ * รหัสขึ้นต้นด้วย C คือสาขาบริษัท เครื่องเป็นของบริษัทเอง ไม่มีประกันให้พูดถึง
+ */
+function BranchFacts({
+  code,
+  openedAt,
+  warrantyExpiresAt,
+}: {
+  code: string;
+  openedAt: string | null;
+  warrantyExpiresAt: string | null;
+}) {
+  const isCompany = code.trim().toUpperCase().startsWith("C");
+  const expired = warrantyExpiresAt ? new Date(warrantyExpiresAt).getTime() < Date.now() : null;
+
+  if (!openedAt && (isCompany || !warrantyExpiresAt)) {
+    return isCompany ? (
+      <Text style={styles.branchFact}>สาขาบริษัท — ไม่มีประกัน</Text>
+    ) : (
+      <Text style={styles.branchFact}>ยังไม่ได้บันทึกวันเปิดร้านและวันหมดประกัน</Text>
+    );
+  }
+
+  return (
+    <View style={styles.branchFacts}>
+      {openedAt ? (
+        <Text style={styles.branchFact}>เปิดร้าน {formatDate(openedAt)}</Text>
+      ) : null}
+      {isCompany ? (
+        <Text style={styles.branchFact}>สาขาบริษัท — ไม่มีประกัน</Text>
+      ) : warrantyExpiresAt ? (
+        <Text style={[styles.branchFact, expired ? styles.warrantyOut : styles.warrantyIn]}>
+          {expired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"} · ถึง {formatDate(warrantyExpiresAt)}
+        </Text>
+      ) : (
+        <Text style={styles.branchFact}>ยังไม่ได้บันทึกวันหมดประกัน</Text>
+      )}
+    </View>
   );
 }
 
@@ -822,6 +912,10 @@ const styles = StyleSheet.create({
   chosenBody: { flex: 1, minWidth: 0 },
   chosenText: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.primaryDark },
   chosenName: { fontSize: 12, lineHeight: 20, color: colors.primaryDark },
+  branchFacts: { gap: 2, marginTop: spacing.xs },
+  branchFact: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  warrantyIn: { color: colors.success, fontWeight: "600" },
+  warrantyOut: { color: colors.danger, fontWeight: "600" },
   files: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
   file: { position: "relative" },
   thumb: { width: 88, height: 88, borderRadius: radius.sm, backgroundColor: colors.background },

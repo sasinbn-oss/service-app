@@ -159,17 +159,28 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
 ] as const;
 
 /**
- * ประเภทงาน — เรื่องที่ให้ไปทำ
+ * ประเภทงาน
  *
  * เป็นตัวเลือกตายตัวไม่ใช่ข้อความอิสระ เพราะต้องเอาไปนับแยกในรายงานได้
  * ข้อความอิสระที่คนพิมพ์เองจะได้ "งานCM" "CM" "ซ่อม CM" ปนกันจนรวมยอดไม่ได้
+ *
+ * OTHER มีไว้สำหรับงานที่ไม่เข้าสามอย่างแรก และบังคับให้พิมพ์รายละเอียดกำกับ
+ * ไม่งั้นจะกลายเป็นถังขยะที่มีงานครึ่งหนึ่งอยู่ในนั้นโดยไม่มีใครรู้ว่างานอะไร
  */
-export const JOB_TYPES = ["CM", "PM", "PROJECT", "PARTS_CLEARING"] as const;
+export const JOB_TYPES = ["CM", "PM", "IT", "OTHER"] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
+/**
+ * รวม PROJECT กับ PARTS_CLEARING ไว้ด้วย ทั้งที่เลือกใหม่ไม่ได้แล้ว
+ *
+ * ใบงานเก่าที่เปิดไว้ก่อนเปลี่ยนตัวเลือกยังถืออยู่สองค่านั้น ถ้าเอาออก
+ * หน้าจอจะโชว์รหัสดิบ "PARTS_CLEARING" ให้คนอ่าน แทนที่จะเป็นชื่อที่อ่านรู้เรื่อง
+ */
 export const JOB_TYPE_LABELS: Record<string, string> = {
   CM: "งาน CM",
   PM: "งาน PM",
+  IT: "งาน IT",
+  OTHER: "อื่นๆ",
   PROJECT: "งาน Project",
   PARTS_CLEARING: "งานระบายอะไหล่",
 };
@@ -177,8 +188,8 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 export const JOB_TYPE_HINTS: Record<string, string> = {
   CM: "ซ่อมแก้เมื่อเครื่องเสีย",
   PM: "บำรุงรักษาตามรอบ",
-  PROJECT: "งานติดตั้งหรือปรับปรุง",
-  PARTS_CLEARING: "ย้ายหรือระบายอะไหล่ระหว่างคลัง",
+  IT: "ระบบเครือข่าย ตู้เติมเงิน กล้อง หรืออุปกรณ์ไอทีในสาขา",
+  OTHER: "งานที่ไม่เข้าสามอย่างข้างบน — ต้องระบุรายละเอียด",
 };
 
 export const WORK_ORDER_PRIORITIES = ["URGENT", "NORMAL", "LOW"] as const;
@@ -229,6 +240,29 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
 export function canActOnStage(role: string, stage: string) {
   if (role === "ADMIN") return true;
   return WORK_ORDER_STAGE_ACTOR[stage] === role;
+}
+
+/**
+ * สาขาบริษัทหรือสาขาแฟรนไชส์ ดูจากรหัสสาขา
+ *
+ * รหัสขึ้นต้นด้วย C คือสาขาบริษัท เครื่องเป็นของบริษัทเอง จึงไม่มีเรื่องประกัน
+ * ให้พูดถึง — ต่างจากสาขาแฟรนไชส์ที่ต้องดูว่าหมดประกันหรือยังก่อนตัดสินใจว่า
+ * จะส่งช่างของเราไปหรือให้ผู้ขายรับผิดชอบ
+ *
+ * ใช้รหัสสาขาไม่ใช่ช่อง ownership เพราะรหัสคือสิ่งที่คนในบริษัทใช้แยกกันจริง
+ * ส่วน ownership มาจากไฟล์ CRM ซึ่งบางแถวว่าง
+ */
+export function isCompanyBranch(branchCode: string): boolean {
+  return branchCode.trim().toUpperCase().startsWith("C");
+}
+
+/** หมดประกันหรือยัง — ว่าง = ไม่รู้ ต่างจาก false ที่แปลว่ายังไม่หมด */
+export function isWarrantyExpired(
+  warrantyExpiresAt: Date | null | undefined,
+  now = new Date()
+): boolean | null {
+  if (!warrantyExpiresAt) return null;
+  return warrantyExpiresAt.getTime() < now.getTime();
 }
 
 /** รหัสที่คนอ่าน ตั้งจาก id จึงไม่มีทางชนกันและไม่ต้องนับแถวก่อน */

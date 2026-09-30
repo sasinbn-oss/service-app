@@ -75,6 +75,14 @@ export function formatDateTime(iso: string | null) {
   });
 }
 
+/** วันที่อย่างเดียว ไม่มีเวลา — ใช้กับวันเปิดร้านและวันหมดประกันซึ่งเป็นรายวัน */
+export function formatDate(iso: string | null) {
+  if (!iso) return "—";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "—";
+  return at.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", dateStyle: "medium" });
+}
+
 export default function WorkOrderListScreen({ navigation }: Props) {
   useWideLayout();
   const [rows, setRows] = useState<WorkOrderRow[]>([]);

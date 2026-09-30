@@ -151,7 +151,20 @@ const branchSchema = z.object({
   ownership: z.enum(["COCO", "DODO"]).optional(),
   zone: z.string().optional(),
   grade: z.enum(["A", "B", "C"]).optional(),
+  // วันที่ส่งมาเป็น YYYY-MM-DD ส่งค่าว่างมาคือล้างทิ้ง
+  openedAt: z.string().nullable().optional(),
+  warrantyExpiresAt: z.string().nullable().optional(),
 });
+
+/** แปลงวันที่จากฟอร์มให้เป็น Date โดยไม่แตะช่องที่ไม่ได้ส่งมา */
+function branchDates(body: { openedAt?: string | null; warrantyExpiresAt?: string | null }) {
+  const out: { openedAt?: Date | null; warrantyExpiresAt?: Date | null } = {};
+  if (body.openedAt !== undefined) out.openedAt = body.openedAt ? new Date(body.openedAt) : null;
+  if (body.warrantyExpiresAt !== undefined) {
+    out.warrantyExpiresAt = body.warrantyExpiresAt ? new Date(body.warrantyExpiresAt) : null;
+  }
+  return out;
+}
 
 router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const parsed = branchSchema.safeParse(req.body);
@@ -160,7 +173,9 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const existing = await prisma.branch.findUnique({ where: { code: parsed.data.code } });
   if (existing) return res.status(409).json({ error: "Branch code already exists" });
 
-  const branch = await prisma.branch.create({ data: parsed.data });
+  const branch = await prisma.branch.create({
+    data: { ...parsed.data, ...branchDates(parsed.data) },
+  });
   res.status(201).json(branch);
 });
 
@@ -172,7 +187,10 @@ router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const branch = await prisma.branch.update({ where: { id }, data: parsed.data });
+    const branch = await prisma.branch.update({
+      where: { id },
+      data: { ...parsed.data, ...branchDates(parsed.data) },
+    });
     res.json(branch);
   } catch {
     res.status(404).json({ error: "Branch not found" });
