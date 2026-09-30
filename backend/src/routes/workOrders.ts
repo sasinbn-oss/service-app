@@ -82,7 +82,11 @@ const detailInclude = {
   },
   // นับอย่างเดียว ไม่ดึงรูปย่อมาด้วย เพราะรายการใบงานมีเป็นร้อยใบ
   // ถ้าติดรูปย่อไปทุกใบ หน้ารายการจะโหลดหนักกว่าหน้ารายละเอียดหลายเท่า
+  //
   _count: { select: { attachments: true } },
+  // แถวเดียวพอ หน้าปิดงานแค่อยากรู้ว่าเคยแนบใบเหลืองไว้แล้วหรือยัง
+  // ไม่ได้จะเอารายการมาแสดง
+  attachments: { where: { role: "REQUISITION" }, select: { id: true }, take: 1 },
 } as const;
 
 /**
@@ -254,6 +258,9 @@ function shape(w: WorkOrderRow) {
     waitingParts: w.parts.filter((p) => p.kind === "WAITING").map(partShape),
     parts: w.parts.filter((p) => p.kind !== "WAITING").map(partShape),
     attachmentCount: w._count.attachments,
+    // ใช้อะไหล่แล้วต้องมีใบเหลืองถึงจะปิดงานได้ หน้าปิดงานเลยต้องรู้ล่วงหน้า
+    // ว่าแนบไปแล้วหรือยัง ไม่ใช่ไปรู้ตอนกดบันทึกแล้วโดนปฏิเสธ
+    hasRequisitionSlip: w.attachments.length > 0,
   };
 }
 
@@ -315,6 +322,7 @@ function partShape(p: {
   quantity: number;
   inStock?: boolean | null;
   warehouse?: string | null;
+  requisitionNo?: string | null;
   sparePart: { id: number; partCode: string; name: string; brand: string | null };
 }) {
   return {
@@ -326,6 +334,7 @@ function partShape(p: {
     // ว่าง = ยังไม่มีใครเช็ค ต่างจาก false ที่แปลว่าเช็คแล้วและหมด
     inStock: p.inStock ?? null,
     warehouse: p.warehouse ?? null,
+    requisitionNo: p.requisitionNo ?? null,
   };
 }
 
@@ -1068,6 +1077,8 @@ const partsCheckSchema = z.object({
         inStock: z.boolean(),
         // บังคับเฉพาะตอนบอกว่ามีของ ของที่หมดไม่มีคลังให้ระบุ
         warehouse: z.string().trim().max(120).nullable().optional(),
+        // เลขใบเบิกจากระบบคลัง ของที่หมดยังไม่มีใบเบิก
+        requisitionNo: z.string().trim().max(60).nullable().optional(),
       })
     )
     .min(1),
@@ -1098,6 +1109,11 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     if (r.inStock && r.warehouse && !WAREHOUSES.includes(r.warehouse as never)) {
       return res.status(400).json({ error: `ไม่รู้จักคลัง "${r.warehouse}"` });
     }
+    // ของที่เบิกออกจากคลังต้องมีเลขใบเบิกกำกับ ไม่งั้นของหายออกจากคลัง
+    // โดยไม่มีเอกสารผูกไว้ แล้วตอนตรวจนับจะหาไม่เจอว่าไปไหน
+    if (r.inStock && !r.requisitionNo?.trim()) {
+      return res.status(400).json({ error: "ของที่มีอยู่ ต้องใส่เลขใบเบิกอะไหล่ด้วย" });
+    }
   }
 
   // มีตัวไหนหมด = ทั้งใบต้องรออะไหล่ เพราะช่างไปแล้วก็ซ่อมไม่จบอยู่ดี
@@ -1111,6 +1127,8 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         data: {
           inStock: r.inStock,
           warehouse: r.inStock ? r.warehouse ?? null : null,
+          // ของที่หมดยังไม่ได้เบิก เลขใบเบิกที่ค้างจากรอบก่อนต้องถูกล้าง
+          requisitionNo: r.inStock ? r.requisitionNo?.trim() || null : null,
           checkedAt: now,
           checkedById: req.auth!.userId,
         },
@@ -1385,6 +1403,24 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     current.assignedToId !== req.auth!.userId
   ) {
     return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
+  }
+
+  /**
+   * เบิกอะไหล่ไปใช้แล้วต้องมีรูปใบเบิก (ใบเหลือง) ติดมาด้วย
+   *
+   * ตรวจที่เซิร์ฟเวอร์ ไม่ใช่แค่ที่หน้าจอ เพราะใบเหลืองคือหลักฐานว่าของที่หายไป
+   * จากคลังไปอยู่ที่เครื่องไหนจริง — ถ้าปล่อยให้ปิดงานได้โดยไม่มี ก็จะไม่มีใคร
+   * ถ่ายมาเลย แล้วตอนตรวจนับคลังจะเหลือแต่ตัวเลขที่ไม่มีเอกสารรองรับ
+   */
+  if ((body.parts?.length ?? 0) > 0) {
+    const slip = await prisma.workOrderAttachment.count({
+      where: { workOrderId: id, role: "REQUISITION" },
+    });
+    if (slip === 0) {
+      return res.status(400).json({
+        error: "ใช้อะไหล่แล้วต้องแนบรูปใบเบิกอะไหล่ (ใบเหลือง) ก่อนปิดงาน",
+      });
+    }
   }
 
   const now = new Date();

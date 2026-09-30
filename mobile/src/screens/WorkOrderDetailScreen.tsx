@@ -8,7 +8,9 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -24,6 +26,11 @@ import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
 import DateField from "../components/DateField";
 import WorkOrderAttachments from "../components/WorkOrderAttachments";
+import {
+  PickedAttachment,
+  pickImageAttachment,
+  uploadAttachment,
+} from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
@@ -82,6 +89,8 @@ interface WorkOrder {
   outageStillOpen: boolean | null;
   outageKind: string | null;
   parts: PickedPart[];
+  /** เคยแนบรูปใบเบิก (ใบเหลือง) ไว้แล้วหรือยัง — ใช้อะไหล่แล้วต้องมีถึงจะปิดงานได้ */
+  hasRequisitionSlip: boolean;
   logs: LogEntry[];
 }
 
@@ -101,6 +110,7 @@ interface Stage {
 interface StockPart extends PickedPart {
   inStock: boolean | null;
   warehouse: string | null;
+  requisitionNo: string | null;
 }
 
 interface Technician {
@@ -125,6 +135,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  // ขยับเมื่อมีไฟล์ถูกแนบจากที่อื่นนอกการ์ดไฟล์แนบ เพื่อสั่งให้การ์ดโหลดใหม่
+  const [filesKey, setFilesKey] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -287,21 +299,27 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               <>
                 <Text style={styles.partsHead}>อะไหล่ที่ต้องใช้</Text>
                 {order.waitingParts.map((part) => (
-                  <View key={part.sparePartId} style={styles.partRow}>
-                    <Text style={styles.partCode}>
-                      {part.partCode} × {part.quantity}
-                    </Text>
-                    <Text style={styles.partName} numberOfLines={1}>
-                      {part.name}
-                    </Text>
-                    {/* ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด */}
-                    {part.inStock === null ? (
-                      <Text style={styles.stockPending}>ยังไม่เช็ค</Text>
-                    ) : part.inStock ? (
-                      <Text style={styles.stockIn}>{part.warehouse ?? "มีของ"}</Text>
-                    ) : (
-                      <Text style={styles.stockOut}>หมด</Text>
-                    )}
+                  <View key={part.sparePartId}>
+                    <View style={styles.partRow}>
+                      <Text style={styles.partCode}>
+                        {part.partCode} × {part.quantity}
+                      </Text>
+                      <Text style={styles.partName} numberOfLines={1}>
+                        {part.name}
+                      </Text>
+                      {/* ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด */}
+                      {part.inStock === null ? (
+                        <Text style={styles.stockPending}>ยังไม่เช็ค</Text>
+                      ) : part.inStock ? (
+                        <Text style={styles.stockIn}>{part.warehouse ?? "มีของ"}</Text>
+                      ) : (
+                        <Text style={styles.stockOut}>หมด</Text>
+                      )}
+                    </View>
+                    {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
+                    {part.requisitionNo ? (
+                      <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text>
+                    ) : null}
                   </View>
                 ))}
               </>
@@ -323,7 +341,11 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         ปิดงานแล้วแนบเพิ่มไม่ได้ ใบที่ปิดแล้วคือบันทึกที่จบไปแล้ว
         ยกเว้นแอดมินที่ยังต้องเอาของที่ไม่ควรอยู่ในระบบออกได้
       */}
-      <WorkOrderAttachments workOrderId={order.id} canEdit={!done || user?.role === "ADMIN"} />
+      <WorkOrderAttachments
+        workOrderId={order.id}
+        canEdit={!done || user?.role === "ADMIN"}
+        reloadKey={filesKey}
+      />
 
       {order.outageId !== null ? (
         <View style={[styles.card, styles.linked]}>
@@ -557,6 +579,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         onCancel={() => setClosing(false)}
         onDone={async () => {
           setClosing(false);
+          // ปิดงานอาจแนบรูปใบเหลืองไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
+          setFilesKey((k) => k + 1);
           await load();
         }}
       />
@@ -693,7 +717,17 @@ function StageModal({
 }) {
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
-  const [checks, setChecks] = useState<Record<number, { inStock: boolean | null; warehouse: string | null }>>({});
+  const [checks, setChecks] = useState<
+    Record<number, { inStock: boolean | null; warehouse: string | null }>
+  >({});
+  /**
+   * เลขใบเบิกใช้ร่วมกันทั้งใบ เพราะปกติเบิกทีเดียวได้ใบเดียว
+   *
+   * เก็บรายตัวในฐานข้อมูล แต่หน้าจอให้กรอกช่องเดียว — พิมพ์เลขเดิมห้ารอบ
+   * คือทางที่ทำให้พิมพ์ผิดโดยไม่มีใครรู้ ถ้าวันหลังต้องเบิกคนละใบจริง
+   * ค่อยเปิดให้แก้รายตัวได้ โดยไม่ต้องแก้ฐานข้อมูลอีก
+   */
+  const [requisitionNo, setRequisitionNo] = useState("");
   const [techId, setTechId] = useState<number | null>(null);
   const [visit, setVisit] = useState("");
   const [note, setNote] = useState("");
@@ -709,6 +743,8 @@ function StageModal({
         order.waitingParts.map((p) => [p.sparePartId, { inStock: p.inStock, warehouse: p.warehouse }])
       )
     );
+    // เปิดซ้ำให้เห็นเลขที่เคยกรอกไว้ ไม่ใช่ช่องว่างที่ต้องหาเลขมาพิมพ์ใหม่
+    setRequisitionNo(order.waitingParts.find((p) => p.requisitionNo)?.requisitionNo ?? "");
     setTechId(order.assignedToId);
     setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
     setNote("");
@@ -733,6 +769,7 @@ function StageModal({
             sparePartId: p.sparePartId,
             inStock: checks[p.sparePartId]?.inStock ?? false,
             warehouse: checks[p.sparePartId]?.warehouse ?? null,
+            requisitionNo: requisitionNo.trim() || null,
           })),
           note: note.trim() || undefined,
         });
@@ -761,11 +798,17 @@ function StageModal({
       const c = checks[p.sparePartId];
       return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse);
     });
+  // มีของอย่างน้อยหนึ่งตัว = ต้องเบิก = ต้องมีเลขใบเบิก
+  const needsRequisition =
+    order.status === "PARTS_REQUESTED" &&
+    order.waitingParts.some((p) => checks[p.sparePartId]?.inStock === true) &&
+    !requisitionNo.trim();
   const blocked =
     (order.status === "NEW" && (needsParts === null || (needsParts && parts.length === 0))) ||
     (order.status === "PARTS_CHECKED" && techId === null) ||
     (order.status === "ASSIGNED" && !/^\d{4}-\d{2}-\d{2}$/.test(visit)) ||
-    unchecked;
+    unchecked ||
+    needsRequisition;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
@@ -887,6 +930,23 @@ function StageModal({
                     </View>
                   );
                 })}
+                {order.waitingParts.some((p) => checks[p.sparePartId]?.inStock === true) ? (
+                  <>
+                    <Text style={styles.modalLabel}>เลขใบเบิกอะไหล่</Text>
+                    <TextInput
+                      style={[styles.modalInput, styles.modalInputLine]}
+                      value={requisitionNo}
+                      onChangeText={setRequisitionNo}
+                      placeholder="เลขใบเบิกจากระบบคลัง"
+                      placeholderTextColor={colors.textFaint}
+                      autoCapitalize="characters"
+                      accessibilityLabel="เลขใบเบิกอะไหล่"
+                    />
+                    <Text style={styles.linkedText}>
+                      ใช้กับอะไหล่ทุกตัวที่ตอบว่ามีของ — ของที่หมดยังไม่ได้เบิก จึงไม่มีเลขใบเบิก
+                    </Text>
+                  </>
+                ) : null}
                 <Text style={styles.linkedText}>
                   มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” ให้เอง
                 </Text>
@@ -1104,13 +1164,39 @@ function CloseModal({
   const [note, setNote] = useState("");
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
+  const [slip, setSlip] = useState<PickedAttachment | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ใช้อะไหล่แล้วต้องมีใบเหลือง — เซิร์ฟเวอร์ก็กันไว้อีกชั้น แต่บอกตั้งแต่ตรงนี้
+  // ดีกว่าให้กดบันทึกแล้วค่อยเด้งกลับมาว่าขาดรูป
+  const slipMissing = parts.length > 0 && !slip && !order.hasRequisitionSlip;
+
+  async function addSlip(
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) {
+    setBusy("กำลังเตรียมรูป");
+    try {
+      const file = await pick(setBusy);
+      if (file) setSlip(file);
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function submit() {
     setSaving(true);
     setError(null);
     try {
+      // ใบเหลืองต้องขึ้นก่อนปิดงาน เพราะเซิร์ฟเวอร์เช็คว่ามีรูปแล้วหรือยัง
+      // ตอนรับคำสั่งปิด ส่งทีหลังจะถูกปฏิเสธทั้งที่รูปอยู่ในมือแล้ว
+      if (slip) {
+        setBusy("กำลังส่งรูปใบเหลือง");
+        await uploadAttachment(order.id, slip, "REQUISITION");
+      }
       await api.post(`/work-orders/${order.id}/close`, {
         result,
         note: note.trim() || undefined,
@@ -1118,11 +1204,13 @@ function CloseModal({
       });
       setNote("");
       setParts([]);
+      setSlip(null);
       onDone();
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
+      setBusy(null);
     }
   }
 
@@ -1163,6 +1251,68 @@ function CloseModal({
 
             <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
 
+            {/*
+              ใบเหลืองคือหลักฐานว่าของที่หายไปจากคลังไปอยู่ที่เครื่องตัวไหน
+              ถามเฉพาะตอนที่มีอะไหล่จริง งานที่ไม่ได้เปลี่ยนอะไรไม่มีใบเบิกให้ถ่าย
+            */}
+            {parts.length > 0 ? (
+              <>
+                <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
+                {order.hasRequisitionSlip && !slip ? (
+                  <Text style={styles.linkedText}>
+                    แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
+                  </Text>
+                ) : null}
+                {slip ? (
+                  <View style={styles.slipRow}>
+                    {slip.thumbnailUri ? (
+                      <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
+                    ) : (
+                      <View style={[styles.slipThumb, styles.slipBlank]}>
+                        <Ionicons name="document-outline" size={22} color={colors.textFaint} />
+                      </View>
+                    )}
+                    <TouchableOpacity
+                      onPress={() => setSlip(null)}
+                      accessibilityLabel="เอารูปใบเหลืองออก"
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+                    </TouchableOpacity>
+                  </View>
+                ) : busy ? (
+                  <View style={styles.slipRow}>
+                    <ActivityIndicator color={colors.primary} size="small" />
+                    <Text style={styles.linkedText}>{busy}…</Text>
+                  </View>
+                ) : (
+                  <View style={styles.options}>
+                    {Platform.OS !== "web" ? (
+                      <TouchableOpacity
+                        style={styles.option}
+                        onPress={() => addSlip((stage) => pickImageAttachment(true, stage))}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={styles.option}
+                      onPress={() => addSlip((stage) => pickImageAttachment(false, stage))}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {slipMissing ? (
+                  <Text style={styles.warn}>
+                    ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+
             {order.outageStillOpen ? (
               <Text style={styles.warn}>
                 เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานล่าสุด ปิดใบงานได้ แต่เคสบนกระดานจะยังอยู่
@@ -1178,13 +1328,16 @@ function CloseModal({
               <Text style={styles.modalCancelText}>ยกเลิก</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.modalSave, saving && styles.modalSaveOff]}
+              style={[styles.modalSave, (saving || slipMissing) && styles.modalSaveOff]}
               onPress={submit}
-              disabled={saving}
+              disabled={saving || slipMissing}
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <>
+                  <ActivityIndicator color="#fff" size="small" />
+                  {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
+                </>
               ) : (
                 <Text style={styles.modalSaveText}>ยืนยันปิดงาน</Text>
               )}
@@ -1216,6 +1369,7 @@ const styles = StyleSheet.create({
   partRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 3 },
   partCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   partName: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  partRequisition: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingBottom: 3 },
   stockPending: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
   stockIn: { fontSize: 11, lineHeight: 19, color: colors.success, fontWeight: "700" },
   stockOut: { fontSize: 11, lineHeight: 19, color: colors.danger, fontWeight: "700" },
@@ -1341,6 +1495,8 @@ const styles = StyleSheet.create({
     minHeight: 84,
     textAlignVertical: "top",
   },
+  // ช่องบรรทัดเดียว — modalInput ตั้งความสูงไว้เผื่อช่องบันทึกที่พิมพ์หลายบรรทัด
+  modalInputLine: { minHeight: 0, textAlignVertical: "center" },
   options: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   option: {
     borderWidth: 1,
@@ -1387,5 +1543,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   modalSaveOff: { opacity: 0.6 },
+  slipRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs },
+  slipThumb: { width: 72, height: 72, borderRadius: radius.sm, backgroundColor: colors.background },
+  slipBlank: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   modalSaveText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
 });

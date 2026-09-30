@@ -321,12 +321,15 @@ export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO"] as const;
  * บทบาทของไฟล์แนบ — ว่างคือรูปหน้างานทั่วไป
  *
  * NAMEPLATE คือรูปป้ายรุ่นบนตัวเครื่อง ซึ่งเป็นที่มาของรุ่นที่กรอกไว้
- * ไม่ใช่หลักฐานของอาการ จึงต้องแยกให้หาเจอ ไม่ใช่ปนอยู่ในกองรูปหน้างาน
+ * REQUISITION คือรูปใบเบิกอะไหล่ (ใบเหลือง) ที่ช่างถ่ายหลังเปลี่ยนเสร็จ
+ *
+ * ทั้งสองอย่างไม่ใช่หลักฐานของอาการ จึงต้องแยกให้หาเจอ ไม่ใช่ปนอยู่ในกองรูปหน้างาน
  */
-export const ATTACHMENT_ROLES = ["NAMEPLATE"] as const;
+export const ATTACHMENT_ROLES = ["NAMEPLATE", "REQUISITION"] as const;
 
 export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   NAMEPLATE: "ป้ายรุ่น",
+  REQUISITION: "ใบเหลือง",
 };
 
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {

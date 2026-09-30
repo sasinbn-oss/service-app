@@ -51,9 +51,18 @@ export interface Attachment {
 export default function WorkOrderAttachments({
   workOrderId,
   canEdit,
+  reloadKey = 0,
 }: {
   workOrderId: number;
   canEdit: boolean;
+  /**
+   * ขยับเลขนี้เมื่อมีคนแนบไฟล์จากที่อื่น เช่น รูปใบเหลืองตอนปิดงาน
+   *
+   * การ์ดนี้โหลดรายการของตัวเองครั้งเดียวตอนขึ้นจอ จึงไม่รู้เลยว่ามีไฟล์
+   * เพิ่มเข้ามาจากหน้าอื่น — ถ้าไม่บอก คนปิดงานจะเห็นว่า "ยังไม่มีรูป"
+   * ทั้งที่เพิ่งแนบไปเมื่อกี้
+   */
+  reloadKey?: number;
 }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Attachment[]>([]);
@@ -75,7 +84,7 @@ export default function WorkOrderAttachments({
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   async function add(
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>,

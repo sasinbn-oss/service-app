@@ -539,6 +539,11 @@ model WorkOrderPart {
   inStock     Boolean?
   // ชื่อคลังที่มีของ ตามรายชื่อใน src/documents/warehouses.ts
   warehouse   String?
+  // เลขใบเบิกอะไหล่จากระบบคลัง — พิมพ์เอง ไม่ได้ออกเลขให้เอง
+  //
+  // เก็บรายตัวไม่ใช่รายใบงาน เพราะใบงานที่ช่างส่งกลับมาขอเบิกเพิ่มจะมีใบเบิก
+  // ใบที่สอง ถ้าเก็บไว้ที่ใบงานใบเดียว เลขใบแรกจะถูกทับหายไป
+  requisitionNo String?
   checkedAt   DateTime?
   checkedById Int?
   checkedBy   User?     @relation("CheckedWorkOrderParts", fields: [checkedById], references: [id])
