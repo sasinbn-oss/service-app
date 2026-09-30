@@ -862,6 +862,33 @@ function StageModal({
 
             {order.status === "PARTS_REQUESTED" ? (
               <View style={styles.checkList}>
+                {/*
+                  ช่องเลขใบเบิกอยู่บนสุด ไม่ใช่ท้ายรายการ
+
+                  อะไหล่ตัวเดียวมีชิปคลังสิบสองอัน สามตัวก็ยาวเกินหน้าจอไปแล้ว
+                  ช่องที่อยู่ใต้รายการจึงเท่ากับไม่มีช่อง สำหรับคนที่ไม่ได้เลื่อนลงไปสุด
+                  และมันเป็นค่าของทั้งใบเบิก ไม่ได้เป็นของอะไหล่ตัวใดตัวหนึ่ง
+                  จึงควรอยู่เหนือรายการอยู่แล้ว
+
+                  โชว์ตลอด ไม่ได้ซ่อนไว้จนกว่าจะตอบว่ามีของ เพราะช่องที่โผล่มา
+                  เหนือจุดที่กำลังมองอยู่ จะดันของที่เหลือเลื่อนลงโดยไม่มีใครทันเห็น
+                */}
+                <Text style={styles.modalLabel}>เลขใบเบิกอะไหล่</Text>
+                <TextInput
+                  style={[styles.modalInput, styles.modalInputLine]}
+                  value={requisitionNo}
+                  onChangeText={setRequisitionNo}
+                  placeholder="เลขใบเบิกจากระบบคลัง"
+                  placeholderTextColor={colors.textFaint}
+                  autoCapitalize="characters"
+                  accessibilityLabel="เลขใบเบิกอะไหล่"
+                />
+                <Text style={needsRequisition ? styles.warn : styles.linkedText}>
+                  {needsRequisition
+                    ? "ต้องใส่เลขใบเบิกก่อน ถึงจะบันทึกได้ — ใช้กับอะไหล่ทุกตัวที่ตอบว่ามีของ"
+                    : "ใช้กับอะไหล่ทุกตัวที่ตอบว่ามีของ — ของที่หมดยังไม่ได้เบิก จึงไม่ต้องใส่"}
+                </Text>
+
                 {order.waitingParts.map((part) => {
                   const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
                   return (
@@ -930,23 +957,6 @@ function StageModal({
                     </View>
                   );
                 })}
-                {order.waitingParts.some((p) => checks[p.sparePartId]?.inStock === true) ? (
-                  <>
-                    <Text style={styles.modalLabel}>เลขใบเบิกอะไหล่</Text>
-                    <TextInput
-                      style={[styles.modalInput, styles.modalInputLine]}
-                      value={requisitionNo}
-                      onChangeText={setRequisitionNo}
-                      placeholder="เลขใบเบิกจากระบบคลัง"
-                      placeholderTextColor={colors.textFaint}
-                      autoCapitalize="characters"
-                      accessibilityLabel="เลขใบเบิกอะไหล่"
-                    />
-                    <Text style={styles.linkedText}>
-                      ใช้กับอะไหล่ทุกตัวที่ตอบว่ามีของ — ของที่หมดยังไม่ได้เบิก จึงไม่มีเลขใบเบิก
-                    </Text>
-                  </>
-                ) : null}
                 <Text style={styles.linkedText}>
                   มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” ให้เอง
                 </Text>
