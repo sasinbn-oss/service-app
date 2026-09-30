@@ -98,6 +98,31 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 /**
+ * เครื่องที่ยังติดตั้งอยู่ในสาขานี้
+ *
+ * หน้าเปิดใบงานใช้ให้เลือกเครื่องแทนการพิมพ์รหัสเอง เพราะพิมพ์เองผิดได้
+ * แล้วกว่าจะรู้ว่าผิดคือตอนกดบันทึกแล้วเจอ "ไม่พบเครื่อง" ซึ่งสายไปแล้ว
+ * สำหรับคนที่กรอกมาทั้งฟอร์ม และยังเดาไม่ออกว่าพิมพ์ผิดตรงไหน
+ *
+ * ส่งรุ่นมาด้วย เพื่อให้ฟอร์มเติมให้เองถ้าเคยกรอกไว้แล้ว
+ */
+router.get("/:code/machines", requireAuth, async (req, res) => {
+  const branch = await prisma.branch.findUnique({
+    where: { code: req.params.code },
+    select: { id: true },
+  });
+  if (!branch) return res.status(404).json({ error: `ไม่พบสาขา ${req.params.code}` });
+
+  const machines = await prisma.machine.findMany({
+    // เครื่องที่ถอดออกไปแล้วไม่ควรถูกเลือกไปเปิดใบงานใหม่
+    where: { branchId: branch.id, removedAt: null },
+    select: { id: true, code: true, type: true, brand: true, model: true, status: true },
+    orderBy: { code: "asc" },
+  });
+  res.json(machines);
+});
+
+/**
  * ภาคทั้งหมดจากทะเบียนสาขา
  *
  * ต่างจาก /machines/regions ที่ให้เฉพาะภาคที่มีเคสค้างอยู่ตอนนี้ — ภาคที่หัวหน้าภาค

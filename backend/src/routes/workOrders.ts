@@ -53,7 +53,7 @@ const router = Router();
 
 const detailInclude = {
   branch: { select: { code: true, name: true, region: true, zone: true, ownership: true } },
-  machine: { select: { code: true, type: true, brand: true } },
+  machine: { select: { code: true, type: true, brand: true, model: true } },
   assignedTo: { select: { id: true, name: true, employeeCode: true } },
   createdBy: { select: { id: true, name: true } },
   closedBy: { select: { id: true, name: true } },
@@ -185,6 +185,7 @@ function shape(w: WorkOrderRow) {
     machineCode: w.machine?.code ?? null,
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
+    machineModel: w.machine?.model ?? null,
     assignedToId: w.assignedTo?.id ?? null,
     assignedToName: w.assignedTo?.name ?? null,
     scheduledAt: w.scheduledAt,
@@ -449,6 +450,28 @@ const createSchema = z.object({
   jobType: z.enum(JOB_TYPES).default("CM"),
 
   machineCode: z.string().optional(),
+  /**
+   * เปิดทีเดียวหลายเครื่องในสาขาเดียวกัน — ได้ใบงานเครื่องละใบ
+   *
+   * ช่างไปสาขาหนึ่งรอบเดียวแต่เจอเสียสามเครื่อง คนละอาการ ถ้าบังคับให้กรอก
+   * ฟอร์มใหม่สามรอบ สาขา ประเภทงาน และความเร่งด่วนจะถูกพิมพ์ซ้ำสามครั้ง
+   * ทั้งที่เป็นค่าเดียวกัน — ส่วนที่ต่างกันจริงมีแค่เครื่อง รุ่น และอาการ
+   *
+   * แต่ใบงานยังเป็นเครื่องละใบ ไม่ได้รวมเป็นใบเดียว เพราะแต่ละเครื่องมีอะไหล่
+   * ของตัวเอง ปิดคนละเวลา และอาจถูกจ่ายให้ช่างคนละคน ใบเดียวที่ถือสามเครื่อง
+   * จะปิดไม่ได้จนกว่าจะเสร็จครบทั้งสาม ซึ่งไม่ตรงกับที่หน้างานเป็นจริง
+   */
+  machines: z
+    .array(
+      z.object({
+        code: z.string().trim().max(50).optional(),
+        model: z.string().trim().max(100).nullable().optional(),
+        symptom: z.string().trim().max(500).nullable().optional(),
+      })
+    )
+    .min(1)
+    .max(20)
+    .optional(),
   title: z.string().min(1, "ต้องระบุเรื่องที่ให้ไปทำ"),
   detail: z.string().optional(),
   priority: z.enum(WORK_ORDER_PRIORITIES).default("NORMAL"),
@@ -522,42 +545,98 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "สาขานี้ถูกทำเครื่องหมายว่ายกเลิกแล้ว" });
   }
 
-  let machineId: number | null = null;
-  if (body.machineCode) {
-    const machine = await prisma.machine.findFirst({
-      where: { branchId: branch.id, code: body.machineCode },
-      select: { id: true, removedAt: true },
-    });
-    if (!machine) {
-      return res
-        .status(404)
-        .json({ error: `ไม่พบเครื่อง ${body.machineCode} ในสาขา ${body.branchCode}` });
-    }
-    if (machine.removedAt) return res.status(400).json({ error: "เครื่องนี้ถูกถอดออกไปแล้ว" });
-    machineId = machine.id;
+  // รูปแบบเดิม (machineCode + symptom) กับรูปแบบใหม่ (machines[]) เป็นเรื่องเดียวกัน
+  // ทำให้เป็นรายการเสมอตั้งแต่ตรงนี้ โค้ดข้างล่างจะได้มีทางเดียว
+  const wanted =
+    body.machines ??
+    [{ code: body.machineCode, model: null, symptom: body.symptom }];
+
+  // เว้นรหัสเครื่องว่าง = งานทั้งสาขา ซึ่งมีได้ใบเดียว ไม่ใช่สามใบที่ไม่รู้ว่าต่างกันตรงไหน
+  const blank = wanted.filter((m) => !m.code?.trim());
+  if (blank.length > 0 && wanted.length > 1) {
+    return res.status(400).json({ error: "ถ้าไม่ระบุเครื่อง จะเปิดได้ใบเดียวเท่านั้น" });
   }
 
-  const id = await createWorkOrder(
-    {
-      branchId: branch.id,
-      machineId,
-      outageId: null,
-      source: "MANUAL",
-      jobType: body.jobType,
-      title: body.title.trim(),
-      detail: body.detail?.trim() || null,
-      priority: body.priority,
-      assignedToId: body.assignedToId ?? null,
-      scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-      symptom: body.symptom?.trim() || null,
-      workStatus: body.workStatus ?? null,
-    },
-    body.waitingParts ?? [],
-    req.auth!.userId
-  );
+  const codes = wanted.map((m) => m.code?.trim()).filter((c): c is string => !!c);
+  const duplicate = codes.find((c, i) => codes.indexOf(c) !== i);
+  if (duplicate) {
+    return res.status(400).json({ error: `เครื่อง ${duplicate} ถูกใส่ซ้ำ` });
+  }
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.status(201).json(shape(row));
+  /**
+   * ตรวจเครื่องให้ครบก่อน แล้วค่อยสร้าง
+   *
+   * ถ้าตรวจไปสร้างไป พอเครื่องที่สามพิมพ์ผิดจะเหลือใบงานสองใบที่สร้างไปแล้ว
+   * กับข้อความ error หนึ่งอัน คนกดไม่มีทางรู้ว่าต้องไปลบสองใบนั้นทิ้งหรือเปล่า
+   */
+  const machines = new Map<string, { id: number; model: string | null }>();
+  for (const code of codes) {
+    const machine = await prisma.machine.findFirst({
+      where: { branchId: branch.id, code },
+      select: { id: true, model: true, removedAt: true },
+    });
+    if (!machine) {
+      return res.status(404).json({ error: `ไม่พบเครื่อง ${code} ในสาขา ${body.branchCode}` });
+    }
+    if (machine.removedAt) {
+      return res.status(400).json({ error: `เครื่อง ${code} ถูกถอดออกไปแล้ว` });
+    }
+    machines.set(code, { id: machine.id, model: machine.model });
+  }
+
+  const created: number[] = [];
+  for (const entry of wanted) {
+    const code = entry.code?.trim();
+    const machine = code ? machines.get(code)! : null;
+
+    // รุ่นเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง
+    const model = entry.model?.trim() || null;
+    if (machine && model && model !== machine.model) {
+      await prisma.machine.update({ where: { id: machine.id }, data: { model } });
+    }
+
+    const id = await createWorkOrder(
+      {
+        branchId: branch.id,
+        machineId: machine?.id ?? null,
+        outageId: null,
+        source: "MANUAL",
+        jobType: body.jobType,
+        title: body.title.trim(),
+        detail: body.detail?.trim() || null,
+        priority: body.priority,
+        assignedToId: body.assignedToId ?? null,
+        scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
+        symptom: entry.symptom?.trim() || null,
+        workStatus: body.workStatus ?? null,
+      },
+      body.waitingParts ?? [],
+      req.auth!.userId
+    );
+    created.push(id);
+  }
+
+  const rows = await prisma.workOrder.findMany({
+    where: { id: { in: created } },
+    include: detailInclude,
+  });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const ordered = created.map((id) => byId.get(id)!);
+
+  /**
+   * ตอบด้วยใบแรกเหมือนเดิม แล้วแนบรายการทั้งชุดมาด้วย
+   *
+   * หน้าจอเดิมอ่าน res.data.id เพื่อเด้งไปหน้ารายละเอียด ยังทำงานได้เหมือนเดิม
+   * ส่วนหน้าที่เปิดหลายเครื่องอ่าน orders เพื่อรู้ว่าต้องแนบรูปเข้าใบไหนบ้าง
+   */
+  res.status(201).json({
+    ...shape(ordered[0]),
+    orders: ordered.map((r) => ({
+      id: r.id,
+      code: r.code,
+      machineCode: r.machine?.code ?? null,
+    })),
+  });
 });
 
 const fromOutageSchema = z.object({

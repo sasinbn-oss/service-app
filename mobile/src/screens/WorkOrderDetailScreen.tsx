@@ -54,6 +54,7 @@ interface WorkOrder {
   region: string | null;
   machineCode: string | null;
   machineBrand: string | null;
+  machineModel: string | null;
   assignedToName: string | null;
   scheduledAt: string | null;
   createdByName: string | null;
@@ -211,7 +212,9 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           label="เครื่อง"
           value={
             order.machineCode
-              ? `${order.machineCode}${order.machineBrand ? ` · ${order.machineBrand}` : ""}`
+              ? [order.machineCode, order.machineBrand, order.machineModel]
+                  .filter(Boolean)
+                  .join(" · ")
               : "ทั้งสาขา"
           }
         />
