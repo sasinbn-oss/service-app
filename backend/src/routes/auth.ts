@@ -108,6 +108,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
     phone: user.phone,
     role: user.role,
     region: user.region,
+    team: user.team,
     mustChangePassword: user.mustChangePassword,
   });
 });
@@ -127,6 +128,7 @@ router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
       phone: true,
       role: true,
       region: true,
+      team: true,
       mustChangePassword: true,
       createdAt: true,
     },
@@ -258,6 +260,8 @@ router.post("/change-password", requireAuth, async (req: AuthRequest, res) => {
 const userUpdateSchema = z.object({
   role: z.enum(ROLES).optional(),
   region: z.string().trim().max(120).nullable().optional(),
+  // ทีมช่างที่สังกัด — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
+  team: z.string().trim().max(120).nullable().optional(),
 });
 
 router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -286,6 +290,9 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
       // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้ง
       ...(body.region !== undefined ? { region: body.region || null } : {}),
       ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null } : {}),
+      // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
+      ...(body.team !== undefined ? { team: body.team || null } : {}),
+      ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
     },
     select: {
       id: true,
@@ -294,6 +301,7 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
       phone: true,
       role: true,
       region: true,
+      team: true,
       mustChangePassword: true,
       createdAt: true,
     },

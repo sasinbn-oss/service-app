@@ -113,6 +113,29 @@ router.get("/regions", requireAuth, async (_req, res) => {
   res.json(rows.map((r) => ({ name: r.region as string, branches: r._count })));
 });
 
+/**
+ * ทีมช่างทั้งหมดจากทะเบียนสาขา
+ *
+ * ทีมไม่ได้เป็นตารางของตัวเอง — เป็นคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
+ * (เก็บที่ Branch.zone) เพราะความจริงของการแบ่งทีมอยู่ที่ไฟล์นั้น ถ้าทำตาราง
+ * แยกจะมีสองที่ที่บอกว่าทีมไหนมีอยู่บ้าง แล้ววันหนึ่งจะไม่ตรงกัน
+ *
+ * คืนจำนวนสาขาไปด้วย จะได้รู้ว่าทีมไหนดูแลกี่สาขาตอนเลือกจ่ายงานข้ามทีม
+ */
+router.get("/teams", requireAuth, async (_req, res) => {
+  const rows = await prisma.branch.groupBy({
+    by: ["zone"],
+    where: { zone: { not: null }, cancelledAt: null },
+    _count: true,
+    orderBy: { zone: "asc" },
+  });
+  res.json(
+    rows
+      .filter((r) => (r.zone as string).trim() !== "")
+      .map((r) => ({ name: r.zone as string, branches: r._count }))
+  );
+});
+
 const branchSchema = z.object({
   name: z.string().min(1),
   code: z.string().min(1),

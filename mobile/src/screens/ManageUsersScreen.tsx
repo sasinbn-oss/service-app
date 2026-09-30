@@ -29,6 +29,8 @@ interface ManagedUser {
   phone: string | null;
   role: Role;
   region: string | null;
+  /** ทีมช่างที่สังกัด — ตัวบอกว่าช่างคนนี้เห็นงานของทีมไหน */
+  team: string | null;
   mustChangePassword: boolean;
 }
 
@@ -41,6 +43,7 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
 export default function ManageUsersScreen() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
+  const [teams, setTeams] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,14 +52,16 @@ export default function ManageUsersScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [list, regionList] = await Promise.all([
+      const [list, regionList, teamList] = await Promise.all([
         api.get<ManagedUser[]>("/auth/users"),
         api.get<{ name: string }[]>("/branches/regions"),
+        api.get<{ name: string }[]>("/branches/teams"),
       ]);
       setUsers(list.data);
       // ภาคมาจากทะเบียนสาขาทั้งหมด ไม่ใช่เฉพาะภาคที่มีเคสค้าง — ภาคที่ทุกอย่างปกติ
       // ก็ยังต้องมีหัวหน้าภาคดูแล
       setRegions(regionList.data.map((r) => r.name).filter(Boolean));
+      setTeams(teamList.data.map((t) => t.name).filter(Boolean));
       setError(null);
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -71,7 +76,10 @@ export default function ManageUsersScreen() {
     }, [load])
   );
 
-  async function update(id: number, patch: { role?: Role; region?: string | null }) {
+  async function update(
+    id: number,
+    patch: { role?: Role; region?: string | null; team?: string | null }
+  ) {
     setSavingId(id);
     try {
       const res = await api.patch<ManagedUser>(`/auth/users/${id}`, patch);
@@ -145,6 +153,45 @@ export default function ManageUsersScreen() {
           <Text style={styles.hint}>
             {ROLE_OPTIONS.find((r) => r.value === u.role)?.hint ?? ""}
           </Text>
+
+          {/*
+            ช่างต้องมีทีม ไม่งั้นจะไม่เห็นใบงานเลย เพราะงานถูกจ่ายให้ทีม
+            ไม่ได้จ่ายรายคน — เหมือนหัวหน้าภาคที่ต้องมีภาค
+          */}
+          {u.role === "EMPLOYEE" ? (
+            <>
+              <Text style={styles.label}>ทีมช่างที่สังกัด</Text>
+              {teams.length === 0 ? (
+                <Text style={styles.hint}>
+                  ยังไม่มีทีมในทะเบียนสาขา — ทีมมาจากคอลัมน์ “ทีมช่าง” ในไฟล์ทะเบียนสาขา
+                </Text>
+              ) : (
+                <View style={styles.options}>
+                  {teams.map((team) => (
+                    <TouchableOpacity
+                      key={team}
+                      style={[styles.option, u.team === team && styles.optionOn]}
+                      onPress={() => update(u.id, { team: u.team === team ? null : team })}
+                      disabled={savingId !== null}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.optionText, u.team === team && styles.optionTextOn]}>
+                        {team}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              {!u.team ? (
+                <View style={styles.warn}>
+                  <Ionicons name="alert-circle" size={14} color={colors.danger} />
+                  <Text style={styles.warnText}>
+                    ยังไม่ได้จัดทีม จะเห็นเฉพาะงานเก่าที่เคยจ่ายให้ตัวเอง
+                  </Text>
+                </View>
+              ) : null}
+            </>
+          ) : null}
 
           {u.role === "SUPERVISOR" ? (
             <>

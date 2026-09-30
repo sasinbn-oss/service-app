@@ -29,6 +29,7 @@ import WorkOrderAttachments from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
   pickImageAttachment,
+  pickVideoAttachment,
   uploadAttachment,
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
@@ -59,6 +60,8 @@ interface WorkOrder {
   branchCode: string;
   branchName: string;
   region: string | null;
+  /** ทีมช่างที่ดูแลสาขานี้ ตามไฟล์ทะเบียนสาขา — ใช้เป็นค่าตั้งต้นตอนจ่ายงาน */
+  zone: string | null;
   branchOpenedAt: string | null;
   // ว่างเมื่อเป็นสาขาบริษัท — เซิร์ฟเวอร์ตัดออกให้แล้ว หน้าจอไม่ต้องตัดสินใจเอง
   branchWarrantyExpiresAt: string | null;
@@ -78,6 +81,9 @@ interface WorkOrder {
   symptom: string | null;
   workStatus: string | null;
   workStatusLabel: string | null;
+  /** ทีมช่างที่รับงาน — งานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน */
+  assignedTeam: string | null;
+  /** ช่างรายคนของใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
   assignedToId: number | null;
   jobType: string;
   jobTypeLabel: string;
@@ -91,7 +97,19 @@ interface WorkOrder {
   parts: PickedPart[];
   /** เคยแนบรูปใบเบิก (ใบเหลือง) ไว้แล้วหรือยัง — ใช้อะไหล่แล้วต้องมีถึงจะปิดงานได้ */
   hasRequisitionSlip: boolean;
+  /** เคยแนบรูปป้ายรุ่นไว้แล้วหรือยัง — ไม่บังคับ แต่ถ้ามีแล้วก็ไม่ต้องถามซ้ำ */
+  hasNameplate: boolean;
+  /** จำนวนรูป/วิดีโอหน้างาน (ไม่นับใบเหลืองกับป้ายรุ่น) — ต้องมีอย่างน้อยหนึ่งถึงจะปิดงานได้ */
+  siteFileCount: number;
+  /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
+  workers: Technician[];
+  otherWorkers: string | null;
   logs: LogEntry[];
+}
+
+interface Team {
+  name: string;
+  branches: number;
 }
 
 interface Option {
@@ -128,6 +146,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const [stages, setStages] = useState<Stage[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [editingNote, setEditingNote] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
   const [rollbackOpen, setRollbackOpen] = useState(false);
@@ -148,6 +167,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           stages: Stage[];
           warehouses: string[];
           technicians: Technician[];
+          teams: Team[];
         }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
@@ -156,6 +176,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
       setStages(options.data.stages);
       setWarehouses(options.data.warehouses);
       setTechnicians(options.data.technicians);
+      setTeams(options.data.teams ?? []);
       setError(null);
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -180,8 +201,13 @@ export default function WorkOrderDetailScreen({ route }: Props) {
     if (!user) return false;
     if (user.role === "ADMIN") return true;
     if (o.stageActor === "EMPLOYEE") {
-      // ช่างที่ถือใบนี้เท่านั้น ไม่ใช่ช่างทุกคน
-      return o.assignedToId === null || o.assignedToId === user.id;
+      // ช่างในทีมที่รับงานเท่านั้น ไม่ใช่ช่างทุกคน
+      //
+      // ใบเก่าที่จ่ายรายคนยังเช็คด้วย assignedToId เหมือนเดิม เพื่อให้คนที่กำลัง
+      // ทำอยู่ตอนเปลี่ยนระบบไม่โดนล็อกออกจากงานของตัวเอง
+      if (o.assignedToId !== null) return o.assignedToId === user.id;
+      if (o.assignedTeam !== null) return o.assignedTeam === user.team;
+      return true;
     }
     return o.stageActor === user.role;
   }
@@ -204,7 +230,9 @@ export default function WorkOrderDetailScreen({ route }: Props) {
 
   const tone = statusTone(order.status);
   const done = order.status === "DONE" || order.status === "CANCELLED";
-  const mine = order.assignedToName === user?.name;
+  const mine =
+    order.assignedToName === user?.name ||
+    (order.assignedTeam !== null && order.assignedTeam === user?.team);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -265,7 +293,11 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           }
         />
         <Row label="ความเร่งด่วน" value={order.priorityLabel} />
-        <Row label="ช่างที่รับผิดชอบ" value={order.assignedToName ?? "ยังไม่มอบหมาย"} />
+        {/* ใบเก่าจ่ายรายคน ใบใหม่จ่ายเป็นทีม — แสดงตามที่ใบนั้นเป็นจริง */}
+        <Row
+          label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
+          value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
+        />
         <Row label="วันที่นัดเข้า" value={order.scheduledAt ? formatDateTime(order.scheduledAt) : "—"} />
         <Row
           label="เปิดโดย"
@@ -371,6 +403,16 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>ผลการทำงาน</Text>
           <Row label="ผล" value={order.closeResultLabel ?? "—"} />
+          {/* คนที่ไปจริง ต่างจาก "ปิดโดย" ซึ่งเป็นคนที่กดปุ่ม — ทีมหนึ่งไปหลายคน
+              แต่คนที่กดปิดมีคนเดียว */}
+          <Row
+            label="ผู้เข้าปฏิบัติงาน"
+            value={
+              [order.workers.map((w) => w.name).join(", "), order.otherWorkers]
+                .filter(Boolean)
+                .join(" · ") || "—"
+            }
+          />
           <Row label="ปิดโดย" value={`${order.closedByName ?? "—"} · ${formatDateTime(order.closedAt)}`} />
           {order.closeNote ? <Text style={styles.detail}>{order.closeNote}</Text> : null}
           {order.parts.length > 0 ? (
@@ -514,8 +556,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
             <Text style={styles.waitingText}>
               ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
-              {order.stageActor === "EMPLOYEE" && order.assignedToName
-                ? ` (${order.assignedToName})`
+              {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
+                ? ` (${order.assignedToName ?? order.assignedTeam})`
                 : ""}
               {" "}— ยังไม่ถึงคิวของคุณ
             </Text>
@@ -553,7 +595,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         visible={stageOpen}
         order={order}
         warehouses={warehouses}
-        technicians={technicians}
+        teams={teams}
         onCancel={() => setStageOpen(false)}
         onDone={async () => {
           setStageOpen(false);
@@ -576,6 +618,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         visible={closing}
         order={order}
         results={results}
+        technicians={technicians}
         onCancel={() => setClosing(false)}
         onDone={async () => {
           setClosing(false);
@@ -704,14 +747,14 @@ function StageModal({
   visible,
   order,
   warehouses,
-  technicians,
+  teams,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   order: WorkOrder;
   warehouses: string[];
-  technicians: Technician[];
+  teams: Team[];
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -728,7 +771,7 @@ function StageModal({
    * ค่อยเปิดให้แก้รายตัวได้ โดยไม่ต้องแก้ฐานข้อมูลอีก
    */
   const [requisitionNo, setRequisitionNo] = useState("");
-  const [techId, setTechId] = useState<number | null>(null);
+  const [team, setTeam] = useState<string | null>(null);
   const [visit, setVisit] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -745,7 +788,9 @@ function StageModal({
     );
     // เปิดซ้ำให้เห็นเลขที่เคยกรอกไว้ ไม่ใช่ช่องว่างที่ต้องหาเลขมาพิมพ์ใหม่
     setRequisitionNo(order.waitingParts.find((p) => p.requisitionNo)?.requisitionNo ?? "");
-    setTechId(order.assignedToId);
+    // ทีมของสาขาเป็นค่าตั้งต้น เพราะเป็นทีมที่รับผิดชอบสาขานี้อยู่แล้ว
+    // จ่ายข้ามทีมยังทำได้ แต่ต้องตั้งใจเลือก ไม่ใช่เผลอ
+    setTeam(order.assignedTeam ?? order.zone ?? null);
     setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
     setNote("");
     setError(null);
@@ -775,7 +820,7 @@ function StageModal({
         });
       } else if (order.status === "PARTS_CHECKED") {
         await api.post(`/work-orders/${order.id}/assign`, {
-          assignedToId: techId,
+          team,
           note: note.trim() || undefined,
         });
       } else {
@@ -805,7 +850,7 @@ function StageModal({
     !requisitionNo.trim();
   const blocked =
     (order.status === "NEW" && (needsParts === null || (needsParts && parts.length === 0))) ||
-    (order.status === "PARTS_CHECKED" && techId === null) ||
+    (order.status === "PARTS_CHECKED" && !team) ||
     (order.status === "ASSIGNED" && !/^\d{4}-\d{2}-\d{2}$/.test(visit)) ||
     unchecked ||
     needsRequisition;
@@ -965,22 +1010,39 @@ function StageModal({
 
             {order.status === "PARTS_CHECKED" ? (
               <>
-                <Text style={styles.modalLabel}>ช่างที่จะรับงาน</Text>
+                <Text style={styles.modalLabel}>ทีมที่จะรับงาน</Text>
+                {/*
+                  ทีมของสาขาขึ้นก่อนและถูกเลือกไว้ให้ เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
+                  ทีมอื่นเรียงตามหลัง เลือกได้เมื่อทีมเจ้าของสาขาไม่ว่าง
+                */}
                 <View style={styles.options}>
-                  {technicians.map((t) => (
+                  {[
+                    ...(order.zone ? [order.zone] : []),
+                    ...teams.map((t) => t.name).filter((n) => n !== order.zone),
+                  ].map((name) => (
                     <TouchableOpacity
-                      key={t.id}
-                      style={[styles.option, techId === t.id && styles.optionOn]}
-                      onPress={() => setTechId(t.id)}
+                      key={name}
+                      style={[styles.option, team === name && styles.optionOn]}
+                      onPress={() => setTeam(name)}
                       activeOpacity={0.7}
                     >
-                      {/* ใส่รหัสพนักงานด้วย ชื่อซ้ำกันเกิดขึ้นจริงและกดผิดคนแล้วงานไปผิดมือ */}
-                      <Text style={[styles.optionText, techId === t.id && styles.optionTextOn]}>
-                        {t.name} · {t.employeeCode}
+                      <Text style={[styles.optionText, team === name && styles.optionTextOn]}>
+                        {name}
+                        {name === order.zone ? " · ทีมของสาขานี้" : ""}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
+                {teams.length === 0 ? (
+                  <Text style={styles.warn}>
+                    ยังไม่มีทีมช่างในระบบ — ทีมมาจากคอลัมน์ “ทีมช่าง” ในไฟล์ทะเบียนสาขา
+                    ต้องนำเข้าไฟล์ที่มีคอลัมน์นั้นก่อน
+                  </Text>
+                ) : team && team !== order.zone ? (
+                  <Text style={styles.warn}>
+                    จ่ายข้ามทีม — สาขานี้เป็นของ {order.zone ?? "ทีมที่ยังไม่ระบุ"}
+                  </Text>
+                ) : null}
               </>
             ) : null}
 
@@ -1157,16 +1219,60 @@ function NoteModal({
   );
 }
 
+/**
+ * แถวรูปย่อของไฟล์ที่เลือกไว้แต่ยังไม่ได้ส่ง พร้อมปุ่มเอาออก
+ *
+ * แยกออกมาเพราะหน้าปิดงานมีสามช่องที่ทำเหมือนกันทุกอย่าง — รูปหน้างาน
+ * ป้ายรุ่น และใบเหลือง ต่างกันแค่จำนวนไฟล์ที่ใส่ได้
+ */
+function FileStrip({
+  files,
+  onChange,
+}: {
+  files: PickedAttachment[];
+  onChange: (next: PickedAttachment[]) => void;
+}) {
+  if (files.length === 0) return null;
+  return (
+    <View style={styles.slipRow}>
+      {files.map((file, i) => (
+        <View key={`${file.name}-${i}`} style={styles.slipItem}>
+          {file.thumbnailUri ? (
+            <Image source={{ uri: file.thumbnailUri }} style={styles.slipThumb} />
+          ) : (
+            <View style={[styles.slipThumb, styles.slipBlank]}>
+              <Ionicons
+                name={file.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                size={22}
+                color={colors.textFaint}
+              />
+            </View>
+          )}
+          <TouchableOpacity
+            onPress={() => onChange(files.filter((_, k) => k !== i))}
+            accessibilityLabel={`เอาไฟล์ที่ ${i + 1} ออก`}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function CloseModal({
   visible,
   order,
   results,
+  technicians,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   order: WorkOrder;
   results: Option[];
+  technicians: Technician[];
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -1175,6 +1281,10 @@ function CloseModal({
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
+  const [siteFiles, setSiteFiles] = useState<PickedAttachment[]>([]);
+  const [nameplate, setNameplate] = useState<PickedAttachment | null>(null);
+  const [workerIds, setWorkerIds] = useState<number[]>([]);
+  const [otherWorkers, setOtherWorkers] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1182,14 +1292,20 @@ function CloseModal({
   // ใช้อะไหล่แล้วต้องมีใบเหลือง — เซิร์ฟเวอร์ก็กันไว้อีกชั้น แต่บอกตั้งแต่ตรงนี้
   // ดีกว่าให้กดบันทึกแล้วค่อยเด้งกลับมาว่าขาดรูป
   const slipMissing = parts.length > 0 && !slip && !order.hasRequisitionSlip;
+  // รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร ต้องมีอย่างน้อยหนึ่ง
+  const shotsMissing = siteFiles.length === 0 && order.siteFileCount === 0;
+  // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
+  const workersMissing = workerIds.length === 0 && !otherWorkers.trim();
 
-  async function addSlip(
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
+  async function pickOne(
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>,
+    keep: (file: PickedAttachment) => void
   ) {
-    setBusy("กำลังเตรียมรูป");
+    setBusy("กำลังเตรียมไฟล์");
     try {
       const file = await pick(setBusy);
-      if (file) setSlip(file);
+      if (file) keep(file);
     } catch (e) {
       showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -1201,20 +1317,36 @@ function CloseModal({
     setSaving(true);
     setError(null);
     try {
-      // ใบเหลืองต้องขึ้นก่อนปิดงาน เพราะเซิร์ฟเวอร์เช็คว่ามีรูปแล้วหรือยัง
-      // ตอนรับคำสั่งปิด ส่งทีหลังจะถูกปฏิเสธทั้งที่รูปอยู่ในมือแล้ว
-      if (slip) {
-        setBusy("กำลังส่งรูปใบเหลือง");
-        await uploadAttachment(order.id, slip, "REQUISITION");
+      /**
+       * ไฟล์ทั้งหมดต้องขึ้นก่อนสั่งปิด
+       *
+       * เซิร์ฟเวอร์เช็คตอนรับคำสั่งปิดว่ามีรูปหน้างานและใบเหลืองแล้วหรือยัง
+       * ส่งไฟล์ทีหลังจะถูกปฏิเสธทั้งที่ไฟล์อยู่ในมือแล้ว
+       */
+      const queue: { file: PickedAttachment; role?: string }[] = [
+        ...siteFiles.map((file) => ({ file })),
+        ...(nameplate ? [{ file: nameplate, role: "NAMEPLATE" }] : []),
+        ...(slip ? [{ file: slip, role: "REQUISITION" }] : []),
+      ];
+      for (const [i, item] of queue.entries()) {
+        setBusy(`กำลังส่งไฟล์ ${i + 1}/${queue.length}`);
+        await uploadAttachment(order.id, item.file, item.role);
       }
+      setBusy("กำลังปิดงาน");
       await api.post(`/work-orders/${order.id}/close`, {
         result,
         note: note.trim() || undefined,
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        workerIds,
+        otherWorkers: otherWorkers.trim() || null,
       });
       setNote("");
       setParts([]);
       setSlip(null);
+      setSiteFiles([]);
+      setNameplate(null);
+      setWorkerIds([]);
+      setOtherWorkers("");
       onDone();
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -1259,6 +1391,136 @@ function CloseModal({
               accessibilityLabel="สรุปงานที่ทำ"
             />
 
+            {/*
+              ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
+              ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
+            */}
+            <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน</Text>
+            <View style={styles.options}>
+              {technicians.map((t) => {
+                const on = workerIds.includes(t.id);
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[styles.option, on && styles.optionOn]}
+                    onPress={() =>
+                      setWorkerIds((v) => (on ? v.filter((x) => x !== t.id) : [...v, t.id]))
+                    }
+                    activeOpacity={0.7}
+                  >
+                    {/* ใส่รหัสพนักงานด้วย ชื่อซ้ำกันเกิดขึ้นจริงในทีมช่าง */}
+                    <Text style={[styles.optionText, on && styles.optionTextOn]}>
+                      {t.name} · {t.employeeCode}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <TextInput
+              style={[styles.modalInput, styles.modalInputLine]}
+              value={otherWorkers}
+              onChangeText={setOtherWorkers}
+              placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
+              placeholderTextColor={colors.textFaint}
+              accessibilityLabel="คนอื่นที่ไปด้วย"
+            />
+            {workersMissing ? (
+              <Text style={styles.warn}>ต้องระบุอย่างน้อยหนึ่งคนว่าใครเข้าไปทำ</Text>
+            ) : null}
+
+            {/*
+              รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร — สรุปงานที่พิมพ์มา
+              เป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปเลยคือใบที่ตรวจย้อนไม่ได้
+            */}
+            <Text style={styles.modalLabel}>รูป / วิดีโอหน้างาน</Text>
+            {order.siteFileCount > 0 ? (
+              <Text style={styles.linkedText}>
+                แนบไว้แล้ว {order.siteFileCount} ไฟล์ในใบงานนี้ — เพิ่มได้อีก
+              </Text>
+            ) : null}
+            <FileStrip files={siteFiles} onChange={setSiteFiles} />
+            {busy ? null : (
+              <View style={styles.options}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity
+                    style={styles.option}
+                    onPress={() =>
+                      pickOne(
+                        (stage) => pickImageAttachment(true, stage),
+                        (f) => setSiteFiles((v) => [...v, f])
+                      )
+                    }
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.optionText}>ถ่ายรูป</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() =>
+                    pickOne(
+                      (stage) => pickImageAttachment(false, stage),
+                      (f) => setSiteFiles((v) => [...v, f])
+                    )
+                  }
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.optionText}>เลือกรูป</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => pickOne(pickVideoAttachment, (f) => setSiteFiles((v) => [...v, f]))}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.optionText}>วิดีโอ</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {shotsMissing ? (
+              <Text style={styles.warn}>ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์</Text>
+            ) : null}
+
+            {/* ป้ายรุ่นไม่บังคับ และไม่ถามซ้ำถ้าแนบไว้ตั้งแต่เปิดใบงานแล้ว */}
+            {order.hasNameplate && !nameplate ? (
+              <>
+                <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
+                <Text style={styles.linkedText}>แนบไว้แล้วตั้งแต่เปิดใบงาน</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง (ไม่บังคับ)</Text>
+                {nameplate ? (
+                  <FileStrip
+                    files={[nameplate]}
+                    onChange={(next) => setNameplate(next[0] ?? null)}
+                  />
+                ) : busy ? null : (
+                  <View style={styles.options}>
+                    {Platform.OS !== "web" ? (
+                      <TouchableOpacity
+                        style={styles.option}
+                        onPress={() =>
+                          pickOne((stage) => pickImageAttachment(true, stage), setNameplate)
+                        }
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.optionText}>ถ่ายป้ายรุ่น</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={styles.option}
+                      onPress={() =>
+                        pickOne((stage) => pickImageAttachment(false, stage), setNameplate)
+                      }
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.optionText}>เลือกรูปป้ายรุ่น</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </>
+            )}
+
             <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
 
             {/*
@@ -1300,7 +1562,7 @@ function CloseModal({
                     {Platform.OS !== "web" ? (
                       <TouchableOpacity
                         style={styles.option}
-                        onPress={() => addSlip((stage) => pickImageAttachment(true, stage))}
+                        onPress={() => pickOne((stage) => pickImageAttachment(true, stage), setSlip)}
                         activeOpacity={0.7}
                       >
                         <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
@@ -1308,7 +1570,7 @@ function CloseModal({
                     ) : null}
                     <TouchableOpacity
                       style={styles.option}
-                      onPress={() => addSlip((stage) => pickImageAttachment(false, stage))}
+                      onPress={() => pickOne((stage) => pickImageAttachment(false, stage), setSlip)}
                       activeOpacity={0.7}
                     >
                       <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
@@ -1338,9 +1600,12 @@ function CloseModal({
               <Text style={styles.modalCancelText}>ยกเลิก</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.modalSave, (saving || slipMissing) && styles.modalSaveOff]}
+              style={[
+                styles.modalSave,
+                (saving || slipMissing || shotsMissing || workersMissing) && styles.modalSaveOff,
+              ]}
               onPress={submit}
-              disabled={saving || slipMissing}
+              disabled={saving || slipMissing || shotsMissing || workersMissing}
               activeOpacity={0.8}
             >
               {saving ? (
@@ -1553,7 +1818,14 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   modalSaveOff: { opacity: 0.6 },
-  slipRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs },
+  slipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  slipItem: { flexDirection: "row", alignItems: "center", gap: 2 },
   slipThumb: { width: 72, height: 72, borderRadius: radius.sm, backgroundColor: colors.background },
   slipBlank: {
     alignItems: "center",

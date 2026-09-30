@@ -39,6 +39,9 @@ export interface WorkOrderRow {
   branchCode: string;
   branchName: string;
   machineCode: string | null;
+  /** ทีมที่รับงาน — ใบใหม่จ่ายเป็นทีม */
+  assignedTeam: string | null;
+  /** ช่างรายคน — ใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
   assignedToName: string | null;
   scheduledAt: string | null;
   createdAt: string;
@@ -267,7 +270,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       <View style={styles.metaRow}>
         <Ionicons name="person-outline" size={13} color={colors.textFaint} />
         <Text style={styles.meta}>
-          {row.assignedToName ?? "ยังไม่มอบหมายช่าง"}
+          {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}
           {row.source === "OUTAGE" ? " · เปิดจากกระดาน" : " · เปิดเอง"}
         </Text>
       </View>

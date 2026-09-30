@@ -84,9 +84,10 @@ const detailInclude = {
   // ถ้าติดรูปย่อไปทุกใบ หน้ารายการจะโหลดหนักกว่าหน้ารายละเอียดหลายเท่า
   //
   _count: { select: { attachments: true } },
-  // แถวเดียวพอ หน้าปิดงานแค่อยากรู้ว่าเคยแนบใบเหลืองไว้แล้วหรือยัง
-  // ไม่ได้จะเอารายการมาแสดง
-  attachments: { where: { role: "REQUISITION" }, select: { id: true }, take: 1 },
+  // แถวเดียวพอต่อชนิด หน้าปิดงานแค่อยากรู้ว่ามีอะไรแนบไว้แล้วบ้าง
+  // ไม่ได้จะเอารายการมาแสดง — รายการอยู่ที่ /attachments อยู่แล้ว
+  attachments: { where: { role: { not: null } }, select: { id: true, role: true } },
+  workers: { include: { user: { select: { id: true, name: true, employeeCode: true } } } },
 } as const;
 
 /**
@@ -227,6 +228,7 @@ function shape(w: WorkOrderRow) {
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
     machineModel: w.machine?.model ?? null,
+    assignedTeam: w.assignedTeam,
     assignedToId: w.assignedTo?.id ?? null,
     assignedToName: w.assignedTo?.name ?? null,
     scheduledAt: w.scheduledAt,
@@ -258,9 +260,22 @@ function shape(w: WorkOrderRow) {
     waitingParts: w.parts.filter((p) => p.kind === "WAITING").map(partShape),
     parts: w.parts.filter((p) => p.kind !== "WAITING").map(partShape),
     attachmentCount: w._count.attachments,
-    // ใช้อะไหล่แล้วต้องมีใบเหลืองถึงจะปิดงานได้ หน้าปิดงานเลยต้องรู้ล่วงหน้า
-    // ว่าแนบไปแล้วหรือยัง ไม่ใช่ไปรู้ตอนกดบันทึกแล้วโดนปฏิเสธ
-    hasRequisitionSlip: w.attachments.length > 0,
+    /**
+     * หน้าปิดงานต้องรู้ล่วงหน้าว่าขาดอะไรอยู่ ไม่ใช่ไปรู้ตอนกดบันทึกแล้วโดนปฏิเสธ
+     *
+     * รูปหน้างานคือไฟล์ที่ไม่มี role — ใบเหลืองกับป้ายรุ่นเป็นเอกสารและข้อมูล
+     * ของเครื่อง ไม่ใช่ภาพของงานที่ทำ จึงนับแยกกัน
+     */
+    hasRequisitionSlip: w.attachments.some((a) => a.role === "REQUISITION"),
+    hasNameplate: w.attachments.some((a) => a.role === "NAMEPLATE"),
+    siteFileCount: w._count.attachments - w.attachments.length,
+    // คนที่เข้าไปทำจริง บันทึกตอนปิดงาน
+    workers: w.workers.map((x) => ({
+      id: x.user.id,
+      name: x.user.name,
+      employeeCode: x.user.employeeCode,
+    })),
+    otherWorkers: w.closeOtherWorkers,
   };
 }
 
@@ -286,6 +301,7 @@ const listSelect = {
   closeResult: true,
   branch: { select: { code: true, name: true } },
   machine: { select: { code: true } },
+  assignedTeam: true,
   assignedTo: { select: { name: true } },
   _count: { select: { attachments: true } },
 } as const;
@@ -307,6 +323,8 @@ function listShape(w: WorkOrderListRow) {
     branchCode: w.branch.code,
     branchName: w.branch.name,
     machineCode: w.machine?.code ?? null,
+    assignedTeam: w.assignedTeam,
+    // ใบเก่าที่จ่ายรายคนก่อนเปลี่ยนมาจ่ายเป็นทีม ยังต้องบอกได้ว่าอยู่ในมือใคร
     assignedToName: w.assignedTo?.name ?? null,
     scheduledAt: w.scheduledAt,
     createdAt: w.createdAt,
@@ -336,6 +354,53 @@ function partShape(p: {
     warehouse: p.warehouse ?? null,
     requisitionNo: p.requisitionNo ?? null,
   };
+}
+
+/**
+ * ขอบเขตที่ช่างคนหนึ่งเห็น — งานของทีมตัวเอง บวกงานเก่าที่จ่ายให้ตัวเอง
+ *
+ * ช่างที่ยังไม่ได้จัดทีมจะเหลือแค่เงื่อนไขหลัง ซึ่งเป็นพฤติกรรมเดิมพอดี
+ * แอดมินจึงทยอยจัดทีมให้ทีละคนได้โดยไม่มีใครมองไม่เห็นงานตัวเองระหว่างทาง
+ */
+function teamScope(team: string | null, userId: number) {
+  const mine = [{ assignedToId: userId }];
+  return { OR: team ? [...mine, { assignedTeam: team }] : mine };
+}
+
+/**
+ * กันไม่ให้ช่างทีมอื่นมาแตะใบงานที่ไม่ใช่ของทีมตัวเอง
+ *
+ * คืน true เมื่อ "ห้าม" เพื่อให้จุดเรียกเขียนเป็น if (await blockedForTeam(...)) return;
+ * แทนเงื่อนไขเดิมที่เทียบ assignedToId ตรง ๆ ได้ทันที
+ */
+async function blockedForTeam(
+  req: AuthRequest,
+  res: Response,
+  wo: { assignedTeam: string | null; assignedToId: number | null }
+) {
+  if (req.auth!.role === "ADMIN") return false;
+  // ยังไม่ได้จ่ายให้ใครเลย — ปล่อยผ่านเหมือนเดิม ขั้นตอนอื่นกันไว้อยู่แล้ว
+  if (wo.assignedTeam === null && wo.assignedToId === null) return false;
+  const me = await prisma.user.findUnique({
+    where: { id: req.auth!.userId },
+    select: { team: true },
+  });
+  if (canTouch(wo, { team: me?.team ?? null, id: req.auth!.userId })) return false;
+  res.status(403).json({
+    error: wo.assignedTeam
+      ? `ใบงานนี้จ่ายให้ ${wo.assignedTeam} ไม่ใช่ทีมของคุณ`
+      : "ใบงานนี้จ่ายให้ช่างคนอื่น",
+  });
+  return true;
+}
+
+/** ช่างคนนี้แตะใบงานนี้ได้ไหม — อยู่ทีมเดียวกัน หรือเป็นงานเก่าที่จ่ายให้ตัวเอง */
+function canTouch(
+  wo: { assignedTeam: string | null; assignedToId: number | null },
+  me: { team: string | null; id: number }
+) {
+  if (wo.assignedToId !== null && wo.assignedToId === me.id) return true;
+  return wo.assignedTeam !== null && me.team !== null && wo.assignedTeam === me.team;
 }
 
 /** เขียนประวัติทุกครั้งที่ใบงานขยับ ใช้ tx เดียวกับการเปลี่ยนสถานะเสมอ */
@@ -382,16 +447,19 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
    */
   const me = await prisma.user.findUnique({
     where: { id: req.auth!.userId },
-    select: { region: true },
+    select: { region: true, team: true },
   });
   const scope =
     req.auth!.role === "ADMIN"
       ? {}
       : req.auth!.role === "SUPERVISOR"
         ? { branch: { region: me?.region ?? "\u0000ไม่มีภาค" } }
-        : // ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง เพราะในสายงานนี้งานถูกจ่ายมา
-          // ไม่ใช่ให้เดินไปหยิบเอง รายการที่มีงานของคนอื่นปนคือรายการที่หางานตัวเองไม่เจอ
-          { assignedToId: req.auth!.userId };
+        : // ช่างเห็นงานของทีมตัวเอง เพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
+          //
+          // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
+          // จ่ายเป็นทีม ต้องไม่หายไปจากรายการของคนที่กำลังทำอยู่
+          // ช่างที่ยังไม่ได้จัดทีมจึงยังเห็นงานเดิมของตัวเองตามปกติ
+          teamScope(me?.team ?? null, req.auth!.userId);
 
   const rows = await prisma.workOrder.findMany({
     where: {
@@ -430,8 +498,14 @@ router.get("/options", requireAuth, async (_req, res) => {
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
   const technicians = await prisma.user.findMany({
     where: { role: "EMPLOYEE" },
-    select: { id: true, name: true, employeeCode: true },
+    select: { id: true, name: true, employeeCode: true, team: true },
     orderBy: { name: "asc" },
+  });
+  const teams = await prisma.branch.groupBy({
+    by: ["zone"],
+    where: { zone: { not: null }, cancelledAt: null },
+    _count: true,
+    orderBy: { zone: "asc" },
   });
   res.json({
     statuses: WORK_ORDER_STATUSES.map((v) => ({ value: v, label: WORK_ORDER_STATUS_LABELS[v] })),
@@ -448,6 +522,11 @@ router.get("/options", requireAuth, async (_req, res) => {
       label: JOB_TYPE_LABELS[v],
       hint: JOB_TYPE_HINTS[v],
     })),
+    // ทีมช่างมาจากทะเบียนสาขา (Branch.zone = คอลัมน์ "ทีมช่าง" ในไฟล์)
+    // ส่งมาที่เดียวกับตัวเลือกอื่น หน้าจอจะได้ไม่ต้องยิงเพิ่มอีกรอบตอนเปิดฟอร์ม
+    teams: teams
+      .filter((t) => (t.zone as string).trim() !== "")
+      .map((t) => ({ name: t.zone as string, branches: t._count })),
     // รุ่นเครื่องส่งมาจากที่นี่ที่เดียว เพิ่มรุ่นใหม่แล้วแอปเห็นทันทีโดยไม่ต้อง
     // ปล่อยเวอร์ชันใหม่ — ถ้าฝังไว้ในแอป เครื่องที่ยังไม่อัปเดตจะเลือกรุ่นใหม่ไม่ได้
     machineModels: MACHINE_MODELS,
@@ -957,7 +1036,12 @@ async function guardStage(
   res: Response,
   id: number,
   expected: string
-): Promise<{ id: number; status: string; assignedToId: number | null } | null> {
+): Promise<{
+  id: number;
+  status: string;
+  assignedToId: number | null;
+  assignedTeam: string | null;
+} | null> {
   const wo = await prisma.workOrder.findUnique({
     where: { id },
     select: {
@@ -965,6 +1049,7 @@ async function guardStage(
       code: true,
       status: true,
       assignedToId: true,
+      assignedTeam: true,
       branch: { select: { region: true } },
     },
   });
@@ -1003,7 +1088,12 @@ async function guardStage(
     return null;
   }
 
-  return { id: wo.id, status: wo.status, assignedToId: wo.assignedToId };
+  return {
+    id: wo.id,
+    status: wo.status,
+    assignedToId: wo.assignedToId,
+    assignedTeam: wo.assignedTeam,
+  };
 }
 
 /**
@@ -1158,9 +1248,14 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   res.json(shape(row));
 });
 
-/** ขั้น 4 — หัวหน้าภาคจ่ายงานให้ช่าง */
+/**
+ * ขั้น 4 — หัวหน้าภาคจ่ายงานให้ทีมช่าง
+ *
+ * จ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
+ * ใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
+ */
 const assignSchema = z.object({
-  assignedToId: z.number().int().positive(),
+  team: z.string().trim().min(1).max(120),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -1171,16 +1266,28 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!(await guardStage(req, res, id, "PARTS_CHECKED"))) return;
 
-  const tech = await prisma.user.findUnique({
-    where: { id: parsed.data.assignedToId },
-    select: { id: true, name: true },
+  const team = parsed.data.team;
+  // ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
+  // ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
+  const known = await prisma.branch.findFirst({
+    where: { zone: team, cancelledAt: null },
+    select: { id: true },
   });
-  if (!tech) return res.status(404).json({ error: "ไม่พบช่างคนนี้" });
+  if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+
+  // จ่ายข้ามทีมได้ แต่ต้องรู้ตัวว่าข้าม จึงบันทึกไว้ในประวัติให้ชัด
+  const wo = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: { branch: { select: { zone: true } } },
+  });
+  const crossTeam = wo.branch.zone !== null && wo.branch.zone !== team;
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
-      data: { status: "ASSIGNED", assignedToId: tech.id },
+      // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
+      // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
+      data: { status: "ASSIGNED", assignedTeam: team, assignedToId: null },
     });
     await writeLog(
       tx,
@@ -1188,7 +1295,10 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
       req.auth!.userId,
       "ASSIGNED",
       "ASSIGNED",
-      parsed.data.note || `จ่ายงานให้ ${tech.name}`
+      parsed.data.note ||
+        (crossTeam
+          ? `จ่ายงานให้ ${team} (ข้ามทีม — สาขานี้เป็นของ ${wo.branch.zone})`
+          : `จ่ายงานให้ ${team}`)
     );
   });
 
@@ -1211,14 +1321,8 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
   const wo = await guardStage(req, res, id, "ASSIGNED");
   if (!wo) return;
 
-  // ช่างคนอื่นนัดวันแทนกันไม่ได้ คนที่ถือใบงานคือคนที่รู้ว่าตัวเองว่างวันไหน
-  if (
-    req.auth!.role !== "ADMIN" &&
-    wo.assignedToId !== null &&
-    wo.assignedToId !== req.auth!.userId
-  ) {
-    return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
-  }
+  // ทีมอื่นนัดวันแทนกันไม่ได้ คนที่ถือใบงานคือคนที่รู้ว่าตัวเองว่างวันไหน
+  if (await blockedForTeam(req, res, wo)) return;
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
@@ -1288,6 +1392,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
       code: true,
       status: true,
       assignedToId: true,
+      assignedTeam: true,
       branch: { select: { region: true } },
     },
   });
@@ -1301,13 +1406,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
       }"`,
     });
   }
-  if (
-    req.auth!.role !== "ADMIN" &&
-    wo.assignedToId !== null &&
-    wo.assignedToId !== req.auth!.userId
-  ) {
-    return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
-  }
+  if (await blockedForTeam(req, res, wo)) return;
 
   const requested = parsed.data.parts ?? [];
 
@@ -1367,6 +1466,11 @@ const closeSchema = z.object({
   parts: z
     .array(z.object({ sparePartId: z.number().int(), quantity: z.number().int().min(1) }))
     .optional(),
+  // คนที่เข้าไปทำจริง — จำเป็นเพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
+  // ถ้าไม่เก็บ จะไม่มีทางรู้ย้อนหลังว่าใครไปสาขาไหนวันไหน
+  workerIds: z.array(z.number().int().positive()).max(20).optional(),
+  // คนนอกระบบที่ไปด้วย เช่น ผู้รับเหมา — ไม่บังคับ
+  otherWorkers: z.string().trim().max(300).nullable().optional(),
 });
 
 router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
@@ -1379,7 +1483,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 
   const current = await prisma.workOrder.findUnique({
     where: { id },
-    select: { status: true, code: true, assignedToId: true },
+    select: { status: true, code: true, assignedToId: true, assignedTeam: true },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (current.status === "DONE") {
@@ -1396,13 +1500,44 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       }"`,
     });
   }
-  // คนปิดต้องเป็นคนที่ไปทำ ไม่งั้นใบงานถูกปิดโดยคนที่ไม่รู้ว่าหน้างานเป็นยังไง
-  if (
-    req.auth!.role !== "ADMIN" &&
-    current.assignedToId !== null &&
-    current.assignedToId !== req.auth!.userId
-  ) {
-    return res.status(403).json({ error: "ใบงานนี้จ่ายให้ช่างคนอื่น" });
+  // คนปิดต้องอยู่ทีมที่รับงาน ไม่งั้นใบงานถูกปิดโดยคนที่ไม่รู้ว่าหน้างานเป็นยังไง
+  if (await blockedForTeam(req, res, current)) return;
+
+  /**
+   * ต้องบอกว่าใครเข้าไปทำ
+   *
+   * งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงเป็นข้อมูลที่มีอยู่ที่เดียวคือตอนปิดงาน
+   * ปล่อยว่างได้เมื่อไหร่ ก็จะว่างเกือบทุกใบ แล้วคำถามว่า "ใครไปสาขานี้"
+   * จะตอบไม่ได้เลยทั้งที่เป็นคำถามพื้นฐานที่สุดของการจ่ายงานเป็นทีม
+   *
+   * คนนอกระบบกรอกเป็นข้อความได้ แต่ต้องมีอย่างน้อยหนึ่งชื่อไม่ทางใดก็ทางหนึ่ง
+   */
+  const workerIds = [...new Set(body.workerIds ?? [])];
+  const otherWorkers = body.otherWorkers?.trim() || null;
+  if (workerIds.length === 0 && !otherWorkers) {
+    return res.status(400).json({ error: "ต้องระบุชื่อผู้เข้าปฏิบัติงานอย่างน้อยหนึ่งคน" });
+  }
+  if (workerIds.length > 0) {
+    const found = await prisma.user.count({ where: { id: { in: workerIds } } });
+    if (found !== workerIds.length) {
+      return res.status(400).json({ error: "มีชื่อผู้เข้าปฏิบัติงานที่ไม่อยู่ในระบบ" });
+    }
+  }
+
+  /**
+   * ต้องมีรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์
+   *
+   * รูปหน้างานคือสิ่งเดียวที่บอกได้ว่าไปถึงจริงและเจออะไร — สรุปงานที่พิมพ์มา
+   * เป็นคำบอกเล่า ส่วนรูปเป็นหลักฐาน ใบงานที่ปิดโดยไม่มีรูปเลยคือใบที่ตรวจย้อนไม่ได้
+   *
+   * นับเฉพาะรูปหน้างานทั่วไป ใบเหลืองกับป้ายรุ่นไม่นับ เพราะเป็นเอกสารและข้อมูล
+   * ของเครื่อง ไม่ใช่ภาพของงานที่ทำ
+   */
+  const siteShots = await prisma.workOrderAttachment.count({
+    where: { workOrderId: id, role: null },
+  });
+  if (siteShots === 0) {
+    return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์" });
   }
 
   /**
@@ -1433,8 +1568,18 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         closedById: req.auth!.userId,
         closeResult: body.result,
         closeNote: body.note?.trim() || null,
+        closeOtherWorkers: otherWorkers,
       },
     });
+
+    // เขียนทับทั้งชุด ไม่ใช่ต่อท้าย เผื่อแอดมินมาแก้ทีหลังว่าใครไปจริง
+    await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
+    if (workerIds.length > 0) {
+      await tx.workOrderWorker.createMany({
+        data: workerIds.map((userId) => ({ workOrderId: id, userId })),
+        skipDuplicates: true,
+      });
+    }
 
     // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
     if (body.parts !== undefined) await replaceParts(tx, id, "USED", body.parts);
@@ -1562,6 +1707,7 @@ async function loadAttachableWorkOrder(
       code: true,
       status: true,
       assignedToId: true,
+      assignedTeam: true,
       branch: { select: { region: true } },
     },
   });
@@ -1582,8 +1728,7 @@ async function loadAttachableWorkOrder(
       });
       return null;
     }
-  } else if (role !== "ADMIN" && wo.assignedToId !== req.auth!.userId) {
-    res.status(403).json({ error: "ใบงานนี้ไม่ได้จ่ายให้คุณ" });
+  } else if (await blockedForTeam(req, res, wo)) {
     return null;
   }
 

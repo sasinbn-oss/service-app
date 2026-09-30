@@ -26,6 +26,11 @@ model User {
   // ใช้เฉพาะกับ role SUPERVISOR เพื่อจำกัดว่าเห็นและจัดการใบงานของภาคไหน
   // แอดมินเห็นทุกภาคจึงไม่ต้องใส่ ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
   region               String?
+  // ทีมช่างที่คนนี้สังกัด — ตรงกับ Branch.zone และ WorkOrder.assignedTeam
+  //
+  // ใช้กับ role EMPLOYEE เพื่อให้เห็นงานของทีมตัวเอง ว่าง = ยังไม่ได้จัดทีม
+  // ซึ่งจะเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเองแบบรายคนเหมือนเดิม
+  team                 String?
   // ต้องเปลี่ยนรหัสก่อนใช้งาน
   //
   // ตั้งเป็น true ตอนแอดมินสร้างบัญชีให้ หรือตอนแอดมินตั้งรหัสใหม่ให้
@@ -45,6 +50,7 @@ model User {
   workOrderLogs        WorkOrderLog[]
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
   workOrderAttachments WorkOrderAttachment[]
+  workedWorkOrders     WorkOrderWorker[]
 }
 
 model Vehicle {
@@ -491,6 +497,15 @@ model WorkOrder {
   // false = ไม่ใช้ ข้ามขั้นเช็คคลังไปจัดคิวช่างเลย เช่น เข้าไปประเมินอาการก่อน
   needsParts Boolean?
 
+  // ทีมช่างที่รับงานนี้ — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
+  //
+  // งานถูกจ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
+  // ส่วนใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
+  assignedTeam String?
+  // ช่างที่ถูกจ่ายงานให้แบบรายคน — ของใบงานเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม
+  //
+  // ไม่ได้เขียนค่าใหม่แล้ว แต่ยังอ่านอยู่ เพื่อให้ใบที่ค้างอยู่ตอนเปลี่ยนระบบ
+  // ยังอยู่ในมือคนเดิม ไม่ใช่หายไปจากรายการของเขาทั้งที่ยังทำไม่เสร็จ
   assignedToId Int?
   assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
   // วันที่นัดเข้าไปทำ เก็บเป็นวันอย่างเดียว เพราะนัดกันเป็นวัน
@@ -508,14 +523,36 @@ model WorkOrder {
   // ผลของงาน ไม่ใช่แค่ "ปิดแล้ว" — ดู WORK_ORDER_RESULTS ใน src/utils/constants.ts
   closeResult String?
   closeNote   String?
+  // คนนอกระบบที่ไปด้วย เช่น ช่างผู้รับเหมาหรือคนของสาขา
+  //
+  // มีไว้เพราะคนที่ไปหน้างานจริงไม่ได้มีบัญชีในระบบทุกคน และถ้าไม่มีช่องให้กรอก
+  // ชื่อเหล่านั้นจะไปโผล่ในช่องสรุปงานแทน ซึ่งค้นหาไม่ได้
+  closeOtherWorkers String?
 
   parts       WorkOrderPart[]
   logs        WorkOrderLog[]
   attachments WorkOrderAttachment[]
+  workers     WorkOrderWorker[]
 
   @@index([status, createdAt])
   @@index([assignedToId, status])
+  @@index([assignedTeam, status])
   @@index([outageId])
+}
+
+// คนที่เข้าไปทำงานจริง บันทึกตอนปิดงาน
+//
+// แยกเป็นตารางไม่ใช่ข้อความ เพราะต้องนับย้อนได้ว่าใครไปกี่งาน ซึ่งเป็นคำถาม
+// ที่จะถูกถามแน่ ๆ เมื่อจ่ายงานเป็นทีม — ชื่อที่เก็บเป็นข้อความรวมกันนับไม่ได้
+model WorkOrderWorker {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@unique([workOrderId, userId])
+  @@index([userId])
 }
 
 // อะไหล่ที่ใช้จริงตอนปิดงาน ต่างจาก OutagePart ที่เป็นของที่ "รออยู่"
