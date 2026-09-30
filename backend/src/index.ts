@@ -60,25 +60,70 @@ app.get("/health/storage", requireAuth, requireAdmin, async (_req, res) => {
  * ใบงานหนึ่งใบใช้ประมาณสิบกว่ารอบ คูณเอาได้เลยว่าควรใช้เวลาเท่าไร
  */
 app.get("/health/db", requireAuth, requireAdmin, async (_req, res) => {
+  /**
+   * วัดรอบแรกแยกจากรอบที่เหลือ
+   *
+   * รอบแรกรวมเวลาเปิดการเชื่อมต่อกับจับมือ TLS ด้วย ซึ่งเกิดครั้งเดียว
+   * ส่วนรอบหลัง ๆ คือเวลาเดินทางไปกลับล้วน ๆ ถ้ารอบแรกช้ามากแต่รอบหลังเร็ว
+   * แปลว่าปัญหาคือการเปิดการเชื่อมต่อ ไม่ใช่ระยะทาง — คนละวิธีแก้กัน
+   */
   const samples: number[] = [];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     const started = process.hrtime.bigint();
     await prisma.$queryRaw`SELECT 1`;
-    samples.push(Number(process.hrtime.bigint() - started) / 1e6);
+    samples.push(Math.round(Number(process.hrtime.bigint() - started) / 1e5) / 10);
   }
-  samples.sort((a, b) => a - b);
-  const median = Math.round(samples[2] * 10) / 10;
+  const first = samples[0];
+  const rest = samples.slice(1).sort((a, b) => a - b);
+  const median = rest[Math.floor(rest.length / 2)];
+
+  /**
+   * บอกว่าฐานข้อมูลตั้งอยู่ที่ไหน โดยไม่เปิดเผยรหัสผ่าน
+   *
+   * ชื่อโฮสต์ของ Supabase มี region อยู่ในตัวอยู่แล้ว เช่น
+   * aws-0-ap-southeast-1.pooler.supabase.com — เอามาเทียบกับ region
+   * ของเซิร์ฟเวอร์ได้เลยว่าอยู่ที่เดียวกันหรือเปล่า ไม่ต้องเดา
+   */
+  let database: { host: string; region: string | null; port: string; mode: string } | null = null;
+  try {
+    const url = new URL(process.env.DATABASE_URL ?? "");
+    const region = url.hostname.match(/aws-\d+-([a-z0-9-]+)\.pooler\.supabase\.com/)?.[1] ?? null;
+    database = {
+      host: url.hostname,
+      region,
+      port: url.port || "5432",
+      // 6543 คือ pooler แบบ transaction ซึ่งเป็นตัวที่ Prisma ควรใช้ตอนใช้งานปกติ
+      mode: url.port === "6543" ? "pooled (transaction)" : "direct/session",
+    };
+  } catch {
+    database = null;
+  }
+
+  // region ของเซิร์ฟเวอร์เอง — Render ใส่ค่านี้ให้ ส่วนโฮสต์อื่นอาจไม่มี
+  const serverRegion = process.env.RENDER_REGION ?? process.env.FLY_REGION ?? null;
+
+  const verdict =
+    median < 30
+      ? "ปกติ — ฐานข้อมูลอยู่ใกล้เซิร์ฟเวอร์"
+      : median < 80
+        ? "พอใช้ได้ แต่เริ่มรู้สึก"
+        : median < 350
+          ? "ช้า — ฐานข้อมูลอยู่คนละ region กับเซิร์ฟเวอร์ ย้ายให้อยู่ที่เดียวกันจะเร็วขึ้นหลายเท่า"
+          : // ไกลสุดในโลกยังไม่ถึง 350 ms เกินกว่านี้แปลว่ามีอย่างอื่นซ้อนอยู่
+            "ช้าเกินกว่าระยะทางจะอธิบายได้ — ไกลสุดในโลกยังไม่ถึง 350 ms " +
+            "ให้ดู connectionMs กับ mode ประกอบ อาจเป็นเครื่องฐานข้อมูลเล็กเกินไป " +
+            "หรือต่อผ่านช่องทางที่ไม่ใช่ pooler";
 
   res.json({
     roundTripMs: median,
+    // รอบแรกรวมเวลาเปิดการเชื่อมต่อ ถ้าต่างจากรอบหลังมาก ปัญหาอยู่ที่การเชื่อมต่อ
+    firstCallMs: first,
+    samples,
     // ประมาณจากจำนวนคำสั่งที่การเปิดใบงานหนึ่งใบใช้จริง
-    estimatedSaveMs: Math.round(median * 12),
-    verdict:
-      median < 30
-        ? "ปกติ — ฐานข้อมูลอยู่ใกล้เซิร์ฟเวอร์"
-        : median < 80
-          ? "พอใช้ได้ แต่เริ่มรู้สึก"
-          : "ช้าผิดปกติ — น่าจะอยู่คนละ region กับเซิร์ฟเวอร์ ย้ายให้อยู่ที่เดียวกันจะเร็วขึ้นหลายเท่า",
+    estimatedSaveMs: Math.round(median * 13),
+    database,
+    serverRegion,
+    verdict,
   });
 });
 
