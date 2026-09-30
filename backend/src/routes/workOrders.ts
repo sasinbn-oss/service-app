@@ -80,8 +80,17 @@ const detailInclude = {
 async function syncOutageFromWorkOrder(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   workOrderId: number,
-  userId: number
+  userId: number,
+  /**
+   * ผู้เรียกที่รู้อยู่แล้วว่าใบงานนี้ไม่ได้ผูกกับเคส ส่ง false มาได้
+   *
+   * ใบงานที่เปิดเองไม่มีเคสอยู่แล้ว แต่เดิมยังต้องอ่านฐานข้อมูลสองรอบ
+   * เพื่อไปพบว่าไม่มีอะไรให้ทำ — สองรอบนั้นคือเวลาที่คนกดบันทึกต้องรอจริง
+   * เพราะฐานข้อมูลอยู่คนละเครื่องกับเซิร์ฟเวอร์ ทุกคำสั่งคือการเดินทางไปกลับ
+   */
+  hasOutage = true
 ) {
+  if (!hasOutage) return;
   const wo = await tx.workOrder.findUnique({
     where: { id: workOrderId },
     select: {
@@ -498,6 +507,7 @@ const createSchema = z.object({
  * ถ้ามีคนกดพร้อมกันสองคน ซึ่งเป็นเรื่องปกติตอนเช้าที่ทุกคนเปิดงานพร้อมกัน
  */
 async function createWorkOrder(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   data: {
     branchId: number;
     machineId: number | null;
@@ -515,20 +525,18 @@ async function createWorkOrder(
   waitingParts: { sparePartId: number; quantity: number }[],
   userId: number
 ) {
-  return prisma.$transaction(async (tx) => {
-    const created = await tx.workOrder.create({
-      data: { ...data, code: "", createdById: userId, status: "NEW" },
-    });
-    const withCode = await tx.workOrder.update({
-      where: { id: created.id },
-      data: { code: workOrderCode(created.id) },
-    });
-    if (waitingParts.length > 0) await replaceParts(tx, created.id, "WAITING", waitingParts);
-    await writeLog(tx, created.id, userId, "CREATED", "NEW", null);
-    // เคสที่เป็นต้นเรื่องต้องเห็นอาการเดียวกันทันที ไม่ต้องรอให้ใครมากรอกซ้ำ
-    await syncOutageFromWorkOrder(tx, created.id, userId);
-    return withCode.id;
+  const created = await tx.workOrder.create({
+    data: { ...data, code: "", createdById: userId, status: "NEW" },
   });
+  await tx.workOrder.update({
+    where: { id: created.id },
+    data: { code: workOrderCode(created.id) },
+  });
+  if (waitingParts.length > 0) await replaceParts(tx, created.id, "WAITING", waitingParts);
+  await writeLog(tx, created.id, userId, "CREATED", "NEW", null);
+  // เคสที่เป็นต้นเรื่องต้องเห็นอาการเดียวกันทันที ไม่ต้องรอให้ใครมากรอกซ้ำ
+  await syncOutageFromWorkOrder(tx, created.id, userId, data.outageId !== null);
+  return created.id;
 }
 
 router.post("/", requireAuth, async (req: AuthRequest, res) => {
@@ -569,52 +577,70 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
    * ถ้าตรวจไปสร้างไป พอเครื่องที่สามพิมพ์ผิดจะเหลือใบงานสองใบที่สร้างไปแล้ว
    * กับข้อความ error หนึ่งอัน คนกดไม่มีทางรู้ว่าต้องไปลบสองใบนั้นทิ้งหรือเปล่า
    */
-  const machines = new Map<string, { id: number; model: string | null }>();
+  // ถามทีเดียวทั้งชุด ไม่ใช่ตัวละรอบ — สามเครื่องเคยเป็นสามรอบไปกลับ
+  const found = await prisma.machine.findMany({
+    where: { branchId: branch.id, code: { in: codes } },
+    select: { id: true, code: true, model: true, removedAt: true },
+  });
+  const machines = new Map(found.map((m) => [m.code, m]));
   for (const code of codes) {
-    const machine = await prisma.machine.findFirst({
-      where: { branchId: branch.id, code },
-      select: { id: true, model: true, removedAt: true },
-    });
+    const machine = machines.get(code);
     if (!machine) {
       return res.status(404).json({ error: `ไม่พบเครื่อง ${code} ในสาขา ${body.branchCode}` });
     }
     if (machine.removedAt) {
       return res.status(400).json({ error: `เครื่อง ${code} ถูกถอดออกไปแล้ว` });
     }
-    machines.set(code, { id: machine.id, model: machine.model });
   }
 
-  const created: number[] = [];
-  for (const entry of wanted) {
-    const code = entry.code?.trim();
-    const machine = code ? machines.get(code)! : null;
+  /**
+   * สร้างทั้งชุดใน transaction เดียว ไม่ใช่ใบละ transaction
+   *
+   * แต่ละ transaction มี BEGIN กับ COMMIT ของตัวเอง สามใบจึงเสียไปกลับ
+   * หกรอบกับการเปิดปิดเฉย ๆ และถ้าใบที่สามพังขึ้นมา สองใบแรกจะค้างอยู่
+   * ทั้งที่คนกดเห็นแต่ข้อความ error — รวมเป็นชุดเดียวแล้วได้ทั้งคู่ คือเร็วกว่า
+   * และได้หรือไม่ได้ทั้งชุด
+   */
+  const created = await prisma.$transaction(
+    async (tx) => {
+      const ids: number[] = [];
+      for (const entry of wanted) {
+        const code = entry.code?.trim();
+        const machine = code ? machines.get(code)! : null;
 
-    // รุ่นเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง
-    const model = entry.model?.trim() || null;
-    if (machine && model && model !== machine.model) {
-      await prisma.machine.update({ where: { id: machine.id }, data: { model } });
-    }
+        // รุ่นเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง
+        const model = entry.model?.trim() || null;
+        if (machine && model && model !== machine.model) {
+          await tx.machine.update({ where: { id: machine.id }, data: { model } });
+        }
 
-    const id = await createWorkOrder(
-      {
-        branchId: branch.id,
-        machineId: machine?.id ?? null,
-        outageId: null,
-        source: "MANUAL",
-        jobType: body.jobType,
-        title: body.title.trim(),
-        detail: body.detail?.trim() || null,
-        priority: body.priority,
-        assignedToId: body.assignedToId ?? null,
-        scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-        symptom: entry.symptom?.trim() || null,
-        workStatus: body.workStatus ?? null,
-      },
-      body.waitingParts ?? [],
-      req.auth!.userId
-    );
-    created.push(id);
-  }
+        ids.push(
+          await createWorkOrder(
+            tx,
+            {
+              branchId: branch.id,
+              machineId: machine?.id ?? null,
+              outageId: null,
+              source: "MANUAL",
+              jobType: body.jobType,
+              title: body.title.trim(),
+              detail: body.detail?.trim() || null,
+              priority: body.priority,
+              assignedToId: body.assignedToId ?? null,
+              scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
+              symptom: entry.symptom?.trim() || null,
+              workStatus: body.workStatus ?? null,
+            },
+            body.waitingParts ?? [],
+            req.auth!.userId
+          )
+        );
+      }
+      return ids;
+    },
+    // เปิดหลายเครื่องพร้อมกันใช้เวลานานกว่าใบเดียว อย่าให้ชนเพดาน 5 วินาทีของ Prisma
+    { timeout: 30_000, maxWait: 15_000 }
+  );
 
   const rows = await prisma.workOrder.findMany({
     where: { id: { in: created } },
@@ -695,28 +721,34 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
     ? `สัญญาณหายทั้งสาขา ${outage.branch.code}`
     : `เครื่อง ${outage.machine?.code ?? ""} ดับ — ${outage.branch.code}`;
 
-  const id = await createWorkOrder(
-    {
-      branchId: outage.branch.id,
-      // สัญญาณหายเป็นปัญหาระดับสาขา ไม่ผูกกับเครื่องใดเครื่องหนึ่ง
-      machineId: isSignalLost ? null : outage.machine?.id ?? null,
-      outageId,
-      source: "OUTAGE",
-      jobType: body.jobType,
-      title: body.title?.trim() || defaultTitle,
-      // อาการที่เคยกรอกไว้ในเคสติดไปกับใบงานด้วย ช่างจะได้ไม่ต้องเปิดสองที่
-      detail: body.detail?.trim() || outage.symptom || null,
-      priority: body.priority,
-      assignedToId: body.assignedToId ?? null,
-      scheduledAt: body.scheduledAt
-        ? new Date(body.scheduledAt)
-        : outage.scheduledVisitAt ?? null,
-      // ที่เคยกรอกไว้บนกระดานถูกยกมาเป็นค่าตั้งต้น ไม่ใช่ทิ้งแล้วเริ่มใหม่
-      symptom: body.symptom !== undefined ? body.symptom?.trim() || null : outage.symptom,
-      workStatus: body.workStatus !== undefined ? body.workStatus : outage.workStatus,
-    },
-    body.waitingParts ?? outage.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
-    req.auth!.userId
+  const id = await prisma.$transaction(
+    (tx) =>
+      createWorkOrder(
+        tx,
+        {
+          branchId: outage.branch.id,
+          // สัญญาณหายเป็นปัญหาระดับสาขา ไม่ผูกกับเครื่องใดเครื่องหนึ่ง
+          machineId: isSignalLost ? null : outage.machine?.id ?? null,
+          outageId,
+          source: "OUTAGE",
+          jobType: body.jobType,
+          title: body.title?.trim() || defaultTitle,
+          // อาการที่เคยกรอกไว้ในเคสติดไปกับใบงานด้วย ช่างจะได้ไม่ต้องเปิดสองที่
+          detail: body.detail?.trim() || outage.symptom || null,
+          priority: body.priority,
+          assignedToId: body.assignedToId ?? null,
+          scheduledAt: body.scheduledAt
+            ? new Date(body.scheduledAt)
+            : outage.scheduledVisitAt ?? null,
+          // ที่เคยกรอกไว้บนกระดานถูกยกมาเป็นค่าตั้งต้น ไม่ใช่ทิ้งแล้วเริ่มใหม่
+          symptom: body.symptom !== undefined ? body.symptom?.trim() || null : outage.symptom,
+          workStatus: body.workStatus !== undefined ? body.workStatus : outage.workStatus,
+        },
+        body.waitingParts ??
+          outage.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        req.auth!.userId
+      ),
+    { timeout: 30_000, maxWait: 15_000 }
   );
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });

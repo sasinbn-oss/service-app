@@ -18,6 +18,7 @@ import machineRoutes from "./routes/machines";
 import workOrderRoutes from "./routes/workOrders";
 import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
+import { prisma } from "./prisma";
 
 const app = express();
 
@@ -46,6 +47,39 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
  */
 app.get("/health/storage", requireAuth, requireAdmin, async (_req, res) => {
   res.json(await checkFileStore());
+});
+
+/**
+ * ฐานข้อมูลอยู่ไกลแค่ไหน
+ *
+ * เวลาคนบอกว่า "กดบันทึกแล้วช้า" สาเหตุที่เป็นไปได้มีสามแบบและแก้คนละทางสุดขั้ว
+ * — เซิร์ฟเวอร์เพิ่งตื่นจากหลับ (ช้าครั้งแรกครั้งเดียว) · ฐานข้อมูลอยู่คนละทวีป
+ * กับเซิร์ฟเวอร์ (ช้าทุกครั้ง ทุกหน้า) · หรือโค้ดคุยกับฐานข้อมูลเยอะเกิน
+ *
+ * ตรงนี้แยกให้ออกด้วยตัวเลขเดียว: เวลาไปกลับฐานข้อมูลหนึ่งรอบ การบันทึก
+ * ใบงานหนึ่งใบใช้ประมาณสิบกว่ารอบ คูณเอาได้เลยว่าควรใช้เวลาเท่าไร
+ */
+app.get("/health/db", requireAuth, requireAdmin, async (_req, res) => {
+  const samples: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const started = process.hrtime.bigint();
+    await prisma.$queryRaw`SELECT 1`;
+    samples.push(Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  samples.sort((a, b) => a - b);
+  const median = Math.round(samples[2] * 10) / 10;
+
+  res.json({
+    roundTripMs: median,
+    // ประมาณจากจำนวนคำสั่งที่การเปิดใบงานหนึ่งใบใช้จริง
+    estimatedSaveMs: Math.round(median * 12),
+    verdict:
+      median < 30
+        ? "ปกติ — ฐานข้อมูลอยู่ใกล้เซิร์ฟเวอร์"
+        : median < 80
+          ? "พอใช้ได้ แต่เริ่มรู้สึก"
+          : "ช้าผิดปกติ — น่าจะอยู่คนละ region กับเซิร์ฟเวอร์ ย้ายให้อยู่ที่เดียวกันจะเร็วขึ้นหลายเท่า",
+  });
 });
 
 app.use("/api/auth", authRoutes);

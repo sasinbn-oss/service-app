@@ -96,7 +96,10 @@ export async function pickImageAttachment(
   // ย่อก่อนส่งเสมอ ไม่ใช่แค่ลดคุณภาพ — quality อย่างเดียวได้ไฟล์ 1.5-2.5 MB
   // เพราะความกว้างยังเท่าเดิม ต้องลดขนาดภาพจริงถึงจะเหลือหลักแสนไบต์
   const uri = await shrink(asset.uri, MAX_WIDTH, 0.7);
-  const thumbnailUri = await shrink(asset.uri, THUMB_WIDTH, 0.5);
+  // ทำรูปย่อจากรูปที่ย่อแล้ว ไม่ใช่จากไฟล์ดิบอีกรอบ — การถอดรหัสรูป 12 ล้าน
+  // พิกเซลคือส่วนที่ช้าที่สุดของทั้งขั้นตอน ทำสองรอบคือรอนานเป็นสองเท่า
+  // โดยที่รูปย่อขนาด 320 px ออกมาหน้าตาเหมือนกัน
+  const thumbnailUri = await shrink(uri, THUMB_WIDTH, 0.5);
   const name = (asset.fileName ?? `photo-${Date.now()}.jpg`).replace(/\.[^.]+$/, "") + ".jpg";
   return { uri, name, type: "image/jpeg", kind: "IMAGE", thumbnailUri };
 }
