@@ -60,8 +60,16 @@ interface WorkOrder {
   branchCode: string;
   branchName: string;
   region: string | null;
-  /** ทีมช่างที่ดูแลสาขานี้ ตามไฟล์ทะเบียนสาขา — ใช้เป็นค่าตั้งต้นตอนจ่ายงาน */
+  /** ทีมที่ดูแลงาน CM ของสาขานี้ ตามไฟล์ทะเบียนสาขา */
   zone: string | null;
+  /** ทีมที่ดูแลงาน PM ของสาขานี้ — ว่างได้ */
+  branchPmTeam: string | null;
+  /**
+   * ทีมที่ควรรับงานใบนี้ ตามประเภทงาน — เซิร์ฟเวอร์คิดมาให้แล้ว
+   *
+   * งาน PM ไปทีม PM งานอื่นไปทีม CM และสาขาที่ไม่ได้ระบุทีม PM ใช้ทีม CM แทน
+   */
+  suggestedTeam: string | null;
   branchOpenedAt: string | null;
   // ว่างเมื่อเป็นสาขาบริษัท — เซิร์ฟเวอร์ตัดออกให้แล้ว หน้าจอไม่ต้องตัดสินใจเอง
   branchWarrantyExpiresAt: string | null;
@@ -790,7 +798,7 @@ function StageModal({
     setRequisitionNo(order.waitingParts.find((p) => p.requisitionNo)?.requisitionNo ?? "");
     // ทีมของสาขาเป็นค่าตั้งต้น เพราะเป็นทีมที่รับผิดชอบสาขานี้อยู่แล้ว
     // จ่ายข้ามทีมยังทำได้ แต่ต้องตั้งใจเลือก ไม่ใช่เผลอ
-    setTeam(order.assignedTeam ?? order.zone ?? null);
+    setTeam(order.assignedTeam ?? order.suggestedTeam ?? null);
     setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
     setNote("");
     setError(null);
@@ -1015,10 +1023,10 @@ function StageModal({
                   ทีมของสาขาขึ้นก่อนและถูกเลือกไว้ให้ เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
                   ทีมอื่นเรียงตามหลัง เลือกได้เมื่อทีมเจ้าของสาขาไม่ว่าง
                 */}
-                <View style={styles.options}>
+<View style={styles.options}>
                   {[
-                    ...(order.zone ? [order.zone] : []),
-                    ...teams.map((t) => t.name).filter((n) => n !== order.zone),
+                    ...(order.suggestedTeam ? [order.suggestedTeam] : []),
+                    ...teams.map((t) => t.name).filter((n) => n !== order.suggestedTeam),
                   ].map((name) => (
                     <TouchableOpacity
                       key={name}
@@ -1028,7 +1036,9 @@ function StageModal({
                     >
                       <Text style={[styles.optionText, team === name && styles.optionTextOn]}>
                         {name}
-                        {name === order.zone ? " · ทีมของสาขานี้" : ""}
+                        {name === order.suggestedTeam
+                          ? ` · ทีม ${order.jobType === "PM" ? "PM" : "CM"} ของสาขานี้`
+                          : ""}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -1038,9 +1048,14 @@ function StageModal({
                     ยังไม่มีทีมช่างในระบบ — ทีมมาจากคอลัมน์ “ทีมช่าง” ในไฟล์ทะเบียนสาขา
                     ต้องนำเข้าไฟล์ที่มีคอลัมน์นั้นก่อน
                   </Text>
-                ) : team && team !== order.zone ? (
+                ) : team && team !== order.suggestedTeam ? (
                   <Text style={styles.warn}>
-                    จ่ายข้ามทีม — สาขานี้เป็นของ {order.zone ?? "ทีมที่ยังไม่ระบุ"}
+                    จ่ายข้ามทีม — งาน{order.jobType === "PM" ? " PM " : " "}ของสาขานี้เป็นของ{" "}
+                    {order.suggestedTeam ?? "ทีมที่ยังไม่ระบุ"}
+                  </Text>
+                ) : order.jobType === "PM" && !order.branchPmTeam && order.suggestedTeam ? (
+                  <Text style={styles.linkedText}>
+                    สาขานี้ไม่ได้ระบุทีม PM ในไฟล์ทะเบียน — ตั้งต้นด้วยทีม CM ให้
                   </Text>
                 ) : null}
               </>

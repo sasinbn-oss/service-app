@@ -66,6 +66,7 @@ const detailInclude = {
       name: true,
       region: true,
       zone: true,
+      pmTeam: true,
       ownership: true,
       openedAt: true,
       warrantyExpiresAt: true,
@@ -228,6 +229,16 @@ function shape(w: WorkOrderRow) {
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
     machineModel: w.machine?.model ?? null,
+    // ทีมที่ควรรับงานใบนี้ตามไฟล์ทะเบียนสาขา
+    //
+    // งาน PM ไปทีมที่ดูแล PM ส่วนงานอื่นไปทีมที่ดูแล CM — คิดที่เซิร์ฟเวอร์
+    // ไม่ปล่อยให้หน้าจอไปตัดสินเอง ไม่งั้นวันหลังมีหน้าจอที่สามแล้วกฎไม่ตรงกัน
+    //
+    // สาขาที่ไม่ได้ระบุทีม PM ใช้ทีม CM แทน ซึ่งในไฟล์จริงมีอยู่ราวหนึ่งในสาม
+    // ของสาขาทั้งหมด — ทีมที่ไปงาน CM อยู่แล้วเป็นคำตอบที่ใกล้ถูกที่สุดที่ไฟล์บอกได้
+    // และยังเลือกทีมอื่นได้อยู่ดี
+    suggestedTeam: (w.jobType === "PM" ? w.branch.pmTeam ?? w.branch.zone : w.branch.zone) ?? null,
+    branchPmTeam: w.branch.pmTeam,
     assignedTeam: w.assignedTeam,
     assignedToId: w.assignedTo?.id ?? null,
     assignedToName: w.assignedTo?.name ?? null,
@@ -501,12 +512,30 @@ router.get("/options", requireAuth, async (_req, res) => {
     select: { id: true, name: true, employeeCode: true, team: true },
     orderBy: { name: "asc" },
   });
-  const teams = await prisma.branch.groupBy({
-    by: ["zone"],
-    where: { zone: { not: null }, cancelledAt: null },
-    _count: true,
-    orderBy: { zone: "asc" },
-  });
+  // ทีมมาจากสองคอลัมน์ (ผู้ดูแล CM / ผู้ดูแล PM) บางทีมรับเฉพาะงาน CM
+  // จึงโผล่แค่คอลัมน์เดียว เอาแค่คอลัมน์เดียวจะมีทีมหายไปจากรายการเลือก
+  const [cmTeams, pmTeams] = await Promise.all([
+    prisma.branch.groupBy({
+      by: ["zone"],
+      where: { zone: { not: null }, cancelledAt: null },
+      _count: true,
+    }),
+    prisma.branch.groupBy({
+      by: ["pmTeam"],
+      where: { pmTeam: { not: null }, cancelledAt: null },
+      _count: true,
+    }),
+  ]);
+  const teamTally = new Map<string, number>();
+  for (const r of cmTeams) {
+    const k = r.zone?.trim();
+    if (k) teamTally.set(k, Math.max(teamTally.get(k) ?? 0, r._count));
+  }
+  for (const r of pmTeams) {
+    const k = r.pmTeam?.trim();
+    if (k) teamTally.set(k, Math.max(teamTally.get(k) ?? 0, r._count));
+  }
+  const teams = [...teamTally.entries()].sort((a, b) => a[0].localeCompare(b[0], "th"));
   res.json({
     statuses: WORK_ORDER_STATUSES.map((v) => ({ value: v, label: WORK_ORDER_STATUS_LABELS[v] })),
     priorities: WORK_ORDER_PRIORITIES.map((v) => ({
@@ -524,9 +553,7 @@ router.get("/options", requireAuth, async (_req, res) => {
     })),
     // ทีมช่างมาจากทะเบียนสาขา (Branch.zone = คอลัมน์ "ทีมช่าง" ในไฟล์)
     // ส่งมาที่เดียวกับตัวเลือกอื่น หน้าจอจะได้ไม่ต้องยิงเพิ่มอีกรอบตอนเปิดฟอร์ม
-    teams: teams
-      .filter((t) => (t.zone as string).trim() !== "")
-      .map((t) => ({ name: t.zone as string, branches: t._count })),
+    teams: teams.map(([name, branches]) => ({ name, branches })),
     // รุ่นเครื่องส่งมาจากที่นี่ที่เดียว เพิ่มรุ่นใหม่แล้วแอปเห็นทันทีโดยไม่ต้อง
     // ปล่อยเวอร์ชันใหม่ — ถ้าฝังไว้ในแอป เครื่องที่ยังไม่อัปเดตจะเลือกรุ่นใหม่ไม่ได้
     machineModels: MACHINE_MODELS,
@@ -1276,11 +1303,16 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
 
   // จ่ายข้ามทีมได้ แต่ต้องรู้ตัวว่าข้าม จึงบันทึกไว้ในประวัติให้ชัด
+  //
+  // "ทีมของสาขา" ขึ้นกับประเภทงาน — งาน PM มีทีมดูแลคนละทีมกับงาน CM
+  // เทียบกับทีม CM อย่างเดียวจะหาว่าข้ามทีมทั้งที่จ่ายถูกตามไฟล์
   const wo = await prisma.workOrder.findUniqueOrThrow({
     where: { id },
-    select: { branch: { select: { zone: true } } },
+    select: { jobType: true, branch: { select: { zone: true, pmTeam: true } } },
   });
-  const crossTeam = wo.branch.zone !== null && wo.branch.zone !== team;
+  const ownTeam =
+    wo.jobType === "PM" ? wo.branch.pmTeam ?? wo.branch.zone : wo.branch.zone;
+  const crossTeam = ownTeam !== null && ownTeam !== team;
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
@@ -1297,7 +1329,7 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
       "ASSIGNED",
       parsed.data.note ||
         (crossTeam
-          ? `จ่ายงานให้ ${team} (ข้ามทีม — สาขานี้เป็นของ ${wo.branch.zone})`
+          ? `จ่ายงานให้ ${team} (ข้ามทีม — งาน${wo.jobType} ของสาขานี้เป็นของ ${ownTeam})`
           : `จ่ายงานให้ ${team}`)
     );
   });

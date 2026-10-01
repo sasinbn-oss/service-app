@@ -13,10 +13,16 @@ export interface BranchSheetRow {
   code: string;
   name: string;
   region: string | null;
+  /** ทีมที่ดูแลงาน CM — คอลัมน์ "ผู้ดูแล CM" */
   zone: string | null;
+  /** ทีมที่ดูแลงาน PM — คอลัมน์ "ผู้ดูแล PM" ว่างได้ */
+  pmTeam: string | null;
   grade: string | null;
   openedAt: Date | null;
   warrantyExpiresAt: Date | null;
+  /** พิกัดจากคอลัมน์ GPS ("8.07475, 98.995222") — ว่างเมื่อไม่มีหรืออ่านไม่ออก */
+  latitude: number | null;
+  longitude: number | null;
 }
 
 export interface BranchParseResult {
@@ -28,15 +34,49 @@ export interface BranchParseResult {
   errors: string[];
 }
 
+/**
+ * ชื่อคอลัมน์ที่ยอมรับได้
+ *
+ * มีหลายชื่อต่อช่องเพราะไฟล์จริงที่ได้มาแต่ละรอบไม่ได้ใช้หัวตารางเดียวกัน —
+ * ไฟล์ที่ทำจาก PivotTable ตั้งหัวคอลัมน์แรกว่า "Row Labels" และ "ผจก.ภาค"
+ * มีจุดคั่นบ้างไม่มีบ้าง การไปไล่แก้ไฟล์ทุกรอบก่อนอัปโหลดคืองานที่จะถูกลืม
+ */
 const HEADER_ALIASES = {
-  code: ["code", "crm_code", "branch_code", "รหัสสาขา"],
+  code: ["code", "crm_code", "branch_code", "รหัสสาขา", "row labels"],
   name: ["ชื่อสาขา", "name", "branch_name"],
-  region: ["ผจกภาค", "region", "ภาค"],
-  zone: ["ทีมช่าง", "zone", "โซน", "team"],
+  region: ["ผจกภาค", "ผจก.ภาค", "region", "ภาค"],
+  zone: ["ผู้ดูแล cm", "ทีมช่าง", "zone", "โซน", "team"],
+  pmTeam: ["ผู้ดูแล pm", "ทีม pm", "pm_team"],
   grade: ["grade", "เกรด"],
-  openedAt: ["วันเปิดร้าน", "วันเปิดสาขา", "opened_at", "open_date", "opening_date"],
+  openedAt: [
+    "วันส่งมอบร้าน",
+    "วันเปิดร้าน",
+    "วันเปิดสาขา",
+    "opened_at",
+    "open_date",
+    "opening_date",
+  ],
   warrantyExpiresAt: ["วันหมดประกัน", "หมดประกัน", "warranty_expires", "warranty_end", "warranty_expiry"],
+  latitude: ["gps", "พิกัด", "lat_long", "latitude"],
+  longitude: ["longitude", "ลองจิจูด"],
 } satisfies Record<keyof BranchSheetRow, string[]>;
+
+/**
+ * อ่านพิกัดจากช่องเดียวที่เขียนติดกันเป็น "lat, long"
+ *
+ * ไฟล์ทะเบียนเก็บพิกัดไว้ช่องเดียวแบบที่ก๊อปจาก Google Maps มาเลย
+ * ไม่ได้แยกเป็นสองคอลัมน์ และค่าที่อยู่นอกประเทศไทยถือว่าผิด ไม่ใช่แค่แปลก —
+ * สาขาที่พิกัดเพี้ยนจะทำให้ช่างรายงานตัวไม่ผ่านทั้งที่ยืนอยู่หน้าร้าน
+ */
+function parseLatLong(text: string): { latitude: number; longitude: number } | null {
+  const parts = text.split(",").map((p) => p.trim());
+  if (parts.length !== 2) return null;
+  const latitude = Number(parts[0]);
+  const longitude = Number(parts[1]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < 5 || latitude > 21 || longitude < 96 || longitude > 106) return null;
+  return { latitude, longitude };
+}
 
 /**
  * อ่านวันที่จากเซลล์ ซึ่งมาได้หลายหน้าตา
@@ -103,8 +143,13 @@ export async function parseBranchWorkbook(buffer: Buffer): Promise<BranchParseRe
 
   const errors: string[] = [];
   if (columnOf.code === undefined) errors.push("ไม่พบคอลัมน์ code ในไฟล์");
-  if (columnOf.region === undefined && columnOf.zone === undefined) {
-    errors.push("ไม่พบคอลัมน์ ผจกภาค และ ทีมช่าง — ไฟล์นี้ไม่มีอะไรให้อัปเดต");
+  if (
+    columnOf.region === undefined &&
+    columnOf.zone === undefined &&
+    columnOf.pmTeam === undefined &&
+    columnOf.latitude === undefined
+  ) {
+    errors.push("ไม่พบคอลัมน์ ผจก.ภาค / ผู้ดูแล CM / ผู้ดูแล PM / GPS — ไฟล์นี้ไม่มีอะไรให้อัปเดต");
   }
   if (errors.length > 0) return { ...empty, errors };
 
@@ -128,14 +173,30 @@ export async function parseBranchWorkbook(buffer: Buffer): Promise<BranchParseRe
     if (!code) continue;
     rowsInFile += 1;
 
+    // พิกัดมาเป็นช่องเดียว "lat, long" — ถ้าไฟล์แยกสองคอลัมน์ก็อ่านแบบนั้นได้เหมือนกัน
+    const pair = parseLatLong(read(row, "latitude"));
+    const splitLat = Number(read(row, "latitude"));
+    const splitLong = Number(read(row, "longitude"));
+    const coords =
+      pair ??
+      (columnOf.longitude !== undefined &&
+      Number.isFinite(splitLat) &&
+      Number.isFinite(splitLong) &&
+      splitLat !== 0
+        ? { latitude: splitLat, longitude: splitLong }
+        : null);
+
     const entry: BranchSheetRow = {
       code,
       name: read(row, "name"),
       region: read(row, "region") || null,
       zone: read(row, "zone") || null,
+      pmTeam: read(row, "pmTeam") || null,
       grade: read(row, "grade") || null,
       openedAt: readDate(row, "openedAt"),
       warrantyExpiresAt: readDate(row, "warrantyExpiresAt"),
+      latitude: coords?.latitude ?? null,
+      longitude: coords?.longitude ?? null,
     };
 
     // รหัสเดียวกันมาสองครั้งแล้วภาค/ทีมไม่ตรงกัน แปลว่าต้นทางมีปัญหา
@@ -164,12 +225,19 @@ export interface BranchImportPlan {
   newBranchSample: string[];
   /** สาขาเดิมที่ค่าภาคหรือทีมช่างจะเปลี่ยนไปจากของเดิม */
   changedCount: number;
+  /** สาขาที่จะได้พิกัดจากไฟล์นี้ทั้งที่เดิมยังไม่มี — รายงานตัวด้วย GPS ได้เพิ่ม */
+  newCoordinateCount: number;
   changedSample: { code: string; from: string; to: string }[];
   unchangedCount: number;
   /** สาขาที่มีในระบบแล้วแต่ไม่อยู่ในไฟล์นี้ — ไม่ถูกแตะต้อง */
   notInFileCount: number;
   regions: { name: string; branches: number }[];
+  /** ทีมที่ดูแลงาน CM */
   zones: { name: string; branches: number }[];
+  /** ทีมที่ดูแลงาน PM */
+  pmTeams: { name: string; branches: number }[];
+  /** สาขาที่ไม่ได้ระบุทีม PM — งาน PM ของสาขาเหล่านี้จะตั้งต้นด้วยทีม CM */
+  noPmTeamCount: number;
   errors: string[];
   warnings: string[];
 }
@@ -190,10 +258,40 @@ export async function planBranchImport(parsed: BranchParseResult): Promise<Branc
     );
   }
 
+  /**
+   * ภาคที่สะกดต่างกันแต่น่าจะหมายถึงภาคเดียวกัน
+   *
+   * ไฟล์จริงมีทั้ง "เหนือ-อีสาน" และ "เหนือ อีสาน" ซึ่งระบบถือเป็นคนละภาค
+   * ผลคือหัวหน้าภาคที่ตั้งไว้ภาคหนึ่งจะมองไม่เห็นสาขาที่สะกดอีกแบบเลย
+   *
+   * ไม่แก้ให้เงียบ ๆ เพราะเดาแทนคนไม่ได้ว่าอันไหนถูก แต่ต้องบอกให้เห็นก่อนกดบันทึก
+   */
+  const normalise = (name: string) => name.replace(/[\s\-–—]+/g, "").toLowerCase();
+  const regionGroups = new Map<string, Set<string>>();
+  for (const row of parsed.rows) {
+    if (!row.region) continue;
+    const key = normalise(row.region);
+    if (!regionGroups.has(key)) regionGroups.set(key, new Set());
+    regionGroups.get(key)!.add(row.region);
+  }
+  for (const names of regionGroups.values()) {
+    if (names.size > 1) {
+      warnings.push(
+        `ภาคที่สะกดต่างกันแต่น่าจะเป็นภาคเดียวกัน: ${[...names].map((n) => `"${n}"`).join(" กับ ")} — ` +
+          "ระบบถือเป็นคนละภาค หัวหน้าภาคจะเห็นแค่ฝั่งเดียว ควรแก้ที่ไฟล์ให้ตรงกัน"
+      );
+    }
+  }
+
   const existing = await prisma.branch.findMany({
-    select: { code: true, region: true, zone: true },
+    select: { code: true, region: true, zone: true, latitude: true },
   });
   const byCode = new Map(existing.map((b) => [b.code, b]));
+
+  // สาขาที่เดิมไม่มีพิกัดแล้วไฟล์นี้มีให้ — รายงานตัวด้วย GPS ได้เพิ่มเท่านี้
+  const newCoordinateCount = parsed.rows.filter(
+    (r) => r.latitude !== null && (byCode.get(r.code)?.latitude ?? null) === null
+  ).length;
 
   const changedSample: { code: string; from: string; to: string }[] = [];
   let changedCount = 0;
@@ -241,6 +339,9 @@ export async function planBranchImport(parsed: BranchParseResult): Promise<Branc
     notInFileCount,
     regions: count((r) => r.region),
     zones: count((r) => r.zone),
+    pmTeams: count((r) => r.pmTeam),
+    noPmTeamCount: parsed.rows.filter((r) => !r.pmTeam).length,
+    newCoordinateCount,
     errors: parsed.errors,
     warnings,
   };
@@ -257,24 +358,58 @@ export async function applyBranchImport(parsed: BranchParseResult): Promise<Bran
   // ชื่อสาขาตั้งเฉพาะตอนสร้างใหม่ ของเดิมไม่แตะ เพราะชื่อในไฟล์ทะเบียนมีรหัสภายใน
   // ต่อท้ายอยู่ ("ถนนอุตรกิจ กระบี่ 00031 KBI009 C0006") ส่วนชื่อที่มาจากรายงานเครื่อง
   // สะอาดกว่าและเป็นชื่อที่ขึ้นบนแดชบอร์ด
+  /**
+   * ส่งทุกคอลัมน์เป็น text[] แล้วค่อยแปลงชนิดทีละค่าใน SQL
+   *
+   * ถ้าส่งเป็น null ล้วนทั้งอาร์เรย์ ไดรเวอร์เดาชนิดเป็น integer[] แล้ว
+   * ::timestamp[] จะพังทันที ("cannot cast type integer[] to timestamp...")
+   * ซึ่งเกิดจริงกับไฟล์ที่ไม่มีคอลัมน์วันหมดประกันมาเลย — ใช้สตริงว่างแทน null
+   * แล้ว NULLIF กลับเป็น null ฝั่ง SQL ทำให้ชนิดของอาร์เรย์ชัดเจนเสมอ
+   */
+  const text = (v: string | null) => v ?? "";
+  const stamp = (v: Date | null) => (v ? v.toISOString() : "");
+  const num = (v: number | null) => (v === null ? "" : String(v));
+
   await prisma.$executeRaw`
-    INSERT INTO "Branch" ("code", "name", "region", "zone", "grade", "openedAt", "warrantyExpiresAt")
-    SELECT * FROM unnest(
+    INSERT INTO "Branch" (
+      "code", "name", "region", "zone", "pmTeam", "grade",
+      "openedAt", "warrantyExpiresAt", "latitude", "longitude"
+    )
+    SELECT
+      t.code,
+      t.name,
+      NULLIF(t.region, ''),
+      NULLIF(t.zone, ''),
+      NULLIF(t.pm_team, ''),
+      NULLIF(t.grade, ''),
+      NULLIF(t.opened_at, '')::timestamp,
+      NULLIF(t.warranty, '')::timestamp,
+      NULLIF(t.lat, '')::double precision,
+      NULLIF(t.lng, '')::double precision
+    FROM unnest(
       ${rows.map((r) => r.code)}::text[],
       ${rows.map((r) => r.name || r.code)}::text[],
-      ${rows.map((r) => r.region)}::text[],
-      ${rows.map((r) => r.zone)}::text[],
-      ${rows.map((r) => r.grade)}::text[],
-      ${rows.map((r) => r.openedAt)}::timestamp[],
-      ${rows.map((r) => r.warrantyExpiresAt)}::timestamp[]
-    )
+      ${rows.map((r) => text(r.region))}::text[],
+      ${rows.map((r) => text(r.zone))}::text[],
+      ${rows.map((r) => text(r.pmTeam))}::text[],
+      ${rows.map((r) => text(r.grade))}::text[],
+      ${rows.map((r) => stamp(r.openedAt))}::text[],
+      ${rows.map((r) => stamp(r.warrantyExpiresAt))}::text[],
+      ${rows.map((r) => num(r.latitude))}::text[],
+      ${rows.map((r) => num(r.longitude))}::text[]
+    ) AS t(code, name, region, zone, pm_team, grade, opened_at, warranty, lat, lng)
     ON CONFLICT ("code") DO UPDATE SET
       "region" = COALESCE(EXCLUDED."region", "Branch"."region"),
       "zone"   = COALESCE(EXCLUDED."zone",   "Branch"."zone"),
+      "pmTeam" = COALESCE(EXCLUDED."pmTeam", "Branch"."pmTeam"),
       "grade"  = COALESCE(EXCLUDED."grade",  "Branch"."grade"),
-      -- ไฟล์ที่ไม่มีสองคอลัมน์นี้ต้องไม่ลบค่าที่เคยกรอกไว้ทิ้ง เหมือนกับ zone/grade
+      -- ไฟล์ที่ไม่มีคอลัมน์เหล่านี้ต้องไม่ลบค่าที่เคยกรอกไว้ทิ้ง เหมือนกับ zone/grade
       "openedAt"          = COALESCE(EXCLUDED."openedAt",          "Branch"."openedAt"),
-      "warrantyExpiresAt" = COALESCE(EXCLUDED."warrantyExpiresAt", "Branch"."warrantyExpiresAt")
+      "warrantyExpiresAt" = COALESCE(EXCLUDED."warrantyExpiresAt", "Branch"."warrantyExpiresAt"),
+      -- พิกัดในไฟล์ถือเป็นค่าจริง ทับของเดิมได้ แต่ไฟล์ที่ไม่มีพิกัดต้องไม่ล้างทิ้ง
+      -- ไม่งั้นอัปโหลดไฟล์เก่าทีเดียว ช่างทั้งบริษัทรายงานตัวด้วย GPS ไม่ได้
+      "latitude"  = COALESCE(EXCLUDED."latitude",  "Branch"."latitude"),
+      "longitude" = COALESCE(EXCLUDED."longitude", "Branch"."longitude")
   `;
 
   return plan;

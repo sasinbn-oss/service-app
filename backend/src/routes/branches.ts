@@ -123,16 +123,36 @@ router.get("/regions", requireAuth, async (_req, res) => {
  * คืนจำนวนสาขาไปด้วย จะได้รู้ว่าทีมไหนดูแลกี่สาขาตอนเลือกจ่ายงานข้ามทีม
  */
 router.get("/teams", requireAuth, async (_req, res) => {
-  const rows = await prisma.branch.groupBy({
-    by: ["zone"],
-    where: { zone: { not: null }, cancelledAt: null },
-    _count: true,
-    orderBy: { zone: "asc" },
-  });
+  // ทีม CM กับทีม PM มาคนละคอลัมน์ แต่เป็นทีมชุดเดียวกัน — บางทีมรับเฉพาะงาน CM
+  // จึงโผล่แค่คอลัมน์เดียว ถ้าเอาแค่คอลัมน์เดียวจะมีทีมหายไปจากรายการเลือก
+  const [cm, pm] = await Promise.all([
+    prisma.branch.groupBy({
+      by: ["zone"],
+      where: { zone: { not: null }, cancelledAt: null },
+      _count: true,
+    }),
+    prisma.branch.groupBy({
+      by: ["pmTeam"],
+      where: { pmTeam: { not: null }, cancelledAt: null },
+      _count: true,
+    }),
+  ]);
+
+  const tally = new Map<string, { cm: number; pm: number }>();
+  const add = (name: string | null, kind: "cm" | "pm", n: number) => {
+    const key = name?.trim();
+    if (!key) return;
+    const row = tally.get(key) ?? { cm: 0, pm: 0 };
+    row[kind] += n;
+    tally.set(key, row);
+  };
+  for (const r of cm) add(r.zone, "cm", r._count);
+  for (const r of pm) add(r.pmTeam, "pm", r._count);
+
   res.json(
-    rows
-      .filter((r) => (r.zone as string).trim() !== "")
-      .map((r) => ({ name: r.zone as string, branches: r._count }))
+    [...tally.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], "th"))
+      .map(([name, n]) => ({ name, branches: Math.max(n.cm, n.pm), cmBranches: n.cm, pmBranches: n.pm }))
   );
 });
 
