@@ -44,6 +44,7 @@ import {
   WORK_STATUS_LABELS,
   WORK_ORDER_PRIORITIES,
   WORK_ORDER_PRIORITY_LABELS,
+  RETIRED_WORK_ORDER_RESULTS,
   WORK_ORDER_RESULTS,
   WORK_ORDER_RESULT_LABELS,
   WORK_ORDER_STATUSES,
@@ -55,6 +56,7 @@ import {
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
+  workStatusForStage,
 } from "../utils/constants";
 
 const router = Router();
@@ -87,7 +89,10 @@ const detailInclude = {
   _count: { select: { attachments: true } },
   // แถวเดียวพอต่อชนิด หน้าปิดงานแค่อยากรู้ว่ามีอะไรแนบไว้แล้วบ้าง
   // ไม่ได้จะเอารายการมาแสดง — รายการอยู่ที่ /attachments อยู่แล้ว
-  attachments: { where: { role: { not: null } }, select: { id: true, role: true } },
+  attachments: {
+    where: { role: { not: null } },
+    select: { id: true, role: true, createdAt: true },
+  },
   workers: { include: { user: { select: { id: true, name: true, employeeCode: true } } } },
 } as const;
 
@@ -197,7 +202,13 @@ type WorkOrderRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ include: typeof detailInclude }>>
 >;
 
-function shape(w: WorkOrderRow) {
+/** สรุปว่าใบที่ปิดไปแล้วทำให้เครื่องกลับมาจริงไหม ตามไฟล์รายงานรอบล่าสุด */
+function closeVerdict(w: WorkOrderRow): "CLEARED" | "STILL_DOWN" | null {
+  if (w.closedAt === null || !w.outage) return null;
+  return w.outage.endedAt === null ? "STILL_DOWN" : "CLEARED";
+}
+
+function shape(w: WorkOrderRow, roundStart?: Date) {
   return {
     id: w.id,
     code: w.code,
@@ -267,6 +278,17 @@ function shape(w: WorkOrderRow) {
     // เคสยังเปิดอยู่ไหมตอนนี้ ใช้เตือนตอนปิดงานว่าเครื่องยังไม่กลับมา
     outageStillOpen: w.outage ? w.outage.endedAt === null : null,
     outageKind: w.outage?.kind ?? null,
+    outageEndedAt: w.outage?.endedAt ?? null,
+    /**
+     * ปิดงานแล้วอาการหายจริงไหม — เทียบกับไฟล์รายงานเครื่อง
+     *
+     * ปิดใบงานคือ "คนไปทำแล้ว" ส่วนเคสปิดคือ "เครื่องกลับมาแล้ว" ซึ่งไม่ใช่
+     * เรื่องเดียวกัน ช่างเปลี่ยนอะไหล่แล้วเครื่องยังไม่กลับมาก็มี และต้องเห็น
+     * ว่าเป็นแบบนั้น ไม่ใช่กลบด้วยการถือว่าปิดงานแล้วจบ
+     *
+     * null = เทียบไม่ได้ (ใบที่เปิดเองไม่ได้ผูกกับเคส หรือยังไม่ปิดงาน)
+     */
+    outcomeVerdict: closeVerdict(w),
     // อะไหล่ที่รออยู่ กับอะไหล่ที่ใช้ไปจริง เป็นคนละชุด
     waitingParts: w.parts.filter((p) => p.kind === "WAITING").map(partShape),
     parts: w.parts.filter((p) => p.kind !== "WAITING").map(partShape),
@@ -277,7 +299,10 @@ function shape(w: WorkOrderRow) {
      * รูปหน้างานคือไฟล์ที่ไม่มี role — ใบเหลืองกับป้ายรุ่นเป็นเอกสารและข้อมูล
      * ของเครื่อง ไม่ใช่ภาพของงานที่ทำ จึงนับแยกกัน
      */
-    hasRequisitionSlip: w.attachments.some((a) => a.role === "REQUISITION"),
+    // "ของรอบนี้" ไม่ใช่ "เคยแนบไหม" — รอบใหม่ต้องมีใบเบิกใบใหม่ของตัวเอง
+    hasRequisitionSlip: w.attachments.some(
+      (a) => a.role === "REQUISITION" && (!roundStart || a.createdAt >= roundStart)
+    ),
     hasNameplate: w.attachments.some((a) => a.role === "NAMEPLATE"),
     siteFileCount: w._count.attachments - w.attachments.length,
     // คนที่เข้าไปทำจริง บันทึกตอนปิดงาน
@@ -412,6 +437,29 @@ function canTouch(
 ) {
   if (wo.assignedToId !== null && wo.assignedToId === me.id) return true;
   return wo.assignedTeam !== null && me.team !== null && wo.assignedTeam === me.team;
+}
+
+/**
+ * รอบปัจจุบันของใบงานเริ่มเมื่อไหร่
+ *
+ * ใบงานหนึ่งใบเข้าหน้างานได้หลายรอบ — ช่างไปแล้วส่งกลับให้ประเมินอะไหล่ใหม่
+ * แล้ววนมาใหม่ รอบใหม่คือตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด ใช้แยกว่าเอกสาร
+ * และรูปของรอบไหนเป็นของรอบไหน
+ *
+ * ไม่มีประวัติการจ่ายงานเลย (ใบเก่ามาก) ก็นับจากวันเปิดใบงาน
+ */
+async function roundStartedAt(workOrderId: number): Promise<Date> {
+  const last = await prisma.workOrderLog.findFirst({
+    where: { workOrderId, action: { in: ["ASSIGNED", "REOPENED"] } },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  if (last) return last.createdAt;
+  const wo = await prisma.workOrder.findUnique({
+    where: { id: workOrderId },
+    select: { createdAt: true },
+  });
+  return wo?.createdAt ?? new Date(0);
 }
 
 /** เขียนประวัติทุกครั้งที่ใบงานขยับ ใช้ tx เดียวกับการเปลี่ยนสถานะเสมอ */
@@ -643,8 +691,14 @@ router.get("/:id", requireAuth, async (req, res) => {
     orderBy: { createdAt: "desc" },
   });
 
+  // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
+  // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
+  const roundStart =
+    logs.find((l) => l.action === "ASSIGNED" || l.action === "REOPENED")?.createdAt ??
+    row.createdAt;
+
   res.json({
-    ...shape(row),
+    ...shape(row, roundStart),
     logs: logs.map((l) => ({
       id: l.id,
       action: l.action,
@@ -1315,8 +1369,9 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       where: { id },
       data: {
         status: "PARTS_CHECKED",
-        // ของหมดขึ้นรออะไหล่ให้เอง ไม่ต้องรอใครมากดอีกที
-        ...(anyOut ? { workStatus: "WAITING_PARTS" } : {}),
+        // สถานะการดำเนินการมาจากขั้น ไม่ต้องรอใครมากรอกซ้ำ —
+        // ของหมดคือรออะไหล่ ของครบคือรอช่างเข้า
+        workStatus: workStatusForStage("PARTS_CHECKED", { anyPartOutOfStock: anyOut }),
       },
     });
     await writeLog(
@@ -1379,7 +1434,12 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
       where: { id },
       // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
       // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
-      data: { status: "ASSIGNED", assignedTeam: team, assignedToId: null },
+      data: {
+        status: "ASSIGNED",
+        assignedTeam: team,
+        assignedToId: null,
+        workStatus: workStatusForStage("ASSIGNED"),
+      },
     });
     await writeLog(
       tx,
@@ -1398,7 +1458,7 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   res.json(shape(row));
 });
 
-/** ขั้น 5 — ช่างกำหนดวันที่จะเข้า */
+/** ขั้น 5 — หัวหน้าภาคนัดวันที่ทีมจะเข้า */
 const scheduleSchema = z.object({
   scheduledAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่ต้องเป็น ปี-เดือน-วัน"),
   note: z.string().trim().max(500).optional(),
@@ -1410,11 +1470,10 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
   const parsed = scheduleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+  // guardStage กันไว้แล้วว่าเป็นหัวหน้าภาคของภาคนี้ (หรือแอดมิน)
+  // ไม่ต้องเช็คทีมซ้ำ เพราะคนนัดวันไม่ใช่คนในทีมอีกต่อไป
   const wo = await guardStage(req, res, id, "ASSIGNED");
   if (!wo) return;
-
-  // ทีมอื่นนัดวันแทนกันไม่ได้ คนที่ถือใบงานคือคนที่รู้ว่าตัวเองว่างวันไหน
-  if (await blockedForTeam(req, res, wo)) return;
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
@@ -1422,8 +1481,8 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
       data: {
         status: "IN_PROGRESS",
         scheduledAt: new Date(`${parsed.data.scheduledAt}T00:00:00.000Z`),
-        // นัดวันแล้ว = รอช่างเข้า ไม่ใช่รออะไหล่อีกต่อไป เว้นแต่ของยังไม่มา
-        ...(parsed.data.note ? {} : {}),
+        // นัดวันแล้ว = รอช่างเข้า ไม่ใช่รออะไหล่อีกต่อไป
+        workStatus: workStatusForStage("IN_PROGRESS"),
       },
     });
     await writeLog(
@@ -1432,7 +1491,7 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
       req.auth!.userId,
       "SCHEDULED",
       "IN_PROGRESS",
-      parsed.data.note || `นัดเข้าวันที่ ${parsed.data.scheduledAt}`
+      parsed.data.note || `นัดทีมเข้าวันที่ ${parsed.data.scheduledAt}`
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   });
@@ -1596,6 +1655,19 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   if (await blockedForTeam(req, res, current)) return;
 
   /**
+   * ปิดงานได้เฉพาะงานที่จบแล้ว
+   *
+   * zod กันไว้ชั้นหนึ่งแล้ว แต่ใบงานเก่าหรือแอปเวอร์ชันเก่าอาจยังส่งผลแบบเดิมมา
+   * และข้อความ "ค่าไม่ถูกต้อง" ไม่ได้บอกช่างว่าต้องทำยังไงต่อ
+   */
+  if ((RETIRED_WORK_ORDER_RESULTS as readonly string[]).includes(body.result)) {
+    return res.status(400).json({
+      error:
+        "งานที่ยังไม่จบปิดไม่ได้ — กด “จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค” แทน",
+    });
+  }
+
+  /**
    * ต้องบอกว่าใครเข้าไปทำ
    *
    * งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงเป็นข้อมูลที่มีอยู่ที่เดียวคือตอนปิดงาน
@@ -1633,19 +1705,22 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
 
   /**
-   * เบิกอะไหล่ไปใช้แล้วต้องมีรูปใบเบิก (ใบเหลือง) ติดมาด้วย
+   * เบิกอะไหล่ไปใช้แล้วต้องมีรูปใบเบิก (ใบเหลือง) ของรอบนี้ติดมาด้วย
+   *
+   * นับเฉพาะใบที่แนบ "หลังจากงานถูกจ่ายให้ทีมรอบล่าสุด" ไม่ใช่นับว่าเคยแนบไหม —
+   * ใบงานที่ช่างส่งกลับไปประเมินอะไหล่ใหม่แล้ววนกลับมา เป็นการเบิกของอีกชุด
+   * และมีใบเบิกใบใหม่ ถ้านับรวมใบเก่า รอบที่สองจะผ่านไปโดยไม่มีเอกสารของตัวเอง
    *
    * ตรวจที่เซิร์ฟเวอร์ ไม่ใช่แค่ที่หน้าจอ เพราะใบเหลืองคือหลักฐานว่าของที่หายไป
-   * จากคลังไปอยู่ที่เครื่องไหนจริง — ถ้าปล่อยให้ปิดงานได้โดยไม่มี ก็จะไม่มีใคร
-   * ถ่ายมาเลย แล้วตอนตรวจนับคลังจะเหลือแต่ตัวเลขที่ไม่มีเอกสารรองรับ
+   * จากคลังไปอยู่ที่เครื่องไหนจริง
    */
   if ((body.parts?.length ?? 0) > 0) {
     const slip = await prisma.workOrderAttachment.count({
-      where: { workOrderId: id, role: "REQUISITION" },
+      where: { workOrderId: id, role: "REQUISITION", createdAt: { gte: await roundStartedAt(id) } },
     });
     if (slip === 0) {
       return res.status(400).json({
-        error: "ใช้อะไหล่แล้วต้องแนบรูปใบเบิกอะไหล่ (ใบเหลือง) ก่อนปิดงาน",
+        error: "ใช้อะไหล่แล้วต้องแนบรูปใบเบิกอะไหล่ (ใบเหลือง) ของรอบนี้ก่อนปิดงาน",
       });
     }
   }
@@ -1661,6 +1736,8 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         closeResult: body.result,
         closeNote: body.note?.trim() || null,
         closeOtherWorkers: otherWorkers,
+        // ปิดแล้วไม่ได้รออะไรอยู่ ค้างไว้จะไปโผล่บนกระดานว่ายังรอช่าง
+        workStatus: workStatusForStage("DONE"),
       },
     });
 

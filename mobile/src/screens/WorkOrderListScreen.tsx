@@ -62,7 +62,7 @@ type Filter = "INBOX" | "ACTIVE" | "ASSIGNED" | "IN_PROGRESS" | "DONE" | "ALL";
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
-  { value: "ASSIGNED", label: "รอช่างนัดวัน" },
+  { value: "ASSIGNED", label: "รอนัดวัน" },
   { value: "IN_PROGRESS", label: "รอช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },

@@ -52,6 +52,35 @@ export const WORK_STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: "กำลังดำเนินการ",
 };
 
+/**
+ * สถานะการดำเนินการที่ได้จากขั้นของใบงาน
+ *
+ * ขั้นของใบงานรู้อยู่แล้วว่าตอนนี้ติดอยู่ที่อะไร — รออะไหล่หรือรอช่างเข้า
+ * ให้คนมากรอกซ้ำคือการขอให้คนพิมพ์สิ่งที่ระบบรู้อยู่แล้ว แล้วก็จะไม่ได้พิมพ์
+ * ผลคือกระดานติดตามเครื่องเสียขึ้นสถานะค้างจากเมื่อสองสัปดาห์ก่อน
+ *
+ * คืน undefined เมื่อขั้นนั้นบอกอะไรไม่ได้ — ไม่ไปแตะค่าที่คนกรอกไว้
+ * ส่วน "รอลูกค้าจ่ายเงิน" กับ "รอลูกค้าแจ้งซ่อม" ยังต้องกรอกเองอยู่
+ * เพราะเป็นเรื่องฝั่งลูกค้าที่ขั้นของใบงานไม่มีทางรู้
+ */
+export function workStatusForStage(
+  stage: string,
+  opts: { anyPartOutOfStock?: boolean } = {}
+): string | null | undefined {
+  if (opts.anyPartOutOfStock) return "WAITING_PARTS";
+  switch (stage) {
+    case "PARTS_CHECKED":
+    case "ASSIGNED":
+    case "IN_PROGRESS":
+      return "WAITING_TECH";
+    case "DONE":
+      // ปิดงานแล้วไม่ได้รออะไรอยู่ ค้างไว้จะไปโผล่บนกระดานว่ายังรอช่าง
+      return null;
+    default:
+      return undefined;
+  }
+}
+
 /** ค่าที่ยังกรองได้ รวมของเก่าด้วย ต่างจาก WORK_STATUSES ที่เลือกใหม่ได้เท่านั้น */
 export const FILTERABLE_WORK_STATUSES = [...WORK_STATUSES, ...RETIRED_WORK_STATUSES] as const;
 
@@ -119,7 +148,7 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   NEW: "รอหัวหน้าภาคระบุอะไหล่",
   PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
   PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
-  ASSIGNED: "รอช่างนัดวัน",
+  ASSIGNED: "รอหัวหน้าภาคนัดวัน",
   IN_PROGRESS: "รอช่างเข้างาน",
   DONE: "ปิดงานแล้ว",
   CANCELLED: "ยกเลิก",
@@ -145,7 +174,9 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   NEW: "SUPERVISOR",
   PARTS_REQUESTED: "ADMIN",
   PARTS_CHECKED: "SUPERVISOR",
-  ASSIGNED: "EMPLOYEE",
+  // นัดวันเข้างานเป็นของหัวหน้าภาค ไม่ใช่ช่าง — คนที่รู้ว่าคิวทั้งทีมว่างวันไหน
+  // คือคนที่ถือคิวทั้งทีม ช่างคนเดียวตอบได้แค่ว่าตัวเองว่างไหม
+  ASSIGNED: "SUPERVISOR",
   IN_PROGRESS: "EMPLOYEE",
 };
 
@@ -206,7 +237,21 @@ export const WORK_ORDER_PRIORITY_LABELS: Record<string, string> = {
  * ต้องแยก "ซ่อมได้" ออกจาก "ไปแล้วแต่ยังไม่จบ" ไม่งั้นใบงานที่ปิดเพราะรออะไหล่
  * จะถูกนับเป็นงานที่สำเร็จ แล้วตัวเลขในรายงานสวยกว่าความจริง
  */
-export const WORK_ORDER_RESULTS = ["FIXED", "PENDING_PARTS", "NEED_REVISIT", "NO_FAULT"] as const;
+/**
+ * ผลที่ "ปิดงาน" ได้จริง — งานที่จบแล้วเท่านั้น
+ *
+ * รออะไหล่กับยังไม่จบไม่ใช่การปิดงาน มันคือการส่งกลับไปให้หัวหน้าภาคตั้งต้นใหม่
+ * ปล่อยให้ปิดด้วยผลพวกนั้นได้ ใบงานจะขึ้นว่า DONE ทั้งที่เครื่องยังเสีย
+ * แล้วตัวเลขงานที่สำเร็จในรายงานจะสวยกว่าความจริง
+ */
+export const WORK_ORDER_RESULTS = ["FIXED", "NO_FAULT"] as const;
+
+/**
+ * ผลที่เลิกใช้แล้ว แต่ใบงานเก่าที่ปิดไปด้วยผลพวกนี้ยังมีอยู่
+ *
+ * เอาออกจากตัวเลือกเฉยๆ ไม่ได้ลบข้อมูล ใบเก่าจึงยังแสดงป้ายไทยได้ปกติ
+ */
+export const RETIRED_WORK_ORDER_RESULTS = ["PENDING_PARTS", "NEED_REVISIT"] as const;
 
 export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
   FIXED: "ซ่อมเสร็จ",
@@ -219,10 +264,10 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CREATED: "เปิดใบงาน",
   PARTS_REQUESTED: "ระบุอะไหล่ที่ต้องใช้",
   NO_PARTS: "ระบุว่าไม่ต้องใช้อะไหล่",
-  PARTS_ROLLBACK: "ส่งกลับให้ประเมินอะไหล่ใหม่",
+  PARTS_ROLLBACK: "ช่างส่งกลับ — ยังจบงานไม่ได้",
   PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
   ASSIGNED: "จ่ายงานให้ช่าง",
-  SCHEDULED: "ช่างนัดวันเข้า",
+  SCHEDULED: "นัดวันเข้างาน",
   CLOSED: "ปิดงาน",
   CANCELLED: "ยกเลิกใบงาน",
   REOPENED: "เปิดงานใหม่",

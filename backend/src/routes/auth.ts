@@ -93,6 +93,9 @@ router.post("/login", async (req, res) => {
       name: user.name,
       role: user.role,
       region: user.region,
+      // ทีมต้องติดมาตั้งแต่ตอนล็อกอิน ไม่ใช่รอให้หน้าจอไปถาม /auth/me อีกรอบ —
+      // ระหว่างนั้นช่างจะมองไม่เห็นปุ่มของงานตัวเอง เพราะระบบยังไม่รู้ว่าอยู่ทีมไหน
+      team: user.team,
       mustChangePassword: user.mustChangePassword,
     },
   });

@@ -101,6 +101,9 @@ interface WorkOrder {
   waitingParts: StockPart[];
   outageId: number | null;
   outageStillOpen: boolean | null;
+  outageEndedAt: string | null;
+  /** ปิดงานแล้วอาการหายจริงไหม เทียบกับไฟล์รายงานเครื่อง — null = เทียบไม่ได้ */
+  outcomeVerdict: "CLEARED" | "STILL_DOWN" | null;
   outageKind: string | null;
   parts: PickedPart[];
   /** เคยแนบรูปใบเบิก (ใบเหลือง) ไว้แล้วหรือยัง — ใช้อะไหล่แล้วต้องมีถึงจะปิดงานได้ */
@@ -387,7 +390,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         reloadKey={filesKey}
       />
 
-      {order.outageId !== null ? (
+      {/*
+        ใบที่ปิดแล้วไม่ต้องขึ้นการ์ดนี้ เพราะคำตอบเดียวกันไปอยู่ในการ์ดผลการทำงาน
+        ซึ่งเป็นที่ที่คนเปิดดูใบที่ปิดแล้วมองหาอยู่แล้ว — สองการ์ดที่พูดเรื่องเดียวกัน
+        คือการบังคับให้คนอ่านสองรอบเพื่อรู้เท่าเดิม
+      */}
+      {order.outageId !== null && !order.closedAt ? (
         <View style={[styles.card, styles.linked]}>
           <View style={styles.headRow}>
             <Ionicons
@@ -423,6 +431,32 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           />
           <Row label="ปิดโดย" value={`${order.closedByName ?? "—"} · ${formatDateTime(order.closedAt)}`} />
           {order.closeNote ? <Text style={styles.detail}>{order.closeNote}</Text> : null}
+
+          {/*
+            ปิดใบงานคือ "คนไปทำแล้ว" ส่วนเคสปิดคือ "เครื่องกลับมาแล้ว" ซึ่งคนละเรื่องกัน
+            ช่างเปลี่ยนอะไหล่แล้วเครื่องยังไม่กลับมาก็มี และต้องเห็นว่าเป็นแบบนั้น
+            ไม่ใช่กลบด้วยการถือว่าปิดงานแล้วจบ
+          */}
+          {order.outcomeVerdict === "CLEARED" ? (
+            <View style={styles.verdictOk}>
+              <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+              <Text style={styles.verdictOkText}>
+                อาการหายแล้ว — เครื่องหายไปจากไฟล์รายงานเมื่อ {formatDate(order.outageEndedAt)}
+              </Text>
+            </View>
+          ) : order.outcomeVerdict === "STILL_DOWN" ? (
+            <View style={styles.verdictBad}>
+              <Ionicons name="alert-circle" size={16} color={colors.danger} />
+              <Text style={styles.verdictBadText}>
+                อาการยังไม่หาย — เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานรอบล่าสุด
+                เคสบนกระดานจะปิดเองเมื่อเครื่องหายไปจากไฟล์รอบถัดไป
+              </Text>
+            </View>
+          ) : order.outageId === null ? (
+            <Text style={styles.linkedText}>
+              ใบนี้เปิดเอง ไม่ได้ผูกกับเคสบนกระดาน จึงเทียบกับไฟล์รายงานไม่ได้
+            </Text>
+          ) : null}
           {order.parts.length > 0 ? (
             <>
               <Text style={styles.sectionTitle}>อะไหล่ที่ใช้</Text>
@@ -498,45 +532,43 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         myTurn(order) ? (
           <>
             <View style={styles.actions}>
-              {order.status !== "ASSIGNED" && order.status !== "IN_PROGRESS" ? (
+{/*
+                ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
+                ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
+                จึงไม่มีขั้นไหนที่ขึ้นทั้งสองปุ่มพร้อมกันอีก
+              */}
+              {order.status === "IN_PROGRESS" ? (
+                <TouchableOpacity
+                  style={[styles.action, styles.actionPrimary]}
+                  onPress={() => setClosing(true)}
+                  disabled={busy}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="checkmark-done" size={18} color="#fff" />
+                  <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                </TouchableOpacity>
+              ) : (
                 <TouchableOpacity
                   style={[styles.action, styles.actionPrimary]}
                   onPress={() => setStageOpen(true)}
                   disabled={busy}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="arrow-forward-circle" size={18} color="#fff" />
+                  <Ionicons
+                    name={order.status === "ASSIGNED" ? "calendar-outline" : "arrow-forward-circle"}
+                    size={18}
+                    color="#fff"
+                  />
                   <Text style={styles.actionPrimaryText}>
                     {order.status === "NEW"
                       ? "ระบุอะไหล่ที่ต้องใช้"
                       : order.status === "PARTS_REQUESTED"
                         ? "เช็คอะไหล่ในคลัง"
-                        : "จ่ายงานให้ช่าง"}
+                        : order.status === "PARTS_CHECKED"
+                          ? "จ่ายงานให้ช่าง"
+                          : "นัดวันเข้างาน"}
                   </Text>
                 </TouchableOpacity>
-              ) : (
-                <>
-                  {order.status === "ASSIGNED" ? (
-                    <TouchableOpacity
-                      style={[styles.action, styles.actionSecondary]}
-                      onPress={() => setStageOpen(true)}
-                      disabled={busy}
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-                      <Text style={styles.actionSecondaryText}>นัดวันเข้างาน</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  <TouchableOpacity
-                    style={[styles.action, styles.actionPrimary]}
-                    onPress={() => setClosing(true)}
-                    disabled={busy}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="checkmark-done" size={18} color="#fff" />
-                    <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
-                  </TouchableOpacity>
-                </>
               )}
             </View>
 
@@ -545,7 +577,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
               แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
             */}
-            {order.status === "ASSIGNED" || order.status === "IN_PROGRESS" ? (
+            {order.status === "IN_PROGRESS" ? (
               <TouchableOpacity
                 style={styles.rollback}
                 onPress={() => setRollbackOpen(true)}
@@ -554,7 +586,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               >
                 <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
                 <Text style={styles.rollbackText}>
-                  จบงานไม่ได้ ต้องเบิกอะไหล่เพิ่ม — เลือกอะไหล่แล้วส่งกลับ
+                  จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค — เลือกอะไหล่ที่ต้องเบิกเพิ่มได้
                 </Text>
               </TouchableOpacity>
             ) : null}
@@ -1833,6 +1865,26 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   modalSaveOff: { opacity: 0.6 },
+  verdictOk: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.successSoft,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+  },
+  verdictOkText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.success, fontWeight: "700" },
+  verdictBad: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+  },
+  verdictBadText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.danger, fontWeight: "700" },
   slipRow: {
     flexDirection: "row",
     alignItems: "center",
