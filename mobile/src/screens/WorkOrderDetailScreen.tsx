@@ -25,6 +25,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
 import DateField from "../components/DateField";
+import Dropdown from "../components/Dropdown";
 import WorkOrderAttachments from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
@@ -146,6 +147,8 @@ interface Technician {
   id: number;
   name: string;
   employeeCode: string;
+  /** ทีมที่สังกัด — ช่วยให้เลือกคนถูกตอนชื่อคล้ายกัน */
+  team?: string | null;
 }
 
 export default function WorkOrderDetailScreen({ route }: Props) {
@@ -1055,26 +1058,35 @@ function StageModal({
                   ทีมของสาขาขึ้นก่อนและถูกเลือกไว้ให้ เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
                   ทีมอื่นเรียงตามหลัง เลือกได้เมื่อทีมเจ้าของสาขาไม่ว่าง
                 */}
-<View style={styles.options}>
-                  {[
-                    ...(order.suggestedTeam ? [order.suggestedTeam] : []),
-                    ...teams.map((t) => t.name).filter((n) => n !== order.suggestedTeam),
-                  ].map((name) => (
-                    <TouchableOpacity
-                      key={name}
-                      style={[styles.option, team === name && styles.optionOn]}
-                      onPress={() => setTeam(name)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.optionText, team === name && styles.optionTextOn]}>
-                        {name}
-                        {name === order.suggestedTeam
-                          ? ` · ทีม ${order.jobType === "PM" ? "PM" : "CM"} ของสาขานี้`
-                          : ""}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+{/*
+                  22 ทีมเป็นชิปคือกำแพงชิปเต็มจอ ต้องกวาดตาหาทีละอัน
+                  dropdown มีช่องค้นหาในตัว พิมพ์ชื่อทีมสามตัวก็เจอ
+                  ทีมของสาขายังอยู่บนสุดเหมือนเดิม เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
+                */}
+                <Dropdown
+                  value={team}
+                  onChange={setTeam}
+                  placeholder="เลือกทีม"
+                  accessibilityLabel="ทีมที่จะรับงาน"
+                  options={[
+                    ...(order.suggestedTeam
+                      ? [
+                          {
+                            value: order.suggestedTeam,
+                            label: order.suggestedTeam,
+                            hint: `ทีม ${order.jobType === "PM" ? "PM" : "CM"} ของสาขานี้`,
+                          },
+                        ]
+                      : []),
+                    ...teams
+                      .filter((t) => t.name !== order.suggestedTeam)
+                      .map((t) => ({
+                        value: t.name,
+                        label: t.name,
+                        hint: `ดูแล ${t.branches} สาขา`,
+                      })),
+                  ]}
+                />
                 {teams.length === 0 ? (
                   <Text style={styles.warn}>
                     ยังไม่มีทีมช่างในระบบ — ทีมมาจากคอลัมน์ “ทีมช่าง” ในไฟล์ทะเบียนสาขา
@@ -1343,6 +1355,8 @@ function CloseModal({
   const shotsMissing = siteFiles.length === 0 && order.siteFileCount === 0;
   // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
   const workersMissing = workerIds.length === 0 && !otherWorkers.trim();
+  // ป้ายรุ่นต้องถ่ายรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง — รูปเก่าใช้แทนไม่ได้
+  const nameplateMissing = !nameplate && !order.hasNameplate;
 
   /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
   async function pickOne(
@@ -1443,26 +1457,45 @@ function CloseModal({
               ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
             */}
             <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน</Text>
-            <View style={styles.options}>
-              {technicians.map((t) => {
-                const on = workerIds.includes(t.id);
-                return (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[styles.option, on && styles.optionOn]}
-                    onPress={() =>
-                      setWorkerIds((v) => (on ? v.filter((x) => x !== t.id) : [...v, t.id]))
-                    }
-                    activeOpacity={0.7}
-                  >
-                    {/* ใส่รหัสพนักงานด้วย ชื่อซ้ำกันเกิดขึ้นจริงในทีมช่าง */}
-                    <Text style={[styles.optionText, on && styles.optionTextOn]}>
-                      {t.name} · {t.employeeCode}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            {/*
+              สามช่อง คนที่ 1–3 แทนการกดเลือกจากรายชื่อทั้งหมด
+
+              ทีมหนึ่งไปกันไม่เกินสามคน การให้กดเลือกจากรายชื่อช่างทั้งบริษัท
+              แปลว่าต้องกวาดตาหาชื่อตัวเองในกองที่ไม่เกี่ยวข้อง และกดเกินไปหนึ่งคน
+              ก็ไม่มีอะไรบอกว่าเกิน — สามช่องบอกจำนวนสูงสุดด้วยตัวมันเอง
+
+              คนเดียวกันเลือกซ้ำสองช่องไม่ได้ เพราะคนที่เลือกไปแล้วถูกตัดออก
+              จากตัวเลือกของช่องที่เหลือ
+            */}
+            {[0, 1, 2].map((slot) => (
+              <View key={slot} style={styles.workerSlot}>
+                <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
+                <Dropdown
+                  value={workerIds[slot] != null ? String(workerIds[slot]) : null}
+                  clearable={slot > 0 || workerIds.length > 1}
+                  placeholder={slot === 0 ? "เลือกช่าง" : "ไม่มี"}
+                  accessibilityLabel={`ผู้เข้าปฏิบัติงานคนที่ ${slot + 1}`}
+                  onChange={(next) =>
+                    setWorkerIds((current) => {
+                      const copy = [...current];
+                      if (next === null) copy.splice(slot, 1);
+                      else copy[slot] = Number(next);
+                      // ช่องว่างตรงกลางทำให้ "คนที่ 2" กลายเป็นช่องที่ไม่มีใคร
+                      // ทั้งที่มีคนที่ 3 อยู่ — บีบให้ชิดกันเสมอ
+                      return copy.filter((x) => x != null);
+                    })
+                  }
+                  options={technicians
+                    .filter((t) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
+                    .map((t) => ({
+                      value: String(t.id),
+                      label: t.name,
+                      // ชื่อซ้ำกันเกิดขึ้นจริงในทีมช่าง รหัสพนักงานเป็นตัวแยก
+                      hint: `${t.employeeCode}${t.team ? ` · ${t.team}` : ""}`,
+                    }))}
+                />
+              </View>
+            ))}
             <TextInput
               style={[styles.modalInput, styles.modalInputLine]}
               value={otherWorkers}
@@ -1527,15 +1560,29 @@ function CloseModal({
               <Text style={styles.warn}>ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์</Text>
             ) : null}
 
-            {/* ป้ายรุ่นไม่บังคับ และไม่ถามซ้ำถ้าแนบไว้ตั้งแต่เปิดใบงานแล้ว */}
+            {/*
+              ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
+
+              รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
+              ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
+              ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
+            */}
             {order.hasNameplate && !nameplate ? (
               <>
                 <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-                <Text style={styles.linkedText}>แนบไว้แล้วตั้งแต่เปิดใบงาน</Text>
+                <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
               </>
             ) : (
               <>
-                <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง (ไม่บังคับ)</Text>
+                <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
+                {/* บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
+                    ไม่ต้องถ่ายมาก่อนแล้วค่อยมีใครมาเทียบทีหลัง */}
+                {order.machineCode ? (
+                  <Text style={styles.linkedText}>
+                    ในระบบบันทึกไว้ว่า {order.machineCode}
+                    {order.machineModel ? ` · ${order.machineModel}` : ""} — ถ่ายป้ายรุ่นมาเทียบ
+                  </Text>
+                ) : null}
                 {nameplate ? (
                   <FileStrip
                     files={[nameplate]}
@@ -1565,6 +1612,11 @@ function CloseModal({
                     </TouchableOpacity>
                   </View>
                 )}
+                {nameplateMissing ? (
+                  <Text style={styles.warn}>
+                    ต้องแนบรูปป้ายรุ่นที่ถ่ายรอบนี้ — ใช้ไล่เทียบว่าไปถูกเครื่อง
+                  </Text>
+                ) : null}
               </>
             )}
 
@@ -1649,10 +1701,11 @@ function CloseModal({
             <TouchableOpacity
               style={[
                 styles.modalSave,
-                (saving || slipMissing || shotsMissing || workersMissing) && styles.modalSaveOff,
+                (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing) &&
+                  styles.modalSaveOff,
               ]}
               onPress={submit}
-              disabled={saving || slipMissing || shotsMissing || workersMissing}
+              disabled={saving || slipMissing || shotsMissing || workersMissing || nameplateMissing}
               activeOpacity={0.8}
             >
               {saving ? (
@@ -1885,6 +1938,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   verdictBadText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.danger, fontWeight: "700" },
+  workerSlot: { marginTop: spacing.xs },
+  workerSlotLabel: {
+    fontSize: 12,
+    lineHeight: 20,
+    color: colors.textMuted,
+    marginBottom: 2,
+    fontWeight: "600",
+  },
   slipRow: {
     flexDirection: "row",
     alignItems: "center",

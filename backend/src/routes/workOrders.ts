@@ -303,7 +303,9 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     hasRequisitionSlip: w.attachments.some(
       (a) => a.role === "REQUISITION" && (!roundStart || a.createdAt >= roundStart)
     ),
-    hasNameplate: w.attachments.some((a) => a.role === "NAMEPLATE"),
+    hasNameplate: w.attachments.some(
+      (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
+    ),
     siteFileCount: w._count.attachments - w.attachments.length,
     // คนที่เข้าไปทำจริง บันทึกตอนปิดงาน
     workers: w.workers.map((x) => ({
@@ -1619,7 +1621,9 @@ const closeSchema = z.object({
     .optional(),
   // คนที่เข้าไปทำจริง — จำเป็นเพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
   // ถ้าไม่เก็บ จะไม่มีทางรู้ย้อนหลังว่าใครไปสาขาไหนวันไหน
-  workerIds: z.array(z.number().int().positive()).max(20).optional(),
+  //
+  // ไม่เกินสามคน เท่าที่ทีมหนึ่งไปกันจริง หน้าจอก็มีสามช่องตรงกัน
+  workerIds: z.array(z.number().int().positive()).max(3).optional(),
   // คนนอกระบบที่ไปด้วย เช่น ผู้รับเหมา — ไม่บังคับ
   otherWorkers: z.string().trim().max(300).nullable().optional(),
 });
@@ -1705,6 +1709,26 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
 
   /**
+   * ปิดงานต้องมีรูปป้ายรุ่นของรอบนี้ — ไว้ไล่เทียบว่าไปถูกเครื่อง
+   *
+   * รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง ส่วนรูปนี้
+   * ถ่ายตอนทำงานเสร็จ เทียบกันแล้วรู้ทันทีว่าช่างไปถูกเครื่องหรือเปล่า และรุ่น
+   * ที่สั่งอะไหล่ไปตรงกับตัวจริงไหม — รูปที่ถ่ายไว้ตั้งแต่ตอนเปิดใบงานใช้แทนไม่ได้
+   * เพราะมันตอบได้แค่ว่าเครื่องรุ่นอะไร ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
+   *
+   * ตอนเปิดใบงานยังไม่บังคับเหมือนเดิม เพราะคนเปิดใบงานบางทีรับแจ้งทางโทรศัพท์
+   */
+  const roundStart = await roundStartedAt(id);
+  const nameplate = await prisma.workOrderAttachment.count({
+    where: { workOrderId: id, role: "NAMEPLATE", createdAt: { gte: roundStart } },
+  });
+  if (nameplate === 0) {
+    return res.status(400).json({
+      error: "ต้องแนบรูปป้ายรุ่นของเครื่องที่ถ่ายรอบนี้ก่อนปิดงาน",
+    });
+  }
+
+  /**
    * เบิกอะไหล่ไปใช้แล้วต้องมีรูปใบเบิก (ใบเหลือง) ของรอบนี้ติดมาด้วย
    *
    * นับเฉพาะใบที่แนบ "หลังจากงานถูกจ่ายให้ทีมรอบล่าสุด" ไม่ใช่นับว่าเคยแนบไหม —
@@ -1716,7 +1740,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    */
   if ((body.parts?.length ?? 0) > 0) {
     const slip = await prisma.workOrderAttachment.count({
-      where: { workOrderId: id, role: "REQUISITION", createdAt: { gte: await roundStartedAt(id) } },
+      where: { workOrderId: id, role: "REQUISITION", createdAt: { gte: roundStart } },
     });
     if (slip === 0) {
       return res.status(400).json({
