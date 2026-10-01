@@ -13,7 +13,8 @@ export type HomeStackParamList = {
   Report: { kind: ReportKind; title: string };
   MachineDashboard: undefined;
   MachineImport: undefined;
-  WorkOrderList: undefined;
+  /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม */
+  WorkOrderList: { inbox?: boolean } | undefined;
   // มาจากกระดานได้ ถ้าเปิดจากเคสจะพกรหัสเคสกับข้อความตั้งต้นมาด้วย
   WorkOrderForm: { outageId?: number; presetTitle?: string; branchCode?: string } | undefined;
   WorkOrderDetail: { id: number };

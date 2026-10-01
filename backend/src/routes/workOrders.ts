@@ -430,8 +430,23 @@ async function writeLog(
 
 // ── รายการ ──────────────────────────────────────────────
 
+/**
+ * ขั้นที่รอบทบาทนี้อยู่ — หัวใจของกล่องงาน
+ *
+ * ใบงานเดินตามสายงานทีละขั้น และแต่ละขั้นมีเจ้าของขั้นชัดเจนอยู่แล้ว
+ * (WORK_ORDER_STAGE_ACTOR) กล่องงานจึงไม่ต้องเก็บข้อมูลใหม่อะไรเลย —
+ * มันคือคำถามเดียวกันกับ "ตอนนี้ลูกบอลอยู่ที่ใคร" ที่ระบบตอบได้อยู่แล้ว
+ *
+ * ทำเป็นตารางแยกว่า "ใบนี้อยู่ในกล่องของใคร" จะกลายเป็นความจริงชุดที่สอง
+ * ที่ต้องคอยให้ตรงกับสถานะใบงาน แล้ววันหนึ่งจะไม่ตรง — กล่องมีใบที่ทำไปแล้ว
+ * หรือใบที่ถึงคิวแต่ไม่โผล่ ซึ่งแย่กว่าไม่มีกล่องงานเลย
+ */
+function stagesWaitingOn(role: string): string[] {
+  return WORK_ORDER_STAGE_ORDER.filter((stage) => WORK_ORDER_STAGE_ACTOR[stage] === role);
+}
+
 const listQuery = z.object({
-  status: z.enum([...WORK_ORDER_STATUSES, "ACTIVE", "ALL"]).default("ACTIVE"),
+  status: z.enum([...WORK_ORDER_STATUSES, "ACTIVE", "ALL", "INBOX"]).default("ACTIVE"),
   assignedTo: z.string().optional(),
   branchCode: z.string().optional(),
   search: z.string().optional(),
@@ -443,12 +458,15 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const q = parsed.data;
   const keyword = q.search?.trim();
 
+  const inboxStages = stagesWaitingOn(req.auth!.role);
   const statusFilter =
     q.status === "ALL"
       ? {}
       : q.status === "ACTIVE"
         ? { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } }
-        : { status: q.status };
+        : q.status === "INBOX"
+          ? { status: { in: inboxStages } }
+          : { status: q.status };
 
   /**
    * เห็นเท่าที่เกี่ยวข้องกับตัวเอง
@@ -495,12 +513,54 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
   });
 
-  const counts = await prisma.workOrder.groupBy({ by: ["status"], _count: true });
+  /**
+   * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
+   *
+   * เดิมนับทั้งระบบโดยไม่สนขอบเขต หัวหน้าภาคจึงเห็นเลขที่รวมใบงานของภาคอื่น
+   * แล้วกดเข้าไปเจอรายการสั้นกว่าเลขบนชิป ซึ่งทำให้คนเลิกเชื่อตัวเลขทั้งหน้า
+   */
+  const counts = await prisma.workOrder.groupBy({
+    by: ["status"],
+    where: scope,
+    _count: true,
+  });
+  const byStatus = Object.fromEntries(counts.map((c) => [c.status, c._count])) as Record<
+    string,
+    number
+  >;
 
   res.json({
     rows: rows.map(listShape),
-    counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
+    counts: {
+      ...byStatus,
+      ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
+      INBOX: inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
+    },
   });
+});
+
+/**
+ * จำนวนใบงานในกล่องของคนที่ถามมา — สำหรับตัวเลขบนเมนูหน้าแรก
+ *
+ * แยกจาก /work-orders เพราะหน้าแรกอยากได้แค่ตัวเลข ไม่ได้อยากได้รายการ
+ * ดึงทั้งรายการมาเพื่อนับคือการโหลดข้อมูลเป็นร้อยใบทิ้งทุกครั้งที่เปิดแอป
+ */
+router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
+  const me = await prisma.user.findUnique({
+    where: { id: req.auth!.userId },
+    select: { region: true, team: true },
+  });
+  const scope =
+    req.auth!.role === "ADMIN"
+      ? {}
+      : req.auth!.role === "SUPERVISOR"
+        ? { branch: { region: me?.region ?? "\u0000ไม่มีภาค" } }
+        : teamScope(me?.team ?? null, req.auth!.userId);
+
+  const inbox = await prisma.workOrder.count({
+    where: { ...scope, status: { in: stagesWaitingOn(req.auth!.role) } },
+  });
+  res.json({ inbox });
 });
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */

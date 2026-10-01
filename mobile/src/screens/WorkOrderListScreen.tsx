@@ -50,12 +50,20 @@ export interface WorkOrderRow {
   attachmentCount: number;
 }
 
-type Filter = "ACTIVE" | "OPEN" | "IN_PROGRESS" | "DONE" | "ALL";
+type Filter = "INBOX" | "ACTIVE" | "ASSIGNED" | "IN_PROGRESS" | "DONE" | "ALL";
 
+/**
+ * ชิปกรองรายการ — ค่าที่ส่งต้องเป็นสถานะจริงที่เซิร์ฟเวอร์รู้จัก
+ *
+ * ชิป "รอช่างรับ" เดิมส่งคำว่า OPEN ซึ่งไม่ใช่สถานะในระบบ เซิร์ฟเวอร์ตอบ 400
+ * ทุกครั้งที่กด — กดแล้วเจอข้อความผิดพลาดแทนรายการ ตอนนี้ใช้ชื่อขั้นจริง
+ * ของระบบ จะได้ตรงกับป้ายสถานะบนการ์ดและไม่ต้องมีคำแปลซ้อนอีกชั้น
+ */
 const FILTERS: { value: Filter; label: string }[] = [
+  { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
-  { value: "OPEN", label: "รอช่างรับ" },
-  { value: "IN_PROGRESS", label: "ช่างรับแล้ว" },
+  { value: "ASSIGNED", label: "รอช่างนัดวัน" },
+  { value: "IN_PROGRESS", label: "รอช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },
 ];
@@ -86,11 +94,12 @@ export function formatDate(iso: string | null) {
   return at.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", dateStyle: "medium" });
 }
 
-export default function WorkOrderListScreen({ navigation }: Props) {
+export default function WorkOrderListScreen({ navigation, route }: Props) {
   useWideLayout();
   const [rows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
-  const [filter, setFilter] = useState<Filter>("ACTIVE");
+  // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที
+  const [filter, setFilter] = useState<Filter>(route.params?.inbox ? "INBOX" : "ACTIVE");
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState("");
   // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
@@ -167,8 +176,7 @@ export default function WorkOrderListScreen({ navigation }: Props) {
             >
               <Text style={[styles.chipText, filter === f.value && styles.chipTextOn]}>
                 {f.label}
-                {f.value === "OPEN" && counts.OPEN ? ` (${counts.OPEN})` : ""}
-                {f.value === "IN_PROGRESS" && counts.IN_PROGRESS ? ` (${counts.IN_PROGRESS})` : ""}
+                {counts[f.value] ? ` (${counts[f.value]})` : ""}
               </Text>
             </TouchableOpacity>
           ))}

@@ -1,6 +1,8 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { StyleSheet, Text } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useFocusEffect } from "@react-navigation/native";
+import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { colors, spacing } from "../theme";
@@ -11,8 +13,47 @@ type Props = NativeStackScreenProps<HomeStackParamList, "HomeMenu">;
 
 export default function HomeScreen({ navigation }: Props) {
   const { user } = useAuth();
+  const [inbox, setInbox] = useState(0);
+
+  /**
+   * ตัวเลขบนกล่องงาน โหลดใหม่ทุกครั้งที่กลับมาหน้าแรก
+   *
+   * เงียบเมื่อโหลดไม่ได้ เพราะเลขบนเมนูไม่ใช่เนื้อหาหลักของหน้า ถ้าเน็ตสะดุด
+   * ไม่ควรขึ้นข้อความผิดพลาดบังเมนูทั้งหน้าที่ยังกดใช้งานได้ตามปกติ
+   */
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      api
+        .get<{ inbox: number }>("/work-orders/inbox-count")
+        .then((res) => alive && setInbox(res.data.inbox))
+        .catch(() => undefined);
+      return () => {
+        alive = false;
+      };
+    }, [])
+  );
 
   const entries: MenuEntry[] = [
+    {
+      /*
+        กล่องงานอยู่บนสุด เพราะเป็นคำถามแรกที่ทุกคนเปิดแอปมาถาม —
+        "มีอะไรรอฉันอยู่บ้าง" เมนูใบงานซ่อมด้านล่างยังเป็นรายการรวมเหมือนเดิม
+        สำหรับตอนที่อยากดูทั้งหมด ไม่ใช่เฉพาะของตัวเอง
+      */
+      key: "Inbox",
+      label: "กล่องงานของฉัน",
+      description: inbox
+        ? `มี ${inbox} ใบงานรอคุณอยู่`
+        : "ใบงานที่ถึงคิวของคุณจะมาอยู่ที่นี่",
+      // ไม่ใช้ไอคอนถาดเอกสาร เพราะเมนูเบิกของใช้สิ้นเปลืองใช้อยู่แล้ว
+      // ไอคอนซ้ำกันสองอันในเมนูเดียวทำให้กวาดตาหาผิดอัน
+      icon: "briefcase",
+      tint: colors.warningSoft,
+      iconColor: colors.warning,
+      badge: inbox,
+      onPress: () => navigation.navigate("WorkOrderList", { inbox: true }),
+    },
     {
       key: "MachineDashboard",
       label: "ติดตามเครื่องเสีย",
