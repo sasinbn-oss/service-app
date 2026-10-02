@@ -1476,8 +1476,9 @@ npx expo start --web       # คอม: เปิดในเบราว์เ�
 **Backend (Render free tier):**
 - Root Directory: `backend`
 - Build Command: `npm install && npm run build`
-- Start Command: `npm run start:prod` (ของจริงที่ตั้งอยู่คือ
-  `npx prisma migrate deploy && npm run start` ซึ่งใช้ได้ปลอดภัยแล้ว — อ่านข้อถัดไป)
+- Start Command: `npm run start:prod` — **ควรเปลี่ยนมาใช้อันนี้** ของเดิมคือ
+  `npx prisma migrate deploy && npm run start` ซึ่งทำให้ deploy ล้มเมื่อ pooler เต็ม
+  (ดู "deploy ล้มเพราะ pooler เต็ม" ด้านล่าง)
 - Environment Variables: `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET` (ใส่ค่าเปล่าๆ ไม่ต้องมีเครื่องหมาย `"`)
   และค่า `STORAGE_*` ถ้าจะให้ช่างแนบรูปในใบงานได้
 - ห้ามตั้ง `PORT` เอง — Render กำหนดให้อัตโนมัติ
@@ -1518,6 +1519,47 @@ node dist/index.js`) จะพังดัง ๆ ให้เห็นทัน
 แย่กว่าเซิร์ฟเวอร์ที่ไม่ขึ้น เพราะอย่างหลังรู้ทันที
 
 Render free tier จะพักเซิร์ฟเวอร์เมื่อไม่มีคนใช้งาน ครั้งแรกที่เรียกอาจช้า 30-60 วินาที
+
+#### deploy ล้มเพราะ pooler เต็ม (EMAXCONNSESSION)
+
+อาการใน Logs ของ Render:
+
+```
+Running 'npx prisma migrate deploy && npm run start'
+Error: Schema engine error:
+FATAL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15
+==> Exited with status 1
+```
+
+**ไม่ใช่ migration ผิด แต่ต่อฐานข้อมูลไม่ติด** session pooler ของ Supabase รับได้
+15 client พร้อมกัน ส่วน Prisma เปิด connection ตามจำนวน CPU (ปกติ 9 ต่อ instance)
+ตอน deploy ตัวเก่ายังไม่ตายแต่ตัวใหม่ขึ้นมาแล้ว จึงมีสองชุดพร้อมกัน = 18 เกินโควตา
+
+**ทุก deploy จึงมีสิทธิ์ล้มแบบนี้ ไม่ใช่เรื่องบังเอิญ** และเพราะมี `&&` คั่น
+migrate ที่ล้มจะตัดไม่ให้เซิร์ฟเวอร์สตาร์ทเลย แอปทั้งระบบขึ้นว่า
+"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" ทั้งที่โค้ดไม่มีอะไรผิด
+
+แก้สองชั้น:
+
+1. **ใส่ `connection_limit` ใน Environment Variables ของ Render**
+   - `DATABASE_URL` ลงท้ายด้วย `?connection_limit=5` (ถ้ามี `?` อยู่แล้วใช้ `&`)
+   - `DIRECT_URL` ลงท้ายด้วย `?connection_limit=1` — migrate ใช้เส้นเดียวพอ
+
+   ห้าเส้นพอสำหรับงานจริง และสอง instance ซ้อนกันก็ยังแค่ 10 จาก 15
+
+2. **ตั้ง Start Command เป็น `npm run start:prod`** ซึ่งตอนนี้เรียก
+   `scripts/start-prod.js` ที่
+   - บังคับ `connection_limit=1` ตอน migrate ให้เอง ไม่ต้องรอใครไปตั้ง
+   - **ลองใหม่ถึง 6 ครั้ง** (5·10·20·30·30 วินาที) เมื่อเป็นปัญหาการต่อ —
+     ช่วงที่ตัวเก่าปล่อย connection ใช้เวลาไม่กี่สิบวินาที รอแล้วลองใหม่ก็ผ่าน
+   - **ไม่ลองใหม่** เมื่อเป็นความผิดพลาดที่ลองกี่ครั้งก็ไม่หาย เช่นรหัสผ่านผิด
+     หรือ migration ชนกัน — ตายทันทีใน 1 วินาที ไม่วนให้เสียเวลา
+   - ยังกั้นเซิร์ฟเวอร์ไว้หลัง migrate เหมือนเดิม โค้ดใหม่บนฐานข้อมูลเก่า
+     แย่กว่าเซิร์ฟเวอร์ที่ไม่ขึ้น
+
+**ถ้าติดอยู่ตอนนี้และต้องการให้ขึ้นเดี๋ยวนี้** connection ที่ค้างมาจาก instance เก่า
+กับรอบที่ crash ไปแล้ว — ปล่อยไว้สักสองสามนาทีแล้วกด Manual Deploy ใหม่
+หรือเข้า Supabase → Database → Connection pooling ตัด connection ที่ค้างทิ้ง
 
 #### แอปขึ้นว่า "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" — ไล่ตรงไหน
 
