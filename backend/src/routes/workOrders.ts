@@ -1990,6 +1990,57 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /** เปิดใหม่ เผื่อปิดผิดใบ — แอดมินเท่านั้น เพราะเป็นการย้อนสิ่งที่บันทึกไปแล้ว */
+/**
+ * ลบใบงานถาวร — แอดมินเท่านั้น
+ *
+ * ต่างจากยกเลิก: ยกเลิกเก็บใบไว้พร้อมประวัติว่าใครยกเลิกเมื่อไหร่ ส่วนลบคือหายไปเลย
+ * มีไว้สำหรับใบที่ไม่ควรมีอยู่ตั้งแต่แรก — เปิดผิดสาขา เปิดซ้ำ หรือใบที่ลองระบบ
+ * ใบที่เปิดถูกแต่ไม่ได้ทำแล้ว ควรใช้ยกเลิก เพราะเป็นเรื่องที่เกิดขึ้นจริงและควรมีร่องรอย
+ *
+ * ของที่หายไปด้วย: อะไหล่ที่บันทึกไว้ ประวัติทั้งหมด คนที่เข้าปฏิบัติงาน
+ * และไฟล์แนบทั้งถัง (ตารางลูกผูก onDelete: Cascade ไว้แล้ว ส่วนไฟล์ในถังลบตามให้)
+ *
+ * ไม่แตะเคสบนกระดาน — อาการที่คนบันทึกไว้ยังเป็นอาการที่เจอจริง การลบใบงาน
+ * ไม่ได้แปลว่าเครื่องไม่เคยเสีย พอไม่มีใบงานค้าง กระดานจะกลับมาขึ้นปุ่มสร้างใบงานเอง
+ */
+router.delete("/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+
+  // อ่าน objectKey ไว้ก่อนลบ เพราะพอแถวหายแล้วจะไม่เหลืออะไรชี้ไปหาไฟล์ในถัง
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      code: true,
+      attachments: { select: { objectKey: true } },
+      _count: { select: { parts: true, logs: true, attachments: true, workers: true } },
+    },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+
+  await prisma.workOrder.delete({ where: { id } });
+
+  // ลบไฟล์หลังลบแถว — ลบไฟล์ไม่ผ่านแล้วหยุดไว้แค่นั้น จะเหลือใบงานที่สั่งลบไปแล้ว
+  // ส่วนไฟล์ที่ค้างในถังไม่มีใครเปิดถึง เพราะไม่มีแถวชี้ไปหาแล้ว
+  let fileErrors = 0;
+  for (const a of wo.attachments) {
+    if (!a.objectKey) continue;
+    try {
+      await deleteObject(a.objectKey);
+    } catch (error) {
+      fileErrors += 1;
+      console.error("file delete failed", error);
+    }
+  }
+
+  console.warn(
+    `[DELETE work-order] ${wo.code} โดย userId=${req.auth!.userId} — ` +
+      `อะไหล่ ${wo._count.parts} · ประวัติ ${wo._count.logs} · ไฟล์ ${wo._count.attachments}`
+  );
+
+  res.json({ ok: true, code: wo.code, removed: wo._count, fileErrors });
+});
+
 router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });

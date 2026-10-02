@@ -182,6 +182,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   // รายการไฟล์ที่การ์ดไฟล์แนบโหลดมาแล้ว — ยืมมาใช้ต่อในการ์ดผลการทำงาน
   // จะได้ไม่ต้องยิงขอรายการเดิมซ้ำอีกรอบ (รูปย่อเป็น data URL ก้อนใหญ่)
   const [files, setFiles] = useState<Attachment[]>([]);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -263,6 +264,53 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const closeFiles = order.closedAt
     ? files.filter((f) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt)
     : [];
+
+  /**
+   * ลบถาวร — บอกให้ครบก่อนว่าอะไรจะหายไปด้วย
+   *
+   * ของที่หายไปพร้อมใบงานไม่ได้มีแค่ตัวใบ ปุ่มที่ถามแค่ "แน่ใจไหม" โดยไม่บอกว่า
+   * จะเสียอะไร คือปุ่มที่คนกดยืนยันโดยไม่รู้ว่ากำลังยืนยันอะไร
+   */
+  function confirmDelete() {
+    const o = order!;
+    const parts = [
+      o.waitingParts.length + o.parts.length > 0
+        ? `อะไหล่ ${o.waitingParts.length + o.parts.length} รายการ`
+        : null,
+      files.length > 0 ? `ไฟล์แนบ ${files.length} ไฟล์` : null,
+      o.logs.length > 0 ? `ประวัติ ${o.logs.length} รายการ` : null,
+      o.workers.length > 0 ? `ผู้เข้าปฏิบัติงาน ${o.workers.length} คน` : null,
+    ].filter(Boolean);
+
+    showAlert(
+      `ลบ ${o.code} ถาวร`,
+      [
+        "ใบงานนี้จะหายไปทั้งใบ กู้คืนไม่ได้",
+        parts.length > 0 ? `หายไปด้วย: ${parts.join(" · ")}` : null,
+        o.closedAt
+          ? "ใบนี้ปิดงานไปแล้ว — ถ้าแค่ต้องการเอาออกจากรายการ ควรเก็บไว้เป็นหลักฐานมากกว่า"
+          : "ถ้าใบนี้เปิดถูกแต่ไม่ได้ทำแล้ว ใช้ยกเลิกแทน จะได้เหลือร่องรอยว่าใครยกเลิกเมื่อไหร่",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      [
+        { text: "ไม่ลบ", style: "cancel" },
+        { text: "ลบถาวร", style: "destructive", onPress: doDelete },
+      ]
+    );
+  }
+
+  async function doDelete() {
+    setDeleting(true);
+    try {
+      await api.delete(`/work-orders/${id}`);
+      navigation.back();
+    } catch (e) {
+      showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const tone = statusTone(order.status);
   const done = order.status === "DONE" || order.status === "CANCELLED";
@@ -711,6 +759,29 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           </View>
         ))}
       </View>
+
+      {/*
+        ลบถาวร — แอดมินเท่านั้น และอยู่ท้ายสุดโดยตั้งใจ
+
+        ต่างจากยกเลิก: ยกเลิกเก็บใบไว้พร้อมประวัติว่าใครยกเลิกเมื่อไหร่
+        ส่วนลบคือหายไปทั้งใบ มีไว้สำหรับใบที่ไม่ควรมีอยู่ตั้งแต่แรก
+        — เปิดผิดสาขา เปิดซ้ำ หรือใบที่ลองระบบ
+      */}
+      {user?.role === "ADMIN" ? (
+        <TouchableOpacity
+          style={styles.deleteRow}
+          onPress={confirmDelete}
+          disabled={deleting}
+          activeOpacity={0.7}
+        >
+          {deleting ? (
+            <ActivityIndicator color={colors.danger} size="small" />
+          ) : (
+            <Ionicons name="trash-outline" size={16} color={colors.danger} />
+          )}
+          <Text style={styles.deleteText}>ลบใบงานนี้ถาวร</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <RollbackModal
         visible={rollbackOpen}
@@ -2238,6 +2309,15 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   verdictBadText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.danger, fontWeight: "700" },
+  deleteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    marginTop: spacing.sm,
+  },
+  deleteText: { fontSize: 13, lineHeight: 21, color: colors.danger, fontWeight: "700" },
   skipRow: {
     flexDirection: "row",
     alignItems: "center",
