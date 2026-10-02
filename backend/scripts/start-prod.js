@@ -20,6 +20,7 @@
  * เพราะโค้ดใหม่ที่วิ่งบนฐานข้อมูลเก่าแย่กว่าเซิร์ฟเวอร์ที่ไม่ขึ้น — อย่างหลังรู้ทันที
  */
 const { spawnSync, spawn } = require("child_process");
+const { existsSync } = require("fs");
 const path = require("path");
 
 const MAX_TRIES = 6;
@@ -71,8 +72,24 @@ function migrate() {
     process.stdout.write(out);
 
     if (r.status === 0) {
+      /**
+       * ยังไม่ได้ build = มีคนเอาคำสั่งนี้ไปใส่ช่อง Build Command
+       *
+       * เจอมาแล้วของจริง: ใส่ผิดช่องแล้ว build ไม่เคยรัน พอหา dist ไม่เจอ
+       * Node โยน MODULE_NOT_FOUND ซึ่งไม่ได้บอกเลยว่าต้นเหตุคือตั้งค่าผิดช่อง
+       */
+      const entry = path.join(__dirname, "..", "dist", "index.js");
+      if (!existsSync(entry)) {
+        console.error(
+          "[start-prod] ไม่พบ dist/index.js — ยังไม่ได้ build\n" +
+            "  คำสั่งนี้ต้องอยู่ใน Start Command ไม่ใช่ Build Command\n" +
+            "  Build Command  = npm install && npm run build\n" +
+            "  Start Command  = npm run start:prod"
+        );
+        process.exit(1);
+      }
       console.log("[start-prod] migration เรียบร้อย — สตาร์ทเซิร์ฟเวอร์");
-      const server = spawn(process.execPath, [path.join(__dirname, "..", "dist", "index.js")], {
+      const server = spawn(process.execPath, [entry], {
         stdio: "inherit",
       });
       server.on("exit", (code) => process.exit(code ?? 1));
