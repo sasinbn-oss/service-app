@@ -73,6 +73,11 @@ export function workStatusForStage(
     case "AWAITING_QUOTE":
     case "AWAITING_PAYMENT":
       return "WAITING_PAYMENT";
+    // รอแอดมินเบิกของออกจากคลัง — ต้องตั้งค่าจริง ไม่ใช่ปล่อยไว้เฉย ๆ
+    // เพราะขั้นก่อนหน้าอาจเป็นขั้นรับเงิน ซึ่งทิ้ง "รอลูกค้าจ่ายเงิน" ค้างไว้
+    // ทั้งที่ลูกค้าจ่ายไปแล้ว แล้วกระดานจะโชว์ว่ายังรอเงินอยู่
+    case "PARTS_REQUESTED":
+      return "WAITING_PARTS";
     case "PARTS_CHECKED":
     case "ASSIGNED":
     case "IN_PROGRESS":
@@ -165,11 +170,20 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
 /** ลำดับของขั้น ใช้ตัดสินว่าใบงานเดินหน้าหรือถอยหลัง */
 export const WORK_ORDER_STAGE_ORDER = [
   "NEW",
-  "PARTS_REQUESTED",
-  // สองขั้นนี้ผ่านเฉพาะงานที่ต้องขายอะไหล่ให้ลูกค้าแฟรนไชส์ — ดู needsCustomerQuote()
-  // งานที่ไม่เข้าเงื่อนไขจะข้ามไปขั้นจ่ายงานเลย และแถบขั้นตอนขึ้นว่าข้าม
+  /**
+   * สองขั้นนี้มาก่อนเบิกอะไหล่ ไม่ใช่หลัง
+   *
+   * ผ่านเฉพาะงานที่ต้องขายอะไหล่ให้ลูกค้าแฟรนไชส์ — ดู needsCustomerQuote()
+   * งานที่ไม่เข้าเงื่อนไขข้ามไปขั้นเบิกอะไหล่เลย และแถบขั้นตอนขึ้นว่าข้าม
+   *
+   * เก็บเงินให้จบก่อนของออกจากคลัง เพราะของที่เบิกออกไปแล้วเอากลับเข้าคลัง
+   * ไม่ได้ง่าย ๆ ถ้าลูกค้าไม่ตกลงราคา — ใบเบิกถูกตัดไปแล้ว ของอยู่กับช่าง
+   * และคนที่ต้องตามเก็บเงินคือคนที่ไม่ได้เป็นคนตัดสินใจเบิก
+   */
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
+  // แอดมินเบิกอะไหล่ออกจากคลัง — ระบุคลังและเลขใบเบิกของแต่ละตัว
+  "PARTS_REQUESTED",
   "PARTS_CHECKED",
   "ASSIGNED",
   "IN_PROGRESS",
@@ -385,6 +399,32 @@ export function isCompanyBranch(branchCode: string): boolean {
   return branchCode.trim().toUpperCase().startsWith("C");
 }
 
+/**
+ * ประกันเครื่องมีอายุ 3 ปีนับจากวันเปิดร้าน
+ *
+ * เป็นเงื่อนไขมาตรฐานของทุกสาขา จึงคิดเอาจากวันเปิดร้านแทนที่จะให้กรอกทีละสาขา —
+ * ทะเบียนจริงมีวันเปิดร้านครบทั้ง 1,204 สาขา แต่ไม่มีวันหมดประกันสักสาขาเดียว
+ * ถ้ารอให้กรอก ช่องนี้จะว่างตลอดไปและขั้นเสนอราคาจะเดาผิดทั้งระบบ
+ */
+export const WARRANTY_YEARS = 3;
+
+/**
+ * วันหมดประกันของสาขา — คิดจากวันเปิดร้าน เว้นแต่มีคนกรอกวันเฉพาะไว้
+ *
+ * ค่าที่กรอกเองชนะกฎ 3 ปี เพราะสัญญาบางฉบับต่างออกไป และคนที่ตั้งใจกรอก
+ * วันที่เจาะจงย่อมมีเอกสารอยู่ในมือ — แต่ไม่ใช่สิ่งที่ต้องทำเป็นปกติ
+ */
+export function warrantyEndFor(
+  openedAt: Date | null | undefined,
+  explicit?: Date | null
+): Date | null {
+  if (explicit) return explicit;
+  if (!openedAt) return null;
+  const end = new Date(openedAt.getTime());
+  end.setFullYear(end.getFullYear() + WARRANTY_YEARS);
+  return end;
+}
+
 /** หมดประกันหรือยัง — ว่าง = ไม่รู้ ต่างจาก false ที่แปลว่ายังไม่หมด */
 export function isWarrantyExpired(
   warrantyExpiresAt: Date | null | undefined,
@@ -405,19 +445,22 @@ export function isWarrantyExpired(
  * สามเงื่อนไขพร้อมกัน — สาขาบริษัท (รหัส C) ไม่ต้องเพราะเครื่องเป็นของบริษัทเอง
  * งานที่ไม่ใช้อะไหล่ไม่มีอะไรให้ขาย และของในประกันผู้ขายรับผิดชอบอยู่แล้ว
  *
- * ไม่มีวันหมดประกันบันทึกไว้ = ถือว่าหมดแล้ว เพราะทะเบียนสาขาส่วนใหญ่ยังไม่มี
- * คอลัมน์นี้ ถ้าตีว่า "ยังอยู่ในประกัน" ขั้นเสนอราคาจะไม่เคยทำงานเลย —
- * แอดมินข้ามขั้นนี้ได้ถ้าที่จริงอยู่ในประกัน
+ * วันหมดประกันคิดจากวันเปิดร้าน + 3 ปี จึงตอบได้เกือบทุกสาขา เหลือที่ตอบไม่ได้
+ * เฉพาะสาขาที่ไม่รู้แม้แต่วันเปิดร้าน ซึ่งถือว่าหมดประกันแล้วไว้ก่อน — ตีว่า
+ * "ยังอยู่ในประกัน" แล้วส่งช่างไปใส่อะไหล่ฟรี เสียหายกว่าการถามราคาเกินจำเป็น
+ * และแอดมินข้ามขั้นนี้ได้ถ้าที่จริงอยู่ในประกัน
  */
 export function needsCustomerQuote(opts: {
   branchCode: string;
   needsParts: boolean | null;
+  openedAt?: Date | null;
   warrantyExpiresAt: Date | null;
   now?: Date;
 }): boolean {
   if (isCompanyBranch(opts.branchCode)) return false;
   if (opts.needsParts !== true) return false;
-  return isWarrantyExpired(opts.warrantyExpiresAt, opts.now) !== false;
+  const end = warrantyEndFor(opts.openedAt, opts.warrantyExpiresAt);
+  return isWarrantyExpired(end, opts.now) !== false;
 }
 
 export function workOrderCode(id: number): string {

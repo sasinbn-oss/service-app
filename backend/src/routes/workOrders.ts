@@ -57,6 +57,7 @@ import {
   isCompanyBranch,
   isValidMachineCode,
   isWarrantyExpired,
+  warrantyEndFor,
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
@@ -269,10 +270,14 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     // สาขาบริษัทไม่มีประกัน ตัดออกตั้งแต่ตรงนี้ ไม่ปล่อยให้หน้าจอไปตัดสินใจเอง
     // ว่าจะซ่อนไหม ไม่งั้นวันหลังมีหน้าจอที่สามแล้วลืมซ่อน
     branchIsCompany: isCompanyBranch(w.branch.code),
-    branchWarrantyExpiresAt: isCompanyBranch(w.branch.code) ? null : w.branch.warrantyExpiresAt,
+    // วันหมดประกันคิดจากวันเปิดร้าน + 3 ปี เว้นแต่มีคนกรอกวันเฉพาะไว้
+    // คิดที่เซิร์ฟเวอร์ที่เดียว หน้าจอจึงไม่ต้องรู้ว่ากฎกี่ปี
+    branchWarrantyExpiresAt: isCompanyBranch(w.branch.code)
+      ? null
+      : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt),
     branchWarrantyExpired: isCompanyBranch(w.branch.code)
       ? null
-      : isWarrantyExpired(w.branch.warrantyExpiresAt),
+      : isWarrantyExpired(warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt)),
     machineCode: w.machine?.code ?? null,
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
@@ -357,6 +362,7 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     needsQuote: needsCustomerQuote({
       branchCode: w.branch.code,
       needsParts: w.needsParts,
+      openedAt: w.branch.openedAt,
       warrantyExpiresAt: w.branch.warrantyExpiresAt,
     }),
     hasNameplate: w.attachments.some(
@@ -1386,7 +1392,27 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "บอกว่าต้องใช้อะไหล่ ต้องระบุอย่างน้อยหนึ่งรายการ" });
   }
 
-  const nextStatus = needsParts ? "PARTS_REQUESTED" : "PARTS_CHECKED";
+  /**
+   * ตัดสินตั้งแต่ตรงนี้ว่าต้องเสนอราคาก่อนไหม
+   *
+   * เงื่อนไขทั้งสามข้อ (สาขาแฟรนไชส์ · ใช้อะไหล่ · หมดประกัน) รู้ครบแล้วตั้งแต่
+   * หัวหน้าภาคระบุอะไหล่ ไม่ต้องรอผลเช็คสต็อก — และต้องตัดสินตรงนี้ เพราะ
+   * ขั้นเสนอราคาอยู่ก่อนเบิกอะไหล่แล้ว ไม่ใช่หลัง
+   */
+  const wo = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: { branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } } },
+  });
+  const quoteFirst =
+    needsParts &&
+    needsCustomerQuote({
+      branchCode: wo.branch.code,
+      needsParts: true,
+      openedAt: wo.branch.openedAt,
+      warrantyExpiresAt: wo.branch.warrantyExpiresAt,
+    });
+
+  const nextStatus = !needsParts ? "PARTS_CHECKED" : quoteFirst ? "AWAITING_QUOTE" : "PARTS_REQUESTED";
 
   await prisma.$transaction(async (tx) => {
     // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
@@ -1397,7 +1423,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
         status: nextStatus,
         needsParts,
         // เลิกรออะไหล่แล้ว ถ้าเคยขึ้นสถานะนี้ไว้จากรอบก่อน
-        ...(needsParts ? {} : { workStatus: null }),
+        ...(needsParts ? { workStatus: workStatusForStage(nextStatus) } : { workStatus: null }),
       },
     });
     await writeLog(
@@ -1406,7 +1432,12 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       req.auth!.userId,
       needsParts ? "PARTS_REQUESTED" : "NO_PARTS",
       nextStatus,
-      note || (needsParts ? null : "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง")
+      note ||
+        (!needsParts
+          ? "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง"
+          : quoteFirst
+          ? "อะไหล่ขายลูกค้าแฟรนไชส์ — ต้องเสนอราคาและเก็บเงินก่อนเบิกของ"
+          : null)
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -1467,21 +1498,8 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   const anyOut = parsed.data.results.some((r) => !r.inStock);
   const now = new Date();
 
-  const wo = await prisma.workOrder.findUniqueOrThrow({
-    where: { id },
-    select: {
-      needsParts: true,
-      branch: { select: { code: true, warrantyExpiresAt: true } },
-    },
-  });
-  const nextStage = needsCustomerQuote({
-    branchCode: wo.branch.code,
-    needsParts: wo.needsParts,
-    warrantyExpiresAt: wo.branch.warrantyExpiresAt,
-    now,
-  })
-    ? "AWAITING_QUOTE"
-    : "PARTS_CHECKED";
+  // เบิกเสร็จแล้วไปขั้นจ่ายงานเสมอ — เรื่องราคาและเงินจบไปก่อนถึงขั้นนี้แล้ว
+  const nextStage = "PARTS_CHECKED";
 
   await prisma.$transaction(async (tx) => {
     for (const r of parsed.data.results) {
@@ -1500,8 +1518,6 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     await tx.workOrder.update({
       where: { id },
       data: {
-        // อะไหล่ที่ขายให้ลูกค้าแฟรนไชส์ต้องเสนอราคาและเก็บเงินก่อนส่งช่าง
-        // งานที่ไม่เข้าเงื่อนไขข้ามสองขั้นนี้ไปรอจ่ายงานเลย
         status: nextStage,
         // สถานะการดำเนินการมาจากขั้น ไม่ต้องรอใครมากรอกซ้ำ
         workStatus: workStatusForStage(nextStage, { anyPartOutOfStock: anyOut }),
@@ -1555,9 +1571,9 @@ router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
     await prisma.$transaction(async (tx) => {
       await tx.workOrder.update({
         where: { id },
-        data: { status: "PARTS_CHECKED", workStatus: workStatusForStage("PARTS_CHECKED") },
+        data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },
       });
-      await writeLog(tx, id, req.auth!.userId, "QUOTE_SKIPPED", "PARTS_CHECKED", parsed.data.note);
+      await writeLog(tx, id, req.auth!.userId, "QUOTE_SKIPPED", "PARTS_REQUESTED", parsed.data.note);
       await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
     }, STAGE_TX);
     const skipped = await prisma.workOrder.findUniqueOrThrow({
@@ -1619,15 +1635,15 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
-      data: { status: "PARTS_CHECKED", workStatus: workStatusForStage("PARTS_CHECKED") },
+      data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },
     });
     await writeLog(
       tx,
       id,
       req.auth!.userId,
       "PAID",
-      "PARTS_CHECKED",
-      parsed.data.note || "ลูกค้าจ่ายเงินแล้ว ส่งต่อให้หัวหน้าภาคจ่ายงาน"
+      "PARTS_REQUESTED",
+      parsed.data.note || "ลูกค้าจ่ายเงินแล้ว — เบิกอะไหล่ออกจากคลังได้"
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);

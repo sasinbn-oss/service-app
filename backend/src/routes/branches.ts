@@ -13,6 +13,7 @@ import {
   parseCancelledWorkbook,
   planCancelledImport,
 } from "../machines/cancellationImport";
+import { warrantyEndFor } from "../utils/constants";
 
 const router = Router();
 
@@ -94,7 +95,19 @@ router.get("/", requireAuth, async (req, res) => {
     orderBy: { name: "asc" },
     ...(keyword ? { take: 20 } : {}),
   });
-  res.json(branches);
+  /**
+   * ส่งวันหมดประกันที่คิดแล้วออกไป ไม่ใช่ค่าดิบในตาราง
+   *
+   * กฎ "3 ปีนับจากเปิดร้าน" อยู่ที่เซิร์ฟเวอร์ที่เดียว หน้าจอจึงไม่ต้องรู้ว่ากี่ปี
+   * และไม่มีทางที่หน้าจอสองหน้าจะคิดคนละแบบ — ค่าในตารางเป็นการกรอกทับเฉพาะราย
+   * ซึ่งทะเบียนจริงยังไม่มีสักสาขา
+   */
+  res.json(
+    branches.map((b) => ({
+      ...b,
+      warrantyExpiresAt: warrantyEndFor(b.openedAt, b.warrantyExpiresAt),
+    }))
+  );
 });
 
 /**

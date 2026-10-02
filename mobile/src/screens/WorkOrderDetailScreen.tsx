@@ -609,9 +609,18 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
         {stages.map((stage, i) => {
           const currentIndex = stages.findIndex((x) => x.value === order.status);
-          // ขั้นเช็คคลังถูกข้ามเมื่อไม่ใช้อะไหล่ ต้องเห็นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
+          /**
+           * ขั้นที่ถูกข้าม ต้องเห็นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
+           *
+           * เบิกอะไหล่ถูกข้ามเมื่องานนี้ไม่ใช้อะไหล่ ส่วนเสนอราคากับรับเงินถูกข้าม
+           * เมื่อไม่ใช่ของที่ขายลูกค้า — และตอนนี้สองขั้นนั้นอยู่ก่อนเบิกอะไหล่
+           * ถ้าไม่ทำเครื่องหมายไว้ ใบที่ไม่ต้องเสนอราคาจะขึ้นว่าทำสองขั้นนั้นไปแล้ว
+           * ทั้งที่ไม่เคยทำ เพราะมันอยู่ก่อนขั้นปัจจุบัน
+           */
           const skipped =
-            stage.value === "PARTS_REQUESTED" && order.needsParts === false;
+            (stage.value === "PARTS_REQUESTED" && order.needsParts === false) ||
+            ((stage.value === "AWAITING_QUOTE" || stage.value === "AWAITING_PAYMENT") &&
+              order.needsQuote === false);
           const state = skipped
             ? "skipped"
             : order.status === "CANCELLED"
