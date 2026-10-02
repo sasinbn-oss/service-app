@@ -1095,8 +1095,15 @@ function StageModal({
         order.waitingParts.map((p) => [p.sparePartId, { inStock: p.inStock, warehouse: p.warehouse }])
       )
     );
-    // เปิดซ้ำให้เห็นเลขที่เคยกรอกไว้ ไม่ใช่ช่องว่างที่ต้องหาเลขมาพิมพ์ใหม่
-    setRequisitionNo(order.waitingParts.find((p) => p.requisitionNo)?.requisitionNo ?? "");
+    /**
+     * เปิดซ้ำให้เห็นเลขที่เคยกรอกไว้ ไม่ใช่ช่องว่างที่ต้องหาเลขมาพิมพ์ใหม่
+     *
+     * แต่ไม่เอาเลขของตัวที่เบิกไปแล้วมาตั้งต้น — รอบนี้เป็นการเบิกของที่เพิ่งเข้ามา
+     * ซึ่งเป็นใบเบิกคนละใบ ถ้าเติมเลขเก่าไว้ให้ คนจะกดบันทึกผ่านโดยไม่ทันดู
+     * แล้วของสองรอบจะอ้างใบเบิกใบเดียวกันทั้งที่เบิกคนละวัน
+     */
+    const pending = order.waitingParts.filter((p) => !(p.inStock === true && p.requisitionNo));
+    setRequisitionNo(pending.find((p) => p.requisitionNo)?.requisitionNo ?? "");
     // ทีมของสาขาเป็นค่าตั้งต้น เพราะเป็นทีมที่รับผิดชอบสาขานี้อยู่แล้ว
     // จ่ายข้ามทีมยังทำได้ แต่ต้องตั้งใจเลือก ไม่ใช่เผลอ
     setTeam(order.assignedTeam ?? order.suggestedTeam ?? null);
@@ -1135,7 +1142,8 @@ function StageModal({
         });
       } else if (order.status === "PARTS_REQUESTED") {
         await api.post(`/work-orders/${order.id}/parts-check`, {
-          results: order.waitingParts.map((p) => ({
+          // ส่งเฉพาะตัวที่ยังไม่ได้เบิก ตัวที่เบิกไปแล้วเซิร์ฟเวอร์ไม่แตะ
+          results: thisRound.map((p) => ({
             sparePartId: p.sparePartId,
             inStock: checks[p.sparePartId]?.inStock ?? false,
             warehouse: checks[p.sparePartId]?.warehouse ?? null,
@@ -1180,16 +1188,26 @@ function StageModal({
     }
   }
 
+  /**
+   * ตัวที่เบิกออกมาแล้วรอบก่อน ไม่ใช่เรื่องของรอบนี้
+   *
+   * ของที่หมดทำให้ใบงานค้างอยู่ขั้นนี้ แอดมินกลับมาอีกรอบตอนของเข้า —
+   * ตัวที่เบิกไปแล้วมีเลขใบเบิกของตัวเองจากรอบก่อน ต้องไม่ถูกเขียนทับ
+   * ด้วยเลขของรอบนี้ เพราะเป็นคนละใบคนละวัน
+   */
+  const issued = order.waitingParts.filter((p) => p.inStock === true && p.requisitionNo);
+  const thisRound = order.waitingParts.filter((p) => !(p.inStock === true && p.requisitionNo));
+
   const unchecked =
     order.status === "PARTS_REQUESTED" &&
-    order.waitingParts.some((p) => {
+    thisRound.some((p) => {
       const c = checks[p.sparePartId];
       return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse);
     });
-  // มีของอย่างน้อยหนึ่งตัว = ต้องเบิก = ต้องมีเลขใบเบิก
+  // มีของอย่างน้อยหนึ่งตัวในรอบนี้ = ต้องเบิก = ต้องมีเลขใบเบิก
   const needsRequisition =
     order.status === "PARTS_REQUESTED" &&
-    order.waitingParts.some((p) => checks[p.sparePartId]?.inStock === true) &&
+    thisRound.some((p) => checks[p.sparePartId]?.inStock === true) &&
     !requisitionNo.trim();
   // ขั้นเสนอราคาต้องมีเอกสาร เว้นแต่กดข้ามซึ่งต้องบอกเหตุผลแทน
   const quoteBlocked =
@@ -1286,11 +1304,25 @@ function StageModal({
                 />
                 <Text style={needsRequisition ? styles.warn : styles.linkedText}>
                   {needsRequisition
-                    ? "ต้องใส่เลขใบเบิกก่อน ถึงจะบันทึกได้ — ใช้กับอะไหล่ทุกตัวที่ตอบว่ามีของ"
-                    : "ใช้กับอะไหล่ทุกตัวที่ตอบว่ามีของ — ของที่หมดยังไม่ได้เบิก จึงไม่ต้องใส่"}
+                    ? "ต้องใส่เลขใบเบิกก่อน ถึงจะบันทึกได้ — ใช้กับอะไหล่ที่ตอบว่ามีของในรอบนี้"
+                    : "ใช้กับอะไหล่ที่ตอบว่ามีของในรอบนี้ — ของที่หมดยังไม่ได้เบิก จึงไม่ต้องใส่"}
                 </Text>
 
-                {order.waitingParts.map((part) => {
+                {issued.length > 0 ? (
+                  <View style={styles.issuedBox}>
+                    <Text style={styles.issuedTitle}>เบิกไปแล้วรอบก่อน</Text>
+                    {issued.map((p) => (
+                      <Text key={p.sparePartId} style={styles.issuedLine}>
+                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · ใบเบิก {p.requisitionNo}
+                      </Text>
+                    ))}
+                    <Text style={styles.issuedHint}>
+                      ไม่ต้องตอบซ้ำ และเลขใบเบิกข้างบนจะไม่ไปทับของรอบนี้
+                    </Text>
+                  </View>
+                ) : null}
+
+                {thisRound.map((part) => {
                   const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
                   return (
                     <View key={part.sparePartId} style={styles.checkItem}>
@@ -2145,6 +2177,19 @@ const styles = StyleSheet.create({
   },
   checkCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   checkName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  // ของที่เบิกไปแล้วรอบก่อน — อ่านอย่างเดียว ไม่ใช่ของที่ต้องตอบในรอบนี้
+  issuedBox: {
+    gap: 3,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    backgroundColor: colors.background,
+  },
+  issuedTitle: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.textMuted },
+  issuedLine: { fontSize: 12, lineHeight: 20, color: colors.text },
+  issuedHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingTop: 3 },
   optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
   optionTextOut: { color: colors.danger },
   stageRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 5 },

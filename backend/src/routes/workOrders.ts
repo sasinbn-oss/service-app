@@ -1472,11 +1472,23 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
 
   const waiting = await prisma.workOrderPart.findMany({
     where: { workOrderId: id, kind: "WAITING" },
-    select: { sparePartId: true },
+    select: { sparePartId: true, inStock: true, requisitionNo: true },
   });
-  const need = new Set(waiting.map((w) => w.sparePartId));
+
+  /**
+   * ตัวที่เบิกออกมาแล้วไม่ต้องตอบซ้ำ
+   *
+   * ของที่หมดทำให้ใบงานค้างอยู่ขั้นนี้รอของเข้า แอดมินจึงกลับมาหน้านี้อีกรอบ
+   * ตอนของมาถึง — ตัวที่เบิกไปแล้วรอบก่อนมีเลขใบเบิกของตัวเองอยู่แล้ว
+   * ถ้าบังคับให้ตอบใหม่ทุกตัว เลขใบเบิกรอบก่อนจะถูกเขียนทับด้วยเลขของรอบนี้
+   * ทั้งที่เป็นคนละใบ คนละวัน แล้วตามของในคลังย้อนหลังไม่ได้
+   */
+  const settled = new Set(
+    waiting.filter((w) => w.inStock === true && w.requisitionNo).map((w) => w.sparePartId)
+  );
+  const need = waiting.map((w) => w.sparePartId).filter((pid) => !settled.has(pid));
   const answered = new Set(parsed.data.results.map((r) => r.sparePartId));
-  const missing = [...need].filter((pid) => !answered.has(pid));
+  const missing = need.filter((pid) => !answered.has(pid));
   if (missing.length > 0) {
     return res.status(400).json({ error: "ต้องเช็คให้ครบทุกรายการก่อนจึงจะไปขั้นต่อไปได้" });
   }
@@ -1494,12 +1506,27 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     }
   }
 
-  // มีตัวไหนหมด = ทั้งใบต้องรออะไหล่ เพราะช่างไปแล้วก็ซ่อมไม่จบอยู่ดี
-  const anyOut = parsed.data.results.some((r) => !r.inStock);
+  /**
+   * มีตัวไหนหมด = ใบงานค้างอยู่ขั้นนี้ ไม่ส่งต่อ
+   *
+   * ช่างไปแล้วก็ซ่อมไม่จบอยู่ดีถ้าของไม่ครบ และการส่งต่อไปขั้นจ่ายงานทั้งที่
+   * ของยังไม่มา ทำให้ใบงานไปกองรอที่หัวหน้าภาคซึ่งทำอะไรไม่ได้ —
+   * คนที่ต้องทำอะไรต่อคือแอดมินที่ต้องตามของ ใบงานจึงควรค้างอยู่กับแอดมิน
+   *
+   * พอของมาถึง แอดมินกลับมาหน้าเดิม เปลี่ยนตัวที่หมดเป็นมีของ ใส่เลขใบเบิก
+   * ของรอบนั้น แล้วใบงานถึงจะเดินต่อ
+   */
+  const stillOut = waiting.some((w) => {
+    const answer = parsed.data.results.find((r) => r.sparePartId === w.sparePartId);
+    // ไม่ได้ตอบมา = ตัวที่เบิกไปแล้ว ถือว่าพร้อม
+    return answer ? !answer.inStock : false;
+  });
+  const anyOut = stillOut;
   const now = new Date();
 
-  // เบิกเสร็จแล้วไปขั้นจ่ายงานเสมอ — เรื่องราคาและเงินจบไปก่อนถึงขั้นนี้แล้ว
-  const nextStage = "PARTS_CHECKED";
+  // ของครบถึงไปขั้นจ่ายงาน — เรื่องราคาและเงินจบไปก่อนถึงขั้นนี้แล้ว
+  // ของไม่ครบก็ค้างอยู่ที่แอดมินรอของเข้า
+  const nextStage = anyOut ? "PARTS_REQUESTED" : "PARTS_CHECKED";
 
   await prisma.$transaction(async (tx) => {
     for (const r of parsed.data.results) {
@@ -1530,7 +1557,9 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       "PARTS_CHECKED",
       nextStage,
       parsed.data.note ||
-        (anyOut ? "มีอะไหล่ที่หมด — ขึ้นสถานะรออะไหล่" : "อะไหล่ครบทุกรายการ")
+        (anyOut
+          ? "มีอะไหล่ที่หมด — ใบงานรออยู่ที่ขั้นนี้ ของมาถึงแล้วค่อยใส่เลขใบเบิกอีกรอบ"
+          : "อะไหล่ครบทุกรายการ")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
