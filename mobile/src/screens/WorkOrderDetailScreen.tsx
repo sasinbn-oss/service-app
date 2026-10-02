@@ -26,7 +26,7 @@ import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
 import DateField from "../components/DateField";
 import Dropdown from "../components/Dropdown";
-import WorkOrderAttachments from "../components/WorkOrderAttachments";
+import WorkOrderAttachments, { Attachment, openAttachment } from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -109,8 +109,10 @@ interface WorkOrder {
   parts: PickedPart[];
   /** เคยแนบรูปใบเบิก (ใบเหลือง) ไว้แล้วหรือยัง — ใช้อะไหล่แล้วต้องมีถึงจะปิดงานได้ */
   hasRequisitionSlip: boolean;
-  /** เคยแนบรูปป้ายรุ่นไว้แล้วหรือยัง — ไม่บังคับ แต่ถ้ามีแล้วก็ไม่ต้องถามซ้ำ */
+  /** เคยแนบรูปป้ายรุ่นของรอบนี้แล้วหรือยัง */
   hasNameplate: boolean;
+  /** รอบปัจจุบันเริ่มเมื่อไหร่ — ใช้แยกว่าไฟล์ไหนเป็นของรอบที่ปิดงาน */
+  roundStartedAt: string | null;
   /** จำนวนรูป/วิดีโอหน้างาน (ไม่นับใบเหลืองกับป้ายรุ่น) — ต้องมีอย่างน้อยหนึ่งถึงจะปิดงานได้ */
   siteFileCount: number;
   /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
@@ -170,6 +172,9 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const [closing, setClosing] = useState(false);
   // ขยับเมื่อมีไฟล์ถูกแนบจากที่อื่นนอกการ์ดไฟล์แนบ เพื่อสั่งให้การ์ดโหลดใหม่
   const [filesKey, setFilesKey] = useState(0);
+  // รายการไฟล์ที่การ์ดไฟล์แนบโหลดมาแล้ว — ยืมมาใช้ต่อในการ์ดผลการทำงาน
+  // จะได้ไม่ต้องยิงขอรายการเดิมซ้ำอีกรอบ (รูปย่อเป็น data URL ก้อนใหญ่)
+  const [files, setFiles] = useState<Attachment[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -241,6 +246,16 @@ export default function WorkOrderDetailScreen({ route }: Props) {
       </View>
     );
   }
+
+  /**
+   * ไฟล์ที่ถูกแนบในรอบที่ปิดงาน
+   *
+   * ไม่มี roundStartedAt (ใบเก่ามากที่ไม่มีประวัติการจ่ายงาน) ก็เอาทั้งหมด
+   * ดีกว่าโชว์ว่าไม่มีรูปเลยทั้งที่มี
+   */
+  const closeFiles = order.closedAt
+    ? files.filter((f) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt)
+    : [];
 
   const tone = statusTone(order.status);
   const done = order.status === "DONE" || order.status === "CANCELLED";
@@ -340,7 +355,14 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         {order.symptom || order.workStatusLabel || order.waitingParts.length > 0 ? (
           <>
             <Row label="อาการ" value={order.symptom ?? "—"} />
-            <Row label="สถานะ" value={order.workStatusLabel ?? "ยังไม่ระบุ"} />
+            {/*
+              ไม่มีค่าที่กรอกไว้ก็บอกตามขั้นของใบงานแทน "ยังไม่ระบุ"
+
+              ขั้นของใบงานบอกได้อยู่แล้วว่าตอนนี้รออะไร คำว่า "ยังไม่ระบุ" จึงเป็น
+              การบอกว่าไม่รู้ ทั้งที่รู้ — และดูแปลกที่สุดบนใบที่ปิดไปแล้ว
+              ซึ่งขึ้นว่ายังไม่ระบุทั้งที่จบไปเรียบร้อย
+            */}
+            <Row label="สถานะ" value={order.workStatusLabel ?? order.statusLabel} />
             {order.waitingParts.length > 0 ? (
               <>
                 <Text style={styles.partsHead}>อะไหล่ที่ต้องใช้</Text>
@@ -391,6 +413,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         workOrderId={order.id}
         canEdit={!done || user?.role === "ADMIN"}
         reloadKey={filesKey}
+        onLoaded={setFiles}
       />
 
       {/*
@@ -440,6 +463,46 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             ช่างเปลี่ยนอะไหล่แล้วเครื่องยังไม่กลับมาก็มี และต้องเห็นว่าเป็นแบบนั้น
             ไม่ใช่กลบด้วยการถือว่าปิดงานแล้วจบ
           */}
+          {/*
+            ไฟล์ของรอบที่ปิดจริง ไม่ใช่ทุกรูปตั้งแต่เปิดใบงาน
+
+            ใบที่เข้าหน้างานหลายรอบมีรูปปนกันหลายรอบ คนที่เปิดมาดูใบที่ปิดแล้ว
+            อยากเห็นว่า "รอบที่จบ เขาถ่ายอะไรมา" ไม่ใช่กองรูปทั้งหมดตั้งแต่ต้น
+          */}
+          {closeFiles.length > 0 ? (
+            <>
+              <Text style={styles.partsHead}>รูปที่ส่งตอนปิดงาน</Text>
+              <View style={styles.closeFiles}>
+                {closeFiles.map((f) => (
+                  <TouchableOpacity
+                    key={f.id}
+                    style={styles.closeFile}
+                    activeOpacity={0.8}
+                    onPress={() => openAttachment(order.id, f)}
+                    accessibilityLabel={`เปิด ${f.fileName}`}
+                  >
+                    {f.thumbnailDataUrl ? (
+                      <Image source={{ uri: f.thumbnailDataUrl }} style={styles.closeThumb} />
+                    ) : (
+                      <View style={[styles.closeThumb, styles.slipBlank]}>
+                        <Ionicons
+                          name={f.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                          size={20}
+                          color={colors.textFaint}
+                        />
+                      </View>
+                    )}
+                    {f.roleLabel ? (
+                      <View style={styles.closeBadge}>
+                        <Text style={styles.closeBadgeText}>{f.roleLabel}</Text>
+                      </View>
+                    ) : null}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          ) : null}
+
           {order.outcomeVerdict === "CLEARED" ? (
             <View style={styles.verdictOk}>
               <Ionicons name="checkmark-circle" size={16} color={colors.success} />
@@ -1019,28 +1082,23 @@ function StageModal({
                           </Text>
                         </TouchableOpacity>
                       </View>
+                      {/*
+                        12 คลังเป็นชิปต่ออะไหล่หนึ่งตัว แปลว่าอะไหล่สามตัวก็ 36 ชิป
+                        กว่าจะเลื่อนถึงช่องเลขใบเบิกข้างล่าง — dropdown ย่อให้เหลือบรรทัดเดียว
+                      */}
                       {c.inStock === true ? (
-                        <View style={styles.options}>
-                          {warehouses.map((w) => (
-                            <TouchableOpacity
-                              key={w}
-                              style={[styles.option, c.warehouse === w && styles.optionOn]}
-                              onPress={() =>
-                                setChecks((v) => ({
-                                  ...v,
-                                  [part.sparePartId]: { inStock: true, warehouse: w },
-                                }))
-                              }
-                              activeOpacity={0.7}
-                            >
-                              <Text
-                                style={[styles.optionText, c.warehouse === w && styles.optionTextOn]}
-                              >
-                                {w}
-                              </Text>
-                            </TouchableOpacity>
-                          ))}
-                        </View>
+                        <Dropdown
+                          value={c.warehouse}
+                          placeholder="เลือกคลังที่มีของ"
+                          accessibilityLabel={`คลังที่มี ${part.partCode}`}
+                          options={warehouses.map((w) => ({ value: w, label: w }))}
+                          onChange={(next) =>
+                            setChecks((v) => ({
+                              ...v,
+                              [part.sparePartId]: { inStock: true, warehouse: next },
+                            }))
+                          }
+                        />
                       ) : null}
                     </View>
                   );
@@ -1918,6 +1976,19 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   modalSaveOff: { opacity: 0.6 },
+  closeFiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },
+  closeFile: { width: 76 },
+  closeThumb: { width: 76, height: 76, borderRadius: radius.sm, backgroundColor: colors.background },
+  closeBadge: {
+    position: "absolute",
+    left: 4,
+    top: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(15,23,42,0.78)",
+  },
+  closeBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
   verdictOk: {
     flexDirection: "row",
     alignItems: "center",

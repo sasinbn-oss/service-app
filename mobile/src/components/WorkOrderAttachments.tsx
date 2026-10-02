@@ -48,10 +48,32 @@ export interface Attachment {
   thumbnailDataUrl: string | null;
 }
 
+/**
+ * ขอลิงก์ไฟล์แล้วเปิด — แยกออกมาเพราะการ์ดผลการทำงานก็ต้องเปิดไฟล์เหมือนกัน
+ *
+ * ลิงก์มีอายุสั้นและขอใหม่ทุกครั้งที่กด ไม่ได้เก็บไว้ ที่เก็บไฟล์ไม่ได้เปิดสาธารณะ
+ * เพราะรูปในนั้นเป็นภาพในร้านของลูกค้า
+ */
+export async function openAttachment(workOrderId: number, row: Attachment) {
+  if (!row.available) {
+    showAlert("เปิดไฟล์ไม่ได้", "ไฟล์นี้ส่งขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ");
+    return;
+  }
+  try {
+    const res = await api.get<{ url: string }>(
+      `/work-orders/${workOrderId}/attachments/${row.id}/link`
+    );
+    await openUrl(res.data.url);
+  } catch (e) {
+    showAlert("เปิดไฟล์ไม่ได้", apiErrorMessage(e));
+  }
+}
+
 export default function WorkOrderAttachments({
   workOrderId,
   canEdit,
   reloadKey = 0,
+  onLoaded,
 }: {
   workOrderId: number;
   canEdit: boolean;
@@ -63,6 +85,8 @@ export default function WorkOrderAttachments({
    * ทั้งที่เพิ่งแนบไปเมื่อกี้
    */
   reloadKey?: number;
+  /** ส่งรายการที่โหลดมาให้หน้าจอแม่ใช้ต่อ จะได้ไม่ต้องยิงขอรายการเดิมซ้ำ */
+  onLoaded?: (rows: Attachment[]) => void;
 }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Attachment[]>([]);
@@ -74,12 +98,16 @@ export default function WorkOrderAttachments({
     try {
       const res = await api.get<{ rows: Attachment[] }>(`/work-orders/${workOrderId}/attachments`);
       setRows(res.data.rows);
+      onLoaded?.(res.data.rows);
     } catch {
       // เงียบไว้ ไฟล์แนบไม่ใช่เนื้อหาหลักของหน้า ถ้าโหลดไม่ได้ก็ไม่ควรบังหน้าจอ
       // ส่วนที่เหลือทั้งใบ ซึ่งเป็นข้อมูลที่คนเปิดมาดูจริง ๆ
     } finally {
       setLoading(false);
     }
+    // onLoaded ไม่อยู่ใน deps เพราะหน้าจอแม่ส่ง setState ตรง ๆ ซึ่งคงที่อยู่แล้ว
+    // ใส่เข้าไปจะกลายเป็นวนโหลดไม่จบถ้าวันหลังมีใครส่ง inline function มา
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workOrderId]);
 
   useEffect(() => {
@@ -105,18 +133,9 @@ export default function WorkOrderAttachments({
   }
 
   async function open(row: Attachment) {
-    if (!row.available) {
-      showAlert("เปิดไฟล์ไม่ได้", "ไฟล์นี้ส่งขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ");
-      return;
-    }
     setOpening(row.id);
     try {
-      const res = await api.get<{ url: string }>(
-        `/work-orders/${workOrderId}/attachments/${row.id}/link`
-      );
-      await openUrl(res.data.url);
-    } catch (e) {
-      showAlert("เปิดไฟล์ไม่ได้", apiErrorMessage(e));
+      await openAttachment(workOrderId, row);
     } finally {
       setOpening(null);
     }

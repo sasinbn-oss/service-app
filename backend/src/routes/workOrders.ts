@@ -303,6 +303,13 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     hasRequisitionSlip: w.attachments.some(
       (a) => a.role === "REQUISITION" && (!roundStart || a.createdAt >= roundStart)
     ),
+    /**
+     * รอบปัจจุบันเริ่มเมื่อไหร่ — หน้าจอใช้แยกว่าไฟล์ไหนเป็นของรอบที่ปิดงาน
+     *
+     * ใบงานหนึ่งใบเข้าหน้างานได้หลายรอบ กองไฟล์ทั้งใบจึงมีของหลายรอบปนกัน
+     * การ์ดผลการทำงานต้องโชว์เฉพาะของรอบที่ปิดจริง ไม่ใช่ทุกรูปตั้งแต่เปิดใบ
+     */
+    roundStartedAt: roundStart ?? null,
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
     ),
