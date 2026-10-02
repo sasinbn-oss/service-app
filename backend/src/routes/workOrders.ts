@@ -483,6 +483,21 @@ async function roundStartedAt(workOrderId: number): Promise<Date> {
   return wo?.createdAt ?? new Date(0);
 }
 
+/**
+ * เพดานเวลาของ transaction ที่เดินสายงานใบงาน
+ *
+ * Prisma ตั้งไว้ 5 วินาที ซึ่งพอสำหรับฐานข้อมูลที่อยู่เครื่องเดียวกัน แต่ของจริง
+ * อยู่คนละ region — ทุกคำสั่งคือการเดินทางไปกลับจริง ๆ และใบงานที่เปิดจากกระดาน
+ * ต้องคัดลอกค่าไปที่เคสด้วย ทำให้รอบไปกลับเพิ่มจาก 4 เป็น 9 รอบ
+ *
+ * ไปกลับรอบละ 600 ms ก็ชนเพดานแล้ว และ transaction ที่ชนเพดานคือ error ที่
+ * ผู้ใช้เห็นเป็น "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" ทั้งที่เซิร์ฟเวอร์ยังอยู่ดี
+ *
+ * 30 วินาทีไม่ได้แปลว่ายอมให้ช้าได้ขนาดนั้น แต่แปลว่าเน็ตสะดุดชั่วคราว
+ * ไม่ควรกลายเป็นงานที่บันทึกไม่ได้ — ตัวเลขนี้ตรงกับที่ขั้นเปิดใบงานใช้อยู่แล้ว
+ */
+const STAGE_TX = { timeout: 30_000, maxWait: 15_000 } as const;
+
 /** เขียนประวัติทุกครั้งที่ใบงานขยับ ใช้ tx เดียวกับการเปลี่ยนสถานะเสมอ */
 async function writeLog(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
@@ -1181,7 +1196,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     if (touchedNote) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
 
     await writeLog(tx, id, req.auth!.userId, "EDITED", current.status);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1321,7 +1336,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       note || (needsParts ? null : "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1429,7 +1444,7 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         (anyOut ? "มีอะไหล่ที่หมด — ขึ้นสถานะรออะไหล่" : "อะไหล่ครบทุกรายการ")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1471,7 +1486,7 @@ router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
       });
       await writeLog(tx, id, req.auth!.userId, "QUOTE_SKIPPED", "PARTS_CHECKED", parsed.data.note);
       await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-    });
+    }, STAGE_TX);
     const skipped = await prisma.workOrder.findUniqueOrThrow({
       where: { id },
       include: detailInclude,
@@ -1500,7 +1515,7 @@ router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
       parsed.data.note || "ส่งใบเสนอราคาให้ลูกค้าแล้ว รอลูกค้าจ่ายเงิน"
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1542,7 +1557,7 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
       parsed.data.note || "ลูกค้าจ่ายเงินแล้ว ส่งต่อให้หัวหน้าภาคจ่ายงาน"
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1610,7 +1625,7 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
           ? `จ่ายงานให้ ${team} (ข้ามทีม — งาน${wo.jobType} ของสาขานี้เป็นของ ${ownTeam})`
           : `จ่ายงานให้ ${team}`)
     );
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1652,7 +1667,7 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
       parsed.data.note || `นัดทีมเข้าวันที่ ${parsed.data.scheduledAt}`
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1761,7 +1776,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
         : parsed.data.reason;
     await writeLog(tx, id, req.auth!.userId, "PARTS_ROLLBACK", "NEW", note);
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1934,7 +1949,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     if (body.parts !== undefined) await replaceParts(tx, id, "USED", body.parts);
 
     await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", body.note?.trim() || null);
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1968,7 +1983,7 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
       "CANCELLED",
       parsed.data.reason?.trim() || null
     );
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -1991,7 +2006,7 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
       data: { status: "ASSIGNED", closedAt: null, closedById: null, closeResult: null },
     });
     await writeLog(tx, id, req.auth!.userId, "REOPENED", "ASSIGNED");
-  });
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
@@ -2253,7 +2268,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       `${ATTACHMENT_KIND_LABELS[kind] ?? kind}: ${row.fileName}`
     );
     return row;
-  });
+  }, STAGE_TX);
 
   res.status(201).json(attachmentShape(created));
 });
@@ -2332,7 +2347,7 @@ router.delete("/:id/attachments/:attachmentId", requireAuth, async (req: AuthReq
       wo.status,
       `${ATTACHMENT_KIND_LABELS[row.kind] ?? row.kind}: ${row.fileName}`
     );
-  });
+  }, STAGE_TX);
 
   if (row.objectKey) {
     try {
