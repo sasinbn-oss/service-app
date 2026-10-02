@@ -1,5 +1,15 @@
 import "dotenv/config";
-import express from "express";
+/**
+ * ส่ง error ของ async handler ไปให้ error middleware
+ *
+ * Express 4 ไม่รู้จัก promise ที่ reject — handler ที่ throw ข้างใน async
+ * จะไม่มีใครตอบคำขอนั้นเลย คำขอค้างจนฝั่งแอปหมดเวลา แล้วแอปขึ้นว่า
+ * "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" ทั้งที่เซิร์ฟเวอร์ยังอยู่ดีและรู้ด้วยซ้ำว่าพังเพราะอะไร
+ *
+ * import ไว้ก่อนสร้าง app เพราะมันแพตช์ Router ของ Express ตอนโหลด
+ */
+import "express-async-errors";
+import express, { NextFunction, Request, Response } from "express";
 import compression from "compression";
 import cors from "cors";
 import authRoutes from "./routes/auth";
@@ -174,6 +184,23 @@ app.use("/api/consumable-requests", consumableRequestRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/machines", machineRoutes);
 app.use("/api/work-orders", workOrderRoutes);
+
+/**
+ * กันคำขอที่พังให้ตอบอะไรกลับไปเสมอ
+ *
+ * ต้องอยู่ท้ายสุดหลัง route ทั้งหมด และต้องมีสี่พารามิเตอร์ ไม่งั้น Express
+ * จะถือว่าเป็น middleware ธรรมดาแล้วไม่เรียกตอนมี error
+ *
+ * ข้อความจริงไม่ส่งออกไป เพราะมันบอกชื่อตารางและชื่อคอลัมน์ แต่เขียนลง log
+ * ให้ครบ — คนที่เปิด Render Logs ต้องเห็นว่าพังเพราะอะไรจริง ๆ
+ */
+app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+  console.error(`[${req.method} ${req.originalUrl}]`, err);
+  if (res.headersSent) return;
+  res.status(500).json({
+    error: "เซิร์ฟเวอร์ทำรายการนี้ไม่สำเร็จ — แจ้งแอดมินให้ดู log ของเซิร์ฟเวอร์",
+  });
+});
 
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {
