@@ -34,6 +34,10 @@ import {
   MAX_ATTACHMENT_VIDEO_BYTES,
   JOB_TYPES,
   MACHINE_MODELS,
+  MACHINE_CAPACITIES_KG,
+  MACHINE_CAPACITY_MAX_KG,
+  MACHINE_CAPACITY_MIN_KG,
+  formatCapacity,
   JOB_TYPE_HINTS,
   JOB_TYPE_LABELS,
   ROLE_LABELS,
@@ -75,7 +79,7 @@ const detailInclude = {
       warrantyExpiresAt: true,
     },
   },
-  machine: { select: { code: true, type: true, brand: true, model: true } },
+  machine: { select: { code: true, type: true, brand: true, model: true, capacityKg: true } },
   assignedTo: { select: { id: true, name: true, employeeCode: true } },
   createdBy: { select: { id: true, name: true } },
   closedBy: { select: { id: true, name: true } },
@@ -199,6 +203,35 @@ async function replaceParts(
   });
 }
 
+/**
+ * จำรุ่นกับขนาดไว้ที่ตัวเครื่อง ไม่ใช่ที่ใบงาน
+ *
+ * ทั้งสองเป็นของตัวเครื่อง ไม่ได้เปลี่ยนไปตามงาน — เครื่อง W5 ที่เป็น Huebsch
+ * ขนาด 13 kg วันนี้ ก็ยังเป็นตัวเดิมขนาดเดิมในใบงานถัดไป ถามซ้ำทุกใบคือ
+ * การขอให้คนกรอกของเดิมอีกรอบแล้วเสี่ยงได้คำตอบที่ไม่ตรงกับครั้งก่อน
+ *
+ * เขียนเฉพาะที่มีค่ามาและค่าเปลี่ยนจริง — ไม่ส่งมาคือ "ไม่รู้" ไม่ใช่ "ไม่มี"
+ * จึงไม่ล้างของเดิมทิ้ง คนที่เปิดใบงานจากกระดานไม่เห็นช่องพวกนี้ทุกใบ
+ * ถ้าถือว่าไม่ส่งมาแปลว่าว่าง รุ่นที่เคยกรอกไว้จะหายไปเพราะใบงานที่ไม่เกี่ยวกัน
+ */
+async function rememberMachineSpec(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  machine: { id: number; model: string | null; capacityKg: number | null },
+  entry: { model?: string | null; capacityKg?: number | null }
+) {
+  const data: { model?: string; capacityKg?: number } = {};
+  const model = entry.model?.trim() || null;
+  if (model && model !== machine.model) data.model = model;
+  if (
+    typeof entry.capacityKg === "number" &&
+    entry.capacityKg !== machine.capacityKg
+  ) {
+    data.capacityKg = entry.capacityKg;
+  }
+  if (Object.keys(data).length === 0) return;
+  await tx.machine.update({ where: { id: machine.id }, data });
+}
+
 type WorkOrderRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ include: typeof detailInclude }>>
 >;
@@ -244,6 +277,10 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
     machineModel: w.machine?.model ?? null,
+    // ขนาดเครื่อง ส่งทั้งตัวเลขและข้อความพร้อมหน่วย — หน้าจอเอาไปแสดงได้เลย
+    // และยังเอาตัวเลขไปเติมในฟอร์มรอบหน้าได้โดยไม่ต้องแกะหน่วยออกจากข้อความ
+    machineCapacityKg: w.machine?.capacityKg ?? null,
+    machineCapacityLabel: formatCapacity(w.machine?.capacityKg),
     // ทีมที่ควรรับงานใบนี้ตามไฟล์ทะเบียนสาขา
     //
     // งาน PM ไปทีมที่ดูแล PM ส่วนงานอื่นไปทีมที่ดูแล CM — คิดที่เซิร์ฟเวอร์
@@ -701,6 +738,10 @@ router.get("/options", requireAuth, async (_req, res) => {
     // รุ่นเครื่องส่งมาจากที่นี่ที่เดียว เพิ่มรุ่นใหม่แล้วแอปเห็นทันทีโดยไม่ต้อง
     // ปล่อยเวอร์ชันใหม่ — ถ้าฝังไว้ในแอป เครื่องที่ยังไม่อัปเดตจะเลือกรุ่นใหม่ไม่ได้
     machineModels: MACHINE_MODELS,
+    // ขนาดเครื่องเป็นตัวเลือกให้กด แต่พิมพ์เลขอื่นได้ ส่งขอบเขตที่รับไปด้วย
+    // หน้าจอจะได้เตือนก่อนส่ง ไม่ใช่ให้กรอกเสร็จแล้วค่อยโดนเซิร์ฟเวอร์ปฏิเสธ
+    machineCapacities: MACHINE_CAPACITIES_KG,
+    machineCapacityRange: { min: MACHINE_CAPACITY_MIN_KG, max: MACHINE_CAPACITY_MAX_KG },
     // ลำดับขั้นทั้งหมด ให้หน้าจอวาดเส้นทางเดินงานได้โดยไม่ต้องเขียนลำดับซ้ำ
     stages: WORK_ORDER_STAGE_ORDER.map((v) => ({
       value: v,
@@ -774,6 +815,14 @@ const createSchema = z.object({
       z.object({
         code: z.string().trim().max(50).optional(),
         model: z.string().trim().max(100).nullable().optional(),
+        // ขนาดเป็นกิโลกรัม เก็บที่ตัวเครื่องเหมือนรุ่น ไม่ใช่ที่ใบงาน
+        capacityKg: z
+          .number()
+          .int()
+          .min(MACHINE_CAPACITY_MIN_KG)
+          .max(MACHINE_CAPACITY_MAX_KG)
+          .nullable()
+          .optional(),
         symptom: z.string().trim().max(500).nullable().optional(),
       })
     )
@@ -881,7 +930,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   // ทำให้เป็นรายการเสมอตั้งแต่ตรงนี้ โค้ดข้างล่างจะได้มีทางเดียว
   const wanted =
     body.machines ??
-    [{ code: body.machineCode, model: null, symptom: body.symptom }];
+    [{ code: body.machineCode, model: null, capacityKg: null, symptom: body.symptom }];
 
   // เว้นรหัสเครื่องว่าง = งานทั้งสาขา ซึ่งมีได้ใบเดียว ไม่ใช่สามใบที่ไม่รู้ว่าต่างกันตรงไหน
   const blank = wanted.filter((m) => !m.code?.trim());
@@ -918,7 +967,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   // ถามทีเดียวทั้งชุด ไม่ใช่ตัวละรอบ — สามเครื่องเคยเป็นสามรอบไปกลับ
   const found = await prisma.machine.findMany({
     where: { branchId: branch.id, code: { in: codes } },
-    select: { id: true, code: true, model: true, removedAt: true },
+    select: { id: true, code: true, model: true, capacityKg: true, removedAt: true },
   });
   const machines = new Map(found.map((m) => [m.code, m]));
 
@@ -951,7 +1000,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     });
     const added = await prisma.machine.findMany({
       where: { branchId: branch.id, code: { in: missing } },
-      select: { id: true, code: true, model: true, removedAt: true },
+      select: { id: true, code: true, model: true, capacityKg: true, removedAt: true },
     });
     for (const m of added) machines.set(m.code, m);
   }
@@ -971,11 +1020,8 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
         const code = entry.code?.trim() ? normaliseMachineCode(entry.code) : undefined;
         const machine = code ? machines.get(code)! : null;
 
-        // รุ่นเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง
-        const model = entry.model?.trim() || null;
-        if (machine && model && model !== machine.model) {
-          await tx.machine.update({ where: { id: machine.id }, data: { model } });
-        }
+        // รุ่นกับขนาดเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง
+        if (machine) await rememberMachineSpec(tx, machine, entry);
 
         ids.push(
           await createWorkOrder(
@@ -1039,6 +1085,25 @@ const fromOutageSchema = z.object({
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  /**
+   * ผู้ติดต่อที่สาขา — ทางกระดานเคยไม่รับไว้ ทั้งที่ฟอร์มมีช่องให้กรอก
+   *
+   * คนกรอกเห็นช่อง พิมพ์ชื่อกับเบอร์ลงไป กดบันทึกแล้วใบงานขึ้นสำเร็จ
+   * แต่ค่าที่พิมพ์หายไปเงียบ ๆ เพราะทางนี้ไม่ได้ส่งต่อ ซึ่งแย่กว่าไม่มีช่องเลย
+   * — ไม่มีช่องคนยังรู้ว่าต้องไปถามที่อื่น มีช่องแล้วหายคือเข้าใจว่าบันทึกแล้ว
+   */
+  contactName: z.string().trim().max(120).nullable().optional(),
+  contactPhone: z.string().trim().max(40).nullable().optional(),
+  // รุ่นกับขนาดของเครื่องในเคส — เคสรู้ว่าเครื่องไหนแต่ไม่รู้ว่ารุ่นอะไรขนาดเท่าไหร่
+  // คนที่ยืนอยู่หน้าเครื่องตอนเปิดใบงานคือคนที่ตอบได้ จึงรับไว้ที่นี่ด้วย
+  model: z.string().trim().max(100).nullable().optional(),
+  capacityKg: z
+    .number()
+    .int()
+    .min(MACHINE_CAPACITY_MIN_KG)
+    .max(MACHINE_CAPACITY_MAX_KG)
+    .nullable()
+    .optional(),
   // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
   waitingParts: z
     .array(
@@ -1063,7 +1128,7 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
     where: { id: outageId },
     include: {
       branch: { select: { id: true, code: true, name: true } },
-      machine: { select: { id: true, code: true } },
+      machine: { select: { id: true, code: true, model: true, capacityKg: true } },
       parts: { select: { sparePartId: true, quantity: true } },
     },
   });
@@ -1093,8 +1158,13 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
     : `เครื่อง ${outage.machine?.code ?? ""} ดับ — ${outage.branch.code}`;
 
   const id = await prisma.$transaction(
-    (tx) =>
-      createWorkOrder(
+    async (tx) => {
+      // รุ่นกับขนาดที่คนกรอกตอนเปิดใบงาน จำไว้ที่ตัวเครื่องเหมือนทางเปิดเอง
+      // สัญญาณหายทั้งสาขาไม่ผูกกับเครื่องตัวไหน จึงไม่มีอะไรให้จำ
+      if (!isSignalLost && outage.machine) {
+        await rememberMachineSpec(tx, outage.machine, body);
+      }
+      return createWorkOrder(
         tx,
         {
           branchId: outage.branch.id,
@@ -1116,11 +1186,14 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
           // ที่เคยกรอกไว้บนกระดานถูกยกมาเป็นค่าตั้งต้น ไม่ใช่ทิ้งแล้วเริ่มใหม่
           symptom: body.symptom !== undefined ? body.symptom?.trim() || null : outage.symptom,
           workStatus: body.workStatus !== undefined ? body.workStatus : outage.workStatus,
+          contactName: body.contactName?.trim() || null,
+          contactPhone: body.contactPhone?.trim() || null,
         },
         body.waitingParts ??
           outage.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         req.auth!.userId
-      ),
+      );
+    },
     { timeout: 30_000, maxWait: 15_000 }
   );
 

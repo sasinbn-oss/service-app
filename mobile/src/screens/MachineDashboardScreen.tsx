@@ -248,6 +248,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       navigation.navigate("WorkOrderForm", {
         outageId: row.id,
         branchCode: row.branchCode,
+        // ส่งรหัสเครื่องไปด้วย ฟอร์มจะได้เติมรุ่นกับขนาดที่เคยกรอกไว้ให้
+        // สัญญาณหายเป็นปัญหาระดับสาขา ไม่มีเครื่องให้ส่ง
+        machineCode: row.machineCode ?? undefined,
       });
     },
     [navigation]

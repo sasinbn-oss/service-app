@@ -16,7 +16,11 @@ export type HomeStackParamList = {
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม */
   WorkOrderList: { inbox?: boolean } | undefined;
   // มาจากกระดานได้ ถ้าเปิดจากเคสจะพกรหัสเคสกับข้อความตั้งต้นมาด้วย
-  WorkOrderForm: { outageId?: number; presetTitle?: string; branchCode?: string } | undefined;
+  // machineCode ติดมาจากกระดานเพื่อเติมรุ่นกับขนาดที่เคยกรอกไว้ของเครื่องตัวนั้น
+  // ฟอร์มไม่มีช่องรหัสเครื่องในทางนี้ จึงหาเองจากที่พิมพ์ไม่ได้เหมือนทางเปิดเอง
+  WorkOrderForm:
+    | { outageId?: number; presetTitle?: string; branchCode?: string; machineCode?: string }
+    | undefined;
   WorkOrderDetail: { id: number };
   TransferDocument: undefined;
   FlowList: undefined;

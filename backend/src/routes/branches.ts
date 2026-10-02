@@ -175,6 +175,33 @@ router.get("/:code/last-contact", requireAuth, async (req, res) => {
   res.json(last ?? { contactName: null, contactPhone: null, createdAt: null });
 });
 
+/**
+ * เครื่องของสาขานี้พร้อมรุ่นและขนาดที่เคยกรอกไว้ — เอาไปเติมในฟอร์มเปิดใบงาน
+ *
+ * รุ่นกับขนาดเก็บไว้ที่ตัวเครื่องเพื่อ "กรอกครั้งเดียวแล้วครั้งหน้าขึ้นให้เอง"
+ * ซึ่งจะเป็นจริงได้ก็ต่อเมื่อฟอร์มอ่านของเดิมมาดูได้ ไม่งั้นค่าถูกเก็บไว้เฉย ๆ
+ * แล้วยังถามซ้ำทุกใบอยู่ดี
+ *
+ * ส่งทั้งสาขาในรอบเดียว ไม่ได้ถามเครื่องละรอบตอนพิมพ์รหัส เพราะสาขาหนึ่งมี
+ * ไม่กี่สิบเครื่อง แต่การพิมพ์ "W12" คือสามจังหวะ ซึ่งจะกลายเป็นสามคำขอ
+ *
+ * เครื่องที่ถอดออกไปแล้วไม่ส่งมา — เปิดใบงานให้เครื่องที่ไม่มีอยู่ไม่ได้อยู่แล้ว
+ */
+router.get("/:code/machines", requireAuth, async (req, res) => {
+  const branch = await prisma.branch.findUnique({
+    where: { code: req.params.code },
+    select: { id: true },
+  });
+  if (!branch) return res.status(404).json({ error: `ไม่พบสาขา ${req.params.code}` });
+
+  const machines = await prisma.machine.findMany({
+    where: { branchId: branch.id, removedAt: null },
+    select: { code: true, type: true, model: true, capacityKg: true },
+    orderBy: { code: "asc" },
+  });
+  res.json(machines);
+});
+
 const branchSchema = z.object({
   name: z.string().min(1),
   code: z.string().min(1),

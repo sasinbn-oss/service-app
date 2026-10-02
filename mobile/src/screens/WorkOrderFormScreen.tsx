@@ -50,6 +50,13 @@ interface BranchOption {
   openedAt: string | null;
   warrantyExpiresAt: string | null;
 }
+/** เครื่องที่ระบบรู้จักแล้วในสาขานี้ พร้อมรุ่นกับขนาดที่เคยกรอกไว้ */
+interface KnownMachine {
+  code: string;
+  type: string;
+  model: string | null;
+  capacityKg: number | null;
+}
 /**
  * รุ่นเครื่อง — ของจริงมาจาก /work-orders/options ตอนเปิดฟอร์ม
  *
@@ -60,9 +67,31 @@ interface BranchOption {
 const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Haier", "Maytag"];
 const MODEL_OTHER = "อื่นๆ";
 
+/**
+ * ขนาดเครื่องเป็นกิโลกรัม — ค่าสำรองเผื่อโหลดตัวเลือกไม่ทัน เหมือนรายการรุ่น
+ *
+ * ต่างจากรุ่นคือพิมพ์เลขอื่นได้ ไม่ได้คุมให้เลือกเฉพาะในรายการ เพราะขนาดเป็น
+ * ตัวเลขอยู่แล้ว เลข 17 ที่พิมพ์เองยังรวมยอดกับเลข 17 อื่นได้ ไม่เหมือนชื่อรุ่น
+ * ที่พิมพ์เองแล้วได้ "Huebsch" กับ "huebsch" เป็นสองรุ่น
+ */
+const FALLBACK_CAPACITIES = [10, 13, 15, 18, 20, 25];
+const CAPACITY_OTHER = "อื่นๆ";
+
 /** รุ่นที่จะส่งไปเซิร์ฟเวอร์ — ที่พิมพ์เองก็เป็นรุ่นเหมือนกัน */
 function resolvedModel(row: MachineRow): string {
   return (row.model === MODEL_OTHER ? row.modelOther : row.model).trim();
+}
+
+/**
+ * ขนาดที่จะส่งไปเซิร์ฟเวอร์ เป็นตัวเลขหรือ null
+ *
+ * ส่งเลขล้วนไม่ส่ง "13 kg" เพราะหน่วยเป็น kg ทั้งระบบ เก็บหน่วยไปด้วยคือ
+ * เปิดช่องให้มีทั้ง "13 kg" และ "13kg" ในฐานข้อมูลเดียวกัน
+ */
+function resolvedCapacity(row: MachineRow): number | null {
+  const raw = row.capacity === CAPACITY_OTHER ? row.capacityOther : row.capacity;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /** หนึ่งแถว = หนึ่งใบงานที่จะถูกเปิด */
@@ -73,6 +102,10 @@ interface MachineRow {
   model: string;
   /** ชื่อรุ่นที่พิมพ์เอง ใช้เมื่อ model เป็น MODEL_OTHER */
   modelOther: string;
+  /** ขนาดที่เลือกเป็นข้อความ เช่น "13" หรือ CAPACITY_OTHER เมื่อจะพิมพ์เอง */
+  capacity: string;
+  /** ขนาดที่พิมพ์เอง ใช้เมื่อ capacity เป็น CAPACITY_OTHER */
+  capacityOther: string;
   symptom: string;
   files: PickedAttachment[];
   /** รูปป้ายรุ่นบนตัวเครื่อง ไม่บังคับ */
@@ -90,6 +123,8 @@ function blankRow(): MachineRow {
     code: "",
     model: "",
     modelOther: "",
+    capacity: "",
+    capacityOther: "",
     symptom: "",
     files: [],
     nameplate: null,
@@ -130,6 +165,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [rows, setRows] = useState<MachineRow[]>([blankRow()]);
 
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
+  const [capacities, setCapacities] = useState<number[]>(FALLBACK_CAPACITIES);
+  /** เครื่องของสาขานี้ที่ระบบรู้รุ่นกับขนาดไว้แล้ว ใช้เติมให้ตอนพิมพ์รหัสตรงกัน */
+  const [knownMachines, setKnownMachines] = useState<KnownMachine[]>([]);
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [branchRegion, setBranchRegion] = useState<string | null>(null);
@@ -142,16 +180,85 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     api
-      .get<{ priorities: Option[]; jobTypes: Option[]; machineModels?: string[] }>(
-        "/work-orders/options"
-      )
+      .get<{
+        priorities: Option[];
+        jobTypes: Option[];
+        machineModels?: string[];
+        machineCapacities?: number[];
+      }>("/work-orders/options")
       .then((res) => {
         setPriorities(res.data.priorities);
         setJobTypes(res.data.jobTypes);
         if (res.data.machineModels?.length) setModels(res.data.machineModels);
+        if (res.data.machineCapacities?.length) setCapacities(res.data.machineCapacities);
       })
       .catch(() => setError("โหลดตัวเลือกไม่สำเร็จ"));
   }, []);
+
+  /**
+   * รุ่นกับขนาดของเครื่องในสาขานี้ที่เคยกรอกไว้
+   *
+   * ถามทีเดียวทั้งสาขาตอนรู้ว่าสาขาไหน ไม่ได้ถามตอนพิมพ์รหัสเครื่องทีละตัว —
+   * พิมพ์ "W12" คือสามจังหวะ ซึ่งจะกลายเป็นสามคำขอโดยได้คำตอบเดียวกัน
+   */
+  useEffect(() => {
+    const code = branchCode.trim();
+    if (!code) {
+      setKnownMachines([]);
+      return;
+    }
+    let alive = true;
+    api
+      .get<KnownMachine[]>(`/branches/${encodeURIComponent(code)}/machines`)
+      .then((res) => {
+        if (alive) setKnownMachines(res.data);
+      })
+      .catch(() => setKnownMachines([]));
+    return () => {
+      alive = false;
+    };
+  }, [branchCode]);
+
+  /**
+   * เติมรุ่นกับขนาดของเครื่องที่ระบบรู้จักแล้ว
+   *
+   * ไม่ทับค่าที่คนกรอกไปแล้ว ด้วยเหตุผลเดียวกับผู้ติดต่อ — คนที่ตั้งใจเลือกเอง
+   * รู้ดีกว่าใบงานเมื่อเดือนก่อน และคนที่ยืนอยู่หน้าเครื่องเห็นป้ายจริงอยู่
+   *
+   * ทางกระดานไม่มีช่องรหัสเครื่อง ใช้รหัสที่ติดมากับเคสแทน
+   */
+  useEffect(() => {
+    if (knownMachines.length === 0) return;
+    const byCode = new Map(knownMachines.map((m) => [m.code, m]));
+    let changed = false;
+    const next = rows.map((r) => {
+      const code = (fromBoard ? route.params?.machineCode ?? "" : r.code).trim().toUpperCase();
+      const known = code ? byCode.get(code) : undefined;
+      if (!known) return r;
+      const patch: Partial<MachineRow> = {};
+      if (!r.model && known.model) {
+        // รุ่นที่เคยกรอกอาจไม่อยู่ในรายการตัวเลือก (เคยพิมพ์เอง) ให้ไปอยู่ช่องพิมพ์เอง
+        if (models.includes(known.model)) patch.model = known.model;
+        else {
+          patch.model = MODEL_OTHER;
+          patch.modelOther = known.model;
+        }
+      }
+      if (!r.capacity && typeof known.capacityKg === "number") {
+        const asText = String(known.capacityKg);
+        if (capacities.includes(known.capacityKg)) patch.capacity = asText;
+        else {
+          patch.capacity = CAPACITY_OTHER;
+          patch.capacityOther = asText;
+        }
+      }
+      if (Object.keys(patch).length === 0) return r;
+      changed = true;
+      return { ...r, ...patch };
+    });
+    // เขียนกลับเฉพาะตอนมีอะไรเปลี่ยนจริง — rows อยู่ใน deps ถ้าเขียนทุกรอบจะวนไม่จบ
+    if (changed) setRows(next);
+  }, [knownMachines, models, capacities, fromBoard, route.params?.machineCode, rows]);
 
   /**
    * เปิดจากกระดาน — รหัสสาขาติดมาแต่ชื่อไม่ได้ติดมาด้วย
@@ -309,19 +416,29 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         priority,
         ...(jobType === "OTHER" ? { title: otherDetail.trim() } : {}),
       };
+      // ผู้ติดต่อส่งทั้งสองทาง — ฟอร์มมีช่องให้กรอกทั้งสองทางอยู่แล้ว
+      // ทางกระดานเคยไม่ส่ง ค่าที่คนพิมพ์ลงไปจึงหายเงียบ ๆ ทั้งที่กดบันทึกสำเร็จ
+      const contact = {
+        contactName: contactName.trim() || null,
+        contactPhone: contactPhone.trim() || null,
+      };
       const res = fromBoard
         ? await api.post(`/work-orders/from-outage/${outageId}`, {
             ...shared,
+            ...contact,
             symptom: rows[0].symptom.trim() || null,
+            // รุ่นกับขนาดของเครื่องในเคส — เคสรู้แต่ว่าเครื่องไหน
+            model: resolvedModel(rows[0]) || null,
+            capacityKg: resolvedCapacity(rows[0]),
           })
         : await api.post("/work-orders", {
             ...shared,
+            ...contact,
             branchCode: branchCode.trim(),
-            contactName: contactName.trim() || null,
-            contactPhone: contactPhone.trim() || null,
             machines: rows.map((r) => ({
               code: r.code.trim().toUpperCase() || undefined,
               model: resolvedModel(r) || null,
+              capacityKg: resolvedCapacity(r),
               symptom: r.symptom.trim() || null,
             })),
           });
@@ -522,6 +639,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             fromBoard={fromBoard}
             busy={busy}
             models={models}
+            capacities={capacities}
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
@@ -670,6 +788,69 @@ function BranchFacts({
 }
 
 /**
+ * ขนาดเครื่องเป็นกิโลกรัม
+ *
+ * เป็นปุ่มกดไม่ใช่ช่องพิมพ์ เพราะคนกรอกอยู่หน้างานถือมือถือข้างเดียว และขนาด
+ * ที่มีจริงมีไม่กี่ค่า — แต่เปิดทาง "อื่นๆ" ไว้ให้พิมพ์เลขที่ไม่อยู่ในรายการ
+ * ไม่ได้ปิดตายเหมือนรายการรุ่น ด้วยเหตุผลที่เขียนไว้ที่ FALLBACK_CAPACITIES
+ *
+ * กดค้ำไว้แล้วกดซ้ำคือเอาออก ไม่ต้องมีปุ่ม "ล้าง" อีกปุ่ม — ขนาดไม่บังคับ
+ * และคนที่กดผิดแล้วหาทางยกเลิกไม่ได้จะปล่อยค่าผิดไว้แทนที่จะเว้นว่าง
+ */
+function CapacityPicker({
+  row,
+  index,
+  capacities,
+  onChange,
+  big,
+}: {
+  row: MachineRow;
+  index: number;
+  capacities: number[];
+  onChange: (patch: Partial<MachineRow>) => void;
+  /** ใช้หัวข้อตัวใหญ่แบบทางกระดาน ซึ่งไม่มีการ์ดเครื่องครอบอยู่ */
+  big?: boolean;
+}) {
+  const options = [...capacities.map(String), CAPACITY_OTHER];
+  return (
+    <>
+      <Text style={big ? styles.label : styles.subLabel}>ขนาดเครื่อง (ไม่บังคับ)</Text>
+      <View style={styles.options}>
+        {options.map((c) => (
+          <TouchableOpacity
+            key={c}
+            style={[styles.option, row.capacity === c && styles.optionOn]}
+            onPress={() =>
+              onChange(
+                row.capacity === c
+                  ? { capacity: "", capacityOther: "" }
+                  : { capacity: c, ...(c === CAPACITY_OTHER ? {} : { capacityOther: "" }) }
+              )
+            }
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.optionText, row.capacity === c && styles.optionTextOn]}>
+              {c === CAPACITY_OTHER ? c : `${c} kg`}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {row.capacity === CAPACITY_OTHER ? (
+        <TextInput
+          style={[styles.input, { marginTop: spacing.xs }]}
+          value={row.capacityOther}
+          onChangeText={(v) => onChange({ capacityOther: v.replace(/[^0-9]/g, "") })}
+          placeholder="พิมพ์ขนาดเป็นกิโลกรัม เช่น 17"
+          placeholderTextColor={colors.textFaint}
+          keyboardType="number-pad"
+          accessibilityLabel={`ขนาดเครื่องที่ ${index + 1}`}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
  * เครื่องหนึ่งตัวกับอาการของมัน — เท่ากับใบงานหนึ่งใบที่จะถูกเปิด
  *
  * ทางที่เปิดจากกระดานไม่มีช่องรหัสเครื่องกับรุ่น เพราะเครื่องมาจากเคสแล้ว
@@ -681,6 +862,7 @@ function MachineCard({
   fromBoard,
   busy,
   models,
+  capacities,
   onChange,
   onRemove,
   onAddFile,
@@ -692,6 +874,7 @@ function MachineCard({
   fromBoard: boolean;
   busy: string | null;
   models: string[];
+  capacities: number[];
   onChange: (patch: Partial<MachineRow>) => void;
   onRemove: () => void;
   onAddFile: (
@@ -769,6 +952,8 @@ function MachineCard({
             />
           ) : null}
 
+          <CapacityPicker row={row} index={index} capacities={capacities} onChange={onChange} />
+
           {/*
             รูปป้ายรุ่นบนตัวเครื่อง ไม่บังคับ — เป็นที่มาของรุ่นที่เลือกไว้
             เอาไว้ย้อนดูตอนสงสัยว่าใส่รุ่นถูกหรือเปล่า ซึ่งเกิดขึ้นตอนสั่งอะไหล่
@@ -817,6 +1002,45 @@ function MachineCard({
               </TouchableOpacity>
             </View>
           )}
+        </>
+      ) : null}
+
+      {/*
+        เปิดจากกระดาน — เครื่องมาจากเคสแล้ว แต่รุ่นกับขนาดเคสไม่รู้
+
+        เคสมาจากไฟล์รายงานซึ่งบอกแต่ว่าเครื่องไหนดับ ไม่ได้บอกว่ารุ่นอะไร
+        กี่กิโล คนที่ตอบได้คือคนที่ยืนอยู่หน้าเครื่องตอนเปิดใบงาน ซึ่งคือตอนนี้
+        — เคยไม่มีช่องให้กรอกเลย ค่าพวกนี้จึงว่างตลอดในใบที่เปิดจากกระดาน
+
+        ส่วนใหญ่จะขึ้นให้แล้วจากที่เคยกรอกไว้ครั้งก่อน เหลือแค่ดูว่าตรงไหม
+      */}
+      {fromBoard ? (
+        <>
+          <Text style={styles.label}>รุ่นของเครื่อง (ไม่บังคับ)</Text>
+          <View style={styles.options}>
+            {[...models, MODEL_OTHER].map((m) => (
+              <TouchableOpacity
+                key={m}
+                style={[styles.option, row.model === m && styles.optionOn]}
+                onPress={() => onChange({ model: m })}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.optionText, row.model === m && styles.optionTextOn]}>{m}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {row.model === MODEL_OTHER ? (
+            <TextInput
+              style={[styles.input, { marginTop: spacing.xs }]}
+              value={row.modelOther}
+              onChangeText={(v) => onChange({ modelOther: v })}
+              placeholder="พิมพ์ชื่อรุ่น"
+              placeholderTextColor={colors.textFaint}
+              accessibilityLabel="ชื่อรุ่นของเครื่อง"
+            />
+          ) : null}
+
+          <CapacityPicker row={row} index={index} capacities={capacities} onChange={onChange} big />
         </>
       ) : null}
 

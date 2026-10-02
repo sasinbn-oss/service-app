@@ -79,6 +79,8 @@ interface WorkOrder {
   machineCode: string | null;
   machineBrand: string | null;
   machineModel: string | null;
+  /** ขนาดเครื่องพร้อมหน่วย เช่น "13 kg" — เซิร์ฟเวอร์ประกอบหน่วยมาให้แล้ว */
+  machineCapacityLabel: string | null;
   assignedToName: string | null;
   scheduledAt: string | null;
   createdByName: string | null;
@@ -370,7 +372,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           label="เครื่อง"
           value={
             order.machineCode
-              ? [order.machineCode, order.machineBrand, order.machineModel]
+              ? [
+                  order.machineCode,
+                  order.machineBrand,
+                  order.machineModel,
+                  order.machineCapacityLabel,
+                ]
                   .filter(Boolean)
                   .join(" · ")
               : "ทั้งสาขา"
@@ -1938,7 +1945,9 @@ function CloseModal({
                 {order.machineCode ? (
                   <Text style={styles.linkedText}>
                     ในระบบบันทึกไว้ว่า {order.machineCode}
-                    {order.machineModel ? ` · ${order.machineModel}` : ""} — ถ่ายป้ายรุ่นมาเทียบ
+                    {order.machineModel ? ` · ${order.machineModel}` : ""}
+                    {order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""} —
+                    ถ่ายป้ายรุ่นมาเทียบ
                   </Text>
                 ) : null}
                 {nameplate ? (
