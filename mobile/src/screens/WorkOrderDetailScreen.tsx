@@ -617,10 +617,21 @@ export default function WorkOrderDetailScreen({ route }: Props) {
            * ถ้าไม่ทำเครื่องหมายไว้ ใบที่ไม่ต้องเสนอราคาจะขึ้นว่าทำสองขั้นนั้นไปแล้ว
            * ทั้งที่ไม่เคยทำ เพราะมันอยู่ก่อนขั้นปัจจุบัน
            */
+          /**
+           * "ไม่ต้องทำ" ตัดสินจากกฎวันนี้ ส่วน "ทำไปแล้ว" เป็นของที่เกิดขึ้นจริง
+           * ของจริงชนะกฎเสมอ — ใบที่มีใบเสนอราคาแนบอยู่ คือใบที่เสนอราคาไปแล้ว
+           *
+           * สำคัญกับใบเก่า: กฎประกัน 3 ปีทำให้สาขาแฟรนไชส์ 245 สาขากลับมาอยู่ใน
+           * ประกัน ใบที่เคยผ่านขั้นเสนอราคาไปแล้วตอนที่ระบบยังตีว่าหมดประกัน
+           * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
+           * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
+           */
           const skipped =
             (stage.value === "PARTS_REQUESTED" && order.needsParts === false) ||
-            ((stage.value === "AWAITING_QUOTE" || stage.value === "AWAITING_PAYMENT") &&
-              order.needsQuote === false);
+            (stage.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
+            (stage.value === "AWAITING_PAYMENT" &&
+              order.needsQuote === false &&
+              !order.hasReceipt);
           const state = skipped
             ? "skipped"
             : order.status === "CANCELLED"
