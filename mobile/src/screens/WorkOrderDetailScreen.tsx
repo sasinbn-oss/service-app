@@ -113,6 +113,13 @@ interface WorkOrder {
   hasNameplate: boolean;
   /** รอบปัจจุบันเริ่มเมื่อไหร่ — ใช้แยกว่าไฟล์ไหนเป็นของรอบที่ปิดงาน */
   roundStartedAt: string | null;
+  /** ผู้ติดต่อที่สาขาสำหรับใบงานนี้ */
+  contactName: string | null;
+  contactPhone: string | null;
+  /** งานนี้ต้องเสนอราคาลูกค้าก่อนไหม (สาขาแฟรนไชส์ + ใช้อะไหล่ + หมดประกัน) */
+  needsQuote: boolean;
+  hasQuote: boolean;
+  hasReceipt: boolean;
   /** จำนวนรูป/วิดีโอหน้างาน (ไม่นับใบเหลืองกับป้ายรุ่น) — ต้องมีอย่างน้อยหนึ่งถึงจะปิดงานได้ */
   siteFileCount: number;
   /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
@@ -322,6 +329,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           }
         />
         <Row label="ความเร่งด่วน" value={order.priorityLabel} />
+        {order.contactName || order.contactPhone ? (
+          <Row
+            label="ผู้ติดต่อที่สาขา"
+            value={[order.contactName, order.contactPhone].filter(Boolean).join(" · ")}
+          />
+        ) : null}
         {/* ใบเก่าจ่ายรายคน ใบใหม่จ่ายเป็นทีม — แสดงตามที่ใบนั้นเป็นจริง */}
         <Row
           label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
@@ -621,7 +634,15 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                   activeOpacity={0.8}
                 >
                   <Ionicons
-                    name={order.status === "ASSIGNED" ? "calendar-outline" : "arrow-forward-circle"}
+                    name={
+                      order.status === "ASSIGNED"
+                        ? "calendar-outline"
+                        : order.status === "AWAITING_QUOTE"
+                          ? "document-text-outline"
+                          : order.status === "AWAITING_PAYMENT"
+                            ? "cash-outline"
+                            : "arrow-forward-circle"
+                    }
                     size={18}
                     color="#fff"
                   />
@@ -630,9 +651,13 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                       ? "ระบุอะไหล่ที่ต้องใช้"
                       : order.status === "PARTS_REQUESTED"
                         ? "เช็คอะไหล่ในคลัง"
-                        : order.status === "PARTS_CHECKED"
-                          ? "จ่ายงานให้ช่าง"
-                          : "นัดวันเข้างาน"}
+                        : order.status === "AWAITING_QUOTE"
+                          ? "เสนอราคาลูกค้า"
+                          : order.status === "AWAITING_PAYMENT"
+                            ? "ลูกค้าจ่ายเงินแล้ว"
+                            : order.status === "PARTS_CHECKED"
+                              ? "จ่ายงานให้ช่าง"
+                              : "นัดวันเข้างาน"}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -693,6 +718,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         onCancel={() => setRollbackOpen(false)}
         onDone={async () => {
           setRollbackOpen(false);
+          // ส่งกลับอาจแนบรูปที่เจอหน้างานไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
+          setFilesKey((k) => k + 1);
           await load();
         }}
       />
@@ -705,6 +732,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         onCancel={() => setStageOpen(false)}
         onDone={async () => {
           setStageOpen(false);
+          // ขั้นเสนอราคาแนบใบเสนอราคา/บิลไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
+          setFilesKey((k) => k + 1);
           await load();
         }}
       />
@@ -768,6 +797,8 @@ function RollbackModal({
 }) {
   const [reason, setReason] = useState("");
   const [parts, setParts] = useState<PickedPart[]>([]);
+  const [files, setFiles] = useState<PickedAttachment[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -775,13 +806,39 @@ function RollbackModal({
     if (!visible) return;
     setReason("");
     setParts([]);
+    setFiles([]);
     setError(null);
   }, [visible]);
+
+  async function addFile(
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) {
+    setBusy("กำลังเตรียมไฟล์");
+    try {
+      const file = await pick(setBusy);
+      if (file) setFiles((v) => [...v, file]);
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function submit() {
     setSaving(true);
     setError(null);
     try {
+      /**
+       * ส่งรูปขึ้นก่อนแล้วค่อยส่งกลับ
+       *
+       * ถ้าส่งกลับก่อน ใบงานจะไปโผล่ในกล่องงานของหัวหน้าภาคทันทีโดยยังไม่มีรูป
+       * ที่ช่างกำลังจะส่ง — คนที่เปิดดูพอดีจะเห็นแต่ข้อความแล้วตัดสินใจไปแล้ว
+       */
+      for (const [i, file] of files.entries()) {
+        setBusy(`กำลังส่งไฟล์ ${i + 1}/${files.length}`);
+        await uploadAttachment(order.id, file);
+      }
+      setBusy("กำลังส่งกลับ");
       await api.post(`/work-orders/${order.id}/reassess-parts`, {
         reason: reason.trim(),
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
@@ -791,6 +848,7 @@ function RollbackModal({
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
+      setBusy(null);
     }
   }
 
@@ -799,10 +857,10 @@ function RollbackModal({
       <View style={styles.backdrop}>
         <View style={styles.modal}>
           <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>ขอเบิกอะไหล่เพิ่ม</Text>
+            <Text style={styles.modalTitle}>จบงานไม่ได้ · {order.code}</Text>
             <Text style={styles.linkedText}>
-              {order.code} จะกลับไปขั้นแรกให้หัวหน้าภาคดูรายการที่คุณขอ แล้วส่งต่อให้แอดมิน
-              เช็คคลัง วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
+              ใบงานจะกลับไปขั้นแรกให้หัวหน้าภาคดู แล้วส่งต่อให้แอดมินเช็คคลัง
+              วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
             </Text>
 
             <Text style={styles.modalLabel}>เจออะไรที่หน้างาน</Text>
@@ -816,6 +874,46 @@ function RollbackModal({
               numberOfLines={3}
               accessibilityLabel="เจออะไรที่หน้างาน"
             />
+
+            {/*
+              รูปที่เจอหน้างาน — ไม่บังคับ แต่เป็นสิ่งเดียวที่ทำให้หัวหน้าภาค
+              ตัดสินใจได้โดยไม่ต้องโทรถามกลับ คำว่า "บอร์ดไหม้" กับรูปบอร์ดที่ไหม้
+              พาไปสู่การตัดสินใจคนละแบบ
+            */}
+            <Text style={styles.modalLabel}>รูป / วิดีโอที่เจอหน้างาน (ไม่บังคับ)</Text>
+            <FileStrip files={files} onChange={setFiles} />
+            {busy ? (
+              <View style={styles.slipRow}>
+                <ActivityIndicator color={colors.primary} size="small" />
+                <Text style={styles.linkedText}>{busy}…</Text>
+              </View>
+            ) : (
+              <View style={styles.options}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity
+                    style={styles.option}
+                    onPress={() => addFile((stage) => pickImageAttachment(true, stage))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.optionText}>ถ่ายรูป</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => addFile((stage) => pickImageAttachment(false, stage))}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.optionText}>เลือกรูป</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => addFile(pickVideoAttachment)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.optionText}>วิดีโอ</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* ช่างเห็นของจริงว่าเสียตรงไหน จึงเลือกเองได้เลย ไม่ต้องรอให้ใครเดาแทน */}
             <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ขอเบิกเพิ่ม" />
@@ -837,7 +935,10 @@ function RollbackModal({
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <>
+                  <ActivityIndicator color="#fff" size="small" />
+                  {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
+                </>
               ) : (
                 <Text style={styles.modalSaveText}>ส่งกลับ</Text>
               )}
@@ -878,6 +979,10 @@ function StageModal({
    */
   const [requisitionNo, setRequisitionNo] = useState("");
   const [team, setTeam] = useState<string | null>(null);
+  // เอกสารขั้นเสนอราคา — ใบเสนอราคา และบิลที่ลูกค้าจ่ายแล้ว
+  const [doc, setDoc] = useState<PickedAttachment | null>(null);
+  const [skipQuote, setSkipQuote] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [visit, setVisit] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -897,10 +1002,26 @@ function StageModal({
     // ทีมของสาขาเป็นค่าตั้งต้น เพราะเป็นทีมที่รับผิดชอบสาขานี้อยู่แล้ว
     // จ่ายข้ามทีมยังทำได้ แต่ต้องตั้งใจเลือก ไม่ใช่เผลอ
     setTeam(order.assignedTeam ?? order.suggestedTeam ?? null);
+    setDoc(null);
+    setSkipQuote(false);
     setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
     setNote("");
     setError(null);
   }, [visible, order]);
+
+  async function pickDoc(
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) {
+    setBusy("กำลังเตรียมไฟล์");
+    try {
+      const file = await pick(setBusy);
+      if (file) setDoc(file);
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function submit() {
     setSaving(true);
@@ -924,6 +1045,23 @@ function StageModal({
           })),
           note: note.trim() || undefined,
         });
+      } else if (order.status === "AWAITING_QUOTE") {
+        if (skipQuote) {
+          await api.post(`/work-orders/${order.id}/quote`, { skip: true, note: note.trim() });
+        } else {
+          // เอกสารต้องขึ้นก่อนสั่งส่งต่อ เพราะเซิร์ฟเวอร์เช็คว่ามีแล้วหรือยัง
+          if (doc) {
+            setBusy("กำลังส่งใบเสนอราคา");
+            await uploadAttachment(order.id, doc, "QUOTE");
+          }
+          await api.post(`/work-orders/${order.id}/quote`, { note: note.trim() || undefined });
+        }
+      } else if (order.status === "AWAITING_PAYMENT") {
+        if (doc) {
+          setBusy("กำลังส่งบิล");
+          await uploadAttachment(order.id, doc, "RECEIPT");
+        }
+        await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
       } else if (order.status === "PARTS_CHECKED") {
         await api.post(`/work-orders/${order.id}/assign`, {
           team,
@@ -940,6 +1078,7 @@ function StageModal({
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
+      setBusy(null);
     }
   }
 
@@ -954,7 +1093,16 @@ function StageModal({
     order.status === "PARTS_REQUESTED" &&
     order.waitingParts.some((p) => checks[p.sparePartId]?.inStock === true) &&
     !requisitionNo.trim();
+  // ขั้นเสนอราคาต้องมีเอกสาร เว้นแต่กดข้ามซึ่งต้องบอกเหตุผลแทน
+  const quoteBlocked =
+    order.status === "AWAITING_QUOTE" &&
+    (skipQuote ? !note.trim() : !doc && !order.hasQuote);
+  const paymentBlocked =
+    order.status === "AWAITING_PAYMENT" && !doc && !order.hasReceipt;
+
   const blocked =
+    quoteBlocked ||
+    paymentBlocked ||
     (order.status === "NEW" && (needsParts === null || (needsParts && parts.length === 0))) ||
     (order.status === "PARTS_CHECKED" && !team) ||
     (order.status === "ASSIGNED" && !/^\d{4}-\d{2}-\d{2}$/.test(visit)) ||
@@ -971,9 +1119,13 @@ function StageModal({
                 ? "ระบุอะไหล่ที่ต้องใช้"
                 : order.status === "PARTS_REQUESTED"
                   ? "เช็คอะไหล่ในคลัง"
-                  : order.status === "PARTS_CHECKED"
-                    ? "จ่ายงานให้ช่าง"
-                    : "นัดวันเข้างาน"}{" "}
+                  : order.status === "AWAITING_QUOTE"
+                    ? "เสนอราคาลูกค้า"
+                    : order.status === "AWAITING_PAYMENT"
+                      ? "ลูกค้าจ่ายเงินแล้ว"
+                      : order.status === "PARTS_CHECKED"
+                        ? "จ่ายงานให้ช่าง"
+                        : "นัดวันเข้างาน"}{" "}
               · {order.code}
             </Text>
 
@@ -1107,6 +1259,83 @@ function StageModal({
                   มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” ให้เอง
                 </Text>
               </View>
+            ) : null}
+
+            {order.status === "AWAITING_QUOTE" || order.status === "AWAITING_PAYMENT" ? (
+              <>
+                {/*
+                  อะไหล่ที่ใส่ให้สาขาแฟรนไชส์ที่หมดประกันแล้วเป็นของที่ขายให้ลูกค้า
+                  ต้องเสนอราคาและเก็บเงินก่อนส่งช่างไป ไม่งั้นของออกจากคลังไปแล้ว
+                  ค่อยมาตามเก็บเงิน ซึ่งเป็นตอนที่ตามยากที่สุด
+                */}
+                <Text style={styles.linkedText}>
+                  {order.status === "AWAITING_QUOTE"
+                    ? "สาขานี้เป็นแฟรนไชส์ที่หมดประกันแล้ว อะไหล่ที่ใช้เป็นของที่ขายให้ลูกค้า — ส่งใบเสนอราคาให้ลูกค้าก่อน"
+                    : "ส่งใบเสนอราคาไปแล้ว รอลูกค้าจ่ายเงิน — ได้เงินแล้วแนบบิลเพื่อส่งต่อให้หัวหน้าภาคจ่ายงาน"}
+                </Text>
+
+                {skipQuote ? null : (
+                  <>
+                    <Text style={styles.modalLabel}>
+                      {order.status === "AWAITING_QUOTE" ? "ใบเสนอราคา" : "บิลที่ลูกค้าจ่ายแล้ว"}
+                    </Text>
+                    {(order.status === "AWAITING_QUOTE" ? order.hasQuote : order.hasReceipt) &&
+                    !doc ? (
+                      <Text style={styles.linkedText}>แนบไว้แล้ว — แนบใหม่ได้ถ้าออกเอกสารใหม่</Text>
+                    ) : null}
+                    <FileStrip files={doc ? [doc] : []} onChange={(n) => setDoc(n[0] ?? null)} />
+                    {busy ? (
+                      <View style={styles.slipRow}>
+                        <ActivityIndicator color={colors.primary} size="small" />
+                        <Text style={styles.linkedText}>{busy}…</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.options}>
+                        {Platform.OS !== "web" ? (
+                          <TouchableOpacity
+                            style={styles.option}
+                            onPress={() =>
+                              pickDoc((stage) => pickImageAttachment(true, stage))
+                            }
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.optionText}>ถ่ายเอกสาร</Text>
+                          </TouchableOpacity>
+                        ) : null}
+                        <TouchableOpacity
+                          style={styles.option}
+                          onPress={() => pickDoc((stage) => pickImageAttachment(false, stage))}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.optionText}>เลือกไฟล์</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </>
+                )}
+
+                {/*
+                  ทะเบียนสาขาส่วนใหญ่ยังไม่มีวันหมดประกัน ระบบจึงเดาว่าหมดแล้วไว้ก่อน
+                  ถ้าที่จริงยังอยู่ในประกันหรือตกลงกันแล้วว่าบริษัทออกให้
+                  การบังคับให้เสนอราคาคือการล็อกใบงานไว้เฉย ๆ
+                */}
+                {order.status === "AWAITING_QUOTE" ? (
+                  <TouchableOpacity
+                    style={styles.skipRow}
+                    onPress={() => setSkipQuote((v) => !v)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name={skipQuote ? "checkbox" : "square-outline"}
+                      size={18}
+                      color={skipQuote ? colors.primary : colors.textFaint}
+                    />
+                    <Text style={styles.skipText}>
+                      ไม่ต้องเสนอราคา — ข้ามขั้นนี้ (ต้องบอกเหตุผลในช่องบันทึก)
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
             ) : null}
 
             {order.status === "PARTS_CHECKED" ? (
@@ -2009,6 +2238,13 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   verdictBadText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.danger, fontWeight: "700" },
+  skipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  skipText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   workerSlot: { marginTop: spacing.xs },
   workerSlotLabel: {
     fontSize: 12,

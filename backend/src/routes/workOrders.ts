@@ -56,6 +56,7 @@ import {
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
+  needsCustomerQuote,
   workStatusForStage,
 } from "../utils/constants";
 
@@ -223,6 +224,9 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     priorityLabel: WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority,
     branchCode: w.branch.code,
     branchName: w.branch.name,
+    // คนที่สาขาให้ติดต่อเรื่องใบงานนี้ — ช่างโทรหาใครก่อนไปหน้างาน
+    contactName: w.contactName,
+    contactPhone: w.contactPhone,
     region: w.branch.region,
     zone: w.branch.zone,
     ownership: w.branch.ownership,
@@ -310,6 +314,14 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
      * การ์ดผลการทำงานต้องโชว์เฉพาะของรอบที่ปิดจริง ไม่ใช่ทุกรูปตั้งแต่เปิดใบ
      */
     roundStartedAt: roundStart ?? null,
+    // เอกสารขั้นเสนอราคา — ไม่ผูกกับรอบ เพราะใบเสนอราคาและบิลออกครั้งเดียวต่อใบงาน
+    hasQuote: w.attachments.some((a) => a.role === "QUOTE"),
+    hasReceipt: w.attachments.some((a) => a.role === "RECEIPT"),
+    needsQuote: needsCustomerQuote({
+      branchCode: w.branch.code,
+      needsParts: w.needsParts,
+      warrantyExpiresAt: w.branch.warrantyExpiresAt,
+    }),
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
     ),
@@ -726,6 +738,9 @@ router.get("/:id", requireAuth, async (req, res) => {
 const createSchema = z.object({
   branchCode: z.string().min(1),
   jobType: z.enum(JOB_TYPES).default("CM"),
+  // คนที่สาขาให้ติดต่อเรื่องใบงานนี้ — ช่างโทรหาใครก่อนไปหน้างาน
+  contactName: z.string().trim().max(120).nullable().optional(),
+  contactPhone: z.string().trim().max(40).nullable().optional(),
 
   machineCode: z.string().optional(),
   /**
@@ -812,6 +827,8 @@ async function createWorkOrder(
     assignedToId: number | null;
     scheduledAt: Date | null;
     symptom: string | null;
+    contactName?: string | null;
+    contactPhone?: string | null;
     workStatus: string | null;
   },
   waitingParts: { sparePartId: number; quantity: number }[],
@@ -961,6 +978,8 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
               scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
               symptom: entry.symptom?.trim() || null,
               workStatus: body.workStatus ?? null,
+              contactName: body.contactName?.trim() || null,
+              contactPhone: body.contactPhone?.trim() || null,
             },
             body.waitingParts ?? [],
             req.auth!.userId
@@ -1360,6 +1379,22 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   const anyOut = parsed.data.results.some((r) => !r.inStock);
   const now = new Date();
 
+  const wo = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: {
+      needsParts: true,
+      branch: { select: { code: true, warrantyExpiresAt: true } },
+    },
+  });
+  const nextStage = needsCustomerQuote({
+    branchCode: wo.branch.code,
+    needsParts: wo.needsParts,
+    warrantyExpiresAt: wo.branch.warrantyExpiresAt,
+    now,
+  })
+    ? "AWAITING_QUOTE"
+    : "PARTS_CHECKED";
+
   await prisma.$transaction(async (tx) => {
     for (const r of parsed.data.results) {
       await tx.workOrderPart.updateMany({
@@ -1377,10 +1412,11 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     await tx.workOrder.update({
       where: { id },
       data: {
-        status: "PARTS_CHECKED",
-        // สถานะการดำเนินการมาจากขั้น ไม่ต้องรอใครมากรอกซ้ำ —
-        // ของหมดคือรออะไหล่ ของครบคือรอช่างเข้า
-        workStatus: workStatusForStage("PARTS_CHECKED", { anyPartOutOfStock: anyOut }),
+        // อะไหล่ที่ขายให้ลูกค้าแฟรนไชส์ต้องเสนอราคาและเก็บเงินก่อนส่งช่าง
+        // งานที่ไม่เข้าเงื่อนไขข้ามสองขั้นนี้ไปรอจ่ายงานเลย
+        status: nextStage,
+        // สถานะการดำเนินการมาจากขั้น ไม่ต้องรอใครมากรอกซ้ำ
+        workStatus: workStatusForStage(nextStage, { anyPartOutOfStock: anyOut }),
       },
     });
     await writeLog(
@@ -1388,9 +1424,122 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       id,
       req.auth!.userId,
       "PARTS_CHECKED",
-      "PARTS_CHECKED",
+      nextStage,
       parsed.data.note ||
         (anyOut ? "มีอะไหล่ที่หมด — ขึ้นสถานะรออะไหล่" : "อะไหล่ครบทุกรายการ")
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * ขั้นเสนอราคา — แอดมินส่งใบเสนอราคาให้ลูกค้าแฟรนไชส์
+ *
+ * ต้องแนบใบเสนอราคาจริง ไม่ใช่แค่กดว่าส่งแล้ว เพราะเอกสารนี้คือสิ่งที่ลูกค้า
+ * ตอบรับ และเป็นตัวที่ต้องงัดมาดูตอนลูกค้าทักว่าราคาไม่ตรงกับที่ตกลงกันไว้
+ */
+const quoteSchema = z.object({
+  // ที่จริงอยู่ในประกัน หรือตกลงกันแล้วว่าบริษัทออกให้ — ข้ามได้แต่ต้องบอกเหตุผล
+  skip: z.boolean().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = quoteSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!(await guardStage(req, res, id, "AWAITING_QUOTE"))) return;
+
+  /**
+   * ข้ามขั้นนี้ได้ แต่ต้องบอกว่าทำไม
+   *
+   * ทะเบียนสาขาส่วนใหญ่ยังไม่มีวันหมดประกัน ระบบจึงเดาว่าหมดแล้วไว้ก่อน
+   * ถ้าที่จริงยังอยู่ในประกัน การบังคับให้เสนอราคาคือการล็อกใบงานไว้เฉย ๆ
+   */
+  if (parsed.data.skip) {
+    if (!parsed.data.note) {
+      return res.status(400).json({ error: "ข้ามขั้นเสนอราคาต้องบอกเหตุผลด้วย" });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.workOrder.update({
+        where: { id },
+        data: { status: "PARTS_CHECKED", workStatus: workStatusForStage("PARTS_CHECKED") },
+      });
+      await writeLog(tx, id, req.auth!.userId, "QUOTE_SKIPPED", "PARTS_CHECKED", parsed.data.note);
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+    });
+    const skipped = await prisma.workOrder.findUniqueOrThrow({
+      where: { id },
+      include: detailInclude,
+    });
+    return res.json(shape(skipped));
+  }
+
+  const quote = await prisma.workOrderAttachment.count({
+    where: { workOrderId: id, role: "QUOTE" },
+  });
+  if (quote === 0) {
+    return res.status(400).json({ error: "ต้องแนบใบเสนอราคาก่อนส่งให้ลูกค้า" });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "AWAITING_PAYMENT", workStatus: workStatusForStage("AWAITING_PAYMENT") },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "QUOTED",
+      "AWAITING_PAYMENT",
+      parsed.data.note || "ส่งใบเสนอราคาให้ลูกค้าแล้ว รอลูกค้าจ่ายเงิน"
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  });
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * ขั้นรับเงิน — แอดมินแนบบิลที่ลูกค้าจ่ายแล้ว
+ *
+ * ต้องแนบบิลจริงด้วยเหตุผลเดียวกับใบเหลือง: เงินที่เข้ามาแล้วไม่มีเอกสารผูกไว้
+ * คือเงินที่กระทบยอดไม่ได้ตอนปิดเดือน
+ */
+router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = z
+    .object({ note: z.string().trim().max(500).optional() })
+    .safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!(await guardStage(req, res, id, "AWAITING_PAYMENT"))) return;
+
+  const paid = await prisma.workOrderAttachment.count({
+    where: { workOrderId: id, role: "RECEIPT" },
+  });
+  if (paid === 0) {
+    return res.status(400).json({ error: "ต้องแนบบิลที่ลูกค้าจ่ายแล้วก่อน" });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "PARTS_CHECKED", workStatus: workStatusForStage("PARTS_CHECKED") },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "PAID",
+      "PARTS_CHECKED",
+      parsed.data.note || "ลูกค้าจ่ายเงินแล้ว ส่งต่อให้หัวหน้าภาคจ่ายงาน"
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   });

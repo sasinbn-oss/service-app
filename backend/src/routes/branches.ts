@@ -156,6 +156,25 @@ router.get("/teams", requireAuth, async (_req, res) => {
   );
 });
 
+/**
+ * ผู้ติดต่อที่ใช้ล่าสุดของสาขานี้ — เอาไว้เติมให้ตอนเปิดใบงานใหม่
+ *
+ * เก็บอยู่ที่ใบงาน ไม่ได้เก็บที่สาขา เพราะคนเฝ้าร้านเปลี่ยนตามกะ ค่าที่ใช้ล่าสุด
+ * จึงเป็นการเดาที่ดีที่สุดที่มี ไม่ใช่ความจริงที่ต้องรักษาให้ตรงตลอด —
+ * คนเปิดใบงานเห็นแล้วแก้ทับได้ทันทีถ้าเปลี่ยนคน
+ */
+router.get("/:code/last-contact", requireAuth, async (req, res) => {
+  const last = await prisma.workOrder.findFirst({
+    where: {
+      branch: { code: req.params.code },
+      OR: [{ contactName: { not: null } }, { contactPhone: { not: null } }],
+    },
+    orderBy: { createdAt: "desc" },
+    select: { contactName: true, contactPhone: true, createdAt: true },
+  });
+  res.json(last ?? { contactName: null, contactPhone: null, createdAt: null });
+});
+
 const branchSchema = z.object({
   name: z.string().min(1),
   code: z.string().min(1),

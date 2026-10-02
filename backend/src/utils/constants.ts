@@ -69,6 +69,10 @@ export function workStatusForStage(
 ): string | null | undefined {
   if (opts.anyPartOutOfStock) return "WAITING_PARTS";
   switch (stage) {
+    // ตรงกับสถานะที่กระดานมีอยู่แล้วพอดี — รอลูกค้าจ่ายเงินคือการรอลูกค้าจริง ๆ
+    case "AWAITING_QUOTE":
+    case "AWAITING_PAYMENT":
+      return "WAITING_PAYMENT";
     case "PARTS_CHECKED":
     case "ASSIGNED":
     case "IN_PROGRESS":
@@ -130,6 +134,8 @@ export function countsAsRepair(closeReason: string | null) {
 export const WORK_ORDER_STATUSES = [
   "NEW",
   "PARTS_REQUESTED",
+  "AWAITING_QUOTE",
+  "AWAITING_PAYMENT",
   "PARTS_CHECKED",
   "ASSIGNED",
   "IN_PROGRESS",
@@ -147,6 +153,8 @@ export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
 export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   NEW: "รอหัวหน้าภาคระบุอะไหล่",
   PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
+  AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
+  AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
   ASSIGNED: "รอหัวหน้าภาคนัดวัน",
   IN_PROGRESS: "รอช่างเข้างาน",
@@ -158,6 +166,10 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
 export const WORK_ORDER_STAGE_ORDER = [
   "NEW",
   "PARTS_REQUESTED",
+  // สองขั้นนี้ผ่านเฉพาะงานที่ต้องขายอะไหล่ให้ลูกค้าแฟรนไชส์ — ดู needsCustomerQuote()
+  // งานที่ไม่เข้าเงื่อนไขจะข้ามไปขั้นจ่ายงานเลย และแถบขั้นตอนขึ้นว่าข้าม
+  "AWAITING_QUOTE",
+  "AWAITING_PAYMENT",
   "PARTS_CHECKED",
   "ASSIGNED",
   "IN_PROGRESS",
@@ -173,6 +185,9 @@ export const WORK_ORDER_STAGE_ORDER = [
 export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   NEW: "SUPERVISOR",
   PARTS_REQUESTED: "ADMIN",
+  // เสนอราคาและรับเงินเป็นงานออฟฟิศ แอดมินเป็นคนรู้ราคาและเป็นคนออกเอกสาร
+  AWAITING_QUOTE: "ADMIN",
+  AWAITING_PAYMENT: "ADMIN",
   PARTS_CHECKED: "SUPERVISOR",
   // นัดวันเข้างานเป็นของหัวหน้าภาค ไม่ใช่ช่าง — คนที่รู้ว่าคิวทั้งทีมว่างวันไหน
   // คือคนที่ถือคิวทั้งทีม ช่างคนเดียวตอบได้แค่ว่าตัวเองว่างไหม
@@ -184,6 +199,8 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
 export const ACTIVE_WORK_ORDER_STATUSES = [
   "NEW",
   "PARTS_REQUESTED",
+  "AWAITING_QUOTE",
+  "AWAITING_PAYMENT",
   "PARTS_CHECKED",
   "ASSIGNED",
   "IN_PROGRESS",
@@ -266,6 +283,9 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   NO_PARTS: "ระบุว่าไม่ต้องใช้อะไหล่",
   PARTS_ROLLBACK: "ช่างส่งกลับ — ยังจบงานไม่ได้",
   PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
+  QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
+  QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
+  PAID: "ลูกค้าจ่ายเงินแล้ว",
   ASSIGNED: "จ่ายงานให้ช่าง",
   SCHEDULED: "นัดวันเข้างาน",
   CLOSED: "ปิดงาน",
@@ -354,6 +374,31 @@ export function isWarrantyExpired(
 }
 
 /** รหัสที่คนอ่าน ตั้งจาก id จึงไม่มีทางชนกันและไม่ต้องนับแถวก่อน */
+/**
+ * ใบงานนี้ต้องเสนอราคาลูกค้าก่อนไหม
+ *
+ * อะไหล่ที่ใส่ให้สาขาแฟรนไชส์ที่หมดประกันแล้ว เป็นของที่ขายให้ลูกค้า ไม่ใช่ของแถม
+ * ต้องเสนอราคาและเก็บเงินก่อนส่งช่างไป ไม่งั้นของออกจากคลังไปแล้วค่อยมาตามเก็บเงิน
+ * ซึ่งเป็นตอนที่ตามยากที่สุด
+ *
+ * สามเงื่อนไขพร้อมกัน — สาขาบริษัท (รหัส C) ไม่ต้องเพราะเครื่องเป็นของบริษัทเอง
+ * งานที่ไม่ใช้อะไหล่ไม่มีอะไรให้ขาย และของในประกันผู้ขายรับผิดชอบอยู่แล้ว
+ *
+ * ไม่มีวันหมดประกันบันทึกไว้ = ถือว่าหมดแล้ว เพราะทะเบียนสาขาส่วนใหญ่ยังไม่มี
+ * คอลัมน์นี้ ถ้าตีว่า "ยังอยู่ในประกัน" ขั้นเสนอราคาจะไม่เคยทำงานเลย —
+ * แอดมินข้ามขั้นนี้ได้ถ้าที่จริงอยู่ในประกัน
+ */
+export function needsCustomerQuote(opts: {
+  branchCode: string;
+  needsParts: boolean | null;
+  warrantyExpiresAt: Date | null;
+  now?: Date;
+}): boolean {
+  if (isCompanyBranch(opts.branchCode)) return false;
+  if (opts.needsParts !== true) return false;
+  return isWarrantyExpired(opts.warrantyExpiresAt, opts.now) !== false;
+}
+
 export function workOrderCode(id: number): string {
   return `WO-${String(id).padStart(5, "0")}`;
 }
@@ -370,11 +415,13 @@ export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO"] as const;
  *
  * ทั้งสองอย่างไม่ใช่หลักฐานของอาการ จึงต้องแยกให้หาเจอ ไม่ใช่ปนอยู่ในกองรูปหน้างาน
  */
-export const ATTACHMENT_ROLES = ["NAMEPLATE", "REQUISITION"] as const;
+export const ATTACHMENT_ROLES = ["NAMEPLATE", "REQUISITION", "QUOTE", "RECEIPT"] as const;
 
 export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   NAMEPLATE: "ป้ายรุ่น",
   REQUISITION: "ใบเหลือง",
+  QUOTE: "ใบเสนอราคา",
+  RECEIPT: "บิลที่จ่ายแล้ว",
 };
 
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {

@@ -130,6 +130,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [rows, setRows] = useState<MachineRow[]>([blankRow()]);
 
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
   const [branchRegion, setBranchRegion] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -173,6 +175,31 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       })
       .catch(() => undefined);
   }, [route.params?.branchCode]);
+
+  /**
+   * เติมผู้ติดต่อจากใบงานล่าสุดของสาขานี้
+   *
+   * ส่วนใหญ่เป็นคนเดิมเบอร์เดิม การให้พิมพ์ใหม่ทุกครั้งคือทางที่ทำให้ช่องนี้ว่าง
+   * ไม่ทับค่าที่คนกรอกไปแล้ว — คนที่ตั้งใจพิมพ์เองย่อมรู้ดีกว่าใบงานเมื่อเดือนก่อน
+   */
+  useEffect(() => {
+    const code = branchCode.trim();
+    if (!code) return;
+    let alive = true;
+    api
+      .get<{ contactName: string | null; contactPhone: string | null }>(
+        `/branches/${encodeURIComponent(code)}/last-contact`
+      )
+      .then((res) => {
+        if (!alive) return;
+        setContactName((v) => v || res.data.contactName || "");
+        setContactPhone((v) => v || res.data.contactPhone || "");
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [branchCode]);
 
   // ค้นสาขาแบบหน่วงไว้ เหมือนตัวเลือกอะไหล่ ไม่งั้นพิมพ์ตัวเดียวยิงหลายรอบ
   useEffect(() => {
@@ -290,6 +317,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         : await api.post("/work-orders", {
             ...shared,
             branchCode: branchCode.trim(),
+            contactName: contactName.trim() || null,
+            contactPhone: contactPhone.trim() || null,
             machines: rows.map((r) => ({
               code: r.code.trim().toUpperCase() || undefined,
               model: resolvedModel(r) || null,
@@ -511,6 +540,32 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             <Text style={styles.addRowText}>เพิ่มเครื่องในสาขาเดียวกัน</Text>
           </TouchableOpacity>
         ) : null}
+
+        {/*
+          คนที่สาขาให้ติดต่อ — ช่างโทรหาใครก่อนไปหน้างาน
+
+          เก็บที่ใบงานไม่ใช่ที่สาขา เพราะคนเฝ้าร้านเปลี่ยนตามกะและตามช่วง
+          เบอร์ที่ใช้ได้เมื่อสามเดือนก่อนไม่ได้แปลว่าวันนี้โทรไปแล้วเจอคนเดิม
+          ระบบเติมค่าจากใบงานล่าสุดของสาขานี้ให้ แก้ทับได้ถ้าเปลี่ยนคน
+        */}
+        <Text style={styles.label}>ผู้ติดต่อที่สาขา (ไม่บังคับ)</Text>
+        <TextInput
+          style={styles.input}
+          value={contactName}
+          onChangeText={setContactName}
+          placeholder="ชื่อคนที่ติดต่อได้ เช่น คุณสมหญิง (ผู้จัดการร้าน)"
+          placeholderTextColor={colors.textFaint}
+          accessibilityLabel="ชื่อผู้ติดต่อที่สาขา"
+        />
+        <TextInput
+          style={[styles.input, { marginTop: spacing.xs }]}
+          value={contactPhone}
+          onChangeText={setContactPhone}
+          placeholder="เบอร์ติดต่อสาขา"
+          placeholderTextColor={colors.textFaint}
+          keyboardType="phone-pad"
+          accessibilityLabel="เบอร์ติดต่อสาขา"
+        />
 
         <Text style={styles.label}>ความเร่งด่วน</Text>
         <View style={styles.options}>
