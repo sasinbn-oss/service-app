@@ -1,5 +1,5 @@
 import React from "react";
-import { Platform, StyleSheet, Text, TouchableOpacity } from "react-native";
+import { Image, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -41,6 +41,7 @@ import ManageUsersScreen from "../screens/ManageUsersScreen";
 
 import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
+import { showAlert } from "../utils/alert";
 import {
   AdminStackParamList,
   HistoryStackParamList,
@@ -50,20 +51,73 @@ import {
 
 const commonScreenOptions = {
   headerStyle: { backgroundColor: colors.card },
-  headerTintColor: colors.text,
-  headerTitleStyle: { fontSize: 17, fontWeight: "700" as const },
+  headerTintColor: colors.navy,
+  headerTitleStyle: { fontSize: 17, fontWeight: "800" as const, color: colors.text },
   headerShadowVisible: false,
   contentStyle: { backgroundColor: colors.background },
 };
 
-/** Sign-out lives in the header so every tab can reach it. */
+/**
+ * ชื่อระบบบนแถบบนของหน้าแรกแต่ละแท็บ
+ *
+ * บรรทัดล่างบอกว่าอยู่แท็บไหน เพราะหน้าแรกของทุกแท็บใช้แบรนด์เดียวกัน
+ * ถ้าไม่มีบรรทัดนี้จะดูไม่ออกว่ากดเปลี่ยนแท็บไปแล้วหรือยัง
+ */
+function Brand({ subtitle }: { subtitle: string }) {
+  return (
+    <View style={styles.brand}>
+      <View style={styles.brandLogo}>
+        <Image source={require("../../assets/logo-otter.png")} style={styles.brandLogoImg} />
+      </View>
+      <View>
+        <View style={styles.brandNameRow}>
+          <Text style={styles.brandName}>OTTERI</Text>
+          <View style={styles.brandPill}>
+            <Text style={styles.brandPillText}>SERVICE</Text>
+          </View>
+        </View>
+        <View style={styles.brandSubRow}>
+          <View style={styles.brandDot} />
+          <Text style={styles.brandSub}>{subtitle}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** ตัวอักษรแรกของชื่อในวงกลม บอกว่าใครล็อกอินอยู่ โดยไม่กินที่บนจอมือถือ */
+function UserAvatar() {
+  const { user } = useAuth();
+  return (
+    <View style={styles.avatar}>
+      <Text style={styles.avatarText}>{(user?.name ?? "?").trim().charAt(0)}</Text>
+    </View>
+  );
+}
+
+/**
+ * ออกจากระบบอยู่บนแถบบนเพื่อให้ทุกแท็บกดได้
+ *
+ * ถามก่อนเสมอ เพราะปุ่มอยู่มุมจอที่นิ้วโป้งแตะโดนง่าย และออกแล้วต้องพิมพ์รหัสใหม่
+ */
 function LogoutButton() {
   const { logout } = useAuth();
   return (
-    <TouchableOpacity onPress={logout} style={styles.logout}>
-      <Ionicons name="log-out-outline" size={18} color={colors.danger} />
-      <Text style={styles.logoutText}>ออกจากระบบ</Text>
-    </TouchableOpacity>
+    <View style={styles.headerRight}>
+      <UserAvatar />
+      <TouchableOpacity
+        accessibilityLabel="ออกจากระบบ"
+        onPress={() =>
+          showAlert("ยืนยัน", "ต้องการออกจากระบบ?", [
+            { text: "ยกเลิก", style: "cancel" },
+            { text: "ตกลง", onPress: logout },
+          ])
+        }
+        style={styles.logout}
+      >
+        <Ionicons name="log-out-outline" size={20} color={colors.navy} />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -75,7 +129,11 @@ function HomeStackNavigator() {
       <HomeStack.Screen
         name="HomeMenu"
         component={HomeScreen}
-        options={{ title: "งานช่าง", headerRight: () => <LogoutButton /> }}
+        options={{
+          title: "งานช่าง",
+          headerTitle: () => <Brand subtitle="งานช่าง" />,
+          headerRight: () => <LogoutButton />,
+        }}
       />
       <HomeStack.Screen
         name="MachineDashboard"
@@ -170,7 +228,11 @@ function HistoryStackNavigator() {
       <HistoryStack.Screen
         name="HistoryMenu"
         component={HistoryMenuScreen}
-        options={{ title: "ประวัติการทำงาน", headerRight: () => <LogoutButton /> }}
+        options={{
+          title: "ประวัติการทำงาน",
+          headerTitle: () => <Brand subtitle="ประวัติการทำงาน" />,
+          headerRight: () => <LogoutButton />,
+        }}
       />
       <HistoryStack.Screen
         name="BranchHistory"
@@ -214,7 +276,11 @@ function AdminStackNavigator() {
       <AdminStack.Screen
         name="AdminMenu"
         component={AdminMenuScreen}
-        options={{ title: "ระบบหลังบ้าน", headerRight: () => <LogoutButton /> }}
+        options={{
+          title: "ระบบหลังบ้าน",
+          headerTitle: () => <Brand subtitle="ระบบหลังบ้าน" />,
+          headerRight: () => <LogoutButton />,
+        }}
       />
       <AdminStack.Screen
         name="ReviewRequests"
@@ -283,8 +349,11 @@ export default function MainNavigator() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textFaint,
+        tabBarActiveTintColor: colors.primaryInk,
+        tabBarInactiveTintColor: colors.textMuted,
+        // แท็บที่เลือกอยู่มีพื้นฟ้าอ่อนรองแบบ OTTERI — แค่เปลี่ยนสีไอคอน
+        // มองจากระยะแขนแยกไม่ออกว่าอยู่แท็บไหน
+        tabBarActiveBackgroundColor: colors.primarySoft,
         tabBarStyle: styles.tabBar,
         tabBarItemStyle: styles.tabItem,
       }}
@@ -344,17 +413,46 @@ const styles = StyleSheet.create({
     // derives from the safe-area inset and collapses the bar out of sight.
     ...(Platform.OS === "web" ? { height: 76, paddingBottom: 12 } : null),
   },
-  tabItem: { paddingVertical: 2 },
+  tabItem: { paddingVertical: 2, borderRadius: 14, marginHorizontal: 6, overflow: "hidden" },
   // Thai vowel and tone marks sit above the line, so the label needs a taller
   // lineHeight than the font size or the marks get clipped.
   tabLabel: { fontSize: 12, lineHeight: 20, fontWeight: "600", marginTop: 2 },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginRight: spacing.sm },
   logout: {
-    flexDirection: "row",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.sm,
+    justifyContent: "center",
+    backgroundColor: colors.sky50,
   },
-  logoutText: { color: colors.danger, fontWeight: "600", fontSize: 13 },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+    borderWidth: 3,
+    borderColor: colors.sky200,
+  },
+  avatarText: { color: "#fff", fontWeight: "800", fontSize: 15, lineHeight: 22 },
+  brand: { flexDirection: "row", alignItems: "center", gap: 10 },
+  brandLogo: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.primarySoft,
+  },
+  brandLogoImg: { width: "100%", height: "100%" },
+  brandNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  brandName: { fontSize: 18, lineHeight: 24, fontWeight: "800", color: colors.text, letterSpacing: -0.3 },
+  brandPill: { backgroundColor: colors.primary, borderRadius: radius.pill, paddingHorizontal: 7 },
+  brandPillText: { color: "#fff", fontSize: 10, lineHeight: 17, fontWeight: "800", letterSpacing: 0.6 },
+  brandSubRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  brandDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
+  brandSub: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
 });

@@ -35,7 +35,7 @@ export default function MenuList({ title, subtitle, note, entries, footer }: Pro
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {note ? (
         <View style={styles.note}>
-          <Ionicons name="information-circle-outline" size={16} color={colors.textMuted} />
+          <Ionicons name="information-circle-outline" size={18} color={colors.primaryInk} />
           <Text style={styles.noteText}>{note}</Text>
         </View>
       ) : null}
@@ -70,38 +70,41 @@ export default function MenuList({ title, subtitle, note, entries, footer }: Pro
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.xl, paddingBottom: spacing.xxl },
-  title: { fontSize: 24, fontWeight: "700", color: colors.text },
-  subtitle: { fontSize: 14, color: colors.textMuted, marginTop: 4 },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  title: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
+  subtitle: { fontSize: 14, lineHeight: 22, color: colors.textMuted, marginTop: 2 },
   note: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    backgroundColor: colors.card,
-    borderRadius: radius.sm,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.lg,
     padding: spacing.md,
     marginTop: spacing.lg,
+    marginBottom: spacing.sm,
   },
-  noteText: { flex: 1, fontSize: 12, color: colors.textMuted },
+  noteText: { flex: 1, fontSize: 13, lineHeight: 20, color: colors.primaryInk },
   card: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.lg,
+    gap: spacing.md,
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.primarySoft,
     padding: spacing.lg,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     ...shadow.card,
   },
   iconChip: {
     width: 46,
     height: 46,
-    borderRadius: radius.md,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  cardLabel: { fontSize: 16, fontWeight: "700", color: colors.text },
-  cardDescription: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  cardLabel: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
+  cardDescription: { fontSize: 13, lineHeight: 21, color: colors.textMuted, marginTop: 2 },
   badge: {
     minWidth: 24,
     paddingHorizontal: 7,

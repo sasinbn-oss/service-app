@@ -73,11 +73,13 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     (await seen("ลบใบงานนี้ถาวร")) > 0 ? pass("แอดมินเห็นปุ่มลบ") : fail("แอดมินไม่เห็นปุ่มลบ");
     await a.screenshot({ path: path.join(DIR, "del-1-button.png"), fullPage: true });
 
-    // บนเว็บ showAlert ใช้ window.confirm ซึ่งเป็น dialog ของเบราว์เซอร์
-    // ต้องอ่านข้อความจาก dialog ไม่ใช่จาก DOM และต้องกด accept ไม่งั้น click ค้าง
-    let msg = "";
-    a.once("dialog", async (d) => { msg = d.message(); await d.accept(); });
+    // บนเว็บ showAlert เปิดกล่องยืนยันที่วาดในแอป (components/Feedback) ไม่ใช่
+    // window.confirm แล้ว — อ่านข้อความจาก DOM และกดปุ่ม "ลบถาวร" ในกล่อง
     await a.getByText("ลบใบงานนี้ถาวร").locator("visible=true").first().click();
+    await a.waitForTimeout(800);
+    const box = a.getByText("กู้คืนไม่ได้", { exact: false }).locator("visible=true").last();
+    const msg = (await box.count()) ? await box.textContent() : "";
+    await a.getByText("ลบถาวร", { exact: true }).locator("visible=true").last().click();
     await a.waitForTimeout(6000);
     console.log("  ข้อความยืนยัน:", JSON.stringify(msg));
     msg.includes("กู้คืนไม่ได้") ? pass("คำเตือนบอกว่ากู้คืนไม่ได้") : fail("ไม่เตือนเรื่องกู้คืน");

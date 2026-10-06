@@ -9,22 +9,32 @@ const LABELS: Record<RequestStatus, string> = {
   REJECTED: "ไม่อนุมัติ",
 };
 
-const STYLES: Record<RequestStatus, { bg: string; fg: string }> = {
-  PENDING: { bg: "#fef3c7", fg: "#92400e" },
-  APPROVED: { bg: "#dcfce7", fg: "#166534" },
-  REJECTED: { bg: "#fee2e2", fg: "#991b1b" },
+const STYLES: Record<RequestStatus, { bg: string; fg: string; dot: string }> = {
+  PENDING: { bg: colors.warningSoft, fg: colors.warningInk, dot: colors.warning },
+  APPROVED: { bg: colors.successSoft, fg: colors.successInk, dot: colors.success },
+  REJECTED: { bg: colors.dangerSoft, fg: colors.dangerInk, dot: colors.danger },
 };
 
 export default function StatusBadge({ status }: { status: RequestStatus }) {
-  const tone = STYLES[status] ?? { bg: colors.background, fg: colors.textMuted };
+  const tone = STYLES[status] ?? { bg: colors.background, fg: colors.textMuted, dot: colors.textFaint };
   return (
     <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+      <View style={[styles.dot, { backgroundColor: tone.dot }]} />
       <Text style={[styles.text, { color: tone.fg }]}>{LABELS[status] ?? status}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, alignSelf: "flex-start" },
-  text: { fontSize: 12, fontWeight: "700" },
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+    borderRadius: 999,
+    alignSelf: "flex-start",
+  },
+  dot: { width: 7, height: 7, borderRadius: 4 },
+  text: { fontSize: 12, lineHeight: 20, fontWeight: "700" },
 });

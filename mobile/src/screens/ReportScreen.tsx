@@ -227,7 +227,7 @@ export default function ReportScreen({ route }: Props) {
 
       {data?.kind === "monthly" && data.hasHistory === false ? (
         <View style={styles.warnCard}>
-          <Ionicons name="information-circle-outline" size={18} color="#a35a06" />
+          <Ionicons name="information-circle-outline" size={18} color={colors.warningInk} />
           <Text style={styles.warnText}>
             ยังไม่มีเคสที่ปิดแล้วในช่วงนี้ ตัวเลขด้านล่างจึงยังคำนวณไม่ได้ —
             ไม่ได้แปลว่าไม่มีปัญหา แต่แปลว่ายังไม่มีข้อมูล ต้องอัปโหลดสะสมอีกสักพัก
@@ -363,10 +363,10 @@ function SectionBlock({ section, wide }: { section: Section; wide: boolean }) {
                 </View>
                 <View style={styles.rowChips}>
                   {row.zone ? <Chip text={row.zone} /> : null}
-                  {row.workStatusLabel ? <Chip text={row.workStatusLabel} tone="#1d4ed8" /> : null}
+                  {row.workStatusLabel ? <Chip text={row.workStatusLabel} tone={colors.primaryInk} /> : null}
                   {row.parts ? <Chip text={row.parts} /> : null}
-                  {row.scheduledVisitAt ? <Chip text={`นัด ${thaiDate(row.scheduledVisitAt)}`} tone="#1d4ed8" /> : null}
-                  <Chip text={`${row.score} คะแนน`} tone="#7c2d12" />
+                  {row.scheduledVisitAt ? <Chip text={`นัด ${thaiDate(row.scheduledVisitAt)}`} tone={colors.primaryInk} /> : null}
+                  <Chip text={`${row.score} คะแนน`} tone={colors.dangerInk} />
                 </View>
                 {row.symptom ? <Text style={styles.rowSymptom}>{row.symptom}</Text> : null}
               </View>
@@ -520,12 +520,12 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.xs,
   },
-  rowBreached: { backgroundColor: colors.warningSoft, borderColor: "#fcd34d" },
+  rowBreached: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
   rowTop: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
   rowCode: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.textMuted, width: 58 },
   rowName: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 23, color: colors.text },
   rowDays: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
-  rowDaysBreached: { color: "#92400e" },
+  rowDaysBreached: { color: colors.warningInk },
   rowChips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   rowSymptom: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   moreButton: {
@@ -582,5 +582,5 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.md,
   },
-  warnText: { flex: 1, fontSize: 13, lineHeight: 22, color: "#92400e" },
+  warnText: { flex: 1, fontSize: 13, lineHeight: 22, color: colors.warningInk },
 });

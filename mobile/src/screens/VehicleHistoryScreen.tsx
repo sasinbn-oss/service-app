@@ -95,8 +95,8 @@ const styles = StyleSheet.create({
   timestamp: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
   empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  badgeOngoing: { backgroundColor: "#fef3c7" },
-  badgeDone: { backgroundColor: "#dcfce7" },
+  badgeOngoing: { backgroundColor: colors.warningSoft },
+  badgeDone: { backgroundColor: colors.successSoft },
   badgeText: { fontSize: 12, fontWeight: "600", color: colors.text },
   error: { color: colors.danger },
 });

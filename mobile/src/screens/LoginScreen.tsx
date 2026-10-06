@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -10,7 +11,9 @@ import {
   View,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
-import { colors } from "../theme";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { colors, radius, shadow } from "../theme";
+import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AuthStackParamList } from "../navigation/types";
 
@@ -44,41 +47,94 @@ export default function LoginScreen({ navigation }: Props) {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <Text style={styles.title}>Service App</Text>
-      <Text style={styles.subtitle}>เข้าสู่ระบบเพื่อเริ่มใช้งาน</Text>
+      {/* ฟองจาง ๆ ตามหน้าเข้าสู่ระบบของ OTTERI — ตกแต่งอย่างเดียว ไม่รับการแตะ */}
+      <View pointerEvents="none" style={[styles.bubble, { width: 70, height: 70, top: "8%", left: "18%" }]} />
+      <View pointerEvents="none" style={[styles.bubble, { width: 26, height: 26, top: "12%", left: "62%" }]} />
+      <View pointerEvents="none" style={[styles.bubble, { width: 48, height: 48, bottom: "10%", right: "12%" }]} />
 
-      <TextInput
-        style={styles.input}
-        placeholder="รหัสพนักงาน"
-        autoCapitalize="none"
-        value={employeeCode}
-        onChangeText={setEmployeeCode}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="รหัสผ่าน"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
+      <View style={styles.card}>
+        <View style={styles.logoWrap}>
+          <Image source={require("../../assets/logo-otter.png")} style={styles.logo} />
+        </View>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>OTTERI</Text>
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>SERVICE</Text>
+          </View>
+        </View>
+        <Text style={styles.subtitle}>ระบบงานช่างซ่อม</Text>
 
-      {error && <Text style={styles.error}>{error}</Text>}
+        <Text style={styles.label}>รหัสพนักงาน</Text>
+        <View style={styles.inputWrap}>
+          <Ionicons name="person-outline" size={20} color={colors.textFaint} />
+          <TextInput
+            style={styles.input}
+            placeholder="รหัสพนักงาน"
+            placeholderTextColor={colors.textFaint}
+            autoCapitalize="none"
+            value={employeeCode}
+            onChangeText={setEmployeeCode}
+          />
+        </View>
 
-      <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={submitting}>
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>เข้าสู่ระบบ</Text>
-        )}
-      </TouchableOpacity>
+        <Text style={styles.label}>รหัสผ่าน</Text>
+        <View style={styles.inputWrap}>
+          <Ionicons name="key-outline" size={20} color={colors.textFaint} />
+          <TextInput
+            style={styles.input}
+            placeholder="รหัสผ่าน"
+            placeholderTextColor={colors.textFaint}
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+            onSubmitEditing={handleLogin}
+          />
+        </View>
 
-      {/*
-        สมัครเองได้เฉพาะผู้ใช้คนแรกของระบบ ที่เหลือแอดมินเป็นคนสร้างให้
-        ลิงก์ยังอยู่เพื่อให้ตั้งแอดมินคนแรกได้ตอนติดตั้งใหม่ แต่เขียนให้ตรงว่าใช้เมื่อไหร่
-      */}
-      <TouchableOpacity onPress={() => navigation.navigate("Register")}>
-        <Text style={styles.link}>ตั้งแอดมินคนแรก (ใช้ตอนติดตั้งระบบครั้งแรกเท่านั้น)</Text>
-      </TouchableOpacity>
+        {/*
+          ไม่มีหน้ากู้รหัสเอง เพราะบัญชีทั้งหมดแอดมินเป็นคนสร้าง — บอกทางที่ใช้ได้จริง
+          ดีกว่าปล่อยให้คนลืมรหัสไปหาปุ่มที่ไม่มี
+        */}
+        <TouchableOpacity
+          style={styles.forgot}
+          onPress={() =>
+            showAlert(
+              "ลืมรหัสผ่าน",
+              "ให้แอดมินกด \"ตั้งรหัสผ่านใหม่ให้\" ที่บัญชีของคุณ แล้วเข้าระบบด้วยรหัสนั้น ระบบจะให้ตั้งรหัสของตัวเองอีกครั้ง"
+            )
+          }
+        >
+          <Text style={styles.forgotText}>ลืมรหัสผ่าน?</Text>
+        </TouchableOpacity>
+
+        {error && <Text style={styles.error}>{error}</Text>}
+
+        <TouchableOpacity
+          style={[styles.button, submitting && styles.buttonBusy]}
+          onPress={handleLogin}
+          disabled={submitting}
+        >
+          {submitting ? (
+            <>
+              <ActivityIndicator color="#fff" />
+              <Text style={styles.buttonText}>กำลังเข้าสู่ระบบ...</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="key-outline" size={20} color="#fff" />
+              <Text style={styles.buttonText}>เข้าสู่ระบบ</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/*
+          สมัครเองได้เฉพาะผู้ใช้คนแรกของระบบ ที่เหลือแอดมินเป็นคนสร้างให้
+          ลิงก์ยังอยู่เพื่อให้ตั้งแอดมินคนแรกได้ตอนติดตั้งใหม่ แต่เขียนให้ตรงว่าใช้เมื่อไหร่
+        */}
+        <TouchableOpacity onPress={() => navigation.navigate("Register")}>
+          <Text style={styles.link}>ตั้งแอดมินคนแรก (ใช้ตอนติดตั้งระบบครั้งแรกเท่านั้น)</Text>
+        </TouchableOpacity>
+      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -87,50 +143,94 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: "center",
-    padding: 24,
-    backgroundColor: colors.background,
+    alignItems: "center",
+    padding: 16,
+    backgroundColor: colors.primarySoft,
+    overflow: "hidden",
   },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: colors.text,
-    textAlign: "center",
+  bubble: {
+    position: "absolute",
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.7)",
+    borderWidth: 1,
+    borderColor: "rgba(0,159,227,0.18)",
   },
-  subtitle: {
-    fontSize: 14,
-    color: colors.textMuted,
-    textAlign: "center",
-    marginBottom: 32,
-  },
-  input: {
+  card: {
+    width: "100%",
+    maxWidth: 430,
     backgroundColor: colors.card,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
-    padding: 14,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    ...shadow.raised,
+  },
+  logoWrap: {
+    alignSelf: "center",
+    width: 84,
+    height: 84,
+    borderRadius: 24,
+    padding: 8,
+    backgroundColor: colors.card,
     marginBottom: 12,
-    fontSize: 16,
+    ...shadow.raised,
   },
-  button: {
-    backgroundColor: colors.primary,
-    borderRadius: 8,
-    padding: 14,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  link: {
-    color: colors.primary,
+  logo: { width: "100%", height: "100%", borderRadius: 16 },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  title: { fontSize: 26, lineHeight: 34, fontWeight: "800", color: colors.text, letterSpacing: -0.5 },
+  pill: { backgroundColor: colors.primary, borderRadius: radius.pill, paddingHorizontal: 10 },
+  pillText: { color: "#fff", fontSize: 12, lineHeight: 22, fontWeight: "800", letterSpacing: 0.6 },
+  subtitle: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.textMuted,
     textAlign: "center",
-    marginTop: 20,
+    marginTop: 2,
+    marginBottom: 22,
+  },
+  label: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.body, marginBottom: 6 },
+  inputWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+    backgroundColor: colors.card,
+  },
+  input: { flex: 1, paddingVertical: 13, fontSize: 16, color: colors.text },
+  forgot: { alignSelf: "flex-end", marginTop: -4, marginBottom: 14 },
+  forgotText: { color: colors.primaryInk, fontWeight: "700", fontSize: 14, lineHeight: 22 },
+  button: {
+    flexDirection: "row",
+    gap: 10,
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    ...shadow.raised,
+  },
+  buttonBusy: { opacity: 0.75 },
+  buttonText: { color: "#fff", fontSize: 16, lineHeight: 24, fontWeight: "700" },
+  link: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 19,
+    textAlign: "center",
+    marginTop: 18,
   },
   error: {
-    color: colors.danger,
-    marginBottom: 8,
+    color: colors.dangerInk,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+    fontSize: 13,
+    lineHeight: 20,
     textAlign: "center",
   },
 });

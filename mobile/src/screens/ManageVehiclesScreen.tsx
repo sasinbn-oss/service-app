@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -95,14 +96,22 @@ export default function ManageVehiclesScreen() {
           keyExtractor={(item) => String(item.id)}
           renderItem={({ item }) => (
             <View style={styles.card}>
+              <View style={styles.vicon}>
+                <Ionicons name="car-outline" size={22} color={colors.primaryInk} />
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.plate}>{item.plateNumber}</Text>
                 <Text style={styles.line}>
-                  {item.brand ?? ""} {item.model ?? ""} · {item.status}
+                  {item.brand ?? ""} {item.model ?? ""}
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => handleDelete(item)}>
-                <Text style={styles.delete}>ลบ</Text>
+              <VehicleStatusBadge status={item.status} />
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                accessibilityLabel={`ลบ ${item.plateNumber}`}
+                onPress={() => handleDelete(item)}
+              >
+                <Ionicons name="trash-outline" size={18} color={colors.dangerInk} />
               </TouchableOpacity>
             </View>
           )}
@@ -112,7 +121,46 @@ export default function ManageVehiclesScreen() {
   );
 }
 
+/**
+ * สถานะรถเป็นป้ายสีตามความหมายแบบ OTTERI — เดิมขึ้นเป็นรหัสอังกฤษ (AVAILABLE)
+ * ซึ่งแอดมินต้องแปลในหัวเอง
+ */
+const VEHICLE_STATUS: Record<string, { label: string; fg: string; bg: string; dot: string }> = {
+  AVAILABLE: { label: "ว่างพร้อมใช้", fg: colors.successInk, bg: colors.successSoft, dot: colors.success },
+  IN_USE: { label: "กำลังใช้งาน", fg: colors.primaryInk, bg: colors.primarySoft, dot: colors.primary },
+  MAINTENANCE: { label: "ซ่อมบำรุง", fg: colors.warningInk, bg: colors.warningSoft, dot: colors.warning },
+};
+
+function VehicleStatusBadge({ status }: { status: string }) {
+  const t = VEHICLE_STATUS[status] ?? { label: status, fg: colors.textMuted, bg: colors.tile, dot: colors.textFaint };
+  return (
+    <View style={[styles.badge, { backgroundColor: t.bg }]}>
+      <View style={[styles.badgeDot, { backgroundColor: t.dot }]} />
+      <Text style={[styles.badgeText, { color: t.fg }]}>{t.label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  vicon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primarySoft,
+  },
+  badge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 2, borderRadius: 999 },
+  badgeDot: { width: 7, height: 7, borderRadius: 4 },
+  badgeText: { fontSize: 12, lineHeight: 20, fontWeight: "700" },
+  deleteBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dangerSoft,
+  },
   container: { flex: 1, backgroundColor: colors.background },
   form: { padding: 20, borderBottomWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
   title: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 10 },
@@ -131,8 +179,9 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 12,
     backgroundColor: colors.card,
-    borderRadius: 10,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
     padding: 14,

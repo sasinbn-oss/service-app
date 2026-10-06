@@ -40,8 +40,8 @@ export default function HistoryMenuScreen({ navigation }: Props) {
       label: "ประวัติการเบิกของ",
       description: "สถานะคำขอเบิกของคุณ",
       icon: "file-tray-full",
-      tint: "#f3e8ff",
-      iconColor: "#9333ea",
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("MyConsumableRequests"),
     },
     {

@@ -140,9 +140,9 @@ const GROUPS: { key: GroupKey; label: string }[] = [
 const OWNERSHIPS = ["ทั้งหมด", "COCO", "DODO"] as const;
 
 const GRADE_STYLE: Record<string, { color: string; background: string }> = {
-  A: { color: "#0b7a68", background: "#dbf3ee" },
-  B: { color: "#2563a8", background: "#e2eefb" },
-  C: { color: "#6b7280", background: "#eef0f2" },
+  A: { color: colors.successInk, background: colors.successSoft },
+  B: { color: colors.primaryInk, background: colors.primarySoft },
+  C: { color: colors.textMuted, background: colors.tile },
 };
 
 /**
@@ -150,11 +150,11 @@ const GRADE_STYLE: Record<string, { color: string; background: string }> = {
  * ค่าที่ใช้ได้มาจาก WORK_STATUSES ฝั่ง backend ตรงนี้แค่ให้สีเท่านั้น
  */
 const STATUS_STYLE: Record<string, { color: string; background: string }> = {
-  WAITING_PARTS: { color: "#92400e", background: "#fef3c7" },
-  WAITING_TECH: { color: "#1d4ed8", background: "#dbeafe" },
-  WAITING_PAYMENT: { color: "#6d28d9", background: "#ede9fe" },
-  WAITING_CUSTOMER: { color: "#a16207", background: "#fef9c3" },
-  IN_PROGRESS: { color: "#047857", background: "#d1fae5" },
+  WAITING_PARTS: { color: colors.warningInk, background: colors.warningSoft },
+  WAITING_TECH: { color: colors.primaryInk, background: colors.primarySoft },
+  WAITING_PAYMENT: { color: colors.warningInk, background: colors.warningSoft },
+  WAITING_CUSTOMER: { color: colors.warningInk, background: colors.warningSoft },
+  IN_PROGRESS: { color: colors.successInk, background: colors.successSoft },
 };
 
 const NO_STATUS_STYLE = { color: colors.textFaint, background: colors.border };
@@ -475,7 +475,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         <SummaryCard
           label={`เลย SLA ${slaHours} ชม.`}
           value={data?.summary.breached ?? 0}
-          color="#b45309"
+          color={colors.warningInk}
           icon="alert-circle"
           wide={wide}
         />
@@ -483,7 +483,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           label="คะแนนรวม"
           value={data?.summary.totalScore ?? 0}
           sub={`วันละ ${data?.scorePerDay ?? 1} ต่อรายการ`}
-          color="#7c2d12"
+          color={colors.dangerInk}
           icon="speedometer"
           wide={wide}
         />
@@ -560,7 +560,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           <Ionicons
             name="alert-circle-outline"
             size={14}
-            color={breachedOnly ? "#92400e" : colors.textMuted}
+            color={breachedOnly ? colors.warningInk : colors.textMuted}
           />
           <Text style={[styles.chipText, breachedOnly && styles.chipTextWarning]}>
             เฉพาะเลย SLA
@@ -672,7 +672,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
             <View style={{ flex: 1 }} />
             {group.breachedCount > 0 ? (
               <View style={styles.staleBadge}>
-                <Ionicons name="alert-circle" size={12} color="#92400e" />
+                <Ionicons name="alert-circle" size={12} color={colors.warningInk} />
                 <Text style={styles.staleBadgeText}>เลย SLA {group.breachedCount}</Text>
               </View>
             ) : null}
@@ -1031,7 +1031,7 @@ function NoteLogItem({ log, showCase }: { log: NoteLog; showCase?: boolean }) {
         ) : null}
         {log.scheduledVisitAt ? (
           <View style={styles.visitChip}>
-            <Ionicons name="calendar-outline" size={11} color="#1d4ed8" />
+            <Ionicons name="calendar-outline" size={11} color={colors.primaryInk} />
             <Text style={styles.visitChipText}>นัด {thaiDate(log.scheduledVisitAt)}</Text>
           </View>
         ) : null}
@@ -1442,7 +1442,7 @@ function NoteLine({ row }: { row: OutageRow }) {
       ))}
       {row.scheduledVisitAt ? (
         <View style={styles.visitChip}>
-          <Ionicons name="calendar-outline" size={11} color="#1d4ed8" />
+          <Ionicons name="calendar-outline" size={11} color={colors.primaryInk} />
           <Text style={styles.visitChipText}>นัด {thaiDate(row.scheduledVisitAt)}</Text>
         </View>
       ) : null}
@@ -1511,7 +1511,7 @@ const OutageCard = React.memo(function OutageCard({
         <Text style={styles.cardBranch}>{row.branchName}</Text>
         {row.breached ? (
           <View style={styles.breachChip}>
-            <Ionicons name="alert-circle" size={11} color="#92400e" />
+            <Ionicons name="alert-circle" size={11} color={colors.warningInk} />
             <Text style={styles.breachChipText}>เลย SLA</Text>
           </View>
         ) : null}
@@ -1557,7 +1557,7 @@ const OutageCard = React.memo(function OutageCard({
         <Ionicons
           name="time-outline"
           size={14}
-          color={row.breached ? "#92400e" : colors.textMuted}
+          color={row.breached ? colors.warningInk : colors.textMuted}
         />
         <Text style={[styles.cardTime, row.breached && styles.cardTimeBreached]}>
           {isMachines ? "ดับมาแล้ว" : "สัญญาณหายมาแล้ว"} {slaText(row.slaHours)}
@@ -1770,9 +1770,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
   },
-  chipWarning: { backgroundColor: colors.warningSoft, borderColor: "#fcd34d" },
+  chipWarning: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
   chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  chipTextWarning: { color: "#92400e" },
+  chipTextWarning: { color: colors.warningInk },
 
   groupPicker: {
     flexDirection: "row",
@@ -1875,12 +1875,12 @@ const styles = StyleSheet.create({
     gap: 4,
     backgroundColor: colors.warningSoft,
     borderWidth: 1,
-    borderColor: "#fcd34d",
+    borderColor: colors.warningBorder,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
   },
-  staleBadgeText: { fontSize: 11, lineHeight: 18, color: "#92400e", fontWeight: "600" },
+  staleBadgeText: { fontSize: 11, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
 
   tableHeader: {
     flexDirection: "row",
@@ -1922,27 +1922,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 24,
     fontWeight: "700",
-    color: "#7c2d12",
+    color: colors.dangerInk,
     textAlign: "right",
     paddingRight: spacing.sm,
   },
   scoreBadge: {
-    backgroundColor: "#fdf0e6",
+    backgroundColor: colors.dangerSoft,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.sm,
     paddingVertical: 1,
   },
-  scoreBadgeText: { fontSize: 11, lineHeight: 18, color: "#7c2d12", fontWeight: "700" },
+  scoreBadgeText: { fontSize: 11, lineHeight: 18, color: colors.dangerInk, fontWeight: "700" },
   visitChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    backgroundColor: "#dbeafe",
+    backgroundColor: colors.primarySoft,
     borderRadius: radius.sm,
     paddingHorizontal: 6,
     paddingVertical: 1,
   },
-  visitChipText: { fontSize: 11, lineHeight: 18, color: "#1d4ed8", fontWeight: "700" },
+  visitChipText: { fontSize: 11, lineHeight: 18, color: colors.primaryInk, fontWeight: "700" },
   visitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   visitInput: {
     flex: 1,
@@ -1958,7 +1958,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   visitInputBad: { borderColor: colors.danger },
-  slaTextBreached: { color: "#92400e" },
+  slaTextBreached: { color: colors.warningInk },
 
   cardList: { padding: spacing.md, gap: spacing.sm },
   card: {
@@ -1969,25 +1969,25 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.sm,
   },
-  cardBreached: { backgroundColor: colors.warningSoft, borderColor: "#fcd34d" },
+  cardBreached: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
   cardTop: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   cardBranch: { flex: 1, fontSize: 14, lineHeight: 23, fontWeight: "700", color: colors.text },
   cardChips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   cardBottom: { flexDirection: "row", alignItems: "center", gap: 4, flexWrap: "wrap" },
   cardTime: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  cardTimeBreached: { color: "#92400e" },
+  cardTimeBreached: { color: colors.warningInk },
   cardTimeExact: { fontSize: 11, lineHeight: 20, color: colors.textFaint },
 
   breachChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    backgroundColor: "#fde68a",
+    backgroundColor: colors.warningBorder,
     borderRadius: radius.pill,
     paddingHorizontal: 8,
     paddingVertical: 1,
   },
-  breachChipText: { fontSize: 11, lineHeight: 18, color: "#92400e", fontWeight: "700" },
+  breachChipText: { fontSize: 11, lineHeight: 18, color: colors.warningInk, fontWeight: "700" },
 
   zoneChip: {
     backgroundColor: colors.border,

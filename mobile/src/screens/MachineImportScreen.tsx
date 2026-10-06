@@ -279,7 +279,7 @@ export default function MachineImportScreen() {
             <View style={styles.warnCard}>
               {branchPlan.warnings.map((w, i) => (
                 <View key={i} style={styles.warnRow}>
-                  <Ionicons name="warning-outline" size={16} color="#92400e" />
+                  <Ionicons name="warning-outline" size={16} color={colors.warningInk} />
                   <Text style={styles.warnText}>{w}</Text>
                 </View>
               ))}
@@ -394,7 +394,7 @@ export default function MachineImportScreen() {
             <View style={styles.warnCard}>
               {cancelledPlan.warnings.map((w, i) => (
                 <View key={i} style={styles.warnRow}>
-                  <Ionicons name="warning-outline" size={16} color="#92400e" />
+                  <Ionicons name="warning-outline" size={16} color={colors.warningInk} />
                   <Text style={styles.warnText}>{w}</Text>
                 </View>
               ))}
@@ -511,7 +511,7 @@ export default function MachineImportScreen() {
             <View style={styles.warnCard}>
               {plan.warnings.map((w, i) => (
                 <View key={i} style={styles.warnRow}>
-                  <Ionicons name="warning-outline" size={16} color="#92400e" />
+                  <Ionicons name="warning-outline" size={16} color={colors.warningInk} />
                   <Text style={styles.warnText}>{w}</Text>
                 </View>
               ))}
@@ -612,7 +612,7 @@ function Row({
     tone === "danger"
       ? colors.danger
       : tone === "warning"
-        ? "#92400e"
+        ? colors.warningInk
         : tone === "success"
           ? colors.success
           : colors.text;
@@ -734,7 +734,7 @@ const styles = StyleSheet.create({
   reclassNote: {
     fontSize: 12,
     lineHeight: 20,
-    color: "#92400e",
+    color: colors.warningInk,
     backgroundColor: colors.warningSoft,
     borderRadius: radius.sm,
     padding: spacing.sm,
@@ -744,13 +744,13 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     backgroundColor: colors.warningSoft,
     borderWidth: 1,
-    borderColor: "#fcd34d",
+    borderColor: colors.warningBorder,
     borderRadius: radius.md,
     padding: spacing.md,
     marginBottom: spacing.md,
   },
   warnRow: { flexDirection: "row", gap: spacing.sm },
-  warnText: { flex: 1, fontSize: 12, lineHeight: 20, color: "#92400e" },
+  warnText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.warningInk },
 
   noteCard: {
     flexDirection: "row",
