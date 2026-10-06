@@ -19,6 +19,40 @@ export const colors = {
   textFaint: "#94a3b8",
 };
 
+/**
+ * สีตามมาตรฐาน OTTERI UI (OTTERI-UI-GUIDE.md หัวข้อ 3)
+ *
+ * แยกจาก `colors` ไว้ก่อน เพราะตอนนี้ใช้แค่หน้าแรกเป็นตัวอย่าง ถ้าเปลี่ยน `colors`
+ * ทันที ทุกหน้าจะเปลี่ยนสีครึ่ง ๆ กลาง ๆ ไปพร้อมกัน — พอตกลงหน้าตาแล้ว
+ * ค่อยย้ายค่าพวกนี้เข้า `colors` แล้วลบชุดนี้ทิ้ง
+ */
+export const otteri = {
+  primary: "#009FE3",
+  primaryDark: "#0088CC",
+  primaryInk: "#006491",
+  navy: "#0B3B60",
+  bg: "#F4F9FD",
+  card: "#FFFFFF",
+  tile: "#EFF4FF",
+  sky50: "#F0F8FF",
+  sky100: "#E1F0FA",
+  sky200: "#C9E6FF",
+  ink: "#0F172A",
+  body: "#334155",
+  muted: "#64748B",
+  faint: "#94A3B8",
+  line: "#E2E8F0",
+  success: "#10B981",
+  successInk: "#065F46",
+  successBg: "#ECFDF5",
+  warn: "#F59E0B",
+  warnInk: "#92400E",
+  warnBg: "#FFFBEB",
+  danger: "#EF4444",
+  dangerInk: "#B91C1C",
+  dangerBg: "#FEF2F2",
+};
+
 export const spacing = {
   xs: 4,
   sm: 8,
