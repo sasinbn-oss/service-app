@@ -1,5 +1,5 @@
 import React from "react";
-import { ActivityIndicator, View } from "react-native";
+import { View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import AuthNavigator from "./src/navigation/AuthNavigator";
 import MainNavigator from "./src/navigation/MainNavigator";
 import AppShell from "./src/components/AppShell";
+import { FeedbackHost, WasherLoader } from "./src/components/Feedback";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
 import { colors } from "./src/theme";
 import { installWebFonts } from "./src/utils/webFonts";
@@ -18,8 +19,8 @@ function RootNavigator() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color={colors.primary} />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
+        <WasherLoader text="กำลังโหลด..." />
       </View>
     );
   }
@@ -50,7 +51,10 @@ export default function App() {
     <SafeAreaProvider>
       <AuthProvider>
         <StatusBar style="auto" />
-        <RootNavigator />
+        <View style={{ flex: 1 }}>
+          <RootNavigator />
+          <FeedbackHost />
+        </View>
       </AuthProvider>
     </SafeAreaProvider>
   );
