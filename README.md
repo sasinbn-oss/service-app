@@ -102,8 +102,11 @@ curl -X POST localhost:4000/api/auth/register -H 'Content-Type: application/json
 
 ```
 service-app/
-├── backend/   # REST API (Node.js + Express + TypeScript + Prisma + PostgreSQL)
-└── mobile/    # แอปมือถือ (Expo SDK 54 / React Native + TypeScript)
+├── backend/    # REST API (Node.js + Express + TypeScript + Prisma + PostgreSQL)
+├── mobile/     # แอปมือถือและเว็บ (Expo SDK 54 / React Native + TypeScript)
+├── tests/      # เทสต์ที่ยิงไปที่ backend จริง — bash tests/run-all.sh
+├── docs/       # ไฟล์แม่แบบเอกสารของบริษัทที่ใช้อ้างอิงรูปแบบ
+└── CLAUDE.md   # กับดักและข้อตกลงของโปรเจกต์ สำหรับคนและ Claude ที่มาทำต่อ
 ```
 
 ## Backend
