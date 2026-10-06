@@ -26,6 +26,7 @@ cp .env.example .env          # แล้วแก้ DATABASE_URL / DIRECT_URL 
 npm install
 npx prisma migrate deploy     # สร้างตารางทั้งหมดจาก migration ที่มีอยู่
 npx prisma db seed            # ใส่ข้อมูลตัวอย่าง (อะไหล่ คู่มือ สาขาตัวอย่าง)
+npm run seed:test             # ข้อมูลที่ชุดทดสอบใช้ (ผู้ใช้ สาขา อะไหล่)
 npm run dev                   # http://localhost:4000
 
 # ── แอป (อีกหน้าต่างหนึ่ง)

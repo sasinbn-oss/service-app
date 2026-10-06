@@ -18,7 +18,8 @@
     "seed": "ts-node prisma/seed.ts",
     "import:parts": "ts-node scripts/import-spare-parts.ts",
     "preview:flow": "ts-node scripts/preview-flowchart.ts",
-    "import:flow": "ts-node scripts/import-troubleshooting.ts"
+    "import:flow": "ts-node scripts/import-troubleshooting.ts",
+    "seed:test": "ts-node scripts/seed-test-fixtures.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1142.0",
