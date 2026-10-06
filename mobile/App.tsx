@@ -9,6 +9,9 @@ import MainNavigator from "./src/navigation/MainNavigator";
 import AppShell from "./src/components/AppShell";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
 import { colors } from "./src/theme";
+import { installWebFonts } from "./src/utils/webFonts";
+
+installWebFonts();
 
 function RootNavigator() {
   const { user, loading } = useAuth();

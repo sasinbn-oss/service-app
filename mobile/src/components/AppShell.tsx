@@ -60,7 +60,8 @@ const styles = StyleSheet.create({
     height: "100%",
     overflow: "hidden",
     alignItems: "center",
-    backgroundColor: colors.border,
+    // ขอบสองข้างบนจอคอมเป็นฟ้าอ่อนแบบ OTTERI ไม่ใช่เทา — คอลัมน์แอปจะได้ดูเป็นส่วนเดียวกับพื้น
+    backgroundColor: colors.primarySoft,
   },
   column: {
     flex: 1,

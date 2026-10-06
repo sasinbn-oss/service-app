@@ -6,7 +6,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
-import { otteri, radius, spacing } from "../theme";
+import { colors, radius, spacing } from "../theme";
 import { MenuEntry } from "../components/MenuList";
 import { HomeStackParamList } from "../navigation/types";
 
@@ -52,8 +52,8 @@ export default function HomeScreen({ navigation }: Props) {
       // ไม่ใช้ไอคอนถาดเอกสาร เพราะเมนูเบิกของใช้สิ้นเปลืองใช้อยู่แล้ว
       // ไอคอนซ้ำกันสองอันในเมนูเดียวทำให้กวาดตาหาผิดอัน
       icon: "briefcase",
-      tint: otteri.warnBg,
-      iconColor: otteri.warnInk,
+      tint: colors.warningSoft,
+      iconColor: colors.warningInk,
       badge: inbox,
       onPress: () => navigation.navigate("WorkOrderList", { inbox: true }),
     },
@@ -64,8 +64,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "ติดตามเครื่องเสีย",
       description: "เครื่องดับและสาขาสัญญาณหาย พร้อมเวลา SLA",
       icon: "pulse",
-      tint: otteri.dangerBg,
-      iconColor: otteri.dangerInk,
+      tint: colors.dangerSoft,
+      iconColor: colors.dangerInk,
       onPress: () => navigation.navigate("MachineDashboard"),
     },
     {
@@ -75,8 +75,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "ใบงานซ่อม",
       description: "เปิดใบงาน มอบหมายช่าง และปิดงานเมื่อทำเสร็จ",
       icon: "clipboard-outline",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("WorkOrderList"),
     },
     {
@@ -86,8 +86,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "รายงาน",
       description: "ใบงานรายวัน สรุปรายสัปดาห์ ภาพรวมผู้บริหาร และอะไหล่ที่ต้องสั่ง",
       icon: "document-text",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("ReportsMenu"),
     },
     {
@@ -97,8 +97,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "เอกสารขอโอนสินค้า",
       description: "กรอกรายการ แล้วได้ไฟล์ Word ตามฟอร์มบริษัท",
       icon: "swap-horizontal",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("TransferDocument"),
     },
     {
@@ -108,8 +108,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "วินิจฉัยอาการเสีย",
       description: "ตอบใช่/ไม่ทีละขั้น พร้อมผังวงจร",
       icon: "construct",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("FlowList"),
     },
     {
@@ -119,8 +119,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "รายการอะไหล่",
       description: "ค้นหารหัส ยี่ห้อ และรูปอะไหล่",
       icon: "cube",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("SparePartList"),
     },
     {
@@ -130,8 +130,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "รายงานตัวเข้าสาขา",
       description: "ยืนยันตำแหน่งด้วย GPS",
       icon: "location",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("BranchCheckIn"),
     },
     {
@@ -141,8 +141,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "บันทึกการทำงาน",
       description: "ลงงานที่ทำในแต่ละวัน",
       icon: "create",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("WorkLogForm"),
     },
     {
@@ -152,8 +152,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "ลงทะเบียนใช้รถ",
       description: "เช็คอิน / คืนรถ พร้อมเลขไมล์",
       icon: "car",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("VehicleCheckIn"),
     },
     {
@@ -163,8 +163,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "เปลี่ยนรหัสผ่าน",
       description: "ตั้งรหัสผ่านใหม่ของบัญชีตัวเอง",
       icon: "key",
-      tint: otteri.line,
-      iconColor: otteri.muted,
+      tint: colors.border,
+      iconColor: colors.textMuted,
       onPress: () => navigation.navigate("ChangePassword"),
     },
     {
@@ -174,8 +174,8 @@ export default function HomeScreen({ navigation }: Props) {
       label: "เบิกของใช้สิ้นเปลือง",
       description: "ขอเบิกของจากออฟฟิศ",
       icon: "file-tray-full",
-      tint: otteri.sky100,
-      iconColor: otteri.primaryInk,
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("ConsumableRequest"),
     },
   ];
@@ -297,7 +297,7 @@ function Hero({
         </View>
         <View style={styles.heroKpiGo}>
           <Text style={styles.heroKpiGoText}>เปิดกล่องงาน</Text>
-          <Ionicons name="arrow-forward" size={16} color={otteri.navy} />
+          <Ionicons name="arrow-forward" size={16} color={colors.navy} />
         </View>
       </TouchableOpacity>
     </View>
@@ -322,7 +322,7 @@ function MenuCard({ entry }: { entry: HomeEntry }) {
         <Text style={styles.cardLabelEn}>{entry.labelEn}</Text>
         <Text style={styles.cardDescription}>{entry.description}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={20} color={otteri.faint} />
+      <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
     </TouchableOpacity>
   );
 }
@@ -348,7 +348,7 @@ function BuildLine() {
 
 // เงาฟ้าอ่อนแบบ --shadow-md ของ OTTERI — บนเว็บใช้ boxShadow ตรง ๆ ได้ จึงตรงกับต้นแบบกว่า
 const cardShadow = {
-  shadowColor: otteri.navy,
+  shadowColor: colors.navy,
   shadowOffset: { width: 0, height: 4 },
   shadowOpacity: 0.06,
   shadowRadius: 16,
@@ -356,11 +356,11 @@ const cardShadow = {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: otteri.bg },
+  container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
 
   hero: {
-    backgroundColor: otteri.navy,
+    backgroundColor: colors.navy,
     borderRadius: 24,
     padding: spacing.xl,
     overflow: "hidden",
@@ -375,7 +375,7 @@ const styles = StyleSheet.create({
     borderRadius: 130,
     right: -90,
     top: -110,
-    backgroundColor: otteri.primary,
+    backgroundColor: colors.primary,
     opacity: 0.35,
   },
   heroTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
@@ -384,13 +384,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: otteri.successBg,
+    backgroundColor: colors.successSoft,
     paddingHorizontal: 10,
     paddingVertical: 2,
     borderRadius: radius.pill,
   },
-  heroBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: otteri.success },
-  heroBadgeText: { color: otteri.successInk, fontSize: 12, lineHeight: 20, fontWeight: "700" },
+  heroBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
+  heroBadgeText: { color: colors.successInk, fontSize: 12, lineHeight: 20, fontWeight: "700" },
   heroName: { color: "#fff", fontSize: 26, lineHeight: 38, fontWeight: "800", marginTop: spacing.sm },
   heroArea: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 },
   heroAreaText: { color: "rgba(255,255,255,0.85)", fontSize: 14, lineHeight: 22 },
@@ -414,22 +414,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     minHeight: 42,
   },
-  heroKpiGoText: { color: otteri.navy, fontSize: 14, lineHeight: 22, fontWeight: "700" },
+  heroKpiGoText: { color: colors.navy, fontSize: 14, lineHeight: 22, fontWeight: "700" },
 
   group: { marginTop: spacing.xl },
   groupHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.xs },
-  groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: otteri.success },
-  groupTitle: { fontSize: 15, lineHeight: 24, fontWeight: "800", color: otteri.navy },
-  groupTitleEn: { fontSize: 12, lineHeight: 20, color: otteri.faint },
+  groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
+  groupTitle: { fontSize: 15, lineHeight: 24, fontWeight: "800", color: colors.navy },
+  groupTitleEn: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
 
   card: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    backgroundColor: otteri.card,
+    backgroundColor: colors.card,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: otteri.sky100,
+    borderColor: colors.primarySoft,
     padding: spacing.lg,
     marginTop: spacing.sm,
     ...cardShadow,
@@ -442,14 +442,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   cardTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  cardLabel: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: otteri.ink },
-  cardLabelEn: { fontSize: 11, lineHeight: 16, color: otteri.faint, fontWeight: "600" },
-  cardDescription: { fontSize: 13, lineHeight: 21, color: otteri.muted, marginTop: 2 },
+  cardLabel: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
+  cardLabelEn: { fontSize: 11, lineHeight: 16, color: colors.textFaint, fontWeight: "600" },
+  cardDescription: { fontSize: 13, lineHeight: 21, color: colors.textMuted, marginTop: 2 },
   cardBadge: {
     minWidth: 22,
     paddingHorizontal: 7,
     borderRadius: radius.pill,
-    backgroundColor: otteri.danger,
+    backgroundColor: colors.danger,
     alignItems: "center",
   },
   cardBadgeText: { color: "#fff", fontSize: 12, lineHeight: 20, fontWeight: "700" },
@@ -457,7 +457,7 @@ const styles = StyleSheet.create({
   build: {
     fontSize: 11,
     lineHeight: 19,
-    color: otteri.faint,
+    color: colors.textFaint,
     textAlign: "center",
     marginTop: spacing.lg,
   },
