@@ -54,8 +54,8 @@ export default function AdminMenuScreen({ navigation }: Props) {
       label: "จัดการข้อมูลอะไหล่",
       description: "เพิ่มอะไหล่และอัปโหลดรูป",
       icon: "cube",
-      tint: "#e0e7ff",
-      iconColor: "#4f46e5",
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("ManageSpareParts"),
     },
     {
@@ -63,8 +63,8 @@ export default function AdminMenuScreen({ navigation }: Props) {
       label: "จัดการของใช้สิ้นเปลือง",
       description: "รายการของและจำนวนคงเหลือ",
       icon: "file-tray-full",
-      tint: "#f3e8ff",
-      iconColor: "#9333ea",
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("ManageConsumables"),
     },
     {

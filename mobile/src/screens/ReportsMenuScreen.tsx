@@ -26,8 +26,8 @@ const ENTRIES: Entry[] = [
     who: "หัวหน้าช่าง · ช่างแต่ละโซน",
     question: "วันนี้ต้องไปที่ไหนก่อน",
     icon: "today-outline",
-    tint: "#fbf0dd",
-    iconColor: "#a35a06",
+    tint: colors.warningSoft,
+    iconColor: colors.warningInk,
   },
   {
     kind: "weekly",
@@ -44,8 +44,8 @@ const ENTRIES: Entry[] = [
     who: "ผู้บริหาร · เจ้าของกิจการ",
     question: "เดือนนี้ดีขึ้นกว่าเดือนที่แล้วไหม",
     icon: "trending-up-outline",
-    tint: "#ece9f8",
-    iconColor: "#5b3fb0",
+    tint: colors.primarySoft,
+    iconColor: colors.primaryInk,
     caveat: "ต้องมีเคสที่ปิดแล้วสะสมสัก 3–4 สัปดาห์ ตัวเลขถึงจะเชื่อได้",
   },
   {
@@ -54,8 +54,8 @@ const ENTRIES: Entry[] = [
     who: "ฝ่ายจัดซื้อ · คลัง",
     question: "ต้องสั่งอะไรเข้ามาบ้าง",
     icon: "cube-outline",
-    tint: "#e0f2ec",
-    iconColor: "#0f7a5a",
+    tint: colors.successSoft,
+    iconColor: colors.successInk,
   },
 ];
 
@@ -107,5 +107,5 @@ const styles = StyleSheet.create({
   label: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
   question: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
   who: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
-  caveat: { fontSize: 11, lineHeight: 19, color: "#a35a06", marginTop: 2 },
+  caveat: { fontSize: 11, lineHeight: 19, color: colors.warningInk, marginTop: 2 },
 });

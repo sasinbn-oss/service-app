@@ -122,12 +122,12 @@ const styles = StyleSheet.create({
   meta: { fontSize: 13, color: colors.textMuted },
   warnBadge: {
     marginTop: 10,
-    backgroundColor: "#fef3c7",
+    backgroundColor: colors.warningSoft,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  warnText: { fontSize: 12, color: "#92400e" },
+  warnText: { fontSize: 12, color: colors.warningInk },
   empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   error: { color: colors.danger, textAlign: "center", marginTop: 40 },
 });

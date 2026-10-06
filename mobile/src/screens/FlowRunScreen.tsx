@@ -258,12 +258,12 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   warnBox: {
     marginTop: 20,
-    backgroundColor: "#fef3c7",
+    backgroundColor: colors.warningSoft,
     borderRadius: 10,
     padding: 16,
   },
-  warnTitle: { fontSize: 15, fontWeight: "700", color: "#92400e", marginBottom: 6 },
-  warnBody: { fontSize: 14, color: "#92400e", lineHeight: 21 },
+  warnTitle: { fontSize: 15, fontWeight: "700", color: colors.warningInk, marginBottom: 6 },
+  warnBody: { fontSize: 14, color: colors.warningInk, lineHeight: 21 },
   diagramSection: { marginTop: 24 },
   diagramLabel: { fontSize: 13, color: colors.textMuted, fontWeight: "600", marginBottom: 8 },
   diagramThumb: {

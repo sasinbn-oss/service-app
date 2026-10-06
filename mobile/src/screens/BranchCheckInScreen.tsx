@@ -165,8 +165,8 @@ const styles = StyleSheet.create({
     padding: 16,
     marginTop: 20,
   },
-  resultSuccess: { backgroundColor: "#dcfce7", borderColor: "#86efac" },
-  resultWarning: { backgroundColor: "#fef3c7", borderColor: "#fcd34d" },
+  resultSuccess: { backgroundColor: colors.successSoft, borderColor: colors.success },
+  resultWarning: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
   resultTitle: { fontWeight: "700", fontSize: 15, color: colors.text, marginBottom: 6 },
   resultLine: { fontSize: 13, color: colors.text, marginTop: 2 },
 });

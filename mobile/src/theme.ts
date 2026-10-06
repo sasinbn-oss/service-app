@@ -29,6 +29,8 @@ export const colors = {
   warning: "#F59E0B",
   warningInk: "#92400E",
   warningSoft: "#FFFBEB",
+  /** ขอบของการ์ดหรือชิปที่เกินเวลา — เส้นเหลืองช่วยให้เห็นจากระยะไกลกว่าพื้นอ่อนอย่างเดียว */
+  warningBorder: "#FDE68A",
   background: "#F4F9FD",
   card: "#FFFFFF",
   border: "#E2E8F0",

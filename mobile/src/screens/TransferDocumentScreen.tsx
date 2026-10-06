@@ -499,7 +499,7 @@ export default function TransferDocumentScreen() {
                 <Ionicons
                   name={created.format === "pdf" ? "document" : "document-text"}
                   size={22}
-                  color={created.format === "pdf" ? "#b91c1c" : "#2563eb"}
+                  color={created.format === "pdf" ? colors.dangerInk : colors.primaryInk}
                 />
               </View>
               <View style={{ flex: 1 }}>
@@ -667,7 +667,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingVertical: spacing.lg,
   },
-  submitPdf: { backgroundColor: "#b91c1c" },
+  submitPdf: { backgroundColor: colors.dangerInk },
   submitDisabled: { backgroundColor: colors.borderStrong },
   submitText: { color: "#fff", fontSize: 16, lineHeight: 26, fontWeight: "700" },
 
@@ -684,7 +684,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     backgroundColor: colors.primarySoft,
     borderWidth: 1,
-    borderColor: "#bfdbfe",
+    borderColor: colors.sky200,
     borderRadius: radius.md,
     padding: spacing.md,
   },

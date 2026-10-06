@@ -68,11 +68,23 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "ALL", label: "ทั้งหมด" },
 ];
 
+/**
+ * สีป้ายสถานะตามความหมายของ OTTERI
+ *
+ * เดิมทุกขั้นที่ยังไม่จบเป็นสีแดง แต่แดงในระบบนี้แปลว่าผิดปกติหรือลบ — ใบงาน
+ * ที่เดินตามขั้นปกติไม่ได้ผิดอะไร พอแดงทั้งหน้าคนก็เลิกสังเกตสีไปเลย
+ * - ฟ้า: รอคนในบริษัททำขั้นถัดไป (ระบุอะไหล่ เช็คคลัง จ่ายงาน นัดวัน ช่างเข้า)
+ * - เหลือง: รอลูกค้า (เสนอราคา จ่ายเงิน) ซึ่งเราเร่งเองไม่ได้
+ * - เขียว: ปิดงานแล้ว · เทา: ยกเลิก
+ * ตัวอักษรใช้สีเข้ม (*Ink) เพราะสีหลักอ่อนเกินไปบนพื้นอ่อน
+ */
 export function statusTone(status: string) {
-  if (status === "DONE") return { bg: colors.successSoft, fg: colors.success };
-  if (status === "CANCELLED") return { bg: colors.background, fg: colors.textFaint };
-  if (status === "IN_PROGRESS") return { bg: colors.warningSoft, fg: colors.warning };
-  return { bg: colors.dangerSoft, fg: colors.danger };
+  if (status === "DONE") return { bg: colors.successSoft, fg: colors.successInk };
+  if (status === "CANCELLED") return { bg: colors.tile, fg: colors.textMuted };
+  if (status === "AWAITING_QUOTE" || status === "AWAITING_PAYMENT") {
+    return { bg: colors.warningSoft, fg: colors.warningInk };
+  }
+  return { bg: colors.primarySoft, fg: colors.primaryInk };
 }
 
 export function formatDateTime(iso: string | null) {
