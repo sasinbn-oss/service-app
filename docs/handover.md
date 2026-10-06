@@ -57,7 +57,7 @@ Render → **Workspace Settings → Members → Invite** · ให้สิท�
 |---|---|
 | แค่พัฒนาฟีเจอร์ | **ไม่ต้องให้เลย** — ให้เขาสร้างโปรเจกต์ Supabase ฟรีของตัวเอง |
 | ดูข้อมูลจริงเพื่อหาสาเหตุบั๊ก | สร้าง user **อ่านอย่างเดียว** ให้ (ดูหัวข้อถัดไป) |
-| ต้องแก้ข้อมูลจริง | ให้ `DATABASE_URL` เต็ม — **และสำรองข้อมูลก่อน** |
+| ต้องแก้ข้อมูลจริง | สร้าง user **แก้ได้แต่ลบฐานข้อมูลไม่ได้** — ไม่ใช่ `DATABASE_URL` เต็ม |
 
 ### 4. ก่อนให้สิทธิ์ ทำสองอย่างนี้เสมอ
 
@@ -100,6 +100,54 @@ alter default privileges in schema public grant select on tables to dev_readonly
 ```sql
 drop owned by dev_readonly;
 drop role dev_readonly;
+```
+
+---
+
+## สร้าง user ที่แก้ข้อมูลได้ แต่ลบฐานข้อมูลไม่ได้
+
+**ใช้อันนี้แทนการส่ง `DATABASE_URL` เต็ม** — "แก้ข้อมูลได้" กับ
+"ลบฐานข้อมูลทิ้งได้" ไม่จำเป็นต้องมาคู่กัน
+
+Supabase → **SQL Editor** → รัน (เปลี่ยนรหัสผ่านเป็นของตัวเอง):
+
+```sql
+create role dev_write with login password 'ตั้งรหัสผ่านตรงนี้';
+grant connect on database postgres to dev_write;
+grant usage on schema public to dev_write;
+grant select, insert, update, delete on all tables in schema public to dev_write;
+grant usage, select on all sequences in schema public to dev_write;
+-- ตารางที่สร้างทีหลังก็ให้สิทธิ์เหมือนกัน ไม่ต้องมาสั่งซ้ำ
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to dev_write;
+alter default privileges in schema public
+  grant usage, select on sequences to dev_write;
+```
+
+แล้วส่ง connection string ที่เปลี่ยน username กับรหัสผ่านเป็นของ `dev_write` ให้เขา
+
+ทดสอบกับระบบจริงแล้ว:
+
+| ลองอะไร | ผล |
+|---|---|
+| รันแอปทั้งตัวด้วย user นี้ แล้วรันเทสต์ 61 ข้อ | **ผ่านหมด** — เปิดใบงาน แนบรูป ปิดงาน ลบใบงาน ได้ครบ |
+| `drop table` | `must be owner of table` |
+| `drop schema public` | `must be owner of schema public` |
+| `create table` | `permission denied for schema public` |
+| `prisma migrate reset --force` | **ล้มเหลว ตารางทั้ง 27 ตารางอยู่ครบ** |
+
+แปลว่าเขาทำงานกับข้อมูลจริงได้ครบทุกอย่างที่แอปทำได้
+รวมถึงลบใบงาน แต่คำสั่งที่ลบทั้งฐานข้อมูลใช้ไม่ได้เลย
+
+**ข้อแลกอย่างเดียว** user นี้รัน migration ไม่ได้ ซึ่งถูกแล้ว — migration
+ควรรันตอน deploy ผ่าน Render ด้วย `DATABASE_URL` ตัวหลัก ไม่ใช่ให้คน
+มารันมือกับฐานข้อมูลจริง ถ้าเขาต้องเพิ่มตาราง ให้ส่ง migration มา แล้วพี่ deploy เอง
+
+เลิกให้สิทธิ์เมื่อไหร่:
+
+```sql
+drop owned by dev_write;
+drop role dev_write;
 ```
 
 ---
