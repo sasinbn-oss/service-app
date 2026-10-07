@@ -12,6 +12,7 @@ import MachineImportScreen from "../screens/MachineImportScreen";
 import WorkOrderListScreen from "../screens/WorkOrderListScreen";
 import WorkOrderFormScreen from "../screens/WorkOrderFormScreen";
 import WorkOrderDetailScreen from "../screens/WorkOrderDetailScreen";
+import PlanBoardScreen from "../screens/PlanBoardScreen";
 import ReportsMenuScreen from "../screens/ReportsMenuScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
@@ -58,6 +59,7 @@ import {
  * (บนจอแคบยังมี เพราะแถบนั้นเป็นที่อยู่ของปุ่มสามขีด)
  */
 const OWN_TITLE = new Set([
+  "PlanBoard",
   "HomeMenu",
   "WorkOrderList",
   "MachineDashboard",
@@ -229,8 +231,17 @@ function LogoutButton() {
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
 function HomeStackNavigator() {
+  const { user } = useAuth();
+  // แอดมินกับหัวหน้าภาคเปิดแอปมาเจอแผนงานวันนี้ก่อน — คำถามแรกของเช้าคือ
+  // "วันนี้ใครไปไหน" ไม่ใช่เมนู ช่างยังเริ่มที่หน้าหลักเหมือนเดิม
+  const planner = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
   return (
-    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout}>
+    <HomeStack.Navigator
+      screenOptions={commonScreenOptions}
+      screenLayout={pageEnterLayout}
+      initialRouteName={planner ? "PlanBoard" : "HomeMenu"}
+    >
+      <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
       <HomeStack.Screen
         name="HomeMenu"
         component={HomeScreen}

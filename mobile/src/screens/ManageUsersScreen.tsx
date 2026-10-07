@@ -38,7 +38,7 @@ interface ManagedUser {
 }
 
 const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
-  { value: "EMPLOYEE", label: "ช่าง", hint: "รับงานที่ถูกจ่ายให้ นัดวัน และปิดงาน" },
+  { value: "EMPLOYEE", label: "ช่าง", hint: "รับงานที่ถูกจ่ายให้ บันทึกผลตรวจหน้างาน และปิดงาน" },
   { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาคที่ดูแล" },
   { value: "ADMIN", label: "แอดมิน", hint: "เปิดใบงาน เช็คคลัง และทำแทนได้ทุกขั้น" },
   {

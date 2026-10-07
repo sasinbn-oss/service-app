@@ -28,7 +28,8 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     await p.waitForTimeout(4000);
   };
   const openWO = async (p, code) => {
-    await p.getByText("ใบงานซ่อม").locator("visible=true").first().click();
+    // แท็บล่าง "ใบงาน" — แอดมินเปิดมาเจอบอร์ดแผนงาน ไม่ใช่หน้าหลักที่มีการ์ดใบงานซ่อม
+    await p.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
     await p.waitForTimeout(2500);
     const s = p.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first();
     await s.click(); await s.type(code, { delay: 60 }); await p.waitForTimeout(2500);

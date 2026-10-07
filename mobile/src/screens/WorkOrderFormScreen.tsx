@@ -738,7 +738,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           <Text style={styles.nextText}>
             {rows.length > 1 ? `จะได้ใบงาน ${rows.length} ใบ เครื่องละใบ — ` : ""}
             เปิดแล้วใบงานจะไปอยู่ที่หัวหน้าภาค{regionHint} เพื่อระบุอะไหล่ที่ต้องใช้
-            จากนั้นแอดมินเช็คคลัง หัวหน้าภาคจ่ายงาน แล้วช่างนัดวันเข้า
+            จากนั้นแอดมินเช็คคลัง หัวหน้าภาคจ่ายงานและนัดลูกค้า แล้วทีมช่างเข้างาน
           </Text>
         </View>
 

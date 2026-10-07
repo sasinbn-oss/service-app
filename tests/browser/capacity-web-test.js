@@ -59,7 +59,8 @@ const DIR = __dirname;
     await page.waitForTimeout(3500);
 
     // ════ เปิดเอง ════
-    await tap("ใบงานซ่อม", false);
+    // แท็บล่าง "ใบงาน" — แอดมินเปิดมาเจอบอร์ดแผนงาน ไม่ใช่หน้าหลักที่มีการ์ดใบงานซ่อม
+    await tap("ใบงาน");
     await page.waitForTimeout(2500);
     await tap("เพิ่มใบงาน", false);
     await page.waitForTimeout(2500);
@@ -126,7 +127,8 @@ const DIR = __dirname;
     // ════ เติมของเดิมให้รอบถัดไป ════
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
     await page.waitForTimeout(3000);
-    await tap("ใบงานซ่อม", false);
+    // แท็บล่าง "ใบงาน" — แอดมินเปิดมาเจอบอร์ดแผนงาน ไม่ใช่หน้าหลักที่มีการ์ดใบงานซ่อม
+    await tap("ใบงาน");
     await page.waitForTimeout(2500);
     await tap("เพิ่มใบงาน", false);
     await page.waitForTimeout(2500);
@@ -163,6 +165,9 @@ const DIR = __dirname;
     // ════ เปิดจากกระดาน ════
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
     await page.waitForTimeout(3000);
+    // แอดมินเปิดมาเจอบอร์ดแผนงาน — ไปกระดานผ่านเมนูสามขีดแทนการ์ดในหน้าหลัก
+    await page.getByLabel("เปิดเมนู").locator("visible=true").first().click();
+    await page.waitForTimeout(800);
     await tap("ติดตามเครื่องเสีย", false);
     await page.waitForTimeout(4000);
     await page.screenshot({ path: path.join(DIR, "cap-5a-board-list.png") });

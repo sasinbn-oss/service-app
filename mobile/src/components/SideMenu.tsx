@@ -89,6 +89,8 @@ interface Item {
   screen: string;
   params?: object;
   badge?: boolean;
+  /** เห็นเฉพาะบทบาทเหล่านี้ — ไม่ใส่ = ทุกคน */
+  roles?: string[];
 }
 
 interface Group {
@@ -101,6 +103,16 @@ const GROUPS: Group[] = [
   {
     title: "งานซ่อม",
     items: [
+      // หน้าแรกของแอดมินกับหัวหน้าภาค — ช่างไม่เห็น เพราะงานของทีมตัวเองอยู่ในกล่องงานแล้ว
+      {
+        key: "plan",
+        label: "แผนงาน",
+        labelEn: "Plan Board",
+        icon: "calendar-outline",
+        tab: "HomeTab",
+        screen: "PlanBoard",
+        roles: ["ADMIN", "SUPERVISOR"],
+      },
       { key: "home", label: "หน้าหลัก", labelEn: "Home", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
       {
         key: "inbox",
@@ -151,7 +163,7 @@ const GROUPS: Group[] = [
 ];
 
 /** หน้าแรกของแต่ละแท็บ — ไปหน้าพวกนี้ต้องล้างหน้าที่ซ้อนอยู่ ไม่ใช่ซ้อนเพิ่ม */
-const TAB_ROOTS = new Set(["HomeMenu", "WorkOrderList", "HistoryMenu", "AdminMenu"]);
+const TAB_ROOTS = new Set(["PlanBoard", "HomeMenu", "WorkOrderList", "HistoryMenu", "AdminMenu"]);
 
 function currentKey(): string | null {
   if (!navigationRef.isReady()) return null;
@@ -204,7 +216,7 @@ function MenuContent({
                   <Text style={styles.groupText}>{g.title}</Text>
                 </View>
               )}
-              {g.items.map((it) => {
+              {g.items.filter((it) => !it.roles || (user && it.roles.includes(user.role))).map((it) => {
                 const on = active === it.key;
                 const n = it.badge ? inbox : 0;
                 return (
