@@ -16,6 +16,11 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/** Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN พร้อมธง superAdmin (ตรงกับ middleware ฝั่งเซิร์ฟเวอร์) */
+function asSession(u: User): User {
+  return u.role === "SUPER_ADMIN" ? { ...u, role: "ADMIN", superAdmin: true } : u;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,7 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       if (!token) return;
       const { data } = await api.get<User>("/auth/me");
-      setUser(data);
+      setUser(asSession(data));
     } catch {
       await AsyncStorage.removeItem(TOKEN_KEY);
     } finally {
@@ -42,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post("/auth/login", { employeeCode, password });
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       clearPageCache();
-      setUser(data.user);
+      setUser(asSession(data.user));
     } catch (error) {
       throw new Error(apiErrorMessage(error));
     }
@@ -53,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post("/auth/register", { employeeCode, name, password, phone });
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       clearPageCache();
-      setUser(data.user);
+      setUser(asSession(data.user));
     } catch (error) {
       throw new Error(apiErrorMessage(error));
     }
@@ -62,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function applyNewToken(token: string) {
     await AsyncStorage.setItem(TOKEN_KEY, token);
     const { data } = await api.get<User>("/auth/me");
-    setUser(data);
+    setUser(asSession(data));
   }
 
   async function logout() {

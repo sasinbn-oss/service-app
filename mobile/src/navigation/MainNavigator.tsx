@@ -185,7 +185,7 @@ function AppTopBar() {
           <Text style={styles.whoName} numberOfLines={1}>
             {user.name}
           </Text>
-          <Text style={styles.whoRole}>{ROLE_LABEL[user.role] ?? user.role}</Text>
+          <Text style={styles.whoRole}>{user.superAdmin ? "Super Admin" : ROLE_LABEL[user.role] ?? user.role}</Text>
         </View>
       ) : null}
       <LogoutButton />

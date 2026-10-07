@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { signToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
-import { ROLES, Role } from "../utils/constants";
+import { ADMIN_ROLES, ROLES, Role } from "../utils/constants";
 
 const router = Router();
 
@@ -48,7 +48,8 @@ router.post("/register", async (req, res) => {
       name,
       phone,
       passwordHash,
-      role: isFirstUser ? "ADMIN" : "EMPLOYEE",
+      // คนแรกของระบบเป็นเจ้าของระบบ — ไม่งั้นไม่มีใครตั้งแอดมินได้เลย
+      role: isFirstUser ? "SUPER_ADMIN" : "EMPLOYEE",
     },
   });
 
@@ -158,11 +159,34 @@ const createUserSchema = z.object({
   password: z.string().min(MIN_PASSWORD, `รหัสตั้งต้นต้องยาวอย่างน้อย ${MIN_PASSWORD} ตัว`),
 });
 
+/**
+ * ใครตั้งสิทธิ์ระดับแอดมินขึ้นไป (หรือแตะบัญชีของแอดมิน) ได้บ้าง
+ *
+ * มี Super Admin ในระบบแล้ว → Super Admin เท่านั้น — แอดมินทั่วไปตั้งแอดมินเพิ่ม
+ * หรือรีเซ็ตรหัสของแอดมินคนอื่นไม่ได้ ไม่งั้นรีเซ็ตรหัส Super Admin แล้วเข้าแทนได้
+ * ยังไม่มี Super Admin → แอดมินทำได้เหมือนเดิม (ระบบเก่าก่อนมีระดับนี้ จะได้ไม่มีใครถูกล็อก)
+ *
+ * อ่านบทบาทของคนสั่งจากฐานข้อมูลสด ไม่ใช่จากโทเคน — ถอดสิทธิ์ใครแล้ว
+ * มีผลกับการตั้งสิทธิ์ทันที ไม่ต้องรอโทเคนเดิมหมดอายุ 30 วัน
+ */
+async function canManageAdmins(actorId: number) {
+  const actor = await prisma.user.findUnique({ where: { id: actorId }, select: { role: true } });
+  if (actor?.role === "SUPER_ADMIN") return true;
+  if (actor?.role !== "ADMIN") return false;
+  const supers = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
+  return supers === 0;
+}
+
+const NEED_SUPER = "เฉพาะ Super Admin เท่านั้นที่ตั้งหรือแก้สิทธิ์ระดับแอดมินได้";
+
 /** แอดมินสร้างบัญชีให้ พร้อมรหัสตั้งต้นที่เจ้าของต้องเปลี่ยนเองตอนเข้าครั้งแรก */
 router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const parsed = createUserSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const body = parsed.data;
+  if (ADMIN_ROLES.includes(body.role) && !(await canManageAdmins(req.auth!.userId))) {
+    return res.status(403).json({ error: NEED_SUPER });
+  }
 
   const existing = await prisma.user.findUnique({ where: { employeeCode: body.employeeCode } });
   if (existing) {
@@ -203,15 +227,23 @@ const resetSchema = z.object({
  * ตั้งธงให้เปลี่ยนเองอีกครั้งเสมอ เพราะรหัสนี้แอดมินรู้ ถ้าไม่บังคับเปลี่ยน
  * บัญชีจะเหลือรหัสที่คนอื่นรู้อยู่ตลอดไป
  */
-router.post("/users/:id/reset-password", requireAuth, requireAdmin, async (req, res) => {
+router.post("/users/:id/reset-password", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสผู้ใช้ไม่ถูกต้อง" });
 
   const parsed = resetSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const target = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+  const target = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
   if (!target) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
+  // รีเซ็ตรหัสของแอดมินคนอื่น = เข้าบัญชีนั้นได้ จึงต้องเป็น Super Admin
+  if (
+    ADMIN_ROLES.includes(target.role) &&
+    target.id !== req.auth!.userId &&
+    !(await canManageAdmins(req.auth!.userId))
+  ) {
+    return res.status(403).json({ error: NEED_SUPER });
+  }
 
   await prisma.user.update({
     where: { id },
@@ -275,11 +307,27 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const body = parsed.data;
 
-  // แอดมินคนสุดท้ายลดสิทธิ์ตัวเองไม่ได้ ไม่งั้นจะไม่เหลือใครตั้งสิทธิ์ให้ใครอีกเลย
-  if (body.role && body.role !== "ADMIN") {
-    const target = await prisma.user.findUnique({ where: { id }, select: { role: true } });
-    if (target?.role === "ADMIN") {
-      const admins = await prisma.user.count({ where: { role: "ADMIN" } });
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } });
+  if (!target) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
+
+  if (body.role && body.role !== target.role) {
+    // ให้หรือถอดสิทธิ์ระดับแอดมินขึ้นไป → ต้องเป็น Super Admin (ดู canManageAdmins)
+    if (
+      (ADMIN_ROLES.includes(body.role) || ADMIN_ROLES.includes(target.role)) &&
+      !(await canManageAdmins(req.auth!.userId))
+    ) {
+      return res.status(403).json({ error: NEED_SUPER });
+    }
+    // Super Admin คนสุดท้ายลดสิทธิ์ไม่ได้ ไม่งั้นจะไม่เหลือใครตั้งแอดมินได้อีก
+    if (target.role === "SUPER_ADMIN") {
+      const supers = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
+      if (supers <= 1) {
+        return res.status(400).json({ error: "ต้องเหลือ Super Admin อย่างน้อยหนึ่งคน" });
+      }
+    }
+    // แอดมินคนสุดท้ายลดสิทธิ์ตัวเองไม่ได้ ไม่งั้นจะไม่เหลือใครตั้งสิทธิ์ให้ใครอีกเลย
+    if (ADMIN_ROLES.includes(target.role) && !ADMIN_ROLES.includes(body.role)) {
+      const admins = await prisma.user.count({ where: { role: { in: ADMIN_ROLES } } });
       if (admins <= 1) {
         return res.status(400).json({ error: "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน" });
       }
