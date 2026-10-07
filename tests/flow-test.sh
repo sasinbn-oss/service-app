@@ -37,7 +37,7 @@ ws $ID | grep -q "รอช่างเข้าแก้ไข" && pass "ขอ
 echo
 echo "═══ นัดวันต้องเป็นของหัวหน้าภาค ไม่ใช่ช่าง"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
-ws $ID | grep -q "รอหัวหน้าภาคนัดวัน" && pass "ขั้นนี้ขึ้นว่ารอหัวหน้าภาคนัดวัน" || fail "ป้ายขั้นยังเป็นของช่าง: $(ws $ID)"
+ws $ID | grep -q "รอหัวหน้าภาคนัดลูกค้า" && pass "ขั้นนี้ขึ้นว่ารอหัวหน้าภาคนัดลูกค้า" || fail "ป้ายขั้นยังเป็นของช่าง: $(ws $ID)"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-20"}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างนัดวันเองไม่ได้แล้ว" || fail "ช่างยังนัดวันได้: $(echo $R | head -c 120)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-20"}' >/dev/null

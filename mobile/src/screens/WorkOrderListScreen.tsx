@@ -64,7 +64,7 @@ type Filter = "INBOX" | "ACTIVE" | "ASSIGNED" | "IN_PROGRESS" | "DONE" | "ALL";
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
-  { value: "ASSIGNED", label: "รอนัดวัน" },
+  { value: "ASSIGNED", label: "รอนัดลูกค้า" },
   { value: "IN_PROGRESS", label: "รอช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },
@@ -76,14 +76,19 @@ const FILTERS: { value: Filter; label: string }[] = [
  * เดิมทุกขั้นที่ยังไม่จบเป็นสีแดง แต่แดงในระบบนี้แปลว่าผิดปกติหรือลบ — ใบงาน
  * ที่เดินตามขั้นปกติไม่ได้ผิดอะไร พอแดงทั้งหน้าคนก็เลิกสังเกตสีไปเลย
  * - ฟ้า: รอคนในบริษัททำขั้นถัดไป (ระบุอะไหล่ เช็คคลัง จ่ายงาน นัดวัน ช่างเข้า)
- * - เหลือง: รอลูกค้า (เสนอราคา จ่ายเงิน) ซึ่งเราเร่งเองไม่ได้
+ * - เหลือง: รอคนนอก (ลูกค้าตอบราคา จ่ายเงิน คอนเฟิร์มนัด · ของเข้าคลัง) ซึ่งเราเร่งเองไม่ได้
  * - เขียว: ปิดงานแล้ว · เทา: ยกเลิก
  * ตัวอักษรใช้สีเข้ม (*Ink) เพราะสีหลักอ่อนเกินไปบนพื้นอ่อน
  */
 export function statusTone(status: string) {
   if (status === "DONE") return { bg: colors.successSoft, fg: colors.successInk };
   if (status === "CANCELLED") return { bg: colors.tile, fg: colors.textMuted };
-  if (status === "AWAITING_QUOTE" || status === "AWAITING_PAYMENT") {
+  if (
+    status === "AWAITING_QUOTE" ||
+    status === "AWAITING_PAYMENT" ||
+    status === "AWAITING_CONFIRM" ||
+    status === "WAITING_PARTS"
+  ) {
     return { bg: colors.warningSoft, fg: colors.warningInk };
   }
   return { bg: colors.primarySoft, fg: colors.primaryInk };

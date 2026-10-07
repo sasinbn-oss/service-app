@@ -33,7 +33,8 @@ const WO = process.argv[2] || "WO-00671";
     await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
     await tap("เข้าสู่ระบบ");
     await page.waitForTimeout(3500);
-    await tap("ใบงานซ่อม", false);
+    // แท็บล่าง "ใบงาน" — แอดมินเปิดมาเจอบอร์ดแผนงาน ไม่ใช่หน้าหลักที่มีการ์ดใบงานซ่อม
+    await tap("ใบงาน");
     await page.waitForTimeout(2500);
 
     const row = page.getByText(WO, { exact: false }).locator("visible=true");

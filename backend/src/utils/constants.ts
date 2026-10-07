@@ -88,8 +88,13 @@ export function workStatusForStage(
     // ทั้งที่ลูกค้าจ่ายไปแล้ว แล้วกระดานจะโชว์ว่ายังรอเงินอยู่
     case "PARTS_REQUESTED":
       return "WAITING_PARTS";
+    // ใบงานรออะไหล่ที่แยกออกมา — รอของเข้าคลังจริง ๆ
+    case "WAITING_PARTS":
+      return "WAITING_PARTS";
+    case "INSPECTING":
     case "PARTS_CHECKED":
     case "ASSIGNED":
+    case "AWAITING_CONFIRM":
     case "IN_PROGRESS":
       return "WAITING_TECH";
     case "DONE":
@@ -148,11 +153,14 @@ export function countsAsRepair(closeReason: string | null) {
  */
 export const WORK_ORDER_STATUSES = [
   "NEW",
+  "INSPECTING",
+  "WAITING_PARTS",
   "PARTS_REQUESTED",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
   "PARTS_CHECKED",
   "ASSIGNED",
+  "AWAITING_CONFIRM",
   "IN_PROGRESS",
   "DONE",
   "CANCELLED",
@@ -167,11 +175,14 @@ export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
  */
 export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   NEW: "รอหัวหน้าภาคระบุอะไหล่",
+  INSPECTING: "รอทีมตรวจหน้างาน",
+  WAITING_PARTS: "รออะไหล่เข้า",
   PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
   AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
   AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
-  ASSIGNED: "รอหัวหน้าภาคนัดวัน",
+  ASSIGNED: "รอหัวหน้าภาคนัดลูกค้า",
+  AWAITING_CONFIRM: "รอลูกค้าคอนเฟิร์มนัด",
   IN_PROGRESS: "รอช่างเข้างาน",
   DONE: "ปิดงานแล้ว",
   CANCELLED: "ยกเลิก",
@@ -180,6 +191,12 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
 /** ลำดับของขั้น ใช้ตัดสินว่าใบงานเดินหน้าหรือถอยหลัง */
 export const WORK_ORDER_STAGE_ORDER = [
   "NEW",
+  /**
+   * ระบุอะไหล่ไม่ได้จนกว่าจะมีคนไปดู — ส่งทีมไปตรวจ แล้ววนกลับมาที่ NEW
+   * พร้อมผลตรวจ ขั้นนี้จึงอยู่ถัดจาก NEW แต่ใบงานเดินย้อนกลับมาเสมอ
+   * ใบที่ไม่ได้ตรวจ แถบขั้นตอนขึ้นว่าข้าม
+   */
+  "INSPECTING",
   /**
    * สองขั้นนี้มาก่อนเบิกอะไหล่ ไม่ใช่หลัง
    *
@@ -192,10 +209,17 @@ export const WORK_ORDER_STAGE_ORDER = [
    */
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
+  /**
+   * มีเฉพาะใบงานรออะไหล่ที่แยกออกมาจากใบอื่น — ของมาแล้วหัวหน้าภาคส่งต่อ
+   * ให้แอดมินเบิก อยู่ก่อนขั้นเบิกเพราะเป็นการรอให้มีของให้เบิก
+   */
+  "WAITING_PARTS",
   // แอดมินเบิกอะไหล่ออกจากคลัง — ระบุคลังและเลขใบเบิกของแต่ละตัว
   "PARTS_REQUESTED",
   "PARTS_CHECKED",
+  // นัดลูกค้า → ลูกค้าคอนเฟิร์ม ก่อนช่างเข้า — ไปถึงแล้วร้านปิดคือเสียทั้งวันของทั้งทีม
   "ASSIGNED",
+  "AWAITING_CONFIRM",
   "IN_PROGRESS",
   "DONE",
 ] as const;
@@ -208,6 +232,10 @@ export const WORK_ORDER_STAGE_ORDER = [
  */
 export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   NEW: "SUPERVISOR",
+  // ทีมที่ไปตรวจเป็นคนบันทึกผล เพราะเป็นคนที่เห็นเครื่องจริง
+  INSPECTING: "EMPLOYEE",
+  // ใบรออะไหล่หัวหน้าภาคเป็นคนดูแล — ตามของ แล้วส่งต่อเมื่อของมา
+  WAITING_PARTS: "SUPERVISOR",
   PARTS_REQUESTED: "ADMIN",
   // เสนอราคาและรับเงินเป็นงานออฟฟิศ แอดมินเป็นคนรู้ราคาและเป็นคนออกเอกสาร
   AWAITING_QUOTE: "ADMIN",
@@ -216,19 +244,36 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   // นัดวันเข้างานเป็นของหัวหน้าภาค ไม่ใช่ช่าง — คนที่รู้ว่าคิวทั้งทีมว่างวันไหน
   // คือคนที่ถือคิวทั้งทีม ช่างคนเดียวตอบได้แค่ว่าตัวเองว่างไหม
   ASSIGNED: "SUPERVISOR",
+  AWAITING_CONFIRM: "SUPERVISOR",
   IN_PROGRESS: "EMPLOYEE",
 };
 
 /** สถานะที่ถือว่ายังทำงานอยู่ ใช้กันไม่ให้เปิดใบงานซ้ำกับเคสเดิม */
 export const ACTIVE_WORK_ORDER_STATUSES = [
   "NEW",
+  "INSPECTING",
+  "WAITING_PARTS",
   "PARTS_REQUESTED",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
   "PARTS_CHECKED",
   "ASSIGNED",
+  "AWAITING_CONFIRM",
   "IN_PROGRESS",
 ] as const;
+
+/**
+ * สถานะนัดลูกค้า
+ *
+ * ADMIN_PICKED แยกจาก CONFIRMED เพราะเป็นแอดมินที่เลือกวันให้ ไม่ใช่ลูกค้าเลือก —
+ * ถ้าไปถึงแล้วร้านไม่พร้อม คนที่ต้องตอบคือคนเลือกวัน ต้องย้อนดูได้ว่าเป็นใคร
+ */
+export const APPOINTMENT_STATUSES = ["PENDING", "CONFIRMED", "ADMIN_PICKED"] as const;
+export const APPOINTMENT_STATUS_LABELS: Record<string, string> = {
+  PENDING: "รอลูกค้าคอนเฟิร์ม",
+  CONFIRMED: "ลูกค้าคอนเฟิร์มแล้ว",
+  ADMIN_PICKED: "แอดมินเลือกวันให้",
+};
 
 /**
  * ประเภทงาน
@@ -239,7 +284,7 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
  * OTHER มีไว้สำหรับงานที่ไม่เข้าสามอย่างแรก และบังคับให้พิมพ์รายละเอียดกำกับ
  * ไม่งั้นจะกลายเป็นถังขยะที่มีงานครึ่งหนึ่งอยู่ในนั้นโดยไม่มีใครรู้ว่างานอะไร
  */
-export const JOB_TYPES = ["CM", "PM", "IT", "OTHER"] as const;
+export const JOB_TYPES = ["CM", "PM", "IT", "INSPECT", "OTHER"] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 /**
@@ -252,6 +297,7 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
   CM: "งาน CM",
   PM: "งาน PM",
   IT: "งาน IT",
+  INSPECT: "ตรวจสอบหน้างาน",
   OTHER: "อื่นๆ",
   PROJECT: "งาน Project",
   PARTS_CLEARING: "งานระบายอะไหล่",
@@ -261,7 +307,8 @@ export const JOB_TYPE_HINTS: Record<string, string> = {
   CM: "ซ่อมแก้เมื่อเครื่องเสีย",
   PM: "บำรุงรักษาตามรอบ",
   IT: "ระบบเครือข่าย ตู้เติมเงิน กล้อง หรืออุปกรณ์ไอทีในสาขา",
-  OTHER: "งานที่ไม่เข้าสามอย่างข้างบน — ต้องระบุรายละเอียด",
+  INSPECT: "เข้าไปดูอาการก่อน ยังบอกไม่ได้ว่าต้องใช้อะไหล่อะไร",
+  OTHER: "งานที่ไม่เข้าประเภทข้างบน — ต้องระบุรายละเอียด",
 };
 
 export const WORK_ORDER_PRIORITIES = ["URGENT", "NORMAL", "LOW"] as const;
@@ -311,7 +358,14 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
   PAID: "ลูกค้าจ่ายเงินแล้ว",
   ASSIGNED: "จ่ายงานให้ช่าง",
-  SCHEDULED: "นัดวันเข้างาน",
+  SCHEDULED: "นัดลูกค้า",
+  CONFIRMED: "ลูกค้าคอนเฟิร์มนัด",
+  INSPECT_REQUESTED: "ส่งทีมตรวจหน้างาน",
+  INSPECTED: "บันทึกผลตรวจหน้างาน",
+  ROLLED_BACK: "ย้อนขั้นตอน",
+  SPLIT: "แยกใบงานรออะไหล่",
+  SPLIT_FROM: "แยกมาจากใบงานอื่น",
+  PARTS_ARRIVED: "อะไหล่มาแล้ว ส่งต่อให้เบิก",
   CLOSED: "ปิดงาน",
   CANCELLED: "ยกเลิกใบงาน",
   REOPENED: "เปิดงานใหม่",

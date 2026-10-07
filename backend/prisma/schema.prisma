@@ -51,6 +51,8 @@ model User {
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
   workOrderAttachments WorkOrderAttachment[]
   workedWorkOrders     WorkOrderWorker[]
+  teamDayPlans         TeamDayPlan[]
+  teamDayPlanSeats     TeamDayPlanMember[]
 }
 
 model Vehicle {
@@ -62,6 +64,7 @@ model Vehicle {
   status      String       @default("AVAILABLE")
   createdAt   DateTime     @default(now())
   logs        VehicleLog[]
+  dayPlans    TeamDayPlan[]
 }
 
 model VehicleLog {
@@ -532,6 +535,26 @@ model WorkOrder {
   assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
   // วันที่นัดเข้าไปทำ เก็บเป็นวันอย่างเดียว เพราะนัดกันเป็นวัน
   scheduledAt  DateTime?
+  // เวลานัด "HH:MM" แยกจากวัน — ใบเก่านัดกันเป็นวันอย่างเดียว ว่างจึงแปลว่า
+  // "ทั้งวัน" ไม่ใช่เที่ยงคืน ถ้ารวมไว้ในช่องเดียวกันจะแยกสองอย่างนี้ไม่ออก
+  scheduledTime String?
+  // ลูกค้ารับนัดหรือยัง — PENDING รอคอนเฟิร์ม · CONFIRMED ลูกค้าคอนเฟิร์ม
+  // ADMIN_PICKED ลูกค้าสะดวกทุกวัน แอดมินเลือกวันให้ (ดู APPOINTMENT_STATUSES)
+  appointmentStatus String?
+
+  // ── ตรวจหน้างาน ──
+  // หัวหน้าภาคระบุอะไหล่ไม่ได้จนกว่าจะมีคนไปดู — ผลตรวจเก็บไว้ที่ใบงาน
+  // เพราะคนที่ระบุอะไหล่รอบถัดไปต้องอ่านมันตอนตัดสินใจ ไม่ใช่ไปค้นในประวัติ
+  inspectedAt    DateTime?
+  inspectionNote String?
+
+  // ใบงานรออะไหล่ที่แยกออกมาจากใบนี้ — อะไหล่บางตัวหมด หรือไปแล้วเปลี่ยนไม่ครบ
+  //
+  // เป็นใบใหม่ไม่ใช่สถานะของใบเดิม เพราะของที่มีอยู่ซ่อมได้เลย ไม่ควรถูกกั้น
+  // ด้วยของที่ยังไม่มา แต่ต้องลิงก์กันไว้ ไม่งั้นดูไม่ออกว่าเป็นงานเดียวกัน
+  parentId Int?
+  parent   WorkOrder?  @relation("WorkOrderSplit", fields: [parentId], references: [id], onDelete: SetNull)
+  children WorkOrder[] @relation("WorkOrderSplit")
 
   createdById Int?
   createdBy   User?    @relation("CreatedWorkOrders", fields: [createdById], references: [id])
@@ -560,6 +583,8 @@ model WorkOrder {
   @@index([assignedToId, status])
   @@index([assignedTeam, status])
   @@index([outageId])
+  @@index([scheduledAt])
+  @@index([parentId])
 }
 
 // คนที่เข้าไปทำงานจริง บันทึกตอนปิดงาน
@@ -673,4 +698,37 @@ model WorkOrderAttachment {
   createdAt   DateTime @default(now())
 
   @@index([workOrderId, createdAt])
+}
+
+// แผนของทีมหนึ่งในวันหนึ่ง — ใครไปกับใคร รถคันไหน ใครเป็นคนจัด
+//
+// ไม่ได้เก็บว่าไปที่ไหนบ้าง เพราะนั่นคือใบงานที่นัดวันนั้นของทีมนั้นอยู่แล้ว
+// เก็บซ้ำไว้ที่นี่จะได้ความจริงสองชุดที่วันหนึ่งไม่ตรงกัน — แก้วันนัดในใบงาน
+// แล้วบอร์ดยังโชว์วันเดิม ตารางนี้เก็บเฉพาะสิ่งที่ใบงานไม่รู้
+model TeamDayPlan {
+  id          Int                 @id @default(autoincrement())
+  // วันอย่างเดียว เก็บที่เที่ยงคืน UTC แบบเดียวกับ WorkOrder.scheduledAt
+  date        DateTime
+  team        String
+  vehicleId   Int?
+  vehicle     Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  note        String?
+  plannedById Int?
+  plannedBy   User?               @relation(fields: [plannedById], references: [id], onDelete: SetNull)
+  updatedAt   DateTime            @updatedAt
+  members     TeamDayPlanMember[]
+
+  @@unique([date, team])
+}
+
+model TeamDayPlanMember {
+  id     Int         @id @default(autoincrement())
+  planId Int
+  plan   TeamDayPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  userId Int
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // คนแรกที่เลือกคือหัวหน้าทีมของวันนั้น
+  position Int       @default(0)
+
+  @@unique([planId, userId])
 }

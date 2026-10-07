@@ -10,7 +10,7 @@ if ! curl -s -m 3 -o /dev/null localhost:4000/health; then
 fi
 
 TOTAL=0; BAD=0
-for t in team-test requisition-test flow-test quote-test capacity-test backorder-test; do
+for t in team-test requisition-test flow-test quote-test capacity-test backorder-test plan-test; do
   OUT=$(bash "$SP/$t.sh" 2>&1)
   P=$(echo "$OUT" | grep -cE '^PASS')
   F=$(echo "$OUT" | grep -cE '^FAIL')

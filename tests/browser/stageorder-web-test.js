@@ -22,7 +22,7 @@ const DIR = __dirname;
     page.evaluate(() => {
       const labels = [
         "รอหัวหน้าภาคระบุอะไหล่", "รอเสนอราคาลูกค้า", "รอลูกค้าจ่ายเงิน",
-        "รอแอดมินเช็คอะไหล่", "รอหัวหน้าภาคจ่ายงาน", "รอหัวหน้าภาคนัดวัน",
+        "รอแอดมินเช็คอะไหล่", "รอหัวหน้าภาคจ่ายงาน", "รอหัวหน้าภาคนัดลูกค้า",
         "รอช่างเข้างาน", "ปิดงานแล้ว",
       ];
       const out = [];
@@ -52,7 +52,7 @@ const DIR = __dirname;
       // เปิดผ่าน URL ไม่ได้ ให้เดินผ่านหน้ารายการแทน
       await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
       await page.waitForTimeout(2500);
-      await page.getByText("ใบงานซ่อม").locator("visible=true").first().click();
+      await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
       await page.waitForTimeout(2500);
       await page.getByText("WO-00656", { exact: false }).locator("visible=true").first().click();
       await page.waitForTimeout(3000);
@@ -68,7 +68,7 @@ const DIR = __dirname;
         if (!card) return null;
         const labels = [
           "รอหัวหน้าภาคระบุอะไหล่", "รอเสนอราคาลูกค้า", "รอลูกค้าจ่ายเงิน",
-          "รอแอดมินเช็คอะไหล่", "รอหัวหน้าภาคจ่ายงาน", "รอหัวหน้าภาคนัดวัน",
+          "รอแอดมินเช็คอะไหล่", "รอหัวหน้าภาคจ่ายงาน", "รอหัวหน้าภาคนัดลูกค้า",
           "รอช่างเข้างาน", "ปิดงานแล้ว",
         ];
         return [...card.querySelectorAll("*")]
@@ -97,7 +97,7 @@ const DIR = __dirname;
     // ── ใบที่ไม่ต้องเสนอราคา (สาขา C) — สองขั้นนั้นต้องขึ้นว่าข้าม ──
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
     await page.waitForTimeout(2500);
-    await page.getByText("ใบงานซ่อม").locator("visible=true").first().click();
+    await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
     await page.waitForTimeout(2500);
     const row = page.getByText("WO-00653", { exact: false }).locator("visible=true");
     if ((await row.count()) === 0) {

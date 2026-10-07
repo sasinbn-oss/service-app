@@ -25,7 +25,8 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
-import DateField from "../components/DateField";
+import DateField, { thaiDate } from "../components/DateField";
+import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import WorkOrderAttachments, { Attachment, openAttachment } from "../components/WorkOrderAttachments";
 import {
@@ -85,6 +86,17 @@ interface WorkOrder {
   machineCapacityLabel: string | null;
   assignedToName: string | null;
   scheduledAt: string | null;
+  /** เวลานัด "HH:MM" — ว่าง = นัดเป็นวัน */
+  scheduledTime: string | null;
+  appointmentStatus: string | null;
+  appointmentStatusLabel: string | null;
+  /** ผลตรวจหน้างาน — หัวหน้าภาคใช้ระบุอะไหล่รอบถัดไป */
+  inspectedAt: string | null;
+  inspectionNote: string | null;
+  /** ใบเดิมที่ใบนี้แยกออกมา (ใบรออะไหล่) */
+  parent: LinkedOrder | null;
+  /** ใบรออะไหล่ที่แยกออกไปจากใบนี้ */
+  children: LinkedOrder[];
   createdByName: string | null;
   createdAt: string;
   closedAt: string | null;
@@ -137,6 +149,68 @@ interface Team {
   branches: number;
 }
 
+interface LinkedOrder {
+  id: number;
+  code: string;
+  status: string;
+  statusLabel: string;
+}
+
+/** ปุ่มของแต่ละขั้น — ชื่อเดียวกับหัวฟอร์มที่เปิดขึ้นมา */
+const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  NEW: { label: "ระบุอะไหล่ที่ต้องใช้", icon: "arrow-forward-circle" },
+  INSPECTING: { label: "บันทึกผลตรวจหน้างาน", icon: "search-outline" },
+  WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
+  PARTS_REQUESTED: { label: "เช็คอะไหล่ในคลัง", icon: "arrow-forward-circle" },
+  AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
+  AWAITING_PAYMENT: { label: "ลูกค้าจ่ายเงินแล้ว", icon: "cash-outline" },
+  PARTS_CHECKED: { label: "จ่ายงานให้ช่าง", icon: "arrow-forward-circle" },
+  ASSIGNED: { label: "นัดลูกค้า", icon: "calendar-outline" },
+  AWAITING_CONFIRM: { label: "ลูกค้าคอนเฟิร์มนัด", icon: "checkmark-circle-outline" },
+};
+
+/** "9 ต.ค. 69 · 10:00 น." — วันนัดเก็บเป็นเที่ยงคืน UTC จึงตัดเอาแค่วันตรง ๆ */
+function visitLabel(o: { scheduledAt: string | null; scheduledTime: string | null }) {
+  if (!o.scheduledAt) return "—";
+  const day = thaiDate(o.scheduledAt.slice(0, 10));
+  return o.scheduledTime ? `${day} · ${o.scheduledTime} น.` : day;
+}
+
+/**
+ * ขั้นที่ใบนี้ไม่ได้ผ่าน — แถบขั้นตอนขึ้นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
+ *
+ * "ไม่ต้องทำ" ตัดสินจากกฎวันนี้ ส่วน "ทำไปแล้ว" เป็นของที่เกิดขึ้นจริง
+ * ของจริงชนะกฎเสมอ — ใบที่มีใบเสนอราคาแนบอยู่ คือใบที่เสนอราคาไปแล้ว
+ *
+ * สำคัญกับใบเก่า: กฎประกัน 3 ปีทำให้สาขาแฟรนไชส์ 245 สาขากลับมาอยู่ใน
+ * ประกัน ใบที่เคยผ่านขั้นเสนอราคาไปแล้วตอนที่ระบบยังตีว่าหมดประกัน
+ * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
+ * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
+ */
+function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
+  const at = (v: string) => stages.findIndex((x) => x.value === v);
+  switch (value) {
+    case "PARTS_REQUESTED":
+      return o.needsParts === false;
+    case "AWAITING_QUOTE":
+      return o.needsQuote === false && !o.hasQuote;
+    case "AWAITING_PAYMENT":
+      return o.needsQuote === false && !o.hasReceipt;
+    // ตรวจหน้างานเป็นทางเลือก — ใบที่ไม่เคยส่งตรวจไม่ได้ผ่านขั้นนี้
+    case "INSPECTING":
+      return o.status !== "INSPECTING" && !o.inspectedAt;
+    // นัดที่ลูกค้าคอนเฟิร์มตั้งแต่โทรนัด (หรือแอดมินเลือกวันให้) ไม่ต้องรอคอนเฟิร์มอีกรอบ
+    case "AWAITING_CONFIRM":
+      return (
+        o.status !== "AWAITING_CONFIRM" &&
+        (o.status === "DONE" || at(o.status) > at("AWAITING_CONFIRM")) &&
+        !o.logs.some((l) => l.action === "CONFIRMED")
+      );
+    default:
+      return false;
+  }
+}
+
 interface Option {
   value: string;
   label: string;
@@ -164,7 +238,7 @@ interface Technician {
   team?: string | null;
 }
 
-export default function WorkOrderDetailScreen({ route }: Props) {
+export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const { id } = route.params;
   const { user } = useAuth();
   const [order, setOrder] = useState<WorkOrder | null>(null);
@@ -178,6 +252,9 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const [stageOpen, setStageOpen] = useState(false);
   const stepScroll = useRef<ScrollView>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
+  // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
+  const [stageBackOpen, setStageBackOpen] = useState(false);
+  const [followUpOpen, setFollowUpOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -237,6 +314,8 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   function myTurn(o: WorkOrder) {
     if (!user) return false;
     if (user.role === "ADMIN") return true;
+    // ผลตรวจหน้างาน หัวหน้าภาคบันทึกแทนได้ เผื่อช่างโทรมาเล่าแทนการกรอกเอง
+    if (o.status === "INSPECTING" && user.role === "SUPERVISOR") return true;
     if (o.stageActor === "EMPLOYEE") {
       // ช่างในทีมที่รับงานเท่านั้น ไม่ใช่ช่างทุกคน
       //
@@ -329,13 +408,44 @@ export default function WorkOrderDetailScreen({ route }: Props) {
     setDeleting(true);
     try {
       await api.delete(`/work-orders/${id}`);
-      navigation.back();
+      navigation.goBack();
     } catch (e) {
       showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
     } finally {
       setDeleting(false);
     }
   }
+
+  /**
+   * ขั้นรออะไหล่มีเฉพาะใบที่แยกออกมาจากใบอื่น — ใบปกติไม่ต้องเห็นขั้นนี้เลย
+   * แม้แต่ในรูป "ข้าม" เพราะมันไม่ใช่ทางเลือกของใบปกติ ขึ้นไว้มีแต่ทำให้งง
+   */
+  const shownStages = stages.filter(
+    (x) => x.value !== "WAITING_PARTS" || order.parent !== null || order.status === "WAITING_PARTS"
+  );
+  /**
+   * ขั้นที่ย้อนกลับไปได้ — ขั้นก่อนหน้าที่ใบนี้ผ่านมาจริง ไม่นับขั้นที่ข้าม
+   * ย้อนไปขั้นที่ไม่เคยผ่านคือการเดินใบงานไปทางที่ไม่ควรมีอยู่
+   */
+  const backTargets = (() => {
+    const at = shownStages.findIndex((x) => x.value === order.status);
+    return shownStages
+      .slice(0, Math.max(0, at))
+      .filter((x) => x.value !== "DONE" && !isSkipped(x.value, order, stages))
+      .reverse();
+  })();
+  const canStepBack =
+    (user?.role === "ADMIN" || user?.role === "SUPERVISOR") &&
+    order.status !== "DONE" &&
+    order.status !== "CANCELLED" &&
+    backTargets.length > 0;
+
+  // เปิดใบรออะไหล่ต่อได้ตั้งแต่ทีมรับงานแล้ว — ก่อนนั้นยังแก้รายการอะไหล่ในใบนี้ได้เอง
+  const canFollowUp =
+    ["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS", "DONE"].includes(order.status) &&
+    (user?.role === "ADMIN" ||
+      user?.role === "SUPERVISOR" ||
+      (order.assignedTeam !== null && order.assignedTeam === user?.team));
 
   const tone = statusTone(order.status);
   const done = order.status === "DONE" || order.status === "CANCELLED";
@@ -371,6 +481,53 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Text style={[styles.title, headingFont]}>{order.title}</Text>
         {order.detail ? <Text style={styles.detail}>{order.detail}</Text> : null}
 
+        {/*
+          ใบที่ลิงก์กัน — ใบรออะไหล่กับใบเดิมเป็นงานเดียวกันที่แบ่งเป็นสองรอบ
+          ต้องกระโดดไปมาได้ ไม่งั้นคนดูใบหนึ่งไม่รู้ว่าอีกครึ่งของงานอยู่ไหน
+        */}
+        {order.parent || order.children.length > 0 || canStepBack ? (
+          <View style={styles.linkRow}>
+            {order.parent ? (
+              <TouchableOpacity
+                style={styles.linkChip}
+                onPress={() => navigation.push("WorkOrderDetail", { id: order.parent!.id })}
+                activeOpacity={0.7}
+                accessibilityLabel={`เปิดใบงาน ${order.parent.code}`}
+              >
+                <Ionicons name="link-outline" size={14} color={colors.primaryInk} />
+                <Text style={styles.linkChipText}>
+                  แยกมาจาก {order.parent.code} · {order.parent.statusLabel}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {order.children.map((c) => (
+              <TouchableOpacity
+                key={c.id}
+                style={styles.linkChip}
+                onPress={() => navigation.push("WorkOrderDetail", { id: c.id })}
+                activeOpacity={0.7}
+                accessibilityLabel={`เปิดใบงาน ${c.code}`}
+              >
+                <Ionicons name="link-outline" size={14} color={colors.primaryInk} />
+                <Text style={styles.linkChipText}>
+                  ใบรออะไหล่ {c.code} · {c.statusLabel}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <View style={{ flex: 1 }} />
+            {canStepBack ? (
+              <TouchableOpacity
+                style={styles.stepBack}
+                onPress={() => setStageBackOpen(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="arrow-undo-outline" size={15} color={colors.warningInk} />
+                <Text style={styles.stepBackText}>ย้อนขั้นตอน</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+
 
         {/*
           ขั้นตอนงานอยู่บนสุด ในการ์ดหัวใบงานเลย ตามตัวอย่างที่เจ้าของงานเลือก —
@@ -386,51 +543,26 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.steps}
         >
-        {stages.map((stage, i) => {
-          const currentIndex = stages.findIndex((x) => x.value === order.status);
-          /**
-           * ขั้นที่ถูกข้าม ต้องเห็นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
-           *
-           * เบิกอะไหล่ถูกข้ามเมื่องานนี้ไม่ใช้อะไหล่ ส่วนเสนอราคากับรับเงินถูกข้าม
-           * เมื่อไม่ใช่ของที่ขายลูกค้า — และตอนนี้สองขั้นนั้นอยู่ก่อนเบิกอะไหล่
-           * ถ้าไม่ทำเครื่องหมายไว้ ใบที่ไม่ต้องเสนอราคาจะขึ้นว่าทำสองขั้นนั้นไปแล้ว
-           * ทั้งที่ไม่เคยทำ เพราะมันอยู่ก่อนขั้นปัจจุบัน
-           */
-          /**
-           * "ไม่ต้องทำ" ตัดสินจากกฎวันนี้ ส่วน "ทำไปแล้ว" เป็นของที่เกิดขึ้นจริง
-           * ของจริงชนะกฎเสมอ — ใบที่มีใบเสนอราคาแนบอยู่ คือใบที่เสนอราคาไปแล้ว
-           *
-           * สำคัญกับใบเก่า: กฎประกัน 3 ปีทำให้สาขาแฟรนไชส์ 245 สาขากลับมาอยู่ใน
-           * ประกัน ใบที่เคยผ่านขั้นเสนอราคาไปแล้วตอนที่ระบบยังตีว่าหมดประกัน
-           * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
-           * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
-           */
-          const skipped =
-            (stage.value === "PARTS_REQUESTED" && order.needsParts === false) ||
-            (stage.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
-            (stage.value === "AWAITING_PAYMENT" &&
-              order.needsQuote === false &&
-              !order.hasReceipt);
+        {shownStages.map((stage, i) => {
+          const currentIndex = shownStages.findIndex((x) => x.value === order.status);
+          const skipped = isSkipped(stage.value, order, stages);
+          // ตรวจหน้างานแล้วใบงานวนกลับไปขั้นแรก ขั้นตรวจจึงอยู่ "หลัง" ขั้นปัจจุบัน
+          // ตามลำดับ แต่ทำไปแล้วจริง — ต้องขึ้นว่าทำแล้ว ไม่ใช่ยังไม่ถึง
+          const doneOutOfOrder =
+            stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING";
           const state = skipped
             ? "skipped"
             : order.status === "CANCELLED"
               ? "future"
-              : i < currentIndex || order.status === "DONE"
+              : i < currentIndex || order.status === "DONE" || doneOutOfOrder
                 ? "done"
                 : i === currentIndex
                   ? "now"
                   : "future";
           // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
-          const number = stages
+          const number = shownStages
             .slice(0, i + 1)
-            .filter(
-              (x) =>
-                !(
-                  (x.value === "PARTS_REQUESTED" && order.needsParts === false) ||
-                  (x.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
-                  (x.value === "AWAITING_PAYMENT" && order.needsQuote === false && !order.hasReceipt)
-                )
-            ).length;
+            .filter((x) => !isSkipped(x.value, order, stages)).length;
           return (
             <TouchableOpacity
               key={stage.value}
@@ -442,7 +574,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               // ไม่งั้นใบที่เดินมาถึงขั้นห้าจะเปิดมาเห็นแต่ขั้นที่ผ่านไปแล้ว
               onLayout={
                 state === "now"
-                  ? (e) => stepScroll.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - 60), animated: false })
+                  ? (e) => stepScroll.current?.scrollTo({ x: i === 0 ? 0 : Math.max(0, e.nativeEvent.layout.x - 60), animated: false })
                   : undefined
               }
             >
@@ -514,30 +646,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                     activeOpacity={0.8}
                   >
                     <Ionicons
-                      name={
-                        order.status === "ASSIGNED"
-                          ? "calendar-outline"
-                          : order.status === "AWAITING_QUOTE"
-                            ? "document-text-outline"
-                            : order.status === "AWAITING_PAYMENT"
-                              ? "cash-outline"
-                              : "arrow-forward-circle"
-                      }
+                      name={STAGE_BUTTON[order.status]?.icon ?? "arrow-forward-circle"}
                       size={18}
                       color="#fff"
                     />
                     <Text style={styles.actionPrimaryText}>
-                      {order.status === "NEW"
-                        ? "ระบุอะไหล่ที่ต้องใช้"
-                        : order.status === "PARTS_REQUESTED"
-                          ? "เช็คอะไหล่ในคลัง"
-                          : order.status === "AWAITING_QUOTE"
-                            ? "เสนอราคาลูกค้า"
-                            : order.status === "AWAITING_PAYMENT"
-                              ? "ลูกค้าจ่ายเงินแล้ว"
-                              : order.status === "PARTS_CHECKED"
-                                ? "จ่ายงานให้ช่าง"
-                                : "นัดวันเข้างาน"}
+                      {STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -649,7 +763,10 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
             value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
           />
-          <Row label="วันที่นัดเข้า" value={order.scheduledAt ? formatDateTime(order.scheduledAt) : "—"} />
+          <Row label="วันนัด" value={visitLabel(order)} />
+          {order.appointmentStatusLabel ? (
+            <Row label="สถานะนัด" value={order.appointmentStatusLabel} />
+          ) : null}
           <Row
             label="เปิดโดย"
             value={`${order.createdByName ?? "—"} · ${formatDateTime(order.createdAt)}`}
@@ -675,7 +792,10 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           ) : null}
         </View>
 
-        {order.symptom || order.workStatusLabel || order.waitingParts.length > 0 ? (
+        {order.symptom ||
+        order.workStatusLabel ||
+        order.inspectionNote ||
+        order.waitingParts.length > 0 ? (
           <>
             <Row label="อาการ" value={order.symptom ?? "—"} />
             {/*
@@ -686,6 +806,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               ซึ่งขึ้นว่ายังไม่ระบุทั้งที่จบไปเรียบร้อย
             */}
             <Row label="สถานะ" value={order.workStatusLabel ?? order.statusLabel} />
+            {order.inspectionNote ? (
+              <Row
+                label="ผลตรวจหน้างาน"
+                value={`${order.inspectionNote}${order.inspectedAt ? ` (${formatDate(order.inspectedAt)})` : ""}`}
+              />
+            ) : null}
             {order.waitingParts.length > 0 ? (
               <>
                 <Text style={styles.partsHead}>อะไหล่ที่ต้องใช้</Text>
@@ -875,6 +1001,17 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         ))}
       </View>
 
+      {canFollowUp ? (
+        <TouchableOpacity
+          style={styles.deleteRow}
+          onPress={() => setFollowUpOpen(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="git-branch-outline" size={16} color={colors.primary} />
+          <Text style={[styles.deleteText, { color: colors.primary }]}>เปิดใบงานรออะไหล่ต่อ</Text>
+        </TouchableOpacity>
+      ) : null}
+
       {/*
         ลบถาวร — แอดมินเท่านั้น และอยู่ท้ายสุดโดยตั้งใจ
 
@@ -906,6 +1043,28 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           setRollbackOpen(false);
           // ส่งกลับอาจแนบรูปที่เจอหน้างานไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
+          await load();
+        }}
+      />
+
+      <FollowUpModal
+        visible={followUpOpen}
+        order={order}
+        onCancel={() => setFollowUpOpen(false)}
+        onDone={async (code) => {
+          setFollowUpOpen(false);
+          showAlert("เปิดใบงานรออะไหล่แล้ว", `${code} ไปอยู่ที่หัวหน้าภาค และลิงก์กับ ${order.code}`);
+          await load();
+        }}
+      />
+
+      <StageBackModal
+        visible={stageBackOpen}
+        order={order}
+        targets={backTargets}
+        onCancel={() => setStageBackOpen(false)}
+        onDone={async () => {
+          setStageBackOpen(false);
           await load();
         }}
       />
@@ -966,12 +1125,15 @@ export default function WorkOrderDetailScreen({ route }: Props) {
  * เดิมต้องไล่อ่านประวัติทั้งก้อนเพื่อหาว่าใครจ่ายงาน ตอนนี้กดที่วงกลมของขั้นนั้นได้เลย
  */
 const STAGE_ACTIONS: Record<string, string[]> = {
-  NEW: ["PARTS_REQUESTED", "NO_PARTS"],
+  NEW: ["PARTS_REQUESTED", "NO_PARTS", "INSPECT_REQUESTED"],
+  INSPECTING: ["INSPECTED"],
+  WAITING_PARTS: ["PARTS_ARRIVED"],
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
   AWAITING_PAYMENT: ["PAID"],
   PARTS_REQUESTED: ["PARTS_CHECKED"],
   PARTS_CHECKED: ["ASSIGNED"],
   ASSIGNED: ["SCHEDULED"],
+  AWAITING_CONFIRM: ["CONFIRMED"],
   IN_PROGRESS: ["CLOSED"],
 };
 
@@ -1194,6 +1356,214 @@ function RollbackModal({
   );
 }
 
+/**
+ * ย้อนขั้นตอน — แอดมินกับหัวหน้าภาคเท่านั้น
+ *
+ * บอกก่อนกดว่าอะไรจะถูกล้าง เพราะการย้อนลบสิ่งที่คนอื่นทำไว้ (วันนัด ทีม ผลเช็คคลัง)
+ * ปุ่มที่ไม่บอกผลคือปุ่มที่คนกดแล้วค่อยมารู้ทีหลังว่าเลขใบเบิกหายไป
+ */
+/** อะไหล่ไม่ครบ — เปิดใบรออะไหล่ที่ลิงก์กับใบนี้ ใช้ได้ทั้งก่อนและหลังปิดงาน */
+function FollowUpModal({
+  visible,
+  order,
+  onCancel,
+  onDone,
+}: {
+  visible: boolean;
+  order: WorkOrder;
+  onCancel: () => void;
+  onDone: (code: string) => void;
+}) {
+  const [parts, setParts] = useState<PickedPart[]>([]);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setParts([]);
+    setNote("");
+    setError(null);
+  }, [visible]);
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await api.post<{ createdChild: { code: string } }>(
+        `/work-orders/${order.id}/follow-up`,
+        {
+          parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+          note: note.trim() || undefined,
+        }
+      );
+      onDone(res.data.createdChild.code);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title={<>เปิดใบงานรออะไหล่ต่อ · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (saving || parts.length === 0) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={saving || parts.length === 0}
+            activeOpacity={0.8}
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>เปิดใบงาน</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.linkedText}>
+        ใบใหม่ลิงก์กับ {order.code} สถานะ “รออะไหล่เข้า” — หัวหน้าภาคเป็นคนดูแล
+        ของมาแล้วส่งต่อให้แอดมินเบิก แล้วเดินขั้นตอนเหมือนใบปกติ
+      </Text>
+      <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ยังขาด" />
+      <Text style={styles.modalLabel}>บันทึกเพิ่มเติม</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={note}
+        onChangeText={setNote}
+        placeholder="ไม่ใส่ก็ได้"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={2}
+        accessibilityLabel="บันทึกเพิ่มเติม"
+      />
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
+function StageBackModal({
+  visible,
+  order,
+  targets,
+  onCancel,
+  onDone,
+}: {
+  visible: boolean;
+  order: WorkOrder;
+  targets: Stage[];
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [target, setTarget] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    // ขั้นก่อนหน้าทันทีเป็นค่าตั้งต้น — ย้อนทีละขั้นคือกรณีที่เจอบ่อยที่สุด
+    setTarget(targets[0]?.value ?? null);
+    setReason("");
+    setError(null);
+  }, [visible, targets]);
+
+  const order_ = targets.map((t) => t.value);
+  function clears(value: string) {
+    const all = ["NEW", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "ASSIGNED"];
+    const idx = all.indexOf(value);
+    const lost: string[] = [];
+    if (idx >= 0 && idx <= all.indexOf("ASSIGNED") && order.scheduledAt) lost.push("วันนัด");
+    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECTING" && order.assignedTeam)
+      lost.push("ทีมที่รับงาน");
+    if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
+      lost.push("ผลเช็คคลังและเลขใบเบิก");
+    return lost;
+  }
+
+  async function submit() {
+    if (!target) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/rollback`, { toStage: target, reason: reason.trim() });
+      onDone();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const lost = target ? clears(target) : [];
+  return (
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title={<>ย้อนขั้นตอน · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (saving || !target || !reason.trim()) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={saving || !target || !reason.trim()}
+            activeOpacity={0.8}
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>ย้อนขั้น</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.linkedText}>
+        ตอนนี้อยู่ขั้น “{order.statusLabel}” — เลือกขั้นที่จะกลับไปทำใหม่ ประวัติเดิมยังอยู่ครบ
+      </Text>
+      <Text style={styles.modalLabel}>ย้อนไปขั้น</Text>
+      <View style={{ gap: spacing.xs }}>
+        {targets.map((t) => (
+          <TouchableOpacity
+            key={t.value}
+            style={[styles.backOption, target === t.value && styles.backOptionOn]}
+            onPress={() => setTarget(t.value)}
+            activeOpacity={0.7}
+            accessibilityLabel={`ย้อนไป ${t.label}`}
+          >
+            <Text style={styles.backOptionText}>
+              {order_.indexOf(t.value) === 0 ? "ขั้นก่อนหน้า · " : ""}
+              {t.label}
+            </Text>
+            {t.actorLabel ? <Text style={styles.backOptionHint}>กลับไปรอ{t.actorLabel}</Text> : null}
+          </TouchableOpacity>
+        ))}
+      </View>
+      {lost.length > 0 ? (
+        <Text style={styles.warn}>สิ่งที่จะถูกล้าง: {lost.join(" · ")}</Text>
+      ) : null}
+      <Text style={styles.modalLabel}>เหตุผลที่ย้อน</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={reason}
+        onChangeText={setReason}
+        placeholder="เช่น ลูกค้าขอเลื่อนนัด · จ่ายผิดทีม · เช็คคลังผิดตัว"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={2}
+        accessibilityLabel="เหตุผลที่ย้อน"
+      />
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
 function StageModal({
   visible,
   order,
@@ -1228,6 +1598,17 @@ function StageModal({
   const [skipQuote, setSkipQuote] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [visit, setVisit] = useState("");
+  const [visitTime, setVisitTime] = useState("");
+  // ขั้นระบุอะไหล่: ตัวเลือกที่สาม "ต้องเข้าตรวจสอบหน้างานก่อน"
+  const [inspectFirst, setInspectFirst] = useState(false);
+  // ขั้นตรวจหน้างาน: ผลตรวจ + รูป
+  const [finding, setFinding] = useState("");
+  const [photos, setPhotos] = useState<PickedAttachment[]>([]);
+  // ขั้นนัดลูกค้า
+  const [appointment, setAppointment] = useState<"PENDING" | "CONFIRMED" | "ADMIN_PICKED" | null>(null);
+  // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
+  const [splitOut, setSplitOut] = useState(true);
+  const { user } = useAuth();
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1235,6 +1616,13 @@ function StageModal({
   useEffect(() => {
     if (!visible) return;
     setNeedsParts(order.needsParts);
+    // ใบที่เปิดมาเป็นงานตรวจสอบหน้างานและยังไม่เคยตรวจ — ตัวเลือกที่ถูกเกือบทุกครั้ง
+    setInspectFirst(order.status === "NEW" && order.jobType === "INSPECT" && !order.inspectedAt);
+    setFinding("");
+    setPhotos([]);
+    setAppointment(null);
+    setSplitOut(true);
+    setVisitTime(order.scheduledTime ?? "");
     setParts(order.waitingParts);
     setChecks(
       Object.fromEntries(
@@ -1274,11 +1662,47 @@ function StageModal({
     }
   }
 
+  async function addPhoto(
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+  ) {
+    setBusy("กำลังเตรียมไฟล์");
+    try {
+      const file = await pick(setBusy);
+      if (file) setPhotos((v) => [...v, file]);
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function submit() {
     setSaving(true);
     setError(null);
     try {
-      if (order.status === "NEW") {
+      if (order.status === "NEW" && inspectFirst) {
+        await api.post(`/work-orders/${order.id}/inspect-request`, {
+          team,
+          scheduledAt: visit || null,
+          scheduledTime: visit && visitTime ? visitTime : null,
+          note: note.trim() || undefined,
+        });
+      } else if (order.status === "INSPECTING") {
+        // รูปขึ้นก่อนผล — ผลขึ้นแล้วใบงานไปโผล่ที่หัวหน้าภาคทันที ต้องเห็นรูปพร้อมกัน
+        for (const [i, file] of photos.entries()) {
+          setBusy(`กำลังส่งรูป ${i + 1}/${photos.length}`);
+          await uploadAttachment(order.id, file);
+        }
+        await api.post(`/work-orders/${order.id}/inspection`, { note: finding.trim() });
+      } else if (order.status === "WAITING_PARTS") {
+        await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
+      } else if (order.status === "AWAITING_CONFIRM") {
+        await api.post(`/work-orders/${order.id}/confirm-appointment`, {
+          scheduledAt: visit,
+          scheduledTime: visitTime || null,
+          note: note.trim() || undefined,
+        });
+      } else if (order.status === "NEW") {
         await api.post(`/work-orders/${order.id}/parts`, {
           needsParts,
           parts: needsParts
@@ -1295,6 +1719,7 @@ function StageModal({
             warehouse: checks[p.sparePartId]?.warehouse ?? null,
             requisitionNo: requisitionNo.trim() || null,
           })),
+          splitOut: mixed && splitOut,
           note: note.trim() || undefined,
         });
       } else if (order.status === "AWAITING_QUOTE") {
@@ -1322,6 +1747,8 @@ function StageModal({
       } else {
         await api.post(`/work-orders/${order.id}/schedule`, {
           scheduledAt: visit,
+          scheduledTime: visitTime || null,
+          appointment,
           note: note.trim() || undefined,
         });
       }
@@ -1362,12 +1789,28 @@ function StageModal({
   const paymentBlocked =
     order.status === "AWAITING_PAYMENT" && !doc && !order.hasReceipt;
 
+  /**
+   * มีบางตัว หมดบางตัว — ถึงจะถามเรื่องแยกใบ ของครบหรือหมดทุกตัวไม่มีอะไรให้แยก
+   * นับตัวที่เบิกไปแล้วรอบก่อนเป็น "มีของ" ด้วย เพราะเป็นของที่ช่างถือไปซ่อมได้
+   */
+  const mixed =
+    order.status === "PARTS_REQUESTED" &&
+    thisRound.some((p) => checks[p.sparePartId]?.inStock === false) &&
+    (issued.length > 0 || thisRound.some((p) => checks[p.sparePartId]?.inStock === true));
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
+  const timeOk = visitTime === "" || isTime(visitTime);
+
   const blocked =
     quoteBlocked ||
     paymentBlocked ||
-    (order.status === "NEW" && (needsParts === null || (needsParts && parts.length === 0))) ||
+    (order.status === "NEW" &&
+      (inspectFirst
+        ? !team || (visit !== "" && !validDate) || !timeOk
+        : needsParts === null || (needsParts && parts.length === 0))) ||
+    (order.status === "INSPECTING" && !finding.trim()) ||
     (order.status === "PARTS_CHECKED" && !team) ||
-    (order.status === "ASSIGNED" && !/^\d{4}-\d{2}-\d{2}$/.test(visit)) ||
+    (order.status === "ASSIGNED" && (!validDate || !timeOk || appointment === null)) ||
+    (order.status === "AWAITING_CONFIRM" && (!validDate || !timeOk)) ||
     unchecked ||
     needsRequisition;
 
@@ -1377,17 +1820,7 @@ function StageModal({
       onClose={onCancel}
       busy={saving}
       title={<>
-              {order.status === "NEW"
-                ? "ระบุอะไหล่ที่ต้องใช้"
-                : order.status === "PARTS_REQUESTED"
-                  ? "เช็คอะไหล่ในคลัง"
-                  : order.status === "AWAITING_QUOTE"
-                    ? "เสนอราคาลูกค้า"
-                    : order.status === "AWAITING_PAYMENT"
-                      ? "ลูกค้าจ่ายเงินแล้ว"
-                      : order.status === "PARTS_CHECKED"
-                        ? "จ่ายงานให้ช่าง"
-                        : "นัดวันเข้างาน"}{" "}
+              {STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}{" "}
               · {order.code}
             </>}
       footer={
@@ -1416,25 +1849,67 @@ function StageModal({
                 <Text style={styles.modalLabel}>งานนี้ต้องใช้อะไหล่ไหม</Text>
                 <View style={styles.options}>
                   <TouchableOpacity
-                    style={[styles.option, needsParts === true && styles.optionOn]}
-                    onPress={() => setNeedsParts(true)}
+                    style={[styles.option, !inspectFirst && needsParts === true && styles.optionOn]}
+                    onPress={() => {
+                      setInspectFirst(false);
+                      setNeedsParts(true);
+                    }}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.optionText, needsParts === true && styles.optionTextOn]}>
+                    <Text
+                      style={[styles.optionText, !inspectFirst && needsParts === true && styles.optionTextOn]}
+                    >
                       ใช้อะไหล่
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.option, needsParts === false && styles.optionOn]}
-                    onPress={() => setNeedsParts(false)}
+                    style={[styles.option, !inspectFirst && needsParts === false && styles.optionOn]}
+                    onPress={() => {
+                      setInspectFirst(false);
+                      setNeedsParts(false);
+                    }}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.optionText, needsParts === false && styles.optionTextOn]}>
+                    <Text
+                      style={[styles.optionText, !inspectFirst && needsParts === false && styles.optionTextOn]}
+                    >
                       ไม่ใช้อะไหล่
                     </Text>
                   </TouchableOpacity>
+                  {/*
+                    ยังตอบไม่ได้จนกว่าจะมีคนไปดู — เดิมต้องตอบ "ไม่ใช้อะไหล่" ไปก่อน
+                    แล้วรอช่างส่งกลับ ซึ่งประวัติจะบอกว่าตัดสินแล้วทั้งที่ยังไม่รู้
+                  */}
+                  <TouchableOpacity
+                    style={[styles.option, inspectFirst && styles.optionOn]}
+                    onPress={() => setInspectFirst(true)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.optionText, inspectFirst && styles.optionTextOn]}>
+                      ต้องเข้าตรวจสอบหน้างานก่อน
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-                {needsParts === true ? (
+                {order.inspectionNote ? (
+                  <View style={styles.issuedBox}>
+                    <Text style={styles.issuedTitle}>ผลตรวจหน้างาน</Text>
+                    <Text style={styles.issuedLine}>{order.inspectionNote}</Text>
+                  </View>
+                ) : null}
+                {inspectFirst ? (
+                  <>
+                    <Text style={styles.linkedText}>
+                      ส่งทีมไปดูก่อน — ทีมบันทึกผลตรวจแล้วใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
+                    </Text>
+                    <DateField
+                      value={visit}
+                      onChange={setVisit}
+                      label="วันที่เข้าตรวจ"
+                      emptyHint="เว้นว่างได้ — ใบงานจะไปรอในรายการรอจัดแผน"
+                    />
+                    {visit ? <TimeField value={visitTime} onChange={setVisitTime} label="เวลา" /> : null}
+                  </>
+                ) : needsParts === true ? (
                   <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
                 ) : needsParts === false ? (
                   <Text style={styles.linkedText}>
@@ -1551,8 +2026,27 @@ function StageModal({
                     </View>
                   );
                 })}
+                {mixed ? (
+                  <TouchableOpacity
+                    style={styles.skipRow}
+                    onPress={() => setSplitOut((v) => !v)}
+                    activeOpacity={0.7}
+                    accessibilityLabel="แยกตัวที่หมดไปใบงานรออะไหล่"
+                  >
+                    <Ionicons
+                      name={splitOut ? "checkbox" : "square-outline"}
+                      size={18}
+                      color={splitOut ? colors.primary : colors.textFaint}
+                    />
+                    <Text style={styles.skipText}>
+                      แยกตัวที่หมดไปใบงานรออะไหล่ (หัวหน้าภาคดูแล) — ใบนี้ไปซ่อมด้วยของที่มีได้เลย
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
                 <Text style={styles.linkedText}>
-                  มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” ให้เอง
+                  {mixed && splitOut
+                    ? "ตัวที่หมดจะย้ายไปใบงานใหม่ที่ลิงก์กับใบนี้ ใบนี้ไปขั้นจ่ายงานต่อ"
+                    : "มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” และค้างที่ขั้นนี้จนของครบ"}
                 </Text>
               </View>
             ) : null}
@@ -1634,9 +2128,11 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "PARTS_CHECKED" ? (
+            {order.status === "PARTS_CHECKED" || (order.status === "NEW" && inspectFirst) ? (
               <>
-                <Text style={styles.modalLabel}>ทีมที่จะรับงาน</Text>
+                <Text style={styles.modalLabel}>
+                  {order.status === "NEW" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
+                </Text>
                 {/*
                   ทีมของสาขาขึ้นก่อนและถูกเลือกไว้ให้ เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
                   ทีมอื่นเรียงตามหลัง เลือกได้เมื่อทีมเจ้าของสาขาไม่ว่าง
@@ -1688,26 +2184,130 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "ASSIGNED" ? (
-              <DateField
-                value={visit}
-                onChange={setVisit}
-                label="วันที่จะเข้างาน"
-                emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
-              />
+            {order.status === "INSPECTING" ? (
+              <>
+                <Text style={styles.modalLabel}>ตรวจแล้วเจออะไร</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={finding}
+                  onChangeText={setFinding}
+                  placeholder="เช่น วาล์วน้ำทิ้งค้าง บอร์ดมีรอยไหม้ ต้องเปลี่ยนทั้งสองตัว"
+                  placeholderTextColor={colors.textFaint}
+                  multiline
+                  numberOfLines={3}
+                  accessibilityLabel="ผลตรวจหน้างาน"
+                />
+                <Text style={styles.modalLabel}>รูป / วิดีโอหน้างาน (ไม่บังคับ)</Text>
+                <FileStrip files={photos} onChange={setPhotos} />
+                {busy ? (
+                  <View style={styles.slipRow}>
+                    <Spinner color={colors.primary} size="small" />
+                    <Text style={styles.linkedText}>{busy}…</Text>
+                  </View>
+                ) : (
+                  <View style={styles.options}>
+                    {Platform.OS !== "web" ? (
+                      <TouchableOpacity
+                        style={styles.option}
+                        onPress={() => addPhoto((stage) => pickImageAttachment(true, stage))}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.optionText}>ถ่ายรูป</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={styles.option}
+                      onPress={() => addPhoto((stage) => pickImageAttachment(false, stage))}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.optionText}>เลือกรูป</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.option} onPress={() => addPhoto(pickVideoAttachment)} activeOpacity={0.7}>
+                      <Text style={styles.optionText}>วิดีโอ</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                <Text style={styles.linkedText}>
+                  บันทึกแล้วใบงานกลับไปให้หัวหน้าภาคระบุอะไหล่จากผลนี้
+                </Text>
+              </>
             ) : null}
 
-            <Text style={styles.modalLabel}>บันทึกเพิ่มเติม</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={note}
-              onChangeText={setNote}
-              placeholder="ไม่ใส่ก็ได้"
-              placeholderTextColor={colors.textFaint}
-              multiline
-              numberOfLines={2}
-              accessibilityLabel="บันทึกเพิ่มเติม"
-            />
+            {order.status === "WAITING_PARTS" ? (
+              <>
+                <Text style={styles.linkedText}>
+                  ใบนี้แยกมาจาก {order.parent?.code ?? "ใบงานเดิม"} เพราะอะไหล่ไม่ครบ —
+                  ของเข้าคลังแล้วกดส่งต่อ แอดมินจะเช็คและเบิกให้ใหม่
+                </Text>
+                {order.waitingParts.map((p) => (
+                  <Text key={p.sparePartId} style={styles.issuedLine}>
+                    {p.partCode} × {p.quantity} · {p.name}
+                  </Text>
+                ))}
+              </>
+            ) : null}
+
+            {order.status === "ASSIGNED" || order.status === "AWAITING_CONFIRM" ? (
+              <>
+                {order.status === "AWAITING_CONFIRM" ? (
+                  <Text style={styles.linkedText}>
+                    นัดไว้ {visitLabel(order)} — ลูกค้าขอเปลี่ยนเวลา แก้ได้ในนี้เลย
+                    ถ้ายกเลิกนัด ใช้ “ย้อนขั้นตอน” กลับไปนัดใหม่
+                  </Text>
+                ) : null}
+                <DateField
+                  value={visit}
+                  onChange={setVisit}
+                  label="วันที่จะเข้างาน"
+                  emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
+                />
+                <TimeField value={visitTime} onChange={setVisitTime} label="เวลานัด" />
+                {order.status === "ASSIGNED" ? (
+                  <>
+                    <Text style={styles.modalLabel}>ลูกค้าตอบว่าอย่างไร</Text>
+                    <View style={{ gap: spacing.xs }}>
+                      {(
+                        [
+                          ["PENDING", "รอลูกค้าคอนเฟิร์ม", "โทรแล้ว ลูกค้ายังไม่ยืนยัน — พักไว้ที่ขั้นรอคอนเฟิร์ม"],
+                          ["CONFIRMED", "ลูกค้าคอนเฟิร์มแล้ว", "ส่งต่อให้ทีมเข้างานได้เลย"],
+                          ["ADMIN_PICKED", "ลูกค้าสะดวกทุกวัน — แอดมินเลือกวันให้", "เฉพาะแอดมิน"],
+                        ] as const
+                      )
+                        .filter(([v]) => v !== "ADMIN_PICKED" || user?.role === "ADMIN")
+                        .map(([v, label, hint]) => (
+                          <TouchableOpacity
+                            key={v}
+                            style={[styles.backOption, appointment === v && styles.backOptionOn]}
+                            onPress={() => setAppointment(v)}
+                            activeOpacity={0.7}
+                            accessibilityLabel={label}
+                          >
+                            <Text style={styles.backOptionText}>{label}</Text>
+                            <Text style={styles.backOptionHint}>{hint}</Text>
+                          </TouchableOpacity>
+                        ))}
+                    </View>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+
+            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน */}
+            {order.status !== "INSPECTING" ? (
+              <>
+                <Text style={styles.modalLabel}>บันทึกเพิ่มเติม</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={note}
+                  onChangeText={setNote}
+                  placeholder="ไม่ใส่ก็ได้"
+                  placeholderTextColor={colors.textFaint}
+                  multiline
+                  numberOfLines={2}
+                  accessibilityLabel="บันทึกเพิ่มเติม"
+                />
+              </>
+            ) : null}
 
             {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
@@ -1905,6 +2505,9 @@ function CloseModal({
   const [nameplate, setNameplate] = useState<PickedAttachment | null>(null);
   const [workerIds, setWorkerIds] = useState<number[]>([]);
   const [otherWorkers, setOtherWorkers] = useState("");
+  // อะไหล่ที่ยังขาด — เปิดใบงานรออะไหล่ต่อจากใบนี้หลังปิดงาน
+  const [followUp, setFollowUp] = useState(false);
+  const [missing, setMissing] = useState<PickedPart[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1918,6 +2521,8 @@ function CloseModal({
   const workersMissing = workerIds.length === 0 && !otherWorkers.trim();
   // ป้ายรุ่นต้องถ่ายรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง — รูปเก่าใช้แทนไม่ได้
   const nameplateMissing = !nameplate && !order.hasNameplate;
+  // ติ๊กว่าอะไหล่ไม่ครบแต่ไม่ได้บอกว่าขาดตัวไหน — ใบรออะไหล่เปล่า ๆ ไม่มีใครตามของได้
+  const followUpMissing = followUp && missing.length === 0;
 
   /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
   async function pickOne(
@@ -1969,6 +2574,25 @@ function CloseModal({
       setNameplate(null);
       setWorkerIds([]);
       setOtherWorkers("");
+      /**
+       * ใบรออะไหล่เปิดหลังปิดงานสำเร็จแล้วเท่านั้น — ปิดไม่ผ่านแต่เปิดใบต่อไปแล้ว
+       * จะได้ใบรออะไหล่ลอย ๆ ของงานที่ยังไม่จบ ซึ่งพอกดปิดอีกรอบก็เปิดซ้ำอีกใบ
+       */
+      if (followUp && missing.length > 0) {
+        try {
+          setBusy("กำลังเปิดใบงานรออะไหล่");
+          await api.post(`/work-orders/${order.id}/follow-up`, {
+            parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+          });
+        } catch (e) {
+          showAlert(
+            "ปิดงานแล้ว แต่เปิดใบรออะไหล่ไม่สำเร็จ",
+            `${apiErrorMessage(e)}\n\nเปิดใหม่ได้จากปุ่ม “เปิดใบงานรออะไหล่ต่อ” ในใบงานนี้`
+          );
+        }
+      }
+      setFollowUp(false);
+      setMissing([]);
       onDone();
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -1992,11 +2616,13 @@ function CloseModal({
           <TouchableOpacity
             style={[
               styles.modalSave,
-              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing) &&
+              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing) &&
                 styles.modalSaveOff,
             ]}
             onPress={submit}
-            disabled={saving || slipMissing || shotsMissing || workersMissing || nameplateMissing}
+            disabled={
+              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing
+            }
             activeOpacity={0.8}
           >
             {saving ? (
@@ -2281,6 +2907,32 @@ function CloseModal({
         </Text>
       ) : null}
 
+      {/*
+        ไปเปลี่ยนแล้วอะไหล่ไม่ครบ — ใบนี้ปิดได้ตามที่ทำจริง ส่วนที่ขาดไปเป็นใบใหม่
+        ลิงก์กับใบนี้ ไม่ใช่ค้างทั้งใบไว้เพราะของตัวเดียว
+      */}
+      <TouchableOpacity
+        style={styles.skipRow}
+        onPress={() => setFollowUp((v) => !v)}
+        activeOpacity={0.7}
+        accessibilityLabel="อะไหล่ไม่ครบ เปิดใบงานรออะไหล่ต่อ"
+      >
+        <Ionicons
+          name={followUp ? "checkbox" : "square-outline"}
+          size={18}
+          color={followUp ? colors.primary : colors.textFaint}
+        />
+        <Text style={styles.skipText}>อะไหล่ไม่ครบ — เปิดใบงานรออะไหล่ต่อจากใบนี้</Text>
+      </TouchableOpacity>
+      {followUp ? (
+        <>
+          <PartPicker parts={missing} onChange={setMissing} label="อะไหล่ที่ยังขาด" />
+          <Text style={styles.linkedText}>
+            ใบใหม่ไปอยู่ที่หัวหน้าภาค สถานะ “รออะไหล่เข้า” และลิงก์กับใบนี้
+          </Text>
+        </>
+      ) : null}
+
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );
@@ -2296,6 +2948,47 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  linkRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  linkChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: colors.primarySoft,
+    maxWidth: "100%",
+  },
+  linkChipText: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.primaryInk },
+  stepBack: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    backgroundColor: colors.warningSoft,
+  },
+  stepBackText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
+  backOption: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  backOptionOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  backOptionText: { fontSize: 14, lineHeight: 21, fontWeight: "600", color: colors.text },
+  backOptionHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   partsHead: {
     fontSize: 13,
     lineHeight: 21,

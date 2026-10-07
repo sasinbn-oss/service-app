@@ -26,6 +26,7 @@ import consumableRequestRoutes from "./routes/consumableRequests";
 import documentRoutes from "./routes/documents";
 import machineRoutes from "./routes/machines";
 import workOrderRoutes from "./routes/workOrders";
+import planRoutes from "./routes/plans";
 import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
 import { prisma } from "./prisma";
@@ -184,6 +185,7 @@ app.use("/api/consumable-requests", consumableRequestRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/machines", machineRoutes);
 app.use("/api/work-orders", workOrderRoutes);
+app.use("/api/plans", planRoutes);
 
 /**
  * กันคำขอที่พังให้ตอบอะไรกลับไปเสมอ

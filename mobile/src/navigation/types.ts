@@ -8,6 +8,8 @@ export type AuthStackParamList = {
 export type ReportKind = "daily" | "weekly" | "monthly" | "parts";
 
 export type HomeStackParamList = {
+  /** บอร์ดแผนงาน — หน้าแรกของแอดมินกับหัวหน้าภาค */
+  PlanBoard: undefined;
   HomeMenu: undefined;
   ReportsMenu: undefined;
   Report: { kind: ReportKind; title: string };
