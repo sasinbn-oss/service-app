@@ -501,7 +501,17 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/*
+        แบ่งเป็นการ์ดขั้น 1–5 ตามต้นแบบ OTTERI — ฟอร์มยาวที่เป็นก้อนเดียวทำให้
+        คนกรอกไม่รู้ว่าเหลืออีกเท่าไหร่ เลขขั้นบอกทั้งลำดับและระยะทางที่เหลือ
+      */}
+      <View style={styles.flowHead}>
+        <View style={styles.flowDot} />
+        <Text style={styles.flowTitle}>เปิดใบงานใหม่</Text>
+        <Text style={styles.flowHint}>ถามเฉพาะสิ่งที่ขั้นนี้รู้</Text>
+      </View>
       <View style={styles.card}>
+        <StepHead n={1} title="สาขา" />
         {fromBoard ? (
           <View style={styles.fromBoard}>
             <Ionicons name="link-outline" size={16} color={colors.primary} />
@@ -519,7 +529,6 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <>
-            <Text style={styles.label}>สาขา</Text>
             {branchCode ? (
               <View style={styles.chosen}>
                 <View style={styles.chosenBody}>
@@ -594,7 +603,10 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </>
         )}
 
-        <Text style={styles.label}>ประเภทงาน</Text>
+      </View>
+
+      <View style={styles.card}>
+        <StepHead n={2} title="ประเภทงาน" />
         <View style={styles.options}>
           {jobTypes.map((t) => (
             <TouchableOpacity
@@ -625,6 +637,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </>
         ) : null}
 
+      </View>
+
+      <View style={styles.card}>
+        <StepHead n={3} title="เครื่องและอาการ" />
+        {!fromBoard ? (
+          <Text style={styles.stepDesc}>เปิดทีเดียวหลายเครื่องได้ ระบบแยกเป็นใบงานเครื่องละใบ</Text>
+        ) : null}
         {/*
           เครื่องกับอาการอยู่ด้วยกัน เพราะอาการเป็นของเครื่อง ไม่ใช่ของใบงาน
           เปิดสามเครื่องพร้อมกันแล้วใส่อาการเดียวกันทั้งสามคือข้อมูลที่ไม่จริง
@@ -659,6 +678,10 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ) : null}
 
+      </View>
+
+      <View style={styles.card}>
+        <StepHead n={4} title="ผู้ติดต่อที่สาขา" optional />
         {/*
           คนที่สาขาให้ติดต่อ — ช่างโทรหาใครก่อนไปหน้างาน
 
@@ -666,7 +689,6 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           เบอร์ที่ใช้ได้เมื่อสามเดือนก่อนไม่ได้แปลว่าวันนี้โทรไปแล้วเจอคนเดิม
           ระบบเติมค่าจากใบงานล่าสุดของสาขานี้ให้ แก้ทับได้ถ้าเปลี่ยนคน
         */}
-        <Text style={styles.label}>ผู้ติดต่อที่สาขา (ไม่บังคับ)</Text>
         <TextInput
           style={styles.input}
           value={contactName}
@@ -685,7 +707,10 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           accessibilityLabel="เบอร์ติดต่อสาขา"
         />
 
-        <Text style={styles.label}>ความเร่งด่วน</Text>
+      </View>
+
+      <View style={styles.card}>
+        <StepHead n={5} title="ความเร่งด่วน" />
         <View style={styles.options}>
           {priorities.map((p) => (
             <TouchableOpacity
@@ -701,6 +726,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           ))}
         </View>
 
+      </View>
+
+      <View>
         {/*
           จบแค่นี้ — อะไหล่ ช่าง และวันนัด เป็นของขั้นถัดไปตามสายงาน
           ถ้าให้กรอกตรงนี้ด้วย คนเปิดใบงานจะต้องรู้เรื่องที่ยังไม่มีใครรู้
@@ -1136,7 +1164,45 @@ function MachineCard({
   );
 }
 
+/** หัวการ์ดขั้น: วงกลมเลขสีกรมท่า + ชื่อขั้น แบบ step-card ของ OTTERI */
+function StepHead({ n, title, optional }: { n: number; title: string; optional?: boolean }) {
+  return (
+    <View style={styles.stepHead}>
+      <View style={styles.stepNum}>
+        <Text style={styles.stepNumText}>{n}</Text>
+      </View>
+      <Text style={styles.stepTitle}>{title}</Text>
+      {optional ? <Text style={styles.stepOptional}>ไม่บังคับ</Text> : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  flowHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.md },
+  flowDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.primary },
+  flowTitle: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.navy },
+  flowHint: { flex: 1, textAlign: "right", fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  stepHead: { flexDirection: "row", alignItems: "center", gap: spacing.md, marginBottom: spacing.md },
+  stepNum: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.navy,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepNumText: { color: "#fff", fontSize: 15, lineHeight: 22, fontWeight: "800" },
+  stepTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800", color: colors.text },
+  stepOptional: {
+    fontSize: 12,
+    lineHeight: 20,
+    fontWeight: "700",
+    color: colors.textMuted,
+    backgroundColor: colors.tile,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+  },
+  stepDesc: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: -6, marginBottom: spacing.sm },
   machineCard: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -1189,7 +1255,15 @@ const styles = StyleSheet.create({
   nextText: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg },
-  card: { backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.lg, ...shadow.card },
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.primarySoft,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
   fromBoard: {
     flexDirection: "row",
     alignItems: "center",

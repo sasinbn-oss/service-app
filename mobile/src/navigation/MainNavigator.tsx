@@ -42,6 +42,9 @@ import ManageUsersScreen from "../screens/ManageUsersScreen";
 import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
 import { showAlert } from "../utils/alert";
+import RefreshButton from "../components/RefreshButton";
+import SideMenu, { DOCK_WIDTH, DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
+import { useDockWidth } from "../components/AppShell";
 import {
   AdminStackParamList,
   HistoryStackParamList,
@@ -105,6 +108,7 @@ function LogoutButton() {
   return (
     <View style={styles.headerRight}>
       <UserAvatar />
+      <RefreshButton />
       <TouchableOpacity
         accessibilityLabel="ออกจากระบบ"
         onPress={() =>
@@ -132,6 +136,7 @@ function HomeStackNavigator() {
         options={{
           title: "งานช่าง",
           headerTitle: () => <Brand subtitle="งานช่าง" />,
+          headerLeft: () => <MenuButton />,
           headerRight: () => <LogoutButton />,
         }}
       />
@@ -220,6 +225,42 @@ function HomeStackNavigator() {
   );
 }
 
+/**
+ * แท็บ "ใบงาน" ในแถบล่าง ตามต้นแบบ OTTERI
+ *
+ * ใบงานคือสิ่งที่ช่างกับหัวหน้าภาคเปิดบ่อยที่สุด เดิมต้องกดหน้าแรกแล้วกดเมนู
+ * อีกชั้น — แท็บนี้มีชุดหน้าของตัวเอง (รายการ รายละเอียด เปิดใหม่) จะได้กด
+ * กลับไปมาโดยไม่หลุดออกจากแท็บ เมนูในหน้าแรกยังพาไปหน้าเดียวกันได้เหมือนเดิม
+ */
+const WorkStack = createNativeStackNavigator<HomeStackParamList>();
+
+function WorkStackNavigator() {
+  return (
+    <WorkStack.Navigator screenOptions={commonScreenOptions}>
+      <WorkStack.Screen
+        name="WorkOrderList"
+        component={WorkOrderListScreen}
+        options={{
+          title: "ใบงานซ่อม",
+          headerTitle: () => <Brand subtitle="ใบงานซ่อม" />,
+          headerLeft: () => <MenuButton />,
+          headerRight: () => <LogoutButton />,
+        }}
+      />
+      <WorkStack.Screen
+        name="WorkOrderForm"
+        component={WorkOrderFormScreen}
+        options={{ title: "เปิดใบงานใหม่" }}
+      />
+      <WorkStack.Screen
+        name="WorkOrderDetail"
+        component={WorkOrderDetailScreen}
+        options={{ title: "ใบงาน" }}
+      />
+    </WorkStack.Navigator>
+  );
+}
+
 const HistoryStack = createNativeStackNavigator<HistoryStackParamList>();
 
 function HistoryStackNavigator() {
@@ -231,6 +272,7 @@ function HistoryStackNavigator() {
         options={{
           title: "ประวัติการทำงาน",
           headerTitle: () => <Brand subtitle="ประวัติการทำงาน" />,
+          headerLeft: () => <MenuButton />,
           headerRight: () => <LogoutButton />,
         }}
       />
@@ -279,6 +321,7 @@ function AdminStackNavigator() {
         options={{
           title: "ระบบหลังบ้าน",
           headerTitle: () => <Brand subtitle="ระบบหลังบ้าน" />,
+          headerLeft: () => <MenuButton />,
           headerRight: () => <LogoutButton />,
         }}
       />
@@ -344,60 +387,81 @@ function tabLabel(text: string) {
 export default function MainNavigator() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  // จอคอม: เมนูค้างไว้ด้านซ้ายและซ่อนแถบล่าง ตามต้นแบบ — เมนูข้างพาไปได้ทุกแท็บอยู่แล้ว
+  // แถบล่างบนจอกว้างทำให้ต้องเลื่อนสายตาไปล่างสุดของจอเพื่อเปลี่ยนหน้า
+  const { docked } = useDocked();
+  useDockWidth(docked ? DOCK_WIDTH : 0);
 
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.primaryInk,
-        tabBarInactiveTintColor: colors.textMuted,
-        // แท็บที่เลือกอยู่มีพื้นฟ้าอ่อนรองแบบ OTTERI — แค่เปลี่ยนสีไอคอน
-        // มองจากระยะแขนแยกไม่ออกว่าอยู่แท็บไหน
-        tabBarActiveBackgroundColor: colors.primarySoft,
-        tabBarStyle: styles.tabBar,
-        tabBarItemStyle: styles.tabItem,
-      }}
-    >
-      <Tab.Screen
-        name="HomeTab"
-        component={HomeStackNavigator}
-        options={{
-          title: "หน้าหลัก",
-          tabBarLabel: tabLabel("หน้าหลัก"),
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "home" : "home-outline"} size={24} color={color} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="HistoryTab"
-        component={HistoryStackNavigator}
-        options={{
-          title: "ประวัติ",
-          tabBarLabel: tabLabel("ประวัติ"),
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "time" : "time-outline"} size={24} color={color} />
-          ),
-        }}
-      />
-      {isAdmin && (
-        <Tab.Screen
-          name="AdminTab"
-          component={AdminStackNavigator}
-          options={{
-            title: "Admin",
-            tabBarLabel: tabLabel("Admin"),
-            tabBarIcon: ({ color, focused }) => (
-              <Ionicons
-                name={focused ? "settings" : "settings-outline"}
-                size={24}
-                color={color}
-              />
-            ),
+    <View style={{ flex: 1, flexDirection: docked ? "row" : "column" }}>
+      {docked ? <DockedSideMenu /> : null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Tab.Navigator
+          screenOptions={{
+            headerShown: false,
+            tabBarActiveTintColor: colors.primaryInk,
+            tabBarInactiveTintColor: colors.textMuted,
+            // แท็บที่เลือกอยู่มีพื้นฟ้าอ่อนรองแบบ OTTERI — แค่เปลี่ยนสีไอคอน
+            // มองจากระยะแขนแยกไม่ออกว่าอยู่แท็บไหน
+            tabBarActiveBackgroundColor: colors.primarySoft,
+            tabBarStyle: docked ? { display: "none" } : styles.tabBar,
+            tabBarItemStyle: styles.tabItem,
           }}
-        />
-      )}
-    </Tab.Navigator>
+        >
+          <Tab.Screen
+            name="HomeTab"
+            component={HomeStackNavigator}
+            options={{
+              title: "หน้าหลัก",
+              tabBarLabel: tabLabel("หน้าหลัก"),
+              tabBarIcon: ({ color, focused }) => (
+                <Ionicons name={focused ? "home" : "home-outline"} size={24} color={color} />
+              ),
+            }}
+          />
+          <Tab.Screen
+            name="WorkOrdersTab"
+            component={WorkStackNavigator}
+            options={{
+              title: "ใบงาน",
+              tabBarLabel: tabLabel("ใบงาน"),
+              tabBarIcon: ({ color, focused }) => (
+                <Ionicons name={focused ? "clipboard" : "clipboard-outline"} size={24} color={color} />
+              ),
+            }}
+          />
+          <Tab.Screen
+            name="HistoryTab"
+            component={HistoryStackNavigator}
+            options={{
+              title: "ประวัติ",
+              tabBarLabel: tabLabel("ประวัติ"),
+              tabBarIcon: ({ color, focused }) => (
+                <Ionicons name={focused ? "time" : "time-outline"} size={24} color={color} />
+              ),
+            }}
+          />
+          {isAdmin && (
+            <Tab.Screen
+              name="AdminTab"
+              component={AdminStackNavigator}
+              options={{
+                title: "Admin",
+                tabBarLabel: tabLabel("Admin"),
+                tabBarIcon: ({ color, focused }) => (
+                  <Ionicons
+                    name={focused ? "settings" : "settings-outline"}
+                    size={24}
+                    color={color}
+                  />
+                ),
+              }}
+            />
+          )}
+        </Tab.Navigator>
+      </View>
+      {docked ? null : <SideMenu />}
+    </View>
   );
 }
 

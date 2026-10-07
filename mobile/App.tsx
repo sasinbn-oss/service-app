@@ -1,6 +1,7 @@
 import React from "react";
 import { View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
+import { navigationRef } from "./src/navigation/navigationRef";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
@@ -32,7 +33,7 @@ function RootNavigator() {
    * ถ้าปล่อยให้เข้าไปจะเจอหน้าจอที่โหลดข้อมูลไม่ขึ้นทั้งหมดโดยไม่รู้ว่าทำไม
    */
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <AppShell>
         {!user ? (
           <AuthNavigator />
