@@ -4,12 +4,22 @@
  * ผูกกับภาคผ่าน User.region — เห็นและจัดการเฉพาะใบงานของสาขาในภาคตัวเอง
  * แอดมินเห็นทุกภาค ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
  */
-export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN"] as const;
+/**
+ * SUPER_ADMIN = แอดมินที่ตั้ง/ถอดแอดมินได้ (เจ้าของระบบ)
+ *
+ * ทำงานทุกอย่างได้เท่าแอดมิน — ตัวตรวจสิทธิ์ (middleware/auth.ts) มองเป็น ADMIN
+ * ทุกที่ที่เช็ค "ADMIN" จึงใช้ได้กับ SUPER_ADMIN ด้วยโดยไม่ต้องไล่แก้
+ * ที่ต่างกันมีแค่เรื่องตั้งสิทธิ์ผู้ใช้ระดับแอดมินขึ้นไป (routes/auth.ts)
+ */
+export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN", "SUPER_ADMIN"] as const;
+/** บทบาทระดับผู้ดูแลระบบ — นับรวมเวลาเช็คว่า "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน" */
+export const ADMIN_ROLES = ["ADMIN", "SUPER_ADMIN"];
 
 export const ROLE_LABELS: Record<string, string> = {
   EMPLOYEE: "ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
+  SUPER_ADMIN: "Super Admin",
 };
 export type Role = (typeof ROLES)[number];
 

@@ -15,6 +15,11 @@ export interface TokenPayload {
    * พอเปลี่ยนรหัสเสร็จ ระบบออกโทเคนใหม่ให้ทันที ไม่ต้องล็อกอินซ้ำ
    */
   mustChangePassword?: boolean;
+  /**
+   * ตั้งโดย requireAuth เมื่อโทเคนเป็น SUPER_ADMIN (role ถูกมองเป็น ADMIN แทน)
+   * ไม่ได้อยู่ในโทเคนจริง
+   */
+  superAdmin?: boolean;
 }
 
 export function signToken(payload: TokenPayload): string {

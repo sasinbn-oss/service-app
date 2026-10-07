@@ -220,7 +220,7 @@ export default function HomeScreen({ navigation }: Props) {
     >
       <Hero
         name={user?.name ?? ""}
-        role={user?.role}
+        role={user?.superAdmin ? "SUPER_ADMIN" : user?.role}
         area={user?.team ?? user?.region ?? null}
         summary={summary}
         onRefresh={() => load().catch(() => undefined)}
@@ -294,6 +294,7 @@ const ROLE_LABEL: Record<string, string> = {
   EMPLOYEE: "ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
+  SUPER_ADMIN: "Super Admin",
 };
 
 /** ทักตามช่วงเวลาไทย ไม่ใช่เวลาเครื่อง เพราะเครื่องที่เปิดเว็บอาจตั้งโซนเวลาอื่นไว้ */
@@ -353,7 +354,7 @@ function Hero({
       <Text style={[styles.heroName, headingFont]}>{name}</Text>
       <View style={styles.heroArea}>
         <Ionicons name="people-outline" size={16} color="rgba(255,255,255,0.85)" />
-        <Text style={styles.heroAreaText}>{area ?? (role === "ADMIN" ? "ดูแลทุกภาค" : "ยังไม่ได้จัดทีม")}</Text>
+        <Text style={styles.heroAreaText}>{area ?? (role === "ADMIN" || role === "SUPER_ADMIN" ? "ดูแลทุกภาค" : "ยังไม่ได้จัดทีม")}</Text>
       </View>
 
       <View style={styles.heroDivider} />

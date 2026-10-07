@@ -1,4 +1,4 @@
-export type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN";
+export type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN" | "SUPER_ADMIN";
 
 export interface User {
   id: number;
@@ -12,6 +12,12 @@ export interface User {
   team?: string | null;
   /** true = ยังใช้รหัสตั้งต้นที่แอดมินให้มา ต้องเปลี่ยนก่อนใช้งาน */
   mustChangePassword?: boolean;
+  /**
+   * true = Super Admin (ตั้ง/ถอดแอดมินได้) — role ของผู้ใช้ที่ล็อกอินอยู่ถูกมองเป็น "ADMIN"
+   * แบบเดียวกับฝั่งเซิร์ฟเวอร์ ทุกที่ที่เช็ค role === "ADMIN" จึงใช้ได้โดยไม่ต้องไล่แก้
+   * ตั้งใน AuthContext เท่านั้น
+   */
+  superAdmin?: boolean;
 }
 
 export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE";

@@ -18,6 +18,7 @@ import Spinner from "../components/Spinner";
 import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useAuth } from "../context/AuthContext";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { Role } from "../types";
@@ -40,9 +41,23 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
   { value: "EMPLOYEE", label: "ช่าง", hint: "รับงานที่ถูกจ่ายให้ นัดวัน และปิดงาน" },
   { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาคที่ดูแล" },
   { value: "ADMIN", label: "แอดมิน", hint: "เปิดใบงาน เช็คคลัง และทำแทนได้ทุกขั้น" },
+  {
+    value: "SUPER_ADMIN",
+    label: "Super Admin",
+    hint: "ทำได้ทุกอย่างเท่าแอดมิน และเป็นคนเดียวที่ตั้ง ถอด หรือรีเซ็ตรหัสแอดมินได้",
+  },
 ];
 
+/**
+ * ตัวเลือก Super Admin ขึ้นเฉพาะกับ Super Admin (หรือบัญชีที่เป็นอยู่แล้ว จะได้เห็นว่าเป็นอะไร)
+ * แอดมินทั่วไปกดไปก็ถูกเซิร์ฟเวอร์ปฏิเสธอยู่ดี ไม่ต้องให้เห็นปุ่มที่กดไม่ได้
+ */
+function roleOptions(meSuper: boolean, current?: Role) {
+  return ROLE_OPTIONS.filter((r) => r.value !== "SUPER_ADMIN" || meSuper || current === "SUPER_ADMIN");
+}
+
 export default function ManageUsersScreen() {
+  const { user: me } = useAuth();
   const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
   const [regions, setRegions] = useCachedState<string[]>("ManageUsers:regions", []);
   const [teams, setTeams] = useCachedState<string[]>("ManageUsers:teams", []);
@@ -145,7 +160,7 @@ export default function ManageUsersScreen() {
 
           <Text style={styles.label}>สิทธิ์</Text>
           <View style={styles.options}>
-            {ROLE_OPTIONS.map((r) => (
+            {roleOptions(!!me?.superAdmin, u.role).map((r) => (
               <TouchableOpacity
                 key={r.value}
                 style={[styles.option, u.role === r.value && styles.optionOn]}
@@ -285,6 +300,7 @@ function CreateUserModal({
   onCancel: () => void;
   onDone: () => void;
 }) {
+  const { user: me } = useAuth();
   const [employeeCode, setEmployeeCode] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -396,7 +412,7 @@ function CreateUserModal({
 
       <Text style={styles.label}>สิทธิ์</Text>
       <View style={styles.options}>
-        {ROLE_OPTIONS.map((r) => (
+        {roleOptions(!!me?.superAdmin).map((r) => (
           <TouchableOpacity
             key={r.value}
             style={[styles.option, role === r.value && styles.optionOn]}

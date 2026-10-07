@@ -17,6 +17,12 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 
+  // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว
+  // ทุกจุดที่เช็ค role === "ADMIN" (ราว 20 จุด) จึงใช้ได้ทันทีโดยไม่ต้องไล่แก้ทีละจุด
+  if ((req.auth.role as string) === "SUPER_ADMIN") {
+    req.auth = { ...req.auth, role: "ADMIN", superAdmin: true };
+  }
+
   /**
    * บัญชีที่ยังใช้รหัสตั้งต้นอยู่ ทำได้อย่างเดียวคือเปลี่ยนรหัส
    *
