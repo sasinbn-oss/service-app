@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useWideLayout } from "../components/AppShell";
@@ -148,6 +149,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       load();
     }, [load])
   );
+  useRefreshHandler(load);
 
   return (
     <View style={styles.container}>
@@ -355,7 +357,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   addButtonText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
-  chipScroll: { flexGrow: 0, paddingVertical: spacing.md },
+  // flexShrink: 0 — รายการด้านล่างเป็น flex: 1 แล้วเบียดแถวชิปจนเตี้ยเหลือครึ่งเดียว
+  // เห็นชัดเมื่อเปิดจากแท็บใบงานที่ความสูงจอถูกแบ่งให้แถบบนกับแถบล่างแล้ว
+  chipScroll: { flexGrow: 0, flexShrink: 0, paddingVertical: spacing.md },
   chipRow: { flexDirection: "row", gap: spacing.xs, paddingHorizontal: spacing.lg },
   chip: {
     borderWidth: 1,

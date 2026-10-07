@@ -60,6 +60,7 @@ export type AdminStackParamList = {
 
 export type MainTabParamList = {
   HomeTab: undefined;
+  WorkOrdersTab: undefined;
   HistoryTab: undefined;
   AdminTab: undefined;
 };

@@ -42,6 +42,7 @@ import ManageUsersScreen from "../screens/ManageUsersScreen";
 import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
 import { showAlert } from "../utils/alert";
+import RefreshButton from "../components/RefreshButton";
 import {
   AdminStackParamList,
   HistoryStackParamList,
@@ -105,6 +106,7 @@ function LogoutButton() {
   return (
     <View style={styles.headerRight}>
       <UserAvatar />
+      <RefreshButton />
       <TouchableOpacity
         accessibilityLabel="ออกจากระบบ"
         onPress={() =>
@@ -217,6 +219,41 @@ function HomeStackNavigator() {
         options={{ title: "เปลี่ยนรหัสผ่าน" }}
       />
     </HomeStack.Navigator>
+  );
+}
+
+/**
+ * แท็บ "ใบงาน" ในแถบล่าง ตามต้นแบบ OTTERI
+ *
+ * ใบงานคือสิ่งที่ช่างกับหัวหน้าภาคเปิดบ่อยที่สุด เดิมต้องกดหน้าแรกแล้วกดเมนู
+ * อีกชั้น — แท็บนี้มีชุดหน้าของตัวเอง (รายการ รายละเอียด เปิดใหม่) จะได้กด
+ * กลับไปมาโดยไม่หลุดออกจากแท็บ เมนูในหน้าแรกยังพาไปหน้าเดียวกันได้เหมือนเดิม
+ */
+const WorkStack = createNativeStackNavigator<HomeStackParamList>();
+
+function WorkStackNavigator() {
+  return (
+    <WorkStack.Navigator screenOptions={commonScreenOptions}>
+      <WorkStack.Screen
+        name="WorkOrderList"
+        component={WorkOrderListScreen}
+        options={{
+          title: "ใบงานซ่อม",
+          headerTitle: () => <Brand subtitle="ใบงานซ่อม" />,
+          headerRight: () => <LogoutButton />,
+        }}
+      />
+      <WorkStack.Screen
+        name="WorkOrderForm"
+        component={WorkOrderFormScreen}
+        options={{ title: "เปิดใบงานใหม่" }}
+      />
+      <WorkStack.Screen
+        name="WorkOrderDetail"
+        component={WorkOrderDetailScreen}
+        options={{ title: "ใบงาน" }}
+      />
+    </WorkStack.Navigator>
   );
 }
 
@@ -366,6 +403,17 @@ export default function MainNavigator() {
           tabBarLabel: tabLabel("หน้าหลัก"),
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? "home" : "home-outline"} size={24} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="WorkOrdersTab"
+        component={WorkStackNavigator}
+        options={{
+          title: "ใบงาน",
+          tabBarLabel: tabLabel("ใบงาน"),
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? "clipboard" : "clipboard-outline"} size={24} color={color} />
           ),
         }}
       />

@@ -1,39 +1,68 @@
 import React, { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
-import { colors, radius, spacing } from "../theme";
+import { colors, radius, shadow, spacing } from "../theme";
 import { MenuEntry } from "../components/MenuList";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { HomeStackParamList } from "../navigation/types";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "HomeMenu">;
 
+interface ListRow {
+  id: number;
+  code: string;
+  priority: string;
+  statusLabel: string;
+  branchName: string;
+}
+
+interface Summary {
+  inbox: number;
+  active: number;
+  urgent: number;
+  /** ใบแรกในกล่องงาน — เรียงด่วนก่อนแล้วเก่าสุดก่อน ตามที่เซิร์ฟเวอร์จัดมา */
+  next: ListRow | null;
+}
+
 export default function HomeScreen({ navigation }: Props) {
   const { user } = useAuth();
-  const [inbox, setInbox] = useState(0);
+  const { width } = useWindowDimensions();
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const inbox = summary?.inbox ?? 0;
 
   /**
-   * ตัวเลขบนกล่องงาน โหลดใหม่ทุกครั้งที่กลับมาหน้าแรก
+   * ตัวเลขบนการ์ดต้อนรับ โหลดใหม่ทุกครั้งที่กลับมาหน้าแรก
    *
-   * เงียบเมื่อโหลดไม่ได้ เพราะเลขบนเมนูไม่ใช่เนื้อหาหลักของหน้า ถ้าเน็ตสะดุด
+   * ใช้รายการเดียวกับหน้าใบงานซ่อม จึงนับตามขอบเขตที่คนนี้เห็นจริง (ภาค/ทีม)
+   * ตัวเลขบนหน้าแรกกับในรายการจะไม่ขัดกัน
+   *
+   * เงียบเมื่อโหลดไม่ได้ เพราะตัวเลขไม่ใช่เนื้อหาหลักของหน้า ถ้าเน็ตสะดุด
    * ไม่ควรขึ้นข้อความผิดพลาดบังเมนูทั้งหน้าที่ยังกดใช้งานได้ตามปกติ
    */
+  const load = useCallback(async () => {
+    const [active, mine] = await Promise.all([
+      api.get<{ rows: ListRow[]; counts: Record<string, number> }>("/work-orders", { params: { status: "ACTIVE" } }),
+      api.get<{ rows: ListRow[] }>("/work-orders", { params: { status: "INBOX" } }),
+    ]);
+    setSummary({
+      inbox: active.data.counts.INBOX ?? mine.data.rows.length,
+      active: active.data.counts.ACTIVE ?? active.data.rows.length,
+      urgent: active.data.rows.filter((r) => r.priority === "URGENT").length,
+      next: mine.data.rows[0] ?? null,
+    });
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      let alive = true;
-      api
-        .get<{ inbox: number }>("/work-orders/inbox-count")
-        .then((res) => alive && setInbox(res.data.inbox))
-        .catch(() => undefined);
-      return () => {
-        alive = false;
-      };
-    }, [])
+      load().catch(() => undefined);
+    }, [load])
   );
+  useRefreshHandler(load);
 
   const entries: HomeEntry[] = [
     {
@@ -180,6 +209,9 @@ export default function HomeScreen({ navigation }: Props) {
     },
   ];
 
+  // สองคอลัมน์เมื่อจอกว้างพอ ตามต้นแบบ — คอลัมน์เดียวบนมือถือ ปุ่มจะได้กว้างพอให้นิ้วกด
+  const twoCol = width >= 640;
+
   return (
     <ScrollView
       style={styles.container}
@@ -190,9 +222,33 @@ export default function HomeScreen({ navigation }: Props) {
         name={user?.name ?? ""}
         role={user?.role}
         area={user?.team ?? user?.region ?? null}
-        inbox={inbox}
-        onOpenInbox={() => navigation.navigate("WorkOrderList", { inbox: true })}
+        summary={summary}
+        onRefresh={() => load().catch(() => undefined)}
       />
+
+      {summary?.next ? (
+        <TouchableOpacity
+          style={styles.notice}
+          activeOpacity={0.8}
+          onPress={() => navigation.navigate("WorkOrderList", { inbox: true })}
+        >
+          <View style={styles.noticeIcon}>
+            <Ionicons name="shield-checkmark-outline" size={22} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={styles.noticeHead}>
+              <Text style={styles.noticeKicker}>ถึงคิวคุณ</Text>
+              <View style={styles.noticeTag}>
+                <Text style={styles.noticeTagText}>{inbox} ใบ</Text>
+              </View>
+            </View>
+            <Text style={styles.noticeText}>
+              ใบแรกคือ <Text style={styles.noticeStrong}>{summary.next.code}</Text>
+              {` — ${summary.next.statusLabel} ที่ ${summary.next.branchName}`}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      ) : null}
 
       {GROUPS.map((group) => (
         <View key={group.key} style={styles.group}>
@@ -201,11 +257,15 @@ export default function HomeScreen({ navigation }: Props) {
             <Text style={styles.groupTitle}>{group.title}</Text>
             <Text style={styles.groupTitleEn}>{group.titleEn}</Text>
           </View>
-          {entries
-            .filter((e) => e.group === group.key)
-            .map((entry) => (
-              <MenuCard key={entry.key} entry={entry} />
-            ))}
+          <View style={styles.grid}>
+            {entries
+              .filter((e) => e.group === group.key)
+              .map((entry) => (
+                <View key={entry.key} style={twoCol ? styles.cellHalf : styles.cellFull}>
+                  <MenuTile entry={entry} />
+                </View>
+              ))}
+          </View>
         </View>
       ))}
 
@@ -247,24 +307,33 @@ function greeting() {
 }
 
 /**
- * การ์ดต้อนรับสีกรมท่า
+ * การ์ดต้อนรับสีกรมท่าไล่ไปฟ้า แบบต้นแบบ OTTERI
  *
- * ตัวเลขมีแค่กล่องงาน เพราะเป็นตัวเลขเดียวที่หน้าแรกโหลดจริง — คู่มือ OTTERI
- * ห้ามแสดงสถิติที่ระบบไม่มีข้อมูล จึงไม่เติมช่องให้ครบสามช่องเหมือนตัวอย่าง
+ * ตัวเลขสามช่องมาจากรายการใบงานจริงในขอบเขตของคนนี้ ไม่มีตัวเลขสมมติ —
+ * ระหว่างที่ยังโหลดไม่เสร็จขึ้นขีดแทน ไม่ขึ้นศูนย์ที่ดูเหมือนข้อมูลจริง
  */
 function Hero({
   name,
   role,
   area,
-  inbox,
-  onOpenInbox,
+  summary,
+  onRefresh,
 }: {
   name: string;
   role?: string;
   area: string | null;
-  inbox: number;
-  onOpenInbox: () => void;
+  summary: Summary | null;
+  onRefresh: () => void;
 }) {
+  const stat = (label: string, value: number | undefined) => (
+    <View style={styles.stat}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statValue}>
+        {value === undefined ? "–" : value.toLocaleString("th-TH")}
+        <Text style={styles.statUnit}> ใบ</Text>
+      </Text>
+    </View>
+  );
   return (
     <View style={styles.hero}>
       <View style={styles.heroGlow} />
@@ -276,53 +345,45 @@ function Hero({
             <Text style={styles.heroBadgeText}>{ROLE_LABEL[role] ?? role}</Text>
           </View>
         ) : null}
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity style={styles.heroRefresh} onPress={onRefresh} accessibilityLabel="โหลดตัวเลขใหม่">
+          <Ionicons name="sync-outline" size={20} color="#fff" />
+        </TouchableOpacity>
       </View>
       <Text style={styles.heroName}>{name}</Text>
-      {area ? (
-        <View style={styles.heroArea}>
-          <Ionicons name="people-outline" size={16} color="rgba(255,255,255,0.8)" />
-          <Text style={styles.heroAreaText}>{area}</Text>
-        </View>
-      ) : null}
+      <View style={styles.heroArea}>
+        <Ionicons name="people-outline" size={16} color="rgba(255,255,255,0.85)" />
+        <Text style={styles.heroAreaText}>{area ?? (role === "ADMIN" ? "ดูแลทุกภาค" : "ยังไม่ได้จัดทีม")}</Text>
+      </View>
 
       <View style={styles.heroDivider} />
 
-      <TouchableOpacity style={styles.heroKpi} activeOpacity={0.8} onPress={onOpenInbox}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.heroKpiLabel}>ใบงานที่รอคุณ</Text>
-          <Text style={styles.heroKpiValue}>
-            {inbox.toLocaleString("th-TH")}
-            <Text style={styles.heroKpiUnit}> ใบ</Text>
-          </Text>
-        </View>
-        <View style={styles.heroKpiGo}>
-          <Text style={styles.heroKpiGoText}>เปิดกล่องงาน</Text>
-          <Ionicons name="arrow-forward" size={16} color={colors.navy} />
-        </View>
-      </TouchableOpacity>
+      <View style={styles.stats}>
+        {stat("รอคุณ", summary?.inbox)}
+        {stat("ใบงานค้าง", summary?.active)}
+        {stat("งานด่วน", summary?.urgent)}
+      </View>
     </View>
   );
 }
 
-function MenuCard({ entry }: { entry: HomeEntry }) {
+/** ปุ่มเมนูแบบกระเบื้อง: ไอคอน ชื่อไทย ชื่ออังกฤษตัวเล็ก คำอธิบาย และตัวเลขแดงถ้ามี */
+function MenuTile({ entry }: { entry: HomeEntry }) {
   return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.75} onPress={entry.onPress}>
-      <View style={[styles.cardIcon, { backgroundColor: entry.tint }]}>
+    <TouchableOpacity style={styles.tile} activeOpacity={0.75} onPress={entry.onPress}>
+      <View style={[styles.tileIcon, { backgroundColor: entry.tint }]}>
         <Ionicons name={entry.icon} size={22} color={entry.iconColor} />
       </View>
-      <View style={{ flex: 1 }}>
-        <View style={styles.cardTitleRow}>
-          <Text style={styles.cardLabel}>{entry.label}</Text>
-          {entry.badge ? (
-            <View style={styles.cardBadge}>
-              <Text style={styles.cardBadgeText}>{entry.badge}</Text>
-            </View>
-          ) : null}
-        </View>
-        <Text style={styles.cardLabelEn}>{entry.labelEn}</Text>
-        <Text style={styles.cardDescription}>{entry.description}</Text>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.tileLabel}>{entry.label}</Text>
+        <Text style={styles.tileLabelEn}>{entry.labelEn}</Text>
+        <Text style={styles.tileDescription}>{entry.description}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
+      {entry.badge ? (
+        <View style={styles.tileBadge}>
+          <Text style={styles.tileBadgeText}>{entry.badge}</Text>
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -346,40 +407,33 @@ function BuildLine() {
   return <Text style={styles.build}>{`รุ่น ${BUILD_COMMIT} · build ${when}`}</Text>;
 }
 
-// เงาฟ้าอ่อนแบบ --shadow-md ของ OTTERI — บนเว็บใช้ boxShadow ตรง ๆ ได้ จึงตรงกับต้นแบบกว่า
-const cardShadow = {
-  shadowColor: colors.navy,
-  shadowOffset: { width: 0, height: 4 },
-  shadowOpacity: 0.06,
-  shadowRadius: 16,
-  elevation: 2,
-};
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
 
   hero: {
     backgroundColor: colors.navy,
-    borderRadius: 24,
+    borderRadius: radius.xl,
     padding: spacing.xl,
     overflow: "hidden",
-    ...cardShadow,
+    ...shadow.raised,
+    // บนเว็บไล่สีกรมท่าไปฟ้าแบบต้นแบบ บนมือถือใช้กรมท่าพื้นแทน
+    // เพื่อไม่ต้องเพิ่มไลบรารี gradient เข้าแอปเพราะการ์ดใบเดียว
+    ...(Platform.OS === "web"
+      ? ({ backgroundImage: `linear-gradient(135deg, ${colors.navy} 0%, ${colors.primaryInk} 55%, ${colors.primary} 100%)` } as object)
+      : null),
   },
-  // วงกลมจาง ๆ มุมขวาบน แทน gradient ของต้นแบบ — ได้ความลึกแบบเดียวกัน
-  // โดยไม่ต้องเพิ่มไลบรารี gradient เข้ามาในแอป
   heroGlow: {
     position: "absolute",
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    right: -90,
-    top: -110,
-    backgroundColor: colors.primary,
-    opacity: 0.35,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    right: -70,
+    top: -80,
+    backgroundColor: "rgba(255,255,255,0.08)",
   },
-  heroTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
-  heroGreet: { color: "rgba(255,255,255,0.85)", fontSize: 14, lineHeight: 22 },
+  heroTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  heroGreet: { color: "rgba(255,255,255,0.88)", fontSize: 14, lineHeight: 22 },
   heroBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -391,38 +445,66 @@ const styles = StyleSheet.create({
   },
   heroBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
   heroBadgeText: { color: colors.successInk, fontSize: 12, lineHeight: 20, fontWeight: "700" },
+  heroRefresh: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.16)",
+  },
   heroName: { color: "#fff", fontSize: 26, lineHeight: 38, fontWeight: "800", marginTop: spacing.sm },
   heroArea: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 },
-  heroAreaText: { color: "rgba(255,255,255,0.85)", fontSize: 14, lineHeight: 22 },
+  heroAreaText: { color: "rgba(255,255,255,0.88)", fontSize: 14, lineHeight: 22 },
   heroDivider: { height: 1, backgroundColor: "rgba(255,255,255,0.15)", marginVertical: spacing.lg },
-  heroKpi: {
-    flexDirection: "row",
+  stats: { flexDirection: "row", gap: 10 },
+  stat: {
+    flex: 1,
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.10)",
     borderRadius: radius.lg,
-    padding: spacing.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
   },
-  heroKpiLabel: { color: "rgba(255,255,255,0.8)", fontSize: 13, lineHeight: 20 },
-  heroKpiValue: { color: "#fff", fontSize: 30, lineHeight: 40, fontWeight: "800" },
-  heroKpiUnit: { fontSize: 14, fontWeight: "500", color: "rgba(255,255,255,0.8)" },
-  heroKpiGo: {
+  statLabel: { color: "rgba(255,255,255,0.85)", fontSize: 13, lineHeight: 20 },
+  statValue: { color: "#fff", fontSize: 26, lineHeight: 36, fontWeight: "800" },
+  statUnit: { fontSize: 13, fontWeight: "500", color: "rgba(255,255,255,0.85)" },
+
+  notice: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "#fff",
-    borderRadius: radius.pill,
-    paddingHorizontal: 14,
-    minHeight: 42,
+    gap: spacing.md,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginTop: spacing.lg,
   },
-  heroKpiGoText: { color: colors.navy, fontSize: 14, lineHeight: 22, fontWeight: "700" },
+  noticeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primaryInk,
+  },
+  noticeHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  noticeKicker: { fontSize: 13, lineHeight: 20, fontWeight: "800", color: colors.primaryInk },
+  noticeTag: { backgroundColor: colors.dangerSoft, borderRadius: radius.pill, paddingHorizontal: 8 },
+  noticeTagText: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.dangerInk },
+  noticeText: { fontSize: 15, lineHeight: 24, color: colors.text, marginTop: 2 },
+  noticeStrong: { fontWeight: "800", color: colors.primaryInk },
 
   group: { marginTop: spacing.xl },
-  groupHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.xs },
+  groupHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm },
   groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
-  groupTitle: { fontSize: 15, lineHeight: 24, fontWeight: "800", color: colors.navy },
-  groupTitleEn: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
+  groupTitle: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.navy },
+  groupTitleEn: { fontSize: 12, lineHeight: 20, color: colors.textFaint, fontWeight: "600" },
+  grid: { flexDirection: "row", flexWrap: "wrap", marginHorizontal: -5 },
+  cellFull: { width: "100%", padding: 5 },
+  cellHalf: { width: "50%", padding: 5 },
 
-  card: {
+  tile: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
@@ -431,28 +513,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.primarySoft,
     padding: spacing.lg,
-    marginTop: spacing.sm,
-    ...cardShadow,
+    ...shadow.card,
   },
-  cardIcon: {
-    width: 46,
-    height: 46,
+  tileIcon: {
+    width: 44,
+    height: 44,
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  cardTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  cardLabel: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
-  cardLabelEn: { fontSize: 11, lineHeight: 16, color: colors.textFaint, fontWeight: "600" },
-  cardDescription: { fontSize: 13, lineHeight: 21, color: colors.textMuted, marginTop: 2 },
-  cardBadge: {
+  tileLabel: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.text },
+  tileLabelEn: { fontSize: 11, lineHeight: 16, color: colors.textFaint, fontWeight: "600" },
+  tileDescription: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
+  tileBadge: {
     minWidth: 22,
     paddingHorizontal: 7,
     borderRadius: radius.pill,
     backgroundColor: colors.danger,
     alignItems: "center",
   },
-  cardBadgeText: { color: "#fff", fontSize: 12, lineHeight: 20, fontWeight: "700" },
+  tileBadgeText: { color: "#fff", fontSize: 12, lineHeight: 20, fontWeight: "700" },
 
   build: {
     fontSize: 11,
