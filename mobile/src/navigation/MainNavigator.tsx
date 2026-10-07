@@ -111,6 +111,17 @@ function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps
   );
 }
 
+/**
+ * ใบงานกับฟอร์มเปิดใบงานเปิดเป็นหน้าต่างลอยทับหน้าเดิม (ตัวหน้าต่างวาดใน PopupScreen)
+ * หน้าข้างหลังยังแสดงอยู่ใต้ฉากมืด ปิดแล้วกลับมาที่เดิมในรายการ
+ */
+const POPUP = {
+  presentation: "transparentModal" as const,
+  animation: "fade" as const,
+  headerShown: false,
+  contentStyle: { backgroundColor: "transparent" },
+};
+
 const commonScreenOptions = {
   header: (props: NativeStackHeaderProps) => <PageHeader {...props} />,
   contentStyle: { backgroundColor: colors.background },
@@ -255,12 +266,12 @@ function HomeStackNavigator() {
       <HomeStack.Screen
         name="WorkOrderForm"
         component={WorkOrderFormScreen}
-        options={{ title: "เปิดใบงานใหม่" }}
+        options={{ title: "เปิดใบงานใหม่", ...POPUP }}
       />
       <HomeStack.Screen
         name="WorkOrderDetail"
         component={WorkOrderDetailScreen}
-        options={{ title: "ใบงาน" }}
+        options={{ title: "ใบงาน", ...POPUP }}
       />
       <HomeStack.Screen
         name="TransferDocument"
@@ -334,12 +345,12 @@ function WorkStackNavigator() {
       <WorkStack.Screen
         name="WorkOrderForm"
         component={WorkOrderFormScreen}
-        options={{ title: "เปิดใบงานใหม่" }}
+        options={{ title: "เปิดใบงานใหม่", ...POPUP }}
       />
       <WorkStack.Screen
         name="WorkOrderDetail"
         component={WorkOrderDetailScreen}
-        options={{ title: "ใบงาน" }}
+        options={{ title: "ใบงาน", ...POPUP }}
       />
     </WorkStack.Navigator>
   );

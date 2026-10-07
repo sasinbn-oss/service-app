@@ -20,8 +20,23 @@ const DIR = __dirname;
 
   const seen = (t, exact = false) =>
     page.getByText(t, { exact }).locator("visible=true").count();
+  // ใบงานกับฟอร์มเปิดเป็นหน้าต่างลอย หน้ารายการข้างหลังยังมองเห็นอยู่ใต้ฉากมืด
+  // ข้อความเดียวกันจึงมีทั้งข้างหน้าและข้างหลัง — เลือกตัวที่อยู่บนสุดจริง ๆ ตรงจุดนั้น
+  // (ไม่งั้น click แบบสำรองด้านล่างจะไปกดรายการข้างหลังทะลุฉากมืด)
+  const topmost = async (loc) => {
+    const n = await loc.count();
+    for (let i = n - 1; i >= 0; i--) {
+      const hit = await loc.nth(i).evaluate((node) => {
+        const r = node.getBoundingClientRect();
+        const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return !!at && (node.contains(at) || at.contains(node));
+      }).catch(() => false);
+      if (hit) return loc.nth(i);
+    }
+    return loc.first();
+  };
   const tap = async (t, exact = true) => {
-    const el = page.getByText(t, { exact }).locator("visible=true").first();
+    const el = await topmost(page.getByText(t, { exact }).locator("visible=true"));
     await el.scrollIntoViewIfNeeded().catch(() => {});
     await el.click().catch(async () => {
       await el.evaluate((n) => (n.closest("[tabindex]") || n).click());

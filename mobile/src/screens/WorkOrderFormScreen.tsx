@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import PopupScreen from "../components/PopupScreen";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
@@ -489,8 +490,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       );
 
       // เปิดหลายใบพร้อมกันแล้วเด้งเข้าใบใดใบหนึ่งจะเหมือนอีกสองใบหายไป
-      // พากลับไปที่รายการแทน จะได้เห็นครบทุกใบที่เพิ่งเปิด
-      if (orders.length > 1) navigation.replace("WorkOrderList");
+      // ปิดหน้าต่างกลับไปที่หน้าเดิมแทน (รายการโหลดใหม่เองตอนได้โฟกัสคืน)
+      // ใบเดียว: ใบงานที่เพิ่งเปิดขึ้นมาแทนที่ในหน้าต่างเดิมทันที
+      if (orders.length > 1) navigation.goBack();
       else navigation.replace("WorkOrderDetail", { id: orders[0].id });
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -501,16 +503,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   }
 
   return (
+    // เปิดเป็นหน้าต่างลอยทับหน้าเดิม แบบเดียวกับใบงาน — ชื่อฟอร์มอยู่หัวหน้าต่าง
+    <PopupScreen title="เปิดใบงานใหม่" subtitle="ถามเฉพาะสิ่งที่ขั้นนี้รู้" width={860}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/*
         แบ่งเป็นการ์ดขั้น 1–5 ตามต้นแบบ OTTERI — ฟอร์มยาวที่เป็นก้อนเดียวทำให้
         คนกรอกไม่รู้ว่าเหลืออีกเท่าไหร่ เลขขั้นบอกทั้งลำดับและระยะทางที่เหลือ
       */}
-      <View style={styles.flowHead}>
-        <View style={styles.flowDot} />
-        <Text style={styles.flowTitle}>เปิดใบงานใหม่</Text>
-        <Text style={styles.flowHint}>ถามเฉพาะสิ่งที่ขั้นนี้รู้</Text>
-      </View>
       <View style={styles.card}>
         <StepHead n={1} title="สาขา" />
         {fromBoard ? (
@@ -767,6 +766,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    </PopupScreen>
   );
 }
 
@@ -1179,10 +1179,6 @@ function StepHead({ n, title, optional }: { n: number; title: string; optional?:
 }
 
 const styles = StyleSheet.create({
-  flowHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.md },
-  flowDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.primary },
-  flowTitle: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.navy },
-  flowHint: { flex: 1, textAlign: "right", fontSize: 13, lineHeight: 20, color: colors.textMuted },
   stepHead: { flexDirection: "row", alignItems: "center", gap: spacing.md, marginBottom: spacing.md },
   stepNum: {
     width: 34,

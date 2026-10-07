@@ -17,7 +17,8 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
-import AppModal from "../components/AppModal";
+import AppModal, { ModalRow } from "../components/AppModal";
+import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -42,6 +43,7 @@ type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
 interface LogEntry {
   id: number;
+  action: string;
   actionLabel: string;
   statusLabel: string;
   note: string | null;
@@ -186,6 +188,11 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   // จะได้ไม่ต้องยิงขอรายการเดิมซ้ำอีกรอบ (รูปย่อเป็น data URL ก้อนใหญ่)
   const [files, setFiles] = useState<Attachment[]>([]);
   const [deleting, setDeleting] = useState(false);
+  // ขั้นที่ทำแล้วที่กดดูอยู่ (null = ไม่ได้ดู)
+  const [stepInfo, setStepInfo] = useState<string | null>(null);
+  // การ์ดสาขา/การมอบหมายวางคู่กันเมื่อหน้าต่างกว้างพอ
+  const [bodyWidth, setBodyWidth] = useState(0);
+  const twoCol = bodyWidth >= 720;
 
   const load = useCallback(async () => {
     try {
@@ -244,18 +251,33 @@ export default function WorkOrderDetailScreen({ route }: Props) {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <Spinner color={colors.primary} />
-      </View>
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
+        <View style={styles.centered}>
+          <Spinner color={colors.primary} />
+        </View>
+      </PopupScreen>
     );
   }
 
   if (error || !order) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>{error ?? "ไม่พบใบงานนี้"}</Text>
-      </View>
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{error ?? "ไม่พบใบงานนี้"}</Text>
+        </View>
+      </PopupScreen>
     );
+  }
+
+  /** กดวงกลมขั้นตอน: ขั้นปัจจุบัน = ทำขั้นนี้ (ถ้าถึงคิวเรา) · ขั้นที่ทำแล้ว = ดูว่าใครทำ */
+  function pressStep(value: string, state: string) {
+    if (state === "done") {
+      setStepInfo(value);
+      return;
+    }
+    if (state !== "now" || !order || !myTurn(order) || busy) return;
+    if (order.status === "IN_PROGRESS") setClosing(true);
+    else setStageOpen(true);
   }
 
   /**
@@ -322,10 +344,24 @@ export default function WorkOrderDetailScreen({ route }: Props) {
     (order.assignedTeam !== null && order.assignedTeam === user?.team);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <PopupScreen
+      title={order.code}
+      subtitle="ใบงานซ่อม"
+      backLabel={`ใบงาน ${order.code}`}
+      right={
+        <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+          <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
+        </View>
+      }
+    >
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      onLayout={(e) => setBodyWidth(e.nativeEvent.layout.width)}
+    >
       <View style={styles.card}>
         <View style={styles.headRow}>
-          <Text style={styles.code}>{order.code}</Text>
+          <Text style={[styles.code, headingFont]}>{order.code}</Text>
           <View style={{ flex: 1 }} />
           <View style={[styles.badge, { backgroundColor: tone.bg }]}>
             <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
@@ -335,87 +371,17 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Text style={[styles.title, headingFont]}>{order.title}</Text>
         {order.detail ? <Text style={styles.detail}>{order.detail}</Text> : null}
 
-        <View style={styles.divider} />
 
-        <Row label="ประเภทงาน" value={order.jobTypeLabel} />
-        <Row label="สาขา" value={`${order.branchCode} · ${order.branchName}`} />
-        {order.region ? <Row label="ภาค" value={order.region} /> : null}
-        {order.branchOpenedAt ? (
-          <Row label="วันเปิดร้าน" value={formatDate(order.branchOpenedAt)} />
-        ) : null}
         {/*
-          ประกันเป็นเรื่องของสาขาแฟรนไชส์เท่านั้น สาขาบริษัท (รหัสขึ้นต้นด้วย C)
-          เครื่องเป็นของบริษัทเอง จึงไม่มีอะไรให้พูดถึง
-
-          ต้องเห็นตั้งแต่หน้านี้ เพราะเป็นตัวตัดสินว่าจะส่งช่างของเราไปหรือ
-          ให้ผู้ขายรับผิดชอบ ซึ่งตัดสินกันตอนดูใบงาน ไม่ใช่ตอนไปถึงหน้างานแล้ว
-        */}
-        {order.branchIsCompany ? (
-          <Row label="ประกัน" value="สาขาบริษัท — ไม่มีประกัน" />
-        ) : order.branchWarrantyExpiresAt ? (
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>ประกัน</Text>
-            <Text
-              style={[
-                styles.rowValue,
-                order.branchWarrantyExpired ? styles.warrantyOut : styles.warrantyIn,
-              ]}
-            >
-              {order.branchWarrantyExpired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"}
-              {" · ถึง "}
-              {formatDate(order.branchWarrantyExpiresAt)}
-            </Text>
-          </View>
-        ) : (
-          <Row label="ประกัน" value="ยังไม่ได้บันทึกวันหมดประกัน" />
-        )}
-        <Row
-          label="เครื่อง"
-          value={
-            order.machineCode
-              ? [
-                  order.machineCode,
-                  order.machineBrand,
-                  order.machineModel,
-                  order.machineCapacityLabel,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")
-              : "ทั้งสาขา"
-          }
-        />
-        <Row label="ความเร่งด่วน" value={order.priorityLabel} />
-        {order.contactName || order.contactPhone ? (
-          <Row
-            label="ผู้ติดต่อที่สาขา"
-            value={[order.contactName, order.contactPhone].filter(Boolean).join(" · ")}
-          />
-        ) : null}
-        {/* ใบเก่าจ่ายรายคน ใบใหม่จ่ายเป็นทีม — แสดงตามที่ใบนั้นเป็นจริง */}
-        <Row
-          label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
-          value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
-        />
-        <Row label="วันที่นัดเข้า" value={order.scheduledAt ? formatDateTime(order.scheduledAt) : "—"} />
-        <Row
-          label="เปิดโดย"
-          value={`${order.createdByName ?? "—"} · ${formatDateTime(order.createdAt)}`}
-        />
-        <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
-      </View>
-
-      {/*
-        เส้นทางเดินงานกับปุ่มของขั้นนี้อยู่ใต้หัวใบงานทันที แบบต้นแบบ OTTERI —
-        คนเปิดใบงานส่วนใหญ่เปิดมาเพื่อทำขั้นถัดไป เดิมต้องเลื่อนผ่านรายละเอียดกับรูปก่อนถึงปุ่ม
-      */}
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
-        {/*
-          แถบแนวนอนแบบต้นแบบ OTTERI — เห็นทั้งเส้นในแวบเดียวว่ามาถึงไหน
-          จอแคบเลื่อนซ้ายขวาได้ แทนการบีบชื่อขั้นจนอ่านไม่ออก
+          ขั้นตอนงานอยู่บนสุด ในการ์ดหัวใบงานเลย ตามตัวอย่างที่เจ้าของงานเลือก —
+          คนเปิดใบงานส่วนใหญ่เปิดมาเพื่อดูว่าถึงไหนแล้วทำขั้นถัดไป
+          กดวงกลมขั้นปัจจุบันได้เหมือนกดปุ่ม ขั้นที่ทำแล้วกดดูว่าใครทำเมื่อไร
         */}
         <ScrollView
           ref={stepScroll}
+          // ชื่อของแถบ — หัวข้อ "ขั้นตอนงาน" ถูกเอาออกตอนย้ายแถบขึ้นบนสุด
+          // คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder-web-test) หาแถบนี้จากชื่อนี้
+          accessibilityLabel="ขั้นตอนงาน"
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.steps}
@@ -466,9 +432,12 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                 )
             ).length;
           return (
-            <View
+            <TouchableOpacity
               key={stage.value}
               style={styles.step}
+              activeOpacity={0.7}
+              onPress={() => pressStep(stage.value, state)}
+              accessibilityLabel={stage.label}
               // จอแคบเห็นแค่สามขั้นแรก — เลื่อนให้ขั้นปัจจุบันอยู่ในจอเอง
               // ไม่งั้นใบที่เดินมาถึงขั้นห้าจะเปิดมาเห็นแต่ขั้นที่ผ่านไปแล้ว
               onLayout={
@@ -513,100 +482,181 @@ export default function WorkOrderDetailScreen({ route }: Props) {
               ) : stage.actorLabel && state !== "done" ? (
                 <Text style={styles.stageActor}>{stage.actorLabel}</Text>
               ) : null}
-            </View>
+            </TouchableOpacity>
           );
         })}
         </ScrollView>
-      </View>
 
-      {!done ? (
-        myTurn(order) ? (
-          <>
-            <View style={styles.actions}>
-{/*
-                ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
-                ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
-                จึงไม่มีขั้นไหนที่ขึ้นทั้งสองปุ่มพร้อมกันอีก
+        {!done ? (
+          myTurn(order) ? (
+            <>
+              <View style={styles.actions}>
+  {/*
+                  ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
+                  ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
+                  จึงไม่มีขั้นไหนที่ขึ้นทั้งสองปุ่มพร้อมกันอีก
+                */}
+                {order.status === "IN_PROGRESS" ? (
+                  <TouchableOpacity
+                    style={[styles.action, styles.actionPrimary]}
+                    onPress={() => setClosing(true)}
+                    disabled={busy}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="checkmark-done" size={18} color="#fff" />
+                    <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.action, styles.actionPrimary]}
+                    onPress={() => setStageOpen(true)}
+                    disabled={busy}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name={
+                        order.status === "ASSIGNED"
+                          ? "calendar-outline"
+                          : order.status === "AWAITING_QUOTE"
+                            ? "document-text-outline"
+                            : order.status === "AWAITING_PAYMENT"
+                              ? "cash-outline"
+                              : "arrow-forward-circle"
+                      }
+                      size={18}
+                      color="#fff"
+                    />
+                    <Text style={styles.actionPrimaryText}>
+                      {order.status === "NEW"
+                        ? "ระบุอะไหล่ที่ต้องใช้"
+                        : order.status === "PARTS_REQUESTED"
+                          ? "เช็คอะไหล่ในคลัง"
+                          : order.status === "AWAITING_QUOTE"
+                            ? "เสนอราคาลูกค้า"
+                            : order.status === "AWAITING_PAYMENT"
+                              ? "ลูกค้าจ่ายเงินแล้ว"
+                              : order.status === "PARTS_CHECKED"
+                                ? "จ่ายงานให้ช่าง"
+                                : "นัดวันเข้างาน"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/*
+                ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม
+                ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
+                แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
               */}
               {order.status === "IN_PROGRESS" ? (
                 <TouchableOpacity
-                  style={[styles.action, styles.actionPrimary]}
-                  onPress={() => setClosing(true)}
+                  style={styles.rollback}
+                  onPress={() => setRollbackOpen(true)}
                   disabled={busy}
-                  activeOpacity={0.8}
+                  activeOpacity={0.7}
                 >
-                  <Ionicons name="checkmark-done" size={18} color="#fff" />
-                  <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.action, styles.actionPrimary]}
-                  onPress={() => setStageOpen(true)}
-                  disabled={busy}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={
-                      order.status === "ASSIGNED"
-                        ? "calendar-outline"
-                        : order.status === "AWAITING_QUOTE"
-                          ? "document-text-outline"
-                          : order.status === "AWAITING_PAYMENT"
-                            ? "cash-outline"
-                            : "arrow-forward-circle"
-                    }
-                    size={18}
-                    color="#fff"
-                  />
-                  <Text style={styles.actionPrimaryText}>
-                    {order.status === "NEW"
-                      ? "ระบุอะไหล่ที่ต้องใช้"
-                      : order.status === "PARTS_REQUESTED"
-                        ? "เช็คอะไหล่ในคลัง"
-                        : order.status === "AWAITING_QUOTE"
-                          ? "เสนอราคาลูกค้า"
-                          : order.status === "AWAITING_PAYMENT"
-                            ? "ลูกค้าจ่ายเงินแล้ว"
-                            : order.status === "PARTS_CHECKED"
-                              ? "จ่ายงานให้ช่าง"
-                              : "นัดวันเข้างาน"}
+                  <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
+                  <Text style={styles.rollbackText}>
+                    จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค — เลือกอะไหล่ที่ต้องเบิกเพิ่มได้
                   </Text>
                 </TouchableOpacity>
-              )}
+              ) : null}
+            </>
+          ) : (
+            <View style={[styles.waitingCard, styles.waitingInline]}>
+              <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
+              <Text style={styles.waitingText}>
+                ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
+                {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
+                  ? ` (${order.assignedToName ?? order.assignedTeam})`
+                  : ""}
+                {" "}— ยังไม่ถึงคิวของคุณ
+              </Text>
             </View>
+          )
+        ) : null}
+      </View>
 
-            {/*
-              ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม
-              ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
-              แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
-            */}
-            {order.status === "IN_PROGRESS" ? (
-              <TouchableOpacity
-                style={styles.rollback}
-                onPress={() => setRollbackOpen(true)}
-                disabled={busy}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
-                <Text style={styles.rollbackText}>
-                  จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค — เลือกอะไหล่ที่ต้องเบิกเพิ่มได้
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </>
-        ) : (
-          <View style={[styles.card, styles.waitingCard]}>
-            <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
-            <Text style={styles.waitingText}>
-              ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
-              {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
-                ? ` (${order.assignedToName ?? order.assignedTeam})`
-                : ""}
-              {" "}— ยังไม่ถึงคิวของคุณ
-            </Text>
+      <View style={[styles.infoGrid, twoCol && styles.infoGridWide]}>
+        <View style={[styles.card, styles.infoCard]}>
+          <View style={styles.infoHead}>
+            <Ionicons name="business-outline" size={20} color={colors.primaryInk} />
+            <Text style={[styles.infoTitle, headingFont]}>สาขาและเครื่อง</Text>
           </View>
-        )
-      ) : null}
+          <Row label="สาขา" value={`${order.branchCode} · ${order.branchName}`} />
+          {order.region ? <Row label="ภาค" value={order.region} /> : null}
+          {order.branchOpenedAt ? (
+            <Row label="วันเปิดร้าน" value={formatDate(order.branchOpenedAt)} />
+          ) : null}
+          {/*
+            ประกันเป็นเรื่องของสาขาแฟรนไชส์เท่านั้น สาขาบริษัท (รหัสขึ้นต้นด้วย C)
+            เครื่องเป็นของบริษัทเอง จึงไม่มีอะไรให้พูดถึง
+
+            ต้องเห็นตั้งแต่หน้านี้ เพราะเป็นตัวตัดสินว่าจะส่งช่างของเราไปหรือ
+            ให้ผู้ขายรับผิดชอบ ซึ่งตัดสินกันตอนดูใบงาน ไม่ใช่ตอนไปถึงหน้างานแล้ว
+          */}
+          {order.branchIsCompany ? (
+            <Row label="ประกัน" value="สาขาบริษัท — ไม่มีประกัน" />
+          ) : order.branchWarrantyExpiresAt ? (
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>ประกัน</Text>
+              <Text
+                style={[
+                  styles.rowValue,
+                  order.branchWarrantyExpired ? styles.warrantyOut : styles.warrantyIn,
+                ]}
+              >
+                {order.branchWarrantyExpired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"}
+                {" · ถึง "}
+                {formatDate(order.branchWarrantyExpiresAt)}
+              </Text>
+            </View>
+          ) : (
+            <Row label="ประกัน" value="ยังไม่ได้บันทึกวันหมดประกัน" />
+          )}
+          <Row
+            label="เครื่อง"
+            value={
+              order.machineCode
+                ? [
+                    order.machineCode,
+                    order.machineBrand,
+                    order.machineModel,
+                    order.machineCapacityLabel,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "ทั้งสาขา"
+            }
+          />
+          {order.contactName || order.contactPhone ? (
+            <Row
+              label="ผู้ติดต่อที่สาขา"
+              value={[order.contactName, order.contactPhone].filter(Boolean).join(" · ")}
+            />
+          ) : null}
+        </View>
+
+        <View style={[styles.card, styles.infoCard]}>
+          <View style={styles.infoHead}>
+            <Ionicons name="people-outline" size={20} color={colors.primaryInk} />
+            <Text style={[styles.infoTitle, headingFont]}>การมอบหมาย</Text>
+          </View>
+          <Row label="ประเภทงาน" value={order.jobTypeLabel} />
+          <Row label="ความเร่งด่วน" value={order.priorityLabel} />
+          {/* ใบเก่าจ่ายรายคน ใบใหม่จ่ายเป็นทีม — แสดงตามที่ใบนั้นเป็นจริง */}
+          <Row
+            label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
+            value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
+          />
+          <Row label="วันที่นัดเข้า" value={order.scheduledAt ? formatDateTime(order.scheduledAt) : "—"} />
+          <Row
+            label="เปิดโดย"
+            value={`${order.createdByName ?? "—"} · ${formatDateTime(order.createdAt)}`}
+          />
+          <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
+        </View>
+      </View>
 
       {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
       <View style={styles.card}>
@@ -898,7 +948,66 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           await load();
         }}
       />
+
+      <StepInfo
+        stageValue={stepInfo}
+        stages={stages}
+        logs={order.logs}
+        onClose={() => setStepInfo(null)}
+      />
     </ScrollView>
+    </PopupScreen>
+  );
+}
+
+/**
+ * ขั้นที่ทำแล้ว — ใครทำ เมื่อไร บันทึกว่าอะไร ดึงจากประวัติของใบงาน
+ *
+ * เดิมต้องไล่อ่านประวัติทั้งก้อนเพื่อหาว่าใครจ่ายงาน ตอนนี้กดที่วงกลมของขั้นนั้นได้เลย
+ */
+const STAGE_ACTIONS: Record<string, string[]> = {
+  NEW: ["PARTS_REQUESTED", "NO_PARTS"],
+  AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
+  AWAITING_PAYMENT: ["PAID"],
+  PARTS_REQUESTED: ["PARTS_CHECKED"],
+  PARTS_CHECKED: ["ASSIGNED"],
+  ASSIGNED: ["SCHEDULED"],
+  IN_PROGRESS: ["CLOSED"],
+};
+
+function StepInfo({
+  stageValue,
+  stages,
+  logs,
+  onClose,
+}: {
+  stageValue: string | null;
+  stages: Stage[];
+  logs: LogEntry[];
+  onClose: () => void;
+}) {
+  const stage = stages.find((x) => x.value === stageValue);
+  const actions = stageValue ? STAGE_ACTIONS[stageValue] ?? [] : [];
+  // ประวัติเรียงใหม่ก่อนเก่า ตัวแรกที่เจอคือครั้งล่าสุด (ขั้นที่ถูกส่งกลับมาทำซ้ำจะเห็นรอบล่าสุด)
+  const log = logs.find((l) => actions.includes(l.action));
+  return (
+    <AppModal
+      visible={stageValue !== null}
+      title={`${stage?.label ?? ""} — ทำแล้ว`}
+      onClose={onClose}
+      width={560}
+    >
+      {log ? (
+        <>
+          <ModalRow label="ทำโดย">{log.byName ?? "—"}</ModalRow>
+          <ModalRow label="เมื่อ">{formatDateTime(log.createdAt)}</ModalRow>
+          <ModalRow label="สิ่งที่ทำ">{log.actionLabel}</ModalRow>
+          <ModalRow label="บันทึก">{log.note || "—"}</ModalRow>
+        </>
+      ) : (
+        <Text style={styles.waitingText}>ไม่พบบันทึกของขั้นนี้ในประวัติ (ใบเก่าก่อนมีระบบประวัติ)</Text>
+      )}
+    </AppModal>
   );
 }
 
@@ -2285,17 +2394,30 @@ const styles = StyleSheet.create({
   },
   rollbackText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.warning, fontWeight: "600" },
   waitingCard: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  // ในการ์ดหัวใบงาน — ไม่มีกรอบการ์ดซ้อน แค่แถบฟ้าอ่อนบอกว่ารอใคร
+  waitingInline: {
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 12,
+    backgroundColor: colors.sky50,
+  },
+  infoGrid: { gap: spacing.md },
+  infoGridWide: { flexDirection: "row", alignItems: "stretch" },
+  infoCard: { flex: 1, minWidth: 0 },
+  infoHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm },
+  infoTitle: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.text },
   waitingText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
-  card: { backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.lg, ...shadow.card },
+  card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  code: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.primary },
+  code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
-  title: { fontSize: 17, lineHeight: 27, fontWeight: "700", color: colors.text, marginTop: spacing.sm },
+  title: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text, marginTop: 2 },
   detail: { fontSize: 13, lineHeight: 21, color: colors.textMuted, marginTop: spacing.xs },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: spacing.md },
   row: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md, paddingVertical: spacing.xs },
@@ -2315,17 +2437,18 @@ const styles = StyleSheet.create({
   linked: { borderLeftWidth: 3, borderLeftColor: colors.primary },
   linkedTitle: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.text },
   linkedText: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: spacing.xs },
-  actions: { flexDirection: "row", gap: spacing.sm },
+  actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
+  // ปุ่มของขั้นนี้ใต้แถบขั้นตอน — สีกรมท่าแบบในตัวอย่าง กว้างตามข้อความ ไม่ยืดเต็มการ์ด
   action: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: spacing.xs,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.md,
+    gap: spacing.sm,
+    borderRadius: 14,
+    minHeight: 48,
+    paddingHorizontal: 22,
   },
-  actionPrimary: { backgroundColor: colors.primary },
+  actionPrimary: { backgroundColor: colors.navy },
   actionPrimaryText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   actionSecondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.primary },
   actionSecondaryText: { color: colors.primary, fontSize: 15, lineHeight: 24, fontWeight: "700" },
