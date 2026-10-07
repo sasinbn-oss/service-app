@@ -1,8 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   FlatList,
-  Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,6 +8,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import AppModal from "../components/AppModal";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -122,33 +121,25 @@ export default function ManageFlowsScreen() {
           );
         })}
 
-        <Modal visible={picking !== null} transparent animationType="slide">
-          <Pressable style={styles.modalBackdrop} onPress={() => setPicking(null)}>
-            <View style={styles.modalSheet}>
-              <Text style={styles.modalTitle}>
-                เลือกกล่องปลายทางเมื่อตอบ "{picking?.answer === "yesKey" ? "ใช่" : "ไม่"}"
-              </Text>
-              {saving ? (
-                <Spinner style={{ margin: 20 }} color={colors.primary} />
-              ) : (
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {openFlow.nodes
-                    .filter((n) => n.key !== picking?.node.key)
-                    .map((n) => (
-                      <TouchableOpacity
-                        key={n.key}
-                        style={styles.pickRow}
-                        onPress={() => setBranch(n)}
-                      >
-                        <Text style={styles.pickKind}>{n.kind === "QUESTION" ? "ถาม" : "แก้"}</Text>
-                        <Text style={styles.pickText}>{n.text}</Text>
-                      </TouchableOpacity>
-                    ))}
-                </ScrollView>
-              )}
-            </View>
-          </Pressable>
-        </Modal>
+        <AppModal
+          visible={picking !== null}
+          onClose={() => setPicking(null)}
+          busy={saving}
+          title={`เลือกกล่องปลายทางเมื่อตอบ "${picking?.answer === "yesKey" ? "ใช่" : "ไม่"}"`}
+        >
+          {saving ? (
+            <Spinner color={colors.primary} label="กำลังบันทึก..." />
+          ) : (
+            openFlow.nodes
+              .filter((n) => n.key !== picking?.node.key)
+              .map((n) => (
+                <TouchableOpacity key={n.key} style={styles.pickRow} onPress={() => setBranch(n)}>
+                  <Text style={styles.pickKind}>{n.kind === "QUESTION" ? "ถาม" : "แก้"}</Text>
+                  <Text style={styles.pickText}>{n.text}</Text>
+                </TouchableOpacity>
+              ))
+          )}
+        </AppModal>
       </ScrollView>
     );
   }
@@ -230,14 +221,6 @@ const styles = StyleSheet.create({
   branchLabel: { fontSize: 13, fontWeight: "700", color: colors.primary, width: 40 },
   branchValue: { flex: 1, fontSize: 13, color: colors.text },
   branchMissing: { color: colors.danger, fontStyle: "italic" },
-  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
-  modalSheet: {
-    backgroundColor: colors.background,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    padding: 20,
-  },
-  modalTitle: { fontSize: 15, fontWeight: "700", color: colors.text, marginBottom: 12 },
   pickRow: {
     flexDirection: "row",
     gap: 10,
