@@ -13,7 +13,6 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
-import { useWideLayout } from "../components/AppShell";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import { HomeStackParamList } from "../navigation/types";
@@ -130,7 +129,6 @@ const SUMMARY_LABELS: Record<string, string> = {
 const HIDDEN_SUMMARY = new Set(["slaHours", "previousAt", "withinSla"]);
 
 export default function ReportScreen({ route }: Props) {
-  useWideLayout();
   const { width } = useWindowDimensions();
   const wide = width >= 700;
   const { kind } = route.params;

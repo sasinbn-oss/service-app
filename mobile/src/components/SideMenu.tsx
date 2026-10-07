@@ -11,7 +11,6 @@ import {
   View,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
@@ -36,10 +35,15 @@ export const sideMenu = {
 /** จอกว้างเท่านี้ขึ้นไป (เว็บ) เมนูค้างไว้ด้านซ้ายแทนการเลื่อนออก ตามต้นแบบ */
 export const DOCK_MIN_WIDTH = 1100;
 export const DOCK_WIDTH = 280;
+/** เมนูที่หดแล้วเหลือแถบไอคอนกว้างเท่านี้ */
+export const RAIL_WIDTH = 76;
 
 /**
- * บนจอคอมปุ่มสามขีดยุบ/ขยายเมนูที่ค้างไว้ และจำค่าไว้ — คนที่ชอบจอโล่ง
- * ไม่ต้องกดยุบใหม่ทุกครั้งที่เปิดเว็บ
+ * บนจอคอมปุ่มสามขีดที่หัวเมนูหด/ยืดเมนู และจำค่าไว้ — คนที่ชอบจอโล่ง
+ * ไม่ต้องกดหดใหม่ทุกครั้งที่เปิดเว็บ
+ *
+ * หดแล้วเหลือแถบไอคอน ไม่ได้ซ่อนทั้งแถบ เพราะปุ่มสามขีดอยู่ในเมนูเอง
+ * ซ่อนหมดแล้วจะไม่มีปุ่มให้กดเปิดกลับ
  */
 const COLLAPSE_KEY = "otteri-side-collapsed";
 let collapsed = (() => {
@@ -71,7 +75,7 @@ export function useDocked() {
     };
   }, []);
   const canDock = Platform.OS === "web" && width >= DOCK_MIN_WIDTH;
-  return { canDock, docked: canDock && !c };
+  return { canDock, docked: canDock, collapsed: canDock && c };
 }
 
 type Tab = keyof MainTabParamList;
@@ -178,10 +182,13 @@ function MenuContent({
   active,
   inbox,
   onPick,
+  rail,
 }: {
   active: string | null;
   inbox: number;
   onPick: (it: Item) => void;
+  /** แถบไอคอนตอนเมนูหด — ไม่มีชื่อ ไม่มีหัวกลุ่ม */
+  rail?: boolean;
 }) {
   const { user } = useAuth();
   const go = onPick;
@@ -189,21 +196,35 @@ function MenuContent({
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => (
             <View key={g.title}>
-              <View style={styles.group}>
-                <View style={styles.groupDot} />
-                <Text style={styles.groupText}>{g.title}</Text>
-              </View>
+              {rail ? (
+                <View style={styles.railSep} />
+              ) : (
+                <View style={styles.group}>
+                  <View style={styles.groupDot} />
+                  <Text style={styles.groupText}>{g.title}</Text>
+                </View>
+              )}
               {g.items.map((it) => {
                 const on = active === it.key;
                 const n = it.badge ? inbox : 0;
                 return (
                   <TouchableOpacity
                     key={it.key}
-                    style={[styles.item, on && styles.itemOn]}
+                    style={[styles.item, rail && styles.itemRail, on && styles.itemOn]}
                     activeOpacity={0.75}
                     onPress={() => go(it)}
+                    accessibilityLabel={it.label}
+                    {...(rail && Platform.OS === "web" ? ({ title: it.label } as object) : null)}
                   >
                     <Ionicons name={it.icon} size={22} color={on ? "#fff" : colors.navy} />
+                    {rail ? (
+                      n ? (
+                        <View style={[styles.badge, styles.badgeRail, on && styles.badgeOn]}>
+                          <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
+                        </View>
+                      ) : null
+                    ) : (
+                    <>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.label, on && styles.labelOn]}>{it.label}</Text>
                       <Text style={[styles.labelEn, on && styles.labelEnOn]}>{it.labelEn}</Text>
@@ -213,12 +234,14 @@ function MenuContent({
                         <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
                       </View>
                     ) : null}
+                    </>
+                    )}
                   </TouchableOpacity>
                 );
               })}
             </View>
           ))}
-          {BUILD_AT ? (
+          {BUILD_AT && !rail ? (
             <View style={styles.foot}>
               <View style={styles.footHead}>
                 <Ionicons name="cloud-done-outline" size={16} color={colors.primaryInk} />
@@ -245,8 +268,18 @@ function MenuContent({
  * ทุกครั้งที่เปลี่ยนหน้า — ไปปิดงานมาแล้วกลับมา ตัวเลขต้องลดลงทันที
  */
 export function DockedSideMenu() {
+  const { collapsed: rail } = useDocked();
   const [active, setActive] = useState<string | null>(currentKey());
   const [inbox, setInbox] = useState(0);
+  // ยืด/หดแบบค่อย ๆ ไม่ตัดฉับ ตามต้นแบบ — เห็นว่าเมนูไปไหน ไม่ใช่หายวับไป
+  const width = useRef(new Animated.Value(rail ? RAIL_WIDTH : DOCK_WIDTH)).current;
+  useEffect(() => {
+    Animated.timing(width, {
+      toValue: rail ? RAIL_WIDTH : DOCK_WIDTH,
+      duration: 220,
+      useNativeDriver: false,
+    }).start();
+  }, [rail, width]);
   useEffect(() => {
     const refresh = () => {
       setActive(currentKey());
@@ -259,16 +292,19 @@ export function DockedSideMenu() {
     return navigationRef.addListener("state", refresh);
   }, []);
   return (
-    <View style={styles.docked}>
-      <MenuContent active={active} inbox={inbox} onPick={navigateTo} />
-    </View>
+    <Animated.View style={[styles.docked, { width }]}>
+      <View style={[styles.dockHead, rail && styles.dockHeadRail]}>
+        <MenuButton />
+        {rail ? null : <Text style={styles.dockHeadText}>ย่อเมนู</Text>}
+      </View>
+      <MenuContent active={active} inbox={inbox} onPick={navigateTo} rail={rail} />
+    </Animated.View>
   );
 }
 
 const WIDTH = 300;
 
 export default function SideMenu() {
-  const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [inbox, setInbox] = useState(0);
@@ -316,7 +352,7 @@ export default function SideMenu() {
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="ปิดเมนู" />
       </Animated.View>
       <Animated.View
-        style={[styles.panel, { paddingTop: insets.top + spacing.lg, transform: [{ translateX: x }] }]}
+        style={[styles.panel, { paddingTop: spacing.sm, transform: [{ translateX: x }] }]}
       >
         <MenuContent active={active} inbox={inbox} onPick={go} />
       </Animated.View>
@@ -324,14 +360,14 @@ export default function SideMenu() {
   );
 }
 
-/** ปุ่มสามขีดบนแถบบน */
+/** ปุ่มสามขีด — จอคอมอยู่หัวเมนูข้าง (หด/ยืด) · จอแคบอยู่แถบชื่อหน้า (เปิดเมนูเลื่อนออก) */
 export function MenuButton() {
-  const { canDock, docked } = useDocked();
+  const { canDock, collapsed: c } = useDocked();
   return (
     <TouchableOpacity
       style={styles.menuBtn}
-      onPress={() => (canDock ? setCollapsed(docked) : sideMenu.open())}
-      accessibilityLabel="เปิดเมนู"
+      onPress={() => (canDock ? setCollapsed(!c) : sideMenu.open())}
+      accessibilityLabel={canDock ? (c ? "ขยายเมนู" : "ย่อเมนู") : "เปิดเมนู"}
     >
       <Ionicons name="menu" size={24} color={colors.navy} />
     </TouchableOpacity>
@@ -341,12 +377,27 @@ export function MenuButton() {
 const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(15,23,42,0.42)" },
   docked: {
-    width: DOCK_WIDTH,
     backgroundColor: colors.card,
     borderRightWidth: 1,
     borderRightColor: colors.border,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
+    overflow: "hidden",
   },
+  dockHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    marginBottom: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F7",
+  },
+  dockHeadRail: { justifyContent: "center", paddingHorizontal: 0 },
+  dockHeadText: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.textMuted },
+  railSep: { height: 1, backgroundColor: "#EEF2F7", marginVertical: spacing.sm, marginHorizontal: 6 },
+  itemRail: { justifyContent: "center", paddingHorizontal: 0 },
+  badgeRail: { position: "absolute", top: 0, right: 2, minWidth: 18, height: 18, paddingHorizontal: 5 },
   panel: {
     position: "absolute",
     top: 0,
@@ -404,13 +455,11 @@ const styles = StyleSheet.create({
   footTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.text },
   footText: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   menuBtn: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.sky50,
-    marginLeft: spacing.sm,
-    marginRight: spacing.sm,
   },
 });

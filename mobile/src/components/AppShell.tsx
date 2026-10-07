@@ -1,102 +1,19 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { Platform, StyleSheet, View } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+import React from "react";
+import { StyleSheet, View } from "react-native";
 import { colors } from "../theme";
 
-/** ความกว้างของหน้าฟอร์มทั่วไป กว้างกว่านี้อ่านยากขึ้นไม่ใช่ง่ายขึ้น */
-const FORM_WIDTH = 820;
-
 /**
- * เพดานของหน้าที่เป็นตารางข้อมูล
+ * กรอบนอกสุดของแอป
  *
- * ไม่ปล่อยเต็มจอเพราะบนจอ ultrawide หัวตารางจะห่างจากข้อมูลเกินไปจนกวาดตาตามไม่ได้
+ * เดิมล็อกความกว้างไว้ (ฟอร์ม 820 px · ตาราง 1600 px) แล้วเว้นขอบฟ้าสองข้าง
+ * เจ้าของงานขอให้ยืดหดตามจอแทน — จอใหญ่เห็นตารางกว้างขึ้น ไม่มีขอบว่างข้างละครึ่งจอ
+ * จึงเหลือแค่กรอบเต็มจอ ความกว้างของแต่ละส่วนให้ flex จัดเอง
  */
-const DATA_WIDTH = 1600;
-
-const SetWideContext = createContext<(wide: boolean) => void>(() => {});
-const SetDockContext = createContext<(width: number) => void>(() => {});
-
-/**
- * ขอที่เพิ่มด้านซ้ายให้เมนูข้างที่ค้างไว้บนจอคอม
- *
- * คอลัมน์ของแอปมีเพดานความกว้าง ถ้าเมนูข้างกินที่จากในคอลัมน์ เนื้อหาจะเหลือ
- * แคบกว่าบนมือถือเสียอีก จึงให้คอลัมน์กว้างขึ้นเท่าความกว้างของเมนูแทน
- */
-export function useDockWidth(width: number) {
-  const setDock = useContext(SetDockContext);
-  useEffect(() => {
-    setDock(width);
-    return () => setDock(0);
-  }, [setDock, width]);
-}
-
-/**
- * ให้หน้าที่เป็นตารางข้อมูลขอใช้ความกว้างเต็มที่
- *
- * หน้าส่วนใหญ่เป็นฟอร์มที่ออกแบบมาสำหรับมือถือ ปล่อยให้ยืดเต็มจอคอมจะกลายเป็น
- * แอปมือถือที่ถูกซูมขึ้นมา แต่แดชบอร์ดเป็นตารางหลายคอลัมน์ ยิ่งกว้างยิ่งเห็นเยอะ
- * จึงให้ขอเป็นรายหน้า ไม่ใช่ปลดเพดานทิ้งทั้งแอป
- */
-export function useWideLayout() {
-  const setWide = useContext(SetWideContext);
-  useFocusEffect(
-    useCallback(() => {
-      setWide(true);
-      return () => setWide(false);
-    }, [setWide])
-  );
-}
-
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const [wide, setWide] = useState(false);
-  const [dock, setDock] = useState(0);
-
-  // บนมือถือไม่มีเพดานให้ปรับ แต่ provider ต้องมี ไม่งั้น useWideLayout พัง
-  if (Platform.OS !== "web") {
-    return (
-      <SetDockContext.Provider value={setDock}>
-        <SetWideContext.Provider value={setWide}>{children}</SetWideContext.Provider>
-      </SetDockContext.Provider>
-    );
-  }
-
-  return (
-    <SetDockContext.Provider value={setDock}>
-      <SetWideContext.Provider value={setWide}>
-        <View style={styles.backdrop}>
-          {/*
-            มีเมนูค้างด้านซ้าย = จอคอม ทุกหน้าใช้ความกว้างเต็มแบบต้นแบบ OTTERI
-            เดิมเฉพาะหน้าตารางขอกว้างได้ หน้าอื่นค้างที่ 820 px ผลคือเปิดเมนูไปมา
-            แล้วบางหน้าเต็มจอ บางหน้ามีขอบฟ้าสองข้าง ดูเหมือนหน้าโหลดไม่ครบ
-          */}
-          <View
-            style={[styles.column, { maxWidth: (dock > 0 || wide ? DATA_WIDTH : FORM_WIDTH) + dock }]}
-          >
-            {children}
-          </View>
-        </View>
-      </SetWideContext.Provider>
-    </SetDockContext.Provider>
-  );
+  return <View style={styles.root}>{children}</View>;
 }
 
 const styles = StyleSheet.create({
-  // height + overflow pin the shell to the viewport, and minHeight:0 lets the
-  // scrolling content shrink instead of growing and pushing the tab bar off
-  // the bottom of the page.
-  backdrop: {
-    flex: 1,
-    height: "100%",
-    overflow: "hidden",
-    alignItems: "center",
-    // ขอบสองข้างบนจอคอมเป็นฟ้าอ่อนแบบ OTTERI ไม่ใช่เทา — คอลัมน์แอปจะได้ดูเป็นส่วนเดียวกับพื้น
-    backgroundColor: colors.primarySoft,
-  },
-  column: {
-    flex: 1,
-    minHeight: 0,
-    overflow: "hidden",
-    width: "100%",
-    backgroundColor: colors.background,
-  },
+  // height + overflow ตรึงแอปไว้เท่าจอ ให้เนื้อหาเลื่อนข้างใน ไม่ดันแถบล่างหลุดจอ
+  root: { flex: 1, height: "100%", minHeight: 0, overflow: "hidden", backgroundColor: colors.background },
 });

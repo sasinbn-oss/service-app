@@ -1,6 +1,7 @@
 import React from "react";
-import { Image, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { Image, Platform, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { createNativeStackNavigator, NativeStackHeaderProps } from "@react-navigation/native-stack";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import Ionicons from "@expo/vector-icons/Ionicons";
 
@@ -43,8 +44,7 @@ import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
-import SideMenu, { DOCK_WIDTH, DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
-import { useDockWidth } from "../components/AppShell";
+import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
 import {
   AdminStackParamList,
@@ -53,11 +53,66 @@ import {
   MainTabParamList,
 } from "./types";
 
+/**
+ * หน้าที่วาดชื่อหน้าตัวใหญ่ของตัวเองอยู่แล้ว — บนจอคอมไม่ต้องมีแถบชื่อหน้าซ้ำ
+ * (บนจอแคบยังมี เพราะแถบนั้นเป็นที่อยู่ของปุ่มสามขีด)
+ */
+const OWN_TITLE = new Set([
+  "HomeMenu",
+  "WorkOrderList",
+  "MachineDashboard",
+  "ManageVehicles",
+  "ManageUsers",
+  "AdminMenu",
+  "HistoryMenu",
+]);
+
+/**
+ * แถบชื่อหน้าใต้แถบโลโก้ แทนแถบหัวของ navigator
+ *
+ * ไม่มีลูกศรย้อนกลับแล้ว ตามที่ตกลงกับเจ้าของงาน — ไปหน้าอื่นผ่านเมนูสามขีด
+ * หน้าย่อย (เช่นใบงานใบหนึ่ง) มีทางลัดชื่อหน้าก่อนหน้า "ใบงานซ่อม ›" กดกลับรายการได้
+ * เพราะเปิดใบงานทีละใบแล้วต้องไล่กลับทางเมนูทุกครั้งจะช้าเกิน
+ *
+ * จอแคบ: ☰ + ชื่อหน้า (เมนูข้างไม่มีที่ค้าง ☰ จึงอยู่ตรงนี้)
+ * จอคอม: ชื่อหน้าตัวใหญ่อย่างเดียว ☰ อยู่หัวเมนูข้างแล้ว
+ */
+function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps) {
+  const { canDock } = useDocked();
+  if (canDock && OWN_TITLE.has(route.name)) return null;
+  const title = typeof options.title === "string" ? options.title : route.name;
+  const crumb = back ? (
+    <TouchableOpacity onPress={() => navigation.goBack()} accessibilityLabel={`กลับไป${back.title}`}>
+      <Text style={styles.crumb} numberOfLines={1}>
+        <Text style={styles.crumbLink}>{back.title}</Text> ›
+      </Text>
+    </TouchableOpacity>
+  ) : null;
+  if (canDock) {
+    return (
+      <View style={styles.pageHeadWide}>
+        {crumb}
+        <Text style={[styles.pageHeadTitle, headingFont]} numberOfLines={1}>
+          {title}
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.pageHeadNarrow}>
+      <MenuButton />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        {crumb}
+        <Text style={[styles.pageHeadNarrowTitle, headingFont]} numberOfLines={1}>
+          {title}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 const commonScreenOptions = {
-  headerStyle: { backgroundColor: colors.card },
-  headerTintColor: colors.navy,
-  headerTitleStyle: { ...headingFont, fontSize: 17, fontWeight: "700" as const, color: colors.text },
-  headerShadowVisible: false,
+  header: (props: NativeStackHeaderProps) => <PageHeader {...props} />,
   contentStyle: { backgroundColor: colors.background },
 };
 
@@ -100,6 +155,40 @@ function UserAvatar() {
 }
 
 /**
+ * แถบโลโก้บนสุด ยาวเต็มจอ อยู่ทุกหน้า
+ *
+ * เดิมแบรนด์อยู่บนแถบหัวของหน้าแรกแต่ละแท็บ หน้าย่อยไม่มี — เปิดหน้าลึก ๆ แล้ว
+ * ไม่มีทั้งโลโก้ ปุ่มรีเฟรช และปุ่มออกจากระบบ ตามตัวอย่างที่ตกลงไว้ ย้ายมาไว้แถวเดียวบนสุด
+ */
+function AppTopBar() {
+  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  const wide = width >= 640;
+  return (
+    <View style={[styles.topBar, { paddingTop: insets.top + 10 }]}>
+      <Brand subtitle="ระบบงานช่างซ่อม" />
+      <View style={{ flex: 1 }} />
+      {wide && user ? (
+        <View style={styles.who}>
+          <Text style={styles.whoName} numberOfLines={1}>
+            {user.name}
+          </Text>
+          <Text style={styles.whoRole}>{ROLE_LABEL[user.role] ?? user.role}</Text>
+        </View>
+      ) : null}
+      <LogoutButton />
+    </View>
+  );
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  ADMIN: "แอดมิน",
+  SUPERVISOR: "หัวหน้าภาค",
+  EMPLOYEE: "ช่าง",
+};
+
+/**
  * ออกจากระบบอยู่บนแถบบนเพื่อให้ทุกแท็บกดได้
  *
  * ถามก่อนเสมอ เพราะปุ่มอยู่มุมจอที่นิ้วโป้งแตะโดนง่าย และออกแล้วต้องพิมพ์รหัสใหม่
@@ -135,10 +224,7 @@ function HomeStackNavigator() {
         name="HomeMenu"
         component={HomeScreen}
         options={{
-          title: "งานช่าง",
-          headerTitle: () => <Brand subtitle="งานช่าง" />,
-          headerLeft: () => <MenuButton />,
-          headerRight: () => <LogoutButton />,
+          title: "หน้าหลัก",
         }}
       />
       <HomeStack.Screen
@@ -243,9 +329,6 @@ function WorkStackNavigator() {
         component={WorkOrderListScreen}
         options={{
           title: "ใบงานซ่อม",
-          headerTitle: () => <Brand subtitle="ใบงานซ่อม" />,
-          headerLeft: () => <MenuButton />,
-          headerRight: () => <LogoutButton />,
         }}
       />
       <WorkStack.Screen
@@ -272,9 +355,6 @@ function HistoryStackNavigator() {
         component={HistoryMenuScreen}
         options={{
           title: "ประวัติการทำงาน",
-          headerTitle: () => <Brand subtitle="ประวัติการทำงาน" />,
-          headerLeft: () => <MenuButton />,
-          headerRight: () => <LogoutButton />,
         }}
       />
       <HistoryStack.Screen
@@ -321,9 +401,6 @@ function AdminStackNavigator() {
         component={AdminMenuScreen}
         options={{
           title: "ระบบหลังบ้าน",
-          headerTitle: () => <Brand subtitle="ระบบหลังบ้าน" />,
-          headerLeft: () => <MenuButton />,
-          headerRight: () => <LogoutButton />,
         }}
       />
       <AdminStack.Screen
@@ -391,10 +468,11 @@ export default function MainNavigator() {
   // จอคอม: เมนูค้างไว้ด้านซ้ายและซ่อนแถบล่าง ตามต้นแบบ — เมนูข้างพาไปได้ทุกแท็บอยู่แล้ว
   // แถบล่างบนจอกว้างทำให้ต้องเลื่อนสายตาไปล่างสุดของจอเพื่อเปลี่ยนหน้า
   const { docked } = useDocked();
-  useDockWidth(docked ? DOCK_WIDTH : 0);
 
   return (
-    <View style={{ flex: 1, flexDirection: docked ? "row" : "column" }}>
+    <View style={{ flex: 1 }}>
+      <AppTopBar />
+      <View style={{ flex: 1, minHeight: 0, flexDirection: docked ? "row" : "column" }}>
       {docked ? <DockedSideMenu /> : null}
       <View style={{ flex: 1, minWidth: 0 }}>
         <Tab.Navigator
@@ -463,12 +541,42 @@ export default function MainNavigator() {
           )}
         </Tab.Navigator>
       </View>
+      {/* อยู่ในส่วนล่าง เมนูเลื่อนออกมาใต้แถบโลโก้ ไม่ทับโลโก้ ตามตัวอย่าง */}
       {docked ? null : <SideMenu />}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  topBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: 10,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  who: { alignItems: "flex-end", maxWidth: 200 },
+  whoName: { fontSize: 15, lineHeight: 20, fontWeight: "700", color: colors.text },
+  whoRole: { fontSize: 11, lineHeight: 16, fontWeight: "600", color: colors.primaryInk },
+  pageHeadWide: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, backgroundColor: colors.background },
+  pageHeadTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
+  pageHeadNarrow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  pageHeadNarrowTitle: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.text },
+  crumb: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  crumbLink: { color: colors.primaryInk, fontWeight: "700" },
   tabBar: {
     backgroundColor: colors.card,
     borderTopColor: colors.border,
