@@ -170,3 +170,70 @@ export async function reportToWorkbook(report: AnyReport): Promise<Buffer> {
   const out = await wb.xlsx.writeBuffer();
   return Buffer.from(out);
 }
+
+/** แถวของหน้าติดตามเครื่องเสีย — ใช้เฉพาะช่องที่ลงไฟล์ (ทั้งแท็บเครื่องดับและสัญญาณหาย) */
+export interface OutageExportRow {
+  branchCode: string;
+  branchName: string;
+  region: string | null;
+  ownership: string | null;
+  zone: string | null;
+  grade: string | null;
+  machineCode?: string;
+  machineType?: string;
+  machineBrand?: string | null;
+  machineCount?: number;
+  startedAt: Date;
+  slaHours: number;
+  breached: boolean;
+  score: number;
+  symptom: string | null;
+  workStatusLabel: string | null;
+  scheduledVisitAt: string | null;
+  parts: { partCode: string; quantity: number }[];
+  workOrder: { code: string; statusLabel: string; assignedToName: string | null } | null;
+}
+
+/**
+ * รายการบนหน้าติดตามเครื่องเสียเป็นไฟล์ Excel — แถวละเคส ตามลำดับที่เห็นบนจอ
+ *
+ * ชั่วโมงกับวันแยกเป็นตัวเลขคนละช่อง ไม่ได้เขียนเป็น "29 วัน 7 ชม." เพราะคนที่ส่งออก
+ * มักเอาไปเรียงหรือกรองต่อใน Excel ซึ่งทำกับข้อความไม่ได้
+ */
+export async function outagesToWorkbook(
+  tab: "machines" | "signal",
+  rows: OutageExportRow[],
+  opts: { at: Date; filters?: string; slaHours: number }
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Service App";
+  wb.created = opts.at;
+  const machines = tab === "machines";
+  const sheet = wb.addWorksheet(machines ? "เครื่องดับ" : "สัญญาณหาย");
+  addTitle(
+    sheet,
+    machines ? "เครื่องดับ (Power Off)" : "สาขาสัญญาณหาย (Offline Telemetry)",
+    [`ข้อมูล ณ ${thaiDateTime(opts.at)}`, `${rows.length} รายการ`, opts.filters].filter(Boolean).join(" · ")
+  );
+  const type = (t?: string) => (t === "WASHER" ? "เครื่องซัก" : t === "DRYER" ? "เครื่องอบ" : t ?? "");
+  addTable(
+    sheet,
+    [
+      "รหัสสาขา", "ชื่อสาขา", "เจ้าของ", "ภาค", "ทีมช่าง", "Grade",
+      ...(machines ? ["เครื่อง", "ชนิด", "ยี่ห้อ"] : ["เครื่องในสาขา"]),
+      "เริ่มดับ", "ดับมาแล้ว (ชม.)", "ดับมาแล้ว (วัน)", `เกิน SLA ${opts.slaHours} ชม.`, "คะแนน",
+      "สถานะ", "อาการ", "อะไหล่ที่รอ", "วันนัด", "ใบงาน", "สถานะใบงาน", "ผู้รับงาน",
+    ],
+    rows.map((r) => [
+      r.branchCode, r.branchName, r.ownership, r.region, r.zone, r.grade,
+      ...(machines ? [r.machineCode ?? "", type(r.machineType), r.machineBrand ?? ""] : [r.machineCount ?? 0]),
+      thaiDateTime(r.startedAt), r.slaHours, Math.floor(r.slaHours / 24), r.breached ? "เกิน" : "", r.score,
+      r.workStatusLabel, r.symptom,
+      r.parts.map((p) => (p.quantity > 1 ? `${p.partCode} x${p.quantity}` : p.partCode)).join(", ") || null,
+      r.scheduledVisitAt, r.workOrder?.code ?? null, r.workOrder?.statusLabel ?? null, r.workOrder?.assignedToName ?? null,
+    ])
+  );
+  // หัวตารางค้างไว้ตอนเลื่อน — ไฟล์มีหลายร้อยแถว
+  sheet.views = [{ state: "frozen", ySplit: 4 }];
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}

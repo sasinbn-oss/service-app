@@ -15,7 +15,7 @@ import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport, resolveSnapshot } from "../machines/import";
 import { dailyReport, monthlyReport, partsReport, weeklyReport } from "../machines/reports";
-import { reportToWorkbook } from "../machines/reportExcel";
+import { outagesToWorkbook, reportToWorkbook } from "../machines/reportExcel";
 import { documentPath, saveDocument } from "../documents/store";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
@@ -188,10 +188,11 @@ function summarise(rows: { ownership: string | null; branchCode: string; breache
 }
 
 /** เครื่องที่ดับอยู่ — รายเครื่อง */
-router.get("/outages", requireAuth, async (req, res) => {
-  const parsed = listSchema.safeParse(req.query);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const query = parsed.data;
+/**
+ * รายการเครื่องดับ — แยกเป็นฟังก์ชันเพื่อให้หน้าจอกับไฟล์ Excel ได้ข้อมูลชุดเดียวกัน
+ * (ส่งออกไม่ต้องคำนวณ SLA/คะแนนซ้ำอีกที่ ตัวเลขในไฟล์จึงตรงกับบนจอเสมอ)
+ */
+async function listMachineOff(query: z.infer<typeof listSchema>) {
   const now = new Date();
   const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
   const keyword = query.search?.trim();
@@ -250,20 +251,25 @@ router.get("/outages", requireAuth, async (req, res) => {
     ...noteFields(o),
   }));
 
-  res.json({
+  return {
     now: now.toISOString(),
     slaHours: SLA_HOURS,
     scorePerDay: SCORE_PER_DAY.MACHINE_OFF,
     summary: summarise(rows),
     rows,
-  });
-});
+  };
+}
 
-/** สาขาที่สัญญาณหาย — รายสาขา ไม่ใช่รายเครื่อง */
-router.get("/signal-lost", requireAuth, async (req, res) => {
+router.get("/outages", requireAuth, async (req, res) => {
   const parsed = listSchema.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const query = parsed.data;
+  res.json(await listMachineOff(query));
+});
+
+/** สาขาที่สัญญาณหาย — รายสาขา ไม่ใช่รายเครื่อง */
+/** รายการสาขาที่สัญญาณหาย — แยกเป็นฟังก์ชันด้วยเหตุผลเดียวกับ listMachineOff */
+async function listSignalLost(query: z.infer<typeof listSchema>) {
   const now = new Date();
   const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
   const keyword = query.search?.trim();
@@ -324,7 +330,7 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
     ...noteFields(o),
   }));
 
-  res.json({
+  return {
     now: now.toISOString(),
     slaHours: SLA_HOURS,
     scorePerDay: SCORE_PER_DAY.SIGNAL_LOST,
@@ -333,7 +339,55 @@ router.get("/signal-lost", requireAuth, async (req, res) => {
       machinesAffected: rows.reduce((sum, r) => sum + r.machineCount, 0),
     },
     rows,
+  };
+}
+
+router.get("/signal-lost", requireAuth, async (req, res) => {
+  const parsed = listSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const query = parsed.data;
+  res.json(await listSignalLost(query));
+});
+
+/**
+ * ส่งออกรายการที่เห็นบนจอเป็น Excel
+ *
+ * แอปส่งมาแค่รหัสเคสของแถวที่เห็น (หลังกรองทั้งฝั่งเซิร์ฟเวอร์และในแอป) ตามลำดับบนจอ
+ * ข้อมูลในไฟล์สร้างใหม่จากฐานข้อมูล ไม่ใช่ค่าที่แอปส่งมา — ตัวเลขจึงเป็นของจริง ณ ตอนกด
+ * และคำขอเล็ก (ตัวเลขล้วน) ไม่ชนเพดานขนาดคำขอ 100 KB ของเซิร์ฟเวอร์
+ */
+const exportSchema = z.object({
+  tab: z.enum(["machines", "signal"]),
+  ids: z.array(z.number().int()).min(1, "ไม่มีรายการให้ส่งออก").max(10000),
+  /** คำอธิบายตัวกรองที่ใช้อยู่ ใส่ไว้หัวไฟล์ให้คนเปิดรู้ว่าเป็นรายการชุดไหน */
+  filters: z.string().max(500).optional(),
+});
+
+router.post("/export", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = exportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง";
+    return res.status(400).json({ error: msg });
+  }
+  const { tab, ids, filters } = parsed.data;
+  const list = tab === "machines" ? await listMachineOff({}) : await listSignalLost({});
+  const byId = new Map<number, (typeof list.rows)[number]>(list.rows.map((r) => [r.id, r]));
+  // เรียงตามที่แอปส่งมา = ตามที่เห็นบนจอ · เคสที่ปิดไปแล้วระหว่างนั้นหลุดออกเอง
+  const rows = ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
+  if (rows.length === 0) return res.status(400).json({ error: "รายการที่เลือกไม่มีแล้ว ลองรีเฟรชหน้า" });
+
+  const now = new Date(list.now);
+  const data = await outagesToWorkbook(tab, rows, { at: now, filters, slaHours: list.slaHours });
+  const stamp = now.toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+  const thai = tab === "machines" ? "เครื่องดับ" : "สัญญาณหาย";
+  const stored = saveDocument({
+    filename: `${thai}-${stamp}.xlsx`,
+    asciiFilename: `outages-${tab}-${stamp}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data,
+    ownerId: req.auth!.userId,
   });
+  res.json({ filename: stored.filename, path: documentPath(stored), count: rows.length });
 });
 
 /** ตัวเลขรวมของทั้งสองแท็บ ใช้ตอนเปิดหน้าเพื่อขึ้นตัวเลขบนแท็บ */

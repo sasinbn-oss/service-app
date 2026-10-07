@@ -15,12 +15,16 @@ import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
-import { api, apiErrorMessage } from "../api/client";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import Dropdown from "../components/Dropdown";
+import { openUrl } from "../utils/share";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { useDebounced } from "../utils/useDebounced";
+import { showAlert } from "../utils/alert";
 
 /** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
 interface OutageRow {
@@ -136,7 +140,33 @@ const GROUPS: { key: GroupKey; label: string }[] = [
   { key: "zone", label: "ทีมช่าง" },
 ];
 
-const OWNERSHIPS = ["ทั้งหมด", "COCO", "DODO"] as const;
+type QuickFilter = "all" | "over" | "COCO" | "DODO" | "nowo";
+
+const QUICK_LABEL: Record<QuickFilter, string> = {
+  all: "ทั้งหมด",
+  over: "เกิน SLA",
+  COCO: "COCO สาขาตรง",
+  DODO: "DODO แฟรนไชส์",
+  nowo: "ยังไม่มีใบงาน",
+};
+
+/**
+ * ชุดตัวกรองที่บันทึกไว้เรียกใช้ซ้ำ — เก็บในเครื่องที่ใช้ (AsyncStorage) แยกตามผู้ใช้
+ * ไม่ได้เก็บที่เซิร์ฟเวอร์ เพราะเป็นความสะดวกส่วนตัว ไม่ใช่ข้อมูลที่ต้องเห็นร่วมกัน
+ */
+interface SavedView {
+  name: string;
+  tab: Tab;
+  quick: QuickFilter;
+  region: string | null;
+  search: string;
+  brand: string | null;
+  workStatus: string | null;
+  slaLevel: "over" | "near" | null;
+  sortKey: SortKey;
+  sortAsc: boolean;
+  groupBy: GroupKey;
+}
 
 const GRADE_STYLE: Record<string, { color: string; background: string }> = {
   A: { color: colors.successInk, background: colors.successSoft },
@@ -207,7 +237,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
    */
   const [pageWidth, setPageWidth] = useState(width);
   const scrollbar = Platform.OS === "web" ? 16 : 0;
-  const tableWidth = pageWidth - scrollbar - spacing.lg * 2 - spacing.md * 2 - 2;
+  // หักขอบหน้า (lg ซ้ายขวา) · ขอบการ์ดกลุ่ม 2 px · ช่องในแถวตาราง 14 ซ้ายขวา
+  const tableWidth = pageWidth - scrollbar - spacing.lg * 2 - 2 - 14 * 2;
   const { user } = useAuth();
 
   const [tab, setTab] = useState<Tab>("machines");
@@ -216,7 +247,21 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [ownership, setOwnership] = useState<string>("ทั้งหมด");
+  /**
+   * ชิปลัดบนแผงตัวกรอง (ทั้งหมด / เกิน SLA / COCO / DODO / ยังไม่มีใบงาน) — เลือกได้ทีละอัน
+   *
+   * กรองในแอป ไม่ได้ส่งไปเซิร์ฟเวอร์ ตัวเลขบนชิปทุกอันจึงคงที่ ไม่ว่าจะกดชิปไหนอยู่
+   * (ถ้าให้เซิร์ฟเวอร์กรอง กด COCO แล้วชิป DODO จะขึ้น 0 ทั้งที่จริงไม่ใช่)
+   */
+  const [quick, setQuick] = useState<QuickFilter>("all");
+  const ownership = quick === "COCO" || quick === "DODO" ? quick : null;
+  // ยี่ห้อกับระดับ SLA กรองในแอปเหมือนกัน — ข้อมูลอยู่ในแถวที่โหลดมาแล้ว ไม่ต้องถามเซิร์ฟเวอร์ใหม่
+  const [brand, setBrand] = useState<string | null>(null);
+  const [slaLevel, setSlaLevel] = useState<"over" | "near" | null>(null);
+  const [tabCounts, setTabCounts] = useState<{ machineOff: number; signalLost: number } | null>(null);
+  const [views, setViews] = useState<SavedView[]>([]);
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   // ภาคเป็นชั้นรองจากเจ้าของ เปลี่ยนเจ้าของแล้วภาคที่เลือกไว้อาจไม่มีอยู่แล้ว จึงล้างทิ้ง
   const [region, setRegion] = useState<string | null>(null);
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
@@ -224,7 +269,6 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
   // ไม่งั้นพิมพ์รหัสสาขาหนึ่งรหัสจะยิงขอทั้งตารางเท่าจำนวนตัวอักษร
   const settledSearch = useDebounced(search);
-  const [breachedOnly, setBreachedOnly] = useState(false);
   const [workStatus, setWorkStatus] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupKey>("region");
   const [sortKey, setSortKey] = useState<SortKey>("slaHours");
@@ -268,10 +312,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           tab === "machines" ? "/machines/outages" : "/machines/signal-lost",
           {
             params: {
-              ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
               ...(region ? { region } : {}),
               ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
-              ...(breachedOnly ? { breachedOnly: "true" } : {}),
               ...(workStatus ? { workStatus } : {}),
             },
           }
@@ -284,8 +326,56 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         setRefreshing(false);
       }
     },
-    [tab, ownership, region, settledSearch, breachedOnly, workStatus]
+    [tab, region, settledSearch, workStatus]
   );
+
+  // ตัวเลขบนแท็บทั้งสอง — ต้องเห็นของแท็บที่ไม่ได้เปิดอยู่ด้วย
+  useFocusEffect(
+    useCallback(() => {
+      api
+        .get<{ machineOff: number; signalLost: number }>("/machines/overview")
+        .then((res) => setTabCounts(res.data))
+        .catch(() => undefined);
+    }, [])
+  );
+
+  // มุมมองที่บันทึกไว้ของคนนี้ในเครื่องนี้
+  const viewsKey = `otteri-monitor-views:${user?.id ?? 0}`;
+  useEffect(() => {
+    AsyncStorage.getItem(viewsKey)
+      .then((raw) => setViews(raw ? (JSON.parse(raw) as SavedView[]) : []))
+      .catch(() => setViews([]));
+  }, [viewsKey]);
+  function storeViews(next: SavedView[]) {
+    setViews(next);
+    AsyncStorage.setItem(viewsKey, JSON.stringify(next)).catch(() => undefined);
+  }
+  function currentView(name: string): SavedView {
+    return { name, tab, quick, region, search, brand, workStatus, slaLevel, sortKey, sortAsc, groupBy };
+  }
+  function applyView(v: SavedView) {
+    if (v.tab !== tab) switchTab(v.tab);
+    setQuick(v.quick);
+    setRegion(v.region);
+    setSearch(v.search);
+    setBrand(v.brand);
+    setWorkStatus(v.workStatus);
+    setSlaLevel(v.slaLevel);
+    setSortKey(v.sortKey);
+    setSortAsc(v.sortAsc);
+    setGroupBy(v.groupBy);
+  }
+  function resetFilters() {
+    setQuick("all");
+    setRegion(null);
+    setSearch("");
+    setBrand(null);
+    setWorkStatus(null);
+    setSlaLevel(null);
+    setSortKey("slaHours");
+    setSortAsc(false);
+    setGroupBy("region");
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -310,17 +400,75 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       .get<RegionOption[]>("/machines/regions", {
         params: {
           kind: tab === "machines" ? "MACHINE_OFF" : "SIGNAL_LOST",
-          ...(ownership !== "ทั้งหมด" ? { ownership } : {}),
+          ...(ownership ? { ownership } : {}),
         },
       })
       .then((res) => setRegionOptions(res.data))
       .catch(() => setRegionOptions([]));
   }, [tab, ownership]);
 
-  function chooseOwnership(next: string) {
-    if (next === ownership) return;
-    setOwnership(next);
-    setRegion(null);
+  function chooseQuick(next: QuickFilter) {
+    // เปลี่ยนเจ้าของแล้วภาคที่เลือกไว้อาจไม่มีในเจ้าของใหม่ จึงล้างทิ้ง
+    const nextOwner = next === "COCO" || next === "DODO" ? next : null;
+    if (nextOwner !== ownership) setRegion(null);
+    setQuick(next);
+  }
+
+  /** แถวที่เห็นจริง = ที่เซิร์ฟเวอร์ส่งมา กรองต่อด้วยชิปลัด ยี่ห้อ และระดับ SLA */
+  const visibleRows = useMemo(() => {
+    if (!data) return [];
+    const near = (data.slaHours ?? 72) * 0.6;
+    return data.rows.filter((r) => {
+      if (quick === "over" && !r.breached) return false;
+      if ((quick === "COCO" || quick === "DODO") && r.ownership !== quick) return false;
+      if (quick === "nowo" && r.workOrder) return false;
+      if (brand && (r.machineBrand ?? "") !== brand) return false;
+      if (slaLevel === "over" && !r.breached) return false;
+      if (slaLevel === "near" && (r.breached || r.slaHours <= near)) return false;
+      return true;
+    });
+  }, [data, quick, brand, slaLevel]);
+
+  const brandOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of data?.rows ?? []) if (r.machineBrand) set.add(r.machineBrand);
+    return [...set].sort();
+  }, [data]);
+
+  /**
+   * ส่งออกเฉพาะที่เห็นบนจอ ตามลำดับบนจอ (รวมกลุ่มที่พับไว้)
+   * ส่งไปแค่รหัสเคส เซิร์ฟเวอร์สร้างไฟล์จากข้อมูลจริงเอง
+   */
+  async function exportExcel() {
+    const ids = groups.flatMap((g) => g.rows.map((r) => r.id));
+    if (ids.length === 0) {
+      showAlert("ไม่มีรายการ", "ไม่มีรายการให้ส่งออกตามตัวกรองที่เลือก");
+      return;
+    }
+    const filters = [
+      quick !== "all" ? QUICK_LABEL[quick] : null,
+      region ? `ภาค ${regionOptions.find((o) => (o.region ?? "NONE") === region)?.label ?? region}` : null,
+      brand ? `ยี่ห้อ ${brand}` : null,
+      workStatus ? (workStatus === "NONE" ? "ยังไม่ระบุสถานะ" : statusOptions.find((o) => o.value === workStatus)?.label) : null,
+      slaLevel === "over" ? "เกิน SLA" : slaLevel === "near" ? "ใกล้เกิน SLA" : null,
+      search.trim() ? `ค้นหา "${search.trim()}"` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    setExporting(true);
+    try {
+      const res = await api.post<{ path: string }>(
+        "/machines/export",
+        { tab, ids, filters: filters || undefined },
+        { loadingText: "กำลังสร้างไฟล์ Excel..." }
+      );
+      const url = resolveImageUrl(res.data.path);
+      if (url) await openUrl(url);
+    } catch (e) {
+      showAlert("ส่งออกไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setExporting(false);
+    }
   }
 
   /**
@@ -364,7 +512,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       (groupBy === "ownership" ? row.ownership : groupBy === "region" ? row.region : row.zone) ??
       (groupBy === "ownership" ? "ไม่ระบุเจ้าของ" : groupBy === "region" ? "ยังไม่ระบุภาค" : "ยังไม่ระบุทีมช่าง");
 
-    for (const row of data.rows) {
+    for (const row of visibleRows) {
       const key = labelOf(row);
       if (!buckets.has(key)) {
         buckets.set(key, []);
@@ -389,7 +537,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         score: rows.reduce((sum, r) => sum + r.score, 0),
       };
     });
-  }, [data, groupBy, sortKey, sortAsc]);
+  }, [data, visibleRows, groupBy, sortKey, sortAsc]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) setSortAsc((v) => !v);
@@ -421,226 +569,234 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         <RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} />
       }
     >
-      {/* หัวหน้าแบบต้นแบบ OTTERI: ชื่อหน้าใหญ่ + เวลาข้อมูลใต้ชื่อ ปุ่มอยู่ขวาบน */}
+      {/* หัวหน้า: ชื่อหน้า + ป้ายเวลาข้อมูลแถวเดียวกัน ปุ่มอยู่ขวาบน (ตามตัวอย่างที่เจ้าของงานเลือก) */}
       <View style={styles.topRow}>
-        <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 220 }}>
-          <Text style={[styles.pageTitle, headingFont]}>ติดตามเครื่องเสีย</Text>
-          {data ? <Text style={styles.updatedAt}>ข้อมูล ณ {formatDateTime(data.now)} น.</Text> : null}
-        </View>
+        <Text style={[styles.pageTitle, headingFont]}>ติดตามเครื่องเสีย</Text>
+        {data ? (
+          <View style={styles.stamp}>
+            <Ionicons name="time-outline" size={14} color={colors.textMuted} />
+            <Text style={styles.stampText}>ข้อมูล ณ {formatDateTime(data.now)} น.</Text>
+          </View>
+        ) : null}
+        <View style={{ flexGrow: 1 }} />
         <View style={styles.topActions}>
-          <TouchableOpacity
-            style={styles.importButton}
-            onPress={() => setShowActivity(true)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="time-outline" size={18} color={colors.primaryInk} />
-            <Text style={styles.importButtonText}>ประวัติการกรอก</Text>
-          </TouchableOpacity>
+          <HeadButton icon="time-outline" label="ประวัติการกรอก" onPress={() => setShowActivity(true)} />
           {user?.role === "ADMIN" ? (
-            <TouchableOpacity
-              style={styles.importButton}
+            <HeadButton
+              icon="cloud-upload-outline"
+              label="อัปโหลดไฟล์รอบใหม่"
               onPress={() => navigation.navigate("MachineImport")}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="cloud-upload-outline" size={18} color={colors.primaryInk} />
-              <Text style={styles.importButtonText}>อัปโหลดไฟล์รอบใหม่</Text>
-            </TouchableOpacity>
+            />
           ) : null}
+          <HeadButton icon="download-outline" label="ส่งออก Excel" onPress={exportExcel} disabled={exporting || !data} />
         </View>
       </View>
 
-      <View style={styles.mainTabs}>
-        <MainTab
+      <View style={styles.bigTabs}>
+        <BigTab
           active={isMachines}
           icon="power"
           label="เครื่องดับ"
-          count={isMachines ? data?.summary.total : undefined}
+          en="Power Off"
+          count={tabCounts?.machineOff}
           onPress={() => switchTab("machines")}
         />
-        <MainTab
+        <BigTab
           active={!isMachines}
-          icon="wifi-outline"
+          icon="cloud-offline-outline"
           label="สัญญาณหาย"
-          count={!isMachines ? data?.summary.total : undefined}
+          en="Offline Telemetry"
+          count={tabCounts?.signalLost}
           onPress={() => switchTab("signal")}
         />
       </View>
 
       {/*
-        การ์ดตัวเลขแบบต้นแบบ 4 ใบ — COCO/DODO เดิมเป็นการ์ดของตัวเอง ย้ายมาอยู่บรรทัดล่างของใบแรก
-        ไม่ได้ย้ายไปไว้บนปุ่มกรอง COCO/DODO เพราะตัวเลขนับตามตัวกรองที่เลือกอยู่
-        เลือก COCO แล้วปุ่ม DODO จะขึ้น 0 ทั้งที่จริงไม่ใช่
+        การ์ดตัวเลข 4 ใบ — นับจากที่เซิร์ฟเวอร์ส่งมา (ภาค ค้นหา สถานะ) ไม่ได้นับตามชิปลัด
+        กดชิปแล้วภาพรวมด้านบนไม่ควรเปลี่ยนตาม ไม่งั้นดูไม่ออกว่าปัญหาทั้งหมดมีเท่าไหร่
       */}
       <View style={styles.summaryRow}>
         <KpiCard
-          label={isMachines ? "เครื่องดับ" : "สาขาสัญญาณหาย"}
+          label={isMachines ? "เครื่องดับทั้งหมด" : "สาขาสัญญาณหายทั้งหมด"}
           value={data?.summary.total ?? 0}
           unit={isMachines ? "เครื่อง" : "สาขา"}
           foot={
             isMachines
               ? `ใน ${data?.summary.branchesAffected ?? 0} สาขา · COCO ${data?.summary.COCO ?? 0} · DODO ${data?.summary.DODO ?? 0}`
-              : data?.summary.machinesAffected
-                ? `กระทบ ${data.summary.machinesAffected} เครื่อง · COCO ${data.summary.COCO} · DODO ${data.summary.DODO}`
-                : "ยังไม่รู้ว่าเครื่องเสียหรือเน็ตหลุด"
+              : `กระทบ ${data?.summary.machinesAffected ?? 0} เครื่อง · COCO ${data?.summary.COCO ?? 0} · DODO ${data?.summary.DODO ?? 0}`
           }
-          tone={isMachines ? "primary" : "navy"}
+          tone="primary"
           icon={isMachines ? "power" : "cloud-offline-outline"}
           wide={wide}
         />
         <KpiCard
           label={`เกิน SLA ${slaHours} ชม.`}
+          badge={(data?.summary.breached ?? 0) > 0 ? "วิกฤต" : undefined}
           value={data?.summary.breached ?? 0}
           unit="เคส"
-          foot="ต้องเร่งก่อน"
+          foot={
+            data?.summary.total
+              ? `สัดส่วน ${((data.summary.breached / data.summary.total) * 100).toFixed(1)}% ของปัญหา`
+              : "ไม่มีเคสค้าง"
+          }
+          action={(data?.summary.breached ?? 0) > 0 ? { label: "ต้องเร่งก่อน", onPress: () => chooseQuick("over") } : undefined}
           tone="red"
-          icon="warning-outline"
+          crit
+          icon="warning"
           wide={wide}
         />
         <KpiCard
-          label="คะแนนรวม"
+          label="คะแนนความเสียหายสะสม"
           value={data?.summary.totalScore ?? 0}
           unit="คะแนน"
-          foot={`วันละ ${data?.scorePerDay ?? 1} ต่อรายการ`}
-          tone="amber"
-          icon="speedometer-outline"
+          foot="คำนวณถ่วงน้ำหนักตามเวลา"
+          footRight={`+${data?.scorePerDay ?? 1} คะแนน / วัน / เคส`}
+          tone="primary"
+          icon="speedometer"
           wide={wide}
         />
         <KpiCard
-          label="มีใบงานแล้ว"
+          label="มีใบงานซ่อมแล้ว"
           value={data ? data.rows.filter((r) => r.workOrder).length : 0}
           unit={`/ ${data?.rows.length ?? 0}`}
           progress={data && data.rows.length ? data.rows.filter((r) => r.workOrder).length / data.rows.length : 0}
-          tone="green"
-          icon="clipboard-outline"
+          progressLabel="อัตราเปิดใบงาน"
+          tone="primary"
+          icon="clipboard"
           wide={wide}
         />
       </View>
 
-      {/* จอกว้างเอาตัวควบคุมมาต่อกันในบรรทัดเดียว ประหยัดพื้นที่แนวตั้งให้ตารางแทน */}
-      <View style={roomy ? styles.controlBar : undefined}>
-      <View style={[styles.tabs, roomy && styles.inlineControl]}>
-        {OWNERSHIPS.map((option) => (
-          <TouchableOpacity
-            key={option}
-            style={[styles.tab, ownership === option && styles.tabActive]}
-            onPress={() => chooseOwnership(option)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabText, ownership === option && styles.tabTextActive]}>
-              {option}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {/* แผงตัวกรอง: ชิปลัด + ค้นหา + บันทึกมุมมอง/รีเซ็ต · แถวล่างเป็นช่องเลือก */}
+      <View style={styles.panel}>
+        <View style={styles.panelRow}>
+          <View style={styles.quickChips}>
+            {(["all", "over", "COCO", "DODO", "nowo"] as QuickFilter[]).map((q) => {
+              const rows = data?.rows ?? [];
+              const n =
+                q === "all"
+                  ? rows.length
+                  : q === "over"
+                    ? rows.filter((r) => r.breached).length
+                    : q === "nowo"
+                      ? rows.filter((r) => !r.workOrder).length
+                      : rows.filter((r) => r.ownership === q).length;
+              const red = q === "over" || q === "nowo";
+              const on = quick === q;
+              return (
+                <TouchableOpacity
+                  key={q}
+                  style={[styles.qChip, red && styles.qChipRed, on && (red ? styles.qChipRedOn : styles.qChipOn)]}
+                  onPress={() => chooseQuick(q)}
+                  activeOpacity={0.75}
+                >
+                  {q === "over" ? (
+                    <Ionicons name="alert-circle" size={15} color={on ? "#fff" : colors.dangerInk} />
+                  ) : null}
+                  <Text style={[styles.qChipText, red && styles.qChipTextRed, on && styles.qChipTextOn]}>
+                    {QUICK_LABEL[q]}
+                  </Text>
+                  <View style={[styles.qCount, red && styles.qCountRed, on && styles.qCountOn]}>
+                    <Text style={[styles.qCountText, red && styles.qCountTextRed, on && (red ? styles.qCountTextRedOn : styles.qCountTextOn)]}>
+                      {n}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
-      {/* ภาคอยู่ใต้เจ้าของเพราะเป็นชั้นรองลงมา เลือกเจ้าของก่อนแล้วค่อยเจาะเข้าภาค */}
-      {regionOptions.length > 0 ? (
-        <View style={styles.regionRow}>
-          <Text style={styles.sortLabel}>ภาค</Text>
-          <StatusFilterChip label="ทุกภาค" active={region === null} onPress={() => setRegion(null)} />
-          {regionOptions.map((option) => (
-            <StatusFilterChip
-              key={option.label}
-              label={`${option.label} ${option.cases}`}
-              active={region === (option.region ?? "NONE")}
-              onPress={() => {
-                const value = option.region ?? "NONE";
-                setRegion(region === value ? null : value);
-              }}
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={17} color={colors.textFaint} />
+            <TextInput
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              onSubmitEditing={() => load()}
+              placeholder={isMachines ? "ค้นหารหัสสาขา / ชื่อสาขา / เครื่อง" : "ค้นหารหัสสาขา / ชื่อสาขา"}
+              placeholderTextColor={colors.textFaint}
+              returnKeyType="search"
             />
-          ))}
+            {search ? (
+              <TouchableOpacity onPress={() => setSearch("")} accessibilityLabel="ล้างคำค้น">
+                <Ionicons name="close-circle-outline" size={18} color={colors.textFaint} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <PanelButton icon="bookmark-outline" label="บันทึกมุมมอง" onPress={() => setViewsOpen(true)} />
+          <PanelButton icon="refresh" label="รีเซ็ต" onPress={resetFilters} />
         </View>
-      ) : null}
 
-      <View style={[styles.searchRow, roomy && styles.inlineSearch]}>
-        <Ionicons name="search" size={16} color={colors.textFaint} />
-        <TextInput
-          style={styles.searchInput}
-          value={search}
-          onChangeText={setSearch}
-          onSubmitEditing={() => load()}
-          placeholder={isMachines ? "ค้นหา รหัสสาขา / ชื่อสาขา / เครื่อง" : "ค้นหา รหัสสาขา / ชื่อสาขา"}
-          placeholderTextColor={colors.textFaint}
-          returnKeyType="search"
-        />
-        {search ? (
-          <TouchableOpacity onPress={() => setSearch("")}>
-            <Ionicons name="close-circle" size={18} color={colors.textFaint} />
-          </TouchableOpacity>
+        {views.length > 0 ? (
+          <View style={styles.viewsRow}>
+            <Text style={styles.viewsLabel}>มุมมองของฉัน</Text>
+            {views.map((v) => (
+              <TouchableOpacity key={v.name} style={styles.viewChip} onPress={() => applyView(v)} activeOpacity={0.75}>
+                <Ionicons name="bookmark" size={13} color={colors.primaryInk} />
+                <Text style={styles.viewChipText}>{v.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         ) : null}
-      </View>
 
-      <View style={[styles.filterRow, roomy && styles.inlineControl]}>
-        <TouchableOpacity
-          style={[styles.chip, breachedOnly && styles.chipWarning]}
-          onPress={() => setBreachedOnly((v) => !v)}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name="alert-circle-outline"
-            size={14}
-            color={breachedOnly ? colors.warningInk : colors.textMuted}
+        <View style={styles.selects}>
+          <SelectField
+            label="ภูมิภาค / โซน"
+            value={region}
+            allLabel="ทุกภาค"
+            options={regionOptions.map((o) => ({ value: o.region ?? "NONE", label: `${o.label} (${o.cases})` }))}
+            onChange={setRegion}
           />
-          <Text style={[styles.chipText, breachedOnly && styles.chipTextWarning]}>
-            เฉพาะเลย SLA
-          </Text>
-        </TouchableOpacity>
-
-        <View style={styles.groupPicker}>
-          <Text style={styles.groupLabel}>กลุ่ม</Text>
-          {GROUPS.map((g) => (
-            <TouchableOpacity
-              key={g.key}
-              style={[styles.groupOption, groupBy === g.key && styles.groupOptionActive]}
-              onPress={() => setGroupBy(g.key)}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[styles.groupOptionText, groupBy === g.key && styles.groupOptionTextActive]}
-              >
-                {g.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {isMachines ? (
+            <SelectField
+              label="ยี่ห้อเครื่องจักร"
+              value={brand}
+              allLabel="ทุกยี่ห้อ"
+              options={brandOptions.map((b) => ({ value: b, label: b }))}
+              onChange={setBrand}
+            />
+          ) : null}
+          <SelectField
+            label="สถานะในงานซ่อม"
+            value={workStatus}
+            allLabel="ทุกสถานะ"
+            options={[{ value: "NONE", label: "ยังไม่ระบุ" }, ...statusOptions.map((o) => ({ value: o.value, label: o.label }))]}
+            onChange={setWorkStatus}
+          />
+          <SelectField
+            label="ความวิกฤต SLA"
+            value={slaLevel}
+            allLabel="ทุกระดับ"
+            alert={slaLevel !== null}
+            options={[
+              { value: "over", label: `เกิน SLA ${slaHours} ชม.` },
+              { value: "near", label: "ใกล้เกิน (ใช้ไปเกิน 60%)" },
+            ]}
+            onChange={(v) => setSlaLevel(v as "over" | "near" | null)}
+          />
+          <SelectField
+            label="เรียงตามลำดับ"
+            value={`${sortKey}:${sortAsc ? "asc" : "desc"}`}
+            options={[
+              { value: "slaHours:desc", label: "ดับนานที่สุด (SLA ↓)" },
+              { value: "slaHours:asc", label: "ดับล่าสุด (SLA ↑)" },
+              { value: "score:desc", label: "คะแนนมากสุด" },
+              { value: "branchCode:asc", label: "รหัสสาขา" },
+            ]}
+            onChange={(v) => {
+              if (!v) return;
+              const [k, dir] = v.split(":");
+              setSortKey(k as SortKey);
+              setSortAsc(dir === "asc");
+            }}
+          />
+          <SelectField
+            label="จัดกลุ่มตาม"
+            value={groupBy}
+            options={GROUPS.map((g) => ({ value: g.key, label: g.label }))}
+            onChange={(v) => v && setGroupBy(v as GroupKey)}
+          />
         </View>
-      </View>
-      </View>
-
-      <View style={roomy ? styles.controlBar : undefined}>
-      <View style={[styles.statusFilterRow, roomy && styles.inlineControl]}>
-        <Text style={styles.sortLabel}>สถานะ</Text>
-        <StatusFilterChip
-          label="ทั้งหมด"
-          active={workStatus === null}
-          onPress={() => setWorkStatus(null)}
-        />
-        <StatusFilterChip
-          label="ยังไม่ระบุ"
-          active={workStatus === "NONE"}
-          onPress={() => setWorkStatus(workStatus === "NONE" ? null : "NONE")}
-        />
-        {statusOptions.map((option) => (
-          <StatusFilterChip
-            key={option.value}
-            label={option.label}
-            tone={STATUS_STYLE[option.value]}
-            active={workStatus === option.value}
-            onPress={() => setWorkStatus(workStatus === option.value ? null : option.value)}
-          />
-        ))}
-      </View>
-
-      <View style={[styles.sortRow, roomy && styles.inlineControl]}>
-        <Text style={styles.sortLabel}>เรียงตาม</Text>
-        <SortButton label="SLA" active={sortKey === "slaHours"} asc={sortAsc} onPress={() => toggleSort("slaHours")} />
-        <SortButton label="คะแนน" active={sortKey === "score"} asc={sortAsc} onPress={() => toggleSort("score")} />
-        <SortButton
-          label="รหัสสาขา"
-          active={sortKey === "branchCode"}
-          asc={sortAsc}
-          onPress={() => toggleSort("branchCode")}
-        />
-      </View>
       </View>
 
       {error ? (
@@ -674,26 +830,26 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           >
             <Ionicons
               name={collapsed[group.name] ? "chevron-forward" : "chevron-down"}
-              size={18}
-              color={colors.text}
+              size={20}
+              color={colors.primaryInk}
             />
-            <Text style={styles.sectionTitle}>{group.name}</Text>
+            <Text style={[styles.sectionTitle, headingFont]}>{group.name}</Text>
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>
                 {group.rows.length} {isMachines ? "เครื่อง" : "สาขา"}
               </Text>
             </View>
-            {group.score > 0 ? (
-              <View style={styles.scoreBadge}>
-                <Text style={styles.scoreBadgeText}>{group.score} คะแนน</Text>
+            {group.breachedCount > 0 ? (
+              <View style={styles.staleBadge}>
+                <Ionicons name="warning" size={12} color={colors.dangerInk} />
+                <Text style={styles.staleBadgeText}>เกิน SLA {group.breachedCount} รายการ</Text>
               </View>
             ) : null}
             <View style={{ flex: 1 }} />
-            {group.breachedCount > 0 ? (
-              <View style={styles.staleBadge}>
-                <Ionicons name="alert-circle" size={12} color={colors.warningInk} />
-                <Text style={styles.staleBadgeText}>เลย SLA {group.breachedCount}</Text>
-              </View>
+            {group.score > 0 ? (
+              <Text style={styles.groupLoss}>
+                ความเสียหายกลุ่มนี้: <Text style={styles.groupLossValue}>{group.score} คะแนน</Text>
+              </Text>
             ) : null}
           </TouchableOpacity>
 
@@ -734,6 +890,22 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       </Text>
 
       <ActivityModal visible={showActivity} onClose={() => setShowActivity(false)} />
+
+      <ViewsModal
+        visible={viewsOpen}
+        views={views}
+        onClose={() => setViewsOpen(false)}
+        onSave={(name) => {
+          // ชื่อซ้ำ = บันทึกทับของเดิม แทนที่จะมีสองอันชื่อเดียวกันให้งง
+          storeViews([currentView(name), ...views.filter((v) => v.name !== name)].slice(0, 12));
+          showAlert("บันทึกแล้ว", `มุมมอง "${name}"`);
+        }}
+        onApply={(v) => {
+          applyView(v);
+          setViewsOpen(false);
+        }}
+        onDelete={(name) => storeViews(views.filter((v) => v.name !== name))}
+      />
 
       <NoteModal
         row={editing}
@@ -1114,89 +1286,6 @@ function ActivityModal({ visible, onClose }: { visible: boolean; onClose: () => 
   );
 }
 
-function StatusFilterChip({
-  label,
-  active,
-  tone,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  tone?: { color: string; background: string };
-  onPress: () => void;
-}) {
-  const style = tone ?? NO_STATUS_STYLE;
-  return (
-    <TouchableOpacity
-      style={[
-        styles.statusFilterChip,
-        active && { backgroundColor: style.background, borderColor: style.color },
-      ]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <Text style={[styles.statusFilterChipText, active && { color: style.color, fontWeight: "700" }]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
-function MainTab({
-  active,
-  icon,
-  label,
-  count,
-  onPress,
-}: {
-  active: boolean;
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  count?: number;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.mainTab, active && styles.mainTabActive]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <Ionicons name={icon} size={17} color={active ? colors.primary : colors.textMuted} />
-      <Text style={[styles.mainTabText, active && styles.mainTabTextActive]}>{label}</Text>
-      {count !== undefined ? (
-        <View style={[styles.mainTabCount, active && styles.mainTabCountActive]}>
-          <Text style={[styles.mainTabCountText, active && styles.mainTabCountTextActive]}>
-            {count}
-          </Text>
-        </View>
-      ) : null}
-    </TouchableOpacity>
-  );
-}
-
-function SortButton({
-  label,
-  active,
-  asc,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  asc: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity style={styles.sortButton} onPress={onPress} activeOpacity={0.7}>
-      <Text style={styles.sortButtonText}>{label}</Text>
-      <Ionicons
-        name={active ? (asc ? "arrow-up" : "arrow-down") : "swap-vertical"}
-        size={14}
-        color={active ? colors.primary : colors.textFaint}
-      />
-    </TouchableOpacity>
-  );
-}
-
 type KpiTone = "primary" | "navy" | "red" | "amber" | "green";
 
 /** สีของการ์ดตัวเลขตาม .kpi / .kpi.navy / .kpi.red / .kpi.amber / .kpi.green ของต้นแบบ */
@@ -1214,47 +1303,278 @@ const KPI_TONE: Record<KpiTone, { tile: string; fg: string }> = {
  */
 function KpiCard({
   label,
+  badge,
   value,
   unit,
   foot,
+  footRight,
+  action,
   progress,
+  progressLabel,
   tone,
+  crit,
   icon,
   wide,
 }: {
   label: string;
+  /** ป้ายแดงเล็กข้างหัวข้อ เช่น "วิกฤต" */
+  badge?: string;
   value: number;
   unit?: string;
   foot?: string;
+  /** ข้อความตัวหนาชิดขวาของบรรทัดล่าง */
+  footRight?: string;
+  /** ลิงก์ท้ายการ์ด เช่น "ต้องเร่งก่อน →" กดแล้วกรองรายการให้ */
+  action?: { label: string; onPress: () => void };
   /** 0–1 ใส่เมื่ออยากให้มีแถบความคืบหน้าแทนบรรทัดล่าง */
   progress?: number;
+  progressLabel?: string;
   tone: KpiTone;
+  /** การ์ดที่ต้องสะดุดตา (เกิน SLA) — พื้นไล่สีแดงอ่อน ตัวเลขแดง */
+  crit?: boolean;
   icon: keyof typeof Ionicons.glyphMap;
   wide: boolean;
 }) {
   const t = KPI_TONE[tone];
   return (
-    <View style={[styles.summaryCard, wide ? styles.summaryCardWide : styles.summaryCardNarrow]}>
-      <Text style={styles.summaryLabel}>{label}</Text>
+    <View style={[styles.summaryCard, crit && styles.kpiCrit, wide ? styles.summaryCardWide : styles.summaryCardNarrow]}>
+      {crit ? <View style={styles.kpiCritGlow} /> : null}
+      <View style={styles.kpiLabelRow}>
+        <Text style={styles.summaryLabel}>{label}</Text>
+        {badge ? (
+          <View style={styles.kpiBadge}>
+            <Text style={styles.kpiBadgeText}>{badge}</Text>
+          </View>
+        ) : null}
+      </View>
       <View style={[styles.kpiIcon, { backgroundColor: t.tile }]}>
         <Ionicons name={icon} size={22} color={t.fg} />
       </View>
-      <Text style={[styles.summaryValue, headingFont, { color: t.fg }]}>
-        {value.toLocaleString("th-TH")}
+      <Text style={[styles.summaryValue, headingFont, { color: crit ? colors.dangerInk : colors.text }]}>
+        {value.toLocaleString("en-US")}
         {unit ? <Text style={styles.summaryUnit}> {unit}</Text> : null}
       </Text>
       {progress !== undefined ? (
         <View style={styles.kpiFoot}>
-          <Text style={styles.summarySub}>{Math.round(progress * 100)}%</Text>
+          <View style={styles.kpiFootRow}>
+            <Text style={styles.summarySub}>{progressLabel ?? ""}</Text>
+            <Text style={[styles.kpiFootStrong, { color: colors.primaryInk }]}>{(progress * 100).toFixed(1)}%</Text>
+          </View>
           <View style={styles.meter}>
             <View style={[styles.meterFill, { width: `${Math.round(progress * 100)}%` }]} />
           </View>
         </View>
-      ) : foot ? (
-        <View style={styles.kpiFoot}>
-          <Text style={styles.summarySub}>{foot}</Text>
+      ) : (
+        <View style={[styles.kpiFoot, styles.kpiFootRow]}>
+          <Text style={[styles.summarySub, crit && { color: colors.dangerInk }, { flexShrink: 1 }]}>{foot ?? ""}</Text>
+          {footRight ? <Text style={styles.kpiFootStrong}>{footRight}</Text> : null}
+          {action ? (
+            <TouchableOpacity onPress={action.onPress} style={styles.kpiAction} activeOpacity={0.7}>
+              <Text style={styles.kpiActionText}>{action.label}</Text>
+              <Ionicons name="arrow-forward" size={14} color={colors.dangerInk} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/**
+ * บันทึกชุดตัวกรองที่ใช้บ่อย แล้วกดเรียกกลับมาได้ในแตะเดียว
+ * เช่น "เกิน SLA ภาคใต้" ที่หัวหน้าภาคเปิดดูทุกเช้า
+ */
+function ViewsModal({
+  visible,
+  views,
+  onClose,
+  onSave,
+  onApply,
+  onDelete,
+}: {
+  visible: boolean;
+  views: SavedView[];
+  onClose: () => void;
+  onSave: (name: string) => void;
+  onApply: (v: SavedView) => void;
+  onDelete: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    if (visible) setName("");
+  }, [visible]);
+  const trimmed = name.trim();
+  return (
+    <AppModal
+      visible={visible}
+      title="บันทึกมุมมอง"
+      subtitle="จำชุดตัวกรองที่เลือกอยู่ตอนนี้ไว้เรียกใช้ทีหลัง (เก็บในเครื่องนี้)"
+      onClose={onClose}
+      width={560}
+      footer={
+        <TouchableOpacity
+          style={[styles.viewSave, !trimmed && { opacity: 0.5 }]}
+          disabled={!trimmed}
+          onPress={() => {
+            onSave(trimmed);
+            setName("");
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="bookmark" size={16} color="#fff" />
+          <Text style={styles.viewSaveText}>บันทึกมุมมองนี้</Text>
+        </TouchableOpacity>
+      }
+    >
+      <Text style={styles.selectLabel}>ชื่อมุมมอง</Text>
+      <TextInput
+        style={styles.viewInput}
+        value={name}
+        onChangeText={setName}
+        placeholder="เช่น เกิน SLA ภาคใต้"
+        placeholderTextColor={colors.textFaint}
+        maxLength={40}
+        accessibilityLabel="ชื่อมุมมอง"
+      />
+      <Text style={[styles.selectLabel, { marginTop: spacing.lg }]}>มุมมองที่บันทึกไว้</Text>
+      {views.length === 0 ? (
+        <Text style={styles.summarySub}>ยังไม่มี — ตั้งชื่อด้านบนแล้วกดบันทึก</Text>
+      ) : (
+        views.map((v) => (
+          <View key={v.name} style={styles.viewItem}>
+            <TouchableOpacity style={{ flex: 1, minWidth: 0 }} onPress={() => onApply(v)} activeOpacity={0.7}>
+              <Text style={styles.viewItemName}>{v.name}</Text>
+              <Text style={styles.summarySub} numberOfLines={1}>
+                {[v.tab === "machines" ? "เครื่องดับ" : "สัญญาณหาย", QUICK_LABEL[v.quick], v.brand, v.search ? `"${v.search}"` : null]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.viewDelete}
+              onPress={() => onDelete(v.name)}
+              accessibilityLabel={`ลบมุมมอง ${v.name}`}
+            >
+              <Ionicons name="trash-outline" size={17} color={colors.dangerInk} />
+            </TouchableOpacity>
+          </View>
+        ))
+      )}
+    </AppModal>
+  );
+}
+
+/** ปุ่มขาวขอบบางบนหัวหน้า (ประวัติ · อัปโหลด · ส่งออก Excel) */
+function HeadButton({
+  icon,
+  label,
+  onPress,
+  disabled,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.headBtn, disabled && { opacity: 0.5 }]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.75}
+    >
+      <Ionicons name={icon} size={17} color={colors.body} />
+      <Text style={styles.headBtnText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/** ปุ่มเล็กข้างช่องค้นหา (บันทึกมุมมอง · รีเซ็ต) */
+function PanelButton({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.panelBtn} onPress={onPress} activeOpacity={0.75}>
+      <Ionicons name={icon} size={16} color={colors.body} />
+      <Text style={styles.panelBtnText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/** แท็บใหญ่สองแท็บ (เครื่องดับ / สัญญาณหาย) พร้อมชื่ออังกฤษและจำนวน */
+function BigTab({
+  active,
+  icon,
+  label,
+  en,
+  count,
+  onPress,
+}: {
+  active: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  en: string;
+  count?: number;
+  onPress: () => void;
+}) {
+  const { width } = useWindowDimensions();
+  return (
+    <TouchableOpacity
+      style={[styles.bigTab, active && styles.bigTabOn]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+    >
+      <Ionicons name={icon} size={20} color={active ? colors.primaryInk : colors.textMuted} />
+      <Text style={[styles.bigTabText, headingFont, active && styles.bigTabTextOn]}>
+        {label}
+        {width >= 640 ? <Text style={styles.bigTabEn}> ({en})</Text> : null}
+      </Text>
+      {count !== undefined ? (
+        <View style={[styles.bigTabCount, active && styles.bigTabCountOn]}>
+          <Text style={[styles.bigTabCountText, active && styles.bigTabCountTextOn]}>{count}</Text>
         </View>
       ) : null}
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * ช่องเลือกพร้อมหัวข้อ — ตัวเลือกแรกเป็น "ทั้งหมด" (allLabel) แทนการปล่อยว่าง
+ * ไม่ใส่ allLabel = ต้องเลือกอย่างใดอย่างหนึ่งเสมอ (เช่น เรียงตาม)
+ */
+function SelectField({
+  label,
+  value,
+  options,
+  allLabel,
+  alert,
+  onChange,
+}: {
+  label: string;
+  value: string | null;
+  options: { value: string; label: string }[];
+  allLabel?: string;
+  alert?: boolean;
+  onChange: (next: string | null) => void;
+}) {
+  const all = allLabel ? [{ value: "", label: allLabel }] : [];
+  return (
+    <View style={[styles.selectField, alert && styles.selectAlert]}>
+      <Text style={styles.selectLabel}>{label}</Text>
+      <Dropdown
+        value={value ?? (allLabel ? "" : null)}
+        options={[...all, ...options]}
+        onChange={(v) => onChange(v ? v : null)}
+        accessibilityLabel={label}
+      />
     </View>
   );
 }
@@ -1287,45 +1607,39 @@ interface Column {
  * อาการกับสถานะจึงไม่ได้เป็นคอลัมน์ แต่ไปอยู่บรรทัดที่สองของแถวแทน
  */
 function columnsFor(isMachines: boolean, available: number): Column[] {
+  // ตามตัวอย่างที่เจ้าของงานเลือก: อาการ/สถานะย้ายไปอยู่ใต้ชื่อสาขา ไม่เป็นคอลัมน์ของตัวเองแล้ว
+  // ตารางจึงไม่ยาวเกินจอแม้บนจอเล็ก และชื่อสาขากับเรื่องที่ค้างอยู่อ่านต่อกันในช่องเดียว
   const columns: Column[] = isMachines
     ? [
-        { id: "branchName", key: "branchCode", label: "สาขา", width: 250 },
-        { id: "machineCode", key: "machineCode", label: "เครื่อง", width: 70 },
-        { id: "brand", label: "ยี่ห้อเครื่อง", width: 100 },
-        { id: "zone", label: "ทีมช่าง", width: 92 },
-        { id: "grade", label: "Grade", width: 52 },
-        { id: "sla", key: "slaHours", label: "ดับมาแล้ว", width: 210 },
-        { id: "score", key: "score", label: "คะแนน", width: 66 },
+        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 100 },
+        { id: "branchName", key: "branchName", label: "สาขา", width: 260 },
+        { id: "machineCode", key: "machineCode", label: "เครื่อง / ยี่ห้อ", width: 230 },
+        { id: "sla", key: "slaHours", label: "ดับมาแล้ว / SLA", width: 220 },
+        { id: "zone", label: "ทีมช่างรับผิดชอบ", width: 200 },
+        { id: "score", key: "score", label: "คะแนน", width: 90 },
       ]
     : [
-        { id: "branchName", key: "branchCode", label: "สาขา", width: 312 },
-        { id: "machineCount", label: "เครื่องในสาขา", width: 96 },
-        { id: "zone", label: "ทีมช่าง", width: 104 },
-        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 220 },
-        { id: "score", key: "score", label: "คะแนน", width: 66 },
+        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 100 },
+        { id: "branchName", key: "branchName", label: "สาขา", width: 300 },
+        { id: "machineCount", label: "เครื่องในสาขา", width: 120 },
+        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว / SLA", width: 230 },
+        { id: "zone", label: "ทีมช่างรับผิดชอบ", width: 200 },
+        { id: "score", key: "score", label: "คะแนน", width: 90 },
       ];
-
-  /**
-   * จอกว้างพอ ให้อาการกับสถานะกลับมาเป็นคอลัมน์
-   *
-   * ที่ไปอยู่บรรทัดสองตอนแรกเพราะจอถูกจำกัดไว้ที่ 820px แล้วคอลัมน์ล้นออกนอกจอ
-   * พอมีที่พอ วางเป็นคอลัมน์อ่านง่ายกว่า เพราะสายตากวาดลงตรงๆ ได้ทีละช่อง
-   */
-  if (available >= 1200) columns.push({ id: "note", label: "อาการ / สถานะ", width: 300 });
   // ใบงานอยู่ท้ายสุดเสมอ เพราะเป็นปุ่มกด ไม่ใช่ข้อมูลที่ต้องกวาดตาอ่าน
-  columns.push({ id: "workOrder", label: "ใบงาน", width: 132 });
+  columns.push({ id: "workOrder", label: "", width: 140 });
 
-  // ที่ว่างที่เหลือแบ่งให้ช่องที่ยาวไม่จำกัด อาการก่อนแล้วค่อยชื่อสาขา
-  const grow = (id: ColumnId, max: number) => {
-    const column = columns.find((c) => c.id === id);
-    if (!column) return;
-    const used = columns.reduce((sum, c) => sum + c.width, 0);
-    column.width = Math.min(max, column.width + Math.max(0, available - used));
-  };
-  // ไม่มีเพดานแล้ว (ยืดตามจอ) — ช่องอาการรับที่เหลือทั้งหมด ตารางจะได้เต็มกว้างพอดี ไม่เหลือขอบว่างขวา
-  grow("note", Number.POSITIVE_INFINITY);
-  grow("branchName", Number.POSITIVE_INFINITY);
-
+  const used = columns.reduce((sum, c) => sum + c.width, 0);
+  const name = columns.find((c) => c.id === "branchName")!;
+  if (available >= used) {
+    // ที่ว่างที่เหลือให้ชื่อสาขา (ยาวไม่จำกัด และมีอาการต่อท้าย) — ตารางเต็มกว้างพอดีจอ
+    name.width += available - used;
+  } else {
+    // ที่ไม่พอ (จอเล็กหรือเปิดเมนูข้างอยู่) — ย่อทุกคอลัมน์ตามสัดส่วน แต่ไม่ต่ำกว่า 70%
+    // ต่ำกว่านั้นค่อยปล่อยให้เลื่อนตารางซ้ายขวาเอา ดีกว่าบีบจนข้อความขึ้นบรรทัดละคำ
+    const k = Math.max(0.7, available / used);
+    for (const c of columns) c.width = Math.floor(c.width * k);
+  }
   return columns;
 }
 
@@ -1351,7 +1665,8 @@ function OutageTable({
   available: number;
 }) {
   const columns = columnsFor(isMachines, available);
-  const noteInline = columns.some((c) => c.id === "note");
+  // อาการ/สถานะอยู่ในช่องชื่อสาขาแล้ว ไม่ต้องมีบรรทัดที่สองใต้แถวอีก
+  const noteInline = true;
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
       <View>
@@ -1428,34 +1743,67 @@ function TableCell({
     case "workOrder":
       return <WorkOrderCell row={row} onPress={onWorkOrder} />;
     case "branchCode":
-      return <Text style={styles.cellMono}>{row.branchCode}</Text>;
-    case "branchName":
-      // "C0006 · ชื่อสาขา" แบบต้นแบบ — รหัสกับชื่อเป็นของชิ้นเดียวกัน แยกสองคอลัมน์เปลืองที่และกวาดตายาก
       return (
-        <Text style={styles.cellText}>
-          <Text style={[styles.cellCode, headingFont]}>{row.branchCode}</Text> · {row.branchName}
-        </Text>
-      );
-    case "machineCode":
-      return <Text style={styles.cellMono}>{row.machineCode}</Text>;
-    case "brand":
-      return <Text style={styles.cellText}>{row.machineBrand || "—"}</Text>;
-    case "machineCount":
-      return <Text style={styles.cellText}>{row.machineCount ?? "—"}</Text>;
-    case "zone":
-      return (
-        <View style={styles.zoneChip}>
-          <Text style={styles.zoneChipText}>{row.zone ?? "—"}</Text>
+        <View style={styles.codePill}>
+          <Text style={[styles.codePillText, headingFont]}>{row.branchCode}</Text>
         </View>
       );
-    case "grade": {
-      const gradeStyle = GRADE_STYLE[row.grade ?? "C"] ?? GRADE_STYLE.C;
+    case "branchName": {
+      const hasNote = !!(row.workStatusLabel || row.symptom || row.parts.length > 0 || row.scheduledVisitAt);
       return (
-        <View style={[styles.gradeChip, { backgroundColor: gradeStyle.background }]}>
-          <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>{row.grade ?? "—"}</Text>
+        <View style={{ paddingRight: spacing.sm, gap: 6 }}>
+          <Text style={styles.branchNameText}>{row.branchName}</Text>
+          <View style={styles.tagRow}>
+            {row.ownership ? (
+              <View style={styles.tagPill}>
+                <Text style={styles.tagPillText}>{row.ownership}</Text>
+              </View>
+            ) : null}
+            {row.region ? (
+              <View style={[styles.tagPill, styles.tagPillRegion]}>
+                <Text style={[styles.tagPillText, { color: colors.primaryInk }]}>{row.region}</Text>
+              </View>
+            ) : null}
+            {row.grade ? <Text style={styles.cellSub}>Grade {row.grade}</Text> : null}
+          </View>
+          {hasNote ? (
+            <View style={styles.noteCell}>
+              <NoteLine row={row} />
+            </View>
+          ) : null}
         </View>
       );
     }
+    case "machineCode":
+      return (
+        <View style={styles.machineCell}>
+          <View style={styles.machineTile}>
+            <Text style={[styles.machineTileText, headingFont]}>{row.machineCode || "—"}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.machineBrandText}>{row.machineBrand || "ไม่ระบุยี่ห้อ"}</Text>
+            <Text style={styles.cellSub}>{machineTypeLabel(row.machineType)}</Text>
+          </View>
+        </View>
+      );
+    case "brand":
+      return <Text style={styles.cellText}>{row.machineBrand || "—"}</Text>;
+    case "machineCount":
+      return <Text style={styles.cellText}>{row.machineCount ?? "—"} เครื่อง</Text>;
+    case "zone":
+      return (
+        <View style={{ paddingRight: spacing.sm }}>
+          <View style={styles.teamRow}>
+            <View style={[styles.teamDot, !row.zone && { backgroundColor: colors.textFaint }]} />
+            <Text style={styles.teamText}>{row.zone ?? "ยังไม่ระบุทีม"}</Text>
+          </View>
+          <Text style={[styles.cellSub, { marginLeft: 14 }]}>
+            {row.workOrder?.assignedToName ?? (row.workOrder ? row.workOrder.statusLabel : "ยังไม่มีใบงาน")}
+          </Text>
+        </View>
+      );
+    case "grade":
+      return <Text style={styles.cellText}>{row.grade ?? "—"}</Text>;
     case "sla": {
       // สีตามต้นแบบ: เกิน SLA แดง · ใช้ไปเกิน 60% เหลือง · ยังห่าง เขียว
       const tone = row.breached
@@ -1464,17 +1812,29 @@ function TableCell({
           ? colors.warningInk
           : colors.successInk;
       return (
-        <>
-          <Text style={styles.cellText}>
+        <View style={{ paddingRight: spacing.sm, gap: 3 }}>
+          <View style={styles.slaLine}>
             <Text style={[styles.slaText, headingFont, { color: tone }]}>{slaText(row.slaHours)}</Text>
-            <Text style={styles.cellSub}> / SLA {slaLimit} ชม.</Text>
-          </Text>
-          <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
-        </>
+            {row.breached ? (
+              <View style={styles.slaTag}>
+                <Text style={styles.slaTagText}>SLA {slaLimit} ชม.</Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.sinceRow}>
+            <Ionicons name="calendar-outline" size={12} color={colors.textMuted} />
+            <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)} น.</Text>
+          </View>
+        </View>
       );
     }
     case "score":
-      return <Text style={styles.scoreCell}>{row.score}</Text>;
+      return (
+        <View style={styles.starPill}>
+          <Ionicons name="star" size={12} color={colors.warning} />
+          <Text style={[styles.starPillText, headingFont]}>{row.score}</Text>
+        </View>
+      );
     case "note":
       return (
         <View style={styles.noteCell}>
@@ -1482,6 +1842,13 @@ function TableCell({
         </View>
       );
   }
+}
+
+/** WASHER/DRYER ในทะเบียนเครื่อง → คำที่ช่างพูดกัน */
+function machineTypeLabel(type?: string) {
+  if (type === "WASHER") return "เครื่องซักผ้า";
+  if (type === "DRYER") return "เครื่องอบผ้า";
+  return type || "";
 }
 
 /** ป้ายสถานะ อะไหล่ที่รอ และอาการที่คนกรอกไว้ ใช้ทั้งบรรทัดที่สองของตารางและในการ์ด */
@@ -1649,6 +2016,300 @@ const OutageCard = React.memo(function OutageCard({
 });
 
 const styles = StyleSheet.create({
+  // ── หัวหน้า · แท็บ · การ์ด · แผงตัวกรอง (ตามตัวอย่างที่เจ้าของงานเลือก) ──
+  topRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, marginBottom: spacing.md },
+  pageTitle: { fontSize: 28, lineHeight: 38, fontWeight: "800", color: colors.text },
+  stamp: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  stampText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  topActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, maxWidth: "100%" },
+  headBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  headBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
+  bigTabs: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    backgroundColor: "#E6F4FD",
+    borderRadius: 20,
+    padding: 6,
+    marginBottom: spacing.md,
+  },
+  bigTab: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    minHeight: 52,
+    borderRadius: 15,
+    paddingHorizontal: spacing.sm,
+  },
+  bigTabOn: { backgroundColor: colors.card, ...shadow.card },
+  bigTabText: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.textMuted, flexShrink: 1 },
+  bigTabTextOn: { color: colors.primaryInk },
+  bigTabEn: { fontSize: 13, fontWeight: "500" },
+  bigTabCount: { borderRadius: 999, paddingHorizontal: 10, backgroundColor: colors.border },
+  bigTabCountOn: { backgroundColor: colors.primary },
+  bigTabCountText: { fontSize: 13, lineHeight: 22, fontWeight: "700", color: colors.textMuted },
+  bigTabCountTextOn: { color: "#fff" },
+  summaryRow: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
+  summaryCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 18,
+    minHeight: 140,
+    overflow: "hidden",
+    ...shadow.card,
+  },
+  kpiCrit: { borderColor: "#FECACA", backgroundColor: "#FFFBFB" },
+  kpiCritGlow: {
+    position: "absolute",
+    right: -40,
+    top: -40,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: "rgba(239,68,68,0.07)",
+  },
+  kpiLabelRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingRight: 56 },
+  kpiBadge: { backgroundColor: colors.danger, borderRadius: 6, paddingHorizontal: 7 },
+  kpiBadgeText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: "#fff" },
+  summaryLabel: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.body },
+  summaryValue: { fontSize: 38, lineHeight: 46, fontWeight: "800", marginTop: 8 },
+  kpiFoot: { marginTop: "auto", paddingTop: 10 },
+  kpiFootRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 6 },
+  kpiFootStrong: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.body, textAlign: "right" },
+  kpiAction: { flexDirection: "row", alignItems: "center", gap: 4 },
+  kpiActionText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.dangerInk },
+  panel: {
+    backgroundColor: colors.card,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    marginTop: spacing.md,
+    gap: 14,
+    ...shadow.card,
+  },
+  panelRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  quickChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, flexGrow: 1, flexBasis: 420, maxWidth: "100%" },
+  qChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 38,
+    paddingLeft: 14,
+    paddingRight: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.sky50,
+  },
+  qChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  qChipRed: { backgroundColor: colors.dangerSoft, borderColor: "#FECACA" },
+  qChipRedOn: { backgroundColor: colors.danger, borderColor: colors.danger },
+  qChipText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
+  qChipTextRed: { color: colors.dangerInk },
+  qChipTextOn: { color: "#fff" },
+  qCount: { borderRadius: 999, paddingHorizontal: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
+  qCountRed: { backgroundColor: colors.danger, borderColor: colors.danger },
+  qCountOn: { backgroundColor: "rgba(255,255,255,0.25)", borderColor: "transparent" },
+  qCountText: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  qCountTextRed: { color: "#fff" },
+  qCountTextOn: { color: "#fff" },
+  qCountTextRedOn: { color: "#fff" },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexGrow: 1,
+    flexBasis: 260,
+    minWidth: 0,
+    maxWidth: "100%",
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.sky50,
+  },
+  panelBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  panelBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
+  viewsRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  viewsLabel: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
+  viewChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: colors.primarySoft,
+  },
+  viewChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  selects: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#EEF2F7",
+    paddingTop: 14,
+  },
+  selectField: { flexGrow: 1, flexBasis: 170, minWidth: 0, gap: 5 },
+  selectAlert: { borderRadius: 12 },
+  selectLabel: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
+  viewInput: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    marginTop: 6,
+  },
+  viewSave: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 46,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+  },
+  viewSaveText: { color: "#fff", fontSize: 15, lineHeight: 22, fontWeight: "700" },
+  viewItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F7",
+  },
+  viewItemName: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
+  viewDelete: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dangerSoft,
+  },
+
+  // ── กลุ่มและตาราง ──
+  section: {
+    backgroundColor: colors.card,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+    marginTop: spacing.lg,
+    ...shadow.card,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F7",
+  },
+  sectionTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800", color: colors.text },
+  countBadge: {
+    backgroundColor: colors.sky50,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+  },
+  countBadgeText: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.body },
+  staleBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: colors.dangerSoft,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+  },
+  staleBadgeText: { fontSize: 12, lineHeight: 20, color: colors.dangerInk, fontWeight: "700" },
+  groupLoss: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  groupLossValue: { color: colors.dangerInk, fontWeight: "800" },
+  codePill: { alignSelf: "flex-start", backgroundColor: "#E6F4FD", borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
+  codePillText: { fontSize: 13, lineHeight: 20, fontWeight: "800", color: colors.primaryInk },
+  branchNameText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
+  tagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
+  tagPill: { backgroundColor: "#EEF2F7", borderRadius: 7, paddingHorizontal: 8 },
+  tagPillRegion: { backgroundColor: "#E6F4FD" },
+  tagPillText: { fontSize: 12, lineHeight: 20, fontWeight: "600", color: colors.body },
+  machineCell: { flexDirection: "row", alignItems: "center", gap: 10, paddingRight: spacing.sm },
+  machineTile: {
+    minWidth: 38,
+    height: 38,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E6F4FD",
+  },
+  machineTileText: { fontSize: 13, lineHeight: 18, fontWeight: "800", color: colors.primaryInk },
+  machineBrandText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.text },
+  teamRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  teamDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.primary },
+  teamText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.text, flexShrink: 1 },
+  slaLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
+  slaText: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.text },
+  slaTag: { backgroundColor: colors.dangerSoft, borderWidth: 1, borderColor: "#FECACA", borderRadius: 6, paddingHorizontal: 6 },
+  slaTagText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: colors.dangerInk },
+  sinceRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  starPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+    backgroundColor: colors.warningSoft,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+  },
+  starPillText: { fontSize: 14, lineHeight: 20, fontWeight: "800", color: colors.warningInk },
+
   noteSource: { fontSize: 10, lineHeight: 16, color: colors.textFaint },
   fromWo: {
     flexDirection: "row",
@@ -1712,69 +2373,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
 
-  topRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
   // ตัวอักษรไทยมีสระบนและวรรณยุกต์ lineHeight ต้องสูงกว่า fontSize ชัดเจน
-  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
-  updatedAt: { fontSize: 14, lineHeight: 22, color: colors.textMuted },
   // .btn-light ของต้นแบบ
-  importButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    minHeight: 44,
-    backgroundColor: colors.sky50,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-  },
-  importButtonText: { fontSize: 15, lineHeight: 22, color: colors.primaryInk, fontWeight: "700" },
-  topActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
 
-  mainTabs: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
-  mainTab: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-  },
-  mainTabActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  mainTabText: { fontSize: 14, lineHeight: 23, fontWeight: "700", color: colors.textMuted },
-  mainTabTextActive: { color: colors.primary },
-  mainTabCount: {
-    minWidth: 26,
-    alignItems: "center",
-    backgroundColor: colors.border,
-    borderRadius: radius.pill,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-  },
-  mainTabCountActive: { backgroundColor: colors.primary },
-  mainTabCountText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
-  mainTabCountTextActive: { color: "#fff" },
 
-  summaryRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  summaryCard: {
-    backgroundColor: colors.card,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 18,
-    minHeight: 132,
-    ...shadow.card,
-  },
   kpiIcon: {
     position: "absolute",
     top: 16,
@@ -1785,44 +2387,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  kpiFoot: { marginTop: "auto", paddingTop: 10 },
   meter: { height: 7, borderRadius: 999, backgroundColor: colors.primarySoft, overflow: "hidden", marginTop: 4 },
   meterFill: { height: "100%", borderRadius: 999, backgroundColor: colors.primary },
   // จอแคบวางสองใบต่อแถว จอกว้างวางสี่ใบเรียงเดียว
   summaryCardNarrow: { flexGrow: 1, flexBasis: "46%", minWidth: 0 },
   summaryCardWide: { flexGrow: 1, flexBasis: 0, minWidth: 0 },
-  summaryLabel: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.body, paddingRight: 52 },
-  summaryValue: { fontSize: 34, lineHeight: 42, fontWeight: "700", marginTop: 10 },
   summaryUnit: { fontSize: 15, fontWeight: "500", color: colors.body },
   summarySub: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
 
-  tabs: {
-    flexDirection: "row",
-    gap: 4,
-    backgroundColor: colors.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 4,
-    marginTop: spacing.lg,
-    alignSelf: "flex-start",
-  },
-  tab: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg, borderRadius: radius.sm },
-  tabActive: { backgroundColor: colors.text },
-  tabText: { fontSize: 14, lineHeight: 22, fontWeight: "600", color: colors.textMuted },
-  tabTextActive: { color: "#fff" },
 
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    marginTop: spacing.md,
-  },
   searchInput: {
     flex: 1,
     minWidth: 0,
@@ -1832,135 +2405,13 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
 
-  filterRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  chipWarning: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
-  chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  chipTextWarning: { color: colors.warningInk },
 
-  groupPicker: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    paddingVertical: 3,
-    paddingHorizontal: spacing.sm,
-  },
-  groupLabel: { fontSize: 12, lineHeight: 20, color: colors.textFaint, marginRight: 2 },
-  groupOption: { paddingVertical: 3, paddingHorizontal: spacing.sm, borderRadius: radius.pill },
-  groupOptionActive: { backgroundColor: colors.primarySoft },
-  groupOptionText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
-  groupOptionTextActive: { color: colors.primary, fontWeight: "700" },
 
-  statusFilterRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: spacing.xs,
-    marginTop: spacing.md,
-  },
-  statusFilterChip: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    paddingVertical: 3,
-    paddingHorizontal: spacing.md,
-  },
-  statusFilterChipText: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
 
-  controlBar: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  inlineControl: { marginTop: 0, alignSelf: "auto" },
-  inlineSearch: { marginTop: 0, flexGrow: 1, flexBasis: 260, minWidth: 0 },
 
-  regionRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: spacing.xs,
-    marginTop: spacing.md,
-  },
 
-  sortRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
-  sortLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
-  sortButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  sortButtonText: { fontSize: 12, lineHeight: 20, color: colors.text },
 
   loading: { paddingVertical: spacing.xxl, alignItems: "center" },
-
-  section: {
-    backgroundColor: colors.card,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: "hidden",
-    marginTop: spacing.lg,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.background,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  sectionTitle: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
-  countBadge: {
-    backgroundColor: colors.border,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  countBadgeText: { fontSize: 11, lineHeight: 18, color: colors.textMuted },
-  staleBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: colors.warningSoft,
-    borderWidth: 1,
-    borderColor: colors.warningBorder,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  staleBadgeText: { fontSize: 11, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
 
   // หัวตารางกับแถวตาม .tbl ของต้นแบบ
   tableHeader: {
@@ -1990,23 +2441,12 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   cellText: { fontSize: 14, lineHeight: 22, color: colors.body, paddingRight: spacing.sm },
-  cellCode: { fontWeight: "700", color: colors.text },
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
-  cellMono: { fontSize: 14, lineHeight: 22, color: colors.body, paddingRight: spacing.sm },
-  slaText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
   noteCell: {
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
     gap: spacing.xs,
-    paddingRight: spacing.sm,
-  },
-  scoreCell: {
-    fontSize: 15,
-    lineHeight: 24,
-    fontWeight: "700",
-    color: colors.dangerInk,
-    textAlign: "right",
     paddingRight: spacing.sm,
   },
   scoreBadge: {
@@ -2041,7 +2481,6 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   visitInputBad: { borderColor: colors.danger },
-  slaTextBreached: { color: colors.warningInk },
 
   cardList: { padding: spacing.md, gap: spacing.sm },
   card: {
@@ -2218,68 +2657,6 @@ const styles = StyleSheet.create({
   logSymptom: { fontSize: 12, lineHeight: 20, color: colors.text },
 
   picker: { gap: spacing.xs },
-  pickedList: { gap: spacing.xs },
-  picked: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  pickedText: { flex: 1, minWidth: 0 },
-  pickedCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
-  pickedName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
-  qtyInput: {
-    width: 52,
-    textAlign: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    backgroundColor: colors.card,
-    paddingVertical: spacing.xs,
-    fontSize: 14,
-    lineHeight: 22,
-    color: colors.text,
-  },
-  qtyUnit: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
-  pickerSearch: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
-  },
-  pickerInput: {
-    flex: 1,
-    minWidth: 0,
-    paddingVertical: spacing.sm,
-    fontSize: 14,
-    lineHeight: 22,
-    color: colors.text,
-  },
-  pickerResults: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    overflow: "hidden",
-  },
-  pickerResult: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  pickerResultName: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.sm },
   modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
   modalCancel: {
