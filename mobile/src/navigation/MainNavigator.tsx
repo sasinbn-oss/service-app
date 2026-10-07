@@ -53,13 +53,45 @@ import {
   MainTabParamList,
 } from "./types";
 
-const commonScreenOptions = {
+/**
+ * ปุ่มซ้ายบนของหน้าย่อย: ย้อนกลับ + ☰
+ *
+ * เดิมมี ☰ เฉพาะหน้าแรกของแต่ละแท็บ หน้าที่เปิดจากเมนูข้าง (เช่นติดตามเครื่องเสีย)
+ * เหลือแค่ลูกศรย้อนกลับ ซ่อน/เปิดเมนูข้างไม่ได้ทั้งที่ตารางต้องการที่กว้าง —
+ * ต้นแบบมี ☰ ทุกหน้า จึงใส่ทุกหน้า และเก็บลูกศรไว้ข้างกันให้ย้อนกลับได้เหมือนเดิม
+ */
+function SubPageHeaderLeft({ onBack }: { onBack?: () => void }) {
+  return (
+    <View style={styles.headerLeft}>
+      {onBack ? (
+        <TouchableOpacity style={styles.backBtn} onPress={onBack} accessibilityLabel="ย้อนกลับ">
+          <Ionicons name="arrow-back" size={24} color={colors.navy} />
+        </TouchableOpacity>
+      ) : null}
+      <MenuButton />
+    </View>
+  );
+}
+
+const baseScreenOptions = {
   headerStyle: { backgroundColor: colors.card },
   headerTintColor: colors.navy,
   headerTitleStyle: { ...headingFont, fontSize: 17, fontWeight: "700" as const, color: colors.text },
   headerShadowVisible: false,
   contentStyle: { backgroundColor: colors.background },
 };
+
+const commonScreenOptions = ({
+  navigation,
+}: {
+  navigation: { canGoBack: () => boolean; goBack: () => void };
+}) => ({
+  ...baseScreenOptions,
+  headerBackVisible: false,
+  headerLeft: () => (
+    <SubPageHeaderLeft onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined} />
+  ),
+});
 
 /**
  * ชื่อระบบบนแถบบนของหน้าแรกแต่ละแท็บ
@@ -469,6 +501,8 @@ export default function MainNavigator() {
 }
 
 const styles = StyleSheet.create({
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 4, marginRight: 8 },
+  backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 12 },
   tabBar: {
     backgroundColor: colors.card,
     borderTopColor: colors.border,

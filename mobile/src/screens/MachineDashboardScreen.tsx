@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -201,10 +202,14 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   // จอคอมเต็มๆ ยุบแถบตัวกรองให้เตี้ยลง จะได้เห็นแถวข้อมูลมากขึ้นต่อหนึ่งหน้าจอ
   const roomy = width >= 1000;
   /**
-   * ความกว้างที่ตารางมีจริง = ความกว้างหน้าจอ (ไม่เกินเพดานของ AppShell)
-   * ลบ padding ของหน้า ของการ์ดกลุ่ม และเส้นขอบ
+   * ความกว้างที่ตารางมีจริง = ความกว้างของหน้านี้ที่วัดได้ ลบ padding ของหน้า ของการ์ดกลุ่ม และเส้นขอบ
+   *
+   * วัดจากหน้าจริง ไม่ใช่ความกว้างหน้าต่าง เพราะบนจอคอมมีเมนูข้างกินไป 280 px
+   * และแถบเลื่อนแนวตั้งอีกราว 16 px — คิดจากหน้าต่างแล้วคอลัมน์ขวาสุดล้นออกนอกจอ
    */
-  const tableWidth = Math.min(width, 1600) - spacing.lg * 2 - spacing.md * 2 - 2;
+  const [pageWidth, setPageWidth] = useState(width);
+  const scrollbar = Platform.OS === "web" ? 16 : 0;
+  const tableWidth = Math.min(pageWidth, 1600) - scrollbar - spacing.lg * 2 - spacing.md * 2 - 2;
   const { user } = useAuth();
 
   const [tab, setTab] = useState<Tab>("machines");
@@ -411,6 +416,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   return (
     <ScrollView
       style={styles.container}
+      onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
       refreshControl={
