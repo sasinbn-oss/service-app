@@ -4,7 +4,7 @@
  * ต่างจากกระดานติดตามเครื่องเสีย ซึ่งบอกว่า "เครื่องไหนมีปัญหา" หน้านี้บอกว่า
  * "ใครต้องไปทำอะไร" เคสหนึ่งอาจมีใบงานหลายใบ ถ้าช่างต้องเข้าไปหลายรอบ
  */
-import React, { useCallback, useState } from "react";
+import React, { useRef, useCallback, useState } from "react";
 import {
   useWindowDimensions,
   FlatList,
@@ -125,7 +125,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // นับรอบการโหลด — สลับชิปเร็ว ๆ คำตอบของชิปก่อนหน้าอาจมาถึงทีหลัง
+  // ต้องทิ้งคำตอบเก่า ไม่งั้นชิป "ปิดแล้ว" อาจโชว์รายการของ "ที่ยังค้าง"
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setError(null);
     try {
       const res = await api.get<{ rows: WorkOrderRow[]; counts: Record<string, number> }>(
@@ -138,14 +143,28 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           },
         }
       );
+      if (seq !== loadSeq.current) return;
       setRows(res.data.rows);
       setCounts(res.data.counts);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(apiErrorMessage(e));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [filter, mineOnly, settledSearch]);
+
+  /**
+   * เลือกหัวข้อ (ชิป) แล้วขึ้นเครื่องซักผ้าแทนรายการเดิมระหว่างโหลด
+   *
+   * ต่างจากกลับมาหน้าเดิมที่โชว์ข้อมูลเก่าไว้ก่อน — กดชิปแล้วรายการเดิมค้างอยู่
+   * คือรายการของหัวข้อที่ไม่ได้เลือกแล้ว คนจะเข้าใจผิดว่าเป็นของหัวข้อใหม่
+   */
+  function chooseFilter(next: Filter) {
+    if (next === filter) return;
+    setLoading(true);
+    setFilter(next);
+  }
 
   // โหลดใหม่ทุกครั้งที่กลับมาหน้านี้ เพราะเพิ่งไปปิดงานมาแล้วตัวเลขต้องเปลี่ยน
   useFocusEffect(
@@ -205,7 +224,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             <TouchableOpacity
               key={f.value}
               style={[styles.chip, filter === f.value && styles.chipOn]}
-              onPress={() => setFilter(f.value)}
+              onPress={() => chooseFilter(f.value)}
               activeOpacity={0.7}
             >
               <Text style={[styles.chipText, filter === f.value && styles.chipTextOn]}>
@@ -216,7 +235,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ))}
           <TouchableOpacity
             style={[styles.chip, mineOnly && styles.chipOn]}
-            onPress={() => setMineOnly((v) => !v)}
+            onPress={() => {
+              setLoading(true);
+              setMineOnly((v) => !v);
+            }}
             activeOpacity={0.7}
           >
             <Text style={[styles.chipText, mineOnly && styles.chipTextOn]}>เฉพาะงานของฉัน</Text>
