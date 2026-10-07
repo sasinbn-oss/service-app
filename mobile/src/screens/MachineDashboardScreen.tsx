@@ -423,19 +423,19 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         <RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} />
       }
     >
+      {/* หัวหน้าแบบต้นแบบ OTTERI: ชื่อหน้าใหญ่ + เวลาข้อมูลใต้ชื่อ ปุ่มอยู่ขวาบน */}
       <View style={styles.topRow}>
-        {data ? (
-          <Text style={styles.updatedAt}>ข้อมูล ณ {formatDateTime(data.now)} น.</Text>
-        ) : (
-          <View />
-        )}
+        <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 220 }}>
+          <Text style={[styles.pageTitle, headingFont]}>ติดตามเครื่องเสีย</Text>
+          {data ? <Text style={styles.updatedAt}>ข้อมูล ณ {formatDateTime(data.now)} น.</Text> : null}
+        </View>
         <View style={styles.topActions}>
           <TouchableOpacity
             style={styles.importButton}
             onPress={() => setShowActivity(true)}
             activeOpacity={0.7}
           >
-            <Ionicons name="time-outline" size={15} color={colors.primary} />
+            <Ionicons name="time-outline" size={18} color={colors.primaryInk} />
             <Text style={styles.importButtonText}>ประวัติการกรอก</Text>
           </TouchableOpacity>
           {user?.role === "ADMIN" ? (
@@ -444,8 +444,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
               onPress={() => navigation.navigate("MachineImport")}
               activeOpacity={0.7}
             >
-              <Ionicons name="cloud-upload-outline" size={15} color={colors.primary} />
-              <Text style={styles.importButtonText}>อัปโหลดไฟล์</Text>
+              <Ionicons name="cloud-upload-outline" size={18} color={colors.primaryInk} />
+              <Text style={styles.importButtonText}>อัปโหลดไฟล์รอบใหม่</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -468,39 +468,55 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         />
       </View>
 
+      {/*
+        การ์ดตัวเลขแบบต้นแบบ 4 ใบ — COCO/DODO เดิมเป็นการ์ดของตัวเอง ย้ายมาอยู่บรรทัดล่างของใบแรก
+        ไม่ได้ย้ายไปไว้บนปุ่มกรอง COCO/DODO เพราะตัวเลขนับตามตัวกรองที่เลือกอยู่
+        เลือก COCO แล้วปุ่ม DODO จะขึ้น 0 ทั้งที่จริงไม่ใช่
+      */}
       <View style={styles.summaryRow}>
-        <SummaryCard
+        <KpiCard
           label={isMachines ? "เครื่องดับ" : "สาขาสัญญาณหาย"}
           value={data?.summary.total ?? 0}
-          sub={isMachines ? `ใน ${data?.summary.branchesAffected ?? 0} สาขา` : undefined}
-          color={isMachines ? colors.danger : colors.warning}
-          icon={isMachines ? "power" : "wifi-outline"}
+          unit={isMachines ? "เครื่อง" : "สาขา"}
+          foot={
+            isMachines
+              ? `ใน ${data?.summary.branchesAffected ?? 0} สาขา · COCO ${data?.summary.COCO ?? 0} · DODO ${data?.summary.DODO ?? 0}`
+              : data?.summary.machinesAffected
+                ? `กระทบ ${data.summary.machinesAffected} เครื่อง · COCO ${data.summary.COCO} · DODO ${data.summary.DODO}`
+                : "ยังไม่รู้ว่าเครื่องเสียหรือเน็ตหลุด"
+          }
+          tone={isMachines ? "primary" : "navy"}
+          icon={isMachines ? "power" : "cloud-offline-outline"}
           wide={wide}
         />
-        <SummaryCard
-          label={`เลย SLA ${slaHours} ชม.`}
+        <KpiCard
+          label={`เกิน SLA ${slaHours} ชม.`}
           value={data?.summary.breached ?? 0}
-          color={colors.warningInk}
-          icon="alert-circle"
+          unit="เคส"
+          foot="ต้องเร่งก่อน"
+          tone="red"
+          icon="warning-outline"
           wide={wide}
         />
-        <SummaryCard
+        <KpiCard
           label="คะแนนรวม"
           value={data?.summary.totalScore ?? 0}
-          sub={`วันละ ${data?.scorePerDay ?? 1} ต่อรายการ`}
-          color={colors.dangerInk}
-          icon="speedometer"
+          unit="คะแนน"
+          foot={`วันละ ${data?.scorePerDay ?? 1} ต่อรายการ`}
+          tone="amber"
+          icon="speedometer-outline"
           wide={wide}
         />
-        <SummaryCard label="COCO" value={data?.summary.COCO ?? 0} color={colors.text} icon="business" wide={wide} />
-        <SummaryCard label="DODO" value={data?.summary.DODO ?? 0} color={colors.text} icon="storefront" wide={wide} />
+        <KpiCard
+          label="มีใบงานแล้ว"
+          value={data ? data.rows.filter((r) => r.workOrder).length : 0}
+          unit={`/ ${data?.rows.length ?? 0}`}
+          progress={data && data.rows.length ? data.rows.filter((r) => r.workOrder).length / data.rows.length : 0}
+          tone="green"
+          icon="clipboard-outline"
+          wide={wide}
+        />
       </View>
-
-      {!isMachines && data?.summary.machinesAffected ? (
-        <Text style={styles.affected}>
-          กระทบเครื่องรวม {data.summary.machinesAffected} เครื่องใน {data.summary.total} สาขา
-        </Text>
-      ) : null}
 
       {/* จอกว้างเอาตัวควบคุมมาต่อกันในบรรทัดเดียว ประหยัดพื้นที่แนวตั้งให้ตารางแทน */}
       <View style={roomy ? styles.controlBar : undefined}>
@@ -694,6 +710,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                 onEdit={setEditing}
                 onWorkOrder={openWorkOrder}
                 available={tableWidth}
+                slaLimit={slaHours}
               />
             ) : (
               <View style={styles.cardList}>
@@ -1182,29 +1199,64 @@ function SortButton({
   );
 }
 
-function SummaryCard({
+type KpiTone = "primary" | "navy" | "red" | "amber" | "green";
+
+/** สีของการ์ดตัวเลขตาม .kpi / .kpi.navy / .kpi.red / .kpi.amber / .kpi.green ของต้นแบบ */
+const KPI_TONE: Record<KpiTone, { tile: string; fg: string }> = {
+  primary: { tile: colors.primarySoft, fg: colors.primaryInk },
+  navy: { tile: colors.sky200, fg: colors.navy },
+  red: { tile: "#FEE2E2", fg: colors.dangerInk },
+  amber: { tile: "#FEF3C7", fg: colors.warningInk },
+  green: { tile: "#D1FAE5", fg: colors.successInk },
+};
+
+/**
+ * การ์ดตัวเลขสรุปแบบ OTTERI: หัวข้อซ้ายบน ไอคอนในกล่องสีขวาบน ตัวเลขใหญ่พร้อมหน่วย
+ * และบรรทัดล่างบอกความหมาย — ตัวเลขเปล่า ๆ คนต้องเดาว่า 12 คือเครื่อง สาขา หรือเคส
+ */
+function KpiCard({
   label,
   value,
-  sub,
-  color,
+  unit,
+  foot,
+  progress,
+  tone,
   icon,
   wide,
 }: {
   label: string;
   value: number;
-  sub?: string;
-  color: string;
+  unit?: string;
+  foot?: string;
+  /** 0–1 ใส่เมื่ออยากให้มีแถบความคืบหน้าแทนบรรทัดล่าง */
+  progress?: number;
+  tone: KpiTone;
   icon: keyof typeof Ionicons.glyphMap;
   wide: boolean;
 }) {
+  const t = KPI_TONE[tone];
   return (
     <View style={[styles.summaryCard, wide ? styles.summaryCardWide : styles.summaryCardNarrow]}>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.summaryLabel}>{label}</Text>
-        <Text style={[styles.summaryValue, headingFont, { color }]}>{value}</Text>
-        {sub ? <Text style={styles.summarySub}>{sub}</Text> : null}
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <View style={[styles.kpiIcon, { backgroundColor: t.tile }]}>
+        <Ionicons name={icon} size={22} color={t.fg} />
       </View>
-      <Ionicons name={icon} size={24} color={color} style={{ opacity: 0.35 }} />
+      <Text style={[styles.summaryValue, headingFont, { color: t.fg }]}>
+        {value.toLocaleString("th-TH")}
+        {unit ? <Text style={styles.summaryUnit}> {unit}</Text> : null}
+      </Text>
+      {progress !== undefined ? (
+        <View style={styles.kpiFoot}>
+          <Text style={styles.summarySub}>{Math.round(progress * 100)}%</Text>
+          <View style={styles.meter}>
+            <View style={[styles.meterFill, { width: `${Math.round(progress * 100)}%` }]} />
+          </View>
+        </View>
+      ) : foot ? (
+        <View style={styles.kpiFoot}>
+          <Text style={styles.summarySub}>{foot}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1239,21 +1291,19 @@ interface Column {
 function columnsFor(isMachines: boolean, available: number): Column[] {
   const columns: Column[] = isMachines
     ? [
-        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 80 },
-        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 170 },
+        { id: "branchName", key: "branchCode", label: "สาขา", width: 250 },
         { id: "machineCode", key: "machineCode", label: "เครื่อง", width: 70 },
         { id: "brand", label: "ยี่ห้อเครื่อง", width: 100 },
         { id: "zone", label: "ทีมช่าง", width: 92 },
         { id: "grade", label: "Grade", width: 52 },
-        { id: "sla", key: "slaHours", label: "ดับมาแล้ว", width: 150 },
+        { id: "sla", key: "slaHours", label: "ดับมาแล้ว", width: 210 },
         { id: "score", key: "score", label: "คะแนน", width: 66 },
       ]
     : [
-        { id: "branchCode", key: "branchCode", label: "รหัสสาขา", width: 84 },
-        { id: "branchName", key: "branchName", label: "ชื่อสาขา", width: 228 },
+        { id: "branchName", key: "branchCode", label: "สาขา", width: 312 },
         { id: "machineCount", label: "เครื่องในสาขา", width: 96 },
         { id: "zone", label: "ทีมช่าง", width: 104 },
-        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 172 },
+        { id: "sla", key: "slaHours", label: "สัญญาณหายมาแล้ว", width: 220 },
         { id: "score", key: "score", label: "คะแนน", width: 66 },
       ];
 
@@ -1289,7 +1339,9 @@ function OutageTable({
   onEdit,
   onWorkOrder,
   available,
+  slaLimit,
 }: {
+  slaLimit: number;
   rows: OutageRow[];
   isMachines: boolean;
   sortKey: SortKey;
@@ -1332,7 +1384,7 @@ function OutageTable({
         {rows.map((row) => (
           <TouchableOpacity
             key={row.id}
-            style={[styles.tableRow, row.breached && styles.tableRowBreached]}
+            style={styles.tableRow}
             onPress={() => onEdit(row)}
             activeOpacity={0.6}
           >
@@ -1343,6 +1395,7 @@ function OutageTable({
                     column={column.id}
                     row={row}
                     onWorkOrder={() => onWorkOrder(row)}
+                    slaLimit={slaLimit}
                   />
                 </View>
               ))}
@@ -1365,10 +1418,12 @@ function TableCell({
   column,
   row,
   onWorkOrder,
+  slaLimit,
 }: {
   column: ColumnId;
   row: OutageRow;
   onWorkOrder: () => void;
+  slaLimit: number;
 }) {
   switch (column) {
     case "workOrder":
@@ -1376,7 +1431,12 @@ function TableCell({
     case "branchCode":
       return <Text style={styles.cellMono}>{row.branchCode}</Text>;
     case "branchName":
-      return <Text style={styles.cellText}>{row.branchName}</Text>;
+      // "C0006 · ชื่อสาขา" แบบต้นแบบ — รหัสกับชื่อเป็นของชิ้นเดียวกัน แยกสองคอลัมน์เปลืองที่และกวาดตายาก
+      return (
+        <Text style={styles.cellText}>
+          <Text style={[styles.cellCode, headingFont]}>{row.branchCode}</Text> · {row.branchName}
+        </Text>
+      );
     case "machineCode":
       return <Text style={styles.cellMono}>{row.machineCode}</Text>;
     case "brand":
@@ -1397,15 +1457,23 @@ function TableCell({
         </View>
       );
     }
-    case "sla":
+    case "sla": {
+      // สีตามต้นแบบ: เกิน SLA แดง · ใช้ไปเกิน 60% เหลือง · ยังห่าง เขียว
+      const tone = row.breached
+        ? colors.dangerInk
+        : row.slaHours > slaLimit * 0.6
+          ? colors.warningInk
+          : colors.successInk;
       return (
         <>
-          <Text style={[styles.slaText, row.breached && styles.slaTextBreached]}>
-            {slaText(row.slaHours)}
+          <Text style={styles.cellText}>
+            <Text style={[styles.slaText, headingFont, { color: tone }]}>{slaText(row.slaHours)}</Text>
+            <Text style={styles.cellSub}> / SLA {slaLimit} ชม.</Text>
           </Text>
           <Text style={styles.cellSub}>ตั้งแต่ {formatDateTime(row.startedAt)}</Text>
         </>
       );
+    }
     case "score":
       return <Text style={styles.scoreCell}>{row.score}</Text>;
     case "note":
@@ -1461,7 +1529,6 @@ function WorkOrderCell({ row, onPress }: { row: OutageRow; onPress: () => void }
   if (row.workOrder) {
     return (
       <TouchableOpacity style={styles.woChip} onPress={onPress} activeOpacity={0.7}>
-        <Ionicons name="clipboard" size={11} color={colors.primaryDark} />
         <View style={styles.woChipText}>
           <Text style={styles.woChipCode}>{row.workOrder.code}</Text>
           <Text style={styles.woChipStatus} numberOfLines={1}>
@@ -1473,7 +1540,7 @@ function WorkOrderCell({ row, onPress }: { row: OutageRow; onPress: () => void }
   }
   return (
     <TouchableOpacity style={styles.woButton} onPress={onPress} activeOpacity={0.7}>
-      <Ionicons name="add" size={13} color={colors.primary} />
+      <Ionicons name="add" size={18} color="#fff" />
       <Text style={styles.woButtonText}>สร้างใบงาน</Text>
     </TouchableOpacity>
   );
@@ -1607,33 +1674,36 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   fromWoButtonText: { fontSize: 12, lineHeight: 20, color: "#fff", fontWeight: "700" },
+  // .btn-primary.btn-sm ของต้นแบบ — ยังไม่มีใบงานคือสิ่งที่ต้องทำ จึงเป็นปุ่มสีเด่น
   woButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 2,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: radius.pill,
-    paddingVertical: 4,
-    paddingHorizontal: spacing.sm,
+    gap: 4,
+    minHeight: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: colors.primary,
     alignSelf: "flex-start",
+    ...shadow.raised,
   },
-  woButtonText: { fontSize: 11, lineHeight: 19, color: colors.primary, fontWeight: "700" },
+  woButtonText: { fontSize: 13, lineHeight: 20, color: "#fff", fontWeight: "700" },
+  // .btn-light.btn-sm — มีใบงานแล้ว กดเพื่อเปิดดู
   woChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.pill,
+    backgroundColor: colors.sky50,
+    borderRadius: 12,
+    minHeight: 38,
     paddingVertical: 4,
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: 12,
     alignSelf: "flex-start",
     maxWidth: "100%",
   },
   woChipText: { minWidth: 0, flexShrink: 1 },
-  woChipCode: { fontSize: 11, lineHeight: 17, fontWeight: "700", color: colors.primaryDark },
-  woChipStatus: { fontSize: 10, lineHeight: 16, color: colors.primaryDark },
+  woChipCode: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.primaryInk },
+  woChipStatus: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
   cardWorkOrder: {
     marginTop: spacing.sm,
     paddingTop: spacing.sm,
@@ -1645,23 +1715,26 @@ const styles = StyleSheet.create({
 
   topRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
     gap: spacing.sm,
     marginBottom: spacing.md,
   },
   // ตัวอักษรไทยมีสระบนและวรรณยุกต์ lineHeight ต้องสูงกว่า fontSize ชัดเจน
-  updatedAt: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
+  updatedAt: { fontSize: 14, lineHeight: 22, color: colors.textMuted },
+  // .btn-light ของต้นแบบ
   importButton: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+    gap: 6,
+    minHeight: 44,
+    backgroundColor: colors.sky50,
+    borderRadius: 12,
+    paddingHorizontal: 16,
   },
-  importButtonText: { fontSize: 12, lineHeight: 20, color: colors.primary, fontWeight: "700" },
+  importButtonText: { fontSize: 15, lineHeight: 22, color: colors.primaryInk, fontWeight: "700" },
   topActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
 
   mainTabs: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
@@ -1695,22 +1768,34 @@ const styles = StyleSheet.create({
 
   summaryRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   summaryCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
     backgroundColor: colors.card,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 18,
+    minHeight: 132,
     ...shadow.card,
   },
+  kpiIcon: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  kpiFoot: { marginTop: "auto", paddingTop: 10 },
+  meter: { height: 7, borderRadius: 999, backgroundColor: colors.primarySoft, overflow: "hidden", marginTop: 4 },
+  meterFill: { height: "100%", borderRadius: 999, backgroundColor: colors.primary },
   // จอแคบวางสองใบต่อแถว จอกว้างวางสี่ใบเรียงเดียว
   summaryCardNarrow: { flexGrow: 1, flexBasis: "46%", minWidth: 0 },
   summaryCardWide: { flexGrow: 1, flexBasis: 0, minWidth: 0 },
-  summaryLabel: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
-  summaryValue: { fontSize: 24, lineHeight: 34, fontWeight: "700" },
-  summarySub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
-  affected: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: spacing.sm },
+  summaryLabel: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.body, paddingRight: 52 },
+  summaryValue: { fontSize: 34, lineHeight: 42, fontWeight: "700", marginTop: 10 },
+  summaryUnit: { fontSize: 15, fontWeight: "500", color: colors.body },
+  summarySub: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
 
   tabs: {
     flexDirection: "row",
@@ -1841,7 +1926,7 @@ const styles = StyleSheet.create({
 
   section: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
     overflow: "hidden",
@@ -1878,20 +1963,23 @@ const styles = StyleSheet.create({
   },
   staleBadgeText: { fontSize: 11, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
 
+  // หัวตารางกับแถวตาม .tbl ของต้นแบบ
   tableHeader: {
     flexDirection: "row",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: "#F8FAFD",
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   tableHeaderCell: { flexDirection: "row", alignItems: "center", gap: 4 },
-  tableHeaderText: { fontSize: 11, lineHeight: 18, color: colors.textMuted, fontWeight: "600" },
+  tableHeaderText: { fontSize: 12, lineHeight: 18, color: colors.textMuted, fontWeight: "700", letterSpacing: 0.4 },
   tableRow: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    backgroundColor: colors.card,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: "#EEF2F7",
   },
   // ช่อง SLA มีสองบรรทัด ชิดบนอ่านง่ายกว่าจัดกึ่งกลาง
   tableRowMain: { flexDirection: "row", alignItems: "flex-start" },
@@ -1902,11 +1990,11 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     paddingTop: 4,
   },
-  tableRowBreached: { backgroundColor: colors.warningSoft },
-  cellText: { fontSize: 13, lineHeight: 21, color: colors.text, paddingRight: spacing.sm },
+  cellText: { fontSize: 14, lineHeight: 22, color: colors.body, paddingRight: spacing.sm },
+  cellCode: { fontWeight: "700", color: colors.text },
   cellSub: { fontSize: 11, lineHeight: 18, color: colors.textFaint },
-  cellMono: { fontSize: 12, lineHeight: 20, color: colors.textMuted, paddingRight: spacing.sm },
-  slaText: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
+  cellMono: { fontSize: 14, lineHeight: 22, color: colors.body, paddingRight: spacing.sm },
+  slaText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
   noteCell: {
     flexDirection: "row",
     flexWrap: "wrap",
