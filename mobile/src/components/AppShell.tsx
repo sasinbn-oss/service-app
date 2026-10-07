@@ -64,7 +64,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <SetDockContext.Provider value={setDock}>
       <SetWideContext.Provider value={setWide}>
         <View style={styles.backdrop}>
-          <View style={[styles.column, { maxWidth: (wide ? DATA_WIDTH : FORM_WIDTH) + dock }]}>
+          {/*
+            มีเมนูค้างด้านซ้าย = จอคอม ทุกหน้าใช้ความกว้างเต็มแบบต้นแบบ OTTERI
+            เดิมเฉพาะหน้าตารางขอกว้างได้ หน้าอื่นค้างที่ 820 px ผลคือเปิดเมนูไปมา
+            แล้วบางหน้าเต็มจอ บางหน้ามีขอบฟ้าสองข้าง ดูเหมือนหน้าโหลดไม่ครบ
+          */}
+          <View
+            style={[styles.column, { maxWidth: (dock > 0 || wide ? DATA_WIDTH : FORM_WIDTH) + dock }]}
+          >
             {children}
           </View>
         </View>
