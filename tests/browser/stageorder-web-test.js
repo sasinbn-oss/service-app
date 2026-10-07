@@ -48,7 +48,7 @@ const DIR = __dirname;
     // ── ใบที่ต้องเสนอราคา (สาขา D หมดประกัน) ──
     await page.goto("http://127.0.0.1:8081/work-orders/656", { waitUntil: "networkidle" }).catch(() => {});
     await page.waitForTimeout(3000);
-    if ((await page.getByText("ขั้นตอนงาน", { exact: true }).locator("visible=true").count()) === 0) {
+    if ((await page.getByLabel("ขั้นตอนงาน", { exact: true }).locator("visible=true").count()) === 0) {
       // เปิดผ่าน URL ไม่ได้ ให้เดินผ่านหน้ารายการแทน
       await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
       await page.waitForTimeout(2500);
@@ -63,11 +63,8 @@ const DIR = __dirname;
     // ด้านบนด้วย ถ้าสแกนทั้งหน้าจะได้ลำดับของหน้าจอ ไม่ใช่ลำดับของแถบขั้นตอน
     const stageCard = () =>
       page.evaluate(() => {
-        const title = [...document.querySelectorAll("*")].find(
-          (n) => !n.children.length && (n.textContent || "").trim() === "ขั้นตอนงาน"
-        );
-        if (!title) return null;
-        const card = title.closest("div")?.parentElement;
+        // แถบขั้นตอนมี aria-label "ขั้นตอนงาน" (ย้ายขึ้นไปอยู่ในการ์ดหัวใบงานแล้ว ไม่มีหัวข้อของตัวเอง)
+        const card = document.querySelector('[aria-label="ขั้นตอนงาน"]');
         if (!card) return null;
         const labels = [
           "รอหัวหน้าภาคระบุอะไหล่", "รอเสนอราคาลูกค้า", "รอลูกค้าจ่ายเงิน",
