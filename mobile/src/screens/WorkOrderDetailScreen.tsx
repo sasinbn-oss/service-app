@@ -404,6 +404,210 @@ export default function WorkOrderDetailScreen({ route }: Props) {
         <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
       </View>
 
+      {/*
+        เส้นทางเดินงานกับปุ่มของขั้นนี้อยู่ใต้หัวใบงานทันที แบบต้นแบบ OTTERI —
+        คนเปิดใบงานส่วนใหญ่เปิดมาเพื่อทำขั้นถัดไป เดิมต้องเลื่อนผ่านรายละเอียดกับรูปก่อนถึงปุ่ม
+      */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
+        {/*
+          แถบแนวนอนแบบต้นแบบ OTTERI — เห็นทั้งเส้นในแวบเดียวว่ามาถึงไหน
+          จอแคบเลื่อนซ้ายขวาได้ แทนการบีบชื่อขั้นจนอ่านไม่ออก
+        */}
+        <ScrollView
+          ref={stepScroll}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.steps}
+        >
+        {stages.map((stage, i) => {
+          const currentIndex = stages.findIndex((x) => x.value === order.status);
+          /**
+           * ขั้นที่ถูกข้าม ต้องเห็นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
+           *
+           * เบิกอะไหล่ถูกข้ามเมื่องานนี้ไม่ใช้อะไหล่ ส่วนเสนอราคากับรับเงินถูกข้าม
+           * เมื่อไม่ใช่ของที่ขายลูกค้า — และตอนนี้สองขั้นนั้นอยู่ก่อนเบิกอะไหล่
+           * ถ้าไม่ทำเครื่องหมายไว้ ใบที่ไม่ต้องเสนอราคาจะขึ้นว่าทำสองขั้นนั้นไปแล้ว
+           * ทั้งที่ไม่เคยทำ เพราะมันอยู่ก่อนขั้นปัจจุบัน
+           */
+          /**
+           * "ไม่ต้องทำ" ตัดสินจากกฎวันนี้ ส่วน "ทำไปแล้ว" เป็นของที่เกิดขึ้นจริง
+           * ของจริงชนะกฎเสมอ — ใบที่มีใบเสนอราคาแนบอยู่ คือใบที่เสนอราคาไปแล้ว
+           *
+           * สำคัญกับใบเก่า: กฎประกัน 3 ปีทำให้สาขาแฟรนไชส์ 245 สาขากลับมาอยู่ใน
+           * ประกัน ใบที่เคยผ่านขั้นเสนอราคาไปแล้วตอนที่ระบบยังตีว่าหมดประกัน
+           * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
+           * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
+           */
+          const skipped =
+            (stage.value === "PARTS_REQUESTED" && order.needsParts === false) ||
+            (stage.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
+            (stage.value === "AWAITING_PAYMENT" &&
+              order.needsQuote === false &&
+              !order.hasReceipt);
+          const state = skipped
+            ? "skipped"
+            : order.status === "CANCELLED"
+              ? "future"
+              : i < currentIndex || order.status === "DONE"
+                ? "done"
+                : i === currentIndex
+                  ? "now"
+                  : "future";
+          // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
+          const number = stages
+            .slice(0, i + 1)
+            .filter(
+              (x) =>
+                !(
+                  (x.value === "PARTS_REQUESTED" && order.needsParts === false) ||
+                  (x.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
+                  (x.value === "AWAITING_PAYMENT" && order.needsQuote === false && !order.hasReceipt)
+                )
+            ).length;
+          return (
+            <View
+              key={stage.value}
+              style={styles.step}
+              // จอแคบเห็นแค่สามขั้นแรก — เลื่อนให้ขั้นปัจจุบันอยู่ในจอเอง
+              // ไม่งั้นใบที่เดินมาถึงขั้นห้าจะเปิดมาเห็นแต่ขั้นที่ผ่านไปแล้ว
+              onLayout={
+                state === "now"
+                  ? (e) => stepScroll.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - 60), animated: false })
+                  : undefined
+              }
+            >
+              {i > 0 ? (
+                <View
+                  style={[styles.stepLine, (state === "done" || state === "now") && styles.stepLineDone]}
+                />
+              ) : null}
+              <View
+                style={[
+                  styles.stepDot,
+                  state === "done" && styles.stepDotDone,
+                  state === "now" && styles.stepDotNow,
+                  state === "skipped" && styles.stepDotSkipped,
+                ]}
+              >
+                {state === "done" ? (
+                  <Ionicons name="checkmark" size={15} color="#fff" />
+                ) : (
+                  <Text style={[styles.stepNum, state === "now" && styles.stepNumNow]}>
+                    {state === "skipped" ? "–" : number}
+                  </Text>
+                )}
+              </View>
+              <Text
+                style={[
+                  styles.stageLabel,
+                  state === "now" && styles.stageLabelNow,
+                  (state === "future" || state === "skipped") && styles.stageLabelFuture,
+                  state === "skipped" && styles.stageLabelSkipped,
+                ]}
+              >
+                {stage.label}
+              </Text>
+              {state === "skipped" ? (
+                <Text style={styles.stageActor}>ข้าม</Text>
+              ) : stage.actorLabel && state !== "done" ? (
+                <Text style={styles.stageActor}>{stage.actorLabel}</Text>
+              ) : null}
+            </View>
+          );
+        })}
+        </ScrollView>
+      </View>
+
+      {!done ? (
+        myTurn(order) ? (
+          <>
+            <View style={styles.actions}>
+{/*
+                ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
+                ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
+                จึงไม่มีขั้นไหนที่ขึ้นทั้งสองปุ่มพร้อมกันอีก
+              */}
+              {order.status === "IN_PROGRESS" ? (
+                <TouchableOpacity
+                  style={[styles.action, styles.actionPrimary]}
+                  onPress={() => setClosing(true)}
+                  disabled={busy}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="checkmark-done" size={18} color="#fff" />
+                  <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.action, styles.actionPrimary]}
+                  onPress={() => setStageOpen(true)}
+                  disabled={busy}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={
+                      order.status === "ASSIGNED"
+                        ? "calendar-outline"
+                        : order.status === "AWAITING_QUOTE"
+                          ? "document-text-outline"
+                          : order.status === "AWAITING_PAYMENT"
+                            ? "cash-outline"
+                            : "arrow-forward-circle"
+                    }
+                    size={18}
+                    color="#fff"
+                  />
+                  <Text style={styles.actionPrimaryText}>
+                    {order.status === "NEW"
+                      ? "ระบุอะไหล่ที่ต้องใช้"
+                      : order.status === "PARTS_REQUESTED"
+                        ? "เช็คอะไหล่ในคลัง"
+                        : order.status === "AWAITING_QUOTE"
+                          ? "เสนอราคาลูกค้า"
+                          : order.status === "AWAITING_PAYMENT"
+                            ? "ลูกค้าจ่ายเงินแล้ว"
+                            : order.status === "PARTS_CHECKED"
+                              ? "จ่ายงานให้ช่าง"
+                              : "นัดวันเข้างาน"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/*
+              ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม
+              ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
+              แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
+            */}
+            {order.status === "IN_PROGRESS" ? (
+              <TouchableOpacity
+                style={styles.rollback}
+                onPress={() => setRollbackOpen(true)}
+                disabled={busy}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
+                <Text style={styles.rollbackText}>
+                  จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค — เลือกอะไหล่ที่ต้องเบิกเพิ่มได้
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
+        ) : (
+          <View style={[styles.card, styles.waitingCard]}>
+            <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
+            <Text style={styles.waitingText}>
+              ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
+              {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
+                ? ` (${order.assignedToName ?? order.assignedTeam})`
+                : ""}
+              {" "}— ยังไม่ถึงคิวของคุณ
+            </Text>
+          </View>
+        )
+      ) : null}
+
       {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
       <View style={styles.card}>
         <View style={styles.headRow}>
@@ -603,207 +807,6 @@ export default function WorkOrderDetailScreen({ route }: Props) {
             </>
           ) : null}
         </View>
-      ) : null}
-
-      {/* เส้นทางเดินงาน — เห็นทั้งเส้นว่ามาถึงไหนและเหลืออีกกี่ขั้น */}
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
-        {/*
-          แถบแนวนอนแบบต้นแบบ OTTERI — เห็นทั้งเส้นในแวบเดียวว่ามาถึงไหน
-          จอแคบเลื่อนซ้ายขวาได้ แทนการบีบชื่อขั้นจนอ่านไม่ออก
-        */}
-        <ScrollView
-          ref={stepScroll}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.steps}
-        >
-        {stages.map((stage, i) => {
-          const currentIndex = stages.findIndex((x) => x.value === order.status);
-          /**
-           * ขั้นที่ถูกข้าม ต้องเห็นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
-           *
-           * เบิกอะไหล่ถูกข้ามเมื่องานนี้ไม่ใช้อะไหล่ ส่วนเสนอราคากับรับเงินถูกข้าม
-           * เมื่อไม่ใช่ของที่ขายลูกค้า — และตอนนี้สองขั้นนั้นอยู่ก่อนเบิกอะไหล่
-           * ถ้าไม่ทำเครื่องหมายไว้ ใบที่ไม่ต้องเสนอราคาจะขึ้นว่าทำสองขั้นนั้นไปแล้ว
-           * ทั้งที่ไม่เคยทำ เพราะมันอยู่ก่อนขั้นปัจจุบัน
-           */
-          /**
-           * "ไม่ต้องทำ" ตัดสินจากกฎวันนี้ ส่วน "ทำไปแล้ว" เป็นของที่เกิดขึ้นจริง
-           * ของจริงชนะกฎเสมอ — ใบที่มีใบเสนอราคาแนบอยู่ คือใบที่เสนอราคาไปแล้ว
-           *
-           * สำคัญกับใบเก่า: กฎประกัน 3 ปีทำให้สาขาแฟรนไชส์ 245 สาขากลับมาอยู่ใน
-           * ประกัน ใบที่เคยผ่านขั้นเสนอราคาไปแล้วตอนที่ระบบยังตีว่าหมดประกัน
-           * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
-           * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
-           */
-          const skipped =
-            (stage.value === "PARTS_REQUESTED" && order.needsParts === false) ||
-            (stage.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
-            (stage.value === "AWAITING_PAYMENT" &&
-              order.needsQuote === false &&
-              !order.hasReceipt);
-          const state = skipped
-            ? "skipped"
-            : order.status === "CANCELLED"
-              ? "future"
-              : i < currentIndex || order.status === "DONE"
-                ? "done"
-                : i === currentIndex
-                  ? "now"
-                  : "future";
-          // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
-          const number = stages
-            .slice(0, i + 1)
-            .filter(
-              (x) =>
-                !(
-                  (x.value === "PARTS_REQUESTED" && order.needsParts === false) ||
-                  (x.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
-                  (x.value === "AWAITING_PAYMENT" && order.needsQuote === false && !order.hasReceipt)
-                )
-            ).length;
-          return (
-            <View
-              key={stage.value}
-              style={styles.step}
-              // จอแคบเห็นแค่สามขั้นแรก — เลื่อนให้ขั้นปัจจุบันอยู่ในจอเอง
-              // ไม่งั้นใบที่เดินมาถึงขั้นห้าจะเปิดมาเห็นแต่ขั้นที่ผ่านไปแล้ว
-              onLayout={
-                state === "now"
-                  ? (e) => stepScroll.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - 60), animated: false })
-                  : undefined
-              }
-            >
-              {i > 0 ? (
-                <View
-                  style={[styles.stepLine, (state === "done" || state === "now") && styles.stepLineDone]}
-                />
-              ) : null}
-              <View
-                style={[
-                  styles.stepDot,
-                  state === "done" && styles.stepDotDone,
-                  state === "now" && styles.stepDotNow,
-                  state === "skipped" && styles.stepDotSkipped,
-                ]}
-              >
-                {state === "done" ? (
-                  <Ionicons name="checkmark" size={15} color="#fff" />
-                ) : (
-                  <Text style={[styles.stepNum, state === "now" && styles.stepNumNow]}>
-                    {state === "skipped" ? "–" : number}
-                  </Text>
-                )}
-              </View>
-              <Text
-                style={[
-                  styles.stageLabel,
-                  state === "now" && styles.stageLabelNow,
-                  (state === "future" || state === "skipped") && styles.stageLabelFuture,
-                  state === "skipped" && styles.stageLabelSkipped,
-                ]}
-              >
-                {stage.label}
-              </Text>
-              {state === "skipped" ? (
-                <Text style={styles.stageActor}>ข้าม</Text>
-              ) : stage.actorLabel && state !== "done" ? (
-                <Text style={styles.stageActor}>{stage.actorLabel}</Text>
-              ) : null}
-            </View>
-          );
-        })}
-        </ScrollView>
-      </View>
-
-      {!done ? (
-        myTurn(order) ? (
-          <>
-            <View style={styles.actions}>
-{/*
-                ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
-                ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
-                จึงไม่มีขั้นไหนที่ขึ้นทั้งสองปุ่มพร้อมกันอีก
-              */}
-              {order.status === "IN_PROGRESS" ? (
-                <TouchableOpacity
-                  style={[styles.action, styles.actionPrimary]}
-                  onPress={() => setClosing(true)}
-                  disabled={busy}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="checkmark-done" size={18} color="#fff" />
-                  <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.action, styles.actionPrimary]}
-                  onPress={() => setStageOpen(true)}
-                  disabled={busy}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={
-                      order.status === "ASSIGNED"
-                        ? "calendar-outline"
-                        : order.status === "AWAITING_QUOTE"
-                          ? "document-text-outline"
-                          : order.status === "AWAITING_PAYMENT"
-                            ? "cash-outline"
-                            : "arrow-forward-circle"
-                    }
-                    size={18}
-                    color="#fff"
-                  />
-                  <Text style={styles.actionPrimaryText}>
-                    {order.status === "NEW"
-                      ? "ระบุอะไหล่ที่ต้องใช้"
-                      : order.status === "PARTS_REQUESTED"
-                        ? "เช็คอะไหล่ในคลัง"
-                        : order.status === "AWAITING_QUOTE"
-                          ? "เสนอราคาลูกค้า"
-                          : order.status === "AWAITING_PAYMENT"
-                            ? "ลูกค้าจ่ายเงินแล้ว"
-                            : order.status === "PARTS_CHECKED"
-                              ? "จ่ายงานให้ช่าง"
-                              : "นัดวันเข้างาน"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/*
-              ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม
-              ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
-              แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
-            */}
-            {order.status === "IN_PROGRESS" ? (
-              <TouchableOpacity
-                style={styles.rollback}
-                onPress={() => setRollbackOpen(true)}
-                disabled={busy}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
-                <Text style={styles.rollbackText}>
-                  จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค — เลือกอะไหล่ที่ต้องเบิกเพิ่มได้
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </>
-        ) : (
-          <View style={[styles.card, styles.waitingCard]}>
-            <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
-            <Text style={styles.waitingText}>
-              ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
-              {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
-                ? ` (${order.assignedToName ?? order.assignedTeam})`
-                : ""}
-              {" "}— ยังไม่ถึงคิวของคุณ
-            </Text>
-          </View>
-        )
       ) : null}
 
       <View style={styles.card}>

@@ -170,6 +170,15 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               <Text style={styles.countPillText}>{rows.length.toLocaleString("th-TH")} ใบ</Text>
             </View>
           ) : null}
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity
+            style={styles.addButton}
+            onPress={() => navigation.navigate("WorkOrderForm")}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
+          </TouchableOpacity>
         </View>
         <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
       </View>
@@ -189,14 +198,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </TouchableOpacity>
           ) : null}
         </View>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => navigation.navigate("WorkOrderForm")}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="add" size={18} color="#fff" />
-          <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
-        </TouchableOpacity>
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
@@ -431,9 +432,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.sm,
+    borderRadius: 12,
     backgroundColor: colors.card,
     paddingHorizontal: spacing.md,
+    minHeight: 46,
   },
   searchInput: {
     flex: 1,
@@ -448,9 +450,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.xs,
     backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    borderRadius: 14,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    ...shadow.raised,
   },
   addButtonText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
   tableList: {
@@ -518,13 +521,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.pill,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
     backgroundColor: colors.card,
   },
-  chipOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  // ชิปที่เลือกเป็นกรมท่าทึบตาม .chip.active ของต้นแบบ — ฟ้าอ่อนเดิมแยกจากชิปที่ไม่ได้เลือกยาก
+  chipOn: { backgroundColor: colors.navy, borderColor: colors.navy },
   chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  chipTextOn: { color: colors.primaryDark },
+  chipTextOn: { color: "#fff" },
   list: { padding: spacing.lg, paddingTop: 0, gap: spacing.md },
   card: {
     backgroundColor: colors.card,
