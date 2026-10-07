@@ -7,6 +7,7 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  useWindowDimensions,
   FlatList,
   RefreshControl,
   ScrollView,
@@ -109,6 +110,10 @@ export function formatDate(iso: string | null) {
 
 export default function WorkOrderListScreen({ navigation, route }: Props) {
   useWideLayout();
+  // จอกว้างเป็นตารางแบบต้นแบบ — กวาดตาเทียบสาขา/สถานะทีละคอลัมน์ได้ไวกว่าการ์ด
+  // ที่ซ้อนข้อมูลเป็นบรรทัด บนมือถือยังเป็นการ์ดเพราะตารางหกคอลัมน์ไม่พอที่
+  const { width } = useWindowDimensions();
+  const table = width >= 900;
   const [rows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที
@@ -247,22 +252,97 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         <FlatList
           data={rows}
           keyExtractor={(row) => String(row.id)}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={table ? styles.tableList : styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
-          initialNumToRender={8}
+          initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
-          renderItem={({ item }) => (
-            <WorkOrderCard
-              row={item}
-              onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
-            />
-          )}
+          ListHeaderComponent={table && rows.length ? <TableHead /> : null}
+          renderItem={({ item, index }) =>
+            table ? (
+              <WorkOrderTableRow
+                row={item}
+                last={index === rows.length - 1}
+                onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
+              />
+            ) : (
+              <WorkOrderCard
+                row={item}
+                onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
+              />
+            )
+          }
         />
       )}
     </View>
   );
 }
+
+/** หัวตาราง — ความกว้างคอลัมน์ต้องตรงกับ WorkOrderTableRow */
+function TableHead() {
+  return (
+    <View style={[styles.tr, styles.thead]}>
+      <Text style={[styles.th, styles.colWo]}>ใบงาน</Text>
+      <Text style={[styles.th, styles.colBranch]}>สาขา</Text>
+      <Text style={[styles.th, styles.colMachine]}>เครื่อง</Text>
+      <Text style={[styles.th, styles.colTeam]}>ทีม</Text>
+      <Text style={[styles.th, styles.colStatus]}>สถานะ</Text>
+      <View style={styles.colAction} />
+    </View>
+  );
+}
+
+const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
+  row,
+  last,
+  onPress,
+}: {
+  row: WorkOrderRow;
+  last: boolean;
+  onPress: () => void;
+}) {
+  const tone = statusTone(row.status);
+  return (
+    <TouchableOpacity style={[styles.tr, !last && styles.trLine]} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.colWo, styles.cellWo]}>
+        <View style={styles.rowIcon}>
+          <Ionicons name="clipboard-outline" size={18} color={colors.primaryInk} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={styles.codeRow}>
+            <Text style={styles.code}>{row.code}</Text>
+            {row.priority === "URGENT" ? (
+              <View style={styles.urgentPill}>
+                <View style={styles.urgentDot} />
+                <Text style={styles.urgentText}>ด่วน</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.td2}>{row.title}</Text>
+        </View>
+      </View>
+      <View style={styles.colBranch}>
+        <Text style={styles.td}>{row.branchCode}</Text>
+        <Text style={styles.td2}>{row.branchName}</Text>
+      </View>
+      <Text style={[styles.td, styles.colMachine]}>{row.machineCode ?? "—"}</Text>
+      <Text style={[styles.td, styles.colTeam, !(row.assignedToName ?? row.assignedTeam) && styles.tdMuted]}>
+        {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมาย"}
+      </Text>
+      <View style={styles.colStatus}>
+        <View style={[styles.badge, { backgroundColor: tone.bg, alignSelf: "flex-start" }]}>
+          <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
+        </View>
+      </View>
+      <View style={styles.colAction}>
+        <View style={styles.viewBtn}>
+          <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
+          <Text style={styles.viewBtnText}>ดู</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+});
 
 /**
  * memo ไว้เพราะการ์ดทั้งหน้าถูกวาดใหม่ทุกครั้งที่กดตัวกรองหรือพิมพ์ค้นหา
@@ -373,6 +453,57 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   addButtonText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
+  tableList: {
+    margin: spacing.lg,
+    marginTop: 0,
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  tr: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: 12 },
+  trLine: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  thead: { backgroundColor: colors.sky50, borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 10 },
+  th: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
+  td: { fontSize: 14, lineHeight: 21, color: colors.text },
+  td2: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  tdMuted: { color: colors.textFaint },
+  colWo: { flex: 2.4, minWidth: 0 },
+  colBranch: { flex: 2.2, minWidth: 0 },
+  colMachine: { flex: 0.8 },
+  colTeam: { flex: 1.3 },
+  colStatus: { flex: 1.8 },
+  colAction: { width: 64, alignItems: "flex-end" },
+  cellWo: { flexDirection: "row", alignItems: "center", gap: 10 },
+  rowIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primarySoft,
+  },
+  codeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  urgentPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+  },
+  urgentDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.danger },
+  viewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.sky50,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  viewBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   pageHead: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, flexShrink: 0 },
   pageTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
@@ -403,7 +534,7 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   cardTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  code: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.primary },
+  code: { fontSize: 14, lineHeight: 21, fontWeight: "800", color: colors.primaryInk },
   urgent: { flexDirection: "row", alignItems: "center", gap: 2 },
   urgentText: { fontSize: 11, lineHeight: 19, color: colors.danger, fontWeight: "700" },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },

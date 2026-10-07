@@ -5,7 +5,7 @@
  * หน้านี้จึงเตือนตรงๆ ตอนปิดว่าเครื่องยังไม่กลับมา ไม่ใช่ปล่อยให้เข้าใจผิด
  * ว่ากดปิดแล้วจบ
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -174,6 +174,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [editingNote, setEditingNote] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
+  const stepScroll = useRef<ScrollView>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -607,6 +608,16 @@ export default function WorkOrderDetailScreen({ route }: Props) {
       {/* เส้นทางเดินงาน — เห็นทั้งเส้นว่ามาถึงไหนและเหลืออีกกี่ขั้น */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>ขั้นตอนงาน</Text>
+        {/*
+          แถบแนวนอนแบบต้นแบบ OTTERI — เห็นทั้งเส้นในแวบเดียวว่ามาถึงไหน
+          จอแคบเลื่อนซ้ายขวาได้ แทนการบีบชื่อขั้นจนอ่านไม่ออก
+        */}
+        <ScrollView
+          ref={stepScroll}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.steps}
+        >
         {stages.map((stage, i) => {
           const currentIndex = stages.findIndex((x) => x.value === order.status);
           /**
@@ -641,27 +652,50 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                 : i === currentIndex
                   ? "now"
                   : "future";
+          // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
+          const number = stages
+            .slice(0, i + 1)
+            .filter(
+              (x) =>
+                !(
+                  (x.value === "PARTS_REQUESTED" && order.needsParts === false) ||
+                  (x.value === "AWAITING_QUOTE" && order.needsQuote === false && !order.hasQuote) ||
+                  (x.value === "AWAITING_PAYMENT" && order.needsQuote === false && !order.hasReceipt)
+                )
+            ).length;
           return (
-            <View key={stage.value} style={styles.stageRow}>
-              <Ionicons
-                name={
-                  state === "skipped"
-                    ? "remove-circle-outline"
-                    : state === "done"
-                      ? "checkmark-circle"
-                      : state === "now"
-                        ? "ellipse"
-                        : "ellipse-outline"
-                }
-                size={16}
-                color={
-                  state === "done"
-                    ? colors.success
-                    : state === "now"
-                      ? colors.primary
-                      : colors.border
-                }
-              />
+            <View
+              key={stage.value}
+              style={styles.step}
+              // จอแคบเห็นแค่สามขั้นแรก — เลื่อนให้ขั้นปัจจุบันอยู่ในจอเอง
+              // ไม่งั้นใบที่เดินมาถึงขั้นห้าจะเปิดมาเห็นแต่ขั้นที่ผ่านไปแล้ว
+              onLayout={
+                state === "now"
+                  ? (e) => stepScroll.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - 60), animated: false })
+                  : undefined
+              }
+            >
+              {i > 0 ? (
+                <View
+                  style={[styles.stepLine, (state === "done" || state === "now") && styles.stepLineDone]}
+                />
+              ) : null}
+              <View
+                style={[
+                  styles.stepDot,
+                  state === "done" && styles.stepDotDone,
+                  state === "now" && styles.stepDotNow,
+                  state === "skipped" && styles.stepDotSkipped,
+                ]}
+              >
+                {state === "done" ? (
+                  <Ionicons name="checkmark" size={15} color="#fff" />
+                ) : (
+                  <Text style={[styles.stepNum, state === "now" && styles.stepNumNow]}>
+                    {state === "skipped" ? "–" : number}
+                  </Text>
+                )}
+              </View>
               <Text
                 style={[
                   styles.stageLabel,
@@ -673,13 +707,14 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                 {stage.label}
               </Text>
               {state === "skipped" ? (
-                <Text style={styles.stageActor}>ข้าม — ไม่ใช้อะไหล่</Text>
+                <Text style={styles.stageActor}>ข้าม</Text>
               ) : stage.actorLabel && state !== "done" ? (
                 <Text style={styles.stageActor}>{stage.actorLabel}</Text>
               ) : null}
             </View>
           );
         })}
+        </ScrollView>
       </View>
 
       {!done ? (
@@ -2192,12 +2227,52 @@ const styles = StyleSheet.create({
   issuedHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingTop: 3 },
   optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
   optionTextOut: { color: colors.danger },
-  stageRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 5 },
-  stageLabel: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.text },
-  stageLabelNow: { fontWeight: "700", color: colors.primary },
+  steps: { flexDirection: "row", paddingTop: spacing.sm, minWidth: "100%" },
+  step: { flex: 1, minWidth: 104, alignItems: "center", paddingHorizontal: 4 },
+  // เส้นเชื่อมจากขอบวงก่อนหน้ามาถึงขอบวงนี้ — เว้นรัศมีวงทั้งสองฝั่ง เส้นจึงไม่พาดทับวง
+  // (บนเว็บเส้นที่วางแบบ absolute ลอยอยู่เหนือวงที่ไม่ได้ absolute zIndex ช่วยไม่ได้)
+  stepLine: {
+    position: "absolute",
+    top: 14,
+    left: "-50%",
+    right: "50%",
+    marginLeft: 19,
+    marginRight: 19,
+    height: 2,
+    backgroundColor: colors.border,
+  },
+  stepLineDone: { backgroundColor: colors.success },
+  stepDot: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1,
+  },
+  stepDotDone: { backgroundColor: colors.success, borderColor: colors.success },
+  stepDotNow: {
+    backgroundColor: colors.navy,
+    borderColor: colors.navy,
+    // วงแหวนฟ้ารอบขั้นปัจจุบัน ให้เห็นจากระยะแขนว่าอยู่ตรงไหน
+    shadowColor: colors.sky200,
+    shadowOpacity: 1,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    ...(Platform.OS === "web" ? ({ boxShadow: `0 0 0 4px ${colors.sky200}` } as object) : null),
+  },
+  stepDotSkipped: { borderStyle: "dashed" },
+  stepNum: { fontSize: 13, lineHeight: 18, fontWeight: "800", color: colors.textFaint },
+  stepNumNow: { color: "#fff" },
+  stageLabel: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.text, textAlign: "center" },
+  stageLabelNow: { fontWeight: "800", color: colors.navy },
   stageLabelFuture: { color: colors.textFaint },
+  // ขั้นที่ข้ามขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
   stageLabelSkipped: { textDecorationLine: "line-through" },
-  stageActor: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
+  stageActor: { fontSize: 11, lineHeight: 16, color: colors.textFaint, textAlign: "center" },
   rollback: {
     flexDirection: "row",
     alignItems: "center",
