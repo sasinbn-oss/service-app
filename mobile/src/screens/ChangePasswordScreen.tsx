@@ -9,7 +9,6 @@
  */
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
@@ -138,7 +138,7 @@ export default function ChangePasswordScreen({
           activeOpacity={0.8}
         >
           {saving ? (
-            <ActivityIndicator color="#fff" />
+            <Spinner color="#fff" />
           ) : (
             <Text style={styles.submitText}>บันทึกรหัสใหม่</Text>
           )}

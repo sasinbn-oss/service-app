@@ -6,7 +6,6 @@
  */
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   Modal,
   ScrollView,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -94,7 +94,7 @@ export default function ManageUsersScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -124,7 +124,7 @@ export default function ManageUsersScreen() {
           <View style={styles.head}>
             <Text style={styles.name}>{u.name}</Text>
             <Text style={styles.code}>{u.employeeCode}</Text>
-            {savingId === u.id ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+            {savingId === u.id ? <Spinner size="small" color={colors.primary} /> : null}
           </View>
 
           {u.mustChangePassword ? (
@@ -433,7 +433,7 @@ function CreateUserModal({
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <Spinner color="#fff" size="small" />
               ) : (
                 <Text style={styles.modalSaveText}>สร้างบัญชี</Text>
               )}
@@ -516,7 +516,7 @@ function ResetPasswordModal({
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <Spinner color="#fff" size="small" />
               ) : (
                 <Text style={styles.modalSaveText}>ตั้งรหัสใหม่</Text>
               )}

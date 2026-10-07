@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Image,
   ScrollView,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
@@ -181,7 +181,7 @@ export default function ManageSparePartsScreen() {
         <View style={styles.buttonRow}>
           <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={submitting}>
             {submitting ? (
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
             ) : (
               <Text style={styles.buttonText}>{editingId ? "บันทึกการแก้ไข" : "เพิ่มอะไหล่"}</Text>
             )}
@@ -198,7 +198,7 @@ export default function ManageSparePartsScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.primary} />
+        <Spinner style={styles.loader} color={colors.primary} />
       ) : (
         <FlatList
           scrollEnabled={false}
@@ -229,7 +229,7 @@ export default function ManageSparePartsScreen() {
                       disabled={uploadingId === item.id}
                     >
                       {uploadingId === item.id ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
+                        <Spinner size="small" color={colors.primary} />
                       ) : (
                         <Text style={styles.action}>เลือกรูป</Text>
                       )}

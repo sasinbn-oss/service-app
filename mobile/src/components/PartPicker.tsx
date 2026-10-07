@@ -7,13 +7,13 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "./Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { colors, radius, spacing } from "../theme";
@@ -140,7 +140,7 @@ export default function PartPicker({
           placeholder="ค้นหารหัสหรือชื่ออะไหล่"
           placeholderTextColor={colors.textFaint}
         />
-        {searching ? <ActivityIndicator size="small" color={colors.textFaint} /> : null}
+        {searching ? <Spinner size="small" color={colors.textFaint} /> : null}
       </View>
 
       {results.length > 0 ? (

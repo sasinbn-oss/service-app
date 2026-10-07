@@ -7,7 +7,6 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   Modal,
   Platform,
@@ -18,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -245,7 +245,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -837,7 +837,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           activeOpacity={0.7}
         >
           {deleting ? (
-            <ActivityIndicator color={colors.danger} size="small" />
+            <Spinner color={colors.danger} size="small" />
           ) : (
             <Ionicons name="trash-outline" size={16} color={colors.danger} />
           )}
@@ -1017,7 +1017,7 @@ function RollbackModal({
             <FileStrip files={files} onChange={setFiles} />
             {busy ? (
               <View style={styles.slipRow}>
-                <ActivityIndicator color={colors.primary} size="small" />
+                <Spinner color={colors.primary} size="small" />
                 <Text style={styles.linkedText}>{busy}…</Text>
               </View>
             ) : (
@@ -1069,7 +1069,7 @@ function RollbackModal({
             >
               {saving ? (
                 <>
-                  <ActivityIndicator color="#fff" size="small" />
+                  <Spinner color="#fff" size="small" />
                   {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
                 </>
               ) : (
@@ -1451,7 +1451,7 @@ function StageModal({
                     <FileStrip files={doc ? [doc] : []} onChange={(n) => setDoc(n[0] ?? null)} />
                     {busy ? (
                       <View style={styles.slipRow}>
-                        <ActivityIndicator color={colors.primary} size="small" />
+                        <Spinner color={colors.primary} size="small" />
                         <Text style={styles.linkedText}>{busy}…</Text>
                       </View>
                     ) : (
@@ -1592,7 +1592,7 @@ function StageModal({
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <Spinner color="#fff" size="small" />
               ) : (
                 <Text style={styles.modalSaveText}>ยืนยัน</Text>
               )}
@@ -1718,7 +1718,7 @@ function NoteModal({
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <Spinner color="#fff" size="small" />
               ) : (
                 <Text style={styles.modalSaveText}>บันทึก</Text>
               )}
@@ -2107,7 +2107,7 @@ function CloseModal({
                   </View>
                 ) : busy ? (
                   <View style={styles.slipRow}>
-                    <ActivityIndicator color={colors.primary} size="small" />
+                    <Spinner color={colors.primary} size="small" />
                     <Text style={styles.linkedText}>{busy}…</Text>
                   </View>
                 ) : (
@@ -2164,7 +2164,7 @@ function CloseModal({
             >
               {saving ? (
                 <>
-                  <ActivityIndicator color="#fff" size="small" />
+                  <Spinner color="#fff" size="small" />
                   {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
                 </>
               ) : (

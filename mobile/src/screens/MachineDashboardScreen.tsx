@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Modal,
   Pressable,
   RefreshControl,
@@ -12,6 +11,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
@@ -633,7 +633,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
 
       {loading && !data ? (
         <View style={styles.loading}>
-          <ActivityIndicator color={colors.primary} />
+          <Spinner color={colors.primary} />
         </View>
       ) : null}
 
@@ -922,7 +922,7 @@ function NoteModal({
                 activeOpacity={0.7}
               >
                 {saving ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <Spinner color="#fff" size="small" />
                 ) : (
                   <Text style={styles.modalSaveText}>บันทึก</Text>
                 )}
@@ -1079,7 +1079,7 @@ function ActivityModal({ visible, onClose }: { visible: boolean; onClose: () => 
 
           {loading ? (
             <View style={styles.loading}>
-              <ActivityIndicator color={colors.primary} />
+              <Spinner color={colors.primary} />
             </View>
           ) : null}
           {error ? <Text style={styles.modalError}>{error}</Text> : null}

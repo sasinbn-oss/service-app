@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Modal,
   Pressable,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -73,7 +73,7 @@ export default function ManageFlowsScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -129,7 +129,7 @@ export default function ManageFlowsScreen() {
                 เลือกกล่องปลายทางเมื่อตอบ "{picking?.answer === "yesKey" ? "ใช่" : "ไม่"}"
               </Text>
               {saving ? (
-                <ActivityIndicator style={{ margin: 20 }} color={colors.primary} />
+                <Spinner style={{ margin: 20 }} color={colors.primary} />
               ) : (
                 <ScrollView style={{ maxHeight: 420 }}>
                   {openFlow.nodes
@@ -155,7 +155,7 @@ export default function ManageFlowsScreen() {
 
   return (
     <View style={styles.container}>
-      {loadingFlow && <ActivityIndicator style={styles.loader} color={colors.primary} />}
+      {loadingFlow && <Spinner style={styles.loader} color={colors.primary} />}
       <FlatList
         contentContainerStyle={styles.listContent}
         data={flows}

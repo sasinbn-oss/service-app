@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
@@ -220,7 +220,7 @@ export default function MachineImportScreen() {
 
       {checking ? (
         <View style={styles.checking}>
-          <ActivityIndicator color={colors.primary} />
+          <Spinner color={colors.primary} />
           <Text style={styles.checkingText}>กำลังอ่านไฟล์และเทียบกับข้อมูลเดิม…</Text>
         </View>
       ) : null}
@@ -294,7 +294,7 @@ export default function MachineImportScreen() {
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" />
+                <Spinner color="#fff" />
               ) : (
                 <>
                   <Ionicons name="checkmark-circle" size={18} color="#fff" />
@@ -409,7 +409,7 @@ export default function MachineImportScreen() {
               activeOpacity={0.8}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" />
+                <Spinner color="#fff" />
               ) : (
                 <>
                   <Ionicons name="checkmark-circle" size={18} color="#fff" />
@@ -535,7 +535,7 @@ export default function MachineImportScreen() {
                 activeOpacity={0.8}
               >
                 {saving ? (
-                  <ActivityIndicator color="#fff" />
+                  <Spinner color="#fff" />
                 ) : (
                   <>
                     <Ionicons name="checkmark-circle" size={18} color="#fff" />
