@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect } from "@react-navigation/native";
@@ -96,7 +96,7 @@ export default function VehicleCheckInScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -126,7 +126,7 @@ export default function VehicleCheckInScreen() {
         />
 
         <TouchableOpacity style={styles.button} onPress={handleEnd} disabled={submitting}>
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>คืนรถ</Text>}
+          {submitting ? <Spinner color="#fff" /> : <Text style={styles.buttonText}>คืนรถ</Text>}
         </TouchableOpacity>
       </ScrollView>
     );
@@ -165,7 +165,7 @@ export default function VehicleCheckInScreen() {
           />
 
           <TouchableOpacity style={styles.button} onPress={handleStart} disabled={submitting}>
-            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>เริ่มใช้รถ</Text>}
+            {submitting ? <Spinner color="#fff" /> : <Text style={styles.buttonText}>เริ่มใช้รถ</Text>}
           </TouchableOpacity>
         </>
       )}

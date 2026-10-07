@@ -10,7 +10,6 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   Platform,
   ScrollView,
@@ -20,6 +19,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
@@ -752,7 +752,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         >
           {saving ? (
             <>
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
               {busy ? <Text style={styles.submitText}>{busy}</Text> : null}
             </>
           ) : (
@@ -1126,7 +1126,7 @@ function MachineCard({
 
       {busy ? (
         <View style={styles.busyRow}>
-          <ActivityIndicator color={colors.primary} size="small" />
+          <Spinner color={colors.primary} size="small" />
           <Text style={styles.busyText}>{busy}…</Text>
         </View>
       ) : (

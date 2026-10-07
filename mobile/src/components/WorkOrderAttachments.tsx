@@ -10,7 +10,6 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   Platform,
   StyleSheet,
@@ -18,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "./Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
@@ -173,7 +173,7 @@ export default function WorkOrderAttachments({
       </View>
 
       {loading ? (
-        <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.md }} />
+        <Spinner color={colors.primary} style={{ marginVertical: spacing.md }} />
       ) : rows.length === 0 ? (
         <Text style={styles.empty}>
           ยังไม่มีรูป — รูปหน้างานช่วยให้คนที่ไม่ได้ไปเห็นว่าเจออะไรจริง ๆ
@@ -208,7 +208,7 @@ export default function WorkOrderAttachments({
                 ) : null}
                 {opening === row.id ? (
                   <View style={styles.tileBusy}>
-                    <ActivityIndicator color="#fff" size="small" />
+                    <Spinner color="#fff" size="small" />
                   </View>
                 ) : null}
               </TouchableOpacity>
@@ -230,7 +230,7 @@ export default function WorkOrderAttachments({
       {canEdit ? (
         busy ? (
           <View style={styles.busyRow}>
-            <ActivityIndicator color={colors.primary} size="small" />
+            <Spinner color={colors.primary} size="small" />
             <Text style={styles.busyText}>{busy}…</Text>
           </View>
         ) : (

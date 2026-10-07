@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Picker } from "@react-native-picker/picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -351,7 +351,7 @@ export default function TransferDocumentScreen() {
               placeholder="พิมพ์รหัสหรือชื่ออะไหล่"
               placeholderTextColor={colors.textFaint}
             />
-            {searching ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+            {searching ? <Spinner size="small" color={colors.primary} /> : null}
           </View>
 
           {results.map((part) => (
@@ -462,7 +462,7 @@ export default function TransferDocumentScreen() {
             activeOpacity={0.8}
           >
             {submitting === "docx" ? (
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
             ) : (
               <>
                 <Ionicons name="document-text" size={18} color="#fff" />
@@ -478,7 +478,7 @@ export default function TransferDocumentScreen() {
             activeOpacity={0.8}
           >
             {submitting === "pdf" ? (
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
             ) : (
               <>
                 <Ionicons name="document" size={18} color="#fff" />

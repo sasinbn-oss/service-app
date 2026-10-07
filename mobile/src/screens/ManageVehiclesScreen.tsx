@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
@@ -83,12 +83,12 @@ export default function ManageVehiclesScreen() {
         <TextInput style={styles.input} placeholder="ยี่ห้อ" value={brand} onChangeText={setBrand} />
         <TextInput style={styles.input} placeholder="รุ่น" value={model} onChangeText={setModel} />
         <TouchableOpacity style={styles.button} onPress={handleAdd} disabled={submitting}>
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>เพิ่มรถ</Text>}
+          {submitting ? <Spinner color="#fff" /> : <Text style={styles.buttonText}>เพิ่มรถ</Text>}
         </TouchableOpacity>
       </View>
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.primary} />
+        <Spinner style={styles.loader} color={colors.primary} />
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}

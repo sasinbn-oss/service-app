@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Easing, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Animated, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, radius, shadow, spacing } from "../theme";
 import type { AlertButton } from "../utils/alert";
 import Overlay from "./Overlay";
+import { WasherIcon } from "./Spinner";
 
 /**
  * แจ้งผล ยืนยัน และหน้าโหลด ที่วาดในแอปเอง แทนกล่อง alert/confirm ของเบราว์เซอร์
@@ -133,33 +134,11 @@ function Dialog({ d }: { d: DialogState }) {
   );
 }
 
-/** เครื่องซักผ้าหมุน — หน้าโหลดของ OTTERI */
+/** หน้าโหลดเต็มจอ — เครื่องซักผ้าตัวเดียวกับที่ใช้ทั้งแอป (components/Spinner) */
 export function WasherLoader({ text }: { text: string }) {
-  const spin = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(spin, {
-        toValue: 1,
-        duration: 1400,
-        easing: Easing.linear,
-        useNativeDriver: Platform.OS !== "web",
-      })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [spin]);
-  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
   return (
     <View style={styles.loaderBox}>
-      <View style={styles.washer}>
-        <View style={styles.washerTop}>
-          <View style={styles.washerSlot} />
-          <View style={styles.washerLed} />
-        </View>
-        <View style={styles.drum}>
-          <Animated.View style={[styles.water, { transform: [{ rotate }] }]} />
-        </View>
-      </View>
+      <WasherIcon size={74} />
       <Text style={styles.loaderText}>{text}</Text>
     </View>
   );
@@ -285,37 +264,5 @@ const styles = StyleSheet.create({
     zIndex: 80,
   },
   loaderBox: { alignItems: "center", gap: 14 },
-  washer: {
-    width: 64,
-    height: 74,
-    borderRadius: 12,
-    borderWidth: 3,
-    borderColor: colors.primary,
-    backgroundColor: colors.card,
-    alignItems: "center",
-    paddingTop: 6,
-  },
-  washerTop: { flexDirection: "row", width: "100%", paddingHorizontal: 8, justifyContent: "space-between", alignItems: "center" },
-  washerSlot: { width: 16, height: 3, borderRadius: 2, backgroundColor: colors.primarySoft },
-  washerLed: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
-  drum: {
-    marginTop: 7,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 3,
-    borderColor: colors.primary,
-    overflow: "hidden",
-    backgroundColor: colors.card,
-  },
-  water: {
-    position: "absolute",
-    width: 60,
-    height: 60,
-    left: -13,
-    top: 14,
-    borderRadius: 26,
-    backgroundColor: "#7FD0F2",
-  },
   loaderText: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.navy },
 });

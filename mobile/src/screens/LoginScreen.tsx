@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, radius, shadow } from "../theme";
@@ -116,7 +116,7 @@ export default function LoginScreen({ navigation }: Props) {
         >
           {submitting ? (
             <>
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
               <Text style={styles.buttonText}>กำลังเข้าสู่ระบบ...</Text>
             </>
           ) : (

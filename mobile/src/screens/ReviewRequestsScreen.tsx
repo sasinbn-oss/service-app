@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -103,7 +103,7 @@ export default function ReviewRequestsScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.primary} />
+        <Spinner style={styles.loader} color={colors.primary} />
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}
@@ -143,7 +143,7 @@ export default function ReviewRequestsScreen() {
                     onChangeText={(v) => setReviewNotes((prev) => ({ ...prev, [item.id]: v }))}
                   />
                   {actingId === item.id ? (
-                    <ActivityIndicator style={styles.acting} color={colors.primary} />
+                    <Spinner style={styles.acting} color={colors.primary} />
                   ) : (
                     <View style={styles.actionRow}>
                       <TouchableOpacity

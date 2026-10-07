@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -95,7 +95,7 @@ export default function GuideListScreen({ navigation }: Props) {
       )}
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.primary} />
+        <Spinner style={styles.loader} color={colors.primary} />
       ) : error ? (
         <Text style={styles.error}>{error}</Text>
       ) : (

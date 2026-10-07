@@ -6,8 +6,6 @@
  */
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
-  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,6 +13,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
+import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -94,7 +94,7 @@ export default function ManageUsersScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -124,7 +124,7 @@ export default function ManageUsersScreen() {
           <View style={styles.head}>
             <Text style={styles.name}>{u.name}</Text>
             <Text style={styles.code}>{u.employeeCode}</Text>
-            {savingId === u.id ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+            {savingId === u.id ? <Spinner size="small" color={colors.primary} /> : null}
           </View>
 
           {u.mustChangePassword ? (
@@ -327,121 +327,120 @@ function CreateUserModal({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
-        <View style={styles.modal}>
-          <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>เพิ่มบัญชีผู้ใช้</Text>
-
-            <Text style={styles.label}>ชื่อผู้ใช้ (รหัสพนักงาน)</Text>
-            <TextInput
-              style={styles.input}
-              value={employeeCode}
-              onChangeText={setEmployeeCode}
-              autoCapitalize="characters"
-              placeholder="เช่น T012"
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="ชื่อผู้ใช้"
-            />
-
-            <Text style={styles.label}>ชื่อ-นามสกุล</Text>
-            <TextInput
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder="ชื่อที่จะขึ้นในใบงาน"
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="ชื่อ-นามสกุล"
-            />
-
-            <Text style={styles.label}>เบอร์โทร</Text>
-            <TextInput
-              style={styles.input}
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-              placeholder="ไม่ใส่ก็ได้"
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="เบอร์โทร"
-            />
-
-            <Text style={styles.label}>สิทธิ์</Text>
-            <View style={styles.options}>
-              {ROLE_OPTIONS.map((r) => (
-                <TouchableOpacity
-                  key={r.value}
-                  style={[styles.option, role === r.value && styles.optionOn]}
-                  onPress={() => {
-                    setRole(r.value);
-                    if (r.value !== "SUPERVISOR") setRegion(null);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.optionText, role === r.value && styles.optionTextOn]}>
-                    {r.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {role === "SUPERVISOR" ? (
-              <>
-                <Text style={styles.label}>ภาคที่ดูแล</Text>
-                <View style={styles.options}>
-                  {regions.map((r) => (
-                    <TouchableOpacity
-                      key={r}
-                      style={[styles.option, region === r && styles.optionOn]}
-                      onPress={() => setRegion(r)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.optionText, region === r && styles.optionTextOn]}>
-                        {r}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </>
-            ) : null}
-
-            <Text style={styles.label}>รหัสตั้งต้น</Text>
-            <TextInput
-              style={styles.input}
-              value={password}
-              onChangeText={setPassword}
-              autoCapitalize="none"
-              placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="รหัสตั้งต้น"
-            />
-            <Text style={styles.hint}>
-              ไม่ต้องซ่อน — ตั้งใจให้แอดมินอ่านออกเพื่อบอกต่อ เจ้าของบัญชีจะถูกบังคับ
-              ให้เปลี่ยนเป็นรหัสของตัวเองตอนเข้าครั้งแรกอยู่แล้ว
-            </Text>
-
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.modalCancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSave, (!ready || saving) && styles.modalSaveOff]}
-              onPress={submit}
-              disabled={!ready || saving}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.modalSaveText}>สร้างบัญชี</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title="เพิ่มบัญชีผู้ใช้"
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (!ready || saving) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={!ready || saving}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <Spinner color="#fff" size="small" />
+            ) : (
+              <Text style={styles.modalSaveText}>สร้างบัญชี</Text>
+            )}
+          </TouchableOpacity>
         </View>
+      }
+    >
+
+      <Text style={styles.label}>ชื่อผู้ใช้ (รหัสพนักงาน)</Text>
+      <TextInput
+        style={styles.input}
+        value={employeeCode}
+        onChangeText={setEmployeeCode}
+        autoCapitalize="characters"
+        placeholder="เช่น T012"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อผู้ใช้"
+      />
+
+      <Text style={styles.label}>ชื่อ-นามสกุล</Text>
+      <TextInput
+        style={styles.input}
+        value={name}
+        onChangeText={setName}
+        placeholder="ชื่อที่จะขึ้นในใบงาน"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อ-นามสกุล"
+      />
+
+      <Text style={styles.label}>เบอร์โทร</Text>
+      <TextInput
+        style={styles.input}
+        value={phone}
+        onChangeText={setPhone}
+        keyboardType="phone-pad"
+        placeholder="ไม่ใส่ก็ได้"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="เบอร์โทร"
+      />
+
+      <Text style={styles.label}>สิทธิ์</Text>
+      <View style={styles.options}>
+        {ROLE_OPTIONS.map((r) => (
+          <TouchableOpacity
+            key={r.value}
+            style={[styles.option, role === r.value && styles.optionOn]}
+            onPress={() => {
+              setRole(r.value);
+              if (r.value !== "SUPERVISOR") setRegion(null);
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.optionText, role === r.value && styles.optionTextOn]}>
+              {r.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
-    </Modal>
+
+      {role === "SUPERVISOR" ? (
+        <>
+          <Text style={styles.label}>ภาคที่ดูแล</Text>
+          <View style={styles.options}>
+            {regions.map((r) => (
+              <TouchableOpacity
+                key={r}
+                style={[styles.option, region === r && styles.optionOn]}
+                onPress={() => setRegion(r)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.optionText, region === r && styles.optionTextOn]}>
+                  {r}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      <Text style={styles.label}>รหัสตั้งต้น</Text>
+      <TextInput
+        style={styles.input}
+        value={password}
+        onChangeText={setPassword}
+        autoCapitalize="none"
+        placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="รหัสตั้งต้น"
+      />
+      <Text style={styles.hint}>
+        ไม่ต้องซ่อน — ตั้งใจให้แอดมินอ่านออกเพื่อบอกต่อ เจ้าของบัญชีจะถูกบังคับ
+        ให้เปลี่ยนเป็นรหัสของตัวเองตอนเข้าครั้งแรกอยู่แล้ว
+      </Text>
+
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+    </AppModal>
   );
 }
 
@@ -481,50 +480,49 @@ function ResetPasswordModal({
   }
 
   return (
-    <Modal visible={!!user} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
-        <View style={styles.modal}>
-          <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>ตั้งรหัสผ่านใหม่</Text>
-            <Text style={styles.hint}>
-              {user?.name} · {user?.employeeCode} — รหัสเดิมจะใช้ไม่ได้ทันที
-              และเจ้าของบัญชีต้องเปลี่ยนเป็นรหัสของตัวเองตอนเข้าครั้งถัดไป
-            </Text>
-
-            <Text style={styles.label}>รหัสตั้งต้นใหม่</Text>
-            <TextInput
-              style={styles.input}
-              value={password}
-              onChangeText={setPassword}
-              autoCapitalize="none"
-              placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="รหัสตั้งต้นใหม่"
-            />
-
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.modalCancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSave, (password.length < MIN_PASSWORD || saving) && styles.modalSaveOff]}
-              onPress={submit}
-              disabled={password.length < MIN_PASSWORD || saving}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.modalSaveText}>ตั้งรหัสใหม่</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+    <AppModal
+      visible={!!user}
+      onClose={onCancel}
+      busy={saving}
+      title="ตั้งรหัสผ่านใหม่"
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (password.length < MIN_PASSWORD || saving) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={password.length < MIN_PASSWORD || saving}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <Spinner color="#fff" size="small" />
+            ) : (
+              <Text style={styles.modalSaveText}>ตั้งรหัสใหม่</Text>
+            )}
+          </TouchableOpacity>
         </View>
-      </View>
-    </Modal>
+      }
+    >
+      <Text style={styles.hint}>
+        {user?.name} · {user?.employeeCode} — รหัสเดิมจะใช้ไม่ได้ทันที
+        และเจ้าของบัญชีต้องเปลี่ยนเป็นรหัสของตัวเองตอนเข้าครั้งถัดไป
+      </Text>
+
+      <Text style={styles.label}>รหัสตั้งต้นใหม่</Text>
+      <TextInput
+        style={styles.input}
+        value={password}
+        onChangeText={setPassword}
+        autoCapitalize="none"
+        placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="รหัสตั้งต้นใหม่"
+      />
+
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+    </AppModal>
   );
 }
 
@@ -562,45 +560,25 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.text,
   },
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(15,23,42,0.45)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.lg,
-  },
-  modal: {
-    width: "100%",
-    maxWidth: 520,
-    maxHeight: "90%",
-    backgroundColor: colors.card,
-    borderRadius: radius.md,
-    overflow: "hidden",
-  },
-  modalBody: { padding: spacing.lg },
-  modalTitle: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
-  modalActions: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    padding: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
+  modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
   modalCancel: {
     flex: 1,
+    minHeight: 46,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.md,
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.sky50,
   },
-  modalCancelText: { fontSize: 14, lineHeight: 22, color: colors.textMuted, fontWeight: "600" },
+  modalCancelText: { fontSize: 15, lineHeight: 22, color: colors.primaryInk, fontWeight: "700" },
   modalSave: {
     flex: 1,
+    minHeight: 46,
+    flexDirection: "row",
+    gap: spacing.sm,
     alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
     backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.md,
   },
   modalSaveOff: { opacity: 0.5 },
   modalSaveText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },

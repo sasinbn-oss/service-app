@@ -7,9 +7,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
-  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -18,6 +16,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
+import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -245,7 +245,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -837,7 +837,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           activeOpacity={0.7}
         >
           {deleting ? (
-            <ActivityIndicator color={colors.danger} size="small" />
+            <Spinner color={colors.danger} size="small" />
           ) : (
             <Ionicons name="trash-outline" size={16} color={colors.danger} />
           )}
@@ -986,100 +986,99 @@ function RollbackModal({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
-        <View style={styles.modal}>
-          <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>จบงานไม่ได้ · {order.code}</Text>
-            <Text style={styles.linkedText}>
-              ใบงานจะกลับไปขั้นแรกให้หัวหน้าภาคดู แล้วส่งต่อให้แอดมินเช็คคลัง
-              วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
-            </Text>
-
-            <Text style={styles.modalLabel}>เจออะไรที่หน้างาน</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={reason}
-              onChangeText={setReason}
-              placeholder="เช่น ไปถึงแล้วพบว่าบอร์ดควบคุมไหม้ ต้องเปลี่ยน"
-              placeholderTextColor={colors.textFaint}
-              multiline
-              numberOfLines={3}
-              accessibilityLabel="เจออะไรที่หน้างาน"
-            />
-
-            {/*
-              รูปที่เจอหน้างาน — ไม่บังคับ แต่เป็นสิ่งเดียวที่ทำให้หัวหน้าภาค
-              ตัดสินใจได้โดยไม่ต้องโทรถามกลับ คำว่า "บอร์ดไหม้" กับรูปบอร์ดที่ไหม้
-              พาไปสู่การตัดสินใจคนละแบบ
-            */}
-            <Text style={styles.modalLabel}>รูป / วิดีโอที่เจอหน้างาน (ไม่บังคับ)</Text>
-            <FileStrip files={files} onChange={setFiles} />
-            {busy ? (
-              <View style={styles.slipRow}>
-                <ActivityIndicator color={colors.primary} size="small" />
-                <Text style={styles.linkedText}>{busy}…</Text>
-              </View>
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title={<>จบงานไม่ได้ · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (saving || !reason.trim()) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={saving || !reason.trim()}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <>
+                <Spinner color="#fff" size="small" />
+                {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
+              </>
             ) : (
-              <View style={styles.options}>
-                {Platform.OS !== "web" ? (
-                  <TouchableOpacity
-                    style={styles.option}
-                    onPress={() => addFile((stage) => pickImageAttachment(true, stage))}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.optionText}>ถ่ายรูป</Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => addFile((stage) => pickImageAttachment(false, stage))}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.optionText}>เลือกรูป</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => addFile(pickVideoAttachment)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.optionText}>วิดีโอ</Text>
-                </TouchableOpacity>
-              </View>
+              <Text style={styles.modalSaveText}>ส่งกลับ</Text>
             )}
-
-            {/* ช่างเห็นของจริงว่าเสียตรงไหน จึงเลือกเองได้เลย ไม่ต้องรอให้ใครเดาแทน */}
-            <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ขอเบิกเพิ่ม" />
-            <Text style={styles.linkedText}>
-              ยังบอกไม่ได้ว่าต้องใช้ตัวไหน เว้นว่างได้ — หัวหน้าภาคจะเป็นคนระบุแทน
-            </Text>
-
-            {error ? <Text style={styles.modalError}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.modalCancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSave, (saving || !reason.trim()) && styles.modalSaveOff]}
-              onPress={submit}
-              disabled={saving || !reason.trim()}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <>
-                  <ActivityIndicator color="#fff" size="small" />
-                  {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
-                </>
-              ) : (
-                <Text style={styles.modalSaveText}>ส่งกลับ</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+          </TouchableOpacity>
         </View>
-      </View>
-    </Modal>
+      }
+    >
+      <Text style={styles.linkedText}>
+        ใบงานจะกลับไปขั้นแรกให้หัวหน้าภาคดู แล้วส่งต่อให้แอดมินเช็คคลัง
+        วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
+      </Text>
+
+      <Text style={styles.modalLabel}>เจออะไรที่หน้างาน</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={reason}
+        onChangeText={setReason}
+        placeholder="เช่น ไปถึงแล้วพบว่าบอร์ดควบคุมไหม้ ต้องเปลี่ยน"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={3}
+        accessibilityLabel="เจออะไรที่หน้างาน"
+      />
+
+      {/*
+        รูปที่เจอหน้างาน — ไม่บังคับ แต่เป็นสิ่งเดียวที่ทำให้หัวหน้าภาค
+        ตัดสินใจได้โดยไม่ต้องโทรถามกลับ คำว่า "บอร์ดไหม้" กับรูปบอร์ดที่ไหม้
+        พาไปสู่การตัดสินใจคนละแบบ
+      */}
+      <Text style={styles.modalLabel}>รูป / วิดีโอที่เจอหน้างาน (ไม่บังคับ)</Text>
+      <FileStrip files={files} onChange={setFiles} />
+      {busy ? (
+        <View style={styles.slipRow}>
+          <Spinner color={colors.primary} size="small" />
+          <Text style={styles.linkedText}>{busy}…</Text>
+        </View>
+      ) : (
+        <View style={styles.options}>
+          {Platform.OS !== "web" ? (
+            <TouchableOpacity
+              style={styles.option}
+              onPress={() => addFile((stage) => pickImageAttachment(true, stage))}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.optionText}>ถ่ายรูป</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={styles.option}
+            onPress={() => addFile((stage) => pickImageAttachment(false, stage))}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.optionText}>เลือกรูป</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.option}
+            onPress={() => addFile(pickVideoAttachment)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.optionText}>วิดีโอ</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ช่างเห็นของจริงว่าเสียตรงไหน จึงเลือกเองได้เลย ไม่ต้องรอให้ใครเดาแทน */}
+      <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ขอเบิกเพิ่ม" />
+      <Text style={styles.linkedText}>
+        ยังบอกไม่ได้ว่าต้องใช้ตัวไหน เว้นว่างได้ — หัวหน้าภาคจะเป็นคนระบุแทน
+      </Text>
+
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
   );
 }
 
@@ -1261,11 +1260,11 @@ function StageModal({
     needsRequisition;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
-        <View style={styles.modal}>
-          <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title={<>
               {order.status === "NEW"
                 ? "ระบุอะไหล่ที่ต้องใช้"
                 : order.status === "PARTS_REQUESTED"
@@ -1278,7 +1277,27 @@ function StageModal({
                         ? "จ่ายงานให้ช่าง"
                         : "นัดวันเข้างาน"}{" "}
               · {order.code}
-            </Text>
+            </>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (saving || blocked) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={saving || blocked}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <Spinner color="#fff" size="small" />
+            ) : (
+              <Text style={styles.modalSaveText}>ยืนยัน</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      }
+    >
 
             {order.status === "NEW" ? (
               <>
@@ -1451,7 +1470,7 @@ function StageModal({
                     <FileStrip files={doc ? [doc] : []} onChange={(n) => setDoc(n[0] ?? null)} />
                     {busy ? (
                       <View style={styles.slipRow}>
-                        <ActivityIndicator color={colors.primary} size="small" />
+                        <Spinner color={colors.primary} size="small" />
                         <Text style={styles.linkedText}>{busy}…</Text>
                       </View>
                     ) : (
@@ -1579,28 +1598,7 @@ function StageModal({
             />
 
             {error ? <Text style={styles.modalError}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.modalCancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSave, (saving || blocked) && styles.modalSaveOff]}
-              onPress={submit}
-              disabled={saving || blocked}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.modalSaveText}>ยืนยัน</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
+    </AppModal>
   );
 }
 
@@ -1653,80 +1651,79 @@ function NoteModal({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
-        <View style={styles.modal}>
-          <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>อาการ / สถานะ · {order.code}</Text>
-
-            <Text style={styles.modalLabel}>อาการที่พบ</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={symptom}
-              onChangeText={setSymptom}
-              placeholder="เช่น ประตูไม่ล็อก / บอร์ดควบคุมไหม้"
-              placeholderTextColor={colors.textFaint}
-              multiline
-              numberOfLines={3}
-              accessibilityLabel="อาการที่พบ"
-            />
-
-            <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
-            <View style={styles.options}>
-              <TouchableOpacity
-                style={[styles.option, workStatus === null && styles.optionOn]}
-                onPress={() => setWorkStatus(null)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.optionText, workStatus === null && styles.optionTextOn]}>
-                  ยังไม่ระบุ
-                </Text>
-              </TouchableOpacity>
-              {workStatuses.map((w) => (
-                <TouchableOpacity
-                  key={w.value}
-                  style={[styles.option, workStatus === w.value && styles.optionOn]}
-                  onPress={() => setWorkStatus(w.value)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.optionText, workStatus === w.value && styles.optionTextOn]}>
-                    {w.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {workStatus === "WAITING_PARTS" ? (
-              <PartPicker parts={parts} onChange={setParts} label="รออะไหล่ตัวไหน" />
-            ) : null}
-
-            {workStatus === "WAITING_TECH" ? (
-              <DateField value={visit} onChange={setVisit} label="วันที่ช่างจะเข้า" />
-            ) : null}
-
-            {error ? <Text style={styles.modalError}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.modalCancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSave, saving && styles.modalSaveOff]}
-              onPress={submit}
-              disabled={saving}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.modalSaveText}>บันทึก</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title={<>อาการ / สถานะ · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, saving && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={saving}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <Spinner color="#fff" size="small" />
+            ) : (
+              <Text style={styles.modalSaveText}>บันทึก</Text>
+            )}
+          </TouchableOpacity>
         </View>
+      }
+    >
+
+      <Text style={styles.modalLabel}>อาการที่พบ</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={symptom}
+        onChangeText={setSymptom}
+        placeholder="เช่น ประตูไม่ล็อก / บอร์ดควบคุมไหม้"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={3}
+        accessibilityLabel="อาการที่พบ"
+      />
+
+      <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
+      <View style={styles.options}>
+        <TouchableOpacity
+          style={[styles.option, workStatus === null && styles.optionOn]}
+          onPress={() => setWorkStatus(null)}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.optionText, workStatus === null && styles.optionTextOn]}>
+            ยังไม่ระบุ
+          </Text>
+        </TouchableOpacity>
+        {workStatuses.map((w) => (
+          <TouchableOpacity
+            key={w.value}
+            style={[styles.option, workStatus === w.value && styles.optionOn]}
+            onPress={() => setWorkStatus(w.value)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.optionText, workStatus === w.value && styles.optionTextOn]}>
+              {w.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
-    </Modal>
+
+      {workStatus === "WAITING_PARTS" ? (
+        <PartPicker parts={parts} onChange={setParts} label="รออะไหล่ตัวไหน" />
+      ) : null}
+
+      {workStatus === "WAITING_TECH" ? (
+        <DateField value={visit} onChange={setVisit} label="วันที่ช่างจะเข้า" />
+      ) : null}
+
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
   );
 }
 
@@ -1870,311 +1867,310 @@ function CloseModal({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
-        <View style={styles.modal}>
-          <ScrollView contentContainerStyle={styles.modalBody}>
-            <Text style={styles.modalTitle}>ปิดงาน {order.code}</Text>
+    <AppModal
+      visible={visible}
+      onClose={onCancel}
+      busy={saving}
+      title={<>ปิดงาน {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.modalSave,
+              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing) &&
+                styles.modalSaveOff,
+            ]}
+            onPress={submit}
+            disabled={saving || slipMissing || shotsMissing || workersMissing || nameplateMissing}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <>
+                <Spinner color="#fff" size="small" />
+                {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
+              </>
+            ) : (
+              <Text style={styles.modalSaveText}>ยืนยันปิดงาน</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      }
+    >
 
-            <Text style={styles.modalLabel}>ผลการทำงาน</Text>
+      <Text style={styles.modalLabel}>ผลการทำงาน</Text>
+      <View style={styles.options}>
+        {results.map((r) => (
+          <TouchableOpacity
+            key={r.value}
+            style={[styles.option, result === r.value && styles.optionOn]}
+            onPress={() => setResult(r.value)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.optionText, result === r.value && styles.optionTextOn]}>
+              {r.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.modalLabel}>สรุปงานที่ทำ</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={note}
+        onChangeText={setNote}
+        placeholder="เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={3}
+        accessibilityLabel="สรุปงานที่ทำ"
+      />
+
+      {/*
+        ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
+        ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
+      */}
+      <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน</Text>
+      {/*
+        สามช่อง คนที่ 1–3 แทนการกดเลือกจากรายชื่อทั้งหมด
+
+        ทีมหนึ่งไปกันไม่เกินสามคน การให้กดเลือกจากรายชื่อช่างทั้งบริษัท
+        แปลว่าต้องกวาดตาหาชื่อตัวเองในกองที่ไม่เกี่ยวข้อง และกดเกินไปหนึ่งคน
+        ก็ไม่มีอะไรบอกว่าเกิน — สามช่องบอกจำนวนสูงสุดด้วยตัวมันเอง
+
+        คนเดียวกันเลือกซ้ำสองช่องไม่ได้ เพราะคนที่เลือกไปแล้วถูกตัดออก
+        จากตัวเลือกของช่องที่เหลือ
+      */}
+      {[0, 1, 2].map((slot) => (
+        <View key={slot} style={styles.workerSlot}>
+          <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
+          <Dropdown
+            value={workerIds[slot] != null ? String(workerIds[slot]) : null}
+            clearable={slot > 0 || workerIds.length > 1}
+            placeholder={slot === 0 ? "เลือกช่าง" : "ไม่มี"}
+            accessibilityLabel={`ผู้เข้าปฏิบัติงานคนที่ ${slot + 1}`}
+            onChange={(next) =>
+              setWorkerIds((current) => {
+                const copy = [...current];
+                if (next === null) copy.splice(slot, 1);
+                else copy[slot] = Number(next);
+                // ช่องว่างตรงกลางทำให้ "คนที่ 2" กลายเป็นช่องที่ไม่มีใคร
+                // ทั้งที่มีคนที่ 3 อยู่ — บีบให้ชิดกันเสมอ
+                return copy.filter((x) => x != null);
+              })
+            }
+            options={technicians
+              .filter((t) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
+              .map((t) => ({
+                value: String(t.id),
+                label: t.name,
+                // ชื่อซ้ำกันเกิดขึ้นจริงในทีมช่าง รหัสพนักงานเป็นตัวแยก
+                hint: `${t.employeeCode}${t.team ? ` · ${t.team}` : ""}`,
+              }))}
+          />
+        </View>
+      ))}
+      <TextInput
+        style={[styles.modalInput, styles.modalInputLine]}
+        value={otherWorkers}
+        onChangeText={setOtherWorkers}
+        placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="คนอื่นที่ไปด้วย"
+      />
+      {workersMissing ? (
+        <Text style={styles.warn}>ต้องระบุอย่างน้อยหนึ่งคนว่าใครเข้าไปทำ</Text>
+      ) : null}
+
+      {/*
+        รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร — สรุปงานที่พิมพ์มา
+        เป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปเลยคือใบที่ตรวจย้อนไม่ได้
+      */}
+      <Text style={styles.modalLabel}>รูป / วิดีโอหน้างาน</Text>
+      {order.siteFileCount > 0 ? (
+        <Text style={styles.linkedText}>
+          แนบไว้แล้ว {order.siteFileCount} ไฟล์ในใบงานนี้ — เพิ่มได้อีก
+        </Text>
+      ) : null}
+      <FileStrip files={siteFiles} onChange={setSiteFiles} />
+      {busy ? null : (
+        <View style={styles.options}>
+          {Platform.OS !== "web" ? (
+            <TouchableOpacity
+              style={styles.option}
+              onPress={() =>
+                pickOne(
+                  (stage) => pickImageAttachment(true, stage),
+                  (f) => setSiteFiles((v) => [...v, f])
+                )
+              }
+              activeOpacity={0.7}
+            >
+              <Text style={styles.optionText}>ถ่ายรูป</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={styles.option}
+            onPress={() =>
+              pickOne(
+                (stage) => pickImageAttachment(false, stage),
+                (f) => setSiteFiles((v) => [...v, f])
+              )
+            }
+            activeOpacity={0.7}
+          >
+            <Text style={styles.optionText}>เลือกรูป</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.option}
+            onPress={() => pickOne(pickVideoAttachment, (f) => setSiteFiles((v) => [...v, f]))}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.optionText}>วิดีโอ</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {shotsMissing ? (
+        <Text style={styles.warn}>ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์</Text>
+      ) : null}
+
+      {/*
+        ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
+
+        รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
+        ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
+        ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
+      */}
+      {order.hasNameplate && !nameplate ? (
+        <>
+          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
+          <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
+        </>
+      ) : (
+        <>
+          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
+          {/* บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
+              ไม่ต้องถ่ายมาก่อนแล้วค่อยมีใครมาเทียบทีหลัง */}
+          {order.machineCode ? (
+            <Text style={styles.linkedText}>
+              ในระบบบันทึกไว้ว่า {order.machineCode}
+              {order.machineModel ? ` · ${order.machineModel}` : ""}
+              {order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""} —
+              ถ่ายป้ายรุ่นมาเทียบ
+            </Text>
+          ) : null}
+          {nameplate ? (
+            <FileStrip
+              files={[nameplate]}
+              onChange={(next) => setNameplate(next[0] ?? null)}
+            />
+          ) : busy ? null : (
             <View style={styles.options}>
-              {results.map((r) => (
-                <TouchableOpacity
-                  key={r.value}
-                  style={[styles.option, result === r.value && styles.optionOn]}
-                  onPress={() => setResult(r.value)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.optionText, result === r.value && styles.optionTextOn]}>
-                    {r.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.modalLabel}>สรุปงานที่ทำ</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={note}
-              onChangeText={setNote}
-              placeholder="เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ"
-              placeholderTextColor={colors.textFaint}
-              multiline
-              numberOfLines={3}
-              accessibilityLabel="สรุปงานที่ทำ"
-            />
-
-            {/*
-              ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
-              ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
-            */}
-            <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน</Text>
-            {/*
-              สามช่อง คนที่ 1–3 แทนการกดเลือกจากรายชื่อทั้งหมด
-
-              ทีมหนึ่งไปกันไม่เกินสามคน การให้กดเลือกจากรายชื่อช่างทั้งบริษัท
-              แปลว่าต้องกวาดตาหาชื่อตัวเองในกองที่ไม่เกี่ยวข้อง และกดเกินไปหนึ่งคน
-              ก็ไม่มีอะไรบอกว่าเกิน — สามช่องบอกจำนวนสูงสุดด้วยตัวมันเอง
-
-              คนเดียวกันเลือกซ้ำสองช่องไม่ได้ เพราะคนที่เลือกไปแล้วถูกตัดออก
-              จากตัวเลือกของช่องที่เหลือ
-            */}
-            {[0, 1, 2].map((slot) => (
-              <View key={slot} style={styles.workerSlot}>
-                <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
-                <Dropdown
-                  value={workerIds[slot] != null ? String(workerIds[slot]) : null}
-                  clearable={slot > 0 || workerIds.length > 1}
-                  placeholder={slot === 0 ? "เลือกช่าง" : "ไม่มี"}
-                  accessibilityLabel={`ผู้เข้าปฏิบัติงานคนที่ ${slot + 1}`}
-                  onChange={(next) =>
-                    setWorkerIds((current) => {
-                      const copy = [...current];
-                      if (next === null) copy.splice(slot, 1);
-                      else copy[slot] = Number(next);
-                      // ช่องว่างตรงกลางทำให้ "คนที่ 2" กลายเป็นช่องที่ไม่มีใคร
-                      // ทั้งที่มีคนที่ 3 อยู่ — บีบให้ชิดกันเสมอ
-                      return copy.filter((x) => x != null);
-                    })
-                  }
-                  options={technicians
-                    .filter((t) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
-                    .map((t) => ({
-                      value: String(t.id),
-                      label: t.name,
-                      // ชื่อซ้ำกันเกิดขึ้นจริงในทีมช่าง รหัสพนักงานเป็นตัวแยก
-                      hint: `${t.employeeCode}${t.team ? ` · ${t.team}` : ""}`,
-                    }))}
-                />
-              </View>
-            ))}
-            <TextInput
-              style={[styles.modalInput, styles.modalInputLine]}
-              value={otherWorkers}
-              onChangeText={setOtherWorkers}
-              placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="คนอื่นที่ไปด้วย"
-            />
-            {workersMissing ? (
-              <Text style={styles.warn}>ต้องระบุอย่างน้อยหนึ่งคนว่าใครเข้าไปทำ</Text>
-            ) : null}
-
-            {/*
-              รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร — สรุปงานที่พิมพ์มา
-              เป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปเลยคือใบที่ตรวจย้อนไม่ได้
-            */}
-            <Text style={styles.modalLabel}>รูป / วิดีโอหน้างาน</Text>
-            {order.siteFileCount > 0 ? (
-              <Text style={styles.linkedText}>
-                แนบไว้แล้ว {order.siteFileCount} ไฟล์ในใบงานนี้ — เพิ่มได้อีก
-              </Text>
-            ) : null}
-            <FileStrip files={siteFiles} onChange={setSiteFiles} />
-            {busy ? null : (
-              <View style={styles.options}>
-                {Platform.OS !== "web" ? (
-                  <TouchableOpacity
-                    style={styles.option}
-                    onPress={() =>
-                      pickOne(
-                        (stage) => pickImageAttachment(true, stage),
-                        (f) => setSiteFiles((v) => [...v, f])
-                      )
-                    }
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.optionText}>ถ่ายรูป</Text>
-                  </TouchableOpacity>
-                ) : null}
+              {Platform.OS !== "web" ? (
                 <TouchableOpacity
                   style={styles.option}
                   onPress={() =>
-                    pickOne(
-                      (stage) => pickImageAttachment(false, stage),
-                      (f) => setSiteFiles((v) => [...v, f])
-                    )
+                    pickOne((stage) => pickImageAttachment(true, stage), setNameplate)
                   }
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.optionText}>เลือกรูป</Text>
+                  <Text style={styles.optionText}>ถ่ายป้ายรุ่น</Text>
                 </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={styles.option}
+                onPress={() =>
+                  pickOne((stage) => pickImageAttachment(false, stage), setNameplate)
+                }
+                activeOpacity={0.7}
+              >
+                <Text style={styles.optionText}>เลือกรูปป้ายรุ่น</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {nameplateMissing ? (
+            <Text style={styles.warn}>
+              ต้องแนบรูปป้ายรุ่นที่ถ่ายรอบนี้ — ใช้ไล่เทียบว่าไปถูกเครื่อง
+            </Text>
+          ) : null}
+        </>
+      )}
+
+      <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
+
+      {/*
+        ใบเหลืองคือหลักฐานว่าของที่หายไปจากคลังไปอยู่ที่เครื่องตัวไหน
+        ถามเฉพาะตอนที่มีอะไหล่จริง งานที่ไม่ได้เปลี่ยนอะไรไม่มีใบเบิกให้ถ่าย
+      */}
+      {parts.length > 0 ? (
+        <>
+          <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
+          {order.hasRequisitionSlip && !slip ? (
+            <Text style={styles.linkedText}>
+              แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
+            </Text>
+          ) : null}
+          {slip ? (
+            <View style={styles.slipRow}>
+              {slip.thumbnailUri ? (
+                <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
+              ) : (
+                <View style={[styles.slipThumb, styles.slipBlank]}>
+                  <Ionicons name="document-outline" size={22} color={colors.textFaint} />
+                </View>
+              )}
+              <TouchableOpacity
+                onPress={() => setSlip(null)}
+                accessibilityLabel="เอารูปใบเหลืองออก"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+              </TouchableOpacity>
+            </View>
+          ) : busy ? (
+            <View style={styles.slipRow}>
+              <Spinner color={colors.primary} size="small" />
+              <Text style={styles.linkedText}>{busy}…</Text>
+            </View>
+          ) : (
+            <View style={styles.options}>
+              {Platform.OS !== "web" ? (
                 <TouchableOpacity
                   style={styles.option}
-                  onPress={() => pickOne(pickVideoAttachment, (f) => setSiteFiles((v) => [...v, f]))}
+                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage), setSlip)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.optionText}>วิดีโอ</Text>
+                  <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
                 </TouchableOpacity>
-              </View>
-            )}
-            {shotsMissing ? (
-              <Text style={styles.warn}>ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์</Text>
-            ) : null}
+              ) : null}
+              <TouchableOpacity
+                style={styles.option}
+                onPress={() => pickOne((stage) => pickImageAttachment(false, stage), setSlip)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {slipMissing ? (
+            <Text style={styles.warn}>
+              ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
+            </Text>
+          ) : null}
+        </>
+      ) : null}
 
-            {/*
-              ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
+      {order.outageStillOpen ? (
+        <Text style={styles.warn}>
+          เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานล่าสุด ปิดใบงานได้ แต่เคสบนกระดานจะยังอยู่
+          จนกว่าเครื่องจะหายไปจากไฟล์รอบถัดไป
+        </Text>
+      ) : null}
 
-              รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
-              ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
-              ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
-            */}
-            {order.hasNameplate && !nameplate ? (
-              <>
-                <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-                <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
-              </>
-            ) : (
-              <>
-                <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-                {/* บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
-                    ไม่ต้องถ่ายมาก่อนแล้วค่อยมีใครมาเทียบทีหลัง */}
-                {order.machineCode ? (
-                  <Text style={styles.linkedText}>
-                    ในระบบบันทึกไว้ว่า {order.machineCode}
-                    {order.machineModel ? ` · ${order.machineModel}` : ""}
-                    {order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""} —
-                    ถ่ายป้ายรุ่นมาเทียบ
-                  </Text>
-                ) : null}
-                {nameplate ? (
-                  <FileStrip
-                    files={[nameplate]}
-                    onChange={(next) => setNameplate(next[0] ?? null)}
-                  />
-                ) : busy ? null : (
-                  <View style={styles.options}>
-                    {Platform.OS !== "web" ? (
-                      <TouchableOpacity
-                        style={styles.option}
-                        onPress={() =>
-                          pickOne((stage) => pickImageAttachment(true, stage), setNameplate)
-                        }
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.optionText}>ถ่ายป้ายรุ่น</Text>
-                      </TouchableOpacity>
-                    ) : null}
-                    <TouchableOpacity
-                      style={styles.option}
-                      onPress={() =>
-                        pickOne((stage) => pickImageAttachment(false, stage), setNameplate)
-                      }
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.optionText}>เลือกรูปป้ายรุ่น</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {nameplateMissing ? (
-                  <Text style={styles.warn}>
-                    ต้องแนบรูปป้ายรุ่นที่ถ่ายรอบนี้ — ใช้ไล่เทียบว่าไปถูกเครื่อง
-                  </Text>
-                ) : null}
-              </>
-            )}
-
-            <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
-
-            {/*
-              ใบเหลืองคือหลักฐานว่าของที่หายไปจากคลังไปอยู่ที่เครื่องตัวไหน
-              ถามเฉพาะตอนที่มีอะไหล่จริง งานที่ไม่ได้เปลี่ยนอะไรไม่มีใบเบิกให้ถ่าย
-            */}
-            {parts.length > 0 ? (
-              <>
-                <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
-                {order.hasRequisitionSlip && !slip ? (
-                  <Text style={styles.linkedText}>
-                    แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
-                  </Text>
-                ) : null}
-                {slip ? (
-                  <View style={styles.slipRow}>
-                    {slip.thumbnailUri ? (
-                      <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
-                    ) : (
-                      <View style={[styles.slipThumb, styles.slipBlank]}>
-                        <Ionicons name="document-outline" size={22} color={colors.textFaint} />
-                      </View>
-                    )}
-                    <TouchableOpacity
-                      onPress={() => setSlip(null)}
-                      accessibilityLabel="เอารูปใบเหลืองออก"
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close-circle" size={20} color={colors.textFaint} />
-                    </TouchableOpacity>
-                  </View>
-                ) : busy ? (
-                  <View style={styles.slipRow}>
-                    <ActivityIndicator color={colors.primary} size="small" />
-                    <Text style={styles.linkedText}>{busy}…</Text>
-                  </View>
-                ) : (
-                  <View style={styles.options}>
-                    {Platform.OS !== "web" ? (
-                      <TouchableOpacity
-                        style={styles.option}
-                        onPress={() => pickOne((stage) => pickImageAttachment(true, stage), setSlip)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
-                      </TouchableOpacity>
-                    ) : null}
-                    <TouchableOpacity
-                      style={styles.option}
-                      onPress={() => pickOne((stage) => pickImageAttachment(false, stage), setSlip)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {slipMissing ? (
-                  <Text style={styles.warn}>
-                    ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
-                  </Text>
-                ) : null}
-              </>
-            ) : null}
-
-            {order.outageStillOpen ? (
-              <Text style={styles.warn}>
-                เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานล่าสุด ปิดใบงานได้ แต่เคสบนกระดานจะยังอยู่
-                จนกว่าเครื่องจะหายไปจากไฟล์รอบถัดไป
-              </Text>
-            ) : null}
-
-            {error ? <Text style={styles.modalError}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.modalCancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.modalSave,
-                (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing) &&
-                  styles.modalSaveOff,
-              ]}
-              onPress={submit}
-              disabled={saving || slipMissing || shotsMissing || workersMissing || nameplateMissing}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <>
-                  <ActivityIndicator color="#fff" size="small" />
-                  {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
-                </>
-              ) : (
-                <Text style={styles.modalSaveText}>ยืนยันปิดงาน</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
   );
 }
 
@@ -2339,23 +2335,6 @@ const styles = StyleSheet.create({
   editNote: { flexDirection: "row", alignItems: "center", gap: 2 },
   editNoteText: { fontSize: 13, lineHeight: 21, color: colors.primary, fontWeight: "700" },
 
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(15,23,42,0.45)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.lg,
-  },
-  modal: {
-    width: "100%",
-    maxWidth: 560,
-    maxHeight: "90%",
-    backgroundColor: colors.card,
-    borderRadius: radius.md,
-    overflow: "hidden",
-  },
-  modalBody: { padding: spacing.lg },
-  modalTitle: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
   modalLabel: {
     fontSize: 13,
     lineHeight: 21,
@@ -2401,28 +2380,25 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.md },
-  modalActions: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    padding: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
+  modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
   modalCancel: {
     flex: 1,
+    minHeight: 46,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.md,
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.sky50,
   },
-  modalCancelText: { fontSize: 14, lineHeight: 22, color: colors.textMuted, fontWeight: "600" },
+  modalCancelText: { fontSize: 15, lineHeight: 22, color: colors.primaryInk, fontWeight: "700" },
   modalSave: {
     flex: 1,
+    minHeight: 46,
+    flexDirection: "row",
+    gap: spacing.sm,
     alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
     backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.md,
   },
   modalSaveOff: { opacity: 0.6 },
   closeFiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },

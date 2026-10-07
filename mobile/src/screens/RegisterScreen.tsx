@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -9,6 +8,7 @@ import {
   TextInput,
   TouchableOpacity,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import { colors } from "../theme";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -95,7 +95,7 @@ export default function RegisterScreen({ navigation }: Props) {
 
         <TouchableOpacity style={styles.button} onPress={handleRegister} disabled={submitting}>
           {submitting ? (
-            <ActivityIndicator color="#fff" />
+            <Spinner color="#fff" />
           ) : (
             <Text style={styles.buttonText}>ลงทะเบียน</Text>
           )}

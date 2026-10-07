@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -112,12 +112,12 @@ export default function ManageBranchesScreen() {
           keyboardType="number-pad"
         />
         <TouchableOpacity style={styles.button} onPress={handleAdd} disabled={submitting}>
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>เพิ่มสาขา</Text>}
+          {submitting ? <Spinner color="#fff" /> : <Text style={styles.buttonText}>เพิ่มสาขา</Text>}
         </TouchableOpacity>
       </View>
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.primary} />
+        <Spinner style={styles.loader} color={colors.primary} />
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}

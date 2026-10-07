@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import * as Location from "expo-location";
@@ -76,7 +76,7 @@ export default function BranchCheckInScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -103,7 +103,7 @@ export default function BranchCheckInScreen() {
 
           <TouchableOpacity style={styles.button} onPress={handleCheckIn} disabled={locating || submitting}>
             {locating || submitting ? (
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
             ) : (
               <Text style={styles.buttonText}>รายงานตัว (ใช้ GPS ปัจจุบัน)</Text>
             )}

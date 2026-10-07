@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -130,7 +130,7 @@ export default function ManageGuidesScreen() {
         <View style={styles.buttonRow}>
           <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={submitting}>
             {submitting ? (
-              <ActivityIndicator color="#fff" />
+              <Spinner color="#fff" />
             ) : (
               <Text style={styles.buttonText}>{editingId ? "บันทึกการแก้ไข" : "เพิ่มหัวข้อ"}</Text>
             )}
@@ -144,7 +144,7 @@ export default function ManageGuidesScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.primary} />
+        <Spinner style={styles.loader} color={colors.primary} />
       ) : (
         <FlatList
           scrollEnabled={false}

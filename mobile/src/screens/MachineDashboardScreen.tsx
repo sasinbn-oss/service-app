@@ -1,8 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -12,6 +9,8 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
+import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
@@ -633,7 +632,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
 
       {loading && !data ? (
         <View style={styles.loading}>
-          <ActivityIndicator color={colors.primary} />
+          <Spinner color={colors.primary} />
         </View>
       ) : null}
 
@@ -804,135 +803,135 @@ function NoteModal({
   }
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        {/* กันไม่ให้การแตะในกล่องทะลุไปปิด modal */}
-        <Pressable style={styles.modalSheet} onPress={() => {}}>
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalTitle}>{row.branchName}</Text>
-            <Text style={styles.modalSub}>
-              {row.branchCode}
-              {row.machineCode ? ` · เครื่อง ${row.machineCode}` : ""}
-              {row.machineBrand ? ` · ${row.machineBrand}` : ""}
-              {` · ดับมาแล้ว ${slaText(row.slaHours)}`}
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={saving}
+      title={row.branchName}
+      subtitle={
+        <>
+          {row.branchCode}
+          {row.machineCode ? ` · เครื่อง ${row.machineCode}` : ""}
+          {row.machineBrand ? ` · ${row.machineBrand}` : ""}
+          {` · ดับมาแล้ว ${slaText(row.slaHours)}`}
+        </>
+      }
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onClose} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>{row.workOrder ? "ปิด" : "ยกเลิก"}</Text>
+          </TouchableOpacity>
+          {row.workOrder ? null : (
+          <TouchableOpacity
+            style={[styles.modalSave, saving && styles.modalSaveDisabled]}
+            onPress={save}
+            disabled={saving}
+            activeOpacity={0.7}
+          >
+            {saving ? (
+              <Spinner color="#fff" size="small" />
+            ) : (
+              <Text style={styles.modalSaveText}>บันทึก</Text>
+            )}
+          </TouchableOpacity>
+          )}
+        </View>
+      }
+    >
+
+      {/*
+        เคสที่มีใบงานแล้ว ให้ไปแก้ที่ใบงานที่เดียว
+        สองที่ที่แก้ได้พร้อมกันแปลว่าจะมีอันหนึ่งเก่ากว่าเสมอ แล้วไม่มีใครรู้ว่าอันไหน
+      */}
+      {row.workOrder ? (
+        <View style={styles.fromWo}>
+          <Ionicons name="clipboard-outline" size={16} color={colors.primaryDark} />
+          <View style={styles.fromWoBody}>
+            <Text style={styles.fromWoTitle}>
+              เคสนี้มีใบงาน {row.workOrder.code} อยู่แล้ว
             </Text>
+            <Text style={styles.fromWoText}>
+              อาการและสถานะกรอกที่ใบงาน แล้วกระดานจะดึงมาแสดงให้เอง
+            </Text>
+            <TouchableOpacity
+              style={styles.fromWoButton}
+              onPress={() => onOpenWorkOrder(row)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.fromWoButtonText}>เปิดใบงาน {row.workOrder.code}</Text>
+              <Ionicons name="arrow-forward" size={14} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
-            {/*
-              เคสที่มีใบงานแล้ว ให้ไปแก้ที่ใบงานที่เดียว
-              สองที่ที่แก้ได้พร้อมกันแปลว่าจะมีอันหนึ่งเก่ากว่าเสมอ แล้วไม่มีใครรู้ว่าอันไหน
-            */}
-            {row.workOrder ? (
-              <View style={styles.fromWo}>
-                <Ionicons name="clipboard-outline" size={16} color={colors.primaryDark} />
-                <View style={styles.fromWoBody}>
-                  <Text style={styles.fromWoTitle}>
-                    เคสนี้มีใบงาน {row.workOrder.code} อยู่แล้ว
-                  </Text>
-                  <Text style={styles.fromWoText}>
-                    อาการและสถานะกรอกที่ใบงาน แล้วกระดานจะดึงมาแสดงให้เอง
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.fromWoButton}
-                    onPress={() => onOpenWorkOrder(row)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.fromWoButtonText}>เปิดใบงาน {row.workOrder.code}</Text>
-                    <Ionicons name="arrow-forward" size={14} color="#fff" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : null}
+      {!row.workOrder ? (
+        <>
+      <Text style={styles.modalLabel}>อาการที่พบ</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={symptom}
+        onChangeText={setSymptom}
+        placeholder="เช่น ปั๊มน้ำไม่ทำงาน / บอร์ดควบคุมเสีย"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        maxLength={500}
+      />
 
-            {!row.workOrder ? (
-              <>
-            <Text style={styles.modalLabel}>อาการที่พบ</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={symptom}
-              onChangeText={setSymptom}
-              placeholder="เช่น ปั๊มน้ำไม่ทำงาน / บอร์ดควบคุมเสีย"
-              placeholderTextColor={colors.textFaint}
-              multiline
-              maxLength={500}
-            />
-
-            <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
-            <View style={styles.modalOptions}>
-              {options.map((option) => {
-                const active = status === option.value;
-                const tone = statusStyle(option.value);
-                return (
-                  <TouchableOpacity
-                    key={option.value}
-                    style={[
-                      styles.modalOption,
-                      active && { backgroundColor: tone.background, borderColor: tone.color },
-                    ]}
-                    onPress={() => setStatus(active ? null : option.value)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.modalOptionText, active && { color: tone.color }]}>
-                      {option.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <Text style={styles.modalHint}>แตะสถานะที่เลือกอยู่อีกครั้งเพื่อล้างค่า</Text>
-
-            {/* ช่องอะไหล่โผล่เมื่อเลือก "รออะไหล่" และยังโผล่อยู่ถ้าเคยใส่ไว้แล้ว
-                เปลี่ยนสถานะแล้วของที่กรอกไว้จะได้ไม่หายไปเงียบๆ */}
-            {status === WAITING_PARTS || parts.length > 0 ? (
-              <PartPicker parts={parts} onChange={setParts} />
-            ) : null}
-
-            {status === WAITING_TECH || visitDate ? (
-              <VisitDateField value={visitDate} onChange={setVisitDate} />
-            ) : null}
-              </>
-            ) : null}
-
-            {logs.length > 0 ? (
-              <>
-                <Text style={styles.modalLabel}>ประวัติการกรอก ({logs.length} ครั้ง)</Text>
-                <View style={styles.logList}>
-                  {logs.map((log) => (
-                    <NoteLogItem key={log.id} log={log} />
-                  ))}
-                </View>
-              </>
-            ) : row.noteUpdatedBy ? (
-              <Text style={styles.modalHint}>
-                แก้ไขล่าสุดโดย {row.noteUpdatedBy} เมื่อ {formatDateTime(row.noteUpdatedAt)} น.
-                {"\n"}(บันทึกไว้ก่อนระบบเริ่มเก็บประวัติ จึงไม่มีรายละเอียดย้อนหลัง)
+      <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
+      <View style={styles.modalOptions}>
+        {options.map((option) => {
+          const active = status === option.value;
+          const tone = statusStyle(option.value);
+          return (
+            <TouchableOpacity
+              key={option.value}
+              style={[
+                styles.modalOption,
+                active && { backgroundColor: tone.background, borderColor: tone.color },
+              ]}
+              onPress={() => setStatus(active ? null : option.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.modalOptionText, active && { color: tone.color }]}>
+                {option.label}
               </Text>
-            ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.modalHint}>แตะสถานะที่เลือกอยู่อีกครั้งเพื่อล้างค่า</Text>
 
-            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+      {/* ช่องอะไหล่โผล่เมื่อเลือก "รออะไหล่" และยังโผล่อยู่ถ้าเคยใส่ไว้แล้ว
+          เปลี่ยนสถานะแล้วของที่กรอกไว้จะได้ไม่หายไปเงียบๆ */}
+      {status === WAITING_PARTS || parts.length > 0 ? (
+        <PartPicker parts={parts} onChange={setParts} />
+      ) : null}
 
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={onClose} activeOpacity={0.7}>
-                <Text style={styles.modalCancelText}>{row.workOrder ? "ปิด" : "ยกเลิก"}</Text>
-              </TouchableOpacity>
-              {row.workOrder ? null : (
-              <TouchableOpacity
-                style={[styles.modalSave, saving && styles.modalSaveDisabled]}
-                onPress={save}
-                disabled={saving}
-                activeOpacity={0.7}
-              >
-                {saving ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.modalSaveText}>บันทึก</Text>
-                )}
-              </TouchableOpacity>
-              )}
-            </View>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+      {status === WAITING_TECH || visitDate ? (
+        <VisitDateField value={visitDate} onChange={setVisitDate} />
+      ) : null}
+        </>
+      ) : null}
+
+      {logs.length > 0 ? (
+        <>
+          <Text style={styles.modalLabel}>ประวัติการกรอก ({logs.length} ครั้ง)</Text>
+          <View style={styles.logList}>
+            {logs.map((log) => (
+              <NoteLogItem key={log.id} log={log} />
+            ))}
+          </View>
+        </>
+      ) : row.noteUpdatedBy ? (
+        <Text style={styles.modalHint}>
+          แก้ไขล่าสุดโดย {row.noteUpdatedBy} เมื่อ {formatDateTime(row.noteUpdatedAt)} น.
+          {"\n"}(บันทึกไว้ก่อนระบบเริ่มเก็บประวัติ จึงไม่มีรายละเอียดย้อนหลัง)
+        </Text>
+      ) : null}
+
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
   );
 }
 
@@ -1066,40 +1065,31 @@ function ActivityModal({ visible, onClose }: { visible: boolean; onClose: () => 
   if (!visible) return null;
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.modalSheet} onPress={() => {}}>
-          <View style={styles.logHeader}>
-            <Text style={styles.modalTitle}>ประวัติการกรอกอาการ/สถานะ</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close" size={22} color={colors.textMuted} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.modalSub}>ล่าสุด 100 ครั้ง ทุกเคสรวมกัน ใหม่สุดอยู่บนสุด</Text>
+    <AppModal
+      visible
+      onClose={onClose}
+      title="ประวัติการกรอกอาการ/สถานะ"
+      subtitle="ล่าสุด 100 ครั้ง ทุกเคสรวมกัน ใหม่สุดอยู่บนสุด"
+    >
+      {loading ? (
+        <View style={styles.loading}>
+          <Spinner color={colors.primary} />
+        </View>
+      ) : null}
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
 
-          {loading ? (
-            <View style={styles.loading}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-          ) : null}
-          {error ? <Text style={styles.modalError}>{error}</Text> : null}
+      {!loading && !error && logs.length === 0 ? (
+        <Text style={styles.modalHint}>
+          ยังไม่มีใครกรอกอาการหรือสถานะเลย — แตะที่รายการในแดชบอร์ดเพื่อเริ่มกรอก
+        </Text>
+      ) : null}
 
-          {!loading && !error && logs.length === 0 ? (
-            <Text style={styles.modalHint}>
-              ยังไม่มีใครกรอกอาการหรือสถานะเลย — แตะที่รายการในแดชบอร์ดเพื่อเริ่มกรอก
-            </Text>
-          ) : null}
-
-          <ScrollView style={{ marginTop: spacing.sm }} keyboardShouldPersistTaps="handled">
-            <View style={styles.logList}>
-              {logs.map((log) => (
-                <NoteLogItem key={log.id} log={log} showCase />
-              ))}
-            </View>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+      <View style={styles.logList}>
+        {logs.map((log) => (
+          <NoteLogItem key={log.id} log={log} showCase />
+        ))}
+      </View>
+    </AppModal>
   );
 }
 
@@ -2084,23 +2074,6 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
 
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: spacing.lg,
-  },
-  modalSheet: {
-    width: "100%",
-    maxWidth: 520,
-    maxHeight: "85%",
-    backgroundColor: colors.card,
-    borderRadius: radius.md,
-    padding: spacing.lg,
-  },
-  modalTitle: { fontSize: 16, lineHeight: 26, fontWeight: "700", color: colors.text },
-  modalSub: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
   modalLabel: {
     fontSize: 13,
     lineHeight: 21,
@@ -2134,7 +2107,6 @@ const styles = StyleSheet.create({
   modalOptionText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
   modalHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
 
-  logHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   logList: { gap: spacing.sm },
   logItem: {
     gap: spacing.xs,
@@ -2216,25 +2188,23 @@ const styles = StyleSheet.create({
   },
   pickerResultName: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.sm },
-  modalActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
+  modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
   modalCancel: {
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.sm,
-  },
-  modalCancelText: { fontSize: 14, lineHeight: 22, color: colors.textMuted, fontWeight: "600" },
-  modalSave: {
-    minWidth: 108,
+    flex: 1,
+    minHeight: 46,
     alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.sky50,
+  },
+  modalCancelText: { fontSize: 15, lineHeight: 22, color: colors.primaryInk, fontWeight: "700" },
+  modalSave: {
+    flex: 1,
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
     backgroundColor: colors.primary,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.sm,
   },
   modalSaveDisabled: { opacity: 0.6 },
   modalSaveText: { fontSize: 14, lineHeight: 22, color: "#fff", fontWeight: "700" },

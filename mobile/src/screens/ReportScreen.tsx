@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -9,6 +8,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
@@ -204,7 +204,7 @@ export default function ReportScreen({ route }: Props) {
           activeOpacity={0.7}
         >
           {downloading ? (
-            <ActivityIndicator size="small" color={colors.primary} />
+            <Spinner size="small" color={colors.primary} />
           ) : (
             <Ionicons name="download-outline" size={16} color={colors.primary} />
           )}
@@ -221,7 +221,7 @@ export default function ReportScreen({ route }: Props) {
 
       {loading && !data ? (
         <View style={styles.loading}>
-          <ActivityIndicator color={colors.primary} />
+          <Spinner color={colors.primary} />
         </View>
       ) : null}
 

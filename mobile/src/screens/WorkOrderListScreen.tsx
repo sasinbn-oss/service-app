@@ -6,7 +6,6 @@
  */
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   useWindowDimensions,
   FlatList,
   RefreshControl,
@@ -17,6 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
@@ -226,7 +226,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
 
       {loading ? (
         <View style={styles.centered}>
-          <ActivityIndicator color={colors.primary} />
+          <Spinner color={colors.primary} />
         </View>
       ) : error ? (
         <View style={styles.centered}>

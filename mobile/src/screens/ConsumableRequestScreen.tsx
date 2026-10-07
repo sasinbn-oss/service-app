@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -8,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
@@ -94,7 +94,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={colors.primary} />
+        <Spinner color={colors.primary} />
       </View>
     );
   }
@@ -140,7 +140,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
               />
               <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={submitting}>
                 {submitting ? (
-                  <ActivityIndicator color="#fff" />
+                  <Spinner color="#fff" />
                 ) : (
                   <Text style={styles.buttonText}>
                     ส่งคำขอเบิก{selectedLines.length > 0 ? ` (${selectedLines.length} รายการ)` : ""}
