@@ -23,7 +23,6 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
-import { useWideLayout } from "../components/AppShell";
 import { useDebounced } from "../utils/useDebounced";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
@@ -110,7 +109,6 @@ export function formatDate(iso: string | null) {
 }
 
 export default function WorkOrderListScreen({ navigation, route }: Props) {
-  useWideLayout();
   // จอกว้างเป็นตารางแบบต้นแบบ — กวาดตาเทียบสาขา/สถานะทีละคอลัมน์ได้ไวกว่าการ์ด
   // ที่ซ้อนข้อมูลเป็นบรรทัด บนมือถือยังเป็นการ์ดเพราะตารางหกคอลัมน์ไม่พอที่
   const { width } = useWindowDimensions();

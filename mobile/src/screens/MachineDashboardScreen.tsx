@@ -16,7 +16,6 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { useWideLayout } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
@@ -194,7 +193,6 @@ type Props = NativeStackScreenProps<HomeStackParamList, "MachineDashboard">;
 
 export default function MachineDashboardScreen({ navigation }: Props) {
   // หน้านี้เป็นตาราง ขอความกว้างเต็มที่แทนคอลัมน์แคบๆ ที่หน้าฟอร์มใช้
-  useWideLayout();
 
   const { width } = useWindowDimensions();
   // ตารางหลายคอลัมน์อ่านไม่ได้บนจอมือถือ จอแคบจึงเปลี่ยนเป็นการ์ดแทน
@@ -209,7 +207,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
    */
   const [pageWidth, setPageWidth] = useState(width);
   const scrollbar = Platform.OS === "web" ? 16 : 0;
-  const tableWidth = Math.min(pageWidth, 1600) - scrollbar - spacing.lg * 2 - spacing.md * 2 - 2;
+  const tableWidth = pageWidth - scrollbar - spacing.lg * 2 - spacing.md * 2 - 2;
   const { user } = useAuth();
 
   const [tab, setTab] = useState<Tab>("machines");
@@ -1324,8 +1322,9 @@ function columnsFor(isMachines: boolean, available: number): Column[] {
     const used = columns.reduce((sum, c) => sum + c.width, 0);
     column.width = Math.min(max, column.width + Math.max(0, available - used));
   };
-  grow("note", 460);
-  grow("branchName", 460);
+  // ไม่มีเพดานแล้ว (ยืดตามจอ) — ช่องอาการรับที่เหลือทั้งหมด ตารางจะได้เต็มกว้างพอดี ไม่เหลือขอบว่างขวา
+  grow("note", Number.POSITIVE_INFINITY);
+  grow("branchName", Number.POSITIVE_INFINITY);
 
   return columns;
 }
