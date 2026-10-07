@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   StyleSheet,
@@ -7,6 +8,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -15,12 +17,12 @@ import { ConsumableRequest } from "../types";
 import StatusBadge from "../components/StatusBadge";
 
 export default function MyConsumableRequestsScreen() {
-  const [requests, setRequests] = useState<ConsumableRequest[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [requests, setRequests, cached] = useCachedState<ConsumableRequest[]>("MyConsumableRequests:requests", []);
+  const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     setError(null);
     api
       .get<ConsumableRequest[]>("/consumable-requests")
@@ -75,7 +77,7 @@ export default function MyConsumableRequestsScreen() {
       contentContainerStyle={styles.content}
       data={requests}
       keyExtractor={(item) => String(item.id)}
-      ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีประวัติการเบิก</Text>}
+      ListEmptyComponent={<EmptyState icon="cube-outline" text="ยังไม่มีประวัติการเบิก" />}
       renderItem={({ item }) => (
         <View style={styles.card}>
           <View style={styles.headerRow}>
@@ -133,6 +135,5 @@ const styles = StyleSheet.create({
   reviewNote: { fontSize: 13, color: colors.text, marginTop: 6 },
   reviewer: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
   cancel: { color: colors.danger, fontWeight: "600", marginTop: 12 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   error: { color: colors.danger },
 });

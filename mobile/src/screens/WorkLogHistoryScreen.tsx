@@ -1,20 +1,22 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { WorkLog } from "../types";
 
 export default function WorkLogHistoryScreen() {
-  const [logs, setLogs] = useState<WorkLog[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [logs, setLogs, cached] = useCachedState<WorkLog[]>("WorkLogHistory:logs", []);
+  const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      setLoading(true);
+      // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
       api
         .get<WorkLog[]>("/work-logs")
         .then((res) => {
@@ -54,7 +56,7 @@ export default function WorkLogHistoryScreen() {
       contentContainerStyle={styles.content}
       data={logs}
       keyExtractor={(item) => String(item.id)}
-      ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีบันทึกการทำงาน</Text>}
+      ListEmptyComponent={<EmptyState icon="create-outline" text="ยังไม่มีบันทึกการทำงาน" />}
       renderItem={({ item }) => (
         <View style={styles.card}>
           <Text style={styles.date}>{new Date(item.workDate).toLocaleDateString("th-TH")}</Text>
@@ -81,6 +83,5 @@ const styles = StyleSheet.create({
   },
   date: { fontSize: 13, color: colors.textMuted, marginBottom: 4 },
   line: { fontSize: 15, color: colors.text, marginTop: 2 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   error: { color: colors.danger },
 });

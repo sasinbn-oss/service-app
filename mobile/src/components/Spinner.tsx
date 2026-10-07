@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Easing, Platform, StyleProp, StyleSheet, Text, View, ViewStyle } from "react-native";
-import { colors } from "../theme";
+import { colors, shadow } from "../theme";
 
 /**
  * เครื่องซักผ้าหมุน — ตัวบอก "กำลังโหลด" ตัวเดียวของทั้งแอป ตามมาตรฐาน OTTERI
@@ -9,7 +9,7 @@ import { colors } from "../theme";
  * วงหมุนธรรมดาหน้าตาต่างกันตามเครื่อง (iOS / Android / เบราว์เซอร์) ส่วนอันนี้
  * เหมือนกันทุกที่ และคนใช้จำได้ว่าเป็นของระบบนี้
  */
-export function WasherIcon({ size = 44, color = colors.primary }: { size?: number; color?: string }) {
+export function WasherIcon({ size = 92, color = colors.primary }: { size?: number; color?: string }) {
   const spin = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -25,52 +25,84 @@ export function WasherIcon({ size = 44, color = colors.primary }: { size?: numbe
   }, [spin]);
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
 
-  // ทุกสัดส่วนคิดจากความสูง ตัวเล็กในปุ่มกับตัวใหญ่กลางจอจึงเป็นรูปเดียวกัน
-  const h = size;
-  const w = Math.round(h * 0.86);
-  const border = Math.max(1.5, Math.round(h * 0.045));
-  const drum = Math.round(h * 0.54);
-  const detail = h >= 30; // ตัวเล็กเกินไปจะเห็นช่องใส่ผงกับไฟเป็นจุดเลอะ ๆ ตัดทิ้ง
+  /*
+    สัดส่วนทุกตัวลอกจาก .washer / .drum / .water ใน otteri-theme.css ของชุด OTTERI
+    (ตัวเต็มสูง 92 px) แล้วคูณด้วย k — ตัวเล็กในปุ่มกับตัวใหญ่กลางจอจึงเป็นรูปเดียวกับต้นแบบ
+    เดิมวาดเองจากคำบรรยาย ตัวเครื่องโปร่งใสและน้ำจาง หน้าตาเลยไม่ตรงกับต้นแบบ
+  */
+  const k = size / 92;
+  const border = Math.max(1.5, 3 * k);
+  const onButton = color.toLowerCase() === "#fff" || color.toLowerCase() === "#ffffff";
+  const drum = 50 * k;
+  const inner = drum - border * 2;
+  const detail = size >= 30; // ตัวเล็กเกินไปจะเห็นช่องผงซักฟอกกับไฟเป็นจุดเลอะ ๆ ตัดทิ้ง
+  const brand = color === colors.primary;
+  // สีเดียวกับต้นแบบเมื่อเป็นสีหลัก สีอื่น (เช่น ในปุ่มแดง) ใช้สีนั้นแบบจางแทน
+  const water = brand ? "#7FD0F2" : color;
 
   return (
     <View
       style={{
-        width: w,
-        height: h,
-        borderRadius: Math.round(h * 0.17),
+        width: 78 * k,
+        height: size,
+        borderRadius: 16 * k,
         borderWidth: border,
         borderColor: color,
-        alignItems: "center",
-        justifyContent: "flex-end",
-        paddingBottom: Math.round(h * 0.1),
+        backgroundColor: onButton ? "transparent" : colors.card,
+        ...(size >= 60 ? shadow.raised : null),
       }}
     >
       {detail ? (
-        <View style={[styles.top, { top: Math.round(h * 0.08), paddingHorizontal: Math.round(w * 0.12) }]}>
-          <View style={{ width: w * 0.28, height: border, borderRadius: border, backgroundColor: color, opacity: 0.3 }} />
-          <View style={{ width: h * 0.09, height: h * 0.09, borderRadius: h, backgroundColor: colors.success }} />
-        </View>
+        <>
+          <View
+            style={{
+              position: "absolute",
+              top: 8 * k - border,
+              left: 10 * k - border,
+              width: 22 * k,
+              height: 5 * k,
+              borderRadius: 3 * k,
+              backgroundColor: onButton ? "rgba(255,255,255,0.5)" : colors.primarySoft,
+            }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              top: 7 * k - border,
+              right: 10 * k - border,
+              width: 8 * k,
+              height: 8 * k,
+              borderRadius: 4 * k,
+              backgroundColor: colors.success,
+            }}
+          />
+        </>
       ) : null}
       <View
         style={{
+          position: "absolute",
+          left: (78 * k - drum) / 2 - border,
+          top: size * 0.56 - drum / 2 - border,
           width: drum,
           height: drum,
-          borderRadius: drum,
+          borderRadius: drum / 2,
           borderWidth: border,
           borderColor: color,
           overflow: "hidden",
+          backgroundColor: onButton ? "transparent" : colors.card,
         }}
       >
+        {/* .water { inset: 40% -30% -30% } — ผิวน้ำเริ่มที่ 40% ของถัง กว้างเกินถังแล้วหมุน */}
         <Animated.View
           style={{
             position: "absolute",
-            width: drum * 1.5,
-            height: drum * 1.5,
-            left: -drum * 0.33,
-            top: drum * 0.35,
-            borderRadius: drum * 0.65,
-            backgroundColor: color,
-            opacity: 0.45,
+            top: inner * 0.4,
+            left: -inner * 0.3,
+            width: inner * 1.6,
+            height: inner * 0.9,
+            borderRadius: inner * 0.42,
+            backgroundColor: water,
+            opacity: brand ? 1 : onButton ? 0.55 : 0.45,
             transform: [{ rotate }],
           }}
         />
@@ -99,7 +131,8 @@ export default function Spinner({
 }) {
   const onButton = color.toLowerCase() === "#fff" || color.toLowerCase() === "#ffffff";
   const small = size === "small" || onButton;
-  const px = typeof size === "number" ? size : small ? 22 : size === "large" ? 56 : 46;
+  // ตัวใหญ่ใช้ขนาดเต็มของต้นแบบ (92 px) — ต้นแบบมีขนาดเดียว ไม่มีตัวกลาง
+  const px = typeof size === "number" ? size : small ? 22 : 92;
   return (
     <View style={[small ? styles.inline : styles.block, style]}>
       <WasherIcon size={px} color={color} />
@@ -111,6 +144,7 @@ export default function Spinner({
 const styles = StyleSheet.create({
   top: { position: "absolute", left: 0, right: 0, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   inline: { alignItems: "center", justifyContent: "center" },
-  block: { alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 12 },
-  label: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.navy },
+  block: { alignItems: "center", justifyContent: "center", gap: 14, paddingVertical: 16 },
+  // .loader p ของต้นแบบ: ตัวหนา สีกรมท่า ห่างจากเครื่อง 14 px
+  label: { fontSize: 15, lineHeight: 24, fontWeight: "600", color: colors.navy },
 });

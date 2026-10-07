@@ -8,11 +8,12 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { Vehicle, VehicleLog } from "../types";
 
 export default function VehicleCheckInScreen() {
@@ -28,7 +29,7 @@ export default function VehicleCheckInScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     try {
       const [vehiclesRes, activeRes] = await Promise.all([
         api.get<Vehicle[]>("/vehicles?status=AVAILABLE"),
@@ -104,7 +105,7 @@ export default function VehicleCheckInScreen() {
   if (activeLog) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <Text style={styles.title}>คืนรถ</Text>
+        <Text style={[styles.title, headingFont]}>คืนรถ</Text>
         <View style={styles.card}>
           <Text style={styles.cardLabel}>รถที่ใช้อยู่</Text>
           <Text style={styles.cardValue}>
@@ -134,10 +135,10 @@ export default function VehicleCheckInScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>ลงทะเบียนใช้รถ</Text>
+      <Text style={[styles.title, headingFont]}>ลงทะเบียนใช้รถ</Text>
 
       {vehicles.length === 0 ? (
-        <Text style={styles.empty}>ไม่มีรถว่างให้ใช้งานในขณะนี้</Text>
+        <EmptyState icon="car-outline" text="ไม่มีรถว่างให้ใช้งานในขณะนี้" />
       ) : (
         <>
           <Text style={styles.label}>เลือกรถ</Text>
@@ -201,7 +202,6 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  empty: { color: colors.textMuted, textAlign: "center", marginTop: 40 },
   card: {
     backgroundColor: colors.card,
     borderRadius: 10,

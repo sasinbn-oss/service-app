@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   StyleSheet,
@@ -15,8 +16,8 @@ import { colors } from "../theme";
 import { Branch } from "../types";
 
 export default function ManageBranchesScreen() {
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [branches, setBranches, cached] = useCachedState<Branch[]>("ManageBranches:branches", []);
+  const [loading, setLoading] = useState(!cached);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [latitude, setLatitude] = useState("");
@@ -25,7 +26,7 @@ export default function ManageBranchesScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const loadBranches = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     api
       .get<Branch[]>("/branches")
       .then((res) => setBranches(res.data))

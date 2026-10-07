@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   ScrollView,
@@ -8,25 +9,26 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import AppModal from "../components/AppModal";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors, shadow } from "../theme";
+import { colors, shadow, headingFont } from "../theme";
 import { TroubleshootFlow, TroubleshootFlowSummary, TroubleshootNode } from "../types";
 
 type Picking = { node: TroubleshootNode; answer: "yesKey" | "noKey" } | null;
 
 export default function ManageFlowsScreen() {
-  const [flows, setFlows] = useState<TroubleshootFlowSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [flows, setFlows, cached] = useCachedState<TroubleshootFlowSummary[]>("ManageFlows:flows", []);
+  const [loading, setLoading] = useState(!cached);
   const [openFlow, setOpenFlow] = useState<TroubleshootFlow | null>(null);
   const [loadingFlow, setLoadingFlow] = useState(false);
   const [picking, setPicking] = useState<Picking>(null);
   const [saving, setSaving] = useState(false);
 
   const loadFlows = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     api
       .get<TroubleshootFlowSummary[]>("/troubleshoot-flows")
       .then((res) => setFlows(res.data))
@@ -89,7 +91,7 @@ export default function ManageFlowsScreen() {
         <TouchableOpacity onPress={() => setOpenFlow(null)}>
           <Text style={styles.back}>‹ กลับไปรายการผัง</Text>
         </TouchableOpacity>
-        <Text style={styles.detailTitle}>{openFlow.title}</Text>
+        <Text style={[styles.detailTitle, headingFont]}>{openFlow.title}</Text>
         <Text style={styles.detailMeta}>
           {questions.length} คำถาม · เริ่มที่ {openFlow.rootKey ?? "ยังไม่ได้ตั้ง"}
         </Text>
@@ -156,7 +158,7 @@ export default function ManageFlowsScreen() {
             แตะหัวข้อเพื่อตรวจสอบและเติมเส้นทางที่ระบบนำเข้าไม่สมบูรณ์
           </Text>
         }
-        ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีผังวินิจฉัยในระบบ</Text>}
+        ListEmptyComponent={<EmptyState icon="git-branch-outline" text="ยังไม่มีผังวินิจฉัยในระบบ" />}
         renderItem={({ item }) => (
           <TouchableOpacity style={styles.card} onPress={() => openDetail(item.id)}>
             <View style={{ flex: 1 }}>
@@ -230,5 +232,4 @@ const styles = StyleSheet.create({
   },
   pickKind: { fontSize: 12, fontWeight: "700", color: colors.primary, width: 30 },
   pickText: { flex: 1, fontSize: 13, color: colors.text },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
 });

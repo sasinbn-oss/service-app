@@ -3,6 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, useWindowDimensions } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors } from "../theme";
+import { subscribeBackgroundReads } from "../api/client";
 
 /**
  * ปุ่มรีเฟรชบนแถบบน แบบ OTTERI: หมุน "กำลังอัปเดต..." → เขียว "อัปเดตแล้ว" 2 วิ
@@ -42,10 +43,17 @@ type Phase = "idle" | "busy" | "done";
 export default function RefreshButton() {
   const { width } = useWindowDimensions();
   const [phase, setPhase] = useState<Phase>("idle");
+  // หน้าเปิดใหม่หรือกลับมาที่หน้าเดิมแล้วโหลดข้อมูลเบื้องหลัง — หมุนจาง ๆ ให้รู้ว่ากำลังอัปเดต
+  // แต่ไม่ขึ้นข้อความ เพราะคนไม่ได้กดเอง (ต้นแบบเรียกว่า syncing)
+  const [syncing, setSyncing] = useState(false);
   const spin = useRef(new Animated.Value(0)).current;
 
+  useEffect(() => subscribeBackgroundReads(setSyncing), []);
+
+  const spinning = phase === "busy" || (phase === "idle" && syncing);
+
   useEffect(() => {
-    if (phase !== "busy") {
+    if (!spinning) {
       spin.stopAnimation();
       spin.setValue(0);
       return;
@@ -60,7 +68,7 @@ export default function RefreshButton() {
     );
     loop.start();
     return () => loop.stop();
-  }, [phase, spin]);
+  }, [spinning, spin]);
 
   async function onPress() {
     if (phase === "busy") return;
@@ -87,7 +95,7 @@ export default function RefreshButton() {
       onPress={onPress}
       style={[styles.btn, wide ? styles.btnWide : styles.btnRound, phase === "done" && styles.btnDone]}
     >
-      <Animated.View style={{ transform: [{ rotate }] }}>
+      <Animated.View style={{ transform: [{ rotate }], opacity: phase === "idle" && syncing ? 0.55 : 1 }}>
         <Ionicons name="sync-outline" size={20} color={tint} />
       </Animated.View>
       {wide ? <Text style={[styles.text, { color: tint }]}>{label}</Text> : null}

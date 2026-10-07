@@ -33,6 +33,7 @@ import {
 } from "../utils/attachments";
 import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
+import FieldHint, { invalidInput } from "../components/FieldHint";
 import { colors, radius, shadow, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderForm">;
@@ -950,11 +951,11 @@ function MachineCard({
             autoCapitalize="characters"
             accessibilityLabel={`หมายเลขเครื่องที่ ${index + 1}`}
           />
-          <Text style={badCode ? styles.machineBad : styles.machineHint}>
-            {badCode
-              ? "ต้องเป็น W หรือ D ตามด้วยตัวเลข เช่น W3 หรือ D12"
-              : "W = เครื่องซัก · D = เครื่องอบ"}
-          </Text>
+          <FieldHint
+            err={badCode ? "ต้องเป็น W หรือ D ตามด้วยตัวเลข เช่น W3 หรือ D12" : null}
+            ok={code.length > 0 ? `รูปแบบถูกต้อง — ${code.startsWith("W") ? "เครื่องซัก" : "เครื่องอบ"}` : null}
+            hint="W = เครื่องซัก · D = เครื่องอบ"
+          />
 
           <Text style={styles.subLabel}>รุ่นของเครื่อง</Text>
           <View style={styles.options}>
@@ -1218,9 +1219,7 @@ const styles = StyleSheet.create({
   },
   machineHead: { flexDirection: "row", alignItems: "center", marginBottom: spacing.xs },
   machineTitle: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
-  machineHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
-  machineBad: { fontSize: 11, lineHeight: 19, color: colors.danger, marginTop: spacing.xs },
-  inputBad: { borderColor: colors.danger },
+  inputBad: invalidInput,
   subLabel: {
     fontSize: 12,
     lineHeight: 20,

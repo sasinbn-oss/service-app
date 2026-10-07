@@ -19,12 +19,15 @@ export function installWebFonts() {
   link.id = "otteri-fonts";
   link.rel = "stylesheet";
   link.href =
-    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap";
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap";
   document.head.appendChild(link);
 
   const style = document.createElement("style");
   style.textContent =
     '[class*="css-text"]:not([style*="font-family"]){font-family:"Inter","Noto Sans Thai",system-ui,sans-serif}' +
-    "body{background:#F4F9FD;-webkit-font-smoothing:antialiased}";
+    "body{background:#F4F9FD;-webkit-font-smoothing:antialiased}" +
+    // ช่องกรอกที่กำลังพิมพ์: ขอบฟ้าแบบต้นแบบ (.input:focus) แทนกรอบดำหนาของเบราว์เซอร์
+    // ที่ดูเหมือนช่องนั้นผิด — ไม่ใส่วงเรือง เพราะช่องค้นหาที่ขอบอยู่ที่กล่องรอบนอกจะมีวงซ้อนข้างใน
+    "input:focus,textarea:focus{outline:none!important;border-color:#009FE3!important}";
   document.head.appendChild(style);
 }

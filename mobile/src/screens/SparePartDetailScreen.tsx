@@ -3,7 +3,7 @@ import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { SparePart } from "../types";
 import { HomeStackParamList } from "../navigation/types";
 
@@ -51,7 +51,7 @@ export default function SparePartDetailScreen({ route }: Props) {
         </View>
       )}
 
-      <Text style={styles.name}>{part.name}</Text>
+      <Text style={[styles.name, headingFont]}>{part.name}</Text>
 
       <View style={styles.card}>
         <Row label="รหัสสินค้า" value={part.partCode} />

@@ -5,6 +5,7 @@
  * "รอหัวหน้าภาคระบุอะไหล่" ตลอดไปโดยไม่มีใครมีสิทธิ์ทำต่อ
  */
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   ScrollView,
   StyleSheet,
@@ -20,7 +21,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { Role } from "../types";
-import { colors, radius, shadow, spacing } from "../theme";
+import FieldHint, { invalidInput } from "../components/FieldHint";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
   id: number;
@@ -41,10 +43,10 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
 ];
 
 export default function ManageUsersScreen() {
-  const [users, setUsers] = useState<ManagedUser[]>([]);
-  const [regions, setRegions] = useState<string[]>([]);
-  const [teams, setTeams] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
+  const [regions, setRegions] = useCachedState<string[]>("ManageUsers:regions", []);
+  const [teams, setTeams] = useCachedState<string[]>("ManageUsers:teams", []);
+  const [loading, setLoading] = useState(!cached);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -109,15 +111,22 @@ export default function ManageUsersScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/* หัวหน้าแบบ OTTERI: ชื่อหน้า ป้ายจำนวน และปุ่มเพิ่มอยู่บรรทัดเดียวกัน */}
+      <View style={styles.pageHead}>
+        <Text style={[styles.pageTitle, headingFont]}>สิทธิ์ผู้ใช้</Text>
+        <View style={styles.countPill}>
+          <Text style={styles.countPillText}>{users.length} คน</Text>
+        </View>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity style={styles.addButton} onPress={() => setCreating(true)} activeOpacity={0.8}>
+          <Ionicons name="person-add-outline" size={18} color="#fff" />
+          <Text style={styles.addButtonText}>เพิ่มบัญชีผู้ใช้</Text>
+        </TouchableOpacity>
+      </View>
       <Text style={styles.intro}>
         บัญชีทั้งหมดสร้างจากที่นี่ ผู้ใช้สมัครเองไม่ได้ · แอดมินตั้งรหัสตั้งต้นให้
         แล้วเจ้าของบัญชีต้องเปลี่ยนรหัสเองตอนเข้าครั้งแรก
       </Text>
-
-      <TouchableOpacity style={styles.addButton} onPress={() => setCreating(true)} activeOpacity={0.8}>
-        <Ionicons name="person-add-outline" size={18} color="#fff" />
-        <Text style={styles.addButtonText}>เพิ่มบัญชีผู้ใช้</Text>
-      </TouchableOpacity>
 
       {users.map((u) => (
         <View key={u.id} style={styles.card}>
@@ -426,13 +435,17 @@ function CreateUserModal({
 
       <Text style={styles.label}>รหัสตั้งต้น</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, password.length > 0 && password.length < MIN_PASSWORD && invalidInput]}
         value={password}
         onChangeText={setPassword}
         autoCapitalize="none"
         placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
         placeholderTextColor={colors.textFaint}
         accessibilityLabel="รหัสตั้งต้น"
+      />
+      <FieldHint
+        err={password.length > 0 && password.length < MIN_PASSWORD ? `ยังขาดอีก ${MIN_PASSWORD - password.length} ตัว` : null}
+        ok={password.length >= MIN_PASSWORD ? "ความยาวใช้ได้" : null}
       />
       <Text style={styles.hint}>
         ไม่ต้องซ่อน — ตั้งใจให้แอดมินอ่านออกเพื่อบอกต่อ เจ้าของบัญชีจะถูกบังคับ
@@ -512,13 +525,17 @@ function ResetPasswordModal({
 
       <Text style={styles.label}>รหัสตั้งต้นใหม่</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, password.length > 0 && password.length < MIN_PASSWORD && invalidInput]}
         value={password}
         onChangeText={setPassword}
         autoCapitalize="none"
         placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
         placeholderTextColor={colors.textFaint}
         accessibilityLabel="รหัสตั้งต้นใหม่"
+      />
+      <FieldHint
+        err={password.length > 0 && password.length < MIN_PASSWORD ? `ยังขาดอีก ${MIN_PASSWORD - password.length} ตัว` : null}
+        ok={password.length >= MIN_PASSWORD ? "ความยาวใช้ได้" : null}
       />
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -527,14 +544,20 @@ function ResetPasswordModal({
 }
 
 const styles = StyleSheet.create({
+  pageHead: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
+  countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
+  countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   addButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
     backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.md,
+    borderRadius: 14,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    ...shadow.raised,
   },
   addButtonText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   pending: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
@@ -586,10 +609,12 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, gap: spacing.md },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
-  intro: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  intro: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: -4 },
   card: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.primarySoft,
     padding: spacing.lg,
     ...shadow.card,
   },

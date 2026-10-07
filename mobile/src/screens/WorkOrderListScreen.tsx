@@ -17,6 +17,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
@@ -25,7 +26,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { useWideLayout } from "../components/AppShell";
 import { useDebounced } from "../utils/useDebounced";
 import { HomeStackParamList } from "../navigation/types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
 
@@ -164,12 +165,21 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       */}
       <View style={styles.pageHead}>
         <View style={styles.pageTitleRow}>
-          <Text style={styles.pageTitle}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
+          <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
           {!loading && !error ? (
             <View style={styles.countPill}>
               <Text style={styles.countPillText}>{rows.length.toLocaleString("th-TH")} ใบ</Text>
             </View>
           ) : null}
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity
+            style={styles.addButton}
+            onPress={() => navigation.navigate("WorkOrderForm")}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
+          </TouchableOpacity>
         </View>
         <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
       </View>
@@ -189,14 +199,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </TouchableOpacity>
           ) : null}
         </View>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => navigation.navigate("WorkOrderForm")}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="add" size={18} color="#fff" />
-          <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
-        </TouchableOpacity>
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
@@ -236,13 +238,11 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
       ) : rows.length === 0 ? (
-        <View style={styles.centered}>
-          <Ionicons name="clipboard-outline" size={34} color={colors.textFaint} />
-          <Text style={styles.emptyTitle}>ไม่มีใบงานในหมวดนี้</Text>
-          <Text style={styles.emptyText}>
-            เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน
-          </Text>
-        </View>
+        <EmptyState
+          icon="clipboard-outline"
+          title="ไม่มีใบงานในหมวดนี้"
+          text="เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
+        />
       ) : (
         /*
           FlatList ไม่ใช่ ScrollView เพราะ ScrollView สร้างการ์ดทุกใบตั้งแต่เปิดหน้า
@@ -431,9 +431,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.sm,
+    borderRadius: 12,
     backgroundColor: colors.card,
     paddingHorizontal: spacing.md,
+    minHeight: 46,
   },
   searchInput: {
     flex: 1,
@@ -448,9 +449,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.xs,
     backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    borderRadius: 14,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    ...shadow.raised,
   },
   addButtonText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
   tableList: {
@@ -506,7 +508,7 @@ const styles = StyleSheet.create({
   viewBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   pageHead: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, flexShrink: 0 },
   pageTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   pageSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
@@ -518,13 +520,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.pill,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
     backgroundColor: colors.card,
   },
-  chipOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  // ชิปที่เลือกเป็นกรมท่าทึบตาม .chip.active ของต้นแบบ — ฟ้าอ่อนเดิมแยกจากชิปที่ไม่ได้เลือกยาก
+  chipOn: { backgroundColor: colors.navy, borderColor: colors.navy },
   chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  chipTextOn: { color: colors.primaryDark },
+  chipTextOn: { color: "#fff" },
   list: { padding: spacing.lg, paddingTop: 0, gap: spacing.md },
   card: {
     backgroundColor: colors.card,
@@ -543,8 +546,6 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   meta: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.sm, padding: spacing.xl },
-  emptyTitle: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
-  emptyText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center" },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
   retry: {
     borderWidth: 1,

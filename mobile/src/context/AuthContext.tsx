@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { clearPageCache } from "../utils/pageCache";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api, apiErrorMessage, TOKEN_KEY } from "../api/client";
 import { User } from "../types";
@@ -40,6 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.post("/auth/login", { employeeCode, password });
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
+      clearPageCache();
       setUser(data.user);
     } catch (error) {
       throw new Error(apiErrorMessage(error));
@@ -50,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.post("/auth/register", { employeeCode, name, password, phone });
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
+      clearPageCache();
       setUser(data.user);
     } catch (error) {
       throw new Error(apiErrorMessage(error));
@@ -64,6 +67,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function logout() {
     await AsyncStorage.removeItem(TOKEN_KEY);
+    // ข้อมูลที่จำไว้ของคนนี้ต้องไม่ค้างให้คนถัดไปที่เข้าเครื่องเดียวกันเห็น
+    clearPageCache();
     setUser(null);
   }
 

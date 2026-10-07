@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
@@ -28,7 +29,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      setLoading(true);
+      // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
       api
         .get<ConsumableItem[]>("/consumables")
         .then((res) => setItems(res.data))
@@ -108,7 +109,7 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
         ListHeaderComponent={
           <Text style={styles.heading}>ระบุจำนวนของที่ต้องการเบิก</Text>
         }
-        ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีรายการของในระบบ</Text>}
+        ListEmptyComponent={<EmptyState icon="cube-outline" text="ยังไม่มีรายการของในระบบ" />}
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={styles.info}>
@@ -205,5 +206,4 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
 });

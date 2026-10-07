@@ -12,7 +12,7 @@ import {
   ViewStyle,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 /**
  * หน้าต่างลอยแบบ OTTERI ที่ทุกหน้าใช้ร่วมกัน
@@ -52,7 +52,7 @@ export default function AppModal({
         <View style={[styles.card, { maxWidth: width }]}>
           <View style={styles.head}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.title}>{title}</Text>
+              <Text style={[styles.title, headingFont]}>{title}</Text>
               {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
             </View>
             <TouchableOpacity

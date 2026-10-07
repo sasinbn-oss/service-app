@@ -21,6 +21,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { useAuth } from "../context/AuthContext";
+import FieldHint, { invalidInput } from "../components/FieldHint";
 import { colors, radius, shadow, spacing } from "../theme";
 
 const MIN_PASSWORD = 8;
@@ -110,11 +111,10 @@ export default function ChangePasswordScreen({
           placeholderTextColor={colors.textFaint}
           accessibilityLabel="รหัสผ่านใหม่"
         />
-        {tooShort ? (
-          <Text style={styles.fieldError}>ต้องยาวอย่างน้อย {MIN_PASSWORD} ตัว</Text>
-        ) : sameAsOld ? (
-          <Text style={styles.fieldError}>รหัสใหม่ต้องไม่ซ้ำกับรหัสเดิม</Text>
-        ) : null}
+        <FieldHint
+          err={tooShort ? `ต้องยาวอย่างน้อย ${MIN_PASSWORD} ตัว` : sameAsOld ? "รหัสใหม่ต้องไม่ซ้ำกับรหัสเดิม" : null}
+          ok={next.length >= MIN_PASSWORD ? "ความยาวใช้ได้" : null}
+        />
 
         <Text style={styles.label}>พิมพ์รหัสใหม่อีกครั้ง</Text>
         <TextInput
@@ -127,7 +127,10 @@ export default function ChangePasswordScreen({
           placeholderTextColor={colors.textFaint}
           accessibilityLabel="พิมพ์รหัสใหม่อีกครั้ง"
         />
-        {mismatch ? <Text style={styles.fieldError}>สองช่องไม่ตรงกัน</Text> : null}
+        <FieldHint
+          err={mismatch ? "สองช่องไม่ตรงกัน" : null}
+          ok={confirm.length > 0 && confirm === next ? "ตรงกัน" : null}
+        />
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -194,8 +197,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.text,
   },
-  inputBad: { borderColor: colors.danger },
-  fieldError: { fontSize: 12, lineHeight: 20, color: colors.danger, marginTop: spacing.xs },
+  inputBad: invalidInput,
   error: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.lg },
   submit: {
     alignItems: "center",

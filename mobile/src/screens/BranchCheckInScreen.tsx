@@ -8,12 +8,13 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { Branch, BranchCheckIn } from "../types";
 
 export default function BranchCheckInScreen() {
@@ -28,7 +29,7 @@ export default function BranchCheckInScreen() {
   useFocusEffect(
     useCallback(() => {
       setResult(null);
-      setLoading(true);
+      // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
       api
         .get<Branch[]>("/branches")
         .then((res) => {
@@ -83,10 +84,10 @@ export default function BranchCheckInScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>รายงานตัวเข้าสาขา</Text>
+      <Text style={[styles.title, headingFont]}>รายงานตัวเข้าสาขา</Text>
 
       {branches.length === 0 ? (
-        <Text style={styles.empty}>ยังไม่มีข้อมูลสาขา</Text>
+        <EmptyState icon="business-outline" text="ยังไม่มีข้อมูลสาขา" />
       ) : (
         <>
           <Text style={styles.label}>เลือกสาขา</Text>
@@ -158,7 +159,6 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  empty: { color: colors.textMuted, textAlign: "center", marginTop: 40 },
   resultCard: {
     borderRadius: 10,
     borderWidth: 1,

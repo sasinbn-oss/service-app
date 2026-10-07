@@ -85,3 +85,20 @@ export const shadow = {
   card: elevation(1),
   raised: elevation(2),
 };
+
+/**
+ * ฟอนต์หัวข้อแบบ OTTERI (h1–h4 ชื่อแบรนด์ ตัวเลขสรุป ทะเบียนรถ)
+ *
+ * ต้นแบบใช้ Plus Jakarta Sans กับหัวข้อ ส่วนเนื้อหาใช้ Inter (ใส่ไว้ทาง CSS ใน webFonts.ts)
+ * ตัวอักษรละตินกับตัวเลขในหัวข้อเลยดูหนาและกลมกว่าเนื้อหา ไทยยังตกไปใช้ Noto Sans Thai เหมือนเดิม
+ * ใส่เฉพาะเว็บ — บนมือถือไม่ได้โหลดฟอนต์นี้ ถ้าระบุชื่อไปเครื่องจะหาไม่เจอแล้วเตือน
+ */
+export const fonts = {
+  head: Platform.OS === "web" ? "'Plus Jakarta Sans','Noto Sans Thai',system-ui,sans-serif" : undefined,
+};
+/**
+ * ใส่ใน style ของ <Text> ตรง ๆ แบบ style={[styles.title, headingFont]} ห้ามใส่ใน StyleSheet.create
+ * บนเว็บ StyleSheet ถูกแปลงเป็น class แล้วแพ้กฎฟอนต์รวมใน webFonts.ts หัวข้อเลยกลับเป็น Inter
+ * ส่วน style ที่ส่งตรง ๆ กลายเป็น inline ซึ่งกฎนั้นข้ามให้ (แบบเดียวกับไอคอน)
+ */
+export const headingFont = { fontFamily: fonts.head, letterSpacing: -0.24 } as const;
