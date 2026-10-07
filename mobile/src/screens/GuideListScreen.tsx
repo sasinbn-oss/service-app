@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -103,7 +104,7 @@ export default function GuideListScreen({ navigation }: Props) {
           contentContainerStyle={styles.listContent}
           data={guides}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ไม่พบข้อมูลที่ค้นหา</Text>}
+          ListEmptyComponent={<EmptyState icon="search-outline" text="ไม่พบข้อมูลที่ค้นหา" />}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.card}
@@ -157,6 +158,5 @@ const styles = StyleSheet.create({
   category: { fontSize: 12, color: colors.primary, fontWeight: "600", marginBottom: 4 },
   title: { fontSize: 16, fontWeight: "700", color: colors.text },
   symptom: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   error: { color: colors.danger, textAlign: "center", marginTop: 40 },
 });

@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import Spinner from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
+import FieldHint, { invalidInput } from "../components/FieldHint";
 import { colors, headingFont } from "../theme";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AuthStackParamList } from "../navigation/types";
@@ -25,6 +26,10 @@ export default function RegisterScreen({ navigation }: Props) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // ตรวจทันทีที่พิมพ์ กฎเดียวกับตอนกดสมัครด้านล่าง
+  const shortPassword = password.length > 0 && password.length < 6;
+  const mismatch = confirmPassword.length > 0 && confirmPassword !== password;
 
   async function handleRegister() {
     setError(null);
@@ -77,18 +82,26 @@ export default function RegisterScreen({ navigation }: Props) {
           onChangeText={setPhone}
         />
         <TextInput
-          style={styles.input}
-          placeholder="รหัสผ่าน"
+          style={[styles.input, shortPassword && invalidInput]}
+          placeholder="รหัสผ่าน (อย่างน้อย 6 ตัว)"
           secureTextEntry
           value={password}
           onChangeText={setPassword}
         />
+        <FieldHint
+          err={shortPassword ? `ยังขาดอีก ${6 - password.length} ตัว` : null}
+          ok={password.length >= 6 ? "ความยาวใช้ได้" : null}
+        />
         <TextInput
-          style={styles.input}
+          style={[styles.input, mismatch && invalidInput]}
           placeholder="ยืนยันรหัสผ่าน"
           secureTextEntry
           value={confirmPassword}
           onChangeText={setConfirmPassword}
+        />
+        <FieldHint
+          err={mismatch ? "สองช่องไม่ตรงกัน" : null}
+          ok={confirmPassword.length > 0 && !mismatch ? "ตรงกัน" : null}
         />
 
         {error && <Text style={styles.error}>{error}</Text>}

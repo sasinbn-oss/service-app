@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -24,7 +25,7 @@ export default function FlowListScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (term: string) => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     setError(null);
     try {
       const query = term ? `?search=${encodeURIComponent(term)}` : "";
@@ -69,7 +70,7 @@ export default function FlowListScreen({ navigation }: Props) {
           contentContainerStyle={styles.listContent}
           data={flows}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ไม่พบผังวินิจฉัยที่ค้นหา</Text>}
+          ListEmptyComponent={<EmptyState icon="search-outline" text="ไม่พบผังวินิจฉัยที่ค้นหา" />}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.card}
@@ -128,6 +129,5 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   warnText: { fontSize: 12, color: colors.warningInk },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   error: { color: colors.danger, textAlign: "center", marginTop: 40 },
 });

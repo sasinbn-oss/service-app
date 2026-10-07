@@ -45,6 +45,7 @@ import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
 import SideMenu, { DOCK_WIDTH, DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { useDockWidth } from "../components/AppShell";
+import { pageEnterLayout } from "../components/PageEnter";
 import {
   AdminStackParamList,
   HistoryStackParamList,
@@ -129,7 +130,7 @@ const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
 function HomeStackNavigator() {
   return (
-    <HomeStack.Navigator screenOptions={commonScreenOptions}>
+    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout}>
       <HomeStack.Screen
         name="HomeMenu"
         component={HomeScreen}
@@ -236,7 +237,7 @@ const WorkStack = createNativeStackNavigator<HomeStackParamList>();
 
 function WorkStackNavigator() {
   return (
-    <WorkStack.Navigator screenOptions={commonScreenOptions}>
+    <WorkStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout}>
       <WorkStack.Screen
         name="WorkOrderList"
         component={WorkOrderListScreen}
@@ -265,7 +266,7 @@ const HistoryStack = createNativeStackNavigator<HistoryStackParamList>();
 
 function HistoryStackNavigator() {
   return (
-    <HistoryStack.Navigator screenOptions={commonScreenOptions}>
+    <HistoryStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout}>
       <HistoryStack.Screen
         name="HistoryMenu"
         component={HistoryMenuScreen}
@@ -314,7 +315,7 @@ const AdminStack = createNativeStackNavigator<AdminStackParamList>();
 
 function AdminStackNavigator() {
   return (
-    <AdminStack.Navigator screenOptions={commonScreenOptions}>
+    <AdminStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout}>
       <AdminStack.Screen
         name="AdminMenu"
         component={AdminMenuScreen}
@@ -399,6 +400,8 @@ export default function MainNavigator() {
         <Tab.Navigator
           screenOptions={{
             headerShown: false,
+            // สลับแท็บแบบจางเข้า ไม่ตัดฉับ — ตามการเปลี่ยนหน้าของต้นแบบ (เฉพาะเว็บ มือถือคงแบบเดิม)
+            animation: Platform.OS === "web" ? "fade" : "none",
             tabBarActiveTintColor: colors.primaryInk,
             tabBarInactiveTintColor: colors.textMuted,
             // แท็บที่เลือกอยู่มีพื้นฟ้าอ่อนรองแบบ OTTERI — แค่เปลี่ยนสีไอคอน

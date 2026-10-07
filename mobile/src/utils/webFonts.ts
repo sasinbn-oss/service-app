@@ -25,6 +25,9 @@ export function installWebFonts() {
   const style = document.createElement("style");
   style.textContent =
     '[class*="css-text"]:not([style*="font-family"]){font-family:"Inter","Noto Sans Thai",system-ui,sans-serif}' +
-    "body{background:#F4F9FD;-webkit-font-smoothing:antialiased}";
+    "body{background:#F4F9FD;-webkit-font-smoothing:antialiased}" +
+    // ช่องกรอกที่กำลังพิมพ์: ขอบฟ้าแบบต้นแบบ (.input:focus) แทนกรอบดำหนาของเบราว์เซอร์
+    // ที่ดูเหมือนช่องนั้นผิด — ไม่ใส่วงเรือง เพราะช่องค้นหาที่ขอบอยู่ที่กล่องรอบนอกจะมีวงซ้อนข้างใน
+    "input:focus,textarea:focus{outline:none!important;border-color:#009FE3!important}";
   document.head.appendChild(style);
 }

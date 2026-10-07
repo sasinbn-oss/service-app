@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   Image,
@@ -10,6 +11,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
@@ -20,15 +22,15 @@ import { SparePart } from "../types";
 const emptyForm = { partCode: "", name: "", brand: "", category: "", description: "" };
 
 export default function ManageSparePartsScreen() {
-  const [parts, setParts] = useState<SparePart[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [parts, setParts, cached] = useCachedState<SparePart[]>("ManageSpareParts:parts", []);
+  const [loading, setLoading] = useState(!cached);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingId, setUploadingId] = useState<number | null>(null);
 
   const loadParts = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     api
       .get<SparePart[]>("/spare-parts")
       .then((res) => setParts(res.data))
@@ -205,7 +207,7 @@ export default function ManageSparePartsScreen() {
           contentContainerStyle={styles.listContent}
           data={parts}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีอะไหล่ในระบบ</Text>}
+          ListEmptyComponent={<EmptyState icon="construct-outline" text="ยังไม่มีอะไหล่ในระบบ" />}
           renderItem={({ item }) => {
             const uri = resolveImageUrl(item.imageUrl);
             return (
@@ -310,5 +312,4 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   action: { color: colors.primary, fontWeight: "600", fontSize: 13 },
   delete: { color: colors.danger, fontWeight: "600", fontSize: 13 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 20 },
 });

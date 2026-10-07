@@ -5,6 +5,7 @@
  * "รอหัวหน้าภาคระบุอะไหล่" ตลอดไปโดยไม่มีใครมีสิทธิ์ทำต่อ
  */
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   ScrollView,
   StyleSheet,
@@ -20,6 +21,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { Role } from "../types";
+import FieldHint, { invalidInput } from "../components/FieldHint";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
@@ -41,10 +43,10 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
 ];
 
 export default function ManageUsersScreen() {
-  const [users, setUsers] = useState<ManagedUser[]>([]);
-  const [regions, setRegions] = useState<string[]>([]);
-  const [teams, setTeams] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
+  const [regions, setRegions] = useCachedState<string[]>("ManageUsers:regions", []);
+  const [teams, setTeams] = useCachedState<string[]>("ManageUsers:teams", []);
+  const [loading, setLoading] = useState(!cached);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -433,13 +435,17 @@ function CreateUserModal({
 
       <Text style={styles.label}>รหัสตั้งต้น</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, password.length > 0 && password.length < MIN_PASSWORD && invalidInput]}
         value={password}
         onChangeText={setPassword}
         autoCapitalize="none"
         placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
         placeholderTextColor={colors.textFaint}
         accessibilityLabel="รหัสตั้งต้น"
+      />
+      <FieldHint
+        err={password.length > 0 && password.length < MIN_PASSWORD ? `ยังขาดอีก ${MIN_PASSWORD - password.length} ตัว` : null}
+        ok={password.length >= MIN_PASSWORD ? "ความยาวใช้ได้" : null}
       />
       <Text style={styles.hint}>
         ไม่ต้องซ่อน — ตั้งใจให้แอดมินอ่านออกเพื่อบอกต่อ เจ้าของบัญชีจะถูกบังคับ
@@ -519,13 +525,17 @@ function ResetPasswordModal({
 
       <Text style={styles.label}>รหัสตั้งต้นใหม่</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, password.length > 0 && password.length < MIN_PASSWORD && invalidInput]}
         value={password}
         onChangeText={setPassword}
         autoCapitalize="none"
         placeholder={`อย่างน้อย ${MIN_PASSWORD} ตัว`}
         placeholderTextColor={colors.textFaint}
         accessibilityLabel="รหัสตั้งต้นใหม่"
+      />
+      <FieldHint
+        err={password.length > 0 && password.length < MIN_PASSWORD ? `ยังขาดอีก ${MIN_PASSWORD - password.length} ตัว` : null}
+        ok={password.length >= MIN_PASSWORD ? "ความยาวใช้ได้" : null}
       />
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}

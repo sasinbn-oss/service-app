@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   ScrollView,
@@ -9,6 +10,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -18,14 +20,14 @@ import { ConsumableItem } from "../types";
 const emptyForm = { name: "", unit: "", stockQty: "" };
 
 export default function ManageConsumablesScreen() {
-  const [items, setItems] = useState<ConsumableItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems, cached] = useCachedState<ConsumableItem[]>("ManageConsumables:items", []);
+  const [loading, setLoading] = useState(!cached);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const loadItems = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     api
       .get<ConsumableItem[]>("/consumables")
       .then((res) => setItems(res.data))
@@ -141,7 +143,7 @@ export default function ManageConsumablesScreen() {
           contentContainerStyle={styles.listContent}
           data={items}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีรายการของในระบบ</Text>}
+          ListEmptyComponent={<EmptyState icon="cube-outline" text="ยังไม่มีรายการของในระบบ" />}
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={{ flex: 1 }}>
@@ -213,5 +215,4 @@ const styles = StyleSheet.create({
   stockOut: { color: colors.danger },
   edit: { color: colors.primary, fontWeight: "600" },
   delete: { color: colors.danger, fontWeight: "600" },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 20 },
 });

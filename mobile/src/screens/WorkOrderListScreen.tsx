@@ -17,6 +17,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
@@ -237,13 +238,11 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
       ) : rows.length === 0 ? (
-        <View style={styles.centered}>
-          <Ionicons name="clipboard-outline" size={34} color={colors.textFaint} />
-          <Text style={styles.emptyTitle}>ไม่มีใบงานในหมวดนี้</Text>
-          <Text style={styles.emptyText}>
-            เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน
-          </Text>
-        </View>
+        <EmptyState
+          icon="clipboard-outline"
+          title="ไม่มีใบงานในหมวดนี้"
+          text="เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
+        />
       ) : (
         /*
           FlatList ไม่ใช่ ScrollView เพราะ ScrollView สร้างการ์ดทุกใบตั้งแต่เปิดหน้า
@@ -547,8 +546,6 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   meta: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.sm, padding: spacing.xl },
-  emptyTitle: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
-  emptyText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center" },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
   retry: {
     borderWidth: 1,

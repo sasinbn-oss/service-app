@@ -1,20 +1,22 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { BranchCheckIn } from "../types";
 
 export default function BranchHistoryScreen() {
-  const [checkIns, setCheckIns] = useState<BranchCheckIn[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [checkIns, setCheckIns, cached] = useCachedState<BranchCheckIn[]>("BranchHistory:checkIns", []);
+  const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      setLoading(true);
+      // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
       api
         .get<BranchCheckIn[]>("/branch-checkins")
         .then((res) => {
@@ -54,7 +56,7 @@ export default function BranchHistoryScreen() {
       contentContainerStyle={styles.content}
       data={checkIns}
       keyExtractor={(item) => String(item.id)}
-      ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีประวัติการรายงานตัว</Text>}
+      ListEmptyComponent={<EmptyState icon="location-outline" text="ยังไม่มีประวัติการรายงานตัว" />}
       renderItem={({ item }) => (
         <View style={styles.card}>
           <View style={styles.rowBetween}>
@@ -88,7 +90,6 @@ const styles = StyleSheet.create({
   branchName: { fontSize: 16, fontWeight: "700", color: colors.text },
   line: { fontSize: 14, color: colors.text, marginTop: 4 },
   timestamp: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   badgeOk: { backgroundColor: colors.successSoft },
   badgeWarn: { backgroundColor: colors.warningSoft },

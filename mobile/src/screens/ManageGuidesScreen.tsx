@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   ScrollView,
@@ -9,6 +10,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -18,14 +20,14 @@ import { TroubleshootingGuide } from "../types";
 const emptyForm = { category: "", title: "", symptom: "", solution: "" };
 
 export default function ManageGuidesScreen() {
-  const [guides, setGuides] = useState<TroubleshootingGuide[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [guides, setGuides, cached] = useCachedState<TroubleshootingGuide[]>("ManageGuides:guides", []);
+  const [loading, setLoading] = useState(!cached);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const loadGuides = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     api
       .get<TroubleshootingGuide[]>("/guides")
       .then((res) => setGuides(res.data))
@@ -151,7 +153,7 @@ export default function ManageGuidesScreen() {
           contentContainerStyle={styles.listContent}
           data={guides}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ยังไม่มีหัวข้อในระบบ</Text>}
+          ListEmptyComponent={<EmptyState icon="book-outline" text="ยังไม่มีหัวข้อในระบบ" />}
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={{ flex: 1 }}>
@@ -221,5 +223,4 @@ const styles = StyleSheet.create({
   title: { fontSize: 15, fontWeight: "600", color: colors.text, marginTop: 2 },
   edit: { color: colors.primary, fontWeight: "600" },
   delete: { color: colors.danger, fontWeight: "600" },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 20 },
 });

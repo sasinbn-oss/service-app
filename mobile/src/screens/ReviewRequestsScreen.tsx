@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
@@ -109,7 +110,7 @@ export default function ReviewRequestsScreen() {
           contentContainerStyle={styles.listContent}
           data={requests}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ไม่มีคำขอในหมวดนี้</Text>}
+          ListEmptyComponent={<EmptyState icon="checkmark-done-outline" text="ไม่มีคำขอในหมวดนี้" />}
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={styles.headerRow}>
@@ -239,5 +240,4 @@ const styles = StyleSheet.create({
   },
   rejectText: { color: colors.danger, fontWeight: "700" },
   acting: { marginTop: 14 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
 });

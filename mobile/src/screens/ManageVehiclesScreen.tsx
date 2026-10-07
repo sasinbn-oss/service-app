@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useCachedState } from "../utils/pageCache";
 import {
   FlatList,
   StyleSheet,
@@ -18,8 +19,8 @@ import { colors, shadow, spacing, headingFont } from "../theme";
 import { Vehicle } from "../types";
 
 export default function ManageVehiclesScreen() {
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [vehicles, setVehicles, cached] = useCachedState<Vehicle[]>("ManageVehicles:vehicles", []);
+  const [loading, setLoading] = useState(!cached);
   // จอแคบ (มือถือ) ป้ายสถานะ + ปุ่มแก้ไข + ปุ่มลบ กินที่จนทะเบียนรถถูกบีบเหลือตัวอักษรละบรรทัด
   // จึงย้ายป้ายลงไปใต้ทะเบียน และปุ่มแก้ไขเหลือแค่ไอคอน
   const narrow = useWindowDimensions().width < 560;
@@ -43,7 +44,7 @@ export default function ManageVehiclesScreen() {
   }
 
   const loadVehicles = useCallback(() => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     api
       .get<Vehicle[]>("/vehicles")
       .then((res) => setVehicles(res.data))

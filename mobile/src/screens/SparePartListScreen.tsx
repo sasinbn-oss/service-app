@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import Spinner from "../components/Spinner";
+import EmptyState from "../components/EmptyState";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
@@ -25,7 +26,7 @@ export default function SparePartListScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (searchTerm: string) => {
-    setLoading(true);
+    // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     setError(null);
     try {
       const query = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : "";
@@ -70,7 +71,7 @@ export default function SparePartListScreen({ navigation }: Props) {
           contentContainerStyle={styles.listContent}
           data={parts}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<Text style={styles.empty}>ไม่พบอะไหล่ที่ค้นหา</Text>}
+          ListEmptyComponent={<EmptyState icon="search-outline" text="ไม่พบอะไหล่ที่ค้นหา" />}
           renderItem={({ item }) => {
             const uri = resolveImageUrl(item.imageUrl);
             return (
@@ -135,6 +136,5 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontWeight: "700", color: colors.text },
   code: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   brand: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  empty: { textAlign: "center", color: colors.textMuted, marginTop: 40 },
   error: { color: colors.danger, textAlign: "center", marginTop: 40 },
 });
