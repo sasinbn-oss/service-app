@@ -20,7 +20,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { Role } from "../types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
   id: number;
@@ -111,7 +111,7 @@ export default function ManageUsersScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* หัวหน้าแบบ OTTERI: ชื่อหน้า ป้ายจำนวน และปุ่มเพิ่มอยู่บรรทัดเดียวกัน */}
       <View style={styles.pageHead}>
-        <Text style={styles.pageTitle}>สิทธิ์ผู้ใช้</Text>
+        <Text style={[styles.pageTitle, headingFont]}>สิทธิ์ผู้ใช้</Text>
         <View style={styles.countPill}>
           <Text style={styles.countPillText}>{users.length} คน</Text>
         </View>
@@ -535,7 +535,7 @@ function ResetPasswordModal({
 
 const styles = StyleSheet.create({
   pageHead: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
-  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   addButton: {

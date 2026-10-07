@@ -17,7 +17,7 @@ import { useWideLayout } from "../components/AppShell";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import { HomeStackParamList } from "../navigation/types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "Report">;
 
@@ -189,7 +189,7 @@ export default function ReportScreen({ route }: Props) {
     >
       <View style={styles.topRow}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          {data ? <Text style={styles.title}>{data.title}</Text> : null}
+          {data ? <Text style={[styles.title, headingFont]}>{data.title}</Text> : null}
           {data ? (
             <Text style={styles.generated}>
               ข้อมูล ณ {formatDateTime(data.generatedAt)} น.
@@ -306,7 +306,7 @@ function SummaryGrid({ summary, wide }: { summary: AnyReport["summary"]; wide: b
       {entries.map(([key, value]) => (
         <View key={key} style={[styles.summaryCard, wide ? styles.summaryWide : styles.summaryNarrow]}>
           <Text style={styles.summaryLabel}>{SUMMARY_LABELS[key] ?? key}</Text>
-          <Text style={styles.summaryValue}>
+          <Text style={[styles.summaryValue, headingFont]}>
             {value === null ? "—" : typeof value === "number" ? value.toLocaleString() : value}
           </Text>
         </View>

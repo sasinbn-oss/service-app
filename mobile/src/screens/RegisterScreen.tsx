@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import Spinner from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AuthStackParamList } from "../navigation/types";
 
@@ -56,7 +56,7 @@ export default function RegisterScreen({ navigation }: Props) {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>ลงทะเบียนพนักงาน</Text>
+        <Text style={[styles.title, headingFont]}>ลงทะเบียนพนักงาน</Text>
         <Text style={styles.subtitle}>
           ผู้ลงทะเบียนคนแรกของระบบจะได้สิทธิ์ผู้ดูแลระบบ (Admin) โดยอัตโนมัติ
         </Text>

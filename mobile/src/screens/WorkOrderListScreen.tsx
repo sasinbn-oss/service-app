@@ -25,7 +25,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { useWideLayout } from "../components/AppShell";
 import { useDebounced } from "../utils/useDebounced";
 import { HomeStackParamList } from "../navigation/types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
 
@@ -164,7 +164,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       */}
       <View style={styles.pageHead}>
         <View style={styles.pageTitleRow}>
-          <Text style={styles.pageTitle}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
+          <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
           {!loading && !error ? (
             <View style={styles.countPill}>
               <Text style={styles.countPillText}>{rows.length.toLocaleString("th-TH")} ใบ</Text>
@@ -509,7 +509,7 @@ const styles = StyleSheet.create({
   viewBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   pageHead: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, flexShrink: 0 },
   pageTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   pageSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: 2 },

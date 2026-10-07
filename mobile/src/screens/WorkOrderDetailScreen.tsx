@@ -35,7 +35,7 @@ import {
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
@@ -332,7 +332,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
           </View>
         </View>
 
-        <Text style={styles.title}>{order.title}</Text>
+        <Text style={[styles.title, headingFont]}>{order.title}</Text>
         {order.detail ? <Text style={styles.detail}>{order.detail}</Text> : null}
 
         <View style={styles.divider} />
@@ -493,7 +493,7 @@ export default function WorkOrderDetailScreen({ route }: Props) {
                 {state === "done" ? (
                   <Ionicons name="checkmark" size={15} color="#fff" />
                 ) : (
-                  <Text style={[styles.stepNum, state === "now" && styles.stepNumNow]}>
+                  <Text style={[styles.stepNum, headingFont, state === "now" && styles.stepNumNow]}>
                     {state === "skipped" ? "–" : number}
                   </Text>
                 )}

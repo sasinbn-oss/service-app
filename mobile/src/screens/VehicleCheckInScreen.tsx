@@ -12,7 +12,7 @@ import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { Vehicle, VehicleLog } from "../types";
 
 export default function VehicleCheckInScreen() {
@@ -104,7 +104,7 @@ export default function VehicleCheckInScreen() {
   if (activeLog) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <Text style={styles.title}>คืนรถ</Text>
+        <Text style={[styles.title, headingFont]}>คืนรถ</Text>
         <View style={styles.card}>
           <Text style={styles.cardLabel}>รถที่ใช้อยู่</Text>
           <Text style={styles.cardValue}>
@@ -134,7 +134,7 @@ export default function VehicleCheckInScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>ลงทะเบียนใช้รถ</Text>
+      <Text style={[styles.title, headingFont]}>ลงทะเบียนใช้รถ</Text>
 
       {vehicles.length === 0 ? (
         <Text style={styles.empty}>ไม่มีรถว่างให้ใช้งานในขณะนี้</Text>

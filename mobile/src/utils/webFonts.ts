@@ -19,7 +19,7 @@ export function installWebFonts() {
   link.id = "otteri-fonts";
   link.rel = "stylesheet";
   link.href =
-    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap";
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap";
   document.head.appendChild(link);
 
   const style = document.createElement("style");

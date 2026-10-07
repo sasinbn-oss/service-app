@@ -19,7 +19,7 @@ import { useWideLayout } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { useDebounced } from "../utils/useDebounced";
 
 /** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
@@ -1195,7 +1195,7 @@ function SummaryCard({
     <View style={[styles.summaryCard, wide ? styles.summaryCardWide : styles.summaryCardNarrow]}>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={styles.summaryLabel}>{label}</Text>
-        <Text style={[styles.summaryValue, { color }]}>{value}</Text>
+        <Text style={[styles.summaryValue, headingFont, { color }]}>{value}</Text>
         {sub ? <Text style={styles.summarySub}>{sub}</Text> : null}
       </View>
       <Ionicons name={icon} size={24} color={color} style={{ opacity: 0.35 }} />

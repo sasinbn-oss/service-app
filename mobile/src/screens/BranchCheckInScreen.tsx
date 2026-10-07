@@ -13,7 +13,7 @@ import { Picker } from "@react-native-picker/picker";
 import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { Branch, BranchCheckIn } from "../types";
 
 export default function BranchCheckInScreen() {
@@ -83,7 +83,7 @@ export default function BranchCheckInScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>รายงานตัวเข้าสาขา</Text>
+      <Text style={[styles.title, headingFont]}>รายงานตัวเข้าสาขา</Text>
 
       {branches.length === 0 ? (
         <Text style={styles.empty}>ยังไม่มีข้อมูลสาขา</Text>

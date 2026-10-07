@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { TroubleshootingGuide } from "../types";
 import { HistoryStackParamList } from "../navigation/types";
 
@@ -42,7 +42,7 @@ export default function GuideDetailScreen({ route }: Props) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.category}>{guide.category}</Text>
-      <Text style={styles.title}>{guide.title}</Text>
+      <Text style={[styles.title, headingFont]}>{guide.title}</Text>
 
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>อาการที่พบ</Text>

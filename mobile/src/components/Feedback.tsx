@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Animated, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import type { AlertButton } from "../utils/alert";
 import Overlay from "./Overlay";
 import { WasherIcon } from "./Spinner";
@@ -105,7 +105,7 @@ function Dialog({ d }: { d: DialogState }) {
       {/* กดในกล่องต้องไม่ทะลุไปปิดกล่อง */}
       <Pressable style={styles.dialog} onPress={() => undefined}>
         <View style={styles.dialogHead}>
-          <Text style={styles.dialogTitle}>{d.title}</Text>
+          <Text style={[styles.dialogTitle, headingFont]}>{d.title}</Text>
           <TouchableOpacity style={styles.closeBtn} onPress={() => run(cancel)} accessibilityLabel="ปิด">
             <Ionicons name="close" size={22} color={colors.navy} />
           </TouchableOpacity>

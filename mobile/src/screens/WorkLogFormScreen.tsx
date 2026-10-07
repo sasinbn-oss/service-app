@@ -12,7 +12,7 @@ import { showAlert } from "../utils/alert";
 import { Picker } from "@react-native-picker/picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont } from "../theme";
 import { Branch } from "../types";
 
 function todayISODate(): string {
@@ -62,7 +62,7 @@ export default function WorkLogFormScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>บันทึกข้อมูลการทำงาน</Text>
+      <Text style={[styles.title, headingFont]}>บันทึกข้อมูลการทำงาน</Text>
 
       <Text style={styles.label}>วันที่ (YYYY-MM-DD)</Text>
       <TextInput style={styles.input} value={workDate} onChangeText={setWorkDate} placeholder="2026-07-29" />

@@ -12,7 +12,7 @@ import {
 import Spinner from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { colors, radius, shadow } from "../theme";
+import { colors, radius, shadow, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AuthStackParamList } from "../navigation/types";
@@ -57,7 +57,7 @@ export default function LoginScreen({ navigation }: Props) {
           <Image source={require("../../assets/logo-otter.png")} style={styles.logo} />
         </View>
         <View style={styles.titleRow}>
-          <Text style={styles.title}>OTTERI</Text>
+          <Text style={[styles.title, headingFont]}>OTTERI</Text>
           <View style={styles.pill}>
             <Text style={styles.pillText}>SERVICE</Text>
           </View>

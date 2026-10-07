@@ -40,7 +40,7 @@ import ManageBranchesScreen from "../screens/ManageBranchesScreen";
 import ManageUsersScreen from "../screens/ManageUsersScreen";
 
 import { useAuth } from "../context/AuthContext";
-import { colors, radius, spacing } from "../theme";
+import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
 import SideMenu, { DOCK_WIDTH, DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
@@ -55,7 +55,7 @@ import {
 const commonScreenOptions = {
   headerStyle: { backgroundColor: colors.card },
   headerTintColor: colors.navy,
-  headerTitleStyle: { fontSize: 17, fontWeight: "800" as const, color: colors.text },
+  headerTitleStyle: { ...headingFont, fontSize: 17, fontWeight: "700" as const, color: colors.text },
   headerShadowVisible: false,
   contentStyle: { backgroundColor: colors.background },
 };
@@ -74,7 +74,7 @@ function Brand({ subtitle }: { subtitle: string }) {
       </View>
       <View>
         <View style={styles.brandNameRow}>
-          <Text style={styles.brandName}>OTTERI</Text>
+          <Text style={[styles.brandName, headingFont]}>OTTERI</Text>
           <View style={styles.brandPill}>
             <Text style={styles.brandPillText}>SERVICE</Text>
           </View>
@@ -93,7 +93,7 @@ function UserAvatar() {
   const { user } = useAuth();
   return (
     <View style={styles.avatar}>
-      <Text style={styles.avatarText}>{(user?.name ?? "?").trim().charAt(0)}</Text>
+      <Text style={[styles.avatarText, headingFont]}>{(user?.name ?? "?").trim().charAt(0)}</Text>
     </View>
   );
 }

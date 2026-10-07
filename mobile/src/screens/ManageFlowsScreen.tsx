@@ -12,7 +12,7 @@ import AppModal from "../components/AppModal";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors, shadow } from "../theme";
+import { colors, shadow, headingFont } from "../theme";
 import { TroubleshootFlow, TroubleshootFlowSummary, TroubleshootNode } from "../types";
 
 type Picking = { node: TroubleshootNode; answer: "yesKey" | "noKey" } | null;
@@ -89,7 +89,7 @@ export default function ManageFlowsScreen() {
         <TouchableOpacity onPress={() => setOpenFlow(null)}>
           <Text style={styles.back}>‹ กลับไปรายการผัง</Text>
         </TouchableOpacity>
-        <Text style={styles.detailTitle}>{openFlow.title}</Text>
+        <Text style={[styles.detailTitle, headingFont]}>{openFlow.title}</Text>
         <Text style={styles.detailMeta}>
           {questions.length} คำถาม · เริ่มที่ {openFlow.rootKey ?? "ยังไม่ได้ตั้ง"}
         </Text>

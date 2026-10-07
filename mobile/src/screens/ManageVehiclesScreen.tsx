@@ -14,7 +14,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors, shadow, spacing } from "../theme";
+import { colors, shadow, spacing, headingFont } from "../theme";
 import { Vehicle } from "../types";
 
 export default function ManageVehiclesScreen() {
@@ -106,7 +106,7 @@ export default function ManageVehiclesScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.pageHead}>
-        <Text style={styles.pageTitle}>จัดการข้อมูลรถ</Text>
+        <Text style={[styles.pageTitle, headingFont]}>จัดการข้อมูลรถ</Text>
         {!loading ? (
           <View style={styles.countPill}>
             <Text style={styles.countPillText}>{vehicles.length} คัน</Text>
@@ -175,7 +175,7 @@ export default function ManageVehiclesScreen() {
                 <Ionicons name="car-outline" size={22} color={colors.primaryInk} />
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.plate} numberOfLines={1}>{item.plateNumber}</Text>
+                <Text style={[styles.plate, headingFont]} numberOfLines={1}>{item.plateNumber}</Text>
                 <Text style={styles.line} numberOfLines={1}>
                   {[item.brand, item.model].filter(Boolean).join(" ") || "-"}
                 </Text>
@@ -257,7 +257,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
   },
-  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   addBtn: {

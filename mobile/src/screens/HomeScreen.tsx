@@ -6,7 +6,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { MenuEntry } from "../components/MenuList";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { HomeStackParamList } from "../navigation/types";
@@ -328,7 +328,7 @@ function Hero({
   const stat = (label: string, value: number | undefined) => (
     <View style={styles.stat}>
       <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>
+      <Text style={[styles.statValue, headingFont]}>
         {value === undefined ? "–" : value.toLocaleString("th-TH")}
         <Text style={styles.statUnit}> ใบ</Text>
       </Text>
@@ -350,7 +350,7 @@ function Hero({
           <Ionicons name="sync-outline" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
-      <Text style={styles.heroName}>{name}</Text>
+      <Text style={[styles.heroName, headingFont]}>{name}</Text>
       <View style={styles.heroArea}>
         <Ionicons name="people-outline" size={16} color="rgba(255,255,255,0.85)" />
         <Text style={styles.heroAreaText}>{area ?? (role === "ADMIN" ? "ดูแลทุกภาค" : "ยังไม่ได้จัดทีม")}</Text>
