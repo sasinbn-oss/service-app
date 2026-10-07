@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { colors } from "../theme";
@@ -14,6 +14,21 @@ const FORM_WIDTH = 820;
 const DATA_WIDTH = 1600;
 
 const SetWideContext = createContext<(wide: boolean) => void>(() => {});
+const SetDockContext = createContext<(width: number) => void>(() => {});
+
+/**
+ * ขอที่เพิ่มด้านซ้ายให้เมนูข้างที่ค้างไว้บนจอคอม
+ *
+ * คอลัมน์ของแอปมีเพดานความกว้าง ถ้าเมนูข้างกินที่จากในคอลัมน์ เนื้อหาจะเหลือ
+ * แคบกว่าบนมือถือเสียอีก จึงให้คอลัมน์กว้างขึ้นเท่าความกว้างของเมนูแทน
+ */
+export function useDockWidth(width: number) {
+  const setDock = useContext(SetDockContext);
+  useEffect(() => {
+    setDock(width);
+    return () => setDock(0);
+  }, [setDock, width]);
+}
 
 /**
  * ให้หน้าที่เป็นตารางข้อมูลขอใช้ความกว้างเต็มที่
@@ -34,20 +49,27 @@ export function useWideLayout() {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [wide, setWide] = useState(false);
+  const [dock, setDock] = useState(0);
 
   // บนมือถือไม่มีเพดานให้ปรับ แต่ provider ต้องมี ไม่งั้น useWideLayout พัง
   if (Platform.OS !== "web") {
-    return <SetWideContext.Provider value={setWide}>{children}</SetWideContext.Provider>;
+    return (
+      <SetDockContext.Provider value={setDock}>
+        <SetWideContext.Provider value={setWide}>{children}</SetWideContext.Provider>
+      </SetDockContext.Provider>
+    );
   }
 
   return (
-    <SetWideContext.Provider value={setWide}>
-      <View style={styles.backdrop}>
-        <View style={[styles.column, { maxWidth: wide ? DATA_WIDTH : FORM_WIDTH }]}>
-          {children}
+    <SetDockContext.Provider value={setDock}>
+      <SetWideContext.Provider value={setWide}>
+        <View style={styles.backdrop}>
+          <View style={[styles.column, { maxWidth: (wide ? DATA_WIDTH : FORM_WIDTH) + dock }]}>
+            {children}
+          </View>
         </View>
-      </View>
-    </SetWideContext.Provider>
+      </SetWideContext.Provider>
+    </SetDockContext.Provider>
   );
 }
 

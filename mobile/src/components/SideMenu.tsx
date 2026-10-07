@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -31,6 +32,47 @@ export const sideMenu = {
   open: () => setOpenGlobal?.(true),
   close: () => setOpenGlobal?.(false),
 };
+
+/** จอกว้างเท่านี้ขึ้นไป (เว็บ) เมนูค้างไว้ด้านซ้ายแทนการเลื่อนออก ตามต้นแบบ */
+export const DOCK_MIN_WIDTH = 1100;
+export const DOCK_WIDTH = 280;
+
+/**
+ * บนจอคอมปุ่มสามขีดยุบ/ขยายเมนูที่ค้างไว้ และจำค่าไว้ — คนที่ชอบจอโล่ง
+ * ไม่ต้องกดยุบใหม่ทุกครั้งที่เปิดเว็บ
+ */
+const COLLAPSE_KEY = "otteri-side-collapsed";
+let collapsed = (() => {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+const collapseListeners = new Set<(c: boolean) => void>();
+function setCollapsed(c: boolean) {
+  collapsed = c;
+  try {
+    localStorage.setItem(COLLAPSE_KEY, c ? "1" : "0");
+  } catch {
+    // ที่เก็บของเบราว์เซอร์ถูกปิด — ยุบได้แค่รอบนี้ ไม่เป็นไร
+  }
+  collapseListeners.forEach((l) => l(c));
+}
+
+/** เมนูควรค้างไว้ด้านซ้ายตอนนี้หรือไม่ */
+export function useDocked() {
+  const { width } = useWindowDimensions();
+  const [c, setC] = useState(collapsed);
+  useEffect(() => {
+    collapseListeners.add(setC);
+    return () => {
+      collapseListeners.delete(setC);
+    };
+  }, []);
+  const canDock = Platform.OS === "web" && width >= DOCK_MIN_WIDTH;
+  return { canDock, docked: canDock && !c };
+}
 
 type Tab = keyof MainTabParamList;
 
@@ -123,66 +165,28 @@ function currentKey(): string | null {
   return null;
 }
 
-const WIDTH = 300;
+function navigateTo(it: Item) {
+  if (!navigationRef.isReady()) return;
+  // initial: false ให้ปุ่มย้อนกลับพากลับไปหน้าแรกของแท็บ ไม่ใช่หลุดออกจากแท็บ
+  const nested = TAB_ROOTS.has(it.screen)
+    ? { screen: it.screen, params: it.params }
+    : { screen: it.screen, params: it.params, initial: false };
+  (navigationRef.navigate as (tab: Tab, p: object) => void)(it.tab, nested);
+}
 
-export default function SideMenu() {
+function MenuContent({
+  active,
+  inbox,
+  onPick,
+}: {
+  active: string | null;
+  inbox: number;
+  onPick: (it: Item) => void;
+}) {
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
-  const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const [inbox, setInbox] = useState(0);
-  const [active, setActive] = useState<string | null>(null);
-  const x = useRef(new Animated.Value(-WIDTH)).current;
-
-  useEffect(() => {
-    setOpenGlobal = setOpen;
-    return () => {
-      setOpenGlobal = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (open) {
-      setMounted(true);
-      setActive(currentKey());
-      // ตัวเลขบนกล่องงานโหลดตอนเปิดเมนู ไม่ใช่ค้างค่าเก่าจากตอนเข้าแอป
-      api
-        .get<{ inbox: number }>("/work-orders/inbox-count")
-        .then((r) => setInbox(r.data.inbox))
-        .catch(() => undefined);
-    }
-    Animated.timing(x, {
-      toValue: open ? 0 : -WIDTH,
-      duration: 200,
-      useNativeDriver: Platform.OS !== "web",
-    }).start(({ finished }) => {
-      if (finished && !open) setMounted(false);
-    });
-  }, [open, x]);
-
-  if (!mounted) return null;
-
-  function go(it: Item) {
-    setOpen(false);
-    if (!navigationRef.isReady()) return;
-    // initial: false ให้ปุ่มย้อนกลับพากลับไปหน้าแรกของแท็บ ไม่ใช่หลุดออกจากแท็บ
-    const nested = TAB_ROOTS.has(it.screen)
-      ? { screen: it.screen, params: it.params }
-      : { screen: it.screen, params: it.params, initial: false };
-    (navigationRef.navigate as (tab: Tab, p: object) => void)(it.tab, nested);
-  }
-
-  const backdrop = x.interpolate({ inputRange: [-WIDTH, 0], outputRange: [0, 1] });
-
+  const go = onPick;
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      <Animated.View style={[styles.backdrop, { opacity: backdrop }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="ปิดเมนู" />
-      </Animated.View>
-      <Animated.View
-        style={[styles.panel, { paddingTop: insets.top + spacing.lg, transform: [{ translateX: x }] }]}
-      >
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => (
             <View key={g.title}>
               <View style={styles.group}>
@@ -230,7 +234,91 @@ export default function SideMenu() {
               </Text>
             </View>
           ) : null}
-        </ScrollView>
+    </ScrollView>
+  );
+}
+
+/**
+ * เมนูที่ค้างไว้ด้านซ้ายบนจอคอม
+ *
+ * ฟังการเปลี่ยนหน้าเองเพื่อย้ายแถบฟ้าตามหน้าที่เปิด และโหลดตัวเลขกล่องงานใหม่
+ * ทุกครั้งที่เปลี่ยนหน้า — ไปปิดงานมาแล้วกลับมา ตัวเลขต้องลดลงทันที
+ */
+export function DockedSideMenu() {
+  const [active, setActive] = useState<string | null>(currentKey());
+  const [inbox, setInbox] = useState(0);
+  useEffect(() => {
+    const refresh = () => {
+      setActive(currentKey());
+      api
+        .get<{ inbox: number }>("/work-orders/inbox-count")
+        .then((r) => setInbox(r.data.inbox))
+        .catch(() => undefined);
+    };
+    refresh();
+    return navigationRef.addListener("state", refresh);
+  }, []);
+  return (
+    <View style={styles.docked}>
+      <MenuContent active={active} inbox={inbox} onPick={navigateTo} />
+    </View>
+  );
+}
+
+const WIDTH = 300;
+
+export default function SideMenu() {
+  const insets = useSafeAreaInsets();
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [inbox, setInbox] = useState(0);
+  const [active, setActive] = useState<string | null>(null);
+  const x = useRef(new Animated.Value(-WIDTH)).current;
+
+  useEffect(() => {
+    setOpenGlobal = setOpen;
+    return () => {
+      setOpenGlobal = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      setActive(currentKey());
+      // ตัวเลขบนกล่องงานโหลดตอนเปิดเมนู ไม่ใช่ค้างค่าเก่าจากตอนเข้าแอป
+      api
+        .get<{ inbox: number }>("/work-orders/inbox-count")
+        .then((r) => setInbox(r.data.inbox))
+        .catch(() => undefined);
+    }
+    Animated.timing(x, {
+      toValue: open ? 0 : -WIDTH,
+      duration: 200,
+      useNativeDriver: Platform.OS !== "web",
+    }).start(({ finished }) => {
+      if (finished && !open) setMounted(false);
+    });
+  }, [open, x]);
+
+  if (!mounted) return null;
+
+  function go(it: Item) {
+    setOpen(false);
+    navigateTo(it);
+  }
+
+  const backdrop = x.interpolate({ inputRange: [-WIDTH, 0], outputRange: [0, 1] });
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <Animated.View style={[styles.backdrop, { opacity: backdrop }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="ปิดเมนู" />
+      </Animated.View>
+      <Animated.View
+        style={[styles.panel, { paddingTop: insets.top + spacing.lg, transform: [{ translateX: x }] }]}
+      >
+        <MenuContent active={active} inbox={inbox} onPick={go} />
       </Animated.View>
     </View>
   );
@@ -238,8 +326,13 @@ export default function SideMenu() {
 
 /** ปุ่มสามขีดบนแถบบน */
 export function MenuButton() {
+  const { canDock, docked } = useDocked();
   return (
-    <TouchableOpacity style={styles.menuBtn} onPress={sideMenu.open} accessibilityLabel="เปิดเมนู">
+    <TouchableOpacity
+      style={styles.menuBtn}
+      onPress={() => (canDock ? setCollapsed(docked) : sideMenu.open())}
+      accessibilityLabel="เปิดเมนู"
+    >
       <Ionicons name="menu" size={24} color={colors.navy} />
     </TouchableOpacity>
   );
@@ -247,6 +340,13 @@ export function MenuButton() {
 
 const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(15,23,42,0.42)" },
+  docked: {
+    width: DOCK_WIDTH,
+    backgroundColor: colors.card,
+    borderRightWidth: 1,
+    borderRightColor: colors.border,
+    paddingTop: spacing.sm,
+  },
   panel: {
     position: "absolute",
     top: 0,

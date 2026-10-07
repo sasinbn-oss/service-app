@@ -153,6 +153,21 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
 
   return (
     <View style={styles.container}>
+      {/*
+        หัวหน้าแบบ OTTERI: ชื่อหน้า + ป้ายจำนวนของกลุ่มที่เลือก + คำอธิบายบรรทัดเดียว
+        ป้ายจำนวนนับจากรายการที่โหลดมาจริง ไม่ใช่ตัวเลขบนชิป — ค้นหาแล้วตัวเลขจะลดตามที่เห็น
+      */}
+      <View style={styles.pageHead}>
+        <View style={styles.pageTitleRow}>
+          <Text style={styles.pageTitle}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
+          {!loading && !error ? (
+            <View style={styles.countPill}>
+              <Text style={styles.countPillText}>{rows.length.toLocaleString("th-TH")} ใบ</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
+      </View>
       <View style={styles.toolbar}>
         <View style={styles.searchBox}>
           <Ionicons name="search" size={16} color={colors.textFaint} />
@@ -325,7 +340,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.md,
+    flexShrink: 0,
   },
   searchBox: {
     flex: 1,
@@ -357,6 +373,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   addButtonText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
+  pageHead: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, flexShrink: 0 },
+  pageTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "800", color: colors.text },
+  countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
+  countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
+  pageSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
   // flexShrink: 0 — รายการด้านล่างเป็น flex: 1 แล้วเบียดแถวชิปจนเตี้ยเหลือครึ่งเดียว
   // เห็นชัดเมื่อเปิดจากแท็บใบงานที่ความสูงจอถูกแบ่งให้แถบบนกับแถบล่างแล้ว
   chipScroll: { flexGrow: 0, flexShrink: 0, paddingVertical: spacing.md },
