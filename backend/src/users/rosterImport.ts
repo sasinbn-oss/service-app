@@ -169,6 +169,12 @@ export function parseRoster(rows: string[][]): { people: RosterPerson[]; problem
         role = "EMPLOYEE";
         supervisorName = stripNick(sup[1]);
         group = `ช่างของ ${sup[1].trim()}`;
+      } else if (/หัวหน้าภาค\s*:\s*$/.test(h)) {
+        // หัวข้อจากแบบฟอร์มที่ยังไม่ได้พิมพ์ชื่อหัวหน้าภาค — ถ้ามีช่างใต้หัวข้อนี้ ต้องเตือน
+        // ไม่ใช่ถือเป็นช่างไม่มีหัวหน้าภาคเงียบ ๆ (หัวหน้าภาคจะไม่ได้ทีมของคนกลุ่มนี้)
+        role = "EMPLOYEE";
+        supervisorName = "";
+        group = "ช่างในหัวข้อที่ยังไม่ได้ใส่ชื่อหัวหน้าภาค";
       } else if (/^\d+\.\s*หัวหน้าภาค/.test(h)) {
         role = "SUPERVISOR";
         supervisorName = null;
@@ -205,7 +211,12 @@ export function parseRoster(rows: string[][]): { people: RosterPerson[]; problem
   // หัวข้อ "หัวหน้าภาค: ชื่อ" ระบุคนด้วยชื่อ — เทียบกับรายชื่อหัวหน้าภาคข้างบนให้ได้รหัสพนักงาน
   const supByName = new Map(people.filter((p) => p.role === "SUPERVISOR").map((p) => [p.fullName, p.code]));
   for (const p of people) {
-    if (p.role !== "EMPLOYEE" || !p.supervisorCode) continue;
+    if (p.role !== "EMPLOYEE" || p.supervisorCode === null) continue;
+    if (p.supervisorCode === "") {
+      problems.push(`${p.code} ${p.fullName}: หัวข้อ "หัวหน้าภาค:" ที่อยู่ ยังไม่ได้ใส่ชื่อหัวหน้าภาค`);
+      p.supervisorCode = null;
+      continue;
+    }
     const code = supByName.get(p.supervisorCode);
     if (!code) problems.push(`${p.code} ${p.fullName}: ไม่พบหัวหน้าภาค "${p.supervisorCode}" ในรายชื่อหัวหน้าภาค`);
     p.supervisorCode = code ?? null;
