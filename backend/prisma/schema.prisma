@@ -833,6 +833,9 @@ model TeamDayPlan {
   vehicleId   Int?
   vehicle     Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   note        String?
+  // เวลาเข้าหน้างานของทีมวันนั้น "HH:MM" — ว่าง = ยังไม่กำหนด
+  // ไม่ใช่เวลานัดของใบงาน (อยู่ที่ใบงานแต่ละใบ) แต่เป็นเวลาที่ทีมเริ่มเข้างานวันนั้น
+  startTime   String?
   plannedById Int?
   plannedBy   User?               @relation(fields: [plannedById], references: [id], onDelete: SetNull)
   updatedAt   DateTime            @updatedAt

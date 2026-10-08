@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
   ViewStyle,
+  useWindowDimensions,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
@@ -32,7 +33,9 @@ export default function AppModal({
   onClose,
   footer,
   children,
-  width = 640,
+  // 560 พอสำหรับฟอร์มทั่วไป — 640 เดิมกว้างเกินจนช่องกรอกยาวเหยียดอ่านยาก
+  // หน้าต่างที่มีตาราง/รายชื่อยาว (นำเข้ารายชื่อ ทะเบียนรถ) ส่ง width ของตัวเองมา
+  width = 560,
   busy,
   bodyStyle,
 }: {
@@ -82,13 +85,15 @@ export default function AppModal({
     else pane.hide(key);
   });
   useEffect(() => () => pane?.hide(key), [pane, key]);
+  // จอแคบ (มือถือ) เปิดจากด้านล่างเต็มกว้าง — นิ้วโป้งถึงปุ่มบันทึก และไม่เหลือขอบว่างข้าง ๆ
+  const sheet = useWindowDimensions().width < 600;
   if (pane) return null;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={busy ? undefined : onClose}>
-      <View style={styles.backdrop}>
+      <View style={[styles.backdrop, sheet && styles.backdropSheet]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={busy ? undefined : onClose} accessibilityLabel="ปิดหน้าต่าง" />
-        <View style={[styles.card, { maxWidth: width }]}>
+        <View style={[styles.card, { maxWidth: width }, sheet && styles.cardSheet]}>
           <View style={styles.head}>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.title, headingFont]}>{title}</Text>
@@ -149,9 +154,11 @@ const styles = StyleSheet.create({
     // เบลอหน้าข้างหลังแบบต้นแบบ ให้สายตาอยู่ที่หน้าต่างอย่างเดียว (มีผลเฉพาะเว็บ)
     ...(Platform.OS === "web" ? ({ backdropFilter: "blur(3px)" } as object) : null),
   },
+  backdropSheet: { justifyContent: "flex-end", padding: 0 },
+  cardSheet: { maxWidth: "100%", maxHeight: "90%", borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   card: {
     width: "100%",
-    maxHeight: "92%",
+    maxHeight: "88%",
     backgroundColor: colors.card,
     borderRadius: radius.xl,
     overflow: "hidden",

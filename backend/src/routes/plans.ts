@@ -119,6 +119,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       vehicleInUseBy: string | null;
       members: { id: number; name: string; employeeCode: string }[];
       note: string | null;
+      startTime: string | null;
       plannedByName: string | null;
       updatedAt: Date;
     } | null;
@@ -185,6 +186,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       vehicleInUseBy: p.vehicleId ? inUse.get(p.vehicleId) ?? null : null,
       members: p.members.map((m) => m.user),
       note: p.note,
+      startTime: p.startTime,
       plannedByName: p.plannedBy?.name ?? null,
       updatedAt: p.updatedAt,
     };
@@ -299,12 +301,18 @@ const planSchema = z.object({
   vehicleId: z.number().int().positive().nullable().optional(),
   memberIds: z.array(z.number().int().positive()).max(8).default([]),
   note: z.string().trim().max(500).nullable().optional(),
+  startTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "เวลาต้องเป็น ชั่วโมง:นาที เช่น 08:30")
+    .nullable()
+    .optional(),
 });
 
 router.put("/", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
   const parsed = planSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { date, team, vehicleId, note } = parsed.data;
+  // ข้อความแรกเป็นภาษาไทย — ส่งทั้งก้อน flatten หน้าจอจะโชว์เป็น JSON ดิบ
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { date, team, vehicleId, note, startTime } = parsed.data;
   const memberIds = [...new Set(parsed.data.memberIds)];
 
   const scope = await scopeFor(req);
@@ -341,11 +349,13 @@ router.put("/", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
           team,
           vehicleId: vehicleId ?? null,
           note: note?.trim() || null,
+          startTime: startTime ?? null,
           plannedById: req.auth!.userId,
         },
         update: {
           vehicleId: vehicleId ?? null,
           note: note?.trim() || null,
+          startTime: startTime ?? null,
           plannedById: req.auth!.userId,
         },
       });

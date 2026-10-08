@@ -1,16 +1,17 @@
 /**
  * ช่องเลือกแบบ dropdown
  *
- * กางรายการออกมาในที่ของตัวเอง ไม่ได้เปิดเป็น Modal ซ้อน เพราะทุกที่ที่ใช้
- * ตัวนี้อยู่ใน Modal อยู่แล้ว (หน้าจ่ายงาน หน้าปิดงาน) Modal ซ้อน Modal
- * บน react-native-web ทำงานไม่เหมือนกันในแต่ละที่ และเวลาพังจะพังแบบกดอะไรไม่ได้เลย
+ * รายการลอยทับฟอร์ม (Popover) ไม่แทรกลงไปดันช่องอื่น — เดิมกางในที่ หน้าต่างจัดแผน/จ่ายงาน
+ * ยืดตามจนช่องที่กำลังกรอกหลุดจอ ไม่ได้เปิดเป็น Modal ซ้อน เพราะทุกที่ที่ใช้ตัวนี้อยู่ใน Modal
+ * อยู่แล้ว Modal ซ้อน Modal บน react-native-web พังแบบกดอะไรไม่ได้เลย (ดู Popover)
  *
  * มีช่องค้นหาให้เมื่อรายการยาว — ทีมช่างมี 22 ทีม การเลื่อนหาทีละอันคือ
  * สิ่งที่ dropdown ควรแก้ ไม่ใช่สิ่งที่มันควรสร้างขึ้นมาใหม่
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import Popover from "./Popover";
 import { colors, radius, spacing } from "../theme";
 
 export interface DropdownOption {
@@ -22,6 +23,66 @@ export interface DropdownOption {
 
 /** รายการยาวกว่านี้ถึงจะมีช่องค้นหา สั้นกว่านี้กวาดตาหาเร็วกว่าพิมพ์ */
 const SEARCH_FROM = 8;
+
+/** ตัวรายการ (ค้นหา + แถว) — ใช้ใน dropdown และในกล่องลอยอื่นที่เปิดจากปุ่ม เช่น ยืมช่างจากทีมอื่น */
+export function OptionList({
+  options,
+  value,
+  onPick,
+  clearable,
+  label,
+}: {
+  options: DropdownOption[];
+  value?: string | null;
+  onPick: (next: string | null) => void;
+  clearable?: boolean;
+  label?: string;
+}) {
+  const [term, setTerm] = useState("");
+  const filtered = useMemo(() => {
+    const keyword = term.trim().toLowerCase();
+    if (!keyword) return options;
+    return options.filter(
+      (o) => o.label.toLowerCase().includes(keyword) || (o.hint ?? "").toLowerCase().includes(keyword)
+    );
+  }, [options, term]);
+
+  return (
+    <View style={styles.listWrap}>
+      {options.length >= SEARCH_FROM ? (
+        <View style={styles.search}>
+          <Ionicons name="search" size={14} color={colors.textFaint} />
+          <TextInput
+            style={styles.searchInput}
+            value={term}
+            onChangeText={setTerm}
+            placeholder="ค้นหา"
+            placeholderTextColor={colors.textFaint}
+            autoFocus
+            accessibilityLabel={`ค้นหาใน ${label ?? "รายการ"}`}
+          />
+        </View>
+      ) : null}
+      <ScrollView style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+        {clearable ? (
+          <TouchableOpacity style={styles.row} onPress={() => onPick(null)} activeOpacity={0.7}>
+            <Text style={[styles.rowLabel, styles.placeholder]}>ไม่ระบุ</Text>
+          </TouchableOpacity>
+        ) : null}
+        {filtered.map((o) => (
+          <TouchableOpacity key={o.value} style={[styles.row, o.value === value && styles.rowOn]} onPress={() => onPick(o.value)} activeOpacity={0.7}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.rowLabel, o.value === value && styles.rowLabelOn]}>{o.label}</Text>
+              {o.hint ? <Text style={styles.rowHint}>{o.hint}</Text> : null}
+            </View>
+            {o.value === value ? <Ionicons name="checkmark" size={16} color={colors.primary} /> : null}
+          </TouchableOpacity>
+        ))}
+        {filtered.length === 0 ? <Text style={styles.empty}>ไม่พบ “{term.trim()}”</Text> : null}
+      </ScrollView>
+    </View>
+  );
+}
 
 export default function Dropdown({
   value,
@@ -42,88 +103,37 @@ export default function Dropdown({
   accessibilityLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [term, setTerm] = useState("");
-
+  const anchor = useRef<View>(null);
   const selected = options.find((o) => o.value === value) ?? null;
-  const filtered = useMemo(() => {
-    const keyword = term.trim().toLowerCase();
-    if (!keyword) return options;
-    return options.filter(
-      (o) =>
-        o.label.toLowerCase().includes(keyword) || (o.hint ?? "").toLowerCase().includes(keyword)
-    );
-  }, [options, term]);
-
-  function pick(next: string | null) {
-    onChange(next);
-    setOpen(false);
-    setTerm("");
-  }
 
   return (
     <View>
-      <TouchableOpacity
-        style={[styles.field, open && styles.fieldOpen, disabled && styles.fieldOff]}
-        onPress={() => !disabled && setOpen((v) => !v)}
-        activeOpacity={0.7}
-        accessibilityLabel={accessibilityLabel}
-      >
-        <Text style={[styles.value, !selected && styles.placeholder]} numberOfLines={1}>
-          {selected ? selected.label : placeholder}
-        </Text>
-        <Ionicons
-          name={open ? "chevron-up" : "chevron-down"}
-          size={16}
-          color={colors.textFaint}
+      <View ref={anchor}>
+        <TouchableOpacity
+          style={[styles.field, open && styles.fieldOpen, disabled && styles.fieldOff]}
+          onPress={() => !disabled && setOpen((v) => !v)}
+          activeOpacity={0.7}
+          accessibilityLabel={accessibilityLabel}
+          accessibilityState={{ expanded: open }}
+        >
+          <Text style={[styles.value, !selected && styles.placeholder]} numberOfLines={1}>
+            {selected ? selected.label : placeholder}
+          </Text>
+          <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.textFaint} />
+        </TouchableOpacity>
+      </View>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)}>
+        <OptionList
+          options={options}
+          value={value}
+          clearable={clearable}
+          label={accessibilityLabel}
+          onPick={(next) => {
+            onChange(next);
+            setOpen(false);
+          }}
         />
-      </TouchableOpacity>
-
-      {open ? (
-        <View style={styles.panel}>
-          {options.length >= SEARCH_FROM ? (
-            <View style={styles.search}>
-              <Ionicons name="search" size={14} color={colors.textFaint} />
-              <TextInput
-                style={styles.searchInput}
-                value={term}
-                onChangeText={setTerm}
-                placeholder="ค้นหา"
-                placeholderTextColor={colors.textFaint}
-                accessibilityLabel={`ค้นหาใน ${accessibilityLabel ?? "รายการ"}`}
-              />
-            </View>
-          ) : null}
-
-          <ScrollView style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-            {clearable ? (
-              <TouchableOpacity style={styles.row} onPress={() => pick(null)} activeOpacity={0.7}>
-                <Text style={[styles.rowLabel, styles.placeholder]}>ไม่ระบุ</Text>
-              </TouchableOpacity>
-            ) : null}
-            {filtered.map((o) => (
-              <TouchableOpacity
-                key={o.value}
-                style={styles.row}
-                onPress={() => pick(o.value)}
-                activeOpacity={0.7}
-              >
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[styles.rowLabel, o.value === value && styles.rowLabelOn]}>
-                    {o.label}
-                  </Text>
-                  {o.hint ? <Text style={styles.rowHint}>{o.hint}</Text> : null}
-                </View>
-                {o.value === value ? (
-                  <Ionicons name="checkmark" size={16} color={colors.primary} />
-                ) : null}
-              </TouchableOpacity>
-            ))}
-            {filtered.length === 0 ? (
-              <Text style={styles.empty}>ไม่พบ “{term.trim()}”</Text>
-            ) : null}
-          </ScrollView>
-        </View>
-      ) : null}
+      </Popover>
     </View>
   );
 }
@@ -144,14 +154,8 @@ const styles = StyleSheet.create({
   fieldOff: { opacity: 0.5 },
   value: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 22, color: colors.text },
   placeholder: { color: colors.textFaint },
-  panel: {
-    marginTop: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    backgroundColor: colors.card,
-    overflow: "hidden",
-  },
+  // ในกล่องลอยที่จำกัดความสูงไว้ — ให้รายการหดตามแล้วเลื่อนข้างใน ช่องค้นหาอยู่กับที่
+  listWrap: { flexShrink: 1, minHeight: 0 },
   search: {
     flexDirection: "row",
     alignItems: "center",
@@ -168,8 +172,8 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: colors.text,
   },
-  // สูงพอให้เห็นว่ายังมีต่อข้างล่าง แต่ไม่กินทั้งหน้าจนไม่เห็นช่องที่กำลังกรอก
-  list: { maxHeight: 220 },
+  // ราว 6 แถว — พอให้เห็นว่ายังมีต่อข้างล่าง
+  list: { flexShrink: 1, maxHeight: 290 },
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -179,6 +183,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  rowOn: { backgroundColor: colors.primarySoft },
   rowLabel: { fontSize: 14, lineHeight: 22, color: colors.text },
   rowLabelOn: { color: colors.primaryDark, fontWeight: "700" },
   rowHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint },

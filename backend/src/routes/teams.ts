@@ -122,6 +122,7 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
           where: { id: target.id },
           data: {
             vehicleId: target.vehicleId ?? p.vehicleId,
+            startTime: target.startTime ?? p.startTime,
             note: [target.note, p.note].filter(Boolean).join(" / ") || null,
           },
         });

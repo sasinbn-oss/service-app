@@ -23,7 +23,9 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import AppModal from "../components/AppModal";
 import DateField, { thaiDate } from "../components/DateField";
-import Dropdown from "../components/Dropdown";
+import Dropdown, { OptionList } from "../components/Dropdown";
+import Popover from "../components/Popover";
+import TimeField from "../components/TimeField";
 import EmptyState from "../components/EmptyState";
 import Spinner, { WasherIcon } from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
@@ -64,6 +66,8 @@ interface Lane {
   plan: {
     vehicleId: number | null;
     vehiclePlate: string | null;
+    /** เวลาเข้าหน้างานของทีมวันนั้น "HH:MM" */
+    startTime: string | null;
     /** ใครเบิกรถคันนี้อยู่ตอนนี้ (จากลงทะเบียนใช้รถ) — บอกได้ว่าทีมออกเดินทางแล้วหรือรถถูกคนอื่นเอาไป */
     vehicleInUseBy: string | null;
     members: Member[];
@@ -145,6 +149,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
   const [date, setDate] = useState(today);
   const [day, setDay] = useState<Day | null>(null);
   const [month, setMonth] = useState<Record<string, number>>({});
+  // จุดในปฏิทินของหน้าต่างจัดแผน = วันที่มีงานนัดแล้ว (เดือนที่กำลังดูอยู่)
+  const busyDays = useMemo(() => new Set(Object.keys(month).filter((d) => month[d] > 0)), [month]);
   const [pending, setPending] = useState<Pending[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<string[]>([]);
@@ -413,6 +419,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
         teams={teams}
         technicians={technicians}
         vehicles={vehicles}
+        busyDays={busyDays}
         onCancel={() => setEditing(null)}
         onSaved={async (savedDate) => {
           setEditing(null);
@@ -497,6 +504,12 @@ function LaneCard({
             <Text style={styles.warnText}>ยังไม่ได้จัดคน</Text>
           )}
         </Text>
+        {lane.plan?.startTime ? (
+          <View style={styles.car}>
+            <Ionicons name="time-outline" size={13} color={colors.primaryInk} />
+            <Text style={styles.carText}>เข้า {lane.plan.startTime} น.</Text>
+          </View>
+        ) : null}
         {lane.plan?.vehiclePlate ? (
           <View style={styles.car}>
             <Ionicons name="car-outline" size={13} color={colors.primaryInk} />
@@ -651,10 +664,12 @@ function PlanModal({
   teams,
   technicians,
   vehicles,
+  busyDays,
   onCancel,
   onSaved,
 }: {
   visible: boolean;
+  busyDays: Set<string>;
   initialTeam: string;
   lane: Lane | null;
   date: string;
@@ -669,7 +684,9 @@ function PlanModal({
   const [memberIds, setMemberIds] = useState<number[]>([]);
   const [vehicleId, setVehicleId] = useState<string | null>(null);
   const [note, setNote] = useState("");
-  const [showAll, setShowAll] = useState(false);
+  const [startTime, setStartTime] = useState("");
+  const [borrowing, setBorrowing] = useState(false);
+  const borrowAnchor = useRef<View>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -680,15 +697,17 @@ function PlanModal({
     setMemberIds(lane?.plan?.members.map((m) => m.id) ?? []);
     setVehicleId(lane?.plan?.vehicleId ? String(lane.plan.vehicleId) : null);
     setNote(lane?.plan?.note ?? "");
-    setShowAll(false);
+    setStartTime(lane?.plan?.startTime ?? "");
+    setBorrowing(false);
     setError(null);
   }, [visible, date, initialTeam, lane]);
 
   const inTeam = technicians.filter((t) => t.team === team);
   const others = technicians.filter((t) => t.team !== team);
-  const shown = showAll ? [...inTeam, ...others] : inTeam;
-  // คนที่เลือกไว้แล้วจากทีมอื่น ต้องยังเห็นอยู่แม้ไม่ได้กดดูทั้งหมด ไม่งั้นเอาออกไม่ได้
-  const pickedOthers = showAll ? [] : others.filter((t) => memberIds.includes(t.id));
+  const shown = inTeam;
+  // ช่างทีมอื่นที่ยืมมาแล้วขึ้นเป็นชิปต่อท้ายทีม ที่เหลือเลือกจากกล่องลอย "ยืมช่างจากทีมอื่น"
+  // (เดิมกางรายชื่อทั้งบริษัทลงในหน้าต่าง หน้าต่างยืดยาวจนหาปุ่มบันทึกไม่เจอ)
+  const pickedOthers = others.filter((t) => memberIds.includes(t.id));
 
   function toggle(id: number) {
     setMemberIds((v) => (v.includes(id) ? v.filter((x) => x !== id) : [...v, id]));
@@ -705,6 +724,7 @@ function PlanModal({
         vehicleId: vehicleId ? Number(vehicleId) : null,
         memberIds,
         note: note.trim() || null,
+        startTime: startTime || null,
       });
       onSaved(planDate);
     } catch (e) {
@@ -720,6 +740,7 @@ function PlanModal({
       visible={visible}
       onClose={onCancel}
       busy={saving}
+      width={520}
       title={lane?.plan ? `แก้แผน ${lane.team}` : "จัดแผนทีม"}
       footer={
         <View style={styles.modalActions}>
@@ -737,7 +758,14 @@ function PlanModal({
         </View>
       }
     >
-      <DateField value={planDate} onChange={setPlanDate} label="วันที่" emptyHint="ต้องระบุวัน" />
+      <View style={styles.dateTime}>
+        <View style={{ flexGrow: 1.4, flexBasis: 200 }}>
+          <DateField value={planDate} onChange={setPlanDate} label="วันที่" emptyHint="ต้องระบุวัน" required marked={busyDays} labelStyle={styles.fieldLabel} />
+        </View>
+        <View style={{ flexGrow: 1, flexBasis: 150 }}>
+          <TimeField value={startTime} onChange={setStartTime} label="เวลาเข้าหน้างาน" labelStyle={styles.fieldLabel} />
+        </View>
+      </View>
       <Text style={styles.label}>ทีม</Text>
       <Dropdown
         value={team}
@@ -772,12 +800,26 @@ function PlanModal({
               );
             })}
           </View>
-          {inTeam.length === 0 && !showAll ? (
-            <Text style={styles.muted}>ยังไม่มีช่างที่สังกัด{team} — เลือกจากทีมอื่นได้</Text>
+          {inTeam.length === 0 ? (
+            <Text style={styles.muted}>ยังไม่มีช่างที่สังกัด{team} — ยืมจากทีมอื่นได้</Text>
           ) : null}
-          <TouchableOpacity onPress={() => setShowAll((v) => !v)}>
-            <Text style={styles.link}>{showAll ? "แสดงเฉพาะช่างในทีม" : "ยืมช่างจากทีมอื่น"}</Text>
-          </TouchableOpacity>
+          <View ref={borrowAnchor} style={{ alignSelf: "flex-start" }}>
+            <TouchableOpacity onPress={() => setBorrowing((v) => !v)} accessibilityLabel="ยืมช่างจากทีมอื่น">
+              <Text style={styles.link}>+ ยืมช่างจากทีมอื่น</Text>
+            </TouchableOpacity>
+          </View>
+          <Popover anchor={borrowAnchor} open={borrowing} onClose={() => setBorrowing(false)} width={320}>
+            <OptionList
+              label="ช่างทีมอื่น"
+              options={others
+                .filter((t) => !memberIds.includes(t.id))
+                .map((t) => ({ value: String(t.id), label: t.name, hint: t.team ?? "ยังไม่มีทีม" }))}
+              onPick={(id) => {
+                if (id) toggle(Number(id));
+                setBorrowing(false);
+              }}
+            />
+          </Popover>
         </>
       ) : null}
       <Text style={styles.label}>รถ (ไม่บังคับ)</Text>
@@ -1011,6 +1053,9 @@ const styles = StyleSheet.create({
   muted: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   error: { color: colors.danger, fontSize: 13 },
   label: { fontSize: 14, fontWeight: "600", color: colors.text, marginTop: spacing.xs },
+  // วันที่กับเวลาอยู่แถวเดียวกัน จอแคบเรียงลงเป็นสองแถว
+  dateTime: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md },
+  fieldLabel: { fontSize: 14, fontWeight: "600", marginTop: spacing.xs, marginBottom: 0 },
   people: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   person: {
     paddingHorizontal: 12,

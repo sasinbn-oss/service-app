@@ -14,7 +14,7 @@ import { api, apiErrorMessage } from "../api/client";
 import AppModal from "../components/AppModal";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
-import { thaiDate } from "../components/DateField";
+import DateField, { thaiDate } from "../components/DateField";
 import { fs, Kpi, Notice, Tag, Tone, vehicleTone } from "../components/FleetUI";
 import { useCachedState } from "../utils/pageCache";
 import { showAlert } from "../utils/alert";
@@ -294,20 +294,9 @@ function VehicleModal({
 }
 
 function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  const bad = value !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(value);
   return (
     <View style={{ flexGrow: 1, flexBasis: 160 }}>
-      <Text style={fs.label}>{label}</Text>
-      <TextInput
-        style={[fs.input, bad && { borderColor: colors.danger }]}
-        value={value}
-        onChangeText={onChange}
-        placeholder="2027-03-12"
-        placeholderTextColor={colors.textFaint}
-        maxLength={10}
-        accessibilityLabel={label}
-      />
-      <Text style={[fs.muted, bad && { color: colors.dangerInk }]}>{bad ? "รูปแบบ ปี-เดือน-วัน" : value ? thaiDate(value) : "ไม่ระบุ"}</Text>
+      <DateField value={value} onChange={onChange} label={label} labelStyle={[fs.label, { marginBottom: 0 }]} />
     </View>
   );
 }

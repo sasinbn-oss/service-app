@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import Spinner from "../components/Spinner";
 import AppModal from "../components/AppModal";
+import DateField from "../components/DateField";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
@@ -1102,7 +1103,7 @@ function NoteModal({
       ) : null}
 
       {status === WAITING_TECH || visitDate ? (
-        <VisitDateField value={visitDate} onChange={setVisitDate} />
+        <DateField value={visitDate} onChange={setVisitDate} label="วันที่ช่างจะเข้า" emptyHint="เว้นว่างได้ถ้ายังไม่ได้นัด" />
       ) : null}
         </>
       ) : null}
@@ -1125,66 +1126,6 @@ function NoteModal({
 
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
-  );
-}
-
-/**
- * เลือกอะไหล่ที่เคสนี้รออยู่ จากรายการอะไหล่ในระบบ
- *
- * ไม่ให้พิมพ์รหัสเอง เพราะรหัสที่พิมพ์มือจะสะกดไม่ตรงกัน แล้วสรุปยอดว่า
- * ทั้งประเทศค้างอะไหล่ตัวไหนอยู่กี่ตัวไม่ได้
- */
-/**
- * วันที่ช่างนัดเข้าไปแก้
- *
- * รับเป็น YYYY-MM-DD แบบเดียวกับหน้าบันทึกงาน จะได้ไม่ต้องพึ่ง date picker
- * ซึ่งหน้าตาไม่เหมือนกันระหว่างเว็บกับมือถือ ปุ่มลัดช่วยให้เคสส่วนใหญ่กดครั้งเดียวจบ
- */
-function VisitDateField({ value, onChange }: { value: string; onChange: (next: string) => void }) {
-  function shift(days: number) {
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    onChange(d.toISOString().slice(0, 10));
-  }
-
-  const valid = value === "" || /^\d{4}-\d{2}-\d{2}$/.test(value);
-
-  return (
-    <View style={styles.picker}>
-      <Text style={styles.modalLabel}>วันที่ช่างจะเข้า</Text>
-      <View style={styles.visitRow}>
-        <TextInput
-          style={[styles.visitInput, !valid && styles.visitInputBad]}
-          value={value}
-          onChangeText={onChange}
-          placeholder="2026-08-20"
-          placeholderTextColor={colors.textFaint}
-          maxLength={10}
-          accessibilityLabel="วันที่ช่างจะเข้า"
-        />
-        {value ? (
-          <TouchableOpacity onPress={() => onChange("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="close-circle" size={20} color={colors.textFaint} />
-          </TouchableOpacity>
-        ) : null}
-      </View>
-      <View style={styles.modalOptions}>
-        <TouchableOpacity style={styles.modalOption} onPress={() => shift(0)} activeOpacity={0.7}>
-          <Text style={styles.modalOptionText}>วันนี้</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.modalOption} onPress={() => shift(1)} activeOpacity={0.7}>
-          <Text style={styles.modalOptionText}>พรุ่งนี้</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.modalOption} onPress={() => shift(7)} activeOpacity={0.7}>
-          <Text style={styles.modalOptionText}>อีก 7 วัน</Text>
-        </TouchableOpacity>
-      </View>
-      {!valid ? (
-        <Text style={styles.modalError}>รูปแบบวันที่ต้องเป็น ปี-เดือน-วัน เช่น 2026-08-20</Text>
-      ) : (
-        <Text style={styles.modalHint}>{value ? thaiDate(value) : "เว้นว่างได้ถ้ายังไม่ได้นัด"}</Text>
-      )}
-    </View>
   );
 }
 
@@ -2466,21 +2407,6 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
   },
   visitChipText: { fontSize: 11, lineHeight: 18, color: colors.primaryInk, fontWeight: "700" },
-  visitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  visitInput: {
-    flex: 1,
-    minWidth: 0,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    fontSize: 14,
-    lineHeight: 22,
-    color: colors.text,
-  },
-  visitInputBad: { borderColor: colors.danger },
 
   cardList: { padding: spacing.md, gap: spacing.sm },
   card: {

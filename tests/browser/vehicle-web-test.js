@@ -152,10 +152,17 @@ const sql = (q) =>
     (await a.page.getByText(`แจ้งซ่อม: ${plate}`).count()) ? pass("ทะเบียนแสดงแจ้งซ่อมของช่าง") : fail("ไม่เห็นแจ้งซ่อม");
     await a.page.getByLabel(`เปิดรถ ${plate}`).click();
     await a.page.waitForTimeout(800);
-    await a.page.getByLabel("ภาษีหมดอายุ").fill("2026-10-20");
+    // ช่องวันที่เป็นปฏิทินแล้ว — เลือกวันที่ 20 ของเดือนนี้ (ตามเวลาไทย) จากปฏิทินลอย
+    const TAX = sql(`select to_char((now() at time zone 'Asia/Bangkok')::date, 'YYYY-MM-') || '20'`);
+    const [ty, tm] = TAX.split("-").map(Number);
+    const taxLabel = `${["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."][new Date(Date.UTC(ty, tm - 1, 20)).getUTCDay()]} 20 ${["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."][tm - 1]} ${ty + 543}`;
+    await a.page.getByLabel("ภาษีหมดอายุ").click();
+    await a.page.waitForTimeout(400);
+    await a.page.getByLabel(taxLabel, { exact: true }).last().click();
+    await a.page.waitForTimeout(300);
     await a.tap("บันทึกข้อมูล");
     await a.page.waitForTimeout(2000);
-    sql(`select "taxExpire"::date from "Vehicle" where id=${vid}`) === "2026-10-20" ? pass("DB: บันทึกวันภาษีหมดอายุ") : fail("วันภาษีไม่ถูกบันทึก");
+    sql(`select "taxExpire"::date from "Vehicle" where id=${vid}`) === TAX ? pass("DB: บันทึกวันภาษีหมดอายุ") : fail("วันภาษีไม่ถูกบันทึก");
     await a.tap("ตกลง").catch(() => {});
     await a.page.waitForTimeout(500);
     await a.tap("ประวัติซ่อมบำรุง");
