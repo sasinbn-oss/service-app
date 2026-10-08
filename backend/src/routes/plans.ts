@@ -113,6 +113,8 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
     plan: {
       vehicleId: number | null;
       vehiclePlate: string | null;
+      /** ใครเบิกรถคันนี้อยู่ตอนนี้ — จากลงทะเบียนใช้รถ ว่าง = ยังไม่มีใครเบิก */
+      vehicleInUseBy: string | null;
       members: { id: number; name: string; employeeCode: string }[];
       note: string | null;
       plannedByName: string | null;
@@ -160,11 +162,25 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
     // ใบเก่าที่จ่ายรายคนไม่มีทีม — ใช้ชื่อคนเป็นแถว ดีกว่าหายไปจากบอร์ด
     laneFor(o.assignedTeam ?? o.assignedTo?.name ?? "ยังไม่ระบุทีม").stops.push(stopShape(o));
   }
+  // รถในแผนถูกเบิกออกไปจริงหรือยัง — คนจัดแผนจะได้รู้ว่าทีมออกเดินทางแล้ว
+  // หรือรถถูกคนอื่นเบิกไปก่อน (จัดรถซ้อนกัน)
+  const planVehicleIds = plans.map((p) => p.vehicleId).filter((x): x is number => x !== null);
+  const inUse = planVehicleIds.length
+    ? new Map(
+        (
+          await prisma.vehicleLog.findMany({
+            where: { status: "ONGOING", vehicleId: { in: planVehicleIds } },
+            select: { vehicleId: true, user: { select: { name: true } } },
+          })
+        ).map((l) => [l.vehicleId, l.user.name])
+      )
+    : new Map<number, string>();
   for (const p of plans) {
     if (scope.teams && !scope.teams.has(p.team) && !lanes.has(p.team)) continue;
     laneFor(p.team).plan = {
       vehicleId: p.vehicle?.id ?? null,
       vehiclePlate: p.vehicle?.plateNumber ?? null,
+      vehicleInUseBy: p.vehicleId ? inUse.get(p.vehicleId) ?? null : null,
       members: p.members.map((m) => m.user),
       note: p.note,
       plannedByName: p.plannedBy?.name ?? null,

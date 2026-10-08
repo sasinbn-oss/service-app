@@ -50,7 +50,7 @@ export function formatSize(bytes: number): string {
  * "[object Object]" แล้วฝั่งเซิร์ฟเวอร์จะไม่เห็นไฟล์เลย — พังแบบเงียบ ๆ
  * ที่หาสาเหตุยากเพราะทุกอย่างดูสำเร็จ
  */
-async function appendFile(form: FormData, field: string, uri: string, name: string, type: string) {
+export async function appendFile(form: FormData, field: string, uri: string, name: string, type: string) {
   if (Platform.OS === "web") {
     const blob = await (await fetch(uri)).blob();
     form.append(field, blob, name);

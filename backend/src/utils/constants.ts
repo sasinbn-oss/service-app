@@ -23,7 +23,7 @@ export const ROLE_LABELS: Record<string, string> = {
 };
 export type Role = (typeof ROLES)[number];
 
-export const VEHICLE_STATUSES = ["AVAILABLE", "IN_USE", "MAINTENANCE"] as const;
+export const VEHICLE_STATUSES = ["AVAILABLE", "IN_USE", "MAINTENANCE", "INACTIVE"] as const;
 export type VehicleStatus = (typeof VEHICLE_STATUSES)[number];
 
 export const VEHICLE_LOG_STATUSES = ["ONGOING", "COMPLETED"] as const;
@@ -598,4 +598,69 @@ export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | null {
   if (ATTACHMENT_IMAGE_TYPES.includes(type)) return "IMAGE";
   if (ATTACHMENT_VIDEO_TYPES.includes(type)) return "VIDEO";
   return null;
+}
+
+/**
+ * ── ลงทะเบียนใช้รถ (ยกมาจาก OTTERI FLEET) ──
+ *
+ * ค่าเดียวกับที่ FLEET ใช้ ตามที่เจ้าของงานยืนยัน — ตั้งเป็นค่าคงที่ไว้ในโค้ด
+ * ไม่ได้ทำหน้าตั้งค่า เพราะเปลี่ยนนาน ๆ ครั้ง และค่าที่แอดมินเผลอตั้งเป็น 0
+ * คือการปิดการตรวจทั้งระบบโดยไม่มีใครรู้
+ */
+export const VEHICLE_RULES = {
+  /** รูปรอบคันขั้นต่ำ ทั้งตอนเบิกและตอนคืน */
+  MIN_PHOTOS: 5,
+  MAX_PHOTOS: 20,
+  /** เลขไมล์ต่างจากล่าสุด / วิ่งต่อรอบ ได้ไม่เกิน (กม.) */
+  MAX_MILEAGE_DIFF: 1000,
+  /** รอบน้ำมันเครื่องมาตรฐาน — รถคันไหนต่างไปตั้งเป็นรายคันได้ */
+  OIL_EVERY_KM: 10000,
+  OIL_EVERY_MONTHS: 6,
+  /** เตือนล่วงหน้าเมื่อเหลือไม่ถึงเท่านี้ */
+  SOON_KM: 1000,
+  SOON_DAYS: 30,
+  /** รูปที่อัปไว้แต่ยังไม่ได้ผูกกับรายการ ใช้ได้ภายในเวลานี้ (เท่ากับ FLEET) */
+  UPLOAD_TTL_HOURS: 6,
+} as const;
+
+/** ช่องรูปรอบคัน — ห้าช่องแรกตรงกับ MIN_PHOTOS */
+export const VEHICLE_PHOTO_LABELS = ["ด้านหน้า", "ด้านหลัง", "ด้านซ้าย", "ด้านขวา", "หน้าปัดเลขไมล์"];
+
+/**
+ * ไปทำอะไร — ตัวเลือกของงานช่าง (FLEET เดิมเป็นงานร้านซักผ้า เช่น ส่งผ้าลูกค้า)
+ * พิมพ์เองได้ถ้าไม่เข้าข้อไหน
+ */
+export const VEHICLE_PURPOSES = ["เข้าซ่อมสาขา", "ตรวจหน้างาน", "ส่ง/รับอะไหล่", "ติดต่องาน", "เติมน้ำมัน/ซ่อมรถ"];
+
+export const VEHICLE_STATUS_LABELS: Record<string, string> = {
+  AVAILABLE: "ว่าง",
+  IN_USE: "กำลังใช้งาน",
+  MAINTENANCE: "ซ่อมบำรุง",
+  INACTIVE: "เลิกใช้งาน",
+};
+
+export const VEHICLE_MAINT_TYPES: Record<string, string> = {
+  OIL: "เปลี่ยนน้ำมันเครื่อง",
+  REPAIR: "ซ่อม",
+  CHECK: "ตรวจเช็คตามระยะ",
+  TAX: "ต่อภาษี / พ.ร.บ. / ประกัน",
+  // มาจากช่องแจ้งซ่อมตอนคืนรถเท่านั้น แอดมินเลือกเองไม่ได้
+  REPORT: "ช่างแจ้งซ่อม",
+};
+
+export const VEHICLE_DOC_KINDS: Record<string, string> = {
+  BOOK: "หน้าเล่มทะเบียน",
+  ACT: "พ.ร.บ.",
+  INS: "กรมธรรม์ประกันภัย",
+  TAX: "ป้ายภาษี",
+};
+
+/** "yyyy-MM-dd" ของวันนี้ตามเวลาไทย — วันของงานรถนับตามวันที่คนในไทยใช้ ไม่ใช่ UTC */
+export function bangkokDay(at: Date = new Date()): string {
+  return new Date(at.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+}
+/** ช่วงเวลาของวันหนึ่งตามเวลาไทย [เริ่ม, เริ่มของวันถัดไป) */
+export function bangkokDayRange(day: string): { from: Date; to: Date } {
+  const from = new Date(`${day}T00:00:00+07:00`);
+  return { from, to: new Date(from.getTime() + 86_400_000) };
 }

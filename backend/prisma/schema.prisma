@@ -53,6 +53,10 @@ model User {
   workedWorkOrders     WorkOrderWorker[]
   teamDayPlans         TeamDayPlan[]
   teamDayPlanSeats     TeamDayPlanMember[]
+  returnedVehicleLogs  VehicleLog[]          @relation("VehicleLogReturnedBy")
+  vehicleLogPhotos     VehicleLogPhoto[]
+  vehicleDocs          VehicleDoc[]
+  vehicleMaintenance   VehicleMaintenance[]
 }
 
 model Vehicle {
@@ -61,10 +65,35 @@ model Vehicle {
   brand       String?
   model       String?
   type        String?
+  // AVAILABLE ว่าง · IN_USE มีคนเบิกอยู่ · MAINTENANCE งดเบิก · INACTIVE เลิกใช้
+  // เลิกใช้แทนการลบ — รถที่มีประวัติแล้วลบทิ้งไม่ได้ ไม่งั้นประวัติการใช้รถหายตาม
   status      String       @default("AVAILABLE")
+  note        String?
+  // เลขไมล์ล่าสุดที่รู้ — ตั้งตอนเบิก/คืน ใช้ตรวจว่าไมล์ที่ช่างกรอกต่อเนื่องไหม
+  currentMileage Int       @default(0)
+
+  // ── ทะเบียน & ซ่อมบำรุง ──
+  // ผู้รับผิดชอบ เช่น ทีมที่ถือรถคันนี้ — ข้อความอิสระเพราะบางคันเป็นของสำนักงาน
+  owner          String?
+  taxExpire      DateTime?
+  actExpire      DateTime?
+  insExpire      DateTime?
+  insCompany     String?
+  insPolicy      String?
+  // ว่าง = ใช้รอบมาตรฐาน (VEHICLE_RULES) รถบางรุ่นรอบสั้นกว่า
+  oilEveryKm     Int?
+  oilEveryMonths Int?
+  lastOilKm      Int?
+  lastOilDate    DateTime?
+  // บันทึก/นัดหมาย ที่แสดงในหน้ารวม — ช่างแจ้งซ่อมตอนคืนรถก็มาขึ้นตรงนี้
+  maintNote      String?
+  updatedAt      DateTime  @default(now()) @updatedAt
+
   createdAt   DateTime     @default(now())
   logs        VehicleLog[]
   dayPlans    TeamDayPlan[]
+  docs        VehicleDoc[]
+  maintenance VehicleMaintenance[]
 }
 
 model VehicleLog {
@@ -80,6 +109,84 @@ model VehicleLog {
   startedAt    DateTime  @default(now())
   endedAt      DateTime?
   status       String    @default("ONGOING")
+  // ไมล์ตอนรับ − ไมล์ล่าสุดของรถ ≠ 0 = ไม่ต่อเนื่อง (มีคนใช้รถโดยไม่ลงทะเบียน
+  // หรือกรอกผิด) — ยอมให้ผ่านได้ในกรอบ ±MAX_MILEAGE_DIFF แต่แอดมินต้องเห็น
+  mileageGap   Int       @default(0)
+  note         String?
+  returnNote   String?
+  // ค่าใช้จ่ายรอบนี้ (บาท) เช่น น้ำมัน ทางด่วน — กรอกตอนคืน
+  cost         Int?
+  repairNote   String?
+  // ใบงานที่ไป (ไม่บังคับ) — รู้ย้อนหลังได้ว่ารถคันไหนไปงานไหน
+  workOrderId  Int?
+  workOrder    WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  // แอดมินคืนแทน (ช่างลืมกดคืน) — ว่าง = เจ้าของรายการคืนเอง
+  returnedById Int?
+  returnedBy   User?     @relation("VehicleLogReturnedBy", fields: [returnedById], references: [id], onDelete: SetNull)
+  photos       VehicleLogPhoto[]
+
+  @@index([userId, status])
+  @@index([vehicleId, startedAt])
+}
+
+// รูปรอบคันตอนเบิก/คืน
+//
+// อัปขึ้นทีละรูประหว่างช่างถ่าย (logId ยังว่าง) แล้วค่อยผูกกับรายการตอนกดยืนยัน —
+// ช่างถ่ายต่อได้ไม่ต้องรอ และตอนกดยืนยันไม่ต้องรอส่ง 5 รูปพร้อมกันผ่าน 4G
+model VehicleLogPhoto {
+  id           Int         @id @default(autoincrement())
+  logId        Int?
+  log          VehicleLog? @relation(fields: [logId], references: [id], onDelete: Cascade)
+  // START ตอนเบิก · END ตอนคืน
+  phase        String
+  objectKey    String
+  // รูปย่อ ~20 KB ไว้แสดงในรายการโดยไม่ต้องขอลิงก์ทีละรูป แบบเดียวกับไฟล์แนบใบงาน
+  thumbnail    Bytes?
+  uploadedById Int
+  uploadedBy   User        @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  createdAt    DateTime    @default(now())
+
+  @@index([logId])
+  @@index([uploadedById, logId])
+}
+
+// รูปเอกสารรถ — คันละหนึ่งรูปต่อชนิด (เล่มทะเบียน พ.ร.บ. กรมธรรม์ ป้ายภาษี)
+model VehicleDoc {
+  id           Int      @id @default(autoincrement())
+  vehicleId    Int
+  vehicle      Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  kind         String
+  objectKey    String
+  thumbnail    Bytes?
+  uploadedById Int?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@unique([vehicleId, kind])
+}
+
+// ประวัติซ่อมบำรุง — เปลี่ยนน้ำมัน ซ่อม ตรวจเช็ค ต่อภาษี และใบแจ้งซ่อมจากช่าง
+model VehicleMaintenance {
+  id           Int         @id @default(autoincrement())
+  vehicleId    Int
+  vehicle      Vehicle     @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  // ดู VEHICLE_MAINT_TYPES ใน src/utils/constants.ts
+  type         String
+  date         DateTime
+  mileage      Int?
+  cost         Int         @default(0)
+  shop         String?
+  detail       String?
+  // รูปใบเสร็จ/ใบแจ้งซ่อม (ไม่บังคับ)
+  objectKey    String?
+  thumbnail    Bytes?
+  // ใบแจ้งซ่อมที่มาจากการคืนรถ — ย้อนไปดูรูปตอนคืนได้
+  vehicleLogId Int?
+  createdById  Int?
+  createdBy    User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime    @default(now())
+
+  @@index([vehicleId, date])
 }
 
 model Branch {
@@ -578,6 +685,7 @@ model WorkOrder {
   logs        WorkOrderLog[]
   attachments WorkOrderAttachment[]
   workers     WorkOrderWorker[]
+  vehicleLogs VehicleLog[]
 
   @@index([status, createdAt])
   @@index([assignedToId, status])
