@@ -38,6 +38,8 @@ import ManageFlowsScreen from "../screens/ManageFlowsScreen";
 import ManageSparePartsScreen from "../screens/ManageSparePartsScreen";
 import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
+import FleetDashboardScreen from "../screens/FleetDashboardScreen";
+import VehicleLogAdminScreen from "../screens/VehicleLogAdminScreen";
 import ManageBranchesScreen from "../screens/ManageBranchesScreen";
 import ManageUsersScreen from "../screens/ManageUsersScreen";
 
@@ -64,6 +66,10 @@ const OWN_TITLE = new Set([
   "WorkOrderList",
   "MachineDashboard",
   "ManageVehicles",
+  "FleetDashboard",
+  "VehicleLogAdmin",
+  "VehicleCheckIn",
+  "VehicleHistory",
   "ManageUsers",
   "AdminMenu",
   "HistoryMenu",
@@ -392,7 +398,7 @@ function HistoryStackNavigator() {
       <HistoryStack.Screen
         name="VehicleHistory"
         component={VehicleHistoryScreen}
-        options={{ title: "ประวัติการใช้รถ" }}
+        options={{ title: "ประวัติการใช้รถของฉัน" }}
       />
       <HistoryStack.Screen
         name="MyConsumableRequests"
@@ -453,7 +459,17 @@ function AdminStackNavigator() {
       <AdminStack.Screen
         name="ManageVehicles"
         component={ManageVehiclesScreen}
-        options={{ title: "จัดการข้อมูลรถ" }}
+        options={{ title: "ทะเบียน & ซ่อมบำรุง" }}
+      />
+      <AdminStack.Screen
+        name="FleetDashboard"
+        component={FleetDashboardScreen}
+        options={{ title: "ภาพรวมรถ" }}
+      />
+      <AdminStack.Screen
+        name="VehicleLogAdmin"
+        component={VehicleLogAdminScreen}
+        options={{ title: "ประวัติการใช้รถ" }}
       />
       <AdminStack.Screen
         name="ManageBranches"

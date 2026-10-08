@@ -1,33 +1,33 @@
+/**
+ * ประวัติการใช้รถของฉัน — ช่างเห็นเฉพาะของตัวเอง (เซิร์ฟเวอร์กรองให้)
+ * แตะรายการเพื่อดูรูปตอนเบิก/คืน — ไว้ยืนยันกับแอดมินเวลามีคำถามเรื่องรอยบนรถ
+ */
 import React, { useCallback, useState } from "react";
+import { FlatList, Text, TouchableOpacity, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { useFocusEffect } from "@react-navigation/native";
 import { useCachedState } from "../utils/pageCache";
-import { FlatList, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
-import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";
-import { colors } from "../theme";
-import { VehicleLog } from "../types";
+import { fs, Kpi, LogDetailModal, LogStatusTag } from "../components/FleetUI";
+import { fmtDT, fmtNum, VehicleLogRow } from "../utils/vehicles";
+import { colors, headingFont } from "../theme";
 
 export default function VehicleHistoryScreen() {
-  const [logs, setLogs, cached] = useCachedState<VehicleLog[]>("VehicleHistory:logs", []);
+  const [logs, setLogs, cached] = useCachedState<VehicleLogRow[]>("VehicleHistory:logs2", []);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<VehicleLogRow | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
       api
-        .get<VehicleLog[]>("/vehicle-logs")
-        .then((res) => {
-          if (!cancelled) setLogs(res.data);
-        })
-        .catch((e) => {
-          if (!cancelled) setError(apiErrorMessage(e));
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
+        .get<VehicleLogRow[]>("/vehicle-logs")
+        .then((res) => !cancelled && (setLogs(res.data), setError(null)))
+        .catch((e) => !cancelled && setError(apiErrorMessage(e)))
+        .finally(() => !cancelled && setLoading(false));
       return () => {
         cancelled = true;
       };
@@ -36,69 +36,64 @@ export default function VehicleHistoryScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
+      <View style={fs.center}>
         <Spinner color={colors.primary} />
       </View>
     );
   }
-
-  if (error) {
+  if (error && logs.length === 0) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.error}>{error}</Text>
+      <View style={fs.center}>
+        <Text style={fs.error}>{error}</Text>
       </View>
     );
   }
 
+  const km = logs.reduce((s, l) => s + (l.distance ?? 0), 0);
+  const cost = logs.reduce((s, l) => s + (l.cost ?? 0), 0);
+
   return (
-    <FlatList
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      data={logs}
-      keyExtractor={(item) => String(item.id)}
-      ListEmptyComponent={<EmptyState icon="car-outline" text="ยังไม่มีประวัติการใช้รถ" />}
-      renderItem={({ item }) => (
-        <View style={styles.card}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.plate}>{item.vehicle.plateNumber}</Text>
-            <View style={[styles.badge, item.status === "ONGOING" ? styles.badgeOngoing : styles.badgeDone]}>
-              <Text style={styles.badgeText}>{item.status === "ONGOING" ? "กำลังใช้งาน" : "เสร็จสิ้น"}</Text>
+    <>
+      <FlatList
+        style={fs.container}
+        contentContainerStyle={fs.content}
+        data={logs}
+        keyExtractor={(l) => String(l.id)}
+        ListHeaderComponent={
+          <View style={{ gap: 12 }}>
+            <Text style={[fs.title, headingFont]}>ประวัติการใช้รถของฉัน</Text>
+            <View style={fs.kpis}>
+              <Kpi label="จำนวนครั้ง" value={fmtNum(logs.length)} unit="ครั้ง" tone="navy" />
+              <Kpi label="ระยะทางรวม" value={fmtNum(km)} unit="กม." />
+              <Kpi label="ค่าใช้จ่ายที่ลง" value={`฿${fmtNum(cost)}`} />
             </View>
           </View>
-          <Text style={styles.line}>วัตถุประสงค์: {item.purpose}</Text>
-          {item.destination ? <Text style={styles.line}>ปลายทาง: {item.destination}</Text> : null}
-          <Text style={styles.line}>
-            ไมล์: {item.startMileage} {item.endMileage != null ? `→ ${item.endMileage}` : ""}
-          </Text>
-          <Text style={styles.timestamp}>เริ่ม: {new Date(item.startedAt).toLocaleString("th-TH")}</Text>
-          {item.endedAt && (
-            <Text style={styles.timestamp}>คืน: {new Date(item.endedAt).toLocaleString("th-TH")}</Text>
-          )}
-        </View>
-      )}
-    />
+        }
+        ListEmptyComponent={<EmptyState icon="car-outline" text="ยังไม่มีประวัติการใช้รถ" />}
+        renderItem={({ item: l }) => (
+          <TouchableOpacity style={fs.card} onPress={() => setOpen(l)} activeOpacity={0.8} accessibilityLabel={`ดูรายการ ${l.plateNumber}`}>
+            <View style={fs.row}>
+              <Ionicons name="car-sport-outline" size={20} color={colors.primary} />
+              <Text style={[fs.plate, headingFont]}>{l.plateNumber}</Text>
+              <View style={{ flex: 1 }} />
+              <LogStatusTag log={l} />
+            </View>
+            <Text style={fs.body}>
+              {l.purpose}
+              {l.destination ? ` · ${l.destination}` : ""}
+            </Text>
+            <View style={fs.row}>
+              <Text style={fs.muted}>
+                {fmtDT(l.startedAt)}
+                {l.endedAt ? ` → ${fmtDT(l.endedAt)}` : ""}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <Text style={fs.bold}>{l.distance === null ? `ไมล์ออก ${fmtNum(l.startMileage)}` : `${fmtNum(l.distance)} กม.`}</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+      />
+      <LogDetailModal log={open} onClose={() => setOpen(null)} />
+    </>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 16 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 16,
-    marginBottom: 12,
-  },
-  rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  plate: { fontSize: 16, fontWeight: "700", color: colors.text },
-  line: { fontSize: 14, color: colors.text, marginTop: 4 },
-  timestamp: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
-  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  badgeOngoing: { backgroundColor: colors.warningSoft },
-  badgeDone: { backgroundColor: colors.successSoft },
-  badgeText: { fontSize: 12, fontWeight: "600", color: colors.text },
-  error: { color: colors.danger },
-});

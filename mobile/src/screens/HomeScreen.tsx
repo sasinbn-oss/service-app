@@ -179,7 +179,7 @@ export default function HomeScreen({ navigation }: Props) {
       group: "field",
       labelEn: "Vehicle Use",
       label: "ลงทะเบียนใช้รถ",
-      description: "เช็คอิน / คืนรถ พร้อมเลขไมล์",
+      description: "เบิก / คืนรถ พร้อมเลขไมล์และรูปรอบคัน",
       icon: "car",
       tint: colors.primarySoft,
       iconColor: colors.primaryInk,
