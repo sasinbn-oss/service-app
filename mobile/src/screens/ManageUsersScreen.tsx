@@ -23,6 +23,8 @@ import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { Role } from "../types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
+import RosterImportModal from "../components/RosterImportModal";
+import { canPickFile } from "../utils/filePicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
@@ -34,12 +36,14 @@ interface ManagedUser {
   region: string | null;
   /** ทีมช่างที่สังกัด — ตัวบอกว่าช่างคนนี้เห็นงานของทีมไหน */
   team: string | null;
+  /** ทีมช่างที่หัวหน้าภาคดูแล — หลายทีมได้ ใช้ร่วมกับภาค */
+  supervisedTeams: string[];
   mustChangePassword: boolean;
 }
 
 const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
   { value: "EMPLOYEE", label: "ช่าง", hint: "รับงานที่ถูกจ่ายให้ บันทึกผลตรวจหน้างาน และปิดงาน" },
-  { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาคที่ดูแล" },
+  { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาคหรือทีมที่ดูแล" },
   { value: "ADMIN", label: "แอดมิน", hint: "เปิดใบงาน เช็คคลัง และทำแทนได้ทุกขั้น" },
   {
     value: "SUPER_ADMIN",
@@ -62,7 +66,10 @@ function roleOptions(meSuper: boolean, current?: Role) {
  */
 function searchText(u: ManagedUser) {
   const role = ROLE_OPTIONS.find((r) => r.value === u.role)?.label ?? "";
-  return [u.name, u.employeeCode, u.phone, u.team, u.region, role].filter(Boolean).join(" ").toLowerCase();
+  return [u.name, u.employeeCode, u.phone, u.team, u.region, ...(u.supervisedTeams ?? []), role]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 export default function ManageUsersScreen() {
@@ -76,6 +83,7 @@ export default function ManageUsersScreen() {
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<ManagedUser | null>(null);
   const [query, setQuery] = useState("");
+  const [importing, setImporting] = useState(false);
   // ทุกคำที่พิมพ์ต้องเจอ (ไม่จำเป็นต้องติดกัน) — "ช่าง กระบี่" ได้ช่างทีมกระบี่
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -114,7 +122,7 @@ export default function ManageUsersScreen() {
 
   async function update(
     id: number,
-    patch: { role?: Role; region?: string | null; team?: string | null }
+    patch: { role?: Role; region?: string | null; team?: string | null; supervisedTeams?: string[] }
   ) {
     setSavingId(id);
     try {
@@ -178,6 +186,17 @@ export default function ManageUsersScreen() {
           </Text>
         </View>
         <View style={{ flex: 1 }} />
+        {/* เลือกไฟล์ได้เฉพาะบนเว็บ (ดู utils/filePicker) — นำเข้ารายชื่อเป็นงานโต๊ะทำงาน */}
+        {canPickFile ? (
+          <TouchableOpacity
+            style={[styles.addButton, styles.importButton]}
+            onPress={() => setImporting(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="document-attach-outline" size={18} color={colors.navy} />
+            <Text style={[styles.addButtonText, { color: colors.navy }]}>นำเข้ารายชื่อจากไฟล์</Text>
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity style={styles.addButton} onPress={() => setCreating(true)} activeOpacity={0.8}>
           <Ionicons name="person-add-outline" size={18} color="#fff" />
           <Text style={styles.addButtonText}>เพิ่มบัญชีผู้ใช้</Text>
@@ -286,7 +305,7 @@ export default function ManageUsersScreen() {
 
           {u.role === "SUPERVISOR" ? (
             <>
-              <Text style={styles.label}>ภาคที่ดูแล</Text>
+              <Text style={styles.label}>ภาคที่ดูแล (กดซ้ำเพื่อเอาออก)</Text>
               {regions.length === 0 ? (
                 <Text style={styles.hint}>
                   ยังไม่มีภาคในทะเบียนสาขา — อัปโหลดไฟล์ทะเบียนสาขาก่อน
@@ -297,7 +316,8 @@ export default function ManageUsersScreen() {
                     <TouchableOpacity
                       key={region}
                       style={[styles.option, u.region === region && styles.optionOn]}
-                      onPress={() => update(u.id, { region })}
+                      // กดซ้ำเพื่อเอาภาคออก — หัวหน้าภาคที่ดูแลตามทีมอย่างเดียวไม่ต้องมีภาค
+                      onPress={() => update(u.id, { region: u.region === region ? null : region })}
                       disabled={savingId !== null}
                       activeOpacity={0.7}
                     >
@@ -310,10 +330,42 @@ export default function ManageUsersScreen() {
                   ))}
                 </View>
               )}
-              {!u.region ? (
+              {/*
+                ทีมที่ดูแลเลือกได้หลายทีม — บันทึกแบ่งทีมแบ่งหัวหน้าภาคตามทีม ไม่ตรงกับภาค
+                (สองคนแบ่ง กทม. กันตามเขต · คนหนึ่งดูสองภาค) เห็นงาน = ภาคที่เลือก รวมกับทีมเหล่านี้
+              */}
+              <Text style={styles.label}>ทีมช่างที่ดูแล (เลือกได้หลายทีม)</Text>
+              {teams.length === 0 ? (
+                <Text style={styles.hint}>ยังไม่มีทีมในทะเบียนสาขา</Text>
+              ) : (
+                <View style={styles.options}>
+                  {teams.map((team) => {
+                    const on = (u.supervisedTeams ?? []).includes(team);
+                    return (
+                      <TouchableOpacity
+                        key={team}
+                        style={[styles.option, on && styles.optionOn]}
+                        onPress={() =>
+                          update(u.id, {
+                            supervisedTeams: on
+                              ? u.supervisedTeams.filter((t) => t !== team)
+                              : [...(u.supervisedTeams ?? []), team],
+                          })
+                        }
+                        disabled={savingId !== null}
+                        activeOpacity={0.7}
+                        accessibilityState={{ selected: on }}
+                      >
+                        <Text style={[styles.optionText, on && styles.optionTextOn]}>{team}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+              {!u.region && !(u.supervisedTeams ?? []).length ? (
                 <View style={styles.warn}>
                   <Ionicons name="alert-circle" size={14} color={colors.danger} />
-                  <Text style={styles.warnText}>ยังไม่ได้เลือกภาค จะไม่เห็นใบงานใดเลย</Text>
+                  <Text style={styles.warnText}>ยังไม่ได้เลือกภาคหรือทีม จะไม่เห็นใบงานใดเลย</Text>
                 </View>
               ) : null}
             </>
@@ -353,6 +405,8 @@ export default function ManageUsersScreen() {
           await load();
         }}
       />
+
+      <RosterImportModal visible={importing} onClose={() => setImporting(false)} onDone={load} />
 
       <ResetPasswordModal
         user={resetting}
@@ -656,6 +710,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     ...shadow.raised,
   },
+  importButton: { backgroundColor: colors.sky50, borderWidth: 1, borderColor: colors.border },
   addButtonText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   pending: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
   pendingText: { fontSize: 11, lineHeight: 19, color: colors.warning },

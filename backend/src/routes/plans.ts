@@ -9,7 +9,9 @@
  */
 import { Router, Response, NextFunction } from "express";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import {
   APPOINTMENT_STATUS_LABELS,
@@ -37,29 +39,29 @@ function dayStart(date: string) {
 }
 
 /**
- * ขอบเขตของคนที่ถาม — หัวหน้าภาคเห็นเฉพาะภาคตัวเอง แบบเดียวกับรายการใบงาน
+ * ขอบเขตของคนที่ถาม — หัวหน้าภาคเห็นเฉพาะภาค/ทีมที่ดูแล แบบเดียวกับรายการใบงาน
  *
- * teams คือทีมที่ดูแลสาขาในภาคนั้น ใช้กรองแผนของทีมที่ยังไม่มีงานในวันนั้น
- * (จัดคนไว้ก่อนแล้วค่อยนัดงาน) ซึ่งกรองจากใบงานไม่ได้เพราะยังไม่มีใบ
+ * teams คือทีมที่ดูแลสาขาในภาคนั้นรวมกับทีมที่ตั้งให้ดูแลตรง ๆ ใช้กรองแผนของทีมที่ยังไม่มีงาน
+ * ในวันนั้น (จัดคนไว้ก่อนแล้วค่อยนัดงาน) ซึ่งกรองจากใบงานไม่ได้เพราะยังไม่มีใบ
  */
 async function scopeFor(req: AuthRequest) {
-  if (req.auth!.role === "ADMIN") return { region: null as string | null, teams: null as Set<string> | null };
-  const me = await prisma.user.findUnique({
-    where: { id: req.auth!.userId },
-    select: { region: true },
-  });
-  const region = me?.region ?? "\u0000ไม่มีภาค";
-  const rows = await prisma.branch.findMany({
-    where: { region, cancelledAt: null },
-    select: { zone: true, pmTeam: true },
-    distinct: ["zone", "pmTeam"],
-  });
-  const teams = new Set<string>();
-  for (const r of rows) {
-    if (r.zone) teams.add(r.zone);
-    if (r.pmTeam) teams.add(r.pmTeam);
+  if (req.auth!.role === "ADMIN") {
+    return { where: null as Prisma.WorkOrderWhereInput | null, teams: null as Set<string> | null };
   }
-  return { region, teams };
+  const s = await supervisorScope(req.auth!.userId);
+  const teams = new Set<string>(s.teams);
+  if (s.region) {
+    const rows = await prisma.branch.findMany({
+      where: { region: s.region, cancelledAt: null },
+      select: { zone: true, pmTeam: true },
+      distinct: ["zone", "pmTeam"],
+    });
+    for (const r of rows) {
+      if (r.zone) teams.add(r.zone);
+      if (r.pmTeam) teams.add(r.pmTeam);
+    }
+  }
+  return { where: workOrderInScope(s), teams };
 }
 
 router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
@@ -73,7 +75,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       where: {
         scheduledAt: day,
         status: { in: ON_BOARD },
-        ...(scope.region ? { branch: { region: scope.region } } : {}),
+        ...(scope.where ? { AND: [scope.where] } : {}),
       },
       select: {
         id: true,
@@ -225,7 +227,7 @@ router.get("/month", requireAuth, requirePlanner, async (req: AuthRequest, res) 
     where: {
       scheduledAt: { gte: from, lt: to },
       status: { in: ON_BOARD },
-      ...(scope.region ? { branch: { region: scope.region } } : {}),
+      ...(scope.where ? { AND: [scope.where] } : {}),
     },
     _count: true,
   });
@@ -252,7 +254,7 @@ router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res
         { status: { in: ["ASSIGNED", "WAITING_PARTS"] } },
         { status: "INSPECTING", scheduledAt: null },
       ],
-      ...(scope.region ? { branch: { region: scope.region } } : {}),
+      ...(scope.where ? { AND: [scope.where] } : {}),
     },
     select: {
       id: true,
