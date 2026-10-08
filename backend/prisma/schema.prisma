@@ -852,3 +852,16 @@ model TeamDayPlanMember {
 
   @@unique([planId, userId])
 }
+
+// ชื่อทีมเดิม → ชื่อใหม่ ที่แอดมินเปลี่ยนในแอป (หน้า ทีมช่าง)
+//
+// ชื่อทีมมาจากไฟล์ทะเบียนสาขาและไฟล์เครื่องที่อัปวันละสองครั้ง ถ้าไฟล์ยังเขียนชื่อเดิมอยู่
+// การอัปรอบถัดไปจะเขียนชื่อเดิมกลับลงสาขา แล้วช่าง/หัวหน้าภาคที่ย้ายไปชื่อใหม่แล้วจะมองไม่เห็นงาน
+// ตัวนำเข้าทั้งสองจึงแปลงชื่อผ่านตารางนี้ก่อนบันทึก (utils/teamAliases.ts)
+model TeamRename {
+  id          Int      @id @default(autoincrement())
+  fromName    String   @unique
+  toName      String
+  createdById Int?
+  createdAt   DateTime @default(now())
+}

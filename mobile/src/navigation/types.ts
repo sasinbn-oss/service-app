@@ -60,6 +60,7 @@ export type AdminStackParamList = {
   VehicleLogAdmin: undefined;
   ManageBranches: undefined;
   ManageUsers: undefined;
+  ManageTeams: undefined;
 };
 
 export type MainTabParamList = {

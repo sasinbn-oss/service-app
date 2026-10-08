@@ -3,6 +3,7 @@ import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin } from "../middleware/auth";
+import { applyTeamAliases } from "../utils/teamAliases";
 import {
   applyBranchImport,
   parseBranchWorkbook,
@@ -36,6 +37,8 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
     const parsed = await parseBranchWorkbook(req.file.buffer);
     if (parsed.errors.length > 0) return res.status(400).json({ error: parsed.errors.join(" / ") });
     if (parsed.rows.length === 0) return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
+    // ไฟล์ยังเขียนชื่อทีมที่แอดมินเปลี่ยนไปแล้ว — แปลงก่อน ไม่งั้นชื่อเดิมถูกเขียนกลับลงสาขา
+    await applyTeamAliases(parsed.rows);
 
     const plan = commit ? await applyBranchImport(parsed) : await planBranchImport(parsed);
     res.json({ committed: commit, plan });

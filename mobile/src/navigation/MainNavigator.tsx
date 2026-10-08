@@ -38,6 +38,7 @@ import ManageFlowsScreen from "../screens/ManageFlowsScreen";
 import ManageSparePartsScreen from "../screens/ManageSparePartsScreen";
 import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
+import ManageTeamsScreen from "../screens/ManageTeamsScreen";
 import FleetDashboardScreen from "../screens/FleetDashboardScreen";
 import VehicleLogAdminScreen from "../screens/VehicleLogAdminScreen";
 import ManageBranchesScreen from "../screens/ManageBranchesScreen";
@@ -71,6 +72,7 @@ const OWN_TITLE = new Set([
   "VehicleCheckIn",
   "VehicleHistory",
   "ManageUsers",
+  "ManageTeams",
   "AdminMenu",
   "HistoryMenu",
 ]);
@@ -480,6 +482,11 @@ function AdminStackNavigator() {
         name="ManageUsers"
         component={ManageUsersScreen}
         options={{ title: "สิทธิ์ผู้ใช้" }}
+      />
+      <AdminStack.Screen
+        name="ManageTeams"
+        component={ManageTeamsScreen}
+        options={{ title: "ทีมช่าง" }}
       />
     </AdminStack.Navigator>
   );

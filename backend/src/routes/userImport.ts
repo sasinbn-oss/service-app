@@ -14,6 +14,7 @@ import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_ROLES } from "../utils/constants";
 import { displayName, parseRoster, readRows, suggestTeam } from "../users/rosterImport";
+import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
 
 const router = Router();
 
@@ -49,8 +50,9 @@ router.post("/preview", requireAuth, requireAdmin, upload.single("file"), async 
     });
   }
 
-  const [teams, existing] = await Promise.all([
+  const [teams, aliases, existing] = await Promise.all([
     knownTeams(),
+    teamAliasMap(),
     prisma.user.findMany({
       where: { employeeCode: { in: people.map((p) => p.code) }, deletedAt: null },
       select: { id: true, employeeCode: true, name: true, role: true, team: true },
@@ -65,7 +67,12 @@ router.post("/preview", requireAuth, requireAdmin, upload.single("file"), async 
     fileName,
     teams,
     problems,
-    areas: [...areaCount].map(([area, count]) => ({ area, count, suggestion: suggestTeam(area, teams) })),
+    // ชื่อพื้นที่ที่เป็นชื่อทีมเดิม (เปลี่ยนชื่อในแอปไปแล้ว) ให้เดาเป็นชื่อปัจจุบัน
+    areas: [...areaCount].map(([area, count]) => ({
+      area,
+      count,
+      suggestion: suggestTeam(resolveTeam(area, aliases) ?? area, teams),
+    })),
     people: people.map((p) => {
       const u = byCode.get(p.code);
       return {
