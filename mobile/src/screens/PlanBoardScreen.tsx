@@ -64,6 +64,8 @@ interface Lane {
   plan: {
     vehicleId: number | null;
     vehiclePlate: string | null;
+    /** ใครเบิกรถคันนี้อยู่ตอนนี้ (จากลงทะเบียนใช้รถ) — บอกได้ว่าทีมออกเดินทางแล้วหรือรถถูกคนอื่นเอาไป */
+    vehicleInUseBy: string | null;
     members: Member[];
     note: string | null;
     plannedByName: string | null;
@@ -498,7 +500,10 @@ function LaneCard({
         {lane.plan?.vehiclePlate ? (
           <View style={styles.car}>
             <Ionicons name="car-outline" size={13} color={colors.primaryInk} />
-            <Text style={styles.carText}>{lane.plan.vehiclePlate}</Text>
+            <Text style={styles.carText}>
+              {lane.plan.vehiclePlate}
+              {lane.plan.vehicleInUseBy ? ` · ${lane.plan.vehicleInUseBy} เบิกอยู่` : ""}
+            </Text>
           </View>
         ) : null}
         <View style={{ flex: 1 }} />

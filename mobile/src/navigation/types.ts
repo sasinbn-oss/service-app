@@ -56,6 +56,8 @@ export type AdminStackParamList = {
   ManageSpareParts: undefined;
   ManageConsumables: undefined;
   ManageVehicles: undefined;
+  FleetDashboard: undefined;
+  VehicleLogAdmin: undefined;
   ManageBranches: undefined;
   ManageUsers: undefined;
 };

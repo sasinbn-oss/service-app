@@ -30,8 +30,8 @@ export default function HistoryMenuScreen({ navigation }: Props) {
     },
     {
       key: "VehicleHistory",
-      label: "ประวัติการใช้รถ",
-      labelEn: "Trip History",
+      label: "ประวัติการใช้รถของฉัน",
+      labelEn: "My Trips",
       description: "การเบิกใช้และคืนรถ",
       icon: "car",
       tint: colors.primarySoft,

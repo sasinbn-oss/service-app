@@ -136,8 +136,18 @@ const GROUPS: Group[] = [
       { key: "parts", label: "รายการอะไหล่", labelEn: "Spare Parts", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
       { key: "checkin", label: "รายงานตัวเข้าสาขา", labelEn: "Branch Check-in", icon: "location-outline", tab: "HomeTab", screen: "BranchCheckIn" },
       { key: "worklog", label: "บันทึกการทำงาน", labelEn: "Work Log", icon: "create-outline", tab: "HomeTab", screen: "WorkLogForm" },
-      { key: "vehicle", label: "ลงทะเบียนใช้รถ", labelEn: "Vehicle Use", icon: "car-outline", tab: "HomeTab", screen: "VehicleCheckIn" },
       { key: "guides", label: "คู่มือแก้ปัญหา", labelEn: "Guides", icon: "book-outline", tab: "HistoryTab", screen: "GuideList" },
+    ],
+  },
+  {
+    // ยกมาจาก OTTERI FLEET — รวมไว้กลุ่มเดียว ช่างเห็นสองรายการแรก แอดมินเห็นครบ
+    title: "รถ",
+    items: [
+      { key: "vehicle", label: "ลงทะเบียนใช้รถ", labelEn: "Vehicle Use", icon: "car-outline", tab: "HomeTab", screen: "VehicleCheckIn" },
+      { key: "vehicleMine", label: "ประวัติการใช้รถของฉัน", labelEn: "My Trips", icon: "time-outline", tab: "HistoryTab", screen: "VehicleHistory" },
+      { key: "fleetDash", label: "ภาพรวมรถ", labelEn: "Fleet Overview", icon: "speedometer-outline", tab: "AdminTab", screen: "FleetDashboard", roles: ["ADMIN"] },
+      { key: "vehicleLogs", label: "ประวัติการใช้รถ", labelEn: "Trip Log", icon: "list-outline", tab: "AdminTab", screen: "VehicleLogAdmin", roles: ["ADMIN"] },
+      { key: "vehicles", label: "ทะเบียน & ซ่อมบำรุง", labelEn: "Registry & Service", icon: "construct-outline", tab: "AdminTab", screen: "ManageVehicles", roles: ["ADMIN"] },
     ],
   },
   {
@@ -156,7 +166,6 @@ const GROUPS: Group[] = [
       { key: "admin", label: "ระบบหลังบ้าน", labelEn: "Admin", icon: "settings-outline", tab: "AdminTab", screen: "AdminMenu" },
       { key: "review", label: "อนุมัติคำขอเบิก", labelEn: "Approvals", icon: "checkmark-circle-outline", tab: "AdminTab", screen: "ReviewRequests" },
       { key: "users", label: "สิทธิ์ผู้ใช้", labelEn: "Users & Access", icon: "people-outline", tab: "AdminTab", screen: "ManageUsers" },
-      { key: "vehicles", label: "จัดการข้อมูลรถ", labelEn: "Fleet Inventory", icon: "bus-outline", tab: "AdminTab", screen: "ManageVehicles" },
       { key: "branches", label: "จัดการข้อมูลสาขา", labelEn: "Branches", icon: "business-outline", tab: "AdminTab", screen: "ManageBranches" },
     ],
   },

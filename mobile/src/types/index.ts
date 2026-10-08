@@ -20,7 +20,7 @@ export interface User {
   superAdmin?: boolean;
 }
 
-export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE";
+export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE" | "INACTIVE";
 
 export interface Vehicle {
   id: number;
