@@ -67,7 +67,7 @@ node tests/browser/backorder-web-test.js WO-00123
 
 ถ้าเครื่องเก็บ chromium ไว้ที่อื่น ตั้ง `PLAYWRIGHT_CHROMIUM` ชี้ไปที่ไฟล์นั้น
 
-`user-delete-web-test.js` (ปุ่มลบเห็นเฉพาะ Super Admin · ลบแล้วหายจากรายการ) และ
+`user-delete-web-test.js` (ค้นหาผู้ใช้ · ปุ่มลบเห็นเฉพาะ Super Admin · ลบแล้วหายจากรายการ) และ
 `vehicle-web-test.js` ต้องมี `DATABASE_URL` (โหลดจาก `backend/.env`) เพราะสร้างรถทดสอบเอง
 ยืนยันผลที่ฐานข้อมูล แล้วลบทิ้งตอนจบ — ช่างเบิก (รูป 5 รูป) → คืน (แจ้งซ่อม) → แอดมินเห็นในทั้งสามหน้า
 

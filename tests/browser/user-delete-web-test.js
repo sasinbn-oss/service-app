@@ -56,6 +56,29 @@ const call = async (method, url, token, body) => {
 
     const s = await open(`ZWSA${suf}`, "test12345");
     (await s.getByLabel("ลบผู้ใช้ ซุปเปอร์ทดสอบ").count()) ? fail("เห็นปุ่มลบตัวเอง") : pass("ไม่มีปุ่มลบบัญชีตัวเอง");
+    // ค้นหา: ด้วยรหัสพนักงาน → เหลือคนเดียว · หลายคำ (สิทธิ์ + ทีม) · ไม่เจอ → ข้อความบอก · ล้าง → ครบ
+    const total = await s.getByText("ตั้งรหัสผ่านใหม่ให้", { exact: true }).locator("visible=true").count();
+    const search = s.getByLabel("ค้นหาผู้ใช้");
+    await search.fill(`zwu${suf}`);
+    await s.waitForTimeout(300);
+    const one = await s.getByText("ตั้งรหัสผ่านใหม่ให้", { exact: true }).locator("visible=true").count();
+    one === 1 && (await s.getByText(victim).locator("visible=true").count()) && (await s.getByText(`1 / ${total} คน`).count())
+      ? pass(`ค้นหารหัสพนักงาน (ไม่สนตัวพิมพ์) เหลือคนเดียว 1 / ${total}`) : fail(`ค้นหาได้ ${one} คน`);
+    await search.fill("ช่าง กรุงเทพ");
+    await s.waitForTimeout(300);
+    (await s.getByText("ช่างสมชาย").locator("visible=true").count()) && !(await s.getByText(victim).locator("visible=true").count())
+      ? pass("ค้นหาหลายคำ (สิทธิ์ + ทีม) ได้เฉพาะคนที่ตรงทุกคำ") : fail("ค้นหาหลายคำไม่ถูก");
+    await search.fill("ไม่มีใครชื่อนี้แน่นอน");
+    await s.waitForTimeout(300);
+    (await s.getByText(/ไม่พบผู้ใช้ที่ตรงกับ/).count()) ? pass("ไม่เจอ → บอกว่าไม่พบ") : fail("ไม่มีข้อความไม่พบ");
+    await s.screenshot({ path: path.join(DIR, "usersearch-1.png") });
+    await s.getByLabel("ล้างคำค้นหา").click();
+    await s.waitForTimeout(300);
+    (await s.getByText("ตั้งรหัสผ่านใหม่ให้", { exact: true }).locator("visible=true").count()) === total
+      ? pass("ล้างคำค้นแล้วกลับมาครบ") : fail("ล้างแล้วไม่ครบ");
+    await search.fill(victim);
+    await s.waitForTimeout(300);
+    await s.screenshot({ path: path.join(DIR, "usersearch-2.png") });
     const btn = s.getByLabel(`ลบผู้ใช้ ${victim}`);
     await btn.scrollIntoViewIfNeeded();
     await btn.click();

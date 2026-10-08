@@ -4,7 +4,7 @@
  * จำเป็นเพราะสายงานใบงานพึ่งบทบาท ถ้าตั้งหัวหน้าภาคไม่ได้ ใบงานจะค้างอยู่ขั้น
  * "รอหัวหน้าภาคระบุอะไหล่" ตลอดไปโดยไม่มีใครมีสิทธิ์ทำต่อ
  */
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useCachedState } from "../utils/pageCache";
 import {
   ScrollView,
@@ -56,6 +56,15 @@ function roleOptions(meSuper: boolean, current?: Role) {
   return ROLE_OPTIONS.filter((r) => r.value !== "SUPER_ADMIN" || meSuper || current === "SUPER_ADMIN");
 }
 
+/**
+ * ข้อความที่ค้นหาได้ของผู้ใช้หนึ่งคน — รวมชื่อบทบาทกับทีม/ภาคด้วย
+ * แอดมินมักหาแบบ "ช่างทีมกระบี่" หรือ "หัวหน้าภาคใต้" ไม่ได้จำชื่อคนได้ทุกคน
+ */
+function searchText(u: ManagedUser) {
+  const role = ROLE_OPTIONS.find((r) => r.value === u.role)?.label ?? "";
+  return [u.name, u.employeeCode, u.phone, u.team, u.region, role].filter(Boolean).join(" ").toLowerCase();
+}
+
 export default function ManageUsersScreen() {
   const { user: me } = useAuth();
   const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
@@ -66,6 +75,16 @@ export default function ManageUsersScreen() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<ManagedUser | null>(null);
+  const [query, setQuery] = useState("");
+  // ทุกคำที่พิมพ์ต้องเจอ (ไม่จำเป็นต้องติดกัน) — "ช่าง กระบี่" ได้ช่างทีมกระบี่
+  const shown = useMemo(() => {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return users;
+    return users.filter((u) => {
+      const t = searchText(u);
+      return words.every((w) => t.includes(w));
+    });
+  }, [users, query]);
 
   const load = useCallback(async () => {
     try {
@@ -154,7 +173,9 @@ export default function ManageUsersScreen() {
       <View style={styles.pageHead}>
         <Text style={[styles.pageTitle, headingFont]}>สิทธิ์ผู้ใช้</Text>
         <View style={styles.countPill}>
-          <Text style={styles.countPillText}>{users.length} คน</Text>
+          <Text style={styles.countPillText}>
+            {shown.length === users.length ? `${users.length} คน` : `${shown.length} / ${users.length} คน`}
+          </Text>
         </View>
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={styles.addButton} onPress={() => setCreating(true)} activeOpacity={0.8}>
@@ -167,7 +188,29 @@ export default function ManageUsersScreen() {
         แล้วเจ้าของบัญชีต้องเปลี่ยนรหัสเองตอนเข้าครั้งแรก
       </Text>
 
-      {users.map((u) => (
+      <View style={styles.search}>
+        <Ionicons name="search" size={18} color={colors.textFaint} />
+        <TextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="ค้นหาชื่อ รหัสพนักงาน เบอร์โทร ทีม ภาค หรือสิทธิ์"
+          placeholderTextColor={colors.textFaint}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="ค้นหาผู้ใช้"
+        />
+        {query ? (
+          <TouchableOpacity onPress={() => setQuery("")} accessibilityLabel="ล้างคำค้นหา" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={18} color={colors.textFaint} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      {shown.length === 0 ? (
+        <Text style={styles.noMatch}>ไม่พบผู้ใช้ที่ตรงกับ “{query.trim()}”</Text>
+      ) : null}
+
+      {shown.map((u) => (
         <View key={u.id} style={styles.card}>
           <View style={styles.head}>
             <Text style={styles.name}>{u.name}</Text>
@@ -665,6 +708,18 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, gap: spacing.md },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
+  search: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    paddingHorizontal: spacing.md,
+  },
+  searchInput: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 22, color: colors.text, paddingVertical: 10 },
+  noMatch: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
   intro: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: -4 },
   card: {
     backgroundColor: colors.card,
