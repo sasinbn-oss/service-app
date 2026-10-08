@@ -7,7 +7,7 @@
  *
  * ช่างไม่ได้เข้าหน้านี้ — เมนูไม่ขึ้น และเซิร์ฟเวอร์ตอบ 403 อยู่แล้ว
  */
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -25,7 +25,7 @@ import AppModal from "../components/AppModal";
 import DateField, { thaiDate } from "../components/DateField";
 import Dropdown from "../components/Dropdown";
 import EmptyState from "../components/EmptyState";
-import Spinner from "../components/Spinner";
+import Spinner, { WasherIcon } from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
@@ -153,24 +153,42 @@ export default function PlanBoardScreen({ navigation }: Props) {
   const [editing, setEditing] = useState<{ team: string; lane: Lane | null } | null>(null);
 
   const monthKey = date.slice(0, 7);
+  /**
+   * นับรอบการโหลด — กดหลายวันติดกันเร็ว ๆ คำตอบของวันก่อนหน้าอาจมาถึงทีหลัง
+   * แล้วทับแผนของวันที่เลือกล่าสุด หัวจะบอก ศ. 9 แต่แถวทีมเป็นของ พฤ. 8
+   * รับเฉพาะคำตอบของรอบล่าสุด
+   */
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const [d, m, p] = await Promise.all([
         api.get<Day>(`/plans/day?date=${date}`),
         api.get<{ days: Record<string, number> }>(`/plans/month?month=${monthKey}`),
         api.get<Pending[]>("/plans/pending"),
       ]);
+      if (seq !== loadSeq.current) return;
       setDay(d.data);
       setMonth(m.data.days);
       setPending(p.data);
       setError(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(apiErrorMessage(e));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [date, monthKey]);
+
+  /**
+   * แผนที่โชว์อยู่ยังเป็นของวันอื่น = กำลังเปลี่ยนวัน
+   *
+   * ดูจากวันที่ในข้อมูลเทียบกับวันที่เลือก ไม่ได้ใช้ธงแยก — ธงที่ลืมปิดตอน error
+   * จะทำให้หน้าหมุนค้าง ส่วนอันนี้จบเองเมื่อข้อมูลของวันใหม่มาถึง
+   * โหลดพังก็เลิกหมุนแล้วโชว์ error แทน ไม่ปล่อยให้รอโดยไม่มีวันจบ
+   */
+  const switching = day !== null && day.date !== date && !error;
 
   useFocusEffect(
     useCallback(() => {
@@ -200,21 +218,34 @@ export default function PlanBoardScreen({ navigation }: Props) {
     return Array.from({ length: 7 }, (_, i) => addDays(mon, i));
   }, [date]);
 
-  const stats = day?.stats;
+  // ตัวเลขของวันเก่าไม่ใช่ตัวเลขของวันที่เลือก — ระหว่างรอขึ้นเป็นแถบเทาแทน
+  const stats = switching ? null : day?.stats;
   const working = day?.lanes.filter((l) => l.stops.length > 0) ?? [];
   const idle = day?.lanes.filter((l) => l.stops.length === 0) ?? [];
 
   const lanes = (
     <View style={{ gap: spacing.md, flex: wide ? 1 : undefined, minWidth: 0 }}>
+      {/*
+        เปลี่ยนวันแล้ว แผนวันเดิมยังอยู่แต่จางลง มีเครื่องซักผ้าบอกว่ากำลังโหลดวันไหน
+        ไม่ล้างจอเป็นว่าง เพราะหน้ากระพริบทุกครั้งที่กด ‹ › แล้วเลื่อนกลับขึ้นบนสุด
+      */}
+      {switching ? (
+        <View style={styles.veil} pointerEvents="none">
+          <View style={styles.veilBox} accessibilityLabel={`กำลังโหลดแผน ${longDate(date)}`}>
+            <WasherIcon size={64} />
+            <Text style={styles.veilTitle}>กำลังโหลดแผน {longDate(date)}</Text>
+          </View>
+        </View>
+      ) : null}
       {loading && !day ? (
         <View style={styles.card}>
           <Spinner color={colors.primary} />
         </View>
       ) : working.length === 0 ? (
-        <View style={styles.card}>
+        <View style={[styles.card, switching && styles.dim]}>
           <EmptyState
             icon="calendar-outline"
-            title={`${longDate(date)} ยังไม่มีงานลงแผน`}
+            title={`${longDate(day?.date ?? date)} ยังไม่มีงานลงแผน`}
             text="ใบงานที่นัดลูกค้าหรือส่งตรวจหน้างานในวันนี้จะขึ้นที่นี่เอง — หยิบจากรายการรอจัดแผนได้"
           />
         </View>
@@ -223,6 +254,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
           <LaneCard
             key={lane.team}
             lane={lane}
+            dim={switching}
             onEdit={() => openPlan(lane.team, lane)}
             onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
           />
@@ -330,6 +362,11 @@ export default function PlanBoardScreen({ navigation }: Props) {
               activeOpacity={0.75}
               accessibilityLabel={`${longDate(d)} ${n} งาน`}
             >
+              {on && switching ? (
+                <View style={styles.weekSpin}>
+                  <WasherIcon size={16} color="#fff" />
+                </View>
+              ) : null}
               <Text style={[styles.weekDow, on && styles.weekOnText]}>
                 {DOW[dd.getDay()]}
                 {d === today ? " · วันนี้" : ""}
@@ -346,10 +383,10 @@ export default function PlanBoardScreen({ navigation }: Props) {
       </ScrollView>
 
       <View style={styles.stats}>
-        <Stat icon="car-outline" value={stats?.teams ?? 0} label="ทีมออกงาน" />
-        <Stat icon="people-outline" value={stats?.people ?? 0} label="ช่างออกงาน" />
-        <Stat icon="location-outline" value={stats?.stops ?? 0} label="จุดที่ต้องเข้า" />
-        <Stat icon="hourglass-outline" value={stats?.awaitingConfirm ?? 0} label="รอลูกค้าคอนเฟิร์ม" warn />
+        <Stat icon="car-outline" value={stats ? stats.teams : day ? null : 0} label="ทีมออกงาน" />
+        <Stat icon="people-outline" value={stats ? stats.people : day ? null : 0} label="ช่างออกงาน" />
+        <Stat icon="location-outline" value={stats ? stats.stops : day ? null : 0} label="จุดที่ต้องเข้า" />
+        <Stat icon="hourglass-outline" value={stats ? stats.awaitingConfirm : day ? null : 0} label="รอลูกค้าคอนเฟิร์ม" warn />
       </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -392,7 +429,8 @@ function Stat({
   warn,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
-  value: number;
+  /** null = ยังโหลดวันใหม่ไม่เสร็จ */
+  value: number | null;
   label: string;
   warn?: boolean;
 }) {
@@ -402,7 +440,11 @@ function Stat({
         <Ionicons name={icon} size={20} color={warn ? colors.warningInk : colors.primaryInk} />
       </View>
       <View>
-        <Text style={[styles.statValue, headingFont]}>{value}</Text>
+        {value === null ? (
+          <View style={styles.statSkeleton} />
+        ) : (
+          <Text style={[styles.statValue, headingFont]}>{value}</Text>
+        )}
         <Text style={styles.muted}>{label}</Text>
       </View>
     </View>
@@ -419,17 +461,19 @@ function stopTag(s: Stop) {
 
 function LaneCard({
   lane,
+  dim,
   onEdit,
   onOpen,
 }: {
   lane: Lane;
+  dim?: boolean;
   onEdit: () => void;
   onOpen: (id: number) => void;
 }) {
   const members = lane.plan?.members ?? [];
   const [lead, ...rest] = members;
   return (
-    <View style={[styles.card, { padding: 0 }]}>
+    <View style={[styles.card, { padding: 0 }, dim && styles.dim]}>
       <View style={styles.laneHead}>
         <Text style={[styles.laneTeam, headingFont]}>{lane.team}</Text>
         {members.length > 0 ? (
@@ -827,6 +871,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  // แผนวันเดิมระหว่างรอวันใหม่ — ยังเห็นโครง แต่ไม่ชวนให้อ่านเป็นของวันที่เลือก
+  dim: { opacity: 0.35 },
+  veil: { position: "absolute", top: 32, left: 0, right: 0, alignItems: "center", zIndex: 2 },
+  veilBox: {
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 26,
+    paddingVertical: 18,
+    ...shadow.raised,
+  },
+  veilTitle: { fontSize: 14, fontWeight: "700", color: colors.text },
+  weekSpin: { position: "absolute", top: 6, right: 6 },
+  statSkeleton: { width: 42, height: 22, borderRadius: 7, backgroundColor: colors.tile, marginVertical: 3 },
   statValue: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: colors.text },
   cols: { flexDirection: "row", gap: spacing.md, alignItems: "flex-start" },
   card: {
