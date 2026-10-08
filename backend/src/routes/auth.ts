@@ -4,7 +4,9 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { signToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
-import { ADMIN_ROLES, ROLES, Role } from "../utils/constants";
+import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
+import { forgetUser, rememberUser } from "../utils/userGate";
+import { deleteObject } from "../storage/fileStore";
 
 const router = Router();
 
@@ -53,6 +55,7 @@ router.post("/register", async (req, res) => {
     },
   });
 
+  rememberUser(user.id);
   const token = signToken({ userId: user.id, role: user.role as Role });
   res.status(201).json({
     token,
@@ -77,9 +80,10 @@ router.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid employee code or password" });
   }
   const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) {
+  if (!valid || user.deletedAt) {
     return res.status(401).json({ error: "Invalid employee code or password" });
   }
+  rememberUser(user.id);
 
   const token = signToken({
     userId: user.id,
@@ -125,6 +129,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
  */
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
+    where: { deletedAt: null },
     select: {
       id: true,
       employeeCode: true,
@@ -173,7 +178,7 @@ async function canManageAdmins(actorId: number) {
   const actor = await prisma.user.findUnique({ where: { id: actorId }, select: { role: true } });
   if (actor?.role === "SUPER_ADMIN") return true;
   if (actor?.role !== "ADMIN") return false;
-  const supers = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
+  const supers = await prisma.user.count({ where: { role: "SUPER_ADMIN", deletedAt: null } });
   return supers === 0;
 }
 
@@ -234,8 +239,8 @@ router.post("/users/:id/reset-password", requireAuth, requireAdmin, async (req: 
   const parsed = resetSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const target = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
-  if (!target) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
+  const target = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, deletedAt: true } });
+  if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
   // รีเซ็ตรหัสของแอดมินคนอื่น = เข้าบัญชีนั้นได้ จึงต้องเป็น Super Admin
   if (
     ADMIN_ROLES.includes(target.role) &&
@@ -307,8 +312,8 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const body = parsed.data;
 
-  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } });
-  if (!target) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true, deletedAt: true } });
+  if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
 
   if (body.role && body.role !== target.role) {
     // ให้หรือถอดสิทธิ์ระดับแอดมินขึ้นไป → ต้องเป็น Super Admin (ดู canManageAdmins)
@@ -320,14 +325,14 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     }
     // Super Admin คนสุดท้ายลดสิทธิ์ไม่ได้ ไม่งั้นจะไม่เหลือใครตั้งแอดมินได้อีก
     if (target.role === "SUPER_ADMIN") {
-      const supers = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
+      const supers = await prisma.user.count({ where: { role: "SUPER_ADMIN", deletedAt: null } });
       if (supers <= 1) {
         return res.status(400).json({ error: "ต้องเหลือ Super Admin อย่างน้อยหนึ่งคน" });
       }
     }
     // แอดมินคนสุดท้ายลดสิทธิ์ตัวเองไม่ได้ ไม่งั้นจะไม่เหลือใครตั้งสิทธิ์ให้ใครอีกเลย
     if (ADMIN_ROLES.includes(target.role) && !ADMIN_ROLES.includes(body.role)) {
-      const admins = await prisma.user.count({ where: { role: { in: ADMIN_ROLES } } });
+      const admins = await prisma.user.count({ where: { role: { in: ADMIN_ROLES }, deletedAt: null } });
       if (admins <= 1) {
         return res.status(400).json({ error: "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน" });
       }
@@ -358,6 +363,108 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     },
   });
   res.json(updated);
+});
+
+/**
+ * ลบผู้ใช้ — Super Admin เท่านั้น (ตามที่เจ้าของระบบกำหนด แอดมินทั่วไปลบไม่ได้)
+ *
+ * ยังไม่มีประวัติในระบบ → ลบจริง
+ * มีประวัติแล้ว (ใบงาน ใช้รถ บันทึกงาน แผนทีม …) → ปิดบัญชีแทน: เข้าระบบไม่ได้
+ * ไม่โผล่ในรายชื่อ แต่ชื่อยังขึ้นในประวัติเดิม ลบจริงจะทำให้ประวัติหายหรือบันทึกไม่ได้
+ * ว่าใครทำ — แบบเดียวกับรถที่เคยใช้แล้วต้องตั้ง "เลิกใช้งาน"
+ *
+ * ยังถือใบงานค้างหรือยังไม่คืนรถ → ไม่ให้ลบ งานพวกนั้นจะค้างอยู่กับคนที่ไม่มีใครเข้าไปทำต่อได้
+ */
+router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสผู้ใช้ไม่ถูกต้อง" });
+
+  // อ่านบทบาทจากฐานข้อมูลสด ไม่ใช่จากโทเคน — ถอดสิทธิ์แล้วต้องลบไม่ได้ทันที
+  const actor = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { role: true } });
+  if (actor?.role !== "SUPER_ADMIN") {
+    return res.status(403).json({ error: "เฉพาะ Super Admin เท่านั้นที่ลบผู้ใช้ได้" });
+  }
+  // ลบตัวเองไม่ได้ — กันกดพลาด และกันระบบไม่เหลือ Super Admin
+  if (id === req.auth!.userId) return res.status(400).json({ error: "ลบบัญชีของตัวเองไม่ได้" });
+
+  const target = await prisma.user.findUnique({
+    where: { id },
+    select: {
+      employeeCode: true,
+      name: true,
+      deletedAt: true,
+      _count: {
+        select: {
+          vehicleLogs: true,
+          branchCheckIns: true,
+          workLogs: true,
+          consumableRequests: true,
+          reviewedRequests: true,
+          outageNotes: true,
+          outageNoteLogs: true,
+          createdWorkOrders: true,
+          assignedWorkOrders: true,
+          closedWorkOrders: true,
+          workOrderLogs: true,
+          checkedParts: true,
+          workOrderAttachments: true,
+          workedWorkOrders: true,
+          teamDayPlans: true,
+          teamDayPlanSeats: true,
+          returnedVehicleLogs: true,
+          vehicleDocs: true,
+          vehicleMaintenance: true,
+        },
+      },
+    },
+  });
+  if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
+
+  const [openOrders, ongoingCar] = await Promise.all([
+    prisma.workOrder.count({ where: { assignedToId: id, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } }),
+    prisma.vehicleLog.count({ where: { userId: id, status: "ONGOING" } }),
+  ]);
+  if (ongoingCar) {
+    return res.status(409).json({ error: `${target.name} ยังไม่คืนรถ — คืนรถแทนที่หน้า ภาพรวมรถ ก่อน` });
+  }
+  if (openOrders) {
+    return res.status(409).json({
+      error: `${target.name} ยังถือใบงานที่ยังไม่ปิด ${openOrders} ใบ — จ่ายงานให้คนอื่นก่อนจึงลบได้`,
+    });
+  }
+
+  const hasHistory = Object.values(target._count).some((n) => n > 0);
+  if (!hasHistory) {
+    // รูปรถที่อัปค้างไว้แต่ยังไม่ได้เบิก (ไม่ใช่ประวัติ) ถูกลบตามด้วย cascade — ลบไฟล์ในถังด้วย
+    const photos = await prisma.vehicleLogPhoto.findMany({ where: { uploadedById: id }, select: { objectKey: true } });
+    await prisma.user.delete({ where: { id } });
+    forgetUser(id);
+    for (const p of photos) deleteObject(p.objectKey).catch((e) => console.error("photo delete failed", e));
+    return res.json({ ok: true, mode: "deleted" });
+  }
+
+  // แผนเก็บวันที่เป็นเที่ยงคืน UTC ของวันนั้น (ดู dayStart ใน plans.ts)
+  const today = new Date(`${bangkokDay()}T00:00:00.000Z`);
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+          // คืนรหัสพนักงานให้สร้างบัญชีใหม่ด้วยรหัสเดิมได้ (กลับมาทำงานใหม่)
+          employeeCode: `${target.employeeCode}~ลบ${id}`,
+          // ทีม/ภาคเป็นตัวกำหนดว่าเห็นงานไหนและอยู่ในทีมไหน — คนที่ไม่อยู่แล้วต้องไม่ถูกนับในทีม
+          team: null,
+          region: null,
+        },
+      });
+      // ถอดออกจากแผนทีมวันนี้เป็นต้นไป ส่วนแผนวันที่ผ่านมาแล้วเก็บไว้เป็นประวัติ
+      await tx.teamDayPlanMember.deleteMany({ where: { userId: id, plan: { date: { gte: today } } } });
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  forgetUser(id);
+  res.json({ ok: true, mode: "deactivated" });
 });
 
 export default router;

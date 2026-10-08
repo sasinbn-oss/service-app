@@ -1,11 +1,12 @@
 import { NextFunction, Request, Response } from "express";
 import { verifyToken, TokenPayload } from "../utils/jwt";
+import { isActiveUser } from "../utils/userGate";
 
 export interface AuthRequest extends Request {
   auth?: TokenPayload;
 }
 
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Missing or invalid Authorization header" });
@@ -15,6 +16,11 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
     req.auth = verifyToken(token);
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
+  }
+
+  // โทเคนยังไม่หมดอายุแต่บัญชีถูกลบไปแล้ว (ดู utils/userGate.ts)
+  if (!(await isActiveUser(req.auth.userId))) {
+    return res.status(401).json({ error: "บัญชีนี้ถูกลบแล้ว ติดต่อแอดมิน", accountDeleted: true });
   }
 
   // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว

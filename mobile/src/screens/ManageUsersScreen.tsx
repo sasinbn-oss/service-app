@@ -108,6 +108,30 @@ export default function ManageUsersScreen() {
     }
   }
 
+  function remove(u: ManagedUser) {
+    showAlert(
+      `ลบผู้ใช้ ${u.name}?`,
+      `${u.employeeCode} จะเข้าระบบไม่ได้อีกและหายจากรายชื่อ\n` +
+        "ถ้าเคยมีประวัติในระบบ (ใบงาน ใช้รถ บันทึกงาน) ชื่อยังขึ้นในประวัติเดิม — ลบแล้วกู้คืนไม่ได้",
+      [
+        { text: "ยกเลิก", style: "cancel" },
+        {
+          text: "ลบผู้ใช้",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await api.delete(`/auth/users/${u.id}`, { loadingText: "กำลังลบผู้ใช้..." });
+              setUsers((list) => list.filter((x) => x.id !== u.id));
+              showAlert(`ลบ ${u.name} แล้ว`);
+            } catch (e) {
+              showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
+            }
+          },
+        },
+      ]
+    );
+  }
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -252,14 +276,28 @@ export default function ManageUsersScreen() {
             </>
           ) : null}
 
-          <TouchableOpacity
-            style={styles.resetLink}
-            onPress={() => setResetting(u)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="refresh-outline" size={14} color={colors.primary} />
-            <Text style={styles.resetLinkText}>ตั้งรหัสผ่านใหม่ให้</Text>
-          </TouchableOpacity>
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={styles.resetLink}
+              onPress={() => setResetting(u)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="refresh-outline" size={14} color={colors.primary} />
+              <Text style={styles.resetLinkText}>ตั้งรหัสผ่านใหม่ให้</Text>
+            </TouchableOpacity>
+            {/* ลบได้เฉพาะ Super Admin (เซิร์ฟเวอร์กันซ้ำ) — แอดมินทั่วไปไม่เห็นปุ่มเลย จะได้ไม่กดแล้วโดนปฏิเสธ */}
+            {me?.superAdmin && u.id !== me.id ? (
+              <TouchableOpacity
+                style={styles.resetLink}
+                onPress={() => remove(u)}
+                activeOpacity={0.7}
+                accessibilityLabel={`ลบผู้ใช้ ${u.name}`}
+              >
+                <Ionicons name="trash-outline" size={14} color={colors.danger} />
+                <Text style={[styles.resetLinkText, { color: colors.dangerInk }]}>ลบผู้ใช้</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
       ))}
 
@@ -578,15 +616,17 @@ const styles = StyleSheet.create({
   addButtonText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   pending: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
   pendingText: { fontSize: 11, lineHeight: 19, color: colors.warning },
-  resetLink: {
+  actions: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: spacing.md,
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
+  resetLink: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   resetLinkText: { fontSize: 13, lineHeight: 21, color: colors.primary, fontWeight: "600" },
   input: {
     borderWidth: 1,

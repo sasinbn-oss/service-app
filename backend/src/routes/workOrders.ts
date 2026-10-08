@@ -720,7 +720,7 @@ router.get("/options", requireAuth, async (_req, res) => {
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
   const technicians = await prisma.user.findMany({
-    where: { role: "EMPLOYEE" },
+    where: { role: "EMPLOYEE", deletedAt: null },
     select: { id: true, name: true, employeeCode: true, team: true },
     orderBy: { name: "asc" },
   });
@@ -2515,7 +2515,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ต้องระบุชื่อผู้เข้าปฏิบัติงานอย่างน้อยหนึ่งคน" });
   }
   if (workerIds.length > 0) {
-    const found = await prisma.user.count({ where: { id: { in: workerIds } } });
+    const found = await prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } });
     if (found !== workerIds.length) {
       return res.status(400).json({ error: "มีชื่อผู้เข้าปฏิบัติงานที่ไม่อยู่ในระบบ" });
     }
