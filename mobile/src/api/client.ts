@@ -110,6 +110,15 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+/**
+ * บัญชีถูก Super Admin ลบระหว่างที่ยังเปิดแอปค้างอยู่ — ออกจากระบบทันที
+ * ไม่งั้นทุกหน้าจะขึ้นแค่ "บัญชีนี้ถูกลบแล้ว" ซ้ำ ๆ โดยไม่พากลับหน้าเข้าระบบ
+ */
+let accountDeletedHandler: (() => void) | null = null;
+export function onAccountDeleted(handler: (() => void) | null) {
+  accountDeletedHandler = handler;
+}
+
 api.interceptors.response.use(
   (response) => {
     end(response.config as Tracked);
@@ -117,6 +126,7 @@ api.interceptors.response.use(
   },
   (error) => {
     end((error?.config ?? undefined) as Tracked | undefined);
+    if (error?.response?.status === 401 && error.response.data?.accountDeleted) accountDeletedHandler?.();
     return Promise.reject(error);
   }
 );

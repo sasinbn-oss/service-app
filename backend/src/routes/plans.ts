@@ -315,7 +315,7 @@ router.put("/", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
   });
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
   if (memberIds.length > 0) {
-    const found = await prisma.user.count({ where: { id: { in: memberIds } } });
+    const found = await prisma.user.count({ where: { id: { in: memberIds }, deletedAt: null } });
     if (found !== memberIds.length) return res.status(400).json({ error: "มีชื่อช่างที่ไม่อยู่ในระบบ" });
   }
   if (vehicleId) {

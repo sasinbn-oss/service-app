@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { clearPageCache } from "../utils/pageCache";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { api, apiErrorMessage, TOKEN_KEY } from "../api/client";
+import { api, apiErrorMessage, onAccountDeleted, TOKEN_KEY } from "../api/client";
 import { User } from "../types";
 
 interface AuthContextValue {
@@ -27,6 +27,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     restoreSession();
+    onAccountDeleted(() => {
+      logout();
+    });
+    return () => onAccountDeleted(null);
   }, []);
 
   async function restoreSession() {
