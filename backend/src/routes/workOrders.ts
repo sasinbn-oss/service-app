@@ -11,7 +11,9 @@
 import { Router, Response } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { coversWorkOrder, OUT_OF_SCOPE, supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { WAREHOUSES } from "../documents/warehouses";
 import {
@@ -623,18 +625,21 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   /**
    * เห็นเท่าที่เกี่ยวข้องกับตัวเอง
    *
-   * หัวหน้าภาคเห็นเฉพาะภาคตัวเอง ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเองกับงานที่ยังไม่มีเจ้าของ
+   * หัวหน้าภาคเห็นเฉพาะภาค/ทีมที่ดูแล ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเองกับงานที่ยังไม่มีเจ้าของ
    * แอดมินเห็นทุกใบ รายการที่ยาวเป็นร้อยใบโดยไม่มีอะไรเกี่ยวกับคนอ่านคือรายการที่ไม่มีใครเปิด
+   *
+   * ขอบเขตใส่ใน AND — เดิมกระจายลงไปตรง ๆ แล้วชนกับตัวกรองสาขา (คีย์ branch) และ
+   * คำค้น (คีย์ OR) ค้นหาหรือกรองสาขาเมื่อไหร่ ขอบเขตหายไปเลย เห็นใบงานทั้งระบบ
    */
   const me = await prisma.user.findUnique({
     where: { id: req.auth!.userId },
-    select: { region: true, team: true },
+    select: { team: true },
   });
-  const scope =
+  const scope: Prisma.WorkOrderWhereInput =
     req.auth!.role === "ADMIN"
       ? {}
       : req.auth!.role === "SUPERVISOR"
-        ? { branch: { region: me?.region ?? "\u0000ไม่มีภาค" } }
+        ? workOrderInScope(await supervisorScope(req.auth!.userId))
         : // ช่างเห็นงานของทีมตัวเอง เพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
           //
           // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
@@ -644,7 +649,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
 
   const rows = await prisma.workOrder.findMany({
     where: {
-      ...scope,
+      AND: [scope],
       ...statusFilter,
       ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
       ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
@@ -700,17 +705,17 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
 router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
   const me = await prisma.user.findUnique({
     where: { id: req.auth!.userId },
-    select: { region: true, team: true },
+    select: { team: true },
   });
-  const scope =
+  const scope: Prisma.WorkOrderWhereInput =
     req.auth!.role === "ADMIN"
       ? {}
       : req.auth!.role === "SUPERVISOR"
-        ? { branch: { region: me?.region ?? "\u0000ไม่มีภาค" } }
+        ? workOrderInScope(await supervisorScope(req.auth!.userId))
         : teamScope(me?.team ?? null, req.auth!.userId);
 
   const inbox = await prisma.workOrder.count({
-    where: { ...scope, status: { in: stagesWaitingOn(req.auth!.role) } },
+    where: { AND: [scope], status: { in: stagesWaitingOn(req.auth!.role) } },
   });
   res.json({ inbox });
 });
@@ -1342,7 +1347,7 @@ async function guardStage(
       status: true,
       assignedToId: true,
       assignedTeam: true,
-      branch: { select: { region: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
   if (!wo) {
@@ -1352,14 +1357,8 @@ async function guardStage(
 
   const role = req.auth!.role;
   if (role === "SUPERVISOR") {
-    const me = await prisma.user.findUnique({
-      where: { id: req.auth!.userId },
-      select: { region: true },
-    });
-    if (!me?.region || me.region !== wo.branch.region) {
-      res.status(403).json({
-        error: `ใบงานนี้อยู่ภาค${wo.branch.region ?? "ที่ยังไม่ระบุ"} ไม่ใช่ภาคที่คุณดูแล`,
-      });
+    if (!coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) {
+      res.status(403).json({ error: OUT_OF_SCOPE });
       return null;
     }
   }
@@ -2028,7 +2027,7 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
       workStatus: true,
       assignedTeam: true,
       assignedToId: true,
-      branch: { select: { region: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -2038,7 +2037,7 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
     });
   }
   if (req.auth!.role === "SUPERVISOR") {
-    if (await blockedForRegion(req, res, wo.branch.region)) return;
+    if (await blockedForSupervisor(req, res, wo)) return;
   } else if (await blockedForTeam(req, res, wo)) return;
 
   await prisma.$transaction(async (tx) => {
@@ -2064,16 +2063,14 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
   res.json(shape(row));
 });
 
-/** หัวหน้าภาคแตะได้เฉพาะใบงานในภาคตัวเอง — คืน true เมื่อ "ห้าม" แบบเดียวกับ blockedForTeam */
-async function blockedForRegion(req: AuthRequest, res: Response, region: string | null) {
-  const me = await prisma.user.findUnique({
-    where: { id: req.auth!.userId },
-    select: { region: true },
-  });
-  if (me?.region && me.region === region) return false;
-  res.status(403).json({
-    error: `ใบงานนี้อยู่ภาค${region ?? "ที่ยังไม่ระบุ"} ไม่ใช่ภาคที่คุณดูแล`,
-  });
+/** หัวหน้าภาคแตะได้เฉพาะใบงานในภาค/ทีมที่ดูแล — คืน true เมื่อ "ห้าม" แบบเดียวกับ blockedForTeam */
+async function blockedForSupervisor(
+  req: AuthRequest,
+  res: Response,
+  wo: { assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
+) {
+  if (coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) return false;
+  res.status(403).json({ error: OUT_OF_SCOPE });
   return true;
 }
 
@@ -2156,7 +2153,7 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
       status: true,
       assignedTeam: true,
       assignedToId: true,
-      branch: { select: { region: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -2167,7 +2164,7 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
     });
   }
   if (req.auth!.role === "SUPERVISOR") {
-    if (await blockedForRegion(req, res, wo.branch.region)) return;
+    if (await blockedForSupervisor(req, res, wo)) return;
   } else if (await blockedForTeam(req, res, wo)) return;
 
   const codes = await partCodesText(parsed.data.parts);
@@ -2259,11 +2256,11 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       status: true,
       parentId: true,
       assignedTeam: true,
-      branch: { select: { region: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (role === "SUPERVISOR" && (await blockedForRegion(req, res, wo.branch.region))) return;
+  if (role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return;
 
   if (!(ACTIVE_WORK_ORDER_STATUSES as readonly string[]).includes(wo.status)) {
     return res.status(409).json({
@@ -2373,7 +2370,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
       status: true,
       assignedToId: true,
       assignedTeam: true,
-      branch: { select: { region: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -2781,7 +2778,7 @@ async function loadAttachableWorkOrder(
       status: true,
       assignedToId: true,
       assignedTeam: true,
-      branch: { select: { region: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
   if (!wo) {
@@ -2791,14 +2788,8 @@ async function loadAttachableWorkOrder(
 
   const role = req.auth!.role;
   if (role === "SUPERVISOR") {
-    const me = await prisma.user.findUnique({
-      where: { id: req.auth!.userId },
-      select: { region: true },
-    });
-    if (!me?.region || me.region !== wo.branch.region) {
-      res.status(403).json({
-        error: `ใบงานนี้อยู่ภาค${wo.branch.region ?? "ที่ยังไม่ระบุ"} ไม่ใช่ภาคที่คุณดูแล`,
-      });
+    if (!coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) {
+      res.status(403).json({ error: OUT_OF_SCOPE });
       return null;
     }
   } else if (await blockedForTeam(req, res, wo)) {

@@ -1,6 +1,9 @@
 // ทดสอบหน้าจอ: ปุ่มลบใบงานของแอดมิน · คำเตือนบอกว่าจะเสียอะไร · ช่างไม่เห็นปุ่ม
 const { chromium } = require("playwright");
 const path = require("path");
+const { execSync } = require("child_process");
+// ต้องมี DATABASE_URL (โหลดจาก backend/.env) — ใช้ตั้งทีมของใบงานตรง ๆ ดูข้างล่าง
+const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -Atc ${JSON.stringify(q)}`).toString().trim();
 const DIR = __dirname;
 const API = "http://127.0.0.1:4000/api";
 const call = async (p, token, method = "GET", body) => {
@@ -51,6 +54,9 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
       machines: [{ code: "W97", model: "Oasis", symptom: "ทดสอบปุ่มลบ" }] });
     const o = wo.orders ? wo.orders[0] : wo;
     await call(`/work-orders/${o.id}/parts`, sup, "POST", { needsParts: true, parts: [{ sparePartId: pid, quantity: 2 }] });
+    // ช่างเห็นเฉพาะใบงานของทีมตัวเอง — เดิมเทสต์นี้หาใบที่ยังไม่จ่ายเจอได้เพราะการค้นหาหลุดขอบเขต
+    // (บั๊กที่แก้แล้ว) จึงใส่ทีมให้ตรง ๆ ข้อที่ทดสอบคือ "ช่างที่เปิดใบงานได้ ไม่เห็นปุ่มลบ"
+    sql(`update "WorkOrder" set "assignedTeam"='${branch.zone}' where id=${o.id}`);
     console.log("เตรียมใบงาน", o.code);
 
     // ── ช่างต้องไม่เห็นปุ่มลบ ──

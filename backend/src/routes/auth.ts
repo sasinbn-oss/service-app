@@ -138,6 +138,7 @@ router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
       role: true,
       region: true,
       team: true,
+      supervisedTeams: true,
       mustChangePassword: true,
       createdAt: true,
     },
@@ -302,6 +303,8 @@ const userUpdateSchema = z.object({
   region: z.string().trim().max(120).nullable().optional(),
   // ทีมช่างที่สังกัด — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
   team: z.string().trim().max(120).nullable().optional(),
+  // ทีมช่างที่หัวหน้าภาคดูแล (หลายทีมได้) — ดู User.supervisedTeams
+  supervisedTeams: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
 });
 
 router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -349,6 +352,8 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
       // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
       ...(body.team !== undefined ? { team: body.team || null } : {}),
       ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
+      ...(body.supervisedTeams !== undefined ? { supervisedTeams: [...new Set(body.supervisedTeams)] } : {}),
+      ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { supervisedTeams: [] } : {}),
     },
     select: {
       id: true,
@@ -358,6 +363,7 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
       role: true,
       region: true,
       team: true,
+      supervisedTeams: true,
       mustChangePassword: true,
       createdAt: true,
     },
