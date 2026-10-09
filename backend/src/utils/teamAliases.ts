@@ -20,15 +20,30 @@ export function resolveTeam(name: string | null, map: Map<string, string>): stri
   return cur;
 }
 
-/** เปลี่ยนชื่อทีมในแถวที่อ่านจากไฟล์ (zone / pmTeam) ก่อนวางแผนนำเข้า — แก้ในที่ */
-export async function applyTeamAliases(rows: { zone?: string | null; pmTeam?: string | null }[]) {
-  const map = await teamAliasMap();
-  if (map.size === 0) return 0;
+/**
+ * ปรับชื่อทีมในแถวที่อ่านจากไฟล์ (zone / pmTeam) ก่อนวางแผนนำเข้า — แก้ในที่
+ *
+ * 1) ชื่อทีมที่เปลี่ยนในแอปแล้ว → ชื่อปัจจุบัน
+ * 2) สาขาที่แอดมินย้ายทีมในแอป (BranchTeamMove) → ทีมที่ย้ายไป ไม่ว่าไฟล์จะเขียนว่าอะไร
+ *    ไฟล์ทะเบียนยังเขียนทีมเดิมจนกว่าจะมีคนแก้ต้นฉบับ อัปทีไรสาขาก็เด้งกลับทีมเดิม
+ */
+export async function applyTeamAliases(
+  rows: { code?: string; branchCode?: string; zone?: string | null; pmTeam?: string | null }[]
+) {
+  const [map, moves] = await Promise.all([
+    teamAliasMap(),
+    prisma.branchTeamMove.findMany({ select: { field: true, toTeam: true, branch: { select: { code: true } } } }),
+  ]);
+  const moved = new Map(moves.map((m) => [`${m.branch.code}|${m.field}`, m.toTeam]));
+  if (map.size === 0 && moved.size === 0) return 0;
   let changed = 0;
   for (const r of rows) {
+    const code = r.code ?? r.branchCode;
     for (const key of ["zone", "pmTeam"] as const) {
       if (!(key in r)) continue;
-      const next = resolveTeam(r[key] ?? null, map);
+      // ไฟล์ไม่ได้กรอกช่องนี้ = ไม่แตะค่าในระบบอยู่แล้ว (COALESCE) ไม่ต้องใส่ทีมที่ย้ายไป
+      const pinned = r[key] && code ? moved.get(`${code}|${key}`) : undefined;
+      const next = pinned ?? resolveTeam(r[key] ?? null, map);
       if (next !== (r[key] ?? null)) {
         r[key] = next;
         changed++;

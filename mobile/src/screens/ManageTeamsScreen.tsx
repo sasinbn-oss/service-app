@@ -3,8 +3,11 @@
  *
  * เปลี่ยนชื่อที่นี่ = เปลี่ยนทุกที่ที่ผูกกับชื่อเดิมพร้อมกัน (สาขา ช่าง หัวหน้าภาค ใบงาน แผน)
  * แทนการแก้ไฟล์ทะเบียนสาขาแล้วอัปใหม่ ซึ่งเปลี่ยนแค่สาขา คนที่อยู่ทีมนั้นจะมองไม่เห็นงานทันที
+ *
+ * ย้ายสาขาเข้าทีม = ตั้งทีมใหม่ตามบันทึกแบ่งทีมได้เลย ไม่ต้องรอแก้ไฟล์ทะเบียน (รายชื่อทีมมาจากสาขา
+ * ทีมที่ยังไม่มีสาขาจึงเลือกให้ช่างไม่ได้) อัปไฟล์ทีหลังสาขาก็ไม่เด้งกลับ — ดู BranchTeamMove
  */
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -25,16 +28,38 @@ interface Team {
   openOrders: number;
   orphan: boolean;
 }
+interface Move {
+  id: number;
+  code: string;
+  name: string;
+  field: "zone" | "pmTeam";
+  from: string | null;
+  to: string;
+  at: string;
+}
 interface Data {
   teams: Team[];
   renames: { from: string; to: string; at: string }[];
+  moves: Move[];
 }
+interface BranchRow {
+  id: number;
+  code: string;
+  name: string;
+  address: string | null;
+  region: string | null;
+  zone: string | null;
+  pmTeam: string | null;
+  moved: string[];
+}
+const FIELD_LABEL = { zone: "CM", pmTeam: "PM" } as const;
 
 export default function ManageTeamsScreen() {
   const [data, setData, cached] = useCachedState<Data | null>("ManageTeams:data", null);
   const [loading, setLoading] = useState(!cached);
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<Team | null>(null);
+  const [moving, setMoving] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -72,6 +97,13 @@ export default function ManageTeamsScreen() {
         <View style={styles.pill}>
           <Text style={styles.pillText}>{data.teams.length - orphans} ทีม</Text>
         </View>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity style={styles.btn} onPress={() => setMoving(true)} accessibilityLabel="ย้ายสาขาเข้าทีม">
+          <View style={styles.row}>
+            <Ionicons name="swap-horizontal" size={16} color="#fff" />
+            <Text style={styles.btnText}>ย้ายสาขาเข้าทีม</Text>
+          </View>
+        </TouchableOpacity>
       </View>
       <Text style={styles.muted}>
         ชื่อทีมมาจากคอลัมน์ "ทีมช่าง" ในทะเบียนสาขา · เปลี่ยนชื่อที่นี่แล้วสาขา ช่าง หัวหน้าภาค ใบงาน และแผน
@@ -129,6 +161,8 @@ export default function ManageTeamsScreen() {
         ))}
       </View>
 
+      {data.moves?.length ? <MovedList moves={data.moves} onChanged={load} /> : null}
+
       {data.renames.length ? (
         <View style={{ gap: 4, marginTop: spacing.md }}>
           <Text style={styles.section}>ชื่อเดิมที่ระบบแปลงให้ตอนอัปไฟล์</Text>
@@ -138,6 +172,17 @@ export default function ManageTeamsScreen() {
             </Text>
           ))}
         </View>
+      ) : null}
+
+      {moving ? (
+        <MoveModal
+          names={data.teams.filter((t) => !t.orphan).map((t) => t.name)}
+          onClose={() => setMoving(false)}
+          onDone={() => {
+            setMoving(false);
+            load();
+          }}
+        />
       ) : null}
 
       {renaming ? (
@@ -152,6 +197,284 @@ export default function ManageTeamsScreen() {
         />
       ) : null}
     </ScrollView>
+  );
+}
+
+/** สาขาที่ย้ายทีมในแอป — ไฟล์ทะเบียนที่อัปภายหลังไม่ดึงกลับ · คืนตามไฟล์ได้ทีละสาขา */
+function MovedList({ moves, onChanged }: { moves: Move[]; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const byTeam = new Map<string, Move[]>();
+  for (const m of moves) byTeam.set(m.to, [...(byTeam.get(m.to) ?? []), m]);
+
+  function revert(m: Move) {
+    showAlert(`คืน ${m.code} ตามไฟล์ทะเบียน?`, `ทีม ${FIELD_LABEL[m.field]} จะกลับเป็น ${m.from ?? "(ว่าง)"} และอัปไฟล์ครั้งต่อไปจะใช้ค่าในไฟล์ตามเดิม`, [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: "คืนตามไฟล์",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await api.post(`/teams/moves/${m.id}/revert`, {}, { loadingText: "กำลังคืนตามไฟล์..." });
+            onChanged();
+          } catch (e) {
+            showAlert("คืนไม่สำเร็จ", apiErrorMessage(e));
+          }
+        },
+      },
+    ]);
+  }
+
+  return (
+    <View style={[styles.card, { flexBasis: "auto" }]}>
+      <TouchableOpacity style={styles.row} onPress={() => setOpen((v) => !v)} accessibilityLabel="สาขาที่ย้ายทีมในแอป">
+        <Ionicons name="swap-horizontal" size={16} color={colors.primary} />
+        <Text style={styles.section}>สาขาที่ย้ายทีมในแอป</Text>
+        <View style={styles.pill}>
+          <Text style={styles.pillText}>{new Set(moves.map((m) => m.code)).size} สาขา</Text>
+        </View>
+        <View style={{ flex: 1 }} />
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.textMuted} />
+      </TouchableOpacity>
+      <Text style={styles.muted}>อัปไฟล์ทะเบียนสาขาที่ยังเขียนทีมเดิม ระบบคงทีมที่ย้ายไว้ให้ — แก้ไฟล์ต้นฉบับด้วยเมื่อสะดวก</Text>
+      {open
+        ? [...byTeam.entries()].map(([team, list]) => (
+            <View key={team} style={{ gap: 4, marginTop: 6 }}>
+              <Text style={styles.label}>
+                {team} · {list.length} รายการ
+              </Text>
+              {list.map((m) => (
+                <View key={m.id} style={styles.moveRow}>
+                  <Text style={[styles.muted, { flex: 1 }]}>
+                    {m.code} {m.name} · {FIELD_LABEL[m.field]} {m.from ?? "(ว่าง)"} → {m.to}
+                  </Text>
+                  <TouchableOpacity onPress={() => revert(m)} accessibilityLabel={`คืนตามไฟล์ ${m.code} ${FIELD_LABEL[m.field]}`}>
+                    <Text style={styles.linkText}>คืนตามไฟล์</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ))
+        : null}
+    </View>
+  );
+}
+
+function MoveModal({ names, onClose, onDone }: { names: string[]; onClose: () => void; onDone: () => void }) {
+  const [search, setSearch] = useState("");
+  const [rows, setRows] = useState<BranchRow[]>([]);
+  const [more, setMore] = useState(false);
+  const [searching, setSearching] = useState(false);
+  // เก็บสาขาที่เลือกไว้แม้ค้นคำใหม่ — ค้น "นครศรี" แล้วค้น "ทุ่งสง" เลือกรวมกันได้
+  const [picked, setPicked] = useState<Map<number, BranchRow>>(new Map());
+  const [team, setTeam] = useState("");
+  const [fields, setFields] = useState<("zone" | "pmTeam")[]>(["zone", "pmTeam"]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) {
+      setRows([]);
+      setMore(false);
+      return;
+    }
+    let live = true;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get<{ branches: BranchRow[]; more: boolean }>("/teams/branches", { params: { search: q } });
+        if (!live) return;
+        setRows(res.data.branches);
+        setMore(res.data.more);
+      } catch (e) {
+        if (live) showAlert("ค้นหาสาขาไม่สำเร็จ", apiErrorMessage(e));
+      } finally {
+        if (live) setSearching(false);
+      }
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [search]);
+
+  const clean = team.trim().replace(/\s+/g, " ");
+  const isNew = clean.length > 0 && !names.includes(clean);
+  const allShown = rows.length > 0 && rows.every((r) => picked.has(r.id));
+  const suggestions = clean ? names.filter((n) => n.includes(clean) && n !== clean).slice(0, 8) : [];
+  const ready = picked.size > 0 && clean.length > 0 && fields.length > 0;
+
+  function toggle(r: BranchRow) {
+    setPicked((m) => {
+      const next = new Map(m);
+      if (next.has(r.id)) next.delete(r.id);
+      else next.set(r.id, r);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setPicked((m) => {
+      const next = new Map(m);
+      for (const r of rows) {
+        if (allShown) next.delete(r.id);
+        else next.set(r.id, r);
+      }
+      return next;
+    });
+  }
+  function toggleField(f: "zone" | "pmTeam") {
+    setFields((v) => (v.includes(f) ? v.filter((x) => x !== f) : [...v, f]));
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      const res = await api.post<{ team: string; moved: number; branches: number; isNew: boolean; technicians: number; supervisors: number }>(
+        "/teams/move-branches",
+        { branchIds: [...picked.keys()], team: clean, fields },
+        { loadingText: "กำลังย้ายสาขา..." }
+      );
+      const r = res.data;
+      const todo = [
+        r.technicians === 0 ? `• ยังไม่มีช่างในทีม ${r.team} — ไปที่ สิทธิ์ผู้ใช้ แล้วเลือก "${r.team}" ที่ช่องทีมช่างที่สังกัดของช่าง` : "",
+        r.supervisors === 0 ? `• ยังไม่มีหัวหน้าภาคดูแล ${r.team} — ติ๊ก "${r.team}" ที่ช่องทีมช่างที่ดูแลของหัวหน้าภาค` : "",
+      ].filter(Boolean);
+      showAlert(
+        `ย้าย ${r.branches} สาขาไปทีม ${r.team} แล้ว`,
+        [
+          `ใบงานใหม่ของสาขาเหล่านี้จะเสนอทีม ${r.team} · อัปไฟล์ทะเบียนทีหลังสาขาไม่เด้งกลับ`,
+          ...(todo.length ? ["", "ต้องทำต่อ:", ...todo] : []),
+        ].join("\n")
+      );
+      onDone();
+    } catch (e) {
+      showAlert("ย้ายไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={busy}
+      width={640}
+      title="ย้ายสาขาเข้าทีม"
+      footer={
+        <View style={styles.actions}>
+          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={onClose} disabled={busy}>
+            <Text style={styles.btnGhostText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, !ready && { opacity: 0.5 }]}
+            onPress={save}
+            disabled={!ready || busy}
+            accessibilityLabel="ยืนยันย้ายสาขา"
+          >
+            <Text style={styles.btnText}>{picked.size ? `ย้าย ${picked.size} สาขา${clean ? `ไป ${clean}` : ""}` : "เลือกสาขาก่อน"}</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.label}>1. ค้นหาและเลือกสาขา</Text>
+      <View style={styles.search}>
+        <Ionicons name="search" size={18} color={colors.textFaint} />
+        <TextInput
+          style={styles.searchInput}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="ชื่อสาขา รหัส ที่อยู่ ภาค หรือทีมเดิม เช่น นครศรี"
+          placeholderTextColor={colors.textFaint}
+          autoFocus
+          accessibilityLabel="ค้นหาสาขา"
+        />
+        {searching ? <Spinner color={colors.primary} size="small" /> : null}
+      </View>
+      {rows.length ? (
+        <ScrollView style={styles.list} nestedScrollEnabled>
+          <TouchableOpacity style={styles.branchRow} onPress={toggleAll} accessibilityLabel="เลือกทั้งหมดที่ค้นเจอ">
+            <Ionicons name={allShown ? "checkbox" : "square-outline"} size={20} color={colors.primary} />
+            <Text style={[styles.label, { flex: 1 }]}>
+              เลือกทั้งหมดที่ค้นเจอ ({rows.length}
+              {more ? "+ — พิมพ์ให้เจาะจงขึ้น" : ""})
+            </Text>
+          </TouchableOpacity>
+          {rows.map((r) => {
+            const on = picked.has(r.id);
+            return (
+              <TouchableOpacity
+                key={r.id}
+                style={[styles.branchRow, on && styles.branchRowOn]}
+                onPress={() => toggle(r)}
+                accessibilityLabel={`เลือกสาขา ${r.code}`}
+              >
+                <Ionicons name={on ? "checkbox" : "square-outline"} size={20} color={on ? colors.primary : colors.textFaint} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.branchName}>
+                    {r.code} · {r.name}
+                  </Text>
+                  <Text style={styles.muted}>
+                    CM {r.zone ?? "—"} · PM {r.pmTeam ?? "—"}
+                    {r.region ? ` · ภาค${r.region}` : ""}
+                    {r.moved.length ? " · ย้ายในแอปแล้ว" : ""}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      ) : search.trim().length >= 2 && !searching ? (
+        <Text style={styles.muted}>ไม่พบสาขา</Text>
+      ) : null}
+      <Text style={styles.muted}>เลือกแล้ว {picked.size} สาขา · ค้นคำใหม่ได้ สาขาที่เลือกไว้ไม่หาย</Text>
+
+      <Text style={styles.label}>2. ย้ายไปทีม</Text>
+      <TextInput
+        style={styles.input}
+        value={team}
+        onChangeText={setTeam}
+        placeholder="พิมพ์ชื่อทีม หรือชื่อทีมใหม่ เช่น นครศรีธรรมราช"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อทีมปลายทาง"
+      />
+      {suggestions.length ? (
+        <View style={styles.row}>
+          {suggestions.map((n) => (
+            <TouchableOpacity key={n} style={styles.chip} onPress={() => setTeam(n)} accessibilityLabel={`ใช้ทีม ${n}`}>
+              <Text style={styles.chipText}>{n}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+      {isNew ? (
+        <View style={styles.infoBox}>
+          <Ionicons name="add-circle-outline" size={16} color={colors.primaryInk} />
+          <Text style={styles.infoText}>
+            ทีมใหม่ "{clean}" — ย้ายเสร็จแล้วชื่อนี้จะขึ้นให้เลือกที่การ์ดช่างและหัวหน้าภาคในหน้าสิทธิ์ผู้ใช้
+          </Text>
+        </View>
+      ) : null}
+
+      <Text style={styles.label}>3. ย้ายงานไหน</Text>
+      <View style={styles.row}>
+        {(["zone", "pmTeam"] as const).map((f) => {
+          const on = fields.includes(f);
+          return (
+            <TouchableOpacity
+              key={f}
+              style={[styles.chip, on && styles.chipOn]}
+              onPress={() => toggleField(f)}
+              accessibilityLabel={`ย้ายทีม ${FIELD_LABEL[f]}`}
+            >
+              <Text style={[styles.chipText, on && { color: "#fff" }]}>
+                {on ? "✓ " : ""}ทีม {FIELD_LABEL[f]} ({f === "zone" ? "งานซ่อม" : "งานบำรุงรักษา"})
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.muted}>ใบงานที่จ่ายไปแล้วยังอยู่กับทีมเดิม — ย้ายเฉพาะทีมที่ดูแลสาขา</Text>
+    </AppModal>
   );
 }
 
@@ -304,4 +627,14 @@ const styles = StyleSheet.create({
   btnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   btnGhost: { backgroundColor: colors.sky50, borderWidth: 1, borderColor: colors.border },
   btnGhostText: { color: colors.navy, fontWeight: "700", fontSize: 14 },
+  list: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, maxHeight: 300 },
+  branchRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: colors.border },
+  branchRowOn: { backgroundColor: colors.primarySoft },
+  branchName: { fontSize: 14, fontWeight: "600", color: colors.text },
+  chip: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: colors.card },
+  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipText: { fontSize: 13, fontWeight: "600", color: colors.text },
+  infoBox: { flexDirection: "row", gap: 8, backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: 10 },
+  infoText: { flex: 1, fontSize: 13, lineHeight: 20, color: colors.primaryInk },
+  moveRow: { flexDirection: "row", alignItems: "center", gap: 8 },
 });
