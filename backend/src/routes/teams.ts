@@ -14,8 +14,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
-import { ACTIVE_WORK_ORDER_STATUSES } from "../utils/constants";
-import { forgetTeamGroups } from "../utils/teamGroups";
+import { ACTIVE_WORK_ORDER_STATUSES, bangkokDay } from "../utils/constants";
+import { forgetTeamGroups, teamGroups } from "../utils/teamGroups";
 
 const router = Router();
 
@@ -345,18 +345,128 @@ router.put("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * ลบทีมรวม — ช่างที่สังกัดกลายเป็นไม่มีสังกัด (เจ้าของระบบต้องการแบบนี้: ให้แอดมินตามจัดทีมใหม่เอง
+ * ผ่านแถบ "ยังไม่มีพื้นที่รับผิดชอบ") · หัวหน้าภาคเลิกดูแล · แผนของทีมรวมตั้งแต่วันนี้ไปถูกลบ
+ */
 router.delete("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const g = Number.isInteger(id) ? await prisma.teamGroup.findUnique({ where: { id } }) : null;
   if (!g) return res.status(404).json({ error: "ไม่พบทีมรวมนี้" });
-  const used = await prisma.user.count({
-    where: { deletedAt: null, OR: [{ team: g.name }, { supervisedTeams: { has: g.name } }] },
-  });
-  // ลบทั้งที่มีคนสังกัด = คนเหล่านั้นมองไม่เห็นงานทันทีโดยไม่มีใครรู้ตัว
-  if (used) return res.status(409).json({ error: `ยังมี ${used} คนผูกกับทีมรวมนี้ — ย้ายคนออกก่อน` });
-  await prisma.teamGroup.delete({ where: { id } });
+  const result = await prisma.$transaction(
+    async (tx) => {
+      const technicians = await tx.user.updateMany({ where: { team: g.name }, data: { team: null } });
+      const supervisors = await tx.$executeRaw`
+        UPDATE "User" SET "supervisedTeams" = array_remove("supervisedTeams", ${g.name}) WHERE ${g.name} = ANY("supervisedTeams")`;
+      const plans = await tx.teamDayPlan.deleteMany({ where: { team: g.name, date: { gte: todayStart() } } });
+      await tx.teamGroup.delete({ where: { id } });
+      return { technicians: technicians.count, supervisors: Number(supervisors), plans: plans.count };
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
   forgetTeamGroups();
-  res.json({ ok: true });
+  res.json({ ok: true, ...result });
+});
+
+/** วันนี้ (เวลาไทย) — แผนรายวันเก็บวันที่เป็นเที่ยงคืน UTC ของวันนั้น */
+function todayStart() {
+  return new Date(`${bangkokDay()}T00:00:00.000Z`);
+}
+
+/** ผลกระทบของการลบทีมช่าง — ให้หน้าจอบอกก่อนกดยืนยัน */
+async function teamUsage(name: string) {
+  const active = [...ACTIVE_WORK_ORDER_STATUSES];
+  const [branches, technicians, supervisors, openOrders] = await Promise.all([
+    prisma.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } }),
+    prisma.user.count({ where: { team: name, deletedAt: null } }),
+    prisma.user.count({ where: { supervisedTeams: { has: name }, deletedAt: null } }),
+    prisma.workOrder.count({ where: { assignedTeam: name, status: { in: active } } }),
+  ]);
+  return { branches, technicians, supervisors, openOrders };
+}
+
+router.get("/usage", requireAuth, requireAdmin, async (req, res) => {
+  const name = String(req.query.name ?? "").trim();
+  if (!name) return res.status(400).json({ error: "ต้องระบุชื่อทีม" });
+  res.json(await teamUsage(name));
+});
+
+const deleteSchema = z.object({
+  name: z.string().trim().min(1),
+  // ทีมที่รับสาขาและใบงานค้างไปดูแลต่อ — บังคับเมื่อทีมที่ลบยังมีสาขาหรือใบงานค้าง
+  moveTo: z.string().trim().min(1).nullable().optional(),
+});
+
+/**
+ * ลบทีมช่าง — ช่างในทีมกลายเป็นไม่มีสังกัด หัวหน้าภาคเลิกดูแล (ตามที่เจ้าของระบบต้องการ)
+ *
+ * สาขาและใบงานที่ยังค้างจะทิ้งไว้กับชื่อที่ไม่มีแล้วไม่ได้ — สาขาไม่มีทีมดูแล ใบงานไม่มีใครเห็น
+ * จึงต้องเลือกทีมที่รับต่อ · จำชื่อเดิม → ทีมใหม่ไว้ (TeamRename) ไม่งั้นอัปไฟล์ทะเบียนครั้งถัดไป
+ * ชื่อทีมที่ลบจะกลับมาพร้อมสาขา · ใบงานที่ปิดแล้วคงชื่อเดิมไว้เป็นประวัติ
+ */
+router.post("/delete", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const parsed = deleteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { name } = parsed.data;
+  const moveTo = parsed.data.moveTo ?? null;
+  if ((await teamGroups()).has(name)) return res.status(400).json({ error: "นี่คือทีมรวม — ลบที่ส่วนทีมรวม" });
+  const usage = await teamUsage(name);
+  if (!usage.branches && !usage.technicians && !usage.supervisors && !usage.openOrders) {
+    return res.status(404).json({ error: `ไม่พบทีม "${name}"` });
+  }
+  if ((usage.branches || usage.openOrders) && !moveTo) {
+    return res.status(400).json({
+      error: `ทีม ${name} ยังมีสาขา ${usage.branches} แห่ง · ใบงานค้าง ${usage.openOrders} ใบ — เลือกทีมที่จะรับไปดูแลต่อ`,
+      needsMoveTo: true,
+    });
+  }
+  if (moveTo) {
+    if (moveTo === name) return res.status(400).json({ error: "ทีมที่รับต่อต้องเป็นทีมอื่น" });
+    const ok = await prisma.branch.findFirst({ where: { cancelledAt: null, OR: [{ zone: moveTo }, { pmTeam: moveTo }] }, select: { id: true } });
+    if (!ok) return res.status(400).json({ error: `ไม่มีทีม "${moveTo}" ในทะเบียนสาขา` });
+  }
+
+  const result = await prisma.$transaction(
+    async (tx) => {
+      let branches = 0;
+      let orders = 0;
+      if (moveTo) {
+        // นับสาขาก่อนย้าย — สาขาเดียวที่ทีมนี้ดูแลทั้ง CM และ PM ต้องนับเป็นหนึ่ง ไม่ใช่สอง
+        branches = await tx.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } });
+        await tx.branch.updateMany({ where: { zone: name }, data: { zone: moveTo } });
+        await tx.branch.updateMany({ where: { pmTeam: name }, data: { pmTeam: moveTo } });
+        orders = (
+          await tx.workOrder.updateMany({
+            where: { assignedTeam: name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+            data: { assignedTeam: moveTo },
+          })
+        ).count;
+        await tx.branchTeamMove.updateMany({ where: { toTeam: name }, data: { toTeam: moveTo } });
+        await tx.branchTeamMove.updateMany({ where: { fromTeam: name }, data: { fromTeam: moveTo } });
+        // ทีมรวมที่เคยครอบคลุมทีมนี้ ครอบคลุมทีมที่รับสาขาไปแทน — ไม่งั้นเสียสาขาเหล่านั้นไปเงียบ ๆ
+        await tx.$executeRaw`
+          UPDATE "TeamGroup" SET "covers" = ARRAY(SELECT DISTINCT unnest(array_replace("covers", ${name}, ${moveTo})))
+          WHERE ${name} = ANY("covers")`;
+        await tx.teamRename.deleteMany({ where: { fromName: moveTo } });
+        await tx.teamRename.updateMany({ where: { toName: name }, data: { toName: moveTo } });
+        await tx.teamRename.upsert({
+          where: { fromName: name },
+          create: { fromName: name, toName: moveTo, createdById: req.auth!.userId },
+          update: { toName: moveTo, createdById: req.auth!.userId, createdAt: new Date() },
+        });
+      } else {
+        await tx.$executeRaw`UPDATE "TeamGroup" SET "covers" = array_remove("covers", ${name}) WHERE ${name} = ANY("covers")`;
+      }
+      const technicians = (await tx.user.updateMany({ where: { team: name }, data: { team: null } })).count;
+      const supervisors = await tx.$executeRaw`
+        UPDATE "User" SET "supervisedTeams" = array_remove("supervisedTeams", ${name}) WHERE ${name} = ANY("supervisedTeams")`;
+      const plans = (await tx.teamDayPlan.deleteMany({ where: { team: name, date: { gte: todayStart() } } })).count;
+      return { branches, orders, technicians, supervisors: Number(supervisors), plans };
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  forgetTeamGroups();
+  res.json({ ok: true, name, moveTo, ...result });
 });
 
 export default router;

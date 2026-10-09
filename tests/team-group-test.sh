@@ -108,8 +108,14 @@ curl -s -X PUT "localhost:4000/api/teams/groups/$GID" -H "$(H $A)" -H 'Content-T
 G2="${G2}ใหม่"
 [ "$(DB "select team from \"User\" where \"employeeCode\"='ZG2$SUF'")" = "$G2" ] && pass "DB: เปลี่ยนชื่อทีมรวม ช่างย้ายตามชื่อใหม่" || fail "ช่างไม่ย้ายตาม"
 [ "$(has $T2)" = "yes" ] && pass "เพิ่มกระบี่ในทีมรวมแล้ว ช่างเห็นใบงานทันที (ไม่ต้องเข้าระบบใหม่)" || fail "ยังไม่เห็นหลังแก้ทีมรวม"
+PATCH $A "auth/users/$(uid ZG3$SUF)" "{\"team\":\"$G2\"}" >/dev/null
+DB "update \"User\" set \"supervisedTeams\"=array_append(\"supervisedTeams\",'$G2') where \"employeeCode\"='$NS'" >/dev/null
 R=$(curl -s -X DELETE "localhost:4000/api/teams/groups/$GID" -H "$(H $A)")
-echo "$R" | grep -q "ย้ายคนออกก่อน" && pass "ลบทีมรวมที่ยังมีช่างไม่ได้" || fail "ลบได้ทั้งที่มีคน: $R"
+[ "$(echo "$R" | J 'd.technicians+"|"+d.supervisors')" = "2|1" ] && [ "$(DB "select count(*) from \"TeamGroup\" where id=$GID")" = "0" ] \
+  && [ "$(DB "select coalesce(team,'-') from \"User\" where \"employeeCode\"='ZG2$SUF'")" = "-" ] \
+  && [ "$(DB "select count(*) from \"User\" where '$G2' = any(\"supervisedTeams\")")" = "0" ] \
+  && pass "DB: ลบทีมรวม → ช่าง 2 คนไม่มีสังกัด หัวหน้าภาคเลิกดูแล" || fail "ลบทีมรวม: $R"
+[ "$(has $T2)" = "no" ] && pass "ช่างที่ทีมรวมถูกลบ ไม่เห็นใบงานของทีมนั้นแล้ว" || fail "ยังเห็นใบงาน"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"
