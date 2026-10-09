@@ -772,6 +772,9 @@ model WorkOrderLog {
   status      String
   note        String?
   createdAt   DateTime  @default(now())
+  // แอดมินกรอกย้อนหลัง (ปิดงานย้อนหลัง) — createdAt คือวันเวลาจริงของงานที่แอดมินใส่
+  // ส่วนนี่คือเวลาที่กดบันทึกจริง ไทม์ไลน์ใช้ติดป้าย "บันทึกย้อนหลัง" ให้รู้ว่าไม่ได้กดตอนนั้น
+  backfilledAt DateTime?
 
   @@index([workOrderId, createdAt])
 }

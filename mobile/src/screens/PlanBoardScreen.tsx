@@ -29,6 +29,7 @@ import TimeField from "../components/TimeField";
 import EmptyState from "../components/EmptyState";
 import Spinner, { WasherIcon } from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
+import TimelineModal, { TimelineButton, TimelineTarget } from "../components/TimelineModal";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
@@ -174,6 +175,9 @@ export default function PlanBoardScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
   // แผนที่กำลังแก้ — ทีมว่าง = จัดแผนใหม่
   const [editing, setEditing] = useState<{ team: string; lane: Lane | null } | null>(null);
+  // ไทม์ไลน์ — เฉพาะ Super Admin (เซิร์ฟเวอร์กันซ้ำอีกชั้น)
+  const [timeline, setTimeline] = useState<TimelineTarget | null>(null);
+  const showTimeline = user?.superAdmin ? setTimeline : undefined;
 
   const monthKey = date.slice(0, 7);
   /**
@@ -280,6 +284,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
             dim={switching}
             onEdit={() => openPlan(lane.team, lane)}
             onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
+            date={day?.date ?? date}
+            onTimeline={showTimeline}
           />
         ))
       )}
@@ -289,6 +295,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
           lane={lane}
           onEdit={() => openPlan(lane.team, lane)}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
+            date={day?.date ?? date}
+            onTimeline={showTimeline}
         />
       ))}
     </View>
@@ -327,6 +335,9 @@ export default function PlanBoardScreen({ navigation }: Props) {
                   </Text>
                 </View>
               </View>
+              {showTimeline ? (
+                <TimelineButton label={`ไทม์ไลน์ ${p.code}`} compact onPress={() => showTimeline({ kind: "wo", id: p.id, code: p.code })} />
+              ) : null}
               <TouchableOpacity
                 style={styles.pendBtn}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: p.id })}
@@ -426,6 +437,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
         </>
       )}
 
+      {timeline ? <TimelineModal target={timeline} onClose={() => setTimeline(null)} /> : null}
       <PlanModal
         visible={editing !== null}
         initialTeam={editing?.team ?? ""}
@@ -491,11 +503,15 @@ function LaneCard({
   dim,
   onEdit,
   onOpen,
+  date,
+  onTimeline,
 }: {
   lane: Lane;
   dim?: boolean;
   onEdit: () => void;
   onOpen: (id: number) => void;
+  date: string;
+  onTimeline?: (t: TimelineTarget) => void;
 }) {
   const members = lane.plan?.members ?? [];
   const [lead, ...rest] = members;
@@ -541,6 +557,9 @@ function LaneCard({
         {lane.plan?.plannedByName ? (
           <Text style={styles.plannedBy}>จัดแผนโดย {lane.plan.plannedByName}</Text>
         ) : null}
+        {onTimeline ? (
+          <TimelineButton label={`ไทม์ไลน์ทีม ${lane.team}`} onPress={() => onTimeline({ kind: "team", date, team: lane.team })} />
+        ) : null}
         <TouchableOpacity style={styles.editBtn} onPress={onEdit} accessibilityLabel={`จัดแผน ${lane.team}`}>
           <Ionicons name="create-outline" size={16} color={colors.primaryInk} />
           <Text style={styles.editText}>{lane.plan ? "แก้แผน" : "จัดคน"}</Text>
@@ -553,9 +572,10 @@ function LaneCard({
         lane.stops.map((s, i) => {
           const tag = stopTag(s);
           return (
+            // ปุ่มไทม์ไลน์อยู่ข้างการ์ด ไม่ซ้อนในการ์ด — ปุ่มซ้อนปุ่มบนเว็บกดแล้วเปิดใบงานไปด้วย
+            <View key={s.id} style={[styles.stopRow, i > 0 && styles.stopBorder]}>
             <TouchableOpacity
-              key={s.id}
-              style={[styles.stop, i > 0 && styles.stopBorder]}
+              style={[styles.stop, { flex: 1 }]}
               onPress={() => onOpen(s.id)}
               activeOpacity={0.75}
               accessibilityLabel={`เปิด ${s.code}`}
@@ -588,6 +608,12 @@ function LaneCard({
                 </Text>
               </View>
             </TouchableOpacity>
+            {onTimeline ? (
+              <View style={styles.stopTl}>
+                <TimelineButton label={`ไทม์ไลน์ ${s.code}`} compact onPress={() => onTimeline({ kind: "wo", id: s.id, code: s.code })} />
+              </View>
+            ) : null}
+            </View>
           );
         })
       )}
@@ -1019,6 +1045,8 @@ const styles = StyleSheet.create({
   },
   stop: { flexDirection: "row", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   stopBorder: { borderTopWidth: 1, borderTopColor: colors.border },
+  stopRow: { flexDirection: "row", alignItems: "flex-start" },
+  stopTl: { paddingTop: spacing.md, paddingRight: spacing.md },
   stopTime: { width: 56 },
   stopClock: { fontSize: 17, fontWeight: "700", color: colors.text },
   rail: { width: 3, borderRadius: 2 },
