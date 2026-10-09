@@ -15,7 +15,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { coversWorkOrder, OUT_OF_SCOPE, supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { Coverage, coverageOf, covers } from "../utils/teamGroups";
-import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
+import { workOrderTimeline } from "../utils/timeline";
+import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { WAREHOUSES } from "../documents/warehouses";
 import {
   buildObjectKey,
@@ -1754,6 +1755,15 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
 const assignSchema = z.object({
   team: z.string().trim().min(1).max(120),
   note: z.string().trim().max(500).optional(),
+});
+
+/** ไทม์ไลน์ของใบงาน — ใครทำอะไรเมื่อไร ตั้งแต่เปิดจนปิด (utils/timeline.ts) */
+router.get("/:id/timeline", requireAuth, requireSuperAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const t = await workOrderTimeline(id);
+  if (!t) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  res.json(t);
 });
 
 router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {

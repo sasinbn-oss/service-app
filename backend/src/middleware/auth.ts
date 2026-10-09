@@ -56,3 +56,12 @@ export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction
   }
   next();
 }
+
+/**
+ * เฉพาะ Super Admin — ดูไทม์ไลน์ว่าใครทำอะไรเมื่อไร (เจ้าของระบบต้องการให้เห็นคนเดียว
+ * แอดมินทั่วไปไม่ควรตามดูการทำงานของแอดมินด้วยกัน)
+ */
+export function requireSuperAdmin(req: AuthRequest, res: Response, next: NextFunction) {
+  if (!req.auth?.superAdmin) return res.status(403).json({ error: "เฉพาะ Super Admin เท่านั้น" });
+  next();
+}

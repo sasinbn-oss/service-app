@@ -28,6 +28,7 @@ import PartPicker, { PickedPart } from "../components/PartPicker";
 import DateField, { thaiDate } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
+import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import WorkOrderAttachments, { Attachment, openAttachment } from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
@@ -252,6 +253,7 @@ function inMyTeam(u: { team?: string | null; teamCoverage?: { all: boolean; team
 export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const { id } = route.params;
   const { user } = useAuth();
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
@@ -470,11 +472,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       subtitle="ใบงานซ่อม"
       backLabel={`ใบงาน ${order.code}`}
       right={
-        <View style={[styles.badge, { backgroundColor: tone.bg }]}>
-          <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          {user?.superAdmin ? (
+            <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} />
+          ) : null}
+          <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+            <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
+          </View>
         </View>
       }
     >
+    {timelineOpen ? (
+      <TimelineModal target={{ kind: "wo", id: order.id, code: order.code }} onClose={() => setTimelineOpen(false)} />
+    ) : null}
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}

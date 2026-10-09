@@ -13,7 +13,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { teamGroups } from "../utils/teamGroups";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { teamDayTimeline } from "../utils/timeline";
+import { requireAuth, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import {
   APPOINTMENT_STATUS_LABELS,
   JOB_TYPE_LABELS,
@@ -64,6 +65,14 @@ async function scopeFor(req: AuthRequest) {
   }
   return { where: workOrderInScope(s), teams };
 }
+
+/** ไทม์ไลน์ทั้งวันของทีม (Super Admin) — รับรถ รายงานตัว ทุกการกดในใบงานของทีม คืนรถ */
+router.get("/timeline", requireAuth, requireSuperAdmin, async (req: AuthRequest, res) => {
+  const date = DATE.safeParse(req.query.date);
+  const team = String(req.query.team ?? "").trim();
+  if (!date.success || !team) return res.status(400).json({ error: "ต้องระบุวันที่และทีม" });
+  res.json(await teamDayTimeline(date.data, team));
+});
 
 router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
   const date = DATE.safeParse(req.query.date);
