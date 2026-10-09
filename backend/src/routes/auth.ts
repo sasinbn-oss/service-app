@@ -305,6 +305,17 @@ const userUpdateSchema = z.object({
   team: z.string().trim().max(120).nullable().optional(),
   // ทีมช่างที่หัวหน้าภาคดูแล (หลายทีมได้) — ดู User.supervisedTeams
   supervisedTeams: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+  // รายละเอียดบัญชี — ปุ่ม "แก้ไขรายละเอียด" ในหน้าสิทธิ์ผู้ใช้
+  // "~" สงวนไว้ให้รหัสของบัญชีที่ถูกลบ (รหัสเดิม~ลบ<id>) จะได้ไม่ชนกัน
+  employeeCode: z
+    .string()
+    .trim()
+    .min(2, "ชื่อผู้ใช้สั้นเกินไป")
+    .max(50)
+    .refine((v) => !v.includes("~"), "ชื่อผู้ใช้ใช้เครื่องหมาย ~ ไม่ได้")
+    .optional(),
+  name: z.string().trim().min(1, "ต้องใส่ชื่อ").max(120).optional(),
+  phone: z.string().trim().max(30).nullable().optional(),
 });
 
 router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -312,11 +323,28 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสผู้ใช้ไม่ถูกต้อง" });
 
   const parsed = userUpdateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  // ข้อความแรกเป็นภาษาไทยอยู่แล้ว — ส่งทั้งก้อน flatten หน้าจอจะโชว์เป็น JSON ดิบ
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   const body = parsed.data;
 
-  const target = await prisma.user.findUnique({ where: { id }, select: { role: true, deletedAt: true } });
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true, deletedAt: true, employeeCode: true } });
   if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
+
+  const detailsChanged = body.employeeCode !== undefined || body.name !== undefined || body.phone !== undefined;
+  // เปลี่ยนชื่อผู้ใช้ของแอดมินคนอื่น = เปลี่ยนสิ่งที่เขาใช้เข้าระบบ จึงต้องเป็น Super Admin
+  // แบบเดียวกับรีเซ็ตรหัส (แก้บัญชีตัวเองได้เสมอ)
+  if (
+    detailsChanged &&
+    ADMIN_ROLES.includes(target.role) &&
+    id !== req.auth!.userId &&
+    !(await canManageAdmins(req.auth!.userId))
+  ) {
+    return res.status(403).json({ error: "เฉพาะ Super Admin เท่านั้นที่แก้รายละเอียดบัญชีแอดมินคนอื่นได้" });
+  }
+  if (body.employeeCode !== undefined && body.employeeCode !== target.employeeCode) {
+    const taken = await prisma.user.findUnique({ where: { employeeCode: body.employeeCode }, select: { id: true } });
+    if (taken) return res.status(409).json({ error: `ชื่อผู้ใช้ "${body.employeeCode}" มีคนใช้อยู่แล้ว` });
+  }
 
   if (body.role && body.role !== target.role) {
     // ให้หรือถอดสิทธิ์ระดับแอดมินขึ้นไป → ต้องเป็น Super Admin (ดู canManageAdmins)
@@ -354,6 +382,9 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
       ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
       ...(body.supervisedTeams !== undefined ? { supervisedTeams: [...new Set(body.supervisedTeams)] } : {}),
       ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { supervisedTeams: [] } : {}),
+      ...(body.employeeCode !== undefined ? { employeeCode: body.employeeCode } : {}),
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.phone !== undefined ? { phone: body.phone || null } : {}),
     },
     select: {
       id: true,

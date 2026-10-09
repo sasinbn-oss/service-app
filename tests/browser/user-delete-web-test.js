@@ -79,6 +79,19 @@ const call = async (method, url, token, body) => {
     await search.fill(victim);
     await s.waitForTimeout(300);
     await s.screenshot({ path: path.join(DIR, "usersearch-2.png") });
+
+    // แก้ไขรายละเอียด — เปลี่ยนเบอร์โทร แล้วยืนยันที่ฐานข้อมูล
+    await s.getByLabel(`แก้ไขรายละเอียด ${victim}`).click();
+    await s.waitForTimeout(500);
+    await s.getByLabel("เบอร์โทร").locator("visible=true").last().fill("0811112222");
+    await s.screenshot({ path: path.join(DIR, "useredit-1.png") });
+    await s.getByText("บันทึก", { exact: true }).locator("visible=true").last().click();
+    await s.waitForTimeout(1500);
+    sql(`select coalesce(phone,'') from "User" where "employeeCode"='ZWU${suf}'`) === "0811112222"
+      ? pass("แก้ไขรายละเอียด: DB ได้เบอร์โทรใหม่") : fail("แก้ไขรายละเอียดไม่ถูกบันทึก");
+    (await s.getByText(`แก้รายละเอียดของ ${victim} แล้ว`).count()) ? pass("ขึ้นข้อความบันทึกแล้ว") : fail("ไม่ขึ้นข้อความบันทึก");
+    await s.getByText("ตกลง", { exact: true }).locator("visible=true").last().click().catch(() => {});
+    await s.waitForTimeout(400);
     const btn = s.getByLabel(`ลบผู้ใช้ ${victim}`);
     await btn.scrollIntoViewIfNeeded();
     await btn.click();

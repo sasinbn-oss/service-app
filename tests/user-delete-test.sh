@@ -1,5 +1,5 @@
 #!/bin/bash
-# ทดสอบ: ลบผู้ใช้ — Super Admin เท่านั้น · ไม่มีประวัติ = ลบจริง · มีประวัติ = ปิดบัญชี (ประวัติอยู่ครบ)
+# ทดสอบ: ลบผู้ใช้ — Super Admin เท่านั้น (+ แก้ไขรายละเอียดผู้ใช้ ท้ายไฟล์) · ไม่มีประวัติ = ลบจริง · มีประวัติ = ปิดบัญชี (ประวัติอยู่ครบ)
 #        ยังถือรถ/ใบงานค้าง = ลบไม่ได้ · โทเคนของคนที่ถูกลบใช้ไม่ได้ทันที · คืนรหัสพนักงานให้ใช้ใหม่ได้
 #
 # ในเครื่องทดสอบไม่มี Super Admin — สร้างชั่วคราว (ทำได้เพราะยังไม่มีใครเป็น) แล้วลบทิ้งตอนจบ
@@ -93,6 +93,35 @@ R=$(POST $A auth/users "{\"employeeCode\":\"ZDU2$SUF\",\"name\":\"กลับ�
   && pass "สร้างบัญชีใหม่ด้วยรหัสพนักงานเดิมได้" || fail "ใช้รหัสเดิมไม่ได้: $(echo $R|head -c 120)"
 R=$(DEL $SA $U2_ID)
 echo "$R" | grep -q "ไม่พบผู้ใช้" && pass "ลบบัญชีที่ปิดไปแล้วซ้ำไม่ได้" || fail "ลบซ้ำได้: $(echo $R|head -c 120)"
+
+echo
+echo "═══ แก้ไขรายละเอียด"
+PATCH() { curl -s -X PATCH "localhost:4000/api/auth/users/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+U3=$(newUser "ZDU3$SUF" "ช่างแก้ชื่อ")
+U3_ID=$(DB "select id from \"User\" where \"employeeCode\"='ZDU3$SUF'")
+R=$(PATCH $A $U3_ID "{\"employeeCode\":\"ZDN3$SUF\",\"name\":\"ช่างชื่อใหม่ (นิว)\",\"phone\":\"0812345678\"}")
+[ "$(DB "select \"employeeCode\"||'|'||name||'|'||phone from \"User\" where id=$U3_ID")" = "ZDN3$SUF|ช่างชื่อใหม่ (นิว)|0812345678" ] \
+  && pass "แอดมินแก้ชื่อผู้ใช้ ชื่อ และเบอร์โทรของช่างได้" || fail "แก้ไม่ได้: $(echo $R|head -c 120)"
+login "ZDN3$SUF" test12345 | grep -q token && ! (login "ZDU3$SUF" test12345 | grep -q token) \
+  && pass "เข้าระบบด้วยชื่อผู้ใช้ใหม่ได้ (รหัสเดิม) ชื่อเก่าใช้ไม่ได้" || fail "ชื่อผู้ใช้ใหม่ใช้ไม่ได้"
+R=$(PATCH $A $U3_ID '{"employeeCode":"A001"}')
+echo "$R" | grep -q "มีคนใช้อยู่แล้ว" && [ "$(DB "select \"employeeCode\" from \"User\" where id=$U3_ID")" = "ZDN3$SUF" ] \
+  && pass "ชื่อผู้ใช้ซ้ำกับคนอื่นไม่ได้" || fail "ใช้ชื่อซ้ำได้: $(echo $R|head -c 120)"
+R=$(PATCH $A $U3_ID '{"employeeCode":"X~1"}')
+echo "$R" | grep -q "ใช้เครื่องหมาย ~ ไม่ได้" && pass "ชื่อผู้ใช้ที่มี ~ (สงวนให้บัญชีที่ถูกลบ) ไม่ได้ — ข้อความภาษาไทย" || fail "รับ ~ ได้: $(echo $R|head -c 120)"
+R=$(PATCH $A $U3_ID '{"name":"  "}')
+echo "$R" | grep -q "ต้องใส่ชื่อ" && pass "ชื่อว่างไม่ได้" || fail "ชื่อว่างผ่าน: $(echo $R|head -c 120)"
+ADM_ID=$(DB "insert into \"User\" (\"employeeCode\",name,\"passwordHash\",role) values ('ZDAD$SUF','แอดมินทดสอบ','x','ADMIN') returning id" | head -1)
+R=$(PATCH $A $ADM_ID '{"name":"แอดมินโดนแก้"}')
+echo "$R" | grep -q "เฉพาะ Super Admin" && [ "$(DB "select name from \"User\" where id=$ADM_ID")" = "แอดมินทดสอบ" ] \
+  && pass "แอดมินทั่วไปแก้รายละเอียดแอดมินคนอื่นไม่ได้ (มี Super Admin แล้ว)" || fail "แอดมินแก้แอดมินอื่นได้: $(echo $R|head -c 120)"
+PATCH $SA $ADM_ID '{"name":"แอดมินแก้โดยซุปเปอร์"}' >/dev/null
+[ "$(DB "select name from \"User\" where id=$ADM_ID")" = "แอดมินแก้โดยซุปเปอร์" ] && pass "Super Admin แก้ได้" || fail "Super Admin แก้ไม่ได้"
+A_ID=$(DB "select id from \"User\" where \"employeeCode\"='A001'"); A_PHONE=$(DB "select coalesce(phone,'') from \"User\" where id=$A_ID")
+PATCH $A $A_ID '{"phone":"0899999999"}' >/dev/null
+[ "$(DB "select phone from \"User\" where id=$A_ID")" = "0899999999" ] && pass "แอดมินแก้บัญชีตัวเองได้" || fail "แก้บัญชีตัวเองไม่ได้"
+DB "update \"User\" set phone=nullif('$A_PHONE','') where id=$A_ID" >/dev/null
+DB "delete from \"User\" where id in ($U3_ID,$ADM_ID)" >/dev/null
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

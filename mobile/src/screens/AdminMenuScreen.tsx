@@ -113,6 +113,16 @@ export default function AdminMenuScreen({ navigation }: Props) {
       onPress: () => navigation.navigate("ManageUsers"),
     },
     {
+      key: "ManageTeams",
+      label: "ทีมช่าง",
+      labelEn: "Teams",
+      description: "ภาพรวมแต่ละทีม และเปลี่ยนชื่อทีม",
+      icon: "people-circle",
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
+      onPress: () => navigation.navigate("ManageTeams"),
+    },
+    {
       key: "ManageBranches",
       label: "จัดการข้อมูลสาขา",
       labelEn: "Branches",

@@ -74,6 +74,15 @@ echo "$R" | J "const l=d.lanes.find(x=>x.team==='$TEAM'); l&&l.stops.some(s=>s.i
   && pass "บอร์ดโชว์ใบงานในทีม พร้อมเวลา และคนที่ไป" || fail "บอร์ดไม่ตรง: $(echo $R|head -c 200)"
 curl -s "localhost:4000/api/plans/month?month=2026-11" -H "$(H $A)" | J 'd.days["2026-11-04"]>=1?"ok":"bad"' | grep -q ok \
   && pass "ปฏิทินเดือนนับวันที่มีแผน" || fail "ปฏิทินไม่มีจุด"
+# เวลาเข้าหน้างานของทีม
+R=$(curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
+  -d "{\"date\":\"2026-11-04\",\"team\":\"$TEAM\",\"memberIds\":[$TID],\"startTime\":\"25:00\"}")
+echo "$R" | grep -q "ชั่วโมง:นาที" && pass "เวลาเข้าหน้างานผิดรูปแบบ ถูกปฏิเสธเป็นภาษาไทย" || fail "รับเวลาผิด: $(echo $R|head -c 120)"
+curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
+  -d "{\"date\":\"2026-11-04\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$TID],\"startTime\":\"08:30\"}" >/dev/null
+[ "$(DB "select \"startTime\" from \"TeamDayPlan\" where team='$TEAM' and date='2026-11-04'")" = "08:30" ] \
+  && curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $S)" | J "d.lanes.find(x=>x.team==='$TEAM').plan.startTime" | grep -q "08:30" \
+  && pass "บันทึกเวลาเข้าหน้างาน 08:30 และบอร์ดส่งกลับมา" || fail "เวลาเข้าหน้างานไม่ถูกบันทึก"
 
 echo
 echo "═══ ย้อนขั้นตอน"

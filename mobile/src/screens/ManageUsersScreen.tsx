@@ -84,6 +84,7 @@ export default function ManageUsersScreen() {
   const [resetting, setResetting] = useState<ManagedUser | null>(null);
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
+  const [editing, setEditing] = useState<ManagedUser | null>(null);
   // ทุกคำที่พิมพ์ต้องเจอ (ไม่จำเป็นต้องติดกัน) — "ช่าง กระบี่" ได้ช่างทีมกระบี่
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -374,6 +375,15 @@ export default function ManageUsersScreen() {
           <View style={styles.actions}>
             <TouchableOpacity
               style={styles.resetLink}
+              onPress={() => setEditing(u)}
+              activeOpacity={0.7}
+              accessibilityLabel={`แก้ไขรายละเอียด ${u.name}`}
+            >
+              <Ionicons name="create-outline" size={14} color={colors.primary} />
+              <Text style={styles.resetLinkText}>แก้ไขรายละเอียด</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.resetLink}
               onPress={() => setResetting(u)}
               activeOpacity={0.7}
             >
@@ -403,6 +413,15 @@ export default function ManageUsersScreen() {
         onDone={async () => {
           setCreating(false);
           await load();
+        }}
+      />
+
+      <EditUserModal
+        user={editing}
+        onCancel={() => setEditing(null)}
+        onDone={(updated) => {
+          setUsers((list) => list.map((x) => (x.id === updated.id ? updated : x)));
+          setEditing(null);
         }}
       />
 
@@ -602,6 +621,124 @@ function CreateUserModal({
         ไม่ต้องซ่อน — ตั้งใจให้แอดมินอ่านออกเพื่อบอกต่อ เจ้าของบัญชีจะถูกบังคับ
         ให้เปลี่ยนเป็นรหัสของตัวเองตอนเข้าครั้งแรกอยู่แล้ว
       </Text>
+
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
+/**
+ * แก้ชื่อผู้ใช้ ชื่อ และเบอร์โทร — สิทธิ์/ทีม/ภาคแก้ที่การ์ดได้อยู่แล้ว ไม่ต้องมีซ้ำในหน้าต่างนี้
+ * ไม่แตะรหัสผ่าน (มีปุ่มตั้งรหัสผ่านใหม่แยกไว้แล้ว)
+ */
+function EditUserModal({
+  user,
+  onCancel,
+  onDone,
+}: {
+  user: ManagedUser | null;
+  onCancel: () => void;
+  onDone: (updated: ManagedUser) => void;
+}) {
+  const [employeeCode, setEmployeeCode] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!user) return;
+    setEmployeeCode(user.employeeCode);
+    setName(user.name);
+    setPhone(user.phone ?? "");
+    setError(null);
+  }, [user?.id]);
+
+  if (!user) return null;
+  const codeChanged = employeeCode.trim() !== user.employeeCode;
+  const changed = codeChanged || name.trim() !== user.name || phone.trim() !== (user.phone ?? "");
+  const ready = changed && employeeCode.trim().length >= 2 && name.trim().length > 0;
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await api.patch<ManagedUser>(`/auth/users/${user!.id}`, {
+        employeeCode: employeeCode.trim(),
+        name: name.trim(),
+        phone: phone.trim() || null,
+      });
+      showAlert(
+        "บันทึกแล้ว",
+        codeChanged
+          ? `ครั้งต่อไป ${res.data.name} ต้องเข้าระบบด้วยชื่อผู้ใช้ "${res.data.employeeCode}"`
+          : `แก้รายละเอียดของ ${res.data.name} แล้ว`
+      );
+      onDone(res.data);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onCancel}
+      busy={saving}
+      title="แก้ไขรายละเอียด"
+      subtitle={`${user.name} · ${user.employeeCode}`}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (!ready || saving) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={!ready || saving}
+            activeOpacity={0.8}
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>บันทึก</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.label}>ชื่อผู้ใช้ (รหัสพนักงาน)</Text>
+      <TextInput
+        style={styles.input}
+        value={employeeCode}
+        onChangeText={setEmployeeCode}
+        autoCapitalize="characters"
+        accessibilityLabel="ชื่อผู้ใช้"
+      />
+      {codeChanged ? (
+        <Text style={styles.hint}>
+          เปลี่ยนชื่อผู้ใช้ = เจ้าของบัญชีต้องเข้าระบบด้วยชื่อใหม่ (รหัสผ่านเดิม) — แจ้งเขาด้วย
+        </Text>
+      ) : null}
+
+      <Text style={styles.label}>ชื่อ-นามสกุล</Text>
+      <TextInput
+        style={styles.input}
+        value={name}
+        onChangeText={setName}
+        placeholder="ชื่อที่จะขึ้นในใบงาน"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อ-นามสกุล"
+      />
+
+      <Text style={styles.label}>เบอร์โทร</Text>
+      <TextInput
+        style={styles.input}
+        value={phone}
+        onChangeText={setPhone}
+        keyboardType="phone-pad"
+        placeholder="ไม่ใส่ก็ได้"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="เบอร์โทร"
+      />
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </AppModal>

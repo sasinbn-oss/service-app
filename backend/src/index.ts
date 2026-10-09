@@ -14,6 +14,7 @@ import compression from "compression";
 import cors from "cors";
 import authRoutes from "./routes/auth";
 import userImportRoutes from "./routes/userImport";
+import teamRoutes from "./routes/teams";
 import vehicleRoutes from "./routes/vehicles";
 import vehicleLogRoutes from "./routes/vehicleLogs";
 import branchRoutes from "./routes/branches";
@@ -174,6 +175,7 @@ app.get("/health/db", requireAuth, requireAdmin, async (_req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/user-import", userImportRoutes);
+app.use("/api/teams", teamRoutes);
 app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/vehicle-logs", vehicleLogRoutes);
 app.use("/api/branches", branchRoutes);
