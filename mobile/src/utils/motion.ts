@@ -23,6 +23,13 @@ export const SPRING = {
   drop: { stiffness: 380, damping: 25, mass: 1 },
 };
 
+/**
+ * ความเร็วรวมของทั้งแอป — 1 = ตามค่าข้างบน · น้อยกว่า 1 = เร็วขึ้น
+ * เจ้าของงานใช้จริงแล้วขอให้เร็วขึ้น "หน่อยนึง" จึงตั้ง 0.75 (เร็วขึ้นราว 25%)
+ * สปริงเร่งโดยคงความเด้งเท่าเดิม: ความแข็ง ÷ TEMPO² และแรงหน่วง ÷ TEMPO (อัตราส่วนการหน่วงไม่เปลี่ยน)
+ */
+export const TEMPO = 0.75;
+
 /** เส้นโค้งแผ่นล่างของ iOS — ออกตัวเร็วแล้วค่อย ๆ จอด */
 export const SHEET_EASE = Easing.bezier(0.32, 0.72, 0, 1);
 /** ตอนปิด: เริ่มช้าแล้วเร่งออก — ปิดต้องเร็วกว่าเปิด คนกดปิดคือจะไปทำอย่างอื่นแล้ว */
@@ -43,11 +50,19 @@ export function reduceMotion() {
 /** velocity เป็นหน่วยของค่าต่อวินาที — จากนิ้ว: gesture.vx (px/ms) × 1000 ÷ ระยะทั้งหมด */
 export function spring(v: Animated.Value, toValue: number, preset: keyof typeof SPRING, velocity = 0) {
   if (reduced) return Animated.timing(v, { toValue, duration: 120, useNativeDriver: false });
-  return Animated.spring(v, { toValue, velocity, ...SPRING[preset], useNativeDriver: false });
+  const { stiffness, damping, mass } = SPRING[preset];
+  return Animated.spring(v, {
+    toValue,
+    velocity,
+    stiffness: stiffness / (TEMPO * TEMPO),
+    damping: damping / TEMPO,
+    mass,
+    useNativeDriver: false,
+  });
 }
 
 export function timing(v: Animated.Value, toValue: number, duration: number, easing = SHEET_EASE) {
-  return Animated.timing(v, { toValue, duration: reduced ? Math.min(duration, 120) : duration, easing, useNativeDriver: false });
+  return Animated.timing(v, { toValue, duration: reduced ? Math.min(duration, 120) : duration * TEMPO, easing, useNativeDriver: false });
 }
 
 /** ลากเลยขอบ → หนืดเหมือนยาง ยิ่งลากยิ่งไปได้น้อย (สูตรเดียวกับ UIScrollView) */

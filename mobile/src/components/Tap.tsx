@@ -1,6 +1,6 @@
 import React, { forwardRef, useRef } from "react";
 import { Animated, LayoutChangeEvent, StyleSheet, TouchableOpacity as RNTouchableOpacity, View } from "react-native";
-import { reduceMotion } from "../utils/motion";
+import { reduceMotion, TEMPO } from "../utils/motion";
 
 const AnimatedTouchable = Animated.createAnimatedComponent(RNTouchableOpacity);
 type Props = React.ComponentProps<typeof RNTouchableOpacity>;
@@ -36,11 +36,11 @@ const Tap = forwardRef<View, Props>(function Tap(props, ref) {
         onLayout?.(e);
       }}
       onPressIn={(e) => {
-        if (!reduceMotion()) Animated.timing(scale, { toValue: depth.current, duration: 90, useNativeDriver: false }).start();
+        if (!reduceMotion()) Animated.timing(scale, { toValue: depth.current, duration: 90 * TEMPO, useNativeDriver: false }).start();
         onPressIn?.(e);
       }}
       onPressOut={(e) => {
-        Animated.spring(scale, { toValue: 1, stiffness: 420, damping: 24, mass: 1, useNativeDriver: false }).start();
+        Animated.spring(scale, { toValue: 1, stiffness: 420 / (TEMPO * TEMPO), damping: 24 / TEMPO, mass: 1, useNativeDriver: false }).start();
         onPressOut?.(e);
       }}
     />
