@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Modal,
   Platform,
@@ -69,6 +69,8 @@ export default function AppModal({
             <Text style={[styles.title, headingFont]}>{title}</Text>
             {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
           </View>
+          {/* ฟอร์มที่เลื่อนเข้ามาในหน้าต่างใบงาน — ขยายคือขยายหน้าต่างใบงานทั้งบาน */}
+          <MaximizeButton on={pane.maximized} onPress={pane.toggleMaximized} />
           <TouchableOpacity style={styles.close} onPress={onClose} disabled={busy} accessibilityLabel="ปิด">
             <Ionicons name="close" size={24} color={colors.primaryInk} />
           </TouchableOpacity>
@@ -87,18 +89,25 @@ export default function AppModal({
   useEffect(() => () => pane?.hide(key), [pane, key]);
   // จอแคบ (มือถือ) เปิดจากด้านล่างเต็มกว้าง — นิ้วโป้งถึงปุ่มบันทึก และไม่เหลือขอบว่างข้าง ๆ
   const sheet = useWindowDimensions().width < 600;
+  // ขยายเกือบเต็มจอ — ไทม์ไลน์ยาว ตารางนำเข้า ฟอร์มหลายขั้น อ่านในกรอบเล็กต้องเลื่อนไม่หยุด
+  // เปิดครั้งใหม่กลับขนาดปกติเสมอ ไม่จำค่า เพราะหน้าต่างส่วนใหญ่สั้นและขนาดปกติอ่านง่ายกว่า
+  const [max, setMax] = useState(false);
+  useEffect(() => {
+    if (!visible) setMax(false);
+  }, [visible]);
   if (pane) return null;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={busy ? undefined : onClose}>
-      <View style={[styles.backdrop, sheet && styles.backdropSheet]}>
+      <View style={[styles.backdrop, sheet && styles.backdropSheet, max && !sheet && styles.backdropMax]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={busy ? undefined : onClose} accessibilityLabel="ปิดหน้าต่าง" />
-        <View style={[styles.card, { maxWidth: width }, sheet && styles.cardSheet]}>
+        <View style={[styles.card, { maxWidth: width }, sheet && styles.cardSheet, max && styles.cardMax]}>
           <View style={styles.head}>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.title, headingFont]}>{title}</Text>
               {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
             </View>
+            <MaximizeButton on={max} onPress={() => setMax((v) => !v)} />
             <TouchableOpacity
               style={styles.close}
               onPress={onClose}
@@ -108,13 +117,27 @@ export default function AppModal({
               <Ionicons name="close" size={24} color={colors.primaryInk} />
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.scroll} contentContainerStyle={[styles.body, bodyStyle]}>
+          <ScrollView style={[styles.scroll, max && { flexGrow: 1 }]} contentContainerStyle={[styles.body, bodyStyle]}>
             {children}
           </ScrollView>
           {footer ? <View style={styles.foot}>{footer}</View> : null}
         </View>
       </View>
     </Modal>
+  );
+}
+
+/** ปุ่มขยาย/ย่อหน้าต่าง — ใช้ร่วมกับ PopupScreen (หน้าต่างใบงาน) ให้หน้าตาและตำแหน่งตรงกันทุกบาน */
+export function MaximizeButton({ on, onPress }: { on: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={styles.close}
+      onPress={onPress}
+      accessibilityLabel={on ? "ย่อหน้าต่างกลับขนาดปกติ" : "ขยายหน้าต่างเต็มจอ"}
+      accessibilityState={{ expanded: on }}
+    >
+      <Ionicons name={on ? "contract-outline" : "expand-outline"} size={21} color={colors.primaryInk} />
+    </TouchableOpacity>
   );
 }
 
@@ -155,6 +178,8 @@ const styles = StyleSheet.create({
     ...(Platform.OS === "web" ? ({ backdropFilter: "blur(3px)" } as object) : null),
   },
   backdropSheet: { justifyContent: "flex-end", padding: 0 },
+  backdropMax: { padding: spacing.sm },
+  cardMax: { maxWidth: "100%", height: "100%", maxHeight: "100%" },
   cardSheet: { maxWidth: "100%", maxHeight: "90%", borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   card: {
     width: "100%",
