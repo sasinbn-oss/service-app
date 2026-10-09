@@ -13,6 +13,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
+import { MaximizeButton } from "./AppModal";
 
 /**
  * หน้าที่เปิดเป็นหน้าต่างลอยทับหน้าเดิม (ใบงาน · เปิดใบงานใหม่) ตามตัวอย่างที่เจ้าของงานเลือก
@@ -32,6 +33,9 @@ interface PaneHost {
   backLabel: string;
   show: (key: string, node: React.ReactNode) => void;
   hide: (key: string) => void;
+  /** ขยายหน้าต่างทั้งบาน — ฟอร์มที่เลื่อนเข้ามาแทนที่ใช้ปุ่มเดียวกันนี้ */
+  maximized: boolean;
+  toggleMaximized: () => void;
 }
 
 export const PopupPaneContext = createContext<PaneHost | null>(null);
@@ -75,8 +79,11 @@ export default function PopupScreen({
   const hide = useCallback((key: string) => {
     setPanes((prev) => (prev.some((p) => p.key === key) ? prev.filter((p) => p.key !== key) : prev));
   }, []);
-  const host = useRef<PaneHost>({ backLabel: backLabel ?? "", show, hide });
+  const [max, setMax] = useState(false);
+  const toggleMax = useCallback(() => setMax((v) => !v), []);
+  const host = useRef<PaneHost>({ backLabel: backLabel ?? "", show, hide, maximized: false, toggleMaximized: toggleMax });
   host.current.backLabel = backLabel ?? "";
+  host.current.maximized = max;
 
   const close = useCallback(() => {
     if (navigation.canGoBack()) navigation.goBack();
@@ -101,12 +108,13 @@ export default function PopupScreen({
 
   return (
     <PopupPaneContext.Provider value={host.current}>
-      <View style={[styles.backdrop, sheet && styles.backdropSheet]}>
+      <View style={[styles.backdrop, sheet && styles.backdropSheet, max && !sheet && styles.backdropMax]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityLabel="ปิดหน้าต่าง" />
         <Animated.View
           style={[
             styles.card,
             sheet ? [styles.cardSheet, { paddingBottom: insets.bottom }] : { maxWidth: width },
+            max && styles.cardMax,
             {
               opacity: rise,
               transform: [{ translateY: rise.interpolate({ inputRange: [0, 1], outputRange: [sheet ? 40 : 14, 0] }) }],
@@ -121,6 +129,7 @@ export default function PopupScreen({
               {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
             </View>
             {right}
+            <MaximizeButton on={max} onPress={toggleMax} />
             <TouchableOpacity style={styles.close} onPress={close} accessibilityLabel="ปิด">
               <Ionicons name="close" size={24} color={colors.primaryInk} />
             </TouchableOpacity>
@@ -162,6 +171,8 @@ const styles = StyleSheet.create({
     ...(Platform.OS === "web" ? ({ backdropFilter: "blur(3px)" } as object) : null),
   },
   backdropSheet: { padding: 0, justifyContent: "flex-end" },
+  backdropMax: { padding: spacing.sm },
+  cardMax: { maxWidth: "100%", height: "100%" },
   card: {
     width: "100%",
     height: "92%",
