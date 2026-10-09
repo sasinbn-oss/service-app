@@ -101,6 +101,7 @@ router.post("/login", async (req, res) => {
       // ทีมต้องติดมาตั้งแต่ตอนล็อกอิน ไม่ใช่รอให้หน้าจอไปถาม /auth/me อีกรอบ —
       // ระหว่างนั้นช่างจะมองไม่เห็นปุ่มของงานตัวเอง เพราะระบบยังไม่รู้ว่าอยู่ทีมไหน
       team: user.team,
+      supervisedTeams: user.supervisedTeams,
       mustChangePassword: user.mustChangePassword,
     },
   });
@@ -117,6 +118,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
     role: user.role,
     region: user.region,
     team: user.team,
+    supervisedTeams: user.supervisedTeams,
     mustChangePassword: user.mustChangePassword,
   });
 });

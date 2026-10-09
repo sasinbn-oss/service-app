@@ -141,6 +141,17 @@ function longDate(s: string) {
   return `${DOW[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}. ${d.getFullYear() + 543}`;
 }
 
+/**
+ * ป้ายขอบเขตของหัวหน้าภาค — เดิมดูแค่ภาค หัวหน้าภาคที่ตั้งเป็น "ทีมที่ดูแล" จากไฟล์รายชื่อ
+ * (ไม่ได้ตั้งภาค) จึงขึ้น "ภาคที่ยังไม่ระบุ" ทั้งที่เห็นแผนของทีมตัวเองครบ คนเลยเข้าใจว่ายังไม่ได้จัดทีม
+ */
+function supervisorScopeLabel(u: { region?: string | null; supervisedTeams?: string[] }) {
+  const teams = u.supervisedTeams ?? [];
+  if (u.region) return `ภาค${u.region}${teams.length ? ` + ${teams.length} ทีม` : ""}`;
+  if (!teams.length) return "ยังไม่ได้ตั้งทีมที่ดูแล";
+  return teams.length <= 3 ? teams.join(" · ") : `${teams.slice(0, 2).join(" · ")} และอีก ${teams.length - 2} ทีม`;
+}
+
 export default function PlanBoardScreen({ navigation }: Props) {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
@@ -333,7 +344,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
         <Text style={[styles.pageTitle, headingFont]}>แผนงาน</Text>
         <View style={styles.scopePill}>
           <Text style={styles.scopePillText}>
-            {user?.role === "SUPERVISOR" ? `ภาค${user.region ?? "ที่ยังไม่ระบุ"}` : "ทุกภาค"}
+            {user?.role === "SUPERVISOR" ? supervisorScopeLabel(user) : "ทุกภาค"}
           </Text>
         </View>
         <View style={{ flex: 1 }} />

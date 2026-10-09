@@ -221,7 +221,9 @@ export default function HomeScreen({ navigation }: Props) {
       <Hero
         name={user?.name ?? ""}
         role={user?.superAdmin ? "SUPER_ADMIN" : user?.role}
-        area={user?.team ?? user?.region ?? null}
+        // หัวหน้าภาคส่วนใหญ่ถูกตั้งเป็น "ทีมที่ดูแล" จากไฟล์รายชื่อ ไม่ได้ตั้งภาค —
+        // ดูแค่ team/region จะขึ้น "ยังไม่ได้จัดทีม" ทั้งที่เห็นและจ่ายงานของทีมได้ตามปกติ
+        area={user?.team ?? user?.region ?? (user?.supervisedTeams?.length ? user.supervisedTeams.join(" · ") : null)}
         summary={summary}
         onRefresh={() => load().catch(() => undefined)}
       />
