@@ -391,6 +391,34 @@ router.get("/usage", requireAuth, requireAdmin, async (req, res) => {
   res.json(await teamUsage(name));
 });
 
+/**
+ * รายชื่อคนในทีม (กดการ์ดทีมในหน้าทีมช่าง) — ตัวเลขบนการ์ดบอกแค่ว่ากี่คน แอดมินต้องรู้ว่าใคร
+ * ก่อนตัดสินใจลบ/รวมทีม หรือเวลาหัวหน้าภาคโทรมาถามว่าช่างคนนี้อยู่ทีมไหน
+ * ใช้ได้ทั้งทีมช่างและทีมรวม · ทีมรวมที่ครอบคลุมทีมนี้แสดงด้วย เพราะช่างทีมรวมก็เห็นงานทีมนี้
+ */
+router.get("/members", requireAuth, requireAdmin, async (req, res) => {
+  const name = String(req.query.name ?? "").trim();
+  if (!name) return res.status(400).json({ error: "ต้องระบุชื่อทีม" });
+  const pick = { id: true, employeeCode: true, name: true, phone: true, role: true, region: true } as const;
+  const [technicians, supervisors, groups] = await Promise.all([
+    prisma.user.findMany({ where: { team: name, deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { supervisedTeams: { has: name }, deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
+    teamGroups(),
+  ]);
+  const group = groups.get(name);
+  res.json({
+    name,
+    isGroup: !!group,
+    covers: group ? (group.allTeams ? null : group.covers) : undefined,
+    technicians,
+    supervisors,
+    // ทีมรวมที่เห็นงานของทีมนี้ (เช่น Senior · QC) — ช่างของทีมรวมก็ไปงานทีมนี้ได้
+    coveredBy: group
+      ? []
+      : [...groups.values()].filter((g) => g.allTeams || g.covers.includes(name)).map((g) => g.name).sort((a, b) => a.localeCompare(b, "th")),
+  });
+});
+
 const deleteSchema = z.object({
   name: z.string().trim().min(1),
   // ทีมที่รับสาขาและใบงานค้างไปดูแลต่อ — บังคับเมื่อทีมที่ลบยังมีสาขาหรือใบงานค้าง

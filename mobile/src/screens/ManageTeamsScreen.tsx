@@ -70,6 +70,7 @@ export default function ManageTeamsScreen() {
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<Team | null>(null);
   const [moving, setMoving] = useState(false);
+  const [viewing, setViewing] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<Team | null>(null);
@@ -154,7 +155,12 @@ export default function ManageTeamsScreen() {
       {shown.length === 0 ? <EmptyState icon="people-outline" text="ไม่พบทีม" /> : null}
       <View style={styles.grid}>
         {shown.map((t) => (
-          <View key={t.name} style={[styles.card, t.orphan && styles.cardOrphan]}>
+          <TouchableOpacity
+            key={t.name}
+            style={[styles.card, t.orphan && styles.cardOrphan]}
+            onPress={() => setViewing(t.name)}
+            accessibilityLabel={`ดูคนในทีม ${t.name}`}
+          >
             <View style={styles.row}>
               <Text style={styles.teamName}>{t.name}</Text>
               {t.orphan ? (
@@ -184,7 +190,8 @@ export default function ManageTeamsScreen() {
               สาขา CM {t.cmBranches} · PM {t.pmBranches} · ช่าง {t.technicians} คน · หัวหน้าภาคดูแล {t.supervisors} คน ·
               ใบงานค้าง {t.openOrders}
             </Text>
-          </View>
+            <Text style={styles.seeMembers}>ดูรายชื่อในทีม ›</Text>
+          </TouchableOpacity>
         ))}
       </View>
 
@@ -200,7 +207,12 @@ export default function ManageTeamsScreen() {
       </View>
       <View style={styles.grid}>
         {(data.groups ?? []).map((g) => (
-          <View key={g.id} style={[styles.card, styles.groupCard]}>
+          <TouchableOpacity
+            key={g.id}
+            style={[styles.card, styles.groupCard]}
+            onPress={() => setViewing(g.name)}
+            accessibilityLabel={`ดูคนในทีม ${g.name}`}
+          >
             <View style={styles.row}>
               <Ionicons name="git-network-outline" size={16} color={colors.primary} />
               <Text style={[styles.teamName, { flex: 1 }]}>{g.name}</Text>
@@ -213,7 +225,8 @@ export default function ManageTeamsScreen() {
             <Text style={styles.muted}>
               ช่าง {g.technicians} คน · หัวหน้าภาคดูแล {g.supervisors} คน
             </Text>
-          </View>
+            <Text style={styles.seeMembers}>ดูรายชื่อในทีม ›</Text>
+          </TouchableOpacity>
         ))}
       </View>
 
@@ -229,6 +242,8 @@ export default function ManageTeamsScreen() {
           ))}
         </View>
       ) : null}
+
+      {viewing ? <MembersModal name={viewing} onClose={() => setViewing(null)} /> : null}
 
       {moving ? (
         <MoveModal
@@ -948,7 +963,131 @@ function RenameModal({
   );
 }
 
+interface Member {
+  id: number;
+  employeeCode: string;
+  name: string;
+  phone: string | null;
+  role: string;
+  region: string | null;
+}
+interface Members {
+  name: string;
+  isGroup: boolean;
+  /** ทีมรวม: ทีมที่ครอบคลุม · null = ทุกทีม */
+  covers?: string[] | null;
+  technicians: Member[];
+  supervisors: Member[];
+  coveredBy: string[];
+}
+
+const ROLE_LABEL: Record<string, string> = { SUPERVISOR: "หัวหน้าภาค", ADMIN: "แอดมิน", SUPER_ADMIN: "Super Admin" };
+
+/**
+ * กดการ์ดทีม → ใครอยู่ในทีมนี้ (ช่าง · หัวหน้าภาคที่ดูแล · ทีมรวมที่เห็นงานทีมนี้ด้วย)
+ * ดูอย่างเดียว — ย้ายคนเข้า/ออกทีมทำที่หน้าสิทธิ์ผู้ใช้ ที่เดียวกับที่ตั้งบทบาทและภาค
+ */
+function MembersModal({ name, onClose }: { name: string; onClose: () => void }) {
+  const [data, setData] = useState<Members | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .get<Members>("/teams/members", { params: { name } })
+      .then((r) => setData(r.data))
+      .catch((e) => setError(apiErrorMessage(e)));
+  }, [name]);
+
+  const person = (m: Member, sub?: string | null) => (
+    <View key={m.id} style={styles.memberRow}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>{m.name.trim().charAt(0)}</Text>
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.memberName}>{m.name}</Text>
+        <Text style={styles.muted}>
+          รหัส {m.employeeCode}
+          {m.phone ? ` · โทร ${m.phone}` : ""}
+          {sub ? ` · ${sub}` : ""}
+        </Text>
+      </View>
+      {ROLE_LABEL[m.role] ? (
+        <View style={[styles.tag, { backgroundColor: colors.primarySoft }]}>
+          <Text style={[styles.tagText, { color: colors.primaryInk }]}>{ROLE_LABEL[m.role]}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      title={`ทีม ${name}`}
+      subtitle={data ? `ช่าง ${data.technicians.length} คน · หัวหน้าภาคดูแล ${data.supervisors.length} คน` : undefined}
+    >
+      {error ? <Text style={[styles.muted, { color: colors.danger }]}>{error}</Text> : null}
+      {!data && !error ? <Spinner /> : null}
+      {data ? (
+        <View style={{ gap: spacing.lg }}>
+          {data.isGroup ? (
+            <Text style={styles.muted}>
+              ทีมรวม — เห็นงานของ {data.covers === null ? "ทุกทีม" : data.covers?.join(" · ") || "—"}
+            </Text>
+          ) : null}
+          <View style={{ gap: spacing.sm }}>
+            <Text style={styles.section}>หัวหน้าภาคที่ดูแล</Text>
+            {data.supervisors.length ? (
+              data.supervisors.map((m) => person(m, m.region ? `ภาค${m.region}` : null))
+            ) : (
+              <Text style={styles.muted}>ยังไม่มีหัวหน้าภาคดูแลทีมนี้ — ตั้งที่หน้าสิทธิ์ผู้ใช้</Text>
+            )}
+          </View>
+          <View style={{ gap: spacing.sm }}>
+            <Text style={styles.section}>ช่างในทีม ({data.technicians.length})</Text>
+            {data.technicians.length ? (
+              data.technicians.map((m) => person(m))
+            ) : (
+              <Text style={styles.muted}>ยังไม่มีช่างสังกัดทีมนี้ — จัดทีมให้ช่างที่หน้าสิทธิ์ผู้ใช้</Text>
+            )}
+          </View>
+          {data.coveredBy.length ? (
+            <View style={{ gap: spacing.sm }}>
+              <Text style={styles.section}>ทีมรวมที่เห็นงานของทีมนี้ด้วย</Text>
+              <View style={[styles.row, { flexWrap: "wrap", gap: 6 }]}>
+                {data.coveredBy.map((g) => (
+                  <View key={g} style={styles.chip}>
+                    <Text style={styles.chipText}>{g}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+    </AppModal>
+  );
+}
+
 const styles = StyleSheet.create({
+  seeMembers: { fontSize: 12.5, fontWeight: "600", color: colors.primaryInk, marginTop: 2 },
+  memberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  avatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarText: { fontSize: 15, fontWeight: "700", color: colors.primaryInk },
+  memberName: { fontSize: 14.5, fontWeight: "600", color: colors.text },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md, paddingBottom: 48, maxWidth: 1100, width: "100%", alignSelf: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background },
