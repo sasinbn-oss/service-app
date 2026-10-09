@@ -81,6 +81,8 @@ interface Day {
   date: string;
   stats: { teams: number; people: number; stops: number; awaitingConfirm: number };
   lanes: Lane[];
+  /** ทีมที่คนนี้จัดแผนได้ · null = ทุกทีม (แอดมิน) */
+  plannableTeams?: string[] | null;
 }
 
 interface Pending {
@@ -427,7 +429,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
         initialTeam={editing?.team ?? ""}
         lane={editing?.lane ?? null}
         date={date}
-        teams={teams}
+        teams={day?.plannableTeams ? teams.filter((t) => day.plannableTeams!.includes(t)) : teams}
         technicians={technicians}
         vehicles={vehicles}
         busyDays={busyDays}

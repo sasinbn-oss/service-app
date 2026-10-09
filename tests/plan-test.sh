@@ -72,6 +72,13 @@ R=$(curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: appli
 R=$(curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $S)")
 echo "$R" | J "const l=d.lanes.find(x=>x.team==='$TEAM'); l&&l.stops.some(s=>s.id===$ID&&s.time==='13:30')&&l.plan.members.length===1?'ok':'bad'" | grep -q ok \
   && pass "บอร์ดโชว์ใบงานในทีม พร้อมเวลา และคนที่ไป" || fail "บอร์ดไม่ตรง: $(echo $R|head -c 200)"
+# ฟอร์มจัดแผนของหัวหน้าภาคต้องมีแต่ทีมของตัวเอง — ทีมอื่นบันทึกไม่ได้อยู่แล้ว ให้เลือกได้คือหลอกให้เสียเวลา
+MINE=$(DB "select string_agg(distinct z,',' order by z) from (select zone z from \"Branch\" where region='$REGION' and \"cancelledAt\" is null and zone is not null union select \"pmTeam\" from \"Branch\" where region='$REGION' and \"cancelledAt\" is null and \"pmTeam\" is not null) t")
+GOT=$(echo "$R" | J '[...d.plannableTeams].sort().join(",")')
+[ "$(echo "$MINE" | tr ',' '\n' | sort | paste -sd,)" = "$GOT" ] && ! echo "$GOT" | tr ',' '\n' | grep -qx "$(DB "select zone from \"Branch\" where coalesce(region,'')<>'$REGION' and zone is not null and zone not in (select zone from \"Branch\" where region='$REGION' and zone is not null) limit 1")" \
+  && pass "ทีมให้เลือกในฟอร์มจัดแผน = ทีมในภาคของหัวหน้าภาคเท่านั้น ($GOT)" || fail "ทีมในฟอร์ม '$GOT' ≠ ทีมในภาค '$MINE'"
+curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $A)" | J 'd.plannableTeams===null?"ok":"bad"' | grep -q ok \
+  && pass "แอดมินเลือกได้ทุกทีม (plannableTeams = null)" || fail "แอดมินถูกจำกัดทีม"
 curl -s "localhost:4000/api/plans/month?month=2026-11" -H "$(H $A)" | J 'd.days["2026-11-04"]>=1?"ok":"bad"' | grep -q ok \
   && pass "ปฏิทินเดือนนับวันที่มีแผน" || fail "ปฏิทินไม่มีจุด"
 # เวลาเข้าหน้างานของทีม

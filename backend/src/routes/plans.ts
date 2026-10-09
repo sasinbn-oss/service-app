@@ -212,6 +212,9 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       awaitingConfirm: orders.filter((o) => o.status === "AWAITING_CONFIRM").length,
     },
     lanes: rows,
+    // ทีมที่จัดแผนได้ (null = ทุกทีม) — ฟอร์มจัดแผนแสดงเฉพาะทีมพวกนี้ ไม่งั้นหัวหน้าภาคเลือกทีมคนอื่นได้
+    // แล้วไปโดนปฏิเสธตอนกดบันทึก หลังจากเลือกคน รถ เวลาครบแล้ว
+    plannableTeams: scope.teams ? [...scope.teams].sort((a, b) => a.localeCompare(b, "th")) : null,
   });
 });
 
