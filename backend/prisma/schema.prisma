@@ -882,6 +882,21 @@ model BranchTeamMove {
   @@unique([branchId, field])
 }
 
+// ทีมรวม — พื้นที่รับผิดชอบที่ครอบคลุมหลายทีมช่าง (เช่น "Senior บางน้ำจืด หลักสี่ ลาดพร้าว",
+// "ทีมเสริม กทม. + IT กทม.") ตามบันทึกแบ่งทีม
+//
+// ทีมช่างผูกกับสาขา (Branch.zone) ส่วนคนกลุ่มนี้ไม่ได้ดูแลสาขาชุดใดชุดหนึ่ง ถ้าใส่ชื่อนี้เป็นทีมเฉย ๆ
+// จะไม่มีใบงานไหนผูกกับชื่อนี้เลย — ช่างที่สังกัดทีมรวม (User.team = name) เห็นใบงานของทุกทีมใน covers
+// ใบงานยังจ่ายให้ทีมช่างจริงเสมอ ไม่จ่ายให้ทีมรวม
+model TeamGroup {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  covers    String[] @default([])
+  // true = ครอบคลุมทุกทีม (งานตรวจคุณภาพ/PM ที่ไปได้ทุกที่) — ไม่ต้องไล่เพิ่มทีมใหม่ทีหลัง
+  allTeams  Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
 model TeamRename {
   id          Int      @id @default(autoincrement())
   fromName    String   @unique

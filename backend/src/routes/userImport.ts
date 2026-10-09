@@ -15,6 +15,7 @@ import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_ROLES } from "../utils/constants";
 import { displayName, parseRoster, readRows, suggestTeam } from "../users/rosterImport";
 import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
+import { teamGroups } from "../utils/teamGroups";
 import { staleUsers } from "../utils/userGate";
 
 const router = Router();
@@ -30,7 +31,9 @@ async function knownTeams() {
     prisma.branch.findMany({ where: { zone: { not: null }, cancelledAt: null }, select: { zone: true }, distinct: ["zone"] }),
     prisma.branch.findMany({ where: { pmTeam: { not: null }, cancelledAt: null }, select: { pmTeam: true }, distinct: ["pmTeam"] }),
   ]);
-  return [...new Set([...cm.map((r) => r.zone!), ...pm.map((r) => r.pmTeam!)])].sort((a, b) => a.localeCompare(b, "th"));
+  // ทีมรวมเลือกได้เหมือนทีมช่าง — ชื่อตรงกับพื้นที่ในบันทึก ("Senior บางน้ำจืด หลักสี่ ลาดพร้าว") จับคู่ได้เอง
+  const groups = [...(await teamGroups()).keys()];
+  return [...new Set([...cm.map((r) => r.zone!), ...pm.map((r) => r.pmTeam!), ...groups])].sort((a, b) => a.localeCompare(b, "th"));
 }
 
 router.post("/preview", requireAuth, requireAdmin, upload.single("file"), async (req: AuthRequest, res) => {
@@ -178,7 +181,9 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
                   role: p.role,
                   // ไม่มีคู่ทีม = คงทีมเดิมไว้ ดีกว่าล้างทิ้งจนช่างมองไม่เห็นงานของทีม
                   team: p.role === "EMPLOYEE" ? team ?? u.team : null,
-                  supervisedTeams: p.role === "SUPERVISOR" ? (supTeams.length ? supTeams : u.supervisedTeams) : [],
+                  // รวมกับทีมเดิม ไม่แทนที่ — ไฟล์ที่มีช่างแค่บางคนของหัวหน้าภาค (เพิ่มคนใหม่ทีละชุด)
+                  // เคยทำให้ทีมอื่นที่เขาดูแลหายไปเงียบ ๆ แล้วมองไม่เห็นงานของทีมเหล่านั้น · เอาทีมออกทำที่การ์ด
+                  supervisedTeams: p.role === "SUPERVISOR" ? [...new Set([...u.supervisedTeams, ...supTeams])] : [],
                   ...(p.role !== "SUPERVISOR" ? { region: null } : {}),
                 }),
           },

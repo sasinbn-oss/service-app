@@ -83,6 +83,8 @@ interface Day {
   lanes: Lane[];
   /** ทีมที่คนนี้จัดแผนได้ · null = ทุกทีม (แอดมิน) */
   plannableTeams?: string[] | null;
+  /** ทีมรวม — ไม่อยู่ในรายชื่อทีมจากทะเบียนสาขา ต้องเติมเอง */
+  groupTeams?: string[];
 }
 
 interface Pending {
@@ -429,7 +431,10 @@ export default function PlanBoardScreen({ navigation }: Props) {
         initialTeam={editing?.team ?? ""}
         lane={editing?.lane ?? null}
         date={date}
-        teams={day?.plannableTeams ? teams.filter((t) => day.plannableTeams!.includes(t)) : teams}
+        teams={(() => {
+          const all = [...teams, ...(day?.groupTeams ?? []).filter((g) => !teams.includes(g))];
+          return day?.plannableTeams ? all.filter((t) => day.plannableTeams!.includes(t)) : all;
+        })()}
         technicians={technicians}
         vehicles={vehicles}
         busyDays={busyDays}

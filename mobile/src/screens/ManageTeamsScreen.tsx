@@ -37,8 +37,17 @@ interface Move {
   to: string;
   at: string;
 }
+interface Group {
+  id: number;
+  name: string;
+  covers: string[];
+  allTeams: boolean;
+  technicians: number;
+  supervisors: number;
+}
 interface Data {
   teams: Team[];
+  groups?: Group[];
   renames: { from: string; to: string; at: string }[];
   moves: Move[];
 }
@@ -60,6 +69,7 @@ export default function ManageTeamsScreen() {
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<Team | null>(null);
   const [moving, setMoving] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -161,6 +171,35 @@ export default function ManageTeamsScreen() {
         ))}
       </View>
 
+      <View style={[styles.row, { marginTop: spacing.md }]}>
+        <Text style={styles.section}>ทีมรวม</Text>
+        <Text style={[styles.muted, { flex: 1, minWidth: 200 }]}>
+          พื้นที่ที่ครอบคลุมหลายทีม (Senior · ทีมเสริม · QC) — ช่างที่สังกัดทีมรวมเห็นใบงานของทุกทีมที่ครอบคลุม
+        </Text>
+        <TouchableOpacity style={styles.linkBtn} onPress={() => setEditingGroup("new")} accessibilityLabel="เพิ่มทีมรวม">
+          <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+          <Text style={styles.linkText}>เพิ่มทีมรวม</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.grid}>
+        {(data.groups ?? []).map((g) => (
+          <View key={g.id} style={[styles.card, styles.groupCard]}>
+            <View style={styles.row}>
+              <Ionicons name="git-network-outline" size={16} color={colors.primary} />
+              <Text style={[styles.teamName, { flex: 1 }]}>{g.name}</Text>
+              <TouchableOpacity style={styles.linkBtn} onPress={() => setEditingGroup(g)} accessibilityLabel={`แก้ไขทีมรวม ${g.name}`}>
+                <Ionicons name="create-outline" size={14} color={colors.primary} />
+                <Text style={styles.linkText}>แก้ไข</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.muted}>เห็นงานของ: {g.allTeams ? "ทุกทีม" : g.covers.join(" · ") || "—"}</Text>
+            <Text style={styles.muted}>
+              ช่าง {g.technicians} คน · หัวหน้าภาคดูแล {g.supervisors} คน
+            </Text>
+          </View>
+        ))}
+      </View>
+
       {data.moves?.length ? <MovedList moves={data.moves} onChanged={load} /> : null}
 
       {data.renames.length ? (
@@ -180,6 +219,18 @@ export default function ManageTeamsScreen() {
           onClose={() => setMoving(false)}
           onDone={() => {
             setMoving(false);
+            load();
+          }}
+        />
+      ) : null}
+
+      {editingGroup ? (
+        <GroupModal
+          group={editingGroup === "new" ? null : editingGroup}
+          teams={data.teams.filter((t) => !t.orphan).map((t) => t.name)}
+          onClose={() => setEditingGroup(null)}
+          onDone={() => {
+            setEditingGroup(null);
             load();
           }}
         />
@@ -478,6 +529,128 @@ function MoveModal({ names, onClose, onDone }: { names: string[]; onClose: () =>
   );
 }
 
+function GroupModal({
+  group,
+  teams,
+  onClose,
+  onDone,
+}: {
+  group: Group | null;
+  teams: string[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(group?.name ?? "");
+  const [all, setAll] = useState(group?.allTeams ?? false);
+  const [picked, setPicked] = useState<string[]>(group?.covers ?? []);
+  const [busy, setBusy] = useState(false);
+  const clean = name.trim().replace(/\s+/g, " ");
+  // ทีมที่ทีมรวมครอบคลุมแต่ไม่มีในทะเบียนแล้ว (เปลี่ยนชื่อ/ลบในไฟล์) ยังแสดงให้เอาออกได้
+  const options = [...new Set([...teams, ...picked])];
+  const ready = clean.length > 0 && (all || picked.length > 0);
+
+  function toggle(t: string) {
+    setPicked((v) => (v.includes(t) ? v.filter((x) => x !== t) : [...v, t]));
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      const body = { name: clean, covers: picked, allTeams: all };
+      if (group) await api.put(`/teams/groups/${group.id}`, body, { loadingText: "กำลังบันทึก..." });
+      else await api.post("/teams/groups", body, { loadingText: "กำลังบันทึก..." });
+      onDone();
+    } catch (e) {
+      showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function remove() {
+    if (!group) return;
+    showAlert(`ลบทีมรวม ${group.name}?`, "ลบได้เมื่อไม่มีช่างหรือหัวหน้าภาคผูกอยู่แล้วเท่านั้น", [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: "ลบ",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await api.delete(`/teams/groups/${group.id}`);
+            onDone();
+          } catch (e) {
+            showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
+          }
+        },
+      },
+    ]);
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={busy}
+      title={group ? `แก้ไขทีมรวม` : "เพิ่มทีมรวม"}
+      footer={
+        <View style={styles.actions}>
+          {group ? (
+            <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={remove} disabled={busy}>
+              <Text style={[styles.btnGhostText, { color: colors.danger }]}>ลบทีมรวม</Text>
+            </TouchableOpacity>
+          ) : null}
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={onClose} disabled={busy}>
+            <Text style={styles.btnGhostText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, !ready && { opacity: 0.5 }]}
+            onPress={save}
+            disabled={!ready || busy}
+            accessibilityLabel="บันทึกทีมรวม"
+          >
+            <Text style={styles.btnText}>บันทึก</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.label}>ชื่อทีมรวม (ใช้ชื่อตามบันทึกแบ่งทีม)</Text>
+      <TextInput
+        style={styles.input}
+        value={name}
+        onChangeText={setName}
+        placeholder="เช่น Senior บางน้ำจืด หลักสี่ ลาดพร้าว"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อทีมรวม"
+      />
+      {group && clean !== group.name ? (
+        <Text style={styles.muted}>เปลี่ยนชื่อแล้ว ช่าง หัวหน้าภาค และแผนที่ผูกกับชื่อเดิมย้ายตามให้</Text>
+      ) : null}
+      <Text style={styles.label}>เห็นใบงานของทีมไหน</Text>
+      <TouchableOpacity
+        style={[styles.chip, all && styles.chipOn, { alignSelf: "flex-start" }]}
+        onPress={() => setAll((v) => !v)}
+        accessibilityLabel="ครอบคลุมทุกทีม"
+      >
+        <Text style={[styles.chipText, all && { color: "#fff" }]}>{all ? "✓ " : ""}ทุกทีม (งานตรวจคุณภาพ / PM ที่ไปได้ทุกที่)</Text>
+      </TouchableOpacity>
+      {!all ? (
+        <View style={styles.row}>
+          {options.map((t) => {
+            const on = picked.includes(t);
+            return (
+              <TouchableOpacity key={t} style={[styles.chip, on && styles.chipOn]} onPress={() => toggle(t)} accessibilityLabel={`ครอบคลุม ${t}`}>
+                <Text style={[styles.chipText, on && { color: "#fff" }]}>{t}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
+      <Text style={styles.muted}>ใบงานยังจ่ายให้ทีมช่างตามสาขาเหมือนเดิม — ทีมรวมแค่ทำให้ช่างกลุ่มนี้เห็นและทำงานของทีมเหล่านั้นได้</Text>
+    </AppModal>
+  );
+}
+
 function RenameModal({
   team,
   names,
@@ -637,4 +810,5 @@ const styles = StyleSheet.create({
   infoBox: { flexDirection: "row", gap: 8, backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: 10 },
   infoText: { flex: 1, fontSize: 13, lineHeight: 20, color: colors.primaryInk },
   moveRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  groupCard: { borderStyle: "dashed", borderColor: colors.primary },
 });

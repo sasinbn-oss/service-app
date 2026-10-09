@@ -12,6 +12,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { teamGroups } from "../utils/teamGroups";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import {
   APPOINTMENT_STATUS_LABELS,
@@ -215,6 +216,8 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
     // ทีมที่จัดแผนได้ (null = ทุกทีม) — ฟอร์มจัดแผนแสดงเฉพาะทีมพวกนี้ ไม่งั้นหัวหน้าภาคเลือกทีมคนอื่นได้
     // แล้วไปโดนปฏิเสธตอนกดบันทึก หลังจากเลือกคน รถ เวลาครบแล้ว
     plannableTeams: scope.teams ? [...scope.teams].sort((a, b) => a.localeCompare(b, "th")) : null,
+    // ทีมรวมไม่อยู่ในรายชื่อทีมจากทะเบียนสาขา — ส่งชื่อให้ฟอร์มจัดแผนเพิ่มเข้าไปเอง
+    groupTeams: [...(await teamGroups()).keys()],
   });
 });
 
@@ -322,10 +325,13 @@ router.put("/", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
   if (scope.teams && !scope.teams.has(team)) {
     return res.status(403).json({ error: `${team} ไม่ได้ดูแลสาขาในภาคของคุณ` });
   }
-  const known = await prisma.branch.findFirst({
-    where: { cancelledAt: null, OR: [{ zone: team }, { pmTeam: team }] },
-    select: { id: true },
-  });
+  // ทีมรวมจัดแผนได้เหมือนทีมช่าง (คนในทีมออกงานด้วยกัน) แม้ไม่มีสาขาของตัวเอง
+  const known =
+    (await teamGroups()).has(team) ||
+    (await prisma.branch.findFirst({
+      where: { cancelledAt: null, OR: [{ zone: team }, { pmTeam: team }] },
+      select: { id: true },
+    }));
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
   if (memberIds.length > 0) {
     const found = await prisma.user.count({ where: { id: { in: memberIds }, deletedAt: null } });

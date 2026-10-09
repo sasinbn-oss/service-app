@@ -77,6 +77,17 @@ function searchText(u: ManagedUser) {
  * ยังไม่มีพื้นที่รับผิดชอบ? — กฎเดียวกับ backend/src/utils/coverage.ts (แก้ที่หนึ่งต้องแก้อีกที่)
  * ชื่อทีม/ภาคที่ไม่มีในทะเบียนสาขานับด้วย เพราะไม่มีใบงานผูกกับชื่อนั้น ผลเท่ากับไม่มีทีม
  */
+interface Group {
+  id: number;
+  name: string;
+  covers: string[];
+  allTeams: boolean;
+}
+
+function groupScope(g: Group) {
+  return g.allTeams ? "ทุกทีม" : g.covers.join(" · ");
+}
+
 function coverageGap(u: ManagedUser, teams: Set<string>, regions: Set<string>): string | null {
   if (u.role === "EMPLOYEE") {
     if (!u.team) return "ยังไม่ได้จัดทีม";
@@ -96,6 +107,7 @@ export default function ManageUsersScreen() {
   const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
   const [regions, setRegions] = useCachedState<string[]>("ManageUsers:regions", []);
   const [teams, setTeams] = useCachedState<string[]>("ManageUsers:teams", []);
+  const [groups, setGroups] = useCachedState<Group[]>("ManageUsers:groups", []);
   const [loading, setLoading] = useState(!cached);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,14 +122,15 @@ export default function ManageUsersScreen() {
   const gaps = useMemo(() => {
     const m = new Map<number, string>();
     if (!teams.length) return m;
-    const ts = new Set(teams);
+    // ทีมรวมนับเป็นทีมที่มีจริง — ช่างในทีมรวมเห็นงานของทีมที่ครอบคลุม
+    const ts = new Set([...teams, ...groups.map((g) => g.name)]);
     const rs = new Set(regions);
     for (const u of users) {
       const g = coverageGap(u, ts, rs);
       if (g) m.set(u.id, g);
     }
     return m;
-  }, [users, teams, regions]);
+  }, [users, teams, regions, groups]);
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const base = gapsOnly ? users.filter((u) => gaps.has(u.id)) : users;
@@ -142,11 +155,13 @@ export default function ManageUsersScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [list, regionList, teamList] = await Promise.all([
+      const [list, regionList, teamList, groupList] = await Promise.all([
         api.get<ManagedUser[]>("/auth/users"),
         api.get<{ name: string }[]>("/branches/regions"),
         api.get<{ name: string }[]>("/branches/teams"),
+        api.get<Group[]>("/teams/groups"),
       ]);
+      setGroups(groupList.data);
       setUsers(list.data);
       // ภาคมาจากทะเบียนสาขาทั้งหมด ไม่ใช่เฉพาะภาคที่มีเคสค้าง — ภาคที่ทุกอย่างปกติ
       // ก็ยังต้องมีหัวหน้าภาคดูแล
@@ -369,6 +384,30 @@ export default function ManageUsersScreen() {
                   ))}
                 </View>
               )}
+              {groups.length ? (
+                <>
+                  <Text style={styles.subLabel}>หรือทีมรวม — พื้นที่ที่ครอบคลุมหลายทีม (ตามบันทึกแบ่งทีม)</Text>
+                  <View style={styles.options}>
+                    {groups.map((g) => (
+                      <TouchableOpacity
+                        key={g.name}
+                        style={[styles.option, styles.groupOption, u.team === g.name && styles.optionOn]}
+                        onPress={() => update(u.id, { team: u.team === g.name ? null : g.name })}
+                        disabled={savingId !== null}
+                        activeOpacity={0.7}
+                        accessibilityLabel={`ทีมรวม ${g.name}`}
+                      >
+                        <Text style={[styles.optionText, u.team === g.name && styles.optionTextOn]}>
+                          {g.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {groups.find((g) => g.name === u.team) ? (
+                    <Text style={styles.hint}>เห็นใบงานของ {groupScope(groups.find((g) => g.name === u.team)!)}</Text>
+                  ) : null}
+                </>
+              ) : null}
               {!u.team ? (
                 <View style={styles.warn}>
                   <Ionicons name="alert-circle" size={14} color={colors.danger} />
@@ -439,6 +478,35 @@ export default function ManageUsersScreen() {
                   })}
                 </View>
               )}
+              {groups.length ? (
+                <>
+                  <Text style={styles.subLabel}>ทีมรวมที่ดูแล — จัดแผนให้ช่างในทีมรวมได้</Text>
+                  <View style={styles.options}>
+                    {groups.map((g) => {
+                      const on = (u.supervisedTeams ?? []).includes(g.name);
+                      return (
+                        <TouchableOpacity
+                          key={g.name}
+                          style={[styles.option, styles.groupOption, on && styles.optionOn]}
+                          onPress={() =>
+                            update(u.id, {
+                              supervisedTeams: on
+                                ? u.supervisedTeams.filter((t) => t !== g.name)
+                                : [...(u.supervisedTeams ?? []), g.name],
+                            })
+                          }
+                          disabled={savingId !== null}
+                          activeOpacity={0.7}
+                          accessibilityLabel={`ทีมรวมที่ดูแล ${g.name}`}
+                          accessibilityState={{ selected: on }}
+                        >
+                          <Text style={[styles.optionText, on && styles.optionTextOn]}>{g.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : null}
               {!u.region && !(u.supervisedTeams ?? []).length ? (
                 <View style={styles.warn}>
                   <Ionicons name="alert-circle" size={14} color={colors.danger} />
@@ -908,6 +976,8 @@ function ResetPasswordModal({
 }
 
 const styles = StyleSheet.create({
+  subLabel: { fontSize: 12.5, fontWeight: "600", color: colors.textMuted, marginTop: 4 },
+  groupOption: { borderStyle: "dashed" },
   gapBox: {
     flexDirection: "row",
     alignItems: "center",

@@ -15,6 +15,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES } from "../utils/constants";
+import { forgetTeamGroups } from "../utils/teamGroups";
 
 const router = Router();
 
@@ -39,6 +40,7 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
     prisma.workOrder.groupBy({ by: ["assignedTeam"], where: { assignedTeam: { not: null }, status: { in: active } }, _count: true }),
     prisma.teamRename.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
   ]);
+  const groupRows = await prisma.teamGroup.findMany({ orderBy: { name: "asc" } });
   const moves = await prisma.branchTeamMove.findMany({
     orderBy: { createdAt: "desc" },
     take: 300,
@@ -59,10 +61,20 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   for (const s of sups) for (const t of new Set(s.supervisedTeams)) row(t).supervisors++;
   for (const o of orders) row(o.assignedTeam!).openOrders = o._count;
   for (const r of rows.values()) r.orphan = r.cmBranches === 0 && r.pmBranches === 0;
+  // ชื่อทีมรวมมีช่าง/หัวหน้าภาคผูกอยู่แต่ไม่มีสาขาโดยตั้งใจ — แสดงแยกในส่วนทีมรวม ไม่ใช่ "ไม่มีในทะเบียนสาขา"
+  const groupNames = new Set((await prisma.teamGroup.findMany({ select: { name: true } })).map((g) => g.name));
 
   res.json({
-    teams: [...rows.values()].sort((a, b) => Number(a.orphan) - Number(b.orphan) || a.name.localeCompare(b.name, "th")),
+    teams: [...rows.values()].filter((r) => !groupNames.has(r.name)).sort((a, b) => Number(a.orphan) - Number(b.orphan) || a.name.localeCompare(b.name, "th")),
     renames: renames.map((r) => ({ from: r.fromName, to: r.toName, at: r.createdAt })),
+    groups: groupRows.map((g) => ({
+      id: g.id,
+      name: g.name,
+      covers: g.covers,
+      allTeams: g.allTeams,
+      technicians: rows.get(g.name)?.technicians ?? 0,
+      supervisors: rows.get(g.name)?.supervisors ?? 0,
+    })),
     moves: moves.map((m) => ({
       id: m.id,
       code: m.branch.code,
@@ -149,6 +161,10 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
 
       // จำชื่อเดิมไว้ให้ตัวนำเข้าไฟล์ · ชื่อที่เคยชี้มาที่ชื่อเดิมก็ชี้ต่อไปที่ชื่อใหม่
       // · ถ้าเปลี่ยนกลับเป็นชื่อที่เคยถูกเปลี่ยนไป ลบรายการนั้นทิ้ง ไม่งั้นแปลงวนกันเอง
+      // ทีมรวมที่ครอบคลุมทีมนี้ต้องตามชื่อใหม่ ไม่งั้นช่างในทีมรวมมองไม่เห็นงานของทีมนี้ทันที
+      await tx.$executeRaw`
+        UPDATE "TeamGroup" SET "covers" = ARRAY(SELECT DISTINCT unnest(array_replace("covers", ${from}, ${to})))
+        WHERE ${from} = ANY("covers")`;
       // สาขาที่ย้ายทีมในแอปต้องตามชื่อใหม่ด้วย ไม่งั้นตัวนำเข้าไฟล์จะบังคับชื่อเดิมกลับลงสาขา
       await tx.branchTeamMove.updateMany({ where: { toTeam: from }, data: { toTeam: to } });
       await tx.branchTeamMove.updateMany({ where: { fromTeam: from }, data: { fromTeam: to } });
@@ -169,6 +185,7 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
     },
     { timeout: 30_000, maxWait: 15_000 }
   );
+  forgetTeamGroups();
   res.json({ ok: true, from, to, merged: merging, ...result });
 });
 
@@ -264,6 +281,82 @@ router.post("/moves/:id/revert", requireAuth, requireAdmin, async (req, res) => 
     { timeout: 30_000, maxWait: 15_000 }
   );
   res.json({ ok: true, team: move.fromTeam });
+});
+
+/** ทีมรวมทั้งหมด — ตัวเลือกในการ์ดช่าง/หัวหน้าภาค (หน้าสิทธิ์ผู้ใช้) */
+router.get("/groups", requireAuth, requireAdmin, async (_req, res) => {
+  const groups = await prisma.teamGroup.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, covers: true, allTeams: true } });
+  res.json(groups);
+});
+
+const groupSchema = z.object({
+  name: z.string().trim().min(1, "ต้องใส่ชื่อทีมรวม").max(120),
+  covers: z.array(z.string().trim().min(1).max(120)).max(200).default([]),
+  allTeams: z.boolean().default(false),
+});
+
+/** ทีมรวมต้องครอบคลุมอะไรสักอย่าง และชื่อห้ามซ้ำทีมช่างของสาขา (ใบงานจ่ายให้ชื่อนั้นอยู่ จะแยกไม่ออก) */
+async function checkGroup(name: string, covers: string[], allTeams: boolean, selfId?: number) {
+  if (!allTeams && covers.length === 0) return "เลือกทีมที่ครอบคลุมอย่างน้อยหนึ่งทีม หรือเลือกทุกทีม";
+  const clash = await prisma.branch.findFirst({ where: { cancelledAt: null, OR: [{ zone: name }, { pmTeam: name }] }, select: { id: true } });
+  if (clash) return `"${name}" เป็นชื่อทีมช่างของสาขาอยู่แล้ว — ตั้งชื่อทีมรวมให้ต่างกัน`;
+  const same = await prisma.teamGroup.findUnique({ where: { name } });
+  if (same && same.id !== selfId) return `มีทีมรวม "${name}" อยู่แล้ว`;
+  return null;
+}
+
+router.post("/groups", requireAuth, requireAdmin, async (req, res) => {
+  const parsed = groupSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const name = parsed.data.name.replace(/\s+/g, " ");
+  const covers = [...new Set(parsed.data.covers)];
+  const err = await checkGroup(name, covers, parsed.data.allTeams);
+  if (err) return res.status(400).json({ error: err });
+  const g = await prisma.teamGroup.create({ data: { name, covers: parsed.data.allTeams ? [] : covers, allTeams: parsed.data.allTeams } });
+  forgetTeamGroups();
+  res.status(201).json(g);
+});
+
+router.put("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const parsed = groupSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const old = Number.isInteger(id) ? await prisma.teamGroup.findUnique({ where: { id } }) : null;
+  if (!old) return res.status(404).json({ error: "ไม่พบทีมรวมนี้" });
+  const name = parsed.data.name.replace(/\s+/g, " ");
+  const covers = [...new Set(parsed.data.covers)];
+  const err = await checkGroup(name, covers, parsed.data.allTeams, id);
+  if (err) return res.status(400).json({ error: err });
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.teamGroup.update({ where: { id }, data: { name, covers: parsed.data.allTeams ? [] : covers, allTeams: parsed.data.allTeams } });
+      if (name !== old.name) {
+        // เปลี่ยนชื่อทีมรวม = ช่าง หัวหน้าภาค และแผนที่ผูกกับชื่อเดิมย้ายตามทั้งหมด
+        await tx.user.updateMany({ where: { team: old.name }, data: { team: name } });
+        await tx.$executeRaw`
+          UPDATE "User" SET "supervisedTeams" = ARRAY(SELECT DISTINCT unnest(array_replace("supervisedTeams", ${old.name}, ${name})))
+          WHERE ${old.name} = ANY("supervisedTeams")`;
+        await tx.teamDayPlan.updateMany({ where: { team: old.name }, data: { team: name } });
+      }
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  forgetTeamGroups();
+  res.json({ ok: true });
+});
+
+router.delete("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const g = Number.isInteger(id) ? await prisma.teamGroup.findUnique({ where: { id } }) : null;
+  if (!g) return res.status(404).json({ error: "ไม่พบทีมรวมนี้" });
+  const used = await prisma.user.count({
+    where: { deletedAt: null, OR: [{ team: g.name }, { supervisedTeams: { has: g.name } }] },
+  });
+  // ลบทั้งที่มีคนสังกัด = คนเหล่านั้นมองไม่เห็นงานทันทีโดยไม่มีใครรู้ตัว
+  if (used) return res.status(409).json({ error: `ยังมี ${used} คนผูกกับทีมรวมนี้ — ย้ายคนออกก่อน` });
+  await prisma.teamGroup.delete({ where: { id } });
+  forgetTeamGroups();
+  res.json({ ok: true });
 });
 
 export default router;
