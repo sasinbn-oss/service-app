@@ -14,6 +14,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { coversWorkOrder, OUT_OF_SCOPE, supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { Coverage, coverageOf, covers } from "../utils/teamGroups";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { WAREHOUSES } from "../documents/warehouses";
 import {
@@ -489,9 +490,12 @@ function partShape(p: {
  * ช่างที่ยังไม่ได้จัดทีมจะเหลือแค่เงื่อนไขหลัง ซึ่งเป็นพฤติกรรมเดิมพอดี
  * แอดมินจึงทยอยจัดทีมให้ทีละคนได้โดยไม่มีใครมองไม่เห็นงานตัวเองระหว่างทาง
  */
-function teamScope(team: string | null, userId: number) {
-  const mine = [{ assignedToId: userId }];
-  return { OR: team ? [...mine, { assignedTeam: team }] : mine };
+async function teamScope(team: string | null, userId: number): Promise<Prisma.WorkOrderWhereInput> {
+  const mine: Prisma.WorkOrderWhereInput[] = [{ assignedToId: userId }];
+  // ทีมรวม (utils/teamGroups.ts) = เห็นงานของทุกทีมที่ครอบคลุม
+  const c = await coverageOf(team);
+  if (!c) return { OR: mine };
+  return { OR: [...mine, c.all ? { assignedTeam: { not: null } } : { assignedTeam: { in: c.teams } }] };
 }
 
 /**
@@ -512,7 +516,7 @@ async function blockedForTeam(
     where: { id: req.auth!.userId },
     select: { team: true },
   });
-  if (canTouch(wo, { team: me?.team ?? null, id: req.auth!.userId })) return false;
+  if (canTouch(wo, { coverage: await coverageOf(me?.team ?? null), id: req.auth!.userId })) return false;
   res.status(403).json({
     error: wo.assignedTeam
       ? `ใบงานนี้จ่ายให้ ${wo.assignedTeam} ไม่ใช่ทีมของคุณ`
@@ -521,13 +525,13 @@ async function blockedForTeam(
   return true;
 }
 
-/** ช่างคนนี้แตะใบงานนี้ได้ไหม — อยู่ทีมเดียวกัน หรือเป็นงานเก่าที่จ่ายให้ตัวเอง */
+/** ช่างคนนี้แตะใบงานนี้ได้ไหม — ทีมของตัวเอง (หรือทีมที่ทีมรวมครอบคลุม) หรืองานเก่าที่จ่ายให้ตัวเอง */
 function canTouch(
   wo: { assignedTeam: string | null; assignedToId: number | null },
-  me: { team: string | null; id: number }
+  me: { coverage: Coverage | null; id: number }
 ) {
   if (wo.assignedToId !== null && wo.assignedToId === me.id) return true;
-  return wo.assignedTeam !== null && me.team !== null && wo.assignedTeam === me.team;
+  return covers(me.coverage, wo.assignedTeam);
 }
 
 /**
@@ -645,7 +649,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
           // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
           // จ่ายเป็นทีม ต้องไม่หายไปจากรายการของคนที่กำลังทำอยู่
           // ช่างที่ยังไม่ได้จัดทีมจึงยังเห็นงานเดิมของตัวเองตามปกติ
-          teamScope(me?.team ?? null, req.auth!.userId);
+          await teamScope(me?.team ?? null, req.auth!.userId);
 
   const rows = await prisma.workOrder.findMany({
     where: {
@@ -712,7 +716,7 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
       ? {}
       : req.auth!.role === "SUPERVISOR"
         ? workOrderInScope(await supervisorScope(req.auth!.userId))
-        : teamScope(me?.team ?? null, req.auth!.userId);
+        : await teamScope(me?.team ?? null, req.auth!.userId);
 
   const inbox = await prisma.workOrder.count({
     where: { AND: [scope], status: { in: stagesWaitingOn(req.auth!.role) } },

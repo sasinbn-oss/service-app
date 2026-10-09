@@ -7,6 +7,7 @@ import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
 import { forgetUser, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
+import { coverageOf, teamGroups } from "../utils/teamGroups";
 import { documentPath, saveDocument } from "../documents/store";
 import ExcelJS from "exceljs";
 import { deleteObject } from "../storage/fileStore";
@@ -104,6 +105,8 @@ router.post("/login", async (req, res) => {
       // ทีมต้องติดมาตั้งแต่ตอนล็อกอิน ไม่ใช่รอให้หน้าจอไปถาม /auth/me อีกรอบ —
       // ระหว่างนั้นช่างจะมองไม่เห็นปุ่มของงานตัวเอง เพราะระบบยังไม่รู้ว่าอยู่ทีมไหน
       team: user.team,
+      // ทีมรวม — แอปใช้ตัดสินว่าใบงานของทีมไหนเป็นงานของช่างคนนี้ (ปุ่มของขั้นตอน)
+      teamCoverage: await coverageOf(user.team),
       supervisedTeams: user.supervisedTeams,
       mustChangePassword: user.mustChangePassword,
     },
@@ -121,6 +124,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
     role: user.role,
     region: user.region,
     team: user.team,
+    teamCoverage: await coverageOf(user.team),
     supervisedTeams: user.supervisedTeams,
     mustChangePassword: user.mustChangePassword,
   });
@@ -168,7 +172,8 @@ router.get("/users/unassigned-report", requireAuth, requireAdmin, async (req: Au
     prisma.branch.findMany({ where: { pmTeam: { not: null }, cancelledAt: null }, select: { pmTeam: true }, distinct: ["pmTeam"] }),
     prisma.branch.findMany({ where: { region: { not: null }, cancelledAt: null }, select: { region: true }, distinct: ["region"] }),
   ]);
-  const teams = new Set([...zones.map((z) => z.zone!), ...pm.map((p) => p.pmTeam!)]);
+  // ทีมรวมนับเป็นทีมที่มีอยู่จริง — ช่างในทีมรวมเห็นงานของทีมที่ครอบคลุม
+  const teams = new Set([...zones.map((z) => z.zone!), ...pm.map((p) => p.pmTeam!), ...(await teamGroups()).keys()]);
   const regions = new Set(regionRows.map((r) => r.region!));
   const rows = users
     .map((u) => ({ u, gap: coverageGap(u, teams, regions) }))

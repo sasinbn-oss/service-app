@@ -37,8 +37,17 @@ interface Move {
   to: string;
   at: string;
 }
+interface Group {
+  id: number;
+  name: string;
+  covers: string[];
+  allTeams: boolean;
+  technicians: number;
+  supervisors: number;
+}
 interface Data {
   teams: Team[];
+  groups?: Group[];
   renames: { from: string; to: string; at: string }[];
   moves: Move[];
 }
@@ -60,6 +69,9 @@ export default function ManageTeamsScreen() {
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<Team | null>(null);
   const [moving, setMoving] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<Team | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -98,6 +110,12 @@ export default function ManageTeamsScreen() {
           <Text style={styles.pillText}>{data.teams.length - orphans} ทีม</Text>
         </View>
         <View style={{ flex: 1 }} />
+        <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={() => setAdding(true)} accessibilityLabel="เพิ่มทีม">
+          <View style={styles.row}>
+            <Ionicons name="add" size={16} color={colors.navy} />
+            <Text style={styles.btnGhostText}>เพิ่มทีม</Text>
+          </View>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.btn} onPress={() => setMoving(true)} accessibilityLabel="ย้ายสาขาเข้าทีม">
           <View style={styles.row}>
             <Ionicons name="swap-horizontal" size={16} color="#fff" />
@@ -152,10 +170,47 @@ export default function ManageTeamsScreen() {
                 <Ionicons name="create-outline" size={14} color={colors.primary} />
                 <Text style={styles.linkText}>เปลี่ยนชื่อ</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.linkBtn}
+                onPress={() => setDeleting(t)}
+                accessibilityLabel={`ลบทีม ${t.name}`}
+              >
+                <Ionicons name="trash-outline" size={14} color={colors.danger} />
+                <Text style={[styles.linkText, { color: colors.danger }]}>ลบทีม</Text>
+              </TouchableOpacity>
             </View>
             <Text style={styles.muted}>
               สาขา CM {t.cmBranches} · PM {t.pmBranches} · ช่าง {t.technicians} คน · หัวหน้าภาคดูแล {t.supervisors} คน ·
               ใบงานค้าง {t.openOrders}
+            </Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={[styles.row, { marginTop: spacing.md }]}>
+        <Text style={styles.section}>ทีมรวม</Text>
+        <Text style={[styles.muted, { flex: 1, minWidth: 200 }]}>
+          พื้นที่ที่ครอบคลุมหลายทีม (Senior · ทีมเสริม · QC) — ช่างที่สังกัดทีมรวมเห็นใบงานของทุกทีมที่ครอบคลุม
+        </Text>
+        <TouchableOpacity style={styles.linkBtn} onPress={() => setEditingGroup("new")} accessibilityLabel="เพิ่มทีมรวม">
+          <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+          <Text style={styles.linkText}>เพิ่มทีมรวม</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.grid}>
+        {(data.groups ?? []).map((g) => (
+          <View key={g.id} style={[styles.card, styles.groupCard]}>
+            <View style={styles.row}>
+              <Ionicons name="git-network-outline" size={16} color={colors.primary} />
+              <Text style={[styles.teamName, { flex: 1 }]}>{g.name}</Text>
+              <TouchableOpacity style={styles.linkBtn} onPress={() => setEditingGroup(g)} accessibilityLabel={`แก้ไขทีมรวม ${g.name}`}>
+                <Ionicons name="create-outline" size={14} color={colors.primary} />
+                <Text style={styles.linkText}>แก้ไข</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.muted}>เห็นงานของ: {g.allTeams ? "ทุกทีม" : g.covers.join(" · ") || "—"}</Text>
+            <Text style={styles.muted}>
+              ช่าง {g.technicians} คน · หัวหน้าภาคดูแล {g.supervisors} คน
             </Text>
           </View>
         ))}
@@ -180,6 +235,69 @@ export default function ManageTeamsScreen() {
           onClose={() => setMoving(false)}
           onDone={() => {
             setMoving(false);
+            load();
+          }}
+        />
+      ) : null}
+
+      {adding ? (
+        <AppModal visible onClose={() => setAdding(false)} title="เพิ่มทีม">
+          <Text style={styles.muted}>ทีมแบบไหน?</Text>
+          <TouchableOpacity
+            style={styles.choice}
+            onPress={() => {
+              setAdding(false);
+              setMoving(true);
+            }}
+            accessibilityLabel="เพิ่มทีมช่างของสาขา"
+          >
+            <Ionicons name="business-outline" size={22} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.teamName}>ทีมช่างของสาขา</Text>
+              <Text style={styles.muted}>
+                ทีมที่ดูแลสาขาชุดหนึ่ง เช่น นครศรีธรรมราช — สร้างโดยเลือกสาขาที่จะให้ทีมนี้ดูแล
+                (ทีมช่างต้องมีสาขา ไม่งั้นไม่มีใบงานไหนถูกจ่ายมาที่ทีม)
+              </Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.choice}
+            onPress={() => {
+              setAdding(false);
+              setEditingGroup("new");
+            }}
+            accessibilityLabel="เพิ่มทีมรวม"
+          >
+            <Ionicons name="git-network-outline" size={22} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.teamName}>ทีมรวม</Text>
+              <Text style={styles.muted}>
+                พื้นที่ที่ครอบคลุมหลายทีม เช่น Senior · ทีมเสริม · QC — เลือกว่าเห็นใบงานของทีมไหนบ้าง ไม่ต้องมีสาขาของตัวเอง
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </AppModal>
+      ) : null}
+
+      {deleting ? (
+        <DeleteTeamModal
+          team={deleting}
+          others={data.teams.filter((t) => !t.orphan && t.name !== deleting.name).map((t) => t.name)}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            load();
+          }}
+        />
+      ) : null}
+
+      {editingGroup ? (
+        <GroupModal
+          group={editingGroup === "new" ? null : editingGroup}
+          teams={data.teams.filter((t) => !t.orphan).map((t) => t.name)}
+          onClose={() => setEditingGroup(null)}
+          onDone={() => {
+            setEditingGroup(null);
             load();
           }}
         />
@@ -478,6 +596,266 @@ function MoveModal({ names, onClose, onDone }: { names: string[]; onClose: () =>
   );
 }
 
+function DeleteTeamModal({
+  team,
+  others,
+  onClose,
+  onDone,
+}: {
+  team: Team;
+  others: string[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [usage, setUsage] = useState<{ branches: number; technicians: number; supervisors: number; openOrders: number } | null>(null);
+  const [moveTo, setMoveTo] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .get("/teams/usage", { params: { name: team.name } })
+      .then((r) => setUsage(r.data))
+      .catch((e) => showAlert("โหลดข้อมูลไม่สำเร็จ", apiErrorMessage(e)));
+  }, [team.name]);
+
+  // มีสาขาหรือใบงานค้าง = ต้องมีทีมรับต่อ ไม่งั้นสาขาไม่มีใครดูแลและใบงานไม่มีใครเห็น
+  const needsTarget = !!usage && (usage.branches > 0 || usage.openOrders > 0);
+  const ready = !!usage && (!needsTarget || !!moveTo);
+  const f = filter.trim();
+  const shown = f ? others.filter((o) => o.includes(f)) : others;
+
+  async function remove() {
+    setBusy(true);
+    try {
+      const res = await api.post<{ technicians: number; supervisors: number; branches: number; orders: number }>(
+        "/teams/delete",
+        { name: team.name, moveTo: needsTarget ? moveTo : null },
+        { loadingText: "กำลังลบทีม..." }
+      );
+      const r = res.data;
+      showAlert(
+        `ลบทีม ${team.name} แล้ว`,
+        [
+          r.branches ? `สาขา ${r.branches} แห่ง · ใบงานค้าง ${r.orders} ใบ ย้ายไป ${moveTo}` : "",
+          r.technicians ? `ช่าง ${r.technicians} คนไม่มีสังกัดแล้ว — จัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้` : "",
+          r.supervisors ? `หัวหน้าภาค ${r.supervisors} คนเลิกดูแลทีมนี้` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+      onDone();
+    } catch (e) {
+      showAlert("ลบทีมไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={busy}
+      title={`ลบทีม ${team.name}`}
+      footer={
+        <View style={styles.actions}>
+          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={onClose} disabled={busy}>
+            <Text style={styles.btnGhostText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, { backgroundColor: colors.danger }, !ready && { opacity: 0.5 }]}
+            onPress={remove}
+            disabled={!ready || busy}
+            accessibilityLabel="ยืนยันลบทีม"
+          >
+            <Text style={styles.btnText}>ลบทีม {team.name}</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      {!usage ? (
+        <Spinner color={colors.primary} />
+      ) : (
+        <>
+          <View style={styles.warnBox}>
+            <Ionicons name="alert-circle" size={16} color={colors.warningInk} />
+            <Text style={styles.warnText}>
+              {usage.technicians ? `ช่าง ${usage.technicians} คนจะไม่มีสังกัด — ไม่เห็นใบงานจนกว่าจะจัดทีมใหม่\n` : ""}
+              {usage.supervisors ? `หัวหน้าภาค ${usage.supervisors} คนจะเลิกดูแลทีมนี้\n` : ""}
+              แผนของทีมนี้ตั้งแต่วันนี้ถูกลบ · ใบงานที่ปิดแล้วคงชื่อทีมเดิมไว้เป็นประวัติ
+            </Text>
+          </View>
+          {needsTarget ? (
+            <>
+              <Text style={styles.label}>
+                สาขา {usage.branches} แห่ง · ใบงานค้าง {usage.openOrders} ใบ — ให้ทีมไหนรับไปดูแลต่อ
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={filter}
+                onChangeText={setFilter}
+                placeholder="ค้นหาทีม"
+                placeholderTextColor={colors.textFaint}
+                accessibilityLabel="ค้นหาทีมที่รับต่อ"
+              />
+              <View style={styles.row}>
+                {shown.map((o) => (
+                  <TouchableOpacity
+                    key={o}
+                    style={[styles.chip, moveTo === o && styles.chipOn]}
+                    onPress={() => setMoveTo(o)}
+                    accessibilityLabel={`รับต่อโดย ${o}`}
+                  >
+                    <Text style={[styles.chipText, moveTo === o && { color: "#fff" }]}>{o}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.muted}>
+                อัปไฟล์ทะเบียนที่ยังเขียน "{team.name}" ระบบเปลี่ยนเป็นทีมที่รับต่อให้เอง ทีมที่ลบไม่กลับมา
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.muted}>ทีมนี้ไม่มีสาขาและใบงานค้าง ลบได้เลย</Text>
+          )}
+        </>
+      )}
+    </AppModal>
+  );
+}
+
+function GroupModal({
+  group,
+  teams,
+  onClose,
+  onDone,
+}: {
+  group: Group | null;
+  teams: string[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(group?.name ?? "");
+  const [all, setAll] = useState(group?.allTeams ?? false);
+  const [picked, setPicked] = useState<string[]>(group?.covers ?? []);
+  const [busy, setBusy] = useState(false);
+  const clean = name.trim().replace(/\s+/g, " ");
+  // ทีมที่ทีมรวมครอบคลุมแต่ไม่มีในทะเบียนแล้ว (เปลี่ยนชื่อ/ลบในไฟล์) ยังแสดงให้เอาออกได้
+  const options = [...new Set([...teams, ...picked])];
+  const ready = clean.length > 0 && (all || picked.length > 0);
+
+  function toggle(t: string) {
+    setPicked((v) => (v.includes(t) ? v.filter((x) => x !== t) : [...v, t]));
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      const body = { name: clean, covers: picked, allTeams: all };
+      if (group) await api.put(`/teams/groups/${group.id}`, body, { loadingText: "กำลังบันทึก..." });
+      else await api.post("/teams/groups", body, { loadingText: "กำลังบันทึก..." });
+      onDone();
+    } catch (e) {
+      showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function remove() {
+    if (!group) return;
+    showAlert(
+      `ลบทีมรวม ${group.name}?`,
+      [
+        group.technicians ? `ช่าง ${group.technicians} คนจะไม่มีสังกัด — ต้องจัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้` : "ยังไม่มีช่างในทีมรวมนี้",
+        group.supervisors ? `หัวหน้าภาค ${group.supervisors} คนเลิกดูแลทีมรวมนี้` : "",
+        "แผนของทีมรวมตั้งแต่วันนี้ถูกลบ",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: "ลบ",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            const res = await api.delete<{ technicians: number }>(`/teams/groups/${group.id}`);
+            if (res.data.technicians) showAlert(`ลบ ${group.name} แล้ว`, `ช่าง ${res.data.technicians} คนไม่มีสังกัดแล้ว — จัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้`);
+            onDone();
+          } catch (e) {
+            showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
+          }
+        },
+      },
+    ]);
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={busy}
+      title={group ? `แก้ไขทีมรวม` : "เพิ่มทีมรวม"}
+      footer={
+        <View style={styles.actions}>
+          {group ? (
+            <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={remove} disabled={busy}>
+              <Text style={[styles.btnGhostText, { color: colors.danger }]}>ลบทีมรวม</Text>
+            </TouchableOpacity>
+          ) : null}
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={onClose} disabled={busy}>
+            <Text style={styles.btnGhostText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, !ready && { opacity: 0.5 }]}
+            onPress={save}
+            disabled={!ready || busy}
+            accessibilityLabel="บันทึกทีมรวม"
+          >
+            <Text style={styles.btnText}>บันทึก</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.label}>ชื่อทีมรวม (ใช้ชื่อตามบันทึกแบ่งทีม)</Text>
+      <TextInput
+        style={styles.input}
+        value={name}
+        onChangeText={setName}
+        placeholder="เช่น Senior บางน้ำจืด หลักสี่ ลาดพร้าว"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อทีมรวม"
+      />
+      {group && clean !== group.name ? (
+        <Text style={styles.muted}>เปลี่ยนชื่อแล้ว ช่าง หัวหน้าภาค และแผนที่ผูกกับชื่อเดิมย้ายตามให้</Text>
+      ) : null}
+      <Text style={styles.label}>เห็นใบงานของทีมไหน</Text>
+      <TouchableOpacity
+        style={[styles.chip, all && styles.chipOn, { alignSelf: "flex-start" }]}
+        onPress={() => setAll((v) => !v)}
+        accessibilityLabel="ครอบคลุมทุกทีม"
+      >
+        <Text style={[styles.chipText, all && { color: "#fff" }]}>{all ? "✓ " : ""}ทุกทีม (งานตรวจคุณภาพ / PM ที่ไปได้ทุกที่)</Text>
+      </TouchableOpacity>
+      {!all ? (
+        <View style={styles.row}>
+          {options.map((t) => {
+            const on = picked.includes(t);
+            return (
+              <TouchableOpacity key={t} style={[styles.chip, on && styles.chipOn]} onPress={() => toggle(t)} accessibilityLabel={`ครอบคลุม ${t}`}>
+                <Text style={[styles.chipText, on && { color: "#fff" }]}>{t}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
+      <Text style={styles.muted}>ใบงานยังจ่ายให้ทีมช่างตามสาขาเหมือนเดิม — ทีมรวมแค่ทำให้ช่างกลุ่มนี้เห็นและทำงานของทีมเหล่านั้นได้</Text>
+    </AppModal>
+  );
+}
+
 function RenameModal({
   team,
   names,
@@ -637,4 +1015,15 @@ const styles = StyleSheet.create({
   infoBox: { flexDirection: "row", gap: 8, backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: 10 },
   infoText: { flex: 1, fontSize: 13, lineHeight: 20, color: colors.primaryInk },
   moveRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  groupCard: { borderStyle: "dashed", borderColor: colors.primary },
+  choice: {
+    flexDirection: "row",
+    gap: spacing.md,
+    alignItems: "flex-start",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    backgroundColor: colors.card,
+  },
 });

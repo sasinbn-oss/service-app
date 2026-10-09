@@ -238,6 +238,17 @@ interface Technician {
   team?: string | null;
 }
 
+/**
+ * ใบงานที่จ่ายให้ทีมนี้เป็นงานของช่างคนนี้ไหม — ทีมรวมครอบคลุมหลายทีม (เซิร์ฟเวอร์ใช้กฎเดียวกัน
+ * utils/teamGroups.ts) ถ้าเทียบชื่อทีมตรง ๆ ช่างในทีมรวมจะเปิดใบงานได้แต่ไม่มีปุ่มให้กด
+ */
+function inMyTeam(u: { team?: string | null; teamCoverage?: { all: boolean; teams: string[] } | null } | null, team: string | null) {
+  if (!u || team === null) return false;
+  if (u.team === team) return true;
+  const c = u.teamCoverage;
+  return !!c && (c.all || c.teams.includes(team));
+}
+
 export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const { id } = route.params;
   const { user } = useAuth();
@@ -322,7 +333,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       // ใบเก่าที่จ่ายรายคนยังเช็คด้วย assignedToId เหมือนเดิม เพื่อให้คนที่กำลัง
       // ทำอยู่ตอนเปลี่ยนระบบไม่โดนล็อกออกจากงานของตัวเอง
       if (o.assignedToId !== null) return o.assignedToId === user.id;
-      if (o.assignedTeam !== null) return o.assignedTeam === user.team;
+      if (o.assignedTeam !== null) return inMyTeam(user, o.assignedTeam);
       return true;
     }
     return o.stageActor === user.role;
@@ -445,13 +456,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     ["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS", "DONE"].includes(order.status) &&
     (user?.role === "ADMIN" ||
       user?.role === "SUPERVISOR" ||
-      (order.assignedTeam !== null && order.assignedTeam === user?.team));
+      inMyTeam(user, order.assignedTeam));
 
   const tone = statusTone(order.status);
   const done = order.status === "DONE" || order.status === "CANCELLED";
   const mine =
     order.assignedToName === user?.name ||
-    (order.assignedTeam !== null && order.assignedTeam === user?.team);
+    inMyTeam(user, order.assignedTeam);
 
   return (
     <PopupScreen

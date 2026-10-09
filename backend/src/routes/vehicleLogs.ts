@@ -14,6 +14,7 @@
  */
 import { Router, Response } from "express";
 import ExcelJS from "exceljs";
+import { coverageOf } from "../utils/teamGroups";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
@@ -116,9 +117,14 @@ router.get("/status", requireAuth, async (req: AuthRequest, res) => {
   const usedBy = new Map(ongoing.map((o) => [o.vehicleId, o.user.name]));
 
   // ใบงานที่ช่างน่าจะขับรถไป — งานของทีมที่ยังเปิดอยู่ เรียงงานที่นัดใกล้ที่สุดก่อน
-  const workOrders = me?.team
+  // ทีมรวมเห็นใบงานของทุกทีมที่ครอบคลุม — แบบเดียวกับรายการใบงาน (utils/teamGroups.ts)
+  const cov = await coverageOf(me?.team ?? null);
+  const workOrders = cov
     ? await prisma.workOrder.findMany({
-        where: { assignedTeam: me.team, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+        where: {
+          assignedTeam: cov.all ? { not: null } : { in: cov.teams },
+          status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
+        },
         select: { id: true, code: true, title: true, scheduledAt: true, branch: { select: { code: true, name: true } } },
         orderBy: [{ scheduledAt: { sort: "asc", nulls: "last" } }, { id: "asc" }],
         take: 30,
