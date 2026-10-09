@@ -6,6 +6,9 @@ import { signToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
 import { forgetUser, rememberUser } from "../utils/userGate";
+import { coverageGap } from "../utils/coverage";
+import { documentPath, saveDocument } from "../documents/store";
+import ExcelJS from "exceljs";
 import { deleteObject } from "../storage/fileStore";
 
 const router = Router();
@@ -147,6 +150,70 @@ router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
     orderBy: [{ role: "asc" }, { name: "asc" }],
   });
   res.json(users);
+});
+
+
+/**
+ * รายงาน "ใครยังไม่มีพื้นที่รับผิดชอบ" เป็น Excel — ใช้ไล่ตั้งทีมหลังนำเข้ารายชื่อ
+ * (ช่างที่ไม่มีทีมเข้าระบบได้ แต่ตัวเลขทุกช่องเป็น 0 และไม่รู้ว่าผิดที่ตัวเอง)
+ */
+router.get("/users/unassigned-report", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const [users, zones, pm, regionRows] = await Promise.all([
+    prisma.user.findMany({
+      where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
+      select: { employeeCode: true, name: true, phone: true, role: true, team: true, region: true, supervisedTeams: true, mustChangePassword: true },
+      orderBy: [{ role: "asc" }, { name: "asc" }],
+    }),
+    prisma.branch.findMany({ where: { zone: { not: null }, cancelledAt: null }, select: { zone: true }, distinct: ["zone"] }),
+    prisma.branch.findMany({ where: { pmTeam: { not: null }, cancelledAt: null }, select: { pmTeam: true }, distinct: ["pmTeam"] }),
+    prisma.branch.findMany({ where: { region: { not: null }, cancelledAt: null }, select: { region: true }, distinct: ["region"] }),
+  ]);
+  const teams = new Set([...zones.map((z) => z.zone!), ...pm.map((p) => p.pmTeam!)]);
+  const regions = new Set(regionRows.map((r) => r.region!));
+  const rows = users
+    .map((u) => ({ u, gap: coverageGap(u, teams, regions) }))
+    .filter((r): r is { u: (typeof users)[number]; gap: string } => r.gap !== null);
+
+  const wb = new ExcelJS.Workbook();
+  const sh = wb.addWorksheet("ยังไม่มีพื้นที่รับผิดชอบ");
+  sh.columns = [
+    { header: "ลำดับ", key: "no", width: 7 },
+    { header: "รหัสพนักงาน", key: "code", width: 14 },
+    { header: "ชื่อ", key: "name", width: 32 },
+    { header: "สิทธิ์", key: "role", width: 12 },
+    { header: "ปัญหา", key: "gap", width: 46 },
+    { header: "เบอร์โทร", key: "phone", width: 14 },
+    { header: "เข้าระบบแล้ว", key: "login", width: 14 },
+  ];
+  sh.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sh.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0B3B60" } };
+  rows.forEach(({ u, gap }, i) =>
+    sh.addRow({
+      no: i + 1,
+      code: u.employeeCode,
+      name: u.name,
+      role: u.role === "SUPERVISOR" ? "หัวหน้าภาค" : "ช่าง",
+      gap,
+      phone: u.phone ?? "",
+      // เปลี่ยนรหัสตั้งต้นแล้ว = เคยเข้าระบบ — คนที่ยังไม่เคยเข้าอาจยังไม่ได้รับแจ้งเลย
+      login: u.mustChangePassword ? "ยังไม่เคย" : "เข้าแล้ว",
+    })
+  );
+  sh.addRow({});
+  sh.addRow({ name: `รวม ${rows.length} คน จากช่างและหัวหน้าภาคทั้งหมด ${users.length} คน` }).font = { bold: true };
+  sh.addRow({ name: "แก้ที่ เมนู สิทธิ์ผู้ใช้ → การ์ดของแต่ละคน · ทีมที่ไม่มีให้เลือก ใช้ เมนู ทีมช่าง → ย้ายสาขาเข้าทีม" });
+  sh.views = [{ state: "frozen", ySplit: 1 }];
+  sh.autoFilter = { from: "A1", to: "G1" };
+
+  const day = bangkokDay();
+  const stored = saveDocument({
+    filename: `ยังไม่มีพื้นที่รับผิดชอบ_${day}.xlsx`,
+    asciiFilename: `unassigned_${day}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: Buffer.from(await wb.xlsx.writeBuffer()),
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored), count: rows.length, total: users.length });
 });
 
 

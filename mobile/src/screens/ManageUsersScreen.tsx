@@ -19,7 +19,8 @@ import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
-import { api, apiErrorMessage } from "../api/client";
+import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import { Role } from "../types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
@@ -72,6 +73,24 @@ function searchText(u: ManagedUser) {
     .toLowerCase();
 }
 
+/**
+ * ยังไม่มีพื้นที่รับผิดชอบ? — กฎเดียวกับ backend/src/utils/coverage.ts (แก้ที่หนึ่งต้องแก้อีกที่)
+ * ชื่อทีม/ภาคที่ไม่มีในทะเบียนสาขานับด้วย เพราะไม่มีใบงานผูกกับชื่อนั้น ผลเท่ากับไม่มีทีม
+ */
+function coverageGap(u: ManagedUser, teams: Set<string>, regions: Set<string>): string | null {
+  if (u.role === "EMPLOYEE") {
+    if (!u.team) return "ยังไม่ได้จัดทีม";
+    return teams.has(u.team) ? null : `ทีม "${u.team}" ไม่มีในทะเบียนสาขา`;
+  }
+  if (u.role === "SUPERVISOR") {
+    const st = u.supervisedTeams ?? [];
+    if ((u.region && regions.has(u.region)) || st.some((t) => teams.has(t))) return null;
+    if (!u.region && st.length === 0) return "ยังไม่ได้ตั้งภาคหรือทีมที่ดูแล";
+    return "ภาค/ทีมที่ตั้งไว้ไม่มีในทะเบียนสาขา";
+  }
+  return null;
+}
+
 export default function ManageUsersScreen() {
   const { user: me } = useAuth();
   const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
@@ -85,15 +104,41 @@ export default function ManageUsersScreen() {
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState<ManagedUser | null>(null);
+  const [gapsOnly, setGapsOnly] = useState(false);
   // ทุกคำที่พิมพ์ต้องเจอ (ไม่จำเป็นต้องติดกัน) — "ช่าง กระบี่" ได้ช่างทีมกระบี่
+  // ทีม/ภาคยังไม่โหลด = ยังตัดสินไม่ได้ ไม่ขึ้นแถบเตือนผิด ๆ ว่าทุกคนไม่มีทีม
+  const gaps = useMemo(() => {
+    const m = new Map<number, string>();
+    if (!teams.length) return m;
+    const ts = new Set(teams);
+    const rs = new Set(regions);
+    for (const u of users) {
+      const g = coverageGap(u, ts, rs);
+      if (g) m.set(u.id, g);
+    }
+    return m;
+  }, [users, teams, regions]);
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return users;
-    return users.filter((u) => {
+    const base = gapsOnly ? users.filter((u) => gaps.has(u.id)) : users;
+    if (!words.length) return base;
+    return base.filter((u) => {
       const t = searchText(u);
       return words.every((w) => t.includes(w));
     });
-  }, [users, query]);
+  }, [users, query, gapsOnly, gaps]);
+
+  async function downloadGaps() {
+    try {
+      const res = await api.get<{ path: string; count: number }>("/auth/users/unassigned-report", {
+        loadingText: "กำลังทำรายงาน...",
+      });
+      if (!res.data.count) return showAlert("ครบทุกคนแล้ว", "ช่างและหัวหน้าภาคทุกคนมีพื้นที่รับผิดชอบแล้ว");
+      await openUrl(resolveImageUrl(res.data.path)!);
+    } catch (e) {
+      showAlert("ออกรายงานไม่สำเร็จ", apiErrorMessage(e));
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -208,6 +253,30 @@ export default function ManageUsersScreen() {
         แล้วเจ้าของบัญชีต้องเปลี่ยนรหัสเองตอนเข้าครั้งแรก
       </Text>
 
+      {gaps.size ? (
+        <View style={styles.gapBox}>
+          <Ionicons name="alert-circle" size={18} color={colors.danger} />
+          <View style={{ flex: 1, minWidth: 200 }}>
+            <Text style={styles.gapTitle}>ยังไม่มีพื้นที่รับผิดชอบ {gaps.size} คน</Text>
+            <Text style={styles.gapText}>
+              ช่าง {users.filter((u) => u.role === "EMPLOYEE" && gaps.has(u.id)).length} · หัวหน้าภาค{" "}
+              {users.filter((u) => u.role === "SUPERVISOR" && gaps.has(u.id)).length} — ยังไม่เห็นใบงานของทีม
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.gapBtn, gapsOnly && styles.gapBtnOn]}
+            onPress={() => setGapsOnly((v) => !v)}
+            accessibilityLabel="ดูเฉพาะคนที่ยังไม่มีพื้นที่รับผิดชอบ"
+          >
+            <Text style={[styles.gapBtnText, gapsOnly && { color: "#fff" }]}>{gapsOnly ? "แสดงทุกคน" : "ดูรายชื่อ"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.gapBtn} onPress={downloadGaps} accessibilityLabel="ดาวน์โหลดรายงานคนที่ยังไม่มีพื้นที่รับผิดชอบ">
+            <Ionicons name="download-outline" size={15} color={colors.danger} />
+            <Text style={styles.gapBtnText}>Excel</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <View style={styles.search}>
         <Ionicons name="search" size={18} color={colors.textFaint} />
         <TextInput
@@ -237,6 +306,13 @@ export default function ManageUsersScreen() {
             <Text style={styles.code}>{u.employeeCode}</Text>
             {savingId === u.id ? <Spinner size="small" color={colors.primary} /> : null}
           </View>
+          {/* ช่างที่ยังไม่มีทีมมีข้อความใต้ช่องทีมอยู่แล้ว — ที่นี่สำหรับกรณีอื่น (ทีมสะกดผิด หัวหน้าภาคไม่มีขอบเขต) */}
+          {gaps.has(u.id) && gaps.get(u.id) !== "ยังไม่ได้จัดทีม" ? (
+            <View style={styles.warn}>
+              <Ionicons name="alert-circle" size={14} color={colors.danger} />
+              <Text style={styles.warnText}>{gaps.get(u.id)} — ยังไม่เห็นใบงานของทีม</Text>
+            </View>
+          ) : null}
 
           {u.mustChangePassword ? (
             <View style={styles.pending}>
@@ -832,6 +908,30 @@ function ResetPasswordModal({
 }
 
 const styles = StyleSheet.create({
+  gapBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  gapTitle: { fontSize: 14, fontWeight: "700", color: colors.danger },
+  gapText: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  gapBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: colors.card,
+  },
+  gapBtnOn: { backgroundColor: colors.danger },
+  gapBtnText: { fontSize: 13, fontWeight: "700", color: colors.danger },
   pageHead: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
   pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
