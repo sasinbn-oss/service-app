@@ -372,6 +372,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   EDITED: "แก้ไขใบงาน",
   ATTACHED: "แนบไฟล์",
   ATTACHMENT_REMOVED: "ลบไฟล์แนบ",
+  BACKFILLED: "ปิดงานย้อนหลัง (แอดมินกรอกแทน)",
 };
 
 /**

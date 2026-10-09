@@ -47,6 +47,7 @@ import {
   ROLE_LABELS,
   WORK_ORDER_STAGE_ACTOR,
   WORK_ORDER_STAGE_ORDER,
+  bangkokDay,
   canActOnStage,
   WORK_STATUSES,
   WORK_STATUS_LABELS,
@@ -2619,6 +2620,182 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 
     await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", body.note?.trim() || null);
   }, STAGE_TX);
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * ปิดงานย้อนหลัง (แอดมิน) — งานที่ช่างซ่อมเสร็จจริงไปแล้ว แต่ในระบบค้างกลางทาง
+ *
+ * กรอกข้อมูลที่ขาดของทุกขั้นที่เหลือในครั้งเดียว แล้วปิดงาน · ประวัติแต่ละขั้นลงวันเวลาจริงของงาน
+ * (ไม่ใช่วันที่กด) เพราะ SLA รายงาน และไทม์ไลน์ต้องสะท้อนสิ่งที่เกิดขึ้นจริง — แต่ติด backfilledAt
+ * ไว้ทุกแถว ให้รู้ว่าแอดมินกรอกทีหลัง ไม่ได้มีคนกดตอนนั้น
+ *
+ * รูปไม่บังคับ (เจ้าของระบบกำหนด) ถ้าไม่มีรูปหน้างานต้องใส่เหตุผลแทน · ไม่บังคับป้ายรุ่น/ใบเหลือง
+ * เพราะงานจบไปแล้ว ไปถ่ายใหม่ไม่ได้ — ขั้นตอนปกติยังบังคับเหมือนเดิม
+ */
+const backfillSchema = z.object({
+  reason: z.string().trim().min(1, "ต้องเลือกเหตุผลที่ปิดย้อนหลัง").max(200),
+  reasonNote: z.string().trim().max(500).optional(),
+  paidAt: dateField.optional(),
+  paymentRef: z.string().trim().max(100).optional(),
+  requisitionAt: dateField.optional(),
+  requisitionRef: z.string().trim().max(100).optional(),
+  warehouse: z.string().trim().max(100).optional(),
+  team: z.string().trim().min(1, "ต้องเลือกทีมที่ไป").max(120),
+  visitDate: dateField,
+  visitTime: timeField,
+  result: z.enum(WORK_ORDER_RESULTS),
+  closedAt: z.string().datetime({ offset: true, message: "เวลาซ่อมเสร็จไม่ถูกต้อง" }),
+  // อะไหล่ที่ใช้จริง — ไม่ส่ง = ไม่ได้ใช้
+  parts: z.array(z.object({ sparePartId: z.number().int(), quantity: z.number().int().min(1) })).optional(),
+  workerIds: z.array(z.number().int().positive()).max(3).optional(),
+  otherWorkers: z.string().trim().max(300).nullable().optional(),
+  note: z.string().trim().max(2000).optional(),
+  noPhotoReason: z.string().trim().max(300).optional(),
+});
+
+router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = backfillSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const b = parsed.data;
+
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: { code: true, status: true, createdAt: true, assignedTeam: true },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.status === "DONE") return res.status(400).json({ error: `${wo.code} ปิดไปแล้ว` });
+  if (wo.status === "CANCELLED") return res.status(400).json({ error: `${wo.code} ถูกยกเลิกไปแล้ว` });
+
+  const known = await prisma.branch.findFirst({ where: { zone: b.team, cancelledAt: null }, select: { id: true } });
+  if (!known) return res.status(400).json({ error: `ไม่รู้จักทีม "${b.team}"` });
+
+  const workerIds = [...new Set(b.workerIds ?? [])];
+  const otherWorkers = b.otherWorkers?.trim() || null;
+  if (workerIds.length === 0 && !otherWorkers) {
+    return res.status(400).json({ error: "ต้องระบุชื่อผู้เข้าปฏิบัติงานอย่างน้อยหนึ่งคน" });
+  }
+  if (workerIds.length && (await prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } })) !== workerIds.length) {
+    return res.status(400).json({ error: "มีชื่อผู้เข้าปฏิบัติงานที่ไม่อยู่ในระบบ" });
+  }
+  const siteShots = await prisma.workOrderAttachment.count({ where: { workOrderId: id, role: null } });
+  if (siteShots === 0 && !b.noPhotoReason) {
+    return res.status(400).json({ error: "ไม่มีรูปหน้างาน — ต้องใส่เหตุผลที่ไม่มีรูป" });
+  }
+
+  // เวลาเป็นเวลาไทย · ต้องเรียงตามลำดับจริง และไม่เกินตอนนี้ — ไม่งั้นไทม์ไลน์และ SLA เพี้ยน
+  // ก่อนวันเปิดใบงานได้ เพราะงานเก่า/งานที่ทำผ่านโทรศัพท์มักเปิดใบงานในระบบหลังจากซ่อมเสร็จแล้ว
+  const at = (day: string, time = "12:00") => new Date(`${day}T${time}:00+07:00`);
+  const closedAt = new Date(b.closedAt);
+  // ไม่รู้เวลาเข้า: วันเดียวกับที่ซ่อมเสร็จ = ลงเวลาเดียวกับตอนเสร็จ (ไม่งั้นงานที่เสร็จ 08:00 จะถูกหาว่า
+  // เสร็จก่อนเข้างานเพราะเดาเวลาเข้าเป็น 09:00) · คนละวัน = 09:00 ของวันนั้น
+  const visit = b.visitTime
+    ? at(b.visitDate, b.visitTime)
+    : bangkokDay(closedAt) === b.visitDate
+      ? closedAt
+      : at(b.visitDate, "09:00");
+  const paidAt = b.paidAt ? at(b.paidAt) : null;
+  const reqAt = b.requisitionAt ? at(b.requisitionAt) : null;
+  const now = new Date();
+  const steps = [
+    ["วันลูกค้าจ่ายเงิน", paidAt],
+    ["วันเบิกอะไหล่", reqAt],
+    ["วันเข้างาน", visit],
+    ["เวลาซ่อมเสร็จ", closedAt],
+  ] as const;
+  let prev: [string, Date] | null = null;
+  for (const [label, t] of steps) {
+    if (!t) continue;
+    if (t > now) return res.status(400).json({ error: `${label}ต้องไม่เกินวันนี้` });
+    if (prev && t < prev[1]) return res.status(400).json({ error: `${label}ต้องไม่ก่อน${prev[0]}` });
+    prev = [label, t];
+  }
+
+  const order = WORK_ORDER_STAGE_ORDER as readonly string[];
+  const before = (stage: string) => order.indexOf(wo.status) <= order.indexOf(stage);
+  const usedParts = b.parts ?? [];
+  const actor = req.auth!.userId;
+  const stamp = new Date();
+
+  await prisma.$transaction(
+    async (tx) => {
+      const log = (action: string, status: string, createdAt: Date, note?: string | null) =>
+        tx.workOrderLog.create({
+          data: { workOrderId: id, userId: actor, action, status, note: note ?? null, createdAt, backfilledAt: stamp },
+        });
+      // ยังไม่ได้ระบุอะไหล่ — ใช้รายการที่ใช้จริงเป็นคำตอบของขั้นนั้น
+      if (wo.status === "NEW" || wo.status === "INSPECTING") {
+        await log(
+          usedParts.length ? "PARTS_REQUESTED" : "NO_PARTS",
+          usedParts.length ? "PARTS_REQUESTED" : "PARTS_CHECKED",
+          reqAt ?? paidAt ?? visit,
+          usedParts.length ? "ระบุตามอะไหล่ที่ใช้จริง" : "ไม่ได้ใช้อะไหล่"
+        );
+      }
+      if (paidAt && before("AWAITING_PAYMENT")) {
+        await log("PAID", "PARTS_REQUESTED", paidAt, b.paymentRef ? `หลักฐานการจ่าย ${b.paymentRef}` : null);
+      }
+      if (usedParts.length && before("PARTS_REQUESTED")) {
+        await log(
+          "PARTS_CHECKED",
+          "PARTS_CHECKED",
+          reqAt ?? visit,
+          [b.warehouse ? `เบิกจาก ${b.warehouse}` : null, b.requisitionRef ? `ใบเบิก ${b.requisitionRef}` : null].filter(Boolean).join(" · ") || null
+        );
+      }
+      if (before("PARTS_CHECKED") || wo.assignedTeam !== b.team) {
+        await log("ASSIGNED", "ASSIGNED", visit, `จ่ายงานให้ ${b.team}`);
+      }
+      if (before("AWAITING_CONFIRM")) {
+        await log("SCHEDULED", "IN_PROGRESS", visit, `เข้างาน ${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""} (ไม่ผ่านนัด/คอนเฟิร์มในระบบ)`);
+      }
+      const closeNote = [
+        b.note || null,
+        siteShots === 0 ? `ไม่มีรูปหน้างาน: ${b.noPhotoReason}` : null,
+      ]
+        .filter(Boolean)
+        .join(" — ");
+      await log("CLOSED", "DONE", closedAt, closeNote || null);
+      // แถวนี้ลงเวลาที่กดจริง — บอกว่าใครปิดย้อนหลัง เพราะอะไร
+      await tx.workOrderLog.create({
+        data: {
+          workOrderId: id,
+          userId: actor,
+          action: "BACKFILLED",
+          status: "DONE",
+          note: [b.reason, b.reasonNote].filter(Boolean).join(" — "),
+        },
+      });
+
+      await tx.workOrder.update({
+        where: { id },
+        data: {
+          status: "DONE",
+          needsParts: usedParts.length > 0,
+          assignedTeam: b.team,
+          scheduledAt: new Date(`${b.visitDate}T00:00:00.000Z`),
+          scheduledTime: b.visitTime ?? null,
+          appointmentStatus: "CONFIRMED",
+          closedAt,
+          closedById: actor,
+          closeResult: b.result,
+          closeNote: closeNote || null,
+          closeOtherWorkers: otherWorkers,
+          workStatus: workStatusForStage("DONE"),
+        },
+      });
+      await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
+      if (workerIds.length) {
+        await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
+      }
+      await replaceParts(tx, id, "USED", usedParts);
+    },
+    STAGE_TX
+  );
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));

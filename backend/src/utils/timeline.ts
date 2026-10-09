@@ -30,6 +30,12 @@ const roleOf = (r: string | null | undefined): TimelineRole =>
 
 const sort = (e: TimelineEvent[]) => e.sort((a, b) => a.at.localeCompare(b.at));
 
+function thaiStamp(d: Date) {
+  const t = new Date(d.getTime() + 7 * 3600_000);
+  const M = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+  return `${t.getUTCDate()} ${M[t.getUTCMonth()]} ${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
+}
+
 function km(n: number) {
   return n.toLocaleString("en-US");
 }
@@ -52,7 +58,7 @@ export async function workOrderTimeline(id: number) {
       workers: { select: { userId: true } },
       logs: {
         orderBy: { createdAt: "asc" },
-        select: { action: true, status: true, note: true, createdAt: true, userId: true, user: { select: { name: true, role: true } } },
+        select: { action: true, status: true, note: true, createdAt: true, backfilledAt: true, userId: true, user: { select: { name: true, role: true } } },
       },
       vehicleLogs: {
         select: {
@@ -80,7 +86,11 @@ export async function workOrderTimeline(id: number) {
       who: l.user?.name ?? "ระบบ",
       what: WORK_ORDER_ACTION_LABELS[l.action] ?? l.action,
       note: l.note,
-      tags: [{ text: `สถานะ: ${WORK_ORDER_STATUS_LABELS[l.status] ?? l.status}`, tone: l.status === "DONE" ? "ok" : undefined }],
+      tags: [
+        { text: `สถานะ: ${WORK_ORDER_STATUS_LABELS[l.status] ?? l.status}`, tone: l.status === "DONE" ? "ok" : undefined },
+        // ปิดงานย้อนหลัง — เวลาของรายการคือเวลาจริงของงาน ส่วนนี่คือตอนที่แอดมินกรอก
+        ...(l.backfilledAt ? [{ text: `แอดมินบันทึกย้อนหลัง ${thaiStamp(l.backfilledAt)}`, tone: "warn" as const }] : []),
+      ],
     });
   }
   for (const v of wo.vehicleLogs) {
@@ -254,6 +264,7 @@ export async function teamDayTimeline(day: string, team: string) {
         status: true,
         note: true,
         createdAt: true,
+        backfilledAt: true,
         user: { select: { name: true, role: true } },
         workOrder: { select: { id: true, code: true } },
       },
@@ -324,7 +335,10 @@ export async function teamDayTimeline(day: string, team: string) {
       who: l.user?.name ?? "ระบบ",
       what: `${WORK_ORDER_ACTION_LABELS[l.action] ?? l.action} ${l.workOrder.code}`,
       note: l.note,
-      tags: l.status === "DONE" ? [{ text: "ปิดงาน", tone: "ok" }] : undefined,
+      tags: [
+        ...(l.status === "DONE" ? [{ text: "ปิดงาน", tone: "ok" as const }] : []),
+        ...(l.backfilledAt ? [{ text: `แอดมินบันทึกย้อนหลัง ${thaiStamp(l.backfilledAt)}`, tone: "warn" as const }] : []),
+      ],
       workOrder: l.workOrder,
     });
   }

@@ -29,6 +29,7 @@ import DateField, { thaiDate } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
+import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
 import WorkOrderAttachments, { Attachment, openAttachment } from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
@@ -254,6 +255,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const { id } = route.params;
   const { user } = useAuth();
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
@@ -485,11 +487,28 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     {timelineOpen ? (
       <TimelineModal target={{ kind: "wo", id: order.id, code: order.code }} onClose={() => setTimelineOpen(false)} />
     ) : null}
+    {backfilling ? (
+      <BackfillCloseModal
+        order={order}
+        teams={teams.map((t) => t.name)}
+        technicians={technicians}
+        results={results}
+        onClose={() => setBackfilling(false)}
+        onDone={async () => {
+          setBackfilling(false);
+          await load();
+        }}
+      />
+    ) : null}
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
       onLayout={(e) => setBodyWidth(e.nativeEvent.layout.width)}
     >
+      {/* แอดมิน (รวม Super Admin) ปิดงานที่จบจริงไปแล้วแต่ค้างในระบบได้ในครั้งเดียว */}
+      {user?.role === "ADMIN" && order.status !== "DONE" && order.status !== "CANCELLED" ? (
+        <BackfillButton onPress={() => setBackfilling(true)} />
+      ) : null}
       <View style={styles.card}>
         <View style={styles.headRow}>
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
