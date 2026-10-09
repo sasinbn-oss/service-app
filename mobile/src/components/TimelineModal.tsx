@@ -5,7 +5,8 @@
  * บอกว่ารอนานเท่าไร เพราะสิ่งที่เจ้าของระบบอยากรู้คือ "ค้างอยู่ที่ใคร" มากกว่าแค่ลำดับเหตุการณ์
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AppModal from "./AppModal";
 import Spinner from "./Spinner";

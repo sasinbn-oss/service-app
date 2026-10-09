@@ -1,5 +1,6 @@
 import React from "react";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { HomeStackParamList, ReportKind } from "../navigation/types";

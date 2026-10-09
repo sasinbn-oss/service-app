@@ -7,7 +7,8 @@
  * ผู้ใช้ได้ id ของรูปที่อัปเสร็จผ่าน onChange — ตอนกดยืนยันส่งแค่ id
  */
 import React, { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import { Image, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Image, Platform, StyleSheet, Text, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { PickedAttachment, pickImageAttachment } from "../utils/attachments";

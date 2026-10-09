@@ -26,5 +26,14 @@ export default function PageEnter({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** ใส่เป็น screenLayout ของ Navigator */
-export const pageEnterLayout = ({ children }: { children: React.ReactElement }) => <PageEnter>{children}</PageEnter>;
+/**
+ * ใส่เป็น screenLayout ของ Navigator
+ * หน้าต่างลอย (ใบงาน) ข้าม — PopupScreen เล่นท่าเปิดของมันเอง ถ้าจางซ้อนอีกชั้นพื้นมืดจะกระพริบ
+ */
+export const pageEnterLayout = ({
+  children,
+  options,
+}: {
+  children: React.ReactElement;
+  options?: { presentation?: string };
+}) => (options?.presentation === "transparentModal" ? children : <PageEnter>{children}</PageEnter>);

@@ -14,9 +14,9 @@ import {
   Platform,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
+import TouchableOpacity from "./Tap";
 import Spinner from "./Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";

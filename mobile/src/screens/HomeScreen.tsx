@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
-import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";

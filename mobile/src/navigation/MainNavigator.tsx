@@ -1,5 +1,6 @@
 import React from "react";
-import { Image, Platform, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { Image, Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import { createNativeStackNavigator, NativeStackHeaderProps } from "@react-navigation/native-stack";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -124,10 +125,11 @@ function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps
 /**
  * ใบงานกับฟอร์มเปิดใบงานเปิดเป็นหน้าต่างลอยทับหน้าเดิม (ตัวหน้าต่างวาดใน PopupScreen)
  * หน้าข้างหลังยังแสดงอยู่ใต้ฉากมืด ปิดแล้วกลับมาที่เดิมในรายการ
+ * animation "none": PopupScreen เล่นท่าเปิด/ปิดเอง (สปริง) — ถ้าให้ navigator จางด้วยจะซ้อนกันสองชั้นบนมือถือ
  */
 const POPUP = {
   presentation: "transparentModal" as const,
-  animation: "fade" as const,
+  animation: "none" as const,
   headerShown: false,
   contentStyle: { backgroundColor: "transparent" },
 };

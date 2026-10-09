@@ -6,10 +6,10 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   useWindowDimensions,
   View,
 } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import AppModal from "../components/AppModal";
 import DateField from "../components/DateField";

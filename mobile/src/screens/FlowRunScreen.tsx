@@ -6,9 +6,9 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";

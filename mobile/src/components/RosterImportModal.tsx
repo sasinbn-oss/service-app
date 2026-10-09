@@ -6,7 +6,8 @@
  * จึงให้จับคู่ทีละชื่อพื้นที่ (ไม่ใช่ทีละคน) — บันทึก 77 คนมีแค่ราว 30 พื้นที่
  */
 import React, { useMemo, useState } from "react";
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AppModal from "./AppModal";
 import Dropdown from "./Dropdown";

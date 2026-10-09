@@ -8,7 +8,8 @@
  * ทีมที่ยังไม่มีสาขาจึงเลือกให้ช่างไม่ได้) อัปไฟล์ทีหลังสาขาก็ไม่เด้งกลับ — ดู BranchTeamMove
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";

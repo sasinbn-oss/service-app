@@ -3,7 +3,8 @@
  * แตะรายการเพื่อดูรูปตอนเบิก/คืน — ไว้ยืนยันกับแอดมินเวลามีคำถามเรื่องรอยบนรถ
  */
 import React, { useCallback, useState } from "react";
-import { FlatList, Text, TouchableOpacity, View } from "react-native";
+import { FlatList, Text, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCachedState } from "../utils/pageCache";

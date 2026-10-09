@@ -1,5 +1,6 @@
 import React from "react";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 

@@ -5,7 +5,8 @@
  * ถ้าเป็นรายการล่าสุด ไม่งั้นการเบิกครั้งถัดไปจะถูกตรวจกับเลขที่ผิด
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { FlatList, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { FlatList, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";

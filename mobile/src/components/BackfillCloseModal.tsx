@@ -6,7 +6,8 @@
  * รูปไม่บังคับ (เจ้าของระบบกำหนด) แต่ไม่มีรูปหน้างานต้องบอกเหตุผล
  */
 import React, { useMemo, useState } from "react";
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AppModal from "./AppModal";
 import Dropdown from "./Dropdown";

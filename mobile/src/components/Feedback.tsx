@@ -1,10 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Animated, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import type { AlertButton } from "../utils/alert";
 import Overlay from "./Overlay";
 import { WasherIcon } from "./Spinner";
+import { EXIT_EASE, spring, timing } from "../utils/motion";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 /**
  * แจ้งผล ยืนยัน และหน้าโหลด ที่วาดในแอปเอง แทนกล่อง alert/confirm ของเบราว์เซอร์
@@ -22,6 +26,8 @@ interface ToastItem {
   id: number;
   kind: ToastKind;
   text: string;
+  /** กำลังเลื่อนออก — ยังวาดอยู่จนเล่นจบ */
+  leaving?: boolean;
 }
 
 interface DialogState {
@@ -52,7 +58,12 @@ export const feedback = {
     set({ toasts: [...state.toasts, { id, kind, text }].slice(-3) });
     setTimeout(() => feedback.dismissToast(id), kind === "error" ? 6000 : 3500);
   },
+  /** เลื่อนกลับขึ้นไปก่อนแล้วค่อยเอาออก — ToastView เรียก removeToast เองเมื่อเล่นจบ */
   dismissToast(id: number) {
+    if (!state.toasts.some((t) => t.id === id && !t.leaving)) return;
+    set({ toasts: state.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) });
+  },
+  removeToast(id: number) {
     set({ toasts: state.toasts.filter((t) => t.id !== id) });
   },
   dialog(d: DialogState) {
@@ -71,17 +82,26 @@ const TONE: Record<ToastKind, { icon: keyof typeof Ionicons.glyphMap; fg: string
   info: { icon: "information", fg: colors.primaryInk, bg: colors.primarySoft },
 };
 
+/** หล่นลงมาจากขอบบนแบบสปริง แล้วเลื่อนกลับขึ้นไปเอง (แบบแจ้งเตือนบน iPhone) */
 function ToastView({ item }: { item: ToastItem }) {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(anim, { toValue: 1, duration: 180, useNativeDriver: Platform.OS !== "web" }).start();
+    spring(anim, 1, "drop").start();
   }, [anim]);
+  useEffect(() => {
+    if (item.leaving) timing(anim, 0, 240, EXIT_EASE).start(() => feedback.removeToast(item.id));
+  }, [item.leaving, item.id, anim]);
   const tone = TONE[item.kind];
   return (
     <Animated.View
       style={{
-        opacity: anim,
-        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
+        width: "100%",
+        alignItems: "center",
+        opacity: anim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 1, 1] }),
+        transform: [
+          { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-80, 0] }) },
+          { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+        ],
       }}
     >
       <Pressable style={styles.toast} pointerEvents="auto" onPress={() => feedback.dismissToast(item.id)}>
@@ -100,10 +120,24 @@ function Dialog({ d }: { d: DialogState }) {
     b?.onPress?.();
   };
   const cancel = d.buttons.find((b) => b.style === "cancel");
+  // กล่องยืนยันพองขึ้นแบบสปริงเหมือนหน้าต่างอื่น ให้ทั้งแอปเคลื่อนไหวจังหวะเดียวกัน
+  const pop = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    spring(pop, 1, "pop").start();
+  }, [pop]);
   return (
     <Pressable style={styles.backdrop} pointerEvents="auto" onPress={() => run(cancel)}>
       {/* กดในกล่องต้องไม่ทะลุไปปิดกล่อง */}
-      <Pressable style={styles.dialog} onPress={() => undefined}>
+      <AnimatedPressable
+        style={[
+          styles.dialog,
+          {
+            opacity: pop.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 1, 1] }),
+            transform: [{ scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] }) }],
+          },
+        ]}
+        onPress={() => undefined}
+      >
         <View style={styles.dialogHead}>
           <Text style={[styles.dialogTitle, headingFont]}>{d.title}</Text>
           <TouchableOpacity style={styles.closeBtn} onPress={() => run(cancel)} accessibilityLabel="ปิด">
@@ -129,7 +163,7 @@ function Dialog({ d }: { d: DialogState }) {
             );
           })}
         </View>
-      </Pressable>
+      </AnimatedPressable>
     </Pressable>
   );
 }

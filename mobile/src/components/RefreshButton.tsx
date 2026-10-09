@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
-import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, useWindowDimensions } from "react-native";
+import { Animated, Easing, Platform, StyleSheet, Text, useWindowDimensions } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors } from "../theme";
 import { subscribeBackgroundReads } from "../api/client";

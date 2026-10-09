@@ -6,9 +6,9 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Picker } from "@react-native-picker/picker";

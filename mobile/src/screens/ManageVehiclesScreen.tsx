@@ -7,7 +7,8 @@
  * กดที่รถเพื่อเปิดรายละเอียด 3 แท็บ: ข้อมูล · เอกสาร (รูปเล่ม/กรมธรรม์) · ซ่อมบำรุง
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { Image, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Image, Platform, ScrollView, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";

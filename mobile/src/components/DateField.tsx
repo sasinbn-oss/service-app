@@ -8,7 +8,8 @@
  * ค่ายังเป็น "YYYY-MM-DD" (ปี ค.ศ.) แบบเดิม ว่าง = ไม่ระบุ
  */
 import React, { useRef, useState } from "react";
-import { StyleProp, StyleSheet, Text, TextStyle, TouchableOpacity, View } from "react-native";
+import { StyleProp, StyleSheet, Text, TextStyle, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Popover from "./Popover";
 import { colors, radius, spacing } from "../theme";
