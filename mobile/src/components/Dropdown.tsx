@@ -9,7 +9,8 @@
  * สิ่งที่ dropdown ควรแก้ ไม่ใช่สิ่งที่มันควรสร้างขึ้นมาใหม่
  */
 import React, { useMemo, useRef, useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Popover from "./Popover";
 import { colors, radius, spacing } from "../theme";

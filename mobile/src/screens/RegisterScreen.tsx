@@ -6,8 +6,8 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
 } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import FieldHint, { invalidInput } from "../components/FieldHint";

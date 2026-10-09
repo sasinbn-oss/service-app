@@ -5,7 +5,8 @@
  * ลงครึ่งชั่วโมง กดทีเดียวจบ ที่ไม่ลง (08:45) พิมพ์เองได้ ว่าง = ยังไม่ได้ตกลงเวลา
  */
 import React, { useRef, useState } from "react";
-import { ScrollView, StyleProp, StyleSheet, Text, TextInput, TextStyle, TouchableOpacity, View } from "react-native";
+import { ScrollView, StyleProp, StyleSheet, Text, TextInput, TextStyle, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Popover from "./Popover";
 import { colors, radius, spacing } from "../theme";

@@ -4,7 +4,8 @@
  * กม. ของวันนับจากรายการที่ "คืนแล้ว" ในวันนั้น (แบบ FLEET) — รายการที่ยังไม่คืนยังไม่รู้ระยะ
  */
 import React, { useCallback, useRef, useState } from "react";
-import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
+import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage } from "../api/client";

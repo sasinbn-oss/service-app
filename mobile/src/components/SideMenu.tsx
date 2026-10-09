@@ -6,10 +6,11 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   useWindowDimensions,
   View,
 } from "react-native";
+import { EXIT_EASE, spring, timing } from "../utils/motion";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -296,11 +297,7 @@ export function DockedSideMenu() {
   // ยืด/หดแบบค่อย ๆ ไม่ตัดฉับ ตามต้นแบบ — เห็นว่าเมนูไปไหน ไม่ใช่หายวับไป
   const width = useRef(new Animated.Value(rail ? RAIL_WIDTH : DOCK_WIDTH)).current;
   useEffect(() => {
-    Animated.timing(width, {
-      toValue: rail ? RAIL_WIDTH : DOCK_WIDTH,
-      duration: 220,
-      useNativeDriver: false,
-    }).start();
+    spring(width, rail ? RAIL_WIDTH : DOCK_WIDTH, "resize").start();
   }, [rail, width]);
   useEffect(() => {
     const refresh = () => {
@@ -350,11 +347,8 @@ export default function SideMenu() {
         .then((r) => setInbox(r.data.inbox))
         .catch(() => undefined);
     }
-    Animated.timing(x, {
-      toValue: open ? 0 : -WIDTH,
-      duration: 200,
-      useNativeDriver: Platform.OS !== "web",
-    }).start(({ finished }) => {
+    // เปิดแบบสปริงตามนิ้ว ปิดเร่งออกเร็ว ๆ — จังหวะเดียวกับหน้าต่างอื่นในแอป (utils/motion)
+    (open ? spring(x, 0, "push") : timing(x, -WIDTH, 220, EXIT_EASE)).start(({ finished }) => {
       if (finished && !open) setMounted(false);
     });
   }, [open, x]);

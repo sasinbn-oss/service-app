@@ -5,7 +5,8 @@
  * แอดมินจะอ่านผิดว่าเป็นคนละสถานะ
  */
 import React, { useEffect, useState } from "react";
-import { Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Image, StyleSheet, Text, TextInput, View } from "react-native";
+import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
