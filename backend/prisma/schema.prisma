@@ -256,6 +256,7 @@ model Branch {
   outages        Outage[]
   scoreSnapshots ScoreSnapshot[]
   workOrders     WorkOrder[]
+  teamMoves      BranchTeamMove[]
 }
 
 // One washer or dryer installed at a branch.
@@ -861,6 +862,26 @@ model TeamDayPlanMember {
 // ชื่อทีมมาจากไฟล์ทะเบียนสาขาและไฟล์เครื่องที่อัปวันละสองครั้ง ถ้าไฟล์ยังเขียนชื่อเดิมอยู่
 // การอัปรอบถัดไปจะเขียนชื่อเดิมกลับลงสาขา แล้วช่าง/หัวหน้าภาคที่ย้ายไปชื่อใหม่แล้วจะมองไม่เห็นงาน
 // ตัวนำเข้าทั้งสองจึงแปลงชื่อผ่านตารางนี้ก่อนบันทึก (utils/teamAliases.ts)
+// สาขาที่แอดมินย้ายทีมช่างในแอป (หน้า "ทีมช่าง" → ย้ายสาขาเข้าทีม)
+//
+// ไฟล์ทะเบียนสาขาถูกอัปซ้ำเป็นประจำ และเขียนทีมช่างของทุกสาขาทับจากไฟล์ — ถ้าไม่จำไว้
+// การอัปรอบถัดไปจะดึงสาขากลับไปทีมเดิม ช่างของทีมใหม่มองไม่เห็นงานทันที (แบบเดียวกับ TeamRename)
+// หนึ่งแถวต่อสาขาต่อช่อง (zone = ทีม CM, pmTeam = ทีม PM) · ลบแถว = กลับไปเชื่อไฟล์
+model BranchTeamMove {
+  id        Int      @id @default(autoincrement())
+  branchId  Int
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // "zone" | "pmTeam"
+  field     String
+  // ทีมก่อนย้ายครั้งแรก — ใช้ตอน "คืนตามไฟล์"
+  fromTeam  String?
+  toTeam    String
+  movedById Int?
+  createdAt DateTime @default(now())
+
+  @@unique([branchId, field])
+}
+
 model TeamRename {
   id          Int      @id @default(autoincrement())
   fromName    String   @unique
