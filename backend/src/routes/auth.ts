@@ -55,7 +55,7 @@ router.post("/register", async (req, res) => {
     },
   });
 
-  rememberUser(user.id);
+  rememberUser(user.id, user.role as Role);
   const token = signToken({ userId: user.id, role: user.role as Role });
   res.status(201).json({
     token,
@@ -83,7 +83,7 @@ router.post("/login", async (req, res) => {
   if (!valid || user.deletedAt) {
     return res.status(401).json({ error: "Invalid employee code or password" });
   }
-  rememberUser(user.id);
+  rememberUser(user.id, user.role as Role);
 
   const token = signToken({
     userId: user.id,
@@ -399,6 +399,7 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
       createdAt: true,
     },
   });
+  rememberUser(updated.id, updated.role as Role);
   res.json(updated);
 });
 

@@ -15,6 +15,7 @@ import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_ROLES } from "../utils/constants";
 import { displayName, parseRoster, readRows, suggestTeam } from "../users/rosterImport";
 import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
+import { staleUsers } from "../utils/userGate";
 
 const router = Router();
 
@@ -189,6 +190,8 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
     // บันทึก 77 คนเกิน 30 วิได้ตอนเครือข่ายช้า แล้วจะล้มทั้งชุดทั้งที่ไม่มีอะไรผิด
     { timeout: 60_000, maxWait: 15_000 }
   );
+  // คนที่เข้าระบบไว้แล้วถูกตั้งเป็นหัวหน้าภาค ต้องใช้สิทธิ์ใหม่ได้ทันที ไม่ใช่หลังเข้าระบบใหม่
+  staleUsers();
   res.json({ ok: true, created, updated, withoutTeam });
 });
 

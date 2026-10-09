@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { verifyToken, TokenPayload } from "../utils/jwt";
-import { isActiveUser } from "../utils/userGate";
+import { currentRole } from "../utils/userGate";
 
 export interface AuthRequest extends Request {
   auth?: TokenPayload;
@@ -18,10 +18,12 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 
-  // โทเคนยังไม่หมดอายุแต่บัญชีถูกลบไปแล้ว (ดู utils/userGate.ts)
-  if (!(await isActiveUser(req.auth.userId))) {
+  // โทเคนยังไม่หมดอายุแต่บัญชีถูกลบไปแล้ว หรือสิทธิ์เปลี่ยนหลังเข้าระบบ (ดู utils/userGate.ts)
+  const role = await currentRole(req.auth.userId);
+  if (!role) {
     return res.status(401).json({ error: "บัญชีนี้ถูกลบแล้ว ติดต่อแอดมิน", accountDeleted: true });
   }
+  req.auth = { ...req.auth, role };
 
   // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว
   // ทุกจุดที่เช็ค role === "ADMIN" (ราว 20 จุด) จึงใช้ได้ทันทีโดยไม่ต้องไล่แก้ทีละจุด
