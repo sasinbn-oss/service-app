@@ -74,6 +74,7 @@ const OWN_TITLE = new Set([
   "VehicleHistory",
   "ManageUsers",
   "ManageTeams",
+  "ManageSpareParts",
   "AdminMenu",
   "HistoryMenu",
 ]);
