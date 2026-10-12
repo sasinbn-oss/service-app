@@ -79,6 +79,11 @@ echo "$R" | grep -q "ผู้เข้าปฏิบัติงาน" && pas
 
 echo
 echo "═══ ครบแล้วปิดได้ และบันทึกคนที่ไป"
+# สรุปงานบังคับ — ช่องว่างล้วนก็ไม่นับ
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \
+  -d "{\"result\":\"FIXED\",\"note\":\"   \",\"workerIds\":[$TECH]}")
+echo "$R" | grep -q "ต้องสรุปงานที่ทำ" && [ "$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.status')" != "DONE" ] \
+  && pass "ปิดงานโดยไม่สรุปงานที่ทำไม่ได้" || fail "ปิดได้ทั้งที่ไม่มีสรุปงาน: $(echo $R|head -c 120)"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \
   -d "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนสายพาน\",\"workerIds\":[$TECH],\"otherWorkers\":\"ช่างผู้รับเหมา 1 คน\"}")
 echo "$R" | J 'd.statusLabel' | grep -q "ปิดงาน" && pass "ปิดงานได้" || fail "ปิดไม่ได้: $R"
