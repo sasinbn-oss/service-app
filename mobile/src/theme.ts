@@ -42,9 +42,12 @@ export const colors = {
   roleSupervisorSoft: "#E0F2FE",
   roleTech: "#047857",
   roleTechSoft: "#E3F7EE",
-  doneInk: "#3F6212",
-  doneSoft: "#ECF7D9",
-  doneLine: "#C9E4A0",
+  // เขียวเสจ (เจ้าของงานเลือก ต.ค. 69) — เขียวมะกอกเดิมอมเหลือง ดูสดเกินสำหรับงานที่จบแล้ว
+  // ตั้งใจให้หม่นและต่างจากเขียวมรกตของ "รอช่าง" ชัด ๆ
+  doneInk: "#2F5A46",
+  doneBand: "#3E6B56",
+  doneSoft: "#F2F7F4",
+  doneLine: "#D6E6DD",
   background: "#F4F9FD",
   card: "#FFFFFF",
   border: "#E2E8F0",

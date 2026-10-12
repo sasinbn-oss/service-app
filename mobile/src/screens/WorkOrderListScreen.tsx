@@ -167,7 +167,7 @@ export const OWNER_TONE: Record<Owner, { bg: string; fg: string }> = {
   SUPERVISOR: { bg: colors.roleSupervisorSoft, fg: colors.roleSupervisor },
   EMPLOYEE: { bg: colors.roleTechSoft, fg: colors.roleTech },
   OUTSIDE: { bg: colors.warningSoft, fg: colors.warningInk },
-  DONE: { bg: colors.doneSoft, fg: colors.doneInk },
+  DONE: { bg: colors.doneSoft, fg: colors.doneBand },
   CANCELLED: { bg: colors.tile, fg: colors.textMuted },
 };
 
@@ -687,7 +687,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมาย"}
       </Text>
       <View style={styles.colStatus}>
-        <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }]}>
+        <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
@@ -725,7 +725,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
         <View style={{ flex: 1 }} />
-        <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }]}>
+        <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
       </View>
@@ -954,6 +954,7 @@ const styles = StyleSheet.create({
   // ป้ายสถานะในแถวนี้จึงต้องเป็นพื้นขาว ไม่งั้นเขียวบนเขียวจนมองไม่เห็น
   cardDone: { backgroundColor: colors.doneSoft },
   trDone: { backgroundColor: colors.doneSoft },
+  badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
   cardTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   code: { fontSize: 14, lineHeight: 21, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },

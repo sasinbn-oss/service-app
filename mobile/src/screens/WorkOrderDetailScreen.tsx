@@ -549,7 +549,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
           {urgent ? <UrgentBadge /> : null}
           <View style={{ flex: 1 }} />
-          <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }]}>
+          <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }, closedOk && styles.badgeDone]}>
             <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
           </View>
         </View>
@@ -3240,11 +3240,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   cardDone: { backgroundColor: colors.doneSoft, borderColor: colors.doneLine },
+  badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
   doneBand: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    backgroundColor: colors.doneInk,
+    backgroundColor: colors.doneBand,
     borderRadius: radius.lg,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
