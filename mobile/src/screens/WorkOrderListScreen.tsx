@@ -8,6 +8,8 @@ import React, { useRef, useCallback, useEffect, useMemo, useState } from "react"
 import {
   useWindowDimensions,
   FlatList,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -325,8 +327,56 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   );
   useRefreshHandler(load);
 
+  /**
+   * มือถือ: เลื่อนลงดูใบงานแล้วหัวหน้า+ตัวกรองหุบเหลือแถบเดียว (เจ้าของงานเลือกแบบ C ต.ค. 69)
+   * กางเต็มกินเกือบทั้งจอ เห็นใบงานแค่ใบสองใบ — แถบที่หุบยังบอกว่ากรองอะไรอยู่ กดแล้วกลับขึ้นบนสุดและกางอีกครั้ง
+   *
+   * หุบ/กางคนละระยะ (มากกว่า 80 / น้อยกว่า 4) กันกระพริบตอนนิ้วค้างแถวเส้นเดียว
+   * และหุบเฉพาะเมื่อรายการยาวพอ — รายการสั้นที่หุบแล้วจอสูงขึ้นจนเลื่อนไม่ได้ จะเด้งกลับไปบนสุดแล้วกางวนไม่จบ
+   */
+  const foldable = width < 640;
+  const [folded, setFolded] = useState(false);
+  const listRef = useRef<FlatList<ListItem>>(null);
+  const headH = useRef(0);
+  const viewH = useRef(0);
+  const contentH = useRef(0);
+  useEffect(() => {
+    if (!foldable) setFolded(false);
+  }, [foldable]);
+  function onListScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    if (!foldable) return;
+    const y = e.nativeEvent.contentOffset.y;
+    if (!folded && y > 80 && contentH.current - viewH.current > headH.current + 40) setFolded(true);
+    else if (folded && y < 4) setFolded(false);
+  }
+  function unfold() {
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+    setFolded(false);
+  }
+
   return (
     <View style={styles.container}>
+      {folded ? (
+        <FoldedBar
+          count={shown.length}
+          parts={[
+            FILTERS.find((f) => f.value === filter)?.label ?? "",
+            mineOnly ? "เฉพาะงานของฉัน" : "",
+            prefs.owner ? `รอ${ROLE_TABS.find((t) => t.value === prefs.owner)?.label ?? ""}` : "",
+            prefs.who ? whoLabel(rows, prefs.who, prefs.owner) : "",
+            prefs.btype,
+            prefs.sort !== "urgent" ? SORTS.find((o) => o.value === prefs.sort)?.label ?? "" : "",
+            settledSearch.trim() ? `ค้น “${settledSearch.trim()}”` : "",
+          ].filter(Boolean)}
+          onPress={unfold}
+        />
+      ) : null}
+      <View
+        style={folded ? styles.headHidden : null}
+        onLayout={(e) => {
+          if (!folded) headH.current = e.nativeEvent.layout.height;
+        }}
+      >
       {/*
         หัวหน้าแบบ OTTERI: ชื่อหน้า + ป้ายจำนวนของกลุ่มที่เลือก + คำอธิบายบรรทัดเดียว
         ป้ายจำนวนนับจากรายการที่โหลดมาจริง ไม่ใช่ตัวเลขบนชิป — ค้นหาแล้วตัวเลขจะลดตามที่เห็น
@@ -400,6 +450,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       {!loading && !error && rows.length > 0 ? (
         <ListFilters rows={rows} prefs={prefs} setPref={setPref} byOwner={byOwner} byType={byType} />
       ) : null}
+      </View>
 
       {loading ? (
         <View style={styles.centered}>
@@ -431,6 +482,11 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ทั้งที่จอเห็นพร้อมกันได้ห้าใบ — FlatList วาดเฉพาะที่กำลังจะเห็น
         */
         <FlatList
+          ref={listRef}
+          onScroll={onListScroll}
+          scrollEventThrottle={32}
+          onLayout={(e) => (viewH.current = e.nativeEvent.layout.height)}
+          onContentSizeChange={(_, h) => (contentH.current = h)}
           data={items}
           keyExtractor={(it) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
           contentContainerStyle={table ? styles.tableList : styles.list}
@@ -476,6 +532,35 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
  * เลือกบทบาทแล้วขึ้นแถวที่สองให้เลือกต่อว่าเป็นของใคร — หัวหน้าภาครายคน ช่างรายทีม
  * แอดมินไม่แยกคน เพราะแอดมินทุกคนทำแทนกันได้ทุกขั้น
  */
+/** ชื่อ "คนไหน/ทีมไหน" ที่เลือกไว้ — ใช้บนแถบหุบ ตัวเลือกจริงสร้างใน ListFilters จากรายการเดียวกัน */
+function whoLabel(rows: WorkOrderRow[], who: Who, owner: Role | "") {
+  if (who === "none") return owner === "SUPERVISOR" ? "ยังไม่มีหัวหน้าภาคดูแล" : "ยังไม่มีทีม";
+  if (who.startsWith("t:")) return `ทีม${who.slice(2)}`;
+  for (const r of rows) {
+    const sup = r.waitingOnSupervisors.find((x) => `s:${x.id}` === who);
+    if (sup) return sup.name;
+  }
+  return "";
+}
+
+/** แถบเดียวตอนหุบ — บอกตัวกรองที่ใช้อยู่ และพากลับไปเปลี่ยนตัวกรองได้ในแตะเดียว */
+function FoldedBar({ count, parts, onPress }: { count: number; parts: string[]; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.folded} onPress={onPress} activeOpacity={0.85} accessibilityLabel="แสดงตัวกรองและช่องค้นหา">
+      <View style={styles.foldedCount}>
+        <Text style={styles.foldedCountText}>{count.toLocaleString("th-TH")} ใบ</Text>
+      </View>
+      <Text style={styles.foldedText} numberOfLines={1}>
+        {parts.join(" · ")}
+      </Text>
+      <View style={styles.foldedBtn}>
+        <Ionicons name="search" size={15} color={colors.primaryInk} />
+        <Ionicons name="options-outline" size={16} color={colors.primaryInk} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 function ListFilters({
   rows,
   prefs,
@@ -781,6 +866,31 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  // ซ่อนด้วย display:none ไม่ถอดทิ้ง — ข้อความที่พิมพ์ค้างในช่องค้นหาและตำแหน่งเลื่อนของแถวชิปต้องอยู่ครบตอนกางกลับ
+  headHidden: { display: "none" },
+  folded: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    ...shadow.card,
+  },
+  foldedCount: { backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingHorizontal: 10 },
+  foldedCountText: { fontSize: 12, lineHeight: 22, fontWeight: "800", color: colors.primaryInk },
+  foldedText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.text },
+  foldedBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.sky50,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
   toolbar: {
     flexDirection: "row",
     alignItems: "center",
