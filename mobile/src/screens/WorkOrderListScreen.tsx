@@ -4,7 +4,7 @@
  * ต่างจากกระดานติดตามเครื่องเสีย ซึ่งบอกว่า "เครื่องไหนมีปัญหา" หน้านี้บอกว่า
  * "ใครต้องไปทำอะไร" เคสหนึ่งอาจมีใบงานหลายใบ ถ้าช่างต้องเข้าไปหลายรอบ
  */
-import React, { useRef, useCallback, useState } from "react";
+import React, { useRef, useCallback, useEffect, useMemo, useState } from "react";
 import {
   useWindowDimensions,
   FlatList,
@@ -19,11 +19,13 @@ import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
+import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -50,6 +52,63 @@ export interface WorkOrderRow {
   closedAt: string | null;
   closeResultLabel: string | null;
   attachmentCount: number;
+  /** ขั้นนี้เป็นของบทบาทไหน — ว่าง = ปิด/ยกเลิกแล้ว */
+  stageActor: Role | null;
+  /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
+  waitingOnSupervisors: { id: number; name: string; region: string | null }[];
+  /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
+  waitingOnTeam: string | null;
+  branchType: "DODO" | "COCO";
+  /** เข้าขั้นปัจจุบันเมื่อไร — ใช้บอกว่าค้างมากี่วัน */
+  stageSince: string;
+}
+
+type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
+type Sort = "urgent" | "new" | "old" | "az" | "za";
+
+const ROLE_TABS: { value: Role; label: string; color: string }[] = [
+  { value: "ADMIN", label: "แอดมิน", color: colors.navy },
+  { value: "SUPERVISOR", label: "หัวหน้าภาค", color: colors.primary },
+  { value: "EMPLOYEE", label: "ช่าง", color: colors.success },
+];
+const ROLE_LABEL: Record<Role, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
+
+/**
+ * ลำดับ — "ด่วนก่อน" คือลำดับเดิมจากเซิร์ฟเวอร์ (ด่วนขึ้นก่อน แล้วเก่าสุดก่อน = ลำดับที่ควรหยิบไปทำ)
+ * ส่วน "ค้างนานสุด" นับจากวันที่เข้าขั้นปัจจุบัน ไม่ใช่วันเปิดใบงาน — ใบเก่าที่เพิ่งขยับขั้น
+ * ไม่ได้ถูกลืม ใบที่นิ่งอยู่ขั้นเดียวหลายวันต่างหากที่ถูกลืม
+ */
+const SORTS: { value: Sort; label: string }[] = [
+  { value: "urgent", label: "ด่วนก่อน" },
+  { value: "new", label: "ใหม่สุด" },
+  { value: "old", label: "ค้างนานสุด" },
+  { value: "az", label: "สาขา A→Z" },
+  { value: "za", label: "สาขา Z→A" },
+];
+
+/** ตัวกรองที่เลือก "คน" ภายในบทบาท — s:<id> หัวหน้าภาค · t:<ทีม> ทีมช่าง · none ยังไม่มีใครดูแล */
+type Who = string;
+
+interface ListPrefs {
+  owner: Role | "";
+  who: Who;
+  btype: "" | "DODO" | "COCO";
+  sort: Sort;
+}
+const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent" };
+
+function whoKeys(row: WorkOrderRow): Who[] {
+  if (row.stageActor === "SUPERVISOR")
+    return row.waitingOnSupervisors.length ? row.waitingOnSupervisors.map((s) => `s:${s.id}`) : ["none"];
+  if (row.stageActor === "EMPLOYEE") return [row.waitingOnTeam ? `t:${row.waitingOnTeam}` : "none"];
+  return [];
+}
+
+/** "ค้าง 3 วัน" — นับเป็นวันเต็มตามเวลาไทย วันนี้ = "เข้าขั้นนี้วันนี้" */
+export function stuckLabel(iso: string) {
+  const day = (d: Date) => Math.floor((d.getTime() + 7 * 3600_000) / 86_400_000);
+  const n = day(new Date()) - day(new Date(iso));
+  return n <= 0 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${n} วัน`;
 }
 
 type Filter = "INBOX" | "ACTIVE" | "PARTS_CHECKED" | "IN_PROGRESS" | "DONE" | "ALL";
@@ -129,6 +188,53 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const settledSearch = useDebounced(search);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
+  const [prefs, setPrefs] = useState<ListPrefs>(DEFAULT_PREFS);
+  const setPref = (patch: Partial<ListPrefs>) => setPrefs((p) => ({ ...p, ...patch }));
+
+  /**
+   * จำตัวกรอง "รอใคร / สาขา / เรียง" ล่าสุดไว้ในเครื่อง แยกตามผู้ใช้ — แบบเดียวกับหน้าติดตามเครื่องเสีย
+   * โหลดของเดิมให้เสร็จก่อนค่อยเริ่มบันทึก ไม่งั้นค่าตั้งต้นตอนเปิดหน้าจะเขียนทับของที่จำไว้
+   */
+  const prefsKey = `otteri-wo-list:${user?.id ?? 0}`;
+  const [restored, setRestored] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(prefsKey)
+      .then((raw) => alive && raw && setPrefs({ ...DEFAULT_PREFS, ...JSON.parse(raw) }))
+      .catch(() => undefined)
+      .finally(() => alive && setRestored(prefsKey));
+    return () => {
+      alive = false;
+    };
+  }, [prefsKey]);
+  useEffect(() => {
+    if (restored !== prefsKey) return;
+    AsyncStorage.setItem(prefsKey, JSON.stringify(prefs)).catch(() => undefined);
+  }, [prefs, restored, prefsKey]);
+
+  /**
+   * กรองและเรียงที่หน้าจอ ไม่ยิงเซิร์ฟเวอร์ใหม่ — รายการไม่แบ่งหน้า ของครบอยู่ในมือแล้ว
+   * กดสลับตัวกรองจึงเปลี่ยนทันทีโดยไม่ต้องรอเน็ต ตัวเลขบนปุ่มแต่ละแถวนับโดยใช้ตัวกรองของแถวอื่น
+   * (เลือก DODO แล้วตัวเลขของ "หัวหน้าภาค" คือใบ DODO ที่รอหัวหน้าภาค)
+   */
+  const byOwner = useCallback(
+    (r: WorkOrderRow) =>
+      (!prefs.owner || r.stageActor === prefs.owner) && (!prefs.who || whoKeys(r).includes(prefs.who)),
+    [prefs.owner, prefs.who]
+  );
+  const byType = useCallback((r: WorkOrderRow) => !prefs.btype || r.branchType === prefs.btype, [prefs.btype]);
+  const shown = useMemo(() => {
+    const list = rows.filter((r) => byOwner(r) && byType(r));
+    const at = (iso: string) => new Date(iso).getTime();
+    const code = (a: WorkOrderRow, b: WorkOrderRow) =>
+      a.branchCode.localeCompare(b.branchCode, "en", { numeric: true }) || a.code.localeCompare(b.code);
+    if (prefs.sort === "az") list.sort(code);
+    else if (prefs.sort === "za") list.sort((a, b) => code(b, a));
+    else if (prefs.sort === "new") list.sort((a, b) => at(b.createdAt) - at(a.createdAt));
+    else if (prefs.sort === "old") list.sort((a, b) => at(a.stageSince) - at(b.stageSince));
+    return list;
+  }, [rows, byOwner, byType, prefs.sort]);
 
   // นับรอบการโหลด — สลับชิปเร็ว ๆ คำตอบของชิปก่อนหน้าอาจมาถึงทีหลัง
   // ต้องทิ้งคำตอบเก่า ไม่งั้นชิป "ปิดแล้ว" อาจโชว์รายการของ "ที่ยังค้าง"
@@ -190,7 +296,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
           {!loading && !error ? (
             <View style={styles.countPill}>
-              <Text style={styles.countPillText}>{rows.length.toLocaleString("th-TH")} ใบ</Text>
+              <Text style={styles.countPillText}>{shown.length.toLocaleString("th-TH")} ใบ</Text>
             </View>
           ) : null}
           <View style={{ flex: 1 }} />
@@ -251,6 +357,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
       </ScrollView>
 
+      {!loading && !error && rows.length > 0 ? (
+        <ListFilters rows={rows} prefs={prefs} setPref={setPref} byOwner={byOwner} byType={byType} />
+      ) : null}
+
       {loading ? (
         <View style={styles.centered}>
           <Spinner color={colors.primary} />
@@ -268,6 +378,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           title="ไม่มีใบงานในหมวดนี้"
           text="เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
         />
+      ) : shown.length === 0 ? (
+        <EmptyState
+          icon="funnel-outline"
+          title="ไม่มีใบงานตามตัวกรองนี้"
+          text="ลองเลือก “ทุกคน” หรือ “ทั้งหมด” ในแถวรอใคร / สาขา"
+        />
       ) : (
         /*
           FlatList ไม่ใช่ ScrollView เพราะ ScrollView สร้างการ์ดทุกใบตั้งแต่เปิดหน้า
@@ -275,19 +391,23 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ทั้งที่จอเห็นพร้อมกันได้ห้าใบ — FlatList วาดเฉพาะที่กำลังจะเห็น
         */
         <FlatList
-          data={rows}
+          data={shown}
           keyExtractor={(row) => String(row.id)}
           contentContainerStyle={table ? styles.tableList : styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
-          ListHeaderComponent={table && rows.length ? <TableHead /> : null}
+          ListHeaderComponent={
+            table ? (
+              <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+            ) : null
+          }
           renderItem={({ item, index }) =>
             table ? (
               <WorkOrderTableRow
                 row={item}
-                last={index === rows.length - 1}
+                last={index === shown.length - 1}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
               />
             ) : (
@@ -303,15 +423,184 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   );
 }
 
-/** หัวตาราง — ความกว้างคอลัมน์ต้องตรงกับ WorkOrderTableRow */
-function TableHead() {
+/**
+ * แถว "รอใคร · สาขา · เรียง" ใต้ชิปสถานะ
+ *
+ * เลือกบทบาทแล้วขึ้นแถวที่สองให้เลือกต่อว่าเป็นของใคร — หัวหน้าภาครายคน ช่างรายทีม
+ * แอดมินไม่แยกคน เพราะแอดมินทุกคนทำแทนกันได้ทุกขั้น
+ */
+function ListFilters({
+  rows,
+  prefs,
+  setPref,
+  byOwner,
+  byType,
+}: {
+  rows: WorkOrderRow[];
+  prefs: ListPrefs;
+  setPref: (p: Partial<ListPrefs>) => void;
+  byOwner: (r: WorkOrderRow) => boolean;
+  byType: (r: WorkOrderRow) => boolean;
+}) {
+  const typed = rows.filter(byType);
+  const ownerCount = (role: Role | "") => typed.filter((r) => !role || r.stageActor === role).length;
+  const typeCount = (t: "" | "DODO" | "COCO") => rows.filter((r) => byOwner(r) && (!t || r.branchType === t)).length;
+
+  // ตัวเลือก "ของใคร" สร้างจากใบที่มีอยู่จริง — ไม่มีชื่อที่กดแล้วได้รายการว่าง
+  const whoOptions = useMemo(() => {
+    if (prefs.owner !== "SUPERVISOR" && prefs.owner !== "EMPLOYEE") return null;
+    const map = new Map<Who, { label: string; n: number }>();
+    for (const r of typed) {
+      if (r.stageActor !== prefs.owner) continue;
+      for (const k of whoKeys(r)) {
+        const label =
+          k === "none"
+            ? prefs.owner === "SUPERVISOR"
+              ? "ยังไม่มีหัวหน้าภาคดูแล"
+              : "ยังไม่มีทีม"
+            : k.startsWith("s:")
+              ? (() => {
+                  const sup = r.waitingOnSupervisors.find((x) => `s:${x.id}` === k)!;
+                  return sup.region ? `${sup.name} (${sup.region})` : sup.name;
+                })()
+              : `ทีม${k.slice(2)}`;
+        const cur = map.get(k);
+        map.set(k, { label, n: (cur?.n ?? 0) + 1 });
+      }
+    }
+    return [...map.entries()].sort((a, b) => (a[0] === "none" ? 1 : b[0] === "none" ? -1 : a[1].label.localeCompare(b[1].label, "th")));
+  }, [typed, prefs.owner]);
+
+  return (
+    <View style={styles.filterPanel}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fRow}>
+        <Text style={styles.fLabel}>รอใคร</Text>
+        <Seg on={!prefs.owner} label="ทุกคน" n={ownerCount("")} onPress={() => setPref({ owner: "", who: "" })} />
+        {ROLE_TABS.map((t) => (
+          <Seg
+            key={t.value}
+            on={prefs.owner === t.value}
+            label={t.label}
+            dot={t.color}
+            n={ownerCount(t.value)}
+            onPress={() => setPref({ owner: t.value, who: "" })}
+          />
+        ))}
+      </ScrollView>
+      {whoOptions ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.fRowLine} contentContainerStyle={styles.fRow}>
+          <Text style={styles.fLabel}>{prefs.owner === "SUPERVISOR" ? "หัวหน้าภาคคนไหน" : "ทีมไหน"}</Text>
+          <Pill on={!prefs.who} label="ทุกคน" n={ownerCount(prefs.owner)} onPress={() => setPref({ who: "" })} />
+          {whoOptions.map(([k, o]) => (
+            <Pill key={k} on={prefs.who === k} label={o.label} n={o.n} onPress={() => setPref({ who: k })} />
+          ))}
+        </ScrollView>
+      ) : null}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.fRowLine} contentContainerStyle={styles.fRow}>
+        <Text style={styles.fLabel}>สาขา</Text>
+        {(["", "DODO", "COCO"] as const).map((t) => (
+          <Seg key={t} on={prefs.btype === t} label={t || "ทั้งหมด"} n={typeCount(t)} onPress={() => setPref({ btype: t })} />
+        ))}
+        <View style={styles.fSep} />
+        <Text style={styles.fLabel}>เรียง</Text>
+        {SORTS.map((o) => (
+          <Seg key={o.value} on={prefs.sort === o.value} label={o.label} onPress={() => setPref({ sort: o.value })} />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function Seg({ on, label, n, dot, onPress }: { on: boolean; label: string; n?: number; dot?: string; onPress: () => void }) {
+  return (
+    // ชื่อมีคำว่า "ตัวกรอง" นำหน้า — ข้อความบนปุ่ม (หัวหน้าภาค, DODO) ซ้ำกับป้ายในแถวรายการ
+    // คนใช้โปรแกรมอ่านจอกับเทสต์จะได้แยกปุ่มกรองออกจากป้ายได้
+    <TouchableOpacity
+      style={[styles.seg, on && styles.segOn]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      accessibilityLabel={`ตัวกรอง ${label}`}
+      accessibilityState={{ selected: on }}
+    >
+      {dot ? <View style={[styles.segDot, { backgroundColor: dot }]} /> : null}
+      <Text style={[styles.segText, on && styles.segTextOn]}>{label}</Text>
+      {n !== undefined ? (
+        <View style={[styles.segCount, on && styles.segCountOn]}>
+          <Text style={[styles.segCountText, on && styles.segCountTextOn]}>{n}</Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+function Pill({ on, label, n, onPress }: { on: boolean; label: string; n: number; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={[styles.pill, on && styles.pillOn]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      accessibilityLabel={`ตัวกรอง ${label}`}
+      accessibilityState={{ selected: on }}
+    >
+      <Text style={[styles.pillText, on && styles.pillTextOn]}>
+        {label} <Text style={styles.pillN}>{n}</Text>
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+/** ป้าย "รอใคร" ในแถว/การ์ด — บทบาท + ชื่อหัวหน้าภาคหรือทีม */
+function WaitingOn({ row }: { row: WorkOrderRow }) {
+  if (!row.stageActor) return null;
+  const who =
+    row.stageActor === "SUPERVISOR"
+      ? row.waitingOnSupervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนดูแล"
+      : row.stageActor === "EMPLOYEE"
+        ? row.waitingOnTeam
+          ? `ทีม${row.waitingOnTeam}`
+          : null
+        : null;
+  const tone =
+    row.stageActor === "ADMIN"
+      ? { bg: colors.sky50, fg: colors.navy }
+      : row.stageActor === "SUPERVISOR"
+        ? { bg: colors.primarySoft, fg: colors.primaryInk }
+        : { bg: colors.successSoft, fg: colors.successInk };
+  return (
+    <View style={[styles.waitTag, { backgroundColor: tone.bg }]}>
+      <Text style={[styles.waitText, { color: tone.fg }]} numberOfLines={1}>
+        {ROLE_LABEL[row.stageActor]}
+        {who ? <Text style={styles.waitWho}> · {who}</Text> : null}
+      </Text>
+    </View>
+  );
+}
+
+function BranchType({ type }: { type: "DODO" | "COCO" }) {
+  return (
+    <View style={[styles.btype, type === "DODO" ? styles.btypeDodo : styles.btypeCoco]}>
+      <Text style={[styles.btypeText, { color: type === "DODO" ? colors.warningInk : colors.primaryInk }]}>{type}</Text>
+    </View>
+  );
+}
+
+/** หัวตาราง — ความกว้างคอลัมน์ต้องตรงกับ WorkOrderTableRow · กด "สาขา" สลับ A→Z / Z→A */
+function TableHead({ sort, onSortBranch }: { sort: Sort; onSortBranch: () => void }) {
   return (
     <View style={[styles.tr, styles.thead]}>
       <Text style={[styles.th, styles.colWo]}>ใบงาน</Text>
-      <Text style={[styles.th, styles.colBranch]}>สาขา</Text>
+      <TouchableOpacity style={[styles.colBranch, styles.thSort]} onPress={onSortBranch} activeOpacity={0.7} accessibilityLabel="เรียงตามสาขา">
+        <Text style={styles.th}>สาขา</Text>
+        {sort === "az" || sort === "za" ? (
+          <Text style={[styles.th, { color: colors.primaryInk }]}>{sort === "az" ? "▲ A→Z" : "▼ Z→A"}</Text>
+        ) : (
+          <Ionicons name="swap-vertical" size={13} color={colors.textFaint} />
+        )}
+      </TouchableOpacity>
       <Text style={[styles.th, styles.colMachine]}>เครื่อง</Text>
       <Text style={[styles.th, styles.colTeam]}>ทีม</Text>
       <Text style={[styles.th, styles.colStatus]}>สถานะ</Text>
+      <Text style={[styles.th, styles.colWait]}>รอใคร</Text>
       <View style={styles.colAction} />
     </View>
   );
@@ -347,7 +636,10 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         </View>
       </View>
       <View style={styles.colBranch}>
-        <Text style={styles.td}>{row.branchCode}</Text>
+        <View style={styles.codeRow}>
+          <Text style={styles.td}>{row.branchCode}</Text>
+          <BranchType type={row.branchType} />
+        </View>
         <Text style={styles.td2}>{row.branchName}</Text>
       </View>
       <Text style={[styles.td, styles.colMachine]}>{row.machineCode ?? "—"}</Text>
@@ -358,6 +650,10 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <View style={[styles.badge, { backgroundColor: tone.bg, alignSelf: "flex-start" }]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
+        {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
+      </View>
+      <View style={styles.colWait}>
+        <WaitingOn row={row} />
       </View>
       <View style={styles.colAction}>
         <View style={styles.viewBtn}>
@@ -403,11 +699,19 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
       <View style={styles.metaRow}>
         <Ionicons name="business-outline" size={13} color={colors.textFaint} />
+        <BranchType type={row.branchType} />
         <Text style={styles.meta}>
           {row.branchCode} · {row.branchName}
           {row.machineCode ? ` · เครื่อง ${row.machineCode}` : ""}
         </Text>
       </View>
+
+      {row.stageActor ? (
+        <View style={styles.metaRow}>
+          <WaitingOn row={row} />
+          <Text style={styles.meta}>{stuckLabel(row.stageSince)}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.metaRow}>
         <Ionicons name="person-outline" size={13} color={colors.textFaint} />
@@ -500,7 +804,55 @@ const styles = StyleSheet.create({
   colBranch: { flex: 2.2, minWidth: 0 },
   colMachine: { flex: 0.8 },
   colTeam: { flex: 1.3 },
-  colStatus: { flex: 1.8 },
+  colStatus: { flex: 1.6, gap: 2 },
+  colWait: { flex: 1.6, minWidth: 0 },
+  thSort: { flexDirection: "row", alignItems: "center", gap: 4 },
+  filterPanel: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingVertical: 6,
+    flexShrink: 0,
+  },
+  fRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.md, paddingVertical: 4 },
+  // เส้นคั่นอยู่ที่ตัว ScrollView ไม่ใช่เนื้อหาข้างใน — ไม่งั้นเส้นยาวแค่ถึงปุ่มสุดท้าย ไม่เต็มกรอบ
+  fRowLine: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 4, marginTop: 4 },
+  fLabel: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted, marginRight: 2 },
+  fSep: { width: 1, alignSelf: "stretch", backgroundColor: colors.border, marginHorizontal: 6 },
+  seg: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+    backgroundColor: colors.tile,
+  },
+  segOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  segDot: { width: 8, height: 8, borderRadius: 4 },
+  segText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
+  segTextOn: { color: colors.primaryInk },
+  segCount: { backgroundColor: colors.card, borderRadius: 999, paddingHorizontal: 6 },
+  segCountOn: { backgroundColor: colors.primary },
+  segCountText: { fontSize: 11, lineHeight: 17, fontWeight: "800", color: colors.textMuted },
+  segCountTextOn: { color: "#fff" },
+  pill: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4, backgroundColor: colors.card },
+  pillOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  pillText: { fontSize: 13, lineHeight: 20, color: colors.text },
+  pillTextOn: { color: "#fff" },
+  pillN: { fontWeight: "800" },
+  waitTag: { alignSelf: "flex-start", borderRadius: 7, paddingHorizontal: 8, paddingVertical: 1, maxWidth: "100%" },
+  waitText: { fontSize: 12, lineHeight: 19, fontWeight: "700" },
+  waitWho: { fontWeight: "500" },
+  btype: { borderRadius: 5, paddingHorizontal: 5 },
+  btypeDodo: { backgroundColor: colors.warningSoft },
+  btypeCoco: { backgroundColor: colors.primarySoft },
+  btypeText: { fontSize: 10, lineHeight: 16, fontWeight: "800" },
   colAction: { width: 64, alignItems: "flex-end" },
   cellWo: { flexDirection: "row", alignItems: "center", gap: 10 },
   rowIcon: {

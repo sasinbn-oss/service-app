@@ -428,19 +428,52 @@ const listSelect = {
   createdAt: true,
   closedAt: true,
   closeResult: true,
-  branch: { select: { code: true, name: true } },
+  branch: { select: { code: true, name: true, region: true, zone: true, pmTeam: true } },
   machine: { select: { code: true } },
   assignedTeam: true,
   assignedTo: { select: { name: true } },
   _count: { select: { attachments: true } },
 } as const;
 
+/** หัวหน้าภาคพร้อมขอบเขต — ใช้ตอบว่าใบที่รอหัวหน้าภาครอ "ใคร" */
+type SupervisorRef = { id: number; name: string; region: string | null; supervisedTeams: string[] };
+
+/**
+ * ประวัติที่ไม่ได้ขยับขั้น — ไม่นับตอนหาว่าใบงานค้างขั้นนี้มานานเท่าไร
+ * แนบรูปเพิ่มตอนบ่ายไม่ได้แปลว่าใบงานเพิ่งเข้าขั้นนี้
+ */
+const NON_STAGE_ACTIONS = ["ATTACHED", "ATTACHMENT_REMOVED", "EDITED"];
+
 type WorkOrderListRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
 >;
 
-function listShape(w: WorkOrderListRow) {
+function listShape(
+  w: WorkOrderListRow,
+  ctx: { supervisors: SupervisorRef[]; stageSince: Map<number, Date> }
+) {
+  const actor = WORK_ORDER_STAGE_ACTOR[w.status] ?? null;
+  /**
+   * ขั้นนี้รอ "ใคร" — ไม่ใช่แค่บทบาท
+   *
+   * ระบบไม่ได้ผูกใบงานกับหัวหน้าภาครายคน จึงตอบจากขอบเขตที่แต่ละคนดูแล
+   * (ภาค หรือทีม) — ภาคที่มีหัวหน้าภาคสองคนจะได้ทั้งสองชื่อ ซึ่งตรงกับความจริง
+   * ว่าใครในสองคนนั้นก็กดได้ ส่วนขั้นของช่างตอบเป็นทีมที่รับงาน แอดมินไม่แยกคน
+   */
+  const waitingOnSupervisors =
+    actor === "SUPERVISOR"
+      ? ctx.supervisors
+          .filter((s) => coversWorkOrder({ region: s.region, teams: s.supervisedTeams }, w))
+          .map((s) => ({ id: s.id, name: s.name, region: s.region }))
+      : [];
   return {
+    stageActor: actor,
+    waitingOnSupervisors,
+    waitingOnTeam: actor === "EMPLOYEE" ? w.assignedTeam : null,
+    // D = แฟรนไชส์ (DODO) · C = สาขาบริษัท (COCO) — กติกาเดียวกับขั้นเสนอราคา
+    branchType: isCompanyBranch(w.branch.code) ? "COCO" : "DODO",
+    // เข้าขั้นปัจจุบันเมื่อไร — ใบที่ไม่มีประวัติขยับขั้นเลยนับจากวันเปิด
+    stageSince: ctx.stageSince.get(w.id) ?? w.createdAt,
     id: w.id,
     code: w.code,
     source: w.source,
@@ -678,6 +711,25 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
   });
 
+  // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
+  // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — สองคำถามรวด ไม่ใช่ทีละแถว
+  const [supervisors, lastMoves] = await Promise.all([
+    prisma.user.findMany({
+      where: { role: "SUPERVISOR", deletedAt: null },
+      select: { id: true, name: true, region: true, supervisedTeams: true },
+      orderBy: { name: "asc" },
+    }),
+    rows.length
+      ? prisma.workOrderLog.groupBy({
+          by: ["workOrderId"],
+          where: { workOrderId: { in: rows.map((r) => r.id) }, action: { notIn: NON_STAGE_ACTIONS } },
+          _max: { createdAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const stageSince = new Map<number, Date>();
+  for (const m of lastMoves) if (m._max.createdAt) stageSince.set(m.workOrderId, m._max.createdAt);
+
   /**
    * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
    *
@@ -695,7 +747,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   >;
 
   res.json({
-    rows: rows.map(listShape),
+    rows: rows.map((w) => listShape(w, { supervisors, stageSince })),
     counts: {
       ...byStatus,
       ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
