@@ -18,13 +18,11 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
-import Dropdown from "../components/Dropdown";
 import { openUrl } from "../utils/share";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
-import { useDebounced } from "../utils/useDebounced";
 import { showAlert } from "../utils/alert";
 
 /** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
@@ -141,15 +139,45 @@ const GROUPS: { key: GroupKey; label: string }[] = [
   { key: "zone", label: "ทีมช่าง" },
 ];
 
-type QuickFilter = "all" | "over" | "COCO" | "DODO" | "nowo";
-
-const QUICK_LABEL: Record<QuickFilter, string> = {
-  all: "ทั้งหมด",
-  over: "เกิน SLA",
-  COCO: "COCO สาขาตรง",
-  DODO: "DODO แฟรนไชส์",
-  nowo: "ยังไม่มีใบงาน",
+/**
+ * ตัวกรองของกระดาน (แบบที่เจ้าของงานเลือกจากตัวอย่าง) — การ์ดแถวบน: ทั้งหมด · DODO · COCO · เกิน SLA ·
+ * ยังไม่มีใบงาน (แยก DODO/COCO) แล้วตามด้วยชิป ภาค · รุ่น/ยี่ห้อ · และตัวกรองเพิ่มเติม
+ *
+ * ในหมวดเดียวกัน = ตรงอย่างใดอย่างหนึ่ง · ข้ามหมวด = ต้องตรงทุกหมวด · "NONE" = ค่าว่าง
+ * (สาขาที่ทะเบียนยังไม่มีภาค / ยังไม่มีใครกรอกสถานะ) ซึ่งเป็นกลุ่มที่ต้องตามหาได้เหมือนกัน
+ */
+interface Filters {
+  own: "COCO" | "DODO" | null;
+  over: boolean;
+  noWo: boolean;
+  regions: string[];
+  brands: string[];
+  teams: string[];
+  statuses: string[];
+  near: boolean;
+  search: string;
+}
+type FilterKey = keyof Filters;
+type FacetKey = "regions" | "brands" | "teams" | "statuses";
+const EMPTY_FILTERS: Filters = {
+  own: null,
+  over: false,
+  noWo: false,
+  regions: [],
+  brands: [],
+  teams: [],
+  statuses: [],
+  near: false,
+  search: "",
 };
+/** การ์ดแถวบนนับโดยไม่สนตัวกรองของการ์ดเอง — ไม่งั้นกด DODO แล้วการ์ด COCO ขึ้น 0 ทั้งที่จริงไม่ใช่ */
+const TOP_KEYS: FilterKey[] = ["own", "over", "noWo"];
+
+/**
+ * ข้อมูลของแต่ละแท็บที่โหลดล่าสุด — กลับมาหน้านี้อีกครั้งเห็นทันที แล้วค่อยอัปเดตเบื้องหลัง
+ * เก็บในหน่วยความจำของแอปเท่านั้น ปิดแอป/รีเฟรชเว็บแล้วโหลดใหม่
+ */
+const DATA_CACHE: Partial<Record<Tab, DashboardResponse>> = {};
 
 /**
  * ชุดตัวกรองที่บันทึกไว้เรียกใช้ซ้ำ — เก็บในเครื่องที่ใช้ (AsyncStorage) แยกตามผู้ใช้
@@ -158,16 +186,48 @@ const QUICK_LABEL: Record<QuickFilter, string> = {
 interface SavedView {
   name: string;
   tab: Tab;
-  quick: QuickFilter;
-  region: string | null;
-  search: string;
-  brand: string | null;
-  workStatus: string | null;
-  slaLevel: "over" | "near" | null;
+  filters?: Filters;
   sortKey: SortKey;
   sortAsc: boolean;
   groupBy: GroupKey;
+  // รูปแบบเดิมก่อนมีชิป — มุมมองที่คนบันทึกไว้แล้วต้องยังเปิดได้
+  quick?: "all" | "over" | "COCO" | "DODO" | "nowo";
+  region?: string | null;
+  search?: string;
+  brand?: string | null;
+  workStatus?: string | null;
+  slaLevel?: "over" | "near" | null;
 }
+
+function viewFilters(v: SavedView): Filters {
+  if (v.filters) return { ...EMPTY_FILTERS, ...v.filters };
+  return {
+    ...EMPTY_FILTERS,
+    own: v.quick === "COCO" || v.quick === "DODO" ? v.quick : null,
+    over: v.quick === "over" || v.slaLevel === "over",
+    noWo: v.quick === "nowo",
+    near: v.slaLevel === "near",
+    regions: v.region ? [v.region] : [],
+    brands: v.brand ? [v.brand] : [],
+    statuses: v.workStatus ? [v.workStatus] : [],
+    search: v.search ?? "",
+  };
+}
+
+function isEmptyFilters(f: Filters) {
+  return (
+    !f.own && !f.over && !f.noWo && !f.near && !f.search.trim() &&
+    !f.regions.length && !f.brands.length && !f.teams.length && !f.statuses.length
+  );
+}
+
+const NONE_LABEL: Record<FacetKey, string> = {
+  regions: "ยังไม่ระบุภาค",
+  brands: "ไม่ระบุยี่ห้อ",
+  teams: "ยังไม่ระบุทีม",
+  statuses: "ยังไม่ระบุสถานะ",
+};
+const FACET_TITLE: Record<FacetKey, string> = { regions: "ภาค", brands: "รุ่น", teams: "ทีม", statuses: "สถานะ" };
 
 const GRADE_STYLE: Record<string, { color: string; background: string }> = {
   A: { color: colors.successInk, background: colors.successSoft },
@@ -243,34 +303,32 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const { user } = useAuth();
 
   const [tab, setTab] = useState<Tab>("machines");
-  const [data, setData] = useState<DashboardResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<DashboardResponse | null>(DATA_CACHE.machines ?? null);
+  const [loading, setLoading] = useState(!DATA_CACHE.machines);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * ชิปลัดบนแผงตัวกรอง (ทั้งหมด / เกิน SLA / COCO / DODO / ยังไม่มีใบงาน) — เลือกได้ทีละอัน
-   *
-   * กรองในแอป ไม่ได้ส่งไปเซิร์ฟเวอร์ ตัวเลขบนชิปทุกอันจึงคงที่ ไม่ว่าจะกดชิปไหนอยู่
-   * (ถ้าให้เซิร์ฟเวอร์กรอง กด COCO แล้วชิป DODO จะขึ้น 0 ทั้งที่จริงไม่ใช่)
+   * ตัวกรองทั้งหมดทำในเครื่อง — โหลดทุกเคสของแท็บครั้งเดียว (ราว 400 แถว) แล้วกรองบนจอ
+   * เดิมภาค/สถานะ/คำค้นถามเซิร์ฟเวอร์ใหม่ทุกครั้ง ฐานข้อมูลอยู่ไกล กดแต่ละทีรอหลายวินาที
    */
-  const [quick, setQuick] = useState<QuickFilter>("all");
-  const ownership = quick === "COCO" || quick === "DODO" ? quick : null;
-  // ยี่ห้อกับระดับ SLA กรองในแอปเหมือนกัน — ข้อมูลอยู่ในแถวที่โหลดมาแล้ว ไม่ต้องถามเซิร์ฟเวอร์ใหม่
-  const [brand, setBrand] = useState<string | null>(null);
-  const [slaLevel, setSlaLevel] = useState<"over" | "near" | null>(null);
+  const [f, setF] = useState<Filters>(EMPTY_FILTERS);
+  const patch = useCallback((next: Partial<Filters>) => setF((cur) => ({ ...cur, ...next })), []);
+  const toggle = useCallback(
+    (key: FacetKey, value: string) =>
+      setF((cur) => ({
+        ...cur,
+        [key]: cur[key].includes(value) ? cur[key].filter((v) => v !== value) : [...cur[key], value],
+      })),
+    []
+  );
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [allTeams, setAllTeams] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [tabCounts, setTabCounts] = useState<{ machineOff: number; signalLost: number } | null>(null);
   const [views, setViews] = useState<SavedView[]>([]);
   const [viewsOpen, setViewsOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
-  // ภาคเป็นชั้นรองจากเจ้าของ เปลี่ยนเจ้าของแล้วภาคที่เลือกไว้อาจไม่มีอยู่แล้ว จึงล้างทิ้ง
-  const [region, setRegion] = useState<string | null>(null);
-  const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
-  const [search, setSearch] = useState("");
-  // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
-  // ไม่งั้นพิมพ์รหัสสาขาหนึ่งรหัสจะยิงขอทั้งตารางเท่าจำนวนตัวอักษร
-  const settledSearch = useDebounced(search);
-  const [workStatus, setWorkStatus] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupKey>("region");
   const [sortKey, setSortKey] = useState<SortKey>("slaHours");
   const [sortAsc, setSortAsc] = useState(false);
@@ -305,29 +363,25 @@ export default function MachineDashboardScreen({ navigation }: Props) {
 
   const load = useCallback(
     async (opts: { refresh?: boolean } = {}) => {
+      const cached = DATA_CACHE[tab];
       if (opts.refresh) setRefreshing(true);
+      else if (cached) setUpdating(true);
       else setLoading(true);
       setError(null);
       try {
-        const res = await api.get<DashboardResponse>(
-          tab === "machines" ? "/machines/outages" : "/machines/signal-lost",
-          {
-            params: {
-              ...(region ? { region } : {}),
-              ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
-              ...(workStatus ? { workStatus } : {}),
-            },
-          }
-        );
+        // ไม่ส่งตัวกรองไป — เอาทุกเคสของแท็บ แล้วกรองบนจอ
+        const res = await api.get<DashboardResponse>(tab === "machines" ? "/machines/outages" : "/machines/signal-lost");
+        DATA_CACHE[tab] = res.data;
         setData(res.data);
       } catch (e) {
         setError(apiErrorMessage(e));
       } finally {
         setLoading(false);
         setRefreshing(false);
+        setUpdating(false);
       }
     },
-    [tab, region, settledSearch, workStatus]
+    [tab]
   );
 
   // ตัวเลขบนแท็บทั้งสอง — ต้องเห็นของแท็บที่ไม่ได้เปิดอยู่ด้วย
@@ -352,30 +406,60 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     AsyncStorage.setItem(viewsKey, JSON.stringify(next)).catch(() => undefined);
   }
   function currentView(name: string): SavedView {
-    return { name, tab, quick, region, search, brand, workStatus, slaLevel, sortKey, sortAsc, groupBy };
+    return { name, tab, filters: f, sortKey, sortAsc, groupBy };
   }
+
+  /**
+   * จำตัวกรองล่าสุดของแต่ละแท็บ (ไม่รวมคำค้น) — เปิดหน้านี้ใหม่ได้แบบที่ดูค้างไว้
+   * โหลดค่าที่จำไว้ให้เสร็จก่อนค่อยเริ่มบันทึก ไม่งั้นค่าว่างตอนเปิดหน้าจะเขียนทับของเดิม
+   */
+  const lastKey = `otteri-monitor-last:${user?.id ?? 0}:${tab}`;
+  const [restoredKey, setRestoredKey] = useState<string | null>(null);
+  const pendingView = React.useRef<SavedView | null>(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(lastKey)
+      .then((raw) => {
+        if (!alive) return;
+        const v = pendingView.current;
+        pendingView.current = null;
+        if (v) {
+          setF(viewFilters(v));
+          setSortKey(v.sortKey);
+          setSortAsc(v.sortAsc);
+          setGroupBy(v.groupBy);
+        } else if (raw) {
+          const saved = JSON.parse(raw) as { filters: Filters; sortKey: SortKey; sortAsc: boolean; groupBy: GroupKey };
+          setF({ ...EMPTY_FILTERS, ...saved.filters, search: "" });
+          setSortKey(saved.sortKey);
+          setSortAsc(saved.sortAsc);
+          setGroupBy(saved.groupBy);
+        } else setF(EMPTY_FILTERS);
+      })
+      .catch(() => undefined)
+      .finally(() => alive && setRestoredKey(lastKey));
+    return () => {
+      alive = false;
+    };
+  }, [lastKey]);
+  useEffect(() => {
+    if (restoredKey !== lastKey) return;
+    AsyncStorage.setItem(lastKey, JSON.stringify({ filters: { ...f, search: "" }, sortKey, sortAsc, groupBy })).catch(
+      () => undefined
+    );
+  }, [f, sortKey, sortAsc, groupBy, restoredKey, lastKey]);
+
   function applyView(v: SavedView) {
-    if (v.tab !== tab) switchTab(v.tab);
-    setQuick(v.quick);
-    setRegion(v.region);
-    setSearch(v.search);
-    setBrand(v.brand);
-    setWorkStatus(v.workStatus);
-    setSlaLevel(v.slaLevel);
+    if (v.tab !== tab) {
+      // แท็บใหม่จะโหลดตัวกรองที่จำไว้ของมันเอง — ฝากมุมมองไว้ให้ใช้แทน
+      pendingView.current = v;
+      switchTab(v.tab);
+      return;
+    }
+    setF(viewFilters(v));
     setSortKey(v.sortKey);
     setSortAsc(v.sortAsc);
     setGroupBy(v.groupBy);
-  }
-  function resetFilters() {
-    setQuick("all");
-    setRegion(null);
-    setSearch("");
-    setBrand(null);
-    setWorkStatus(null);
-    setSlaLevel(null);
-    setSortKey("slaHours");
-    setSortAsc(false);
-    setGroupBy("region");
   }
 
   useFocusEffect(
@@ -392,49 +476,125 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       .catch(() => setStatusOptions([]));
   }, []);
 
-  /**
-   * รายชื่อภาคดึงแยกจากตาราง ไม่ได้อ่านจากแถวที่แสดงอยู่
-   * ถ้าอ่านจากแถว พอเลือกภาคหนึ่งแล้วรายการจะเหลือภาคเดียว แล้วสลับไปภาคอื่นไม่ได้
-   */
-  useEffect(() => {
-    api
-      .get<RegionOption[]>("/machines/regions", {
-        params: {
-          kind: tab === "machines" ? "MACHINE_OFF" : "SIGNAL_LOST",
-          ...(ownership ? { ownership } : {}),
-        },
-      })
-      .then((res) => setRegionOptions(res.data))
-      .catch(() => setRegionOptions([]));
-  }, [tab, ownership]);
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const nearHours = (data?.slaHours ?? 72) * 0.6;
+  // ข้อความที่ค้นได้ของแต่ละแถว ทำครั้งเดียวต่อการโหลด ไม่ใช่ทุกครั้งที่พิมพ์
+  const hay = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of rows) {
+      m.set(
+        r.id,
+        [r.branchCode, r.branchName, r.machineCode, r.machineBrand, r.zone, r.region, r.symptom, r.workOrder?.code]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+      );
+    }
+    return m;
+  }, [rows]);
+  const words = useMemo(() => f.search.toLowerCase().split(/\s+/).filter(Boolean), [f.search]);
+  const valueOf = useCallback((r: OutageRow, key: FacetKey) => {
+    if (key === "regions") return r.region ?? "NONE";
+    if (key === "brands") return r.machineBrand ?? "NONE";
+    if (key === "teams") return r.zone ?? "NONE";
+    return r.workStatus ?? "NONE";
+  }, []);
 
-  function chooseQuick(next: QuickFilter) {
-    // เปลี่ยนเจ้าของแล้วภาคที่เลือกไว้อาจไม่มีในเจ้าของใหม่ จึงล้างทิ้ง
-    const nextOwner = next === "COCO" || next === "DODO" ? next : null;
-    if (nextOwner !== ownership) setRegion(null);
-    setQuick(next);
-  }
-
-  /** แถวที่เห็นจริง = ที่เซิร์ฟเวอร์ส่งมา กรองต่อด้วยชิปลัด ยี่ห้อ และระดับ SLA */
-  const visibleRows = useMemo(() => {
-    if (!data) return [];
-    const near = (data.slaHours ?? 72) * 0.6;
-    return data.rows.filter((r) => {
-      if (quick === "over" && !r.breached) return false;
-      if ((quick === "COCO" || quick === "DODO") && r.ownership !== quick) return false;
-      if (quick === "nowo" && r.workOrder) return false;
-      if (brand && (r.machineBrand ?? "") !== brand) return false;
-      if (slaLevel === "over" && !r.breached) return false;
-      if (slaLevel === "near" && (r.breached || r.slaHours <= near)) return false;
+  /** แถวนี้ผ่านตัวกรองไหม — skip = หมวดที่ไม่ต้องดู (ใช้นับตัวเลขบนชิป/การ์ดของหมวดนั้นเอง) */
+  const test = useCallback(
+    (r: OutageRow, skip: FilterKey[] = []) => {
+      const use = (k: FilterKey) => !skip.includes(k);
+      if (use("search") && words.length) {
+        const h = hay.get(r.id) ?? "";
+        if (!words.every((w) => h.includes(w))) return false;
+      }
+      if (use("own") && f.own && r.ownership !== f.own) return false;
+      if (use("over") && f.over && !r.breached) return false;
+      if (use("noWo") && f.noWo && r.workOrder) return false;
+      if (use("near") && f.near && (r.breached || r.slaHours <= nearHours)) return false;
+      for (const k of ["regions", "brands", "teams", "statuses"] as FacetKey[]) {
+        if (use(k) && f[k].length && !f[k].includes(valueOf(r, k))) return false;
+      }
       return true;
-    });
-  }, [data, quick, brand, slaLevel]);
+    },
+    [f, words, hay, nearHours, valueOf]
+  );
 
-  const brandOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of data?.rows ?? []) if (r.machineBrand) set.add(r.machineBrand);
-    return [...set].sort();
-  }, [data]);
+  const visibleRows = useMemo(() => rows.filter((r) => test(r)), [rows, test]);
+
+  /** ตัวเลขบนการ์ดแถวบน — นับตามตัวกรองอื่น (ภาค รุ่น คำค้น) แต่ไม่สนการ์ดด้วยกันเอง */
+  const tiles = useMemo(() => {
+    const base = rows.filter((r) => test(r, TOP_KEYS));
+    const noWo = base.filter((r) => !r.workOrder);
+    return {
+      all: base.length,
+      DODO: base.filter((r) => r.ownership === "DODO").length,
+      COCO: base.filter((r) => r.ownership === "COCO").length,
+      over: base.filter((r) => r.breached).length,
+      noWo: noWo.length,
+      noWoDODO: noWo.filter((r) => r.ownership === "DODO").length,
+      noWoCOCO: noWo.filter((r) => r.ownership === "COCO").length,
+    };
+  }, [rows, test]);
+
+  /** ตัวเลือกของหมวดหนึ่ง พร้อมจำนวนถ้ากดเพิ่ม — ค่าที่มีในข้อมูลขึ้นครบ แม้ตอนนี้จะเหลือ 0 */
+  const facetOptions = useCallback(
+    (key: FacetKey, labelOf: (v: string) => string) => {
+      const counts = new Map<string, number>();
+      for (const r of rows) if (!counts.has(valueOf(r, key))) counts.set(valueOf(r, key), 0);
+      for (const r of rows) if (test(r, [key])) counts.set(valueOf(r, key), (counts.get(valueOf(r, key)) ?? 0) + 1);
+      return [...counts].map(([value, count]) => ({
+        value,
+        label: value === "NONE" ? NONE_LABEL[key] : labelOf(value),
+        count,
+        on: f[key].includes(value),
+      }));
+    },
+    [rows, test, valueOf, f]
+  );
+  const statusLabel = useCallback(
+    (v: string) => statusOptions.find((o) => o.value === v)?.label ?? rows.find((r) => r.workStatus === v)?.workStatusLabel ?? v,
+    [statusOptions, rows]
+  );
+  const regionOpts = useMemo(
+    () => facetOptions("regions", (v) => v).sort((a, b) => (a.value === "NONE" ? 1 : b.value === "NONE" ? -1 : a.label.localeCompare(b.label, "th"))),
+    [facetOptions]
+  );
+  const brandOpts = useMemo(() => facetOptions("brands", (v) => v).sort((a, b) => a.label.localeCompare(b.label)), [facetOptions]);
+  const statusOpts = useMemo(() => facetOptions("statuses", statusLabel), [facetOptions, statusLabel]);
+  /**
+   * ทีมมีราว 25 ทีม — เลือกภาคแล้วเหลือเฉพาะทีมในภาคนั้น ไม่เลือกภาคโชว์ 8 ทีมที่มีเคสมากสุด
+   * (ทีมที่เลือกอยู่ขึ้นเสมอ ไม่งั้นเอาออกไม่ได้)
+   */
+  const teamView = useMemo(() => {
+    const all = facetOptions("teams", (v) => v).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th"));
+    if (f.regions.length) {
+      const inRegion = new Set(rows.filter((r) => f.regions.includes(r.region ?? "NONE")).map((r) => r.zone ?? "NONE"));
+      return { shown: all.filter((o) => o.on || inRegion.has(o.value)), hidden: 0 };
+    }
+    if (allTeams || all.length <= 8) return { shown: all, hidden: 0 };
+    const top = new Set(all.slice(0, 8).map((o) => o.value));
+    const shown = all.filter((o) => o.on || top.has(o.value));
+    return { shown, hidden: all.length - shown.length };
+  }, [facetOptions, f.regions, rows, allTeams]);
+  const nearCount = useMemo(() => rows.filter((r) => test(r, ["near"]) && !r.breached && r.slaHours > nearHours).length, [rows, test, nearHours]);
+
+  /** ป้ายในแถบ "กำลังกรอง" — กด × เอาออกทีละอัน */
+  const pills = useMemo(() => {
+    const out: { key: string; label: string; remove: () => void }[] = [];
+    if (f.search.trim()) out.push({ key: "q", label: `ค้น "${f.search.trim()}"`, remove: () => patch({ search: "" }) });
+    if (f.own) out.push({ key: "own", label: f.own, remove: () => patch({ own: null }) });
+    if (f.over) out.push({ key: "over", label: "เกิน SLA", remove: () => patch({ over: false }) });
+    if (f.noWo) out.push({ key: "noWo", label: "ยังไม่มีใบงาน", remove: () => patch({ noWo: false }) });
+    if (f.near) out.push({ key: "near", label: "ใกล้เกิน SLA", remove: () => patch({ near: false }) });
+    for (const k of ["regions", "brands", "teams", "statuses"] as FacetKey[]) {
+      for (const v of f[k]) {
+        const label = v === "NONE" ? NONE_LABEL[k] : k === "statuses" ? statusLabel(v) : v;
+        out.push({ key: `${k}:${v}`, label: `${FACET_TITLE[k]}: ${label}`, remove: () => toggle(k, v) });
+      }
+    }
+    return out;
+  }, [f, patch, toggle, statusLabel]);
 
   /**
    * ส่งออกเฉพาะที่เห็นบนจอ ตามลำดับบนจอ (รวมกลุ่มที่พับไว้)
@@ -446,16 +606,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       showAlert("ไม่มีรายการ", "ไม่มีรายการให้ส่งออกตามตัวกรองที่เลือก");
       return;
     }
-    const filters = [
-      quick !== "all" ? QUICK_LABEL[quick] : null,
-      region ? `ภาค ${regionOptions.find((o) => (o.region ?? "NONE") === region)?.label ?? region}` : null,
-      brand ? `ยี่ห้อ ${brand}` : null,
-      workStatus ? (workStatus === "NONE" ? "ยังไม่ระบุสถานะ" : statusOptions.find((o) => o.value === workStatus)?.label) : null,
-      slaLevel === "over" ? "เกิน SLA" : slaLevel === "near" ? "ใกล้เกิน SLA" : null,
-      search.trim() ? `ค้นหา "${search.trim()}"` : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    const filters = pills.map((p) => p.label).join(" · ");
     setExporting(true);
     try {
       const res = await api.post<{ path: string }>(
@@ -476,33 +627,17 @@ export default function MachineDashboardScreen({ navigation }: Props) {
    * อัปเดตแถวในหน้าเลย ไม่ต้องโหลดใหม่ทั้งตารางเพราะแก้ทีละเคส
    * ถ้ากำลังกรองด้วยสถานะอยู่แล้วแถวนั้นเปลี่ยนไปไม่ตรงเงื่อนไข ให้หายออกจากรายการ
    */
+  // แถวที่ไม่ตรงตัวกรองแล้ว (เช่นเปลี่ยนสถานะ) หายจากจอเองเพราะกรองบนจอ
   const applyNote = useCallback(
     (updated: OutageRow) => {
-      const stillMatches =
-        !workStatus ||
-        (workStatus === "NONE" ? updated.workStatus === null : updated.workStatus === workStatus);
-
       setData((current) => {
         if (!current) return current;
-        if (stillMatches) {
-          return { ...current, rows: current.rows.map((r) => (r.id === updated.id ? updated : r)) };
-        }
-        // ตัวเลขสรุปด้านบนต้องลดตามด้วย ไม่งั้นหัวตารางกับจำนวนแถวจะไม่ตรงกัน
-        const rows = current.rows.filter((r) => r.id !== updated.id);
-        return {
-          ...current,
-          rows,
-          summary: {
-            ...current.summary,
-            total: rows.length,
-            COCO: rows.filter((r) => r.ownership === "COCO").length,
-            DODO: rows.filter((r) => r.ownership === "DODO").length,
-            breached: rows.filter((r) => r.breached).length,
-          },
-        };
+        const next = { ...current, rows: current.rows.map((r) => (r.id === updated.id ? updated : r)) };
+        DATA_CACHE[tab] = next;
+        return next;
       });
     },
-    [workStatus]
+    [tab]
   );
 
   const groups = useMemo(() => {
@@ -551,9 +686,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   function switchTab(next: Tab) {
     if (next === tab) return;
     setTab(next);
-    setData(null);
-    setRegion(null);
-    setLoading(true);
+    setData(DATA_CACHE[next] ?? null);
+    setLoading(!DATA_CACHE[next]);
     setCollapsed({});
   }
 
@@ -576,7 +710,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         {data ? (
           <View style={styles.stamp}>
             <Ionicons name="time-outline" size={14} color={colors.textMuted} />
-            <Text style={styles.stampText}>ข้อมูล ณ {formatDateTime(data.now)} น.</Text>
+            <Text style={styles.stampText}>
+              ข้อมูล ณ {formatDateTime(data.now)} น.{updating ? " · กำลังอัปเดต…" : ""}
+            </Text>
           </View>
         ) : null}
         <View style={{ flexGrow: 1 }} />
@@ -640,7 +776,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
               ? `สัดส่วน ${((data.summary.breached / data.summary.total) * 100).toFixed(1)}% ของปัญหา`
               : "ไม่มีเคสค้าง"
           }
-          action={(data?.summary.breached ?? 0) > 0 ? { label: "ต้องเร่งก่อน", onPress: () => chooseQuick("over") } : undefined}
+          action={(data?.summary.breached ?? 0) > 0 ? { label: "ต้องเร่งก่อน", onPress: () => patch({ over: true }) } : undefined}
           tone="red"
           crit
           icon="warning"
@@ -668,64 +804,151 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         />
       </View>
 
-      {/* แผงตัวกรอง: ชิปลัด + ค้นหา + บันทึกมุมมอง/รีเซ็ต · แถวล่างเป็นช่องเลือก */}
+      {/*
+        แผงตัวกรอง — การ์ดแถวบน → ชิปภาค · รุ่น → ตัวกรองเพิ่มเติม → แถบกำลังกรอง → เรียง/จัดกลุ่ม
+        ทุกอย่างกรองบนจอทันที ตัวเลขบนการ์ดและชิปบอกล่วงหน้าว่ากดแล้วเหลือเท่าไร
+      */}
       <View style={styles.panel}>
         <View style={styles.panelRow}>
-          <View style={styles.quickChips}>
-            {(["all", "over", "COCO", "DODO", "nowo"] as QuickFilter[]).map((q) => {
-              const rows = data?.rows ?? [];
-              const n =
-                q === "all"
-                  ? rows.length
-                  : q === "over"
-                    ? rows.filter((r) => r.breached).length
-                    : q === "nowo"
-                      ? rows.filter((r) => !r.workOrder).length
-                      : rows.filter((r) => r.ownership === q).length;
-              const red = q === "over" || q === "nowo";
-              const on = quick === q;
-              return (
-                <TouchableOpacity
-                  key={q}
-                  style={[styles.qChip, red && styles.qChipRed, on && (red ? styles.qChipRedOn : styles.qChipOn)]}
-                  onPress={() => chooseQuick(q)}
-                  activeOpacity={0.75}
-                >
-                  {q === "over" ? (
-                    <Ionicons name="alert-circle" size={15} color={on ? "#fff" : colors.dangerInk} />
-                  ) : null}
-                  <Text style={[styles.qChipText, red && styles.qChipTextRed, on && styles.qChipTextOn]}>
-                    {QUICK_LABEL[q]}
-                  </Text>
-                  <View style={[styles.qCount, red && styles.qCountRed, on && styles.qCountOn]}>
-                    <Text style={[styles.qCountText, red && styles.qCountTextRed, on && (red ? styles.qCountTextRedOn : styles.qCountTextOn)]}>
-                      {n}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+        <View style={styles.searchBox}>
+          <Ionicons name="search" size={17} color={colors.textFaint} />
+          <TextInput
+            style={styles.searchInput}
+            value={f.search}
+            onChangeText={(t) => patch({ search: t })}
+            placeholder={isMachines ? "ค้นรหัสสาขา ชื่อสาขา เครื่อง ยี่ห้อ หรือทีม" : "ค้นรหัสสาขา ชื่อสาขา หรือทีม"}
+            placeholderTextColor={colors.textFaint}
+            returnKeyType="search"
+            accessibilityLabel="ค้นหาในกระดาน"
+          />
+          {f.search ? (
+            <TouchableOpacity onPress={() => patch({ search: "" })} accessibilityLabel="ล้างคำค้น">
+              <Ionicons name="close-circle-outline" size={18} color={colors.textFaint} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        </View>
 
-          <View style={styles.searchBox}>
-            <Ionicons name="search" size={17} color={colors.textFaint} />
-            <TextInput
-              style={styles.searchInput}
-              value={search}
-              onChangeText={setSearch}
-              onSubmitEditing={() => load()}
-              placeholder={isMachines ? "ค้นหารหัสสาขา / ชื่อสาขา / เครื่อง" : "ค้นหารหัสสาขา / ชื่อสาขา"}
-              placeholderTextColor={colors.textFaint}
-              returnKeyType="search"
+        <View style={styles.tiles}>
+          <FilterTile
+            label="ทั้งหมด"
+            count={tiles.all}
+            unit={(isMachines ? "เครื่อง" : "สาขา")}
+            on={!f.own && !f.over && !f.noWo}
+            onPress={() => patch({ own: null, over: false, noWo: false })}
+            wide={wide}
+          />
+          <FilterTile
+            label="DODO แฟรนไชส์"
+            count={tiles.DODO}
+            unit={(isMachines ? "เครื่อง" : "สาขา")}
+            on={f.own === "DODO" && !f.noWo}
+            onPress={() => patch(f.own === "DODO" && !f.noWo ? { own: null } : { own: "DODO", noWo: false })}
+            wide={wide}
+          />
+          <FilterTile
+            label="COCO สาขาตรง"
+            count={tiles.COCO}
+            unit={(isMachines ? "เครื่อง" : "สาขา")}
+            on={f.own === "COCO" && !f.noWo}
+            onPress={() => patch(f.own === "COCO" && !f.noWo ? { own: null } : { own: "COCO", noWo: false })}
+            wide={wide}
+          />
+          <FilterTile
+            label={`เกิน SLA ${slaHours} ชม.`}
+            count={tiles.over}
+            unit={(isMachines ? "เครื่อง" : "สาขา")}
+            red
+            on={f.over}
+            onPress={() => patch({ over: !f.over })}
+            wide={wide}
+          />
+          <NoWorkOrderTile
+            count={tiles.noWo}
+            dodo={tiles.noWoDODO}
+            coco={tiles.noWoCOCO}
+            unit={(isMachines ? "เครื่อง" : "สาขา")}
+            on={f.noWo}
+            own={f.noWo ? f.own : null}
+            onMain={() => patch(f.noWo && !f.own ? { noWo: false } : { noWo: true, own: null })}
+            onPart={(o) => patch(f.noWo && f.own === o ? { noWo: false, own: null } : { noWo: true, own: o })}
+            wide={wide}
+          />
+        </View>
+
+        <ChipRow label="ภาค" options={regionOpts} onToggle={(v) => toggle("regions", v)} wide={wide} />
+        {isMachines ? (
+          <ChipRow label="รุ่น / ยี่ห้อ" options={brandOpts} onToggle={(v) => toggle("brands", v)} wide={wide} />
+        ) : null}
+
+        <TouchableOpacity style={styles.moreBtn} onPress={() => setMoreOpen((v) => !v)} accessibilityLabel="ตัวกรองเพิ่มเติม">
+          <Ionicons name={moreOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.primaryInk} />
+          <Text style={styles.moreBtnText}>
+            {moreOpen ? "ซ่อนตัวกรองเพิ่มเติม" : "ตัวกรองเพิ่มเติม — ทีมช่าง · สถานะงานซ่อม · ใกล้เกิน SLA"}
+            {f.teams.length + f.statuses.length + (f.near ? 1 : 0) > 0
+              ? ` (${f.teams.length + f.statuses.length + (f.near ? 1 : 0)})`
+              : ""}
+          </Text>
+        </TouchableOpacity>
+        {moreOpen ? (
+          <>
+            <ChipRow
+              label="ทีมช่าง"
+              options={teamView.shown}
+              onToggle={(v) => toggle("teams", v)}
+              wide={wide}
+              extra={
+                teamView.hidden > 0 ? (
+                  <TouchableOpacity onPress={() => setAllTeams(true)} style={styles.chipMore}>
+                    <Text style={styles.moreBtnText}>+ อีก {teamView.hidden} ทีม</Text>
+                  </TouchableOpacity>
+                ) : allTeams && !f.regions.length ? (
+                  <TouchableOpacity onPress={() => setAllTeams(false)} style={styles.chipMore}>
+                    <Text style={styles.moreBtnText}>ย่อ</Text>
+                  </TouchableOpacity>
+                ) : null
+              }
             />
-            {search ? (
-              <TouchableOpacity onPress={() => setSearch("")} accessibilityLabel="ล้างคำค้น">
-                <Ionicons name="close-circle-outline" size={18} color={colors.textFaint} />
+            <ChipRow label="สถานะงานซ่อม" options={statusOpts} onToggle={(v) => toggle("statuses", v)} wide={wide} />
+            <ChipRow
+              label="ความวิกฤต SLA"
+              options={[{ value: "near", label: "ใกล้เกิน (ใช้ไปเกิน 60%)", count: nearCount, on: f.near, tone: "amber" }]}
+              onToggle={() => patch({ near: !f.near })}
+              wide={wide}
+            />
+          </>
+        ) : null}
+
+        <View style={styles.activeBar}>
+          <Text style={styles.activeCount}>
+            {visibleRows.length}{" "}
+            <Text style={styles.activeOf}>
+              จาก {rows.length} {(isMachines ? "เครื่อง" : "สาขา")}
+            </Text>
+          </Text>
+          {pills.length ? (
+            <Text style={styles.activeLabel}>กำลังกรอง</Text>
+          ) : (
+            <Text style={styles.activeHint}>ยังไม่ได้กรอง — กดการ์ดหรือชิปด้านบน</Text>
+          )}
+          {pills.map((p) => (
+            <View key={p.key} style={styles.pill}>
+              <Text style={styles.pillText}>{p.label}</Text>
+              <TouchableOpacity onPress={p.remove} style={styles.pillX} accessibilityLabel={`เอาตัวกรอง ${p.label} ออก`}>
+                <Ionicons name="close" size={13} color={colors.textMuted} />
               </TouchableOpacity>
-            ) : null}
-          </View>
-          <PanelButton icon="bookmark-outline" label="บันทึกมุมมอง" onPress={() => setViewsOpen(true)} />
-          <PanelButton icon="refresh" label="รีเซ็ต" onPress={resetFilters} />
+            </View>
+          ))}
+          {pills.length ? (
+            <TouchableOpacity onPress={() => setF(EMPTY_FILTERS)} accessibilityLabel="ล้างตัวกรองทั้งหมด">
+              <Text style={styles.clearAll}>ล้างทั้งหมด</Text>
+            </TouchableOpacity>
+          ) : null}
+          <View style={{ flexGrow: 1 }} />
+          <TouchableOpacity style={styles.saveView} onPress={() => setViewsOpen(true)} accessibilityLabel="บันทึกมุมมอง">
+            <Ionicons name="bookmark-outline" size={15} color={colors.primaryInk} />
+            <Text style={styles.moreBtnText}>บันทึกมุมมอง</Text>
+          </TouchableOpacity>
         </View>
 
         {views.length > 0 ? (
@@ -740,63 +963,24 @@ export default function MachineDashboardScreen({ navigation }: Props) {
           </View>
         ) : null}
 
-        <View style={styles.selects}>
-          <SelectField
-            label="ภูมิภาค / โซน"
-            value={region}
-            allLabel="ทุกภาค"
-            options={regionOptions.map((o) => ({ value: o.region ?? "NONE", label: `${o.label} (${o.cases})` }))}
-            onChange={setRegion}
-          />
-          {isMachines ? (
-            <SelectField
-              label="ยี่ห้อเครื่องจักร"
-              value={brand}
-              allLabel="ทุกยี่ห้อ"
-              options={brandOptions.map((b) => ({ value: b, label: b }))}
-              onChange={setBrand}
-            />
-          ) : null}
-          <SelectField
-            label="สถานะในงานซ่อม"
-            value={workStatus}
-            allLabel="ทุกสถานะ"
-            options={[{ value: "NONE", label: "ยังไม่ระบุ" }, ...statusOptions.map((o) => ({ value: o.value, label: o.label }))]}
-            onChange={setWorkStatus}
-          />
-          <SelectField
-            label="ความวิกฤต SLA"
-            value={slaLevel}
-            allLabel="ทุกระดับ"
-            alert={slaLevel !== null}
-            options={[
-              { value: "over", label: `เกิน SLA ${slaHours} ชม.` },
-              { value: "near", label: "ใกล้เกิน (ใช้ไปเกิน 60%)" },
-            ]}
-            onChange={(v) => setSlaLevel(v as "over" | "near" | null)}
-          />
-          <SelectField
-            label="เรียงตามลำดับ"
+        <View style={styles.sortRow}>
+          <Text style={styles.segLabel}>เรียง</Text>
+          <Seg
             value={`${sortKey}:${sortAsc ? "asc" : "desc"}`}
             options={[
-              { value: "slaHours:desc", label: "ดับนานที่สุด (SLA ↓)" },
-              { value: "slaHours:asc", label: "ดับล่าสุด (SLA ↑)" },
-              { value: "score:desc", label: "คะแนนมากสุด" },
+              { value: "slaHours:desc", label: "ดับนานสุด" },
+              { value: "slaHours:asc", label: "ดับล่าสุด" },
+              { value: "score:desc", label: "คะแนน" },
               { value: "branchCode:asc", label: "รหัสสาขา" },
             ]}
             onChange={(v) => {
-              if (!v) return;
               const [k, dir] = v.split(":");
               setSortKey(k as SortKey);
               setSortAsc(dir === "asc");
             }}
           />
-          <SelectField
-            label="จัดกลุ่มตาม"
-            value={groupBy}
-            options={GROUPS.map((g) => ({ value: g.key, label: g.label }))}
-            onChange={(v) => v && setGroupBy(v as GroupKey)}
-          />
+          <Text style={styles.segLabel}>จัดกลุ่ม</Text>
+          <Seg value={groupBy} options={GROUPS.map((g) => ({ value: g.key, label: g.label }))} onChange={(v) => setGroupBy(v as GroupKey)} />
         </View>
       </View>
 
@@ -813,11 +997,15 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         </View>
       ) : null}
 
-      {data && data.rows.length === 0 && !error ? (
+      {data && visibleRows.length === 0 && !error ? (
         <View style={styles.emptyCard}>
           <Ionicons name="checkmark-circle-outline" size={28} color={colors.success} />
           <Text style={styles.emptyText}>
-            {isMachines ? "ไม่มีเครื่องดับตามเงื่อนไขที่เลือก" : "ไม่มีสาขาที่สัญญาณหาย"}
+            {rows.length === 0
+              ? isMachines
+                ? "ไม่มีเครื่องดับ"
+                : "ไม่มีสาขาที่สัญญาณหาย"
+              : "ไม่มีรายการตามตัวกรองที่เลือก — กด × ที่แถบกำลังกรองเพื่อเอาบางตัวออก"}
           </Text>
         </View>
       ) : null}
@@ -1386,9 +1574,7 @@ function ViewsModal({
             <TouchableOpacity style={{ flex: 1, minWidth: 0 }} onPress={() => onApply(v)} activeOpacity={0.7}>
               <Text style={styles.viewItemName}>{v.name}</Text>
               <Text style={styles.summarySub} numberOfLines={1}>
-                {[v.tab === "machines" ? "เครื่องดับ" : "สัญญาณหาย", QUICK_LABEL[v.quick], v.brand, v.search ? `"${v.search}"` : null]
-                  .filter(Boolean)
-                  .join(" · ")}
+                {describeView(v)}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -1402,6 +1588,188 @@ function ViewsModal({
         ))
       )}
     </AppModal>
+  );
+}
+
+/** คำอธิบายสั้นของมุมมองที่บันทึกไว้ (ในหน้าต่างบันทึกมุมมอง) */
+function describeView(v: SavedView) {
+  const f = viewFilters(v);
+  return [
+    v.tab === "machines" ? "เครื่องดับ" : "สัญญาณหาย",
+    f.own,
+    f.over ? "เกิน SLA" : null,
+    f.noWo ? "ยังไม่มีใบงาน" : null,
+    f.near ? "ใกล้เกิน SLA" : null,
+    ...f.regions,
+    ...f.brands,
+    ...f.teams,
+    f.statuses.length ? `สถานะ ${f.statuses.length}` : null,
+    f.search ? `"${f.search}"` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** การ์ดตัวกรองแถวบน — ตัวเลขใหญ่อ่านได้ทันที กดครั้งเดียวกรอง กดซ้ำเอาออก */
+function FilterTile({
+  label,
+  count,
+  unit,
+  on,
+  red,
+  onPress,
+  wide,
+}: {
+  label: string;
+  count: number;
+  unit: string;
+  on: boolean;
+  red?: boolean;
+  onPress: () => void;
+  wide: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.tile, !wide && styles.tileHalf, on && (red ? styles.tileRedOn : styles.tileOn)]}
+      onPress={onPress}
+      accessibilityLabel={`กรอง ${label}`}
+      accessibilityState={{ selected: on }}
+    >
+      <View style={styles.tileHead}>
+        {red ? <Ionicons name="warning" size={13} color={on ? "#fff" : colors.dangerInk} /> : null}
+        <Text style={[styles.tileLabel, on && styles.tileTextOn]} numberOfLines={1}>
+          {label}
+        </Text>
+      </View>
+      <Text style={[styles.tileNum, headingFont, red && styles.tileNumRed, on && styles.tileTextOn]}>
+        {count}
+        <Text style={[styles.tileUnit, on && styles.tileTextOn]}> {unit}</Text>
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * การ์ด "ยังไม่มีใบงาน" แยก DODO / COCO ในใบเดียว (ตามที่เจ้าของงานขอ)
+ * กดชื่อการ์ด = ทั้งสองฝั่ง · กดตัวเลขฝั่งไหน = เฉพาะฝั่งนั้น
+ */
+function NoWorkOrderTile({
+  count,
+  dodo,
+  coco,
+  unit,
+  on,
+  own,
+  onMain,
+  onPart,
+  wide,
+}: {
+  count: number;
+  dodo: number;
+  coco: number;
+  unit: string;
+  on: boolean;
+  own: "COCO" | "DODO" | null;
+  onMain: () => void;
+  onPart: (o: "COCO" | "DODO") => void;
+  wide: boolean;
+}) {
+  return (
+    <View style={[styles.tile, styles.tileSplit, !wide && styles.tileFull, on && styles.tileSplitOn]}>
+      <TouchableOpacity style={styles.tileMain} onPress={onMain} accessibilityLabel="กรอง ยังไม่มีใบงาน" accessibilityState={{ selected: on && !own }}>
+        <Text style={[styles.tileLabel, on && { color: colors.dangerInk }]}>ยังไม่มีใบงาน</Text>
+        <Text style={[styles.tileNum, headingFont, styles.tileNumRed]}>
+          {count}
+          <Text style={styles.tileUnit}> {unit}</Text>
+        </Text>
+      </TouchableOpacity>
+      <View style={styles.tileParts}>
+        {(["DODO", "COCO"] as const).map((o) => {
+          const sel = on && own === o;
+          return (
+            <TouchableOpacity
+              key={o}
+              style={[styles.tilePart, sel && styles.tilePartOn]}
+              onPress={() => onPart(o)}
+              accessibilityLabel={`กรอง ยังไม่มีใบงาน ${o}`}
+              accessibilityState={{ selected: sel }}
+            >
+              <Text style={[styles.tilePartText, sel && styles.tileTextOn]}>{o}</Text>
+              <Text style={[styles.tilePartNum, sel && styles.tileTextOn]}>{o === "DODO" ? dodo : coco}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+type ChipOption = { value: string; label: string; count: number; on: boolean; tone?: "amber" };
+
+/**
+ * แถวชิปของหมวดหนึ่ง — กดได้หลายอัน ตัวเลขคือจำนวนถ้ากดอันนั้นเพิ่ม (0 = จางลง)
+ * จอแคบเลื่อนซ้ายขวาในแถวเดียว ไม่ดันเนื้อหาลงไปจนเห็นตารางยาก
+ */
+function ChipRow({
+  label,
+  options,
+  onToggle,
+  wide,
+  extra,
+}: {
+  label: string;
+  options: ChipOption[];
+  onToggle: (value: string) => void;
+  wide: boolean;
+  extra?: React.ReactNode;
+}) {
+  const chips = (
+    <>
+      {options.map((o) => (
+        <TouchableOpacity
+          key={o.value}
+          style={[styles.fChip, o.on && (o.tone === "amber" ? styles.fChipAmberOn : styles.fChipOn), !o.count && !o.on && styles.fChipZero]}
+          onPress={() => onToggle(o.value)}
+          accessibilityLabel={`${label} ${o.label}`}
+          accessibilityState={{ selected: o.on }}
+        >
+          {o.on ? <Ionicons name="checkmark" size={13} color={o.tone === "amber" ? colors.warningInk : colors.primaryInk} /> : null}
+          <Text style={[styles.fChipText, o.on && (o.tone === "amber" ? styles.fChipAmberText : styles.fChipTextOn)]}>{o.label}</Text>
+          <Text style={[styles.fChipCount, o.on && (o.tone === "amber" ? styles.fChipAmberText : styles.fChipTextOn)]}>{o.count}</Text>
+        </TouchableOpacity>
+      ))}
+      {extra}
+    </>
+  );
+  return (
+    <View style={[styles.chipRow, !wide && styles.chipRowNarrow]}>
+      <Text style={[styles.chipRowLabel, wide && styles.chipRowLabelWide]}>{label}</Text>
+      {wide ? (
+        <View style={styles.chipWrap}>{chips}</View>
+      ) : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipScroll}>
+          {chips}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+/** ปุ่มเลือกแบบแถบ (เรียง · จัดกลุ่ม) — กดครั้งเดียว แทนช่องเลือกที่ต้องเปิดก่อน */
+function Seg({ value, options, onChange }: { value: string; options: { value: string; label: string }[]; onChange: (v: string) => void }) {
+  return (
+    <View style={styles.seg}>
+      {options.map((o) => (
+        <TouchableOpacity
+          key={o.value}
+          style={[styles.segBtn, value === o.value && styles.segBtnOn]}
+          onPress={() => onChange(o.value)}
+          accessibilityState={{ selected: value === o.value }}
+        >
+          <Text style={[styles.segText, value === o.value && styles.segTextOn]}>{o.label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
   );
 }
 
@@ -1426,24 +1794,6 @@ function HeadButton({
     >
       <Ionicons name={icon} size={17} color={colors.body} />
       <Text style={styles.headBtnText}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-/** ปุ่มเล็กข้างช่องค้นหา (บันทึกมุมมอง · รีเซ็ต) */
-function PanelButton({
-  icon,
-  label,
-  onPress,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity style={styles.panelBtn} onPress={onPress} activeOpacity={0.75}>
-      <Ionicons name={icon} size={16} color={colors.body} />
-      <Text style={styles.panelBtnText}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -1484,39 +1834,6 @@ function BigTab({
         </View>
       ) : null}
     </TouchableOpacity>
-  );
-}
-
-/**
- * ช่องเลือกพร้อมหัวข้อ — ตัวเลือกแรกเป็น "ทั้งหมด" (allLabel) แทนการปล่อยว่าง
- * ไม่ใส่ allLabel = ต้องเลือกอย่างใดอย่างหนึ่งเสมอ (เช่น เรียงตาม)
- */
-function SelectField({
-  label,
-  value,
-  options,
-  allLabel,
-  alert,
-  onChange,
-}: {
-  label: string;
-  value: string | null;
-  options: { value: string; label: string }[];
-  allLabel?: string;
-  alert?: boolean;
-  onChange: (next: string | null) => void;
-}) {
-  const all = allLabel ? [{ value: "", label: allLabel }] : [];
-  return (
-    <View style={[styles.selectField, alert && styles.selectAlert]}>
-      <Text style={styles.selectLabel}>{label}</Text>
-      <Dropdown
-        value={value ?? (allLabel ? "" : null)}
-        options={[...all, ...options]}
-        onChange={(v) => onChange(v ? v : null)}
-        accessibilityLabel={label}
-      />
-    </View>
   );
 }
 
@@ -2053,33 +2370,102 @@ const styles = StyleSheet.create({
     gap: 14,
     ...shadow.card,
   },
-  panelRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
-  quickChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, flexGrow: 1, flexBasis: 420, maxWidth: "100%" },
-  qChip: {
+  // ── ตัวกรองแบบการ์ด + ชิป ──
+  tiles: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  tile: {
+    flexGrow: 1,
+    flexBasis: 0,
+    minWidth: 120,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: 13,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    backgroundColor: colors.card,
+    gap: 1,
+  },
+  tileHalf: { flexBasis: "40%" },
+  tileFull: { flexBasis: "100%" },
+  tileOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  tileRedOn: { backgroundColor: colors.danger, borderColor: colors.danger },
+  tileHead: { flexDirection: "row", alignItems: "center", gap: 5 },
+  tileLabel: { fontSize: 12.5, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  tileNum: { fontSize: 24, lineHeight: 30, fontWeight: "800", color: colors.text },
+  tileNumRed: { color: colors.danger },
+  tileUnit: { fontSize: 12, fontWeight: "600", color: colors.textMuted },
+  tileTextOn: { color: "#fff" },
+  tileSplit: { flexGrow: 1.9, flexDirection: "row", alignItems: "stretch", paddingHorizontal: 0, paddingVertical: 0, gap: 8 },
+  tileSplitOn: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+  tileMain: { flex: 1, paddingHorizontal: 13, paddingVertical: 9, gap: 1 },
+  tileParts: { justifyContent: "center", gap: 4, paddingVertical: 7, paddingRight: 8 },
+  tilePart: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    minWidth: 112,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    backgroundColor: colors.dangerSoft,
+  },
+  tilePartOn: { backgroundColor: colors.danger },
+  tilePartText: { fontSize: 12.5, fontWeight: "700", color: colors.dangerInk },
+  tilePartNum: { fontSize: 13, fontWeight: "800", color: colors.dangerInk },
+  chipRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  chipRowNarrow: { flexDirection: "column", gap: 6 },
+  chipRowLabel: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  chipRowLabelWide: { width: 92, paddingTop: 7 },
+  chipWrap: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  chipScroll: { gap: 6, paddingRight: spacing.md },
+  fChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    minHeight: 38,
-    paddingLeft: 14,
-    paddingRight: 10,
-    borderRadius: 12,
-    borderWidth: 1,
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1.5,
     borderColor: colors.border,
-    backgroundColor: colors.sky50,
+    backgroundColor: colors.card,
   },
-  qChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
-  qChipRed: { backgroundColor: colors.dangerSoft, borderColor: "#FECACA" },
-  qChipRedOn: { backgroundColor: colors.danger, borderColor: colors.danger },
-  qChipText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
-  qChipTextRed: { color: colors.dangerInk },
-  qChipTextOn: { color: "#fff" },
-  qCount: { borderRadius: 999, paddingHorizontal: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
-  qCountRed: { backgroundColor: colors.danger, borderColor: colors.danger },
-  qCountOn: { backgroundColor: "rgba(255,255,255,0.25)", borderColor: "transparent" },
-  qCountText: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
-  qCountTextRed: { color: "#fff" },
-  qCountTextOn: { color: "#fff" },
-  qCountTextRedOn: { color: "#fff" },
+  fChipOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  fChipAmberOn: { backgroundColor: colors.warningSoft, borderColor: colors.warning },
+  fChipZero: { opacity: 0.4 },
+  fChipText: { fontSize: 13, lineHeight: 19, color: colors.text },
+  fChipTextOn: { color: colors.primaryInk, fontWeight: "700" },
+  fChipAmberText: { color: colors.warningInk, fontWeight: "700" },
+  fChipCount: { fontSize: 11.5, fontWeight: "700", color: colors.textMuted },
+  chipMore: { justifyContent: "center", paddingHorizontal: 6, paddingVertical: 5 },
+  moreBtn: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start" },
+  moreBtnText: { fontSize: 13, fontWeight: "600", color: colors.primaryInk },
+  activeBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    borderStyle: "dashed",
+    paddingTop: 10,
+  },
+  activeCount: { fontSize: 16, fontWeight: "800", color: colors.text, marginRight: 4 },
+  activeOf: { fontSize: 12.5, fontWeight: "500", color: colors.textMuted },
+  activeLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted },
+  activeHint: { fontSize: 12.5, color: colors.textMuted },
+  pill: { flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: colors.sky50, borderRadius: 999, paddingLeft: 10, paddingRight: 3, paddingVertical: 2 },
+  pillText: { fontSize: 12.5, color: colors.text },
+  pillX: { width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  clearAll: { fontSize: 12.5, fontWeight: "700", color: colors.dangerInk, marginLeft: 4 },
+  saveView: { flexDirection: "row", alignItems: "center", gap: 5 },
+  sortRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  segLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted },
+  seg: { flexDirection: "row", flexWrap: "wrap", backgroundColor: colors.sky50, borderRadius: 10, padding: 3, gap: 2 },
+  segBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  segBtnOn: { backgroundColor: colors.card, ...shadow.card },
+  segText: { fontSize: 12.5, fontWeight: "600", color: colors.textMuted },
+  segTextOn: { color: colors.text },
+  panelRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
   searchBox: {
     flexDirection: "row",
     alignItems: "center",
@@ -2095,18 +2481,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.sky50,
   },
-  panelBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    minHeight: 42,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  panelBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
   viewsRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   viewsLabel: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
   viewChip: {
@@ -2119,16 +2493,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primarySoft,
   },
   viewChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
-  selects: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#EEF2F7",
-    paddingTop: 14,
-  },
-  selectField: { flexGrow: 1, flexBasis: 170, minWidth: 0, gap: 5 },
-  selectAlert: { borderRadius: 12 },
   selectLabel: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
   viewInput: {
     minHeight: 46,
