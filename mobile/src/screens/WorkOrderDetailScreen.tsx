@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
+import StepPulse from "../components/StepPulse";
 import AppModal, { ModalRow } from "../components/AppModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -634,6 +635,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                   state === "skipped" && styles.stepDotSkipped,
                 ]}
               >
+                {state === "now" ? <StepPulse size={30} /> : null}
                 {state === "done" ? (
                   <Ionicons name="checkmark" size={15} color="#fff" />
                 ) : (
@@ -3089,7 +3091,8 @@ const styles = StyleSheet.create({
   issuedHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingTop: 3 },
   optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
   optionTextOut: { color: colors.danger },
-  steps: { flexDirection: "row", paddingTop: spacing.sm, minWidth: "100%" },
+  // เว้นบน-ล่างให้คลื่นรอบวงขั้นปัจจุบัน (ขยายถึง 2.1 เท่า) ไม่ถูกขอบ ScrollView ตัด
+  steps: { flexDirection: "row", paddingTop: 18, paddingBottom: 4, minWidth: "100%" },
   step: { flex: 1, minWidth: 104, alignItems: "center", paddingHorizontal: 4 },
   // เส้นเชื่อมจากขอบวงก่อนหน้ามาถึงขอบวงนี้ — เว้นรัศมีวงทั้งสองฝั่ง เส้นจึงไม่พาดทับวง
   // (บนเว็บเส้นที่วางแบบ absolute ลอยอยู่เหนือวงที่ไม่ได้ absolute zIndex ช่วยไม่ได้)
