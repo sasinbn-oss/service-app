@@ -260,7 +260,7 @@ router.get("/month", requireAuth, requirePlanner, async (req: AuthRequest, res) 
 /**
  * ใบงานที่รอจัดแผน — ยังไม่มีวันไปหน้างาน
  *
- * ลูกค้าคอนเฟิร์มนัดแล้วแต่ยังไม่ได้จ่ายทีม (ASSIGNED ตามลำดับใหม่) · ส่งตรวจหน้างานแต่ยังไม่ได้กำหนดวัน ·
+ * รอหัวหน้าภาคจ่ายงาน+ใส่วัน (PARTS_CHECKED) · ส่งตรวจหน้างานแต่ยังไม่ได้กำหนดวัน ·
  * ใบรออะไหล่ที่หัวหน้าภาคต้องตามของ — สามอย่างนี้คือสิ่งที่คนจัดแผนต้องหยิบมาจัด
  */
 router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res) => {
@@ -268,7 +268,7 @@ router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res
   const rows = await prisma.workOrder.findMany({
     where: {
       OR: [
-        { status: { in: ["ASSIGNED", "WAITING_PARTS"] } },
+        { status: { in: ["PARTS_CHECKED", "WAITING_PARTS"] } },
         { status: "INSPECTING", scheduledAt: null },
       ],
       ...(scope.where ? { AND: [scope.where] } : {}),

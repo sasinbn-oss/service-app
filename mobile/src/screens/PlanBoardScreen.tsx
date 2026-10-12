@@ -494,7 +494,8 @@ function Stat({
 function stopTag(s: Stop) {
   if (s.status === "DONE") return { text: "ปิดงานแล้ว", tone: "ok" as const };
   if (s.kind === "INSPECT") return { text: "ตรวจหน้างาน", tone: "violet" as const };
-  if (s.status === "AWAITING_CONFIRM") return { text: "รอลูกค้าคอนเฟิร์ม", tone: "warn" as const };
+  if (s.status === "AWAITING_CONFIRM") return { text: "รอแอดมินคอนเฟิร์มลูกค้า", tone: "warn" as const };
+  if (s.status === "ASSIGNED") return { text: "รอยืนยันออกงาน", tone: "warn" as const };
   return { text: s.appointmentLabel ?? s.statusLabel, tone: "ok" as const };
 }
 

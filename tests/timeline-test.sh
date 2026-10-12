@@ -29,8 +29,9 @@ DB "update \"User\" set region='ใต้' where \"employeeCode\"='S001'" >/dev/
 WO=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","model":"Haier","symptom":"ทดสอบไทม์ไลน์"}]}')
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); CODE=$(echo "$WO" | J 'd.orders?d.orders[0].code:d.code')
 POST $S "work-orders/$ID/parts" '{"needsParts":false}' >/dev/null
-POST $A "work-orders/$ID/schedule" '{"scheduledAt":"2026-11-10"}' >/dev/null
-POST $S "work-orders/$ID/assign" '{"team":"กระบี่"}' >/dev/null
+POST $S "work-orders/$ID/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}' >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
+POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 DAY=$(DB "select to_char(current_date+50,'YYYY-MM-DD')")
 DB "update \"WorkOrder\" set \"scheduledAt\"='$DAY' where id=$ID" >/dev/null
 curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"date\":\"$DAY\",\"team\":\"กระบี่\",\"memberIds\":[$TID],\"startTime\":\"08:30\"}" >/dev/null

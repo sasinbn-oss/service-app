@@ -49,9 +49,10 @@ export type TimelineTarget = { kind: "wo"; id: number; code: string } | { kind: 
 
 const ROLE_LABEL: Record<Role, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง", SYSTEM: "ระบบ" };
 const ROLE_COLOR: Record<Role, { fg: string; bg: string }> = {
-  ADMIN: { fg: "#6D4AD1", bg: "#EEE9FB" },
-  SUPERVISOR: { fg: "#0A7C86", bg: "#E2F4F5" },
-  EMPLOYEE: { fg: "#C2620A", bg: "#FCEFE3" },
+  // ชุดเดียวกับป้ายสถานะในรายการใบงาน (theme role*) — จำสีครั้งเดียวใช้ได้ทุกหน้า
+  ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft },
+  SUPERVISOR: { fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft },
+  EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft },
   SYSTEM: { fg: "#6B7785", bg: "#EEF1F4" },
 };
 // สีของแถบสัดส่วนเวลา — ตามคนที่ถือลูกบอลในขั้นนั้น
@@ -62,8 +63,8 @@ const STAGE_COLOR: Record<string, string> = {
   PARTS_REQUESTED: ROLE_COLOR.ADMIN.fg,
   AWAITING_QUOTE: ROLE_COLOR.ADMIN.fg,
   AWAITING_PAYMENT: ROLE_COLOR.ADMIN.fg,
-  PARTS_CHECKED: ROLE_COLOR.ADMIN.fg,
-  AWAITING_CONFIRM: ROLE_COLOR.SYSTEM.fg,
+  PARTS_CHECKED: ROLE_COLOR.SUPERVISOR.fg,
+  AWAITING_CONFIRM: ROLE_COLOR.ADMIN.fg,
   ASSIGNED: ROLE_COLOR.SUPERVISOR.fg,
   IN_PROGRESS: ROLE_COLOR.EMPLOYEE.fg,
 };

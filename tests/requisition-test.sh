@@ -45,7 +45,7 @@ echo "$R" | J 'd.waitingParts.find(p=>p.inStock===false).requisitionNo===null?"o
 echo "$R" | J 'd.statusLabel' | grep -q "เช็คอะไหล่" && pass "ของหมด ใบงานยังค้างอยู่ที่แอดมิน" || fail "ส่งต่อทั้งที่ของไม่ครบ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-2569-0099\"}]}")
-echo "$R" | J 'd.statusLabel' | grep -q "นัดลูกค้า" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
+echo "$R" | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
 echo "$R" | J 'd.waitingParts.find(p=>p.partCode==="SP-BOARD").requisitionNo==="RQ-2569-0042"?"ok":"bad"' | grep -q ok \
   && pass "ใบเบิกรอบแรกไม่ถูกเขียนทับ" || fail "ใบเบิกรอบแรกถูกทับ"
 
@@ -55,8 +55,9 @@ TECH=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)" | J 'd.techni
 # จ่ายเป็นทีม และจัดช่างทดสอบเข้าทีมของสาขา C0006 ตามไฟล์ทะเบียนจริง
 TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
 curl -s -X PATCH "localhost:4000/api/auth/users/$TECH" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-02"}' >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 
 echo
 # รูปหน้างานต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทน
@@ -85,8 +86,9 @@ WO2=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Ty
   -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"code":"D5","model":"Haier","symptom":"ตรวจตามรอบ"}]}')
 ID2=$(echo "$WO2" | J 'd.orders?d.orders[0].id:d.id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID2/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-02"}' >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID2/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID2/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/attachments" -H "$(H $T)" \
   -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
 # ปิดงานต้องมีป้ายรุ่นของรอบนี้ด้วย ไว้ไล่เทียบว่าไปถูกเครื่อง

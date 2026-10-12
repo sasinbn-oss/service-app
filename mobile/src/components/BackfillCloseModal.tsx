@@ -213,7 +213,7 @@ export default function BackfillCloseModal({
         ) : null}
       </Step>
 
-      <Step title="ทีมและวันเข้างานจริง" hint={before("AWAITING_CONFIRM") ? "ข้ามขั้นนัดลูกค้า/คอนเฟิร์ม/จ่ายงาน — ใส่ทีมและวันที่ช่างเข้าไปจริงแทน" : undefined}>
+      <Step title="ทีมและวันเข้างานจริง" hint={before("ASSIGNED") ? "ข้ามขั้นจ่ายงาน/คอนเฟิร์มลูกค้า/ยืนยันออกงาน — ใส่ทีมและวันที่ช่างเข้าไปจริงแทน" : undefined}>
         <Text style={styles.label}>ทีมที่ไป</Text>
         <Dropdown value={team} onChange={setTeam} placeholder="เลือกทีม" accessibilityLabel="ทีมที่ไป" options={teams.map((t) => ({ value: t, label: t }))} />
         <View style={styles.two}>

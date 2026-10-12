@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
+import StepPulse from "../components/StepPulse";
 import AppModal, { ModalRow } from "../components/AppModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -168,10 +169,10 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   PARTS_REQUESTED: { label: "เช็คอะไหล่ในคลัง", icon: "arrow-forward-circle" },
   AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
   AWAITING_PAYMENT: { label: "ลูกค้าจ่ายเงินแล้ว", icon: "cash-outline" },
-  // ลำดับใหม่: แอดมินนัด → ลูกค้าคอนเฟิร์ม → หัวหน้าภาคจ่ายงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
-  PARTS_CHECKED: { label: "นัดลูกค้า", icon: "calendar-outline" },
-  AWAITING_CONFIRM: { label: "ลูกค้าคอนเฟิร์มนัด", icon: "checkmark-circle-outline" },
-  ASSIGNED: { label: "จ่ายงานให้ช่าง", icon: "arrow-forward-circle" },
+  // หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
+  PARTS_CHECKED: { label: "จ่ายงานให้ช่าง", icon: "arrow-forward-circle" },
+  AWAITING_CONFIRM: { label: "คอนเฟิร์มลูกค้า", icon: "call-outline" },
+  ASSIGNED: { label: "ยืนยันออกงาน", icon: "checkmark-circle-outline" },
 };
 
 /** "9 ต.ค. 69 · 10:00 น." — วันนัดเก็บเป็นเที่ยงคืน UTC จึงตัดเอาแค่วันตรง ๆ */
@@ -204,12 +205,12 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
     // ตรวจหน้างานเป็นทางเลือก — ใบที่ไม่เคยส่งตรวจไม่ได้ผ่านขั้นนี้
     case "INSPECTING":
       return o.status !== "INSPECTING" && !o.inspectedAt;
-    // นัดที่ลูกค้าคอนเฟิร์มตั้งแต่โทรนัด (หรือแอดมินเลือกวันให้) ไม่ต้องรอคอนเฟิร์มอีกรอบ
+    // ใบเก่าบางใบนัดแล้วไปเลยโดยไม่ได้ผ่านขั้นคอนเฟิร์ม — ไม่มีประวัติคอนเฟิร์ม/เลื่อน = ข้าม
     case "AWAITING_CONFIRM":
       return (
         o.status !== "AWAITING_CONFIRM" &&
         (o.status === "DONE" || at(o.status) > at("AWAITING_CONFIRM")) &&
-        !o.logs.some((l) => l.action === "CONFIRMED")
+        !o.logs.some((l) => l.action === "CONFIRMED" || l.action === "RESCHEDULED")
       );
     default:
       return false;
@@ -630,10 +631,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 style={[
                   styles.stepDot,
                   state === "done" && styles.stepDotDone,
-                  state === "now" && styles.stepDotNow,
+                  // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
+                  state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
                   state === "skipped" && styles.stepDotSkipped,
                 ]}
               >
+                {state === "now" ? <StepPulse size={30} color={tone.fg} /> : null}
                 {state === "done" ? (
                   <Ionicons name="checkmark" size={15} color="#fff" />
                 ) : (
@@ -645,7 +648,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text
                 style={[
                   styles.stageLabel,
-                  state === "now" && styles.stageLabelNow,
+                  state === "now" && [styles.stageLabelNow, { color: tone.fg }],
                   (state === "future" || state === "skipped") && styles.stageLabelFuture,
                   state === "skipped" && styles.stageLabelSkipped,
                 ]}
@@ -1174,9 +1177,9 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
   AWAITING_PAYMENT: ["PAID"],
   PARTS_REQUESTED: ["PARTS_CHECKED"],
-  PARTS_CHECKED: ["SCHEDULED"],
-  AWAITING_CONFIRM: ["CONFIRMED"],
-  ASSIGNED: ["ASSIGNED"],
+  PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
+  AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
+  ASSIGNED: ["DISPATCHED", "ASSIGNED"],
   IN_PROGRESS: ["CLOSED"],
 };
 
@@ -1523,7 +1526,7 @@ function StageBackModal({
     const idx = all.indexOf(value);
     const lost: string[] = [];
     if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && order.scheduledAt) lost.push("วันนัด");
-    if (idx >= 0 && idx <= all.indexOf("ASSIGNED") && value !== "INSPECTING" && order.assignedTeam)
+    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECTING" && order.assignedTeam)
       lost.push("ทีมที่รับงาน");
     if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
       lost.push("ผลเช็คคลังและเลขใบเบิก");
@@ -1648,7 +1651,8 @@ function StageModal({
   const [finding, setFinding] = useState("");
   const [photos, setPhotos] = useState<PickedAttachment[]>([]);
   // ขั้นนัดลูกค้า
-  const [appointment, setAppointment] = useState<"PENDING" | "CONFIRMED" | "ADMIN_PICKED" | null>(null);
+  // ขั้นคอนเฟิร์มลูกค้า: ลูกค้าตกลงวันเดิม หรือขอเลื่อน (เลื่อนแล้วถึงจะขึ้นช่องวันให้แก้)
+  const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
   // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
   const [splitOut, setSplitOut] = useState(true);
   const { user } = useAuth();
@@ -1663,7 +1667,7 @@ function StageModal({
     setInspectFirst(order.status === "NEW" && order.jobType === "INSPECT" && !order.inspectedAt);
     setFinding("");
     setPhotos([]);
-    setAppointment(null);
+    setConfirmChoice(null);
     setSplitOut(true);
     setVisitTime(order.scheduledTime ?? "");
     setParts(order.waitingParts);
@@ -1740,11 +1744,13 @@ function StageModal({
       } else if (order.status === "WAITING_PARTS") {
         await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
       } else if (order.status === "AWAITING_CONFIRM") {
-        await api.post(`/work-orders/${order.id}/confirm-appointment`, {
-          scheduledAt: visit,
-          scheduledTime: visitTime || null,
-          note: note.trim() || undefined,
-        });
+        // ตกลงวันเดิมไม่ส่งวันไป — เซิร์ฟเวอร์ใช้วันที่หัวหน้าภาคใส่ไว้ จะได้ไม่บันทึกว่าเลื่อนเพราะเผลอแตะช่องวัน
+        await api.post(
+          `/work-orders/${order.id}/confirm-appointment`,
+          confirmChoice === "MOVE"
+            ? { scheduledAt: visit, scheduledTime: visitTime || null, note: note.trim() || undefined }
+            : { note: note.trim() || undefined }
+        );
       } else if (order.status === "NEW") {
         await api.post(`/work-orders/${order.id}/parts`, {
           needsParts,
@@ -1783,15 +1789,15 @@ function StageModal({
         }
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
       } else if (order.status === "ASSIGNED") {
-        await api.post(`/work-orders/${order.id}/assign`, {
+        await api.post(`/work-orders/${order.id}/dispatch`, {
           team,
           note: note.trim() || undefined,
         });
       } else {
-        await api.post(`/work-orders/${order.id}/schedule`, {
+        await api.post(`/work-orders/${order.id}/assign`, {
+          team,
           scheduledAt: visit,
           scheduledTime: visitTime || null,
-          appointment,
           note: note.trim() || undefined,
         });
       }
@@ -1852,8 +1858,11 @@ function StageModal({
         : needsParts === null || (needsParts && parts.length === 0))) ||
     (order.status === "INSPECTING" && !finding.trim()) ||
     (order.status === "ASSIGNED" && !team) ||
-    (order.status === "PARTS_CHECKED" && (!validDate || !timeOk || appointment === null)) ||
-    (order.status === "AWAITING_CONFIRM" && (!validDate || !timeOk)) ||
+    (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
+    (order.status === "AWAITING_CONFIRM" &&
+      (confirmChoice === null ||
+        (confirmChoice === "MOVE" &&
+          (!validDate || !timeOk || (visit === (order.scheduledAt ?? "").slice(0, 10) && visitTime === (order.scheduledTime ?? "")))))) ||
     unchecked ||
     needsRequisition;
 
@@ -2178,11 +2187,15 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "ASSIGNED" || (order.status === "NEW" && inspectFirst) ? (
+            {order.status === "ASSIGNED" ||
+            order.status === "PARTS_CHECKED" ||
+            (order.status === "NEW" && inspectFirst) ? (
               <>
-                {order.status === "ASSIGNED" ? (
+                {order.status === "ASSIGNED" ? <DispatchNote order={order} /> : null}
+                {order.status === "PARTS_CHECKED" ? (
                   <Text style={styles.linkedText}>
-                    แอดมินนัดลูกค้าไว้ {visitLabel(order)} (ลูกค้าคอนเฟิร์มแล้ว) — เลือกทีมที่ว่างวันนั้น
+                    เลือกทีมและวันเข้างาน แล้วแอดมินจะโทรคอนเฟิร์มกับร้าน — ร้านขอเลื่อน แอดมินเปลี่ยนวันให้
+                    แล้วส่งกลับมาให้คุณยืนยันออกงานอีกครั้ง
                   </Text>
                 ) : null}
                 <Text style={styles.modalLabel}>
@@ -2302,46 +2315,48 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "PARTS_CHECKED" || order.status === "AWAITING_CONFIRM" ? (
+            {order.status === "PARTS_CHECKED" ? (
               <>
-                {order.status === "AWAITING_CONFIRM" ? (
-                  <Text style={styles.linkedText}>
-                    นัดไว้ {visitLabel(order)} — ลูกค้าขอเปลี่ยนเวลา แก้ได้ในนี้เลย
-                    ถ้ายกเลิกนัด ใช้ “ย้อนขั้นตอน” กลับไปนัดใหม่
-                  </Text>
-                ) : null}
                 <DateField
                   value={visit}
                   onChange={setVisit}
-                  label="วันที่จะเข้างาน"
+                  label="วันเข้างาน"
                   emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
                 />
-                <TimeField value={visitTime} onChange={setVisitTime} label="เวลานัด" />
-                {order.status === "PARTS_CHECKED" ? (
+                <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
+              </>
+            ) : null}
+
+            {order.status === "AWAITING_CONFIRM" ? (
+              <>
+                <Text style={styles.linkedText}>
+                  หัวหน้าภาคจ่าย {order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"} เข้า {visitLabel(order)}
+                  {order.contactPhone ? ` · โทร ${order.contactPhone}` : ""}
+                </Text>
+                <Text style={styles.modalLabel}>ลูกค้าตอบว่าอย่างไร</Text>
+                <View style={{ gap: spacing.xs }}>
+                  {(
+                    [
+                      ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
+                      ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
+                    ] as const
+                  ).map(([v, label, hint]) => (
+                    <TouchableOpacity
+                      key={v}
+                      style={[styles.backOption, confirmChoice === v && styles.backOptionOn]}
+                      onPress={() => setConfirmChoice(v)}
+                      activeOpacity={0.7}
+                      accessibilityLabel={label}
+                    >
+                      <Text style={styles.backOptionText}>{label}</Text>
+                      <Text style={styles.backOptionHint}>{hint}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {confirmChoice === "MOVE" ? (
                   <>
-                    <Text style={styles.modalLabel}>ลูกค้าตอบว่าอย่างไร</Text>
-                    <View style={{ gap: spacing.xs }}>
-                      {(
-                        [
-                          ["PENDING", "รอลูกค้าคอนเฟิร์ม", "โทรแล้ว ลูกค้ายังไม่ยืนยัน — พักไว้ที่ขั้นรอคอนเฟิร์ม"],
-                          ["CONFIRMED", "ลูกค้าคอนเฟิร์มแล้ว", "ส่งให้หัวหน้าภาคจ่ายงานได้เลย"],
-                          ["ADMIN_PICKED", "ลูกค้าสะดวกทุกวัน — แอดมินเลือกวันให้", "ไม่ต้องรอคอนเฟิร์ม — ส่งให้หัวหน้าภาคจ่ายงานเลย"],
-                        ] as const
-                      )
-                        .filter(([v]) => v !== "ADMIN_PICKED" || user?.role === "ADMIN")
-                        .map(([v, label, hint]) => (
-                          <TouchableOpacity
-                            key={v}
-                            style={[styles.backOption, appointment === v && styles.backOptionOn]}
-                            onPress={() => setAppointment(v)}
-                            activeOpacity={0.7}
-                            accessibilityLabel={label}
-                          >
-                            <Text style={styles.backOptionText}>{label}</Text>
-                            <Text style={styles.backOptionHint}>{hint}</Text>
-                          </TouchableOpacity>
-                        ))}
-                    </View>
+                    <DateField value={visit} onChange={setVisit} label="วันใหม่" emptyHint="เลือกวันที่ลูกค้าสะดวก" />
+                    <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
               </>
@@ -2538,6 +2553,39 @@ function FileStrip({
           </TouchableOpacity>
         </View>
       ))}
+    </View>
+  );
+}
+
+/**
+ * หัวฟอร์มยืนยันออกงาน — บอกว่าแอดมินคุยกับลูกค้าได้ข้อสรุปว่าอะไร
+ *
+ * ลูกค้าเลื่อนวันคือเหตุผลหลักที่ขั้นนี้มีอยู่ (ทีมเดิมอาจไม่ว่างวันใหม่) จึงต้องเด่น
+ * อ่านจากประวัติล่าสุดของขั้นคอนเฟิร์ม ไม่เก็บซ้ำในใบงาน — ประวัติคือของจริงอยู่แล้ว
+ */
+function DispatchNote({ order }: { order: WorkOrder }) {
+  const last = order.logs
+    .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const moved = last?.action === "RESCHEDULED";
+  return (
+    <View style={[styles.dispatchNote, moved && styles.dispatchNoteMoved]}>
+      <Ionicons
+        name={moved ? "swap-horizontal" : "checkmark-circle"}
+        size={16}
+        color={moved ? colors.warningInk : colors.successInk}
+      />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.dispatchText, { color: moved ? colors.warningInk : colors.successInk }]}>
+          {moved ? last.note : `ลูกค้าคอนเฟิร์มแล้ว · เข้างาน ${visitLabel(order)}`}
+        </Text>
+        {last ? (
+          <Text style={styles.linkedText}>
+            {last.byName ?? "—"} · {formatDateTime(last.createdAt)}
+            {moved ? " — เช็คว่าทีมยังว่างวันใหม่ หรือเปลี่ยนทีมด้านล่าง" : ""}
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -3084,12 +3132,23 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     backgroundColor: colors.background,
   },
+  dispatchNote: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "flex-start",
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    backgroundColor: colors.successSoft,
+  },
+  dispatchNoteMoved: { backgroundColor: colors.warningSoft },
+  dispatchText: { fontSize: 13, lineHeight: 21, fontWeight: "700" },
   issuedTitle: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.textMuted },
   issuedLine: { fontSize: 12, lineHeight: 20, color: colors.text },
   issuedHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingTop: 3 },
   optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
   optionTextOut: { color: colors.danger },
-  steps: { flexDirection: "row", paddingTop: spacing.sm, minWidth: "100%" },
+  // เว้นบน-ล่างให้คลื่นรอบวงขั้นปัจจุบัน (ขยายถึง 2.1 เท่า) ไม่ถูกขอบ ScrollView ตัด
+  steps: { flexDirection: "row", paddingTop: 18, paddingBottom: 4, minWidth: "100%" },
   step: { flex: 1, minWidth: 104, alignItems: "center", paddingHorizontal: 4 },
   // เส้นเชื่อมจากขอบวงก่อนหน้ามาถึงขอบวงนี้ — เว้นรัศมีวงทั้งสองฝั่ง เส้นจึงไม่พาดทับวง
   // (บนเว็บเส้นที่วางแบบ absolute ลอยอยู่เหนือวงที่ไม่ได้ absolute zIndex ช่วยไม่ได้)
