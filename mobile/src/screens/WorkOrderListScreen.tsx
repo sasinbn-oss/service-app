@@ -211,6 +211,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
   // ไม่งั้นพิมพ์รหัสใบงานหนึ่งรหัสจะยิงขอข้อมูลเท่าจำนวนตัวอักษร
   const settledSearch = useDebounced(search);
+  // กำลังพิมพ์ค้นอยู่ไหม — รายการถูกสร้างใหม่เมื่อผลค้นหาเปลี่ยนระหว่างว่าง/มีใบงาน (ดู key ของ FlatList)
+  // ช่องค้นหาที่อยู่ในหัวรายการจึงถูกสร้างใหม่ด้วย ต้องโฟกัสกลับให้ ไม่งั้นพิมพ์ตัวถัดไปไม่ติด
+  const searchFocused = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
@@ -350,6 +353,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const [tableW, setTableW] = useState(0);
   const [barH, setBarH] = useState(FOLDED_H);
   function onListScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    scrollY.setValue(e.nativeEvent.contentOffset.y);
     // แถบสรุปกดได้เฉพาะตอนเห็นแล้ว — ตอนจางอยู่ไม่ควรบังปุ่มของหัวหน้าข้างใต้
     const on = headH > 0 && e.nativeEvent.contentOffset.y > headH - 20;
     if (on !== barOn) setBarOn(on);
@@ -397,6 +401,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             style={styles.searchInput}
             value={search}
             onChangeText={setSearch}
+            autoFocus={searchFocused.current}
+            onFocus={() => (searchFocused.current = true)}
+            onBlur={() => (searchFocused.current = false)}
             placeholder="ค้นรหัสใบงาน สาขา หรือเรื่อง"
             placeholderTextColor={colors.textFaint}
           />
@@ -470,33 +477,31 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   return (
     <View style={styles.container}>
       {foldable ? null : header}
-      {!foldable && status ? (
-        status
-      ) : (
+      {
         /*
           FlatList ไม่ใช่ ScrollView เพราะ ScrollView สร้างการ์ดทุกใบตั้งแต่เปิดหน้า
           รายการที่เปิดค้างสองร้อยใบจึงต้องวาดสองร้อยใบก่อนภาพแรกจะขึ้น
           ทั้งที่จอเห็นพร้อมกันได้ห้าใบ — FlatList วาดเฉพาะที่กำลังจะเห็น
+
+          key เปลี่ยนทุกครั้งที่รายการสลับระหว่าง "ว่าง/กำลังโหลด" กับ "มีใบงาน" = สร้างรายการใหม่
+          รายการที่ว่างอยู่แล้วค่อยได้ใบงานทีหลัง (โหลดเสร็จ · ลบคำค้นที่ไม่เจอ) ไม่วาดใบเพิ่มตอนเลื่อน
+          เจอจริงหลังย้ายหัวหน้าเข้ามาในรายการ: ป้าย 123 ใบ เลื่อนจนสุดเห็นแค่ 6 ใบ
+          สร้างใหม่แล้วช่องค้นหาในหัวรายการถูกสร้างใหม่ด้วย จึงคืนโฟกัสให้เอง (searchFocused)
         */
-        <Animated.FlatList
+      }
+        <FlatList
+          key={status ? "empty" : "list"}
           ref={listRef}
-          onScroll={
-            foldable
-              ? Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-                  useNativeDriver: false,
-                  listener: onListScroll,
-                })
-              : undefined
-          }
+          onScroll={onListScroll}
           scrollEventThrottle={16}
           data={status ? [] : items}
+          ListEmptyComponent={status}
           keyExtractor={(it: ListItem) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
           contentContainerStyle={table ? styles.tableOuter : styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
-          ListEmptyComponent={status}
           ListHeaderComponent={
             <>
               {foldable ? header : null}
@@ -548,7 +553,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             )
           }
         />
-      )}
       {foldable ? (
         <Animated.View
           pointerEvents={barOn ? "box-none" : "none"}
