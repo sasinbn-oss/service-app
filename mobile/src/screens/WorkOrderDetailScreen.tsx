@@ -19,6 +19,7 @@ import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import StepPulse from "../components/StepPulse";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
+import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -32,7 +33,7 @@ import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
-import WorkOrderAttachments, { Attachment, openAttachment } from "../components/WorkOrderAttachments";
+import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -275,6 +276,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [editingNote, setEditingNote] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
   const stepScroll = useRef<ScrollView>(null);
+  // ดูรูปที่ส่งตอนปิดงานเต็มจอ — เลื่อนไปมาได้เฉพาะรูปของรอบที่ปิด
+  const [viewingClose, setViewingClose] = useState<number | null>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
   const [stageBackOpen, setStageBackOpen] = useState(false);
@@ -990,13 +993,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {closeFiles.length > 0 ? (
             <>
               <Text style={styles.partsHead}>รูปที่ส่งตอนปิดงาน</Text>
+              {viewingClose !== null ? (
+                <ImageViewer
+                  workOrderId={order.id}
+                  items={closeFiles}
+                  startIndex={viewingClose}
+                  onClose={() => setViewingClose(null)}
+                />
+              ) : null}
               <View style={styles.closeFiles}>
                 {closeFiles.map((f) => (
                   <TouchableOpacity
                     key={f.id}
                     style={styles.closeFile}
                     activeOpacity={0.8}
-                    onPress={() => openAttachment(order.id, f)}
+                    onPress={() => setViewingClose(closeFiles.findIndex((x) => x.id === f.id))}
                     accessibilityLabel={`เปิด ${f.fileName}`}
                   >
                     {f.thumbnailDataUrl ? (
