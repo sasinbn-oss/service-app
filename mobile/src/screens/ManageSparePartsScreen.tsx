@@ -1,32 +1,77 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useCachedState } from "../utils/pageCache";
-import {
-  FlatList,
-  Image,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
+import AppModal from "../components/AppModal";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { showAlert } from "../utils/alert";
+import { appendFile } from "../utils/attachments";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
-import { colors } from "../theme";
+import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
 
 const emptyForm = { partCode: "", name: "", brand: "", category: "", description: "" };
+type Form = typeof emptyForm;
+type PickedImage = { uri: string; name: string; type: string };
+
+const ALL = "ทั้งหมด";
+
+// รูปอะไหล่เสิร์ฟจาก URL เดิมทุกครั้ง (/spare-parts/:id/image) — ต่อท้ายด้วยเวลาที่แก้ล่าสุด
+// ไม่งั้นเบราว์เซอร์โชว์รูปเก่าจากแคชหลังเปลี่ยนรูปจนกว่าจะรีเฟรชหน้า
+function thumbUri(part: SparePart) {
+  const uri = resolveImageUrl(part.imageUrl);
+  return uri ? `${uri}${uri.includes("?") ? "&" : "?"}v=${encodeURIComponent(part.updatedAt)}` : null;
+}
+
+async function pickImage(): Promise<PickedImage | null> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) {
+    showAlert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงคลังรูปภาพ");
+    return null;
+  }
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ["images"],
+    quality: 0.6,
+    allowsEditing: true,
+  });
+  if (result.canceled || result.assets.length === 0) return null;
+  const a = result.assets[0];
+  return { uri: a.uri, name: a.fileName ?? "part.jpg", type: a.mimeType ?? "image/jpeg" };
+}
+
+async function uploadImage(partId: number, img: PickedImage) {
+  const form = new FormData();
+  // ใช้ appendFile — บนเว็บต้องเป็น Blob ถ้าส่ง {uri,name,type} ตรง ๆ เซิร์ฟเวอร์ไม่เห็นไฟล์
+  await appendFile(form, "image", img.uri, img.name, img.type);
+  await api.post(`/spare-parts/${partId}/image`, form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+}
+
+/** ไฮไลต์คำค้นในข้อความ — รายการยาวเป็นร้อย เห็นทันทีว่าแถวนี้ติดมาเพราะอะไร */
+function Hl({ text, q, style }: { text: string; q: string; style: object }) {
+  const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+  if (i < 0) return <Text style={style}>{text}</Text>;
+  return (
+    <Text style={style}>
+      {text.slice(0, i)}
+      <Text style={styles.mark}>{text.slice(i, i + q.length)}</Text>
+      {text.slice(i + q.length)}
+    </Text>
+  );
+}
 
 export default function ManageSparePartsScreen() {
   const [parts, setParts, cached] = useCachedState<SparePart[]>("ManageSpareParts:parts", []);
   const [loading, setLoading] = useState(!cached);
-  const [form, setForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [query, setQuery] = useState("");
+  const [brand, setBrand] = useState(ALL);
+  // null = ป๊อปอัพปิด · "new" = เพิ่มใหม่ · อะไหล่ = แก้ไขตัวนั้น
+  const [editing, setEditing] = useState<SparePart | "new" | null>(null);
   const [uploadingId, setUploadingId] = useState<number | null>(null);
 
   const loadParts = useCallback(() => {
@@ -44,78 +89,28 @@ export default function ManageSparePartsScreen() {
     }, [loadParts])
   );
 
-  function resetForm() {
-    setForm(emptyForm);
-    setEditingId(null);
-  }
+  const brands = useMemo(() => {
+    const set = new Set(parts.map((p) => p.brand?.trim()).filter((b): b is string => !!b));
+    return [ALL, ...[...set].sort((a, b) => a.localeCompare(b))];
+  }, [parts]);
 
-  function startEdit(part: SparePart) {
-    setEditingId(part.id);
-    setForm({
-      partCode: part.partCode,
-      name: part.name,
-      brand: part.brand ?? "",
-      category: part.category ?? "",
-      description: part.description ?? "",
-    });
-  }
-
-  async function handleSubmit() {
-    if (!form.partCode || !form.name) {
-      showAlert("ข้อมูลไม่ครบ", "กรุณาระบุรหัสสินค้าและชื่ออะไหล่");
-      return;
-    }
-    setSubmitting(true);
-    const payload = {
-      partCode: form.partCode,
-      name: form.name,
-      brand: form.brand || undefined,
-      category: form.category || undefined,
-      description: form.description || undefined,
-    };
-    try {
-      if (editingId) {
-        await api.put(`/spare-parts/${editingId}`, payload);
-      } else {
-        await api.post("/spare-parts", payload);
-      }
-      resetForm();
-      loadParts();
-      showAlert("สำเร็จ", editingId ? "แก้ไขข้อมูลเรียบร้อย" : "เพิ่มอะไหล่เรียบร้อย");
-    } catch (e) {
-      showAlert("ผิดพลาด", apiErrorMessage(e));
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const q = query.trim();
+  const shown = useMemo(() => {
+    const needle = q.toLowerCase();
+    return parts.filter(
+      (p) =>
+        (brand === ALL || p.brand?.trim() === brand) &&
+        (!needle ||
+          [p.partCode, p.name, p.brand, p.category].some((v) => v?.toLowerCase().includes(needle)))
+    );
+  }, [parts, q, brand]);
 
   async function handlePickImage(part: SparePart) {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      showAlert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงคลังรูปภาพ");
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.6,
-      allowsEditing: true,
-    });
-    if (result.canceled || result.assets.length === 0) return;
-
-    const asset = result.assets[0];
+    const img = await pickImage();
+    if (!img) return;
     setUploadingId(part.id);
     try {
-      const formData = new FormData();
-      formData.append("image", {
-        uri: asset.uri,
-        name: asset.fileName ?? `part-${part.id}.jpg`,
-        type: asset.mimeType ?? "image/jpeg",
-      } as unknown as Blob);
-
-      await api.post(`/spare-parts/${part.id}/image`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      await uploadImage(part.id, img);
       loadParts();
       showAlert("สำเร็จ", "อัปโหลดรูปภาพเรียบร้อย");
     } catch (e) {
@@ -134,7 +129,6 @@ export default function ManageSparePartsScreen() {
         onPress: async () => {
           try {
             await api.delete(`/spare-parts/${part.id}`);
-            if (editingId === part.id) resetForm();
             loadParts();
           } catch (e) {
             showAlert("ผิดพลาด", apiErrorMessage(e));
@@ -145,71 +139,70 @@ export default function ManageSparePartsScreen() {
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scroll}>
-      <View style={styles.form}>
-        <Text style={styles.formTitle}>{editingId ? "แก้ไขอะไหล่" : "เพิ่มอะไหล่ใหม่"}</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="รหัสสินค้า"
-          value={form.partCode}
-          onChangeText={(v) => setForm({ ...form, partCode: v })}
-          autoCapitalize="characters"
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="ชื่ออะไหล่"
-          value={form.name}
-          onChangeText={(v) => setForm({ ...form, name: v })}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="ยี่ห้อ"
-          value={form.brand}
-          onChangeText={(v) => setForm({ ...form, brand: v })}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="หมวดหมู่ (ไม่บังคับ)"
-          value={form.category}
-          onChangeText={(v) => setForm({ ...form, category: v })}
-        />
-        <TextInput
-          style={[styles.input, styles.multiline]}
-          placeholder="รายละเอียด (ไม่บังคับ)"
-          value={form.description}
-          onChangeText={(v) => setForm({ ...form, description: v })}
-          multiline
-        />
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={submitting}>
-            {submitting ? (
-              <Spinner color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>{editingId ? "บันทึกการแก้ไข" : "เพิ่มอะไหล่"}</Text>
-            )}
-          </TouchableOpacity>
-          {editingId && (
-            <TouchableOpacity style={styles.cancelButton} onPress={resetForm}>
-              <Text style={styles.cancelText}>ยกเลิก</Text>
-            </TouchableOpacity>
-          )}
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/* หัวหน้าแบบเดียวกับหน้าสิทธิ์ผู้ใช้ — ฟอร์มเพิ่มเดิมกินครึ่งจอบนจนต้องเลื่อนผ่านทุกครั้งที่จะหาอะไหล่ */}
+      <View style={styles.pageHead}>
+        <Text style={[styles.pageTitle, headingFont]}>จัดการข้อมูลอะไหล่</Text>
+        <View style={styles.countPill}>
+          <Text style={styles.countPillText}>
+            {shown.length === parts.length ? `${parts.length} รายการ` : `${shown.length} / ${parts.length} รายการ`}
+          </Text>
         </View>
-        <Text style={styles.hint}>
-          เพิ่มอะไหล่ก่อน แล้วจึงกด "เลือกรูป" ที่รายการด้านล่างเพื่ออัปโหลดรูปภาพ
-        </Text>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity style={styles.addButton} onPress={() => setEditing("new")} activeOpacity={0.8}>
+          <Ionicons name="add" size={18} color="#fff" />
+          <Text style={styles.addButtonText}>เพิ่มอะไหล่ใหม่</Text>
+        </TouchableOpacity>
       </View>
+
+      <View style={styles.search}>
+        <Ionicons name="search" size={18} color={colors.textFaint} />
+        <TextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="ค้นรหัสสินค้า ชื่ออะไหล่ ยี่ห้อ หรือหมวดหมู่"
+          placeholderTextColor={colors.textFaint}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="ค้นหาอะไหล่"
+        />
+        {query ? (
+          <TouchableOpacity onPress={() => setQuery("")} accessibilityLabel="ล้างคำค้นหา" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={18} color={colors.textFaint} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {brands.length > 2 ? (
+        <View style={styles.chips}>
+          {brands.map((b) => (
+            <TouchableOpacity
+              key={b}
+              style={[styles.chip, brand === b && styles.chipOn]}
+              onPress={() => setBrand(b)}
+              accessibilityLabel={`ยี่ห้อ ${b}`}
+            >
+              <Text style={[styles.chipText, brand === b && styles.chipTextOn]}>{b}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
 
       {loading ? (
         <Spinner style={styles.loader} color={colors.primary} />
+      ) : parts.length === 0 ? (
+        <EmptyState icon="construct-outline" text="ยังไม่มีอะไหล่ในระบบ — กดเพิ่มอะไหล่ใหม่ที่มุมขวาบน" />
+      ) : shown.length === 0 ? (
+        <Text style={styles.noMatch}>ไม่พบอะไหล่ที่ตรงกับ “{q || brand}”</Text>
       ) : (
         <FlatList
           scrollEnabled={false}
-          contentContainerStyle={styles.listContent}
-          data={parts}
+          data={shown}
           keyExtractor={(item) => String(item.id)}
-          ListEmptyComponent={<EmptyState icon="construct-outline" text="ยังไม่มีอะไหล่ในระบบ" />}
+          contentContainerStyle={{ gap: spacing.sm }}
           renderItem={({ item }) => {
-            const uri = resolveImageUrl(item.imageUrl);
+            const uri = thumbUri(item);
             return (
               <View style={styles.card}>
                 {uri ? (
@@ -220,26 +213,24 @@ export default function ManageSparePartsScreen() {
                   </View>
                 )}
                 <View style={styles.info}>
-                  <Text style={styles.name}>{item.name}</Text>
+                  <Hl text={item.name} q={q} style={styles.name} />
                   <Text style={styles.meta}>
-                    {item.partCode}
-                    {item.brand ? ` · ${item.brand}` : ""}
+                    <Hl text={item.partCode} q={q} style={styles.meta} />
+                    {item.brand ? " · " : ""}
+                    {item.brand ? <Hl text={item.brand} q={q} style={styles.meta} /> : null}
                   </Text>
                   <View style={styles.actionRow}>
-                    <TouchableOpacity
-                      onPress={() => handlePickImage(item)}
-                      disabled={uploadingId === item.id}
-                    >
+                    <TouchableOpacity onPress={() => handlePickImage(item)} disabled={uploadingId === item.id}>
                       {uploadingId === item.id ? (
                         <Spinner size="small" color={colors.primary} />
                       ) : (
                         <Text style={styles.action}>เลือกรูป</Text>
                       )}
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => startEdit(item)}>
+                    <TouchableOpacity onPress={() => setEditing(item)} accessibilityLabel={`แก้ไข ${item.partCode}`}>
                       <Text style={styles.action}>แก้ไข</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => handleDelete(item)}>
+                    <TouchableOpacity onPress={() => handleDelete(item)} accessibilityLabel={`ลบ ${item.partCode}`}>
                       <Text style={styles.delete}>ลบ</Text>
                     </TouchableOpacity>
                   </View>
@@ -249,54 +240,247 @@ export default function ManageSparePartsScreen() {
           }}
         />
       )}
+
+      {editing ? (
+        <PartModal
+          part={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            loadParts();
+          }}
+        />
+      ) : null}
     </ScrollView>
+  );
+}
+
+function PartModal({
+  part,
+  onClose,
+  onSaved,
+}: {
+  part: SparePart | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<Form>(
+    part
+      ? {
+          partCode: part.partCode,
+          name: part.name,
+          brand: part.brand ?? "",
+          category: part.category ?? "",
+          description: part.description ?? "",
+        }
+      : emptyForm
+  );
+  const [image, setImage] = useState<PickedImage | null>(null);
+  const [saving, setSaving] = useState(false);
+  const set = (k: keyof Form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const ready = !!form.partCode.trim() && !!form.name.trim();
+  const preview = image?.uri ?? (part ? thumbUri(part) : null);
+
+  async function submit() {
+    if (!ready) return;
+    setSaving(true);
+    const payload = {
+      partCode: form.partCode.trim(),
+      name: form.name.trim(),
+      brand: form.brand.trim() || undefined,
+      category: form.category.trim() || undefined,
+      description: form.description.trim() || undefined,
+    };
+    let saved: SparePart;
+    try {
+      saved = part
+        ? (await api.put<SparePart>(`/spare-parts/${part.id}`, payload)).data
+        : (await api.post<SparePart>("/spare-parts", payload)).data;
+    } catch (e) {
+      setSaving(false);
+      showAlert("ผิดพลาด", apiErrorMessage(e));
+      return;
+    }
+    // รูปส่งหลังได้ id — อะไหล่ใหม่ยังไม่มี id จนกว่าจะบันทึก
+    // อัปรูปพังไม่ควรทำให้ข้อมูลที่บันทึกไปแล้วดูเหมือนหาย จึงแจ้งแยก
+    if (image) {
+      try {
+        await uploadImage(saved.id, image);
+      } catch (e) {
+        setSaving(false);
+        onSaved();
+        showAlert("บันทึกอะไหล่แล้ว แต่อัปรูปไม่สำเร็จ", `${apiErrorMessage(e)} — กด "เลือกรูป" ที่รายการเพื่อลองใหม่`);
+        return;
+      }
+    }
+    setSaving(false);
+    onSaved();
+    showAlert("สำเร็จ", part ? "แก้ไขข้อมูลเรียบร้อย" : "เพิ่มอะไหล่เรียบร้อย");
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={saving}
+      title={part ? "แก้ไขอะไหล่" : "เพิ่มอะไหล่ใหม่"}
+      subtitle={part ? part.partCode : undefined}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onClose} disabled={saving} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, (!ready || saving) && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={!ready || saving}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <Spinner color="#fff" size="small" />
+            ) : (
+              <Text style={styles.modalSaveText}>{part ? "บันทึกการแก้ไข" : "เพิ่มอะไหล่"}</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <View style={styles.row2}>
+        <View style={styles.field}>
+          <Text style={styles.label}>รหัสสินค้า *</Text>
+          <TextInput
+            style={styles.input}
+            value={form.partCode}
+            onChangeText={set("partCode")}
+            autoCapitalize="characters"
+            placeholder="เช่น SPHB0094"
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel="รหัสสินค้า"
+          />
+        </View>
+        <View style={styles.field}>
+          <Text style={styles.label}>ยี่ห้อ</Text>
+          <TextInput
+            style={styles.input}
+            value={form.brand}
+            onChangeText={set("brand")}
+            placeholder="เช่น HB - Huebsch"
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel="ยี่ห้อ"
+          />
+        </View>
+      </View>
+      <Text style={styles.label}>ชื่ออะไหล่ *</Text>
+      <TextInput
+        style={styles.input}
+        value={form.name}
+        onChangeText={set("name")}
+        placeholder="เช่น ACTUATOR, DOOR SWITCH"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่ออะไหล่"
+      />
+      <Text style={styles.label}>
+        หมวดหมู่ <Text style={styles.optional}>(ไม่บังคับ)</Text>
+      </Text>
+      <TextInput
+        style={styles.input}
+        value={form.category}
+        onChangeText={set("category")}
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="หมวดหมู่"
+      />
+      <Text style={styles.label}>
+        รายละเอียด <Text style={styles.optional}>(ไม่บังคับ)</Text>
+      </Text>
+      <TextInput
+        style={[styles.input, styles.multiline]}
+        value={form.description}
+        onChangeText={set("description")}
+        multiline
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="รายละเอียด"
+      />
+      <Text style={styles.label}>
+        รูปอะไหล่ <Text style={styles.optional}>(ไม่บังคับ)</Text>
+      </Text>
+      <TouchableOpacity
+        style={styles.pick}
+        onPress={async () => {
+          const img = await pickImage();
+          if (img) setImage(img);
+        }}
+        disabled={saving}
+        accessibilityLabel="เลือกรูปอะไหล่"
+      >
+        {preview ? (
+          <Image source={{ uri: preview }} style={styles.thumb} resizeMode="cover" />
+        ) : (
+          <View style={[styles.thumb, styles.thumbPlaceholder]}>
+            <Ionicons name="image-outline" size={22} color={colors.textFaint} />
+          </View>
+        )}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.pickTitle}>{preview ? "เปลี่ยนรูป" : "เลือกรูป"}</Text>
+          <Text style={styles.meta}>{image ? image.name : "JPEG, PNG หรือ WebP"}</Text>
+        </View>
+      </TouchableOpacity>
+    </AppModal>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  scroll: { paddingBottom: 32 },
-  form: { padding: 20, backgroundColor: colors.card, borderBottomWidth: 1, borderColor: colors.border },
-  formTitle: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 10 },
-  input: {
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 8,
-    fontSize: 15,
-  },
-  multiline: { minHeight: 70, textAlignVertical: "top" },
-  buttonRow: { flexDirection: "row", gap: 8, marginTop: 4 },
-  button: {
-    flex: 1,
-    backgroundColor: colors.primary,
-    borderRadius: 8,
-    padding: 12,
+  content: { padding: spacing.lg, gap: spacing.md, paddingBottom: 32 },
+  pageHead: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
+  pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
+  countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
+  countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
+  addButton: {
+    flexDirection: "row",
     alignItems: "center",
-  },
-  buttonText: { color: "#fff", fontWeight: "600" },
-  cancelButton: {
-    paddingHorizontal: 16,
     justifyContent: "center",
-    borderRadius: 8,
+    gap: spacing.sm,
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    ...shadow.raised,
+  },
+  addButtonText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
+  search: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    paddingHorizontal: spacing.md,
   },
-  cancelText: { color: colors.textMuted, fontWeight: "600" },
-  hint: { fontSize: 12, color: colors.textMuted, marginTop: 10 },
+  searchInput: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 22, color: colors.text, paddingVertical: 10 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  chip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  chipOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  chipText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  chipTextOn: { color: colors.primaryInk, fontWeight: "700" },
+  noMatch: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
+  mark: { backgroundColor: "#FDE68A" },
   loader: { marginTop: 30 },
-  listContent: { padding: 16 },
   card: {
     flexDirection: "row",
     gap: 12,
     backgroundColor: colors.card,
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     padding: 12,
-    marginBottom: 10,
   },
   thumb: { width: 64, height: 64, borderRadius: 8, backgroundColor: colors.background },
   thumbPlaceholder: {
@@ -306,10 +490,57 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   thumbPlaceholderText: { fontSize: 10, color: colors.textMuted },
-  info: { flex: 1 },
+  info: { flex: 1, minWidth: 0 },
   name: { fontSize: 15, fontWeight: "700", color: colors.text },
   meta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   actionRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   action: { color: colors.primary, fontWeight: "600", fontSize: 13 },
   delete: { color: colors.danger, fontWeight: "600", fontSize: 13 },
+  row2: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
+  field: { flex: 1, minWidth: 180 },
+  label: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text, marginTop: spacing.sm, marginBottom: 4 },
+  optional: { fontWeight: "400", color: colors.textMuted },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.text,
+  },
+  multiline: { minHeight: 70, textAlignVertical: "top" },
+  pick: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+  },
+  pickTitle: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
+  modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
+  modalCancel: {
+    flex: 1,
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.sky50,
+  },
+  modalCancelText: { fontSize: 15, lineHeight: 22, color: colors.primaryInk, fontWeight: "700" },
+  modalSave: {
+    flex: 1,
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+  },
+  modalSaveOff: { opacity: 0.5 },
+  modalSaveText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
 });

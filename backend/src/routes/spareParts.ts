@@ -40,7 +40,7 @@ router.get("/", requireAuth, async (req, res) => {
 router.get("/:id/image", async (req, res) => {
   const id = Number(req.params.id);
   const image = await prisma.sparePartImage.findUnique({ where: { sparePartId: id } });
-  if (!image) return res.status(404).json({ error: "Image not found" });
+  if (!image) return res.status(404).json({ error: "อะไหล่นี้ยังไม่มีรูป" });
 
   res.setHeader("Content-Type", image.mimeType);
   res.setHeader("Cache-Control", "public, max-age=86400");
@@ -50,7 +50,7 @@ router.get("/:id/image", async (req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const part = await prisma.sparePart.findUnique({ where: { id } });
-  if (!part) return res.status(404).json({ error: "Spare part not found" });
+  if (!part) return res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
   res.json(part);
 });
 
@@ -68,7 +68,7 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const existing = await prisma.sparePart.findUnique({ where: { partCode: parsed.data.partCode } });
-  if (existing) return res.status(409).json({ error: "Part code already exists" });
+  if (existing) return res.status(409).json({ error: "รหัสสินค้านี้มีอยู่แล้ว" });
 
   const part = await prisma.sparePart.create({ data: parsed.data });
   res.status(201).json(part);
@@ -82,8 +82,12 @@ router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const part = await prisma.sparePart.update({ where: { id }, data: parsed.data });
     res.json(part);
-  } catch {
-    res.status(404).json({ error: "Spare part not found" });
+  } catch (e) {
+    // แก้รหัสให้ซ้ำกับอะไหล่อื่น — เดิมตกไปเป็น "ไม่พบอะไหล่" ทำให้แอดมินงงว่าหายไปไหน
+    if ((e as { code?: string }).code === "P2002") {
+      return res.status(409).json({ error: "รหัสสินค้านี้มีอยู่แล้ว" });
+    }
+    res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
   }
 });
 
@@ -94,13 +98,13 @@ router.post(
   upload.single("image"),
   async (req, res) => {
     const id = Number(req.params.id);
-    if (!req.file) return res.status(400).json({ error: "No image file uploaded" });
+    if (!req.file) return res.status(400).json({ error: "ไม่ได้แนบไฟล์รูป" });
     if (!ALLOWED_IMAGE_TYPES.includes(req.file.mimetype)) {
-      return res.status(400).json({ error: "Image must be JPEG, PNG or WebP" });
+      return res.status(400).json({ error: "รูปต้องเป็นไฟล์ JPEG, PNG หรือ WebP" });
     }
 
     const part = await prisma.sparePart.findUnique({ where: { id } });
-    if (!part) return res.status(404).json({ error: "Spare part not found" });
+    if (!part) return res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
 
     const imageUrl = `/api/spare-parts/${id}/image`;
     const [, updated] = await prisma.$transaction([
@@ -122,7 +126,7 @@ router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
     await prisma.sparePart.delete({ where: { id } });
     res.status(204).send();
   } catch {
-    res.status(404).json({ error: "Spare part not found" });
+    res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
   }
 });
 

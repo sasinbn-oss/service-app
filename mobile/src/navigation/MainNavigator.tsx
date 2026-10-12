@@ -49,6 +49,7 @@ import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
+import { ViewAsBanner, ViewAsButton } from "../components/ViewAs";
 import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
 import {
@@ -74,6 +75,7 @@ const OWN_TITLE = new Set([
   "VehicleHistory",
   "ManageUsers",
   "ManageTeams",
+  "ManageSpareParts",
   "AdminMenu",
   "HistoryMenu",
 ]);
@@ -188,10 +190,19 @@ function AppTopBar() {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
   const wide = width >= 640;
+  // ดูในฐานะคนอื่น — แถบส้มอยู่บนสุด (ใต้ขอบจอ) เหนือโลโก้ ให้เห็นก่อนอย่างอื่น
+  const viewing = !!user?.viewAs;
   return (
-    <View style={[styles.topBar, { paddingTop: insets.top + 10 }]}>
+    <View>
+    {viewing ? (
+      <View style={{ paddingTop: insets.top, backgroundColor: "#B45309" }}>
+        <ViewAsBanner />
+      </View>
+    ) : null}
+    <View style={[styles.topBar, { paddingTop: (viewing ? 0 : insets.top) + 10 }]}>
       <Brand subtitle="ระบบงานช่างซ่อม" />
       <View style={{ flex: 1 }} />
+      <ViewAsButton compact={!wide} />
       {wide && user ? (
         <View style={styles.who}>
           <Text style={styles.whoName} numberOfLines={1}>
@@ -201,6 +212,7 @@ function AppTopBar() {
         </View>
       ) : null}
       <LogoutButton />
+    </View>
     </View>
   );
 }
