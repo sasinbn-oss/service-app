@@ -209,7 +209,7 @@ function AppTopBar() {
             {user.name}
           </Text>
           <Text style={styles.whoRole}>
-            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "แอดมินอะไหล่" : ROLE_LABEL[user.role] ?? user.role}
+            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "Admin Spare Part" : ROLE_LABEL[user.role] ?? user.role}
           </Text>
         </View>
       ) : null}

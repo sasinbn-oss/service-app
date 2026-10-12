@@ -48,7 +48,7 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
   { value: "ADMIN", label: "แอดมิน", hint: "เปิดใบงาน เช็คคลัง และทำแทนได้ทุกขั้น" },
   {
     value: "PARTS_ADMIN",
-    label: "แอดมินอะไหล่",
+    label: "Admin Spare Part",
     hint: "คนเช็คประกัน ทำได้ทุกอย่างเท่าแอดมิน · ตั้งได้เฉพาะ Super Admin",
   },
   {

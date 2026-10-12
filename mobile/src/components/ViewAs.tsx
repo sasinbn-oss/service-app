@@ -46,7 +46,7 @@ function detailOf(p: Person) {
     return [p.region ? `ภาค${p.region}` : null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
   }
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
-  return p.role === "PARTS_ADMIN" ? "แอดมินอะไหล่" : "แอดมิน";
+  return p.role === "PARTS_ADMIN" ? "Admin Spare Part" : "แอดมิน";
 }
 
 /** ปุ่มบนแถบบน — เห็นเฉพาะ Super Admin ที่ยังเป็นตัวเองอยู่ */
@@ -241,7 +241,7 @@ export function ViewAsBanner() {
       <Ionicons name="eye" size={18} color="#fff" />
       <Text style={styles.bannerText} numberOfLines={narrow ? 2 : 1}>
         กำลังดูในฐานะ <Text style={{ fontWeight: "800" }}>{user.name}</Text>
-        {` (${user.employeeCode} · ${user.partsAdmin ? "แอดมินอะไหล่" : ROLE_LABEL[user.role] ?? user.role})`}
+        {` (${user.employeeCode} · ${user.partsAdmin ? "Admin Spare Part" : ROLE_LABEL[user.role] ?? user.role})`}
         {narrow ? "" : ` — ดูได้อย่างเดียว · เหลือ ${left} นาที`}
       </Text>
       <TouchableOpacity

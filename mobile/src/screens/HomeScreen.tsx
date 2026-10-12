@@ -297,7 +297,7 @@ const ROLE_LABEL: Record<string, string> = {
   EMPLOYEE: "ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
-  PARTS_ADMIN: "แอดมินอะไหล่",
+  PARTS_ADMIN: "Admin Spare Part",
   SUPER_ADMIN: "Super Admin",
 };
 
