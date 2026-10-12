@@ -46,7 +46,7 @@ function detailOf(p: Person) {
     return [p.region ? `ภาค${p.region}` : null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
   }
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
-  return "แอดมิน";
+  return p.role === "PARTS_ADMIN" ? "Admin Spare Part" : "แอดมิน";
 }
 
 /** ปุ่มบนแถบบน — เห็นเฉพาะ Super Admin ที่ยังเป็นตัวเองอยู่ */
@@ -91,7 +91,8 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
   const rows = useMemo(
     () =>
       (people ?? [])
-        .filter((p) => p.role === tab)
+        // แอดมินอะไหล่อยู่แท็บเดียวกับแอดมิน — หน้าจอที่เห็นเหมือนแอดมินทุกอย่าง
+        .filter((p) => p.role === tab || (tab === "ADMIN" && p.role === "PARTS_ADMIN"))
         .filter(
           (p) =>
             !q ||
@@ -141,7 +142,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
       <View style={styles.tabs}>
         {TABS.map((t) => {
           const on = t.role === tab;
-          const n = (people ?? []).filter((p) => p.role === t.role).length;
+          const n = (people ?? []).filter((p) => p.role === t.role || (t.role === "ADMIN" && p.role === "PARTS_ADMIN")).length;
           return (
             <TouchableOpacity
               key={t.role}
@@ -240,7 +241,7 @@ export function ViewAsBanner() {
       <Ionicons name="eye" size={18} color="#fff" />
       <Text style={styles.bannerText} numberOfLines={narrow ? 2 : 1}>
         กำลังดูในฐานะ <Text style={{ fontWeight: "800" }}>{user.name}</Text>
-        {` (${user.employeeCode} · ${ROLE_LABEL[user.role] ?? user.role})`}
+        {` (${user.employeeCode} · ${user.partsAdmin ? "Admin Spare Part" : ROLE_LABEL[user.role] ?? user.role})`}
         {narrow ? "" : ` — ดูได้อย่างเดียว · เหลือ ${left} นาที`}
       </Text>
       <TouchableOpacity

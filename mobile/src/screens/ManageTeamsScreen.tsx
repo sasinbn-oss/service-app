@@ -981,7 +981,12 @@ interface Members {
   coveredBy: string[];
 }
 
-const ROLE_LABEL: Record<string, string> = { SUPERVISOR: "หัวหน้าภาค", ADMIN: "แอดมิน", SUPER_ADMIN: "Super Admin" };
+const ROLE_LABEL: Record<string, string> = {
+  SUPERVISOR: "หัวหน้าภาค",
+  ADMIN: "แอดมิน",
+  PARTS_ADMIN: "Admin Spare Part",
+  SUPER_ADMIN: "Super Admin",
+};
 
 /**
  * กดการ์ดทีม → ใครอยู่ในทีมนี้ (ช่าง · หัวหน้าภาคที่ดูแล · ทีมรวมที่เห็นงานทีมนี้ด้วย)

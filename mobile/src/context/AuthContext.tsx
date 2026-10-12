@@ -22,7 +22,10 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 /** Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN พร้อมธง superAdmin (ตรงกับ middleware ฝั่งเซิร์ฟเวอร์) */
 function asSession(u: User): User {
-  return u.role === "SUPER_ADMIN" ? { ...u, role: "ADMIN", superAdmin: true } : u;
+  if (u.role === "SUPER_ADMIN") return { ...u, role: "ADMIN", superAdmin: true };
+  // แอดมินอะไหล่สิทธิ์เท่าแอดมินทุกอย่าง — ทุกที่ที่เช็ค role === "ADMIN" ใช้ได้เลย ป้ายชื่อดูที่ partsAdmin
+  if (u.role === "PARTS_ADMIN") return { ...u, role: "ADMIN", partsAdmin: true };
+  return u;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {

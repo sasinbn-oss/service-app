@@ -20,6 +20,8 @@ export interface TokenPayload {
    * ไม่ได้อยู่ในโทเคนจริง
    */
   superAdmin?: boolean;
+  /** ตั้งโดย requireAuth เมื่อโทเคนเป็น PARTS_ADMIN (role ถูกมองเป็น ADMIN แทน) — ไม่ได้อยู่ในโทเคนจริง */
+  partsAdmin?: boolean;
   /**
    * โทเคน "ดูในฐานะ" ที่ Super Admin ขอไว้ดูหน้าจอของคนอื่น — userId คือคนที่ถูกดู
    * by = Super Admin ตัวจริง · logId = แถวใน ViewAsLog ที่จะปิดตอนเลิกดู

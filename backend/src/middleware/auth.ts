@@ -50,6 +50,11 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
   // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว
   // ทุกจุดที่เช็ค role === "ADMIN" (ราว 20 จุด) จึงใช้ได้ทันทีโดยไม่ต้องไล่แก้ทีละจุด
+  // แอดมินอะไหล่ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียวเหมือน Super Admin
+  // ธง partsAdmin เก็บไว้ให้ขั้นที่เป็นของตำแหน่งนี้โดยเฉพาะ (ขั้นหลังปิดงาน — ยังไม่ได้ทำ)
+  if ((req.auth.role as string) === "PARTS_ADMIN") {
+    req.auth = { ...req.auth, role: "ADMIN", partsAdmin: true };
+  }
   if ((req.auth.role as string) === "SUPER_ADMIN") {
     // ดูในฐานะไม่เปิดให้ดู Super Admin (เช็คตอนเริ่มแล้ว) — คนที่ถูกดูกลายเป็น Super Admin ทีหลังก็ไม่ได้สิทธิ์นั้นไปด้วย
     if (viewAs) return res.status(401).json({ error: "ดูในฐานะ Super Admin ไม่ได้", viewAsEnded: true });

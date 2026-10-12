@@ -1,4 +1,4 @@
-export type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN" | "SUPER_ADMIN";
+export type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN" | "PARTS_ADMIN" | "SUPER_ADMIN";
 
 export interface User {
   id: number;
@@ -27,6 +27,8 @@ export interface User {
    * ตั้งใน AuthContext เท่านั้น
    */
   superAdmin?: boolean;
+  /** true = แอดมินอะไหล่ (คนเช็คประกัน) — role ถูกมองเป็น "ADMIN" แบบเดียวกับ superAdmin ตั้งใน AuthContext */
+  partsAdmin?: boolean;
 }
 
 export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE" | "INACTIVE";
