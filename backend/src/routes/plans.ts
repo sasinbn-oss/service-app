@@ -284,7 +284,9 @@ router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res
       machine: { select: { code: true } },
       parent: { select: { code: true } },
     },
-    orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+    // priority เก็บเป็นข้อความ — เรียงจากมากไปน้อยได้ URGENT → NORMAL → LOW พอดี
+    // (เดิมเรียงน้อยไปมาก ใบด่วนจึงไปอยู่ท้ายสุด ทั้งที่คอมเมนต์บอกว่า "ด่วนขึ้นก่อน")
+    orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
     take: 100,
   });
   res.json(

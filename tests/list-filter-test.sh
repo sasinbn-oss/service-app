@@ -51,4 +51,10 @@ LAST2=$(DB "select to_char(max(\"createdAt\"),'YYYY-MM-DD\"T\"HH24:MI:SS') from 
 [ "$(row $C 'r.stageSince.slice(0,19)')" = "$LAST2" ] && pass "แนบไฟล์ทีหลังไม่ทำให้นับใหม่" || fail "แนบไฟล์แล้วนับใหม่: $(row $C 'r.stageSince')"
 
 echo
+echo "═══ ใบด่วนขึ้นก่อน"
+U=$(POST $A work-orders "{\"branchCode\":\"C0006\",\"jobType\":\"CM\",\"priority\":\"URGENT\",\"machines\":[{\"code\":\"W3\",\"symptom\":\"ทดสอบใบด่วน\"}]}" | J 'd.orders?d.orders[0].id:d.id'); IDS="$IDS $U"
+curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $A)" | J "const i=d.rows.findIndex(r=>r.id===$U), j=d.rows.findIndex(r=>r.priority!=='URGENT'); (i>=0&&(j<0||i<j))?'ok':'bad:'+i+'/'+j" | grep -q ok \
+  && pass "ใบด่วนอยู่ก่อนใบปกติในรายการ (เดิมเรียงตัวอักษรแล้วไปอยู่ท้าย)" || fail "ใบด่วนไม่ขึ้นก่อน"
+
+echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || { echo "── มีข้อที่ไม่ผ่าน ──"; exit 1; }

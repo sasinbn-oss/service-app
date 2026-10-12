@@ -18,6 +18,7 @@ import {
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import StepPulse from "../components/StepPulse";
+import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import AppModal, { ModalRow } from "../components/AppModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -65,6 +66,8 @@ interface WorkOrder {
   detail: string | null;
   status: string;
   statusLabel: string;
+  /** URGENT | NORMAL | LOW — URGENT ขึ้นออร่าแดงและป้ายด่วนบนหัวใบงาน */
+  priority: string;
   priorityLabel: string;
   branchCode: string;
   branchName: string;
@@ -467,6 +470,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       inMyTeam(user, order.assignedTeam));
 
   const tone = statusTone(order.status);
+  const urgent = order.priority === "URGENT";
   const done = order.status === "DONE" || order.status === "CANCELLED";
   const mine =
     order.assignedToName === user?.name ||
@@ -514,8 +518,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         <BackfillButton onPress={() => setBackfilling(true)} />
       ) : null}
       <View style={styles.card}>
+        {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
+        {urgent ? <UrgentGlow radius={radius.xl} /> : null}
+        {urgent ? (
+          <View style={styles.urgentBar}>
+            <Ionicons name="alert-circle" size={16} color="#fff" />
+            <Text style={styles.urgentBarText}>
+              งานด่วน <Text style={styles.urgentBarSub}>— ทำก่อนใบปกติ</Text>
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.headRow}>
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
+          {urgent ? <UrgentBadge /> : null}
           <View style={{ flex: 1 }} />
           <View style={[styles.badge, { backgroundColor: tone.bg }]}>
             <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
@@ -3227,6 +3242,18 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
   card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  urgentBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.danger,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    marginBottom: spacing.md,
+  },
+  urgentBarText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "800" },
+  urgentBarSub: { fontWeight: "500" },
   code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },

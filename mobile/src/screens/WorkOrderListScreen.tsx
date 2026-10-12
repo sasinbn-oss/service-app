@@ -26,6 +26,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
 import { useAuth } from "../context/AuthContext";
+import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -64,6 +65,10 @@ export interface WorkOrderRow {
 }
 
 type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
+
+/** ใบด่วนที่ยังค้าง — ดึงขึ้นบนสุดและมีออร่า (ใบที่ปิดแล้วไม่มี stageActor) */
+const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
+type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
 type Sort = "urgent" | "new" | "old" | "az" | "za";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
@@ -250,8 +255,26 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     else if (prefs.sort === "za") list.sort((a, b) => code(b, a));
     else if (prefs.sort === "new") list.sort((a, b) => at(b.createdAt) - at(a.createdAt));
     else if (prefs.sort === "old") list.sort((a, b) => at(a.stageSince) - at(b.stageSince));
-    return list;
+    // ใบด่วนที่ยังค้างอยู่ขึ้นบนสุดเสมอ ไม่ว่าเลือกเรียงแบบไหน (เจ้าของงานกำหนด) — เรียงตามที่เลือกภายในกลุ่ม
+    // ใบที่ปิดแล้วไม่ดึงขึ้น ด่วนเมื่อเดือนก่อนไม่ได้แปลว่าต้องดูก่อนวันนี้
+    const hot = list.filter(isHot);
+    return hot.length ? [...hot, ...list.filter((r) => !isHot(r))] : list;
   }, [rows, byOwner, byType, prefs.sort]);
+
+  /**
+   * แถวคั่น "ด่วน (n)" / "ปกติ (n)" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน
+   * ไม่มีใบด่วนก็ไม่มีแถวคั่นเลย รายการหน้าตาเหมือนเดิม
+   */
+  const items = useMemo<ListItem[]>(() => {
+    const hot = shown.filter(isHot).length;
+    if (!hot) return shown;
+    return [
+      { sep: "URGENT", label: `ด่วน (${hot})` },
+      ...shown.slice(0, hot),
+      ...(shown.length > hot ? [{ sep: "NORMAL" as const, label: `ปกติ (${shown.length - hot})` }] : []),
+      ...shown.slice(hot),
+    ];
+  }, [shown]);
 
   // นับรอบการโหลด — สลับชิปเร็ว ๆ คำตอบของชิปก่อนหน้าอาจมาถึงทีหลัง
   // ต้องทิ้งคำตอบเก่า ไม่งั้นชิป "ปิดแล้ว" อาจโชว์รายการของ "ที่ยังค้าง"
@@ -408,8 +431,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ทั้งที่จอเห็นพร้อมกันได้ห้าใบ — FlatList วาดเฉพาะที่กำลังจะเห็น
         */
         <FlatList
-          data={shown}
-          keyExtractor={(row) => String(row.id)}
+          data={items}
+          keyExtractor={(it) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
           contentContainerStyle={table ? styles.tableList : styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
           initialNumToRender={table ? 20 : 8}
@@ -421,10 +444,17 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             ) : null
           }
           renderItem={({ item, index }) =>
-            table ? (
+            "sep" in item ? (
+              <View style={[table ? styles.sepRow : styles.sepCard, item.sep === "URGENT" && styles.sepUrgent]}>
+                <Text style={[styles.sepText, item.sep === "URGENT" && styles.sepTextUrgent]}>
+                  {item.sep === "URGENT" ? "● " : ""}
+                  {item.label}
+                </Text>
+              </View>
+            ) : table ? (
               <WorkOrderTableRow
                 row={item}
-                last={index === shown.length - 1}
+                last={index === items.length - 1}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
               />
             ) : (
@@ -629,7 +659,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
 }) {
   const tone = statusTone(row.status);
   return (
-    <TouchableOpacity style={[styles.tr, !last && styles.trLine]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity style={[styles.tr, !last && styles.trLine, isHot(row) && styles.trUrgent]} onPress={onPress} activeOpacity={0.7}>
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
       <View style={[styles.rowBar, { backgroundColor: tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
@@ -639,12 +669,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={styles.codeRow}>
             <Text style={styles.code}>{row.code}</Text>
-            {row.priority === "URGENT" ? (
-              <View style={styles.urgentPill}>
-                <View style={styles.urgentDot} />
-                <Text style={styles.urgentText}>ด่วน</Text>
-              </View>
-            ) : null}
+            {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
           </View>
           <Text style={styles.td2}>{row.title}</Text>
         </View>
@@ -693,14 +718,10 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
   const tone = statusTone(row.status);
   return (
     <TouchableOpacity style={[styles.card, { borderLeftColor: tone.fg }]} onPress={onPress} activeOpacity={0.8}>
+      {isHot(row) ? <UrgentGlow radius={radius.md} /> : null}
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
-        {row.priority === "URGENT" ? (
-          <View style={styles.urgent}>
-            <Ionicons name="alert-circle" size={12} color={colors.danger} />
-            <Text style={styles.urgentText}>ด่วน</Text>
-          </View>
-        ) : null}
+        {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
         <View style={{ flex: 1 }} />
         <View style={[styles.badge, { backgroundColor: tone.bg }]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
@@ -820,6 +841,13 @@ const styles = StyleSheet.create({
   colTeam: { flex: 1.3 },
   colStatus: { flex: 1.6, gap: 2 },
   colWait: { flex: 1.6, minWidth: 0 },
+  // พื้นแดงจาง ๆ ทั้งแถว — ตารางตัดขอบ (overflow hidden) ออร่ารอบแถวจึงใช้ไม่ได้ เหลือป้ายที่เรืองแสงแทน
+  trUrgent: { backgroundColor: "#FFF7F7" },
+  sepRow: { paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: colors.tile, borderBottomWidth: 1, borderBottomColor: colors.border },
+  sepCard: { paddingHorizontal: 4, paddingTop: 2 },
+  sepUrgent: { backgroundColor: colors.dangerSoft },
+  sepText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
+  sepTextUrgent: { color: colors.dangerInk },
   rowBar: { position: "absolute", left: 0, top: 10, bottom: 10, width: 4, borderTopRightRadius: 4, borderBottomRightRadius: 4 },
   thSort: { flexDirection: "row", alignItems: "center", gap: 4 },
   filterPanel: {
@@ -879,15 +907,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primarySoft,
   },
   codeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  urgentPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: colors.dangerSoft,
-    borderRadius: 999,
-    paddingHorizontal: 7,
-  },
-  urgentDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.danger },
   viewBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -931,8 +950,6 @@ const styles = StyleSheet.create({
   },
   cardTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   code: { fontSize: 14, lineHeight: 21, fontWeight: "800", color: colors.primaryInk },
-  urgent: { flexDirection: "row", alignItems: "center", gap: 2 },
-  urgentText: { fontSize: 11, lineHeight: 19, color: colors.danger, fontWeight: "700" },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
   title: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
