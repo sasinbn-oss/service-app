@@ -19,6 +19,8 @@ export interface User {
   supervisedTeams?: string[];
   /** true = ยังใช้รหัสตั้งต้นที่แอดมินให้มา ต้องเปลี่ยนก่อนใช้งาน */
   mustChangePassword?: boolean;
+  /** มีค่า = Super Admin กำลังดูแอปในฐานะผู้ใช้คนนี้ (ดูได้อย่างเดียว) — แสดงแถบเตือนค้างด้านบน */
+  viewAs?: { byName: string; expiresAt: string };
   /**
    * true = Super Admin (ตั้ง/ถอดแอดมินได้) — role ของผู้ใช้ที่ล็อกอินอยู่ถูกมองเป็น "ADMIN"
    * แบบเดียวกับฝั่งเซิร์ฟเวอร์ ทุกที่ที่เช็ค role === "ADMIN" จึงใช้ได้โดยไม่ต้องไล่แก้

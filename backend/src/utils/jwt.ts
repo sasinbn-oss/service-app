@@ -20,10 +20,28 @@ export interface TokenPayload {
    * ไม่ได้อยู่ในโทเคนจริง
    */
   superAdmin?: boolean;
+  /**
+   * โทเคน "ดูในฐานะ" ที่ Super Admin ขอไว้ดูหน้าจอของคนอื่น — userId คือคนที่ถูกดู
+   * by = Super Admin ตัวจริง · logId = แถวใน ViewAsLog ที่จะปิดตอนเลิกดู
+   * ดูได้อย่างเดียว (requireAuth กันคำขอที่แก้ข้อมูล) และอายุสั้นกว่าโทเคนปกติมาก
+   */
+  viewAs?: { by: number; logId: number };
+  /** เวลาหมดอายุ (วินาที) ที่ jsonwebtoken ใส่ให้เอง */
+  exp?: number;
 }
 
 export function signToken(payload: TokenPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "30d" });
+}
+
+/** โทเคนดูในฐานะ — 1 ชั่วโมงพอสำหรับไล่ดูหน้าจอ ลืมกดกลับก็หมดเอง ไม่ค้างเป็นคนอื่นทั้งเดือน */
+export function signViewAsToken(payload: TokenPayload): string {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "1h" });
+}
+
+/** อ่านเนื้อโทเคนโดยไม่ตรวจลายเซ็น — ใช้แค่ดูว่าโทเคนที่หมดอายุเป็นแบบดูในฐานะหรือไม่ */
+export function peekToken(token: string): TokenPayload | null {
+  return jwt.decode(token) as TokenPayload | null;
 }
 
 export function verifyToken(token: string): TokenPayload {

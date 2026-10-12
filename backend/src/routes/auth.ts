@@ -2,8 +2,8 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../prisma";
-import { signToken } from "../utils/jwt";
-import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
+import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
+import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
 import { forgetUser, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
@@ -113,10 +113,12 @@ router.post("/login", async (req, res) => {
   });
 });
 
-router.get("/me", requireAuth, async (req: AuthRequest, res) => {
-  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId } });
-  if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({
+type MeUser = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>;
+
+async function meOf(user: MeUser, auth?: AuthRequest["auth"]) {
+  const viewAs = auth?.viewAs;
+  const by = viewAs ? await prisma.user.findUnique({ where: { id: viewAs.by }, select: { name: true } }) : null;
+  return {
     id: user.id,
     employeeCode: user.employeeCode,
     name: user.name,
@@ -126,8 +128,69 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
     team: user.team,
     teamCoverage: await coverageOf(user.team),
     supervisedTeams: user.supervisedTeams,
-    mustChangePassword: user.mustChangePassword,
+    // ระหว่างดูในฐานะ ไม่บังคับเปลี่ยนรหัสแทนเจ้าของบัญชี — Super Admin แค่มาดูหน้าจอ
+    mustChangePassword: viewAs ? false : user.mustChangePassword,
+    // แอปใช้แสดงแถบ "กำลังดูในฐานะ" ค้างไว้ด้านบนและนับเวลาที่เหลือ
+    viewAs: viewAs
+      ? { byName: by?.name ?? "Super Admin", expiresAt: new Date((auth!.exp ?? 0) * 1000).toISOString() }
+      : undefined,
+  };
+}
+
+router.get("/me", requireAuth, async (req: AuthRequest, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json(await meOf(user, req.auth));
+});
+
+/**
+ * Super Admin ดูแอปในฐานะพนักงานคนหนึ่ง — เห็นเมนู กล่องงาน และใบงานเหมือนที่คนนั้นเห็นจริง
+ *
+ * ออกโทเคนของคนนั้นให้ แทนการจำลองหน้าจอฝั่งแอป เพราะสิ่งที่แต่ละคนเห็นตัดสินที่เซิร์ฟเวอร์
+ * (ทีม ภาค ทีมรวม ขั้นที่เป็นของใคร) จำลองฝั่งแอปจะเพี้ยนจากของจริงทันทีที่กฎเปลี่ยน
+ * ไม่ต้องรู้รหัสผ่านของใคร และไม่กระทบการล็อกอินของเจ้าของบัญชี
+ */
+router.post("/view-as", requireAuth, requireSuperAdmin, async (req: AuthRequest, res) => {
+  if (req.auth!.viewAs) return res.status(400).json({ error: "กำลังดูในฐานะคนอื่นอยู่ — กลับเป็นตัวเองก่อน" });
+  const userId = Number(req.body?.userId);
+  if (!Number.isInteger(userId)) return res.status(400).json({ error: "ไม่ได้เลือกผู้ใช้" });
+  if (userId === req.auth!.userId) return res.status(400).json({ error: "เลือกตัวเองไม่ได้" });
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้นี้ — อาจถูกลบไปแล้ว" });
+  // Super Admin เห็นทุกอย่างเท่ากันอยู่แล้ว และหน้าจอของเขามีเครื่องมือที่ไม่ควรเปิดผ่านทางอ้อม
+  if (target.role === "SUPER_ADMIN") return res.status(400).json({ error: "ดูในฐานะ Super Admin ไม่ได้" });
+
+  const log = await prisma.viewAsLog.create({ data: { byUserId: req.auth!.userId, targetUserId: target.id } });
+  const token = signViewAsToken({
+    userId: target.id,
+    role: target.role as Role,
+    viewAs: { by: req.auth!.userId, logId: log.id },
   });
+  res.json({ token, user: await meOf(target, peekToken(token) ?? undefined) });
+});
+
+/** เลิกดู — ปิดบันทึก ส่วนโทเคนเดิมของ Super Admin แอปเก็บไว้เองและสลับกลับ */
+router.post("/view-as/stop", requireAuth, async (req: AuthRequest, res) => {
+  const viewAs = req.auth!.viewAs;
+  if (viewAs) {
+    await prisma.viewAsLog.updateMany({ where: { id: viewAs.logId, endedAt: null }, data: { endedAt: new Date() } });
+  }
+  res.json({ ok: true });
+});
+
+/** ประวัติดูในฐานะล่าสุด — Super Admin ใช้ตรวจว่าใครเข้าไปดูหน้าจอของใคร */
+router.get("/view-as/logs", requireAuth, requireSuperAdmin, async (_req, res) => {
+  const logs = await prisma.viewAsLog.findMany({ orderBy: { startedAt: "desc" }, take: 200 });
+  const ids = [...new Set(logs.flatMap((l) => [l.byUserId, l.targetUserId]))];
+  const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, employeeCode: true } });
+  const byId = new Map(users.map((u) => [u.id, u]));
+  res.json(
+    logs.map((l) => ({
+      ...l,
+      by: byId.get(l.byUserId) ?? null,
+      target: byId.get(l.targetUserId) ?? null,
+    }))
+  );
 });
 
 /**

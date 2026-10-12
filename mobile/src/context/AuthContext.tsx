@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { clearPageCache } from "../utils/pageCache";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { api, apiErrorMessage, onAccountDeleted, TOKEN_KEY } from "../api/client";
+import { api, apiErrorMessage, onAccountDeleted, onViewAsEnded, SELF_TOKEN_KEY, TOKEN_KEY } from "../api/client";
 import { User } from "../types";
 
 interface AuthContextValue {
@@ -12,6 +12,10 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   /** ใช้โทเคนใบใหม่หลังเปลี่ยนรหัส แล้วดึงข้อมูลผู้ใช้ล่าสุดมาแทน */
   applyNewToken: (token: string) => Promise<void>;
+  /** Super Admin ดูแอปในฐานะพนักงานคนนี้ (ดูได้อย่างเดียว) */
+  startViewAs: (userId: number) => Promise<void>;
+  /** เลิกดูในฐานะ กลับเป็น Super Admin ตัวเอง */
+  stopViewAs: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -30,7 +34,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     onAccountDeleted(() => {
       logout();
     });
-    return () => onAccountDeleted(null);
+    onViewAsEnded(() => {
+      stopViewAs();
+    });
+    return () => {
+      onAccountDeleted(null);
+      onViewAsEnded(null);
+    };
   }, []);
 
   async function restoreSession() {
@@ -40,6 +50,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.get<User>("/auth/me");
       setUser(asSession(data));
     } catch {
+      // ปิดแอปค้างไว้ระหว่างดูในฐานะจนโทเคนหมดอายุ — กลับเป็น Super Admin ไม่ใช่ให้ล็อกอินใหม่
+      const self = await AsyncStorage.getItem(SELF_TOKEN_KEY);
+      if (self) {
+        await AsyncStorage.multiRemove([SELF_TOKEN_KEY]);
+        await AsyncStorage.setItem(TOKEN_KEY, self);
+        try {
+          const { data } = await api.get<User>("/auth/me");
+          setUser(asSession(data));
+          return;
+        } catch {
+          /* โทเคนตัวเองก็หมดแล้ว — ล็อกอินใหม่ */
+        }
+      }
       await AsyncStorage.removeItem(TOKEN_KEY);
     } finally {
       setLoading(false);
@@ -74,7 +97,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(asSession(data));
   }
 
+  async function startViewAs(userId: number) {
+    const own = await AsyncStorage.getItem(TOKEN_KEY);
+    try {
+      const { data } = await api.post("/auth/view-as", { userId });
+      // เก็บโทเคนตัวจริงไว้ก่อนสลับ — ปิดแอปแล้วเปิดใหม่ระหว่างดูก็ยังกลับเป็นตัวเองได้
+      if (own) await AsyncStorage.setItem(SELF_TOKEN_KEY, own);
+      await AsyncStorage.setItem(TOKEN_KEY, data.token);
+      // ข้อมูลที่จำไว้ของ Super Admin (ตัวเลข รายการ) ต้องไม่โผล่ในหน้าจอของคนที่ถูกดู
+      clearPageCache();
+      setUser(asSession(data.user));
+    } catch (error) {
+      throw new Error(apiErrorMessage(error));
+    }
+  }
+
+  async function stopViewAs() {
+    const self = await AsyncStorage.getItem(SELF_TOKEN_KEY);
+    if (!self) return;
+    // ปิดบันทึกฝั่งเซิร์ฟเวอร์ — ถ้าโทเคนหมดอายุไปแล้วก็ไม่เป็นไร บันทึกยังบอกเวลาเริ่มดู
+    await api.post("/auth/view-as/stop", {}).catch(() => {});
+    await AsyncStorage.setItem(TOKEN_KEY, self);
+    await AsyncStorage.removeItem(SELF_TOKEN_KEY);
+    clearPageCache();
+    try {
+      const { data } = await api.get<User>("/auth/me");
+      setUser(asSession(data));
+    } catch {
+      await logout();
+    }
+  }
+
   async function logout() {
+    await AsyncStorage.removeItem(SELF_TOKEN_KEY);
     await AsyncStorage.removeItem(TOKEN_KEY);
     // ข้อมูลที่จำไว้ของคนนี้ต้องไม่ค้างให้คนถัดไปที่เข้าเครื่องเดียวกันเห็น
     clearPageCache();
@@ -82,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, applyNewToken }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, applyNewToken, startViewAs, stopViewAs }}>
       {children}
     </AuthContext.Provider>
   );

@@ -40,7 +40,9 @@ function RootNavigator() {
         ) : user.mustChangePassword ? (
           <ChangePasswordScreen forced />
         ) : (
-          <MainNavigator />
+          // key ตามผู้ใช้ — สลับไปดูในฐานะคนอื่นแล้วเมนู แท็บ และหน้าแรกต้องเป็นของคนนั้นตั้งแต่ต้น
+          // ไม่ใช่ค้างหน้าของ Super Admin ที่คนนั้นไม่มีสิทธิ์เข้า
+          <MainNavigator key={user.id} />
         )}
       </AppShell>
     </NavigationContainer>

@@ -16,6 +16,8 @@ export function resolveImageUrl(imageUrl?: string | null): string | undefined {
 }
 
 export const TOKEN_KEY = "service-app/token";
+/** โทเคนตัวจริงของ Super Admin ระหว่างดูในฐานะคนอื่น — TOKEN_KEY ถือโทเคนของคนที่ถูกดูแทน */
+export const SELF_TOKEN_KEY = "service-app/token-self";
 
 export const api = axios.create({
   baseURL: `${API_URL}/api`,
@@ -119,6 +121,12 @@ export function onAccountDeleted(handler: (() => void) | null) {
   accountDeletedHandler = handler;
 }
 
+/** หมดเวลาดูในฐานะ (1 ชม.) หรือถูกถอดสิทธิ์ Super Admin — กลับเป็นตัวเอง ไม่ใช่ออกจากระบบ */
+let viewAsEndedHandler: (() => void) | null = null;
+export function onViewAsEnded(handler: (() => void) | null) {
+  viewAsEndedHandler = handler;
+}
+
 api.interceptors.response.use(
   (response) => {
     end(response.config as Tracked);
@@ -127,6 +135,7 @@ api.interceptors.response.use(
   (error) => {
     end((error?.config ?? undefined) as Tracked | undefined);
     if (error?.response?.status === 401 && error.response.data?.accountDeleted) accountDeletedHandler?.();
+    if (error?.response?.status === 401 && error.response.data?.viewAsEnded) viewAsEndedHandler?.();
     return Promise.reject(error);
   }
 );

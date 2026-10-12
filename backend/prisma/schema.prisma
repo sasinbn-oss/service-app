@@ -907,3 +907,16 @@ model TeamRename {
   createdById Int?
   createdAt   DateTime @default(now())
 }
+
+// Super Admin "ดูในฐานะ" ใคร เมื่อไร — เจ้าของระบบอยากรู้ว่าใครเห็นหน้าจอของใครบ้าง
+// ไม่ผูก relation กับ User เพราะผู้ใช้ถูกลบแบบ soft delete อยู่แล้ว และบันทึกต้องอยู่ต่อแม้บัญชีหายไป
+model ViewAsLog {
+  id           Int       @id @default(autoincrement())
+  byUserId     Int
+  targetUserId Int
+  startedAt    DateTime  @default(now())
+  // null = ยังดูอยู่ หรือปล่อยให้หมดเวลาเอง (โทเคนอายุ 1 ชั่วโมง)
+  endedAt      DateTime?
+
+  @@index([byUserId, startedAt])
+}

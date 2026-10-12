@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from "express";
-import { verifyToken, TokenPayload } from "../utils/jwt";
+import { peekToken, verifyToken, TokenPayload } from "../utils/jwt";
 import { currentRole } from "../utils/userGate";
 
 export interface AuthRequest extends Request {
@@ -15,7 +15,30 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   try {
     req.auth = verifyToken(token);
   } catch {
+    // โทเคนดูในฐานะหมดอายุ (1 ชม.) — บอกแอปให้กลับเป็น Super Admin ไม่ใช่เด้งออกจากระบบ
+    if (peekToken(token)?.viewAs) {
+      return res.status(401).json({ error: "หมดเวลาดูในฐานะผู้ใช้อื่นแล้ว", viewAsEnded: true });
+    }
     return res.status(401).json({ error: "Invalid or expired token" });
+  }
+
+  const viewAs = req.auth.viewAs;
+  if (viewAs) {
+    // คนที่ขอดูต้องยังเป็น Super Admin อยู่ — ถูกถอดสิทธิ์ระหว่างดูก็ต้องหยุดทันที ไม่ใช่รอครบชั่วโมง
+    if ((await currentRole(viewAs.by)) !== "SUPER_ADMIN") {
+      return res.status(401).json({ error: "สิทธิ์ดูในฐานะผู้ใช้อื่นถูกยกเลิกแล้ว", viewAsEnded: true });
+    }
+    /**
+     * ดูได้อย่างเดียว — กันที่นี่ที่เดียวแทนการไล่ซ่อนปุ่มทุกหน้า
+     * ถ้าปล่อยให้บันทึกได้ ประวัติใบงานจะขึ้นชื่อคนที่ถูกดู ทั้งที่เขาไม่ได้ทำ
+     */
+    const path = req.baseUrl + req.path;
+    if (!READ_METHODS.has(req.method) && !ALLOWED_WHILE_VIEWING.has(path)) {
+      return res.status(403).json({
+        error: "กำลังดูในฐานะผู้ใช้อื่น — ดูได้อย่างเดียว แก้ไขไม่ได้",
+        viewAsReadOnly: true,
+      });
+    }
   }
 
   // โทเคนยังไม่หมดอายุแต่บัญชีถูกลบไปแล้ว หรือสิทธิ์เปลี่ยนหลังเข้าระบบ (ดู utils/userGate.ts)
@@ -28,6 +51,8 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว
   // ทุกจุดที่เช็ค role === "ADMIN" (ราว 20 จุด) จึงใช้ได้ทันทีโดยไม่ต้องไล่แก้ทีละจุด
   if ((req.auth.role as string) === "SUPER_ADMIN") {
+    // ดูในฐานะไม่เปิดให้ดู Super Admin (เช็คตอนเริ่มแล้ว) — คนที่ถูกดูกลายเป็น Super Admin ทีหลังก็ไม่ได้สิทธิ์นั้นไปด้วย
+    if (viewAs) return res.status(401).json({ error: "ดูในฐานะ Super Admin ไม่ได้", viewAsEnded: true });
     req.auth = { ...req.auth, role: "ADMIN", superAdmin: true };
   }
 
@@ -46,6 +71,14 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
   next();
 }
+
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * POST ที่ไม่ได้แก้ข้อมูล — ยังใช้ได้ระหว่างดูในฐานะ
+ * export ส่งรายการ id มาทาง body เพราะยาวเกิน URL · stop ต้องเรียกได้เพื่อปิดบันทึก
+ */
+const ALLOWED_WHILE_VIEWING = new Set(["/api/machines/export", "/api/auth/view-as/stop"]);
 
 /** เส้นทางที่ยังเรียกได้ทั้งที่ยังไม่เปลี่ยนรหัส — พอให้เปลี่ยนรหัสได้และรู้ว่าตัวเองเป็นใคร */
 const ALLOWED_WHILE_LOCKED = new Set(["/change-password", "/me"]);
