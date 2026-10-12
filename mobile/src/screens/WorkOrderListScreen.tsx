@@ -336,12 +336,19 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * ทุกพิกเซลตามนิ้ว ไม่มีจังหวะหุบ/กางที่ตัดสินจากระยะ — ของเดิมที่ยุบความสูงตามเกณฑ์ 80 จุด
    * ทำให้รายการกระตุกไม่ว่าจะใส่ภาพเคลื่อนไหวนุ่มแค่ไหน เพราะความสูงเปลี่ยนระหว่างนิ้วกำลังลาก
    * แถบสรุปค่อย ๆ โผล่ตามระยะเลื่อนเมื่อขอบล่างของหัวหน้าพ้นจอ แตะแล้วเลื่อนกลับขึ้นบนสุด
+   *
+   * จอคอมทำเหมือนกัน (เจ้าของงานขอ) — ตารางมีหัวคอลัมน์ติดใต้แถบสรุปด้วย
+   * ไม่งั้นเลื่อนลงไปลึก ๆ แล้วไม่รู้ว่าคอลัมน์ไหนคืออะไร
    */
-  const foldable = width < 640;
+  const foldable = true;
   const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<ListItem>>(null);
   const [headH, setHeadH] = useState(0);
   const [barOn, setBarOn] = useState(false);
+  // ความกว้างตารางในรายการ — หัวคอลัมน์ที่ลอยบนแถบสรุปต้องกว้างเท่ากันพอดี คอลัมน์จึงตรงกับแถว
+  // (รายการบนเว็บมีแถบเลื่อนกินขอบขวา ถ้าลอยเต็มจอ คอลัมน์จะเหลื่อมไปเท่าความกว้างแถบเลื่อน)
+  const [tableW, setTableW] = useState(0);
+  const [barH, setBarH] = useState(FOLDED_H);
   function onListScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
     // แถบสรุปกดได้เฉพาะตอนเห็นแล้ว — ตอนจางอยู่ไม่ควรบังปุ่มของหัวหน้าข้างใต้
     const on = headH > 0 && e.nativeEvent.contentOffset.y > headH - 20;
@@ -353,7 +360,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
 
   const header = (
     <View
-      style={foldable ? styles.headInList : null}
+      style={foldable && !table ? styles.headInList : null}
       onLayout={(e) => {
         const h = Math.round(e.nativeEvent.layout.height);
         if (h !== headH) setHeadH(h);
@@ -484,7 +491,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           scrollEventThrottle={16}
           data={status ? [] : items}
           keyExtractor={(it: ListItem) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
-          contentContainerStyle={table ? styles.tableList : styles.list}
+          contentContainerStyle={table ? styles.tableOuter : styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
@@ -493,13 +500,34 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ListHeaderComponent={
             <>
               {foldable ? header : null}
-              {table ? (
-                <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+              {table && !status ? (
+                <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
+                  <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+                </View>
               ) : null}
             </>
           }
           renderItem={({ item, index }: { item: ListItem; index: number }) =>
-            "sep" in item ? (
+            table ? (
+              // ตารางเป็นกรอบเดียวที่ต่อกันจากหัวคอลัมน์ลงมาทีละแถว — หัวหน้าอยู่ในรายการเดียวกันแล้ว
+              // จะใช้ทั้งรายการเป็นกรอบเหมือนเดิมไม่ได้ ไม่งั้นช่องค้นหาและตัวกรองไปอยู่ในกรอบตารางด้วย
+              <View style={[styles.tableMid, index === items.length - 1 && styles.tableBottom]}>
+                {"sep" in item ? (
+                  <View style={[styles.sepRow, item.sep === "URGENT" && styles.sepUrgent]}>
+                    <Text style={[styles.sepText, item.sep === "URGENT" && styles.sepTextUrgent]}>
+                      {item.sep === "URGENT" ? "● " : ""}
+                      {item.label}
+                    </Text>
+                  </View>
+                ) : (
+                  <WorkOrderTableRow
+                    row={item}
+                    last={index === items.length - 1}
+                    onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
+                  />
+                )}
+              </View>
+            ) : "sep" in item ? (
               <View style={[table ? styles.sepRow : styles.sepCard, item.sep === "URGENT" && styles.sepUrgent]}>
                 <Text style={[styles.sepText, item.sep === "URGENT" && styles.sepTextUrgent]}>
                   {item.sep === "URGENT" ? "● " : ""}
@@ -523,7 +551,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       )}
       {foldable ? (
         <Animated.View
-          pointerEvents={barOn ? "auto" : "none"}
+          pointerEvents={barOn ? "box-none" : "none"}
+          onLayout={(e) => setBarH(Math.round(e.nativeEvent.layout.height))}
           style={[
             styles.foldedWrap,
             {
@@ -537,7 +566,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 {
                   translateY: scrollY.interpolate({
                     inputRange: [Math.max(0, headH - 40), Math.max(1, headH)],
-                    outputRange: [-FOLDED_H, 0],
+                    outputRange: [-barH, 0],
                     extrapolate: "clamp",
                   }),
                 },
@@ -558,6 +587,11 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             ].filter(Boolean)}
             onPress={backToTop}
           />
+          {table && !status && tableW > 0 ? (
+            <View style={[styles.tableTop, styles.tableHeadFloat, { width: tableW }]}>
+              <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+            </View>
+          ) : null}
         </Animated.View>
       ) : null}
     </View>
@@ -907,7 +941,34 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   // ลอยทับบนสุดของรายการ — ไม่ดันรายการลง ความสูงหน้าจอจึงไม่เปลี่ยนระหว่างเลื่อน
-  foldedWrap: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, ...shadow.card },
+  foldedWrap: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 2 },
+  tableOuter: { paddingBottom: spacing.lg },
+  // กรอบตารางแบ่งเป็นสามส่วน (หัว · แถว · ท้าย) เพราะแถวถูกวาดทีละแถวในรายการ
+  tableTop: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: colors.border,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    overflow: "hidden",
+  },
+  tableMid: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.card,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  tableBottom: {
+    borderBottomWidth: 1,
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+  },
+  // หัวคอลัมน์ที่ลอยใต้แถบสรุป — ไม่มีมุมโค้งด้านบน เพราะต่อจากแถบสรุปแล้ว
+  tableHeadFloat: { borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTopWidth: 0, ...shadow.card },
   // หัวหน้าอยู่ในรายการซึ่งมีขอบซ้ายขวาอยู่แล้ว — หักออกให้หัวหน้ากว้างเต็มเหมือนตอนอยู่นอกรายการ
   headInList: { marginHorizontal: -spacing.lg },
   folded: {
