@@ -91,6 +91,8 @@ interface WorkOrder {
   branchWarrantyExpired: boolean | null;
   /** ประกันกี่ปีตามยี่ห้อเครื่องของใบนี้ — ว่างเมื่อสาขากรอกวันหมดประกันเอง */
   branchWarrantyYears?: number | null;
+  /** ยี่ห้อที่ใช้คิดประกัน — จากไฟล์รายงานเครื่อง หรือรุ่นที่เลือกตอนเปิดใบงาน */
+  branchWarrantyBrand?: string | null;
   branchIsCompany: boolean;
   machineCode: string | null;
   machineBrand: string | null;
@@ -805,7 +807,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 {formatDate(order.branchWarrantyExpiresAt)}
                 {/* สาขาเดียวกันประกันหมดไม่พร้อมกันได้ (Oasis 2 ปี · อื่น ๆ 3 ปี) บอกที่มาไว้กันงง */}
                 {order.branchWarrantyYears
-                  ? ` (${order.machineBrand ? `${order.machineBrand} ` : ""}${order.branchWarrantyYears} ปี)`
+                  ? ` (${order.branchWarrantyBrand ? `${order.branchWarrantyBrand} ` : ""}${order.branchWarrantyYears} ปี)`
                   : ""}
               </Text>
             </View>

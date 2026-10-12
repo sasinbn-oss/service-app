@@ -14,7 +14,7 @@ import {
   parseCancelledWorkbook,
   planCancelledImport,
 } from "../machines/cancellationImport";
-import { warrantyEndFor, warrantyYearsFor } from "../utils/constants";
+import { machineMake, warrantyEndFor, warrantyYearsFor } from "../utils/constants";
 
 const router = Router();
 
@@ -112,14 +112,15 @@ router.get("/", requireAuth, async (req, res) => {
    * ดึงยี่ห้อเป็นคิวรีเดียวทั้งชุด ไม่ใช่ทีละสาขา — หน้าจัดการสาขาขอทั้งพันกว่าแถว
    */
   const brandRows = await prisma.machine.groupBy({
-    by: ["branchId", "brand"],
+    by: ["branchId", "brand", "model"],
     where: { removedAt: null, branchId: { in: branches.map((b) => b.id) } },
   });
   const brandsOf = new Map<number, string[]>();
   for (const r of brandRows) {
-    const name = r.brand?.trim();
+    const name = machineMake(r);
     if (!name) continue;
-    brandsOf.set(r.branchId, [...(brandsOf.get(r.branchId) ?? []), name]);
+    const list = brandsOf.get(r.branchId) ?? [];
+    if (!list.includes(name)) brandsOf.set(r.branchId, [...list, name]);
   }
   res.json(
     branches.map((b) => {
