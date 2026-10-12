@@ -167,7 +167,7 @@ export const OWNER_TONE: Record<Owner, { bg: string; fg: string }> = {
   SUPERVISOR: { bg: colors.roleSupervisorSoft, fg: colors.roleSupervisor },
   EMPLOYEE: { bg: colors.roleTechSoft, fg: colors.roleTech },
   OUTSIDE: { bg: colors.warningSoft, fg: colors.warningInk },
-  DONE: { bg: colors.doneSoft, fg: colors.doneInk },
+  DONE: { bg: colors.doneSoft, fg: colors.doneBand },
   CANCELLED: { bg: colors.tile, fg: colors.textMuted },
 };
 
@@ -658,8 +658,9 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
+  const closed = row.status === "DONE";
   return (
-    <TouchableOpacity style={[styles.tr, !last && styles.trLine, isHot(row) && styles.trUrgent]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity style={[styles.tr, !last && styles.trLine, isHot(row) && styles.trUrgent, closed && styles.trDone]} onPress={onPress} activeOpacity={0.7}>
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
       <View style={[styles.rowBar, { backgroundColor: tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
@@ -686,7 +687,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมาย"}
       </Text>
       <View style={styles.colStatus}>
-        <View style={[styles.badge, { backgroundColor: tone.bg, alignSelf: "flex-start" }]}>
+        <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
@@ -716,14 +717,15 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
+  const closed = row.status === "DONE";
   return (
-    <TouchableOpacity style={[styles.card, { borderLeftColor: tone.fg }]} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity style={[styles.card, closed && styles.cardDone, { borderLeftColor: tone.fg }]} onPress={onPress} activeOpacity={0.8}>
       {isHot(row) ? <UrgentGlow radius={radius.md} /> : null}
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
         <View style={{ flex: 1 }} />
-        <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+        <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
       </View>
@@ -948,6 +950,11 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     ...shadow.card,
   },
+  // ใบที่ปิดแล้วทั้งแถวเป็นเขียว (เจ้าของงานเลือก ต.ค. 69) — กวาดตาแล้วแยกงานจบออกจากงานค้างได้ทันที
+  // ป้ายสถานะในแถวนี้จึงต้องเป็นพื้นขาว ไม่งั้นเขียวบนเขียวจนมองไม่เห็น
+  cardDone: { backgroundColor: colors.doneSoft },
+  trDone: { backgroundColor: colors.doneSoft },
+  badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
   cardTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   code: { fontSize: 14, lineHeight: 21, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },

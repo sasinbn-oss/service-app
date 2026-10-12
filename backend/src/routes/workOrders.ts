@@ -866,7 +866,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   const logs = await prisma.workOrderLog.findMany({
     where: { workOrderId: id },
-    include: { user: { select: { name: true } } },
+    include: { user: { select: { name: true, role: true } } },
     orderBy: { createdAt: "desc" },
   });
 
@@ -886,6 +886,8 @@ router.get("/:id", requireAuth, async (req, res) => {
       statusLabel: WORK_ORDER_STATUS_LABELS[l.status] ?? l.status,
       note: l.note,
       byName: l.user?.name ?? null,
+      // บทบาทของคนกด ณ ตอนนี้ — ประวัติใช้ติดป้ายและสีจุด (เลื่อนตำแหน่งทีหลังป้ายเปลี่ยนตาม ยอมรับได้)
+      byRole: l.user?.role ?? null,
       createdAt: l.createdAt,
     })),
   });
@@ -2671,6 +2673,17 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         error: "ใช้อะไหล่แล้วต้องแนบรูปใบเบิกอะไหล่ (ใบเหลือง) ของรอบนี้ก่อนปิดงาน",
       });
     }
+  }
+
+  /**
+   * ต้องสรุปว่าทำอะไรไป (เจ้าของงานกำหนด ต.ค. 69)
+   *
+   * "ซ่อมเสร็จ" อย่างเดียวไม่บอกว่าเปลี่ยนอะไร — ครั้งหน้าเครื่องเดิมเสียอีก คนที่เปิดดู
+   * ต้องรู้ว่ารอบก่อนทำอะไรไปแล้ว ตรวจเป็นอย่างสุดท้าย เพราะช่างที่ขาดรูปหรือใบเหลือง
+   * ควรได้ยินเรื่องนั้นก่อน (สรุปงานพิมพ์ได้ทันที รูปต้องเดินกลับไปถ่าย)
+   */
+  if (!body.note?.trim()) {
+    return res.status(400).json({ error: "ต้องสรุปงานที่ทำ — เช่น เปลี่ยนอะไรไป ทดสอบแล้วเป็นยังไง" });
   }
 
   const now = new Date();

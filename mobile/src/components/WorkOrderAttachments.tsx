@@ -21,7 +21,6 @@ import Spinner from "./Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
-import { openUrl } from "../utils/share";
 import {
   PickedAttachment,
   formatSize,
@@ -31,6 +30,7 @@ import {
   attachmentIcon,
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
+import ImageViewer from "./ImageViewer";
 import { colors, radius, spacing } from "../theme";
 
 export interface Attachment {
@@ -47,27 +47,6 @@ export interface Attachment {
   createdById: number | null;
   createdByName: string | null;
   thumbnailDataUrl: string | null;
-}
-
-/**
- * ขอลิงก์ไฟล์แล้วเปิด — แยกออกมาเพราะการ์ดผลการทำงานก็ต้องเปิดไฟล์เหมือนกัน
- *
- * ลิงก์มีอายุสั้นและขอใหม่ทุกครั้งที่กด ไม่ได้เก็บไว้ ที่เก็บไฟล์ไม่ได้เปิดสาธารณะ
- * เพราะรูปในนั้นเป็นภาพในร้านของลูกค้า
- */
-export async function openAttachment(workOrderId: number, row: Attachment) {
-  if (!row.available) {
-    showAlert("เปิดไฟล์ไม่ได้", "ไฟล์นี้ส่งขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ");
-    return;
-  }
-  try {
-    const res = await api.get<{ url: string }>(
-      `/work-orders/${workOrderId}/attachments/${row.id}/link`
-    );
-    await openUrl(res.data.url);
-  } catch (e) {
-    showAlert("เปิดไฟล์ไม่ได้", apiErrorMessage(e));
-  }
 }
 
 export default function WorkOrderAttachments({
@@ -93,7 +72,6 @@ export default function WorkOrderAttachments({
   const [rows, setRows] = useState<Attachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [opening, setOpening] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -133,13 +111,14 @@ export default function WorkOrderAttachments({
     }
   }
 
-  async function open(row: Attachment) {
-    setOpening(row.id);
-    try {
-      await openAttachment(workOrderId, row);
-    } finally {
-      setOpening(null);
+  // กดรูปแล้วเปิดดูเต็มจอในแอป (เลื่อนรูป · ซูม) แทนเปิดแท็บใหม่ทีละรูป
+  const [viewing, setViewing] = useState<number | null>(null);
+  function open(row: Attachment) {
+    if (!row.available && !row.thumbnailDataUrl) {
+      showAlert("เปิดไฟล์ไม่ได้", "ไฟล์นี้ส่งขึ้นที่เก็บไม่สำเร็จ");
+      return;
     }
+    setViewing(rows.findIndex((r) => r.id === row.id));
   }
 
   function remove(row: Attachment) {
@@ -167,6 +146,9 @@ export default function WorkOrderAttachments({
 
   return (
     <View style={styles.card}>
+      {viewing !== null ? (
+        <ImageViewer workOrderId={workOrderId} items={rows} startIndex={viewing} onClose={() => setViewing(null)} />
+      ) : null}
       <View style={styles.head}>
         <Text style={styles.title}>รูป / วิดีโอหน้างาน</Text>
         <View style={{ flex: 1 }} />
@@ -183,7 +165,7 @@ export default function WorkOrderAttachments({
         <View style={styles.grid}>
           {rows.map((row) => (
             <View key={row.id} style={styles.tile}>
-              <TouchableOpacity activeOpacity={0.8} onPress={() => open(row)} style={styles.thumbBox}>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => open(row)} style={styles.thumbBox} accessibilityLabel={`ดูไฟล์ ${row.fileName}`}>
                 {row.thumbnailDataUrl ? (
                   <Image source={{ uri: row.thumbnailDataUrl }} style={styles.thumb} />
                 ) : (
@@ -205,11 +187,6 @@ export default function WorkOrderAttachments({
                 {row.roleLabel ? (
                   <View style={styles.roleBadge}>
                     <Text style={styles.roleBadgeText}>{row.roleLabel}</Text>
-                  </View>
-                ) : null}
-                {opening === row.id ? (
-                  <View style={styles.tileBusy}>
-                    <Spinner color="#fff" size="small" />
                   </View>
                 ) : null}
               </TouchableOpacity>
@@ -298,13 +275,6 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: radius.pill,
     backgroundColor: "rgba(15,23,42,0.72)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tileBusy: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.45)",
-    borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
   },

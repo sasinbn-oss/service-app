@@ -19,6 +19,7 @@ import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import StepPulse from "../components/StepPulse";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
+import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -32,7 +33,7 @@ import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
-import WorkOrderAttachments, { Attachment, openAttachment } from "../components/WorkOrderAttachments";
+import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -55,6 +56,8 @@ interface LogEntry {
   statusLabel: string;
   note: string | null;
   byName: string | null;
+  /** บทบาทของคนกด — ประวัติใช้ติดป้ายและสีจุด */
+  byRole: string | null;
   createdAt: string;
 }
 
@@ -273,6 +276,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [editingNote, setEditingNote] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
   const stepScroll = useRef<ScrollView>(null);
+  // ดูรูปที่ส่งตอนปิดงานเต็มจอ — เลื่อนไปมาได้เฉพาะรูปของรอบที่ปิด
+  const [viewingClose, setViewingClose] = useState<number | null>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
   const [stageBackOpen, setStageBackOpen] = useState(false);
@@ -472,6 +477,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const tone = statusTone(order.status);
   const urgent = order.priority === "URGENT";
   const done = order.status === "DONE" || order.status === "CANCELLED";
+  // ปิดแล้วการ์ดทุกใบเป็นเขียว (เจ้าของงานเลือกแบบ B ต.ค. 69) — เปิดมาก็รู้ทันทีว่างานจบ
+  // ไม่ต้องหาป้ายสถานะ · ยกเลิกไม่นับ เพราะงานไม่ได้ซ่อมเสร็จ
+  const closedOk = order.status === "DONE";
+  const card = closedOk ? [styles.card, styles.cardDone] : styles.card;
   const mine =
     order.assignedToName === user?.name ||
     inMyTeam(user, order.assignedTeam);
@@ -517,7 +526,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {user?.role === "ADMIN" && order.status !== "DONE" && order.status !== "CANCELLED" ? (
         <BackfillButton onPress={() => setBackfilling(true)} />
       ) : null}
-      <View style={styles.card}>
+      {closedOk ? (
+        <View style={styles.doneBand}>
+          <Ionicons name="checkmark-circle" size={18} color="#fff" />
+          <Text style={styles.doneBandText}>ปิดงานแล้ว</Text>
+          <View style={{ flex: 1 }} />
+          {order.closedAt ? <Text style={styles.doneBandWhen}>{formatDateTime(order.closedAt)}</Text> : null}
+        </View>
+      ) : null}
+      <View style={card}>
         {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
         {urgent ? <UrgentGlow radius={radius.xl} /> : null}
         {urgent ? (
@@ -532,7 +549,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
           {urgent ? <UrgentBadge /> : null}
           <View style={{ flex: 1 }} />
-          <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+          <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }, closedOk && styles.badgeDone]}>
             <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
           </View>
         </View>
@@ -753,7 +770,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       </View>
 
       <View style={[styles.infoGrid, twoCol && styles.infoGridWide]}>
-        <View style={[styles.card, styles.infoCard]}>
+        <View style={[card, styles.infoCard]}>
           <View style={styles.infoHead}>
             <Ionicons name="business-outline" size={20} color={colors.primaryInk} />
             <Text style={[styles.infoTitle, headingFont]}>สาขาและเครื่อง</Text>
@@ -812,7 +829,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           ) : null}
         </View>
 
-        <View style={[styles.card, styles.infoCard]}>
+        <View style={[card, styles.infoCard]}>
           <View style={styles.infoHead}>
             <Ionicons name="people-outline" size={20} color={colors.primaryInk} />
             <Text style={[styles.infoTitle, headingFont]}>การมอบหมาย</Text>
@@ -837,7 +854,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       </View>
 
       {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
-      <View style={styles.card}>
+      <View style={card}>
         <View style={styles.headRow}>
           <Text style={styles.sectionTitle}>อาการ / สถานะ</Text>
           <View style={{ flex: 1 }} />
@@ -932,7 +949,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         คือการบังคับให้คนอ่านสองรอบเพื่อรู้เท่าเดิม
       */}
       {order.outageId !== null && !order.closedAt ? (
-        <View style={[styles.card, styles.linked]}>
+        <View style={[card, styles.linked]}>
           <View style={styles.headRow}>
             <Ionicons
               name={order.outageStillOpen ? "alert-circle" : "checkmark-circle"}
@@ -952,9 +969,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       ) : null}
 
       {order.closedAt ? (
-        <View style={styles.card}>
+        <View style={card}>
           <Text style={styles.sectionTitle}>ผลการทำงาน</Text>
           <Row label="ผล" value={order.closeResultLabel ?? "—"} />
+          {/* สรุปงานคือสิ่งที่คนเปิดใบปิดแล้วมาหา (เจ้าของงานให้ตัวหนา) — เดิมเป็นตัวเทาเล็กไม่มีหัวข้อ */}
+          {order.closeNote ? (
+            <View style={[styles.summaryBox, closedOk && styles.summaryBoxDone]}>
+              <Text style={styles.summaryLabel}>สรุปงานที่ทำ</Text>
+              <Text style={styles.summaryText}>{order.closeNote}</Text>
+            </View>
+          ) : null}
           {/* คนที่ไปจริง ต่างจาก "ปิดโดย" ซึ่งเป็นคนที่กดปุ่ม — ทีมหนึ่งไปหลายคน
               แต่คนที่กดปิดมีคนเดียว */}
           <Row
@@ -966,7 +990,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             }
           />
           <Row label="ปิดโดย" value={`${order.closedByName ?? "—"} · ${formatDateTime(order.closedAt)}`} />
-          {order.closeNote ? <Text style={styles.detail}>{order.closeNote}</Text> : null}
 
           {/*
             ปิดใบงานคือ "คนไปทำแล้ว" ส่วนเคสปิดคือ "เครื่องกลับมาแล้ว" ซึ่งคนละเรื่องกัน
@@ -982,13 +1005,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {closeFiles.length > 0 ? (
             <>
               <Text style={styles.partsHead}>รูปที่ส่งตอนปิดงาน</Text>
+              {viewingClose !== null ? (
+                <ImageViewer
+                  workOrderId={order.id}
+                  items={closeFiles}
+                  startIndex={viewingClose}
+                  onClose={() => setViewingClose(null)}
+                />
+              ) : null}
               <View style={styles.closeFiles}>
                 {closeFiles.map((f) => (
                   <TouchableOpacity
                     key={f.id}
                     style={styles.closeFile}
                     activeOpacity={0.8}
-                    onPress={() => openAttachment(order.id, f)}
+                    onPress={() => setViewingClose(closeFiles.findIndex((x) => x.id === f.id))}
                     accessibilityLabel={`เปิด ${f.fileName}`}
                   >
                     {f.thumbnailDataUrl ? (
@@ -1046,21 +1077,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>ประวัติ</Text>
-        {order.logs.map((log) => (
-          <View key={log.id} style={styles.logRow}>
-            <View style={styles.dot} />
-            <View style={styles.logBody}>
-              <Text style={styles.logAction}>{log.actionLabel}</Text>
-              <Text style={styles.logMeta}>
-                {log.byName ?? "—"} · {formatDateTime(log.createdAt)}
-              </Text>
-              {log.note ? <Text style={styles.logNote}>{log.note}</Text> : null}
-            </View>
-          </View>
-        ))}
-      </View>
+      <History logs={order.logs} closed={closedOk} />
 
       {canFollowUp ? (
         <TouchableOpacity
@@ -2573,6 +2590,74 @@ function FileStrip({
 }
 
 /**
+ * ประวัติ — เฉพาะขั้นสำคัญ เรียงเก่าไปใหม่ (เจ้าของงานเลือกจากตัวอย่าง ต.ค. 69)
+ *
+ * แนบไฟล์/ลบไฟล์เคยปนทุกบรรทัด ใบที่ปิดงานพร้อมรูปห้ารูปต้องเลื่อนผ่านห้าบรรทัด "แนบไฟล์"
+ * ก่อนถึงขั้นที่อยากรู้ รูปดูได้ในการ์ดรูปอยู่แล้ว จึงซ่อนไว้ · ปุ่มท้ายเปิดดูทั้งหมดได้
+ * เผื่อต้องตามว่าใครลบรูป · เก่าไปใหม่เพราะอ่านไล่เป็นเรื่องเดียวกันได้
+ */
+const MINOR_ACTIONS = new Set(["ATTACHED", "ATTACHMENT_REMOVED"]);
+const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
+  ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft, label: "แอดมิน" },
+  SUPER_ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft, label: "แอดมิน" },
+  SUPERVISOR: { fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft, label: "หัวหน้าภาค" },
+  EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "ช่าง" },
+};
+
+function History({ logs, closed }: { logs: WorkOrder["logs"]; closed: boolean }) {
+  const [all, setAll] = useState(false);
+  const ordered = [...logs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+  const minor = ordered.filter((l) => MINOR_ACTIONS.has(l.action)).length;
+  const shown = all ? ordered : ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
+  return (
+    <View style={[styles.card, closed && styles.cardDone]}>
+      <Text style={styles.sectionTitle}>ประวัติ</Text>
+      {shown.map((log, i) => {
+        const role = log.byRole ? ROLE_DOT[log.byRole] : undefined;
+        const fg = role?.fg ?? colors.textFaint;
+        const small = MINOR_ACTIONS.has(log.action);
+        const at = new Date(log.createdAt);
+        const day = at.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" });
+        const time = at.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
+        return (
+          <View key={log.id} style={styles.hRow}>
+            <View style={styles.hWhen}>
+              <Text style={styles.hDay}>{day}</Text>
+              <Text style={styles.hTime}>{time}</Text>
+            </View>
+            <View style={styles.hRail}>
+              {i < shown.length - 1 ? <View style={styles.hLine} /> : null}
+              <View style={[styles.hDot, small ? styles.hDotSmall : { backgroundColor: fg, borderColor: fg }]} />
+            </View>
+            <View style={styles.logBody}>
+              <Text style={[styles.logAction, small && styles.hMinor]}>{log.actionLabel}</Text>
+              <View style={styles.hWho}>
+                <Text style={styles.logMeta}>{log.byName ?? "—"}</Text>
+                {role && !small ? (
+                  <View style={[styles.hRole, { backgroundColor: role.bg }]}>
+                    <Text style={[styles.hRoleText, { color: role.fg }]}>{role.label}</Text>
+                  </View>
+                ) : null}
+              </View>
+              {log.note ? (
+                <Text style={[styles.hNote, log.action === "CLOSED" && styles.hNoteBig]}>{log.note}</Text>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+      {minor > 0 ? (
+        <TouchableOpacity onPress={() => setAll((v) => !v)} activeOpacity={0.7} style={styles.hMore}>
+          <Text style={styles.hMoreText}>
+            {all ? "ซ่อนรายการแนบไฟล์" : `แสดงทั้งหมด (รวมแนบไฟล์ ${minor} รายการ)`}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
+/**
  * หัวฟอร์มยืนยันออกงาน — บอกว่าแอดมินคุยกับลูกค้าได้ข้อสรุปว่าอะไร
  *
  * ลูกค้าเลื่อนวันคือเหตุผลหลักที่ขั้นนี้มีอยู่ (ทีมเดิมอาจไม่ว่างวันใหม่) จึงต้องเด่น
@@ -2643,6 +2728,7 @@ function CloseModal({
   const shotsMissing = siteFiles.length === 0 && order.siteFileCount === 0;
   // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
   const workersMissing = workerIds.length === 0 && !otherWorkers.trim();
+  const summaryMissing = !note.trim();
   // ป้ายรุ่นต้องถ่ายรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง — รูปเก่าใช้แทนไม่ได้
   const nameplateMissing = !nameplate && !order.hasNameplate;
   // ติ๊กว่าอะไหล่ไม่ครบแต่ไม่ได้บอกว่าขาดตัวไหน — ใบรออะไหล่เปล่า ๆ ไม่มีใครตามของได้
@@ -2740,12 +2826,12 @@ function CloseModal({
           <TouchableOpacity
             style={[
               styles.modalSave,
-              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing) &&
+              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing) &&
                 styles.modalSaveOff,
             ]}
             onPress={submit}
             disabled={
-              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing
+              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing
             }
             activeOpacity={0.8}
           >
@@ -2778,9 +2864,12 @@ function CloseModal({
         ))}
       </View>
 
-      <Text style={styles.modalLabel}>สรุปงานที่ทำ</Text>
+      {/* บังคับ (เจ้าของงานกำหนด) — "ซ่อมเสร็จ" อย่างเดียวไม่บอกว่ารอบนี้เปลี่ยนอะไรไป */}
+      <Text style={styles.modalLabel}>
+        สรุปงานที่ทำ <Text style={{ color: colors.danger }}>*</Text>
+      </Text>
       <TextInput
-        style={styles.modalInput}
+        style={[styles.modalInput, summaryMissing && styles.inputMissing]}
         value={note}
         onChangeText={setNote}
         placeholder="เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ"
@@ -2789,6 +2878,9 @@ function CloseModal({
         numberOfLines={3}
         accessibilityLabel="สรุปงานที่ทำ"
       />
+      {summaryMissing ? (
+        <Text style={styles.warn}>ต้องสรุปว่าทำอะไรไป — หัวหน้าภาคกับแอดมินอ่านจากตรงนี้</Text>
+      ) : null}
 
       {/*
         ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
@@ -3147,6 +3239,60 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     backgroundColor: colors.background,
   },
+  cardDone: { backgroundColor: colors.doneSoft, borderColor: colors.doneLine },
+  badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
+  doneBand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.doneBand,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  doneBandText: { color: "#fff", fontSize: 15, lineHeight: 22, fontWeight: "800" },
+  doneBandWhen: { color: "#fff", opacity: 0.9, fontSize: 13, lineHeight: 20 },
+  // การ์ดเขียวแล้ว กล่องสรุปงานเป็นพื้นขาวให้ยังเด่นเป็นอันดับแรก
+  summaryBoxDone: { backgroundColor: colors.card },
+  summaryBox: {
+    marginVertical: spacing.sm,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+    borderTopRightRadius: radius.md,
+    borderBottomRightRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  summaryLabel: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.primaryInk },
+  summaryText: { fontSize: 17, lineHeight: 27, fontWeight: "800", color: colors.text },
+  hRow: { flexDirection: "row", gap: spacing.sm },
+  hWhen: { width: 62, alignItems: "flex-end", paddingTop: 1 },
+  hDay: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.text },
+  hTime: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
+  hRail: { width: 16, alignItems: "center" },
+  hLine: { position: "absolute", top: 16, bottom: 0, width: 2, backgroundColor: colors.border },
+  hDot: { width: 12, height: 12, borderRadius: 6, marginTop: 4, borderWidth: 2 },
+  hDotSmall: { width: 8, height: 8, borderRadius: 4, marginTop: 6, backgroundColor: colors.textFaint, borderColor: colors.textFaint },
+  hMinor: { fontWeight: "500", color: colors.textMuted },
+  hWho: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  hRole: { borderRadius: 5, paddingHorizontal: 6 },
+  hRoleText: { fontSize: 10, lineHeight: 16, fontWeight: "800" },
+  hNote: {
+    alignSelf: "flex-start",
+    marginTop: 3,
+    marginBottom: spacing.sm,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.text,
+    backgroundColor: colors.tile,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+  },
+  hNoteBig: { fontSize: 14, fontWeight: "800", backgroundColor: colors.primarySoft },
+  hMore: { marginTop: spacing.sm, alignSelf: "flex-start" },
+  hMoreText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   dispatchNote: {
     flexDirection: "row",
     gap: spacing.sm,
@@ -3292,12 +3438,9 @@ const styles = StyleSheet.create({
   actionPrimaryText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   actionSecondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.primary },
   actionSecondaryText: { color: colors.primary, fontSize: 15, lineHeight: 24, fontWeight: "700" },
-  logRow: { flexDirection: "row", gap: spacing.sm, paddingVertical: spacing.xs },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.primary, marginTop: 8 },
   logBody: { flex: 1, minWidth: 0 },
   logAction: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   logMeta: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
-  logNote: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
   editNote: { flexDirection: "row", alignItems: "center", gap: 2 },
   editNoteText: { fontSize: 13, lineHeight: 21, color: colors.primary, fontWeight: "700" },
 
@@ -3309,6 +3452,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     marginBottom: spacing.xs,
   },
+  inputMissing: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
   modalInput: {
     borderWidth: 1,
     borderColor: colors.border,
