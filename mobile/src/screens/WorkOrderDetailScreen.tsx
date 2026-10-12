@@ -166,9 +166,10 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   PARTS_REQUESTED: { label: "เช็คอะไหล่ในคลัง", icon: "arrow-forward-circle" },
   AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
   AWAITING_PAYMENT: { label: "ลูกค้าจ่ายเงินแล้ว", icon: "cash-outline" },
-  PARTS_CHECKED: { label: "จ่ายงานให้ช่าง", icon: "arrow-forward-circle" },
-  ASSIGNED: { label: "นัดลูกค้า", icon: "calendar-outline" },
+  // ลำดับใหม่: แอดมินนัด → ลูกค้าคอนเฟิร์ม → หัวหน้าภาคจ่ายงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
+  PARTS_CHECKED: { label: "นัดลูกค้า", icon: "calendar-outline" },
   AWAITING_CONFIRM: { label: "ลูกค้าคอนเฟิร์มนัด", icon: "checkmark-circle-outline" },
+  ASSIGNED: { label: "จ่ายงานให้ช่าง", icon: "arrow-forward-circle" },
 };
 
 /** "9 ต.ค. 69 · 10:00 น." — วันนัดเก็บเป็นเที่ยงคืน UTC จึงตัดเอาแค่วันตรง ๆ */
@@ -457,7 +458,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   // เปิดใบรออะไหล่ต่อได้ตั้งแต่ทีมรับงานแล้ว — ก่อนนั้นยังแก้รายการอะไหล่ในใบนี้ได้เอง
   const canFollowUp =
-    ["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS", "DONE"].includes(order.status) &&
+    ["IN_PROGRESS", "DONE"].includes(order.status) &&
     (user?.role === "ADMIN" ||
       user?.role === "SUPERVISOR" ||
       inMyTeam(user, order.assignedTeam));
@@ -1171,9 +1172,9 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
   AWAITING_PAYMENT: ["PAID"],
   PARTS_REQUESTED: ["PARTS_CHECKED"],
-  PARTS_CHECKED: ["ASSIGNED"],
-  ASSIGNED: ["SCHEDULED"],
+  PARTS_CHECKED: ["SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED"],
+  ASSIGNED: ["ASSIGNED"],
   IN_PROGRESS: ["CLOSED"],
 };
 
@@ -1516,11 +1517,11 @@ function StageBackModal({
 
   const order_ = targets.map((t) => t.value);
   function clears(value: string) {
-    const all = ["NEW", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "ASSIGNED"];
+    const all = ["NEW", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
     const idx = all.indexOf(value);
     const lost: string[] = [];
-    if (idx >= 0 && idx <= all.indexOf("ASSIGNED") && order.scheduledAt) lost.push("วันนัด");
-    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECTING" && order.assignedTeam)
+    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && order.scheduledAt) lost.push("วันนัด");
+    if (idx >= 0 && idx <= all.indexOf("ASSIGNED") && value !== "INSPECTING" && order.assignedTeam)
       lost.push("ทีมที่รับงาน");
     if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
       lost.push("ผลเช็คคลังและเลขใบเบิก");
@@ -1779,7 +1780,7 @@ function StageModal({
           await uploadAttachment(order.id, doc, "RECEIPT");
         }
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
-      } else if (order.status === "PARTS_CHECKED") {
+      } else if (order.status === "ASSIGNED") {
         await api.post(`/work-orders/${order.id}/assign`, {
           team,
           note: note.trim() || undefined,
@@ -1848,8 +1849,8 @@ function StageModal({
         ? !team || (visit !== "" && !validDate) || !timeOk
         : needsParts === null || (needsParts && parts.length === 0))) ||
     (order.status === "INSPECTING" && !finding.trim()) ||
-    (order.status === "PARTS_CHECKED" && !team) ||
-    (order.status === "ASSIGNED" && (!validDate || !timeOk || appointment === null)) ||
+    (order.status === "ASSIGNED" && !team) ||
+    (order.status === "PARTS_CHECKED" && (!validDate || !timeOk || appointment === null)) ||
     (order.status === "AWAITING_CONFIRM" && (!validDate || !timeOk)) ||
     unchecked ||
     needsRequisition;
@@ -2168,8 +2169,13 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "PARTS_CHECKED" || (order.status === "NEW" && inspectFirst) ? (
+            {order.status === "ASSIGNED" || (order.status === "NEW" && inspectFirst) ? (
               <>
+                {order.status === "ASSIGNED" ? (
+                  <Text style={styles.linkedText}>
+                    แอดมินนัดลูกค้าไว้ {visitLabel(order)} (ลูกค้าคอนเฟิร์มแล้ว) — เลือกทีมที่ว่างวันนั้น
+                  </Text>
+                ) : null}
                 <Text style={styles.modalLabel}>
                   {order.status === "NEW" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
                 </Text>
@@ -2287,7 +2293,7 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "ASSIGNED" || order.status === "AWAITING_CONFIRM" ? (
+            {order.status === "PARTS_CHECKED" || order.status === "AWAITING_CONFIRM" ? (
               <>
                 {order.status === "AWAITING_CONFIRM" ? (
                   <Text style={styles.linkedText}>
@@ -2302,15 +2308,15 @@ function StageModal({
                   emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
                 />
                 <TimeField value={visitTime} onChange={setVisitTime} label="เวลานัด" />
-                {order.status === "ASSIGNED" ? (
+                {order.status === "PARTS_CHECKED" ? (
                   <>
                     <Text style={styles.modalLabel}>ลูกค้าตอบว่าอย่างไร</Text>
                     <View style={{ gap: spacing.xs }}>
                       {(
                         [
                           ["PENDING", "รอลูกค้าคอนเฟิร์ม", "โทรแล้ว ลูกค้ายังไม่ยืนยัน — พักไว้ที่ขั้นรอคอนเฟิร์ม"],
-                          ["CONFIRMED", "ลูกค้าคอนเฟิร์มแล้ว", "ส่งต่อให้ทีมเข้างานได้เลย"],
-                          ["ADMIN_PICKED", "ลูกค้าสะดวกทุกวัน — แอดมินเลือกวันให้", "เฉพาะแอดมิน"],
+                          ["CONFIRMED", "ลูกค้าคอนเฟิร์มแล้ว", "ส่งให้หัวหน้าภาคจ่ายงานได้เลย"],
+                          ["ADMIN_PICKED", "ลูกค้าสะดวกทุกวัน — แอดมินเลือกวันให้", "ไม่ต้องรอคอนเฟิร์ม — ส่งให้หัวหน้าภาคจ่ายงานเลย"],
                         ] as const
                       )
                         .filter(([v]) => v !== "ADMIN_PICKED" || user?.role === "ADMIN")

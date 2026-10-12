@@ -46,7 +46,7 @@ RES=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $
   -d "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-ROUND-2\"}]}")
 echo "  $(st $ID)"
 echo "  $(parts $ID)"
-st $ID | grep -q "จ่ายงาน" && pass "ของครบแล้วเดินต่อไปขั้นจ่ายงาน" || fail "ไม่เดินต่อ: $(st $ID)"
+st $ID | grep -q "นัดลูกค้า" && pass "ของครบแล้วเดินต่อไปขั้นแอดมินนัดลูกค้า" || fail "ไม่เดินต่อ: $(st $ID)"
 echo "$RES" | J 'd.waitingParts.find(p=>p.partCode==="SP-BOARD").requisitionNo==="RQ-ROUND-1"?"ok":"bad"' | grep -q ok \
   && pass "ใบเบิกรอบแรกไม่ถูกเขียนทับ" || fail "ใบเบิกรอบแรกหายหรือถูกทับ"
 echo "$RES" | J 'd.waitingParts.find(p=>p.partCode==="SP-BELT").requisitionNo==="RQ-ROUND-2"?"ok":"bad"' | grep -q ok \
@@ -72,7 +72,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID3/parts" -H "$(H $S)" -H 'Con
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID3/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-OK\"}]}" >/dev/null
-st $ID3 | grep -q "จ่ายงาน" && pass "ของครบรอบเดียวยังเดินต่อทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
+st $ID3 | grep -q "นัดลูกค้า" && pass "ของครบรอบเดียวยังเดินต่อทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
 
 echo
 curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J '"ประวัติ: "+d.logs.filter(l=>l.action==="PARTS_CHECKED").map(l=>l.note).reverse().join(" || ")'

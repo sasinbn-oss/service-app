@@ -19,7 +19,7 @@ import { colors, radius, spacing } from "../theme";
 
 const ORDER = [
   "NEW", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED",
-  "PARTS_CHECKED", "ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS", "DONE",
+  "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED", "IN_PROGRESS", "DONE",
 ];
 const REASONS = [
   "ช่างซ่อมเสร็จแล้วแต่ไม่ได้กดในแอป",
@@ -213,7 +213,7 @@ export default function BackfillCloseModal({
         ) : null}
       </Step>
 
-      <Step title="ทีมและวันเข้างานจริง" hint={before("AWAITING_CONFIRM") ? "ข้ามขั้นนัดลูกค้า/คอนเฟิร์ม — ใส่วันที่ช่างเข้าไปจริงแทน" : undefined}>
+      <Step title="ทีมและวันเข้างานจริง" hint={before("AWAITING_CONFIRM") ? "ข้ามขั้นนัดลูกค้า/คอนเฟิร์ม/จ่ายงาน — ใส่ทีมและวันที่ช่างเข้าไปจริงแทน" : undefined}>
         <Text style={styles.label}>ทีมที่ไป</Text>
         <Dropdown value={team} onChange={setTeam} placeholder="เลือกทีม" accessibilityLabel="ทีมที่ไป" options={teams.map((t) => ({ value: t, label: t }))} />
         <View style={styles.two}>

@@ -29,6 +29,11 @@ WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Typ
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); CODE=$(echo "$WO" | J 'd.orders?d.orders[0].code:d.code')
 echo "  $CODE (id=$ID)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
+# นัดลูกค้าเป็นขั้นของแอดมิน ช่างแตะไม่ได้ไม่ว่าจะอยู่ทีมไหน
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}')
+echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างนัดวันเองไม่ได้" || fail "ช่างยังนัดวันได้: $R"
+curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}' \
+  | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "แอดมินนัดลูกค้าแล้วส่งให้หัวหน้าภาคจ่ายงาน" || fail "แอดมินนัดไม่ได้"
 
 echo
 echo "═══ ทีมที่ไม่มีในทะเบียนต้องถูกปฏิเสธ"
@@ -45,9 +50,6 @@ echo
 echo "═══ ช่างที่ยังไม่ได้จัดทีม ต้องไม่เห็นงานของทีม"
 N=$(curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $T)" | J 'const r=d.rows||d; r.filter(w=>w.code==="'"$CODE"'").length')
 [ "$N" = "0" ] && pass "ช่างไม่มีทีม ไม่เห็นงานของทีม" || fail "เห็นทั้งที่ยังไม่ได้จัดทีม"
-# นัดวันเป็นขั้นของหัวหน้าภาคแล้ว ช่างแตะไม่ได้ไม่ว่าจะอยู่ทีมไหน
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}')
-echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างนัดวันเองไม่ได้" || fail "ช่างยังนัดวันได้: $R"
 
 echo
 echo "═══ จัดช่างเข้าทีมแล้วต้องเห็น"
@@ -55,8 +57,8 @@ curl -s -X PATCH "localhost:4000/api/auth/users/$TECH" -H "$(H $A)" -H 'Content-
   -d '{"team":"กระบี่"}' | J '"  "+d.name+" → ทีม "+d.team'
 N=$(curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $T)" | J 'const r=d.rows||d; r.filter(w=>w.code==="'"$CODE"'").length')
 [ "$N" = "1" ] && pass "ช่างในทีมเห็นงานของทีม" || fail "ยังไม่เห็น"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}' \
-  | J 'd.statusLabel' | grep -q "เข้างาน" && pass "หัวหน้าภาคนัดวันได้" || fail "นัดวันไม่ได้"
+curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $T)" \
+  | J 'd.statusLabel' | grep -q "เข้างาน" && pass "จ่ายงานแล้วถึงคิวช่างเข้างาน" || fail "ยังไม่ถึงคิวเข้างาน"
 
 echo
 echo "═══ ปิดงานโดยไม่มีรูปหน้างาน — ต้องถูกปฏิเสธ"
@@ -89,6 +91,7 @@ WO2=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Ty
   -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"code":"D8","model":"Oasis","symptom":"ทดสอบข้ามทีม"}]}')
 ID2=$(echo "$WO2" | J 'd.orders?d.orders[0].id:d.id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID2/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}' >/dev/null
 TEAMS=$(curl -s localhost:4000/api/branches/teams -H "$(H $A)" | J 'd.map(t=>t.name).join("|")')
 OTHER=$(echo "$TEAMS" | tr '|' '\n' | grep -v "กระบี่" | head -1)
 if [ -n "$OTHER" ]; then

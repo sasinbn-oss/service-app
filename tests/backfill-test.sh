@@ -49,8 +49,8 @@ echo "═══ ปิดย้อนหลังจากขั้นแรก 
 R=$(POST $A "work-orders/$ID/backfill-close" "$(body)")
 [ "$(DB "select status||'|'||\"closeResult\"||'|'||\"assignedTeam\"||'|'||to_char((\"closedAt\" at time zone 'UTC') at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI')||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"needsParts\" from \"WorkOrder\" where id=$ID")" = "DONE|FIXED|กระบี่|$D2 15:10|$D2|false" ] \
   && pass "DB: ปิดงาน ผล ทีม เวลาซ่อมเสร็จ วันเข้างาน ตามที่กรอก" || fail "DB: $(DB "select status,\"closedAt\",\"scheduledAt\" from \"WorkOrder\" where id=$ID") · $(echo $R|head -c 160)"
-[ "$(DB "select string_agg(action,',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$ID and \"backfilledAt\" is not null")" = "NO_PARTS,ASSIGNED,SCHEDULED,CLOSED" ] \
-  && pass "DB: ทุกขั้นที่เหลือถูกบันทึกและติดป้ายย้อนหลัง (ไม่ใช้อะไหล่ → จ่ายงาน → เข้างาน → ปิด)" || fail "ขั้น: $(DB "select string_agg(action,',' order by \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$ID")"
+[ "$(DB "select string_agg(action,',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$ID and \"backfilledAt\" is not null")" = "NO_PARTS,SCHEDULED,ASSIGNED,CLOSED" ] \
+  && pass "DB: ทุกขั้นที่เหลือถูกบันทึกและติดป้ายย้อนหลัง (ไม่ใช้อะไหล่ → นัดลูกค้า → จ่ายงาน → ปิด)" || fail "ขั้น: $(DB "select string_agg(action,',' order by \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$ID")"
 [ "$(DB "select to_char((\"createdAt\" at time zone 'UTC') at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='CLOSED'")" = "$D2 15:10" ] \
   && pass "DB: ประวัติปิดงานลงเวลาจริงของงาน ไม่ใช่เวลาที่กด" || fail "เวลาประวัติ"
 [ "$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='BACKFILLED' and \"backfilledAt\" is null")" = "ช่างซ่อมเสร็จแล้วแต่ไม่ได้กดในแอป" ] \

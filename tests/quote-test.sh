@@ -97,7 +97,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/payment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 echo "  $(st $ID1)"
 st $ID1 | grep -q "รอแอดมินเช็คอะไหล่" && pass "จ่ายเงินแล้วมาถึงขั้นเบิกอะไหล่" || fail "ไม่มาขั้นเบิกอะไหล่"
-checkparts $ID1 | J 'd.statusLabel' | grep -q "จ่ายงาน" && pass "เบิกอะไหล่เสร็จไปขั้นจ่ายงาน" || fail "เบิกแล้วไม่ไปจ่ายงาน"
+checkparts $ID1 | J 'd.statusLabel' | grep -q "นัดลูกค้า" && pass "เบิกอะไหล่เสร็จไปขั้นแอดมินนัดลูกค้า" || fail "เบิกแล้วไม่ไปขั้นนัดลูกค้า"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs.map(l=>l.action).reverse().join(" → ")' | sed 's/^/  ประวัติ: /'
 
 echo
@@ -114,7 +114,7 @@ st $ID3 | grep -q "รอแอดมินเช็คอะไหล่" && pa
 echo
 echo "═══ งานที่ไม่ใช้อะไหล่ ข้ามทั้งเสนอราคาและเบิกอะไหล่"
 ID4=$(prep "$DOLD" no)
-st $ID4 | grep -q "จ่ายงาน" && pass "ไม่ใช้อะไหล่ ข้ามไปจ่ายงานเลย" || fail "ไม่ข้าม: $(st $ID4)"
+st $ID4 | grep -q "นัดลูกค้า" && pass "ไม่ใช้อะไหล่ ข้ามไปนัดลูกค้าเลย" || fail "ไม่ข้าม: $(st $ID4)"
 
 echo
 echo "═══ ข้ามขั้นเสนอราคาได้ แต่ต้องบอกเหตุผล และไปโผล่ที่เบิกอะไหล่"
