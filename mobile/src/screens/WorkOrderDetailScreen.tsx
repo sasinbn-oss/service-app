@@ -36,6 +36,8 @@ import {
   pickImageAttachment,
   pickVideoAttachment,
   uploadAttachment,
+  attachmentIcon,
+  pickPdfAttachment,
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
@@ -976,7 +978,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                     ) : (
                       <View style={[styles.closeThumb, styles.slipBlank]}>
                         <Ionicons
-                          name={f.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                          name={attachmentIcon(f.kind)}
                           size={20}
                           color={colors.textFaint}
                         />
@@ -2138,7 +2140,14 @@ function StageModal({
                           onPress={() => pickDoc((stage) => pickImageAttachment(false, stage))}
                           activeOpacity={0.7}
                         >
-                          <Text style={styles.optionText}>เลือกไฟล์</Text>
+                          <Text style={styles.optionText}>เลือกรูป</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.option}
+                          onPress={() => pickDoc(() => pickPdfAttachment())}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.optionText}>แนบไฟล์ PDF</Text>
                         </TouchableOpacity>
                       </View>
                     )}
@@ -2508,12 +2517,18 @@ function FileStrip({
           ) : (
             <View style={[styles.slipThumb, styles.slipBlank]}>
               <Ionicons
-                name={file.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                name={attachmentIcon(file.kind)}
                 size={22}
                 color={colors.textFaint}
               />
             </View>
           )}
+          {/* PDF ไม่มีรูปย่อ ชื่อไฟล์คือสิ่งเดียวที่บอกว่าเลือกถูกใบ */}
+          {file.kind === "DOCUMENT" ? (
+            <Text style={styles.slipName} numberOfLines={1}>
+              {file.name}
+            </Text>
+          ) : null}
           <TouchableOpacity
             onPress={() => onChange(files.filter((_, k) => k !== i))}
             accessibilityLabel={`เอาไฟล์ที่ ${i + 1} ออก`}
@@ -3331,6 +3346,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   slipItem: { flexDirection: "row", alignItems: "center", gap: 2 },
+  slipName: { maxWidth: 200, fontSize: 13, color: colors.text, marginLeft: 4 },
   slipThumb: { width: 72, height: 72, borderRadius: radius.sm, backgroundColor: colors.background },
   slipBlank: {
     alignItems: "center",

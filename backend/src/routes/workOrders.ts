@@ -29,6 +29,8 @@ import {
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
+  ATTACHMENT_DOCUMENT_ROLES,
+  MAX_ATTACHMENT_DOCUMENT_BYTES,
   ATTACHMENT_ROLES,
   ATTACHMENT_ROLE_LABELS,
   attachmentKindFor,
@@ -3091,17 +3093,35 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
 
   const kind = attachmentKindFor(file.mimetype);
   if (!kind) {
-    return res.status(400).json({ error: `ไฟล์ชนิด ${file.mimetype} ยังแนบไม่ได้ — รับเฉพาะรูปกับวิดีโอ` });
+    return res
+      .status(400)
+      .json({ error: `ไฟล์ชนิด ${file.mimetype} ยังแนบไม่ได้ — รับเฉพาะรูป วิดีโอ และ PDF (ใบเสนอราคา/บิล)` });
   }
 
-  const limit = kind === "IMAGE" ? MAX_ATTACHMENT_IMAGE_BYTES : MAX_ATTACHMENT_VIDEO_BYTES;
+  // บทบาทมาจากฟอร์ม ส่งมาผิดค่าถือว่าเป็นรูปทั่วไป ไม่ใช่ error —
+  // ไฟล์ที่อัปสำเร็จแล้วไม่ควรถูกทิ้งเพราะป้ายกำกับสะกดผิด
+  const rawRole = typeof req.body?.role === "string" ? req.body.role.trim().toUpperCase() : "";
+  const role = (ATTACHMENT_ROLES as readonly string[]).includes(rawRole) ? rawRole : null;
+
+  if (kind === "DOCUMENT" && !(role && ATTACHMENT_DOCUMENT_ROLES.includes(role))) {
+    return res.status(400).json({ error: "PDF แนบได้เฉพาะใบเสนอราคากับบิลที่ลูกค้าจ่ายแล้ว — รูปหน้างานแนบเป็นรูปหรือวิดีโอ" });
+  }
+
+  const limit =
+    kind === "IMAGE"
+      ? MAX_ATTACHMENT_IMAGE_BYTES
+      : kind === "DOCUMENT"
+        ? MAX_ATTACHMENT_DOCUMENT_BYTES
+        : MAX_ATTACHMENT_VIDEO_BYTES;
   if (file.size > limit) {
     const mb = Math.round(limit / 1024 / 1024);
     return res.status(400).json({
       error:
         kind === "IMAGE"
           ? `รูปใหญ่เกิน ${mb} MB`
-          : `วิดีโอใหญ่เกิน ${mb} MB — ถ่ายสั้นลงหรือตัดให้เหลือเฉพาะช่วงที่เห็นอาการ`,
+          : kind === "DOCUMENT"
+            ? `ไฟล์ PDF ใหญ่เกิน ${mb} MB`
+            : `วิดีโอใหญ่เกิน ${mb} MB — ถ่ายสั้นลงหรือตัดให้เหลือเฉพาะช่วงที่เห็นอาการ`,
     });
   }
 
@@ -3111,11 +3131,6 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       .status(400)
       .json({ error: `ใบงานหนึ่งแนบได้ไม่เกิน ${MAX_ATTACHMENTS_PER_WORK_ORDER} ไฟล์` });
   }
-
-  // บทบาทมาจากฟอร์ม ส่งมาผิดค่าถือว่าเป็นรูปทั่วไป ไม่ใช่ error —
-  // ไฟล์ที่อัปสำเร็จแล้วไม่ควรถูกทิ้งเพราะป้ายกำกับสะกดผิด
-  const rawRole = typeof req.body?.role === "string" ? req.body.role.trim().toUpperCase() : "";
-  const role = (ATTACHMENT_ROLES as readonly string[]).includes(rawRole) ? rawRole : null;
 
   const thumb = files?.thumbnail?.[0];
   // รูปย่อใหญ่ผิดปกติ = แอปส่งรูปเต็มมาผิดช่อง ทิ้งไปดีกว่าเก็บรูป 3 MB

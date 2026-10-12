@@ -28,6 +28,7 @@ import {
   pickImageAttachment,
   pickVideoAttachment,
   uploadAttachment,
+  attachmentIcon,
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
@@ -188,7 +189,7 @@ export default function WorkOrderAttachments({
                 ) : (
                   <View style={[styles.thumb, styles.thumbBlank]}>
                     <Ionicons
-                      name={row.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                      name={attachmentIcon(row.kind)}
                       size={26}
                       color={colors.textFaint}
                     />

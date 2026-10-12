@@ -543,7 +543,7 @@ export function workOrderCode(id: number): string {
 
 // ── ไฟล์แนบใบงาน ────────────────────────────────────────
 
-export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO"] as const;
+export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "DOCUMENT"] as const;
 
 /**
  * บทบาทของไฟล์แนบ — ว่างคือรูปหน้างานทั่วไป
@@ -565,6 +565,7 @@ export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {
   IMAGE: "รูป",
   VIDEO: "วิดีโอ",
+  DOCUMENT: "เอกสาร PDF",
 };
 
 /**
@@ -584,6 +585,14 @@ export const ATTACHMENT_IMAGE_TYPES = [
 export const ATTACHMENT_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"];
 
 /**
+ * PDF รับเฉพาะเอกสารที่ออกจากโปรแกรมบัญชี (ใบเสนอราคา บิล) — ไฟล์พวกนี้เป็น PDF
+ * อยู่แล้ว การบังคับให้แคปหน้าจอเป็นรูปก่อนแนบทำให้ตัวเลขเบลอและเสียเวลาแอดมิน
+ * รูปหน้างานยังรับแค่รูปกับวิดีโอ เพราะ PDF ในกองรูปหน้างานเปิดดูเร็ว ๆ ไม่ได้
+ */
+export const ATTACHMENT_DOCUMENT_TYPES = ["application/pdf"];
+export const ATTACHMENT_DOCUMENT_ROLES = ["QUOTE", "RECEIPT"];
+
+/**
  * เพดานขนาดไฟล์
  *
  * รูปตั้งไว้ 10 MB ทั้งที่แอปย่อให้เหลือหลักแสนไบต์ก่อนส่งอยู่แล้ว เผื่อไว้
@@ -596,6 +605,8 @@ export const ATTACHMENT_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/we
  */
 export const MAX_ATTACHMENT_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENT_VIDEO_BYTES = 60 * 1024 * 1024;
+/** ใบเสนอราคาจากโปรแกรมบัญชีหน้าละไม่กี่ร้อย KB — 15 MB เผื่อไฟล์สแกนหลายหน้า */
+export const MAX_ATTACHMENT_DOCUMENT_BYTES = 15 * 1024 * 1024;
 
 /** รูปย่อที่แอปส่งมาพร้อมไฟล์ ถ้าใหญ่กว่านี้แปลว่าแอปส่งรูปเต็มมาผิดช่อง */
 export const MAX_ATTACHMENT_THUMBNAIL_BYTES = 200 * 1024;
@@ -603,10 +614,11 @@ export const MAX_ATTACHMENT_THUMBNAIL_BYTES = 200 * 1024;
 /** กี่ไฟล์ต่อใบงาน — กันคนเผลออัปทั้งอัลบั้ม ไม่ได้กันการใช้งานปกติ */
 export const MAX_ATTACHMENTS_PER_WORK_ORDER = 20;
 
-export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | null {
+export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | "DOCUMENT" | null {
   const type = mimeType.split(";")[0].trim().toLowerCase();
   if (ATTACHMENT_IMAGE_TYPES.includes(type)) return "IMAGE";
   if (ATTACHMENT_VIDEO_TYPES.includes(type)) return "VIDEO";
+  if (ATTACHMENT_DOCUMENT_TYPES.includes(type)) return "DOCUMENT";
   return null;
 }
 

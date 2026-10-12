@@ -80,8 +80,13 @@ echo "$R" | grep -q "ต้องแนบใบเสนอราคา" && pas
 
 echo
 echo "═══ แนบใบเสนอราคาแล้วไปขั้นรอจ่ายเงิน"
-curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
-  -F "file=@$SP/site-photo.png;type=image/png" -F "role=QUOTE" | J '"  แนบแล้ว: "+d.roleLabel'
+# ใบเสนอราคาจากโปรแกรมบัญชีเป็น PDF — แนบตรง ๆ ได้ ไม่ต้องแคปเป็นรูป
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" -F "file=@$SP/quote-sample.pdf;type=application/pdf")
+echo "$R" | grep -q "PDF แนบได้เฉพาะ" && pass "PDF ที่ไม่ใช่ใบเสนอราคา/บิล แนบเป็นรูปหน้างานไม่ได้" || fail "PDF เข้ากองรูปหน้างานได้: $R"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
+  -F "file=@$SP/quote-sample.pdf;type=application/pdf" -F "role=QUOTE")
+echo "$R" | J 'd.kind+"|"+d.role+"|"+d.mimeType' | grep -q "^DOCUMENT|QUOTE|application/pdf$" \
+  && pass "แนบใบเสนอราคาเป็น PDF ได้" || fail "แนบ PDF ไม่ได้: $(echo $R | head -c 160)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/quote" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 st $ID1 | grep -q "รอลูกค้าจ่ายเงิน" && pass "ไปขั้นรอลูกค้าจ่ายเงินแล้ว" || fail "ไม่ไปขั้นจ่ายเงิน: $(st $ID1)"
 

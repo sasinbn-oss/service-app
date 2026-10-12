@@ -31,6 +31,7 @@ import {
   pickImageAttachment,
   pickVideoAttachment,
   uploadAttachment,
+  attachmentIcon,
 } from "../utils/attachments";
 import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
@@ -1102,7 +1103,7 @@ function MachineCard({
               ) : (
                 <View style={[styles.thumb, styles.thumbBlank]}>
                   <Ionicons
-                    name={file.kind === "VIDEO" ? "videocam-outline" : "image-outline"}
+                    name={attachmentIcon(file.kind)}
                     size={24}
                     color={colors.textFaint}
                   />
