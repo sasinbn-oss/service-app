@@ -35,16 +35,21 @@ echo "  เช็คอะไหล่ครบ → $(ws $ID)"
 ws $ID | grep -q "รอช่างเข้าแก้ไข" && pass "ของครบแล้วขึ้น 'รอช่างเข้าแก้ไข' ให้เอง" || fail "สถานะไม่ขยับ"
 
 echo
-echo "═══ แอดมินนัดลูกค้า แล้วส่งกลับให้หัวหน้าภาคจ่ายงาน"
-ws $ID | grep -q "รอแอดมินนัดลูกค้า" && pass "ของครบแล้วขึ้นว่ารอแอดมินนัดลูกค้า" || fail "ป้ายขั้นไม่ใช่ของแอดมิน: $(ws $ID)"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-20"}')
-echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างนัดวันเองไม่ได้" || fail "ช่างยังนัดวันได้: $(echo $R | head -c 120)"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-20"}')
-echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "หัวหน้าภาคนัดลูกค้าเองไม่ได้แล้ว" || fail "หัวหน้าภาคยังนัดได้: $(echo $R | head -c 120)"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-20"}' >/dev/null
-ws $ID | grep -q "รอหัวหน้าภาคจ่ายงาน" && pass "แอดมินนัดแล้วส่งให้หัวหน้าภาคจ่ายงาน" || fail "แอดมินนัดไม่ได้: $(ws $ID)"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
-ws $ID | grep -q "รอช่างเข้างาน" && pass "หัวหน้าภาคจ่ายงานแล้วถึงคิวช่างเข้างาน" || fail "จ่ายงานไม่ได้: $(ws $ID)"
+echo "═══ หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน"
+P() { curl -s -X POST "localhost:4000/api/work-orders/$ID/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+ws $ID | grep -q "รอหัวหน้าภาคจ่ายงาน" && pass "ของครบแล้วขึ้นว่ารอหัวหน้าภาคจ่ายงาน" || fail "ป้ายขั้นผิด: $(ws $ID)"
+R=$(P $T assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-20\"}")
+echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงานเองไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R | head -c 120)"
+R=$(P $S assign "{\"team\":\"$TEAM\"}")
+echo "$R" | grep -q "ต้องระบุวันเข้างาน" && pass "จ่ายงานต้องใส่วันเข้างานด้วย" || fail "จ่ายได้โดยไม่มีวัน: $(echo $R | head -c 120)"
+P $S assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-20\"}" >/dev/null
+ws $ID | grep -q "รอแอดมินคอนเฟิร์มลูกค้า" && pass "จ่ายงานแล้วไปรอแอดมินโทรคอนเฟิร์มลูกค้า" || fail "ไม่ไปขั้นคอนเฟิร์ม: $(ws $ID)"
+R=$(P $S confirm-appointment '{}')
+echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "หัวหน้าภาคกดคอนเฟิร์มลูกค้าแทนแอดมินไม่ได้" || fail "หัวหน้าภาคคอนเฟิร์มได้: $(echo $R | head -c 120)"
+P $A confirm-appointment '{}' >/dev/null
+ws $ID | grep -q "รอหัวหน้าภาคคอนเฟิร์มออกงาน" && pass "ลูกค้าคอนเฟิร์มแล้วกลับไปให้หัวหน้าภาคยืนยันออกงาน" || fail "ไม่กลับไปหัวหน้าภาค: $(ws $ID)"
+P $S dispatch '{}' >/dev/null
+ws $ID | grep -q "รอช่างเข้างาน" && pass "ยืนยันออกงานแล้วถึงคิวช่างเข้างาน" || fail "ยืนยันออกงานไม่ได้: $(ws $ID)"
 
 echo
 echo "═══ ปิดงานด้วยผลที่ยังไม่จบ ต้องถูกปฏิเสธ"
@@ -68,8 +73,9 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-002\"}]}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-21"}' >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-21\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 # ป้ายรุ่นของรอบนี้ต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทนใบเหลือง
 curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
   -F "file=@$SP/site-photo.png;type=image/png" -F "role=NAMEPLATE" >/dev/null

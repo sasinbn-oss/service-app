@@ -29,21 +29,21 @@ WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Typ
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); CODE=$(echo "$WO" | J 'd.orders?d.orders[0].code:d.code')
 echo "  $CODE (id=$ID)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
-# นัดลูกค้าเป็นขั้นของแอดมิน ช่างแตะไม่ได้ไม่ว่าจะอยู่ทีมไหน
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}')
-echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างนัดวันเองไม่ได้" || fail "ช่างยังนัดวันได้: $R"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}' \
-  | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "แอดมินนัดลูกค้าแล้วส่งให้หัวหน้าภาคจ่ายงาน" || fail "แอดมินนัดไม่ได้"
+# จ่ายงานและวันเข้างานเป็นของหัวหน้าภาค ช่างแตะไม่ได้ไม่ว่าจะอยู่ทีมไหน
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"team":"กระบี่","scheduledAt":"2026-10-08"}')
+echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงาน/นัดวันเองไม่ได้" || fail "ช่างยังจ่ายงานได้: $R"
 
 echo
 echo "═══ ทีมที่ไม่มีในทะเบียนต้องถูกปฏิเสธ"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"ทีมที่ไม่มีจริง"}')
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"ทีมที่ไม่มีจริง","scheduledAt":"2026-10-08"}')
 echo "$R" | grep -q "ไม่รู้จักทีม" && pass "ทีมมั่วถูกปฏิเสธ" || fail "รับทีมมั่ว: $R"
 
 echo
 echo "═══ จ่ายให้ทีมของสาขาเอง"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"กระบี่"}')
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"กระบี่","scheduledAt":"2026-10-08"}')
 echo "$R" | J 'd.assignedTeam' | grep -q "กระบี่" && pass "จ่ายให้ทีมได้" || fail "จ่ายไม่ได้: $R"
+curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J '"  ประวัติ: "+d.logs.find(l=>l.action==="ASSIGNED").note'
 
 echo
@@ -91,13 +91,19 @@ WO2=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Ty
   -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"code":"D8","model":"Oasis","symptom":"ทดสอบข้ามทีม"}]}')
 ID2=$(echo "$WO2" | J 'd.orders?d.orders[0].id:d.id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID2/schedule" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"scheduledAt":"2026-10-08"}' >/dev/null
 TEAMS=$(curl -s localhost:4000/api/branches/teams -H "$(H $A)" | J 'd.map(t=>t.name).join("|")')
 OTHER=$(echo "$TEAMS" | tr '|' '\n' | grep -v "กระบี่" | head -1)
 if [ -n "$OTHER" ]; then
-  R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\"}")
+  R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-10-08\"}")
   curl -s "localhost:4000/api/work-orders/$ID2" -H "$(H $A)" | J '"  ประวัติ: "+d.logs.find(l=>l.action==="ASSIGNED").note' | grep -q "ข้ามทีม" \
     && pass "จ่ายข้ามทีมได้ และประวัติบอกว่าข้าม" || fail "ประวัติไม่บอกว่าข้ามทีม"
+  # ลูกค้าคอนเฟิร์มวันเดิม = CONFIRMED ไม่ใช่เลื่อน · ตอนยืนยันออกงานหัวหน้าภาคเปลี่ยนกลับเป็นทีมของสาขาได้
+  curl -s -X POST "localhost:4000/api/work-orders/$ID2/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+  curl -s -X POST "localhost:4000/api/work-orders/$ID2/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"กระบี่"}' >/dev/null
+  R=$(curl -s "localhost:4000/api/work-orders/$ID2" -H "$(H $A)")
+  echo "$R" | J '[d.status,d.assignedTeam,d.logs.some(l=>l.action==="CONFIRMED"),d.logs.some(l=>l.action==="RESCHEDULED"),(d.logs.find(l=>l.action==="DISPATCHED")||{}).note||""].join("|")' \
+    | grep -q "^IN_PROGRESS|กระบี่|true|false|.*เปลี่ยนทีม" \
+    && pass "คอนเฟิร์มวันเดิมไม่นับเป็นเลื่อน · ยืนยันออกงานเปลี่ยนทีมได้และประวัติบอกทีมเดิม" || fail "ยืนยันออกงาน: $(echo "$R" | J '[d.status,d.assignedTeam].join("|")')"
 else
   echo "  (ข้าม — มีทีมเดียวในฐานข้อมูลทดสอบ)"
 fi

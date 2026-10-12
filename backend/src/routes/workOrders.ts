@@ -1801,17 +1801,6 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
   res.json(shape(row));
 });
 
-/**
- * ขั้น 4 — หัวหน้าภาคจ่ายงานให้ทีมช่าง
- *
- * จ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
- * ใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
- */
-const assignSchema = z.object({
-  team: z.string().trim().min(1).max(120),
-  note: z.string().trim().max(500).optional(),
-});
-
 /** ไทม์ไลน์ของใบงาน — ใครทำอะไรเมื่อไร ตั้งแต่เปิดจนปิด (utils/timeline.ts) */
 router.get("/:id/timeline", requireAuth, requireSuperAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -1821,71 +1810,6 @@ router.get("/:id/timeline", requireAuth, requireSuperAdmin, async (req: AuthRequ
   res.json(t);
 });
 
-router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const parsed = assignSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  // จ่ายงานหลังลูกค้าคอนเฟิร์มนัดแล้ว — ส่งถึงช่างทันที เพราะวันนัดมีแล้ว
-  if (!(await guardStage(req, res, id, "ASSIGNED"))) return;
-
-  const team = parsed.data.team;
-  // ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
-  // ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
-  const known = await prisma.branch.findFirst({
-    where: { zone: team, cancelledAt: null },
-    select: { id: true },
-  });
-  if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
-
-  // จ่ายข้ามทีมได้ แต่ต้องรู้ตัวว่าข้าม จึงบันทึกไว้ในประวัติให้ชัด
-  //
-  // "ทีมของสาขา" ขึ้นกับประเภทงาน — งาน PM มีทีมดูแลคนละทีมกับงาน CM
-  // เทียบกับทีม CM อย่างเดียวจะหาว่าข้ามทีมทั้งที่จ่ายถูกตามไฟล์
-  const wo = await prisma.workOrder.findUniqueOrThrow({
-    where: { id },
-    select: { jobType: true, branch: { select: { zone: true, pmTeam: true } } },
-  });
-  const ownTeam =
-    wo.jobType === "PM" ? wo.branch.pmTeam ?? wo.branch.zone : wo.branch.zone;
-  const crossTeam = ownTeam !== null && ownTeam !== team;
-
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
-      // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
-      data: {
-        status: "IN_PROGRESS",
-        assignedTeam: team,
-        assignedToId: null,
-        workStatus: workStatusForStage("IN_PROGRESS"),
-      },
-    });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "ASSIGNED",
-      "IN_PROGRESS",
-      parsed.data.note ||
-        (crossTeam
-          ? `จ่ายงานให้ ${team} (ข้ามทีม — งาน${wo.jobType} ของสาขานี้เป็นของ ${ownTeam})`
-          : `จ่ายงานให้ ${team}`)
-    );
-  }, STAGE_TX);
-
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
-});
-
-/**
- * ขั้นนัดลูกค้า — แอดมินโทรนัดร้าน แล้วบันทึกวันและเวลา (เดิมเป็นของหัวหน้าภาค)
- *
- * นัดแล้วยังไม่ได้แปลว่าไปได้ — ร้านต้องคอนเฟิร์มก่อน ไปถึงแล้วร้านปิดหรือ
- * ไม่มีคนเปิดเครื่องให้ คือเสียวันของทั้งทีม ลูกค้ายังไม่ตอบจึงพักไว้ที่ขั้น
- * "รอลูกค้าคอนเฟิร์มนัด" ก่อน ส่วนลูกค้าที่สะดวกทุกวัน แอดมินเลือกวันให้ได้เลย
- */
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const dateField = z.string().regex(DATE_PATTERN, "วันที่ต้องเป็น ปี-เดือน-วัน");
@@ -1896,56 +1820,93 @@ function dayStart(date: string) {
   return new Date(`${date}T00:00:00.000Z`);
 }
 
+/**
+ * "พ. 22 ต.ค. 69 เวลา 13:00 น." — ข้อความนี้ลงประวัติและขึ้นตรง ๆ ในฟอร์มยืนยันออกงาน
+ * คนอ่านคือหัวหน้าภาคกับแอดมิน ไม่ใช่โปรแกรม — 2026-10-22 ต้องแปลในหัวก่อนว่าวันอะไร
+ */
+const TH_DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+const TH_MONTH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 function visitText(date: string, time: string | null | undefined) {
-  return time ? `${date} เวลา ${time} น.` : date;
+  const [y, m, d] = date.split("-").map(Number);
+  const day = `${TH_DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${TH_MONTH[m - 1]} ${String((y + 543) % 100).padStart(2, "0")}`;
+  return time ? `${day} เวลา ${time} น.` : day;
 }
 
-const scheduleSchema = z.object({
+/**
+ * ทีมของสาขานี้สำหรับงานประเภทนี้ — ใช้บอกในประวัติว่าจ่ายข้ามทีม
+ *
+ * "ทีมของสาขา" ขึ้นกับประเภทงาน — งาน PM มีทีมดูแลคนละทีมกับงาน CM
+ * เทียบกับทีม CM อย่างเดียวจะหาว่าข้ามทีมทั้งที่จ่ายถูกตามไฟล์
+ */
+async function teamNote(id: number, team: string, verb: string) {
+  const wo = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: { jobType: true, branch: { select: { zone: true, pmTeam: true } } },
+  });
+  const ownTeam = wo.jobType === "PM" ? wo.branch.pmTeam ?? wo.branch.zone : wo.branch.zone;
+  return ownTeam !== null && ownTeam !== team
+    ? `${verb} ${team} (ข้ามทีม — งาน${wo.jobType} ของสาขานี้เป็นของ ${ownTeam})`
+    : `${verb} ${team}`;
+}
+
+/**
+ * ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
+ * ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
+ */
+async function knownCmTeam(team: string) {
+  return (await prisma.branch.findFirst({ where: { zone: team, cancelledAt: null }, select: { id: true } })) !== null;
+}
+
+/**
+ * ขั้นจ่ายงาน — หัวหน้าภาคเลือกทีมและวันเข้างานพร้อมกัน
+ *
+ * จ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
+ * ใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
+ * วันบังคับใส่ เพราะขั้นถัดไปคือแอดมินโทรถามร้านว่าวันนี้ได้ไหม — ไม่มีวันก็ไม่มีอะไรให้ถาม
+ */
+const assignSchema = z.object({
+  team: z.string().trim().min(1).max(120),
   scheduledAt: dateField,
   scheduledTime: timeField,
-  // แอปรุ่นก่อนไม่ส่งมา — ถือว่าคอนเฟิร์มแล้ว ตรงกับที่รุ่นนั้นทำอยู่ (นัดแล้วไปขั้นช่างเข้างานเลย)
-  appointment: z.enum(APPOINTMENT_STATUSES).default("CONFIRMED"),
   note: z.string().trim().max(500).optional(),
 });
 
-router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
+router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const parsed = scheduleSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-  // ขั้นของแอดมิน — guardStage กันคนอื่นไว้แล้ว
-  const wo = await guardStage(req, res, id, "PARTS_CHECKED");
-  if (!wo) return;
-
-  const { scheduledAt, scheduledTime, appointment } = parsed.data;
-  // ลูกค้าไม่ได้เลือกวันเอง — ต้องเป็นแอดมินที่รับผิดชอบการเลือกนั้น
-  if (appointment === "ADMIN_PICKED" && req.auth!.role !== "ADMIN") {
-    return res.status(403).json({ error: "เลือกวันให้ลูกค้าได้เฉพาะแอดมิน" });
+  const parsed = assignSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const missingDate = parsed.error.issues.some((i) => i.path[0] === "scheduledAt");
+    return res.status(400).json({ error: missingDate ? "ต้องระบุวันเข้างาน" : parsed.error.flatten() });
   }
-  // ลูกค้าตอบรับแล้ว → ส่งให้หัวหน้าภาคจ่ายงานเลย · ยังไม่ตอบ → พักที่รอคอนเฟิร์ม
-  const next = appointment === "PENDING" ? "AWAITING_CONFIRM" : "ASSIGNED";
+  if (!(await guardStage(req, res, id, "PARTS_CHECKED"))) return;
+
+  const { team, scheduledAt, scheduledTime } = parsed.data;
+  if (!(await knownCmTeam(team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+  const teamText = await teamNote(id, team, "จ่ายงานให้");
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
+      // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
+      // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
       data: {
-        status: next,
+        status: "AWAITING_CONFIRM",
+        assignedTeam: team,
+        assignedToId: null,
         scheduledAt: dayStart(scheduledAt),
         scheduledTime: scheduledTime ?? null,
-        appointmentStatus: appointment,
-        workStatus: workStatusForStage(next),
+        appointmentStatus: "PENDING",
+        workStatus: workStatusForStage("AWAITING_CONFIRM"),
       },
     });
     await writeLog(
       tx,
       id,
       req.auth!.userId,
-      "SCHEDULED",
-      next,
-      [`นัด ${visitText(scheduledAt, scheduledTime)} · ${APPOINTMENT_STATUS_LABELS[appointment]}`, parsed.data.note]
-        .filter(Boolean)
-        .join(" — ")
+      "ASSIGNED",
+      "AWAITING_CONFIRM",
+      [`${teamText} · เข้างาน ${visitText(scheduledAt, scheduledTime)}`, parsed.data.note].filter(Boolean).join(" — ")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -1955,10 +1916,11 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * ลูกค้าคอนเฟิร์มนัด — ส่งกลับให้หัวหน้าภาคจ่ายงาน
+ * แอดมินโทรคอนเฟิร์มลูกค้า — ลูกค้าตกลงวันเดิม หรือขอเลื่อน
  *
- * แก้วันหรือเวลาในขั้นนี้ได้เลย ลูกค้าที่โทรกลับมาบอกว่า "ได้ แต่ขอบ่ายนะ"
- * มีบ่อยกว่าลูกค้าที่ตอบรับตามนัดเป๊ะ ไม่ควรต้องย้อนขั้นเพื่อแก้เวลา
+ * ลูกค้าขอเลื่อน แอดมินเปลี่ยนวันได้ในขั้นนี้เลย ไม่ต้องตีกลับไปให้หัวหน้าภาคจ่ายใหม่ —
+ * ลูกค้าที่ตอบว่า "ได้ แต่ขอวันพฤหัส" มีบ่อยกว่าลูกค้าที่ตอบรับตามนัดเป๊ะ
+ * เลื่อนแล้วบันทึกเป็น RESCHEDULED พร้อมวันเดิม→วันใหม่ หัวหน้าภาคจะเห็นก่อนกดปล่อยงาน
  */
 const confirmSchema = z.object({
   scheduledAt: dateField.optional(),
@@ -1973,31 +1935,93 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!(await guardStage(req, res, id, "AWAITING_CONFIRM"))) return;
 
-  const { scheduledAt, scheduledTime } = parsed.data;
+  const before = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: { scheduledAt: true, scheduledTime: true },
+  });
+  const oldDate = before.scheduledAt ? before.scheduledAt.toISOString().slice(0, 10) : null;
+  const newDate = parsed.data.scheduledAt ?? oldDate;
+  const newTime = parsed.data.scheduledTime !== undefined ? parsed.data.scheduledTime : before.scheduledTime;
+  if (!newDate) return res.status(400).json({ error: "ต้องระบุวันเข้างาน" });
+  const moved = newDate !== oldDate || (newTime ?? null) !== (before.scheduledTime ?? null);
+
   await prisma.$transaction(async (tx) => {
-    const updated = await tx.workOrder.update({
+    await tx.workOrder.update({
       where: { id },
       data: {
         status: "ASSIGNED",
         appointmentStatus: "CONFIRMED",
-        ...(scheduledAt ? { scheduledAt: dayStart(scheduledAt) } : {}),
-        ...(scheduledTime !== undefined ? { scheduledTime } : {}),
+        scheduledAt: dayStart(newDate),
+        scheduledTime: newTime ?? null,
         workStatus: workStatusForStage("ASSIGNED"),
       },
-      select: { scheduledAt: true, scheduledTime: true },
     });
-    const when = updated.scheduledAt
-      ? visitText(updated.scheduledAt.toISOString().slice(0, 10), updated.scheduledTime)
-      : "—";
     await writeLog(
       tx,
       id,
       req.auth!.userId,
-      "CONFIRMED",
+      moved ? "RESCHEDULED" : "CONFIRMED",
       "ASSIGNED",
-      [`ลูกค้าคอนเฟิร์ม ${when}`, parsed.data.note].filter(Boolean).join(" — ")
+      [
+        moved
+          ? `ลูกค้าขอเลื่อนจาก ${oldDate ? visitText(oldDate, before.scheduledTime) : "—"} เป็น ${visitText(newDate, newTime)}`
+          : `ลูกค้าคอนเฟิร์ม ${visitText(newDate, newTime)}`,
+        parsed.data.note,
+      ]
+        .filter(Boolean)
+        .join(" — ")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * หัวหน้าภาคคอนเฟิร์มออกงาน — ปล่อยใบงานให้ช่าง
+ *
+ * ผ่านหัวหน้าภาคทุกครั้ง (เจ้าของงานเลือก) ไม่ใช่เฉพาะตอนลูกค้าเลื่อน — หัวหน้าภาค
+ * เป็นคนปล่อยงานให้ช่างเสมอ และวันที่ลูกค้าเลื่อนไปทีมเดิมอาจไม่ว่าง จึงเปลี่ยนทีมได้ในขั้นนี้
+ */
+const dispatchSchema = z.object({
+  team: z.string().trim().min(1).max(120).optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = dispatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!(await guardStage(req, res, id, "ASSIGNED"))) return;
+
+  const cur = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: { assignedTeam: true, scheduledAt: true, scheduledTime: true },
+  });
+  const team = parsed.data.team ?? cur.assignedTeam;
+  if (!team) return res.status(400).json({ error: "ต้องเลือกทีมที่จะออกงาน" });
+  if (team !== cur.assignedTeam && !(await knownCmTeam(team))) {
+    return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+  }
+  const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
+  const text =
+    team !== cur.assignedTeam
+      ? `${await teamNote(id, team, "ยืนยันออกงาน เปลี่ยนทีมเป็น")} (เดิม ${cur.assignedTeam ?? "—"}) · ${when}`
+      : `ยืนยันออกงาน ${team} · ${when}`;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: "IN_PROGRESS",
+        assignedTeam: team,
+        assignedToId: null,
+        workStatus: workStatusForStage("IN_PROGRESS"),
+      },
+    });
+    await writeLog(tx, id, req.auth!.userId, "DISPATCHED", "IN_PROGRESS", [text, parsed.data.note].filter(Boolean).join(" — "));
   }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
@@ -2364,7 +2388,7 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   }
   // ย้อนไปถึงขั้นจ่ายงานหรือก่อนนั้น = ยังไม่มีทีมรับ ไม่งั้นใบจะค้างอยู่ในรายการของทีมเดิม
   // ยกเว้นย้อนไปตรวจหน้างาน ซึ่งทีมเดิมคือทีมที่ต้องไป
-  if (to <= at("ASSIGNED") && toStage !== "INSPECTING") {
+  if (to <= at("PARTS_CHECKED") && toStage !== "INSPECTING") {
     data.assignedTeam = null;
     data.assignedToId = null;
   }
@@ -2804,12 +2828,16 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
           [b.warehouse ? `เบิกจาก ${b.warehouse}` : null, b.requisitionRef ? `ใบเบิก ${b.requisitionRef}` : null].filter(Boolean).join(" · ") || null
         );
       }
-      // ลำดับใหม่: นัด/คอนเฟิร์ม (แอดมิน) ก่อน แล้วจ่ายงาน (หัวหน้าภาค)
-      if (before("AWAITING_CONFIRM")) {
-        await log("SCHEDULED", "ASSIGNED", visit, `เข้างาน ${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""} (ไม่ผ่านนัด/คอนเฟิร์มในระบบ)`);
+      // ลำดับ: จ่ายงาน+วัน (หัวหน้าภาค) → คอนเฟิร์มลูกค้า (แอดมิน) → ยืนยันออกงาน (หัวหน้าภาค)
+      const when = `${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""}`;
+      if (before("PARTS_CHECKED") || wo.assignedTeam !== b.team) {
+        await log("ASSIGNED", "AWAITING_CONFIRM", visit, `จ่ายงานให้ ${b.team} · เข้างาน ${when}`);
       }
-      if (before("ASSIGNED") || wo.assignedTeam !== b.team) {
-        await log("ASSIGNED", "IN_PROGRESS", visit, `จ่ายงานให้ ${b.team}`);
+      if (before("AWAITING_CONFIRM")) {
+        await log("CONFIRMED", "ASSIGNED", visit, `เข้างาน ${when} (ไม่ผ่านคอนเฟิร์มในระบบ)`);
+      }
+      if (before("ASSIGNED")) {
+        await log("DISPATCHED", "IN_PROGRESS", visit, `ยืนยันออกงาน ${b.team}`);
       }
       const closeNote = [
         b.note || null,

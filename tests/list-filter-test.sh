@@ -28,10 +28,11 @@ echo "═══ รอใคร"
 [ "$(row $C "r.stageActor+'|'+r.waitingOnSupervisors.some(s=>s.id===$SID)")" = "SUPERVISOR|true" ] \
   && pass "ใบใหม่รอหัวหน้าภาค และบอกชื่อหัวหน้าภาคที่ดูแลภาคนั้น" || fail "รอใคร: $(row $C 'JSON.stringify([r.stageActor,r.waitingOnSupervisors])')"
 POST $S "work-orders/$C/parts" '{"needsParts":false}' >/dev/null
+POST $S "work-orders/$C/assign" '{"team":"กระบี่","scheduledAt":"2026-11-20"}' >/dev/null
 [ "$(row $C 'r.stageActor+"|"+r.waitingOnSupervisors.length')" = "ADMIN|0" ] \
-  && pass "ระบุอะไหล่แล้วไปรอแอดมิน (แอดมินไม่แยกรายคน)" || fail "หลังระบุอะไหล่: $(row $C 'r.stageActor')"
-POST $A "work-orders/$C/schedule" '{"scheduledAt":"2026-11-20"}' >/dev/null
-POST $S "work-orders/$C/assign" '{"team":"กระบี่"}' >/dev/null
+  && pass "จ่ายงานแล้วไปรอแอดมินคอนเฟิร์มลูกค้า (แอดมินไม่แยกรายคน)" || fail "หลังจ่ายงาน: $(row $C 'r.stageActor')"
+POST $A "work-orders/$C/confirm-appointment" '{}' >/dev/null
+POST $S "work-orders/$C/dispatch" '{}' >/dev/null
 [ "$(row $C 'r.stageActor+"|"+r.waitingOnTeam')" = "EMPLOYEE|กระบี่" ] \
   && pass "จ่ายงานแล้วรอช่าง และบอกทีมที่รับงาน" || fail "ขั้นช่าง: $(row $C 'r.stageActor+"|"+r.waitingOnTeam')"
 

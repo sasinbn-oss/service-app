@@ -49,8 +49,8 @@ echo "═══ ปิดย้อนหลังจากขั้นแรก 
 R=$(POST $A "work-orders/$ID/backfill-close" "$(body)")
 [ "$(DB "select status||'|'||\"closeResult\"||'|'||\"assignedTeam\"||'|'||to_char((\"closedAt\" at time zone 'UTC') at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI')||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"needsParts\" from \"WorkOrder\" where id=$ID")" = "DONE|FIXED|กระบี่|$D2 15:10|$D2|false" ] \
   && pass "DB: ปิดงาน ผล ทีม เวลาซ่อมเสร็จ วันเข้างาน ตามที่กรอก" || fail "DB: $(DB "select status,\"closedAt\",\"scheduledAt\" from \"WorkOrder\" where id=$ID") · $(echo $R|head -c 160)"
-[ "$(DB "select string_agg(action,',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$ID and \"backfilledAt\" is not null")" = "NO_PARTS,SCHEDULED,ASSIGNED,CLOSED" ] \
-  && pass "DB: ทุกขั้นที่เหลือถูกบันทึกและติดป้ายย้อนหลัง (ไม่ใช้อะไหล่ → นัดลูกค้า → จ่ายงาน → ปิด)" || fail "ขั้น: $(DB "select string_agg(action,',' order by \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$ID")"
+[ "$(DB "select string_agg(action,',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$ID and \"backfilledAt\" is not null")" = "NO_PARTS,ASSIGNED,CONFIRMED,DISPATCHED,CLOSED" ] \
+  && pass "DB: ทุกขั้นที่เหลือถูกบันทึกและติดป้ายย้อนหลัง (ไม่ใช้อะไหล่ → จ่ายงาน → คอนเฟิร์ม → ยืนยันออกงาน → ปิด)" || fail "ขั้น: $(DB "select string_agg(action,',' order by \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$ID")"
 [ "$(DB "select to_char((\"createdAt\" at time zone 'UTC') at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='CLOSED'")" = "$D2 15:10" ] \
   && pass "DB: ประวัติปิดงานลงเวลาจริงของงาน ไม่ใช่เวลาที่กด" || fail "เวลาประวัติ"
 [ "$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='BACKFILLED' and \"backfilledAt\" is null")" = "ช่างซ่อมเสร็จแล้วแต่ไม่ได้กดในแอป" ] \
@@ -63,8 +63,8 @@ echo "$R" | grep -q "ปิดไปแล้ว" && pass "ใบที่ปิ
 HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='T001'")
 DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values ('ZBS$SUF','ซุปเปอร์ปิดย้อนหลัง','SUPER_ADMIN','$HASH',false)" >/dev/null
 SA=$(login ZBS$SUF)
-curl -s "localhost:4000/api/work-orders/$ID/timeline" -H "$(H $SA)" | J 'const e=d.events.filter(e=>e.tags&&e.tags.some(t=>t.text.startsWith("แอดมินบันทึกย้อนหลัง"))); e.length===4&&!d.summary.open?"ok":"bad"' | grep -q ok \
-  && pass "ไทม์ไลน์ติดป้าย \"แอดมินบันทึกย้อนหลัง\" ทั้ง 4 ขั้น และนับว่าปิดแล้ว" || fail "ไทม์ไลน์ไม่ติดป้าย"
+curl -s "localhost:4000/api/work-orders/$ID/timeline" -H "$(H $SA)" | J 'const e=d.events.filter(e=>e.tags&&e.tags.some(t=>t.text.startsWith("แอดมินบันทึกย้อนหลัง"))); e.length===5&&!d.summary.open?"ok":"bad"' | grep -q ok \
+  && pass "ไทม์ไลน์ติดป้าย \"แอดมินบันทึกย้อนหลัง\" ทั้ง 5 ขั้น และนับว่าปิดแล้ว" || fail "ไทม์ไลน์ไม่ติดป้าย"
 
 ID3=$(newwo); IDS="$IDS $ID3"
 R=$(POST $A "work-orders/$ID3/backfill-close" "$(body "\"visitTime\":null,\"closedAt\":\"${D2}T08:00:00+07:00\"")")

@@ -31,6 +31,19 @@ export const colors = {
   warningSoft: "#FFFBEB",
   /** ขอบของการ์ดหรือชิปที่เกินเวลา — เส้นเหลืองช่วยให้เห็นจากระยะไกลกว่าพื้นอ่อนอย่างเดียว */
   warningBorder: "#FDE68A",
+  /**
+   * สีตาม "ใบงานรอใคร" (เจ้าของงานเลือก ต.ค. 69) — ป้ายสถานะ แถบซ้ายแถว ตัวกรองรอใคร และวงขั้นปัจจุบัน
+   * ใช้ชุดเดียวกันทุกที่ จำครั้งเดียว: ม่วง = แอดมิน · ฟ้าเข้ม = หัวหน้าภาค · เขียว = ช่าง
+   * (รอคนนอกใช้ warning* · ปิดงานใช้ done*)
+   */
+  roleAdmin: "#6D28D9",
+  roleAdminSoft: "#F1EAFE",
+  roleSupervisor: "#0369A1",
+  roleSupervisorSoft: "#E0F2FE",
+  roleTech: "#047857",
+  roleTechSoft: "#E3F7EE",
+  doneInk: "#3F6212",
+  doneSoft: "#ECF7D9",
   background: "#F4F9FD",
   card: "#FFFFFF",
   border: "#E2E8F0",

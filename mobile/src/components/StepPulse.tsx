@@ -15,7 +15,7 @@ const PERIOD = 2200;
  * ไม่ใช่ขยายขนาดจริง — ไม่ดันตำแหน่งวงข้าง ๆ และไม่ต้องคำนวณ layout ใหม่ทุกเฟรม
  * คนที่ตั้ง "ลดการเคลื่อนไหว" ไม่เห็นคลื่น เหลือวงแหวนนิ่งของ stepDotNow อย่างเดียว
  */
-export default function StepPulse({ size }: { size: number }) {
+export default function StepPulse({ size, color = colors.primary }: { size: number; color?: string }) {
   const waves = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
   const [reduced, setReduced] = useState(false);
 
@@ -58,6 +58,7 @@ export default function StepPulse({ size }: { size: number }) {
             StyleSheet.absoluteFill,
             styles.ring,
             {
+              borderColor: color,
               borderRadius: size / 2,
               opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.9, 0] }),
               transform: [{ scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 2.1] }) }],
@@ -72,5 +73,5 @@ export default function StepPulse({ size }: { size: number }) {
 const styles = StyleSheet.create({
   // ทับขอบนอกของวงขั้น (วงมีเส้นขอบ 2 px ลูกที่ absolute เริ่มนับจากด้านในเส้นขอบ)
   box: { position: "absolute", top: -2, left: -2 },
-  ring: { borderWidth: 2, borderColor: colors.primary },
+  ring: { borderWidth: 2 },
 });

@@ -53,8 +53,9 @@ echo "═══ ใบงานของทีมกระบี่"
 WO=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","model":"Haier","symptom":"ทดสอบทีมรวม"}]}')
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); IDS="$IDS $ID"
 POST $S "work-orders/$ID/parts" '{"needsParts":false}' >/dev/null
-POST $A "work-orders/$ID/schedule" '{"scheduledAt":"2026-11-10"}' >/dev/null
-POST $S "work-orders/$ID/assign" '{"team":"กระบี่"}' >/dev/null
+POST $S "work-orders/$ID/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}' >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
+POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(DB "select \"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "กระบี่" ] && pass "DB: ใบงานจ่ายให้ทีมกระบี่ (ทีมช่างจริง)" || fail "จ่ายงานไม่ได้"
 has() { curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $1)" | J "const r=d.rows||d; r.some(w=>w.id===$ID)?'yes':'no'"; }
 [ "$(has $T1)|$(has $T3)|$(has $T2)" = "yes|yes|no" ] && pass "ช่างทีมรวมกระบี่และทีมรวมทุกทีมเห็นใบงาน · ทีมรวมกรุงเทพไม่เห็น" || fail "เห็นใบงาน: $(has $T1) $(has $T3) $(has $T2)"

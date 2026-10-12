@@ -67,9 +67,9 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 type Sort = "urgent" | "new" | "old" | "az" | "za";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
-  { value: "ADMIN", label: "แอดมิน", color: colors.navy },
-  { value: "SUPERVISOR", label: "หัวหน้าภาค", color: colors.primary },
-  { value: "EMPLOYEE", label: "ช่าง", color: colors.success },
+  { value: "ADMIN", label: "แอดมิน", color: colors.roleAdmin },
+  { value: "SUPERVISOR", label: "หัวหน้าภาค", color: colors.roleSupervisor },
+  { value: "EMPLOYEE", label: "ช่าง", color: colors.roleTech },
 ];
 const ROLE_LABEL: Record<Role, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
 
@@ -111,7 +111,7 @@ export function stuckLabel(iso: string) {
   return n <= 0 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${n} วัน`;
 }
 
-type Filter = "INBOX" | "ACTIVE" | "PARTS_CHECKED" | "IN_PROGRESS" | "DONE" | "ALL";
+type Filter = "INBOX" | "ACTIVE" | "AWAITING_CONFIRM" | "IN_PROGRESS" | "DONE" | "ALL";
 
 /**
  * ชิปกรองรายการ — ค่าที่ส่งต้องเป็นสถานะจริงที่เซิร์ฟเวอร์รู้จัก
@@ -123,34 +123,51 @@ type Filter = "INBOX" | "ACTIVE" | "PARTS_CHECKED" | "IN_PROGRESS" | "DONE" | "A
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
-  { value: "PARTS_CHECKED", label: "รอนัดลูกค้า" },
+  { value: "AWAITING_CONFIRM", label: "รอคอนเฟิร์มลูกค้า" },
   { value: "IN_PROGRESS", label: "รอช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },
 ];
 
 /**
- * สีป้ายสถานะตามความหมายของ OTTERI
+ * ใบงานรอใคร — ตัดสินสีของป้ายสถานะ
  *
- * เดิมทุกขั้นที่ยังไม่จบเป็นสีแดง แต่แดงในระบบนี้แปลว่าผิดปกติหรือลบ — ใบงาน
- * ที่เดินตามขั้นปกติไม่ได้ผิดอะไร พอแดงทั้งหน้าคนก็เลิกสังเกตสีไปเลย
- * - ฟ้า: รอคนในบริษัททำขั้นถัดไป (ระบุอะไหล่ เช็คคลัง จ่ายงาน นัดวัน ช่างเข้า)
- * - เหลือง: รอคนนอก (ลูกค้าตอบราคา จ่ายเงิน คอนเฟิร์มนัด · ของเข้าคลัง) ซึ่งเราเร่งเองไม่ได้
- * - เขียว: ปิดงานแล้ว · เทา: ยกเลิก
- * ตัวอักษรใช้สีเข้ม (*Ink) เพราะสีหลักอ่อนเกินไปบนพื้นอ่อน
+ * ตรงกับ WORK_ORDER_STAGE_ACTOR ฝั่ง backend ยกเว้นขั้นที่รอคนนอก (ลูกค้าจ่ายเงิน ของเข้าคลัง)
+ * ซึ่งแยกเป็นสีส้ม — คนในบริษัทเร่งเองไม่ได้ ไม่ควรดูเหมือนงานค้างของใคร
  */
+export type Owner = "ADMIN" | "SUPERVISOR" | "EMPLOYEE" | "OUTSIDE" | "DONE" | "CANCELLED";
+export const STATUS_OWNER: Record<string, Owner> = {
+  NEW: "SUPERVISOR",
+  INSPECTING: "EMPLOYEE",
+  AWAITING_QUOTE: "ADMIN",
+  AWAITING_PAYMENT: "OUTSIDE",
+  WAITING_PARTS: "OUTSIDE",
+  PARTS_REQUESTED: "ADMIN",
+  PARTS_CHECKED: "SUPERVISOR",
+  AWAITING_CONFIRM: "ADMIN",
+  ASSIGNED: "SUPERVISOR",
+  IN_PROGRESS: "EMPLOYEE",
+  DONE: "DONE",
+  CANCELLED: "CANCELLED",
+};
+
+/**
+ * สีตามคนที่ใบงานรอ (เจ้าของงานเลือก ต.ค. 69)
+ *
+ * เดิมเกือบทุกขั้นเป็นฟ้าเหมือนกัน กวาดตาแล้วแยกไม่ออกว่าใบไหนค้างที่ใคร
+ * fg = ตัวอักษร/จุด · bg = พื้นป้าย · ตัวอักษรใช้สีเข้มเพราะสีอ่อนอ่านไม่ออกบนพื้นอ่อน
+ */
+export const OWNER_TONE: Record<Owner, { bg: string; fg: string }> = {
+  ADMIN: { bg: colors.roleAdminSoft, fg: colors.roleAdmin },
+  SUPERVISOR: { bg: colors.roleSupervisorSoft, fg: colors.roleSupervisor },
+  EMPLOYEE: { bg: colors.roleTechSoft, fg: colors.roleTech },
+  OUTSIDE: { bg: colors.warningSoft, fg: colors.warningInk },
+  DONE: { bg: colors.doneSoft, fg: colors.doneInk },
+  CANCELLED: { bg: colors.tile, fg: colors.textMuted },
+};
+
 export function statusTone(status: string) {
-  if (status === "DONE") return { bg: colors.successSoft, fg: colors.successInk };
-  if (status === "CANCELLED") return { bg: colors.tile, fg: colors.textMuted };
-  if (
-    status === "AWAITING_QUOTE" ||
-    status === "AWAITING_PAYMENT" ||
-    status === "AWAITING_CONFIRM" ||
-    status === "WAITING_PARTS"
-  ) {
-    return { bg: colors.warningSoft, fg: colors.warningInk };
-  }
-  return { bg: colors.primarySoft, fg: colors.primaryInk };
+  return OWNER_TONE[STATUS_OWNER[status] ?? "SUPERVISOR"];
 }
 
 export function formatDateTime(iso: string | null) {
@@ -560,12 +577,7 @@ function WaitingOn({ row }: { row: WorkOrderRow }) {
           ? `ทีม${row.waitingOnTeam}`
           : null
         : null;
-  const tone =
-    row.stageActor === "ADMIN"
-      ? { bg: colors.sky50, fg: colors.navy }
-      : row.stageActor === "SUPERVISOR"
-        ? { bg: colors.primarySoft, fg: colors.primaryInk }
-        : { bg: colors.successSoft, fg: colors.successInk };
+  const tone = OWNER_TONE[row.stageActor];
   return (
     <View style={[styles.waitTag, { backgroundColor: tone.bg }]}>
       <Text style={[styles.waitText, { color: tone.fg }]} numberOfLines={1}>
@@ -618,6 +630,8 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   const tone = statusTone(row.status);
   return (
     <TouchableOpacity style={[styles.tr, !last && styles.trLine]} onPress={onPress} activeOpacity={0.7}>
+      {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
+      <View style={[styles.rowBar, { backgroundColor: tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
         <View style={styles.rowIcon}>
           <Ionicons name="clipboard-outline" size={18} color={colors.primaryInk} />
@@ -678,7 +692,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 }) {
   const tone = statusTone(row.status);
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity style={[styles.card, { borderLeftColor: tone.fg }]} onPress={onPress} activeOpacity={0.8}>
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? (
@@ -806,6 +820,7 @@ const styles = StyleSheet.create({
   colTeam: { flex: 1.3 },
   colStatus: { flex: 1.6, gap: 2 },
   colWait: { flex: 1.6, minWidth: 0 },
+  rowBar: { position: "absolute", left: 0, top: 10, bottom: 10, width: 4, borderTopRightRadius: 4, borderBottomRightRadius: 4 },
   thSort: { flexDirection: "row", alignItems: "center", gap: 4 },
   filterPanel: {
     marginHorizontal: spacing.lg,
@@ -908,6 +923,7 @@ const styles = StyleSheet.create({
   list: { padding: spacing.lg, paddingTop: 0, gap: spacing.md },
   card: {
     backgroundColor: colors.card,
+    borderLeftWidth: 4,
     borderRadius: radius.md,
     padding: spacing.lg,
     gap: spacing.xs,
