@@ -44,6 +44,7 @@ export const colors = {
   roleTechSoft: "#E3F7EE",
   doneInk: "#3F6212",
   doneSoft: "#ECF7D9",
+  doneLine: "#C9E4A0",
   background: "#F4F9FD",
   card: "#FFFFFF",
   border: "#E2E8F0",

@@ -477,6 +477,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const tone = statusTone(order.status);
   const urgent = order.priority === "URGENT";
   const done = order.status === "DONE" || order.status === "CANCELLED";
+  // ปิดแล้วการ์ดทุกใบเป็นเขียว (เจ้าของงานเลือกแบบ B ต.ค. 69) — เปิดมาก็รู้ทันทีว่างานจบ
+  // ไม่ต้องหาป้ายสถานะ · ยกเลิกไม่นับ เพราะงานไม่ได้ซ่อมเสร็จ
+  const closedOk = order.status === "DONE";
+  const card = closedOk ? [styles.card, styles.cardDone] : styles.card;
   const mine =
     order.assignedToName === user?.name ||
     inMyTeam(user, order.assignedTeam);
@@ -522,7 +526,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {user?.role === "ADMIN" && order.status !== "DONE" && order.status !== "CANCELLED" ? (
         <BackfillButton onPress={() => setBackfilling(true)} />
       ) : null}
-      <View style={styles.card}>
+      {closedOk ? (
+        <View style={styles.doneBand}>
+          <Ionicons name="checkmark-circle" size={18} color="#fff" />
+          <Text style={styles.doneBandText}>ปิดงานแล้ว</Text>
+          <View style={{ flex: 1 }} />
+          {order.closedAt ? <Text style={styles.doneBandWhen}>{formatDateTime(order.closedAt)}</Text> : null}
+        </View>
+      ) : null}
+      <View style={card}>
         {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
         {urgent ? <UrgentGlow radius={radius.xl} /> : null}
         {urgent ? (
@@ -537,7 +549,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
           {urgent ? <UrgentBadge /> : null}
           <View style={{ flex: 1 }} />
-          <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+          <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }]}>
             <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
           </View>
         </View>
@@ -758,7 +770,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       </View>
 
       <View style={[styles.infoGrid, twoCol && styles.infoGridWide]}>
-        <View style={[styles.card, styles.infoCard]}>
+        <View style={[card, styles.infoCard]}>
           <View style={styles.infoHead}>
             <Ionicons name="business-outline" size={20} color={colors.primaryInk} />
             <Text style={[styles.infoTitle, headingFont]}>สาขาและเครื่อง</Text>
@@ -817,7 +829,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           ) : null}
         </View>
 
-        <View style={[styles.card, styles.infoCard]}>
+        <View style={[card, styles.infoCard]}>
           <View style={styles.infoHead}>
             <Ionicons name="people-outline" size={20} color={colors.primaryInk} />
             <Text style={[styles.infoTitle, headingFont]}>การมอบหมาย</Text>
@@ -842,7 +854,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       </View>
 
       {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
-      <View style={styles.card}>
+      <View style={card}>
         <View style={styles.headRow}>
           <Text style={styles.sectionTitle}>อาการ / สถานะ</Text>
           <View style={{ flex: 1 }} />
@@ -937,7 +949,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         คือการบังคับให้คนอ่านสองรอบเพื่อรู้เท่าเดิม
       */}
       {order.outageId !== null && !order.closedAt ? (
-        <View style={[styles.card, styles.linked]}>
+        <View style={[card, styles.linked]}>
           <View style={styles.headRow}>
             <Ionicons
               name={order.outageStillOpen ? "alert-circle" : "checkmark-circle"}
@@ -957,12 +969,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       ) : null}
 
       {order.closedAt ? (
-        <View style={styles.card}>
+        <View style={card}>
           <Text style={styles.sectionTitle}>ผลการทำงาน</Text>
           <Row label="ผล" value={order.closeResultLabel ?? "—"} />
           {/* สรุปงานคือสิ่งที่คนเปิดใบปิดแล้วมาหา (เจ้าของงานให้ตัวหนา) — เดิมเป็นตัวเทาเล็กไม่มีหัวข้อ */}
           {order.closeNote ? (
-            <View style={styles.summaryBox}>
+            <View style={[styles.summaryBox, closedOk && styles.summaryBoxDone]}>
               <Text style={styles.summaryLabel}>สรุปงานที่ทำ</Text>
               <Text style={styles.summaryText}>{order.closeNote}</Text>
             </View>
@@ -1065,7 +1077,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      <History logs={order.logs} />
+      <History logs={order.logs} closed={closedOk} />
 
       {canFollowUp ? (
         <TouchableOpacity
@@ -2592,13 +2604,13 @@ const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
   EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "ช่าง" },
 };
 
-function History({ logs }: { logs: WorkOrder["logs"] }) {
+function History({ logs, closed }: { logs: WorkOrder["logs"]; closed: boolean }) {
   const [all, setAll] = useState(false);
   const ordered = [...logs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
   const minor = ordered.filter((l) => MINOR_ACTIONS.has(l.action)).length;
   const shown = all ? ordered : ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, closed && styles.cardDone]}>
       <Text style={styles.sectionTitle}>ประวัติ</Text>
       {shown.map((log, i) => {
         const role = log.byRole ? ROLE_DOT[log.byRole] : undefined;
@@ -3227,6 +3239,20 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     backgroundColor: colors.background,
   },
+  cardDone: { backgroundColor: colors.doneSoft, borderColor: colors.doneLine },
+  doneBand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.doneInk,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  doneBandText: { color: "#fff", fontSize: 15, lineHeight: 22, fontWeight: "800" },
+  doneBandWhen: { color: "#fff", opacity: 0.9, fontSize: 13, lineHeight: 20 },
+  // การ์ดเขียวแล้ว กล่องสรุปงานเป็นพื้นขาวให้ยังเด่นเป็นอันดับแรก
+  summaryBoxDone: { backgroundColor: colors.card },
   summaryBox: {
     marginVertical: spacing.sm,
     borderLeftWidth: 4,
