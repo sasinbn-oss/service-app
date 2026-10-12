@@ -708,7 +708,9 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     },
     select: listSelect,
     // ด่วนขึ้นก่อน แล้วเก่าสุดขึ้นก่อน — ลำดับที่ควรหยิบไปทำ
-    orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+    // priority เก็บเป็นข้อความ — เรียงจากมากไปน้อยได้ URGENT → NORMAL → LOW พอดี
+    // (เดิมเรียงน้อยไปมาก ใบด่วนจึงไปอยู่ท้ายสุด ทั้งที่คอมเมนต์บอกว่า "ด่วนขึ้นก่อน")
+    orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
   });
 
   // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
