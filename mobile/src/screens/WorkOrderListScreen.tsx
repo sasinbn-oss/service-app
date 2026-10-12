@@ -32,7 +32,6 @@ import { useAuth } from "../context/AuthContext";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
-import { timing } from "../utils/motion";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
 
@@ -330,97 +329,36 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   useRefreshHandler(load);
 
   /**
-   * มือถือ: เลื่อนลงดูใบงานแล้วหัวหน้า+ตัวกรองหุบเหลือแถบเดียว (เจ้าของงานเลือกแบบ C ต.ค. 69)
-   * กางเต็มกินเกือบทั้งจอ เห็นใบงานแค่ใบสองใบ — แถบที่หุบยังบอกว่ากรองอะไรอยู่ กดแล้วกลับขึ้นบนสุดและกางอีกครั้ง
+   * มือถือ: หัวหน้า+ตัวกรองเลื่อนขึ้นไปพร้อมรายการตามนิ้ว แล้วเหลือแถบสรุปแถบเดียวติดบน
+   * (เจ้าของงานเลือกแบบ C ต.ค. 69 · ใช้จริงแล้วขอให้ "เลื่อนปิดตามมือ")
    *
-   * หุบ/กางคนละระยะ (มากกว่า 80 / น้อยกว่า 4) กันกระพริบตอนนิ้วค้างแถวเส้นเดียว
-   * และหุบเฉพาะเมื่อรายการยาวพอ — รายการสั้นที่หุบแล้วจอสูงขึ้นจนเลื่อนไม่ได้ จะเด้งกลับไปบนสุดแล้วกางวนไม่จบ
+   * หัวหน้าอยู่ในรายการเดียวกับใบงาน (ListHeaderComponent) จึงเลื่อนด้วยการเลื่อนจริงของเครื่อง
+   * ทุกพิกเซลตามนิ้ว ไม่มีจังหวะหุบ/กางที่ตัดสินจากระยะ — ของเดิมที่ยุบความสูงตามเกณฑ์ 80 จุด
+   * ทำให้รายการกระตุกไม่ว่าจะใส่ภาพเคลื่อนไหวนุ่มแค่ไหน เพราะความสูงเปลี่ยนระหว่างนิ้วกำลังลาก
+   * แถบสรุปค่อย ๆ โผล่ตามระยะเลื่อนเมื่อขอบล่างของหัวหน้าพ้นจอ แตะแล้วเลื่อนกลับขึ้นบนสุด
    */
   const foldable = width < 640;
-  const [folded, setFolded] = useState(false);
-  /**
-   * หุบ/กางแบบค่อย ๆ ยุบ ไม่ใช่หายฉับ (เจ้าของงานใช้จริงแล้วขอให้นุ่มกว่านี้)
-   * ความสูงหัวหน้าไล่จากที่วัดได้ลงไป 0 พร้อมแถบสรุปไล่จาก 0 ขึ้นมา รายการจึงเลื่อนขึ้นตามอย่างต่อเนื่อง
-   * ระหว่างเคลื่อน (moving) ไม่รับสัญญาณเลื่อน — ตอนกาง รายการถูกดันลงจนตำแหน่งเลื่อนเปลี่ยน แล้วจะหุบซ้ำ
-   */
-  const fold = useRef(new Animated.Value(0)).current;
-  const [moving, setMoving] = useState(false);
+  const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<ListItem>>(null);
-  const headH = useRef(0);
-  const viewH = useRef(0);
-  const contentH = useRef(0);
-  // แตะแถบแล้วรายการค่อย ๆ เลื่อนกลับขึ้นบนสุด ระหว่างทางยังเกิน 80 — ห้ามหุบจนกว่าจะถึงบนสุดจริง
-  const holdOpen = useRef(false);
-  function foldTo(next: boolean) {
-    setFolded(next);
-    setMoving(true);
-    timing(fold, next ? 1 : 0, 320).start(() => setMoving(false));
-  }
-  useEffect(() => {
-    if (!foldable && folded) foldTo(false);
-  }, [foldable]);
+  const [headH, setHeadH] = useState(0);
+  const [barOn, setBarOn] = useState(false);
   function onListScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    if (!foldable || moving) return;
-    const y = e.nativeEvent.contentOffset.y;
-    if (holdOpen.current) {
-      if (y < 4) holdOpen.current = false;
-      return;
-    }
-    if (!folded && headH.current > 0 && y > 80 && contentH.current - viewH.current > headH.current + 40) foldTo(true);
-    else if (folded && y < 4) foldTo(false);
+    // แถบสรุปกดได้เฉพาะตอนเห็นแล้ว — ตอนจางอยู่ไม่ควรบังปุ่มของหัวหน้าข้างใต้
+    const on = headH > 0 && e.nativeEvent.contentOffset.y > headH - 20;
+    if (on !== barOn) setBarOn(on);
   }
-  function unfold() {
-    holdOpen.current = true;
+  function backToTop() {
     listRef.current?.scrollToOffset({ offset: 0, animated: true });
-    foldTo(false);
   }
-  // คงความสูงตายตัวเฉพาะตอนหุบหรือกำลังเคลื่อน — ตอนกางเต็มปล่อยให้สูงตามเนื้อหา (แถว "คนไหน" โผล่/หายได้)
-  const sliding = folded || moving;
 
-  return (
-    <View style={styles.container}>
-      {foldable && sliding ? (
-        <Animated.View
-          style={{
-            height: fold.interpolate({ inputRange: [0, 1], outputRange: [0, FOLDED_H] }),
-            opacity: fold,
-            overflow: "hidden",
-            zIndex: 1,
-          }}
-        >
-          <FoldedBar
-            count={shown.length}
-            parts={[
-              FILTERS.find((f) => f.value === filter)?.label ?? "",
-              mineOnly ? "เฉพาะงานของฉัน" : "",
-              prefs.owner ? `รอ${ROLE_TABS.find((t) => t.value === prefs.owner)?.label ?? ""}` : "",
-              prefs.who ? whoLabel(rows, prefs.who, prefs.owner) : "",
-              prefs.btype,
-              prefs.sort !== "urgent" ? SORTS.find((o) => o.value === prefs.sort)?.label ?? "" : "",
-              settledSearch.trim() ? `ค้น “${settledSearch.trim()}”` : "",
-            ].filter(Boolean)}
-            onPress={unfold}
-          />
-        </Animated.View>
-      ) : null}
-      <Animated.View
-        pointerEvents={folded ? "none" : "auto"}
-        style={
-          sliding
-            ? {
-                height: fold.interpolate({ inputRange: [0, 1], outputRange: [headH.current, 0] }),
-                opacity: fold.interpolate({ inputRange: [0, 0.7], outputRange: [1, 0], extrapolate: "clamp" }),
-                overflow: "hidden",
-                // ยึดขอบล่างไว้กับรายการ — ส่วนบนถูกตัดก่อน ดูเหมือนเลื่อนขึ้นไปซ่อนใต้แถบสรุป
-                // ถ้ายึดขอบบน เนื้อหาจะถูกแถบสรุปที่โตขึ้นดันลงก่อนหาย ดูสะดุด
-                justifyContent: "flex-end",
-              }
-            : null
-        }
-        onLayout={(e) => {
-          if (!sliding) headH.current = e.nativeEvent.layout.height;
-        }}
-      >
+  const header = (
+    <View
+      style={foldable ? styles.headInList : null}
+      onLayout={(e) => {
+        const h = Math.round(e.nativeEvent.layout.height);
+        if (h !== headH) setHeadH(h);
+      }}
+    >
       {/*
         หัวหน้าแบบ OTTERI: ชื่อหน้า + ป้ายจำนวนของกลุ่มที่เลือก + คำอธิบายบรรทัดเดียว
         ป้ายจำนวนนับจากรายการที่โหลดมาจริง ไม่ใช่ตัวเลขบนชิป — ค้นหาแล้วตัวเลขจะลดตามที่เห็น
@@ -494,56 +432,73 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       {!loading && !error && rows.length > 0 ? (
         <ListFilters rows={rows} prefs={prefs} setPref={setPref} byOwner={byOwner} byType={byType} />
       ) : null}
-      </Animated.View>
+    </View>
+  );
 
-      {loading ? (
-        <View style={styles.centered}>
-          <Spinner color={colors.primary} />
-        </View>
-      ) : error ? (
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={load} style={styles.retry}>
-            <Text style={styles.retryText}>ลองใหม่</Text>
-          </TouchableOpacity>
-        </View>
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon="clipboard-outline"
-          title="ไม่มีใบงานในหมวดนี้"
-          text="เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
-        />
-      ) : shown.length === 0 ? (
-        <EmptyState
-          icon="funnel-outline"
-          title="ไม่มีใบงานตามตัวกรองนี้"
-          text="ลองเลือก “ทุกคน” หรือ “ทั้งหมด” ในแถวรอใคร / สาขา"
-        />
+  const status = loading ? (
+    <View style={styles.centered}>
+      <Spinner color={colors.primary} />
+    </View>
+  ) : error ? (
+    <View style={styles.centered}>
+      <Text style={styles.errorText}>{error}</Text>
+      <TouchableOpacity onPress={load} style={styles.retry}>
+        <Text style={styles.retryText}>ลองใหม่</Text>
+      </TouchableOpacity>
+    </View>
+  ) : rows.length === 0 ? (
+    <EmptyState
+      icon="clipboard-outline"
+      title="ไม่มีใบงานในหมวดนี้"
+      text="เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
+    />
+  ) : shown.length === 0 ? (
+    <EmptyState
+      icon="funnel-outline"
+      title="ไม่มีใบงานตามตัวกรองนี้"
+      text="ลองเลือก “ทุกคน” หรือ “ทั้งหมด” ในแถวรอใคร / สาขา"
+    />
+  ) : null;
+
+  return (
+    <View style={styles.container}>
+      {foldable ? null : header}
+      {!foldable && status ? (
+        status
       ) : (
         /*
           FlatList ไม่ใช่ ScrollView เพราะ ScrollView สร้างการ์ดทุกใบตั้งแต่เปิดหน้า
           รายการที่เปิดค้างสองร้อยใบจึงต้องวาดสองร้อยใบก่อนภาพแรกจะขึ้น
           ทั้งที่จอเห็นพร้อมกันได้ห้าใบ — FlatList วาดเฉพาะที่กำลังจะเห็น
         */
-        <FlatList
+        <Animated.FlatList
           ref={listRef}
-          onScroll={onListScroll}
-          scrollEventThrottle={32}
-          onLayout={(e) => (viewH.current = e.nativeEvent.layout.height)}
-          onContentSizeChange={(_, h) => (contentH.current = h)}
-          data={items}
-          keyExtractor={(it) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
+          onScroll={
+            foldable
+              ? Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+                  useNativeDriver: false,
+                  listener: onListScroll,
+                })
+              : undefined
+          }
+          scrollEventThrottle={16}
+          data={status ? [] : items}
+          keyExtractor={(it: ListItem) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
           contentContainerStyle={table ? styles.tableList : styles.list}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
+          ListEmptyComponent={status}
           ListHeaderComponent={
-            table ? (
-              <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
-            ) : null
+            <>
+              {foldable ? header : null}
+              {table ? (
+                <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+              ) : null}
+            </>
           }
-          renderItem={({ item, index }) =>
+          renderItem={({ item, index }: { item: ListItem; index: number }) =>
             "sep" in item ? (
               <View style={[table ? styles.sepRow : styles.sepCard, item.sep === "URGENT" && styles.sepUrgent]}>
                 <Text style={[styles.sepText, item.sep === "URGENT" && styles.sepTextUrgent]}>
@@ -566,6 +521,45 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           }
         />
       )}
+      {foldable ? (
+        <Animated.View
+          pointerEvents={barOn ? "auto" : "none"}
+          style={[
+            styles.foldedWrap,
+            {
+              // โผล่ตามระยะเลื่อน 40 จุดสุดท้ายก่อนหัวหน้าพ้นจอ — ไม่ใช่สลับฉับตามเกณฑ์
+              opacity: scrollY.interpolate({
+                inputRange: [Math.max(0, headH - 40), Math.max(1, headH)],
+                outputRange: [0, 1],
+                extrapolate: "clamp",
+              }),
+              transform: [
+                {
+                  translateY: scrollY.interpolate({
+                    inputRange: [Math.max(0, headH - 40), Math.max(1, headH)],
+                    outputRange: [-FOLDED_H, 0],
+                    extrapolate: "clamp",
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <FoldedBar
+            count={shown.length}
+            parts={[
+              FILTERS.find((f) => f.value === filter)?.label ?? "",
+              mineOnly ? "เฉพาะงานของฉัน" : "",
+              prefs.owner ? `รอ${ROLE_TABS.find((t) => t.value === prefs.owner)?.label ?? ""}` : "",
+              prefs.who ? whoLabel(rows, prefs.who, prefs.owner) : "",
+              prefs.btype,
+              prefs.sort !== "urgent" ? SORTS.find((o) => o.value === prefs.sort)?.label ?? "" : "",
+              settledSearch.trim() ? `ค้น “${settledSearch.trim()}”` : "",
+            ].filter(Boolean)}
+            onPress={backToTop}
+          />
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -912,6 +906,10 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  // ลอยทับบนสุดของรายการ — ไม่ดันรายการลง ความสูงหน้าจอจึงไม่เปลี่ยนระหว่างเลื่อน
+  foldedWrap: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, ...shadow.card },
+  // หัวหน้าอยู่ในรายการซึ่งมีขอบซ้ายขวาอยู่แล้ว — หักออกให้หัวหน้ากว้างเต็มเหมือนตอนอยู่นอกรายการ
+  headInList: { marginHorizontal: -spacing.lg },
   folded: {
     height: FOLDED_H,
     flexDirection: "row",
