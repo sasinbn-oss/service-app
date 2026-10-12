@@ -7,6 +7,7 @@
 import React, { useRef, useCallback, useEffect, useMemo, useState } from "react";
 import {
   useWindowDimensions,
+  Animated,
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -31,6 +32,7 @@ import { useAuth } from "../context/AuthContext";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
+import { timing } from "../utils/motion";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
 
@@ -336,45 +338,87 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    */
   const foldable = width < 640;
   const [folded, setFolded] = useState(false);
+  /**
+   * หุบ/กางแบบค่อย ๆ ยุบ ไม่ใช่หายฉับ (เจ้าของงานใช้จริงแล้วขอให้นุ่มกว่านี้)
+   * ความสูงหัวหน้าไล่จากที่วัดได้ลงไป 0 พร้อมแถบสรุปไล่จาก 0 ขึ้นมา รายการจึงเลื่อนขึ้นตามอย่างต่อเนื่อง
+   * ระหว่างเคลื่อน (moving) ไม่รับสัญญาณเลื่อน — ตอนกาง รายการถูกดันลงจนตำแหน่งเลื่อนเปลี่ยน แล้วจะหุบซ้ำ
+   */
+  const fold = useRef(new Animated.Value(0)).current;
+  const [moving, setMoving] = useState(false);
   const listRef = useRef<FlatList<ListItem>>(null);
   const headH = useRef(0);
   const viewH = useRef(0);
   const contentH = useRef(0);
+  // แตะแถบแล้วรายการค่อย ๆ เลื่อนกลับขึ้นบนสุด ระหว่างทางยังเกิน 80 — ห้ามหุบจนกว่าจะถึงบนสุดจริง
+  const holdOpen = useRef(false);
+  function foldTo(next: boolean) {
+    setFolded(next);
+    setMoving(true);
+    timing(fold, next ? 1 : 0, 320).start(() => setMoving(false));
+  }
   useEffect(() => {
-    if (!foldable) setFolded(false);
+    if (!foldable && folded) foldTo(false);
   }, [foldable]);
   function onListScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    if (!foldable) return;
+    if (!foldable || moving) return;
     const y = e.nativeEvent.contentOffset.y;
-    if (!folded && y > 80 && contentH.current - viewH.current > headH.current + 40) setFolded(true);
-    else if (folded && y < 4) setFolded(false);
+    if (holdOpen.current) {
+      if (y < 4) holdOpen.current = false;
+      return;
+    }
+    if (!folded && headH.current > 0 && y > 80 && contentH.current - viewH.current > headH.current + 40) foldTo(true);
+    else if (folded && y < 4) foldTo(false);
   }
   function unfold() {
-    listRef.current?.scrollToOffset({ offset: 0, animated: false });
-    setFolded(false);
+    holdOpen.current = true;
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    foldTo(false);
   }
+  // คงความสูงตายตัวเฉพาะตอนหุบหรือกำลังเคลื่อน — ตอนกางเต็มปล่อยให้สูงตามเนื้อหา (แถว "คนไหน" โผล่/หายได้)
+  const sliding = folded || moving;
 
   return (
     <View style={styles.container}>
-      {folded ? (
-        <FoldedBar
-          count={shown.length}
-          parts={[
-            FILTERS.find((f) => f.value === filter)?.label ?? "",
-            mineOnly ? "เฉพาะงานของฉัน" : "",
-            prefs.owner ? `รอ${ROLE_TABS.find((t) => t.value === prefs.owner)?.label ?? ""}` : "",
-            prefs.who ? whoLabel(rows, prefs.who, prefs.owner) : "",
-            prefs.btype,
-            prefs.sort !== "urgent" ? SORTS.find((o) => o.value === prefs.sort)?.label ?? "" : "",
-            settledSearch.trim() ? `ค้น “${settledSearch.trim()}”` : "",
-          ].filter(Boolean)}
-          onPress={unfold}
-        />
+      {foldable && sliding ? (
+        <Animated.View
+          style={{
+            height: fold.interpolate({ inputRange: [0, 1], outputRange: [0, FOLDED_H] }),
+            opacity: fold,
+            overflow: "hidden",
+            zIndex: 1,
+          }}
+        >
+          <FoldedBar
+            count={shown.length}
+            parts={[
+              FILTERS.find((f) => f.value === filter)?.label ?? "",
+              mineOnly ? "เฉพาะงานของฉัน" : "",
+              prefs.owner ? `รอ${ROLE_TABS.find((t) => t.value === prefs.owner)?.label ?? ""}` : "",
+              prefs.who ? whoLabel(rows, prefs.who, prefs.owner) : "",
+              prefs.btype,
+              prefs.sort !== "urgent" ? SORTS.find((o) => o.value === prefs.sort)?.label ?? "" : "",
+              settledSearch.trim() ? `ค้น “${settledSearch.trim()}”` : "",
+            ].filter(Boolean)}
+            onPress={unfold}
+          />
+        </Animated.View>
       ) : null}
-      <View
-        style={folded ? styles.headHidden : null}
+      <Animated.View
+        pointerEvents={folded ? "none" : "auto"}
+        style={
+          sliding
+            ? {
+                height: fold.interpolate({ inputRange: [0, 1], outputRange: [headH.current, 0] }),
+                opacity: fold.interpolate({ inputRange: [0, 0.7], outputRange: [1, 0], extrapolate: "clamp" }),
+                overflow: "hidden",
+                // ยึดขอบล่างไว้กับรายการ — ส่วนบนถูกตัดก่อน ดูเหมือนเลื่อนขึ้นไปซ่อนใต้แถบสรุป
+                // ถ้ายึดขอบบน เนื้อหาจะถูกแถบสรุปที่โตขึ้นดันลงก่อนหาย ดูสะดุด
+                justifyContent: "flex-end",
+              }
+            : null
+        }
         onLayout={(e) => {
-          if (!folded) headH.current = e.nativeEvent.layout.height;
+          if (!sliding) headH.current = e.nativeEvent.layout.height;
         }}
       >
       {/*
@@ -450,7 +494,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       {!loading && !error && rows.length > 0 ? (
         <ListFilters rows={rows} prefs={prefs} setPref={setPref} byOwner={byOwner} byType={byType} />
       ) : null}
-      </View>
+      </Animated.View>
 
       {loading ? (
         <View style={styles.centered}>
@@ -542,6 +586,8 @@ function whoLabel(rows: WorkOrderRow[], who: Who, owner: Role | "") {
   }
   return "";
 }
+
+const FOLDED_H = 46;
 
 /** แถบเดียวตอนหุบ — บอกตัวกรองที่ใช้อยู่ และพากลับไปเปลี่ยนตัวกรองได้ในแตะเดียว */
 function FoldedBar({ count, parts, onPress }: { count: number; parts: string[]; onPress: () => void }) {
@@ -866,18 +912,15 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  // ซ่อนด้วย display:none ไม่ถอดทิ้ง — ข้อความที่พิมพ์ค้างในช่องค้นหาและตำแหน่งเลื่อนของแถวชิปต้องอยู่ครบตอนกางกลับ
-  headHidden: { display: "none" },
   folded: {
+    height: FOLDED_H,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
     backgroundColor: colors.card,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    ...shadow.card,
   },
   foldedCount: { backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingHorizontal: 10 },
   foldedCountText: { fontSize: 12, lineHeight: 22, fontWeight: "800", color: colors.primaryInk },

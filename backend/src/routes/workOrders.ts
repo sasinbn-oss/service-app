@@ -67,6 +67,7 @@ import {
   isValidMachineCode,
   isWarrantyExpired,
   warrantyEndFor,
+  warrantyYearsFor,
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
@@ -282,14 +283,18 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     // สาขาบริษัทไม่มีประกัน ตัดออกตั้งแต่ตรงนี้ ไม่ปล่อยให้หน้าจอไปตัดสินใจเอง
     // ว่าจะซ่อนไหม ไม่งั้นวันหลังมีหน้าจอที่สามแล้วลืมซ่อน
     branchIsCompany: isCompanyBranch(w.branch.code),
-    // วันหมดประกันคิดจากวันเปิดร้าน + 3 ปี เว้นแต่มีคนกรอกวันเฉพาะไว้
+    // วันหมดประกันคิดจากวันเปิดร้าน + ปีตามยี่ห้อเครื่องของใบนี้ (Oasis 2 · อื่น ๆ 3) เว้นแต่มีคนกรอกวันเฉพาะไว้
     // คิดที่เซิร์ฟเวอร์ที่เดียว หน้าจอจึงไม่ต้องรู้ว่ากฎกี่ปี
     branchWarrantyExpiresAt: isCompanyBranch(w.branch.code)
       ? null
-      : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt),
+      : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, w.machine?.brand),
     branchWarrantyExpired: isCompanyBranch(w.branch.code)
       ? null
-      : isWarrantyExpired(warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt)),
+      : isWarrantyExpired(warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, w.machine?.brand)),
+    // บอกว่าคิดจากกี่ปี — คนดูใบงานจะได้ไม่งงว่าทำไมสาขาเดียวกันเครื่องหนึ่งหมด อีกเครื่องยังไม่หมด
+    // ว่างเมื่อใช้วันที่กรอกเอง (ไม่ได้คิดจากกฎ)
+    branchWarrantyYears:
+      isCompanyBranch(w.branch.code) || w.branch.warrantyExpiresAt ? null : warrantyYearsFor(w.machine?.brand),
     machineCode: w.machine?.code ?? null,
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
@@ -391,6 +396,7 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
       needsParts: w.needsParts,
       openedAt: w.branch.openedAt,
       warrantyExpiresAt: w.branch.warrantyExpiresAt,
+      machineBrand: w.machine?.brand,
     }),
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
@@ -1493,7 +1499,10 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
    */
   const wo = await prisma.workOrder.findUniqueOrThrow({
     where: { id },
-    select: { branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } } },
+    select: {
+      branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+      machine: { select: { brand: true } },
+    },
   });
   const quoteFirst =
     needsParts &&
@@ -1502,6 +1511,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       needsParts: true,
       openedAt: wo.branch.openedAt,
       warrantyExpiresAt: wo.branch.warrantyExpiresAt,
+      machineBrand: wo.machine?.brand,
     });
 
   const nextStatus = !needsParts ? "PARTS_CHECKED" : quoteFirst ? "AWAITING_QUOTE" : "PARTS_REQUESTED";

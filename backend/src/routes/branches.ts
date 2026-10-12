@@ -14,7 +14,7 @@ import {
   parseCancelledWorkbook,
   planCancelledImport,
 } from "../machines/cancellationImport";
-import { warrantyEndFor } from "../utils/constants";
+import { warrantyEndFor, warrantyYearsFor } from "../utils/constants";
 
 const router = Router();
 
@@ -105,11 +105,37 @@ router.get("/", requireAuth, async (req, res) => {
    * และไม่มีทางที่หน้าจอสองหน้าจะคิดคนละแบบ — ค่าในตารางเป็นการกรอกทับเฉพาะราย
    * ซึ่งทะเบียนจริงยังไม่มีสักสาขา
    */
+  /**
+   * ประกันขึ้นกับยี่ห้อเครื่อง (Oasis 2 ปี · อื่น ๆ 3 ปี) — สาขาเดียวมีได้หลายยี่ห้อ จึงส่งแยกยี่ห้อมาด้วย
+   * ค่า warrantyExpiresAt ตัวเดียวใช้วันที่หมดเร็วสุด: ตอนเปิดใบงานยังไม่รู้ว่าเป็นเครื่องไหน
+   * บอกว่า "ยังอยู่ในประกัน" ทั้งที่เครื่อง Oasis หมดไปแล้ว อันตรายกว่าเตือนเกินไปหนึ่งปี
+   * ดึงยี่ห้อเป็นคิวรีเดียวทั้งชุด ไม่ใช่ทีละสาขา — หน้าจัดการสาขาขอทั้งพันกว่าแถว
+   */
+  const brandRows = await prisma.machine.groupBy({
+    by: ["branchId", "brand"],
+    where: { removedAt: null, branchId: { in: branches.map((b) => b.id) } },
+  });
+  const brandsOf = new Map<number, string[]>();
+  for (const r of brandRows) {
+    const name = r.brand?.trim();
+    if (!name) continue;
+    brandsOf.set(r.branchId, [...(brandsOf.get(r.branchId) ?? []), name]);
+  }
   res.json(
-    branches.map((b) => ({
-      ...b,
-      warrantyExpiresAt: warrantyEndFor(b.openedAt, b.warrantyExpiresAt),
-    }))
+    branches.map((b) => {
+      const warranties = (brandsOf.get(b.id) ?? [])
+        .map((brand) => ({
+          brand,
+          years: b.warrantyExpiresAt ? null : warrantyYearsFor(brand),
+          expiresAt: warrantyEndFor(b.openedAt, b.warrantyExpiresAt, brand),
+        }))
+        .sort((x, y) => (x.expiresAt?.getTime() ?? 0) - (y.expiresAt?.getTime() ?? 0));
+      return {
+        ...b,
+        warrantyExpiresAt: warranties[0]?.expiresAt ?? warrantyEndFor(b.openedAt, b.warrantyExpiresAt),
+        warranties,
+      };
+    })
   );
 });
 

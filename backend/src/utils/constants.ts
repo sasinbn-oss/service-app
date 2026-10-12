@@ -481,28 +481,40 @@ export function isCompanyBranch(branchCode: string): boolean {
 }
 
 /**
- * ประกันเครื่องมีอายุ 3 ปีนับจากวันเปิดร้าน
+ * ประกันเครื่องนับจากวันเปิดร้าน อายุขึ้นกับยี่ห้อเครื่อง (เจ้าของงานกำหนด ต.ค. 69)
+ * Oasis 2 ปี · Huebsch 3 ปี · ยี่ห้ออื่นหรือไม่รู้ยี่ห้อ 3 ปีตามกฎเดิม
  *
- * เป็นเงื่อนไขมาตรฐานของทุกสาขา จึงคิดเอาจากวันเปิดร้านแทนที่จะให้กรอกทีละสาขา —
- * ทะเบียนจริงมีวันเปิดร้านครบทั้ง 1,204 สาขา แต่ไม่มีวันหมดประกันสักสาขาเดียว
- * ถ้ารอให้กรอก ช่องนี้จะว่างตลอดไปและขั้นเสนอราคาจะเดาผิดทั้งระบบ
+ * คิดเอาจากวันเปิดร้านแทนที่จะให้กรอกทีละสาขา — ทะเบียนจริงมีวันเปิดร้านครบทั้ง 1,204 สาขา
+ * แต่ไม่มีวันหมดประกันสักสาขาเดียว ถ้ารอให้กรอก ช่องนี้จะว่างตลอดไปและขั้นเสนอราคาจะเดาผิดทั้งระบบ
+ *
+ * จับยี่ห้อแบบมีคำนี้อยู่ ไม่สนตัวพิมพ์ เพราะไฟล์รายงานเครื่องเขียนได้หลายแบบ (OASIS, Oasis, HB - Huebsch)
  */
 export const WARRANTY_YEARS = 3;
+const WARRANTY_YEARS_BY_BRAND: { match: RegExp; years: number }[] = [
+  { match: /oasis/i, years: 2 },
+  { match: /huebsch/i, years: 3 },
+];
+
+export function warrantyYearsFor(brand: string | null | undefined): number {
+  if (brand) for (const r of WARRANTY_YEARS_BY_BRAND) if (r.match.test(brand)) return r.years;
+  return WARRANTY_YEARS;
+}
 
 /**
- * วันหมดประกันของสาขา — คิดจากวันเปิดร้าน เว้นแต่มีคนกรอกวันเฉพาะไว้
+ * วันหมดประกัน — วันเปิดร้าน + จำนวนปีตามยี่ห้อ เว้นแต่มีคนกรอกวันเฉพาะของสาขาไว้
  *
- * ค่าที่กรอกเองชนะกฎ 3 ปี เพราะสัญญาบางฉบับต่างออกไป และคนที่ตั้งใจกรอก
+ * ค่าที่กรอกเองชนะกฎ เพราะสัญญาบางฉบับต่างออกไป และคนที่ตั้งใจกรอก
  * วันที่เจาะจงย่อมมีเอกสารอยู่ในมือ — แต่ไม่ใช่สิ่งที่ต้องทำเป็นปกติ
  */
 export function warrantyEndFor(
   openedAt: Date | null | undefined,
-  explicit?: Date | null
+  explicit?: Date | null,
+  brand?: string | null
 ): Date | null {
   if (explicit) return explicit;
   if (!openedAt) return null;
   const end = new Date(openedAt.getTime());
-  end.setFullYear(end.getFullYear() + WARRANTY_YEARS);
+  end.setFullYear(end.getFullYear() + warrantyYearsFor(brand));
   return end;
 }
 
@@ -526,7 +538,7 @@ export function isWarrantyExpired(
  * สามเงื่อนไขพร้อมกัน — สาขาบริษัท (รหัส C) ไม่ต้องเพราะเครื่องเป็นของบริษัทเอง
  * งานที่ไม่ใช้อะไหล่ไม่มีอะไรให้ขาย และของในประกันผู้ขายรับผิดชอบอยู่แล้ว
  *
- * วันหมดประกันคิดจากวันเปิดร้าน + 3 ปี จึงตอบได้เกือบทุกสาขา เหลือที่ตอบไม่ได้
+ * วันหมดประกันคิดจากวันเปิดร้าน + ปีตามยี่ห้อเครื่อง จึงตอบได้เกือบทุกสาขา เหลือที่ตอบไม่ได้
  * เฉพาะสาขาที่ไม่รู้แม้แต่วันเปิดร้าน ซึ่งถือว่าหมดประกันแล้วไว้ก่อน — ตีว่า
  * "ยังอยู่ในประกัน" แล้วส่งช่างไปใส่อะไหล่ฟรี เสียหายกว่าการถามราคาเกินจำเป็น
  * และแอดมินข้ามขั้นนี้ได้ถ้าที่จริงอยู่ในประกัน
@@ -536,11 +548,13 @@ export function needsCustomerQuote(opts: {
   needsParts: boolean | null;
   openedAt?: Date | null;
   warrantyExpiresAt: Date | null;
+  /** ยี่ห้อเครื่องของใบงาน — Oasis ประกันสั้นกว่ายี่ห้ออื่น */
+  machineBrand?: string | null;
   now?: Date;
 }): boolean {
   if (isCompanyBranch(opts.branchCode)) return false;
   if (opts.needsParts !== true) return false;
-  const end = warrantyEndFor(opts.openedAt, opts.warrantyExpiresAt);
+  const end = warrantyEndFor(opts.openedAt, opts.warrantyExpiresAt, opts.machineBrand);
   return isWarrantyExpired(end, opts.now) !== false;
 }
 
