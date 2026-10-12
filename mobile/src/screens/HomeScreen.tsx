@@ -221,7 +221,7 @@ export default function HomeScreen({ navigation }: Props) {
     >
       <Hero
         name={user?.name ?? ""}
-        role={user?.superAdmin ? "SUPER_ADMIN" : user?.role}
+        role={user?.superAdmin ? "SUPER_ADMIN" : user?.partsAdmin ? "PARTS_ADMIN" : user?.role}
         // หัวหน้าภาคส่วนใหญ่ถูกตั้งเป็น "ทีมที่ดูแล" จากไฟล์รายชื่อ ไม่ได้ตั้งภาค —
         // ดูแค่ team/region จะขึ้น "ยังไม่ได้จัดทีม" ทั้งที่เห็นและจ่ายงานของทีมได้ตามปกติ
         area={user?.team ?? user?.region ?? (user?.supervisedTeams?.length ? user.supervisedTeams.join(" · ") : null)}
@@ -297,6 +297,7 @@ const ROLE_LABEL: Record<string, string> = {
   EMPLOYEE: "ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
+  PARTS_ADMIN: "แอดมินอะไหล่",
   SUPER_ADMIN: "Super Admin",
 };
 
@@ -357,7 +358,7 @@ function Hero({
       <Text style={[styles.heroName, headingFont]}>{name}</Text>
       <View style={styles.heroArea}>
         <Ionicons name="people-outline" size={16} color="rgba(255,255,255,0.85)" />
-        <Text style={styles.heroAreaText}>{area ?? (role === "ADMIN" || role === "SUPER_ADMIN" ? "ดูแลทุกภาค" : "ยังไม่ได้จัดทีม")}</Text>
+        <Text style={styles.heroAreaText}>{area ?? (role === "ADMIN" || role === "PARTS_ADMIN" || role === "SUPER_ADMIN" ? "ดูแลทุกภาค" : "ยังไม่ได้จัดทีม")}</Text>
       </View>
 
       <View style={styles.heroDivider} />

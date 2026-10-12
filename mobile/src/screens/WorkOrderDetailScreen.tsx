@@ -2607,6 +2607,7 @@ function FileStrip({
 const MINOR_ACTIONS = new Set(["ATTACHED", "ATTACHMENT_REMOVED"]);
 const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
   ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft, label: "แอดมิน" },
+  PARTS_ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft, label: "แอดมินอะไหล่" },
   SUPER_ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft, label: "แอดมิน" },
   SUPERVISOR: { fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft, label: "หัวหน้าภาค" },
   EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "ช่าง" },

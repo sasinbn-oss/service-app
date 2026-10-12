@@ -10,15 +10,23 @@
  * ทำงานทุกอย่างได้เท่าแอดมิน — ตัวตรวจสิทธิ์ (middleware/auth.ts) มองเป็น ADMIN
  * ทุกที่ที่เช็ค "ADMIN" จึงใช้ได้กับ SUPER_ADMIN ด้วยโดยไม่ต้องไล่แก้
  * ที่ต่างกันมีแค่เรื่องตั้งสิทธิ์ผู้ใช้ระดับแอดมินขึ้นไป (routes/auth.ts)
+ *
+ * PARTS_ADMIN = แอดมินอะไหล่ (เจ้าของงานเพิ่ม ต.ค. 69) — คนเช็คประกัน สิทธิ์เท่าแอดมินทุกอย่าง
+ * มองเป็น ADMIN แบบเดียวกับ SUPER_ADMIN · เก็บแยกไว้เพราะจะมีขั้นสุดท้ายหลังช่างปิดงาน
+ * (แก้ใบปิดงานกรณีเปลี่ยนสินค้า/เคลมประกัน และตีกลับถ้าช่างปิดไม่ตรงฟอร์ม) ที่เป็นของตำแหน่งนี้
  */
-export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN", "SUPER_ADMIN"] as const;
-/** บทบาทระดับผู้ดูแลระบบ — นับรวมเวลาเช็คว่า "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน" */
-export const ADMIN_ROLES = ["ADMIN", "SUPER_ADMIN"];
+export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN", "PARTS_ADMIN", "SUPER_ADMIN"] as const;
+/**
+ * บทบาทระดับผู้ดูแลระบบ — นับรวมเวลาเช็คว่า "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน"
+ * และตั้ง/ถอดได้เฉพาะ Super Admin — แอดมินอะไหล่ทำได้เท่าแอดมิน ตั้งให้ใครก็คือให้สิทธิ์แอดมิน
+ */
+export const ADMIN_ROLES = ["ADMIN", "PARTS_ADMIN", "SUPER_ADMIN"];
 
 export const ROLE_LABELS: Record<string, string> = {
   EMPLOYEE: "ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
+  PARTS_ADMIN: "แอดมินอะไหล่",
   SUPER_ADMIN: "Super Admin",
 };
 export type Role = (typeof ROLES)[number];

@@ -47,6 +47,11 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
   { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาคหรือทีมที่ดูแล" },
   { value: "ADMIN", label: "แอดมิน", hint: "เปิดใบงาน เช็คคลัง และทำแทนได้ทุกขั้น" },
   {
+    value: "PARTS_ADMIN",
+    label: "แอดมินอะไหล่",
+    hint: "คนเช็คประกัน ทำได้ทุกอย่างเท่าแอดมิน · ตั้งได้เฉพาะ Super Admin",
+  },
+  {
     value: "SUPER_ADMIN",
     label: "Super Admin",
     hint: "ทำได้ทุกอย่างเท่าแอดมิน และเป็นคนเดียวที่ตั้ง ถอด หรือรีเซ็ตรหัสแอดมินได้",
