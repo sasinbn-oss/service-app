@@ -51,8 +51,12 @@ interface BranchOption {
   name: string;
   region: string | null;
   openedAt: string | null;
+  /** วันหมดประกันที่เร็วที่สุดในบรรดายี่ห้อเครื่องของสาขา */
   warrantyExpiresAt: string | null;
+  /** แยกตามยี่ห้อเครื่อง — Oasis 2 ปี · อื่น ๆ 3 ปี (คิดที่เซิร์ฟเวอร์) */
+  warranties?: Warranty[];
 }
+type Warranty = { brand: string; years: number | null; expiresAt: string | null };
 /** เครื่องที่ระบบรู้จักแล้วในสาขานี้ พร้อมรุ่นกับขนาดที่เคยกรอกไว้ */
 interface KnownMachine {
   code: string;
@@ -150,6 +154,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   // ไม่ใช่ไปรู้ทีหลังตอนช่างถึงหน้างานแล้วว่าเครื่องยังอยู่ในประกันของผู้ขาย
   const [branchOpenedAt, setBranchOpenedAt] = useState<string | null>(null);
   const [branchWarrantyAt, setBranchWarrantyAt] = useState<string | null>(null);
+  const [branchWarranties, setBranchWarranties] = useState<Warranty[]>([]);
   const [branchResults, setBranchResults] = useState<BranchOption[]>([]);
   const [branchTerm, setBranchTerm] = useState("");
   /**
@@ -281,6 +286,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           setBranchRegion(match.region ?? null);
           setBranchOpenedAt(match.openedAt ?? null);
           setBranchWarrantyAt(match.warrantyExpiresAt ?? null);
+          setBranchWarranties(match.warranties ?? []);
         }
       })
       .catch(() => undefined);
@@ -525,6 +531,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                 code={branchCode}
                 openedAt={branchOpenedAt}
                 warrantyExpiresAt={branchWarrantyAt}
+                warranties={branchWarranties}
               />
             ) : null}
           </View>
@@ -547,6 +554,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                     setBranchRegion(null);
                     setBranchOpenedAt(null);
                     setBranchWarrantyAt(null);
+                    setBranchWarranties([]);
                     setBranchTerm("");
                     setRows([blankRow()]);
                   }}
@@ -561,6 +569,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                 code={branchCode}
                 openedAt={branchOpenedAt}
                 warrantyExpiresAt={branchWarrantyAt}
+                warranties={branchWarranties}
               />
             ) : (
               <>
@@ -587,6 +596,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                           setBranchRegion(b.region ?? null);
                           setBranchOpenedAt(b.openedAt ?? null);
                           setBranchWarrantyAt(b.warrantyExpiresAt ?? null);
+                          setBranchWarranties(b.warranties ?? []);
                           setBranchResults([]);
                         }}
                         activeOpacity={0.7}
@@ -783,10 +793,12 @@ function BranchFacts({
   code,
   openedAt,
   warrantyExpiresAt,
+  warranties = [],
 }: {
   code: string;
   openedAt: string | null;
   warrantyExpiresAt: string | null;
+  warranties?: Warranty[];
 }) {
   const isCompany = code.trim().toUpperCase().startsWith("C");
   const expired = warrantyExpiresAt ? new Date(warrantyExpiresAt).getTime() < Date.now() : null;
@@ -806,9 +818,22 @@ function BranchFacts({
       ) : null}
       {isCompany ? (
         <Text style={styles.branchFact}>สาขาบริษัท — ไม่มีประกัน</Text>
+      ) : warranties.length > 1 ? (
+        // หลายยี่ห้อในสาขาเดียว ประกันหมดไม่พร้อมกัน (Oasis 2 ปี · อื่น ๆ 3 ปี) — แยกบรรทัดให้เห็นว่าเครื่องไหนหมดแล้ว
+        warranties.map((w) => {
+          const out = w.expiresAt ? new Date(w.expiresAt).getTime() < Date.now() : null;
+          return (
+            <Text key={w.brand} style={[styles.branchFact, out ? styles.warrantyOut : styles.warrantyIn]}>
+              {w.brand}
+              {w.years ? ` (${w.years} ปี)` : ""} · {out ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"}
+              {w.expiresAt ? ` · ถึง ${formatDate(w.expiresAt)}` : ""}
+            </Text>
+          );
+        })
       ) : warrantyExpiresAt ? (
         <Text style={[styles.branchFact, expired ? styles.warrantyOut : styles.warrantyIn]}>
           {expired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"} · ถึง {formatDate(warrantyExpiresAt)}
+          {warranties[0]?.years ? ` (${warranties[0].brand} ${warranties[0].years} ปี)` : ""}
         </Text>
       ) : (
         <Text style={styles.branchFact}>ยังไม่ได้บันทึกวันหมดประกัน</Text>

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ทดสอบ: ประกัน 3 ปีนับจากเปิดร้าน · เสนอราคาและรับเงินมาก่อนเบิกอะไหล่
+# ทดสอบ: ประกันนับจากเปิดร้าน (3 ปี · Oasis 2 ปี) · เสนอราคาและรับเงินมาก่อนเบิกอะไหล่
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -136,6 +136,32 @@ echo "═══ ขั้นเสนอราคาเป็นของแอ�
 ID6=$(prep "$DOLD" yes)
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID6/quote" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ขั้นเสนอราคาเป็นของแอดมินเท่านั้น" || fail "หัวหน้าภาคทำได้: $R"
+
+echo
+echo "═══ ประกันตามยี่ห้อเครื่อง: Oasis 2 ปี · Huebsch 3 ปี"
+# สาขาชั่วคราวที่เปิดมา 2 ปีครึ่ง มีทั้งสองยี่ห้อ — Oasis หมดแล้ว Huebsch ยังอยู่ในประกัน
+DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+BC="DZW$RANDOM"
+DB "insert into \"Branch\"(name,code,region,zone,ownership,\"openedAt\") values ('สาขาทดสอบประกันยี่ห้อ','$BC','ใต้','กระบี่','FRANCHISE',now()-interval '30 months')" >/dev/null
+BID=$(DB "select id from \"Branch\" where code='$BC'")
+DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W1','WASHER','OASIS',now()),($BID,'W2','WASHER','HB - Huebsch',now())" >/dev/null
+curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"region":"ใต้"}' >/dev/null
+brandWo() {  # $1=เครื่อง → id ใบงานที่ระบุอะไหล่แล้ว
+  local ID=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
+    -d "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"$1\",\"model\":\"X\",\"symptom\":\"ทดสอบประกันยี่ห้อ\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+  curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
+    -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
+  echo "$ID"
+}
+IDO=$(brandWo W1); IDH=$(brandWo W2)
+st $IDO | grep -q "เสนอราคา" && pass "Oasis เปิดร้านมา 2 ปีครึ่ง = หมดประกัน → ต้องเสนอราคา" || fail "Oasis: $(st $IDO)"
+st $IDH | grep -q "รอแอดมินเช็คอะไหล่" && pass "Huebsch สาขาเดียวกัน = ยังอยู่ในประกัน → ข้ามเสนอราคา" || fail "Huebsch: $(st $IDH)"
+curl -s "localhost:4000/api/work-orders/$IDO" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyExpired].join()' | grep -q "^2,true$" \
+  && pass "ใบงาน Oasis บอกว่าประกัน 2 ปี และหมดแล้ว" || fail "รายละเอียด Oasis: $(curl -s "localhost:4000/api/work-orders/$IDO" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyExpired].join()')"
+curl -s "localhost:4000/api/branches?search=$BC" -H "$(H $A)" | J 'const b=d[0]; const o=new Date(b.openedAt), w=new Date(b.warrantyExpiresAt); [b.warranties.map(x=>x.brand+":"+x.years).join("|"), w.getFullYear()-o.getFullYear()].join(" ")' \
+  | grep -q "^OASIS:2|HB - Huebsch:3 2$" && pass "ค้นสาขาได้ประกันแยกยี่ห้อ · วันรวมใช้ตัวที่หมดเร็วสุด (Oasis)" || fail "สาขา: $(curl -s "localhost:4000/api/branches?search=$BC" -H "$(H $A)" | J 'JSON.stringify(d[0].warranties)')"
+for i in $IDO $IDH; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+DB "delete from \"Machine\" where \"branchId\"=$BID; delete from \"Branch\" where id=$BID" >/dev/null
 
 echo
 echo "IDS=$ID1,$ID2,$ID3,$ID4,$ID5,$ID6"
