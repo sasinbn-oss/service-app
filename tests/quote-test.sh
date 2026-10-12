@@ -49,12 +49,13 @@ if [ -z "$DOLD" ] || [ -z "$DNEW" ]; then
   exit 0
 fi
 
-echo "═══ ประกัน 3 ปีนับจากวันเปิดร้าน"
+echo "═══ ประกันนับจากวันเปิดร้าน"
 echo "  เส้นแบ่ง: $CUT · เปิดก่อนหน้านี้ = หมดประกัน"
 B=$(curl -s "localhost:4000/api/branches?search=$DOLD" -H "$(H $A)")
 echo "$B" | J '"  "+d[0].code+" เปิด "+String(d[0].openedAt).slice(0,10)+" → หมดประกัน "+String(d[0].warrantyExpiresAt).slice(0,10)'
-echo "$B" | J 'const b=d[0]; const o=new Date(b.openedAt), w=new Date(b.warrantyExpiresAt); (w.getFullYear()-o.getFullYear()===3&&w.getMonth()===o.getMonth()&&w.getDate()===o.getDate())?"ok":"bad"' \
-  | grep -q ok && pass "วันหมดประกัน = วันเปิดร้าน + 3 ปีพอดี" || fail "ไม่ใช่ 3 ปีพอดี"
+# จำนวนปีขึ้นกับยี่ห้อ (เครื่องสาขานี้ถูกเลือกรุ่น Oasis ในรอบทดสอบก่อน ๆ = 2 ปี) — ไม่รู้ยี่ห้อ = 3 ปี
+echo "$B" | J 'const b=d[0]; const y=(b.warranties[0]&&b.warranties[0].years)||3; const o=new Date(b.openedAt), w=new Date(b.warrantyExpiresAt); (w.getFullYear()-o.getFullYear()===y&&w.getMonth()===o.getMonth()&&w.getDate()===o.getDate())?"ok":"bad"' \
+  | grep -q ok && pass "วันหมดประกัน = วันเปิดร้าน + ปีตามยี่ห้อพอดี" || fail "ปีไม่ตรงยี่ห้อ: $(echo "$B" | J 'JSON.stringify(d[0].warranties)')"
 B2=$(curl -s "localhost:4000/api/branches?search=$DNEW" -H "$(H $A)")
 echo "$B2" | J '"  "+d[0].code+" เปิด "+String(d[0].openedAt).slice(0,10)+" → หมดประกัน "+String(d[0].warrantyExpiresAt).slice(0,10)'
 echo "$B2" | J 'd[0].warrantyExpiresAt?"ok":"bad"' | grep -q ok \
@@ -146,9 +147,9 @@ DB "insert into \"Branch\"(name,code,region,zone,ownership,\"openedAt\") values 
 BID=$(DB "select id from \"Branch\" where code='$BC'")
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W1','WASHER','OASIS',now()),($BID,'W2','WASHER','HB - Huebsch',now())" >/dev/null
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"region":"ใต้"}' >/dev/null
-brandWo() {  # $1=เครื่อง → id ใบงานที่ระบุอะไหล่แล้ว
+brandWo() {  # $1=เครื่อง $2=รุ่นที่เลือกในฟอร์ม (ไม่ใส่ = X) → id ใบงานที่ระบุอะไหล่แล้ว
   local ID=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
-    -d "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"$1\",\"model\":\"X\",\"symptom\":\"ทดสอบประกันยี่ห้อ\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+    -d "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"$1\",\"model\":\"${2:-X}\",\"symptom\":\"ทดสอบประกันยี่ห้อ\"}]}" | J 'd.orders?d.orders[0].id:d.id')
   curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
     -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
   echo "$ID"
@@ -160,6 +161,14 @@ curl -s "localhost:4000/api/work-orders/$IDO" -H "$(H $A)" | J '[d.branchWarrant
   && pass "ใบงาน Oasis บอกว่าประกัน 2 ปี และหมดแล้ว" || fail "รายละเอียด Oasis: $(curl -s "localhost:4000/api/work-orders/$IDO" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyExpired].join()')"
 curl -s "localhost:4000/api/branches?search=$BC" -H "$(H $A)" | J 'const b=d[0]; const o=new Date(b.openedAt), w=new Date(b.warrantyExpiresAt); [b.warranties.map(x=>x.brand+":"+x.years).join("|"), w.getFullYear()-o.getFullYear()].join(" ")' \
   | grep -q "^OASIS:2|HB - Huebsch:3 2$" && pass "ค้นสาขาได้ประกันแยกยี่ห้อ · วันรวมใช้ตัวที่หมดเร็วสุด (Oasis)" || fail "สาขา: $(curl -s "localhost:4000/api/branches?search=$BC" -H "$(H $A)" | J 'JSON.stringify(d[0].warranties)')"
+# ไฟล์รายงานเครื่องส่วนใหญ่ไม่มียี่ห้อ — เครื่องที่ช่องยี่ห้อว่างใช้ "รุ่นของเครื่อง" ที่เลือกตอนเปิดใบงานแทน
+IDT=$(brandWo W3 "Oasis(TC)")
+st $IDT | grep -q "เสนอราคา" && pass "ไม่มียี่ห้อจากไฟล์ แต่เลือกรุ่น Oasis(TC) → นับ 2 ปี ต้องเสนอราคา" || fail "Oasis(TC): $(st $IDT)"
+curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyBrand].join()' | grep -q "^2,Oasis(TC)$" \
+  && pass "ใบงานบอกที่มา (Oasis(TC) 2 ปี)" || fail "ที่มา: $(curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyBrand].join()')"
+IDT2=$(brandWo W4 "Huebsch")
+st $IDT2 | grep -q "รอแอดมินเช็คอะไหล่" && pass "ไม่มียี่ห้อจากไฟล์ เลือกรุ่น Huebsch → 3 ปี ยังอยู่ในประกัน" || fail "Huebsch รุ่น: $(st $IDT2)"
+for i in $IDT $IDT2; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
 for i in $IDO $IDH; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
 DB "delete from \"Machine\" where \"branchId\"=$BID; delete from \"Branch\" where id=$BID" >/dev/null
 

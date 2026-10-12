@@ -482,7 +482,7 @@ export function isCompanyBranch(branchCode: string): boolean {
 
 /**
  * ประกันเครื่องนับจากวันเปิดร้าน อายุขึ้นกับยี่ห้อเครื่อง (เจ้าของงานกำหนด ต.ค. 69)
- * Oasis 2 ปี · Huebsch 3 ปี · ยี่ห้ออื่นหรือไม่รู้ยี่ห้อ 3 ปีตามกฎเดิม
+ * Oasis และ Oasis(TC) 2 ปี · Huebsch 3 ปี · ยี่ห้ออื่นหรือไม่รู้ยี่ห้อ 3 ปีตามกฎเดิม
  *
  * คิดเอาจากวันเปิดร้านแทนที่จะให้กรอกทีละสาขา — ทะเบียนจริงมีวันเปิดร้านครบทั้ง 1,204 สาขา
  * แต่ไม่มีวันหมดประกันสักสาขาเดียว ถ้ารอให้กรอก ช่องนี้จะว่างตลอดไปและขั้นเสนอราคาจะเดาผิดทั้งระบบ
@@ -494,6 +494,17 @@ const WARRANTY_YEARS_BY_BRAND: { match: RegExp; years: number }[] = [
   { match: /oasis/i, years: 2 },
   { match: /huebsch/i, years: 3 },
 ];
+
+/**
+ * ยี่ห้อที่ใช้คิดประกันของเครื่องหนึ่ง — ยี่ห้อจากไฟล์รายงานเครื่องก่อน ว่างแล้วใช้ "รุ่นของเครื่อง"
+ *
+ * ไฟล์รายงานเครื่องส่วนใหญ่ไม่มีคอลัมน์ machine_brand ช่อง brand จึงว่างแทบทั้งระบบ
+ * ส่วนปุ่ม "รุ่นของเครื่อง" ในฟอร์มเปิดใบงาน (Oasis · Oasis(TC) · Huebsch · Haier · Maytag)
+ * ที่จริงคือชื่อยี่ห้อ และจำไว้ที่ตัวเครื่องแล้ว — ถ้าไม่ใช้ตัวนี้ กฎประกันตามยี่ห้อจะไม่มีผลกับเครื่องจริงเลย
+ */
+export function machineMake(m: { brand?: string | null; model?: string | null } | null | undefined): string | null {
+  return m?.brand?.trim() || m?.model?.trim() || null;
+}
 
 export function warrantyYearsFor(brand: string | null | undefined): number {
   if (brand) for (const r of WARRANTY_YEARS_BY_BRAND) if (r.match.test(brand)) return r.years;

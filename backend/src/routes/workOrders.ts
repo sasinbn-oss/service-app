@@ -68,6 +68,7 @@ import {
   isWarrantyExpired,
   warrantyEndFor,
   warrantyYearsFor,
+  machineMake,
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
@@ -287,14 +288,16 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     // คิดที่เซิร์ฟเวอร์ที่เดียว หน้าจอจึงไม่ต้องรู้ว่ากฎกี่ปี
     branchWarrantyExpiresAt: isCompanyBranch(w.branch.code)
       ? null
-      : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, w.machine?.brand),
+      : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, machineMake(w.machine)),
     branchWarrantyExpired: isCompanyBranch(w.branch.code)
       ? null
-      : isWarrantyExpired(warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, w.machine?.brand)),
+      : isWarrantyExpired(warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, machineMake(w.machine))),
     // บอกว่าคิดจากกี่ปี — คนดูใบงานจะได้ไม่งงว่าทำไมสาขาเดียวกันเครื่องหนึ่งหมด อีกเครื่องยังไม่หมด
     // ว่างเมื่อใช้วันที่กรอกเอง (ไม่ได้คิดจากกฎ)
     branchWarrantyYears:
-      isCompanyBranch(w.branch.code) || w.branch.warrantyExpiresAt ? null : warrantyYearsFor(w.machine?.brand),
+      isCompanyBranch(w.branch.code) || w.branch.warrantyExpiresAt ? null : warrantyYearsFor(machineMake(w.machine)),
+    // ยี่ห้อที่ใช้คิด — จากไฟล์รายงานเครื่อง หรือรุ่นที่เลือกตอนเปิดใบงาน
+    branchWarrantyBrand: machineMake(w.machine),
     machineCode: w.machine?.code ?? null,
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
@@ -396,7 +399,7 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
       needsParts: w.needsParts,
       openedAt: w.branch.openedAt,
       warrantyExpiresAt: w.branch.warrantyExpiresAt,
-      machineBrand: w.machine?.brand,
+      machineBrand: machineMake(w.machine),
     }),
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
@@ -1501,7 +1504,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
     where: { id },
     select: {
       branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
-      machine: { select: { brand: true } },
+      machine: { select: { brand: true, model: true } },
     },
   });
   const quoteFirst =
@@ -1511,7 +1514,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       needsParts: true,
       openedAt: wo.branch.openedAt,
       warrantyExpiresAt: wo.branch.warrantyExpiresAt,
-      machineBrand: wo.machine?.brand,
+      machineBrand: machineMake(wo.machine),
     });
 
   const nextStatus = !needsParts ? "PARTS_CHECKED" : quoteFirst ? "AWAITING_QUOTE" : "PARTS_REQUESTED";
