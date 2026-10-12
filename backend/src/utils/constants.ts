@@ -159,8 +159,8 @@ export const WORK_ORDER_STATUSES = [
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
   "PARTS_CHECKED",
-  "ASSIGNED",
   "AWAITING_CONFIRM",
+  "ASSIGNED",
   "IN_PROGRESS",
   "DONE",
   "CANCELLED",
@@ -180,9 +180,9 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
   AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
   AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
-  PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
-  ASSIGNED: "รอหัวหน้าภาคนัดลูกค้า",
+  PARTS_CHECKED: "รอแอดมินนัดลูกค้า",
   AWAITING_CONFIRM: "รอลูกค้าคอนเฟิร์มนัด",
+  ASSIGNED: "รอหัวหน้าภาคจ่ายงาน",
   IN_PROGRESS: "รอช่างเข้างาน",
   DONE: "ปิดงานแล้ว",
   CANCELLED: "ยกเลิก",
@@ -216,10 +216,19 @@ export const WORK_ORDER_STAGE_ORDER = [
   "WAITING_PARTS",
   // แอดมินเบิกอะไหล่ออกจากคลัง — ระบุคลังและเลขใบเบิกของแต่ละตัว
   "PARTS_REQUESTED",
+  /**
+   * แอดมินนัดลูกค้า → ลูกค้าคอนเฟิร์ม → หัวหน้าภาคจ่ายงาน (เจ้าของงานเปลี่ยนลำดับ ต.ค. 69)
+   *
+   * เดิมหัวหน้าภาคจ่ายงานก่อนแล้วนัดเอง — ตอนนี้แอดมินเป็นคนโทรนัดและรับคอนเฟิร์ม
+   * แล้วส่งกลับให้หัวหน้าภาคจ่ายงาน หัวหน้าภาครู้วันนัดแล้วจึงเลือกทีมที่ว่างวันนั้นได้ตรง
+   * ร้านต้องคอนเฟิร์มก่อนช่างเข้า — ไปถึงแล้วร้านปิดคือเสียทั้งวันของทั้งทีม
+   *
+   * ชื่อสถานะเดิมคงไว้ (ข้อมูลเก่าใช้อยู่) แต่ความหมายตามลำดับใหม่:
+   * PARTS_CHECKED = รอแอดมินนัด · AWAITING_CONFIRM = รอลูกค้าคอนเฟิร์ม · ASSIGNED = รอหัวหน้าภาคจ่ายงาน
+   */
   "PARTS_CHECKED",
-  // นัดลูกค้า → ลูกค้าคอนเฟิร์ม ก่อนช่างเข้า — ไปถึงแล้วร้านปิดคือเสียทั้งวันของทั้งทีม
-  "ASSIGNED",
   "AWAITING_CONFIRM",
+  "ASSIGNED",
   "IN_PROGRESS",
   "DONE",
 ] as const;
@@ -240,11 +249,11 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   // เสนอราคาและรับเงินเป็นงานออฟฟิศ แอดมินเป็นคนรู้ราคาและเป็นคนออกเอกสาร
   AWAITING_QUOTE: "ADMIN",
   AWAITING_PAYMENT: "ADMIN",
-  PARTS_CHECKED: "SUPERVISOR",
-  // นัดวันเข้างานเป็นของหัวหน้าภาค ไม่ใช่ช่าง — คนที่รู้ว่าคิวทั้งทีมว่างวันไหน
-  // คือคนที่ถือคิวทั้งทีม ช่างคนเดียวตอบได้แค่ว่าตัวเองว่างไหม
+  // นัดลูกค้าและรับคอนเฟิร์มเป็นงานออฟฟิศ (เจ้าของงานกำหนด) — แอดมินเป็นคนคุยกับร้าน
+  PARTS_CHECKED: "ADMIN",
+  AWAITING_CONFIRM: "ADMIN",
+  // จ่ายงานหลังรู้วันนัด — หัวหน้าภาคถือคิวทั้งทีม รู้ว่าทีมไหนว่างวันนั้น
   ASSIGNED: "SUPERVISOR",
-  AWAITING_CONFIRM: "SUPERVISOR",
   IN_PROGRESS: "EMPLOYEE",
 };
 
@@ -534,7 +543,7 @@ export function workOrderCode(id: number): string {
 
 // ── ไฟล์แนบใบงาน ────────────────────────────────────────
 
-export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO"] as const;
+export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "DOCUMENT"] as const;
 
 /**
  * บทบาทของไฟล์แนบ — ว่างคือรูปหน้างานทั่วไป
@@ -556,6 +565,7 @@ export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {
   IMAGE: "รูป",
   VIDEO: "วิดีโอ",
+  DOCUMENT: "เอกสาร PDF",
 };
 
 /**
@@ -575,6 +585,14 @@ export const ATTACHMENT_IMAGE_TYPES = [
 export const ATTACHMENT_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"];
 
 /**
+ * PDF รับเฉพาะเอกสารที่ออกจากโปรแกรมบัญชี (ใบเสนอราคา บิล) — ไฟล์พวกนี้เป็น PDF
+ * อยู่แล้ว การบังคับให้แคปหน้าจอเป็นรูปก่อนแนบทำให้ตัวเลขเบลอและเสียเวลาแอดมิน
+ * รูปหน้างานยังรับแค่รูปกับวิดีโอ เพราะ PDF ในกองรูปหน้างานเปิดดูเร็ว ๆ ไม่ได้
+ */
+export const ATTACHMENT_DOCUMENT_TYPES = ["application/pdf"];
+export const ATTACHMENT_DOCUMENT_ROLES = ["QUOTE", "RECEIPT"];
+
+/**
  * เพดานขนาดไฟล์
  *
  * รูปตั้งไว้ 10 MB ทั้งที่แอปย่อให้เหลือหลักแสนไบต์ก่อนส่งอยู่แล้ว เผื่อไว้
@@ -587,6 +605,8 @@ export const ATTACHMENT_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/we
  */
 export const MAX_ATTACHMENT_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENT_VIDEO_BYTES = 60 * 1024 * 1024;
+/** ใบเสนอราคาจากโปรแกรมบัญชีหน้าละไม่กี่ร้อย KB — 15 MB เผื่อไฟล์สแกนหลายหน้า */
+export const MAX_ATTACHMENT_DOCUMENT_BYTES = 15 * 1024 * 1024;
 
 /** รูปย่อที่แอปส่งมาพร้อมไฟล์ ถ้าใหญ่กว่านี้แปลว่าแอปส่งรูปเต็มมาผิดช่อง */
 export const MAX_ATTACHMENT_THUMBNAIL_BYTES = 200 * 1024;
@@ -594,10 +614,11 @@ export const MAX_ATTACHMENT_THUMBNAIL_BYTES = 200 * 1024;
 /** กี่ไฟล์ต่อใบงาน — กันคนเผลออัปทั้งอัลบั้ม ไม่ได้กันการใช้งานปกติ */
 export const MAX_ATTACHMENTS_PER_WORK_ORDER = 20;
 
-export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | null {
+export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | "DOCUMENT" | null {
   const type = mimeType.split(";")[0].trim().toLowerCase();
   if (ATTACHMENT_IMAGE_TYPES.includes(type)) return "IMAGE";
   if (ATTACHMENT_VIDEO_TYPES.includes(type)) return "VIDEO";
+  if (ATTACHMENT_DOCUMENT_TYPES.includes(type)) return "DOCUMENT";
   return null;
 }
 

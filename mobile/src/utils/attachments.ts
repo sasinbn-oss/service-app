@@ -12,6 +12,7 @@
  * ที่สุดจากตรงนี้ — รอส่งรูป 3 MB ผ่าน 4G ในซอยคือเหตุผลที่คนเลิกส่งรูป
  */
 import { Platform } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as VideoThumbnails from "expo-video-thumbnails";
@@ -23,7 +24,7 @@ export interface PickedAttachment {
   uri: string;
   name: string;
   type: string;
-  kind: "IMAGE" | "VIDEO";
+  kind: "IMAGE" | "VIDEO" | "DOCUMENT";
   /** รูปย่อไว้โชว์ในหน้าจอ — วิดีโอบนเว็บทำไม่ได้ จะเป็น null */
   thumbnailUri: string | null;
 }
@@ -144,6 +145,36 @@ export async function pickVideoAttachment(
   const type =
     asset.mimeType ?? (name.toLowerCase().endsWith(".mov") ? "video/quicktime" : "video/mp4");
   return { uri: asset.uri, name, type, kind: "VIDEO", thumbnailUri };
+}
+
+/** ตรงกับเพดาน PDF ฝั่งเซิร์ฟเวอร์ — เช็คก่อนส่งจะได้ไม่ต้องรออัปจนจบแล้วค่อยรู้ว่าใหญ่ไป */
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+
+/**
+ * เลือก PDF — ใช้เฉพาะใบเสนอราคากับบิล (เซิร์ฟเวอร์ไม่รับ PDF เป็นรูปหน้างาน)
+ *
+ * ใบเสนอราคาออกจากโปรแกรมบัญชีเป็น PDF อยู่แล้ว ส่งไฟล์ตรง ๆ ตัวเลขคมชัด
+ * ไม่ต้องแคปหน้าจอเป็นรูปก่อน ไม่ย่อและไม่มีรูปย่อ — หน้าจอแสดงไอคอนเอกสารแทน
+ */
+export async function pickPdfAttachment(): Promise<PickedAttachment | null> {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: "application/pdf",
+    copyToCacheDirectory: true,
+    multiple: false,
+  });
+  if (result.canceled || result.assets.length === 0) return null;
+  const asset = result.assets[0];
+  if (asset.size && asset.size > MAX_PDF_BYTES) {
+    showAlert("ไฟล์ใหญ่เกินไป", `PDF แนบได้ไม่เกิน ${formatSize(MAX_PDF_BYTES)}`);
+    return null;
+  }
+  const name = /\.pdf$/i.test(asset.name) ? asset.name : `${asset.name || "document"}.pdf`;
+  return { uri: asset.uri, name, type: "application/pdf", kind: "DOCUMENT", thumbnailUri: null };
+}
+
+/** ไอคอนแทนรูปย่อ สำหรับไฟล์ที่ไม่มีรูปย่อ */
+export function attachmentIcon(kind: string) {
+  return kind === "VIDEO" ? "videocam-outline" : kind === "DOCUMENT" ? "document-text-outline" : "image-outline";
 }
 
 /** ส่งไฟล์ที่เลือกไว้ขึ้นใบงานที่มีอยู่แล้ว */

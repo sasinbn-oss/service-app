@@ -52,7 +52,7 @@ export interface WorkOrderRow {
   attachmentCount: number;
 }
 
-type Filter = "INBOX" | "ACTIVE" | "ASSIGNED" | "IN_PROGRESS" | "DONE" | "ALL";
+type Filter = "INBOX" | "ACTIVE" | "PARTS_CHECKED" | "IN_PROGRESS" | "DONE" | "ALL";
 
 /**
  * ชิปกรองรายการ — ค่าที่ส่งต้องเป็นสถานะจริงที่เซิร์ฟเวอร์รู้จัก
@@ -64,7 +64,7 @@ type Filter = "INBOX" | "ACTIVE" | "ASSIGNED" | "IN_PROGRESS" | "DONE" | "ALL";
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
-  { value: "ASSIGNED", label: "รอนัดลูกค้า" },
+  { value: "PARTS_CHECKED", label: "รอนัดลูกค้า" },
   { value: "IN_PROGRESS", label: "รอช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },

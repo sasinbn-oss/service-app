@@ -80,8 +80,13 @@ echo "$R" | grep -q "ต้องแนบใบเสนอราคา" && pas
 
 echo
 echo "═══ แนบใบเสนอราคาแล้วไปขั้นรอจ่ายเงิน"
-curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
-  -F "file=@$SP/site-photo.png;type=image/png" -F "role=QUOTE" | J '"  แนบแล้ว: "+d.roleLabel'
+# ใบเสนอราคาจากโปรแกรมบัญชีเป็น PDF — แนบตรง ๆ ได้ ไม่ต้องแคปเป็นรูป
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" -F "file=@$SP/quote-sample.pdf;type=application/pdf")
+echo "$R" | grep -q "PDF แนบได้เฉพาะ" && pass "PDF ที่ไม่ใช่ใบเสนอราคา/บิล แนบเป็นรูปหน้างานไม่ได้" || fail "PDF เข้ากองรูปหน้างานได้: $R"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
+  -F "file=@$SP/quote-sample.pdf;type=application/pdf" -F "role=QUOTE")
+echo "$R" | J 'd.kind+"|"+d.role+"|"+d.mimeType' | grep -q "^DOCUMENT|QUOTE|application/pdf$" \
+  && pass "แนบใบเสนอราคาเป็น PDF ได้" || fail "แนบ PDF ไม่ได้: $(echo $R | head -c 160)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/quote" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 st $ID1 | grep -q "รอลูกค้าจ่ายเงิน" && pass "ไปขั้นรอลูกค้าจ่ายเงินแล้ว" || fail "ไม่ไปขั้นจ่ายเงิน: $(st $ID1)"
 
@@ -97,7 +102,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/payment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 echo "  $(st $ID1)"
 st $ID1 | grep -q "รอแอดมินเช็คอะไหล่" && pass "จ่ายเงินแล้วมาถึงขั้นเบิกอะไหล่" || fail "ไม่มาขั้นเบิกอะไหล่"
-checkparts $ID1 | J 'd.statusLabel' | grep -q "จ่ายงาน" && pass "เบิกอะไหล่เสร็จไปขั้นจ่ายงาน" || fail "เบิกแล้วไม่ไปจ่ายงาน"
+checkparts $ID1 | J 'd.statusLabel' | grep -q "นัดลูกค้า" && pass "เบิกอะไหล่เสร็จไปขั้นแอดมินนัดลูกค้า" || fail "เบิกแล้วไม่ไปขั้นนัดลูกค้า"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs.map(l=>l.action).reverse().join(" → ")' | sed 's/^/  ประวัติ: /'
 
 echo
@@ -114,7 +119,7 @@ st $ID3 | grep -q "รอแอดมินเช็คอะไหล่" && pa
 echo
 echo "═══ งานที่ไม่ใช้อะไหล่ ข้ามทั้งเสนอราคาและเบิกอะไหล่"
 ID4=$(prep "$DOLD" no)
-st $ID4 | grep -q "จ่ายงาน" && pass "ไม่ใช้อะไหล่ ข้ามไปจ่ายงานเลย" || fail "ไม่ข้าม: $(st $ID4)"
+st $ID4 | grep -q "นัดลูกค้า" && pass "ไม่ใช้อะไหล่ ข้ามไปนัดลูกค้าเลย" || fail "ไม่ข้าม: $(st $ID4)"
 
 echo
 echo "═══ ข้ามขั้นเสนอราคาได้ แต่ต้องบอกเหตุผล และไปโผล่ที่เบิกอะไหล่"

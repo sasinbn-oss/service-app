@@ -23,10 +23,11 @@ trap cleanup EXIT
 
 A=$(login A001 | J 'd.token')
 S=$(login S001 | J 'd.token')
-# ใบงานที่รอหัวหน้าภาคจ่ายงาน (สาขา C0006 ทีมกระบี่)
+# ใบงานที่แอดมินนัดลูกค้าแล้ว รอหัวหน้าภาคจ่ายงาน (สาขา C0006 ทีมกระบี่)
 newOrder() {
   local id=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","model":"Haier","symptom":"ทดสอบเปลี่ยนสิทธิ์"}]}' | J 'd.orders?d.orders[0].id:d.id')
   POST $S "work-orders/$id/parts" '{"needsParts":false}' >/dev/null
+  POST $A "work-orders/$id/schedule" '{"scheduledAt":"2026-11-10"}' >/dev/null
   echo $id
 }
 
@@ -43,8 +44,8 @@ echo "$R" | grep -q "ไม่ใช่ของคุณ" && pass "ตอนเ
 PATCH $A "auth/users/$UID_" '{"role":"SUPERVISOR","supervisedTeams":["กระบี่"]}' >/dev/null
 [ "$(DB "select role from \"User\" where id=$UID_")" = "SUPERVISOR" ] && pass "DB: ตั้งเป็นหัวหน้าภาคแล้ว" || fail "DB: role ไม่เปลี่ยน"
 R=$(POST $T "work-orders/$W1/assign" '{"team":"กระบี่"}')
-[ "$(DB "select status||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$W1")" = "ASSIGNED|กระบี่" ] \
-  && pass "โทเคนเดิมจ่ายงานได้ทันทีหลังเลื่อนเป็นหัวหน้าภาค (DB: ASSIGNED กระบี่)" || fail "ยังจ่ายไม่ได้: $(echo $R | head -c 160)"
+[ "$(DB "select status||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$W1")" = "IN_PROGRESS|กระบี่" ] \
+  && pass "โทเคนเดิมจ่ายงานได้ทันทีหลังเลื่อนเป็นหัวหน้าภาค (DB: IN_PROGRESS กระบี่)" || fail "ยังจ่ายไม่ได้: $(echo $R | head -c 160)"
 
 echo
 echo "═══ หัวหน้าภาค → ช่าง (โทเคนเดิม) ต้องเสียสิทธิ์ทันที"
@@ -53,7 +54,7 @@ TS=$(login "ZR$SUF" test12345 | J 'd.token')
 W2=$(newOrder); IDS="$IDS $W2"
 PATCH $A "auth/users/$UID_" '{"role":"EMPLOYEE"}' >/dev/null
 R=$(POST $TS "work-orders/$W2/assign" '{"team":"กระบี่"}')
-[ "$(DB "select status from \"WorkOrder\" where id=$W2")" = "PARTS_CHECKED" ] && echo "$R" | grep -q "ไม่ใช่ของคุณ" \
+[ "$(DB "select status from \"WorkOrder\" where id=$W2")" = "ASSIGNED" ] && echo "$R" | grep -q "ไม่ใช่ของคุณ" \
   && pass "ถอดสิทธิ์แล้วโทเคนเดิมจ่ายงานไม่ได้ (DB: ยังรอจ่ายงาน)" || fail "ถอดสิทธิ์แล้วยังจ่ายได้: $(echo $R | head -c 120)"
 R=$(curl -s localhost:4000/api/auth/users -H "$(H $TS)")
 echo "$R" | grep -q "employeeCode" && fail "ช่างดูรายชื่อผู้ใช้ได้" || pass "หน้าแอดมินก็ใช้สิทธิ์ปัจจุบัน (ช่างเปิดรายชื่อผู้ใช้ไม่ได้)"

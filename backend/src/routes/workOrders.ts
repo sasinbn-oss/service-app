@@ -29,6 +29,8 @@ import {
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
+  ATTACHMENT_DOCUMENT_ROLES,
+  MAX_ATTACHMENT_DOCUMENT_BYTES,
   ATTACHMENT_ROLES,
   ATTACHMENT_ROLE_LABELS,
   attachmentKindFor,
@@ -1772,7 +1774,8 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = assignSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (!(await guardStage(req, res, id, "PARTS_CHECKED"))) return;
+  // จ่ายงานหลังลูกค้าคอนเฟิร์มนัดแล้ว — ส่งถึงช่างทันที เพราะวันนัดมีแล้ว
+  if (!(await guardStage(req, res, id, "ASSIGNED"))) return;
 
   const team = parsed.data.team;
   // ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
@@ -1801,10 +1804,10 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
       // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
       // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
       data: {
-        status: "ASSIGNED",
+        status: "IN_PROGRESS",
         assignedTeam: team,
         assignedToId: null,
-        workStatus: workStatusForStage("ASSIGNED"),
+        workStatus: workStatusForStage("IN_PROGRESS"),
       },
     });
     await writeLog(
@@ -1812,7 +1815,7 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
       id,
       req.auth!.userId,
       "ASSIGNED",
-      "ASSIGNED",
+      "IN_PROGRESS",
       parsed.data.note ||
         (crossTeam
           ? `จ่ายงานให้ ${team} (ข้ามทีม — งาน${wo.jobType} ของสาขานี้เป็นของ ${ownTeam})`
@@ -1825,7 +1828,7 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * ขั้นนัดลูกค้า — หัวหน้าภาคโทรนัดร้าน แล้วบันทึกวันและเวลา
+ * ขั้นนัดลูกค้า — แอดมินโทรนัดร้าน แล้วบันทึกวันและเวลา (เดิมเป็นของหัวหน้าภาค)
  *
  * นัดแล้วยังไม่ได้แปลว่าไปได้ — ร้านต้องคอนเฟิร์มก่อน ไปถึงแล้วร้านปิดหรือ
  * ไม่มีคนเปิดเครื่องให้ คือเสียวันของทั้งทีม ลูกค้ายังไม่ตอบจึงพักไว้ที่ขั้น
@@ -1859,8 +1862,8 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
   const parsed = scheduleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  // guardStage กันไว้แล้วว่าเป็นหัวหน้าภาคของภาคนี้ (หรือแอดมิน)
-  const wo = await guardStage(req, res, id, "ASSIGNED");
+  // ขั้นของแอดมิน — guardStage กันคนอื่นไว้แล้ว
+  const wo = await guardStage(req, res, id, "PARTS_CHECKED");
   if (!wo) return;
 
   const { scheduledAt, scheduledTime, appointment } = parsed.data;
@@ -1868,7 +1871,8 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
   if (appointment === "ADMIN_PICKED" && req.auth!.role !== "ADMIN") {
     return res.status(403).json({ error: "เลือกวันให้ลูกค้าได้เฉพาะแอดมิน" });
   }
-  const next = appointment === "PENDING" ? "AWAITING_CONFIRM" : "IN_PROGRESS";
+  // ลูกค้าตอบรับแล้ว → ส่งให้หัวหน้าภาคจ่ายงานเลย · ยังไม่ตอบ → พักที่รอคอนเฟิร์ม
+  const next = appointment === "PENDING" ? "AWAITING_CONFIRM" : "ASSIGNED";
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
@@ -1899,7 +1903,7 @@ router.post("/:id/schedule", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * ลูกค้าคอนเฟิร์มนัด — ส่งต่อให้ช่างเข้างาน
+ * ลูกค้าคอนเฟิร์มนัด — ส่งกลับให้หัวหน้าภาคจ่ายงาน
  *
  * แก้วันหรือเวลาในขั้นนี้ได้เลย ลูกค้าที่โทรกลับมาบอกว่า "ได้ แต่ขอบ่ายนะ"
  * มีบ่อยกว่าลูกค้าที่ตอบรับตามนัดเป๊ะ ไม่ควรต้องย้อนขั้นเพื่อแก้เวลา
@@ -1922,11 +1926,11 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
     const updated = await tx.workOrder.update({
       where: { id },
       data: {
-        status: "IN_PROGRESS",
+        status: "ASSIGNED",
         appointmentStatus: "CONFIRMED",
         ...(scheduledAt ? { scheduledAt: dayStart(scheduledAt) } : {}),
         ...(scheduledTime !== undefined ? { scheduledTime } : {}),
-        workStatus: workStatusForStage("IN_PROGRESS"),
+        workStatus: workStatusForStage("ASSIGNED"),
       },
       select: { scheduledAt: true, scheduledTime: true },
     });
@@ -1938,7 +1942,7 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
       id,
       req.auth!.userId,
       "CONFIRMED",
-      "IN_PROGRESS",
+      "ASSIGNED",
       [`ลูกค้าคอนเฟิร์ม ${when}`, parsed.data.note].filter(Boolean).join(" — ")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
@@ -2173,7 +2177,8 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   // ก่อนจ่ายงานยังไม่มีใครไปหน้างาน ของที่ขาดยังแก้ในขั้นระบุอะไหล่/เช็คคลังได้
-  if (!["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS", "DONE"].includes(wo.status)) {
+  // ทีมรับงานแล้ว (ลำดับใหม่ ทีมได้งานตอนจ่ายงานซึ่งเป็นขั้นสุดท้ายก่อนช่างเข้า)
+  if (!["IN_PROGRESS", "DONE"].includes(wo.status)) {
     return res.status(409).json({
       error: `${wo.code} ยังไม่ถึงขั้นเข้าหน้างาน — แก้รายการอะไหล่ในใบนี้ได้เลย`,
     });
@@ -2298,16 +2303,16 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   const at = (stage: string) => order.indexOf(stage);
   const data: Record<string, unknown> = { status: toStage };
   // วันนัดผูกกับรอบที่ถูกย้อนทิ้ง — ค้างไว้จะโผล่บนบอร์ดแผนงานทั้งที่ไม่มีใครจะไป
-  if (to <= at("ASSIGNED")) {
+  if (to <= at("PARTS_CHECKED")) {
     data.scheduledAt = null;
     data.scheduledTime = null;
     data.appointmentStatus = null;
   } else if (toStage === "AWAITING_CONFIRM") {
     data.appointmentStatus = "PENDING";
   }
-  // ย้อนไปก่อนจ่ายงาน = ยังไม่มีทีมรับ ไม่งั้นใบจะค้างอยู่ในรายการของทีมเดิม
+  // ย้อนไปถึงขั้นจ่ายงานหรือก่อนนั้น = ยังไม่มีทีมรับ ไม่งั้นใบจะค้างอยู่ในรายการของทีมเดิม
   // ยกเว้นย้อนไปตรวจหน้างาน ซึ่งทีมเดิมคือทีมที่ต้องไป
-  if (to <= at("PARTS_CHECKED") && toStage !== "INSPECTING") {
+  if (to <= at("ASSIGNED") && toStage !== "INSPECTING") {
     data.assignedTeam = null;
     data.assignedToId = null;
   }
@@ -2747,11 +2752,12 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
           [b.warehouse ? `เบิกจาก ${b.warehouse}` : null, b.requisitionRef ? `ใบเบิก ${b.requisitionRef}` : null].filter(Boolean).join(" · ") || null
         );
       }
-      if (before("PARTS_CHECKED") || wo.assignedTeam !== b.team) {
-        await log("ASSIGNED", "ASSIGNED", visit, `จ่ายงานให้ ${b.team}`);
-      }
+      // ลำดับใหม่: นัด/คอนเฟิร์ม (แอดมิน) ก่อน แล้วจ่ายงาน (หัวหน้าภาค)
       if (before("AWAITING_CONFIRM")) {
-        await log("SCHEDULED", "IN_PROGRESS", visit, `เข้างาน ${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""} (ไม่ผ่านนัด/คอนเฟิร์มในระบบ)`);
+        await log("SCHEDULED", "ASSIGNED", visit, `เข้างาน ${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""} (ไม่ผ่านนัด/คอนเฟิร์มในระบบ)`);
+      }
+      if (before("ASSIGNED") || wo.assignedTeam !== b.team) {
+        await log("ASSIGNED", "IN_PROGRESS", visit, `จ่ายงานให้ ${b.team}`);
       }
       const closeNote = [
         b.note || null,
@@ -2900,9 +2906,10 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
-      data: { status: "ASSIGNED", closedAt: null, closedById: null, closeResult: null },
+      // เปิดงานใหม่ = ต้องไปอีกรอบ เริ่มที่แอดมินนัดลูกค้าใหม่ แล้วหัวหน้าภาคจ่ายงาน
+      data: { status: "PARTS_CHECKED", closedAt: null, closedById: null, closeResult: null },
     });
-    await writeLog(tx, id, req.auth!.userId, "REOPENED", "ASSIGNED");
+    await writeLog(tx, id, req.auth!.userId, "REOPENED", "PARTS_CHECKED");
   }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
@@ -3086,17 +3093,35 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
 
   const kind = attachmentKindFor(file.mimetype);
   if (!kind) {
-    return res.status(400).json({ error: `ไฟล์ชนิด ${file.mimetype} ยังแนบไม่ได้ — รับเฉพาะรูปกับวิดีโอ` });
+    return res
+      .status(400)
+      .json({ error: `ไฟล์ชนิด ${file.mimetype} ยังแนบไม่ได้ — รับเฉพาะรูป วิดีโอ และ PDF (ใบเสนอราคา/บิล)` });
   }
 
-  const limit = kind === "IMAGE" ? MAX_ATTACHMENT_IMAGE_BYTES : MAX_ATTACHMENT_VIDEO_BYTES;
+  // บทบาทมาจากฟอร์ม ส่งมาผิดค่าถือว่าเป็นรูปทั่วไป ไม่ใช่ error —
+  // ไฟล์ที่อัปสำเร็จแล้วไม่ควรถูกทิ้งเพราะป้ายกำกับสะกดผิด
+  const rawRole = typeof req.body?.role === "string" ? req.body.role.trim().toUpperCase() : "";
+  const role = (ATTACHMENT_ROLES as readonly string[]).includes(rawRole) ? rawRole : null;
+
+  if (kind === "DOCUMENT" && !(role && ATTACHMENT_DOCUMENT_ROLES.includes(role))) {
+    return res.status(400).json({ error: "PDF แนบได้เฉพาะใบเสนอราคากับบิลที่ลูกค้าจ่ายแล้ว — รูปหน้างานแนบเป็นรูปหรือวิดีโอ" });
+  }
+
+  const limit =
+    kind === "IMAGE"
+      ? MAX_ATTACHMENT_IMAGE_BYTES
+      : kind === "DOCUMENT"
+        ? MAX_ATTACHMENT_DOCUMENT_BYTES
+        : MAX_ATTACHMENT_VIDEO_BYTES;
   if (file.size > limit) {
     const mb = Math.round(limit / 1024 / 1024);
     return res.status(400).json({
       error:
         kind === "IMAGE"
           ? `รูปใหญ่เกิน ${mb} MB`
-          : `วิดีโอใหญ่เกิน ${mb} MB — ถ่ายสั้นลงหรือตัดให้เหลือเฉพาะช่วงที่เห็นอาการ`,
+          : kind === "DOCUMENT"
+            ? `ไฟล์ PDF ใหญ่เกิน ${mb} MB`
+            : `วิดีโอใหญ่เกิน ${mb} MB — ถ่ายสั้นลงหรือตัดให้เหลือเฉพาะช่วงที่เห็นอาการ`,
     });
   }
 
@@ -3106,11 +3131,6 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       .status(400)
       .json({ error: `ใบงานหนึ่งแนบได้ไม่เกิน ${MAX_ATTACHMENTS_PER_WORK_ORDER} ไฟล์` });
   }
-
-  // บทบาทมาจากฟอร์ม ส่งมาผิดค่าถือว่าเป็นรูปทั่วไป ไม่ใช่ error —
-  // ไฟล์ที่อัปสำเร็จแล้วไม่ควรถูกทิ้งเพราะป้ายกำกับสะกดผิด
-  const rawRole = typeof req.body?.role === "string" ? req.body.role.trim().toUpperCase() : "";
-  const role = (ATTACHMENT_ROLES as readonly string[]).includes(rawRole) ? rawRole : null;
 
   const thumb = files?.thumbnail?.[0];
   // รูปย่อใหญ่ผิดปกติ = แอปส่งรูปเต็มมาผิดช่อง ทิ้งไปดีกว่าเก็บรูป 3 MB
