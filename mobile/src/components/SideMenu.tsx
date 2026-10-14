@@ -173,6 +173,12 @@ const GROUPS: Group[] = [
   },
 ];
 
+/**
+ * หน้าแอดมินที่ Admin Spare Part ไม่เห็น — ตำแหน่งนี้ดูได้ทุกอย่างแต่แก้ได้เฉพาะเคลมกับข้อมูลอะไหล่
+ * (เจ้าของงานกำหนด ต.ค. 69) "ระบบหลังบ้าน" ยังอยู่ เพราะข้างในเหลือหน้าจัดการข้อมูลอะไหล่
+ */
+const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches"]);
+
 /** หน้าแรกของแต่ละแท็บ — ไปหน้าพวกนี้ต้องล้างหน้าที่ซ้อนอยู่ ไม่ใช่ซ้อนเพิ่ม */
 const TAB_ROOTS = new Set(["PlanBoard", "HomeMenu", "WorkOrderList", "HistoryMenu", "AdminMenu"]);
 
@@ -227,7 +233,10 @@ function MenuContent({
                   <Text style={styles.groupText}>{g.title}</Text>
                 </View>
               )}
-              {g.items.filter((it) => !it.roles || (user && it.roles.includes(user.role))).map((it) => {
+              {g.items
+                .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
+                .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
+                .map((it) => {
                 const on = active === it.key;
                 const n = it.badge ? inbox : 0;
                 return (

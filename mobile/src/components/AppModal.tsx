@@ -113,8 +113,8 @@ export default function AppModal({
   const swiped = useRef(false);
 
   // ขยายเกือบเต็มจอ — ไทม์ไลน์ยาว ตารางนำเข้า ฟอร์มหลายขั้น อ่านในกรอบเล็กต้องเลื่อนไม่หยุด
-  // เปิดครั้งใหม่กลับขนาดปกติเสมอ ไม่จำค่า เพราะหน้าต่างส่วนใหญ่สั้นและขนาดปกติอ่านง่ายกว่า
-  const [max, setMax] = useState(false);
+  // เปิดมาแบบขยายเสมอ (เจ้าของงานเลือก ต.ค. 69) กดย่อได้ แต่ไม่จำค่า — เปิดบานใหม่กลับมาขยายอีก
+  const [max, setMax] = useState(true);
   // ขนาด "เต็มจอ" กับ "ปกติ" เป็นเปอร์เซ็นต์/ตามเนื้อหา ซึ่งค่อย ๆ ไหลระหว่างกันไม่ได้
   // ระหว่างยืด/หดจึงใช้ขนาดเป็นพิกเซลที่วัดไว้ จบแล้วคืนเป็นแบบเดิม (หมุนจอ/ย่อหน้าต่างแล้วยังพอดี)
   const [resizing, setResizing] = useState(false);
@@ -127,7 +127,8 @@ export default function AppModal({
     if (pane) return;
     if (visible) {
       setMounted(true);
-      setMax(false);
+      setMax(true);
+      normal.current = { w: 0, h: 0 };
       setResizing(false);
       grow.setValue(0);
       swiped.current = false;
@@ -156,6 +157,12 @@ export default function AppModal({
     const next = !max;
     const pad = sheet ? 0 : spacing.sm;
     const n = normal.current;
+    // เปิดมาแบบขยาย ยังไม่เคยเห็นขนาดปกติ — ไม่มีขนาดให้ยืดไปหา ย่อทันทีแทน
+    // (ยืดไปหา 0×0 คือหน้าต่างหดหายแล้วเด้งกลับ) ย่อแล้ววัดขนาดได้ ครั้งต่อไปยืดตามปกติ
+    if (!next && n.w === 0) {
+      setMax(false);
+      return;
+    }
     range.current = { w0: n.w, h0: n.h, w1: sheet ? n.w : box.current.w - pad * 2, h1: box.current.h - pad * 2 };
     setResizing(true);
     setMax(next);

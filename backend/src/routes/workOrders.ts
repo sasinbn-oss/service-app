@@ -679,6 +679,8 @@ async function writeLog(
  * หรือใบที่ถึงคิวแต่ไม่โผล่ ซึ่งแย่กว่าไม่มีกล่องงานเลย
  */
 function stagesWaitingOn(auth: AuthRequest["auth"]): string[] {
+  // Admin Spare Part ทำอะไรกับใบงานไม่ได้นอกจากตรวจเคลม — "งานของฉัน" จึงมีแค่ใบที่รอตรวจเคลม
+  if (auth?.partsAdmin) return ["CLAIM_REVIEW"];
   return WORK_ORDER_STAGE_ORDER.filter(
     (stage) =>
       WORK_ORDER_STAGE_ACTOR[stage] === auth!.role &&

@@ -472,14 +472,17 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </View>
           ) : null}
           <View style={{ flex: 1 }} />
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => navigation.navigate("WorkOrderForm")}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={18} color="#fff" />
-            <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
-          </TouchableOpacity>
+          {/* Admin Spare Part ดูใบงานได้อย่างเดียว — เปิดใบงานไม่ได้ */}
+          {user?.partsAdmin ? null : (
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={() => navigation.navigate("WorkOrderForm")}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="add" size={18} color="#fff" />
+              <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
+            </TouchableOpacity>
+          )}
         </View>
         <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
       </View>

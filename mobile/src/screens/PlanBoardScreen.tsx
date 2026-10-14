@@ -178,6 +178,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
   // ไทม์ไลน์ — เฉพาะ Super Admin (เซิร์ฟเวอร์กันซ้ำอีกชั้น)
   const [timeline, setTimeline] = useState<TimelineTarget | null>(null);
   const showTimeline = user?.superAdmin ? setTimeline : undefined;
+  // Admin Spare Part ดูแผนงานได้ แต่จัดแผนไม่ได้ (เจ้าของงานกำหนด ต.ค. 69 · เซิร์ฟเวอร์กันอีกชั้น)
+  const canPlan = !user?.partsAdmin;
 
   const monthKey = date.slice(0, 7);
   /**
@@ -282,7 +284,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
             key={lane.team}
             lane={lane}
             dim={switching}
-            onEdit={() => openPlan(lane.team, lane)}
+            onEdit={canPlan ? () => openPlan(lane.team, lane) : undefined}
             onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
             date={day?.date ?? date}
             onTimeline={showTimeline}
@@ -293,7 +295,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
         <LaneCard
           key={lane.team}
           lane={lane}
-          onEdit={() => openPlan(lane.team, lane)}
+          onEdit={canPlan ? () => openPlan(lane.team, lane) : undefined}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
             date={day?.date ?? date}
             onTimeline={showTimeline}
@@ -342,9 +344,10 @@ export default function PlanBoardScreen({ navigation }: Props) {
                 style={styles.pendBtn}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: p.id })}
                 activeOpacity={0.7}
-                accessibilityLabel={`จัด ${p.code}`}
+                accessibilityLabel={`${canPlan ? "จัด" : "ดู"} ${p.code}`}
               >
-                <Text style={styles.pendBtnText}>จัด</Text>
+                {/* เปิดใบงานเหมือนกัน — แต่คนที่จัดไม่ได้ เห็นคำว่า "จัด" แล้วเข้าใจผิดว่าทำได้ */}
+                <Text style={styles.pendBtnText}>{canPlan ? "จัด" : "ดู"}</Text>
               </TouchableOpacity>
             </View>
           ))
@@ -377,10 +380,12 @@ export default function PlanBoardScreen({ navigation }: Props) {
             </TouchableOpacity>
           ) : null}
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => openPlan("", null)} activeOpacity={0.8}>
-          <Ionicons name="add" size={18} color="#fff" />
-          <Text style={styles.addBtnText}>จัดแผน</Text>
-        </TouchableOpacity>
+        {canPlan ? (
+          <TouchableOpacity style={styles.addBtn} onPress={() => openPlan("", null)} activeOpacity={0.8}>
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text style={styles.addBtnText}>จัดแผน</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.week}>
@@ -509,7 +514,8 @@ function LaneCard({
 }: {
   lane: Lane;
   dim?: boolean;
-  onEdit: () => void;
+  /** ไม่ส่งมา = ดูได้อย่างเดียว ไม่มีปุ่มจัดแผน */
+  onEdit?: () => void;
   onOpen: (id: number) => void;
   date: string;
   onTimeline?: (t: TimelineTarget) => void;
@@ -561,10 +567,12 @@ function LaneCard({
         {onTimeline ? (
           <TimelineButton label={`ไทม์ไลน์ทีม ${lane.team}`} onPress={() => onTimeline({ kind: "team", date, team: lane.team })} />
         ) : null}
-        <TouchableOpacity style={styles.editBtn} onPress={onEdit} accessibilityLabel={`จัดแผน ${lane.team}`}>
-          <Ionicons name="create-outline" size={16} color={colors.primaryInk} />
-          <Text style={styles.editText}>{lane.plan ? "แก้แผน" : "จัดคน"}</Text>
-        </TouchableOpacity>
+        {onEdit ? (
+          <TouchableOpacity style={styles.editBtn} onPress={onEdit} accessibilityLabel={`จัดแผน ${lane.team}`}>
+            <Ionicons name="create-outline" size={16} color={colors.primaryInk} />
+            <Text style={styles.editText}>{lane.plan ? "แก้แผน" : "จัดคน"}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       {lane.plan?.note ? <Text style={styles.laneNote}>{lane.plan.note}</Text> : null}
       {lane.stops.length === 0 ? (
