@@ -697,6 +697,7 @@ model WorkOrder {
   parts       WorkOrderPart[]
   logs        WorkOrderLog[]
   attachments WorkOrderAttachment[]
+  claims      PartClaim[]
   workers     WorkOrderWorker[]
   vehicleLogs VehicleLog[]
 
@@ -817,6 +818,10 @@ model WorkOrderAttachment {
   // รูปย่อ ~20 KB เก็บที่นี่เพื่อให้ใบงานแสดงภาพได้โดยไม่ต้องขอลิงก์ทีละรูป
   thumbnail Bytes?
 
+  // หลักฐานเคลม (role CLAIM_*) เป็นของอะไหล่ชิ้นไหน — ใบเคลมหนึ่งใบต่ออะไหล่หนึ่งชิ้นตามฟอร์ม
+  // เปลี่ยนหลายชิ้นในใบงานเดียว รูปอะไหล่เก่าของแต่ละชิ้นต้องไม่ปนกัน
+  sparePartId Int?
+
   createdById Int?
   createdBy   User?    @relation(fields: [createdById], references: [id])
   createdAt   DateTime @default(now())
@@ -919,4 +924,40 @@ model ViewAsLog {
   endedAt      DateTime?
 
   @@index([byUserId, startedAt])
+}
+
+// เคลมอะไหล่เก่ากับผู้ขาย ตามฟอร์ม "เอกสารใบเคลมอะไหล่" — หนึ่งแถวต่ออะไหล่หนึ่งชิ้นต่อรอบที่ปิดงาน
+//
+// หัวใบเคลม (สาขา วันเปิดร้าน ยี่ห้อ รุ่น หมายเลขเครื่อง อะไหล่) เก็บเป็นค่าตอนส่ง ไม่ได้อ้างไปที่ตารางอื่น
+// เพราะใบเคลมเป็นเอกสารที่ส่งออกไปแล้ว — แก้ทะเบียนสาขาหรือรุ่นเครื่องทีหลัง ใบเคลมเดิมต้องไม่เปลี่ยนตาม
+// ตีกลับแล้วช่างปิดใหม่ = แถวใหม่ แถวเดิมเก็บไว้เป็นประวัติว่าเคยถูกตีกลับเพราะอะไร
+model PartClaim {
+  id           Int       @id @default(autoincrement())
+  workOrderId  Int
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  sparePartId  Int?
+  partCode     String
+  partName     String
+  quantity     Int       @default(1)
+  branchCode   String
+  branchName   String
+  branchOpenedAt DateTime?
+  brand        String?
+  model        String?
+  machineCode  String?
+  // อาการ/สาเหตุ · ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้ — ช่องที่ช่างกรอกเองตามฟอร์ม
+  symptom      String
+  checkNote    String
+  // Troubleshooting ที่ทำ (ข้อ 4) — รายการข้อที่ติ๊ก · ว่าง = ยี่ห้อนี้ไม่ต้องทำ
+  troubleshooting String[] @default([])
+  // PENDING รอตรวจ · APPROVED อนุมัติ (ออกใบเคลมได้) · REJECTED ตีกลับ
+  status       String    @default("PENDING")
+  rejectReason String?
+  createdById  Int?
+  createdAt    DateTime  @default(now())
+  reviewedById Int?
+  reviewedAt   DateTime?
+
+  @@index([workOrderId, createdAt])
+  @@index([status])
 }

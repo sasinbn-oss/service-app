@@ -106,6 +106,8 @@ export function workStatusForStage(
     case "IN_PROGRESS":
       return "WAITING_TECH";
     case "DONE":
+    // รอตรวจเคลม — ช่างซ่อมเสร็จแล้ว เครื่องไม่ได้รออะไร เหลือแต่เอกสารเคลม
+    case "CLAIM_REVIEW":
       // ปิดงานแล้วไม่ได้รออะไรอยู่ ค้างไว้จะไปโผล่บนกระดานว่ายังรอช่าง
       return null;
     default:
@@ -170,6 +172,7 @@ export const WORK_ORDER_STATUSES = [
   "AWAITING_CONFIRM",
   "ASSIGNED",
   "IN_PROGRESS",
+  "CLAIM_REVIEW",
   "DONE",
   "CANCELLED",
 ] as const;
@@ -192,6 +195,7 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   AWAITING_CONFIRM: "รอแอดมินคอนเฟิร์มลูกค้า",
   ASSIGNED: "รอหัวหน้าภาคคอนเฟิร์มออกงาน",
   IN_PROGRESS: "รอช่างเข้างาน",
+  CLAIM_REVIEW: "รอตรวจเคลมอะไหล่",
   DONE: "ปิดงานแล้ว",
   CANCELLED: "ยกเลิก",
 };
@@ -241,6 +245,12 @@ export const WORK_ORDER_STAGE_ORDER = [
   "AWAITING_CONFIRM",
   "ASSIGNED",
   "IN_PROGRESS",
+  /**
+   * ช่างปิดงานแล้วแต่มีอะไหล่เก่าต้องส่งเคลม — Admin Spare Part ตรวจหลักฐานตามฟอร์มใบเคลมก่อน
+   * (เจ้าของงานกำหนด ต.ค. 69) อนุมัติแล้วปิดงาน · ตีกลับแล้วกลับไปที่ช่าง
+   * ใบที่ไม่มีเคลมข้ามขั้นนี้ไปปิดเลย
+   */
+  "CLAIM_REVIEW",
   "DONE",
 ] as const;
 
@@ -267,6 +277,9 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   // ปล่อยงานให้ช่าง — วันอาจถูกเลื่อน หัวหน้าภาคเช็คทีมอีกรอบก่อนออกงาน
   ASSIGNED: "SUPERVISOR",
   IN_PROGRESS: "EMPLOYEE",
+  // ตรวจเคลมเป็นหน้าที่ Admin Spare Part — role ถูกมองเป็น ADMIN แต่กดได้เฉพาะ partsAdmin/Super Admin
+  // (ดู canReviewClaims) กล่องงานของแอดมินทั่วไปจึงไม่มีขั้นนี้
+  CLAIM_REVIEW: "ADMIN",
 };
 
 /** สถานะที่ถือว่ายังทำงานอยู่ ใช้กันไม่ให้เปิดใบงานซ้ำกับเคสเดิม */
@@ -281,6 +294,7 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
   "ASSIGNED",
   "AWAITING_CONFIRM",
   "IN_PROGRESS",
+  "CLAIM_REVIEW",
 ] as const;
 
 /**
@@ -397,6 +411,9 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   ATTACHED: "แนบไฟล์",
   ATTACHMENT_REMOVED: "ลบไฟล์แนบ",
   BACKFILLED: "ปิดงานย้อนหลัง (แอดมินกรอกแทน)",
+  CLAIM_SUBMITTED: "ส่งเคลมอะไหล่เก่า",
+  CLAIM_APPROVED: "อนุมัติเคลม · ปิดงาน",
+  CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",
 };
 
 /**
@@ -593,13 +610,64 @@ export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "DOCUMENT"] as const;
  *
  * ทั้งสองอย่างไม่ใช่หลักฐานของอาการ จึงต้องแยกให้หาเจอ ไม่ใช่ปนอยู่ในกองรูปหน้างาน
  */
-export const ATTACHMENT_ROLES = ["NAMEPLATE", "REQUISITION", "QUOTE", "RECEIPT"] as const;
+export const ATTACHMENT_ROLES = [
+  "NAMEPLATE",
+  "REQUISITION",
+  "QUOTE",
+  "RECEIPT",
+  ...(["CLAIM_PART", "CLAIM_SYMPTOM", "CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"] as const),
+] as const;
+
+/**
+ * หลักฐานเคลมอะไหล่ตามฟอร์ม "เอกสารใบเคลมอะไหล่" (ข้อ 1–3) — ผูกกับอะไหล่ทีละชิ้นผ่าน sparePartId ของไฟล์แนบ
+ * รูป Nameplate ใช้รูปป้ายรุ่นที่ปิดงานบังคับถ่ายอยู่แล้ว จึงไม่อยู่ในรายการนี้
+ */
+export const CLAIM_EVIDENCE_ROLES = ["CLAIM_PART", "CLAIM_SYMPTOM", "CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"] as const;
+
+/**
+ * Troubleshooting ข้อ 4 ของฟอร์ม — บังคับเฉพาะเครื่อง Huebsch หรือ Primus
+ *
+ * ⚠ รายการนี้เป็นตัวอย่างไว้ก่อน (เจ้าของงานยังไม่ได้ส่งรายการจริงของผู้ผลิตมา)
+ * ได้รายการจริงแล้วแก้ที่นี่ที่เดียว — หน้าจอดึงจากเซิร์ฟเวอร์ ไม่ได้เขียนรายการซ้ำ
+ */
+export const CLAIM_TROUBLESHOOTING: { match: RegExp; brand: string; items: string[] }[] = [
+  {
+    match: /huebsch/i,
+    brand: "Huebsch",
+    items: [
+      "เช็ค Error code บนหน้าจอและบันทึกรหัส",
+      "วัดแรงดันไฟเข้าเครื่อง / เข้าชิ้นส่วนที่สงสัย",
+      "เช็คสายไฟและขั้วต่อของชิ้นส่วนนี้",
+      "ทดสอบการทำงานของชิ้นส่วนตามคู่มือ",
+      "เปลี่ยนแล้วทดสอบเดินเครื่องครบรอบ",
+    ],
+  },
+  {
+    match: /primus/i,
+    brand: "Primus",
+    items: [
+      "เช็ค Error code บนหน้าจอและบันทึกรหัส",
+      "วัดแรงดันไฟเข้าเครื่อง / เข้าชิ้นส่วนที่สงสัย",
+      "เช็คสายไฟและขั้วต่อของชิ้นส่วนนี้",
+      "ทดสอบการทำงานของชิ้นส่วนตามคู่มือ",
+      "เปลี่ยนแล้วทดสอบเดินเครื่องครบรอบ",
+    ],
+  },
+];
+
+export function claimTroubleshootingFor(make: string | null | undefined) {
+  return make ? CLAIM_TROUBLESHOOTING.find((t) => t.match.test(make)) ?? null : null;
+}
 
 export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   NAMEPLATE: "ป้ายรุ่น",
   REQUISITION: "ใบเหลือง",
   QUOTE: "ใบเสนอราคา",
   RECEIPT: "บิลที่จ่ายแล้ว",
+  CLAIM_PART: "รูปอะไหล่เก่า (เคลม)",
+  CLAIM_SYMPTOM: "รูปอาการเสีย (เคลม)",
+  CLAIM_ERROR_VIDEO: "วิดีโอ Error code (เคลม)",
+  CLAIM_CHECK_VIDEO: "วิดีโอการตรวจเช็ค (เคลม)",
 };
 
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {

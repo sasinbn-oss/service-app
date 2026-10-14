@@ -13,10 +13,12 @@ import {
 import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useNavigation } from "@react-navigation/native";
+import { BottomTabBarHeightContext } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { MaximizeButton } from "./AppModal";
 import { EXIT_EASE, lockHistorySwipe, lockSelection, rubber, spring, timing } from "../utils/motion";
+import { chromeHide, useChrome } from "../utils/chrome";
 
 /**
  * หน้าที่เปิดเป็นหน้าต่างลอยทับหน้าเดิม (ใบงาน · เปิดใบงานใหม่) ตามตัวอย่างที่เจ้าของงานเลือก
@@ -89,6 +91,21 @@ export default function PopupScreen({
   // จอแคบ (มือถือ) เป็นแผ่นเลื่อนขึ้นจากล่าง เต็มความกว้าง — หน้าต่างกลางจอบนมือถือ
   // เหลือขอบสองข้างที่ไม่ได้ใช้ และนิ้วเอื้อมถึงปุ่มปิดยากกว่า
   const sheet = screen < 640;
+  /**
+   * เปิดจากหน้ารายการใบงานบนจอแคบ แถบบนกับแท็บล่างลอยทับอยู่ (utils/chrome.ts) — หน้ารายการยังเป็นโหมดลอย
+   * ตอนใบงานเด้งทับ เพื่อไม่ให้รายการข้างหลังกระโดด แต่หน้าต่างนี้ต้องหลบแถบเอง
+   * ไม่งั้นหัวหน้าต่างอยู่ใต้แถบบน และปุ่มท้ายฟอร์ม (ยืนยันปิดงาน) อยู่ใต้แท็บล่าง กดไม่ได้
+   * หลบเท่าที่แถบโผล่อยู่จริง — เลื่อนรายการจนแถบหลบไปแล้ว หน้าต่างก็ได้ทั้งจอ
+   */
+  const chrome = useChrome();
+  const tabH = useContext(BottomTabBarHeightContext) ?? 0;
+  const pad = sheet ? 0 : spacing.lg;
+  const dodge = chrome.overlay
+    ? {
+        paddingTop: chromeHide.interpolate({ inputRange: [0, 1], outputRange: [chrome.barsH + pad, insets.top + pad] }),
+        paddingBottom: chromeHide.interpolate({ inputRange: [0, 1], outputRange: [tabH + pad, pad] }),
+      }
+    : null;
 
   const [panes, setPanes] = useState<Pane[]>([]);
   const show = useCallback((key: string, node: React.ReactNode, opts?: { onBack?: () => void; busy?: boolean }) => {
@@ -200,8 +217,8 @@ export default function PopupScreen({
   return (
     <PopupPaneContext.Provider value={host.current}>
       <PopupMaxContext.Provider value={max}>
-        <View
-          style={[styles.backdrop, sheet && styles.backdropSheet, big && !sheet && styles.backdropMax]}
+        <Animated.View
+          style={[styles.backdrop, sheet && styles.backdropSheet, big && !sheet && styles.backdropMax, dodge]}
           onLayout={(e) => (box.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
         >
           <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, { opacity: fade }]}>
@@ -252,7 +269,7 @@ export default function PopupScreen({
               <PaneView key={p.key} pane={p} width={cardW} onGone={remove} onSwiped={markGone} />
             ))}
           </Animated.View>
-        </View>
+        </Animated.View>
       </PopupMaxContext.Provider>
     </PopupPaneContext.Provider>
   );

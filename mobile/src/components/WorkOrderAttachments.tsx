@@ -47,6 +47,8 @@ export interface Attachment {
   createdById: number | null;
   createdByName: string | null;
   thumbnailDataUrl: string | null;
+  /** หลักฐานเคลม (role CLAIM_*) เป็นของอะไหล่ชิ้นไหน */
+  sparePartId?: number | null;
 }
 
 export default function WorkOrderAttachments({
