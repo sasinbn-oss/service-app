@@ -62,7 +62,9 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'C
 echo
 # รูปหน้างานต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทน
 curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
-  -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
+  -F "file=@$SP/site-photo.png;type=image/png" -F "role=BEFORE" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
+  -F "file=@$SP/site-photo.png;type=image/png" -F "role=AFTER" >/dev/null
 # ปิดงานต้องมีป้ายรุ่นของรอบนี้ด้วย ไว้ไล่เทียบว่าไปถูกเครื่อง
 curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
   -F "file=@$SP/site-photo.png;type=image/png" -F "role=NAMEPLATE" >/dev/null
@@ -90,7 +92,9 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Co
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/attachments" -H "$(H $T)" \
-  -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
+  -F "file=@$SP/site-photo.png;type=image/png" -F "role=BEFORE" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID2/attachments" -H "$(H $T)" \
+  -F "file=@$SP/site-photo.png;type=image/png" -F "role=AFTER" >/dev/null
 # ปิดงานต้องมีป้ายรุ่นของรอบนี้ด้วย ไว้ไล่เทียบว่าไปถูกเครื่อง
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/attachments" -H "$(H $T)" \
   -F "file=@$SP/site-photo.png;type=image/png" -F "role=NAMEPLATE" >/dev/null

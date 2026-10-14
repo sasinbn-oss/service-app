@@ -44,7 +44,8 @@ POST $S "work-orders/$ID/assign" '{"team":"กระบี่","scheduledAt":"20
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] || { echo "FAIL เตรียมใบงานไม่ถึงขั้นเข้างาน"; exit 1; }
-UP image/png >/dev/null
+UP image/png -F "role=BEFORE" >/dev/null
+UP image/png -F "role=AFTER" >/dev/null
 UP image/png -F "role=NAMEPLATE" >/dev/null
 UP image/png -F "role=REQUISITION" >/dev/null
 ME=$(DB "select id from \"User\" where \"employeeCode\"='A001'")

@@ -157,6 +157,9 @@ interface WorkOrder {
   hasReceipt: boolean;
   /** จำนวนรูป/วิดีโอหน้างาน (ไม่นับใบเหลืองกับป้ายรุ่น) — ต้องมีอย่างน้อยหนึ่งถึงจะปิดงานได้ */
   siteFileCount: number;
+  /** รูป/วิดีโอก่อนซ่อม · หลังซ่อม ของรอบนี้ที่แนบไว้แล้ว — ปิดงานบังคับอย่างละอย่างน้อยหนึ่ง */
+  beforeCount?: number;
+  afterCount?: number;
   /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
   workers: Technician[];
   otherWorkers: string | null;
@@ -462,6 +465,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const closeFiles = order.closedAt || rejected
     ? files.filter((f) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt)
     : [];
+  const beforeShots = closeFiles.filter((f) => f.role === "BEFORE");
+  const afterShots = closeFiles.filter((f) => f.role === "AFTER");
+  const otherShots = closeFiles.filter((f) => f.role !== "BEFORE" && f.role !== "AFTER");
+  const closeShown = [...beforeShots, ...afterShots, ...otherShots];
 
   /**
    * ลบถาวร — บอกให้ครบก่อนว่าอะไรจะหายไปด้วย
@@ -1075,6 +1082,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
         reloadKey={filesKey}
         onLoaded={setFiles}
+        onAdded={load}
       />
 
       {/*
@@ -1154,39 +1162,41 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               {viewingClose !== null ? (
                 <ImageViewer
                   workOrderId={order.id}
-                  items={closeFiles}
+                  items={closeShown}
                   startIndex={viewingClose}
                   onClose={() => setViewingClose(null)}
                 />
               ) : null}
-              <View style={styles.closeFiles}>
-                {closeFiles.map((f) => (
-                  <TouchableOpacity
-                    key={f.id}
-                    style={styles.closeFile}
-                    activeOpacity={0.8}
-                    onPress={() => setViewingClose(closeFiles.findIndex((x) => x.id === f.id))}
-                    accessibilityLabel={`เปิด ${f.fileName}`}
-                  >
-                    {f.thumbnailDataUrl ? (
-                      <Image source={{ uri: f.thumbnailDataUrl }} style={styles.closeThumb} />
-                    ) : (
-                      <View style={[styles.closeThumb, styles.slipBlank]}>
-                        <Ionicons
-                          name={attachmentIcon(f.kind)}
-                          size={20}
-                          color={colors.textFaint}
-                        />
+              {/*
+                ก่อนซ่อม | หลังซ่อม วางคู่กันให้เทียบได้ทันที (เจ้าของงานขอ ต.ค. 69) — ไฟล์อื่น
+                (ป้ายรุ่น ใบเหลือง หลักฐานเคลม รูปหน้างานแบบเดิม) เป็นแถวแยกด้านล่างเหมือนเดิม
+                ลำดับในหน้าดูรูปเต็มจอตามที่วางบนจอ: ก่อน → หลัง → อื่น ๆ
+              */}
+              {beforeShots.length + afterShots.length > 0 ? (
+                <View style={styles.compare}>
+                  {([["ก่อนซ่อม", beforeShots, styles.compareBefore], ["หลังซ่อม", afterShots, styles.compareAfter]] as const).map(
+                    ([label, list, tone]) => (
+                      <View key={label} style={[styles.compareCol, tone]}>
+                        <Text style={[styles.compareHead, label === "ก่อนซ่อม" ? styles.compareHeadBefore : styles.compareHeadAfter]}>
+                          {label} · {list.length}
+                        </Text>
+                        <View style={styles.closeFiles}>
+                          {list.map((f) => (
+                            <CloseThumb key={f.id} f={f} onPress={() => setViewingClose(closeShown.findIndex((x) => x.id === f.id))} />
+                          ))}
+                        </View>
                       </View>
-                    )}
-                    {f.roleLabel ? (
-                      <View style={styles.closeBadge}>
-                        <Text style={styles.closeBadgeText}>{f.roleLabel}</Text>
-                      </View>
-                    ) : null}
-                  </TouchableOpacity>
-                ))}
-              </View>
+                    )
+                  )}
+                </View>
+              ) : null}
+              {otherShots.length > 0 ? (
+                <View style={styles.closeFiles}>
+                  {otherShots.map((f) => (
+                    <CloseThumb key={f.id} f={f} badge onPress={() => setViewingClose(closeShown.findIndex((x) => x.id === f.id))} />
+                  ))}
+                </View>
+              ) : null}
             </>
           ) : null}
 
@@ -3083,7 +3093,8 @@ function CloseModal({
   const [parts, setParts] = useState<PickedPart[]>(reclosing ? order.parts : []);
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
-  const [siteFiles, setSiteFiles] = useState<PickedAttachment[]>([]);
+  const [beforeFiles, setBeforeFiles] = useState<PickedAttachment[]>([]);
+  const [afterFiles, setAfterFiles] = useState<PickedAttachment[]>([]);
   const [nameplate, setNameplate] = useState<PickedAttachment | null>(null);
   const [workerIds, setWorkerIds] = useState<number[]>(reclosing ? order.workers.map((w) => w.id).slice(0, 3) : []);
   const [otherWorkers, setOtherWorkers] = useState(reclosing ? order.otherWorkers ?? "" : "");
@@ -3098,7 +3109,10 @@ function CloseModal({
   // ดีกว่าให้กดบันทึกแล้วค่อยเด้งกลับมาว่าขาดรูป
   const slipMissing = parts.length > 0 && !slip && !order.hasRequisitionSlip;
   // รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร ต้องมีอย่างน้อยหนึ่ง
-  const shotsMissing = siteFiles.length === 0 && order.siteFileCount === 0;
+  // ก่อน/หลังซ่อมของรอบนี้ อย่างละอย่างน้อยหนึ่ง (เจ้าของงานขอ ต.ค. 69) — เซิร์ฟเวอร์เช็คซ้ำ
+  const beforeMissing = beforeFiles.length === 0 && !order.beforeCount;
+  const afterMissing = afterFiles.length === 0 && !order.afterCount;
+  const shotsMissing = beforeMissing || afterMissing;
   // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
   const workersMissing = workerIds.length === 0 && !otherWorkers.trim();
   const summaryMissing = !note.trim();
@@ -3172,7 +3186,8 @@ function CloseModal({
        */
       const claimed = parts.filter((p) => draftFor(p.sparePartId).on);
       const queue: { file: PickedAttachment; role?: string; sparePartId?: number }[] = [
-        ...siteFiles.map((file) => ({ file })),
+        ...beforeFiles.map((file) => ({ file, role: "BEFORE" })),
+        ...afterFiles.map((file) => ({ file, role: "AFTER" })),
         ...(nameplate ? [{ file: nameplate, role: "NAMEPLATE" }] : []),
         ...(slip ? [{ file: slip, role: "REQUISITION" }] : []),
         ...claimed.flatMap((p) =>
@@ -3208,7 +3223,8 @@ function CloseModal({
       setNote("");
       setParts([]);
       setSlip(null);
-      setSiteFiles([]);
+      setBeforeFiles([]);
+      setAfterFiles([]);
       setNameplate(null);
       setWorkerIds([]);
       setOtherWorkers("");
@@ -3367,56 +3383,62 @@ function CloseModal({
       ) : null}
 
       {/*
-        รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร — สรุปงานที่พิมพ์มา
-        เป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปเลยคือใบที่ตรวจย้อนไม่ได้
+        รูปก่อนซ่อม · หลังซ่อม แยกช่อง (เจ้าของงานขอ ต.ค. 69 — แทนช่องรูปหน้างานช่องเดียว)
+        ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง คนตรวจย้อนเทียบสองภาพนี้
+        สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปคือใบที่ตรวจย้อนไม่ได้
       */}
-      <Text style={styles.modalLabel}>รูป / วิดีโอหน้างาน</Text>
-      {order.siteFileCount > 0 ? (
-        <Text style={styles.linkedText}>
-          แนบไว้แล้ว {order.siteFileCount} ไฟล์ในใบงานนี้ — เพิ่มได้อีก
-        </Text>
-      ) : null}
-      <FileStrip files={siteFiles} onChange={setSiteFiles} />
-      {busy ? null : (
-        <View style={styles.options}>
-          {Platform.OS !== "web" ? (
-            <TouchableOpacity
-              style={styles.option}
-              onPress={() =>
-                pickOne(
-                  (stage) => pickImageAttachment(true, stage),
-                  (f) => setSiteFiles((v) => [...v, f])
-                )
-              }
-              activeOpacity={0.7}
-            >
-              <Text style={styles.optionText}>ถ่ายรูป</Text>
-            </TouchableOpacity>
+      {([
+        ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0, beforeMissing],
+        ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วปกติ", afterFiles, setAfterFiles, order.afterCount ?? 0, afterMissing],
+      ] as const).map(([role, label, hint, list, setList, already, missingNow]) => (
+        <View key={role}>
+          <Text style={styles.modalLabel}>
+            รูป / วิดีโอ {label} <Text style={{ color: colors.danger }}>*</Text>
+          </Text>
+          <View style={[styles.shotSlot, role === "BEFORE" ? styles.shotBefore : styles.shotAfter]}>
+            <Text style={styles.shotHint}>{hint}</Text>
+            {already > 0 ? (
+              <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text>
+            ) : null}
+            <FileStrip files={[...list]} onChange={(next) => setList(next)} />
+            {busy ? null : (
+              <View style={styles.options}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity
+                    style={styles.option}
+                    onPress={() => pickOne((stage) => pickImageAttachment(true, stage), (f) => setList((v) => [...v, f]))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.optionText}>ถ่ายรูป</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => pickOne((stage) => pickImageAttachment(false, stage), (f) => setList((v) => [...v, f]))}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`เลือกรูป${label}`}
+                >
+                  <Text style={styles.optionText}>เลือกรูป</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => pickOne(pickVideoAttachment, (f) => setList((v) => [...v, f]))}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`เลือกวิดีโอ${label}`}
+                >
+                  <Text style={styles.optionText}>วิดีโอ</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+          {missingNow ? (
+            <Text style={styles.warn}>
+              ต้องแนบรูปหรือวิดีโอ{label}อย่างน้อยหนึ่งไฟล์
+              {role === "AFTER" ? " — ใช้ยืนยันว่าเครื่องกลับมาใช้ได้" : ""}
+            </Text>
           ) : null}
-          <TouchableOpacity
-            style={styles.option}
-            onPress={() =>
-              pickOne(
-                (stage) => pickImageAttachment(false, stage),
-                (f) => setSiteFiles((v) => [...v, f])
-              )
-            }
-            activeOpacity={0.7}
-          >
-            <Text style={styles.optionText}>เลือกรูป</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.option}
-            onPress={() => pickOne(pickVideoAttachment, (f) => setSiteFiles((v) => [...v, f]))}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.optionText}>วิดีโอ</Text>
-          </TouchableOpacity>
         </View>
-      )}
-      {shotsMissing ? (
-        <Text style={styles.warn}>ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์</Text>
-      ) : null}
+      ))}
 
       {/*
         ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
@@ -3783,6 +3805,26 @@ function CloseModal({
 
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
+  );
+}
+
+/** รูปย่อในการ์ดผลการทำงาน — badge = ขึ้นป้ายบอกว่าไฟล์นี้คืออะไร (ในช่องก่อน/หลังไม่ต้อง หัวช่องบอกแล้ว) */
+function CloseThumb({ f, onPress, badge }: { f: Attachment; onPress: () => void; badge?: boolean }) {
+  return (
+    <TouchableOpacity style={styles.closeFile} activeOpacity={0.8} onPress={onPress} accessibilityLabel={`เปิด ${f.fileName}`}>
+      {f.thumbnailDataUrl ? (
+        <Image source={{ uri: f.thumbnailDataUrl }} style={styles.closeThumb} />
+      ) : (
+        <View style={[styles.closeThumb, styles.slipBlank]}>
+          <Ionicons name={attachmentIcon(f.kind)} size={20} color={colors.textFaint} />
+        </View>
+      )}
+      {badge && f.roleLabel ? (
+        <View style={styles.closeBadge}>
+          <Text style={styles.closeBadgeText}>{f.roleLabel}</Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
   );
 }
 
@@ -4167,6 +4209,17 @@ const styles = StyleSheet.create({
     borderColor: colors.warning,
   },
   testBandText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
+  compare: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
+  compareCol: { flex: 1, minWidth: 150, borderTopWidth: 4, borderRadius: radius.md, padding: spacing.sm, backgroundColor: colors.card },
+  compareBefore: { borderTopColor: colors.warning },
+  compareAfter: { borderTopColor: colors.success },
+  compareHead: { fontSize: 13, lineHeight: 20, fontWeight: "800", marginBottom: 2 },
+  compareHeadBefore: { color: colors.warningInk },
+  compareHeadAfter: { color: colors.success },
+  shotSlot: { borderWidth: 1.5, borderRadius: radius.md, padding: spacing.sm, gap: spacing.xs },
+  shotBefore: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
+  shotAfter: { borderColor: colors.success, backgroundColor: colors.successSoft },
+  shotHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   // ── เคลมอะไหล่ ──
   claimCardReview: { borderColor: colors.primary, borderWidth: 2 },
   claimBlock: { paddingTop: spacing.sm },

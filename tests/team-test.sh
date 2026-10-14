@@ -61,15 +61,24 @@ curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $T)" \
   | J 'd.statusLabel' | grep -q "เข้างาน" && pass "จ่ายงานแล้วถึงคิวช่างเข้างาน" || fail "ยังไม่ถึงคิวเข้างาน"
 
 echo
-echo "═══ ปิดงานโดยไม่มีรูปหน้างาน — ต้องถูกปฏิเสธ"
+echo "═══ ปิดงานโดยไม่มีรูปก่อน/หลังซ่อม — ต้องถูกปฏิเสธ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \
   -d "{\"result\":\"FIXED\",\"note\":\"เสร็จ\",\"workerIds\":[$TECH]}")
-echo "$R" | grep -q "รูปหรือวิดีโอหน้างาน" && pass "ไม่มีรูปหน้างาน ปิดไม่ได้" || fail "ปิดได้ทั้งที่ไม่มีรูป: $R"
+echo "$R" | grep -q "ก่อนซ่อม" && pass "ไม่มีรูปก่อนซ่อม ปิดไม่ได้" || fail "ปิดได้ทั้งที่ไม่มีรูปก่อนซ่อม: $R"
+# รูปหน้างานแบบเดิม (ไม่ระบุก่อน/หลัง) ไม่นับแทน
+curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=BEFORE" >/dev/null
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \
+  -d "{\"result\":\"FIXED\",\"note\":\"เสร็จ\",\"workerIds\":[$TECH]}")
+echo "$R" | grep -q "หลังซ่อม" && [ "$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.status')" != "DONE" ] \
+  && pass "มีแต่รูปก่อนซ่อม (กับรูปทั่วไป) ปิดไม่ได้ ต้องมีหลังซ่อม" || fail "ปิดได้ทั้งที่ไม่มีรูปหลังซ่อม: $R"
 
 echo
 echo "═══ ปิดงานโดยไม่บอกว่าใครไป — ต้องถูกปฏิเสธ"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
-  -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
+  -F "file=@$SP/site-photo.png;type=image/png" -F "role=BEFORE" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
+  -F "file=@$SP/site-photo.png;type=image/png" -F "role=AFTER" >/dev/null
 # ปิดงานต้องมีป้ายรุ่นของรอบนี้ด้วย ไว้ไล่เทียบว่าไปถูกเครื่อง
 curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
   -F "file=@$SP/site-photo.png;type=image/png" -F "role=NAMEPLATE" >/dev/null

@@ -67,7 +67,7 @@ const login = async (code) =>
     await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: "2026-11-10" });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(S, "POST", `/work-orders/${id}/dispatch`, {});
-    for (const role of [null, "NAMEPLATE", "REQUISITION"]) {
+    for (const role of ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"]) {
       const form = new FormData();
       form.append("file", new Blob([fs.readFileSync(PHOTO)], { type: "image/png" }), "p.png");
       if (role) form.append("role", role);
@@ -121,7 +121,7 @@ const login = async (code) =>
       ? pass(`คัดลอกเป็นใบทดสอบ ${code}: เปิดใบใหม่ให้เลย มีแถบใบทดสอบ ขั้นเดียวกับใบจริง`)
       : fail("คัดลอกเป็นใบทดสอบ");
     // ใบทดสอบไม่คัดลอกรูป — แนบรูปหน้างาน ป้ายรุ่น ใบเหลืองของใบทดสอบเอง (ผู้ทดสอบจริงแนบในฟอร์มปิดงาน)
-    for (const role of [null, "NAMEPLATE", "REQUISITION"]) {
+    for (const role of ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"]) {
       const form = new FormData();
       form.append("file", new Blob([fs.readFileSync(PHOTO)], { type: "image/png" }), "p.png");
       if (role) form.append("role", role);
