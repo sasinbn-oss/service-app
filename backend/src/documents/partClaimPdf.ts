@@ -1,7 +1,9 @@
 /**
  * ใบเคลมอะไหล่เป็น PDF — หัวข้อและลำดับตามหน้า "ข้อมูลแจ้งเคลม" ของฟอร์มใบเคลมอะไหล่ที่ผู้ขายใช้
  *
- * ไม่ใส่โลโก้หรือที่อยู่ของผู้ขาย — เอกสารนี้ออกจากฝั่งเรา ส่งไปพร้อมไฟล์หลักฐาน
+ * หัวกระดาษ K-nex (โลโก้ ที่อยู่ เลขผู้เสียภาษี) ตามที่เจ้าของงานส่งมา ต.ค. 69 — ข้อความวาดด้วยฟอนต์ที่ฝัง
+ * ไม่ใช้รูปหัวกระดาษทั้งแผ่น เพราะรูปที่ความละเอียดไม่พอพิมพ์แล้วตัวหนังสือเบลอ · โลโก้ยังเป็นรูป
+ * (assets/knex-logo.png ตัดจากรูปที่ส่งมา) — ได้ไฟล์โลโก้ต้นฉบับแล้วแทนที่ไฟล์นั้นไฟล์เดียว
  * ช่อง "ผู้รับเคลม" เว้นว่างไว้ให้ผู้ขายเซ็นจริง
  *
  * ฟอนต์ต้องฝังลงไฟล์เสมอ (ดู transferRequestPdf.ts) ฟอนต์มาตรฐานของ PDF ไม่มีอักษรไทย
@@ -10,6 +12,17 @@ import path from "path";
 import PDFDocument from "pdfkit";
 
 const FONT_DIR = path.join(__dirname, "..", "..", "assets", "fonts");
+const LOGO = path.join(__dirname, "..", "..", "assets", "knex-logo.png");
+
+/** หัวกระดาษ — แก้ที่อยู่/เบอร์ที่นี่ที่เดียว */
+const LETTERHEAD = {
+  nameEn: "K-nex Corporation Co.,Ltd",
+  nameTh: "บริษัท เค-เน็กซ์ คอร์ปอเรชั่น จำกัด (สำนักงานใหญ่)",
+  address: ["142/9 ซอยลาดพร้าว 94 (ปัญจมิตร) แขวงพลับพลา", "เขตวังทองหลาง กรุงเทพมหานคร 10310"],
+  contact: "T : 02-125-2397     www.knexcorp.com",
+  taxId: "เลขประจำตัวผู้เสียภาษี  0-1055-55065-09-3",
+};
+const NAVY = "#1B2A6B";
 const REGULAR = "sarabun";
 const BOLD = "sarabun-bold";
 
@@ -63,7 +76,22 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
       doc.registerFont(REGULAR, path.join(FONT_DIR, "Sarabun-Regular.ttf"));
       doc.registerFont(BOLD, path.join(FONT_DIR, "Sarabun-Bold.ttf"));
 
-      doc.font(BOLD).fontSize(22).text("เอกสารใบเคลมอะไหล่", MARGIN, MARGIN, { width: WIDTH, align: "center" });
+      // ── หัวกระดาษ ── ซ้าย: โลโก้ + ชื่อบริษัท · ขวา: ที่อยู่ เบอร์ เลขผู้เสียภาษี
+      const top = 34;
+      doc.image(LOGO, MARGIN, top, { width: 92 });
+      doc.font(BOLD).fontSize(11).fillColor(NAVY).text(LETTERHEAD.nameEn, MARGIN, top + 42, { width: 240, lineBreak: false });
+      doc.font(REGULAR).fontSize(9).fillColor("#333").text(LETTERHEAD.nameTh, MARGIN, top + 57, { width: 240, lineBreak: false });
+      const right = { width: 260, align: "right" as const, lineBreak: false };
+      const rx = MARGIN + WIDTH - 260;
+      doc.font(BOLD).fontSize(11).fillColor("#222");
+      doc.text(LETTERHEAD.address[0], rx, top + 2, right);
+      doc.text(LETTERHEAD.address[1], rx, top + 17, right);
+      doc.font(REGULAR).fontSize(9).fillColor("#333");
+      doc.text(LETTERHEAD.contact, rx, top + 38, right);
+      doc.text(LETTERHEAD.taxId, rx, top + 52, right);
+      doc.moveTo(MARGIN, top + 74).lineTo(MARGIN + WIDTH, top + 74).lineWidth(0.8).strokeColor(NAVY).stroke().lineWidth(1);
+
+      doc.font(BOLD).fontSize(22).fillColor("#000").text("เอกสารใบเคลมอะไหล่", MARGIN, top + 86, { width: WIDTH, align: "center" });
       doc.font(REGULAR).fontSize(11).fillColor("#555")
         .text(`อ้างอิงใบงาน ${data.workOrderCode}`, { width: WIDTH, align: "center" });
       // ยังไม่อนุมัติ = ร่าง — ผู้ขายต้องไม่ได้รับใบที่ Admin Spare Part ยังไม่ได้ตรวจ
