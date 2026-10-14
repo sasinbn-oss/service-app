@@ -132,7 +132,8 @@ export default function PopupScreen({
   );
 
   // ── ขยาย/ย่อ: ยืดจากขนาดปกติไปเต็มกรอบแบบสปริง (วิธีเดียวกับ AppModal) ──
-  const [max, setMax] = useState(false);
+  // เปิดมาแบบขยายเสมอ (เจ้าของงานเลือก ต.ค. 69) — ใบงานยาว ขนาดปกติต้องเลื่อนมากกว่าที่ควร
+  const [max, setMax] = useState(true);
   const [resizing, setResizing] = useState(false);
   const grow = useRef(new Animated.Value(0)).current;
   const box = useRef({ w: 0, h: 0 });
@@ -144,6 +145,12 @@ export default function PopupScreen({
     const next = !max;
     const pad = sheet ? 0 : spacing.sm;
     const n = normal.current;
+    // เปิดมาแบบขยาย ยังไม่เคยเห็นขนาดปกติ — ไม่มีขนาดให้ยืดไปหา ย่อทันทีแทน
+    // (ยืดไปหา 0×0 คือหน้าต่างหดหายแล้วเด้งกลับ) ย่อแล้ววัดขนาดได้ ครั้งต่อไปยืดตามปกติ
+    if (!next && n.w === 0) {
+      setMax(false);
+      return;
+    }
     range.current = { w0: n.w, h0: n.h, w1: sheet ? n.w : box.current.w - pad * 2, h1: box.current.h - pad * 2 };
     setResizing(true);
     setMax(next);
