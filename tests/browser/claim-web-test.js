@@ -198,17 +198,22 @@ const login = async (code) =>
     // ── ช่างเห็นเหตุผล ปิดใหม่ (แนบใหม่เฉพาะวิดีโอที่โดนตีกลับ) ──
     page = await open("A001");
     (await vis(page, "วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่").count()) > 0 ? pass("ช่างเห็นเหตุผลที่ถูกตีกลับบนใบงาน") : fail("ไม่เห็นเหตุผลตีกลับ");
+    // ผลปิดงานรอบที่ถูกตีกลับยังอยู่ พร้อม remark เหตุผล (ไม่ใช่หายทั้งการ์ด)
+    (await vis(page, "ผลการทำงานรอบที่ถูกตีกลับ").count()) > 0 &&
+      (await vis(page, "Remark: ตีกลับเพราะ วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่", false).count()) > 0 &&
+      (await vis(page, "เปลี่ยนบอร์ด ทดสอบแล้วปกติ").count()) > 0
+      ? pass("ตีกลับแล้วยังเห็นผลการทำงานรอบเดิม พร้อม Remark เหตุผลที่ตีกลับ")
+      : fail("ผลการทำงานรอบเดิมหายหลังตีกลับ");
     await vis(page, "ปิดงาน").first().click();
     await page.waitForTimeout(1500);
-    await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").fill("ถ่ายวิดีโอใหม่ เห็นมิเตอร์");
-    await label(page, "ผู้เข้าปฏิบัติงานคนที่ 1").click();
-    await page.waitForTimeout(500);
-    await vis(page, "ช่างสมชาย", false).last().click();
-    await page.waitForTimeout(500);
-    (await label(page, "อาการ/สาเหตุ SP-BOARD").inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
+    const summary = page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last();
+    (await summary.inputValue()) === "เปลี่ยนบอร์ด ทดสอบแล้วปกติ" &&
+      (await vis(page, "ช่างสมชาย", false).count()) > 0 &&
+      (await label(page, "อาการ/สาเหตุ SP-BOARD").inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
       (await vis(page, "รูปอะไหล่เก่า — แนบไว้แล้ว").count()) > 0
-      ? pass("ปิดใหม่: อะไหล่ ข้อความ และหลักฐานเดิมมาให้ ไม่ต้องทำซ้ำ")
-      : fail("ปิดใหม่ต้องกรอกใหม่หมด");
+      ? pass("ปิดใหม่: สรุปงาน ผู้เข้าปฏิบัติงาน อะไหล่ ข้อความเคลม และหลักฐานเดิมมาให้ ไม่ต้องกรอกซ้ำ")
+      : fail(`ปิดใหม่ต้องกรอกใหม่: สรุป="${await summary.inputValue()}"`);
+    await summary.fill("ถ่ายวิดีโอใหม่ เห็นมิเตอร์");
     await attach(page, "แนบวิดีโอการตรวจเช็ค SP-BOARD", CLIP);
     await vis(page, "ยืนยันปิดงาน").last().click();
     await page.waitForTimeout(5000);
