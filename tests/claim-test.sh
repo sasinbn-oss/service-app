@@ -88,6 +88,8 @@ POST $PA "work-orders/$ID/claim-review" '{"approve":false}' | grep -q "ต้อ
 R=$(POST $PA "work-orders/$ID/claim-review" '{"approve":false,"reason":"วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่"}')
 [ "$(DB "select status||'|'||coalesce(\"closedAt\"::text,'null') from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS|null" ] \
   && pass "ตีกลับแล้วใบงานกลับไปรอช่าง และล้างเวลาปิด" || fail "สถานะหลังตีกลับ: $(DB "select status from \"WorkOrder\" where id=$ID")"
+[ "$(DB "select \"closeResult\"||'|'||\"closeNote\"||'|'||(\"closedById\"=$ME)||'|'||(select count(*) from \"WorkOrderWorker\" where \"workOrderId\"=$ID) from \"WorkOrder\" where id=$ID")" = "FIXED|เปลี่ยนบอร์ด ทดสอบแล้วปกติ|true|1" ] \
+  && pass "ตีกลับแล้วผล สรุปงาน คนปิด และผู้เข้าปฏิบัติงานรอบเดิมยังอยู่ (ฐานข้อมูล)" || fail "ข้อมูลปิดงานเดิมหาย"
 [ "$(DB "select status||'|'||\"rejectReason\" from \"PartClaim\" where \"workOrderId\"=$ID")" = "REJECTED|วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่" ] \
   && pass "ใบเคลมบันทึกว่าถูกตีกลับพร้อมเหตุผล" || fail "แถวเคลมหลังตีกลับ"
 echo "$R" | J 'd.claims[0].rejectReason' | grep -q "ถ่ายใหม่" && pass "ใบงานส่งเหตุผลตีกลับให้หน้าจอช่าง" || fail "หน้าจอไม่เห็นเหตุผล"

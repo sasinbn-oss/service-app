@@ -119,6 +119,7 @@ interface WorkOrder {
   createdAt: string;
   closedAt: string | null;
   closedByName: string | null;
+  closeResult?: string | null;
   closeResultLabel: string | null;
   closeNote: string | null;
   symptom: string | null;
@@ -451,7 +452,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * ไม่มี roundStartedAt (ใบเก่ามากที่ไม่มีประวัติการจ่ายงาน) ก็เอาทั้งหมด
    * ดีกว่าโชว์ว่าไม่มีรูปเลยทั้งที่มี
    */
-  const closeFiles = order.closedAt
+  /**
+   * รอบที่ถูกตีกลับเคลม — ใบงานกลับไปที่ช่าง (ไม่มีเวลาปิด) แต่ผลปิดงานรอบนั้นยังอยู่
+   * ต้องเห็นว่ารอบนั้นส่งอะไรมาและถูกตีกลับเพราะอะไร ไม่ใช่หายไปทั้งการ์ด (เจ้าของงานขอ ต.ค. 69)
+   */
+  const rejected = order.status === "IN_PROGRESS" && order.claims[0]?.status === "REJECTED" ? order.claims[0] : null;
+  const closeFiles = order.closedAt || rejected
     ? files.filter((f) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt)
     : [];
 
@@ -1094,9 +1100,18 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      {order.closedAt ? (
+      {order.closedAt || rejected ? (
         <View style={card}>
-          <Text style={styles.sectionTitle}>ผลการทำงาน</Text>
+          <Text style={styles.sectionTitle}>{rejected ? "ผลการทำงานรอบที่ถูกตีกลับ" : "ผลการทำงาน"}</Text>
+          {rejected ? (
+            <View style={styles.verdictBad}>
+              <Ionicons name="arrow-undo" size={16} color={colors.danger} />
+              <Text style={styles.verdictBadText}>
+                Remark: ตีกลับเพราะ {rejected.rejectReason ?? "—"}
+                {rejected.reviewedAt ? ` · ${formatDateTime(rejected.reviewedAt)}` : ""}
+              </Text>
+            </View>
+          ) : null}
           <Row label="ผล" value={order.closeResultLabel ?? "—"} />
           {/* สรุปงานคือสิ่งที่คนเปิดใบปิดแล้วมาหา (เจ้าของงานให้ตัวหนา) — เดิมเป็นตัวเทาเล็กไม่มีหัวข้อ */}
           {order.closeNote ? (
@@ -1115,7 +1130,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 .join(" · ") || "—"
             }
           />
-          <Row label="ปิดโดย" value={`${order.closedByName ?? "—"} · ${formatDateTime(order.closedAt)}`} />
+          <Row
+            label="ปิดโดย"
+            value={`${order.closedByName ?? "—"} · ${formatDateTime(order.closedAt ?? rejected?.createdAt ?? null)}`}
+          />
 
           {/*
             ปิดใบงานคือ "คนไปทำแล้ว" ส่วนเคสปิดคือ "เครื่องกลับมาแล้ว" ซึ่งคนละเรื่องกัน
@@ -3049,18 +3067,19 @@ function CloseModal({
   onCancel: () => void;
   onDone: () => void;
 }) {
-  const [result, setResult] = useState("FIXED");
-  const [note, setNote] = useState("");
-  const [needsParts, setNeedsParts] = useState<boolean | null>(null);
-  // ถูกตีกลับเคลมแล้วมาปิดใหม่ — อะไหล่ชุดเดิมยังอยู่ในใบ ไม่ต้องให้ช่างเลือกใหม่ทั้งหมด
+  // ถูกตีกลับเคลมแล้วมาปิดใหม่ — ค่าที่ปิดรอบก่อน (ผล สรุป คนที่ไป อะไหล่) ยังอยู่ในใบ ดึงมาให้แก้เฉพาะจุด
+  // ไม่ใช่ให้กรอกใหม่หมด (เจ้าของงานขอ ต.ค. 69)
   const reclosing = order.claims[0]?.status === "REJECTED";
+  const [result, setResult] = useState((reclosing && order.closeResult) || "FIXED");
+  const [note, setNote] = useState(reclosing ? order.closeNote ?? "" : "");
+  const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>(reclosing ? order.parts : []);
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [siteFiles, setSiteFiles] = useState<PickedAttachment[]>([]);
   const [nameplate, setNameplate] = useState<PickedAttachment | null>(null);
-  const [workerIds, setWorkerIds] = useState<number[]>([]);
-  const [otherWorkers, setOtherWorkers] = useState("");
+  const [workerIds, setWorkerIds] = useState<number[]>(reclosing ? order.workers.map((w) => w.id).slice(0, 3) : []);
+  const [otherWorkers, setOtherWorkers] = useState(reclosing ? order.otherWorkers ?? "" : "");
   // อะไหล่ที่ยังขาด — เปิดใบงานรออะไหล่ต่อจากใบนี้หลังปิดงาน
   const [followUp, setFollowUp] = useState(false);
   const [missing, setMissing] = useState<PickedPart[]>([]);
