@@ -944,6 +944,10 @@ model PartClaim {
   sparePartId  Int?
   partCode     String
   partName     String
+  // รหัสอะไหล่ตัวที่เสีย (ตัวที่ถอดออกและส่งเคลม) — ช่างกรอกเองจากตัวอะไหล่ (เจ้าของงานขอ ต.ค. 69)
+  // partCode ข้างบนคืออะไหล่ที่เบิกมาใส่แทน · ปกติตรงกัน แต่ตัวที่ส่งคืนผู้ขายคือตัวนี้ ต้องอ่านจากของจริง
+  // ว่างได้เฉพาะใบเคลมเก่าก่อนมีช่องนี้
+  brokenPartCode String?
   quantity     Int       @default(1)
   branchCode   String
   branchName   String

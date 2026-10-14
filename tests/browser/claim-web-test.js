@@ -149,6 +149,7 @@ const login = async (code) =>
     const dim = async () => saveBtn.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
     (await dim()) !== "1" ? pass("หลักฐานไม่ครบ ปุ่มยืนยันปิดงานกดไม่ได้") : fail("ปุ่มกดได้ทั้งที่ยังไม่ครบ");
 
+    await label(page, "รหัสอะไหล่ตัวที่เสีย SP-BOARD").fill("SP-BOARD");
     await label(page, "อาการ/สาเหตุ SP-BOARD").fill("ประตูล็อกไม่ลง ขึ้น Error dL");
     await label(page, "สิ่งที่เข้าเช็ค SP-BOARD").fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
     await attach(page, "แนบรูปอะไหล่เก่า SP-BOARD", PHOTO);
@@ -163,8 +164,8 @@ const login = async (code) =>
     await saveBtn.click();
     await page.waitForTimeout(6000);
 
-    sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW"
-      ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม (ฐานข้อมูล)")
+    sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === "CLAIM_REVIEW|SP-BOARD"
+      ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม พร้อมรหัสตัวที่เสียที่กรอก (ฐานข้อมูล)")
       : fail(`สถานะ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
     sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`) === "4"
       ? pass("หลักฐาน 4 ไฟล์ขึ้นไปผูกกับอะไหล่ที่เคลม (ฐานข้อมูล)")
@@ -210,8 +211,9 @@ const login = async (code) =>
     (await summary.inputValue()) === "เปลี่ยนบอร์ด ทดสอบแล้วปกติ" &&
       (await vis(page, "ช่างสมชาย", false).count()) > 0 &&
       (await label(page, "อาการ/สาเหตุ SP-BOARD").inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
+      (await label(page, "รหัสอะไหล่ตัวที่เสีย SP-BOARD").inputValue()) === "SP-BOARD" &&
       (await vis(page, "รูปอะไหล่เก่า — แนบไว้แล้ว").count()) > 0
-      ? pass("ปิดใหม่: สรุปงาน ผู้เข้าปฏิบัติงาน อะไหล่ ข้อความเคลม และหลักฐานเดิมมาให้ ไม่ต้องกรอกซ้ำ")
+      ? pass("ปิดใหม่: รหัสตัวที่เสีย สรุปงาน ผู้เข้าปฏิบัติงาน อะไหล่ ข้อความเคลม และหลักฐานเดิมมาให้ ไม่ต้องกรอกซ้ำ")
       : fail(`ปิดใหม่ต้องกรอกใหม่: สรุป="${await summary.inputValue()}"`);
     await summary.fill("ถ่ายวิดีโอใหม่ เห็นมิเตอร์");
     await attach(page, "แนบวิดีโอการตรวจเช็ค SP-BOARD", CLIP);
