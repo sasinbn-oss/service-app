@@ -25,7 +25,8 @@ import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { api, apiErrorMessage } from "../api/client";
+import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
 import DateField, { thaiDate } from "../components/DateField";
@@ -157,7 +158,45 @@ interface WorkOrder {
   workers: Technician[];
   otherWorkers: string | null;
   logs: LogEntry[];
+  /** ใบเคลมอะไหล่เก่าทุกรอบ ใหม่สุดก่อน */
+  claims: PartClaim[];
+  /** หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ — ถูกตีกลับแล้วปิดใหม่ ไม่ต้องแนบซ้ำ */
+  claimEvidence: { sparePartId: number | null; role: string }[];
+  /** Troubleshooting ที่ยี่ห้อเครื่องใบนี้ต้องทำก่อนเคลม — ว่าง = ไม่บังคับ */
+  claimTroubleshooting: string[];
 }
+
+interface PartClaim {
+  id: number;
+  sparePartId: number;
+  partCode: string;
+  partName: string;
+  quantity: number;
+  brand: string | null;
+  model: string | null;
+  machineCode: string | null;
+  symptom: string;
+  checkNote: string;
+  troubleshooting: string[];
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  rejectReason: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+/** หลักฐานของฟอร์มเคลม — ลำดับและชื่อตามหัวข้อในฟอร์มของผู้ขาย (รูป Nameplate ใช้ป้ายรุ่นที่ถ่ายตอนปิดงาน) */
+const CLAIM_EVIDENCE: { role: string; label: string; video: boolean }[] = [
+  { role: "CLAIM_PART", label: "รูปอะไหล่เก่า", video: false },
+  { role: "CLAIM_SYMPTOM", label: "รูปอาการเสีย", video: false },
+  { role: "CLAIM_ERROR_VIDEO", label: "วิดีโอ Error code", video: true },
+  { role: "CLAIM_CHECK_VIDEO", label: "วิดีโอการตรวจเช็ค", video: true },
+];
+
+const CLAIM_STATUS: Record<PartClaim["status"], { label: string; fg: string; bg: string }> = {
+  PENDING: { label: "รอตรวจ", fg: colors.warningInk, bg: colors.warningSoft },
+  APPROVED: { label: "อนุมัติแล้ว", fg: colors.success, bg: colors.successSoft },
+  REJECTED: { label: "ตีกลับ", fg: colors.dangerInk, bg: colors.dangerSoft },
+};
 
 interface Team {
   name: string;
@@ -263,6 +302,11 @@ function inMyTeam(u: { team?: string | null; teamCoverage?: { all: boolean; team
   if (u.team === team) return true;
   const c = u.teamCoverage;
   return !!c && (c.all || c.teams.includes(team));
+}
+
+/** ตรวจเคลมได้เฉพาะ Admin Spare Part (Super Admin ทำแทนได้) — ตรงกับ canReviewClaims ฝั่งเซิร์ฟเวอร์ */
+function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | null) {
+  return !!u && (!!u.partsAdmin || !!u.superAdmin);
 }
 
 export default function WorkOrderDetailScreen({ route, navigation }: Props) {
@@ -386,6 +430,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       return;
     }
     if (state !== "now" || !order || !myTurn(order) || busy) return;
+    // ตรวจเคลมทำที่การ์ดใบเคลมด้านล่าง ไม่มีฟอร์มขั้นตอนให้เปิด
+    if (order.status === "CLAIM_REVIEW") return;
     if (order.status === "IN_PROGRESS") setClosing(true);
     else setStageOpen(true);
   }
@@ -452,7 +498,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * แม้แต่ในรูป "ข้าม" เพราะมันไม่ใช่ทางเลือกของใบปกติ ขึ้นไว้มีแต่ทำให้งง
    */
   const shownStages = stages.filter(
-    (x) => x.value !== "WAITING_PARTS" || order.parent !== null || order.status === "WAITING_PARTS"
+    (x) =>
+      (x.value !== "WAITING_PARTS" || order.parent !== null || order.status === "WAITING_PARTS") &&
+      // ขั้นตรวจเคลมมีเฉพาะใบที่ส่งอะไหล่เก่าเคลม — ใบส่วนใหญ่ไม่มี ขึ้นไว้มีแต่ทำให้ดูเหมือนงานยังไม่จบ
+      (x.value !== "CLAIM_REVIEW" || order.status === "CLAIM_REVIEW" || order.claims.length > 0)
   );
   /**
    * ขั้นที่ย้อนกลับไปได้ — ขั้นก่อนหน้าที่ใบนี้ผ่านมาจริง ไม่นับขั้นที่ข้าม
@@ -462,13 +511,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     const at = shownStages.findIndex((x) => x.value === order.status);
     return shownStages
       .slice(0, Math.max(0, at))
-      .filter((x) => x.value !== "DONE" && !isSkipped(x.value, order, stages))
+      .filter((x) => x.value !== "DONE" && x.value !== "CLAIM_REVIEW" && !isSkipped(x.value, order, stages))
       .reverse();
   })();
   const canStepBack =
     (user?.role === "ADMIN" || user?.role === "SUPERVISOR") &&
     order.status !== "DONE" &&
     order.status !== "CANCELLED" &&
+    // รอตรวจเคลมย้อนด้วยปุ่ม "ตีกลับ" ของ Admin Spare Part เท่านั้น — ต้องมีเหตุผลให้ช่างเห็น
+    order.status !== "CLAIM_REVIEW" &&
     backTargets.length > 0;
 
   // เปิดใบรออะไหล่ต่อได้ตั้งแต่ทีมรับงานแล้ว — ก่อนนั้นยังแก้รายการอะไหล่ในใบนี้ได้เอง
@@ -527,7 +578,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       onLayout={(e) => setBodyWidth(e.nativeEvent.layout.width)}
     >
       {/* แอดมิน (รวม Super Admin) ปิดงานที่จบจริงไปแล้วแต่ค้างในระบบได้ในครั้งเดียว */}
-      {user?.role === "ADMIN" && order.status !== "DONE" && order.status !== "CANCELLED" ? (
+      {user?.role === "ADMIN" && !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
         <BackfillButton onPress={() => setBackfilling(true)} />
       ) : null}
       {closedOk ? (
@@ -701,7 +752,27 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         })}
         </ScrollView>
 
-        {!done ? (
+        {/* ตีกลับเคลม — ช่างต้องเห็นเหตุผลก่อนกดปิดงานอีกรอบ ไม่งั้นแนบของเดิมกลับไปแล้วโดนตีกลับซ้ำ */}
+        {order.status === "IN_PROGRESS" && order.claims[0]?.status === "REJECTED" ? (
+          <View style={styles.claimRejected}>
+            <Ionicons name="arrow-undo" size={16} color={colors.dangerInk} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.claimRejectedTitle}>Admin Spare Part ตีกลับใบเคลม — แก้แล้วปิดงานใหม่</Text>
+              <Text style={styles.claimRejectedText}>{order.claims[0].rejectReason ?? "—"}</Text>
+            </View>
+          </View>
+        ) : null}
+
+        {order.status === "CLAIM_REVIEW" ? (
+          <View style={[styles.waitingCard, styles.waitingInline]}>
+            <Ionicons name="shield-checkmark-outline" size={16} color={colors.textMuted} />
+            <Text style={styles.waitingText}>
+              {canReviewClaims(user)
+                ? "ช่างปิดงานพร้อมส่งอะไหล่เก่าเคลม — ตรวจใบเคลมด้านล่าง แล้วอนุมัติหรือตีกลับ"
+                : "ช่างปิดงานแล้ว รอ Admin Spare Part ตรวจเคลมอะไหล่เก่า"}
+            </Text>
+          </View>
+        ) : !done ? (
           myTurn(order) ? (
             <>
               <View style={styles.actions}>
@@ -772,6 +843,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           )
         ) : null}
       </View>
+
+      {order.claims.length > 0 ? (
+        <ClaimsCard
+          order={order}
+          files={files}
+          canReview={order.status === "CLAIM_REVIEW" && canReviewClaims(user)}
+          onReviewed={load}
+        />
+      ) : null}
 
       <View style={[styles.infoGrid, twoCol && styles.infoGridWide]}>
         <View style={[card, styles.infoCard]}>
@@ -2699,6 +2779,216 @@ function DispatchNote({ order }: { order: WorkOrder }) {
   );
 }
 
+/** ใบเคลมที่ช่างกำลังกรอกในหน้าปิดงาน — ไฟล์ยังอยู่ในเครื่อง ส่งขึ้นตอนกดปิดงาน */
+interface ClaimDraft {
+  on: boolean;
+  symptom: string;
+  checkNote: string;
+  troubleshooting: string[];
+  files: Record<string, PickedAttachment | undefined>;
+}
+
+/**
+ * ใบเคลมอะไหล่เก่าของใบงานนี้ — ทุกคนเห็น Admin Spare Part ตรวจและตัดสินที่นี่
+ *
+ * วางข้อมูลเรียงตามฟอร์มเคลมของผู้ขาย คนตรวจไล่ทีละหัวข้อได้เหมือนถือฟอร์มกระดาษ
+ * แล้วหลักฐานของอะไหล่ชิ้นนั้นอยู่ติดกัน — ใบที่เปลี่ยนสองชิ้นไม่ต้องเดาว่ารูปไหนของชิ้นไหน
+ */
+function ClaimsCard({
+  order,
+  files,
+  canReview,
+  onReviewed,
+}: {
+  order: WorkOrder;
+  files: Attachment[];
+  canReview: boolean;
+  onReviewed: () => Promise<void> | void;
+}) {
+  const [viewing, setViewing] = useState<{ items: Attachment[]; at: number } | null>(null);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState<"approve" | "reject" | null>(null);
+  const [opening, setOpening] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function review(approve: boolean) {
+    if (!approve && !reason.trim()) {
+      setError("ตีกลับต้องบอกเหตุผล — ช่างเห็นข้อความนี้บนใบงาน และต้องรู้ว่าต้องแก้อะไร");
+      return;
+    }
+    setSaving(approve ? "approve" : "reject");
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/claim-review`, { approve, reason: reason.trim() || undefined });
+      setReason("");
+      await onReviewed();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  // ลิงก์มี token ของตัวเอง — มือถือส่งต่อให้เบราว์เซอร์เปิดได้โดยไม่ต้องแนบ header
+  async function openPdf(claimId: number) {
+    setOpening(claimId);
+    try {
+      const res = await api.post<{ path: string }>(`/work-orders/${order.id}/claims/${claimId}/pdf-link`);
+      await openUrl(resolveImageUrl(res.data.path)!);
+    } catch (e) {
+      showAlert("เปิดใบเคลมไม่ได้", apiErrorMessage(e));
+    } finally {
+      setOpening(null);
+    }
+  }
+
+  return (
+    <View style={[styles.card, canReview && styles.claimCardReview]}>
+      <View style={styles.infoHead}>
+        <Ionicons name="shield-checkmark-outline" size={20} color={colors.primaryInk} />
+        <Text style={[styles.infoTitle, headingFont]}>เคลมอะไหล่เก่า</Text>
+      </View>
+      {viewing ? (
+        <ImageViewer
+          workOrderId={order.id}
+          items={viewing.items}
+          startIndex={viewing.at}
+          onClose={() => setViewing(null)}
+        />
+      ) : null}
+      {order.claims.map((c, i) => {
+        const tone = CLAIM_STATUS[c.status];
+        // หลักฐานที่แนบก่อนส่งใบเคลมใบนี้ — ไฟล์ที่แนบหลังจากนั้นเป็นของรอบถัดไป
+        const evidence = files.filter(
+          (f) => f.sparePartId === c.sparePartId && f.role?.startsWith("CLAIM_") && f.createdAt <= c.createdAt
+        );
+        return (
+          <View key={c.id} style={[styles.claimBlock, i > 0 && styles.claimBlockOld]}>
+            <View style={styles.headRow}>
+              <Text style={[styles.partCode, { flexShrink: 1 }]}>
+                {c.partCode} · {c.partName}
+                {c.quantity > 1 ? ` × ${c.quantity}` : ""}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <View style={[styles.claimChip, { backgroundColor: tone.bg }]}>
+                <Text style={[styles.claimChipText, { color: tone.fg }]}>{tone.label}</Text>
+              </View>
+            </View>
+            <Text style={styles.linkedText}>
+              ส่งเมื่อ {formatDateTime(c.createdAt)}
+              {c.reviewedAt ? ` · ตรวจเมื่อ ${formatDateTime(c.reviewedAt)}` : ""}
+            </Text>
+            <Row label="ยี่ห้อ / รุ่น" value={[c.brand, c.model].filter(Boolean).join(" · ") || "—"} />
+            <Row label="หมายเลขเครื่อง" value={c.machineCode ?? "—"} />
+            <Text style={styles.partsHead}>อาการ/สาเหตุ</Text>
+            <Text style={styles.claimText}>{c.symptom}</Text>
+            <Text style={styles.partsHead}>ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้</Text>
+            <Text style={styles.claimText}>{c.checkNote}</Text>
+            {c.troubleshooting.length > 0 ? (
+              <>
+                <Text style={styles.partsHead}>Troubleshooting ที่ทำแล้ว</Text>
+                {c.troubleshooting.map((t) => (
+                  <View key={t} style={styles.partRow}>
+                    <Ionicons name="checkmark-circle" size={15} color={colors.success} />
+                    <Text style={styles.claimText}>{t}</Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+            {evidence.length > 0 ? (
+              <>
+                <Text style={styles.partsHead}>หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)</Text>
+                <View style={styles.closeFiles}>
+                  {evidence.map((f, at) => (
+                    <TouchableOpacity
+                      key={f.id}
+                      style={styles.closeFile}
+                      activeOpacity={0.8}
+                      onPress={() => setViewing({ items: evidence, at })}
+                      accessibilityLabel={`เปิด ${f.roleLabel ?? f.fileName}`}
+                    >
+                      {f.thumbnailDataUrl ? (
+                        <Image source={{ uri: f.thumbnailDataUrl }} style={styles.closeThumb} />
+                      ) : (
+                        <View style={[styles.closeThumb, styles.slipBlank]}>
+                          <Ionicons name={attachmentIcon(f.kind)} size={20} color={colors.textFaint} />
+                        </View>
+                      )}
+                      {f.roleLabel ? (
+                        <View style={styles.closeBadge}>
+                          <Text style={styles.closeBadgeText}>{f.roleLabel.replace(" (เคลม)", "")}</Text>
+                        </View>
+                      ) : null}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            ) : null}
+            {c.status === "REJECTED" && c.rejectReason ? (
+              <View style={styles.verdictBad}>
+                <Ionicons name="arrow-undo" size={16} color={colors.danger} />
+                <Text style={styles.verdictBadText}>ตีกลับ: {c.rejectReason}</Text>
+              </View>
+            ) : null}
+            <TouchableOpacity
+              style={styles.claimPdf}
+              onPress={() => openPdf(c.id)}
+              disabled={opening !== null}
+              activeOpacity={0.7}
+              accessibilityLabel={`เปิดใบเคลม ${c.partCode}`}
+            >
+              {opening === c.id ? (
+                <Spinner color={colors.primaryInk} size="small" />
+              ) : (
+                <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
+              )}
+              <Text style={styles.claimPdfText}>
+                เปิดใบเคลม (PDF){c.status === "APPROVED" ? "" : " — ร่าง"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        );
+      })}
+
+      {canReview ? (
+        <View style={styles.claimReview}>
+          <Text style={styles.modalLabel}>ผลตรวจของ Admin Spare Part</Text>
+          <TextInput
+            style={[styles.modalInput, styles.claimReason]}
+            value={reason}
+            onChangeText={setReason}
+            placeholder="เหตุผลที่ตีกลับ (ต้องกรอกเมื่อตีกลับ) เช่น วิดีโอ Error code ไม่เห็นรหัสบนหน้าจอ"
+            placeholderTextColor={colors.textFaint}
+            multiline
+            accessibilityLabel="เหตุผลที่ตีกลับเคลม"
+          />
+          {error ? <Text style={styles.modalError}>{error}</Text> : null}
+          <View style={styles.modalActions}>
+            <TouchableOpacity
+              style={[styles.claimReject, saving !== null && styles.modalSaveOff]}
+              onPress={() => review(false)}
+              disabled={saving !== null}
+              activeOpacity={0.8}
+            >
+              {saving === "reject" ? <Spinner color={colors.dangerInk} size="small" /> : null}
+              <Text style={styles.claimRejectText}>ตีกลับให้ช่างแก้</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalSave, saving !== null && styles.modalSaveOff]}
+              onPress={() => review(true)}
+              disabled={saving !== null}
+              activeOpacity={0.8}
+            >
+              {saving === "approve" ? <Spinner color="#fff" size="small" /> : null}
+              <Text style={styles.modalSaveText}>อนุมัติเคลม · ปิดงาน</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function CloseModal({
   visible,
   order,
@@ -2717,7 +3007,10 @@ function CloseModal({
   const [result, setResult] = useState("FIXED");
   const [note, setNote] = useState("");
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
-  const [parts, setParts] = useState<PickedPart[]>([]);
+  // ถูกตีกลับเคลมแล้วมาปิดใหม่ — อะไหล่ชุดเดิมยังอยู่ในใบ ไม่ต้องให้ช่างเลือกใหม่ทั้งหมด
+  const reclosing = order.claims[0]?.status === "REJECTED";
+  const [parts, setParts] = useState<PickedPart[]>(reclosing ? order.parts : []);
+  const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [siteFiles, setSiteFiles] = useState<PickedAttachment[]>([]);
   const [nameplate, setNameplate] = useState<PickedAttachment | null>(null);
@@ -2742,6 +3035,41 @@ function CloseModal({
   const nameplateMissing = !nameplate && !order.hasNameplate;
   // ติ๊กว่าอะไหล่ไม่ครบแต่ไม่ได้บอกว่าขาดตัวไหน — ใบรออะไหล่เปล่า ๆ ไม่มีใครตามของได้
   const followUpMissing = followUp && missing.length === 0;
+
+  /**
+   * ร่างใบเคลมของอะไหล่แต่ละชิ้น — ยังไม่เคยแตะ = ค่าเริ่มต้น
+   *
+   * สาขายังอยู่ในประกันเปิดเคลมไว้ให้เลย (ส่วนใหญ่ต้องเคลม ลืมติ๊กแล้วอะไหล่เก่าถูกทิ้ง
+   * คือเสียสิทธิ์ถาวร) ช่างปิดเองได้ถ้าชิ้นนั้นเคลมไม่ได้ · เคยถูกตีกลับ = ดึงข้อความเดิมมาให้แก้
+   */
+  function draftFor(id: number): ClaimDraft {
+    if (drafts[id]) return drafts[id];
+    const prior = order.claims.find((c) => c.sparePartId === id);
+    return {
+      on: prior ? true : order.branchWarrantyExpired === false,
+      symptom: prior?.symptom ?? "",
+      checkNote: prior?.checkNote ?? "",
+      troubleshooting: prior?.troubleshooting ?? [],
+      files: {},
+    };
+  }
+  function patchDraft(id: number, patch: Partial<ClaimDraft>) {
+    setDrafts((all) => ({ ...all, [id]: { ...draftFor(id), ...all[id], ...patch } }));
+  }
+  const hasEvidence = (id: number, role: string) =>
+    !!draftFor(id).files[role] || order.claimEvidence.some((e) => e.sparePartId === id && e.role === role);
+  /** สิ่งที่ยังขาดของแต่ละชิ้น — ตรงกับที่เซิร์ฟเวอร์เช็ค บอกตรงนี้ก่อนจะได้ไม่ต้องรอโดนปฏิเสธ */
+  function claimGaps(p: PickedPart) {
+    const d = draftFor(p.sparePartId);
+    if (!d.on) return [];
+    return [
+      ...CLAIM_EVIDENCE.filter((e) => !hasEvidence(p.sparePartId, e.role)).map((e) => e.label),
+      ...(d.symptom.trim() ? [] : ["อาการ/สาเหตุ"]),
+      ...(d.checkNote.trim() ? [] : ["สิ่งที่เข้าเช็ค"]),
+      ...(order.claimTroubleshooting.every((t) => d.troubleshooting.includes(t)) ? [] : ["Troubleshooting ให้ครบ"]),
+    ];
+  }
+  const claimsMissing = parts.some((p) => claimGaps(p).length > 0);
 
   /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
   async function pickOne(
@@ -2769,14 +3097,20 @@ function CloseModal({
        * เซิร์ฟเวอร์เช็คตอนรับคำสั่งปิดว่ามีรูปหน้างานและใบเหลืองแล้วหรือยัง
        * ส่งไฟล์ทีหลังจะถูกปฏิเสธทั้งที่ไฟล์อยู่ในมือแล้ว
        */
-      const queue: { file: PickedAttachment; role?: string }[] = [
+      const claimed = parts.filter((p) => draftFor(p.sparePartId).on);
+      const queue: { file: PickedAttachment; role?: string; sparePartId?: number }[] = [
         ...siteFiles.map((file) => ({ file })),
         ...(nameplate ? [{ file: nameplate, role: "NAMEPLATE" }] : []),
         ...(slip ? [{ file: slip, role: "REQUISITION" }] : []),
+        ...claimed.flatMap((p) =>
+          Object.entries(draftFor(p.sparePartId).files).flatMap(([role, file]) =>
+            file ? [{ file, role, sparePartId: p.sparePartId }] : []
+          )
+        ),
       ];
       for (const [i, item] of queue.entries()) {
         setBusy(`กำลังส่งไฟล์ ${i + 1}/${queue.length}`);
-        await uploadAttachment(order.id, item.file, item.role);
+        await uploadAttachment(order.id, item.file, item.role, item.sparePartId);
       }
       setBusy("กำลังปิดงาน");
       await api.post(`/work-orders/${order.id}/close`, {
@@ -2785,7 +3119,18 @@ function CloseModal({
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         workerIds,
         otherWorkers: otherWorkers.trim() || null,
+        claims: claimed.map((p) => {
+          const d = draftFor(p.sparePartId);
+          return {
+            sparePartId: p.sparePartId,
+            symptom: d.symptom.trim(),
+            checkNote: d.checkNote.trim(),
+            troubleshooting: d.troubleshooting,
+          };
+        }),
       });
+      // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
+      setDrafts({});
       setNote("");
       setParts([]);
       setSlip(null);
@@ -2835,12 +3180,12 @@ function CloseModal({
           <TouchableOpacity
             style={[
               styles.modalSave,
-              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing) &&
+              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing) &&
                 styles.modalSaveOff,
             ]}
             onPress={submit}
             disabled={
-              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing
+              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing
             }
             activeOpacity={0.8}
           >
@@ -3120,6 +3465,188 @@ function CloseModal({
           {slipMissing ? (
             <Text style={styles.warn}>
               ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
+            </Text>
+          ) : null}
+
+          {/*
+            เคลมอะไหล่เก่า — ตามฟอร์ม "เอกสารใบเคลมอะไหล่" ของผู้ขาย
+            ถามตอนปิดงานเพราะเป็นจังหวะเดียวที่อะไหล่เก่ายังอยู่ในมือช่าง และเครื่องยังเปิดดูได้
+            หัวฟอร์ม (สาขา วันเปิด ยี่ห้อ รุ่น หมายเลขเครื่อง) ระบบใส่ให้จากใบงาน ช่างไม่ต้องพิมพ์
+          */}
+          <Text style={styles.modalLabel}>เคลมอะไหล่เก่า</Text>
+          {parts.map((p) => {
+            const d = draftFor(p.sparePartId);
+            const gaps = claimGaps(p);
+            return (
+              <View key={p.sparePartId} style={[styles.claimPart, d.on && styles.claimPartOn]}>
+                <TouchableOpacity
+                  style={styles.partRow}
+                  onPress={() => patchDraft(p.sparePartId, { on: !d.on })}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`ส่งอะไหล่เก่าเคลม ${p.partCode}`}
+                >
+                  <Ionicons
+                    name={d.on ? "checkbox" : "square-outline"}
+                    size={20}
+                    color={d.on ? colors.primary : colors.textFaint}
+                  />
+                  <Text style={[styles.partCode, { flex: 1, minWidth: 0 }]}>
+                    ส่งอะไหล่เก่าเคลม · {p.partCode} {p.name}
+                  </Text>
+                </TouchableOpacity>
+                {!d.on ? (
+                  <Text style={styles.claimHeader}>
+                    {order.branchWarrantyExpired === false
+                      ? "สาขายังอยู่ในประกัน — ปิดไว้เฉพาะชิ้นที่เคลมไม่ได้"
+                      : "ไม่เคลม (สาขาหมดประกันหรือเป็นสาขาบริษัท) — ติ๊กได้ถ้าชิ้นนี้ยังเคลมได้"}
+                  </Text>
+                ) : (
+                  <>
+                    <Text style={styles.claimHeader}>
+                      ระบบใส่ให้ในใบเคลม: {order.branchCode} {order.branchName}
+                      {order.branchOpenedAt ? ` · เปิด ${formatDate(order.branchOpenedAt)}` : ""}
+                      {" · "}
+                      {[order.branchWarrantyBrand ?? order.machineBrand, order.machineModel, order.machineCode]
+                        .filter(Boolean)
+                        .join(" · ") || "ไม่มีข้อมูลเครื่อง"}
+                    </Text>
+
+                    <Text style={styles.modalLabel}>
+                      อาการ/สาเหตุ <Text style={{ color: colors.danger }}>*</Text>
+                    </Text>
+                    <TextInput
+                      style={[styles.modalInput, styles.claimReason]}
+                      value={d.symptom}
+                      onChangeText={(v) => patchDraft(p.sparePartId, { symptom: v })}
+                      placeholder="เช่น เครื่องไม่ปั่นหมาด ขึ้น Error E-21"
+                      placeholderTextColor={colors.textFaint}
+                      multiline
+                      accessibilityLabel={`อาการ/สาเหตุ ${p.partCode}`}
+                    />
+                    <Text style={styles.modalLabel}>
+                      ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้ <Text style={{ color: colors.danger }}>*</Text>
+                    </Text>
+                    <TextInput
+                      style={[styles.modalInput, styles.claimReason]}
+                      value={d.checkNote}
+                      onChangeText={(v) => patchDraft(p.sparePartId, { checkNote: v })}
+                      placeholder="เช่น วัดไฟเข้ามอเตอร์ปกติ เปลี่ยนแล้วเครื่องปั่นได้"
+                      placeholderTextColor={colors.textFaint}
+                      multiline
+                      accessibilityLabel={`สิ่งที่เข้าเช็ค ${p.partCode}`}
+                    />
+
+                    <Text style={styles.modalLabel}>หลักฐานตามฟอร์มเคลม</Text>
+                    {CLAIM_EVIDENCE.map((e) => {
+                      const picked = d.files[e.role];
+                      const already = !picked && hasEvidence(p.sparePartId, e.role);
+                      // เลือกไฟล์ใช้เวลา (ย่อรูป) — อ่านร่างล่าสุดตอนไฟล์เสร็จ ไม่ใช่ตอนกดปุ่ม
+                      const keep = (f: PickedAttachment) =>
+                        setDrafts((all) => {
+                          const cur = all[p.sparePartId] ?? draftFor(p.sparePartId);
+                          return { ...all, [p.sparePartId]: { ...cur, files: { ...cur.files, [e.role]: f } } };
+                        });
+                      return (
+                        <View key={e.role} style={styles.claimSlot}>
+                          <Ionicons
+                            name={picked || already ? "checkmark-circle" : "ellipse-outline"}
+                            size={18}
+                            color={picked || already ? colors.success : colors.textFaint}
+                          />
+                          <Text style={styles.claimSlotLabel}>
+                            {e.label}
+                            {already ? " — แนบไว้แล้ว" : ""}
+                          </Text>
+                          {picked ? (
+                            <TouchableOpacity
+                              onPress={() =>
+                                patchDraft(p.sparePartId, { files: { ...d.files, [e.role]: undefined } })
+                              }
+                              accessibilityLabel={`เอา${e.label}ออก ${p.partCode}`}
+                              style={styles.partRow}
+                            >
+                              <Text style={styles.linkedText}>{picked.name}</Text>
+                              <Ionicons name="close-circle" size={18} color={colors.textFaint} />
+                            </TouchableOpacity>
+                          ) : busy ? null : e.video ? (
+                            <TouchableOpacity
+                              style={styles.option}
+                              onPress={() => pickOne(pickVideoAttachment, keep)}
+                              activeOpacity={0.7}
+                              accessibilityLabel={`แนบ${e.label} ${p.partCode}`}
+                            >
+                              <Text style={styles.optionText}>{already ? "แนบใหม่" : "เลือกวิดีโอ"}</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <View style={styles.options}>
+                              {Platform.OS !== "web" ? (
+                                <TouchableOpacity
+                                  style={styles.option}
+                                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage), keep)}
+                                  activeOpacity={0.7}
+                                >
+                                  <Text style={styles.optionText}>ถ่าย</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                              <TouchableOpacity
+                                style={styles.option}
+                                onPress={() => pickOne((stage) => pickImageAttachment(false, stage), keep)}
+                                activeOpacity={0.7}
+                                accessibilityLabel={`แนบ${e.label} ${p.partCode}`}
+                              >
+                                <Text style={styles.optionText}>{already ? "แนบใหม่" : "เลือกรูป"}</Text>
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
+                    <Text style={styles.claimHeader}>รูป Nameplate ใช้รูปป้ายรุ่นด้านบน</Text>
+
+                    {order.claimTroubleshooting.length > 0 ? (
+                      <>
+                        <Text style={styles.modalLabel}>
+                          Troubleshooting {order.branchWarrantyBrand ?? order.machineBrand ?? ""} (ต้องทำครบ)
+                        </Text>
+                        {order.claimTroubleshooting.map((t) => {
+                          const on = d.troubleshooting.includes(t);
+                          return (
+                            <TouchableOpacity
+                              key={t}
+                              style={styles.skipRow}
+                              onPress={() =>
+                                patchDraft(p.sparePartId, {
+                                  troubleshooting: on
+                                    ? d.troubleshooting.filter((x) => x !== t)
+                                    : [...d.troubleshooting, t],
+                                })
+                              }
+                              activeOpacity={0.7}
+                              accessibilityLabel={`${t} ${p.partCode}`}
+                            >
+                              <Ionicons
+                                name={on ? "checkbox" : "square-outline"}
+                                size={18}
+                                color={on ? colors.primary : colors.textFaint}
+                              />
+                              <Text style={[styles.skipText, { color: colors.text }]}>{t}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </>
+                    ) : null}
+
+                    {gaps.length > 0 ? (
+                      <Text style={styles.warn}>ยังขาด: {gaps.join(" · ")}</Text>
+                    ) : null}
+                  </>
+                )}
+              </View>
+            );
+          })}
+          {parts.some((p) => draftFor(p.sparePartId).on) ? (
+            <Text style={styles.linkedText}>
+              ปิดงานแล้วใบงานไปรอ Admin Spare Part ตรวจเคลมก่อน ถึงจะนับว่าปิดงาน
             </Text>
           ) : null}
         </>
@@ -3533,6 +4060,61 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(15,23,42,0.78)",
   },
   closeBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
+  // ── เคลมอะไหล่ ──
+  claimCardReview: { borderColor: colors.primary, borderWidth: 2 },
+  claimBlock: { paddingTop: spacing.sm },
+  claimBlockOld: { marginTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, opacity: 0.75 },
+  claimChip: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 },
+  claimChipText: { fontSize: 12, lineHeight: 18, fontWeight: "800" },
+  claimText: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 22, color: colors.text },
+  claimPdf: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+    marginTop: spacing.md,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.md,
+    backgroundColor: colors.primarySoft,
+  },
+  claimPdfText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  claimReview: { marginTop: spacing.md, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, gap: spacing.sm },
+  claimReason: { minHeight: 64 },
+  claimReject: {
+    flex: 1,
+    minHeight: 46,
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.dangerSoft,
+  },
+  claimRejectText: { fontSize: 15, lineHeight: 22, color: colors.dangerInk, fontWeight: "700" },
+  claimRejected: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: 12,
+    backgroundColor: colors.dangerSoft,
+  },
+  claimRejectedTitle: { fontSize: 13, lineHeight: 20, fontWeight: "800", color: colors.dangerInk },
+  claimRejectedText: { fontSize: 13, lineHeight: 21, color: colors.dangerInk },
+  claimPart: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  claimPartOn: { borderColor: colors.primary, backgroundColor: colors.sky50 },
+  claimHeader: { fontSize: 12, lineHeight: 19, color: colors.textMuted, marginTop: spacing.xs },
+  claimSlot: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs, flexWrap: "wrap" },
+  claimSlotLabel: { flex: 1, minWidth: 140, fontSize: 13, lineHeight: 20, color: colors.text },
   verdictOk: {
     flexDirection: "row",
     alignItems: "center",

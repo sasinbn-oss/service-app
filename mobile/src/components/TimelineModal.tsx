@@ -67,6 +67,7 @@ const STAGE_COLOR: Record<string, string> = {
   AWAITING_CONFIRM: ROLE_COLOR.ADMIN.fg,
   ASSIGNED: ROLE_COLOR.SUPERVISOR.fg,
   IN_PROGRESS: ROLE_COLOR.EMPLOYEE.fg,
+  CLAIM_REVIEW: ROLE_COLOR.ADMIN.fg,
 };
 const DAY = 86_400_000;
 const MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];

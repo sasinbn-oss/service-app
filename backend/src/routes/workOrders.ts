@@ -18,6 +18,8 @@ import { Coverage, coverageOf, covers } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { WAREHOUSES } from "../documents/warehouses";
+import { buildPartClaimPdf } from "../documents/partClaimPdf";
+import { documentPath, saveDocument } from "../documents/store";
 import {
   buildObjectKey,
   deleteObject,
@@ -69,6 +71,8 @@ import {
   warrantyEndFor,
   warrantyYearsFor,
   machineMake,
+  claimTroubleshootingFor,
+  CLAIM_EVIDENCE_ROLES,
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
@@ -108,8 +112,10 @@ const detailInclude = {
   // ไม่ได้จะเอารายการมาแสดง — รายการอยู่ที่ /attachments อยู่แล้ว
   attachments: {
     where: { role: { not: null } },
-    select: { id: true, role: true, createdAt: true },
+    select: { id: true, role: true, createdAt: true, sparePartId: true },
   },
+  // ใบเคลมทุกรอบ ใหม่สุดก่อน — รอบที่ถูกตีกลับเก็บไว้ให้ช่างเห็นว่าโดนตีกลับเพราะอะไร
+  claims: { orderBy: { createdAt: "desc" as const } },
   workers: { include: { user: { select: { id: true, name: true, employeeCode: true } } } },
   // ใบงานที่ลิงก์กัน (แยกใบรออะไหล่) — ต้องเห็นจากทั้งสองฝั่ง
   parent: { select: { id: true, code: true, status: true } },
@@ -401,6 +407,33 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
       warrantyExpiresAt: w.branch.warrantyExpiresAt,
       machineBrand: machineMake(w.machine),
     }),
+    // ── เคลมอะไหล่ ──
+    claims: w.claims.map((c) => ({
+      id: c.id,
+      sparePartId: c.sparePartId,
+      partCode: c.partCode,
+      partName: c.partName,
+      quantity: c.quantity,
+      brand: c.brand,
+      model: c.model,
+      machineCode: c.machineCode,
+      symptom: c.symptom,
+      checkNote: c.checkNote,
+      troubleshooting: c.troubleshooting,
+      status: c.status,
+      rejectReason: c.rejectReason,
+      createdAt: c.createdAt,
+      reviewedAt: c.reviewedAt,
+    })),
+    // หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ (อะไหล่ชิ้นไหน · ชนิดไหน) — ช่างที่ถูกตีกลับแนบเพิ่มเฉพาะที่ขาด
+    claimEvidence: w.attachments
+      .filter(
+        (a) =>
+          a.role && (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(a.role) && (!roundStart || a.createdAt >= roundStart)
+      )
+      .map((a) => ({ sparePartId: a.sparePartId, role: a.role })),
+    // Troubleshooting (ข้อ 4 ของฟอร์มเคลม) ของยี่ห้อเครื่องใบนี้ — ว่าง = ยี่ห้อนี้ไม่ต้องทำ
+    claimTroubleshooting: claimTroubleshootingFor(machineMake(w.machine))?.items ?? [],
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
     ),
@@ -645,8 +678,18 @@ async function writeLog(
  * ที่ต้องคอยให้ตรงกับสถานะใบงาน แล้ววันหนึ่งจะไม่ตรง — กล่องมีใบที่ทำไปแล้ว
  * หรือใบที่ถึงคิวแต่ไม่โผล่ ซึ่งแย่กว่าไม่มีกล่องงานเลย
  */
-function stagesWaitingOn(role: string): string[] {
-  return WORK_ORDER_STAGE_ORDER.filter((stage) => WORK_ORDER_STAGE_ACTOR[stage] === role);
+function stagesWaitingOn(auth: AuthRequest["auth"]): string[] {
+  return WORK_ORDER_STAGE_ORDER.filter(
+    (stage) =>
+      WORK_ORDER_STAGE_ACTOR[stage] === auth!.role &&
+      // ตรวจเคลมเป็นของ Admin Spare Part — แอดมินทั่วไปกดไม่ได้ จึงไม่ควรเห็นในกล่องงานตัวเอง
+      (stage !== "CLAIM_REVIEW" || canReviewClaims(auth))
+  );
+}
+
+/** ตรวจเคลมอะไหล่ได้ไหม — Admin Spare Part (คนเช็คประกัน) และ Super Admin */
+function canReviewClaims(auth: AuthRequest["auth"]) {
+  return !!(auth?.partsAdmin || auth?.superAdmin);
 }
 
 const listQuery = z.object({
@@ -662,7 +705,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const q = parsed.data;
   const keyword = q.search?.trim();
 
-  const inboxStages = stagesWaitingOn(req.auth!.role);
+  const inboxStages = stagesWaitingOn(req.auth);
   const statusFilter =
     q.status === "ALL"
       ? {}
@@ -786,7 +829,7 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
         : await teamScope(me?.team ?? null, req.auth!.userId);
 
   const inbox = await prisma.workOrder.count({
-    where: { AND: [scope], status: { in: stagesWaitingOn(req.auth!.role) } },
+    where: { AND: [scope], status: { in: stagesWaitingOn(req.auth) } },
   });
   res.json({ inbox });
 });
@@ -2380,6 +2423,10 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       error: `${wo.code} ${wo.status === "DONE" ? "ปิดงานแล้ว" : "ถูกยกเลิกแล้ว"} ย้อนขั้นไม่ได้ — ใช้ “เปิดงานใหม่” แทน`,
     });
   }
+  // ย้อนจากรอตรวจเคลมจะทิ้งเคลมค้างสถานะรอตรวจไว้ — ต้องผ่านปุ่มตีกลับ ซึ่งบันทึกเหตุผลให้ช่างเห็น
+  if (wo.status === "CLAIM_REVIEW") {
+    return res.status(409).json({ error: `${wo.code} รอตรวจเคลมอยู่ — ใช้ “ตีกลับ” ในส่วนตรวจเคลมแทนการย้อนขั้น` });
+  }
   const order = WORK_ORDER_STAGE_ORDER as readonly string[];
   const from = order.indexOf(wo.status);
   const to = order.indexOf(toStage);
@@ -2565,6 +2612,18 @@ const closeSchema = z.object({
   workerIds: z.array(z.number().int().positive()).max(3).optional(),
   // คนนอกระบบที่ไปด้วย เช่น ผู้รับเหมา — ไม่บังคับ
   otherWorkers: z.string().trim().max(300).nullable().optional(),
+  // อะไหล่ที่ต้องส่งของเก่าเคลม (ฟอร์มใบเคลมอะไหล่) — มีอย่างน้อยหนึ่งชิ้น ใบงานไปรอ Admin Spare Part ตรวจก่อนปิด
+  claims: z
+    .array(
+      z.object({
+        sparePartId: z.number().int(),
+        symptom: z.string().trim().max(1000).default(""),
+        checkNote: z.string().trim().max(2000).default(""),
+        troubleshooting: z.array(z.string().max(300)).max(50).default([]),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
@@ -2585,6 +2644,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
   if (current.status === "CANCELLED") {
     return res.status(400).json({ error: `${current.code} ถูกยกเลิกไปแล้ว` });
+  }
+  if (current.status === "CLAIM_REVIEW") {
+    return res.status(400).json({ error: `${current.code} ปิดงานแล้ว กำลังรอ Admin Spare Part ตรวจเคลม` });
   }
   // ปิดได้ตั้งแต่ถูกจ่ายงานแล้ว เผื่อไปถึงหน้างานวันเดียวกันโดยไม่ได้นัดล่วงหน้า
   if (!["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS"].includes(current.status)) {
@@ -2695,16 +2757,92 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * ต้องรู้ว่ารอบก่อนทำอะไรไปแล้ว ตรวจเป็นอย่างสุดท้าย เพราะช่างที่ขาดรูปหรือใบเหลือง
    * ควรได้ยินเรื่องนั้นก่อน (สรุปงานพิมพ์ได้ทันที รูปต้องเดินกลับไปถ่าย)
    */
+  /**
+   * เคลมอะไหล่เก่า — ตรวจหลักฐานครบตามฟอร์ม "เอกสารใบเคลมอะไหล่" ก่อนส่งให้ Admin Spare Part
+   *
+   * ผู้ขายรับเคลมเฉพาะเมื่อหลักฐานครบ (รูปอะไหล่/อาการ วิดีโอ Error code วิดีโอการตรวจเช็ค
+   * และ Troubleshooting สำหรับ Huebsch/Primus) — ขาดข้อไหนก็ถูกปฏิเสธ แล้วต้องตามช่างกลับไปถ่ายใหม่
+   * ซึ่งตอนนั้นอะไหล่เก่าอาจทิ้งไปแล้ว จึงกันตั้งแต่ตอนปิดงาน · รูป Nameplate ใช้ป้ายรุ่นที่ตรวจไว้ข้างบน
+   */
+  const claimInputs = body.claims ?? [];
+  const claimRows: Prisma.PartClaimCreateManyInput[] = [];
+  if (claimInputs.length > 0) {
+    const ctx = await prisma.workOrder.findUniqueOrThrow({
+      where: { id },
+      select: {
+        branch: { select: { code: true, name: true, openedAt: true } },
+        machine: { select: { code: true, brand: true, model: true } },
+      },
+    });
+    const used = new Map((body.parts ?? []).map((p) => [p.sparePartId, p.quantity]));
+    const spares = await prisma.sparePart.findMany({
+      where: { id: { in: claimInputs.map((c) => c.sparePartId) } },
+      select: { id: true, partCode: true, name: true },
+    });
+    const evidence = await prisma.workOrderAttachment.groupBy({
+      by: ["sparePartId", "role"],
+      where: {
+        workOrderId: id,
+        role: { in: [...CLAIM_EVIDENCE_ROLES] },
+        createdAt: { gte: roundStart },
+      },
+      _count: true,
+    });
+    const make = machineMake(ctx.machine);
+    const ts = claimTroubleshootingFor(make);
+    for (const c of [...new Map(claimInputs.map((x) => [x.sparePartId, x])).values()]) {
+      const sp = spares.find((x) => x.id === c.sparePartId);
+      if (!sp || !used.has(c.sparePartId)) {
+        return res.status(400).json({ error: "เคลมได้เฉพาะอะไหล่ที่ใส่ไว้ในรายการอะไหล่ที่ใช้" });
+      }
+      const missing = CLAIM_EVIDENCE_ROLES.filter(
+        (role) => !evidence.some((e) => e.sparePartId === c.sparePartId && e.role === role)
+      ).map((role) => ATTACHMENT_ROLE_LABELS[role].replace(" (เคลม)", ""));
+      if (missing.length) {
+        return res.status(400).json({ error: `เคลม ${sp.partCode}: ยังขาด${missing.join(" · ")}` });
+      }
+      if (!c.symptom) return res.status(400).json({ error: `เคลม ${sp.partCode}: ต้องกรอกอาการ/สาเหตุ` });
+      if (!c.checkNote) {
+        return res.status(400).json({ error: `เคลม ${sp.partCode}: ต้องกรอกว่าเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้` });
+      }
+      const done = ts ? ts.items.filter((i) => c.troubleshooting.includes(i)) : [];
+      if (ts && done.length < ts.items.length) {
+        return res.status(400).json({
+          error: `เคลม ${sp.partCode}: เครื่อง ${ts.brand} ต้องทำ Troubleshooting ครบ (${done.length}/${ts.items.length})`,
+        });
+      }
+      claimRows.push({
+        workOrderId: id,
+        sparePartId: sp.id,
+        partCode: sp.partCode,
+        partName: sp.name,
+        quantity: used.get(sp.id) ?? 1,
+        branchCode: ctx.branch.code,
+        branchName: ctx.branch.name,
+        branchOpenedAt: ctx.branch.openedAt,
+        brand: make,
+        model: ctx.machine?.model ?? null,
+        machineCode: ctx.machine?.code ?? null,
+        symptom: c.symptom,
+        checkNote: c.checkNote,
+        troubleshooting: done,
+        createdById: req.auth!.userId,
+      });
+    }
+  }
+
   if (!body.note?.trim()) {
     return res.status(400).json({ error: "ต้องสรุปงานที่ทำ — เช่น เปลี่ยนอะไรไป ทดสอบแล้วเป็นยังไง" });
   }
 
+  // มีเคลม = ยังไม่ปิดจริง รอ Admin Spare Part ตรวจหลักฐานก่อน (ข้อมูลปิดงานบันทึกไว้แล้ว อนุมัติแล้วไม่ต้องกรอกซ้ำ)
+  const nextStatus = claimRows.length > 0 ? "CLAIM_REVIEW" : "DONE";
   const now = new Date();
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
       data: {
-        status: "DONE",
+        status: nextStatus,
         closedAt: now,
         closedById: req.auth!.userId,
         closeResult: body.result,
@@ -2727,11 +2865,150 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
     if (body.parts !== undefined) await replaceParts(tx, id, "USED", body.parts);
 
-    await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", body.note?.trim() || null);
+    if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows });
+
+    await writeLog(tx, id, req.auth!.userId, "CLOSED", nextStatus, body.note?.trim() || null);
+    if (claimRows.length > 0) {
+      await writeLog(
+        tx,
+        id,
+        req.auth!.userId,
+        "CLAIM_SUBMITTED",
+        nextStatus,
+        `ส่งเคลมอะไหล่เก่า: ${claimRows.map((c) => c.partCode).join(", ")}`
+      );
+    }
   }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
+});
+
+/**
+ * ตรวจเคลมอะไหล่ (Admin Spare Part) — อนุมัติแล้วปิดงาน · ตีกลับแล้วใบงานกลับไปที่ช่าง
+ *
+ * ตีกลับต้องบอกเหตุผลเสมอ ช่างเห็นข้อความนี้บนใบงาน — ตีกลับเฉย ๆ ช่างไม่รู้ว่าต้องถ่ายอะไรใหม่
+ * ตีกลับแล้วข้อมูลปิดงานเดิม (ผล เวลาปิด) ถูกล้าง เพราะใบงานยังไม่จบ ช่างปิดใหม่พร้อมหลักฐานที่แก้แล้ว
+ * ไฟล์ที่แนบไว้ยังอยู่ ช่างแนบเพิ่มเฉพาะที่ถูกตีกลับได้
+ */
+const claimReviewSchema = z.object({
+  approve: z.boolean(),
+  reason: z.string().trim().max(1000).optional(),
+});
+
+router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  if (!canReviewClaims(req.auth)) {
+    return res.status(403).json({ error: "ตรวจเคลมได้เฉพาะ Admin Spare Part" });
+  }
+  const parsed = claimReviewSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "ข้อมูลไม่ถูกต้อง" });
+  const { approve, reason } = parsed.data;
+
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true } });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.status !== "CLAIM_REVIEW") {
+    return res.status(409).json({
+      error: `${wo.code} ไม่ได้รอตรวจเคลม — ตอนนี้อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}"`,
+    });
+  }
+  if (!approve && !reason) {
+    return res.status(400).json({ error: "ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร" });
+  }
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.partClaim.updateMany({
+      where: { workOrderId: id, status: "PENDING" },
+      data: {
+        status: approve ? "APPROVED" : "REJECTED",
+        rejectReason: approve ? null : reason,
+        reviewedById: req.auth!.userId,
+        reviewedAt: now,
+      },
+    });
+    if (approve) {
+      await tx.workOrder.update({ where: { id }, data: { status: "DONE", workStatus: workStatusForStage("DONE") } });
+      await writeLog(tx, id, req.auth!.userId, "CLAIM_APPROVED", "DONE", reason || null);
+    } else {
+      await tx.workOrder.update({
+        where: { id },
+        data: {
+          status: "IN_PROGRESS",
+          closedAt: null,
+          closedById: null,
+          closeResult: null,
+          workStatus: workStatusForStage("IN_PROGRESS"),
+        },
+      });
+      await writeLog(tx, id, req.auth!.userId, "CLAIM_REJECTED", "IN_PROGRESS", reason!);
+    }
+  }, STAGE_TX);
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * ใบเคลมเป็น PDF หน้าตาตามหน้า "ข้อมูลแจ้งเคลม" ของฟอร์ม — ส่งให้ผู้ขายพร้อมไฟล์หลักฐาน
+ * ยังไม่อนุมัติก็เปิดได้ (Admin Spare Part ดูก่อนกดอนุมัติ) แต่มีคำว่า "ร่าง" กำกับ
+ */
+async function claimPdf(req: AuthRequest, res: Response) {
+  const id = Number(req.params.id);
+  const claimId = Number(req.params.claimId);
+  if (!Number.isInteger(id) || !Number.isInteger(claimId)) {
+    res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
+    return null;
+  }
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return null;
+  const claim = await prisma.partClaim.findFirst({ where: { id: claimId, workOrderId: id } });
+  if (!claim) {
+    res.status(404).json({ error: "ไม่พบใบเคลมนี้" });
+    return null;
+  }
+  const [requester, files] = await Promise.all([
+    claim.createdById
+      ? prisma.user.findUnique({ where: { id: claim.createdById }, select: { name: true } })
+      : Promise.resolve(null),
+    prisma.workOrderAttachment.findMany({
+      where: { workOrderId: id, sparePartId: claim.sparePartId, role: { in: [...CLAIM_EVIDENCE_ROLES] } },
+      select: { role: true },
+    }),
+  ]);
+  const pdf = await buildPartClaimPdf({
+    workOrderCode: wo.code,
+    claim,
+    requesterName: requester?.name ?? null,
+    evidence: [...new Set(files.map((f) => ATTACHMENT_ROLE_LABELS[f.role!]?.replace(" (เคลม)", "") ?? f.role!))],
+  });
+  return { pdf, filename: `ใบเคลม-${wo.code}-${claim.partCode}.pdf`, ascii: `claim-${wo.code}-${claim.id}.pdf` };
+}
+
+router.get("/:id/claims/:claimId/pdf", requireAuth, async (req: AuthRequest, res) => {
+  const out = await claimPdf(req, res);
+  if (!out) return;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${out.ascii}"; filename*=UTF-8''${encodeURIComponent(out.filename)}`);
+  res.send(out.pdf);
+});
+
+/**
+ * ลิงก์เปิดใบเคลม — แอปบนมือถือส่งต่อให้เบราว์เซอร์เปิด ซึ่งแนบ Authorization header เองไม่ได้
+ * จึงเก็บไฟล์ไว้ในที่เก็บเอกสารชั่วคราวแล้วคืนลิงก์ที่มี token (แบบเดียวกับใบขอโอนสินค้า)
+ */
+router.post("/:id/claims/:claimId/pdf-link", requireAuth, async (req: AuthRequest, res) => {
+  const out = await claimPdf(req, res);
+  if (!out) return;
+  const stored = saveDocument({
+    filename: out.filename,
+    asciiFilename: out.ascii,
+    mimeType: "application/pdf",
+    data: out.pdf,
+    ownerId: req.auth!.userId,
+  });
+  res.status(201).json({ path: documentPath(stored) });
 });
 
 /**
@@ -2779,6 +3056,10 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (wo.status === "DONE") return res.status(400).json({ error: `${wo.code} ปิดไปแล้ว` });
   if (wo.status === "CANCELLED") return res.status(400).json({ error: `${wo.code} ถูกยกเลิกไปแล้ว` });
+  // ช่างปิดแล้ว รอตรวจเคลมอยู่ — ปิดย้อนหลังตรงนี้คือข้ามการตรวจเคลมไปเงียบ ๆ
+  if (wo.status === "CLAIM_REVIEW") {
+    return res.status(400).json({ error: `${wo.code} รอ Admin Spare Part ตรวจเคลม — ใช้ปุ่มอนุมัติหรือตีกลับในใบงาน` });
+  }
 
   const known = await prisma.branch.findFirst({ where: { zone: b.team, cancelledAt: null }, select: { id: true } });
   if (!known) return res.status(400).json({ error: `ไม่รู้จักทีม "${b.team}"` });
@@ -3114,6 +3395,7 @@ type AttachmentRow = {
   objectKey: string | null;
   uploadedAt: Date | null;
   role: string | null;
+  sparePartId: number | null;
   thumbnail: Uint8Array | Buffer | null;
   createdAt: Date;
   createdById: number | null;
@@ -3135,6 +3417,8 @@ function attachmentShape(a: AttachmentRow) {
     // ว่าง = รูปหน้างานทั่วไป · NAMEPLATE = รูปป้ายรุ่นบนตัวเครื่อง
     role: a.role,
     roleLabel: a.role ? ATTACHMENT_ROLE_LABELS[a.role] ?? a.role : null,
+    // หลักฐานเคลมเป็นของอะไหล่ชิ้นไหน (role CLAIM_*)
+    sparePartId: a.sparePartId,
     fileName: a.fileName,
     mimeType: a.mimeType,
     sizeBytes: a.sizeBytes,
@@ -3161,6 +3445,7 @@ const attachmentSelect = {
   objectKey: true,
   uploadedAt: true,
   role: true,
+  sparePartId: true,
   thumbnail: true,
   createdAt: true,
   createdById: true,
@@ -3210,6 +3495,13 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   // ไฟล์ที่อัปสำเร็จแล้วไม่ควรถูกทิ้งเพราะป้ายกำกับสะกดผิด
   const rawRole = typeof req.body?.role === "string" ? req.body.role.trim().toUpperCase() : "";
   const role = (ATTACHMENT_ROLES as readonly string[]).includes(rawRole) ? rawRole : null;
+  // หลักฐานเคลมต้องบอกว่าเป็นของอะไหล่ชิ้นไหน — ไม่บอกก็นับให้ชิ้นไหนไม่ได้ จึงปฏิเสธเลย
+  // ดีกว่ารับไว้แล้วตอนปิดงานขึ้นว่า "ยังขาดรูปอะไหล่เก่า" ทั้งที่ช่างเพิ่งแนบไป
+  const isClaimEvidence = !!role && (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(role);
+  const sparePartId = Number(req.body?.sparePartId);
+  if (isClaimEvidence && !Number.isInteger(sparePartId)) {
+    return res.status(400).json({ error: "หลักฐานเคลมต้องระบุว่าเป็นของอะไหล่ชิ้นไหน" });
+  }
 
   if (kind === "DOCUMENT" && !(role && ATTACHMENT_DOCUMENT_ROLES.includes(role))) {
     return res.status(400).json({ error: "PDF แนบได้เฉพาะใบเสนอราคากับบิลที่ลูกค้าจ่ายแล้ว — รูปหน้างานแนบเป็นรูปหรือวิดีโอ" });
@@ -3273,6 +3565,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
         objectKey,
         uploadedAt: new Date(),
         role,
+        sparePartId: isClaimEvidence ? sparePartId : null,
         thumbnail,
         createdById: req.auth!.userId,
       },

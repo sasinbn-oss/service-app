@@ -159,6 +159,8 @@ export const STATUS_OWNER: Record<string, Owner> = {
   AWAITING_CONFIRM: "ADMIN",
   ASSIGNED: "SUPERVISOR",
   IN_PROGRESS: "EMPLOYEE",
+  // Admin Spare Part เป็นแอดมิน — สีเดียวกับขั้นอื่นที่รอแอดมิน
+  CLAIM_REVIEW: "ADMIN",
   DONE: "DONE",
   CANCELLED: "CANCELLED",
 };

@@ -24,7 +24,7 @@ import {
 const router = Router();
 
 /** ขั้นที่ถือว่า "มีกำหนดไปหน้างานวันนั้น" — ปิดแล้วก็ยังโชว์ว่าวันนั้นไปทำอะไรมา */
-const ON_BOARD = ["INSPECTING", "AWAITING_CONFIRM", "IN_PROGRESS", "DONE"];
+const ON_BOARD = ["INSPECTING", "AWAITING_CONFIRM", "IN_PROGRESS", "CLAIM_REVIEW", "DONE"];
 
 function requirePlanner(req: AuthRequest, res: Response, next: NextFunction) {
   const role = req.auth?.role;
