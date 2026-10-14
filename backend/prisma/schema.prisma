@@ -674,6 +674,12 @@ model WorkOrder {
   // ด้วยของที่ยังไม่มา แต่ต้องลิงก์กันไว้ ไม่งั้นดูไม่ออกว่าเป็นงานเดียวกัน
   parentId Int?
   parent   WorkOrder?  @relation("WorkOrderSplit", fields: [parentId], references: [id], onDelete: SetNull)
+
+  // ใบทดสอบ — คัดลอกจากใบจริงเพื่อลองขั้นตอน (เช่นเคลมอะไหล่) โดยไม่แตะใบจริง
+  // ใบจริงที่เอามาเดินทดสอบตรง ๆ จะถูกปิดงานจริง · ทดสอบเสร็จให้ลบทิ้ง
+  isTest   Boolean @default(false)
+  // คัดลอกมาจากใบไหน — แค่อ้างอิง ใบต้นทางถูกลบไปก็ไม่กระทบ
+  testOfId Int?
   children WorkOrder[] @relation("WorkOrderSplit")
 
   createdById Int?

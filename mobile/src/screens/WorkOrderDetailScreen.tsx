@@ -66,6 +66,8 @@ interface WorkOrder {
   id: number;
   code: string;
   source: string;
+  /** ใบทดสอบที่คัดลอกจากใบจริง — ลบทิ้งเมื่อทดสอบเสร็จ */
+  isTest?: boolean;
   title: string;
   detail: string | null;
   status: string;
@@ -488,6 +490,29 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     );
   }
 
+  /** คัดลอกเป็นใบทดสอบ — ลองเดินขั้นที่เหลือ (เช่นเคลมอะไหล่) โดยไม่แตะใบจริง */
+  function confirmTestCopy() {
+    const o = order!;
+    showAlert(
+      `คัดลอก ${o.code} เป็นใบทดสอบ`,
+      "ได้ใบใหม่ สาขา เครื่อง อาการ อะไหล่ ทีม และขั้นเดียวกับใบนี้ (ไม่มีรูปและประวัติ) ใบนี้ไม่ถูกแตะ\n\nทดสอบเสร็จแล้วลบใบทดสอบทิ้ง",
+      [
+        { text: "ยกเลิก", style: "cancel" },
+        {
+          text: "คัดลอก",
+          onPress: async () => {
+            try {
+              const res = await api.post<{ id: number; code: string }>(`/work-orders/${o.id}/test-copy`);
+              navigation.push("WorkOrderDetail", { id: res.data.id });
+            } catch (e) {
+              showAlert("คัดลอกไม่สำเร็จ", apiErrorMessage(e));
+            }
+          },
+        },
+      ]
+    );
+  }
+
   async function doDelete() {
     setDeleting(true);
     try {
@@ -587,6 +612,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {/* แอดมิน (รวม Super Admin) ปิดงานที่จบจริงไปแล้วแต่ค้างในระบบได้ในครั้งเดียว */}
       {user?.role === "ADMIN" && !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
         <BackfillButton onPress={() => setBackfilling(true)} />
+      ) : null}
+      {order.isTest ? (
+        <View style={styles.testBand}>
+          <Ionicons name="flask-outline" size={18} color={colors.warningInk} />
+          <Text style={styles.testBandText}>ใบทดสอบ — คัดลอกจากใบจริง ไม่กระทบใบจริง ทดสอบเสร็จให้ลบทิ้ง</Text>
+        </View>
       ) : null}
       {closedOk ? (
         <View style={styles.doneBand}>
@@ -1182,6 +1213,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         >
           <Ionicons name="git-branch-outline" size={16} color={colors.primary} />
           <Text style={[styles.deleteText, { color: colors.primary }]}>เปิดใบงานรออะไหล่ต่อ</Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {user?.role === "ADMIN" && !order.isTest ? (
+        <TouchableOpacity style={styles.deleteRow} onPress={confirmTestCopy} activeOpacity={0.7}>
+          <Ionicons name="copy-outline" size={16} color={colors.primary} />
+          <Text style={[styles.deleteText, { color: colors.primary }]}>คัดลอกเป็นใบทดสอบ</Text>
         </TouchableOpacity>
       ) : null}
 
@@ -4067,6 +4105,17 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(15,23,42,0.78)",
   },
   closeBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
+  testBand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.warningSoft,
+    borderWidth: 1,
+    borderColor: colors.warning,
+  },
+  testBandText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
   // ── เคลมอะไหล่ ──
   claimCardReview: { borderColor: colors.primary, borderWidth: 2 },
   claimBlock: { paddingTop: spacing.sm },
