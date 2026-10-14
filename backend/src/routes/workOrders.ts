@@ -34,6 +34,7 @@ import {
   ATTACHMENT_DOCUMENT_ROLES,
   MAX_ATTACHMENT_DOCUMENT_BYTES,
   ATTACHMENT_ROLES,
+  INSPECTION_ROLES,
   ATTACHMENT_ROLE_LABELS,
   attachmentKindFor,
   MAX_ATTACHMENTS_PER_WORK_ORDER,
@@ -263,7 +264,7 @@ function closeVerdict(w: WorkOrderRow): "CLEARED" | "STILL_DOWN" | null {
   return w.outage.endedAt === null ? "STILL_DOWN" : "CLEARED";
 }
 
-function shape(w: WorkOrderRow, roundStart?: Date) {
+function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
   return {
     id: w.id,
     code: w.code,
@@ -439,6 +440,14 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     // รูปก่อน/หลังซ่อมของรอบนี้ — หน้าปิดงานบอกว่าแนบไว้แล้ว ไม่ต้องถ่ายซ้ำ
     beforeCount: w.attachments.filter((a) => a.role === "BEFORE" && (!roundStart || a.createdAt >= roundStart)).length,
     afterCount: w.attachments.filter((a) => a.role === "AFTER" && (!roundStart || a.createdAt >= roundStart)).length,
+    // ไฟล์ตรวจหน้างานของรอบตรวจนี้ (นับตั้งแต่ส่งทีมไปตรวจครั้งล่าสุด) — ฟอร์มส่งผลตรวจบอกว่าแนบไว้แล้วกี่ไฟล์
+    // ไม่รู้ว่ารอบตรวจเริ่มเมื่อไหร่ (คำตอบจากคำสั่งอื่นที่ไม่ใช่หน้ารายละเอียด) ก็ไม่ส่ง ดีกว่าส่งเลขที่นับปนรอบเก่า
+    inspectionStartedAt: inspectStart ?? null,
+    inspectionFiles: inspectStart
+      ? Object.fromEntries(
+          INSPECTION_ROLES.map((r) => [r, w.attachments.filter((a) => a.role === r && a.createdAt >= inspectStart).length])
+        )
+      : null,
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
     ),
@@ -934,9 +943,10 @@ router.get("/:id", requireAuth, async (req, res) => {
   const roundStart =
     logs.find((l) => l.action === "ASSIGNED" || l.action === "REOPENED")?.createdAt ??
     row.createdAt;
+  const inspectStart = logs.find((l) => l.action === "INSPECT_REQUESTED")?.createdAt ?? row.createdAt;
 
   res.json({
-    ...shape(row, roundStart),
+    ...shape(row, roundStart, inspectStart),
     logs: logs.map((l) => ({
       id: l.id,
       action: l.action,
@@ -2201,6 +2211,28 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
   if (req.auth!.role === "SUPERVISOR") {
     if (await blockedForSupervisor(req, res, wo)) return;
   } else if (await blockedForTeam(req, res, wo)) return;
+
+  // ครบสามอย่างของรอบตรวจนี้ — หัวหน้าภาคบันทึกแทนช่างก็ต้องครบ เพราะคนที่ใช้ไฟล์คือคนระบุอะไหล่
+  // ไม่ใช่คนกด ไฟล์จากรอบตรวจก่อนไม่นับ เพราะเครื่องอาจเปลี่ยนอาการไปแล้ว
+  const inspectStart =
+    (
+      await prisma.workOrderLog.findFirst({
+        where: { workOrderId: id, action: "INSPECT_REQUESTED" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      })
+    )?.createdAt ?? new Date(0);
+  const got = await prisma.workOrderAttachment.groupBy({
+    by: ["role"],
+    where: { workOrderId: id, role: { in: [...INSPECTION_ROLES] }, createdAt: { gte: inspectStart } },
+    _count: true,
+  });
+  const missing = INSPECTION_ROLES.filter((r) => !got.some((g) => g.role === r)).map((r) =>
+    ATTACHMENT_ROLE_LABELS[r].replace(" (ตรวจ)", "")
+  );
+  if (missing.length) {
+    return res.status(400).json({ error: `ยังขาด: ${missing.join(" · ")} — แนบให้ครบสามอย่างก่อนส่งผลตรวจ` });
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
@@ -3589,6 +3621,15 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   const sparePartId = Number(req.body?.sparePartId);
   if (isClaimEvidence && !Number.isInteger(sparePartId)) {
     return res.status(400).json({ error: "หลักฐานเคลมต้องระบุว่าเป็นของอะไหล่ชิ้นไหน" });
+  }
+
+  // กรอบวิดีโอการทำงานมีไว้ให้เห็นอาการตอนเครื่องเดิน รูปนิ่งบอกไม่ได้ ส่วนกรอบรูปตรวจรับวิดีโอก็จะ
+  // ทำให้ช่างแนบวิดีโอซ้ำสองที่แล้วนับว่าครบ ทั้งที่ไม่มีรูปให้ซูมดูรหัสอะไหล่
+  if (role === "INSPECT_VIDEO" && kind !== "VIDEO") {
+    return res.status(400).json({ error: "วิดีโอการทำงานต้องเป็นไฟล์วิดีโอ" });
+  }
+  if ((role === "INSPECT_SITE" || role === "INSPECT_PART") && kind !== "IMAGE") {
+    return res.status(400).json({ error: `${ATTACHMENT_ROLE_LABELS[role].replace(" (ตรวจ)", "")}ต้องเป็นรูปภาพ` });
   }
 
   if (kind === "DOCUMENT" && !(role && ATTACHMENT_DOCUMENT_ROLES.includes(role))) {

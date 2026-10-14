@@ -35,6 +35,7 @@ import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
+import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -111,6 +112,8 @@ interface WorkOrder {
   /** ผลตรวจหน้างาน — หัวหน้าภาคใช้ระบุอะไหล่รอบถัดไป */
   inspectedAt: string | null;
   inspectionNote: string | null;
+  /** รอบตรวจล่าสุดเริ่มเมื่อไหร่ (ส่งทีมไปตรวจครั้งล่าสุด) — ไฟล์ตรวจก่อนหน้านี้ไม่นับ */
+  inspectionStartedAt?: string | null;
   /** ใบเดิมที่ใบนี้แยกออกมา (ใบรออะไหล่) */
   parent: LinkedOrder | null;
   /** ใบรออะไหล่ที่แยกออกไปจากใบนี้ */
@@ -1083,6 +1086,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         reloadKey={filesKey}
         onLoaded={setFiles}
         onAdded={load}
+        inspection={
+          order.status === "INSPECTING" || order.inspectedAt
+            ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
+            : undefined
+        }
       />
 
       {/*
@@ -1315,6 +1323,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         order={order}
         warehouses={warehouses}
         teams={teams}
+        files={files}
+        onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
         onDone={async () => {
           setStageOpen(false);
@@ -1810,6 +1820,8 @@ function StageModal({
   order,
   warehouses,
   teams,
+  files,
+  onFilesChanged,
   onCancel,
   onDone,
 }: {
@@ -1817,6 +1829,10 @@ function StageModal({
   order: WorkOrder;
   warehouses: string[];
   teams: Team[];
+  /** ไฟล์แนบของใบงาน (จากการ์ดไฟล์แนบ) — ฟอร์มผลตรวจบอกว่าแนบอะไรไว้แล้ว */
+  files: Attachment[];
+  /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
+  onFilesChanged: () => void;
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -1842,9 +1858,8 @@ function StageModal({
   const [visitTime, setVisitTime] = useState("");
   // ขั้นระบุอะไหล่: ตัวเลือกที่สาม "ต้องเข้าตรวจสอบหน้างานก่อน"
   const [inspectFirst, setInspectFirst] = useState(false);
-  // ขั้นตรวจหน้างาน: ผลตรวจ + รูป
+  // ขั้นตรวจหน้างาน: ผลตรวจ — ไฟล์ตรวจส่งขึ้นทันทีจากกรอบ ไม่ได้ถือไว้ในฟอร์ม
   const [finding, setFinding] = useState("");
-  const [photos, setPhotos] = useState<PickedAttachment[]>([]);
   // ขั้นนัดลูกค้า
   // ขั้นคอนเฟิร์มลูกค้า: ลูกค้าตกลงวันเดิม หรือขอเลื่อน (เลื่อนแล้วถึงจะขึ้นช่องวันให้แก้)
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
@@ -1861,7 +1876,6 @@ function StageModal({
     // ใบที่เปิดมาเป็นงานตรวจสอบหน้างานและยังไม่เคยตรวจ — ตัวเลือกที่ถูกเกือบทุกครั้ง
     setInspectFirst(order.status === "NEW" && order.jobType === "INSPECT" && !order.inspectedAt);
     setFinding("");
-    setPhotos([]);
     setConfirmChoice(null);
     setSplitOut(true);
     setVisitTime(order.scheduledTime ?? "");
@@ -1904,20 +1918,6 @@ function StageModal({
     }
   }
 
-  async function addPhoto(
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
-  ) {
-    setBusy("กำลังเตรียมไฟล์");
-    try {
-      const file = await pick(setBusy);
-      if (file) setPhotos((v) => [...v, file]);
-    } catch (e) {
-      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function submit() {
     setSaving(true);
     setError(null);
@@ -1930,11 +1930,6 @@ function StageModal({
           note: note.trim() || undefined,
         });
       } else if (order.status === "INSPECTING") {
-        // รูปขึ้นก่อนผล — ผลขึ้นแล้วใบงานไปโผล่ที่หัวหน้าภาคทันที ต้องเห็นรูปพร้อมกัน
-        for (const [i, file] of photos.entries()) {
-          setBusy(`กำลังส่งรูป ${i + 1}/${photos.length}`);
-          await uploadAttachment(order.id, file);
-        }
         await api.post(`/work-orders/${order.id}/inspection`, { note: finding.trim() });
       } else if (order.status === "WAITING_PARTS") {
         await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
@@ -2044,6 +2039,9 @@ function StageModal({
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
   const timeOk = visitTime === "" || isTime(visitTime);
 
+  // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
+  const inspectMissing = order.status === "INSPECTING" ? missingInspection(files, order.inspectionStartedAt) : [];
+
   const blocked =
     quoteBlocked ||
     paymentBlocked ||
@@ -2051,7 +2049,7 @@ function StageModal({
       (inspectFirst
         ? !team || (visit !== "" && !validDate) || !timeOk
         : needsParts === null || (needsParts && parts.length === 0))) ||
-    (order.status === "INSPECTING" && !finding.trim()) ||
+    (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     (order.status === "ASSIGNED" && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
     (order.status === "AWAITING_CONFIRM" &&
@@ -2460,36 +2458,40 @@ function StageModal({
                   numberOfLines={3}
                   accessibilityLabel="ผลตรวจหน้างาน"
                 />
-                <Text style={styles.modalLabel}>รูป / วิดีโอหน้างาน (ไม่บังคับ)</Text>
-                <FileStrip files={photos} onChange={setPhotos} />
-                {busy ? (
-                  <View style={styles.slipRow}>
-                    <Spinner color={colors.primary} size="small" />
-                    <Text style={styles.linkedText}>{busy}…</Text>
-                  </View>
-                ) : (
-                  <View style={styles.options}>
-                    {Platform.OS !== "web" ? (
-                      <TouchableOpacity
-                        style={styles.option}
-                        onPress={() => addPhoto((stage) => pickImageAttachment(true, stage))}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.optionText}>ถ่ายรูป</Text>
-                      </TouchableOpacity>
-                    ) : null}
-                    <TouchableOpacity
-                      style={styles.option}
-                      onPress={() => addPhoto((stage) => pickImageAttachment(false, stage))}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.optionText}>เลือกรูป</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.option} onPress={() => addPhoto(pickVideoAttachment)} activeOpacity={0.7}>
-                      <Text style={styles.optionText}>วิดีโอ</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
+                <Text style={styles.modalLabel}>ไฟล์ตรวจหน้างาน (ต้องครบ 3 อย่าง)</Text>
+                <InspectionSlots
+                  workOrderId={order.id}
+                  rows={files}
+                  since={order.inspectionStartedAt}
+                  canEdit
+                  compact
+                  canRemove={(row) => user?.role === "ADMIN" || row.createdById === user?.id}
+                  // ไม่เปิดดูรูปเต็มจอในฟอร์ม — ตัวดูรูปซ้อน Modal บนเว็บไม่น่าเชื่อถือ ดูได้จากการ์ดไฟล์แนบ
+                  onOpen={() => {}}
+                  onRemove={(row) =>
+                    showAlert("ลบไฟล์นี้", `ต้องการลบ "${row.fileName}" ใช่ไหม`, [
+                      { text: "ยกเลิก", style: "cancel" },
+                      {
+                        text: "ลบ",
+                        style: "destructive",
+                        onPress: async () => {
+                          try {
+                            await api.delete(`/work-orders/${order.id}/attachments/${row.id}`);
+                            onFilesChanged();
+                          } catch (e) {
+                            showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
+                          }
+                        },
+                      },
+                    ])
+                  }
+                  onChanged={onFilesChanged}
+                />
+                {inspectMissing.length > 0 ? (
+                  <Text style={styles.inspectWarn}>
+                    ยังขาด: {inspectMissing.join(" · ")} — ใส่ให้ครบ 3 อย่างก่อนส่งผลตรวจ
+                  </Text>
+                ) : null}
                 <Text style={styles.linkedText}>
                   บันทึกแล้วใบงานกลับไปให้หัวหน้าภาคระบุอะไหล่จากผลนี้
                 </Text>
@@ -4216,6 +4218,15 @@ const styles = StyleSheet.create({
   compareHead: { fontSize: 13, lineHeight: 20, fontWeight: "800", marginBottom: 2 },
   compareHeadBefore: { color: colors.warningInk },
   compareHeadAfter: { color: colors.success },
+  inspectWarn: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.warningInk,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.xs,
+  },
   shotSlot: { borderWidth: 1.5, borderRadius: radius.md, padding: spacing.sm, gap: spacing.xs },
   shotBefore: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
   shotAfter: { borderColor: colors.success, backgroundColor: colors.successSoft },

@@ -40,9 +40,40 @@ POST $S "work-orders/$ID/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\
   && pass "หัวหน้าภาคส่งทีมไปตรวจ พร้อมวันเวลา" || fail "ส่งตรวจไม่สำเร็จ: $(st $ID)"
 R=$(POST $T "work-orders/$ID/inspection" '{"note":""}')
 echo "$R" | grep -q "ต้องบอกว่าตรวจแล้วเจออะไร" && pass "ผลตรวจว่างไม่ได้" || fail "ผลตรวจว่างผ่าน: $(echo $R|head -c 120)"
+# ไฟล์ตรวจหน้างานต้องครบสามอย่าง: รูปหน้างาน · รูปอะไหล่ที่เสีย · วิดีโอการทำงาน
+UPI() { curl -s -X POST "localhost:4000/api/work-orders/$1/attachments" -H "$(H $T)" -F "file=@$SP/$2" -F "role=$3"; }
+R=$(POST $T "work-orders/$ID/inspection" '{"note":"วาล์วน้ำทิ้งค้าง"}')
+echo "$R" | grep -q "ยังขาด: รูปหน้างาน · รูปอะไหล่ที่เสีย · วิดีโอการทำงาน" && [ "$(st $ID)" = "INSPECTING" ] \
+  && pass "ไม่มีไฟล์ตรวจ ส่งผลตรวจไม่ได้ และบอกว่าขาดอะไรบ้าง" || fail "ส่งผลตรวจได้ทั้งที่ไม่มีไฟล์: $(echo $R|head -c 160)"
+R=$(UPI $ID "site-photo.png;type=image/png" INSPECT_VIDEO)
+echo "$R" | grep -q "วิดีโอการทำงานต้องเป็นไฟล์วิดีโอ" && [ "$(DB "select count(*) from \"WorkOrderAttachment\" where \"workOrderId\"=$ID")" = "0" ] \
+  && pass "กรอบวิดีโอการทำงานไม่รับรูป" || fail "กรอบวิดีโอรับรูป: $(echo $R|head -c 120)"
+R=$(UPI $ID "site-clip.mp4;type=video/mp4" INSPECT_PART)
+echo "$R" | grep -q "รูปอะไหล่ที่เสียต้องเป็นรูปภาพ" && pass "กรอบรูปอะไหล่ไม่รับวิดีโอ" || fail "กรอบรูปรับวิดีโอ: $(echo $R|head -c 120)"
+UPI $ID "site-photo.png;type=image/png" INSPECT_SITE >/dev/null
+UPI $ID "site-photo.png;type=image/png" INSPECT_SITE >/dev/null
+UPI $ID "site-photo.png;type=image/png" INSPECT_PART >/dev/null
+R=$(POST $T "work-orders/$ID/inspection" '{"note":"วาล์วน้ำทิ้งค้าง"}')
+echo "$R" | grep -q "ยังขาด: วิดีโอการทำงาน —" && [ "$(st $ID)" = "INSPECTING" ] \
+  && pass "แนบรูปหลายรูปแล้วแต่ขาดวิดีโอ ยังส่งไม่ได้ และบอกเฉพาะที่ขาด" || fail "ขาดวิดีโอแต่ส่งได้: $(echo $R|head -c 160)"
+UPI $ID "site-clip.mp4;type=video/mp4" INSPECT_VIDEO >/dev/null
+[ "$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $T)" | J 'const f=d.inspectionFiles;[f.INSPECT_SITE,f.INSPECT_PART,f.INSPECT_VIDEO].join()')" = "2,1,1" ] \
+  && pass "หน้ารายละเอียดนับไฟล์ตรวจแต่ละกรอบได้ (รูปหน้างาน 2 รูป)" || fail "นับไฟล์ตรวจผิด"
 POST $T "work-orders/$ID/inspection" '{"note":"วาล์วน้ำทิ้งค้าง บอร์ดมีรอยไหม้"}' >/dev/null
 [ "$(DB "select status||'|'||(\"inspectedAt\" is not null)||'|'||(\"scheduledAt\" is null) from \"WorkOrder\" where id=$ID")" = "NEW|true|true" ] \
   && pass "ทีมบันทึกผลตรวจแล้วใบงานกลับไปให้ระบุอะไหล่" || fail "บันทึกผลตรวจไม่สำเร็จ: $(st $ID)"
+
+# ส่งไปตรวจซ้ำ — ไฟล์ของรอบตรวจก่อนไม่นับ ต้องถ่ายใหม่ (หัวหน้าภาคบันทึกแทนก็ต้องครบ)
+ID2=$(newwo INSPECT); CREATED="$CREATED $ID2"
+POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\"}" >/dev/null
+for r in INSPECT_SITE INSPECT_PART; do UPI $ID2 "site-photo.png;type=image/png" $r >/dev/null; done
+UPI $ID2 "site-clip.mp4;type=video/mp4" INSPECT_VIDEO >/dev/null
+POST $T "work-orders/$ID2/inspection" '{"note":"รอบแรก"}' >/dev/null
+sleep 1
+POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\"}" >/dev/null
+R=$(POST $S "work-orders/$ID2/inspection" '{"note":"รอบสอง"}')
+echo "$R" | grep -q "ยังขาด: รูปหน้างาน · รูปอะไหล่ที่เสีย · วิดีโอการทำงาน" && [ "$(st $ID2)" = "INSPECTING" ] \
+  && pass "ตรวจซ้ำ: ไฟล์รอบก่อนไม่นับ หัวหน้าภาคบันทึกแทนก็ต้องแนบครบ" || fail "ไฟล์รอบก่อนถูกนับ: $(echo $R|head -c 160)"
 
 echo
 echo "═══ หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า (เลื่อนวันได้) → หัวหน้าภาคยืนยันออกงาน"
