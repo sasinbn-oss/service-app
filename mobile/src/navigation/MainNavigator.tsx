@@ -1,5 +1,5 @@
 import React from "react";
-import { Image, Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Animated, Image, Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import { createNativeStackNavigator, NativeStackHeaderProps } from "@react-navigation/native-stack";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -52,6 +52,7 @@ import RefreshButton from "../components/RefreshButton";
 import { ViewAsBanner, ViewAsButton } from "../components/ViewAs";
 import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
+import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
 import {
   AdminStackParamList,
   HistoryStackParamList,
@@ -92,6 +93,9 @@ const OWN_TITLE = new Set([
  */
 function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps) {
   const { canDock } = useDocked();
+  const chrome = useChrome();
+  // หน้ารายการใบงานบนจอแคบ: แถบ "☰ ชื่อหน้า" ย้ายไปลอยรวมกับแถบโลโก้ (AppTopBar) เพื่อหลบขึ้นไปพร้อมกันตอนเลื่อน
+  if (!canDock && chrome.overlay && route.name === "WorkOrderList") return null;
   if (canDock && OWN_TITLE.has(route.name)) return null;
   const title = typeof options.title === "string" ? options.title : route.name;
   const crumb = back ? (
@@ -192,7 +196,11 @@ function AppTopBar() {
   const wide = width >= 640;
   // ดูในฐานะคนอื่น — แถบส้มอยู่บนสุด (ใต้ขอบจอ) เหนือโลโก้ ให้เห็นก่อนอย่างอื่น
   const viewing = !!user?.viewAs;
-  return (
+  const { canDock } = useDocked();
+  const chrome = useChrome();
+  // หน้ารายการใบงานบนจอแคบขอให้แถบบนลอยทับและหลบตอนเลื่อนลง (ดู utils/chrome.ts)
+  const overlay = chrome.overlay && !canDock;
+  const bars = (
     <View>
     {viewing ? (
       <View style={{ paddingTop: insets.top, backgroundColor: "#B45309" }}>
@@ -215,7 +223,34 @@ function AppTopBar() {
       ) : null}
       <LogoutButton />
     </View>
+    {overlay ? (
+      <View style={styles.pageHeadNarrow}>
+        <MenuButton />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.pageHeadNarrowTitle, headingFont]} numberOfLines={1}>
+            {chrome.title}
+          </Text>
+        </View>
+      </View>
+    ) : null}
     </View>
+  );
+  if (!overlay) return bars;
+  // เลื่อนขึ้นได้ไม่เกินขอบจอบน — ส่วนใต้แถบสถานะของเครื่องมีแผ่นปิดไว้ ไม่ให้ใบงานโผล่ทับนาฬิกา/แบตเตอรี่
+  const move = Math.max(0, chrome.barsH - insets.top);
+  return (
+    <>
+      <Animated.View
+        onLayout={(e) => setChromeBarsHeight(Math.round(e.nativeEvent.layout.height))}
+        style={[
+          styles.barsFloat,
+          { transform: [{ translateY: chromeHide.interpolate({ inputRange: [0, 1], outputRange: [0, -move] }) }] },
+        ]}
+      >
+        {bars}
+      </Animated.View>
+      {insets.top > 0 ? <View style={[styles.statusCover, { height: insets.top }]} /> : null}
+    </>
   );
 }
 
@@ -546,7 +581,7 @@ export default function MainNavigator() {
             // แท็บที่เลือกอยู่มีพื้นฟ้าอ่อนรองแบบ OTTERI — แค่เปลี่ยนสีไอคอน
             // มองจากระยะแขนแยกไม่ออกว่าอยู่แท็บไหน
             tabBarActiveBackgroundColor: colors.primarySoft,
-            tabBarStyle: docked ? { display: "none" } : styles.tabBar,
+            tabBarStyle: docked ? { display: "none" } : TAB_BAR_STYLE,
             tabBarItemStyle: styles.tabItem,
           }}
         >
@@ -638,17 +673,9 @@ const styles = StyleSheet.create({
   pageHeadNarrowTitle: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.text },
   crumb: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   crumbLink: { color: colors.primaryInk, fontWeight: "700" },
-  tabBar: {
-    backgroundColor: colors.card,
-    borderTopColor: colors.border,
-    paddingTop: 8,
-    // Web gets no safe-area inset, so the bar needs an explicit height to leave
-    // room for the label. These keys must be absent on native rather than set
-    // to undefined: this style is merged over the bar's own computed style, so
-    // an explicit `height: undefined` erases the height React Navigation
-    // derives from the safe-area inset and collapses the bar out of sight.
-    ...(Platform.OS === "web" ? { height: 76, paddingBottom: 12 } : null),
-  },
+  // ลอยทับเนื้อหาเฉพาะตอนหน้ารายการใบงานบนจอแคบขอ — เนื้อหาเว้นที่ด้านบนเท่าความสูงนี้เอง
+  barsFloat: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 20 },
+  statusCover: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 21, backgroundColor: colors.card },
   tabItem: { paddingVertical: 2, borderRadius: 14, marginHorizontal: 6, overflow: "hidden" },
   // Thai vowel and tone marks sit above the line, so the label needs a taller
   // lineHeight than the font size or the marks get clipped.

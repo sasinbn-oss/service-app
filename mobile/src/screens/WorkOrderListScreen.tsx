@@ -24,6 +24,10 @@ import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useDocked } from "../components/SideMenu";
+import { chromeHide, setChromeOverlay, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
 import { useRefreshHandler } from "../components/RefreshButton";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
@@ -352,10 +356,93 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   // (รายการบนเว็บมีแถบเลื่อนกินขอบขวา ถ้าลอยเต็มจอ คอลัมน์จะเหลื่อมไปเท่าความกว้างแถบเลื่อน)
   const [tableW, setTableW] = useState(0);
   const [barH, setBarH] = useState(FOLDED_H);
+  /**
+   * จอแคบ: แถบโลโก้ + "☰ ใบงานซ่อม" และแท็บล่างหลบตอนเลื่อนลง กลับมาตอนเลื่อนขึ้น (เจ้าของงานเลือกแบบ B ต.ค. 69)
+   *
+   * แถบพวกนี้อยู่นอกหน้านี้ จึงสั่งผ่าน utils/chrome.ts — ระหว่างหน้านี้เปิดอยู่ แถบบนลอยทับรายการ
+   * และแท็บล่างลอยทับขอบล่าง รายการเว้นที่บน/ล่างเท่าความสูงแถบเอง ใบงานจึงเลื่อนตามนิ้วพอดี
+   * ไม่ถูกดันเร็วกว่านิ้วตอนแถบกำลังหาย
+   *
+   * ยังเปิดค้างไว้ตอนใบงานเด้งเป็นหน้าต่างลอยทับ (หน้านี้เสียโฟกัสแต่ยังเห็นอยู่ใต้ฉากมืด)
+   * ไม่งั้นแถบจะกลับมาดันรายการข้างหลังลงจนกระตุกทุกครั้งที่เปิด/ปิดใบงาน
+   */
+  const { docked } = useDocked();
+  const insets = useSafeAreaInsets();
+  const tabH = useBottomTabBarHeight();
+  const chrome = useChrome();
+  // วาดตามค่ากลาง ไม่ใช่ตามโฟกัสของหน้านี้ — สลับแท็บแล้วหน้านี้ถูกพัก (freeze) ไม่วาดใหม่
+  const overlayOn = chrome.overlay && !docked;
+  const barsH = overlayOn ? chrome.barsH : 0;
+  const barsMove = Math.max(0, barsH - insets.top);
+  const live = useRef({ docked, tabH });
+  live.current = { docked, tabH };
+  /**
+   * เปิด/ปิดโหมดลอยจากเหตุการณ์ focus/blur ของ navigation ไม่ใช่จาก effect ตามโฟกัส
+   * หน้าที่ถูกสลับแท็บออกไปถูกพักไว้ effect จึงไม่ทำงาน — แถบบนเคยค้างโหมดลอยครึ่งทางบนแท็บอื่น
+   * ใบงาน/ฟอร์มที่เด้งทับในแท็บเดียวกันไม่นับเป็นออกจากหน้า (ยังเห็นรายการอยู่ใต้ฉากมืด)
+   */
+  useEffect(() => {
+    const apply = (on: boolean) => {
+      const { docked: d, tabH: h } = live.current;
+      const show = on && !d;
+      setChromeOverlay(show, "ใบงานซ่อม");
+      navigation.getParent()?.setOptions({
+        tabBarStyle: show
+          ? {
+              ...TAB_BAR_STYLE,
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              // เลื่อนลงพ้นขอบจอไปเท่าความสูงแท็บ (+ขอบจอล่าง) — ค่าเผื่อไว้กว้างกว่าความสูงจริง
+              transform: [{ translateY: chromeHide.interpolate({ inputRange: [0, 1], outputRange: [0, h + 20] }) }],
+            }
+          : d
+            ? { display: "none" }
+            : TAB_BAR_STYLE,
+      });
+    };
+    /**
+     * ฟังที่ระดับแท็บ (สถานะ stack ข้างใน + โฟกัสของแท็บ) ไม่ใช่ focus/blur ของหน้านี้
+     * — ปิดใบงานที่เด้งทับแล้วหน้านี้ไม่ได้รับ focus กลับมา พอสลับแท็บก็ไม่มี blur ตามมาให้ปิดโหมดลอย
+     * (เจอจริง: แถบโลโก้ค้างครึ่งทางบนแท็บหน้าหลัก)
+     */
+    const tabNav = navigation.getParent();
+    const sync = () => {
+      const st = navigation.getState();
+      const i = st.routes.findIndex((r) => r.key === route.key);
+      const top = st.routes[st.index];
+      const popupOnTop = (top?.name === "WorkOrderDetail" || top?.name === "WorkOrderForm") && st.index - 1 === i;
+      apply(!!tabNav?.isFocused() && (st.index === i || popupOnTop));
+    };
+    const offs = [
+      tabNav?.addListener("state", sync),
+      tabNav?.addListener("focus", sync),
+      tabNav?.addListener("blur", () => apply(false)),
+      navigation.addListener("focus", sync),
+    ];
+    sync();
+    return () => {
+      offs.forEach((off) => off?.());
+      apply(false);
+    };
+  }, [navigation, route.key, docked, tabH]);
+  // ซ่อนไปแล้วกี่จุด — สะสมตามทิศเลื่อนเมื่อพ้นหัวหน้าไปแล้ว (เลื่อนขึ้นนิดเดียวก็เริ่มกลับมา ไม่ต้องไปถึงบนสุด)
+  const hidden = useRef(0);
+  const lastY = useRef(0);
   function onListScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    scrollY.setValue(e.nativeEvent.contentOffset.y);
+    const y = e.nativeEvent.contentOffset.y;
+    scrollY.setValue(y);
+    const dy = y - lastY.current;
+    lastY.current = y;
+    if (overlayOn && barsMove > 0) {
+      // ช่วงบนสุด (ยังเห็นหัวหน้า): แถบเลื่อนขึ้นไปพร้อมเนื้อหาตามนิ้ว · พ้นหัวหน้าแล้ว: หลบ/โผล่ตามทิศ
+      hidden.current =
+        y <= barsMove + headH ? Math.min(Math.max(y, 0), barsMove) : Math.min(barsMove, Math.max(0, hidden.current + dy));
+      chromeHide.setValue(hidden.current / barsMove);
+    }
     // แถบสรุปกดได้เฉพาะตอนเห็นแล้ว — ตอนจางอยู่ไม่ควรบังปุ่มของหัวหน้าข้างใต้
-    const on = headH > 0 && e.nativeEvent.contentOffset.y > headH - 20;
+    const on = headH > 0 && y > barsMove + headH - 20;
     if (on !== barOn) setBarOn(on);
   }
   function backToTop() {
@@ -497,13 +584,19 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           data={status ? [] : items}
           ListEmptyComponent={status}
           keyExtractor={(it: ListItem) => ("sep" in it ? `sep-${it.sep}` : String(it.id))}
-          contentContainerStyle={table ? styles.tableOuter : styles.list}
+          contentContainerStyle={[
+            table ? styles.tableOuter : styles.list,
+            // แท็บล่างลอยทับ — เว้นท้ายรายการไว้ ใบสุดท้ายจะได้ไม่จมใต้แท็บ
+            overlayOn ? { paddingBottom: tabH + spacing.lg } : null,
+          ]}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
           ListHeaderComponent={
             <>
+              {/* แถบบนลอยทับ — เว้นที่ไว้ให้หัวหน้าเริ่มใต้แถบ */}
+              {barsH ? <View style={{ height: barsH }} /> : null}
               {foldable ? header : null}
               {table && !status ? (
                 <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
@@ -561,15 +654,19 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             styles.foldedWrap,
             {
               // โผล่ตามระยะเลื่อน 40 จุดสุดท้ายก่อนหัวหน้าพ้นจอ — ไม่ใช่สลับฉับตามเกณฑ์
+              // จอแคบ: แถบสรุปเกาะใต้แถบบนที่กำลังหลบ — แถบบนหายหมดแล้วก็ขึ้นไปชิดขอบจอ
+              top: overlayOn
+                ? chromeHide.interpolate({ inputRange: [0, 1], outputRange: [barsH, insets.top] })
+                : 0,
               opacity: scrollY.interpolate({
-                inputRange: [Math.max(0, headH - 40), Math.max(1, headH)],
+                inputRange: [Math.max(0, barsMove + headH - 40), Math.max(1, barsMove + headH)],
                 outputRange: [0, 1],
                 extrapolate: "clamp",
               }),
               transform: [
                 {
                   translateY: scrollY.interpolate({
-                    inputRange: [Math.max(0, headH - 40), Math.max(1, headH)],
+                    inputRange: [Math.max(0, barsMove + headH - 40), Math.max(1, barsMove + headH)],
                     outputRange: [-barH, 0],
                     extrapolate: "clamp",
                   }),
