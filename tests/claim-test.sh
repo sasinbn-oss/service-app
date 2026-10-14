@@ -52,7 +52,7 @@ CLOSE() {  # $1 = claims json
   POST $A "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนบอร์ด ทดสอบแล้วปกติ\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"claims\":$1}"
 }
 TS=$(GET $A "work-orders/$ID" | J 'JSON.stringify(d.claimTroubleshooting)')
-FULL="[{\"sparePartId\":$PID,\"symptom\":\"ประตูล็อกไม่ลง ขึ้น Error dL\",\"checkNote\":\"วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย\",\"troubleshooting\":$TS}]"
+FULL="[{\"sparePartId\":$PID,\"brokenPartCode\":\"SP-BOARD-OLD\",\"symptom\":\"ประตูล็อกไม่ลง ขึ้น Error dL\",\"checkNote\":\"วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย\",\"troubleshooting\":$TS}]"
 
 echo "═══ ปิดงานพร้อมเคลม — หลักฐานต้องครบ"
 [ "$(echo "$TS" | J 'd.length')" -gt 0 ] && pass "เครื่อง Huebsch ได้รายการ Troubleshooting ($(echo "$TS" | J 'd.length') ข้อ)" || fail "ไม่มีรายการ Troubleshooting"
@@ -64,16 +64,18 @@ for r in CLAIM_PART CLAIM_SYMPTOM; do UP image/png -F "role=$r" -F "sparePartId=
 for r in CLAIM_ERROR_VIDEO CLAIM_CHECK_VIDEO; do UP video/mp4 -F "role=$r" -F "sparePartId=$PID" >/dev/null; done
 [ "$(DB "select count(*) from \"WorkOrderAttachment\" where \"workOrderId\"=$ID and \"sparePartId\"=$PID and role like 'CLAIM_%'")" = "4" ] \
   && pass "หลักฐานเคลม 4 ไฟล์ผูกกับอะไหล่ในฐานข้อมูล" || fail "หลักฐานไม่ผูกกับอะไหล่"
-R=$(CLOSE "[{\"sparePartId\":$PID,\"symptom\":\"x\",\"checkNote\":\"y\",\"troubleshooting\":[]}]")
+R=$(CLOSE "[{\"sparePartId\":$PID,\"brokenPartCode\":\"SP-BOARD-OLD\",\"symptom\":\"x\",\"checkNote\":\"y\",\"troubleshooting\":[]}]")
 echo "$R" | grep -q "Troubleshooting ครบ (0/" && pass "เครื่อง Huebsch ไม่ทำ Troubleshooting ปิดไม่ได้" || fail "Troubleshooting: $(echo $R | head -c 150)"
-R=$(CLOSE "[{\"sparePartId\":$PID,\"symptom\":\"\",\"checkNote\":\"y\",\"troubleshooting\":$TS}]")
+R=$(CLOSE "[{\"sparePartId\":$PID,\"brokenPartCode\":\" \",\"symptom\":\"x\",\"checkNote\":\"y\",\"troubleshooting\":$TS}]")
+echo "$R" | grep -q "รหัสอะไหล่ตัวที่เสีย" && pass "ไม่กรอกรหัสอะไหล่ตัวที่เสีย ปิดไม่ได้" || fail "รหัสตัวที่เสียว่างผ่าน: $(echo $R | head -c 150)"
+R=$(CLOSE "[{\"sparePartId\":$PID,\"brokenPartCode\":\"SP-BOARD-OLD\",\"symptom\":\"\",\"checkNote\":\"y\",\"troubleshooting\":$TS}]")
 echo "$R" | grep -q "อาการ/สาเหตุ" && pass "ไม่กรอกอาการ/สาเหตุ ปิดไม่ได้" || fail "อาการว่างผ่าน: $(echo $R | head -c 150)"
-R=$(CLOSE "[{\"sparePartId\":$PID2,\"symptom\":\"x\",\"checkNote\":\"y\",\"troubleshooting\":$TS}]")
+R=$(CLOSE "[{\"sparePartId\":$PID2,\"brokenPartCode\":\"X\",\"symptom\":\"x\",\"checkNote\":\"y\",\"troubleshooting\":$TS}]")
 echo "$R" | grep -q "เฉพาะอะไหล่ที่ใส่ไว้" && pass "เคลมอะไหล่ที่ไม่ได้ใช้ไม่ได้" || fail "เคลมของที่ไม่ได้ใช้ได้: $(echo $R | head -c 150)"
 R=$(CLOSE "$FULL")
 echo "$R" | J 'd.status' | grep -q "^CLAIM_REVIEW$" && pass "หลักฐานครบ → รอตรวจเคลม (ยังไม่ปิด)" || fail "ไม่ไปรอตรวจ: $(echo $R | head -c 200)"
-ROW=$(DB "select status||'|'||\"partCode\"||'|'||coalesce(brand,'')||'|'||array_length(troubleshooting,1)||'|'||\"branchCode\" from \"PartClaim\" where \"workOrderId\"=$ID")
-[ "$ROW" = "PENDING|SP-BOARD|HB - Huebsch|$(echo "$TS" | J 'd.length')|$BC" ] && pass "ฐานข้อมูลมีใบเคลมรอตรวจ พร้อมหัวใบเคลมจากระบบ" || fail "แถวเคลม: $ROW"
+ROW=$(DB "select status||'|'||\"partCode\"||'|'||\"brokenPartCode\"||'|'||coalesce(brand,'')||'|'||array_length(troubleshooting,1)||'|'||\"branchCode\" from \"PartClaim\" where \"workOrderId\"=$ID")
+[ "$ROW" = "PENDING|SP-BOARD|SP-BOARD-OLD|HB - Huebsch|$(echo "$TS" | J 'd.length')|$BC" ] && pass "ฐานข้อมูลมีใบเคลมรอตรวจ พร้อมหัวใบเคลมจากระบบ และรหัสตัวที่เสียที่ช่างกรอก" || fail "แถวเคลม: $ROW"
 
 echo
 echo "═══ ใครตรวจได้"

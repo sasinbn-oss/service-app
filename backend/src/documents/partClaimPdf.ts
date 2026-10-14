@@ -37,6 +37,8 @@ export interface PartClaimPdfData {
     status: string;
     partCode: string;
     partName: string;
+    /** รหัสตัวที่เสียที่ช่างอ่านจากของจริง — ว่างเฉพาะใบเก่าก่อนมีช่องนี้ */
+    brokenPartCode: string | null;
     quantity: number;
     branchCode: string;
     branchName: string;
@@ -116,8 +118,10 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
       line("ยี่ห้อ", claim.brand ?? "");
       line("โมเดล/รุ่นเครื่อง", claim.model ?? "");
       line("หมายเลขเครื่อง", claim.machineCode ?? "");
-      line("รหัสอะไหล่", claim.partCode);
+      // รหัสที่ผู้ขายรับเคลมคือตัวที่ส่งคืน (ช่างอ่านจากของจริง) — ตัวที่เบิกมาใส่แทนแยกไว้อีกบรรทัด
+      line("รหัสอะไหล่ (ตัวที่เสีย)", claim.brokenPartCode ?? claim.partCode);
       line("ชื่ออะไหล่", claim.quantity > 1 ? `${claim.partName} × ${claim.quantity}` : claim.partName);
+      line("อะไหล่ที่เปลี่ยนใส่", claim.partCode);
 
       const block = (title: string, body: string) => {
         doc.moveDown(0.5);

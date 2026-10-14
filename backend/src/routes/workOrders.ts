@@ -414,6 +414,7 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
       sparePartId: c.sparePartId,
       partCode: c.partCode,
       partName: c.partName,
+      brokenPartCode: c.brokenPartCode,
       quantity: c.quantity,
       brand: c.brand,
       model: c.model,
@@ -2690,6 +2691,7 @@ const closeSchema = z.object({
     .array(
       z.object({
         sparePartId: z.number().int(),
+        brokenPartCode: z.string().trim().max(100).default(""),
         symptom: z.string().trim().max(1000).default(""),
         checkNote: z.string().trim().max(2000).default(""),
         troubleshooting: z.array(z.string().max(300)).max(50).default([]),
@@ -2874,6 +2876,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       if (missing.length) {
         return res.status(400).json({ error: `เคลม ${sp.partCode}: ยังขาด${missing.join(" · ")}` });
       }
+      if (!c.brokenPartCode) {
+        return res.status(400).json({ error: `เคลม ${sp.partCode}: ต้องกรอกรหัสอะไหล่ตัวที่เสีย (ตัวที่ส่งเคลม)` });
+      }
       if (!c.symptom) return res.status(400).json({ error: `เคลม ${sp.partCode}: ต้องกรอกอาการ/สาเหตุ` });
       if (!c.checkNote) {
         return res.status(400).json({ error: `เคลม ${sp.partCode}: ต้องกรอกว่าเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้` });
@@ -2889,6 +2894,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         sparePartId: sp.id,
         partCode: sp.partCode,
         partName: sp.name,
+        brokenPartCode: c.brokenPartCode,
         quantity: used.get(sp.id) ?? 1,
         branchCode: ctx.branch.code,
         branchName: ctx.branch.name,

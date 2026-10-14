@@ -174,6 +174,8 @@ interface PartClaim {
   sparePartId: number;
   partCode: string;
   partName: string;
+  /** รหัสตัวที่เสียที่ส่งเคลม (ช่างกรอก) — ว่างเฉพาะใบเก่า */
+  brokenPartCode: string | null;
   quantity: number;
   brand: string | null;
   model: string | null;
@@ -2845,6 +2847,7 @@ function DispatchNote({ order }: { order: WorkOrder }) {
 /** ใบเคลมที่ช่างกำลังกรอกในหน้าปิดงาน — ไฟล์ยังอยู่ในเครื่อง ส่งขึ้นตอนกดปิดงาน */
 interface ClaimDraft {
   on: boolean;
+  brokenPartCode: string;
   symptom: string;
   checkNote: string;
   troubleshooting: string[];
@@ -2941,6 +2944,10 @@ function ClaimsCard({
               ส่งเมื่อ {formatDateTime(c.createdAt)}
               {c.reviewedAt ? ` · ตรวจเมื่อ ${formatDateTime(c.reviewedAt)}` : ""}
             </Text>
+            <Row label="รหัสตัวที่เสีย" value={c.brokenPartCode ?? "—"} />
+            {c.brokenPartCode && c.brokenPartCode.toUpperCase() !== c.partCode.toUpperCase() ? (
+              <Text style={styles.claimMismatch}>ไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ ({c.partCode}) — ตรวจรหัสก่อนส่งผู้ขาย</Text>
+            ) : null}
             <Row label="ยี่ห้อ / รุ่น" value={[c.brand, c.model].filter(Boolean).join(" · ") || "—"} />
             <Row label="หมายเลขเครื่อง" value={c.machineCode ?? "—"} />
             <Text style={styles.partsHead}>อาการ/สาเหตุ</Text>
@@ -3111,6 +3118,7 @@ function CloseModal({
     const prior = order.claims.find((c) => c.sparePartId === id);
     return {
       on: prior ? true : order.branchWarrantyExpired === false,
+      brokenPartCode: prior?.brokenPartCode ?? "",
       symptom: prior?.symptom ?? "",
       checkNote: prior?.checkNote ?? "",
       troubleshooting: prior?.troubleshooting ?? [],
@@ -3127,6 +3135,7 @@ function CloseModal({
     const d = draftFor(p.sparePartId);
     if (!d.on) return [];
     return [
+      ...(d.brokenPartCode.trim() ? [] : ["รหัสอะไหล่ตัวที่เสีย"]),
       ...CLAIM_EVIDENCE.filter((e) => !hasEvidence(p.sparePartId, e.role)).map((e) => e.label),
       ...(d.symptom.trim() ? [] : ["อาการ/สาเหตุ"]),
       ...(d.checkNote.trim() ? [] : ["สิ่งที่เข้าเช็ค"]),
@@ -3187,6 +3196,7 @@ function CloseModal({
           const d = draftFor(p.sparePartId);
           return {
             sparePartId: p.sparePartId,
+            brokenPartCode: d.brokenPartCode.trim(),
             symptom: d.symptom.trim(),
             checkNote: d.checkNote.trim(),
             troubleshooting: d.troubleshooting,
@@ -3574,6 +3584,28 @@ function CloseModal({
                         .filter(Boolean)
                         .join(" · ") || "ไม่มีข้อมูลเครื่อง"}
                     </Text>
+
+                    {/*
+                      รหัสตัวที่เสีย อ่านจากอะไหล่ที่ถอดออกจริง ไม่ใช่เติมจากตัวที่เบิกมาใส่ — ผู้ขายรับเคลมตามตัวที่ส่งคืน
+                      ถ้าเติมให้ ช่างจะกดผ่านโดยไม่ได้ดูของ แล้วรุ่นที่ต่างกันจะไปรู้เอาตอนผู้ขายตีกลับ
+                    */}
+                    <Text style={styles.modalLabel}>
+                      รหัสอะไหล่ตัวที่เสีย (ตัวที่ส่งเคลม) <Text style={{ color: colors.danger }}>*</Text>
+                    </Text>
+                    <TextInput
+                      style={[styles.modalInput, styles.modalInputLine]}
+                      value={d.brokenPartCode}
+                      onChangeText={(v) => patchDraft(p.sparePartId, { brokenPartCode: v })}
+                      placeholder={`ดูจากป้าย/สติกเกอร์บนตัวที่ถอดออก เช่น ${p.partCode}`}
+                      placeholderTextColor={colors.textFaint}
+                      autoCapitalize="characters"
+                      accessibilityLabel={`รหัสอะไหล่ตัวที่เสีย ${p.partCode}`}
+                    />
+                    {d.brokenPartCode.trim() && d.brokenPartCode.trim().toUpperCase() !== p.partCode.toUpperCase() ? (
+                      <Text style={styles.claimHeader}>
+                        ไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ ({p.partCode}) — ส่งได้ แต่ตรวจรหัสอีกครั้ง
+                      </Text>
+                    ) : null}
 
                     <Text style={styles.modalLabel}>
                       อาการ/สาเหตุ <Text style={{ color: colors.danger }}>*</Text>
@@ -4176,6 +4208,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: colors.dangerSoft,
   },
+  claimMismatch: { fontSize: 12, lineHeight: 19, color: colors.warningInk, fontWeight: "700" },
   claimRejectedTitle: { fontSize: 13, lineHeight: 20, fontWeight: "800", color: colors.dangerInk },
   claimRejectedText: { fontSize: 13, lineHeight: 21, color: colors.dangerInk },
   claimPart: {
