@@ -402,6 +402,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   INSPECTED: "บันทึกผลตรวจหน้างาน",
   ROLLED_BACK: "ย้อนขั้นตอน",
   SPLIT: "แยกใบงานรออะไหล่",
+  TEST_COPY: "คัดลอกเป็นใบทดสอบ",
   SPLIT_FROM: "แยกมาจากใบงานอื่น",
   PARTS_ARRIVED: "อะไหล่มาแล้ว ส่งต่อให้เบิก",
   CLOSED: "ปิดงาน",

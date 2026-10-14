@@ -268,6 +268,7 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
     id: w.id,
     code: w.code,
     source: w.source,
+    isTest: w.isTest,
     jobType: w.jobType,
     jobTypeLabel: JOB_TYPE_LABELS[w.jobType] ?? w.jobType,
     title: w.title,
@@ -2337,6 +2338,76 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json({ ...shape(row), createdChild: child });
+});
+
+/**
+ * คัดลอกเป็นใบทดสอบ (แอดมิน) — ใบใหม่ สาขา เครื่อง อาการ อะไหล่ ทีม วันนัด และขั้นเดียวกับใบต้นทาง
+ * ลองเดินขั้นที่เหลือ (เช่นปิดงานพร้อมเคลม) ได้โดยไม่แตะใบจริง — ใบจริงที่เอามาทดสอบตรง ๆ ถูกปิดงานจริง
+ *
+ * ไม่คัดลอก: รูป/ไฟล์ ประวัติ ใบเคลม ผลปิดงาน และไม่ผูกกับเคสบนกระดาน (ปิดใบทดสอบต้องไม่ไปปิดเคสจริง)
+ * ใบต้นทางที่ปิด/ยกเลิก/รอตรวจเคลมไปแล้ว → ใบทดสอบเริ่มที่ "รอช่างเข้างาน" ถ้ามีทีมแล้ว ไม่งั้นเริ่มใหม่
+ */
+router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const src = await prisma.workOrder.findUnique({
+    where: { id },
+    include: { parts: { where: { kind: "WAITING" } } },
+  });
+  if (!src) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  const ended = ["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(src.status);
+  const status = ended ? (src.assignedTeam || src.assignedToId ? "IN_PROGRESS" : "NEW") : src.status;
+
+  const made = await prisma.$transaction(async (tx) => {
+    const copy = await tx.workOrder.create({
+      data: {
+        code: "",
+        source: "MANUAL",
+        isTest: true,
+        testOfId: src.id,
+        branchId: src.branchId,
+        machineId: src.machineId,
+        jobType: src.jobType,
+        title: src.title.startsWith("[ทดสอบ]") ? src.title : `[ทดสอบ] ${src.title}`,
+        detail: src.detail,
+        contactName: src.contactName,
+        contactPhone: src.contactPhone,
+        symptom: src.symptom,
+        priority: src.priority,
+        status,
+        workStatus: workStatusForStage(status),
+        needsParts: src.needsParts,
+        assignedTeam: src.assignedTeam,
+        assignedToId: src.assignedToId,
+        scheduledAt: src.scheduledAt,
+        scheduledTime: src.scheduledTime,
+        appointmentStatus: src.appointmentStatus,
+        inspectedAt: src.inspectedAt,
+        inspectionNote: src.inspectionNote,
+        createdById: req.auth!.userId,
+      },
+    });
+    const code = workOrderCode(copy.id);
+    await tx.workOrder.update({ where: { id: copy.id }, data: { code } });
+    if (src.parts.length > 0) {
+      await tx.workOrderPart.createMany({
+        data: src.parts.map((p) => ({
+          workOrderId: copy.id,
+          sparePartId: p.sparePartId,
+          quantity: p.quantity,
+          kind: "WAITING",
+          inStock: p.inStock,
+          warehouse: p.warehouse,
+          requisitionNo: p.requisitionNo,
+          checkedAt: p.checkedAt,
+          checkedById: p.checkedById,
+        })),
+      });
+    }
+    await writeLog(tx, copy.id, req.auth!.userId, "TEST_COPY", status, `ใบทดสอบ คัดลอกจาก ${src.code} — ทดสอบเสร็จให้ลบทิ้ง`);
+    return { id: copy.id, code };
+  }, STAGE_TX);
+  res.status(201).json(made);
 });
 
 /** "SPHB144, D12-X x2" สำหรับเขียนลงประวัติ */

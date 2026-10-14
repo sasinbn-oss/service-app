@@ -1,4 +1,4 @@
-// ทดสอบ: เคลมอะไหล่เก่าผ่านหน้าจอจริง (Admin Spare Part ดูใบงานได้อย่างเดียว เหลือแค่ปุ่มตรวจเคลม) — ช่าง(แอดมิน A001 กดแทน)ปิดงานพร้อมใบเคลม แนบหลักฐาน 4 ชนิดผ่านปุ่มในฟอร์ม
+// ทดสอบ: เคลมอะไหล่เก่าผ่านหน้าจอจริง บนใบทดสอบที่คัดลอกจากใบจริง (ใบจริงต้องไม่ถูกแตะ) · Admin Spare Part ดูใบงานได้อย่างเดียว
 //        · ปุ่มปิดงานกดไม่ได้จนกว่าจะครบ · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
 //        · Admin Spare Part ตีกลับ → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ → อนุมัติ → ปิดงาน
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
@@ -37,6 +37,8 @@ const login = async (code) =>
   const bc = `DZCW${suf}`;
   const oldRegion = sql(`select coalesce(region,'') from "User" where "employeeCode"='S001'`);
   let id = null;
+  let orig = null;
+  let before = null;
   const browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
     args: ["--no-sandbox"],
@@ -71,7 +73,7 @@ const login = async (code) =>
       if (role) form.append("role", role);
       await call(A, "POST", `/work-orders/${id}/attachments`, form);
     }
-    const code = sql(`select code from "WorkOrder" where id=${id}`);
+    let code = sql(`select code from "WorkOrder" where id=${id}`);
     if (sql(`select status from "WorkOrder" where id=${id}`) !== "IN_PROGRESS") throw new Error("เตรียมใบงานไม่ถึงขั้นเข้างาน");
 
     async function open(user) {
@@ -103,6 +105,31 @@ const login = async (code) =>
 
     // ── ช่างปิดงานพร้อมเคลม ──
     let page = await open("A001");
+
+    // ── คัดลอกเป็นใบทดสอบ แล้วเดินเคลมบนใบทดสอบ — ใบจริงต้องไม่ถูกแตะ ──
+    orig = id;
+    before = sql(`select status||'|'||"updatedAt" from "WorkOrder" where id=${orig}`);
+    await vis(page, "คัดลอกเป็นใบทดสอบ").last().click();
+    await page.waitForTimeout(800);
+    await vis(page, "คัดลอก").last().click();
+    await page.waitForTimeout(3500);
+    id = Number(sql(`select id from "WorkOrder" where "testOfId"=${orig}`)) || null;
+    if (!id) throw new Error("คัดลอกเป็นใบทดสอบไม่สำเร็จ");
+    code = sql(`select code from "WorkOrder" where id=${id}`);
+    (await vis(page, "ใบทดสอบ — คัดลอกจากใบจริง ไม่กระทบใบจริง ทดสอบเสร็จให้ลบทิ้ง").count()) > 0 &&
+      sql(`select "isTest"||'|'||status from "WorkOrder" where id=${id}`) === "true|IN_PROGRESS"
+      ? pass(`คัดลอกเป็นใบทดสอบ ${code}: เปิดใบใหม่ให้เลย มีแถบใบทดสอบ ขั้นเดียวกับใบจริง`)
+      : fail("คัดลอกเป็นใบทดสอบ");
+    // ใบทดสอบไม่คัดลอกรูป — แนบรูปหน้างาน ป้ายรุ่น ใบเหลืองของใบทดสอบเอง (ผู้ทดสอบจริงแนบในฟอร์มปิดงาน)
+    for (const role of [null, "NAMEPLATE", "REQUISITION"]) {
+      const form = new FormData();
+      form.append("file", new Blob([fs.readFileSync(PHOTO)], { type: "image/png" }), "p.png");
+      if (role) form.append("role", role);
+      await call(A, "POST", `/work-orders/${id}/attachments`, form);
+    }
+    // ปิดหน้าแล้วเปิดใบทดสอบใหม่ — ใบจริงยังค้างอยู่ข้างหลัง ปุ่มชื่อเดียวกันมีสองชุด
+    await page.close();
+    page = await open("A001");
     await vis(page, "ปิดงาน").first().click();
     await page.waitForTimeout(1500);
     await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").fill("เปลี่ยนบอร์ด ทดสอบแล้วปกติ");
@@ -202,6 +229,12 @@ const login = async (code) =>
   } catch (e) {
     fail(String(e));
   } finally {
+    if (orig && orig !== id) {
+      sql(`select status||'|'||"updatedAt" from "WorkOrder" where id=${orig}`) === before
+        ? pass("ใบจริงไม่ถูกแตะตลอดการทดสอบ (ฐานข้อมูล)")
+        : fail("ใบจริงเปลี่ยนระหว่างทดสอบ");
+      await call(A, "DELETE", `/work-orders/${orig}`);
+    }
     if (id) await call(A, "DELETE", `/work-orders/${id}`);
     sql(`delete from "Machine" where "branchId" in (select id from "Branch" where code='${bc}');
          delete from "Branch" where code='${bc}';
