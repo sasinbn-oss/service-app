@@ -31,6 +31,7 @@ import {
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
 import ImageViewer from "./ImageViewer";
+import InspectionSlots, { inspectionFilesOf, missingInspection } from "./InspectionSlots";
 import { colors, radius, spacing } from "../theme";
 
 export interface Attachment {
@@ -57,6 +58,7 @@ export default function WorkOrderAttachments({
   reloadKey = 0,
   onLoaded,
   onAdded,
+  inspection,
 }: {
   workOrderId: number;
   canEdit: boolean;
@@ -72,6 +74,11 @@ export default function WorkOrderAttachments({
   onLoaded?: (rows: Attachment[]) => void;
   /** แนบไฟล์สำเร็จ — หน้าจอแม่โหลดใบงานใหม่ ให้หน้าปิดงานรู้ว่ามีรูปก่อนซ่อมแล้ว */
   onAdded?: () => void;
+  /**
+   * ใบงานที่ส่งทีมไปตรวจหน้างาน — แยกไฟล์ตรวจขึ้นเป็นกรอบสามอย่าง
+   * active คือยังรอผลตรวจ (แนบได้ · บอกว่าขาดอะไร) ตรวจเสร็จแล้วกรอบเหลือไว้ให้หัวหน้าภาคดู
+   */
+  inspection?: { since: string | null; active: boolean };
 }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Attachment[]>([]);
@@ -155,6 +162,12 @@ export default function WorkOrderAttachments({
   const canRemove = (row: Attachment) =>
     user?.role === "ADMIN" || (user != null && row.createdById === user.id);
 
+  const inspectRows = inspection ? inspectionFilesOf(rows, inspection.since) : [];
+  const showSlots = !!inspection && (inspection.active || inspectRows.length > 0);
+  // ไฟล์ที่อยู่ในกรอบแล้วไม่ต้องขึ้นซ้ำในกองไฟล์ด้านล่าง
+  const others = showSlots ? rows.filter((r) => !inspectRows.includes(r)) : rows;
+  const missing = inspection?.active ? missingInspection(rows, inspection.since) : [];
+
   return (
     <View style={styles.card}>
       {viewing !== null ? (
@@ -166,15 +179,44 @@ export default function WorkOrderAttachments({
         {rows.length > 0 ? <Text style={styles.count}>{rows.length} ไฟล์</Text> : null}
       </View>
 
+      {showSlots && !loading ? (
+        <>
+          {inspection!.active ? (
+            <View style={[styles.progress, missing.length === 0 && styles.progressDone]}>
+              <Text style={[styles.progressText, missing.length === 0 && styles.progressTextDone]}>
+                ไฟล์ตรวจหน้างาน ครบ {3 - missing.length} / 3
+                {missing.length ? ` — ยังขาด: ${missing.join(" · ")}` : ""}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.groupLabel}>ไฟล์ตรวจหน้างาน</Text>
+          )}
+          <InspectionSlots
+            workOrderId={workOrderId}
+            rows={rows}
+            since={inspection!.since}
+            canEdit={canEdit && inspection!.active}
+            canRemove={canRemove}
+            onOpen={open}
+            onRemove={remove}
+            onChanged={async () => {
+              await load();
+              onAdded?.();
+            }}
+          />
+          {others.length > 0 || canEdit ? <Text style={styles.groupLabel}>ไฟล์อื่น ๆ</Text> : null}
+        </>
+      ) : null}
+
       {loading ? (
         <Spinner color={colors.primary} style={{ marginVertical: spacing.md }} />
-      ) : rows.length === 0 ? (
+      ) : showSlots && others.length === 0 ? null : others.length === 0 ? (
         <Text style={styles.empty}>
           ยังไม่มีรูป — รูปหน้างานช่วยให้คนที่ไม่ได้ไปเห็นว่าเจออะไรจริง ๆ
         </Text>
       ) : (
         <View style={styles.grid}>
-          {rows.map((row) => (
+          {others.map((row) => (
             <View key={row.id} style={styles.tile}>
               <TouchableOpacity activeOpacity={0.8} onPress={() => open(row)} style={styles.thumbBox} accessibilityLabel={`ดูไฟล์ ${row.fileName}`}>
                 {row.thumbnailDataUrl ? (
@@ -264,6 +306,11 @@ export default function WorkOrderAttachments({
 }
 
 const styles = StyleSheet.create({
+  progress: { borderRadius: radius.md, paddingVertical: 6, paddingHorizontal: spacing.sm, backgroundColor: colors.warningSoft },
+  progressDone: { backgroundColor: colors.successSoft },
+  progressText: { fontSize: 12, fontWeight: "700", color: colors.warningInk },
+  progressTextDone: { color: colors.successInk },
+  groupLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted, marginTop: spacing.xs },
   tagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: spacing.sm },
   tagLabel: { fontSize: 12, color: colors.textMuted, marginRight: 2 },
   tagChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },

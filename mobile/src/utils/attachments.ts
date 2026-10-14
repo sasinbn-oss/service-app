@@ -92,8 +92,38 @@ export async function pickImageAttachment(
     : await ImagePicker.launchImageLibraryAsync(options);
   if (result.canceled || result.assets.length === 0) return null;
 
-  const asset = result.assets[0];
   onStage?.("กำลังย่อรูป");
+  return prepareImage(result.assets[0]);
+}
+
+/**
+ * เลือกจากคลังทีละหลายรูป — กรอบไฟล์ตรวจหน้างานที่ช่างถ่ายมาเป็นชุด
+ * กดเลือกทีละรูปสิบรอบคือเหตุผลที่คนส่งแค่รูปเดียว
+ */
+export async function pickImageAttachments(
+  onStage?: (label: string) => void
+): Promise<PickedAttachment[]> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) {
+    showAlert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงรูปภาพ");
+    return [];
+  }
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ["images"],
+    quality: 1,
+    allowsMultipleSelection: true,
+    selectionLimit: 10,
+  });
+  if (result.canceled) return [];
+  const out: PickedAttachment[] = [];
+  for (const [i, asset] of result.assets.entries()) {
+    onStage?.(result.assets.length > 1 ? `กำลังย่อรูป ${i + 1}/${result.assets.length}` : "กำลังย่อรูป");
+    out.push(await prepareImage(asset));
+  }
+  return out;
+}
+
+async function prepareImage(asset: ImagePicker.ImagePickerAsset): Promise<PickedAttachment> {
   // ย่อก่อนส่งเสมอ ไม่ใช่แค่ลดคุณภาพ — quality อย่างเดียวได้ไฟล์ 1.5-2.5 MB
   // เพราะความกว้างยังเท่าเดิม ต้องลดขนาดภาพจริงถึงจะเหลือหลักแสนไบต์
   const uri = await shrink(asset.uri, MAX_WIDTH, 0.7);

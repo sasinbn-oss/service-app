@@ -611,11 +611,17 @@ export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "DOCUMENT"] as const;
  *
  * ทั้งสองอย่างไม่ใช่หลักฐานของอาการ จึงต้องแยกให้หาเจอ ไม่ใช่ปนอยู่ในกองรูปหน้างาน
  */
+/** ไฟล์ตรวจหน้างาน ลำดับตามที่หน้าจอวางกรอบ — INSPECT_VIDEO รับเฉพาะวิดีโอ ที่เหลือรับเฉพาะรูป */
+export const INSPECTION_ROLES = ["INSPECT_SITE", "INSPECT_PART", "INSPECT_VIDEO"] as const;
+
 export const ATTACHMENT_ROLES = [
   // รูป/วิดีโอก่อนซ่อมกับหลังซ่อม — ปิดงานบังคับอย่างละอย่างน้อยหนึ่ง (เจ้าของงานขอ ต.ค. 69)
   // แยกออกจากรูปหน้างานทั่วไป เพื่อให้ใบที่ปิดแล้ววางคู่กันเทียบได้ว่าเจออะไรและทำอะไรไป
   "BEFORE",
   "AFTER",
+  // ไฟล์ตรวจหน้างาน — ส่งผลตรวจต้องครบสามอย่าง (เจ้าของงานขอ ต.ค. 69) เพราะหัวหน้าภาค
+  // ระบุอะไหล่จากตรงนี้โดยไม่ได้เห็นเครื่องเอง คำบรรยายอย่างเดียวพาสั่งอะไหล่ผิดตัว
+  ...INSPECTION_ROLES,
   "NAMEPLATE",
   "REQUISITION",
   "QUOTE",
@@ -667,6 +673,9 @@ export function claimTroubleshootingFor(make: string | null | undefined) {
 export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   BEFORE: "ก่อนซ่อม",
   AFTER: "หลังซ่อม",
+  INSPECT_SITE: "รูปหน้างาน (ตรวจ)",
+  INSPECT_PART: "รูปอะไหล่ที่เสีย",
+  INSPECT_VIDEO: "วิดีโอการทำงาน",
   NAMEPLATE: "ป้ายรุ่น",
   REQUISITION: "ใบเหลือง",
   QUOTE: "ใบเสนอราคา",
