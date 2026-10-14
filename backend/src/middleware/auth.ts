@@ -50,10 +50,18 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
   // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว
   // ทุกจุดที่เช็ค role === "ADMIN" (ราว 20 จุด) จึงใช้ได้ทันทีโดยไม่ต้องไล่แก้ทีละจุด
-  // แอดมินอะไหล่ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียวเหมือน Super Admin
-  // ธง partsAdmin เก็บไว้ให้ขั้นที่เป็นของตำแหน่งนี้โดยเฉพาะ (ขั้นหลังปิดงาน — ยังไม่ได้ทำ)
+  /**
+   * แอดมินอะไหล่ (Admin Spare Part) เห็นทุกอย่างเท่าแอดมิน แต่แก้ได้เฉพาะงานของตัวเอง (เจ้าของงานกำหนด ต.ค. 69):
+   * ตรวจเคลมอะไหล่ · ข้อมูลอะไหล่ · งานส่วนตัวที่พนักงานทุกคนทำ (เปลี่ยนรหัส · ใช้รถ · ลงเวลา/บันทึกงาน · ขอเบิก)
+   * มองเป็น ADMIN เพื่อให้อ่านได้ทุกที่ แล้วกันการเขียนตรงนี้ที่เดียว แบบเดียวกับดูในฐานะ —
+   * ไล่ใส่เงื่อนไขทีละ route จะมีสักที่ที่ลืม แล้วปุ่มที่ซ่อนไว้ยังยิง API ตรง ๆ ได้
+   */
   if ((req.auth.role as string) === "PARTS_ADMIN") {
     req.auth = { ...req.auth, role: "ADMIN", partsAdmin: true };
+    const path = req.baseUrl + req.path;
+    if (!READ_METHODS.has(req.method) && !PARTS_ADMIN_WRITES.some((r) => r.test(`${req.method} ${path}`))) {
+      return res.status(403).json({ error: "Admin Spare Part ดูได้อย่างเดียว — แก้ได้เฉพาะเคลมอะไหล่และข้อมูลอะไหล่" });
+    }
   }
   if ((req.auth.role as string) === "SUPER_ADMIN") {
     // ดูในฐานะไม่เปิดให้ดู Super Admin (เช็คตอนเริ่มแล้ว) — คนที่ถูกดูกลายเป็น Super Admin ทีหลังก็ไม่ได้สิทธิ์นั้นไปด้วย
@@ -84,6 +92,23 @@ const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * export ส่งรายการ id มาทาง body เพราะยาวเกิน URL · stop ต้องเรียกได้เพื่อปิดบันทึก
  */
 const ALLOWED_WHILE_VIEWING = new Set(["/api/machines/export", "/api/auth/view-as/stop"]);
+
+/** สิ่งที่ Admin Spare Part แก้ได้ — นอกจากนี้ดูได้อย่างเดียว (ดู requireAuth) */
+const PARTS_ADMIN_WRITES = [
+  /^POST \/api\/work-orders\/\d+\/claim-review$/,
+  /^POST \/api\/work-orders\/\d+\/claims\/\d+\/pdf-link$/,
+  /^\w+ \/api\/spare-parts(\/|$)/,
+  /^POST \/api\/auth\/(change-password|view-as\/stop)$/,
+  // POST ที่ไม่ได้แก้ข้อมูล
+  /^POST \/api\/machines\/export$/,
+  /^POST \/api\/documents\/transfer-request$/,
+  // งานส่วนตัวที่พนักงานทุกคนทำได้ — ไม่รวมส่วนที่เป็นของแอดมิน (คืนรถแทน · แก้ประวัติรถ · อนุมัติเบิก)
+  /^(POST|DELETE) \/api\/vehicle-logs\/photos(\/\d+)?$/,
+  /^POST \/api\/vehicle-logs\/(start|\d+\/end)$/,
+  /^POST \/api\/branch-checkins\/?$/,
+  /^(POST \/api\/work-logs\/?|DELETE \/api\/work-logs\/\d+)$/,
+  /^(POST \/api\/consumable-requests\/?|DELETE \/api\/consumable-requests\/\d+)$/,
+];
 
 /** เส้นทางที่ยังเรียกได้ทั้งที่ยังไม่เปลี่ยนรหัส — พอให้เปลี่ยนรหัสได้และรู้ว่าตัวเองเป็นใคร */
 const ALLOWED_WHILE_LOCKED = new Set(["/change-password", "/me"]);

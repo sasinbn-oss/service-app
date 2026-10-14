@@ -350,6 +350,11 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         navigation.navigate("WorkOrderDetail", { id: row.workOrder.id });
         return;
       }
+      // เปิดฟอร์มให้กรอกจนจบแล้วค่อยโดนเซิร์ฟเวอร์ปฏิเสธ แย่กว่าบอกตั้งแต่กด
+      if (user?.partsAdmin) {
+        showAlert("ดูได้อย่างเดียว", "Admin Spare Part เปิดใบงานไม่ได้ — ให้แอดมินหรือหัวหน้าภาคเปิด");
+        return;
+      }
       navigation.navigate("WorkOrderForm", {
         outageId: row.id,
         branchCode: row.branchCode,
@@ -358,7 +363,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         machineCode: row.machineCode ?? undefined,
       });
     },
-    [navigation]
+    [navigation, user?.partsAdmin]
   );
 
   const load = useCallback(

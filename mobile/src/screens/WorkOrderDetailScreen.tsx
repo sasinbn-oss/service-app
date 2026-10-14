@@ -311,7 +311,14 @@ function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | nul
 
 export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const { id } = route.params;
-  const { user } = useAuth();
+  const { user: me } = useAuth();
+  /**
+   * Admin Spare Part ดูใบงานได้ทุกใบแต่แก้ไม่ได้ (เจ้าของงานกำหนด ต.ค. 69) ยกเว้นตรวจเคลม
+   * ตัด user ทิ้งสำหรับปุ่มทั้งหมดในหน้านี้ — ทุกปุ่มที่เช็คสิทธิ์จาก user หายไปพร้อมกัน
+   * ไม่ต้องไล่ใส่เงื่อนไขทีละปุ่ม (เซิร์ฟเวอร์กันอีกชั้นใน middleware/auth.ts)
+   */
+  const viewOnly = !!me?.partsAdmin;
+  const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
@@ -767,7 +774,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <View style={[styles.waitingCard, styles.waitingInline]}>
             <Ionicons name="shield-checkmark-outline" size={16} color={colors.textMuted} />
             <Text style={styles.waitingText}>
-              {canReviewClaims(user)
+              {canReviewClaims(me)
                 ? "ช่างปิดงานพร้อมส่งอะไหล่เก่าเคลม — ตรวจใบเคลมด้านล่าง แล้วอนุมัติหรือตีกลับ"
                 : "ช่างปิดงานแล้ว รอ Admin Spare Part ตรวจเคลมอะไหล่เก่า"}
             </Text>
@@ -833,11 +840,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             <View style={[styles.waitingCard, styles.waitingInline]}>
               <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
               <Text style={styles.waitingText}>
-                ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
+                {viewOnly ? "ดูได้อย่างเดียว · " : ""}ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
                 {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
                   ? ` (${order.assignedToName ?? order.assignedTeam})`
                   : ""}
-                {" "}— ยังไม่ถึงคิวของคุณ
+                {viewOnly ? "" : " — ยังไม่ถึงคิวของคุณ"}
               </Text>
             </View>
           )
@@ -848,7 +855,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         <ClaimsCard
           order={order}
           files={files}
-          canReview={order.status === "CLAIM_REVIEW" && canReviewClaims(user)}
+          canReview={order.status === "CLAIM_REVIEW" && canReviewClaims(me)}
           onReviewed={load}
         />
       ) : null}
@@ -946,7 +953,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         <View style={styles.headRow}>
           <Text style={styles.sectionTitle}>อาการ / สถานะ</Text>
           <View style={{ flex: 1 }} />
-          {!done ? (
+          {!done && !viewOnly ? (
             <TouchableOpacity
               style={styles.editNote}
               onPress={() => setEditingNote(true)}
@@ -1026,7 +1033,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       */}
       <WorkOrderAttachments
         workOrderId={order.id}
-        canEdit={!done || user?.role === "ADMIN"}
+        canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
         reloadKey={filesKey}
         onLoaded={setFiles}
       />

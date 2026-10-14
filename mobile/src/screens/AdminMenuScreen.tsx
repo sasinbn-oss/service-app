@@ -2,6 +2,7 @@ import React, { useCallback, useState } from "react";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 import { colors } from "../theme";
 import MenuList, { MenuEntry } from "../components/MenuList";
 import { AdminStackParamList } from "../navigation/types";
@@ -9,6 +10,7 @@ import { AdminStackParamList } from "../navigation/types";
 type Props = NativeStackScreenProps<AdminStackParamList, "AdminMenu">;
 
 export default function AdminMenuScreen({ navigation }: Props) {
+  const { user } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
 
   useFocusEffect(
@@ -139,7 +141,8 @@ export default function AdminMenuScreen({ navigation }: Props) {
       title="ระบบหลังบ้าน"
       subtitle="จัดการข้อมูลของทั้งระบบ"
       note="การแก้ไขในหน้านี้มีผลกับผู้ใช้ทุกคน"
-      entries={entries}
+      // Admin Spare Part เหลือแค่ข้อมูลอะไหล่ (เจ้าของงานกำหนด ต.ค. 69) — หน้าอื่นเซิร์ฟเวอร์ไม่ให้แก้อยู่แล้ว
+      entries={user?.partsAdmin ? entries.filter((e) => e.key === "ManageSpareParts") : entries}
     />
   );
 }
