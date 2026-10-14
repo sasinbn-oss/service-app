@@ -25,6 +25,7 @@ import {
 import { COMPANY_LOGO_PNG, COMPANY_LOGO_SIZE } from "./logo";
 import {
   COLUMNS,
+  CONTENT_DXA,
   COMPANY_NAME,
   DOCUMENT_TITLE,
   DOTS,
@@ -148,7 +149,7 @@ function signatureBlock() {
     plainCell(caption ? [label(caption), line(), line()] : [line(), line()], 5400);
 
   return new Table({
-    width: { size: 10800, type: WidthType.DXA },
+    width: { size: CONTENT_DXA, type: WidthType.DXA },
     borders: NO_BORDERS,
     rows: SIGNATURE_LABELS.map(
       ([left, right]) => new TableRow({ children: [column(left), column(right)] })
@@ -165,8 +166,8 @@ export async function buildTransferRequestDocx(data: TransferRequestData): Promi
       {
         properties: {
           page: {
-            // Letter ตามแม่แบบเดิม
-            size: { width: 12240, height: 15840 },
+            // A4 (เจ้าของงานขอ ต.ค. 69 — เดิม Letter ตามแม่แบบ) · กว้างลบขอบสองข้างเหลือ 10772 = CONTENT_DXA
+            size: { width: 11906, height: 16838 },
             margin: { top: 567, right: 567, bottom: 567, left: 567 },
           },
         },
@@ -193,7 +194,7 @@ export async function buildTransferRequestDocx(data: TransferRequestData): Promi
           }),
 
           new Table({
-            width: { size: 10800, type: WidthType.DXA },
+            width: { size: CONTENT_DXA, type: WidthType.DXA },
             borders: NO_BORDERS,
             rows: content.fieldRows.map(fieldRow),
           }),

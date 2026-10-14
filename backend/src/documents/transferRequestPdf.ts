@@ -31,8 +31,9 @@ const FONT_BOLD = path.join(FONT_DIR, "Sarabun-Bold.ttf");
 const REGULAR = "sarabun";
 const BOLD = "sarabun-bold";
 
-// Letter ขนาดเดียวกับไฟล์ Word (12240 x 15840 twip = 612 x 792 pt)
-const PAGE = { width: 612, height: 792 };
+// A4 ขนาดเดียวกับไฟล์ Word (11906 x 16838 twip = 595.28 x 841.89 pt) — เจ้าของงานขอ ต.ค. 69 (เดิม Letter ตามแม่แบบ)
+// กระดาษในออฟฟิศไทยเป็น A4 · Letter พิมพ์ลง A4 แล้วถูกย่อ/ตัดขอบ
+const PAGE = { width: 595.28, height: 841.89 };
 const MARGIN = 28;
 const CONTENT_WIDTH = PAGE.width - MARGIN * 2;
 
