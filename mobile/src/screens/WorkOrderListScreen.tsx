@@ -212,6 +212,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที
   const [filter, setFilter] = useState<Filter>(route.params?.inbox ? "INBOX" : "ACTIVE");
+  // หน้ารายการถูกใช้ซ้ำเมื่อกดเมนูกล่องงาน/ใบงานซ่อมสลับกัน (ไม่ได้ขึ้นหน้าใหม่)
+  // ค่าตั้งต้นข้างบนจึงไม่ทำงานรอบสอง ต้องตามค่าที่เมนูส่งมาเอง
+  const inboxParam = route.params?.inbox;
+  useEffect(() => {
+    if (inboxParam !== undefined) setFilter(inboxParam ? "INBOX" : "ACTIVE");
+  }, [inboxParam]);
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState("");
   // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
