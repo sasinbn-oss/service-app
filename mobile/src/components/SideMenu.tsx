@@ -125,7 +125,17 @@ const GROUPS: Group[] = [
         params: { inbox: true },
         badge: true,
       },
-      { key: "wo", label: "ใบงานซ่อม", labelEn: "Work Orders", icon: "clipboard-outline", tab: "WorkOrdersTab", screen: "WorkOrderList" },
+      // inbox: false ต้องส่งชัด ๆ — ไม่ส่งแล้วหน้ารายการเดิมยังถือ inbox: true จากกล่องงานไว้
+      // กดใบงานซ่อมต่อจากกล่องงานจึงยังเห็นแค่กล่องงาน (ช่างเห็น 0 ใบทั้งที่ทีมมีใบค้าง)
+      {
+        key: "wo",
+        label: "ใบงานซ่อม",
+        labelEn: "Work Orders",
+        icon: "clipboard-outline",
+        tab: "WorkOrdersTab",
+        screen: "WorkOrderList",
+        params: { inbox: false },
+      },
       { key: "dash", label: "ติดตามเครื่องเสีย", labelEn: "Machine Monitor", icon: "pulse-outline", tab: "HomeTab", screen: "MachineDashboard" },
       { key: "reports", label: "รายงาน", labelEn: "Reports", icon: "document-text-outline", tab: "HomeTab", screen: "ReportsMenu" },
     ],

@@ -107,7 +107,7 @@ export default function HomeScreen({ navigation }: Props) {
       icon: "clipboard-outline",
       tint: colors.primarySoft,
       iconColor: colors.primaryInk,
-      onPress: () => navigation.navigate("WorkOrderList"),
+      onPress: () => navigation.navigate("WorkOrderList", { inbox: false }),
     },
     {
       key: "Reports",
