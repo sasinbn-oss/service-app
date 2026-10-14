@@ -50,7 +50,7 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(2500);
     const search = page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first();
     if (await search.count()) { await search.fill(code); await page.waitForTimeout(2500); }
-    const row = page.getByText(code, { exact: false }).locator("visible=true");
+    const row = page.getByText(code, { exact: true }).locator("visible=true");
     if (!(await row.count())) return false;
     await row.last().click();
     await page.waitForTimeout(3000);

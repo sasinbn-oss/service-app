@@ -117,9 +117,11 @@ let WO = process.argv[2] || null;
     await page.waitForTimeout(4000);
     await page.screenshot({ path: path.join(DIR, "bo-4-after.png"), fullPage: true });
 
-    // บันทึกแล้วแอปเด้งกลับหน้ารายการ ต้องเปิดใบเดิมซ้ำก่อนถึงจะอ่านป้ายของมันได้
+    // รุ่นเก่าบันทึกแล้วเด้งกลับหน้ารายการ รุ่นนี้ค้างที่ใบงานเดิม — เปิดซ้ำเฉพาะเมื่อหน้าต่างปิดไปแล้ว
+    // (ถ้ายังเปิดอยู่ เลขใบในรายการข้างหลังถูกหน้าต่างบัง กดไม่ได้)
+    const stillOpen = (await page.getByLabel("ขั้นตอนงาน", { exact: true }).locator("visible=true").count()) > 0;
     const again = page.getByText(WO, { exact: false }).locator("visible=true");
-    if ((await again.count()) > 0) {
+    if (!stillOpen && (await again.count()) > 0) {
       await again.first().click();
       await page.waitForTimeout(3000);
       await page.screenshot({ path: path.join(DIR, "bo-4-after.png"), fullPage: true });
@@ -143,6 +145,13 @@ let WO = process.argv[2] || null;
       ? pass("เห็นใบเบิกทั้งสองใบในใบงาน")
       : fail("ใบเบิกใบใดใบหนึ่งหายไป");
 
+    if (fx) {
+      // ยืนยันที่ฐานข้อมูลด้วย ไม่ใช่เชื่อป้ายบนจออย่างเดียว
+      const db = fx.sql(`select w.status||'|'||(select string_agg(p."requisitionNo",',' order by p."requisitionNo") from "WorkOrderPart" p where p."workOrderId"=w.id) from "WorkOrder" w where w.code='${WO}'`);
+      db === "PARTS_CHECKED|RQ-2569-0042,RQ-WEB-2"
+        ? pass("DB: ไปขั้นจ่ายงาน ใบเบิกสองใบครบ ไม่ถูกทับ")
+        : fail(`DB: ${db}`);
+    }
     errors.length === 0 ? pass("ไม่มี error ในหน้า") : fail(`error: ${errors.slice(0, 2).join(" | ")}`);
   } catch (e) {
     await page.screenshot({ path: path.join(DIR, "bo-error.png") }).catch(() => {});
