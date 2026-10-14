@@ -53,7 +53,8 @@ ws $ID | grep -q "รอช่างเข้างาน" && pass "ยืนย
 
 echo
 echo "═══ ปิดงานด้วยผลที่ยังไม่จบ ต้องถูกปฏิเสธ"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=BEFORE" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=AFTER" >/dev/null
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \
   -d "{\"result\":\"NEED_REVISIT\",\"workerIds\":[$TID]}")
 echo "$R" | grep -q "ยังไม่จบปิดไม่ได้\|Invalid enum" && pass "ผล 'ยังไม่จบ' ปิดงานไม่ได้" || fail "ปิดได้ทั้งที่ยังไม่จบ: $(echo $R|head -c 140)"
@@ -76,9 +77,15 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H
 curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-21\"}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
-# ป้ายรุ่นของรอบนี้ต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทนใบเหลือง
-curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
-  -F "file=@$SP/site-photo.png;type=image/png" -F "role=NAMEPLATE" >/dev/null
+# ป้ายรุ่นกับรูปก่อน/หลังซ่อมของรอบนี้ต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทนใบเหลือง
+# (รูปก่อน/หลังซ่อมของรอบแรกไม่นับ เหมือนใบเหลือง)
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \
+  -d "{\"result\":\"FIXED\",\"note\":\"x\",\"workerIds\":[$TID]}")
+echo "$R" | grep -q "ก่อนซ่อม" && pass "รูปก่อน/หลังซ่อมของรอบก่อน ใช้ปิดรอบนี้ไม่ได้" || fail "นับรูปของรอบก่อน: $(echo $R|head -c 140)"
+for r in NAMEPLATE BEFORE AFTER; do
+  curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
+    -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
+done
 curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.hasRequisitionSlip===false?"ok":"bad"' | grep -q ok \
   && pass "ระบบถือว่ารอบนี้ยังไม่มีใบเหลือง" || fail "ยังนับใบเหลืองของรอบก่อน"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/close" -H "$(H $T)" -H 'Content-Type: application/json' \

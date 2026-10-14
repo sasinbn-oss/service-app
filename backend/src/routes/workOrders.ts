@@ -436,6 +436,9 @@ function shape(w: WorkOrderRow, roundStart?: Date) {
       .map((a) => ({ sparePartId: a.sparePartId, role: a.role })),
     // Troubleshooting (ข้อ 4 ของฟอร์มเคลม) ของยี่ห้อเครื่องใบนี้ — ว่าง = ยี่ห้อนี้ไม่ต้องทำ
     claimTroubleshooting: claimTroubleshootingFor(machineMake(w.machine))?.items ?? [],
+    // รูปก่อน/หลังซ่อมของรอบนี้ — หน้าปิดงานบอกว่าแนบไว้แล้ว ไม่ต้องถ่ายซ้ำ
+    beforeCount: w.attachments.filter((a) => a.role === "BEFORE" && (!roundStart || a.createdAt >= roundStart)).length,
+    afterCount: w.attachments.filter((a) => a.role === "AFTER" && (!roundStart || a.createdAt >= roundStart)).length,
     hasNameplate: w.attachments.some(
       (a) => a.role === "NAMEPLATE" && (!roundStart || a.createdAt >= roundStart)
     ),
@@ -2769,19 +2772,23 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
 
   /**
-   * ต้องมีรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์
+   * ต้องมีรูปหรือวิดีโอก่อนซ่อมและหลังซ่อม อย่างละอย่างน้อยหนึ่งไฟล์ ของรอบนี้ (เจ้าของงานขอ ต.ค. 69)
    *
-   * รูปหน้างานคือสิ่งเดียวที่บอกได้ว่าไปถึงจริงและเจออะไร — สรุปงานที่พิมพ์มา
-   * เป็นคำบอกเล่า ส่วนรูปเป็นหลักฐาน ใบงานที่ปิดโดยไม่มีรูปเลยคือใบที่ตรวจย้อนไม่ได้
-   *
-   * นับเฉพาะรูปหน้างานทั่วไป ใบเหลืองกับป้ายรุ่นไม่นับ เพราะเป็นเอกสารและข้อมูล
-   * ของเครื่อง ไม่ใช่ภาพของงานที่ทำ
+   * รูปคือสิ่งเดียวที่บอกได้ว่าไปถึงจริง เจออะไร และซ่อมแล้วเครื่องกลับมาจริง — สรุปงานที่พิมพ์มา
+   * เป็นคำบอกเล่า · ก่อน/หลังแยกกันเพราะคนตรวจย้อนอยากเทียบสองภาพนี้ ไม่ใช่ไล่หาในกองรูป
+   * นับเฉพาะรอบนี้เหมือนป้ายรุ่น — ใบที่วนกลับมา รูปหลังซ่อมของรอบก่อนไม่ได้บอกว่ารอบนี้ซ่อมเสร็จ
    */
-  const siteShots = await prisma.workOrderAttachment.count({
-    where: { workOrderId: id, role: null },
+  const roundStart = await roundStartedAt(id);
+  const shots = await prisma.workOrderAttachment.groupBy({
+    by: ["role"],
+    where: { workOrderId: id, role: { in: ["BEFORE", "AFTER"] }, createdAt: { gte: roundStart } },
+    _count: true,
   });
-  if (siteShots === 0) {
-    return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอหน้างานอย่างน้อยหนึ่งไฟล์" });
+  if (!shots.some((s) => s.role === "BEFORE")) {
+    return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอก่อนซ่อมอย่างน้อยหนึ่งไฟล์" });
+  }
+  if (!shots.some((s) => s.role === "AFTER")) {
+    return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอหลังซ่อมอย่างน้อยหนึ่งไฟล์" });
   }
 
   /**
@@ -2794,7 +2801,6 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    *
    * ตอนเปิดใบงานยังไม่บังคับเหมือนเดิม เพราะคนเปิดใบงานบางทีรับแจ้งทางโทรศัพท์
    */
-  const roundStart = await roundStartedAt(id);
   const nameplate = await prisma.workOrderAttachment.count({
     where: { workOrderId: id, role: "NAMEPLATE", createdAt: { gte: roundStart } },
   });
@@ -3151,7 +3157,10 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
   if (workerIds.length && (await prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } })) !== workerIds.length) {
     return res.status(400).json({ error: "มีชื่อผู้เข้าปฏิบัติงานที่ไม่อยู่ในระบบ" });
   }
-  const siteShots = await prisma.workOrderAttachment.count({ where: { workOrderId: id, role: null } });
+  // ปิดย้อนหลัง: รูปหน้างานแบบเดิมหรือรูปก่อน/หลังซ่อม อย่างใดก็ได้ — งานจบไปแล้ว ไม่มีจังหวะให้ถ่ายแยก
+  const siteShots = await prisma.workOrderAttachment.count({
+    where: { workOrderId: id, OR: [{ role: null }, { role: { in: ["BEFORE", "AFTER"] } }] },
+  });
   if (siteShots === 0 && !b.noPhotoReason) {
     return res.status(400).json({ error: "ไม่มีรูปหน้างาน — ต้องใส่เหตุผลที่ไม่มีรูป" });
   }

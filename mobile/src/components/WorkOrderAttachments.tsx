@@ -56,6 +56,7 @@ export default function WorkOrderAttachments({
   canEdit,
   reloadKey = 0,
   onLoaded,
+  onAdded,
 }: {
   workOrderId: number;
   canEdit: boolean;
@@ -69,11 +70,18 @@ export default function WorkOrderAttachments({
   reloadKey?: number;
   /** ส่งรายการที่โหลดมาให้หน้าจอแม่ใช้ต่อ จะได้ไม่ต้องยิงขอรายการเดิมซ้ำ */
   onLoaded?: (rows: Attachment[]) => void;
+  /** แนบไฟล์สำเร็จ — หน้าจอแม่โหลดใบงานใหม่ ให้หน้าปิดงานรู้ว่ามีรูปก่อนซ่อมแล้ว */
+  onAdded?: () => void;
 }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Attachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * รูปที่จะแนบคืออะไร — ช่างถ่าย "ก่อนซ่อม" ไว้ตั้งแต่ไปถึงได้ ตอนปิดงานไม่ต้องถ่ายซ้ำ
+   * (ปิดงานบังคับรูปก่อน/หลังซ่อม) · ไม่เลือก = รูปหน้างานทั่วไปแบบเดิม
+   */
+  const [tag, setTag] = useState<"" | "BEFORE" | "AFTER">("");
 
   const load = useCallback(async () => {
     try {
@@ -104,8 +112,9 @@ export default function WorkOrderAttachments({
       const file = await pick(setBusy);
       if (!file) return;
       setBusy(sending);
-      await uploadAttachment(workOrderId, file);
+      await uploadAttachment(workOrderId, file, tag || undefined);
       await load();
+      onAdded?.();
     } catch (e) {
       showAlert("แนบไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -214,6 +223,21 @@ export default function WorkOrderAttachments({
             <Text style={styles.busyText}>{busy}…</Text>
           </View>
         ) : (
+          <>
+          <View style={styles.tagRow}>
+            <Text style={styles.tagLabel}>รูปนี้คือ</Text>
+            {([["", "รูปหน้างาน"], ["BEFORE", "ก่อนซ่อม"], ["AFTER", "หลังซ่อม"]] as const).map(([v, label]) => (
+              <TouchableOpacity
+                key={v || "site"}
+                style={[styles.tagChip, tag === v && styles.tagChipOn]}
+                onPress={() => setTag(v)}
+                activeOpacity={0.7}
+                accessibilityLabel={`แนบเป็น${label}`}
+              >
+                <Text style={[styles.tagText, tag === v && styles.tagTextOn]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <View style={styles.addRow}>
             {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ
                 ปุ่มถ่ายรูปบนเครื่องนั้นไม่ได้ช่วยอะไรนอกจากทำให้แถวปุ่มรก */}
@@ -232,6 +256,7 @@ export default function WorkOrderAttachments({
               <Text style={styles.addText}>วิดีโอ</Text>
             </TouchableOpacity>
           </View>
+          </>
         )
       ) : null}
     </View>
@@ -239,6 +264,12 @@ export default function WorkOrderAttachments({
 }
 
 const styles = StyleSheet.create({
+  tagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: spacing.sm },
+  tagLabel: { fontSize: 12, color: colors.textMuted, marginRight: 2 },
+  tagChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  tagChipOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  tagText: { fontSize: 12, lineHeight: 18, color: colors.textMuted, fontWeight: "600" },
+  tagTextOn: { color: colors.primaryInk },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,
