@@ -3,6 +3,7 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
+const { setup } = require("./fixture");
 
 (async () => {
   // ใช้ chromium ที่ติดตั้งไว้แล้วถ้ามี ไม่งั้นให้ playwright หาเอง
@@ -38,7 +39,33 @@ const DIR = __dirname;
       return out;
     });
 
+  // ใบที่ต้องเสนอราคา = สาขาแฟรนไชส์ (D) ที่เปิดเกิน 3 ปี หมดประกัน · ใบที่ไม่ต้อง = สาขา C
+  // ส่งเลขใบมาเองได้ (argv 2 กับ 3) ไม่ส่งก็สร้างให้แล้วลบตอนจบ
+  let QUOTE = process.argv[2] || null, NOQUOTE = process.argv[3] || null;
+  let fx = null;
+  const open = async (code) => {
+    await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
+    await page.waitForTimeout(2500);
+    await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
+    await page.waitForTimeout(2500);
+    const search = page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first();
+    if (await search.count()) { await search.fill(code); await page.waitForTimeout(2500); }
+    const row = page.getByText(code, { exact: false }).locator("visible=true");
+    if (!(await row.count())) return false;
+    await row.last().click();
+    await page.waitForTimeout(3000);
+    return true;
+  };
+
   try {
+    if (!QUOTE) {
+      fx = await setup();
+      const board = fx.part("SP-BOARD");
+      const dOld = fx.sql(`select code from "Branch" where code like 'D%' and "cancelledAt" is null and "openedAt" < now() - interval '3 years' order by "openedAt" limit 1`);
+      QUOTE = (await fx.workOrder(dOld, [{ sparePartId: board, quantity: 1 }])).code;
+      NOQUOTE = (await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }])).code;
+      console.log(`เตรียมใบงาน ${QUOTE} (ต้องเสนอราคา · สาขา ${dOld}) · ${NOQUOTE} (ไม่ต้อง)`);
+    }
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle", timeout: 180000 });
     await page.getByPlaceholder("รหัสพนักงาน").fill("A001");
     await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
@@ -46,17 +73,7 @@ const DIR = __dirname;
     await page.waitForTimeout(3500);
 
     // ── ใบที่ต้องเสนอราคา (สาขา D หมดประกัน) ──
-    await page.goto("http://127.0.0.1:8081/work-orders/656", { waitUntil: "networkidle" }).catch(() => {});
-    await page.waitForTimeout(3000);
-    if ((await page.getByLabel("ขั้นตอนงาน", { exact: true }).locator("visible=true").count()) === 0) {
-      // เปิดผ่าน URL ไม่ได้ ให้เดินผ่านหน้ารายการแทน
-      await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
-      await page.waitForTimeout(2500);
-      await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
-      await page.waitForTimeout(2500);
-      await page.getByText("WO-00656", { exact: false }).locator("visible=true").first().click();
-      await page.waitForTimeout(3000);
-    }
+    if (!(await open(QUOTE))) throw new Error(`ไม่เจอ ${QUOTE} ในรายการ`);
     await page.screenshot({ path: path.join(DIR, "so-1-quote.png"), fullPage: true });
 
     // อ่านเฉพาะในการ์ด "ขั้นตอนงาน" ไม่ใช่ทั้งหน้า — ชื่อขั้นไปโผล่ที่ป้ายสถานะ
@@ -95,16 +112,9 @@ const DIR = __dirname;
       : fail(`ลำดับไม่ถูก: ${names.join(" → ")}`);
 
     // ── ใบที่ไม่ต้องเสนอราคา (สาขา C) — สองขั้นนั้นต้องขึ้นว่าข้าม ──
-    await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
-    await page.waitForTimeout(2500);
-    await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
-    await page.waitForTimeout(2500);
-    const row = page.getByText("WO-00653", { exact: false }).locator("visible=true");
-    if ((await row.count()) === 0) {
-      console.log("SKIP ไม่เจอ WO-00653 ในรายการ");
+    if (!NOQUOTE || !(await open(NOQUOTE))) {
+      fail(`ไม่เจอใบที่ไม่ต้องเสนอราคา (${NOQUOTE}) ในรายการ`);
     } else {
-      await row.first().click();
-      await page.waitForTimeout(3000);
       await page.screenshot({ path: path.join(DIR, "so-2-noquote.png"), fullPage: true });
       // ขั้นที่ข้ามใช้ไอคอน remove-circle-outline และสีจาง — เช็คจาก aria/ชื่อไอคอน
       const bar2 = await stageCard();
@@ -121,6 +131,7 @@ const DIR = __dirname;
     await page.screenshot({ path: path.join(DIR, "so-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${e.message}`);
   } finally {
+    if (fx) await fx.cleanup();
     await browser.close();
   }
 })();

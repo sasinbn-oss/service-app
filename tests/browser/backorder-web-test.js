@@ -2,7 +2,9 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
-const WO = process.argv[2] || "WO-00671";
+const { setup } = require("./fixture");
+// ส่งเลขใบงานมาเองได้ ไม่ส่งก็สร้างใบที่ตรงเงื่อนไขให้: บอร์ดเบิกไปแล้ว (RQ-2569-0042) สายพานหมด
+let WO = process.argv[2] || null;
 
 (async () => {
   // ใช้ chromium ที่ติดตั้งไว้แล้วถ้ามี ไม่งั้นให้ playwright หาเอง
@@ -27,7 +29,21 @@ const WO = process.argv[2] || "WO-00671";
     });
   };
 
+  let fx = null;
   try {
+    if (!WO) {
+      fx = await setup();
+      const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
+      const wo = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
+      await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
+        results: [
+          { sparePartId: board, inStock: true, warehouse: "คลังกระบี่", requisitionNo: "RQ-2569-0042" },
+          { sparePartId: belt, inStock: false },
+        ],
+      });
+      WO = wo.code;
+      console.log(`เตรียมใบงาน ${WO}`);
+    }
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle", timeout: 180000 });
     await page.getByPlaceholder("รหัสพนักงาน").fill("A001");
     await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
@@ -37,6 +53,9 @@ const WO = process.argv[2] || "WO-00671";
     await tap("ใบงาน");
     await page.waitForTimeout(2500);
 
+    // ค้นเลขใบก่อน — รายการยาวแล้วใบที่ต้องการอาจยังไม่ถูกวาด
+    const search = page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first();
+    if (await search.count()) { await search.fill(WO); await page.waitForTimeout(2500); }
     const row = page.getByText(WO, { exact: false }).locator("visible=true");
     if ((await row.count()) === 0) { fail(`ไม่เจอ ${WO} ในรายการ`); throw new Error("no row"); }
     await row.first().click();
@@ -129,6 +148,7 @@ const WO = process.argv[2] || "WO-00671";
     await page.screenshot({ path: path.join(DIR, "bo-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${e.message}`);
   } finally {
+    if (fx) await fx.cleanup();
     await browser.close();
   }
 })();
