@@ -70,6 +70,7 @@ import {
   isValidMachineCode,
   isWarrantyExpired,
   warrantyEndFor,
+  warrantyStatus,
   warrantyYearsFor,
   machineMake,
   claimTroubleshootingFor,
@@ -484,8 +485,10 @@ const listSelect = {
   createdAt: true,
   closedAt: true,
   closeResult: true,
-  branch: { select: { code: true, name: true, region: true, zone: true, pmTeam: true } },
-  machine: { select: { code: true } },
+  branch: {
+    select: { code: true, name: true, region: true, zone: true, pmTeam: true, openedAt: true, warrantyExpiresAt: true },
+  },
+  machine: { select: { code: true, brand: true, model: true } },
   assignedTeam: true,
   assignedTo: { select: { name: true } },
   _count: { select: { attachments: true } },
@@ -528,6 +531,15 @@ function listShape(
     waitingOnTeam: actor === "EMPLOYEE" ? w.assignedTeam : null,
     // D = แฟรนไชส์ (DODO) · C = สาขาบริษัท (COCO) — กติกาเดียวกับขั้นเสนอราคา
     branchType: isCompanyBranch(w.branch.code) ? "COCO" : "DODO",
+    // ป้ายประกันในรายการ — คิดที่เดียวกับหน้าใบงาน (วันเปิดร้าน + ปีตามยี่ห้อเครื่อง)
+    ...(({ state, endsAt }) => ({ warranty: state, warrantyEndsAt: endsAt }))(
+      warrantyStatus({
+        branchCode: w.branch.code,
+        openedAt: w.branch.openedAt,
+        warrantyExpiresAt: w.branch.warrantyExpiresAt,
+        machineBrand: machineMake(w.machine),
+      })
+    ),
     // เข้าขั้นปัจจุบันเมื่อไร — ใบที่ไม่มีประวัติขยับขั้นเลยนับจากวันเปิด
     stageSince: ctx.stageSince.get(w.id) ?? w.createdAt,
     id: w.id,

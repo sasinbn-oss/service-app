@@ -25,7 +25,9 @@ import {
   WORK_ORDER_STATUS_LABELS,
   WORK_STATUSES,
   WORK_STATUS_LABELS,
+  machineMake,
   outageScore,
+  warrantyStatus,
 } from "../utils/constants";
 
 const router = Router();
@@ -223,9 +225,12 @@ async function listMachineOff(query: z.infer<typeof listSchema>) {
     include: {
       ...noteInclude,
       branch: {
-        select: { code: true, name: true, region: true, ownership: true, zone: true, grade: true },
+        select: {
+          code: true, name: true, region: true, ownership: true, zone: true, grade: true,
+          openedAt: true, warrantyExpiresAt: true,
+        },
       },
-      machine: { select: { code: true, type: true, brand: true } },
+      machine: { select: { code: true, type: true, brand: true, model: true } },
     },
     // ดับนานสุดขึ้นก่อน เพราะนั่นคือลำดับที่ควรเข้าไปซ่อม
     orderBy: { startedAt: "asc" },
@@ -243,6 +248,16 @@ async function listMachineOff(query: z.infer<typeof listSchema>) {
     machineCode: o.machine?.code ?? "",
     machineType: o.machine?.type ?? "",
     machineBrand: o.machine?.brand ?? null,
+    // ประกันคิดรายเครื่อง — สาขาเดียวกัน Oasis (2 ปี) หมดก่อน Huebsch (3 ปี) ได้
+    ...(({ state, endsAt }) => ({ warranty: state, warrantyEndsAt: endsAt }))(
+      warrantyStatus({
+        branchCode: o.branch.code,
+        openedAt: o.branch.openedAt,
+        warrantyExpiresAt: o.branch.warrantyExpiresAt,
+        machineBrand: machineMake(o.machine),
+        now,
+      })
+    ),
     startedAt: o.startedAt,
     lastSeenAt: o.lastSeenAt,
     slaHours: Math.floor(hoursSince(o.startedAt, now)),
