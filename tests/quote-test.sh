@@ -169,6 +169,20 @@ curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrant
 IDT2=$(brandWo W4 "Huebsch")
 st $IDT2 | grep -q "รอแอดมินเช็คอะไหล่" && pass "ไม่มียี่ห้อจากไฟล์ เลือกรุ่น Huebsch → 3 ปี ยังอยู่ในประกัน" || fail "Huebsch รุ่น: $(st $IDT2)"
 for i in $IDT $IDT2; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+echo
+echo "═══ ป้ายประกันในรายการ (ติดตามเครื่องเสีย · ใบงานซ่อม)"
+DB "insert into \"Outage\"(kind,\"branchId\",\"machineId\",\"startedAt\",\"lastSeenAt\") select 'MACHINE_OFF',$BID,id,now()-interval '2 hours',now() from \"Machine\" where \"branchId\"=$BID" >/dev/null
+OUT() { curl -s "localhost:4000/api/machines/outages?search=$BC" -H "$(H $A)" | J 'd.rows.sort((a,b)=>a.machineCode.localeCompare(b.machineCode)).map(r=>r.machineCode+":"+r.warranty).join(" ")'; }
+WOL() { curl -s "localhost:4000/api/work-orders?status=ALL&search=$BC" -H "$(H $A)" | J 'd.rows.filter(r=>['$IDO','$IDH'].includes(r.id)).sort((a,b)=>a.id-b.id).map(r=>r.warranty).join(" ")'; }
+# W3 Oasis(TC) · W4 Huebsch มาจากเทสต์รุ่นด้านบน (ยี่ห้อว่าง ใช้รุ่นที่เลือกในฟอร์ม)
+[ "$(OUT)" = "W1:OUT W2:IN W3:OUT W4:IN" ] && [ "$(WOL)" = "OUT IN" ] \
+  && pass "เปิดร้าน 2 ปีครึ่ง: Oasis หมดประกัน · Huebsch ในประกัน — ทั้งหน้าติดตามเครื่องเสียและรายการใบงาน" || fail "ป้าย: $(OUT) / $(WOL)"
+DB "update \"Branch\" set \"openedAt\"=now()-interval '35 months' where id=$BID" >/dev/null
+[ "$(OUT)" = "W1:OUT W2:SOON W3:OUT W4:SOON" ] && pass "Huebsch เหลืออีกราวเดือนเดียว → ใกล้หมดประกัน (60 วัน)" || fail "ใกล้หมด: $(OUT)"
+DB "update \"Branch\" set \"openedAt\"=null where id=$BID" >/dev/null
+[ "$(OUT)" = "W1:UNKNOWN W2:UNKNOWN W3:UNKNOWN W4:UNKNOWN" ] && [ "$(WOL)" = "UNKNOWN UNKNOWN" ] && pass "ไม่รู้วันเปิดร้าน → ป้าย \"ไม่ทราบ\" (ไม่ใช่หมดประกัน)" || fail "ไม่ทราบ: $(OUT) / $(WOL)"
+curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $A)" | J 'const c=d.rows.filter(r=>r.branchType==="COCO"); String(c.length>0 && c.every(r=>r.warranty===null))' | grep -q true \
+  && pass "สาขาบริษัท (COCO) ไม่มีป้ายประกัน" || fail "COCO มีป้ายประกัน"
 for i in $IDO $IDH; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
 DB "delete from \"Machine\" where \"branchId\"=$BID; delete from \"Branch\" where id=$BID" >/dev/null
 

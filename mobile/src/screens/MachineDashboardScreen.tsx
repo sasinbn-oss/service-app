@@ -24,6 +24,7 @@ import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
+import WarrantyBadge, { WARRANTY_LABEL, WarrantyState } from "../components/WarrantyBadge";
 
 /** แถวเดียวใช้ได้ทั้งสองแท็บ — แท็บสัญญาณหายไม่มีข้อมูลระดับเครื่อง */
 interface OutageRow {
@@ -37,6 +38,9 @@ interface OutageRow {
   machineCode?: string;
   machineType?: string;
   machineBrand?: string | null;
+  /** ประกันของเครื่องนี้ (เฉพาะแท็บเครื่องดับ) — ว่าง = สาขาบริษัท */
+  warranty?: WarrantyState | null;
+  warrantyEndsAt?: string | null;
   machineCount?: number;
   startedAt: string;
   slaHours: number;
@@ -154,11 +158,13 @@ interface Filters {
   brands: string[];
   teams: string[];
   statuses: string[];
+  warranties: string[];
   near: boolean;
   search: string;
 }
 type FilterKey = keyof Filters;
-type FacetKey = "regions" | "brands" | "teams" | "statuses";
+type FacetKey = "regions" | "brands" | "teams" | "statuses" | "warranties";
+const FACET_KEYS: FacetKey[] = ["regions", "brands", "teams", "statuses", "warranties"];
 const EMPTY_FILTERS: Filters = {
   own: null,
   over: false,
@@ -167,6 +173,7 @@ const EMPTY_FILTERS: Filters = {
   brands: [],
   teams: [],
   statuses: [],
+  warranties: [],
   near: false,
   search: "",
 };
@@ -217,7 +224,7 @@ function viewFilters(v: SavedView): Filters {
 function isEmptyFilters(f: Filters) {
   return (
     !f.own && !f.over && !f.noWo && !f.near && !f.search.trim() &&
-    !f.regions.length && !f.brands.length && !f.teams.length && !f.statuses.length
+    !f.regions.length && !f.brands.length && !f.teams.length && !f.statuses.length && !f.warranties.length
   );
 }
 
@@ -226,8 +233,15 @@ const NONE_LABEL: Record<FacetKey, string> = {
   brands: "ไม่ระบุยี่ห้อ",
   teams: "ยังไม่ระบุทีม",
   statuses: "ยังไม่ระบุสถานะ",
+  warranties: "สาขาบริษัท",
 };
-const FACET_TITLE: Record<FacetKey, string> = { regions: "ภาค", brands: "รุ่น", teams: "ทีม", statuses: "สถานะ" };
+const FACET_TITLE: Record<FacetKey, string> = {
+  regions: "ภาค",
+  brands: "รุ่น",
+  teams: "ทีม",
+  statuses: "สถานะ",
+  warranties: "ประกัน",
+};
 
 const GRADE_STYLE: Record<string, { color: string; background: string }> = {
   A: { color: colors.successInk, background: colors.successSoft },
@@ -502,6 +516,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     if (key === "regions") return r.region ?? "NONE";
     if (key === "brands") return r.machineBrand ?? "NONE";
     if (key === "teams") return r.zone ?? "NONE";
+    if (key === "warranties") return r.warranty ?? "NONE";
     return r.workStatus ?? "NONE";
   }, []);
 
@@ -517,7 +532,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       if (use("over") && f.over && !r.breached) return false;
       if (use("noWo") && f.noWo && r.workOrder) return false;
       if (use("near") && f.near && (r.breached || r.slaHours <= nearHours)) return false;
-      for (const k of ["regions", "brands", "teams", "statuses"] as FacetKey[]) {
+      for (const k of FACET_KEYS) {
         if (use(k) && f[k].length && !f[k].includes(valueOf(r, k))) return false;
       }
       return true;
@@ -567,6 +582,13 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   );
   const brandOpts = useMemo(() => facetOptions("brands", (v) => v).sort((a, b) => a.label.localeCompare(b.label)), [facetOptions]);
   const statusOpts = useMemo(() => facetOptions("statuses", statusLabel), [facetOptions, statusLabel]);
+  // ประกันมีความหมายเฉพาะ DODO — สาขาบริษัท (NONE) ไม่ขึ้นเป็นชิป · เรียงจากดีไปแย่ ไม่ใช่ตามตัวอักษร
+  const warrantyOpts = useMemo(() => {
+    const order: WarrantyState[] = ["IN", "SOON", "OUT", "UNKNOWN"];
+    return facetOptions("warranties", (v) => WARRANTY_LABEL[v as WarrantyState] ?? v)
+      .filter((o) => o.value !== "NONE")
+      .sort((a, b) => order.indexOf(a.value as WarrantyState) - order.indexOf(b.value as WarrantyState));
+  }, [facetOptions]);
   /**
    * ทีมมีราว 25 ทีม — เลือกภาคแล้วเหลือเฉพาะทีมในภาคนั้น ไม่เลือกภาคโชว์ 8 ทีมที่มีเคสมากสุด
    * (ทีมที่เลือกอยู่ขึ้นเสมอ ไม่งั้นเอาออกไม่ได้)
@@ -592,9 +614,10 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     if (f.over) out.push({ key: "over", label: "เกิน SLA", remove: () => patch({ over: false }) });
     if (f.noWo) out.push({ key: "noWo", label: "ยังไม่มีใบงาน", remove: () => patch({ noWo: false }) });
     if (f.near) out.push({ key: "near", label: "ใกล้เกิน SLA", remove: () => patch({ near: false }) });
-    for (const k of ["regions", "brands", "teams", "statuses"] as FacetKey[]) {
+    for (const k of FACET_KEYS) {
       for (const v of f[k]) {
-        const label = v === "NONE" ? NONE_LABEL[k] : k === "statuses" ? statusLabel(v) : v;
+        const label =
+          v === "NONE" ? NONE_LABEL[k] : k === "statuses" ? statusLabel(v) : k === "warranties" ? WARRANTY_LABEL[v as WarrantyState] : v;
         out.push({ key: `${k}:${v}`, label: `${FACET_TITLE[k]}: ${label}`, remove: () => toggle(k, v) });
       }
     }
@@ -884,6 +907,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         <ChipRow label="ภาค" options={regionOpts} onToggle={(v) => toggle("regions", v)} wide={wide} />
         {isMachines ? (
           <ChipRow label="รุ่น / ยี่ห้อ" options={brandOpts} onToggle={(v) => toggle("brands", v)} wide={wide} />
+        ) : null}
+        {isMachines && warrantyOpts.length ? (
+          <ChipRow label="ประกัน" options={warrantyOpts} onToggle={(v) => toggle("warranties", v)} wide={wide} />
         ) : null}
 
         <TouchableOpacity style={styles.moreBtn} onPress={() => setMoreOpen((v) => !v)} accessibilityLabel="ตัวกรองเพิ่มเติม">
@@ -2028,6 +2054,7 @@ function TableCell({
               </View>
             ) : null}
             {row.grade ? <Text style={styles.cellSub}>Grade {row.grade}</Text> : null}
+            <WarrantyBadge state={row.warranty} endsAt={row.warrantyEndsAt} />
           </View>
           {hasNote ? (
             <View style={styles.noteCell}>
@@ -2243,6 +2270,7 @@ const OutageCard = React.memo(function OutageCard({
             <Text style={[styles.gradeChipText, { color: gradeStyle.color }]}>{row.grade}</Text>
           </View>
         ) : null}
+        <WarrantyBadge state={row.warranty} endsAt={row.warrantyEndsAt} />
       </View>
 
       <View style={styles.cardBottom}>

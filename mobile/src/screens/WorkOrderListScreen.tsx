@@ -34,6 +34,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
 import { useAuth } from "../context/AuthContext";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
+import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -67,6 +68,9 @@ export interface WorkOrderRow {
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
   waitingOnTeam: string | null;
   branchType: "DODO" | "COCO";
+  /** ประกันของเครื่องในใบนี้ — ว่าง = สาขาบริษัท */
+  warranty: WarrantyState | null;
+  warrantyEndsAt: string | null;
   /** เข้าขั้นปัจจุบันเมื่อไร — ใช้บอกว่าค้างมากี่วัน */
   stageSince: string;
 }
@@ -953,6 +957,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
           <BranchType type={row.branchType} />
         </View>
         <Text style={styles.td2}>{row.branchName}</Text>
+        <WarrantyBadge state={row.warranty} endsAt={row.warrantyEndsAt} />
       </View>
       <Text style={[styles.td, styles.colMachine]}>{row.machineCode ?? "—"}</Text>
       <Text style={[styles.td, styles.colTeam, !(row.assignedToName ?? row.assignedTeam) && styles.tdMuted]}>
@@ -1014,6 +1019,11 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
           {row.machineCode ? ` · เครื่อง ${row.machineCode}` : ""}
         </Text>
       </View>
+      {row.warranty ? (
+        <View style={styles.metaRow}>
+          <WarrantyBadge state={row.warranty} endsAt={row.warrantyEndsAt} />
+        </View>
+      ) : null}
 
       {row.stageActor ? (
         <View style={styles.metaRow}>

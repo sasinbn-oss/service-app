@@ -575,6 +575,30 @@ export function isWarrantyExpired(
   return warrantyExpiresAt.getTime() < now.getTime();
 }
 
+/**
+ * ป้ายประกันในรายการ (ติดตามเครื่องเสีย · ใบงานซ่อม) — เจ้าของงานขอ ต.ค. 69 ให้เห็นตั้งแต่ในรายการ
+ * ว่าเครื่องไหนยังอยู่ในประกัน ไม่ต้องเปิดใบงานทีละใบ
+ *
+ * SOON = ยังในประกันแต่เหลือไม่ถึง 60 วัน — ซ่อม/เคลมช้าไปไม่กี่สัปดาห์คือค่าอะไหล่ที่ลูกค้าต้องจ่ายเอง
+ * UNKNOWN = ไม่รู้วันเปิดร้าน (กฎเสนอราคาถือว่าหมดประกันไว้ก่อน แต่ป้ายบอกตรง ๆ ว่าไม่รู้ ให้ไปเติมวัน)
+ * null = สาขาบริษัท ไม่มีประกันให้พูดถึง
+ */
+export const WARRANTY_SOON_DAYS = 60;
+export type WarrantyState = "IN" | "SOON" | "OUT" | "UNKNOWN";
+export function warrantyStatus(opts: {
+  branchCode: string;
+  openedAt: Date | null | undefined;
+  warrantyExpiresAt: Date | null | undefined;
+  machineBrand: string | null | undefined;
+  now?: Date;
+}): { state: WarrantyState | null; endsAt: Date | null } {
+  if (isCompanyBranch(opts.branchCode)) return { state: null, endsAt: null };
+  const end = warrantyEndFor(opts.openedAt, opts.warrantyExpiresAt, opts.machineBrand);
+  if (!end) return { state: "UNKNOWN", endsAt: null };
+  const left = end.getTime() - (opts.now ?? new Date()).getTime();
+  return { state: left < 0 ? "OUT" : left <= WARRANTY_SOON_DAYS * 86_400_000 ? "SOON" : "IN", endsAt: end };
+}
+
 /** รหัสที่คนอ่าน ตั้งจาก id จึงไม่มีทางชนกันและไม่ต้องนับแถวก่อน */
 /**
  * ใบงานนี้ต้องเสนอราคาลูกค้าก่อนไหม
