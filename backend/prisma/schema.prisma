@@ -986,3 +986,23 @@ model PartClaim {
   @@index([workOrderId, createdAt])
   @@index([status])
 }
+
+// ไฟล์สำรองข้อมูล (Super Admin) — ตัวไฟล์อยู่ในที่เก็บไฟล์ (ไม่เป็นสาธารณะ) ตารางนี้จำว่ามีไฟล์ไหนบ้าง
+// สองไฟล์ต่อรอบ: Excel ให้คนเปิดอ่าน · ไฟล์กู้คืน (.json.gz) ให้ scripts/restore-backup.js เอากลับเข้าฐานข้อมูล
+// ไม่ผูก relation กับ User — ผู้ใช้ถูกลบแล้วประวัติการสำรองต้องยังอยู่ จึงเก็บชื่อไว้ตรง ๆ
+model Backup {
+  id         Int      @id @default(autoincrement())
+  createdAt  DateTime @default(now())
+  // AUTO รอบ 17:00 · MANUAL กดเอง
+  kind       String
+  // วันที่ (เวลาไทย) ของรอบอัตโนมัติ — กันทำซ้ำในวันเดียวกันเมื่อเซิร์ฟเวอร์ตื่นหลายรอบ
+  dayKey     String?  @unique
+  byUserId   Int?
+  byName     String?
+  excelKey   String
+  excelBytes Int
+  dataKey    String
+  dataBytes  Int
+  // จำนวนแถวของตารางหลัก ไว้โชว์ในรายการ (ใบงาน / สาขา / ผู้ใช้)
+  summary    Json?
+}

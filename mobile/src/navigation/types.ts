@@ -61,6 +61,7 @@ export type AdminStackParamList = {
   ManageBranches: undefined;
   ManageUsers: undefined;
   ManageTeams: undefined;
+  Backup: undefined;
 };
 
 export type MainTabParamList = {
