@@ -87,6 +87,77 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   });
 });
 
+/**
+ * ผังผู้รับผิดชอบพื้นที่ — ภาค → หัวหน้าภาค → ทีมช่าง → ช่าง (เจ้าของงานขอ ต.ค. 69)
+ *
+ * ทุกคนเปิดดูได้ (ช่างรู้ว่าทีมไหนมีใคร หัวหน้าภาคเห็นภาพรวม) — แก้ได้เฉพาะแอดมิน ผ่าน PATCH /auth/users/:id
+ * ตัวเดียวกับหน้าสิทธิ์ผู้ใช้ ไม่มีเส้นทางเขียนแยก จะได้ไม่มีกฎสองชุด
+ * ไม่ส่งเบอร์โทร — ผังนี้ช่างทุกคนเห็น ชื่อและรหัสพอสำหรับรู้ว่าใครอยู่ทีมไหน
+ *
+ * ภาคของทีม = ภาคที่สาขาของทีมนั้น (CM หรือ PM) อยู่มากที่สุด — ทะเบียนสาขาไม่มีตารางทีม
+ * ช่างที่ทีมไม่มีในทะเบียนและไม่ใช่ทีมรวม นับเป็น "ยังไม่มีสังกัด" เพราะไม่มีใบงานผูกกับชื่อนั้น (ผลเท่ากัน)
+ */
+router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
+  const [branches, orders, users, groups] = await Promise.all([
+    prisma.branch.findMany({ where: { cancelledAt: null }, select: { region: true, zone: true, pmTeam: true } }),
+    prisma.workOrder.groupBy({
+      by: ["assignedTeam"],
+      where: { assignedTeam: { not: null }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+      _count: true,
+    }),
+    prisma.user.findMany({
+      where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
+      select: { id: true, name: true, employeeCode: true, role: true, team: true, region: true, supervisedTeams: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.teamGroup.findMany({ orderBy: { name: "asc" } }),
+  ]);
+  const NO_REGION = "ไม่ระบุภาค";
+  const votes = new Map<string, Map<string, number>>();
+  const count = new Map<string, number>();
+  for (const b of branches) {
+    for (const t of new Set([b.zone, b.pmTeam].filter(Boolean) as string[])) {
+      count.set(t, (count.get(t) ?? 0) + 1);
+      const m = votes.get(t) ?? new Map<string, number>();
+      const r = b.region ?? NO_REGION;
+      m.set(r, (m.get(r) ?? 0) + 1);
+      votes.set(t, m);
+    }
+  }
+  const open = new Map(orders.map((o) => [o.assignedTeam!, o._count]));
+  const regions = new Map<string, { name: string; branches: number; open: number }[]>();
+  for (const [team, m] of votes) {
+    const r = [...m].sort((a, b) => b[1] - a[1])[0][0];
+    regions.set(r, [...(regions.get(r) ?? []), { name: team, branches: count.get(team) ?? 0, open: open.get(team) ?? 0 }]);
+  }
+  const groupNames = new Set(groups.map((g) => g.name));
+  const known = new Set(votes.keys());
+  const viewing = !!req.auth!.viewAs;
+
+  res.json({
+    asOf: new Date(),
+    canEdit: req.auth!.role === "ADMIN" && !req.auth!.partsAdmin && !viewing,
+    regions: [...regions]
+      // ภาคที่ไม่ระบุไว้ท้ายสุด ที่เหลือเรียงตามชื่อ
+      .sort(([a], [b]) => (a === NO_REGION ? 1 : b === NO_REGION ? -1 : a.localeCompare(b, "th")))
+      .map(([name, teams]) => ({ name, teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")) })),
+    supervisors: users
+      .filter((u) => u.role === "SUPERVISOR")
+      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, region: u.region, teams: u.supervisedTeams })),
+    technicians: users
+      .filter((u) => u.role === "EMPLOYEE")
+      .map((u) => ({
+        id: u.id,
+        name: u.name,
+        code: u.employeeCode,
+        // ทีมที่ไม่มีในทะเบียนและไม่ใช่ทีมรวม = ไม่มีสังกัด (เก็บชื่อเดิมไว้ให้เห็นว่าเคยอยู่ไหน)
+        team: u.team && (known.has(u.team) || groupNames.has(u.team)) ? u.team : null,
+        staleTeam: u.team && !known.has(u.team) && !groupNames.has(u.team) ? u.team : null,
+      })),
+    groups: groups.map((g) => ({ name: g.name, covers: g.covers, allTeams: g.allTeams })),
+  });
+});
+
 const renameSchema = z.object({
   from: z.string().trim().min(1),
   to: z.string().trim().min(1, "ต้องใส่ชื่อใหม่").max(120),

@@ -34,6 +34,8 @@ export type HomeStackParamList = {
   VehicleCheckIn: undefined;
   ConsumableRequest: undefined;
   ChangePassword: undefined;
+  /** ผังผู้รับผิดชอบพื้นที่ — ทุกคนดูได้ แอดมินลากแก้ได้ */
+  CoverageMap: undefined;
 };
 
 /** Tab 2 — everything the user has already recorded. */
