@@ -1,8 +1,8 @@
 /**
  * สำรองข้อมูล (Super Admin เท่านั้น)
  *
- * เซิร์ฟเวอร์สำรองเองทุกวัน 17:00 และเก็บไว้ 30 วัน — หน้านี้มีไว้ดูว่ารอบล่าสุดทำแล้วจริง
- * โหลดไฟล์ย้อนหลัง และกดสำรองเองก่อนทำอะไรเสี่ยง (นำเข้าไฟล์ใหญ่ แก้ข้อมูลทีละมาก ๆ)
+ * กดสำรองเองก่อนทำอะไรเสี่ยง (นำเข้าไฟล์ใหญ่ แก้ข้อมูลทีละมาก ๆ) และโหลดไฟล์ย้อนหลัง · เก็บไว้ 30 วัน
+ * ไม่มีรอบอัตโนมัติแล้ว (เจ้าของงานสั่งเอาออก 15 ต.ค. 69 — รอบ 17:00 ทำเซิร์ฟเวอร์ล่ม)
  *
  * ไฟล์มีสองแบบตามที่เจ้าของงานขอ: Excel ไว้เปิดดู · ไฟล์กู้คืน (.json.gz) ไว้ใส่กลับทั้งระบบ
  * (backend/scripts/restore-backup.js) — ไม่มีเลข Fleet Card ทั้งสองไฟล์
@@ -23,8 +23,6 @@ import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
 interface Data {
   keepDays: number;
-  hour: number;
-  nextRunAt: string;
   rows: BackupRow[];
 }
 
@@ -92,7 +90,6 @@ export default function BackupScreen() {
   }
 
   const latest = data.rows[0];
-  const hh = `${String(data.hour).padStart(2, "0")}:00`;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -115,8 +112,8 @@ export default function BackupScreen() {
         </TouchableOpacity>
       </View>
       <Text style={styles.muted}>
-        ระบบสำรองเองทุกวัน {hh} น. และเก็บไว้บนเซิร์ฟเวอร์ {data.keepDays} วัน · เปิดแอปบนคอมค้างไว้ หลัง {hh} น.
-        ไฟล์ของวันนั้นจะดาวน์โหลดลงเครื่องให้เอง · ไม่มีเลข Fleet Card ในไฟล์
+        กดสำรองก่อนทำอะไรเสี่ยง (นำเข้าไฟล์ใหญ่ แก้ข้อมูลทีละมาก ๆ) · ไฟล์เก็บไว้บนเซิร์ฟเวอร์ {data.keepDays} วัน ·
+        ไม่มีเลข Fleet Card ในไฟล์
       </Text>
 
       <View style={styles.kpis}>
@@ -130,10 +127,6 @@ export default function BackupScreen() {
           ) : null}
         </View>
         <View style={styles.kpi}>
-          <Text style={styles.kpiLabel}>รอบอัตโนมัติถัดไป</Text>
-          <Text style={styles.kpiValue}>{fmtWhen(data.nextRunAt)}</Text>
-        </View>
-        <View style={styles.kpi}>
           <Text style={styles.kpiLabel}>เก็บย้อนหลัง</Text>
           <Text style={styles.kpiValue}>
             {data.keepDays} วัน · {data.rows.length} ชุด
@@ -144,7 +137,7 @@ export default function BackupScreen() {
       <View style={styles.card}>
         <Text style={styles.section}>ไฟล์ที่เก็บไว้</Text>
         {data.rows.length === 0 ? (
-          <Text style={styles.muted}>ยังไม่มีไฟล์สำรอง — กดปุ่มด้านบนเพื่อสำรองครั้งแรก หรือรอรอบ {hh} น.</Text>
+          <Text style={styles.muted}>ยังไม่มีไฟล์สำรอง — กดปุ่มด้านบนเพื่อสำรองครั้งแรก</Text>
         ) : (
           data.rows.map((b) => (
             <View key={b.id} style={styles.item}>

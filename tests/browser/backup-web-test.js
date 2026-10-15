@@ -1,9 +1,8 @@
 // ทดสอบ: หน้าสำรองข้อมูล (Super Admin · จอคอม)
 //   1. แอดมินทั่วไปไม่เห็นเมนู
 //   2. Super Admin กด "สำรองและดาวน์โหลดตอนนี้" → มีแถวในฐานข้อมูล + ได้ไฟล์ .xlsx และ .json.gz ลงเครื่อง
-//   3. หลัง 17:00 แอปโหลดไฟล์ของวันนั้นให้เองครั้งเดียว — เปิดหน้าใหม่ไม่โหลดซ้ำ
-//      (ตั้งนาฬิกาของเบราว์เซอร์เป็น 17:05 และตอบ /backups/today ด้วยแถวจริงจากข้อ 2 — เซิร์ฟเวอร์ยังเป็นเวลาจริง
-//       ฝั่งเซิร์ฟเวอร์ของรอบ 17:00 ทดสอบแยกใน tests/backup-test.sh)
+//   3. ไม่มีรอบอัตโนมัติแล้ว (เอาออก ต.ค. 69) — หลัง 17:00 แอปไม่ถาม /backups/today และไม่โหลดอะไรเอง
+//      (ตั้งนาฬิกาของเบราว์เซอร์เป็น 17:05 แล้วเดินเวลา)
 // ต้องมี DATABASE_URL และ mock-s3 ที่ตอบ Content-Disposition (tests/mock-s3.js)
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -66,41 +65,24 @@ const START = Number(sql(`select coalesce(max(id),0) from "Backup"`));
     (await vis(base).count()) > 0 ? pass("ไฟล์ใหม่ขึ้นในรายการ") : fail(`รายการไม่มี ${base}`);
     await page.screenshot({ path: path.join(DIR, "backup-screen.png") });
 
-    // ── รอบ 17:00 ──
+    // ── ไม่มีรอบ 17:00 แล้ว ──
     downloads.length = 0;
-    const token = (
-      await (await fetch("http://localhost:4000/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employeeCode: CODE, password: "test1234" }),
-      })).json()
-    ).token;
-    const list = await (await fetch("http://localhost:4000/api/backups", { headers: { Authorization: `Bearer ${token}` } })).json();
-    const shaped = list.rows.find((r) => r.id === id);
-    if (!shaped) throw new Error("ไม่พบแถวสำรองใน /api/backups");
-    await page.route("**/api/backups/today", (r) => r.fulfill({ json: { backup: { ...shaped, kind: "AUTO" } } }));
-    // 10:05 UTC = 17:05 เวลาไทย
-    // ใช้นาฬิกาปลอมทั้งหน้า แล้วเดินเวลาเอง — แอปเช็ครอบแรกหลังเปิด 10 วินาที
+    let askedToday = 0;
+    page.on("request", (r) => {
+      if (r.url().includes("/api/backups/today")) askedToday++;
+    });
+    // 10:05 UTC = 17:05 เวลาไทย · แอปรุ่นเดิมเช็ครอบแรกหลังเปิด 10 วินาที แล้วทุก 5 นาที
     await page.clock.install({ time: new Date(`${new Date().toISOString().slice(0, 10)}T10:05:00Z`) });
     await page.reload({ waitUntil: "networkidle" });
-    // หยุดเดินเวลาทันทีที่ไฟล์มาครบ — เดินต่อข้อความแจ้งจะหมดเวลาหายไปก่อนตรวจ
-    for (let i = 0; i < 12 && downloads.length < 2; i++) {
-      await page.clock.runFor(1500);
-      await page.waitForTimeout(800);
-    }
-    await page.waitForTimeout(1000);
-    downloads.length === 2 ? pass("หลัง 17:00 โหลดไฟล์ของวันนั้นให้เองทั้งสองไฟล์") : fail(`โหลดเอง: [${downloads.join(",")}]`);
-    (await vis("ดาวน์โหลดข้อมูลสำรองประจำวันแล้ว", false).count()) > 0 ? pass("บอกว่าโหลดให้แล้ว") : fail("ไม่มีข้อความแจ้ง");
-    await page.screenshot({ path: path.join(DIR, "backup-auto.png") });
-
-    downloads.length = 0;
-    await page.reload({ waitUntil: "networkidle" });
     for (let i = 0; i < 12; i++) {
-      await page.clock.runFor(1500);
-      await page.waitForTimeout(500);
+      await page.clock.runFor(30_000);
+      await page.waitForTimeout(300);
     }
-    await page.waitForTimeout(3000);
-    downloads.length === 0 ? pass("เปิดหน้าใหม่ไม่โหลดไฟล์ของวันเดิมซ้ำ") : fail(`โหลดซ้ำ: [${downloads.join(",")}]`);
+    await page.waitForTimeout(1500);
+    askedToday === 0 && downloads.length === 0
+      ? pass("หลัง 17:00 แอปไม่ถามรอบประจำวันและไม่โหลดอะไรเอง")
+      : fail(`ถาม /today ${askedToday} ครั้ง · โหลด [${downloads.join(",")}]`);
+    (await vis("รอบอัตโนมัติ", false).count()) === 0 ? pass("หน้าสำรองข้อมูลไม่พูดถึงรอบอัตโนมัติแล้ว") : fail("ยังมีข้อความรอบอัตโนมัติ");
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {
