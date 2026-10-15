@@ -430,6 +430,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
   PARTS_SOURCED: "อะไหล่ครบ — ส่งต่อเสนอราคา",
   PARTS_BACKORDERED: "รอของเข้า (ก่อนเสนอราคา)",
+  PARTS_ETA_CHANGED: "เลื่อนวันคาดว่าอะไหล่เข้า",
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
   PAID: "ลูกค้าจ่ายเงินแล้ว",

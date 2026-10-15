@@ -63,10 +63,11 @@ const { setup } = require("./fixture");
     fx.sql(`select "inStock" from "WorkOrderPart" where "workOrderId"=${wo.id} and kind='WAITING'`) === "f"
       ? pass("รอของเข้า: ใบงานค้างที่รอเบิกอะไหล่ บันทึกว่าหมด (ฐานข้อมูล)")
       : fail(`หลังรอของเข้า: ${db("status")}`);
-    (await vis("รอของเข้า 1 รายการ", false).count()) > 0 ? pass("หน้าใบงานบอกว่ารอของเข้ากี่รายการ ตัวไหน") : fail("ไม่บอกว่ารอของตัวไหน");
+    (await vis("อะไหล่หมด 1 รายการ", false).count()) > 0 ? pass("หน้าใบงานบอกว่าอะไหล่หมดกี่รายการ ตัวไหน") : fail("ไม่บอกว่ารอของตัวไหน");
     await page.screenshot({ path: path.join(DIR, "parts-sourcing-waiting.png"), fullPage: true });
 
-    await vis("เช็คอะไหล่ก่อนเสนอราคา").first().click();
+    // ของหมดอยู่ ปุ่มขั้นนี้เปลี่ยนเป็น "อะไหล่มาแล้ว — อัปเดตสถานะ"
+    await vis("อะไหล่มาแล้ว — อัปเดตสถานะ").first().click();
     await page.waitForTimeout(1200);
     await page.locator('[aria-label^="มีของ "]').locator("visible=true").last().click();
     await page.waitForTimeout(500);

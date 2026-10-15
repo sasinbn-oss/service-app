@@ -226,6 +226,9 @@ interface LinkedOrder {
 }
 
 /** ปุ่มของแต่ละขั้น — ชื่อเดียวกับหัวฟอร์มที่เปิดขึ้นมา */
+/** ขั้นที่ผล "หมด" ยังเป็นเรื่องของตอนนี้ — ตรงกับ PARTS_OUT_STAGES ฝั่ง backend */
+const PARTS_OUT_STAGES = ["PARTS_SOURCING", "PARTS_REQUESTED", "WAITING_PARTS"];
+
 const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   NEW: { label: "ระบุอะไหล่ที่ต้องใช้", icon: "arrow-forward-circle" },
   // แอดมินนัดร้านก่อนช่างไปตรวจ — ฟอร์มเดียวกับคอนเฟิร์มลูกค้าของงานซ่อม
@@ -384,6 +387,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [rollbackOpen, setRollbackOpen] = useState(false);
   // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
   const [stageBackOpen, setStageBackOpen] = useState(false);
+  const [etaOpen, setEtaOpen] = useState(false);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -401,7 +405,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [bodyWidth, setBodyWidth] = useState(0);
   const twoCol = bodyWidth >= 720;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<WorkOrder | null> => {
     try {
       const [detail, options] = await Promise.all([
         api.get<WorkOrder>(`/work-orders/${id}`),
@@ -422,8 +426,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
       setError(null);
+      return detail.data;
     } catch (e) {
       setError(apiErrorMessage(e));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -433,6 +439,28 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     useCallback(() => {
       load();
     }, [load])
+  );
+
+  /**
+   * โหลดใหม่แล้วเด้งบอกสถานะใหม่ทุกครั้งที่มีการเปลี่ยน (เจ้าของงานขอ ต.ค. 69)
+   *
+   * หน้าจอเปลี่ยนเงียบ ๆ แล้วคนกดไม่แน่ใจว่าบันทึกไปแล้วหรือยัง — บางคนกดซ้ำ
+   * บางคนออกไปเปิดใหม่เพื่อเช็ค · บอกทั้ง "จากไหน → ไปไหน" ให้รู้ว่าใบงานเดินไปทางที่ตั้งใจ
+   */
+  const reloadWithNotice = useCallback(
+    async (what = "อัปเดตสถานะแล้ว") => {
+      const before = order;
+      const next = await load();
+      if (!next) return;
+      const label = (o: WorkOrder) => {
+        const out = PARTS_OUT_STAGES.includes(o.status) ? o.waitingParts.filter((p) => p.inStock === false).length : 0;
+        return out ? `${o.statusLabel} · อะไหล่หมด ${out} รายการ` : o.workStatusLabel && o.workStatusLabel !== o.statusLabel ? `${o.statusLabel} · ${o.workStatusLabel}` : o.statusLabel;
+      };
+      const from = before ? label(before) : null;
+      const to = label(next);
+      showAlert(`${next.code} ${what}`, from && from !== to ? `${from} → ${to}` : to);
+    },
+    [order, load]
   );
 
   /**
@@ -617,6 +645,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       inMyTeam(user, order.assignedTeam));
 
   const tone = statusTone(order.status);
+  /**
+   * อะไหล่หมด — ป้ายแดงบนแถบขั้นตอนและหัวใบงาน (เจ้าของงานขอ ต.ค. 69)
+   *
+   * สีของคนที่ใบรอ (ม่วงแอดมิน) บอกแค่ว่ารอใคร ไม่บอกว่าติดอยู่เพราะของไม่มี —
+   * ใบที่ติดของกับใบที่แอดมินแค่ยังไม่ได้เปิดดูหน้าตาเหมือนกันจนต้องเปิดเข้ามาอ่านรายการอะไหล่
+   * นับเฉพาะขั้นที่ผล "หมด" ยังเป็นเรื่องของตอนนี้ (ตรงกับ PARTS_OUT_STAGES ฝั่ง backend)
+   */
+  const partsOut = PARTS_OUT_STAGES.includes(order.status) ? order.waitingParts.filter((p) => p.inStock === false) : [];
+  const etaDay = order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : null;
+  const etaLate = !!etaDay && etaDay < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const urgent = order.priority === "URGENT";
   const done = order.status === "DONE" || order.status === "CANCELLED";
   // ปิดแล้วการ์ดทุกใบเป็นเขียว (เจ้าของงานเลือกแบบ B ต.ค. 69) — เปิดมาก็รู้ทันทีว่างานจบ
@@ -637,9 +675,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {user?.superAdmin ? (
             <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} />
           ) : null}
-          <View style={[styles.badge, { backgroundColor: tone.bg }]}>
-            <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
-          </View>
+          {partsOut.length ? (
+            <View style={[styles.badge, styles.badgeOut]}>
+              <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
+            </View>
+          ) : (
+            <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+              <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
+            </View>
+          )}
         </View>
       }
     >
@@ -655,7 +699,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         onClose={() => setBackfilling(false)}
         onDone={async () => {
           setBackfilling(false);
-          await load();
+          await reloadWithNotice();
         }}
       />
     ) : null}
@@ -697,9 +741,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
           {urgent ? <UrgentBadge /> : null}
           <View style={{ flex: 1 }} />
-          <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }, closedOk && styles.badgeDone]}>
-            <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
-          </View>
+          {partsOut.length ? (
+            <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
+              <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
+            </View>
+          ) : (
+            <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }, closedOk && styles.badgeDone]}>
+              <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
+            </View>
+          )}
         </View>
 
         <Text style={[styles.title, headingFont]}>{order.title}</Text>
@@ -814,12 +864,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                   state === "done" && styles.stepDotDone,
                   // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
                   state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
+                  state === "now" && partsOut.length > 0 && styles.stepDotOut,
                   state === "skipped" && styles.stepDotSkipped,
                 ]}
               >
-                {state === "now" ? <StepPulse size={30} color={tone.fg} /> : null}
+                {state === "now" ? <StepPulse size={30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
                 {state === "done" ? (
                   <Ionicons name="checkmark" size={15} color="#fff" />
+                ) : state === "now" && partsOut.length ? (
+                  <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
                 ) : (
                   <Text style={[styles.stepNum, headingFont, state === "now" && styles.stepNumNow]}>
                     {state === "skipped" ? "–" : number}
@@ -829,14 +882,26 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text
                 style={[
                   styles.stageLabel,
-                  state === "now" && [styles.stageLabelNow, { color: tone.fg }],
+                  state === "now" && [styles.stageLabelNow, { color: partsOut.length ? colors.dangerInk : tone.fg }],
                   (state === "future" || state === "skipped") && styles.stageLabelFuture,
                   state === "skipped" && styles.stageLabelSkipped,
                 ]}
               >
                 {stage.label}
               </Text>
-              {state === "skipped" ? (
+              {state === "now" && partsOut.length ? (
+                <>
+                  <View style={styles.stepOutPill} accessibilityLabel="อะไหล่หมดบนแถบขั้นตอน">
+                    <Text style={styles.stepOutPillText}>อะไหล่หมด {partsOut.length} รายการ</Text>
+                  </View>
+                  {etaDay ? (
+                    <Text style={styles.stepOutEta}>
+                      {etaLate ? "เลยกำหนด " : "คาดเข้า "}
+                      {thaiDate(etaDay)}
+                    </Text>
+                  ) : null}
+                </>
+              ) : state === "skipped" ? (
                 <Text style={styles.stageActor}>ข้าม</Text>
               ) : stage.actorLabel && state !== "done" ? (
                 <Text style={styles.stageActor}>{stage.actorLabel}</Text>
@@ -857,24 +922,44 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           </View>
         ) : null}
 
-        {/* รอเบิกอะไหล่ — ทุกคนเห็นว่ารออะไหล่ตัวไหน ถึงเมื่อไร (ไม่ต้องเปิดฟอร์มดู) */}
-        {order.status === "PARTS_SOURCING" && order.waitingParts.some((p) => p.inStock === false) ? (
-          <View style={[styles.waitingCard, styles.waitingInline]} accessibilityLabel="รอของเข้า">
-            <Ionicons name="cube-outline" size={16} color={colors.roleAdmin} />
-            <Text style={styles.waitingText}>
-              รอของเข้า {order.waitingParts.filter((p) => p.inStock === false).length} รายการ —{" "}
-              {order.waitingParts
-                .filter((p) => p.inStock === false)
-                .map((p) => p.name || p.partCode)
-                .join(", ")}
-              {order.partsExpectedAt
-                ? ` · คาดว่า ${thaiDate(order.partsExpectedAt.slice(0, 10))}${
-                    order.partsExpectedAt.slice(0, 10) < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
-                      ? " (เลยกำหนดแล้ว — ตามผู้ขาย)"
-                      : ""
-                  }`
-                : ""}
-            </Text>
+        {/*
+          อะไหล่หมด — ทุกคนเห็นว่ารอตัวไหน ถึงเมื่อไร ใครเช็ค (ไม่ต้องเปิดฟอร์มดู)
+          ปุ่มเลื่อนวันอยู่ในกล่องนี้ ไม่ได้อยู่กับปุ่มขั้นตอน เพราะใบรออะไหล่ที่แยกออกมา
+          เป็นคิวของหัวหน้าภาค แต่คนที่รู้ว่าของจะเข้าเมื่อไรคือแอดมินที่ตามของ
+        */}
+        {partsOut.length ? (
+          <View style={styles.outCard} accessibilityLabel="กล่องอะไหล่หมด">
+            <View style={styles.outIcon}>
+              <Text style={styles.outIconText}>!</Text>
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.outTitle}>
+                อะไหล่หมด {partsOut.length} รายการ{" "}
+                <Text style={styles.outText}>— {partsOut.map((p) => p.name || p.partCode).join(", ")}</Text>
+              </Text>
+              <Text style={styles.outText}>
+                {etaDay
+                  ? `คาดว่าเข้า ${thaiDate(etaDay)}${etaLate ? " (เลยกำหนดแล้ว — ตามผู้ขาย)" : ""}`
+                  : "ยังไม่ได้ระบุวันคาดว่าของเข้า"}
+                {(() => {
+                  const c = [...order.logs]
+                    .filter((l) => ["PARTS_CHECKED", "PARTS_BACKORDERED", "SPLIT_FROM"].includes(l.action))
+                    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+                  return c ? ` · เช็คเมื่อ ${formatDateTime(c.createdAt)}${c.byName ? ` (${c.byName})` : ""}` : "";
+                })()}
+              </Text>
+            </View>
+            {user?.role === "ADMIN" ? (
+              <TouchableOpacity
+                style={styles.outEtaBtn}
+                onPress={() => setEtaOpen(true)}
+                activeOpacity={0.7}
+                accessibilityLabel="เลื่อนวันคาดว่าเข้า"
+              >
+                <Ionicons name="calendar-outline" size={14} color={colors.dangerInk} />
+                <Text style={styles.outEtaBtnText}>{etaDay ? "เลื่อนวัน" : "ใส่วันคาดว่าเข้า"}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
 
@@ -919,7 +1004,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                       color="#fff"
                     />
                     <Text style={styles.actionPrimaryText}>
-                      {STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}
+                      {/* ของหมดอยู่ = สิ่งที่แอดมินรอทำคือบอกว่าของมาแล้ว ไม่ใช่ "เช็คคลัง" เหมือนรอบแรก */}
+                      {partsOut.length && order.status !== "WAITING_PARTS"
+                        ? "อะไหล่มาแล้ว — อัปเดตสถานะ"
+                        : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -964,7 +1052,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           order={order}
           files={files}
           canReview={order.status === "CLAIM_REVIEW" && canReviewClaims(me)}
-          onReviewed={load}
+          onReviewed={() => reloadWithNotice()}
         />
       ) : null}
 
@@ -1111,7 +1199,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                       ) : part.inStock ? (
                         <Text style={styles.stockIn}>{part.warehouse ?? "มีของ"}</Text>
                       ) : (
-                        <Text style={styles.stockOut}>หมด</Text>
+                        <Text style={partsOut.length ? styles.stockOutPill : styles.stockOut}>หมด</Text>
                       )}
                     </View>
                     {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
@@ -1351,7 +1439,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           setRollbackOpen(false);
           // ส่งกลับอาจแนบรูปที่เจอหน้างานไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
-          await load();
+          await reloadWithNotice();
         }}
       />
 
@@ -1366,6 +1454,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         }}
       />
 
+      {etaOpen ? (
+        <PartsEtaModal
+          order={order}
+          onCancel={() => setEtaOpen(false)}
+          onDone={async () => {
+            setEtaOpen(false);
+            await reloadWithNotice("อัปเดตวันคาดว่าอะไหล่เข้าแล้ว");
+          }}
+        />
+      ) : null}
+
       <StageBackModal
         visible={stageBackOpen}
         order={order}
@@ -1373,7 +1472,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         onCancel={() => setStageBackOpen(false)}
         onDone={async () => {
           setStageBackOpen(false);
-          await load();
+          await reloadWithNotice();
         }}
       />
 
@@ -1389,7 +1488,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           setStageOpen(false);
           // ขั้นเสนอราคาแนบใบเสนอราคา/บิลไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
-          await load();
+          await reloadWithNotice();
         }}
       />
 
@@ -1400,7 +1499,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         onCancel={() => setEditingNote(false)}
         onDone={async () => {
           setEditingNote(false);
-          await load();
+          await reloadWithNotice("บันทึกแล้ว");
         }}
       />
 
@@ -1414,7 +1513,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           setClosing(false);
           // ปิดงานอาจแนบรูปใบเหลืองไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
-          await load();
+          await reloadWithNotice();
         }}
       />
 
@@ -1762,6 +1861,83 @@ function FollowUpModal({
   );
 }
 
+/**
+ * เลื่อนวันคาดว่าอะไหล่เข้า — แก้วันอย่างเดียว ผลเช็คคลังรอบนั้นไม่ถูกแตะ
+ * ล้างวันได้ (ผู้ขายยังไม่ยืนยัน) ดีกว่าค้างวันเก่าที่รู้อยู่แล้วว่าไม่จริง
+ */
+function PartsEtaModal({
+  order,
+  onCancel,
+  onDone,
+}: {
+  order: WorkOrder;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [day, setDay] = useState(order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : "");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const valid = day === "" || /^\d{4}-\d{2}-\d{2}$/.test(day);
+  const unchanged = day === (order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : "");
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/parts-eta`, { expectedAt: day || null, note: note.trim() || undefined });
+      onDone();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const off = saving || !valid || unchanged;
+  return (
+    <AppModal
+      visible
+      onClose={onCancel}
+      busy={saving}
+      title={<>เลื่อนวันคาดว่าอะไหล่เข้า · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, off && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={off}
+            activeOpacity={0.8}
+            accessibilityLabel="บันทึกวันคาดว่าเข้า"
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>บันทึก</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.linkedText}>
+        แก้เฉพาะวัน — ของมาแล้วให้กด “อะไหล่มาแล้ว — อัปเดตสถานะ” แทน
+      </Text>
+      <DateField value={day} onChange={setDay} label="คาดว่าของเข้า" emptyHint="เว้นว่าง = ยังไม่รู้วัน" />
+      <Text style={styles.modalLabel}>หมายเหตุ</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={note}
+        onChangeText={setNote}
+        placeholder="เช่น ผู้ขายเลื่อนส่งของ"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={2}
+        accessibilityLabel="หมายเหตุเลื่อนวัน"
+      />
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
 function StageBackModal({
   visible,
   order,
@@ -2026,6 +2202,7 @@ function StageModal({
             requisitionNo: requisitionNo.trim() || null,
           })),
           splitOut: mixed && splitOut,
+          expectedAt: checkOut && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
       } else if (order.status === "PARTS_SOURCING") {
@@ -2115,6 +2292,8 @@ function StageModal({
     order.status === "PARTS_REQUESTED" &&
     thisRound.some((p) => checks[p.sparePartId]?.inStock === false) &&
     (issued.length > 0 || thisRound.some((p) => checks[p.sparePartId]?.inStock === true));
+  // ตอบว่าหมดสักตัว = มีของให้รอ ถามวันคาดว่าเข้า (แยกใบแล้ววันนี้ไปติดใบรออะไหล่)
+  const checkOut = order.status === "PARTS_REQUESTED" && thisRound.some((p) => checks[p.sparePartId]?.inStock === false);
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
   const timeOk = visitTime === "" || isTime(visitTime);
 
@@ -2137,7 +2316,8 @@ function StageModal({
         (confirmChoice === "MOVE" &&
           (!validDate || !timeOk || (visit === (order.scheduledAt ?? "").slice(0, 10) && visitTime === (order.scheduledTime ?? "")))))) ||
     unchecked ||
-    needsRequisition;
+    needsRequisition ||
+    (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
 
   return (
     <AppModal
@@ -2429,10 +2609,18 @@ function StageModal({
                     </Text>
                   </TouchableOpacity>
                 ) : null}
+                {checkOut ? (
+                  <DateField
+                    value={expectedAt}
+                    onChange={setExpectedAt}
+                    label="คาดว่าของเข้า"
+                    emptyHint="ไม่บังคับ — ใส่แล้วขึ้นบนแถบขั้นตอนคู่กับป้าย “อะไหล่หมด”"
+                  />
+                ) : null}
                 <Text style={styles.linkedText}>
                   {mixed && splitOut
                     ? "ตัวที่หมดจะย้ายไปใบงานใหม่ที่ลิงก์กับใบนี้ ใบนี้ไปขั้นจ่ายงานต่อ"
-                    : "มีตัวไหนหมด ใบงานจะขึ้นสถานะ “รออะไหล่” และค้างที่ขั้นนี้จนของครบ"}
+                    : "มีตัวไหนหมด ใบงานจะขึ้นป้ายแดง “อะไหล่หมด” และค้างที่ขั้นนี้จนของครบ — ของมาแล้วกดเช็คอีกรอบ"}
                 </Text>
               </View>
             ) : null}
@@ -4070,6 +4258,16 @@ const styles = StyleSheet.create({
   stockPending: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
   stockIn: { fontSize: 11, lineHeight: 19, color: colors.success, fontWeight: "700" },
   stockOut: { fontSize: 11, lineHeight: 19, color: colors.danger, fontWeight: "700" },
+  stockOutPill: {
+    fontSize: 11,
+    lineHeight: 19,
+    color: "#fff",
+    fontWeight: "700",
+    backgroundColor: colors.danger,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    overflow: "hidden",
+  },
   checkList: { gap: spacing.md, marginTop: spacing.md },
   checkItem: {
     gap: spacing.xs,
@@ -4200,6 +4398,10 @@ const styles = StyleSheet.create({
   stepDotSkipped: { borderStyle: "dashed" },
   stepNum: { fontSize: 13, lineHeight: 18, fontWeight: "800", color: colors.textFaint },
   stepNumNow: { color: "#fff" },
+  stepDotOut: { backgroundColor: colors.danger, borderColor: colors.danger },
+  stepOutPill: { marginTop: 3, backgroundColor: colors.danger, borderRadius: radius.pill, paddingHorizontal: 8 },
+  stepOutPillText: { fontSize: 11, lineHeight: 18, fontWeight: "800", color: "#fff", textAlign: "center" },
+  stepOutEta: { fontSize: 10.5, lineHeight: 15, fontWeight: "700", color: colors.dangerInk, textAlign: "center", marginTop: 2 },
   stageLabel: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.text, textAlign: "center" },
   stageLabelNow: { fontWeight: "800", color: colors.navy },
   stageLabelFuture: { color: colors.textFaint },
@@ -4254,6 +4456,36 @@ const styles = StyleSheet.create({
   code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
+  badgeOut: { backgroundColor: colors.danger },
+  outCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderLeftWidth: 5,
+    borderColor: colors.danger,
+    backgroundColor: colors.dangerSoft,
+    flexWrap: "wrap",
+  },
+  outIcon: { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.danger, alignItems: "center", justifyContent: "center" },
+  outIconText: { color: "#fff", fontWeight: "800", fontSize: 14, lineHeight: 20 },
+  outTitle: { fontSize: 13.5, lineHeight: 21, fontWeight: "800", color: colors.dangerInk },
+  outText: { fontSize: 13, lineHeight: 21, fontWeight: "400", color: colors.text },
+  outEtaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    backgroundColor: colors.card,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  outEtaBtnText: { fontSize: 12.5, fontWeight: "700", color: colors.dangerInk },
   title: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text, marginTop: 2 },
   detail: { fontSize: 13, lineHeight: 21, color: colors.textMuted, marginTop: spacing.xs },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: spacing.md },

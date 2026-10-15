@@ -60,6 +60,8 @@ export interface WorkOrderRow {
   scheduledAt: string | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
   partsExpectedAt?: string | null;
+  /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
+  partsOut?: number;
   createdAt: string;
   closedAt: string | null;
   closeResultLabel: string | null;
@@ -133,7 +135,8 @@ const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string 
   { key: "branch", label: "สาขา", value: (r) => `${r.branchCode} ${r.branchName}` },
   { key: "machine", label: "เครื่อง", value: (r) => r.machineCode ?? "(ว่าง)" },
   { key: "team", label: "ทีม", value: (r) => r.assignedToName ?? r.assignedTeam ?? "ยังไม่มอบหมาย" },
-  { key: "status", label: "สถานะ", value: (r) => r.statusLabel },
+  // ติด "อะไหล่หมด" ต่อท้ายแทนการแทนที่ — กรองตามขั้นยังเจอครบ ค้นคำว่า "หมด" ก็ได้ทุกใบที่ติดของ
+  { key: "status", label: "สถานะ", value: (r) => (r.partsOut ? `${r.statusLabel} · อะไหล่หมด` : r.statusLabel) },
   { key: "wait", label: "รอใคร", value: (r) => waitText(r) ?? "(ไม่ได้รอใคร)" },
 ];
 type ColFilters = Partial<Record<ColKey, Set<string>>>;
@@ -174,12 +177,22 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "ALL", label: "ทั้งหมด" },
 ];
 
+/** ป้ายแดง "อะไหล่หมด" — ใบที่ติดของต้องเห็นจากรายการเลย ไม่ใช่ต้องเปิดเข้าไปอ่านรายการอะไหล่ */
+function PartsOutBadge({ row }: { row: { partsOut?: number } }) {
+  if (!row.partsOut) return null;
+  return (
+    <View style={[styles.badge, { backgroundColor: colors.danger, alignSelf: "flex-start" }]} accessibilityLabel="ป้ายอะไหล่หมด">
+      <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด {row.partsOut}</Text>
+    </View>
+  );
+}
+
 /**
- * รอเบิกอะไหล่ (ก่อนเสนอราคา) — บอกวันที่คาดว่าของเข้า เลยแล้วขึ้นแดงให้แอดมินตามผู้ขาย
- * แสดงเฉพาะขั้นนี้ ขั้นอื่นวันที่นี้ไม่มีความหมายแล้ว (เซิร์ฟเวอร์ล้างให้เมื่อของครบ)
+ * ใบที่อะไหล่หมด — บอกวันที่คาดว่าของเข้า เลยแล้วขึ้นแดงให้แอดมินตามผู้ขาย
+ * แสดงเฉพาะตอนยังรอของ ขั้นอื่นวันที่นี้ไม่มีความหมายแล้ว (เซิร์ฟเวอร์ล้างให้เมื่อของครบ)
  */
-function PartsEta({ row }: { row: { status: string; partsExpectedAt?: string | null } }) {
-  if (row.status !== "PARTS_SOURCING" || !row.partsExpectedAt) return null;
+function PartsEta({ row }: { row: { status: string; partsExpectedAt?: string | null; partsOut?: number } }) {
+  if (!row.partsOut || !row.partsExpectedAt) return null;
   const day = row.partsExpectedAt.slice(0, 10);
   const late = day < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const [y, m, d] = day.split("-").map(Number);
@@ -1112,6 +1125,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
+        <PartsOutBadge row={row} />
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
         <PartsEta row={row} />
       </View>
@@ -1148,6 +1162,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
         <View style={{ flex: 1 }} />
+        <PartsOutBadge row={row} />
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
