@@ -55,6 +55,7 @@ import {
   bangkokDay,
   canActOnStage,
   WORK_STATUSES,
+  STORABLE_WORK_STATUSES,
   WORK_STATUS_LABELS,
   WORK_ORDER_PRIORITIES,
   WORK_ORDER_PRIORITY_LABELS,
@@ -1036,7 +1037,7 @@ const createSchema = z.object({
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
-  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
   // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
   waitingParts: z
     .array(
@@ -1276,7 +1277,7 @@ const fromOutageSchema = z.object({
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
-  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
   /**
    * ผู้ติดต่อที่สาขา — ทางกระดานเคยไม่รับไว้ ทั้งที่ฟอร์มมีช่องให้กรอก
    *
@@ -1402,7 +1403,7 @@ const updateSchema = z.object({
   assignedToId: z.number().int().nullable().optional(),
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
-  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
   // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
   waitingParts: z
     .array(
@@ -1681,7 +1682,7 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
       where: { id },
       data: allIn
         ? { status: "AWAITING_QUOTE", partsExpectedAt: null, workStatus: workStatusForStage("AWAITING_QUOTE") }
-        : { partsExpectedAt: expected, workStatus: workStatusForStage("PARTS_SOURCING") },
+        : { partsExpectedAt: expected, workStatus: workStatusForStage("PARTS_SOURCING", { anyPartOutOfStock: true }) },
     });
     const outText = out.map((p) => p.sparePart.name || p.sparePart.partCode).join(", ");
     await writeLog(

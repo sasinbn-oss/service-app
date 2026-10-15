@@ -69,8 +69,8 @@ echo
 echo "═══ สาขา D หมดประกัน + ใช้อะไหล่ → รอเบิกอะไหล่ (เช็คของก่อน) แล้วค่อยเสนอราคา"
 ID1=$(prep "$DOLD" yes)
 echo "  $(st $ID1)"
-[ "$(DB "select status||'|'||coalesce(\"workStatus\",'-') from \"WorkOrder\" where id=$ID1")" = "PARTS_SOURCING|WAITING_PARTS" ] \
-  && pass "ระบุอะไหล่เสร็จเข้าขั้นรอเบิกอะไหล่ก่อนเสนอราคา (ฐานข้อมูล · กระดานขึ้นรออะไหล่)" || fail "ไม่เข้าขั้นรอเบิกอะไหล่: $(st $ID1)"
+[ "$(DB "select status||'|'||coalesce(\"workStatus\",'-') from \"WorkOrder\" where id=$ID1")" = "PARTS_SOURCING|CHECKING_PARTS" ] \
+  && pass "ระบุอะไหล่เสร็จเข้าขั้นรอเบิกอะไหล่ก่อนเสนอราคา · สถานะ \"รอแอดมินเช็คอะไหล่\" (ยังไม่มีใครบอกว่าหมด)" || fail "ไม่เข้าขั้นรอเบิกอะไหล่: $(st $ID1)"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/quote" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
 echo "$R" | grep -q "ยังไม่ถึงขั้นนี้" && pass "ยังไม่เช็คอะไหล่ เสนอราคาไม่ได้" || fail "เสนอราคาได้ก่อนเช็คอะไหล่: $R"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true}]}")
@@ -82,6 +82,8 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $A)
   -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":false}],\"expectedAt\":\"2026-11-20\"}" >/dev/null
 [ "$(DB "select w.status||'|'||to_char(w.\"partsExpectedAt\",'YYYY-MM-DD')||'|'||p.\"inStock\" from \"WorkOrder\" w join \"WorkOrderPart\" p on p.\"workOrderId\"=w.id and p.kind='WAITING' where w.id=$ID1")" = "PARTS_SOURCING|2026-11-20|false" ] \
   && pass "อะไหล่หมด → ค้างที่รอเบิกอะไหล่ พร้อมวันที่คาดว่าของเข้า (ฐานข้อมูล)" || fail "หมดแล้วไม่ค้าง: $(st $ID1)"
+[ "$(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")" = "WAITING_PARTS" ] \
+  && pass "แอดมินตอบว่าหมด → สถานะเปลี่ยนเป็น \"รออะไหล่\" ตามที่ระบุจริง" || fail "ตอบหมดแล้วสถานะ: $(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs[0].action+"|"+d.logs[0].note+"|"+d.partsExpectedAt.slice(0,10)' | grep -q "^PARTS_BACKORDERED|หมด: .*คาดว่าเข้า 2026-11-20|2026-11-20$" \
   && pass "ประวัติบอกตัวที่หมดและวันที่คาด · หน้าใบงานได้วันที่" || fail "ประวัติ: $(curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs[0].action+" "+d.logs[0].note')"
 curl -s "localhost:4000/api/work-orders?filter=ALL" -H "$(H $A)" | J "(d.rows||d).find(r=>r.id===$ID1).partsExpectedAt" | grep -q "2026-11-20" \
@@ -126,6 +128,8 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/payment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 echo "  $(st $ID1)"
 st $ID1 | grep -q "รอแอดมินเช็คอะไหล่" && pass "จ่ายเงินแล้วมาถึงขั้นเบิกอะไหล่" || fail "ไม่มาขั้นเบิกอะไหล่"
+[ "$(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")" = "CHECKING_PARTS" ] \
+  && pass "ถึงขั้นเช็คอะไหล่ สถานะเป็น \"รอแอดมินเช็คอะไหล่\" ไม่ใช่ \"รออะไหล่\" (ยังไม่เช็ค)" || fail "สถานะขั้นเช็คอะไหล่: $(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")"
 checkparts $ID1 | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "เบิกอะไหล่เสร็จไปขั้นหัวหน้าภาคจ่ายงาน" || fail "เบิกแล้วไม่ไปขั้นจ่ายงาน"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs.map(l=>l.action).reverse().join(" → ")' | sed 's/^/  ประวัติ: /'
 
