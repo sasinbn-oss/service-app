@@ -32,7 +32,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H
   -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-ROUND-1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
 echo "  $(st $ID)"
 echo "  $(parts $ID)"
-st $ID | grep -q "รอแอดมินเช็คอะไหล่" && pass "ของหมด ใบงานค้างอยู่ที่แอดมิน ไม่ส่งต่อ" || fail "ส่งต่อไปแล้วทั้งที่ของยังไม่มา: $(st $ID)"
+st $ID | grep -q "^รอแอดมินเบิกอะไหล่" && pass "ของหมด ใบงานค้างอยู่ที่แอดมิน ไม่ส่งต่อ" || fail "ส่งต่อไปแล้วทั้งที่ของยังไม่มา: $(st $ID)"
 st $ID | grep -q "รออะไหล่" && pass "สถานะขึ้นว่ารออะไหล่" || fail "สถานะไม่ขึ้นรออะไหล่"
 
 echo

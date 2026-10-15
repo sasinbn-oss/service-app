@@ -1,7 +1,7 @@
-// ทดสอบ: ขั้น "รอเบิกอะไหล่" (ก่อนเสนอราคา) ผ่านหน้าจอแอดมิน
-//   · ใบงานสาขาแฟรนไชส์หมดประกัน + ใช้อะไหล่ → รอเบิกอะไหล่ (ฐานข้อมูล)
-//   · ปุ่มยืนยันกดไม่ได้จนตอบครบ · ตอบ "หมด" → ปุ่มเป็น "รอของเข้า" → ค้างที่ขั้นนี้ หน้าใบงานบอกว่ารอของตัวไหน
-//   · เปิดใหม่ตอบ "มีของ" → ปุ่มเป็น "อะไหล่ครบ — ไปเสนอราคา" → ไปรอเสนอราคา (ฐานข้อมูล)
+// ทดสอบ: ขั้น "รอแอดมินเช็คอะไหล่" (ก่อนเสนอราคา) ผ่านหน้าจอแอดมิน
+//   · ใบงานสาขาแฟรนไชส์หมดประกัน + ใช้อะไหล่ → รอแอดมินเช็คอะไหล่ (ฐานข้อมูล)
+//   · ปุ่มยืนยันกดไม่ได้จนตอบครบ · ตอบ "หมด" → ปุ่มเป็น "อะไหล่หมด — รอของเข้า" → ค้างที่ขั้นนี้ หน้าใบงานบอกว่ารอของตัวไหน
+//   · เปิดใหม่ตอบ "มีอะไหล่" → ปุ่มเป็น "มีอะไหล่ — ไปเสนอราคา" → ไปรอเสนอราคา (ฐานข้อมูล)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
@@ -25,7 +25,7 @@ const { setup } = require("./fixture");
     const pid = fx.part("SP-BOARD");
     const wo = await fx.workOrder(branch, [{ sparePartId: pid, quantity: 1 }]);
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
-    db("status") === "PARTS_SOURCING" ? pass("ใบงานแฟรนไชส์หมดประกัน + ใช้อะไหล่ → รอเบิกอะไหล่ (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
+    db("status") === "PARTS_SOURCING" ? pass("ใบงานแฟรนไชส์หมดประกัน + ใช้อะไหล่ → รอแอดมินเช็คอะไหล่ (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
 
     const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
     page.on("pageerror", (e) => errors.push(String(e)));
@@ -43,25 +43,25 @@ const { setup } = require("./fixture");
     await vis(wo.code).last().click();
     await page.waitForTimeout(3000);
 
-    (await vis("รอเบิกอะไหล่").count()) > 0 ? pass("ป้ายสถานะ: รอเบิกอะไหล่") : fail("ไม่ขึ้นป้ายรอเบิกอะไหล่");
+    (await vis("รอแอดมินเช็คอะไหล่").count()) > 0 ? pass("ป้ายสถานะ: รอแอดมินเช็คอะไหล่") : fail("ไม่ขึ้นป้ายรอแอดมินเช็คอะไหล่");
     // ปุ่มหัวหน้าภาค/แอดมินปิดเอง "ปิดงาน — เครื่องใช้งานได้แล้ว" เอาออกแล้ว (เจ้าของงานขอ ต.ค. 69)
     (await vis("ปิดงาน — เครื่องใช้งานได้แล้ว", false).count()) === 0 ? pass("ไม่มีปุ่ม \"ปิดงาน — เครื่องใช้งานได้แล้ว\" แล้ว") : fail("ยังมีปุ่มปิดงาน — เครื่องใช้งานได้แล้ว");
-    await vis("เช็คอะไหล่ก่อนเสนอราคา").first().click();
+    await vis("เช็คอะไหล่ (มี / หมด)").first().click();
     await page.waitForTimeout(1200);
-    const save = () => page.getByText(/^(ยืนยัน|รอของเข้า|อะไหล่ครบ — ไปเสนอราคา)$/).locator("visible=true").last();
+    const save = () => page.getByText(/^(ยืนยัน|อะไหล่หมด — รอของเข้า|มีอะไหล่ — ไปเสนอราคา)$/).locator("visible=true").last();
     await save().click();
     await page.waitForTimeout(800);
     db("status") === "PARTS_SOURCING" ? pass("ยังไม่ตอบว่ามีหรือหมด กดยืนยันแล้วไม่ไปไหน") : fail("ผ่านทั้งที่ยังไม่ตอบ");
 
     await page.locator('[aria-label^="หมด "]').locator("visible=true").last().click();
     await page.waitForTimeout(500);
-    (await vis("รอของเข้า").count()) > 0 ? pass("ตอบว่าหมด → ปุ่มเป็น \"รอของเข้า\"") : fail("ปุ่มไม่เปลี่ยนเป็นรอของเข้า");
+    (await vis("อะไหล่หมด — รอของเข้า").count()) > 0 ? pass("ตอบว่าหมด → ปุ่มเป็น \"รอของเข้า\"") : fail("ปุ่มไม่เปลี่ยนเป็นรอของเข้า");
     await page.screenshot({ path: path.join(DIR, "parts-sourcing-form.png") });
-    await vis("รอของเข้า").last().click();
+    await vis("อะไหล่หมด — รอของเข้า").last().click();
     await page.waitForTimeout(3000);
     db("status") === "PARTS_SOURCING" &&
     fx.sql(`select "inStock" from "WorkOrderPart" where "workOrderId"=${wo.id} and kind='WAITING'`) === "f"
-      ? pass("รอของเข้า: ใบงานค้างที่รอเบิกอะไหล่ บันทึกว่าหมด (ฐานข้อมูล)")
+      ? pass("รอของเข้า: ใบงานค้างที่รอแอดมินเช็คอะไหล่ บันทึกว่าหมด (ฐานข้อมูล)")
       : fail(`หลังรอของเข้า: ${db("status")}`);
     (await vis("อะไหล่หมด 1 รายการ", false).count()) > 0 ? pass("หน้าใบงานบอกว่าอะไหล่หมดกี่รายการ ตัวไหน") : fail("ไม่บอกว่ารอของตัวไหน");
     await page.screenshot({ path: path.join(DIR, "parts-sourcing-waiting.png"), fullPage: true });
@@ -71,8 +71,8 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(1200);
     await page.locator('[aria-label^="มีของ "]').locator("visible=true").last().click();
     await page.waitForTimeout(500);
-    (await vis("อะไหล่ครบ — ไปเสนอราคา").count()) > 0 ? pass("ของมาแล้ว ตอบมีของ → ปุ่มเป็น \"อะไหล่ครบ — ไปเสนอราคา\"") : fail("ปุ่มไม่เปลี่ยน");
-    await vis("อะไหล่ครบ — ไปเสนอราคา").last().click();
+    (await vis("มีอะไหล่ — ไปเสนอราคา").count()) > 0 ? pass("ของมาแล้ว ตอบมีของ → ปุ่มเป็น \"มีอะไหล่ — ไปเสนอราคา\"") : fail("ปุ่มไม่เปลี่ยน");
+    await vis("มีอะไหล่ — ไปเสนอราคา").last().click();
     await page.waitForTimeout(3000);
     db("status") === "AWAITING_QUOTE" ? pass("ไปขั้นรอเสนอราคา (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
     (await vis("รอเสนอราคาลูกค้า").count()) > 0 ? pass("หน้าใบงานขึ้นรอเสนอราคาลูกค้า") : fail("หน้าใบงานไม่อัปเดต");

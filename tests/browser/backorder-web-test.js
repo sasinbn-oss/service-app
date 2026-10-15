@@ -65,12 +65,12 @@ let WO = process.argv[2] || null;
     (await seen("รออะไหล่", false)) > 0
       ? pass("ใบงานขึ้นสถานะรออะไหล่")
       : fail("ไม่ขึ้นสถานะรออะไหล่");
-    (await seen("รอแอดมินเช็คอะไหล่", false)) > 0
+    (await seen("รอแอดมินเบิกอะไหล่", false)) > 0
       ? pass("ใบงานยังค้างอยู่ขั้นแอดมิน ไม่เลยไปจ่ายงาน")
       : fail("ไม่ได้ค้างที่ขั้นแอดมิน");
 
-    // เปิดฟอร์มเช็คอะไหล่
-    await tap("เช็คอะไหล่ในคลัง", false);
+    // เปิดฟอร์มเบิกอะไหล่ — ของหมดอยู่ ปุ่มขั้นนี้เป็น "อะไหล่มาแล้ว — อัปเดตสถานะ"
+    await tap("อะไหล่มาแล้ว — อัปเดตสถานะ", false);
     await page.waitForTimeout(2000);
     await page.screenshot({ path: path.join(DIR, "bo-2-modal.png"), fullPage: true });
 

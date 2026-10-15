@@ -62,6 +62,8 @@ import {
   RETIRED_WORK_ORDER_RESULTS,
   WORK_ORDER_RESULTS,
   WORK_ORDER_RESULT_LABELS,
+  SEND_BACK_REASONS,
+  SEND_BACK_REASON_LABELS,
   WORK_ORDER_STATUSES,
   WORK_ORDER_STATUS_LABELS,
   WORK_ORDER_ACTION_LABELS,
@@ -226,6 +228,50 @@ async function replaceParts(
     data: [...merged].map(([sparePartId, quantity]) => ({ workOrderId, sparePartId, quantity, kind })),
   });
 }
+
+/**
+ * ปรับรายการอะไหล่ที่รออยู่ให้ตรงกับรายการใหม่ โดยไม่ลบผลเช็คของตัวที่ไม่ได้เปลี่ยน
+ *
+ * replaceParts ลบแล้วสร้างใหม่ทั้งชุด ผลเช็คคลังกับเลขใบเบิกจึงหายไปทุกครั้งที่ใครแก้รายการ
+ * — ใบที่ช่างส่งกลับมาพร้อมของที่เบิกไปแล้ว ต้องให้แอดมินเช็คเฉพาะตัวที่เพิ่ม ไม่ใช่เบิกซ้ำทั้งใบ
+ * (เจ้าของงานขอ ต.ค. 69: "ข้อมูลเดิมยังอยู่")
+ *
+ * ตัวเดิมจำนวนเดิม = เก็บแถวเดิมไว้ทั้งแถว · จำนวนเปลี่ยน = ต้องเบิกใหม่ ผลเช็คถูกล้าง ·
+ * ไม่อยู่ในรายการใหม่ = ลบ · ตัวใหม่ = ยังไม่เช็ค
+ */
+async function mergeWaitingParts(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  workOrderId: number,
+  parts: { sparePartId: number; quantity: number }[]
+) {
+  const merged = new Map<number, number>();
+  for (const p of parts) merged.set(p.sparePartId, (merged.get(p.sparePartId) ?? 0) + p.quantity);
+  const current = await tx.workOrderPart.findMany({ where: { workOrderId, kind: "WAITING" } });
+  const kept = new Set<number>();
+  for (const row of current) {
+    const want = merged.get(row.sparePartId);
+    if (want === undefined || kept.has(row.sparePartId)) {
+      await tx.workOrderPart.delete({ where: { id: row.id } });
+    } else {
+      kept.add(row.sparePartId);
+      if (want !== row.quantity) {
+        await tx.workOrderPart.update({
+          where: { id: row.id },
+          data: { quantity: want, inStock: null, warehouse: null, requisitionNo: null, checkedAt: null, checkedById: null },
+        });
+      }
+    }
+  }
+  const fresh = [...merged].filter(([sparePartId]) => !kept.has(sparePartId));
+  if (fresh.length) {
+    await tx.workOrderPart.createMany({
+      data: fresh.map(([sparePartId, quantity]) => ({ workOrderId, sparePartId, quantity, kind: "WAITING" })),
+    });
+  }
+}
+
+/** เบิกไปแล้ว — มีของและมีเลขใบเบิก ไม่ต้องเช็คหรือเสนอราคาซ้ำ */
+const isIssued = (p: { inStock: boolean | null; requisitionNo: string | null }) => p.inStock === true && !!p.requisitionNo;
 
 /**
  * จำรุ่นกับขนาดไว้ที่ตัวเครื่อง ไม่ใช่ที่ใบงาน
@@ -923,6 +969,7 @@ router.get("/options", requireAuth, async (_req, res) => {
       label: WORK_ORDER_PRIORITY_LABELS[v],
     })),
     results: WORK_ORDER_RESULTS.map((v) => ({ value: v, label: WORK_ORDER_RESULT_LABELS[v] })),
+    sendBackReasons: SEND_BACK_REASONS.map((v) => ({ value: v, label: SEND_BACK_REASON_LABELS[v] })),
     appointmentStatuses: APPOINTMENT_STATUSES.map((v) => ({
       value: v,
       label: APPOINTMENT_STATUS_LABELS[v],
@@ -1051,7 +1098,7 @@ const createSchema = z.object({
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
-  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
+  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ — ตัวที่ไม่เปลี่ยนเก็บผลเช็คเดิมไว้ (mergeWaitingParts) ส่ง [] คือล้างออกหมด
   waitingParts: z
     .array(
       z.object({
@@ -1310,7 +1357,7 @@ const fromOutageSchema = z.object({
     .max(MACHINE_CAPACITY_MAX_KG)
     .nullable()
     .optional(),
-  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
+  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ — ตัวที่ไม่เปลี่ยนเก็บผลเช็คเดิมไว้ (mergeWaitingParts) ส่ง [] คือล้างออกหมด
   waitingParts: z
     .array(
       z.object({
@@ -1417,7 +1464,10 @@ const updateSchema = z.object({
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
-  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ ระบบแทนที่ของเดิม ส่ง [] คือล้างออกหมด
+  // หัวหน้าภาคแก้ได้ทุกอย่างตอนช่างส่งกลับ — ผู้ติดต่อเปลี่ยนบ่อย (พนักงานร้านเปลี่ยนกะ)
+  contactName: z.string().trim().max(120).nullable().optional(),
+  contactPhone: z.string().trim().max(40).nullable().optional(),
+  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ — ตัวที่ไม่เปลี่ยนเก็บผลเช็คเดิมไว้ (mergeWaitingParts) ส่ง [] คือล้างออกหมด
   waitingParts: z
     .array(
       z.object({
@@ -1459,11 +1509,13 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
           : {}),
         ...(body.symptom !== undefined ? { symptom: body.symptom?.trim() || null } : {}),
         ...(body.workStatus !== undefined ? { workStatus: body.workStatus } : {}),
+        ...(body.contactName !== undefined ? { contactName: body.contactName?.trim() || null } : {}),
+        ...(body.contactPhone !== undefined ? { contactPhone: body.contactPhone?.trim() || null } : {}),
       },
     });
 
     if (body.waitingParts !== undefined) {
-      await replaceParts(tx, id, "WAITING", body.waitingParts);
+      await mergeWaitingParts(tx, id, body.waitingParts);
     }
 
     // อาการ สถานะ อะไหล่ที่รอ และวันนัด เป็นสิ่งที่กระดานแสดง จึงต้องส่งต่อไปที่เคส
@@ -1610,12 +1662,27 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       machineBrand: machineMake(wo.machine),
     });
 
+  /**
+   * ทุกตัวเบิกไปแล้วตั้งแต่รอบก่อน (ช่างส่งกลับด้วยเหตุอื่นที่ไม่ใช่อะไหล่) — ไม่มีอะไรให้เช็ค
+   * หรือเสนอราคาเพิ่ม ไปจ่ายงานรอบใหม่เลย ไม่งั้นแอดมินต้องกดผ่านขั้นที่ไม่มีงานให้ทำ
+   */
+  const before = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: { sparePartId: true, quantity: true, inStock: true, requisitionNo: true },
+  });
+  const allIssued =
+    !!needsParts &&
+    parts!.every((p) => {
+      const was = before.find((b) => b.sparePartId === p.sparePartId);
+      return !!was && was.quantity === p.quantity && isIssued(was);
+    });
+
   // ต้องเสนอราคา → เช็คอะไหล่ก่อน (รอเบิกอะไหล่) แล้วค่อยเสนอราคาด้วยของที่มีจริง
-  const nextStatus = !needsParts ? "PARTS_CHECKED" : quoteFirst ? "PARTS_SOURCING" : "PARTS_REQUESTED";
+  const nextStatus = !needsParts || allIssued ? "PARTS_CHECKED" : quoteFirst ? "PARTS_SOURCING" : "PARTS_REQUESTED";
 
   await prisma.$transaction(async (tx) => {
     // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
-    await replaceParts(tx, id, "WAITING", needsParts ? parts! : []);
+    await mergeWaitingParts(tx, id, needsParts ? parts! : []);
     await tx.workOrder.update({
       where: { id },
       data: {
@@ -1634,6 +1701,8 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       note ||
         (!needsParts
           ? "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง"
+          : allIssued
+          ? "อะไหล่ชุดเดิมเบิกไปแล้วทุกตัว — ข้ามไปจัดคิวช่าง"
           : quoteFirst
           ? "อะไหล่ขายลูกค้าแฟรนไชส์ — เช็คอะไหล่ก่อน แล้วเสนอราคาและเก็บเงินก่อนเบิกของ"
           : null)
@@ -1669,10 +1738,13 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   if (!(await guardStage(req, res, id, "PARTS_SOURCING"))) return;
 
-  const parts = await prisma.workOrderPart.findMany({
-    where: { workOrderId: id, kind: "WAITING" },
-    include: { sparePart: { select: { partCode: true, name: true } } },
-  });
+  // ตัวที่เบิกไปแล้วรอบก่อนจ่ายเงินไปแล้ว — เช็คและเสนอราคาเฉพาะตัวที่เพิ่มมา
+  const parts = (
+    await prisma.workOrderPart.findMany({
+      where: { workOrderId: id, kind: "WAITING" },
+      include: { sparePart: { select: { partCode: true, name: true } } },
+    })
+  ).filter((p) => !isIssued(p));
   const result = new Map(parsed.data.results.map((r) => [r.sparePartId, r.inStock]));
   // ต้องตอบครบทุกตัว — ตอบบางตัวแล้วถือว่าครบคือเสนอราคาของที่ยังไม่รู้ว่ามี
   const missing = parts.filter((p) => !result.has(p.sparePartId));
@@ -2796,6 +2868,8 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
  * ช่างที่ถือใบงานเป็นคนกด เพราะเป็นคนเดียวที่เห็นหน้างาน
  */
 const rollbackSchema = z.object({
+  // แอปรุ่นเก่าไม่ส่งมา — ถือว่าเป็นเรื่องอะไหล่ตามที่ปุ่มเดิมตั้งใจไว้
+  reasonCode: z.enum(SEND_BACK_REASONS).default("PARTS"),
   reason: z.string().trim().min(1, "ต้องบอกด้วยว่าเจออะไรที่หน้างาน").max(500),
   // อะไหล่ที่ช่างขอเบิกเพิ่ม ไม่ใส่ก็ได้ ถ้ายังบอกไม่ได้ว่าต้องใช้ตัวไหน
   parts: z
@@ -2839,6 +2913,10 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
   if (await blockedForTeam(req, res, wo)) return;
 
   const requested = parsed.data.parts ?? [];
+  const existing = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: { id: true, sparePartId: true, quantity: true, requisitionNo: true },
+  });
 
   // ชื่อรหัสอะไหล่ไว้เขียนลงประวัติ ให้อ่านย้อนหลังรู้ว่าช่างขอเบิกอะไรไว้
   const requestedCodes =
@@ -2859,9 +2937,9 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
       where: { id },
       data: {
         status: "NEW",
-        // ช่างระบุของมาแล้ว = ต้องใช้อะไหล่แน่ๆ ไม่ต้องให้ตัดสินซ้ำว่าใช้หรือไม่ใช้
-        // ไม่ได้ระบุมา ก็เปิดให้ตัดสินใหม่ทั้งหมด
-        needsParts: requested.length > 0 ? true : null,
+        // มีของอยู่ในใบ (ของเดิมหรือที่ช่างขอ) = ต้องใช้อะไหล่ · ไม่มีเลยก็เปิดให้ตัดสินใหม่
+        needsParts: requested.length > 0 || existing.length > 0 ? true : null,
+        partsExpectedAt: null,
         // ช่างคนเดิมยังติดอยู่กับใบงาน หัวหน้าภาคเปลี่ยนได้ตอนจ่ายงานรอบใหม่
         scheduledAt: null,
         scheduledTime: null,
@@ -2870,18 +2948,43 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
     });
 
     /**
-     * แทนที่ของที่รออยู่ด้วยรายการที่ช่างขอ
+     * ของเดิมอยู่ครบ ตัวที่ช่างขอต่อท้าย (เจ้าของงานขอ ต.ค. 69)
      *
-     * แทนที่ ไม่ใช่เพิ่มต่อท้าย เพราะของชุดเดิมถูกเช็คคลังไปแล้วในรอบก่อน
-     * ถ้าเก็บไว้ แอดมินจะเห็นว่า "เช็คแล้ว" ทั้งที่ของที่ต้องใช้เปลี่ยนไปแล้ว
-     * replaceParts สร้างแถวใหม่ ผลเช็คคลังจึงกลับเป็นยังไม่เช็คให้เอง
+     * เดิมแทนที่ด้วยรายการที่ช่างขอ — ของที่เบิกไปแล้วหายจากใบ ทั้งที่อยู่กับช่างจริง
+     * และไม่มีใครรู้ว่าต้องคืนคลังหรือใช้ต่อ · ตอนนี้หัวหน้าภาคเห็นทั้งหมดแล้วตัดสินเองว่าตัดตัวไหน
+     *
+     * ตัวที่ขอซ้ำกับของเดิม = ของที่เบิกไปใช้ไม่ได้ (เสีย/ผิดรุ่น) ต้องเบิกใหม่ — ล้างผลเช็คของแถวนั้น
+     * ให้แอดมินเบิกรอบใหม่ เลขใบเบิกเดิมเขียนลงประวัติไว้ ไม่หายไปเงียบ ๆ
      */
-    await replaceParts(tx, id, "WAITING", requested);
+    const again: string[] = [];
+    for (const r of requested) {
+      const row = existing.find((e) => e.sparePartId === r.sparePartId);
+      if (!row) continue;
+      await tx.workOrderPart.update({
+        where: { id: row.id },
+        data: {
+          quantity: Math.max(row.quantity, r.quantity),
+          inStock: null,
+          warehouse: null,
+          requisitionNo: null,
+          checkedAt: null,
+          checkedById: null,
+        },
+      });
+      if (row.requisitionNo) again.push(row.requisitionNo);
+    }
+    const fresh = requested.filter((r) => !existing.some((e) => e.sparePartId === r.sparePartId));
+    if (fresh.length) {
+      await tx.workOrderPart.createMany({
+        data: fresh.map((r) => ({ workOrderId: id, sparePartId: r.sparePartId, quantity: r.quantity, kind: "WAITING" })),
+      });
+    }
 
+    // หมวดอยู่หน้าข้อความ — กล่อง "ช่างส่งกลับ" ของหัวหน้าภาคและประวัติอ่านจากโน้ตเดียวกัน
+    const head = `[${SEND_BACK_REASON_LABELS[parsed.data.reasonCode]}] ${parsed.data.reason}`;
     const note =
-      requestedCodes.length > 0
-        ? `${parsed.data.reason} — ขอเบิกเพิ่ม: ${requestedCodes.join(", ")}`
-        : parsed.data.reason;
+      (requestedCodes.length > 0 ? `${head} — ขอเบิกเพิ่ม: ${requestedCodes.join(", ")}` : head) +
+      (again.length ? ` (ใบเบิกเดิม ${[...new Set(again)].join(", ")})` : "");
     await writeLog(tx, id, req.auth!.userId, "PARTS_ROLLBACK", "NEW", note);
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);

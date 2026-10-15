@@ -206,8 +206,9 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   INSPECT_CONFIRM: "รอแอดมินนัดลูกค้า (ตรวจหน้างาน)",
   INSPECTING: "รอทีมตรวจหน้างาน",
   WAITING_PARTS: "รออะไหล่เข้า",
-  PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
-  PARTS_SOURCING: "รอเบิกอะไหล่",
+  // เจ้าของงานขอ ต.ค. 69: ขั้นก่อนเสนอราคาคือ "เช็คว่ามีหรือหมด" ขั้นหลังรับเงินคือ "เบิกจริงส่งหน้างาน"
+  PARTS_REQUESTED: "รอแอดมินเบิกอะไหล่",
+  PARTS_SOURCING: "รอแอดมินเช็คอะไหล่",
   AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
   AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
@@ -403,6 +404,21 @@ export const WORK_ORDER_PRIORITY_LABELS: Record<string, string> = {
  * ปล่อยให้ปิดด้วยผลพวกนั้นได้ ใบงานจะขึ้นว่า DONE ทั้งที่เครื่องยังเสีย
  * แล้วตัวเลขงานที่สำเร็จในรายงานจะสวยกว่าความจริง
  */
+/**
+ * เหตุที่ช่างปิดงานไม่ได้ ส่งกลับหัวหน้าภาค (เจ้าของงานขอ ต.ค. 69)
+ *
+ * เดิมปุ่มส่งกลับคิดไว้สำหรับเรื่องอะไหล่อย่างเดียว แต่ที่หน้างานปิดไม่ได้ด้วยเหตุอื่นบ่อยกว่า
+ * (ร้านปิด หาสาเหตุไม่เจอ) — หมวดช่วยให้หัวหน้าภาคเห็นทันทีว่าต้องแก้เรื่องไหนโดยไม่ต้องอ่านทั้งย่อหน้า
+ */
+export const SEND_BACK_REASONS = ["PARTS", "INSPECT", "SHOP", "RESOURCES", "OTHER"] as const;
+export const SEND_BACK_REASON_LABELS: Record<string, string> = {
+  PARTS: "ต้องเปลี่ยนอะไหล่เพิ่ม / ไม่ตรง",
+  INSPECT: "ต้องตรวจเพิ่ม ยังหาสาเหตุไม่เจอ",
+  SHOP: "ร้านปิด / ลูกค้าไม่สะดวก",
+  RESOURCES: "เครื่องมือ / คนไม่พอ",
+  OTHER: "อื่น ๆ",
+};
+
 export const WORK_ORDER_RESULTS = ["FIXED", "NO_FAULT"] as const;
 
 /**
@@ -426,10 +442,10 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CREATED: "เปิดใบงาน",
   PARTS_REQUESTED: "ระบุอะไหล่ที่ต้องใช้",
   NO_PARTS: "ระบุว่าไม่ต้องใช้อะไหล่",
-  PARTS_ROLLBACK: "ช่างส่งกลับ — ยังจบงานไม่ได้",
-  PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
-  PARTS_SOURCED: "อะไหล่ครบ — ส่งต่อเสนอราคา",
-  PARTS_BACKORDERED: "รอของเข้า (ก่อนเสนอราคา)",
+  PARTS_ROLLBACK: "ช่างส่งกลับ — ปิดงานไม่ได้",
+  PARTS_CHECKED: "แอดมินเบิกอะไหล่",
+  PARTS_SOURCED: "มีอะไหล่ — ส่งต่อเสนอราคา",
+  PARTS_BACKORDERED: "อะไหล่หมด (ก่อนเสนอราคา)",
   PARTS_ETA_CHANGED: "เลื่อนวันคาดว่าอะไหล่เข้า",
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
