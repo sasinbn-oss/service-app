@@ -99,6 +99,7 @@ export function workStatusForStage(
     // ใบงานรออะไหล่ที่แยกออกมา — รอของเข้าคลังจริง ๆ
     case "WAITING_PARTS":
       return "WAITING_PARTS";
+    case "INSPECT_CONFIRM":
     case "INSPECTING":
     case "PARTS_CHECKED":
     case "ASSIGNED":
@@ -163,6 +164,7 @@ export function countsAsRepair(closeReason: string | null) {
  */
 export const WORK_ORDER_STATUSES = [
   "NEW",
+  "INSPECT_CONFIRM",
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
@@ -186,6 +188,7 @@ export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
  */
 export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   NEW: "รอหัวหน้าภาคระบุอะไหล่",
+  INSPECT_CONFIRM: "รอแอดมินนัดลูกค้า (ตรวจหน้างาน)",
   INSPECTING: "รอทีมตรวจหน้างาน",
   WAITING_PARTS: "รออะไหล่เข้า",
   PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
@@ -207,7 +210,12 @@ export const WORK_ORDER_STAGE_ORDER = [
    * ระบุอะไหล่ไม่ได้จนกว่าจะมีคนไปดู — ส่งทีมไปตรวจ แล้ววนกลับมาที่ NEW
    * พร้อมผลตรวจ ขั้นนี้จึงอยู่ถัดจาก NEW แต่ใบงานเดินย้อนกลับมาเสมอ
    * ใบที่ไม่ได้ตรวจ แถบขั้นตอนขึ้นว่าข้าม
+   *
+   * INSPECT_CONFIRM — แอดมินโทรนัดร้านก่อนช่างไปตรวจ (เจ้าของงานขอ ต.ค. 69) เหตุผลเดียวกับ
+   * AWAITING_CONFIRM ของงานซ่อม: ไปถึงแล้วร้านปิดคือเสียวันของทั้งทีม นัดแล้วส่งถึงช่างเลย
+   * ไม่ต้องให้หัวหน้าภาคยืนยันออกงานอีกรอบ เพราะงานตรวจไปครั้งเดียว และหัวหน้าภาคเลือกทีมไว้แล้ว
    */
+  "INSPECT_CONFIRM",
   "INSPECTING",
   /**
    * สองขั้นนี้มาก่อนเบิกอะไหล่ ไม่ใช่หลัง
@@ -263,6 +271,8 @@ export const WORK_ORDER_STAGE_ORDER = [
 export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   NEW: "SUPERVISOR",
   // ทีมที่ไปตรวจเป็นคนบันทึกผล เพราะเป็นคนที่เห็นเครื่องจริง
+  // นัดร้านก่อนไปตรวจ — งานโทรคุยกับร้านเป็นของแอดมิน เหมือนคอนเฟิร์มลูกค้าของงานซ่อม
+  INSPECT_CONFIRM: "ADMIN",
   INSPECTING: "EMPLOYEE",
   // ใบรออะไหล่หัวหน้าภาคเป็นคนดูแล — ตามของ แล้วส่งต่อเมื่อของมา
   WAITING_PARTS: "SUPERVISOR",
@@ -285,6 +295,7 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
 /** สถานะที่ถือว่ายังทำงานอยู่ ใช้กันไม่ให้เปิดใบงานซ้ำกับเคสเดิม */
 export const ACTIVE_WORK_ORDER_STATUSES = [
   "NEW",
+  "INSPECT_CONFIRM",
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",

@@ -150,6 +150,7 @@ const FILTERS: { value: Filter; label: string }[] = [
 export type Owner = "ADMIN" | "SUPERVISOR" | "EMPLOYEE" | "OUTSIDE" | "DONE" | "CANCELLED";
 export const STATUS_OWNER: Record<string, Owner> = {
   NEW: "SUPERVISOR",
+  INSPECT_CONFIRM: "ADMIN",
   INSPECTING: "EMPLOYEE",
   AWAITING_QUOTE: "ADMIN",
   AWAITING_PAYMENT: "OUTSIDE",

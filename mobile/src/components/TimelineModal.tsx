@@ -58,6 +58,7 @@ const ROLE_COLOR: Record<Role, { fg: string; bg: string }> = {
 // สีของแถบสัดส่วนเวลา — ตามคนที่ถือลูกบอลในขั้นนั้น
 const STAGE_COLOR: Record<string, string> = {
   NEW: ROLE_COLOR.SUPERVISOR.fg,
+  INSPECT_CONFIRM: ROLE_COLOR.ADMIN.fg,
   INSPECTING: ROLE_COLOR.EMPLOYEE.fg,
   WAITING_PARTS: ROLE_COLOR.SUPERVISOR.fg,
   PARTS_REQUESTED: ROLE_COLOR.ADMIN.fg,

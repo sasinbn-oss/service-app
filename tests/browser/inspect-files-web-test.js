@@ -52,6 +52,8 @@ const login = async (code) =>
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/inspect-request`, { team: "กระบี่" });
+    // แอดมินนัดร้านก่อนช่างไปตรวจ (ขั้น INSPECT_CONFIRM) — ไม่ใช่เรื่องที่ทดสอบในชุดนี้
+    await call(A, "POST", `/work-orders/${id}/confirm-appointment`, { scheduledAt: "2026-11-10" });
     const code = sql(`select code from "WorkOrder" where id=${id}`);
     if (sql(`select status from "WorkOrder" where id=${id}`) !== "INSPECTING") throw new Error("เตรียมใบงานไม่ถึงขั้นตรวจหน้างาน");
 
