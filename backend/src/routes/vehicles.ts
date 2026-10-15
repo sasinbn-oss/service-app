@@ -41,6 +41,11 @@ const FLEET_FIELDS = [
   ["insCompany", "บริษัทประกัน"],
   ["note", "หมายเหตุ"],
 ] as const;
+const CARD_FIELDS = [
+  ["fleetCardNo", "บัตรเติมน้ำมัน"],
+  ["fleetCardLimit", "วงเงินบัตร"],
+  ["easyPassNo", "Easy Pass"],
+] as const;
 const plateKey = (p: string) => p.replace(/[\s\-–]+/g, "");
 
 router.post("/import", requireAuth, requireAdmin, sheetUpload.single("file"), async (req: AuthRequest, res) => {
@@ -55,12 +60,15 @@ router.post("/import", requireAuth, requireAdmin, sheetUpload.single("file"), as
     return res.status(400).json({ error: 'ไม่พบรถในไฟล์ — ต้องมีหัวตารางที่มีคอลัมน์ "ทะเบียน" และ "ชื่อผู้รับผิดชอบ"' });
   }
 
-  const existing = await prisma.vehicle.findMany();
+  const existing = await prisma.vehicle.findMany({ include: { card: true } });
   const byKey = new Map(existing.map((v) => [plateKey(v.plateNumber), v]));
   const plan = parsed.rows.map((row) => {
     const cur = byKey.get(plateKey(row.plateNumber));
     if (!cur) return { ...row, action: "CREATE" as const, changes: [] as string[], id: null as number | null };
-    const changes = FLEET_FIELDS.filter(([f]) => (cur[f] ?? null) !== (row[f] ?? null)).map(([, label]) => label);
+    const changes = [
+      ...FLEET_FIELDS.filter(([f]) => (cur[f] ?? null) !== (row[f] ?? null)).map(([, label]) => label),
+      ...CARD_FIELDS.filter(([f]) => (cur.card?.[f] ?? null) !== (row[f] ?? null)).map(([, label]) => label),
+    ];
     return {
       ...row,
       plateNumber: cur.plateNumber,
@@ -74,8 +82,15 @@ router.post("/import", requireAuth, requireAdmin, sheetUpload.single("file"), as
     await prisma.$transaction(async (tx) => {
       for (const p of plan) {
         const data = { brand: p.brand, type: p.type, owner: p.owner, insCompany: p.insCompany, note: p.note };
-        if (p.action === "CREATE") await tx.vehicle.create({ data: { plateNumber: p.plateNumber, ...data } });
-        else if (p.action === "UPDATE") await tx.vehicle.update({ where: { id: p.id! }, data });
+        const card = { fleetCardNo: p.fleetCardNo, fleetCardLimit: p.fleetCardLimit, easyPassNo: p.easyPassNo };
+        if (p.action === "CREATE") {
+          await tx.vehicle.create({ data: { plateNumber: p.plateNumber, ...data, card: { create: card } } });
+        } else if (p.action === "UPDATE") {
+          await tx.vehicle.update({
+            where: { id: p.id! },
+            data: { ...data, card: { upsert: { create: card, update: card } } },
+          });
+        }
       }
     }, TX);
   }
@@ -128,12 +143,24 @@ const vehicleSchema = z.object({
   lastOilKm: intOrNull,
   lastOilDate: day,
   maintNote: z.string().trim().max(300).nullable().optional(),
+  // บัตรเติมน้ำมัน/Easy Pass — ลงตาราง VehicleCard (เห็นเฉพาะแอดมิน) ไม่ใช่ช่องของ Vehicle
+  fleetCardNo: z.string().trim().max(40).nullable().optional(),
+  fleetCardLimit: intOrNull,
+  easyPassNo: z.string().trim().max(40).nullable().optional(),
 });
+const CARD_KEYS = ["fleetCardNo", "fleetCardLimit", "easyPassNo"] as const;
+
+/** แยกช่องบัตรออกจากข้อมูลรถ — ไม่ส่งมาเลย = ไม่แตะบัตร */
+function cardData(p: Partial<z.infer<typeof vehicleSchema>>) {
+  const out: Record<string, unknown> = {};
+  for (const k of CARD_KEYS) if (p[k] !== undefined) out[k] = p[k] === "" ? null : p[k];
+  return Object.keys(out).length ? out : null;
+}
 
 function toData(p: z.infer<typeof vehicleSchema>) {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(p)) {
-    if (v === undefined) continue;
+    if (v === undefined || (CARD_KEYS as readonly string[]).includes(k)) continue;
     if (["taxExpire", "actExpire", "insExpire", "lastOilDate"].includes(k)) out[k] = toDate(v as string);
     else out[k] = v === "" ? null : v;
   }
@@ -149,7 +176,10 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
   }
   // รถใหม่เริ่มที่ว่างหรือซ่อมบำรุงได้เท่านั้น — "กำลังใช้งาน" มาจากการเบิกจริงเท่านั้น
   const status = parsed.data.status === "IN_USE" ? "AVAILABLE" : parsed.data.status;
-  const vehicle = await prisma.vehicle.create({ data: { ...toData(parsed.data), plateNumber: plate, status } as never });
+  const card = cardData(parsed.data);
+  const vehicle = await prisma.vehicle.create({
+    data: { ...toData(parsed.data), plateNumber: plate, status, ...(card ? { card: { create: card } } : {}) } as never,
+  });
   res.status(201).json(vehicle);
 });
 
@@ -169,6 +199,8 @@ router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   // สถานะ "กำลังใช้งาน" เป็นของการเบิก/คืนเท่านั้น — ตั้งเองได้จะได้รถที่ขึ้นว่ามีคนใช้แต่หาไม่เจอว่าใคร
   // ส่วนรถที่มีคนใช้อยู่ เปลี่ยนเป็นซ่อมบำรุงได้ (คืนแล้วจะไม่กลับเป็นว่าง) แต่เปลี่ยนเป็นว่างไม่ได้
   if (data.status === "IN_USE" || (cur.status === "IN_USE" && data.status === "AVAILABLE")) delete data.status;
+  const card = cardData(parsed.data);
+  if (card) (data as Record<string, unknown>).card = { upsert: { create: card, update: card } };
   const vehicle = await prisma.vehicle.update({ where: { id }, data: data as never });
   res.json(vehicle);
 });
@@ -241,12 +273,14 @@ function expiry(d: Date | null) {
   };
 }
 
-router.get("/fleet", requireAuth, requireAdmin, async (_req, res) => {
+router.get("/fleet", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  // บัตรเติมน้ำมัน/Easy Pass — แอดมินเท่านั้น Admin Spare Part เปิดหน้านี้ดูได้แต่ไม่ได้เห็นเลขบัตร
+  const showCard = !req.auth?.partsAdmin;
   const yearStart = new Date(`${bangkokDay().slice(0, 4)}-01-01T00:00:00+07:00`);
   const [vehicles, ongoing, costs] = await Promise.all([
     prisma.vehicle.findMany({
       orderBy: { plateNumber: "asc" },
-      include: { docs: { select: { kind: true } } },
+      include: { docs: { select: { kind: true } }, card: showCard },
     }),
     prisma.vehicleLog.findMany({ where: { status: "ONGOING" }, select: { vehicleId: true, user: { select: { name: true } } } }),
     prisma.vehicleMaintenance.aggregate({ where: { date: { gte: yearStart } }, _sum: { cost: true }, _count: true }),
@@ -277,6 +311,13 @@ router.get("/fleet", requireAuth, requireAdmin, async (_req, res) => {
       ins: expiry(v.insExpire),
       oil: oilStatus(v),
       docs: Object.fromEntries(Object.keys(VEHICLE_DOC_KINDS).map((k) => [k, v.docs.some((d) => d.kind === k)])),
+      card: showCard
+        ? {
+            fleetCardNo: v.card?.fleetCardNo ?? null,
+            fleetCardLimit: v.card?.fleetCardLimit ?? null,
+            easyPassNo: v.card?.easyPassNo ?? null,
+          }
+        : null,
     })),
     costYear: costs._sum.cost ?? 0,
     logCountYear: costs._count,

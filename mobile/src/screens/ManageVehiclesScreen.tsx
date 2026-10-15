@@ -55,6 +55,8 @@ interface FleetVehicle {
   ins: Expiry;
   oil: { level: Level; every?: number; months?: number; remainKm?: number; dueKm?: number; dueDate?: string | null; daysLeft?: number | null; pct?: number };
   docs: Record<string, boolean>;
+  /** บัตรเติมน้ำมัน/Easy Pass — เซิร์ฟเวอร์ส่งมาเฉพาะแอดมิน (Admin Spare Part ได้ null) */
+  card: { fleetCardNo: string | null; fleetCardLimit: number | null; easyPassNo: string | null } | null;
 }
 interface Fleet {
   vehicles: FleetVehicle[];
@@ -192,6 +194,21 @@ export default function ManageVehiclesScreen() {
                 {v.activeBy ? ` · ใช้งานโดย ${v.activeBy}` : ""}
                 {v.owner ? ` · ผู้รับผิดชอบ ${v.owner}` : ""}
               </Text>
+              {v.card?.fleetCardNo || v.card?.easyPassNo ? (
+                <View style={[fs.row, { flexWrap: "nowrap", alignItems: "flex-start" }]}>
+                  <Ionicons name="card-outline" size={14} color={colors.textMuted} style={{ marginTop: 3 }} />
+                  <Text style={[fs.muted, { flex: 1, minWidth: 0 }]} selectable>
+                    {[
+                      v.card.fleetCardNo
+                        ? `Fleet Card ${v.card.fleetCardNo}${v.card.fleetCardLimit ? ` · วงเงิน ${fmtNum(v.card.fleetCardLimit)} บาท` : ""}`
+                        : null,
+                      v.card.easyPassNo ? `Easy Pass ${v.card.easyPassNo}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                </View>
+              ) : null}
               <View style={fs.chips}>
                 <Tag tone={LEVEL_TONE[v.tax.level]}>{expiryText("ภาษี", v.tax)}</Tag>
                 <Tag tone={LEVEL_TONE[v.act.level]}>{expiryText("พ.ร.บ.", v.act)}</Tag>
@@ -377,7 +394,12 @@ function InfoForm({
     lastOilKm: s(v?.lastOilKm),
     lastOilDate: s(v?.lastOilDate),
     maintNote: s(v?.maintNote),
+    fleetCardNo: s(v?.card?.fleetCardNo),
+    fleetCardLimit: s(v?.card?.fleetCardLimit),
+    easyPassNo: s(v?.card?.easyPassNo),
   }));
+  // รถเดิมที่เซิร์ฟเวอร์ไม่ส่งบัตรมา (Admin Spare Part) — ไม่ขึ้นช่องและไม่ส่งค่าบัตรกลับไปทับ
+  const showCard = !v || v.card !== null;
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (t: string) => setF((p) => ({ ...p, [k]: t }));
 
@@ -387,7 +409,7 @@ function InfoForm({
       const t = f[k].replace(/[,\s]/g, "");
       return t === "" ? null : Number(t);
     };
-    for (const k of ["currentMileage", "oilEveryKm", "oilEveryMonths", "lastOilKm"]) {
+    for (const k of ["currentMileage", "oilEveryKm", "oilEveryMonths", "lastOilKm", "fleetCardLimit"]) {
       const n = num(k);
       if (n !== null && (!Number.isInteger(n) || n < 0)) return showAlert("ตรวจตัวเลข", "ช่องตัวเลขต้องเป็นจำนวนเต็ม");
     }
@@ -413,6 +435,11 @@ function InfoForm({
       oilEveryMonths: num("oilEveryMonths"),
       lastOilKm: num("lastOilKm"),
     };
+    if (showCard) {
+      body.fleetCardNo = text("fleetCardNo");
+      body.fleetCardLimit = num("fleetCardLimit");
+      body.easyPassNo = text("easyPassNo");
+    }
     // รถที่กำลังถูกใช้: สถานะเป็นของการเบิก/คืน ไม่ส่งไปให้เปลี่ยน
     if (f.status !== "IN_USE") body.status = f.status;
     if (num("currentMileage") !== null) body.currentMileage = num("currentMileage");
@@ -489,6 +516,18 @@ function InfoForm({
         <Field label="บริษัทประกัน" value={f.insCompany} onChange={set("insCompany")} />
         <Field label="เลขกรมธรรม์" value={f.insPolicy} onChange={set("insPolicy")} />
       </View>
+
+      {showCard ? (
+        <>
+          <Text style={[fs.section, { marginTop: 8 }]}>บัตรเติมน้ำมัน / Easy Pass</Text>
+          <Text style={fs.muted}>เห็นเฉพาะแอดมิน — ช่างไม่เห็นเลขบัตรในหน้าเบิกรถ</Text>
+          <View style={wrap}>
+            <Field label="เลข Fleet Card" value={f.fleetCardNo} onChange={set("fleetCardNo")} placeholder="0004 7000 0000 0000" />
+            <Field label="วงเงินต่อรอบ (บาท)" value={f.fleetCardLimit} onChange={set("fleetCardLimit")} numeric />
+            <Field label="เลขบัตร Easy Pass" value={f.easyPassNo} onChange={set("easyPassNo")} />
+          </View>
+        </>
+      ) : null}
 
       <Text style={[fs.section, { marginTop: 8 }]}>รอบน้ำมันเครื่อง</Text>
       <Text style={fs.muted}>

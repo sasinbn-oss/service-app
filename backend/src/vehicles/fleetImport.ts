@@ -5,8 +5,8 @@
  * และคอลัมน์ไม่ตรงกันทุกตอน (ตอน ORIX ไม่มีหัวคอลัมน์วงเงินบัตร) จึงหาคอลัมน์จากชื่อหัวตารางของแต่ละตอน
  * ชีต "Easy pass" เอามาเติมเลขบัตร Easy Pass ให้รถคันเดียวกัน (จับคู่ด้วยทะเบียน)
  *
- * เลขบัตรเติมน้ำมัน/Easy Pass เก็บแค่ 4 ตัวท้าย — พอให้รู้ว่าบัตรใบไหนอยู่กับรถคันไหน
- * เลขเต็มคือของที่เอาไปใช้จ่ายได้ ไม่ควรอยู่ในระบบที่ช่างทุกคนเปิดดูได้
+ * เลขบัตรเติมน้ำมัน (Fleet Card) / Easy Pass เก็บเต็มเลขในตาราง VehicleCard ซึ่งเห็นเฉพาะแอดมิน
+ * (เจ้าของงานขอ ต.ค. 69) — ไม่ใส่ในหมายเหตุของรถ เพราะหมายเหตุไปถึงช่างทุกคนในหน้าเบิกรถ
  *
  * รถส่วนตัวของหัวหน้าภาคไม่นำเข้า — ไม่ใช่รถที่ช่างเบิกไปใช้ได้ ขึ้นในหน้าตัวอย่างว่าข้ามพร้อมเหตุผล
  */
@@ -19,6 +19,10 @@ export interface FleetRow {
   owner: string | null;
   insCompany: string | null;
   note: string | null;
+  /** ลง VehicleCard — เห็นเฉพาะแอดมิน */
+  fleetCardNo: string | null;
+  fleetCardLimit: number | null;
+  easyPassNo: string | null;
 }
 
 export interface FleetSkip {
@@ -50,9 +54,14 @@ function brandName(raw: string): string | null {
   return BRAND_NAMES.find(([re]) => re.test(t))?.[1] ?? t;
 }
 
-const lastDigits = (raw: string) => {
+/** เลขบัตรเติมน้ำมันเต็มใบ จัดกลุ่มละ 4 ตัวแบบที่พิมพ์บนบัตร — ช่องที่ไม่ใช่เลขบัตรจริง (เช่น "xxx2587 / 893") ได้ null */
+const fleetCard = (raw: string) => {
   const d = raw.replace(/\D/g, "");
-  return d.length >= 4 ? d.slice(-4) : null;
+  return d.length >= 12 && /^[\d\s-]+$/.test(raw.trim()) ? d.replace(/(\d{4})(?=\d)/g, "$1 ") : null;
+};
+const digits = (raw: string) => {
+  const d = raw.replace(/\D/g, "");
+  return d.length >= 6 ? d : null;
 };
 const clean = (s: string) => s.replace(/\s+/g, " ").trim();
 
@@ -89,8 +98,8 @@ function easyPassByPlate(sheets: { rows: string[][] }[]) {
         continue;
       }
       if (plateCol < 0 || !cells[plateCol]) continue;
-      const last = lastDigits(cells[cardCol] ?? "");
-      if (last) out.set(normalizePlate(cells[plateCol]).replace(/\s/g, ""), last);
+      const no = digits(cells[cardCol] ?? "");
+      if (no) out.set(normalizePlate(cells[plateCol]).replace(/\s/g, ""), no);
     }
   }
   return out;
@@ -170,12 +179,8 @@ export async function parseFleetWorkbook(buf: Buffer): Promise<{ rows: FleetRow[
 
       const team = clean(at("team"));
       const nick = clean(at("nick"));
-      const card = lastDigits(at("card"));
       const limit = Number(at("limit").replace(/[,\s]/g, ""));
-      const pass = easyPass.get(key);
       const notes = [
-        card ? `บัตรเติมน้ำมัน ลงท้าย ${card}${limit > 0 ? ` · วงเงิน ${limit.toLocaleString("en-US")} บาท` : ""}` : null,
-        pass ? `Easy Pass ลงท้าย ${pass}` : null,
         at("check") ? `เช็ครถที่: ${clean(at("check"))}` : null,
         ...extra.map((x) => `หมายเหตุ: ${x}`),
       ].filter(Boolean);
@@ -187,6 +192,9 @@ export async function parseFleetWorkbook(buf: Buffer): Promise<{ rows: FleetRow[
         owner: [team, `${name}${nick ? ` (${nick})` : ""}`].filter(Boolean).join(" · "),
         insCompany: clean(at("ins")) || null,
         note: notes.length ? notes.join("\n") : null,
+        fleetCardNo: fleetCard(at("card")),
+        fleetCardLimit: Number.isFinite(limit) && limit > 0 ? Math.round(limit) : null,
+        easyPassNo: easyPass.get(key) ?? null,
       });
     }
   }
