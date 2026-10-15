@@ -235,9 +235,10 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   INSPECT_CONFIRM: { label: "นัดลูกค้า (ตรวจหน้างาน)", icon: "call-outline" },
   INSPECTING: { label: "บันทึกผลตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
-  PARTS_REQUESTED: { label: "เช็คอะไหล่ในคลัง", icon: "arrow-forward-circle" },
+  // หลังรับเงิน (หรือในประกัน) — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน
+  PARTS_REQUESTED: { label: "เบิกอะไหล่ส่งหน้างาน", icon: "arrow-forward-circle" },
   // ก่อนเสนอราคา — เช็คว่ามีอะไหล่ไหม มีครบไปเสนอราคา หมดรอของเข้า
-  PARTS_SOURCING: { label: "เช็คอะไหล่ก่อนเสนอราคา", icon: "cube-outline" },
+  PARTS_SOURCING: { label: "เช็คอะไหล่ (มี / หมด)", icon: "cube-outline" },
   AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
   AWAITING_PAYMENT: { label: "ลูกค้าจ่ายเงินแล้ว", icon: "cash-outline" },
   // หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
@@ -279,6 +280,18 @@ function recoveredFrom(o: WorkOrder): string | null {
   if (!done) return null;
   const prior = o.logs.filter((l) => l.id < done.id).sort((a, b) => b.id - a.id)[0];
   return prior?.status ?? "NEW";
+}
+
+/**
+ * ใบที่ช่างเพิ่งส่งกลับ — ขั้นล่าสุดที่ขยับคือ "ช่างส่งกลับ" และยังอยู่ที่ขั้นแรก
+ * แนบรูป/แก้ข้อความหลังจากนั้นไม่นับ เพราะไม่ได้ทำให้ใบงานเดินไปไหน
+ */
+function sentBackLog(o: WorkOrder): LogEntry | null {
+  if (o.status !== "NEW") return null;
+  const last = [...o.logs]
+    .filter((l) => !["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED"].includes(l.action))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return last?.action === "PARTS_ROLLBACK" ? last : null;
 }
 
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
@@ -375,6 +388,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
+  const [sendBackReasons, setSendBackReasons] = useState<Option[]>([]);
+  const [priorities, setPriorities] = useState<Option[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
@@ -412,6 +427,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         api.get<{
           results: Option[];
           workStatuses: Option[];
+          sendBackReasons?: Option[];
+          priorities?: Option[];
           stages: Stage[];
           warehouses: string[];
           technicians: Technician[];
@@ -421,6 +438,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       setOrder(detail.data);
       setResults(options.data.results);
       setWorkStatuses(options.data.workStatuses);
+      setSendBackReasons(options.data.sendBackReasons ?? []);
+      setPriorities(options.data.priorities ?? []);
       setStages(options.data.stages);
       setWarehouses(options.data.warehouses);
       setTechnicians(options.data.technicians);
@@ -626,7 +645,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     const at = shownStages.findIndex((x) => x.value === order.status);
     return shownStages
       .slice(0, Math.max(0, at))
-      .filter((x) => x.value !== "DONE" && x.value !== "CLAIM_REVIEW" && !isSkipped(x.value, order, stages))
+      .filter(
+        (x) =>
+          x.value !== "DONE" &&
+          x.value !== "CLAIM_REVIEW" &&
+          (!isSkipped(x.value, order, stages) ||
+            /**
+             * ใบเก่าที่เข้าเสนอราคาก่อนมีขั้นรอเบิกอะไหล่ — แอดมินเช็คหลังบ้านแล้วพบว่าของหมด
+             * ต้องส่งกลับไปขั้นนั้นได้ ไม่งั้นเสนอราคา/เก็บเงินของที่ไม่มี (เจ้าของงานขอ ต.ค. 69)
+             */
+            (x.value === "PARTS_SOURCING" &&
+              order.needsQuote === true &&
+              (order.status === "AWAITING_QUOTE" || order.status === "AWAITING_PAYMENT")))
+      )
       .reverse();
   })();
   const canStepBack =
@@ -654,6 +685,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    */
   const partsOut = PARTS_OUT_STAGES.includes(order.status) ? order.waitingParts.filter((p) => p.inStock === false) : [];
   const etaDay = order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : null;
+  const sentBack = sentBackLog(order);
   const etaLate = !!etaDay && etaDay < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const urgent = order.priority === "URGENT";
   const done = order.status === "DONE" || order.status === "CANCELLED";
@@ -923,6 +955,27 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ) : null}
 
         {/*
+          ช่างส่งกลับ — หัวหน้าภาคต้องเห็นก่อนอย่างอื่นว่าทำไมใบนี้กลับมา ใครส่ง เมื่อไร
+          ข้อมูลเดิมอยู่ครบในการ์ดข้างล่าง แก้ได้ที่ปุ่ม "แก้ไข" แล้วส่งตรวจหรือเดินต่อจากปุ่มขั้นนี้
+        */}
+        {sentBack ? (
+          <View style={styles.sentBack} accessibilityLabel="กล่องช่างส่งกลับ">
+            <Ionicons name="arrow-undo" size={18} color={colors.warningInk} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.sentBackTitle}>ช่างส่งกลับ — ปิดงานไม่ได้</Text>
+              <Text style={styles.sentBackText}>{sentBack.note ?? "—"}</Text>
+              <Text style={styles.sentBackMeta}>
+                {sentBack.byName ?? "—"} · {formatDateTime(sentBack.createdAt)}
+                {order.assignedTeam ? ` · ทีมเดิม ${order.assignedTeam}` : ""}
+                {order.waitingParts.some((p) => p.inStock === true && p.requisitionNo)
+                  ? " · อะไหล่ที่เบิกแล้วยังอยู่ ไม่ต้องเช็คซ้ำ"
+                  : ""}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/*
           อะไหล่หมด — ทุกคนเห็นว่ารอตัวไหน ถึงเมื่อไร ใครเช็ค (ไม่ต้องเปิดฟอร์มดู)
           ปุ่มเลื่อนวันอยู่ในกล่องนี้ ไม่ได้อยู่กับปุ่มขั้นตอน เพราะใบรออะไหล่ที่แยกออกมา
           เป็นคิวของหัวหน้าภาค แต่คนที่รู้ว่าของจะเข้าเมื่อไรคือแอดมินที่ตามของ
@@ -1027,7 +1080,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 >
                   <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
                   <Text style={styles.rollbackText}>
-                    จบงานไม่ได้ ส่งกลับให้หัวหน้าภาค — เลือกอะไหล่ที่ต้องเบิกเพิ่มได้
+                    ปิดงานไม่ได้ — ส่งกลับหัวหน้าภาค (บอกเหตุ แนบรูป ขอเบิกอะไหล่เพิ่มได้)
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -1434,6 +1487,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       <RollbackModal
         visible={rollbackOpen}
         order={order}
+        reasons={sendBackReasons}
         onCancel={() => setRollbackOpen(false)}
         onDone={async () => {
           setRollbackOpen(false);
@@ -1496,6 +1550,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         visible={editingNote}
         order={order}
         workStatuses={workStatuses}
+        priorities={priorities}
         onCancel={() => setEditingNote(false)}
         onDone={async () => {
           setEditingNote(false);
@@ -1607,14 +1662,17 @@ function StepInfo({
 function RollbackModal({
   visible,
   order,
+  reasons,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   order: WorkOrder;
+  reasons: Option[];
   onCancel: () => void;
   onDone: () => void;
 }) {
+  const [reasonCode, setReasonCode] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [parts, setParts] = useState<PickedPart[]>([]);
   const [files, setFiles] = useState<PickedAttachment[]>([]);
@@ -1624,6 +1682,7 @@ function RollbackModal({
 
   useEffect(() => {
     if (!visible) return;
+    setReasonCode(null);
     setReason("");
     setParts([]);
     setFiles([]);
@@ -1660,6 +1719,7 @@ function RollbackModal({
       }
       setBusy("กำลังส่งกลับ");
       await api.post(`/work-orders/${order.id}/reassess-parts`, {
+        reasonCode,
         reason: reason.trim(),
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
       });
@@ -1677,16 +1737,16 @@ function RollbackModal({
       visible={visible}
       onClose={onCancel}
       busy={saving}
-      title={<>จบงานไม่ได้ · {order.code}</>}
+      title={<>ปิดงานไม่ได้ · {order.code}</>}
       footer={
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.modalSave, (saving || !reason.trim()) && styles.modalSaveOff]}
+            style={[styles.modalSave, (saving || !reason.trim() || !reasonCode) && styles.modalSaveOff]}
             onPress={submit}
-            disabled={saving || !reason.trim()}
+            disabled={saving || !reason.trim() || !reasonCode}
             activeOpacity={0.8}
           >
             {saving ? (
@@ -1702,9 +1762,25 @@ function RollbackModal({
       }
     >
       <Text style={styles.linkedText}>
-        ใบงานจะกลับไปขั้นแรกให้หัวหน้าภาคดู แล้วส่งต่อให้แอดมินเช็คคลัง
-        วันนัดและผลเช็คคลังรอบก่อนจะถูกล้าง แต่ประวัติทั้งหมดยังอยู่ในใบเดิม
+        ใบงานกลับไปที่หัวหน้าภาค ข้อมูลเดิมอยู่ครบ (อะไหล่ที่เบิกแล้ว ทีม รูป ประวัติ) หัวหน้าภาคแก้ได้ทั้งหมด
+        แล้วส่งช่างเข้าตรวจหรือเดินต่อ — วันนัดรอบนี้ถูกล้าง
       </Text>
+
+      {/* หมวดก่อนข้อความ — หัวหน้าภาคเห็นทันทีว่าต้องแก้เรื่องไหน (เจ้าของงานขอ ต.ค. 69: "ด้วยเหตุอะไรก็ตาม") */}
+      <Text style={styles.modalLabel}>ปิดงานไม่ได้เพราะ</Text>
+      <View style={styles.options}>
+        {reasons.map((r) => (
+          <TouchableOpacity
+            key={r.value}
+            style={[styles.option, reasonCode === r.value && styles.optionOn]}
+            onPress={() => setReasonCode(r.value)}
+            activeOpacity={0.7}
+            accessibilityLabel={`เหตุ ${r.label}`}
+          >
+            <Text style={[styles.optionText, reasonCode === r.value && styles.optionTextOn]}>{r.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       <Text style={styles.modalLabel}>เจออะไรที่หน้างาน</Text>
       <TextInput
@@ -2115,7 +2191,10 @@ function StageModal({
     if (!visible) return;
     setNeedsParts(order.needsParts);
     // ใบที่เปิดมาเป็นงานตรวจสอบหน้างานและยังไม่เคยตรวจ — ตัวเลือกที่ถูกเกือบทุกครั้ง
-    setInspectFirst(order.status === "NEW" && order.jobType === "INSPECT" && !order.inspectedAt);
+    // ช่างส่งกลับ — ตัวเลือกแรกคือส่งช่างเข้าตรวจ (เจ้าของงานขอ ต.ค. 69) ทีมเดิมเป็นค่าตั้งต้นอยู่แล้ว (ข้างล่าง)
+    setInspectFirst(
+      order.status === "NEW" && ((order.jobType === "INSPECT" && !order.inspectedAt) || sentBackLog(order) !== null)
+    );
     setFinding("");
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
     setConfirmChoice(order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "MOVE" : null);
@@ -2207,7 +2286,7 @@ function StageModal({
         });
       } else if (order.status === "PARTS_SOURCING") {
         await api.post(`/work-orders/${order.id}/parts-sourcing`, {
-          results: order.waitingParts.map((p) => ({ sparePartId: p.sparePartId, inStock: checks[p.sparePartId]?.inStock === true })),
+          results: thisRound.map((p) => ({ sparePartId: p.sparePartId, inStock: checks[p.sparePartId]?.inStock === true })),
           expectedAt: sourcingOut.length && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
@@ -2275,11 +2354,12 @@ function StageModal({
   const quoteBlocked =
     order.status === "AWAITING_QUOTE" &&
     (skipQuote ? !note.trim() : !doc && !order.hasQuote);
-  // ขั้นรอเบิกอะไหล่ต้องตอบครบทุกตัว — ตอบบางตัวแล้วไปเสนอราคา คือเสนอราคาของที่ยังไม่รู้ว่ามี
-  const sourcingOut = order.status === "PARTS_SOURCING" ? order.waitingParts.filter((p) => checks[p.sparePartId]?.inStock === false) : [];
+  // ขั้นรอเบิกอะไหล่ต้องตอบครบทุกตัวที่ยังไม่ได้เบิก — ตอบบางตัวแล้วไปเสนอราคา คือเสนอราคาของที่ยังไม่รู้ว่ามี
+  // (ตัวที่เบิกไปแล้วรอบก่อน ลูกค้าจ่ายไปแล้ว ไม่ต้องเช็คและเสนอราคาซ้ำ)
+  const sourcingOut = order.status === "PARTS_SOURCING" ? thisRound.filter((p) => checks[p.sparePartId]?.inStock === false) : [];
   const sourcingBlocked =
     order.status === "PARTS_SOURCING" &&
-    (order.waitingParts.some((p) => typeof checks[p.sparePartId]?.inStock !== "boolean") ||
+    (thisRound.some((p) => typeof checks[p.sparePartId]?.inStock !== "boolean") ||
       (expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt)));
   const paymentBlocked =
     order.status === "AWAITING_PAYMENT" && !doc && !order.hasReceipt;
@@ -2345,8 +2425,8 @@ function StageModal({
               <Text style={styles.modalSaveText}>
                 {order.status === "PARTS_SOURCING"
                   ? sourcingOut.length
-                    ? "รอของเข้า"
-                    : "อะไหล่ครบ — ไปเสนอราคา"
+                    ? "อะไหล่หมด — รอของเข้า"
+                    : "มีอะไหล่ — ไปเสนอราคา"
                   : "ยืนยัน"}
               </Text>
             )}
@@ -2435,10 +2515,10 @@ function StageModal({
             {order.status === "PARTS_SOURCING" ? (
               <View style={styles.checkList}>
                 <Text style={styles.linkedText}>
-                  งานนี้ต้องเสนอราคาลูกค้า — เช็คก่อนว่ามีอะไหล่ไหม มีครบไปเสนอราคาได้เลย หมดตัวไหนรอของเข้าที่ขั้นนี้
+                  งานนี้ต้องเสนอราคาลูกค้า — เช็คอะไหล่ตามที่หัวหน้าภาคระบุว่ามีหรือหมด มีครบกด “มีอะไหล่” ไปเสนอราคา หมดตัวไหนรอของเข้าที่ขั้นนี้
                   (ยังไม่ต้องใส่คลังหรือเลขใบเบิก — เบิกจริงหลังลูกค้าจ่ายเงิน)
                 </Text>
-                {order.waitingParts.map((part) => {
+                {thisRound.map((part) => {
                   const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
                   const set = (inStock: boolean) =>
                     setChecks((v) => ({ ...v, [part.sparePartId]: { inStock, warehouse: c.warehouse } }));
@@ -2455,7 +2535,7 @@ function StageModal({
                           activeOpacity={0.7}
                           accessibilityLabel={`มีของ ${part.partCode}`}
                         >
-                          <Text style={[styles.optionText, c.inStock === true && styles.optionTextOn]}>มีของ</Text>
+                          <Text style={[styles.optionText, c.inStock === true && styles.optionTextOn]}>มีอะไหล่</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.option, c.inStock === false && styles.optionOut]}
@@ -2480,7 +2560,7 @@ function StageModal({
                 <Text style={styles.linkedText}>
                   {sourcingOut.length
                     ? `หมด ${sourcingOut.length} รายการ — ใบงานรอที่ขั้นนี้ ของมาแล้วกดเช็คอีกรอบแล้วตอบว่ามีครบ`
-                    : order.waitingParts.every((p) => checks[p.sparePartId]?.inStock === true)
+                    : thisRound.every((p) => checks[p.sparePartId]?.inStock === true)
                       ? "มีครบทุกตัว — ส่งต่อไปเสนอราคาได้เลย"
                       : "ตอบให้ครบทุกตัวก่อน"}
                 </Text>
@@ -2925,19 +3005,31 @@ function StageModal({
   );
 }
 
+/**
+ * แก้ไขรายละเอียดใบงาน — เรื่อง ความเร่งด่วน ผู้ติดต่อ อาการ สถานะ
+ *
+ * เดิมแก้ได้แค่อาการกับสถานะ ใบที่ช่างส่งกลับมาหัวหน้าภาคต้องแก้ได้ทุกอย่างก่อนส่งช่างรอบใหม่
+ * (เจ้าของงานขอ ต.ค. 69) — ผู้ติดต่อที่ผิดหรือเรื่องที่เขียนไว้ไม่ตรงคือสาเหตุให้ไปแล้วเสียเที่ยวซ้ำ
+ */
 function NoteModal({
   visible,
   order,
   workStatuses,
+  priorities,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   order: WorkOrder;
   workStatuses: Option[];
+  priorities: Option[];
   onCancel: () => void;
   onDone: () => void;
 }) {
+  const [title, setTitle] = useState(order.title);
+  const [priority, setPriority] = useState(order.priority);
+  const [contactName, setContactName] = useState(order.contactName ?? "");
+  const [contactPhone, setContactPhone] = useState(order.contactPhone ?? "");
   const [symptom, setSymptom] = useState(order.symptom ?? "");
   const [workStatus, setWorkStatus] = useState<string | null>(order.workStatus);
   const [parts, setParts] = useState<PickedPart[]>(order.waitingParts);
@@ -2948,6 +3040,10 @@ function NoteModal({
   // เปิดฟอร์มใหม่ทุกครั้งให้เห็นค่าล่าสุด ไม่ใช่ค่าที่ค้างจากการเปิดครั้งก่อน
   useEffect(() => {
     if (!visible) return;
+    setTitle(order.title);
+    setPriority(order.priority);
+    setContactName(order.contactName ?? "");
+    setContactPhone(order.contactPhone ?? "");
     setSymptom(order.symptom ?? "");
     setWorkStatus(order.workStatus);
     setParts(order.waitingParts);
@@ -2960,6 +3056,10 @@ function NoteModal({
     setError(null);
     try {
       await api.patch(`/work-orders/${order.id}`, {
+        title: title.trim() || order.title,
+        priority,
+        contactName: contactName.trim() || null,
+        contactPhone: contactPhone.trim() || null,
         symptom: symptom.trim() || null,
         workStatus,
         waitingParts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
@@ -2978,7 +3078,7 @@ function NoteModal({
       visible={visible}
       onClose={onCancel}
       busy={saving}
-      title={<>อาการ / สถานะ · {order.code}</>}
+      title={<>แก้ไขรายละเอียด · {order.code}</>}
       footer={
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
@@ -2999,6 +3099,52 @@ function NoteModal({
         </View>
       }
     >
+      <Text style={styles.modalLabel}>เรื่อง</Text>
+      <TextInput
+        style={[styles.modalInput, styles.modalInputLine]}
+        value={title}
+        onChangeText={setTitle}
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="เรื่อง"
+      />
+
+      {priorities.length ? (
+        <>
+          <Text style={styles.modalLabel}>ความเร่งด่วน</Text>
+          <View style={styles.options}>
+            {priorities.map((p) => (
+              <TouchableOpacity
+                key={p.value}
+                style={[styles.option, priority === p.value && styles.optionOn]}
+                onPress={() => setPriority(p.value)}
+                activeOpacity={0.7}
+                accessibilityLabel={`ความเร่งด่วน ${p.label}`}
+              >
+                <Text style={[styles.optionText, priority === p.value && styles.optionTextOn]}>{p.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      <Text style={styles.modalLabel}>ผู้ติดต่อที่สาขา</Text>
+      <TextInput
+        style={[styles.modalInput, styles.modalInputLine]}
+        value={contactName}
+        onChangeText={setContactName}
+        placeholder="ชื่อ"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ชื่อผู้ติดต่อ"
+      />
+      <TextInput
+        style={[styles.modalInput, styles.modalInputLine, { marginTop: spacing.xs }]}
+        value={contactPhone}
+        onChangeText={setContactPhone}
+        placeholder="เบอร์โทร"
+        placeholderTextColor={colors.textFaint}
+        keyboardType="phone-pad"
+        accessibilityLabel="เบอร์ผู้ติดต่อ"
+      />
 
       <Text style={styles.modalLabel}>อาการที่พบ</Text>
       <TextInput
@@ -4470,6 +4616,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dangerSoft,
     flexWrap: "wrap",
   },
+  sentBack: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderLeftWidth: 5,
+    borderColor: colors.warning,
+    backgroundColor: colors.warningSoft,
+  },
+  sentBackTitle: { fontSize: 13.5, lineHeight: 21, fontWeight: "800", color: colors.warningInk },
+  sentBackText: { fontSize: 13, lineHeight: 21, color: colors.text },
+  sentBackMeta: { fontSize: 12, lineHeight: 19, color: colors.textMuted },
   outIcon: { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.danger, alignItems: "center", justifyContent: "center" },
   outIconText: { color: "#fff", fontWeight: "800", fontSize: 14, lineHeight: 20 },
   outTitle: { fontSize: 13.5, lineHeight: 21, fontWeight: "800", color: colors.dangerInk },

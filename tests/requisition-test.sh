@@ -37,12 +37,12 @@ echo
 echo "═══ ของที่หมดไม่ต้องมีเลขใบเบิก"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":false}]}")
-echo "$R" | J 'd.statusLabel' | grep -q "เช็คอะไหล่" && pass "เช็คผ่านโดยตัวที่หมดไม่ต้องมีเลขใบเบิก" || fail "เช็คไม่ผ่าน: $R"
+echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "เช็คผ่านโดยตัวที่หมดไม่ต้องมีเลขใบเบิก" || fail "เช็คไม่ผ่าน: $R"
 echo "$R" | J 'd.waitingParts.map(p=>p.partCode+" คลัง="+(p.warehouse||"-")+" ใบเบิก="+(p.requisitionNo||"-")).join(" · ")'
 echo "$R" | J 'd.waitingParts.find(p=>p.inStock===false).requisitionNo===null?"ok":"bad"' | grep -q ok \
   && pass "ตัวที่หมดไม่มีเลขใบเบิกค้างไว้" || fail "ตัวที่หมดมีเลขใบเบิกติดมา"
 # ของหมดทำให้ใบงานค้างอยู่ขั้นนี้ ต้องรอของเข้าแล้วเบิกอีกรอบถึงจะเดินต่อ
-echo "$R" | J 'd.statusLabel' | grep -q "เช็คอะไหล่" && pass "ของหมด ใบงานยังค้างอยู่ที่แอดมิน" || fail "ส่งต่อทั้งที่ของไม่ครบ"
+echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ของหมด ใบงานยังค้างอยู่ที่แอดมิน" || fail "ส่งต่อทั้งที่ของไม่ครบ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-2569-0099\"}]}")
 echo "$R" | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
