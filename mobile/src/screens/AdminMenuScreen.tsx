@@ -134,6 +134,21 @@ export default function AdminMenuScreen({ navigation }: Props) {
       iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("ManageBranches"),
     },
+    // ไฟล์สำรองคือข้อมูลทั้งบริษัทในก้อนเดียว — เซิร์ฟเวอร์ให้เฉพาะ Super Admin
+    ...(user?.superAdmin
+      ? [
+          {
+            key: "Backup",
+            label: "สำรองข้อมูล",
+            labelEn: "Backup",
+            description: "สำรองอัตโนมัติทุกวัน 17:00 · ดาวน์โหลด Excel และไฟล์กู้คืน",
+            icon: "cloud-download" as const,
+            tint: colors.primarySoft,
+            iconColor: colors.primaryInk,
+            onPress: () => navigation.navigate("Backup"),
+          },
+        ]
+      : []),
   ];
 
   return (

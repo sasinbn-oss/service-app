@@ -92,6 +92,8 @@ interface Item {
   badge?: boolean;
   /** เห็นเฉพาะบทบาทเหล่านี้ — ไม่ใส่ = ทุกคน */
   roles?: string[];
+  /** เห็นเฉพาะ Super Admin */
+  superAdmin?: boolean;
 }
 
 interface Group {
@@ -179,6 +181,7 @@ const GROUPS: Group[] = [
       { key: "users", label: "สิทธิ์ผู้ใช้", labelEn: "Users & Access", icon: "people-outline", tab: "AdminTab", screen: "ManageUsers" },
       { key: "teams", label: "ทีมช่าง", labelEn: "Teams", icon: "people-circle-outline", tab: "AdminTab", screen: "ManageTeams" },
       { key: "branches", label: "จัดการข้อมูลสาขา", labelEn: "Branches", icon: "business-outline", tab: "AdminTab", screen: "ManageBranches" },
+      { key: "backup", label: "สำรองข้อมูล", labelEn: "Backup", icon: "cloud-download-outline", tab: "AdminTab", screen: "Backup", superAdmin: true },
     ],
   },
 ];
@@ -246,6 +249,7 @@ function MenuContent({
               {g.items
                 .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
                 .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
+                .filter((it) => !it.superAdmin || user?.superAdmin)
                 .map((it) => {
                 const on = active === it.key;
                 const n = it.badge ? inbox : 0;

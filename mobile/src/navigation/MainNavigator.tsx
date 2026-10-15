@@ -39,6 +39,8 @@ import ManageFlowsScreen from "../screens/ManageFlowsScreen";
 import ManageSparePartsScreen from "../screens/ManageSparePartsScreen";
 import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
+import BackupScreen from "../screens/BackupScreen";
+import { useDailyBackupDownload } from "../utils/backup";
 import ManageTeamsScreen from "../screens/ManageTeamsScreen";
 import FleetDashboardScreen from "../screens/FleetDashboardScreen";
 import VehicleLogAdminScreen from "../screens/VehicleLogAdminScreen";
@@ -76,6 +78,7 @@ const OWN_TITLE = new Set([
   "VehicleHistory",
   "ManageUsers",
   "ManageTeams",
+  "Backup",
   "ManageSpareParts",
   "AdminMenu",
   "HistoryMenu",
@@ -539,6 +542,7 @@ function AdminStackNavigator() {
         component={ManageTeamsScreen}
         options={{ title: "ทีมช่าง" }}
       />
+      <AdminStack.Screen name="Backup" component={BackupScreen} options={{ title: "สำรองข้อมูล" }} />
     </AdminStack.Navigator>
   );
 }
@@ -564,6 +568,7 @@ export default function MainNavigator() {
   // จอคอม: เมนูค้างไว้ด้านซ้ายและซ่อนแถบล่าง ตามต้นแบบ — เมนูข้างพาไปได้ทุกแท็บอยู่แล้ว
   // แถบล่างบนจอกว้างทำให้ต้องเลื่อนสายตาไปล่างสุดของจอเพื่อเปลี่ยนหน้า
   const { docked } = useDocked();
+  useDailyBackupDownload(user);
 
   return (
     <View style={{ flex: 1 }}>

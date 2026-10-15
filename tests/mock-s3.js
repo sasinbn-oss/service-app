@@ -34,7 +34,9 @@ const server = http.createServer((req, res) => {
     } else if (req.method === "GET") {
       const data = objects.get(key);
       if (!data) return res.writeHead(404).end();
-      res.writeHead(200).end(data);
+      // ลิงก์ presigned ส่งชื่อไฟล์มาทาง query แบบเดียวกับ S3 จริง — ไม่ตอบกลับ เบราว์เซอร์จะเปิดไฟล์แทนการดาวน์โหลด
+      const cd = new URLSearchParams(query).get("response-content-disposition");
+      res.writeHead(200, cd ? { "Content-Disposition": cd } : {}).end(data);
     } else {
       res.writeHead(400).end();
     }
