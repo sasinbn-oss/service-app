@@ -7,7 +7,7 @@
  * กดที่รถเพื่อเปิดรายละเอียด 3 แท็บ: ข้อมูล · เอกสาร (รูปเล่ม/กรมธรรม์) · ซ่อมบำรุง
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { Image, Platform, ScrollView, Text, TextInput, View } from "react-native";
+import { Image, Platform, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -16,12 +16,13 @@ import AppModal from "../components/AppModal";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import DateField, { thaiDate } from "../components/DateField";
-import { fs, Kpi, Notice, Tag, Tone, vehicleTone } from "../components/FleetUI";
+import { fs, Notice, Tag } from "../components/FleetUI";
 import { useCachedState } from "../utils/pageCache";
 import { showAlert } from "../utils/alert";
 import { pickImageAttachment, PickedAttachment } from "../utils/attachments";
 import { fmtNum, openSigned, postImageForm } from "../utils/vehicles";
-import { colors, headingFont, radius } from "../theme";
+import { colors, headingFont, radius, shadow } from "../theme";
+import { useDocked } from "../components/SideMenu";
 import VehicleImportModal from "../components/VehicleImportModal";
 import { canPickFile } from "../utils/filePicker";
 
@@ -68,28 +69,96 @@ interface Fleet {
   docKinds: { value: string; label: string }[];
 }
 
-const LEVEL_TONE: Record<Level, Tone> = { none: "mute", ok: "ok", soon: "warn", over: "bad" };
+/** ป้ายสถานะในตาราง — คำเต็มแบบในตัวอย่างของเจ้าของงาน ("ว่างพร้อมเบิก" บอกมากกว่า "ว่าง") */
+const STATUS_PILL: Record<string, { label: string; tone: "ok" | "info" | "warn" | "mute" }> = {
+  AVAILABLE: { label: "ว่างพร้อมเบิก", tone: "ok" },
+  IN_USE: { label: "กำลังใช้งาน", tone: "info" },
+  MAINTENANCE: { label: "ซ่อมบำรุง", tone: "warn" },
+  INACTIVE: { label: "เลิกใช้งาน", tone: "mute" },
+};
+const PILL_TONE = {
+  ok: [colors.successSoft, colors.successInk, colors.success],
+  info: [colors.primarySoft, colors.primaryInk, colors.primary],
+  warn: [colors.warningSoft, colors.warningInk, colors.warning],
+  bad: [colors.dangerSoft, colors.dangerInk, colors.danger],
+  mute: [colors.tile, colors.textMuted, colors.textFaint],
+} as const;
 
-function expiryText(label: string, e: Expiry) {
-  if (!e.date) return `${label} —`;
+function DotPill({ tone, children }: { tone: keyof typeof PILL_TONE; children: React.ReactNode }) {
+  const t = PILL_TONE[tone];
+  return (
+    <View style={[vs.pill, { backgroundColor: t[0] }]}>
+      <View style={[vs.dot, { backgroundColor: t[2] }]} />
+      <Text style={[vs.pillText, { color: t[1] }]}>{children}</Text>
+    </View>
+  );
+}
+
+/** ชิปวันหมดอายุ — ไม่มีวันที่ = "ไม่ระบุ" สีเทา ให้เห็นว่ายังไม่ได้กรอก ไม่ใช่ว่าไม่ต้องต่อ */
+function ExpiryChip({ icon, label, e }: { icon: keyof typeof Ionicons.glyphMap; label: string; e: Expiry }) {
+  const tone = e.level === "over" ? PILL_TONE.bad : e.level === "soon" ? PILL_TONE.warn : e.level === "ok" ? PILL_TONE.ok : PILL_TONE.mute;
   const left = e.daysLeft ?? 0;
-  return `${label} ${thaiDate(e.date)}${left < 0 ? ` (หมดแล้ว ${-left} วัน)` : e.level === "soon" ? ` (อีก ${left} วัน)` : ""}`;
+  const text = !e.date
+    ? `${label} ไม่ระบุ`
+    : `${label} ${thaiDate(e.date)}${left < 0 ? ` · หมดแล้ว ${-left} วัน` : e.level === "soon" ? ` · อีก ${left} วัน` : ""}`;
+  return (
+    <View style={[vs.chip, { backgroundColor: tone[0] }]}>
+      <Ionicons name={icon} size={13} color={tone[1]} />
+      <Text style={[vs.chipText, { color: tone[1] }]}>{text}</Text>
+    </View>
+  );
 }
 
-function oilText(o: FleetVehicle["oil"]) {
-  if (o.level === "none") return "ยังไม่มีบันทึกเปลี่ยนน้ำมัน";
-  const km = o.remainKm ?? 0;
-  const parts = [km < 0 ? `เกินรอบ ${fmtNum(-km)} กม.` : `อีก ${fmtNum(km)} กม.`];
-  if (o.daysLeft !== null && o.daysLeft !== undefined) parts.push(o.daysLeft < 0 ? `เกินกำหนด ${-o.daysLeft} วัน` : `หรือ ${thaiDate(o.dueDate ?? null)}`);
-  return parts.join(" · ");
+function KpiCard({
+  label,
+  value,
+  unit,
+  hint,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  hint?: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  tone: "ok" | "info" | "warn" | "bad";
+}) {
+  const t = PILL_TONE[tone];
+  return (
+    <View style={vs.kpi}>
+      <View style={vs.kpiTop}>
+        <Text style={vs.kpiLabel}>{label}</Text>
+        <View style={[vs.kpiIcon, { backgroundColor: t[0] }]}>
+          <Ionicons name={icon} size={18} color={t[1]} />
+        </View>
+      </View>
+      <Text style={[vs.kpiValue, headingFont]}>
+        {value}
+        {unit ? <Text style={vs.kpiUnit}> {unit}</Text> : null}
+      </Text>
+      {hint ? <Text style={fs.muted}>{hint}</Text> : null}
+    </View>
+  );
 }
+
+const urgent = (v: FleetVehicle) => v.oil.level === "over" || [v.tax, v.act, v.ins].some((e) => e.level === "over") || !!v.maintNote;
+const dueSoon = (v: FleetVehicle) => v.oil.level === "soon" || [v.tax, v.act, v.ins].some((e) => e.level === "soon");
 
 export default function ManageVehiclesScreen() {
   const [data, setData, cached] = useCachedState<Fleet | null>("ManageVehicles:fleet", null);
   const [loading, setLoading] = useState(!cached);
   const [showInactive, setShowInactive] = useState(false);
   const [openId, setOpenId] = useState<number | "new" | null>(null);
+  const [openTab, setOpenTab] = useState<"info" | "maint">("info");
+  const [picking, setPicking] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<"all" | "urgent" | "soon">("all");
+  const { width } = useWindowDimensions();
+  const { docked, collapsed } = useDocked();
+  // ตารางต้องการราว 1,050 px หลังหักเมนูข้าง — แคบกว่านั้นคอลัมน์บีบจนอ่านไม่ออก ใช้การ์ดแทน
+  const table = width - (docked ? (collapsed ? 80 : 280) : 0) >= 1050;
 
   const load = useCallback(async () => {
     try {
@@ -116,22 +185,146 @@ export default function ManageVehiclesScreen() {
     );
   }
 
+  const open = (id: number | "new", tab: "info" | "maint" = "info") => {
+    setOpenTab(tab);
+    setOpenId(id);
+  };
   const active = data.vehicles.filter((v) => v.status !== "INACTIVE");
   const inactive = data.vehicles.length - active.length;
-  const list = showInactive ? data.vehicles : active;
+  const base = showInactive ? data.vehicles : active;
+  const term = q.trim().toLowerCase();
+  const list = base.filter(
+    (v) =>
+      (filter === "all" || (filter === "urgent" ? urgent(v) : dueSoon(v))) &&
+      (!term ||
+        [v.plateNumber, v.brand, v.model, v.type, v.owner, v.activeBy].some((x) => x && x.toLowerCase().includes(term)) ||
+        v.plateNumber.replace(/[\s-]/g, "").toLowerCase().includes(term.replace(/[\s-]/g, "")))
+  );
   const oilOver = active.filter((v) => v.oil.level === "over").length;
   const oilSoon = active.filter((v) => v.oil.level === "soon").length;
+  const oilUnset = active.filter((v) => v.oil.level === "none").length;
   const expiring = active.filter((v) => [v.tax, v.act, v.ins].some((e) => e.level === "soon" || e.level === "over")).length;
   const reports = active.filter((v) => v.maintNote);
   const opened = typeof openId === "number" ? data.vehicles.find((v) => v.id === openId) ?? null : null;
 
+  // จัดกลุ่มตามประเภทรถ (รถบริษัท / รถเช่า ...) — ไม่ระบุประเภทอยู่กลุ่ม "ทั่วไป"
+  const groups = new Map<string, FleetVehicle[]>();
+  for (const v of list) {
+    const k = v.type?.trim() || "ทั่วไป";
+    groups.set(k, [...(groups.get(k) ?? []), v]);
+  }
+
+  const carCell = (v: FleetVehicle) => (
+    <View style={vs.car}>
+      <View style={vs.carIcon}>
+        <Ionicons name="car-outline" size={19} color={colors.primaryInk} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+        <Text style={vs.carPlate}>{v.plateNumber}</Text>
+        <Text style={vs.carModel} numberOfLines={1}>
+          {[v.brand, v.model].filter(Boolean).join(" ") || "—"}
+        </Text>
+        {v.card?.fleetCardNo || v.card?.easyPassNo ? (
+          <Text style={[fs.muted, { fontSize: 11.5 }]} selectable>
+            {[
+              v.card.fleetCardNo
+                ? `Fleet Card ${v.card.fleetCardNo}${v.card.fleetCardLimit ? ` · วงเงิน ${fmtNum(v.card.fleetCardLimit)} บาท` : ""}`
+                : null,
+              v.card.easyPassNo ? `Easy Pass ${v.card.easyPassNo}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+  const statusCell = (v: FleetVehicle) => {
+    const p = STATUS_PILL[v.status] ?? { label: v.statusLabel, tone: "mute" as const };
+    return (
+      <View style={{ gap: 4, alignItems: "flex-start" }}>
+        <DotPill tone={p.tone}>{p.label}</DotPill>
+        {v.activeBy ? <Text style={fs.muted}>โดย {v.activeBy}</Text> : null}
+      </View>
+    );
+  };
+  const expiryCell = (v: FleetVehicle) => (
+    <View style={{ gap: 4, alignItems: "flex-start" }}>
+      <ExpiryChip icon="calendar-outline" label="ภาษี" e={v.tax} />
+      <ExpiryChip icon="shield-checkmark-outline" label="พ.ร.บ." e={v.act} />
+      <ExpiryChip icon="umbrella-outline" label="ประกัน" e={v.ins} />
+    </View>
+  );
+  const oilCell = (v: FleetVehicle) => {
+    if (v.oil.level === "none") {
+      return (
+        <View style={[vs.chip, { backgroundColor: colors.tile }]}>
+          <Ionicons name="water-outline" size={13} color={colors.textMuted} />
+          <Text style={[vs.chipText, { color: colors.textMuted }]}>ยังไม่ได้ตั้งรอบ — กด "รายละเอียด" เพื่อตั้ง</Text>
+        </View>
+      );
+    }
+    const km = v.oil.remainKm ?? 0;
+    const color = v.oil.level === "over" ? colors.dangerInk : v.oil.level === "soon" ? colors.warningInk : colors.successInk;
+    const bar = v.oil.level === "over" ? colors.danger : v.oil.level === "soon" ? colors.warning : colors.success;
+    return (
+      <View style={{ gap: 5 }}>
+        <View style={vs.oilTop}>
+          <Text style={[vs.oilLeft, { color }]}>{km < 0 ? `เกินรอบ ${fmtNum(-km)} กม.` : `อีก ${fmtNum(km)} กม.`}</Text>
+          <Text style={fs.muted}>{Math.round(v.oil.pct ?? 0)}%</Text>
+        </View>
+        <View style={vs.track}>
+          <View style={[vs.fill, { width: `${Math.min(100, v.oil.pct ?? 0)}%`, backgroundColor: bar }]} />
+        </View>
+        <Text style={fs.muted}>
+          ไมล์ {fmtNum(v.currentMileage)} / กำหนด {fmtNum(v.oil.dueKm ?? null)}
+          {v.oil.daysLeft !== null && v.oil.daysLeft !== undefined
+            ? v.oil.daysLeft < 0
+              ? ` · เกินกำหนด ${-v.oil.daysLeft} วัน`
+              : ` · หรือ ${thaiDate(v.oil.dueDate ?? null)}`
+            : ""}
+        </Text>
+      </View>
+    );
+  };
+  const noteCell = (v: FleetVehicle) =>
+    v.maintNote ? (
+      <TouchableOpacity style={vs.note} onPress={() => open(v.id, "maint")} accessibilityLabel={`บันทึกของ ${v.plateNumber}`}>
+        <Ionicons name="document-text-outline" size={15} color={colors.primaryInk} />
+        <Text style={vs.noteText} numberOfLines={2}>
+          {v.maintNote}
+        </Text>
+      </TouchableOpacity>
+    ) : (
+      <TouchableOpacity style={vs.noteEmpty} onPress={() => open(v.id, "maint")} accessibilityLabel={`เพิ่มบันทึก ${v.plateNumber}`}>
+        <View style={vs.noteDot} />
+        <Text style={vs.noteEmptyText}>ยังไม่มีบันทึก / นัดหมาย</Text>
+      </TouchableOpacity>
+    );
+  const detailBtn = (v: FleetVehicle) => (
+    <TouchableOpacity style={vs.detail} onPress={() => open(v.id)} accessibilityLabel={`เปิดรถ ${v.plateNumber}`}>
+      <Text style={vs.detailText}>รายละเอียด</Text>
+    </TouchableOpacity>
+  );
+
+  const FILTERS = [
+    { key: "all", label: `ทั้งหมด (${base.length})`, dot: null },
+    { key: "urgent", label: "เร่งด่วน", dot: colors.danger },
+    { key: "soon", label: "ใกล้กำหนด", dot: colors.warning },
+  ] as const;
+
   return (
     <>
-      <ScrollView style={fs.container} contentContainerStyle={fs.content}>
+      <ScrollView style={fs.container} contentContainerStyle={[fs.content, { maxWidth: 1400 }]}>
         <View style={fs.row}>
-          <Text style={[fs.title, headingFont]}>ทะเบียน & ซ่อมบำรุง</Text>
-          <Tag tone="mute">{active.length} คัน</Tag>
-          <View style={{ flex: 1 }} />
+          <View style={{ flex: 1, minWidth: 240, gap: 2 }}>
+            <Text style={[fs.title, headingFont]}>ทะเบียน & ซ่อมบำรุง</Text>
+            <Text style={fs.sub}>ติดตามรอบเปลี่ยนน้ำมันเครื่อง ภาษี พ.ร.บ. ประกันภัย และเก็บเอกสารรถไว้ที่เดียว</Text>
+          </View>
+          <TouchableOpacity style={vs.topBtn} onPress={() => setPicking(true)} accessibilityLabel="บันทึกการซ่อม / เปลี่ยนน้ำมัน">
+            <Ionicons name="build-outline" size={16} color={colors.primaryInk} />
+            <Text style={vs.topBtnText}>บันทึกการซ่อม / เปลี่ยนน้ำมัน</Text>
+          </TouchableOpacity>
           {/* นำเข้าจากไฟล์ "รถช่าง Service" — เลือกไฟล์ได้เฉพาะบนเว็บ (แอดมินนั่งโต๊ะ) */}
           {canPickFile ? (
             <TouchableOpacity style={[fs.btn, fs.btnGhost]} onPress={() => setImporting(true)} accessibilityLabel="นำเข้ารถจาก Excel">
@@ -139,27 +332,49 @@ export default function ManageVehiclesScreen() {
               <Text style={fs.btnGhostText}>นำเข้าจาก Excel</Text>
             </TouchableOpacity>
           ) : null}
-          <TouchableOpacity style={fs.btn} onPress={() => setOpenId("new")}>
+          <TouchableOpacity style={fs.btn} onPress={() => open("new")}>
             <Ionicons name="add" size={18} color="#fff" />
             <Text style={fs.btnText}>เพิ่มรถ</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={fs.kpis}>
-          <Kpi label="เกินรอบน้ำมันเครื่อง" value={oilOver} unit="คัน" tone={oilOver ? "bad" : undefined} />
-          <Kpi
+        <View style={vs.kpis}>
+          <KpiCard
+            label="เกินรอบเปลี่ยนน้ำมันเครื่อง"
+            value={oilOver}
+            unit="คัน"
+            hint="ควรเข้าศูนย์โดยเร็ว"
+            icon="warning-outline"
+            tone={oilOver ? "bad" : "ok"}
+          />
+          <KpiCard
             label={`ใกล้ถึงรอบ (≤ ${fmtNum(data.soon.km)} กม. / ${data.soon.days} วัน)`}
             value={oilSoon}
             unit="คัน"
-            tone={oilSoon ? "warn" : undefined}
+            hint={oilUnset ? `ยังไม่ตั้งรอบ ${oilUnset} คัน` : "ตั้งรอบครบทุกคันแล้ว"}
+            icon="water-outline"
+            tone={oilSoon ? "warn" : "info"}
           />
-          <Kpi label="ภาษี / พ.ร.บ. / ประกัน ใกล้หมด" value={expiring} unit="คัน" tone={expiring ? "warn" : undefined} />
-          <Kpi label="ค่าซ่อมบำรุงปีนี้" value={`฿${fmtNum(data.costYear)}`} hint={`${data.logCountYear} รายการ`} tone="navy" />
+          <KpiCard
+            label="ภาษี / พ.ร.บ. / ประกัน ใกล้หมดอายุ"
+            value={expiring}
+            unit="คัน"
+            hint={`ภายใน ${data.soon.days} วัน หรือหมดแล้ว`}
+            icon="calendar-outline"
+            tone={expiring ? "warn" : "ok"}
+          />
+          <KpiCard
+            label="ค่าซ่อมบำรุงปีนี้"
+            value={`฿${fmtNum(data.costYear)}`}
+            hint={`${fmtNum(data.logCountYear)} รายการ`}
+            icon="document-text-outline"
+            tone="info"
+          />
         </View>
 
         {reports.map((v) => (
           <Notice key={v.id} tone="bad" icon="construct-outline">
-            <TouchableOpacity onPress={() => setOpenId(v.id)}>
+            <TouchableOpacity onPress={() => open(v.id, "maint")}>
               <Text style={fs.body}>
                 <Text style={fs.bold}>แจ้งซ่อม: {v.plateNumber}</Text> — {v.maintNote}{" "}
                 <Text style={{ color: colors.primaryInk }}>เปิดรถคันนี้ ›</Text>
@@ -168,73 +383,101 @@ export default function ManageVehiclesScreen() {
           </Notice>
         ))}
 
-        {list.length === 0 ? (
-          <View style={fs.card}>
-            <EmptyState icon="car-outline" text="ยังไม่มีรถในระบบ — กด เพิ่มรถ" />
+        <View style={vs.panel}>
+          <View style={vs.toolbar}>
+            <View style={vs.search}>
+              <Ionicons name="search-outline" size={18} color={colors.textMuted} />
+              <TextInput
+                style={vs.searchInput}
+                value={q}
+                onChangeText={setQ}
+                placeholder="ค้นหาทะเบียน, ยี่ห้อ, ผู้รับผิดชอบ..."
+                placeholderTextColor={colors.textFaint}
+                accessibilityLabel="ค้นหารถ"
+              />
+            </View>
+            <View style={vs.filters}>
+              {FILTERS.map((f) => (
+                <TouchableOpacity
+                  key={f.key}
+                  style={[vs.filter, filter === f.key && vs.filterOn]}
+                  onPress={() => setFilter(f.key)}
+                  accessibilityLabel={`กรอง ${f.label}`}
+                >
+                  {f.dot ? <View style={[vs.dot, { backgroundColor: f.dot }]} /> : null}
+                  <Text style={[vs.filterText, filter === f.key && vs.filterTextOn]}>{f.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-        ) : null}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-          {list.map((v) => (
-            <TouchableOpacity
-              key={v.id}
-              style={[fs.card, { flexGrow: 1, flexBasis: 320, maxWidth: "100%" }, v.status === "INACTIVE" && { opacity: 0.6 }]}
-              onPress={() => setOpenId(v.id)}
-              activeOpacity={0.85}
-              accessibilityLabel={`เปิดรถ ${v.plateNumber}`}
-            >
-              <View style={fs.row}>
-                <Text style={[fs.plate, headingFont]}>{v.plateNumber}</Text>
-                <Tag tone={vehicleTone(v.status)}>{v.statusLabel}</Tag>
-                {v.maintNote ? <Tag tone="bad">แจ้งซ่อม</Tag> : null}
+
+          {list.length === 0 ? (
+            <View style={{ padding: 24 }}>
+              <EmptyState
+                icon="car-outline"
+                text={base.length ? "ไม่มีรถตรงกับที่ค้นหา / ตัวกรองนี้" : "ยังไม่มีรถในระบบ — กด เพิ่มรถ"}
+              />
+            </View>
+          ) : null}
+
+          {[...groups.entries()].map(([name, vehicles]) => (
+            <View key={name}>
+              <View style={vs.groupHead}>
+                <View style={vs.groupBar} />
+                <Text style={[vs.groupName, headingFont]}>{name}</Text>
+                <View style={vs.groupCount}>
+                  <Text style={vs.groupCountText}>{vehicles.length} คัน</Text>
+                </View>
                 <View style={{ flex: 1 }} />
-                <Text style={fs.muted}>ไมล์ {fmtNum(v.currentMileage)}</Text>
+                <Text style={fs.muted}>
+                  รอบน้ำมันเครื่องมาตรฐาน: ทุก {fmtNum(data.defaults.km)} กม. หรือ {data.defaults.months} เดือน
+                </Text>
               </View>
-              <Text style={fs.muted}>
-                {[v.brand, v.model, v.type].filter(Boolean).join(" · ") || "—"}
-                {v.activeBy ? ` · ใช้งานโดย ${v.activeBy}` : ""}
-                {v.owner ? ` · ผู้รับผิดชอบ ${v.owner}` : ""}
-              </Text>
-              {v.card?.fleetCardNo || v.card?.easyPassNo ? (
-                <View style={[fs.row, { flexWrap: "nowrap", alignItems: "flex-start" }]}>
-                  <Ionicons name="card-outline" size={14} color={colors.textMuted} style={{ marginTop: 3 }} />
-                  <Text style={[fs.muted, { flex: 1, minWidth: 0 }]} selectable>
-                    {[
-                      v.card.fleetCardNo
-                        ? `Fleet Card ${v.card.fleetCardNo}${v.card.fleetCardLimit ? ` · วงเงิน ${fmtNum(v.card.fleetCardLimit)} บาท` : ""}`
-                        : null,
-                      v.card.easyPassNo ? `Easy Pass ${v.card.easyPassNo}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Text>
-                </View>
-              ) : null}
-              <View style={fs.chips}>
-                <Tag tone={LEVEL_TONE[v.tax.level]}>{expiryText("ภาษี", v.tax)}</Tag>
-                <Tag tone={LEVEL_TONE[v.act.level]}>{expiryText("พ.ร.บ.", v.act)}</Tag>
-                <Tag tone={LEVEL_TONE[v.ins.level]}>{expiryText("ประกัน", v.ins)}</Tag>
-              </View>
-              <View style={{ gap: 4 }}>
-                <View style={fs.row}>
-                  <Ionicons name="water-outline" size={14} color={colors.textMuted} />
-                  <Text style={[fs.muted, v.oil.level === "over" && { color: colors.dangerInk, fontWeight: "700" }]}>
-                    น้ำมันเครื่อง · {oilText(v.oil)}
-                  </Text>
-                </View>
-                {v.oil.level !== "none" ? (
-                  <View style={fs.hbar}>
-                    <View
-                      style={[
-                        fs.hbarFill,
-                        { width: `${v.oil.pct ?? 0}%` },
-                        v.oil.level === "over" && { backgroundColor: colors.danger },
-                        v.oil.level === "soon" && { backgroundColor: colors.warning },
-                      ]}
-                    />
+              {table ? (
+                <>
+                  <View style={[vs.tr, vs.thead]}>
+                    <Text style={[vs.th, vs.cCar]}>รถ</Text>
+                    <Text style={[vs.th, vs.cStatus]}>สถานะ</Text>
+                    <Text style={[vs.th, vs.cExp]}>ภาษี / พ.ร.บ. / ประกัน</Text>
+                    <Text style={[vs.th, vs.cOil]}>รอบน้ำมันเครื่อง</Text>
+                    <Text style={[vs.th, vs.cOwner]}>ผู้รับผิดชอบ</Text>
+                    <Text style={[vs.th, vs.cNote]}>บันทึก / นัดหมาย</Text>
+                    <View style={vs.cAct} />
                   </View>
-                ) : null}
-              </View>
-            </TouchableOpacity>
+                  {vehicles.map((v) => (
+                    <View key={v.id} style={[vs.tr, vs.trLine, v.status === "INACTIVE" && { opacity: 0.6 }]}>
+                      <View style={vs.cCar}>{carCell(v)}</View>
+                      <View style={vs.cStatus}>{statusCell(v)}</View>
+                      <View style={vs.cExp}>{expiryCell(v)}</View>
+                      <View style={vs.cOil}>{oilCell(v)}</View>
+                      <Text style={[vs.cOwner, vs.owner]}>{v.owner || "-"}</Text>
+                      <View style={vs.cNote}>{noteCell(v)}</View>
+                      <View style={[vs.cAct, { alignItems: "flex-end" }]}>{detailBtn(v)}</View>
+                    </View>
+                  ))}
+                </>
+              ) : (
+                vehicles.map((v) => (
+                  <View key={v.id} style={[vs.cardRow, v.status === "INACTIVE" && { opacity: 0.6 }]}>
+                    <View style={vs.cardTop}>
+                      <View style={{ flex: 1, minWidth: 0 }}>{carCell(v)}</View>
+                      {statusCell(v)}
+                    </View>
+                    <View style={[fs.row, { gap: 6 }]}>
+                      <ExpiryChip icon="calendar-outline" label="ภาษี" e={v.tax} />
+                      <ExpiryChip icon="shield-checkmark-outline" label="พ.ร.บ." e={v.act} />
+                      <ExpiryChip icon="umbrella-outline" label="ประกัน" e={v.ins} />
+                    </View>
+                    {oilCell(v)}
+                    {v.owner ? <Text style={fs.muted}>ผู้รับผิดชอบ {v.owner}</Text> : null}
+                    <View style={vs.cardTop}>
+                      <View style={{ flex: 1 }}>{noteCell(v)}</View>
+                      {detailBtn(v)}
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
           ))}
         </View>
         {inactive ? (
@@ -251,19 +494,179 @@ export default function ManageVehiclesScreen() {
           key={String(openId)}
           vehicle={opened}
           fleet={data}
+          initialTab={openTab}
           onClose={() => setOpenId(null)}
           onCreated={async (id) => {
             // โหลดก่อนค่อยเปิดคันใหม่ — ฟอร์มอ่านค่าตั้งต้นครั้งเดียวตอนเปิด ถ้ายังไม่มีข้อมูลจะได้ฟอร์มว่าง
             await load();
-            setOpenId(id);
+            open(id);
           }}
           onChanged={load}
         />
       ) : null}
+      {/* ปุ่มบนสุด: เลือกคันก่อน แล้วเปิดตรงแท็บประวัติซ่อมบำรุง — บันทึกเปลี่ยนน้ำมันอยู่ในแท็บนั้น */}
+      <AppModal
+        visible={picking}
+        onClose={() => setPicking(false)}
+        title="บันทึกการซ่อม / เปลี่ยนน้ำมัน"
+        subtitle="เลือกรถที่จะบันทึก"
+      >
+        <View style={{ gap: 6 }}>
+          {active.map((v) => (
+            <TouchableOpacity
+              key={v.id}
+              style={vs.pickRow}
+              onPress={() => {
+                setPicking(false);
+                open(v.id, "maint");
+              }}
+              accessibilityLabel={`บันทึกซ่อม ${v.plateNumber}`}
+            >
+              {carCell(v)}
+              <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </AppModal>
       <VehicleImportModal visible={importing} onClose={() => setImporting(false)} onDone={load} />
     </>
   );
 }
+
+const vs = StyleSheet.create({
+  topBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.sky50,
+    borderRadius: radius.md,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  topBtnText: { color: colors.primaryInk, fontSize: 14, fontWeight: "700" },
+  kpis: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  // 150 = มือถือได้แถวละสองใบ (ใบละใบเต็มจอต้องเลื่อนสี่จอกว่าจะเจอรถ) จอคอมได้แถวเดียวสี่ใบ
+  kpi: {
+    flexGrow: 1,
+    flexBasis: 150,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: 18,
+    gap: 4,
+    ...shadow.card,
+  },
+  kpiTop: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  kpiLabel: { flex: 1, fontSize: 13, fontWeight: "600", color: colors.text, marginTop: 4 },
+  kpiIcon: { width: 42, height: 42, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  kpiValue: { fontSize: 34, lineHeight: 42, fontWeight: "800", color: colors.navy },
+  kpiUnit: { fontSize: 14, fontWeight: "400", color: colors.textMuted },
+  panel: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    ...shadow.card,
+  },
+  toolbar: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, padding: 14 },
+  search: {
+    flexGrow: 1,
+    flexBasis: 280,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+  },
+  searchInput: { flex: 1, minWidth: 0, fontSize: 14.5, lineHeight: 22, color: colors.text, paddingVertical: 11 },
+  filters: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  filter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: colors.card,
+  },
+  filterOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  filterText: { fontSize: 13.5, fontWeight: "700", color: colors.text },
+  filterTextOn: { color: "#fff" },
+  groupHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.sky50,
+  },
+  groupBar: { width: 4, height: 20, borderRadius: 2, backgroundColor: colors.primary },
+  groupName: { fontSize: 16, fontWeight: "700", color: colors.text },
+  groupCount: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 2 },
+  groupCountText: { fontSize: 12, fontWeight: "700", color: colors.primaryInk },
+  tr: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  trLine: { borderTopWidth: 1, borderTopColor: colors.border },
+  thead: { paddingVertical: 11, borderTopWidth: 1, borderTopColor: colors.border },
+  th: { fontSize: 11.5, fontWeight: "700", color: colors.textMuted },
+  cCar: { flex: 1.6 },
+  cStatus: { flex: 1.2 },
+  cExp: { flex: 1.3 },
+  cOil: { flex: 2.6 },
+  cOwner: { flex: 0.8 },
+  cNote: { flex: 1.6 },
+  cAct: { flex: 0.9 },
+  car: { flexDirection: "row", alignItems: "center", gap: 12 },
+  carIcon: { width: 38, height: 38, borderRadius: 10, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" },
+  carPlate: { fontSize: 15, fontWeight: "700", color: colors.text },
+  carModel: { fontSize: 13.5, color: colors.textMuted },
+  pill: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, alignSelf: "flex-start" },
+  dot: { width: 7, height: 7, borderRadius: 4 },
+  pillText: { fontSize: 12, fontWeight: "700" },
+  chip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4, alignSelf: "flex-start" },
+  chipText: { fontSize: 12.5, fontWeight: "600" },
+  oilTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
+  oilLeft: { fontSize: 14, fontWeight: "700" },
+  track: { height: 7, borderRadius: 4, backgroundColor: colors.sky200, overflow: "hidden" },
+  fill: { height: 7, borderRadius: 4 },
+  owner: { fontSize: 14, color: colors.body },
+  note: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.sky50, borderRadius: radius.md, padding: 10 },
+  noteText: { flex: 1, fontSize: 13, color: colors.primaryInk },
+  noteEmpty: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    padding: 12,
+  },
+  noteDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: colors.tile },
+  noteEmptyText: { fontSize: 12.5, color: colors.textFaint },
+  detail: { backgroundColor: colors.sky50, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8 },
+  detailText: { color: colors.primaryInk, fontSize: 13.5, fontWeight: "700" },
+  cardRow: { padding: 14, gap: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  cardTop: { flexDirection: "row", alignItems: "center", gap: 10 },
+  pickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: 10,
+  },
+});
 
 // ── หน้าต่างรายละเอียดรถ ─────────────────────────────────
 
@@ -279,14 +682,16 @@ function VehicleModal({
   onClose,
   onCreated,
   onChanged,
+  initialTab = "info",
 }: {
   vehicle: FleetVehicle | null;
   fleet: Fleet;
+  initialTab?: "info" | "maint";
   onClose: () => void;
   onCreated: (id: number) => void | Promise<void>;
   onChanged: () => void;
 }) {
-  const [tab, setTab] = useState<"info" | "docs" | "maint">("info");
+  const [tab, setTab] = useState<"info" | "docs" | "maint">(vehicle ? initialTab : "info");
   const isNew = vehicle === null;
   return (
     <AppModal
