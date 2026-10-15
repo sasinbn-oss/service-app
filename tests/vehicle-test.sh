@@ -1,6 +1,6 @@
 #!/bin/bash
 # ทดสอบ: ลงทะเบียนใช้รถแบบ OTTERI FLEET — รูปรอบคัน 5 รูป · ไมล์ ±1,000 · คนละคันพร้อมกันไม่ได้ ·
-#        คืนรถ + แจ้งซ่อมเข้าประวัติซ่อม · แอดมินคืนแทน/ภาพรวม/Excel · ทะเบียน & ซ่อมบำรุง
+#        คืนรถ + แจ้งซ่อมเข้าประวัติซ่อม · แอดมินคืนแทน/ภาพรวม/Excel · ทะเบียน & ซ่อมบำรุง · ภาคของรถ
 #
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md) · ต้องมี mock-s3 รันอยู่ (tests/README.md)
 set -e
@@ -128,6 +128,27 @@ DB "select note from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'
 [ "$(DB "select count(*) from \"Vehicle\" where \"plateNumber\" in ('9ทส 1004','9ทส 1005')")" = "0" ] && pass "รถที่ข้ามไม่ถูกสร้าง (ฐานข้อมูล)" || fail "รถที่ข้ามถูกสร้าง"
 [ "$(IMP $A | J '[d.created,d.updated,d.same].join()')" = "0,0,3" ] && pass "นำเข้าไฟล์เดิมซ้ำ ทุกคันขึ้นว่าไม่เปลี่ยน" || fail "นำเข้าซ้ำไม่นิ่ง"
 DB "delete from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'-','') like '9ทส100%'" >/dev/null
+
+echo "═══ ภาคของรถ (หาจากทีมของผู้รับผิดชอบ)"
+RS=$RANDOM
+# ทีมสมมุติ: สาขาสองแห่งอยู่ภาค X หนึ่งแห่งอยู่ภาค Y → ทีมนี้อยู่ภาค X (ภาคที่สาขามากที่สุด) · ชื่อเก่าของทีมเปลี่ยนชื่อมาแล้ว
+DB "insert into \"Branch\"(code,name,zone,region) values ('ZR1$RS','ร1','ทีมภาค$RS','ภาคX$RS'),('ZR2$RS','ร2','ทีมภาค$RS','ภาคX$RS'),('ZR3$RS','ร3','ทีมภาค$RS','ภาคY$RS');
+    insert into \"TeamRename\"(\"fromName\",\"toName\") values ('ทีมเก่า$RS','ทีมภาค$RS')" >/dev/null
+PUTV() { curl -s -X PUT "localhost:4000/api/vehicles/$1" -H "$(H $A)" -H 'Content-Type: application/json' -d "$2" >/dev/null; }
+FLEETV() { curl -s localhost:4000/api/vehicles/fleet -H "$(H $A)" | J "const v=d.vehicles.find(x=>x.id===$1); [v.region,v.regionSource,v.team].join('|')"; }
+PUTV $V1 "{\"owner\":\"ทีมภาค$RS · สมชาย (ชาย)\"}"
+[ "$(FLEETV $V1)" = "ภาคX$RS|team|ทีมภาค$RS" ] && pass "ภาคมาจากทีมในช่องผู้รับผิดชอบ (ภาคที่สาขาของทีมมากที่สุด)" || fail "ภาคจากทีม: $(FLEETV $V1)"
+PUTV $V1 "{\"owner\":\"ทีมเก่า$RS · สมชาย\"}"
+[ "$(FLEETV $V1)" = "ภาคX$RS|team|ทีมภาค$RS" ] && pass "ผู้รับผิดชอบยังเขียนชื่อทีมเก่า (เปลี่ยนชื่อแล้ว) ก็หาภาคได้" || fail "ชื่อทีมเก่า: $(FLEETV $V1)"
+PUTV $V1 '{"region":"ภาคกำหนดเอง"}'
+[ "$(FLEETV $V1)|$(DB "select region from \"Vehicle\" where id=$V1")" = "ภาคกำหนดเอง|manual|ทีมภาค$RS|ภาคกำหนดเอง" ] && pass "กำหนดภาคเองแทนภาคของทีมได้ (ฐานข้อมูล)" || fail "กำหนดเอง: $(FLEETV $V1)"
+PUTV $V1 '{"region":null}'
+[ "$(FLEETV $V1)" = "ภาคX$RS|team|ทีมภาค$RS" ] && pass "ล้างภาคที่กำหนดเอง กลับไปใช้ภาคของทีม" || fail "ล้างแล้ว: $(FLEETV $V1)"
+PUTV $V2 '{"owner":"สำนักงานใหญ่"}'
+[ "$(FLEETV $V2)" = "||" ] && pass "หาทีมไม่ได้ = ยังไม่ระบุภาค" || fail "ไม่มีทีม: $(FLEETV $V2)"
+curl -s localhost:4000/api/vehicles/fleet -H "$(H $A)" | J "d.regions.includes('ภาคX$RS')&&d.regions.includes('ภาคY$RS')" | grep -q true \
+  && pass "ตัวเลือกภาคในฟอร์มมาจากทะเบียนสาขา" || fail "ตัวเลือกภาค"
+DB "delete from \"Branch\" where code like 'ZR_$RS'; delete from \"TeamRename\" where \"fromName\"='ทีมเก่า$RS'" >/dev/null
 
 echo
 # เก็บกวาด — ลบรายการ รูป และรถทดสอบ

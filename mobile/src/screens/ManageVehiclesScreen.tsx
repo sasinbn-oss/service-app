@@ -15,6 +15,7 @@ import { api, apiErrorMessage } from "../api/client";
 import AppModal from "../components/AppModal";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
+import Dropdown from "../components/Dropdown";
 import DateField, { thaiDate } from "../components/DateField";
 import { fs, Notice, Tag } from "../components/FleetUI";
 import { useCachedState } from "../utils/pageCache";
@@ -44,6 +45,14 @@ interface FleetVehicle {
   currentMileage: number;
   activeBy: string | null;
   owner: string | null;
+  /** ภาคที่ใช้จัดกลุ่ม — กำหนดเอง (manual) หรือหาจากทีมของผู้รับผิดชอบ (team) · null = หาไม่ได้ */
+  region: string | null;
+  regionSource: "manual" | "team" | null;
+  /** ภาคที่แอดมินกำหนดเอง (ช่องในฟอร์ม) */
+  regionManual: string | null;
+  /** ทีมที่อ่านได้จากช่องผู้รับผิดชอบ และภาคของทีมนั้น */
+  team: string | null;
+  teamRegion: string | null;
   insCompany: string | null;
   insPolicy: string | null;
   oilEveryKm: number | null;
@@ -62,6 +71,7 @@ interface FleetVehicle {
 interface Fleet {
   vehicles: FleetVehicle[];
   costYear: number;
+  regions: string[];
   logCountYear: number;
   defaults: { km: number; months: number };
   soon: { km: number; days: number };
@@ -155,6 +165,8 @@ export default function ManageVehiclesScreen() {
   const [importing, setImporting] = useState(false);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "urgent" | "soon">("all");
+  const [regionPick, setRegionPick] = useState<string | null>(null);
+  const [closed, setClosed] = useState<Set<string>>(new Set());
   const { width } = useWindowDimensions();
   const { docked, collapsed } = useDocked();
   // ตารางต้องการราว 1,050 px หลังหักเมนูข้าง — แคบกว่านั้นคอลัมน์บีบจนอ่านไม่ออก ใช้การ์ดแทน
@@ -197,7 +209,7 @@ export default function ManageVehiclesScreen() {
     (v) =>
       (filter === "all" || (filter === "urgent" ? urgent(v) : dueSoon(v))) &&
       (!term ||
-        [v.plateNumber, v.brand, v.model, v.type, v.owner, v.activeBy].some((x) => x && x.toLowerCase().includes(term)) ||
+        [v.plateNumber, v.brand, v.model, v.type, v.owner, v.activeBy, v.region].some((x) => x && x.toLowerCase().includes(term)) ||
         v.plateNumber.replace(/[\s-]/g, "").toLowerCase().includes(term.replace(/[\s-]/g, "")))
   );
   const oilOver = active.filter((v) => v.oil.level === "over").length;
@@ -207,12 +219,24 @@ export default function ManageVehiclesScreen() {
   const reports = active.filter((v) => v.maintNote);
   const opened = typeof openId === "number" ? data.vehicles.find((v) => v.id === openId) ?? null : null;
 
-  // จัดกลุ่มตามประเภทรถ (รถบริษัท / รถเช่า ...) — ไม่ระบุประเภทอยู่กลุ่ม "ทั่วไป"
-  const groups = new Map<string, FleetVehicle[]>();
-  for (const v of list) {
-    const k = v.type?.trim() || "ทั่วไป";
-    groups.set(k, [...(groups.get(k) ?? []), v]);
-  }
+  // จัดกลุ่มตามภาค (เจ้าของงานขอ ต.ค. 69) — ภาคเรียงตามชื่อ หาภาคไม่ได้อยู่ท้ายสุด
+  const NO_REGION = "ยังไม่ระบุภาค";
+  const regionKey = (v: FleetVehicle) => v.region ?? NO_REGION;
+  const byRegion = (vs: FleetVehicle[]) => {
+    const g = new Map<string, FleetVehicle[]>();
+    for (const v of vs) g.set(regionKey(v), [...(g.get(regionKey(v)) ?? []), v]);
+    return new Map(
+      [...g].sort(([a], [b]) => (a === NO_REGION ? 1 : b === NO_REGION ? -1 : a.localeCompare(b, "th")))
+    );
+  };
+  const regionCounts = byRegion(base);
+  const groups = byRegion(regionPick ? list.filter((v) => regionKey(v) === regionPick) : list);
+  const toggle = (name: string) =>
+    setClosed((c) => {
+      const n = new Set(c);
+      n.has(name) ? n.delete(name) : n.add(name);
+      return n;
+    });
 
   const carCell = (v: FleetVehicle) => (
     <View style={vs.car}>
@@ -221,8 +245,8 @@ export default function ManageVehiclesScreen() {
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
         <Text style={vs.carPlate}>{v.plateNumber}</Text>
-        <Text style={vs.carModel} numberOfLines={1}>
-          {[v.brand, v.model].filter(Boolean).join(" ") || "—"}
+        <Text style={vs.carModel} numberOfLines={2}>
+          {[[v.brand, v.model].filter(Boolean).join(" "), v.type].filter(Boolean).join(" · ") || "—"}
         </Text>
         {v.card?.fleetCardNo || v.card?.easyPassNo ? (
           <Text style={[fs.muted, { fontSize: 11.5 }]} selectable>
@@ -301,6 +325,19 @@ export default function ManageVehiclesScreen() {
         <Text style={vs.noteEmptyText}>ยังไม่มีบันทึก / นัดหมาย</Text>
       </TouchableOpacity>
     );
+  // ทีมตัวหนาแล้วชื่อช่างบรรทัดล่าง — ในภาคเดียวกันคนหารถด้วยทีม ("รถทีมขอนแก่นคันไหน")
+  const ownerCell = (v: FleetVehicle) => {
+    if (!v.owner) return <Text style={vs.owner}>-</Text>;
+    const parts = v.owner.split("·").map((x) => x.trim());
+    const teamIdx = v.team ? parts.findIndex((x) => x.replace(/^ทีม\s*/, "") === v.team) : -1;
+    const rest = parts.filter((_, i) => i !== teamIdx).join(" · ");
+    return (
+      <View style={{ gap: 1 }}>
+        {teamIdx >= 0 ? <Text style={vs.ownerTeam}>ทีม{v.team}</Text> : null}
+        {rest ? <Text style={teamIdx >= 0 ? fs.muted : vs.owner}>{rest}</Text> : null}
+      </View>
+    );
+  };
   const detailBtn = (v: FleetVehicle) => (
     <TouchableOpacity style={vs.detail} onPress={() => open(v.id)} accessibilityLabel={`เปิดรถ ${v.plateNumber}`}>
       <Text style={vs.detailText}>รายละเอียด</Text>
@@ -411,6 +448,23 @@ export default function ManageVehiclesScreen() {
             </View>
           </View>
 
+          <View style={vs.regionBar}>
+            <Text style={vs.regionLbl}>ภาค</Text>
+            {[[null, "ทุกภาค", base.length] as const, ...[...regionCounts].map(([r, vs2]) => [r, r, vs2.length] as const)].map(
+              ([k, l, n]) => (
+                <TouchableOpacity
+                  key={k ?? "all"}
+                  style={[vs.filter, vs.regionChip, regionPick === k && vs.filterOn]}
+                  onPress={() => setRegionPick(k)}
+                  accessibilityLabel={`ภาค ${l}`}
+                >
+                  <Text style={[vs.filterText, regionPick === k && vs.filterTextOn]}>{l}</Text>
+                  <Text style={[vs.regionN, regionPick === k && vs.filterTextOn]}>{n}</Text>
+                </TouchableOpacity>
+              )
+            )}
+          </View>
+
           {list.length === 0 ? (
             <View style={{ padding: 24 }}>
               <EmptyState
@@ -420,20 +474,32 @@ export default function ManageVehiclesScreen() {
             </View>
           ) : null}
 
-          {[...groups.entries()].map(([name, vehicles]) => (
+          {[...groups.entries()].map(([name, vehicles]) => {
+            const nUrgent = vehicles.filter(urgent).length;
+            const nSoon = vehicles.filter((v) => !urgent(v) && dueSoon(v)).length;
+            const teams = [...new Set(vehicles.map((v) => v.team).filter(Boolean))];
+            const isClosed = closed.has(name);
+            return (
             <View key={name}>
-              <View style={vs.groupHead}>
-                <View style={vs.groupBar} />
+              <TouchableOpacity style={vs.groupHead} onPress={() => toggle(name)} accessibilityLabel={`กลุ่มภาค ${name}`}>
+                <View style={[vs.groupBar, name === NO_REGION && { backgroundColor: colors.textFaint }]} />
                 <Text style={[vs.groupName, headingFont]}>{name}</Text>
                 <View style={vs.groupCount}>
                   <Text style={vs.groupCountText}>{vehicles.length} คัน</Text>
                 </View>
+                {nUrgent ? <DotPill tone="bad">เร่งด่วน {nUrgent}</DotPill> : null}
+                {nSoon ? <DotPill tone="warn">ใกล้กำหนด {nSoon}</DotPill> : null}
                 <View style={{ flex: 1 }} />
-                <Text style={fs.muted}>
-                  รอบน้ำมันเครื่องมาตรฐาน: ทุก {fmtNum(data.defaults.km)} กม. หรือ {data.defaults.months} เดือน
+                <Text style={[fs.muted, { flexShrink: 1 }]} numberOfLines={2}>
+                  {name === NO_REGION
+                    ? "ไม่มีทีม หรือทีมไม่อยู่ในทะเบียนสาขา — กำหนดภาคในรายละเอียดรถ"
+                    : teams.length
+                    ? `ทีม: ${teams.join(" · ")}`
+                    : ""}
                 </Text>
-              </View>
-              {table ? (
+                <Ionicons name={isClosed ? "chevron-forward" : "chevron-down"} size={18} color={colors.textMuted} />
+              </TouchableOpacity>
+              {isClosed ? null : table ? (
                 <>
                   <View style={[vs.tr, vs.thead]}>
                     <Text style={[vs.th, vs.cCar]}>รถ</Text>
@@ -450,7 +516,7 @@ export default function ManageVehiclesScreen() {
                       <View style={vs.cStatus}>{statusCell(v)}</View>
                       <View style={vs.cExp}>{expiryCell(v)}</View>
                       <View style={vs.cOil}>{oilCell(v)}</View>
-                      <Text style={[vs.cOwner, vs.owner]}>{v.owner || "-"}</Text>
+                      <View style={vs.cOwner}>{ownerCell(v)}</View>
                       <View style={vs.cNote}>{noteCell(v)}</View>
                       <View style={[vs.cAct, { alignItems: "flex-end" }]}>{detailBtn(v)}</View>
                     </View>
@@ -469,7 +535,7 @@ export default function ManageVehiclesScreen() {
                       <ExpiryChip icon="umbrella-outline" label="ประกัน" e={v.ins} />
                     </View>
                     {oilCell(v)}
-                    {v.owner ? <Text style={fs.muted}>ผู้รับผิดชอบ {v.owner}</Text> : null}
+                    {v.owner ? ownerCell(v) : null}
                     <View style={vs.cardTop}>
                       <View style={{ flex: 1 }}>{noteCell(v)}</View>
                       {detailBtn(v)}
@@ -478,8 +544,12 @@ export default function ManageVehiclesScreen() {
                 ))
               )}
             </View>
-          ))}
+            );
+          })}
         </View>
+        <Text style={[fs.muted, { textAlign: "center" }]}>
+          รอบน้ำมันเครื่องมาตรฐาน: ทุก {fmtNum(data.defaults.km)} กม. หรือ {data.defaults.months} เดือน
+        </Text>
         {inactive ? (
           <TouchableOpacity onPress={() => setShowInactive((s) => !s)} style={{ alignSelf: "center", padding: 8 }}>
             <Text style={{ color: colors.primaryInk }}>
@@ -638,6 +708,18 @@ const vs = StyleSheet.create({
   track: { height: 7, borderRadius: 4, backgroundColor: colors.sky200, overflow: "hidden" },
   fill: { height: 7, borderRadius: 4 },
   owner: { fontSize: 14, color: colors.body },
+  ownerTeam: { fontSize: 14, fontWeight: "700", color: colors.text },
+  regionBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+  },
+  regionLbl: { fontSize: 12, fontWeight: "600", color: colors.textMuted, marginRight: 2 },
+  regionChip: { paddingVertical: 6 },
+  regionN: { fontSize: 12.5, color: colors.textMuted },
   note: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.sky50, borderRadius: radius.md, padding: 10 },
   noteText: { flex: 1, fontSize: 13, color: colors.primaryInk },
   noteEmpty: {
@@ -789,6 +871,7 @@ function InfoForm({
     currentMileage: s(v?.currentMileage ?? ""),
     status: v?.status ?? "AVAILABLE",
     owner: s(v?.owner),
+    region: s(v?.regionManual),
     taxExpire: s(v?.tax.date),
     actExpire: s(v?.act.date),
     insExpire: s(v?.ins.date),
@@ -829,6 +912,7 @@ function InfoForm({
       type: text("type"),
       note: text("note"),
       owner: text("owner"),
+      region: text("region"),
       insCompany: text("insCompany"),
       insPolicy: text("insPolicy"),
       maintNote: text("maintNote"),
@@ -895,7 +979,23 @@ function InfoForm({
         <Field label="รุ่น" value={f.model} onChange={set("model")} placeholder="Hilux Revo" />
         <Field label="ประเภท" value={f.type} onChange={set("type")} placeholder="กระบะ" />
         <Field label="เลขไมล์ปัจจุบัน" value={f.currentMileage} onChange={set("currentMileage")} numeric placeholder="0" />
-        <Field label="ผู้รับผิดชอบ" value={f.owner} onChange={set("owner")} />
+        <Field label="ผู้รับผิดชอบ" value={f.owner} onChange={set("owner")} placeholder="ทีม · ชื่อช่าง" />
+      </View>
+      <View style={{ gap: 4 }}>
+        <Text style={fs.label}>ภาค</Text>
+        <Dropdown
+          value={f.region || null}
+          options={fleet.regions.map((r) => ({ value: r, label: r }))}
+          onChange={(x) => set("region")(x ?? "")}
+          clearable
+          placeholder={v?.teamRegion ? `ตามทีม ${v.team} — ${v.teamRegion}` : "ตามทีมของผู้รับผิดชอบ"}
+          accessibilityLabel="ภาค"
+        />
+        <Text style={fs.muted}>
+          {v?.teamRegion
+            ? "ว่างไว้ = ใช้ภาคของทีมผู้รับผิดชอบ (ย้ายทีมแล้วภาคตามเอง) · เลือกเองเฉพาะเมื่ออยากให้ต่างจากทีม"
+            : "หาภาคจากทีมของผู้รับผิดชอบไม่ได้ — เลือกภาคเองเพื่อไม่ให้อยู่กลุ่ม \"ยังไม่ระบุภาค\""}
+        </Text>
       </View>
       <Field label="หมายเหตุ (ช่างเห็นตอนเลือกรถ)" value={f.note} onChange={set("note")} grow={false} placeholder="เช่น ยางอะไหล่อยู่ใต้กระบะ" />
       <Text style={fs.label}>สถานะ</Text>

@@ -133,6 +133,7 @@ const vehicleSchema = z.object({
   currentMileage: z.number().int().min(0).max(9_999_999).optional(),
   status: z.enum(VEHICLE_STATUSES).optional(),
   owner: z.string().trim().max(100).nullable().optional(),
+  region: z.string().trim().max(60).nullable().optional(),
   taxExpire: day,
   actExpire: day,
   insExpire: day,
@@ -273,6 +274,53 @@ function expiry(d: Date | null) {
   };
 }
 
+/**
+ * ทีม → ภาค จากทะเบียนสาขา (ภาคที่สาขาของทีมนั้นอยู่มากที่สุด) — ทีมที่ถูกเปลี่ยนชื่อใช้ชื่อเก่าหาได้ด้วย
+ * เพราะช่อง owner ของรถเก็บชื่อทีมตอนนำเข้าไฟล์ ไม่ได้เปลี่ยนตามเวลาเปลี่ยนชื่อทีม
+ */
+async function teamRegions() {
+  const [branches, renames] = await Promise.all([
+    prisma.branch.findMany({ where: { region: { not: null } }, select: { region: true, zone: true, pmTeam: true } }),
+    prisma.teamRename.findMany({ select: { fromName: true, toName: true } }),
+  ]);
+  const votes = new Map<string, Map<string, number>>();
+  for (const b of branches) {
+    for (const t of new Set([b.zone, b.pmTeam])) {
+      if (!t) continue;
+      const m = votes.get(t) ?? new Map<string, number>();
+      m.set(b.region!, (m.get(b.region!) ?? 0) + 1);
+      votes.set(t, m);
+    }
+  }
+  const map = new Map<string, string>();
+  for (const [t, m] of votes) map.set(t, [...m].sort((a, b) => b[1] - a[1])[0][0]);
+  const rename = new Map(renames.map((r) => [r.fromName, r.toName]));
+  const find = (start: string) => {
+    let n = start;
+    // ไล่ชื่อเก่า→ใหม่ได้หลายทอด กันวนด้วยจำนวนรอบ
+    for (let i = 0; i < 10 && !map.has(n) && rename.has(n); i++) n = rename.get(n)!;
+    return map.has(n) ? { team: n, region: map.get(n)! } : null;
+  };
+  // ลองตามที่เขียนก่อน แล้วค่อยตัดคำว่า "ทีม" ข้างหน้า — ไฟล์รถเขียน "ทีมขอนแก่น" แต่ทะเบียนสาขาเขียน "ขอนแก่น"
+  // (และบางทีมชื่อขึ้นต้นด้วย "ทีม" จริง เช่น "ทีมเสริม กทม.")
+  return (name: string) => find(name.trim()) ?? find(name.trim().replace(/^ทีม\s*/, ""));
+}
+
+/** ภาคของรถ: ที่แอดมินกำหนดเองก่อน ไม่งั้นหาจากทีมในช่องผู้รับผิดชอบ ("ขอนแก่น · สมชาย (ชาย)") */
+function vehicleRegion(
+  v: { owner: string | null; region: string | null },
+  regionOf: (name: string) => { team: string; region: string } | null
+) {
+  const hit = (v.owner ?? "")
+    .split("·")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map(regionOf)
+    .find(Boolean);
+  if (v.region) return { region: v.region, regionSource: "manual" as const, team: hit?.team ?? null, teamRegion: hit?.region ?? null };
+  return { region: hit?.region ?? null, regionSource: hit ? ("team" as const) : null, team: hit?.team ?? null, teamRegion: hit?.region ?? null };
+}
+
 router.get("/fleet", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   // บัตรเติมน้ำมัน/Easy Pass — แอดมินเท่านั้น Admin Spare Part เปิดหน้านี้ดูได้แต่ไม่ได้เห็นเลขบัตร
   const showCard = !req.auth?.partsAdmin;
@@ -286,8 +334,10 @@ router.get("/fleet", requireAuth, requireAdmin, async (req: AuthRequest, res) =>
     prisma.vehicleMaintenance.aggregate({ where: { date: { gte: yearStart } }, _sum: { cost: true }, _count: true }),
   ]);
   const usedBy = new Map(ongoing.map((o) => [o.vehicleId, o.user.name]));
+  const regionOf = await teamRegions();
   res.json({
     vehicles: vehicles.map((v) => ({
+      ...vehicleRegion(v, regionOf),
       id: v.id,
       plateNumber: v.plateNumber,
       brand: v.brand,
@@ -299,6 +349,7 @@ router.get("/fleet", requireAuth, requireAdmin, async (req: AuthRequest, res) =>
       currentMileage: v.currentMileage,
       activeBy: usedBy.get(v.id) ?? null,
       owner: v.owner,
+      regionManual: v.region,
       insCompany: v.insCompany,
       insPolicy: v.insPolicy,
       oilEveryKm: v.oilEveryKm,
@@ -319,6 +370,12 @@ router.get("/fleet", requireAuth, requireAdmin, async (req: AuthRequest, res) =>
           }
         : null,
     })),
+    // ตัวเลือกภาคในฟอร์มรถ = ภาคที่มีในทะเบียนสาขา สะกดตรงกันจะได้รวมกลุ่มเดียวกัน
+    regions: (
+      await prisma.branch.findMany({ where: { region: { not: null } }, distinct: ["region"], select: { region: true } })
+    )
+      .map((b) => b.region!)
+      .sort((a, b) => a.localeCompare(b, "th")),
     costYear: costs._sum.cost ?? 0,
     logCountYear: costs._count,
     defaults: { km: VEHICLE_RULES.OIL_EVERY_KM, months: VEHICLE_RULES.OIL_EVERY_MONTHS },
