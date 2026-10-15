@@ -75,7 +75,7 @@ echo
 echo "═══ ถอดตำแหน่ง"
 PATCH $A '{"role":"EMPLOYEE"}' | grep -q "Super Admin" && pass "แอดมินทั่วไปถอดแอดมินอะไหล่ไม่ได้" || fail "แอดมินทั่วไปถอดได้"
 PATCH $SA '{"role":"EMPLOYEE"}' | J 'd.role' | grep -q "^EMPLOYEE$" && pass "Super Admin ถอดกลับเป็นช่างได้" || fail "ถอดไม่ได้"
-curl -s localhost:4000/api/auth/users -H "$(H $P)" | grep -q "Admin access required" && pass "ถอดแล้วโทเคนเดิมเข้าหน้าแอดมินไม่ได้ทันที" || fail "ถอดแล้วยังเข้าได้"
+curl -s localhost:4000/api/auth/users -H "$(H $P)" | grep -q "หน้านี้สำหรับแอดมินเท่านั้น" && pass "ถอดแล้วโทเคนเดิมเข้าหน้าแอดมินไม่ได้ทันที" || fail "ถอดแล้วยังเข้าได้"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

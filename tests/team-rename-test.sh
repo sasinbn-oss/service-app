@@ -37,7 +37,7 @@ DB "insert into \"TeamDayPlanMember\" (\"planId\",\"userId\",position) values ($
 
 echo "═══ ดูรายการทีม"
 R=$(curl -s localhost:4000/api/teams -H "$(H $T)")
-echo "$R" | grep -q "Admin access required" && pass "ช่างเปิดหน้าทีมไม่ได้ (เฉพาะแอดมิน)" || fail "ช่างเปิดได้"
+echo "$R" | grep -q "หน้านี้สำหรับแอดมินเท่านั้น" && pass "ช่างเปิดหน้าทีมไม่ได้ (เฉพาะแอดมิน)" || fail "ช่างเปิดได้"
 ROW=$(curl -s localhost:4000/api/teams -H "$(H $A)" | J "const t=d.teams.find(t=>t.name==='$OLD'); [t.cmBranches,t.pmBranches,t.technicians,t.supervisors,t.openOrders>=0,t.orphan].join('|')")
 [ "$ROW" = "1|1|1|1|true|false" ] && pass "นับสาขา CM/PM ช่าง หัวหน้าภาคของทีมถูก" || fail "นับผิด: $ROW"
 
@@ -45,7 +45,7 @@ echo
 echo "═══ เปลี่ยนชื่อ"
 R=$(RENAME $A "{\"from\":\"$OLD\",\"to\":\"$OLD\"}"); echo "$R" | grep -q "เหมือนชื่อเดิม" && pass "ชื่อใหม่เหมือนเดิม ถูกปฏิเสธ" || fail "รับชื่อเดิม"
 R=$(RENAME $A "{\"from\":\"ไม่มีทีมนี้$SUF\",\"to\":\"x$SUF\"}"); echo "$R" | grep -q "ไม่พบทีม" && pass "ทีมที่ไม่มีอยู่ ถูกปฏิเสธ" || fail "เปลี่ยนทีมที่ไม่มีได้"
-R=$(RENAME $T "{\"from\":\"$OLD\",\"to\":\"$NEW\"}"); echo "$R" | grep -q "Admin access required" && pass "ช่างเปลี่ยนชื่อทีมไม่ได้" || fail "ช่างเปลี่ยนได้"
+R=$(RENAME $T "{\"from\":\"$OLD\",\"to\":\"$NEW\"}"); echo "$R" | grep -q "หน้านี้สำหรับแอดมินเท่านั้น" && pass "ช่างเปลี่ยนชื่อทีมไม่ได้" || fail "ช่างเปลี่ยนได้"
 R=$(RENAME $A "{\"from\":\"$OLD\",\"to\":\"  $NEW  \"}")
 [ "$(echo "$R" | J '[d.branches,d.technicians,d.supervisors,d.workOrders,d.plans,d.merged].join("|")')" = "2|1|1|1|1|false" ] \
   && pass "ตอบจำนวนที่ย้าย: สาขา 2 (CM+PM) ช่าง 1 หัวหน้าภาค 1 ใบงาน 1 แผน 1" || fail "ผลเปลี่ยนชื่อ: $(echo $R|head -c 200)"

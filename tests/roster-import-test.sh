@@ -21,7 +21,7 @@ PREVIEW() { curl -s -X POST localhost:4000/api/user-import/preview -H "$(H $1)" 
 
 echo "═══ อ่านไฟล์"
 R=$(PREVIEW $T)
-echo "$R" | grep -q "Admin access required" && pass "ช่างนำเข้าไม่ได้ (เฉพาะแอดมิน)" || fail "ช่างเรียกได้: $(echo $R|head -c 100)"
+echo "$R" | grep -q "หน้านี้สำหรับแอดมินเท่านั้น" && pass "ช่างนำเข้าไม่ได้ (เฉพาะแอดมิน)" || fail "ช่างเรียกได้: $(echo $R|head -c 100)"
 # บัญชีที่มีอยู่แล้วก่อนนำเข้า: ช่างคนหนึ่ง (ทีมเดิม) กับแอดมินที่อยู่ในบันทึกด้วย
 DB "insert into \"User\" (\"employeeCode\",name,\"passwordHash\",role,team) values ('990013','ชื่อเก่า','x','EMPLOYEE','กรุงเทพ'),('990002','ชื่อเก่าแอดมิน','x','ADMIN',null)" >/dev/null
 P=$(PREVIEW $A)

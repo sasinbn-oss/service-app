@@ -22,6 +22,8 @@ import { showAlert } from "../utils/alert";
 import { pickImageAttachment, PickedAttachment } from "../utils/attachments";
 import { fmtNum, openSigned, postImageForm } from "../utils/vehicles";
 import { colors, headingFont, radius } from "../theme";
+import VehicleImportModal from "../components/VehicleImportModal";
+import { canPickFile } from "../utils/filePicker";
 
 type Level = "none" | "ok" | "soon" | "over";
 interface Expiry {
@@ -85,6 +87,7 @@ export default function ManageVehiclesScreen() {
   const [loading, setLoading] = useState(!cached);
   const [showInactive, setShowInactive] = useState(false);
   const [openId, setOpenId] = useState<number | "new" | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -127,6 +130,13 @@ export default function ManageVehiclesScreen() {
           <Text style={[fs.title, headingFont]}>ทะเบียน & ซ่อมบำรุง</Text>
           <Tag tone="mute">{active.length} คัน</Tag>
           <View style={{ flex: 1 }} />
+          {/* นำเข้าจากไฟล์ "รถช่าง Service" — เลือกไฟล์ได้เฉพาะบนเว็บ (แอดมินนั่งโต๊ะ) */}
+          {canPickFile ? (
+            <TouchableOpacity style={[fs.btn, fs.btnGhost]} onPress={() => setImporting(true)} accessibilityLabel="นำเข้ารถจาก Excel">
+              <Ionicons name="cloud-upload-outline" size={17} color={colors.navy} />
+              <Text style={fs.btnGhostText}>นำเข้าจาก Excel</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={fs.btn} onPress={() => setOpenId("new")}>
             <Ionicons name="add" size={18} color="#fff" />
             <Text style={fs.btnText}>เพิ่มรถ</Text>
@@ -233,6 +243,7 @@ export default function ManageVehiclesScreen() {
           onChanged={load}
         />
       ) : null}
+      <VehicleImportModal visible={importing} onClose={() => setImporting(false)} onDone={load} />
     </>
   );
 }

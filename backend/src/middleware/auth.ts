@@ -115,7 +115,7 @@ const ALLOWED_WHILE_LOCKED = new Set(["/change-password", "/me"]);
 
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
   if (req.auth?.role !== "ADMIN") {
-    return res.status(403).json({ error: "Admin access required" });
+    return res.status(403).json({ error: "หน้านี้สำหรับแอดมินเท่านั้น" });
   }
   next();
 }

@@ -137,13 +137,9 @@ const login = async (code) =>
     await page.waitForTimeout(500);
     await vis(page, "ช่างสมชาย", false).last().click();
     await page.waitForTimeout(500);
-    await page.getByPlaceholder("ค้นหารหัสหรือชื่ออะไหล่").locator("visible=true").first().fill("SP-BOARD");
-    await page.waitForTimeout(1500);
-    await vis(page, "SP-BOARD", false).last().click();
-    await page.waitForTimeout(1000);
-
+    // อะไหล่ที่เบิกไว้ (SP-BOARD) ถูกเติมเป็นอะไหล่ที่ใช้ไปให้แล้ว — ช่างไม่ต้องเพิ่มเอง กล่องเคลมจึงขึ้นทันที
     (await label(page, "ส่งอะไหล่เก่าเคลม SP-BOARD").count()) > 0 && (await vis(page, "ยังขาด:", false).count()) > 0
-      ? pass("สาขาในประกัน: เปิดใบเคลมไว้ให้เอง และบอกว่ายังขาดอะไร")
+      ? pass("อะไหล่ที่เบิกไว้เติมให้เอง · สาขาในประกัน: เปิดใบเคลมไว้ให้ และบอกว่ายังขาดอะไร")
       : fail("ไม่มีส่วนเคลมหรือไม่ได้เปิดไว้ให้");
     const saveBtn = vis(page, "ยืนยันปิดงาน").last();
     const dim = async () => saveBtn.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);

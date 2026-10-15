@@ -44,7 +44,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $A)" -F
 BEFORE=$(DB "select status||'|'||\"updatedAt\" from \"WorkOrder\" where id=$ID")
 
 echo "═══ ใครคัดลอกได้"
-POST $S "work-orders/$ID/test-copy" '{}' | grep -q "Admin" && pass "หัวหน้าภาคคัดลอกไม่ได้" || fail "หัวหน้าภาคคัดลอกได้"
+POST $S "work-orders/$ID/test-copy" '{}' | grep -q "สำหรับแอดมิน" && pass "หัวหน้าภาคคัดลอกไม่ได้" || fail "หัวหน้าภาคคัดลอกได้"
 POST $PA "work-orders/$ID/test-copy" '{}' | grep -q "ดูได้อย่างเดียว" && pass "Admin Spare Part คัดลอกไม่ได้" || fail "Admin Spare Part คัดลอกได้"
 [ "$(DB "select count(*) from \"WorkOrder\" where \"testOfId\"=$ID")" = "0" ] && pass "ฐานข้อมูลไม่มีใบทดสอบเกิดขึ้น" || fail "มีใบทดสอบหลุดออกมา"
 
