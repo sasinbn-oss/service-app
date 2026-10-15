@@ -57,6 +57,8 @@ export interface WorkOrderRow {
   /** ช่างรายคน — ใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
   assignedToName: string | null;
   scheduledAt: string | null;
+  /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
+  partsExpectedAt?: string | null;
   createdAt: string;
   closedAt: string | null;
   closeResultLabel: string | null;
@@ -146,6 +148,23 @@ const FILTERS: { value: Filter; label: string }[] = [
 ];
 
 /**
+ * รอเบิกอะไหล่ (ก่อนเสนอราคา) — บอกวันที่คาดว่าของเข้า เลยแล้วขึ้นแดงให้แอดมินตามผู้ขาย
+ * แสดงเฉพาะขั้นนี้ ขั้นอื่นวันที่นี้ไม่มีความหมายแล้ว (เซิร์ฟเวอร์ล้างให้เมื่อของครบ)
+ */
+function PartsEta({ row }: { row: { status: string; partsExpectedAt?: string | null } }) {
+  if (row.status !== "PARTS_SOURCING" || !row.partsExpectedAt) return null;
+  const day = row.partsExpectedAt.slice(0, 10);
+  const late = day < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const [y, m, d] = day.split("-").map(Number);
+  const label = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("th-TH", { day: "numeric", month: "short", timeZone: "UTC" });
+  return (
+    <Text style={{ fontSize: 12, lineHeight: 18, fontWeight: late ? "700" : "400", color: late ? colors.dangerInk : colors.textMuted }}>
+      {late ? `เลยกำหนดของเข้า (${label}) — ตามผู้ขาย` : `คาดว่าของเข้า ${label}`}
+    </Text>
+  );
+}
+
+/**
  * ใบงานรอใคร — ตัดสินสีของป้ายสถานะ
  *
  * ตรงกับ WORK_ORDER_STAGE_ACTOR ฝั่ง backend ยกเว้นขั้นที่รอคนนอก (ลูกค้าจ่ายเงิน ของเข้าคลัง)
@@ -156,6 +175,8 @@ export const STATUS_OWNER: Record<string, Owner> = {
   NEW: "SUPERVISOR",
   INSPECT_CONFIRM: "ADMIN",
   INSPECTING: "EMPLOYEE",
+  // รอเบิกอะไหล่ก่อนเสนอราคา — แอดมินเป็นคนเช็คและตามของ (เจ้าของงานกำหนด: อยู่ใน "รอแอดมิน")
+  PARTS_SOURCING: "ADMIN",
   AWAITING_QUOTE: "ADMIN",
   AWAITING_PAYMENT: "OUTSIDE",
   WAITING_PARTS: "OUTSIDE",
@@ -968,6 +989,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
+        <PartsEta row={row} />
       </View>
       <View style={styles.colWait}>
         <WaitingOn row={row} />
@@ -1031,6 +1053,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
           <Text style={styles.meta}>{stuckLabel(row.stageSince)}</Text>
         </View>
       ) : null}
+      <PartsEta row={row} />
 
       <View style={styles.metaRow}>
         <Ionicons name="person-outline" size={13} color={colors.textFaint} />
