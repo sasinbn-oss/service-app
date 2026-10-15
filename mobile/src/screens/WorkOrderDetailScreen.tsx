@@ -3125,7 +3125,22 @@ function CloseModal({
   const [result, setResult] = useState((reclosing && order.closeResult) || "FIXED");
   const [note, setNote] = useState(reclosing ? order.closeNote ?? "" : "");
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
-  const [parts, setParts] = useState<PickedPart[]>(reclosing ? order.parts : []);
+  /**
+   * อะไหล่ที่เบิกไว้ในใบนี้ (แอดมินเช็คแล้วว่ามีของ) เติมให้เป็นค่าตั้งต้น — ช่างส่วนใหญ่ใช้ตามที่เบิก
+   * เดิมช่องนี้ว่างเสมอ กล่องเคลมอะไหล่เก่าที่ผูกกับรายการนี้จึงไม่ขึ้นจนช่างเพิ่มเอง แล้วช่างหาไม่เจอ
+   * (เจ้าของงานแจ้ง ต.ค. 69) · ตัวที่ไม่ได้ใช้จริงช่างลบออกได้
+   */
+  const requisitioned = (): PickedPart[] =>
+    order.waitingParts
+      .filter((p) => p.inStock === true)
+      .map(({ sparePartId, partCode, name, brand, quantity }) => ({ sparePartId, partCode, name, brand, quantity }));
+  const [parts, setParts] = useState<PickedPart[]>(reclosing ? order.parts : requisitioned());
+  // ฟอร์มนี้ค้างอยู่ตลอด (ไม่ได้สร้างใหม่ทุกครั้งที่เปิด) — เปิดขึ้นมาแล้วยังว่างให้เติมอีกรอบ
+  // เผื่อเบิกของหลังจากเปิดหน้าใบงานไว้แล้ว
+  useEffect(() => {
+    if (visible && !reclosing) setParts((cur) => (cur.length ? cur : requisitioned()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, order]);
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [beforeFiles, setBeforeFiles] = useState<PickedAttachment[]>([]);
@@ -3418,125 +3433,9 @@ function CloseModal({
       ) : null}
 
       {/*
-        รูปก่อนซ่อม · หลังซ่อม แยกช่อง (เจ้าของงานขอ ต.ค. 69 — แทนช่องรูปหน้างานช่องเดียว)
-        ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง คนตรวจย้อนเทียบสองภาพนี้
-        สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปคือใบที่ตรวจย้อนไม่ได้
+        อะไหล่ · ใบเหลือง · เคลม อยู่ก่อนรูปก่อน/หลังซ่อม — เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอ
+        ว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
       */}
-      {([
-        ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0, beforeMissing],
-        ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วปกติ", afterFiles, setAfterFiles, order.afterCount ?? 0, afterMissing],
-      ] as const).map(([role, label, hint, list, setList, already, missingNow]) => (
-        <View key={role}>
-          <Text style={styles.modalLabel}>
-            รูป / วิดีโอ {label} <Text style={{ color: colors.danger }}>*</Text>
-          </Text>
-          <View style={[styles.shotSlot, role === "BEFORE" ? styles.shotBefore : styles.shotAfter]}>
-            <Text style={styles.shotHint}>{hint}</Text>
-            {already > 0 ? (
-              <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text>
-            ) : null}
-            <FileStrip files={[...list]} onChange={(next) => setList(next)} />
-            {busy ? null : (
-              <View style={styles.options}>
-                {Platform.OS !== "web" ? (
-                  <TouchableOpacity
-                    style={styles.option}
-                    onPress={() => pickOne((stage) => pickImageAttachment(true, stage), (f) => setList((v) => [...v, f]))}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.optionText}>ถ่ายรูป</Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => pickOne((stage) => pickImageAttachment(false, stage), (f) => setList((v) => [...v, f]))}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`เลือกรูป${label}`}
-                >
-                  <Text style={styles.optionText}>เลือกรูป</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => pickOne(pickVideoAttachment, (f) => setList((v) => [...v, f]))}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`เลือกวิดีโอ${label}`}
-                >
-                  <Text style={styles.optionText}>วิดีโอ</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-          {missingNow ? (
-            <Text style={styles.warn}>
-              ต้องแนบรูปหรือวิดีโอ{label}อย่างน้อยหนึ่งไฟล์
-              {role === "AFTER" ? " — ใช้ยืนยันว่าเครื่องกลับมาใช้ได้" : ""}
-            </Text>
-          ) : null}
-        </View>
-      ))}
-
-      {/*
-        ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
-
-        รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
-        ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
-        ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
-      */}
-      {order.hasNameplate && !nameplate ? (
-        <>
-          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-          <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
-        </>
-      ) : (
-        <>
-          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-          {/* บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
-              ไม่ต้องถ่ายมาก่อนแล้วค่อยมีใครมาเทียบทีหลัง */}
-          {order.machineCode ? (
-            <Text style={styles.linkedText}>
-              ในระบบบันทึกไว้ว่า {order.machineCode}
-              {order.machineModel ? ` · ${order.machineModel}` : ""}
-              {order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""} —
-              ถ่ายป้ายรุ่นมาเทียบ
-            </Text>
-          ) : null}
-          {nameplate ? (
-            <FileStrip
-              files={[nameplate]}
-              onChange={(next) => setNameplate(next[0] ?? null)}
-            />
-          ) : busy ? null : (
-            <View style={styles.options}>
-              {Platform.OS !== "web" ? (
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() =>
-                    pickOne((stage) => pickImageAttachment(true, stage), setNameplate)
-                  }
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.optionText}>ถ่ายป้ายรุ่น</Text>
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                style={styles.option}
-                onPress={() =>
-                  pickOne((stage) => pickImageAttachment(false, stage), setNameplate)
-                }
-                activeOpacity={0.7}
-              >
-                <Text style={styles.optionText}>เลือกรูปป้ายรุ่น</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {nameplateMissing ? (
-            <Text style={styles.warn}>
-              ต้องแนบรูปป้ายรุ่นที่ถ่ายรอบนี้ — ใช้ไล่เทียบว่าไปถูกเครื่อง
-            </Text>
-          ) : null}
-        </>
-      )}
-
       <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
 
       {/*
@@ -3804,6 +3703,126 @@ function CloseModal({
           ) : null}
         </>
       ) : null}
+
+      {/*
+        รูปก่อนซ่อม · หลังซ่อม แยกช่อง (เจ้าของงานขอ ต.ค. 69 — แทนช่องรูปหน้างานช่องเดียว)
+        ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง คนตรวจย้อนเทียบสองภาพนี้
+        สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปคือใบที่ตรวจย้อนไม่ได้
+      */}
+      {([
+        ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0, beforeMissing],
+        ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วปกติ", afterFiles, setAfterFiles, order.afterCount ?? 0, afterMissing],
+      ] as const).map(([role, label, hint, list, setList, already, missingNow]) => (
+        <View key={role}>
+          <Text style={styles.modalLabel}>
+            รูป / วิดีโอ {label} <Text style={{ color: colors.danger }}>*</Text>
+          </Text>
+          <View style={[styles.shotSlot, role === "BEFORE" ? styles.shotBefore : styles.shotAfter]}>
+            <Text style={styles.shotHint}>{hint}</Text>
+            {already > 0 ? (
+              <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text>
+            ) : null}
+            <FileStrip files={[...list]} onChange={(next) => setList(next)} />
+            {busy ? null : (
+              <View style={styles.options}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity
+                    style={styles.option}
+                    onPress={() => pickOne((stage) => pickImageAttachment(true, stage), (f) => setList((v) => [...v, f]))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.optionText}>ถ่ายรูป</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => pickOne((stage) => pickImageAttachment(false, stage), (f) => setList((v) => [...v, f]))}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`เลือกรูป${label}`}
+                >
+                  <Text style={styles.optionText}>เลือกรูป</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() => pickOne(pickVideoAttachment, (f) => setList((v) => [...v, f]))}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`เลือกวิดีโอ${label}`}
+                >
+                  <Text style={styles.optionText}>วิดีโอ</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+          {missingNow ? (
+            <Text style={styles.warn}>
+              ต้องแนบรูปหรือวิดีโอ{label}อย่างน้อยหนึ่งไฟล์
+              {role === "AFTER" ? " — ใช้ยืนยันว่าเครื่องกลับมาใช้ได้" : ""}
+            </Text>
+          ) : null}
+        </View>
+      ))}
+
+      {/*
+        ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
+
+        รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
+        ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
+        ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
+      */}
+      {order.hasNameplate && !nameplate ? (
+        <>
+          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
+          <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
+        </>
+      ) : (
+        <>
+          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
+          {/* บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
+              ไม่ต้องถ่ายมาก่อนแล้วค่อยมีใครมาเทียบทีหลัง */}
+          {order.machineCode ? (
+            <Text style={styles.linkedText}>
+              ในระบบบันทึกไว้ว่า {order.machineCode}
+              {order.machineModel ? ` · ${order.machineModel}` : ""}
+              {order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""} —
+              ถ่ายป้ายรุ่นมาเทียบ
+            </Text>
+          ) : null}
+          {nameplate ? (
+            <FileStrip
+              files={[nameplate]}
+              onChange={(next) => setNameplate(next[0] ?? null)}
+            />
+          ) : busy ? null : (
+            <View style={styles.options}>
+              {Platform.OS !== "web" ? (
+                <TouchableOpacity
+                  style={styles.option}
+                  onPress={() =>
+                    pickOne((stage) => pickImageAttachment(true, stage), setNameplate)
+                  }
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.optionText}>ถ่ายป้ายรุ่น</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={styles.option}
+                onPress={() =>
+                  pickOne((stage) => pickImageAttachment(false, stage), setNameplate)
+                }
+                activeOpacity={0.7}
+              >
+                <Text style={styles.optionText}>เลือกรูปป้ายรุ่น</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {nameplateMissing ? (
+            <Text style={styles.warn}>
+              ต้องแนบรูปป้ายรุ่นที่ถ่ายรอบนี้ — ใช้ไล่เทียบว่าไปถูกเครื่อง
+            </Text>
+          ) : null}
+        </>
+      )}
 
       {order.outageStillOpen ? (
         <Text style={styles.warn}>
