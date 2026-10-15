@@ -34,6 +34,7 @@ import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
+import RecoveredCloseModal, { RecoveredCloseButton } from "../components/RecoveredCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import {
@@ -262,8 +263,23 @@ function inspectBooked(o: WorkOrder) {
   return o.logs.some((l) => (l.action === "CONFIRMED" || l.action === "RESCHEDULED") && l.status === "INSPECTING");
 }
 
+/**
+ * หัวหน้าภาคปิดเอง (เครื่องใช้งานได้แล้ว) — ขั้นที่ใบงานรออยู่และขั้นที่ยังไปไม่ถึงตอนปิดไม่มีใครทำ
+ * ต้องขึ้นว่าข้าม ไม่ใช่ติ๊กว่าทำแล้ว · ขั้นตอนปิดอ่านจากประวัติแถวสุดท้ายก่อนปิด (สถานะหลังแถวนั้น)
+ */
+function recoveredFrom(o: WorkOrder): string | null {
+  if (o.closeResult !== "RECOVERED") return null;
+  const done = o.logs.find((l) => l.action === "RECOVERED_CLOSED");
+  if (!done) return null;
+  const prior = o.logs.filter((l) => l.id < done.id).sort((a, b) => b.id - a.id)[0];
+  return prior?.status ?? "NEW";
+}
+
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
   const at = (v: string) => stages.findIndex((x) => x.value === v);
+  const recovered = recoveredFrom(o);
+  // รวมขั้นที่ใบงานรออยู่ตอนกดปิดด้วย — ขั้นนั้นก็ไม่มีใครทำ (เช่น รอจ่ายงาน แล้วปิดเลยโดยไม่จ่าย)
+  if (recovered && value !== "DONE" && at(value) >= at(recovered)) return true;
   switch (value) {
     case "PARTS_REQUESTED":
       return o.needsParts === false;
@@ -344,6 +360,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
@@ -621,6 +638,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     {timelineOpen ? (
       <TimelineModal target={{ kind: "wo", id: order.id, code: order.code }} onClose={() => setTimelineOpen(false)} />
     ) : null}
+    {recovering ? (
+      <RecoveredCloseModal
+        order={order}
+        files={files}
+        onFilesChanged={() => setFilesKey((k) => k + 1)}
+        onClose={() => setRecovering(false)}
+        onDone={async () => {
+          setRecovering(false);
+          await load();
+          setFilesKey((k) => k + 1);
+        }}
+      />
+    ) : null}
     {backfilling ? (
       <BackfillCloseModal
         order={order}
@@ -642,6 +672,14 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {/* แอดมิน (รวม Super Admin) ปิดงานที่จบจริงไปแล้วแต่ค้างในระบบได้ในครั้งเดียว */}
       {user?.role === "ADMIN" && !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
         <BackfillButton onPress={() => setBackfilling(true)} />
+      ) : null}
+      {/* หัวหน้าภาค (ใบในขอบเขต — เปิดหน้านี้ได้แปลว่าอยู่ในขอบเขตแล้ว) และแอดมิน ปิดงานที่เครื่องกลับมาใช้ได้โดยไม่ส่งช่าง
+          Admin Spare Part กับดูในฐานะ ดูได้อย่างเดียว ไม่ขึ้นปุ่ม */}
+      {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
+      !user?.partsAdmin &&
+      !user?.viewAs &&
+      !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
+        <RecoveredCloseButton onPress={() => setRecovering(true)} />
       ) : null}
       {order.isTest ? (
         <View style={styles.testBand}>

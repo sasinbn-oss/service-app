@@ -392,6 +392,22 @@ export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
   PENDING_PARTS: "รออะไหล่ ต้องกลับไปอีกรอบ",
   NEED_REVISIT: "ยังไม่จบ ต้องกลับไปอีกรอบ",
   NO_FAULT: "ไปถึงแล้วเครื่องปกติ",
+  // ไม่อยู่ใน WORK_ORDER_RESULTS — ช่างเลือกตอนปิดหน้างานไม่ได้ ได้มาจากปุ่มของหัวหน้าภาคเท่านั้น
+  RECOVERED: "เครื่องใช้งานได้แล้ว (หัวหน้าภาคปิด ไม่ต้องเข้าหน้างาน)",
+};
+
+/**
+ * เหตุผลที่หัวหน้าภาคปิดงานเองโดยไม่ส่งช่าง (เจ้าของงานขอ ต.ค. 69)
+ *
+ * ต่างจากยกเลิก: ยกเลิก = ใบงานไม่ควรมี · ปิดแบบนี้ = งานจบเพราะเครื่องใช้ได้จริง นับเป็นงานที่ปิดแล้ว
+ * เลือกจากรายการให้รายงานนับแยกได้ ส่วนรายละเอียดอยู่ในคำอธิบายที่บังคับกรอก
+ */
+export const RECOVERY_REASONS: Record<string, string> = {
+  SELF: "เครื่องกลับมาใช้งานได้เอง",
+  PHONE_GUIDE: "แนะนำลูกค้าทางโทรศัพท์/ไลน์ แล้วใช้งานได้",
+  REMOTE_RESET: "รีเซ็ต/แก้จากระยะไกล",
+  OTHER_ORDER: "ซ่อมแล้วในใบงานอื่น",
+  OTHER: "อื่น ๆ",
 };
 
 export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
@@ -423,6 +439,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   ATTACHED: "แนบไฟล์",
   ATTACHMENT_REMOVED: "ลบไฟล์แนบ",
   BACKFILLED: "ปิดงานย้อนหลัง (แอดมินกรอกแทน)",
+  RECOVERED_CLOSED: "หัวหน้าภาคปิดงาน — เครื่องใช้งานได้แล้ว",
   CLAIM_SUBMITTED: "ส่งเคลมอะไหล่เก่า",
   CLAIM_APPROVED: "อนุมัติเคลม · ปิดงาน",
   CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",
@@ -662,6 +679,8 @@ export const ATTACHMENT_ROLES = [
   "QUOTE",
   "RECEIPT",
   ...(["CLAIM_PART", "CLAIM_SYMPTOM", "CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"] as const),
+  // รูป/วิดีโอยืนยันว่าเครื่องกลับมาใช้งานได้ — หัวหน้าภาคปิดงานเองต้องมีอย่างน้อยหนึ่ง
+  "RECOVERY",
 ] as const;
 
 /**
@@ -719,6 +738,7 @@ export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   CLAIM_SYMPTOM: "รูปอาการเสีย (เคลม)",
   CLAIM_ERROR_VIDEO: "วิดีโอ Error code (เคลม)",
   CLAIM_CHECK_VIDEO: "วิดีโอการตรวจเช็ค (เคลม)",
+  RECOVERY: "เครื่องใช้งานได้แล้ว",
 };
 
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {
