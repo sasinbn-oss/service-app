@@ -30,7 +30,6 @@ import machineRoutes from "./routes/machines";
 import workOrderRoutes from "./routes/workOrders";
 import planRoutes from "./routes/plans";
 import backupRoutes from "./routes/backups";
-import { startBackupSchedule } from "./backup/backup";
 import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
 import { prisma } from "./prisma";
@@ -214,6 +213,4 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {
   console.log(`Service-app backend listening on port ${PORT}`);
-  // สำรองข้อมูลรอบ 17:00 — เช็คตอนเพิ่งตื่นและทุก 5 นาที (ดู backup/backup.ts) · เทสต์ปิดได้ด้วย BACKUP_SCHEDULE=off
-  if (process.env.BACKUP_SCHEDULE !== "off") startBackupSchedule();
 });

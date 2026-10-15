@@ -2,7 +2,7 @@
 # ทดสอบ: สำรองข้อมูล — Super Admin เท่านั้น · กดสำรองแล้วได้ไฟล์ Excel + ไฟล์กู้คืนที่ครบ ·
 #        ไม่มีเลข Fleet Card / รหัสผ่านใน Excel · รอบ 17:00 ทำวันละครั้ง · เก่ากว่า 30 วันถูกลบทั้งไฟล์และแถว
 #
-# รอบอัตโนมัติกับการลบของเก่าเรียกฟังก์ชันตรง (ts-node) พร้อมเวลาที่กำหนดเอง — รอให้ถึง 17:00 จริงไม่ได้
+# การลบของเก่าเรียกฟังก์ชันตรง (ts-node)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -43,8 +43,8 @@ SA=$(login ZBK$SUF); A=$(login A001); S=$(login S001); T=$(login T001)
 echo "═══ สิทธิ์"
 for who in A S T; do
   tok=${!who}
-  c="$(CODE GET $tok backups)$(CODE POST $tok backups)$(CODE GET $tok backups/today)$(CODE GET $tok 'backups/1/link?file=data')"
-  [ "$c" = "403403403403" ] && pass "${who}001 ดู/กดสำรอง/โหลดไฟล์ไม่ได้ (403 ทุกทาง)" || fail "${who}001 ได้ $c"
+  c="$(CODE GET $tok backups)$(CODE POST $tok backups)$(CODE GET $tok 'backups/1/link?file=data')"
+  [ "$c" = "403403403" ] && pass "${who}001 ดู/กดสำรอง/โหลดไฟล์ไม่ได้ (403 ทุกทาง)" || fail "${who}001 ได้ $c"
 done
 [ "$(DB "select count(*) from \"Backup\" where id>$START")" = 0 ] && pass "คนที่ไม่ใช่ Super Admin กดแล้วไม่มีไฟล์ถูกสร้าง (ฐานข้อมูล)" || fail "มีแถวสำรองเกิดขึ้น"
 GET $A backups | grep -q "เฉพาะ Super Admin" && pass "ข้อความปฏิเสธเป็นภาษาไทย" || fail "ข้อความ: $(GET $A backups)"
@@ -57,8 +57,8 @@ echo "$R" | J 'd.kind==="MANUAL"&&/^OTTERI-backup-\d{4}-\d\d-\d\d-\d{4}$/.test(d
   && pass "สำรองแล้วได้ชื่อไฟล์ตามเวลาไทย + ขนาดทั้งสองไฟล์" || fail "ผล: $(echo "$R" | head -c 300)"
 DB "select kind||'|'||\"byName\"||'|'||coalesce(\"dayKey\",'-') from \"Backup\" where id=$BID" | grep -q "^MANUAL|ซุปเปอร์สำรอง|-$" \
   && pass "แถวในฐานข้อมูลบอกว่าใครกด และไม่นับเป็นรอบประจำวัน" || fail "แถว: $(DB "select * from \"Backup\" where id=$BID")"
-GET $SA backups | J 'const n=new Date(d.nextRunAt); const bkk=new Date(n.getTime()+7*3600e3); d.keepDays===30&&d.hour===17&&bkk.getUTCHours()===17&&n>Date.now()&&n-Date.now()<=86400e3&&d.rows[0].id==='$BID'?"ok":"bad"' | grep -q ok \
-  && pass "รายการ: เก็บ 30 วัน · รอบถัดไป 17:00 ภายใน 24 ชม. · ล่าสุดอยู่บน" || fail "รายการ: $(GET $SA backups | head -c 300)"
+GET $SA backups | J 'd.keepDays===30&&d.nextRunAt===undefined&&d.rows[0].id==='$BID'?"ok":"bad"' | grep -q ok \
+  && pass "รายการ: เก็บ 30 วัน · ไม่มีรอบอัตโนมัติ · ล่าสุดอยู่บน" || fail "รายการ: $(GET $SA backups | head -c 300)"
 
 EX=$(GET $SA "backups/$BID/link?file=excel")
 DA=$(GET $SA "backups/$BID/link?file=data")
@@ -86,32 +86,28 @@ console.log([d.format, d.version, d.migrations.length>10, d.tables.WorkOrder.len
   && pass "ไฟล์กู้คืน: ใบงาน $DBWO สาขา $DBBR ครบตามฐานข้อมูล · มีรหัสผ่าน (เข้ารหัส) · ไม่มี Fleet Card" || fail "ไฟล์กู้คืน: $R (ฐานข้อมูล ใบงาน $DBWO สาขา $DBBR)"
 
 echo
-echo "═══ รอบอัตโนมัติ 17:00"
-R=$(TS '
-const b=require("./src/backup/backup");const {prisma}=require("./src/prisma");
-(async()=>{
-  const before=await b.ensureDailyBackup(new Date("2001-02-03T09:59:00Z"));   // 16:59 เวลาไทย
-  const [x,y]=await Promise.all([b.ensureDailyBackup(new Date("2001-02-03T10:05:00Z")),b.ensureDailyBackup(new Date("2001-02-03T12:00:00Z"))]);
-  const again=await b.ensureDailyBackup(new Date("2001-02-03T16:00:00Z"));      // 23:00 วันเดียวกัน
-  const rows=await prisma.backup.findMany({where:{dayKey:"2001-02-03"}});
-  console.log([before===null, rows.length, rows[0]&&rows[0].kind, again===null].join("|"));
-  await prisma.$disconnect();
-})()' 2>&1 | tail -1)
-[ "$R" = "true|1|AUTO|true" ] && pass "ก่อน 17:00 ไม่ทำ · หลัง 17:00 ทำครั้งเดียวต่อวัน แม้ถามพร้อมกันหรือถามซ้ำ" || fail "รอบอัตโนมัติ: $R"
-TODAY=$(GET $SA backups/today)
-if [ "$(TZ=Asia/Bangkok date +%H)" -ge 17 ]; then
-  echo "$TODAY" | J 'd.backup&&d.backup.kind==="AUTO"?"ok":"bad"' | grep -q ok && pass "/today หลัง 17:00 ได้ไฟล์ของวันนี้" || fail "/today: $TODAY"
-else
-  echo "$TODAY" | J 'd.backup===null?"ok":"bad"' | grep -q ok && pass "/today ก่อน 17:00 ยังไม่มีไฟล์ให้โหลด" || fail "/today: $TODAY"
-fi
+echo "═══ ไม่มีรอบอัตโนมัติแล้ว (เอาออก ต.ค. 69 — รอบ 17:00 ทำเซิร์ฟเวอร์ล่ม)"
+[ "$(CODE GET $SA backups/today)" = "404" ] && pass "/backups/today ไม่มีแล้ว — ถามแล้วไม่ไปสำรองเอง" || fail "/today ยังอยู่"
+R=$(TS 'const b=require("./src/backup/backup");console.log([typeof b.ensureDailyBackup,typeof b.startBackupSchedule].join("|"));process.exit(0)' 2>&1 | tail -1)
+[ "$R" = "undefined|undefined" ] && pass "ไม่มีตัวตั้งเวลาสำรองเองในเซิร์ฟเวอร์" || fail "ยังมีรอบอัตโนมัติ: $R"
 
 echo
+echo "═══ หน่วยความจำ — เขียนไฟล์ทีละส่วน ไม่อ่านทั้งฐานข้อมูลเข้าหน่วยความจำ"
+# จำกัด heap 100 MB — รุ่นเดิมใช้ 3.6 GB กับฐานข้อมูลใหญ่ (เกิน 512 MB ของ Render) จนเซิร์ฟเวอร์ถูกฆ่า
+R=$(cd "$BE" && node --max-old-space-size=100 -r ts-node/register/transpile-only -e '
+const b=require("./src/backup/backup");const fs=require("fs");
+(async()=>{const dir=fs.mkdtempSync(require("os").tmpdir()+"/bk-");const r=await b.writeBackupFiles(dir,[]);
+console.log(fs.statSync(r.excelPath).size>0&&fs.statSync(r.dataPath).size>0?"ok":"bad");fs.rmSync(dir,{recursive:true});process.exit(0)})()' 2>&1 | tail -1)
+[ "$R" = "ok" ] && pass "สำรองได้ในหน่วยความจำ JS 100 MB" || fail "หน่วยความจำ: $R"
+
 echo "═══ เก็บ 30 วัน"
+# สร้างชุดที่สองก่อนตั้งชุดแรกให้เก่า — ทุกรอบสำรองลบของเก่าเอง (pruneOld) ชุดแรกจะหายก่อนถึงข้อนี้
+B2=$(curl -s -X POST localhost:4000/api/backups -H "$(H $SA)" | J 'd.id')
 DB "update \"Backup\" set \"createdAt\"=now()-interval '31 days' where id=$BID" >/dev/null
-DB "update \"Backup\" set \"createdAt\"=now()-interval '29 days' where \"dayKey\"='2001-02-03'" >/dev/null
+DB "update \"Backup\" set \"createdAt\"=now()-interval '29 days' where id=$B2" >/dev/null
 OLDURL=$(GET $SA "backups/$BID/link?file=data" | J 'd.url')
 TS 'require("./src/backup/backup").pruneOld().then(()=>process.exit(0))' >/dev/null 2>&1
-[ "$(DB "select count(*) from \"Backup\" where id=$BID")$(DB "select count(*) from \"Backup\" where \"dayKey\"='2001-02-03'")" = "01" ] \
+[ "$(DB "select count(*) from \"Backup\" where id=$BID")$(DB "select count(*) from \"Backup\" where id=$B2")" = "01" ] \
   && pass "เก่ากว่า 30 วันถูกลบ · 29 วันยังอยู่ (ฐานข้อมูล)" || fail "ลบของเก่าไม่ตรง"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$OLDURL")" = 404 ] && pass "ไฟล์ในที่เก็บไฟล์ถูกลบด้วย ไม่ใช่แค่แถว" || fail "ไฟล์เก่ายังอยู่ในที่เก็บไฟล์"
 GET $SA "backups/$BID/link" | grep -q "เก่ากว่า 30 วัน" && pass "ขอลิงก์ไฟล์ที่ถูกลบแล้ว บอกเหตุผลเป็นภาษาไทย" || fail "ลิงก์ของที่ลบ: $(GET $SA "backups/$BID/link")"

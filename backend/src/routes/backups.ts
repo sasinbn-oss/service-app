@@ -8,15 +8,7 @@ import { Router } from "express";
 import { prisma } from "../prisma";
 import { requireAuth, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { getDownloadUrl, SIGNED_URL_TTL_SECONDS } from "../storage/fileStore";
-import {
-  BACKUP_HOUR,
-  BACKUP_KEEP_DAYS,
-  backupBaseName,
-  ensureDailyBackup,
-  pastBackupHour,
-  runBackup,
-} from "../backup/backup";
-import { bangkokDay } from "../utils/constants";
+import { BACKUP_KEEP_DAYS, backupBaseName, runBackup } from "../backup/backup";
 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
@@ -34,11 +26,7 @@ const shape = (b: Awaited<ReturnType<typeof prisma.backup.findFirstOrThrow>>) =>
 
 router.get("/", async (_req, res) => {
   const rows = await prisma.backup.findMany({ orderBy: { createdAt: "desc" } });
-  // รอบถัดไป: วันนี้ 17:00 ถ้ายังไม่ถึง ไม่งั้นพรุ่งนี้ 17:00
-  const today = bangkokDay();
-  const next = new Date(`${today}T${String(BACKUP_HOUR).padStart(2, "0")}:00:00+07:00`);
-  if (pastBackupHour()) next.setTime(next.getTime() + 86_400_000);
-  res.json({ keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR, nextRunAt: next, rows: rows.map(shape) });
+  res.json({ keepDays: BACKUP_KEEP_DAYS, rows: rows.map(shape) });
 });
 
 /** สำรองตอนนี้ — ใช้ก่อนนำเข้าไฟล์ใหญ่หรือก่อนแก้ข้อมูลจำนวนมาก */
@@ -50,17 +38,6 @@ router.post("/", async (req: AuthRequest, res) => {
   } catch (e) {
     res.status(503).json({ error: e instanceof Error ? e.message : "สำรองข้อมูลไม่สำเร็จ" });
   }
-});
-
-/**
- * ไฟล์ของรอบอัตโนมัติวันนี้ — แอปของ Super Admin ถามทุก 5 นาทีหลัง 17:00 เพื่อโหลดลงเครื่องให้เอง
- * ถ้ายังไม่มี (เซิร์ฟเวอร์เพิ่งตื่น) ทำให้ตอนนี้เลย — คำถามนี้เองคือตัวปลุกที่เชื่อถือได้ที่สุดตอน 17:00
- */
-router.get("/today", async (_req, res) => {
-  if (!pastBackupHour()) return res.json({ backup: null });
-  await ensureDailyBackup().catch((e) => console.error("[backup] รอบอัตโนมัติไม่สำเร็จ", e));
-  const b = await prisma.backup.findUnique({ where: { dayKey: bangkokDay() } });
-  res.json({ backup: b ? shape(b) : null });
 });
 
 router.get("/:id/link", async (req, res) => {

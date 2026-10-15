@@ -141,7 +141,7 @@ export default function AdminMenuScreen({ navigation }: Props) {
             key: "Backup",
             label: "สำรองข้อมูล",
             labelEn: "Backup",
-            description: "สำรองอัตโนมัติทุกวัน 17:00 · ดาวน์โหลด Excel และไฟล์กู้คืน",
+            description: "กดสำรองแล้วดาวน์โหลด Excel และไฟล์กู้คืน",
             icon: "cloud-download" as const,
             tint: colors.primarySoft,
             iconColor: colors.primaryInk,
