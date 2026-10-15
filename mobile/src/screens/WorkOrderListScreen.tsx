@@ -22,6 +22,7 @@ import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { HeadFilter, SortDir } from "../components/ColumnFilter";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
@@ -57,6 +58,8 @@ export interface WorkOrderRow {
   /** ช่างรายคน — ใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
   assignedToName: string | null;
   scheduledAt: string | null;
+  /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
+  partsExpectedAt?: string | null;
   createdAt: string;
   closedAt: string | null;
   closeResultLabel: string | null;
@@ -120,6 +123,32 @@ function whoKeys(row: WorkOrderRow): Who[] {
   return [];
 }
 
+/**
+ * คอลัมน์ของตาราง — ค่าที่ใช้กรอง/เรียงแบบ Excel ต้องเป็นข้อความเดียวกับที่ตาเห็นในช่องนั้น
+ * (กรอง "ทีม" แล้วต้องเจอคำที่อ่านอยู่ในคอลัมน์ ไม่ใช่รหัสภายใน)
+ */
+type ColKey = "wo" | "branch" | "machine" | "team" | "status" | "wait";
+const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string }[] = [
+  { key: "wo", label: "ใบงาน", value: (r) => r.code },
+  { key: "branch", label: "สาขา", value: (r) => `${r.branchCode} ${r.branchName}` },
+  { key: "machine", label: "เครื่อง", value: (r) => r.machineCode ?? "(ว่าง)" },
+  { key: "team", label: "ทีม", value: (r) => r.assignedToName ?? r.assignedTeam ?? "ยังไม่มอบหมาย" },
+  { key: "status", label: "สถานะ", value: (r) => r.statusLabel },
+  { key: "wait", label: "รอใคร", value: (r) => waitText(r) ?? "(ไม่ได้รอใคร)" },
+];
+type ColFilters = Partial<Record<ColKey, Set<string>>>;
+
+function waitText(row: WorkOrderRow) {
+  if (!row.stageActor) return null;
+  const who =
+    row.stageActor === "SUPERVISOR"
+      ? row.waitingOnSupervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนดูแล"
+      : row.stageActor === "EMPLOYEE" && row.waitingOnTeam
+        ? `ทีม${row.waitingOnTeam}`
+        : null;
+  return `${ROLE_LABEL[row.stageActor]}${who ? ` · ${who}` : ""}`;
+}
+
 /** "ค้าง 3 วัน" — นับเป็นวันเต็มตามเวลาไทย วันนี้ = "เข้าขั้นนี้วันนี้" */
 export function stuckLabel(iso: string) {
   const day = (d: Date) => Math.floor((d.getTime() + 7 * 3600_000) / 86_400_000);
@@ -146,6 +175,23 @@ const FILTERS: { value: Filter; label: string }[] = [
 ];
 
 /**
+ * รอเบิกอะไหล่ (ก่อนเสนอราคา) — บอกวันที่คาดว่าของเข้า เลยแล้วขึ้นแดงให้แอดมินตามผู้ขาย
+ * แสดงเฉพาะขั้นนี้ ขั้นอื่นวันที่นี้ไม่มีความหมายแล้ว (เซิร์ฟเวอร์ล้างให้เมื่อของครบ)
+ */
+function PartsEta({ row }: { row: { status: string; partsExpectedAt?: string | null } }) {
+  if (row.status !== "PARTS_SOURCING" || !row.partsExpectedAt) return null;
+  const day = row.partsExpectedAt.slice(0, 10);
+  const late = day < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const [y, m, d] = day.split("-").map(Number);
+  const label = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("th-TH", { day: "numeric", month: "short", timeZone: "UTC" });
+  return (
+    <Text style={{ fontSize: 12, lineHeight: 18, fontWeight: late ? "700" : "400", color: late ? colors.dangerInk : colors.textMuted }}>
+      {late ? `เลยกำหนดของเข้า (${label}) — ตามผู้ขาย` : `คาดว่าของเข้า ${label}`}
+    </Text>
+  );
+}
+
+/**
  * ใบงานรอใคร — ตัดสินสีของป้ายสถานะ
  *
  * ตรงกับ WORK_ORDER_STAGE_ACTOR ฝั่ง backend ยกเว้นขั้นที่รอคนนอก (ลูกค้าจ่ายเงิน ของเข้าคลัง)
@@ -156,6 +202,8 @@ export const STATUS_OWNER: Record<string, Owner> = {
   NEW: "SUPERVISOR",
   INSPECT_CONFIRM: "ADMIN",
   INSPECTING: "EMPLOYEE",
+  // รอเบิกอะไหล่ก่อนเสนอราคา — แอดมินเป็นคนเช็คและตามของ (เจ้าของงานกำหนด: อยู่ใน "รอแอดมิน")
+  PARTS_SOURCING: "ADMIN",
   AWAITING_QUOTE: "ADMIN",
   AWAITING_PAYMENT: "OUTSIDE",
   WAITING_PARTS: "OUTSIDE",
@@ -269,8 +317,32 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     [prefs.owner, prefs.who]
   );
   const byType = useCallback((r: WorkOrderRow) => !prefs.btype || r.branchType === prefs.btype, [prefs.btype]);
+  // ตัวกรองหัวคอลัมน์ (Excel) — ไม่จำข้ามการเปิดแอป ตั้งใจใช้ค้นเฉพาะกิจ จำไว้แล้วลืมจะงงว่าใบหายไปไหน
+  const [colFilters, setColFilters] = useState<ColFilters>({});
+  const [colSort, setColSort] = useState<{ key: ColKey; dir: SortDir } | null>(null);
+  const byCols = useCallback(
+    (r: WorkOrderRow, skip?: ColKey) =>
+      COLUMNS.every((c) => c.key === skip || !colFilters[c.key] || colFilters[c.key]!.has(c.value(r))),
+    [colFilters]
+  );
+  /** ค่าให้ติ๊กของแต่ละคอลัมน์ — นับจากใบที่ผ่านตัวกรองอื่นทั้งหมดยกเว้นคอลัมน์นั้นเอง (แบบ Excel) */
+  const colValues = useMemo(() => {
+    const out = {} as Record<ColKey, { value: string; count: number }[]>;
+    const base = rows.filter((r) => byOwner(r) && byType(r));
+    for (const c of COLUMNS) {
+      const m = new Map<string, number>();
+      for (const r of base) if (byCols(r, c.key)) m.set(c.value(r), (m.get(c.value(r)) ?? 0) + 1);
+      // ค่าที่ติ๊กไว้แต่ตอนนี้ไม่มีใบแล้ว ยังต้องเห็นในรายการ ไม่งั้นเอาติ๊กออกไม่ได้
+      for (const v of colFilters[c.key] ?? []) if (!m.has(v)) m.set(v, 0);
+      out[c.key] = [...m]
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => a.value.localeCompare(b.value, "th", { numeric: true }));
+    }
+    return out;
+  }, [rows, byOwner, byType, byCols, colFilters]);
+  const colFilterCount = Object.values(colFilters).filter(Boolean).length;
   const shown = useMemo(() => {
-    const list = rows.filter((r) => byOwner(r) && byType(r));
+    const list = rows.filter((r) => byOwner(r) && byType(r) && byCols(r));
     const at = (iso: string) => new Date(iso).getTime();
     const code = (a: WorkOrderRow, b: WorkOrderRow) =>
       a.branchCode.localeCompare(b.branchCode, "en", { numeric: true }) || a.code.localeCompare(b.code);
@@ -278,11 +350,17 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     else if (prefs.sort === "za") list.sort((a, b) => code(b, a));
     else if (prefs.sort === "new") list.sort((a, b) => at(b.createdAt) - at(a.createdAt));
     else if (prefs.sort === "old") list.sort((a, b) => at(a.stageSince) - at(b.stageSince));
+    // เรียงจากหัวคอลัมน์ทับการเรียงจากแถบตัวกรอง (กดล่าสุดชนะ — แถบตัวกรองกดแล้วล้างอันนี้)
+    if (colSort) {
+      const col = COLUMNS.find((c) => c.key === colSort.key)!;
+      const sign = colSort.dir === "asc" ? 1 : -1;
+      list.sort((a, b) => sign * col.value(a).localeCompare(col.value(b), "th", { numeric: true }));
+    }
     // ใบด่วนที่ยังค้างอยู่ขึ้นบนสุดเสมอ ไม่ว่าเลือกเรียงแบบไหน (เจ้าของงานกำหนด) — เรียงตามที่เลือกภายในกลุ่ม
     // ใบที่ปิดแล้วไม่ดึงขึ้น ด่วนเมื่อเดือนก่อนไม่ได้แปลว่าต้องดูก่อนวันนี้
     const hot = list.filter(isHot);
     return hot.length ? [...hot, ...list.filter((r) => !isHot(r))] : list;
-  }, [rows, byOwner, byType, prefs.sort]);
+  }, [rows, byOwner, byType, byCols, prefs.sort, colSort]);
 
   /**
    * แถวคั่น "ด่วน (n)" / "ปกติ (n)" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน
@@ -547,7 +625,27 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       </ScrollView>
 
       {!loading && !error && rows.length > 0 ? (
-        <ListFilters rows={rows} prefs={prefs} setPref={setPref} byOwner={byOwner} byType={byType} />
+        <ListFilters
+          rows={rows}
+          prefs={prefs}
+          setPref={setPref}
+          byOwner={byOwner}
+          byType={byType}
+          colSort={colSort}
+          setColSort={setColSort}
+        />
+      ) : null}
+      {colFilterCount ? (
+        <View style={styles.colFilterBar}>
+          <Ionicons name="funnel" size={13} color={colors.primaryInk} />
+          <Text style={styles.colFilterText}>
+            กรองตามหัวคอลัมน์ {colFilterCount} คอลัมน์ ({COLUMNS.filter((c) => colFilters[c.key]).map((c) => c.label).join(" · ")}) — เหลือ{" "}
+            {shown.length} ใบ
+          </Text>
+          <TouchableOpacity onPress={() => setColFilters({})} accessibilityLabel="ล้างตัวกรองคอลัมน์ทั้งหมด">
+            <Text style={styles.colFilterClear}>ล้างตัวกรองคอลัมน์</Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
     </View>
   );
@@ -616,7 +714,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               {foldable ? header : null}
               {table && !status ? (
                 <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
-                  <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+                  <TableHead
+                    values={colValues}
+                    filters={colFilters}
+                    sort={colSort}
+                    onFilter={(key, next) => setColFilters((f) => ({ ...f, [key]: next ?? undefined }))}
+                    onSort={(key, dir) => setColSort(dir ? { key, dir } : null)}
+                  />
                 </View>
               ) : null}
             </>
@@ -706,7 +810,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           />
           {table && !status && tableW > 0 ? (
             <View style={[styles.tableTop, styles.tableHeadFloat, { width: tableW }]}>
-              <TableHead sort={prefs.sort} onSortBranch={() => setPref({ sort: prefs.sort === "az" ? "za" : "az" })} />
+              <TableHead
+                    values={colValues}
+                    filters={colFilters}
+                    sort={colSort}
+                    onFilter={(key, next) => setColFilters((f) => ({ ...f, [key]: next ?? undefined }))}
+                    onSort={(key, dir) => setColSort(dir ? { key, dir } : null)}
+                  />
             </View>
           ) : null}
         </Animated.View>
@@ -758,12 +868,17 @@ function ListFilters({
   setPref,
   byOwner,
   byType,
+  colSort,
+  setColSort,
 }: {
   rows: WorkOrderRow[];
   prefs: ListPrefs;
   setPref: (p: Partial<ListPrefs>) => void;
   byOwner: (r: WorkOrderRow) => boolean;
   byType: (r: WorkOrderRow) => boolean;
+  /** เรียงจากหัวคอลัมน์อยู่ — ปุ่มเรียงของแถบนี้ไม่ขึ้นว่าเลือก และกดแล้วล้างการเรียงจากหัวคอลัมน์ */
+  colSort: unknown;
+  setColSort: (v: null) => void;
 }) {
   const typed = rows.filter(byType);
   const ownerCount = (role: Role | "") => typed.filter((r) => !role || r.stageActor === role).length;
@@ -827,7 +942,15 @@ function ListFilters({
         <View style={styles.fSep} />
         <Text style={styles.fLabel}>เรียง</Text>
         {SORTS.map((o) => (
-          <Seg key={o.value} on={prefs.sort === o.value} label={o.label} onPress={() => setPref({ sort: o.value })} />
+          <Seg
+            key={o.value}
+            on={!colSort && prefs.sort === o.value}
+            label={o.label}
+            onPress={() => {
+              setColSort(null);
+              setPref({ sort: o.value });
+            }}
+          />
         ))}
       </ScrollView>
     </View>
@@ -902,23 +1025,45 @@ function BranchType({ type }: { type: "DODO" | "COCO" }) {
   );
 }
 
-/** หัวตาราง — ความกว้างคอลัมน์ต้องตรงกับ WorkOrderTableRow · กด "สาขา" สลับ A→Z / Z→A */
-function TableHead({ sort, onSortBranch }: { sort: Sort; onSortBranch: () => void }) {
+/**
+ * หัวตาราง — ความกว้างคอลัมน์ต้องตรงกับ WorkOrderTableRow
+ * ทุกหัวคอลัมน์กดได้แบบ Excel: เรียง · ค้นหา · ติ๊กค่าที่จะแสดง (เจ้าของงานขอ ต.ค. 69)
+ */
+const COL_STYLE: Record<ColKey, object> = {
+  wo: { flex: 2.4, minWidth: 0 },
+  branch: { flex: 2.2, minWidth: 0 },
+  machine: { flex: 0.8 },
+  team: { flex: 1.3 },
+  status: { flex: 1.6 },
+  wait: { flex: 1.6, minWidth: 0 },
+};
+function TableHead({
+  values,
+  filters,
+  sort,
+  onFilter,
+  onSort,
+}: {
+  values: Record<ColKey, { value: string; count: number }[]>;
+  filters: ColFilters;
+  sort: { key: ColKey; dir: SortDir } | null;
+  onFilter: (key: ColKey, next: Set<string> | null) => void;
+  onSort: (key: ColKey, dir: SortDir | null) => void;
+}) {
   return (
     <View style={[styles.tr, styles.thead]}>
-      <Text style={[styles.th, styles.colWo]}>ใบงาน</Text>
-      <TouchableOpacity style={[styles.colBranch, styles.thSort]} onPress={onSortBranch} activeOpacity={0.7} accessibilityLabel="เรียงตามสาขา">
-        <Text style={styles.th}>สาขา</Text>
-        {sort === "az" || sort === "za" ? (
-          <Text style={[styles.th, { color: colors.primaryInk }]}>{sort === "az" ? "▲ A→Z" : "▼ Z→A"}</Text>
-        ) : (
-          <Ionicons name="swap-vertical" size={13} color={colors.textFaint} />
-        )}
-      </TouchableOpacity>
-      <Text style={[styles.th, styles.colMachine]}>เครื่อง</Text>
-      <Text style={[styles.th, styles.colTeam]}>ทีม</Text>
-      <Text style={[styles.th, styles.colStatus]}>สถานะ</Text>
-      <Text style={[styles.th, styles.colWait]}>รอใคร</Text>
+      {COLUMNS.map((c) => (
+        <HeadFilter
+          key={c.key}
+          label={c.label}
+          style={COL_STYLE[c.key]}
+          values={values[c.key]}
+          selected={filters[c.key] ?? null}
+          sort={sort?.key === c.key ? sort.dir : null}
+          onApply={(next) => onFilter(c.key, next)}
+          onSort={(dir) => onSort(c.key, dir)}
+        />
+      ))}
       <View style={styles.colAction} />
     </View>
   );
@@ -968,6 +1113,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
+        <PartsEta row={row} />
       </View>
       <View style={styles.colWait}>
         <WaitingOn row={row} />
@@ -1031,6 +1177,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
           <Text style={styles.meta}>{stuckLabel(row.stageSince)}</Text>
         </View>
       ) : null}
+      <PartsEta row={row} />
 
       <View style={styles.metaRow}>
         <Ionicons name="person-outline" size={13} color={colors.textFaint} />
@@ -1167,6 +1314,19 @@ const styles = StyleSheet.create({
   },
   tr: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: 12 },
   trLine: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  colFilterBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 8,
+  },
+  colFilterText: { flex: 1, minWidth: 200, fontSize: 12.5, color: colors.primaryInk },
+  colFilterClear: { fontSize: 12.5, fontWeight: "700", color: colors.primaryInk, textDecorationLine: "underline" },
   thead: { backgroundColor: colors.sky50, borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 10 },
   th: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
   td: { fontSize: 14, lineHeight: 21, color: colors.text },

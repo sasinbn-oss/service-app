@@ -403,6 +403,7 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     roundStartedAt: roundStart ?? null,
     // เอกสารขั้นเสนอราคา — ไม่ผูกกับรอบ เพราะใบเสนอราคาและบิลออกครั้งเดียวต่อใบงาน
     hasQuote: w.attachments.some((a) => a.role === "QUOTE"),
+    partsExpectedAt: w.partsExpectedAt,
     hasReceipt: w.attachments.some((a) => a.role === "RECEIPT"),
     needsQuote: needsCustomerQuote({
       branchCode: w.branch.code,
@@ -481,6 +482,7 @@ const listSelect = {
   status: true,
   priority: true,
   scheduledAt: true,
+  partsExpectedAt: true,
   scheduledTime: true,
   parentId: true,
   createdAt: true,
@@ -559,6 +561,7 @@ function listShape(
     assignedToName: w.assignedTo?.name ?? null,
     scheduledAt: w.scheduledAt,
     scheduledTime: w.scheduledTime,
+    partsExpectedAt: w.partsExpectedAt,
     // ใบรออะไหล่ที่แยกมาจากใบอื่น — รายการขึ้นป้ายให้รู้ว่าเป็นงานต่อเนื่อง
     isFollowUp: w.parentId !== null,
     createdAt: w.createdAt,
@@ -1594,7 +1597,8 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       machineBrand: machineMake(wo.machine),
     });
 
-  const nextStatus = !needsParts ? "PARTS_CHECKED" : quoteFirst ? "AWAITING_QUOTE" : "PARTS_REQUESTED";
+  // ต้องเสนอราคา → เช็คอะไหล่ก่อน (รอเบิกอะไหล่) แล้วค่อยเสนอราคาด้วยของที่มีจริง
+  const nextStatus = !needsParts ? "PARTS_CHECKED" : quoteFirst ? "PARTS_SOURCING" : "PARTS_REQUESTED";
 
   await prisma.$transaction(async (tx) => {
     // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
@@ -1618,8 +1622,81 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
         (!needsParts
           ? "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง"
           : quoteFirst
-          ? "อะไหล่ขายลูกค้าแฟรนไชส์ — ต้องเสนอราคาและเก็บเงินก่อนเบิกของ"
+          ? "อะไหล่ขายลูกค้าแฟรนไชส์ — เช็คอะไหล่ก่อน แล้วเสนอราคาและเก็บเงินก่อนเบิกของ"
           : null)
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * รอเบิกอะไหล่ (ก่อนเสนอราคา) — แอดมินบอกว่าอะไหล่แต่ละตัวมีหรือหมด (เจ้าของงานขอ ต.ค. 69)
+ *
+ * มีครบ → ไปเสนอราคาทันที · หมดบางตัว → ค้างที่ขั้นนี้ พร้อมวันที่คาดว่าของเข้า (ไม่บังคับ)
+ * ของมาแล้วกดซ้ำด้วยผล "มีครบ" — ใช้เส้นทางเดียวกัน ไม่ต้องมีปุ่มแยกฝั่งเซิร์ฟเวอร์
+ * เก็บผลไว้ที่อะไหล่ (inStock) ให้ขั้นเช็คคลังหลังรับเงินเห็นผลเดิมเป็นค่าตั้งต้น แต่ยังต้องเช็คซ้ำ
+ */
+const partsSourcingSchema = z.object({
+  results: z.array(z.object({ sparePartId: z.number().int().positive(), inStock: z.boolean() })).min(1),
+  expectedAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่คาดว่าของเข้าต้องเป็น ปี-เดือน-วัน")
+    .nullable()
+    .optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = partsSourcingSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (!(await guardStage(req, res, id, "PARTS_SOURCING"))) return;
+
+  const parts = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    include: { sparePart: { select: { partCode: true, name: true } } },
+  });
+  const result = new Map(parsed.data.results.map((r) => [r.sparePartId, r.inStock]));
+  // ต้องตอบครบทุกตัว — ตอบบางตัวแล้วถือว่าครบคือเสนอราคาของที่ยังไม่รู้ว่ามี
+  const missing = parts.filter((p) => !result.has(p.sparePartId));
+  if (missing.length) {
+    return res.status(400).json({ error: `ยังไม่ได้บอกว่ามีหรือหมด: ${missing.map((p) => p.sparePart.partCode).join(", ")}` });
+  }
+  const out = parts.filter((p) => result.get(p.sparePartId) === false);
+  const allIn = out.length === 0;
+  const expected = !allIn && parsed.data.expectedAt ? new Date(`${parsed.data.expectedAt}T00:00:00.000Z`) : null;
+  const now = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    for (const p of parts) {
+      await tx.workOrderPart.update({
+        where: { id: p.id },
+        data: { inStock: result.get(p.sparePartId)!, checkedAt: now, checkedById: req.auth!.userId },
+      });
+    }
+    await tx.workOrder.update({
+      where: { id },
+      data: allIn
+        ? { status: "AWAITING_QUOTE", partsExpectedAt: null, workStatus: workStatusForStage("AWAITING_QUOTE") }
+        : { partsExpectedAt: expected, workStatus: workStatusForStage("PARTS_SOURCING") },
+    });
+    const outText = out.map((p) => p.sparePart.name || p.sparePart.partCode).join(", ");
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      allIn ? "PARTS_SOURCED" : "PARTS_BACKORDERED",
+      allIn ? "AWAITING_QUOTE" : "PARTS_SOURCING",
+      [
+        allIn ? null : `หมด: ${outText}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""}`,
+        parsed.data.note || null,
+      ]
+        .filter(Boolean)
+        .join(" — ") || null
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -2591,6 +2668,8 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
     data.assignedToId = null;
   }
   if (toStage === "NEW") data.needsParts = null;
+  // วันที่คาดว่าของเข้าเป็นของรอบเช็คอะไหล่ที่ถูกย้อนทิ้ง
+  if (to <= at("PARTS_SOURCING")) data.partsExpectedAt = null;
   const ws = workStatusForStage(toStage);
   if (ws !== undefined) data.workStatus = ws;
 

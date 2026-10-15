@@ -160,6 +160,8 @@ interface WorkOrder {
   /** งานนี้ต้องเสนอราคาลูกค้าก่อนไหม (สาขาแฟรนไชส์ + ใช้อะไหล่ + หมดประกัน) */
   needsQuote: boolean;
   hasQuote: boolean;
+  /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของที่หมดจะเข้า */
+  partsExpectedAt?: string | null;
   hasReceipt: boolean;
   /** จำนวนรูป/วิดีโอหน้างาน (ไม่นับใบเหลืองกับป้ายรุ่น) — ต้องมีอย่างน้อยหนึ่งถึงจะปิดงานได้ */
   siteFileCount: number;
@@ -232,6 +234,8 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   INSPECTING: { label: "บันทึกผลตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
   PARTS_REQUESTED: { label: "เช็คอะไหล่ในคลัง", icon: "arrow-forward-circle" },
+  // ก่อนเสนอราคา — เช็คว่ามีอะไหล่ไหม มีครบไปเสนอราคา หมดรอของเข้า
+  PARTS_SOURCING: { label: "เช็คอะไหล่ก่อนเสนอราคา", icon: "cube-outline" },
   AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
   AWAITING_PAYMENT: { label: "ลูกค้าจ่ายเงินแล้ว", icon: "cash-outline" },
   // หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
@@ -285,6 +289,12 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
       return o.needsParts === false;
     case "AWAITING_QUOTE":
       return o.needsQuote === false && !o.hasQuote;
+    // ใบที่ไม่ต้องเสนอราคา หรือใบเก่าก่อนมีขั้นนี้ (ไปเสนอราคาตรง ๆ ไม่มีประวัติเช็คก่อน) — ไม่ได้ผ่านขั้นนี้
+    case "PARTS_SOURCING":
+      return (
+        o.status !== "PARTS_SOURCING" &&
+        (o.needsQuote === false || !o.logs.some((l) => l.action === "PARTS_SOURCED" || l.action === "PARTS_BACKORDERED"))
+      );
     case "AWAITING_PAYMENT":
       return o.needsQuote === false && !o.hasReceipt;
     // ตรวจหน้างานเป็นทางเลือก — ใบที่ไม่เคยส่งตรวจไม่ได้ผ่านขั้นนี้
@@ -870,6 +880,27 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           </View>
         ) : null}
 
+        {/* รอเบิกอะไหล่ — ทุกคนเห็นว่ารออะไหล่ตัวไหน ถึงเมื่อไร (ไม่ต้องเปิดฟอร์มดู) */}
+        {order.status === "PARTS_SOURCING" && order.waitingParts.some((p) => p.inStock === false) ? (
+          <View style={[styles.waitingCard, styles.waitingInline]} accessibilityLabel="รอของเข้า">
+            <Ionicons name="cube-outline" size={16} color={colors.roleAdmin} />
+            <Text style={styles.waitingText}>
+              รอของเข้า {order.waitingParts.filter((p) => p.inStock === false).length} รายการ —{" "}
+              {order.waitingParts
+                .filter((p) => p.inStock === false)
+                .map((p) => p.name || p.partCode)
+                .join(", ")}
+              {order.partsExpectedAt
+                ? ` · คาดว่า ${thaiDate(order.partsExpectedAt.slice(0, 10))}${
+                    order.partsExpectedAt.slice(0, 10) < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+                      ? " (เลยกำหนดแล้ว — ตามผู้ขาย)"
+                      : ""
+                  }`
+                : ""}
+            </Text>
+          </View>
+        ) : null}
+
         {order.status === "CLAIM_REVIEW" ? (
           <View style={[styles.waitingCard, styles.waitingInline]}>
             <Ionicons name="shield-checkmark-outline" size={16} color={colors.textMuted} />
@@ -1434,6 +1465,7 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
   AWAITING_PAYMENT: ["PAID"],
   PARTS_REQUESTED: ["PARTS_CHECKED"],
+  PARTS_SOURCING: ["PARTS_SOURCED", "PARTS_BACKORDERED"],
   PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
   ASSIGNED: ["DISPATCHED", "ASSIGNED"],
@@ -1781,7 +1813,7 @@ function StageBackModal({
 
   const order_ = targets.map((t) => t.value);
   function clears(value: string) {
-    const all = ["NEW", "INSPECT_CONFIRM", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
+    const all = ["NEW", "INSPECT_CONFIRM", "INSPECTING", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
     const idx = all.indexOf(value);
     const lost: string[] = [];
     if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && order.scheduledAt) lost.push("วันนัด");
@@ -1907,6 +1939,8 @@ function StageModal({
   // เอกสารขั้นเสนอราคา — ใบเสนอราคา และบิลที่ลูกค้าจ่ายแล้ว
   const [doc, setDoc] = useState<PickedAttachment | null>(null);
   const [skipQuote, setSkipQuote] = useState(false);
+  // ขั้นรอเบิกอะไหล่: วันที่คาดว่าของที่หมดจะเข้า (ไม่บังคับ)
+  const [expectedAt, setExpectedAt] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [visit, setVisit] = useState("");
   const [visitTime, setVisitTime] = useState("");
@@ -1954,6 +1988,7 @@ function StageModal({
     setTeam(order.assignedTeam ?? order.suggestedTeam ?? null);
     setDoc(null);
     setSkipQuote(false);
+    setExpectedAt(order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : "");
     setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
     setNote("");
     setError(null);
@@ -2014,6 +2049,12 @@ function StageModal({
             requisitionNo: requisitionNo.trim() || null,
           })),
           splitOut: mixed && splitOut,
+          note: note.trim() || undefined,
+        });
+      } else if (order.status === "PARTS_SOURCING") {
+        await api.post(`/work-orders/${order.id}/parts-sourcing`, {
+          results: order.waitingParts.map((p) => ({ sparePartId: p.sparePartId, inStock: checks[p.sparePartId]?.inStock === true })),
+          expectedAt: sourcingOut.length && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
       } else if (order.status === "AWAITING_QUOTE") {
@@ -2080,6 +2121,12 @@ function StageModal({
   const quoteBlocked =
     order.status === "AWAITING_QUOTE" &&
     (skipQuote ? !note.trim() : !doc && !order.hasQuote);
+  // ขั้นรอเบิกอะไหล่ต้องตอบครบทุกตัว — ตอบบางตัวแล้วไปเสนอราคา คือเสนอราคาของที่ยังไม่รู้ว่ามี
+  const sourcingOut = order.status === "PARTS_SOURCING" ? order.waitingParts.filter((p) => checks[p.sparePartId]?.inStock === false) : [];
+  const sourcingBlocked =
+    order.status === "PARTS_SOURCING" &&
+    (order.waitingParts.some((p) => typeof checks[p.sparePartId]?.inStock !== "boolean") ||
+      (expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt)));
   const paymentBlocked =
     order.status === "AWAITING_PAYMENT" && !doc && !order.hasReceipt;
 
@@ -2099,6 +2146,7 @@ function StageModal({
 
   const blocked =
     quoteBlocked ||
+    sourcingBlocked ||
     paymentBlocked ||
     (order.status === "NEW" &&
       (inspectFirst
@@ -2137,7 +2185,13 @@ function StageModal({
             {saving ? (
               <Spinner color="#fff" size="small" />
             ) : (
-              <Text style={styles.modalSaveText}>ยืนยัน</Text>
+              <Text style={styles.modalSaveText}>
+                {order.status === "PARTS_SOURCING"
+                  ? sourcingOut.length
+                    ? "รอของเข้า"
+                    : "อะไหล่ครบ — ไปเสนอราคา"
+                  : "ยืนยัน"}
+              </Text>
             )}
           </TouchableOpacity>
         </View>
@@ -2221,6 +2275,60 @@ function StageModal({
               </>
             ) : null}
 
+            {order.status === "PARTS_SOURCING" ? (
+              <View style={styles.checkList}>
+                <Text style={styles.linkedText}>
+                  งานนี้ต้องเสนอราคาลูกค้า — เช็คก่อนว่ามีอะไหล่ไหม มีครบไปเสนอราคาได้เลย หมดตัวไหนรอของเข้าที่ขั้นนี้
+                  (ยังไม่ต้องใส่คลังหรือเลขใบเบิก — เบิกจริงหลังลูกค้าจ่ายเงิน)
+                </Text>
+                {order.waitingParts.map((part) => {
+                  const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
+                  const set = (inStock: boolean) =>
+                    setChecks((v) => ({ ...v, [part.sparePartId]: { inStock, warehouse: c.warehouse } }));
+                  return (
+                    <View key={part.sparePartId} style={styles.checkItem}>
+                      <Text style={styles.checkCode}>
+                        {part.partCode} × {part.quantity}
+                      </Text>
+                      <Text style={styles.checkName}>{part.name}</Text>
+                      <View style={styles.options}>
+                        <TouchableOpacity
+                          style={[styles.option, c.inStock === true && styles.optionOn]}
+                          onPress={() => set(true)}
+                          activeOpacity={0.7}
+                          accessibilityLabel={`มีของ ${part.partCode}`}
+                        >
+                          <Text style={[styles.optionText, c.inStock === true && styles.optionTextOn]}>มีของ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.option, c.inStock === false && styles.optionOut]}
+                          onPress={() => set(false)}
+                          activeOpacity={0.7}
+                          accessibilityLabel={`หมด ${part.partCode}`}
+                        >
+                          <Text style={[styles.optionText, c.inStock === false && styles.optionTextOut]}>หมด</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
+                {sourcingOut.length ? (
+                  <DateField
+                    value={expectedAt}
+                    onChange={setExpectedAt}
+                    label="คาดว่าของเข้า"
+                    emptyHint="ไม่บังคับ — ใส่แล้วรายการเตือนเมื่อเลยกำหนด"
+                  />
+                ) : null}
+                <Text style={styles.linkedText}>
+                  {sourcingOut.length
+                    ? `หมด ${sourcingOut.length} รายการ — ใบงานรอที่ขั้นนี้ ของมาแล้วกดเช็คอีกรอบแล้วตอบว่ามีครบ`
+                    : order.waitingParts.every((p) => checks[p.sparePartId]?.inStock === true)
+                      ? "มีครบทุกตัว — ส่งต่อไปเสนอราคาได้เลย"
+                      : "ตอบให้ครบทุกตัวก่อน"}
+                </Text>
+              </View>
+            ) : null}
             {order.status === "PARTS_REQUESTED" ? (
               <View style={styles.checkList}>
                 {/*

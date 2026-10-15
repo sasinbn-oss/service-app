@@ -40,6 +40,7 @@ import ManageSparePartsScreen from "../screens/ManageSparePartsScreen";
 import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
 import BackupScreen from "../screens/BackupScreen";
+import CoverageMapScreen from "../screens/CoverageMapScreen";
 import { useDailyBackupDownload } from "../utils/backup";
 import ManageTeamsScreen from "../screens/ManageTeamsScreen";
 import FleetDashboardScreen from "../screens/FleetDashboardScreen";
@@ -78,6 +79,7 @@ const OWN_TITLE = new Set([
   "VehicleHistory",
   "ManageUsers",
   "ManageTeams",
+  "CoverageMap",
   "Backup",
   "ManageSpareParts",
   "AdminMenu",
@@ -304,6 +306,7 @@ function HomeStackNavigator() {
       initialRouteName={planner ? "PlanBoard" : "HomeMenu"}
     >
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
+      <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
       <HomeStack.Screen
         name="HomeMenu"
         component={HomeScreen}

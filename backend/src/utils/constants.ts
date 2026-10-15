@@ -91,6 +91,9 @@ export function workStatusForStage(
     case "AWAITING_QUOTE":
     case "AWAITING_PAYMENT":
       return "WAITING_PAYMENT";
+    // รอเบิกอะไหล่ก่อนเสนอราคา — เครื่องรออะไหล่อยู่จริง ยังไม่ถึงคิวลูกค้าจ่ายเงิน
+    case "PARTS_SOURCING":
+      return "WAITING_PARTS";
     // รอแอดมินเบิกของออกจากคลัง — ต้องตั้งค่าจริง ไม่ใช่ปล่อยไว้เฉย ๆ
     // เพราะขั้นก่อนหน้าอาจเป็นขั้นรับเงิน ซึ่งทิ้ง "รอลูกค้าจ่ายเงิน" ค้างไว้
     // ทั้งที่ลูกค้าจ่ายไปแล้ว แล้วกระดานจะโชว์ว่ายังรอเงินอยู่
@@ -168,6 +171,7 @@ export const WORK_ORDER_STATUSES = [
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
+  "PARTS_SOURCING",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
   "PARTS_CHECKED",
@@ -192,6 +196,7 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   INSPECTING: "รอทีมตรวจหน้างาน",
   WAITING_PARTS: "รออะไหล่เข้า",
   PARTS_REQUESTED: "รอแอดมินเช็คอะไหล่",
+  PARTS_SOURCING: "รอเบิกอะไหล่",
   AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
   AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
@@ -226,7 +231,13 @@ export const WORK_ORDER_STAGE_ORDER = [
    * เก็บเงินให้จบก่อนของออกจากคลัง เพราะของที่เบิกออกไปแล้วเอากลับเข้าคลัง
    * ไม่ได้ง่าย ๆ ถ้าลูกค้าไม่ตกลงราคา — ใบเบิกถูกตัดไปแล้ว ของอยู่กับช่าง
    * และคนที่ต้องตามเก็บเงินคือคนที่ไม่ได้เป็นคนตัดสินใจเบิก
+   *
+   * PARTS_SOURCING (รอเบิกอะไหล่ — เจ้าของงานขอ ต.ค. 69) มาก่อนเสนอราคา: แอดมินเช็คว่ามีอะไหล่ไหมก่อน
+   * ไม่งั้นลูกค้าจ่ายเงินไปแล้วต้องรอของ หรือราคาที่เสนอไม่ตรงกับของที่ได้จริง · มีครบผ่านทันที
+   * หมดรอที่ขั้นนี้จนของเข้า · ขั้นเช็คคลังหลังรับเงิน (PARTS_REQUESTED) ยังเช็คซ้ำ เพราะระหว่างรอเงิน
+   * ของอาจถูกงานอื่นใช้ไป
    */
+  "PARTS_SOURCING",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
   /**
@@ -277,6 +288,8 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   // ใบรออะไหล่หัวหน้าภาคเป็นคนดูแล — ตามของ แล้วส่งต่อเมื่อของมา
   WAITING_PARTS: "SUPERVISOR",
   PARTS_REQUESTED: "ADMIN",
+  // เช็ค/ตามอะไหล่ก่อนเสนอราคา — แอดมินดูคลังและเป็นคนเบิก (เจ้าของงานกำหนด: อยู่ใน "รอแอดมิน")
+  PARTS_SOURCING: "ADMIN",
   // เสนอราคาและรับเงินเป็นงานออฟฟิศ แอดมินเป็นคนรู้ราคาและเป็นคนออกเอกสาร
   AWAITING_QUOTE: "ADMIN",
   AWAITING_PAYMENT: "ADMIN",
@@ -299,6 +312,7 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
+  "PARTS_SOURCING",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
   "PARTS_CHECKED",
@@ -416,6 +430,8 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   NO_PARTS: "ระบุว่าไม่ต้องใช้อะไหล่",
   PARTS_ROLLBACK: "ช่างส่งกลับ — ยังจบงานไม่ได้",
   PARTS_CHECKED: "เช็คอะไหล่ในคลัง",
+  PARTS_SOURCED: "อะไหล่ครบ — ส่งต่อเสนอราคา",
+  PARTS_BACKORDERED: "รอของเข้า (ก่อนเสนอราคา)",
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
   PAID: "ลูกค้าจ่ายเงินแล้ว",

@@ -140,6 +140,8 @@ const GROUPS: Group[] = [
       },
       { key: "dash", label: "ติดตามเครื่องเสีย", labelEn: "Machine Monitor", icon: "pulse-outline", tab: "HomeTab", screen: "MachineDashboard" },
       { key: "reports", label: "รายงาน", labelEn: "Reports", icon: "document-text-outline", tab: "HomeTab", screen: "ReportsMenu" },
+      // ทุกคนดูได้ — ช่างรู้ว่าทีมไหนมีใคร · แอดมินลากแก้ได้ในหน้าเดียวกัน
+      { key: "coverage", label: "ผังผู้รับผิดชอบ", labelEn: "Coverage Map", icon: "git-network-outline", tab: "HomeTab", screen: "CoverageMap" },
     ],
   },
   {

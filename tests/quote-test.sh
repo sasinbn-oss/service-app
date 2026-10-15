@@ -1,5 +1,6 @@
 #!/bin/bash
-# ทดสอบ: ประกันนับจากเปิดร้าน (3 ปี · Oasis 2 ปี) · เสนอราคาและรับเงินมาก่อนเบิกอะไหล่
+# ทดสอบ: ประกันนับจากเปิดร้าน (3 ปี · Oasis 2 ปี) · รอเบิกอะไหล่ (เช็คของก่อนเสนอราคา) ·
+#        เสนอราคาและรับเงินมาก่อนเบิกอะไหล่
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -8,6 +9,9 @@ A=$(login A001); S=$(login S001)
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+# รอเบิกอะไหล่ — ตอบว่ามีครบ แล้วไปเสนอราคา
+source_ok() { curl -s -X POST "localhost:4000/api/work-orders/$1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true}]}"; }
 st() { curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.statusLabel+" / "+(d.workStatusLabel||"—")'; }
 
 PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
@@ -62,10 +66,29 @@ echo "$B2" | J 'd[0].warrantyExpiresAt?"ok":"bad"' | grep -q ok \
   && pass "สาขาที่ไม่เคยกรอกวันหมดประกันก็มีวันให้แล้ว" || fail "ยังไม่มีวันหมดประกัน"
 
 echo
-echo "═══ สาขา D หมดประกัน + ใช้อะไหล่ → เข้าขั้นเสนอราคาตั้งแต่ระบุอะไหล่เสร็จ"
+echo "═══ สาขา D หมดประกัน + ใช้อะไหล่ → รอเบิกอะไหล่ (เช็คของก่อน) แล้วค่อยเสนอราคา"
 ID1=$(prep "$DOLD" yes)
 echo "  $(st $ID1)"
-st $ID1 | grep -q "รอเสนอราคาลูกค้า" && pass "ระบุอะไหล่เสร็จเข้าขั้นเสนอราคาเลย ไม่ผ่านเบิกอะไหล่ก่อน" || fail "ไม่เข้าขั้นเสนอราคา"
+[ "$(DB "select status||'|'||coalesce(\"workStatus\",'-') from \"WorkOrder\" where id=$ID1")" = "PARTS_SOURCING|WAITING_PARTS" ] \
+  && pass "ระบุอะไหล่เสร็จเข้าขั้นรอเบิกอะไหล่ก่อนเสนอราคา (ฐานข้อมูล · กระดานขึ้นรออะไหล่)" || fail "ไม่เข้าขั้นรอเบิกอะไหล่: $(st $ID1)"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/quote" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
+echo "$R" | grep -q "ยังไม่ถึงขั้นนี้" && pass "ยังไม่เช็คอะไหล่ เสนอราคาไม่ได้" || fail "เสนอราคาได้ก่อนเช็คอะไหล่: $R"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true}]}")
+[ "$(DB "select status from \"WorkOrder\" where id=$ID1")" = "PARTS_SOURCING" ] && echo "$R" | grep -q "error" \
+  && pass "หัวหน้าภาคกดขั้นรอเบิกอะไหล่ไม่ได้ (ขั้นของแอดมิน)" || fail "หัวหน้าภาคกดได้: $R"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"results":[{"sparePartId":999999,"inStock":true}]}')
+echo "$R" | grep -q "ยังไม่ได้บอกว่ามีหรือหมด" && pass "ต้องตอบครบทุกตัว" || fail "ตอบไม่ครบผ่าน: $R"
+curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":false}],\"expectedAt\":\"2026-11-20\"}" >/dev/null
+[ "$(DB "select w.status||'|'||to_char(w.\"partsExpectedAt\",'YYYY-MM-DD')||'|'||p.\"inStock\" from \"WorkOrder\" w join \"WorkOrderPart\" p on p.\"workOrderId\"=w.id and p.kind='WAITING' where w.id=$ID1")" = "PARTS_SOURCING|2026-11-20|false" ] \
+  && pass "อะไหล่หมด → ค้างที่รอเบิกอะไหล่ พร้อมวันที่คาดว่าของเข้า (ฐานข้อมูล)" || fail "หมดแล้วไม่ค้าง: $(st $ID1)"
+curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs[0].action+"|"+d.logs[0].note+"|"+d.partsExpectedAt.slice(0,10)' | grep -q "^PARTS_BACKORDERED|หมด: .*คาดว่าเข้า 2026-11-20|2026-11-20$" \
+  && pass "ประวัติบอกตัวที่หมดและวันที่คาด · หน้าใบงานได้วันที่" || fail "ประวัติ: $(curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs[0].action+" "+d.logs[0].note')"
+curl -s "localhost:4000/api/work-orders?filter=ALL" -H "$(H $A)" | J "(d.rows||d).find(r=>r.id===$ID1).partsExpectedAt" | grep -q "2026-11-20" \
+  && pass "รายการใบงานได้วันที่คาดว่าของเข้า" || fail "รายการไม่มีวันที่คาด"
+source_ok $ID1 | J 'd.statusLabel' | grep -q "รอเสนอราคาลูกค้า" && pass "ของมาแล้ว ตอบว่ามีครบ → ไปเสนอราคา" || fail "มีครบแล้วไม่ไปเสนอราคา"
+[ "$(DB "select coalesce(to_char(w.\"partsExpectedAt\",'YYYY-MM-DD'),'-')||'|'||p.\"inStock\"||'|'||coalesce(p.\"requisitionNo\",'-') from \"WorkOrder\" w join \"WorkOrderPart\" p on p.\"workOrderId\"=w.id and p.kind='WAITING' where w.id=$ID1")" = "-|true|-" ] \
+  && pass "ครบแล้วล้างวันที่คาด · ยังไม่มีเลขใบเบิก (เบิกจริงหลังรับเงิน)" || fail "หลังครบ: $(DB "select \"partsExpectedAt\" from \"WorkOrder\" where id=$ID1")"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.contactPhone==="081-234-5678"?"ok":"bad"' | grep -q ok \
   && pass "เก็บชื่อและเบอร์ผู้ติดต่อสาขาแล้ว" || fail "ไม่ได้เก็บผู้ติดต่อ"
 
@@ -125,6 +148,7 @@ st $ID4 | grep -q "หัวหน้าภาคจ่ายงาน" && pass 
 echo
 echo "═══ ข้ามขั้นเสนอราคาได้ แต่ต้องบอกเหตุผล และไปโผล่ที่เบิกอะไหล่"
 ID5=$(prep "$DOLD" yes)
+source_ok $ID5 >/dev/null
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID5/quote" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"skip":true}')
 echo "$R" | grep -q "ต้องบอกเหตุผล" && pass "ข้ามโดยไม่บอกเหตุผลไม่ได้" || fail "ข้ามได้โดยไม่บอกเหตุผล"
 curl -s -X POST "localhost:4000/api/work-orders/$ID5/quote" -H "$(H $A)" -H 'Content-Type: application/json' \
@@ -135,6 +159,7 @@ curl -s "localhost:4000/api/work-orders/$ID5" -H "$(H $A)" | J '"  ประว�
 echo
 echo "═══ ขั้นเสนอราคาเป็นของแอดมิน หัวหน้าภาคทำแทนไม่ได้"
 ID6=$(prep "$DOLD" yes)
+source_ok $ID6 >/dev/null
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID6/quote" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ขั้นเสนอราคาเป็นของแอดมินเท่านั้น" || fail "หัวหน้าภาคทำได้: $R"
 
@@ -155,7 +180,7 @@ brandWo() {  # $1=เครื่อง $2=รุ่นที่เลือก�
   echo "$ID"
 }
 IDO=$(brandWo W1); IDH=$(brandWo W2)
-st $IDO | grep -q "เสนอราคา" && pass "Oasis เปิดร้านมา 2 ปีครึ่ง = หมดประกัน → ต้องเสนอราคา" || fail "Oasis: $(st $IDO)"
+st $IDO | grep -q "รอเบิกอะไหล่" && pass "Oasis เปิดร้านมา 2 ปีครึ่ง = หมดประกัน → ต้องเสนอราคา (เข้ารอเบิกอะไหล่ก่อน)" || fail "Oasis: $(st $IDO)"
 st $IDH | grep -q "รอแอดมินเช็คอะไหล่" && pass "Huebsch สาขาเดียวกัน = ยังอยู่ในประกัน → ข้ามเสนอราคา" || fail "Huebsch: $(st $IDH)"
 curl -s "localhost:4000/api/work-orders/$IDO" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyExpired].join()' | grep -q "^2,true$" \
   && pass "ใบงาน Oasis บอกว่าประกัน 2 ปี และหมดแล้ว" || fail "รายละเอียด Oasis: $(curl -s "localhost:4000/api/work-orders/$IDO" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyExpired].join()')"
@@ -163,7 +188,7 @@ curl -s "localhost:4000/api/branches?search=$BC" -H "$(H $A)" | J 'const b=d[0];
   | grep -q "^OASIS:2|HB - Huebsch:3 2$" && pass "ค้นสาขาได้ประกันแยกยี่ห้อ · วันรวมใช้ตัวที่หมดเร็วสุด (Oasis)" || fail "สาขา: $(curl -s "localhost:4000/api/branches?search=$BC" -H "$(H $A)" | J 'JSON.stringify(d[0].warranties)')"
 # ไฟล์รายงานเครื่องส่วนใหญ่ไม่มียี่ห้อ — เครื่องที่ช่องยี่ห้อว่างใช้ "รุ่นของเครื่อง" ที่เลือกตอนเปิดใบงานแทน
 IDT=$(brandWo W3 "Oasis(TC)")
-st $IDT | grep -q "เสนอราคา" && pass "ไม่มียี่ห้อจากไฟล์ แต่เลือกรุ่น Oasis(TC) → นับ 2 ปี ต้องเสนอราคา" || fail "Oasis(TC): $(st $IDT)"
+st $IDT | grep -q "รอเบิกอะไหล่" && pass "ไม่มียี่ห้อจากไฟล์ แต่เลือกรุ่น Oasis(TC) → นับ 2 ปี ต้องเสนอราคา (เข้ารอเบิกอะไหล่ก่อน)" || fail "Oasis(TC): $(st $IDT)"
 curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyBrand].join()' | grep -q "^2,Oasis(TC)$" \
   && pass "ใบงานบอกที่มา (Oasis(TC) 2 ปี)" || fail "ที่มา: $(curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyBrand].join()')"
 IDT2=$(brandWo W4 "Huebsch")
