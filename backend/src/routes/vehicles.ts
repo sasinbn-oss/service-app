@@ -6,6 +6,7 @@
  * เพื่อรู้ว่าคันไหนต้องเข้าศูนย์ แทนการจำหรือจดในสมุด
  */
 import { Router } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
@@ -19,9 +20,74 @@ import {
   VEHICLE_STATUS_LABELS,
   bangkokDay,
 } from "../utils/constants";
+import { parseFleetWorkbook } from "../vehicles/fleetImport";
 
 const router = Router();
 const TX = { timeout: 30_000, maxWait: 15_000 } as const;
+
+const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+/**
+ * นำเข้ารถจากไฟล์ "รถช่าง Service" (.xlsx) — ส่งไฟล์มาโดยไม่มี apply คือดูตัวอย่าง · apply=true คือบันทึก
+ *
+ * จับคู่รถเดิมด้วยทะเบียนที่ตัดช่องว่าง/ขีดออก ("3 ฒฉ 1984" = "3ฒฉ1984") ไม่งั้นนำเข้าซ้ำแล้วได้รถคันเดิมสองแถว
+ * รถเดิมแก้เฉพาะช่องที่มาจากไฟล์ (ยี่ห้อ ประเภท ผู้รับผิดชอบ บริษัทประกัน หมายเหตุ) — สถานะ ไมล์ และประวัติไม่แตะ
+ * ทำซ้ำได้: นำเข้าไฟล์เดิมอีกรอบ ทุกคันขึ้นว่า "ไม่เปลี่ยน"
+ */
+const FLEET_FIELDS = [
+  ["brand", "ยี่ห้อ"],
+  ["type", "ประเภท"],
+  ["owner", "ผู้รับผิดชอบ"],
+  ["insCompany", "บริษัทประกัน"],
+  ["note", "หมายเหตุ"],
+] as const;
+const plateKey = (p: string) => p.replace(/[\s\-–]+/g, "");
+
+router.post("/import", requireAuth, requireAdmin, sheetUpload.single("file"), async (req: AuthRequest, res) => {
+  if (!req.file) return res.status(400).json({ error: "ต้องแนบไฟล์รถ (.xlsx)" });
+  let parsed: Awaited<ReturnType<typeof parseFleetWorkbook>>;
+  try {
+    parsed = await parseFleetWorkbook(req.file.buffer);
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้" });
+  }
+  if (parsed.rows.length === 0) {
+    return res.status(400).json({ error: 'ไม่พบรถในไฟล์ — ต้องมีหัวตารางที่มีคอลัมน์ "ทะเบียน" และ "ชื่อผู้รับผิดชอบ"' });
+  }
+
+  const existing = await prisma.vehicle.findMany();
+  const byKey = new Map(existing.map((v) => [plateKey(v.plateNumber), v]));
+  const plan = parsed.rows.map((row) => {
+    const cur = byKey.get(plateKey(row.plateNumber));
+    if (!cur) return { ...row, action: "CREATE" as const, changes: [] as string[], id: null as number | null };
+    const changes = FLEET_FIELDS.filter(([f]) => (cur[f] ?? null) !== (row[f] ?? null)).map(([, label]) => label);
+    return {
+      ...row,
+      plateNumber: cur.plateNumber,
+      action: changes.length ? ("UPDATE" as const) : ("SAME" as const),
+      changes,
+      id: cur.id as number | null,
+    };
+  });
+
+  if (req.body?.apply === "true") {
+    await prisma.$transaction(async (tx) => {
+      for (const p of plan) {
+        const data = { brand: p.brand, type: p.type, owner: p.owner, insCompany: p.insCompany, note: p.note };
+        if (p.action === "CREATE") await tx.vehicle.create({ data: { plateNumber: p.plateNumber, ...data } });
+        else if (p.action === "UPDATE") await tx.vehicle.update({ where: { id: p.id! }, data });
+      }
+    }, TX);
+  }
+  res.json({
+    applied: req.body?.apply === "true",
+    created: plan.filter((p) => p.action === "CREATE").length,
+    updated: plan.filter((p) => p.action === "UPDATE").length,
+    same: plan.filter((p) => p.action === "SAME").length,
+    rows: plan,
+    skipped: parsed.skipped,
+  });
+});
 
 /** รายการรถแบบย่อ — ใช้ในตัวเลือกรถ (บอร์ดแผนงาน ฯลฯ) */
 router.get("/", requireAuth, async (req, res) => {

@@ -41,7 +41,7 @@ GET $V auth/me | J 'const left=(new Date(d.viewAs.expiresAt)-Date.now())/60000; 
 OWN=$(GET $T "work-orders?filter=ALL" | J 'd.rows.map(r=>r.id).sort().join()')
 SEEN=$(GET $V "work-orders?filter=ALL" | J 'd.rows.map(r=>r.id).sort().join()')
 [ "$OWN" = "$SEEN" ] && pass "รายการใบงานตรงกับที่ T001 เห็นเองทุกใบ" || fail "ใบงานไม่ตรง: เอง=[$OWN] ดูแทน=[$SEEN]"
-GET $V auth/users | grep -q "Admin access required" && pass "ระหว่างดูเป็นช่าง เปิดหน้าแอดมินไม่ได้ (สิทธิ์เป็นของช่างจริง)" || fail "ช่างเห็นหน้าแอดมิน"
+GET $V auth/users | grep -q "หน้านี้สำหรับแอดมินเท่านั้น" && pass "ระหว่างดูเป็นช่าง เปิดหน้าแอดมินไม่ได้ (สิทธิ์เป็นของช่างจริง)" || fail "ช่างเห็นหน้าแอดมิน"
 
 echo
 echo "═══ ดูได้อย่างเดียว"

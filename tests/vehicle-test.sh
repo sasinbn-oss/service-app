@@ -59,14 +59,14 @@ echo "$R" | grep -q "อย่างน้อย 5 รูป" && pass "รูป
 P3=$(photos $T START)
 LOG2=$(POST $T vehicle-logs/start "{\"vehicleId\":$V1,\"mileage\":45140,\"purpose\":\"ส่ง/รับอะไหล่\",\"photoIds\":$P3}" | J 'd.id')
 R=$(POST $T "vehicle-logs/$LOG2/force-return" '{"mileage":45200}')
-echo "$R" | grep -q "Admin\|สิทธิ์" && pass "ช่างคืนแทนคนอื่นไม่ได้ (เฉพาะแอดมิน)" || fail "ช่างใช้คืนแทนได้"
+echo "$R" | grep -q "สำหรับแอดมิน\|สิทธิ์" && pass "ช่างคืนแทนคนอื่นไม่ได้ (เฉพาะแอดมิน)" || fail "ช่างใช้คืนแทนได้"
 POST $A "vehicle-logs/$LOG2/force-return" '{"mileage":45200,"note":"ช่างลืมคืน"}' >/dev/null
 [ "$(DB "select status||'|'||(\"returnedById\" is not null) from \"VehicleLog\" where id=$LOG2")" = "COMPLETED|true" ] \
   && [ "$(DB "select status from \"Vehicle\" where id=$V1")" = "AVAILABLE" ] && pass "แอดมินคืนแทนได้ และบันทึกว่าใครคืนแทน" || fail "คืนแทนไม่สำเร็จ"
 TODAY=$(TZ=Asia/Bangkok date +%F)
 curl -s "localhost:4000/api/vehicle-logs/dashboard?date=$TODAY" -H "$(H $A)" | J "const v=d.perVehicle.find(x=>x.id===$V1); v.km===190&&v.trips===2&&d.warnings.length>=1?'ok':JSON.stringify(v)" | grep -q ok \
   && pass "ภาพรวมรถนับ กม. วันนี้ (130+60) เที่ยว และไมล์ไม่ต่อเนื่อง" || fail "ภาพรวมรถไม่ตรง"
-curl -s "localhost:4000/api/vehicle-logs/dashboard" -H "$(H $T)" | grep -q "Admin" && pass "ช่างเปิดภาพรวมรถไม่ได้" || fail "ช่างเปิดภาพรวมได้"
+curl -s "localhost:4000/api/vehicle-logs/dashboard" -H "$(H $T)" | grep -q "สำหรับแอดมิน" && pass "ช่างเปิดภาพรวมรถไม่ได้" || fail "ช่างเปิดภาพรวมได้"
 curl -s "localhost:4000/api/vehicle-logs" -H "$(H $S)" | J "d.some(l=>l.id===$LOG)?'bad':'ok'" | grep -q ok \
   && pass "คนอื่นเห็นแค่ประวัติของตัวเอง" || fail "เห็นประวัติของคนอื่น"
 curl -s "localhost:4000/api/vehicle-logs/export?from=$TODAY&to=$TODAY" -H "$(H $A)" | J 'd.path&&d.count>=2?"ok":"bad"' | grep -q ok \
@@ -88,6 +88,35 @@ curl -s -X POST "localhost:4000/api/vehicles/$V1/docs" -H "$(H $A)" -F kind=BOOK
   && pass "อัปเอกสารซ้ำชนิดเดิม แทนที่ของเดิม (ไม่ซ้อน)" || fail "เอกสารซ้อน"
 R=$(curl -s -X DELETE "localhost:4000/api/vehicles/$V1" -H "$(H $A)")
 echo "$R" | grep -q "เลิกใช้งาน" && pass "รถที่มีประวัติแล้วลบไม่ได้ — ให้ตั้งเลิกใช้งานแทน" || fail "ลบรถที่มีประวัติได้"
+
+echo
+echo "═══ นำเข้ารถจาก Excel (ไฟล์แบบ \"รถช่าง Service\" — fleet-fixture.xlsx ข้อมูลสมมุติ)"
+# รถเดิมทะเบียนเดียวกันแต่เขียนต่างแบบ — ต้องถูกแก้ ไม่ใช่สร้างซ้ำ
+POST $A vehicles '{"plateNumber":"9ทส-1003","brand":"Toyota","currentMileage":12000}' >/dev/null
+IMP() { curl -s -X POST localhost:4000/api/vehicles/import -H "$(H $1)" -F "file=@$SP/fleet-fixture.xlsx" ${2:+-F apply=true}; }
+R=$(IMP $T)
+echo "$R" | grep -q "หน้านี้สำหรับแอดมินเท่านั้น" && pass "ช่างนำเข้ารถไม่ได้" || fail "ช่างนำเข้าได้: $(echo $R|head -c 120)"
+R=$(IMP $A)
+[ "$(echo "$R" | J '[d.created,d.updated,d.same,d.skipped.length].join()')" = "2,1,0,2" ] && [ "$(DB "select count(*) from \"Vehicle\" where \"plateNumber\" like '9%ทส%'")" = "1" ] \
+  && pass "ดูตัวอย่าง: เพิ่ม 2 · แก้ 1 (ทะเบียนเดิมเขียนต่างแบบ) · ข้าม 2 — ยังไม่บันทึก (ฐานข้อมูล)" || fail "ตัวอย่าง: $(echo "$R" | J '[d.created,d.updated,d.same,JSON.stringify(d.skipped)].join(" ")')"
+echo "$R" | J 'd.skipped.map(s=>s.plateNumber+":"+s.reason).join("|")' | grep -q "9ทส 1004:ยังไม่มีผู้รับผิดชอบในไฟล์ (ยังไม่ใช่รถ service)|9ทส 1005:รถส่วนตัวหัวหน้าภาค" \
+  && pass "ข้ามพร้อมเหตุผล: รถที่ไม่มีผู้รับผิดชอบ (เก็บหมายเหตุท้ายแถวมาบอก) · รถส่วนตัวหัวหน้าภาค" || fail "เหตุผลที่ข้าม: $(echo "$R" | J 'JSON.stringify(d.skipped)')"
+IMP $A 1 >/dev/null
+[ "$(DB "select \"plateNumber\"||'|'||brand||'|'||type||'|'||owner from \"Vehicle\" where \"plateNumber\"='9ทส 1001'")" = "9ทส 1001|Mitsubishi|รถบริษัท|กทม. ทีมทดสอบ1 · นายทดสอบ หนึ่ง (เอ)" ] \
+  && pass "บันทึกแล้ว: ทะเบียน ยี่ห้อ (MITSU → Mitsubishi) ประเภท ผู้รับผิดชอบ (ฐานข้อมูล)" || fail "รถที่นำเข้า: $(DB "select \"plateNumber\"||'|'||coalesce(brand,'')||'|'||coalesce(type,'')||'|'||coalesce(owner,'') from \"Vehicle\" where \"plateNumber\" like '9ทส%1001'")"
+N=$(DB "select note from \"Vehicle\" where \"plateNumber\"='9ทส 1001'")
+echo "$N" | grep -q "บัตรเติมน้ำมัน ลงท้าย 1111 · วงเงิน 7,000 บาท" && echo "$N" | grep -q "Easy Pass ลงท้าย 4444" && ! DB "select note from \"Vehicle\"" | grep -q "0004 0000\|3700004444" \
+  && pass "หมายเหตุมีบัตรเติมน้ำมัน/Easy Pass แค่ 4 ตัวท้าย — ไม่มีเลขเต็มในฐานข้อมูล" || fail "หมายเหตุ: $N"
+echo "$(DB "select note from \"Vehicle\" where \"plateNumber\"='9ทส 1002'")" | grep -q "เช็ครถที่: สาขาเช็คทดสอบ" \
+  && pass "ช่องสาขาเช็ครถที่ผสานหลายแถว ใช้กับทุกคันในช่องนั้น" || fail "สาขาเช็ครถผสาน"
+[ "$(DB "select count(*)||'|'||max(\"currentMileage\")||'|'||max(type) from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'-','')='9ทส1003'")" = "1|12000|รถเช่า (ORIX)" ] \
+  && pass "รถเดิมถูกแก้ข้อมูล ไม่สร้างซ้ำ และไมล์เดิมไม่ถูกแตะ" || fail "รถเดิม: $(DB "select count(*) from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'-','')='9ทส1003'")"
+# รถเดิมคงทะเบียนแบบที่เขียนไว้ ("9ทส-1003") — หาด้วยทะเบียนที่ตัดช่องว่าง/ขีดแล้ว
+DB "select note from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'-','')='9ทส1003'" | grep -q "หมายเหตุ: รอสลับคัน" \
+  && pass "ข้อความท้ายแถวที่ไม่มีหัวคอลัมน์ เก็บเป็นหมายเหตุ" || fail "หมายเหตุท้ายแถว"
+[ "$(DB "select count(*) from \"Vehicle\" where \"plateNumber\" in ('9ทส 1004','9ทส 1005')")" = "0" ] && pass "รถที่ข้ามไม่ถูกสร้าง (ฐานข้อมูล)" || fail "รถที่ข้ามถูกสร้าง"
+[ "$(IMP $A | J '[d.created,d.updated,d.same].join()')" = "0,0,3" ] && pass "นำเข้าไฟล์เดิมซ้ำ ทุกคันขึ้นว่าไม่เปลี่ยน" || fail "นำเข้าซ้ำไม่นิ่ง"
+DB "delete from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'-','') like '9ทส100%'" >/dev/null
 
 echo
 # เก็บกวาด — ลบรายการ รูป และรถทดสอบ
