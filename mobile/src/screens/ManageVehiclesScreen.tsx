@@ -80,6 +80,12 @@ interface Fleet {
 }
 
 /** ป้ายสถานะในตาราง — คำเต็มแบบในตัวอย่างของเจ้าของงาน ("ว่างพร้อมเบิก" บอกมากกว่า "ว่าง") */
+/**
+ * ตารางใช้พื้นที่ข้างเมนูเต็มจอ (เจ้าของงานขอ ต.ค. 69) — จอใหญ่เคยเหลือขอบว่างสองข้างเพราะความกว้างถูกจำกัดแล้ววางกลาง
+ * หน้าอื่นที่เป็นการ์ด/ฟอร์มยังจำกัดความกว้างไว้ บรรทัดยาวเต็มจอใหญ่อ่านยาก
+ */
+const FULL_WIDTH = { maxWidth: "100%" as const, paddingHorizontal: 24 };
+
 const STATUS_PILL: Record<string, { label: string; tone: "ok" | "info" | "warn" | "mute" }> = {
   AVAILABLE: { label: "ว่างพร้อมเบิก", tone: "ok" },
   IN_USE: { label: "กำลังใช้งาน", tone: "info" },
@@ -352,7 +358,7 @@ export default function ManageVehiclesScreen() {
 
   return (
     <>
-      <ScrollView style={fs.container} contentContainerStyle={[fs.content, { maxWidth: 1400 }]}>
+      <ScrollView style={fs.container} contentContainerStyle={[fs.content, table && FULL_WIDTH]}>
         <View style={fs.row}>
           <View style={{ flex: 1, minWidth: 240, gap: 2 }}>
             <Text style={[fs.title, headingFont]}>ทะเบียน & ซ่อมบำรุง</Text>
