@@ -61,7 +61,6 @@ import {
   RETIRED_WORK_ORDER_RESULTS,
   WORK_ORDER_RESULTS,
   WORK_ORDER_RESULT_LABELS,
-  RECOVERY_REASONS,
   WORK_ORDER_STATUSES,
   WORK_ORDER_STATUS_LABELS,
   WORK_ORDER_ACTION_LABELS,
@@ -3415,75 +3414,6 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
     },
     STAGE_TX
   );
-
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
-});
-
-/**
- * หัวหน้าภาคปิดงานเอง — เครื่องกลับมาใช้งานได้แล้ว ไม่ต้องส่งช่างเข้าหน้างาน (เจ้าของงานขอ ต.ค. 69)
- *
- * เช่น เครื่องกลับมาทำงานเอง · แนะนำลูกค้าทางโทรศัพท์แล้วใช้ได้ · รีเซ็ตจากระยะไกล · ซ่อมไปแล้วในใบงานอื่น
- * ก่อนมีปุ่มนี้ทางเดียวคือยกเลิก ซึ่งทำให้รายงานนับว่าใบงานไม่ควรมี ทั้งที่เครื่องเสียจริงและจบแล้วจริง
- *
- * กดได้ทุกขั้นที่ยังไม่ปิด (รวมรอช่างปิดงาน) — งานจบได้ก่อนช่างไปถึงเสมอ
- * บังคับเหตุผล คำอธิบาย และรูป/วิดีโอ RECOVERY อย่างน้อยหนึ่ง: ไม่มีช่างเห็นเครื่อง หลักฐานจึงต้องมาจากรูป
- * อะไหล่ที่เบิกไปแล้วไม่บล็อก (เจ้าของงานเลือก) — หน้าต่างเตือนให้คืนคลัง ระบบไม่บันทึกว่าใช้ไป
- * ใบงานที่ปิดแล้วหลุดจากบอร์ดแผนงานเอง (บอร์ดดึงเฉพาะใบที่ยังไม่ปิด) — ไม่มีแผนต้องลบแยก
- */
-const recoveredCloseSchema = z.object({
-  reason: z.enum(Object.keys(RECOVERY_REASONS) as [string, ...string[]], {
-    errorMap: () => ({ message: "เลือกเหตุผลที่ปิดงาน" }),
-  }),
-  note: z.string().trim().max(1000).optional(),
-});
-
-router.post("/:id/recovered-close", requireAuth, async (req: AuthRequest, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const role = req.auth!.role;
-  if (role !== "ADMIN" && role !== "SUPERVISOR") {
-    return res.status(403).json({ error: "ปิดงานแบบนี้ได้เฉพาะหัวหน้าภาคกับแอดมิน — ช่างปิดงานจากหน้างานตามปกติ" });
-  }
-  const parsed = recoveredCloseSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
-  const note = parsed.data.note?.trim() ?? "";
-  if (note.length < 5) {
-    return res.status(400).json({ error: "ต้องอธิบายสิ่งที่ทำและยืนยันกับใคร — เช่น โทรแนะนำพนักงานสาขา เครื่องกลับมาปั่นได้" });
-  }
-
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: { code: true, status: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
-  });
-  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return;
-  if (wo.status === "DONE") return res.status(400).json({ error: `${wo.code} ปิดไปแล้ว` });
-  if (wo.status === "CANCELLED") return res.status(400).json({ error: `${wo.code} ถูกยกเลิกไปแล้ว` });
-  // ช่างปิดแล้ว รอตรวจเคลม — ปิดตรงนี้คือข้ามการตรวจเคลมไปเงียบ ๆ
-  if (wo.status === "CLAIM_REVIEW") {
-    return res.status(400).json({ error: `${wo.code} รอ Admin Spare Part ตรวจเคลม — ใช้ปุ่มอนุมัติหรือตีกลับในใบงาน` });
-  }
-  const proof = await prisma.workOrderAttachment.count({ where: { workOrderId: id, role: "RECOVERY" } });
-  if (proof === 0) {
-    return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอที่เห็นว่าเครื่องใช้งานได้อย่างน้อย 1 ไฟล์" });
-  }
-
-  const text = `${RECOVERY_REASONS[parsed.data.reason]} — ${note}`;
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        status: "DONE",
-        closedAt: new Date(),
-        closedById: req.auth!.userId,
-        closeResult: "RECOVERED",
-        closeNote: text,
-        workStatus: workStatusForStage("DONE"),
-      },
-    });
-    await writeLog(tx, id, req.auth!.userId, "RECOVERED_CLOSED", "DONE", text);
-  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
