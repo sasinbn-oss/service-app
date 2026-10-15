@@ -27,6 +27,12 @@ import { openUrl } from "../utils/share";
 import { fmtDT, fmtNum, VehicleLogRow } from "../utils/vehicles";
 import { colors, headingFont, radius, shadow } from "../theme";
 
+/**
+ * ตารางใช้พื้นที่ข้างเมนูเต็มจอ (เจ้าของงานขอ ต.ค. 69) — จอใหญ่เคยเหลือขอบว่างสองข้างเพราะความกว้างถูกจำกัดแล้ววางกลาง
+ * หน้าอื่นที่เป็นการ์ด/ฟอร์มยังจำกัดความกว้างไว้ บรรทัดยาวเต็มจอใหญ่อ่านยาก
+ */
+const FULL_WIDTH = { maxWidth: "100%" as const, paddingHorizontal: 24 };
+
 const MONTH_NAMES = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
 
 function thisMonth() {
@@ -317,7 +323,7 @@ export default function VehicleLogAdminScreen() {
       <>
         <FlatList
           style={fs.container}
-          contentContainerStyle={[fs.content, { maxWidth: 1400 }]}
+          contentContainerStyle={[fs.content, FULL_WIDTH]}
           data={[0]}
           keyExtractor={() => "table"}
           ListHeaderComponent={header}
