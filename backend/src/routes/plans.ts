@@ -24,7 +24,8 @@ import {
 const router = Router();
 
 /** ขั้นที่ถือว่า "มีกำหนดไปหน้างานวันนั้น" — ปิดแล้วก็ยังโชว์ว่าวันนั้นไปทำอะไรมา */
-const ON_BOARD = ["INSPECTING", "AWAITING_CONFIRM", "IN_PROGRESS", "CLAIM_REVIEW", "DONE"];
+// INSPECT_CONFIRM อยู่บนบอร์ดด้วย — ใบที่หัวหน้าภาคใส่วันเสนอไว้แล้ว ทีมนั้นถูกจองวันนั้นแม้ร้านยังไม่ตอบ
+const ON_BOARD = ["INSPECT_CONFIRM", "INSPECTING", "AWAITING_CONFIRM", "IN_PROGRESS", "CLAIM_REVIEW", "DONE"];
 
 function requirePlanner(req: AuthRequest, res: Response, next: NextFunction) {
   const role = req.auth?.role;
@@ -162,7 +163,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       status: o.status,
       statusLabel: WORK_ORDER_STATUS_LABELS[o.status] ?? o.status,
       // ไปตรวจหน้างาน กับไปซ่อม เป็นงานคนละแบบ — ไปตรวจไม่ต้องเตรียมอะไหล่
-      kind: o.status === "INSPECTING" ? "INSPECT" : "REPAIR",
+      kind: o.status === "INSPECTING" || o.status === "INSPECT_CONFIRM" ? "INSPECT" : "REPAIR",
       appointmentStatus: o.appointmentStatus,
       appointmentLabel: o.appointmentStatus
         ? APPOINTMENT_STATUS_LABELS[o.appointmentStatus] ?? o.appointmentStatus
@@ -219,7 +220,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       teams: working.length,
       people: working.reduce((n, l) => n + (l.plan?.members.length ?? 0), 0),
       stops: orders.length,
-      awaitingConfirm: orders.filter((o) => o.status === "AWAITING_CONFIRM").length,
+      awaitingConfirm: orders.filter((o) => o.status === "AWAITING_CONFIRM" || o.status === "INSPECT_CONFIRM").length,
     },
     lanes: rows,
     // ทีมที่จัดแผนได้ (null = ทุกทีม) — ฟอร์มจัดแผนแสดงเฉพาะทีมพวกนี้ ไม่งั้นหัวหน้าภาคเลือกทีมคนอื่นได้

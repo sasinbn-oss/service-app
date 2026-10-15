@@ -729,7 +729,10 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
         ? { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } }
         : q.status === "INBOX"
           ? { status: { in: inboxStages } }
-          : { status: q.status };
+          : q.status === "AWAITING_CONFIRM"
+            ? // ชิป "รอคอนเฟิร์มลูกค้า" คือรายการร้านที่แอดมินต้องโทร — นัดตรวจหน้างานก็เป็นการโทรแบบเดียวกัน
+              { status: { in: ["AWAITING_CONFIRM", "INSPECT_CONFIRM"] } }
+            : { status: q.status };
 
   /**
    * เห็นเท่าที่เกี่ยวข้องกับตัวเอง
@@ -820,6 +823,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     rows: rows.map((w) => listShape(w, { supervisors, stageSince })),
     counts: {
       ...byStatus,
+      AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
       ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
       INBOX: inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
     },
@@ -2010,7 +2014,12 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = confirmSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (!(await guardStage(req, res, id, "AWAITING_CONFIRM"))) return;
+  // ใช้ทั้งนัดเข้าซ่อม และนัดไปตรวจหน้างาน — คุยกับร้านแบบเดียวกัน ต่างกันแค่ว่านัดแล้วไปไหนต่อ
+  // ซ่อม: กลับไปให้หัวหน้าภาคยืนยันออกงาน · ตรวจ: ถึงช่างเลย (ดู WORK_ORDER_STAGE_ORDER)
+  const current = await prisma.workOrder.findUnique({ where: { id }, select: { status: true } });
+  const inspect = current?.status === "INSPECT_CONFIRM";
+  if (!(await guardStage(req, res, id, inspect ? "INSPECT_CONFIRM" : "AWAITING_CONFIRM"))) return;
+  const next = inspect ? "INSPECTING" : "ASSIGNED";
 
   const before = await prisma.workOrder.findUniqueOrThrow({
     where: { id },
@@ -2026,11 +2035,11 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
     await tx.workOrder.update({
       where: { id },
       data: {
-        status: "ASSIGNED",
+        status: next,
         appointmentStatus: "CONFIRMED",
         scheduledAt: dayStart(newDate),
         scheduledTime: newTime ?? null,
-        workStatus: workStatusForStage("ASSIGNED"),
+        workStatus: workStatusForStage(next),
       },
     });
     await writeLog(
@@ -2038,7 +2047,7 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
       id,
       req.auth!.userId,
       moved ? "RESCHEDULED" : "CONFIRMED",
-      "ASSIGNED",
+      next,
       [
         moved
           ? `ลูกค้าขอเลื่อนจาก ${oldDate ? visitText(oldDate, before.scheduledTime) : "—"} เป็น ${visitText(newDate, newTime)}`
@@ -2146,13 +2155,14 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
     await tx.workOrder.update({
       where: { id },
       data: {
-        status: "INSPECTING",
+        // ยังไม่ถึงช่าง — แอดมินนัดร้านก่อน (วันที่หัวหน้าภาคใส่คือวันที่เสนอ ลูกค้าอาจขอเลื่อน)
+        status: "INSPECT_CONFIRM",
         assignedTeam: team,
         assignedToId: null,
         scheduledAt: scheduledAt ? dayStart(scheduledAt) : null,
         scheduledTime: scheduledAt ? scheduledTime ?? null : null,
-        appointmentStatus: null,
-        workStatus: workStatusForStage("INSPECTING"),
+        appointmentStatus: "PENDING",
+        workStatus: workStatusForStage("INSPECT_CONFIRM"),
       },
     });
     await writeLog(
@@ -2160,7 +2170,7 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
       id,
       req.auth!.userId,
       "INSPECT_REQUESTED",
-      "INSPECTING",
+      "INSPECT_CONFIRM",
       [
         `ให้ ${team} เข้าตรวจหน้างาน${scheduledAt ? ` วันที่ ${visitText(scheduledAt, scheduledTime)}` : ""}`,
         parsed.data.note,
@@ -2545,7 +2555,7 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   if (toStage === "WAITING_PARTS" && wo.parentId === null) {
     return res.status(400).json({ error: "ขั้นรออะไหล่มีเฉพาะใบงานที่แยกมาจากใบอื่น" });
   }
-  if (toStage === "INSPECTING" && !wo.assignedTeam) {
+  if ((toStage === "INSPECTING" || toStage === "INSPECT_CONFIRM") && !wo.assignedTeam) {
     return res.status(400).json({ error: "ใบนี้ยังไม่มีทีมที่ไปตรวจ — ย้อนไปขั้นระบุอะไหล่แล้วส่งตรวจใหม่" });
   }
 
@@ -2559,9 +2569,11 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   } else if (toStage === "AWAITING_CONFIRM") {
     data.appointmentStatus = "PENDING";
   }
+  // ย้อนไปให้แอดมินนัดตรวจใหม่ — วันเดิมถูกล้างไปข้างบนแล้ว แอดมินใส่วันที่นัดได้ใหม่
+  if (toStage === "INSPECT_CONFIRM") data.appointmentStatus = "PENDING";
   // ย้อนไปถึงขั้นจ่ายงานหรือก่อนนั้น = ยังไม่มีทีมรับ ไม่งั้นใบจะค้างอยู่ในรายการของทีมเดิม
   // ยกเว้นย้อนไปตรวจหน้างาน ซึ่งทีมเดิมคือทีมที่ต้องไป
-  if (to <= at("PARTS_CHECKED") && toStage !== "INSPECTING") {
+  if (to <= at("PARTS_CHECKED") && toStage !== "INSPECTING" && toStage !== "INSPECT_CONFIRM") {
     data.assignedTeam = null;
     data.assignedToId = null;
   }
@@ -3238,7 +3250,7 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
           data: { workOrderId: id, userId: actor, action, status, note: note ?? null, createdAt, backfilledAt: stamp },
         });
       // ยังไม่ได้ระบุอะไหล่ — ใช้รายการที่ใช้จริงเป็นคำตอบของขั้นนั้น
-      if (wo.status === "NEW" || wo.status === "INSPECTING") {
+      if (wo.status === "NEW" || wo.status === "INSPECT_CONFIRM" || wo.status === "INSPECTING") {
         await log(
           usedParts.length ? "PARTS_REQUESTED" : "NO_PARTS",
           usedParts.length ? "PARTS_REQUESTED" : "PARTS_CHECKED",

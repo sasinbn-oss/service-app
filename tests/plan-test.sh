@@ -36,8 +36,25 @@ echo "═══ ตรวจหน้างาน"
 ID=$(newwo INSPECT); CREATED="$CREATED $ID"
 [ "$(DB "select \"jobType\" from \"WorkOrder\" where id=$ID")" = "INSPECT" ] && pass "เปิดใบงานประเภทตรวจสอบหน้างานได้" || fail "ประเภทงานไม่ถูกบันทึก"
 POST $S "work-orders/$ID/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-03\",\"scheduledTime\":\"09:30\"}" >/dev/null
-[ "$(DB "select status||'|'||\"assignedTeam\"||'|'||\"scheduledTime\" from \"WorkOrder\" where id=$ID")" = "INSPECTING|$TEAM|09:30" ] \
-  && pass "หัวหน้าภาคส่งทีมไปตรวจ พร้อมวันเวลา" || fail "ส่งตรวจไม่สำเร็จ: $(st $ID)"
+[ "$(DB "select status||'|'||\"assignedTeam\"||'|'||\"scheduledTime\"||'|'||\"appointmentStatus\" from \"WorkOrder\" where id=$ID")" = "INSPECT_CONFIRM|$TEAM|09:30|PENDING" ] \
+  && pass "หัวหน้าภาคส่งทีมไปตรวจ พร้อมวันเสนอ — ไปรอแอดมินนัดลูกค้าก่อน ยังไม่ถึงช่าง" || fail "ส่งตรวจไม่สำเร็จ: $(st $ID)"
+# ก่อนแอดมินนัด ช่างยังบันทึกผลตรวจไม่ได้ · ช่าง/หัวหน้าภาคนัดแทนไม่ได้
+R=$(POST $T "work-orders/$ID/inspection" '{"note":"แอบไปก่อนนัด"}')
+echo "$R" | grep -q "รอแอดมินนัดลูกค้า" && [ "$(st $ID)" = "INSPECT_CONFIRM" ] \
+  && pass "ยังไม่ได้นัด ช่างบันทึกผลตรวจไม่ได้" || fail "บันทึกผลตรวจได้ก่อนนัด: $(echo $R|head -c 120)"
+for who in T S; do
+  R=$(POST ${!who} "work-orders/$ID/confirm-appointment" '{}')
+  echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "$([ $who = T ] && echo ช่าง || echo หัวหน้าภาค)นัดลูกค้าแทนแอดมินไม่ได้" || fail "$who นัดได้: $(echo $R|head -c 120)"
+done
+[ "$(curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $A)" | J 'String(d.rows.some(r=>r.id==='$ID'))')" = "true" ] \
+  && pass "ใบรอนัดตรวจขึ้นในกล่องงานของแอดมิน" || fail "ไม่อยู่ในกล่องงานแอดมิน"
+[ "$(curl -s "localhost:4000/api/work-orders?status=AWAITING_CONFIRM" -H "$(H $A)" | J 'String(d.rows.some(r=>r.id==='$ID'))')" = "true" ] \
+  && pass "ชิป \"รอคอนเฟิร์มลูกค้า\" รวมใบรอนัดตรวจด้วย" || fail "ชิปรอคอนเฟิร์มไม่รวมนัดตรวจ"
+POST $A "work-orders/$ID/confirm-appointment" '{"scheduledAt":"2026-11-04","scheduledTime":"10:00"}' >/dev/null
+[ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"scheduledTime\"||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "INSPECTING|CONFIRMED|2026-11-04|10:00|$TEAM" ] \
+  && pass "แอดมินนัด (ลูกค้าขอเลื่อนวัน) แล้วส่งถึงทีมเลย ไม่ผ่านหัวหน้าภาคอีกรอบ" || fail "นัดไม่สำเร็จ: $(st $ID)"
+DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='RESCHEDULED' and status='INSPECTING'" | grep -q "09:30.*10:00" \
+  && pass "ประวัติบันทึกว่าเลื่อนนัดตรวจจากวันเสนอเป็นวันใหม่" || fail "ไม่มีประวัติเลื่อนนัดตรวจ"
 R=$(POST $T "work-orders/$ID/inspection" '{"note":""}')
 echo "$R" | grep -q "ต้องบอกว่าตรวจแล้วเจออะไร" && pass "ผลตรวจว่างไม่ได้" || fail "ผลตรวจว่างผ่าน: $(echo $R|head -c 120)"
 # ไฟล์ตรวจหน้างานต้องครบสามอย่าง: รูปหน้างาน · รูปอะไหล่ที่เสีย · วิดีโอการทำงาน
@@ -66,11 +83,16 @@ POST $T "work-orders/$ID/inspection" '{"note":"วาล์วน้ำทิ้
 # ส่งไปตรวจซ้ำ — ไฟล์ของรอบตรวจก่อนไม่นับ ต้องถ่ายใหม่ (หัวหน้าภาคบันทึกแทนก็ต้องครบ)
 ID2=$(newwo INSPECT); CREATED="$CREATED $ID2"
 POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\"}" >/dev/null
+R=$(POST $A "work-orders/$ID2/confirm-appointment" '{}')
+echo "$R" | grep -q "ต้องระบุวันเข้างาน" && pass "หัวหน้าภาคไม่ได้ใส่วัน แอดมินนัดโดยไม่ใส่วันไม่ได้" || fail "นัดได้ทั้งที่ไม่มีวัน: $(echo $R|head -c 120)"
+POST $A "work-orders/$ID2/confirm-appointment" '{"scheduledAt":"2026-11-05"}' >/dev/null
 for r in INSPECT_SITE INSPECT_PART; do UPI $ID2 "site-photo.png;type=image/png" $r >/dev/null; done
 UPI $ID2 "site-clip.mp4;type=video/mp4" INSPECT_VIDEO >/dev/null
 POST $T "work-orders/$ID2/inspection" '{"note":"รอบแรก"}' >/dev/null
 sleep 1
-POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\"}" >/dev/null
+POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-06\"}" >/dev/null
+POST $A "work-orders/$ID2/confirm-appointment" '{}' >/dev/null
+[ "$(st $ID2)" = "INSPECTING" ] && pass "ลูกค้าตกลงวันที่หัวหน้าภาคเสนอ แอดมินกดคอนเฟิร์มได้เลย" || fail "คอนเฟิร์มวันเสนอไม่ได้: $(st $ID2)"
 R=$(POST $S "work-orders/$ID2/inspection" '{"note":"รอบสอง"}')
 echo "$R" | grep -q "ยังขาด: รูปหน้างาน · รูปอะไหล่ที่เสีย · วิดีโอการทำงาน" && [ "$(st $ID2)" = "INSPECTING" ] \
   && pass "ตรวจซ้ำ: ไฟล์รอบก่อนไม่นับ หัวหน้าภาคบันทึกแทนก็ต้องแนบครบ" || fail "ไฟล์รอบก่อนถูกนับ: $(echo $R|head -c 160)"

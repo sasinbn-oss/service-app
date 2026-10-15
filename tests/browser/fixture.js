@@ -28,6 +28,7 @@ async function call(token, method, url, body) {
 
 /**
  * เปิดใบงานที่สาขา branchCode แล้วให้หัวหน้าภาคระบุอะไหล่ (parts = [{sparePartId, quantity}])
+ * parts = null คือหยุดไว้ที่ขั้นระบุอะไหล่ ให้เทสต์เดินขั้นนั้นเอง
  * หัวหน้าภาค S001 ถูกย้ายไปภาคของสาขานั้นชั่วคราว — เรียก cleanup() คืนค่าเดิมเสมอ
  */
 async function setup() {
@@ -46,14 +47,14 @@ async function setup() {
     });
     const id = wo.orders ? wo.orders[0].id : wo.id;
     created.push(id);
-    await call(S, "POST", `/work-orders/${id}/parts`, parts.length ? { needsParts: true, parts } : { needsParts: false });
+    if (parts) await call(S, "POST", `/work-orders/${id}/parts`, parts.length ? { needsParts: true, parts } : { needsParts: false });
     return { id, code: sql(`select code from "WorkOrder" where id=${id}`) };
   }
   async function cleanup() {
     for (const id of created) await call(A, "DELETE", `/work-orders/${id}`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
   }
-  return { A, sql, call, part, workOrder, cleanup };
+  return { A, sql, call, login, part, workOrder, cleanup };
 }
 
 module.exports = { setup };

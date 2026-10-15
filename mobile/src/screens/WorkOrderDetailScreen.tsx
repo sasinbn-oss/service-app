@@ -55,6 +55,8 @@ interface LogEntry {
   id: number;
   action: string;
   actionLabel: string;
+  /** ขั้นที่ใบงานไปอยู่หลังรายการนี้ — แยกคอนเฟิร์มนัดตรวจ (→ INSPECTING) ออกจากนัดซ่อม (→ ASSIGNED) */
+  status: string;
   statusLabel: string;
   note: string | null;
   byName: string | null;
@@ -224,6 +226,8 @@ interface LinkedOrder {
 /** ปุ่มของแต่ละขั้น — ชื่อเดียวกับหัวฟอร์มที่เปิดขึ้นมา */
 const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   NEW: { label: "ระบุอะไหล่ที่ต้องใช้", icon: "arrow-forward-circle" },
+  // แอดมินนัดร้านก่อนช่างไปตรวจ — ฟอร์มเดียวกับคอนเฟิร์มลูกค้าของงานซ่อม
+  INSPECT_CONFIRM: { label: "นัดลูกค้า (ตรวจหน้างาน)", icon: "call-outline" },
   INSPECTING: { label: "บันทึกผลตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
   PARTS_REQUESTED: { label: "เช็คอะไหล่ในคลัง", icon: "arrow-forward-circle" },
@@ -253,6 +257,11 @@ function visitLabel(o: { scheduledAt: string | null; scheduledTime: string | nul
  * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
  * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
  */
+/** แอดมินนัดร้านให้ไปตรวจหน้างานแล้วอย่างน้อยหนึ่งครั้ง */
+function inspectBooked(o: WorkOrder) {
+  return o.logs.some((l) => (l.action === "CONFIRMED" || l.action === "RESCHEDULED") && l.status === "INSPECTING");
+}
+
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
   const at = (v: string) => stages.findIndex((x) => x.value === v);
   switch (value) {
@@ -265,6 +274,9 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
     // ตรวจหน้างานเป็นทางเลือก — ใบที่ไม่เคยส่งตรวจไม่ได้ผ่านขั้นนี้
     case "INSPECTING":
       return o.status !== "INSPECTING" && !o.inspectedAt;
+    // ใบที่ส่งตรวจก่อนมีขั้นนัดก็ไม่ได้ผ่านขั้นนี้ — ดูจากประวัตินัดที่ส่งต่อไปขั้นตรวจ
+    case "INSPECT_CONFIRM":
+      return o.status !== "INSPECT_CONFIRM" && !inspectBooked(o);
     // ใบเก่าบางใบนัดแล้วไปเลยโดยไม่ได้ผ่านขั้นคอนเฟิร์ม — ไม่มีประวัติคอนเฟิร์ม/เลื่อน = ข้าม
     case "AWAITING_CONFIRM":
       return (
@@ -736,7 +748,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           // ตรวจหน้างานแล้วใบงานวนกลับไปขั้นแรก ขั้นตรวจจึงอยู่ "หลัง" ขั้นปัจจุบัน
           // ตามลำดับ แต่ทำไปแล้วจริง — ต้องขึ้นว่าทำแล้ว ไม่ใช่ยังไม่ถึง
           const doneOutOfOrder =
-            stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING";
+            (stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING") ||
+            (stage.value === "INSPECT_CONFIRM" && inspectBooked(order) && order.status !== "INSPECT_CONFIRM");
           const state = skipped
             ? "skipped"
             : order.status === "CANCELLED"
@@ -1377,6 +1390,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
  */
 const STAGE_ACTIONS: Record<string, string[]> = {
   NEW: ["PARTS_REQUESTED", "NO_PARTS", "INSPECT_REQUESTED"],
+  INSPECT_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
   INSPECTING: ["INSPECTED"],
   WAITING_PARTS: ["PARTS_ARRIVED"],
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
@@ -1402,7 +1416,9 @@ function StepInfo({
   const stage = stages.find((x) => x.value === stageValue);
   const actions = stageValue ? STAGE_ACTIONS[stageValue] ?? [] : [];
   // ประวัติเรียงใหม่ก่อนเก่า ตัวแรกที่เจอคือครั้งล่าสุด (ขั้นที่ถูกส่งกลับมาทำซ้ำจะเห็นรอบล่าสุด)
-  const log = logs.find((l) => actions.includes(l.action));
+  // คอนเฟิร์ม/เลื่อนใช้ทั้งนัดตรวจและนัดซ่อม — แยกด้วยขั้นที่ส่งต่อไป
+  const goesTo = stageValue === "INSPECT_CONFIRM" ? "INSPECTING" : stageValue === "AWAITING_CONFIRM" ? "ASSIGNED" : null;
+  const log = logs.find((l) => actions.includes(l.action) && (!goesTo || l.status === goesTo));
   return (
     <AppModal
       visible={stageValue !== null}
@@ -1727,11 +1743,11 @@ function StageBackModal({
 
   const order_ = targets.map((t) => t.value);
   function clears(value: string) {
-    const all = ["NEW", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
+    const all = ["NEW", "INSPECT_CONFIRM", "INSPECTING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
     const idx = all.indexOf(value);
     const lost: string[] = [];
     if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && order.scheduledAt) lost.push("วันนัด");
-    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECTING" && order.assignedTeam)
+    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECTING" && value !== "INSPECT_CONFIRM" && order.assignedTeam)
       lost.push("ทีมที่รับงาน");
     if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
       lost.push("ผลเช็คคลังและเลขใบเบิก");
@@ -1876,7 +1892,8 @@ function StageModal({
     // ใบที่เปิดมาเป็นงานตรวจสอบหน้างานและยังไม่เคยตรวจ — ตัวเลือกที่ถูกเกือบทุกครั้ง
     setInspectFirst(order.status === "NEW" && order.jobType === "INSPECT" && !order.inspectedAt);
     setFinding("");
-    setConfirmChoice(null);
+    // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
+    setConfirmChoice(order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "MOVE" : null);
     setSplitOut(true);
     setVisitTime(order.scheduledTime ?? "");
     setParts(order.waitingParts);
@@ -1933,7 +1950,7 @@ function StageModal({
         await api.post(`/work-orders/${order.id}/inspection`, { note: finding.trim() });
       } else if (order.status === "WAITING_PARTS") {
         await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
-      } else if (order.status === "AWAITING_CONFIRM") {
+      } else if (order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") {
         // ตกลงวันเดิมไม่ส่งวันไป — เซิร์ฟเวอร์ใช้วันที่หัวหน้าภาคใส่ไว้ จะได้ไม่บันทึกว่าเลื่อนเพราะเผลอแตะช่องวัน
         await api.post(
           `/work-orders/${order.id}/confirm-appointment`,
@@ -2052,7 +2069,7 @@ function StageModal({
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     (order.status === "ASSIGNED" && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
-    (order.status === "AWAITING_CONFIRM" &&
+    ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
         (confirmChoice === "MOVE" &&
           (!validDate || !timeOk || (visit === (order.scheduledAt ?? "").slice(0, 10) && visitTime === (order.scheduledTime ?? "")))))) ||
@@ -2144,13 +2161,14 @@ function StageModal({
                 {inspectFirst ? (
                   <>
                     <Text style={styles.linkedText}>
-                      ส่งทีมไปดูก่อน — ทีมบันทึกผลตรวจแล้วใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
+                      ส่งทีมไปดูก่อน — แอดมินโทรนัดร้านก่อน นัดแล้วใบงานถึงทีม ทีมบันทึกผลตรวจแล้ว
+                      ใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
                     </Text>
                     <DateField
                       value={visit}
                       onChange={setVisit}
-                      label="วันที่เข้าตรวจ"
-                      emptyHint="เว้นว่างได้ — ใบงานจะไปรอในรายการรอจัดแผน"
+                      label="วันที่เสนอเข้าตรวจ"
+                      emptyHint="เว้นว่างได้ — แอดมินใส่วันตอนนัดร้าน"
                     />
                     {visit ? <TimeField value={visitTime} onChange={setVisitTime} label="เวลา" /> : null}
                   </>
@@ -2524,19 +2542,29 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "AWAITING_CONFIRM" ? (
+            {order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM" ? (
               <>
                 <Text style={styles.linkedText}>
-                  หัวหน้าภาคจ่าย {order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"} เข้า {visitLabel(order)}
+                  {order.status === "INSPECT_CONFIRM"
+                    ? `หัวหน้าภาคส่ง${order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"}ไปตรวจหน้างาน · ${
+                        order.scheduledAt ? `วันที่เสนอ ${visitLabel(order)}` : "ยังไม่ได้ระบุวัน"
+                      }`
+                    : `หัวหน้าภาคจ่าย ${order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"} เข้า ${visitLabel(order)}`}
                   {order.contactPhone ? ` · โทร ${order.contactPhone}` : ""}
                 </Text>
                 <Text style={styles.modalLabel}>ลูกค้าตอบว่าอย่างไร</Text>
                 <View style={{ gap: spacing.xs }}>
-                  {(
-                    [
-                      ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
-                      ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
-                    ] as const
+                  {(order.status === "INSPECT_CONFIRM"
+                    ? order.scheduledAt
+                      ? ([
+                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้ทีมเข้าตรวจตามวันนี้"],
+                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันที่ลูกค้าสะดวก แล้วส่งให้ทีมเข้าตรวจ"],
+                        ] as const)
+                      : ([["MOVE", "นัดวันเข้าตรวจ", "ใส่วันที่ลูกค้าสะดวก แล้วส่งให้ทีมเข้าตรวจ"]] as const)
+                    : ([
+                        ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
+                        ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
+                      ] as const)
                   ).map(([v, label, hint]) => (
                     <TouchableOpacity
                       key={v}
@@ -2552,7 +2580,12 @@ function StageModal({
                 </View>
                 {confirmChoice === "MOVE" ? (
                   <>
-                    <DateField value={visit} onChange={setVisit} label="วันใหม่" emptyHint="เลือกวันที่ลูกค้าสะดวก" />
+                    <DateField
+                      value={visit}
+                      onChange={setVisit}
+                      label={order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "วันเข้าตรวจ" : "วันใหม่"}
+                      emptyHint="เลือกวันที่ลูกค้าสะดวก"
+                    />
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
