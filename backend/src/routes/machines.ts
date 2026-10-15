@@ -24,6 +24,7 @@ import {
   SCORE_PER_DAY,
   WORK_ORDER_STATUS_LABELS,
   WORK_STATUSES,
+  STORABLE_WORK_STATUSES,
   WORK_STATUS_LABELS,
   machineMake,
   outageScore,
@@ -486,7 +487,7 @@ router.get("/regions", requireAuth, async (req, res) => {
 
 const noteSchema = z.object({
   symptom: z.string().trim().max(500).nullable().optional(),
-  workStatus: z.enum(WORK_STATUSES).nullable().optional(),
+  workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
   // วันล้วน YYYY-MM-DD ไม่รับเวลา เพราะนัดช่างกันเป็นวัน
   scheduledVisitAt: z
     .string()

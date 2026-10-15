@@ -62,8 +62,19 @@ export type WorkStatus = (typeof WORK_STATUSES)[number];
  */
 export const RETIRED_WORK_STATUSES = ["IN_PROGRESS"] as const;
 
+/**
+ * สถานะที่ระบบตั้งให้เองตามขั้นของใบงาน — ไม่อยู่ในตัวเลือกที่คนกรอก แต่รับค่าได้ (ฟอร์มส่งค่าเดิมกลับมา)
+ *
+ * CHECKING_PARTS (เจ้าของงานขอ ต.ค. 69): ใบที่ถึงขั้นเช็คอะไหล่แต่แอดมินยังไม่ได้ตอบ เดิมขึ้น "รออะไหล่" ทั้งที่
+ * ยังไม่มีใครบอกว่าของหมด — ตอนนี้ขึ้นตามที่แอดมินระบุจริง: ยังไม่เช็ค = รอแอดมินเช็คอะไหล่ · ตอบว่าหมด = รออะไหล่
+ */
+export const SYSTEM_WORK_STATUSES = ["CHECKING_PARTS"] as const;
+/** ค่าที่บันทึกได้ — ที่คนเลือกได้ + ที่ระบบตั้ง */
+export const STORABLE_WORK_STATUSES = [...WORK_STATUSES, ...SYSTEM_WORK_STATUSES] as const;
+
 export const WORK_STATUS_LABELS: Record<string, string> = {
   WAITING_PARTS: "รออะไหล่",
+  CHECKING_PARTS: "รอแอดมินเช็คอะไหล่",
   WAITING_TECH: "รอช่างเข้าแก้ไข",
   WAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   WAITING_CUSTOMER: "รอลูกค้าแจ้งซ่อม",
@@ -91,14 +102,14 @@ export function workStatusForStage(
     case "AWAITING_QUOTE":
     case "AWAITING_PAYMENT":
       return "WAITING_PAYMENT";
-    // รอเบิกอะไหล่ก่อนเสนอราคา — เครื่องรออะไหล่อยู่จริง ยังไม่ถึงคิวลูกค้าจ่ายเงิน
+    // รอเบิกอะไหล่ก่อนเสนอราคา — ยังไม่เช็ค = รอแอดมินเช็ค · ตอบว่าหมด = รออะไหล่ (ผู้เรียกส่ง anyPartOutOfStock)
     case "PARTS_SOURCING":
-      return "WAITING_PARTS";
-    // รอแอดมินเบิกของออกจากคลัง — ต้องตั้งค่าจริง ไม่ใช่ปล่อยไว้เฉย ๆ
-    // เพราะขั้นก่อนหน้าอาจเป็นขั้นรับเงิน ซึ่งทิ้ง "รอลูกค้าจ่ายเงิน" ค้างไว้
-    // ทั้งที่ลูกค้าจ่ายไปแล้ว แล้วกระดานจะโชว์ว่ายังรอเงินอยู่
+      return "CHECKING_PARTS";
+    // รอแอดมินเช็คอะไหล่ — ต้องตั้งค่าจริง ไม่ใช่ปล่อยไว้เฉย ๆ เพราะขั้นก่อนหน้าอาจเป็นขั้นรับเงิน
+    // ซึ่งทิ้ง "รอลูกค้าจ่ายเงิน" ค้างไว้ · ยังไม่รู้ว่าของหมด จึงไม่ใช่ "รออะไหล่" (ตอบว่าหมดแล้วค่อยเป็น —
+    // ผู้เรียกส่ง anyPartOutOfStock) — เจ้าของงานขอ ต.ค. 69
     case "PARTS_REQUESTED":
-      return "WAITING_PARTS";
+      return "CHECKING_PARTS";
     // ใบงานรออะไหล่ที่แยกออกมา — รอของเข้าคลังจริง ๆ
     case "WAITING_PARTS":
       return "WAITING_PARTS";
@@ -120,7 +131,7 @@ export function workStatusForStage(
 }
 
 /** ค่าที่ยังกรองได้ รวมของเก่าด้วย ต่างจาก WORK_STATUSES ที่เลือกใหม่ได้เท่านั้น */
-export const FILTERABLE_WORK_STATUSES = [...WORK_STATUSES, ...RETIRED_WORK_STATUSES] as const;
+export const FILTERABLE_WORK_STATUSES = [...WORK_STATUSES, ...SYSTEM_WORK_STATUSES, ...RETIRED_WORK_STATUSES] as const;
 
 /**
  * คะแนนความรุนแรงของปัญหา
@@ -406,23 +417,10 @@ export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
   PENDING_PARTS: "รออะไหล่ ต้องกลับไปอีกรอบ",
   NEED_REVISIT: "ยังไม่จบ ต้องกลับไปอีกรอบ",
   NO_FAULT: "ไปถึงแล้วเครื่องปกติ",
-  // ไม่อยู่ใน WORK_ORDER_RESULTS — ช่างเลือกตอนปิดหน้างานไม่ได้ ได้มาจากปุ่มของหัวหน้าภาคเท่านั้น
+  // ปุ่ม "ปิดงาน — เครื่องใช้งานได้แล้ว" ถูกเอาออกแล้ว (เจ้าของงานขอ ต.ค. 69) — คงป้ายไว้ให้ใบเก่าที่ปิดแบบนี้
   RECOVERED: "เครื่องใช้งานได้แล้ว (หัวหน้าภาคปิด ไม่ต้องเข้าหน้างาน)",
 };
 
-/**
- * เหตุผลที่หัวหน้าภาคปิดงานเองโดยไม่ส่งช่าง (เจ้าของงานขอ ต.ค. 69)
- *
- * ต่างจากยกเลิก: ยกเลิก = ใบงานไม่ควรมี · ปิดแบบนี้ = งานจบเพราะเครื่องใช้ได้จริง นับเป็นงานที่ปิดแล้ว
- * เลือกจากรายการให้รายงานนับแยกได้ ส่วนรายละเอียดอยู่ในคำอธิบายที่บังคับกรอก
- */
-export const RECOVERY_REASONS: Record<string, string> = {
-  SELF: "เครื่องกลับมาใช้งานได้เอง",
-  PHONE_GUIDE: "แนะนำลูกค้าทางโทรศัพท์/ไลน์ แล้วใช้งานได้",
-  REMOTE_RESET: "รีเซ็ต/แก้จากระยะไกล",
-  OTHER_ORDER: "ซ่อมแล้วในใบงานอื่น",
-  OTHER: "อื่น ๆ",
-};
 
 export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CREATED: "เปิดใบงาน",
@@ -695,7 +693,7 @@ export const ATTACHMENT_ROLES = [
   "QUOTE",
   "RECEIPT",
   ...(["CLAIM_PART", "CLAIM_SYMPTOM", "CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"] as const),
-  // รูป/วิดีโอยืนยันว่าเครื่องกลับมาใช้งานได้ — หัวหน้าภาคปิดงานเองต้องมีอย่างน้อยหนึ่ง
+  // รูปยืนยันเครื่องใช้งานได้ ของปุ่มหัวหน้าภาคปิดเองที่เอาออกแล้ว — คงไว้ให้ไฟล์ของใบเก่าแสดงป้ายได้
   "RECOVERY",
 ] as const;
 

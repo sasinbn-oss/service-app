@@ -255,6 +255,8 @@ const GRADE_STYLE: Record<string, { color: string; background: string }> = {
  */
 const STATUS_STYLE: Record<string, { color: string; background: string }> = {
   WAITING_PARTS: { color: colors.warningInk, background: colors.warningSoft },
+  // ระบบตั้งให้ — ใบงานถึงขั้นเช็คอะไหล่แต่แอดมินยังไม่ตอบ (ม่วง = รอแอดมิน แบบเดียวกับรายการใบงาน)
+  CHECKING_PARTS: { color: colors.roleAdmin, background: colors.roleAdminSoft },
   WAITING_TECH: { color: colors.primaryInk, background: colors.primarySoft },
   WAITING_PAYMENT: { color: colors.warningInk, background: colors.warningSoft },
   WAITING_CUSTOMER: { color: colors.warningInk, background: colors.warningSoft },
