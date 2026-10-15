@@ -104,9 +104,20 @@ echo "$R" | J 'd.skipped.map(s=>s.plateNumber+":"+s.reason).join("|")' | grep -q
 IMP $A 1 >/dev/null
 [ "$(DB "select \"plateNumber\"||'|'||brand||'|'||type||'|'||owner from \"Vehicle\" where \"plateNumber\"='9ทส 1001'")" = "9ทส 1001|Mitsubishi|รถบริษัท|กทม. ทีมทดสอบ1 · นายทดสอบ หนึ่ง (เอ)" ] \
   && pass "บันทึกแล้ว: ทะเบียน ยี่ห้อ (MITSU → Mitsubishi) ประเภท ผู้รับผิดชอบ (ฐานข้อมูล)" || fail "รถที่นำเข้า: $(DB "select \"plateNumber\"||'|'||coalesce(brand,'')||'|'||coalesce(type,'')||'|'||coalesce(owner,'') from \"Vehicle\" where \"plateNumber\" like '9ทส%1001'")"
-N=$(DB "select note from \"Vehicle\" where \"plateNumber\"='9ทส 1001'")
-echo "$N" | grep -q "บัตรเติมน้ำมัน ลงท้าย 1111 · วงเงิน 7,000 บาท" && echo "$N" | grep -q "Easy Pass ลงท้าย 4444" && ! DB "select note from \"Vehicle\"" | grep -q "0004 0000\|3700004444" \
-  && pass "หมายเหตุมีบัตรเติมน้ำมัน/Easy Pass แค่ 4 ตัวท้าย — ไม่มีเลขเต็มในฐานข้อมูล" || fail "หมายเหตุ: $N"
+VID=$(DB "select id from \"Vehicle\" where \"plateNumber\"='9ทส 1001'")
+[ "$(DB "select \"fleetCardNo\"||'|'||\"fleetCardLimit\"||'|'||\"easyPassNo\" from \"VehicleCard\" where \"vehicleId\"=$VID")" = "0004 0000 0000 1111|7000|3700004444" ] \
+  && ! DB "select coalesce(note,'') from \"Vehicle\"" | grep -q "0004 0000\|3700004444" \
+  && pass "Fleet Card เต็มเลข + วงเงิน + Easy Pass อยู่ในตาราง VehicleCard ไม่ปนในหมายเหตุ (ฐานข้อมูล)" || fail "บัตร: $(DB "select * from \"VehicleCard\" where \"vehicleId\"=$VID")"
+# เห็นเฉพาะแอดมิน — รายการรถที่ช่างเรียก (หน้าเบิกรถ) ต้องไม่มีเลขบัตร
+curl -s localhost:4000/api/vehicles -H "$(H $T)" | grep -q "0004 0000\|3700004444\|fleetCard" && fail "ช่างเห็นเลขบัตรในรายการรถ" || pass "รายการรถของช่างไม่มีเลขบัตร"
+curl -s localhost:4000/api/vehicle-logs/status -H "$(H $T)" | grep -q "0004 0000\|3700004444" && fail "ช่างเห็นเลขบัตรในฟอร์มเบิกรถ" || pass "ฟอร์มเบิกรถของช่างไม่มีเลขบัตร"
+curl -s localhost:4000/api/vehicles/fleet -H "$(H $A)" | J 'd.vehicles.find(v=>v.id==='$VID').card.fleetCardNo' | grep -q "^0004 0000 0000 1111$" \
+  && pass "แอดมินเห็น Fleet Card ในหน้าทะเบียน" || fail "แอดมินไม่เห็นบัตร"
+POST $A vehicles '{"plateNumber":"9ทส 1009","fleetCardNo":"0004 9999","fleetCardLimit":3000}' >/dev/null
+curl -s -X PUT "localhost:4000/api/vehicles/$VID" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"fleetCardLimit":9000}' >/dev/null
+[ "$(DB "select \"fleetCardLimit\"||'|'||\"fleetCardNo\" from \"VehicleCard\" where \"vehicleId\"=$VID")|$(DB "select \"fleetCardNo\" from \"VehicleCard\" c join \"Vehicle\" v on v.id=c.\"vehicleId\" where v.\"plateNumber\"='9ทส 1009'")" = "9000|0004 0000 0000 1111|0004 9999" ] \
+  && pass "แอดมินแก้วงเงินบัตรได้ (เลขบัตรเดิมไม่หาย) · เพิ่มรถพร้อมบัตรได้" || fail "แก้บัตร: $(DB "select * from \"VehicleCard\" where \"vehicleId\"=$VID")"
+DB "update \"VehicleCard\" set \"fleetCardLimit\"=7000 where \"vehicleId\"=$VID" >/dev/null
 echo "$(DB "select note from \"Vehicle\" where \"plateNumber\"='9ทส 1002'")" | grep -q "เช็ครถที่: สาขาเช็คทดสอบ" \
   && pass "ช่องสาขาเช็ครถที่ผสานหลายแถว ใช้กับทุกคันในช่องนั้น" || fail "สาขาเช็ครถผสาน"
 [ "$(DB "select count(*)||'|'||max(\"currentMileage\")||'|'||max(type) from \"Vehicle\" where replace(replace(\"plateNumber\",' ',''),'-','')='9ทส1003'")" = "1|12000|รถเช่า (ORIX)" ] \

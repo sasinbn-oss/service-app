@@ -106,6 +106,21 @@ model Vehicle {
   dayPlans    TeamDayPlan[]
   docs        VehicleDoc[]
   maintenance VehicleMaintenance[]
+  card        VehicleCard?
+}
+
+// บัตรเติมน้ำมัน (Fleet Card) และ Easy Pass ของรถ — เห็นเฉพาะแอดมิน (เจ้าของงานขอ ต.ค. 69)
+// แยกตารางจาก Vehicle เพราะรายการรถถูกส่งให้ช่างทุกคน (หน้าเบิกรถ ตัวเลือกรถในแผนงาน) —
+// อยู่ในตารางเดียวกันแล้ววันหนึ่งมีคนส่งทั้งแถวออกไป เลขบัตรที่เอาไปใช้จ่ายได้จะหลุดถึงทุกคนเงียบ ๆ
+// ตารางนี้ถูกอ่านเฉพาะในเส้นทางของแอดมินที่ตั้งใจดึงมา
+model VehicleCard {
+  vehicleId      Int      @id
+  vehicle        Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  fleetCardNo    String?
+  // วงเงินต่อรอบ (บาท) ตามคอลัมน์ "ยอดบัตรฟีดการ์ด" ในไฟล์รถ
+  fleetCardLimit Int?
+  easyPassNo     String?
+  updatedAt      DateTime @default(now()) @updatedAt
 }
 
 model VehicleLog {

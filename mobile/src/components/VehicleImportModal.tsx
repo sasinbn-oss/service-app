@@ -24,6 +24,9 @@ interface Row {
   owner: string | null;
   insCompany: string | null;
   note: string | null;
+  fleetCardNo: string | null;
+  fleetCardLimit: number | null;
+  easyPassNo: string | null;
   action: "CREATE" | "UPDATE" | "SAME";
   changes: string[];
 }
@@ -141,7 +144,7 @@ export default function VehicleImportModal({
     >
       <Text style={styles.lead}>
         ไฟล์แบบ "รถช่าง Service" — ตอนรถบริษัท / รถเช่า / รถส่วนตัว และชีต Easy pass จับคู่รถเดิมด้วยทะเบียน
-        เลขบัตรเติมน้ำมันและ Easy Pass เก็บแค่ 4 ตัวท้าย · รถส่วนตัวหัวหน้าภาคไม่นำเข้า
+        เลข Fleet Card และ Easy Pass เห็นเฉพาะแอดมิน · รถส่วนตัวหัวหน้าภาคไม่นำเข้า
       </Text>
       <TouchableOpacity style={[fs.btn, fs.btnGhost, { alignSelf: "flex-start" }]} onPress={choose} disabled={busy} accessibilityLabel="เลือกไฟล์รถ">
         <Ionicons name="document-attach-outline" size={17} color={colors.navy} />
@@ -176,6 +179,18 @@ export default function VehicleImportModal({
                   </View>
                   {r.owner ? <Text style={styles.owner}>{r.owner}</Text> : null}
                   {r.insCompany ? <Text style={styles.meta}>ประกัน {r.insCompany}</Text> : null}
+                  {r.fleetCardNo || r.easyPassNo ? (
+                    <Text style={styles.meta}>
+                      {[
+                        r.fleetCardNo
+                          ? `Fleet Card ${r.fleetCardNo}${r.fleetCardLimit ? ` · วงเงิน ${r.fleetCardLimit.toLocaleString("en-US")} บาท` : ""}`
+                          : null,
+                        r.easyPassNo ? `Easy Pass ${r.easyPassNo}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Text>
+                  ) : null}
                   {r.note ? <Text style={styles.note}>{r.note}</Text> : null}
                 </View>
               );

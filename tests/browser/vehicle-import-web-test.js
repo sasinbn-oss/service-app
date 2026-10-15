@@ -55,6 +55,11 @@ const cleanup = () => sql(`delete from "Vehicle" where replace(replace("plateNum
       ? pass("ยืนยันแล้วรถ 3 คันอยู่ในฐานข้อมูล พร้อมประเภท")
       : fail(`ฐานข้อมูล: ${sql(`select string_agg("plateNumber", ',') from "Vehicle" where "plateNumber" like '9ทส%'`)}`);
     (await vis("9ทส 1001", false).count()) > 0 ? pass("รายการรถโหลดใหม่ เห็นคันที่นำเข้า") : fail("รายการไม่แสดงคันที่นำเข้า");
+    (await vis("Fleet Card 0004 0000 0000 1111 · วงเงิน 7,000 บาท · Easy Pass 3700004444").count()) > 0
+      ? pass("แอดมินเห็น Fleet Card เต็มเลข + วงเงิน + Easy Pass ในรายการรถ")
+      : fail("รายการรถไม่แสดง Fleet Card");
+    await vis("9ทส 1001", false).first().scrollIntoViewIfNeeded().catch(() => {});
+    await page.screenshot({ path: path.join(DIR, "vehicle-import-list.png") });
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {
