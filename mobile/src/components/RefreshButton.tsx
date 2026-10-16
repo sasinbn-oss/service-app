@@ -18,7 +18,12 @@ import { subscribeBackgroundReads } from "../api/client";
  * โหลดเสร็จจริงก่อนขึ้น "อัปเดตแล้ว" ไม่ใช่หมุนตามเวลาที่ตั้งไว้
  */
 
-type Handler = () => Promise<unknown>;
+/**
+ * ผลของการรีเฟรช — หน้าที่รู้ว่ามีอะไรเปลี่ยนส่ง changed มา ปุ่มกับแถบลากจะบอกได้ว่า "ใหม่ n ใบ"
+ * หรือ "ข้อมูลล่าสุดแล้ว" (เจ้าของงานขอ ต.ค. 69) · หน้าที่ไม่ส่งอะไรขึ้นแค่ "อัปเดตแล้ว"
+ */
+export type RefreshResult = { changed: number; unit?: string } | void | undefined;
+type Handler = () => Promise<RefreshResult | unknown>;
 let current: Handler | null = null;
 
 /**
@@ -41,11 +46,60 @@ export function useRefreshHandler(handler: Handler | null) {
   );
 }
 
+/** หน้านี้มีข้อมูลให้โหลดใหม่ไหม — ไม่มี (หน้าฟอร์ม) แถบลากรีเฟรชไม่ทำงาน */
+export function hasRefreshHandler() {
+  return current !== null;
+}
+
 type Phase = "idle" | "busy" | "done";
+type RefreshState = { phase: Phase; text: string };
+let state: RefreshState = { phase: "idle", text: "" };
+const stateListeners = new Set<(s: RefreshState) => void>();
+function setState(next: RefreshState) {
+  state = next;
+  stateListeners.forEach((l) => l(state));
+}
+export function subscribeRefresh(listener: (s: RefreshState) => void): () => void {
+  stateListeners.add(listener);
+  listener(state);
+  return () => stateListeners.delete(listener);
+}
+
+function outcomeText(r: unknown) {
+  if (r && typeof r === "object" && typeof (r as { changed?: unknown }).changed === "number") {
+    const { changed, unit } = r as { changed: number; unit?: string };
+    return changed > 0 ? `อัปเดตแล้ว · ใหม่ ${changed} ${unit ?? "รายการ"}` : "ข้อมูลล่าสุดแล้ว";
+  }
+  return "อัปเดตแล้ว";
+}
+
+/**
+ * รีเฟรชหน้าที่เปิดอยู่ — ปุ่มบนแถบบนกับการลากลง (PullToRefresh) ใช้ตัวเดียวกัน
+ * โหลดเฉพาะข้อมูลของหน้านั้น อยู่หน้าเดิม ตัวกรองและตำแหน่งที่เลื่อนไม่หาย
+ * คืนข้อความผล หรือ null ถ้าไม่ได้รีเฟรช (กำลังรีเฟรชอยู่ / หน้านี้ไม่มีข้อมูลให้โหลด)
+ */
+export async function runRefresh(): Promise<string | null> {
+  if (state.phase === "busy" || !current) return null;
+  setState({ phase: "busy", text: "กำลังอัปเดต..." });
+  let text = "อัปเดตแล้ว";
+  try {
+    // หมุนอย่างน้อยครู่หนึ่ง ข้อมูลที่โหลดเร็วมากจะได้ไม่ดูเหมือนกดแล้วไม่มีอะไรเกิดขึ้น
+    const [r] = await Promise.all([current(), new Promise((res) => setTimeout(res, 500))]);
+    text = outcomeText(r);
+  } catch {
+    // หน้าที่โหลดไม่สำเร็จแจ้งผิดพลาดของตัวเองอยู่แล้ว ปุ่มแค่กลับสู่ปกติ
+  }
+  setState({ phase: "done", text });
+  setTimeout(() => {
+    if (state.phase === "done") setState({ phase: "idle", text: "" });
+  }, 2200);
+  return text;
+}
 
 export default function RefreshButton() {
   const { width } = useWindowDimensions();
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [{ phase, text }, setLocal] = useState<RefreshState>(state);
+  useEffect(() => subscribeRefresh(setLocal), []);
   // หน้าเปิดใหม่หรือกลับมาที่หน้าเดิมแล้วโหลดข้อมูลเบื้องหลัง — หมุนจาง ๆ ให้รู้ว่ากำลังอัปเดต
   // แต่ไม่ขึ้นข้อความ เพราะคนไม่ได้กดเอง (ต้นแบบเรียกว่า syncing)
   const [syncing, setSyncing] = useState(false);
@@ -76,33 +130,22 @@ export default function RefreshButton() {
   async function onPress() {
     if (phase === "busy") return;
     /**
-     * หน้าที่ยังไม่ได้บอกปุ่มว่าต้องโหลดอะไร — บนเว็บโหลดทั้งหน้าใหม่แทน (ต.ค. 69)
-     * เดิมหมุนแล้วขึ้น "อัปเดตแล้ว" ทั้งที่ไม่ได้โหลดอะไร คนเลยต้องไปกดรีเฟรชเบราว์เซอร์เอง
-     * มีฟอร์มเปิดอยู่ไม่โหลดทั้งหน้า — ที่พิมพ์ค้างไว้จะหาย
+     * หน้าที่ไม่มีข้อมูลให้โหลดใหม่ (หน้าฟอร์ม) — เดิมบนเว็บโหลดทั้งหน้าใหม่ ซึ่งพาเด้งกลับหน้าแรก
+     * และทิ้งที่กรอกไว้ ตอนนี้ทุกหน้าที่มีข้อมูลผูกกับปุ่มแล้ว (ต.ค. 69) ที่เหลือจึงแค่บอก
      */
-    if (!current && Platform.OS === "web" && typeof window !== "undefined") {
-      if (anyModalOpen()) {
-        feedback.toast("warn", "มีฟอร์มเปิดอยู่ — บันทึกหรือปิดก่อน แล้วกดรีเฟรชอีกครั้ง");
-        return;
-      }
-      window.location.reload();
+    if (!current) {
+      feedback.toast("info", anyModalOpen() ? "มีฟอร์มเปิดอยู่ — บันทึกหรือปิดก่อน" : "หน้านี้ไม่มีข้อมูลให้โหลดใหม่");
       return;
     }
-    setPhase("busy");
-    try {
-      // หมุนอย่างน้อยครู่หนึ่ง ข้อมูลที่โหลดเร็วมากจะได้ไม่ดูเหมือนกดแล้วไม่มีอะไรเกิดขึ้น
-      await Promise.all([current ? current() : null, new Promise((r) => setTimeout(r, 500))]);
-    } catch {
-      // หน้าที่โหลดไม่สำเร็จแจ้งผิดพลาดของตัวเองอยู่แล้ว ปุ่มแค่กลับสู่ปกติ
-    }
-    setPhase("done");
-    setTimeout(() => setPhase("idle"), 2000);
+    const result = await runRefresh();
+    // จอแคบปุ่มเป็นไอคอนกลม ไม่มีที่ให้ข้อความผล — บอกผ่านแถบแจ้งแทน
+    if (result && width < 640) feedback.toast(result.startsWith("อัปเดตแล้ว · ใหม่") ? "info" : "success", result);
   }
 
   // จอแคบเหลือแค่ไอคอนกลม ตามต้นแบบ — ข้อความกินที่ของชื่อระบบบนแถบบน
   const wide = width >= 640;
   const tint = phase === "done" ? colors.successInk : colors.primaryInk;
-  const label = phase === "busy" ? "กำลังอัปเดต..." : phase === "done" ? "อัปเดตแล้ว" : "รีเฟรช";
+  const label = phase === "idle" ? "รีเฟรช" : text;
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
 
   return (

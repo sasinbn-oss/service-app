@@ -10,6 +10,7 @@ import { showAlert } from "../utils/alert";
 import { appendFile } from "../utils/attachments";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
@@ -76,7 +77,7 @@ export default function ManageSparePartsScreen() {
 
   const loadParts = useCallback(() => {
     // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
-    api
+    return api
       .get<SparePart[]>("/spare-parts")
       .then((res) => setParts(res.data))
       .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
@@ -88,6 +89,7 @@ export default function ManageSparePartsScreen() {
       loadParts();
     }, [loadParts])
   );
+  useRefreshHandler(loadParts);
 
   const brands = useMemo(() => {
     const set = new Set(parts.map((p) => p.brand?.trim()).filter((b): b is string => !!b));

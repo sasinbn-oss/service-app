@@ -8,6 +8,7 @@ import { ScrollView, Text, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import Spinner, { WasherIcon } from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
@@ -71,6 +72,7 @@ export default function FleetDashboardScreen() {
       load(date);
     }, [date, load])
   );
+  useRefreshHandler(() => load(date));
 
   if (!data) {
     return (
