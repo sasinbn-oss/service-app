@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Service App",
+    "name": "OTTERI Service",
     "slug": "service-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -26,9 +26,13 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./public/icons/favicon-48.png",
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "name": "OTTERI Service",
+      "shortName": "OTTERI",
+      "themeColor": "#FFFFFF",
+      "backgroundColor": "#FFFFFF"
     },
     "plugins": [
       [

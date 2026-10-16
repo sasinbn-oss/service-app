@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <title>OTTERI Service</title>
+    <!--
+      เพิ่มไปยังหน้าจอโฮมแล้วดูเป็นแอป (เจ้าของงานเลือก ต.ค. 69 — ชื่อ OTTERI · แถบบนขาว)
+      - ไอคอน/ชื่อ: iPhone อ่าน apple-touch-icon + apple-mobile-web-app-title · Android อ่าน manifest.json
+        ไม่มีสองอย่างนี้ iPhone ใช้ภาพย่อหน้าเว็บเป็นไอคอน และตั้งชื่อตามหน้าที่เปิดอยู่ตอนกดเพิ่ม
+      - เปิดจากไอคอน = เต็มจอ ไม่มีแถบเบราว์เซอร์ (standalone) และเริ่มที่หน้าหลักเสมอ (start_url)
+      - แถบบนขาว: iPhone เลือกสีเองไม่ได้ (ขาว/ดำ/โปร่ง) จึงใช้ "default" ขาวทั้งสองระบบ ต่อกับแถบโลโก้เป็นผืนเดียว
+      - ไม่ใส่ service worker — มันแคชหน้าเว็บไว้ ซึ่งขัดกับ UpdateGate ที่ต้องได้รุ่นใหม่ทันทีหลัง merge
+    -->
+    <meta name="theme-color" content="#FFFFFF" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="OTTERI" />
+    <meta name="application-name" content="OTTERI" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/icons/favicon-48.png" />
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+        background: #ffffff;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>ต้องเปิด JavaScript ก่อนใช้งานระบบนี้</noscript>
+    <div id="root"></div>
+  </body>
+</html>

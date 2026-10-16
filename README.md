@@ -2796,6 +2796,21 @@ deploy ใหม่ ไม่ใช่โค้ดไม่ทำงาน — �
 ใช้ Netlify / Vercel / Cloudflare Pages ก็ได้ ตั้งค่าเหมือนกัน (ไฟล์ `mobile/public/_redirects`
 มีกฎ SPA rewrite ไว้ให้แล้ว)
 
+#### เพิ่มไปยังหน้าจอโฮม — ไอคอน ชื่อ แถบบน (แทนแอป iOS/APK)
+
+(เจ้าของงานเลือก ต.ค. 69 — แอป iOS จริงต้องมีบัญชี Apple Developer และติดตั้งผ่าน TestFlight เท่านั้น)
+iPhone: Safari → แชร์ → **เพิ่มไปยังหน้าจอโฮม** · Android: Chrome ขึ้น **ติดตั้งแอป** เอง หรือเมนู ⋮ → ติดตั้งแอป
+- `mobile/public/index.html` = แม่แบบหน้าเว็บของ Expo (ใช้แทนของเดิมทั้งตอน `expo start` และ `expo export`) ใส่
+  `apple-touch-icon` · `apple-mobile-web-app-title` = **OTTERI** · `apple-mobile-web-app-capable` (เปิดเต็มจอ) ·
+  `apple-mobile-web-app-status-bar-style` = `default` (แถบบนขาว — iPhone เลือกสีอื่นนอกจากขาว/ดำ/โปร่งไม่ได้) ·
+  `theme-color` ขาว · ลิงก์ `manifest.json`
+- `mobile/public/manifest.json` — ชื่อ **OTTERI Service** / สั้น **OTTERI** · `display: standalone` · `start_url: /`
+  (เปิดจากไอคอนเริ่มหน้าหลักเสมอ) · ไอคอน 192/512 และ maskable 512 (รูปอยู่ใน 80% กลาง ให้ Android ตัดเป็นวงกลมได้)
+- ไอคอนใน `mobile/public/icons/` สร้างจาก `assets/logo-otter.png` (มีแค่ 128 px — ตัว 512 ขยายจึงไม่คมเท่า
+  ได้ไฟล์ต้นฉบับใหญ่กว่านี้มาให้สร้างใหม่ด้วยขนาดเดิม)
+- **ไม่มี service worker โดยตั้งใจ** — มันแคชหน้าเว็บ ขัดกับ UpdateGate ที่ต้องได้รุ่นใหม่ทันที · Chrome รุ่นปัจจุบัน
+  ติดตั้งได้โดยไม่ต้องมี (เช็คด้วย `Page.getInstallabilityErrors` แล้ว ไม่มีข้อติด)
+
 #### คนที่เปิดเว็บค้างไว้ได้รุ่นใหม่เอง — ไม่ต้องบอกให้กดรีเฟรช
 
 (เจ้าของงานขอ ต.ค. 69) `npm run build:web` เขียน `public/version.json` (รหัสรุ่น + `minBuiltAt`) ไปกับเว็บ
