@@ -14,6 +14,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
@@ -237,6 +238,7 @@ export default function CoverageMapScreen() {
       load();
     }, [load])
   );
+  useRefreshHandler(load);
 
   const regionOfTeam = useMemo(() => {
     const m = new Map<string, string>();

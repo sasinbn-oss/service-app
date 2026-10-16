@@ -12,6 +12,7 @@ import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
@@ -162,6 +163,7 @@ export default function ReportScreen({ route }: Props) {
       load();
     }, [load])
   );
+  useRefreshHandler(() => load({ refresh: true }));
 
   async function download() {
     setDownloading(true);

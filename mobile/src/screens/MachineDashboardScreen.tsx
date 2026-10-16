@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Platform,
   RefreshControl,
@@ -16,6 +16,9 @@ import DateField from "../components/DateField";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
+import UpdatePill, { useBackgroundCheck } from "../components/UpdatePill";
+import { countChanges } from "../utils/liveSync";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
@@ -490,6 +493,54 @@ export default function MachineDashboardScreen({ navigation }: Props) {
       load();
     }, [load])
   );
+  /**
+   * ปุ่ม "มีอัปเดต" (ต.ค. 69 แบบ Facebook) — เช็คเคสใหม่/เคสที่เปลี่ยนทุก 1 นาที แต่ไม่สลับตารางให้เอง
+   * ไม่นับชั่วโมงที่ค้าง/คะแนน/เกิน SLA ซึ่งขยับเองตามเวลา ไม่งั้นทุกรอบขึ้นว่ามีอัปเดต
+   */
+  const rowSig = (r: OutageRow) => {
+    const { slaHours: _h, score: _s, breached: _b, ...rest } = r;
+    return JSON.stringify(rest);
+  };
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const pendingData = useRef<DashboardResponse | null>(null);
+  const [newCount, setNewCount] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+  const fetchTab = useCallback(
+    async () =>
+      (await api.get<DashboardResponse>(tab === "machines" ? "/machines/outages" : "/machines/signal-lost")).data,
+    [tab]
+  );
+  const applyData = (d: DashboardResponse) => {
+    DATA_CACHE[tab] = d;
+    setData(d);
+    pendingData.current = null;
+    setNewCount(0);
+  };
+  // เปลี่ยนแท็บ = ของที่ค้างไว้เป็นของอีกแท็บ
+  useEffect(() => {
+    pendingData.current = null;
+    setNewCount(0);
+  }, [tab]);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  useBackgroundCheck(async () => {
+    const t = tab;
+    const d = await fetchTab();
+    // ระหว่างรอ คนสลับแท็บไปแล้ว — ผลนี้เป็นของแท็บเดิม
+    if (t !== tabRef.current || !dataRef.current) return;
+    const n = countChanges(dataRef.current.rows, d.rows, (r) => r.id, rowSig).changed;
+    if (n > 0) {
+      pendingData.current = d;
+      setNewCount(n);
+    }
+  });
+  useRefreshHandler(async () => {
+    const d = await fetchTab();
+    const n = dataRef.current ? countChanges(dataRef.current.rows, d.rows, (r) => r.id, rowSig).changed : d.rows.length;
+    applyData(d);
+    return { changed: n, unit: "เคส" };
+  });
 
   // รายการสถานะมาจาก backend เพื่อไม่ให้มีสองที่ที่ต้องแก้ตอนเพิ่มสถานะใหม่
   useEffect(() => {
@@ -727,7 +778,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
   const isMachines = tab === "machines";
 
   return (
+    <View style={{ flex: 1 }}>
     <ScrollView
+      ref={scrollRef}
       style={styles.container}
       onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}
       contentContainerStyle={styles.content}
@@ -1145,6 +1198,16 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         }}
       />
     </ScrollView>
+      <UpdatePill
+        count={newCount}
+        unit="เคส"
+        onPress={() => {
+          if (!pendingData.current) return;
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+          applyData(pendingData.current);
+        }}
+      />
+    </View>
   );
 }
 

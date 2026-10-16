@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -22,6 +23,7 @@ export default function SparePartDetailScreen({ route }: Props) {
       .catch((e) => setError(apiErrorMessage(e)))
       .finally(() => setLoading(false));
   }, [id]);
+  useRefreshHandler(() => api.get<SparePart>(`/spare-parts/${id}`).then((res) => setPart(res.data)));
 
   if (loading) {
     return (
