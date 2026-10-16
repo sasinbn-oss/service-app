@@ -14,6 +14,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import {
   JOB_TYPE_LABELS,
+  WORK_STATUS_LABELS,
   WORK_ORDER_PRIORITY_LABELS,
   WORK_ORDER_RESULT_LABELS,
   WORK_ORDER_STATUS_LABELS,
@@ -84,6 +85,9 @@ interface Row {
   jobType: string;
   branchCode: string;
   branchName: string;
+  symptom: string;
+  /** สถานะแบบในกล่อง "อาการ / สถานะ" ของหน้าใบงาน — สถานะย่อย ไม่มีก็ใช้ขั้นของใบงาน */
+  workStatus: string;
   region: string;
   team: string;
   machine: string;
@@ -126,6 +130,8 @@ export async function buildOpenerReport(opts: {
       createdAt: true,
       closedAt: true,
       closeResult: true,
+      symptom: true,
+      workStatus: true,
       assignedTeam: true,
       branch: { select: { code: true, name: true, region: true, zone: true } },
       machine: { select: { code: true } },
@@ -171,6 +177,11 @@ export async function buildOpenerReport(opts: {
       jobType: JOB_TYPE_LABELS[w.jobType] ?? w.jobType,
       branchCode: w.branch.code,
       branchName: w.branch.name,
+      symptom: w.symptom ?? "",
+      // กฎเดียวกับหน้าใบงาน (WorkOrderDetailScreen) — ไฟล์กับหน้าจอต้องพูดเหมือนกัน
+      workStatus: w.workStatus
+        ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus
+        : WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
       region: w.branch.region ?? "",
       team: w.assignedTeam ?? w.branch.zone ?? "",
       machine: w.machine?.code ?? "",
@@ -212,9 +223,10 @@ export async function buildOpenerReport(opts: {
 
 const HEAD_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF2F7" } };
 const TOTAL_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7F9FC" } };
-const DETAIL_HEAD = ["วันที่เปิด", "เลขใบงาน", "เรื่อง", "ประเภทงาน", "รหัสสาขา", "ชื่อสาขา", "ภาค", "ทีมช่าง", "เครื่อง", "ความเร่งด่วน", "ที่มา", "สถานะปัจจุบัน", "วันที่ปิด", "ผลปิดงาน"];
+// อาการกับสถานะต่อท้ายชื่อสาขา (เจ้าของงานขอ ต.ค. 69) — อ่านแถวเดียวรู้ว่าที่ไหน เป็นอะไร ติดอยู่ตรงไหน
+const DETAIL_HEAD = ["วันที่เปิด", "เลขใบงาน", "เรื่อง", "ประเภทงาน", "รหัสสาขา", "ชื่อสาขา", "อาการ", "สถานะ", "ภาค", "ทีมช่าง", "เครื่อง", "ความเร่งด่วน", "ที่มา", "สถานะปัจจุบัน", "วันที่ปิด", "ผลปิดงาน"];
 const detail = (r: Row) => [
-  thaiDateTime(r.createdAt), r.code, r.title, r.jobType, r.branchCode, r.branchName, r.region, r.team,
+  thaiDateTime(r.createdAt), r.code, r.title, r.jobType, r.branchCode, r.branchName, r.symptom, r.workStatus, r.region, r.team,
   r.machine, r.priority, r.source, r.status, thaiDateTime(r.closedAt), r.result,
 ];
 
@@ -234,6 +246,12 @@ function table(sheet: ExcelJS.Worksheet, headers: string[], rows: (string | numb
     sheet.getColumn(i + 1).width = Math.min(44, Math.max(9, longest + 2));
   });
   // หัวตารางค้างไว้ตอนเลื่อน และกรองได้ทุกคอลัมน์ — คนที่ขอ Excel คือคนที่จะเอาไปกรอง/pivot ต่อ
+  // อาการหลายบรรทัด (สาเหตุ/แก้ไข/หมายเหตุ) — ตัดบรรทัดในช่อง ไม่งั้นเห็นแค่บรรทัดแรกยาวทะลุ
+  const symptomCol = headers.indexOf("อาการ") + 1;
+  if (symptomCol > 0) {
+    sheet.getColumn(symptomCol).width = 44;
+    sheet.getColumn(symptomCol).alignment = { wrapText: true, vertical: "top" };
+  }
   sheet.views = [{ state: "frozen", ySplit: head.number }];
   if (filter && rows.length) {
     sheet.autoFilter = { from: { row: head.number, column: 1 }, to: { row: head.number + rows.length, column: headers.length } };

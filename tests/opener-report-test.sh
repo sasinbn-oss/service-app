@@ -29,7 +29,8 @@ SOUTH=$(DB "select code from \"Branch\" where region='ใต้' and \"cancelled
 OTHER=$(DB "select code from \"Branch\" where region<>'ใต้' and region is not null and \"cancelledAt\" is null order by code limit 1")
 W1=$(NEWWO $SOUTH URGENT); W2=$(NEWWO $SOUTH); W3=$(NEWWO $OTHER); W4=$(NEWWO $SOUTH); IDS="$W1 $W2 $W3 $W4"
 # W4 ไม่มีผู้เปิด (บัญชีถูกลบ/ระบบสร้าง) · W2 ปิดแล้ว · ใบทดสอบไม่นับ
-DB "update \"WorkOrder\" set \"createdById\"=null where id=$W4; update \"WorkOrder\" set status='DONE', \"closedAt\"=now(), \"closeResult\"='FIXED' where id=$W2" >/dev/null
+DB "update \"WorkOrder\" set symptom='น้ำเข้าเครื่องช้า'||chr(10)||'สาเหตุ: 4 way ชำรุด', \"workStatus\"='WAITING_PARTS' where id=$W1;
+    update \"WorkOrder\" set \"createdById\"=null where id=$W4; update \"WorkOrder\" set status='DONE', \"closedAt\"=now(), \"closeResult\"='FIXED' where id=$W2" >/dev/null
 # นับจากฐานข้อมูลด้วยช่วงเวลาไทยเดียวกัน
 RANGE="\"createdAt\" >= ('$TODAY'::date - interval '7 hours') and \"createdAt\" < ('$TODAY'::date + interval '17 hours') and not \"isTest\""
 
@@ -67,7 +68,8 @@ echo
 echo "═══ ไฟล์ Excel"
 P=$(REP $A $TODAY $TODAY "" xlsx | J 'd.path')
 curl -s -o /tmp/opener-report-test.xlsx "localhost:4000$P"
-OUT=$(python3 - "$AID" <<'PY'
+W1CODE=$(DB "select code from \"WorkOrder\" where id=$W1")
+OUT=$(python3 - "$AID" "$W1CODE" <<'PY'
 import sys, openpyxl
 wb = openpyxl.load_workbook("/tmp/opener-report-test.xlsx")
 names = wb.sheetnames
@@ -77,7 +79,12 @@ total = next(r for r in rows if r and r[0] == "รวม")[4]
 detail = wb[names[1]]
 n = sum(1 for r in detail.iter_rows(min_row=5, values_only=True) if r and r[0])
 per = sum(wb[x].max_row - 4 for x in names[2:])
-print(f"{names[0]}|{names[1]}|{len(names)-2}|{total}|{n}|{per}")
+head = [c.value for c in detail[4]]
+i = head.index("ชื่อสาขา")
+order = "/".join(head[i:i + 3])
+code = sys.argv[2]
+row = next(r for r in detail.iter_rows(min_row=5, values_only=True) if r[3] == code)
+print(f"{names[0]}|{names[1]}|{len(names)-2}|{total}|{n}|{per}|{order}|{row[i + 1]!r}|{row[i + 2]}")
 PY
 )
 SUMN=$(REP $A $TODAY $TODAY | J 'd.summary.length+"|"+d.totals.total')
@@ -85,5 +92,10 @@ SUMN=$(REP $A $TODAY $TODAY | J 'd.summary.length+"|"+d.totals.total')
 [ "$(echo "$OUT" | cut -d'|' -f3)|$(echo "$OUT" | cut -d'|' -f4)" = "$SUMN" ] && pass "1 ชีตต่อผู้เปิด และยอดรวมในไฟล์ตรงกับหน้าจอ ($OUT)" || fail "ชีต/ยอด: $OUT vs $SUMN"
 [ "$(echo "$OUT" | cut -d'|' -f5)" = "$(echo "$OUT" | cut -d'|' -f4)" ] && [ "$(echo "$OUT" | cut -d'|' -f6)" = "$(echo "$OUT" | cut -d'|' -f4)" ] \
   && pass "แถวในชีตรายการ = แถวรวมทุกชีตคน = ยอดรวม (กระทบยอดได้)" || fail "แถวไม่ตรง: $OUT"
+
+[ "$(echo "$OUT" | cut -d'|' -f7)" = "ชื่อสาขา/อาการ/สถานะ" ] && pass "อาการกับสถานะอยู่ถัดจากชื่อสาขา" || fail "ลำดับคอลัมน์: $(echo "$OUT" | cut -d'|' -f7)"
+[ "$(echo "$OUT" | cut -d'|' -f8)" = "'น้ำเข้าเครื่องช้า\\nสาเหตุ: 4 way ชำรุด'" ] && pass "อาการหลายบรรทัดมาครบในช่องเดียว" || fail "อาการ: $(echo "$OUT" | cut -d'|' -f8)"
+[ "$(echo "$OUT" | cut -d'|' -f9)" = "$(curl -s "localhost:4000/api/work-orders/$W1" -H "$(H $A)" | J 'd.workStatusLabel')" ] \
+  && pass "สถานะตรงกับที่หน้าใบงานแสดง ($(echo "$OUT" | cut -d'|' -f9))" || fail "สถานะ: $(echo "$OUT" | cut -d'|' -f9)"
 
 [ -z "$FAILED" ]
