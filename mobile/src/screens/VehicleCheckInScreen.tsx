@@ -241,9 +241,10 @@ function VehicleTile({ v, onPick }: { v: VehicleCard; onPick: () => void }) {
           <Text style={styles.tileValue}>{fmtNum(v.currentMileage)} กม.</Text>
         </View>
         <View style={styles.tileBox}>
-          <Text style={styles.tileLabel}>{v.status === "IN_USE" ? "ผู้ใช้งานตอนนี้" : "หมายเหตุ"}</Text>
+          {/* หมายเหตุรถมีเฉพาะแอดมิน (เซิร์ฟเวอร์ไม่ส่งให้ช่าง) — ไม่มีก็บอกสถานะรถแทนช่องว่าง */}
+          <Text style={styles.tileLabel}>{v.status === "IN_USE" ? "ผู้ใช้งานตอนนี้" : v.note ? "หมายเหตุ" : "สถานะรถ"}</Text>
           <Text style={styles.tileValue} numberOfLines={1}>
-            {v.status === "IN_USE" ? v.activeBy ?? "—" : v.note || "—"}
+            {v.status === "IN_USE" ? v.activeBy ?? "—" : v.note || v.statusLabel}
           </Text>
         </View>
       </View>

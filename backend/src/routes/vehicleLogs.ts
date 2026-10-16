@@ -140,7 +140,9 @@ router.get("/status", requireAuth, async (req: AuthRequest, res) => {
       type: v.type,
       status: v.status,
       statusLabel: VEHICLE_STATUS_LABELS[v.status] ?? v.status,
-      note: v.note,
+      // หมายเหตุรถเห็นเฉพาะแอดมิน (เจ้าของงานสั่ง ต.ค. 69) — แอดมินจดเลขบัตรเติมน้ำมัน/วงเงินไว้ในช่องนี้
+      // ตัดที่เซิร์ฟเวอร์ ไม่ใช่แค่ซ่อนบนจอ — ซ่อนบนจออย่างเดียวยังอ่านได้จากคำตอบ API
+      note: req.auth!.role === "ADMIN" ? v.note : null,
       currentMileage: v.currentMileage,
       activeBy: usedBy.get(v.id) ?? null,
       plannedForMe: planned.has(v.id),

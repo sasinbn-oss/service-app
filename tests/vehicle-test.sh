@@ -150,6 +150,15 @@ curl -s localhost:4000/api/vehicles/fleet -H "$(H $A)" | J "d.regions.includes('
   && pass "ตัวเลือกภาคในฟอร์มมาจากทะเบียนสาขา" || fail "ตัวเลือกภาค"
 DB "delete from \"Branch\" where code like 'ZR_$RS'; delete from \"TeamRename\" where \"fromName\"='ทีมเก่า$RS'" >/dev/null
 
+echo "═══ หมายเหตุรถเห็นเฉพาะแอดมิน (ต.ค. 69 — แอดมินจดเลขบัตรเติมน้ำมันไว้ในช่องนี้)"
+DB "update \"Vehicle\" set note='บัตรลงท้าย 8853 ทดสอบ' where id=$V1" >/dev/null
+NT=$(curl -s localhost:4000/api/vehicle-logs/status -H "$(H $T)" | J "(d.vehicles.find(v=>v.id===$V1)||{}).note")
+NA=$(curl -s localhost:4000/api/vehicle-logs/status -H "$(H $A)" | J "(d.vehicles.find(v=>v.id===$V1)||{}).note")
+[ "$NT" = "null" ] && [ "$NA" = "บัตรลงท้าย 8853 ทดสอบ" ] && pass "หน้าลงทะเบียนใช้รถ: ช่างไม่ได้หมายเหตุ แอดมินได้ (คำตอบ API)" || fail "status: ช่าง=$NT แอดมิน=$NA"
+LT=$(curl -s localhost:4000/api/vehicles -H "$(H $T)" | J "(d.find(v=>v.id===$V1)||{}).note")
+LA=$(curl -s localhost:4000/api/vehicles -H "$(H $A)" | J "(d.find(v=>v.id===$V1)||{}).note")
+[ "$LT" = "null" ] && [ "$LA" = "บัตรลงท้าย 8853 ทดสอบ" ] && pass "รายชื่อรถ: ช่างไม่ได้หมายเหตุ แอดมินได้ (คำตอบ API)" || fail "vehicles: ช่าง=$LT แอดมิน=$LA"
+
 echo
 # เก็บกวาด — ลบรายการ รูป และรถทดสอบ
 for L in $(DB "select id from \"VehicleLog\" where \"vehicleId\" in ($V1,$V2)"); do curl -s -X DELETE "localhost:4000/api/vehicle-logs/$L" -H "$(H $A)" >/dev/null; done
