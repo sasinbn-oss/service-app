@@ -396,7 +396,9 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [editingNote, setEditingNote] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
-  const stepScroll = useRef<ScrollView>(null);
+  // ความกว้างของแถบขั้นตอน — แคบจนชื่อขั้นอ่านไม่ออก ซ่อนชื่อขั้นอื่น เหลือแค่ขั้นปัจจุบัน
+  const [stepBarW, setStepBarW] = useState(0);
+  const [skipOpen, setSkipOpen] = useState<number | null>(null);
   // ดูรูปที่ส่งตอนปิดงานเต็มจอ — เลื่อนไปมาได้เฉพาะรูปของรอบที่ปิด
   const [viewingClose, setViewingClose] = useState<number | null>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
@@ -840,108 +842,154 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           คนเปิดใบงานส่วนใหญ่เปิดมาเพื่อดูว่าถึงไหนแล้วทำขั้นถัดไป
           กดวงกลมขั้นปัจจุบันได้เหมือนกดปุ่ม ขั้นที่ทำแล้วกดดูว่าใครทำเมื่อไร
         */}
-        <ScrollView
-          ref={stepScroll}
-          // ชื่อของแถบ — หัวข้อ "ขั้นตอนงาน" ถูกเอาออกตอนย้ายแถบขึ้นบนสุด
-          // คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder-web-test) หาแถบนี้จากชื่อนี้
-          accessibilityLabel="ขั้นตอนงาน"
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.steps}
-        >
-        {shownStages.map((stage, i) => {
+        {/*
+          ไม่เลื่อนซ้ายขวาแล้ว (เจ้าของงานเลือกแบบ 1 ต.ค. 69) — เดิมขั้นละอย่างน้อย 104 px · 12 ขั้น = 1,248 px
+          ซูมแล้วกลายเป็นเลื่อนที่ไม่มีแถบเลื่อนให้เห็น ขั้นแรกถูกตัดครึ่ง ขั้นท้ายหายไปเฉย ๆ
+          ตอนนี้: ขั้นที่ข้ามติดกันยุบเป็นปุ่มเดียว "ข้าม N" (กดดูชื่อ) · ทุกช่องแบ่งความกว้างเท่ากัน ·
+          แคบจนชื่ออ่านไม่ออก ซ่อนชื่อขั้นอื่น เหลือวงกับเลข ชื่อขั้นปัจจุบันยังเห็นเต็ม
+        */}
+        {(() => {
           const currentIndex = shownStages.findIndex((x) => x.value === order.status);
-          const skipped = isSkipped(stage.value, order, stages);
-          // ตรวจหน้างานแล้วใบงานวนกลับไปขั้นแรก ขั้นตรวจจึงอยู่ "หลัง" ขั้นปัจจุบัน
-          // ตามลำดับ แต่ทำไปแล้วจริง — ต้องขึ้นว่าทำแล้ว ไม่ใช่ยังไม่ถึง
-          const doneOutOfOrder =
-            (stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING") ||
-            (stage.value === "INSPECT_CONFIRM" && inspectBooked(order) && order.status !== "INSPECT_CONFIRM");
-          const state = skipped
-            ? "skipped"
-            : order.status === "CANCELLED"
-              ? "future"
-              : i < currentIndex || order.status === "DONE" || doneOutOfOrder
-                ? "done"
-                : i === currentIndex
-                  ? "now"
-                  : "future";
-          // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
-          const number = shownStages
-            .slice(0, i + 1)
-            .filter((x) => !isSkipped(x.value, order, stages)).length;
+          const rows = shownStages.map((stage, i) => {
+            const skipped = isSkipped(stage.value, order, stages);
+            // ตรวจหน้างานแล้วใบงานวนกลับไปขั้นแรก ขั้นตรวจจึงอยู่ "หลัง" ขั้นปัจจุบัน
+            // ตามลำดับ แต่ทำไปแล้วจริง — ต้องขึ้นว่าทำแล้ว ไม่ใช่ยังไม่ถึง
+            const doneOutOfOrder =
+              (stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING") ||
+              (stage.value === "INSPECT_CONFIRM" && inspectBooked(order) && order.status !== "INSPECT_CONFIRM");
+            const state = skipped
+              ? "skipped"
+              : order.status === "CANCELLED"
+                ? "future"
+                : i < currentIndex || order.status === "DONE" || doneOutOfOrder
+                  ? "done"
+                  : i === currentIndex
+                    ? "now"
+                    : "future";
+            // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
+            const number = shownStages.slice(0, i + 1).filter((x) => !isSkipped(x.value, order, stages)).length;
+            return { stage, state, number };
+          });
+          // ขั้นที่ข้ามติดกันรวมเป็นกลุ่มเดียว
+          type Row = (typeof rows)[number];
+          const items: ({ kind: "step"; row: Row } | { kind: "skip"; rows: Row[]; at: number })[] = [];
+          rows.forEach((r, i) => {
+            const last = items[items.length - 1];
+            if (r.state === "skipped" && last?.kind === "skip") last.rows.push(r);
+            else if (r.state === "skipped") items.push({ kind: "skip", rows: [r], at: i });
+            else items.push({ kind: "step", row: r });
+          });
+          // ช่องละไม่ถึง ~74 px ชื่อขั้นภาษาไทยขึ้นบรรทัดละสองสามตัวอักษร อ่านไม่ออก — ซ่อนดีกว่า
+          const tight = stepBarW > 0 && stepBarW / items.length < 74;
+          const opened = items.find((it) => it.kind === "skip" && it.at === skipOpen);
           return (
-            <TouchableOpacity
-              key={stage.value}
-              style={styles.step}
-              activeOpacity={0.7}
-              onPress={() => pressStep(stage.value, state)}
-              accessibilityLabel={stage.label}
-              // จอแคบเห็นแค่สามขั้นแรก — เลื่อนให้ขั้นปัจจุบันอยู่ในจอเอง
-              // ไม่งั้นใบที่เดินมาถึงขั้นห้าจะเปิดมาเห็นแต่ขั้นที่ผ่านไปแล้ว
-              onLayout={
-                state === "now"
-                  ? (e) => stepScroll.current?.scrollTo({ x: i === 0 ? 0 : Math.max(0, e.nativeEvent.layout.x - 60), animated: false })
-                  : undefined
-              }
-            >
-              {i > 0 ? (
-                <View
-                  style={[styles.stepLine, (state === "done" || state === "now") && styles.stepLineDone]}
-                />
-              ) : null}
+            <>
               <View
-                style={[
-                  styles.stepDot,
-                  state === "done" && styles.stepDotDone,
-                  // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
-                  state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
-                  state === "now" && partsOut.length > 0 && styles.stepDotOut,
-                  state === "skipped" && styles.stepDotSkipped,
-                ]}
+                // ชื่อของแถบ — หัวข้อ "ขั้นตอนงาน" ถูกเอาออกตอนย้ายแถบขึ้นบนสุด
+                // คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder-web-test) หาแถบนี้จากชื่อนี้
+                accessibilityLabel="ขั้นตอนงาน"
+                style={styles.steps}
+                onLayout={(e) => setStepBarW(e.nativeEvent.layout.width)}
               >
-                {state === "now" ? <StepPulse size={30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
-                {state === "done" ? (
-                  <Ionicons name="checkmark" size={15} color="#fff" />
-                ) : state === "now" && partsOut.length ? (
-                  <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
-                ) : (
-                  <Text style={[styles.stepNum, headingFont, state === "now" && styles.stepNumNow]}>
-                    {state === "skipped" ? "–" : number}
-                  </Text>
-                )}
+                {items.map((it, k) => {
+                  if (it.kind === "skip") {
+                    const isOpen = skipOpen === it.at;
+                    return (
+                      <TouchableOpacity
+                        key={`skip-${it.at}`}
+                        style={[styles.stepSkipGroup, tight && styles.stepSkipGroupTight]}
+                        activeOpacity={0.7}
+                        onPress={() => setSkipOpen(isOpen ? null : it.at)}
+                        accessibilityLabel={`ข้าม ${it.rows.length} ขั้น`}
+                      >
+                        {k > 0 ? <View style={[styles.stepLine, tight && styles.stepLineTight]} /> : null}
+                        <View style={[styles.stepSkipPill, tight && styles.stepSkipPillTight, isOpen && styles.stepSkipPillOn]}>
+                          <Text style={styles.stepSkipText}>ข้าม {it.rows.length}</Text>
+                        </View>
+                        {tight ? null : <Text style={styles.stageActor}>{isOpen ? "ปิด" : "กดดู"}</Text>}
+                      </TouchableOpacity>
+                    );
+                  }
+                  const { stage, state, number } = it.row;
+                  const showLabel = !tight || state === "now";
+                  return (
+                    <TouchableOpacity
+                      key={stage.value}
+                      style={[styles.step, tight && styles.stepTight, tight && state === "now" && styles.stepNowWide]}
+                      activeOpacity={0.7}
+                      onPress={() => pressStep(stage.value, state)}
+                      accessibilityLabel={stage.label}
+                    >
+                      {k > 0 ? (
+                        <View
+                          style={[styles.stepLine, tight && styles.stepLineTight, (state === "done" || state === "now") && styles.stepLineDone]}
+                        />
+                      ) : null}
+                      <View
+                        style={[
+                          styles.stepDot,
+                          tight && styles.stepDotTight,
+                          state === "done" && styles.stepDotDone,
+                          // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
+                          state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
+                          state === "now" && partsOut.length > 0 && styles.stepDotOut,
+                        ]}
+                      >
+                        {state === "now" ? <StepPulse size={tight ? 24 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
+                        {state === "done" ? (
+                          <Ionicons name="checkmark" size={15} color="#fff" />
+                        ) : state === "now" && partsOut.length ? (
+                          <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
+                        ) : (
+                          <Text style={[styles.stepNum, headingFont, tight && styles.stepNumTight, state === "now" && styles.stepNumNow]}>
+                            {number}
+                          </Text>
+                        )}
+                      </View>
+                      {showLabel ? (
+                        <Text
+                          style={[
+                            styles.stageLabel,
+                            state === "now" && [styles.stageLabelNow, { color: partsOut.length ? colors.dangerInk : tone.fg }],
+                            state === "future" && styles.stageLabelFuture,
+                          ]}
+                        >
+                          {stage.label}
+                        </Text>
+                      ) : null}
+                      {state === "now" && partsOut.length ? (
+                        <>
+                          <View style={styles.stepOutPill} accessibilityLabel="อะไหล่หมดบนแถบขั้นตอน">
+                            <Text style={styles.stepOutPillText}>อะไหล่หมด {partsOut.length} รายการ</Text>
+                          </View>
+                          {etaDay ? (
+                            <Text style={styles.stepOutEta}>
+                              {etaLate ? "เลยกำหนด " : "คาดเข้า "}
+                              {thaiDate(etaDay)}
+                            </Text>
+                          ) : null}
+                        </>
+                      ) : showLabel && stage.actorLabel && state !== "done" ? (
+                        <Text style={styles.stageActor}>{stage.actorLabel}</Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-              <Text
-                style={[
-                  styles.stageLabel,
-                  state === "now" && [styles.stageLabelNow, { color: partsOut.length ? colors.dangerInk : tone.fg }],
-                  (state === "future" || state === "skipped") && styles.stageLabelFuture,
-                  state === "skipped" && styles.stageLabelSkipped,
-                ]}
-              >
-                {stage.label}
-              </Text>
-              {state === "now" && partsOut.length ? (
-                <>
-                  <View style={styles.stepOutPill} accessibilityLabel="อะไหล่หมดบนแถบขั้นตอน">
-                    <Text style={styles.stepOutPillText}>อะไหล่หมด {partsOut.length} รายการ</Text>
-                  </View>
-                  {etaDay ? (
-                    <Text style={styles.stepOutEta}>
-                      {etaLate ? "เลยกำหนด " : "คาดเข้า "}
-                      {thaiDate(etaDay)}
+              {opened && opened.kind === "skip" ? (
+                <View style={styles.stepSkipList} accessibilityLabel="ขั้นที่ข้าม">
+                  <Text style={styles.stepSkipListHead}>ใบนี้ไม่ได้ผ่าน {opened.rows.length} ขั้น:</Text>
+                  {opened.rows.map((r) => (
+                    // ขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
+                    <Text key={r.stage.value} style={[styles.stageLabelFuture, styles.stageLabelSkipped, styles.stepSkipItem]}>
+                      {r.stage.label}
                     </Text>
-                  ) : null}
-                </>
-              ) : state === "skipped" ? (
-                <Text style={styles.stageActor}>ข้าม</Text>
-              ) : stage.actorLabel && state !== "done" ? (
-                <Text style={styles.stageActor}>{stage.actorLabel}</Text>
+                  ))}
+                </View>
               ) : null}
-            </TouchableOpacity>
+            </>
           );
-        })}
-        </ScrollView>
+        })()}
 
         {/* ตีกลับเคลม — ช่างต้องเห็นเหตุผลก่อนกดปิดงานอีกรอบ ไม่งั้นแนบของเดิมกลับไปแล้วโดนตีกลับซ้ำ */}
         {order.status === "IN_PROGRESS" && order.claims[0]?.status === "REJECTED" ? (
@@ -4504,8 +4552,46 @@ const styles = StyleSheet.create({
   optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
   optionTextOut: { color: colors.danger },
   // เว้นบน-ล่างให้คลื่นรอบวงขั้นปัจจุบัน (ขยายถึง 2.1 เท่า) ไม่ถูกขอบ ScrollView ตัด
-  steps: { flexDirection: "row", paddingTop: 18, paddingBottom: 4, minWidth: "100%" },
-  step: { flex: 1, minWidth: 104, alignItems: "center", paddingHorizontal: 4 },
+  steps: { flexDirection: "row", alignItems: "flex-start", paddingTop: 18, paddingBottom: 4 },
+  // แบ่งความกว้างเท่ากันทุกช่อง ไม่มีขั้นต่ำ — ไม่ให้ล้นจนต้องเลื่อน (ดูที่แถบขั้นตอน)
+  step: { flex: 1, flexBasis: 0, minWidth: 0, alignItems: "center", paddingHorizontal: 3 },
+  // จอแคบ ชื่อขั้นปัจจุบันเป็นชื่อเดียวที่โชว์ — ให้ที่มากกว่าช่องอื่น
+  stepNowWide: { flexGrow: 3 },
+  // จอแคบ: 11 วง × 30 px ก็เกือบเต็มจอมือถือแล้ว — ลดช่องไฟให้วงไม่ล้น
+  stepTight: { paddingHorizontal: 1 },
+  stepSkipGroupTight: { width: 44 },
+  // วงเล็กลงด้วย — 10 วง × 30 px + ปุ่มข้าม ยังเกินจอมือถือ 360 px
+  stepDotTight: { width: 24, height: 24, borderRadius: 12 },
+  stepNumTight: { fontSize: 11, lineHeight: 15 },
+  stepLineTight: { top: 11, marginLeft: 14, marginRight: 14 },
+  stepSkipPillTight: { paddingHorizontal: 4, height: 22, marginTop: 1 },
+  // อยู่เหนือเส้นเชื่อมของขั้นถัดไป (เส้นลากย้อนมาครึ่งช่องของมันเอง) — ไม่งั้นเส้นพาดทับคำว่า "ข้าม"
+  stepSkipGroup: { flexGrow: 0, flexShrink: 0, width: 58, alignItems: "center", zIndex: 2 },
+  stepSkipPill: {
+    marginTop: 2,
+    height: 26,
+    paddingHorizontal: 8,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepSkipPillOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  stepSkipText: { fontSize: 11.5, fontWeight: "700", color: colors.textMuted },
+  stepSkipList: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.sky50,
+    gap: 2,
+  },
+  stepSkipListHead: { fontSize: 12, fontWeight: "700", color: colors.textMuted },
+  stepSkipItem: { fontSize: 12.5, lineHeight: 19 },
   // เส้นเชื่อมจากขอบวงก่อนหน้ามาถึงขอบวงนี้ — เว้นรัศมีวงทั้งสองฝั่ง เส้นจึงไม่พาดทับวง
   // (บนเว็บเส้นที่วางแบบ absolute ลอยอยู่เหนือวงที่ไม่ได้ absolute zIndex ช่วยไม่ได้)
   stepLine: {
