@@ -5,11 +5,15 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { HomeStackParamList, ReportKind } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
+import { useAuth } from "../context/AuthContext";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
 interface Entry {
-  kind: ReportKind;
+  /** byOpener = รายงานแยกตามผู้เปิด มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
+  kind: ReportKind | "byOpener";
+  /** เฉพาะแอดมิน/หัวหน้าภาค — ช่างเปิดแล้วเซิร์ฟเวอร์ปฏิเสธ ไม่ควรเห็นการ์ดตั้งแต่แรก */
+  managersOnly?: boolean;
   label: string;
   who: string;
   question: string;
@@ -50,6 +54,16 @@ const ENTRIES: Entry[] = [
     caveat: "ต้องมีเคสที่ปิดแล้วสะสมสัก 3–4 สัปดาห์ ตัวเลขถึงจะเชื่อได้",
   },
   {
+    kind: "byOpener",
+    label: "รายงานตามผู้เปิดใบงาน",
+    who: "แอดมิน · หัวหน้าภาค",
+    question: "ช่วงนี้ใครเปิดใบงานไปเท่าไร ค้างอยู่กี่ใบ",
+    icon: "people-outline",
+    tint: colors.roleSupervisorSoft,
+    iconColor: colors.roleSupervisor,
+    managersOnly: true,
+  },
+  {
     kind: "parts",
     label: "อะไหล่ที่ต้องสั่ง",
     who: "ฝ่ายจัดซื้อ · คลัง",
@@ -61,18 +75,24 @@ const ENTRIES: Entry[] = [
 ];
 
 export default function ReportsMenuScreen({ navigation }: Props) {
+  const { user } = useAuth();
+  const manager = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.intro}>
         ทุกใบดูบนหน้าจอได้ และกดดาวน์โหลดเป็น Excel เพื่อส่งต่อหรือทำต่อได้
       </Text>
 
-      {ENTRIES.map((entry) => (
+      {ENTRIES.filter((e) => !e.managersOnly || manager).map((entry) => (
         <TouchableOpacity
           key={entry.kind}
           style={styles.card}
           activeOpacity={0.7}
-          onPress={() => navigation.navigate("Report", { kind: entry.kind, title: entry.label })}
+          onPress={() =>
+            entry.kind === "byOpener"
+              ? navigation.navigate("OpenerReport")
+              : navigation.navigate("Report", { kind: entry.kind, title: entry.label })
+          }
         >
           <View style={[styles.icon, { backgroundColor: entry.tint }]}>
             <Ionicons name={entry.icon} size={22} color={entry.iconColor} />

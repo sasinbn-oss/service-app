@@ -26,6 +26,11 @@ export interface StoredDocument {
 
 const TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_DOCUMENTS = 200;
+/**
+ * เพดานรวมเป็นไบต์ — นับแค่จำนวนไฟล์ไม่พอ: รายงาน Excel ทั้งปีไฟล์ละหลาย MB 200 ไฟล์เกิน 512 MB
+ * ของ Render free แล้วเซิร์ฟเวอร์ถูกฆ่าทั้งตัว (เคยล่มแบบนี้มาแล้วจากการสำรองข้อมูล)
+ */
+const MAX_TOTAL_BYTES = 60 * 1024 * 1024;
 
 const documents = new Map<string, StoredDocument>();
 
@@ -35,9 +40,12 @@ function evictExpired() {
     if (doc.createdAt < cutoff) documents.delete(id);
   }
   // กันหน่วยความจำบวมถ้ามีการสร้างถี่มากในช่วงสั้น ๆ — ทิ้งอันที่เก่าสุดก่อน
-  while (documents.size > MAX_DOCUMENTS) {
+  let total = 0;
+  for (const doc of documents.values()) total += doc.data.length;
+  while (documents.size > MAX_DOCUMENTS || (total > MAX_TOTAL_BYTES && documents.size > 1)) {
     const oldest = documents.keys().next().value;
     if (oldest === undefined) break;
+    total -= documents.get(oldest)?.data.length ?? 0;
     documents.delete(oldest);
   }
 }
@@ -57,6 +65,7 @@ export function saveDocument(input: {
     ...input,
   };
   documents.set(doc.id, doc);
+  evictExpired();
   return doc;
 }
 
