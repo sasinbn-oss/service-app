@@ -257,6 +257,8 @@ const STATUS_STYLE: Record<string, { color: string; background: string }> = {
   WAITING_PARTS: { color: colors.warningInk, background: colors.warningSoft },
   // ระบบตั้งให้ — ใบงานถึงขั้นเช็คอะไหล่แต่แอดมินยังไม่ตอบ (ม่วง = รอแอดมิน แบบเดียวกับรายการใบงาน)
   CHECKING_PARTS: { color: colors.roleAdmin, background: colors.roleAdminSoft },
+  // ระบบตั้งให้ — ขั้นเสนอราคา แอดมินยังไม่ได้ส่งราคา (ม่วง = รอแอดมิน)
+  QUOTING: { color: colors.roleAdmin, background: colors.roleAdminSoft },
   WAITING_TECH: { color: colors.primaryInk, background: colors.primarySoft },
   WAITING_PAYMENT: { color: colors.warningInk, background: colors.warningSoft },
   WAITING_CUSTOMER: { color: colors.warningInk, background: colors.warningSoft },

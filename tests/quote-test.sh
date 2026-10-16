@@ -89,6 +89,8 @@ curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs[0].action
 curl -s "localhost:4000/api/work-orders?filter=ALL" -H "$(H $A)" | J "(d.rows||d).find(r=>r.id===$ID1).partsExpectedAt" | grep -q "2026-11-20" \
   && pass "รายการใบงานได้วันที่คาดว่าของเข้า" || fail "รายการไม่มีวันที่คาด"
 source_ok $ID1 | J 'd.statusLabel' | grep -q "รอเสนอราคาลูกค้า" && pass "ของมาแล้ว ตอบว่ามีครบ → ไปเสนอราคา" || fail "มีครบแล้วไม่ไปเสนอราคา"
+[ "$(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")" = "QUOTING" ] \
+  && pass "ขั้นเสนอราคา สถานะ \"รอแอดมินส่งใบเสนอราคา\" (ไม่ใช่รอลูกค้าจ่ายเงิน — ลูกค้ายังไม่ได้ราคา)" || fail "สถานะขั้นเสนอราคา: $(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")"
 [ "$(DB "select coalesce(to_char(w.\"partsExpectedAt\",'YYYY-MM-DD'),'-')||'|'||p.\"inStock\"||'|'||coalesce(p.\"requisitionNo\",'-') from \"WorkOrder\" w join \"WorkOrderPart\" p on p.\"workOrderId\"=w.id and p.kind='WAITING' where w.id=$ID1")" = "-|true|-" ] \
   && pass "ครบแล้วล้างวันที่คาด · ยังไม่มีเลขใบเบิก (เบิกจริงหลังรับเงิน)" || fail "หลังครบ: $(DB "select \"partsExpectedAt\" from \"WorkOrder\" where id=$ID1")"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.contactPhone==="081-234-5678"?"ok":"bad"' | grep -q ok \

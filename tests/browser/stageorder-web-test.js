@@ -1,5 +1,6 @@
 // ทดสอบ: แถบขั้นตอนเรียงใหม่ — เสนอราคา/จ่ายเงิน มาก่อนเบิกอะไหล่
 // และขั้นที่ไม่ต้องทำต้องขึ้นว่า "ข้าม" ไม่ใช่ขึ้นว่าทำแล้ว
+// ขั้นที่ข้ามติดกันยุบเป็นปุ่ม "ข้าม N" (กดดูชื่อ) · แถบไม่เลื่อนซ้ายขวา จอแคบซ่อนชื่อขั้นอื่น (ต.ค. 69)
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
@@ -44,6 +45,7 @@ const { setup } = require("./fixture");
   let QUOTE = process.argv[2] || null, NOQUOTE = process.argv[3] || null;
   let fx = null;
   const open = async (code) => {
+    await page.setViewportSize({ width: 420, height: 1500 });
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
     await page.waitForTimeout(2500);
     await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click();
@@ -74,6 +76,19 @@ const { setup } = require("./fixture");
 
     // ── ใบที่ต้องเสนอราคา (สาขา D หมดประกัน) ──
     if (!(await open(QUOTE))) throw new Error(`ไม่เจอ ${QUOTE} ในรายการ`);
+    // จอแคบ (420): ช่องไม่พอ → ซ่อนชื่อขั้นอื่น แต่ต้องไม่ล้นจนต้องเลื่อน
+    const fit = await page.evaluate(() => {
+      const b = document.querySelector('[aria-label="ขั้นตอนงาน"]');
+      return b ? { over: b.scrollWidth - b.clientWidth } : null;
+    });
+    fit && fit.over <= 1 ? pass("จอแคบ แถบขั้นตอนพอดีจอ ไม่ต้องเลื่อนซ้ายขวา") : fail(`แถบล้น ${fit && fit.over}px`);
+    (await page.getByText("รอแอดมินเช็คอะไหล่", { exact: true }).locator("visible=true").count()) > 0 &&
+    (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("รอหัวหน้าภาคจ่ายงาน", { exact: true }).count()) === 0
+      ? pass("จอแคบ เห็นชื่อขั้นปัจจุบัน ชื่อขั้นอื่นซ่อน")
+      : fail("จอแคบ ชื่อขั้นไม่ตรงที่ควร");
+    // จอคอม — อ่านลำดับชื่อขั้น
+    await page.setViewportSize({ width: 1400, height: 1500 });
+    await page.waitForTimeout(1200);
     await page.screenshot({ path: path.join(DIR, "so-1-quote.png"), fullPage: true });
 
     // อ่านเฉพาะในการ์ด "ขั้นตอนงาน" ไม่ใช่ทั้งหน้า — ชื่อขั้นไปโผล่ที่ป้ายสถานะ
@@ -81,8 +96,10 @@ const { setup } = require("./fixture");
     const stageCard = () =>
       page.evaluate(() => {
         // แถบขั้นตอนมี aria-label "ขั้นตอนงาน" (ย้ายขึ้นไปอยู่ในการ์ดหัวใบงานแล้ว ไม่มีหัวข้อของตัวเอง)
-        const card = document.querySelector('[aria-label="ขั้นตอนงาน"]');
-        if (!card) return null;
+        const bar = document.querySelector('[aria-label="ขั้นตอนงาน"]');
+        if (!bar) return null;
+        // รายการขั้นที่ข้าม (กดปุ่ม "ข้าม N" แล้วกางใต้แถบ) อ่านต่อท้าย
+        const card = { querySelectorAll: () => [...bar.querySelectorAll("*"), ...(document.querySelector('[aria-label="ขั้นที่ข้าม"]')?.querySelectorAll("*") ?? [])] };
         const labels = [
           "รอหัวหน้าภาคระบุอะไหล่", "รอเสนอราคาลูกค้า", "รอลูกค้าจ่ายเงิน",
           "รอแอดมินเบิกอะไหล่", "รอหัวหน้าภาคจ่ายงาน", "รอหัวหน้าภาคนัดลูกค้า",
@@ -115,6 +132,12 @@ const { setup } = require("./fixture");
     if (!NOQUOTE || !(await open(NOQUOTE))) {
       fail(`ไม่เจอใบที่ไม่ต้องเสนอราคา (${NOQUOTE}) ในรายการ`);
     } else {
+      await page.setViewportSize({ width: 1400, height: 1500 });
+      await page.waitForTimeout(1200);
+      const chip = page.locator('[aria-label^="ข้าม "][aria-label$=" ขั้น"]').locator("visible=true");
+      (await chip.count()) === 1 ? pass(`ขั้นที่ข้ามติดกันยุบเป็นปุ่มเดียว (${await chip.first().getAttribute("aria-label")})`) : fail(`ปุ่มข้าม ${await chip.count()} ปุ่ม`);
+      await chip.first().click();
+      await page.waitForTimeout(600);
       await page.screenshot({ path: path.join(DIR, "so-2-noquote.png"), fullPage: true });
       // ขั้นที่ข้ามใช้ไอคอน remove-circle-outline และสีจาง — เช็คจาก aria/ชื่อไอคอน
       const bar2 = await stageCard();

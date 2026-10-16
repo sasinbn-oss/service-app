@@ -64,6 +64,7 @@ import {
   WORK_ORDER_RESULT_LABELS,
   SEND_BACK_REASONS,
   SEND_BACK_REASON_LABELS,
+  MANUAL_WORK_STATUSES,
   WORK_ORDER_STATUSES,
   WORK_ORDER_STATUS_LABELS,
   WORK_ORDER_ACTION_LABELS,
@@ -555,6 +556,19 @@ const listSelect = {
  */
 const PARTS_OUT_STAGES = new Set(["PARTS_SOURCING", "PARTS_REQUESTED", "WAITING_PARTS"]);
 
+/** ค่าที่ยกมาได้ตอนเปิดใบงาน — เฉพาะที่คนตั้งเอง ที่เหลือว่าง (ขั้นแรกระบบไม่ตั้งอะไร) */
+function manualOrNull(v: string | null | undefined): string | null {
+  return v && (MANUAL_WORK_STATUSES as readonly string[]).includes(v) ? v : null;
+}
+
+/** สถานะอัตโนมัติของใบงานตอนนี้ — ตามขั้น และผลเช็คคลังของขั้นที่อะไหล่หมดได้ */
+async function autoWorkStatus(id: number, stage: string): Promise<string | null> {
+  const out = PARTS_OUT_STAGES.has(stage)
+    ? (await prisma.workOrderPart.count({ where: { workOrderId: id, kind: "WAITING", inStock: false } })) > 0
+    : false;
+  return workStatusForStage(stage, { anyPartOutOfStock: out }) ?? null;
+}
+
 /** หัวหน้าภาคพร้อมขอบเขต — ใช้ตอบว่าใบที่รอหัวหน้าภาครอ "ใคร" */
 type SupervisorRef = { id: number; name: string; region: string | null; supervisedTeams: string[] };
 
@@ -562,7 +576,7 @@ type SupervisorRef = { id: number; name: string; region: string | null; supervis
  * ประวัติที่ไม่ได้ขยับขั้น — ไม่นับตอนหาว่าใบงานค้างขั้นนี้มานานเท่าไร
  * แนบรูปเพิ่มตอนบ่ายไม่ได้แปลว่าใบงานเพิ่งเข้าขั้นนี้
  */
-const NON_STAGE_ACTIONS = ["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED"];
+const NON_STAGE_ACTIONS = ["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED", "STATUS_CHANGED"];
 
 type WorkOrderListRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
@@ -1291,7 +1305,8 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
               assignedToId: body.assignedToId ?? null,
               scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
               symptom: entry.symptom?.trim() || null,
-              workStatus: body.workStatus ?? null,
+              // เปิดใหม่อยู่ขั้นแรก — สถานะเดียวที่ยกมาได้คือที่คนตั้งเอง (รอลูกค้า) ที่เหลือระบบตั้งตามขั้น
+              workStatus: manualOrNull(body.workStatus),
               contactName: body.contactName?.trim() || null,
               contactPhone: body.contactPhone?.trim() || null,
             },
@@ -1438,7 +1453,8 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
             : outage.scheduledVisitAt ?? null,
           // ที่เคยกรอกไว้บนกระดานถูกยกมาเป็นค่าตั้งต้น ไม่ใช่ทิ้งแล้วเริ่มใหม่
           symptom: body.symptom !== undefined ? body.symptom?.trim() || null : outage.symptom,
-          workStatus: body.workStatus !== undefined ? body.workStatus : outage.workStatus,
+          // ค่าบนกระดานอาจเป็นอะไรก็ได้ ("รออะไหล่" จากเมื่อเดือนก่อน) — ใบงานใหม่อยู่ขั้นแรก ยกมาเฉพาะที่คนตั้งเอง
+          workStatus: manualOrNull(body.workStatus !== undefined ? body.workStatus : outage.workStatus),
           contactName: body.contactName?.trim() || null,
           contactPhone: body.contactPhone?.trim() || null,
         },
@@ -1464,6 +1480,8 @@ const updateSchema = z.object({
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
+  // เหตุผลที่ตั้ง "รอลูกค้า" — บังคับ คนอื่นที่เปิดใบงานต้องรู้ว่ารอลูกค้าเรื่องอะไร
+  workStatusNote: z.string().trim().max(300).optional(),
   // หัวหน้าภาคแก้ได้ทุกอย่างตอนช่างส่งกลับ — ผู้ติดต่อเปลี่ยนบ่อย (พนักงานร้านเปลี่ยนกะ)
   contactName: z.string().trim().max(120).nullable().optional(),
   contactPhone: z.string().trim().max(40).nullable().optional(),
@@ -1489,11 +1507,31 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
 
   const current = await prisma.workOrder.findUnique({
     where: { id },
-    select: { status: true, assignedToId: true },
+    select: { status: true, assignedToId: true, workStatus: true },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (current.status === "DONE" || current.status === "CANCELLED") {
     return res.status(400).json({ error: "ใบงานนี้ปิดไปแล้ว แก้ไขไม่ได้" });
+  }
+
+  /**
+   * สถานะ — คนตั้งได้แค่ "อัตโนมัติ" (null) กับที่อยู่ใน MANUAL_WORK_STATUSES พร้อมเหตุผล
+   *
+   * ส่งค่าเดิมกลับมาเฉย ๆ ไม่นับว่าแก้ (แอปรุ่นเก่าส่งสถานะเดิมมาทุกครั้งที่กดบันทึกอาการ)
+   * ค่าอื่นปฏิเสธ — ต้องเปลี่ยนผ่านปุ่มขั้นตอน ไม่งั้นใบงานบอกว่ารออะไหล่ทั้งที่ไม่มีของหมด
+   */
+  let nextWorkStatus: string | null | undefined = undefined;
+  if (body.workStatus !== undefined && body.workStatus !== current.workStatus) {
+    const manual = body.workStatus !== null && (MANUAL_WORK_STATUSES as readonly string[]).includes(body.workStatus);
+    if (body.workStatus !== null && !manual) {
+      return res.status(400).json({
+        error: `"${WORK_STATUS_LABELS[body.workStatus] ?? body.workStatus}" ระบบตั้งตามขั้นของใบงาน แก้เองไม่ได้ — ใช้ปุ่มขั้นตอนของใบงานแทน`,
+      });
+    }
+    if (manual && !body.workStatusNote) {
+      return res.status(400).json({ error: "ต้องบอกเหตุผล — คนอื่นที่เปิดใบงานต้องรู้ว่ารอลูกค้าเรื่องอะไร" });
+    }
+    nextWorkStatus = manual ? body.workStatus : await autoWorkStatus(id, current.status);
   }
 
   await prisma.$transaction(async (tx) => {
@@ -1508,7 +1546,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
           ? { scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null }
           : {}),
         ...(body.symptom !== undefined ? { symptom: body.symptom?.trim() || null } : {}),
-        ...(body.workStatus !== undefined ? { workStatus: body.workStatus } : {}),
+        ...(nextWorkStatus !== undefined ? { workStatus: nextWorkStatus } : {}),
         ...(body.contactName !== undefined ? { contactName: body.contactName?.trim() || null } : {}),
         ...(body.contactPhone !== undefined ? { contactPhone: body.contactPhone?.trim() || null } : {}),
       },
@@ -1521,12 +1559,27 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     // อาการ สถานะ อะไหล่ที่รอ และวันนัด เป็นสิ่งที่กระดานแสดง จึงต้องส่งต่อไปที่เคส
     const touchedNote =
       body.symptom !== undefined ||
-      body.workStatus !== undefined ||
+      nextWorkStatus !== undefined ||
       body.waitingParts !== undefined ||
       body.scheduledAt !== undefined;
     if (touchedNote) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
 
     await writeLog(tx, id, req.auth!.userId, "EDITED", current.status);
+    // เปลี่ยนสถานะลงประวัติแยก บอกจากอะไรเป็นอะไรและเพราะอะไร — มั่วแล้วตามย้อนได้ว่าใครแก้
+    if (nextWorkStatus !== undefined && nextWorkStatus !== current.workStatus) {
+      const label = (v: string | null) => (v ? WORK_STATUS_LABELS[v] ?? v : "ไม่มี");
+      const manual = nextWorkStatus !== null && (MANUAL_WORK_STATUSES as readonly string[]).includes(nextWorkStatus);
+      await writeLog(
+        tx,
+        id,
+        req.auth!.userId,
+        "STATUS_CHANGED",
+        current.status,
+        manual
+          ? `${label(current.workStatus)} → ${label(nextWorkStatus)} — ${body.workStatusNote}`
+          : `${label(current.workStatus)} → อัตโนมัติตามขั้น (${label(nextWorkStatus)})`
+      );
+    }
   }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
@@ -1688,8 +1741,8 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       data: {
         status: nextStatus,
         needsParts,
-        // เลิกรออะไหล่แล้ว ถ้าเคยขึ้นสถานะนี้ไว้จากรอบก่อน
-        ...(needsParts ? { workStatus: workStatusForStage(nextStatus) } : { workStatus: null }),
+        // ทุกขั้นตั้งสถานะใหม่ — ไม่ใช้อะไหล่ไปขั้นจ่ายงานก็ "รอช่างเข้าแก้ไข" ตามขั้น (เดิมล้างเป็นว่าง)
+        workStatus: workStatusForStage(nextStatus),
       },
     });
     await writeLog(
@@ -2441,8 +2494,8 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
         needsParts: null,
         scheduledAt: null,
         scheduledTime: null,
-        // "รอช่าง" ที่ตั้งไว้ตอนส่งไปตรวจไม่จริงแล้ว — ค่าที่คนกรอกเองไม่แตะ
-        ...(wo.workStatus === "WAITING_TECH" ? { workStatus: null } : {}),
+        // "รอช่าง" ที่ตั้งไว้ตอนส่งไปตรวจไม่จริงแล้ว · ค่าที่คนตั้งเองก็หมดอายุเมื่อเปลี่ยนขั้น
+        workStatus: workStatusForStage("NEW"),
       },
     });
     await writeLog(tx, id, req.auth!.userId, "INSPECTED", "NEW", parsed.data.note);
@@ -2940,6 +2993,8 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
         // มีของอยู่ในใบ (ของเดิมหรือที่ช่างขอ) = ต้องใช้อะไหล่ · ไม่มีเลยก็เปิดให้ตัดสินใหม่
         needsParts: requested.length > 0 || existing.length > 0 ? true : null,
         partsExpectedAt: null,
+        // "รอช่างเข้าแก้ไข" ของรอบที่แล้วไม่จริงแล้ว — งานกลับมารอหัวหน้าภาค
+        workStatus: workStatusForStage("NEW"),
         // ช่างคนเดิมยังติดอยู่กับใบงาน หัวหน้าภาคเปลี่ยนได้ตอนจ่ายงานรอบใหม่
         scheduledAt: null,
         scheduledTime: null,
@@ -3703,7 +3758,14 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
     await tx.workOrder.update({
       where: { id },
       // เปิดงานใหม่ = ต้องไปอีกรอบ เริ่มที่แอดมินนัดลูกค้าใหม่ แล้วหัวหน้าภาคจ่ายงาน
-      data: { status: "PARTS_CHECKED", closedAt: null, closedById: null, closeResult: null },
+      data: {
+        status: "PARTS_CHECKED",
+        closedAt: null,
+        closedById: null,
+        closeResult: null,
+        // ทุกขั้นตั้งสถานะใหม่ — สถานะว่างของใบที่ปิดไปแล้วไม่ใช่ของรอบนี้
+        workStatus: workStatusForStage("PARTS_CHECKED"),
+      },
     });
     await writeLog(tx, id, req.auth!.userId, "REOPENED", "PARTS_CHECKED");
   }, STAGE_TX);
