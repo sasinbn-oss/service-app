@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { anyModalOpen } from "../utils/liveSync";
+import { feedback } from "./Feedback";
 import { useFocusEffect } from "@react-navigation/native";
 import { Animated, Easing, Platform, StyleSheet, Text, useWindowDimensions } from "react-native";
 import TouchableOpacity from "./Tap";
@@ -73,6 +75,19 @@ export default function RefreshButton() {
 
   async function onPress() {
     if (phase === "busy") return;
+    /**
+     * หน้าที่ยังไม่ได้บอกปุ่มว่าต้องโหลดอะไร — บนเว็บโหลดทั้งหน้าใหม่แทน (ต.ค. 69)
+     * เดิมหมุนแล้วขึ้น "อัปเดตแล้ว" ทั้งที่ไม่ได้โหลดอะไร คนเลยต้องไปกดรีเฟรชเบราว์เซอร์เอง
+     * มีฟอร์มเปิดอยู่ไม่โหลดทั้งหน้า — ที่พิมพ์ค้างไว้จะหาย
+     */
+    if (!current && Platform.OS === "web" && typeof window !== "undefined") {
+      if (anyModalOpen()) {
+        feedback.toast("warn", "มีฟอร์มเปิดอยู่ — บันทึกหรือปิดก่อน แล้วกดรีเฟรชอีกครั้ง");
+        return;
+      }
+      window.location.reload();
+      return;
+    }
     setPhase("busy");
     try {
       // หมุนอย่างน้อยครู่หนึ่ง ข้อมูลที่โหลดเร็วมากจะได้ไม่ดูเหมือนกดแล้วไม่มีอะไรเกิดขึ้น

@@ -1019,6 +1019,35 @@ router.get("/options", requireAuth, async (_req, res) => {
   });
 });
 
+/**
+ * รุ่นข้อมูลของใบงาน — หน้าใบงานถามทุก ~20 วินาทีว่ามีใครเปลี่ยนอะไรไหม (เจ้าของงานขอ ต.ค. 69)
+ *
+ * ทุกการเปลี่ยนแปลงลงประวัติ เลขประวัติล่าสุดจึงเป็นรุ่นของใบงานโดยไม่ต้องเพิ่มคอลัมน์ ·
+ * ตอบเล็กที่สุดที่บอกได้ว่า "ใครเปลี่ยนอะไร" — เดิมสองคนเปิดใบเดียวกัน อีกคนเห็นของเก่าจนรีเฟรชเบราว์เซอร์
+ */
+router.get("/:id/version", requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const [wo, last] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { status: true } }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id },
+      orderBy: { id: "desc" },
+      select: { id: true, action: true, userId: true, createdAt: true, user: { select: { name: true } } },
+    }),
+  ]);
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  res.json({
+    v: last?.id ?? 0,
+    byId: last?.userId ?? null,
+    byName: last?.user?.name ?? null,
+    actionLabel: last ? WORK_ORDER_ACTION_LABELS[last.action] ?? last.action : null,
+    at: last?.createdAt ?? null,
+    status: wo.status,
+    statusLabel: WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status,
+  });
+});
+
 router.get("/:id", requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -1480,6 +1509,8 @@ const updateSchema = z.object({
   scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
+  // เลขประวัติล่าสุดตอนเปิดฟอร์ม — มีคนอื่นเปลี่ยนใบงานหลังจากนั้น ไม่ให้บันทึกทับเงียบ ๆ
+  expectedVersion: z.number().int().nonnegative().optional(),
   // เหตุผลที่ตั้ง "รอลูกค้า" — บังคับ คนอื่นที่เปิดใบงานต้องรู้ว่ารอลูกค้าเรื่องอะไร
   workStatusNote: z.string().trim().max(300).optional(),
   // หัวหน้าภาคแก้ได้ทุกอย่างตอนช่างส่งกลับ — ผู้ติดต่อเปลี่ยนบ่อย (พนักงานร้านเปลี่ยนกะ)
@@ -1512,6 +1543,25 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (current.status === "DONE" || current.status === "CANCELLED") {
     return res.status(400).json({ error: "ใบงานนี้ปิดไปแล้ว แก้ไขไม่ได้" });
+  }
+
+  /**
+   * มีคนอื่นเปลี่ยนใบงานหลังเปิดฟอร์ม — ปฏิเสธ ไม่ให้บันทึกทับ (เดิมคนกดทีหลังทับของอีกคนเงียบ ๆ)
+   * ของที่ตัวเองทำ (แนบรูประหว่างนั้น) ไม่นับ · แอปรุ่นเก่าไม่ส่ง expectedVersion มา = ไม่เช็ค
+   */
+  if (body.expectedVersion !== undefined) {
+    const newer = await prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, id: { gt: body.expectedVersion }, NOT: { userId: req.auth!.userId } },
+      orderBy: { id: "desc" },
+      select: { createdAt: true, user: { select: { name: true } } },
+    });
+    if (newer) {
+      const at = newer.createdAt.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
+      return res.status(409).json({
+        error: `${newer.user?.name ?? "มีคน"} แก้ใบงานนี้ไปแล้ว (${at} น.) — โหลดข้อมูลใหม่ให้แล้ว ตรวจแล้วบันทึกอีกครั้ง`,
+        stale: true,
+      });
+    }
   }
 
   /**
