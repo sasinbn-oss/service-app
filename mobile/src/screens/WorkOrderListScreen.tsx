@@ -29,6 +29,7 @@ import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useDocked } from "../components/SideMenu";
 import { chromeHide, setChromeOverlay, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
+import { anyModalOpen, onPageShown, pageVisible } from "../utils/liveSync";
 import { useRefreshHandler } from "../components/RefreshButton";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
@@ -438,6 +439,23 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     }, [load])
   );
   useRefreshHandler(load);
+  /**
+   * โหลดใหม่เองทุก 1 นาที และทุกครั้งที่กลับมาที่แท็บ (ต.ค. 69) — สถานะและตัวเลขในกล่องงานไม่ค้าง
+   * ข้ามรอบที่มีฟอร์มเปิดอยู่ (ตัวกรอง Excel ฯลฯ) และแท็บที่ซ่อนอยู่ · หน้าใบงานเปิดทับอยู่ = หน้านี้ไม่ได้โฟกัส ไม่โหลด
+   */
+  useFocusEffect(
+    useCallback(() => {
+      const tick = () => {
+        if (pageVisible() && !anyModalOpen()) void load();
+      };
+      const timer = setInterval(tick, 60_000);
+      const off = onPageShown(tick);
+      return () => {
+        clearInterval(timer);
+        off();
+      };
+    }, [load])
+  );
 
   /**
    * มือถือ: หัวหน้า+ตัวกรองเลื่อนขึ้นไปพร้อมรายการตามนิ้ว แล้วเหลือแถบสรุปแถบเดียวติดบน

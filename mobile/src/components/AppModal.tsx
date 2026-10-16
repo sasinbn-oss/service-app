@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { modalOpened } from "../utils/liveSync";
 import {
   Animated,
   Easing,
@@ -58,6 +59,8 @@ export default function AppModal({
     แต่ส่งเนื้อหาไปเลื่อนเข้ามาแทนที่ในกรอบเดิม พร้อม "‹ กลับ…"
     ส่งใหม่ทุกครั้งที่วาด เพื่อให้ปุ่มกับช่องกรอกในนั้นเห็นค่าล่าสุดเสมอ
   */
+  // นับหน้าต่างที่เปิดอยู่ — มีฟอร์มค้าง แอปจะไม่โหลดข้อมูลทับหรือรีเฟรชรุ่นใหม่ระหว่างกรอก (utils/liveSync)
+  useEffect(() => (visible ? modalOpened() : undefined), [visible]);
   const pane = usePopupPane();
   const key = useRef(`pane-${Math.random().toString(36).slice(2)}`).current;
   const paneNode =

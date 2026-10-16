@@ -48,6 +48,9 @@ import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
+import { useRefreshHandler } from "../components/RefreshButton";
+import { feedback } from "../components/Feedback";
+import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -226,6 +229,11 @@ interface LinkedOrder {
 }
 
 /** ปุ่มของแต่ละขั้น — ชื่อเดียวกับหัวฟอร์มที่เปิดขึ้นมา */
+/** รุ่นข้อมูลของใบงานที่หน้าจอถืออยู่ = เลขประวัติล่าสุด (ตรงกับ GET /work-orders/:id/version) */
+function latestLogId(o: { logs: { id: number }[] }) {
+  return o.logs.reduce((m, l) => Math.max(m, l.id), 0);
+}
+
 /** สถานะเดียวที่คนตั้งเองได้ — ตรงกับ MANUAL_WORK_STATUSES ฝั่ง backend */
 const MANUAL_STATUS = "WAITING_CUSTOMER";
 
@@ -398,6 +406,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [editingNote, setEditingNote] = useState(false);
+  const editingNoteRef = useRef(false);
+  editingNoteRef.current = editingNote;
   const [stageOpen, setStageOpen] = useState(false);
   // ความกว้างของแถบขั้นตอน — แคบจนชื่อขั้นอ่านไม่ออก ซ่อนชื่อขั้นอื่น เหลือแค่ขั้นปัจจุบัน
   const [stepBarW, setStepBarW] = useState(0);
@@ -485,6 +495,79 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       showAlert(`${next.code} ${what}`, from && from !== to ? `${from} → ${to}` : to);
     },
     [order, load]
+  );
+
+  // ปุ่ม "รีเฟรช" ด้านบนโหลดหน้าใบงานจริง — เดิมหน้านี้ไม่ได้ผูกไว้ กดแล้วขึ้น "อัปเดตแล้ว" โดยไม่ได้โหลดอะไร
+  useRefreshHandler(load);
+
+  /**
+   * มีคนอื่นเปลี่ยนใบงานนี้ระหว่างที่เปิดอยู่ — ถามรุ่นข้อมูลทุก 20 วินาทีและตอนกลับมาที่แท็บ (ต.ค. 69)
+   *
+   * ไม่มีฟอร์มเปิด → โหลดใหม่ให้เองพร้อมบอกว่าใครเปลี่ยน · มีฟอร์มเปิด → แถบเหลือง ไม่โหลดทับที่กำลังกรอก
+   * ปิดฟอร์มแล้วเช็คอีกรอบทันที · ถามแค่เลขประวัติล่าสุด (เบา) ไม่โหลดทั้งใบทุกรอบ
+   */
+  const [staleNote, setStaleNote] = useState<string | null>(null);
+  const live = useRef({ order, load });
+  live.current = { order, load };
+  const checkRemote = useCallback(async () => {
+    const cur = live.current.order;
+    if (!cur || !pageVisible()) return;
+    let r: { v: number; byId: number | null; byName: string | null; actionLabel: string | null; at: string | null; statusLabel: string };
+    try {
+      r = (await api.get(`/work-orders/${cur.id}/version`, { loadingText: false })).data;
+    } catch {
+      return; // เน็ตหลุด / เซิร์ฟเวอร์หลับ — รอบหน้าค่อยถาม
+    }
+    if (r.v <= latestLogId(cur)) return;
+    // ของที่ตัวเองทำจากอีกแท็บ/อีกเครื่อง โหลดเงียบ ๆ ไม่ต้องบอก
+    const who = r.byId !== null && r.byId !== user?.id ? r.byName ?? "มีคน" : null;
+    if (anyModalOpen()) {
+      if (who) {
+        const at = r.at ? new Date(r.at).toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }) : "";
+        setStaleNote(`${who} เปลี่ยนใบงานนี้ระหว่างที่คุณเปิดอยู่ (${r.actionLabel ?? "แก้ไข"} ${at} น.) — ข้อมูลที่เห็นอาจเก่า`);
+      }
+      return;
+    }
+    await live.current.load();
+    setStaleNote(null);
+    if (who) feedback.toast("info", `${who} อัปเดตใบงานนี้ — ${r.statusLabel}`);
+  }, [user?.id]);
+  useFocusEffect(
+    useCallback(() => {
+      const timer = setInterval(checkRemote, 20_000);
+      const off = onPageShown(checkRemote);
+      return () => {
+        clearInterval(timer);
+        off();
+      };
+    }, [checkRemote])
+  );
+  // ปิดฟอร์มหมดแล้ว — ของที่ค้างไว้ระหว่างกรอกโหลดตอนนี้
+  useEffect(() => subscribeModals((n) => (n === 0 ? void checkRemote() : undefined)), [checkRemote]);
+  /**
+   * เซิร์ฟเวอร์ตอบ 409 = หน้าจอถือข้อมูลเก่า (กดขั้นที่คนอื่นทำไปแล้ว · บันทึกทับของคนอื่น)
+   * ฟอร์มแก้ไขรายละเอียดเปิดค้างไว้ให้ตรวจแล้วบันทึกใหม่ (ข้อความอยู่ในฟอร์ม) · ฟอร์มขั้นตอนปิด
+   * เพราะขั้นเปลี่ยนไปแล้ว ฟอร์มเดิมไม่มีความหมาย — บอกเหตุผลด้วยข้อความจากเซิร์ฟเวอร์
+   */
+  useEffect(
+    () =>
+      subscribeWorkOrderStale((wid, message) => {
+        if (wid !== id) return;
+        void live.current.load();
+        setStaleNote(null);
+        if (editingNoteRef.current) {
+          // ข้อความอยู่ท้ายฟอร์มด้วย แต่จอมือถือมักไม่เห็น — แจ้งด้านบนอีกที
+          feedback.toast("warn", message ?? "มีคนแก้ใบงานนี้ไปแล้ว — โหลดข้อมูลใหม่ให้แล้ว");
+          return;
+        }
+        setStageOpen(false);
+        setClosing(false);
+        setRollbackOpen(false);
+        setStageBackOpen(false);
+        setEtaOpen(false);
+        feedback.toast("warn", `${message ?? "ข้อมูลใบงานนี้เปลี่ยนไปแล้ว"} — โหลดข้อมูลล่าสุดให้แล้ว`);
+      }),
+    [id]
   );
 
   /**
@@ -1017,6 +1100,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text style={styles.claimRejectedTitle}>Admin Spare Part ตีกลับใบเคลม — แก้แล้วปิดงานใหม่</Text>
               <Text style={styles.claimRejectedText}>{order.claims[0].rejectReason ?? "—"}</Text>
             </View>
+          </View>
+        ) : null}
+
+        {staleNote ? (
+          <View style={styles.staleBar} accessibilityLabel="แถบข้อมูลเก่า">
+            <Ionicons name="sync-outline" size={16} color={colors.warningInk} />
+            <Text style={styles.staleText}>{staleNote}</Text>
+            <TouchableOpacity
+              style={styles.staleBtn}
+              onPress={async () => {
+                await load();
+                setStaleNote(null);
+              }}
+              accessibilityLabel="โหลดข้อมูลใหม่"
+            >
+              <Text style={styles.staleBtnText}>โหลดใหม่</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -3117,7 +3217,9 @@ function NoteModal({
     setWaitCustomer(order.workStatus === MANUAL_STATUS);
     setStatusNote("");
     setError(null);
-  }, [visible, order]);
+    // ตั้งค่าตอนเปิดฟอร์มเท่านั้น — ใบงานโหลดใหม่ระหว่างเปิด (มีคนอื่นแก้) ต้องไม่ล้างที่กำลังพิมพ์
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   const statusChanged = waitCustomer !== (order.workStatus === MANUAL_STATUS);
   const needNote = waitCustomer && statusChanged && !statusNote.trim();
@@ -3127,6 +3229,8 @@ function NoteModal({
     setError(null);
     try {
       await api.patch(`/work-orders/${order.id}`, {
+        // มีคนอื่นแก้หลังจากรุ่นที่หน้าจอถืออยู่ → เซิร์ฟเวอร์ไม่ให้บันทึกทับ (409) แล้วหน้าใบงานโหลดใหม่ให้
+        expectedVersion: latestLogId(order),
         title: title.trim() || order.title,
         priority,
         contactName: contactName.trim() || null,
@@ -4777,6 +4881,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dangerSoft,
     flexWrap: "wrap",
   },
+  staleBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.sm,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    backgroundColor: colors.warningSoft,
+  },
+  staleText: { flex: 1, minWidth: 160, fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.warningInk },
+  staleBtn: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    backgroundColor: colors.card,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  staleBtnText: { fontSize: 12.5, fontWeight: "700", color: colors.warningInk },
   sentBack: {
     flexDirection: "row",
     alignItems: "flex-start",

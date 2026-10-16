@@ -40,3 +40,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# เขียนตอน build (scripts/write-build-info.js) — หน้าเว็บถามไฟล์นี้ว่ามีรุ่นใหม่ไหม
+public/version.json

@@ -34,3 +34,24 @@ try {
 } catch (err) {
   console.warn("เขียน buildInfo ไม่สำเร็จ ใช้ค่าเดิมต่อ:", err.message);
 }
+
+/**
+ * public/version.json — หน้าเว็บที่เปิดค้างไว้ถามไฟล์นี้เป็นระยะว่ามีรุ่นใหม่ไหม (src/components/UpdateGate.tsx)
+ *
+ * minBuiltAt มาจาก update-policy.json: รุ่นที่ build ก่อนเวลานี้ "ต้อง" อัปเดตก่อนใช้งานต่อ
+ * ขยับค่านี้เฉพาะรอบที่หน้าจอเก่าใช้กับเซิร์ฟเวอร์ใหม่ไม่ได้จริง ๆ — รอบปกติอัปเดตให้เองตอนว่างอยู่แล้ว
+ */
+let minBuiltAt = null;
+try {
+  minBuiltAt = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "update-policy.json"), "utf8")).minBuiltAt ?? null;
+} catch {
+  // ไม่มีไฟล์ = ไม่บังคับรุ่นไหน
+}
+try {
+  fs.writeFileSync(
+    path.join(__dirname, "..", "public", "version.json"),
+    JSON.stringify({ commit, builtAt, minBuiltAt }) + "\n"
+  );
+} catch (err) {
+  console.warn("เขียน version.json ไม่สำเร็จ หน้าเว็บจะไม่รู้ว่ามีรุ่นใหม่:", err.message);
+}

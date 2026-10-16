@@ -1,4 +1,5 @@
 import axios from "axios";
+import { notifyWorkOrderStale } from "../utils/liveSync";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { feedback } from "../components/Feedback";
@@ -136,6 +137,12 @@ api.interceptors.response.use(
     end((error?.config ?? undefined) as Tracked | undefined);
     if (error?.response?.status === 401 && error.response.data?.accountDeleted) accountDeletedHandler?.();
     if (error?.response?.status === 401 && error.response.data?.viewAsEnded) viewAsEndedHandler?.();
+    // ใบงานข้อมูลเก่า — กดขั้นตอนที่คนอื่นทำไปแล้ว หรือบันทึกทับของคนอื่น หน้าใบงานโหลดใหม่ให้ทันที
+    if (error?.response?.status === 409) {
+      const m = /\/work-orders\/(\d+)/.exec(String(error.config?.url ?? ""));
+      const msg = error.response.data?.error;
+      if (m) notifyWorkOrderStale(Number(m[1]), typeof msg === "string" ? msg : null);
+    }
     return Promise.reject(error);
   }
 );

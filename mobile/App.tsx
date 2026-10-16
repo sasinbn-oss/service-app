@@ -9,6 +9,7 @@ import AuthNavigator from "./src/navigation/AuthNavigator";
 import MainNavigator from "./src/navigation/MainNavigator";
 import AppShell from "./src/components/AppShell";
 import { FeedbackHost, WasherLoader } from "./src/components/Feedback";
+import UpdateGate from "./src/components/UpdateGate";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
 import { colors } from "./src/theme";
 import { installWebFonts } from "./src/utils/webFonts";
@@ -57,6 +58,7 @@ export default function App() {
         <View style={{ flex: 1 }}>
           <RootNavigator />
           <FeedbackHost />
+          <UpdateGate />
         </View>
       </AuthProvider>
     </SafeAreaProvider>
