@@ -220,6 +220,55 @@ export default function CoverageMapScreen() {
   const [supState, setSupState] = useState<Map<number, SupState>>(new Map());
   const [log, setLog] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [trayQuery, setTrayQuery] = useState("");
+  const [trayMin, setTrayMin] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const dockRef = useRef<View>(null);
+
+  /**
+   * ลากใกล้ขอบบน/ล่างแล้วหน้าเลื่อนเอง (เจ้าของงานขอ ต.ค. 69)
+   *
+   * เดิมกล่อง "ยังไม่มีสังกัด" อยู่บนสุด ทีมอยู่ล่างลงไปไกล ระหว่างลาก HTML5 เบราว์เซอร์ไม่เลื่อนกล่องที่เลื่อนได้ให้
+   * (เลื่อนให้แค่หน้าเว็บทั้งหน้า ซึ่งของเราไม่เลื่อน) — ลากไปไม่ถึงทีม · ยิ่งใกล้ขอบยิ่งเร็ว
+   * ขอบล่าง = ขอบบนของแถบที่ลอยอยู่ล่างจอ ไม่ใช่ขอบจอ (แถบบังส่วนล่างของผังอยู่)
+   */
+  useEffect(() => {
+    if (Platform.OS !== "web" || !dragging) return;
+    const node = (scrollRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.();
+    if (!node) return;
+    let speed = 0;
+    let frame = 0;
+    let last = 0;
+    const ZONE = 80;
+    const over = (e: DragEvent) => {
+      last = Date.now();
+      const r = node.getBoundingClientRect();
+      const dock = domOf(dockRef);
+      const bottom = Math.min(r.bottom, dock ? dock.getBoundingClientRect().top : r.bottom);
+      const y = e.clientY;
+      speed = y < r.top + ZONE ? -Math.ceil((r.top + ZONE - y) / 4) : y > bottom - ZONE && y < bottom ? Math.ceil((y - (bottom - ZONE)) / 4) : 0;
+    };
+    const tick = () => {
+      // ไม่มี dragover มาครึ่งวินาที = ลากจบ/หลุดไปแล้ว (เบราว์เซอร์ยิงเป็นระยะแม้เมาส์นิ่ง) — หยุดเลื่อน ไม่ให้ผังไหลเอง
+      if (Date.now() - last > 500) speed = 0;
+      if (speed) node.scrollTop += speed;
+      frame = requestAnimationFrame(tick);
+    };
+    document.addEventListener("dragover", over);
+    frame = requestAnimationFrame(tick);
+    return () => {
+      document.removeEventListener("dragover", over);
+      cancelAnimationFrame(frame);
+    };
+  }, [dragging]);
+
+  // แตะ/คลิกชื่อค้างไว้แล้วเปลี่ยนใจ — Esc ยกเลิก (ป้ายบนจอบอกไว้)
+  useEffect(() => {
+    if (Platform.OS !== "web" || !grab) return;
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setGrab(null);
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [grab]);
 
   const load = useCallback(async () => {
     try {
@@ -360,6 +409,11 @@ export default function CoverageMapScreen() {
   const supsOfTeam = (region: string, team: string) => [...wholeOf(region), ...partOf(region, team)];
   const freeTechs = data.technicians.filter((t) => !techTeam.get(t.id));
   const freeSups = data.supervisors.filter((s) => !sup(s.id).region && !sup(s.id).teams.length);
+  const tq = trayQuery.trim();
+  const inTray = (x: { name: string; code: string }) => !tq || `${x.name} ${x.code}`.includes(tq);
+  const trayFree = { sups: freeSups.filter(inTray), techs: freeTechs.filter(inTray) };
+  const grabName = (g: Grab) =>
+    (g.kind === "SUP" ? data.supervisors.find((x) => x.id === g.id) : data.technicians.find((x) => x.id === g.id))?.name ?? "";
   const allTeams = data.regions.flatMap((r) => r.teams.map((t) => ({ r: r.name, t })));
   const q = query.trim();
   const dim = (text: string) => !!q && !text.includes(q);
@@ -528,7 +582,7 @@ export default function CoverageMapScreen() {
   return (
     <DnDContext.Provider value={dnd}>
       <View style={{ flex: 1, backgroundColor: colors.background }}>
-        <ScrollView contentContainerStyle={styles.page}>
+        <ScrollView ref={scrollRef} contentContainerStyle={[styles.page, editing && { paddingBottom: 340 }]}>
           <View style={[styles.sheet, editing && { borderColor: GOLD }]}>
             <View style={styles.dochead}>
               <View style={styles.brand}>
@@ -588,33 +642,9 @@ export default function CoverageMapScreen() {
               <>
                 <View style={styles.editband}>
                   <Text style={styles.editbandText}>
-                    โหมดแก้ไข — {Platform.OS === "web" ? "ลากชื่อ" : "แตะชื่อ แล้วแตะ"}ไปที่ทีมหรือหัวภาค · ช่าง → ทีม · หัวหน้าภาค → หัวภาค (ทั้งภาค) หรือทีม ·
-                    การเปลี่ยนแปลงยังไม่ถูกบันทึกจนกว่าจะกด "บันทึก"
+                    โหมดแก้ไข — {Platform.OS === "web" ? "ลากชื่อ หรือคลิกชื่อแล้วคลิก" : "แตะชื่อ แล้วแตะ"}ไปที่ทีมหรือหัวภาค · คนที่ยังไม่มีสังกัดอยู่ในแถบเหลืองล่างจอ ·
+                    ช่าง → ทีม · หัวหน้าภาค → หัวภาค (ทั้งภาค) หรือทีม · การเปลี่ยนแปลงยังไม่ถูกบันทึกจนกว่าจะกด "บันทึก"
                   </Text>
-                </View>
-                <View style={styles.trayWrap}>
-                  <Text style={styles.h3}>
-                    ยังไม่มีสังกัด ({freeTechs.length + freeSups.length}) — ลากเข้าทีม/ภาค หรือลากคนในผังมาวางที่นี่เพื่อเอาออก
-                  </Text>
-                  <DropZone zone={{ kind: "tray", target: null }} style={styles.tray} label="ยังไม่มีสังกัด">
-                    {freeSups.map((s) => (
-                      <Person key={`s${s.id}`} grab={{ id: s.id, kind: "SUP", from: null }} name={s.name} code={s.code} role="หัวหน้าภาค" sup small />
-                    ))}
-                    {freeTechs.map((t) => {
-                      const stale = data.technicians.find((x) => x.id === t.id)?.staleTeam;
-                      return (
-                        <Person
-                          key={`t${t.id}`}
-                          grab={{ id: t.id, kind: "TECH", from: null }}
-                          name={t.name}
-                          code={t.code}
-                          role={stale && !t.team ? `ช่าง · เดิม ${stale}` : "ช่าง"}
-                          small
-                        />
-                      );
-                    })}
-                    {!freeSups.length && !freeTechs.length ? <Text style={styles.trayEmpty}>ทุกคนมีสังกัดแล้ว</Text> : null}
-                  </DropZone>
                 </View>
               </>
             ) : null}
@@ -696,6 +726,78 @@ export default function CoverageMapScreen() {
           </View>
         </ScrollView>
 
+        {grab && !dragging ? (
+          // คลิก/แตะชื่อแล้ว — บอกว่ากำลังย้ายใคร ต้องทำอะไรต่อ (เดิมทำได้แต่ไม่มีอะไรบอก)
+          <View style={styles.moving} pointerEvents="box-none">
+            <View style={styles.movingPill}>
+              <Text style={styles.movingText} numberOfLines={2}>
+                กำลังย้าย {grabName(grab)} — {Platform.OS === "web" ? "คลิก" : "แตะ"}ทีมหรือหัวภาคที่ต้องการ
+                {Platform.OS === "web" ? " (Esc ยกเลิก)" : ""}
+              </Text>
+              <TouchableOpacity onPress={() => setGrab(null)} accessibilityLabel="ยกเลิกการย้าย">
+                <Ionicons name="close" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
+        <View style={styles.bottomStack} pointerEvents="box-none">
+        {editing ? (
+          /**
+           * แถบ "ยังไม่มีสังกัด" ลอยติดล่างจอ (เจ้าของงานเลือก ต.ค. 69) — เดิมอยู่บนสุดของผัง
+           * เลื่อนไปทีมไหนก็ลากจากแถบนี้ได้ · ลากคนในผังมาวางที่แถบ = เอาออก · ค้นชื่อ/ย่อเก็บได้
+           */
+          <View ref={dockRef} style={styles.dock}>
+            <View style={styles.dockHead}>
+              <Text style={styles.dockTitle}>● ยังไม่มีสังกัด ({freeTechs.length + freeSups.length})</Text>
+              {!trayMin ? (
+                <TextInput
+                  style={styles.dockSearch}
+                  value={trayQuery}
+                  onChangeText={setTrayQuery}
+                  placeholder="ค้นชื่อ / รหัส"
+                  placeholderTextColor={colors.textFaint}
+                  accessibilityLabel="ค้นคนที่ยังไม่มีสังกัด"
+                />
+              ) : (
+                <View style={{ flex: 1 }} />
+              )}
+              <TouchableOpacity onPress={() => setTrayMin((v) => !v)} accessibilityLabel={trayMin ? "ขยายแถบยังไม่มีสังกัด" : "ย่อแถบยังไม่มีสังกัด"}>
+                <Text style={styles.dockToggle}>{trayMin ? "ขยาย ▴" : "ย่อ ▾"}</Text>
+              </TouchableOpacity>
+            </View>
+            {/* ย่อแล้วยังวางได้ — ทั้งแถบเป็นที่วาง "เอาออก" */}
+            <DropZone zone={{ kind: "tray", target: null }} style={trayMin ? styles.trayMin : styles.tray} label="ยังไม่มีสังกัด">
+              {trayMin ? (
+                <Text style={styles.trayEmpty}>ลากคนมาวางที่นี่เพื่อเอาออกจากทีม</Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 112 }} contentContainerStyle={styles.trayList}>
+                  {trayFree.sups.map((s) => (
+                    <Person key={`s${s.id}`} grab={{ id: s.id, kind: "SUP", from: null }} name={s.name} code={s.code} role="หัวหน้าภาค" sup small />
+                  ))}
+                  {trayFree.techs.map((t) => {
+                    const stale = data.technicians.find((x) => x.id === t.id)?.staleTeam;
+                    return (
+                      <Person
+                        key={`t${t.id}`}
+                        grab={{ id: t.id, kind: "TECH", from: null }}
+                        name={t.name}
+                        code={t.code}
+                        role={stale && !t.team ? `ช่าง · เดิม ${stale}` : "ช่าง"}
+                        small
+                      />
+                    );
+                  })}
+                  {!freeSups.length && !freeTechs.length ? (
+                    <Text style={styles.trayEmpty}>ทุกคนมีสังกัดแล้ว — ลากคนในผังมาวางที่นี่เพื่อเอาออก</Text>
+                  ) : !trayFree.sups.length && !trayFree.techs.length ? (
+                    <Text style={styles.trayEmpty}>ไม่พบ “{trayQuery.trim()}”</Text>
+                  ) : null}
+                </ScrollView>
+              )}
+            </DropZone>
+          </View>
+        ) : null}
         {log.length ? (
           <View style={styles.pending}>
             <View style={{ flex: 1, minWidth: 240 }}>
@@ -718,6 +820,7 @@ export default function CoverageMapScreen() {
             </View>
           </View>
         ) : null}
+        </View>
       </View>
     </DnDContext.Provider>
   );
@@ -789,19 +892,7 @@ const styles = StyleSheet.create({
   editText: { fontWeight: "700", color: colors.navy, fontSize: 13.5 },
   editband: { backgroundColor: "#FFF7E3", paddingHorizontal: 22, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.border },
   editbandText: { color: "#6B4E12", fontSize: 13, lineHeight: 20 },
-  trayWrap: { paddingHorizontal: 22, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border },
-  tray: {
-    borderWidth: 1.5,
-    borderStyle: "dashed",
-    borderColor: colors.borderStrong,
-    borderRadius: 8,
-    padding: 10,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    minHeight: 50,
-    alignItems: "center",
-  },
+  tray: { minHeight: 50 },
   trayEmpty: { color: colors.textFaint, fontSize: 12.5 },
   h3: { fontSize: 12.5, letterSpacing: 0.6, color: colors.textMuted, fontWeight: "700", marginBottom: 8 },
   stats: { flexDirection: "row", flexWrap: "wrap", borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -921,11 +1012,46 @@ const styles = StyleSheet.create({
   },
   groupTechs: { flexDirection: "row", flexWrap: "wrap", gap: 6, flexGrow: 1 },
   foot: { paddingHorizontal: 22, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.border },
+  bottomStack: { position: "absolute", left: 16, right: 16, bottom: 16, gap: 8 },
+  dock: {
+    backgroundColor: colors.card,
+    borderWidth: 2,
+    borderColor: GOLD,
+    borderRadius: radius.md,
+    overflow: "hidden",
+    ...shadow.card,
+  },
+  dockHead: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "#FFF7E3" },
+  dockTitle: { fontSize: 13, fontWeight: "700", color: "#6B4E12" },
+  dockSearch: {
+    flex: 1,
+    minWidth: 80,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: colors.card,
+  },
+  dockToggle: { fontSize: 13, fontWeight: "700", color: "#6B4E12" },
+  trayMin: { paddingHorizontal: 12, paddingVertical: 8 },
+  trayList: { flexDirection: "row", flexWrap: "wrap", gap: 8, padding: 10, alignItems: "center" },
+  moving: { position: "absolute", top: 10, left: 0, right: 0, alignItems: "center", zIndex: 20 },
+  movingPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    maxWidth: "92%",
+    backgroundColor: colors.navy,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    ...shadow.card,
+  },
+  movingText: { color: "#fff", fontSize: 13, fontWeight: "600", flexShrink: 1 },
   pending: {
-    position: "absolute",
-    left: 16,
-    right: 16,
-    bottom: 16,
     backgroundColor: colors.navy,
     borderRadius: radius.md,
     padding: 14,
