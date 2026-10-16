@@ -49,6 +49,14 @@ export default function UpdatePill({
   // ซ่อน = เลื่อนพ้นขอบบนของกล่องจริง ๆ ไม่ใช่แค่ขึ้นไปหลบใต้แถบบน (มือถือมีแถบลอยสูงกว่า 70)
   const hidden = -(top + 70);
   const y = useRef(new Animated.Value(hidden)).current;
+  /**
+   * ซ่อนแล้วต้องโปร่งใสด้วย ไม่ใช่แค่เลื่อนขึ้น — iPhone/จอมือถือไม่มีอะไรตัดขอบเหนือกล่องรายการ
+   * ปุ่มที่เลื่อนขึ้นไปเลยโผล่ทับแถบชื่อหน้าเป็น "มีอัปเดต 0 รายการ" (เจ้าของงานเจอบน iOS ต.ค. 69)
+   * จำตัวเลขล่าสุดที่มากกว่า 0 ไว้ ระหว่างปุ่มเลื่อนหายจะได้ไม่เห็นเลขเปลี่ยนเป็น 0
+   */
+  const opacity = y.interpolate({ inputRange: [hidden, hidden / 2, 0], outputRange: [0, 0, 1], extrapolate: "clamp" });
+  const shown = useRef(count);
+  if (count > 0) shown.current = count;
   useEffect(() => {
     Animated.spring(y, {
       toValue: count > 0 ? 0 : hidden,
@@ -58,11 +66,11 @@ export default function UpdatePill({
     }).start();
   }, [count, y, hidden]);
   return (
-    <Animated.View pointerEvents={count > 0 ? "box-none" : "none"} style={[styles.wrap, { top, transform: [{ translateY: y }] }]}>
+    <Animated.View pointerEvents={count > 0 ? "box-none" : "none"} style={[styles.wrap, { top, opacity, transform: [{ translateY: y }] }]}>
       <TouchableOpacity style={styles.pill} onPress={onPress} accessibilityLabel="ดูข้อมูลที่อัปเดต">
         <Ionicons name="arrow-up" size={15} color="#fff" />
         <Text style={styles.text}>
-          มีอัปเดต {count} {unit}
+          มีอัปเดต {shown.current} {unit}
         </Text>
       </TouchableOpacity>
     </Animated.View>
