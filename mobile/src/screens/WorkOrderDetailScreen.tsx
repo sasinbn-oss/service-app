@@ -226,6 +226,9 @@ interface LinkedOrder {
 }
 
 /** ปุ่มของแต่ละขั้น — ชื่อเดียวกับหัวฟอร์มที่เปิดขึ้นมา */
+/** สถานะเดียวที่คนตั้งเองได้ — ตรงกับ MANUAL_WORK_STATUSES ฝั่ง backend */
+const MANUAL_STATUS = "WAITING_CUSTOMER";
+
 /** ขั้นที่ผล "หมด" ยังเป็นเรื่องของตอนนี้ — ตรงกับ PARTS_OUT_STAGES ฝั่ง backend */
 const PARTS_OUT_STAGES = ["PARTS_SOURCING", "PARTS_REQUESTED", "WAITING_PARTS"];
 
@@ -956,6 +959,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                         >
                           {stage.label}
                         </Text>
+                      ) : null}
+                      {/*
+                        สถานะย่อย — ตอนนี้ติดอะไรอยู่ในขั้นนี้ (เจ้าของงานขอ ต.ค. 69)
+                        ขึ้นเฉพาะตอนบอกอะไรเพิ่มจากชื่อขั้น: รอลูกค้า (คนตั้งเอง) ทุกขั้น ·
+                        ขั้นเบิกอะไหล่ที่ยังไม่เช็คคลัง · อะไหล่หมดใช้ป้ายแดงข้างล่าง
+                        ที่เหลือ ("รอช่างเข้าแก้ไข" ใต้ขั้นของแอดมิน ฯลฯ) ซ้ำหรือขัดกับชื่อขั้น ไม่ขึ้น
+                      */}
+                      {state === "now" && order.workStatus === MANUAL_STATUS ? (
+                        <View style={[styles.stepSub, styles.stepSubCust]} accessibilityLabel="สถานะย่อย">
+                          <Text style={[styles.stepSubText, styles.stepSubCustText]}>{order.workStatusLabel}</Text>
+                        </View>
+                      ) : state === "now" && !partsOut.length && order.status === "PARTS_REQUESTED" && order.workStatus === "CHECKING_PARTS" ? (
+                        <View style={styles.stepSub} accessibilityLabel="สถานะย่อย">
+                          <Text style={styles.stepSubText}>{order.workStatusLabel}</Text>
+                        </View>
                       ) : null}
                       {state === "now" && partsOut.length ? (
                         <>
@@ -3079,9 +3097,12 @@ function NoteModal({
   const [contactName, setContactName] = useState(order.contactName ?? "");
   const [contactPhone, setContactPhone] = useState(order.contactPhone ?? "");
   const [symptom, setSymptom] = useState(order.symptom ?? "");
-  const [workStatus, setWorkStatus] = useState<string | null>(order.workStatus);
-  const [parts, setParts] = useState<PickedPart[]>(order.waitingParts);
-  const [visit, setVisit] = useState(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
+  /**
+   * สถานะ — เลือกได้แค่ "อัตโนมัติตามขั้น" กับ "รอลูกค้าแจ้งซ่อม" (เจ้าของงานขอ ต.ค. 69)
+   * ที่เหลือระบบตั้งตามขั้นและผลเช็คคลัง เปลี่ยนด้วยปุ่มขั้นตอนเท่านั้น (เซิร์ฟเวอร์ปฏิเสธด้วย)
+   */
+  const [waitCustomer, setWaitCustomer] = useState(order.workStatus === MANUAL_STATUS);
+  const [statusNote, setStatusNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -3093,11 +3114,13 @@ function NoteModal({
     setContactName(order.contactName ?? "");
     setContactPhone(order.contactPhone ?? "");
     setSymptom(order.symptom ?? "");
-    setWorkStatus(order.workStatus);
-    setParts(order.waitingParts);
-    setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
+    setWaitCustomer(order.workStatus === MANUAL_STATUS);
+    setStatusNote("");
     setError(null);
   }, [visible, order]);
+
+  const statusChanged = waitCustomer !== (order.workStatus === MANUAL_STATUS);
+  const needNote = waitCustomer && statusChanged && !statusNote.trim();
 
   async function submit() {
     setSaving(true);
@@ -3109,9 +3132,11 @@ function NoteModal({
         contactName: contactName.trim() || null,
         contactPhone: contactPhone.trim() || null,
         symptom: symptom.trim() || null,
-        workStatus,
-        waitingParts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
-        scheduledAt: visit || null,
+        // ส่งสถานะเฉพาะตอนเปลี่ยนจริง — null = กลับไปอัตโนมัติตามขั้น
+        // อะไหล่ที่รอและวันนัดเป็นของขั้นตอน แก้ผ่านปุ่มขั้นตอน ไม่ใช่ที่นี่
+        ...(statusChanged
+          ? { workStatus: waitCustomer ? MANUAL_STATUS : null, workStatusNote: waitCustomer ? statusNote.trim() : undefined }
+          : {}),
       });
       onDone();
     } catch (e) {
@@ -3133,9 +3158,9 @@ function NoteModal({
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.modalSave, saving && styles.modalSaveOff]}
+            style={[styles.modalSave, (saving || needNote) && styles.modalSaveOff]}
             onPress={submit}
-            disabled={saving}
+            disabled={saving || needNote}
             activeOpacity={0.8}
           >
             {saving ? (
@@ -3207,37 +3232,52 @@ function NoteModal({
       />
 
       <Text style={styles.modalLabel}>สถานะการดำเนินการ</Text>
-      <View style={styles.options}>
-        <TouchableOpacity
-          style={[styles.option, workStatus === null && styles.optionOn]}
-          onPress={() => setWorkStatus(null)}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.optionText, workStatus === null && styles.optionTextOn]}>
-            ยังไม่ระบุ
+      <TouchableOpacity
+        style={[styles.statusOpt, !waitCustomer && styles.statusOptOn]}
+        onPress={() => setWaitCustomer(false)}
+        activeOpacity={0.7}
+        accessibilityLabel="สถานะอัตโนมัติตามขั้น"
+      >
+        <Ionicons name={!waitCustomer ? "radio-button-on" : "radio-button-off"} size={18} color={colors.primary} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.statusOptTitle}>อัตโนมัติตามขั้น</Text>
+          <Text style={styles.statusOptHint}>
+            {order.workStatus && order.workStatus !== MANUAL_STATUS ? `ตอนนี้: ${order.workStatusLabel}` : "ระบบตั้งตามขั้นของใบงาน"}
           </Text>
-        </TouchableOpacity>
-        {workStatuses.map((w) => (
-          <TouchableOpacity
-            key={w.value}
-            style={[styles.option, workStatus === w.value && styles.optionOn]}
-            onPress={() => setWorkStatus(w.value)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.optionText, workStatus === w.value && styles.optionTextOn]}>
-              {w.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        </View>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.statusOpt, waitCustomer && styles.statusOptOn]}
+        onPress={() => setWaitCustomer(true)}
+        activeOpacity={0.7}
+        accessibilityLabel="สถานะรอลูกค้าแจ้งซ่อม"
+      >
+        <Ionicons name={waitCustomer ? "radio-button-on" : "radio-button-off"} size={18} color={colors.primary} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.statusOptTitle}>รอลูกค้าแจ้งซ่อม</Text>
+          <Text style={styles.statusOptHint}>ร้านยังไม่สะดวก / ยังไม่ให้เข้า — หมดอายุเองเมื่อใบงานเปลี่ยนขั้น</Text>
+        </View>
+      </TouchableOpacity>
+      {waitCustomer && statusChanged ? (
+        <>
+          <Text style={styles.modalLabel}>เหตุผล (บังคับ)</Text>
+          <TextInput
+            style={[styles.modalInput, styles.modalInputLine]}
+            value={statusNote}
+            onChangeText={setStatusNote}
+            placeholder="เช่น ร้านปิดปรับปรุงถึง 20 ต.ค."
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel="เหตุผลที่รอลูกค้า"
+          />
+        </>
+      ) : null}
+      <View style={styles.statusLock}>
+        <Ionicons name="lock-closed-outline" size={14} color={colors.textMuted} />
+        <Text style={styles.statusLockText}>
+          รอแอดมินเช็คอะไหล่ · รออะไหล่ · รอแอดมินส่งใบเสนอราคา · รอลูกค้าจ่ายเงิน · รอช่างเข้าแก้ไข — ระบบตั้งตามขั้น
+          แก้ที่นี่ไม่ได้ เปลี่ยนด้วยปุ่มขั้นตอนเท่านั้น
+        </Text>
       </View>
-
-      {workStatus === "WAITING_PARTS" ? (
-        <PartPicker parts={parts} onChange={setParts} label="รออะไหล่ตัวไหน" />
-      ) : null}
-
-      {workStatus === "WAITING_TECH" ? (
-        <DateField value={visit} onChange={setVisit} label="วันที่ช่างจะเข้า" />
-      ) : null}
 
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
@@ -4581,6 +4621,41 @@ const styles = StyleSheet.create({
   },
   stepSkipPillOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
   stepSkipText: { fontSize: 11.5, fontWeight: "700", color: colors.textMuted },
+  statusOpt: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  statusOptOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  statusOptTitle: { fontSize: 13.5, fontWeight: "700", color: colors.text },
+  statusOptHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  statusLock: {
+    flexDirection: "row",
+    gap: 6,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+  },
+  statusLockText: { flex: 1, fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  stepSub: {
+    marginTop: 3,
+    paddingHorizontal: 8,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.roleAdmin,
+    backgroundColor: colors.roleAdminSoft,
+  },
+  stepSubText: { fontSize: 11, lineHeight: 17, fontWeight: "700", color: colors.roleAdmin, textAlign: "center" },
+  stepSubCust: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
+  stepSubCustText: { color: colors.warningInk },
   stepSkipList: {
     marginTop: spacing.sm,
     padding: spacing.sm,

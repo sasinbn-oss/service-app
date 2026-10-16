@@ -68,13 +68,22 @@ export const RETIRED_WORK_STATUSES = ["IN_PROGRESS"] as const;
  * CHECKING_PARTS (เจ้าของงานขอ ต.ค. 69): ใบที่ถึงขั้นเช็คอะไหล่แต่แอดมินยังไม่ได้ตอบ เดิมขึ้น "รออะไหล่" ทั้งที่
  * ยังไม่มีใครบอกว่าของหมด — ตอนนี้ขึ้นตามที่แอดมินระบุจริง: ยังไม่เช็ค = รอแอดมินเช็คอะไหล่ · ตอบว่าหมด = รออะไหล่
  */
-export const SYSTEM_WORK_STATUSES = ["CHECKING_PARTS"] as const;
+export const SYSTEM_WORK_STATUSES = ["CHECKING_PARTS", "QUOTING"] as const;
+/**
+ * ที่คนตั้งเองบนใบงานได้ — เรื่องที่ระบบไม่มีทางรู้จากขั้นของใบงาน (เจ้าของงานขอ ต.ค. 69)
+ *
+ * ที่เหลือระบบตั้งตามขั้นและผลเช็คคลัง แก้มือไม่ได้ (PATCH ปฏิเสธ) — เดิมเลือกได้ทุกค่าทุกขั้น
+ * ใบงานเลยขึ้น "รออะไหล่" ทั้งที่ไม่มีของหมด หรือ "รอลูกค้าจ่ายเงิน" ในใบที่ไม่มีขั้นเก็บเงิน
+ * ต้องบอกเหตุผล และหมดอายุเองเมื่อใบงานเปลี่ยนขั้น (ทุกขั้นตั้งสถานะใหม่ด้วย workStatusForStage)
+ */
+export const MANUAL_WORK_STATUSES = ["WAITING_CUSTOMER"] as const;
 /** ค่าที่บันทึกได้ — ที่คนเลือกได้ + ที่ระบบตั้ง */
 export const STORABLE_WORK_STATUSES = [...WORK_STATUSES, ...SYSTEM_WORK_STATUSES] as const;
 
 export const WORK_STATUS_LABELS: Record<string, string> = {
   WAITING_PARTS: "รออะไหล่",
   CHECKING_PARTS: "รอแอดมินเช็คอะไหล่",
+  QUOTING: "รอแอดมินส่งใบเสนอราคา",
   WAITING_TECH: "รอช่างเข้าแก้ไข",
   WAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   WAITING_CUSTOMER: "รอลูกค้าแจ้งซ่อม",
@@ -98,10 +107,16 @@ export function workStatusForStage(
 ): string | null | undefined {
   if (opts.anyPartOutOfStock) return "WAITING_PARTS";
   switch (stage) {
-    // ตรงกับสถานะที่กระดานมีอยู่แล้วพอดี — รอลูกค้าจ่ายเงินคือการรอลูกค้าจริง ๆ
+    // ยังไม่ได้ส่งราคา — เดิมขึ้น "รอลูกค้าจ่ายเงิน" ทั้งที่ลูกค้ายังไม่รู้ราคาด้วยซ้ำ (ต.ค. 69)
     case "AWAITING_QUOTE":
+      return "QUOTING";
+    // ตรงกับสถานะที่กระดานมีอยู่แล้วพอดี — รอลูกค้าจ่ายเงินคือการรอลูกค้าจริง ๆ
     case "AWAITING_PAYMENT":
       return "WAITING_PAYMENT";
+    // กลับมาขั้นแรก (เปิดใหม่ · ช่างส่งกลับ · ย้อนขั้น · ตรวจเสร็จ) — หัวหน้าภาคยังไม่ได้ตัดสินอะไร
+    // เดิมคืน undefined แล้วค่ารอบก่อน ("รอช่างเข้าแก้ไข") ค้างอยู่ทั้งที่งานกลับมารอหัวหน้าภาคแล้ว
+    case "NEW":
+      return null;
     // รอเบิกอะไหล่ก่อนเสนอราคา — ยังไม่เช็ค = รอแอดมินเช็ค · ตอบว่าหมด = รออะไหล่ (ผู้เรียกส่ง anyPartOutOfStock)
     case "PARTS_SOURCING":
       return "CHECKING_PARTS";
@@ -447,6 +462,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   PARTS_SOURCED: "มีอะไหล่ — ส่งต่อเสนอราคา",
   PARTS_BACKORDERED: "อะไหล่หมด (ก่อนเสนอราคา)",
   PARTS_ETA_CHANGED: "เลื่อนวันคาดว่าอะไหล่เข้า",
+  STATUS_CHANGED: "เปลี่ยนสถานะ",
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
   PAID: "ลูกค้าจ่ายเงินแล้ว",
