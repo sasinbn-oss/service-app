@@ -12,6 +12,7 @@ import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors, radius, shadow } from "../theme";
 import { SparePart } from "../types";
@@ -45,6 +46,7 @@ export default function SparePartListScreen({ navigation }: Props) {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
   );
+  useRefreshHandler(() => load(search));
 
   useEffect(() => {
     const timer = setTimeout(() => load(search), 300);

@@ -11,6 +11,7 @@ import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { Branch } from "../types";
@@ -27,7 +28,7 @@ export default function ManageBranchesScreen() {
 
   const loadBranches = useCallback(() => {
     // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
-    api
+    return api
       .get<Branch[]>("/branches")
       .then((res) => setBranches(res.data))
       .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
@@ -39,6 +40,7 @@ export default function ManageBranchesScreen() {
       loadBranches();
     }, [loadBranches])
   );
+  useRefreshHandler(loadBranches);
 
   async function handleAdd() {
     if (!name || !code || !latitude || !longitude) {

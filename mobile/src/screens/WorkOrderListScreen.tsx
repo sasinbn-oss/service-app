@@ -29,8 +29,9 @@ import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useDocked } from "../components/SideMenu";
 import { chromeHide, setChromeOverlay, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
-import { anyModalOpen, onPageShown, pageVisible } from "../utils/liveSync";
+import { countChanges } from "../utils/liveSync";
 import { useRefreshHandler } from "../components/RefreshButton";
+import UpdatePill, { useBackgroundCheck } from "../components/UpdatePill";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
@@ -90,6 +91,7 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 /** ใบด่วนที่ยังค้าง — ดึงขึ้นบนสุดและมีออร่า (ใบที่ปิดแล้วไม่มี stageActor) */
 const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
 type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
+type ListData = { rows: WorkOrderRow[]; counts: Record<string, number> };
 type Sort = "urgent" | "new" | "old" | "az" | "za";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
@@ -407,30 +409,80 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   // ต้องทิ้งคำตอบเก่า ไม่งั้นชิป "ปิดแล้ว" อาจโชว์รายการของ "ที่ยังค้าง"
   const loadSeq = useRef(0);
 
-  const load = useCallback(async () => {
-    const seq = ++loadSeq.current;
-    setError(null);
-    try {
-      const res = await api.get<{ rows: WorkOrderRow[]; counts: Record<string, number> }>(
-        "/work-orders",
-        {
+  const fetchList = useCallback(
+    async () =>
+      (
+        await api.get<ListData>("/work-orders", {
           params: {
             status: filter,
             ...(mineOnly ? { assignedTo: "me" } : {}),
             ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
           },
-        }
-      );
+        })
+      ).data,
+    [filter, mineOnly, settledSearch]
+  );
+
+  /**
+   * ของใหม่ที่เช็คเจอเบื้องหลังแต่ยังไม่ได้เอาขึ้นจอ (ปุ่ม "มีอัปเดต") — ตัวกรองเปลี่ยน/โหลดใหม่แล้วทิ้ง
+   * rowsRef ให้ตัวเช็คเบื้องหลังเทียบกับสิ่งที่จอถืออยู่จริง โดยไม่ต้องสร้างตัวเช็คใหม่ทุกครั้งที่รายการเปลี่ยน
+   */
+  const pendingRef = useRef<ListData | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [flash, setFlash] = useState<Set<string | number>>(new Set());
+  const rowsRef = useRef<WorkOrderRow[]>([]);
+  rowsRef.current = rows;
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearPending = () => {
+    pendingRef.current = null;
+    setPendingCount(0);
+  };
+  /** เอาข้อมูลชุดใหม่ขึ้นจอ แล้วไฮไลต์ใบที่เปลี่ยนสักครู่ — คืนจำนวนที่เปลี่ยน */
+  const applyFresh = useCallback((data: ListData) => {
+    const { changed, keys } = countChanges(rowsRef.current, data.rows, (r) => r.id);
+    setRows(data.rows);
+    setCounts(data.counts);
+    pendingRef.current = null;
+    setPendingCount(0);
+    if (keys.size) {
+      setFlash(keys);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlash(new Set()), 2600);
+    }
+    return changed;
+  }, []);
+
+  const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    setError(null);
+    try {
+      const data = await fetchList();
       if (seq !== loadSeq.current) return;
-      setRows(res.data.rows);
-      setCounts(res.data.counts);
+      setRows(data.rows);
+      setCounts(data.counts);
+      clearPending();
     } catch (e) {
       if (seq !== loadSeq.current) return;
       setError(apiErrorMessage(e));
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, [filter, mineOnly, settledSearch]);
+  }, [fetchList]);
+
+  /** ปุ่มรีเฟรช / ลากลง — เอาของใหม่ขึ้นเลย ไฮไลต์ใบที่เปลี่ยน และบอกว่าใหม่กี่ใบ */
+  const refresh = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    setError(null);
+    try {
+      const data = await fetchList();
+      if (seq !== loadSeq.current) return;
+      return { changed: applyFresh(data), unit: "ใบงาน" };
+    } catch (e) {
+      if (seq === loadSeq.current) setError(apiErrorMessage(e));
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  }, [fetchList, applyFresh]);
 
   /**
    * เลือกหัวข้อ (ชิป) แล้วขึ้นเครื่องซักผ้าแทนรายการเดิมระหว่างโหลด
@@ -450,24 +502,31 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       load();
     }, [load])
   );
-  useRefreshHandler(load);
+  useRefreshHandler(refresh);
   /**
-   * โหลดใหม่เองทุก 1 นาที และทุกครั้งที่กลับมาที่แท็บ (ต.ค. 69) — สถานะและตัวเลขในกล่องงานไม่ค้าง
-   * ข้ามรอบที่มีฟอร์มเปิดอยู่ (ตัวกรอง Excel ฯลฯ) และแท็บที่ซ่อนอยู่ · หน้าใบงานเปิดทับอยู่ = หน้านี้ไม่ได้โฟกัส ไม่โหลด
+   * เช็คของใหม่เองทุก 1 นาที และทุกครั้งที่กลับมาที่แท็บ — แต่ไม่สลับรายการให้ทันที (ต.ค. 69 แบบ Facebook)
+   * เจอว่าต่าง → ปุ่ม "มีอัปเดต n ใบงาน" เด้งลงมา คนกดเองเมื่อพร้อม ไม่มีแถวกระโดดใต้นิ้ว
+   * ไม่มีอะไรเปลี่ยนก็ยังอัปเดตตัวเลขบนชิป (ไม่กระทบรายการ)
    */
-  useFocusEffect(
-    useCallback(() => {
-      const tick = () => {
-        if (pageVisible() && !anyModalOpen()) void load();
-      };
-      const timer = setInterval(tick, 60_000);
-      const off = onPageShown(tick);
-      return () => {
-        clearInterval(timer);
-        off();
-      };
-    }, [load])
-  );
+  useBackgroundCheck(async () => {
+    const seq = loadSeq.current;
+    const data = await fetchList();
+    if (seq !== loadSeq.current) return; // ระหว่างรอ มีการโหลดใหม่หรือเปลี่ยนตัวกรอง — ของนี้เก่าแล้ว
+    const { changed } = countChanges(rowsRef.current, data.rows, (r) => r.id);
+    if (changed > 0) {
+      pendingRef.current = data;
+      setPendingCount(changed);
+    } else {
+      clearPending();
+      setCounts(data.counts);
+    }
+  });
+  const showPending = useCallback(() => {
+    const data = pendingRef.current;
+    if (!data) return;
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    applyFresh(data);
+  }, [applyFresh]);
 
   /**
    * มือถือ: หัวหน้า+ตัวกรองเลื่อนขึ้นไปพร้อมรายการตามนิ้ว แล้วเหลือแถบสรุปแถบเดียวติดบน
@@ -733,6 +792,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           สร้างใหม่แล้วช่องค้นหาในหัวรายการถูกสร้างใหม่ด้วย จึงคืนโฟกัสให้เอง (searchFocused)
         */
       }
+      <View style={{ flex: 1 }}>
         <FlatList
           key={status ? "empty" : "list"}
           ref={listRef}
@@ -746,7 +806,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             // แท็บล่างลอยทับ — เว้นท้ายรายการไว้ ใบสุดท้ายจะได้ไม่จมใต้แท็บ
             overlayOn ? { paddingBottom: tabH + spacing.lg } : null,
           ]}
-          refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
+          refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
@@ -783,6 +843,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 ) : (
                   <WorkOrderTableRow
                     row={item}
+                    flash={flash.has(item.id)}
                     last={index === items.length - 1}
                     onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
                   />
@@ -798,17 +859,23 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             ) : table ? (
               <WorkOrderTableRow
                 row={item}
+                flash={flash.has(item.id)}
                 last={index === items.length - 1}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
               />
             ) : (
               <WorkOrderCard
                 row={item}
+                flash={flash.has(item.id)}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
               />
             )
           }
         />
+        {/* จอคอม: ลอยเหนือรายการในกรอบนี้ · มือถือวาดท้ายหน้า (ข้างล่าง) — กรอบนี้เป็นชั้นของตัวเอง
+            (react-native-web ให้ทุก View zIndex 0) แถบสรุปที่ลอยทับจะบังปุ่มจนกดไม่ได้ */}
+        {foldable ? null : <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} />}
+      </View>
       {foldable ? (
         <Animated.View
           pointerEvents={barOn ? "box-none" : "none"}
@@ -864,6 +931,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ) : null}
         </Animated.View>
       ) : null}
+      {foldable ? <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} top={barsH + 8} /> : null}
     </View>
   );
 }
@@ -1133,16 +1201,19 @@ function Opener({ row }: { row: WorkOrderRow }) {
 const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   row,
   last,
+  flash,
   onPress,
 }: {
   row: WorkOrderRow;
   last: boolean;
+  /** เพิ่งเปลี่ยนจากการรีเฟรช — พื้นเหลืองสักครู่ให้เห็นว่าใบไหน */
+  flash?: boolean;
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
   const closed = row.status === "DONE";
   return (
-    <TouchableOpacity style={[styles.tr, !last && styles.trLine, isHot(row) && styles.trUrgent, closed && styles.trDone]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity style={[styles.tr, !last && styles.trLine, isHot(row) && styles.trUrgent, closed && styles.trDone, flash && styles.flashRow]} onPress={onPress} activeOpacity={0.7}>
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
       <View style={[styles.rowBar, { backgroundColor: tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
@@ -1205,15 +1276,17 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
  */
 const WorkOrderCard = React.memo(function WorkOrderCard({
   row,
+  flash,
   onPress,
 }: {
   row: WorkOrderRow;
+  flash?: boolean;
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
   const closed = row.status === "DONE";
   return (
-    <TouchableOpacity style={[styles.card, closed && styles.cardDone, { borderLeftColor: tone.fg }]} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity style={[styles.card, closed && styles.cardDone, { borderLeftColor: tone.fg }, flash && styles.flashCard]} onPress={onPress} activeOpacity={0.8}>
       {isHot(row) ? <UrgentGlow radius={radius.md} /> : null}
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
@@ -1227,6 +1300,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
       <Text style={styles.title} numberOfLines={2}>
         {row.title}
+        {flash ? <Text style={styles.flashTag}> อัปเดต</Text> : null}
       </Text>
 
       <View style={styles.metaRow}>
@@ -1426,6 +1500,10 @@ const styles = StyleSheet.create({
   srcTagText: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
   // พื้นแดงจาง ๆ ทั้งแถว — ตารางตัดขอบ (overflow hidden) ออร่ารอบแถวจึงใช้ไม่ได้ เหลือป้ายที่เรืองแสงแทน
   trUrgent: { backgroundColor: "#FFF7F7" },
+  // ใบที่เพิ่งเปลี่ยนหลังรีเฟรช — เหลืองแบบเดียวกับตัวอย่างที่เจ้าของงานเลือก
+  flashRow: { backgroundColor: colors.warningSoft },
+  flashCard: { backgroundColor: colors.warningSoft, borderColor: colors.warning },
+  flashTag: { fontSize: 11.5, fontWeight: "800", color: colors.warningInk },
   sepRow: { paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: colors.tile, borderBottomWidth: 1, borderBottomColor: colors.border },
   sepCard: { paddingHorizontal: 4, paddingTop: 2 },
   sepUrgent: { backgroundColor: colors.dangerSoft },
