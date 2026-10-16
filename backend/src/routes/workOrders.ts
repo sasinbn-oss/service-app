@@ -62,6 +62,8 @@ import {
   RETIRED_WORK_ORDER_RESULTS,
   WORK_ORDER_RESULTS,
   WORK_ORDER_RESULT_LABELS,
+  SUPERVISOR_CLOSE_REASONS,
+  SUPERVISOR_CLOSE_MIN_NOTE,
   SEND_BACK_REASONS,
   SEND_BACK_REASON_LABELS,
   MANUAL_WORK_STATUSES,
@@ -643,6 +645,8 @@ function listShape(
     createdByRole: w.createdBy?.role ?? null,
     createdAt: w.createdAt,
     closedAt: w.closedAt,
+    // รหัสผลด้วย ไม่ใช่แค่ป้าย — รายการแยกใบที่หัวหน้าภาคปิดเองจากใบที่ช่างปิดหน้างาน
+    closeResult: w.closeResult,
     closeResultLabel: w.closeResult
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
       : null,
@@ -3709,6 +3713,72 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
     },
     STAGE_TX
   );
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * หัวหน้าภาคปิดใบงานเอง ไม่ต้องส่งช่างเข้าหน้างาน (เจ้าของงานขอ ต.ค. 69 รอบสอง)
+ *
+ * ต่างจากยกเลิก: ยกเลิก = ไม่ทำงานนี้แล้ว · ปิดแบบนี้ = ปัญหาจบแล้ว นับเป็นงานที่ปิด
+ * บังคับเหตุผลจากรายการ + รายละเอียดอย่างน้อย SUPERVISOR_CLOSE_MIN_NOTE ตัวอักษร ไม่บังคับรูป
+ * (รอบแรกบังคับรูปแล้วถูกขอเอาออก — หัวหน้าภาคมักรู้ผลทางโทรศัพท์ ไม่มีรูปให้แนบ)
+ *
+ * กดได้ทุกขั้นที่ยังไม่ปิด ยกเว้นรอตรวจเคลม (ปิดตรงนี้คือข้ามการตรวจเคลมไปเงียบ ๆ)
+ * อะไหล่ที่เบิกไปแล้วไม่บล็อก — หน้าต่างเตือนให้คืนคลัง ระบบไม่บันทึกว่าใช้ไป
+ * ใบที่ปิดแล้วหลุดจากกล่องงานและบอร์ดแผนงานเอง (ดึงเฉพาะใบที่ยังไม่ปิด)
+ */
+const supervisorCloseSchema = z.object({
+  reason: z.enum(Object.keys(SUPERVISOR_CLOSE_REASONS) as [string, ...string[]], {
+    errorMap: () => ({ message: "เลือกเหตุผลที่ปิดใบงาน" }),
+  }),
+  note: z.string().trim().max(1000).optional(),
+});
+
+router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "ปิดใบงานแบบนี้ได้เฉพาะหัวหน้าภาคกับแอดมิน — ช่างปิดงานจากหน้างานตามปกติ" });
+  }
+  const parsed = supervisorCloseSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const note = parsed.data.note?.trim() ?? "";
+  if (note.length < SUPERVISOR_CLOSE_MIN_NOTE) {
+    return res.status(400).json({
+      error: `พิมพ์รายละเอียดอย่างน้อย ${SUPERVISOR_CLOSE_MIN_NOTE} ตัวอักษร — เช่น โทรถามร้านเมื่อไร ใครยืนยันว่าเครื่องใช้ได้`,
+    });
+  }
+
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: { code: true, status: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return;
+  if (wo.status === "DONE") return res.status(400).json({ error: `${wo.code} ปิดไปแล้ว` });
+  if (wo.status === "CANCELLED") return res.status(400).json({ error: `${wo.code} ถูกยกเลิกไปแล้ว` });
+  if (wo.status === "CLAIM_REVIEW") {
+    return res.status(400).json({ error: `${wo.code} รอ Admin Spare Part ตรวจเคลม — ใช้ปุ่มอนุมัติหรือตีกลับในใบงาน` });
+  }
+
+  const text = `${SUPERVISOR_CLOSE_REASONS[parsed.data.reason]} — ${note}`;
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: "DONE",
+        closedAt: new Date(),
+        closedById: req.auth!.userId,
+        closeResult: "SUPERVISOR_CLOSED",
+        closeNote: text,
+        workStatus: workStatusForStage("DONE"),
+      },
+    });
+    await writeLog(tx, id, req.auth!.userId, "SUPERVISOR_CLOSED", "DONE", text);
+  }, STAGE_TX);
 
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
