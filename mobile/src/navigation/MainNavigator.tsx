@@ -15,6 +15,7 @@ import WorkOrderFormScreen from "../screens/WorkOrderFormScreen";
 import WorkOrderDetailScreen from "../screens/WorkOrderDetailScreen";
 import PlanBoardScreen from "../screens/PlanBoardScreen";
 import ReportsMenuScreen from "../screens/ReportsMenuScreen";
+import OpenerReportScreen from "../screens/OpenerReportScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
@@ -327,6 +328,11 @@ function HomeStackNavigator() {
         name="Report"
         component={ReportScreen}
         options={({ route }) => ({ title: route.params.title })}
+      />
+      <HomeStack.Screen
+        name="OpenerReport"
+        component={OpenerReportScreen}
+        options={{ title: "รายงานตามผู้เปิดใบงาน" }}
       />
       <HomeStack.Screen
         name="MachineImport"

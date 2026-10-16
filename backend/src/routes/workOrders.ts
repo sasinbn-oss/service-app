@@ -20,6 +20,7 @@ import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../mi
 import { WAREHOUSES } from "../documents/warehouses";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
+import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
 import {
   buildObjectKey,
   deleteObject,
@@ -954,6 +955,56 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */
+/**
+ * รายงานใบงานแยกตามผู้เปิด (เจ้าของงานขอ ต.ค. 69) — ?from=YYYY-MM-DD&to=YYYY-MM-DD&opener=<id|system>&format=json|xlsx
+ *
+ * แอดมิน (รวม Admin Spare Part · Super Admin) เห็นทุกภาค · หัวหน้าภาคเห็นเฉพาะใบในภาค/ทีมที่ดูแล
+ * (ขอบเขตเดียวกับหน้ารายการใบงาน) · ช่างไม่ได้ — เป็นรายงานของคนที่จัดการงาน ไม่ใช่ของคนทำงาน
+ * วางก่อน "/:id" ไม่งั้น Express จับ "reports" เป็นรหัสใบงาน
+ */
+const openerReportQuery = z
+  .object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่เริ่มไม่ถูกต้อง"),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่สิ้นสุดไม่ถูกต้อง"),
+    opener: z.union([z.literal("system"), z.string().regex(/^\d+$/)]).optional(),
+    format: z.enum(["json", "xlsx"]).default("json"),
+  })
+  .refine((q) => q.from <= q.to, { message: "วันที่เริ่มต้องไม่หลังวันที่สิ้นสุด" })
+  // ปีหนึ่งพอสำหรับทุกคำถามที่มีจริง — กันกดเลือกช่วงยาวผิดแล้วเซิร์ฟเวอร์ฟรีหน่วยความจำไม่พอ
+  .refine((q) => bkkDayStart(q.to).getTime() - bkkDayStart(q.from).getTime() <= 366 * 24 * 3600_000, {
+    message: "เลือกช่วงได้ไม่เกิน 1 ปี",
+  });
+
+router.get("/reports/by-opener", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "รายงานนี้สำหรับแอดมินและหัวหน้าภาค" });
+  }
+  const parsed = openerReportQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const q = parsed.data;
+  const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : null;
+  const report = await buildOpenerReport({
+    from: q.from,
+    to: q.to,
+    openerId: q.opener === undefined ? undefined : q.opener === "system" ? null : Number(q.opener),
+    scope,
+    scopeLabel: scope ? "เฉพาะภาค/ทีมที่ดูแล" : "ทุกภาค",
+  });
+  if (q.format === "json") {
+    const { rows, ...rest } = report;
+    return res.json({ ...rest, count: rows.length });
+  }
+  const stored = saveDocument({
+    filename: `ใบงานแยกตามผู้เปิด-${q.from}_${q.to}.xlsx`,
+    asciiFilename: `work-orders-by-opener-${q.from}_${q.to}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: await openerReportWorkbook(report),
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored) });
+});
+
 router.get("/options", requireAuth, async (_req, res) => {
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
