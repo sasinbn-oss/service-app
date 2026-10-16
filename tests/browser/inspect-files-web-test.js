@@ -51,9 +51,10 @@ const login = async (code) =>
       machines: [{ code: "W9", model: "Haier", symptom: "ทดสอบกรอบไฟล์ตรวจหน้างาน" }],
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
-    await call(S, "POST", `/work-orders/${id}/inspect-request`, { team: "กระบี่" });
-    // แอดมินนัดร้านก่อนช่างไปตรวจ (ขั้น INSPECT_CONFIRM) — ไม่ใช่เรื่องที่ทดสอบในชุดนี้
-    await call(A, "POST", `/work-orders/${id}/confirm-appointment`, { scheduledAt: "2026-11-10" });
+    // ส่งตรวจ → แอดมินนัดร้าน → หัวหน้าภาคส่งช่าง — ไม่ใช่เรื่องที่ทดสอบในชุดนี้ (ดู inspect-confirm-web-test.js)
+    await call(S, "POST", `/work-orders/${id}/inspect-request`, { team: "กระบี่", scheduledAt: "2026-11-10" });
+    await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
+    await call(S, "POST", `/work-orders/${id}/dispatch`, {});
     const code = sql(`select code from "WorkOrder" where id=${id}`);
     if (sql(`select status from "WorkOrder" where id=${id}`) !== "INSPECTING") throw new Error("เตรียมใบงานไม่ถึงขั้นตรวจหน้างาน");
 

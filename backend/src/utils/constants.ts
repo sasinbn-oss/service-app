@@ -129,6 +129,7 @@ export function workStatusForStage(
     case "WAITING_PARTS":
       return "WAITING_PARTS";
     case "INSPECT_CONFIRM":
+    case "INSPECT_DISPATCH":
     case "INSPECTING":
     case "PARTS_CHECKED":
     case "ASSIGNED":
@@ -194,6 +195,7 @@ export function countsAsRepair(closeReason: string | null) {
 export const WORK_ORDER_STATUSES = [
   "NEW",
   "INSPECT_CONFIRM",
+  "INSPECT_DISPATCH",
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
@@ -219,6 +221,7 @@ export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
 export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   NEW: "รอหัวหน้าภาคระบุอะไหล่",
   INSPECT_CONFIRM: "รอแอดมินนัดลูกค้า (ตรวจหน้างาน)",
+  INSPECT_DISPATCH: "รอหัวหน้าภาคส่งช่างตรวจ",
   INSPECTING: "รอทีมตรวจหน้างาน",
   WAITING_PARTS: "รออะไหล่เข้า",
   // เจ้าของงานขอ ต.ค. 69: ขั้นก่อนเสนอราคาคือ "เช็คว่ามีหรือหมด" ขั้นหลังรับเงินคือ "เบิกจริงส่งหน้างาน"
@@ -243,11 +246,13 @@ export const WORK_ORDER_STAGE_ORDER = [
    * พร้อมผลตรวจ ขั้นนี้จึงอยู่ถัดจาก NEW แต่ใบงานเดินย้อนกลับมาเสมอ
    * ใบที่ไม่ได้ตรวจ แถบขั้นตอนขึ้นว่าข้าม
    *
-   * INSPECT_CONFIRM — แอดมินโทรนัดร้านก่อนช่างไปตรวจ (เจ้าของงานขอ ต.ค. 69) เหตุผลเดียวกับ
-   * AWAITING_CONFIRM ของงานซ่อม: ไปถึงแล้วร้านปิดคือเสียวันของทั้งทีม นัดแล้วส่งถึงช่างเลย
-   * ไม่ต้องให้หัวหน้าภาคยืนยันออกงานอีกรอบ เพราะงานตรวจไปครั้งเดียว และหัวหน้าภาคเลือกทีมไว้แล้ว
+   * หัวหน้าภาคส่งตรวจพร้อมวัน → แอดมินคอนเฟิร์มวันกับร้าน → หัวหน้าภาคส่งช่างเข้าตรวจ
+   * (เจ้าของงานกำหนด ต.ค. 69 รอบสอง — ลำดับเดียวกับงานซ่อม: PARTS_CHECKED → AWAITING_CONFIRM → ASSIGNED)
+   * รอบแรกนัดแล้วถึงช่างเลย แต่ร้านมักขอเลื่อนวัน และวันใหม่ทีมเดิมอาจไม่ว่าง — หัวหน้าภาคถือคิวทีม
+   * จึงต้องเป็นคนปล่อยงานให้ช่าง (เปลี่ยนทีมได้) · วันบังคับใส่ตั้งแต่ส่งตรวจ แอดมินจะได้มีวันไปคุยกับร้าน
    */
   "INSPECT_CONFIRM",
+  "INSPECT_DISPATCH",
   "INSPECTING",
   /**
    * สองขั้นนี้มาก่อนเบิกอะไหล่ ไม่ใช่หลัง
@@ -311,6 +316,8 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   // ทีมที่ไปตรวจเป็นคนบันทึกผล เพราะเป็นคนที่เห็นเครื่องจริง
   // นัดร้านก่อนไปตรวจ — งานโทรคุยกับร้านเป็นของแอดมิน เหมือนคอนเฟิร์มลูกค้าของงานซ่อม
   INSPECT_CONFIRM: "ADMIN",
+  // ร้านตกลงวันแล้ว — หัวหน้าภาคเช็คว่าทีมยังว่างวันนั้นก่อนปล่อยให้ช่าง
+  INSPECT_DISPATCH: "SUPERVISOR",
   INSPECTING: "EMPLOYEE",
   // ใบรออะไหล่หัวหน้าภาคเป็นคนดูแล — ตามของ แล้วส่งต่อเมื่อของมา
   WAITING_PARTS: "SUPERVISOR",
@@ -336,6 +343,7 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
 export const ACTIVE_WORK_ORDER_STATUSES = [
   "NEW",
   "INSPECT_CONFIRM",
+  "INSPECT_DISPATCH",
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",

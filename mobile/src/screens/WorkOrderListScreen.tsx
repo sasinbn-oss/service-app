@@ -228,6 +228,7 @@ export type Owner = "ADMIN" | "SUPERVISOR" | "EMPLOYEE" | "OUTSIDE" | "DONE" | "
 export const STATUS_OWNER: Record<string, Owner> = {
   NEW: "SUPERVISOR",
   INSPECT_CONFIRM: "ADMIN",
+  INSPECT_DISPATCH: "SUPERVISOR",
   INSPECTING: "EMPLOYEE",
   // รอเบิกอะไหล่ก่อนเสนอราคา — แอดมินเป็นคนเช็คและตามของ (เจ้าของงานกำหนด: อยู่ใน "รอแอดมิน")
   PARTS_SOURCING: "ADMIN",

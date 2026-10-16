@@ -563,6 +563,8 @@ function stopTag(s: Stop) {
   if (s.status === "DONE") return { text: "ปิดงานแล้ว", tone: "ok" as const };
   // นัดตรวจที่ร้านยังไม่ตอบ — ทีมถูกจองวันนั้นไว้แล้ว แต่ยังไม่แน่ว่าไปได้
   if (s.status === "INSPECT_CONFIRM") return { text: "ตรวจหน้างาน · รอแอดมินนัด", tone: "warn" as const };
+  // ร้านตกลงวันแล้ว แต่หัวหน้าภาคยังไม่ส่งช่าง — เหมือน "รอยืนยันออกงาน" ของงานซ่อม
+  if (s.status === "INSPECT_DISPATCH") return { text: "ตรวจหน้างาน · รอส่งช่าง", tone: "warn" as const };
   if (s.kind === "INSPECT") return { text: "ตรวจหน้างาน", tone: "violet" as const };
   if (s.status === "AWAITING_CONFIRM") return { text: "รอแอดมินคอนเฟิร์มลูกค้า", tone: "warn" as const };
   if (s.status === "ASSIGNED") return { text: "รอยืนยันออกงาน", tone: "warn" as const };
