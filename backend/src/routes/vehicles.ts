@@ -111,7 +111,9 @@ router.get("/", requireAuth, async (req, res) => {
     where: status ? { status } : { status: { not: "INACTIVE" } },
     orderBy: { plateNumber: "asc" },
   });
-  res.json(vehicles);
+  // หมายเหตุรถเห็นเฉพาะแอดมิน (เจ้าของงานสั่ง ต.ค. 69) — แอดมินจดเลขบัตรเติมน้ำมัน/วงเงินไว้ในช่องนี้
+  const admin = (req as AuthRequest).auth!.role === "ADMIN";
+  res.json(admin ? vehicles : vehicles.map((v) => ({ ...v, note: null })));
 });
 
 const day = z
