@@ -15,6 +15,8 @@ export type HomeStackParamList = {
   Report: { kind: ReportKind; title: string };
   /** รายงานใบงานแยกตามผู้เปิด — เลือกช่วงวันที่เอง ไม่ได้ใช้หน้ารายงานทั่วไป */
   OpenerReport: undefined;
+  /** รายงานทั้งระบบ — แอดมินเท่านั้น */
+  SystemReport: undefined;
   MachineDashboard: undefined;
   MachineImport: undefined;
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม */

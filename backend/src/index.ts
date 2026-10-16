@@ -30,6 +30,7 @@ import machineRoutes from "./routes/machines";
 import workOrderRoutes from "./routes/workOrders";
 import planRoutes from "./routes/plans";
 import backupRoutes from "./routes/backups";
+import reportRoutes from "./routes/reports";
 import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
 import { prisma } from "./prisma";
@@ -192,6 +193,7 @@ app.use("/api/machines", machineRoutes);
 app.use("/api/work-orders", workOrderRoutes);
 app.use("/api/plans", planRoutes);
 app.use("/api/backups", backupRoutes);
+app.use("/api/reports", reportRoutes);
 
 /**
  * กันคำขอที่พังให้ตอบอะไรกลับไปเสมอ
