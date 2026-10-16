@@ -10,10 +10,12 @@ import { useAuth } from "../context/AuthContext";
 type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
 interface Entry {
-  /** byOpener = รายงานแยกตามผู้เปิด มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
-  kind: ReportKind | "byOpener";
+  /** byOpener/system มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
+  kind: ReportKind | "byOpener" | "system";
   /** เฉพาะแอดมิน/หัวหน้าภาค — ช่างเปิดแล้วเซิร์ฟเวอร์ปฏิเสธ ไม่ควรเห็นการ์ดตั้งแต่แรก */
   managersOnly?: boolean;
+  /** เฉพาะแอดมิน — รายงานทั้งระบบมีข้อมูลทั้งบริษัทรวมเบอร์โทรพนักงาน */
+  adminOnly?: boolean;
   label: string;
   who: string;
   question: string;
@@ -64,6 +66,16 @@ const ENTRIES: Entry[] = [
     managersOnly: true,
   },
   {
+    kind: "system",
+    label: "รายงานทั้งระบบ",
+    who: "แอดมิน",
+    question: "ขอข้อมูลทั้งหมดในไฟล์เดียว — คน สาขา เครื่อง ใบงาน",
+    icon: "server-outline",
+    tint: colors.tile,
+    iconColor: colors.navy,
+    adminOnly: true,
+  },
+  {
     kind: "parts",
     label: "อะไหล่ที่ต้องสั่ง",
     who: "ฝ่ายจัดซื้อ · คลัง",
@@ -76,14 +88,15 @@ const ENTRIES: Entry[] = [
 
 export default function ReportsMenuScreen({ navigation }: Props) {
   const { user } = useAuth();
-  const manager = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
+  const admin = user?.role === "ADMIN";
+  const manager = admin || user?.role === "SUPERVISOR";
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.intro}>
         ทุกใบดูบนหน้าจอได้ และกดดาวน์โหลดเป็น Excel เพื่อส่งต่อหรือทำต่อได้
       </Text>
 
-      {ENTRIES.filter((e) => !e.managersOnly || manager).map((entry) => (
+      {ENTRIES.filter((e) => (!e.managersOnly || manager) && (!e.adminOnly || admin)).map((entry) => (
         <TouchableOpacity
           key={entry.kind}
           style={styles.card}
@@ -91,6 +104,8 @@ export default function ReportsMenuScreen({ navigation }: Props) {
           onPress={() =>
             entry.kind === "byOpener"
               ? navigation.navigate("OpenerReport")
+              : entry.kind === "system"
+              ? navigation.navigate("SystemReport")
               : navigation.navigate("Report", { kind: entry.kind, title: entry.label })
           }
         >
