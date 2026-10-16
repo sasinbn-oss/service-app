@@ -18,6 +18,7 @@ import Spinner from "../components/Spinner";
 import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { useAuth } from "../context/AuthContext";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
@@ -185,6 +186,7 @@ export default function ManageUsersScreen() {
       load();
     }, [load])
   );
+  useRefreshHandler(load);
 
   async function update(
     id: number,

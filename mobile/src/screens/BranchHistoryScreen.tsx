@@ -4,6 +4,7 @@ import { FlatList, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { BranchCheckIn } from "../types";
@@ -32,6 +33,13 @@ export default function BranchHistoryScreen() {
         cancelled = true;
       };
     }, [])
+  );
+  // ปุ่มรีเฟรช / ลากลง — โหลดซ้ำแบบเดียวกับตอนเข้าหน้า โดยไม่ออกจากหน้านี้
+  useRefreshHandler(() =>
+    api.get<BranchCheckIn[]>("/branch-checkins").then((res) => {
+      setCheckIns(res.data);
+      setError(null);
+    })
   );
 
   if (loading) {

@@ -19,6 +19,9 @@ import {
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
+import UpdatePill, { useBackgroundCheck } from "../components/UpdatePill";
+import { countChanges } from "../utils/liveSync";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import AppModal from "../components/AppModal";
@@ -189,26 +192,66 @@ export default function PlanBoardScreen({ navigation }: Props) {
    */
   const loadSeq = useRef(0);
 
+  const fetchBoard = useCallback(async () => {
+    const [d, m, p] = await Promise.all([
+      api.get<Day>(`/plans/day?date=${date}`),
+      api.get<{ days: Record<string, number> }>(`/plans/month?month=${monthKey}`),
+      api.get<Pending[]>("/plans/pending"),
+    ]);
+    return { day: d.data, month: m.data.days, pending: p.data };
+  }, [date, monthKey]);
+  type Board = Awaited<ReturnType<typeof fetchBoard>>;
+
+  /**
+   * ปุ่ม "มีอัปเดต" (ต.ค. 69 แบบ Facebook) — นับทีมที่แผนเปลี่ยน + ใบงานรอจัดที่เปลี่ยน
+   * เช็คเบื้องหลังทุก 1 นาทีแต่ไม่สลับกระดานให้เอง คนที่กำลังไล่ดูทีมจะไม่โดนแถวกระโดด
+   */
+  const shown = useRef<{ day: Day | null; pending: Pending[] }>({ day: null, pending: [] });
+  shown.current = { day, pending };
+  const pendingBoard = useRef<Board | null>(null);
+  const [newCount, setNewCount] = useState(0);
+  const diff = (b: Board) =>
+    (shown.current.day?.date === b.day.date
+      ? countChanges(shown.current.day.lanes, b.day.lanes, (l) => l.team).changed
+      : 0) + countChanges(shown.current.pending, b.pending, (x) => x.id).changed;
+  const apply = (b: Board) => {
+    setDay(b.day);
+    setMonth(b.month);
+    setPending(b.pending);
+    setError(null);
+    pendingBoard.current = null;
+    setNewCount(0);
+  };
+
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     try {
-      const [d, m, p] = await Promise.all([
-        api.get<Day>(`/plans/day?date=${date}`),
-        api.get<{ days: Record<string, number> }>(`/plans/month?month=${monthKey}`),
-        api.get<Pending[]>("/plans/pending"),
-      ]);
+      const b = await fetchBoard();
       if (seq !== loadSeq.current) return;
-      setDay(d.data);
-      setMonth(m.data.days);
-      setPending(p.data);
-      setError(null);
+      apply(b);
     } catch (e) {
       if (seq !== loadSeq.current) return;
       setError(apiErrorMessage(e));
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, [date, monthKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchBoard]);
+
+  useBackgroundCheck(async () => {
+    const seq = loadSeq.current;
+    const b = await fetchBoard();
+    if (seq !== loadSeq.current) return;
+    const n = diff(b);
+    if (n > 0) {
+      pendingBoard.current = b;
+      setNewCount(n);
+    } else {
+      // แผนไม่เปลี่ยน แต่จุดบนปฏิทินเดือนอาจเปลี่ยน — อันนั้นไม่ทำให้อะไรกระโดด เอาขึ้นได้เลย
+      setMonth(b.month);
+    }
+  });
+  const scrollRef = useRef<ScrollView>(null);
 
   /**
    * แผนที่โชว์อยู่ยังเป็นของวันอื่น = กำลังเปลี่ยนวัน
@@ -224,6 +267,15 @@ export default function PlanBoardScreen({ navigation }: Props) {
       load();
     }, [load])
   );
+  useRefreshHandler(async () => {
+    const seq = ++loadSeq.current;
+    const b = await fetchBoard();
+    if (seq !== loadSeq.current) return;
+    const n = diff(b);
+    apply(b);
+    setLoading(false);
+    return { changed: n };
+  });
 
   // ตัวเลือกของฟอร์มจัดแผน โหลดครั้งเดียวตอนเปิดฟอร์มครั้งแรก — ไม่ต้องจ่ายทุกครั้งที่เปลี่ยนวัน
   async function openPlan(team: string, lane: Lane | null) {
@@ -357,7 +409,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
   );
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <View style={{ flex: 1 }}>
+    <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.pageHead}>
         <Text style={[styles.pageTitle, headingFont]}>แผนงาน</Text>
         <View style={styles.scopePill}>
@@ -463,6 +516,16 @@ export default function PlanBoardScreen({ navigation }: Props) {
         }}
       />
     </ScrollView>
+      <UpdatePill
+        count={newCount}
+        unit="รายการ"
+        onPress={() => {
+          if (!pendingBoard.current) return;
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+          apply(pendingBoard.current);
+        }}
+      />
+    </View>
   );
 }
 

@@ -15,6 +15,7 @@ import { FlatList, StyleSheet, Text, TextInput, useWindowDimensions, View } from
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import AppModal from "../components/AppModal";
 import Dropdown from "../components/Dropdown";
@@ -125,6 +126,7 @@ export default function VehicleLogAdminScreen() {
       load();
     }, [load])
   );
+  useRefreshHandler(load);
 
   const shown = useMemo(() => {
     const term = q.trim().toLowerCase();
