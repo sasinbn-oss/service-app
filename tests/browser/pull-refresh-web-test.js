@@ -42,6 +42,15 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(3000);
     await vis("ทั้งหมด").first().click();
     await page.waitForTimeout(2500);
+    // ยังไม่มีของใหม่ = ปุ่มต้องมองไม่เห็นเลย (iOS เคยโผล่ "มีอัปเดต 0 รายการ" ทับแถบชื่อหน้า)
+    const ghost = await page.evaluate(() =>
+      [...document.querySelectorAll('[aria-label="ดูข้อมูลที่อัปเดต"]')].filter((e) => {
+        let o = 1;
+        for (let n = e; n; n = n.parentElement) o *= Number(getComputedStyle(n).opacity);
+        return o > 0.01;
+      }).length
+    );
+    ghost === 0 ? pass("ไม่มีของใหม่ = ไม่เห็นปุ่มมีอัปเดตเลย") : fail(`เห็นปุ่มมีอัปเดตทั้งที่ไม่มีของใหม่ (${ghost})`);
     // ตัวบอกว่าไม่ได้โหลดทั้งเว็บใหม่ — โหลดใหม่แล้วตัวแปรนี้หาย
     await page.evaluate(() => (window.__noReload = 1));
 
