@@ -59,7 +59,7 @@ interface LogEntry {
   id: number;
   action: string;
   actionLabel: string;
-  /** ขั้นที่ใบงานไปอยู่หลังรายการนี้ — แยกคอนเฟิร์มนัดตรวจ (→ INSPECTING) ออกจากนัดซ่อม (→ ASSIGNED) */
+  /** ขั้นที่ใบงานไปอยู่หลังรายการนี้ — แยกคอนเฟิร์มนัดตรวจ (→ INSPECT_DISPATCH) ออกจากนัดซ่อม (→ ASSIGNED) */
   status: string;
   statusLabel: string;
   note: string | null;
@@ -245,6 +245,8 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   NEW: { label: "ระบุอะไหล่ที่ต้องใช้", icon: "arrow-forward-circle" },
   // แอดมินนัดร้านก่อนช่างไปตรวจ — ฟอร์มเดียวกับคอนเฟิร์มลูกค้าของงานซ่อม
   INSPECT_CONFIRM: { label: "นัดลูกค้า (ตรวจหน้างาน)", icon: "call-outline" },
+  // ร้านตกลงวันแล้ว หัวหน้าภาคปล่อยงานให้ทีม — คู่กับ "ยืนยันออกงาน" ของงานซ่อม
+  INSPECT_DISPATCH: { label: "ส่งช่างเข้าตรวจหน้างาน", icon: "checkmark-circle-outline" },
   INSPECTING: { label: "บันทึกผลตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
   // หลังรับเงิน (หรือในประกัน) — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน
@@ -277,9 +279,16 @@ function visitLabel(o: { scheduledAt: string | null; scheduledTime: string | nul
  * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
  * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
  */
-/** แอดมินนัดร้านให้ไปตรวจหน้างานแล้วอย่างน้อยหนึ่งครั้ง */
+/** แอดมินนัดร้านให้ไปตรวจหน้างานแล้วอย่างน้อยหนึ่งครั้ง — ใบก่อน ต.ค. 69 รอบสองนัดแล้วไป INSPECTING ตรง */
 function inspectBooked(o: WorkOrder) {
-  return o.logs.some((l) => (l.action === "CONFIRMED" || l.action === "RESCHEDULED") && l.status === "INSPECTING");
+  return o.logs.some(
+    (l) => (l.action === "CONFIRMED" || l.action === "RESCHEDULED") && (l.status === "INSPECT_DISPATCH" || l.status === "INSPECTING")
+  );
+}
+
+/** หัวหน้าภาคส่งช่างเข้าตรวจแล้ว — ใบเก่าไม่มีขั้นนี้ (นัดแล้วถึงช่างเลย) */
+function inspectDispatched(o: WorkOrder) {
+  return o.logs.some((l) => l.action === "DISPATCHED" && l.status === "INSPECTING");
 }
 
 /**
@@ -333,6 +342,8 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
     // ใบที่ส่งตรวจก่อนมีขั้นนัดก็ไม่ได้ผ่านขั้นนี้ — ดูจากประวัตินัดที่ส่งต่อไปขั้นตรวจ
     case "INSPECT_CONFIRM":
       return o.status !== "INSPECT_CONFIRM" && !inspectBooked(o);
+    case "INSPECT_DISPATCH":
+      return o.status !== "INSPECT_DISPATCH" && !inspectDispatched(o);
     // ใบเก่าบางใบนัดแล้วไปเลยโดยไม่ได้ผ่านขั้นคอนเฟิร์ม — ไม่มีประวัติคอนเฟิร์ม/เลื่อน = ข้าม
     case "AWAITING_CONFIRM":
       return (
@@ -1782,6 +1793,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 const STAGE_ACTIONS: Record<string, string[]> = {
   NEW: ["PARTS_REQUESTED", "NO_PARTS", "INSPECT_REQUESTED"],
   INSPECT_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
+  INSPECT_DISPATCH: ["DISPATCHED"],
   INSPECTING: ["INSPECTED"],
   WAITING_PARTS: ["PARTS_ARRIVED"],
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
@@ -1808,9 +1820,16 @@ function StepInfo({
   const stage = stages.find((x) => x.value === stageValue);
   const actions = stageValue ? STAGE_ACTIONS[stageValue] ?? [] : [];
   // ประวัติเรียงใหม่ก่อนเก่า ตัวแรกที่เจอคือครั้งล่าสุด (ขั้นที่ถูกส่งกลับมาทำซ้ำจะเห็นรอบล่าสุด)
-  // คอนเฟิร์ม/เลื่อนใช้ทั้งนัดตรวจและนัดซ่อม — แยกด้วยขั้นที่ส่งต่อไป
-  const goesTo = stageValue === "INSPECT_CONFIRM" ? "INSPECTING" : stageValue === "AWAITING_CONFIRM" ? "ASSIGNED" : null;
-  const log = logs.find((l) => actions.includes(l.action) && (!goesTo || l.status === goesTo));
+  // คอนเฟิร์ม/เลื่อน และส่งช่าง ใช้ทั้งงานตรวจและงานซ่อม — แยกด้วยขั้นที่ส่งต่อไป
+  // (นัดตรวจของใบเก่าไป INSPECTING ตรง ใบใหม่ไป INSPECT_DISPATCH)
+  const goesTo: Record<string, string[]> = {
+    INSPECT_CONFIRM: ["INSPECT_DISPATCH", "INSPECTING"],
+    INSPECT_DISPATCH: ["INSPECTING"],
+    AWAITING_CONFIRM: ["ASSIGNED"],
+    ASSIGNED: ["IN_PROGRESS"],
+  };
+  const to = stageValue ? goesTo[stageValue] : undefined;
+  const log = logs.find((l) => actions.includes(l.action) && (!to || to.includes(l.status)));
   return (
     <AppModal
       visible={stageValue !== null}
@@ -2233,11 +2252,11 @@ function StageBackModal({
 
   const order_ = targets.map((t) => t.value);
   function clears(value: string) {
-    const all = ["NEW", "INSPECT_CONFIRM", "INSPECTING", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
+    const all = ["NEW", "INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
     const idx = all.indexOf(value);
     const lost: string[] = [];
-    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && order.scheduledAt) lost.push("วันนัด");
-    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECTING" && value !== "INSPECT_CONFIRM" && order.assignedTeam)
+    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECT_DISPATCH" && order.scheduledAt) lost.push("วันนัด");
+    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && !["INSPECTING", "INSPECT_DISPATCH", "INSPECT_CONFIRM"].includes(value) && order.assignedTeam)
       lost.push("ทีมที่รับงาน");
     if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
       lost.push("ผลเช็คคลังและเลขใบเบิก");
@@ -2438,8 +2457,8 @@ function StageModal({
       if (order.status === "NEW" && inspectFirst) {
         await api.post(`/work-orders/${order.id}/inspect-request`, {
           team,
-          scheduledAt: visit || null,
-          scheduledTime: visit && visitTime ? visitTime : null,
+          scheduledAt: visit,
+          scheduledTime: visitTime || null,
           note: note.trim() || undefined,
         });
       } else if (order.status === "INSPECTING") {
@@ -2498,7 +2517,7 @@ function StageModal({
           await uploadAttachment(order.id, doc, "RECEIPT");
         }
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
-      } else if (order.status === "ASSIGNED") {
+      } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
           team,
           note: note.trim() || undefined,
@@ -2577,10 +2596,10 @@ function StageModal({
     paymentBlocked ||
     (order.status === "NEW" &&
       (inspectFirst
-        ? !team || (visit !== "" && !validDate) || !timeOk
+        ? !team || !validDate || !timeOk
         : needsParts === null || (needsParts && parts.length === 0))) ||
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
-    (order.status === "ASSIGNED" && !team) ||
+    ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
     ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
@@ -2681,16 +2700,16 @@ function StageModal({
                 {inspectFirst ? (
                   <>
                     <Text style={styles.linkedText}>
-                      ส่งทีมไปดูก่อน — แอดมินโทรนัดร้านก่อน นัดแล้วใบงานถึงทีม ทีมบันทึกผลตรวจแล้ว
-                      ใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
+                      เลือกทีมและวันเข้าตรวจ → แอดมินโทรคอนเฟิร์มวันกับร้าน (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) →
+                      กลับมาให้คุณส่งช่างเข้าตรวจ · ทีมบันทึกผลตรวจแล้วใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
                     </Text>
                     <DateField
                       value={visit}
                       onChange={setVisit}
-                      label="วันที่เสนอเข้าตรวจ"
-                      emptyHint="เว้นว่างได้ — แอดมินใส่วันตอนนัดร้าน"
+                      label="วันเข้าตรวจหน้างาน"
+                      emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
                     />
-                    {visit ? <TimeField value={visitTime} onChange={setVisitTime} label="เวลา" /> : null}
+                    <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : needsParts === true ? (
                   <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
@@ -2981,10 +3000,11 @@ function StageModal({
             ) : null}
 
             {order.status === "ASSIGNED" ||
+            order.status === "INSPECT_DISPATCH" ||
             order.status === "PARTS_CHECKED" ||
             (order.status === "NEW" && inspectFirst) ? (
               <>
-                {order.status === "ASSIGNED" ? <DispatchNote order={order} /> : null}
+                {order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH" ? <DispatchNote order={order} /> : null}
                 {order.status === "PARTS_CHECKED" ? (
                   <Text style={styles.linkedText}>
                     เลือกทีมและวันเข้างาน แล้วแอดมินจะโทรคอนเฟิร์มกับร้าน — ร้านขอเลื่อน แอดมินเปลี่ยนวันให้
@@ -2992,7 +3012,7 @@ function StageModal({
                   </Text>
                 ) : null}
                 <Text style={styles.modalLabel}>
-                  {order.status === "NEW" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
+                  {order.status === "NEW" || order.status === "INSPECT_DISPATCH" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
                 </Text>
                 {/*
                   ทีมของสาขาขึ้นก่อนและถูกเลือกไว้ให้ เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
@@ -3139,10 +3159,11 @@ function StageModal({
                   {(order.status === "INSPECT_CONFIRM"
                     ? order.scheduledAt
                       ? ([
-                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้ทีมเข้าตรวจตามวันนี้"],
-                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันที่ลูกค้าสะดวก แล้วส่งให้ทีมเข้าตรวจ"],
+                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"],
+                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"],
                         ] as const)
-                      : ([["MOVE", "นัดวันเข้าตรวจ", "ใส่วันที่ลูกค้าสะดวก แล้วส่งให้ทีมเข้าตรวจ"]] as const)
+                      : // ใบที่ส่งตรวจก่อนบังคับวัน (ก่อน ต.ค. 69 รอบสอง) — ไม่มีวันให้ลูกค้า "ตกลง"
+                        ([["MOVE", "นัดวันเข้าตรวจ", "ใส่วันที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"]] as const)
                     : ([
                         ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
                         ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
@@ -3550,7 +3571,7 @@ function DispatchNote({ order }: { order: WorkOrder }) {
       />
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.dispatchText, { color: moved ? colors.warningInk : colors.successInk }]}>
-          {moved ? last.note : `ลูกค้าคอนเฟิร์มแล้ว · เข้างาน ${visitLabel(order)}`}
+          {moved ? last.note : `ลูกค้าคอนเฟิร์มแล้ว · ${order.status === "INSPECT_DISPATCH" ? "เข้าตรวจ" : "เข้างาน"} ${visitLabel(order)}`}
         </Text>
         {last ? (
           <Text style={styles.linkedText}>

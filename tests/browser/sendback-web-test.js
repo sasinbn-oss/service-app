@@ -79,7 +79,18 @@ const { setup } = require("./fixture");
     // ขั้นนี้ — ตั้งต้นที่ส่งตรวจหน้างาน ทีมเดิม
     await vis("ระบุอะไหล่ที่ต้องใช้").first().click();
     await page.waitForTimeout(1200);
-    (await vis("วันที่เสนอเข้าตรวจ").count()) > 0 ? pass("เปิดมาตั้งต้นที่ \"ต้องเข้าตรวจสอบหน้างานก่อน\"") : fail("ไม่ได้ตั้งต้นที่ส่งตรวจ");
+    (await vis("วันเข้าตรวจหน้างาน").count()) > 0 ? pass("เปิดมาตั้งต้นที่ \"ต้องเข้าตรวจสอบหน้างานก่อน\"") : fail("ไม่ได้ตั้งต้นที่ส่งตรวจ");
+    // วันเข้าตรวจบังคับ (ต.ค. 69 รอบสอง) — เลือกวันที่ 15 ของเดือนหน้า
+    await page.getByLabel("วันเข้าตรวจหน้างาน", { exact: true }).locator("visible=true").last().click();
+    await page.waitForTimeout(400);
+    await page.getByLabel("เดือนถัดไป").last().click();
+    await page.waitForTimeout(200);
+    const target = fx.sql("select to_char(date_trunc('month', (now() at time zone 'Asia/Bangkok')) + interval '1 month' + interval '14 day','YYYY-MM-DD')");
+    const [ty, tm] = target.split("-").map(Number);
+    const M = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+    const D = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+    await page.getByLabel(`${D[new Date(Date.UTC(ty, tm - 1, 15)).getUTCDay()]} 15 ${M[tm - 1]} ${ty + 543}`, { exact: true }).click();
+    await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(DIR, "sendback-stage.png") });
     await page.getByText(/^(ยืนยัน|บันทึก)$/).locator("visible=true").last().click();
     await page.waitForTimeout(3000);
