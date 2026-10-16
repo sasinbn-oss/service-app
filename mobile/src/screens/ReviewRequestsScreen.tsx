@@ -11,7 +11,6 @@ import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors, shadow } from "../theme";
 import { ConsumableRequest, RequestStatus } from "../types";
@@ -34,7 +33,7 @@ export default function ReviewRequestsScreen() {
   const load = useCallback((status: RequestStatus | null) => {
     setLoading(true);
     const query = status ? `?status=${status}` : "";
-    return api
+    api
       .get<ConsumableRequest[]>(`/consumable-requests${query}`)
       .then((res) => setRequests(res.data))
       .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
@@ -46,7 +45,6 @@ export default function ReviewRequestsScreen() {
       load(filter);
     }, [load, filter])
   );
-  useRefreshHandler(() => load(filter));
 
   async function act(request: ConsumableRequest, action: "approve" | "reject") {
     setActingId(request.id);

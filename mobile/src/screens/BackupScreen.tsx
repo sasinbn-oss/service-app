@@ -11,7 +11,6 @@ import React, { useCallback, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
@@ -50,7 +49,7 @@ export default function BackupScreen() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    return api
+    api
       .get<Data>("/backups")
       .then((res) => {
         setData(res.data);
@@ -58,13 +57,7 @@ export default function BackupScreen() {
       })
       .catch((e) => setError(apiErrorMessage(e)));
   }, []);
-  // ไม่ส่ง load ให้ useFocusEffect ตรง ๆ — มันคืน promise ซึ่ง useFocusEffect จะเข้าใจว่าเป็นตัวเก็บกวาด
-  useFocusEffect(
-    useCallback(() => {
-      void load();
-    }, [load])
-  );
-  useRefreshHandler(load);
+  useFocusEffect(load);
 
   const backupNow = async () => {
     setBusy(true);

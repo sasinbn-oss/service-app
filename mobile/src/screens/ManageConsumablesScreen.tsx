@@ -13,7 +13,6 @@ import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { ConsumableItem } from "../types";
@@ -29,7 +28,7 @@ export default function ManageConsumablesScreen() {
 
   const loadItems = useCallback(() => {
     // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
-    return api
+    api
       .get<ConsumableItem[]>("/consumables")
       .then((res) => setItems(res.data))
       .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
@@ -41,7 +40,6 @@ export default function ManageConsumablesScreen() {
       loadItems();
     }, [loadItems])
   );
-  useRefreshHandler(loadItems);
 
   function resetForm() {
     setForm(emptyForm);

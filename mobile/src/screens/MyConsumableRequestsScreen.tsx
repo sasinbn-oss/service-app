@@ -11,7 +11,6 @@ import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors, shadow } from "../theme";
 import { ConsumableRequest } from "../types";
@@ -25,7 +24,7 @@ export default function MyConsumableRequestsScreen() {
   const load = useCallback(() => {
     // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
     setError(null);
-    return api
+    api
       .get<ConsumableRequest[]>("/consumable-requests")
       .then((res) => setRequests(res.data))
       .catch((e) => setError(apiErrorMessage(e)))
@@ -37,7 +36,6 @@ export default function MyConsumableRequestsScreen() {
       load();
     }, [load])
   );
-  useRefreshHandler(load);
 
   function handleCancel(request: ConsumableRequest) {
     showAlert("ยกเลิกคำขอ", "ต้องการยกเลิกคำขอเบิกนี้หรือไม่?", [

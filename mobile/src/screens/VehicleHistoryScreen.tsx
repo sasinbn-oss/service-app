@@ -7,7 +7,6 @@ import { FlatList, Text, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { useCachedState } from "../utils/pageCache";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
@@ -34,13 +33,6 @@ export default function VehicleHistoryScreen() {
         cancelled = true;
       };
     }, [])
-  );
-  // ปุ่มรีเฟรช / ลากลง — โหลดซ้ำแบบเดียวกับตอนเข้าหน้า โดยไม่ออกจากหน้านี้
-  useRefreshHandler(() =>
-    api.get<VehicleLogRow[]>("/vehicle-logs").then((res) => {
-      setLogs(res.data);
-      setError(null);
-    })
   );
 
   if (loading) {
