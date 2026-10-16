@@ -450,7 +450,25 @@ export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
   NO_FAULT: "ไปถึงแล้วเครื่องปกติ",
   // ปุ่ม "ปิดงาน — เครื่องใช้งานได้แล้ว" ถูกเอาออกแล้ว (เจ้าของงานขอ ต.ค. 69) — คงป้ายไว้ให้ใบเก่าที่ปิดแบบนี้
   RECOVERED: "เครื่องใช้งานได้แล้ว (หัวหน้าภาคปิด ไม่ต้องเข้าหน้างาน)",
+  // ไม่อยู่ใน WORK_ORDER_RESULTS — ช่างเลือกตอนปิดหน้างานไม่ได้ ได้มาจากปุ่มของหัวหน้าภาคเท่านั้น
+  SUPERVISOR_CLOSED: "หัวหน้าภาคปิด · ไม่เข้าหน้างาน",
 };
+
+/**
+ * เหตุผลที่หัวหน้าภาคปิดใบงานเองโดยไม่ส่งช่าง (เจ้าของงานขอ ต.ค. 69 รอบสอง)
+ *
+ * รอบแรก (RECOVERED) บังคับรูปและถูกขอให้เอาออก รอบนี้บังคับแค่เหตุผล + รายละเอียด
+ * เลือกจากรายการให้รายงานนับแยกได้ — แก้ต้องแก้ใน SupervisorCloseModal.tsx ด้วย
+ */
+export const SUPERVISOR_CLOSE_REASONS: Record<string, string> = {
+  SELF: "เครื่องกลับมาใช้งานได้เอง",
+  PHONE: "แก้ไขทางโทรศัพท์ / แนะนำร้านแล้ว",
+  OTHER_ORDER: "ซ่อมรวมกับใบงานอื่นแล้ว",
+  SHOP_FIXED: "ร้านจัดการซ่อมเอง",
+  OTHER: "อื่น ๆ",
+};
+/** รายละเอียดสั้นกว่านี้มักเป็น "ปกติแล้ว" ซึ่งไม่บอกว่าใครยืนยัน — คนอ่านย้อนหลังตามต่อไม่ได้ */
+export const SUPERVISOR_CLOSE_MIN_NOTE = 10;
 
 
 export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
@@ -487,6 +505,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   ATTACHMENT_REMOVED: "ลบไฟล์แนบ",
   BACKFILLED: "ปิดงานย้อนหลัง (แอดมินกรอกแทน)",
   RECOVERED_CLOSED: "หัวหน้าภาคปิดงาน — เครื่องใช้งานได้แล้ว",
+  SUPERVISOR_CLOSED: "หัวหน้าภาคปิดใบงาน",
   CLAIM_SUBMITTED: "ส่งเคลมอะไหล่เก่า",
   CLAIM_APPROVED: "อนุมัติเคลม · ปิดงาน",
   CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",

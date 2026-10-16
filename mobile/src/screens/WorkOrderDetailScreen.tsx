@@ -34,6 +34,7 @@ import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
+import SupervisorCloseModal, { SupervisorCloseButton } from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import {
@@ -282,12 +283,15 @@ function inspectBooked(o: WorkOrder) {
 }
 
 /**
- * ใบเก่าที่หัวหน้าภาคปิดเอง (เครื่องใช้งานได้แล้ว — ปุ่มเอาออกแล้ว ต.ค. 69) — ขั้นที่ใบงานรออยู่และขั้นที่ยังไปไม่ถึงตอนปิดไม่มีใครทำ
- * ต้องขึ้นว่าข้าม ไม่ใช่ติ๊กว่าทำแล้ว · ขั้นตอนปิดอ่านจากประวัติแถวสุดท้ายก่อนปิด (สถานะหลังแถวนั้น)
+ * ใบที่หัวหน้าภาคปิดเอง (SUPERVISOR_CLOSED และ RECOVERED ของใบเก่าจากปุ่มรอบแรก) — ขั้นที่ใบงานรออยู่
+ * และขั้นที่ยังไปไม่ถึงตอนปิดไม่มีใครทำ ต้องขึ้นว่าข้าม ไม่ใช่ติ๊กว่าทำแล้ว
+ * ขั้นตอนปิดอ่านจากประวัติแถวสุดท้ายก่อนปิด (สถานะหลังแถวนั้น)
  */
+const SUPERVISOR_CLOSES: Record<string, string> = { RECOVERED: "RECOVERED_CLOSED", SUPERVISOR_CLOSED: "SUPERVISOR_CLOSED" };
 function recoveredFrom(o: WorkOrder): string | null {
-  if (o.closeResult !== "RECOVERED") return null;
-  const done = o.logs.find((l) => l.action === "RECOVERED_CLOSED");
+  const action = o.closeResult ? SUPERVISOR_CLOSES[o.closeResult] : undefined;
+  if (!action) return null;
+  const done = o.logs.find((l) => l.action === action);
   if (!done) return null;
   const prior = o.logs.filter((l) => l.id < done.id).sort((a, b) => b.id - a.id)[0];
   return prior?.status ?? "NEW";
@@ -396,6 +400,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [supClosing, setSupClosing] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
@@ -823,6 +828,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         }}
       />
     ) : null}
+    {supClosing ? (
+      <SupervisorCloseModal
+        order={order}
+        onClose={() => setSupClosing(false)}
+        onDone={async () => {
+          setSupClosing(false);
+          await reloadWithNotice();
+        }}
+      />
+    ) : null}
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -831,6 +846,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {/* แอดมิน (รวม Super Admin) ปิดงานที่จบจริงไปแล้วแต่ค้างในระบบได้ในครั้งเดียว */}
       {user?.role === "ADMIN" && !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
         <BackfillButton onPress={() => setBackfilling(true)} />
+      ) : null}
+      {/* หัวหน้าภาค (เปิดหน้านี้ได้แปลว่าใบอยู่ในขอบเขตแล้ว) และแอดมิน ปิดใบงานโดยไม่ส่งช่าง ต้องใส่เหตุผล
+          Admin Spare Part (user เป็น null) กับดูในฐานะ ดูได้อย่างเดียว ไม่ขึ้นปุ่ม */}
+      {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
+      !user?.viewAs &&
+      !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
+        <SupervisorCloseButton onPress={() => setSupClosing(true)} />
       ) : null}
       {order.isTest ? (
         <View style={styles.testBand}>
@@ -1500,7 +1522,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {/* สรุปงานคือสิ่งที่คนเปิดใบปิดแล้วมาหา (เจ้าของงานให้ตัวหนา) — เดิมเป็นตัวเทาเล็กไม่มีหัวข้อ */}
           {order.closeNote ? (
             <View style={[styles.summaryBox, closedOk && styles.summaryBoxDone]}>
-              <Text style={styles.summaryLabel}>สรุปงานที่ทำ</Text>
+              {/* หัวหน้าภาคปิดเองไม่มีงานที่ทำ — สิ่งที่บันทึกไว้คือเหตุผล เรียกให้ตรง */}
+              <Text style={styles.summaryLabel}>
+                {order.closeResult === "SUPERVISOR_CLOSED" ? "เหตุผลที่หัวหน้าภาคปิด" : "สรุปงานที่ทำ"}
+              </Text>
               <Text style={styles.summaryText}>{order.closeNote}</Text>
             </View>
           ) : null}

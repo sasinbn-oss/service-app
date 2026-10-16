@@ -68,6 +68,7 @@ export interface WorkOrderRow {
   createdByRole?: Role | null;
   createdAt: string;
   closedAt: string | null;
+  closeResult?: string | null;
   closeResultLabel: string | null;
   attachmentCount: number;
   /** ขั้นนี้เป็นของบทบาทไหน — ว่าง = ปิด/ยกเลิกแล้ว */
@@ -1173,6 +1174,8 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
         <PartsOutBadge row={row} />
+        {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
+        {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
         <PartsEta row={row} />
       </View>
