@@ -63,6 +63,9 @@ export interface WorkOrderRow {
   partsExpectedAt?: string | null;
   /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
   partsOut?: number;
+  /** ผู้เปิดใบงาน — ว่าง = ระบบสร้างเอง หรือบัญชีผู้เปิดถูกลบไปแล้ว */
+  createdByName?: string | null;
+  createdByRole?: Role | null;
   createdAt: string;
   closedAt: string | null;
   closeResultLabel: string | null;
@@ -130,7 +133,7 @@ function whoKeys(row: WorkOrderRow): Who[] {
  * คอลัมน์ของตาราง — ค่าที่ใช้กรอง/เรียงแบบ Excel ต้องเป็นข้อความเดียวกับที่ตาเห็นในช่องนั้น
  * (กรอง "ทีม" แล้วต้องเจอคำที่อ่านอยู่ในคอลัมน์ ไม่ใช่รหัสภายใน)
  */
-type ColKey = "wo" | "branch" | "machine" | "team" | "status" | "wait";
+type ColKey = "wo" | "branch" | "machine" | "team" | "status" | "wait" | "opener";
 const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string }[] = [
   { key: "wo", label: "ใบงาน", value: (r) => r.code },
   { key: "branch", label: "สาขา", value: (r) => `${r.branchCode} ${r.branchName}` },
@@ -139,8 +142,15 @@ const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string 
   // ติด "อะไหล่หมด" ต่อท้ายแทนการแทนที่ — กรองตามขั้นยังเจอครบ ค้นคำว่า "หมด" ก็ได้ทุกใบที่ติดของ
   { key: "status", label: "สถานะ", value: (r) => (r.partsOut ? `${r.statusLabel} · อะไหล่หมด` : r.statusLabel) },
   { key: "wait", label: "รอใคร", value: (r) => waitText(r) ?? "(ไม่ได้รอใคร)" },
+  // ใส่บทบาทต่อท้ายชื่อ — ตัวกรองแยกคนชื่อซ้ำต่างบทบาทได้ และอ่านแล้วรู้ว่าเปิดจากฝั่งไหน
+  { key: "opener", label: "เปิดโดย", value: openerText },
 ];
 type ColFilters = Partial<Record<ColKey, Set<string>>>;
+
+function openerText(row: WorkOrderRow) {
+  if (!row.createdByName) return "ระบบ";
+  return row.createdByRole ? `${row.createdByName} (${ROLE_LABEL[row.createdByRole]})` : row.createdByName;
+}
 
 function waitText(row: WorkOrderRow) {
   if (!row.stageActor) return null;
@@ -272,9 +282,10 @@ export function formatDate(iso: string | null) {
 
 export default function WorkOrderListScreen({ navigation, route }: Props) {
   // จอกว้างเป็นตารางแบบต้นแบบ — กวาดตาเทียบสาขา/สถานะทีละคอลัมน์ได้ไวกว่าการ์ด
-  // ที่ซ้อนข้อมูลเป็นบรรทัด บนมือถือยังเป็นการ์ดเพราะตารางหกคอลัมน์ไม่พอที่
+  // ที่ซ้อนข้อมูลเป็นบรรทัด บนมือถือยังเป็นการ์ดเพราะตารางเจ็ดคอลัมน์ไม่พอที่
   const { width } = useWindowDimensions();
-  const table = width >= 900;
+  // 1024 ไม่ใช่ 900 — ตั้งแต่มีคอลัมน์ "เปิดโดย" จอ 900–1000 เหลือที่ไม่พอ รหัสใบงานกับชื่อทีมหักบรรทัด
+  const table = width >= 1024;
   const [rows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที
@@ -1067,6 +1078,7 @@ const COL_STYLE: Record<ColKey, object> = {
   team: { flex: 1.3 },
   status: { flex: 1.6 },
   wait: { flex: 1.6, minWidth: 0 },
+  opener: { flex: 1.5, minWidth: 0 },
 };
 function TableHead({
   values,
@@ -1096,6 +1108,23 @@ function TableHead({
         />
       ))}
       <View style={styles.colAction} />
+    </View>
+  );
+}
+
+/** ชื่อผู้เปิด + ป้ายบทบาท สีเดียวกับแท็บบทบาท — ไม่มีผู้เปิดขึ้นว่า "ระบบ" */
+function Opener({ row }: { row: WorkOrderRow }) {
+  const tone = row.createdByRole ? OWNER_TONE[row.createdByRole] : { bg: colors.tile, fg: colors.textMuted };
+  return (
+    <View style={styles.openerRow}>
+      <Text style={styles.openerName} numberOfLines={1}>
+        {row.createdByName ?? "ระบบ"}
+      </Text>
+      <View style={[styles.roleChip, { backgroundColor: tone.bg }]}>
+        <Text style={[styles.roleChipText, { color: tone.fg }]}>
+          {row.createdByRole ? ROLE_LABEL[row.createdByRole] : "อัตโนมัติ"}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -1149,6 +1178,13 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       </View>
       <View style={styles.colWait}>
         <WaitingOn row={row} />
+      </View>
+      <View style={styles.colOpener}>
+        <Opener row={row} />
+        <Text style={styles.td2}>{formatDateTime(row.createdAt)}</Text>
+        <View style={styles.srcTag}>
+          <Text style={styles.srcTagText}>{row.source === "OUTAGE" ? "จากกระดาน" : "เปิดเอง"}</Text>
+        </View>
       </View>
       <View style={styles.colAction}>
         <View style={styles.viewBtn}>
@@ -1213,10 +1249,17 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       <PartsEta row={row} />
 
       <View style={styles.metaRow}>
-        <Ionicons name="person-outline" size={13} color={colors.textFaint} />
+        <Ionicons name="people-outline" size={13} color={colors.textFaint} />
+        <Text style={styles.meta}>{row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}</Text>
+      </View>
+
+      <View style={styles.metaRow}>
+        <Ionicons name="create-outline" size={13} color={colors.textFaint} />
+        <Text style={[styles.meta, styles.metaFit]}>เปิดโดย</Text>
+        <Opener row={row} />
         <Text style={styles.meta}>
-          {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}
-          {row.source === "OUTAGE" ? " · เปิดจากกระดาน" : " · เปิดเอง"}
+          · {formatDateTime(row.createdAt)}
+          {row.source === "OUTAGE" ? " · จากกระดาน" : ""}
         </Text>
       </View>
 
@@ -1371,6 +1414,13 @@ const styles = StyleSheet.create({
   colTeam: { flex: 1.3 },
   colStatus: { flex: 1.6, gap: 2 },
   colWait: { flex: 1.6, minWidth: 0 },
+  colOpener: { flex: 1.5, minWidth: 0, gap: 2, alignItems: "flex-start" },
+  openerRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, minWidth: 0 },
+  openerName: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.text, flexShrink: 1 },
+  roleChip: { borderRadius: 999, paddingHorizontal: 7 },
+  roleChipText: { fontSize: 11, lineHeight: 17, fontWeight: "700" },
+  srcTag: { borderWidth: 1, borderColor: colors.border, borderRadius: 4, paddingHorizontal: 6 },
+  srcTagText: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
   // พื้นแดงจาง ๆ ทั้งแถว — ตารางตัดขอบ (overflow hidden) ออร่ารอบแถวจึงใช้ไม่ได้ เหลือป้ายที่เรืองแสงแทน
   trUrgent: { backgroundColor: "#FFF7F7" },
   sepRow: { paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: colors.tile, borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -1436,7 +1486,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.primarySoft,
   },
-  codeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  // wrap — จอแคบให้ป้ายด่วนลงบรรทัดใหม่ แทนที่รหัสใบงานจะถูกหักกลางเป็น "WO-" กับ "00001"
+  codeRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   viewBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -1490,6 +1541,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
   metaRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   meta: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
+  // ป้ายนำหน้าที่ต้องติดกับของข้างหลัง — meta ปกติยืดเต็มแถวจะดันชื่อผู้เปิดไปชิดขวา
+  metaFit: { flexGrow: 0, flexShrink: 0, flexBasis: "auto" },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.sm, padding: spacing.xl },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
   retry: {

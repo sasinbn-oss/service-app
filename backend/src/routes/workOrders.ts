@@ -541,6 +541,7 @@ const listSelect = {
   machine: { select: { code: true, brand: true, model: true } },
   assignedTeam: true,
   assignedTo: { select: { name: true } },
+  createdBy: { select: { name: true, role: true } },
   _count: {
     select: {
       attachments: true,
@@ -637,6 +638,9 @@ function listShape(
     partsOut: PARTS_OUT_STAGES.has(w.status) ? w._count.parts : 0,
     // ใบรออะไหล่ที่แยกมาจากใบอื่น — รายการขึ้นป้ายให้รู้ว่าเป็นงานต่อเนื่อง
     isFollowUp: w.parentId !== null,
+    // ใบที่ไม่มีผู้เปิด (ระบบสร้างเอง หรือบัญชีผู้เปิดถูกลบ) ส่ง null ให้แอปขึ้นว่า "ระบบ"
+    createdByName: w.createdBy?.name ?? null,
+    createdByRole: w.createdBy?.role ?? null,
     createdAt: w.createdAt,
     closedAt: w.closedAt,
     closeResultLabel: w.closeResult
@@ -862,6 +866,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
               { branch: { code: { contains: keyword, mode: "insensitive" as const } } },
               { branch: { name: { contains: keyword, mode: "insensitive" as const } } },
               { machine: { code: { contains: keyword, mode: "insensitive" as const } } },
+              // หาใบที่ตัวเองหรือเพื่อนเปิดไว้ — คนจำชื่อคนเปิดได้ง่ายกว่ารหัสใบงาน
+              { createdBy: { name: { contains: keyword, mode: "insensitive" as const } } },
             ],
           }
         : {}),
