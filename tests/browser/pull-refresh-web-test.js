@@ -53,15 +53,20 @@ const { setup } = require("./fixture");
         await page.waitForTimeout(16);
       }
       await page.screenshot({ path: path.join(DIR, "pull-1-dragging.png") });
-      const hint = await vis("ปล่อยเพื่อรีเฟรช").count();
+      // ระหว่างลาก: เนื้อหาเลื่อนลงตามนิ้ว (กล่องเลื่อนถูกขยับ) และวงหมุนโผล่ชัด
+      const hint = await page.evaluate(() => {
+        const moved = [...document.querySelectorAll("div")].some((d) => /translate3d\(0px, [1-9]\d*(\.\d+)?px/.test(d.style.transform));
+        const ball = document.querySelector('[aria-label="ลากรีเฟรช"]');
+        return moved && ball && Number(ball.style.opacity) > 0.9 ? 1 : 0;
+      });
       await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
       return hint;
     };
 
     fx.sql(`update "WorkOrder" set title='ทดสอบลากรีเฟรช' where id=${w1.id}`);
     const hint = await pull();
-    hint > 0 ? pass("ลากลงจากบนสุด → ขึ้น \"ปล่อยเพื่อรีเฟรช\"") : fail("ไม่ขึ้นตัวบอกการลาก");
-    await page.waitForTimeout(900);
+    hint > 0 ? pass("ลากลงจากบนสุด → เนื้อหาเลื่อนตามนิ้ว วงหมุนโผล่") : fail("ลากแล้วเนื้อหาไม่ขยับ/ไม่มีวงหมุน");
+    await page.waitForTimeout(1100);
     const doneText = await page.getByText(/^อัปเดตแล้ว · ใหม่ \d+ ใบงาน$|^ข้อมูลล่าสุดแล้ว$/).locator("visible=true").allTextContents();
     await page.screenshot({ path: path.join(DIR, "pull-2-done.png") });
     doneText.some((t) => /ใหม่ [1-9]\d* ใบงาน/.test(t)) ? pass(`ปล่อยแล้วรีเฟรช บอกผล "${doneText[0]}"`) : fail(`ผลหลังลาก: ${doneText.join(",") || "ไม่มี"}`);
