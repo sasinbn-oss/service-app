@@ -57,4 +57,16 @@ curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $A)" | J "const i
   && pass "ใบด่วนอยู่ก่อนใบปกติในรายการ (เดิมเรียงตัวอักษรแล้วไปอยู่ท้าย)" || fail "ใบด่วนไม่ขึ้นก่อน"
 
 echo
+echo "═══ ผู้เปิดใบงาน"
+ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
+[ "$(row $D 'r.createdByName+"|"+r.createdByRole')" = "$ANAME|ADMIN" ] \
+  && pass "รายการบอกชื่อและบทบาทผู้เปิด ($ANAME)" || fail "ผู้เปิด: $(row $D 'r.createdByName+"|"+r.createdByRole')"
+curl -s -G "localhost:4000/api/work-orders" --data-urlencode "status=ALL" --data-urlencode "search=$ANAME" -H "$(H $A)" \
+  | J "d.rows.some(r=>r.id===$D)?'ok':'none'" | grep -q ok \
+  && pass "ค้นด้วยชื่อผู้เปิดแล้วเจอใบงาน" || fail "ค้นชื่อผู้เปิดไม่เจอ"
+DB "update \"WorkOrder\" set \"createdById\"=null where id=$D" >/dev/null
+[ "$(row $D 'String(r.createdByName)+"|"+String(r.createdByRole)')" = "null|null" ] \
+  && pass "ใบที่ไม่มีผู้เปิดส่งค่าว่าง (แอปขึ้นว่า ระบบ)" || fail "ไม่มีผู้เปิด: $(row $D 'r.createdByName')"
+
+echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || { echo "── มีข้อที่ไม่ผ่าน ──"; exit 1; }

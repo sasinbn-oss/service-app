@@ -33,15 +33,19 @@ const { chromium } = require("playwright");
     const collect = async () => {
       const codes = new Set();
       await page.mouse.move(vp.width / 2 + 100, vp.height - 200);
-      for (let i = 0; i < 80; i++) {
+      // เลื่อนจนไม่เจอใบใหม่ติดกันหลายรอบ ไม่ใช่จำนวนรอบตายตัว — การ์ดสูงขึ้นเมื่อไร (เช่นตอนเพิ่มบรรทัด
+      // "เปิดโดย") ระยะเลื่อนแบบตายตัวไปไม่ถึงท้ายรายการ แล้วเทสต์รายงานว่าใบหายทั้งที่แอปวาดครบ
+      for (let i = 0, idle = 0; i < 400 && idle < 15; i++) {
         const now = await page.evaluate(() =>
           [...document.querySelectorAll("div")]
             .filter((d) => /^WO-\d{5}$/.test(d.innerText) && d.children.length === 0)
             .map((d) => d.innerText)
         );
+        const before = codes.size;
         now.forEach((c) => codes.add(c));
+        idle = codes.size === before ? idle + 1 : 0;
         await page.mouse.wheel(0, 400);
-        await page.waitForTimeout(60);
+        await page.waitForTimeout(80);
       }
       // กลับขึ้นบนสุดผ่านแถบสรุป — ตัวกรองอยู่ในหัวรายการ ต้องเห็นก่อนกด
       await page.getByLabel("แสดงตัวกรองและช่องค้นหา").click().catch(() => {});
