@@ -61,24 +61,3 @@ export function onPageShown(listener: () => void): () => void {
   document.addEventListener("visibilitychange", h);
   return () => document.removeEventListener("visibilitychange", h);
 }
-
-/**
- * นับว่าข้อมูลชุดใหม่ต่างจากที่หน้าจอถืออยู่กี่รายการ (เพิ่ม · เปลี่ยน · หายไป) — ใช้กับปุ่ม "มีอัปเดต"
- * และข้อความหลังรีเฟรช · keys = รายการที่เพิ่มหรือเปลี่ยน (ไว้ไฮไลต์) ส่วนที่หายไปนับอย่างเดียว
- * sig ต้องไม่รวมค่าที่เปลี่ยนตามเวลาเอง (เช่น ชั่วโมงที่ค้าง) ไม่งั้นทุกรอบจะขึ้นว่ามีอัปเดต
- */
-export function countChanges<T>(
-  prev: T[],
-  next: T[],
-  key: (x: T) => string | number,
-  sig: (x: T) => string = (x) => JSON.stringify(x)
-): { changed: number; keys: Set<string | number> } {
-  const before = new Map(prev.map((x) => [key(x), sig(x)]));
-  const keys = new Set<string | number>();
-  for (const x of next) {
-    const k = key(x);
-    if (before.get(k) !== sig(x)) keys.add(k);
-    before.delete(k);
-  }
-  return { changed: keys.size + before.size, keys };
-}

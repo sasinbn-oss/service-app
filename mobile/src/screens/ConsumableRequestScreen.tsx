@@ -13,7 +13,6 @@ import { showAlert } from "../utils/alert";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { ConsumableItem } from "../types";
@@ -38,8 +37,6 @@ export default function ConsumableRequestScreen({ navigation }: Props) {
         .finally(() => setLoading(false));
     }, [])
   );
-  // รีเฟรชเฉพาะรายการของ — จำนวนที่กรอกค้างไว้ไม่หาย
-  useRefreshHandler(() => api.get<ConsumableItem[]>("/consumables").then((res) => setItems(res.data)));
 
   function setQuantity(itemId: number, value: string) {
     const digitsOnly = value.replace(/[^0-9]/g, "");

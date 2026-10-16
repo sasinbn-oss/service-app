@@ -11,7 +11,6 @@ import { Image, Platform, ScrollView, StyleSheet, Text, TextInput, useWindowDime
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import AppModal from "../components/AppModal";
 import Spinner from "../components/Spinner";
@@ -195,7 +194,6 @@ export default function ManageVehiclesScreen() {
       load();
     }, [load])
   );
-  useRefreshHandler(load);
 
   if (loading || !data) {
     return (

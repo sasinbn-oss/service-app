@@ -10,7 +10,6 @@ import MainNavigator from "./src/navigation/MainNavigator";
 import AppShell from "./src/components/AppShell";
 import { FeedbackHost, WasherLoader } from "./src/components/Feedback";
 import UpdateGate from "./src/components/UpdateGate";
-import PullToRefresh from "./src/components/PullToRefresh";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
 import { colors } from "./src/theme";
 import { installWebFonts } from "./src/utils/webFonts";
@@ -60,7 +59,6 @@ export default function App() {
           <RootNavigator />
           <FeedbackHost />
           <UpdateGate />
-          <PullToRefresh />
         </View>
       </AuthProvider>
     </SafeAreaProvider>

@@ -13,7 +13,6 @@ import EmptyState from "../components/EmptyState";
 import AppModal from "../components/AppModal";
 import { showAlert } from "../utils/alert";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors, shadow, headingFont } from "../theme";
 import { TroubleshootFlow, TroubleshootFlowSummary, TroubleshootNode } from "../types";
@@ -30,7 +29,7 @@ export default function ManageFlowsScreen() {
 
   const loadFlows = useCallback(() => {
     // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
-    return api
+    api
       .get<TroubleshootFlowSummary[]>("/troubleshoot-flows")
       .then((res) => setFlows(res.data))
       .catch((e) => showAlert("ผิดพลาด", apiErrorMessage(e)))
@@ -42,7 +41,6 @@ export default function ManageFlowsScreen() {
       loadFlows();
     }, [loadFlows])
   );
-  useRefreshHandler(loadFlows);
 
   async function openDetail(id: number) {
     setLoadingFlow(true);

@@ -4,7 +4,6 @@ import { FlatList, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { useFocusEffect } from "@react-navigation/native";
-import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { colors } from "../theme";
 import { WorkLog } from "../types";
@@ -33,13 +32,6 @@ export default function WorkLogHistoryScreen() {
         cancelled = true;
       };
     }, [])
-  );
-  // ปุ่มรีเฟรช / ลากลง — โหลดซ้ำแบบเดียวกับตอนเข้าหน้า โดยไม่ออกจากหน้านี้
-  useRefreshHandler(() =>
-    api.get<WorkLog[]>("/work-logs").then((res) => {
-      setLogs(res.data);
-      setError(null);
-    })
   );
 
   if (loading) {
