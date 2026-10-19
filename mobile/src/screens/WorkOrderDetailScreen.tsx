@@ -145,6 +145,8 @@ interface WorkOrder {
   stageActor: string | null;
   stageActorLabel: string | null;
   waitingParts: StockPart[];
+  /** ค่าบริการที่หัวหน้าช่างให้เสนอราคา — ไม่มีราคา (ราคาอยู่ในใบเสนอราคาจากระบบบัญชี) */
+  services: { id: number; name: string; quantity: number; unit: string | null; note: string | null }[];
   outageId: number | null;
   outageStillOpen: boolean | null;
   outageEndedAt: string | null;
@@ -1434,6 +1436,22 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 value={`${order.inspectionNote}${order.inspectedAt ? ` (${formatDate(order.inspectedAt)})` : ""}`}
               />
             ) : null}
+            {order.services.length > 0 ? (
+              <>
+                <Text style={styles.partsHead}>ค่าบริการ (เสนอราคาลูกค้า)</Text>
+                {order.services.map((v) => (
+                  <View key={v.id} style={styles.partRow}>
+                    <Text style={styles.partCode}>
+                      {v.name} × {v.quantity}
+                      {v.unit ? ` ${v.unit}` : ""}
+                    </Text>
+                    <Text style={styles.partName} numberOfLines={1}>
+                      {v.note ?? ""}
+                    </Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
             {order.waitingParts.length > 0 ? (
               <>
                 <Text style={styles.partsHead}>อะไหล่ที่ต้องใช้</Text>
@@ -2371,6 +2389,8 @@ function StageModal({
   const [parts, setParts] = useState<PickedPart[]>([]);
   // ของนอกสโตร์แยกช่อง — ส่งกลับด้วยชื่อ เซิร์ฟเวอร์จับคู่กับแถวเดิม ผลเช็คจึงไม่หาย
   const [offParts, setOffParts] = useState<OffPart[]>([]);
+  // ค่าบริการ (ค่าแรง ค่าเดินทาง) — มีรายการ = ส่งแอดมินทำใบเสนอราคา ใช้หรือไม่ใช้อะไหล่ก็ได้
+  const [services, setServices] = useState<OffPart[]>([]);
   const [checks, setChecks] = useState<
     Record<number, { inStock: boolean | null; warehouse: string | null }>
   >({});
@@ -2421,6 +2441,7 @@ function StageModal({
     const split = splitParts(order.waitingParts);
     setParts(split.store);
     setOffParts(split.off);
+    setServices(order.services.map((v) => ({ name: v.name, quantity: v.quantity, unit: v.unit ?? "", note: v.note ?? "" })));
     setChecks(
       Object.fromEntries(
         order.waitingParts.map((p) => [p.sparePartId, { inStock: p.inStock, warehouse: p.warehouse }])
@@ -2485,6 +2506,7 @@ function StageModal({
         );
       } else if (order.status === "NEW") {
         await api.post(`/work-orders/${order.id}/parts`, {
+          services: offPartsPayload(services),
           needsParts,
           parts: needsParts
             ? parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }))
@@ -2560,6 +2582,11 @@ function StageModal({
    */
   const issued = order.waitingParts.filter((p) => p.inStock === true && p.requisitionNo);
   const thisRound = order.waitingParts.filter((p) => !(p.inStock === true && p.requisitionNo));
+  // หัวหน้าช่างใส่อะไหล่นอก/ค่าบริการ = ขอให้เสนอราคาเอง (ไม่ได้มาจากกฎแฟรนไชส์หมดประกัน)
+  const quoteAsked = [
+    order.waitingParts.some((p) => p.offCatalog) ? "มีอะไหล่นอก" : "",
+    order.services.length ? `ค่าบริการ ${order.services.length} รายการ` : "",
+  ].filter(Boolean);
 
   const unchecked =
     order.status === "PARTS_REQUESTED" &&
@@ -2612,7 +2639,8 @@ function StageModal({
         ? !team || !validDate || !timeOk
         : needsParts === null ||
           (needsParts && parts.length === 0 && offPartsPayload(offParts).length === 0) ||
-          (needsParts && offPartsIncomplete(offParts)))) ||
+          (needsParts && offPartsIncomplete(offParts)) ||
+          offPartsIncomplete(services))) ||
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
@@ -2731,12 +2759,21 @@ function StageModal({
                     <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
                     <OffPartEditor rows={offParts} onChange={setOffParts} />
                   </>
-                ) : needsParts === false ? (
+                ) : needsParts === false && services.length === 0 ? (
                   <Text style={styles.linkedText}>
                     ข้ามขั้นเช็คคลัง ไปจัดคิวช่างเลย — เช่น ให้เข้าไปประเมินอาการก่อน
                     ถ้าไปถึงแล้วต้องเปลี่ยนอะไหล่ ช่างส่งกลับมาให้ประเมินใหม่ได้
                   </Text>
                 ) : null}
+                {!inspectFirst && needsParts !== null ? (
+                  <OffPartEditor
+                    rows={services}
+                    onChange={setServices}
+                    variant="service"
+                    hint={needsParts ? "ค่าแรง ค่าเดินทาง ฯลฯ ที่ลูกค้าต้องจ่าย · ไม่ใส่ราคา แอดมินใส่ในใบเสนอราคา" : "ไม่มีค่าบริการ = ไปจัดคิวช่างเลยเหมือนเดิม"}
+                  />
+                ) : null}
+                {!inspectFirst ? <QuoteRoute needsParts={needsParts} off={offPartsPayload(offParts).length} services={offPartsPayload(services).length} /> : null}
               </>
             ) : null}
 
@@ -2950,22 +2987,32 @@ function StageModal({
                 */}
                 <Text style={styles.linkedText}>
                   {order.status === "AWAITING_QUOTE"
-                    ? "สาขานี้เป็นแฟรนไชส์ที่หมดประกันแล้ว อะไหล่ที่ใช้เป็นของที่ขายให้ลูกค้า — ส่งใบเสนอราคาให้ลูกค้าก่อน"
+                    ? quoteAsked.length
+                      ? `หัวหน้าช่างขอให้เสนอราคา: ${quoteAsked.join(" · ")} — ทำใบเสนอราคาจากระบบบัญชีแล้วแนบที่นี่`
+                      : "สาขานี้เป็นแฟรนไชส์ที่หมดประกันแล้ว อะไหล่ที่ใช้เป็นของที่ขายให้ลูกค้า — ส่งใบเสนอราคาให้ลูกค้าก่อน"
                     : "ส่งใบเสนอราคาไปแล้ว รอลูกค้าจ่ายเงิน — ได้เงินแล้วแนบบิลเพื่อส่งต่อให้หัวหน้าภาคจ่ายงาน"}
                 </Text>
-                {/* ของนอกสโตร์ไม่มีราคาในสโตร์ให้ดึง — โชว์ไว้ตรงนี้กันลืมใส่ในใบเสนอราคา */}
-                {order.status === "AWAITING_QUOTE" && order.waitingParts.some((p) => p.offCatalog) ? (
+                {/* รายการที่ต้องอยู่ในใบเสนอราคา — ใบเสนอราคาออกจากระบบบัญชี แอดมินดูจากตรงนี้แล้วไปพิมพ์ราคาที่นั่น */}
+                {order.waitingParts.length || order.services.length ? (
                   <View style={styles.issuedBox}>
-                    <Text style={styles.issuedTitle}>อะไหล่นอกสโตร์ — อย่าลืมใส่ราคาในใบเสนอราคา</Text>
-                    {order.waitingParts
-                      .filter((p) => p.offCatalog)
-                      .map((p) => (
-                        <Text key={p.sparePartId} style={styles.issuedLine}>
-                          {p.name} × {p.quantity}
-                          {p.unit ? ` ${p.unit}` : ""}
-                          {p.note ? ` · ${p.note}` : ""}
-                        </Text>
-                      ))}
+                    <Text style={styles.issuedTitle}>
+                      {order.status === "AWAITING_QUOTE" ? "รายการที่ต้องใส่ในใบเสนอราคา" : "รายการในใบเสนอราคา"}
+                    </Text>
+                    {order.waitingParts.map((p) => (
+                      <Text key={`p${p.sparePartId}`} style={styles.issuedLine}>
+                        {p.offCatalog ? "อะไหล่นอก · " : ""}
+                        {p.offCatalog ? p.name : `${p.partCode} ${p.name}`} × {p.quantity}
+                        {p.unit ? ` ${p.unit}` : ""}
+                        {p.note ? ` · ${p.note}` : ""}
+                      </Text>
+                    ))}
+                    {order.services.map((v) => (
+                      <Text key={`s${v.id}`} style={styles.issuedLine}>
+                        ค่าบริการ · {v.name} × {v.quantity}
+                        {v.unit ? ` ${v.unit}` : ""}
+                        {v.note ? ` · ${v.note}` : ""}
+                      </Text>
+                    ))}
                   </View>
                 ) : null}
 
@@ -3593,6 +3640,25 @@ function History({ logs, closed }: { logs: WorkOrder["logs"]; closed: boolean })
 }
 
 /**
+ * บอกหัวหน้าช่างก่อนกดว่าใบนี้จะไปไหนต่อ — มีอะไหล่นอก/ค่าบริการ = ส่งแอดมินทำใบเสนอราคาเสมอ
+ * (เจ้าของงานเลือก ต.ค. 69) · ใบที่เสนอราคาเพราะกฎแฟรนไชส์หมดประกันไม่ขึ้นกล่องนี้ — กฎนั้นอยู่ฝั่งเซิร์ฟเวอร์
+ */
+function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null; off: number; services: number }) {
+  const offCount = needsParts ? off : 0;
+  if (needsParts === null || (offCount === 0 && services === 0)) return null;
+  const chain = needsParts
+    ? ["แอดมินเช็คอะไหล่", "แอดมินแนบใบเสนอราคา", "ลูกค้าจ่ายเงิน", "เบิกอะไหล่", "จ่ายงาน"]
+    : ["แอดมินแนบใบเสนอราคา", "ลูกค้าจ่ายเงิน", "จ่ายงาน"];
+  const why = [offCount ? `อะไหล่นอก ${offCount}` : "", services ? `ค่าบริการ ${services}` : ""].filter(Boolean).join(" · ");
+  return (
+    <View style={styles.quoteRoute} accessibilityLabel="ใบนี้จะส่งให้แอดมินทำใบเสนอราคา">
+      <Text style={styles.quoteRouteTitle}>ใบนี้จะส่งให้แอดมินทำใบเสนอราคา — {why}</Text>
+      <Text style={styles.quoteRouteChain}>{chain.join(" → ")}</Text>
+    </View>
+  );
+}
+
+/**
  * หัวฟอร์มยืนยันออกงาน — บอกว่าแอดมินคุยกับลูกค้าได้ข้อสรุปว่าอะไร
  *
  * ลูกค้าเลื่อนวันคือเหตุผลหลักที่ขั้นนี้มีอยู่ (ทีมเดิมอาจไม่ว่างวันใหม่) จึงต้องเด่น
@@ -4185,6 +4251,7 @@ function CloseModal({
       <OffPartEditor
         rows={offParts}
         onChange={setOffParts}
+        title="อะไหล่นอกสโตร์ที่ใช้"
         hint="ของที่หารหัสในสโตร์ไม่เจอ หรือซื้อหน้างานเอง · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง"
       />
 
@@ -4781,6 +4848,15 @@ const styles = StyleSheet.create({
   hNoteBig: { fontSize: 14, fontWeight: "800", backgroundColor: colors.primarySoft },
   hMore: { marginTop: spacing.sm, alignSelf: "flex-start" },
   hMoreText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  quoteRoute: {
+    gap: 4,
+    marginTop: spacing.md,
+    backgroundColor: colors.roleAdminSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  quoteRouteTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.roleAdmin },
+  quoteRouteChain: { fontSize: 12.5, lineHeight: 19, color: colors.body },
   dispatchNote: {
     flexDirection: "row",
     gap: spacing.sm,

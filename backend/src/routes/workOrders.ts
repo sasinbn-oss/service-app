@@ -114,6 +114,7 @@ const detailInclude = {
     include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true, offCatalog: true } } },
     orderBy: { id: "asc" },
   },
+  services: { orderBy: { id: "asc" } },
   // นับอย่างเดียว ไม่ดึงรูปย่อมาด้วย เพราะรายการใบงานมีเป็นร้อยใบ
   // ถ้าติดรูปย่อไปทุกใบ หน้ารายการจะโหลดหนักกว่าหน้ารายละเอียดหลายเท่า
   //
@@ -503,13 +504,18 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     hasQuote: w.attachments.some((a) => a.role === "QUOTE"),
     partsExpectedAt: w.partsExpectedAt,
     hasReceipt: w.attachments.some((a) => a.role === "RECEIPT"),
-    needsQuote: needsCustomerQuote({
-      branchCode: w.branch.code,
-      needsParts: w.needsParts,
-      openedAt: w.branch.openedAt,
-      warrantyExpiresAt: w.branch.warrantyExpiresAt,
-      machineBrand: machineMake(w.machine),
-    }),
+    // อะไหล่นอก/ค่าบริการ = หัวหน้าช่างขอให้เสนอราคาเสมอ ไม่ว่าสาขาไหนหรือประกันยังอยู่ (เจ้าของงานเลือก ต.ค. 69)
+    needsQuote:
+      w.parts.some((p) => p.kind === "WAITING" && p.sparePart.offCatalog) ||
+      w.services.length > 0 ||
+      needsCustomerQuote({
+        branchCode: w.branch.code,
+        needsParts: w.needsParts,
+        openedAt: w.branch.openedAt,
+        warrantyExpiresAt: w.branch.warrantyExpiresAt,
+        machineBrand: machineMake(w.machine),
+      }),
+    services: w.services.map((v) => ({ id: v.id, name: v.name, quantity: v.quantity, unit: v.unit, note: v.note })),
     // ── เคลมอะไหล่ ──
     claims: w.claims.map((c) => ({
       id: c.id,
@@ -1843,6 +1849,18 @@ const partsSchema = z.object({
     .optional(),
   // อะไหล่นอกสโตร์ที่พิมพ์ชื่อเอง — ไม่มี SKU (ดู resolveOffParts) · มีแต่ของนอกสโตร์อย่างเดียวก็ได้
   offParts: z.array(offPartInput).max(20).optional(),
+  // ค่าบริการที่ต้องเสนอราคาลูกค้า (ค่าแรง ค่าเดินทาง) — ใส่ได้ทั้งตอนใช้และไม่ใช้อะไหล่ · ส่งมาทั้งชุดแทนของเดิม
+  services: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1, "ค่าบริการต้องมีชื่อรายการ").max(120),
+        quantity: z.number().int().min(1).max(999).default(1),
+        unit: z.string().trim().max(20).nullable().optional(),
+        note: z.string().trim().max(300).nullable().optional(),
+      })
+    )
+    .max(20)
+    .optional(),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -1874,15 +1892,22 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       machine: { select: { brand: true, model: true } },
     },
   });
+  /**
+   * อะไหล่นอกหรือค่าบริการ = ของที่ลูกค้าต้องจ่าย หัวหน้าช่างเป็นคนรู้ — เสนอราคาเสมอ (เจ้าของงานเลือก ต.ค. 69)
+   * ไม่รอกฎแฟรนไชส์/ประกัน ซึ่งเขียนไว้สำหรับของในสโตร์ที่บริษัทออกให้ได้ระหว่างประกัน
+   */
+  const services = parsed.data.services ?? [];
+  const asked = services.length > 0 || (needsParts && (parsed.data.offParts?.length ?? 0) > 0);
   const quoteFirst =
-    needsParts &&
+    asked ||
+    (needsParts &&
     needsCustomerQuote({
       branchCode: wo.branch.code,
       needsParts: true,
       openedAt: wo.branch.openedAt,
       warrantyExpiresAt: wo.branch.warrantyExpiresAt,
       machineBrand: machineMake(wo.machine),
-    });
+    }));
 
   /**
    * ทุกตัวเบิกไปแล้วตั้งแต่รอบก่อน (ช่างส่งกลับด้วยเหตุอื่นที่ไม่ใช่อะไหล่) — ไม่มีอะไรให้เช็ค
@@ -1900,11 +1925,25 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
     });
 
   // ต้องเสนอราคา → เช็คอะไหล่ก่อน (รอเบิกอะไหล่) แล้วค่อยเสนอราคาด้วยของที่มีจริง
-  const nextStatus = !needsParts || allIssued ? "PARTS_CHECKED" : quoteFirst ? "PARTS_SOURCING" : "PARTS_REQUESTED";
+  // ไม่ใช้อะไหล่แต่มีค่าบริการ → ตรงไปเสนอราคา (ไม่มีอะไหล่ให้เช็ค) · จ่ายเงินแล้วไปจ่ายงานเลย (ดู afterPayment)
+  const nextStatus =
+    !needsParts || allIssued
+      ? services.length > 0
+        ? "AWAITING_QUOTE"
+        : "PARTS_CHECKED"
+      : quoteFirst
+      ? "PARTS_SOURCING"
+      : "PARTS_REQUESTED";
 
   await prisma.$transaction(async (tx) => {
     // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
     await mergeWaitingParts(tx, id, parts);
+    await tx.workOrderService.deleteMany({ where: { workOrderId: id } });
+    if (services.length) {
+      await tx.workOrderService.createMany({
+        data: services.map((v) => ({ workOrderId: id, name: v.name, quantity: v.quantity, unit: v.unit || null, note: v.note || null })),
+      });
+    }
     await tx.workOrder.update({
       where: { id },
       data: {
@@ -1921,10 +1960,14 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       needsParts ? "PARTS_REQUESTED" : "NO_PARTS",
       nextStatus,
       note ||
-        (!needsParts
+        (nextStatus === "AWAITING_QUOTE"
+          ? `ไม่ใช้อะไหล่ — มีค่าบริการ ${services.length} รายการ ส่งแอดมินทำใบเสนอราคา`
+          : !needsParts
           ? "ไม่ต้องใช้อะไหล่ — ข้ามไปจัดคิวช่าง"
           : allIssued
           ? "อะไหล่ชุดเดิมเบิกไปแล้วทุกตัว — ข้ามไปจัดคิวช่าง"
+          : asked
+          ? "มีอะไหล่นอก/ค่าบริการ — เช็คอะไหล่ก่อน แล้วแอดมินทำใบเสนอราคาและเก็บเงินก่อนเบิกของ"
           : quoteFirst
           ? "อะไหล่ขายลูกค้าแฟรนไชส์ — เช็คอะไหล่ก่อน แล้วเสนอราคาและเก็บเงินก่อนเบิกของ"
           : null)
@@ -2192,12 +2235,22 @@ const quoteSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+/**
+ * หลังรับเงิน (หรือข้ามเสนอราคา) ไปไหนต่อ — มีอะไหล่ไปเบิก · ไม่มี (มีแต่ค่าบริการ) ไปจ่ายงานเลย
+ * ไม่งั้นใบค่าบริการล้วนไปค้างที่ขั้นเบิกซึ่งไม่มีอะไรให้เบิก แอดมินกดผ่านไม่ได้
+ */
+async function afterPayment(id: number): Promise<"PARTS_REQUESTED" | "PARTS_CHECKED"> {
+  const waiting = await prisma.workOrderPart.count({ where: { workOrderId: id, kind: "WAITING" } });
+  return waiting > 0 ? "PARTS_REQUESTED" : "PARTS_CHECKED";
+}
+
 router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = quoteSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!(await guardStage(req, res, id, "AWAITING_QUOTE"))) return;
+  const after = await afterPayment(id);
 
   /**
    * ข้ามขั้นนี้ได้ แต่ต้องบอกว่าทำไม
@@ -2212,9 +2265,9 @@ router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
     await prisma.$transaction(async (tx) => {
       await tx.workOrder.update({
         where: { id },
-        data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },
+        data: { status: after, workStatus: workStatusForStage(after) },
       });
-      await writeLog(tx, id, req.auth!.userId, "QUOTE_SKIPPED", "PARTS_REQUESTED", parsed.data.note);
+      await writeLog(tx, id, req.auth!.userId, "QUOTE_SKIPPED", after, parsed.data.note);
       await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
     }, STAGE_TX);
     const skipped = await prisma.workOrder.findUniqueOrThrow({
@@ -2265,6 +2318,7 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
     .safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!(await guardStage(req, res, id, "AWAITING_PAYMENT"))) return;
+  const after = await afterPayment(id);
 
   const paid = await prisma.workOrderAttachment.count({
     where: { workOrderId: id, role: "RECEIPT" },
@@ -2276,15 +2330,16 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
-      data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },
+      data: { status: after, workStatus: workStatusForStage(after) },
     });
     await writeLog(
       tx,
       id,
       req.auth!.userId,
       "PAID",
-      "PARTS_REQUESTED",
-      parsed.data.note || "ลูกค้าจ่ายเงินแล้ว — เบิกอะไหล่ออกจากคลังได้"
+      after,
+      parsed.data.note ||
+        (after === "PARTS_CHECKED" ? "ลูกค้าจ่ายเงินแล้ว — ไม่มีอะไหล่ให้เบิก ไปจ่ายงานได้เลย" : "ลูกค้าจ่ายเงินแล้ว — เบิกอะไหล่ออกจากคลังได้")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -2815,7 +2870,7 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const src = await prisma.workOrder.findUnique({
     where: { id },
-    include: { parts: { where: { kind: "WAITING" } } },
+    include: { parts: { where: { kind: "WAITING" } }, services: true },
   });
   if (!src) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   const ended = ["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(src.status);
@@ -2862,9 +2917,17 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
           inStock: p.inStock,
           warehouse: p.warehouse,
           requisitionNo: p.requisitionNo,
+          unit: p.unit,
+          note: p.note,
           checkedAt: p.checkedAt,
           checkedById: p.checkedById,
         })),
+      });
+    }
+    // ค่าบริการติดไปด้วย — ใบทดสอบที่ไม่มีค่าบริการจะไม่ผ่านขั้นเสนอราคาเหมือนใบจริง
+    if (src.services.length > 0) {
+      await tx.workOrderService.createMany({
+        data: src.services.map((v) => ({ workOrderId: copy.id, name: v.name, quantity: v.quantity, unit: v.unit, note: v.note })),
       });
     }
     await writeLog(tx, copy.id, req.auth!.userId, "TEST_COPY", status, `ใบทดสอบ คัดลอกจาก ${src.code} — ทดสอบเสร็จให้ลบทิ้ง`);
