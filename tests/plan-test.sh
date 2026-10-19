@@ -122,6 +122,9 @@ echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่
 POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-04\",\"scheduledTime\":\"10:00\"}" >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"assignedTeam\"||'|'||\"scheduledTime\" from \"WorkOrder\" where id=$ID")" = "AWAITING_CONFIRM|PENDING|$TEAM|10:00" ] \
   && pass "จ่ายงานพร้อมวันเวลา แล้วไปรอแอดมินคอนเฟิร์มลูกค้า" || fail "จ่ายงานไม่สำเร็จ: $(st $ID)"
+ABY() { curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.appointmentBy?d.appointmentBy.name:"-"'; }
+LBY() { curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $A)" | J 'const r=d.rows.find(x=>x.id==='$ID');r.appointmentByName||"-"'; }
+[ "$(ABY)|$(LBY)" = "-|-" ] && pass "ยังรอลูกค้าคอนเฟิร์ม = ยังไม่มีชื่อคนคอนเฟิร์ม" || fail "มีชื่อทั้งที่ยังไม่คอนเฟิร์ม: $(ABY)|$(LBY)"
 R=$(POST $T "work-orders/$ID/confirm-appointment" '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างกดคอนเฟิร์มแทนไม่ได้" || fail "ช่างคอนเฟิร์มได้: $(echo $R|head -c 120)"
 R=$(POST $S "work-orders/$ID/confirm-appointment" '{}')
@@ -131,6 +134,8 @@ POST $A "work-orders/$ID/confirm-appointment" '{"scheduledAt":"2026-11-04","sche
   && pass "ลูกค้าขอเลื่อนเวลา แอดมินเปลี่ยนได้เลย แล้วส่งให้หัวหน้าภาคยืนยันออกงาน" || fail "คอนเฟิร์มไม่สำเร็จ: $(st $ID)"
 DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='RESCHEDULED'" | grep -q "10:00.*13:30" \
   && pass "ประวัติบันทึกว่าเลื่อนจากเวลาเดิมเป็นเวลาใหม่" || fail "ไม่มีประวัติการเลื่อน"
+ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
+[ "$(ABY)|$(LBY)" = "$ANAME|$ANAME" ] && pass "หน้าใบงานและรายการบอกชื่อแอดมินที่คอนเฟิร์ม/เลื่อนนัด ($ANAME)" || fail "ชื่อคนคอนเฟิร์ม: $(ABY)|$(LBY)"
 R=$(POST $T "work-orders/$ID/dispatch" '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างยืนยันออกงานเองไม่ได้" || fail "ช่างยืนยันออกงานได้: $(echo $R|head -c 120)"
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null

@@ -950,7 +950,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
 
   // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
   // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — สองคำถามรวด ไม่ใช่ทีละแถว
-  const [supervisors, lastMoves] = await Promise.all([
+  const [supervisors, lastMoves, confirms] = await Promise.all([
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
       select: { id: true, name: true, region: true, supervisedTeams: true },
@@ -963,7 +963,21 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
           _max: { createdAt: true },
         })
       : Promise.resolve([]),
+    // คนคอนเฟิร์มนัดล่าสุดของแต่ละใบ — เฉพาะใบที่นัดตกลงแล้ว (ดู APPOINTMENT_BY_ACTIONS)
+    rows.some((r) => APPOINTMENT_DONE.includes(r.appointmentStatus ?? ""))
+      ? prisma.workOrderLog.findMany({
+          where: {
+            workOrderId: { in: rows.filter((r) => APPOINTMENT_DONE.includes(r.appointmentStatus ?? "")).map((r) => r.id) },
+            action: { in: APPOINTMENT_BY_ACTIONS },
+            backfilledAt: null,
+          },
+          orderBy: { createdAt: "desc" },
+          distinct: ["workOrderId"],
+          select: { workOrderId: true, user: { select: { name: true } } },
+        })
+      : Promise.resolve([]),
   ]);
+  const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
   const stageSince = new Map<number, Date>();
   for (const m of lastMoves) if (m._max.createdAt) stageSince.set(m.workOrderId, m._max.createdAt);
 
@@ -984,7 +998,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   >;
 
   res.json({
-    rows: rows.map((w) => listShape(w, { supervisors, stageSince })),
+    rows: rows.map((w) => ({ ...listShape(w, { supervisors, stageSince }), appointmentByName: confirmedBy.get(w.id) ?? null })),
     counts: {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
@@ -1173,6 +1187,14 @@ router.get("/:id/version", requireAuth, async (req, res) => {
   });
 });
 
+/**
+ * ใครคอนเฟิร์มนัดกับลูกค้า (เจ้าของงานขอ ต.ค. 69) — คนกดคอนเฟิร์ม/เลื่อนนัดครั้งล่าสุด อ่านจากประวัติ ไม่เก็บซ้ำ
+ * ไม่นับประวัติที่ "ปิดงานย้อนหลัง" สร้างให้ (backfilledAt) — คนกดปิดย้อนหลังไม่ได้เป็นคนคุยกับร้าน
+ * โชว์เฉพาะนัดที่ตกลงแล้ว — ยังรอคอนเฟิร์มอยู่ ชื่อของรอบก่อนจะทำให้เข้าใจผิดว่าคอนเฟิร์มแล้ว
+ */
+const APPOINTMENT_BY_ACTIONS = ["CONFIRMED", "RESCHEDULED"];
+const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
+
 router.get("/:id", requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -1193,8 +1215,13 @@ router.get("/:id", requireAuth, async (req, res) => {
     row.createdAt;
   const inspectStart = logs.find((l) => l.action === "INSPECT_REQUESTED")?.createdAt ?? row.createdAt;
 
+  const confirm = logs.find((l) => APPOINTMENT_BY_ACTIONS.includes(l.action) && !l.backfilledAt);
   res.json({
     ...shape(row, roundStart, inspectStart),
+    appointmentBy:
+      confirm && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")
+        ? { name: confirm.user?.name ?? null, at: confirm.createdAt }
+        : null,
     logs: logs.map((l) => ({
       id: l.id,
       action: l.action,

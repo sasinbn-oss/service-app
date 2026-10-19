@@ -25,6 +25,10 @@ const { setup } = require("./fixture");
     const bkk = fx.sql("select to_char((now() at time zone 'Asia/Bangkok')::date,'YYYY-MM-DD')");
     fx.sql(`update "WorkOrder" set status='AWAITING_CONFIRM', "scheduledAt"=('${bkk}'::date - 5), "scheduledTime"='14:00', "appointmentStatus"='PENDING', "assignedTeam"='กระบี่' where id=${late.id}`);
     fx.sql(`update "WorkOrder" set status='IN_PROGRESS', "scheduledAt"='${bkk}'::date, "scheduledTime"='10:30', "appointmentStatus"='CONFIRMED', "assignedTeam"='กระบี่' where id=${today.id}`);
+    // แอดมินคอนเฟิร์มนัดใบ "วันนี้" — ประวัติคือที่มาของชื่อ · อีกแถวเป็นของปิดงานย้อนหลัง (ต้องไม่ถูกนับ)
+    const aid = fx.sql(`select id from "User" where "employeeCode"='A001'`);
+    const aname = fx.sql(`select name from "User" where "employeeCode"='A001'`);
+    fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note,"createdAt") values (${today.id},${aid},'CONFIRMED','ASSIGNED','ทดสอบคอนเฟิร์ม',now() - interval '1 hour')`);
     const lateCount = Number(fx.sql(`select count(*) from "WorkOrder" where "scheduledAt" < '${bkk}'::date and status not in ('DONE','CANCELLED') and not "isTest"`));
 
     const open = async (width) => {
@@ -61,6 +65,8 @@ const { setup } = require("./fixture");
       const t2 = await rowText(page, today.code);
       /10:30\sน\./.test(t2) && t2.includes("ลูกค้าคอนเฟิร์มแล้ว") && t2.includes("วันนี้")
         ? pass("ใบนัดวันนี้: ลูกค้าคอนเฟิร์มแล้ว · วันนี้") : fail(`แถววันนี้: ${t2.replace(/\n/g, " | ")}`);
+      t2.includes(`โดย ${aname}`) && !t1.includes(`โดย ${aname}`)
+        ? pass(`คอนเฟิร์มแล้วขึ้น "โดย ${aname}" · ใบที่ยังรอคอนเฟิร์มไม่มีชื่อ`) : fail("ชื่อคนคอนเฟิร์มในรายการไม่ถูก");
       (await rowText(page, none.code)).includes("ยังไม่นัด") ? pass("ใบที่ยังไม่มีวัน: ยังไม่นัด") : fail("ใบไม่มีวันไม่ขึ้นยังไม่นัด");
 
       await vis("วันนัดใกล้สุด").first().click();
@@ -100,6 +106,13 @@ const { setup } = require("./fixture");
       (await vis("เลยนัดมา 5 วัน").count()) > 0 && (await vis("รอลูกค้าคอนเฟิร์ม").count()) > 0 && (await vis("นัด").count()) > 0
         ? pass("มือถือ: การ์ดมีบรรทัดนัด + สถานะ + เลยนัด") : fail("การ์ดมือถือไม่มีบรรทัดนัด");
       await page.screenshot({ path: path.join(DIR, "appointment-card.png") });
+      await page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first().fill(today.code);
+      await page.waitForTimeout(2500);
+      (await vis(`คอนเฟิร์มโดย ${aname}`).count()) > 0 ? pass("การ์ดมือถือ: คอนเฟิร์มโดย …") : fail("การ์ดมือถือไม่บอกคนคอนเฟิร์ม");
+      await vis(today.code).last().click();
+      await page.waitForTimeout(3000);
+      (await vis(new RegExp(`^โดย ${aname} · `)).count()) > 0 ? pass("หน้าใบงาน: สถานะนัดบอกชื่อและเวลาที่คอนเฟิร์ม") : fail("หน้าใบงานไม่บอกคนคอนเฟิร์ม");
+      await page.screenshot({ path: path.join(DIR, "appointment-detail.png") });
       await page.close();
     }
   } catch (e) {

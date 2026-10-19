@@ -65,6 +65,8 @@ export interface WorkOrderRow {
   /** PENDING รอลูกค้าคอนเฟิร์ม · CONFIRMED · ADMIN_PICKED — ว่าง = ยังไม่ได้นัด */
   appointmentStatus?: string | null;
   appointmentStatusLabel?: string | null;
+  /** แอดมินที่คอนเฟิร์มนัดล่าสุด — มีเฉพาะนัดที่ตกลงแล้ว */
+  appointmentByName?: string | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
   partsExpectedAt?: string | null;
   /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
@@ -1227,6 +1229,12 @@ function Appointment({ row, inline }: { row: WorkOrderRow; inline?: boolean }) {
           <Text style={[styles.apptChipText, { color: tone.fg }]}>{row.appointmentStatusLabel}</Text>
         </View>
       ) : null}
+      {row.appointmentByName ? (
+        <Text style={styles.apptRel} numberOfLines={1}>
+          {inline ? "คอนเฟิร์มโดย " : "โดย "}
+          <Text style={styles.apptBy}>{row.appointmentByName}</Text>
+        </Text>
+      ) : null}
       {a.rel ? (
         <Text style={[styles.apptRel, a.rel.tone === "late" ? styles.apptLate : a.rel.tone === "today" ? styles.apptToday : null]}>
           {a.rel.text}
@@ -1592,6 +1600,7 @@ const styles = StyleSheet.create({
   apptChip: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 6 },
   apptChipText: { fontSize: 11, lineHeight: 17, fontWeight: "700" },
   apptRel: { fontSize: 11.5, lineHeight: 17, color: colors.textMuted },
+  apptBy: { fontWeight: "700", color: colors.roleAdmin },
   apptLate: { color: colors.dangerInk, fontWeight: "700" },
   apptToday: { color: colors.primaryInk, fontWeight: "700" },
   colStatus: { flex: 1.6, gap: 2 },

@@ -116,6 +116,8 @@ interface WorkOrder {
   scheduledTime: string | null;
   appointmentStatus: string | null;
   appointmentStatusLabel: string | null;
+  /** คนคอนเฟิร์มนัดกับลูกค้าล่าสุด (จากประวัติ) — มีเฉพาะนัดที่ตกลงแล้ว */
+  appointmentBy?: { name: string | null; at: string } | null;
   /** ผลตรวจหน้างาน — หัวหน้าภาคใช้ระบุอะไหล่รอบถัดไป */
   inspectedAt: string | null;
   inspectionNote: string | null;
@@ -1389,7 +1391,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           />
           <Row label="วันนัด" value={visitLabel(order)} />
           {order.appointmentStatusLabel ? (
-            <Row label="สถานะนัด" value={order.appointmentStatusLabel} />
+            <Row
+              label="สถานะนัด"
+              value={order.appointmentStatusLabel}
+              sub={
+                order.appointmentBy
+                  ? `โดย ${order.appointmentBy.name ?? "—"} · ${formatDateTime(order.appointmentBy.at)}`
+                  : undefined
+              }
+            />
           ) : null}
           <Row
             label="เปิดโดย"
@@ -4699,16 +4709,24 @@ function CloseThumb({ f, onPress, badge }: { f: Attachment; onPress: () => void;
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
+      {sub ? (
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.rowValue}>{value}</Text>
+          <Text style={styles.rowSub}>{sub}</Text>
+        </View>
+      ) : (
+        <Text style={styles.rowValue}>{value}</Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  rowSub: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: 1 },
   linkRow: {
     flexDirection: "row",
     flexWrap: "wrap",
