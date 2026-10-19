@@ -1,6 +1,6 @@
 // ทดสอบ: หน้าสรุปคอนเฟิร์มลูกค้า (จ่ายงานผ่านกลุ่มไลน์ช่าง) ด้วยบทบาทจริง — อ่านคลิปบอร์ดจริง
 //   รูปแบบข้อความ (ต.ค. 69): ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่นงาน · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด
-//   · อาการเต็มไม่ตัด · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่
+//   · ไม่มีอาการ · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่
 //   · การ์ดในเมนูรายงาน: แอดมินเห็น · ช่างไม่เห็น
 //   · เคสที่คอนเฟิร์มวันนี้แยกตามทีม · คัดลอกทั้งหมดได้ทุกเคส + เบอร์ร้าน + ไม่มีชื่อแอดมิน
 //   · คัดลอกทีมนี้ได้เฉพาะทีมนั้น · สลับ "นัดเข้างานวันที่" ไปวันที่ไม่มีนัด = ว่าง
@@ -35,8 +35,8 @@ const { setup } = require("./fixture");
       fx.sql(`update "WorkOrder" set status='ASSIGNED', "scheduledAt"='2026-12-10', "scheduledTime"='${t}', "appointmentStatus"='CONFIRMED', "assignedTeam"='${team}', "contactPhone"='081-111-222${wo.id % 10}' where id=${wo.id}`);
       fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note) values (${wo.id},${aid},'CONFIRMED','ASSIGNED','ทดสอบ')`);
     }
-    // a: อาการยาว (ต้องถูกตัด) · b: ไม่มีเบอร์ผู้ติดต่อ
-    fx.sql(`update "WorkOrder" set symptom='${"ก".repeat(30)} ${"ข".repeat(40)} ท้ายสุดต้องเห็นครบ' where id=${a.id}`);
+    // a: มีอาการ (ต้องไม่ติดไปในไลน์) · b: ไม่มีเบอร์ผู้ติดต่อ
+    fx.sql(`update "WorkOrder" set symptom='${"ก".repeat(30)} ${"ข".repeat(40)} ท้ายสุดไม่ต้องอยู่ในไลน์' where id=${a.id}`);
     fx.sql(`update "WorkOrder" set "contactPhone"=null, "contactName"=null where id=${b.id}`);
 
     const openAs = async (code) => {
@@ -75,9 +75,9 @@ const { setup } = require("./fixture");
       lines.includes("1) 09:00 น. | ซ่อม") && lines.includes("------------------------") &&
       lines.includes(`เลขที่ใบงาน: ${a.code}`) && lines.includes(`เลขที่ใบงาน: ${b.code}`) && lines.includes("รหัสสาขา: C0006") &&
       lines.includes("ผู้ติดต่อ: ไม่มีในใบงาน") && lines.includes("แผนที่: https://maps.google.com/?q=13.7563,100.5018") &&
-      lines.includes(`อาการ: ${"ก".repeat(30)} ${"ข".repeat(40)} ท้ายสุดต้องเห็นครบ`) && !all.includes("…") &&
+      !lines.some((l) => l.startsWith("อาการ")) && !all.includes("ท้ายสุด") &&
       !/\p{Extended_Pictographic}/u.test(all) && lines.every((l) => !l.startsWith(" ")) && !all.includes(aname)
-        ? pass("คัดลอกทุกทีม: ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่น · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด · อาการเต็มไม่ตัด · ไม่มีเบอร์บอกตรง ๆ · แผนที่ · ไม่ย่อหน้า · ไม่มีชื่อแอดมิน")
+        ? pass("คัดลอกทุกทีม: ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่น · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด · ไม่มีอาการ · ไม่มีเบอร์บอกตรง ๆ · แผนที่ · ไม่ย่อหน้า · ไม่มีชื่อแอดมิน")
         : fail(`คลิปบอร์ด: ${all.replace(/\n/g, " | ").slice(0, 400)}`);
       // ปุ่มที่สอง = คัดลอกทีมแรก
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").nth(1).click();

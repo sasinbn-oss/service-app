@@ -46,7 +46,8 @@ import {
   pickVideoAttachment,
   uploadAttachment,
   attachmentIcon,
-  pickPdfAttachment,
+  pickPdfAttachments,
+  pickImageAttachments,
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
 import { HomeStackParamList } from "../navigation/types";
@@ -2428,8 +2429,9 @@ function StageModal({
    */
   const [requisitionNo, setRequisitionNo] = useState("");
   const [team, setTeam] = useState<string | null>(null);
-  // เอกสารขั้นเสนอราคา — ใบเสนอราคา และบิลที่ลูกค้าจ่ายแล้ว
-  const [doc, setDoc] = useState<PickedAttachment | null>(null);
+  // เอกสารขั้นเสนอราคา — ใบเสนอราคา และบิลที่ลูกค้าจ่ายแล้ว · แนบได้หลายไฟล์
+  // (ใบเสนอราคาค่าอะไหล่กับค่าบริการแยกใบ, เอกสารหลายหน้าที่ถ่ายเป็นรูปทีละหน้า)
+  const [docs, setDocs] = useState<PickedAttachment[]>([]);
   const [skipQuote, setSkipQuote] = useState(false);
   // ขั้นรอเบิกอะไหล่: วันที่คาดว่าของที่หมดจะเข้า (ไม่บังคับ)
   const [expectedAt, setExpectedAt] = useState("");
@@ -2484,7 +2486,7 @@ function StageModal({
     // ทีมของสาขาเป็นค่าตั้งต้น เพราะเป็นทีมที่รับผิดชอบสาขานี้อยู่แล้ว
     // จ่ายข้ามทีมยังทำได้ แต่ต้องตั้งใจเลือก ไม่ใช่เผลอ
     setTeam(order.assignedTeam ?? order.suggestedTeam ?? null);
-    setDoc(null);
+    setDocs([]);
     setSkipQuote(false);
     setExpectedAt(order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : "");
     setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
@@ -2493,16 +2495,31 @@ function StageModal({
   }, [visible, order]);
 
   async function pickDoc(
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
   ) {
     setBusy("กำลังเตรียมไฟล์");
     try {
-      const file = await pick(setBusy);
-      if (file) setDoc(file);
+      const picked = await pick(setBusy);
+      // ต่อท้ายของเดิม ไม่ใช่แทนที่ — กดแนบอีกครั้งคือเพิ่มไฟล์
+      const files = picked === null ? [] : Array.isArray(picked) ? picked : [picked];
+      if (files.length) setDocs((prev) => [...prev, ...files]);
     } catch (e) {
       showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  /**
+   * ส่งไฟล์ทีละไฟล์ แล้วเอาออกจากรายการทันทีที่ขึ้นสำเร็จ
+   * ถ้าเน็ตหลุดกลางทาง กดบันทึกซ้ำจะส่งเฉพาะไฟล์ที่ยังไม่ขึ้น ไม่ใช่ซ้ำทั้งชุด
+   */
+  async function uploadDocs(role: "QUOTE" | "RECEIPT", label: string) {
+    const list = [...docs];
+    for (const [n, file] of list.entries()) {
+      setBusy(list.length > 1 ? `${label} ${n + 1}/${list.length}` : label);
+      await uploadAttachment(order.id, file, role);
+      setDocs((prev) => prev.filter((f) => f !== file));
     }
   }
 
@@ -2566,17 +2583,11 @@ function StageModal({
           await api.post(`/work-orders/${order.id}/quote`, { skip: true, note: note.trim() });
         } else {
           // เอกสารต้องขึ้นก่อนสั่งส่งต่อ เพราะเซิร์ฟเวอร์เช็คว่ามีแล้วหรือยัง
-          if (doc) {
-            setBusy("กำลังส่งใบเสนอราคา");
-            await uploadAttachment(order.id, doc, "QUOTE");
-          }
+          await uploadDocs("QUOTE", "กำลังส่งใบเสนอราคา");
           await api.post(`/work-orders/${order.id}/quote`, { note: note.trim() || undefined });
         }
       } else if (order.status === "AWAITING_PAYMENT") {
-        if (doc) {
-          setBusy("กำลังส่งบิล");
-          await uploadAttachment(order.id, doc, "RECEIPT");
-        }
+        await uploadDocs("RECEIPT", "กำลังส่งบิล");
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
       } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
@@ -2630,7 +2641,7 @@ function StageModal({
   // ขั้นเสนอราคาต้องมีเอกสาร เว้นแต่กดข้ามซึ่งต้องบอกเหตุผลแทน
   const quoteBlocked =
     order.status === "AWAITING_QUOTE" &&
-    (skipQuote ? !note.trim() : !doc && !order.hasQuote);
+    (skipQuote ? !note.trim() : docs.length === 0 && !order.hasQuote);
   // ขั้นรอเบิกอะไหล่ต้องตอบครบทุกตัวที่ยังไม่ได้เบิก — ตอบบางตัวแล้วไปเสนอราคา คือเสนอราคาของที่ยังไม่รู้ว่ามี
   // (ตัวที่เบิกไปแล้วรอบก่อน ลูกค้าจ่ายไปแล้ว ไม่ต้องเช็คและเสนอราคาซ้ำ)
   const sourcingOut = order.status === "PARTS_SOURCING" ? thisRound.filter((p) => checks[p.sparePartId]?.inStock === false) : [];
@@ -2639,7 +2650,7 @@ function StageModal({
     (thisRound.some((p) => typeof checks[p.sparePartId]?.inStock !== "boolean") ||
       (expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt)));
   const paymentBlocked =
-    order.status === "AWAITING_PAYMENT" && !doc && !order.hasReceipt;
+    order.status === "AWAITING_PAYMENT" && docs.length === 0 && !order.hasReceipt;
 
   /**
    * มีบางตัว หมดบางตัว — ถึงจะถามเรื่องแยกใบ ของครบหรือหมดทุกตัวไม่มีอะไรให้แยก
@@ -3049,10 +3060,11 @@ function StageModal({
                       {order.status === "AWAITING_QUOTE" ? "ใบเสนอราคา" : "บิลที่ลูกค้าจ่ายแล้ว"}
                     </Text>
                     {(order.status === "AWAITING_QUOTE" ? order.hasQuote : order.hasReceipt) &&
-                    !doc ? (
-                      <Text style={styles.linkedText}>แนบไว้แล้ว — แนบใหม่ได้ถ้าออกเอกสารใหม่</Text>
+                    docs.length === 0 ? (
+                      <Text style={styles.linkedText}>แนบไว้แล้ว — แนบเพิ่มได้ถ้ามีเอกสารอีก</Text>
                     ) : null}
-                    <FileStrip files={doc ? [doc] : []} onChange={(n) => setDoc(n[0] ?? null)} />
+                    <FileStrip files={docs} onChange={setDocs} />
+                    {docs.length > 1 ? <Text style={styles.linkedText}>{docs.length} ไฟล์ — กดแนบอีกเพื่อเพิ่ม</Text> : null}
                     {busy ? (
                       <View style={styles.slipRow}>
                         <Spinner color={colors.primary} size="small" />
@@ -3073,14 +3085,14 @@ function StageModal({
                         ) : null}
                         <TouchableOpacity
                           style={styles.option}
-                          onPress={() => pickDoc((stage) => pickImageAttachment(false, stage))}
+                          onPress={() => pickDoc((stage) => pickImageAttachments(stage))}
                           activeOpacity={0.7}
                         >
                           <Text style={styles.optionText}>เลือกรูป</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.option}
-                          onPress={() => pickDoc(() => pickPdfAttachment())}
+                          onPress={() => pickDoc(() => pickPdfAttachments())}
                           activeOpacity={0.7}
                         >
                           <Text style={styles.optionText}>แนบไฟล์ PDF</Text>
