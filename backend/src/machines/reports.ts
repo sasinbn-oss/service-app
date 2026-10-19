@@ -382,7 +382,8 @@ export async function monthlyReport(opts: { months?: number } = {}) {
 export async function partsReport() {
   const now = new Date();
   const rows = await prisma.outagePart.findMany({
-    where: { outage: { endedAt: null } },
+    // ของนอกสโตร์ไม่ได้สั่งเข้าคลัง แอดมินซื้อเป็นรายใบงาน — นับรวมแล้วฝ่ายจัดซื้อจะสั่งของที่ไม่มีรหัส
+    where: { outage: { endedAt: null }, sparePart: { offCatalog: false } },
     include: {
       sparePart: { select: { id: true, partCode: true, name: true, brand: true } },
       outage: {

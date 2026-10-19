@@ -721,6 +721,9 @@ export function needsCustomerQuote(opts: {
   return isWarrantyExpired(end, opts.now) !== false;
 }
 
+/** partCode ของอะไหล่นอกสโตร์ (ไม่มี SKU) — ดู resolveOffParts ใน routes/workOrders.ts */
+export const OFF_CATALOG_PREFIX = "[นอกสโตร์] ";
+
 export function workOrderCode(id: number): string {
   return `WO-${String(id).padStart(5, "0")}`;
 }

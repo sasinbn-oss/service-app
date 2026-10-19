@@ -53,6 +53,7 @@ import {
   ROLE_LABELS,
   WORK_ORDER_STAGE_ACTOR,
   WORK_ORDER_STAGE_ORDER,
+  OFF_CATALOG_PREFIX,
   bangkokDay,
   canActOnStage,
   WORK_STATUSES,
@@ -110,7 +111,7 @@ const detailInclude = {
   closedBy: { select: { id: true, name: true } },
   outage: { select: { id: true, kind: true, startedAt: true, endedAt: true } },
   parts: {
-    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true } } },
+    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true, offCatalog: true } } },
     orderBy: { id: "asc" },
   },
   // นับอย่างเดียว ไม่ดึงรูปย่อมาด้วย เพราะรายการใบงานมีเป็นร้อยใบ
@@ -216,20 +217,65 @@ async function syncOutageFromWorkOrder(
   });
 }
 
+/** อะไหล่หนึ่งรายการของใบงาน — unit/note มีเฉพาะของนอกสโตร์ */
+type PartLine = { sparePartId: number; quantity: number; unit?: string | null; note?: string | null };
+
+/** ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error · หน่วย/หมายเหตุใช้ของแถวแรกที่ใส่มา */
+function mergeLines(parts: PartLine[]) {
+  const merged = new Map<number, { quantity: number; unit: string | null; note: string | null }>();
+  for (const p of parts) {
+    const was = merged.get(p.sparePartId);
+    merged.set(p.sparePartId, {
+      quantity: (was?.quantity ?? 0) + p.quantity,
+      unit: was?.unit ?? p.unit ?? null,
+      note: was?.note ?? p.note ?? null,
+    });
+  }
+  return merged;
+}
+
+/**
+ * อะไหล่นอกสโตร์ (ไม่มี SKU — เจ้าของงานขอ ต.ค. 69) ที่พิมพ์ชื่อมา → แถวใน SparePart ที่ติดป้าย offCatalog
+ *
+ * ทำเป็นแถวในตารางเดียวกับของในสโตร์ ไม่ใช่ตารางแยก เพราะทุกขั้นหลังจากนี้ (เช็คมี/หมด แยกใบรออะไหล่
+ * ปิดงานด้วยของที่ใช้จริง เคลม) อ้างอะไหล่ด้วย sparePartId ทั้งหมด — ตารางแยกต้องเขียนทุกขั้นสองทาง
+ * ชื่อเดียวกันคือแถวเดียวกัน (partCode = OFF_CATALOG_PREFIX + ชื่อ) จึงนับได้ว่าของนอกสโตร์ตัวไหนใช้บ่อยจนควรเปิด SKU
+ * partCode ขึ้นต้นด้วยป้ายไว้ให้ทุกที่ที่โชว์ partCode (สรุปบนกระดาน ประวัติ รายงาน) อ่านออกโดยไม่ต้องแก้
+ */
+const offPartInput = z.object({
+  name: z.string().trim().min(1, "อะไหล่นอกสโตร์ต้องมีชื่อ").max(120),
+  quantity: z.number().int().min(1).max(999).default(1),
+  unit: z.string().trim().max(20).nullable().optional(),
+  note: z.string().trim().max(300).nullable().optional(),
+});
+async function resolveOffParts(items: z.infer<typeof offPartInput>[] | undefined): Promise<PartLine[]> {
+  const out: PartLine[] = [];
+  for (const it of items ?? []) {
+    const name = it.name.replace(/\s+/g, " ").trim();
+    const partCode = `${OFF_CATALOG_PREFIX}${name}`;
+    const sp = await prisma.sparePart.upsert({
+      where: { partCode },
+      create: { partCode, name, offCatalog: true },
+      update: {},
+      select: { id: true },
+    });
+    out.push({ sparePartId: sp.id, quantity: it.quantity, unit: it.unit || null, note: it.note || null });
+  }
+  return out;
+}
+
 /** แทนที่อะไหล่ของใบงานทั้งชุดเฉพาะประเภทที่ระบุ ไม่แตะอีกประเภท */
 async function replaceParts(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   workOrderId: number,
   kind: "WAITING" | "USED",
-  parts: { sparePartId: number; quantity: number }[]
+  parts: PartLine[]
 ) {
   await tx.workOrderPart.deleteMany({ where: { workOrderId, kind } });
-  // ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error
-  const merged = new Map<number, number>();
-  for (const p of parts) merged.set(p.sparePartId, (merged.get(p.sparePartId) ?? 0) + p.quantity);
+  const merged = mergeLines(parts);
   if (merged.size === 0) return;
   await tx.workOrderPart.createMany({
-    data: [...merged].map(([sparePartId, quantity]) => ({ workOrderId, sparePartId, quantity, kind })),
+    data: [...merged].map(([sparePartId, p]) => ({ workOrderId, sparePartId, kind, ...p })),
   });
 }
 
@@ -246,10 +292,9 @@ async function replaceParts(
 async function mergeWaitingParts(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   workOrderId: number,
-  parts: { sparePartId: number; quantity: number }[]
+  parts: PartLine[]
 ) {
-  const merged = new Map<number, number>();
-  for (const p of parts) merged.set(p.sparePartId, (merged.get(p.sparePartId) ?? 0) + p.quantity);
+  const merged = mergeLines(parts);
   const current = await tx.workOrderPart.findMany({ where: { workOrderId, kind: "WAITING" } });
   const kept = new Set<number>();
   for (const row of current) {
@@ -258,18 +303,21 @@ async function mergeWaitingParts(
       await tx.workOrderPart.delete({ where: { id: row.id } });
     } else {
       kept.add(row.sparePartId);
-      if (want !== row.quantity) {
+      if (want.quantity !== row.quantity) {
         await tx.workOrderPart.update({
           where: { id: row.id },
-          data: { quantity: want, inStock: null, warehouse: null, requisitionNo: null, checkedAt: null, checkedById: null },
+          data: { ...want, inStock: null, warehouse: null, requisitionNo: null, checkedAt: null, checkedById: null },
         });
+      } else if (want.unit !== row.unit || want.note !== row.note) {
+        // แก้แค่หน่วย/หมายเหตุ ไม่ใช่ของคนละชิ้น — ผลเช็คเดิมยังใช้ได้
+        await tx.workOrderPart.update({ where: { id: row.id }, data: { unit: want.unit, note: want.note } });
       }
     }
   }
   const fresh = [...merged].filter(([sparePartId]) => !kept.has(sparePartId));
   if (fresh.length) {
     await tx.workOrderPart.createMany({
-      data: fresh.map(([sparePartId, quantity]) => ({ workOrderId, sparePartId, quantity, kind: "WAITING" })),
+      data: fresh.map(([sparePartId, p]) => ({ workOrderId, sparePartId, kind: "WAITING", ...p })),
     });
   }
 }
@@ -660,13 +708,19 @@ function partShape(p: {
   inStock?: boolean | null;
   warehouse?: string | null;
   requisitionNo?: string | null;
-  sparePart: { id: number; partCode: string; name: string; brand: string | null };
+  unit?: string | null;
+  note?: string | null;
+  sparePart: { id: number; partCode: string; name: string; brand: string | null; offCatalog?: boolean };
 }) {
   return {
     sparePartId: p.sparePart.id,
     partCode: p.sparePart.partCode,
     name: p.sparePart.name,
     brand: p.sparePart.brand,
+    // ของนอกสโตร์ — หน้าจอโชว์ชื่อ + ป้าย แทนรหัส และไม่ถามคลัง/เลขใบเบิก
+    offCatalog: p.sparePart.offCatalog ?? false,
+    unit: p.unit ?? null,
+    note: p.note ?? null,
     quantity: p.quantity,
     // ว่าง = ยังไม่มีใครเช็ค ต่างจาก false ที่แปลว่าเช็คแล้วและหมด
     inStock: p.inStock ?? null,
@@ -1787,6 +1841,8 @@ const partsSchema = z.object({
     )
     .max(20)
     .optional(),
+  // อะไหล่นอกสโตร์ที่พิมพ์ชื่อเอง — ไม่มี SKU (ดู resolveOffParts) · มีแต่ของนอกสโตร์อย่างเดียวก็ได้
+  offParts: z.array(offPartInput).max(20).optional(),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -1797,10 +1853,12 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!(await guardStage(req, res, id, "NEW"))) return;
 
-  const { needsParts, parts, note } = parsed.data;
-  if (needsParts && (!parts || parts.length === 0)) {
+  const { needsParts, note } = parsed.data;
+  if (needsParts && !parsed.data.parts?.length && !parsed.data.offParts?.length) {
     return res.status(400).json({ error: "บอกว่าต้องใช้อะไหล่ ต้องระบุอย่างน้อยหนึ่งรายการ" });
   }
+  // รวมเป็นรายการเดียวกันตั้งแต่ตรงนี้ — ข้างล่างไม่ต้องรู้ว่าตัวไหนมี SKU
+  const parts: PartLine[] = needsParts ? [...(parsed.data.parts ?? []), ...(await resolveOffParts(parsed.data.offParts))] : [];
 
   /**
    * ตัดสินตั้งแต่ตรงนี้ว่าต้องเสนอราคาก่อนไหม
@@ -1836,7 +1894,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   });
   const allIssued =
     !!needsParts &&
-    parts!.every((p) => {
+    parts.every((p) => {
       const was = before.find((b) => b.sparePartId === p.sparePartId);
       return !!was && was.quantity === p.quantity && isIssued(was);
     });
@@ -1846,7 +1904,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
 
   await prisma.$transaction(async (tx) => {
     // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
-    await mergeWaitingParts(tx, id, needsParts ? parts! : []);
+    await mergeWaitingParts(tx, id, parts);
     await tx.workOrder.update({
       where: { id },
       data: {
@@ -1993,8 +2051,10 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
 
   const waiting = await prisma.workOrderPart.findMany({
     where: { workOrderId: id, kind: "WAITING" },
-    select: { sparePartId: true, inStock: true, requisitionNo: true, quantity: true },
+    select: { sparePartId: true, inStock: true, requisitionNo: true, quantity: true, unit: true, note: true, sparePart: { select: { offCatalog: true } } },
   });
+  // ของนอกสโตร์ไม่ได้ออกจากคลัง — "มี" แปลว่าแอดมินจัดหาได้แล้ว ไม่มีคลังหรือใบเบิกให้ใส่
+  const offIds = new Set(waiting.filter((w) => w.sparePart.offCatalog).map((w) => w.sparePartId));
 
   /**
    * ตัวที่เบิกออกมาแล้วไม่ต้องตอบซ้ำ
@@ -2014,6 +2074,7 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ต้องเช็คให้ครบทุกรายการก่อนจึงจะไปขั้นต่อไปได้" });
   }
   for (const r of parsed.data.results) {
+    if (offIds.has(r.sparePartId)) continue;
     if (r.inStock && !r.warehouse) {
       return res.status(400).json({ error: "ของที่มีอยู่ ต้องระบุด้วยว่าอยู่คลังไหน" });
     }
@@ -2066,9 +2127,9 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         where: { workOrderId: id, kind: "WAITING", sparePartId: r.sparePartId },
         data: {
           inStock: r.inStock,
-          warehouse: r.inStock ? r.warehouse ?? null : null,
-          // ของที่หมดยังไม่ได้เบิก เลขใบเบิกที่ค้างจากรอบก่อนต้องถูกล้าง
-          requisitionNo: r.inStock ? r.requisitionNo?.trim() || null : null,
+          warehouse: r.inStock && !offIds.has(r.sparePartId) ? r.warehouse ?? null : null,
+          // ของที่หมดยังไม่ได้เบิก เลขใบเบิกที่ค้างจากรอบก่อนต้องถูกล้าง · ของนอกสโตร์ไม่มีใบเบิก
+          requisitionNo: r.inStock && !offIds.has(r.sparePartId) ? r.requisitionNo?.trim() || null : null,
           checkedAt: now,
           checkedById: req.auth!.userId,
         },
@@ -3172,8 +3233,17 @@ const closeSchema = z.object({
   result: z.enum(WORK_ORDER_RESULTS),
   note: z.string().optional(),
   parts: z
-    .array(z.object({ sparePartId: z.number().int(), quantity: z.number().int().min(1) }))
+    .array(
+      z.object({
+        sparePartId: z.number().int(),
+        quantity: z.number().int().min(1),
+        unit: z.string().trim().max(20).nullable().optional(),
+        note: z.string().trim().max(300).nullable().optional(),
+      })
+    )
     .optional(),
+  // ของนอกสโตร์ที่ช่างซื้อ/ใช้หน้างานเอง พิมพ์ชื่อมา (เจ้าของงานเลือก ต.ค. 69) — ไม่ต้องมีใบเบิก
+  offParts: z.array(offPartInput).max(20).optional(),
   // คนที่เข้าไปทำจริง — จำเป็นเพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
   // ถ้าไม่เก็บ จะไม่มีทางรู้ย้อนหลังว่าใครไปสาขาไหนวันไหน
   //
@@ -3312,7 +3382,20 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * ตรวจที่เซิร์ฟเวอร์ ไม่ใช่แค่ที่หน้าจอ เพราะใบเหลืองคือหลักฐานว่าของที่หายไป
    * จากคลังไปอยู่ที่เครื่องไหนจริง
    */
-  if ((body.parts?.length ?? 0) > 0) {
+  const usedLines: PartLine[] | undefined =
+    body.parts === undefined && body.offParts === undefined
+      ? undefined
+      : [...(body.parts ?? []), ...(await resolveOffParts(body.offParts))];
+  const offUsed = new Set(
+    (
+      await prisma.sparePart.findMany({
+        where: { id: { in: (usedLines ?? []).map((p) => p.sparePartId) }, offCatalog: true },
+        select: { id: true },
+      })
+    ).map((x) => x.id)
+  );
+  // ใบเหลืองคือเอกสารของที่ออกจากคลัง — ของนอกสโตร์ไม่ได้ออกจากคลัง ใช้แต่ของนอกสโตร์จึงไม่ต้องแนบ
+  if ((usedLines ?? []).some((p) => !offUsed.has(p.sparePartId))) {
     const slip = await prisma.workOrderAttachment.count({
       where: { workOrderId: id, role: "REQUISITION", createdAt: { gte: roundStart } },
     });
@@ -3347,7 +3430,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         machine: { select: { code: true, brand: true, model: true } },
       },
     });
-    const used = new Map((body.parts ?? []).map((p) => [p.sparePartId, p.quantity]));
+    const used = new Map((usedLines ?? []).map((p) => [p.sparePartId, p.quantity]));
     const spares = await prisma.sparePart.findMany({
       where: { id: { in: claimInputs.map((c) => c.sparePartId) } },
       select: { id: true, partCode: true, name: true },
@@ -3440,7 +3523,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     }
 
     // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
-    if (body.parts !== undefined) await replaceParts(tx, id, "USED", body.parts);
+    if (usedLines !== undefined) await replaceParts(tx, id, "USED", usedLines);
 
     if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows });
 

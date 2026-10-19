@@ -48,6 +48,10 @@ export const colors = {
   doneBand: "#3E6B56",
   doneSoft: "#F2F7F4",
   doneLine: "#D6E6DD",
+  // อะไหล่นอกสโตร์ (ไม่มี SKU) — ส้มอิฐ ต่างจากเหลือง "รอคนนอก" ให้แยกออกว่าเป็นของคนละประเภท ไม่ใช่สถานะ
+  offPart: "#B45309",
+  offPartSoft: "#FFF4E5",
+  offPartLine: "#F5C98B",
   background: "#F4F9FD",
   card: "#FFFFFF",
   border: "#E2E8F0",
