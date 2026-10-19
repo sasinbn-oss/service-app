@@ -11,7 +11,7 @@ type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
 interface Entry {
   /** byOpener/system มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
-  kind: ReportKind | "byOpener" | "system";
+  kind: ReportKind | "byOpener" | "system" | "confirmed";
   /** เฉพาะแอดมิน/หัวหน้าภาค — ช่างเปิดแล้วเซิร์ฟเวอร์ปฏิเสธ ไม่ควรเห็นการ์ดตั้งแต่แรก */
   managersOnly?: boolean;
   /** เฉพาะแอดมิน — รายงานทั้งระบบมีข้อมูลทั้งบริษัทรวมเบอร์โทรพนักงาน */
@@ -66,6 +66,16 @@ const ENTRIES: Entry[] = [
     managersOnly: true,
   },
   {
+    kind: "confirmed",
+    label: "สรุปคอนเฟิร์มลูกค้า",
+    who: "แอดมิน · หัวหน้าภาค → กลุ่มไลน์ช่าง",
+    question: "วันนี้คอนเฟิร์มเคสไหนไปแล้วบ้าง",
+    icon: "megaphone-outline",
+    tint: colors.successSoft,
+    iconColor: colors.successInk,
+    managersOnly: true,
+  },
+  {
     kind: "system",
     label: "รายงานทั้งระบบ",
     who: "แอดมิน",
@@ -106,6 +116,8 @@ export default function ReportsMenuScreen({ navigation }: Props) {
               ? navigation.navigate("OpenerReport")
               : entry.kind === "system"
               ? navigation.navigate("SystemReport")
+              : entry.kind === "confirmed"
+              ? navigation.navigate("ConfirmedReport")
               : navigation.navigate("Report", { kind: entry.kind, title: entry.label })
           }
         >

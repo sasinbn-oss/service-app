@@ -12,7 +12,7 @@ import { showAlert } from "../utils/alert";
 import { customerMessage, MessageOrder } from "../utils/customerMessage";
 import { colors, radius, spacing } from "../theme";
 
-function CopyButton({ text, label = "คัดลอก" }: { text: string; label?: string }) {
+export function CopyButton({ text, label = "คัดลอก" }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
   async function copy() {
     try {

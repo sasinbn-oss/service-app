@@ -1083,6 +1083,94 @@ router.get("/reports/by-opener", requireAuth, async (req: AuthRequest, res) => {
   res.json({ filename: stored.filename, path: documentPath(stored) });
 });
 
+/**
+ * สรุปเคสที่คอนเฟิร์มลูกค้าแล้ว — แอดมินคัดลอกส่งกลุ่มไลน์ช่าง (เจ้าของงานขอ ต.ค. 69)
+ *
+ * by=confirm (ค่าเริ่มต้น): เคสที่คอนเฟิร์ม/เลื่อนนัดครั้งล่าสุดในวันนั้น (ตามประวัติ · วันตามเวลาไทย)
+ *   ครั้งล่าสุดเท่านั้น — เคสที่คอนเฟิร์มเมื่อวานแล้ววันนี้ลูกค้าขอเลื่อน ต้องขึ้นในสรุปวันนี้ ไม่ใช่สองวัน
+ * by=visit: คิวที่นัดเข้างานวันนั้น
+ * นับเฉพาะนัดที่ยังตกลงอยู่ (appointmentStatus) และใบที่ไม่ถูกยกเลิก — ย้อนขั้นหลังคอนเฟิร์ม นัดกลับเป็นรอ ไม่ขึ้นเอง
+ * หัวหน้าภาคเห็นเฉพาะภาค/ทีมที่ดูแล เหมือนรายงานอื่น
+ */
+const confirmedQuery = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่ไม่ถูกต้อง"),
+  by: z.enum(["confirm", "visit"]).default("confirm"),
+});
+
+router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "รายงานนี้สำหรับแอดมินและหัวหน้าภาค" });
+  }
+  const parsed = confirmedQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { date, by } = parsed.data;
+  const dayStart = bkkDayStart(date);
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+  const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : {};
+
+  const orders = await prisma.workOrder.findMany({
+    where: {
+      AND: [scope],
+      isTest: false,
+      status: { not: "CANCELLED" },
+      appointmentStatus: { in: APPOINTMENT_DONE },
+      scheduledAt: { not: null },
+      ...(by === "visit" ? { scheduledAt: { gte: new Date(`${date}T00:00:00.000Z`), lt: new Date(`${date}T23:59:59.999Z`) } } : {}),
+    },
+    select: {
+      id: true, code: true, status: true, assignedTeam: true, scheduledAt: true, scheduledTime: true,
+      symptom: true, contactName: true, contactPhone: true,
+      branch: { select: { code: true, name: true, zone: true } },
+      machine: { select: { code: true } },
+    },
+  });
+  // คนคอนเฟิร์มล่าสุดของแต่ละใบ (และเวลา) — ไม่นับแถวที่ปิดงานย้อนหลังสร้าง (ดู APPOINTMENT_BY_ACTIONS)
+  const confirms = orders.length
+    ? await prisma.workOrderLog.findMany({
+        where: { workOrderId: { in: orders.map((o) => o.id) }, action: { in: APPOINTMENT_BY_ACTIONS }, backfilledAt: null },
+        orderBy: { createdAt: "desc" },
+        distinct: ["workOrderId"],
+        select: { workOrderId: true, createdAt: true, status: true, user: { select: { name: true } } },
+      })
+    : [];
+  const last = new Map(confirms.map((c) => [c.workOrderId, c]));
+  const inspectStages = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING"];
+  const rows = orders
+    .map((o) => {
+      const c = last.get(o.id);
+      return {
+        id: o.id,
+        code: o.code,
+        // งานตรวจ: ยังอยู่ขั้นตรวจ หรือคอนเฟิร์มแล้วส่งต่อไปขั้นตรวจ (ใบที่ตรวจเสร็จกลับไประบุอะไหล่แล้วนับเป็นซ่อม)
+        kind: inspectStages.includes(o.status) ? ("INSPECT" as const) : ("REPAIR" as const),
+        team: o.assignedTeam ?? o.branch.zone ?? null,
+        scheduledAt: o.scheduledAt!.toISOString().slice(0, 10),
+        scheduledTime: o.scheduledTime,
+        branchCode: o.branch.code,
+        branchName: o.branch.name,
+        machineCode: o.machine?.code ?? null,
+        // บรรทัดแรก — บรรทัดสาเหตุ/แก้ไขเป็นเรื่องภายใน (เหมือนข้อความแจ้งลูกค้า)
+        symptom: (o.symptom ?? "").split("\n")[0].trim() || null,
+        contactName: o.contactName,
+        contactPhone: o.contactPhone,
+        status: o.status,
+        statusLabel: WORK_ORDER_STATUS_LABELS[o.status] ?? o.status,
+        confirmedBy: c?.user?.name ?? null,
+        confirmedAt: c?.createdAt ?? null,
+      };
+    })
+    .filter((r) => by === "visit" || (r.confirmedAt && r.confirmedAt >= dayStart && r.confirmedAt < dayEnd))
+    .sort(
+      (a, b) =>
+        (a.team ?? "~").localeCompare(b.team ?? "~", "th") ||
+        a.scheduledAt.localeCompare(b.scheduledAt) ||
+        (a.scheduledTime ?? "99:99").localeCompare(b.scheduledTime ?? "99:99") ||
+        a.code.localeCompare(b.code)
+    );
+  res.json({ date, by, rows });
+});
+
 router.get("/options", requireAuth, async (_req, res) => {
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
