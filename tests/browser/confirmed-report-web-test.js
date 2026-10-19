@@ -1,5 +1,6 @@
 // ทดสอบ: หน้าสรุปคอนเฟิร์มลูกค้า (จ่ายงานผ่านกลุ่มไลน์ช่าง) ด้วยบทบาทจริง — อ่านคลิปบอร์ดจริง
-//   รูปแบบข้อความ (ออกแบบใหม่ ต.ค. 69): หัวคิวงาน+ทีม · เส้นคั่นงาน · อาการตัด … · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่
+//   รูปแบบข้อความ (ต.ค. 69): ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่นงาน · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด
+//   · อาการตัด … · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่
 //   · การ์ดในเมนูรายงาน: แอดมินเห็น · ช่างไม่เห็น
 //   · เคสที่คอนเฟิร์มวันนี้แยกตามทีม · คัดลอกทั้งหมดได้ทุกเคส + เบอร์ร้าน + ไม่มีชื่อแอดมิน
 //   · คัดลอกทีมนี้ได้เฉพาะทีมนั้น · สลับ "นัดเข้างานวันที่" ไปวันที่ไม่มีนัด = ว่าง
@@ -70,12 +71,13 @@ const { setup } = require("./fixture");
       await page.waitForTimeout(500);
       const all = await clip(page);
       const lines = all.split("\n");
-      all.startsWith("📢 คิวงานช่าง พฤ. 10 ธ.ค. 69") && all.includes(a.code) && all.includes(b.code) &&
-      lines.includes(`👷 ${teamA} · 1 งาน`) && lines.includes("1) ⏰ 09:00 น. · 🔧 ซ่อม") && lines.includes("━━━━━━━━━━━━") &&
-      lines.includes("📞 ไม่มีในใบงาน") && lines.includes("📍 https://maps.google.com/?q=13.7563,100.5018") &&
-      lines.some((l) => l.startsWith("⚠️ ") && l.endsWith("…")) && !all.includes("ท้ายสุดต้องไม่เห็น") &&
-      lines.every((l) => !l.startsWith(" ")) && !all.includes(aname)
-        ? pass("คัดลอกทุกทีม: หัวคิวงาน+ทีม · เส้นคั่น · เวลา+ประเภท · อาการตัด … · ไม่มีเบอร์บอกตรง ๆ · แผนที่ · ไม่ย่อหน้า · ไม่มีชื่อแอดมิน")
+      all.startsWith("คิวงานช่าง พฤ. 10 ธ.ค. 69") && lines.includes(`ทีม: ${teamA} (1 งาน)`) &&
+      lines.includes("1) 09:00 น. | ซ่อม") && lines.includes("------------------------") &&
+      lines.includes(`เลขที่ใบงาน: ${a.code}`) && lines.includes(`เลขที่ใบงาน: ${b.code}`) && lines.includes("รหัสสาขา: C0006") &&
+      lines.includes("ผู้ติดต่อ: ไม่มีในใบงาน") && lines.includes("แผนที่: https://maps.google.com/?q=13.7563,100.5018") &&
+      lines.some((l) => l.startsWith("อาการ: ") && l.endsWith("…")) && !all.includes("ท้ายสุดต้องไม่เห็น") &&
+      !/\p{Extended_Pictographic}/u.test(all) && lines.every((l) => !l.startsWith(" ")) && !all.includes(aname)
+        ? pass("คัดลอกทุกทีม: ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่น · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด · อาการตัด … · ไม่มีเบอร์บอกตรง ๆ · แผนที่ · ไม่ย่อหน้า · ไม่มีชื่อแอดมิน")
         : fail(`คลิปบอร์ด: ${all.replace(/\n/g, " | ").slice(0, 400)}`);
       // ปุ่มที่สอง = คัดลอกทีมแรก
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").nth(1).click();
@@ -83,7 +85,7 @@ const { setup } = require("./fixture");
       const one = await clip(page);
       const first = [teamA, teamB].sort((x, y) => x.localeCompare(y, "th"))[0];
       const other = first === teamA ? b.code : a.code;
-      one.includes(`👷 ${first}`) && !one.includes(other)
+      one.includes(`ทีม: ${first}`) && !one.includes(other)
         ? pass("คัดลอกทีมนี้: ได้เฉพาะเคสของทีมนั้น") : fail(`คัดลอกทีม: ${one.replace(/\n/g, " | ").slice(0, 200)}`);
       // ปุ่มแยกตามผู้คอนเฟิร์ม — ใบ b ให้คนอื่น (S001) เป็นคนคอนเฟิร์ม แล้วกดปุ่มชื่อแอดมิน
       const sname = fx.sql(`select name from "User" where "employeeCode"='S001'`);
