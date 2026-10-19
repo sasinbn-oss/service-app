@@ -588,6 +588,7 @@ const listSelect = {
   scheduledAt: true,
   partsExpectedAt: true,
   scheduledTime: true,
+  appointmentStatus: true,
   parentId: true,
   createdAt: true,
   closedAt: true,
@@ -691,6 +692,9 @@ function listShape(
     assignedToName: w.assignedTo?.name ?? null,
     scheduledAt: w.scheduledAt,
     scheduledTime: w.scheduledTime,
+    // สถานะนัดในรายการ (เจ้าของงานขอ ต.ค. 69) — ป้ายเดียวกับหน้าใบงาน
+    appointmentStatus: w.appointmentStatus,
+    appointmentStatusLabel: w.appointmentStatus ? APPOINTMENT_STATUS_LABELS[w.appointmentStatus] ?? w.appointmentStatus : null,
     partsExpectedAt: w.partsExpectedAt,
     partsOut: PARTS_OUT_STAGES.has(w.status) ? w._count.parts : 0,
     // ใบรออะไหล่ที่แยกมาจากใบอื่น — รายการขึ้นป้ายให้รู้ว่าเป็นงานต่อเนื่อง

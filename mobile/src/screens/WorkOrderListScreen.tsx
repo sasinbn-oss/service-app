@@ -38,6 +38,7 @@ import { useDebounced } from "../utils/useDebounced";
 import { useAuth } from "../context/AuthContext";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
+import { thaiDate, todayBkk } from "../components/DateField";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -60,6 +61,10 @@ export interface WorkOrderRow {
   /** ช่างรายคน — ใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
   assignedToName: string | null;
   scheduledAt: string | null;
+  scheduledTime?: string | null;
+  /** PENDING รอลูกค้าคอนเฟิร์ม · CONFIRMED · ADMIN_PICKED — ว่าง = ยังไม่ได้นัด */
+  appointmentStatus?: string | null;
+  appointmentStatusLabel?: string | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
   partsExpectedAt?: string | null;
   /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
@@ -92,7 +97,7 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
 type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
 type ListData = { rows: WorkOrderRow[]; counts: Record<string, number> };
-type Sort = "urgent" | "new" | "old" | "az" | "za";
+type Sort = "urgent" | "new" | "old" | "az" | "za" | "appt";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
   { value: "ADMIN", label: "แอดมิน", color: colors.roleAdmin },
@@ -112,7 +117,47 @@ const SORTS: { value: Sort; label: string }[] = [
   { value: "old", label: "ค้างนานสุด" },
   { value: "az", label: "สาขา A→Z" },
   { value: "za", label: "สาขา Z→A" },
+  // นัดใกล้สุดก่อน (เลยนัดขึ้นบนสุด) · ใบที่ยังไม่นัดไปท้าย — เจ้าของงานขอ ต.ค. 69
+  { value: "appt", label: "วันนัดใกล้สุด" },
 ];
+
+/**
+ * วันนัดในรายการ (เจ้าของงานขอ ต.ค. 69) — วัน+เวลาแบบเดียวกับหน้าใบงาน · สถานะนัด · ห่างจากวันนี้กี่วัน
+ * "เลยนัด" นับเฉพาะใบที่ยังไม่ปิด: นัดผ่านไปแล้วแต่ใบยังค้าง = นัดแล้วไม่ได้ไป หรือไปแล้วไม่ได้กดในแอป
+ */
+function apptOf(r: WorkOrderRow) {
+  if (!r.scheduledAt) return null;
+  const ymd = r.scheduledAt.slice(0, 10);
+  const days = Math.round((Date.parse(ymd) - Date.parse(todayBkk())) / 86_400_000);
+  const open = r.stageActor !== null;
+  const rel = !open
+    ? null
+    : days < 0
+    ? { text: `เลยนัดมา ${-days} วัน`, tone: "late" as const }
+    : days === 0
+    ? { text: "วันนี้", tone: "today" as const }
+    : days === 1
+    ? { text: "พรุ่งนี้", tone: "today" as const }
+    : { text: `อีก ${days} วัน`, tone: "later" as const };
+  return { ymd, days, open, date: thaiDate(ymd), time: r.scheduledTime ? `${r.scheduledTime}\u00A0น.` : null, rel };
+}
+
+/** ช่วงที่ใช้กรองหัวคอลัมน์ "วันนัด" — วันที่ทีละวันกรองไม่มีประโยชน์ คนถามเป็นช่วง */
+function apptBucket(r: WorkOrderRow) {
+  const a = apptOf(r);
+  if (!a) return "ยังไม่นัด";
+  if (!a.open) return "ปิด/ยกเลิกแล้ว";
+  if (a.days < 0) return "เลยนัด";
+  if (a.days === 0) return "วันนี้";
+  if (a.days === 1) return "พรุ่งนี้";
+  return a.days <= 7 ? "ภายใน 7 วัน" : "เกิน 7 วัน";
+}
+
+const APPT_TONE: Record<string, { fg: string; bg: string; line: string }> = {
+  PENDING: { fg: colors.warningInk, bg: colors.warningSoft, line: colors.warningBorder },
+  CONFIRMED: { fg: colors.successInk, bg: colors.successSoft, line: "#A7F3D0" },
+  ADMIN_PICKED: { fg: colors.primaryInk, bg: colors.primarySoft, line: colors.sky200 },
+};
 
 /** ตัวกรองที่เลือก "คน" ภายในบทบาท — s:<id> หัวหน้าภาค · t:<ทีม> ทีมช่าง · none ยังไม่มีใครดูแล */
 type Who = string;
@@ -136,12 +181,19 @@ function whoKeys(row: WorkOrderRow): Who[] {
  * คอลัมน์ของตาราง — ค่าที่ใช้กรอง/เรียงแบบ Excel ต้องเป็นข้อความเดียวกับที่ตาเห็นในช่องนั้น
  * (กรอง "ทีม" แล้วต้องเจอคำที่อ่านอยู่ในคอลัมน์ ไม่ใช่รหัสภายใน)
  */
-type ColKey = "wo" | "branch" | "machine" | "team" | "status" | "wait" | "opener";
-const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string }[] = [
+type ColKey = "wo" | "branch" | "machine" | "team" | "appt" | "status" | "wait" | "opener";
+/** sortValue — คอลัมน์ที่ข้อความกรองไม่ใช่ลำดับจริง (วันนัดกรองเป็นช่วง แต่เรียงตามวันที่) */
+const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string; sortValue?: (r: WorkOrderRow) => string }[] = [
   { key: "wo", label: "ใบงาน", value: (r) => r.code },
   { key: "branch", label: "สาขา", value: (r) => `${r.branchCode} ${r.branchName}` },
   { key: "machine", label: "เครื่อง", value: (r) => r.machineCode ?? "(ว่าง)" },
   { key: "team", label: "ทีม", value: (r) => r.assignedToName ?? r.assignedTeam ?? "ยังไม่มอบหมาย" },
+  {
+    key: "appt",
+    label: "วันนัด",
+    value: apptBucket,
+    sortValue: (r) => (r.scheduledAt ? `${r.scheduledAt.slice(0, 10)} ${r.scheduledTime ?? "99:99"}` : "9999"),
+  },
   // ติด "อะไหล่หมด" ต่อท้ายแทนการแทนที่ — กรองตามขั้นยังเจอครบ ค้นคำว่า "หมด" ก็ได้ทุกใบที่ติดของ
   { key: "status", label: "สถานะ", value: (r) => (r.partsOut ? `${r.statusLabel} · อะไหล่หมด` : r.statusLabel) },
   { key: "wait", label: "รอใคร", value: (r) => waitText(r) ?? "(ไม่ได้รอใคร)" },
@@ -379,11 +431,16 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     else if (prefs.sort === "za") list.sort((a, b) => code(b, a));
     else if (prefs.sort === "new") list.sort((a, b) => at(b.createdAt) - at(a.createdAt));
     else if (prefs.sort === "old") list.sort((a, b) => at(a.stageSince) - at(b.stageSince));
+    else if (prefs.sort === "appt") {
+      const k = COLUMNS.find((c) => c.key === "appt")!.sortValue!;
+      list.sort((a, b) => k(a).localeCompare(k(b)));
+    }
     // เรียงจากหัวคอลัมน์ทับการเรียงจากแถบตัวกรอง (กดล่าสุดชนะ — แถบตัวกรองกดแล้วล้างอันนี้)
     if (colSort) {
       const col = COLUMNS.find((c) => c.key === colSort.key)!;
       const sign = colSort.dir === "asc" ? 1 : -1;
-      list.sort((a, b) => sign * col.value(a).localeCompare(col.value(b), "th", { numeric: true }));
+      const key = col.sortValue ?? col.value;
+      list.sort((a, b) => sign * key(a).localeCompare(key(b), "th", { numeric: true }));
     }
     // ใบด่วนที่ยังค้างอยู่ขึ้นบนสุดเสมอ ไม่ว่าเลือกเรียงแบบไหน (เจ้าของงานกำหนด) — เรียงตามที่เลือกภายในกลุ่ม
     // ใบที่ปิดแล้วไม่ดึงขึ้น ด่วนเมื่อเดือนก่อนไม่ได้แปลว่าต้องดูก่อนวันนี้
@@ -1146,10 +1203,38 @@ const COL_STYLE: Record<ColKey, object> = {
   branch: { flex: 2.2, minWidth: 0 },
   machine: { flex: 0.8 },
   team: { flex: 1.3 },
+  appt: { flex: 1.5, minWidth: 0 },
   status: { flex: 1.6 },
   wait: { flex: 1.6, minWidth: 0 },
   opener: { flex: 1.5, minWidth: 0 },
 };
+
+/** ช่องวันนัด — ตาราง (stack) กับการ์ดมือถือ (inline) ใช้ชิ้นเดียวกัน */
+function Appointment({ row, inline }: { row: WorkOrderRow; inline?: boolean }) {
+  const a = apptOf(row);
+  if (!a) return inline ? null : <Text style={[styles.td, styles.tdMuted]}>ยังไม่นัด</Text>;
+  const tone = row.appointmentStatus ? APPT_TONE[row.appointmentStatus] : null;
+  return (
+    <View style={inline ? styles.apptInline : styles.apptStack}>
+      {inline ? <Text style={[styles.meta, styles.metaFit]}>นัด</Text> : null}
+      {/* วันกับเวลาแยกชิ้น — คอลัมน์แคบแล้วตัดบรรทัดทั้งก้อน ไม่ใช่เหลือ "น." ห้อยบรรทัดใหม่ */}
+      <View style={styles.apptWhenRow}>
+        <Text style={[styles.td, styles.apptWhen]}>{a.date}</Text>
+        {a.time ? <Text style={[styles.td, styles.apptWhen]}>{`·\u00A0${a.time}`}</Text> : null}
+      </View>
+      {row.appointmentStatusLabel && tone ? (
+        <View style={[styles.apptChip, { backgroundColor: tone.bg, borderColor: tone.line }]}>
+          <Text style={[styles.apptChipText, { color: tone.fg }]}>{row.appointmentStatusLabel}</Text>
+        </View>
+      ) : null}
+      {a.rel ? (
+        <Text style={[styles.apptRel, a.rel.tone === "late" ? styles.apptLate : a.rel.tone === "today" ? styles.apptToday : null]}>
+          {a.rel.text}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
 function TableHead({
   values,
   filters,
@@ -1241,6 +1326,9 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       <Text style={[styles.td, styles.colTeam, !(row.assignedToName ?? row.assignedTeam) && styles.tdMuted]}>
         {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมาย"}
       </Text>
+      <View style={styles.colAppt}>
+        <Appointment row={row} />
+      </View>
       <View style={styles.colStatus}>
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
@@ -1330,6 +1418,12 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <Ionicons name="people-outline" size={13} color={colors.textFaint} />
         <Text style={styles.meta}>{row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}</Text>
       </View>
+      {row.scheduledAt ? (
+        <View style={styles.metaRow}>
+          <Ionicons name="calendar-outline" size={13} color={colors.textFaint} />
+          <Appointment row={row} inline />
+        </View>
+      ) : null}
 
       <View style={styles.metaRow}>
         <Ionicons name="create-outline" size={13} color={colors.textFaint} />
@@ -1490,6 +1584,16 @@ const styles = StyleSheet.create({
   colBranch: { flex: 2.2, minWidth: 0 },
   colMachine: { flex: 0.8 },
   colTeam: { flex: 1.3 },
+  colAppt: { flex: 1.5, minWidth: 0 },
+  apptStack: { gap: 3, alignItems: "flex-start" },
+  apptInline: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, flex: 1, minWidth: 0 },
+  apptWhen: { fontWeight: "600", fontVariant: ["tabular-nums"] },
+  apptWhenRow: { flexDirection: "row", flexWrap: "wrap", columnGap: 4 },
+  apptChip: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 6 },
+  apptChipText: { fontSize: 11, lineHeight: 17, fontWeight: "700" },
+  apptRel: { fontSize: 11.5, lineHeight: 17, color: colors.textMuted },
+  apptLate: { color: colors.dangerInk, fontWeight: "700" },
+  apptToday: { color: colors.primaryInk, fontWeight: "700" },
   colStatus: { flex: 1.6, gap: 2 },
   colWait: { flex: 1.6, minWidth: 0 },
   colOpener: { flex: 1.5, minWidth: 0, gap: 2, alignItems: "flex-start" },
