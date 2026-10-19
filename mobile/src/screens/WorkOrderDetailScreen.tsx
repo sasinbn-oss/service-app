@@ -1414,8 +1414,9 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {/* ข้อความแจ้งคิวช่างให้ลูกค้า — คนคุยกับร้าน (แอดมิน) และคนปล่อยงาน (หัวหน้าภาค) ช่างไม่ต้องใช้ */}
-      {hasCustomerMessage(order) && (me?.role === "ADMIN" || me?.role === "SUPERVISOR") ? (
+      {/* ข้อความแจ้งคิวช่างให้ลูกค้า — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69): แอดมินเป็นคนคุยกับร้าน
+          หัวหน้าภาค/ช่างไม่ได้ส่งข้อความหาลูกค้า เห็นแล้วเข้าใจผิดว่าต้องส่งเอง */}
+      {hasCustomerMessage(order) && me?.role === "ADMIN" ? (
         <CustomerMessageCard order={order} style={card} />
       ) : null}
 
