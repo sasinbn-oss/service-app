@@ -85,8 +85,6 @@ export function byTeam(rows: ConfirmedRow[]) {
   return [...map].map(([team, list]) => ({ team, rows: list }));
 }
 
-/** อาการยาวเกินไปในไลน์ — ตัดแล้วใส่ … รายละเอียดเต็มดูในแอป */
-const cut = (t: string, n = 60) => (t.length > n ? `${t.slice(0, n).trimEnd()}…` : t);
 const LINE = "------------------------";
 
 /**
@@ -114,7 +112,9 @@ export function teamDispatch(team: string, rows: ConfirmedRow[]) {
         `รหัสสาขา: ${r.branchCode}`,
         `สาขา: ${r.branchName}`,
         ...(r.machineCode ? [`เครื่อง: ${r.machineCode}`] : []),
-        ...(r.symptom ? [`อาการ: ${cut(r.symptom)}`] : []),
+        // อาการเต็มบรรทัด ไม่ตัด — เคยตัดที่ 60 ตัวอักษรแล้วช่างได้ข้อความขาดกลางคำ (ส่วนท้ายมักเป็นรายละเอียดสำคัญ)
+        // backend ส่งมาแค่บรรทัดแรกอยู่แล้ว บรรทัด "สาเหตุ/แก้ไข" ที่ช่างเติมทีหลังไม่ติดมา
+        ...(r.symptom ? [`อาการ: ${r.symptom}`] : []),
         `ผู้ติดต่อ: ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
         ...(r.latitude != null && r.longitude != null ? [`แผนที่: https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
       );
