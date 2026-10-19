@@ -185,21 +185,27 @@ const MAX_PDF_BYTES = 15 * 1024 * 1024;
  *
  * ใบเสนอราคาออกจากโปรแกรมบัญชีเป็น PDF อยู่แล้ว ส่งไฟล์ตรง ๆ ตัวเลขคมชัด
  * ไม่ต้องแคปหน้าจอเป็นรูปก่อน ไม่ย่อและไม่มีรูปย่อ — หน้าจอแสดงไอคอนเอกสารแทน
+ *
+ * เลือกได้หลายไฟล์ — งานเดียวอาจมีใบเสนอราคาค่าอะไหล่กับค่าบริการแยกกัน หรือบิลหลายใบ
+ * ไฟล์ที่ใหญ่เกินถูกตัดออกแล้วบอกชื่อ ไฟล์ที่เหลือยังแนบได้ ไม่ต้องเลือกใหม่ทั้งชุด
  */
-export async function pickPdfAttachment(): Promise<PickedAttachment | null> {
+export async function pickPdfAttachments(): Promise<PickedAttachment[]> {
   const result = await DocumentPicker.getDocumentAsync({
     type: "application/pdf",
     copyToCacheDirectory: true,
-    multiple: false,
+    multiple: true,
   });
-  if (result.canceled || result.assets.length === 0) return null;
-  const asset = result.assets[0];
-  if (asset.size && asset.size > MAX_PDF_BYTES) {
-    showAlert("ไฟล์ใหญ่เกินไป", `PDF แนบได้ไม่เกิน ${formatSize(MAX_PDF_BYTES)}`);
-    return null;
+  if (result.canceled) return [];
+  const big = result.assets.filter((a) => a.size && a.size > MAX_PDF_BYTES);
+  if (big.length) {
+    showAlert("ไฟล์ใหญ่เกินไป", `PDF แนบได้ไม่เกิน ${formatSize(MAX_PDF_BYTES)} — ไม่ได้แนบ: ${big.map((a) => a.name).join(", ")}`);
   }
-  const name = /\.pdf$/i.test(asset.name) ? asset.name : `${asset.name || "document"}.pdf`;
-  return { uri: asset.uri, name, type: "application/pdf", kind: "DOCUMENT", thumbnailUri: null };
+  return result.assets
+    .filter((a) => !big.includes(a))
+    .map((asset) => {
+      const name = /\.pdf$/i.test(asset.name) ? asset.name : `${asset.name || "document"}.pdf`;
+      return { uri: asset.uri, name, type: "application/pdf", kind: "DOCUMENT" as const, thumbnailUri: null };
+    });
 }
 
 /** ไอคอนแทนรูปย่อ สำหรับไฟล์ที่ไม่มีรูปย่อ */
