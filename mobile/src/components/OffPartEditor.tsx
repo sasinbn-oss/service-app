@@ -40,21 +40,37 @@ export function offPartsPayload(rows: OffPart[]) {
 /** มีแถวที่กดเพิ่มแล้วแต่ยังไม่ได้พิมพ์ชื่อ — ส่งไปแล้วหายเงียบ ๆ แย่กว่าบอกให้กรอก */
 export const offPartsIncomplete = (rows: OffPart[]) => rows.some((r) => !r.name.trim());
 
+/**
+ * สองแบบหน้าตาเดียวกัน — "off" อะไหล่นอกสโตร์ (ส้ม) · "service" ค่าบริการที่ต้องเสนอราคา (เขียวอมฟ้า)
+ * ช่องเหมือนกันทุกอย่าง (ชื่อ จำนวน หน่วย หมายเหตุ) ต่างแค่ชื่อกล่องกับสี ให้คนแยกออกว่าเป็นของหรือค่าแรง
+ */
+const VARIANTS = {
+  off: { title: "อะไหล่นอก — เสนอราคาให้ลูกค้า", badge: "ไม่มี SKU", item: "อะไหล่นอกสโตร์", add: "เพิ่มอะไหล่นอก", placeholder: "ชื่อ / รุ่นอะไหล่", unit: "ชิ้น", note: "หมายเหตุ เช่น สเปค แหล่งซื้อ (ไม่บังคับ)" },
+  service: { title: "ค่าบริการ — เสนอราคาให้ลูกค้า", badge: null, item: "ค่าบริการ", add: "เพิ่มค่าบริการ", placeholder: "เช่น ค่าแรง ค่าเดินทาง", unit: "งาน", note: "หมายเหตุ เช่น ใช้ช่าง 2 คน ระยะทาง (ไม่บังคับ)" },
+} as const;
+
 export default function OffPartEditor({
   rows,
   onChange,
+  variant = "off",
+  title,
   hint = "ใช้เมื่อหารหัสในสโตร์ไม่เจอ · ไม่ต้องเช็คคลังหรือใส่เลขใบเบิก แอดมินเป็นคนจัดหา",
 }: {
   rows: OffPart[];
   onChange: (next: OffPart[]) => void;
+  variant?: keyof typeof VARIANTS;
+  /** ตอนปิดงานไม่ได้เสนอราคาแล้ว — ใช้ชื่อกล่องอื่นแทน */
+  title?: string;
   hint?: string;
 }) {
+  const v = VARIANTS[variant];
+  const svc = variant === "service";
   const set = (i: number, patch: Partial<OffPart>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
-    <View style={styles.box}>
+    <View style={[styles.box, svc && styles.boxService]}>
       <View style={styles.head}>
-        <Text style={styles.title}>อะไหล่นอกสโตร์</Text>
-        <Text style={styles.tag}>ไม่มี SKU</Text>
+        <Text style={[styles.title, svc && { color: colors.service }]}>{title ?? v.title}</Text>
+        {v.badge ? <Text style={styles.tag}>{v.badge}</Text> : null}
       </View>
       {rows.map((r, i) => (
         <View key={i} style={styles.row}>
@@ -63,10 +79,10 @@ export default function OffPartEditor({
               style={[styles.input, styles.name, !r.name.trim() && styles.inputEmpty]}
               value={r.name}
               onChangeText={(t) => set(i, { name: t })}
-              placeholder="ชื่อ / รุ่นอะไหล่"
+              placeholder={v.placeholder}
               placeholderTextColor={colors.textFaint}
               maxLength={120}
-              accessibilityLabel={`ชื่ออะไหล่นอกสโตร์ ${i + 1}`}
+              accessibilityLabel={`ชื่อ${v.item} ${i + 1}`}
             />
             <TextInput
               style={[styles.input, styles.qty]}
@@ -77,20 +93,20 @@ export default function OffPartEditor({
               }}
               keyboardType="number-pad"
               maxLength={3}
-              accessibilityLabel={`จำนวนอะไหล่นอกสโตร์ ${i + 1}`}
+              accessibilityLabel={`จำนวน${v.item} ${i + 1}`}
             />
             <TextInput
               style={[styles.input, styles.unit]}
               value={r.unit}
               onChangeText={(t) => set(i, { unit: t })}
-              placeholder="ชิ้น"
+              placeholder={v.unit}
               placeholderTextColor={colors.textFaint}
               maxLength={20}
-              accessibilityLabel={`หน่วยอะไหล่นอกสโตร์ ${i + 1}`}
+              accessibilityLabel={`หน่วย${v.item} ${i + 1}`}
             />
             <TouchableOpacity
               onPress={() => onChange(rows.filter((_, j) => j !== i))}
-              accessibilityLabel={`เอาอะไหล่นอกสโตร์ ${i + 1} ออก`}
+              accessibilityLabel={`เอา${v.item} ${i + 1} ออก`}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="close-circle" size={20} color={colors.textFaint} />
@@ -100,22 +116,22 @@ export default function OffPartEditor({
             style={styles.input}
             value={r.note}
             onChangeText={(t) => set(i, { note: t })}
-            placeholder="หมายเหตุ เช่น สเปค แหล่งซื้อ (ไม่บังคับ)"
+            placeholder={v.note}
             placeholderTextColor={colors.textFaint}
             maxLength={300}
-            accessibilityLabel={`หมายเหตุอะไหล่นอกสโตร์ ${i + 1}`}
+            accessibilityLabel={`หมายเหตุ${v.item} ${i + 1}`}
           />
         </View>
       ))}
       <TouchableOpacity
         style={styles.add}
         onPress={() => onChange([...rows, { name: "", quantity: 1, unit: "", note: "" }])}
-        accessibilityLabel="เพิ่มรายการนอกสโตร์"
+        accessibilityLabel={v.add}
       >
-        <Ionicons name="add-circle-outline" size={17} color={colors.offPart} />
-        <Text style={styles.addText}>เพิ่มรายการนอกสโตร์</Text>
+        <Ionicons name="add-circle-outline" size={17} color={svc ? colors.service : colors.offPart} />
+        <Text style={[styles.addText, svc && { color: colors.service }]}>{v.add}</Text>
       </TouchableOpacity>
-      {offPartsIncomplete(rows) ? <Text style={styles.warn}>ใส่ชื่ออะไหล่ให้ครบ หรือกด ✕ เอาแถวที่ไม่ใช้ออก</Text> : null}
+      {offPartsIncomplete(rows) ? <Text style={styles.warn}>ใส่ชื่อ{v.item}ให้ครบ หรือกด ✕ เอาแถวที่ไม่ใช้ออก</Text> : null}
       <Text style={styles.hint}>{hint}</Text>
     </View>
   );
@@ -139,6 +155,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.md,
   },
+  boxService: { borderColor: colors.serviceLine, backgroundColor: colors.serviceSoft },
   head: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   title: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.offPart },
   tag: {

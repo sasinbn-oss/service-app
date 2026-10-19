@@ -72,17 +72,17 @@ model User {
 }
 
 model Vehicle {
-  id          Int          @id @default(autoincrement())
-  plateNumber String       @unique
-  brand       String?
-  model       String?
-  type        String?
+  id             Int     @id @default(autoincrement())
+  plateNumber    String  @unique
+  brand          String?
+  model          String?
+  type           String?
   // AVAILABLE ว่าง · IN_USE มีคนเบิกอยู่ · MAINTENANCE งดเบิก · INACTIVE เลิกใช้
   // เลิกใช้แทนการลบ — รถที่มีประวัติแล้วลบทิ้งไม่ได้ ไม่งั้นประวัติการใช้รถหายตาม
-  status      String       @default("AVAILABLE")
-  note        String?
+  status         String  @default("AVAILABLE")
+  note           String?
   // เลขไมล์ล่าสุดที่รู้ — ตั้งตอนเบิก/คืน ใช้ตรวจว่าไมล์ที่ช่างกรอกต่อเนื่องไหม
-  currentMileage Int       @default(0)
+  currentMileage Int     @default(0)
 
   // ── ทะเบียน & ซ่อมบำรุง ──
   // ผู้รับผิดชอบ เช่น ทีมที่ถือรถคันนี้ — ข้อความอิสระเพราะบางคันเป็นของสำนักงาน
@@ -104,7 +104,7 @@ model Vehicle {
   maintNote      String?
   updatedAt      DateTime  @default(now()) @updatedAt
 
-  createdAt   DateTime     @default(now())
+  createdAt   DateTime             @default(now())
   logs        VehicleLog[]
   dayPlans    TeamDayPlan[]
   docs        VehicleDoc[]
@@ -127,21 +127,21 @@ model VehicleCard {
 }
 
 model VehicleLog {
-  id           Int       @id @default(autoincrement())
+  id           Int               @id @default(autoincrement())
   vehicleId    Int
-  vehicle      Vehicle   @relation(fields: [vehicleId], references: [id])
+  vehicle      Vehicle           @relation(fields: [vehicleId], references: [id])
   userId       Int
-  user         User      @relation(fields: [userId], references: [id])
+  user         User              @relation(fields: [userId], references: [id])
   purpose      String
   destination  String?
   startMileage Int
   endMileage   Int?
-  startedAt    DateTime  @default(now())
+  startedAt    DateTime          @default(now())
   endedAt      DateTime?
-  status       String    @default("ONGOING")
+  status       String            @default("ONGOING")
   // ไมล์ตอนรับ − ไมล์ล่าสุดของรถ ≠ 0 = ไม่ต่อเนื่อง (มีคนใช้รถโดยไม่ลงทะเบียน
   // หรือกรอกผิด) — ยอมให้ผ่านได้ในกรอบ ±MAX_MILEAGE_DIFF แต่แอดมินต้องเห็น
-  mileageGap   Int       @default(0)
+  mileageGap   Int               @default(0)
   note         String?
   returnNote   String?
   // ค่าใช้จ่ายรอบนี้ (บาท) เช่น น้ำมัน ทางด่วน — กรอกตอนคืน
@@ -149,10 +149,10 @@ model VehicleLog {
   repairNote   String?
   // ใบงานที่ไป (ไม่บังคับ) — รู้ย้อนหลังได้ว่ารถคันไหนไปงานไหน
   workOrderId  Int?
-  workOrder    WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  workOrder    WorkOrder?        @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
   // แอดมินคืนแทน (ช่างลืมกดคืน) — ว่าง = เจ้าของรายการคืนเอง
   returnedById Int?
-  returnedBy   User?     @relation("VehicleLogReturnedBy", fields: [returnedById], references: [id], onDelete: SetNull)
+  returnedBy   User?             @relation("VehicleLogReturnedBy", fields: [returnedById], references: [id], onDelete: SetNull)
   photos       VehicleLogPhoto[]
 
   @@index([userId, status])
@@ -197,14 +197,14 @@ model VehicleDoc {
 
 // ประวัติซ่อมบำรุง — เปลี่ยนน้ำมัน ซ่อม ตรวจเช็ค ต่อภาษี และใบแจ้งซ่อมจากช่าง
 model VehicleMaintenance {
-  id           Int         @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   vehicleId    Int
-  vehicle      Vehicle     @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle      Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   // ดู VEHICLE_MAINT_TYPES ใน src/utils/constants.ts
   type         String
   date         DateTime
   mileage      Int?
-  cost         Int         @default(0)
+  cost         Int      @default(0)
   shop         String?
   detail       String?
   // รูปใบเสร็จ/ใบแจ้งซ่อม (ไม่บังคับ)
@@ -213,40 +213,40 @@ model VehicleMaintenance {
   // ใบแจ้งซ่อมที่มาจากการคืนรถ — ย้อนไปดูรูปตอนคืนได้
   vehicleLogId Int?
   createdById  Int?
-  createdBy    User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt    DateTime    @default(now())
+  createdBy    User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
 
   @@index([vehicleId, date])
 }
 
 model Branch {
-  id             Int             @id @default(autoincrement())
-  name           String
-  code           String          @unique
-  address        String?
+  id                Int              @id @default(autoincrement())
+  name              String
+  code              String           @unique
+  address           String?
   // Optional because a branch can be on the machine dashboard long before
   // anyone has stood in it with a phone to record its coordinates. Check-in
   // only offers branches that have them.
-  latitude       Float?
-  longitude      Float?
-  radiusMeters   Int             @default(200)
+  latitude          Float?
+  longitude         Float?
+  radiusMeters      Int              @default(200)
   // Grouping used by the machine dashboard.
-  region         String?
+  region            String?
   // COCO (company owned) | DODO (dealer owned)
-  ownership      String?
+  ownership         String?
   // ทีมช่างที่ดูแลสาขานี้สำหรับงาน CM — คอลัมน์ "ผู้ดูแล CM" ในไฟล์ทะเบียนสาขา
   //
   // ชื่อช่อง zone เป็นชื่อเดิมตั้งแต่ตอนที่แดชบอร์ดใช้จัดกลุ่ม ไม่ได้เปลี่ยนชื่อ
   // เพราะมีตัวกรองและรายงานหลายที่อ้างถึง zone อยู่ — ความหมายคือทีมช่าง
   //
   // ไฟล์ export รายงานเครื่องไม่มีค่านี้ ตัวนำเข้าจึงไม่แตะค่าเดิม เขียนทับให้ว่างไม่ได้
-  zone           String?
+  zone              String?
   // ทีมช่างที่ดูแลงาน PM — คอลัมน์ "ผู้ดูแล PM" ในไฟล์ทะเบียนสาขา
   //
   // แยกจาก zone เพราะงาน PM กับงาน CM ไม่ได้เป็นของทีมเดียวกันเสมอไป
   // ว่างได้ — ในไฟล์จริงมีสาขาที่ช่องนี้ไม่ได้กรอก ตอนจ่ายงาน PM จะใช้ทีม CM แทน
-  pmTeam         String?
-  grade          String?
+  pmTeam            String?
+  grade             String?
   // วันที่สาขาเปิดทำการ และวันที่ประกันหมด
   //
   // ประกันเป็นเรื่องของสาขาแฟรนไชส์เท่านั้น สาขาบริษัท (รหัสขึ้นต้นด้วย C)
@@ -260,21 +260,21 @@ model Branch {
   //
   // ห้ามใช้ช่องนี้เก็บ "สาขายกเลิก" เพราะตัวนำเข้ารายงานเครื่องเขียนทับทุกรอบ
   // จากคอลัมน์ status ในไฟล์ ซึ่งเป็น active เสมอ ใช้ cancelledAt แทน
-  status         String?         @default("active")
+  status            String?          @default("active")
   // สาขาที่เลิกกิจการแล้ว — ว่าง = ยังเปิดอยู่
   //
   // เครื่องของสาขาที่ปิดไปแล้วยังถูก export ออกมาเป็น state 0 ทุกรอบ
   // ถ้าไม่กันไว้ เคสจะเปิดค้างตลอดกาล สะสม SLA และคะแนนทั้งที่ไม่มีอะไรให้ซ่อม
-  cancelledAt    DateTime?
-  cancelledNote  String?
-  createdAt      DateTime        @default(now())
-  checkIns       BranchCheckIn[]
-  workLogs       WorkLog[]
-  machines       Machine[]
-  outages        Outage[]
-  scoreSnapshots ScoreSnapshot[]
-  workOrders     WorkOrder[]
-  teamMoves      BranchTeamMove[]
+  cancelledAt       DateTime?
+  cancelledNote     String?
+  createdAt         DateTime         @default(now())
+  checkIns          BranchCheckIn[]
+  workLogs          WorkLog[]
+  machines          Machine[]
+  outages           Outage[]
+  scoreSnapshots    ScoreSnapshot[]
+  workOrders        WorkOrder[]
+  teamMoves         BranchTeamMove[]
 }
 
 // One washer or dryer installed at a branch.
@@ -668,21 +668,21 @@ model WorkOrder {
   //
   // งานถูกจ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
   // ส่วนใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
-  assignedTeam String?
+  assignedTeam      String?
   // ช่างที่ถูกจ่ายงานให้แบบรายคน — ของใบงานเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม
   //
   // ไม่ได้เขียนค่าใหม่แล้ว แต่ยังอ่านอยู่ เพื่อให้ใบที่ค้างอยู่ตอนเปลี่ยนระบบ
   // ยังอยู่ในมือคนเดิม ไม่ใช่หายไปจากรายการของเขาทั้งที่ยังทำไม่เสร็จ
-  assignedToId Int?
-  assignedTo   User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
+  assignedToId      Int?
+  assignedTo        User?     @relation("AssignedWorkOrders", fields: [assignedToId], references: [id])
   // วันที่นัดเข้าไปทำ เก็บเป็นวันอย่างเดียว เพราะนัดกันเป็นวัน
-  scheduledAt  DateTime?
+  scheduledAt       DateTime?
   // ขั้นรอเบิกอะไหล่ (ก่อนเสนอราคา) — วันที่แอดมินคาดว่าอะไหล่ที่หมดจะเข้า ไม่บังคับ
   // เลยวันนี้แล้วรายการขึ้นเตือนให้ตามผู้ขาย · ล้างเมื่ออะไหล่ครบ
-  partsExpectedAt DateTime?
+  partsExpectedAt   DateTime?
   // เวลานัด "HH:MM" แยกจากวัน — ใบเก่านัดกันเป็นวันอย่างเดียว ว่างจึงแปลว่า
   // "ทั้งวัน" ไม่ใช่เที่ยงคืน ถ้ารวมไว้ในช่องเดียวกันจะแยกสองอย่างนี้ไม่ออก
-  scheduledTime String?
+  scheduledTime     String?
   // ลูกค้ารับนัดหรือยัง — PENDING รอคอนเฟิร์ม · CONFIRMED ลูกค้าคอนเฟิร์ม
   // ADMIN_PICKED ลูกค้าสะดวกทุกวัน แอดมินเลือกวันให้ (ดู APPOINTMENT_STATUSES)
   appointmentStatus String?
@@ -698,11 +698,11 @@ model WorkOrder {
   // เป็นใบใหม่ไม่ใช่สถานะของใบเดิม เพราะของที่มีอยู่ซ่อมได้เลย ไม่ควรถูกกั้น
   // ด้วยของที่ยังไม่มา แต่ต้องลิงก์กันไว้ ไม่งั้นดูไม่ออกว่าเป็นงานเดียวกัน
   parentId Int?
-  parent   WorkOrder?  @relation("WorkOrderSplit", fields: [parentId], references: [id], onDelete: SetNull)
+  parent   WorkOrder? @relation("WorkOrderSplit", fields: [parentId], references: [id], onDelete: SetNull)
 
   // ใบทดสอบ — คัดลอกจากใบจริงเพื่อลองขั้นตอน (เช่นเคลมอะไหล่) โดยไม่แตะใบจริง
   // ใบจริงที่เอามาเดินทดสอบตรง ๆ จะถูกปิดงานจริง · ทดสอบเสร็จให้ลบทิ้ง
-  isTest   Boolean @default(false)
+  isTest   Boolean     @default(false)
   // คัดลอกมาจากใบไหน — แค่อ้างอิง ใบต้นทางถูกลบไปก็ไม่กระทบ
   testOfId Int?
   children WorkOrder[] @relation("WorkOrderSplit")
@@ -713,12 +713,12 @@ model WorkOrder {
   updatedAt   DateTime @updatedAt
 
   // ── ปิดงาน ──
-  closedAt    DateTime?
-  closedById  Int?
-  closedBy    User?     @relation("ClosedWorkOrders", fields: [closedById], references: [id])
+  closedAt          DateTime?
+  closedById        Int?
+  closedBy          User?     @relation("ClosedWorkOrders", fields: [closedById], references: [id])
   // ผลของงาน ไม่ใช่แค่ "ปิดแล้ว" — ดู WORK_ORDER_RESULTS ใน src/utils/constants.ts
-  closeResult String?
-  closeNote   String?
+  closeResult       String?
+  closeNote         String?
   // คนนอกระบบที่ไปด้วย เช่น ช่างผู้รับเหมาหรือคนของสาขา
   //
   // มีไว้เพราะคนที่ไปหน้างานจริงไม่ได้มีบัญชีในระบบทุกคน และถ้าไม่มีช่องให้กรอก
@@ -726,6 +726,7 @@ model WorkOrder {
   closeOtherWorkers String?
 
   parts       WorkOrderPart[]
+  services    WorkOrderService[]
   logs        WorkOrderLog[]
   attachments WorkOrderAttachment[]
   claims      PartClaim[]
@@ -773,22 +774,39 @@ model WorkOrderPart {
   //
   // ว่าง = ยังไม่มีใครเช็ค · true = มีของ พร้อมบอกว่าอยู่คลังไหน · false = หมด
   // ถ้ามีตัวไหน false ใบงานจะขึ้นสถานะ "รออะไหล่" ให้เอง
-  inStock     Boolean?
+  inStock       Boolean?
   // ชื่อคลังที่มีของ ตามรายชื่อใน src/documents/warehouses.ts
-  warehouse   String?
+  warehouse     String?
   // เลขใบเบิกอะไหล่จากระบบคลัง — พิมพ์เอง ไม่ได้ออกเลขให้เอง
   //
   // เก็บรายตัวไม่ใช่รายใบงาน เพราะใบงานที่ช่างส่งกลับมาขอเบิกเพิ่มจะมีใบเบิก
   // ใบที่สอง ถ้าเก็บไว้ที่ใบงานใบเดียว เลขใบแรกจะถูกทับหายไป
   requisitionNo String?
   // หน่วยกับหมายเหตุของอะไหล่นอกสโตร์ (เส้น/ชุด · สเปค แหล่งซื้อ) — ของในสโตร์ไม่ใช้
-  unit        String?
-  note        String?
-  checkedAt   DateTime?
-  checkedById Int?
-  checkedBy   User?     @relation("CheckedWorkOrderParts", fields: [checkedById], references: [id])
+  unit          String?
+  note          String?
+  checkedAt     DateTime?
+  checkedById   Int?
+  checkedBy     User?     @relation("CheckedWorkOrderParts", fields: [checkedById], references: [id])
 
   @@unique([workOrderId, sparePartId, kind])
+}
+
+// ค่าบริการที่หัวหน้าช่างระบุให้เสนอราคาลูกค้า (ค่าแรง ค่าเดินทาง ฯลฯ — เจ้าของงานขอ ต.ค. 69)
+//
+// แยกจาก WorkOrderPart เพราะไม่ใช่ของ — ไม่ต้องเช็คมี/หมด ไม่มีคลังหรือใบเบิก ไม่นับในรายงานอะไหล่
+// ไม่มีราคา: ใบเสนอราคาออกจากระบบบัญชี แอดมินใส่ราคาที่นั่น ที่นี่เป็นแค่รายการที่ต้องใส่
+model WorkOrderService {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  name        String
+  quantity    Int       @default(1)
+  unit        String?
+  note        String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId])
 }
 
 // ประวัติทุกครั้งที่ใบงานเปลี่ยนมือหรือเปลี่ยนสถานะ
@@ -796,17 +814,17 @@ model WorkOrderPart {
 // เหมือน OutageNoteLog — ช่องบนใบงานบอกได้แค่สภาพล่าสุด พอมีคนแก้ทับ
 // ก็ไม่เหลือร่องรอยว่าใครทำอะไรไว้ก่อนหน้า
 model WorkOrderLog {
-  id          Int       @id @default(autoincrement())
-  workOrderId Int
-  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-  userId      Int?
-  user        User?     @relation(fields: [userId], references: [id])
+  id           Int       @id @default(autoincrement())
+  workOrderId  Int
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId       Int?
+  user         User?     @relation(fields: [userId], references: [id])
   // CREATED | ASSIGNED | STARTED | CLOSED | CANCELLED | REOPENED | EDITED
-  action      String
+  action       String
   // สภาพหลังทำรายการนี้ เก็บเป็น snapshot เพื่ออ่านย้อนหลังแล้วเข้าใจได้ทันที
-  status      String
-  note        String?
-  createdAt   DateTime  @default(now())
+  status       String
+  note         String?
+  createdAt    DateTime  @default(now())
   // แอดมินกรอกย้อนหลัง (ปิดงานย้อนหลัง) — createdAt คือวันเวลาจริงของงานที่แอดมินใส่
   // ส่วนนี่คือเวลาที่กดบันทึกจริง ไทม์ไลน์ใช้ติดป้าย "บันทึกย้อนหลัง" ให้รู้ว่าไม่ได้กดตอนนั้น
   backfilledAt DateTime?
@@ -888,13 +906,13 @@ model TeamDayPlan {
 }
 
 model TeamDayPlanMember {
-  id     Int         @id @default(autoincrement())
-  planId Int
-  plan   TeamDayPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
-  userId Int
-  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id       Int         @id @default(autoincrement())
+  planId   Int
+  plan     TeamDayPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  userId   Int
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   // คนแรกที่เลือกคือหัวหน้าทีมของวันนั้น
-  position Int       @default(0)
+  position Int         @default(0)
 
   @@unique([planId, userId])
 }
@@ -966,35 +984,35 @@ model ViewAsLog {
 // เพราะใบเคลมเป็นเอกสารที่ส่งออกไปแล้ว — แก้ทะเบียนสาขาหรือรุ่นเครื่องทีหลัง ใบเคลมเดิมต้องไม่เปลี่ยนตาม
 // ตีกลับแล้วช่างปิดใหม่ = แถวใหม่ แถวเดิมเก็บไว้เป็นประวัติว่าเคยถูกตีกลับเพราะอะไร
 model PartClaim {
-  id           Int       @id @default(autoincrement())
-  workOrderId  Int
-  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-  sparePartId  Int?
-  partCode     String
-  partName     String
+  id              Int       @id @default(autoincrement())
+  workOrderId     Int
+  workOrder       WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  sparePartId     Int?
+  partCode        String
+  partName        String
   // รหัสอะไหล่ตัวที่เสีย (ตัวที่ถอดออกและส่งเคลม) — ช่างกรอกเองจากตัวอะไหล่ (เจ้าของงานขอ ต.ค. 69)
   // partCode ข้างบนคืออะไหล่ที่เบิกมาใส่แทน · ปกติตรงกัน แต่ตัวที่ส่งคืนผู้ขายคือตัวนี้ ต้องอ่านจากของจริง
   // ว่างได้เฉพาะใบเคลมเก่าก่อนมีช่องนี้
-  brokenPartCode String?
-  quantity     Int       @default(1)
-  branchCode   String
-  branchName   String
-  branchOpenedAt DateTime?
-  brand        String?
-  model        String?
-  machineCode  String?
+  brokenPartCode  String?
+  quantity        Int       @default(1)
+  branchCode      String
+  branchName      String
+  branchOpenedAt  DateTime?
+  brand           String?
+  model           String?
+  machineCode     String?
   // อาการ/สาเหตุ · ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้ — ช่องที่ช่างกรอกเองตามฟอร์ม
-  symptom      String
-  checkNote    String
+  symptom         String
+  checkNote       String
   // Troubleshooting ที่ทำ (ข้อ 4) — รายการข้อที่ติ๊ก · ว่าง = ยี่ห้อนี้ไม่ต้องทำ
-  troubleshooting String[] @default([])
+  troubleshooting String[]  @default([])
   // PENDING รอตรวจ · APPROVED อนุมัติ (ออกใบเคลมได้) · REJECTED ตีกลับ
-  status       String    @default("PENDING")
-  rejectReason String?
-  createdById  Int?
-  createdAt    DateTime  @default(now())
-  reviewedById Int?
-  reviewedAt   DateTime?
+  status          String    @default("PENDING")
+  rejectReason    String?
+  createdById     Int?
+  createdAt       DateTime  @default(now())
+  reviewedById    Int?
+  reviewedAt      DateTime?
 
   @@index([workOrderId, createdAt])
   @@index([status])

@@ -52,6 +52,10 @@ export const colors = {
   offPart: "#B45309",
   offPartSoft: "#FFF4E5",
   offPartLine: "#F5C98B",
+  // ค่าบริการที่ต้องเสนอราคา — เขียวอมฟ้า ไม่ใช่ของ จึงไม่ใช้ส้มเดียวกับอะไหล่นอกสโตร์
+  service: "#0F766E",
+  serviceSoft: "#E6F6F4",
+  serviceLine: "#99D5CD",
   background: "#F4F9FD",
   card: "#FFFFFF",
   border: "#E2E8F0",
