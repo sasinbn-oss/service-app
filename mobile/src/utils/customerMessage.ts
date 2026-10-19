@@ -87,38 +87,40 @@ export function byTeam(rows: ConfirmedRow[]) {
 
 /** อาการยาวเกินไปในไลน์ — ตัดแล้วใส่ … รายละเอียดเต็มดูในแอป */
 const cut = (t: string, n = 60) => (t.length > n ? `${t.slice(0, n).trimEnd()}…` : t);
-const LINE = "━━━━━━━━━━━━";
+const LINE = "------------------------";
 
 /**
  * ข้อความจ่ายงานส่งกลุ่มไลน์ช่าง 1 ทีม (ออกแบบใหม่ ต.ค. 69 — แบบแรกอ่านยากบนมือถือ)
  *
- * ไลน์บนมือถือกว้างไม่ถึง 30 ตัวอักษร: บรรทัดสั้น ขึ้นต้นด้วยอิโมจิทุกบรรทัด (ห้ามย่อหน้าด้วยเว้นวรรค —
- * ตัดบรรทัดแล้วเยื้องไม่ตรง) · เส้นคั่นระหว่างงาน · วันที่บอกครั้งเดียว (หลายวันขึ้นหัวข้อย่อยต่อวัน)
+ * ไม่มีอิโมจิ (เจ้าของงานขอเอาออก) — ทุกบรรทัดขึ้นต้นด้วยชื่อช่อง "เลขที่ใบงาน:" "รหัสสาขา:" … แยกคนละบรรทัด
+ * ไลน์บนมือถือกว้างไม่ถึง 30 ตัวอักษร: บรรทัดสั้น ห้ามย่อหน้าด้วยเว้นวรรค (ตัดบรรทัดแล้วเยื้องไม่ตรง)
+ * · เส้นคั่นระหว่างงาน · วันที่บอกครั้งเดียว (หลายวันขึ้นหัวข้อย่อยต่อวัน)
  * · ไม่มีเบอร์บอกตรง ๆ ว่าไม่มี ไม่ใช่หายไปเฉย ๆ · ไม่ใส่ชื่อแอดมิน (ช่างไม่ต้องใช้)
  */
 export function teamDispatch(team: string, rows: ConfirmedRow[]) {
   const days = [...new Set(rows.map((r) => r.scheduledAt))];
   const one = days.length === 1;
-  const out = [`📢 คิวงานช่าง${one ? ` ${dayLabel(days[0])}` : ""}`, `👷 ${team} · ${rows.length} งาน`];
+  const out = [`คิวงานช่าง${one ? ` ${dayLabel(days[0])}` : ""}`, `ทีม: ${team} (${rows.length} งาน)`];
   let n = 0;
   for (const day of days) {
     const list = rows.filter((r) => r.scheduledAt === day);
-    if (!one) out.push(LINE, `📅 ${dayLabel(day)} · ${list.length} งาน`);
+    if (!one) out.push(LINE, `วันที่ ${dayLabel(day)} (${list.length} งาน)`);
     for (const r of list) {
       n += 1;
       out.push(
         LINE,
-        `${n}) ⏰ ${r.scheduledTime ? `${r.scheduledTime} น.` : "ไม่ระบุเวลา"} · ${r.kind === "INSPECT" ? "🔍 ตรวจหน้างาน" : "🔧 ซ่อม"}`,
-        `🏪 ${r.branchName}`,
-        `🔖 ${r.branchCode} · ${r.code}`,
-        ...(r.machineCode ? [`🧺 เครื่อง ${r.machineCode}`] : []),
-        ...(r.symptom ? [`⚠️ ${cut(r.symptom)}`] : []),
-        `📞 ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
-        ...(r.latitude != null && r.longitude != null ? [`📍 https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
+        `${n}) ${r.scheduledTime ? `${r.scheduledTime} น.` : "ไม่ระบุเวลา"} | ${r.kind === "INSPECT" ? "ตรวจหน้างาน" : "ซ่อม"}`,
+        `เลขที่ใบงาน: ${r.code}`,
+        `รหัสสาขา: ${r.branchCode}`,
+        `สาขา: ${r.branchName}`,
+        ...(r.machineCode ? [`เครื่อง: ${r.machineCode}`] : []),
+        ...(r.symptom ? [`อาการ: ${cut(r.symptom)}`] : []),
+        `ผู้ติดต่อ: ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
+        ...(r.latitude != null && r.longitude != null ? [`แผนที่: https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
       );
     }
   }
-  out.push(LINE, "🙏 ถึงหน้างานแล้วอัปเดตในแอปด้วยนะครับ");
+  out.push(LINE, "ถึงหน้างานแล้วอัปเดตในแอปด้วยนะครับ");
   return out.join("\n");
 }
 
