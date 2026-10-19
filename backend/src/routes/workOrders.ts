@@ -1121,7 +1121,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
     select: {
       id: true, code: true, status: true, assignedTeam: true, scheduledAt: true, scheduledTime: true,
       symptom: true, contactName: true, contactPhone: true,
-      branch: { select: { code: true, name: true, zone: true } },
+      branch: { select: { code: true, name: true, zone: true, latitude: true, longitude: true } },
       machine: { select: { code: true } },
     },
   });
@@ -1149,6 +1149,9 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
         scheduledTime: o.scheduledTime,
         branchCode: o.branch.code,
         branchName: o.branch.name,
+        // พิกัดสาขา — ข้อความไลน์ใส่ลิงก์แผนที่ให้ช่าง (มีเฉพาะสาขาที่เคยบันทึกพิกัด)
+        latitude: o.branch.latitude,
+        longitude: o.branch.longitude,
         machineCode: o.machine?.code ?? null,
         // บรรทัดแรก — บรรทัดสาเหตุ/แก้ไขเป็นเรื่องภายใน (เหมือนข้อความแจ้งลูกค้า)
         symptom: (o.symptom ?? "").split("\n")[0].trim() || null,

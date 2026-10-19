@@ -62,6 +62,8 @@ export interface ConfirmedRow {
   symptom: string | null;
   contactName: string | null;
   contactPhone: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   confirmedBy: string | null;
   confirmedAt: string | null;
 }
@@ -83,32 +85,45 @@ export function byTeam(rows: ConfirmedRow[]) {
   return [...map].map(([team, list]) => ({ team, rows: list }));
 }
 
+/** อาการยาวเกินไปในไลน์ — ตัดแล้วใส่ … รายละเอียดเต็มดูในแอป */
+const cut = (t: string, n = 60) => (t.length > n ? `${t.slice(0, n).trimEnd()}…` : t);
+const LINE = "━━━━━━━━━━━━";
+
 /**
- * ข้อความสรุปส่งกลุ่มไลน์ช่าง — ไม่ใส่ชื่อแอดมินที่คอนเฟิร์ม (ช่างไม่ต้องใช้ · เจ้าของงานเลือก) แต่ใส่เบอร์ร้าน
- * เพราะช่างต้องโทรแจ้งก่อนเข้าพื้นที่ · title บอกว่าเป็นสรุปของวันไหน แบบไหน
+ * ข้อความจ่ายงานส่งกลุ่มไลน์ช่าง 1 ทีม (ออกแบบใหม่ ต.ค. 69 — แบบแรกอ่านยากบนมือถือ)
+ *
+ * ไลน์บนมือถือกว้างไม่ถึง 30 ตัวอักษร: บรรทัดสั้น ขึ้นต้นด้วยอิโมจิทุกบรรทัด (ห้ามย่อหน้าด้วยเว้นวรรค —
+ * ตัดบรรทัดแล้วเยื้องไม่ตรง) · เส้นคั่นระหว่างงาน · วันที่บอกครั้งเดียว (หลายวันขึ้นหัวข้อย่อยต่อวัน)
+ * · ไม่มีเบอร์บอกตรง ๆ ว่าไม่มี ไม่ใช่หายไปเฉย ๆ · ไม่ใส่ชื่อแอดมิน (ช่างไม่ต้องใช้)
  */
-export function confirmedReport(title: string, rows: ConfirmedRow[]) {
-  const teams = byTeam(rows);
-  return [
-    "📢 สรุปงานที่คอนเฟิร์มลูกค้าแล้ว",
-    `🗓️ ${title} · ${rows.length} งาน`,
-    "",
-    teams
-      .map((t) =>
-        [
-          `👷 ${t.team} (${t.rows.length} งาน)`,
-          ...t.rows.flatMap((r, i) => [
-            `${i + 1}) 📅 ${dayLabel(r.scheduledAt)}${r.scheduledTime ? ` · ${r.scheduledTime} น.` : ""} · ${
-              r.kind === "INSPECT" ? "🔍 ตรวจหน้างาน" : "🔧 ซ่อม"
-            }`,
-            `   📋 ${r.code} · 🏪 ${r.branchName} (${r.branchCode})`,
-            ...(r.machineCode || r.symptom
-              ? [`   🧺 ${[r.machineCode, r.symptom ? `อาการ: ${r.symptom}` : null].filter(Boolean).join(" · ")}`]
-              : []),
-            ...(r.contactName || r.contactPhone ? [`   📞 ${[r.contactName, r.contactPhone].filter(Boolean).join(" ")}`] : []),
-          ]),
-        ].join("\n")
-      )
-      .join("\n\n"),
-  ].join("\n");
+export function teamDispatch(team: string, rows: ConfirmedRow[]) {
+  const days = [...new Set(rows.map((r) => r.scheduledAt))];
+  const one = days.length === 1;
+  const out = [`📢 คิวงานช่าง${one ? ` ${dayLabel(days[0])}` : ""}`, `👷 ${team} · ${rows.length} งาน`];
+  let n = 0;
+  for (const day of days) {
+    const list = rows.filter((r) => r.scheduledAt === day);
+    if (!one) out.push(LINE, `📅 ${dayLabel(day)} · ${list.length} งาน`);
+    for (const r of list) {
+      n += 1;
+      out.push(
+        LINE,
+        `${n}) ⏰ ${r.scheduledTime ? `${r.scheduledTime} น.` : "ไม่ระบุเวลา"} · ${r.kind === "INSPECT" ? "🔍 ตรวจหน้างาน" : "🔧 ซ่อม"}`,
+        `🏪 ${r.branchName}`,
+        `🔖 ${r.branchCode} · ${r.code}`,
+        ...(r.machineCode ? [`🧺 เครื่อง ${r.machineCode}`] : []),
+        ...(r.symptom ? [`⚠️ ${cut(r.symptom)}`] : []),
+        `📞 ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
+        ...(r.latitude != null && r.longitude != null ? [`📍 https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
+      );
+    }
+  }
+  out.push(LINE, "🙏 ถึงหน้างานแล้วอัปเดตในแอปด้วยนะครับ");
+  return out.join("\n");
 }
+
+/** ทุกทีมต่อกัน — แต่ละทีมเป็นข้อความครบในตัว ตัดส่งทีละกลุ่มได้ */
+export const allDispatch = (rows: ConfirmedRow[]) =>
+  byTeam(rows)
+    .map((t) => teamDispatch(t.team, t.rows))
+    .join("\n\n");

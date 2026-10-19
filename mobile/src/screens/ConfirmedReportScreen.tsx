@@ -14,7 +14,7 @@ import Dropdown from "../components/Dropdown";
 import { CopyButton } from "../components/CustomerMessage";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
-import { byTeam, confirmedReport, ConfirmedRow, dayLabel } from "../utils/customerMessage";
+import { allDispatch, byTeam, ConfirmedRow, dayLabel, teamDispatch } from "../utils/customerMessage";
 import { formatDateTime } from "./WorkOrderListScreen";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -70,7 +70,6 @@ export default function ConfirmedReportScreen() {
   }, [confirmers, confirmer]);
   const shown = team ? teams.filter((t) => t.team === team) : teams;
   const shownRows = shown.flatMap((t) => t.rows);
-  const title = `${by === "confirm" ? "คอนเฟิร์มวันที่" : "นัดเข้างานวันที่"} ${dayLabel(date)}${confirmer ? ` · คอนเฟิร์มโดย ${confirmer}` : ""}`;
   const inspect = shownRows.filter((r) => r.kind === "INSPECT").length;
 
   return (
@@ -148,7 +147,7 @@ export default function ConfirmedReportScreen() {
               {inspect ? ` · ตรวจหน้างาน ${inspect}` : ""}
             </Text>
             <View style={{ flex: 1 }} />
-            <CopyButton text={confirmedReport(title, shownRows)} label={team || confirmer ? "คัดลอก" : "คัดลอกทั้งหมด"} />
+            <CopyButton text={allDispatch(shownRows)} label={shown.length > 1 ? "คัดลอกทุกทีม" : `คัดลอกให้${shown[0].team}`} />
           </View>
 
           {shown.map((t) => (
@@ -157,7 +156,7 @@ export default function ConfirmedReportScreen() {
                 <Text style={styles.teamName}>👷 {t.team}</Text>
                 <Text style={styles.teamCount}>{t.rows.length} งาน</Text>
                 <View style={{ flex: 1 }} />
-                {shown.length > 1 ? <CopyButton text={confirmedReport(title, t.rows)} label="คัดลอกทีมนี้" /> : null}
+                {shown.length > 1 ? <CopyButton text={teamDispatch(t.team, t.rows)} label={`คัดลอกให้${t.team}`} /> : null}
               </View>
               {t.rows.map((r) => (
                 <View key={r.id} style={styles.job}>
@@ -191,10 +190,13 @@ export default function ConfirmedReportScreen() {
             </View>
           ))}
 
-          <Text style={styles.label}>ตัวอย่างข้อความ</Text>
-          <Text style={styles.bubble} selectable>
-            {confirmedReport(title, shownRows)}
-          </Text>
+          {/* กว้างประมาณจอมือถือ — เห็นการตัดบรรทัดใกล้กับที่ช่างเห็นในไลน์ */}
+          <Text style={styles.label}>ตัวอย่างข้อความในไลน์ (ทีละทีม)</Text>
+          {shown.map((t) => (
+            <Text key={t.team} style={styles.bubble} selectable>
+              {teamDispatch(t.team, t.rows)}
+            </Text>
+          ))}
         </>
       )}
     </ScrollView>
@@ -242,6 +244,7 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12, color: colors.textMuted },
   by: { color: colors.roleAdmin, fontWeight: "700" },
   bubble: {
+    maxWidth: 380,
     backgroundColor: "#E8F5E9",
     borderWidth: 1,
     borderColor: "#CDE8D2",
