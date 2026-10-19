@@ -1,4 +1,5 @@
-// ทดสอบ: หน้าสรุปคอนเฟิร์มลูกค้า (ส่งกลุ่มไลน์ช่าง) ด้วยบทบาทจริง — อ่านคลิปบอร์ดจริง
+// ทดสอบ: หน้าสรุปคอนเฟิร์มลูกค้า (จ่ายงานผ่านกลุ่มไลน์ช่าง) ด้วยบทบาทจริง — อ่านคลิปบอร์ดจริง
+//   รูปแบบข้อความ (ออกแบบใหม่ ต.ค. 69): หัวคิวงาน+ทีม · เส้นคั่นงาน · อาการตัด … · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่
 //   · การ์ดในเมนูรายงาน: แอดมินเห็น · ช่างไม่เห็น
 //   · เคสที่คอนเฟิร์มวันนี้แยกตามทีม · คัดลอกทั้งหมดได้ทุกเคส + เบอร์ร้าน + ไม่มีชื่อแอดมิน
 //   · คัดลอกทีมนี้ได้เฉพาะทีมนั้น · สลับ "นัดเข้างานวันที่" ไปวันที่ไม่มีนัด = ว่าง
@@ -16,6 +17,7 @@ const { setup } = require("./fixture");
     args: ["--no-sandbox"],
   });
   let fx = null;
+  let restoreBranch = () => {};
   try {
     fx = await setup();
     const a = await fx.workOrder("C0006", null);
@@ -24,10 +26,17 @@ const { setup } = require("./fixture");
     const teamB = fx.sql(`select zone from "Branch" where zone is not null and zone<>'${teamA}' order by zone limit 1`);
     const aid = fx.sql(`select id from "User" where "employeeCode"='A001'`);
     const aname = fx.sql(`select name from "User" where "employeeCode"='A001'`);
+    // พิกัดสาขาชั่วคราว (คืนค่าเดิมตอนจบ) — ข้อความต้องมีลิงก์แผนที่
+    const oldLat = fx.sql(`select coalesce(latitude::text,'null')||','||coalesce(longitude::text,'null') from "Branch" where code='C0006'`);
+    fx.sql(`update "Branch" set latitude=13.7563, longitude=100.5018 where code='C0006'`);
+    restoreBranch = () => fx.sql(`update "Branch" set latitude=${oldLat.split(",")[0]}, longitude=${oldLat.split(",")[1]} where code='C0006'`);
     for (const [wo, team, t] of [[a, teamA, "09:00"], [b, teamB, "14:00"]]) {
       fx.sql(`update "WorkOrder" set status='ASSIGNED', "scheduledAt"='2026-12-10', "scheduledTime"='${t}', "appointmentStatus"='CONFIRMED', "assignedTeam"='${team}', "contactPhone"='081-111-222${wo.id % 10}' where id=${wo.id}`);
       fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note) values (${wo.id},${aid},'CONFIRMED','ASSIGNED','ทดสอบ')`);
     }
+    // a: อาการยาว (ต้องถูกตัด) · b: ไม่มีเบอร์ผู้ติดต่อ
+    fx.sql(`update "WorkOrder" set symptom='${"ก".repeat(30)} ${"ข".repeat(40)} ท้ายสุดต้องไม่เห็น' where id=${a.id}`);
+    fx.sql(`update "WorkOrder" set "contactPhone"=null, "contactName"=null where id=${b.id}`);
 
     const openAs = async (code) => {
       const ctx = await browser.newContext({ viewport: { width: 1300, height: 950 }, permissions: ["clipboard-read", "clipboard-write"] });
@@ -60,9 +69,14 @@ const { setup } = require("./fixture");
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").first().click();
       await page.waitForTimeout(500);
       const all = await clip(page);
-      all.startsWith("📢 สรุปงานที่คอนเฟิร์มลูกค้าแล้ว") && all.includes(a.code) && all.includes(b.code) &&
-      all.includes(`👷 ${teamA}`) && all.includes("📞") && all.includes("09:00 น.") && !all.includes(aname)
-        ? pass("คัดลอกทั้งหมด: ทุกเคส ทุกทีม มีเวลา+เบอร์ร้าน ไม่มีชื่อแอดมิน") : fail(`คลิปบอร์ด: ${all.replace(/\n/g, " | ").slice(0, 300)}`);
+      const lines = all.split("\n");
+      all.startsWith("📢 คิวงานช่าง พฤ. 10 ธ.ค. 69") && all.includes(a.code) && all.includes(b.code) &&
+      lines.includes(`👷 ${teamA} · 1 งาน`) && lines.includes("1) ⏰ 09:00 น. · 🔧 ซ่อม") && lines.includes("━━━━━━━━━━━━") &&
+      lines.includes("📞 ไม่มีในใบงาน") && lines.includes("📍 https://maps.google.com/?q=13.7563,100.5018") &&
+      lines.some((l) => l.startsWith("⚠️ ") && l.endsWith("…")) && !all.includes("ท้ายสุดต้องไม่เห็น") &&
+      lines.every((l) => !l.startsWith(" ")) && !all.includes(aname)
+        ? pass("คัดลอกทุกทีม: หัวคิวงาน+ทีม · เส้นคั่น · เวลา+ประเภท · อาการตัด … · ไม่มีเบอร์บอกตรง ๆ · แผนที่ · ไม่ย่อหน้า · ไม่มีชื่อแอดมิน")
+        : fail(`คลิปบอร์ด: ${all.replace(/\n/g, " | ").slice(0, 400)}`);
       // ปุ่มที่สอง = คัดลอกทีมแรก
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").nth(1).click();
       await page.waitForTimeout(500);
@@ -84,8 +98,8 @@ const { setup } = require("./fixture");
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").first().click();
       await page.waitForTimeout(500);
       const mine = await clip(page);
-      mine.includes(a.code) && !mine.includes(b.code) && mine.includes(`คอนเฟิร์มโดย ${aname}`)
-        ? pass("คัดลอกหลังเลือกผู้คอนเฟิร์ม: ได้เฉพาะเคสของคนนั้น หัวข้อบอกชื่อ") : fail(`คัดลอกรายคน: ${mine.replace(/\n/g, " | ").slice(0, 200)}`);
+      mine.includes(a.code) && !mine.includes(b.code) && !mine.includes(aname)
+        ? pass("คัดลอกหลังเลือกผู้คอนเฟิร์ม: ได้เฉพาะเคสของคนนั้น") : fail(`คัดลอกรายคน: ${mine.replace(/\n/g, " | ").slice(0, 200)}`);
       await page.screenshot({ path: path.join(DIR, "confirmed-report-by.png"), fullPage: true });
       await page.locator('[aria-label="ผู้คอนเฟิร์ม ทุกคน"]').locator("visible=true").first().click();
       await page.waitForTimeout(500);
@@ -98,7 +112,10 @@ const { setup } = require("./fixture");
   } catch (e) {
     fail(String(e).slice(0, 400));
   } finally {
-    if (fx) await fx.cleanup();
+    if (fx) {
+      restoreBranch();
+      await fx.cleanup();
+    }
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();
   }
