@@ -1,0 +1,105 @@
+// ทดสอบ: หน้าสรุปคอนเฟิร์มลูกค้า (ส่งกลุ่มไลน์ช่าง) ด้วยบทบาทจริง — อ่านคลิปบอร์ดจริง
+//   · การ์ดในเมนูรายงาน: แอดมินเห็น · ช่างไม่เห็น
+//   · เคสที่คอนเฟิร์มวันนี้แยกตามทีม · คัดลอกทั้งหมดได้ทุกเคส + เบอร์ร้าน + ไม่มีชื่อแอดมิน
+//   · คัดลอกทีมนี้ได้เฉพาะทีมนั้น · สลับ "นัดเข้างานวันที่" ไปวันที่ไม่มีนัด = ว่าง
+const { chromium } = require("playwright");
+const path = require("path");
+const DIR = __dirname;
+const { setup } = require("./fixture");
+
+(async () => {
+  const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
+  const pass = (m) => console.log("PASS", m);
+  const errors = [];
+  const browser = await chromium.launch({
+    ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
+    args: ["--no-sandbox"],
+  });
+  let fx = null;
+  try {
+    fx = await setup();
+    const a = await fx.workOrder("C0006", null);
+    const b = await fx.workOrder("C0006", null);
+    const teamA = fx.sql(`select zone from "Branch" where code='C0006'`);
+    const teamB = fx.sql(`select zone from "Branch" where zone is not null and zone<>'${teamA}' order by zone limit 1`);
+    const aid = fx.sql(`select id from "User" where "employeeCode"='A001'`);
+    const aname = fx.sql(`select name from "User" where "employeeCode"='A001'`);
+    for (const [wo, team, t] of [[a, teamA, "09:00"], [b, teamB, "14:00"]]) {
+      fx.sql(`update "WorkOrder" set status='ASSIGNED', "scheduledAt"='2026-12-10', "scheduledTime"='${t}', "appointmentStatus"='CONFIRMED', "assignedTeam"='${team}', "contactPhone"='081-111-222${wo.id % 10}' where id=${wo.id}`);
+      fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note) values (${wo.id},${aid},'CONFIRMED','ASSIGNED','ทดสอบ')`);
+    }
+
+    const openAs = async (code) => {
+      const ctx = await browser.newContext({ viewport: { width: 1300, height: 950 }, permissions: ["clipboard-read", "clipboard-write"] });
+      const page = await ctx.newPage();
+      page.on("pageerror", (e) => errors.push(String(e)));
+      const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
+      await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
+      await page.getByPlaceholder("รหัสพนักงาน").fill(code);
+      await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
+      await vis("เข้าสู่ระบบ").click();
+      await page.waitForTimeout(3500);
+      await vis("รายงาน").first().click();
+      await page.waitForTimeout(2000);
+      return { ctx, page, vis };
+    };
+    const clip = (page) => page.evaluate(() => navigator.clipboard.readText());
+
+    {
+      const { ctx, vis } = await openAs("T001");
+      (await vis("สรุปคอนเฟิร์มลูกค้า").count()) === 0 ? pass("ช่างไม่เห็นการ์ดสรุปคอนเฟิร์มลูกค้า") : fail("ช่างเห็นการ์ด");
+      await ctx.close();
+    }
+    {
+      const { ctx, page, vis } = await openAs("A001");
+      await vis("สรุปคอนเฟิร์มลูกค้า").first().click();
+      await page.waitForTimeout(2500);
+      (await vis(a.code).count()) > 0 && (await vis(b.code).count()) > 0 && (await vis(`👷 ${teamA}`).count()) > 0 && (await vis(`👷 ${teamB}`).count()) > 0
+        ? pass("เคสที่คอนเฟิร์มวันนี้ขึ้น แยกตามทีม") : fail("ไม่เห็นเคส/ทีม");
+      await page.screenshot({ path: path.join(DIR, "confirmed-report.png"), fullPage: true });
+      await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").first().click();
+      await page.waitForTimeout(500);
+      const all = await clip(page);
+      all.startsWith("📢 สรุปงานที่คอนเฟิร์มลูกค้าแล้ว") && all.includes(a.code) && all.includes(b.code) &&
+      all.includes(`👷 ${teamA}`) && all.includes("📞") && all.includes("09:00 น.") && !all.includes(aname)
+        ? pass("คัดลอกทั้งหมด: ทุกเคส ทุกทีม มีเวลา+เบอร์ร้าน ไม่มีชื่อแอดมิน") : fail(`คลิปบอร์ด: ${all.replace(/\n/g, " | ").slice(0, 300)}`);
+      // ปุ่มที่สอง = คัดลอกทีมแรก
+      await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").nth(1).click();
+      await page.waitForTimeout(500);
+      const one = await clip(page);
+      const first = [teamA, teamB].sort((x, y) => x.localeCompare(y, "th"))[0];
+      const other = first === teamA ? b.code : a.code;
+      one.includes(`👷 ${first}`) && !one.includes(other)
+        ? pass("คัดลอกทีมนี้: ได้เฉพาะเคสของทีมนั้น") : fail(`คัดลอกทีม: ${one.replace(/\n/g, " | ").slice(0, 200)}`);
+      // ปุ่มแยกตามผู้คอนเฟิร์ม — ใบ b ให้คนอื่น (S001) เป็นคนคอนเฟิร์ม แล้วกดปุ่มชื่อแอดมิน
+      const sname = fx.sql(`select name from "User" where "employeeCode"='S001'`);
+      fx.sql(`update "WorkOrderLog" set "userId"=(select id from "User" where "employeeCode"='S001') where "workOrderId"=${b.id} and action='CONFIRMED'`);
+      // ปุ่มรีเฟรชของแอป — โหลดหน้าเว็บใหม่จะกลับไปหน้าแรก
+      await vis("รีเฟรช").first().click();
+      await page.waitForTimeout(3000);
+      await page.locator(`[aria-label="ผู้คอนเฟิร์ม ${aname}"]`).locator("visible=true").first().click();
+      await page.waitForTimeout(800);
+      (await vis(a.code).count()) > 0 && (await vis(b.code).count()) === 0 && (await page.locator(`[aria-label="ผู้คอนเฟิร์ม ${sname}"]`).count()) > 0
+        ? pass("ปุ่มแยกตามผู้คอนเฟิร์ม: กดชื่อแล้วเหลือเฉพาะเคสของคนนั้น") : fail("ปุ่มผู้คอนเฟิร์มไม่กรอง");
+      await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").first().click();
+      await page.waitForTimeout(500);
+      const mine = await clip(page);
+      mine.includes(a.code) && !mine.includes(b.code) && mine.includes(`คอนเฟิร์มโดย ${aname}`)
+        ? pass("คัดลอกหลังเลือกผู้คอนเฟิร์ม: ได้เฉพาะเคสของคนนั้น หัวข้อบอกชื่อ") : fail(`คัดลอกรายคน: ${mine.replace(/\n/g, " | ").slice(0, 200)}`);
+      await page.screenshot({ path: path.join(DIR, "confirmed-report-by.png"), fullPage: true });
+      await page.locator('[aria-label="ผู้คอนเฟิร์ม ทุกคน"]').locator("visible=true").first().click();
+      await page.waitForTimeout(500);
+      await vis("นัดเข้างานวันที่").first().click();
+      await page.waitForTimeout(2500);
+      (await vis("ไม่มีคิวนัดเข้างานวันนี้").count()) > 0 || (await vis(a.code).count()) === 0
+        ? pass("สลับเป็นนัดเข้างานวันที่ (วันนี้) — เคสที่นัด 10 ธ.ค. ไม่ขึ้น") : fail("นัดเข้างานวันนี้ยังเห็นเคสวันอื่น");
+      await ctx.close();
+    }
+  } catch (e) {
+    fail(String(e).slice(0, 400));
+  } finally {
+    if (fx) await fx.cleanup();
+    errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
+    await browser.close();
+  }
+})();

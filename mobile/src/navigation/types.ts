@@ -17,6 +17,8 @@ export type HomeStackParamList = {
   OpenerReport: undefined;
   /** รายงานทั้งระบบ — แอดมินเท่านั้น */
   SystemReport: undefined;
+  /** สรุปเคสที่คอนเฟิร์มลูกค้าแล้ว — คัดลอกส่งกลุ่มไลน์ช่าง */
+  ConfirmedReport: undefined;
   MachineDashboard: undefined;
   MachineImport: undefined;
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม */

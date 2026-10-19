@@ -46,3 +46,69 @@ export const hasCustomerMessage = (o: { status: string; appointmentStatus: strin
   !!o.scheduledAt &&
   (o.appointmentStatus === "CONFIRMED" || o.appointmentStatus === "ADMIN_PICKED") &&
   !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(o.status);
+
+// ── สรุปเคสที่คอนเฟิร์มลูกค้าแล้ว ส่งกลุ่มไลน์ช่าง (เจ้าของงานขอ ต.ค. 69) ──
+
+export interface ConfirmedRow {
+  id: number;
+  code: string;
+  kind: "INSPECT" | "REPAIR";
+  team: string | null;
+  scheduledAt: string;
+  scheduledTime: string | null;
+  branchCode: string;
+  branchName: string;
+  machineCode: string | null;
+  symptom: string | null;
+  contactName: string | null;
+  contactPhone: string | null;
+  confirmedBy: string | null;
+  confirmedAt: string | null;
+}
+
+const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+/** "อ. 20 ต.ค. 69" — ช่างอ่านวันในสัปดาห์ก่อนวันที่ */
+export function dayLabel(ymd: string) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return `${DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${thaiDate(ymd)}`;
+}
+
+/** เคสแยกตามทีม — ลำดับตามที่เซิร์ฟเวอร์เรียงมา (ทีม → วันเวลานัด) */
+export function byTeam(rows: ConfirmedRow[]) {
+  const map = new Map<string, ConfirmedRow[]>();
+  for (const r of rows) {
+    const k = r.team ?? "ยังไม่มีทีม";
+    map.set(k, [...(map.get(k) ?? []), r]);
+  }
+  return [...map].map(([team, list]) => ({ team, rows: list }));
+}
+
+/**
+ * ข้อความสรุปส่งกลุ่มไลน์ช่าง — ไม่ใส่ชื่อแอดมินที่คอนเฟิร์ม (ช่างไม่ต้องใช้ · เจ้าของงานเลือก) แต่ใส่เบอร์ร้าน
+ * เพราะช่างต้องโทรแจ้งก่อนเข้าพื้นที่ · title บอกว่าเป็นสรุปของวันไหน แบบไหน
+ */
+export function confirmedReport(title: string, rows: ConfirmedRow[]) {
+  const teams = byTeam(rows);
+  return [
+    "📢 สรุปงานที่คอนเฟิร์มลูกค้าแล้ว",
+    `🗓️ ${title} · ${rows.length} งาน`,
+    "",
+    teams
+      .map((t) =>
+        [
+          `👷 ${t.team} (${t.rows.length} งาน)`,
+          ...t.rows.flatMap((r, i) => [
+            `${i + 1}) 📅 ${dayLabel(r.scheduledAt)}${r.scheduledTime ? ` · ${r.scheduledTime} น.` : ""} · ${
+              r.kind === "INSPECT" ? "🔍 ตรวจหน้างาน" : "🔧 ซ่อม"
+            }`,
+            `   📋 ${r.code} · 🏪 ${r.branchName} (${r.branchCode})`,
+            ...(r.machineCode || r.symptom
+              ? [`   🧺 ${[r.machineCode, r.symptom ? `อาการ: ${r.symptom}` : null].filter(Boolean).join(" · ")}`]
+              : []),
+            ...(r.contactName || r.contactPhone ? [`   📞 ${[r.contactName, r.contactPhone].filter(Boolean).join(" ")}`] : []),
+          ]),
+        ].join("\n")
+      )
+      .join("\n\n"),
+  ].join("\n");
+}
