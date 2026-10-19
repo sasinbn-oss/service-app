@@ -29,6 +29,8 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
+import { CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
+import { hasCustomerMessage } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
 import DateField, { thaiDate } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
@@ -430,6 +432,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const editingNoteRef = useRef(false);
   editingNoteRef.current = editingNote;
   const [stageOpen, setStageOpen] = useState(false);
+  // เด้งข้อความแจ้งลูกค้าหลังแอดมินกดคอนเฟิร์ม (ดู StageModal onDone)
+  const [messageOpen, setMessageOpen] = useState(false);
   // ความกว้างของแถบขั้นตอน — แคบจนชื่อขั้นอ่านไม่ออก ซ่อนชื่อขั้นอื่น เหลือแค่ขั้นปัจจุบัน
   const [stepBarW, setStepBarW] = useState(0);
   const [skipOpen, setSkipOpen] = useState<number | null>(null);
@@ -1409,6 +1413,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       </View>
 
+      {/* ข้อความแจ้งคิวช่างให้ลูกค้า — คนคุยกับร้าน (แอดมิน) และคนปล่อยงาน (หัวหน้าภาค) ช่างไม่ต้องใช้ */}
+      {hasCustomerMessage(order) && (me?.role === "ADMIN" || me?.role === "SUPERVISOR") ? (
+        <CustomerMessageCard order={order} style={card} />
+      ) : null}
+
       {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
       <View style={card}>
         <View style={styles.headRow}>
@@ -1774,13 +1783,18 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         files={files}
         onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
-        onDone={async () => {
+        onDone={async (kind) => {
           setStageOpen(false);
           // ขั้นเสนอราคาแนบใบเสนอราคา/บิลไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
           await reloadWithNotice();
+          // เพิ่งคอนเฟิร์มกับลูกค้า — จังหวะที่ต้องส่งข้อความแจ้งคิวช่างพอดี
+          if (kind === "confirmed") setMessageOpen(true);
         }}
       />
+      {messageOpen && hasCustomerMessage(order) ? (
+        <CustomerMessageModal order={order} onClose={() => setMessageOpen(false)} />
+      ) : null}
 
       <NoteModal
         visible={editingNote}
@@ -2393,7 +2407,8 @@ function StageModal({
   /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
   onFilesChanged: () => void;
   onCancel: () => void;
-  onDone: () => void;
+  /** confirmed = เพิ่งคอนเฟิร์มนัดกับลูกค้า (หน้าใบงานเปิดข้อความแจ้งลูกค้าให้) */
+  onDone: (kind?: "confirmed") => void;
 }) {
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
@@ -2514,6 +2529,8 @@ function StageModal({
             ? { scheduledAt: visit, scheduledTime: visitTime || null, note: note.trim() || undefined }
             : { note: note.trim() || undefined }
         );
+        onDone("confirmed");
+        return;
       } else if (order.status === "NEW") {
         await api.post(`/work-orders/${order.id}/parts`, {
           services: offPartsPayload(services),
