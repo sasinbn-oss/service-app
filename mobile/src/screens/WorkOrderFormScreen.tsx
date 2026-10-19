@@ -8,7 +8,7 @@
  * ที่ถือหลายเครื่อง เพราะแต่ละเครื่องมีอะไหล่ของตัวเอง ปิดคนละเวลา และอาจถูก
  * จ่ายให้ช่างคนละคน ใบเดียวที่ถือสามเครื่องจะปิดไม่ได้จนกว่าจะเสร็จครบทั้งสาม
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Image,
   Platform,
@@ -36,6 +36,7 @@ import {
 import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
+import OpenOrdersWarning, { MachineOpenWarning, OpenOrder } from "../components/OpenOrdersWarning";
 import { colors, radius, shadow, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderForm">;
@@ -181,6 +182,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [branchRegion, setBranchRegion] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /**
+   * กันกดเปิดใบงานซ้ำตอนเน็ตช้า — saving เป็น state ปุ่มจึงยังกดได้อีกครั้งก่อนหน้าจอวาดใหม่
+   * สองคลิกติดกันได้ใบเหมือนกันเป๊ะสองใบ ref เปลี่ยนทันทีไม่ต้องรอวาด
+   */
+  const submitting = useRef(false);
+  const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
@@ -291,6 +298,24 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       })
       .catch(() => undefined);
   }, [route.params?.branchCode]);
+
+  // ใบงานที่ยังเปิดค้างของสาขา — เตือนก่อนเปิดซ้ำ (ดู OpenOrdersWarning)
+  useEffect(() => {
+    const code = branchCode.trim();
+    setOpenOrders([]);
+    if (!code) return;
+    let alive = true;
+    api
+      .get<OpenOrder[]>(`/branches/${encodeURIComponent(code)}/open-work-orders`)
+      .then((res) => {
+        if (alive) setOpenOrders(res.data);
+      })
+      // เตือนไม่ขึ้นดีกว่าเปิดใบงานไม่ได้ — ฟอร์มยังใช้ได้ตามปกติ
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [branchCode]);
 
   /**
    * เติมผู้ติดต่อจากใบงานล่าสุดของสาขานี้
@@ -410,11 +435,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   }
 
   async function submit() {
+    if (submitting.current) return;
     const problem = validate();
     if (problem) {
       setError(problem);
       return;
     }
+    submitting.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -504,6 +531,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
+      submitting.current = false;
       setSaving(false);
       setBusy(null);
     }
@@ -613,7 +641,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             )}
           </>
         )}
-
+        {branchCode ? (
+          <OpenOrdersWarning
+            orders={openOrders}
+            onOpen={(id) => navigation.push("WorkOrderDetail", { id })}
+          />
+        ) : null}
       </View>
 
       <View style={styles.card}>
@@ -661,6 +694,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           และไม่ช่วยหัวหน้าภาคที่ต้องระบุอะไหล่ให้แต่ละเครื่อง
         */}
         {rows.map((row, i) => (
+          <React.Fragment key={row.key}>
           <MachineCard
             key={row.key}
             row={row}
@@ -675,6 +709,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             onAddFile={(pick) => addFile(row, pick)}
             onAddNameplate={(pick) => addNameplate(row, pick)}
           />
+          <MachineOpenWarning
+            order={openOrders.find((o) => {
+              const code = (fromBoard ? route.params?.machineCode ?? "" : row.code).trim().toUpperCase();
+              return !!code && o.machineCode === code;
+            })}
+          />
+          </React.Fragment>
         ))}
 
         {!fromBoard ? (
