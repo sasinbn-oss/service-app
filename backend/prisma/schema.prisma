@@ -551,6 +551,10 @@ model SparePart {
   // Either a full external URL, or a path served by this API
   // ("/api/spare-parts/:id/image") when a photo was uploaded.
   imageUrl       String?
+  // อะไหล่นอกสโตร์ (ไม่มี SKU) — หัวหน้าภาค/ช่างพิมพ์ชื่อเอง (เจ้าของงานขอ ต.ค. 69)
+  // เก็บเป็นแถวในตารางนี้ให้ทุกขั้นของใบงาน (เช็ค แยกใบรออะไหล่ ปิดงาน) ใช้ทางเดียวกับของในสโตร์
+  // partCode = "[นอกสโตร์] ชื่อ" ชื่อเดียวกันคือแถวเดียวกัน · ไม่ขึ้นในหน้ารายการอะไหล่/ค้นหา
+  offCatalog     Boolean         @default(false)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   image          SparePartImage?
@@ -777,6 +781,9 @@ model WorkOrderPart {
   // เก็บรายตัวไม่ใช่รายใบงาน เพราะใบงานที่ช่างส่งกลับมาขอเบิกเพิ่มจะมีใบเบิก
   // ใบที่สอง ถ้าเก็บไว้ที่ใบงานใบเดียว เลขใบแรกจะถูกทับหายไป
   requisitionNo String?
+  // หน่วยกับหมายเหตุของอะไหล่นอกสโตร์ (เส้น/ชุด · สเปค แหล่งซื้อ) — ของในสโตร์ไม่ใช้
+  unit        String?
+  note        String?
   checkedAt   DateTime?
   checkedById Int?
   checkedBy   User?     @relation("CheckedWorkOrderParts", fields: [checkedById], references: [id])

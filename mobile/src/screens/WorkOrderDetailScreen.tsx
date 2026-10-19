@@ -29,6 +29,7 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
+import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
 import DateField, { thaiDate } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
@@ -1440,18 +1441,22 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                   <View key={part.sparePartId}>
                     <View style={styles.partRow}>
                       <Text style={styles.partCode}>
-                        {part.partCode} × {part.quantity}
+                        {partTitle(part)} × {part.quantity}
+                        {part.unit ? ` ${part.unit}` : ""}
                       </Text>
+                      {part.offCatalog ? <OffTag /> : null}
                       <Text style={styles.partName} numberOfLines={1}>
-                        {part.name}
+                        {part.offCatalog ? part.note ?? "" : part.name}
                       </Text>
-                      {/* ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด */}
+                      {/* ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด · ของนอกสโตร์ = จัดหาได้ไหม */}
                       {part.inStock === null ? (
                         <Text style={styles.stockPending}>ยังไม่เช็ค</Text>
                       ) : part.inStock ? (
-                        <Text style={styles.stockIn}>{part.warehouse ?? "มีของ"}</Text>
+                        <Text style={styles.stockIn}>{part.offCatalog ? "หาได้" : part.warehouse ?? "มีของ"}</Text>
                       ) : (
-                        <Text style={partsOut.length ? styles.stockOutPill : styles.stockOut}>หมด</Text>
+                        <Text style={partsOut.length ? styles.stockOutPill : styles.stockOut}>
+                          {part.offCatalog ? "ยังหาไม่ได้" : "หมด"}
+                        </Text>
                       )}
                     </View>
                     {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
@@ -1635,7 +1640,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text style={styles.sectionTitle}>อะไหล่ที่ใช้</Text>
               {order.parts.map((p) => (
                 <Text key={p.sparePartId} style={styles.partLine}>
-                  {p.partCode} · {p.name} × {p.quantity}
+                  {p.offCatalog ? `${p.name} (นอกสโตร์)` : `${p.partCode} · ${p.name}`} × {p.quantity}
+                  {p.unit ? ` ${p.unit}` : ""}
                 </Text>
               ))}
             </>
@@ -2363,6 +2369,8 @@ function StageModal({
 }) {
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
+  // ของนอกสโตร์แยกช่อง — ส่งกลับด้วยชื่อ เซิร์ฟเวอร์จับคู่กับแถวเดิม ผลเช็คจึงไม่หาย
+  const [offParts, setOffParts] = useState<OffPart[]>([]);
   const [checks, setChecks] = useState<
     Record<number, { inStock: boolean | null; warehouse: string | null }>
   >({});
@@ -2410,7 +2418,9 @@ function StageModal({
     setConfirmChoice(order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "MOVE" : null);
     setSplitOut(true);
     setVisitTime(order.scheduledTime ?? "");
-    setParts(order.waitingParts);
+    const split = splitParts(order.waitingParts);
+    setParts(split.store);
+    setOffParts(split.off);
     setChecks(
       Object.fromEntries(
         order.waitingParts.map((p) => [p.sparePartId, { inStock: p.inStock, warehouse: p.warehouse }])
@@ -2479,6 +2489,7 @@ function StageModal({
           parts: needsParts
             ? parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }))
             : [],
+          offParts: needsParts ? offPartsPayload(offParts) : [],
           note: note.trim() || undefined,
         });
       } else if (order.status === "PARTS_REQUESTED") {
@@ -2487,8 +2498,9 @@ function StageModal({
           results: thisRound.map((p) => ({
             sparePartId: p.sparePartId,
             inStock: checks[p.sparePartId]?.inStock ?? false,
-            warehouse: checks[p.sparePartId]?.warehouse ?? null,
-            requisitionNo: requisitionNo.trim() || null,
+            // ของนอกสโตร์ไม่ได้ออกจากคลัง — ไม่มีคลัง ไม่ผูกกับใบเบิกของรอบนี้
+            warehouse: p.offCatalog ? null : checks[p.sparePartId]?.warehouse ?? null,
+            requisitionNo: p.offCatalog ? null : requisitionNo.trim() || null,
           })),
           splitOut: mixed && splitOut,
           expectedAt: checkOut && expectedAt ? expectedAt : null,
@@ -2553,12 +2565,13 @@ function StageModal({
     order.status === "PARTS_REQUESTED" &&
     thisRound.some((p) => {
       const c = checks[p.sparePartId];
-      return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse);
+      return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse && !p.offCatalog);
     });
   // มีของอย่างน้อยหนึ่งตัวในรอบนี้ = ต้องเบิก = ต้องมีเลขใบเบิก
   const needsRequisition =
     order.status === "PARTS_REQUESTED" &&
-    thisRound.some((p) => checks[p.sparePartId]?.inStock === true) &&
+    // ของนอกสโตร์ไม่ได้ออกจากคลัง ไม่มีใบเบิก — นับเฉพาะของในสโตร์
+    thisRound.some((p) => !p.offCatalog && checks[p.sparePartId]?.inStock === true) &&
     !requisitionNo.trim();
   // ขั้นเสนอราคาต้องมีเอกสาร เว้นแต่กดข้ามซึ่งต้องบอกเหตุผลแทน
   const quoteBlocked =
@@ -2597,7 +2610,9 @@ function StageModal({
     (order.status === "NEW" &&
       (inspectFirst
         ? !team || !validDate || !timeOk
-        : needsParts === null || (needsParts && parts.length === 0))) ||
+        : needsParts === null ||
+          (needsParts && parts.length === 0 && offPartsPayload(offParts).length === 0) ||
+          (needsParts && offPartsIncomplete(offParts)))) ||
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
@@ -2712,7 +2727,10 @@ function StageModal({
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : needsParts === true ? (
-                  <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
+                  <>
+                    <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
+                    <OffPartEditor rows={offParts} onChange={setOffParts} />
+                  </>
                 ) : needsParts === false ? (
                   <Text style={styles.linkedText}>
                     ข้ามขั้นเช็คคลัง ไปจัดคิวช่างเลย — เช่น ให้เข้าไปประเมินอาการก่อน
@@ -2735,9 +2753,11 @@ function StageModal({
                   return (
                     <View key={part.sparePartId} style={styles.checkItem}>
                       <Text style={styles.checkCode}>
-                        {part.partCode} × {part.quantity}
+                        {partTitle(part)} × {part.quantity}
+                        {part.unit ? ` ${part.unit}` : ""}
                       </Text>
-                      <Text style={styles.checkName}>{part.name}</Text>
+                      {part.offCatalog ? <OffTag /> : null}
+                      <Text style={styles.checkName}>{part.offCatalog ? part.note || "จัดหาเอง — ไม่ต้องใส่คลัง/เลขใบเบิก" : part.name}</Text>
                       <View style={styles.options}>
                         <TouchableOpacity
                           style={[styles.option, c.inStock === true && styles.optionOn]}
@@ -2745,7 +2765,9 @@ function StageModal({
                           activeOpacity={0.7}
                           accessibilityLabel={`มีของ ${part.partCode}`}
                         >
-                          <Text style={[styles.optionText, c.inStock === true && styles.optionTextOn]}>มีอะไหล่</Text>
+                          <Text style={[styles.optionText, c.inStock === true && styles.optionTextOn]}>
+                            {part.offCatalog ? "หาได้" : "มีอะไหล่"}
+                          </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.option, c.inStock === false && styles.optionOut]}
@@ -2753,7 +2775,9 @@ function StageModal({
                           activeOpacity={0.7}
                           accessibilityLabel={`หมด ${part.partCode}`}
                         >
-                          <Text style={[styles.optionText, c.inStock === false && styles.optionTextOut]}>หมด</Text>
+                          <Text style={[styles.optionText, c.inStock === false && styles.optionTextOut]}>
+                            {part.offCatalog ? "ยังหาไม่ได้" : "หมด"}
+                          </Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -2824,9 +2848,11 @@ function StageModal({
                   return (
                     <View key={part.sparePartId} style={styles.checkItem}>
                       <Text style={styles.checkCode}>
-                        {part.partCode} × {part.quantity}
+                        {partTitle(part)} × {part.quantity}
+                        {part.unit ? ` ${part.unit}` : ""}
                       </Text>
-                      <Text style={styles.checkName}>{part.name}</Text>
+                      {part.offCatalog ? <OffTag /> : null}
+                      <Text style={styles.checkName}>{part.offCatalog ? part.note || "จัดหาเอง — ไม่ต้องใส่คลัง/เลขใบเบิก" : part.name}</Text>
                       <View style={styles.options}>
                         <TouchableOpacity
                           style={[styles.option, c.inStock === true && styles.optionOn]}
@@ -2841,7 +2867,7 @@ function StageModal({
                           <Text
                             style={[styles.optionText, c.inStock === true && styles.optionTextOn]}
                           >
-                            มีของ
+                            {part.offCatalog ? "ได้ของแล้ว" : "มีของ"}
                           </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -2857,7 +2883,7 @@ function StageModal({
                           <Text
                             style={[styles.optionText, c.inStock === false && styles.optionTextOut]}
                           >
-                            หมด
+                            {part.offCatalog ? "ยังไม่ได้ของ" : "หมด"}
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -2865,7 +2891,7 @@ function StageModal({
                         12 คลังเป็นชิปต่ออะไหล่หนึ่งตัว แปลว่าอะไหล่สามตัวก็ 36 ชิป
                         กว่าจะเลื่อนถึงช่องเลขใบเบิกข้างล่าง — dropdown ย่อให้เหลือบรรทัดเดียว
                       */}
-                      {c.inStock === true ? (
+                      {c.inStock === true && !part.offCatalog ? (
                         <Dropdown
                           value={c.warehouse}
                           placeholder="เลือกคลังที่มีของ"
@@ -2927,6 +2953,21 @@ function StageModal({
                     ? "สาขานี้เป็นแฟรนไชส์ที่หมดประกันแล้ว อะไหล่ที่ใช้เป็นของที่ขายให้ลูกค้า — ส่งใบเสนอราคาให้ลูกค้าก่อน"
                     : "ส่งใบเสนอราคาไปแล้ว รอลูกค้าจ่ายเงิน — ได้เงินแล้วแนบบิลเพื่อส่งต่อให้หัวหน้าภาคจ่ายงาน"}
                 </Text>
+                {/* ของนอกสโตร์ไม่มีราคาในสโตร์ให้ดึง — โชว์ไว้ตรงนี้กันลืมใส่ในใบเสนอราคา */}
+                {order.status === "AWAITING_QUOTE" && order.waitingParts.some((p) => p.offCatalog) ? (
+                  <View style={styles.issuedBox}>
+                    <Text style={styles.issuedTitle}>อะไหล่นอกสโตร์ — อย่าลืมใส่ราคาในใบเสนอราคา</Text>
+                    {order.waitingParts
+                      .filter((p) => p.offCatalog)
+                      .map((p) => (
+                        <Text key={p.sparePartId} style={styles.issuedLine}>
+                          {p.name} × {p.quantity}
+                          {p.unit ? ` ${p.unit}` : ""}
+                          {p.note ? ` · ${p.note}` : ""}
+                        </Text>
+                      ))}
+                  </View>
+                ) : null}
 
                 {skipQuote ? null : (
                   <>
@@ -3126,7 +3167,7 @@ function StageModal({
                 </Text>
                 {order.waitingParts.map((p) => (
                   <Text key={p.sparePartId} style={styles.issuedLine}>
-                    {p.partCode} × {p.quantity} · {p.name}
+                    {p.offCatalog ? `${p.name} (นอกสโตร์)` : `${p.partCode} · ${p.name}`} × {p.quantity}
                   </Text>
                 ))}
               </>
@@ -3828,12 +3869,20 @@ function CloseModal({
   const requisitioned = (): PickedPart[] =>
     order.waitingParts
       .filter((p) => p.inStock === true)
-      .map(({ sparePartId, partCode, name, brand, quantity }) => ({ sparePartId, partCode, name, brand, quantity }));
-  const [parts, setParts] = useState<PickedPart[]>(reclosing ? order.parts : requisitioned());
+      .map(({ sparePartId, partCode, name, brand, quantity, offCatalog, unit, note }) => ({
+        sparePartId, partCode, name, brand, quantity, offCatalog, unit, note,
+      }));
+  // ของนอกสโตร์ที่แอดมินจัดหาให้ (หรือที่ช่างซื้อหน้างานเอง) อยู่ช่องของตัวเอง — ไม่ต้องมีใบเหลือง
+  const initial = splitParts(reclosing ? order.parts : requisitioned());
+  const [parts, setParts] = useState<PickedPart[]>(initial.store);
+  const [offParts, setOffParts] = useState<OffPart[]>(initial.off);
   // ฟอร์มนี้ค้างอยู่ตลอด (ไม่ได้สร้างใหม่ทุกครั้งที่เปิด) — เปิดขึ้นมาแล้วยังว่างให้เติมอีกรอบ
   // เผื่อเบิกของหลังจากเปิดหน้าใบงานไว้แล้ว
   useEffect(() => {
-    if (visible && !reclosing) setParts((cur) => (cur.length ? cur : requisitioned()));
+    if (!visible || reclosing) return;
+    const next = splitParts(requisitioned());
+    setParts((cur) => (cur.length ? cur : next.store));
+    setOffParts((cur) => (cur.length ? cur : next.off));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, order]);
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
@@ -3950,6 +3999,7 @@ function CloseModal({
         result,
         note: note.trim() || undefined,
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        offParts: offPartsPayload(offParts),
         workerIds,
         otherWorkers: otherWorkers.trim() || null,
         claims: claimed.map((p) => {
@@ -4015,12 +4065,12 @@ function CloseModal({
           <TouchableOpacity
             style={[
               styles.modalSave,
-              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing) &&
+              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || offPartsIncomplete(offParts)) &&
                 styles.modalSaveOff,
             ]}
             onPress={submit}
             disabled={
-              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing
+              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || offPartsIncomplete(offParts)
             }
             activeOpacity={0.8}
           >
@@ -4132,6 +4182,11 @@ function CloseModal({
         ว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
       */}
       <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
+      <OffPartEditor
+        rows={offParts}
+        onChange={setOffParts}
+        hint="ของที่หารหัสในสโตร์ไม่เจอ หรือซื้อหน้างานเอง · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง"
+      />
 
       {/*
         ใบเหลืองคือหลักฐานว่าของที่หายไปจากคลังไปอยู่ที่เครื่องตัวไหน

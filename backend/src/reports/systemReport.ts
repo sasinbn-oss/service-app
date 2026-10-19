@@ -305,7 +305,11 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
 
   // ── 7) อะไหล่ ──
   const [parts, used, waiting] = await Promise.all([
-    prisma.sparePart.findMany({ orderBy: { partCode: "asc" }, select: { id: true, partCode: true, name: true, brand: true, category: true } }),
+    // ของนอกสโตร์ขึ้นท้ายตาราง — ดูว่าตัวไหนใช้บ่อยจนควรเปิด SKU
+    prisma.sparePart.findMany({
+      orderBy: [{ offCatalog: "asc" }, { partCode: "asc" }],
+      select: { id: true, partCode: true, name: true, brand: true, category: true, offCatalog: true },
+    }),
     prisma.workOrderPart.groupBy({ by: ["sparePartId"], where: { kind: "USED", workOrder: { isTest: false } }, _sum: { quantity: true } }),
     prisma.workOrderPart.groupBy({
       by: ["sparePartId"],
@@ -316,8 +320,11 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
   const usedBy = new Map(used.map((u) => [u.sparePartId, u._sum.quantity ?? 0]));
   const waitBy = new Map(waiting.map((u) => [u.sparePartId, u._sum.quantity ?? 0]));
   table(wb, "อะไหล่", "รายการอะไหล่", sub,
-    ["รหัสอะไหล่", "ชื่อ", "ยี่ห้อ", "หมวด", "ใช้ไปทั้งหมด (ชิ้น)", "รออยู่ในใบงานค้าง (ชิ้น)"],
-    parts.map((p) => [p.partCode, p.name, p.brand ?? "", p.category ?? "", usedBy.get(p.id) ?? 0, waitBy.get(p.id) ?? 0])
+    ["รหัสอะไหล่", "ชื่อ", "ประเภท", "ยี่ห้อ", "หมวด", "ใช้ไปทั้งหมด (ชิ้น)", "รออยู่ในใบงานค้าง (ชิ้น)"],
+    parts.map((p) => [
+      p.offCatalog ? "" : p.partCode, p.name, p.offCatalog ? "นอกสโตร์ (ไม่มี SKU)" : "ในสโตร์",
+      p.brand ?? "", p.category ?? "", usedBy.get(p.id) ?? 0, waitBy.get(p.id) ?? 0,
+    ])
   );
 
   // ── 8) รถ — ไม่แตะตารางบัตรเติมน้ำมัน/Easy Pass เลย ──

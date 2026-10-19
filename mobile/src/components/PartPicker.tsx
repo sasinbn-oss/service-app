@@ -24,6 +24,10 @@ export interface PickedPart {
   name: string;
   brand: string | null;
   quantity: number;
+  /** อะไหล่นอกสโตร์ (ไม่มี SKU) — ไม่ได้เลือกจากที่นี่ ใช้ OffPartEditor แต่มากับแถวจากเซิร์ฟเวอร์ */
+  offCatalog?: boolean;
+  unit?: string | null;
+  note?: string | null;
 }
 
 interface SparePartOption {

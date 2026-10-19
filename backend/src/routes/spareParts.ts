@@ -20,16 +20,20 @@ router.get("/", requireAuth, async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
   const parts = await prisma.sparePart.findMany({
-    where: search
-      ? {
-          OR: [
-            { name: { contains: search, mode: "insensitive" } },
-            { partCode: { contains: search, mode: "insensitive" } },
-            { brand: { contains: search, mode: "insensitive" } },
-            { category: { contains: search, mode: "insensitive" } },
-          ],
-        }
-      : undefined,
+    where: {
+      // ของนอกสโตร์ (พิมพ์ชื่อเองในใบงาน) ไม่ใช่สินค้าในสโตร์ — ขึ้นในรายการ/ช่องค้นหาแล้วคนจะเลือกเหมือนมี SKU
+      offCatalog: false,
+      ...(search
+        ? {
+            OR: [
+              { name: { contains: search, mode: "insensitive" } },
+              { partCode: { contains: search, mode: "insensitive" } },
+              { brand: { contains: search, mode: "insensitive" } },
+              { category: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
     orderBy: { name: "asc" },
   });
   res.json(parts);
