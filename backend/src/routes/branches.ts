@@ -14,7 +14,13 @@ import {
   parseCancelledWorkbook,
   planCancelledImport,
 } from "../machines/cancellationImport";
-import { machineMake, warrantyEndFor, warrantyYearsFor } from "../utils/constants";
+import {
+  ACTIVE_WORK_ORDER_STATUSES,
+  WORK_ORDER_STATUS_LABELS,
+  machineMake,
+  warrantyEndFor,
+  warrantyYearsFor,
+} from "../utils/constants";
 
 const router = Router();
 
@@ -216,6 +222,52 @@ router.get("/:code/last-contact", requireAuth, async (req, res) => {
     select: { contactName: true, contactPhone: true, createdAt: true },
   });
   res.json(last ?? { contactName: null, contactPhone: null, createdAt: null });
+});
+
+/**
+ * ใบงานที่ยังเปิดค้างของสาขานี้ — ฟอร์มเปิดใบงานใช้เตือนก่อนเปิดซ้ำ (เจ้าของงานขอ ต.ค. 69)
+ *
+ * ทางกระดานเครื่องดับบล็อกใบซ้ำได้เพราะผูกกับเคส แต่ทางฟอร์มไม่มีอะไรผูก —
+ * ลูกค้าแจ้งสองช่องทาง หรือแอดมินสองคนต่างคนต่างเปิด ช่างก็ขับไปสาขาเดียวกันสองรอบ
+ * แค่เตือน ไม่บล็อก: สาขาเดียวกันมีหลายเรื่องจริงได้ ระบบแยกไม่ออกว่าอาการใหม่หรือเรื่องเดิม
+ *
+ * ส่งทั้งหมดใหม่ก่อนเก่า หน้าจอตัดเหลือ 3 ใบเอง (ต้องรู้จำนวนทั้งหมดไว้บอก "ดูทั้งหมด")
+ * ไม่นับใบทดสอบ — แอดมินคัดลอกไว้ลองระบบ ไม่ใช่งานจริงที่ช่างจะไป
+ */
+router.get("/:code/open-work-orders", requireAuth, async (req, res) => {
+  const rows = await prisma.workOrder.findMany({
+    where: {
+      branch: { code: req.params.code },
+      status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
+      isTest: false,
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      title: true,
+      symptom: true,
+      assignedTeam: true,
+      createdAt: true,
+      machine: { select: { code: true } },
+      createdBy: { select: { name: true } },
+    },
+  });
+  res.json(
+    rows.map((w) => ({
+      id: w.id,
+      code: w.code,
+      status: w.status,
+      statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+      machineCode: w.machine?.code ?? null,
+      // บรรทัดแรกพอให้จำได้ว่าเรื่องไหน — บรรทัดหลังเป็นสาเหตุที่ช่างเติม
+      symptom: (w.symptom ?? "").split("\n")[0].trim() || w.title,
+      team: w.assignedTeam,
+      createdAt: w.createdAt,
+      createdBy: w.createdBy?.name ?? null,
+    }))
+  );
 });
 
 /**
