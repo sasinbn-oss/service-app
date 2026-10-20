@@ -32,7 +32,7 @@ import PartPicker, { PickedPart } from "../components/PartPicker";
 import { CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
-import DateField, { thaiDate } from "../components/DateField";
+import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
@@ -121,6 +121,18 @@ interface WorkOrder {
   appointmentStatusLabel: string | null;
   /** คนคอนเฟิร์มนัดกับลูกค้าล่าสุด (จากประวัติ) — มีเฉพาะนัดที่ตกลงแล้ว */
   appointmentBy?: { name: string | null; at: string } | null;
+  /** ย้อนขั้นมาและยังไม่มีใครกดผ่านขั้นนี้ — ป้าย/กล่อง "↩ ย้อนขั้น" (null = ไม่ได้ย้อน) */
+  rolledBack?: { from: string | null; fromLabel: string | null; reason: string | null; byName: string | null; at: string } | null;
+  /** ค่าที่การย้อนรอบล่าสุดล้างไป — ฟอร์มขั้นเติมให้เฉพาะช่องที่ว่าง จนกว่าจะผ่านขั้นเดิมไปแล้ว */
+  rollbackPrefill?: {
+    from: string;
+    needsParts: boolean | null;
+    assignedTeam: string | null;
+    scheduledAt: string | null;
+    scheduledTime: string | null;
+    partsExpectedAt: string | null;
+    parts: { sparePartId: number; inStock: boolean | null; warehouse: string | null; requisitionNo: string | null }[];
+  } | null;
   /** ผลตรวจหน้างาน — หัวหน้าภาคใช้ระบุอะไหล่รอบถัดไป */
   inspectedAt: string | null;
   inspectionNote: string | null;
@@ -903,6 +915,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         <View style={styles.headRow}>
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
           {urgent ? <UrgentBadge /> : null}
+          {order.rolledBack ? (
+            <View style={[styles.badge, styles.badgeBack]} accessibilityLabel="ป้ายย้อนขั้น">
+              <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้นมา</Text>
+            </View>
+          ) : null}
           <View style={{ flex: 1 }} />
           {partsOut.length ? (
             <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
@@ -1062,6 +1079,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                           // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
                           state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
                           state === "now" && partsOut.length > 0 && styles.stepDotOut,
+                          // ขั้นที่ย้อนมาจาก — วงเส้นประสีส้ม คู่กับกล่อง "ย้อนขั้นมา" ข้างล่าง
+                          order.rolledBack?.from === stage.value && styles.stepDotFrom,
                         ]}
                       >
                         {state === "now" ? <StepPulse size={tight ? 24 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
@@ -1092,6 +1111,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                         ขั้นเบิกอะไหล่ที่ยังไม่เช็คคลัง · อะไหล่หมดใช้ป้ายแดงข้างล่าง
                         ที่เหลือ ("รอช่างเข้าแก้ไข" ใต้ขั้นของแอดมิน ฯลฯ) ซ้ำหรือขัดกับชื่อขั้น ไม่ขึ้น
                       */}
+                      {order.rolledBack?.from === stage.value ? (
+                        <View style={styles.stepFromPill} accessibilityLabel="ขั้นที่ย้อนมา">
+                          {/* แถบแคบ (มือถือ) คอลัมน์กว้างไม่กี่ตัวอักษร — ข้อความยาวจะตัดเป็นแนวตั้ง โชว์แค่ลูกศร วงประส้มบอกที่เหลือ */}
+                          <Text style={styles.stepFromPillText}>{tight ? "↩" : "↩ ย้อนจากตรงนี้"}</Text>
+                        </View>
+                      ) : null}
                       {state === "now" && order.workStatus === MANUAL_STATUS ? (
                         <View style={[styles.stepSub, styles.stepSubCust]} accessibilityLabel="สถานะย่อย">
                           <Text style={[styles.stepSubText, styles.stepSubCustText]}>{order.workStatusLabel}</Text>
@@ -1167,6 +1192,25 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           ช่างส่งกลับ — หัวหน้าภาคต้องเห็นก่อนอย่างอื่นว่าทำไมใบนี้กลับมา ใครส่ง เมื่อไร
           ข้อมูลเดิมอยู่ครบในการ์ดข้างล่าง แก้ได้ที่ปุ่ม "แก้ไข" แล้วส่งตรวจหรือเดินต่อจากปุ่มขั้นนี้
         */}
+        {/*
+          ย้อนขั้นมา (เจ้าของงานขอ ต.ค. 69) — คนที่เปิดใบต้องรู้ก่อนอย่างอื่นว่าใบนี้ถอยมา เพราะอะไร ใครย้อน
+          ข้อมูลเดิมไม่หาย: ฟอร์มขั้นนี้เติมค่าก่อนย้อนไว้ให้ (rollbackPrefill) · หายเองเมื่อกดผ่านขั้นนี้
+        */}
+        {order.rolledBack ? (
+          <View style={[styles.sentBack, styles.rolledBack]} accessibilityLabel="กล่องย้อนขั้น">
+            <Ionicons name="arrow-undo" size={18} color={colors.rollbackInk} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.sentBackTitle, { color: colors.rollbackInk }]}>
+                ย้อนขั้นมา{order.rolledBack.fromLabel ? `จาก “${order.rolledBack.fromLabel}”` : ""}
+              </Text>
+              {order.rolledBack.reason ? <Text style={styles.sentBackText}>{order.rolledBack.reason}</Text> : null}
+              <Text style={styles.sentBackMeta}>
+                {order.rolledBack.byName ?? "—"} · {formatDateTime(order.rolledBack.at)}
+                {order.rollbackPrefill ? " · ข้อมูลเดิมเก็บไว้ครบ — กดปุ่มขั้นนี้แล้วจะเห็นค่าเดิมเติมไว้ให้" : ""}
+              </Text>
+            </View>
+          </View>
+        ) : null}
         {sentBack ? (
           <View style={styles.sentBack} accessibilityLabel="กล่องช่างส่งกลับ">
             <Ionicons name="arrow-undo" size={18} color={colors.warningInk} />
@@ -2108,8 +2152,8 @@ function RollbackModal({
 /**
  * ย้อนขั้นตอน — แอดมินกับหัวหน้าภาคเท่านั้น
  *
- * บอกก่อนกดว่าอะไรจะถูกล้าง เพราะการย้อนลบสิ่งที่คนอื่นทำไว้ (วันนัด ทีม ผลเช็คคลัง)
- * ปุ่มที่ไม่บอกผลคือปุ่มที่คนกดแล้วค่อยมารู้ทีหลังว่าเลขใบเบิกหายไป
+ * บอกก่อนกดว่าอะไรถูกเอาออกจากใบ (วันนัด ทีม ผลเช็คคลัง) — และตั้งแต่ ต.ค. 69 บอกว่าไม่หาย:
+ * ค่าเดิมเก็บไว้ในประวัติ ขั้นที่ย้อนไปเติมให้ (เจ้าของงานขอ — เดิมย้อนแล้วต้องกรอกใหม่ทั้งหมด)
  */
 /** อะไหล่ไม่ครบ — เปิดใบรออะไหล่ที่ลิงก์กับใบนี้ ใช้ได้ทั้งก่อนและหลังปิดงาน */
 function FollowUpModal({
@@ -2310,6 +2354,7 @@ function StageBackModal({
       lost.push("ทีมที่รับงาน");
     if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
       lost.push("ผลเช็คคลังและเลขใบเบิก");
+    if (value === "NEW" && order.needsParts !== null) lost.push("ใช้อะไหล่ไหม");
     return lost;
   }
 
@@ -2372,7 +2417,13 @@ function StageBackModal({
         ))}
       </View>
       {lost.length > 0 ? (
-        <Text style={styles.warn}>สิ่งที่จะถูกล้าง: {lost.join(" · ")}</Text>
+        <View style={styles.keepBox} accessibilityLabel="ข้อมูลที่เก็บไว้">
+          <Text style={styles.keepTitle}>✓ ข้อมูลที่กรอกไว้ไม่หาย — ขั้นที่ย้อนไปจะเติมค่าเดิมให้</Text>
+          <Text style={styles.keepText}>{lost.join(" · ")}</Text>
+          {lost.includes("ทีมที่รับงาน") ? (
+            <Text style={styles.keepHint}>ใบนี้จะออกจากบอร์ดแผนงานของทีมเดิมก่อน จนกว่าจะจ่ายงานอีกครั้ง</Text>
+          ) : null}
+        </View>
       ) : null}
       <Text style={styles.modalLabel}>เหตุผลที่ย้อน</Text>
       <TextInput
@@ -2448,6 +2499,8 @@ function StageModal({
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
   // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
   const [splitOut, setSplitOut] = useState(true);
+  // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
+  const [prevUsed, setPrevUsed] = useState<string[]>([]);
   const { user } = useAuth();
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2455,7 +2508,19 @@ function StageModal({
 
   useEffect(() => {
     if (!visible) return;
-    setNeedsParts(order.needsParts);
+    /**
+     * ย้อนขั้นแล้วข้อมูลไม่หาย (เจ้าของงานขอ ต.ค. 69) — ใบงานต้องว่างจริงตอนย้อน (ไม่งั้นโผล่บนบอร์ดทีมเดิม)
+     * แต่ค่าที่ล้างไปเก็บไว้ในประวัติ เติมกลับให้เฉพาะช่องที่ตอนนี้ว่าง · ยังต้องกดยืนยันเหมือนเดิม
+     */
+    const pf = order.rollbackPrefill ?? null;
+    const used: string[] = [];
+    const prev = <T,>(now: T | null | undefined, old: T | null | undefined, label: string): T | null => {
+      if (now !== null && now !== undefined && now !== "") return now;
+      if (old === null || old === undefined || old === "") return null;
+      used.push(label);
+      return old;
+    };
+    setNeedsParts(order.status === "NEW" ? prev(order.needsParts, pf?.needsParts, "ใช้อะไหล่ไหม") : order.needsParts);
     // ใบที่เปิดมาเป็นงานตรวจสอบหน้างานและยังไม่เคยตรวจ — ตัวเลือกที่ถูกเกือบทุกครั้ง
     // ช่างส่งกลับ — ตัวเลือกแรกคือส่งช่างเข้าตรวจ (เจ้าของงานขอ ต.ค. 69) ทีมเดิมเป็นค่าตั้งต้นอยู่แล้ว (ข้างล่าง)
     setInspectFirst(
@@ -2465,14 +2530,24 @@ function StageModal({
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
     setConfirmChoice(order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "MOVE" : null);
     setSplitOut(true);
-    setVisitTime(order.scheduledTime ?? "");
+    // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้
+    const oldVisit = pf?.scheduledAt && pf.scheduledAt >= todayBkk() ? pf.scheduledAt : null;
+    const visitDay = order.scheduledAt ? order.scheduledAt.slice(0, 10) : prev(null, oldVisit, "วันนัด");
+    setVisit(visitDay ?? "");
+    setVisitTime(order.scheduledTime ?? (oldVisit && visitDay === oldVisit ? pf?.scheduledTime ?? "" : ""));
     const split = splitParts(order.waitingParts);
     setParts(split.store);
     setOffParts(split.off);
     setServices(order.services.map((v) => ({ name: v.name, quantity: v.quantity, unit: v.unit ?? "", note: v.note ?? "" })));
+    const oldCheck = new Map((pf?.parts ?? []).map((p) => [p.sparePartId, p]));
+    const checkPrefilled = order.waitingParts.some((p) => p.inStock === null && oldCheck.get(p.sparePartId)?.inStock != null);
+    if (checkPrefilled && ["PARTS_SOURCING", "PARTS_REQUESTED"].includes(order.status)) used.push("ผลเช็คคลัง");
     setChecks(
       Object.fromEntries(
-        order.waitingParts.map((p) => [p.sparePartId, { inStock: p.inStock, warehouse: p.warehouse }])
+        order.waitingParts.map((p) => {
+          const old = p.inStock === null ? oldCheck.get(p.sparePartId) : undefined;
+          return [p.sparePartId, { inStock: old?.inStock ?? p.inStock, warehouse: p.warehouse ?? old?.warehouse ?? null }];
+        })
       )
     );
     /**
@@ -2483,14 +2558,31 @@ function StageModal({
      * แล้วของสองรอบจะอ้างใบเบิกใบเดียวกันทั้งที่เบิกคนละวัน
      */
     const pending = order.waitingParts.filter((p) => !(p.inStock === true && p.requisitionNo));
-    setRequisitionNo(pending.find((p) => p.requisitionNo)?.requisitionNo ?? "");
+    setRequisitionNo(
+      pending.find((p) => p.requisitionNo)?.requisitionNo ??
+        (order.status === "PARTS_REQUESTED"
+          ? prev(null, pending.map((p) => oldCheck.get(p.sparePartId)?.requisitionNo).find(Boolean), "เลขใบเบิก") ?? ""
+          : "")
+    );
     // ทีมของสาขาเป็นค่าตั้งต้น เพราะเป็นทีมที่รับผิดชอบสาขานี้อยู่แล้ว
     // จ่ายข้ามทีมยังทำได้ แต่ต้องตั้งใจเลือก ไม่ใช่เผลอ
-    setTeam(order.assignedTeam ?? order.suggestedTeam ?? null);
+    setTeam(
+      order.assignedTeam ??
+        (["PARTS_CHECKED", "INSPECT_DISPATCH"].includes(order.status) ? prev(null, pf?.assignedTeam, "ทีม") : null) ??
+        order.suggestedTeam ??
+        null
+    );
     setDocs([]);
     setSkipQuote(false);
-    setExpectedAt(order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : "");
-    setVisit(order.scheduledAt ? order.scheduledAt.slice(0, 10) : "");
+    setExpectedAt(
+      order.partsExpectedAt
+        ? order.partsExpectedAt.slice(0, 10)
+        : ["PARTS_SOURCING", "PARTS_REQUESTED"].includes(order.status)
+        ? prev(null, pf?.partsExpectedAt, "วันของเข้า") ?? ""
+        : ""
+    );
+    // ป้ายวันนัดมีความหมายเฉพาะขั้นที่มีช่องวัน
+    setPrevUsed(used.filter((u) => u !== "วันนัด" || order.status === "PARTS_CHECKED"));
     setNote("");
     setError(null);
   }, [visible, order]);
@@ -2726,10 +2818,18 @@ function StageModal({
         </View>
       }
     >
+            {prevUsed.length ? (
+              <View style={styles.prevBox} accessibilityLabel="ค่าเดิมก่อนย้อน">
+                <Text style={styles.prevBoxTitle}>↩ ใบนี้ย้อนขั้นมา — เติมค่าเดิมไว้ให้: {prevUsed.join(" · ")}</Text>
+                <Text style={styles.prevBoxText}>ตรวจแล้วกดยืนยัน แก้ได้ทุกช่อง · ช่องที่เป็นค่าเดิมติดป้าย “ค่าเดิมก่อนย้อน”</Text>
+              </View>
+            ) : null}
 
             {order.status === "NEW" ? (
               <>
-                <Text style={styles.modalLabel}>งานนี้ต้องใช้อะไหล่ไหม</Text>
+                <Text style={styles.modalLabel}>
+                  งานนี้ต้องใช้อะไหล่ไหม{prevUsed.includes("ใช้อะไหล่ไหม") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
+                </Text>
                 <View style={styles.options}>
                   <TouchableOpacity
                     style={[styles.option, !inspectFirst && needsParts === true && styles.optionOn]}
@@ -2863,7 +2963,7 @@ function StageModal({
                   <DateField
                     value={expectedAt}
                     onChange={setExpectedAt}
-                    label="คาดว่าของเข้า"
+                    label={prevUsed.includes("วันของเข้า") ? "คาดว่าของเข้า · ค่าเดิมก่อนย้อน" : "คาดว่าของเข้า"}
                     emptyHint="ไม่บังคับ — ใส่แล้วรายการเตือนเมื่อเลยกำหนด"
                   />
                 ) : null}
@@ -2889,7 +2989,9 @@ function StageModal({
                   โชว์ตลอด ไม่ได้ซ่อนไว้จนกว่าจะตอบว่ามีของ เพราะช่องที่โผล่มา
                   เหนือจุดที่กำลังมองอยู่ จะดันของที่เหลือเลื่อนลงโดยไม่มีใครทันเห็น
                 */}
-                <Text style={styles.modalLabel}>เลขใบเบิกอะไหล่</Text>
+                <Text style={styles.modalLabel}>
+                  เลขใบเบิกอะไหล่{prevUsed.includes("เลขใบเบิก") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
+                </Text>
                 <TextInput
                   style={[styles.modalInput, styles.modalInputLine]}
                   value={requisitionNo}
@@ -3005,7 +3107,7 @@ function StageModal({
                   <DateField
                     value={expectedAt}
                     onChange={setExpectedAt}
-                    label="คาดว่าของเข้า"
+                    label={prevUsed.includes("วันของเข้า") ? "คาดว่าของเข้า · ค่าเดิมก่อนย้อน" : "คาดว่าของเข้า"}
                     emptyHint="ไม่บังคับ — ใส่แล้วขึ้นบนแถบขั้นตอนคู่กับป้าย “อะไหล่หมด”"
                   />
                 ) : null}
@@ -3141,6 +3243,7 @@ function StageModal({
                 ) : null}
                 <Text style={styles.modalLabel}>
                   {order.status === "NEW" || order.status === "INSPECT_DISPATCH" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
+                  {prevUsed.includes("ทีม") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
                 </Text>
                 {/*
                   ทีมของสาขาขึ้นก่อนและถูกเลือกไว้ให้ เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
@@ -3265,7 +3368,7 @@ function StageModal({
                 <DateField
                   value={visit}
                   onChange={setVisit}
-                  label="วันเข้างาน"
+                  label={prevUsed.includes("วันนัด") ? "วันเข้างาน · ค่าเดิมก่อนย้อน" : "วันเข้างาน"}
                   emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
                 />
                 <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
@@ -5140,6 +5243,19 @@ const styles = StyleSheet.create({
     borderColor: colors.warning,
     backgroundColor: colors.warningSoft,
   },
+  rolledBack: { borderColor: colors.rollback, backgroundColor: colors.rollbackSoft },
+  keepBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: "#A7F3D0", backgroundColor: colors.successSoft },
+  keepTitle: { fontSize: 13, fontWeight: "800", color: colors.successInk },
+  keepText: { fontSize: 12.5, color: colors.text },
+  keepHint: { fontSize: 12, color: colors.textMuted },
+  badgeBack: { backgroundColor: colors.rollback },
+  stepDotFrom: { borderStyle: "dashed", borderColor: colors.rollback, borderWidth: 2 },
+  stepFromPill: { marginTop: 3, borderRadius: 6, paddingHorizontal: 5, backgroundColor: colors.rollbackSoft },
+  stepFromPillText: { fontSize: 10.5, fontWeight: "700", color: colors.rollbackInk },
+  prevBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: colors.warningSoft },
+  prevBoxTitle: { fontSize: 13, fontWeight: "800", color: colors.warningInk },
+  prevBoxText: { fontSize: 12, color: colors.warningInk },
+  prevTag: { fontSize: 11, fontWeight: "700", color: colors.warningInk, backgroundColor: "#FEF3C7" },
   sentBackTitle: { fontSize: 13.5, lineHeight: 21, fontWeight: "800", color: colors.warningInk },
   sentBackText: { fontSize: 13, lineHeight: 21, color: colors.text },
   sentBackMeta: { fontSize: 12, lineHeight: 19, color: colors.textMuted },

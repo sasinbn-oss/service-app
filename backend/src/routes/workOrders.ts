@@ -22,6 +22,7 @@ import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
 import { buildPartsOutReport, partsOutWorkbook } from "../reports/partsOutReport";
+import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import {
   buildObjectKey,
   deleteObject,
@@ -979,6 +980,30 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       : Promise.resolve([]),
   ]);
   const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
+  // ป้าย ↩ ย้อนขั้นในรายการ — ใบที่เคยย้อนมีไม่มาก ถามประวัติเฉพาะใบเหล่านั้น สองคำถามรวด ไม่ใช่ทีละแถว
+  const rollbacks = rows.length
+    ? await prisma.workOrderLog.findMany({
+        where: { workOrderId: { in: rows.map((r) => r.id) }, action: "ROLLED_BACK" },
+        orderBy: { createdAt: "desc" },
+        distinct: ["workOrderId"],
+        select: { workOrderId: true, createdAt: true },
+      })
+    : [];
+  const rolledBackFrom = new Map<number, ReturnType<typeof activeRollback>>();
+  if (rollbacks.length) {
+    const since = new Date(Math.min(...rollbacks.map((r) => r.createdAt.getTime())));
+    const recent = await prisma.workOrderLog.findMany({
+      where: { workOrderId: { in: rollbacks.map((r) => r.workOrderId) }, createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      select: { workOrderId: true, action: true, status: true, note: true, createdAt: true, meta: true, user: { select: { name: true } } },
+    });
+    const status = new Map(rows.map((r) => [r.id, r.status]));
+    for (const r of rollbacks) {
+      const mine = recent.filter((l) => l.workOrderId === r.workOrderId);
+      const active = activeRollback(status.get(r.workOrderId) ?? "", mine);
+      if (active) rolledBackFrom.set(r.workOrderId, active);
+    }
+  }
   const stageSince = new Map<number, Date>();
   for (const m of lastMoves) if (m._max.createdAt) stageSince.set(m.workOrderId, m._max.createdAt);
 
@@ -999,7 +1024,12 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   >;
 
   res.json({
-    rows: rows.map((w) => ({ ...listShape(w, { supervisors, stageSince }), appointmentByName: confirmedBy.get(w.id) ?? null })),
+    rows: rows.map((w) => ({
+      ...listShape(w, { supervisors, stageSince }),
+      appointmentByName: confirmedBy.get(w.id) ?? null,
+      // ขั้นที่ย้อนมา (ไม่ได้ย้อน = null) — รายการติดป้าย ↩ ย้อนขั้น
+      rolledBackFrom: rolledBackFrom.get(w.id)?.fromLabel ?? null,
+    })),
     counts: {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
@@ -1338,6 +1368,9 @@ router.get("/:id", requireAuth, async (req, res) => {
       confirm && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")
         ? { name: confirm.user?.name ?? null, at: confirm.createdAt }
         : null,
+    // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
+    rolledBack: activeRollback(row.status, logs),
+    rollbackPrefill: rollbackPrefill(row.status, logs),
     logs: logs.map((l) => ({
       id: l.id,
       action: l.action,
@@ -3214,6 +3247,15 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       status: true,
       parentId: true,
       assignedTeam: true,
+      // ค่าที่การย้อนจะล้าง — เก็บไว้ในประวัติ ให้ขั้นที่ย้อนไปเติมค่าเดิมได้ (ดู RollbackSnapshot)
+      needsParts: true,
+      scheduledAt: true,
+      scheduledTime: true,
+      partsExpectedAt: true,
+      parts: {
+        where: { kind: "WAITING" },
+        select: { sparePartId: true, inStock: true, warehouse: true, requisitionNo: true },
+      },
       branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
@@ -3276,16 +3318,27 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       });
     }
     await tx.workOrder.update({ where: { id }, data });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "ROLLED_BACK",
-      toStage,
-      `จาก “${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}” กลับไป “${
-        WORK_ORDER_STATUS_LABELS[toStage] ?? toStage
-      }” — ${reason}`
-    );
+    const snapshot: RollbackSnapshot = {
+      from: wo.status,
+      needsParts: wo.needsParts,
+      assignedTeam: wo.assignedTeam,
+      scheduledAt: wo.scheduledAt?.toISOString().slice(0, 10) ?? null,
+      scheduledTime: wo.scheduledTime,
+      partsExpectedAt: wo.partsExpectedAt?.toISOString().slice(0, 10) ?? null,
+      parts: wo.parts.filter((p) => p.inStock !== null),
+    };
+    await tx.workOrderLog.create({
+      data: {
+        workOrderId: id,
+        userId: req.auth!.userId,
+        action: "ROLLED_BACK",
+        status: toStage,
+        note: `จาก “${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}” กลับไป “${
+          WORK_ORDER_STATUS_LABELS[toStage] ?? toStage
+        }” — ${reason}`,
+        meta: snapshot as unknown as Prisma.InputJsonValue,
+      },
+    });
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
