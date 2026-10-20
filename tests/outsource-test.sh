@@ -58,6 +58,13 @@ POST $S work-orders/$W/dispatch '{}' >/dev/null
 [ "$(curl -s localhost:4000/api/work-orders/$W -H "$(H $S)" | J 'd.assignedOutsource')" = "true" ] && pass "ใบงานบอกว่าเป็นทีม outsource" || fail "ไม่มีธง outsource"
 [ "$(curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $S)" | J "d.rows.some(r=>r.id===$W)")" = "true" ] \
   && pass "ใบที่ทีม outsource เข้างานอยู่ เข้ากล่องงานหัวหน้าภาค (ต้องปิดแทน)" || fail "ไม่อยู่ในกล่องหัวหน้าภาค"
+# แท็บ "ทีม outsource" ของกล่องงานหัวหน้าภาคแยกจากธงนี้ — ใบทีมปกติต้องไม่ติด
+W2=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactPhone":"089-111-2222","machines":[{"code":"W65","symptom":"ทดสอบทีมปกติ"}]}' | J 'd.orders?d.orders[0].id:d.id'); IDS="$IDS $W2"
+POST $S work-orders/$W2/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$BTEAM\",\"scheduledAt\":\"2026-12-02\"}}" >/dev/null
+LIST=$(curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $S)")
+[ "$(echo "$LIST" | J "[d.rows.find(r=>r.id===$W).outsource, d.rows.find(r=>r.id===$W2).outsource].join()")" = "true,false" ] \
+  && [ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$W2")" = "$BTEAM" ] \
+  && pass "รายการใบงานติดธง outsource เฉพาะใบที่จ่ายให้ทีม outsource (ใบทีมปกติไม่ติด)" || fail "ธง outsource ในรายการ: $(echo "$LIST" | J "JSON.stringify(d.rows.filter(r=>[$W,$W2].includes(r.id)).map(r=>[r.id,r.outsource]))")"
 
 echo "═══ ปิดงานแทน"
 CLOSE='{"result":"FIXED","note":"outsource ซ่อมเสร็จ","otherWorkers":"ทีม outsource"}'

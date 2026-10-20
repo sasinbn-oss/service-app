@@ -691,6 +691,8 @@ function listShape(
       !!w.scheduledAt &&
       w.scheduledAt.toISOString().slice(0, 10) < bangkokDay(new Date()),
     waitingOnTeam: actor === "EMPLOYEE" ? w.assignedTeam : null,
+    // ใบที่จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บของตัวเอง ไม่ปนกับงานทีมช่างปกติ
+    outsource: isOutsourceTeam(w.assignedTeam),
     // D = แฟรนไชส์ (DODO) · C = สาขาบริษัท (COCO) — กติกาเดียวกับขั้นเสนอราคา
     branchType: isCompanyBranch(w.branch.code) ? "COCO" : "DODO",
     // ป้ายประกันในรายการ — คิดที่เดียวกับหน้าใบงาน (วันเปิดร้าน + ปีตามยี่ห้อเครื่อง)
@@ -997,8 +999,10 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const inboxStages = stagesWaitingOn(req.auth);
   const orphans = inboxTakesOrphans(req.auth) ? await orphanSupervisorIds() : [];
   // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
+  // รีเฟรชก่อนเสมอ — แถวในรายการติดธง outsource จากรายชื่อนี้ (แท็บ "ทีม outsource" ของกล่องงานหัวหน้าภาค)
+  const outsourceNow = await freshOutsource();
   const outsourceInbox: Prisma.WorkOrderWhereInput[] =
-    req.auth!.role === "SUPERVISOR" ? [{ status: "IN_PROGRESS", assignedTeam: { in: [...(await freshOutsource())] } }] : [];
+    req.auth!.role === "SUPERVISOR" ? [{ status: "IN_PROGRESS", assignedTeam: { in: [...outsourceNow] } }] : [];
   const statusFilter =
     q.status === "ALL"
       ? {}

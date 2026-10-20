@@ -35,7 +35,7 @@ import { hasCustomerMessage } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
 import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
-import Dropdown from "../components/Dropdown";
+import Dropdown, { DropdownOption } from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
@@ -475,6 +475,36 @@ function inMyTeam(u: { team?: string | null; teamCoverage?: { all: boolean; team
 /** ตรวจเคลมได้เฉพาะ Admin Spare Part (Super Admin ทำแทนได้) — ตรงกับ canReviewClaims ฝั่งเซิร์ฟเวอร์ */
 function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | null) {
   return !!u && (!!u.partsAdmin || !!u.superAdmin);
+}
+
+/**
+ * ตัวเลือกทีมตอนจ่ายงาน — ทีม outsource ใช้ชื่อทีมเหมือนทีมอื่น แต่แยกไว้กลุ่มของตัวเองท้ายรายการ
+ * (เจ้าของงานขอ ต.ค. 69: ไม่อยากเห็นป้าย "outsource" ต่อชื่อ แต่ต้องไม่ปนกับทีมช่างปกติ)
+ * ทีมประจำสาขาขึ้นก่อนเสมอในกลุ่มของมัน — ทีมที่ดูแลสาขาก็เป็น outsource ได้ (เช่น PWS)
+ */
+function teamOptions(teams: Team[], suggested: string | null | undefined, jobType: string): DropdownOption[] {
+  const OWN = "ทีมช่าง";
+  const OUT = "ทีม outsource · หัวหน้าภาคปิดงานแทน";
+  const sug = teams.find((t) => t.name === suggested);
+  const opt = (t: Team): DropdownOption => ({
+    value: t.name,
+    label: t.name,
+    group: t.outsource ? OUT : OWN,
+    hint:
+      t.name === suggested
+        ? `ทีม ${jobType === "PM" ? "PM" : "CM"} ของสาขานี้`
+        : t.branches
+          ? `ดูแล ${t.branches} สาขา`
+          : "รับงานเป็นครั้ง",
+  });
+  const rest = teams.filter((t) => t.name !== suggested);
+  // ทีมประจำสาขาที่ไม่อยู่ในรายชื่อทีม (ข้อมูลสาขาเก่า) ยังให้เลือกได้ เหมือนเดิม
+  const head: DropdownOption[] = suggested
+    ? [sug ? opt(sug) : { value: suggested, label: suggested, group: OWN, hint: `ทีม ${jobType === "PM" ? "PM" : "CM"} ของสาขานี้` }]
+    : [];
+  const own = [...head.filter((o) => o.group === OWN), ...rest.filter((t) => !t.outsource).map(opt)];
+  const out = [...head.filter((o) => o.group === OUT), ...rest.filter((t) => t.outsource).map(opt)];
+  return [...own, ...out];
 }
 
 export default function WorkOrderDetailScreen({ route, navigation }: Props) {
@@ -1498,7 +1528,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text style={styles.waitingText}>
                 {viewOnly ? "ดูได้อย่างเดียว · " : ""}ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
                 {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
-                  ? ` (${order.assignedToName ?? order.assignedTeam}${order.assignedOutsource ? " · outsource — หัวหน้าภาคปิดงานแทน" : ""})`
+                  ? ` (${order.assignedToName ?? order.assignedTeam}${order.assignedOutsource ? " — หัวหน้าภาคปิดงานแทน" : ""})`
                   : ""}
                 {viewOnly ? "" : " — ยังไม่ถึงคิวของคุณ"}
               </Text>
@@ -3620,25 +3650,7 @@ function StageModal({
                   onChange={setTeam}
                   placeholder="เลือกทีม"
                   accessibilityLabel="ทีมที่จะรับงาน"
-                  options={[
-                    ...(order.suggestedTeam
-                      ? [
-                          {
-                            value: order.suggestedTeam,
-                            label: order.suggestedTeam,
-                            hint: `ทีม ${order.jobType === "PM" ? "PM" : "CM"} ของสาขานี้`,
-                          },
-                        ]
-                      : []),
-                    ...teams
-                      .filter((t) => t.name !== order.suggestedTeam)
-                      .map((t) => ({
-                        value: t.name,
-                        // ป้าย outsource ติดชื่อไว้ ให้เห็นทั้งตอนเลือกและหลังเลือก
-                        label: t.outsource ? `${t.name} · outsource` : t.name,
-                        hint: t.outsource ? "outsource · หัวหน้าภาคปิดงานแทน" : `ดูแล ${t.branches} สาขา`,
-                      })),
-                  ]}
+                  options={teamOptions(teams, order.suggestedTeam, order.jobType)}
                 />
                 {teams.length === 0 ? (
                   <Text style={styles.warn}>
@@ -4477,7 +4489,7 @@ function CloseModal({
   const [workerIds, setWorkerIds] = useState<number[]>(reclosing ? order.workers.map((w) => w.id).slice(0, 3) : []);
   // ทีม outsource ไม่มีชื่อในระบบให้ติ๊ก — เติมชื่อทีมไว้ให้ หัวหน้าภาคพิมพ์ชื่อช่างเพิ่มได้
   const [otherWorkers, setOtherWorkers] = useState(
-    reclosing ? order.otherWorkers ?? "" : order.assignedOutsource && order.assignedTeam ? `ทีม ${order.assignedTeam} (outsource)` : ""
+    reclosing ? order.otherWorkers ?? "" : order.assignedOutsource && order.assignedTeam ? `ทีม ${order.assignedTeam}` : ""
   );
   // อะไหล่ที่ยังขาด — เปิดใบงานรออะไหล่ต่อจากใบนี้หลังปิดงาน
   const [followUp, setFollowUp] = useState(false);
