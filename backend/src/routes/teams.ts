@@ -16,6 +16,7 @@ import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, bangkokDay } from "../utils/constants";
 import { forgetTeamGroups, teamGroups } from "../utils/teamGroups";
+import { recordTeamMove } from "../utils/branchPins";
 
 const router = Router();
 
@@ -312,21 +313,7 @@ router.post("/move-branches", requireAuth, requireAdmin, async (req: AuthRequest
         if (!change.length) continue;
         await tx.branch.updateMany({ where: { id: { in: change.map((b) => b.id) } }, data: { [field]: team } });
         moved += change.length;
-        for (const b of change) {
-          const prev = b.teamMoves.find((m) => m.field === field);
-          // fromTeam = ทีมตามไฟล์ก่อนย้ายครั้งแรก — ย้ายซ้ำไม่ทับ ไม่งั้น "คืนตามไฟล์" จะคืนไปทีมที่ย้ายในแอป
-          const fromTeam = prev ? prev.fromTeam : b[field];
-          if (fromTeam === team) {
-            // ย้ายกลับไปทีมเดิมตามไฟล์ = ไม่ต้องบังคับอะไรแล้ว
-            if (prev) await tx.branchTeamMove.delete({ where: { id: prev.id } });
-            continue;
-          }
-          await tx.branchTeamMove.upsert({
-            where: { branchId_field: { branchId: b.id, field } },
-            create: { branchId: b.id, field, fromTeam, toTeam: team, movedById: req.auth!.userId },
-            update: { toTeam: team, movedById: req.auth!.userId, createdAt: new Date() },
-          });
-        }
+        for (const b of change) await recordTeamMove(tx, b, field, team, req.auth!.userId);
       }
     },
     { timeout: 30_000, maxWait: 15_000 }

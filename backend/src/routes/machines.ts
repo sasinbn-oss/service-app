@@ -15,6 +15,7 @@ import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport, resolveSnapshot } from "../machines/import";
 import { applyTeamAliases } from "../utils/teamAliases";
+import { applyBranchPins } from "../utils/branchPins";
 import { dailyReport, monthlyReport, partsReport, weeklyReport } from "../machines/reports";
 import { outagesToWorkbook, reportToWorkbook } from "../machines/reportExcel";
 import { documentPath, saveDocument } from "../documents/store";
@@ -916,6 +917,8 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
     }
     // คอลัมน์ zone ในไฟล์เครื่องเขียนลงสาขาด้วย — แปลงชื่อทีมที่เปลี่ยนในแอปแล้วแบบเดียวกับทะเบียนสาขา
     await applyTeamAliases(parsed.rows);
+    // ภาค/ประเภทที่แก้ในหน้าจัดการสาขา — ไฟล์เครื่องเขียนสองค่านี้ลงสาขาทุกรอบ
+    await applyBranchPins(parsed.rows);
 
     // เวลาอ้างอิงมาจากตัวไฟล์ ไม่ใช่เวลาที่กดอัปโหลด อัปโหลดช้าไปสองวัน
     // SLA ก็ยังต้องนับจากเวลาที่ export ไม่ใช่เวลาที่เพิ่งนึกได้ว่ายังไม่ได้อัป

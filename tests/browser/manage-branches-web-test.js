@@ -13,11 +13,14 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
   const pass = (m) => console.log("PASS", m);
   const errors = [];
   // สาขาที่มีใบงาน — ใช้ทั้งทดสอบแก้พิกัดและทดสอบว่าลบไม่ได้
-  const [id, code, lat, lng] = sql(
-    `select b.id||'|'||b.code||'|'||coalesce(b.latitude::text,'')||'|'||coalesce(b.longitude::text,'') from "Branch" b
+  const [id, code, lat, lng, region] = sql(
+    `select b.id||'|'||b.code||'|'||coalesce(b.latitude::text,'')||'|'||coalesce(b.longitude::text,'')||'|'||coalesce(b.region,'') from "Branch" b
      where b."cancelledAt" is null and exists (select 1 from "WorkOrder" w where w."branchId"=b.id) order by b.id limit 1`
   ).split("|");
-  const restore = () => sql(`update "Branch" set latitude=nullif('${lat}','')::float, longitude=nullif('${lng}','')::float where id=${id}`);
+  const otherRegion = sql(`select region from "Branch" where region is not null and region<>'${region}' limit 1`);
+  const restore = () =>
+    sql(`update "Branch" set latitude=nullif('${lat}','')::float, longitude=nullif('${lng}','')::float, region=nullif('${region}','') where id=${id};
+         delete from "BranchPin" where "branchId"=${id};`);
   const browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
     args: ["--no-sandbox"],
@@ -60,6 +63,21 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     await page.waitForTimeout(2500);
     const saved = sql(`select latitude||','||longitude from "Branch" where id=${id}`);
     saved === "13.75,100.5" ? pass("บันทึกแล้วพิกัดเปลี่ยนในฐานข้อมูล") : fail(`ฐานข้อมูล: ${saved}`);
+
+    // ภาคเลือกจากรายการในระบบ แล้วบันทึก — ต้องเปลี่ยนในฐานข้อมูลและจำไว้ให้ตัวนำเข้า
+    if (!(await page.getByLabel("แผงแก้ไขสาขา").count())) {
+      await page.getByLabel(`สาขา ${code}`).click();
+      await page.waitForTimeout(1500);
+    }
+    await page.getByLabel("เลือกภาค").click();
+    await page.waitForTimeout(800);
+    await page.getByText(otherRegion, { exact: true }).locator("visible=true").last().click();
+    await page.waitForTimeout(500);
+    await page.getByLabel("บันทึกสาขา").click();
+    await page.waitForTimeout(2500);
+    const reg = sql(`select region||'|'||(select count(*) from "BranchPin" where "branchId"=${id} and field='region') from "Branch" where id=${id}`);
+    reg === `${otherRegion}|1` ? pass(`เลือกภาค ${otherRegion} จากรายการ บันทึกแล้วฐานข้อมูลเปลี่ยน และจำไว้กันไฟล์ทับ`) : fail(`ภาค: ${reg}`);
+    (await page.getByText("แก้ในแอป", { exact: true }).locator("visible=true").count()) ? pass("ป้าย แก้ในแอป ขึ้นที่ช่องภาค") : fail("ไม่มีป้าย แก้ในแอป");
 
     // หลังบันทึก แผงอาจปิด — เปิดใหม่เพื่อดูส่วนลบ
     if (!(await page.getByLabel("แผงแก้ไขสาขา").count())) {

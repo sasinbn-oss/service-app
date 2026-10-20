@@ -278,6 +278,7 @@ model Branch {
   scoreSnapshots    ScoreSnapshot[]
   workOrders        WorkOrder[]
   teamMoves         BranchTeamMove[]
+  pins              BranchPin[]
 }
 
 // One washer or dryer installed at a branch.
@@ -944,6 +945,25 @@ model BranchTeamMove {
   toTeam    String
   movedById Int?
   createdAt DateTime @default(now())
+
+  @@unique([branchId, field])
+}
+
+// ภาค/ประเภทสาขาที่แอดมินแก้ในหน้าจัดการสาขา — ตัวนำเข้าไฟล์ทะเบียนและไฟล์เครื่องใช้ค่านี้แทนค่าในไฟล์
+//
+// แยกจาก BranchTeamMove เพราะอันนั้นหน้าทีมช่างแสดงเป็นรายการ "ย้ายสาขาเข้าทีม" ทั้งตาราง
+// ถ้าไม่จำไว้ ไฟล์เครื่องที่อัปวันละสองครั้งจะเขียนค่าเดิมกลับทันที แอดมินแก้แล้วเหมือนไม่ได้แก้
+model BranchPin {
+  id         Int      @id @default(autoincrement())
+  branchId   Int
+  branch     Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // "region" | "ownership"
+  field      String
+  // ค่าก่อนแก้ครั้งแรก — แก้กลับเป็นค่านี้ = เลิกบังคับ
+  fromValue  String?
+  value      String
+  pinnedById Int?
+  createdAt  DateTime @default(now())
 
   @@unique([branchId, field])
 }

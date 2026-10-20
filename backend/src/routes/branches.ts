@@ -7,6 +7,7 @@ import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { resolveMapLink } from "../utils/mapLink";
 import { applyTeamAliases } from "../utils/teamAliases";
+import { applyBranchPins, pinBranchField, recordTeamMove } from "../utils/branchPins";
 import {
   applyBranchImport,
   parseBranchWorkbook,
@@ -48,6 +49,8 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
     if (parsed.rows.length === 0) return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
     // ไฟล์ยังเขียนชื่อทีมที่แอดมินเปลี่ยนไปแล้ว — แปลงก่อน ไม่งั้นชื่อเดิมถูกเขียนกลับลงสาขา
     await applyTeamAliases(parsed.rows);
+    // ภาค/ประเภทที่แก้ในหน้าจัดการสาขา — ไฟล์ยังเขียนค่าเดิมจนกว่าจะมีคนแก้ต้นฉบับ
+    await applyBranchPins(parsed.rows);
 
     const plan = commit ? await applyBranchImport(parsed) : await planBranchImport(parsed);
     res.json({ committed: commit, plan });
@@ -198,6 +201,8 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
       select: {
         id: true, code: true, name: true, address: true, region: true, zone: true, pmTeam: true, ownership: true,
         latitude: true, longitude: true, radiusMeters: true, cancelledAt: true, cancelledNote: true,
+        teamMoves: { select: { field: true } },
+        pins: { select: { field: true } },
       },
     }),
     prisma.branch.count({ where: { cancelledAt: null } }),
@@ -216,8 +221,89 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
   res.json({
     total,
     counts: { open, noCoords, noTeam, closed },
-    rows: rows.map((r) => ({ ...r, openWorkOrders: openOf.get(r.id) ?? 0 })),
+    rows: rows.map(({ teamMoves, pins, ...r }) => ({
+      ...r,
+      openWorkOrders: openOf.get(r.id) ?? 0,
+      // ช่องที่แก้ในแอป (นำเข้าไฟล์ไม่ทับ) — แผงแก้ไขติดป้ายให้รู้ว่าไม่ตรงกับไฟล์ทะเบียน
+      editedInApp: [...teamMoves.map((m) => m.field), ...pins.map((p) => p.field)],
+    })),
   });
+});
+
+/**
+ * ตัวเลือกภาค/ประเภท/ทีม สำหรับแผงแก้ไขสาขา — เลือกจากค่าที่มีในระบบเท่านั้น
+ *
+ * ชื่อพวกนี้เป็นข้อความที่ใช้จับคู่กันหลายที่ (ภาคของหัวหน้าภาค ทีมของช่าง) พิมพ์เองสะกดต่างไปตัวเดียว
+ * สาขาก็หลุดจากคนดูแลโดยไม่มีใครรู้ · ทีมใหม่ให้สร้างที่หน้าทีมช่าง (ย้ายสาขาเข้าทีม)
+ */
+async function registryOptions() {
+  const [regions, ownerships, cm, pm] = await Promise.all([
+    prisma.branch.findMany({ where: { region: { not: null } }, distinct: ["region"], select: { region: true } }),
+    prisma.branch.findMany({ where: { ownership: { not: null } }, distinct: ["ownership"], select: { ownership: true } }),
+    prisma.branch.findMany({ where: { zone: { not: null } }, distinct: ["zone"], select: { zone: true } }),
+    prisma.branch.findMany({ where: { pmTeam: { not: null } }, distinct: ["pmTeam"], select: { pmTeam: true } }),
+  ]);
+  const sorted = (xs: (string | null)[]) => [...new Set(xs.filter((x): x is string => !!x?.trim()))].sort((a, b) => a.localeCompare(b, "th"));
+  return {
+    regions: sorted(regions.map((r) => r.region)),
+    ownerships: sorted(["COCO", "DODO", ...ownerships.map((r) => r.ownership)]),
+    teams: sorted([...cm.map((r) => r.zone), ...pm.map((r) => r.pmTeam)]),
+  };
+}
+
+router.get("/manage/options", requireAuth, requireAdmin, async (_req, res) => {
+  res.json(await registryOptions());
+});
+
+/**
+ * แก้ภาค ประเภท ทีม CM ทีม PM ในแผงแก้ไขสาขา (เจ้าของงานขอ ต.ค. 69 — เดิมต้องแก้ไฟล์แล้วนำเข้า)
+ *
+ * ค่าที่แก้ต้องอยู่รอดการนำเข้ารอบหน้า ไม่งั้นไฟล์เครื่องที่อัปวันละสองครั้งเขียนค่าเดิมกลับ:
+ * ทีม → BranchTeamMove (ขึ้นในรายการย้ายสาขาของหน้าทีมช่าง คืนตามไฟล์ได้) · ภาค/ประเภท → BranchPin
+ * ใบงานที่จ่ายไปแล้วไม่ย้ายตาม (assignedTeam ของใบ) — มีผลกับใบงานใหม่
+ */
+const registrySchema = z.object({
+  region: z.string().trim().min(1).optional(),
+  ownership: z.string().trim().min(1).optional(),
+  zone: z.string().trim().min(1).optional(),
+  pmTeam: z.string().trim().min(1).optional(),
+});
+
+router.put("/:id/registry", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const parsed = registrySchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "ข้อมูลไม่ถูกต้อง" });
+  const want = parsed.data;
+  const branch = await prisma.branch.findUnique({
+    where: { id },
+    select: { id: true, region: true, ownership: true, zone: true, pmTeam: true, teamMoves: true, pins: true },
+  });
+  if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+  const opt = await registryOptions();
+  if (want.region && !opt.regions.includes(want.region)) return res.status(400).json({ error: `ไม่มีภาค “${want.region}” ในระบบ` });
+  if (want.ownership && !opt.ownerships.includes(want.ownership)) return res.status(400).json({ error: `ไม่มีประเภท “${want.ownership}” ในระบบ` });
+  for (const f of ["zone", "pmTeam"] as const) {
+    const t = want[f];
+    if (t && !opt.teams.includes(t)) return res.status(400).json({ error: `ไม่มีทีม “${t}” ในระบบ — ทีมใหม่สร้างที่หน้าทีมช่าง` });
+  }
+  const uid = req.auth!.userId;
+  await prisma.$transaction(
+    async (tx) => {
+      for (const f of ["region", "ownership"] as const) {
+        const v = want[f];
+        if (v) await pinBranchField(tx, branch, f, v, uid);
+      }
+      for (const f of ["zone", "pmTeam"] as const) {
+        const t = want[f];
+        if (!t || branch[f] === t) continue;
+        await tx.branch.update({ where: { id }, data: { [f]: t } });
+        await recordTeamMove(tx, branch, f, t, uid);
+      }
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  res.json(await prisma.branch.findUniqueOrThrow({ where: { id } }));
 });
 
 /** วางลิงก์ Google Maps → พิกัด (ลิงก์สั้นต้องตามที่เซิร์ฟเวอร์ — ดู utils/mapLink.ts) */
