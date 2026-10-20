@@ -51,18 +51,19 @@ const { setup } = require("./fixture");
     await vis("แจ้งปัญหาหน้างาน", false).last().click();
     await page.waitForTimeout(1000);
     (await vis("ปิดงานไม่ได้เพราะ").count()) > 0 ? pass("ฟอร์มส่งกลับมีหมวดเหตุ") : fail("ไม่มีหมวดเหตุ");
-    await page.getByLabel("เจออะไรที่หน้างาน").locator("visible=true").last().fill("ไปถึงร้านปิด โทรไม่ติด");
+    await page.getByLabel("เจออะไรที่หน้างาน").locator("visible=true").last().fill("หาสาเหตุไม่เจอ ต้องเข้าไปดูอีกรอบ");
     await vis("ส่งกลับ").last().click();
     await page.waitForTimeout(1500);
     db("status") === "IN_PROGRESS" ? pass("ยังไม่เลือกหมวด กดส่งกลับไม่ได้") : fail("ส่งกลับได้ทั้งที่ไม่เลือกหมวด");
-    await label("เหตุ ร้านปิด / ลูกค้าไม่สะดวก").click();
+    // ร้านปิดไปที่แอดมินนัดใหม่แล้ว (ต.ค. 69 — sendback-test.sh) · เส้นทางกลับขั้นแรกคือ "ต้องตรวจเพิ่ม"
+    await label("เหตุ ต้องตรวจเพิ่ม ยังหาสาเหตุไม่เจอ").click();
     await page.waitForTimeout(300);
     await vis("ส่งกลับ").last().click();
     await page.waitForTimeout(3500);
     db("status") === "NEW" ? pass("ส่งกลับแล้ว ใบงานกลับไปขั้นแรก (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
     fx.sql(`select "requisitionNo" from "WorkOrderPart" where "workOrderId"=${wo.id} and kind='WAITING'`) === "RQ-WSB"
       ? pass("อะไหล่ที่เบิกแล้วยังอยู่พร้อมเลขใบเบิก (ฐานข้อมูล)") : fail("อะไหล่ที่เบิกแล้วหาย");
-    (await label("กล่องช่างส่งกลับ").count()) > 0 && (await vis("[ร้านปิด / ลูกค้าไม่สะดวก] ไปถึงร้านปิด โทรไม่ติด").count()) > 0
+    (await label("กล่องช่างส่งกลับ").count()) > 0 && (await vis("[ต้องตรวจเพิ่ม ยังหาสาเหตุไม่เจอ] หาสาเหตุไม่เจอ ต้องเข้าไปดูอีกรอบ").count()) > 0
       ? pass("กล่อง \"ช่างส่งกลับ\" บอกหมวดและเหตุ") : fail("ไม่มีกล่องช่างส่งกลับ");
     await page.screenshot({ path: path.join(DIR, "sendback-banner.png") });
     await page.waitForTimeout(3500);
