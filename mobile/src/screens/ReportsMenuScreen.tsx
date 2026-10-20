@@ -11,7 +11,7 @@ type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
 interface Entry {
   /** byOpener/system มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
-  kind: ReportKind | "byOpener" | "system" | "confirmed";
+  kind: ReportKind | "byOpener" | "system" | "confirmed" | "partsOut";
   /** เฉพาะแอดมิน/หัวหน้าภาค — ช่างเปิดแล้วเซิร์ฟเวอร์ปฏิเสธ ไม่ควรเห็นการ์ดตั้งแต่แรก */
   managersOnly?: boolean;
   /** เฉพาะแอดมิน — รายงานทั้งระบบมีข้อมูลทั้งบริษัทรวมเบอร์โทรพนักงาน */
@@ -86,6 +86,16 @@ const ENTRIES: Entry[] = [
     adminOnly: true,
   },
   {
+    kind: "partsOut",
+    label: "สาขาที่ติดอะไหล่หมด",
+    who: "แอดมิน · หัวหน้าภาค",
+    question: "สาขาไหนรอของอยู่ รออะไร ถึงเมื่อไร",
+    icon: "alert-circle-outline",
+    tint: colors.dangerSoft,
+    iconColor: colors.dangerInk,
+    managersOnly: true,
+  },
+  {
     kind: "parts",
     label: "อะไหล่ที่ต้องสั่ง",
     who: "ฝ่ายจัดซื้อ · คลัง",
@@ -118,6 +128,8 @@ export default function ReportsMenuScreen({ navigation }: Props) {
               ? navigation.navigate("SystemReport")
               : entry.kind === "confirmed"
               ? navigation.navigate("ConfirmedReport")
+              : entry.kind === "partsOut"
+              ? navigation.navigate("PartsOutReport")
               : navigation.navigate("Report", { kind: entry.kind, title: entry.label })
           }
         >

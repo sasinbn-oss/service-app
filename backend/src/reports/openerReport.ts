@@ -230,13 +230,13 @@ const detail = (r: Row) => [
   r.machine, r.priority, r.source, r.status, thaiDateTime(r.closedAt), r.result,
 ];
 
-function title(sheet: ExcelJS.Worksheet, text: string, sub: string) {
+export function title(sheet: ExcelJS.Worksheet, text: string, sub: string) {
   sheet.addRow([text]).font = { bold: true, size: 14 };
   sheet.addRow([sub]).font = { size: 10, color: { argb: "FF666666" } };
   sheet.addRow([]);
 }
 
-function table(sheet: ExcelJS.Worksheet, headers: string[], rows: (string | number)[][], filter = true) {
+export function table(sheet: ExcelJS.Worksheet, headers: string[], rows: (string | number)[][], filter = true) {
   const head = sheet.addRow(headers);
   head.font = { bold: true };
   head.eachCell((c) => (c.fill = HEAD_FILL));
@@ -259,7 +259,7 @@ function table(sheet: ExcelJS.Worksheet, headers: string[], rows: (string | numb
 }
 
 /** ชื่อชีต Excel: ไม่เกิน 31 ตัว ห้าม : \ / ? * [ ] และห้ามซ้ำ (คนชื่อต้นเหมือนกันมีจริง) */
-function sheetName(base: string, used: Set<string>) {
+export function sheetName(base: string, used: Set<string>) {
   const clean = base.replace(/[:\\/?*[\]]/g, " ").trim().slice(0, 28) || "ไม่มีชื่อ";
   let name = clean;
   for (let i = 2; used.has(name); i++) name = `${clean.slice(0, 26)} ${i}`;
