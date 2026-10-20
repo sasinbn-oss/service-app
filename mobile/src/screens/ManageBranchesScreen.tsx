@@ -133,7 +133,9 @@ export default function ManageBranchesScreen() {
                   {item.name} ({item.code})
                 </Text>
                 <Text style={styles.line}>
-                  {item.latitude.toFixed(4)}, {item.longitude.toFixed(4)} · รัศมี {item.radiusMeters} ม.
+                  {item.latitude != null && item.longitude != null
+                    ? `${item.latitude.toFixed(4)}, ${item.longitude.toFixed(4)} · รัศมี ${item.radiusMeters} ม.`
+                    : "ยังไม่มีพิกัด"}
                 </Text>
               </View>
               <TouchableOpacity onPress={() => handleDelete(item)}>
