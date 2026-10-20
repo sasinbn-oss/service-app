@@ -37,7 +37,7 @@ let WO = process.argv[2] || null;
       const wo = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
       await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
         results: [
-          { sparePartId: board, inStock: true, warehouse: "คลังกระบี่", requisitionNo: "RQ-2569-0042" },
+          { sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-2569-0042" },
           { sparePartId: belt, inStock: false },
         ],
       });
@@ -99,12 +99,12 @@ let WO = process.argv[2] || null;
     await page.waitForTimeout(600);
     await tap("เลือกคลังที่มีของ", false);
     await page.waitForTimeout(800);
-    // ค้นในช่องของ dropdown ก่อน ไม่งั้นคำว่า "คลังกระบี่" ไปโดนข้อความ
+    // ค้นในช่องของ dropdown ก่อน ไม่งั้นคำว่า "คลังลาดพร้าว 94" ไปโดนข้อความ
     // ในกล่อง "เบิกไปแล้วรอบก่อน" ซึ่งอยู่เหนือกว่าใน DOM
     const find = page.getByPlaceholder("ค้นหา").locator("visible=true").first();
-    await find.fill("กระบี่");
+    await find.fill("ลาดพร้าว");
     await page.waitForTimeout(900);
-    const opt = page.getByText("คลังกระบี่", { exact: true }).locator("visible=true").last();
+    const opt = page.getByText("คลังลาดพร้าว 94", { exact: true }).locator("visible=true").last();
     await opt.click().catch(async () => {
       await opt.evaluate((n) => (n.closest("[tabindex]") || n).click());
     });

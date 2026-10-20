@@ -262,6 +262,16 @@ const MANUAL_STATUS = "WAITING_CUSTOMER";
 /** ขั้นที่ผล "หมด" ยังเป็นเรื่องของตอนนี้ — ตรงกับ PARTS_OUT_STAGES ฝั่ง backend */
 const PARTS_OUT_STAGES = ["PARTS_SOURCING", "PARTS_REQUESTED", "WAITING_PARTS"];
 
+/** ตัวที่หัวหน้าภาคต้องเบิกเอง — กฎเดียวกับ pendingPickup ฝั่งเซิร์ฟเวอร์ */
+function isPickup(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
+  return p.inStock === true && !p.offCatalog && !!p.warehouse && p.warehouse !== adminWarehouse && !p.requisitionNo;
+}
+
+/** หมายเหตุล่าสุดที่แอดมินส่งให้หัวหน้าภาคเบิก */
+function lastPickupRequest(o: { logs: LogEntry[] }): LogEntry | null {
+  return [...o.logs].filter((l) => l.action === "PICKUP_REQUESTED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+}
+
 const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   NEW: { label: "ระบุอะไหล่ที่ต้องใช้", icon: "arrow-forward-circle" },
   // แอดมินนัดร้านก่อนช่างไปตรวจ — ฟอร์มเดียวกับคอนเฟิร์มลูกค้าของงานซ่อม
@@ -272,6 +282,8 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
   // หลังรับเงิน (หรือในประกัน) — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน
   PARTS_REQUESTED: { label: "เบิกอะไหล่ส่งหน้างาน", icon: "arrow-forward-circle" },
+  // ของอยู่คลังอื่น (ไม่ใช่ลาดพร้าว 94) — หัวหน้าภาคเบิกเอง แอดมินกดแทนไม่ได้
+  PARTS_PICKUP: { label: "เบิกอะไหล่จากคลังอื่น", icon: "cube-outline" },
   // ก่อนเสนอราคา — เช็คว่ามีอะไหล่ไหม มีครบไปเสนอราคา หมดรอของเข้า
   PARTS_SOURCING: { label: "เช็คอะไหล่ (มี / หมด)", icon: "cube-outline" },
   AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
@@ -347,6 +359,9 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
   switch (value) {
     case "PARTS_REQUESTED":
       return o.needsParts === false;
+    // ใบที่ของอยู่คลังลาดพร้าว 94 ทั้งหมดไม่ผ่านขั้นนี้
+    case "PARTS_PICKUP":
+      return o.status !== "PARTS_PICKUP" && !o.logs.some((l) => l.action === "PICKED_UP");
     case "AWAITING_QUOTE":
       return o.needsQuote === false && !o.hasQuote;
     // ใบที่ไม่ต้องเสนอราคา หรือใบเก่าก่อนมีขั้นนี้ (ไปเสนอราคาตรง ๆ ไม่มีประวัติเช็คก่อน) — ไม่ได้ผ่านขั้นนี้
@@ -441,6 +456,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [priorities, setPriorities] = useState<Option[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
+  // คลังเดียวที่แอดมินเบิกเองได้ — มาจากเซิร์ฟเวอร์ (ค่าตั้งต้นเผื่อเซิร์ฟเวอร์รุ่นเก่า)
+  const [adminWarehouse, setAdminWarehouse] = useState("คลังลาดพร้าว 94");
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [editingNote, setEditingNote] = useState(false);
@@ -488,6 +505,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           priorities?: Option[];
           stages: Stage[];
           warehouses: string[];
+          adminWarehouse?: string;
           technicians: Technician[];
           teams: Team[];
         }>("/work-orders/options"),
@@ -499,6 +517,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       setPriorities(options.data.priorities ?? []);
       setStages(options.data.stages);
       setWarehouses(options.data.warehouses);
+      if (options.data.adminWarehouse) setAdminWarehouse(options.data.adminWarehouse);
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
       setError(null);
@@ -622,7 +641,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    */
   function myTurn(o: WorkOrder) {
     if (!user) return false;
-    if (user.role === "ADMIN") return true;
+    // เบิกคลังอื่นเป็นสิทธิ์ของหัวหน้าภาค — แอดมินทำแทนได้ทุกขั้นยกเว้นขั้นนี้ (เซิร์ฟเวอร์กันซ้ำ)
+    if (user.role === "ADMIN") return o.status !== "PARTS_PICKUP";
     // ผลตรวจหน้างาน หัวหน้าภาคบันทึกแทนได้ เผื่อช่างโทรมาเล่าแทนการกรอกเอง
     if (o.status === "INSPECTING" && user.role === "SUPERVISOR") return true;
     if (o.stageActor === "EMPLOYEE") {
@@ -801,6 +821,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         (x) =>
           x.value !== "DONE" &&
           x.value !== "CLAIM_REVIEW" &&
+          // ไม่รู้ว่าเลขใบเบิกตัวไหนเป็นของหัวหน้าภาค — ย้อนไปให้แอดมินเบิกใหม่แทน (เซิร์ฟเวอร์ปฏิเสธเหมือนกัน)
+          x.value !== "PARTS_PICKUP" &&
           (!isSkipped(x.value, order, stages) ||
             /**
              * ใบเก่าที่เข้าเสนอราคาก่อนมีขั้นรอเบิกอะไหล่ — แอดมินเช็คหลังบ้านแล้วพบว่าของหมด
@@ -1884,6 +1906,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         visible={stageOpen}
         order={order}
         warehouses={warehouses}
+        adminWarehouse={adminWarehouse}
         teams={teams}
         files={files}
         onFilesChanged={() => setFilesKey((k) => k + 1)}
@@ -1952,6 +1975,7 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   AWAITING_QUOTE: ["QUOTED", "QUOTE_SKIPPED"],
   AWAITING_PAYMENT: ["PAID"],
   PARTS_REQUESTED: ["PARTS_CHECKED"],
+  PARTS_PICKUP: ["PICKED_UP"],
   PARTS_SOURCING: ["PARTS_SOURCED", "PARTS_BACKORDERED"],
   PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
@@ -2504,6 +2528,7 @@ function StageModal({
   visible,
   order,
   warehouses,
+  adminWarehouse,
   teams,
   files,
   onFilesChanged,
@@ -2513,6 +2538,7 @@ function StageModal({
   visible: boolean;
   order: WorkOrder;
   warehouses: string[];
+  adminWarehouse: string;
   teams: Team[];
   /** ไฟล์แนบของใบงาน (จากการ์ดไฟล์แนบ) — ฟอร์มผลตรวจบอกว่าแนบอะไรไว้แล้ว */
   files: Attachment[];
@@ -2558,6 +2584,11 @@ function StageModal({
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
   // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
   const [splitOut, setSplitOut] = useState(true);
+  // ขั้นเบิกอะไหล่: ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
+  const [pickupNote, setPickupNote] = useState("");
+  // ขั้นหัวหน้าภาคเบิก: คลังที่เบิกจริง + เลขใบเบิก รายตัว (อาจเบิกคนละคลังคนละใบ) · เบิกไม่ได้ = ส่งกลับแอดมิน
+  const [pickup, setPickup] = useState<Record<number, { warehouse: string | null; requisitionNo: string }>>({});
+  const [pickupFail, setPickupFail] = useState(false);
   // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
   const [prevUsed, setPrevUsed] = useState<string[]>([]);
   const { user } = useAuth();
@@ -2642,6 +2673,13 @@ function StageModal({
     );
     // ป้ายวันนัดมีความหมายเฉพาะขั้นที่มีช่องวัน
     setPrevUsed(used.filter((u) => u !== "วันนัด" || order.status === "PARTS_CHECKED"));
+    setPickupNote("");
+    setPickup(
+      Object.fromEntries(
+        order.waitingParts.filter((p) => isPickup(p, adminWarehouse)).map((p) => [p.sparePartId, { warehouse: p.warehouse, requisitionNo: "" }])
+      )
+    );
+    setPickupFail(false);
     setNote("");
     setError(null);
   }, [visible, order]);
@@ -2718,12 +2756,28 @@ function StageModal({
             inStock: checks[p.sparePartId]?.inStock ?? false,
             // ของนอกสโตร์ไม่ได้ออกจากคลัง — ไม่มีคลัง ไม่ผูกกับใบเบิกของรอบนี้
             warehouse: p.offCatalog ? null : checks[p.sparePartId]?.warehouse ?? null,
-            requisitionNo: p.offCatalog ? null : requisitionNo.trim() || null,
+            // เลขใบเบิกของแอดมินใช้กับของคลังลาดพร้าว 94 เท่านั้น — คลังอื่นหัวหน้าภาคใส่เอง
+            requisitionNo:
+              p.offCatalog || checks[p.sparePartId]?.warehouse !== adminWarehouse ? null : requisitionNo.trim() || null,
           })),
+          pickupNote: toPickup.length ? pickupNote.trim() : undefined,
           splitOut: mixed && splitOut,
           expectedAt: checkOut && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
+      } else if (order.status === "PARTS_PICKUP") {
+        if (pickupFail) {
+          await api.post(`/work-orders/${order.id}/parts-pickup/return`, { reason: note.trim() });
+        } else {
+          await api.post(`/work-orders/${order.id}/parts-pickup`, {
+            results: pickupParts.map((p) => ({
+              sparePartId: p.sparePartId,
+              warehouse: pickup[p.sparePartId]?.warehouse,
+              requisitionNo: pickup[p.sparePartId]?.requisitionNo.trim(),
+            })),
+            note: note.trim() || undefined,
+          });
+        }
       } else if (order.status === "PARTS_SOURCING") {
         await api.post(`/work-orders/${order.id}/parts-sourcing`, {
           results: thisRound.map((p) => ({ sparePartId: p.sparePartId, inStock: checks[p.sparePartId]?.inStock === true })),
@@ -2784,12 +2838,28 @@ function StageModal({
       const c = checks[p.sparePartId];
       return c?.inStock === null || c?.inStock === undefined || (c.inStock && !c.warehouse && !p.offCatalog);
     });
-  // มีของอย่างน้อยหนึ่งตัวในรอบนี้ = ต้องเบิก = ต้องมีเลขใบเบิก
+  // ของที่อยู่คลังอื่น — แอดมินเบิกไม่ได้ ส่งให้หัวหน้าภาคเบิก
+  const toPickup =
+    order.status === "PARTS_REQUESTED"
+      ? thisRound.filter((p) => {
+          const c = checks[p.sparePartId];
+          return !p.offCatalog && c?.inStock === true && !!c.warehouse && c.warehouse !== adminWarehouse;
+        })
+      : [];
+  // มีของที่คลังลาดพร้าว 94 อย่างน้อยหนึ่งตัวในรอบนี้ = แอดมินเบิก = ต้องมีเลขใบเบิก
   const needsRequisition =
     order.status === "PARTS_REQUESTED" &&
     // ของนอกสโตร์ไม่ได้ออกจากคลัง ไม่มีใบเบิก — นับเฉพาะของในสโตร์
-    thisRound.some((p) => !p.offCatalog && checks[p.sparePartId]?.inStock === true) &&
+    thisRound.some((p) => !p.offCatalog && checks[p.sparePartId]?.inStock === true && checks[p.sparePartId]?.warehouse === adminWarehouse) &&
     !requisitionNo.trim();
+  // ขั้นหัวหน้าภาคเบิก — ตัวที่ต้องเบิก · ตัวที่แอดมินเบิกไปแล้ว (โชว์ให้รู้ว่าครบชุด)
+  const pickupParts = order.status === "PARTS_PICKUP" ? order.waitingParts.filter((p) => isPickup(p, adminWarehouse)) : [];
+  const pickupBlocked =
+    order.status === "PARTS_PICKUP" &&
+    (pickupFail
+      ? !note.trim()
+      : pickupParts.some((p) => !pickup[p.sparePartId]?.warehouse || !pickup[p.sparePartId]?.requisitionNo.trim()));
+  const pickupRequest = order.status === "PARTS_PICKUP" ? lastPickupRequest(order) : null;
   // ขั้นเสนอราคาต้องมีเอกสาร เว้นแต่กดข้ามซึ่งต้องบอกเหตุผลแทน
   const quoteBlocked =
     order.status === "AWAITING_QUOTE" &&
@@ -2840,6 +2910,8 @@ function StageModal({
           (!validDate || !timeOk || (visit === (order.scheduledAt ?? "").slice(0, 10) && visitTime === (order.scheduledTime ?? "")))))) ||
     unchecked ||
     needsRequisition ||
+    pickupBlocked ||
+    (toPickup.length > 0 && !pickupNote.trim()) ||
     (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
 
   return (
@@ -2870,7 +2942,13 @@ function StageModal({
                   ? sourcingOut.length
                     ? "อะไหล่หมด — รอของเข้า"
                     : "มีอะไหล่ — ไปเสนอราคา"
-                  : "ยืนยัน"}
+                  : order.status === "PARTS_PICKUP"
+                    ? pickupFail
+                      ? "ส่งกลับแอดมิน"
+                      : "คอนเฟิร์ม เบิกแล้ว"
+                    : toPickup.length && !checkOut
+                      ? `ส่งหัวหน้าภาคเบิก ${toPickup.length} รายการ`
+                      : "ยืนยัน"}
               </Text>
             )}
           </TouchableOpacity>
@@ -3049,7 +3127,7 @@ function StageModal({
                   เหนือจุดที่กำลังมองอยู่ จะดันของที่เหลือเลื่อนลงโดยไม่มีใครทันเห็น
                 */}
                 <Text style={styles.modalLabel}>
-                  เลขใบเบิกอะไหล่{prevUsed.includes("เลขใบเบิก") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
+                  เลขใบเบิกอะไหล่ ({adminWarehouse}){prevUsed.includes("เลขใบเบิก") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
                 </Text>
                 <TextInput
                   style={[styles.modalInput, styles.modalInputLine]}
@@ -3062,8 +3140,8 @@ function StageModal({
                 />
                 <Text style={needsRequisition ? styles.warn : styles.linkedText}>
                   {needsRequisition
-                    ? "ต้องใส่เลขใบเบิกก่อน ถึงจะบันทึกได้ — ใช้กับอะไหล่ที่ตอบว่ามีของในรอบนี้"
-                    : "ใช้กับอะไหล่ที่ตอบว่ามีของในรอบนี้ — ของที่หมดยังไม่ได้เบิก จึงไม่ต้องใส่"}
+                    ? `ต้องใส่เลขใบเบิกก่อน ถึงจะบันทึกได้ — ใช้กับอะไหล่ที่มีของที่${adminWarehouse}`
+                    : `แอดมินเบิกได้เฉพาะ${adminWarehouse} — ของที่อยู่คลังอื่นส่งให้หัวหน้าภาคเบิก ไม่ต้องใส่เลขใบเบิก`}
                 </Text>
 
                 {issued.length > 0 ? (
@@ -3133,7 +3211,11 @@ function StageModal({
                           value={c.warehouse}
                           placeholder="เลือกคลังที่มีของ"
                           accessibilityLabel={`คลังที่มี ${part.partCode}`}
-                          options={warehouses.map((w) => ({ value: w, label: w }))}
+                          options={warehouses.map((w) => ({
+                            value: w,
+                            label: w,
+                            hint: w === adminWarehouse ? "แอดมินเบิก" : "หัวหน้าภาคเบิก",
+                          }))}
                           onChange={(next) =>
                             setChecks((v) => ({
                               ...v,
@@ -3142,9 +3224,32 @@ function StageModal({
                           }
                         />
                       ) : null}
+                      {c.inStock === true && !part.offCatalog && c.warehouse && c.warehouse !== adminWarehouse ? (
+                        <Text style={styles.pickupTag} accessibilityLabel={`หัวหน้าภาคเบิก ${part.partCode}`}>
+                          หัวหน้าภาคเบิกเองจาก{c.warehouse} — ไม่ใช้เลขใบเบิกข้างบน
+                        </Text>
+                      ) : null}
                     </View>
                   );
                 })}
+                {toPickup.length ? (
+                  <View style={styles.pickupBox}>
+                    <Text style={styles.modalLabel}>หมายเหตุถึงหัวหน้าภาค *</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      value={pickupNote}
+                      onChangeText={setPickupNote}
+                      placeholder="เบิกที่ไหน ติดต่อใคร เช่น มีที่คลังภูเก็ต 2 ตัว ติดต่อพี่เอ"
+                      placeholderTextColor={colors.textFaint}
+                      multiline
+                      numberOfLines={2}
+                      accessibilityLabel="หมายเหตุถึงหัวหน้าภาค"
+                    />
+                    <Text style={pickupNote.trim() ? styles.linkedText : styles.warn}>
+                      {toPickup.length} รายการอยู่คลังอื่น — ใบงานไปขั้น “รอหัวหน้าภาคเบิกอะไหล่” หัวหน้าภาคเบิกเสร็จแล้วไปจ่ายงานต่อ
+                    </Text>
+                  </View>
+                ) : null}
                 {mixed ? (
                   <TouchableOpacity
                     style={styles.skipRow}
@@ -3174,6 +3279,84 @@ function StageModal({
                   {mixed && splitOut
                     ? "ตัวที่หมดจะย้ายไปใบงานใหม่ที่ลิงก์กับใบนี้ ใบนี้ไปขั้นจ่ายงานต่อ"
                     : "มีตัวไหนหมด ใบงานจะขึ้นป้ายแดง “อะไหล่หมด” และค้างที่ขั้นนี้จนของครบ — ของมาแล้วกดเช็คอีกรอบ"}
+                </Text>
+              </View>
+            ) : null}
+
+            {order.status === "PARTS_PICKUP" ? (
+              <View style={styles.checkList}>
+                {pickupRequest ? (
+                  <View style={styles.pickupBox} accessibilityLabel="หมายเหตุจากแอดมิน">
+                    <Text style={styles.issuedTitle}>
+                      จากแอดมิน{pickupRequest.byName ? ` (${pickupRequest.byName} · ${formatDateTime(pickupRequest.createdAt)})` : ""}
+                    </Text>
+                    <Text style={styles.pickupNoteText}>{pickupRequest.note ?? "—"}</Text>
+                  </View>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.skipRow}
+                  onPress={() => setPickupFail((v) => !v)}
+                  activeOpacity={0.7}
+                  accessibilityLabel="เบิกไม่ได้ ส่งกลับแอดมิน"
+                >
+                  <Ionicons name={pickupFail ? "checkbox" : "square-outline"} size={18} color={pickupFail ? colors.danger : colors.textFaint} />
+                  <Text style={styles.skipText}>เบิกไม่ได้ — ส่งกลับให้แอดมินหาคลังอื่นหรือตอบว่าหมด (ใส่เหตุผลในช่องบันทึกข้างล่าง)</Text>
+                </TouchableOpacity>
+                {!pickupFail
+                  ? pickupParts.map((part) => {
+                      const v = pickup[part.sparePartId] ?? { warehouse: part.warehouse, requisitionNo: "" };
+                      const set = (next: Partial<typeof v>) => setPickup((cur) => ({ ...cur, [part.sparePartId]: { ...v, ...next } }));
+                      return (
+                        <View key={part.sparePartId} style={styles.checkItem}>
+                          <Text style={styles.checkCode}>
+                            {partTitle(part)} × {part.quantity}
+                          </Text>
+                          <Text style={styles.checkName}>{part.name}</Text>
+                          <Dropdown
+                            value={v.warehouse}
+                            placeholder="คลังที่เบิก"
+                            accessibilityLabel={`คลังที่เบิก ${part.partCode}`}
+                            options={warehouses.map((w) => ({
+                              value: w,
+                              label: w,
+                              hint: w === part.warehouse ? "แอดมินบอก" : undefined,
+                            }))}
+                            onChange={(next) => set({ warehouse: next })}
+                          />
+                          {v.warehouse && v.warehouse !== part.warehouse ? (
+                            <Text style={styles.linkedText}>เปลี่ยนจาก{part.warehouse}ที่แอดมินบอก — บันทึกคลังที่เบิกจริง</Text>
+                          ) : null}
+                          <TextInput
+                            style={[styles.modalInput, styles.modalInputLine]}
+                            value={v.requisitionNo}
+                            onChangeText={(t) => set({ requisitionNo: t })}
+                            placeholder="เลขใบเบิกจากระบบคลัง"
+                            placeholderTextColor={colors.textFaint}
+                            autoCapitalize="characters"
+                            accessibilityLabel={`เลขใบเบิก ${part.partCode}`}
+                          />
+                        </View>
+                      );
+                    })
+                  : null}
+                {issued.length > 0 ? (
+                  <View style={styles.issuedBox}>
+                    <Text style={styles.issuedTitle}>แอดมินเบิกแล้ว</Text>
+                    {issued.map((p) => (
+                      <Text key={p.sparePartId} style={styles.issuedLine}>
+                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · ใบเบิก {p.requisitionNo}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+                <Text style={pickupBlocked ? styles.warn : styles.linkedText}>
+                  {pickupFail
+                    ? note.trim()
+                      ? "ใบงานกลับไปขั้นรอแอดมินเบิกอะไหล่"
+                      : "ใส่เหตุผลที่เบิกไม่ได้ในช่องบันทึกข้างล่าง"
+                    : pickupBlocked
+                      ? "ใส่คลังและเลขใบเบิกให้ครบทุกรายการ"
+                      : "เบิกครบแล้ว — ใบงานไปขั้นจ่ายงานให้ช่างต่อ"}
                 </Text>
               </View>
             ) : null}
@@ -3488,12 +3671,12 @@ function StageModal({
             {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน */}
             {order.status !== "INSPECTING" ? (
               <>
-                <Text style={styles.modalLabel}>บันทึกเพิ่มเติม</Text>
+                <Text style={styles.modalLabel}>{order.status === "PARTS_PICKUP" && pickupFail ? "เหตุผลที่เบิกไม่ได้ *" : "บันทึกเพิ่มเติม"}</Text>
                 <TextInput
                   style={styles.modalInput}
                   value={note}
                   onChangeText={setNote}
-                  placeholder="ไม่ใส่ก็ได้"
+                  placeholder={order.status === "PARTS_PICKUP" && pickupFail ? "เช่น คลังภูเก็ตของหมดแล้ว" : "ไม่ใส่ก็ได้"}
                   placeholderTextColor={colors.textFaint}
                   multiline
                   numberOfLines={2}
@@ -4918,6 +5101,9 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 const styles = StyleSheet.create({
+  pickupBox: { gap: 6, padding: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  pickupTag: { fontSize: 12, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
+  pickupNoteText: { fontSize: 14, lineHeight: 21, color: colors.text },
   rowSub: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: 1 },
   linkRow: {
     flexDirection: "row",

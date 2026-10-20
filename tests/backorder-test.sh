@@ -29,7 +29,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
 echo
 echo "═══ รอบ 1 — บอร์ดมีของ สายพานหมด"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-ROUND-1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
+  -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-ROUND-1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
 echo "  $(st $ID)"
 echo "  $(parts $ID)"
 st $ID | grep -q "^รอแอดมินเบิกอะไหล่" && pass "ของหมด ใบงานค้างอยู่ที่แอดมิน ไม่ส่งต่อ" || fail "ส่งต่อไปแล้วทั้งที่ของยังไม่มา: $(st $ID)"
@@ -43,7 +43,7 @@ echo "$RR" | grep -q "ยังไม่ถึงขั้นนี้" && pass 
 echo
 echo "═══ รอบ 2 — ของมาแล้ว ส่งมาเฉพาะตัวที่เพิ่งเข้า พร้อมใบเบิกใบใหม่"
 RES=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-ROUND-2\"}]}")
+  -d "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-ROUND-2\"}]}")
 echo "  $(st $ID)"
 echo "  $(parts $ID)"
 st $ID | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของครบแล้วเดินต่อไปขั้นหัวหน้าภาคจ่ายงาน" || fail "ไม่เดินต่อ: $(st $ID)"
@@ -60,7 +60,7 @@ ID2=$(echo "$WO2" | J 'd.orders[0].id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":1}]}" >/dev/null
 RR=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-X\"}]}")
+  -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-X\"}]}")
 echo "$RR" | grep -q "ต้องเช็คให้ครบ" && pass "ตอบไม่ครบยังถูกปฏิเสธ" || fail "รับทั้งที่ตอบไม่ครบ: $RR"
 
 echo
@@ -71,7 +71,7 @@ ID3=$(echo "$WO3" | J 'd.orders[0].id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID3/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID3/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-OK\"}]}" >/dev/null
+  -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-OK\"}]}" >/dev/null
 st $ID3 | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของครบรอบเดียวยังเดินต่อทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
 
 echo

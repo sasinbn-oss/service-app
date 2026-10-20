@@ -35,7 +35,7 @@ echo "═══ เตรียมใบงาน: บอร์ด + สาย�
 WO=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactName":"คุณเดิม","contactPhone":"081-111-1111","machines":[{"code":"W81","symptom":"ทดสอบส่งกลับ"}]}')
 ID=$(echo "$WO" | J 'd.orders[0].id')
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-SB1\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-SB1\"}]}" >/dev/null
+POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SB1\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SB1\"}]}" >/dev/null
 toWork $ID
 [ "$(status $ID)" = "IN_PROGRESS" ] && pass "ใบงานถึงขั้นช่างเข้างาน" || fail "เตรียมไม่ถึง: $(status $ID)"
 
@@ -73,7 +73,7 @@ POST $A "work-orders/$ID/reassess-parts" "{\"reasonCode\":\"PARTS\",\"reason\":\
 GET "work-orders/$ID" | J 'd.logs.find(l=>l.action==="PARTS_ROLLBACK").note' | grep -q "ใบเบิกเดิม RQ-SB1" && pass "เลขใบเบิกเดิมลงประวัติไว้" || fail "ประวัติไม่มีใบเบิกเดิม"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
 [ "$(status $ID)" = "PARTS_REQUESTED" ] && pass "มีตัวต้องเบิกใหม่ → ไปแอดมินเช็คคลัง" || fail "สถานะ: $(status $ID)"
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-SB2\"}]}" >/dev/null
+POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SB2\"}]}" >/dev/null
 [ "$(status $ID)" = "PARTS_CHECKED" ] && [ "$(parts $ID)" = "SP-BELT:true:RQ-SB2 SP-BOARD:true:RQ-SB1" ] \
   && pass "แอดมินเช็คเฉพาะตัวใหม่ · บอร์ดยังเป็นใบเบิกเดิม" || fail "หลังเช็ค: $(status $ID) $(parts $ID)"
 

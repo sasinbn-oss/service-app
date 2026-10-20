@@ -125,6 +125,9 @@ export function workStatusForStage(
     // ผู้เรียกส่ง anyPartOutOfStock) — เจ้าของงานขอ ต.ค. 69
     case "PARTS_REQUESTED":
       return "CHECKING_PARTS";
+    // ของมีแล้ว อยู่ระหว่างหัวหน้าภาคไปเบิกจากคลังอื่น — ยังไม่พร้อมส่งช่าง
+    case "PARTS_PICKUP":
+      return "CHECKING_PARTS";
     // ใบงานรออะไหล่ที่แยกออกมา — รอของเข้าคลังจริง ๆ
     case "WAITING_PARTS":
       return "WAITING_PARTS";
@@ -199,6 +202,7 @@ export const WORK_ORDER_STATUSES = [
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
+  "PARTS_PICKUP",
   "PARTS_SOURCING",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
@@ -226,6 +230,7 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   WAITING_PARTS: "รออะไหล่เข้า",
   // เจ้าของงานขอ ต.ค. 69: ขั้นก่อนเสนอราคาคือ "เช็คว่ามีหรือหมด" ขั้นหลังรับเงินคือ "เบิกจริงส่งหน้างาน"
   PARTS_REQUESTED: "รอแอดมินเบิกอะไหล่",
+  PARTS_PICKUP: "รอหัวหน้าภาคเบิกอะไหล่",
   PARTS_SOURCING: "รอแอดมินเช็คอะไหล่",
   AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
   AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
@@ -280,6 +285,14 @@ export const WORK_ORDER_STAGE_ORDER = [
   // แอดมินเบิกอะไหล่ออกจากคลัง — ระบุคลังและเลขใบเบิกของแต่ละตัว
   "PARTS_REQUESTED",
   /**
+   * ของอยู่คลังอื่นที่ไม่ใช่ลาดพร้าว 94 — หัวหน้าภาคเบิกเอง (เจ้าของงานกำหนด ต.ค. 69)
+   *
+   * แอดมินเช็คได้ทุกคลังแต่เบิกได้เฉพาะคลังลาดพร้าว 94 (ADMIN_WAREHOUSE) จึงบอกแค่ว่าของอยู่คลังไหน
+   * พร้อมหมายเหตุ แล้วส่งต่อมาที่นี่ · หัวหน้าภาคเบิกเสร็จใส่เลขใบเบิก ไปขั้นจ่ายงานซึ่งเป็นของหัวหน้าภาคอยู่แล้ว
+   * ใบที่ของอยู่คลัง 94 ทั้งหมดไม่ผ่านขั้นนี้ · แอดมินกดแทนไม่ได้ (ดู canActOnStage)
+   */
+  "PARTS_PICKUP",
+  /**
    * หัวหน้าภาคจ่ายงาน+วันเข้างาน → แอดมินโทรคอนเฟิร์มลูกค้า → หัวหน้าภาคคอนเฟิร์มออกงาน
    * (เจ้าของงานกำหนดลำดับนี้ ต.ค. 69 — แทนแบบ "แอดมินนัดก่อนแล้วค่อยจ่ายงาน")
    *
@@ -322,6 +335,8 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   // ใบรออะไหล่หัวหน้าภาคเป็นคนดูแล — ตามของ แล้วส่งต่อเมื่อของมา
   WAITING_PARTS: "SUPERVISOR",
   PARTS_REQUESTED: "ADMIN",
+  // ของอยู่คลังอื่น — หัวหน้าภาคเบิกเอง แอดมินไม่มีสิทธิ์เบิกคลังอื่น
+  PARTS_PICKUP: "SUPERVISOR",
   // เช็ค/ตามอะไหล่ก่อนเสนอราคา — แอดมินดูคลังและเป็นคนเบิก (เจ้าของงานกำหนด: อยู่ใน "รอแอดมิน")
   PARTS_SOURCING: "ADMIN",
   // เสนอราคาและรับเงินเป็นงานออฟฟิศ แอดมินเป็นคนรู้ราคาและเป็นคนออกเอกสาร
@@ -347,6 +362,7 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
+  "PARTS_PICKUP",
   "PARTS_SOURCING",
   "AWAITING_QUOTE",
   "AWAITING_PAYMENT",
@@ -488,6 +504,9 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   PARTS_SOURCED: "มีอะไหล่ — ส่งต่อเสนอราคา",
   PARTS_BACKORDERED: "อะไหล่หมด (ก่อนเสนอราคา)",
   PARTS_ETA_CHANGED: "เลื่อนวันคาดว่าอะไหล่เข้า",
+  PICKUP_REQUESTED: "ส่งให้หัวหน้าภาคเบิกอะไหล่ (คลังอื่น)",
+  PICKED_UP: "หัวหน้าภาคเบิกอะไหล่แล้ว",
+  PICKUP_RETURNED: "หัวหน้าภาคเบิกไม่ได้ — ส่งกลับแอดมิน",
   STATUS_CHANGED: "เปลี่ยนสถานะ",
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
@@ -525,8 +544,14 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
  * ได้ เพราะงานด่วนรอหัวหน้าภาคว่างไม่ได้ แต่ข้ามลำดับไม่ได้ — ต้องทำทีละขั้น
  * ไม่งั้นจะมีใบงานที่จ่ายให้ช่างทั้งที่ยังไม่มีใครเช็คว่ามีอะไหล่หรือเปล่า
  */
+/**
+ * ขั้นที่แอดมินกดแทนไม่ได้ — ปกติแอดมินทำแทนได้ทุกขั้นเพราะงานด่วนรอใครไม่ได้
+ * แต่เบิกคลังอื่นเป็นเรื่องสิทธิ์ ไม่ใช่เรื่องความเร็ว (เจ้าของงานกำหนด ต.ค. 69)
+ */
+export const SUPERVISOR_ONLY_STAGES: readonly string[] = ["PARTS_PICKUP"];
+
 export function canActOnStage(role: string, stage: string) {
-  if (role === "ADMIN") return true;
+  if (role === "ADMIN") return !SUPERVISOR_ONLY_STAGES.includes(stage);
   return WORK_ORDER_STAGE_ACTOR[stage] === role;
 }
 

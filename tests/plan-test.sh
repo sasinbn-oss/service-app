@@ -115,7 +115,7 @@ echo "$R" | grep -q "ยังขาด: รูปหน้างาน · ร�
 echo
 echo "═══ หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า (เลื่อนวันได้) → หัวหน้าภาคยืนยันออกงาน"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}]}" >/dev/null
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-PL1\"}]}" >/dev/null
+POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL1\"}]}" >/dev/null
 [ "$(st $ID)" = "PARTS_CHECKED" ] && pass "ของครบแล้วไปรอหัวหน้าภาคจ่ายงาน" || fail "ไม่ได้ไปรอจ่ายงาน: $(st $ID)"
 R=$(POST $T "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-04\"}")
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงานเองไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R|head -c 120)"
@@ -194,7 +194,7 @@ echo
 echo "═══ แยกใบงานรออะไหล่ตอนเช็คคลัง"
 ID2=$(newwo CM); CREATED="$CREATED $ID2"
 POST $S "work-orders/$ID2/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1},{\"sparePartId\":$P2,\"quantity\":2}]}" >/dev/null
-POST $A "work-orders/$ID2/parts-check" "{\"splitOut\":true,\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-PL2\"},{\"sparePartId\":$P2,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$ID2/parts-check" "{\"splitOut\":true,\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL2\"},{\"sparePartId\":$P2,\"inStock\":false}]}" >/dev/null
 CH=$(DB "select id from \"WorkOrder\" where \"parentId\"=$ID2")
 [ -n "$CH" ] && CREATED="$CREATED $CH"
 [ "$(st $ID2)" = "PARTS_CHECKED" ] && [ "$(st $CH)" = "WAITING_PARTS" ] \

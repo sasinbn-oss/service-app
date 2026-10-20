@@ -58,7 +58,7 @@ const { setup } = require("./fixture");
 
     // ② อีกคนเปลี่ยนขั้น → โหลดเองพร้อมบอกชื่อ
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
-      results: [{ sparePartId: board, inStock: true, warehouse: "คลังกระบี่", requisitionNo: "RQ-LIVE" }],
+      results: [{ sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-LIVE" }],
     });
     await shown(page);
     await page.waitForTimeout(2500);

@@ -62,7 +62,7 @@ const login = async (code) =>
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: true, parts: [{ sparePartId: Number(sp), quantity: 1 }] });
     await call(A, "POST", `/work-orders/${id}/parts-check`, {
-      results: [{ sparePartId: Number(sp), inStock: true, warehouse: "คลังกระบี่", requisitionNo: `RQ-CW${suf}` }],
+      results: [{ sparePartId: Number(sp), inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-CW${suf}` }],
     });
     await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: "2026-11-10" });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});

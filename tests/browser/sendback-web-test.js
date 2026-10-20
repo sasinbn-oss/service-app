@@ -24,7 +24,7 @@ const { setup } = require("./fixture");
     const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }]);
     const S = await fx.login("S001");
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
-      results: [{ sparePartId: board, inStock: true, warehouse: "คลังกระบี่", requisitionNo: "RQ-WSB" }],
+      results: [{ sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-WSB" }],
     });
     await fx.call(S, "POST", `/work-orders/${wo.id}/assign`, { team, scheduledAt: "2026-11-10" });
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/confirm-appointment`, {});

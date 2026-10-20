@@ -36,9 +36,9 @@ mine() { REP $1 | J "d.rows.filter(r=>[$W1,$W2,$W3].includes(r.workOrderId)).map
 W1=$(newwo W71); W2=$(newwo W72); W3=$(newwo W73); IDS="$W1 $W2 $W3"
 C1=$(DB "select code from \"WorkOrder\" where id=$W1"); C2=$(DB "select code from \"WorkOrder\" where id=$W2"); C3=$(DB "select code from \"WorkOrder\" where id=$W3")
 # W1: สายพานหมด ของเข้าเลยมาแล้ว · W2: แผงวงจรหมด ไม่ใส่วัน · W3: สายพานหมดแต่เป็นใบทดสอบ
-POST $A "work-orders/$W1/parts-check" "{\"expectedAt\":\"2026-01-05\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-R1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
-POST $A "work-orders/$W2/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-R2\"}]}" >/dev/null
-POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-R3\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$W1/parts-check" "{\"expectedAt\":\"2026-01-05\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-R1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$W2/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-R2\"}]}" >/dev/null
+POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-R3\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
 DB "update \"WorkOrder\" set \"isTest\"=true where id=$W3" >/dev/null
 [ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\" in ($W1,$W2) and \"inStock\"=false")" = "2" ] || fail "เตรียมข้อมูลไม่ได้ (ฐานข้อมูลไม่มีตัวที่หมด)"
 
@@ -62,7 +62,7 @@ unzip -p /tmp/parts-out-test.xlsx xl/sharedStrings.xml 2>/dev/null | grep -q "$C
 rm -f /tmp/parts-out-test.xlsx
 
 # ของมาแล้ว — แอดมินเช็คใหม่ว่ามี ใบหายจากรายงาน
-POST $A "work-orders/$W1/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-R4\"}]}" >/dev/null
+POST $A "work-orders/$W1/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-R4\"}]}" >/dev/null
 [ "$(mine $A)" = "$C2/SP-BOARD" ] && pass "ของมาแล้วเช็คใหม่ว่ามี = หายจากรายงานเอง" || fail "หลังของมา: $(mine $A)"
 
 [ -z "$FAILED" ]
