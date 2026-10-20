@@ -21,15 +21,20 @@ const MAX_AGE_MS = 60_000;
 const MIN_GAP_MS = 5_000;
 
 let active: Map<number, Role> | null = null;
+/** เวลาเปลี่ยน/รีเซ็ตรหัสผ่านล่าสุด (วินาที) — โทเคนที่ออกก่อนนี้ใช้ไม่ได้ ดู requireAuth */
+let changedAt = new Map<number, number>();
 let loadedAt = 0;
 let loading: Promise<void> | null = null;
 
 function reload() {
   if (!loading) {
     loading = prisma.user
-      .findMany({ where: { deletedAt: null }, select: { id: true, role: true } })
+      .findMany({ where: { deletedAt: null }, select: { id: true, role: true, passwordChangedAt: true } })
       .then((rows) => {
         active = new Map(rows.map((r) => [r.id, r.role as Role]));
+        changedAt = new Map(
+          rows.filter((r) => r.passwordChangedAt).map((r) => [r.id, Math.floor(r.passwordChangedAt!.getTime() / 1000)])
+        );
         loadedAt = Date.now();
       })
       .finally(() => {
@@ -45,6 +50,20 @@ export async function currentRole(id: number): Promise<Role | null> {
   if (!active || age > MAX_AGE_MS) await reload();
   else if (!active.has(id) && age > MIN_GAP_MS) await reload();
   return active!.get(id) ?? null;
+}
+
+/**
+ * โทเคนนี้ออกก่อนเปลี่ยนรหัสผ่านล่าสุดไหม — เรียกหลัง currentRole (รายชื่อโหลดแล้ว)
+ * เทียบเป็นวินาทีเพราะ iat ของ JWT เป็นวินาที โทเคนใหม่ที่ออกในวินาทีเดียวกับที่เปลี่ยนรหัสยังใช้ได้
+ */
+export function issuedBeforePasswordChange(id: number, iat: number | undefined) {
+  const at = changedAt.get(id);
+  return at !== undefined && iat !== undefined && iat < at;
+}
+
+/** เรียกทันทีหลังเปลี่ยน/รีเซ็ตรหัสผ่าน — เครื่องนี้ตัดโทเคนเก่าตั้งแต่คำขอถัดไป ไม่ต้องรอรอบโหลด 60 วินาที */
+export function passwordChanged(id: number, at: Date) {
+  changedAt.set(id, Math.floor(at.getTime() / 1000));
 }
 
 /** เรียกทันทีหลังลบ — เครื่องนี้ตัดโทเคนของคนนั้นตั้งแต่คำขอถัดไป */

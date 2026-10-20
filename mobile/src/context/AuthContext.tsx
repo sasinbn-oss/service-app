@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { clearPageCache } from "../utils/pageCache";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { showAlert } from "../utils/alert";
 import { api, apiErrorMessage, onAccountDeleted, onViewAsEnded, SELF_TOKEN_KEY, TOKEN_KEY } from "../api/client";
 import { User } from "../types";
 
@@ -34,8 +35,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     restoreSession();
-    onAccountDeleted(() => {
+    onAccountDeleted((notice) => {
       logout();
+      if (notice) showAlert("เข้าสู่ระบบใหม่", notice);
     });
     onViewAsEnded(() => {
       stopViewAs();

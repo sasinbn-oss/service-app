@@ -7,15 +7,18 @@ import { formatDate } from "../screens/WorkOrderListScreen";
 
 /** ใบงานที่ยังเปิดค้างของสาขา — จาก GET /branches/:code/open-work-orders */
 export interface OpenOrder {
-  id: number;
+  /** null = แบบย่อ (ช่าง) — เปิดจากกล่องเตือนไม่ได้ */
+  id: number | null;
   code: string;
   status: string;
   statusLabel: string;
   machineCode: string | null;
-  symptom: string;
+  symptom: string | null;
   team: string | null;
   createdAt: string;
   createdBy: string | null;
+  /** ช่างเห็นแบบย่อ: เลขใบงาน เครื่อง ขั้น — ไม่เห็นอาการ/ชื่อคน/ทีมของสาขาอื่น (เจ้าของงานเลือก ต.ค. 69) */
+  limited?: boolean;
 }
 
 /** โชว์แค่นี้ก่อน — สาขาที่มีใบค้างสิบใบ กล่องเตือนยาวกว่าฟอร์มทั้งหน้า */
@@ -37,30 +40,41 @@ export default function OpenOrdersWarning({
   const [all, setAll] = useState(false);
   if (orders.length === 0) return null;
   const shown = all ? orders : orders.slice(0, FIRST);
+  const limited = orders.every((o) => o.limited);
   return (
     <View style={styles.box} accessibilityLabel="เตือนใบงานเปิดค้าง">
       <View style={styles.head}>
         <Ionicons name="warning-outline" size={16} color={colors.warningInk} />
         <Text style={styles.title}>
-          สาขานี้มีใบงานเปิดค้างอยู่ {orders.length} ใบ — ดูก่อนว่าไม่ใช่เรื่องเดียวกัน
+          สาขานี้มีใบงานเปิดค้างอยู่ {orders.length} ใบ — {limited ? "ถามหัวหน้าภาคก่อนเปิดซ้ำ" : "ดูก่อนว่าไม่ใช่เรื่องเดียวกัน"}
         </Text>
       </View>
       {shown.map((o) => (
-        <TouchableOpacity key={o.id} style={styles.order} onPress={() => onOpen(o.id)} activeOpacity={0.7}>
+        <TouchableOpacity
+          key={o.code}
+          style={styles.order}
+          onPress={() => (o.id !== null ? onOpen(o.id) : undefined)}
+          disabled={o.id === null}
+          activeOpacity={0.7}
+        >
           <View style={styles.top}>
             <Text style={styles.code}>{o.code}</Text>
             <Text style={styles.machine}>{o.machineCode ?? "ทั้งสาขา"}</Text>
             <Text style={styles.stage}>{o.statusLabel}</Text>
-            <Text style={styles.open}>เปิดดู ›</Text>
+            {o.id !== null ? <Text style={styles.open}>เปิดดู ›</Text> : null}
           </View>
-          <Text style={styles.symptom} numberOfLines={2}>
-            {o.symptom}
-          </Text>
-          <Text style={styles.meta}>
-            เปิด {formatDate(o.createdAt)}
-            {o.createdBy ? ` โดย ${o.createdBy}` : ""}
-            {o.team ? ` · ${o.team}` : ""}
-          </Text>
+          {o.symptom ? (
+            <Text style={styles.symptom} numberOfLines={2}>
+              {o.symptom}
+            </Text>
+          ) : null}
+          {o.limited ? null : (
+            <Text style={styles.meta}>
+              เปิด {formatDate(o.createdAt)}
+              {o.createdBy ? ` โดย ${o.createdBy}` : ""}
+              {o.team ? ` · ${o.team}` : ""}
+            </Text>
+          )}
         </TouchableOpacity>
       ))}
       {orders.length > FIRST ? (
@@ -69,7 +83,9 @@ export default function OpenOrdersWarning({
         </TouchableOpacity>
       ) : null}
       <Text style={styles.hint}>
-        เป็นอาการใหม่/เครื่องอื่น = เปิดต่อได้เลย · เรื่องเดิม = เข้าไปเพิ่มรายละเอียดในใบเดิมแทน
+        {limited
+          ? "เป็นอาการใหม่/เครื่องอื่น = เปิดต่อได้เลย · ไม่แน่ใจ = ถามหัวหน้าภาคก่อน"
+          : "เป็นอาการใหม่/เครื่องอื่น = เปิดต่อได้เลย · เรื่องเดิม = เข้าไปเพิ่มรายละเอียดในใบเดิมแทน"}
       </Text>
     </View>
   );

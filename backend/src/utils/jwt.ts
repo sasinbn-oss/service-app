@@ -30,6 +30,8 @@ export interface TokenPayload {
   viewAs?: { by: number; logId: number };
   /** เวลาหมดอายุ (วินาที) ที่ jsonwebtoken ใส่ให้เอง */
   exp?: number;
+  /** เวลาที่ออกโทเคน (วินาที) — ใส่ให้เอง · ใช้ตัดโทเคนที่ออกก่อนเปลี่ยนรหัสผ่าน */
+  iat?: number;
 }
 
 export function signToken(payload: TokenPayload): string {

@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { peekToken, verifyToken, TokenPayload } from "../utils/jwt";
-import { currentRole } from "../utils/userGate";
+import { currentRole, issuedBeforePasswordChange } from "../utils/userGate";
 
 export interface AuthRequest extends Request {
   auth?: TokenPayload;
@@ -45,6 +45,11 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   const role = await currentRole(req.auth.userId);
   if (!role) {
     return res.status(401).json({ error: "บัญชีนี้ถูกลบแล้ว ติดต่อแอดมิน", accountDeleted: true });
+  }
+  // เปลี่ยน/รีเซ็ตรหัสผ่านแล้ว — เครื่องที่ล็อกอินไว้ก่อนหน้านั้นต้องเข้าระบบใหม่ (มือถือหาย/คนลาออก)
+  // ดูในฐานะไม่เช็ค: โทเคนนั้นเป็นของ Super Admin ที่ยืมตัวตนมาดู ไม่ใช่การล็อกอินของคนที่ถูกดู
+  if (!viewAs && issuedBeforePasswordChange(req.auth.userId, req.auth.iat)) {
+    return res.status(401).json({ error: "รหัสผ่านของบัญชีนี้ถูกเปลี่ยน — เข้าสู่ระบบใหม่ด้วยรหัสผ่านล่าสุด", passwordChanged: true });
   }
   req.auth = { ...req.auth, role };
 
