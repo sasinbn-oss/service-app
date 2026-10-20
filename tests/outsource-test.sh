@@ -21,7 +21,7 @@ OS=ZZOS$RANDOM
 IDS=""
 cleanup() {
   for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
-  DB "delete from \"OutsourceTeam\" where name like 'ZZOS%'" >/dev/null
+  DB "delete from \"OutsourceTeam\" where name like 'ZZOS%' or name='$BTEAM'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT
@@ -34,7 +34,12 @@ echo "═══ รายชื่อทีม outsource"
   && pass "ห้าทีมที่เจ้าของงานแจ้ง (PWS SPK TBL COB STM) อยู่ในฐานข้อมูลจาก migration" || fail "ทีมตั้งต้นไม่ครบ"
 [ "$(PC $S teams/outsource "{\"name\":\"$OS\"}")" = "403" ] && [ "$(DB "select count(*) from \"OutsourceTeam\" where name='$OS'")" = "0" ] \
   && pass "หัวหน้าภาคเพิ่มไม่ได้ (403)" || fail "หัวหน้าภาคเพิ่มได้"
-[ "$(PC $A teams/outsource "{\"name\":\"$BTEAM\"}")" = "409" ] && pass "ชื่อซ้ำทีมที่ดูแลสาขา: 409" || fail "เพิ่มชื่อทีมสาขาเป็น outsource ได้"
+# ทีมที่ดูแลสาขาอยู่ก็เป็น outsource ได้ (เช่น PWS ดูแลสาขาประจำ) — ติดป้ายตอนจ่ายงาน และยังอยู่ในรายการทีมปกติ
+[ "$(PC $A teams/outsource "{\"name\":\"$BTEAM\"}")" = "201" ] \
+  && [ "$(curl -s localhost:4000/api/work-orders/options -H "$(H $S)" | J "d.teams.filter(x=>x.name===\"$BTEAM\").map(x=>x.outsource===true&&x.branches>0).join()")" = "true" ] \
+  && [ "$(curl -s localhost:4000/api/teams -H "$(H $A)" | J "d.teams.some(t=>t.name===\"$BTEAM\"&&t.cmBranches>0)")" = "true" ] \
+  && pass "ทีมที่ดูแลสาขาเป็น outsource ได้: ติดป้าย (ชื่อเดียวไม่ซ้ำ) และยังอยู่ในรายการทีมปกติพร้อมจำนวนสาขา" || fail "ทีมสาขาที่เป็น outsource ไม่ถูก"
+DB "delete from \"OutsourceTeam\" where name='$BTEAM'" >/dev/null
 [ "$(PC $A teams/outsource "{\"name\":\"  $OS \"}")" = "201" ] && [ "$(DB "select count(*) from \"OutsourceTeam\" where name='$OS'")" = "1" ] \
   && pass "แอดมินเพิ่มได้ (ตัดช่องว่าง)" || fail "เพิ่มไม่ได้"
 [ "$(PC $A teams/outsource "{\"name\":\"$OS\"}")" = "409" ] && pass "เพิ่มซ้ำ: 409" || fail "เพิ่มซ้ำได้"

@@ -65,9 +65,13 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   for (const r of rows.values()) r.orphan = r.cmBranches === 0 && r.pmBranches === 0;
   // ชื่อทีมรวมมีช่าง/หัวหน้าภาคผูกอยู่แต่ไม่มีสาขาโดยตั้งใจ — แสดงแยกในส่วนทีมรวม ไม่ใช่ "ไม่มีในทะเบียนสาขา"
   const groupNames = new Set((await prisma.teamGroup.findMany({ select: { name: true } })).map((g) => g.name));
-  // ทีม outsource ไม่มีสาขาโดยตั้งใจ — แสดงแยกในส่วนของตัวเอง ไม่ใช่ "ไม่มีในทะเบียนสาขา"
+  // ทีม outsource ที่ไม่มีสาขาประจำ — แสดงแยกในส่วนของตัวเอง ไม่ใช่ "ไม่มีในทะเบียนสาขา"
+  // ทีม outsource ที่ดูแลสาขาอยู่ด้วย (เช่น PWS) ยังอยู่ในรายการทีมปกติ ไม่งั้นจำนวนสาขา/คนหายจากหน้านี้
   const outsource = await prisma.outsourceTeam.findMany({ orderBy: { name: "asc" } });
-  for (const o of outsource) groupNames.add(o.name);
+  for (const o of outsource) {
+    const r = rows.get(o.name);
+    if (!r || (r.cmBranches === 0 && r.pmBranches === 0)) groupNames.add(o.name);
+  }
 
   res.json({
     teams: [...rows.values()].filter((r) => !groupNames.has(r.name)).sort((a, b) => Number(a.orphan) - Number(b.orphan) || a.name.localeCompare(b.name, "th")),
@@ -351,10 +355,9 @@ router.post("/moves/:id/revert", requireAuth, requireAdmin, async (req, res) => 
  * ลบได้เฉพาะทีมที่ไม่มีใบงานค้าง ไม่งั้นใบที่จ่ายไปแล้วไม่มีใครปิดได้ (หัวหน้าภาคปิดแทนได้เพราะเป็นทีม outsource)
  */
 router.post("/outsource", requireAuth, requireAdmin, async (req, res) => {
+  // ทีมที่ดูแลสาขาอยู่แล้วก็เป็น outsource ได้ (บริษัทภายนอกที่รับดูแลสาขาประจำ เช่น PWS)
   const name = typeof req.body?.name === "string" ? req.body.name.trim().replace(/\s+/g, " ") : "";
   if (!name || name.length > 60) return res.status(400).json({ error: "ใส่ชื่อทีม (ไม่เกิน 60 ตัวอักษร)" });
-  const clash = await prisma.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } });
-  if (clash) return res.status(409).json({ error: `“${name}” เป็นทีมที่ดูแลสาขาอยู่แล้ว ไม่ใช่ทีม outsource` });
   if (await prisma.outsourceTeam.findUnique({ where: { name } })) return res.status(409).json({ error: `มีทีม ${name} อยู่แล้ว` });
   const row = await prisma.outsourceTeam.create({ data: { name } });
   await refreshOutsource();

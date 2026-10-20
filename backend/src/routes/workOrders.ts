@@ -1413,7 +1413,8 @@ router.get("/options", requireAuth, async (_req, res) => {
     // ทีมช่างมาจากทะเบียนสาขา (Branch.zone = คอลัมน์ "ทีมช่าง" ในไฟล์)
     // ส่งมาที่เดียวกับตัวเลือกอื่น หน้าจอจะได้ไม่ต้องยิงเพิ่มอีกรอบตอนเปิดฟอร์ม
     teams: [
-      ...teams.map(([name, branches]) => ({ name, branches })),
+      // ทีมที่ดูแลสาขาแต่เป็นบริษัทภายนอก (เช่น PWS) ก็ติดป้าย outsource — หัวหน้าภาคปิดงานแทนเหมือนกัน
+      ...teams.map(([name, branches]) => ({ name, branches, ...(isOutsourceTeam(name) ? { outsource: true } : {}) })),
       // ทีม outsource ต่อท้าย พร้อมป้าย — รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ
       ...outsourceList()
         .filter((n) => !teams.some(([t]) => t === n))
