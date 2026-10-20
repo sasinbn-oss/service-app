@@ -393,8 +393,13 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
     case "PARTS_REQUESTED":
       return o.needsParts === false;
     // ใบที่ของอยู่คลังลาดพร้าว 94 ทั้งหมดไม่ผ่านขั้นนี้
+    // ข้ามเมื่อไม่ใช้อะไหล่ หรือเลยขั้นนี้ไปแล้วโดยไม่ได้ผ่าน — ก่อนถึงขั้นเบิกยังไม่รู้ว่าของจะอยู่คลังไหน
+    // (เดิมขึ้นว่าข้ามตั้งแต่ใบยังไม่ถึงขั้นเบิก ทั้งที่แอดมินอาจส่งมาให้หัวหน้าภาคเบิก)
     case "PARTS_PICKUP":
-      return o.status !== "PARTS_PICKUP" && !o.logs.some((l) => l.action === "PICKED_UP");
+      return (
+        o.needsParts === false ||
+        (at(o.status) > at("PARTS_PICKUP") && !o.logs.some((l) => l.action === "PICKED_UP"))
+      );
     case "AWAITING_QUOTE":
       return o.needsQuote === false && !o.hasQuote;
     // ใบที่ไม่ต้องเสนอราคา หรือใบเก่าก่อนมีขั้นนี้ (ไปเสนอราคาตรง ๆ ไม่มีประวัติเช็คก่อน) — ไม่ได้ผ่านขั้นนี้

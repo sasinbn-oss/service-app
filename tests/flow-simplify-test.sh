@@ -50,6 +50,8 @@ O=$(mk C0001 63); IDS="$IDS $O"
 INB=$(curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $A)")
 [ "$(echo "$INB" | J "const r=d.rows.find(x=>x.id===$O); !!r && r.orphan===true")" = "true" ] \
   && pass "ใบรอหัวหน้าภาคที่ไม่มีใครดูแล อยู่ในกล่องงานแอดมิน ติด orphan" || fail "ไม่อยู่ในกล่องแอดมิน"
+[ "$(echo "$INB" | J "d.rows.find(x=>x.id===$O).orphanReason")" = "ภาค$(DB "select region from \"Branch\" where code='C0001'") · ทีม$(DB "select zone from \"Branch\" where code='C0001'") — ยังไม่มีหัวหน้าภาคดูแลภาค/ทีมนี้ (ตั้งที่สิทธิ์ผู้ใช้)" ] \
+  && pass "บอกเหตุผลว่าไม่มีคนรับเพราะอะไร (ภาค/ทีมนี้ยังไม่มีหัวหน้าภาค)" || fail "เหตุผล: $(echo "$INB" | J "d.rows.find(x=>x.id===$O).orphanReason")"
 [ "$(echo "$INB" | J "d.rows.some(x=>x.id===$W2)")" = "false" ] && pass "ใบรอหัวหน้าภาคที่มีคนดูแล ไม่อยู่ในกล่องแอดมิน" || fail "ใบมีเจ้าของหลุดมากล่องแอดมิน"
 [ "$(curl -s localhost:4000/api/work-orders/inbox-count -H "$(H $A)" | J 'd.inbox')" = "$(echo "$INB" | J 'd.rows.length')" ] \
   && pass "ตัวเลขกล่องงานหน้าแรกนับใบไม่มีคนรับด้วย" || fail "ตัวเลขกล่องงานไม่ตรงรายการ"

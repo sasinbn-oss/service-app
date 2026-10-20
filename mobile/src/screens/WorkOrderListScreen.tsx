@@ -85,6 +85,8 @@ export interface WorkOrderRow {
   stageActor: Role | null;
   /** รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินหัวข้อ "ไม่มีคนรับ" */
   orphan?: boolean;
+  /** ทำไมไม่มีคนรับ: สาขายังไม่มีภาค/ทีม หรือภาค/ทีมนี้ยังไม่มีหัวหน้าภาค */
+  orphanReason?: string | null;
   /** วันนัดผ่านไปแล้วยังไม่คอนเฟิร์มลูกค้า — กล่องงานแอดมินหัวข้อ "เลยนัด" */
   overdue?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
@@ -1508,7 +1510,14 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
     const orphan = rows.filter((r) => r.orphan);
     const overdue = rows.filter((r) => r.overdue);
     if (orphan.length)
-      groups.push({ key: "orphan", title: `ไม่มีคนรับ ${orphan.length}`, hint: "ภาค/ทีมนี้ไม่มีหัวหน้าภาค — กดทำแทน หรือตั้งคนที่ผังผู้รับผิดชอบ", tone: "bad", items: orphan });
+      groups.push({
+        key: "orphan",
+        title: `ไม่มีคนรับ ${orphan.length}`,
+        hint: "ไม่มีหัวหน้าภาคดูแลสาขาเหล่านี้ — แต่ละแถวบอกว่าต้องไปแก้ที่ไหน · แอดมินกดทำแทนได้",
+        tone: "bad",
+        // เรียงตามเหตุผล ให้ใบที่แก้ที่เดียวกันอยู่ติดกัน
+        items: [...orphan].sort((a, b) => (a.orphanReason ?? "").localeCompare(b.orphanReason ?? "", "th")),
+      });
     if (overdue.length)
       groups.push({ key: "overdue", title: `เลยนัด ${overdue.length}`, hint: "วันนัดผ่านไปแล้ว ยังไม่ได้คอนเฟิร์มลูกค้า — โทรนัดใหม่", tone: "bad", items: overdue });
   }
@@ -1522,10 +1531,11 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
           {g.items.map((r) => (
             <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`${g.title} ${r.code}`}>
               <Text style={styles.attnCode}>{r.code}</Text>
-              <Text style={styles.attnText} numberOfLines={1}>
+              {/* เหตุผลของ "ไม่มีคนรับ" ยาว — ให้ขึ้นบรรทัดใหม่ได้ ไม่ตัดทิ้ง */}
+              <Text style={styles.attnText} numberOfLines={g.key === "orphan" ? 2 : 1}>
                 {[
                   r.branchCode,
-                  g.key === "orphan" ? r.statusLabel : r.assignedTeam && `ทีม${r.assignedTeam}`,
+                  g.key === "orphan" ? r.orphanReason ?? r.statusLabel : r.assignedTeam && `ทีม${r.assignedTeam}`,
                   g.key === "today"
                     ? r.scheduledTime
                       ? `${r.scheduledTime} น.`
