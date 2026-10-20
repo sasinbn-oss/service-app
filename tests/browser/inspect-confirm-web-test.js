@@ -119,7 +119,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
           const n = card && [...card.querySelectorAll("*")].find((x) => !x.children.length && x.textContent.trim() === t);
           return n ? getComputedStyle(n).textDecorationLine : "missing";
         };
-        return [of("แอดมิน · นัดร้าน (ตรวจหน้างาน)"), of("หัวหน้าภาค · ส่งช่างตรวจ")];
+        return [of("นัดร้านแล้ว"), of("ส่งช่างตรวจแล้ว")];
       });
       struck.every((x) => x !== "missing" && !x.includes("line-through"))
         ? pass("แถบขั้นตอนมีขั้นนัดตรวจและขั้นส่งช่าง ขึ้นว่าทำแล้วทั้งคู่")
