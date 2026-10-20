@@ -45,7 +45,7 @@ echo "$R" | J 'd.waitingParts.find(p=>p.inStock===false).requisitionNo===null?"o
 echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ของหมด ใบงานยังค้างอยู่ที่แอดมิน" || fail "ส่งต่อทั้งที่ของไม่ครบ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0099\"}]}")
-echo "$R" | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
+echo "$R" | J 'd.statusLabel' | grep -q "จ่ายงานให้ทีม" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
 echo "$R" | J 'd.waitingParts.find(p=>p.partCode==="SP-BOARD").requisitionNo==="RQ-2569-0042"?"ok":"bad"' | grep -q ok \
   && pass "ใบเบิกรอบแรกไม่ถูกเขียนทับ" || fail "ใบเบิกรอบแรกถูกทับ"
 

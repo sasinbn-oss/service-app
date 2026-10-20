@@ -66,8 +66,9 @@ CH=$(echo "$R" | J 'd.children[0].id')
 [ "$(eta $ID2)" = "-" ] && [ "$(eta $CH)" = "2026-11-25" ] && pass "ใบเดิมไม่มีวัน ใบรออะไหล่ได้วัน" || fail "ใบเดิม $(eta $ID2) ใบลูก $(eta $CH)"
 CHCODE=$(GET "work-orders/$CH" | J 'd.code')
 [ "$(out $CH $CHCODE)" = "1" ] && pass "ใบรออะไหล่ขึ้นป้ายแดง" || fail "ใบลูก partsOut=$(out $CH $CHCODE)"
-POST $S "work-orders/$CH/parts-arrived" '{}' >/dev/null
-[ "$(eta $CH)" = "-" ] && [ "$(out $CH $CHCODE)" = "0" ] && pass "หัวหน้าภาคกดของมาแล้ว — วันล้าง ป้ายแดงหาย" || fail "หลังของมา: $(eta $CH) / $(out $CH $CHCODE)"
+# ใบแยกอยู่ที่แอดมิน (ต.ค. 69) — ของมาแล้วแอดมินเบิกในฟอร์มเดิม
+POST $A "work-orders/$CH/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PO4\"}]}" >/dev/null
+[ "$(eta $CH)" = "-" ] && [ "$(out $CH $CHCODE)" = "0" ] && pass "แอดมินเบิกเมื่อของมา — วันล้าง ป้ายแดงหาย" || fail "หลังของมา: $(eta $CH) / $(out $CH $CHCODE)"
 
 echo
 echo "═══ ย้อนขั้นไปเช็คคลัง — วันของรอบเดิมถูกล้าง"

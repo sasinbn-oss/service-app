@@ -52,7 +52,7 @@ const { setup } = require("./fixture");
 
     await vis("ย้อนขั้นตอน").first().click();
     await page.waitForTimeout(1000);
-    await lbl("ย้อนไป รอหัวหน้าภาคระบุอะไหล่").first().click();
+    await lbl("ย้อนไป หัวหน้าภาค · ระบุอะไหล่").first().click();
     await page.waitForTimeout(400);
     const keep = (await lbl("ข้อมูลที่เก็บไว้").count()) ? await lbl("ข้อมูลที่เก็บไว้").first().innerText() : "";
     keep.includes("ไม่หาย") && keep.includes("ทีมที่รับงาน") && keep.includes("วันนัด") && (await vis("สิ่งที่จะถูกล้าง", false).count()) === 0
@@ -64,7 +64,7 @@ const { setup } = require("./fixture");
     db("status") === "NEW" && db('"assignedTeam"') === "-" ? pass("ย้อนผ่านหน้าจอ: ฐานข้อมูลกลับไประบุอะไหล่ ทีมถูกเอาออกจากใบ") : fail(`สถานะ ${db("status")} ทีม ${db('"assignedTeam"')}`);
 
     const banner = (await lbl("กล่องย้อนขั้น").count()) ? await lbl("กล่องย้อนขั้น").first().innerText() : "";
-    (await lbl("ป้ายย้อนขั้น").count()) > 0 && banner.includes("รอช่างเข้างาน") && banner.includes("ต้องเพิ่มสายพาน") && (await lbl("ขั้นที่ย้อนมา").count()) > 0
+    (await lbl("ป้ายย้อนขั้น").count()) > 0 && banner.includes("ช่าง · เข้างาน/ปิดงาน") && banner.includes("ต้องเพิ่มสายพาน") && (await lbl("ขั้นที่ย้อนมา").count()) > 0
       ? pass("หน้าใบงาน: ป้าย ↩ ย้อนขั้นมา · กล่องบอกขั้นเดิมและเหตุผล · แถบขั้นตอนบอกขั้นที่ย้อนมา") : fail(`กล่อง: ${banner}`);
     await page.screenshot({ path: path.join(DIR, "rollback-detail.png") });
 

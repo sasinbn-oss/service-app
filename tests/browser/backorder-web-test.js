@@ -62,10 +62,11 @@ let WO = process.argv[2] || null;
     await page.waitForTimeout(3000);
     await page.screenshot({ path: path.join(DIR, "bo-1-detail.png"), fullPage: true });
 
-    (await seen("รออะไหล่", false)) > 0
-      ? pass("ใบงานขึ้นสถานะรออะไหล่")
-      : fail("ไม่ขึ้นสถานะรออะไหล่");
-    (await seen("รอแอดมินเบิกอะไหล่", false)) > 0
+    // สถานะเดียว (ต.ค. 69) — ของหมดขึ้นเป็นป้ายแดง "อะไหล่หมด" แทนสถานะชั้นที่สอง "รออะไหล่"
+    (await seen("อะไหล่หมด", false)) > 0
+      ? pass("ใบงานขึ้นป้ายอะไหล่หมด")
+      : fail("ไม่ขึ้นป้ายอะไหล่หมด");
+    (await seen("แอดมิน · เบิกอะไหล่ (คลัง 94)", false)) > 0
       ? pass("ใบงานยังค้างอยู่ขั้นแอดมิน ไม่เลยไปจ่ายงาน")
       : fail("ไม่ได้ค้างที่ขั้นแอดมิน");
 

@@ -44,14 +44,14 @@ POST $S "work-orders/$ID/rollback" '{"toStage":"NEW","reason":"ต้องเ�
 D=$(GET "work-orders/$ID")
 [ "$(echo "$D" | J 'const p=d.rollbackPrefill; [p.from,p.needsParts,p.assignedTeam,p.scheduledAt,p.scheduledTime,p.parts.length,p.parts.every(x=>x.inStock&&x.warehouse==="คลังกระบี่"&&x.requisitionNo==="RQ-KEEP1")].join("|")')" = "IN_PROGRESS|true|$TEAM|$VISIT|14:00|2|true" ] \
   && pass "ค่าเดิมเก็บไว้ครบ: ใช้อะไหล่ ทีม วันนัด เวลา ผลเช็คคลัง คลัง เลขใบเบิก" || fail "rollbackPrefill: $(echo "$D" | J 'JSON.stringify(d.rollbackPrefill)')"
-[ "$(echo "$D" | J 'const r=d.rolledBack; [r.from,r.fromLabel,r.reason,r.byName].join("|")')" = "IN_PROGRESS|รอช่างเข้างาน|ต้องเพิ่มสายพานอีกเส้น|$SNAME" ] \
-  && pass "หน้าใบงานบอก ย้อนมาจาก “รอช่างเข้างาน” · เหตุผล · คนย้อน" || fail "rolledBack: $(echo "$D" | J 'JSON.stringify(d.rolledBack)')"
+[ "$(echo "$D" | J 'const r=d.rolledBack; [r.from,r.fromLabel,r.reason,r.byName].join("|")')" = "IN_PROGRESS|ช่าง · เข้างาน/ปิดงาน|ต้องเพิ่มสายพานอีกเส้น|$SNAME" ] \
+  && pass "หน้าใบงานบอก ย้อนมาจาก “ช่าง · เข้างาน/ปิดงาน” · เหตุผล · คนย้อน" || fail "rolledBack: $(echo "$D" | J 'JSON.stringify(d.rolledBack)')"
 LIST() { GET "work-orders?status=ALL&search=$CODE" | J "((d.rows||d).find(r=>r.id===$ID)||{}).rolledBackFrom ?? 'null'"; }
-[ "$(LIST)" = "รอช่างเข้างาน" ] && pass "รายการติดป้าย ย้อนขั้น (rolledBackFrom)" || fail "รายการ: $(LIST)"
+[ "$(LIST)" = "ช่าง · เข้างาน/ปิดงาน" ] && pass "รายการติดป้าย ย้อนขั้น (rolledBackFrom)" || fail "รายการ: $(LIST)"
 
 # แนบไฟล์/แก้รายละเอียดไม่ใช่การเดินขั้น — ป้ายต้องยังอยู่
 DB "insert into \"WorkOrderLog\"(\"workOrderId\",action,status,note) values ($ID,'ATTACHED','NEW','แนบรูปทดสอบ')" >/dev/null
-[ "$(GET "work-orders/$ID" | J 'd.rolledBack?"yes":"no"')" = "yes" ] && [ "$(LIST)" = "รอช่างเข้างาน" ] \
+[ "$(GET "work-orders/$ID" | J 'd.rolledBack?"yes":"no"')" = "yes" ] && [ "$(LIST)" = "ช่าง · เข้างาน/ปิดงาน" ] \
   && pass "แนบไฟล์หลังย้อน ป้ายยังอยู่" || fail "แนบไฟล์แล้วป้ายหาย"
 
 # หัวหน้าภาคกดผ่านขั้นที่ย้อนไป — ป้ายหาย แต่ค่าเดิม (ทีม วันนัด) ยังเติมให้ขั้นถัดไป
@@ -68,8 +68,8 @@ DB "update \"WorkOrder\" set status='CLAIM_REVIEW' where id=$ID" >/dev/null
 
 # ประวัติเก่าก่อนมี meta — ยังอ่านชื่อขั้นเดิมจากบันทึกได้
 DB "update \"WorkOrder\" set status='PARTS_CHECKED' where id=$ID" >/dev/null
-DB "insert into \"WorkOrderLog\"(\"workOrderId\",action,status,note) values ($ID,'ROLLED_BACK','PARTS_CHECKED','จาก “รอแอดมินคอนเฟิร์มลูกค้า” กลับไป “รอหัวหน้าภาคจ่ายงาน” — ลูกค้าขอเลื่อน')" >/dev/null
-[ "$(GET "work-orders/$ID" | J 'd.rolledBack.fromLabel+"|"+d.rolledBack.reason')" = "รอแอดมินคอนเฟิร์มลูกค้า|ลูกค้าขอเลื่อน" ] \
+DB "insert into \"WorkOrderLog\"(\"workOrderId\",action,status,note) values ($ID,'ROLLED_BACK','PARTS_CHECKED','จาก “แอดมิน · คอนเฟิร์มลูกค้า” กลับไป “หัวหน้าภาค · จ่ายงานให้ทีม” — ลูกค้าขอเลื่อน')" >/dev/null
+[ "$(GET "work-orders/$ID" | J 'd.rolledBack.fromLabel+"|"+d.rolledBack.reason')" = "แอดมิน · คอนเฟิร์มลูกค้า|ลูกค้าขอเลื่อน" ] \
   && pass "ประวัติเก่า (ไม่มี meta) ยังบอกขั้นเดิมและเหตุผล" || fail "ประวัติเก่า: $(GET "work-orders/$ID" | J 'JSON.stringify(d.rolledBack)')"
 
 [ -z "$FAILED" ]

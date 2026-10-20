@@ -71,7 +71,7 @@ POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(ws $ID)" = "WAITING_TECH" ] && pass "ช่างเข้างาน → รอช่างเข้าแก้ไข" || fail "ช่างเข้างาน: $(ws $ID)"
-POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"SHOP","reason":"ร้านปิด"}' >/dev/null
+POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"PARTS","reason":"อะไหล่ไม่ตรง"}' >/dev/null
 [ "$(ws $ID)" = "-" ] && pass "ช่างส่งกลับ → ล้างสถานะ (ไม่ค้าง \"รอช่างเข้าแก้ไข\")" || fail "หลังส่งกลับ: $(ws $ID)"
 
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$OLDR\"}" >/dev/null

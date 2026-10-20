@@ -83,6 +83,10 @@ export interface WorkOrderRow {
   attachmentCount: number;
   /** ขั้นนี้เป็นของบทบาทไหน — ว่าง = ปิด/ยกเลิกแล้ว */
   stageActor: Role | null;
+  /** รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินหัวข้อ "ไม่มีคนรับ" */
+  orphan?: boolean;
+  /** วันนัดผ่านไปแล้วยังไม่คอนเฟิร์มลูกค้า — กล่องงานแอดมินหัวข้อ "เลยนัด" */
+  overdue?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
   waitingOnSupervisors: { id: number; name: string; region: string | null }[];
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
@@ -242,7 +246,7 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
   { value: "AWAITING_CONFIRM", label: "รอคอนเฟิร์มลูกค้า" },
-  { value: "IN_PROGRESS", label: "รอช่างเข้างาน" },
+  { value: "IN_PROGRESS", label: "ช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },
 ];
@@ -753,6 +757,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
         <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
       </View>
+      {filter === "INBOX" && !loading ? (
+        <InboxAttention rows={shown} role={user?.role ?? null} onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })} />
+      ) : null}
       <View style={styles.toolbar}>
         <View style={styles.searchBox}>
           <Ionicons name="search" size={16} color={colors.textFaint} />
@@ -1482,7 +1489,74 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
   );
 });
 
+/**
+ * หัวข้อบนสุดของกล่องงาน (เจ้าของงานเลือก ต.ค. 69)
+ *
+ * หัวหน้าภาค: "ออกงานวันนี้" — ลูกค้าคอนเฟิร์มแล้ว รอรับทราบปล่อยงาน เน้นย้ำว่ามีงานออกวันนี้ ไม่ให้ปนกับใบอื่น
+ * แอดมิน: "ไม่มีคนรับ" (รอหัวหน้าภาคแต่ภาค/ทีมนั้นไม่มีคน) · "เลยนัด" (วันนัดผ่านแล้วยังไม่คอนเฟิร์ม)
+ * ใบพวกนี้ยังอยู่ในรายการข้างล่างตามปกติ — หัวข้อนี้แค่ดึงขึ้นมาให้เห็นก่อน
+ */
+function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: string | null; onOpen: (id: number) => void }) {
+  const today = todayBkk();
+  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
+  if (role === "SUPERVISOR") {
+    const due = rows.filter((r) => r.status === "ASSIGNED" && r.scheduledAt?.slice(0, 10) === today);
+    if (due.length)
+      groups.push({ key: "today", title: `ออกงานวันนี้ ${due.length} ใบ`, hint: "ลูกค้าคอนเฟิร์มแล้ว — กดรับทราบเพื่อปล่อยงานให้ช่าง", tone: "sup", items: due });
+  }
+  if (role === "ADMIN") {
+    const orphan = rows.filter((r) => r.orphan);
+    const overdue = rows.filter((r) => r.overdue);
+    if (orphan.length)
+      groups.push({ key: "orphan", title: `ไม่มีคนรับ ${orphan.length}`, hint: "ภาค/ทีมนี้ไม่มีหัวหน้าภาค — กดทำแทน หรือตั้งคนที่ผังผู้รับผิดชอบ", tone: "bad", items: orphan });
+    if (overdue.length)
+      groups.push({ key: "overdue", title: `เลยนัด ${overdue.length}`, hint: "วันนัดผ่านไปแล้ว ยังไม่ได้คอนเฟิร์มลูกค้า — โทรนัดใหม่", tone: "bad", items: overdue });
+  }
+  if (!groups.length) return null;
+  return (
+    <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+      {groups.map((g) => (
+        <View key={g.key} style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]} accessibilityLabel={`หัวข้อ ${g.title}`}>
+          <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>{g.title}</Text>
+          <Text style={styles.attnHint}>{g.hint}</Text>
+          {g.items.map((r) => (
+            <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`${g.title} ${r.code}`}>
+              <Text style={styles.attnCode}>{r.code}</Text>
+              <Text style={styles.attnText} numberOfLines={1}>
+                {[
+                  r.branchCode,
+                  g.key === "orphan" ? r.statusLabel : r.assignedTeam && `ทีม${r.assignedTeam}`,
+                  g.key === "today"
+                    ? r.scheduledTime
+                      ? `${r.scheduledTime} น.`
+                      : "ทั้งวัน"
+                    : g.key === "overdue" && r.scheduledAt
+                      ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}`
+                      : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
+  attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+  attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
+  attnTitleSup: { color: colors.primaryDark },
+  attnTitleBad: { color: colors.danger },
+  attnHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  attnRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
+  attnCode: { fontSize: 13.5, fontWeight: "700", color: colors.text },
+  attnText: { flex: 1, minWidth: 0, fontSize: 13, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },
   // ลอยทับบนสุดของรายการ — ไม่ดันรายการลง ความสูงหน้าจอจึงไม่เปลี่ยนระหว่างเลื่อน
   foldedWrap: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 2 },

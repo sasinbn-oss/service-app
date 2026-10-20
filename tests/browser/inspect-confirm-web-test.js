@@ -92,9 +92,9 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
       await save.click();
       await page.waitForTimeout(3500);
       state() === `INSPECT_DISPATCH|CONFIRMED|${target}|${team}`
-        ? pass("แอดมินคอนเฟิร์ม → รอหัวหน้าภาคส่งช่างตรวจ วันเดิม (ฐานข้อมูล)")
+        ? pass("แอดมินคอนเฟิร์ม → หัวหน้าภาค · ส่งช่างตรวจ วันเดิม (ฐานข้อมูล)")
         : fail(`หลังคอนเฟิร์ม: ${state()}`);
-      (await vis("รอหัวหน้าภาคส่งช่างตรวจ", false).count()) > 0 ? pass("หน้าจอขึ้นว่ารอหัวหน้าภาคส่งช่างตรวจ") : fail("หน้าจอไม่อัปเดตสถานะ");
+      (await vis("หัวหน้าภาค · ส่งช่างตรวจ", false).count()) > 0 ? pass("หน้าจอขึ้นว่าหัวหน้าภาค · ส่งช่างตรวจ") : fail("หน้าจอไม่อัปเดตสถานะ");
       await ctx.close();
     }
 
@@ -110,7 +110,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
       await save.click();
       await page.waitForTimeout(3500);
       state() === `INSPECTING|CONFIRMED|${target}|${team}`
-        ? pass("หัวหน้าภาคส่งช่าง → รอทีมตรวจหน้างาน ตามวันนัด ทีมเดิม (ฐานข้อมูล)")
+        ? pass("หัวหน้าภาคส่งช่าง → ช่าง · ตรวจหน้างาน ตามวันนัด ทีมเดิม (ฐานข้อมูล)")
         : fail(`หลังส่งช่าง: ${state()}`);
       // แถบขั้นตอน — ขั้นนัดและขั้นส่งช่างต้องไม่ถูกขีดฆ่า (ทำแล้วจริง ไม่ใช่ข้าม)
       const struck = await page.evaluate(() => {
@@ -119,7 +119,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
           const n = card && [...card.querySelectorAll("*")].find((x) => !x.children.length && x.textContent.trim() === t);
           return n ? getComputedStyle(n).textDecorationLine : "missing";
         };
-        return [of("รอแอดมินนัดลูกค้า (ตรวจหน้างาน)"), of("รอหัวหน้าภาคส่งช่างตรวจ")];
+        return [of("แอดมิน · นัดร้าน (ตรวจหน้างาน)"), of("หัวหน้าภาค · ส่งช่างตรวจ")];
       });
       struck.every((x) => x !== "missing" && !x.includes("line-through"))
         ? pass("แถบขั้นตอนมีขั้นนัดตรวจและขั้นส่งช่าง ขึ้นว่าทำแล้วทั้งคู่")

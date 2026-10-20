@@ -566,8 +566,8 @@ function stopTag(s: Stop) {
   // ร้านตกลงวันแล้ว แต่หัวหน้าภาคยังไม่ส่งช่าง — เหมือน "รอยืนยันออกงาน" ของงานซ่อม
   if (s.status === "INSPECT_DISPATCH") return { text: "ตรวจหน้างาน · รอส่งช่าง", tone: "warn" as const };
   if (s.kind === "INSPECT") return { text: "ตรวจหน้างาน", tone: "violet" as const };
-  if (s.status === "AWAITING_CONFIRM") return { text: "รอแอดมินคอนเฟิร์มลูกค้า", tone: "warn" as const };
-  if (s.status === "ASSIGNED") return { text: "รอยืนยันออกงาน", tone: "warn" as const };
+  if (s.status === "AWAITING_CONFIRM") return { text: "ยังไม่คอนเฟิร์มลูกค้า", tone: "warn" as const };
+  if (s.status === "ASSIGNED") return { text: "ยังไม่ปล่อยงาน", tone: "warn" as const };
   return { text: s.appointmentLabel ?? s.statusLabel, tone: "ok" as const };
 }
 

@@ -26,7 +26,7 @@ ID=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Typ
 echo "═══ รุ่นข้อมูลของใบงาน"
 V0=$(VER $ID)
 [ "$(echo "$V0" | J 'd.v')" = "$(DB "select max(id) from \"WorkOrderLog\" where \"workOrderId\"=$ID")" ] && pass "v = เลขประวัติล่าสุด (ฐานข้อมูล)" || fail "version: $V0"
-echo "$V0" | J 'd.byName+"|"+d.statusLabel' | grep -q "^$ANAME|รอหัวหน้าภาคระบุอะไหล่$" && pass "บอกว่าใครทำล่าสุด และขั้นตอนตอนนี้" || fail "version: $V0"
+echo "$V0" | J 'd.byName+"|"+d.statusLabel' | grep -q "^$ANAME|หัวหน้าภาค · ระบุอะไหล่$" && pass "บอกว่าใครทำล่าสุด และขั้นตอนตอนนี้" || fail "version: $V0"
 V=$(echo "$V0" | J 'd.v')
 PATCH $S $ID '{"symptom":"หัวหน้าภาคแก้"}' >/dev/null
 V1=$(VER $ID)

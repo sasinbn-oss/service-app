@@ -71,7 +71,7 @@ echo "═══ คัดลอกใบที่ปิดแล้ว"
 DB "update \"WorkOrder\" set status='DONE', \"closedAt\"=now() where id=$ID" >/dev/null
 C2=$(POST $A "work-orders/$ID/test-copy" '{}' | J 'd.id'); IDS="$C2 $IDS"
 [ "$(DB "select status||'|'||coalesce(\"closedAt\"::text,'null') from \"WorkOrder\" where id=$C2")" = "IN_PROGRESS|null" ] \
-  && pass "ใบปิดแล้วคัดลอกได้ ใบทดสอบเริ่มที่รอช่างเข้างาน ยังไม่ปิด" || fail "คัดลอกใบปิดแล้ว: $(DB "select status from \"WorkOrder\" where id=$C2")"
+  && pass "ใบปิดแล้วคัดลอกได้ ใบทดสอบเริ่มที่ช่าง · เข้างาน/ปิดงาน ยังไม่ปิด" || fail "คัดลอกใบปิดแล้ว: $(DB "select status from \"WorkOrder\" where id=$C2")"
 
 echo
 echo "═══ ลบใบทดสอบ"

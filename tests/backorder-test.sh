@@ -32,7 +32,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H
   -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-ROUND-1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
 echo "  $(st $ID)"
 echo "  $(parts $ID)"
-st $ID | grep -q "^รอแอดมินเบิกอะไหล่" && pass "ของหมด ใบงานค้างอยู่ที่แอดมิน ไม่ส่งต่อ" || fail "ส่งต่อไปแล้วทั้งที่ของยังไม่มา: $(st $ID)"
+st $ID | grep -q "^แอดมิน · เบิกอะไหล่" && pass "ของหมด ใบงานค้างอยู่ที่แอดมิน ไม่ส่งต่อ" || fail "ส่งต่อไปแล้วทั้งที่ของยังไม่มา: $(st $ID)"
 st $ID | grep -q "รออะไหล่" && pass "สถานะขึ้นว่ารออะไหล่" || fail "สถานะไม่ขึ้นรออะไหล่"
 
 echo
@@ -46,7 +46,7 @@ RES=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $
   -d "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-ROUND-2\"}]}")
 echo "  $(st $ID)"
 echo "  $(parts $ID)"
-st $ID | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของครบแล้วเดินต่อไปขั้นหัวหน้าภาคจ่ายงาน" || fail "ไม่เดินต่อ: $(st $ID)"
+st $ID | grep -q "จ่ายงานให้ทีม" && pass "ของครบแล้วเดินต่อไปขั้นจ่ายงานให้ทีม" || fail "ไม่เดินต่อ: $(st $ID)"
 echo "$RES" | J 'd.waitingParts.find(p=>p.partCode==="SP-BOARD").requisitionNo==="RQ-ROUND-1"?"ok":"bad"' | grep -q ok \
   && pass "ใบเบิกรอบแรกไม่ถูกเขียนทับ" || fail "ใบเบิกรอบแรกหายหรือถูกทับ"
 echo "$RES" | J 'd.waitingParts.find(p=>p.partCode==="SP-BELT").requisitionNo==="RQ-ROUND-2"?"ok":"bad"' | grep -q ok \
@@ -72,7 +72,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID3/parts" -H "$(H $S)" -H 'Con
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID3/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-OK\"}]}" >/dev/null
-st $ID3 | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของครบรอบเดียวยังเดินต่อทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
+st $ID3 | grep -q "จ่ายงานให้ทีม" && pass "ของครบรอบเดียวยังเดินต่อทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
 
 echo
 curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J '"ประวัติ: "+d.logs.filter(l=>l.action==="PARTS_CHECKED").map(l=>l.note).reverse().join(" || ")'

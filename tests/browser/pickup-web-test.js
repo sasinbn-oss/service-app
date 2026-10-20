@@ -93,7 +93,7 @@ const { setup } = require("./fixture");
     await s.vis("คอนเฟิร์ม เบิกแล้ว").last().click();
     await s.page.waitForTimeout(3500);
     const done = `${st()}|${part(belt)}`;
-    done === "PARTS_CHECKED|คลังภูเก็ต|RQ-WEB-SUP" ? pass("คอนเฟิร์มแล้ว: รอหัวหน้าภาคจ่ายงาน · เลขใบเบิกบันทึกที่ฐานข้อมูล") : fail(`หลังคอนเฟิร์ม: ${done}`);
+    done === "PARTS_CHECKED|คลังภูเก็ต|RQ-WEB-SUP" ? pass("คอนเฟิร์มแล้ว: หัวหน้าภาค · จ่ายงานให้ทีม · เลขใบเบิกบันทึกที่ฐานข้อมูล") : fail(`หลังคอนเฟิร์ม: ${done}`);
     (await s.vis("จ่ายงานให้ช่าง").count()) ? pass("หัวหน้าภาคได้ปุ่มจ่ายงานต่อทันที") : fail("ไม่มีปุ่มจ่ายงาน");
 
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");

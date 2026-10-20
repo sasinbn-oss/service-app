@@ -223,24 +223,57 @@ export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
  * ตอบคำถามนั้นได้ทันทีโดยไม่ต้องแปลในหัว
  */
 export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
-  NEW: "รอหัวหน้าภาคระบุอะไหล่",
-  INSPECT_CONFIRM: "รอแอดมินนัดลูกค้า (ตรวจหน้างาน)",
-  INSPECT_DISPATCH: "รอหัวหน้าภาคส่งช่างตรวจ",
-  INSPECTING: "รอทีมตรวจหน้างาน",
-  WAITING_PARTS: "รออะไหล่เข้า",
+  /**
+   * "ใคร · ทำอะไร" ใช้คำเดียวกันทั้งสถานะ ปุ่ม และแถบขั้นตอน (เจ้าของงานเลือก ต.ค. 69)
+   *
+   * เดิมสถานะขึ้นต้นด้วย "รอ…" แต่ปุ่มใช้อีกคำ (สถานะ "รอหัวหน้าภาคคอนเฟิร์มออกงาน" ปุ่ม "ยืนยันออกงาน")
+   * และแถบขั้นตอนใช้ "รอ…" กับขั้นที่ผ่านแล้วด้วย เลยเห็น ✓ คู่กับ "รอลูกค้าจ่ายเงิน"
+   * ส่วนการกระทำอยู่ที่ WORK_ORDER_STAGE_ACTIONS · ขั้นที่ผ่านแล้วใช้ WORK_ORDER_STAGE_DONE
+   */
+  NEW: "หัวหน้าภาค · ระบุอะไหล่",
+  INSPECT_CONFIRM: "แอดมิน · นัดร้าน (ตรวจหน้างาน)",
+  INSPECT_DISPATCH: "หัวหน้าภาค · ส่งช่างตรวจ",
+  INSPECTING: "ช่าง · ตรวจหน้างาน",
+  // ใบรออะไหล่รุ่นเก่า — ใบที่แยกตั้งแต่ ต.ค. 69 เริ่มที่แอดมินเบิกอะไหล่
+  WAITING_PARTS: "หัวหน้าภาค · รออะไหล่เข้า",
   // เจ้าของงานขอ ต.ค. 69: ขั้นก่อนเสนอราคาคือ "เช็คว่ามีหรือหมด" ขั้นหลังรับเงินคือ "เบิกจริงส่งหน้างาน"
-  PARTS_REQUESTED: "รอแอดมินเบิกอะไหล่",
-  PARTS_PICKUP: "รอหัวหน้าภาคเบิกอะไหล่",
-  PARTS_SOURCING: "รอแอดมินเช็คอะไหล่",
-  AWAITING_QUOTE: "รอเสนอราคาลูกค้า",
-  AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
-  PARTS_CHECKED: "รอหัวหน้าภาคจ่ายงาน",
-  AWAITING_CONFIRM: "รอแอดมินคอนเฟิร์มลูกค้า",
-  ASSIGNED: "รอหัวหน้าภาคคอนเฟิร์มออกงาน",
-  IN_PROGRESS: "รอช่างเข้างาน",
-  CLAIM_REVIEW: "รอตรวจเคลมอะไหล่",
+  PARTS_REQUESTED: "แอดมิน · เบิกอะไหล่ (คลัง 94)",
+  PARTS_PICKUP: "หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)",
+  PARTS_SOURCING: "แอดมิน · เช็คอะไหล่ (มี/หมด)",
+  AWAITING_QUOTE: "แอดมิน · ส่งใบเสนอราคา",
+  AWAITING_PAYMENT: "แอดมิน · แนบบิลรับเงิน",
+  PARTS_CHECKED: "หัวหน้าภาค · จ่ายงานให้ทีม",
+  AWAITING_CONFIRM: "แอดมิน · คอนเฟิร์มลูกค้า",
+  ASSIGNED: "หัวหน้าภาค · รับทราบ ปล่อยงาน",
+  IN_PROGRESS: "ช่าง · เข้างาน/ปิดงาน",
+  CLAIM_REVIEW: "Admin Spare Part · ตรวจเคลม",
   DONE: "ปิดงานแล้ว",
   CANCELLED: "ยกเลิก",
+};
+
+/** สิ่งที่ต้องทำในขั้นนี้ — ชื่อปุ่มและชื่อขั้นบนแถบขั้นตอน (คนทำแสดงแยกใต้ชื่อ) */
+export const WORK_ORDER_STAGE_ACTIONS: Record<string, string> = Object.fromEntries(
+  Object.entries(WORK_ORDER_STATUS_LABELS).map(([k, v]) => [k, v.includes(" · ") ? v.slice(v.indexOf(" · ") + 3) : v])
+);
+
+/** ชื่อขั้นที่ผ่านไปแล้วบนแถบขั้นตอน — "…แล้ว" ไม่ใช่ "รอ…" */
+export const WORK_ORDER_STAGE_DONE: Record<string, string> = {
+  NEW: "ระบุอะไหล่แล้ว",
+  INSPECT_CONFIRM: "นัดร้านแล้ว",
+  INSPECT_DISPATCH: "ส่งช่างตรวจแล้ว",
+  INSPECTING: "ตรวจแล้ว",
+  WAITING_PARTS: "อะไหล่เข้าแล้ว",
+  PARTS_REQUESTED: "เบิกอะไหล่แล้ว",
+  PARTS_PICKUP: "เบิกคลังอื่นแล้ว",
+  PARTS_SOURCING: "เช็คอะไหล่แล้ว",
+  AWAITING_QUOTE: "ส่งใบเสนอราคาแล้ว",
+  AWAITING_PAYMENT: "ลูกค้าจ่ายแล้ว",
+  PARTS_CHECKED: "จ่ายงานแล้ว",
+  AWAITING_CONFIRM: "ลูกค้าคอนเฟิร์มแล้ว",
+  ASSIGNED: "ปล่อยงานแล้ว",
+  IN_PROGRESS: "ปิดงานแล้ว",
+  CLAIM_REVIEW: "ตรวจเคลมแล้ว",
+  DONE: "ปิดงานแล้ว",
 };
 
 /** ลำดับของขั้น ใช้ตัดสินว่าใบงานเดินหน้าหรือถอยหลัง */
@@ -499,7 +532,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CREATED: "เปิดใบงาน",
   PARTS_REQUESTED: "ระบุอะไหล่ที่ต้องใช้",
   NO_PARTS: "ระบุว่าไม่ต้องใช้อะไหล่",
-  PARTS_ROLLBACK: "ช่างส่งกลับ — ปิดงานไม่ได้",
+  PARTS_ROLLBACK: "ช่างแจ้งปัญหาหน้างาน",
   PARTS_CHECKED: "แอดมินเบิกอะไหล่",
   PARTS_SOURCED: "มีอะไหล่ — ส่งต่อเสนอราคา",
   PARTS_BACKORDERED: "อะไหล่หมด (ก่อนเสนอราคา)",

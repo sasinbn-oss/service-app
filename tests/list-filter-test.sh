@@ -30,7 +30,7 @@ echo "═══ รอใคร"
 POST $S "work-orders/$C/parts" '{"needsParts":false}' >/dev/null
 POST $S "work-orders/$C/assign" '{"team":"กระบี่","scheduledAt":"2026-11-20"}' >/dev/null
 [ "$(row $C 'r.stageActor+"|"+r.waitingOnSupervisors.length')" = "ADMIN|0" ] \
-  && pass "จ่ายงานแล้วไปรอแอดมินคอนเฟิร์มลูกค้า (แอดมินไม่แยกรายคน)" || fail "หลังจ่ายงาน: $(row $C 'r.stageActor')"
+  && pass "จ่ายงานแล้วไปแอดมิน · คอนเฟิร์มลูกค้า (แอดมินไม่แยกรายคน)" || fail "หลังจ่ายงาน: $(row $C 'r.stageActor')"
 POST $A "work-orders/$C/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$C/dispatch" '{}' >/dev/null
 [ "$(row $C 'r.stageActor+"|"+r.waitingOnTeam')" = "EMPLOYEE|กระบี่" ] \
