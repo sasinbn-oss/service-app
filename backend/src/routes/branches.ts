@@ -1,9 +1,11 @@
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { resolveMapLink } from "../utils/mapLink";
 import { applyTeamAliases } from "../utils/teamAliases";
 import {
   applyBranchImport,
@@ -145,6 +147,92 @@ router.get("/", requireAuth, async (req, res) => {
       };
     })
   );
+});
+
+/**
+ * หน้าจัดการสาขา (แอดมิน — ออกแบบใหม่ ต.ค. 69): ค้นหา กรอง แบ่งหน้า + ตัวเลขสรุปด้านบน
+ *
+ * แยกจาก GET / เพราะตัวนั้นหน้าอื่นใช้ (ค้นสาขาตอนเปิดใบงาน รายงานตัว) และส่งทั้งพันกว่าแถว
+ * หน้านี้ขอทีละ 50 · ตัวเลขสรุปนับทั้งระบบ ไม่ขึ้นกับตัวกรอง (เป็นทางลัดกรอง ต้องนิ่ง)
+ */
+const manageQuery = z.object({
+  search: z.string().trim().max(100).optional(),
+  region: z.string().trim().max(100).optional(),
+  team: z.string().trim().max(100).optional(),
+  coords: z.enum(["has", "none"]).optional(),
+  noTeam: z.enum(["1"]).optional(),
+  status: z.enum(["open", "closed"]).default("open"),
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
+  const parsed = manageQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const q = parsed.data;
+  const where: Prisma.BranchWhereInput = {
+    cancelledAt: q.status === "closed" ? { not: null } : null,
+    ...(q.region ? { region: q.region } : {}),
+    ...(q.team ? { OR: [{ zone: q.team }, { pmTeam: q.team }] } : {}),
+    ...(q.coords === "has" ? { latitude: { not: null }, longitude: { not: null } } : {}),
+    ...(q.coords === "none" ? { OR: [{ latitude: null }, { longitude: null }] } : {}),
+    ...(q.noTeam ? { zone: null, pmTeam: null } : {}),
+  };
+  const and: Prisma.BranchWhereInput[] = [where];
+  if (q.search) {
+    and.push({
+      OR: [
+        { code: { contains: q.search, mode: "insensitive" } },
+        { name: { contains: q.search, mode: "insensitive" } },
+        { address: { contains: q.search, mode: "insensitive" } },
+      ],
+    });
+  }
+  const [total, rows, open, noCoords, noTeam, closed] = await Promise.all([
+    prisma.branch.count({ where: { AND: and } }),
+    prisma.branch.findMany({
+      where: { AND: and },
+      orderBy: { code: "asc" },
+      skip: q.offset,
+      take: q.limit,
+      select: {
+        id: true, code: true, name: true, address: true, region: true, zone: true, pmTeam: true, ownership: true,
+        latitude: true, longitude: true, radiusMeters: true, cancelledAt: true, cancelledNote: true,
+      },
+    }),
+    prisma.branch.count({ where: { cancelledAt: null } }),
+    prisma.branch.count({ where: { cancelledAt: null, OR: [{ latitude: null }, { longitude: null }] } }),
+    prisma.branch.count({ where: { cancelledAt: null, zone: null, pmTeam: null } }),
+    prisma.branch.count({ where: { cancelledAt: { not: null } } }),
+  ]);
+  const openOrders = rows.length
+    ? await prisma.workOrder.groupBy({
+        by: ["branchId"],
+        where: { branchId: { in: rows.map((r) => r.id) }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, isTest: false },
+        _count: true,
+      })
+    : [];
+  const openOf = new Map(openOrders.map((o) => [o.branchId, o._count]));
+  res.json({
+    total,
+    counts: { open, noCoords, noTeam, closed },
+    rows: rows.map((r) => ({ ...r, openWorkOrders: openOf.get(r.id) ?? 0 })),
+  });
+});
+
+/** วางลิงก์ Google Maps → พิกัด (ลิงก์สั้นต้องตามที่เซิร์ฟเวอร์ — ดู utils/mapLink.ts) */
+router.post("/resolve-map-link", requireAuth, requireAdmin, async (req, res) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.slice(0, 2000) : "";
+  if (!text.trim()) return res.status(400).json({ error: "วางลิงก์ Google Maps หรือพิกัดก่อน" });
+  try {
+    const found = await resolveMapLink(text);
+    if (!found) {
+      return res.status(400).json({ error: "อ่านพิกัดจากลิงก์นี้ไม่ได้ — เปิดหมุดใน Google Maps แล้วกดแชร์ลิงก์ หรือพิมพ์พิกัดเอง" });
+    }
+    res.json(found);
+  } catch {
+    res.status(400).json({ error: "เปิดลิงก์ไม่สำเร็จ — ลองใหม่ หรือพิมพ์พิกัดเอง" });
+  }
 });
 
 /**
@@ -328,8 +416,9 @@ const branchSchema = z.object({
   address: z.string().optional(),
   // พิกัดไม่บังคับ สาขาที่ยังไม่ได้ไปวัดพิกัดก็ขึ้นในแดชบอร์ดเครื่องได้
   // แต่จะรายงานตัวด้วย GPS ไม่ได้จนกว่าจะใส่พิกัด
-  latitude: z.number().optional(),
-  longitude: z.number().optional(),
+  // null = ล้างพิกัด (ใส่ผิดสาขา) — หน้าจัดการสาขาแก้ได้
+  latitude: z.number().min(-90).max(90).nullable().optional(),
+  longitude: z.number().min(-180).max(180).nullable().optional(),
   radiusMeters: z.number().int().positive().optional(),
   region: z.string().optional(),
   ownership: z.enum(["COCO", "DODO"]).optional(),
@@ -339,6 +428,15 @@ const branchSchema = z.object({
   openedAt: z.string().nullable().optional(),
   warrantyExpiresAt: z.string().nullable().optional(),
 });
+
+/** หน้าจัดการสาขาแสดง error เป็นข้อความตรง ๆ — เดิมส่งก้อน flatten() ของ zod ไปซึ่งแอปแสดงไม่ได้ */
+function branchInputError(err: z.ZodError) {
+  const field = String(err.issues[0]?.path[0] ?? "");
+  const label: Record<string, string> = {
+    name: "ชื่อสาขา", code: "รหัสสาขา", latitude: "ละติจูด (-90 ถึง 90)", longitude: "ลองจิจูด (-180 ถึง 180)", radiusMeters: "รัศมี",
+  };
+  return label[field] ? `${label[field]}ไม่ถูกต้อง` : "ข้อมูลสาขาไม่ถูกต้อง";
+}
 
 /** แปลงวันที่จากฟอร์มให้เป็น Date โดยไม่แตะช่องที่ไม่ได้ส่งมา */
 function branchDates(body: { openedAt?: string | null; warrantyExpiresAt?: string | null }) {
@@ -352,10 +450,10 @@ function branchDates(body: { openedAt?: string | null; warrantyExpiresAt?: strin
 
 router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const parsed = branchSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: branchInputError(parsed.error) });
 
   const existing = await prisma.branch.findUnique({ where: { code: parsed.data.code } });
-  if (existing) return res.status(409).json({ error: "Branch code already exists" });
+  if (existing) return res.status(409).json({ error: `มีสาขารหัส ${parsed.data.code} อยู่แล้ว` });
 
   const branch = await prisma.branch.create({
     data: { ...parsed.data, ...branchDates(parsed.data) },
@@ -368,7 +466,7 @@ const updateSchema = branchSchema.partial();
 router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const parsed = updateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: branchInputError(parsed.error) });
 
   try {
     const branch = await prisma.branch.update({
@@ -377,18 +475,103 @@ router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
     });
     res.json(branch);
   } catch {
-    res.status(404).json({ error: "Branch not found" });
+    res.status(404).json({ error: "ไม่พบสาขานี้" });
   }
 });
 
+/** สิ่งที่ผูกกับสาขา — ลบสาขาแล้วฐานข้อมูลลบตามทั้งหมด (ใบงาน เครื่อง เคส ... onDelete: Cascade) */
+async function branchUsage(id: number) {
+  const [workOrders, openWorkOrders, machines, outages, checkIns, workLogs, snapshots, teamMoves] = await Promise.all([
+    prisma.workOrder.count({ where: { branchId: id } }),
+    prisma.workOrder.count({ where: { branchId: id, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } }),
+    prisma.machine.count({ where: { branchId: id } }),
+    prisma.outage.count({ where: { branchId: id } }),
+    prisma.branchCheckIn.count({ where: { branchId: id } }),
+    prisma.workLog.count({ where: { branchId: id } }),
+    prisma.scoreSnapshot.count({ where: { branchId: id } }),
+    prisma.branchTeamMove.count({ where: { branchId: id } }),
+  ]);
+  return { workOrders, openWorkOrders, machines, outages, checkIns, workLogs, snapshots, teamMoves };
+}
+
+/** ใช้บอกในหน้าจัดการสาขาว่าลบได้ไหม และถ้าปิดสาขาจะเหลืองานค้างกี่ใบ */
+router.get("/:id/usage", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  res.json(await branchUsage(id));
+});
+
+/**
+ * ลบสาขาถาวร — เฉพาะสาขาที่ไม่มีอะไรผูกอยู่เลย (ตรวจระบบ ต.ค. 69)
+ *
+ * เดิมลบได้ทุกสาขา และฐานข้อมูลลบต่อเนื่อง: ใบงาน เครื่อง เคสบนกระดาน ของสาขานั้นหายหมด
+ * ปุ่มอยู่ทุกแถวของรายการพันกว่าสาขา กดพลาดครั้งเดียวประวัติงานหาย · สาขาที่เลิกใช้ให้ "ปิดสาขา"
+ * ลบมีไว้สำหรับสาขาที่เพิ่มผิด (ยังไม่มีใบงาน/เครื่อง/ประวัติ)
+ */
 router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
-  try {
-    await prisma.branch.delete({ where: { id } });
-    res.status(204).send();
-  } catch {
-    res.status(404).json({ error: "Branch not found" });
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true } });
+  if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+  const u = await branchUsage(id);
+  const linked = [
+    u.workOrders && `ใบงาน ${u.workOrders} ใบ`,
+    u.machines && `เครื่อง ${u.machines} เครื่อง`,
+    u.outages && `เคสบนกระดาน ${u.outages} เคส`,
+    u.checkIns && `รายงานตัว ${u.checkIns} ครั้ง`,
+    u.workLogs && `บันทึกการทำงาน ${u.workLogs} รายการ`,
+    u.snapshots && `คะแนนย้อนหลัง ${u.snapshots} รายการ`,
+    u.teamMoves && `ประวัติย้ายทีม ${u.teamMoves} รายการ`,
+  ].filter(Boolean);
+  if (linked.length) {
+    return res.status(409).json({
+      error: `ลบ ${branch.code} ไม่ได้ — มี${linked.join(" · ")} ลบสาขาแล้วข้อมูลพวกนี้หายด้วย ใช้ “ปิดสาขา” แทน`,
+      usage: u,
+    });
   }
+  await prisma.branch.delete({ where: { id } });
+  res.status(204).send();
+});
+
+/**
+ * ปิดสาขา — สาขาเลิกใช้ แต่ประวัติอยู่ครบ (แทนการลบ)
+ *
+ * ช่องเดียวกับ "นำเข้าสาขาที่ยกเลิก" (cancelledAt) และทำแบบเดียวกัน: เคสบนกระดานที่ค้างปิดเป็น BRANCH_CANCELLED
+ * สาขาที่ปิดไม่ขึ้นตอนค้นหาเปิดใบงาน ไม่นับในทีม · ใบงานที่ค้างไม่แตะ — หน้าต่างบอกจำนวนให้แอดมินจัดการเอง
+ * นำเข้าไฟล์ยกเลิกรอบหน้าไม่เปิดคืนเอง (เปิดคืนเฉพาะแถวที่ไฟล์ระบุว่าคืน)
+ */
+const closeSchema = z.object({ note: z.string().trim().min(1, "ต้องบอกเหตุผลที่ปิดสาขา").max(200) });
+
+router.post("/:id/close", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const parsed = closeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, cancelledAt: true } });
+  if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+  if (branch.cancelledAt) return res.status(400).json({ error: `${branch.code} ปิดไปแล้ว` });
+  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
+  const now = new Date();
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.branch.update({
+        where: { id },
+        data: { cancelledAt: now, cancelledNote: `ปิดในแอปโดย ${me?.name ?? "แอดมิน"} — ${parsed.data.note}` },
+      });
+      await tx.outage.updateMany({ where: { branchId: id, endedAt: null }, data: { endedAt: now, closeReason: "BRANCH_CANCELLED" } });
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  res.json(await prisma.branch.findUniqueOrThrow({ where: { id } }));
+});
+
+router.post("/:id/reopen", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, cancelledAt: true } });
+  if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+  if (!branch.cancelledAt) return res.status(400).json({ error: `${branch.code} ยังเปิดอยู่` });
+  res.json(await prisma.branch.update({ where: { id }, data: { cancelledAt: null, cancelledNote: null } }));
 });
 
 export default router;
