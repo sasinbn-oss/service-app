@@ -93,7 +93,7 @@ POST $A "work-orders/$W3/quote" '{"skip":true,"note":"ทดสอบ — ข้
 R=$(POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
 echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "ของในสโตร์ยังต้องระบุคลัง/เลขใบเบิก" || fail "ของในสโตร์ผ่านโดยไม่มีคลัง: $(echo $R|head -c 120)"
 # แก้หมายเหตุอย่างเดียวก่อนเบิก — ไม่ใช่ของคนละชิ้น ผลเช็คเดิม (ยังไม่มี) ไม่เกี่ยว แค่ต้องไม่สร้างแถวใหม่
-POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-OFF1\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
+POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-OFF1\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
 [ "$(st $W3)" = "PARTS_CHECKED" ] && [ "$(DB "select \"inStock\"||'|'||coalesce(warehouse,'-')||'|'||coalesce(\"requisitionNo\",'-') from \"WorkOrderPart\" where \"workOrderId\"=$W3 and \"sparePartId\"=$OFF1")" = "true|-|-" ] \
   && pass "ของนอกสโตร์ \"มี\" ผ่านได้โดยไม่มีคลังและเลขใบเบิก (ฐานข้อมูล)" || fail "เบิก: $(st $W3)"
 POST $S "work-orders/$W3/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null

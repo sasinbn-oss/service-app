@@ -65,7 +65,7 @@ PATCH $ID '{"workStatus":null}' >/dev/null
 
 echo
 echo "═══ ช่างส่งกลับ — ล้างสถานะรอบก่อน"
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-SG1\"}]}" >/dev/null
+POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SG1\"}]}" >/dev/null
 TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
 POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-10\"}" >/dev/null
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null

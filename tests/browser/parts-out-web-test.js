@@ -24,7 +24,7 @@ const { setup } = require("./fixture");
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
       expectedAt: "2026-11-20",
       results: [
-        { sparePartId: board, inStock: true, warehouse: "คลังกระบี่", requisitionNo: "RQ-WEB1" },
+        { sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-WEB1" },
         { sparePartId: belt, inStock: false },
       ],
     });
@@ -76,7 +76,7 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(300);
     await label("คลังที่มี SP-BELT").click();
     await page.waitForTimeout(400);
-    await vis("คลังกระบี่").last().click();
+    await vis("คลังลาดพร้าว 94").last().click();
     await page.waitForTimeout(300);
     await page.getByPlaceholder("เลขใบเบิกจากระบบคลัง").locator("visible=true").last().fill("RQ-WEB2");
     await page.waitForTimeout(300);

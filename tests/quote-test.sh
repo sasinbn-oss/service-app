@@ -34,7 +34,7 @@ prep() {  # $1=branchCode  $2=needsParts(yes|no)
 }
 checkparts() {  # เบิกอะไหล่
   curl -s -X POST "localhost:4000/api/work-orders/$1/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-    -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-900\"}]}"
+    -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-900\"}]}"
 }
 
 # หาสาขาแฟรนไชส์คนละฝั่งของเส้น 3 ปี — ถามผ่าน Prisma ของโปรเจกต์

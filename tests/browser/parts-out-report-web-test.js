@@ -24,7 +24,7 @@ const { setup } = require("./fixture");
     const parts = [{ sparePartId: BOARD, quantity: 1 }, { sparePartId: BELT, quantity: 2 }];
     const a = await fx.workOrder("C0006", parts);
     const b = await fx.workOrder("C0006", parts);
-    const ok = (id, n) => ({ sparePartId: id, inStock: true, warehouse: "คลังกระบี่", requisitionNo: `RQ-W${n}` });
+    const ok = (id, n) => ({ sparePartId: id, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-W${n}` });
     await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-check`, { expectedAt: "2026-01-05", results: [ok(BOARD, 1), { sparePartId: BELT, inStock: false }] });
     await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-check`, { results: [{ sparePartId: BOARD, inStock: false }, ok(BELT, 2)] });
     const outRows = Number(fx.sql(`select count(*) from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId"

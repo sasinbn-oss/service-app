@@ -17,7 +17,7 @@ import { coversWorkOrder, OUT_OF_SCOPE, supervisorScope, workOrderInScope } from
 import { Coverage, coverageOf, covers } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
-import { WAREHOUSES } from "../documents/warehouses";
+import { ADMIN_WAREHOUSE, WAREHOUSES } from "../documents/warehouses";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
@@ -1316,6 +1316,8 @@ router.get("/options", requireAuth, async (_req, res) => {
     // สถานะการดำเนินการของเคส ชุดเดียวกับที่กระดานเคยใช้
     workStatuses: WORK_STATUSES.map((v) => ({ value: v, label: WORK_STATUS_LABELS[v] })),
     warehouses: WAREHOUSES,
+    // คลังเดียวที่แอดมินเบิกเองได้ — คลังอื่นส่งให้หัวหน้าภาคเบิก (ขั้น PARTS_PICKUP)
+    adminWarehouse: ADMIN_WAREHOUSE,
     jobTypes: JOB_TYPES.map((v) => ({
       value: v,
       label: JOB_TYPE_LABELS[v],
@@ -2292,6 +2294,8 @@ const partsCheckSchema = z.object({
    * ไม่มีประโยชน์ เช่น ชุดลูกปืนที่ต้องเปลี่ยนพร้อมกัน — คนเช็คคลังเป็นคนเลือก
    */
   splitOut: z.boolean().optional(),
+  // ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
+  pickupNote: z.string().trim().max(500).optional(),
   // ของหมด — วันที่คาดว่าของเข้า ขึ้นบนแถบขั้นตอนคู่กับป้ายแดง "อะไหล่หมด"
   expectedAt: z
     .string()
@@ -2339,11 +2343,25 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     if (r.inStock && r.warehouse && !WAREHOUSES.includes(r.warehouse as never)) {
       return res.status(400).json({ error: `ไม่รู้จักคลัง "${r.warehouse}"` });
     }
+    // แอดมินเบิกได้เฉพาะคลังลาดพร้าว 94 — ของคลังอื่นหัวหน้าภาคเป็นคนเบิกและใส่เลขใบเบิกเอง
+    // กันที่เซิร์ฟเวอร์ด้วย ไม่ใช่แค่ซ่อนช่องบนหน้าจอ
+    if (r.inStock && r.warehouse !== ADMIN_WAREHOUSE && r.requisitionNo?.trim()) {
+      return res.status(400).json({
+        error: `แอดมินเบิกได้เฉพาะ${ADMIN_WAREHOUSE} — ของที่อยู่${r.warehouse} ให้หัวหน้าภาคเป็นคนเบิก (ไม่ต้องใส่เลขใบเบิก)`,
+      });
+    }
     // ของที่เบิกออกจากคลังต้องมีเลขใบเบิกกำกับ ไม่งั้นของหายออกจากคลัง
     // โดยไม่มีเอกสารผูกไว้ แล้วตอนตรวจนับจะหาไม่เจอว่าไปไหน
-    if (r.inStock && !r.requisitionNo?.trim()) {
+    if (r.inStock && r.warehouse === ADMIN_WAREHOUSE && !r.requisitionNo?.trim()) {
       return res.status(400).json({ error: "ของที่มีอยู่ ต้องใส่เลขใบเบิกอะไหล่ด้วย" });
     }
+  }
+  // ตัวที่หัวหน้าภาคต้องไปเบิกจากคลังอื่น
+  const pickupIds = parsed.data.results
+    .filter((r) => r.inStock && !offIds.has(r.sparePartId) && r.warehouse !== ADMIN_WAREHOUSE)
+    .map((r) => r.sparePartId);
+  if (pickupIds.length && !parsed.data.pickupNote) {
+    return res.status(400).json({ error: "ของที่อยู่คลังอื่น ต้องเขียนหมายเหตุถึงหัวหน้าภาคด้วย (เบิกที่ไหน ติดต่อใคร)" });
   }
 
   /**
@@ -2369,7 +2387,8 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
 
   // ของครบถึงไปขั้นจ่ายงาน — เรื่องราคาและเงินจบไปก่อนถึงขั้นนี้แล้ว
   // ของไม่ครบก็ค้างอยู่ที่แอดมินรอของเข้า
-  const nextStage = anyOut ? "PARTS_REQUESTED" : "PARTS_CHECKED";
+  // ของคลังอื่นยังไม่ได้เบิก — ไปให้หัวหน้าภาคเบิกก่อนจ่ายงาน (ของหมดยังค้างที่แอดมินก่อน)
+  const nextStage = anyOut ? "PARTS_REQUESTED" : pickupIds.length ? "PARTS_PICKUP" : "PARTS_CHECKED";
   const outCodes = stillOut
     ? await partCodesText(
         waiting.filter((w) => outIds.includes(w.sparePartId))
@@ -2431,9 +2450,128 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
           ? `อะไหล่หมด: ${outCodes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""} — ใบงานรออยู่ที่ขั้นนี้ ของมาถึงแล้วค่อยใส่เลขใบเบิกอีกรอบ`
           : "อะไหล่ครบทุกรายการ")
     );
+    if (nextStage === "PARTS_PICKUP") {
+      const pickupText = waiting
+        .filter((w) => pickupIds.includes(w.sparePartId))
+        .map((w) => {
+          const r = parsed.data.results.find((x) => x.sparePartId === w.sparePartId)!;
+          return { ...w, where: r.warehouse };
+        });
+      const codes = await partCodesText(pickupText);
+      const where = [...new Set(pickupText.map((w) => w.where))].join(", ");
+      // หน้าจอหัวหน้าภาคอ่านหมายเหตุจากรายการนี้ (ตัวล่าสุด)
+      await writeLog(tx, id, req.auth!.userId, "PICKUP_REQUESTED", "PARTS_PICKUP", `${codes} (${where}) — ${parsed.data.pickupNote}`);
+    }
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * ตัวที่หัวหน้าภาคต้องเบิกเอง — แอดมินบอกว่ามีของที่คลังอื่น (ไม่ใช่ลาดพร้าว 94) และยังไม่มีเลขใบเบิก
+ * ไม่มีช่องแยกในฐานข้อมูล: แอดมินใส่เลขใบเบิกคลังอื่นไม่ได้อยู่แล้ว (parts-check) จึงแยกออกจากกันได้เสมอ
+ */
+function pendingPickup(p: { inStock: boolean | null; warehouse: string | null; requisitionNo: string | null; sparePart: { offCatalog: boolean } }) {
+  return p.inStock === true && !p.sparePart.offCatalog && !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo;
+}
+
+/**
+ * หัวหน้าภาคเบิกอะไหล่จากคลังอื่นแล้ว (ขั้น PARTS_PICKUP — เจ้าของงานกำหนด ต.ค. 69)
+ *
+ * ต้องใส่เลขใบเบิกทุกตัว ด้วยเหตุผลเดียวกับที่แอดมินต้องใส่: ของออกจากคลังโดยไม่มีเอกสาร ตรวจนับแล้วหาไม่เจอ
+ * เปลี่ยนคลังได้ (เช่น เบิกคลังที่ใกล้กว่าที่แอดมินบอก) — บันทึกคลังที่เบิกจริง · แอดมินกดแทนไม่ได้
+ */
+const pickupSchema = z.object({
+  results: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        warehouse: z.string().trim().min(1).max(120),
+        requisitionNo: z.string().trim().min(1, "ต้องใส่เลขใบเบิกทุกรายการ").max(60),
+      })
+    )
+    .min(1),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = pickupSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (!(await guardStage(req, res, id, "PARTS_PICKUP"))) return;
+
+  const parts = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: { sparePartId: true, quantity: true, inStock: true, warehouse: true, requisitionNo: true, sparePart: { select: { offCatalog: true } } },
+  });
+  const pending = parts.filter(pendingPickup);
+  const answered = new Map(parsed.data.results.map((r) => [r.sparePartId, r]));
+  if (pending.some((p) => !answered.has(p.sparePartId))) {
+    return res.status(400).json({ error: "ต้องใส่เลขใบเบิกให้ครบทุกรายการที่ต้องเบิก" });
+  }
+  for (const r of parsed.data.results) {
+    if (!pending.some((p) => p.sparePartId === r.sparePartId)) {
+      return res.status(400).json({ error: "มีรายการที่ไม่ได้อยู่ในรายการที่ต้องเบิก" });
+    }
+    if (!WAREHOUSES.includes(r.warehouse as never)) return res.status(400).json({ error: `ไม่รู้จักคลัง "${r.warehouse}"` });
+  }
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    for (const r of parsed.data.results) {
+      await tx.workOrderPart.updateMany({
+        where: { workOrderId: id, kind: "WAITING", sparePartId: r.sparePartId },
+        data: { warehouse: r.warehouse, requisitionNo: r.requisitionNo, checkedAt: now },
+      });
+    }
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "PARTS_CHECKED", workStatus: workStatusForStage("PARTS_CHECKED") },
+    });
+    const lines = await Promise.all(
+      parsed.data.results.map(async (r) => {
+        const p = pending.find((x) => x.sparePartId === r.sparePartId)!;
+        const moved = p.warehouse !== r.warehouse ? ` (แอดมินบอก${p.warehouse})` : "";
+        return `${await partCodesText([p])} ${r.warehouse}${moved} · ${r.requisitionNo}`;
+      })
+    );
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "PICKED_UP",
+      "PARTS_CHECKED",
+      [lines.join(" / "), parsed.data.note].filter(Boolean).join(" — ")
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
+
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * หัวหน้าภาคไปแล้วเบิกไม่ได้ (คลังนั้นของหมดจริง) — ส่งกลับให้แอดมินหาคลังอื่นหรือตอบว่าหมด
+ * ผลเช็คของตัวที่ยังไม่เบิกยังอยู่ (คลังที่แอดมินบอก) เป็นค่าตั้งต้นให้แอดมิน แต่ต้องตอบใหม่ทุกตัว
+ * เพราะยังไม่มีเลขใบเบิก (ดู settled ใน parts-check)
+ */
+router.post("/:id/parts-pickup/return", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const reason = z.string().trim().min(1, "ต้องบอกเหตุผลที่เบิกไม่ได้").max(500).safeParse(req.body?.reason ?? "");
+  if (!reason.success) return res.status(400).json({ error: reason.error.issues[0]?.message });
+  if (!(await guardStage(req, res, id, "PARTS_PICKUP"))) return;
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },
+    });
+    await writeLog(tx, id, req.auth!.userId, "PICKUP_RETURNED", "PARTS_REQUESTED", reason.data);
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
 });
@@ -3311,6 +3449,10 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   const to = order.indexOf(toStage);
   if (toStage === "DONE" || to >= from) {
     return res.status(400).json({ error: "ย้อนได้เฉพาะขั้นที่ผ่านมาแล้ว" });
+  }
+  // ย้อนมาที่ขั้นนี้ตรง ๆ ไม่ได้ — ไม่รู้ว่าเลขใบเบิกตัวไหนเป็นของหัวหน้าภาคที่ต้องล้าง ให้ย้อนไปให้แอดมินเบิกใหม่
+  if (toStage === "PARTS_PICKUP") {
+    return res.status(400).json({ error: "ย้อนไปขั้นรอหัวหน้าภาคเบิกอะไหล่ตรง ๆ ไม่ได้ — ย้อนไปขั้นรอแอดมินเบิกอะไหล่แทน" });
   }
   if (toStage === "WAITING_PARTS" && wo.parentId === null) {
     return res.status(400).json({ error: "ขั้นรออะไหล่มีเฉพาะใบงานที่แยกมาจากใบอื่น" });

@@ -30,13 +30,13 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
 echo
 echo "═══ เช็คอะไหล่โดยไม่ใส่เลขใบเบิก — ต้องถูกปฏิเสธ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"},{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}")
+  -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}")
 echo "$R" | grep -q "เลขใบเบิก" && pass "ไม่ใส่เลขใบเบิกแล้วถูกปฏิเสธ" || fail "รับไปทั้งที่ไม่มีเลขใบเบิก: $R"
 
 echo
 echo "═══ ของที่หมดไม่ต้องมีเลขใบเบิก"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":false}]}")
+  -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":false}]}")
 echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "เช็คผ่านโดยตัวที่หมดไม่ต้องมีเลขใบเบิก" || fail "เช็คไม่ผ่าน: $R"
 echo "$R" | J 'd.waitingParts.map(p=>p.partCode+" คลัง="+(p.warehouse||"-")+" ใบเบิก="+(p.requisitionNo||"-")).join(" · ")'
 echo "$R" | J 'd.waitingParts.find(p=>p.inStock===false).requisitionNo===null?"ok":"bad"' | grep -q ok \
@@ -44,7 +44,7 @@ echo "$R" | J 'd.waitingParts.find(p=>p.inStock===false).requisitionNo===null?"o
 # ของหมดทำให้ใบงานค้างอยู่ขั้นนี้ ต้องรอของเข้าแล้วเบิกอีกรอบถึงจะเดินต่อ
 echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ของหมด ใบงานยังค้างอยู่ที่แอดมิน" || fail "ส่งต่อทั้งที่ของไม่ครบ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-2569-0099\"}]}")
+  -d "{\"results\":[{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0099\"}]}")
 echo "$R" | J 'd.statusLabel' | grep -q "หัวหน้าภาคจ่ายงาน" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
 echo "$R" | J 'd.waitingParts.find(p=>p.partCode==="SP-BOARD").requisitionNo==="RQ-2569-0042"?"ok":"bad"' | grep -q ok \
   && pass "ใบเบิกรอบแรกไม่ถูกเขียนทับ" || fail "ใบเบิกรอบแรกถูกทับ"

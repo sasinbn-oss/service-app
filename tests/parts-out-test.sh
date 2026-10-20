@@ -30,7 +30,7 @@ echo "═══ เช็คคลัง: สายพานหมด พร้�
 ID=$(newWo W71); CODE=$(GET "work-orders/$ID" | J 'd.code')
 OUT0=$(out $ID $CODE)
 [ "$OUT0" = "0" ] && pass "ก่อนเช็ค รายการขึ้น partsOut=0" || fail "ก่อนเช็ค partsOut=$OUT0"
-POST $A "work-orders/$ID/parts-check" "{\"expectedAt\":\"2026-11-20\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-PO1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$ID/parts-check" "{\"expectedAt\":\"2026-11-20\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PO1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
 [ "$(eta $ID)" = "2026-11-20" ] && pass "เก็บวันคาดว่าของเข้าไว้ที่ใบงาน" || fail "วันคาดว่าเข้า: $(eta $ID)"
 [ "$(out $ID $CODE)" = "1" ] && pass "รายการขึ้น partsOut=1 (ป้ายแดง)" || fail "partsOut=$(out $ID $CODE)"
 GET "work-orders/$ID" | J 'd.logs.find(l=>l.action==="PARTS_CHECKED").note' | grep -q "อะไหล่หมด: .*2026-11-20" \
@@ -51,7 +51,7 @@ GET "work-orders/$ID" | J 'd.logs.find(l=>l.action==="PARTS_ETA_CHANGED").note' 
 
 echo
 echo "═══ ของมาแล้ว — ครบ ป้ายแดงหาย วันถูกล้าง"
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-PO2\"}]}" >/dev/null
+POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PO2\"}]}" >/dev/null
 GET "work-orders/$ID" | J 'd.status' | grep -q PARTS_CHECKED && pass "ของครบ เดินต่อไปขั้นจ่ายงาน" || fail "ไม่เดินต่อ"
 [ "$(eta $ID)" = "-" ] && pass "วันคาดว่าเข้าถูกล้าง" || fail "วันค้าง: $(eta $ID)"
 [ "$(out $ID $CODE)" = "0" ] && pass "รายการไม่ขึ้นป้ายแดงแล้ว" || fail "partsOut=$(out $ID $CODE)"
@@ -61,7 +61,7 @@ echo "$R" | grep -q "ไม่ได้รออะไหล่" && pass "ใบ
 echo
 echo "═══ แยกใบ — วันคาดว่าเข้าไปติดใบรออะไหล่"
 ID2=$(newWo W72)
-R=$(POST $A "work-orders/$ID2/parts-check" "{\"splitOut\":true,\"expectedAt\":\"2026-11-25\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"RQ-PO3\"},{\"sparePartId\":$BELT,\"inStock\":false}]}")
+R=$(POST $A "work-orders/$ID2/parts-check" "{\"splitOut\":true,\"expectedAt\":\"2026-11-25\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PO3\"},{\"sparePartId\":$BELT,\"inStock\":false}]}")
 CH=$(echo "$R" | J 'd.children[0].id')
 [ "$(eta $ID2)" = "-" ] && [ "$(eta $CH)" = "2026-11-25" ] && pass "ใบเดิมไม่มีวัน ใบรออะไหล่ได้วัน" || fail "ใบเดิม $(eta $ID2) ใบลูก $(eta $CH)"
 CHCODE=$(GET "work-orders/$CH" | J 'd.code')
