@@ -36,7 +36,21 @@ interface Row {
   cancelledAt: string | null;
   cancelledNote: string | null;
   openWorkOrders: number;
+  /** ช่องที่แก้ในแอป — นำเข้าไฟล์รอบหน้าไม่ทับ */
+  editedInApp: string[];
 }
+interface Options {
+  regions: string[];
+  ownerships: string[];
+  teams: string[];
+}
+type RegistryField = "region" | "ownership" | "zone" | "pmTeam";
+const REGISTRY: { key: RegistryField; label: string }[] = [
+  { key: "region", label: "ภาค" },
+  { key: "ownership", label: "ประเภท" },
+  { key: "zone", label: "ทีม CM" },
+  { key: "pmTeam", label: "ทีม PM" },
+];
 interface Counts {
   open: number;
   noCoords: number;
@@ -220,7 +234,7 @@ export default function ManageBranchesScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.titleRow}>
-        <Text style={styles.sub}>สาขาส่วนใหญ่มาจากนำเข้าทะเบียน (หน้าติดตามเครื่องเสีย → นำเข้า) · แก้ที่นี่ได้: พิกัด รัศมี ที่อยู่</Text>
+        <Text style={styles.sub}>สาขาส่วนใหญ่มาจากนำเข้าทะเบียน (หน้าติดตามเครื่องเสีย → นำเข้า) · กดที่สาขาเพื่อแก้พิกัด ภาค ประเภท ทีม — นำเข้ารอบหน้าไม่ทับค่าที่แก้ในแอป</Text>
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => setAdding(true)} accessibilityLabel="เพิ่มสาขา">
           <Ionicons name="add" size={16} color="#fff" />
@@ -333,6 +347,17 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
   const [usage, setUsage] = useState<Usage | null>(null);
   const [closing, setClosing] = useState(false);
   const [closeNote, setCloseNote] = useState("");
+  const [reg, setReg] = useState<Record<RegistryField, string | null>>({
+    region: row?.region ?? null,
+    ownership: row?.ownership ?? null,
+    zone: row?.zone ?? null,
+    pmTeam: row?.pmTeam ?? null,
+  });
+  const [options, setOptions] = useState<Options | null>(null);
+
+  useEffect(() => {
+    api.get<Options>("/branches/manage/options").then((r) => setOptions(r.data)).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!row) return;
@@ -367,8 +392,14 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
     setBusy("กำลังบันทึก");
     try {
       const body = { latitude: la, longitude: lo, radiusMeters: r, address: address.trim() || undefined };
-      if (adding) await api.post("/branches", { ...body, code: code.trim().toUpperCase(), name: name.trim(), latitude: la ?? undefined, longitude: lo ?? undefined });
-      else await api.put(`/branches/${row!.id}`, body);
+      let id = row?.id;
+      if (adding) {
+        const res = await api.post<{ id: number }>("/branches", { ...body, code: code.trim().toUpperCase(), name: name.trim(), latitude: la ?? undefined, longitude: lo ?? undefined });
+        id = res.data.id;
+      } else await api.put(`/branches/${row!.id}`, body);
+      // ส่งเฉพาะช่องที่เปลี่ยน — ช่องที่ไม่ได้แตะต้องไม่ถูกจำว่า "แก้ในแอป" แล้วไปบังคับทับไฟล์รอบหน้า
+      const changed = Object.fromEntries(REGISTRY.filter((f) => reg[f.key] && reg[f.key] !== (row?.[f.key] ?? null)).map((f) => [f.key, reg[f.key]]));
+      if (Object.keys(changed).length) await api.put(`/branches/${id}/registry`, changed);
       await onChanged();
     } catch (e) {
       showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
@@ -465,7 +496,7 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
             value={link}
             onChangeText={setLink}
             onSubmitEditing={readLink}
-            placeholder="วางลิงก์ Google Maps หรือ 13.75, 100.50"
+            placeholder="วางลิงก์ Google Maps หรือพิกัด"
             placeholderTextColor={colors.primaryInk}
             accessibilityLabel="วางลิงก์ Google Maps"
           />
@@ -474,8 +505,8 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
           </TouchableOpacity>
         </View>
         <View style={styles.row2}>
-          <TextInput style={[styles.input, { flex: 1 }]} value={lat} onChangeText={setLat} placeholder="ละติจูด" keyboardType="numbers-and-punctuation" accessibilityLabel="ละติจูด" />
-          <TextInput style={[styles.input, { flex: 1 }]} value={lng} onChangeText={setLng} placeholder="ลองจิจูด" keyboardType="numbers-and-punctuation" accessibilityLabel="ลองจิจูด" />
+          <TextInput style={[styles.input, { flex: 1, minWidth: 0 }]} value={lat} onChangeText={setLat} placeholder="ละติจูด" keyboardType="numbers-and-punctuation" accessibilityLabel="ละติจูด" />
+          <TextInput style={[styles.input, { flex: 1, minWidth: 0 }]} value={lng} onChangeText={setLng} placeholder="ลองจิจูด" keyboardType="numbers-and-punctuation" accessibilityLabel="ลองจิจูด" />
         </View>
         {mapOk ? (
           <TouchableOpacity onPress={() => openUrl(`https://maps.google.com/?q=${la},${lo}`)}>
@@ -498,13 +529,34 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
         </View>
       </View>
 
-      {!adding ? (
-        <Field label="จากไฟล์ทะเบียน (แก้ที่ไฟล์แล้วนำเข้า)">
-          <Text style={styles.ro}>ภาค {row!.region ?? "—"} · ประเภท {row!.ownership ?? "—"}</Text>
-          <Text style={styles.ro}>ทีม CM {row!.zone ?? "—"} · ทีม PM {row!.pmTeam ?? "—"}</Text>
-          <Text style={styles.hint}>ย้ายทีมที่ ทีมช่าง → ย้ายสาขาเข้าทีม (นำเข้ารอบหน้าคงไว้ให้)</Text>
-        </Field>
-      ) : null}
+      <Field label="ภาค ประเภท ทีม (เลือกจากที่มีในระบบ)">
+        <View style={styles.regGrid}>
+          {REGISTRY.map((f) => {
+            const list = !options ? [] : f.key === "region" ? options.regions : f.key === "ownership" ? options.ownerships : options.teams;
+            const edited = row?.editedInApp.includes(f.key);
+            return (
+              <View key={f.key} style={styles.regCell}>
+                <View style={styles.regLabelRow}>
+                  <Text style={styles.subLabel}>{f.label}</Text>
+                  {edited ? <Text style={styles.editedTag}>แก้ในแอป</Text> : null}
+                </View>
+                <Dropdown
+                  value={reg[f.key]}
+                  options={list.map((v) => ({ value: v, label: v }))}
+                  onChange={(v) => v && setReg((cur) => ({ ...cur, [f.key]: v }))}
+                  placeholder="— ยังไม่ระบุ —"
+                  disabled={!options}
+                  accessibilityLabel={`เลือก${f.label}`}
+                />
+              </View>
+            );
+          })}
+        </View>
+        <Text style={styles.hint}>
+          นำเข้าไฟล์รอบหน้าไม่ทับค่าที่แก้ที่นี่ · ทีมที่แก้ขึ้นในรายการย้ายสาขาของหน้าทีมช่าง (คืนตามไฟล์ได้) ·
+          ใบงานที่จ่ายไปแล้วไม่ย้ายตาม มีผลกับใบงานใหม่
+        </Text>
+      </Field>
 
       <View style={styles.actions}>
         <TouchableOpacity style={styles.btn} onPress={onClose} disabled={!!busy}>
@@ -580,6 +632,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 const COLS = [{ width: 80 }, { flex: 1, minWidth: 200 }, { width: 120 }, { width: 120 }, { width: 110 }, { width: 96 }, { width: 110 }, { width: 60 }];
 
 const styles = StyleSheet.create({
+  regGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  regCell: { flexGrow: 1, flexBasis: 150, gap: 4 },
+  regLabelRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  subLabel: { fontSize: 12, color: colors.textMuted },
+  editedTag: { fontSize: 11, color: colors.primary, backgroundColor: colors.primarySoft, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999, overflow: "hidden" },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md, paddingBottom: 60 },
   titleRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
@@ -628,7 +685,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 12.5, fontWeight: "700", color: colors.textMuted },
   input: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: colors.text, backgroundColor: colors.card },
   pasteRow: { flexDirection: "row", gap: 6 },
-  paste: { flex: 1, borderStyle: "dashed", borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  paste: { flex: 1, minWidth: 0, borderStyle: "dashed", borderColor: colors.primary, backgroundColor: colors.primarySoft },
   row2: { flexDirection: "row", gap: spacing.sm },
   link: { fontSize: 13, fontWeight: "700", color: colors.primary },
   hint: { fontSize: 12, color: colors.textMuted, lineHeight: 18 },
