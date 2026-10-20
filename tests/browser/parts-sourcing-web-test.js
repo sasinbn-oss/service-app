@@ -75,7 +75,7 @@ const { setup } = require("./fixture");
     await vis("มีอะไหล่ — ไปเสนอราคา").last().click();
     await page.waitForTimeout(3000);
     db("status") === "AWAITING_QUOTE" ? pass("ไปขั้นรอเสนอราคา (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
-    (await vis("รอเสนอราคาลูกค้า").count()) > 0 ? pass("หน้าใบงานขึ้นรอเสนอราคาลูกค้า") : fail("หน้าใบงานไม่อัปเดต");
+    (await vis("แอดมิน · ส่งใบเสนอราคา").count()) > 0 ? pass("หน้าใบงานขึ้นแอดมิน · ส่งใบเสนอราคา") : fail("หน้าใบงานไม่อัปเดต");
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {

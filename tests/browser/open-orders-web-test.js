@@ -59,7 +59,7 @@ const { setup } = require("./fixture");
 
     await page.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").first().fill("W77");
     await page.waitForTimeout(2500);
-    const red = `เครื่อง W77 มีใบงานค้าง ${wo.code} (รอหัวหน้าภาคระบุอะไหล่)`;
+    const red = `เครื่อง W77 มีใบงานค้าง ${wo.code} (หัวหน้าภาค · ระบุอะไหล่)`;
     (await vis(red).count()) > 0 ? pass("ใส่เครื่องที่มีใบค้าง → บรรทัดแดงบอกเลขใบงาน") : fail(`ไม่เห็น "${red}"`);
     await page.screenshot({ path: path.join(DIR, "open-orders.png") });
 

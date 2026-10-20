@@ -40,7 +40,7 @@ POST $S "work-orders/$ID/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\
   && pass "หัวหน้าภาคส่งทีมไปตรวจ พร้อมวันเสนอ — ไปรอแอดมินนัดลูกค้าก่อน ยังไม่ถึงช่าง" || fail "ส่งตรวจไม่สำเร็จ: $(st $ID)"
 # ก่อนแอดมินนัด ช่างยังบันทึกผลตรวจไม่ได้ · ช่าง/หัวหน้าภาคนัดแทนไม่ได้
 R=$(POST $T "work-orders/$ID/inspection" '{"note":"แอบไปก่อนนัด"}')
-echo "$R" | grep -q "รอแอดมินนัดลูกค้า" && [ "$(st $ID)" = "INSPECT_CONFIRM" ] \
+echo "$R" | grep -q "นัดร้าน" && [ "$(st $ID)" = "INSPECT_CONFIRM" ] \
   && pass "ยังไม่ได้นัด ช่างบันทึกผลตรวจไม่ได้" || fail "บันทึกผลตรวจได้ก่อนนัด: $(echo $R|head -c 120)"
 for who in T S; do
   R=$(POST ${!who} "work-orders/$ID/confirm-appointment" '{}')
@@ -57,7 +57,7 @@ DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='RESC
   && pass "ประวัติบันทึกว่าเลื่อนนัดตรวจจากวันเสนอเป็นวันใหม่" || fail "ไม่มีประวัติเลื่อนนัดตรวจ"
 # ร้านตกลงแล้วแต่หัวหน้าภาคยังไม่ส่ง — ช่างยังไปตรวจไม่ได้ และส่งตัวเองไม่ได้
 R=$(POST $T "work-orders/$ID/inspection" '{"note":"แอบไปก่อนส่ง"}')
-echo "$R" | grep -q "รอหัวหน้าภาคส่งช่างตรวจ" && [ "$(st $ID)" = "INSPECT_DISPATCH" ] \
+echo "$R" | grep -q "หัวหน้าภาค · ส่งช่างตรวจ" && [ "$(st $ID)" = "INSPECT_DISPATCH" ] \
   && pass "หัวหน้าภาคยังไม่ส่ง ช่างบันทึกผลตรวจไม่ได้" || fail "บันทึกผลตรวจได้ก่อนส่ง: $(echo $R|head -c 120)"
 R=$(POST $T "work-orders/$ID/dispatch" '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างส่งตัวเองเข้าตรวจไม่ได้" || fail "ช่างส่งได้: $(echo $R|head -c 120)"
@@ -66,7 +66,7 @@ echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(DB "select status||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "INSPECTING|2026-11-04|$TEAM" ] \
   && DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='DISPATCHED' and status='INSPECTING'" | grep -q "ส่งตรวจหน้างาน $TEAM" \
-  && pass "หัวหน้าภาคส่งช่างเข้าตรวจ → รอทีมตรวจหน้างาน วันนัดคงเดิม มีประวัติ" || fail "ส่งช่างตรวจไม่สำเร็จ: $(st $ID)"
+  && pass "หัวหน้าภาคส่งช่างเข้าตรวจ → ช่าง · ตรวจหน้างาน วันนัดคงเดิม มีประวัติ" || fail "ส่งช่างตรวจไม่สำเร็จ: $(st $ID)"
 R=$(POST $T "work-orders/$ID/inspection" '{"note":""}')
 echo "$R" | grep -q "ต้องบอกว่าตรวจแล้วเจออะไร" && pass "ผลตรวจว่างไม่ได้" || fail "ผลตรวจว่างผ่าน: $(echo $R|head -c 120)"
 # ไฟล์ตรวจหน้างานต้องครบสามอย่าง: รูปหน้างาน · รูปอะไหล่ที่เสีย · วิดีโอการทำงาน
@@ -116,12 +116,12 @@ echo
 echo "═══ หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า (เลื่อนวันได้) → หัวหน้าภาคยืนยันออกงาน"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}]}" >/dev/null
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL1\"}]}" >/dev/null
-[ "$(st $ID)" = "PARTS_CHECKED" ] && pass "ของครบแล้วไปรอหัวหน้าภาคจ่ายงาน" || fail "ไม่ได้ไปรอจ่ายงาน: $(st $ID)"
+[ "$(st $ID)" = "PARTS_CHECKED" ] && pass "ของครบแล้วไปหัวหน้าภาค · จ่ายงานให้ทีม" || fail "ไม่ได้ไปรอจ่ายงาน: $(st $ID)"
 R=$(POST $T "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-04\"}")
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงานเองไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R|head -c 120)"
 POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-04\",\"scheduledTime\":\"10:00\"}" >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"assignedTeam\"||'|'||\"scheduledTime\" from \"WorkOrder\" where id=$ID")" = "AWAITING_CONFIRM|PENDING|$TEAM|10:00" ] \
-  && pass "จ่ายงานพร้อมวันเวลา แล้วไปรอแอดมินคอนเฟิร์มลูกค้า" || fail "จ่ายงานไม่สำเร็จ: $(st $ID)"
+  && pass "จ่ายงานพร้อมวันเวลา แล้วไปแอดมิน · คอนเฟิร์มลูกค้า" || fail "จ่ายงานไม่สำเร็จ: $(st $ID)"
 ABY() { curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.appointmentBy?d.appointmentBy.name:"-"'; }
 LBY() { curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $A)" | J 'const r=d.rows.find(x=>x.id==='$ID');r.appointmentByName||"-"'; }
 [ "$(ABY)|$(LBY)" = "-|-" ] && pass "ยังรอลูกค้าคอนเฟิร์ม = ยังไม่มีชื่อคนคอนเฟิร์ม" || fail "มีชื่อทั้งที่ยังไม่คอนเฟิร์ม: $(ABY)|$(LBY)"
@@ -197,17 +197,19 @@ POST $S "work-orders/$ID2/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId
 POST $A "work-orders/$ID2/parts-check" "{\"splitOut\":true,\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL2\"},{\"sparePartId\":$P2,\"inStock\":false}]}" >/dev/null
 CH=$(DB "select id from \"WorkOrder\" where \"parentId\"=$ID2")
 [ -n "$CH" ] && CREATED="$CREATED $CH"
-[ "$(st $ID2)" = "PARTS_CHECKED" ] && [ "$(st $CH)" = "WAITING_PARTS" ] \
-  && pass "ใบเดิมไปจ่ายงานด้วยของที่มี ตัวที่หมดแยกเป็นใบรออะไหล่" || fail "แยกไม่สำเร็จ: $(st $ID2) / ${CH:-ไม่มีใบลูก}"
+# ใบแยกเริ่มที่แอดมินเบิกอะไหล่ (ต.ค. 69 — เดิมเริ่มที่หัวหน้าภาค "รออะไหล่เข้า")
+[ "$(st $ID2)" = "PARTS_CHECKED" ] && [ "$(st $CH)" = "PARTS_REQUESTED" ] \
+  && pass "ใบเดิมไปจ่ายงานด้วยของที่มี ตัวที่หมดแยกเป็นใบรออะไหล่ (แอดมินเบิกเมื่อของเข้า)" || fail "แยกไม่สำเร็จ: $(st $ID2) / ${CH:-ไม่มีใบลูก}"
 [ "$(DB "select string_agg(\"sparePartId\"::text||'x'||quantity,',') from \"WorkOrderPart\" where \"workOrderId\"=$CH")" = "${P2}x2" ] \
   && [ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\"=$ID2")" = "1" ] \
   && pass "อะไหล่ที่หมดย้ายไปใบใหม่พร้อมจำนวน ไม่ซ้ำในใบเดิม" || fail "อะไหล่ไม่ได้ย้าย"
-curl -s "localhost:4000/api/plans/pending" -H "$(H $S)" | J "d.some(r=>r.id===$CH&&r.parentCode)?'ok':'bad'" | grep -q ok \
-  && pass "ใบรออะไหล่ขึ้นในรายการรอจัดแผนของหัวหน้าภาค" || fail "ไม่ขึ้นในรอจัดแผน"
-R=$(POST $A "work-orders/$CH/parts-arrived" '{}')
-POST $S "work-orders/$CH/parts-arrived" '{"note":"ของเข้าคลังแล้ว"}' >/dev/null
-[ "$(st $CH)" = "PARTS_REQUESTED" ] && [ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\"=$CH and \"inStock\" is null")" = "1" ] \
-  && pass "ของมาแล้ว ส่งต่อให้แอดมินเช็คใหม่ (ผล 'หมด' เดิมถูกล้าง)" || fail "ส่งต่อไม่สำเร็จ: $(st $CH)"
+[ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\"=$CH and \"inStock\"=false")" = "1" ] \
+  && pass "ใบรออะไหล่ยังจำว่าตัวไหนหมด (ป้ายแดงที่แอดมิน)" || fail "ผลหมดหาย"
+curl -s "localhost:4000/api/plans/pending" -H "$(H $S)" | J "d.some(r=>r.id===$CH)?'bad':'ok'" | grep -q ok \
+  && pass "ใบรออะไหล่ยังไม่ขึ้นในรอจัดแผน (ยังรอแอดมินเบิก)" || fail "ขึ้นในรอจัดแผนก่อนเบิก"
+POST $A "work-orders/$CH/parts-check" "{\"results\":[{\"sparePartId\":$P2,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL3\"}]}" >/dev/null
+[ "$(st $CH)" = "PARTS_CHECKED" ] && curl -s "localhost:4000/api/plans/pending" -H "$(H $S)" | J "d.some(r=>r.id===$CH&&r.parentCode)?'ok':'bad'" | grep -q ok \
+  && pass "ของมาแล้ว แอดมินเบิกปุ่มเดียว → รอหัวหน้าภาคจ่ายงาน ขึ้นในรอจัดแผน" || fail "เบิกใบแยก: $(st $CH)"
 
 echo
 echo "═══ เข้าหน้างานแล้วอะไหล่ไม่ครบ — เปิดใบรออะไหล่ต่อ"
@@ -219,7 +221,7 @@ POST $S "work-orders/$ID2/dispatch" '{}' >/dev/null
 R=$(POST $T "work-orders/$ID2/follow-up" "{\"parts\":[{\"sparePartId\":$P2,\"quantity\":1}],\"note\":\"ต้องเปลี่ยนเพิ่ม\"}")
 CH2=$(echo "$R" | J 'd.createdChild?d.createdChild.id:""')
 [ -n "$CH2" ] && CREATED="$CREATED $CH2"
-[ -n "$CH2" ] && [ "$(DB "select \"parentId\"||'|'||status from \"WorkOrder\" where id=$CH2")" = "$ID2|WAITING_PARTS" ] \
+[ -n "$CH2" ] && [ "$(DB "select \"parentId\"||'|'||status from \"WorkOrder\" where id=$CH2")" = "$ID2|PARTS_REQUESTED" ] \
   && pass "ช่างในทีมเปิดใบรออะไหล่ต่อได้ ลิงก์กับใบเดิม" || fail "เปิดใบต่อไม่สำเร็จ: $(echo $R|head -c 140)"
 
 echo

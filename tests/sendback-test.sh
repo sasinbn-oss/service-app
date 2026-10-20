@@ -44,12 +44,28 @@ echo "═══ ส่งกลับด้วยเหตุร้านปิ�
 R=$(POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"XYZ","reason":"ทดสอบ"}')
 echo "$R" | grep -q "error" && [ "$(status $ID)" = "IN_PROGRESS" ] && pass "หมวดเหตุที่ไม่รู้จักถูกปฏิเสธ" || fail "รับหมวดแปลก: $R"
 POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"SHOP","reason":"ไปถึงร้านปิด โทรไม่ติด"}' >/dev/null
-[ "$(status $ID)" = "NEW" ] && pass "เด้งกลับไปที่หัวหน้าภาค" || fail "สถานะ: $(status $ID)"
+# ร้านปิด → แอดมินนัดใหม่ ทีมเดิม อะไหล่เดิม (เจ้าของงานเลือก ต.ค. 69 — เดิมกลับขั้นแรกทุกเหตุผล)
+[ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$ID")" = "AWAITING_CONFIRM|PENDING|$TEAM" ] \
+  && pass "ร้านปิด → แอดมินคอนเฟิร์มลูกค้าใหม่ ทีมเดิม (ไม่กลับขั้นแรก)" || fail "สถานะ: $(status $ID)"
 [ "$(parts $ID)" = "SP-BELT:true:RQ-SB1 SP-BOARD:true:RQ-SB1" ] && pass "อะไหล่ที่เบิกแล้วอยู่ครบ พร้อมเลขใบเบิก (ฐานข้อมูล)" || fail "อะไหล่: $(parts $ID)"
 [ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$ID")" = "$TEAM" ] && pass "ทีมเดิมยังอยู่" || fail "ทีมหาย"
-GET "work-orders/$ID" | J 'd.logs.find(l=>l.action==="PARTS_ROLLBACK").note' | grep -q "^\[ร้านปิด / ลูกค้าไม่สะดวก\] ไปถึงร้านปิด" \
+GET "work-orders/$ID" | J 'd.logs.filter(l=>l.action==="PARTS_ROLLBACK").map(l=>l.note).join("\n")' | grep -q "^\[ร้านปิด / ลูกค้าไม่สะดวก\] ไปถึงร้านปิด" \
   && pass "ประวัติขึ้นหมวดเหตุนำหน้า" || fail "ประวัติไม่มีหมวด"
 GET "work-orders/options" | J 'd.sendBackReasons.length' | grep -q "^5$" && pass "รายการหมวดเหตุส่งไปให้แอป" || fail "options ไม่มีหมวดเหตุ"
+
+echo
+echo "═══ เครื่องมือ/คนไม่พอ → หัวหน้าภาคจ่ายงานใหม่"
+POST $A "work-orders/$ID/confirm-appointment" '{"scheduledAt":"2026-11-12"}' >/dev/null
+POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
+POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"RESOURCES","reason":"บันไดไม่พอ ต้องไปสองคน"}' >/dev/null
+[ "$(DB "select status||'|'||coalesce(\"assignedTeam\",'-')||'|'||coalesce(\"scheduledAt\"::text,'-') from \"WorkOrder\" where id=$ID")" = "PARTS_CHECKED|-|-" ] \
+  && [ "$(parts $ID)" = "SP-BELT:true:RQ-SB1 SP-BOARD:true:RQ-SB1" ] && pass "ไปรอหัวหน้าภาคจ่ายงานใหม่ (ล้างทีม/วัน) อะไหล่ที่เบิกแล้วอยู่ครบ" || fail "RESOURCES: $(status $ID)"
+
+echo
+echo "═══ ต้องตรวจเพิ่ม → กลับไปหัวหน้าภาคระบุอะไหล่"
+toWork $ID
+POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"INSPECT","reason":"ยังหาสาเหตุไม่เจอ"}' >/dev/null
+[ "$(status $ID)" = "NEW" ] && pass "เด้งกลับไปที่หัวหน้าภาค" || fail "สถานะ: $(status $ID)"
 
 echo
 echo "═══ หัวหน้าภาคแก้รายละเอียดทั้งหมด"

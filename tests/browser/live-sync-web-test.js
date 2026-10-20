@@ -62,7 +62,7 @@ const { setup } = require("./fixture");
     });
     await shown(page);
     await page.waitForTimeout(2500);
-    (await has(page, `${aName} อัปเดตใบงานนี้`)) && (await has(page, "รอหัวหน้าภาคจ่ายงาน"))
+    (await has(page, `${aName} อัปเดตใบงานนี้`)) && (await has(page, "หัวหน้าภาค · จ่ายงานให้ทีม"))
       ? pass("อีกคนเปลี่ยนขั้น → หน้าจอนี้โหลดใหม่เอง บอกว่าใครเปลี่ยน")
       : fail("ไม่โหลดเอง / ไม่บอกชื่อ");
     await page.waitForTimeout(4000);

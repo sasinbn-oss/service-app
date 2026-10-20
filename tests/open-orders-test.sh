@@ -35,7 +35,7 @@ R=$(OPEN $A $BR)
 [ "$(echo "$R" | J 'd.map(o=>o.id).join(",")')" = "$W2,$W1" ] && pass "ขึ้นเฉพาะใบค้างจริง ใหม่ก่อนเก่า — ไม่มีใบปิดแล้ว ใบทดสอบ หรือใบสาขาอื่น" \
   || fail "รายการ: $(echo "$R" | J 'd.map(o=>o.code+":"+o.status).join(",")')"
 [ "$(echo "$R" | J "d.find(o=>o.id==$W1).symptom")" = "ไม่ปั่นหมาดทดสอบเปิดซ้ำ" ] && pass "อาการบรรทัดแรกเท่านั้น (ไม่มีบรรทัดสาเหตุ)" || fail "อาการ: $(echo "$R" | J "d.find(o=>o.id==$W1).symptom")"
-[ "$(echo "$R" | J "const o=d.find(o=>o.id==$W1); [o.machineCode,o.statusLabel,!!o.createdBy,!!o.createdAt].join('|')")" = "W5|รอหัวหน้าภาคระบุอะไหล่|true|true" ] \
+[ "$(echo "$R" | J "const o=d.find(o=>o.id==$W1); [o.machineCode,o.statusLabel,!!o.createdBy,!!o.createdAt].join('|')")" = "W5|หัวหน้าภาค · ระบุอะไหล่|true|true" ] \
   && pass "มีรหัสเครื่อง ชื่อขั้น คนเปิด วันที่เปิด" || fail "ช่อง: $(echo "$R" | J "JSON.stringify(d.find(o=>o.id==$W1))")"
 [ "$(curl -s -o /dev/null -w '%{http_code}' localhost:4000/api/branches/$BR/open-work-orders)" = "401" ] && pass "ไม่ล็อกอิน 401" || fail "ไม่ล็อกอินเข้าได้"
 

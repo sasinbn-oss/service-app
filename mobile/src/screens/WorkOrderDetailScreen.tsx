@@ -21,7 +21,7 @@ import StepPulse from "../components/StepPulse";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
-import CancelOrderModal, { CancelOrderButton } from "../components/CancelOrderModal";
+import CancelOrderModal from "../components/CancelOrderModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -37,8 +37,8 @@ import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
-import BackfillCloseModal, { BackfillButton } from "../components/BackfillCloseModal";
-import SupervisorCloseModal, { SupervisorCloseButton } from "../components/SupervisorCloseModal";
+import BackfillCloseModal from "../components/BackfillCloseModal";
+import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import {
@@ -262,9 +262,38 @@ const MANUAL_STATUS = "WAITING_CUSTOMER";
 /** ขั้นที่ผล "หมด" ยังเป็นเรื่องของตอนนี้ — ตรงกับ PARTS_OUT_STAGES ฝั่ง backend */
 const PARTS_OUT_STAGES = ["PARTS_SOURCING", "PARTS_REQUESTED", "WAITING_PARTS"];
 
+/** ข้ามขั้นเพราะอะไร — แถบขั้นตอนเดิมขึ้นแค่ "ข้าม 6" ไม่บอกเหตุผล */
+const SKIP_WHY: Record<string, string> = {
+  INSPECT_CONFIRM: "ไม่ได้ตรวจหน้างาน",
+  INSPECT_DISPATCH: "ไม่ได้ตรวจหน้างาน",
+  INSPECTING: "ไม่ได้ตรวจหน้างาน",
+  PARTS_SOURCING: "ไม่ต้องเสนอราคา",
+  AWAITING_QUOTE: "ไม่ต้องเสนอราคา",
+  AWAITING_PAYMENT: "ไม่ต้องเสนอราคา",
+  WAITING_PARTS: "ไม่ใช่ใบรออะไหล่รุ่นเก่า",
+  PARTS_REQUESTED: "ไม่ใช้อะไหล่",
+  PARTS_PICKUP: "ของอยู่คลัง 94 หรือไม่ใช้อะไหล่",
+  CLAIM_REVIEW: "ไม่มีเคลมอะไหล่",
+};
+
 /** ตัวที่หัวหน้าภาคต้องเบิกเอง — กฎเดียวกับ pendingPickup ฝั่งเซิร์ฟเวอร์ */
 function isPickup(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
   return p.inStock === true && !p.offCatalog && !!p.warehouse && p.warehouse !== adminWarehouse && !p.requisitionNo;
+}
+
+/**
+ * ผลเช็คอะไหล่ก่อนเสนอราคา (ขั้นเช็คอะไหล่ มี/หมด) ยังใช้ได้ไหมตอนเบิก — เจ้าของงานเลือก ต.ค. 69
+ *
+ * ลูกค้าจ่ายเงินภายใน 3 วัน = ผล "มีครบ" ยังเชื่อได้ ฟอร์มเบิกเติมให้ เหลือเลือกคลังกับใส่เลขใบเบิก
+ * เกิน 3 วัน = ของอาจถูกงานอื่นใช้ไประหว่างรอเงิน เปิดให้เช็คใหม่ทั้งหมดเหมือนเดิม
+ */
+const SOURCING_FRESH_DAYS = 3;
+function sourcingCheck(o: { status: string; logs: LogEntry[] }): { days: number; stale: boolean; at: string } | null {
+  if (o.status !== "PARTS_REQUESTED") return null;
+  const last = [...o.logs].filter((l) => l.action === "PARTS_SOURCED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!last) return null;
+  const days = Math.floor((Date.now() - Date.parse(last.createdAt)) / 86_400_000);
+  return { days, stale: days > SOURCING_FRESH_DAYS, at: last.createdAt };
 }
 
 /** หมายเหตุล่าสุดที่แอดมินส่งให้หัวหน้าภาคเบิก */
@@ -273,25 +302,25 @@ function lastPickupRequest(o: { logs: LogEntry[] }): LogEntry | null {
 }
 
 const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
-  NEW: { label: "ระบุอะไหล่ที่ต้องใช้", icon: "arrow-forward-circle" },
+  NEW: { label: "ระบุอะไหล่", icon: "arrow-forward-circle" },
   // แอดมินนัดร้านก่อนช่างไปตรวจ — ฟอร์มเดียวกับคอนเฟิร์มลูกค้าของงานซ่อม
-  INSPECT_CONFIRM: { label: "นัดลูกค้า (ตรวจหน้างาน)", icon: "call-outline" },
+  INSPECT_CONFIRM: { label: "นัดร้าน (ตรวจหน้างาน)", icon: "call-outline" },
   // ร้านตกลงวันแล้ว หัวหน้าภาคปล่อยงานให้ทีม — คู่กับ "ยืนยันออกงาน" ของงานซ่อม
-  INSPECT_DISPATCH: { label: "ส่งช่างเข้าตรวจหน้างาน", icon: "checkmark-circle-outline" },
-  INSPECTING: { label: "บันทึกผลตรวจหน้างาน", icon: "search-outline" },
+  INSPECT_DISPATCH: { label: "ส่งช่างตรวจ", icon: "checkmark-circle-outline" },
+  INSPECTING: { label: "ตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
   // หลังรับเงิน (หรือในประกัน) — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน
-  PARTS_REQUESTED: { label: "เบิกอะไหล่ส่งหน้างาน", icon: "arrow-forward-circle" },
+  PARTS_REQUESTED: { label: "เบิกอะไหล่ (คลัง 94)", icon: "arrow-forward-circle" },
   // ของอยู่คลังอื่น (ไม่ใช่ลาดพร้าว 94) — หัวหน้าภาคเบิกเอง แอดมินกดแทนไม่ได้
-  PARTS_PICKUP: { label: "เบิกอะไหล่จากคลังอื่น", icon: "cube-outline" },
+  PARTS_PICKUP: { label: "เบิกอะไหล่ (คลังอื่น)", icon: "cube-outline" },
   // ก่อนเสนอราคา — เช็คว่ามีอะไหล่ไหม มีครบไปเสนอราคา หมดรอของเข้า
-  PARTS_SOURCING: { label: "เช็คอะไหล่ (มี / หมด)", icon: "cube-outline" },
-  AWAITING_QUOTE: { label: "เสนอราคาลูกค้า", icon: "document-text-outline" },
-  AWAITING_PAYMENT: { label: "ลูกค้าจ่ายเงินแล้ว", icon: "cash-outline" },
+  PARTS_SOURCING: { label: "เช็คอะไหล่ (มี/หมด)", icon: "cube-outline" },
+  AWAITING_QUOTE: { label: "ส่งใบเสนอราคา", icon: "document-text-outline" },
+  AWAITING_PAYMENT: { label: "แนบบิลรับเงิน", icon: "cash-outline" },
   // หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
-  PARTS_CHECKED: { label: "จ่ายงานให้ช่าง", icon: "arrow-forward-circle" },
+  PARTS_CHECKED: { label: "จ่ายงานให้ทีม", icon: "arrow-forward-circle" },
   AWAITING_CONFIRM: { label: "คอนเฟิร์มลูกค้า", icon: "call-outline" },
-  ASSIGNED: { label: "ยืนยันออกงาน", icon: "checkmark-circle-outline" },
+  ASSIGNED: { label: "รับทราบ ปล่อยงาน", icon: "checkmark-circle-outline" },
 };
 
 /** "9 ต.ค. 69 · 10:00 น." — วันนัดเก็บเป็นเที่ยงคืน UTC จึงตัดเอาแค่วันตรง ๆ */
@@ -344,11 +373,11 @@ function recoveredFrom(o: WorkOrder): string | null {
  * แนบรูป/แก้ข้อความหลังจากนั้นไม่นับ เพราะไม่ได้ทำให้ใบงานเดินไปไหน
  */
 function sentBackLog(o: WorkOrder): LogEntry | null {
-  if (o.status !== "NEW") return null;
   const last = [...o.logs]
     .filter((l) => !["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED"].includes(l.action))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  return last?.action === "PARTS_ROLLBACK" ? last : null;
+  // ช่างแจ้งปัญหาแล้วใบไปต่อตามเหตุผล (ระบุอะไหล่ / คอนเฟิร์มลูกค้าใหม่ / จ่ายงานใหม่) — กล่องขึ้นที่ขั้นนั้น
+  return last?.action === "PARTS_ROLLBACK" && last.status === o.status ? last : null;
 }
 
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
@@ -400,6 +429,10 @@ interface Option {
 interface Stage {
   value: string;
   label: string;
+  /** ชื่อบนแถบขั้นตอน (ไม่มีคนทำ — คนทำอยู่ใต้ชื่อ) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา */
+  action?: string;
+  /** ชื่อเมื่อผ่านขั้นนี้แล้ว — "…แล้ว" */
+  doneLabel?: string;
   actor: string | null;
   actorLabel: string | null;
 }
@@ -449,6 +482,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [backfilling, setBackfilling] = useState(false);
   const [supClosing, setSupClosing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  // "จบใบงาน…" — เลือกก่อนว่าจบเพราะอะไร แล้วค่อยเปิดฟอร์มของทางนั้น
+  const [ending, setEnding] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
@@ -551,7 +586,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       if (!next) return;
       const label = (o: WorkOrder) => {
         const out = PARTS_OUT_STAGES.includes(o.status) ? o.waitingParts.filter((p) => p.inStock === false).length : 0;
-        return out ? `${o.statusLabel} · อะไหล่หมด ${out} รายการ` : o.workStatusLabel && o.workStatusLabel !== o.statusLabel ? `${o.statusLabel} · ${o.workStatusLabel}` : o.statusLabel;
+        // สถานะเดียว (เจ้าของงานเลือก ต.ค. 69) — สถานะชั้นที่สองขึ้นเฉพาะตอนติดจริง (อะไหล่หมด / รอลูกค้า)
+        return out
+          ? `${o.statusLabel} · อะไหล่หมด ${out} รายการ`
+          : o.workStatus === MANUAL_STATUS && o.workStatusLabel
+            ? `${o.statusLabel} · ${o.workStatusLabel}`
+            : o.statusLabel;
       };
       const from = before ? label(before) : null;
       const to = label(next);
@@ -920,6 +960,45 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         }}
       />
     ) : null}
+    <AppModal visible={ending} onClose={() => setEnding(false)} title={`จบใบงาน · ${order.code}`} subtitle="จบเพราะอะไร">
+      <View style={{ gap: spacing.sm }}>
+        {user?.role === "ADMIN" ? (
+          <TouchableOpacity
+            style={styles.endOpt}
+            onPress={() => {
+              setEnding(false);
+              setBackfilling(true);
+            }}
+            accessibilityLabel="จบ: ซ่อมเสร็จแล้ว"
+          >
+            <Text style={styles.endOptTitle}>ซ่อมเสร็จแล้ว แต่ไม่ได้กดในระบบ</Text>
+            <Text style={styles.endOptHint}>กรอกวันที่ ใครไป อะไหล่ที่ใช้ — ปิดงานย้อนหลัง (แอดมิน)</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={styles.endOpt}
+          onPress={() => {
+            setEnding(false);
+            setSupClosing(true);
+          }}
+          accessibilityLabel="จบ: ไม่ต้องเข้าหน้างาน"
+        >
+          <Text style={styles.endOptTitle}>ไม่ต้องเข้าหน้างาน</Text>
+          <Text style={styles.endOptHint}>เครื่องกลับมาเอง · แก้ทางโทรศัพท์ · ร้านจัดการเอง · ซ่อมรวมกับใบอื่น</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.endOpt, styles.endOptDanger]}
+          onPress={() => {
+            setEnding(false);
+            setCancelling(true);
+          }}
+          accessibilityLabel="จบ: ไม่ทำแล้ว"
+        >
+          <Text style={[styles.endOptTitle, { color: colors.danger }]}>ไม่ทำแล้ว — ยกเลิกใบงาน</Text>
+          <Text style={styles.endOptHint}>เปิดซ้ำ · ลูกค้ายกเลิก · เปิดผิดสาขา/เครื่อง (ต้องมีเหตุผล)</Text>
+        </TouchableOpacity>
+      </View>
+    </AppModal>
     {supClosing ? (
       <SupervisorCloseModal
         order={order}
@@ -935,17 +1014,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       contentContainerStyle={styles.content}
       onLayout={(e) => setBodyWidth(e.nativeEvent.layout.width)}
     >
-      {/* แอดมิน (รวม Super Admin) ปิดงานที่จบจริงไปแล้วแต่ค้างในระบบได้ในครั้งเดียว */}
-      {user?.role === "ADMIN" && !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
-        <BackfillButton onPress={() => setBackfilling(true)} />
-      ) : null}
-      {/* หัวหน้าภาค (เปิดหน้านี้ได้แปลว่าใบอยู่ในขอบเขตแล้ว) และแอดมิน ปิดใบงานโดยไม่ส่งช่าง ต้องใส่เหตุผล
-          Admin Spare Part (user เป็น null) กับดูในฐานะ ดูได้อย่างเดียว ไม่ขึ้นปุ่ม */}
-      {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
-      !user?.viewAs &&
-      !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
-        <SupervisorCloseButton onPress={() => setSupClosing(true)} />
-      ) : null}
       {/* ยกเลิกแล้ว — บอกว่าทำไม ใคร เมื่อไร (เหตุผลอยู่ในประวัติ CANCELLED ล่าสุด) */}
       {order.status === "CANCELLED" && cancelLog ? (
         <View style={[styles.sentBack, styles.cancelledBox]} accessibilityLabel="กล่องยกเลิกใบงาน">
@@ -1173,7 +1241,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                             state === "future" && styles.stageLabelFuture,
                           ]}
                         >
-                          {stage.label}
+                          {state === "done" ? stage.doneLabel ?? stage.label : stage.action ?? stage.label}
                         </Text>
                       ) : null}
                       {/*
@@ -1191,10 +1259,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                       {state === "now" && order.workStatus === MANUAL_STATUS ? (
                         <View style={[styles.stepSub, styles.stepSubCust]} accessibilityLabel="สถานะย่อย">
                           <Text style={[styles.stepSubText, styles.stepSubCustText]}>{order.workStatusLabel}</Text>
-                        </View>
-                      ) : state === "now" && !partsOut.length && order.status === "PARTS_REQUESTED" && order.workStatus === "CHECKING_PARTS" ? (
-                        <View style={styles.stepSub} accessibilityLabel="สถานะย่อย">
-                          <Text style={styles.stepSubText}>{order.workStatusLabel}</Text>
                         </View>
                       ) : null}
                       {state === "now" && partsOut.length ? (
@@ -1222,7 +1286,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                   {opened.rows.map((r) => (
                     // ขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
                     <Text key={r.stage.value} style={[styles.stageLabelFuture, styles.stageLabelSkipped, styles.stepSkipItem]}>
-                      {r.stage.label}
+                      {r.stage.action ?? r.stage.label}
+                      {SKIP_WHY[r.stage.value] ? ` — ${SKIP_WHY[r.stage.value]}` : ""}
                     </Text>
                   ))}
                 </View>
@@ -1286,7 +1351,14 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <View style={styles.sentBack} accessibilityLabel="กล่องช่างส่งกลับ">
             <Ionicons name="arrow-undo" size={18} color={colors.warningInk} />
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.sentBackTitle}>ช่างส่งกลับ — ปิดงานไม่ได้</Text>
+              <Text style={styles.sentBackTitle}>
+                ช่างแจ้งปัญหาหน้างาน
+                {order.status === "AWAITING_CONFIRM"
+                  ? " — นัดลูกค้าใหม่ (ทีมเดิม อะไหล่เดิม)"
+                  : order.status === "PARTS_CHECKED"
+                    ? " — จ่ายงานใหม่ (เปลี่ยนทีม/วันได้)"
+                    : ""}
+              </Text>
               <Text style={styles.sentBackText}>{sentBack.note ?? "—"}</Text>
               <Text style={styles.sentBackMeta}>
                 {sentBack.byName ?? "—"} · {formatDateTime(sentBack.createdAt)}
@@ -1404,7 +1476,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 >
                   <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
                   <Text style={styles.rollbackText}>
-                    ปิดงานไม่ได้ — ส่งกลับหัวหน้าภาค (บอกเหตุ แนบรูป ขอเบิกอะไหล่เพิ่มได้)
+                    แจ้งปัญหาหน้างาน — ปิดงานไม่ได้ (บอกเหตุ แนบรูป ขอเบิกอะไหล่เพิ่มได้)
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -1553,7 +1625,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
 
         {order.symptom ||
-        order.workStatusLabel ||
         order.inspectionNote ||
         order.waitingParts.length > 0 ? (
           <>
@@ -1565,7 +1636,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               การบอกว่าไม่รู้ ทั้งที่รู้ — และดูแปลกที่สุดบนใบที่ปิดไปแล้ว
               ซึ่งขึ้นว่ายังไม่ระบุทั้งที่จบไปเรียบร้อย
             */}
-            <Row label="สถานะ" value={order.workStatusLabel ?? order.statusLabel} />
+            {/* สถานะเดียวกับหัวใบงาน — สถานะชั้นที่สอง (ของกระดานเครื่องเสีย) ขัดกับขั้นได้ เช่น "รอช่างเข้าแก้ไข" ตอนรอจ่ายงาน */}
+            <Row
+              label="สถานะ"
+              value={order.workStatus === MANUAL_STATUS && order.workStatusLabel ? `${order.statusLabel} · ${order.workStatusLabel}` : order.statusLabel}
+            />
             {order.inspectionNote ? (
               <Row
                 label="ผลตรวจหน้างาน"
@@ -1827,10 +1902,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ยกเลิก (ใบซ้ำ/เปิดผิด/ลูกค้าไม่เอา) — อยู่ท้ายหน้าคู่กับลบถาวร (เจ้าของงานขอ ต.ค. 69)
         เป็นทางออกของใบ ไม่ใช่งานประจำ จึงไม่ควรอยู่หัวใบงานให้กดพลาด · เดิมแอปมีแต่ลบถาวร คนเลยลบทิ้งทั้งประวัติ
       */}
+      {/*
+        จบใบงาน — ปุ่มเดียวแล้วถามว่าจบเพราะอะไร (เจ้าของงานเลือก ต.ค. 69)
+        เดิมมีปิดงานย้อนหลัง · ปิดใบงาน (ไม่ต้องเข้าหน้างาน) · ยกเลิก แยกกันสามปุ่มชื่อคล้ายกัน คนเลือกผิด
+        อยู่ท้ายหน้าตามที่ขอให้ยกเลิกอยู่ล่างสุด · หัวหน้าภาค/แอดมินเท่านั้น (Admin Spare Part และดูในฐานะ ไม่ขึ้น)
+      */}
       {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
       !user?.viewAs &&
       !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
-        <CancelOrderButton onPress={() => setCancelling(true)} />
+        <TouchableOpacity style={styles.endTrigger} onPress={() => setEnding(true)} accessibilityLabel="จบใบงาน">
+          <Ionicons name="flag-outline" size={18} color={colors.primaryDark} />
+          <Text style={styles.endTriggerText}>จบใบงาน…</Text>
+          <Text style={styles.endTriggerHint}>ซ่อมเสร็จแล้ว / ไม่ต้องเข้าหน้างาน / ไม่ทำแล้ว</Text>
+        </TouchableOpacity>
       ) : null}
 
       {/*
@@ -2304,7 +2388,7 @@ function FollowUpModal({
       }
     >
       <Text style={styles.linkedText}>
-        ใบใหม่ลิงก์กับ {order.code} สถานะ “รออะไหล่เข้า” — หัวหน้าภาคเป็นคนดูแล
+        ใบใหม่ลิงก์กับ {order.code} สถานะ “แอดมิน · เบิกอะไหล่” — แอดมินเช็คคลังและเบิกเมื่อของเข้า
         ของมาแล้วส่งต่อให้แอดมินเบิก แล้วเดินขั้นตอนเหมือนใบปกติ
       </Text>
       <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ยังขาด" />
@@ -2618,7 +2702,10 @@ function StageModal({
     );
     setFinding("");
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
-    setConfirmChoice(order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "MOVE" : null);
+    // ช่างแจ้งร้านปิด — วันเดิมใช้ไม่ได้แล้ว เปิดที่ "ลูกค้าขอเลื่อน" เลย
+    setConfirmChoice(
+      (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && sentBackLog(order)) ? "MOVE" : null
+    );
     setSplitOut(true);
     // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้
     const oldVisit = pf?.scheduledAt && pf.scheduledAt >= todayBkk() ? pf.scheduledAt : null;
@@ -2632,11 +2719,14 @@ function StageModal({
     const oldCheck = new Map((pf?.parts ?? []).map((p) => [p.sparePartId, p]));
     const checkPrefilled = order.waitingParts.some((p) => p.inStock === null && oldCheck.get(p.sparePartId)?.inStock != null);
     if (checkPrefilled && ["PARTS_SOURCING", "PARTS_REQUESTED"].includes(order.status)) used.push("ผลเช็คคลัง");
+    // ผลเช็คก่อนเสนอราคาที่เก่าเกิน 3 วัน — ของอาจถูกงานอื่นใช้ไประหว่างรอเงิน ต้องเช็คใหม่ (ไม่เติมให้)
+    const stale = sourcingCheck(order)?.stale === true;
     setChecks(
       Object.fromEntries(
         order.waitingParts.map((p) => {
           const old = p.inStock === null ? oldCheck.get(p.sparePartId) : undefined;
-          return [p.sparePartId, { inStock: old?.inStock ?? p.inStock, warehouse: p.warehouse ?? old?.warehouse ?? null }];
+          const now = stale && !p.requisitionNo ? null : p.inStock;
+          return [p.sparePartId, { inStock: old?.inStock ?? now, warehouse: p.warehouse ?? old?.warehouse ?? null }];
         })
       )
     );
@@ -2746,6 +2836,7 @@ function StageModal({
             ? parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }))
             : [],
           offParts: needsParts ? offPartsPayload(offParts) : [],
+          assign: noPartsAssign ? { team, scheduledAt: visit, scheduledTime: visitTime || null } : undefined,
           note: note.trim() || undefined,
         });
       } else if (order.status === "PARTS_REQUESTED") {
@@ -2885,6 +2976,8 @@ function StageModal({
   // ตอบว่าหมดสักตัว = มีของให้รอ ถามวันคาดว่าเข้า (แยกใบแล้ววันนี้ไปติดใบรออะไหล่)
   const checkOut = order.status === "PARTS_REQUESTED" && thisRound.some((p) => checks[p.sparePartId]?.inStock === false);
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
+  // ไม่ใช้อะไหล่ และไม่มีค่าบริการให้เสนอราคา = ขั้นถัดไปคือจ่ายงาน → จ่ายในฟอร์มนี้เลย
+  const noPartsAssign = order.status === "NEW" && !inspectFirst && needsParts === false && offPartsPayload(services).length === 0;
   const timeOk = visitTime === "" || isTime(visitTime);
 
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
@@ -2898,6 +2991,7 @@ function StageModal({
       (inspectFirst
         ? !team || !validDate || !timeOk
         : needsParts === null ||
+          (noPartsAssign && (!team || !validDate || !timeOk)) ||
           (needsParts && parts.length === 0 && offPartsPayload(offParts).length === 0) ||
           (needsParts && offPartsIncomplete(offParts)) ||
           offPartsIncomplete(services))) ||
@@ -2942,6 +3036,8 @@ function StageModal({
                   ? sourcingOut.length
                     ? "อะไหล่หมด — รอของเข้า"
                     : "มีอะไหล่ — ไปเสนอราคา"
+                  : order.status === "ASSIGNED"
+                    ? "รับทราบ ปล่อยงานให้ช่าง"
                   : order.status === "PARTS_PICKUP"
                     ? pickupFail
                       ? "ส่งกลับแอดมิน"
@@ -3035,11 +3131,16 @@ function StageModal({
                     <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
                     <OffPartEditor rows={offParts} onChange={setOffParts} />
                   </>
-                ) : needsParts === false && services.length === 0 ? (
-                  <Text style={styles.linkedText}>
-                    ข้ามขั้นเช็คคลัง ไปจัดคิวช่างเลย — เช่น ให้เข้าไปประเมินอาการก่อน
-                    ถ้าไปถึงแล้วต้องเปลี่ยนอะไหล่ ช่างส่งกลับมาให้ประเมินใหม่ได้
-                  </Text>
+                ) : noPartsAssign ? (
+                  <>
+                    {/* จ่ายงานในฟอร์มนี้เลย (เจ้าของงานเลือก ต.ค. 69) — เดิมกดไม่ใช้อะไหล่แล้วต้องเปิดฟอร์มจ่ายงานอีกรอบ */}
+                    <Text style={styles.linkedText}>
+                      ไม่ใช้อะไหล่ — จ่ายงานในฟอร์มนี้เลย แล้วแอดมินโทรคอนเฟิร์มร้าน · ไปถึงแล้วต้องเปลี่ยนอะไหล่
+                      ช่างแจ้งกลับมาให้ระบุอะไหล่ได้
+                    </Text>
+                    <DateField value={visit} onChange={setVisit} label="วันเข้างาน" emptyHint="ต้องระบุวันก่อนจึงจะจ่ายงานได้" />
+                    <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
+                  </>
                 ) : null}
                 {!inspectFirst && needsParts !== null ? (
                   <OffPartEditor
@@ -3112,6 +3213,13 @@ function StageModal({
                       : "ตอบให้ครบทุกตัวก่อน"}
                 </Text>
               </View>
+            ) : null}
+            {order.status === "PARTS_REQUESTED" && sourcingCheck(order) ? (
+              <Text style={sourcingCheck(order)!.stale ? styles.warn : styles.linkedText} accessibilityLabel="ผลเช็คก่อนเสนอราคา">
+                {sourcingCheck(order)!.stale
+                  ? `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days} วันก่อน (ก่อนเสนอราคา) — นานเกิน ${SOURCING_FRESH_DAYS} วัน เช็คใหม่ทุกตัว`
+                  : `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days === 0 ? "วันนี้" : `${sourcingCheck(order)!.days} วันก่อน`} (ก่อนเสนอราคา) — มีครบ ไม่ต้องเช็คซ้ำ เลือกคลังและใส่เลขใบเบิก`}
+              </Text>
             ) : null}
             {order.status === "PARTS_REQUESTED" ? (
               <View style={styles.checkList}>
@@ -3246,7 +3354,7 @@ function StageModal({
                       accessibilityLabel="หมายเหตุถึงหัวหน้าภาค"
                     />
                     <Text style={pickupNote.trim() ? styles.linkedText : styles.warn}>
-                      {toPickup.length} รายการอยู่คลังอื่น — ใบงานไปขั้น “รอหัวหน้าภาคเบิกอะไหล่” หัวหน้าภาคเบิกเสร็จแล้วไปจ่ายงานต่อ
+                      {toPickup.length} รายการอยู่คลังอื่น — ใบงานไปขั้น “หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)” หัวหน้าภาคเบิกเสร็จแล้วไปจ่ายงานต่อ
                     </Text>
                   </View>
                 ) : null}
@@ -3263,7 +3371,7 @@ function StageModal({
                       color={splitOut ? colors.primary : colors.textFaint}
                     />
                     <Text style={styles.skipText}>
-                      แยกตัวที่หมดไปใบงานรออะไหล่ (หัวหน้าภาคดูแล) — ใบนี้ไปซ่อมด้วยของที่มีได้เลย
+                      แยกตัวที่หมดไปใบงานรออะไหล่ (แอดมินเบิกเมื่อของเข้า) — ใบนี้ไปซ่อมด้วยของที่มีได้เลย
                     </Text>
                   </TouchableOpacity>
                 ) : null}
@@ -3352,7 +3460,7 @@ function StageModal({
                 <Text style={pickupBlocked ? styles.warn : styles.linkedText}>
                   {pickupFail
                     ? note.trim()
-                      ? "ใบงานกลับไปขั้นรอแอดมินเบิกอะไหล่"
+                      ? "ใบงานกลับไปขั้นแอดมินเบิกอะไหล่"
                       : "ใส่เหตุผลที่เบิกไม่ได้ในช่องบันทึกข้างล่าง"
                     : pickupBlocked
                       ? "ใส่คลังและเลขใบเบิกให้ครบทุกรายการ"
@@ -3474,7 +3582,7 @@ function StageModal({
             {order.status === "ASSIGNED" ||
             order.status === "INSPECT_DISPATCH" ||
             order.status === "PARTS_CHECKED" ||
-            (order.status === "NEW" && inspectFirst) ? (
+            (order.status === "NEW" && (inspectFirst || noPartsAssign)) ? (
               <>
                 {order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH" ? <DispatchNote order={order} /> : null}
                 {order.status === "PARTS_CHECKED" ? (
@@ -3484,7 +3592,7 @@ function StageModal({
                   </Text>
                 ) : null}
                 <Text style={styles.modalLabel}>
-                  {order.status === "NEW" || order.status === "INSPECT_DISPATCH" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
+                  {(order.status === "NEW" && inspectFirst) || order.status === "INSPECT_DISPATCH" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
                   {prevUsed.includes("ทีม") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
                 </Text>
                 {/*
@@ -4054,7 +4162,19 @@ function DispatchNote({ order }: { order: WorkOrder }) {
     .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const moved = last?.action === "RESCHEDULED";
+  // ออกงานวันนี้ — ตัวใหญ่บนสุด ย้ำให้หัวหน้าภาครู้ว่ากดแล้วทีมต้องออกวันนี้ (เจ้าของงานขอ ต.ค. 69)
+  const today = order.status === "ASSIGNED" && order.scheduledAt?.slice(0, 10) === todayBkk();
   return (
+    <>
+    {today ? (
+      <View style={styles.todayHero} accessibilityLabel="ออกงานวันนี้">
+        <Text style={styles.todayHeroBig}>ออกงานวันนี้{order.scheduledTime ? ` · ${order.scheduledTime} น.` : " · ทั้งวัน"}</Text>
+        <Text style={styles.todayHeroText}>
+          {order.assignedTeam ? `ทีม${order.assignedTeam} · ` : ""}
+          {order.branchCode} {order.branchName}
+        </Text>
+      </View>
+    ) : null}
     <View style={[styles.dispatchNote, moved && styles.dispatchNoteMoved]}>
       <Ionicons
         name={moved ? "swap-horizontal" : "checkmark-circle"}
@@ -4073,6 +4193,7 @@ function DispatchNote({ order }: { order: WorkOrder }) {
         ) : null}
       </View>
     </View>
+    </>
   );
 }
 
@@ -5054,7 +5175,7 @@ function CloseModal({
         <>
           <PartPicker parts={missing} onChange={setMissing} label="อะไหล่ที่ยังขาด" />
           <Text style={styles.linkedText}>
-            ใบใหม่ไปอยู่ที่หัวหน้าภาค สถานะ “รออะไหล่เข้า” และลิงก์กับใบนี้
+            ใบใหม่ไปอยู่ที่แอดมิน สถานะ “แอดมิน · เบิกอะไหล่” และลิงก์กับใบนี้
           </Text>
         </>
       ) : null}
@@ -5101,6 +5222,16 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 const styles = StyleSheet.create({
+  endTrigger: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingVertical: spacing.md, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  endTriggerText: { fontSize: 15, fontWeight: "800", color: colors.primaryDark },
+  endTriggerHint: { fontSize: 12.5, color: colors.textMuted, flexShrink: 1 },
+  endOpt: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, gap: 2, backgroundColor: colors.card },
+  endOptDanger: { borderColor: colors.dangerSoft },
+  endOptTitle: { fontSize: 14.5, fontWeight: "700", color: colors.text },
+  endOptHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  todayHero: { borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary, backgroundColor: colors.primarySoft, padding: spacing.md, gap: 2 },
+  todayHeroBig: { fontSize: 20, lineHeight: 30, fontWeight: "800", color: colors.primaryDark },
+  todayHeroText: { fontSize: 13.5, lineHeight: 21, color: colors.text },
   pickupBox: { gap: 6, padding: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
   pickupTag: { fontSize: 12, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
   pickupNoteText: { fontSize: 14, lineHeight: 21, color: colors.text },
