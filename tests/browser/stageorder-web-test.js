@@ -23,9 +23,9 @@ const { setup } = require("./fixture");
   const readStages = () =>
     page.evaluate(() => {
       const labels = [
-        "หัวหน้าภาค · ระบุอะไหล่", "แอดมิน · ส่งใบเสนอราคา", "รอลูกค้าจ่ายเงิน",
-        "แอดมิน · เบิกอะไหล่ (คลัง 94)", "หัวหน้าภาค · จ่ายงานให้ทีม", "รอหัวหน้าภาคนัดลูกค้า",
-        "ช่าง · เข้างาน/ปิดงาน", "ปิดงานแล้ว",
+        // ชื่อบนแถบ (ต.ค. 69): ขั้นที่ยังไม่ผ่าน = การกระทำ · ผ่านแล้ว = "…แล้ว"
+        "ระบุอะไหล่แล้ว", "ระบุอะไหล่", "เช็คอะไหล่ (มี/หมด)", "ส่งใบเสนอราคา", "แนบบิลรับเงิน",
+        "เบิกอะไหล่ (คลัง 94)", "จ่ายงานให้ทีม", "คอนเฟิร์มลูกค้า", "รับทราบ ปล่อยงาน", "เข้างาน/ปิดงาน", "ปิดงานแล้ว",
       ];
       const out = [];
       for (const el of document.querySelectorAll("*")) {
@@ -82,8 +82,8 @@ const { setup } = require("./fixture");
       return b ? { over: b.scrollWidth - b.clientWidth } : null;
     });
     fit && fit.over <= 1 ? pass("จอแคบ แถบขั้นตอนพอดีจอ ไม่ต้องเลื่อนซ้ายขวา") : fail(`แถบล้น ${fit && fit.over}px`);
-    (await page.getByText("รอแอดมินเช็คอะไหล่", { exact: true }).locator("visible=true").count()) > 0 &&
-    (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("หัวหน้าภาค · จ่ายงานให้ทีม", { exact: true }).count()) === 0
+    (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("เช็คอะไหล่ (มี/หมด)", { exact: true }).locator("visible=true").count()) > 0 &&
+    (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("จ่ายงานให้ทีม", { exact: true }).count()) === 0
       ? pass("จอแคบ เห็นชื่อขั้นปัจจุบัน ชื่อขั้นอื่นซ่อน")
       : fail("จอแคบ ชื่อขั้นไม่ตรงที่ควร");
     // จอคอม — อ่านลำดับชื่อขั้น
@@ -101,18 +101,19 @@ const { setup } = require("./fixture");
         // รายการขั้นที่ข้าม (กดปุ่ม "ข้าม N" แล้วกางใต้แถบ) อ่านต่อท้าย
         const card = { querySelectorAll: () => [...bar.querySelectorAll("*"), ...(document.querySelector('[aria-label="ขั้นที่ข้าม"]')?.querySelectorAll("*") ?? [])] };
         const labels = [
-          "หัวหน้าภาค · ระบุอะไหล่", "แอดมิน · ส่งใบเสนอราคา", "รอลูกค้าจ่ายเงิน",
-          "แอดมิน · เบิกอะไหล่ (คลัง 94)", "หัวหน้าภาค · จ่ายงานให้ทีม", "รอหัวหน้าภาคนัดลูกค้า",
-          "ช่าง · เข้างาน/ปิดงาน", "ปิดงานแล้ว",
+          "ระบุอะไหล่แล้ว", "ระบุอะไหล่", "เช็คอะไหล่ (มี/หมด)", "ส่งใบเสนอราคา", "แนบบิลรับเงิน",
+          "เบิกอะไหล่ (คลัง 94)", "จ่ายงานให้ทีม", "คอนเฟิร์มลูกค้า", "รับทราบ ปล่อยงาน", "เข้างาน/ปิดงาน", "ปิดงานแล้ว",
         ];
+        // รายการขั้นที่ข้ามต่อท้ายเหตุผล "ชื่อขั้น — ไม่ต้องเสนอราคา" — เทียบเฉพาะชื่อ
+        const name = (n) => (n.textContent || "").trim().split(" — ")[0];
         return [...card.querySelectorAll("*")]
-          .filter((n) => !n.children.length && labels.includes((n.textContent || "").trim()))
+          .filter((n) => !n.children.length && labels.includes(name(n)))
           .map((n) => {
             const row = n.parentElement;
             // ขั้นที่ถูกข้ามถูกขีดฆ่า ส่วนขั้นที่ยังไม่ถึงแค่สีจาง
             const st = getComputedStyle(n);
             return {
-              label: (n.textContent || "").trim(),
+              label: name(n),
               struck: (st.textDecorationLine || "").includes("line-through"),
             };
           });
@@ -121,9 +122,9 @@ const { setup } = require("./fixture");
     const bar = await stageCard();
     console.log("  แถบขั้นตอน:", bar.map((b) => b.label).join(" → "));
     const names = bar.map((b) => b.label);
-    const qi = names.indexOf("แอดมิน · ส่งใบเสนอราคา");
-    const pi = names.indexOf("รอลูกค้าจ่ายเงิน");
-    const ci = names.indexOf("แอดมิน · เบิกอะไหล่ (คลัง 94)");
+    const qi = names.indexOf("ส่งใบเสนอราคา");
+    const pi = names.indexOf("แนบบิลรับเงิน");
+    const ci = names.indexOf("เบิกอะไหล่ (คลัง 94)");
     qi >= 0 && pi === qi + 1 && ci === pi + 1
       ? pass("เสนอราคา → จ่ายเงิน → เบิกอะไหล่ เรียงถูกแล้ว")
       : fail(`ลำดับไม่ถูก: ${names.join(" → ")}`);
@@ -144,7 +145,7 @@ const { setup } = require("./fixture");
       console.log("  แถบขั้นตอน:", bar2.map((b) => (b.struck ? `[ข้าม]${b.label}` : b.label)).join(" → "));
       const skipped = bar2.filter((b) => b.struck).map((b) => b.label);
       console.log("  " + JSON.stringify(skipped).slice(0, 300));
-      skipped.includes("แอดมิน · ส่งใบเสนอราคา") && skipped.includes("รอลูกค้าจ่ายเงิน")
+      skipped.includes("ส่งใบเสนอราคา") && skipped.includes("แนบบิลรับเงิน")
         ? pass("ใบที่ไม่ต้องเสนอราคา สองขั้นนั้นขึ้นว่าข้าม ไม่ได้ขึ้นว่าทำแล้ว")
         : fail(`ไม่ได้ทำเครื่องหมายว่าข้าม: ${JSON.stringify(skipped)}`);
     }

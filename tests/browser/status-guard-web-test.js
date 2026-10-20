@@ -41,8 +41,9 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(3000);
 
     const sub = () => page.locator('[aria-label="สถานะย่อย"]').locator("visible=true");
-    (await sub().count()) === 1 && (await sub().first().innerText()).trim() === "รอแอดมินเช็คอะไหล่"
-      ? pass("ป้ายสถานะย่อยใต้ขั้นปัจจุบัน: รอแอดมินเช็คอะไหล่")
+    // สถานะเดียว (ต.ค. 69) — สถานะอัตโนมัติไม่ขึ้นเป็นป้ายย่อยแล้ว ขึ้นเฉพาะ "รอลูกค้า…" ที่คนตั้งเอง (ข้างล่าง)
+    (await sub().count()) === 0
+      ? pass("ไม่มีป้ายสถานะย่อยอัตโนมัติ (ใบงานแสดงสถานะเดียว)")
       : fail(`ป้ายสถานะย่อย: ${await sub().count()}`);
 
     await vis("แก้ไข").last().click();
