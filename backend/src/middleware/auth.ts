@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { peekToken, verifyToken, TokenPayload } from "../utils/jwt";
 import { currentRole, issuedBeforePasswordChange } from "../utils/userGate";
+import { canViewAs } from "../utils/viewAs";
 
 export interface AuthRequest extends Request {
   auth?: TokenPayload;
@@ -24,8 +25,9 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
   const viewAs = req.auth.viewAs;
   if (viewAs) {
-    // คนที่ขอดูต้องยังเป็น Super Admin อยู่ — ถูกถอดสิทธิ์ระหว่างดูก็ต้องหยุดทันที ไม่ใช่รอครบชั่วโมง
-    if ((await currentRole(viewAs.by)) !== "SUPER_ADMIN") {
+    // คนที่ขอดูต้องยังมีสิทธิ์ดูคนนี้อยู่ — ถูกถอดสิทธิ์ (หรือคนที่ถูกดูถูกเลื่อนเป็นแอดมิน) ระหว่างดู
+    // ก็ต้องหยุดทันที ไม่ใช่รอครบชั่วโมง (แอดมินดูได้เฉพาะหัวหน้าภาค/ช่าง — ดู canViewAs)
+    if (!canViewAs(await currentRole(viewAs.by), await currentRole(req.auth.userId))) {
       return res.status(401).json({ error: "สิทธิ์ดูในฐานะผู้ใช้อื่นถูกยกเลิกแล้ว", viewAsEnded: true });
     }
     /**

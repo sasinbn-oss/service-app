@@ -1,5 +1,6 @@
 #!/bin/bash
-# ทดสอบ: Super Admin ดูในฐานะผู้ใช้อื่น — เห็นเหมือนคนนั้นจริง · ดูได้อย่างเดียว · มีบันทึก ·
+# ทดสอบ: Super Admin ดูในฐานะผู้ใช้อื่น — เห็นเหมือนคนนั้นจริง · ดูได้อย่างเดียว
+#        แอดมินดูได้เฉพาะหัวหน้าภาค/ช่าง (ต.ค. 69) · มีบันทึก ·
 #        แอดมินทั่วไปใช้ไม่ได้ · ดู Super Admin/ตัวเองไม่ได้ · ซ้อนไม่ได้
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -13,7 +14,8 @@ GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
 SUF=$RANDOM
 cleanup() {
   DB "delete from \"ViewAsLog\" where \"byUserId\" in (select id from \"User\" where \"employeeCode\" like 'ZVA%$SUF');
-      delete from \"User\" where \"employeeCode\" like 'ZVA%$SUF'" >/dev/null
+      delete from \"User\" where \"employeeCode\" like 'ZVA%$SUF';
+      update \"User\" set role='EMPLOYEE' where \"employeeCode\"='T001'" >/dev/null
 }
 trap cleanup EXIT
 A=$(login A001); T=$(login T001)
@@ -26,7 +28,31 @@ SA2ID=$(DB "select id from \"User\" where \"employeeCode\"='ZVAX$SUF'")
 TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'")
 
 echo "═══ สิทธิ์"
-POST $A auth/view-as "{\"userId\":$TID}" | grep -q "เฉพาะ Super Admin" && pass "แอดมินทั่วไปใช้ดูในฐานะไม่ได้" || fail "แอดมินใช้ได้"
+# แอดมินดูในฐานะได้เฉพาะหัวหน้าภาค/ช่าง (เจ้าของงานเพิ่ม ต.ค. 69) — แอดมินด้วยกัน/Admin Spare Part/Super Admin ไม่ได้
+AV=$(POST $A auth/view-as "{\"userId\":$TID}" | J 'd.token||""')
+[ -n "$AV" ] && [ "$(GET $AV auth/me | J 'd.employeeCode')" = "T001" ] && pass "แอดมินดูในฐานะช่างได้" || fail "แอดมินดูช่างไม่ได้"
+R=$(POST $AV work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","symptom":"x"}]}')
+echo "$R" | grep -q "ดูได้อย่างเดียว" && pass "แอดมินที่ดูแทน แก้อะไรไม่ได้ (ดูได้อย่างเดียว)" || fail "แอดมินดูแทนแล้วแก้ได้: $R"
+POST $AV auth/view-as/stop '{}' >/dev/null
+SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
+[ -n "$(POST $A auth/view-as "{\"userId\":$SID}" | J 'd.token||""')" ] && pass "แอดมินดูในฐานะหัวหน้าภาคได้" || fail "แอดมินดูหัวหน้าภาคไม่ได้"
+DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values
+  ('ZVAA$SUF','แอดมินอีกคน','ADMIN','$HASH',false),('ZVAP$SUF','แอดมินอะไหล่','PARTS_ADMIN','$HASH',false)" >/dev/null
+AAID=$(DB "select id from \"User\" where \"employeeCode\"='ZVAA$SUF'"); APID=$(DB "select id from \"User\" where \"employeeCode\"='ZVAP$SUF'")
+POST $A auth/view-as "{\"userId\":$AAID}" | grep -q "เฉพาะหัวหน้าภาคและช่าง" && POST $A auth/view-as "{\"userId\":$APID}" | grep -q "เฉพาะหัวหน้าภาคและช่าง" \
+  && pass "แอดมินดูในฐานะแอดมิน/Admin Spare Part ไม่ได้" || fail "แอดมินดูแอดมินได้"
+POST $A auth/view-as "{\"userId\":$SAID}" | grep -q "Super Admin ไม่ได้" && pass "แอดมินดูในฐานะ Super Admin ไม่ได้" || fail "แอดมินดู Super Admin ได้"
+PA=$(login ZVAP$SUF)
+# Admin Spare Part ถูกกันตั้งแต่ชั้นดูได้อย่างเดียว (middleware) — ข้อความต่างกันได้ แต่ต้องไม่ได้โทเคน
+[ -z "$(POST $PA auth/view-as "{\"userId\":$TID}" | J 'd.token||""')" ] && pass "Admin Spare Part ใช้ดูในฐานะไม่ได้" || fail "Admin Spare Part ดูแทนได้"
+T2=$(login T001)
+AV2=$(POST $A auth/view-as "{\"userId\":$TID}" | J 'd.token')
+TEAM_T=$(DB "select team from \"User\" where id=$TID")
+curl -s -X PATCH localhost:4000/api/auth/users/$TID -H "$(H $SA)" -H 'Content-Type: application/json' -d '{"role":"ADMIN"}' >/dev/null
+R=$(GET $AV2 auth/me)
+curl -s -X PATCH localhost:4000/api/auth/users/$TID -H "$(H $SA)" -H 'Content-Type: application/json' -d '{"role":"EMPLOYEE"}' >/dev/null
+DB "update \"User\" set team='$TEAM_T' where id=$TID" >/dev/null
+echo "$R" | J 'd.viewAsEnded===true?"ok":"bad"' | grep -q ok && pass "คนที่ถูกดูถูกเลื่อนเป็นแอดมินระหว่างดู → แอดมินหยุดดูทันที" || fail "ยังดูต่อได้: $(echo "$R" | head -c 150)"
 POST $SA auth/view-as "{\"userId\":$SA2ID}" | grep -q "Super Admin ไม่ได้" && pass "ดูในฐานะ Super Admin ไม่ได้" || fail "ดู Super Admin ได้"
 POST $SA auth/view-as "{\"userId\":$SAID}" | grep -q "ตัวเองไม่ได้" && pass "ดูในฐานะตัวเองไม่ได้" || fail "ดูตัวเองได้"
 
