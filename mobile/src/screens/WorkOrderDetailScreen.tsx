@@ -922,11 +922,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
       !user?.viewAs &&
       !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
-        <View style={styles.headActions}>
-          <SupervisorCloseButton onPress={() => setSupClosing(true)} />
-          {/* ยกเลิก (ใบซ้ำ/เปิดผิด/ลูกค้าไม่เอา) — เดิมแอปมีแต่ลบถาวร คนเลยลบทิ้งทั้งประวัติ */}
-          <CancelOrderButton onPress={() => setCancelling(true)} />
-        </View>
+        <SupervisorCloseButton onPress={() => setSupClosing(true)} />
       ) : null}
       {/* ยกเลิกแล้ว — บอกว่าทำไม ใคร เมื่อไร (เหตุผลอยู่ในประวัติ CANCELLED ล่าสุด) */}
       {order.status === "CANCELLED" && cancelLog ? (
@@ -1803,6 +1799,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <Ionicons name="copy-outline" size={16} color={colors.primary} />
           <Text style={[styles.deleteText, { color: colors.primary }]}>คัดลอกเป็นใบทดสอบ</Text>
         </TouchableOpacity>
+      ) : null}
+
+      {/*
+        ยกเลิก (ใบซ้ำ/เปิดผิด/ลูกค้าไม่เอา) — อยู่ท้ายหน้าคู่กับลบถาวร (เจ้าของงานขอ ต.ค. 69)
+        เป็นทางออกของใบ ไม่ใช่งานประจำ จึงไม่ควรอยู่หัวใบงานให้กดพลาด · เดิมแอปมีแต่ลบถาวร คนเลยลบทิ้งทั้งประวัติ
+      */}
+      {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
+      !user?.viewAs &&
+      !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
+        <CancelOrderButton onPress={() => setCancelling(true)} />
       ) : null}
 
       {/*
@@ -5303,7 +5309,6 @@ const styles = StyleSheet.create({
   },
   rolledBack: { borderColor: colors.rollback, backgroundColor: colors.rollbackSoft },
   cancelledBox: { borderColor: colors.borderStrong, backgroundColor: colors.background },
-  headActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   keepBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: "#A7F3D0", backgroundColor: colors.successSoft },
   keepTitle: { fontSize: 13, fontWeight: "800", color: colors.successInk },
   keepText: { fontSize: 12.5, color: colors.text },
