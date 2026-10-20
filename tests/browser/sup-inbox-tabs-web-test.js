@@ -88,6 +88,13 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     const n = await label("แท็บ ทีม outsource").first().getAttribute("aria-label");
     const want = sql(`select count(*) from "WorkOrder" w where w."assignedTeam" in (select name from "OutsourceTeam") and w.status in ('ASSIGNED','IN_PROGRESS') and w."branchId" in (select id from "Branch" where region='${region}')`);
     n === `แท็บ ทีม outsource ${want} ใบ` ? pass(`ตัวเลขบนแท็บตรงกับฐานข้อมูล (${want})`) : fail(`ตัวเลขแท็บ ${n} · ฐานข้อมูล ${want}`);
+    // ตัวเลขต้องไม่ขัดกัน: หัวข้อ = ผลรวมทุกแท็บ = ชิปกล่องงาน · แถวสาขานับตามแท็บ · ไม่มีแถว "รอใคร"
+    const tabN = async (name) => Number((await label(`แท็บ ${name}`).first().getAttribute("aria-label")).match(/(\d+) ใบ$/)[1]);
+    const total = (await tabN("งานแจ้งซ่อม")) + (await tabN("จ่ายงาน/ปล่อยงาน")) + (await tabN("ทีม outsource"));
+    (await vis(`${total} ใบ`).count()) && (await vis(`กล่องงานของฉัน (${total})`).count())
+      ? pass(`หัวข้อบอก ${total} ใบ เท่ากับผลรวมแท็บและชิปกล่องงาน`) : fail(`หัวข้อ/ชิปไม่ตรงผลรวมแท็บ ${total}`);
+    (await vis("ทุกคน").count()) === 0 ? pass("กล่องงานหัวหน้าภาคไม่มีแถว รอใคร (ไม่มีปุ่ม ทุกคน)") : fail("ยังมีแถว รอใคร");
+    await page.screenshot({ path: __dirname + "/sup-inbox-tabs-list.png" });
 
     // ช่องเลือกทีมตอนจ่ายงาน
     await tab("จ่ายงาน/ปล่อยงาน");
