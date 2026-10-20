@@ -195,6 +195,8 @@ interface WorkOrder {
   /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
   workers: Technician[];
   otherWorkers: string | null;
+  /** ทีมที่รับงานเป็นทีม outsource — ช่างไม่มีบัญชีในแอป หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน */
+  assignedOutsource?: boolean;
   logs: LogEntry[];
   /** ใบเคลมอะไหล่เก่าทุกรอบ ใหม่สุดก่อน */
   claims: PartClaim[];
@@ -241,6 +243,8 @@ const CLAIM_STATUS: Record<PartClaim["status"], { label: string; fg: string; bg:
 interface Team {
   name: string;
   branches: number;
+  /** ทีม outsource — รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ หัวหน้าภาคปิดงานแทน */
+  outsource?: boolean;
 }
 
 interface LinkedOrder {
@@ -683,6 +687,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     if (!user) return false;
     // เบิกคลังอื่นเป็นสิทธิ์ของหัวหน้าภาค — แอดมินทำแทนได้ทุกขั้นยกเว้นขั้นนี้ (เซิร์ฟเวอร์กันซ้ำ)
     if (user.role === "ADMIN") return o.status !== "PARTS_PICKUP";
+    // ทีม outsource ไม่มีบัญชีในแอป — หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน (เจ้าของงานเลือก ต.ค. 69)
+    if (o.status === "IN_PROGRESS" && o.assignedOutsource && user.role === "SUPERVISOR") return true;
     // ผลตรวจหน้างาน หัวหน้าภาคบันทึกแทนได้ เผื่อช่างโทรมาเล่าแทนการกรอกเอง
     if (o.status === "INSPECTING" && user.role === "SUPERVISOR") return true;
     if (o.stageActor === "EMPLOYEE") {
@@ -1487,7 +1493,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text style={styles.waitingText}>
                 {viewOnly ? "ดูได้อย่างเดียว · " : ""}ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
                 {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
-                  ? ` (${order.assignedToName ?? order.assignedTeam})`
+                  ? ` (${order.assignedToName ?? order.assignedTeam}${order.assignedOutsource ? " · outsource — หัวหน้าภาคปิดงานแทน" : ""})`
                   : ""}
                 {viewOnly ? "" : " — ยังไม่ถึงคิวของคุณ"}
               </Text>
@@ -3623,8 +3629,9 @@ function StageModal({
                       .filter((t) => t.name !== order.suggestedTeam)
                       .map((t) => ({
                         value: t.name,
-                        label: t.name,
-                        hint: `ดูแล ${t.branches} สาขา`,
+                        // ป้าย outsource ติดชื่อไว้ ให้เห็นทั้งตอนเลือกและหลังเลือก
+                        label: t.outsource ? `${t.name} · outsource` : t.name,
+                        hint: t.outsource ? "outsource · หัวหน้าภาคปิดงานแทน" : `ดูแล ${t.branches} สาขา`,
                       })),
                   ]}
                 />
@@ -4463,7 +4470,10 @@ function CloseModal({
   const [afterFiles, setAfterFiles] = useState<PickedAttachment[]>([]);
   const [nameplate, setNameplate] = useState<PickedAttachment | null>(null);
   const [workerIds, setWorkerIds] = useState<number[]>(reclosing ? order.workers.map((w) => w.id).slice(0, 3) : []);
-  const [otherWorkers, setOtherWorkers] = useState(reclosing ? order.otherWorkers ?? "" : "");
+  // ทีม outsource ไม่มีชื่อในระบบให้ติ๊ก — เติมชื่อทีมไว้ให้ หัวหน้าภาคพิมพ์ชื่อช่างเพิ่มได้
+  const [otherWorkers, setOtherWorkers] = useState(
+    reclosing ? order.otherWorkers ?? "" : order.assignedOutsource && order.assignedTeam ? `ทีม ${order.assignedTeam} (outsource)` : ""
+  );
   // อะไหล่ที่ยังขาด — เปิดใบงานรออะไหล่ต่อจากใบนี้หลังปิดงาน
   const [followUp, setFollowUp] = useState(false);
   const [missing, setMissing] = useState<PickedPart[]>([]);

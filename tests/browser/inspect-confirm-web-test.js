@@ -59,7 +59,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
     // ── 1) หัวหน้าภาคส่งตรวจ ต้องใส่วัน ──
     {
       const { ctx, page, vis, save, op } = await openAs("S001");
-      await vis("ระบุอะไหล่ที่ต้องใช้").first().click();
+      await vis("ระบุอะไหล่").first().click();
       await page.waitForTimeout(1200);
       await vis("ต้องเข้าตรวจสอบหน้างานก่อน").click();
       await page.waitForTimeout(500);
@@ -82,7 +82,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
     // ── 2) แอดมินคอนเฟิร์มวันกับร้าน ──
     {
       const { ctx, page, vis, save } = await openAs("A001");
-      await vis("นัดลูกค้า (ตรวจหน้างาน)").first().click();
+      await vis("นัดร้าน (ตรวจหน้างาน)").first().click();
       await page.waitForTimeout(1500);
       (await vis("ส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ").count()) > 0
         ? pass("ฟอร์มนัดบอกว่าคอนเฟิร์มแล้วกลับไปให้หัวหน้าภาคส่งช่าง")
@@ -102,7 +102,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
     {
       // จอคอม — แถบขั้นตอนบนมือถือเหลือแต่วงกลม ไม่มีชื่อขั้นให้เช็ค
       const { ctx, page, vis, save } = await openAs("S001", 1400);
-      await vis("ส่งช่างเข้าตรวจหน้างาน").first().click();
+      await vis("ส่งช่างตรวจ").first().click();
       await page.waitForTimeout(1500);
       (await vis("ลูกค้าคอนเฟิร์มแล้ว · เข้าตรวจ", false).count()) > 0 && (await vis("ทีมที่จะไปตรวจ").count()) > 0
         ? pass("ฟอร์มส่งช่างบอกว่าร้านคอนเฟิร์มแล้ว และเลือก/เปลี่ยนทีมได้")

@@ -983,6 +983,16 @@ model TeamGroup {
   createdAt DateTime @default(now())
 }
 
+// ทีม outsource — รับงานเป็นครั้ง ๆ ไม่ได้ดูแลสาขาประจำ (เจ้าของงานเพิ่ม ต.ค. 69: PWS SPK TBL COB STM)
+//
+// ทีมปกติมาจากทะเบียนสาขา (Branch.zone) — ทีมพวกนี้ไม่มีสาขาของตัวเอง จึงต้องมีรายชื่อแยก ไม่งั้นเลือกจ่ายงานไม่ได้
+// ช่าง outsource ไม่มีบัญชีในแอป หัวหน้าภาคที่ดูแลสาขานั้นเป็นคนปิดงาน/แจ้งปัญหาแทน
+model OutsourceTeam {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
 model TeamRename {
   id          Int      @id @default(autoincrement())
   fromName    String   @unique

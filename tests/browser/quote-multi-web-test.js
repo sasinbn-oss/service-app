@@ -55,7 +55,7 @@ const pdf = (name) => ({
     };
 
     // ── ใบเสนอราคา ──
-    await vis("เสนอราคาลูกค้า").first().click();
+    await vis("ส่งใบเสนอราคา").first().click();
     await page.waitForTimeout(1200);
     await attach([pdf("ใบเสนอราคา-อะไหล่.pdf"), pdf("ใบเสนอราคา-ค่าบริการ.pdf")]);
     await attach([pdf("ใบเสนอราคา-ลบทิ้ง.pdf")]);
@@ -78,7 +78,7 @@ const pdf = (name) => ({
       : fail(`QUOTE=${count("QUOTE")} (${quoteNames}) สถานะ=${status}`);
 
     // ── บิลที่ลูกค้าจ่ายแล้ว ──
-    await vis("ลูกค้าจ่ายเงินแล้ว").first().click();
+    await vis("แนบบิลรับเงิน").first().click();
     await page.waitForTimeout(1200);
     await attach([pdf("บิล-1.pdf"), pdf("บิล-2.pdf")]);
     await vis("ยืนยัน").last().click();

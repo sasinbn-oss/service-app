@@ -17,6 +17,7 @@ import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, bangkokDay } from "../utils/constants";
 import { forgetTeamGroups, teamGroups } from "../utils/teamGroups";
 import { recordTeamMove } from "../utils/branchPins";
+import { refreshOutsource } from "../utils/outsource";
 
 const router = Router();
 
@@ -64,6 +65,9 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   for (const r of rows.values()) r.orphan = r.cmBranches === 0 && r.pmBranches === 0;
   // ชื่อทีมรวมมีช่าง/หัวหน้าภาคผูกอยู่แต่ไม่มีสาขาโดยตั้งใจ — แสดงแยกในส่วนทีมรวม ไม่ใช่ "ไม่มีในทะเบียนสาขา"
   const groupNames = new Set((await prisma.teamGroup.findMany({ select: { name: true } })).map((g) => g.name));
+  // ทีม outsource ไม่มีสาขาโดยตั้งใจ — แสดงแยกในส่วนของตัวเอง ไม่ใช่ "ไม่มีในทะเบียนสาขา"
+  const outsource = await prisma.outsourceTeam.findMany({ orderBy: { name: "asc" } });
+  for (const o of outsource) groupNames.add(o.name);
 
   res.json({
     teams: [...rows.values()].filter((r) => !groupNames.has(r.name)).sort((a, b) => Number(a.orphan) - Number(b.orphan) || a.name.localeCompare(b.name, "th")),
@@ -76,6 +80,7 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
       technicians: rows.get(g.name)?.technicians ?? 0,
       supervisors: rows.get(g.name)?.supervisors ?? 0,
     })),
+    outsource: outsource.map((o) => ({ id: o.id, name: o.name, openOrders: rows.get(o.name)?.openOrders ?? 0 })),
     moves: moves.map((m) => ({
       id: m.id,
       code: m.branch.code,
@@ -339,6 +344,32 @@ router.post("/moves/:id/revert", requireAuth, requireAdmin, async (req, res) => 
     { timeout: 30_000, maxWait: 15_000 }
   );
   res.json({ ok: true, team: move.fromTeam });
+});
+
+/**
+ * ทีม outsource — เพิ่ม/ลบ (แอดมิน · เจ้าของงานเพิ่ม ต.ค. 69)
+ * ลบได้เฉพาะทีมที่ไม่มีใบงานค้าง ไม่งั้นใบที่จ่ายไปแล้วไม่มีใครปิดได้ (หัวหน้าภาคปิดแทนได้เพราะเป็นทีม outsource)
+ */
+router.post("/outsource", requireAuth, requireAdmin, async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim().replace(/\s+/g, " ") : "";
+  if (!name || name.length > 60) return res.status(400).json({ error: "ใส่ชื่อทีม (ไม่เกิน 60 ตัวอักษร)" });
+  const clash = await prisma.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } });
+  if (clash) return res.status(409).json({ error: `“${name}” เป็นทีมที่ดูแลสาขาอยู่แล้ว ไม่ใช่ทีม outsource` });
+  if (await prisma.outsourceTeam.findUnique({ where: { name } })) return res.status(409).json({ error: `มีทีม ${name} อยู่แล้ว` });
+  const row = await prisma.outsourceTeam.create({ data: { name } });
+  await refreshOutsource();
+  res.status(201).json(row);
+});
+
+router.delete("/outsource/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const row = Number.isInteger(id) ? await prisma.outsourceTeam.findUnique({ where: { id } }) : null;
+  if (!row) return res.status(404).json({ error: "ไม่พบทีมนี้" });
+  const open = await prisma.workOrder.count({ where: { assignedTeam: row.name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } });
+  if (open) return res.status(409).json({ error: `${row.name} ยังมีใบงานค้าง ${open} ใบ — จ่ายให้ทีมอื่นก่อน` });
+  await prisma.outsourceTeam.delete({ where: { id } });
+  await refreshOutsource();
+  res.status(204).send();
 });
 
 /** ทีมรวมทั้งหมด — ตัวเลือกในการ์ดช่าง/หัวหน้าภาค (หน้าสิทธิ์ผู้ใช้) */
