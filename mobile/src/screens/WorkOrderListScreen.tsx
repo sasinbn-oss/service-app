@@ -457,10 +457,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * กดสลับตัวกรองจึงเปลี่ยนทันทีโดยไม่ต้องรอเน็ต ตัวเลขบนปุ่มแต่ละแถวนับโดยใช้ตัวกรองของแถวอื่น
    * (เลือก DODO แล้วตัวเลขของ "หัวหน้าภาค" คือใบ DODO ที่รอหัวหน้าภาค)
    */
+  const supTabs = filter === "INBOX" && user?.role === "SUPERVISOR";
+  // กล่องงานหัวหน้าภาคซ่อนแถว "รอใคร" (ทุกใบในกล่องเป็นงานของเขาอยู่แล้ว ใบที่ "รอช่าง" คือทีม outsource ซึ่งมีแท็บแยก)
+  // ตัวกรองที่จำไว้จากหน้าอื่นจึงต้องไม่มีผลที่นี่ ไม่งั้นใบหายไปโดยไม่มีปุ่มให้เอาตัวกรองออก
   const byOwner = useCallback(
     (r: WorkOrderRow) =>
-      (!prefs.owner || r.stageActor === prefs.owner) && (!prefs.who || whoKeys(r).includes(prefs.who)),
-    [prefs.owner, prefs.who]
+      supTabs || ((!prefs.owner || r.stageActor === prefs.owner) && (!prefs.who || whoKeys(r).includes(prefs.who))),
+    [prefs.owner, prefs.who, supTabs]
   );
   const byType = useCallback((r: WorkOrderRow) => !prefs.btype || r.branchType === prefs.btype, [prefs.btype]);
   // ตัวกรองหัวคอลัมน์ (Excel) — ไม่จำข้ามการเปิดแอป ตั้งใจใช้ค้นเฉพาะกิจ จำไว้แล้วลืมจะงงว่าใบหายไปไหน
@@ -487,7 +490,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     return out;
   }, [rows, byOwner, byType, byCols, colFilters]);
   const colFilterCount = Object.values(colFilters).filter(Boolean).length;
-  const supTabs = filter === "INBOX" && user?.role === "SUPERVISOR";
   // ตัวเลขบนแท็บนับหลังตัวกรองอื่น — ตรงกับจำนวนที่จะเห็นเมื่อกดเข้าไป
   const supTabCounts = useMemo(() => {
     const n: Record<SupTab, number> = { repair: 0, dispatch: 0, outsource: 0 };
@@ -792,7 +794,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
           {!loading && !error ? (
             <View style={styles.countPill}>
-              <Text style={styles.countPillText}>{shown.length.toLocaleString("th-TH")} ใบ</Text>
+              {/* กล่องงานหัวหน้าภาค: นับทุกแท็บ ให้ตรงกับชิป "กล่องงานของฉัน" — แท็บข้างล่างแบ่งย่อยจากตัวเลขนี้ */}
+              <Text style={styles.countPillText}>
+                {(supTabs ? supTabCounts.repair + supTabCounts.dispatch + supTabCounts.outsource : shown.length).toLocaleString("th-TH")} ใบ
+              </Text>
             </View>
           ) : null}
           <View style={{ flex: 1 }} />
@@ -822,9 +827,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 accessibilityLabel={`แท็บ ${t.label} ${supTabCounts[t.value]} ใบ`}
                 accessibilityState={{ selected: on }}
               >
-                <Text style={[styles.supTabText, on && styles.supTabTextOn]}>
-                  {t.label} <Text style={{ fontWeight: "800" }}>{supTabCounts[t.value]}</Text>
-                </Text>
+                <Text style={[styles.supTabText, on && styles.supTabTextOn]}>{t.label}</Text>
+                <View style={[styles.supTabN, on && styles.supTabNOn]}>
+                  <Text style={[styles.supTabNText, on && styles.supTabNTextOn]}>{supTabCounts[t.value]}</Text>
+                </View>
               </TouchableOpacity>
             );
           })}
@@ -884,7 +890,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
 
       {!loading && !error && rows.length > 0 ? (
         <ListFilters
-          rows={rows}
+          // ตัวเลขในแถวสาขานับตามแท็บที่เลือก — ตรงกับรายการที่เห็นอยู่
+          rows={supTabs ? rows.filter((r) => supTabOf(r) === prefs.supTab) : rows}
+          hideOwner={supTabs}
           prefs={prefs}
           setPref={setPref}
           byOwner={byOwner}
@@ -1137,8 +1145,11 @@ function ListFilters({
   byType,
   colSort,
   setColSort,
+  hideOwner,
 }: {
   rows: WorkOrderRow[];
+  /** ไม่แสดงแถว "รอใคร" — กล่องงานหัวหน้าภาค (แยกเป็นแท็บแล้ว) */
+  hideOwner?: boolean;
   prefs: ListPrefs;
   setPref: (p: Partial<ListPrefs>) => void;
   byOwner: (r: WorkOrderRow) => boolean;
@@ -1178,6 +1189,7 @@ function ListFilters({
 
   return (
     <View style={styles.filterPanel}>
+      {hideOwner ? null : (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fRow}>
         <Text style={styles.fLabel}>รอใคร</Text>
         <Seg on={!prefs.owner} label="ทุกคน" n={ownerCount("")} onPress={() => setPref({ owner: "", who: "" })} />
@@ -1192,7 +1204,8 @@ function ListFilters({
           />
         ))}
       </ScrollView>
-      {whoOptions ? (
+      )}
+      {whoOptions && !hideOwner ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.fRowLine} contentContainerStyle={styles.fRow}>
           <Text style={styles.fLabel}>{prefs.owner === "SUPERVISOR" ? "หัวหน้าภาคคนไหน" : "ทีมไหน"}</Text>
           <Pill on={!prefs.who} label="ทุกคน" n={ownerCount(prefs.owner)} onPress={() => setPref({ who: "" })} />
@@ -1201,7 +1214,7 @@ function ListFilters({
           ))}
         </ScrollView>
       ) : null}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.fRowLine} contentContainerStyle={styles.fRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={hideOwner ? null : styles.fRowLine} contentContainerStyle={styles.fRow}>
         <Text style={styles.fLabel}>สาขา</Text>
         {(["", "DODO", "COCO"] as const).map((t) => (
           <Seg key={t} on={prefs.btype === t} label={t || "ทั้งหมด"} n={typeCount(t)} onPress={() => setPref({ btype: t })} />
@@ -1594,7 +1607,7 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
   }
   if (!groups.length) return null;
   return (
-    <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+    <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
       {groups.map((g) => (
         <View key={g.key} style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]} accessibilityLabel={`หัวข้อ ${g.title}`}>
           <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>{g.title}</Text>
@@ -1628,18 +1641,33 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
 }
 
 const styles = StyleSheet.create({
-  supTabs: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.sm },
-  supTab: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.card,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.md,
+  // แท็บแบบขีดเส้นใต้ ไม่ใช่ปุ่มกลม — หน้าตาต่างจากชิปข้างล่าง ให้เห็นว่าเป็นชั้นบนสุดของกล่องงาน
+  supTabs: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    marginHorizontal: spacing.lg,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.border,
   },
-  supTabOn: { backgroundColor: colors.primaryDark, borderColor: colors.primaryDark },
-  supTabText: { fontSize: 14, lineHeight: 22, fontWeight: "600", color: colors.text },
-  supTabTextOn: { color: "#fff" },
+  supTab: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 3,
+    borderBottomColor: "transparent",
+    marginBottom: -2,
+  },
+  supTabOn: { borderBottomColor: colors.primary },
+  supTabText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.textMuted },
+  supTabTextOn: { color: colors.primaryDark },
+  supTabN: { borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.tile },
+  supTabNOn: { backgroundColor: colors.primarySoft },
+  supTabNText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
+  supTabNTextOn: { color: colors.primaryDark },
   attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
   attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
