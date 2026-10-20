@@ -1,5 +1,5 @@
 // ทดสอบ: ผังผู้รับผิดชอบพื้นที่
-//   · ช่างเปิดดูได้ แต่ไม่มีปุ่มแก้ไข (และแก้ผ่าน API ไม่ได้)
+//   · ช่างเปิดดูได้ แต่ไม่มีปุ่มแก้ไข (และแก้ผ่าน API ไม่ได้) · ชื่อยาว/รหัสพนักงานเห็นครบ ไม่ถูกตัดเป็น …
 //   · แอดมิน: ลากช่างจาก "ยังไม่มีสังกัด" เข้าทีม · แตะหัวหน้าภาคแล้วแตะหัวภาค (แบบมือถือ) ·
 //     ก่อนกดบันทึกฐานข้อมูลยังไม่เปลี่ยน · บันทึกแล้วฐานข้อมูลเปลี่ยน · ยกเลิกทั้งหมดแล้วไม่มีอะไรเปลี่ยน
 // สร้างผู้ใช้ทดสอบเองแล้วลบทิ้ง (ต้องมี DATABASE_URL)
@@ -11,7 +11,8 @@ const sql = (q) =>
   execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
 const SUF = String(Math.floor(Math.random() * 1e5));
 const TECH = `ZCMT${SUF}`, SUP = `ZCMS${SUF}`;
-const TECH_NAME = `ช่างผังทดสอบ${SUF}`, SUP_NAME = `หัวหน้าผังทดสอบ${SUF}`;
+// ชื่อช่างยาวแบบชื่อจริง (ชื่อ นามสกุล ชื่อเล่น) — ยาวเกินคอลัมน์ ต้องตัดบรรทัด ไม่ใช่ตัดเป็น …
+const TECH_NAME = `ช่างผังทดสอบ${SUF} สุวรรณประเสริฐวงศ์ (ชื่อเล่นท้าย)`, SUP_NAME = `หัวหน้าผังทดสอบ${SUF}`;
 
 (async () => {
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
@@ -89,6 +90,22 @@ const TECH_NAME = `ช่างผังทดสอบ${SUF}`, SUP_NAME = `ห�
     (await vis(TECH_NAME).count()) > 0 && (await label(page, "แก้ไขผัง").count()) > 0
       ? pass("บันทึกแล้วออกจากโหมดแก้ไข ผังโหลดใหม่ เห็นคนในที่ใหม่")
       : fail("หลังบันทึกผังไม่ตรง");
+    // ผังขึ้นไม่ครบ (เจ้าของงานแจ้ง ต.ค. 69) — ชื่อยาวต้องเห็นครบถึงชื่อเล่น ไม่ถูกตัดเป็น …
+    const clip = await vis(TECH_NAME).first().evaluate((el) => ({
+      clipped: el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1,
+      ellipsis: getComputedStyle(el).textOverflow === "ellipsis",
+      // lineHeight เป็น "normal" บนเว็บ — เทียบความสูงกับขนาดตัวอักษรแทน (บรรทัดเดียว ≈ 1.3 เท่า)
+      lines: Math.round(el.getBoundingClientRect().height / (parseFloat(getComputedStyle(el).fontSize) * 1.3)),
+    }));
+    !clip.clipped && !clip.ellipsis && clip.lines >= 2
+      ? pass(`ชื่อยาวตัดบรรทัด (${clip.lines} บรรทัด) เห็นครบถึงชื่อเล่น ไม่มี …`)
+      : fail(`ชื่อยาวถูกตัด: ${JSON.stringify(clip)}`);
+    // บรรทัดตำแหน่ง · รหัสพนักงาน ก็ห้ามถูกตัด — เคยเห็นแค่ "ZCMS378…"
+    const codeLine = await vis(SUP, false).first().evaluate((el) => ({
+      text: el.innerText,
+      clipped: el.scrollWidth > el.clientWidth + 1 || getComputedStyle(el).textOverflow === "ellipsis",
+    }));
+    codeLine.text.endsWith(SUP) && !codeLine.clipped ? pass("บรรทัดตำแหน่ง · รหัสพนักงาน เห็นรหัสครบ") : fail(`รหัสถูกตัด: ${JSON.stringify(codeLine)}`);
     await page.screenshot({ path: path.join(DIR, "coverage-map.png") });
   } catch (e) {
     fail(String(e).slice(0, 300));
