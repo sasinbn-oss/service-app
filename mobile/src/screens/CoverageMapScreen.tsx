@@ -135,10 +135,11 @@ function Person({
           <Text style={[styles.avText, small && { fontSize: 11 }]}>{ini(name)}</Text>
         </View>
         <View style={{ flexShrink: 1 }}>
-          <Text style={styles.pn} numberOfLines={1}>
-            {name}
-          </Text>
-          <Text style={styles.pr} numberOfLines={1}>
+          {/* ชื่อตัดบรรทัดได้ ไม่ตัดเป็น … — คอลัมน์ภาคกว้างคงที่ ชื่อจริง+นามสกุล+ชื่อเล่นยาวเกินบรรทัดเดียวบ่อย
+              ตัดแล้วชื่อเล่นหาย ซึ่งเป็นส่วนที่คนใช้เรียกกันจริง (เจ้าของงานแจ้งว่าผังขึ้นไม่ครบ ต.ค. 69) */}
+          <Text style={styles.pn}>{name}</Text>
+          {/* รหัสพนักงานก็ต้องเห็นครบ — คนใช้ค้นหาด้วยรหัส */}
+          <Text style={styles.pr}>
             {role} · {code}
           </Text>
         </View>
