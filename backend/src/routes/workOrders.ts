@@ -18,6 +18,7 @@ import { Coverage, coverageOf, covers } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_WAREHOUSE, WAREHOUSES } from "../documents/warehouses";
+import { freshOutsource, isOutsourceTeam, outsourceList } from "../utils/outsource";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
@@ -430,6 +431,8 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     suggestedTeam: (w.jobType === "PM" ? w.branch.pmTeam ?? w.branch.zone : w.branch.zone) ?? null,
     branchPmTeam: w.branch.pmTeam,
     assignedTeam: w.assignedTeam,
+    // ทีม outsource — ช่างไม่มีบัญชีในแอป หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน
+    assignedOutsource: isOutsourceTeam(w.assignedTeam),
     assignedToId: w.assignedTo?.id ?? null,
     assignedToName: w.assignedTo?.name ?? null,
     scheduledAt: w.scheduledAt,
@@ -773,9 +776,15 @@ async function teamScope(team: string | null, userId: number): Promise<Prisma.Wo
 async function blockedForTeam(
   req: AuthRequest,
   res: Response,
-  wo: { assignedTeam: string | null; assignedToId: number | null }
+  wo: { assignedTeam: string | null; assignedToId: number | null; branch?: { region: string | null; zone: string | null; pmTeam: string | null } }
 ) {
   if (req.auth!.role === "ADMIN") return false;
+  // ทีม outsource ไม่มีบัญชีในแอป — หัวหน้าภาคที่ดูแลสาขานั้นปิดงาน/แจ้งปัญหาแทน (เจ้าของงานเลือก ต.ค. 69)
+  if (req.auth!.role === "SUPERVISOR" && wo.branch && (await freshOutsource()).has(wo.assignedTeam ?? "")) {
+    if (coversWorkOrder(await supervisorScope(req.auth!.userId), { assignedTeam: wo.assignedTeam, branch: wo.branch })) return false;
+    res.status(403).json({ error: OUT_OF_SCOPE });
+    return true;
+  }
   // ยังไม่ได้จ่ายให้ใครเลย — ปล่อยผ่านเหมือนเดิม ขั้นตอนอื่นกันไว้อยู่แล้ว
   if (wo.assignedTeam === null && wo.assignedToId === null) return false;
   const me = await prisma.user.findUnique({
@@ -959,13 +968,16 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
 
   const inboxStages = stagesWaitingOn(req.auth);
   const orphans = inboxTakesOrphans(req.auth) ? await orphanSupervisorIds() : [];
+  // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
+  const outsourceInbox: Prisma.WorkOrderWhereInput[] =
+    req.auth!.role === "SUPERVISOR" ? [{ status: "IN_PROGRESS", assignedTeam: { in: [...(await freshOutsource())] } }] : [];
   const statusFilter =
     q.status === "ALL"
       ? {}
       : q.status === "ACTIVE"
         ? { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } }
         : q.status === "INBOX"
-          ? { OR: [{ status: { in: inboxStages } }, { id: { in: orphans } }] }
+          ? { OR: [{ status: { in: inboxStages } }, { id: { in: orphans } }, ...outsourceInbox] }
           : q.status === "AWAITING_CONFIRM"
             ? // ชิป "รอคอนเฟิร์มลูกค้า" คือรายการร้านที่แอดมินต้องโทร — นัดตรวจหน้างานก็เป็นการโทรแบบเดียวกัน
               { status: { in: ["AWAITING_CONFIRM", "INSPECT_CONFIRM"] } }
@@ -1107,7 +1119,10 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
       ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
-      INBOX: inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0) + orphans.length,
+      INBOX:
+        inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0) +
+        orphans.length +
+        (outsourceInbox.length ? await prisma.workOrder.count({ where: { AND: [scope, ...outsourceInbox] } }) : 0),
     },
   });
 });
@@ -1131,10 +1146,18 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
         : await teamScope(me?.team ?? null, req.auth!.userId);
 
   const orphans = inboxTakesOrphans(req.auth) ? await orphanSupervisorIds() : [];
+  const outsourceOpen =
+    req.auth!.role === "SUPERVISOR"
+      ? await prisma.workOrder.count({
+          where: { AND: [scope], status: "IN_PROGRESS", assignedTeam: { in: [...(await freshOutsource())] } },
+        })
+      : 0;
   const inbox =
     (await prisma.workOrder.count({
       where: { AND: [scope], status: { in: stagesWaitingOn(req.auth) } },
-    })) + orphans.length;
+    })) +
+    orphans.length +
+    outsourceOpen;
   res.json({ inbox });
 });
 
@@ -1305,6 +1328,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.get("/options", requireAuth, async (_req, res) => {
+  await freshOutsource();
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
   const technicians = await prisma.user.findMany({
@@ -1360,7 +1384,14 @@ router.get("/options", requireAuth, async (_req, res) => {
     })),
     // ทีมช่างมาจากทะเบียนสาขา (Branch.zone = คอลัมน์ "ทีมช่าง" ในไฟล์)
     // ส่งมาที่เดียวกับตัวเลือกอื่น หน้าจอจะได้ไม่ต้องยิงเพิ่มอีกรอบตอนเปิดฟอร์ม
-    teams: teams.map(([name, branches]) => ({ name, branches })),
+    teams: [
+      ...teams.map(([name, branches]) => ({ name, branches })),
+      // ทีม outsource ต่อท้าย พร้อมป้าย — รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ
+      ...outsourceList()
+        .filter((n) => !teams.some(([t]) => t === n))
+        .sort((a, b) => a.localeCompare(b, "th"))
+        .map((name) => ({ name, branches: 0, outsource: true })),
+    ],
     // รุ่นเครื่องส่งมาจากที่นี่ที่เดียว เพิ่มรุ่นใหม่แล้วแอปเห็นทันทีโดยไม่ต้อง
     // ปล่อยเวอร์ชันใหม่ — ถ้าฝังไว้ในแอป เครื่องที่ยังไม่อัปเดตจะเลือกรุ่นใหม่ไม่ได้
     machineModels: MACHINE_MODELS,
@@ -1425,6 +1456,7 @@ const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
 router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  await freshOutsource();
 
   const row = await prisma.workOrder.findUnique({ where: { id }, include: detailInclude });
   if (!row) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -2834,6 +2866,8 @@ async function teamNote(id: number, team: string, verb: string) {
  * ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
  */
 async function knownCmTeam(team: string) {
+  // ทีม outsource ไม่มีสาขาประจำ แต่จ่ายงานให้ได้ (เจ้าของงานเพิ่ม ต.ค. 69)
+  if ((await freshOutsource()).has(team)) return true;
   return (await prisma.branch.findFirst({ where: { zone: team, cancelledAt: null }, select: { id: true } })) !== null;
 }
 
@@ -3835,7 +3869,14 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 
   const current = await prisma.workOrder.findUnique({
     where: { id },
-    select: { status: true, code: true, assignedToId: true, assignedTeam: true },
+    select: {
+      status: true,
+      code: true,
+      assignedToId: true,
+      assignedTeam: true,
+      // ทีม outsource — หัวหน้าภาคในพื้นที่ปิดแทนได้ (ดู blockedForTeam)
+      branch: { select: { region: true, zone: true, pmTeam: true } },
+    },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (current.status === "DONE") {

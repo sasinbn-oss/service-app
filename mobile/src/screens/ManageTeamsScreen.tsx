@@ -52,6 +52,8 @@ interface Data {
   groups?: Group[];
   renames: { from: string; to: string; at: string }[];
   moves: Move[];
+  /** ทีม outsource — รับงานเป็นครั้ง ๆ (เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา) */
+  outsource?: { id: number; name: string; openOrders: number }[];
 }
 interface BranchRow {
   id: number;
@@ -64,6 +66,88 @@ interface BranchRow {
   moved: string[];
 }
 const FIELD_LABEL = { zone: "CM", pmTeam: "PM" } as const;
+
+/**
+ * ทีม outsource (เจ้าของงานเพิ่ม ต.ค. 69) — รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ จึงไม่อยู่ในทะเบียนสาขา
+ * ขึ้นให้เลือกตอนจ่ายงานพร้อมป้าย "outsource" · ช่างไม่มีบัญชีในแอป หัวหน้าภาคปิดงานแทน
+ */
+function OutsourceTeams({ rows, onChanged }: { rows: { id: number; name: string; openOrders: number }[]; onChanged: () => void }) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function add() {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await api.post("/teams/outsource", { name: name.trim() });
+      setName("");
+      onChanged();
+    } catch (e) {
+      showAlert("เพิ่มไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function remove(r: { id: number; name: string; openOrders: number }) {
+    showAlert(
+      `เอา ${r.name} ออกจากทีม outsource?`,
+      r.openOrders ? `ยังมีใบงานค้าง ${r.openOrders} ใบ — ต้องจ่ายให้ทีมอื่นก่อน` : "จะเลือกทีมนี้ตอนจ่ายงานไม่ได้อีก (ใบงานเก่ายังอยู่)",
+      r.openOrders
+        ? [{ text: "ตกลง" }]
+        : [
+            { text: "ไม่เอาออก", style: "cancel" },
+            {
+              text: "เอาออก",
+              style: "destructive",
+              onPress: async () => {
+                try {
+                  await api.delete(`/teams/outsource/${r.id}`);
+                  onChanged();
+                } catch (e) {
+                  showAlert("เอาออกไม่สำเร็จ", apiErrorMessage(e));
+                }
+              },
+            },
+          ]
+    );
+  }
+  return (
+    <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
+      <View style={styles.row}>
+        <Text style={styles.section}>ทีม outsource</Text>
+        <Text style={[styles.muted, { flex: 1, minWidth: 200 }]}>
+          รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ — เลือกได้ตอนจ่ายงาน · ช่างไม่มีบัญชีในแอป หัวหน้าภาคปิดงานแทน
+        </Text>
+      </View>
+      <View style={[styles.row, { flexWrap: "wrap" }]}>
+        {rows.map((r) => (
+          <View key={r.id} style={styles.osChip} accessibilityLabel={`ทีม outsource ${r.name}`}>
+            <Text style={styles.osChipText}>
+              {r.name}
+              {r.openOrders ? ` · ค้าง ${r.openOrders}` : ""}
+            </Text>
+            <TouchableOpacity onPress={() => remove(r)} accessibilityLabel={`เอา ${r.name} ออก`} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close" size={14} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+        ))}
+        <TextInput
+          style={styles.osInput}
+          value={name}
+          onChangeText={setName}
+          onSubmitEditing={add}
+          placeholder="ชื่อทีม เช่น PWS"
+          placeholderTextColor={colors.textFaint}
+          autoCapitalize="characters"
+          accessibilityLabel="ชื่อทีม outsource"
+        />
+        <TouchableOpacity style={styles.linkBtn} onPress={add} disabled={busy || !name.trim()} accessibilityLabel="เพิ่มทีม outsource">
+          <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+          <Text style={styles.linkText}>เพิ่ม</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
 export default function ManageTeamsScreen() {
   const [data, setData, cached] = useCachedState<Data | null>("ManageTeams:data", null);
@@ -231,6 +315,8 @@ export default function ManageTeamsScreen() {
           </TouchableOpacity>
         ))}
       </View>
+
+      <OutsourceTeams rows={data.outsource ?? []} onChanged={load} />
 
       {data.moves?.length ? <MovedList moves={data.moves} onChanged={load} /> : null}
 
@@ -1076,6 +1162,9 @@ function MembersModal({ name, onClose }: { name: string; onClose: () => void }) 
 }
 
 const styles = StyleSheet.create({
+  osChip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, paddingHorizontal: 12, paddingVertical: 5 },
+  osChipText: { fontSize: 13, fontWeight: "700", color: colors.text },
+  osInput: { minWidth: 140, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 6, fontSize: 13, color: colors.text, backgroundColor: colors.card },
   seeMembers: { fontSize: 12.5, fontWeight: "600", color: colors.primaryInk, marginTop: 2 },
   memberRow: {
     flexDirection: "row",

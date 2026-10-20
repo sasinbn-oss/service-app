@@ -55,7 +55,7 @@ const { setup } = require("./fixture");
 
     // ── แอดมิน
     const a = await open(wo.code, "A001");
-    await a.vis("เบิกอะไหล่ส่งหน้างาน").first().click();
+    await a.vis("เบิกอะไหล่ (คลัง 94)").first().click();
     await a.page.waitForTimeout(1200);
     await a.vis("มีของ").first().click();
     await a.page.waitForTimeout(300);
@@ -79,12 +79,13 @@ const { setup } = require("./fixture");
     const after = `${st()}|${part(board)}|${part(belt)}`;
     after === "PARTS_PICKUP|คลังลาดพร้าว 94|RQ-WEB-94|คลังภูเก็ต|-"
       ? pass("ฐานข้อมูล: รอหัวหน้าภาคเบิก · คลัง 94 มีเลขใบเบิก · ภูเก็ตยังไม่มี") : fail(`ฐานข้อมูล: ${after}`);
-    (await a.vis("เบิกอะไหล่จากคลังอื่น").count()) === 0 ? pass("แอดมินไม่มีปุ่มของขั้นหัวหน้าภาคเบิก") : fail("แอดมินมีปุ่มเบิกคลังอื่น");
+    // ชื่อขั้นบนแถบขั้นตอนใช้คำเดียวกับปุ่ม (ต.ค. 69) — ดูว่าแอดมินได้ "ขั้นนี้รอหัวหน้าภาค" แทนปุ่ม
+    (await a.vis("ขั้นนี้รอหัวหน้าภาค", false).count()) > 0 ? pass("แอดมินไม่มีปุ่มของขั้นหัวหน้าภาคเบิก (ขึ้นว่ารอหัวหน้าภาค)") : fail("แอดมินมีปุ่มเบิกคลังอื่น");
     await a.page.screenshot({ path: path.join(DIR, "pickup-admin-after.png") });
 
     // ── หัวหน้าภาค (fixture ย้าย S001 ไปภาคของสาขานี้แล้ว)
     const s = await open(wo.code, "S001");
-    await s.vis("เบิกอะไหล่จากคลังอื่น").first().click();
+    await s.vis("เบิกอะไหล่ (คลังอื่น)").first().click();
     await s.page.waitForTimeout(1200);
     (await s.vis("มีที่คลังภูเก็ต ติดต่อพี่เอ (เทสต์)", false).count()) ? pass("หัวหน้าภาคเห็นหมายเหตุจากแอดมิน") : fail("ไม่เห็นหมายเหตุ");
     (await s.vis("RQ-WEB-94", false).count()) ? pass("เห็นตัวที่แอดมินเบิกไปแล้ว") : fail("ไม่เห็นตัวที่แอดมินเบิก");
@@ -94,7 +95,7 @@ const { setup } = require("./fixture");
     await s.page.waitForTimeout(3500);
     const done = `${st()}|${part(belt)}`;
     done === "PARTS_CHECKED|คลังภูเก็ต|RQ-WEB-SUP" ? pass("คอนเฟิร์มแล้ว: หัวหน้าภาค · จ่ายงานให้ทีม · เลขใบเบิกบันทึกที่ฐานข้อมูล") : fail(`หลังคอนเฟิร์ม: ${done}`);
-    (await s.vis("จ่ายงานให้ช่าง").count()) ? pass("หัวหน้าภาคได้ปุ่มจ่ายงานต่อทันที") : fail("ไม่มีปุ่มจ่ายงาน");
+    (await s.vis("จ่ายงานให้ทีม").count()) ? pass("หัวหน้าภาคได้ปุ่มจ่ายงานต่อทันที") : fail("ไม่มีปุ่มจ่ายงาน");
 
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {

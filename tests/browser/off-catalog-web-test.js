@@ -54,7 +54,7 @@ const SVC = "ค่าแรงทดสอบหน้าจอ";
     // ── 1) หัวหน้าภาค ──
     {
       const { ctx, page, vis, label, save, op } = await openAs("S001");
-      await vis("ระบุอะไหล่ที่ต้องใช้").first().click();
+      await vis("ระบุอะไหล่").first().click();
       await page.waitForTimeout(1200);
       await vis("ใช้อะไหล่").first().click();
       await page.waitForTimeout(500);
@@ -113,7 +113,7 @@ const SVC = "ค่าแรงทดสอบหน้าจอ";
       offRow().endsWith("|true") && st() === "AWAITING_QUOTE"
         ? pass("ตอบหาได้ → ไปขั้นเสนอราคา (ฐานข้อมูล)")
         : fail(`หลังเช็ค: ${st()} · ${offRow()}`);
-      await vis("เสนอราคาลูกค้า").first().click();
+      await vis("ส่งใบเสนอราคา").first().click();
       await page.waitForTimeout(1500);
       (await vis("รายการที่ต้องใส่ในใบเสนอราคา").count()) > 0 &&
       (await vis(`อะไหล่นอก · ${NAME} × 2 เส้น · ซื้อร้านในพื้นที่`).count()) > 0 &&

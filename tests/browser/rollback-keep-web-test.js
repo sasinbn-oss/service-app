@@ -68,7 +68,7 @@ const { setup } = require("./fixture");
       ? pass("หน้าใบงาน: ป้าย ↩ ย้อนขั้นมา · กล่องบอกขั้นเดิมและเหตุผล · แถบขั้นตอนบอกขั้นที่ย้อนมา") : fail(`กล่อง: ${banner}`);
     await page.screenshot({ path: path.join(DIR, "rollback-detail.png") });
 
-    await vis("ระบุอะไหล่ที่ต้องใช้").first().click();
+    await vis("ระบุอะไหล่").first().click();
     await page.waitForTimeout(1500);
     const prevBox = (await lbl("ค่าเดิมก่อนย้อน").count()) ? await lbl("ค่าเดิมก่อนย้อน").first().innerText() : "";
     prevBox.includes("ใช้อะไหล่ไหม") ? pass("ฟอร์มระบุอะไหล่บอกว่าเติมค่าเดิม (ใช้อะไหล่ไหม)") : fail(`กล่องค่าเดิม: ${prevBox}`);
@@ -86,7 +86,7 @@ const { setup } = require("./fixture");
     await openOrder();
     await vis(wo.code).last().click();
     await page.waitForTimeout(3000);
-    await vis("จ่ายงานให้ช่าง").first().click();
+    await vis("จ่ายงานให้ทีม").first().click();
     await page.waitForTimeout(1500);
     const prev2 = (await lbl("ค่าเดิมก่อนย้อน").count()) ? await lbl("ค่าเดิมก่อนย้อน").first().innerText() : "";
     prev2.includes("ทีม") && prev2.includes("วันนัด") ? pass("ฟอร์มจ่ายงานเติมทีมและวันนัดเดิมให้") : fail(`กล่องค่าเดิม: ${prev2}`);

@@ -48,7 +48,7 @@ const { setup } = require("./fixture");
     await vis(wo.code).last().click();
     await page.waitForTimeout(3000);
 
-    await vis("ปิดงานไม่ได้ — ส่งกลับหัวหน้าภาค", false).last().click();
+    await vis("แจ้งปัญหาหน้างาน", false).last().click();
     await page.waitForTimeout(1000);
     (await vis("ปิดงานไม่ได้เพราะ").count()) > 0 ? pass("ฟอร์มส่งกลับมีหมวดเหตุ") : fail("ไม่มีหมวดเหตุ");
     await page.getByLabel("เจออะไรที่หน้างาน").locator("visible=true").last().fill("ไปถึงร้านปิด โทรไม่ติด");
@@ -77,7 +77,7 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(3500);
 
     // ขั้นนี้ — ตั้งต้นที่ส่งตรวจหน้างาน ทีมเดิม
-    await vis("ระบุอะไหล่ที่ต้องใช้").first().click();
+    await vis("ระบุอะไหล่").first().click();
     await page.waitForTimeout(1200);
     (await vis("วันเข้าตรวจหน้างาน").count()) > 0 ? pass("เปิดมาตั้งต้นที่ \"ต้องเข้าตรวจสอบหน้างานก่อน\"") : fail("ไม่ได้ตั้งต้นที่ส่งตรวจ");
     // วันเข้าตรวจบังคับ (ต.ค. 69 รอบสอง) — เลือกวันที่ 15 ของเดือนหน้า

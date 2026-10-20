@@ -53,7 +53,7 @@ const { setup } = require("./fixture");
       await search(page, mine.code);
       await vis(mine.code).last().click();
       await page.waitForTimeout(3000);
-      (await vis("สาขาและเครื่อง").count()) > 0 && (await page.locator('[aria-label="ยกเลิกใบงาน"]').locator("visible=true").count()) === 0
+      (await vis("สาขาและเครื่อง").count()) > 0 && (await page.locator('[aria-label="จบใบงาน"]').locator("visible=true").count()) === 0
         ? pass("ช่างเปิดใบทีมตัวเองได้ และไม่มีปุ่มยกเลิกใบงาน") : fail("ช่างเปิดใบตัวเองไม่ได้ หรือเห็นปุ่มยกเลิก");
       await page.locator('[aria-label="ปิด"]').locator("visible=true").last().click();
       await page.waitForTimeout(1500);
@@ -89,11 +89,14 @@ const { setup } = require("./fixture");
       await page.waitForTimeout(3000);
       // ปุ่มยกเลิกอยู่ท้ายหน้าคู่กับลบถาวร ไม่ใช่หัวใบงาน (เจ้าของงานขอ ต.ค. 69)
       const yOf = async (loc) => (await loc.first().boundingBox())?.y ?? -1;
-      const cancelY = await yOf(page.locator('[aria-label="ยกเลิกใบงาน"]').locator("visible=true"));
+      // ปุ่มเดียว "จบใบงาน…" (ต.ค. 69) — ยกเลิกเป็นทางเลือกข้างใน ยังอยู่ท้ายหน้า
+      const cancelY = await yOf(page.locator('[aria-label="จบใบงาน"]').locator("visible=true"));
       const deleteY = await yOf(page.getByText("ลบใบงานนี้ถาวร", { exact: true }).locator("visible=true"));
       const branchY = await yOf(page.getByText("สาขาและเครื่อง", { exact: true }).locator("visible=true"));
       cancelY > branchY && deleteY > cancelY ? pass("ปุ่มยกเลิกใบงานอยู่ท้ายหน้า เหนือ ลบใบงานนี้ถาวร") : fail(`ตำแหน่งปุ่ม: ยกเลิก ${cancelY} สาขา ${branchY} ลบ ${deleteY}`);
-      await page.locator('[aria-label="ยกเลิกใบงาน"]').locator("visible=true").first().click();
+      await page.locator('[aria-label="จบใบงาน"]').locator("visible=true").first().click();
+      await page.waitForTimeout(800);
+      await page.locator('[aria-label="จบ: ไม่ทำแล้ว"]').locator("visible=true").last().click();
       await page.waitForTimeout(800);
       await page.locator('[aria-label="ยืนยันยกเลิกใบงาน"]').locator("visible=true").last().click();
       await page.waitForTimeout(800);
