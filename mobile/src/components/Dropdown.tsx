@@ -20,6 +20,8 @@ export interface DropdownOption {
   label: string;
   /** บรรทัดเล็กใต้ชื่อ เช่น รหัสพนักงาน หรือจำนวนสาขาที่ทีมดูแล */
   hint?: string;
+  /** หัวข้อกลุ่ม — แถวที่ติดกันและกลุ่มเดียวกันอยู่ใต้หัวข้อเดียว (เช่น ทีมช่าง / ทีม outsource) */
+  group?: string;
 }
 
 /** รายการยาวกว่านี้ถึงจะมีช่องค้นหา สั้นกว่านี้กวาดตาหาเร็วกว่าพิมพ์ */
@@ -70,14 +72,17 @@ export function OptionList({
             <Text style={[styles.rowLabel, styles.placeholder]}>ไม่ระบุ</Text>
           </TouchableOpacity>
         ) : null}
-        {filtered.map((o) => (
-          <TouchableOpacity key={o.value} style={[styles.row, o.value === value && styles.rowOn]} onPress={() => onPick(o.value)} activeOpacity={0.7}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[styles.rowLabel, o.value === value && styles.rowLabelOn]}>{o.label}</Text>
-              {o.hint ? <Text style={styles.rowHint}>{o.hint}</Text> : null}
-            </View>
-            {o.value === value ? <Ionicons name="checkmark" size={16} color={colors.primary} /> : null}
-          </TouchableOpacity>
+        {filtered.map((o, i) => (
+          <React.Fragment key={o.value}>
+            {o.group && o.group !== filtered[i - 1]?.group ? <Text style={styles.group}>{o.group}</Text> : null}
+            <TouchableOpacity style={[styles.row, o.value === value && styles.rowOn]} onPress={() => onPick(o.value)} activeOpacity={0.7}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.rowLabel, o.value === value && styles.rowLabelOn]}>{o.label}</Text>
+                {o.hint ? <Text style={styles.rowHint}>{o.hint}</Text> : null}
+              </View>
+              {o.value === value ? <Ionicons name="checkmark" size={16} color={colors.primary} /> : null}
+            </TouchableOpacity>
+          </React.Fragment>
         ))}
         {filtered.length === 0 ? <Text style={styles.empty}>ไม่พบ “{term.trim()}”</Text> : null}
       </ScrollView>
@@ -181,6 +186,17 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  group: {
+    paddingVertical: 4,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.tile,
+    fontSize: 11.5,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: colors.textMuted,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },

@@ -89,6 +89,8 @@ export interface WorkOrderRow {
   orphanReason?: string | null;
   /** วันนัดผ่านไปแล้วยังไม่คอนเฟิร์มลูกค้า — กล่องงานแอดมินหัวข้อ "เลยนัด" */
   overdue?: boolean;
+  /** จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บ "ทีม outsource" */
+  outsource?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
   waitingOnSupervisors: { id: number; name: string; region: string | null }[];
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
@@ -177,8 +179,37 @@ interface ListPrefs {
   who: Who;
   btype: "" | "DODO" | "COCO";
   sort: Sort;
+  supTab: SupTab;
 }
-const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent" };
+const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair" };
+
+/**
+ * แท็บกล่องงานหัวหน้าภาค (เจ้าของงานขอ ต.ค. 69 — "งานแจ้งมาปนกันหมด")
+ *
+ * แยกตามสิ่งที่ต้องทำ ไม่ใช่ตามชื่อขั้น: ใบแจ้งซ่อมใหม่ต้องนั่งดูอะไหล่ · ใบรอจ่าย/ปล่อยงานต้องดูคิวทีม
+ * · ใบทีม outsource ต้องตามให้ทีมนอกส่งรูปมาแล้วปิดแทน — สามอย่างนี้ทำคนละจังหวะ ปนกันแล้วหาไม่เจอ
+ * ทีม outsource แยกทั้งก้อน (รอปล่อยงาน + รอปิดงาน) แท็บจ่ายงานจึงเหลือแต่ทีมช่างปกติ
+ */
+type SupTab = "repair" | "dispatch" | "outsource";
+const SUP_TABS: { value: SupTab; label: string }[] = [
+  { value: "repair", label: "งานแจ้งซ่อม" },
+  { value: "dispatch", label: "จ่ายงาน/ปล่อยงาน" },
+  { value: "outsource", label: "ทีม outsource" },
+];
+const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP"];
+function supTabOf(r: WorkOrderRow): SupTab {
+  if (r.outsource) return "outsource";
+  return DISPATCH_STAGES.includes(r.status) ? "dispatch" : "repair";
+}
+/** ทีม outsource เข้างานแล้วค้างเกินนี้ (วัน) ขึ้นแดง — ช่างไม่มีบัญชีในแอป ไม่มีใครเตือนนอกจากหัวหน้าภาค */
+const OUTSOURCE_LATE_DAYS = 2;
+function stuckDays(iso: string) {
+  const day = (d: Date) => Math.floor((d.getTime() + 7 * 3600_000) / 86_400_000);
+  return day(new Date()) - day(new Date(iso));
+}
+function outsourceLate(r: WorkOrderRow) {
+  return !!r.outsource && r.status === "IN_PROGRESS" && stuckDays(r.stageSince) >= OUTSOURCE_LATE_DAYS;
+}
 
 function whoKeys(row: WorkOrderRow): Who[] {
   if (row.stageActor === "SUPERVISOR")
@@ -230,8 +261,7 @@ function waitText(row: WorkOrderRow) {
 
 /** "ค้าง 3 วัน" — นับเป็นวันเต็มตามเวลาไทย วันนี้ = "เข้าขั้นนี้วันนี้" */
 export function stuckLabel(iso: string) {
-  const day = (d: Date) => Math.floor((d.getTime() + 7 * 3600_000) / 86_400_000);
-  const n = day(new Date()) - day(new Date(iso));
+  const n = stuckDays(iso);
   return n <= 0 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${n} วัน`;
 }
 
@@ -263,6 +293,17 @@ function RolledBackBadge({ row }: { row: { rolledBackFrom?: string | null } }) {
     >
       <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้น</Text>
     </View>
+  );
+}
+
+/** "ค้าง n วัน" — ทีม outsource เข้างานค้างเกินกำหนดขึ้นแดง ให้หัวหน้าภาคตามรูปมาปิดงาน */
+function StuckText({ row, style }: { row: WorkOrderRow; style: object }) {
+  const late = outsourceLate(row);
+  return (
+    <Text style={[style, late && { color: colors.dangerInk, fontWeight: "700" }]}>
+      {stuckLabel(row.stageSince)}
+      {late ? " · ตามทีม outsource ปิดงาน" : ""}
+    </Text>
   );
 }
 
@@ -446,8 +487,15 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     return out;
   }, [rows, byOwner, byType, byCols, colFilters]);
   const colFilterCount = Object.values(colFilters).filter(Boolean).length;
+  const supTabs = filter === "INBOX" && user?.role === "SUPERVISOR";
+  // ตัวเลขบนแท็บนับหลังตัวกรองอื่น — ตรงกับจำนวนที่จะเห็นเมื่อกดเข้าไป
+  const supTabCounts = useMemo(() => {
+    const n: Record<SupTab, number> = { repair: 0, dispatch: 0, outsource: 0 };
+    if (supTabs) for (const r of rows) if (byOwner(r) && byType(r) && byCols(r)) n[supTabOf(r)]++;
+    return n;
+  }, [supTabs, rows, byOwner, byType, byCols]);
   const shown = useMemo(() => {
-    const list = rows.filter((r) => byOwner(r) && byType(r) && byCols(r));
+    const list = rows.filter((r) => byOwner(r) && byType(r) && byCols(r) && (!supTabs || supTabOf(r) === prefs.supTab));
     const at = (iso: string) => new Date(iso).getTime();
     const code = (a: WorkOrderRow, b: WorkOrderRow) =>
       a.branchCode.localeCompare(b.branchCode, "en", { numeric: true }) || a.code.localeCompare(b.code);
@@ -455,10 +503,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     else if (prefs.sort === "za") list.sort((a, b) => code(b, a));
     else if (prefs.sort === "new") list.sort((a, b) => at(b.createdAt) - at(a.createdAt));
     else if (prefs.sort === "old") list.sort((a, b) => at(a.stageSince) - at(b.stageSince));
-    else if (prefs.sort === "appt") {
+    else if (prefs.sort === "appt" || (supTabs && prefs.sort === "urgent" && prefs.supTab === "dispatch")) {
+      // แท็บจ่ายงาน: วันนัดใกล้สุดก่อน — ใบที่ต้องปล่อยงานวันนี้/พรุ่งนี้ขึ้นบน
       const k = COLUMNS.find((c) => c.key === "appt")!.sortValue!;
       list.sort((a, b) => k(a).localeCompare(k(b)));
-    }
+    } else if (supTabs && prefs.sort === "urgent" && prefs.supTab === "outsource")
+      // แท็บ outsource: ค้างนานสุดก่อน — ใบที่ต้องตามทีมนอกขึ้นบน
+      list.sort((a, b) => at(a.stageSince) - at(b.stageSince));
     // เรียงจากหัวคอลัมน์ทับการเรียงจากแถบตัวกรอง (กดล่าสุดชนะ — แถบตัวกรองกดแล้วล้างอันนี้)
     if (colSort) {
       const col = COLUMNS.find((c) => c.key === colSort.key)!;
@@ -470,7 +521,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     // ใบที่ปิดแล้วไม่ดึงขึ้น ด่วนเมื่อเดือนก่อนไม่ได้แปลว่าต้องดูก่อนวันนี้
     const hot = list.filter(isHot);
     return hot.length ? [...hot, ...list.filter((r) => !isHot(r))] : list;
-  }, [rows, byOwner, byType, byCols, prefs.sort, colSort]);
+  }, [rows, byOwner, byType, byCols, prefs.sort, prefs.supTab, supTabs, colSort]);
 
   /**
    * แถวคั่น "ด่วน (n)" / "ปกติ (n)" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน
@@ -759,6 +810,26 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
         <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
       </View>
+      {supTabs && !loading && !error ? (
+        <View style={styles.supTabs}>
+          {SUP_TABS.map((t) => {
+            const on = prefs.supTab === t.value;
+            return (
+              <TouchableOpacity
+                key={t.value}
+                style={[styles.supTab, on && styles.supTabOn]}
+                onPress={() => setPref({ supTab: t.value })}
+                accessibilityLabel={`แท็บ ${t.label} ${supTabCounts[t.value]} ใบ`}
+                accessibilityState={{ selected: on }}
+              >
+                <Text style={[styles.supTabText, on && styles.supTabTextOn]}>
+                  {t.label} <Text style={{ fontWeight: "800" }}>{supTabCounts[t.value]}</Text>
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
       {filter === "INBOX" && !loading ? (
         <InboxAttention rows={shown} role={user?.role ?? null} onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })} />
       ) : null}
@@ -1370,7 +1441,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <RolledBackBadge row={row} />
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
         {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
-        {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
+        {row.stageActor ? <StuckText row={row} style={styles.td2} /> : null}
         <PartsEta row={row} />
       </View>
       <View style={styles.colWait}>
@@ -1444,7 +1515,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       {row.stageActor ? (
         <View style={styles.metaRow}>
           <WaitingOn row={row} />
-          <Text style={styles.meta}>{stuckLabel(row.stageSince)}</Text>
+          <StuckText row={row} style={styles.meta} />
         </View>
       ) : null}
       <PartsEta row={row} />
@@ -1557,6 +1628,18 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
 }
 
 const styles = StyleSheet.create({
+  supTabs: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.sm },
+  supTab: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+  },
+  supTabOn: { backgroundColor: colors.primaryDark, borderColor: colors.primaryDark },
+  supTabText: { fontSize: 14, lineHeight: 22, fontWeight: "600", color: colors.text },
+  supTabTextOn: { color: "#fff" },
   attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
   attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
