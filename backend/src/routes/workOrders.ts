@@ -671,6 +671,20 @@ function listShape(
     waitingOnSupervisors,
     // รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินแยกหัวข้อ "ไม่มีคนรับ"
     orphan: actor === "SUPERVISOR" && waitingOnSupervisors.length === 0,
+    /**
+     * ทำไมไม่มีคนรับ — แอดมินรู้เลยว่าต้องไปแก้ที่สาขา (ไม่มีภาค/ทีม) หรือที่หัวหน้าภาค (ภาค/ทีมนี้ยังไม่มีคนดูแล)
+     * เดิมขึ้นแค่ "ไม่มีคนรับ" ต้องเปิดใบทีละใบไปเทียบกับผังผู้รับผิดชอบเอง (เจ้าของงานขอ ต.ค. 69)
+     */
+    orphanReason:
+      actor === "SUPERVISOR" && waitingOnSupervisors.length === 0
+        ? (() => {
+            const team = w.assignedTeam ?? w.branch.zone ?? w.branch.pmTeam;
+            const where = `ภาค${w.branch.region ?? " —"} · ทีม${team ?? " —"}`;
+            return !w.branch.region && !team
+              ? `${where} — สาขายังไม่มีภาคและทีม (ตั้งที่จัดการข้อมูลสาขา)`
+              : `${where} — ยังไม่มีหัวหน้าภาคดูแลภาค/ทีมนี้ (ตั้งที่สิทธิ์ผู้ใช้)`;
+          })()
+        : null,
     // วันนัดผ่านไปแล้วยังไม่ได้คอนเฟิร์มลูกค้า — กล่องงานแอดมินแยกหัวข้อ "เลยนัด"
     overdue:
       (w.status === "AWAITING_CONFIRM" || w.status === "INSPECT_CONFIRM") &&
@@ -899,6 +913,8 @@ async function writeLog(
   await tx.workOrderLog.create({
     data: { workOrderId, userId: userId ?? null, action, status, note: note ?? null },
   });
+  // ใบขยับขั้น = ชุด "ไม่มีคนรับ" อาจเปลี่ยน — ทิ้งผลที่จำไว้ ให้กล่องงานแอดมินไม่ค้างของเก่า
+  orphanCache = null;
 }
 
 // ── รายการ ──────────────────────────────────────────────
@@ -920,7 +936,19 @@ async function writeLog(
  * เดิมขึ้นแค่ "ยังไม่มีคนดูแล" ในรายการ แต่ไม่อยู่ในกล่องของใคร ค้างได้เป็นสัปดาห์โดยไม่มีใครเห็น
  * (เจ้าของงานเลือก ต.ค. 69) · แอดมินกดแทนได้ทุกขั้นอยู่แล้ว ยกเว้นเบิกคลังอื่น (ต้องตั้งหัวหน้าภาคก่อน)
  */
+/**
+ * จำผลไว้ 60 วินาที — inbox-count ถูกเรียกทุกครั้งที่แอดมินเปลี่ยนหน้า (เมนูข้าง) และรายการโหลดซ้ำทุกนาที
+ * แต่ละครั้งต้องดึงใบที่รอหัวหน้าภาคทั้งบริษัท · ช้าไปไม่เกินนาทีไม่มีผลกับงาน (ใบไม่มีคนรับค้างเป็นวัน)
+ */
+let orphanCache: { at: number; ids: number[] } | null = null;
 async function orphanSupervisorIds(): Promise<number[]> {
+  if (orphanCache && Date.now() - orphanCache.at < 60_000) return orphanCache.ids;
+  const ids = await computeOrphanSupervisorIds();
+  orphanCache = { at: Date.now(), ids };
+  return ids;
+}
+
+async function computeOrphanSupervisorIds(): Promise<number[]> {
   const stages = WORK_ORDER_STAGE_ORDER.filter((st) => WORK_ORDER_STAGE_ACTOR[st] === "SUPERVISOR");
   const [rows, sups] = await Promise.all([
     prisma.workOrder.findMany({
