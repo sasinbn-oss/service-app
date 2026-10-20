@@ -1084,14 +1084,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       <View style={card}>
         {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
         {urgent ? <UrgentGlow radius={radius.xl} /> : null}
-        {urgent ? (
-          <View style={styles.urgentBar}>
-            <Ionicons name="alert-circle" size={16} color="#fff" />
-            <Text style={styles.urgentBarText}>
-              งานด่วน <Text style={styles.urgentBarSub}>— ทำก่อนใบปกติ</Text>
-            </Text>
-          </View>
-        ) : null}
+        {/* ไม่มีแถบ "งานด่วน — ทำก่อนใบปกติ" แล้ว (เจ้าของงานขอ ต.ค. 69) — บอกซ้ำกับป้าย "ด่วน" ข้างเลขใบงาน
+            และกินที่ด้านบนการ์ด ออร่าแดงรอบการ์ดยังบอกตั้งแต่เปิดใบว่าเป็นงานด่วน */}
         <View style={styles.headRow}>
           <Text style={[styles.code, headingFont]}>{order.code}</Text>
           {urgent ? <UrgentBadge /> : null}
@@ -5588,18 +5582,6 @@ const styles = StyleSheet.create({
   lockBtnText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
   card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  urgentBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    backgroundColor: colors.danger,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    marginBottom: spacing.md,
-  },
-  urgentBarText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "800" },
-  urgentBarSub: { fontWeight: "500" },
   code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
