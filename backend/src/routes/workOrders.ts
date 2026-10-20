@@ -782,6 +782,46 @@ async function blockedForTeam(
   return true;
 }
 
+type ViewableWorkOrder = {
+  id: number;
+  assignedTeam: string | null;
+  assignedToId: number | null;
+  createdById: number | null;
+  branch: { region: string | null; zone: string | null; pmTeam: string | null };
+};
+
+/**
+ * เปิดดูใบงานนี้ได้ไหม (ตรวจระบบ ต.ค. 69) — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว
+ *
+ * เดิมเปิดตรงด้วยเลขใบงานได้ทุกใบ ทั้งที่หน้ารายการกรองตามทีม/พื้นที่ — ไล่เลขก็เห็นเบอร์ลูกค้า
+ * และรูปในร้านของทั้งบริษัท · ตอนนี้ใช้กฎเดียวกับหน้ารายการ บวกใบที่ช่างคนนั้นเปิดเอง
+ * (เปิดใบงานเสร็จต้องเข้าดู/แนบรูปใบตัวเองได้ ทั้งที่ยังไม่จ่ายทีม) และใบที่เคยไปทำ (ประวัติงานตัวเอง)
+ */
+async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder) {
+  const role = req.auth!.role;
+  if (role === "ADMIN") return false;
+  if (role === "SUPERVISOR") {
+    if (coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) return false;
+    res.status(403).json({ error: OUT_OF_SCOPE });
+    return true;
+  }
+  const me = req.auth!.userId;
+  if (wo.assignedToId === me || wo.createdById === me) return false;
+  const user = await prisma.user.findUnique({ where: { id: me }, select: { team: true } });
+  if (covers(await coverageOf(user?.team ?? null), wo.assignedTeam)) return false;
+  if ((await prisma.workOrderWorker.count({ where: { workOrderId: wo.id, userId: me } })) > 0) return false;
+  res.status(403).json({ error: "ใบงานนี้ไม่ใช่ของทีมคุณ — ถ้าต้องช่วยงานนี้ ให้หัวหน้าภาคจ่ายงานให้ทีมคุณ", notYourTeam: true });
+  return true;
+}
+
+const VIEW_SELECT = {
+  id: true,
+  assignedTeam: true,
+  assignedToId: true,
+  createdById: true,
+  branch: { select: { region: true, zone: true, pmTeam: true } },
+} as const;
+
 /** ช่างคนนี้แตะใบงานนี้ได้ไหม — ทีมของตัวเอง (หรือทีมที่ทีมรวมครอบคลุม) หรืองานเก่าที่จ่ายให้ตัวเอง */
 function canTouch(
   wo: { assignedTeam: string | null; assignedToId: number | null },
@@ -1310,11 +1350,11 @@ router.get("/options", requireAuth, async (_req, res) => {
  * ทุกการเปลี่ยนแปลงลงประวัติ เลขประวัติล่าสุดจึงเป็นรุ่นของใบงานโดยไม่ต้องเพิ่มคอลัมน์ ·
  * ตอบเล็กที่สุดที่บอกได้ว่า "ใครเปลี่ยนอะไร" — เดิมสองคนเปิดใบเดียวกัน อีกคนเห็นของเก่าจนรีเฟรชเบราว์เซอร์
  */
-router.get("/:id/version", requireAuth, async (req, res) => {
+router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const [wo, last] = await Promise.all([
-    prisma.workOrder.findUnique({ where: { id }, select: { status: true } }),
+    prisma.workOrder.findUnique({ where: { id }, select: { status: true, ...VIEW_SELECT } }),
     prisma.workOrderLog.findFirst({
       where: { workOrderId: id },
       orderBy: { id: "desc" },
@@ -1322,6 +1362,7 @@ router.get("/:id/version", requireAuth, async (req, res) => {
     }),
   ]);
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, wo)) return;
   res.json({
     v: last?.id ?? 0,
     byId: last?.userId ?? null,
@@ -1341,12 +1382,13 @@ router.get("/:id/version", requireAuth, async (req, res) => {
 const APPOINTMENT_BY_ACTIONS = ["CONFIRMED", "RESCHEDULED"];
 const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
 
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
   const row = await prisma.workOrder.findUnique({ where: { id }, include: detailInclude });
   if (!row) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, row)) return;
 
   const logs = await prisma.workOrderLog.findMany({
     where: { workOrderId: id },
@@ -1806,8 +1848,6 @@ const updateSchema = z.object({
   title: z.string().min(1).optional(),
   detail: z.string().nullable().optional(),
   priority: z.enum(WORK_ORDER_PRIORITIES).optional(),
-  assignedToId: z.number().int().nullable().optional(),
-  scheduledAt: z.string().min(1).nullable().optional(),
   symptom: z.string().trim().max(500).nullable().optional(),
   workStatus: z.enum(STORABLE_WORK_STATUSES).nullable().optional(),
   // เลขประวัติล่าสุดตอนเปิดฟอร์ม — มีคนอื่นเปลี่ยนใบงานหลังจากนั้น ไม่ให้บันทึกทับเงียบ ๆ
@@ -1817,31 +1857,38 @@ const updateSchema = z.object({
   // หัวหน้าภาคแก้ได้ทุกอย่างตอนช่างส่งกลับ — ผู้ติดต่อเปลี่ยนบ่อย (พนักงานร้านเปลี่ยนกะ)
   contactName: z.string().trim().max(120).nullable().optional(),
   contactPhone: z.string().trim().max(40).nullable().optional(),
-  // อะไหล่ที่รออยู่ ส่งมาทั้งชุดเสมอ — ตัวที่ไม่เปลี่ยนเก็บผลเช็คเดิมไว้ (mergeWaitingParts) ส่ง [] คือล้างออกหมด
-  waitingParts: z
-    .array(
-      z.object({
-        sparePartId: z.number().int().positive(),
-        quantity: z.number().int().min(1).max(999).default(1),
-      })
-    )
-    .max(20)
-    .optional(),
 });
+
+/**
+ * ช่องที่เคยแก้ได้ทางนี้ แต่ต้องผ่านปุ่มขั้นตอน (ตรวจระบบ ต.ค. 69) — แอปไม่เคยส่ง แต่เซิร์ฟเวอร์เคยรับ:
+ * ช่างตั้งตัวเองเป็นผู้รับงานใบทีมอื่นแล้วปิดงานแทนได้ · เพิ่มอะไหล่ข้ามการเช็คคลัง/เสนอราคา · ตั้งวันนัดข้ามการคอนเฟิร์มลูกค้า
+ * ปฏิเสธตรง ๆ ไม่ทิ้งเงียบ — คนที่ยิงมาจะได้รู้ว่าต้องไปทางไหน
+ */
+const STAGE_ONLY_FIELDS: Record<string, string> = {
+  assignedToId: "ผู้รับงานเปลี่ยนที่ขั้นจ่ายงาน",
+  scheduledAt: "วันนัดเปลี่ยนที่ขั้นจ่ายงาน/คอนเฟิร์มลูกค้า",
+  waitingParts: "อะไหล่เปลี่ยนที่ขั้นระบุอะไหล่",
+};
 
 router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
+  const stageOnly = Object.keys(req.body ?? {}).filter((k) => STAGE_ONLY_FIELDS[k]);
+  if (stageOnly.length) {
+    return res.status(400).json({ error: `แก้ทางนี้ไม่ได้ — ${stageOnly.map((k) => STAGE_ONLY_FIELDS[k]).join(" · ")}` });
+  }
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const body = parsed.data;
 
   const current = await prisma.workOrder.findUnique({
     where: { id },
-    select: { status: true, assignedToId: true, workStatus: true },
+    select: { status: true, workStatus: true, ...VIEW_SELECT },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  // แก้ได้เฉพาะใบที่เปิดดูได้ — เดิมใครก็แก้ใบไหนก็ได้ (ตรวจระบบ ต.ค. 69)
+  if (await blockedForViewer(req, res, current)) return;
   if (current.status === "DONE" || current.status === "CANCELLED") {
     return res.status(400).json({ error: "ใบงานนี้ปิดไปแล้ว แก้ไขไม่ได้" });
   }
@@ -1892,10 +1939,6 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
         ...(body.title !== undefined ? { title: body.title.trim() } : {}),
         ...(body.detail !== undefined ? { detail: body.detail?.trim() || null } : {}),
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
-        ...(body.assignedToId !== undefined ? { assignedToId: body.assignedToId } : {}),
-        ...(body.scheduledAt !== undefined
-          ? { scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null }
-          : {}),
         ...(body.symptom !== undefined ? { symptom: body.symptom?.trim() || null } : {}),
         ...(nextWorkStatus !== undefined ? { workStatus: nextWorkStatus } : {}),
         ...(body.contactName !== undefined ? { contactName: body.contactName?.trim() || null } : {}),
@@ -1903,16 +1946,8 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       },
     });
 
-    if (body.waitingParts !== undefined) {
-      await mergeWaitingParts(tx, id, body.waitingParts);
-    }
-
-    // อาการ สถานะ อะไหล่ที่รอ และวันนัด เป็นสิ่งที่กระดานแสดง จึงต้องส่งต่อไปที่เคส
-    const touchedNote =
-      body.symptom !== undefined ||
-      nextWorkStatus !== undefined ||
-      body.waitingParts !== undefined ||
-      body.scheduledAt !== undefined;
+    // อาการกับสถานะเป็นสิ่งที่กระดานแสดง จึงต้องส่งต่อไปที่เคส
+    const touchedNote = body.symptom !== undefined || nextWorkStatus !== undefined;
     if (touchedNote) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
 
     await writeLog(tx, id, req.auth!.userId, "EDITED", current.status);
@@ -4188,22 +4223,48 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
   res.json(shape(row));
 });
 
-const cancelSchema = z.object({ reason: z.string().optional() });
+/**
+ * ยกเลิกใบงาน — แอดมิน และหัวหน้าภาคในพื้นที่ (เจ้าของงานเลือก ต.ค. 69) ต้องบอกเหตุผลเสมอ
+ *
+ * เดิมใครที่ล็อกอินก็ยกเลิกใบไหนก็ได้และไม่ต้องบอกเหตุผล (ตรวจระบบ ต.ค. 69) — ช่างคนเดียวยกเลิกได้ทั้งบริษัท
+ * เหตุผลเป็นตัวเลือก + ข้อความ: ตัวเลือกให้นับได้ว่ายกเลิกเพราะอะไรบ่อย ข้อความให้รู้ว่าซ้ำกับใบไหน
+ */
+const CANCEL_REASON_LABELS: Record<string, string> = {
+  DUPLICATE: "เปิดซ้ำ",
+  CUSTOMER: "ลูกค้ายกเลิก",
+  WRONG: "เปิดผิดสาขา/ผิดเครื่อง",
+  OTHER: "อื่น ๆ",
+};
+const cancelSchema = z.object({
+  reasonCode: z.enum(["DUPLICATE", "CUSTOMER", "WRONG", "OTHER"], { errorMap: () => ({ message: "ต้องเลือกเหตุผลที่ยกเลิก" }) }),
+  note: z.string().trim().max(300).optional(),
+});
 
 router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "ยกเลิกใบงานได้เฉพาะแอดมินกับหัวหน้าภาค — เจอปัญหาหน้างานให้ใช้ “ส่งกลับหัวหน้าภาค”" });
+  }
   const parsed = cancelSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { reasonCode, note } = parsed.data;
+  if (reasonCode === "OTHER" && !note) return res.status(400).json({ error: "เลือก “อื่น ๆ” ต้องพิมพ์เหตุผลด้วย" });
 
   const current = await prisma.workOrder.findUnique({
     where: { id },
-    select: { status: true, code: true },
+    select: { status: true, code: true, ...VIEW_SELECT },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (current.status === "DONE") {
-    return res.status(400).json({ error: `${current.code} ปิดไปแล้ว ยกเลิกไม่ได้` });
+  if (role === "SUPERVISOR" && (await blockedForViewer(req, res, current))) return;
+  if (current.status === "DONE" || current.status === "CANCELLED") {
+    return res.status(400).json({ error: `${current.code} ${current.status === "DONE" ? "ปิดไปแล้ว" : "ถูกยกเลิกไปแล้ว"} ยกเลิกไม่ได้` });
+  }
+  // ยกเลิกระหว่างรอตรวจเคลมทิ้งใบเคลมค้างสถานะรอตรวจไว้ — ต้องให้ Admin Spare Part ตัดสินก่อน
+  if (current.status === "CLAIM_REVIEW") {
+    return res.status(409).json({ error: `${current.code} รอตรวจเคลมอยู่ — ให้ตรวจเคลมให้เสร็จก่อนยกเลิก` });
   }
 
   await prisma.$transaction(async (tx) => {
@@ -4214,7 +4275,7 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
       req.auth!.userId,
       "CANCELLED",
       "CANCELLED",
-      parsed.data.reason?.trim() || null
+      `${CANCEL_REASON_LABELS[reasonCode]}${note ? ` — ${note}` : ""}`
     );
   }, STAGE_TX);
 
@@ -4358,29 +4419,14 @@ async function loadAttachableWorkOrder(
 ): Promise<{ id: number; code: string; status: string } | null> {
   const wo = await prisma.workOrder.findUnique({
     where: { id },
-    select: {
-      id: true,
-      code: true,
-      status: true,
-      assignedToId: true,
-      assignedTeam: true,
-      branch: { select: { region: true, zone: true, pmTeam: true } },
-    },
+    select: { code: true, status: true, ...VIEW_SELECT },
   });
   if (!wo) {
     res.status(404).json({ error: "ไม่พบใบงานนี้" });
     return null;
   }
-
-  const role = req.auth!.role;
-  if (role === "SUPERVISOR") {
-    if (!coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) {
-      res.status(403).json({ error: OUT_OF_SCOPE });
-      return null;
-    }
-  } else if (await blockedForTeam(req, res, wo)) {
-    return null;
-  }
+  // กฎเดียวกับเปิดดูใบงาน — เดิมช่างเปิดรูปของใบที่ยังไม่จ่ายทีมได้ทุกภาค (ภาพในร้านลูกค้า)
+  if (await blockedForViewer(req, res, wo)) return null;
 
   return { id: wo.id, code: wo.code, status: wo.status };
 }

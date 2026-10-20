@@ -53,8 +53,9 @@ GET "work-orders/options" | J 'd.sendBackReasons.length' | grep -q "^5$" && pass
 
 echo
 echo "═══ หัวหน้าภาคแก้รายละเอียดทั้งหมด"
+# อะไหล่ไม่ส่งทางนี้แล้ว (ตรวจระบบ ต.ค. 69) — เปลี่ยนอะไหล่ผ่านขั้นระบุอะไหล่ข้างล่าง เหมือนที่แอปทำ
 curl -s -X PATCH "localhost:4000/api/work-orders/$ID" -H "$(H $S)" -H 'Content-Type: application/json' \
-  -d "{\"title\":\"เครื่อง W81 ไม่ปั่น (นัดใหม่)\",\"priority\":\"URGENT\",\"contactName\":\"คุณใหม่\",\"contactPhone\":\"089-999-9999\",\"waitingParts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
+  -d "{\"title\":\"เครื่อง W81 ไม่ปั่น (นัดใหม่)\",\"priority\":\"URGENT\",\"contactName\":\"คุณใหม่\",\"contactPhone\":\"089-999-9999\"}" >/dev/null
 [ "$(DB "select title||'|'||priority||'|'||\"contactName\"||'|'||\"contactPhone\" from \"WorkOrder\" where id=$ID")" = "เครื่อง W81 ไม่ปั่น (นัดใหม่)|URGENT|คุณใหม่|089-999-9999" ] \
   && pass "แก้เรื่อง ความเร่งด่วน ผู้ติดต่อได้ (ฐานข้อมูล)" || fail "แก้ไม่ติด"
 [ "$(parts $ID)" = "SP-BELT:true:RQ-SB1 SP-BOARD:true:RQ-SB1" ] && pass "แก้ใบงานโดยรายการอะไหล่ไม่เปลี่ยน ผลเช็คไม่หาย" || fail "ผลเช็คหาย: $(parts $ID)"

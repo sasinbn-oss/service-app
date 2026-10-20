@@ -2,7 +2,8 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
-import { requireAuth, requireAdmin } from "../middleware/auth";
+import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
+import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { applyTeamAliases } from "../utils/teamAliases";
 import {
   applyBranchImport,
@@ -233,10 +234,18 @@ router.get("/:code/last-contact", requireAuth, async (req, res) => {
  *
  * ส่งทั้งหมดใหม่ก่อนเก่า หน้าจอตัดเหลือ 3 ใบเอง (ต้องรู้จำนวนทั้งหมดไว้บอก "ดูทั้งหมด")
  * ไม่นับใบทดสอบ — แอดมินคัดลอกไว้ลองระบบ ไม่ใช่งานจริงที่ช่างจะไป
+ *
+ * ใครเห็นอะไร (ตรวจระบบ ต.ค. 69 — เดิมทุกคนเห็นทุกสาขาครบทุกช่อง):
+ * หัวหน้าภาคเฉพาะใบในพื้นที่ · ช่างเห็นแบบย่อ (เลขใบงาน เครื่อง ขั้น) พอให้รู้ว่ามีใบอยู่แล้ว
+ * แต่ไม่เห็นอาการ/ชื่อคน/ทีมของสาขาอื่น และเปิดจากกล่องเตือนไม่ได้ (เจ้าของงานเลือก)
  */
-router.get("/:code/open-work-orders", requireAuth, async (req, res) => {
+router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  const limited = role !== "ADMIN" && role !== "SUPERVISOR";
+  const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : {};
   const rows = await prisma.workOrder.findMany({
     where: {
+      AND: [scope],
       branch: { code: req.params.code },
       status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
       isTest: false,
@@ -255,18 +264,34 @@ router.get("/:code/open-work-orders", requireAuth, async (req, res) => {
     },
   });
   res.json(
-    rows.map((w) => ({
-      id: w.id,
-      code: w.code,
-      status: w.status,
-      statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
-      machineCode: w.machine?.code ?? null,
-      // บรรทัดแรกพอให้จำได้ว่าเรื่องไหน — บรรทัดหลังเป็นสาเหตุที่ช่างเติม
-      symptom: (w.symptom ?? "").split("\n")[0].trim() || w.title,
-      team: w.assignedTeam,
-      createdAt: w.createdAt,
-      createdBy: w.createdBy?.name ?? null,
-    }))
+    rows.map((w) =>
+      limited
+        ? {
+            id: null,
+            code: w.code,
+            status: w.status,
+            statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+            machineCode: w.machine?.code ?? null,
+            symptom: null,
+            team: null,
+            createdAt: w.createdAt,
+            createdBy: null,
+            limited: true,
+          }
+        : {
+            id: w.id,
+            code: w.code,
+            status: w.status,
+            statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+            machineCode: w.machine?.code ?? null,
+            // บรรทัดแรกพอให้จำได้ว่าเรื่องไหน — บรรทัดหลังเป็นสาเหตุที่ช่างเติม
+            symptom: (w.symptom ?? "").split("\n")[0].trim() || w.title,
+            team: w.assignedTeam,
+            createdAt: w.createdAt,
+            createdBy: w.createdBy?.name ?? null,
+            limited: false,
+          }
+    )
   );
 });
 

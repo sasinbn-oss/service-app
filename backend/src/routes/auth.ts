@@ -5,7 +5,7 @@ import { prisma } from "../prisma";
 import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
-import { forgetUser, rememberUser } from "../utils/userGate";
+import { forgetUser, passwordChanged, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
 import { coverageOf, teamGroups } from "../utils/teamGroups";
 import { documentPath, saveDocument } from "../documents/store";
@@ -388,13 +388,17 @@ router.post("/users/:id/reset-password", requireAuth, requireAdmin, async (req: 
     return res.status(403).json({ error: NEED_SUPER });
   }
 
+  // รีเซ็ตให้ = ทุกเครื่องที่ล็อกอินค้างไว้หลุด (มือถือหาย คนลาออก) — ดู issuedBeforePasswordChange
+  const resetAt = new Date();
   await prisma.user.update({
     where: { id },
     data: {
       passwordHash: await bcrypt.hash(parsed.data.password, 10),
       mustChangePassword: true,
+      passwordChangedAt: resetAt,
     },
   });
+  passwordChanged(id, resetAt);
   res.json({ ok: true });
 });
 
@@ -420,13 +424,17 @@ router.post("/change-password", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "รหัสใหม่ต้องไม่ซ้ำกับรหัสเดิม" });
   }
 
+  // เครื่องอื่นที่ล็อกอินด้วยรหัสเดิมหลุด — เครื่องนี้ได้โทเคนใหม่ข้างล่าง (ออกหลังเวลานี้) จึงไม่หลุด
+  const changedAt = new Date();
   await prisma.user.update({
     where: { id: user.id },
     data: {
       passwordHash: await bcrypt.hash(newPassword, 10),
       mustChangePassword: false,
+      passwordChangedAt: changedAt,
     },
   });
+  passwordChanged(user.id, changedAt);
 
   // โทเคนเดิมยังพกธง "ต้องเปลี่ยนรหัส" อยู่ ถ้าไม่ออกใบใหม่ผู้ใช้จะยังถูกกันอยู่ดี
   res.json({

@@ -21,6 +21,7 @@ import StepPulse from "../components/StepPulse";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
+import CancelOrderModal, { CancelOrderButton } from "../components/CancelOrderModal";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -432,6 +433,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [supClosing, setSupClosing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
@@ -469,6 +471,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [deleting, setDeleting] = useState(false);
   // ขั้นที่ทำแล้วที่กดดูอยู่ (null = ไม่ได้ดู)
   const [stepInfo, setStepInfo] = useState<string | null>(null);
+  // เปิดใบที่ไม่ใช่ของทีม/พื้นที่ตัวเอง (403) — หน้ากุญแจแทนตัวหนังสือแดง เพราะไม่ใช่ข้อผิดพลาด แค่ไม่ใช่งานของคุณ
+  const [locked, setLocked] = useState(false);
   // การ์ดสาขา/การมอบหมายวางคู่กันเมื่อหน้าต่างกว้างพอ
   const [bodyWidth, setBodyWidth] = useState(0);
   const twoCol = bodyWidth >= 720;
@@ -498,9 +502,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
       setError(null);
+      setLocked(false);
       return detail.data;
     } catch (e) {
       setError(apiErrorMessage(e));
+      setLocked((e as { response?: { status?: number } })?.response?.status === 403);
       return null;
     } finally {
       setLoading(false);
@@ -636,6 +642,26 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
         <View style={styles.centered}>
           <Spinner color={colors.primary} />
+        </View>
+      </PopupScreen>
+    );
+  }
+
+  if (locked) {
+    return (
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
+        <View style={styles.centered} accessibilityLabel="ไม่มีสิทธิ์ดูใบงานนี้">
+          <View style={styles.lockIcon}>
+            <Ionicons name="lock-closed" size={22} color={colors.textMuted} />
+          </View>
+          <Text style={styles.lockTitle}>
+            {me?.role === "SUPERVISOR" ? "ใบงานนี้อยู่นอกพื้นที่ที่คุณดูแล" : "ใบงานนี้ไม่ใช่ของทีมคุณ"}
+          </Text>
+          {/* ข้อความเซิร์ฟเวอร์ขึ้นต้นด้วยหัวข้อเดียวกัน — ตัดออก เหลือแค่คำแนะนำ */}
+          <Text style={styles.lockText}>{error?.replace(/^ใบงานนี้ไม่ใช่ของทีมคุณ — /, "")}</Text>
+          <TouchableOpacity style={styles.lockBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+            <Text style={styles.lockBtnText}>กลับไปรายการใบงาน</Text>
+          </TouchableOpacity>
         </View>
       </PopupScreen>
     );
@@ -812,6 +838,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const partsOut = PARTS_OUT_STAGES.includes(order.status) ? order.waitingParts.filter((p) => p.inStock === false) : [];
   const etaDay = order.partsExpectedAt ? order.partsExpectedAt.slice(0, 10) : null;
   const sentBack = sentBackLog(order);
+  const cancelLog = order.status === "CANCELLED" ? order.logs.find((l) => l.action === "CANCELLED") ?? null : null;
   const etaLate = !!etaDay && etaDay < new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const urgent = order.priority === "URGENT";
   const done = order.status === "DONE" || order.status === "CANCELLED";
@@ -861,6 +888,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         }}
       />
     ) : null}
+    {cancelling ? (
+      <CancelOrderModal
+        order={order}
+        onClose={() => setCancelling(false)}
+        onDone={async () => {
+          setCancelling(false);
+          await reloadWithNotice();
+        }}
+      />
+    ) : null}
     {supClosing ? (
       <SupervisorCloseModal
         order={order}
@@ -885,7 +922,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {(user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
       !user?.viewAs &&
       !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status) ? (
-        <SupervisorCloseButton onPress={() => setSupClosing(true)} />
+        <View style={styles.headActions}>
+          <SupervisorCloseButton onPress={() => setSupClosing(true)} />
+          {/* ยกเลิก (ใบซ้ำ/เปิดผิด/ลูกค้าไม่เอา) — เดิมแอปมีแต่ลบถาวร คนเลยลบทิ้งทั้งประวัติ */}
+          <CancelOrderButton onPress={() => setCancelling(true)} />
+        </View>
+      ) : null}
+      {/* ยกเลิกแล้ว — บอกว่าทำไม ใคร เมื่อไร (เหตุผลอยู่ในประวัติ CANCELLED ล่าสุด) */}
+      {order.status === "CANCELLED" && cancelLog ? (
+        <View style={[styles.sentBack, styles.cancelledBox]} accessibilityLabel="กล่องยกเลิกใบงาน">
+          <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.sentBackTitle, { color: colors.text }]}>ยกเลิกแล้ว{cancelLog.note ? ` — ${cancelLog.note}` : ""}</Text>
+            <Text style={styles.sentBackMeta}>
+              {cancelLog.byName ?? "—"} · {formatDateTime(cancelLog.createdAt)}
+            </Text>
+          </View>
+        </View>
       ) : null}
       {order.isTest ? (
         <View style={styles.testBand}>
@@ -5178,6 +5231,11 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, gap: spacing.md },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
+  lockIcon: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", backgroundColor: colors.background, marginBottom: spacing.sm },
+  lockTitle: { fontSize: 16, fontWeight: "800", color: colors.text, textAlign: "center" },
+  lockText: { marginTop: 4, fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center", maxWidth: 360 },
+  lockBtn: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
+  lockBtnText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
   card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   urgentBar: {
@@ -5244,6 +5302,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningSoft,
   },
   rolledBack: { borderColor: colors.rollback, backgroundColor: colors.rollbackSoft },
+  cancelledBox: { borderColor: colors.borderStrong, backgroundColor: colors.background },
+  headActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   keepBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: "#A7F3D0", backgroundColor: colors.successSoft },
   keepTitle: { fontSize: 13, fontWeight: "800", color: colors.successInk },
   keepText: { fontSize: 12.5, color: colors.text },
