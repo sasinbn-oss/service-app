@@ -67,6 +67,8 @@ export interface WorkOrderRow {
   appointmentStatusLabel?: string | null;
   /** แอดมินที่คอนเฟิร์มนัดล่าสุด — มีเฉพาะนัดที่ตกลงแล้ว */
   appointmentByName?: string | null;
+  /** ย้อนขั้นมาจากขั้นไหน (ยังไม่มีใครกดผ่านขั้นนี้) — ไม่ได้ย้อน = null */
+  rolledBackFrom?: string | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
   partsExpectedAt?: string | null;
   /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
@@ -244,6 +246,19 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },
 ];
+
+/** ป้ายส้ม "↩ ย้อนขั้น" (เจ้าของงานขอ ต.ค. 69) — ใบที่ถอยมาต้องเห็นจากรายการ ไม่ใช่ต้องเปิดเข้าไปอ่านประวัติ */
+function RolledBackBadge({ row }: { row: { rolledBackFrom?: string | null } }) {
+  if (!row.rolledBackFrom) return null;
+  return (
+    <View
+      style={[styles.badge, { backgroundColor: colors.rollback, alignSelf: "flex-start" }]}
+      accessibilityLabel={`ป้ายย้อนขั้น จาก ${row.rolledBackFrom}`}
+    >
+      <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้น</Text>
+    </View>
+  );
+}
 
 /** ป้ายแดง "อะไหล่หมด" — ใบที่ติดของต้องเห็นจากรายการเลย ไม่ใช่ต้องเปิดเข้าไปอ่านรายการอะไหล่ */
 function PartsOutBadge({ row }: { row: { partsOut?: number } }) {
@@ -1342,6 +1357,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
         </View>
         <PartsOutBadge row={row} />
+        <RolledBackBadge row={row} />
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
         {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
         {row.stageActor ? <Text style={styles.td2}>{stuckLabel(row.stageSince)}</Text> : null}
@@ -1389,6 +1405,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
         <View style={{ flex: 1 }} />
+        <RolledBackBadge row={row} />
         <PartsOutBadge row={row} />
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
