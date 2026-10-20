@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
+import { canViewAs } from "../utils/viewAs";
 import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
 import { forgetUser, passwordChanged, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
@@ -132,7 +133,7 @@ async function meOf(user: MeUser, auth?: AuthRequest["auth"]) {
     mustChangePassword: viewAs ? false : user.mustChangePassword,
     // แอปใช้แสดงแถบ "กำลังดูในฐานะ" ค้างไว้ด้านบนและนับเวลาที่เหลือ
     viewAs: viewAs
-      ? { byName: by?.name ?? "Super Admin", expiresAt: new Date((auth!.exp ?? 0) * 1000).toISOString() }
+      ? { byName: by?.name ?? "แอดมิน", expiresAt: new Date((auth!.exp ?? 0) * 1000).toISOString() }
       : undefined,
   };
 }
@@ -150,7 +151,9 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
  * (ทีม ภาค ทีมรวม ขั้นที่เป็นของใคร) จำลองฝั่งแอปจะเพี้ยนจากของจริงทันทีที่กฎเปลี่ยน
  * ไม่ต้องรู้รหัสผ่านของใคร และไม่กระทบการล็อกอินของเจ้าของบัญชี
  */
-router.post("/view-as", requireAuth, requireSuperAdmin, async (req: AuthRequest, res) => {
+router.post("/view-as", requireAuth, async (req: AuthRequest, res) => {
+  // Admin Spare Part มองเป็น ADMIN ในโทเคน — ดูในฐานะไม่ได้ (ไม่ได้ขอ)
+  if (req.auth!.role !== "ADMIN" || req.auth!.partsAdmin) return res.status(403).json({ error: "ดูในฐานะได้เฉพาะแอดมินและ Super Admin" });
   if (req.auth!.viewAs) return res.status(400).json({ error: "กำลังดูในฐานะคนอื่นอยู่ — กลับเป็นตัวเองก่อน" });
   const userId = Number(req.body?.userId);
   if (!Number.isInteger(userId)) return res.status(400).json({ error: "ไม่ได้เลือกผู้ใช้" });
@@ -159,6 +162,9 @@ router.post("/view-as", requireAuth, requireSuperAdmin, async (req: AuthRequest,
   if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้นี้ — อาจถูกลบไปแล้ว" });
   // Super Admin เห็นทุกอย่างเท่ากันอยู่แล้ว และหน้าจอของเขามีเครื่องมือที่ไม่ควรเปิดผ่านทางอ้อม
   if (target.role === "SUPER_ADMIN") return res.status(400).json({ error: "ดูในฐานะ Super Admin ไม่ได้" });
+  if (!canViewAs(req.auth!.superAdmin ? "SUPER_ADMIN" : "ADMIN", target.role)) {
+    return res.status(403).json({ error: "แอดมินดูในฐานะได้เฉพาะหัวหน้าภาคและช่าง" });
+  }
 
   const log = await prisma.viewAsLog.create({ data: { byUserId: req.auth!.userId, targetUserId: target.id } });
   const token = signViewAsToken({

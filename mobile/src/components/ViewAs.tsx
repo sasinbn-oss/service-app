@@ -49,11 +49,15 @@ function detailOf(p: Person) {
   return p.role === "PARTS_ADMIN" ? "Admin Spare Part" : "แอดมิน";
 }
 
-/** ปุ่มบนแถบบน — เห็นเฉพาะ Super Admin ที่ยังเป็นตัวเองอยู่ */
+/**
+ * ปุ่มบนแถบบน — Super Admin และแอดมิน (ไม่ใช่ Admin Spare Part) ที่ยังเป็นตัวเองอยู่
+ * แอดมินดูได้เฉพาะหัวหน้าภาคกับช่าง (เจ้าของงานเพิ่ม ต.ค. 69 · เซิร์ฟเวอร์กันซ้ำ — utils/viewAs.ts)
+ */
 export function ViewAsButton({ compact }: { compact?: boolean }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  if (!user?.superAdmin || user.viewAs) return null;
+  const allowed = !!user && (user.superAdmin || (user.role === "ADMIN" && !user.partsAdmin));
+  if (!allowed || user?.viewAs) return null;
   return (
     <>
       <TouchableOpacity
@@ -80,7 +84,14 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     api
       .get<Person[]>("/auth/users")
-      .then((r) => setPeople(r.data.filter((p) => p.role !== "SUPER_ADMIN" && p.id !== user?.id)))
+      // แอดมินทั่วไปดูได้เฉพาะหัวหน้าภาค/ช่าง — ไม่ขึ้นรายชื่อแอดมินให้เลือกแล้วโดนปฏิเสธ
+      .then((r) =>
+        setPeople(
+          r.data.filter(
+            (p) => p.role !== "SUPER_ADMIN" && p.id !== user?.id && (user?.superAdmin || p.role === "SUPERVISOR" || p.role === "EMPLOYEE")
+          )
+        )
+      )
       .catch((e) => {
         showAlert("ผิดพลาด", apiErrorMessage(e));
         onClose();
@@ -140,7 +151,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
       }
     >
       <View style={styles.tabs}>
-        {TABS.map((t) => {
+        {TABS.filter((t) => user?.superAdmin || t.role !== "ADMIN").map((t) => {
           const on = t.role === tab;
           const n = (people ?? []).filter((p) => p.role === t.role || (t.role === "ADMIN" && p.role === "PARTS_ADMIN")).length;
           return (
