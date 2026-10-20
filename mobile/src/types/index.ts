@@ -63,8 +63,10 @@ export interface Branch {
   name: string;
   code: string;
   address?: string | null;
-  latitude: number;
-  longitude: number;
+  // สาขาที่นำเข้าจากทะเบียนส่วนใหญ่ยังไม่มีพิกัด (ฐานข้อมูลเป็น Float?) — ประกาศตามจริง
+  // เดิมประกาศว่ามีเสมอ หน้าจัดการสาขาเลยเรียก .toFixed บน null แล้วค้างจอขาวทั้งหน้า (ต.ค. 69)
+  latitude: number | null;
+  longitude: number | null;
   radiusMeters: number;
 }
 
