@@ -21,6 +21,7 @@ import { WAREHOUSES } from "../documents/warehouses";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
+import { buildPartsOutReport, partsOutWorkbook } from "../reports/partsOutReport";
 import {
   buildObjectKey,
   deleteObject,
@@ -1078,6 +1079,30 @@ router.get("/reports/by-opener", requireAuth, async (req: AuthRequest, res) => {
     asciiFilename: `work-orders-by-opener-${q.from}_${q.to}.xlsx`,
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     data: await openerReportWorkbook(report),
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored) });
+});
+
+/**
+ * อะไหล่หมด — สาขาไหนรอของอะไร (เจ้าของงานขอ ต.ค. 69 · src/reports/partsOutReport.ts)
+ * format=xlsx = ไฟล์ Excel · ไม่ส่ง = แถว JSON ให้หน้าจอจัดกลุ่มเอง (ตามอะไหล่ / ตามสาขา)
+ * แอดมินทุกคน (รวม Admin Spare Part) เห็นทั้งหมด · หัวหน้าภาคเห็นเฉพาะภาค/ทีมที่ดูแล · ช่างไม่เห็น
+ */
+router.get("/reports/parts-out", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "รายงานนี้สำหรับแอดมินและหัวหน้าภาค" });
+  }
+  const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : null;
+  const report = await buildPartsOutReport({ scope, scopeLabel: scope ? "เฉพาะภาค/ทีมที่ดูแล" : "ทุกภาค" });
+  if (req.query.format !== "xlsx") return res.json(report);
+  const stamp = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const stored = saveDocument({
+    filename: `อะไหล่หมด-${stamp}.xlsx`,
+    asciiFilename: `parts-out-${stamp}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: await partsOutWorkbook(report),
     ownerId: req.auth!.userId,
   });
   res.json({ filename: stored.filename, path: documentPath(stored) });
