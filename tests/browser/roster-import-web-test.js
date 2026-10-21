@@ -17,6 +17,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     args: ["--no-sandbox"],
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 1400 } });
+  // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+  await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
   page.on("pageerror", (e) => errors.push(String(e)));
   // แท็บอื่นค้างอยู่ข้างหลัง และหน้าต่างลอยซ้อนหน้า — เลือกตัวที่อยู่บนสุดจริง
   const topmost = async (loc) => {

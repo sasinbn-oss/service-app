@@ -27,6 +27,8 @@ const START = Number(sql(`select coalesce(max(id),0) from "Backup"`));
   try {
     const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, acceptDownloads: true });
     const page = await ctx.newPage();
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     const downloads = [];
     page.on("download", (d) => downloads.push(d.suggestedFilename()));
