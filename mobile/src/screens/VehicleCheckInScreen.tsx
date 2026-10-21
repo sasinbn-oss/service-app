@@ -625,8 +625,8 @@ function ReturnForm({ data, log, onDone }: { data: Status; log: VehicleLogRow; o
   );
 }
 
-const VIO_BG = "#F3E8FF";
-const VIO_INK = "#6B21A8";
+const VIO_BG = colors.roleAdminSoft;
+const VIO_INK = colors.roleAdmin;
 const MI = {
   info: { backgroundColor: colors.tile, color: colors.body },
   ok: { backgroundColor: colors.successSoft, color: colors.successInk },
@@ -642,7 +642,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, lineHeight: 32, fontWeight: "700", color: colors.text },
   muted: { fontSize: 12.5, color: colors.textMuted },
   bold: { fontWeight: "700" },
-  welcome: { backgroundColor: colors.navy, borderRadius: radius.xl, padding: spacing.lg, gap: 6 },
+  welcome: { backgroundColor: colors.navyFill, borderRadius: radius.xl, padding: spacing.lg, gap: 6 },
   welcomeSmall: { color: "rgba(255,255,255,0.85)", fontSize: 13 },
   welcomeName: { color: "#fff", fontSize: 22, fontWeight: "700" },
   wstats: { flexDirection: "row", gap: spacing.sm, marginTop: 6 },
@@ -678,7 +678,7 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 12, color: colors.textMuted },
   tileValue: { fontSize: 13.5, fontWeight: "700", color: colors.text },
   btn: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 14 },
-  btnNavy: { backgroundColor: colors.navy },
+  btnNavy: { backgroundColor: colors.navyFill },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 14.5 },
   btnLocked: { backgroundColor: colors.tile },
   btnLockedText: { color: colors.textFaint, fontWeight: "700", fontSize: 13 },
@@ -688,7 +688,7 @@ const styles = StyleSheet.create({
   activeCar: { backgroundColor: colors.card, borderRadius: radius.xl, borderWidth: 2, borderColor: colors.primary, padding: spacing.lg, gap: spacing.md },
   bento: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   bentoBox: { flexGrow: 1, flexBasis: 140, backgroundColor: colors.tile, borderRadius: radius.md, padding: 10, minWidth: 0 },
-  stepN: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.navy, alignItems: "center", justifyContent: "center" },
+  stepN: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.navyFill, alignItems: "center", justifyContent: "center" },
   stepNText: { color: "#fff", fontWeight: "700" },
   stepTitle: { fontSize: 15.5, fontWeight: "700", color: colors.text },
   odo: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 2, borderColor: colors.primary, borderRadius: radius.lg, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.card },

@@ -245,9 +245,9 @@ const styles = StyleSheet.create({
   by: { color: colors.roleAdmin, fontWeight: "700" },
   bubble: {
     maxWidth: 380,
-    backgroundColor: "#E8F5E9",
+    backgroundColor: colors.successSoft,
     borderWidth: 1,
-    borderColor: "#CDE8D2",
+    borderColor: colors.successLine,
     borderRadius: radius.md,
     padding: spacing.md,
     fontSize: 13,

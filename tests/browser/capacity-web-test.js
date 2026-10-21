@@ -13,6 +13,8 @@ const DIR = __dirname;
     args: ["--no-sandbox"],
   });
   const page = await browser.newPage({ viewport: { width: 420, height: 1400 } });
+  // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+  await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
   const pass = (m) => console.log("PASS", m);
   const errors = [];

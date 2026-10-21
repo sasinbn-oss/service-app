@@ -36,6 +36,8 @@ const { setup } = require("./fixture");
     const open = async (code, width) => {
       const ctx = await browser.newContext({ viewport: { width, height: 950 } });
       const page = await ctx.newPage();
+      // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+      await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
       page.on("pageerror", (e) => errors.push(String(e)));
       const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
       await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });

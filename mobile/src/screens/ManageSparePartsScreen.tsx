@@ -473,7 +473,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   chipTextOn: { color: colors.primaryInk, fontWeight: "700" },
   noMatch: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
-  mark: { backgroundColor: "#FDE68A" },
+  mark: { backgroundColor: colors.warningBorder },
   loader: { marginTop: 30 },
   card: {
     flexDirection: "row",

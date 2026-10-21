@@ -79,6 +79,44 @@ export function useDocked() {
   return { canDock, docked: canDock, collapsed: canDock && c };
 }
 
+/**
+ * หัวกลุ่มกดย่อ/กางได้ และจำไว้ (เจ้าของงานขอ ต.ค. 69 — เมนูกางทุกกลุ่มดูเยอะ ลายตา)
+ * ครั้งแรกกางแค่ "งานซ่อม" ที่ใช้ทุกวัน · กลุ่มที่ย่ออยู่ยังโชว์หน้าที่เปิดอยู่ ไม่งั้นแถบฟ้าหายไปกับกลุ่ม
+ */
+const GROUPS_KEY = "otteri-side-groups";
+let closedGroups: Set<string> = (() => {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(GROUPS_KEY) : null;
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    // อ่านไม่ได้ก็ใช้ค่าเริ่มต้น
+  }
+  return new Set(["หน้างาน", "รถ", "เอกสารและบัญชี", "ผู้ดูแลระบบ"]);
+})();
+const groupListeners = new Set<(s: Set<string>) => void>();
+function toggleGroup(title: string) {
+  const next = new Set(closedGroups);
+  if (next.has(title)) next.delete(title);
+  else next.add(title);
+  closedGroups = next;
+  try {
+    localStorage.setItem(GROUPS_KEY, JSON.stringify([...next]));
+  } catch {
+    // ที่เก็บของเบราว์เซอร์ถูกปิด — จำได้แค่รอบนี้
+  }
+  groupListeners.forEach((l) => l(next));
+}
+function useClosedGroups() {
+  const [s, setS] = useState(closedGroups);
+  useEffect(() => {
+    groupListeners.add(setS);
+    return () => {
+      groupListeners.delete(setS);
+    };
+  }, []);
+  return s;
+}
+
 type Tab = keyof MainTabParamList;
 
 interface Item {
@@ -246,24 +284,44 @@ function MenuContent({
 }) {
   const { user } = useAuth();
   const go = onPick;
+  const closed = useClosedGroups();
   return (
     // nativeID = id บนเว็บ — ลากรีเฟรช (PullToRefresh) ไม่จับนิ้วที่อยู่ในเมนู ไม่งั้นเมนูเลื่อนลงตามนิ้ว
     <ScrollView nativeID="side-menu" contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => (
+          {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => {
+            const items = g.items
+              .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
+              .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
+              .filter((it) => !it.superAdmin || user?.superAdmin);
+            if (!items.length) return null;
+            // แถบไอคอน (เมนูหด) ไม่มีหัวกลุ่มให้กด จึงโชว์ทุกปุ่มเสมอ
+            const shut = !rail && closed.has(g.title);
+            const shown = shut ? items.filter((it) => it.key === active) : items;
+            // ตัวเลขกล่องงานต้องไม่หายไปกับกลุ่มที่ย่อ — ย้ายไปติดที่หัวกลุ่มแทน
+            const hiddenBadge = shut && items.some((it) => it.badge && it.key !== active) ? inbox : 0;
+            return (
             <View key={g.title}>
               {rail ? (
                 <View style={styles.railSep} />
               ) : (
-                <View style={styles.group}>
+                <TouchableOpacity
+                  style={styles.group}
+                  activeOpacity={0.7}
+                  onPress={() => toggleGroup(g.title)}
+                  accessibilityLabel={`${shut ? "กาง" : "ย่อ"}กลุ่ม ${g.title}`}
+                >
                   <View style={styles.groupDot} />
-                  <Text style={styles.groupText}>{g.title}</Text>
-                </View>
+                  <Text style={[styles.groupText, { flex: 1 }]}>{g.title}</Text>
+                  {hiddenBadge ? (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{hiddenBadge}</Text>
+                    </View>
+                  ) : null}
+                  {shut ? <Text style={styles.groupCount}>{items.length}</Text> : null}
+                  <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.textMuted} />
+                </TouchableOpacity>
               )}
-              {g.items
-                .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
-                .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
-                .filter((it) => !it.superAdmin || user?.superAdmin)
-                .map((it) => {
+              {shown.map((it) => {
                 const on = active === it.key;
                 const n = it.badge ? inbox : 0;
                 return (
@@ -299,7 +357,8 @@ function MenuContent({
                 );
               })}
             </View>
-          ))}
+            );
+          })}
           {BUILD_AT && !rail ? (
             <View style={styles.foot}>
               <View style={styles.footHead}>
@@ -443,11 +502,11 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
     marginBottom: spacing.xs,
     borderBottomWidth: 1,
-    borderBottomColor: "#EEF2F7",
+    borderBottomColor: colors.border,
   },
   dockHeadRail: { justifyContent: "center", paddingHorizontal: 0 },
   dockHeadText: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.textMuted },
-  railSep: { height: 1, backgroundColor: "#EEF2F7", marginVertical: spacing.sm, marginHorizontal: 6 },
+  railSep: { height: 1, backgroundColor: colors.border, marginVertical: spacing.sm, marginHorizontal: 6 },
   itemRail: { justifyContent: "center", paddingHorizontal: 0 },
   badgeRail: { position: "absolute", top: 0, right: 2, minWidth: 18, height: 18, paddingHorizontal: 5 },
   panel: {
@@ -475,6 +534,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
+  groupCount: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textFaint },
   groupText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted, letterSpacing: 0.5 },
   item: {
     flexDirection: "row",

@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
   form: { padding: 20, backgroundColor: colors.card, borderBottomWidth: 1, borderColor: colors.border },
   formTitle: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 10 },
   input: {
-    backgroundColor: "#fff",
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 8,

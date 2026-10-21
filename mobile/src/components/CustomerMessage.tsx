@@ -96,9 +96,9 @@ const styles = StyleSheet.create({
   copyDone: { backgroundColor: colors.successInk },
   copyText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   bubble: {
-    backgroundColor: "#E8F5E9",
+    backgroundColor: colors.successSoft,
     borderWidth: 1,
-    borderColor: "#CDE8D2",
+    borderColor: colors.successLine,
     borderRadius: radius.md,
     borderBottomLeftRadius: 4,
     padding: spacing.md,

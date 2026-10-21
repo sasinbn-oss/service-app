@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
   },
   checkOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 6 },
-  btn: { backgroundColor: colors.navy, borderRadius: radius.sm, paddingHorizontal: 16, paddingVertical: 8 },
+  btn: { backgroundColor: colors.navyFill, borderRadius: radius.sm, paddingHorizontal: 16, paddingVertical: 8 },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   ghost: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.borderStrong },
   ghostText: { color: colors.navy, fontWeight: "700", fontSize: 13 },

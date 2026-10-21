@@ -25,6 +25,8 @@ const sql = (q) =>
 
   async function session(user, viewport) {
     const page = await browser.newPage({ viewport });
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     // แท็บอื่นยังถูกวาดค้างอยู่ข้างหลัง ข้อความ/ปุ่มเดียวกันจึงมีหลายตัว — เลือกตัวที่อยู่บนสุดจริง ๆ
     const topmost = async (loc) => {

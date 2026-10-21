@@ -57,6 +57,7 @@ import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
 import { ViewAsBanner, ViewAsButton } from "../components/ViewAs";
+import ThemeToggle from "../components/ThemeToggle";
 import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -293,6 +294,7 @@ function LogoutButton() {
       >
         <Ionicons name="log-out-outline" size={20} color={colors.navy} />
       </TouchableOpacity>
+      <ThemeToggle />
     </View>
   );
 }

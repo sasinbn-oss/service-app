@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 10,
     marginTop: 12,
-    backgroundColor: "#fff",
+    backgroundColor: colors.card,
     fontSize: 14,
   },
   actionRow: { flexDirection: "row", gap: 8, marginTop: 10 },

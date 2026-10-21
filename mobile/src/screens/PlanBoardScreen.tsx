@@ -698,16 +698,16 @@ function LaneCard({
 }
 
 const VIOLET = "#7C3AED";
-const AVATAR = [colors.primary, colors.navy, colors.warning, "#E11D48", VIOLET];
+const AVATAR = [colors.primary, colors.navyFill, colors.warning, "#E11D48", VIOLET];
 const TAG_BG = {
   ok: { backgroundColor: colors.successSoft },
   warn: { backgroundColor: colors.warningSoft },
-  violet: { backgroundColor: "#F3E8FF" },
+  violet: { backgroundColor: colors.roleAdminSoft },
 };
 const TAG_FG = {
   ok: { color: colors.successInk },
   warn: { color: colors.warningInk },
-  violet: { color: "#6B21A8" },
+  violet: { color: colors.roleAdmin },
 };
 
 function MonthCalendar({
@@ -1022,7 +1022,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     gap: 2,
   },
-  weekDayOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  weekDayOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   weekDow: { fontSize: 12, color: colors.textMuted },
   weekNum: { fontSize: 20, fontWeight: "700", color: colors.text },
   weekOnText: { color: "#fff" },
@@ -1169,7 +1169,7 @@ const styles = StyleSheet.create({
   calCell: { width: `${100 / 7}%`, alignItems: "center", paddingVertical: 2 },
   calDow: { fontSize: 11, color: colors.textMuted, textAlign: "center" },
   calDay: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" },
-  calDayOn: { backgroundColor: colors.navy },
+  calDayOn: { backgroundColor: colors.navyFill },
   calToday: { borderWidth: 1, borderColor: colors.primary },
   calNum: { fontSize: 13, color: colors.text },
   muted: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
@@ -1213,7 +1213,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: radius.md,
-    backgroundColor: colors.navy,
+    backgroundColor: colors.navyFill,
     minWidth: 110,
     alignItems: "center",
   },
