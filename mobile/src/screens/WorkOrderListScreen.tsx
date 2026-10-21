@@ -121,6 +121,16 @@ const ROLE_TABS: { value: Role; label: string; color: string }[] = [
 const ROLE_LABEL: Record<Role, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
 
 /**
+ * บทบาทของคนเปิดใบ → กลุ่มสี/ป้าย — Super Admin เป็นแอดมินในทุกเรื่องของหน้านี้
+ * เดิมเอาบทบาทไปเปิดตารางสีตรง ๆ ใบที่ Super Admin เปิดได้ undefined แล้วทั้งรายการพัง (หน้าขาว ต.ค. 69)
+ * บทบาทที่ไม่รู้จักขึ้นแบบ "ระบบ" ดีกว่าทำทั้งหน้าใช้ไม่ได้
+ */
+function roleGroup(role: string | null | undefined): Role | null {
+  if (role === "SUPER_ADMIN") return "ADMIN";
+  return role === "ADMIN" || role === "SUPERVISOR" || role === "EMPLOYEE" ? role : null;
+}
+
+/**
  * ลำดับ — "ด่วนก่อน" คือลำดับเดิมจากเซิร์ฟเวอร์ (ด่วนขึ้นก่อน แล้วเก่าสุดก่อน = ลำดับที่ควรหยิบไปทำ)
  * ส่วน "ค้างนานสุด" นับจากวันที่เข้าขั้นปัจจุบัน ไม่ใช่วันเปิดใบงาน — ใบเก่าที่เพิ่งขยับขั้น
  * ไม่ได้ถูกลืม ใบที่นิ่งอยู่ขั้นเดียวหลายวันต่างหากที่ถูกลืม
@@ -250,7 +260,8 @@ type ColFilters = Partial<Record<ColKey, Set<string>>>;
 
 function openerText(row: WorkOrderRow) {
   if (!row.createdByName) return "ระบบ";
-  return row.createdByRole ? `${row.createdByName} (${ROLE_LABEL[row.createdByRole]})` : row.createdByName;
+  const role = roleGroup(row.createdByRole);
+  return role ? `${row.createdByName} (${ROLE_LABEL[role]})` : row.createdByName;
 }
 
 function waitText(row: WorkOrderRow) {
@@ -1439,7 +1450,8 @@ function TableHead({
 
 /** ชื่อผู้เปิด + ป้ายบทบาท สีเดียวกับแท็บบทบาท — ไม่มีผู้เปิดขึ้นว่า "ระบบ" */
 function Opener({ row }: { row: WorkOrderRow }) {
-  const tone = row.createdByRole ? OWNER_TONE[row.createdByRole] : { bg: colors.tile, fg: colors.textMuted };
+  const role = roleGroup(row.createdByRole);
+  const tone = role ? OWNER_TONE[role] : { bg: colors.tile, fg: colors.textMuted };
   return (
     <View style={styles.openerRow}>
       <Text style={styles.openerName} numberOfLines={1}>
@@ -1447,7 +1459,7 @@ function Opener({ row }: { row: WorkOrderRow }) {
       </Text>
       <View style={[styles.roleChip, { backgroundColor: tone.bg }]}>
         <Text style={[styles.roleChipText, { color: tone.fg }]}>
-          {row.createdByRole ? ROLE_LABEL[row.createdByRole] : "อัตโนมัติ"}
+          {role ? ROLE_LABEL[role] : "อัตโนมัติ"}
         </Text>
       </View>
     </View>
