@@ -547,8 +547,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
-  // ทางที่กดมาจากแผงจบใบงาน — ฟอร์มเดียวกัน แต่ล็อก/ตัดเหตุผลให้ตรงกับปุ่มที่กด
-  const [supClosing, setSupClosing] = useState<null | "fixed" | "noVisit">(null);
+  const [supClosing, setSupClosing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
@@ -1052,10 +1051,9 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         order={order}
         technicians={technicians}
         subTeams={teams.filter((t) => t.outsource).map((t) => t.name)}
-        mode={supClosing}
-        onClose={() => setSupClosing(null)}
+        onClose={() => setSupClosing(false)}
         onDone={async () => {
-          setSupClosing(null);
+          setSupClosing(false);
           await reloadWithNotice();
         }}
       />
@@ -1951,60 +1949,20 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       <History logs={order.logs} closed={closedOk} />
 
       {/*
-        แผงท้ายใบงาน (เจ้าของงานขอออกแบบใหม่ ต.ค. 69) — เดิมเป็นปุ่ม "จบใบงาน…" ที่ต้องกดเปิดอีกชั้น
-        ถึงจะเห็นว่าจบได้กี่ทาง ปนกับลิงก์คัดลอก/ลบที่หน้าตาเหมือนกัน · ตอนนี้สามทางจบเห็นทันที
-        กดแล้วเข้าฟอร์มของทางนั้นเลย · เครื่องมือรองย่อเป็นชิปเล็ก · ลบถาวรแยกกล่องแดงให้รู้ว่าไม่ใช่ทางจบ
+        ปุ่มปิดใบงานปุ่มเดียว (เจ้าของงานเลือก ต.ค. 69) — กดแล้วเข้าฟอร์มเหตุผลที่ปิดตามปกติ
+        ชื่อ "ปิดใบงาน" ไม่ใช่ "ปิดงาน" เพราะขั้นเข้างานมีปุ่ม "ปิดงาน" ของช่าง (แนบรูป) อยู่แล้ว แอดมินเห็นทั้งสองปุ่ม
+        เคยลองแผงสามทาง (ซ่อมเสร็จ/ไม่ต้องเข้า/ยกเลิก) แต่เจ้าของงานอยากได้ปุ่มเดียวที่คุ้นมือ
+        ยกเลิกใบงานย้ายไปอยู่ในชิปเครื่องมือด้านล่าง เพราะไม่ใช่ทางปิดงานปกติ
       */}
       {canEnd ? (
-        <View style={styles.endPanel} accessibilityLabel="จบใบงาน">
-          <View style={styles.endHead}>
-            <Ionicons name="flag-outline" size={18} color={colors.navy} />
-            <Text style={styles.endHeadTitle}>จบใบงานนี้</Text>
-            <Text style={styles.endHeadHint}>เลือกว่าจบเพราะอะไร</Text>
-          </View>
-          <View style={styles.endOpts}>
-            <TouchableOpacity
-              style={[styles.endOpt, { borderColor: colors.success, backgroundColor: colors.successSoft }]}
-              onPress={() => setSupClosing("fixed")}
-              accessibilityLabel="จบ: ซ่อมเสร็จแล้ว"
-            >
-              <View style={styles.endOptTop}>
-                <Ionicons name="checkmark-circle" size={20} color={colors.success} />
-                <Text style={[styles.endOptTitle, { color: colors.successInk }]}>ซ่อมเสร็จแล้ว</Text>
-              </View>
-              <Text style={styles.endOptHint}>ช่างเข้าแก้แล้วแต่ไม่ได้ปิดในระบบ · ใส่ใครเข้า วันที่ รูปหลังซ่อม</Text>
-              <Text style={[styles.endOptTag, { color: colors.successInk }]}>นับเป็นงานซ่อมเสร็จ</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.endOpt, { borderColor: colors.roleSupervisor, backgroundColor: colors.roleSupervisorSoft }]}
-              onPress={() => setSupClosing("noVisit")}
-              accessibilityLabel="จบ: ไม่ต้องเข้าหน้างาน"
-            >
-              <View style={styles.endOptTop}>
-                <Ionicons name="call" size={18} color={colors.roleSupervisor} />
-                <Text style={[styles.endOptTitle, { color: colors.roleSupervisor }]}>ไม่ต้องเข้าหน้างาน</Text>
-              </View>
-              <Text style={styles.endOptHint}>เครื่องกลับมาเอง · แก้ทางโทรศัพท์ · ร้านจัดการเอง · ซ่อมรวมกับใบอื่น</Text>
-              <Text style={[styles.endOptTag, { color: colors.roleSupervisor }]}>ต้องใส่เหตุผล</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.endOpt, { borderColor: colors.danger, backgroundColor: colors.dangerSoft }]}
-              onPress={() => setCancelling(true)}
-              accessibilityLabel="จบ: ไม่ทำแล้ว"
-            >
-              <View style={styles.endOptTop}>
-                <Ionicons name="close-circle" size={20} color={colors.danger} />
-                <Text style={[styles.endOptTitle, { color: colors.dangerInk }]}>ไม่ทำแล้ว — ยกเลิก</Text>
-              </View>
-              <Text style={styles.endOptHint}>เปิดซ้ำ · ลูกค้ายกเลิก · เปิดผิดสาขา/เครื่อง</Text>
-              <Text style={[styles.endOptTag, { color: colors.dangerInk }]}>เก็บใบไว้พร้อมประวัติ</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <TouchableOpacity style={styles.closeBtn} onPress={() => setSupClosing(true)} accessibilityLabel="ปิดใบงาน">
+          <Ionicons name="checkmark-done-circle" size={20} color="#fff" />
+          <Text style={styles.closeBtnText}>ปิดใบงาน</Text>
+        </TouchableOpacity>
       ) : null}
 
-      {/* เครื่องมือรอง — ไม่ใช่ทางจบ จึงย่อเป็นชิปให้ไม่แย่งสายตาจากแผงด้านบน */}
-      {canFollowUp || (user?.role === "ADMIN" && (!order.isTest || canEnd)) ? (
+      {/* เครื่องมือรอง — ไม่ใช่ทางปิดงานปกติ จึงย่อเป็นชิปให้ไม่แย่งสายตาจากปุ่มปิดงาน */}
+      {canFollowUp || canEnd || (user?.role === "ADMIN" && !order.isTest) ? (
         <View style={styles.toolRow}>
           <Text style={styles.toolLabel}>เครื่องมือ</Text>
           {canFollowUp ? (
@@ -2029,6 +1987,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             >
               <Ionicons name="time-outline" size={15} color={colors.primaryInk} />
               <Text style={styles.toolChipText}>ปิดงานย้อนหลัง (กรอกทุกขั้น)</Text>
+            </TouchableOpacity>
+          ) : null}
+          {canEnd ? (
+            <TouchableOpacity
+              style={[styles.toolChip, { borderColor: colors.dangerSoft }]}
+              onPress={() => setCancelling(true)}
+              activeOpacity={0.7}
+              accessibilityLabel="ยกเลิกใบงาน"
+            >
+              <Ionicons name="close-circle-outline" size={15} color={colors.danger} />
+              <Text style={[styles.toolChipText, { color: colors.dangerInk }]}>ยกเลิกใบงาน</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -5457,16 +5426,8 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 const styles = StyleSheet.create({
-  endPanel: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, backgroundColor: colors.card, padding: spacing.md, gap: spacing.md, marginTop: spacing.md },
-  endHead: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
-  endHeadTitle: { fontSize: 16, fontWeight: "800", color: colors.navy },
-  endHeadHint: { fontSize: 12.5, color: colors.textMuted },
-  endOpts: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  endOpt: { flexGrow: 1, flexBasis: 200, borderWidth: 1.5, borderRadius: radius.md, padding: spacing.md, gap: 4 },
-  endOptTop: { flexDirection: "row", alignItems: "center", gap: 6 },
-  endOptTitle: { fontSize: 15, fontWeight: "800" },
-  endOptHint: { fontSize: 12.5, lineHeight: 19, color: colors.body },
-  endOptTag: { fontSize: 11.5, fontWeight: "700", marginTop: 2 },
+  closeBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: radius.md, backgroundColor: colors.roleSupervisor, marginTop: spacing.md },
+  closeBtnText: { fontSize: 16, fontWeight: "800", color: "#fff" },
   toolRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   toolLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted, letterSpacing: 0.3 },
   toolChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 7, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
