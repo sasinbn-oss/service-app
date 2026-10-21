@@ -64,9 +64,14 @@ const login = async (code) =>
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (l) => page.getByLabel(l, { exact: true }).locator("visible=true").last();
-    async function choose(l) {
+    // กล่อง "ยังขาด: …" ท้ายฟอร์มปิดงาน — ไม่มีกล่อง = ไม่ขาดอะไร
+    const missing = async () => {
+      const box = page.getByText(/^ยังขาด:/).locator("visible=true");
+      return (await box.count()) ? await box.last().innerText() : "";
+    };
+    async function choose(l, files = PHOTO) {
       const [chooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 15000 }), label(l).click()]);
-      await chooser.setFiles(PHOTO);
+      await chooser.setFiles(files);
       await page.waitForTimeout(2500);
     }
     await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
@@ -93,8 +98,8 @@ const login = async (code) =>
     // ── ฟอร์มปิดงาน ──
     await vis("ปิดงาน").first().click();
     await page.waitForTimeout(1500);
-    (await vis("แนบไว้แล้ว 1 ไฟล์ — เพิ่มได้อีก").count()) > 0 && (await vis("ต้องแนบรูปหรือวิดีโอหลังซ่อมอย่างน้อยหนึ่งไฟล์", false).count()) > 0 &&
-      (await vis("ต้องแนบรูปหรือวิดีโอก่อนซ่อมอย่างน้อยหนึ่งไฟล์", false).count()) === 0
+    (await vis("แนบไว้แล้ว 1 ไฟล์ — เพิ่มได้อีก").count()) > 0 && (await missing()).includes("รูปหลังซ่อม") &&
+      !(await missing()).includes("รูปก่อนซ่อม")
       ? pass("ฟอร์มปิดงาน: ก่อนซ่อมขึ้นว่าแนบไว้แล้ว เหลือเตือนแค่หลังซ่อม")
       : fail("ฟอร์มไม่รู้ว่าแนบรูปก่อนซ่อมไว้แล้ว");
     await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last().fill("เปลี่ยนปั๊มน้ำทิ้ง ทดสอบแล้วปกติ");
@@ -105,19 +110,20 @@ const login = async (code) =>
     const save = vis("ยืนยันปิดงาน").last();
     const op = () => save.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
     (await op()) !== "1" ? pass("ยังไม่มีรูปหลังซ่อม ปุ่มยืนยันปิดงานกดไม่ได้") : fail("กดปิดได้ทั้งที่ไม่มีรูปหลังซ่อม");
-    await choose("เลือกรูปหลังซ่อม");
-    (await vis("ต้องแนบรูปหรือวิดีโอหลังซ่อมอย่างน้อยหนึ่งไฟล์", false).count()) === 0 && (await op()) === "1"
+    // เลือกสองรูปพร้อมกันจากอัลบั้ม (เจ้าของงานขอ ต.ค. 69 — เดิมทีละรูป)
+    await choose("เลือกรูปหลังซ่อม", [PHOTO, PHOTO]);
+    !(await missing()).includes("รูปหลังซ่อม") && (await op()) === "1"
       ? pass("แนบรูปหลังซ่อมในฟอร์มแล้ว ข้อความเตือนหาย ปุ่มกดได้")
       : fail("แนบหลังซ่อมแล้วยังกดไม่ได้");
     await save.click();
     await page.waitForTimeout(6000);
-    sql(`select w.status||'|'||(select string_agg(role,',' order by role) from "WorkOrderAttachment" a where a."workOrderId"=w.id and role in ('BEFORE','AFTER')) from "WorkOrder" w where w.id=${id}`) === "DONE|AFTER,BEFORE"
-      ? pass("ปิดงานแล้ว มีรูปก่อนซ่อมและหลังซ่อมในฐานข้อมูล")
+    sql(`select w.status||'|'||(select string_agg(role,',' order by role) from "WorkOrderAttachment" a where a."workOrderId"=w.id and role in ('BEFORE','AFTER')) from "WorkOrder" w where w.id=${id}`) === "DONE|AFTER,AFTER,BEFORE"
+      ? pass("ปิดงานแล้ว มีรูปก่อนซ่อม 1 หลังซ่อม 2 (เลือกพร้อมกัน) ในฐานข้อมูล")
       : fail(`หลังปิด: ${sql(`select status from "WorkOrder" where id=${id}`)}`);
 
     // ── การ์ดผลการทำงาน ──
     await page.waitForTimeout(1500);
-    (await vis("ก่อนซ่อม · 1").count()) > 0 && (await vis("หลังซ่อม · 1").count()) > 0
+    (await vis("ก่อนซ่อม · 1").count()) > 0 && (await vis("หลังซ่อม · 2").count()) > 0
       ? pass("การ์ดผลการทำงานวางก่อนซ่อม | หลังซ่อม คู่กัน")
       : fail("การ์ดผลการทำงานไม่แยกก่อน/หลัง");
     await vis("ก่อนซ่อม · 1").first().scrollIntoViewIfNeeded().catch(() => {});

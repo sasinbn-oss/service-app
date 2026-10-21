@@ -21,8 +21,8 @@ const { setup } = require("./fixture");
     fx = await setup();
     const wo = await fx.workOrder("C0006", []);
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
-    // ปุ่มเดียว "จบใบงาน…" แล้วเลือกทาง (ต.ค. 69) — เดิมเป็นปุ่ม "ปิดใบงาน (ไม่ต้องเข้าหน้างาน)" แยก
-    const BTN = "จบใบงาน";
+    // ปุ่ม "ปิดใบงาน" ปุ่มเดียวท้ายหน้า (ต.ค. 69) แล้วเลือกเหตุผลในฟอร์ม
+    const BTN = "ปิดใบงาน";
 
     const open = async (code, width) => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
@@ -58,8 +58,6 @@ const { setup } = require("./fixture");
     (await label(page, BTN).count()) > 0 ? pass(`หัวหน้าภาคเห็นปุ่ม "${BTN}"`) : fail("ไม่เห็นปุ่ม");
     await page.screenshot({ path: path.join(DIR, "sup-close-button.png") });
     await label(page, BTN).click();
-    await page.waitForTimeout(800);
-    await label(page, "จบ: ไม่ต้องเข้าหน้างาน").click();
     await page.waitForTimeout(1200);
 
     await label(page, "ยืนยันปิดใบงาน").click();

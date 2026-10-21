@@ -118,9 +118,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
 
     // ── 4) ช่างเข้าดำเนินการแก้ไขเรียบร้อย ──
     await open(F.code);
-    await label("จบใบงาน").first().click();
-    await page.waitForTimeout(800);
-    await label("จบ: ไม่ต้องเข้าหน้างาน").click();
+    await label("ปิดใบงาน").click();
     await page.waitForTimeout(1000);
     await label("เหตุผล ช่างเข้าดำเนินการแก้ไขเรียบร้อย").click();
     await page.waitForTimeout(500);

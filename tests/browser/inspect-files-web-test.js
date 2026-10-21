@@ -97,11 +97,18 @@ const login = async (code) =>
     // ── ฟอร์มบันทึกผลตรวจ ──
     await vis("ตรวจหน้างาน").first().click();
     await page.waitForTimeout(1500);
-    (await vis("✓ 3 รูป").count()) > 0 && (await vis("ยังขาด: รูปอะไหล่ที่เสีย · วิดีโอการทำงาน — ใส่ให้ครบ 3 อย่างก่อนส่งผลตรวจ").count()) > 0
+    (await vis("✓ 3 รูป").count()) > 0 && (await vis("ยังขาด: รูปอะไหล่ที่เสีย · วิดีโอการทำงาน").count()) > 0
       ? pass("ฟอร์มรู้ว่ารูปหน้างานแนบไว้แล้วจากการ์ด เหลือเตือนสองอย่าง")
       : fail("ฟอร์มไม่เห็นไฟล์ที่แนบจากการ์ด");
     await label("ผลตรวจหน้างาน").fill("บอร์ดควบคุมไหม้ ต้องเปลี่ยนบอร์ด");
-    const save = vis("ยืนยัน").last();
+    // ข้อความจำไว้เอง ไม่ต้องกดบันทึกร่าง — ปิดฟอร์มแล้วเปิดใหม่ยังอยู่
+    await vis("ยกเลิก").last().click();
+    await page.waitForTimeout(800);
+    await vis("ตรวจหน้างาน").first().click();
+    await page.waitForTimeout(1500);
+    (await label("ผลตรวจหน้างาน").inputValue()) === "บอร์ดควบคุมไหม้ ต้องเปลี่ยนบอร์ด"
+      ? pass("ปิดฟอร์มแล้วเปิดใหม่ ข้อความผลตรวจยังอยู่ (จำเอง)") : fail(`เปิดใหม่ข้อความ = "${await label("ผลตรวจหน้างาน").inputValue()}"`);
+    const save = vis("บันทึกและส่งผลตรวจ").last();
     const op = () => save.evaluate((el) => getComputedStyle(el.closest("[tabindex]") || el.parentElement).opacity);
     (await op()) !== "1" ? pass("ไฟล์ยังไม่ครบ ปุ่มยืนยันกดไม่ได้") : fail("กดยืนยันได้ทั้งที่ไฟล์ไม่ครบ");
     await choose("เลือกรูปอะไหล่ที่เสีย", [PHOTO]);
