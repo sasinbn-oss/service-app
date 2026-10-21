@@ -72,7 +72,7 @@ const { setup } = require("./fixture");
       return hint;
     };
 
-    fx.sql(`update "WorkOrder" set title='ทดสอบลากรีเฟรช' where id=${w1.id}`);
+    fx.sql(`update "WorkOrder" set title='ทดสอบลากรีเฟรช', "updatedAt"=now() where id=${w1.id}`);
     const hint = await pull();
     hint > 0 ? pass("ลากลงจากบนสุด → เนื้อหาเลื่อนตามนิ้ว วงหมุนโผล่") : fail("ลากแล้วเนื้อหาไม่ขยับ/ไม่มีวงหมุน");
     await page.waitForTimeout(1100);
@@ -85,7 +85,9 @@ const { setup } = require("./fixture");
 
     // เช็คเบื้องหลัง: ไม่สลับรายการเอง แต่ขึ้นปุ่ม
     await page.waitForTimeout(3000);
-    fx.sql(`update "WorkOrder" set title='ทดสอบปุ่มมีอัปเดต' where id=${w2.id}`);
+    // แตะ updatedAt ด้วยแบบที่แอปจริงทำผ่าน Prisma — ตัวเช็คเบื้องหลังถามลายนิ้วมือ (/work-orders/version) ก่อน
+    // แก้ด้วย SQL ตรง ๆ โดยไม่แตะ updatedAt ลายนิ้วมือจะไม่เปลี่ยน (ของจริงไม่มีทางแก้แบบนั้น)
+    fx.sql(`update "WorkOrder" set title='ทดสอบปุ่มมีอัปเดต', "updatedAt"=now() where id=${w2.id}`);
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await page.waitForTimeout(2500);
     (await page.getByText(/^มีอัปเดต 1 ใบงาน$/).locator("visible=true").count()) > 0
