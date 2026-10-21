@@ -25,6 +25,7 @@ import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
 import { buildPartsOutReport, partsOutWorkbook } from "../reports/partsOutReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
+import { claimGuideFor } from "../utils/claimGuide";
 import {
   buildObjectKey,
   deleteObject,
@@ -543,6 +544,8 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
       symptom: c.symptom,
       checkNote: c.checkNote,
       troubleshooting: c.troubleshooting,
+      nameplate: c.nameplate,
+      fieldCheck: c.fieldCheck,
       status: c.status,
       rejectReason: c.rejectReason,
       createdAt: c.createdAt,
@@ -557,6 +560,8 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
       .map((a) => ({ sparePartId: a.sparePartId, role: a.role })),
     // Troubleshooting (ข้อ 4 ของฟอร์มเคลม) ของยี่ห้อเครื่องใบนี้ — ว่าง = ยี่ห้อนี้ไม่ต้องทำ
     claimTroubleshooting: claimTroubleshootingFor(machineMake(w.machine))?.items ?? [],
+    // แบบป้ายรุ่นของยี่ห้อนี้ (บรรทัดที่สแกน) + รายการเช็คตามคู่มือ — แอปไม่ได้เขียนรายการซ้ำ (utils/claimGuide.ts)
+    claimGuide: claimGuideFor(machineMake(w.machine)),
     // รูปก่อน/หลังซ่อมของรอบนี้ — หน้าปิดงานบอกว่าแนบไว้แล้ว ไม่ต้องถ่ายซ้ำ
     beforeCount: w.attachments.filter((a) => a.role === "BEFORE" && (!roundStart || a.createdAt >= roundStart)).length,
     afterCount: w.attachments.filter((a) => a.role === "AFTER" && (!roundStart || a.createdAt >= roundStart)).length,
@@ -4198,6 +4203,34 @@ const closeSchema = z.object({
     )
     .max(20)
     .optional(),
+  /**
+   * ข้อมูลป้ายรุ่น + เช็คตามคู่มือ ของเคลมในใบนี้ (เครื่องเดียว ใช้ร่วมทุกชิ้น) — ดู utils/claimGuide.ts
+   * crop คือภาพบรรทัดที่สแกน (JPEG data URL เล็ก) ให้ Admin Spare Part เทียบ · เพดานกันไฟล์ใหญ่หลุดเข้าฐานข้อมูล
+   */
+  claimNameplate: z
+    .object({
+      fields: z
+        .array(
+          z.object({
+            key: z.string().max(40),
+            label: z.string().max(60),
+            value: z.string().trim().max(60),
+            source: z.enum(["SCAN", "HAND"]),
+            crop: z.string().max(60_000).startsWith("data:image/").nullable().optional(),
+          })
+        )
+        .max(12),
+    })
+    .nullable()
+    .optional(),
+  claimCheck: z
+    .object({
+      errorCode: z.string().trim().max(60),
+      checked: z.array(z.string().max(200)).max(20).default([]),
+      install: z.record(z.string().max(40), z.boolean()).default({}),
+    })
+    .nullable()
+    .optional(),
 });
 
 router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
@@ -4404,6 +4437,35 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     const used = new Map((usedLines ?? []).map((p) => [p.sparePartId, p.quantity]));
     const make = machineMake(ctx.machine);
     const ts = claimTroubleshootingFor(make);
+    /**
+     * ข้อมูลป้ายรุ่น — ต้องมีอย่างน้อยหนึ่งช่อง (สแกนหรือพิมพ์) · เช็คตามคู่มือเฉพาะยี่ห้อที่มีคู่มือ (Alliance)
+     * ต้องเลือก Error และตอบเรื่องการติดตั้งครบทุกข้อ — ช่างแค่ตอบ ระบบไม่ตัดสินว่ารับประกันหรือไม่
+     */
+    const guide = claimGuideFor(make);
+    const plateFields = (body.claimNameplate?.fields ?? []).filter((f) => f.value);
+    if (plateFields.length === 0) {
+      return res.status(400).json({ error: "เคลมอะไหล่ต้องสแกนหรือกรอกข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" });
+    }
+    let fieldCheck: Prisma.InputJsonValue | undefined;
+    if (guide.errors.length) {
+      const chk = body.claimCheck;
+      const err = guide.errors.find((e) => e.code === chk?.errorCode);
+      if (!chk || !err) return res.status(400).json({ error: "เคลมเครื่องยี่ห้อนี้ต้องเลือก Error ที่เครื่องขึ้น (ตามคู่มือ)" });
+      const unanswered = guide.installChecks.filter((c) => typeof chk.install[c.key] !== "boolean");
+      if (unanswered.length) {
+        return res.status(400).json({ error: `ต้องตอบเรื่องการติดตั้งให้ครบ — ยังไม่ได้ตอบ: ${unanswered.map((c) => c.label).join(" · ")}` });
+      }
+      fieldCheck = {
+        errorCode: err.code,
+        errorName: err.name,
+        checked: err.checks.filter((c) => chk.checked.includes(c)),
+        install: guide.installChecks.map((c) => ({ key: c.key, label: c.label, note: c.note, answer: chk.install[c.key] })),
+      };
+    }
+    const nameplate: Prisma.InputJsonValue = {
+      family: guide.plate.family,
+      fields: plateFields.map((f) => ({ key: f.key, label: f.label, value: f.value, source: f.source, crop: f.crop ?? null })),
+    };
     for (const c of [...new Map(claimInputs.map((x) => [x.sparePartId, x])).values()]) {
       const sp = spares.find((x) => x.id === c.sparePartId);
       if (!sp || !used.has(c.sparePartId)) {
@@ -4444,6 +4506,8 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         symptom: c.symptom,
         checkNote: c.checkNote,
         troubleshooting: done,
+        nameplate,
+        fieldCheck,
         createdById: req.auth!.userId,
       });
     }

@@ -10,6 +10,45 @@ const DIR = __dirname;
 const PHOTO = path.join(DIR, "..", "site-photo.png");
 const CLIP = path.join(DIR, "..", "site-clip.mp4");
 const API = "http://localhost:4000/api";
+// บรรทัด MODEL / SERIAL ที่ครอปจากรูปป้าย Huebsch จริง (เจ้าของงานส่งมา ต.ค. 69) — MODEL อ่านได้ "HLOSSL" ทุกครั้ง
+const PLATE = {
+  model: "data:image/png;base64," + fs.readFileSync(path.join(DIR, "..", "plate-model-line.png")).toString("base64"),
+  serial: "data:image/png;base64," + fs.readFileSync(path.join(DIR, "..", "plate-serial-line.png")).toString("base64"),
+};
+/**
+ * กล้องปลอม: แทน getUserMedia ด้วยภาพจาก canvas ที่วาดบรรทัดของป้ายลงตรงกรอบสแกนพอดี (ช่างเล็งตรงกรอบ)
+ * ภาพผ่านทางเดียวกับกล้องจริงทุกขั้น — <video> → ครอปใต้กรอบ → อ่าน → โหวต · เปลี่ยนบรรทัดด้วย window.__plate(url)
+ */
+function fakeCamera() {
+  const c = document.createElement("canvas");
+  let img = null;
+  window.__plate = (url) =>
+    new Promise((ok) => {
+      const i = new Image();
+      i.onload = () => ((img = i), ok());
+      i.src = url;
+    });
+  const draw = () => {
+    const g = c.getContext("2d");
+    g.fillStyle = "#c9cdd2";
+    g.fillRect(0, 0, c.width, c.height);
+    const box = document.querySelector('[aria-label="กรอบสแกน"]');
+    if (img && box) {
+      // วาดบรรทัดเต็มความกว้างกรอบ คงสัดส่วนภาพ กึ่งกลางแนวตั้ง — canvas ใหญ่กว่าจอ 2 เท่า (ภาพคมขึ้น)
+      const r = box.getBoundingClientRect();
+      const w = r.width * 2 * 0.94;
+      const h = (w * img.height) / img.width;
+      g.drawImage(img, r.left * 2 + r.width * 0.03, r.top * 2 + r.height - h / 2, w, h);
+    }
+    requestAnimationFrame(draw);
+  };
+  navigator.mediaDevices.getUserMedia = async () => {
+    c.width = innerWidth * 2;
+    c.height = innerHeight * 2;
+    draw();
+    return c.captureStream(10);
+  };
+}
 
 // ส่งคำสั่งทาง stdin ไม่ใช่ -c — รหัสผ่านที่แฮชแล้วมี $ ซึ่ง shell จะกินไปเงียบ ๆ
 const sql = (q) =>
@@ -57,7 +96,7 @@ const login = async (code) =>
     const sp = sql(`select id from "SparePart" where "partCode"='SP-BOARD'`);
     const wo = await call(A, "POST", "/work-orders", {
       branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
-      machines: [{ code: "W1", model: "Huebsch", symptom: "ประตูล็อกไม่ลง" }],
+      machines: [{ code: "W1", model: "HL055L", symptom: "ประตูล็อกไม่ลง" }],
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: true, parts: [{ sparePartId: Number(sp), quantity: 1 }] });
@@ -79,6 +118,7 @@ const login = async (code) =>
     async function open(user) {
       const page = await browser.newPage({ viewport: { width: 420, height: 860 } });
       page.on("pageerror", (e) => errors.push(String(e)));
+      await page.addInitScript(fakeCamera);
       await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
       await page.getByPlaceholder("รหัสพนักงาน").fill(user);
       await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
@@ -155,6 +195,34 @@ const login = async (code) =>
     const items = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimTroubleshooting);
     for (const t of items) await label(page, `${t} SP-BOARD`).click();
     await page.waitForTimeout(500);
+
+    // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
+    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ยังขาด: ข้อมูลป้ายรุ่น", false).count()) > 0
+      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง บอกว่ายังขาดข้อมูลป้ายรุ่น") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
+    await page.evaluate((u) => window.__plate(u), PLATE.model);
+    await label(page, "สแกนป้ายรุ่น").click();
+    // บรรทัด MODEL → อ่านได้ HLOSSL ซ้ำทุกเฟรม แต่ตรงกับทะเบียน HL055L เมื่อมองข้าม O/0 S/5 → ใช้ตัวสะกดของทะเบียน
+    await page.getByText("รุ่น: ✓ HL055L").waitFor({ timeout: 90000 });
+    await page.screenshot({ path: path.join(DIR, "claim-0a-scanner.png") });
+    pass("สแกนบรรทัด MODEL ด้วยกล้อง: อ่านได้ HLOSSL แต่แก้เป็น HL055L ตามทะเบียน (O/0 · S/5)");
+    await page.evaluate((u) => window.__plate(u), PLATE.serial);
+    await page.getByLabel("กรอบสแกน").waitFor({ state: "detached", timeout: 60000 });
+    const val = (f) => label(page, `ป้ายรุ่น ${f}`).inputValue();
+    (await val("รุ่น")) === "HL055L" && (await val("Serial")) === "2402600330" && (await vis(page, "สแกน").count()) >= 2
+      ? pass("สแกนครบสองบรรทัด กล้องปิดเอง ช่องรุ่น/Serial เติมให้ ติดป้าย \"สแกน\" พร้อมภาพบรรทัด")
+      : fail(`ค่าที่สแกน: รุ่น=${await val("รุ่น")} Serial=${await val("Serial")}`);
+    await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-0-scanned.png") });
+    await label(page, "Error ที่เครื่องขึ้น").click();
+    await page.waitForTimeout(400);
+    await vis(page, "E dL / E dL1 / E dL2 · Door Lock — ประตูล็อก/ปลดล็อก").last().click();
+    await page.waitForTimeout(300);
+    await label(page, "เช็คแล้ว Solenoid ไม่ฝืด").click();
+    const guide = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimGuide);
+    for (const c of guide.installChecks) await label(page, `${c.label} ไม่มี`).click();
+    await page.waitForTimeout(500);
+    await label(page, "Error ที่เครื่องขึ้น").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-0b-check.png") });
     (await vis(page, "ยังขาด:", false).count()) === 0 ? pass("ครบทุกข้อ ข้อความยังขาดหายไป") : fail(`ยังขึ้นว่าขาด: ${await vis(page, "ยังขาด:", false).first().innerText()}`);
     await page.screenshot({ path: path.join(DIR, "claim-1-close.png") });
     await saveBtn.click();
@@ -163,6 +231,13 @@ const login = async (code) =>
     sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === "CLAIM_REVIEW|SP-BOARD"
       ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม พร้อมรหัสตัวที่เสียที่กรอก (ฐานข้อมูล)")
       : fail(`สถานะ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
+    const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||(select count(*) from jsonb_array_elements("fieldCheck"->'install') x where x->>'answer'='false') from "PartClaim" where "workOrderId"=${id}`);
+    const fields = JSON.parse(np.split("|")[0]);
+    const f = (k) => fields.find((x) => x.key === k) ?? {};
+    f("model").value === "HL055L" && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
+      /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|5')
+      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (สแกน + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ติดตั้ง 5 ข้อ")
+      : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}`).join(",")}`);
     sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`) === "4"
       ? pass("หลักฐาน 4 ไฟล์ขึ้นไปผูกกับอะไหล่ที่เคลม (ฐานข้อมูล)")
       : fail("หลักฐานในฐานข้อมูลไม่ครบ");
@@ -180,6 +255,10 @@ const login = async (code) =>
     gone.length === 0 ? pass("Admin Spare Part: ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน") : fail(`Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}`);
     await vis(page, "อนุมัติเคลม · ปิดงาน").first().scrollIntoViewIfNeeded();
     (await vis(page, "หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
+    (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตามคู่มือ Error in Field").count()) > 0
+      ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตามคู่มือในการ์ดเคลม") : fail("การ์ดเคลมไม่มีข้อมูลเครื่อง");
+    await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });
     await vis(page, "ตีกลับให้ช่างแก้").first().click();
     await page.waitForTimeout(800);

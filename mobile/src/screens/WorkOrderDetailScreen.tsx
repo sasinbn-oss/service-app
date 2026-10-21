@@ -45,6 +45,8 @@ import InspectionSlots, { missingInspection } from "../components/InspectionSlot
 import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
 import { takeFresh } from "../utils/freshOrder";
+import ClaimMachineBox, { ClaimCheckDraft, claimMachineGaps, ClaimMachineSummary, PlateDraft } from "../components/ClaimMachineBox";
+import type { ClaimGuide } from "../utils/nameplate";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -214,6 +216,8 @@ interface WorkOrder {
   claimEvidence: { sparePartId: number | null; role: string }[];
   /** Troubleshooting ที่ยี่ห้อเครื่องใบนี้ต้องทำก่อนเคลม — ว่าง = ไม่บังคับ */
   claimTroubleshooting: string[];
+  /** แบบป้ายรุ่น + รายการเช็คตามคู่มือของยี่ห้อนี้ (backend/src/utils/claimGuide.ts) */
+  claimGuide?: ClaimGuide;
 }
 
 interface PartClaim {
@@ -230,6 +234,15 @@ interface PartClaim {
   symptom: string;
   checkNote: string;
   troubleshooting: string[];
+  /** ข้อมูลป้ายรุ่นที่สแกน/พิมพ์ — ใบเก่าก่อน ต.ค. 69 ว่าง */
+  nameplate?: { family: string; fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[] } | null;
+  /** เช็คตามคู่มือ Error in Field — ยี่ห้อที่ไม่มีคู่มือว่าง */
+  fieldCheck?: {
+    errorCode: string;
+    errorName: string;
+    checked: string[];
+    install: { key: string; label: string; note: string; answer: boolean }[];
+  } | null;
   status: "PENDING" | "APPROVED" | "REJECTED";
   rejectReason: string | null;
   createdAt: string;
@@ -4468,6 +4481,7 @@ function ClaimsCard({
             ) : null}
             <Row label="ยี่ห้อ / รุ่น" value={[c.brand, c.model].filter(Boolean).join(" · ") || "—"} />
             <Row label="หมายเลขเครื่อง" value={c.machineCode ?? "—"} />
+            <ClaimMachineSummary nameplate={c.nameplate} fieldCheck={c.fieldCheck} />
             <Text style={styles.partsHead}>อาการ/สาเหตุ</Text>
             <Text style={styles.claimText}>{c.symptom}</Text>
             <Text style={styles.partsHead}>ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้</Text>
@@ -4649,6 +4663,22 @@ function CloseModal({
     saveDraft(draftKey, d.note.trim() || d.otherWorkers.trim() ? JSON.stringify(d) : "");
   }
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
+  /**
+   * ข้อมูลป้ายรุ่น + เช็คตามคู่มือ ของเคลมในใบนี้ (เครื่องเดียว ใช้ร่วมทุกชิ้น)
+   * ถูกตีกลับแล้วปิดใหม่ — ดึงของรอบก่อนมาให้แก้เฉพาะจุด (สแกนใหม่ได้)
+   */
+  const priorClaim = order.claims[0];
+  const [plate, setPlate] = useState<PlateDraft>(() => ({
+    values: Object.fromEntries(
+      (priorClaim?.nameplate?.fields ?? []).map((f) => [f.key, { value: f.value, source: f.source, crop: f.crop ?? null }])
+    ),
+    confirmed: [],
+  }));
+  const [check, setCheck] = useState<ClaimCheckDraft>(() => ({
+    errorCode: priorClaim?.fieldCheck?.errorCode ?? null,
+    checked: priorClaim?.fieldCheck?.checked ?? [],
+    install: Object.fromEntries((priorClaim?.fieldCheck?.install ?? []).map((i) => [i.key, i.answer])),
+  }));
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [beforeFiles, setBeforeFiles] = useState<PickedAttachment[]>([]);
   const [afterFiles, setAfterFiles] = useState<PickedAttachment[]>([]);
@@ -4725,7 +4755,9 @@ function CloseModal({
       ...(order.claimTroubleshooting.every((t) => d.troubleshooting.includes(t)) ? [] : ["Troubleshooting ให้ครบ"]),
     ];
   }
-  const claimsMissing = parts.some((p) => claimGaps(p).length > 0);
+  const anyClaim = parts.some((p) => draftFor(p.sparePartId).on);
+  const machineGaps = anyClaim ? claimMachineGaps(order.claimGuide, plate, check) : [];
+  const claimsMissing = parts.some((p) => claimGaps(p).length > 0) || machineGaps.length > 0;
 
   /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
   /** ไฟล์ปิดงานแต่ละขั้น — หมุนเฉพาะขั้นที่กำลังเตรียมไฟล์ ขั้นอื่นยังเห็นปุ่มตามปกติ */
@@ -4799,6 +4831,22 @@ function CloseModal({
         workerIds: isSub && !withStaff ? [] : workerIds,
         otherWorkers: otherWorkers.trim() || null,
         ...(isSub ? { subTeam } : {}),
+        ...(claimed.length && order.claimGuide
+          ? {
+              claimNameplate: {
+                fields: Object.entries(plate.values)
+                  .filter(([, v]) => v.value.trim())
+                  .map(([key, v]) => ({
+                    key,
+                    label: order.claimGuide!.plate.lines.flatMap((l) => l.fields).find((f) => f.key === key)?.label ?? key,
+                    value: v.value.trim(),
+                    source: v.source,
+                    crop: v.crop ?? null,
+                  })),
+              },
+              claimCheck: order.claimGuide.errors.length ? check : null,
+            }
+          : {}),
         claims: claimed.map((p) => {
           const d = draftFor(p.sparePartId);
           return {
@@ -5388,7 +5436,20 @@ function CloseModal({
               </View>
             );
           })}
-          {parts.some((p) => draftFor(p.sparePartId).on) ? (
+          {anyClaim && order.claimGuide ? (
+            <>
+              <ClaimMachineBox
+                guide={order.claimGuide}
+                registryModel={order.machineModel}
+                plate={plate}
+                onPlate={setPlate}
+                check={check}
+                onCheck={setCheck}
+              />
+              {machineGaps.length > 0 ? <Text style={styles.warn}>ยังขาด: {machineGaps.join(" · ")}</Text> : null}
+            </>
+          ) : null}
+          {anyClaim ? (
             <Text style={styles.linkedText}>
               ปิดงานแล้วใบงานไปรอ Admin Spare Part ตรวจเคลมก่อน ถึงจะนับว่าปิดงาน
             </Text>
@@ -5497,7 +5558,7 @@ const styles = StyleSheet.create({
   todayHero: { borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary, backgroundColor: colors.primarySoft, padding: spacing.md, gap: 2 },
   todayHeroBig: { fontSize: 20, lineHeight: 30, fontWeight: "800", color: colors.primaryDark },
   todayHeroText: { fontSize: 13.5, lineHeight: 21, color: colors.text },
-  pickupBox: { gap: 6, padding: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  pickupBox: { gap: 6, padding: spacing.sm, borderRadius: radius.sm, backgroundColor: "#FEF3C7", borderWidth: 1, borderColor: colors.warningBorder },
   pickupTag: { fontSize: 12, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
   pickupNoteText: { fontSize: 14, lineHeight: 21, color: colors.text },
   rowSub: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: 1 },
@@ -5528,7 +5589,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.warning,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
   },
   stepBackText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
   backOption: {
@@ -5643,11 +5704,11 @@ const styles = StyleSheet.create({
   quoteRoute: {
     gap: 4,
     marginTop: spacing.md,
-    backgroundColor: colors.roleAdminSoft,
+    backgroundColor: "#F5F3FF",
     borderRadius: radius.md,
     padding: spacing.md,
   },
-  quoteRouteTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.roleAdmin },
+  quoteRouteTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: "#4C1D95" },
   quoteRouteChain: { fontSize: 12.5, lineHeight: 19, color: colors.body },
   dispatchNote: {
     flexDirection: "row",
@@ -5657,7 +5718,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     backgroundColor: colors.successSoft,
   },
-  dispatchNoteMoved: { backgroundColor: colors.warningSoft },
+  dispatchNoteMoved: { backgroundColor: "#FEF3C7" },
   dispatchText: { fontSize: 13, lineHeight: 21, fontWeight: "700" },
   issuedTitle: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.textMuted },
   issuedLine: { fontSize: 12, lineHeight: 20, color: colors.text },
@@ -5724,10 +5785,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.roleAdmin,
-    backgroundColor: colors.roleAdminSoft,
+    backgroundColor: "#F5F3FF",
   },
   stepSubText: { fontSize: 11, lineHeight: 17, fontWeight: "700", color: colors.roleAdmin, textAlign: "center" },
-  stepSubCust: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
+  stepSubCust: { borderColor: colors.warning, backgroundColor: "#FEF3C7" },
   stepSubCustText: { color: colors.warningInk },
   stepSkipList: {
     marginTop: spacing.sm,
@@ -5795,7 +5856,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.warning,
     borderRadius: radius.sm,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.md,
   },
@@ -5867,7 +5928,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.warning,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
   },
   staleText: { flex: 1, minWidth: 160, fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.warningInk },
   staleBtn: {
@@ -5889,7 +5950,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderLeftWidth: 5,
     borderColor: colors.warning,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
   },
   rolledBack: { borderColor: colors.rollback, backgroundColor: colors.rollbackSoft },
   cancelledBox: { borderColor: colors.borderStrong, backgroundColor: colors.background },
@@ -5901,7 +5962,7 @@ const styles = StyleSheet.create({
   stepDotFrom: { borderStyle: "dashed", borderColor: colors.rollback, borderWidth: 2 },
   stepFromPill: { marginTop: 3, borderRadius: 6, paddingHorizontal: 5, backgroundColor: colors.rollbackSoft },
   stepFromPillText: { fontSize: 10.5, fontWeight: "700", color: colors.rollbackInk },
-  prevBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: colors.warningSoft },
+  prevBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: "#FEF3C7" },
   prevBoxTitle: { fontSize: 13, fontWeight: "800", color: colors.warningInk },
   prevBoxText: { fontSize: 12, color: colors.warningInk },
   prevTag: { fontSize: 11, fontWeight: "700", color: colors.warningInk, backgroundColor: "#FEF3C7" },
@@ -6005,7 +6066,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 20,
     color: colors.warning,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
     borderRadius: radius.sm,
     padding: spacing.md,
     marginTop: spacing.lg,
@@ -6051,7 +6112,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     padding: spacing.md,
     borderRadius: radius.md,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
     borderWidth: 1,
     borderColor: colors.warning,
   },
@@ -6067,13 +6128,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     color: colors.warningInk,
-    backgroundColor: colors.warningSoft,
+    backgroundColor: "#FEF3C7",
     borderRadius: radius.md,
     padding: spacing.sm,
     marginTop: spacing.xs,
   },
   shotSlot: { borderWidth: 1.5, borderRadius: radius.md, padding: spacing.sm, gap: spacing.xs },
-  shotBefore: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
+  shotBefore: { borderColor: colors.warning, backgroundColor: "#FEF3C7" },
   shotAfter: { borderColor: colors.success, backgroundColor: colors.successSoft },
   shotHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   // ── เคลมอะไหล่ ──

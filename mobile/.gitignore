@@ -43,3 +43,6 @@ yarn-error.*
 
 # เขียนตอน build (scripts/write-build-info.js) — หน้าเว็บถามไฟล์นี้ว่ามีรุ่นใหม่ไหม
 public/version.json
+
+# ตัวอ่าน OCR — scripts/copy-ocr.js สร้างจาก node_modules ทุกครั้ง
+public/ocr/

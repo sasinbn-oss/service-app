@@ -49,8 +49,11 @@ UP image/png -F "role=AFTER" >/dev/null
 UP image/png -F "role=NAMEPLATE" >/dev/null
 UP image/png -F "role=REQUISITION" >/dev/null
 ME=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
-CLOSE() {  # $1 = claims json
-  POST $A "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนบอร์ด ทดสอบแล้วปกติ\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"claims\":$1}"
+# ข้อมูลป้ายรุ่น + เช็คตามคู่มือ (Huebsch = Alliance) — ค่าตั้งต้นครบ · ข้อทดสอบที่ต้องการขาดส่ง $2/$3 เอง
+PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA"},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND"}]}'
+CHECK='{"errorCode":"E dL / E dL1 / E dL2","checked":["Solenoid ไม่ฝืด","ข้อที่ไม่มีในคู่มือ"],"install":{"groutOverFrame":false,"springWasher":true,"washerUnderFrame":false,"spacerUnderFrame":false,"boltNotTight":false}}'
+CLOSE() {  # $1 = claims json · $2 = ข้อมูลป้าย · $3 = เช็คตามคู่มือ
+  POST $A "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนบอร์ด ทดสอบแล้วปกติ\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK}}"
 }
 TS=$(GET $A "work-orders/$ID" | J 'JSON.stringify(d.claimTroubleshooting)')
 FULL="[{\"sparePartId\":$PID,\"brokenPartCode\":\"SP-BOARD-OLD\",\"symptom\":\"ประตูล็อกไม่ลง ขึ้น Error dL\",\"checkNote\":\"วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย\",\"troubleshooting\":$TS}]"
@@ -73,10 +76,26 @@ R=$(CLOSE "[{\"sparePartId\":$PID,\"brokenPartCode\":\"SP-BOARD-OLD\",\"symptom\
 echo "$R" | grep -q "อาการ/สาเหตุ" && pass "ไม่กรอกอาการ/สาเหตุ ปิดไม่ได้" || fail "อาการว่างผ่าน: $(echo $R | head -c 150)"
 R=$(CLOSE "[{\"sparePartId\":$PID2,\"brokenPartCode\":\"X\",\"symptom\":\"x\",\"checkNote\":\"y\",\"troubleshooting\":$TS}]")
 echo "$R" | grep -q "เฉพาะอะไหล่ที่ใส่ไว้" && pass "เคลมอะไหล่ที่ไม่ได้ใช้ไม่ได้" || fail "เคลมของที่ไม่ได้ใช้ได้: $(echo $R | head -c 150)"
+echo "═══ ข้อมูลป้ายรุ่น + เช็คตามคู่มือ Error in Field (Huebsch)"
+G=$(GET $A "work-orders/$ID")
+[ "$(echo "$G" | J 'd.claimGuide.plate.family+"|"+d.claimGuide.plate.lines.map(l=>l.id).join(",")+"|"+(d.claimGuide.errors.length>10)+"|"+d.claimGuide.installChecks.length')" = "ALLIANCE|model,serial|true|5" ] \
+  && pass "ใบงานส่งแบบป้าย Alliance (รุ่น · Serial) + Error ตามคู่มือ + เรื่องติดตั้ง 5 ข้อ" || fail "claimGuide: $(echo "$G" | J 'JSON.stringify(d.claimGuide.plate)' | head -c 150)"
+R=$(CLOSE "$FULL" '{"fields":[{"key":"serial","label":"Serial","value":"","source":"HAND"}]}')
+echo "$R" | grep -q "ข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" && [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] \
+  && pass "ไม่มีข้อมูลป้ายรุ่น ปิดไม่ได้ ใบงานไม่เปลี่ยน" || fail "ไม่มีข้อมูลป้ายผ่าน: $(echo $R | head -c 150)"
+R=$(CLOSE "$FULL" "$PLATE" 'null')
+echo "$R" | grep -q "เลือก Error" && pass "เครื่อง Alliance ไม่เลือก Error ปิดไม่ได้" || fail "ไม่เลือก Error ผ่าน: $(echo $R | head -c 150)"
+R=$(CLOSE "$FULL" "$PLATE" '{"errorCode":"E bELt","install":{"groutOverFrame":false}}')
+echo "$R" | grep -q "ยังไม่ได้ตอบ: ใช้แหวนสปริง" && pass "ตอบเรื่องติดตั้งไม่ครบ ปิดไม่ได้ (บอกข้อที่ขาด)" || fail "ติดตั้งไม่ครบผ่าน: $(echo $R | head -c 150)"
+R=$(CLOSE "$FULL" "$PLATE" '{"errorCode":"E XX","install":{}}')
+echo "$R" | grep -q "เลือก Error" && pass "Error ที่ไม่มีในคู่มือ ไม่รับ" || fail "Error มั่วผ่าน"
 R=$(CLOSE "$FULL")
 echo "$R" | J 'd.status' | grep -q "^CLAIM_REVIEW$" && pass "หลักฐานครบ → รอตรวจเคลม (ยังไม่ปิด)" || fail "ไม่ไปรอตรวจ: $(echo $R | head -c 200)"
 ROW=$(DB "select status||'|'||\"partCode\"||'|'||\"brokenPartCode\"||'|'||coalesce(brand,'')||'|'||array_length(troubleshooting,1)||'|'||\"branchCode\" from \"PartClaim\" where \"workOrderId\"=$ID")
 [ "$ROW" = "PENDING|SP-BOARD|SP-BOARD-OLD|HB - Huebsch|$(echo "$TS" | J 'd.length')|$BC" ] && pass "ฐานข้อมูลมีใบเคลมรอตรวจ พร้อมหัวใบเคลมจากระบบ และรหัสตัวที่เสียที่ช่างกรอก" || fail "แถวเคลม: $ROW"
+NP=$(DB "select nameplate->>'family'||'|'||(nameplate->'fields'->1->>'value')||'|'||(nameplate->'fields'->1->>'source')||'|'||(nameplate->'fields'->0->>'crop' like 'data:image/%')||'|'||(\"fieldCheck\"->>'errorCode')||'|'||(\"fieldCheck\"->'checked')::text||'|'||(\"fieldCheck\"->'install'->1->>'answer') from \"PartClaim\" where \"workOrderId\"=$ID")
+[ "$NP" = 'ALLIANCE|2402600330|HAND|true|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|true' ] \
+  && pass "ฐานข้อมูล: ป้ายรุ่น (Serial พิมพ์เอง · ภาพบรรทัด) + Error + ข้อที่ติ๊ก (ตัดข้อนอกคู่มือ) + คำตอบเรื่องติดตั้ง" || fail "ข้อมูลป้าย/เช็ค: $NP"
 
 echo
 echo "═══ ใครตรวจได้"
@@ -106,6 +125,12 @@ echo "$R" | J 'd.status' | grep -q "^CLAIM_REVIEW$" && pass "ปิดใหม�
 CID=$(DB "select id from \"PartClaim\" where \"workOrderId\"=$ID and status='PENDING'")
 curl -s "localhost:4000/api/work-orders/$ID/claims/$CID/pdf" -H "$(H $A)" -o /tmp/claim-$SUF.pdf -w "%{content_type}" | grep -q "application/pdf" \
   && head -c 4 /tmp/claim-$SUF.pdf | grep -q "%PDF" && pass "เปิดใบเคลม PDF ได้" || fail "PDF"
+# ข้อมูลป้ายลงเอกสารที่ส่งผู้ขาย แต่ผลเช็คการติดตั้งไม่ลง (Admin Spare Part เห็นในระบบเท่านั้น) — ต้องมี pdftotext
+if command -v pdftotext >/dev/null; then
+  TXT=$(pdftotext /tmp/claim-$SUF.pdf - 2>/dev/null | tr -d '\n')
+  echo "$TXT" | grep -q "2402600330" && echo "$TXT" | grep -q "พิมพ์เอง" && ! echo "$TXT" | grep -q "แหวนสปริง" \
+    && pass "PDF มี Serial จากป้าย (ติด 'พิมพ์เอง') ไม่มีผลเช็คการติดตั้ง" || fail "ข้อมูลป้ายใน PDF: $(echo "$TXT" | grep -o '.\{20\}2402600330.\{20\}')"
+fi
 rm -f /tmp/claim-$SUF.pdf
 # ลิงก์สำหรับมือถือ — เปิดได้โดยไม่ต้องแนบ header (เบราว์เซอร์ของเครื่องแนบเองไม่ได้)
 LINK=$(POST $A "work-orders/$ID/claims/$CID/pdf-link" '{}' | J 'd.path')
