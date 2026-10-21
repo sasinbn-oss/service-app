@@ -50,7 +50,7 @@ UP image/png -F "role=NAMEPLATE" >/dev/null
 UP image/png -F "role=REQUISITION" >/dev/null
 ME=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 # ข้อมูลป้ายรุ่น + เช็คตามคู่มือ (Huebsch = Alliance) — ค่าตั้งต้นครบ · ข้อทดสอบที่ต้องการขาดส่ง $2/$3 เอง
-PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA"},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND"}]}'
+PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA"},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND"}],"verified":true}'
 CHECK='{"errorCode":"E dL / E dL1 / E dL2","checked":["Solenoid ไม่ฝืด","ข้อที่ไม่มีในคู่มือ"],"install":{"groutOverFrame":false,"springWasher":true,"washerUnderFrame":false,"spacerUnderFrame":false,"boltNotTight":false}}'
 CLOSE() {  # $1 = claims json · $2 = ข้อมูลป้าย · $3 = เช็คตามคู่มือ
   POST $A "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนบอร์ด ทดสอบแล้วปกติ\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK}}"
@@ -83,6 +83,8 @@ G=$(GET $A "work-orders/$ID")
 R=$(CLOSE "$FULL" '{"fields":[{"key":"serial","label":"Serial","value":"","source":"HAND"}]}')
 echo "$R" | grep -q "ข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" && [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] \
   && pass "ไม่มีข้อมูลป้ายรุ่น ปิดไม่ได้ ใบงานไม่เปลี่ยน" || fail "ไม่มีข้อมูลป้ายผ่าน: $(echo $R | head -c 150)"
+R=$(CLOSE "$FULL" "${PLATE/\"verified\":true/\"verified\":false}")
+echo "$R" | grep -q "ตรวจค่าที่ระบบอ่านกับรูปป้ายรุ่น" && pass "ค่าที่ระบบอ่านจากรูป ไม่ติ๊กตรวจกับรูป ปิดไม่ได้" || fail "ไม่ตรวจกับรูปผ่าน: $(echo $R | head -c 150)"
 R=$(CLOSE "$FULL" "$PLATE" 'null')
 echo "$R" | grep -q "เลือก Error" && pass "เครื่อง Alliance ไม่เลือก Error ปิดไม่ได้" || fail "ไม่เลือก Error ผ่าน: $(echo $R | head -c 150)"
 R=$(CLOSE "$FULL" "$PLATE" '{"errorCode":"E bELt","install":{"groutOverFrame":false}}')
@@ -96,6 +98,8 @@ ROW=$(DB "select status||'|'||\"partCode\"||'|'||\"brokenPartCode\"||'|'||coales
 NP=$(DB "select nameplate->>'family'||'|'||(nameplate->'fields'->1->>'value')||'|'||(nameplate->'fields'->1->>'source')||'|'||(nameplate->'fields'->0->>'crop' like 'data:image/%')||'|'||(\"fieldCheck\"->>'errorCode')||'|'||(\"fieldCheck\"->'checked')::text||'|'||(\"fieldCheck\"->'install'->1->>'answer') from \"PartClaim\" where \"workOrderId\"=$ID")
 [ "$NP" = 'ALLIANCE|2402600330|HAND|true|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|true' ] \
   && pass "ฐานข้อมูล: ป้ายรุ่น (Serial พิมพ์เอง · ภาพบรรทัด) + Error + ข้อที่ติ๊ก (ตัดข้อนอกคู่มือ) + คำตอบเรื่องติดตั้ง" || fail "ข้อมูลป้าย/เช็ค: $NP"
+PH=$(DB "select ((c.nameplate->>'photoId')::int = (select max(id) from \"WorkOrderAttachment\" a where a.\"workOrderId\"=$ID and a.role='NAMEPLATE'))::text||'|'||(c.nameplate->>'verified') from \"PartClaim\" c where c.\"workOrderId\"=$ID")
+[ "$PH" = "true|true" ] && pass "ใบเคลมผูกรูปป้ายรุ่นเต็มของรอบนี้ + บันทึกว่าช่างตรวจกับรูปแล้ว" || fail "รูปป้าย/ตรวจ: $PH"
 
 echo
 echo "═══ ใครตรวจได้"

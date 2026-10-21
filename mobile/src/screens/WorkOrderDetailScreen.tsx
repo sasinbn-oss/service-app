@@ -235,7 +235,13 @@ interface PartClaim {
   checkNote: string;
   troubleshooting: string[];
   /** ข้อมูลป้ายรุ่นที่สแกน/พิมพ์ — ใบเก่าก่อน ต.ค. 69 ว่าง */
-  nameplate?: { family: string; fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[] } | null;
+  nameplate?: {
+    family: string;
+    /** ไฟล์ป้ายรุ่น (รูปเต็ม) ของรอบที่ส่งเคลมนี้ */
+    photoId?: number | null;
+    verified?: boolean;
+    fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[];
+  } | null;
   /** เช็คตามคู่มือ Error in Field — ยี่ห้อที่ไม่มีคู่มือว่าง */
   fieldCheck?: {
     errorCode: string;
@@ -4481,7 +4487,14 @@ function ClaimsCard({
             ) : null}
             <Row label="ยี่ห้อ / รุ่น" value={[c.brand, c.model].filter(Boolean).join(" · ") || "—"} />
             <Row label="หมายเลขเครื่อง" value={c.machineCode ?? "—"} />
-            <ClaimMachineSummary nameplate={c.nameplate} fieldCheck={c.fieldCheck} />
+            <ClaimMachineSummary
+              nameplate={c.nameplate}
+              fieldCheck={c.fieldCheck}
+              photo={(() => {
+                const at = files.findIndex((f) => f.id === c.nameplate?.photoId);
+                return at < 0 ? null : { uri: files[at].thumbnailDataUrl, open: () => setViewing({ items: files, at }) };
+              })()}
+            />
             <Text style={styles.partsHead}>อาการ/สาเหตุ</Text>
             <Text style={styles.claimText}>{c.symptom}</Text>
             <Text style={styles.partsHead}>ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้</Text>
@@ -4672,7 +4685,7 @@ function CloseModal({
     values: Object.fromEntries(
       (priorClaim?.nameplate?.fields ?? []).map((f) => [f.key, { value: f.value, source: f.source, crop: f.crop ?? null }])
     ),
-    confirmed: [],
+    verified: !!priorClaim?.nameplate?.verified,
   }));
   const [check, setCheck] = useState<ClaimCheckDraft>(() => ({
     errorCode: priorClaim?.fieldCheck?.errorCode ?? null,
@@ -4843,6 +4856,7 @@ function CloseModal({
                     source: v.source,
                     crop: v.crop ?? null,
                   })),
+                verified: plate.verified,
               },
               claimCheck: order.claimGuide.errors.length ? check : null,
             }
@@ -5445,6 +5459,7 @@ function CloseModal({
                 onPlate={setPlate}
                 check={check}
                 onCheck={setCheck}
+                onPhoto={setNameplate}
               />
               {machineGaps.length > 0 ? <Text style={styles.warn}>ยังขาด: {machineGaps.join(" · ")}</Text> : null}
             </>

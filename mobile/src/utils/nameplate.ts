@@ -2,8 +2,8 @@
  * ตัดสินค่าที่อ่านจากป้ายรุ่น — ใช้ร่วมกันระหว่างตัวสแกน (กล้อง) กับกล่องข้อมูลป้ายในฟอร์มปิดงาน
  *
  * แบบบรรทัดของแต่ละยี่ห้อมาจากเซิร์ฟเวอร์ (backend/src/utils/claimGuide.ts) ไม่ได้เขียนซ้ำที่นี่
- * ทดลองกับรูปป้ายจริง ต.ค. 69: ตัวเลขอ่านถูกเป็นส่วนใหญ่แต่บางเฟรมอ่านผิด (28 → 25) จึงต้องโหวตหลายเฟรม
- * ส่วนรุ่นที่ปนตัวอักษร OCR ผิดซ้ำแบบเดิมทุกเฟรม (HL055L → HLOSSL) โหวตกันไม่ได้ ต้องเทียบทะเบียน + ให้คนยืนยัน
+ * ทดลองกับรูปป้ายจริง ต.ค. 69: รุ่นที่ปนตัวอักษร OCR ผิดซ้ำแบบเดิมทุกรอบ (HL055L → HLOSSL)
+ * อ่านซ้ำกี่รอบก็ไม่ช่วย ต้องเทียบทะเบียน + ให้คนยืนยัน (ตัวอ่านจากรูปอยู่ที่ ocr.web.ts)
  */
 
 export interface PlateField {
@@ -28,12 +28,12 @@ export interface ClaimGuide {
   installChecks: { key: string; label: string; note: string }[];
 }
 
-/** ค่าในช่องหนึ่งของป้าย — SCAN = อ่านด้วยกล้อง · HAND = พิมพ์/แก้เอง (Admin Spare Part เห็นป้ายต่างกัน) */
+/** ค่าในช่องหนึ่งของป้าย — SCAN = ระบบอ่านจากรูป · HAND = พิมพ์/แก้เอง (Admin Spare Part เห็นป้ายต่างกัน) */
 export interface PlateValue {
   value: string;
   source: "SCAN" | "HAND";
   crop?: string | null;
-  /** รุ่นที่สแกนได้แต่ไม่ตรงทะเบียน — ต้องให้ช่างยืนยันกับภาพก่อน */
+  /** ค่าที่ระบบไม่มั่นใจ (รุ่นไม่ตรงทะเบียน · คะแนนน้อย · ปีเกินปีนี้) — โชว์เด่นให้ช่างดูกับรูปก่อน */
   needsCheck?: boolean;
 }
 
@@ -47,20 +47,6 @@ export function extract(field: PlateField, text: string): string | null {
   if (!m?.[1]) return null;
   const v = m[1].replace(/\s+/g, "").toUpperCase();
   return field.unit ? `${v} ${field.unit}` : v;
-}
-
-/**
- * รับค่าเมื่อเฟรมล่าสุดอ่านได้ค่าเดียวกันอย่างน้อย 3 ครั้ง และเป็นอย่างน้อย 70% ของเฟรมที่อ่านออก
- * (เฟรมที่อ่านไม่ออกไม่นับ) — 28 ×6 กับ 25 ×2 ผ่าน · 01/2022 ×3 กับ 01/2029 ×2 ยังไม่ผ่าน อ่านต่อ
- */
-export const VOTE_WINDOW = 8;
-export function vote(reads: (string | null)[]): string | null {
-  const recent = reads.filter((r): r is string => !!r).slice(-VOTE_WINDOW);
-  if (recent.length < 3) return null;
-  const count = new Map<string, number>();
-  for (const r of recent) count.set(r, (count.get(r) ?? 0) + 1);
-  const [best, n] = [...count.entries()].sort((a, b) => b[1] - a[1])[0];
-  return n >= 3 && n / recent.length >= 0.7 ? best : null;
 }
 
 /** ตัวที่ OCR สับสนบนป้ายโลหะ — ใช้เทียบเท่านั้น ไม่ได้แปลงค่าที่เก็บ (L ไม่อยู่ในนี้ เพราะ HL055L มี L จริง) */

@@ -10,45 +10,8 @@ const DIR = __dirname;
 const PHOTO = path.join(DIR, "..", "site-photo.png");
 const CLIP = path.join(DIR, "..", "site-clip.mp4");
 const API = "http://localhost:4000/api";
-// บรรทัด MODEL / SERIAL ที่ครอปจากรูปป้าย Huebsch จริง (เจ้าของงานส่งมา ต.ค. 69) — MODEL อ่านได้ "HLOSSL" ทุกครั้ง
-const PLATE = {
-  model: "data:image/png;base64," + fs.readFileSync(path.join(DIR, "..", "plate-model-line.png")).toString("base64"),
-  serial: "data:image/png;base64," + fs.readFileSync(path.join(DIR, "..", "plate-serial-line.png")).toString("base64"),
-};
-/**
- * กล้องปลอม: แทน getUserMedia ด้วยภาพจาก canvas ที่วาดบรรทัดของป้ายลงตรงกรอบสแกนพอดี (ช่างเล็งตรงกรอบ)
- * ภาพผ่านทางเดียวกับกล้องจริงทุกขั้น — <video> → ครอปใต้กรอบ → อ่าน → โหวต · เปลี่ยนบรรทัดด้วย window.__plate(url)
- */
-function fakeCamera() {
-  const c = document.createElement("canvas");
-  let img = null;
-  window.__plate = (url) =>
-    new Promise((ok) => {
-      const i = new Image();
-      i.onload = () => ((img = i), ok());
-      i.src = url;
-    });
-  const draw = () => {
-    const g = c.getContext("2d");
-    g.fillStyle = "#c9cdd2";
-    g.fillRect(0, 0, c.width, c.height);
-    const box = document.querySelector('[aria-label="กรอบสแกน"]');
-    if (img && box) {
-      // วาดบรรทัดเต็มความกว้างกรอบ คงสัดส่วนภาพ กึ่งกลางแนวตั้ง — canvas ใหญ่กว่าจอ 2 เท่า (ภาพคมขึ้น)
-      const r = box.getBoundingClientRect();
-      const w = r.width * 2 * 0.94;
-      const h = (w * img.height) / img.width;
-      g.drawImage(img, r.left * 2 + r.width * 0.03, r.top * 2 + r.height - h / 2, w, h);
-    }
-    requestAnimationFrame(draw);
-  };
-  navigator.mediaDevices.getUserMedia = async () => {
-    c.width = innerWidth * 2;
-    c.height = innerHeight * 2;
-    draw();
-    return c.captureStream(10);
-  };
-}
+// รูปป้าย Huebsch ทั้งป้าย (เจ้าของงานส่งมา ต.ค. 69) — ถ่ายรูปเดียวแล้วระบบเลือกค่าเอง · MODEL อ่านได้ "HLOSSL" ทุกครั้ง
+const PLATE_PHOTO = path.join(DIR, "..", "plate-huebsch.jpg");
 
 // ส่งคำสั่งทาง stdin ไม่ใช่ -c — รหัสผ่านที่แฮชแล้วมี $ ซึ่ง shell จะกินไปเงียบ ๆ
 const sql = (q) =>
@@ -118,7 +81,6 @@ const login = async (code) =>
     async function open(user) {
       const page = await browser.newPage({ viewport: { width: 420, height: 860 } });
       page.on("pageerror", (e) => errors.push(String(e)));
-      await page.addInitScript(fakeCamera);
       await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
       await page.getByPlaceholder("รหัสพนักงาน").fill(user);
       await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
@@ -199,18 +161,21 @@ const login = async (code) =>
     // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
     (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ยังขาด: ข้อมูลป้ายรุ่น", false).count()) > 0
       ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง บอกว่ายังขาดข้อมูลป้ายรุ่น") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
-    await page.evaluate((u) => window.__plate(u), PLATE.model);
-    await label(page, "สแกนป้ายรุ่น").click();
-    // บรรทัด MODEL → อ่านได้ HLOSSL ซ้ำทุกเฟรม แต่ตรงกับทะเบียน HL055L เมื่อมองข้าม O/0 S/5 → ใช้ตัวสะกดของทะเบียน
-    await page.getByText("รุ่น: ✓ HL055L").waitFor({ timeout: 90000 });
-    await page.screenshot({ path: path.join(DIR, "claim-0a-scanner.png") });
-    pass("สแกนบรรทัด MODEL ด้วยกล้อง: อ่านได้ HLOSSL แต่แก้เป็น HL055L ตามทะเบียน (O/0 · S/5)");
-    await page.evaluate((u) => window.__plate(u), PLATE.serial);
-    await page.getByLabel("กรอบสแกน").waitFor({ state: "detached", timeout: 60000 });
+    await attach(page, "ถ่ายรูปป้ายรุ่น", PLATE_PHOTO);
+    // อ่านทั้งป้ายในเบราว์เซอร์ (หาบรรทัด → อ่านซ้ำทีละบรรทัด) — เครื่องทดสอบช้ากว่ามือถือจริง ให้เวลานาน
+    await page.waitForTimeout(1500);
+    await label(page, "สถานะอ่านป้าย").waitFor({ state: "detached", timeout: 180000 });
     const val = (f) => label(page, `ป้ายรุ่น ${f}`).inputValue();
-    (await val("รุ่น")) === "HL055L" && (await val("Serial")) === "2402600330" && (await vis(page, "สแกน").count()) >= 2
-      ? pass("สแกนครบสองบรรทัด กล้องปิดเอง ช่องรุ่น/Serial เติมให้ ติดป้าย \"สแกน\" พร้อมภาพบรรทัด")
-      : fail(`ค่าที่สแกน: รุ่น=${await val("รุ่น")} Serial=${await val("Serial")}`);
+    // MODEL อ่านได้ HLOSSL แต่ตรงกับทะเบียน HL055L เมื่อมองข้าม O/0 S/5 → ใช้ตัวสะกดของทะเบียน
+    (await val("รุ่น")) === "HL055L" && (await val("Serial")) === "2402600330" && (await vis(page, "อ่านจากรูป").count()) >= 2
+      ? pass("ถ่ายรูปทั้งป้ายรูปเดียว: ระบบเลือกรุ่น HL055L (อ่านได้ HLOSSL แก้ตามทะเบียน) + Serial 2402600330 ติดป้าย \"อ่านจากรูป\"")
+      : fail(`ค่าที่อ่านจากรูป: รุ่น=${await val("รุ่น")} Serial=${await val("Serial")}`);
+    (await label(page, "รูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ยังขาด:", false).first().innerText()).includes("ติ๊กตรวจค่ากับรูปป้าย")
+      ? pass("โชว์รูปป้ายเต็มในฟอร์ม · ยังต้องติ๊กตรวจค่ากับรูป") : fail("ไม่มีรูปป้ายเต็ม/ไม่บังคับตรวจกับรูป");
+    await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-0a-scanner.png") });
+    await label(page, "ตรวจค่ากับรูปป้ายแล้ว").click();
+    await page.waitForTimeout(300);
     await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-0-scanned.png") });
     await label(page, "Error ที่เครื่องขึ้น").click();
@@ -236,8 +201,13 @@ const login = async (code) =>
     const f = (k) => fields.find((x) => x.key === k) ?? {};
     f("model").value === "HL055L" && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
       /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|5')
-      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (สแกน + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ติดตั้ง 5 ข้อ")
+      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ติดตั้ง 5 ข้อ")
       : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}`).join(",")}`);
+    sql(`select (c.nameplate->>'photoId')::int = (select max(a.id) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE')
+           and (select count(*) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE') >= 1
+           and (c.nameplate->>'verified')::boolean from "PartClaim" c where c."workOrderId"=${id}`) === "t"
+      ? pass("รูปป้ายเต็มที่ถ่ายขึ้นเป็นไฟล์ป้ายรุ่นของงาน และผูกกับใบเคลม + บันทึกว่าตรวจกับรูปแล้ว (ฐานข้อมูล)")
+      : fail("รูปป้ายเต็มไม่ผูกกับใบเคลม");
     sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`) === "4"
       ? pass("หลักฐาน 4 ไฟล์ขึ้นไปผูกกับอะไหล่ที่เคลม (ฐานข้อมูล)")
       : fail("หลักฐานในฐานข้อมูลไม่ครบ");
@@ -257,6 +227,8 @@ const login = async (code) =>
     (await vis(page, "หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
     (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตามคู่มือ Error in Field").count()) > 0
       ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตามคู่มือในการ์ดเคลม") : fail("การ์ดเคลมไม่มีข้อมูลเครื่อง");
+    (await label(page, "เปิดรูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว").count()) > 0
+      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว") : fail("การ์ดเคลมไม่มีรูปป้ายเต็ม");
     await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });

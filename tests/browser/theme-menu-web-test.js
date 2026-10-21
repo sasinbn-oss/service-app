@@ -63,7 +63,8 @@ const path = require("path");
     const m = await ctx.newPage();
     m.on("pageerror", (e) => errors.push(String(e)));
     await m.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
-    await m.getByPlaceholder("รหัสพนักงาน").fill("T001");
+    // แอดมินมีปุ่มบนแถบบนมากสุด (ดูในฐานะ) — ถ้าพอสำหรับแอดมินก็พอทุกคน
+    await m.getByPlaceholder("รหัสพนักงาน").fill("A001");
     await m.getByPlaceholder("รหัสผ่าน").fill("test1234");
     await m.getByText("เข้าสู่ระบบ", { exact: true }).click();
     await m.waitForTimeout(4500);

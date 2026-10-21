@@ -4220,6 +4220,8 @@ const closeSchema = z.object({
           })
         )
         .max(12),
+      /** ช่างติ๊กว่าดูค่าที่ระบบอ่านเทียบกับรูปป้ายแล้ว — OCR อ่านผิดซ้ำแบบเดิมได้ (01/2022 → 01/2029 ทุกรอบ) */
+      verified: z.boolean().optional(),
     })
     .nullable()
     .optional(),
@@ -4446,6 +4448,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     if (plateFields.length === 0) {
       return res.status(400).json({ error: "เคลมอะไหล่ต้องสแกนหรือกรอกข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" });
     }
+    if (plateFields.some((f) => f.source === "SCAN") && !body.claimNameplate?.verified) {
+      return res.status(400).json({ error: "ต้องติ๊กว่าตรวจค่าที่ระบบอ่านกับรูปป้ายรุ่นแล้ว" });
+    }
     let fieldCheck: Prisma.InputJsonValue | undefined;
     if (guide.errors.length) {
       const chk = body.claimCheck;
@@ -4462,8 +4467,17 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         install: guide.installChecks.map((c) => ({ key: c.key, label: c.label, note: c.note, answer: chk.install[c.key] })),
       };
     }
+    // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
+    // ให้ Admin Spare Part เห็นรูปที่ระบบอ่านค่ามา ไม่ต้องไล่หาในกองไฟล์ของใบงาน
+    const platePhoto = await prisma.workOrderAttachment.findFirst({
+      where: { workOrderId: id, role: "NAMEPLATE", createdAt: { gte: roundStart } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
     const nameplate: Prisma.InputJsonValue = {
       family: guide.plate.family,
+      photoId: platePhoto?.id ?? null,
+      verified: !!body.claimNameplate?.verified,
       fields: plateFields.map((f) => ({ key: f.key, label: f.label, value: f.value, source: f.source, crop: f.crop ?? null })),
     };
     for (const c of [...new Map(claimInputs.map((x) => [x.sparePartId, x])).values()]) {

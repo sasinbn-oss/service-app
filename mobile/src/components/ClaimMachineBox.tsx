@@ -1,5 +1,5 @@
 /**
- * ข้อมูลเครื่องสำหรับเคลม — ป้ายรุ่น (สแกน/พิมพ์) + เช็คตามคู่มือ Error in Field (เจ้าของงานขอ ต.ค. 69)
+ * ข้อมูลเครื่องสำหรับเคลม — ป้ายรุ่น (ถ่ายรูปทั้งป้ายให้ระบบอ่าน/พิมพ์เอง) + เช็คตามคู่มือ Error in Field (เจ้าของงานขอ ต.ค. 69)
  *
  * ขึ้นในฟอร์มปิดงานเมื่อมีอะไหล่ที่ส่งเคลม ใช้ร่วมทุกชิ้น (เครื่องเดียวกัน) · ส่งต่อให้ Admin Spare Part
  * ช่าง "แค่เก็บข้อมูลและเช็คตามรายการ" — ไม่มีการตัดสินว่ารับประกันหรือไม่ ทีมถัดไปคุยกับประกันเอง
@@ -10,8 +10,9 @@ import { Image, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Dropdown from "./Dropdown";
-import NameplateScanner from "./NameplateScanner";
 import { ClaimGuide, PlateValue, plateFields } from "../utils/nameplate";
+import { readPlatePhoto } from "../utils/ocr";
+import { pickImageAttachment, type PickedAttachment } from "../utils/attachments";
 import { colors, radius, spacing } from "../theme";
 
 export interface ClaimCheckDraft {
@@ -21,8 +22,10 @@ export interface ClaimCheckDraft {
 }
 export interface PlateDraft {
   values: Record<string, PlateValue>;
-  /** ช่องรุ่นที่สแกนแล้วไม่ตรงทะเบียน และช่างกดยืนยันกับภาพแล้ว */
-  confirmed: string[];
+  /** ช่างติ๊กว่าดูค่าที่ระบบอ่านเทียบกับรูปแล้ว — ติ๊กครั้งเดียวทั้งชุด อ่านรูปใหม่แล้วต้องติ๊กใหม่ */
+  verified: boolean;
+  /** รูปป้ายเต็มที่ถ่ายรอบนี้ (ขึ้นเป็นไฟล์ "ป้ายรุ่น" ตอนปิดงาน) */
+  photo?: PickedAttachment | null;
 }
 
 /** สิ่งที่ยังขาด — ตรงกับที่เซิร์ฟเวอร์เช็ค บอกก่อนกดปิดงาน */
@@ -30,10 +33,10 @@ export function claimMachineGaps(guide: ClaimGuide | undefined, plate: PlateDraf
   if (!guide) return [];
   const fields = plateFields(guide.plate);
   const filled = fields.filter((f) => plate.values[f.key]?.value?.trim());
-  const unconfirmed = filled.filter((f) => plate.values[f.key].needsCheck && !plate.confirmed.includes(f.key));
+  const scanned = filled.some((f) => plate.values[f.key].source === "SCAN");
   return [
     ...(filled.length ? [] : ["ข้อมูลป้ายรุ่น"]),
-    ...unconfirmed.map((f) => `ยืนยัน${f.label}ที่สแกน`),
+    ...(scanned && !plate.verified ? ["ติ๊กตรวจค่ากับรูปป้าย"] : []),
     ...(guide.errors.length && !check.errorCode ? ["Error ที่เครื่องขึ้น"] : []),
     ...(guide.installChecks.some((c) => typeof check.install[c.key] !== "boolean") ? ["เรื่องการติดตั้งฐานเครื่อง"] : []),
   ];
@@ -46,6 +49,7 @@ export default function ClaimMachineBox({
   onPlate,
   check,
   onCheck,
+  onPhoto,
 }: {
   guide: ClaimGuide;
   registryModel?: string | null;
@@ -53,10 +57,32 @@ export default function ClaimMachineBox({
   onPlate: (next: PlateDraft) => void;
   check: ClaimCheckDraft;
   onCheck: (next: ClaimCheckDraft) => void;
+  /** รูปป้ายที่ถ่ายใช้เป็นรูป "ป้ายรุ่น" ของการปิดงานด้วย — ไม่ต้องถ่ายสองรอบ */
+  onPhoto: (photo: PickedAttachment) => void;
 }) {
-  const [scanning, setScanning] = useState(false);
+  const [stage, setStage] = useState<string | null>(null);
+  const [readErr, setReadErr] = useState<string | null>(null);
   const fields = plateFields(guide.plate);
   const err = guide.errors.find((e) => e.code === check.errorCode);
+  const scanned = fields.some((f) => plate.values[f.key]?.source === "SCAN" && plate.values[f.key]?.value);
+  const missed = plate.photo ? fields.filter((f) => !plate.values[f.key]?.value) : [];
+
+  async function shoot(fromCamera: boolean) {
+    setReadErr(null);
+    const photo = await pickImageAttachment(fromCamera, setStage);
+    if (!photo) return setStage(null);
+    onPhoto(photo);
+    try {
+      const read = await readPlatePhoto(photo.uri, guide.plate, registryModel, setStage);
+      // ค่าที่อ่านได้ทับเฉพาะช่องนั้น ช่องที่อ่านไม่ได้ยังเป็นค่าเดิม (อาจพิมพ์ไว้แล้ว) · อ่านใหม่ต้องตรวจใหม่
+      onPlate({ values: { ...plate.values, ...read }, verified: false, photo });
+    } catch (e) {
+      onPlate({ ...plate, photo });
+      setReadErr(e instanceof Error ? e.message : "อ่านป้ายไม่สำเร็จ — พิมพ์เองจากรูปได้");
+    } finally {
+      setStage(null);
+    }
+  }
 
   return (
     <View style={styles.box} accessibilityLabel="ข้อมูลเครื่องสำหรับเคลม">
@@ -64,26 +90,58 @@ export default function ClaimMachineBox({
       <Text style={styles.hint}>ใช้ร่วมทุกชิ้นที่ส่งเคลม · ส่งให้ Admin Spare Part</Text>
 
       {/* ── ป้ายรุ่น ── */}
-      <View style={styles.headRow}>
-        <Text style={styles.label}>
-          ข้อมูลป้ายรุ่น <Text style={{ color: colors.danger }}>*</Text>
-        </Text>
-        <TouchableOpacity style={styles.scanBtn} onPress={() => setScanning(true)} activeOpacity={0.8} accessibilityLabel="สแกนป้ายรุ่น">
-          <Ionicons name="scan" size={16} color="#fff" />
-          <Text style={styles.scanText}>สแกนป้ายรุ่น</Text>
+      <Text style={[styles.label, { marginTop: spacing.sm }]}>
+        ข้อมูลป้ายรุ่น <Text style={{ color: colors.danger }}>*</Text>
+      </Text>
+      <Text style={styles.hint}>ถ่ายรูปให้เห็นทั้งป้าย ตรง ๆ ไม่เอียง ไม่มีแสงสะท้อน — ระบบอ่านเลขให้เอง อ่านไม่ได้ก็พิมพ์เองได้</Text>
+      <View style={styles.btnRow}>
+        <TouchableOpacity
+          style={[styles.scanBtn, stage && styles.scanBusy]}
+          onPress={() => shoot(true)}
+          disabled={!!stage}
+          activeOpacity={0.8}
+          accessibilityLabel="ถ่ายรูปป้ายรุ่น"
+        >
+          <Ionicons name="camera" size={16} color="#fff" />
+          <Text style={styles.scanText}>{plate.photo ? "ถ่ายใหม่" : "ถ่ายรูปป้ายรุ่น"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.pickBtn}
+          onPress={() => shoot(false)}
+          disabled={!!stage}
+          activeOpacity={0.8}
+          accessibilityLabel="เลือกรูปป้ายรุ่น"
+        >
+          <Ionicons name="images-outline" size={16} color={colors.primaryInk} />
+          <Text style={styles.pickText}>เลือกรูป</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.hint}>เล็งกล้องทีละบรรทัด แอปอ่านเลขให้เอง · อ่านไม่ได้ก็พิมพ์เองได้</Text>
+      {stage ? (
+        <Text style={styles.stage} accessibilityLabel="สถานะอ่านป้าย">
+          {stage}…
+        </Text>
+      ) : null}
+      {readErr ? <Text style={styles.readErr}>{readErr}</Text> : null}
+      {plate.photo ? (
+        <Image
+          source={{ uri: plate.photo.thumbnailUri ?? plate.photo.uri }}
+          style={styles.photo}
+          resizeMode="contain"
+          accessibilityLabel="รูปป้ายรุ่นเต็ม"
+        />
+      ) : null}
+      {plate.photo && !stage && missed.length ? (
+        <Text style={styles.hint}>อ่านไม่ได้: {missed.map((f) => f.label).join(" · ")} — พิมพ์เองจากรูปด้านบนได้</Text>
+      ) : null}
       {fields.map((f) => {
         const v = plate.values[f.key];
-        const confirmed = plate.confirmed.includes(f.key);
         return (
           <View key={f.key} style={styles.field}>
             <View style={styles.fieldHead}>
               <Text style={styles.fieldLabel}>{f.label}</Text>
               {v?.value ? (
                 v.source === "SCAN" ? (
-                  <Text style={[styles.tag, styles.tagScan]}>สแกน</Text>
+                  <Text style={[styles.tag, styles.tagScan]}>อ่านจากรูป</Text>
                 ) : (
                   <Text style={[styles.tag, styles.tagHand]}>พิมพ์เอง</Text>
                 )
@@ -92,13 +150,13 @@ export default function ClaimMachineBox({
             <View style={styles.fieldRow}>
               {v?.crop ? <Image source={{ uri: v.crop }} style={styles.crop} resizeMode="contain" /> : null}
               <TextInput
-                style={styles.input}
+                style={[styles.input, v?.needsCheck && v.source === "SCAN" && styles.inputDoubt]}
                 value={v?.value ?? ""}
                 onChangeText={(t) =>
                   onPlate({
-                    // แก้เองแล้วไม่ใช่ค่าที่กล้องอ่าน — ภาพเดิมไม่ตรงกับค่าแล้ว ทิ้งไป
+                    // แก้เองแล้วไม่ใช่ค่าที่ระบบอ่าน — ภาพตัดเดิมไม่ตรงกับค่าแล้ว ทิ้งไป
+                    ...plate,
                     values: { ...plate.values, [f.key]: { value: t.toUpperCase(), source: "HAND", crop: null } },
-                    confirmed: plate.confirmed.filter((k) => k !== f.key),
                   })
                 }
                 autoCapitalize="characters"
@@ -107,27 +165,29 @@ export default function ClaimMachineBox({
                 accessibilityLabel={`ป้ายรุ่น ${f.label}`}
               />
             </View>
-            {v?.needsCheck && v.source === "SCAN" ? (
-              <TouchableOpacity
-                style={styles.confirm}
-                onPress={() =>
-                  onPlate({
-                    ...plate,
-                    confirmed: confirmed ? plate.confirmed.filter((k) => k !== f.key) : [...plate.confirmed, f.key],
-                  })
-                }
-                activeOpacity={0.7}
-                accessibilityLabel={`ยืนยัน${f.label}ตรงกับภาพ`}
-              >
-                <Ionicons name={confirmed ? "checkbox" : "square-outline"} size={18} color={confirmed ? colors.primary : colors.warningInk} />
-                <Text style={styles.confirmText}>
-                  {registryModel ? `ไม่ตรงทะเบียน (${registryModel}) — ` : ""}เทียบกับภาพแล้วถูกต้อง (ระวัง O/0 · S/5 · I/1)
-                </Text>
-              </TouchableOpacity>
+            {v?.needsCheck && v.source === "SCAN" && v.value ? (
+              <Text style={styles.doubt}>
+                {f.model && registryModel ? `ไม่ตรงทะเบียน (${registryModel}) — ` : ""}ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9)
+              </Text>
             ) : null}
           </View>
         );
       })}
+      {scanned ? (
+        <TouchableOpacity
+          style={[styles.verify, plate.verified && styles.verifyOn]}
+          onPress={() => onPlate({ ...plate, verified: !plate.verified })}
+          activeOpacity={0.7}
+          accessibilityLabel="ตรวจค่ากับรูปป้ายแล้ว"
+        >
+          <Ionicons
+            name={plate.verified ? "checkbox" : "square-outline"}
+            size={20}
+            color={plate.verified ? colors.primary : colors.warningInk}
+          />
+          <Text style={styles.verifyText}>ดูทุกช่องเทียบกับรูปแล้ว ถูกต้อง</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {/* ── เช็คตามคู่มือ (เฉพาะยี่ห้อที่มีคู่มือ) ── */}
       {guide.errors.length ? (
@@ -191,19 +251,6 @@ export default function ClaimMachineBox({
         </Text>
       )}
 
-      {scanning ? (
-        <NameplateScanner
-          template={guide.plate}
-          registryModel={registryModel}
-          onClose={() => setScanning(false)}
-          onDone={(read) => {
-            setScanning(false);
-            // ค่าที่สแกนได้ทับเฉพาะช่องที่อ่านได้ ช่องที่ข้ามไว้ยังเป็นค่าเดิม (อาจพิมพ์ไว้แล้ว)
-            const keys = Object.keys(read);
-            onPlate({ values: { ...plate.values, ...read }, confirmed: plate.confirmed.filter((k) => !keys.includes(k)) });
-          }}
-        />
-      ) : null}
     </View>
   );
 }
@@ -220,7 +267,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 15, fontWeight: "800", color: colors.navy },
   hint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
-  headRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, marginTop: spacing.sm },
+  btnRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   label: { fontSize: 13.5, fontWeight: "700", color: colors.text },
   scanBtn: {
     flexDirection: "row",
@@ -231,7 +278,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: radius.md,
   },
+  scanBusy: { opacity: 0.6 },
   scanText: { color: "#fff", fontWeight: "800", fontSize: 13.5 },
+  pickBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.sky200,
+    backgroundColor: colors.sky50,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+  },
+  pickText: { color: colors.primaryInk, fontWeight: "700", fontSize: 13.5 },
+  stage: { fontSize: 12.5, fontWeight: "700", color: colors.primaryInk },
+  readErr: { fontSize: 12.5, color: colors.dangerInk },
+  photo: { width: "100%", height: 220, borderRadius: radius.md, backgroundColor: colors.tile },
   field: { gap: 4, marginTop: 4 },
   fieldHead: { flexDirection: "row", alignItems: "center", gap: 6 },
   fieldLabel: { fontSize: 12.5, fontWeight: "700", color: colors.body },
@@ -253,8 +316,21 @@ const styles = StyleSheet.create({
     color: colors.text,
     backgroundColor: colors.card,
   },
-  confirm: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.warningSoft, borderRadius: radius.sm, padding: 6 },
-  confirmText: { flex: 1, fontSize: 12, color: colors.warningInk },
+  inputDoubt: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
+  doubt: { fontSize: 12, color: colors.warningInk },
+  verify: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    backgroundColor: colors.warningSoft,
+  },
+  verifyOn: { borderColor: colors.sky200, backgroundColor: colors.primarySoft },
+  verifyText: { flex: 1, fontSize: 13, fontWeight: "700", color: colors.text },
   checkRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
   checkText: { flex: 1, fontSize: 13, color: colors.text },
   install: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 4 },
@@ -269,6 +345,8 @@ const styles = StyleSheet.create({
   sumRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   sumLabel: { width: 110, fontSize: 12.5, color: colors.textMuted },
   sumValue: { fontSize: 13.5, fontWeight: "800", color: colors.text, fontFamily: "monospace" },
+  sumPhoto: { width: "100%", height: 200, borderRadius: radius.sm, backgroundColor: colors.card },
+  link: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   sumCrop: { width: 140, height: 28, borderRadius: 4, backgroundColor: colors.card },
   ans: { fontSize: 12.5, fontWeight: "800", color: colors.textMuted },
   // "มี" เด่นขึ้นให้ผู้ตรวจไม่พลาด — แต่ไม่ใช้สีแดง เพราะระบบไม่ได้ตัดสินว่าไม่รับประกัน
@@ -282,8 +360,14 @@ const styles = StyleSheet.create({
 export function ClaimMachineSummary({
   nameplate,
   fieldCheck,
+  photo,
 }: {
-  nameplate?: { fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[] } | null;
+  nameplate?: {
+    verified?: boolean;
+    fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[];
+  } | null;
+  /** รูปป้ายเต็มที่ระบบอ่านค่ามา — กดดูขนาดเต็ม */
+  photo?: { uri: string | null; open: () => void } | null;
   fieldCheck?: { errorCode: string; errorName: string; checked: string[]; install: { key: string; label: string; note: string; answer: boolean }[] } | null;
 }) {
   if (!nameplate?.fields?.length && !fieldCheck) return null;
@@ -292,12 +376,24 @@ export function ClaimMachineSummary({
       {nameplate?.fields?.length ? (
         <>
           <Text style={styles.sumHead}>ข้อมูลป้ายรุ่น</Text>
+          {photo ? (
+            <TouchableOpacity onPress={photo.open} activeOpacity={0.85} accessibilityLabel="เปิดรูปป้ายรุ่นเต็ม">
+              {photo.uri ? (
+                <Image source={{ uri: photo.uri }} style={styles.sumPhoto} resizeMode="contain" />
+              ) : (
+                <Text style={styles.link}>เปิดรูปป้ายรุ่นเต็ม</Text>
+              )}
+            </TouchableOpacity>
+          ) : null}
+          {nameplate.fields.some((f) => f.source === "SCAN") ? (
+            <Text style={styles.hint}>{nameplate.verified ? "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว" : "ค่าที่ระบบอ่าน — ยังไม่ได้ตรวจกับรูป"}</Text>
+          ) : null}
           {nameplate.fields.map((f) => (
             <View key={f.key} style={styles.sumRow}>
               <Text style={styles.sumLabel}>{f.label}</Text>
               <Text style={styles.sumValue}>{f.value}</Text>
               <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>
-                {f.source === "SCAN" ? "สแกน" : "พิมพ์เอง"}
+                {f.source === "SCAN" ? "อ่านจากรูป" : "พิมพ์เอง"}
               </Text>
               {f.crop ? <Image source={{ uri: f.crop }} style={styles.sumCrop} resizeMode="contain" /> : null}
             </View>
