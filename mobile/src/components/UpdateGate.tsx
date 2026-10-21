@@ -9,7 +9,7 @@
  *   (ไม่โหลดทับระหว่างกรอก — ที่พิมพ์ค้างไว้จะหาย)
  * - build ก่อน minBuiltAt → หน้า "ต้องอัปเดตก่อนใช้งานต่อ" (รอบที่หน้าจอเก่าใช้กับเซิร์ฟเวอร์ใหม่ไม่ได้)
  *
- * โหลดใหม่แล้วยังได้รุ่นเดิม (เบราว์เซอร์/โฮสต์แคชหน้าเก่า) → ไม่โหลดวนซ้ำ เหลือแค่แถบให้กดเอง
+ * โหลดใหม่ด้วย ?v=รุ่น หลบแคชหน้าเว็บ (ดู freshReload) · ถ้ายังได้รุ่นเดิม → ไม่โหลดวนซ้ำ เหลือแค่แถบให้กดเอง
  * ตอนพัฒนา (expo start) ไม่มีไฟล์นี้ — ไม่ทำอะไร
  */
 import React, { useEffect, useRef, useState } from "react";
@@ -25,6 +25,15 @@ const TRIED_KEY = "update-reloaded-for";
 
 type State = { kind: "none" } | { kind: "soft"; commit: string } | { kind: "must" };
 
+/**
+ * โหลดหน้าใหม่ด้วย ?v=รุ่น ไม่ใช่ reload() เฉย ๆ — หน้าเว็บผ่านแคช (Cloudflare หน้า Render) ที่เก็บหน้าแรกไว้ 5 นาที
+ * (s-maxage=300) ส่วน version.json ถามตรงเลยรู้ก่อนว่ามีรุ่นใหม่ · reload() เฉย ๆ ได้หน้าเก่าจากแคช
+ * แถบอัปเดตเลยเด้งกลับมาทุกครั้งที่กด (เจ้าของงานเจอ ต.ค. 69) · ที่อยู่ใหม่แคชไม่มี จึงไปเอาจากเซิร์ฟเวอร์จริง
+ */
+function freshReload(commit: string) {
+  window.location.replace(`${window.location.pathname}?v=${encodeURIComponent(commit)}`);
+}
+
 function reloadFor(commit: string) {
   try {
     // จำว่าโหลดใหม่เพื่อรุ่นนี้ไปแล้ว — ถ้าโหลดแล้วยังเป็นรุ่นเก่าอยู่ จะไม่โหลดวน
@@ -32,7 +41,7 @@ function reloadFor(commit: string) {
   } catch {
     // โหมดไม่บันทึกประวัติ — โหลดได้ตามปกติ แค่กันวนไม่ได้
   }
-  window.location.reload();
+  freshReload(commit);
 }
 
 function triedAlready(commit: string) {
@@ -50,6 +59,8 @@ export default function UpdateGate() {
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
+    // ล้าง ?v= ที่ใส่ไว้หลบแคชตอนโหลดรอบก่อน — ที่อยู่ในแถบเบราว์เซอร์กลับเป็นปกติ
+    if (/[?&]v=/.test(window.location.search)) window.history.replaceState(null, "", window.location.pathname);
     let stopped = false;
     const check = async () => {
       if (stopped || !pageVisible()) return;
@@ -93,7 +104,7 @@ export default function UpdateGate() {
           <Ionicons name="arrow-up-circle" size={44} color={colors.primary} />
           <Text style={styles.boxTitle}>ต้องอัปเดตก่อนใช้งานต่อ</Text>
           <Text style={styles.boxText}>ระบบเปลี่ยนแบบที่หน้าจอรุ่นเดิมใช้ต่อไม่ได้ — ข้อมูลของคุณไม่หาย</Text>
-          <TouchableOpacity style={styles.btn} onPress={() => window.location.reload()} accessibilityLabel="อัปเดตตอนนี้">
+          <TouchableOpacity style={styles.btn} onPress={() => freshReload(String(Date.now()))} accessibilityLabel="อัปเดตตอนนี้">
             <Text style={styles.btnText}>อัปเดตตอนนี้</Text>
           </TouchableOpacity>
         </View>
@@ -104,7 +115,7 @@ export default function UpdateGate() {
     <View style={styles.bar} accessibilityLabel="มีระบบรุ่นใหม่">
       <Ionicons name="sparkles-outline" size={16} color={colors.primaryInk} />
       <Text style={styles.barText}>มีระบบรุ่นใหม่ — อัปเดตให้เองเมื่อปิดฟอร์มที่เปิดอยู่</Text>
-      <TouchableOpacity style={styles.barBtn} onPress={() => window.location.reload()} accessibilityLabel="อัปเดตเลย">
+      <TouchableOpacity style={styles.barBtn} onPress={() => freshReload(state.commit)} accessibilityLabel="อัปเดตเลย">
         <Text style={styles.btnText}>อัปเดตเลย</Text>
       </TouchableOpacity>
     </View>
