@@ -44,6 +44,7 @@ import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachm
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
+import { takeFresh } from "../utils/freshOrder";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -609,7 +610,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [bodyWidth, setBodyWidth] = useState(0);
   const twoCol = bodyWidth >= 720;
 
+  const optionsLoaded = useRef(false);
   const load = useCallback(async (): Promise<WorkOrder | null> => {
+    // เพิ่งกดบันทึก — เซิร์ฟเวอร์ส่งใบงานทั้งก้อนกลับมาแล้ว ใช้เลย ไม่ต้องรอถามซ้ำ (utils/freshOrder.ts)
+    // ตัวเลือกในฟอร์ม (ทีม ช่าง คลัง) ไม่ได้เปลี่ยนตามขั้น ใช้ชุดที่โหลดไว้ตอนเปิดหน้า
+    const fresh = takeFresh<WorkOrder>(id);
+    if (fresh && optionsLoaded.current) {
+      setOrder(fresh);
+      return fresh;
+    }
     try {
       const [detail, options] = await Promise.all([
         api.get<WorkOrder>(`/work-orders/${id}`),
@@ -635,6 +644,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       if (options.data.adminWarehouse) setAdminWarehouse(options.data.adminWarehouse);
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
+      optionsLoaded.current = true;
       setError(null);
       setLocked(false);
       return detail.data;
