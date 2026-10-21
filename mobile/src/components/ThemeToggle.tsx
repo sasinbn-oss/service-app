@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Animated, Platform, Pressable, StyleSheet, View } from "react-native";
+import { Animated, Platform, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { isDark, setDarkMode } from "../theme";
 import { spring } from "../utils/motion";
@@ -11,11 +11,13 @@ import { spring } from "../utils/motion";
  * กดแล้วปุ่มเลื่อนให้เห็นก่อน แล้วค่อยโหลดหน้าใหม่ (ชุดสีเลือกตอนโหลด — ดู theme.ts)
  * มีแค่บนเว็บ แอป native ไม่แสดง
  */
-const W = 58;
-const H = 30;
-const KNOB = 24;
+// มือถือแถบบนเต็มแล้ว (โลโก้ ผู้ใช้ รีเฟรช ออกจากระบบ) — ขนาดเต็มล้นขอบจอ 400 px จึงย่อลง
+const FULL = { W: 58, H: 30, KNOB: 24 };
+const COMPACT = { W: 46, H: 26, KNOB: 20 };
 
 export default function ThemeToggle() {
+  const { width } = useWindowDimensions();
+  const { W, H, KNOB } = width < 480 ? COMPACT : FULL;
   const [on, setOn] = useState(isDark);
   const x = useRef(new Animated.Value(isDark ? W - KNOB - 3 : 3)).current;
   if (Platform.OS !== "web") return null;
@@ -29,7 +31,7 @@ export default function ThemeToggle() {
         spring(x, next ? W - KNOB - 3 : 3, "push").start();
         setTimeout(() => setDarkMode(next), 260);
       }}
-      style={[styles.track, on ? styles.trackDark : styles.trackLight]}
+      style={[styles.track, { width: W, height: H, borderRadius: H / 2 }, on ? styles.trackDark : styles.trackLight]}
     >
       {on ? (
         <>
@@ -43,8 +45,15 @@ export default function ThemeToggle() {
           <View style={[styles.cloud, styles.cloudSmall, { right: 15, top: 16 }]} />
         </>
       )}
-      <Animated.View style={[styles.knob, on ? styles.knobDark : styles.knobLight, { transform: [{ translateX: x }] }]}>
-        <Ionicons name={on ? "moon" : "sunny"} size={15} color={on ? "#4B5B8C" : "#F59E0B"} />
+      <Animated.View
+        style={[
+          styles.knob,
+          { top: (H - 2 - KNOB) / 2, width: KNOB, height: KNOB, borderRadius: KNOB / 2 },
+          on ? styles.knobDark : styles.knobLight,
+          { transform: [{ translateX: x }] },
+        ]}
+      >
+        <Ionicons name={on ? "moon" : "sunny"} size={KNOB - 9} color={on ? "#4B5B8C" : "#F59E0B"} />
       </Animated.View>
     </Pressable>
   );
@@ -52,16 +61,12 @@ export default function ThemeToggle() {
 
 // สีของสวิตช์ไม่อิงชุดสีแอป — ตัวมันเองคือภาพ "กลางวัน/กลางคืน" ต้องหน้าตาเดิมทั้งสองโหมด
 const styles = StyleSheet.create({
-  track: { width: W, height: H, borderRadius: H / 2, justifyContent: "center", overflow: "hidden" },
+  track: { justifyContent: "center", overflow: "hidden" },
   trackLight: { backgroundColor: "#8FD3F4", borderWidth: 1, borderColor: "#6CC2EC" },
   trackDark: { backgroundColor: "#1E2A4A", borderWidth: 1, borderColor: "#34416A" },
   knob: {
     position: "absolute",
-    top: (H - 2 - KNOB) / 2,
     left: 0,
-    width: KNOB,
-    height: KNOB,
-    borderRadius: KNOB / 2,
     alignItems: "center",
     justifyContent: "center",
   },

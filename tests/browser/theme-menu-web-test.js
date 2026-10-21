@@ -58,7 +58,8 @@ const path = require("path");
 
     // มือถือ — บริบทใหม่แต่ตั้งค่ามืดไว้แล้ว เหมือนช่างที่เคยเปิดไว้
     const ctx = await browser.newContext({ viewport: { width: 400, height: 860 } });
-    await ctx.addInitScript(() => localStorage.setItem("otteri-theme", "dark"));
+    // ตั้งเฉพาะครั้งแรก — สคริปต์นี้รันทุกครั้งที่โหลด ถ้าตั้งทับทุกครั้งจะปิดโหมดมืดไม่ได้
+    await ctx.addInitScript(() => localStorage.getItem("otteri-theme") || localStorage.setItem("otteri-theme", "dark"));
     const m = await ctx.newPage();
     m.on("pageerror", (e) => errors.push(String(e)));
     await m.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
@@ -74,7 +75,8 @@ const path = require("path");
     await m.getByLabel("เปิดเมนู").locator("visible=true").first().click();
     await m.waitForTimeout(900);
     await m.screenshot({ path: path.join(__dirname, "dark-4-phone-menu.png") });
-    await m.getByLabel("ปิดเมนู").click();
+    // กลางฉากมืดมีแผงเมนูทับ — แตะขอบขวาที่ยังเห็นฉากมืด
+    await m.mouse.click(390, 500);
     await m.waitForTimeout(500);
 
     await toggle.click();
