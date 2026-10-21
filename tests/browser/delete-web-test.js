@@ -40,8 +40,13 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     await p.waitForTimeout(3000);
   };
 
+  // อ่านค่าเดิมก่อนแตะอะไร แล้วคืนใน finally — เดิมเทสต์นี้ย้ายภาค S001 ไปตามสาขา C0001
+  // แล้วไม่คืน ทุกรอบที่รันครบชุด S001 จึงค้างอยู่ "กลาง-ตะวันตก" ทั้งที่ทุกข้อขึ้น PASS
+  const oldRegion = sql(`select coalesce(region,'') from "User" where "employeeCode"='S001'`);
+  const oldTeam = sql(`select coalesce(team,'') from "User" where "employeeCode"='T001'`);
+  let admin = null, o = null;
   try {
-    const admin = await login("A001");
+    admin = await login("A001");
     const sup = await login("S001");
     const branch = (await call("/branches?search=C0001", admin))[0];
     const users = await call("/auth/users", admin);
@@ -52,7 +57,7 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
 
     const wo = await call("/work-orders", admin, "POST", { branchCode: "C0001", jobType: "CM", priority: "NORMAL",
       machines: [{ code: "W97", model: "Oasis", symptom: "ทดสอบปุ่มลบ" }] });
-    const o = wo.orders ? wo.orders[0] : wo;
+    o = wo.orders ? wo.orders[0] : wo;
     await call(`/work-orders/${o.id}/parts`, sup, "POST", { needsParts: true, parts: [{ sparePartId: pid, quantity: 2 }] });
     // ช่างเห็นเฉพาะใบงานของทีมตัวเอง — เดิมเทสต์นี้หาใบที่ยังไม่จ่ายเจอได้เพราะการค้นหาหลุดขอบเขต
     // (บั๊กที่แก้แล้ว) จึงใส่ทีมให้ตรง ๆ ข้อที่ทดสอบคือ "ช่างที่เปิดใบงานได้ ไม่เห็นปุ่มลบ"
@@ -96,5 +101,12 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     gone.rows.find(r => r.code === o.code) ? fail("ใบงานยังอยู่") : pass("ลบแล้วหายจากรายการ");
     await a.screenshot({ path: path.join(DIR, "del-3-after.png"), fullPage: true });
     await a.close();
-  } catch (e) { fail(e.message); } finally { await browser.close(); }
+  } catch (e) { fail(e.message); } finally {
+    // ถ้าพังก่อนถึงขั้นกดลบ ใบงานจะค้าง — ลบทิ้งเองถ้ายังอยู่ในฐานข้อมูล
+    if (admin && o && sql(`select count(*) from "WorkOrder" where id=${o.id}`) !== "0")
+      await call(`/work-orders/${o.id}`, admin, "DELETE").catch((e) => fail(`ลบใบงานทดสอบไม่ได้: ${e.message}`));
+    sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
+    sql(`update "User" set team=nullif('${oldTeam}','') where "employeeCode"='T001'`);
+    await browser.close();
+  }
 })();
