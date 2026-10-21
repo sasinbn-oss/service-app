@@ -3,6 +3,7 @@ import { notifyWorkOrderStale } from "../utils/liveSync";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { feedback } from "../components/Feedback";
+import { rememberFresh } from "../utils/freshOrder";
 
 // Set EXPO_PUBLIC_API_URL in mobile/.env to the deployed backend, or to your
 // machine's LAN address (e.g. http://192.168.1.20:4000) when running locally.
@@ -131,6 +132,7 @@ export function onViewAsEnded(handler: (() => void) | null) {
 api.interceptors.response.use(
   (response) => {
     end(response.config as Tracked);
+    if (response.config.method && response.config.method !== "get") rememberFresh(response.config.url, response.data);
     return response;
   },
   (error) => {

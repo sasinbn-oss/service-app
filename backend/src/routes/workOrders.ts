@@ -1607,21 +1607,30 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
 const APPOINTMENT_BY_ACTIONS = ["CONFIRMED", "RESCHEDULED"];
 const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
 
-router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  await freshOutsource();
+/**
+ * หน้าใบงานทั้งก้อน — GET /:id กับทุกปุ่มที่เปลี่ยนขั้นส่งก้อนเดียวกันนี้กลับ
+ *
+ * เดิมปุ่มเปลี่ยนขั้นส่ง shape(row) เปล่า ๆ (ไม่มีประวัติเต็ม/ค่าก่อนย้อน) แอปเลยทิ้งแล้วโหลดใบงานใหม่อีกรอบ
+ * ฐานข้อมูลอยู่คนละภูมิภาค (~0.23 วิ/รอบ) โหลดซ้ำคือรอเพิ่มอีกเกือบวินาทีกว่าทามไลน์จะขึ้น (เจ้าของงานถาม ต.ค. 69)
+ * ตอนนี้ส่งก้อนที่ครบแล้วแอปใช้เลย (mobile/src/utils/freshOrder.ts) · ใบงานกับประวัติอ่านพร้อมกัน ไม่ต่อคิว
+ */
+async function loadDetail(id: number) {
+  const [row, logs] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, include: detailInclude }),
+    prisma.workOrderLog.findMany({
+      where: { workOrderId: id },
+      include: { user: { select: { name: true, role: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
+    // รายชื่อทีม outsource จำไว้ไม่เกินนาทีละครั้ง — shape() ใช้ตัดสินว่าเป็นใบงาน SUB ไหม
+    freshOutsource(),
+  ]);
+  return row ? { row, logs } : null;
+}
 
-  const row = await prisma.workOrder.findUnique({ where: { id }, include: detailInclude });
-  if (!row) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (await blockedForViewer(req, res, row)) return;
+type Detail = NonNullable<Awaited<ReturnType<typeof loadDetail>>>;
 
-  const logs = await prisma.workOrderLog.findMany({
-    where: { workOrderId: id },
-    include: { user: { select: { name: true, role: true } } },
-    orderBy: { createdAt: "desc" },
-  });
-
+function detailBody({ row, logs }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -1630,7 +1639,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const inspectStart = logs.find((l) => l.action === "INSPECT_REQUESTED")?.createdAt ?? row.createdAt;
 
   const confirm = logs.find((l) => APPOINTMENT_BY_ACTIONS.includes(l.action) && !l.backfilledAt);
-  res.json({
+  return {
     ...shape(row, roundStart, inspectStart),
     appointmentBy:
       confirm && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")
@@ -1651,7 +1660,22 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
       byRole: l.user?.role ?? null,
       createdAt: l.createdAt,
     })),
-  });
+  };
+}
+
+async function detailFor(id: number) {
+  const d = await loadDetail(id);
+  if (!d) throw new Error(`ไม่พบใบงาน ${id}`);
+  return detailBody(d);
+}
+
+router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const d = await loadDetail(id);
+  if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, d.row)) return;
+  res.json(detailBody(d));
 });
 
 // ── เปิดใบงาน ──────────────────────────────────────────
@@ -2194,8 +2218,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     }
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 
@@ -2215,38 +2238,50 @@ async function guardStage(
   req: AuthRequest,
   res: Response,
   id: number,
-  expected: string
+  /** หลายขั้นได้ — ปุ่มเดียวที่ใช้ได้สองขั้น (นัดซ่อม/นัดตรวจ) ไม่ต้องอ่านสถานะก่อนเรียกอีกรอบ */
+  expected: string | readonly string[]
 ): Promise<{
   id: number;
   status: string;
   assignedToId: number | null;
   assignedTeam: string | null;
+  scheduledAt: Date | null;
+  scheduledTime: string | null;
+  outageId: number | null;
 } | null> {
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: {
-      id: true,
-      code: true,
-      status: true,
-      assignedToId: true,
-      assignedTeam: true,
-      branch: { select: { region: true, zone: true, pmTeam: true } },
-    },
-  });
+  const role = req.auth!.role;
+  // ขอบเขตหัวหน้าภาคอ่านพร้อมใบงาน ไม่ต่อคิวกัน — ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ (ต.ค. 69)
+  const [wo, scope] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        assignedToId: true,
+        assignedTeam: true,
+        scheduledAt: true,
+        scheduledTime: true,
+        outageId: true,
+        branch: { select: { region: true, zone: true, pmTeam: true } },
+      },
+    }),
+    role === "SUPERVISOR" ? supervisorScope(req.auth!.userId) : null,
+  ]);
   if (!wo) {
     res.status(404).json({ error: "ไม่พบใบงานนี้" });
     return null;
   }
 
-  const role = req.auth!.role;
-  if (role === "SUPERVISOR") {
-    if (!coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) {
+  if (scope) {
+    if (!coversWorkOrder(scope, wo)) {
       res.status(403).json({ error: OUT_OF_SCOPE });
       return null;
     }
   }
 
-  if (wo.status !== expected) {
+  const allowed: readonly string[] = typeof expected === "string" ? [expected] : expected;
+  if (!allowed.includes(wo.status)) {
     res.status(409).json({
       error: `${wo.code} อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}" ยังไม่ถึงขั้นนี้`,
       status: wo.status,
@@ -2254,8 +2289,8 @@ async function guardStage(
     return null;
   }
 
-  if (!canActOnStage(role, expected)) {
-    const actor = WORK_ORDER_STAGE_ACTOR[expected];
+  if (!canActOnStage(role, wo.status)) {
+    const actor = WORK_ORDER_STAGE_ACTOR[wo.status];
     res.status(403).json({
       error: `ขั้นนี้เป็นของ${ROLE_LABELS[actor] ?? actor} ไม่ใช่ของคุณ`,
     });
@@ -2267,7 +2302,64 @@ async function guardStage(
     status: wo.status,
     assignedToId: wo.assignedToId,
     assignedTeam: wo.assignedTeam,
+    // ปุ่มส่วนใหญ่ต้องใช้ทีม/วันนัดต่อ — คืนไปเลย ไม่ต้องอ่านใบงานซ้ำอีกรอบ
+    scheduledAt: wo.scheduledAt,
+    scheduledTime: wo.scheduledTime,
+    outageId: wo.outageId,
   };
+}
+
+/**
+ * เปลี่ยนขั้น + เขียนประวัติ ในคำสั่ง SQL เดียว — ปุ่มที่แค่แก้ช่องในใบงานแล้วลงประวัติหนึ่งบรรทัด
+ *
+ * ทำไม: ฐานข้อมูลอยู่คนละภูมิภาค (~0.23 วิ/รอบ) ทรานแซกชันแบบเดิมคือ BEGIN · UPDATE · INSERT · COMMIT
+ * สี่รอบ เหลือหนึ่ง (เจ้าของงานถามว่าทำไมบันทึกแล้วทามไลน์ขึ้นช้า ต.ค. 69) · คำสั่งเดียวในฐานข้อมูล
+ * เป็นทั้งหมดหรือไม่มีเลยอยู่แล้ว ไม่ต้องห่อทรานแซกชัน
+ *
+ * WHERE status = from — ถ้ามีคนกดขั้นนี้ไปก่อนเสี้ยววินาที จะไม่เขียนทับ คืน false ให้ตอบ 409
+ * (เดิมเช็คสถานะแล้วค่อยเขียน มีช่องว่างตรงกลาง) · วันที่ส่งเป็นเวลา UTC แบบที่ Prisma เขียน
+ * ไม่พึ่งเขตเวลาของเซิร์ฟเวอร์ฐานข้อมูล · ใบที่ผูกกับเคสเครื่องเสียยังใช้ทรานแซกชันเดิม (ต้องซิงก์เคสด้วย)
+ */
+type StageValue = string | number | Date | null;
+const STAGE_COLUMNS = new Set([
+  "status", "workStatus", "assignedTeam", "assignedToId", "scheduledAt", "scheduledTime", "appointmentStatus",
+]);
+async function moveStage(
+  id: number,
+  from: string,
+  /** undefined = ไม่แตะช่องนั้น (เหมือน Prisma update) */
+  data: Record<string, StageValue | undefined>,
+  log: { userId: number | undefined; action: string; status: string; note?: string | null }
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const val = (v: StageValue) =>
+    v instanceof Date ? Prisma.sql`CAST(${v.toISOString()} AS timestamp(3))` : v === null ? Prisma.sql`NULL` : Prisma.sql`${v}`;
+  const sets = Object.entries(data).flatMap(([k, v]) => {
+    if (v === undefined) return [];
+    // ชื่อคอลัมน์มาจากโค้ดเท่านั้น — กันพิมพ์ผิดแล้วไปแก้คอลัมน์ที่ไม่ตั้งใจ
+    if (!STAGE_COLUMNS.has(k)) throw new Error(`moveStage: ไม่รู้จักคอลัมน์ ${k}`);
+    return [Prisma.sql`${Prisma.raw(`"${k}"`)} = ${val(v)}`];
+  });
+  const rows = await prisma.$queryRaw<{ id: number }[]>`
+    WITH moved AS (
+      UPDATE "WorkOrder"
+      SET ${Prisma.join(sets)}, "updatedAt" = CAST(${now} AS timestamp(3))
+      WHERE "id" = ${id} AND "status" = ${from}
+      RETURNING "id"
+    )
+    INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
+    SELECT "id", CAST(${log.userId ?? null} AS integer), CAST(${log.action} AS text), CAST(${log.status} AS text),
+           CAST(${log.note ?? null} AS text), CAST(${now} AS timestamp(3))
+    FROM moved
+    RETURNING "id"`;
+  // ใบขยับขั้น = ชุด "ไม่มีคนรับ" อาจเปลี่ยน — เหมือน writeLog
+  orphanCache = null;
+  return rows.length > 0;
+}
+
+/** มีคนกดขั้นนี้ไปก่อน — แอปโหลดใบงานใหม่เองเมื่อได้ 409 (api/client.ts) */
+function stageMoved(res: Response) {
+  res.status(409).json({ error: "ใบงานนี้ถูกเปลี่ยนขั้นไปแล้ว — โหลดใหม่ให้แล้ว ลองดูอีกครั้ง" });
 }
 
 /**
@@ -2321,29 +2413,44 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = partsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (!(await guardStage(req, res, id, "NEW"))) return;
+  const cur = await guardStage(req, res, id, "NEW");
+  if (!cur) return;
 
   const { needsParts, note } = parsed.data;
   if (needsParts && !parsed.data.parts?.length && !parsed.data.offParts?.length) {
     return res.status(400).json({ error: "บอกว่าต้องใช้อะไหล่ ต้องระบุอย่างน้อยหนึ่งรายการ" });
   }
+  const assign = parsed.data.assign;
+  /**
+   * ทุกอย่างที่ต้องอ่านก่อนตัดสิน อ่านพร้อมกันรอบเดียว ไม่ต่อคิวทีละอย่าง — ฐานข้อมูลอยู่ไกล
+   * รอบละ ~0.23 วิ เดิมห้ารอบต่อกัน (เจ้าของงานถามว่าทำไมบันทึกช้า ต.ค. 69) · ไม่มีตัวไหนขึ้นต่อกัน
+   */
+  const [offLines, wo, before, knownTeam, teamText] = await Promise.all([
+    needsParts ? resolveOffParts(parsed.data.offParts) : Promise.resolve([]),
+    prisma.workOrder.findUniqueOrThrow({
+      where: { id },
+      select: {
+        branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+        machine: { select: { brand: true, model: true } },
+      },
+    }),
+    prisma.workOrderPart.findMany({
+      where: { workOrderId: id, kind: "WAITING" },
+      select: { sparePartId: true, quantity: true, inStock: true, requisitionNo: true },
+    }),
+    assign ? knownCmTeam(assign.team) : Promise.resolve(true),
+    assign ? teamNote(id, assign.team, "จ่ายงานให้") : Promise.resolve(""),
+  ]);
   // รวมเป็นรายการเดียวกันตั้งแต่ตรงนี้ — ข้างล่างไม่ต้องรู้ว่าตัวไหนมี SKU
-  const parts: PartLine[] = needsParts ? [...(parsed.data.parts ?? []), ...(await resolveOffParts(parsed.data.offParts))] : [];
+  const parts: PartLine[] = needsParts ? [...(parsed.data.parts ?? []), ...offLines] : [];
 
   /**
    * ตัดสินตั้งแต่ตรงนี้ว่าต้องเสนอราคาก่อนไหม
    *
    * เงื่อนไขทั้งสามข้อ (สาขาแฟรนไชส์ · ใช้อะไหล่ · หมดประกัน) รู้ครบแล้วตั้งแต่
    * หัวหน้าภาคระบุอะไหล่ ไม่ต้องรอผลเช็คสต็อก — และต้องตัดสินตรงนี้ เพราะ
-   * ขั้นเสนอราคาอยู่ก่อนเบิกอะไหล่แล้ว ไม่ใช่หลัง
+   * ขั้นเสนอราคาอยู่ก่อนเบิกอะไหล่แล้ว ไม่ใช่หลัง (ใบงานอ่านไว้แล้วข้างบน)
    */
-  const wo = await prisma.workOrder.findUniqueOrThrow({
-    where: { id },
-    select: {
-      branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
-      machine: { select: { brand: true, model: true } },
-    },
-  });
   /**
    * อะไหล่นอกหรือค่าบริการ = ของที่ลูกค้าต้องจ่าย หัวหน้าช่างเป็นคนรู้ — เสนอราคาเสมอ (เจ้าของงานเลือก ต.ค. 69)
    * ไม่รอกฎแฟรนไชส์/ประกัน ซึ่งเขียนไว้สำหรับของในสโตร์ที่บริษัทออกให้ได้ระหว่างประกัน
@@ -2365,10 +2472,6 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
    * ทุกตัวเบิกไปแล้วตั้งแต่รอบก่อน (ช่างส่งกลับด้วยเหตุอื่นที่ไม่ใช่อะไหล่) — ไม่มีอะไรให้เช็ค
    * หรือเสนอราคาเพิ่ม ไปจ่ายงานรอบใหม่เลย ไม่งั้นแอดมินต้องกดผ่านขั้นที่ไม่มีงานให้ทำ
    */
-  const before = await prisma.workOrderPart.findMany({
-    where: { workOrderId: id, kind: "WAITING" },
-    select: { sparePartId: true, quantity: true, inStock: true, requisitionNo: true },
-  });
   const allIssued =
     !!needsParts &&
     parts.every((p) => {
@@ -2386,14 +2489,12 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       : quoteFirst
       ? "PARTS_SOURCING"
       : "PARTS_REQUESTED";
-  const assign = parsed.data.assign;
   if (assign) {
     if (nextStatus !== "PARTS_CHECKED") {
       return res.status(400).json({ error: "ใบนี้ยังจ่ายงานไม่ได้ — ต้องผ่านขั้นอะไหล่/เสนอราคาก่อน" });
     }
-    if (!(await knownCmTeam(assign.team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${assign.team}"` });
+    if (!knownTeam) return res.status(404).json({ error: `ไม่รู้จักทีม "${assign.team}"` });
   }
-  const teamText = assign ? await teamNote(id, assign.team, "จ่ายงานให้") : "";
 
   await prisma.$transaction(async (tx) => {
     // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
@@ -2404,21 +2505,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
         data: services.map((v) => ({ workOrderId: id, name: v.name, quantity: v.quantity, unit: v.unit || null, note: v.note || null })),
       });
     }
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        status: nextStatus,
-        needsParts,
-        // ทุกขั้นตั้งสถานะใหม่ — ไม่ใช้อะไหล่ไปขั้นจ่ายงานก็ "รอช่างเข้าแก้ไข" ตามขั้น (เดิมล้างเป็นว่าง)
-        workStatus: workStatusForStage(nextStatus),
-      },
-    });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      needsParts ? "PARTS_REQUESTED" : "NO_PARTS",
-      nextStatus,
+    const partsNote =
       note ||
         (nextStatus === "AWAITING_QUOTE"
           ? `ไม่ใช้อะไหล่ — มีค่าบริการ ${services.length} รายการ ส่งแอดมินทำใบเสนอราคา`
@@ -2430,14 +2517,30 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
           ? "มีอะไหล่นอก/ค่าบริการ — เช็คอะไหล่ก่อน แล้วแอดมินทำใบเสนอราคาและเก็บเงินก่อนเบิกของ"
           : quoteFirst
           ? "อะไหล่ขายลูกค้าแฟรนไชส์ — เช็คอะไหล่ก่อน แล้วเสนอราคาและเก็บเงินก่อนเบิกของ"
-          : null)
-    );
-    if (assign) {
-      // เหมือน /assign ทุกอย่าง — แยกเป็นประวัติสองแถว แถบขั้นตอนจึงขึ้นว่าผ่านขั้นจ่ายงานแล้วตามจริง
+          : null);
+    const partsAction = needsParts ? "PARTS_REQUESTED" : "NO_PARTS";
+    if (!assign) {
+      await tx.workOrder.update({
+        where: { id },
+        data: {
+          status: nextStatus,
+          needsParts,
+          // ทุกขั้นตั้งสถานะใหม่ — ไม่ใช้อะไหล่ไปขั้นจ่ายงานก็ "รอช่างเข้าแก้ไข" ตามขั้น (เดิมล้างเป็นว่าง)
+          workStatus: workStatusForStage(nextStatus),
+        },
+      });
+      await writeLog(tx, id, req.auth!.userId, partsAction, nextStatus, partsNote);
+    } else {
+      /**
+       * เหมือน /assign ทุกอย่าง — ประวัติสองแถว แถบขั้นตอนจึงขึ้นว่าผ่านขั้นจ่ายงานแล้วตามจริง
+       * แต่เขียนใบงานครั้งเดียวด้วยค่าสุดท้าย และสองแถวประวัติในคำสั่งเดียว (เดิมสี่คำสั่ง) ·
+       * แถวจ่ายงานช้ากว่า 1 ms ทามไลน์เรียงตามเวลาจะได้ไม่สลับกัน
+       */
       await tx.workOrder.update({
         where: { id },
         data: {
           status: "AWAITING_CONFIRM",
+          needsParts,
           assignedTeam: assign.team,
           assignedToId: null,
           scheduledAt: dayStart(assign.scheduledAt),
@@ -2446,20 +2549,27 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
           workStatus: workStatusForStage("AWAITING_CONFIRM"),
         },
       });
-      await writeLog(
-        tx,
-        id,
-        req.auth!.userId,
-        "ASSIGNED",
-        "AWAITING_CONFIRM",
-        `${teamText} · เข้างาน ${visitText(assign.scheduledAt, assign.scheduledTime ?? null)}`
-      );
+      const at = Date.now();
+      await tx.workOrderLog.createMany({
+        data: [
+          { workOrderId: id, userId: req.auth!.userId, action: partsAction, status: nextStatus, note: partsNote, createdAt: new Date(at) },
+          {
+            workOrderId: id,
+            userId: req.auth!.userId,
+            action: "ASSIGNED",
+            status: "AWAITING_CONFIRM",
+            note: `${teamText} · เข้างาน ${visitText(assign.scheduledAt, assign.scheduledTime ?? null)}`,
+            createdAt: new Date(at + 1),
+          },
+        ],
+      });
+      orphanCache = null;
     }
-    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+    // ใบที่ไม่ได้ผูกกับเคสเครื่องเสีย ไม่ต้องอ่านเพื่อไปพบว่าไม่มีอะไรให้ซิงก์
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId, !!cur.outageId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -2534,8 +2644,7 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /** ขั้น 3 — แอดมินเช็คว่าอะไหล่แต่ละตัวมีไหม อยู่คลังไหน */
@@ -2731,8 +2840,7 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -2815,8 +2923,7 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -2838,8 +2945,7 @@ router.post("/:id/parts-pickup/return", requireAuth, async (req: AuthRequest, re
     await writeLog(tx, id, req.auth!.userId, "PICKUP_RETURNED", "PARTS_REQUESTED", reason.data);
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -2919,8 +3025,7 @@ router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -2963,8 +3068,7 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /** ไทม์ไลน์ของใบงาน — ใครทำอะไรเมื่อไร ตั้งแต่เปิดจนปิด (utils/timeline.ts) */
@@ -3047,40 +3151,42 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
     const missingDate = parsed.error.issues.some((i) => i.path[0] === "scheduledAt");
     return res.status(400).json({ error: missingDate ? "ต้องระบุวันเข้างาน" : parsed.error.flatten() });
   }
-  if (!(await guardStage(req, res, id, "PARTS_CHECKED"))) return;
+  const cur = await guardStage(req, res, id, "PARTS_CHECKED");
+  if (!cur) return;
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
-  if (!(await knownCmTeam(team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
-  const teamText = await teamNote(id, team, "จ่ายงานให้");
+  // ทีมกับข้อความทีมไม่ขึ้นต่อกัน อ่านพร้อมกัน
+  const [known, teamText] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้")]);
+  if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
 
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
-      // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
-      data: {
-        status: "AWAITING_CONFIRM",
-        assignedTeam: team,
-        assignedToId: null,
-        scheduledAt: dayStart(scheduledAt),
-        scheduledTime: scheduledTime ?? null,
-        appointmentStatus: "PENDING",
-        workStatus: workStatusForStage("AWAITING_CONFIRM"),
-      },
-    });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "ASSIGNED",
-      "AWAITING_CONFIRM",
-      [`${teamText} · เข้างาน ${visitText(scheduledAt, scheduledTime)}`, parsed.data.note].filter(Boolean).join(" — ")
-    );
-    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  }, STAGE_TX);
+  // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
+  // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
+  const data = {
+    status: "AWAITING_CONFIRM",
+    assignedTeam: team,
+    assignedToId: null,
+    scheduledAt: dayStart(scheduledAt),
+    scheduledTime: scheduledTime ?? null,
+    appointmentStatus: "PENDING",
+    workStatus: workStatusForStage("AWAITING_CONFIRM"),
+  };
+  const log = {
+    userId: req.auth!.userId,
+    action: "ASSIGNED",
+    status: "AWAITING_CONFIRM",
+    note: [`${teamText} · เข้างาน ${visitText(scheduledAt, scheduledTime)}`, parsed.data.note].filter(Boolean).join(" — "),
+  };
+  if (!cur.outageId) {
+    if (!(await moveStage(id, "PARTS_CHECKED", data, log))) return stageMoved(res);
+  } else {
+    await prisma.$transaction(async (tx) => {
+      await tx.workOrder.update({ where: { id }, data });
+      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+    }, STAGE_TX);
+  }
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3103,52 +3209,49 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   // ใช้ทั้งนัดเข้าซ่อม และนัดไปตรวจหน้างาน — คุยกับร้านแบบเดียวกัน
   // ทั้งสองแบบกลับไปให้หัวหน้าภาคปล่อยงานให้ช่าง (ดู WORK_ORDER_STAGE_ORDER)
-  const current = await prisma.workOrder.findUnique({ where: { id }, select: { status: true } });
-  const inspect = current?.status === "INSPECT_CONFIRM";
-  if (!(await guardStage(req, res, id, inspect ? "INSPECT_CONFIRM" : "AWAITING_CONFIRM"))) return;
+  const before = await guardStage(req, res, id, ["AWAITING_CONFIRM", "INSPECT_CONFIRM"]);
+  if (!before) return;
+  const inspect = before.status === "INSPECT_CONFIRM";
   const next = inspect ? "INSPECT_DISPATCH" : "ASSIGNED";
 
-  const before = await prisma.workOrder.findUniqueOrThrow({
-    where: { id },
-    select: { scheduledAt: true, scheduledTime: true },
-  });
   const oldDate = before.scheduledAt ? before.scheduledAt.toISOString().slice(0, 10) : null;
   const newDate = parsed.data.scheduledAt ?? oldDate;
   const newTime = parsed.data.scheduledTime !== undefined ? parsed.data.scheduledTime : before.scheduledTime;
   if (!newDate) return res.status(400).json({ error: "ต้องระบุวันเข้างาน" });
   const moved = newDate !== oldDate || (newTime ?? null) !== (before.scheduledTime ?? null);
 
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        status: next,
-        appointmentStatus: "CONFIRMED",
-        scheduledAt: dayStart(newDate),
-        scheduledTime: newTime ?? null,
-        workStatus: workStatusForStage(next),
-      },
-    });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      moved ? "RESCHEDULED" : "CONFIRMED",
-      next,
-      [
-        moved
-          ? `ลูกค้าขอเลื่อนจาก ${oldDate ? visitText(oldDate, before.scheduledTime) : "—"} เป็น ${visitText(newDate, newTime)}`
-          : `ลูกค้าคอนเฟิร์ม ${visitText(newDate, newTime)}`,
-        parsed.data.note,
-      ]
-        .filter(Boolean)
-        .join(" — ")
-    );
-    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  }, STAGE_TX);
+  const data = {
+    status: next,
+    appointmentStatus: "CONFIRMED",
+    scheduledAt: dayStart(newDate),
+    scheduledTime: newTime ?? null,
+    workStatus: workStatusForStage(next),
+  };
+  const log = {
+    userId: req.auth!.userId,
+    action: moved ? "RESCHEDULED" : "CONFIRMED",
+    status: next,
+    note: [
+      moved
+        ? `ลูกค้าขอเลื่อนจาก ${oldDate ? visitText(oldDate, before.scheduledTime) : "—"} เป็น ${visitText(newDate, newTime)}`
+        : `ลูกค้าคอนเฟิร์ม ${visitText(newDate, newTime)}`,
+      parsed.data.note,
+    ]
+      .filter(Boolean)
+      .join(" — "),
+  };
+  if (!before.outageId) {
+    if (!(await moveStage(id, before.status, data, log))) return stageMoved(res);
+  } else {
+    // ผูกกับเคสเครื่องเสีย — ต้องซิงก์สถานะเคสในทรานแซกชันเดียวกัน
+    await prisma.$transaction(async (tx) => {
+      await tx.workOrder.update({ where: { id }, data });
+      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+    }, STAGE_TX);
+  }
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3169,15 +3272,11 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   // ปุ่มเดียวกันใช้ส่งช่างเข้าตรวจหน้างาน (INSPECT_DISPATCH) — หัวหน้าภาคทำสิ่งเดียวกันทุกอย่าง
   // ต่างกันแค่ปลายทาง: ซ่อม → รอช่างเข้างาน · ตรวจ → รอทีมตรวจหน้างาน
-  const current = await prisma.workOrder.findUnique({ where: { id }, select: { status: true } });
-  const inspect = current?.status === "INSPECT_DISPATCH";
-  if (!(await guardStage(req, res, id, inspect ? "INSPECT_DISPATCH" : "ASSIGNED"))) return;
+  const cur = await guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]);
+  if (!cur) return;
+  const inspect = cur.status === "INSPECT_DISPATCH";
   const next = inspect ? "INSPECTING" : "IN_PROGRESS";
 
-  const cur = await prisma.workOrder.findUniqueOrThrow({
-    where: { id },
-    select: { assignedTeam: true, scheduledAt: true, scheduledTime: true },
-  });
   const team = parsed.data.team ?? cur.assignedTeam;
   if (!team) return res.status(400).json({ error: "ต้องเลือกทีมที่จะออกงาน" });
   // ทีมตรวจเลือกได้ทั้งทีม CM และ PM เหมือนตอนส่งตรวจ (teamExists)
@@ -3190,21 +3289,15 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
       ? `${await teamNote(id, team, inspect ? "ส่งตรวจหน้างาน เปลี่ยนทีมเป็น" : "ยืนยันออกงาน เปลี่ยนทีมเป็น")} (เดิม ${cur.assignedTeam ?? "—"}) · ${when}`
       : `${inspect ? "ส่งตรวจหน้างาน" : "ยืนยันออกงาน"} ${team} · ${when}`;
 
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        status: next,
-        assignedTeam: team,
-        assignedToId: null,
-        workStatus: workStatusForStage(next),
-      },
-    });
-    await writeLog(tx, id, req.auth!.userId, "DISPATCHED", next, [text, parsed.data.note].filter(Boolean).join(" — "));
-  }, STAGE_TX);
+  const moved = await moveStage(
+    id,
+    cur.status,
+    { status: next, assignedTeam: team, assignedToId: null, workStatus: workStatusForStage(next) },
+    { userId: req.auth!.userId, action: "DISPATCHED", status: next, note: [text, parsed.data.note].filter(Boolean).join(" — ") }
+  );
+  if (!moved) return stageMoved(res);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3289,28 +3382,22 @@ router.post("/:id/decline-new-date", requireAuth, async (req: AuthRequest, res) 
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = declineNewDateSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
-  if (!(await guardStage(req, res, id, "ASSIGNED"))) return;
-  const cur = await prisma.workOrder.findUniqueOrThrow({
-    where: { id },
-    select: { assignedTeam: true, scheduledAt: true, scheduledTime: true },
-  });
+  const cur = await guardStage(req, res, id, "ASSIGNED");
+  if (!cur) return;
   const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: { status: "AWAITING_CONFIRM", appointmentStatus: "PENDING", workStatus: workStatusForStage("AWAITING_CONFIRM") },
-    });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "NEW_DATE_DECLINED",
-      "AWAITING_CONFIRM",
-      `ทีม${cur.assignedTeam ?? " —"} ไม่ว่างวันที่ลูกค้าขอ (${when}) — ${parsed.data.reason}`
-    );
-  }, STAGE_TX);
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  const moved = await moveStage(
+    id,
+    "ASSIGNED",
+    { status: "AWAITING_CONFIRM", appointmentStatus: "PENDING", workStatus: workStatusForStage("AWAITING_CONFIRM") },
+    {
+      userId: req.auth!.userId,
+      action: "NEW_DATE_DECLINED",
+      status: "AWAITING_CONFIRM",
+      note: `ทีม${cur.assignedTeam ?? " —"} ไม่ว่างวันที่ลูกค้าขอ (${when}) — ${parsed.data.reason}`,
+    }
+  );
+  if (!moved) return stageMoved(res);
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3345,43 +3432,41 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = inspectRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (!(await guardStage(req, res, id, "NEW"))) return;
+  const cur = await guardStage(req, res, id, "NEW");
+  if (!cur) return;
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
   if (!(await teamExists(team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
 
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        // ยังไม่ถึงช่าง — แอดมินนัดร้านก่อน (วันที่หัวหน้าภาคใส่คือวันที่เสนอ ลูกค้าอาจขอเลื่อน)
-        status: "INSPECT_CONFIRM",
-        assignedTeam: team,
-        assignedToId: null,
-        scheduledAt: dayStart(scheduledAt),
-        scheduledTime: scheduledTime ?? null,
-        appointmentStatus: "PENDING",
-        workStatus: workStatusForStage("INSPECT_CONFIRM"),
-      },
-    });
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "INSPECT_REQUESTED",
-      "INSPECT_CONFIRM",
-      [
-        `ให้ ${team} เข้าตรวจหน้างาน วันที่ ${visitText(scheduledAt, scheduledTime)}`,
-        parsed.data.note,
-      ]
-        .filter(Boolean)
-        .join(" — ")
-    );
-    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  }, STAGE_TX);
+  const data = {
+    // ยังไม่ถึงช่าง — แอดมินนัดร้านก่อน (วันที่หัวหน้าภาคใส่คือวันที่เสนอ ลูกค้าอาจขอเลื่อน)
+    status: "INSPECT_CONFIRM",
+    assignedTeam: team,
+    assignedToId: null,
+    scheduledAt: dayStart(scheduledAt),
+    scheduledTime: scheduledTime ?? null,
+    appointmentStatus: "PENDING",
+    workStatus: workStatusForStage("INSPECT_CONFIRM"),
+  };
+  const log = {
+    userId: req.auth!.userId,
+    action: "INSPECT_REQUESTED",
+    status: "INSPECT_CONFIRM",
+    note: [`ให้ ${team} เข้าตรวจหน้างาน วันที่ ${visitText(scheduledAt, scheduledTime)}`, parsed.data.note]
+      .filter(Boolean)
+      .join(" — "),
+  };
+  if (!cur.outageId) {
+    if (!(await moveStage(id, "NEW", data, log))) return stageMoved(res);
+  } else {
+    await prisma.$transaction(async (tx) => {
+      await tx.workOrder.update({ where: { id }, data });
+      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+    }, STAGE_TX);
+  }
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3462,8 +3547,7 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /** หัวหน้าภาคแตะได้เฉพาะใบงานในภาค/ทีมที่ดูแล — คืน true เมื่อ "ห้าม" แบบเดียวกับ blockedForTeam */
@@ -3588,8 +3672,7 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
     return made;
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json({ ...shape(row), createdChild: child });
+  res.json({ ...(await detailFor(id)), createdChild: child });
 });
 
 /**
@@ -3736,8 +3819,7 @@ router.post("/:id/parts-eta", requireAuth, async (req: AuthRequest, res) => {
     );
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3764,8 +3846,7 @@ router.post("/:id/parts-arrived", requireAuth, async (req: AuthRequest, res) => 
     await writeLog(tx, id, req.auth!.userId, "PARTS_ARRIVED", "PARTS_REQUESTED", note.data || null);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -3900,8 +3981,7 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 
@@ -4076,8 +4156,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 // ── ปิดงาน ────────────────────────────────────────────
@@ -4189,7 +4268,22 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * ใบงาน SUB (จ่ายให้ทีม outsource) ต้องบอกว่าทีม SUB ไหนเข้าทำ — ช่างทีมนอกไม่มีบัญชี เลือกจากรายชื่อช่างไม่ได้
    * ทีมนี้แทน "ผู้เข้าปฏิบัติงาน" ได้ (ชื่อช่างของทีมไม่บังคับ) · ต้องเป็นทีม outsource ที่มีในระบบ
    */
-  const outsourceNow = await freshOutsource();
+  /**
+   * ทุกอย่างที่ต้องอ่านเพื่อตรวจ อ่านพร้อมกันสองรอบ ไม่ต่อคิวทีละอย่าง (เดิมเจ็ดรอบ ~0.23 วิ/รอบ —
+   * เจ้าของงานถามว่าทำไมบันทึกช้า ต.ค. 69) · ยังตรวจและตอบข้อผิดพลาดตามลำดับเดิมทุกข้อ
+   * ไฟล์ของรอบนี้นับทุกประเภทในคำสั่งเดียว (ก่อน/หลังซ่อม · ป้ายรุ่น · ใบเหลือง)
+   */
+  const [outsourceNow, foundWorkers, roundStart] = await Promise.all([
+    freshOutsource(),
+    workerIds.length > 0 ? prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } }) : Promise.resolve(0),
+    roundStartedAt(id),
+  ]);
+  const roundFiles = await prisma.workOrderAttachment.groupBy({
+    by: ["role"],
+    where: { workOrderId: id, role: { in: ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"] }, createdAt: { gte: roundStart } },
+    _count: true,
+  });
+  const has = (role: string) => roundFiles.some((f) => f.role === role);
   const subTeam = body.subTeam?.trim() || null;
   if (subTeam && !outsourceNow.has(subTeam)) {
     return res.status(400).json({ error: `ไม่รู้จักทีม SUB "${subTeam}" — เลือกจากรายชื่อทีม outsource` });
@@ -4201,8 +4295,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ต้องระบุชื่อผู้เข้าปฏิบัติงานอย่างน้อยหนึ่งคน" });
   }
   if (workerIds.length > 0) {
-    const found = await prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } });
-    if (found !== workerIds.length) {
+    if (foundWorkers !== workerIds.length) {
       return res.status(400).json({ error: "มีชื่อผู้เข้าปฏิบัติงานที่ไม่อยู่ในระบบ" });
     }
   }
@@ -4214,16 +4307,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * เป็นคำบอกเล่า · ก่อน/หลังแยกกันเพราะคนตรวจย้อนอยากเทียบสองภาพนี้ ไม่ใช่ไล่หาในกองรูป
    * นับเฉพาะรอบนี้เหมือนป้ายรุ่น — ใบที่วนกลับมา รูปหลังซ่อมของรอบก่อนไม่ได้บอกว่ารอบนี้ซ่อมเสร็จ
    */
-  const roundStart = await roundStartedAt(id);
-  const shots = await prisma.workOrderAttachment.groupBy({
-    by: ["role"],
-    where: { workOrderId: id, role: { in: ["BEFORE", "AFTER"] }, createdAt: { gte: roundStart } },
-    _count: true,
-  });
-  if (!shots.some((s) => s.role === "BEFORE")) {
+  if (!has("BEFORE")) {
     return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอก่อนซ่อมอย่างน้อยหนึ่งไฟล์" });
   }
-  if (!shots.some((s) => s.role === "AFTER")) {
+  if (!has("AFTER")) {
     return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอหลังซ่อมอย่างน้อยหนึ่งไฟล์" });
   }
 
@@ -4237,10 +4324,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    *
    * ตอนเปิดใบงานยังไม่บังคับเหมือนเดิม เพราะคนเปิดใบงานบางทีรับแจ้งทางโทรศัพท์
    */
-  const nameplate = await prisma.workOrderAttachment.count({
-    where: { workOrderId: id, role: "NAMEPLATE", createdAt: { gte: roundStart } },
-  });
-  if (nameplate === 0) {
+  if (!has("NAMEPLATE")) {
     return res.status(400).json({
       error: "ต้องแนบรูปป้ายรุ่นของเครื่องที่ถ่ายรอบนี้ก่อนปิดงาน",
     });
@@ -4270,10 +4354,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   );
   // ใบเหลืองคือเอกสารของที่ออกจากคลัง — ของนอกสโตร์ไม่ได้ออกจากคลัง ใช้แต่ของนอกสโตร์จึงไม่ต้องแนบ
   if ((usedLines ?? []).some((p) => !offUsed.has(p.sparePartId))) {
-    const slip = await prisma.workOrderAttachment.count({
-      where: { workOrderId: id, role: "REQUISITION", createdAt: { gte: roundStart } },
-    });
-    if (slip === 0) {
+    if (!has("REQUISITION")) {
       return res.status(400).json({
         error: "ใช้อะไหล่แล้วต้องแนบรูปใบเบิกอะไหล่ (ใบเหลือง) ของรอบนี้ก่อนปิดงาน",
       });
@@ -4297,27 +4378,30 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   const claimInputs = body.claims ?? [];
   const claimRows: Prisma.PartClaimCreateManyInput[] = [];
   if (claimInputs.length > 0) {
-    const ctx = await prisma.workOrder.findUniqueOrThrow({
-      where: { id },
-      select: {
-        branch: { select: { code: true, name: true, openedAt: true } },
-        machine: { select: { code: true, brand: true, model: true } },
-      },
-    });
+    // สามอย่างไม่ขึ้นต่อกัน — อ่านพร้อมกัน
+    const [ctx, spares, evidence] = await Promise.all([
+      prisma.workOrder.findUniqueOrThrow({
+        where: { id },
+        select: {
+          branch: { select: { code: true, name: true, openedAt: true } },
+          machine: { select: { code: true, brand: true, model: true } },
+        },
+      }),
+      prisma.sparePart.findMany({
+        where: { id: { in: claimInputs.map((c) => c.sparePartId) } },
+        select: { id: true, partCode: true, name: true },
+      }),
+      prisma.workOrderAttachment.groupBy({
+        by: ["sparePartId", "role"],
+        where: {
+          workOrderId: id,
+          role: { in: [...CLAIM_EVIDENCE_ROLES] },
+          createdAt: { gte: roundStart },
+        },
+        _count: true,
+      }),
+    ]);
     const used = new Map((usedLines ?? []).map((p) => [p.sparePartId, p.quantity]));
-    const spares = await prisma.sparePart.findMany({
-      where: { id: { in: claimInputs.map((c) => c.sparePartId) } },
-      select: { id: true, partCode: true, name: true },
-    });
-    const evidence = await prisma.workOrderAttachment.groupBy({
-      by: ["sparePartId", "role"],
-      where: {
-        workOrderId: id,
-        role: { in: [...CLAIM_EVIDENCE_ROLES] },
-        createdAt: { gte: roundStart },
-      },
-      _count: true,
-    });
     const make = machineMake(ctx.machine);
     const ts = claimTroubleshootingFor(make);
     for (const c of [...new Map(claimInputs.map((x) => [x.sparePartId, x])).values()]) {
@@ -4422,8 +4506,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     }
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -4488,8 +4571,7 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
     }
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -4737,8 +4819,7 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
     STAGE_TX
   );
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -4862,8 +4943,7 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
     await writeLog(tx, id, req.auth!.userId, "SUPERVISOR_CLOSED", "DONE", text);
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /**
@@ -4922,8 +5002,7 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
     );
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 /** เปิดใหม่ เผื่อปิดผิดใบ — แอดมินเท่านั้น เพราะเป็นการย้อนสิ่งที่บันทึกไปแล้ว */
@@ -5004,8 +5083,7 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
     await writeLog(tx, id, req.auth!.userId, "REOPENED", "PARTS_CHECKED");
   }, STAGE_TX);
 
-  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
-  res.json(shape(row));
+  res.json(await detailFor(id));
 });
 
 // ── ไฟล์แนบ ────────────────────────────────────────────
