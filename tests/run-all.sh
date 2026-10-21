@@ -10,7 +10,7 @@ if ! curl -s -m 3 -o /dev/null localhost:4000/health; then
 fi
 
 TOTAL=0; BAD=0
-for t in team-test requisition-test flow-test quote-test capacity-test backorder-test parts-out-test sendback-test status-guard-test live-sync-test plan-test vehicle-test user-delete-test roster-import-test team-rename-test role-change-test branch-move-test coverage-test team-group-test team-delete-test team-members-test list-filter-test timeline-test backfill-test view-as-test parts-admin-test claim-test test-copy-test backup-test coverage-map-test supervisor-close-test opener-report-test system-report-test off-catalog-test confirmed-report-test open-orders-test parts-out-report-test rollback-keep-test permission-test branch-manage-test pickup-test flow-simplify-test outsource-test; do
+for t in team-test requisition-test flow-test quote-test capacity-test backorder-test parts-out-test sendback-test status-guard-test live-sync-test plan-test vehicle-test user-delete-test roster-import-test team-rename-test role-change-test branch-move-test coverage-test team-group-test team-delete-test team-members-test list-filter-test timeline-test backfill-test view-as-test parts-admin-test claim-test test-copy-test backup-test coverage-map-test supervisor-close-test opener-report-test system-report-test off-catalog-test confirmed-report-test open-orders-test parts-out-report-test rollback-keep-test permission-test branch-manage-test pickup-test flow-simplify-test outsource-test list-version-test tech-day-test; do
   OUT=$(bash "$SP/$t.sh" 2>&1)
   P=$(echo "$OUT" | grep -cE '^PASS')
   F=$(echo "$OUT" | grep -cE '^FAIL')

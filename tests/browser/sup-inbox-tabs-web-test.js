@@ -1,6 +1,6 @@
 // ทดสอบ: กล่องงานหัวหน้าภาคแยกแท็บ + ทีม outsource แสดงชื่อปกติแต่แยกกลุ่ม (เจ้าของงานขอ ต.ค. 69)
-//   · แท็บ งานแจ้งซ่อม / จ่ายงาน/ปล่อยงาน / ทีม outsource — ใบแต่ละแบบอยู่แท็บของตัวเอง ไม่ปนกัน
-//   · ทีม outsource เข้างานค้างเกิน 2 วัน ขึ้นแดง "ตามทีม outsource ปิดงาน"
+//   · แท็บ งานแจ้งซ่อม / จ่ายงาน/ปล่อยงาน / ใบงาน SUB (ทีม outsource) — ใบแต่ละแบบอยู่แท็บของตัวเอง ไม่ปนกัน
+//   · ใบงาน SUB ที่ทีมเข้างานค้างเกิน 2 วัน ขึ้นแดง "ตามผลงาน SUB จากทีม"
 //   · ช่องเลือกทีมตอนจ่ายงาน: หัวข้อ "ทีมช่าง" กับ "ทีม outsource" แยกกัน ชื่อทีมไม่มีป้ายต่อท้าย
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
@@ -72,7 +72,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
       await label(`แท็บ ${name}`).first().click();
       await page.waitForTimeout(1200);
     };
-    (await label("แท็บ งานแจ้งซ่อม").count()) && (await label("แท็บ จ่ายงาน/ปล่อยงาน").count()) && (await label("แท็บ ทีม outsource").count())
+    (await label("แท็บ งานแจ้งซ่อม").count()) && (await label("แท็บ จ่ายงาน/ปล่อยงาน").count()) && (await label("แท็บ ใบงาน SUB").count())
       ? pass("กล่องงานหัวหน้าภาคมีสามแท็บ") : fail("ไม่เห็นแท็บ");
     await tab("งานแจ้งซ่อม");
     (await has(R.code)) && !(await has(D.code)) && !(await has(O.code))
@@ -80,17 +80,17 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await tab("จ่ายงาน/ปล่อยงาน");
     (await has(D.code)) && !(await has(R.code)) && !(await has(O.code))
       ? pass("แท็บจ่ายงาน/ปล่อยงาน: เห็นแต่ใบรอจ่ายงานทีมปกติ") : fail("แท็บจ่ายงานปนใบอื่น");
-    await tab("ทีม outsource");
+    await tab("ใบงาน SUB");
     (await has(O.code)) && !(await has(R.code)) && !(await has(D.code))
       ? pass("แท็บทีม outsource: เห็นแต่ใบทีม outsource") : fail("แท็บ outsource ปนใบอื่น");
-    (await vis("ตามทีม outsource ปิดงาน", false).count())
+    (await vis("ตามผลงาน SUB จากทีม", false).count())
       ? pass("ค้างเกิน 2 วัน ขึ้นเตือนให้ตามทีม outsource ปิดงาน") : fail("ไม่มีเตือนค้างเกินกำหนด");
-    const n = await label("แท็บ ทีม outsource").first().getAttribute("aria-label");
+    const n = await label("แท็บ ใบงาน SUB").first().getAttribute("aria-label");
     const want = sql(`select count(*) from "WorkOrder" w where w."assignedTeam" in (select name from "OutsourceTeam") and w.status in ('ASSIGNED','IN_PROGRESS') and w."branchId" in (select id from "Branch" where region='${region}')`);
-    n === `แท็บ ทีม outsource ${want} ใบ` ? pass(`ตัวเลขบนแท็บตรงกับฐานข้อมูล (${want})`) : fail(`ตัวเลขแท็บ ${n} · ฐานข้อมูล ${want}`);
+    n === `แท็บ ใบงาน SUB ${want} ใบ` ? pass(`ตัวเลขบนแท็บตรงกับฐานข้อมูล (${want})`) : fail(`ตัวเลขแท็บ ${n} · ฐานข้อมูล ${want}`);
     // ตัวเลขต้องไม่ขัดกัน: หัวข้อ = ผลรวมทุกแท็บ = ชิปกล่องงาน · แถวสาขานับตามแท็บ · ไม่มีแถว "รอใคร"
     const tabN = async (name) => Number((await label(`แท็บ ${name}`).first().getAttribute("aria-label")).match(/(\d+) ใบ$/)[1]);
-    const total = (await tabN("งานแจ้งซ่อม")) + (await tabN("จ่ายงาน/ปล่อยงาน")) + (await tabN("ทีม outsource"));
+    const total = (await tabN("งานแจ้งซ่อม")) + (await tabN("จ่ายงาน/ปล่อยงาน")) + (await tabN("ใบงาน SUB"));
     (await vis(`${total} ใบ`).count()) && (await vis(`กล่องงานของฉัน (${total})`).count())
       ? pass(`หัวข้อบอก ${total} ใบ เท่ากับผลรวมแท็บและชิปกล่องงาน`) : fail(`หัวข้อ/ชิปไม่ตรงผลรวมแท็บ ${total}`);
     (await vis("ทุกคน").count()) === 0 ? pass("กล่องงานหัวหน้าภาคไม่มีแถว รอใคร (ไม่มีปุ่ม ทุกคน)") : fail("ยังมีแถว รอใคร");

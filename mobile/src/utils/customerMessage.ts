@@ -127,3 +127,53 @@ export const allDispatch = (rows: ConfirmedRow[]) =>
   byTeam(rows)
     .map((t) => teamDispatch(t.team, t.rows))
     .join("\n\n");
+
+// ── ใบงาน SUB: ข้อความส่งทีม outsource (เจ้าของงานขอ ต.ค. 69) ──
+
+export interface SubOrder {
+  code: string;
+  status: string;
+  assignedTeam: string | null;
+  scheduledAt: string | null;
+  scheduledTime: string | null;
+  branchCode: string;
+  branchName: string;
+  branchLatitude?: number | null;
+  branchLongitude?: number | null;
+  machineCode: string | null;
+  symptom: string | null;
+  contactName: string | null;
+  contactPhone: string | null;
+  parts: { name: string; quantity: number; unit?: string | null }[];
+}
+
+/**
+ * ข้อความที่หัวหน้าภาคส่งให้ทีม outsource ทางไลน์ — รูปแบบเดียวกับข้อความจ่ายงานทีมช่าง (ไม่มีอิโมจิ บรรทัดสั้น)
+ *
+ * ต่างจากข้อความทีมช่างตรงที่ใส่อาการกับอะไหล่ด้วย: ช่างในบริษัทเปิดดูในใบงานได้ แต่ทีม outsource ไม่มีบัญชีในแอป
+ * ข้อความนี้คือทุกอย่างที่เขาจะได้เห็น · ท้ายข้อความบอกว่าต้องส่งรูปอะไรกลับ เพราะหัวหน้าภาคต้องแนบตอนบันทึกผล
+ */
+export function subDispatch(o: SubOrder) {
+  const day = o.scheduledAt ? dayLabel(o.scheduledAt.slice(0, 10)) : "ยังไม่นัด";
+  const symptom = (o.symptom ?? "").split("\n")[0].trim();
+  return [
+    `งาน SUB ทีม: ${o.assignedTeam ?? "—"}`,
+    LINE,
+    `นัด: ${day} | ${o.scheduledTime ? `${o.scheduledTime} น.` : "ไม่ระบุเวลา"} | ${INSPECT_STAGES.includes(o.status) ? "ตรวจหน้างาน" : "ซ่อม"}`,
+    `เลขที่ใบงาน: ${o.code}`,
+    `รหัสสาขา: ${o.branchCode}`,
+    `สาขา: ${o.branchName}`,
+    ...(o.machineCode ? [`เครื่อง: ${o.machineCode}`] : []),
+    ...(symptom ? [`อาการ: ${symptom}`] : []),
+    ...(o.parts.length ? ["อะไหล่:", ...o.parts.map((p) => `- ${p.name} x${p.quantity}${p.unit ? ` ${p.unit}` : ""}`)] : []),
+    `ผู้ติดต่อ: ${[o.contactName, o.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
+    ...(o.branchLatitude != null && o.branchLongitude != null
+      ? [`แผนที่: https://maps.google.com/?q=${o.branchLatitude},${o.branchLongitude}`]
+      : []),
+    LINE,
+    "ทำเสร็จแล้วส่งรูปกลับมาด้วยนะครับ:",
+    "- ป้ายรุ่นเครื่อง",
+    "- ก่อนซ่อม",
+    "- หลังซ่อม",
+  ].join("\n");
+}

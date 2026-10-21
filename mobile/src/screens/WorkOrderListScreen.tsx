@@ -89,8 +89,10 @@ export interface WorkOrderRow {
   orphanReason?: string | null;
   /** วันนัดผ่านไปแล้วยังไม่คอนเฟิร์มลูกค้า — กล่องงานแอดมินหัวข้อ "เลยนัด" */
   overdue?: boolean;
-  /** จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บ "ทีม outsource" */
+  /** จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บ "ใบงาน SUB" */
   outsource?: boolean;
+  /** ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — ป้ายแยกจากรับทราบปล่อยงานปกติ */
+  rescheduled?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
   waitingOnSupervisors: { id: number; name: string; region: string | null }[];
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
@@ -180,8 +182,10 @@ interface ListPrefs {
   btype: "" | "DODO" | "COCO";
   sort: Sort;
   supTab: SupTab;
+  /** ใบงาน SUB (จ่ายให้ทีม outsource) / ทีมปกติ — เจ้าของงานขอให้แยกไม่ปนกัน ต.ค. 69 */
+  kind: "" | "normal" | "sub";
 }
-const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair" };
+const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair", kind: "" };
 
 /**
  * แท็บกล่องงานหัวหน้าภาค (เจ้าของงานขอ ต.ค. 69 — "งานแจ้งมาปนกันหมด")
@@ -194,7 +198,8 @@ type SupTab = "repair" | "dispatch" | "outsource";
 const SUP_TABS: { value: SupTab; label: string }[] = [
   { value: "repair", label: "งานแจ้งซ่อม" },
   { value: "dispatch", label: "จ่ายงาน/ปล่อยงาน" },
-  { value: "outsource", label: "ทีม outsource" },
+  // "ใบงาน SUB" — คำที่เจ้าของงานใช้เรียกใบที่จ่ายให้ทีม outsource
+  { value: "outsource", label: "ใบงาน SUB" },
 ];
 const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP"];
 function supTabOf(r: WorkOrderRow): SupTab {
@@ -236,7 +241,7 @@ const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string;
     sortValue: (r) => (r.scheduledAt ? `${r.scheduledAt.slice(0, 10)} ${r.scheduledTime ?? "99:99"}` : "9999"),
   },
   // ติด "อะไหล่หมด" ต่อท้ายแทนการแทนที่ — กรองตามขั้นยังเจอครบ ค้นคำว่า "หมด" ก็ได้ทุกใบที่ติดของ
-  { key: "status", label: "สถานะ", value: (r) => (r.partsOut ? `${r.statusLabel} · อะไหล่หมด` : r.statusLabel) },
+  { key: "status", label: "สถานะ", value: (r) => (r.partsOut ? `${statusText(r)} · อะไหล่หมด` : statusText(r)) },
   { key: "wait", label: "รอใคร", value: (r) => waitText(r) ?? "(ไม่ได้รอใคร)" },
   // ใส่บทบาทต่อท้ายชื่อ — ตัวกรองแยกคนชื่อซ้ำต่างบทบาทได้ และอ่านแล้วรู้ว่าเปิดจากฝั่งไหน
   { key: "opener", label: "เปิดโดย", value: openerText },
@@ -296,13 +301,18 @@ function RolledBackBadge({ row }: { row: { rolledBackFrom?: string | null } }) {
   );
 }
 
-/** "ค้าง n วัน" — ทีม outsource เข้างานค้างเกินกำหนดขึ้นแดง ให้หัวหน้าภาคตามรูปมาปิดงาน */
+/** ป้ายสถานะในรายการ — ใบที่ลูกค้าขอเปลี่ยนวันบอกว่าต้องคอนเฟิร์มวันใหม่ ไม่ใช่แค่รับทราบปล่อยงาน */
+function statusText(r: { statusLabel: string; rescheduled?: boolean }) {
+  return r.rescheduled ? "หัวหน้าภาค · คอนเฟิร์มวันใหม่" : r.statusLabel;
+}
+
+/** "ค้าง n วัน" — ใบงาน SUB ที่ทีมเข้างานค้างเกินกำหนดขึ้นแดง ให้หัวหน้าภาคตามรูปมาบันทึกผล */
 function StuckText({ row, style }: { row: WorkOrderRow; style: object }) {
   const late = outsourceLate(row);
   return (
     <Text style={[style, late && { color: colors.dangerInk, fontWeight: "700" }]}>
       {stuckLabel(row.stageSince)}
-      {late ? " · ตามทีม outsource ปิดงาน" : ""}
+      {late ? " · ตามผลงาน SUB จากทีม" : ""}
     </Text>
   );
 }
@@ -465,7 +475,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       supTabs || ((!prefs.owner || r.stageActor === prefs.owner) && (!prefs.who || whoKeys(r).includes(prefs.who))),
     [prefs.owner, prefs.who, supTabs]
   );
-  const byType = useCallback((r: WorkOrderRow) => !prefs.btype || r.branchType === prefs.btype, [prefs.btype]);
+  // แถว "ประเภทงาน: ทีมปกติ / ใบงาน SUB" — กล่องงานหัวหน้าภาคแยกเป็นแท็บอยู่แล้ว ไม่ใช้ตัวกรองนี้ซ้ำ
+  const kindOn = !supTabs && user?.role !== "EMPLOYEE";
+  const byType = useCallback(
+    (r: WorkOrderRow) =>
+      (!prefs.btype || r.branchType === prefs.btype) && (!kindOn || !prefs.kind || (prefs.kind === "sub") === !!r.outsource),
+    [prefs.btype, prefs.kind, kindOn]
+  );
   // ตัวกรองหัวคอลัมน์ (Excel) — ไม่จำข้ามการเปิดแอป ตั้งใจใช้ค้นเฉพาะกิจ จำไว้แล้วลืมจะงงว่าใบหายไปไหน
   const [colFilters, setColFilters] = useState<ColFilters>({});
   const [colSort, setColSort] = useState<{ key: ColKey; dir: SortDir } | null>(null);
@@ -544,19 +560,32 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   // ต้องทิ้งคำตอบเก่า ไม่งั้นชิป "ปิดแล้ว" อาจโชว์รายการของ "ที่ยังค้าง"
   const loadSeq = useRef(0);
 
-  const fetchList = useCallback(
-    async () =>
-      (
-        await api.get<ListData>("/work-orders", {
-          params: {
-            status: filter,
-            ...(mineOnly ? { assignedTo: "me" } : {}),
-            ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
-          },
-        })
-      ).data,
+  const listParams = useMemo(
+    () => ({
+      status: filter,
+      ...(mineOnly ? { assignedTo: "me" } : {}),
+      ...(settledSearch.trim() ? { search: settledSearch.trim() } : {}),
+    }),
     [filter, mineOnly, settledSearch]
   );
+  /**
+   * ลายนิ้วมือของรายการ (GET /work-orders/version) — ตัวเช็คเบื้องหลังถามอันนี้ก่อน (ไม่กี่สิบไบต์)
+   * ต่างจากที่เห็นล่าสุดค่อยโหลดรายการจริง เดิมโหลดทั้งก้อนทุกนาที (หลายร้อย KB) กิน bandwidth ของ Render
+   */
+  const fetchVersion = useCallback(
+    async () => (await api.get<{ version: string }>("/work-orders/version", { params: listParams })).data.version,
+    [listParams]
+  );
+  const seenVersion = useRef<string | null>(null);
+  // โหลดรายการกับลายนิ้วมือพร้อมกัน — ไม่ช้าลง และตัวเช็คเบื้องหลังรอบแรกไม่ต้องโหลดรายการซ้ำ
+  const fetchList = useCallback(async () => {
+    const [list, version] = await Promise.all([
+      api.get<ListData>("/work-orders", { params: listParams }),
+      fetchVersion().catch(() => null),
+    ]);
+    seenVersion.current = version;
+    return list.data;
+  }, [listParams, fetchVersion]);
 
   /**
    * ของใหม่ที่เช็คเจอเบื้องหลังแต่ยังไม่ได้เอาขึ้นจอ (ปุ่ม "มีอัปเดต") — ตัวกรองเปลี่ยน/โหลดใหม่แล้วทิ้ง
@@ -645,6 +674,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    */
   useBackgroundCheck(async () => {
     const seq = loadSeq.current;
+    // ไม่มีอะไรเปลี่ยนตั้งแต่ครั้งก่อน — จบที่คำถามเล็ก ไม่ต้องโหลดรายการ
+    if (seenVersion.current && (await fetchVersion()) === seenVersion.current) return;
+    if (seq !== loadSeq.current) return;
     const data = await fetchList();
     if (seq !== loadSeq.current) return; // ระหว่างรอ มีการโหลดใหม่หรือเปลี่ยนตัวกรอง — ของนี้เก่าแล้ว
     const { changed } = countChanges(rowsRef.current, data.rows, (r) => r.id);
@@ -893,6 +925,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           // ตัวเลขในแถวสาขานับตามแท็บที่เลือก — ตรงกับรายการที่เห็นอยู่
           rows={supTabs ? rows.filter((r) => supTabOf(r) === prefs.supTab) : rows}
           hideOwner={supTabs}
+          showKind={kindOn}
           prefs={prefs}
           setPref={setPref}
           byOwner={byOwner}
@@ -1146,8 +1179,11 @@ function ListFilters({
   colSort,
   setColSort,
   hideOwner,
+  showKind,
 }: {
   rows: WorkOrderRow[];
+  /** แถว "ทีมปกติ / ใบงาน SUB" — แอดมินกับหัวหน้าภาค (ช่างไม่มีใบงาน SUB) */
+  showKind?: boolean;
   /** ไม่แสดงแถว "รอใคร" — กล่องงานหัวหน้าภาค (แยกเป็นแท็บแล้ว) */
   hideOwner?: boolean;
   prefs: ListPrefs;
@@ -1160,7 +1196,10 @@ function ListFilters({
 }) {
   const typed = rows.filter(byType);
   const ownerCount = (role: Role | "") => typed.filter((r) => !role || r.stageActor === role).length;
-  const typeCount = (t: "" | "DODO" | "COCO") => rows.filter((r) => byOwner(r) && (!t || r.branchType === t)).length;
+  const typeCount = (t: "" | "DODO" | "COCO") =>
+    rows.filter((r) => byOwner(r) && (!t || r.branchType === t) && (!prefs.kind || (prefs.kind === "sub") === !!r.outsource)).length;
+  const kindCount = (k: "" | "normal" | "sub") =>
+    rows.filter((r) => byOwner(r) && (!prefs.btype || r.branchType === prefs.btype) && (!k || (k === "sub") === !!r.outsource)).length;
 
   // ตัวเลือก "ของใคร" สร้างจากใบที่มีอยู่จริง — ไม่มีชื่อที่กดแล้วได้รายการว่าง
   const whoOptions = useMemo(() => {
@@ -1214,7 +1253,21 @@ function ListFilters({
           ))}
         </ScrollView>
       ) : null}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={hideOwner ? null : styles.fRowLine} contentContainerStyle={styles.fRow}>
+      {showKind ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={hideOwner ? null : styles.fRowLine} contentContainerStyle={styles.fRow}>
+          <Text style={styles.fLabel}>ทีม</Text>
+          {(
+            [
+              ["", "ทั้งหมด"],
+              ["normal", "ทีมปกติ"],
+              ["sub", "ใบงาน SUB"],
+            ] as const
+          ).map(([k, label]) => (
+            <Seg key={k} on={prefs.kind === k} label={label} n={kindCount(k)} onPress={() => setPref({ kind: k })} />
+          ))}
+        </ScrollView>
+      ) : null}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={hideOwner && !showKind ? null : styles.fRowLine} contentContainerStyle={styles.fRow}>
         <Text style={styles.fLabel}>สาขา</Text>
         {(["", "DODO", "COCO"] as const).map((t) => (
           <Seg key={t} on={prefs.btype === t} label={t || "ทั้งหมด"} n={typeCount(t)} onPress={() => setPref({ btype: t })} />
@@ -1448,7 +1501,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       </View>
       <View style={styles.colStatus}>
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }, closed && styles.badgeDone]}>
-          <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
+          <Text style={[styles.badgeText, { color: tone.fg }]}>{statusText(row)}</Text>
         </View>
         <PartsOutBadge row={row} />
         <RolledBackBadge row={row} />
@@ -1502,7 +1555,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <RolledBackBadge row={row} />
         <PartsOutBadge row={row} />
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
-          <Text style={[styles.badgeText, { color: tone.fg }]}>{row.statusLabel}</Text>
+          <Text style={[styles.badgeText, { color: tone.fg }]}>{statusText(row)}</Text>
         </View>
       </View>
 

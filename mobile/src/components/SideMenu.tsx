@@ -116,6 +116,16 @@ const GROUPS: Group[] = [
         screen: "PlanBoard",
         roles: ["ADMIN", "SUPERVISOR"],
       },
+      // หน้าแรกของช่าง — งานที่ปล่อยให้ทีมแล้ว เรียงตามเวลานัด (แบบ Salesforce ต.ค. 69)
+      {
+        key: "myjobs",
+        label: "งานของฉันวันนี้",
+        labelEn: "My Jobs Today",
+        icon: "today-outline",
+        tab: "HomeTab",
+        screen: "MyJobs",
+        roles: ["EMPLOYEE"],
+      },
       { key: "home", label: "หน้าหลัก", labelEn: "Home", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
       {
         key: "inbox",
@@ -195,7 +205,7 @@ const GROUPS: Group[] = [
 const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches"]);
 
 /** หน้าแรกของแต่ละแท็บ — ไปหน้าพวกนี้ต้องล้างหน้าที่ซ้อนอยู่ ไม่ใช่ซ้อนเพิ่ม */
-const TAB_ROOTS = new Set(["PlanBoard", "HomeMenu", "WorkOrderList", "HistoryMenu", "AdminMenu"]);
+const TAB_ROOTS = new Set(["PlanBoard", "MyJobs", "HomeMenu", "WorkOrderList", "HistoryMenu", "AdminMenu"]);
 
 function currentKey(): string | null {
   if (!navigationRef.isReady()) return null;

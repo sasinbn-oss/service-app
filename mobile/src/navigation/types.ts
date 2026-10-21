@@ -10,6 +10,8 @@ export type ReportKind = "daily" | "weekly" | "monthly" | "parts";
 export type HomeStackParamList = {
   /** บอร์ดแผนงาน — หน้าแรกของแอดมินกับหัวหน้าภาค */
   PlanBoard: undefined;
+  /** งานของฉันวันนี้ — หน้าแรกของช่าง */
+  MyJobs: undefined;
   HomeMenu: undefined;
   ReportsMenu: undefined;
   Report: { kind: ReportKind; title: string };
@@ -30,7 +32,7 @@ export type HomeStackParamList = {
   WorkOrderForm:
     | { outageId?: number; presetTitle?: string; branchCode?: string; machineCode?: string }
     | undefined;
-  WorkOrderDetail: { id: number };
+  WorkOrderDetail: { id: number; open?: "close" | "stage" | "problem" };
   TransferDocument: undefined;
   FlowList: undefined;
   FlowRun: { id: number; title: string };
