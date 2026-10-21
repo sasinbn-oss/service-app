@@ -67,7 +67,7 @@ LIST=$(curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $S)")
   && pass "รายการใบงานติดธง outsource เฉพาะใบที่จ่ายให้ทีม outsource (ใบทีมปกติไม่ติด)" || fail "ธง outsource ในรายการ: $(echo "$LIST" | J "JSON.stringify(d.rows.filter(r=>[$W,$W2].includes(r.id)).map(r=>[r.id,r.outsource]))")"
 
 echo "═══ ปิดงานแทน"
-CLOSE='{"result":"FIXED","note":"outsource ซ่อมเสร็จ","otherWorkers":"ทีม outsource"}'
+CLOSE="{\"result\":\"FIXED\",\"note\":\"outsource ซ่อมเสร็จ\",\"otherWorkers\":\"ทีม outsource\",\"subTeam\":\"$OS\"}"
 [ "$(PC $T work-orders/$W/close "$CLOSE")" = "403" ] && [ "$(ST $W)" = "IN_PROGRESS|$OS" ] && pass "ช่างทีมอื่นปิดไม่ได้ (403)" || fail "ช่างทีมอื่นปิดได้"
 DB "update \"User\" set region='ภาคที่ไม่ใช่ของสาขานี้' where \"employeeCode\"='S001'" >/dev/null
 [ "$(PC $S work-orders/$W/close "$CLOSE")" = "403" ] && [ "$(ST $W)" = "IN_PROGRESS|$OS" ] && pass "หัวหน้าภาคนอกพื้นที่ปิดไม่ได้" || fail "หัวหน้าภาคนอกพื้นที่ปิดได้"

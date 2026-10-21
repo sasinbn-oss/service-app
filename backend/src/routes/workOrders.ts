@@ -579,6 +579,7 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
       employeeCode: x.user.employeeCode,
     })),
     otherWorkers: w.closeOtherWorkers,
+    subTeam: w.closeSubTeam,
   };
 }
 
@@ -609,7 +610,8 @@ const listSelect = {
   branch: {
     select: { code: true, name: true, region: true, zone: true, pmTeam: true, openedAt: true, warrantyExpiresAt: true },
   },
-  machine: { select: { code: true, brand: true, model: true } },
+  // ขนาดเครื่อง (กก.) — ป้าย "W7 · 25 กก." ในรายการ (เจ้าของงานขอ ต.ค. 69 ให้รู้ขนาดเร็ว)
+  machine: { select: { code: true, brand: true, model: true, capacityKg: true } },
   assignedTeam: true,
   assignedTo: { select: { name: true } },
   createdBy: { select: { name: true, role: true } },
@@ -724,6 +726,7 @@ function listShape(
     branchCode: w.branch.code,
     branchName: w.branch.name,
     machineCode: w.machine?.code ?? null,
+    machineCapacityKg: w.machine?.capacityKg ?? null,
     assignedTeam: w.assignedTeam,
     // ใบเก่าที่จ่ายรายคนก่อนเปลี่ยนมาจ่ายเป็นทีม ยังต้องบอกได้ว่าอยู่ในมือใคร
     assignedToName: w.assignedTo?.name ?? null,
@@ -1241,7 +1244,7 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
       closedAt: true,
       assignedTeam: true,
       branch: { select: { code: true, name: true, latitude: true, longitude: true } },
-      machine: { select: { code: true } },
+      machine: { select: { code: true, capacityKg: true } },
       parts: { where: { kind: "WAITING" }, select: { quantity: true, unit: true, sparePart: { select: { name: true } } } },
       // ปล่อยงานรอบล่าสุด + ถึงหน้างาน — ถึงแล้วคือมี ARRIVED หลังปล่อยงาน
       logs: {
@@ -1279,6 +1282,7 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           latitude: w.branch.latitude,
           longitude: w.branch.longitude,
           machineCode: w.machine?.code ?? null,
+          machineCapacityKg: w.machine?.capacityKg ?? null,
           parts: w.parts.map((p) => ({ name: p.sparePart.name, quantity: p.quantity, unit: p.unit })),
           arrivedAt: arrived?.createdAt ?? null,
         };
@@ -1423,7 +1427,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
       id: true, code: true, status: true, assignedTeam: true, scheduledAt: true, scheduledTime: true,
       symptom: true, contactName: true, contactPhone: true,
       branch: { select: { code: true, name: true, zone: true, latitude: true, longitude: true } },
-      machine: { select: { code: true } },
+      machine: { select: { code: true, capacityKg: true } },
     },
   });
   // คนคอนเฟิร์มล่าสุดของแต่ละใบ (และเวลา) — ไม่นับแถวที่ปิดงานย้อนหลังสร้าง (ดู APPOINTMENT_BY_ACTIONS)
@@ -1454,6 +1458,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
         latitude: o.branch.latitude,
         longitude: o.branch.longitude,
         machineCode: o.machine?.code ?? null,
+        machineCapacityKg: o.machine?.capacityKg ?? null,
         // บรรทัดแรก — บรรทัดสาเหตุ/แก้ไขเป็นเรื่องภายใน (เหมือนข้อความแจ้งลูกค้า)
         symptom: (o.symptom ?? "").split("\n")[0].trim() || null,
         contactName: o.contactName,
@@ -4099,6 +4104,8 @@ const closeSchema = z.object({
   workerIds: z.array(z.number().int().positive()).max(3).optional(),
   // คนนอกระบบที่ไปด้วย เช่น ผู้รับเหมา — ไม่บังคับ
   otherWorkers: z.string().trim().max(300).nullable().optional(),
+  // ใบงาน SUB: ทีม outsource ที่เข้าทำ — บังคับเมื่อใบจ่ายให้ทีม outsource (ดูข้างล่าง)
+  subTeam: z.string().trim().max(120).nullable().optional(),
   // อะไหล่ที่ต้องส่งของเก่าเคลม (ฟอร์มใบเคลมอะไหล่) — มีอย่างน้อยหนึ่งชิ้น ใบงานไปรอ Admin Spare Part ตรวจก่อนปิด
   claims: z
     .array(
@@ -4178,7 +4185,19 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    */
   const workerIds = [...new Set(body.workerIds ?? [])];
   const otherWorkers = body.otherWorkers?.trim() || null;
-  if (workerIds.length === 0 && !otherWorkers) {
+  /**
+   * ใบงาน SUB (จ่ายให้ทีม outsource) ต้องบอกว่าทีม SUB ไหนเข้าทำ — ช่างทีมนอกไม่มีบัญชี เลือกจากรายชื่อช่างไม่ได้
+   * ทีมนี้แทน "ผู้เข้าปฏิบัติงาน" ได้ (ชื่อช่างของทีมไม่บังคับ) · ต้องเป็นทีม outsource ที่มีในระบบ
+   */
+  const outsourceNow = await freshOutsource();
+  const subTeam = body.subTeam?.trim() || null;
+  if (subTeam && !outsourceNow.has(subTeam)) {
+    return res.status(400).json({ error: `ไม่รู้จักทีม SUB "${subTeam}" — เลือกจากรายชื่อทีม outsource` });
+  }
+  if (outsourceNow.has(current.assignedTeam ?? "") && !subTeam) {
+    return res.status(400).json({ error: "ใบงาน SUB ต้องเลือกทีม SUB ที่เข้าทำ" });
+  }
+  if (workerIds.length === 0 && !otherWorkers && !subTeam) {
     return res.status(400).json({ error: "ต้องระบุชื่อผู้เข้าปฏิบัติงานอย่างน้อยหนึ่งคน" });
   }
   if (workerIds.length > 0) {
@@ -4363,6 +4382,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         closeResult: body.result,
         closeNote: body.note?.trim() || null,
         closeOtherWorkers: otherWorkers,
+        closeSubTeam: subTeam,
         // ปิดแล้วไม่ได้รออะไรอยู่ ค้างไว้จะไปโผล่บนกระดานว่ายังรอช่าง
         workStatus: workStatusForStage("DONE"),
       },
@@ -4382,7 +4402,14 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 
     if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows });
 
-    await writeLog(tx, id, req.auth!.userId, "CLOSED", nextStatus, body.note?.trim() || null);
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "CLOSED",
+      nextStatus,
+      [subTeam ? `บันทึกผลงาน SUB · ทีม ${subTeam}` : null, body.note?.trim() || null].filter(Boolean).join(" — ") || null
+    );
     if (claimRows.length > 0) {
       await writeLog(
         tx,
@@ -4730,6 +4757,12 @@ const supervisorCloseSchema = z.object({
     errorMap: () => ({ message: "เลือกเหตุผลที่ปิดใบงาน" }),
   }),
   note: z.string().trim().max(1000).optional(),
+  // เฉพาะ TECH_FIXED — ใครเข้า (ช่างในระบบ / คนนอกระบบ / ทีม SUB) วันที่เข้า อะไหล่ที่ใช้
+  workerIds: z.array(z.number().int().positive()).max(3).optional(),
+  otherWorkers: z.string().trim().max(300).nullable().optional(),
+  subTeam: z.string().trim().max(120).nullable().optional(),
+  visitDate: dateField.optional(),
+  parts: z.array(z.object({ sparePartId: z.number().int(), quantity: z.number().int().min(1).max(999) })).max(30).optional(),
 });
 
 router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) => {
@@ -4761,6 +4794,59 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
   }
 
   const text = `${SUPERVISOR_CLOSE_REASONS[parsed.data.reason]} — ${note}`;
+
+  /**
+   * ช่างเข้าซ่อมเสร็จแล้ว (TECH_FIXED) — บันทึกเป็นงานซ่อมเสร็จจริง ไม่ใช่ "ปิดโดยไม่มีช่างเข้า"
+   * ข้อมูลที่ขาดไม่ได้ของงานซ่อม: ใครเข้า · วันที่ · รูปหลังซ่อมอย่างน้อยหนึ่งรูป (อะไหล่ไม่บังคับ — ซ่อมโดยไม่เปลี่ยนของก็มี)
+   * ไม่บังคับรูปก่อนซ่อม/ป้ายรุ่น/ใบเหลืองเหมือนช่างปิดเอง เพราะงานจบไปแล้ว ไปถ่ายใหม่ไม่ได้ (แบบเดียวกับปิดย้อนหลัง)
+   */
+  if (parsed.data.reason === "TECH_FIXED") {
+    const d = parsed.data;
+    const outsourceNow = await freshOutsource();
+    const subTeam = d.subTeam?.trim() || null;
+    if (subTeam && !outsourceNow.has(subTeam)) {
+      return res.status(400).json({ error: `ไม่รู้จักทีม SUB "${subTeam}" — เลือกจากรายชื่อทีม outsource` });
+    }
+    const workerIds = [...new Set(d.workerIds ?? [])];
+    const otherWorkers = d.otherWorkers?.trim() || null;
+    if (workerIds.length === 0 && !otherWorkers && !subTeam) {
+      return res.status(400).json({ error: "ต้องบอกว่าใครเข้าซ่อม (ช่าง ชื่อคน หรือทีม SUB)" });
+    }
+    if (workerIds.length && (await prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } })) !== workerIds.length) {
+      return res.status(400).json({ error: "มีชื่อผู้เข้าปฏิบัติงานที่ไม่อยู่ในระบบ" });
+    }
+    if (!d.visitDate) return res.status(400).json({ error: "ต้องใส่วันที่ช่างเข้าซ่อม" });
+    if (d.visitDate > bangkokDay(new Date())) return res.status(400).json({ error: "วันที่เข้าซ่อมต้องไม่เกินวันนี้" });
+    const after = await prisma.workOrderAttachment.count({ where: { workOrderId: id, role: "AFTER" } });
+    if (after === 0) return res.status(400).json({ error: "ต้องแนบรูปหลังซ่อมอย่างน้อย 1 รูป" });
+    const fixedText = `${SUPERVISOR_CLOSE_REASONS.TECH_FIXED} · เข้า ${visitText(d.visitDate, null)}${
+      subTeam ? ` · ทีม SUB ${subTeam}` : ""
+    } — ${note}`;
+    await prisma.$transaction(async (tx) => {
+      await tx.workOrder.update({
+        where: { id },
+        data: {
+          status: "DONE",
+          closedAt: new Date(),
+          closedById: req.auth!.userId,
+          closeResult: "FIXED",
+          closeNote: fixedText,
+          closeOtherWorkers: otherWorkers,
+          closeSubTeam: subTeam,
+          workStatus: workStatusForStage("DONE"),
+        },
+      });
+      await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
+      if (workerIds.length) {
+        await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
+      }
+      if (d.parts) await replaceParts(tx, id, "USED", d.parts);
+      await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", fixedText);
+    }, STAGE_TX);
+    const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+    return res.json(shape(row));
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },

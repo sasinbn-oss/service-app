@@ -6,6 +6,7 @@
  * ว่ากดปิดแล้วจบ
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { machineTag } from "../utils/machine";
 import {
   Image,
   Platform,
@@ -117,6 +118,7 @@ interface WorkOrder {
   machineModel: string | null;
   /** ขนาดเครื่องพร้อมหน่วย เช่น "13 kg" — เซิร์ฟเวอร์ประกอบหน่วยมาให้แล้ว */
   machineCapacityLabel: string | null;
+  machineCapacityKg?: number | null;
   assignedToName: string | null;
   scheduledAt: string | null;
   /** เวลานัด "HH:MM" — ว่าง = นัดเป็นวัน */
@@ -198,6 +200,8 @@ interface WorkOrder {
   /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
   workers: Technician[];
   otherWorkers: string | null;
+  /** ใบงาน SUB: ทีม outsource ที่เข้าทำจริง (บันทึกตอนปิดงาน) */
+  subTeam?: string | null;
   /** ทีมที่รับงานเป็นทีม outsource — ช่างไม่มีบัญชีในแอป หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน */
   assignedOutsource?: boolean;
   logs: LogEntry[];
@@ -1061,8 +1065,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           }}
           accessibilityLabel="จบ: ไม่ต้องเข้าหน้างาน"
         >
-          <Text style={styles.endOptTitle}>ไม่ต้องเข้าหน้างาน</Text>
-          <Text style={styles.endOptHint}>เครื่องกลับมาเอง · แก้ทางโทรศัพท์ · ร้านจัดการเอง · ซ่อมรวมกับใบอื่น</Text>
+          <Text style={styles.endOptTitle}>ไม่ต้องเข้าหน้างาน / ช่างแก้ไขเรียบร้อยแล้ว</Text>
+          <Text style={styles.endOptHint}>
+            ช่างเข้าแก้ไขเรียบร้อย (ใส่ใครเข้า วันที่ รูปหลังซ่อม) · เครื่องกลับมาเอง · แก้ทางโทรศัพท์ · ร้านจัดการเอง · ซ่อมรวมกับใบอื่น
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.endOpt, styles.endOptDanger]}
@@ -1080,6 +1086,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     {supClosing ? (
       <SupervisorCloseModal
         order={order}
+        technicians={technicians}
+        subTeams={teams.filter((t) => t.outsource).map((t) => t.name)}
         onClose={() => setSupClosing(false)}
         onDone={async () => {
           setSupClosing(false);
@@ -1143,7 +1151,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           )}
         </View>
 
-        <Text style={[styles.title, headingFont]}>{order.title}</Text>
+        <View style={styles.titleRow}>
+          <Text style={[styles.title, headingFont]}>{order.title}</Text>
+          {/* เครื่อง + ขนาดบนหัวใบงาน (เจ้าของงานขอ ต.ค. 69) — เดิมอยู่ในการ์ดสาขาด้านล่าง ต้องเลื่อนหา */}
+          {order.machineCode ? (
+            <View style={styles.machinePill} accessibilityLabel={`เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}`}>
+              <Text style={styles.machinePillText}>เครื่อง {machineTag(order.machineCode, order.machineCapacityKg)}</Text>
+            </View>
+          ) : null}
+        </View>
         {order.detail ? <Text style={styles.detail}>{order.detail}</Text> : null}
 
         {/*
@@ -1872,6 +1888,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 .join(" · ") || "—"
             }
           />
+          {order.subTeam ? <Row label="ทีม SUB ที่เข้าทำ" value={order.subTeam} /> : null}
           <Row
             label="ปิดโดย"
             value={`${order.closedByName ?? "—"} · ${formatDateTime(order.closedAt ?? rejected?.createdAt ?? null)}`}
@@ -2113,6 +2130,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         order={order}
         results={results}
         technicians={technicians}
+        subTeams={teams.filter((t) => t.outsource).map((t) => t.name)}
         onCancel={() => setClosing(false)}
         onDone={async () => {
           setClosing(false);
@@ -4561,6 +4579,7 @@ function CloseModal({
   order,
   results,
   technicians,
+  subTeams,
   onCancel,
   onDone,
 }: {
@@ -4568,6 +4587,8 @@ function CloseModal({
   order: WorkOrder;
   results: Option[];
   technicians: Technician[];
+  /** ทีม outsource ทั้งหมด — ใบงาน SUB เลือกทีมที่เข้าทำจริง */
+  subTeams: string[];
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -4609,7 +4630,7 @@ function CloseModal({
   const [workerIds, setWorkerIds] = useState<number[]>(reclosing ? order.workers.map((w) => w.id).slice(0, 3) : []);
   // ทีม outsource ไม่มีชื่อในระบบให้ติ๊ก — เติมชื่อทีมไว้ให้ หัวหน้าภาคพิมพ์ชื่อช่างเพิ่มได้
   const [otherWorkers, setOtherWorkers] = useState(
-    reclosing ? order.otherWorkers ?? "" : order.assignedOutsource && order.assignedTeam ? `ทีม ${order.assignedTeam}` : ""
+    reclosing ? order.otherWorkers ?? "" : ""
   );
   // อะไหล่ที่ยังขาด — เปิดใบงานรออะไหล่ต่อจากใบนี้หลังปิดงาน
   const [followUp, setFollowUp] = useState(false);
@@ -4627,7 +4648,16 @@ function CloseModal({
   const afterMissing = afterFiles.length === 0 && !order.afterCount;
   const shotsMissing = beforeMissing || afterMissing;
   // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
-  const workersMissing = workerIds.length === 0 && !otherWorkers.trim();
+  /**
+   * ใบงาน SUB: เลือกทีม SUB ที่เข้าทำแทนช่องช่างบริษัท (เจ้าของงานขอ ต.ค. 69) — เลือกทีมที่จ่ายงานไว้ให้ เปลี่ยนได้
+   * ช่างบริษัทไปด้วยก็เปิดช่องคนที่ 1–3 เพิ่มได้ · ชื่อช่างของทีม SUB ไม่บังคับ
+   */
+  const isSub = !!order.assignedOutsource;
+  const [subTeam, setSubTeam] = useState<string | null>(
+    reclosing ? order.subTeam ?? null : isSub ? order.assignedTeam : null
+  );
+  const [withStaff, setWithStaff] = useState(isSub && workerIds.length > 0);
+  const workersMissing = isSub ? !subTeam : workerIds.length === 0 && !otherWorkers.trim();
   const summaryMissing = !note.trim();
   // ป้ายรุ่นต้องถ่ายรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง — รูปเก่าใช้แทนไม่ได้
   const nameplateMissing = !nameplate && !order.hasNameplate;
@@ -4719,8 +4749,9 @@ function CloseModal({
         note: note.trim() || undefined,
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         offParts: offPartsPayload(offParts),
-        workerIds,
+        workerIds: isSub && !withStaff ? [] : workerIds,
         otherWorkers: otherWorkers.trim() || null,
+        ...(isSub ? { subTeam } : {}),
         claims: claimed.map((p) => {
           const d = draftFor(p.sparePartId);
           return {
@@ -4844,7 +4875,43 @@ function CloseModal({
         ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
         ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
       */}
-      <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน</Text>
+      {isSub ? (
+        <>
+          <Text style={styles.modalLabel}>
+            ทีม SUB ที่เข้าทำ <Text style={{ color: colors.danger }}>*</Text>
+          </Text>
+          <Dropdown
+            value={subTeam}
+            onChange={setSubTeam}
+            placeholder="เลือกทีม SUB"
+            accessibilityLabel="ทีม SUB ที่เข้าทำ"
+            options={[...new Set([...(order.assignedTeam ? [order.assignedTeam] : []), ...subTeams])].map((t) => ({
+              value: t,
+              label: t,
+              hint: t === order.assignedTeam ? "ทีมที่จ่ายงาน" : undefined,
+            }))}
+          />
+          <Text style={styles.modalLabel}>ชื่อช่างของทีม SUB (ไม่บังคับ)</Text>
+          <TextInput
+            style={[styles.modalInput, styles.modalInputLine]}
+            value={otherWorkers}
+            onChangeText={setOtherWorkers}
+            placeholder="เช่น นายสมชาย, นายสมศักดิ์"
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel="ชื่อช่างของทีม SUB"
+          />
+          <TouchableOpacity
+            style={styles.skipRow}
+            onPress={() => setWithStaff((v) => !v)}
+            accessibilityLabel="มีช่างบริษัทไปด้วย"
+          >
+            <Ionicons name={withStaff ? "checkbox" : "square-outline"} size={18} color={withStaff ? colors.primary : colors.textFaint} />
+            <Text style={styles.skipText}>มีช่างบริษัทไปด้วย</Text>
+          </TouchableOpacity>
+          {workersMissing ? <Text style={styles.warn}>ต้องเลือกทีม SUB ที่เข้าทำ</Text> : null}
+        </>
+      ) : null}
+      {!isSub || withStaff ? <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน{isSub ? " (ช่างบริษัท)" : ""}</Text> : null}
       {/*
         สามช่อง คนที่ 1–3 แทนการกดเลือกจากรายชื่อทั้งหมด
 
@@ -4855,7 +4922,7 @@ function CloseModal({
         คนเดียวกันเลือกซ้ำสองช่องไม่ได้ เพราะคนที่เลือกไปแล้วถูกตัดออก
         จากตัวเลือกของช่องที่เหลือ
       */}
-      {[0, 1, 2].map((slot) => (
+      {(!isSub || withStaff ? [0, 1, 2] : []).map((slot) => (
         <View key={slot} style={styles.workerSlot}>
           <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
           <Dropdown
@@ -4884,15 +4951,17 @@ function CloseModal({
           />
         </View>
       ))}
-      <TextInput
-        style={[styles.modalInput, styles.modalInputLine]}
-        value={otherWorkers}
-        onChangeText={setOtherWorkers}
-        placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
-        placeholderTextColor={colors.textFaint}
-        accessibilityLabel="คนอื่นที่ไปด้วย"
-      />
-      {workersMissing ? (
+      {isSub ? null : (
+        <TextInput
+          style={[styles.modalInput, styles.modalInputLine]}
+          value={otherWorkers}
+          onChangeText={setOtherWorkers}
+          placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
+          placeholderTextColor={colors.textFaint}
+          accessibilityLabel="คนอื่นที่ไปด้วย"
+        />
+      )}
+      {workersMissing && !isSub ? (
         <Text style={styles.warn}>ต้องระบุอย่างน้อยหนึ่งคนว่าใครเข้าไปทำ</Text>
       ) : null}
 
@@ -5706,6 +5775,9 @@ const styles = StyleSheet.create({
   lockText: { marginTop: 4, fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center", maxWidth: 360 },
   lockBtn: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
   lockBtnText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
+  titleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
+  machinePill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 10 },
+  machinePillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   subBox: {
     marginTop: spacing.sm,
     padding: spacing.md,
