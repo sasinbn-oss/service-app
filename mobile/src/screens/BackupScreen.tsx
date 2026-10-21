@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   itemName: { fontSize: 14, fontWeight: "700", color: colors.text, fontVariant: ["tabular-nums"] },
-  btn: { backgroundColor: colors.navy, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 9 },
+  btn: { backgroundColor: colors.navyFill, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 9 },
   btnText: { color: "#fff", fontSize: 13.5, fontWeight: "700" },
   btnGhost: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.borderStrong },
   btnGhostText: { color: colors.navy, fontSize: 13, fontWeight: "600" },

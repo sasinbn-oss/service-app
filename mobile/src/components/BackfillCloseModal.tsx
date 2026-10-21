@@ -308,7 +308,7 @@ const styles = StyleSheet.create({
   muted: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   h: { fontSize: 14.5, fontWeight: "700", color: colors.text },
   label: { fontSize: 13, fontWeight: "600", color: colors.text },
-  why: { backgroundColor: "#EEE9FB", borderRadius: radius.md, padding: spacing.md, gap: 8 },
+  why: { backgroundColor: colors.roleAdminSoft, borderRadius: radius.md, padding: spacing.md, gap: 8 },
   step: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, gap: 8 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   two: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },

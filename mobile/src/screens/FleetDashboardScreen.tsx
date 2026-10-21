@@ -211,7 +211,7 @@ export default function FleetDashboardScreen() {
                         maxWidth: 36,
                         height: `${Math.max(3, (d.km / max7) * 70)}%`,
                         borderRadius: 6,
-                        backgroundColor: d.date === data.date ? colors.navy : colors.sky200,
+                        backgroundColor: d.date === data.date ? colors.navyFill : colors.sky200,
                       }}
                     />
                     <Text style={[fs.muted, { fontSize: 11 }, d.date === data.date && fs.bold]}>{dow}</Text>

@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  slotOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  slotOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   slotText: { fontSize: 14, color: colors.text, fontVariant: ["tabular-nums"] },
   slotTextOn: { color: "#fff", fontWeight: "700" },
   ownRow: {

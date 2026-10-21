@@ -1048,6 +1048,12 @@ model PartClaim {
   checkNote       String
   // Troubleshooting ที่ทำ (ข้อ 4) — รายการข้อที่ติ๊ก · ว่าง = ยี่ห้อนี้ไม่ต้องทำ
   troubleshooting String[]  @default([])
+  // ข้อมูลป้ายรุ่น { family, fields: [{ key, label, value, source: SCAN|HAND, crop? }] } — สแกนด้วยกล้องหรือพิมพ์เอง
+  // crop = ภาพบรรทัดที่อ่าน (JPEG เล็ก) ให้ Admin Spare Part เทียบกับค่าได้ · ใบเคลมเก่าก่อน ต.ค. 69 ว่าง
+  nameplate       Json?
+  // เช็คตามคู่มือ Error in Field (Alliance) { errorCode, errorName, checked[], install: [{ key, label, note, answer }] }
+  // ช่างแค่ตอบตามรายการ ระบบไม่ตัดสินว่ารับประกันหรือไม่ · ยี่ห้ออื่นว่าง
+  fieldCheck      Json?
   // PENDING รอตรวจ · APPROVED อนุมัติ (ออกใบเคลมได้) · REJECTED ตีกลับ
   status          String    @default("PENDING")
   rejectReason    String?

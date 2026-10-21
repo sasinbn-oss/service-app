@@ -10,6 +10,8 @@ const DIR = __dirname;
 const PHOTO = path.join(DIR, "..", "site-photo.png");
 const CLIP = path.join(DIR, "..", "site-clip.mp4");
 const API = "http://localhost:4000/api";
+// รูปป้าย Huebsch ทั้งป้าย (เจ้าของงานส่งมา ต.ค. 69) — ถ่ายรูปเดียวแล้วระบบเลือกค่าเอง · MODEL อ่านได้ "HLOSSL" ทุกครั้ง
+const PLATE_PHOTO = path.join(DIR, "..", "plate-huebsch.jpg");
 
 // ส่งคำสั่งทาง stdin ไม่ใช่ -c — รหัสผ่านที่แฮชแล้วมี $ ซึ่ง shell จะกินไปเงียบ ๆ
 const sql = (q) =>
@@ -57,7 +59,7 @@ const login = async (code) =>
     const sp = sql(`select id from "SparePart" where "partCode"='SP-BOARD'`);
     const wo = await call(A, "POST", "/work-orders", {
       branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
-      machines: [{ code: "W1", model: "Huebsch", symptom: "ประตูล็อกไม่ลง" }],
+      machines: [{ code: "W1", model: "HL055L", symptom: "ประตูล็อกไม่ลง" }],
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: true, parts: [{ sparePartId: Number(sp), quantity: 1 }] });
@@ -155,6 +157,37 @@ const login = async (code) =>
     const items = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimTroubleshooting);
     for (const t of items) await label(page, `${t} SP-BOARD`).click();
     await page.waitForTimeout(500);
+
+    // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
+    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ยังขาด: ข้อมูลป้ายรุ่น", false).count()) > 0
+      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง บอกว่ายังขาดข้อมูลป้ายรุ่น") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
+    await attach(page, "ถ่ายรูปป้ายรุ่น", PLATE_PHOTO);
+    // อ่านทั้งป้ายในเบราว์เซอร์ (หาบรรทัด → อ่านซ้ำทีละบรรทัด) — เครื่องทดสอบช้ากว่ามือถือจริง ให้เวลานาน
+    await page.waitForTimeout(1500);
+    await label(page, "สถานะอ่านป้าย").waitFor({ state: "detached", timeout: 180000 });
+    const val = (f) => label(page, `ป้ายรุ่น ${f}`).inputValue();
+    // MODEL อ่านได้ HLOSSL แต่ตรงกับทะเบียน HL055L เมื่อมองข้าม O/0 S/5 → ใช้ตัวสะกดของทะเบียน
+    (await val("รุ่น")) === "HL055L" && (await val("Serial")) === "2402600330" && (await vis(page, "อ่านจากรูป").count()) >= 2
+      ? pass("ถ่ายรูปทั้งป้ายรูปเดียว: ระบบเลือกรุ่น HL055L (อ่านได้ HLOSSL แก้ตามทะเบียน) + Serial 2402600330 ติดป้าย \"อ่านจากรูป\"")
+      : fail(`ค่าที่อ่านจากรูป: รุ่น=${await val("รุ่น")} Serial=${await val("Serial")}`);
+    (await label(page, "รูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ยังขาด:", false).first().innerText()).includes("ติ๊กตรวจค่ากับรูปป้าย")
+      ? pass("โชว์รูปป้ายเต็มในฟอร์ม · ยังต้องติ๊กตรวจค่ากับรูป") : fail("ไม่มีรูปป้ายเต็ม/ไม่บังคับตรวจกับรูป");
+    await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-0a-scanner.png") });
+    await label(page, "ตรวจค่ากับรูปป้ายแล้ว").click();
+    await page.waitForTimeout(300);
+    await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-0-scanned.png") });
+    await label(page, "Error ที่เครื่องขึ้น").click();
+    await page.waitForTimeout(400);
+    await vis(page, "E dL / E dL1 / E dL2 · Door Lock — ประตูล็อก/ปลดล็อก").last().click();
+    await page.waitForTimeout(300);
+    await label(page, "เช็คแล้ว Solenoid ไม่ฝืด").click();
+    const guide = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimGuide);
+    for (const c of guide.installChecks) await label(page, `${c.label} ไม่มี`).click();
+    await page.waitForTimeout(500);
+    await label(page, "Error ที่เครื่องขึ้น").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-0b-check.png") });
     (await vis(page, "ยังขาด:", false).count()) === 0 ? pass("ครบทุกข้อ ข้อความยังขาดหายไป") : fail(`ยังขึ้นว่าขาด: ${await vis(page, "ยังขาด:", false).first().innerText()}`);
     await page.screenshot({ path: path.join(DIR, "claim-1-close.png") });
     await saveBtn.click();
@@ -163,6 +196,18 @@ const login = async (code) =>
     sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === "CLAIM_REVIEW|SP-BOARD"
       ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม พร้อมรหัสตัวที่เสียที่กรอก (ฐานข้อมูล)")
       : fail(`สถานะ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
+    const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||(select count(*) from jsonb_array_elements("fieldCheck"->'install') x where x->>'answer'='false') from "PartClaim" where "workOrderId"=${id}`);
+    const fields = JSON.parse(np.split("|")[0]);
+    const f = (k) => fields.find((x) => x.key === k) ?? {};
+    f("model").value === "HL055L" && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
+      /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|5')
+      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ติดตั้ง 5 ข้อ")
+      : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}`).join(",")}`);
+    sql(`select (c.nameplate->>'photoId')::int = (select max(a.id) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE')
+           and (select count(*) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE') >= 1
+           and (c.nameplate->>'verified')::boolean from "PartClaim" c where c."workOrderId"=${id}`) === "t"
+      ? pass("รูปป้ายเต็มที่ถ่ายขึ้นเป็นไฟล์ป้ายรุ่นของงาน และผูกกับใบเคลม + บันทึกว่าตรวจกับรูปแล้ว (ฐานข้อมูล)")
+      : fail("รูปป้ายเต็มไม่ผูกกับใบเคลม");
     sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`) === "4"
       ? pass("หลักฐาน 4 ไฟล์ขึ้นไปผูกกับอะไหล่ที่เคลม (ฐานข้อมูล)")
       : fail("หลักฐานในฐานข้อมูลไม่ครบ");
@@ -180,6 +225,12 @@ const login = async (code) =>
     gone.length === 0 ? pass("Admin Spare Part: ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน") : fail(`Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}`);
     await vis(page, "อนุมัติเคลม · ปิดงาน").first().scrollIntoViewIfNeeded();
     (await vis(page, "หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
+    (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตามคู่มือ Error in Field").count()) > 0
+      ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตามคู่มือในการ์ดเคลม") : fail("การ์ดเคลมไม่มีข้อมูลเครื่อง");
+    (await label(page, "เปิดรูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว").count()) > 0
+      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว") : fail("การ์ดเคลมไม่มีรูปป้ายเต็ม");
+    await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });
     await vis(page, "ตีกลับให้ช่างแก้").first().click();
     await page.waitForTimeout(800);

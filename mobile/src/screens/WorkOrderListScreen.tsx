@@ -182,7 +182,7 @@ function apptBucket(r: WorkOrderRow) {
 
 const APPT_TONE: Record<string, { fg: string; bg: string; line: string }> = {
   PENDING: { fg: colors.warningInk, bg: colors.warningSoft, line: colors.warningBorder },
-  CONFIRMED: { fg: colors.successInk, bg: colors.successSoft, line: "#A7F3D0" },
+  CONFIRMED: { fg: colors.successInk, bg: colors.successSoft, line: colors.successLine },
   ADMIN_PICKED: { fg: colors.primaryInk, bg: colors.primarySoft, line: colors.sky200 },
 };
 
@@ -1894,7 +1894,7 @@ const styles = StyleSheet.create({
   srcTag: { borderWidth: 1, borderColor: colors.border, borderRadius: 4, paddingHorizontal: 6 },
   srcTagText: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
   // พื้นแดงจาง ๆ ทั้งแถว — ตารางตัดขอบ (overflow hidden) ออร่ารอบแถวจึงใช้ไม่ได้ เหลือป้ายที่เรืองแสงแทน
-  trUrgent: { backgroundColor: "#FFF7F7" },
+  trUrgent: { backgroundColor: colors.dangerSoft },
   // ใบที่เพิ่งเปลี่ยนหลังรีเฟรช — เหลืองแบบเดียวกับตัวอย่างที่เจ้าของงานเลือก
   flashRow: { backgroundColor: colors.warningSoft },
   flashCard: { backgroundColor: colors.warningSoft, borderColor: colors.warning },
@@ -1941,7 +1941,7 @@ const styles = StyleSheet.create({
   segCountText: { fontSize: 11, lineHeight: 17, fontWeight: "800", color: colors.textMuted },
   segCountTextOn: { color: "#fff" },
   pill: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4, backgroundColor: colors.card },
-  pillOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  pillOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   pillText: { fontSize: 13, lineHeight: 20, color: colors.text },
   pillTextOn: { color: "#fff" },
   pillN: { fontWeight: "800" },
@@ -1993,7 +1993,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   // ชิปที่เลือกเป็นกรมท่าทึบตาม .chip.active ของต้นแบบ — ฟ้าอ่อนเดิมแยกจากชิปที่ไม่ได้เลือกยาก
-  chipOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  chipOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
   chipTextOn: { color: "#fff" },
   list: { padding: spacing.lg, paddingTop: 0, gap: spacing.md },

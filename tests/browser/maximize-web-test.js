@@ -14,6 +14,8 @@ const { chromium } = require("playwright");
 
   for (const [name, vp] of [["มือถือ", { width: 400, height: 820 }], ["จอคอม", { width: 1280, height: 800 }]]) {
     const page = await browser.newPage({ viewport: vp });
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t) => page.getByText(t, { exact: true }).locator("visible=true");
     const shrinkBtn = () => page.getByLabel("ย่อหน้าต่างกลับขนาดปกติ").locator("visible=true").last();

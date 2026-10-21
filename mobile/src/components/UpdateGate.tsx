@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
     zIndex: 9000,
   },
   barText: { flex: 1, minWidth: 180, fontSize: 13, fontWeight: "700", color: colors.primaryInk },
-  barBtn: { backgroundColor: colors.navy, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 6 },
+  barBtn: { backgroundColor: colors.navyFill, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 6 },
   over: {
     position: "absolute",
     top: 0,
@@ -156,6 +156,6 @@ const styles = StyleSheet.create({
   },
   boxTitle: { fontSize: 17, fontWeight: "800", color: colors.text, textAlign: "center" },
   boxText: { fontSize: 13.5, lineHeight: 21, color: colors.textMuted, textAlign: "center" },
-  btn: { marginTop: spacing.xs, backgroundColor: colors.navy, borderRadius: radius.sm, paddingHorizontal: 18, paddingVertical: 10 },
+  btn: { marginTop: spacing.xs, backgroundColor: colors.navyFill, borderRadius: radius.sm, paddingHorizontal: 18, paddingVertical: 10 },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 13.5 },
 });

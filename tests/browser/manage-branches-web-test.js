@@ -28,6 +28,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
   try {
     sql(`update "Branch" set latitude=null, longitude=null where id=${id}`);
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
@@ -89,6 +91,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
       ? pass("สาขาที่มีใบงาน: ไม่มีปุ่มลบถาวร บอกเหตุผลแทน") : fail("ยังมีปุ่มลบ/ไม่มีเหตุผล");
 
     const narrow = await (await browser.newContext({ viewport: { width: 420, height: 860 } })).newPage();
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await narrow.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     narrow.on("pageerror", (e) => errors.push(String(e)));
     await narrow.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
     await narrow.getByPlaceholder("รหัสพนักงาน").fill("A001");

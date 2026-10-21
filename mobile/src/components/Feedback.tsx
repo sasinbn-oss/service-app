@@ -292,7 +292,7 @@ const styles = StyleSheet.create({
 
   loader: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(244,249,253,0.86)",
+    backgroundColor: colors.veil,
     alignItems: "center",
     justifyContent: "center",
     zIndex: 80,

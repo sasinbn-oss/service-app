@@ -53,7 +53,7 @@ const ROLE_COLOR: Record<Role, { fg: string; bg: string }> = {
   ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft },
   SUPERVISOR: { fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft },
   EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft },
-  SYSTEM: { fg: "#6B7785", bg: "#EEF1F4" },
+  SYSTEM: { fg: colors.textMuted, bg: colors.background },
 };
 // สีของแถบสัดส่วนเวลา — ตามคนที่ถือลูกบอลในขั้นนั้น
 const STAGE_COLOR: Record<string, string> = {
@@ -273,7 +273,7 @@ export function TimelineButton({ onPress, label, compact }: { onPress: () => voi
   );
 }
 
-const GOLD = "#8A6A00";
+const GOLD = colors.warningInk;
 const styles = StyleSheet.create({
   error: { color: colors.danger, fontSize: 14 },
   head: { fontSize: 15, fontWeight: "700", color: colors.text },
@@ -306,6 +306,6 @@ const styles = StyleSheet.create({
   tag: { fontSize: 11, color: colors.textMuted, backgroundColor: colors.sky50, borderRadius: 5, paddingHorizontal: 6, overflow: "hidden" },
   gap: { fontSize: 11.5, color: colors.textMuted, paddingBottom: 8 },
   gapLong: { color: colors.warningInk, fontWeight: "700" },
-  btn: { flexDirection: "row", alignItems: "center", gap: 4, borderWidth: 1.5, borderColor: "#D4AF37", backgroundColor: "#FFF6D6", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  btn: { flexDirection: "row", alignItems: "center", gap: 4, borderWidth: 1.5, borderColor: "#D4AF37", backgroundColor: colors.warningSoft, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   btnText: { fontSize: 12, fontWeight: "700", color: GOLD },
 });

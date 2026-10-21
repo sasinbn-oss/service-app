@@ -56,6 +56,8 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     st === `NEW:-,PARTS_CHECKED:-,IN_PROGRESS:${os}` ? pass("เตรียมใบสามแบบ (ฐานข้อมูล): ใหม่ · รอจ่ายงาน · outsource เข้างาน") : fail(`เตรียมข้อมูล: ${st}`);
 
     const page = await (await browser.newContext({ viewport: { width: 1300, height: 1100 } })).newPage();
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (l) => page.locator(`[aria-label^="${l}"]`).locator("visible=true");

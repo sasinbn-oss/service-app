@@ -21,6 +21,8 @@ const cleanup = () => sql(`delete from "Vehicle" where replace(replace("plateNum
   try {
     cleanup();
     const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (l) => page.locator(`[aria-label="${l}"]`).locator("visible=true").last();

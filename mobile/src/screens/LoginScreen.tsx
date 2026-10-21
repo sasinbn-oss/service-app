@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
   bubble: {
     position: "absolute",
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.7)",
+    backgroundColor: colors.veil,
     borderWidth: 1,
     borderColor: "rgba(0,159,227,0.18)",
   },

@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     borderWidth: 1.5,
-    borderColor: "#FECACA",
+    borderColor: colors.dangerLine,
     shadowColor: "#DC2626",
     shadowOpacity: 0.45,
     shadowRadius: 14,

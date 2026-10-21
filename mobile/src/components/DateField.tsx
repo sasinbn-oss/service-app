@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
   dayText: { fontSize: 14, color: colors.text, fontVariant: ["tabular-nums"] },
   dayOut: { color: colors.textFaint },
   today: { borderWidth: 1.5, borderColor: colors.primary },
-  sel: { backgroundColor: colors.navy, borderColor: colors.navy },
+  sel: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   selText: { color: "#fff", fontWeight: "700" },
   dot: { position: "absolute", bottom: 4, width: 4, height: 4, borderRadius: 2, backgroundColor: colors.primary },
   clear: { borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: 9, alignItems: "center" },

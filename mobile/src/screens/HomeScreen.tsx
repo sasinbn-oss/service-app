@@ -7,7 +7,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
-import { colors, radius, shadow, spacing, headingFont } from "../theme";
+import { colors, isDark, radius, shadow, spacing, headingFont } from "../theme";
 import { MenuEntry } from "../components/MenuList";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { HomeStackParamList } from "../navigation/types";
@@ -417,7 +417,7 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
 
   hero: {
-    backgroundColor: colors.navy,
+    backgroundColor: colors.navyFill,
     borderRadius: radius.xl,
     padding: spacing.xl,
     overflow: "hidden",
@@ -425,7 +425,7 @@ const styles = StyleSheet.create({
     // บนเว็บไล่สีกรมท่าไปฟ้าแบบต้นแบบ บนมือถือใช้กรมท่าพื้นแทน
     // เพื่อไม่ต้องเพิ่มไลบรารี gradient เข้าแอปเพราะการ์ดใบเดียว
     ...(Platform.OS === "web"
-      ? ({ backgroundImage: `linear-gradient(135deg, ${colors.navy} 0%, ${colors.primaryInk} 55%, ${colors.primary} 100%)` } as object)
+      ? ({ backgroundImage: `linear-gradient(135deg, ${colors.navyFill} 0%, ${isDark ? colors.primaryDark : colors.primaryInk} 55%, ${colors.primary} 100%)` } as object)
       : null),
   },
   heroGlow: {
@@ -490,7 +490,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.primaryInk,
+    backgroundColor: isDark ? colors.primaryDark : colors.primaryInk,
   },
   noticeHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   noticeKicker: { fontSize: 13, lineHeight: 20, fontWeight: "800", color: colors.primaryInk },

@@ -41,6 +41,8 @@ export interface PartClaimPdfData {
     symptom: string;
     checkNote: string;
     troubleshooting: string[];
+    /** ข้อมูลป้ายรุ่นที่สแกน/พิมพ์ตอนปิดงาน (Json ของ PartClaim) — ใบเก่าว่าง */
+    nameplate?: unknown;
     createdAt: Date;
     reviewedAt: Date | null;
   };
@@ -101,6 +103,13 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
       line("ยี่ห้อ", claim.brand ?? "");
       line("โมเดล/รุ่นเครื่อง", claim.model ?? "");
       line("หมายเลขเครื่อง", claim.machineCode ?? "");
+      /**
+       * ข้อมูลจากป้ายรุ่น (Serial · No. of production ฯลฯ) — ผู้ขายใช้ยืนยันว่าเครื่องอยู่ในประกัน
+       * ใส่เฉพาะข้อมูลเครื่อง · ผลเช็คการติดตั้งตามคู่มือไม่พิมพ์ลงเอกสารที่ส่งผู้ขาย (Admin Spare Part เห็นในระบบ)
+       * "พิมพ์เอง" ติดท้ายให้รู้ว่าไม่ได้อ่านจากป้ายด้วยกล้อง
+       */
+      const plate = (claim.nameplate as { fields?: { label: string; value: string; source: string }[] } | null)?.fields ?? [];
+      for (const f of plate) line(`${f.label} (ป้ายรุ่น)`, `${f.value}${f.source === "HAND" ? " · พิมพ์เอง" : ""}`);
       // รหัสที่ผู้ขายรับเคลมคือตัวที่ส่งคืน (ช่างอ่านจากของจริง) — ตัวที่เบิกมาใส่แทนแยกไว้อีกบรรทัด
       line("รหัสอะไหล่ (ตัวที่เสีย)", claim.brokenPartCode ?? claim.partCode);
       line("ชื่ออะไหล่", claim.quantity > 1 ? `${claim.partName} × ${claim.quantity}` : claim.partName);

@@ -673,7 +673,7 @@ const vs = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: colors.card,
   },
-  filterOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  filterOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   filterText: { fontSize: 13.5, fontWeight: "700", color: colors.text },
   filterTextOn: { color: "#fff" },
   groupHead: {

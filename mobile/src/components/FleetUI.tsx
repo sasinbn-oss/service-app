@@ -59,7 +59,7 @@ export function Kpi({
     <View
       style={[
         fs.kpi,
-        dark && { backgroundColor: colors.navy, borderColor: colors.navy },
+        dark && { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
         tone === "warn" && { backgroundColor: colors.warningSoft, borderColor: "transparent" },
         tone === "bad" && { backgroundColor: colors.dangerSoft, borderColor: "transparent" },
       ]}

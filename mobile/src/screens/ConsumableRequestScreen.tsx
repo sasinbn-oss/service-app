@@ -187,7 +187,7 @@ const styles = StyleSheet.create({
     padding: 10,
     textAlign: "center",
     fontSize: 16,
-    backgroundColor: "#fff",
+    backgroundColor: colors.card,
   },
   footer: { marginTop: 8 },
   label: { fontSize: 14, color: colors.textMuted, marginBottom: 6 },

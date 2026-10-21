@@ -57,6 +57,7 @@ import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
 import { ViewAsBanner, ViewAsButton } from "../components/ViewAs";
+import ThemeToggle from "../components/ThemeToggle";
 import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -161,7 +162,11 @@ const commonScreenOptions = {
  * บรรทัดล่างบอกว่าอยู่แท็บไหน เพราะหน้าแรกของทุกแท็บใช้แบรนด์เดียวกัน
  * ถ้าไม่มีบรรทัดนี้จะดูไม่ออกว่ากดเปลี่ยนแท็บไปแล้วหรือยัง
  */
-function Brand({ subtitle }: { subtitle: string }) {
+/**
+ * compact: มือถือจอแคบเหลือโลโก้กับชื่อ — ปุ่มขวา (ดูในฐานะ ผู้ใช้ รีเฟรช ออกจากระบบ โหมดมืด)
+ * ของแอดมินไม่พอที่จนสวิตช์โหมดมืดล้นขอบจอ (เจอตอนเพิ่มสวิตช์ ต.ค. 69)
+ */
+function Brand({ subtitle, compact }: { subtitle: string; compact?: boolean }) {
   return (
     <View style={styles.brand}>
       <View style={styles.brandLogo}>
@@ -170,14 +175,18 @@ function Brand({ subtitle }: { subtitle: string }) {
       <View>
         <View style={styles.brandNameRow}>
           <Text style={[styles.brandName, headingFont]}>OTTERI</Text>
-          <View style={styles.brandPill}>
-            <Text style={styles.brandPillText}>SERVICE</Text>
+          {compact ? null : (
+            <View style={styles.brandPill}>
+              <Text style={styles.brandPillText}>SERVICE</Text>
+            </View>
+          )}
+        </View>
+        {compact ? null : (
+          <View style={styles.brandSubRow}>
+            <View style={styles.brandDot} />
+            <Text style={styles.brandSub}>{subtitle}</Text>
           </View>
-        </View>
-        <View style={styles.brandSubRow}>
-          <View style={styles.brandDot} />
-          <Text style={styles.brandSub}>{subtitle}</Text>
-        </View>
+        )}
       </View>
     </View>
   );
@@ -218,7 +227,7 @@ function AppTopBar() {
       </View>
     ) : null}
     <View style={[styles.topBar, { paddingTop: (viewing ? 0 : insets.top) + 10 }]}>
-      <Brand subtitle="ระบบงานช่างซ่อม" />
+      <Brand subtitle="ระบบงานช่างซ่อม" compact={width < 480} />
       <View style={{ flex: 1 }} />
       <ViewAsButton compact={!wide} />
       {wide && user ? (
@@ -293,6 +302,7 @@ function LogoutButton() {
       >
         <Ionicons name="log-out-outline" size={20} color={colors.navy} />
       </TouchableOpacity>
+      <ThemeToggle />
     </View>
   );
 }

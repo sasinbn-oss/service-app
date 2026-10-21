@@ -130,6 +130,8 @@ const { setup } = require("./fixture");
 
     // ── จอคอม: หน้าที่เคยเด้งกลับหน้าแรก ──
     const desk = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+    // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — เทสต์นี้กดรายการในกลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
+    await desk.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     desk.on("pageerror", (e) => errors.push(String(e)));
     const dvis = (t, exact = true) => desk.getByText(t, { exact }).locator("visible=true");
     await login(desk, dvis);

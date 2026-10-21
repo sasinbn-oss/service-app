@@ -17,6 +17,11 @@ export const colors = {
   primaryInk: "#006491",
   primarySoft: "#E1F0FA",
   navy: "#0B3B60",
+  /**
+   * กรมท่าที่เป็น "พื้น" ปุ่ม/ชิปที่เลือก (ตัวหนังสือขาว) — โหมดสว่างเท่ากับ navy
+   * แยกไว้เพราะโหมดมืด navy ที่เป็นตัวหนังสือต้องสว่าง แต่พื้นปุ่มต้องยังเข้มให้ตัวขาวอ่านได้
+   */
+  navyFill: "#0B3B60",
   sky50: "#F0F8FF",
   sky200: "#C9E6FF",
   tile: "#EFF4FF",
@@ -29,6 +34,10 @@ export const colors = {
   warning: "#F59E0B",
   warningInk: "#92400E",
   warningSoft: "#FFFBEB",
+  /** เหลืองเข้มกว่า warningSoft — ป้าย/กล่องเตือนที่ต้องเด่นกว่าพื้นเตือนทั่วไป */
+  warningTint: "#FEF3C7",
+  dangerLine: "#FECACA",
+  successLine: "#A7F3D0",
   /** ขอบของการ์ดหรือชิปที่เกินเวลา — เส้นเหลืองช่วยให้เห็นจากระยะไกลกว่าพื้นอ่อนอย่างเดียว */
   warningBorder: "#FDE68A",
   /** ใบที่ถูกย้อนขั้น (เจ้าของงานขอ ต.ค. 69) — ส้มเข้ม แยกจากเหลือง "รอ" และแดง "อะไหล่หมด" */
@@ -42,6 +51,7 @@ export const colors = {
    */
   roleAdmin: "#6D28D9",
   roleAdminSoft: "#F1EAFE",
+  roleAdminLine: "#C4B5FD",
   roleSupervisor: "#0369A1",
   roleSupervisorSoft: "#E0F2FE",
   roleTech: "#047857",
@@ -68,7 +78,91 @@ export const colors = {
   body: "#334155",
   textMuted: "#64748B",
   textFaint: "#94A3B8",
+  /** ม่านโปร่งทับเนื้อหาตอนรอ (toast/หน้าต่างโหลด) — สีพื้นหลังแบบโปร่ง */
+  veil: "rgba(244,249,253,0.86)",
 };
+
+/**
+ * โหมดมืด (เจ้าของงานขอ ต.ค. 69 — สวิตช์ดวงจันทร์มุมขวาบน)
+ *
+ * เลือกชุดสีครั้งเดียวตอนโหลดแอป แล้วเขียนทับ `colors` ตรงนี้ก่อนหน้าไหนจะ import —
+ * ทุกหน้าสร้าง StyleSheet ตอน import จากค่าใน `colors` จึงได้สีมืดไปเองโดยไม่ต้องแก้ทีละหน้า
+ * ต้องแลกด้วยการโหลดหน้าใหม่ตอนสลับ (ทางเลือกอื่นคือย้ายสไตล์ร้อยกว่าไฟล์ไปคำนวณตอน render)
+ *
+ * สีสด (primary, danger, role*) แทบไม่เปลี่ยน เพราะใช้เป็นพื้นปุ่มที่มีตัวหนังสือขาว ·
+ * สี *Ink (ตัวหนังสือบนพื้นอ่อน) กลับเป็นสว่าง · *Soft กลับเป็นเข้มอมสีเดิม ความหมายของสีคงเดิม
+ * มีแค่บนเว็บ — แอป native ยังไม่มีที่เก็บค่าที่อ่านได้ทันทีตอนโหลด
+ */
+const DARK: Partial<typeof colors> = {
+  primary: "#13A6E6",
+  primaryDark: "#0A8FCB",
+  primaryInk: "#7DCFF5",
+  primarySoft: "#0E2D42",
+  navy: "#D4E6F7",
+  navyFill: "#1C5689",
+  sky50: "#13283A",
+  sky200: "#24486A",
+  tile: "#15283B",
+  dangerInk: "#FCA5A5",
+  dangerSoft: "#2C1618",
+  dangerLine: "#6B2A2E",
+  successInk: "#6EE7B7",
+  successSoft: "#0F2A22",
+  successLine: "#1F5141",
+  warningInk: "#FCD34D",
+  warningSoft: "#2A2211",
+  warningTint: "#3A2E10",
+  warningBorder: "#6B5317",
+  rollback: "#EA580C",
+  rollbackInk: "#FDBA74",
+  rollbackSoft: "#2C1B0F",
+  roleAdmin: "#8B5CF6",
+  roleAdminSoft: "#231B3D",
+  roleAdminLine: "#4F3F80",
+  roleSupervisor: "#0284C7",
+  roleSupervisorSoft: "#0C2A3D",
+  roleTech: "#059669",
+  roleTechSoft: "#0F2A22",
+  doneInk: "#A3CDB7",
+  doneBand: "#4A7D65",
+  doneSoft: "#13231C",
+  doneLine: "#2A4537",
+  offPart: "#E08A1E",
+  offPartSoft: "#2A1E0D",
+  offPartLine: "#6B4A1C",
+  service: "#14A396",
+  serviceSoft: "#0D2724",
+  serviceLine: "#1F5A52",
+  background: "#0B1520",
+  card: "#14202D",
+  border: "#253546",
+  borderStrong: "#36495E",
+  text: "#E8EFF6",
+  body: "#C4D0DC",
+  textMuted: "#8FA2B5",
+  textFaint: "#66798C",
+  veil: "rgba(11,21,32,0.86)",
+};
+
+const THEME_KEY = "otteri-theme";
+export const isDark: boolean = (() => {
+  try {
+    return Platform.OS === "web" && typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY) === "dark";
+  } catch {
+    return false;
+  }
+})();
+if (isDark) Object.assign(colors, DARK);
+
+/** สลับโหมดแล้วโหลดหน้าใหม่ — ข้อความที่พิมพ์ค้างในฟอร์มช่างจำไว้แล้ว (utils/draft.ts) */
+export function setDarkMode(on: boolean) {
+  try {
+    localStorage.setItem(THEME_KEY, on ? "dark" : "light");
+  } catch {
+    return;
+  }
+  if (typeof location !== "undefined") location.reload();
+}
 
 export const spacing = {
   xs: 4,
@@ -94,15 +188,15 @@ export const radius = {
 function elevation(level: 1 | 2): ViewStyle {
   const config = {
     // ตาม --shadow / --shadow-md ของ OTTERI: เงานุ่ม กระจายกว้าง ไม่มีขอบแข็ง
-    1: { offset: 4, radius: 16, opacity: 0.06, android: 1 },
-    2: { offset: 12, radius: 28, opacity: 0.1, android: 3 },
+    1: { offset: 4, radius: 16, opacity: isDark ? 0.3 : 0.06, android: 1 },
+    2: { offset: 12, radius: 28, opacity: isDark ? 0.45 : 0.1, android: 3 },
   }[level];
 
   return Platform.select<ViewStyle>({
     android: { elevation: config.android },
     default: {
       // เงาโทนกรมท่าแบบ OTTERI ไม่ใช่ดำ — บนพื้นฟ้าอ่อนเงาดำดูสกปรก
-      shadowColor: colors.navy,
+      shadowColor: isDark ? "#000" : colors.navy,
       shadowOffset: { width: 0, height: config.offset },
       shadowOpacity: config.opacity,
       shadowRadius: config.radius,
