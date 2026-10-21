@@ -108,6 +108,24 @@ const { setup } = require("./fixture");
     );
     pillsLeft === 0 ? pass("กดแล้วปุ่มหายไป") : fail("ปุ่มยังอยู่");
     await page.screenshot({ path: path.join(DIR, "pull-4-applied.png") });
+
+    // ── เมนูข้างเปิดอยู่: ลากลงบนเมนูต้องไม่ลากเมนูลงมา และไม่รีเฟรชหน้าข้างหลัง (เจ้าของงานเจอบนมือถือ ต.ค. 69) ──
+    await page.locator('[aria-label="เปิดเมนู"]').locator("visible=true").first().click();
+    await page.waitForTimeout(900);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 120, y: 300 }] });
+    for (let y = 310; y <= 610; y += 20) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 120, y }] });
+      await page.waitForTimeout(16);
+    }
+    const onMenu = await page.evaluate(() => ({
+      menu: document.getElementById("side-menu")?.style.transform ?? "ไม่มีเมนู",
+      ball: Number(document.querySelector('[aria-label="ลากรีเฟรช"]')?.style.opacity ?? 0),
+    }));
+    await page.screenshot({ path: path.join(DIR, "pull-6-menu.png") });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    !onMenu.menu && onMenu.ball === 0
+      ? pass("เมนูข้างเปิดอยู่ ลากลงบนเมนู: เมนูไม่เลื่อนตาม ไม่มีวงรีเฟรช")
+      : fail(`ลากบนเมนู: transform="${onMenu.menu}" วง=${onMenu.ball}`);
     await ctx.close();
 
     // ── จอคอม: หน้าที่เคยเด้งกลับหน้าแรก ──
