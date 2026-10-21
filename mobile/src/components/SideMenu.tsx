@@ -247,7 +247,8 @@ function MenuContent({
   const { user } = useAuth();
   const go = onPick;
   return (
-    <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    // nativeID = id บนเว็บ — ลากรีเฟรช (PullToRefresh) ไม่จับนิ้วที่อยู่ในเมนู ไม่งั้นเมนูเลื่อนลงตามนิ้ว
+    <ScrollView nativeID="side-menu" contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => (
             <View key={g.title}>
               {rail ? (
@@ -399,7 +400,7 @@ export default function SideMenu() {
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      <Animated.View style={[styles.backdrop, { opacity: backdrop }]}>
+      <Animated.View nativeID="side-menu-backdrop" style={[styles.backdrop, { opacity: backdrop }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="ปิดเมนู" />
       </Animated.View>
       <Animated.View
