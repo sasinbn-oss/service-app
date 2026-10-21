@@ -14,6 +14,7 @@ import WorkOrderListScreen from "../screens/WorkOrderListScreen";
 import WorkOrderFormScreen from "../screens/WorkOrderFormScreen";
 import WorkOrderDetailScreen from "../screens/WorkOrderDetailScreen";
 import PlanBoardScreen from "../screens/PlanBoardScreen";
+import MyJobsScreen from "../screens/MyJobsScreen";
 import ReportsMenuScreen from "../screens/ReportsMenuScreen";
 import OpenerReportScreen from "../screens/OpenerReportScreen";
 import SystemReportScreen from "../screens/SystemReportScreen";
@@ -72,6 +73,7 @@ import {
  */
 const OWN_TITLE = new Set([
   "PlanBoard",
+  "MyJobs",
   "HomeMenu",
   "WorkOrderList",
   "MachineDashboard",
@@ -300,15 +302,17 @@ const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 function HomeStackNavigator() {
   const { user } = useAuth();
   // แอดมินกับหัวหน้าภาคเปิดแอปมาเจอแผนงานวันนี้ก่อน — คำถามแรกของเช้าคือ
-  // "วันนี้ใครไปไหน" ไม่ใช่เมนู ช่างยังเริ่มที่หน้าหลักเหมือนเดิม
+  // "วันนี้ใครไปไหน" ไม่ใช่เมนู · ช่างเริ่มที่ "งานของฉัน" (เจ้าของงานเลือกแบบ Salesforce ต.ค. 69)
   const planner = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
+  const tech = user?.role === "EMPLOYEE";
   return (
     <HomeStack.Navigator
       screenOptions={commonScreenOptions}
       screenLayout={pageEnterLayout}
-      initialRouteName={planner ? "PlanBoard" : "HomeMenu"}
+      initialRouteName={planner ? "PlanBoard" : tech ? "MyJobs" : "HomeMenu"}
     >
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
+      <HomeStack.Screen name="MyJobs" component={MyJobsScreen} options={{ title: "งานของฉัน" }} />
       <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
       <HomeStack.Screen
         name="HomeMenu"

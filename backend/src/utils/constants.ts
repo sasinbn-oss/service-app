@@ -549,6 +549,8 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   SCHEDULED: "นัดลูกค้า",
   CONFIRMED: "ลูกค้าคอนเฟิร์มนัด",
   RESCHEDULED: "ลูกค้าขอเลื่อนวัน",
+  NEW_DATE_DECLINED: "ทีมไม่ว่างวันใหม่ — ส่งกลับแอดมินนัดใหม่",
+  ARRIVED: "ช่างถึงหน้างาน",
   DISPATCHED: "ยืนยันออกงาน",
   INSPECT_REQUESTED: "ส่งทีมตรวจหน้างาน",
   INSPECTED: "บันทึกผลตรวจหน้างาน",

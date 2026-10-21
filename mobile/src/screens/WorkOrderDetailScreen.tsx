@@ -30,8 +30,8 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
-import { CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
-import { hasCustomerMessage } from "../utils/customerMessage";
+import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
+import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
 import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
@@ -94,6 +94,9 @@ interface WorkOrder {
   zone: string | null;
   /** ทีมที่ดูแลงาน PM ของสาขานี้ — ว่างได้ */
   branchPmTeam: string | null;
+  /** พิกัดสาขา — ลิงก์แผนที่ในข้อความส่งทีม outsource (ใบงาน SUB) */
+  branchLatitude?: number | null;
+  branchLongitude?: number | null;
   /**
    * ทีมที่ควรรับงานใบนี้ ตามประเภทงาน — เซิร์ฟเวอร์คิดมาให้แล้ว
    *
@@ -384,6 +387,27 @@ function sentBackLog(o: WorkOrder): LogEntry | null {
   return last?.action === "PARTS_ROLLBACK" && last.status === o.status ? last : null;
 }
 
+/**
+ * ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ (เจ้าของงานเลือก ต.ค. 69)
+ * — ป้าย/ปุ่ม "คอนเฟิร์มวันใหม่" แยกจาก "รับทราบ ปล่อยงาน" ปกติ เพราะต้องดูคิวทีมวันใหม่ก่อน ไม่ใช่กดผ่าน
+ */
+function rescheduledPending(o: WorkOrder) {
+  if (o.status !== "ASSIGNED") return false;
+  const last = o.logs
+    .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return last?.action === "RESCHEDULED";
+}
+
+/** หัวหน้าภาคส่งกลับเพราะทีมไม่ว่างวันใหม่ — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่ */
+function declinedNewDate(o: WorkOrder): LogEntry | null {
+  if (o.status !== "AWAITING_CONFIRM") return null;
+  const last = [...o.logs]
+    .filter((l) => !["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED"].includes(l.action))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return last?.action === "NEW_DATE_DECLINED" ? last : null;
+}
+
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
   const at = (v: string) => stages.findIndex((x) => x.value === v);
   const recovered = recoveredFrom(o);
@@ -554,6 +578,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  /**
+   * เปิดมาจากหน้า "งานของฉันวันนี้" ของช่าง — ปุ่มใหญ่ที่นั่นพามาเปิดฟอร์มให้เลย (ปิดงาน / ผลตรวจ / แจ้งปัญหา)
+   * ช่างกดครั้งเดียวถึงฟอร์ม ไม่ต้องเปิดใบงานแล้วหาปุ่มอีกรอบ · เปิดครั้งเดียวต่อการเข้าหน้า
+   */
+  const openOnLoad = useRef(route.params.open ?? null);
+  useEffect(() => {
+    const want = openOnLoad.current;
+    if (!want || !order) return;
+    openOnLoad.current = null;
+    if (want === "close" && order.status === "IN_PROGRESS") setClosing(true);
+    else if (want === "stage" && order.status === "INSPECTING") setStageOpen(true);
+    else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
+  }, [order]);
   // ขยับเมื่อมีไฟล์ถูกแนบจากที่อื่นนอกการ์ดไฟล์แนบ เพื่อสั่งให้การ์ดโหลดใหม่
   const [filesKey, setFilesKey] = useState(0);
   // รายการไฟล์ที่การ์ดไฟล์แนบโหลดมาแล้ว — ยืมมาใช้ต่อในการ์ดผลการทำงาน
@@ -1405,6 +1442,18 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             </View>
           </View>
         ) : null}
+        {declinedNewDate(order) ? (
+          <View style={styles.sentBack} accessibilityLabel="กล่องหัวหน้าภาคส่งกลับนัดใหม่">
+            <Ionicons name="calendar-outline" size={18} color={colors.warningInk} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.sentBackTitle}>หัวหน้าภาคส่งกลับ — ทีมไม่ว่างวันที่ลูกค้าขอ โทรนัดร้านใหม่</Text>
+              <Text style={styles.sentBackText}>{declinedNewDate(order)!.note ?? "—"}</Text>
+              <Text style={styles.sentBackMeta}>
+                {declinedNewDate(order)!.byName ?? "—"} · {formatDateTime(declinedNewDate(order)!.createdAt)}
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
         {/*
           อะไหล่หมด — ทุกคนเห็นว่ารอตัวไหน ถึงเมื่อไร ใครเช็ค (ไม่ต้องเปิดฟอร์มดู)
@@ -1447,6 +1496,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           </View>
         ) : null}
 
+        {subStage(order) && (me?.role === "SUPERVISOR" || me?.role === "ADMIN") ? <SubBox order={order} /> : null}
         {order.status === "CLAIM_REVIEW" ? (
           <View style={[styles.waitingCard, styles.waitingInline]}>
             <Ionicons name="shield-checkmark-outline" size={16} color={colors.textMuted} />
@@ -1473,7 +1523,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                     activeOpacity={0.8}
                   >
                     <Ionicons name="checkmark-done" size={18} color="#fff" />
-                    <Text style={styles.actionPrimaryText}>ปิดงาน</Text>
+                    {/* ใบงาน SUB: ทีม outsource ทำ หัวหน้าภาคเอาผลที่ได้มาใส่ — คนละความหมายกับช่างปิดงานเอง */}
+                    <Text style={styles.actionPrimaryText}>{order.assignedOutsource ? "บันทึกผลงาน SUB" : "ปิดงาน"}</Text>
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
@@ -1491,7 +1542,9 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                       {/* ของหมดอยู่ = สิ่งที่แอดมินรอทำคือบอกว่าของมาแล้ว ไม่ใช่ "เช็คคลัง" เหมือนรอบแรก */}
                       {partsOut.length && order.status !== "WAITING_PARTS"
                         ? "อะไหล่มาแล้ว — อัปเดตสถานะ"
-                        : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}
+                        : rescheduledPending(order)
+                          ? "คอนเฟิร์มวันใหม่"
+                          : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -2708,6 +2761,9 @@ function StageModal({
   // ขั้นหัวหน้าภาคเบิก: คลังที่เบิกจริง + เลขใบเบิก รายตัว (อาจเบิกคนละคลังคนละใบ) · เบิกไม่ได้ = ส่งกลับแอดมิน
   const [pickup, setPickup] = useState<Record<number, { warehouse: string | null; requisitionNo: string }>>({});
   const [pickupFail, setPickupFail] = useState(false);
+  // ลูกค้าขอเปลี่ยนวันแต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
+  const newDate = rescheduledPending(order);
+  const [declineDate, setDeclineDate] = useState(false);
   // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
   const [prevUsed, setPrevUsed] = useState<string[]>([]);
   const { user } = useAuth();
@@ -2739,7 +2795,7 @@ function StageModal({
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
     // ช่างแจ้งร้านปิด — วันเดิมใช้ไม่ได้แล้ว เปิดที่ "ลูกค้าขอเลื่อน" เลย
     setConfirmChoice(
-      (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && sentBackLog(order)) ? "MOVE" : null
+      (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order))) ? "MOVE" : null
     );
     setSplitOut(true);
     // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้
@@ -2921,6 +2977,8 @@ function StageModal({
       } else if (order.status === "AWAITING_PAYMENT") {
         await uploadDocs("RECEIPT", "กำลังส่งบิล");
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
+      } else if (order.status === "ASSIGNED" && declineDate) {
+        await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim() });
       } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
           team,
@@ -3033,6 +3091,7 @@ function StageModal({
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
+    (order.status === "ASSIGNED" && declineDate && !note.trim()) ||
     ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
         (confirmChoice === "MOVE" &&
@@ -3049,7 +3108,7 @@ function StageModal({
       onClose={onCancel}
       busy={saving}
       title={<>
-              {STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}{" "}
+              {newDate ? "คอนเฟิร์มวันใหม่" : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}{" "}
               · {order.code}
             </>}
       footer={
@@ -3072,7 +3131,11 @@ function StageModal({
                     ? "อะไหล่หมด — รอของเข้า"
                     : "มีอะไหล่ — ไปเสนอราคา"
                   : order.status === "ASSIGNED"
-                    ? "รับทราบ ปล่อยงานให้ช่าง"
+                    ? declineDate
+                      ? "ส่งกลับให้แอดมินนัดใหม่"
+                      : newDate
+                        ? "คอนเฟิร์มวันใหม่ ปล่อยงาน"
+                        : "รับทราบ ปล่อยงานให้ช่าง"
                   : order.status === "PARTS_PICKUP"
                     ? pickupFail
                       ? "ส่งกลับแอดมิน"
@@ -3614,7 +3677,32 @@ function StageModal({
               </>
             ) : null}
 
-            {order.status === "ASSIGNED" ||
+            {newDate ? (
+              <>
+                {declineDate ? <DispatchNote order={order} /> : null}
+                <View style={styles.options} accessibilityLabel="ลูกค้าขอเปลี่ยนวัน ทีมว่างไหม">
+                  <TouchableOpacity
+                    style={[styles.option, !declineDate && styles.optionOn]}
+                    onPress={() => setDeclineDate(false)}
+                    accessibilityLabel="คอนเฟิร์มวันใหม่ ปล่อยงาน"
+                  >
+                    <Text style={[styles.optionText, !declineDate && styles.optionTextOn]}>ทีมว่าง — คอนเฟิร์มวันใหม่</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.option, declineDate && styles.optionOn]}
+                    onPress={() => setDeclineDate(true)}
+                    accessibilityLabel="ทีมไม่ว่าง ส่งกลับแอดมิน"
+                  >
+                    <Text style={[styles.optionText, declineDate && styles.optionTextOn]}>ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่</Text>
+                  </TouchableOpacity>
+                </View>
+                {declineDate ? (
+                  <Text style={styles.linkedText}>ใบกลับไปให้แอดมินโทรนัดร้านใหม่ ทีมเดิมยังอยู่ — ใส่เหตุผลในช่องด้านล่าง แอดมินจะเห็น</Text>
+                ) : null}
+              </>
+            ) : null}
+
+            {(order.status === "ASSIGNED" && !declineDate) ||
             order.status === "INSPECT_DISPATCH" ||
             order.status === "PARTS_CHECKED" ||
             (order.status === "NEW" && (inspectFirst || noPartsAssign)) ? (
@@ -3797,12 +3885,24 @@ function StageModal({
             {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน */}
             {order.status !== "INSPECTING" ? (
               <>
-                <Text style={styles.modalLabel}>{order.status === "PARTS_PICKUP" && pickupFail ? "เหตุผลที่เบิกไม่ได้ *" : "บันทึกเพิ่มเติม"}</Text>
+                <Text style={styles.modalLabel}>
+                  {order.status === "PARTS_PICKUP" && pickupFail
+                    ? "เหตุผลที่เบิกไม่ได้ *"
+                    : order.status === "ASSIGNED" && declineDate
+                      ? "เหตุผลที่ทีมไม่ว่าง (แอดมินเห็น) *"
+                      : "บันทึกเพิ่มเติม"}
+                </Text>
                 <TextInput
                   style={styles.modalInput}
                   value={note}
                   onChangeText={setNote}
-                  placeholder={order.status === "PARTS_PICKUP" && pickupFail ? "เช่น คลังภูเก็ตของหมดแล้ว" : "ไม่ใส่ก็ได้"}
+                  placeholder={
+                    order.status === "PARTS_PICKUP" && pickupFail
+                      ? "เช่น คลังภูเก็ตของหมดแล้ว"
+                      : order.status === "ASSIGNED" && declineDate
+                        ? "เช่น ทีมเต็มวันนั้น ขอเป็นสัปดาห์หน้า"
+                        : "ไม่ใส่ก็ได้"
+                  }
                   placeholderTextColor={colors.textFaint}
                   multiline
                   numberOfLines={2}
@@ -4223,6 +4323,32 @@ interface ClaimDraft {
   checkNote: string;
   troubleshooting: string[];
   files: Record<string, PickedAttachment | undefined>;
+}
+
+/** ใบงาน SUB = ใบที่จ่ายให้ทีม outsource แล้ว (รอปล่อยงาน / ทีมกำลังทำ) */
+function subStage(o: WorkOrder) {
+  return !!o.assignedOutsource && (o.status === "ASSIGNED" || o.status === "IN_PROGRESS");
+}
+
+/**
+ * กล่องใบงาน SUB (เจ้าของงานขอ ต.ค. 69)
+ *
+ * หัวหน้าภาคเอาข้อมูลใบนี้ไปสั่งทีม outsource ทางไลน์ ทีมทำเสร็จส่งรูปกลับ แล้วหัวหน้าภาคบันทึกผลเอง
+ * — บอกสามขั้นนี้ตรงหน้าใบงาน และให้คัดลอกข้อความส่งทีมได้ในปุ่มเดียว (เดิมต้องพิมพ์เองจากหน้าใบงาน)
+ */
+function SubBox({ order }: { order: WorkOrder }) {
+  const team = order.assignedTeam ?? "outsource";
+  return (
+    <View style={styles.subBox} accessibilityLabel={`ใบงาน SUB ทีม ${team}`}>
+      <Text style={styles.subTitle}>ใบงาน SUB · ทีม {team}</Text>
+      <Text style={styles.subText}>
+        ช่างทีมนี้ไม่มีบัญชีในแอป — 1) ส่งข้อมูลให้ทีม {team} · 2) ทีมทำเสร็จส่งรูปกลับมา · 3) หัวหน้าภาคกด "บันทึกผลงาน SUB"
+      </Text>
+      <View style={{ flexDirection: "row" }}>
+        <CopyButton text={subDispatch(order)} label={`คัดลอกข้อมูลส่งทีม ${team}`} />
+      </View>
+    </View>
+  );
 }
 
 /**
@@ -4649,7 +4775,7 @@ function CloseModal({
       visible={visible}
       onClose={onCancel}
       busy={saving}
-      title={<>ปิดงาน {order.code}</>}
+      title={order.assignedOutsource && !reclosing ? <>บันทึกผลงาน SUB {order.code}</> : <>ปิดงาน {order.code}</>}
       footer={
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
@@ -5580,6 +5706,17 @@ const styles = StyleSheet.create({
   lockText: { marginTop: 4, fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center", maxWidth: 360 },
   lockBtn: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
   lockBtnText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
+  subBox: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    gap: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: "#C4B5FD",
+    backgroundColor: "#F5F3FF",
+  },
+  subTitle: { fontSize: 14.5, lineHeight: 22, fontWeight: "800", color: "#4C1D95" },
+  subText: { fontSize: 13, lineHeight: 20, color: "#5B21B6" },
   card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },

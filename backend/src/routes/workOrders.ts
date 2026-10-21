@@ -19,6 +19,7 @@ import { workOrderTimeline } from "../utils/timeline";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_WAREHOUSE, WAREHOUSES } from "../documents/warehouses";
 import { freshOutsource, isOutsourceTeam, outsourceList } from "../utils/outsource";
+import { distanceMeters } from "../utils/geo";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
@@ -58,6 +59,7 @@ import {
   WORK_ORDER_STAGE_ORDER,
   OFF_CATALOG_PREFIX,
   bangkokDay,
+  bangkokDayRange,
   canActOnStage,
   WORK_STATUSES,
   STORABLE_WORK_STATUSES,
@@ -108,6 +110,9 @@ const detailInclude = {
       ownership: true,
       openedAt: true,
       warrantyExpiresAt: true,
+      // ลิงก์แผนที่ในข้อความส่งทีม outsource (ใบงาน SUB) — ทีมนอกไม่มีแอปให้เปิดดูเอง
+      latitude: true,
+      longitude: true,
     },
   },
   machine: { select: { code: true, type: true, brand: true, model: true, capacityKg: true } },
@@ -430,6 +435,7 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     // และยังเลือกทีมอื่นได้อยู่ดี
     suggestedTeam: (w.jobType === "PM" ? w.branch.pmTeam ?? w.branch.zone : w.branch.zone) ?? null,
     branchPmTeam: w.branch.pmTeam,
+    ...("latitude" in w.branch ? { branchLatitude: w.branch.latitude, branchLongitude: w.branch.longitude } : {}),
     assignedTeam: w.assignedTeam,
     // ทีม outsource — ช่างไม่มีบัญชีในแอป หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน
     assignedOutsource: isOutsourceTeam(w.assignedTeam),
@@ -642,7 +648,8 @@ type SupervisorRef = { id: number; name: string; region: string | null; supervis
  * ประวัติที่ไม่ได้ขยับขั้น — ไม่นับตอนหาว่าใบงานค้างขั้นนี้มานานเท่าไร
  * แนบรูปเพิ่มตอนบ่ายไม่ได้แปลว่าใบงานเพิ่งเข้าขั้นนี้
  */
-const NON_STAGE_ACTIONS = ["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED", "STATUS_CHANGED"];
+// ARRIVED (ช่างถึงหน้างาน) ไม่ใช่การเดินขั้น — ใบยังอยู่ "ช่าง · เข้างาน/ปิดงาน" นับวันค้างต่อจากเดิม
+const NON_STAGE_ACTIONS = ["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED", "STATUS_CHANGED", "ARRIVED"];
 
 type WorkOrderListRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
@@ -990,17 +997,38 @@ const listQuery = z.object({
   search: z.string().optional(),
 });
 
-router.get("/", requireAuth, async (req: AuthRequest, res) => {
-  const parsed = listQuery.safeParse(req.query);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const q = parsed.data;
-  const keyword = q.search?.trim();
+/**
+ * ขอบเขตใบงานที่คนนี้เห็น — แอดมินไม่ต้องถามฐานข้อมูล หัวหน้าภาค/ช่างถามรอบเดียว
+ * แยกออกมาให้รายการ ตัวเลขกล่องงาน และการเช็คของใหม่ใช้ชุดเดียวกัน
+ */
+async function scopeFor(req: AuthRequest): Promise<Prisma.WorkOrderWhereInput> {
+  if (req.auth!.role === "ADMIN") return {};
+  if (req.auth!.role === "SUPERVISOR") return workOrderInScope(await supervisorScope(req.auth!.userId));
+  // ช่างเห็นงานของทีมตัวเอง เพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
+  //
+  // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
+  // จ่ายเป็นทีม ต้องไม่หายไปจากรายการของคนที่กำลังทำอยู่
+  // ช่างที่ยังไม่ได้จัดทีมจึงยังเห็นงานเดิมของตัวเองตามปกติ
+  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
+  return teamScope(me?.team ?? null, req.auth!.userId);
+}
 
+/**
+ * เงื่อนไขของรายการใบงานตามตัวกรอง — ใช้ทั้งตัวรายการและ /version (เช็คของใหม่แบบเบา)
+ *
+ * คำถามที่ไม่ขึ้นต่อกัน (ใบไม่มีคนรับ · รายชื่อ outsource · ขอบเขต) ยิงพร้อมกัน
+ * ฐานข้อมูลจริงอยู่คนละ region (ไปกลับรอบละ ~200 ms) — รอทีละคำถามคือรอเป็นวินาที
+ */
+async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
+  const keyword = q.search?.trim();
   const inboxStages = stagesWaitingOn(req.auth);
-  const orphans = inboxTakesOrphans(req.auth) ? await orphanSupervisorIds() : [];
+  const [orphans, outsourceNow, scope] = await Promise.all([
+    inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
+    // รีเฟรชก่อนเสมอ — แถวในรายการติดธง outsource จากรายชื่อนี้ (แท็บ "ใบงาน SUB" ของกล่องงานหัวหน้าภาค)
+    freshOutsource(),
+    scopeFor(req),
+  ]);
   // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
-  // รีเฟรชก่อนเสมอ — แถวในรายการติดธง outsource จากรายชื่อนี้ (แท็บ "ทีม outsource" ของกล่องงานหัวหน้าภาค)
-  const outsourceNow = await freshOutsource();
   const outsourceInbox: Prisma.WorkOrderWhereInput[] =
     req.auth!.role === "SUPERVISOR" ? [{ status: "IN_PROGRESS", assignedTeam: { in: [...outsourceNow] } }] : [];
   const statusFilter =
@@ -1024,61 +1052,67 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
    * ขอบเขตใส่ใน AND — เดิมกระจายลงไปตรง ๆ แล้วชนกับตัวกรองสาขา (คีย์ branch) และ
    * คำค้น (คีย์ OR) ค้นหาหรือกรองสาขาเมื่อไหร่ ขอบเขตหายไปเลย เห็นใบงานทั้งระบบ
    */
-  const me = await prisma.user.findUnique({
-    where: { id: req.auth!.userId },
-    select: { team: true },
-  });
-  const scope: Prisma.WorkOrderWhereInput =
-    req.auth!.role === "ADMIN"
-      ? {}
-      : req.auth!.role === "SUPERVISOR"
-        ? workOrderInScope(await supervisorScope(req.auth!.userId))
-        : // ช่างเห็นงานของทีมตัวเอง เพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
-          //
-          // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
-          // จ่ายเป็นทีม ต้องไม่หายไปจากรายการของคนที่กำลังทำอยู่
-          // ช่างที่ยังไม่ได้จัดทีมจึงยังเห็นงานเดิมของตัวเองตามปกติ
-          await teamScope(me?.team ?? null, req.auth!.userId);
+  const where: Prisma.WorkOrderWhereInput = {
+    AND: [scope],
+    ...statusFilter,
+    ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
+    ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
+    ...(keyword
+      ? {
+          OR: [
+            { code: { contains: keyword, mode: "insensitive" as const } },
+            { title: { contains: keyword, mode: "insensitive" as const } },
+            { branch: { code: { contains: keyword, mode: "insensitive" as const } } },
+            { branch: { name: { contains: keyword, mode: "insensitive" as const } } },
+            { machine: { code: { contains: keyword, mode: "insensitive" as const } } },
+            // หาใบที่ตัวเองหรือเพื่อนเปิดไว้ — คนจำชื่อคนเปิดได้ง่ายกว่ารหัสใบงาน
+            { createdBy: { name: { contains: keyword, mode: "insensitive" as const } } },
+          ],
+        }
+      : {}),
+  };
+  return { where, scope, inboxStages, orphans, outsourceInbox };
+}
 
-  const rows = await prisma.workOrder.findMany({
-    where: {
-      AND: [scope],
-      ...statusFilter,
-      ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
-      ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
-      ...(keyword
-        ? {
-            OR: [
-              { code: { contains: keyword, mode: "insensitive" as const } },
-              { title: { contains: keyword, mode: "insensitive" as const } },
-              { branch: { code: { contains: keyword, mode: "insensitive" as const } } },
-              { branch: { name: { contains: keyword, mode: "insensitive" as const } } },
-              { machine: { code: { contains: keyword, mode: "insensitive" as const } } },
-              // หาใบที่ตัวเองหรือเพื่อนเปิดไว้ — คนจำชื่อคนเปิดได้ง่ายกว่ารหัสใบงาน
-              { createdBy: { name: { contains: keyword, mode: "insensitive" as const } } },
-            ],
-          }
-        : {}),
-    },
-    select: listSelect,
-    // ด่วนขึ้นก่อน แล้วเก่าสุดขึ้นก่อน — ลำดับที่ควรหยิบไปทำ
-    // priority เก็บเป็นข้อความ — เรียงจากมากไปน้อยได้ URGENT → NORMAL → LOW พอดี
-    // (เดิมเรียงน้อยไปมาก ใบด่วนจึงไปอยู่ท้ายสุด ทั้งที่คอมเมนต์บอกว่า "ด่วนขึ้นก่อน")
-    orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
-  });
+router.get("/", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = listQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { where, scope, inboxStages, orphans, outsourceInbox } = await listWhere(req, parsed.data);
 
-  // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
-  // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — สองคำถามรวด ไม่ใช่ทีละแถว
-  const [supervisors, lastMoves, confirms] = await Promise.all([
+  /**
+   * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
+   *
+   * เดิมนับทั้งระบบโดยไม่สนขอบเขต หัวหน้าภาคจึงเห็นเลขที่รวมใบงานของภาคอื่น
+   * แล้วกดเข้าไปเจอรายการสั้นกว่าเลขบนชิป ซึ่งทำให้คนเลิกเชื่อตัวเลขทั้งหน้า
+   *
+   * รายการ ตัวเลขชิป และรายชื่อหัวหน้าภาค ไม่ขึ้นต่อกัน — ยิงพร้อมกันรอบเดียว (เดิมทีละคำถาม)
+   */
+  const [rows, counts, outsourceOpen, supervisors] = await Promise.all([
+    prisma.workOrder.findMany({
+      where,
+      select: listSelect,
+      // ด่วนขึ้นก่อน แล้วเก่าสุดขึ้นก่อน — ลำดับที่ควรหยิบไปทำ
+      // priority เก็บเป็นข้อความ — เรียงจากมากไปน้อยได้ URGENT → NORMAL → LOW พอดี
+      // (เดิมเรียงน้อยไปมาก ใบด่วนจึงไปอยู่ท้ายสุด ทั้งที่คอมเมนต์บอกว่า "ด่วนขึ้นก่อน")
+      orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
+    }),
+    prisma.workOrder.groupBy({ by: ["status"], where: scope, _count: true }),
+    outsourceInbox.length ? prisma.workOrder.count({ where: { AND: [scope, ...outsourceInbox] } }) : Promise.resolve(0),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
       select: { id: true, name: true, region: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
-    rows.length
+  ]);
+
+  // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
+  // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — คำถามรวดพร้อมกัน ไม่ใช่ทีละแถว
+  const ids = rows.map((r) => r.id);
+  const [lastMoves, confirms, rollbacks] = await Promise.all([
+    ids.length
       ? prisma.workOrderLog.groupBy({
           by: ["workOrderId"],
-          where: { workOrderId: { in: rows.map((r) => r.id) }, action: { notIn: NON_STAGE_ACTIONS } },
+          where: { workOrderId: { in: ids }, action: { notIn: NON_STAGE_ACTIONS } },
           _max: { createdAt: true },
         })
       : Promise.resolve([]),
@@ -1092,20 +1126,21 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
           },
           orderBy: { createdAt: "desc" },
           distinct: ["workOrderId"],
-          select: { workOrderId: true, user: { select: { name: true } } },
+          select: { workOrderId: true, action: true, user: { select: { name: true } } },
+        })
+      : Promise.resolve([]),
+    // ป้าย ↩ ย้อนขั้นในรายการ — ใบที่เคยย้อนมีไม่มาก ถามประวัติเฉพาะใบเหล่านั้น
+    ids.length
+      ? prisma.workOrderLog.findMany({
+          where: { workOrderId: { in: ids }, action: "ROLLED_BACK" },
+          orderBy: { createdAt: "desc" },
+          distinct: ["workOrderId"],
+          select: { workOrderId: true, createdAt: true },
         })
       : Promise.resolve([]),
   ]);
   const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
-  // ป้าย ↩ ย้อนขั้นในรายการ — ใบที่เคยย้อนมีไม่มาก ถามประวัติเฉพาะใบเหล่านั้น สองคำถามรวด ไม่ใช่ทีละแถว
-  const rollbacks = rows.length
-    ? await prisma.workOrderLog.findMany({
-        where: { workOrderId: { in: rows.map((r) => r.id) }, action: "ROLLED_BACK" },
-        orderBy: { createdAt: "desc" },
-        distinct: ["workOrderId"],
-        select: { workOrderId: true, createdAt: true },
-      })
-    : [];
+  const lastConfirmAction = new Map(confirms.map((c) => [c.workOrderId, c.action]));
   const rolledBackFrom = new Map<number, ReturnType<typeof activeRollback>>();
   if (rollbacks.length) {
     const since = new Date(Math.min(...rollbacks.map((r) => r.createdAt.getTime())));
@@ -1124,17 +1159,6 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const stageSince = new Map<number, Date>();
   for (const m of lastMoves) if (m._max.createdAt) stageSince.set(m.workOrderId, m._max.createdAt);
 
-  /**
-   * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
-   *
-   * เดิมนับทั้งระบบโดยไม่สนขอบเขต หัวหน้าภาคจึงเห็นเลขที่รวมใบงานของภาคอื่น
-   * แล้วกดเข้าไปเจอรายการสั้นกว่าเลขบนชิป ซึ่งทำให้คนเลิกเชื่อตัวเลขทั้งหน้า
-   */
-  const counts = await prisma.workOrder.groupBy({
-    by: ["status"],
-    where: scope,
-    _count: true,
-  });
   const byStatus = Object.fromEntries(counts.map((c) => [c.status, c._count])) as Record<
     string,
     number
@@ -1144,6 +1168,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     rows: rows.map((w) => ({
       ...listShape(w, { supervisors, stageSince }),
       appointmentByName: confirmedBy.get(w.id) ?? null,
+      // ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — กล่องงานติดป้าย "คอนเฟิร์มวันใหม่" แยกจากรับทราบปล่อยงานปกติ
+      rescheduled: w.status === "ASSIGNED" && lastConfirmAction.get(w.id) === "RESCHEDULED",
       // ขั้นที่ย้อนมา (ไม่ได้ย้อน = null) — รายการติดป้าย ↩ ย้อนขั้น
       rolledBackFrom: rolledBackFrom.get(w.id)?.fromLabel ?? null,
     })),
@@ -1151,11 +1177,113 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
       ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
-      INBOX:
-        inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0) +
-        orphans.length +
-        (outsourceInbox.length ? await prisma.workOrder.count({ where: { AND: [scope, ...outsourceInbox] } }) : 0),
+      INBOX: inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0) + orphans.length + outsourceOpen,
     },
+  });
+});
+
+/**
+ * เช็คของใหม่แบบเบา — ลายนิ้วมือของรายการตามตัวกรองเดียวกับ GET /
+ *
+ * หน้ารายการ/แผนงานเดิมโหลดรายการทั้งก้อน (หลายร้อย KB) ทุก 1 นาทีเพื่อดูว่ามีอะไรเปลี่ยนไหม
+ * — กิน bandwidth ของ Render จนเกินโควตา และแย่ง connection กับคนที่กำลังเปิดหน้าอยู่
+ * ตอนนี้แอปถามอันนี้ก่อน (ตอบไม่กี่สิบไบต์) ต่างจากครั้งก่อนเมื่อไหร่ค่อยโหลดรายการจริง
+ *
+ * นับจาก: จำนวนใบ · แก้ใบล่าสุด (updatedAt) · ประวัติล่าสุดของใบในรายการ (แนบรูป ฯลฯ ที่ไม่แตะตัวใบ)
+ * · ตัวเลขชิป — อะไรในรายการเปลี่ยน ค่าใดค่าหนึ่งต้องเปลี่ยนด้วย
+ */
+router.get("/version", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = listQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { where, scope } = await listWhere(req, parsed.data);
+  const [agg, lastLog, counts] = await Promise.all([
+    prisma.workOrder.aggregate({ where, _count: true, _max: { updatedAt: true } }),
+    prisma.workOrderLog.aggregate({ where: { workOrder: where }, _max: { id: true } }),
+    prisma.workOrder.groupBy({ by: ["status"], where: scope, _count: true }),
+  ]);
+  const chip = counts
+    .map((c) => `${c.status}:${c._count}`)
+    .sort()
+    .join(",");
+  res.json({
+    version: [agg._count, agg._max.updatedAt?.getTime() ?? 0, lastLog._max.id ?? 0, chip].join("|"),
+  });
+});
+
+/**
+ * หน้า "งานของฉันวันนี้" ของช่าง (เจ้าของงานเลือกแบบ Salesforce ต.ค. 69)
+ *
+ * ช่างเห็นแค่งานที่ปล่อยให้ทีมตัวเองแล้ว เรียงตามเวลานัด — ไม่ต้องหาในกล่องงาน ไม่เห็นขั้นของแอดมิน/หัวหน้าภาค
+ * ใบที่ปิดวันนี้ติดมาด้วย (ขึ้น ✓) ให้ช่างเห็นว่าวันนี้ทำไปกี่งานแล้ว
+ * ถึงหน้างานแล้วหรือยังอ่านจากประวัติ ARRIVED หลังถูกปล่อยงานรอบล่าสุด — ไม่เก็บซ้ำในใบงาน
+ */
+router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
+  const scope = await scopeFor(req);
+  const today = bangkokDay(new Date());
+  const { from } = bangkokDayRange(today);
+  const rows = await prisma.workOrder.findMany({
+    where: {
+      AND: [scope],
+      OR: [{ status: { in: ["IN_PROGRESS", "INSPECTING"] } }, { status: { in: ["DONE", "CLAIM_REVIEW"] }, closedAt: { gte: from } }],
+    },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      priority: true,
+      jobType: true,
+      symptom: true,
+      title: true,
+      contactName: true,
+      contactPhone: true,
+      scheduledAt: true,
+      scheduledTime: true,
+      closedAt: true,
+      assignedTeam: true,
+      branch: { select: { code: true, name: true, latitude: true, longitude: true } },
+      machine: { select: { code: true } },
+      parts: { where: { kind: "WAITING" }, select: { quantity: true, unit: true, sparePart: { select: { name: true } } } },
+      // ปล่อยงานรอบล่าสุด + ถึงหน้างาน — ถึงแล้วคือมี ARRIVED หลังปล่อยงาน
+      logs: {
+        where: { action: { in: ["DISPATCHED", "ARRIVED", "ASSIGNED", "REOPENED", "INSPECT_REQUESTED"] } },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { action: true, createdAt: true },
+      },
+    },
+  });
+  const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+  res.json({
+    today,
+    rows: rows
+      .map((w) => {
+        const sinceRelease = w.logs.findIndex((l) => l.action !== "ARRIVED");
+        const arrived = w.logs.slice(0, sinceRelease < 0 ? w.logs.length : sinceRelease).find((l) => l.action === "ARRIVED");
+        return {
+          id: w.id,
+          code: w.code,
+          status: w.status,
+          inspect: w.status === "INSPECTING",
+          done: w.status === "DONE" || w.status === "CLAIM_REVIEW",
+          urgent: w.priority === "URGENT",
+          jobType: w.jobType,
+          symptom: (w.symptom ?? w.title ?? "").split("\n")[0],
+          contactName: w.contactName,
+          contactPhone: w.contactPhone,
+          scheduledAt: day(w.scheduledAt),
+          scheduledTime: w.scheduledTime,
+          closedAt: w.closedAt,
+          team: w.assignedTeam,
+          branchCode: w.branch.code,
+          branchName: w.branch.name,
+          latitude: w.branch.latitude,
+          longitude: w.branch.longitude,
+          machineCode: w.machine?.code ?? null,
+          parts: w.parts.map((p) => ({ name: p.sparePart.name, quantity: p.quantity, unit: p.unit })),
+          arrivedAt: arrived?.createdAt ?? null,
+        };
+      })
+      .sort((a, b) => `${a.scheduledAt ?? "9999"} ${a.scheduledTime ?? "99:99"}`.localeCompare(`${b.scheduledAt ?? "9999"} ${b.scheduledTime ?? "99:99"}`)),
   });
 });
 
@@ -1166,31 +1294,19 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
  * ดึงทั้งรายการมาเพื่อนับคือการโหลดข้อมูลเป็นร้อยใบทิ้งทุกครั้งที่เปิดแอป
  */
 router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
-  const me = await prisma.user.findUnique({
-    where: { id: req.auth!.userId },
-    select: { team: true },
-  });
-  const scope: Prisma.WorkOrderWhereInput =
-    req.auth!.role === "ADMIN"
-      ? {}
-      : req.auth!.role === "SUPERVISOR"
-        ? workOrderInScope(await supervisorScope(req.auth!.userId))
-        : await teamScope(me?.team ?? null, req.auth!.userId);
-
-  const orphans = inboxTakesOrphans(req.auth) ? await orphanSupervisorIds() : [];
-  const outsourceOpen =
+  // ขอบเขต · ใบไม่มีคนรับ · รายชื่อ outsource ไม่ขึ้นต่อกัน — ถามพร้อมกัน แล้วนับสองอย่างพร้อมกัน
+  const [scope, orphans, outsource] = await Promise.all([
+    scopeFor(req),
+    inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
+    req.auth!.role === "SUPERVISOR" ? freshOutsource() : Promise.resolve(new Set<string>()),
+  ]);
+  const [waiting, outsourceOpen] = await Promise.all([
+    prisma.workOrder.count({ where: { AND: [scope], status: { in: stagesWaitingOn(req.auth) } } }),
     req.auth!.role === "SUPERVISOR"
-      ? await prisma.workOrder.count({
-          where: { AND: [scope], status: "IN_PROGRESS", assignedTeam: { in: [...(await freshOutsource())] } },
-        })
-      : 0;
-  const inbox =
-    (await prisma.workOrder.count({
-      where: { AND: [scope], status: { in: stagesWaitingOn(req.auth) } },
-    })) +
-    orphans.length +
-    outsourceOpen;
-  res.json({ inbox });
+      ? prisma.workOrder.count({ where: { AND: [scope], status: "IN_PROGRESS", assignedTeam: { in: [...outsource] } } })
+      : Promise.resolve(0),
+  ]);
+  res.json({ inbox: waiting + orphans.length + outsourceOpen });
 });
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */
@@ -3082,6 +3198,112 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
     await writeLog(tx, id, req.auth!.userId, "DISPATCHED", next, [text, parsed.data.note].filter(Boolean).join(" — "));
   }, STAGE_TX);
 
+  const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
+  res.json(shape(row));
+});
+
+/**
+ * ช่างกด "ถึงหน้างาน" (หน้า งานของฉันวันนี้ — เจ้าของงานเลือก ต.ค. 69)
+ *
+ * บันทึกเวลาถึงจริง แอดมิน/หัวหน้าภาคเห็นว่าช่างใช้เวลาหน้างานเท่าไร · มีพิกัดก็เทียบกับสาขาเหมือนรายงานตัวเข้าสาขา
+ * (ลงตารางรายงานตัวด้วย ไม่ต้องกดสองที่) · ไม่ได้บล็อกเมื่ออยู่นอกรัศมีหรือไม่มีพิกัด — GPS ในร้าน/ห้างคลาดบ่อย
+ * บล็อกแล้วช่างทำงานต่อไม่ได้ ระบบแค่บันทึกตามจริงให้คนตรวจย้อนหลังได้
+ * ไม่ใช่การเดินขั้น: ใบยังอยู่ขั้นเดิม (ช่าง · เข้างาน/ปิดงาน หรือ ตรวจหน้างาน)
+ */
+const arriveSchema = z.object({
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+});
+
+router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = arriveSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "พิกัดไม่ถูกต้อง" });
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      code: true,
+      status: true,
+      assignedToId: true,
+      assignedTeam: true,
+      branchId: true,
+      branch: { select: { region: true, zone: true, pmTeam: true, latitude: true, longitude: true, radiusMeters: true } },
+    },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.status !== "IN_PROGRESS" && wo.status !== "INSPECTING") {
+    return res.status(409).json({ error: `${wo.code} ไม่ได้อยู่ในมือช่างตอนนี้` });
+  }
+  if (await blockedForTeam(req, res, wo)) return;
+  const { latitude, longitude } = parsed.data;
+  const b = wo.branch;
+  const distance =
+    latitude != null && longitude != null && b.latitude != null && b.longitude != null
+      ? distanceMeters(latitude, longitude, b.latitude, b.longitude)
+      : null;
+  const within = distance != null ? distance <= b.radiusMeters : null;
+  const note =
+    distance == null
+      ? latitude == null
+        ? "ถึงหน้างาน (ไม่มีพิกัดจากเครื่อง)"
+        : "ถึงหน้างาน (สาขายังไม่มีพิกัด เทียบระยะไม่ได้)"
+      : `ถึงหน้างาน · ห่างสาขา ${Math.round(distance)} ม. · ${within ? "ในรัศมี" : "นอกรัศมี"}`;
+  await prisma.$transaction(async (tx) => {
+    if (distance != null) {
+      await tx.branchCheckIn.create({
+        data: {
+          userId: req.auth!.userId,
+          branchId: wo.branchId,
+          latitude: latitude!,
+          longitude: longitude!,
+          distanceMeters: distance,
+          withinRadius: within!,
+          note: `ถึงหน้างาน ${wo.code}`,
+        },
+      });
+    }
+    await writeLog(tx, id, req.auth!.userId, "ARRIVED", wo.status, note);
+  }, STAGE_TX);
+  res.json({ ok: true, note, distance: distance != null ? Math.round(distance) : null, withinRadius: within });
+});
+
+/**
+ * ลูกค้าขอเปลี่ยนวัน แต่ทีมไม่ว่างวันใหม่ — หัวหน้าภาคส่งกลับให้แอดมินนัดลูกค้าใหม่ (เจ้าของงานเลือก ต.ค. 69)
+ *
+ * เดิมทางเดียวคือเปลี่ยนทีมแล้วปล่อยงาน — แต่บางวันไม่มีทีมไหนว่าง ต้องให้ร้านเลือกวันอื่น
+ * ซึ่งคนที่คุยกับร้านคือแอดมิน ใบจึงกลับไปขั้นคอนเฟิร์มลูกค้า ทีมเดิมยังอยู่ วันที่ลูกค้าขอยังอยู่ให้แอดมินเห็น
+ * ต้องบอกเหตุผล — แอดมินต้องรู้ว่าจะไปต่อรองกับร้านว่าอะไร
+ */
+const declineNewDateSchema = z.object({
+  reason: z.string().trim().min(1, "ต้องบอกเหตุผลให้แอดมิน เช่น ทีมเต็มวันนั้น").max(500),
+});
+
+router.post("/:id/decline-new-date", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = declineNewDateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (!(await guardStage(req, res, id, "ASSIGNED"))) return;
+  const cur = await prisma.workOrder.findUniqueOrThrow({
+    where: { id },
+    select: { assignedTeam: true, scheduledAt: true, scheduledTime: true },
+  });
+  const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "AWAITING_CONFIRM", appointmentStatus: "PENDING", workStatus: workStatusForStage("AWAITING_CONFIRM") },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "NEW_DATE_DECLINED",
+      "AWAITING_CONFIRM",
+      `ทีม${cur.assignedTeam ?? " —"} ไม่ว่างวันที่ลูกค้าขอ (${when}) — ${parsed.data.reason}`
+    );
+  }, STAGE_TX);
   const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
   res.json(shape(row));
 });

@@ -1,5 +1,8 @@
 generator client {
   provider = "prisma-client-js"
+  // ดึงตารางที่เกี่ยวข้อง (สาขา เครื่อง อะไหล่ ฯลฯ) ใน SQL คำสั่งเดียวแทนคำสั่งละตาราง
+  // ฐานข้อมูลจริงอยู่คนละ region (ไปกลับ ~220 ms) — หน้าใบงานเคยรอ 12 รอบต่อกัน
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {
