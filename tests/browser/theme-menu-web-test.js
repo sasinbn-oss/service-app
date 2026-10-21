@@ -44,16 +44,18 @@ const path = require("path");
     await shot(page, "menu-2-collapsed.png");
     await page.getByLabel("กางกลุ่ม งานซ่อม").click();
 
+    // อยู่หน้ารายการใบงาน (ไม่ใช่หน้าแรก) แล้วสลับ — โหลดใหม่แล้วต้องอยู่หน้าเดิม ไม่เด้งกลับแผนงาน
+    await vis("ใบงานซ่อม").first().click();
+    await page.waitForTimeout(3000);
+    const onList = () => page.getByPlaceholder(/ค้นรหัสใบงาน/).locator("visible=true").count();
     const light = await bg(page);
     await page.getByLabel("เปิดโหมดมืด").click();
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(4000);
+    (await onList()) > 0 ? pass("สลับโหมดแล้วยังอยู่หน้ารายการใบงาน (ไม่เด้งกลับหน้าแรก)") : fail("สลับโหมดแล้วเด้งออกจากหน้าเดิม");
     const dark = await bg(page);
     dark === "rgb(11, 21, 32)" && light !== dark ? pass(`เปิดโหมดมืด: พื้น ${light} → ${dark}`) : fail(`พื้นไม่เปลี่ยน ${light} → ${dark}`);
     (await page.getByLabel("ปิดโหมดมืด").count()) ? pass("สวิตช์เป็นสถานะมืด") : fail("สวิตช์ไม่เปลี่ยนสถานะ");
-    await shot(page, "dark-1-plan.png");
-    await vis("ใบงานซ่อม").first().click();
-    await page.waitForTimeout(4000);
     await shot(page, "dark-2-list.png");
 
     // มือถือ — บริบทใหม่แต่ตั้งค่ามืดไว้แล้ว เหมือนช่างที่เคยเปิดไว้

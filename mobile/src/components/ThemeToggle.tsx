@@ -3,6 +3,8 @@ import { Animated, Platform, Pressable, StyleSheet, useWindowDimensions, View } 
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { isDark, setDarkMode } from "../theme";
 import { spring } from "../utils/motion";
+import { useAuth } from "../context/AuthContext";
+import { rememberScreenForReload } from "../navigation/navigationRef";
 
 /**
  * สวิตช์โหมดมืด มุมขวาบน — แบบแคปซูลดวงจันทร์ตามตัวอย่างที่เจ้าของงานส่งมา (ต.ค. 69)
@@ -17,6 +19,7 @@ const COMPACT = { W: 46, H: 26, KNOB: 20 };
 
 export default function ThemeToggle() {
   const { width } = useWindowDimensions();
+  const { user } = useAuth();
   const { W, H, KNOB } = width < 480 ? COMPACT : FULL;
   const [on, setOn] = useState(isDark);
   const x = useRef(new Animated.Value(isDark ? W - KNOB - 3 : 3)).current;
@@ -29,7 +32,10 @@ export default function ThemeToggle() {
         const next = !on;
         setOn(next);
         spring(x, next ? W - KNOB - 3 : 3, "push").start();
-        setTimeout(() => setDarkMode(next), 260);
+        setTimeout(() => {
+          rememberScreenForReload(user?.id);
+          setDarkMode(next);
+        }, 260);
       }}
       style={[styles.track, { width: W, height: H, borderRadius: H / 2 }, on ? styles.trackDark : styles.trackLight]}
     >
