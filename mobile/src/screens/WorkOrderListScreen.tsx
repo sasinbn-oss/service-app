@@ -5,6 +5,7 @@
  * "ใครต้องไปทำอะไร" เคสหนึ่งอาจมีใบงานหลายใบ ถ้าช่างต้องเข้าไปหลายรอบ
  */
 import React, { useRef, useCallback, useEffect, useMemo, useState } from "react";
+import { machineTag } from "../utils/machine";
 import {
   useWindowDimensions,
   Animated,
@@ -56,6 +57,8 @@ export interface WorkOrderRow {
   branchCode: string;
   branchName: string;
   machineCode: string | null;
+  /** ขนาดเครื่อง (กก.) — ป้าย "W7 · 25 กก." */
+  machineCapacityKg?: number | null;
   /** ทีมที่รับงาน — ใบใหม่จ่ายเป็นทีม */
   assignedTeam: string | null;
   /** ช่างรายคน — ใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
@@ -242,7 +245,7 @@ type ColKey = "wo" | "branch" | "machine" | "team" | "appt" | "status" | "wait" 
 const COLUMNS: { key: ColKey; label: string; value: (r: WorkOrderRow) => string; sortValue?: (r: WorkOrderRow) => string }[] = [
   { key: "wo", label: "ใบงาน", value: (r) => r.code },
   { key: "branch", label: "สาขา", value: (r) => `${r.branchCode} ${r.branchName}` },
-  { key: "machine", label: "เครื่อง", value: (r) => r.machineCode ?? "(ว่าง)" },
+  { key: "machine", label: "เครื่อง", value: (r) => machineTag(r.machineCode, r.machineCapacityKg) ?? "(ว่าง)" },
   { key: "team", label: "ทีม", value: (r) => r.assignedToName ?? r.assignedTeam ?? "ยังไม่มอบหมาย" },
   {
     key: "appt",
@@ -1504,7 +1507,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <Text style={styles.td2}>{row.branchName}</Text>
         <WarrantyBadge state={row.warranty} endsAt={row.warrantyEndsAt} />
       </View>
-      <Text style={[styles.td, styles.colMachine]}>{row.machineCode ?? "—"}</Text>
+      <Text style={[styles.td, styles.colMachine]}>{machineTag(row.machineCode, row.machineCapacityKg) ?? "—"}</Text>
       <Text style={[styles.td, styles.colTeam, !(row.assignedToName ?? row.assignedTeam) && styles.tdMuted]}>
         {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมาย"}
       </Text>
@@ -1581,7 +1584,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <BranchType type={row.branchType} />
         <Text style={styles.meta}>
           {row.branchCode} · {row.branchName}
-          {row.machineCode ? ` · เครื่อง ${row.machineCode}` : ""}
+          {row.machineCode ? ` · เครื่อง ${machineTag(row.machineCode, row.machineCapacityKg)}` : ""}
         </Text>
       </View>
       {row.warranty ? (

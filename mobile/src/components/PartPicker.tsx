@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import TouchableOpacity from "./Tap";
+import QtyInput from "./QtyInput";
 import Spinner from "./Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
@@ -95,10 +96,7 @@ export default function PartPicker({
     ]);
   }
 
-  function setQuantity(sparePartId: number, text: string) {
-    const digits = text.replace(/[^0-9]/g, "");
-    // ปล่อยให้ว่างระหว่างพิมพ์ได้ ค่อยตีเป็น 1 ตอนบันทึก
-    const value = digits === "" ? 1 : Math.min(999, Math.max(1, Number(digits)));
+  function setQuantity(sparePartId: number, value: number) {
     onChange(parts.map((p) => (p.sparePartId === sparePartId ? { ...p, quantity: value } : p)));
   }
 
@@ -114,12 +112,9 @@ export default function PartPicker({
                 <Text style={styles.pickedCode}>{part.partCode}</Text>
                 <Text style={styles.pickedName}>{part.name}</Text>
               </View>
-              <TextInput
-                style={styles.qtyInput}
-                value={String(part.quantity)}
-                onChangeText={(t) => setQuantity(part.sparePartId, t)}
-                keyboardType="number-pad"
-                maxLength={3}
+              <QtyInput
+                value={part.quantity}
+                onChange={(n) => setQuantity(part.sparePartId, n)}
                 accessibilityLabel={`จำนวน ${part.partCode}`}
               />
               <Text style={styles.qtyUnit}>ตัว</Text>
@@ -200,18 +195,6 @@ const styles = StyleSheet.create({
   pickedText: { flex: 1, minWidth: 0 },
   pickedCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   pickedName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
-  qtyInput: {
-    width: 52,
-    textAlign: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    backgroundColor: colors.card,
-    paddingVertical: spacing.xs,
-    fontSize: 14,
-    lineHeight: 22,
-    color: colors.text,
-  },
   qtyUnit: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
   pickerSearch: {
     flexDirection: "row",

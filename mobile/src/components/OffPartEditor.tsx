@@ -9,6 +9,7 @@ import React from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
+import QtyInput from "./QtyInput";
 import { colors, radius, spacing } from "../theme";
 
 export interface OffPart {
@@ -84,17 +85,7 @@ export default function OffPartEditor({
               maxLength={120}
               accessibilityLabel={`ชื่อ${v.item} ${i + 1}`}
             />
-            <TextInput
-              style={[styles.input, styles.qty]}
-              value={String(r.quantity)}
-              onChangeText={(t) => {
-                const digits = t.replace(/[^0-9]/g, "");
-                set(i, { quantity: digits === "" ? 1 : Math.min(999, Math.max(1, Number(digits))) });
-              }}
-              keyboardType="number-pad"
-              maxLength={3}
-              accessibilityLabel={`จำนวน${v.item} ${i + 1}`}
-            />
+            <QtyInput value={r.quantity} onChange={(n) => set(i, { quantity: n })} accessibilityLabel={`จำนวน${v.item} ${i + 1}`} />
             <TextInput
               style={[styles.input, styles.unit]}
               value={r.unit}
@@ -192,7 +183,6 @@ const styles = StyleSheet.create({
   },
   inputEmpty: { borderColor: colors.offPartLine },
   name: { flex: 1, minWidth: 0 },
-  qty: { width: 52, textAlign: "center" },
   unit: { width: 64 },
   add: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", paddingVertical: 2 },
   addText: { color: colors.offPart, fontWeight: "700", fontSize: 13 },

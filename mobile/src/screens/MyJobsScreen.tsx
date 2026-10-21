@@ -9,6 +9,7 @@
  * ใช้ของหน้าใบงานเดิม (เปิดหน้าใบงานพร้อมสั่งให้เปิดฟอร์มเลย) ไม่ได้ทำฟอร์มซ้ำ
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import { machineTag } from "../utils/machine";
 import { Linking, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -46,6 +47,7 @@ interface Job {
   latitude: number | null;
   longitude: number | null;
   machineCode: string | null;
+  machineCapacityKg: number | null;
   parts: { name: string; quantity: number; unit: string | null }[];
   arrivedAt: string | null;
 }
@@ -253,7 +255,7 @@ function JobCard({
       </Text>
       <Text style={styles.meta}>
         {job.code} · {job.inspect ? "ตรวจหน้างาน" : job.jobType === "PM" ? "งาน PM" : "งานซ่อม"}
-        {job.machineCode ? ` · เครื่อง ${job.machineCode}` : " · ทั้งสาขา"}
+        {job.machineCode ? ` · เครื่อง ${machineTag(job.machineCode, job.machineCapacityKg)}` : " · ทั้งสาขา"}
         {job.symptom ? ` · ${job.symptom}` : ""}
       </Text>
       {job.parts.length ? (

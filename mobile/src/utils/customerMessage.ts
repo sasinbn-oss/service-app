@@ -5,6 +5,7 @@
  * เลื่อนนัดแล้วข้อความเปลี่ยนตามเอง ไม่มีฉบับเก่าค้างให้ส่งผิด
  */
 import { thaiDate } from "../components/DateField";
+import { machineTag } from "./machine";
 
 /** ขั้นของงานตรวจหน้างาน — ข้อความใช้ "เข้าตรวจสอบ / ผลการตรวจสอบ" แทน "เข้าซ่อม / ผลการซ่อม" */
 const INSPECT_STAGES = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING"];
@@ -14,6 +15,7 @@ export interface MessageOrder {
   status: string;
   branchName: string;
   machineCode: string | null;
+  machineCapacityKg?: number | null;
   symptom: string | null;
   scheduledAt: string | null;
   scheduledTime: string | null;
@@ -32,7 +34,7 @@ export function customerMessage(o: MessageOrder) {
     `📋 Case No. ${o.code}`,
     `🏪 ชื่อสาขา: ${o.branchName}`,
     // งานทั้งสาขาไม่ได้ระบุเครื่อง — ไม่มีบรรทัดนี้ ดีกว่าขึ้น "เครื่อง: —"
-    ...(o.machineCode ? [`🧺 เครื่อง: ${o.machineCode}`] : []),
+    ...(o.machineCode ? [`🧺 เครื่อง: ${machineTag(o.machineCode, o.machineCapacityKg)}`] : []),
     ...(symptom ? [`🔧 อาการ: ${symptom}`] : []),
     `📅 วัน–เวลา: ${when}`,
     "",
@@ -59,6 +61,7 @@ export interface ConfirmedRow {
   branchCode: string;
   branchName: string;
   machineCode: string | null;
+  machineCapacityKg?: number | null;
   symptom: string | null;
   contactName: string | null;
   contactPhone: string | null;
@@ -112,7 +115,7 @@ export function teamDispatch(team: string, rows: ConfirmedRow[]) {
         `เลขที่ใบงาน: ${r.code}`,
         `รหัสสาขา: ${r.branchCode}`,
         `สาขา: ${r.branchName}`,
-        ...(r.machineCode ? [`เครื่อง: ${r.machineCode}`] : []),
+        ...(r.machineCode ? [`เครื่อง: ${machineTag(r.machineCode, r.machineCapacityKg)}`] : []),
         `ผู้ติดต่อ: ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
         ...(r.latitude != null && r.longitude != null ? [`แผนที่: https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
       );
@@ -141,6 +144,7 @@ export interface SubOrder {
   branchLatitude?: number | null;
   branchLongitude?: number | null;
   machineCode: string | null;
+  machineCapacityKg?: number | null;
   symptom: string | null;
   contactName: string | null;
   contactPhone: string | null;
@@ -163,7 +167,7 @@ export function subDispatch(o: SubOrder) {
     `เลขที่ใบงาน: ${o.code}`,
     `รหัสสาขา: ${o.branchCode}`,
     `สาขา: ${o.branchName}`,
-    ...(o.machineCode ? [`เครื่อง: ${o.machineCode}`] : []),
+    ...(o.machineCode ? [`เครื่อง: ${machineTag(o.machineCode, o.machineCapacityKg)}`] : []),
     ...(symptom ? [`อาการ: ${symptom}`] : []),
     ...(o.parts.length ? ["อะไหล่:", ...o.parts.map((p) => `- ${p.name} x${p.quantity}${p.unit ? ` ${p.unit}` : ""}`)] : []),
     `ผู้ติดต่อ: ${[o.contactName, o.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
