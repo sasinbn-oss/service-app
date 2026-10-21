@@ -1,7 +1,7 @@
-import React from "react";
+import React, { useRef } from "react";
 import { View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
-import { navigationRef } from "./src/navigation/navigationRef";
+import { navigationRef, takeScreenAfterReload } from "./src/navigation/navigationRef";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
@@ -19,6 +19,9 @@ installWebFonts();
 
 function RootNavigator() {
   const { user, loading } = useAuth();
+  // หน้าที่เปิดไว้ก่อนแอปโหลดตัวเองใหม่ (สลับโหมดมืด) — อ่านครั้งเดียวหลังรู้ตัวผู้ใช้ (ตอนแรกยัง loading)
+  const restore = useRef<{ state?: object } | null>(null);
+  if (!loading && !restore.current) restore.current = { state: takeScreenAfterReload(user?.id) };
 
   if (loading) {
     return (
@@ -35,7 +38,7 @@ function RootNavigator() {
    * ถ้าปล่อยให้เข้าไปจะเจอหน้าจอที่โหลดข้อมูลไม่ขึ้นทั้งหมดโดยไม่รู้ว่าทำไม
    */
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer ref={navigationRef} initialState={restore.current?.state as never}>
       <AppShell>
         {!user ? (
           <AuthNavigator />
