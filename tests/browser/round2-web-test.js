@@ -118,12 +118,11 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
 
     // ── 4) ช่างเข้าดำเนินการแก้ไขเรียบร้อย ──
     await open(F.code);
-    await label("จบใบงาน").first().click();
-    await page.waitForTimeout(800);
-    await label("จบ: ไม่ต้องเข้าหน้างาน").click();
+    // แผงท้ายใบงาน: "ซ่อมเสร็จแล้ว" เข้าฟอร์มช่างแก้ไขเรียบร้อยเลย ไม่ต้องเลือกเหตุผลซ้ำ
+    await label("จบ: ซ่อมเสร็จแล้ว").click();
     await page.waitForTimeout(1000);
-    await label("เหตุผล ช่างเข้าดำเนินการแก้ไขเรียบร้อย").click();
-    await page.waitForTimeout(500);
+    (await label("เหตุผล ช่างเข้าดำเนินการแก้ไขเรียบร้อย").count()) === 0
+      ? pass("กดซ่อมเสร็จแล้ว: ไม่มีรายการเหตุผลให้เลือกซ้ำ") : fail("ยังมีรายการเหตุผล");
     (await vis("ช่างเข้าซ่อมเสร็จแล้ว แต่ไม่ได้ปิดในระบบ · นับเป็นงานซ่อมเสร็จ").count())
       ? pass("เลือกช่างแก้ไขเรียบร้อย: หัวฟอร์มบอกว่านับเป็นงานซ่อมเสร็จ") : fail("หัวฟอร์มไม่เปลี่ยน");
     await label("ช่างที่เข้าซ่อม").click();

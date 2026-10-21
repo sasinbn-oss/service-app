@@ -59,6 +59,7 @@ export default function SupervisorCloseModal({
   order,
   technicians = [],
   subTeams = [],
+  mode,
   onClose,
   onDone,
 }: {
@@ -67,10 +68,16 @@ export default function SupervisorCloseModal({
   technicians?: { id: number; name: string; employeeCode: string; team?: string | null }[];
   /** ทีม outsource — ใบงาน SUB เลือกทีมที่เข้าทำ */
   subTeams?: string[];
+  /**
+   * ทางจบที่เลือกมาจากแผงท้ายใบงาน — "fixed" ล็อกเป็นช่างแก้ไขเรียบร้อย ไม่ต้องเลือกเหตุผลซ้ำ
+   * "noVisit" ตัดข้อนั้นออก เพราะคนกดมาทางไม่ต้องเข้าหน้างาน · ไม่ส่งมา = เลือกได้ทุกข้อ
+   */
+  mode?: "fixed" | "noVisit";
   onClose: () => void;
   onDone: () => void | Promise<void>;
 }) {
-  const [reason, setReason] = useState<string | null>(null);
+  const [reason, setReason] = useState<string | null>(mode === "fixed" ? "TECH_FIXED" : null);
+  const reasons = mode === "noVisit" ? REASONS.filter((r) => r.value !== "TECH_FIXED") : REASONS;
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [tried, setTried] = useState(false);
@@ -170,22 +177,24 @@ export default function SupervisorCloseModal({
       }
     >
       <View style={{ gap: spacing.lg }}>
-        <View style={{ gap: 6 }}>
-          <Text style={styles.label}>
-            เหตุผลที่ปิด <Text style={styles.req}>*</Text>
-          </Text>
-          {REASONS.map((r) => (
-            <TouchableOpacity
-              key={r.value}
-              style={[styles.opt, reason === r.value && styles.optOn]}
-              onPress={() => setReason(r.value)}
-              accessibilityLabel={`เหตุผล ${r.label}`}
-            >
-              <View style={[styles.radio, reason === r.value && styles.radioOn]} />
-              <Text style={styles.optText}>{r.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {mode === "fixed" ? null : (
+          <View style={{ gap: 6 }}>
+            <Text style={styles.label}>
+              เหตุผลที่ปิด <Text style={styles.req}>*</Text>
+            </Text>
+            {reasons.map((r) => (
+              <TouchableOpacity
+                key={r.value}
+                style={[styles.opt, reason === r.value && styles.optOn]}
+                onPress={() => setReason(r.value)}
+                accessibilityLabel={`เหตุผล ${r.label}`}
+              >
+                <View style={[styles.radio, reason === r.value && styles.radioOn]} />
+                <Text style={styles.optText}>{r.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         {fixed ? (
           <View style={styles.fixedBox} accessibilityLabel="ข้อมูลงานซ่อมที่ช่างทำ">

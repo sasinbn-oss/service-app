@@ -62,14 +62,14 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     // ── ช่างต้องไม่เห็นปุ่มลบ ──
     const t = await browser.newPage({ viewport: { width: 420, height: 1400 } });
     await signIn(t, "T001"); await openWO(t, o.code);
-    (await t.getByText("ลบใบงานนี้ถาวร").locator("visible=true").count()) === 0
+    (await t.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").count()) === 0
       ? pass("ช่างไม่เห็นปุ่มลบ") : fail("ช่างเห็นปุ่มลบ");
     await t.close();
 
     // ── หัวหน้าภาคต้องไม่เห็น ──
     const s2 = await browser.newPage({ viewport: { width: 420, height: 1400 } });
     await signIn(s2, "S001"); await openWO(s2, o.code);
-    (await s2.getByText("ลบใบงานนี้ถาวร").locator("visible=true").count()) === 0
+    (await s2.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").count()) === 0
       ? pass("หัวหน้าภาคไม่เห็นปุ่มลบ") : fail("หัวหน้าภาคเห็นปุ่มลบ");
     await s2.close();
 
@@ -77,12 +77,12 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     const a = await browser.newPage({ viewport: { width: 420, height: 1400 } });
     const seen = (x, e=false) => a.getByText(x, { exact: e }).locator("visible=true").count();
     await signIn(a, "A001"); await openWO(a, o.code);
-    (await seen("ลบใบงานนี้ถาวร")) > 0 ? pass("แอดมินเห็นปุ่มลบ") : fail("แอดมินไม่เห็นปุ่มลบ");
+    (await a.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").count()) > 0 ? pass("แอดมินเห็นปุ่มลบ") : fail("แอดมินไม่เห็นปุ่มลบ");
     await a.screenshot({ path: path.join(DIR, "del-1-button.png"), fullPage: true });
 
     // บนเว็บ showAlert เปิดกล่องยืนยันที่วาดในแอป (components/Feedback) ไม่ใช่
     // window.confirm แล้ว — อ่านข้อความจาก DOM และกดปุ่ม "ลบถาวร" ในกล่อง
-    await a.getByText("ลบใบงานนี้ถาวร").locator("visible=true").first().click();
+    await a.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").first().click();
     await a.waitForTimeout(800);
     const box = a.getByText("กู้คืนไม่ได้", { exact: false }).locator("visible=true").last();
     const msg = (await box.count()) ? await box.textContent() : "";

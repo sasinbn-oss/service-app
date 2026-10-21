@@ -91,10 +91,9 @@ const { setup } = require("./fixture");
       const yOf = async (loc) => (await loc.first().boundingBox())?.y ?? -1;
       // ปุ่มเดียว "จบใบงาน…" (ต.ค. 69) — ยกเลิกเป็นทางเลือกข้างใน ยังอยู่ท้ายหน้า
       const cancelY = await yOf(page.locator('[aria-label="จบใบงาน"]').locator("visible=true"));
-      const deleteY = await yOf(page.getByText("ลบใบงานนี้ถาวร", { exact: true }).locator("visible=true"));
+      const deleteY = await yOf(page.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true"));
       const branchY = await yOf(page.getByText("สาขาและเครื่อง", { exact: true }).locator("visible=true"));
       cancelY > branchY && deleteY > cancelY ? pass("ปุ่มยกเลิกใบงานอยู่ท้ายหน้า เหนือ ลบใบงานนี้ถาวร") : fail(`ตำแหน่งปุ่ม: ยกเลิก ${cancelY} สาขา ${branchY} ลบ ${deleteY}`);
-      await page.locator('[aria-label="จบใบงาน"]').locator("visible=true").first().click();
       await page.waitForTimeout(800);
       await page.locator('[aria-label="จบ: ไม่ทำแล้ว"]').locator("visible=true").last().click();
       await page.waitForTimeout(800);
