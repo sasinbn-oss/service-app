@@ -75,9 +75,14 @@ export async function pickImageAttachment(
   fromCamera: boolean,
   onStage?: (label: string) => void
 ): Promise<PickedAttachment | null> {
-  const permission = fromCamera
-    ? await ImagePicker.requestCameraPermissionsAsync()
-    : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  // เว็บเปิดกล้องผ่าน <input capture> ซึ่งไม่ต้องขอสิทธิ์ — ขอผ่าน getUserMedia บนคอมที่ไม่มีกล้อง
+  // จะได้ "ไม่อนุญาต" ทั้งที่แค่อยากเลือกไฟล์ (ปุ่มถ่ายทันทีเปิดบนเว็บตั้งแต่ ต.ค. 69)
+  const permission =
+    fromCamera && Platform.OS === "web"
+      ? { granted: true }
+      : fromCamera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
     showAlert(
       "ต้องการสิทธิ์",
@@ -136,18 +141,24 @@ async function prepareImage(asset: ImagePicker.ImagePickerAsset): Promise<Picked
 }
 
 export async function pickVideoAttachment(
-  onStage?: (label: string) => void
+  onStage?: (label: string) => void,
+  fromCamera = false
 ): Promise<PickedAttachment | null> {
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  const permission =
+    fromCamera && Platform.OS === "web"
+      ? { granted: true }
+      : fromCamera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
-    showAlert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงคลังวิดีโอ");
+    showAlert("ต้องการสิทธิ์", fromCamera ? "กรุณาอนุญาตให้แอปใช้กล้อง" : "กรุณาอนุญาตให้แอปเข้าถึงคลังวิดีโอ");
     return null;
   }
 
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ["videos"],
-    videoMaxDuration: MAX_VIDEO_SECONDS,
-  });
+  const options = { mediaTypes: ["videos"] as ImagePicker.MediaType[], videoMaxDuration: MAX_VIDEO_SECONDS };
+  const result = fromCamera
+    ? await ImagePicker.launchCameraAsync(options)
+    : await ImagePicker.launchImageLibraryAsync(options);
   if (result.canceled || result.assets.length === 0) return null;
 
   const asset = result.assets[0];

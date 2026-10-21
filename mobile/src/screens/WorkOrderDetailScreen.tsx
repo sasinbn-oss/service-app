@@ -42,6 +42,8 @@ import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
+import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
+import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
 import {
   PickedAttachment,
   pickImageAttachment,
@@ -2798,6 +2800,8 @@ function StageModal({
       order.status === "NEW" && ((order.jobType === "INSPECT" && !order.inspectedAt) || sentBackLog(order) !== null)
     );
     setFinding("");
+    // ข้อความผลตรวจที่พิมพ์ค้างไว้ (ปิดฟอร์ม/แอปหลุด) — จำไว้ในเครื่องโดยไม่ต้องกดบันทึกร่าง
+    if (order.status === "INSPECTING") loadDraft(`inspect:${order.id}`).then((v) => v && setFinding(v));
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
     // ช่างแจ้งร้านปิด — วันเดิมใช้ไม่ได้แล้ว เปิดที่ "ลูกค้าขอเลื่อน" เลย
     setConfirmChoice(
@@ -2913,6 +2917,7 @@ function StageModal({
         });
       } else if (order.status === "INSPECTING") {
         await api.post(`/work-orders/${order.id}/inspection`, { note: finding.trim() });
+        clearDraft(`inspect:${order.id}`);
       } else if (order.status === "WAITING_PARTS") {
         await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
       } else if (order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") {
@@ -3148,7 +3153,9 @@ function StageModal({
                       : "คอนเฟิร์ม เบิกแล้ว"
                     : toPickup.length && !checkOut
                       ? `ส่งหัวหน้าภาคเบิก ${toPickup.length} รายการ`
-                      : "ยืนยัน"}
+                      : order.status === "INSPECTING"
+                        ? "บันทึกและส่งผลตรวจ"
+                        : "ยืนยัน"}
               </Text>
             )}
           </TouchableOpacity>
@@ -3759,19 +3766,8 @@ function StageModal({
             ) : null}
 
             {order.status === "INSPECTING" ? (
-              <>
-                <Text style={styles.modalLabel}>ตรวจแล้วเจออะไร</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  value={finding}
-                  onChangeText={setFinding}
-                  placeholder="เช่น วาล์วน้ำทิ้งค้าง บอร์ดมีรอยไหม้ ต้องเปลี่ยนทั้งสองตัว"
-                  placeholderTextColor={colors.textFaint}
-                  multiline
-                  numberOfLines={3}
-                  accessibilityLabel="ผลตรวจหน้างาน"
-                />
-                <Text style={styles.modalLabel}>ไฟล์ตรวจหน้างาน (ต้องครบ 3 อย่าง)</Text>
+              // ทีละขั้น 1-2-3 ตามแบบที่เจ้าของงานส่งมา (ต.ค. 69) — ถ่ายไฟล์ก่อน แล้วค่อยสรุปว่าเจออะไร
+              <View style={{ gap: spacing.sm }}>
                 <InspectionSlots
                   workOrderId={order.id}
                   rows={files}
@@ -3800,15 +3796,24 @@ function StageModal({
                   }
                   onChanged={onFilesChanged}
                 />
-                {inspectMissing.length > 0 ? (
-                  <Text style={styles.inspectWarn}>
-                    ยังขาด: {inspectMissing.join(" · ")} — ใส่ให้ครบ 3 อย่างก่อนส่งผลตรวจ
-                  </Text>
-                ) : null}
-                <Text style={styles.linkedText}>
-                  บันทึกแล้วใบงานกลับไปให้หัวหน้าภาคระบุอะไหล่จากผลนี้
-                </Text>
-              </>
+                <TextStep n={4} title="ตรวจแล้วเจออะไร" done={!!finding.trim()}>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={finding}
+                    onChangeText={(v) => {
+                      setFinding(v);
+                      saveDraft(`inspect:${order.id}`, v);
+                    }}
+                    placeholder="เช่น วาล์วน้ำทิ้งค้าง บอร์ดมีรอยไหม้ ต้องเปลี่ยนทั้งสองตัว"
+                    placeholderTextColor={colors.textFaint}
+                    multiline
+                    numberOfLines={3}
+                    accessibilityLabel="ผลตรวจหน้างาน"
+                  />
+                </TextStep>
+                <MissingBox items={inspectMissing} why="ต้องแนบให้ครบ 3 อย่างก่อนส่งผลตรวจ" />
+                <NextBox>ส่งแล้วใบงานกลับไปให้หัวหน้าภาคดูไฟล์ และระบุอะไหล่จากผลนี้</NextBox>
+              </View>
             ) : null}
 
             {order.status === "WAITING_PARTS" ? (
@@ -4610,6 +4615,29 @@ function CloseModal({
     setOffParts((cur) => (cur.length ? cur : next.off));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, order]);
+  /**
+   * สรุปงานกับชื่อคนที่ไปที่พิมพ์ค้างไว้ — ปิดฟอร์มหรือแอปหลุดแล้วเปิดใหม่ยังอยู่ (เจ้าของงานขอ ต.ค. 69)
+   * ไม่ต้องมีปุ่มบันทึกร่าง · รูปไม่ต้องจำ ส่วนที่แนบไว้จากการ์ดไฟล์แนบนับให้อยู่แล้ว
+   */
+  const draftKey = `close:${order.id}`;
+  useEffect(() => {
+    if (!visible) return;
+    loadDraft(draftKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw) as { note?: string; otherWorkers?: string };
+        if (d.note) setNote(d.note);
+        if (d.otherWorkers) setOtherWorkers(d.otherWorkers);
+      } catch {
+        // ร่างเสีย — ไม่จำก็ได้ ไม่ให้ฟอร์มพัง
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, draftKey]);
+  function remember(patch: { note?: string; otherWorkers?: string }) {
+    const d = { note, otherWorkers, ...patch };
+    saveDraft(draftKey, d.note.trim() || d.otherWorkers.trim() ? JSON.stringify(d) : "");
+  }
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [beforeFiles, setBeforeFiles] = useState<PickedAttachment[]>([]);
@@ -4690,6 +4718,27 @@ function CloseModal({
   const claimsMissing = parts.some((p) => claimGaps(p).length > 0);
 
   /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
+  /** ไฟล์ปิดงานแต่ละขั้น — หมุนเฉพาะขั้นที่กำลังเตรียมไฟล์ ขั้นอื่นยังเห็นปุ่มตามปกติ */
+  const [picking, setPicking] = useState<string | null>(null);
+  async function pickFor(
+    role: string,
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment[] | PickedAttachment | null>,
+    keep: (files: PickedAttachment[]) => void
+  ) {
+    setPicking(role);
+    setBusy("กำลังเตรียมไฟล์");
+    try {
+      const got = await pick(setBusy);
+      const files = Array.isArray(got) ? got : got ? [got] : [];
+      if (files.length) keep(files);
+    } catch (e) {
+      showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+      setPicking(null);
+    }
+  }
+
   async function pickOne(
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>,
     keep: (file: PickedAttachment) => void
@@ -4753,6 +4802,7 @@ function CloseModal({
       });
       // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
       setDrafts({});
+      clearDraft(draftKey);
       setNote("");
       setParts([]);
       setSlip(null);
@@ -4825,6 +4875,102 @@ function CloseModal({
       }
     >
 
+      {/*
+        ไฟล์ปิดงานทีละขั้น 1-2-3 อยู่บนสุด (เจ้าของงานขอ ต.ค. 69 — แบบเดียวกับไฟล์ตรวจหน้างาน)
+        ช่างถ่ายตอนยืนหน้าเครื่องก่อน แล้วค่อยกรอกสรุป/คนที่ไปตอนนั่งพัก
+
+        ก่อนซ่อม · หลังซ่อม แยกขั้น — ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง
+        คนตรวจย้อนเทียบสองภาพนี้ สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบที่ปิดโดยไม่มีรูปตรวจย้อนไม่ได้
+      */}
+      <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
+        {([
+          ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0],
+          ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วเครื่องกลับมาใช้ได้", afterFiles, setAfterFiles, order.afterCount ?? 0],
+        ] as const).map(([role, label, hint, list, setList, already], i) => {
+          const add = (files: PickedAttachment[]) => setList((v) => [...v, ...files]);
+          const count = list.length + already;
+          return (
+            <EvidenceStep
+              key={role}
+              n={i + 1}
+              title={`รูป / วิดีโอ${label}`}
+              hint={hint}
+              done={count > 0}
+              doneText={`✓ ${count} ไฟล์`}
+              busy={picking === role ? busy : null}
+              primary={{
+                label: count ? "ถ่ายเพิ่ม" : "ถ่ายรูปทันที",
+                icon: "camera",
+                onPress: () => pickFor(role, (stage) => pickImageAttachment(true, stage), add),
+                accessibilityLabel: `ถ่ายรูป${label}`,
+              }}
+              secondary={{
+                label: count ? "เลือกเพิ่ม" : "เลือกจากอัลบั้ม",
+                icon: "images-outline",
+                // เลือกได้หลายรูปพร้อมกัน (เจ้าของงานขอ ต.ค. 69) — เดิมทีละรูป ช่างเลยแนบแค่รูปเดียว
+                onPress: () => pickFor(role, pickImageAttachments, add),
+                accessibilityLabel: `เลือกรูป${label}`,
+              }}
+              more={[
+                {
+                  label: "วิดีโอ",
+                  icon: "videocam-outline",
+                  onPress: () => pickFor(role, (stage) => pickVideoAttachment(stage), add),
+                  accessibilityLabel: `เลือกวิดีโอ${label}`,
+                },
+              ]}
+              footLeft="เลือกจากอัลบั้มได้หลายรูปพร้อมกัน · วิดีโอไม่เกิน 60 วินาที"
+            >
+              {already > 0 ? <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text> : null}
+              <FileStrip files={[...list]} onChange={(next) => setList(next)} />
+            </EvidenceStep>
+          );
+        })}
+
+        {/*
+          ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
+
+          รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
+          ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
+          ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
+          บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
+        */}
+        <EvidenceStep
+          n={3}
+          title="ป้ายรุ่นของเครื่อง"
+          hint={
+            order.machineCode
+              ? `ในระบบบันทึกไว้ว่า ${order.machineCode}${order.machineModel ? ` · ${order.machineModel}` : ""}${
+                  order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""
+                } — ถ่ายป้ายรุ่นมาเทียบ`
+              : "ถ่ายป้ายรุ่นของรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง"
+          }
+          done={!nameplateMissing}
+          doneText="✓ แนบแล้ว"
+          // ป้ายรุ่นใช้รูปเดียว — แนบแล้วเปลี่ยนได้ด้วยการลบรูปในแถบรูปย่อ ไม่ต้องมีปุ่มเพิ่ม
+          canEdit={nameplateMissing}
+          busy={picking === "NAMEPLATE" ? busy : null}
+          primary={{
+            label: "ถ่ายป้ายรุ่น",
+            icon: "camera",
+            onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage), (f) => setNameplate(f[0] ?? null)),
+            accessibilityLabel: "ถ่ายป้ายรุ่น",
+          }}
+          secondary={{
+            label: "เลือกจากอัลบั้ม",
+            icon: "images-outline",
+            onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage), (f) => setNameplate(f[0] ?? null)),
+            accessibilityLabel: "เลือกรูปป้ายรุ่น",
+          }}
+        >
+          {nameplate ? (
+            <FileStrip files={[nameplate]} onChange={(next) => setNameplate(next[0] ?? null)} />
+          ) : order.hasNameplate ? (
+            <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
+          ) : null}
+        </EvidenceStep>
+      </View>
+
       <Text style={styles.modalLabel}>ผลการทำงาน</Text>
       <View style={styles.options}>
         {results.map((r) => (
@@ -4848,7 +4994,10 @@ function CloseModal({
       <TextInput
         style={[styles.modalInput, summaryMissing && styles.inputMissing]}
         value={note}
-        onChangeText={setNote}
+        onChangeText={(v) => {
+          setNote(v);
+          remember({ note: v });
+        }}
         placeholder="เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ"
         placeholderTextColor={colors.textFaint}
         multiline
@@ -4883,7 +5032,10 @@ function CloseModal({
           <TextInput
             style={[styles.modalInput, styles.modalInputLine]}
             value={otherWorkers}
-            onChangeText={setOtherWorkers}
+            onChangeText={(v) => {
+              setOtherWorkers(v);
+              remember({ otherWorkers: v });
+            }}
             placeholder="เช่น นายสมชาย, นายสมศักดิ์"
             placeholderTextColor={colors.textFaint}
             accessibilityLabel="ชื่อช่างของทีม SUB"
@@ -4943,7 +5095,10 @@ function CloseModal({
         <TextInput
           style={[styles.modalInput, styles.modalInputLine]}
           value={otherWorkers}
-          onChangeText={setOtherWorkers}
+          onChangeText={(v) => {
+            setOtherWorkers(v);
+            remember({ otherWorkers: v });
+          }}
           placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
           placeholderTextColor={colors.textFaint}
           accessibilityLabel="คนอื่นที่ไปด้วย"
@@ -5231,126 +5386,6 @@ function CloseModal({
         </>
       ) : null}
 
-      {/*
-        รูปก่อนซ่อม · หลังซ่อม แยกช่อง (เจ้าของงานขอ ต.ค. 69 — แทนช่องรูปหน้างานช่องเดียว)
-        ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง คนตรวจย้อนเทียบสองภาพนี้
-        สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบงานที่ปิดโดยไม่มีรูปคือใบที่ตรวจย้อนไม่ได้
-      */}
-      {([
-        ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0, beforeMissing],
-        ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วปกติ", afterFiles, setAfterFiles, order.afterCount ?? 0, afterMissing],
-      ] as const).map(([role, label, hint, list, setList, already, missingNow]) => (
-        <View key={role}>
-          <Text style={styles.modalLabel}>
-            รูป / วิดีโอ {label} <Text style={{ color: colors.danger }}>*</Text>
-          </Text>
-          <View style={[styles.shotSlot, role === "BEFORE" ? styles.shotBefore : styles.shotAfter]}>
-            <Text style={styles.shotHint}>{hint}</Text>
-            {already > 0 ? (
-              <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text>
-            ) : null}
-            <FileStrip files={[...list]} onChange={(next) => setList(next)} />
-            {busy ? null : (
-              <View style={styles.options}>
-                {Platform.OS !== "web" ? (
-                  <TouchableOpacity
-                    style={styles.option}
-                    onPress={() => pickOne((stage) => pickImageAttachment(true, stage), (f) => setList((v) => [...v, f]))}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.optionText}>ถ่ายรูป</Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => pickOne((stage) => pickImageAttachment(false, stage), (f) => setList((v) => [...v, f]))}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`เลือกรูป${label}`}
-                >
-                  <Text style={styles.optionText}>เลือกรูป</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => pickOne(pickVideoAttachment, (f) => setList((v) => [...v, f]))}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`เลือกวิดีโอ${label}`}
-                >
-                  <Text style={styles.optionText}>วิดีโอ</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-          {missingNow ? (
-            <Text style={styles.warn}>
-              ต้องแนบรูปหรือวิดีโอ{label}อย่างน้อยหนึ่งไฟล์
-              {role === "AFTER" ? " — ใช้ยืนยันว่าเครื่องกลับมาใช้ได้" : ""}
-            </Text>
-          ) : null}
-        </View>
-      ))}
-
-      {/*
-        ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
-
-        รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
-        ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
-        ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
-      */}
-      {order.hasNameplate && !nameplate ? (
-        <>
-          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-          <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
-        </>
-      ) : (
-        <>
-          <Text style={styles.modalLabel}>ป้ายรุ่นของเครื่อง</Text>
-          {/* บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
-              ไม่ต้องถ่ายมาก่อนแล้วค่อยมีใครมาเทียบทีหลัง */}
-          {order.machineCode ? (
-            <Text style={styles.linkedText}>
-              ในระบบบันทึกไว้ว่า {order.machineCode}
-              {order.machineModel ? ` · ${order.machineModel}` : ""}
-              {order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""} —
-              ถ่ายป้ายรุ่นมาเทียบ
-            </Text>
-          ) : null}
-          {nameplate ? (
-            <FileStrip
-              files={[nameplate]}
-              onChange={(next) => setNameplate(next[0] ?? null)}
-            />
-          ) : busy ? null : (
-            <View style={styles.options}>
-              {Platform.OS !== "web" ? (
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() =>
-                    pickOne((stage) => pickImageAttachment(true, stage), setNameplate)
-                  }
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.optionText}>ถ่ายป้ายรุ่น</Text>
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                style={styles.option}
-                onPress={() =>
-                  pickOne((stage) => pickImageAttachment(false, stage), setNameplate)
-                }
-                activeOpacity={0.7}
-              >
-                <Text style={styles.optionText}>เลือกรูปป้ายรุ่น</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {nameplateMissing ? (
-            <Text style={styles.warn}>
-              ต้องแนบรูปป้ายรุ่นที่ถ่ายรอบนี้ — ใช้ไล่เทียบว่าไปถูกเครื่อง
-            </Text>
-          ) : null}
-        </>
-      )}
-
       {order.outageStillOpen ? (
         <Text style={styles.warn}>
           เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานล่าสุด ปิดใบงานได้ แต่เคสบนกระดานจะยังอยู่
@@ -5384,6 +5419,19 @@ function CloseModal({
         </>
       ) : null}
 
+      <MissingBox
+        items={[
+          beforeMissing && "รูปก่อนซ่อม",
+          afterMissing && "รูปหลังซ่อม",
+          nameplateMissing && "รูปป้ายรุ่น",
+          summaryMissing && "สรุปงานที่ทำ",
+          workersMissing && (isSub ? "ทีม SUB ที่เข้าทำ" : "ผู้เข้าปฏิบัติงาน"),
+          slipMissing && "รูปใบเหลือง",
+          claimsMissing && "ข้อมูลเคลมอะไหล่เก่า",
+          followUpMissing && "อะไหล่ที่ยังขาด",
+        ].filter((x): x is string => !!x)}
+        why="ต้องครบก่อนถึงจะกดยืนยันปิดงานได้"
+      />
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );

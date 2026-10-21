@@ -9,10 +9,10 @@
  * ไม่ต้องถ่ายซ้ำ
  */
 import React, { useState } from "react";
-import { Image, Platform, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
-import Spinner from "./Spinner";
+import EvidenceStep from "./EvidenceStep";
 import { apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import {
@@ -27,9 +27,18 @@ import type { Attachment } from "./WorkOrderAttachments";
 import { colors, radius, spacing } from "../theme";
 
 export const INSPECTION_SLOTS = [
-  { role: "INSPECT_SITE", label: "รูปหน้างาน", hint: "สภาพเครื่องและจุดที่เสีย ให้เห็นทั้งเครื่อง", video: false },
-  { role: "INSPECT_PART", label: "รูปอะไหล่ที่เสีย", hint: "ซูมให้เห็นรหัส/ป้ายบนอะไหล่ ถ้ามี", video: false },
-  { role: "INSPECT_VIDEO", label: "วิดีโอการทำงาน", hint: "ถ่ายตอนเครื่องทำงาน ให้เห็นอาการ (ไม่เกิน 60 วินาที)", video: true },
+  {
+    role: "INSPECT_SITE", label: "รูปหน้างาน", video: false, camera: "ถ่ายรูปทันที",
+    hint: "ถ่ายให้เห็นสภาพเครื่องและภาพรวมหน้างานโดยรอบ", foot: "เลือกจากอัลบั้มได้หลายรูปพร้อมกัน",
+  },
+  {
+    role: "INSPECT_PART", label: "รูปอะไหล่ที่เสีย", video: false, camera: "ถ่ายชิ้นส่วน",
+    hint: "ซูมให้เห็นชิ้นส่วน รหัส Serial No. หรือป้ายกำกับอะไหล่", foot: "ภาพคมชัด มองเห็นรหัสอะไหล่ชัดเจน",
+  },
+  {
+    role: "INSPECT_VIDEO", label: "วิดีโอการทำงาน", video: true, camera: "อัดวิดีโอทันที",
+    hint: "คลิปสั้นตอนเครื่องทำงาน ให้เห็นอาการผิดปกติหรือเสียง", foot: "ไม่เกิน 60 วินาที",
+  },
 ] as const;
 
 /** ไฟล์ตรวจของรอบนี้ — ใบที่ถูกส่งไปตรวจซ้ำต้องถ่ายใหม่ เพราะเครื่องอาจเปลี่ยนอาการไปแล้ว */
@@ -93,100 +102,65 @@ export default function InspectionSlots({
 
   return (
     <View style={styles.wrap}>
-      {INSPECTION_SLOTS.map((slot) => {
+      {INSPECTION_SLOTS.map((slot, i) => {
         const got = mine.filter((r) => r.role === slot.role);
-        const tone = slot.role === "INSPECT_SITE" ? styles.site : slot.role === "INSPECT_PART" ? styles.part : styles.video;
-        const ink = slot.role === "INSPECT_SITE" ? colors.roleSupervisor : slot.role === "INSPECT_PART" ? colors.warningInk : colors.roleAdmin;
-        const pick = () => add(slot.role, slot.video ? pickVideoAttachment : pickImageAttachments);
-        const noun = slot.video ? "วิดีโอ" : "รูป";
+        const noun = slot.video ? "คลิป" : "รูป";
         return (
-          <View key={slot.role} style={[styles.slot, tone]} accessibilityLabel={`กรอบ${slot.label}`}>
-            <View style={styles.head}>
-              <Text style={styles.label}>{slot.label}</Text>
-              <View style={{ flex: 1 }} />
-              {got.length > 0 ? (
-                <Text style={styles.ok}>✓ {got.length} {slot.video ? "คลิป" : "รูป"}</Text>
-              ) : canEdit ? (
-                <Text style={styles.miss}>ยังไม่มี</Text>
-              ) : (
-                <Text style={styles.none}>ไม่มี</Text>
-              )}
-            </View>
-            {!compact && canEdit ? <Text style={styles.hint}>{slot.hint}</Text> : null}
-
-            <View style={styles.thumbs}>
-              {got.map((row) => (
-                <View key={row.id}>
-                  <TouchableOpacity activeOpacity={0.8} onPress={() => onOpen(row)} accessibilityLabel={`ดูไฟล์ ${row.fileName}`}>
-                    {row.thumbnailDataUrl ? (
-                      <Image source={{ uri: row.thumbnailDataUrl }} style={styles.thumb} />
-                    ) : (
-                      <View style={[styles.thumb, styles.blank]}>
-                        <Ionicons name={attachmentIcon(row.kind)} size={22} color={colors.textFaint} />
-                      </View>
-                    )}
-                    {row.kind === "VIDEO" ? (
-                      <View style={styles.play}>
-                        <Ionicons name="play" size={11} color="#fff" />
-                      </View>
-                    ) : null}
-                  </TouchableOpacity>
-                  {canEdit && canRemove(row) ? (
-                    <TouchableOpacity style={styles.remove} onPress={() => onRemove(row)} activeOpacity={0.7} accessibilityLabel={`ลบ ${row.fileName}`}>
-                      <Ionicons name="close" size={12} color="#fff" />
+          <EvidenceStep
+            key={slot.role}
+            n={i + 1}
+            title={slot.label}
+            hint={compact && got.length ? undefined : slot.hint}
+            done={got.length > 0}
+            doneText={`✓ ${got.length} ${noun}`}
+            canEdit={canEdit}
+            accessibilityLabel={`กรอบ${slot.label}`}
+            busy={busy?.role === slot.role ? busy.label : null}
+            primary={{
+              label: got.length ? `${slot.video ? "อัด" : "ถ่าย"}เพิ่ม` : slot.camera,
+              icon: slot.video ? "videocam" : slot.role === "INSPECT_PART" ? "scan" : "camera",
+              onPress: () =>
+                add(slot.role, (stage) => (slot.video ? pickVideoAttachment(stage, true) : pickImageAttachment(true, stage))),
+              accessibilityLabel: `ถ่าย${slot.label}`,
+            }}
+            secondary={{
+              label: got.length ? "เลือกเพิ่ม" : slot.video ? "เลือกคลิปวิดีโอ" : "เลือกจากอัลบั้ม",
+              icon: slot.video ? "film-outline" : "images-outline",
+              onPress: () => add(slot.role, slot.video ? (stage) => pickVideoAttachment(stage) : pickImageAttachments),
+              // มีแล้วชื่อปุ่มเป็น "เพิ่ม…" — เทสต์และโปรแกรมอ่านหน้าจอแยกได้ว่านี่คือการเพิ่มไม่ใช่เริ่มใหม่
+              accessibilityLabel: `${got.length ? "เพิ่ม" : "เลือก"}${slot.label}`,
+            }}
+            footLeft={slot.foot}
+            footTip={slot.video ? "แนะนำ 15-30 วินาที" : undefined}
+          >
+            {got.length ? (
+              <View style={styles.thumbs}>
+                {got.map((row) => (
+                  <View key={row.id}>
+                    <TouchableOpacity activeOpacity={0.8} onPress={() => onOpen(row)} accessibilityLabel={`ดูไฟล์ ${row.fileName}`}>
+                      {row.thumbnailDataUrl ? (
+                        <Image source={{ uri: row.thumbnailDataUrl }} style={styles.thumb} />
+                      ) : (
+                        <View style={[styles.thumb, styles.blank]}>
+                          <Ionicons name={attachmentIcon(row.kind)} size={22} color={colors.textFaint} />
+                        </View>
+                      )}
+                      {row.kind === "VIDEO" ? (
+                        <View style={styles.play}>
+                          <Ionicons name="play" size={11} color="#fff" />
+                        </View>
+                      ) : null}
                     </TouchableOpacity>
-                  ) : null}
-                </View>
-              ))}
-
-              {canEdit ? (
-                busy?.role === slot.role ? (
-                  <View style={styles.busy}>
-                    <Spinner color={ink} size="small" />
-                    <Text style={styles.busyText}>{busy.label}…</Text>
-                  </View>
-                ) : got.length > 0 ? (
-                  // มีแล้วก็เพิ่มได้อีกเสมอ — อาการเดียวมักต้องถ่ายหลายมุม
-                  <TouchableOpacity
-                    style={[styles.addTile, { borderColor: ink }]}
-                    onPress={pick}
-                    disabled={!!busy}
-                    activeOpacity={0.7}
-                    accessibilityLabel={`เพิ่ม${slot.label}`}
-                  >
-                    <Ionicons name="add" size={20} color={ink} />
-                    <Text style={[styles.addTileText, { color: ink }]}>เพิ่ม{noun}</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <>
-                    {/* กล้องเฉพาะบนมือถือ — บนคอมพิวเตอร์ปุ่มนี้ไม่มีกล้องให้เปิด */}
-                    {Platform.OS !== "web" && !slot.video ? (
-                      <TouchableOpacity
-                        style={styles.btn}
-                        onPress={() => add(slot.role, (stage) => pickImageAttachment(true, stage))}
-                        disabled={!!busy}
-                        activeOpacity={0.7}
-                        accessibilityLabel={`ถ่าย${slot.label}`}
-                      >
-                        <Ionicons name="camera-outline" size={16} color={ink} />
-                        <Text style={[styles.btnText, { color: ink }]}>ถ่ายรูป</Text>
+                    {canEdit && canRemove(row) ? (
+                      <TouchableOpacity style={styles.remove} onPress={() => onRemove(row)} activeOpacity={0.7} accessibilityLabel={`ลบ ${row.fileName}`}>
+                        <Ionicons name="close" size={12} color="#fff" />
                       </TouchableOpacity>
                     ) : null}
-                    <TouchableOpacity
-                      style={styles.btn}
-                      onPress={pick}
-                      disabled={!!busy}
-                      activeOpacity={0.7}
-                      accessibilityLabel={`เลือก${slot.label}`}
-                    >
-                      <Ionicons name={slot.video ? "videocam-outline" : "images-outline"} size={16} color={ink} />
-                      <Text style={[styles.btnText, { color: ink }]}>{slot.video ? "เลือกวิดีโอ" : "เลือกรูป"}</Text>
-                    </TouchableOpacity>
-                  </>
-                )
-              ) : null}
-            </View>
-          </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </EvidenceStep>
         );
       })}
     </View>
@@ -195,19 +169,8 @@ export default function InspectionSlots({
 
 const styles = StyleSheet.create({
   wrap: { gap: spacing.sm },
-  slot: { borderWidth: 1.5, borderRadius: radius.md, padding: spacing.sm, gap: spacing.xs },
-  site: { borderColor: colors.roleSupervisor, backgroundColor: colors.roleSupervisorSoft },
-  part: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
-  // เส้นประให้ต่างจากกรอบรูปตั้งแต่มองแวบแรก — กรอบนี้รับเฉพาะวิดีโอ
-  video: { borderColor: colors.roleAdmin, backgroundColor: colors.roleAdminSoft, borderStyle: "dashed" },
-  head: { flexDirection: "row", alignItems: "center" },
-  label: { fontSize: 14, fontWeight: "700", color: colors.text },
-  ok: { fontSize: 12, fontWeight: "700", color: colors.successInk },
-  miss: { fontSize: 12, fontWeight: "700", color: colors.dangerInk },
-  none: { fontSize: 12, color: colors.textFaint },
-  hint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   thumbs: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, marginTop: 2 },
-  thumb: { width: 64, height: 64, borderRadius: radius.sm, backgroundColor: colors.card },
+  thumb: { width: 64, height: 64, borderRadius: radius.sm, backgroundColor: colors.tile },
   blank: { alignItems: "center", justifyContent: "center" },
   play: {
     position: "absolute",
@@ -231,29 +194,4 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  addTile: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.sm,
-    borderWidth: 1.5,
-    borderStyle: "dashed",
-    backgroundColor: colors.card,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  addTileText: { fontSize: 11, fontWeight: "700" },
-  btn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  btnText: { fontSize: 13, fontWeight: "700" },
-  busy: { flexDirection: "row", alignItems: "center", gap: spacing.xs, minHeight: 32 },
-  busyText: { fontSize: 12, color: colors.textMuted },
 });
