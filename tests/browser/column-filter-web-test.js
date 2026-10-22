@@ -1,6 +1,6 @@
 // ทดสอบ: ตัวกรองหัวคอลัมน์แบบ Excel ในรายการใบงาน (จอคอม · แอดมิน · แท็บทั้งหมด)
 //   · กดหัว "สถานะ" → เอาติ๊กทั้งหมดออก → ติ๊กค่าเดียว → ตกลง → ทุกแถวเป็นสถานะนั้น จำนวนตรงกับตัวเลขข้างค่า
-//   · หัวคอลัมน์ขึ้นสัญลักษณ์กรอง + แถบ "กรองตามหัวคอลัมน์" · เรียง "เครื่อง" ฮ→ก ได้ลำดับจริง
+//   · หัวคอลัมน์ขึ้นสัญลักษณ์กรอง + ป้าย "หัวคอลัมน์: …" ในแถบสรุปตัวกรอง · เรียง "เครื่อง" ฮ→ก ได้ลำดับจริง
 //   · ล้างตัวกรองคอลัมน์ → กลับมาครบ
 const { chromium } = require("playwright");
 const path = require("path");
@@ -50,16 +50,16 @@ const DIR = __dirname;
     const expected = apiRows.filter((r) => r.statusLabel === value).length;
     const visibleCodes = await codes();
     const wrong = visibleCodes.filter((c) => apiRows.find((r) => r.code === c)?.statusLabel !== value);
-    count === expected && (await vis(`เหลือ ${expected} ใบ`, false).count()) > 0 && !wrong.length
+    count === expected && (await vis(`แสดง ${expected} จาก`, false).count()) > 0 && !wrong.length
       ? pass(`กรองสถานะ "${value}" → เหลือ ${expected} ใบ ตรงกับ API · ทุกแถวที่เห็นเป็นสถานะนั้น`)
       : fail(`หลังกรอง: ตัวเลขข้างค่า ${count} · API ${expected} · แถวผิดสถานะ ${wrong.join(",")}`);
-    (await vis("กรองตามหัวคอลัมน์ 1 คอลัมน์", false).count()) > 0 ? pass("ขึ้นแถบบอกว่ากรองคอลัมน์อยู่") : fail("ไม่มีแถบบอกตัวกรอง");
+    (await vis("หัวคอลัมน์: สถานะ", false).count()) > 0 ? pass("แถบสรุปตัวกรองบอกว่ากรองคอลัมน์สถานะอยู่") : fail("ไม่มีแถบบอกตัวกรอง");
     await page.screenshot({ path: path.join(DIR, "column-filter.png") });
 
     await label("ล้างตัวกรองคอลัมน์ทั้งหมด").click();
     await page.waitForTimeout(1200);
     const back = await codes();
-    (await vis("กรองตามหัวคอลัมน์", false).count()) === 0 && back.some((c) => apiRows.find((r) => r.code === c)?.statusLabel !== value)
+    (await vis("หัวคอลัมน์:", false).count()) === 0 && back.some((c) => apiRows.find((r) => r.code === c)?.statusLabel !== value)
       ? pass("ล้างตัวกรองคอลัมน์ → แถบหาย สถานะอื่นกลับมา")
       : fail("ล้างแล้วยังกรองอยู่");
 

@@ -52,6 +52,27 @@ export function ocrWorker(): Promise<OcrWorker> {
 }
 
 
+/**
+ * รวมค่าที่อ่านได้หลายรอบเป็นตัวต่อตัว — เอาความยาวที่เจอบ่อยสุด แล้วแต่ละตำแหน่งใช้ตัวที่เจอบ่อยสุด
+ * sure = ทุกรอบอ่านตรงกันทุกตัว — ชนะแค่เสียงข้างมากยังผิดได้ (ป้ายจริง: 6 อ่านเป็น E ห้าในแปดรอบ) จึงให้ช่างตรวจกับรูป
+ */
+function majority(reads: string[]): { value: string; sure: boolean } {
+  const lens = new Map<number, number>();
+  for (const r of reads) lens.set(r.length, (lens.get(r.length) ?? 0) + 1);
+  const len = [...lens.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const same = reads.filter((r) => r.length === len);
+  let value = "";
+  let sure = same.length >= 2;
+  for (let i = 0; i < len; i++) {
+    const c = new Map<string, number>();
+    for (const r of same) c.set(r[i], (c.get(r[i]) ?? 0) + 1);
+    const [ch, k] = [...c.entries()].sort((a, b) => b[1] - a[1])[0];
+    value += ch;
+    if (k < same.length) sure = false;
+  }
+  return { value, sure };
+}
+
 /** ย่อรูปยาวสุดเท่านี้ก่อนหาบรรทัด — ทดลองกับรูปป้ายจริงแล้วพอ และเร็วกว่ารูปเต็มจากกล้องหลายเท่า */
 const PAGE_MAX = 1600;
 
@@ -147,20 +168,36 @@ export async function readPlatePhoto(
     const pad = h * 0.4;
     const sx = Math.max(0, x0 - pad * 2);
     const sy = Math.max(0, y0 - pad);
-    const sw = Math.min(page.width, x1 + pad * 2) - sx;
+    // บรรทัด MODEL: ตัดกว้างไปทางขวา — รุ่นเต็มของ Huebsch อยู่ในกรอบห่างออกไป รอบแรกมักแยกเป็นอีกบรรทัด
+    // ทดลองกับรูปป้ายจริง: ตัดเท่าบรรทัดได้แค่ "HL055L | HL055LWH" · กว้างแปดเท่าได้รหัสครบ 18 ตัว
+    const wide = /mode/i.test(l.text);
+    const right = wide ? Math.min(page.width, x1 + (x1 - x0) * 8) : Math.min(page.width, x1 + pad * 2);
+    const sw = right - sx;
     const sh = Math.min(page.height, y1 + pad) - sy;
-    for (const target of [64, 96]) {
+    const box = wide ? { x0, y0, x1: right, y1 } : l.bbox;
+    for (const target of wide ? [48, 64, 96, 128] : [64, 96]) {
       const c = canvasOf(page, sx, sy, sw, sh, (sw * target) / sh, target);
-      tally((await worker.recognize(c)).data.text, l.bbox);
+      tally((await worker.recognize(c)).data.text, box);
     }
   }
 
   const year = new Date().getFullYear();
   const out: Record<string, PlateValue> = {};
   for (const f of fields) {
-    const ranked = [...(votes.get(f.key) ?? new Map()).entries()].sort((a, b) => b[1].n - a[1].n);
+    let ranked = [...(votes.get(f.key) ?? new Map()).entries()].sort((a, b) => b[1].n - a[1].n);
     if (!ranked.length) continue;
-    const [best, { n, bbox }] = ranked[0];
+    // รุ่น: อ่านรหัสเต็มได้สักรอบก็ใช้รหัสเต็ม (เจ้าของงานขอ) — รอบแรกที่เห็นแค่ "MODEL: HL055L" ได้คะแนนรุ่นสั้นเยอะกว่าเสมอ
+    // รหัสยาวแต่ละรอบเพี้ยนคนละตัว จึงรวมเป็นตัวต่อตัวตามเสียงข้างมาก (ยาวเท่ากันเท่านั้น)
+    let merged: { value: string; sure: boolean } | null = null;
+    if (f.model) {
+      const long = ranked.filter(([v]) => v.length >= 12);
+      if (long.length) {
+        merged = majority(long.flatMap(([v, o]) => Array(o.n).fill(v)));
+        ranked = long;
+      }
+    }
+    const [top, { n, bbox }] = ranked[0];
+    const best = merged?.value ?? top;
     const rival = ranked[1]?.[1].n ?? 0;
     // ภาพตัดสีจากรูปจริงของบรรทัดนั้น — ให้คนตรวจเทียบค่ากับตัวหนังสือบนป้ายได้ทันที
     const bx = bbox.x0 / scale;
@@ -182,7 +219,8 @@ export async function readPlatePhoto(
     if (f.model) {
       const m = matchModel(best, registryModel);
       value = m.value;
-      needsCheck = m.needsCheck;
+      // ส่วนต่อท้ายรุ่นสั้นไม่มีทะเบียนให้เทียบ — มั่นใจได้เฉพาะเมื่อทุกรอบอ่านตรงกันทุกตัว
+      needsCheck = m.needsCheck || (merged !== null && !merged.sure);
     }
     out[f.key] = { value, source: "SCAN", crop, needsCheck };
   }

@@ -23,6 +23,8 @@ const BKK_MS = 7 * 3600_000;
 const bkkDay = (d: Date) => Math.floor((d.getTime() + BKK_MS) / DAY_MS);
 
 export interface PartsOutRow {
+  /** WorkOrderPart.id — ใช้บันทึกหมายเหตุของแถวนี้ */
+  partRowId: number;
   workOrderId: number;
   code: string;
   status: string;
@@ -48,6 +50,10 @@ export interface PartsOutRow {
   expectedAt: string | null;
   /** ของเข้าอีกกี่วัน · ติดลบ = เลยมาแล้ว · null = ยังไม่ใส่วัน */
   etaDays: number | null;
+  /** หมายเหตุของแถวสาขา+อะไหล่นี้ — เฉพาะหน้ารายงาน (ไม่ใส่ในไฟล์ Excel และไม่ขึ้นในใบงาน) */
+  note: string | null;
+  noteBy: string | null;
+  noteAt: string | null;
 }
 
 export interface PartsOutReport {
@@ -73,8 +79,12 @@ export async function buildPartsOutReport(opts: {
       },
     },
     select: {
+      id: true,
       sparePartId: true,
       quantity: true,
+      outNote: true,
+      outNoteAt: true,
+      outNoteBy: { select: { name: true } },
       unit: true,
       checkedAt: true,
       checkedBy: { select: { name: true } },
@@ -96,7 +106,10 @@ export async function buildPartsOutReport(opts: {
     const w = p.workOrder;
     // วันของเข้าเก็บเป็นวันล้วน (เที่ยงคืน UTC) — เทียบด้วยวันที่ตรง ๆ ไม่เลื่อนเวลาไทย
     const eta = w.partsExpectedAt ? Math.floor(w.partsExpectedAt.getTime() / DAY_MS) : null;
+    // หมายเหตุที่เขียนก่อนเช็คว่าหมดรอบนี้ = ของรอบก่อน (ของเข้าแล้วหมดซ้ำ) ไม่เกี่ยวกับรอบนี้แล้ว
+    const noteLive = !!p.outNote && !!p.outNoteAt && (!p.checkedAt || p.outNoteAt >= p.checkedAt);
     return {
+      partRowId: p.id,
       workOrderId: w.id,
       code: w.code,
       status: w.status,
@@ -119,6 +132,9 @@ export async function buildPartsOutReport(opts: {
       outDays: p.checkedAt ? today - bkkDay(p.checkedAt) : null,
       expectedAt: w.partsExpectedAt?.toISOString().slice(0, 10) ?? null,
       etaDays: eta === null ? null : eta - today,
+      note: noteLive ? p.outNote : null,
+      noteBy: noteLive ? p.outNoteBy?.name ?? null : null,
+      noteAt: noteLive ? p.outNoteAt!.toISOString() : null,
     };
   });
   // รอนานสุดก่อน — เรียงไว้ที่เดียว หน้าจอกับ Excel ได้ลำดับเดียวกัน

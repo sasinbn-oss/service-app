@@ -166,10 +166,15 @@ const login = async (code) =>
     await page.waitForTimeout(1500);
     await label(page, "สถานะอ่านป้าย").waitFor({ state: "detached", timeout: 180000 });
     const val = (f) => label(page, `ป้ายรุ่น ${f}`).inputValue();
-    // MODEL อ่านได้ HLOSSL แต่ตรงกับทะเบียน HL055L เมื่อมองข้าม O/0 S/5 → ใช้ตัวสะกดของทะเบียน
-    (await val("รุ่น")) === "HL055L" && (await val("Serial")) === "2402600330" && (await vis(page, "อ่านจากรูป").count()) >= 2
-      ? pass("ถ่ายรูปทั้งป้ายรูปเดียว: ระบบเลือกรุ่น HL055L (อ่านได้ HLOSSL แก้ตามทะเบียน) + Serial 2402600330 ติดป้าย \"อ่านจากรูป\"")
+    // MODEL: รุ่นเต็มในกรอบข้าง ๆ (HL055LWHPRXG6W0000 · เจ้าของงานขอ ต.ค. 69) อ่านได้ HLOSSL… → ตัวต้นแก้ตามทะเบียน HL055L
+    // ส่วนท้ายอ่านเพี้ยนได้ (6 → E/S) ระบบติดธงให้ช่างตรวจ — เทสต์ดูตัวต้นที่แก้ตามทะเบียน + ความยาวเต็ม 18 ตัว
+    const model = await val("รุ่น");
+    /^HL055LWHPRXG/.test(model) && model.length === 18 && (await val("Serial")) === "2402600330" && (await vis(page, "อ่านจากรูป").count()) >= 2
+      ? pass(`ถ่ายรูปทั้งป้ายรูปเดียว: ระบบเลือกรุ่นเต็ม ${model} (ตัวต้นแก้ตามทะเบียน HL055L) + Serial 2402600330 ติดป้าย "อ่านจากรูป"`)
       : fail(`ค่าที่อ่านจากรูป: รุ่น=${await val("รุ่น")} Serial=${await val("Serial")}`);
+    // ตัวท้ายแต่ละรอบอ่านไม่ตรงกัน (6 อ่านเป็น E/S) — ต้องขึ้นกรอบเหลืองบอกว่าส่วนท้ายไม่มั่นใจ ไม่ใช่ปล่อยผ่านเงียบ ๆ
+    (await vis(page, "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ", false).count()) > 0
+      ? pass("รุ่นเต็มที่ตัวท้ายอ่านไม่ตรงกันทุกรอบ ขึ้นเตือนให้ช่างดูกับรูป") : fail("รุ่นเต็มไม่ขึ้นเตือนทั้งที่ตัวท้ายไม่แน่นอน");
     (await label(page, "รูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ยังขาด:", false).first().innerText()).includes("ติ๊กตรวจค่ากับรูปป้าย")
       ? pass("โชว์รูปป้ายเต็มในฟอร์ม · ยังต้องติ๊กตรวจค่ากับรูป") : fail("ไม่มีรูปป้ายเต็ม/ไม่บังคับตรวจกับรูป");
     await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
@@ -236,9 +241,9 @@ const login = async (code) =>
     const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||("fieldCheck" ? 'install')::text from "PartClaim" where "workOrderId"=${id}`);
     const fields = JSON.parse(np.split("|")[0]);
     const f = (k) => fields.find((x) => x.key === k) ?? {};
-    f("model").value === "HL055L" && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
+    f("model").value === model && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
       /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|false')
-      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ไม่มีคำตอบเรื่องติดตั้ง")
+      ? pass(`ฐานข้อมูล: รุ่นเต็ม ${model} · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ไม่มีคำตอบเรื่องติดตั้ง`)
       : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}`).join(",")}`);
     sql(`select (c.nameplate->>'photoId')::int = (select max(a.id) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE')
            and (select count(*) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE') >= 1

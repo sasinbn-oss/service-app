@@ -22,6 +22,7 @@ import { colors, radius, shadow, spacing } from "../theme";
 type Props = NativeStackScreenProps<HomeStackParamList, "PartsOutReport">;
 
 interface Row {
+  partRowId: number;
   workOrderId: number;
   code: string;
   statusLabel: string;
@@ -41,6 +42,9 @@ interface Row {
   checkedBy: string | null;
   outDays: number | null;
   etaDays: number | null;
+  note: string | null;
+  noteBy: string | null;
+  noteAt: string | null;
 }
 
 type Tab = "part" | "branch";
@@ -58,6 +62,89 @@ function Eta({ r }: { r: Row }) {
   if (r.etaDays < 0) return <Text style={[styles.eta, styles.etaLate]}>ของเข้าเลยมา {-r.etaDays} วัน</Text>;
   if (r.etaDays === 0) return <Text style={[styles.eta, styles.etaSoon]}>ของเข้าวันนี้</Text>;
   return <Text style={[styles.eta, r.etaDays <= 3 && styles.etaSoon]}>ของเข้าอีก {r.etaDays} วัน</Text>;
+}
+
+/**
+ * หมายเหตุของแถวสาขา+อะไหล่ (เจ้าของงานขอ ต.ค. 69) — ขึ้นเฉพาะหน้านี้ ไม่ขึ้นในใบงาน
+ * ไว้จดเรื่องที่ระบบไม่มีช่องให้ เช่น สั่งผู้ขายเจ้าไหนแล้ว ลูกค้ารอได้ถึงเมื่อไร
+ * แก้ในที่ ไม่เปิดหน้าต่าง — คนไล่จดทีละสาขา เปิดปิดหน้าต่างทุกแถวช้า
+ */
+function RowNote({ r, onSaved }: { r: Row; onSaved: (next: Pick<Row, "note" | "noteBy" | "noteAt">) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(r.note ?? "");
+  const [saving, setSaving] = useState(false);
+  // เลขใบงานด้วย — สาขาเดียวรออะไหล่ตัวเดียวกันได้หลายใบ ชื่อปุ่มต้องไม่ซ้ำกัน
+  const label = `${r.code} ${r.branchCode} ${r.partCode}`;
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await api.put<Pick<Row, "note" | "noteBy" | "noteAt">>("/work-orders/reports/parts-out/note", {
+        partRowId: r.partRowId,
+        note: text,
+      });
+      onSaved(res.data);
+      setEditing(false);
+    } catch (e) {
+      showAlert("บันทึกหมายเหตุไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  if (editing)
+    return (
+      <View style={styles.noteEdit}>
+        <TextInput
+          style={styles.noteInput}
+          value={text}
+          onChangeText={setText}
+          placeholder="เช่น สั่งผู้ขายแล้ว รอ 2 สัปดาห์ · ลูกค้ารอได้"
+          placeholderTextColor={colors.textFaint}
+          multiline
+          maxLength={500}
+          autoFocus
+          accessibilityLabel={`ช่องหมายเหตุ ${label}`}
+        />
+        <View style={styles.noteBtns}>
+          <TouchableOpacity
+            onPress={() => {
+              setText(r.note ?? "");
+              setEditing(false);
+            }}
+            disabled={saving}
+            accessibilityLabel={`ยกเลิกหมายเหตุ ${label}`}
+          >
+            <Text style={styles.noteCancel}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.noteSave} onPress={save} disabled={saving} accessibilityLabel={`บันทึกหมายเหตุ ${label}`}>
+            {saving ? <Spinner size="small" color="#fff" /> : <Text style={styles.noteSaveText}>บันทึก</Text>}
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  if (!r.note)
+    return (
+      <TouchableOpacity onPress={() => setEditing(true)} accessibilityLabel={`เพิ่มหมายเหตุ ${label}`} style={{ alignSelf: "flex-start" }}>
+        <Text style={styles.noteAdd}>+ หมายเหตุ</Text>
+      </TouchableOpacity>
+    );
+  return (
+    <TouchableOpacity
+      style={styles.note}
+      onPress={() => {
+        setText(r.note ?? "");
+        setEditing(true);
+      }}
+      accessibilityLabel={`แก้หมายเหตุ ${label}`}
+    >
+      <Ionicons name="document-text-outline" size={14} color={colors.warningInk} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.noteText}>{r.note}</Text>
+        <Text style={styles.noteMeta}>
+          {[r.noteBy, r.noteAt ? formatDateTime(r.noteAt) : null].filter(Boolean).join(" · ")} · แตะเพื่อแก้
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
 }
 
 export default function PartsOutReportScreen({ navigation }: Props) {
@@ -108,7 +195,7 @@ export default function PartsOutReportScreen({ navigation }: Props) {
     return (rows ?? []).filter(
       (r) =>
         (filter === "all" || (filter === "late" ? isLate(r) : r.etaDays === null)) &&
-        (!q || [r.partName, r.partCode, r.branchCode, r.branchName, r.code].some((v) => v.toLowerCase().includes(q)))
+        (!q || [r.partName, r.partCode, r.branchCode, r.branchName, r.code, r.note ?? ""].some((v) => v.toLowerCase().includes(q)))
     );
   }, [rows, filter, search]);
 
@@ -144,6 +231,9 @@ export default function PartsOutReportScreen({ navigation }: Props) {
   }, [shown]);
 
   const openOrder = (id: number) => navigation.navigate("WorkOrderDetail", { id });
+  // บันทึกแล้วแก้แถวในมือเลย ไม่โหลดทั้งรายงานใหม่ — รายการไม่กระโดด ตำแหน่งที่กำลังไล่จดอยู่ไม่หาย
+  const setNote = (partRowId: number) => (next: Pick<Row, "note" | "noteBy" | "noteAt">) =>
+    setRows((list) => list && list.map((x) => (x.partRowId === partRowId ? { ...x, ...next } : x)));
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -268,7 +358,7 @@ export default function PartsOutReportScreen({ navigation }: Props) {
                 </TouchableOpacity>
                 <View style={styles.waits}>
                   {(open ? list : list.slice(0, FIRST)).map((r) => (
-                    <View key={`${r.workOrderId}`} style={styles.wait}>
+                    <View key={r.partRowId} style={styles.wait}>
                       <View style={styles.waitTop}>
                         <Text style={styles.waitBranch}>
                           {r.branchCode} <Text style={styles.waitName}>{r.branchName}</Text>
@@ -287,6 +377,7 @@ export default function PartsOutReportScreen({ navigation }: Props) {
                         {r.outDays !== null ? `หมดมาแล้ว ${r.outDays} วัน` : "ไม่ทราบวันที่เช็ค"}
                         {r.checkedBy ? ` · เช็คโดย ${r.checkedBy}` : ""}
                       </Text>
+                      <RowNote key={`${r.partRowId}-${r.noteAt}`} r={r} onSaved={setNote(r.partRowId)} />
                     </View>
                   ))}
                 </View>
@@ -323,7 +414,15 @@ export default function PartsOutReportScreen({ navigation }: Props) {
                       <Text style={styles.stage}>{r.statusLabel}</Text>
                       <Eta r={r} />
                     </View>
-                    <Text style={styles.branchParts}>{list.map((x) => `${x.partName} × ${qtyText(x)}`).join(" · ")}</Text>
+                    {/* ทีละอะไหล่ — หมายเหตุผูกกับสาขา+อะไหล่ แต่ละตัวจดคนละเรื่องได้ */}
+                    {list.map((x) => (
+                      <View key={x.partRowId} style={styles.branchPart}>
+                        <Text style={styles.branchParts}>
+                          {x.partName} × {qtyText(x)}
+                        </Text>
+                        <RowNote key={`${x.partRowId}-${x.noteAt}`} r={x} onSaved={setNote(x.partRowId)} />
+                      </View>
+                    ))}
                     <Text style={styles.waitMeta}>
                       {r.outDays !== null ? `หมดมาแล้ว ${r.outDays} วัน` : "ไม่ทราบวันที่เช็ค"}
                       {r.checkedBy ? ` · เช็คโดย ${r.checkedBy}` : ""}
@@ -397,5 +496,16 @@ const styles = StyleSheet.create({
   branchName: { fontSize: 13.5, color: colors.text },
   branchOrder: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 },
   branchParts: { fontSize: 13, color: colors.text },
+  branchPart: { gap: 3, paddingVertical: 2 },
+  noteAdd: { fontSize: 12, fontWeight: "700", color: colors.primaryInk, paddingVertical: 3 },
+  note: { flexDirection: "row", gap: 6, marginTop: 4, padding: 8, borderRadius: radius.sm, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  noteText: { fontSize: 13, lineHeight: 19, color: colors.text },
+  noteMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  noteEdit: { marginTop: 4, gap: 6 },
+  noteInput: { minHeight: 60, borderWidth: 1, borderColor: colors.primary, borderRadius: radius.sm, backgroundColor: colors.card, padding: 8, fontSize: 13.5, color: colors.text, textAlignVertical: "top" },
+  noteBtns: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: spacing.md },
+  noteCancel: { fontSize: 13, fontWeight: "600", color: colors.textMuted },
+  noteSave: { minWidth: 72, alignItems: "center", backgroundColor: colors.primary, borderRadius: radius.sm, paddingHorizontal: 14, paddingVertical: 7 },
+  noteSaveText: { fontSize: 13, fontWeight: "700", color: "#fff" },
   stage: { fontSize: 11.5, fontWeight: "700", color: colors.roleAdmin, backgroundColor: colors.roleAdminSoft, borderRadius: 6, paddingHorizontal: 6, overflow: "hidden" },
 });

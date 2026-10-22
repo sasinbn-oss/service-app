@@ -62,8 +62,14 @@ const fold = (s: string) =>
  */
 export function matchModel(read: string, registry: string | null | undefined): { value: string; needsCheck: boolean } {
   const reg = registry?.trim();
-  if (reg && fold(reg).length >= 3 && (fold(read) === fold(reg) || fold(read).includes(fold(reg)))) {
-    return { value: reg.toUpperCase(), needsCheck: false };
+  if (reg && fold(reg).length >= 3) {
+    const r = fold(read);
+    const g = fold(reg);
+    if (r === g) return { value: reg.toUpperCase(), needsCheck: false };
+    // รุ่นเต็มที่ขึ้นต้นด้วยรุ่นในทะเบียน (HL055L → HL055LWHPRXG6W0000 · เจ้าของงานขอ ต.ค. 69) — แก้ตัวต้นตามทะเบียน
+    // เก็บส่วนต่อท้ายตามที่อ่านได้ ไม่ตัดกลับเหลือรุ่นสั้นแบบเดิม (ค่าที่อ่านไม่มีช่องว่าง/ขีด ตัวต่อตัวตรงกับ fold)
+    if (r.startsWith(g) && read.length === r.length) return { value: reg.toUpperCase().replace(/[^A-Z0-9]/g, "") + read.slice(g.length), needsCheck: false };
+    if (r.includes(g)) return { value: reg.toUpperCase(), needsCheck: false };
   }
   return { value: read, needsCheck: true };
 }

@@ -12,6 +12,7 @@ import {
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -24,6 +25,19 @@ import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { HeadFilter, SortDir } from "../components/ColumnFilter";
+import {
+  ActiveBar,
+  ActiveTag,
+  FilterButton,
+  FilterDropdown,
+  FilterGroup,
+  FilterSheet,
+  QuickChips,
+  Toggle,
+  ViewTabs,
+  isSet,
+  pickedLabel,
+} from "../components/FilterBar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
@@ -180,6 +194,24 @@ function apptBucket(r: WorkOrderRow) {
   return a.days <= 7 ? "ภายใน 7 วัน" : "เกิน 7 วัน";
 }
 
+/**
+ * ชิป "ต้องรีบดู" (เจ้าของงานเลือก ต.ค. 69) — เรื่องที่คนเปิดหน้ารายการเข้ามาหาบ่อยที่สุด
+ * กดได้หลายอันพร้อมกัน = ใบที่เข้าอย่างใดอย่างหนึ่ง (ด่วน หรือ อะไหล่หมด) ไม่ใช่ต้องเข้าทุกข้อ
+ * — คนกดหลายอันเพราะอยากเห็นใบที่มีปัญหาทั้งหมด ไม่ใช่หาใบที่ซวยครบทุกเรื่อง
+ * นับเฉพาะใบที่ยังค้าง: ใบปิดแล้วที่เคยด่วน/เคยเลยนัด ไม่ใช่เรื่องที่ต้องรีบดูวันนี้
+ */
+type QuickKey = "urgent" | "partsOut" | "rolledBack" | "apptLate" | "stale" | "unassigned";
+const STALE_DAYS = 3;
+const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow) => boolean }[] = [
+  { key: "urgent", label: "ด่วน", dot: colors.danger, test: isHot },
+  { key: "partsOut", label: "อะไหล่หมด", dot: colors.dangerInk, test: (r) => r.stageActor !== null && !!r.partsOut },
+  { key: "rolledBack", label: "ย้อนขั้น", dot: colors.rollback, test: (r) => r.stageActor !== null && !!r.rolledBackFrom },
+  { key: "apptLate", label: "เลยวันนัด", dot: colors.warningInk, test: (r) => apptOf(r)?.rel?.tone === "late" },
+  // นับจากวันที่เข้าขั้นปัจจุบัน แบบเดียวกับ "ค้าง n วัน" ในรายการ — ใบเก่าที่เพิ่งขยับไม่ได้ถูกลืม
+  { key: "stale", label: `ค้างขั้นเดิมเกิน ${STALE_DAYS} วัน`, dot: colors.textMuted, test: (r) => r.stageActor !== null && stuckDays(r.stageSince) > STALE_DAYS },
+  { key: "unassigned", label: "ยังไม่มอบหมายช่าง", dot: colors.textFaint, test: (r) => r.stageActor !== null && !r.assignedTeam && !r.assignedToName },
+];
+
 const APPT_TONE: Record<string, { fg: string; bg: string; line: string }> = {
   PENDING: { fg: colors.warningInk, bg: colors.warningSoft, line: colors.warningBorder },
   CONFIRMED: { fg: colors.successInk, bg: colors.successSoft, line: colors.successLine },
@@ -285,6 +317,8 @@ export function stuckLabel(iso: string) {
 }
 
 type Filter = "INBOX" | "ACTIVE" | "AWAITING_CONFIRM" | "IN_PROGRESS" | "DONE" | "ALL";
+/** เดิม "เฉพาะงานของฉัน" — ที่จริงกรองใบที่มอบหมายให้ตัวเอง (assignedTo=me) ไม่ใช่ใบที่ตัวเองเปิด */
+const MINE_LABEL = "เฉพาะที่มอบหมายให้ฉัน";
 
 /**
  * ชิปกรองรายการ — ค่าที่ส่งต้องเป็นสถานะจริงที่เซิร์ฟเวอร์รู้จัก
@@ -498,6 +532,16 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       (!prefs.btype || r.branchType === prefs.btype) && (!kindOn || !prefs.kind || (prefs.kind === "sub") === !!r.outsource),
     [prefs.btype, prefs.kind, kindOn]
   );
+  // ชิป "ต้องรีบดู" — ไม่จำข้ามการเปิดแอปเหมือนตัวกรองหัวคอลัมน์ เปิดมาเจอรายการถูกกรองค้างไว้จะงงว่าใบหายไปไหน
+  const [quick, setQuick] = useState<Set<QuickKey>>(new Set());
+  const toggleQuick = (k: string) =>
+    setQuick((s) => {
+      const next = new Set(s);
+      if (!next.delete(k as QuickKey)) next.add(k as QuickKey);
+      return next;
+    });
+  const byQuick = useCallback((r: WorkOrderRow) => !quick.size || QUICK.some((q) => quick.has(q.key) && q.test(r)), [quick]);
+  const [sheetOpen, setSheetOpen] = useState(false);
   // ตัวกรองหัวคอลัมน์ (Excel) — ไม่จำข้ามการเปิดแอป ตั้งใจใช้ค้นเฉพาะกิจ จำไว้แล้วลืมจะงงว่าใบหายไปไหน
   const [colFilters, setColFilters] = useState<ColFilters>({});
   const [colSort, setColSort] = useState<{ key: ColKey; dir: SortDir } | null>(null);
@@ -509,7 +553,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   /** ค่าให้ติ๊กของแต่ละคอลัมน์ — นับจากใบที่ผ่านตัวกรองอื่นทั้งหมดยกเว้นคอลัมน์นั้นเอง (แบบ Excel) */
   const colValues = useMemo(() => {
     const out = {} as Record<ColKey, { value: string; count: number }[]>;
-    const base = rows.filter((r) => byOwner(r) && byType(r));
+    const base = rows.filter((r) => byOwner(r) && byType(r) && byQuick(r));
     for (const c of COLUMNS) {
       const m = new Map<string, number>();
       for (const r of base) if (byCols(r, c.key)) m.set(c.value(r), (m.get(c.value(r)) ?? 0) + 1);
@@ -520,16 +564,23 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         .sort((a, b) => a.value.localeCompare(b.value, "th", { numeric: true }));
     }
     return out;
-  }, [rows, byOwner, byType, byCols, colFilters]);
+  }, [rows, byOwner, byType, byQuick, byCols, colFilters]);
   const colFilterCount = Object.values(colFilters).filter(Boolean).length;
   // ตัวเลขบนแท็บนับหลังตัวกรองอื่น — ตรงกับจำนวนที่จะเห็นเมื่อกดเข้าไป
   const supTabCounts = useMemo(() => {
     const n: Record<SupTab, number> = { repair: 0, dispatch: 0, outsource: 0 };
-    if (supTabs) for (const r of rows) if (byOwner(r) && byType(r) && byCols(r)) n[supTabOf(r)]++;
+    if (supTabs) for (const r of rows) if (byOwner(r) && byType(r) && byCols(r) && byQuick(r)) n[supTabOf(r)]++;
     return n;
-  }, [supTabs, rows, byOwner, byType, byCols]);
+  }, [supTabs, rows, byOwner, byType, byCols, byQuick]);
+  /** ใบในแท็บที่เลือกอยู่ก่อนกรองอะไรเลย — ตัวหารของ "แสดง x จาก y ใบ" */
+  const tabRows = useMemo(() => (supTabs ? rows.filter((r) => supTabOf(r) === prefs.supTab) : rows), [rows, supTabs, prefs.supTab]);
+  /** ตัวเลขบนชิปต้องรีบดู — นับหลังตัวกรองอื่นทั้งหมด แต่ไม่รวมชิปด้วยกันเอง (กดเพิ่มแล้วได้เพิ่มเท่าตัวเลข) */
+  const quickItems = useMemo(() => {
+    const base = tabRows.filter((r) => byOwner(r) && byType(r) && byCols(r));
+    return QUICK.map((q) => ({ key: q.key, label: q.label, dot: q.dot, n: base.filter(q.test).length }));
+  }, [tabRows, byOwner, byType, byCols]);
   const shown = useMemo(() => {
-    const list = rows.filter((r) => byOwner(r) && byType(r) && byCols(r) && (!supTabs || supTabOf(r) === prefs.supTab));
+    const list = rows.filter((r) => byOwner(r) && byType(r) && byCols(r) && byQuick(r) && (!supTabs || supTabOf(r) === prefs.supTab));
     const at = (iso: string) => new Date(iso).getTime();
     const code = (a: WorkOrderRow, b: WorkOrderRow) =>
       a.branchCode.localeCompare(b.branchCode, "en", { numeric: true }) || a.code.localeCompare(b.code);
@@ -555,7 +606,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     // ใบที่ปิดแล้วไม่ดึงขึ้น ด่วนเมื่อเดือนก่อนไม่ได้แปลว่าต้องดูก่อนวันนี้
     const hot = list.filter(isHot);
     return hot.length ? [...hot, ...list.filter((r) => !isHot(r))] : list;
-  }, [rows, byOwner, byType, byCols, prefs.sort, prefs.supTab, supTabs, colSort]);
+  }, [rows, byOwner, byType, byCols, byQuick, prefs.sort, prefs.supTab, supTabs, colSort]);
 
   /**
    * แถวคั่น "ด่วน (n)" / "ปกติ (n)" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน
@@ -825,6 +876,62 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }
 
+  /**
+   * จอคอมเป็นปุ่มกางรายการเรียงในแถวเดียวกับช่องค้นหา · จอแคบ (และแอปมือถือ ซึ่งกล่องลอยกางในที่)
+   * รวมเป็นปุ่ม "ตัวกรอง" ปุ่มเดียว — ปุ่มสี่ห้าอันในจอ 400 จุดล้นจนต้องปัดหา
+   */
+  const compact = !table || Platform.OS !== "web";
+  const toggleMine = () => {
+    setLoading(true);
+    setMineOnly((v) => !v);
+  };
+  // ตัวเลขบนตัวเลือกนับจากใบที่ผ่านหัวคอลัมน์และชิปต้องรีบดูแล้ว — ตรงกับที่จะเห็นเมื่อกด
+  const groups = filterGroups({
+    rows: tabRows.filter((r) => byCols(r) && byQuick(r)),
+    prefs,
+    setPref,
+    byOwner,
+    byType,
+    hideOwner: supTabs,
+    showKind: kindOn,
+  });
+  // การเรียงแยกจากตัวกรองชัด ๆ (ไม่ทำให้ใบหาย) — เรียงจากหัวคอลัมน์อยู่ก็บอกบนปุ่ม กดเลือกแบบอื่นแล้วล้างอันนั้น
+  const sortGroup: FilterGroup = {
+    key: "sort",
+    label: "เรียง",
+    value: colSort ? "" : prefs.sort,
+    allValue: "urgent",
+    options: [...(colSort ? [{ value: "", label: "ตามหัวคอลัมน์" }] : []), ...SORTS],
+    onPick: (v) => {
+      if (!v) return;
+      setColSort(null);
+      setPref({ sort: v as Sort });
+    },
+  };
+  const activeTags: ActiveTag[] = [
+    ...(mineOnly ? [{ key: "mine", label: "มอบหมายให้ฉัน", onClear: toggleMine }] : []),
+    ...quickItems.filter((q) => quick.has(q.key)).map((q) => ({ key: `q-${q.key}`, label: q.label, onClear: () => toggleQuick(q.key) })),
+    ...groups.filter(isSet).map((g) => ({ key: g.key, label: `${g.label} ${pickedLabel(g)}`, onClear: () => g.onPick(g.allValue ?? "") })),
+    ...(colFilterCount
+      ? [
+          {
+            key: "cols",
+            label: `หัวคอลัมน์: ${COLUMNS.filter((c) => colFilters[c.key]).map((c) => c.label).join(" · ")}`,
+            onClear: () => setColFilters({}),
+            a11y: "ล้างตัวกรองคอลัมน์ทั้งหมด",
+          },
+        ]
+      : []),
+  ];
+  const activeCount = (mineOnly ? 1 : 0) + quick.size + groups.filter(isSet).length;
+  /** ล้างตัวกรองทั้งหมด — การเรียงกับคำค้นไม่ถูกล้าง (ไม่ได้ทำให้ใบหาย และคำค้นมีปุ่ม ✕ ของตัวเอง) */
+  function clearAll() {
+    setPrefs((p) => ({ ...p, owner: "", who: "", btype: "", kind: "" }));
+    setQuick(new Set());
+    setColFilters({});
+    if (mineOnly) toggleMine();
+  }
+
   const header = (
     <View
       style={foldable && !table ? styles.headInList : null}
@@ -863,6 +970,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
         <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
       </View>
+      <ViewTabs
+        tabs={FILTERS.map((f) => ({ value: f.value, label: f.label, n: counts[f.value] }))}
+        value={filter}
+        onPick={(v) => chooseFilter(v as Filter)}
+        right={compact ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
+      />
       {supTabs && !loading && !error ? (
         <View style={styles.supTabs}>
           {SUP_TABS.map((t) => {
@@ -884,9 +997,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           })}
         </View>
       ) : null}
-      {filter === "INBOX" && !loading ? (
-        <InboxAttention rows={shown} role={user?.role ?? null} onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })} />
-      ) : null}
       <View style={styles.toolbar}>
         <View style={styles.searchBox}>
           <Ionicons name="search" size={16} color={colors.textFaint} />
@@ -906,61 +1016,30 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </TouchableOpacity>
           ) : null}
         </View>
+        {loading || error ? null : compact ? (
+          <FilterButton count={activeCount} onPress={() => setSheetOpen(true)} />
+        ) : (
+          <>
+            {groups.map((g) => (
+              <FilterDropdown key={g.key} group={g} />
+            ))}
+            <View style={styles.tbSep} />
+            <FilterDropdown group={sortGroup} icon="swap-vertical" />
+          </>
+        )}
       </View>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-        <View style={styles.chipRow}>
-          {FILTERS.map((f) => (
-            <TouchableOpacity
-              key={f.value}
-              style={[styles.chip, filter === f.value && styles.chipOn]}
-              onPress={() => chooseFilter(f.value)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.chipText, filter === f.value && styles.chipTextOn]}>
-                {f.label}
-                {counts[f.value] ? ` (${counts[f.value]})` : ""}
-              </Text>
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity
-            style={[styles.chip, mineOnly && styles.chipOn]}
-            onPress={() => {
-              setLoading(true);
-              setMineOnly((v) => !v);
-            }}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.chipText, mineOnly && styles.chipTextOn]}>เฉพาะงานของฉัน</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-
       {!loading && !error && rows.length > 0 ? (
-        <ListFilters
-          // ตัวเลขในแถวสาขานับตามแท็บที่เลือก — ตรงกับรายการที่เห็นอยู่
-          rows={supTabs ? rows.filter((r) => supTabOf(r) === prefs.supTab) : rows}
-          hideOwner={supTabs}
-          showKind={kindOn}
-          prefs={prefs}
-          setPref={setPref}
-          byOwner={byOwner}
-          byType={byType}
-          colSort={colSort}
-          setColSort={setColSort}
-        />
-      ) : null}
-      {colFilterCount ? (
-        <View style={styles.colFilterBar}>
-          <Ionicons name="funnel" size={13} color={colors.primaryInk} />
-          <Text style={styles.colFilterText}>
-            กรองตามหัวคอลัมน์ {colFilterCount} คอลัมน์ ({COLUMNS.filter((c) => colFilters[c.key]).map((c) => c.label).join(" · ")}) — เหลือ{" "}
-            {shown.length} ใบ
-          </Text>
-          <TouchableOpacity onPress={() => setColFilters({})} accessibilityLabel="ล้างตัวกรองคอลัมน์ทั้งหมด">
-            <Text style={styles.colFilterClear}>ล้างตัวกรองคอลัมน์</Text>
-          </TouchableOpacity>
+        <View style={styles.quickWrap}>
+          <QuickChips items={quickItems} on={quick} toggle={toggleQuick} wrap={!compact} />
         </View>
+      ) : null}
+      {!loading && !error ? (
+        <View style={styles.activeWrap}>
+          <ActiveBar shown={shown.length} total={tabRows.length} tags={activeTags} onClearAll={clearAll} />
+        </View>
+      ) : null}
+      {filter === "INBOX" && !loading ? (
+        <InboxAttention rows={shown} role={user?.role ?? null} onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })} />
       ) : null}
     </View>
   );
@@ -986,7 +1065,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     <EmptyState
       icon="funnel-outline"
       title="ไม่มีใบงานตามตัวกรองนี้"
-      text="ลองเลือก “ทุกคน” หรือ “ทั้งหมด” ในแถวรอใคร / สาขา"
+      text="กด “ล้างทั้งหมด” ในแถบสรุปตัวกรอง หรือกด ✕ ทีละตัวที่ไม่ต้องการ"
     />
   ) : null;
 
@@ -1122,11 +1201,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             count={shown.length}
             parts={[
               FILTERS.find((f) => f.value === filter)?.label ?? "",
-              mineOnly ? "เฉพาะงานของฉัน" : "",
-              prefs.owner ? `รอ${ROLE_TABS.find((t) => t.value === prefs.owner)?.label ?? ""}` : "",
-              prefs.who ? whoLabel(rows, prefs.who, prefs.owner) : "",
-              prefs.btype,
-              prefs.sort !== "urgent" ? SORTS.find((o) => o.value === prefs.sort)?.label ?? "" : "",
+              ...activeTags.map((t) => t.label),
+              isSet(sortGroup) ? `เรียง${pickedLabel(sortGroup)}` : "",
               settledSearch.trim() ? `ค้น “${settledSearch.trim()}”` : "",
             ].filter(Boolean)}
             onPress={backToTop}
@@ -1145,23 +1221,31 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </Animated.View>
       ) : null}
       {foldable ? <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} top={barsH + 8} /> : null}
+      <FilterSheet
+        visible={sheetOpen && compact}
+        onClose={() => setSheetOpen(false)}
+        groups={groups}
+        sort={sortGroup}
+        quick={rows.length ? quickItems : []}
+        quickOn={quick}
+        toggleQuick={toggleQuick}
+        extra={<Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
+        shown={shown.length}
+        onClearAll={clearAll}
+      />
     </View>
   );
 }
 
 /**
- * แถว "รอใคร · สาขา · เรียง" ใต้ชิปสถานะ
- *
- * เลือกบทบาทแล้วขึ้นแถวที่สองให้เลือกต่อว่าเป็นของใคร — หัวหน้าภาครายคน ช่างรายทีม
- * แอดมินไม่แยกคน เพราะแอดมินทุกคนทำแทนกันได้ทุกขั้น
+ * ชื่อ "คนไหน/ทีมไหน" — ใช้ทั้งในตัวเลือก (withRegion: ใส่ภาคต่อท้าย แยกคนชื่อซ้ำ) และบนแถบหุบ/แถบสรุป
  */
-/** ชื่อ "คนไหน/ทีมไหน" ที่เลือกไว้ — ใช้บนแถบหุบ ตัวเลือกจริงสร้างใน ListFilters จากรายการเดียวกัน */
-function whoLabel(rows: WorkOrderRow[], who: Who, owner: Role | "") {
+function whoLabel(rows: WorkOrderRow[], who: Who, owner: Role | "", withRegion = false) {
   if (who === "none") return owner === "SUPERVISOR" ? "ยังไม่มีหัวหน้าภาคดูแล" : "ยังไม่มีทีม";
   if (who.startsWith("t:")) return `ทีม${who.slice(2)}`;
   for (const r of rows) {
     const sup = r.waitingOnSupervisors.find((x) => `s:${x.id}` === who);
-    if (sup) return sup.name;
+    if (sup) return withRegion && sup.region ? `${sup.name} (${sup.region})` : sup.name;
   }
   return "";
 }
@@ -1186,162 +1270,99 @@ function FoldedBar({ count, parts, onPress }: { count: number; parts: string[]; 
   );
 }
 
-function ListFilters({
+/**
+ * กลุ่มตัวกรอง "รอใคร · คนไหน · ทีม · สาขา" — จอคอมเป็นปุ่มกางรายการ จอแคบเป็นหัวข้อในหน้าต่างตัวกรอง
+ *
+ * ตัวเลขของแต่ละตัวเลือกนับโดยใช้ตัวกรองของกลุ่มอื่น (เลือก DODO แล้วตัวเลขของ "หัวหน้าภาค"
+ * คือใบ DODO ที่รอหัวหน้าภาค) — ตัวเลขบนตัวเลือกจึงเท่ากับจำนวนที่จะเห็นเมื่อกด
+ * เลือกบทบาทแล้วมีกลุ่มที่สองให้เลือกต่อว่าเป็นของใคร — หัวหน้าภาครายคน ช่างรายทีม
+ * แอดมินไม่แยกคน เพราะแอดมินทุกคนทำแทนกันได้ทุกขั้น
+ */
+function filterGroups({
   rows,
   prefs,
   setPref,
   byOwner,
   byType,
-  colSort,
-  setColSort,
   hideOwner,
   showKind,
 }: {
+  /** ใบในแท็บที่เลือก ผ่านตัวกรองหัวคอลัมน์และชิปต้องรีบดูแล้ว */
   rows: WorkOrderRow[];
-  /** แถว "ทีมปกติ / ใบงาน SUB" — แอดมินกับหัวหน้าภาค (ช่างไม่มีใบงาน SUB) */
-  showKind?: boolean;
-  /** ไม่แสดงแถว "รอใคร" — กล่องงานหัวหน้าภาค (แยกเป็นแท็บแล้ว) */
-  hideOwner?: boolean;
   prefs: ListPrefs;
   setPref: (p: Partial<ListPrefs>) => void;
   byOwner: (r: WorkOrderRow) => boolean;
   byType: (r: WorkOrderRow) => boolean;
-  /** เรียงจากหัวคอลัมน์อยู่ — ปุ่มเรียงของแถบนี้ไม่ขึ้นว่าเลือก และกดแล้วล้างการเรียงจากหัวคอลัมน์ */
-  colSort: unknown;
-  setColSort: (v: null) => void;
-}) {
+  /** ไม่มีกลุ่ม "รอใคร" — กล่องงานหัวหน้าภาค (แยกเป็นแท็บแล้ว) */
+  hideOwner?: boolean;
+  /** กลุ่ม "ทีมปกติ / ใบงาน SUB" — แอดมินกับหัวหน้าภาค (ช่างไม่มีใบงาน SUB) */
+  showKind?: boolean;
+}): FilterGroup[] {
   const typed = rows.filter(byType);
   const ownerCount = (role: Role | "") => typed.filter((r) => !role || r.stageActor === role).length;
   const typeCount = (t: "" | "DODO" | "COCO") =>
     rows.filter((r) => byOwner(r) && (!t || r.branchType === t) && (!prefs.kind || (prefs.kind === "sub") === !!r.outsource)).length;
   const kindCount = (k: "" | "normal" | "sub") =>
     rows.filter((r) => byOwner(r) && (!prefs.btype || r.branchType === prefs.btype) && (!k || (k === "sub") === !!r.outsource)).length;
+  const groups: FilterGroup[] = [];
 
-  // ตัวเลือก "ของใคร" สร้างจากใบที่มีอยู่จริง — ไม่มีชื่อที่กดแล้วได้รายการว่าง
-  const whoOptions = useMemo(() => {
-    if (prefs.owner !== "SUPERVISOR" && prefs.owner !== "EMPLOYEE") return null;
-    const map = new Map<Who, { label: string; n: number }>();
-    for (const r of typed) {
-      if (r.stageActor !== prefs.owner) continue;
-      for (const k of whoKeys(r)) {
-        const label =
-          k === "none"
-            ? prefs.owner === "SUPERVISOR"
-              ? "ยังไม่มีหัวหน้าภาคดูแล"
-              : "ยังไม่มีทีม"
-            : k.startsWith("s:")
-              ? (() => {
-                  const sup = r.waitingOnSupervisors.find((x) => `s:${x.id}` === k)!;
-                  return sup.region ? `${sup.name} (${sup.region})` : sup.name;
-                })()
-              : `ทีม${k.slice(2)}`;
-        const cur = map.get(k);
-        map.set(k, { label, n: (cur?.n ?? 0) + 1 });
+  if (!hideOwner) {
+    groups.push({
+      key: "owner",
+      label: "รอใคร",
+      value: prefs.owner,
+      onPick: (v) => setPref({ owner: v as Role | "", who: "" }),
+      options: [
+        { value: "", label: "ทุกคน", n: ownerCount("") },
+        ...ROLE_TABS.map((t) => ({ value: t.value, label: t.label, dot: t.color, n: ownerCount(t.value) })),
+      ],
+    });
+    // ตัวเลือก "ของใคร" สร้างจากใบที่มีอยู่จริง — ไม่มีชื่อที่กดแล้วได้รายการว่าง
+    if (prefs.owner === "SUPERVISOR" || prefs.owner === "EMPLOYEE") {
+      const map = new Map<Who, { label: string; n: number }>();
+      for (const r of typed) {
+        if (r.stageActor !== prefs.owner) continue;
+        for (const k of whoKeys(r)) {
+          const cur = map.get(k);
+          map.set(k, { label: cur?.label ?? whoLabel([r], k, prefs.owner, true), n: (cur?.n ?? 0) + 1 });
+        }
       }
+      const who = [...map.entries()].sort((a, b) =>
+        a[0] === "none" ? 1 : b[0] === "none" ? -1 : a[1].label.localeCompare(b[1].label, "th")
+      );
+      groups.push({
+        key: "who",
+        label: prefs.owner === "SUPERVISOR" ? "หัวหน้าภาคคนไหน" : "ทีมไหน",
+        value: prefs.who,
+        onPick: (v) => setPref({ who: v }),
+        options: [{ value: "", label: "ทุกคน", n: ownerCount(prefs.owner) }, ...who.map(([k, o]) => ({ value: k, label: o.label, n: o.n }))],
+      });
     }
-    return [...map.entries()].sort((a, b) => (a[0] === "none" ? 1 : b[0] === "none" ? -1 : a[1].label.localeCompare(b[1].label, "th")));
-  }, [typed, prefs.owner]);
-
-  return (
-    <View style={styles.filterPanel}>
-      {hideOwner ? null : (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fRow}>
-        <Text style={styles.fLabel}>รอใคร</Text>
-        <Seg on={!prefs.owner} label="ทุกคน" n={ownerCount("")} onPress={() => setPref({ owner: "", who: "" })} />
-        {ROLE_TABS.map((t) => (
-          <Seg
-            key={t.value}
-            on={prefs.owner === t.value}
-            label={t.label}
-            dot={t.color}
-            n={ownerCount(t.value)}
-            onPress={() => setPref({ owner: t.value, who: "" })}
-          />
-        ))}
-      </ScrollView>
-      )}
-      {whoOptions && !hideOwner ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.fRowLine} contentContainerStyle={styles.fRow}>
-          <Text style={styles.fLabel}>{prefs.owner === "SUPERVISOR" ? "หัวหน้าภาคคนไหน" : "ทีมไหน"}</Text>
-          <Pill on={!prefs.who} label="ทุกคน" n={ownerCount(prefs.owner)} onPress={() => setPref({ who: "" })} />
-          {whoOptions.map(([k, o]) => (
-            <Pill key={k} on={prefs.who === k} label={o.label} n={o.n} onPress={() => setPref({ who: k })} />
-          ))}
-        </ScrollView>
-      ) : null}
-      {showKind ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={hideOwner ? null : styles.fRowLine} contentContainerStyle={styles.fRow}>
-          <Text style={styles.fLabel}>ทีม</Text>
-          {(
-            [
-              ["", "ทั้งหมด"],
-              ["normal", "ทีมปกติ"],
-              ["sub", "ใบงาน SUB"],
-            ] as const
-          ).map(([k, label]) => (
-            <Seg key={k} on={prefs.kind === k} label={label} n={kindCount(k)} onPress={() => setPref({ kind: k })} />
-          ))}
-        </ScrollView>
-      ) : null}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={hideOwner && !showKind ? null : styles.fRowLine} contentContainerStyle={styles.fRow}>
-        <Text style={styles.fLabel}>สาขา</Text>
-        {(["", "DODO", "COCO"] as const).map((t) => (
-          <Seg key={t} on={prefs.btype === t} label={t || "ทั้งหมด"} n={typeCount(t)} onPress={() => setPref({ btype: t })} />
-        ))}
-        <View style={styles.fSep} />
-        <Text style={styles.fLabel}>เรียง</Text>
-        {SORTS.map((o) => (
-          <Seg
-            key={o.value}
-            on={!colSort && prefs.sort === o.value}
-            label={o.label}
-            onPress={() => {
-              setColSort(null);
-              setPref({ sort: o.value });
-            }}
-          />
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
-function Seg({ on, label, n, dot, onPress }: { on: boolean; label: string; n?: number; dot?: string; onPress: () => void }) {
-  return (
-    // ชื่อมีคำว่า "ตัวกรอง" นำหน้า — ข้อความบนปุ่ม (หัวหน้าภาค, DODO) ซ้ำกับป้ายในแถวรายการ
-    // คนใช้โปรแกรมอ่านจอกับเทสต์จะได้แยกปุ่มกรองออกจากป้ายได้
-    <TouchableOpacity
-      style={[styles.seg, on && styles.segOn]}
-      onPress={onPress}
-      activeOpacity={0.8}
-      accessibilityLabel={`ตัวกรอง ${label}`}
-      accessibilityState={{ selected: on }}
-    >
-      {dot ? <View style={[styles.segDot, { backgroundColor: dot }]} /> : null}
-      <Text style={[styles.segText, on && styles.segTextOn]}>{label}</Text>
-      {n !== undefined ? (
-        <View style={[styles.segCount, on && styles.segCountOn]}>
-          <Text style={[styles.segCountText, on && styles.segCountTextOn]}>{n}</Text>
-        </View>
-      ) : null}
-    </TouchableOpacity>
-  );
-}
-
-function Pill({ on, label, n, onPress }: { on: boolean; label: string; n: number; onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      style={[styles.pill, on && styles.pillOn]}
-      onPress={onPress}
-      activeOpacity={0.8}
-      accessibilityLabel={`ตัวกรอง ${label}`}
-      accessibilityState={{ selected: on }}
-    >
-      <Text style={[styles.pillText, on && styles.pillTextOn]}>
-        {label} <Text style={styles.pillN}>{n}</Text>
-      </Text>
-    </TouchableOpacity>
-  );
+  }
+  if (showKind)
+    groups.push({
+      key: "kind",
+      label: "ทีม",
+      value: prefs.kind,
+      onPick: (v) => setPref({ kind: v as ListPrefs["kind"] }),
+      options: [
+        { value: "", label: "ทั้งหมด", n: kindCount("") },
+        { value: "normal", label: "ทีมปกติ", n: kindCount("normal") },
+        { value: "sub", label: "ใบงาน SUB", hint: "จ่ายให้ทีม outsource", n: kindCount("sub") },
+      ],
+    });
+  groups.push({
+    key: "btype",
+    label: "สาขา",
+    value: prefs.btype,
+    onPick: (v) => setPref({ btype: v as ListPrefs["btype"] }),
+    options: [
+      { value: "", label: "ทั้งหมด", n: typeCount("") },
+      { value: "DODO", label: "DODO", hint: "แฟรนไชส์", n: typeCount("DODO") },
+      { value: "COCO", label: "COCO", hint: "สาขาบริษัท", n: typeCount("COCO") },
+    ],
+  });
+  return groups;
 }
 
 /** ป้าย "รอใคร" ในแถว/การ์ด — บทบาท + ชื่อหัวหน้าภาคหรือทีม */
@@ -1711,6 +1732,9 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
 }
 
 const styles = StyleSheet.create({
+  tbSep: { width: 1, height: 26, backgroundColor: colors.border, marginHorizontal: 2 },
+  quickWrap: { paddingTop: spacing.md },
+  activeWrap: { paddingTop: spacing.sm },
   // แท็บแบบขีดเส้นใต้ ไม่ใช่ปุ่มกลม — หน้าตาต่างจากชิปข้างล่าง ให้เห็นว่าเป็นชั้นบนสุดของกล่องงาน
   supTabs: {
     flexDirection: "row",
@@ -1804,6 +1828,7 @@ const styles = StyleSheet.create({
   },
   toolbar: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
@@ -1812,7 +1837,8 @@ const styles = StyleSheet.create({
   },
   searchBox: {
     flex: 1,
-    minWidth: 0,
+    // จอคอม: ปุ่มตัวกรองเยอะจนแถวไม่พอ ช่องค้นหาตกไปบรรทัดใหม่แทนการหดจนพิมพ์ไม่เห็น
+    minWidth: 220,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
@@ -1853,19 +1879,6 @@ const styles = StyleSheet.create({
   },
   tr: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: 12 },
   trLine: { borderBottomWidth: 1, borderBottomColor: colors.border },
-  colFilterBar: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 8,
-  },
-  colFilterText: { flex: 1, minWidth: 200, fontSize: 12.5, color: colors.primaryInk },
-  colFilterClear: { fontSize: 12.5, fontWeight: "700", color: colors.primaryInk, textDecorationLine: "underline" },
   thead: { backgroundColor: colors.sky50, borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 10 },
   th: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
   td: { fontSize: 14, lineHeight: 21, color: colors.text },
@@ -1908,45 +1921,6 @@ const styles = StyleSheet.create({
   sepTextUrgent: { color: colors.dangerInk },
   rowBar: { position: "absolute", left: 0, top: 10, bottom: 10, width: 4, borderTopRightRadius: 4, borderBottomRightRadius: 4 },
   thSort: { flexDirection: "row", alignItems: "center", gap: 4 },
-  filterPanel: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    paddingVertical: 6,
-    flexShrink: 0,
-  },
-  fRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.md, paddingVertical: 4 },
-  // เส้นคั่นอยู่ที่ตัว ScrollView ไม่ใช่เนื้อหาข้างใน — ไม่งั้นเส้นยาวแค่ถึงปุ่มสุดท้าย ไม่เต็มกรอบ
-  fRowLine: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 4, marginTop: 4 },
-  fLabel: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted, marginRight: 2 },
-  fSep: { width: 1, alignSelf: "stretch", backgroundColor: colors.border, marginHorizontal: 6 },
-  seg: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: "transparent",
-    backgroundColor: colors.tile,
-  },
-  segOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
-  segDot: { width: 8, height: 8, borderRadius: 4 },
-  segText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
-  segTextOn: { color: colors.primaryInk },
-  segCount: { backgroundColor: colors.card, borderRadius: 999, paddingHorizontal: 6 },
-  segCountOn: { backgroundColor: colors.primary },
-  segCountText: { fontSize: 11, lineHeight: 17, fontWeight: "800", color: colors.textMuted },
-  segCountTextOn: { color: "#fff" },
-  pill: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4, backgroundColor: colors.card },
-  pillOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
-  pillText: { fontSize: 13, lineHeight: 20, color: colors.text },
-  pillTextOn: { color: "#fff" },
-  pillN: { fontWeight: "800" },
   waitTag: { alignSelf: "flex-start", borderRadius: 7, paddingHorizontal: 8, paddingVertical: 1, maxWidth: "100%" },
   waitText: { fontSize: 12, lineHeight: 19, fontWeight: "700" },
   waitWho: { fontWeight: "500" },
@@ -1982,22 +1956,6 @@ const styles = StyleSheet.create({
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   pageSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
-  // flexShrink: 0 — รายการด้านล่างเป็น flex: 1 แล้วเบียดแถวชิปจนเตี้ยเหลือครึ่งเดียว
-  // เห็นชัดเมื่อเปิดจากแท็บใบงานที่ความสูงจอถูกแบ่งให้แถบบนกับแถบล่างแล้ว
-  chipScroll: { flexGrow: 0, flexShrink: 0, paddingVertical: spacing.md },
-  chipRow: { flexDirection: "row", gap: spacing.xs, paddingHorizontal: spacing.lg },
-  chip: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    paddingVertical: 7,
-    paddingHorizontal: 14,
-    backgroundColor: colors.card,
-  },
-  // ชิปที่เลือกเป็นกรมท่าทึบตาม .chip.active ของต้นแบบ — ฟ้าอ่อนเดิมแยกจากชิปที่ไม่ได้เลือกยาก
-  chipOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
-  chipText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
-  chipTextOn: { color: "#fff" },
   list: { padding: spacing.lg, paddingTop: 0, gap: spacing.md },
   card: {
     backgroundColor: colors.card,

@@ -143,7 +143,18 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await a.waitForTimeout(3000);
     await vis(a, "ใบงานซ่อม").first().click();
     await a.waitForTimeout(3500);
-    await vis(a, "ใบงาน SUB").first().click();
+    // ตัวกรองแบบใหม่ (ต.ค. 69): จอคอมเป็นปุ่ม "ทีม ▾" · จอแคบอยู่ในหน้าต่างตัวกรอง
+    if (await label(a, "เลือก ทีม").count()) {
+      await label(a, "เลือก ทีม").first().click();
+      await a.waitForTimeout(500);
+      await label(a, "ตัวกรอง ใบงาน SUB").last().click();
+    } else {
+      await label(a, "เปิดตัวกรอง").first().click();
+      await a.waitForTimeout(1000);
+      await label(a, "ตัวกรอง ใบงาน SUB").last().click();
+      await a.waitForTimeout(500);
+      await a.locator('[aria-label^="ดู "]').locator("visible=true").last().click();
+    }
     await a.waitForTimeout(1500);
     (await vis(a, B.code).count()) && (await vis(a, J.code).count()) === 0
       ? pass("แอดมินกรอง ใบงาน SUB: เห็นใบ SUB ไม่เห็นใบทีมปกติ") : fail("ชิป ใบงาน SUB กรองไม่ถูก");

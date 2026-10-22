@@ -3,6 +3,8 @@
 #   · ขึ้นเฉพาะตัวที่แอดมินเช็คว่าหมด (ตัวที่มีของไม่ขึ้น) · ชื่อ/รหัสอะไหล่ จำนวน สาขา เครื่อง คนเช็ค หมดมาแล้วกี่วัน
 #   · วันของเข้า: เลยแล้วติดลบ · ไม่ใส่ = null · ของมาแล้วเช็คใหม่ว่ามี = หายจากรายงาน · ใบทดสอบไม่ขึ้น
 #   · หัวหน้าภาคนอกพื้นที่ไม่เห็น · ช่าง 403 · ไฟล์ Excel มีเลขใบงานจริง
+#   · หมายเหตุทีละแถวสาขา+อะไหล่: บันทึก/ล้างได้ · ไม่อยู่ใน Excel · แถวที่ไม่อยู่ในรายงาน/นอกพื้นที่แก้ไม่ได้
+#     · เช็คว่าหมดซ้ำรอบใหม่ หมายเหตุรอบก่อนไม่ขึ้น
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -60,6 +62,34 @@ curl -s "localhost:4000$P" -H "$(H $A)" -o /tmp/parts-out-test.xlsx
 unzip -p /tmp/parts-out-test.xlsx xl/sharedStrings.xml 2>/dev/null | grep -q "$C1" && unzip -p /tmp/parts-out-test.xlsx xl/workbook.xml | grep -q "รวมตามอะไหล่" \
   && pass "Excel มีเลขใบงานจริง และชีตรวมตามอะไหล่" || fail "Excel ไม่มีข้อมูล (path=$P)"
 rm -f /tmp/parts-out-test.xlsx
+
+# ── หมายเหตุ (เจ้าของงานขอ ต.ค. 69) — ทีละแถวสาขา+อะไหล่ ขึ้นเฉพาะหน้ารายงาน
+NOTE() { curl -s -X PUT localhost:4000/api/work-orders/reports/parts-out/note -H "$(H $1)" -H 'Content-Type: application/json' -d "$2"; }
+NCODE() { curl -s -o /dev/null -w '%{http_code}' -X PUT localhost:4000/api/work-orders/reports/parts-out/note -H "$(H $1)" -H 'Content-Type: application/json' -d "$2"; }
+PR2=$(DB "select id from \"WorkOrderPart\" where \"workOrderId\"=$W2 and \"sparePartId\"=$BOARD and kind='WAITING'")
+PR1OK=$(DB "select id from \"WorkOrderPart\" where \"workOrderId\"=$W1 and \"sparePartId\"=$BOARD and kind='WAITING'")
+NOTE $A "{\"partRowId\":$PR2,\"note\":\"  สั่งผู้ขาย ABC แล้ว รอ 2 สัปดาห์  \"}" >/dev/null
+[ "$(DB "select \"outNote\"||'|'||(\"outNoteById\"=(select id from \"User\" where \"employeeCode\"='A001'))::text from \"WorkOrderPart\" where id=$PR2")" = "สั่งผู้ขาย ABC แล้ว รอ 2 สัปดาห์|true" ] \
+  && pass "บันทึกหมายเหตุลงแถวสาขา+อะไหล่ (ตัดช่องว่างหัวท้าย · เก็บคนเขียน)" || fail "ฐานข้อมูลหลังบันทึก: $(DB "select \"outNote\" from \"WorkOrderPart\" where id=$PR2")"
+[ "$(REP $A | J "(r=>r.note+'|'+r.noteBy)(d.rows.find(r=>r.partRowId==$PR2))")" = "สั่งผู้ขาย ABC แล้ว รอ 2 สัปดาห์|$ANAME" ] \
+  && pass "รายงานส่งหมายเหตุ + คนเขียนของแถวนั้น" || fail "รายงานไม่มีหมายเหตุ"
+P=$(REP $A "?format=xlsx" | J 'd.path')
+curl -s "localhost:4000$P" -H "$(H $A)" -o /tmp/parts-out-note.xlsx
+! unzip -p /tmp/parts-out-note.xlsx xl/sharedStrings.xml | grep -q "ผู้ขาย ABC" && pass "หมายเหตุไม่อยู่ในไฟล์ Excel (เฉพาะหน้ารายงาน)" || fail "หมายเหตุหลุดไปใน Excel"
+rm -f /tmp/parts-out-note.xlsx
+[ "$(NCODE $A "{\"partRowId\":$PR1OK,\"note\":\"x\"}")" = "404" ] && pass "แถวที่มีของ (ไม่อยู่ในรายงาน) ใส่หมายเหตุไม่ได้ 404" || fail "แถวที่มีของใส่หมายเหตุได้"
+[ "$(NCODE $S2 "{\"partRowId\":$PR2,\"note\":\"x\"}")" = "404" ] && pass "หัวหน้าภาคนอกพื้นที่แก้ไม่ได้" || fail "นอกพื้นที่แก้ได้"
+[ "$(NCODE $T "{\"partRowId\":$PR2,\"note\":\"x\"}")" = "403" ] && pass "ช่างแก้หมายเหตุไม่ได้ 403" || fail "ช่างแก้ได้"
+LONG=$(node -e 'process.stdout.write("ก".repeat(501))')
+[ "$(NCODE $A "{\"partRowId\":$PR2,\"note\":\"$LONG\"}")" = "400" ] && pass "ยาวเกิน 500 ตัวอักษร 400" || fail "ยาวเกินแต่รับ"
+# เช็คว่าหมดซ้ำ (รอบใหม่) — หมายเหตุรอบก่อนไม่ขึ้น
+sleep 1
+POST $A "work-orders/$W2/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false}]}" >/dev/null
+[ "$(REP $A | J "d.rows.find(r=>r.partRowId==$PR2).note")" = "null" ] && pass "เช็คว่าหมดรอบใหม่ หมายเหตุรอบก่อนไม่ขึ้น" || fail "หมายเหตุเก่ายังขึ้นหลังเช็คใหม่"
+NOTE $A "{\"partRowId\":$PR2,\"note\":\"รอบใหม่\"}" >/dev/null
+NOTE $A "{\"partRowId\":$PR2,\"note\":\"   \"}" >/dev/null
+[ "$(DB "select coalesce(\"outNote\",'NULL') from \"WorkOrderPart\" where id=$PR2")" = "NULL" ] && [ "$(REP $A | J "d.rows.find(r=>r.partRowId==$PR2).note")" = "null" ] \
+  && pass "ส่งข้อความว่าง = ลบหมายเหตุ" || fail "ลบหมายเหตุไม่ได้"
 
 # ของมาแล้ว — แอดมินเช็คใหม่ว่ามี ใบหายจากรายงาน
 POST $A "work-orders/$W1/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-R4\"}]}" >/dev/null
