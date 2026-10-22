@@ -2695,9 +2695,12 @@ const partsCheckSchema = z.object({
   /**
    * ของคลังอื่น ต้องโอนไหม (เจ้าของงานขอ ต.ค. 69) — คลังที่อยู่ในพื้นที่หน้างานอยู่แล้วไม่ต้องโอน
    * หัวหน้าภาคเบิกจากคลังนั้นส่งช่างได้เลย (PARTS_PICKUP) · ต้องโอน → เบิกแล้วโอนมาคลังส่งมอบ (PARTS_TRANSFER)
-   * ไม่ส่งมา = ต้องโอน (แอปรุ่นก่อนที่ยังไม่มีคำถามนี้)
+   *
+   * noTransfer = รหัสอะไหล่ที่ไม่ต้องโอน (เลือกทีละชิ้น — ใบเดียวมีทั้งชิ้นที่ต้องโอนและไม่ต้องโอนได้)
+   * transfer: false = ไม่ต้องโอนทุกชิ้น (รูปแบบแรก) · ไม่ส่งทั้งคู่ = ต้องโอน (แอปรุ่นก่อนที่ยังไม่มีคำถามนี้)
    */
   transfer: z.boolean().optional(),
+  noTransfer: z.array(z.number().int().positive()).max(20).optional(),
   // ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
   pickupNote: z.string().trim().max(500).optional(),
   // ของหมด — วันที่คาดว่าของเข้า ขึ้นบนแถบขั้นตอนคู่กับป้ายแดง "อะไหล่หมด"
@@ -2785,9 +2788,14 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     .map((r) => r.sparePartId);
   // ไม่ต้องโอน = ถือว่าของอยู่คลังที่จะเบิกส่งมอบแล้ว เหมือนตัวที่โอนมาถึงแล้ว
   const noTransferIds = new Set(
-    parsed.data.transfer === false
-      ? parsed.data.results.filter((r) => otherIds.includes(r.sparePartId) && !arrivedAt(r.sparePartId, r.warehouse)).map((r) => r.sparePartId)
-      : []
+    parsed.data.results
+      .filter(
+        (r) =>
+          otherIds.includes(r.sparePartId) &&
+          !arrivedAt(r.sparePartId, r.warehouse) &&
+          (parsed.data.transfer === false || (parsed.data.noTransfer ?? []).includes(r.sparePartId))
+      )
+      .map((r) => r.sparePartId)
   );
   const arrivedIds = new Set(
     parsed.data.results
@@ -2955,6 +2963,17 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
  * ไม่มีช่องแยกในฐานข้อมูล: แอดมินใส่เลขใบเบิกคลังอื่นไม่ได้อยู่แล้ว (parts-check) จึงแยกออกจากกันได้เสมอ
  */
 /** ตัวที่หัวหน้าภาคต้องเบิกส่งมอบจากคลังที่ไม่ใช่ 94 — ต้องโอนมาถึงแล้ว (ยังไม่โอน = ขั้นเบิกและโอน) */
+/**
+ * ชิ้นที่แอดมินบอกว่าไม่ต้องโอน = มี transferredAt แต่ไม่มีเลขใบโอน (ของอยู่คลังนั้นอยู่แล้ว)
+ * ใบถูกส่งกลับแอดมิน (เบิก/โอนไม่ได้) → ล้าง ให้แอดมินตอบใหม่ทุกชิ้นว่าโอนไหม · ชิ้นที่โอนมาถึงจริงเก็บไว้
+ */
+async function clearNoTransfer(tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0], workOrderId: number) {
+  await tx.workOrderPart.updateMany({
+    where: { workOrderId, kind: "WAITING", transferNo: null, transferredAt: { not: null }, requisitionNo: null },
+    data: { transferredAt: null },
+  });
+}
+
 function pendingPickup(p: {
   inStock: boolean | null;
   warehouse: string | null;
@@ -3151,6 +3170,7 @@ router.post("/:id/parts-transfer/return", requireAuth, async (req: AuthRequest, 
   if (!reason.success) return res.status(400).json({ error: reason.error.issues[0]?.message });
   if (!(await guardStage(req, res, id, ["PARTS_TRANSFER", "PARTS_IN_TRANSIT"]))) return;
   await prisma.$transaction(async (tx) => {
+    await clearNoTransfer(tx, id);
     // คลังที่ค้างไว้เป็นต้นทางเดิม (ไม่ใช่ปลายทางที่โอนไม่ถึง) — แอดมินเห็นค่าตั้งต้นที่ตัวเองบอกไว้
     const moving = await tx.workOrderPart.findMany({
       where: { workOrderId: id, kind: "WAITING", transferNo: { not: null }, transferredAt: null },
@@ -3248,6 +3268,7 @@ router.post("/:id/parts-pickup/return", requireAuth, async (req: AuthRequest, re
   if (!reason.success) return res.status(400).json({ error: reason.error.issues[0]?.message });
   if (!(await guardStage(req, res, id, "PARTS_PICKUP"))) return;
   await prisma.$transaction(async (tx) => {
+    await clearNoTransfer(tx, id);
     await tx.workOrder.update({
       where: { id },
       data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },

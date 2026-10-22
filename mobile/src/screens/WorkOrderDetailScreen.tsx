@@ -2875,10 +2875,11 @@ function StageModal({
    */
   const [splitPaid, setSplitPaid] = useState<boolean | null>(null);
   /**
-   * ของคลังอื่น ต้องโอนไหม (เจ้าของงานขอ ต.ค. 69) — คลังในพื้นที่หน้างานไม่ต้องโอน หัวหน้าภาคเบิกส่งช่างได้เลย
-   * ต้องเลือก ไม่ตั้งค่าให้ — เลือกผิดทางหนึ่งคือโอนเปล่า ๆ อีกทางคือช่างไปเบิกไกลจากหน้างาน
+   * ของคลังอื่น ต้องโอนไหม ทีละชิ้น (เจ้าของงานขอ ต.ค. 69) — คลังในพื้นที่หน้างานไม่ต้องโอน หัวหน้าภาคเบิกส่งช่างได้เลย
+   * ใบเดียวมีทั้งชิ้นที่ต้องโอนและไม่ต้องโอนได้ · ต้องเลือกทุกชิ้น ไม่ตั้งค่าให้ — เลือกผิดทางหนึ่งคือโอนเปล่า ๆ
+   * อีกทางคือช่างไปเบิกไกลจากหน้างาน
    */
-  const [transferChoice, setTransferChoice] = useState<boolean | null>(null);
+  const [transferChoice, setTransferChoice] = useState<Record<number, boolean>>({});
   // ขั้นเบิกอะไหล่: ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
   const [pickupNote, setPickupNote] = useState("");
   // ขั้นหัวหน้าภาคเบิก: คลังที่เบิกจริง + เลขใบเบิก รายตัว (อาจเบิกคนละคลังคนละใบ) · เบิกไม่ได้ = ส่งกลับแอดมิน
@@ -2931,7 +2932,7 @@ function StageModal({
     );
     setSplitOut(true);
     setSplitPaid(null);
-    setTransferChoice(null);
+    setTransferChoice({});
     // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้
     const oldVisit = pf?.scheduledAt && pf.scheduledAt >= todayBkk() ? pf.scheduledAt : null;
     const visitDay = order.scheduledAt ? order.scheduledAt.slice(0, 10) : prev(null, oldVisit, "วันนัด");
@@ -3087,7 +3088,7 @@ function StageModal({
               p.offCatalog || checks[p.sparePartId]?.warehouse !== adminWarehouse ? null : requisitionNo.trim() || null,
           })),
           pickupNote: toPickup.length ? pickupNote.trim() || undefined : undefined,
-          ...(askTransfer ? { transfer: transferChoice ?? undefined } : {}),
+          ...(askTransfer.length ? { noTransfer: askTransfer.filter((pid) => transferChoice[pid] === false) } : {}),
           splitOut: mixed && splitOut,
           ...(mixed && splitOut && paidOrder ? { splitPaid: splitPaid ?? undefined } : {}),
           expectedAt: checkOut && expectedAt ? expectedAt : null,
@@ -3194,7 +3195,9 @@ function StageModal({
         })
       : [];
   // ตัวที่โอนมาถึงคลังนี้แล้วไม่ต้องถาม — ถามเฉพาะของที่ยังอยู่คลังต้นทาง
-  const askTransfer = toPickup.some((p) => !(p.transferredAt && p.warehouse === checks[p.sparePartId]?.warehouse));
+  const askTransfer = toPickup
+    .filter((p) => !(p.transferredAt && p.warehouse === checks[p.sparePartId]?.warehouse))
+    .map((p) => p.sparePartId);
   // มีของที่คลังลาดพร้าว 94 อย่างน้อยหนึ่งตัวในรอบนี้ = แอดมินเบิก = ต้องมีเลขใบเบิก
   const needsRequisition =
     order.status === "PARTS_REQUESTED" &&
@@ -3295,7 +3298,7 @@ function StageModal({
   const paidOrder = order.logs.some((l) => l.action === "PAID");
   const blocked =
     (mixed && splitOut && paidOrder && splitPaid === null) ||
-    (askTransfer && transferChoice === null) ||
+    askTransfer.some((pid) => transferChoice[pid] === undefined) ||
     quoteBlocked ||
     sourcingBlocked ||
     paymentBlocked ||
@@ -3667,10 +3670,30 @@ function StageModal({
                         <Text style={styles.pickupTag} accessibilityLabel={`หัวหน้าภาคเบิก ${part.partCode}`}>
                           {part.transferredAt && part.warehouse === c.warehouse
                             ? `โอนมาถึง${c.warehouse}แล้ว — หัวหน้าภาคเบิกส่งมอบ ไม่ใช้เลขใบเบิกข้างบน`
-                            : transferChoice === false
+                            : transferChoice[part.sparePartId] === false
                               ? `หัวหน้าภาคเบิกจาก${c.warehouse}ส่งช่าง (ไม่ต้องโอน) — ไม่ใช้เลขใบเบิกข้างบน`
                               : `หัวหน้าภาคเบิกจาก${c.warehouse}แล้วโอนมาคลังส่งมอบ — ไม่ใช้เลขใบเบิกข้างบน`}
                         </Text>
+                      ) : null}
+                      {askTransfer.includes(part.sparePartId) ? (
+                        <View style={styles.options} accessibilityLabel={`ต้องโอนไหม ${part.partCode}`}>
+                          {([
+                            [true, "ต้องโอน", "ต้องโอน — มาคลังส่งมอบ"],
+                            [false, "ไม่ต้องโอน", "ไม่ต้องโอน — คลังอยู่ในพื้นที่"],
+                          ] as const).map(([v, key, text]) => {
+                            const on = transferChoice[part.sparePartId] === v;
+                            return (
+                              <TouchableOpacity
+                                key={key}
+                                style={[styles.option, on && styles.optionOn]}
+                                onPress={() => setTransferChoice((x) => ({ ...x, [part.sparePartId]: v }))}
+                                accessibilityLabel={`${key} ${part.partCode}`}
+                              >
+                                <Text style={[styles.optionText, on && styles.optionTextOn]}>{text}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
                       ) : null}
                       {part.transferredAt && part.transferFrom ? (
                         <Text style={styles.linkedText} accessibilityLabel={`โอนมาแล้ว ${part.partCode}`}>
@@ -3680,33 +3703,6 @@ function StageModal({
                     </View>
                   );
                 })}
-                {askTransfer ? (
-                  <>
-                    <Text style={styles.modalLabel}>
-                      ของคลังอื่น ต้องโอนไหม <Text style={{ color: colors.danger }}>*</Text>
-                    </Text>
-                    <View style={styles.options} accessibilityLabel="ของคลังอื่น ต้องโอนไหม">
-                      <TouchableOpacity
-                        style={[styles.option, transferChoice === true && styles.optionOn]}
-                        onPress={() => setTransferChoice(true)}
-                        accessibilityLabel="ต้องโอน"
-                      >
-                        <Text style={[styles.optionText, transferChoice === true && styles.optionTextOn]}>
-                          ต้องโอน — เบิกแล้วโอนมาคลังส่งมอบ
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.option, transferChoice === false && styles.optionOn]}
-                        onPress={() => setTransferChoice(false)}
-                        accessibilityLabel="ไม่ต้องโอน"
-                      >
-                        <Text style={[styles.optionText, transferChoice === false && styles.optionTextOn]}>
-                          ไม่ต้องโอน — คลังอยู่ในพื้นที่ เบิกส่งช่างได้เลย
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                ) : null}
                 {toPickup.length ? (
                   <View style={styles.pickupBox}>
                     {/* ไม่บังคับ — ชื่อคลังที่เลือกบอกที่เบิกอยู่แล้ว (เจ้าของงานตกลง ต.ค. 69) */}
@@ -3722,9 +3718,9 @@ function StageModal({
                       accessibilityLabel="หมายเหตุถึงหัวหน้าภาค"
                     />
                     <Text style={styles.linkedText}>
-                      {askTransfer && transferChoice === false
-                        ? `${toPickup.length} รายการอยู่คลังอื่น — ไม่ต้องโอน หัวหน้าภาคเบิกจากคลังนั้นแล้วจ่ายงานได้เลย`
-                        : `${toPickup.length} รายการอยู่คลังอื่น — หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ โอนเสร็จแล้วกลับมาให้แอดมินเบิกส่งมอบ (โอนไปคลังอื่นนอกจาก 94 หัวหน้าภาคเบิกส่งมอบเอง)`}
+                      {askTransfer.some((pid) => transferChoice[pid] !== false)
+                        ? `${toPickup.length} รายการอยู่คลังอื่น — ชิ้นที่ต้องโอน หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ ชิ้นที่ไม่ต้องโอนเบิกพร้อมกันตอนส่งมอบ (โอนมาคลัง 94 กลับมาให้แอดมินเบิกส่งมอบก่อน)`
+                        : `${toPickup.length} รายการอยู่คลังอื่น — ไม่ต้องโอน หัวหน้าภาคเบิกจากคลังนั้นแล้วจ่ายงานได้เลย`}
                     </Text>
                   </View>
                 ) : null}
@@ -3807,6 +3803,14 @@ function StageModal({
                         {partTitle(p)} × {p.quantity} — {p.warehouse}
                       </Text>
                     ))}
+                    {/* ชิ้นที่แอดมินบอกว่าไม่ต้องโอน — ไม่อยู่ในฟอร์มโอน เบิกพร้อมกันตอนส่งมอบ (แบบ ก. เจ้าของงานเลือก ต.ค. 69) */}
+                    {order.waitingParts
+                      .filter((p) => isPickup(p, adminWarehouse) && !p.transferNo)
+                      .map((p) => (
+                        <Text key={`nt-${p.sparePartId}`} style={styles.pickupNoteText} accessibilityLabel={`ไม่ต้องโอน ${p.partCode}`}>
+                          {partTitle(p)} × {p.quantity} — {p.warehouse} · ไม่ต้องโอน เบิกตอนส่งมอบ
+                        </Text>
+                      ))}
                     {pickupAdminNote(pickupRequest.note) ? (
                       <Text style={styles.linkedText}>หมายเหตุ: {pickupAdminNote(pickupRequest.note)}</Text>
                     ) : null}

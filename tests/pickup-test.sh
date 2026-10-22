@@ -149,6 +149,29 @@ DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W6" >/dev/null
 POST $A work-orders/$W6/parts-check "{\"transfer\":true,\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
 [ "$(ST $W6)" = "PARTS_TRANSFER" ] && pass "ต้องโอน → หัวหน้าภาคเบิกและโอน (เหมือนเดิม)" || fail "ต้องโอน: $(ST $W6)"
 
+echo "═══ ใบเดียวมีทั้งชิ้นที่ต้องโอนและไม่ต้องโอน (เลือกทีละชิ้น · แบบ ก.)"
+W7=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W7"
+DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W7" >/dev/null
+MIX="{\"noTransfer\":[$BELT],\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}"
+POST $A work-orders/$W7/parts-check "$MIX" >/dev/null
+[ "$(ST $W7)|$(XF $W7 $BOARD)|$(XF $W7 $BELT)" = "PARTS_TRANSFER|-|-|-|false|-|-|-|true" ] \
+  && pass "ผสมกัน → เบิกและโอน · ขอนแก่นรอโอน · กระบี่ไม่ต้องโอน (อยู่คลังนั้นแล้ว)" || fail "ผสม: $(ST $W7) $(XF $W7 $BOARD) $(XF $W7 $BELT)"
+R=$(POST $S work-orders/$W7/parts-transfer "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-7\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-7\"}]}")
+[ "$(ST $W7)" = "PARTS_IN_TRANSIT" ] && pass "หัวหน้าภาคกรอกโอนเฉพาะชิ้นที่ต้องโอน" || fail "โอนเฉพาะชิ้น: $(ST $W7) $(echo $R | head -c 150)"
+POST $S work-orders/$W7/parts-transfer/arrived '{}' >/dev/null
+[ "$(ST $W7)" = "PARTS_REQUESTED" ] && pass "ของถึงคลัง 94 → แอดมินเบิกส่งมอบก่อน" || fail "หลังโอนถึง: $(ST $W7)"
+POST $A work-orders/$W7/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-M7\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
+[ "$(ST $W7)|$(PART $W7 $BOARD)" = "PARTS_PICKUP|true|$L94|RQ-M7" ] \
+  && pass "แอดมินเบิกชิ้นคลัง 94 → หัวหน้าภาคเบิกชิ้นที่ไม่ต้องโอน (ไม่ถามโอนซ้ำ)" || fail "หลังแอดมินเบิก: $(ST $W7) $(PART $W7 $BOARD)"
+POST $S work-orders/$W7/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"KB-M7\"}]}" >/dev/null
+[ "$(ST $W7)" = "PARTS_CHECKED" ] && pass "เบิกครบทุกชิ้น → จ่ายงาน" || fail "เบิกครบ: $(ST $W7)"
+W8=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W8"
+DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W8" >/dev/null
+POST $A work-orders/$W8/parts-check "$MIX" >/dev/null
+POST $S work-orders/$W8/parts-transfer/return '{"reason":"คลังขอนแก่นไม่มีของ"}' >/dev/null
+[ "$(ST $W8)|$(XF $W8 $BELT)" = "PARTS_REQUESTED|-|-|-|false" ] \
+  && pass "ส่งกลับแอดมิน → ล้าง \"ไม่ต้องโอน\" ให้แอดมินตอบใหม่ทุกชิ้น" || fail "ส่งกลับ: $(ST $W8) $(XF $W8 $BELT)"
+
 echo "═══ ของอยู่คลัง 94 ทั้งหมด — ไม่ผ่านขั้นเหล่านี้"
 W2=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1}]"); IDS="$IDS $W2"
 DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W2" >/dev/null
