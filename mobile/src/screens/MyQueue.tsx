@@ -10,7 +10,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
@@ -39,6 +39,9 @@ export default function MyQueue({ onOpen }: Props) {
   const [rows, setRows] = useState<WorkOrderRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
+  // แท็บที่ไม่ได้เปิดอยู่บนเว็บยังวาดค้างไว้แบบโปร่งใส (ท่าจางเข้าเวลาสลับแท็บ) — รายการรหัสใบงานที่นี่
+  // ไปปนกับหน้ารายการใบงาน (เทสต์ appointment-list นับรหัสเกิน) วาดรายการเฉพาะตอนแท็บนี้เปิดอยู่
+  const focused = useIsFocused();
 
   const load = useCallback(async () => {
     const n = ++seq.current;
@@ -103,7 +106,7 @@ export default function MyQueue({ onOpen }: Props) {
         <Spinner color={colors.primary} style={{ marginTop: spacing.xl }} />
       ) : all.length === 0 ? (
         <EmptyState icon="checkmark-done-outline" title="ไม่มีงานค้างรอคุณ" text="ใบงานที่ถึงขั้นของคุณจะขึ้นที่นี่ทันที" />
-      ) : (
+      ) : !focused ? null : (
         groups.map((g) => (
           <View key={g.label} style={styles.group} accessibilityLabel={`กลุ่ม ${g.label}`}>
             <View style={styles.groupHead}>
