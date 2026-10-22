@@ -1702,18 +1702,29 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
  * หัวข้อบนสุดของกล่องงาน (เจ้าของงานเลือก ต.ค. 69)
  *
  * หัวหน้าภาค: "ออกงานวันนี้" — ลูกค้าคอนเฟิร์มแล้ว รอรับทราบปล่อยงาน เน้นย้ำว่ามีงานออกวันนี้ ไม่ให้ปนกับใบอื่น
- * แอดมิน: "ไม่มีคนรับ" (รอหัวหน้าภาคแต่ภาค/ทีมนั้นไม่มีคน) · "เลยนัด" (วันนัดผ่านแล้วยังไม่คอนเฟิร์ม)
+ * แอดมิน: "ใบงานเคลม" (ช่างปิดงานพร้อมส่งอะไหล่เก่าเคลม รอตรวจ — เจ้าของงานขอ ต.ค. 69) ·
+ *         "ไม่มีคนรับ" (รอหัวหน้าภาคแต่ภาค/ทีมนั้นไม่มีคน) · "เลยนัด" (วันนัดผ่านแล้วยังไม่คอนเฟิร์ม)
  * ใบพวกนี้ยังอยู่ในรายการข้างล่างตามปกติ — หัวข้อนี้แค่ดึงขึ้นมาให้เห็นก่อน
  */
 function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: string | null; onOpen: (id: number) => void }) {
   const today = todayBkk();
-  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
+  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad" | "claim"; items: WorkOrderRow[] }[] = [];
   if (role === "SUPERVISOR") {
     const due = rows.filter((r) => r.status === "ASSIGNED" && r.scheduledAt?.slice(0, 10) === today);
     if (due.length)
       groups.push({ key: "today", title: `ออกงานวันนี้ ${due.length} ใบ`, hint: "ลูกค้าคอนเฟิร์มแล้ว — กดรับทราบเพื่อปล่อยงานให้ช่าง", tone: "sup", items: due });
   }
   if (role === "ADMIN") {
+    // ใบเคลมปนอยู่กับใบอื่นในกล่องงาน แต่เป็นงานคนละแบบ (ตรวจหลักฐานเคลม ไม่ใช่เดินขั้นงานซ่อม) — ดึงขึ้นหัวข้อของตัวเอง
+    const claims = rows.filter((r) => r.status === "CLAIM_REVIEW");
+    if (claims.length)
+      groups.push({
+        key: "claim",
+        title: `ใบงานเคลม ${claims.length}`,
+        hint: "ช่างปิดงานพร้อมส่งอะไหล่เก่าเคลม — เปิดใบงานเพื่อตรวจใบเคลม แล้วอนุมัติหรือตีกลับ",
+        tone: "claim",
+        items: [...claims].sort((a, b) => a.stageSince.localeCompare(b.stageSince)),
+      });
     const orphan = rows.filter((r) => r.orphan);
     const overdue = rows.filter((r) => r.overdue);
     if (orphan.length)
@@ -1732,8 +1743,15 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
   return (
     <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
       {groups.map((g) => (
-        <View key={g.key} style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]} accessibilityLabel={`หัวข้อ ${g.title}`}>
-          <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>{g.title}</Text>
+        <View
+          key={g.key}
+          style={[styles.attn, g.tone === "bad" ? styles.attnBad : g.tone === "claim" ? styles.attnClaim : styles.attnSup]}
+          accessibilityLabel={`หัวข้อ ${g.title}`}
+        >
+          <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : g.tone === "claim" ? styles.attnTitleClaim : styles.attnTitleSup]}>
+            {g.key === "claim" ? "🛡 " : ""}
+            {g.title}
+          </Text>
           <Text style={styles.attnHint}>{g.hint}</Text>
           {g.items.map((r) => (
             <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`${g.title} ${r.code}`}>
@@ -1749,7 +1767,9 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
                       : "ทั้งวัน"
                     : g.key === "overdue" && r.scheduledAt
                       ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}`
-                      : null,
+                      : g.key === "claim"
+                        ? `ส่งเคลม ${formatDateTime(r.stageSince)}`
+                        : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
@@ -1797,9 +1817,12 @@ const styles = StyleSheet.create({
   attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
   attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+  // ใบเคลมใช้สีม่วงของแอดมิน — แยกจากแดง (เรื่องเร่ง) และฟ้า (งานออกวันนี้)
+  attnClaim: { backgroundColor: colors.roleAdminSoft, borderColor: colors.roleAdminLine },
   attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
   attnTitleSup: { color: colors.primaryDark },
   attnTitleBad: { color: colors.danger },
+  attnTitleClaim: { color: colors.roleAdmin },
   attnHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   attnRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
   attnCode: { fontSize: 13.5, fontWeight: "700", color: colors.text },
