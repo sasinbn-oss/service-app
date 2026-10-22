@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDocked } from "../components/SideMenu";
 import {
   Platform,
   RefreshControl,
@@ -304,6 +305,7 @@ function formatDateTime(iso: string | null) {
 type Props = NativeStackScreenProps<HomeStackParamList, "MachineDashboard">;
 
 export default function MachineDashboardScreen({ navigation }: Props) {
+  const { docked } = useDocked();
   // หน้านี้เป็นตาราง ขอความกว้างเต็มที่แทนคอลัมน์แคบๆ ที่หน้าฟอร์มใช้
 
   const { width } = useWindowDimensions();
@@ -791,7 +793,8 @@ export default function MachineDashboardScreen({ navigation }: Props) {
     >
       {/* หัวหน้า: ชื่อหน้า + ป้ายเวลาข้อมูลแถวเดียวกัน ปุ่มอยู่ขวาบน (ตามตัวอย่างที่เจ้าของงานเลือก) */}
       <View style={styles.topRow}>
-        <Text style={[styles.pageTitle, headingFont]}>ติดตามเครื่องเสีย</Text>
+        {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ (เจ้าของงานขอ ต.ค. 69) */}
+        {docked ? <Text style={[styles.pageTitle, headingFont]}>ติดตามเครื่องเสีย</Text> : null}
         {data ? (
           <View style={styles.stamp}>
             <Ionicons name="time-outline" size={14} color={colors.textMuted} />

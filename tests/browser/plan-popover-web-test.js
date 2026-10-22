@@ -42,15 +42,9 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
     await page.waitForTimeout(3500);
     await vis("จัดแผน").first().click();
     await page.waitForTimeout(800);
-    if (tag === "desk") {
-      // หน้าต่างที่ขยายได้เปิดมาแบบขยายเต็มจอ (เจ้าของงานขอ ต.ค. 69) — กดย่อแล้วต้องกลับเป็นขนาดปกติ
-      const opened = await modalBox();
-      opened.w > 520 ? pass(`จอคอม: เปิดมาแบบขยาย (${opened.w}px)`) : fail(`จอคอม: เปิดมาไม่ขยาย (${opened.w}px)`);
-      await page.getByLabel("ย่อหน้าต่างกลับขนาดปกติ").locator("visible=true").last().click();
-      await page.waitForTimeout(800);
-    }
+    // หน้าต่างเปิดมาขนาดปกติ (เจ้าของงานขอ ต.ค. 69) — ไม่ต้องกดย่อก่อน
     const before = await modalBox();
-    if (tag === "desk") before.w <= 520 ? pass(`จอคอม: กดย่อแล้วหน้าต่างกว้าง ${before.w}px (ไม่เกิน 520)`) : fail(`หน้าต่างกว้าง ${before.w}`);
+    if (tag === "desk") before.w <= 520 ? pass(`จอคอม: เปิดมาขนาดปกติ กว้าง ${before.w}px (ไม่เกิน 520)`) : fail(`หน้าต่างกว้าง ${before.w}`);
     else Math.abs(before.bottom - viewport.height) <= 2 && before.w === viewport.width
       ? pass("มือถือ: หน้าต่างเต็มกว้าง ชิดขอบล่าง") : fail(`มือถือ: ${JSON.stringify(before)}`);
 

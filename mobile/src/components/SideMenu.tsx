@@ -1,6 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  Image,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -9,7 +11,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { EXIT_EASE, spring, timing } from "../utils/motion";
+import { EXIT_EASE, lockSelection, rubber, spring, timing } from "../utils/motion";
 import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
@@ -17,7 +19,9 @@ import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
 import { MainTabParamList } from "../navigation/types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, headingFont, radius, shadow, spacing } from "../theme";
+import ThemeToggle from "./ThemeToggle";
+import { showAlert } from "../utils/alert";
 
 /**
  * เมนูข้างแบบเลื่อนออกจากซ้าย (ปุ่มสามขีดบนแถบบน) ตามต้นแบบ OTTERI
@@ -144,7 +148,16 @@ const GROUPS: Group[] = [
   {
     title: "งานซ่อม",
     items: [
-      // หน้าแรกของแอดมินกับหัวหน้าภาค — ช่างไม่เห็น เพราะงานของทีมตัวเองอยู่ในกล่องงานแล้ว
+      // หน้าแรกของทุกตำแหน่ง (เจ้าของงานเลือก ต.ค. 69) — งานที่ปล่อยแล้ว เรียงตามเวลานัด (แบบ Salesforce)
+      {
+        key: "myjobs",
+        label: "งานของฉันวันนี้",
+        labelEn: "My Jobs Today",
+        icon: "today-outline",
+        tab: "HomeTab",
+        screen: "MyJobs",
+      },
+      // แผนงานของแอดมินกับหัวหน้าภาค — ช่างไม่เห็น เพราะงานของทีมตัวเองอยู่ในกล่องงานแล้ว
       {
         key: "plan",
         label: "แผนงาน",
@@ -153,16 +166,6 @@ const GROUPS: Group[] = [
         tab: "HomeTab",
         screen: "PlanBoard",
         roles: ["ADMIN", "SUPERVISOR"],
-      },
-      // หน้าแรกของช่าง — งานที่ปล่อยให้ทีมแล้ว เรียงตามเวลานัด (แบบ Salesforce ต.ค. 69)
-      {
-        key: "myjobs",
-        label: "งานของฉันวันนี้",
-        labelEn: "My Jobs Today",
-        icon: "today-outline",
-        tab: "HomeTab",
-        screen: "MyJobs",
-        roles: ["EMPLOYEE"],
       },
       { key: "home", label: "หน้าหลัก", labelEn: "Home", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
       {
@@ -287,7 +290,7 @@ function MenuContent({
   const closed = useClosedGroups();
   return (
     // nativeID = id บนเว็บ — ลากรีเฟรช (PullToRefresh) ไม่จับนิ้วที่อยู่ในเมนู ไม่งั้นเมนูเลื่อนลงตามนิ้ว
-    <ScrollView nativeID="side-menu" contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    <ScrollView nativeID="side-menu" style={{ flex: 1 }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => {
             const items = g.items
               .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
@@ -425,6 +428,27 @@ export default function SideMenu() {
   const [active, setActive] = useState<string | null>(null);
   const x = useRef(new Animated.Value(-WIDTH)).current;
 
+  // ปัดเมนูไปทางซ้ายเพื่อปิด — แผงตามนิ้ว ปล่อยแล้วปิดถ้าปัดเกินราวหนึ่งในสามหรือสะบัดเร็ว ไม่งั้นเด้งกลับ
+  // จับเฉพาะตอนลากแนวนอนชัด ๆ การเลื่อนรายการเมนูขึ้นลงยังทำงานตามเดิม
+  const panelPan = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_, g) => g.dx < -8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+        onPanResponderGrant: () => lockSelection(true),
+        onPanResponderMove: (_, g) => x.setValue(g.dx <= 0 ? g.dx : rubber(g.dx, 40)),
+        onPanResponderRelease: (_, g) => {
+          lockSelection(false);
+          if (g.dx < -WIDTH * 0.3 || g.vx < -0.5) setOpen(false);
+          else spring(x, 0, "settle", g.vx * 1000).start();
+        },
+        onPanResponderTerminate: () => {
+          lockSelection(false);
+          spring(x, 0, "settle").start();
+        },
+      }),
+    [x],
+  );
+
   useEffect(() => {
     setOpenGlobal = setOpen;
     return () => {
@@ -448,7 +472,14 @@ export default function SideMenu() {
     });
   }, [open, x]);
 
-  if (!mounted) return null;
+  // แถบขอบจออยู่ตลอด ตำแหน่งเดิมในต้นไม้เสมอ — ถ้าถูกถอดตอนแผงโผล่ นิ้วที่กำลังลากจะหลุดกลางทาง
+  const edge = <EdgeCatcher x={x} onMount={() => setMounted(true)} onSettle={settleFromEdge} />;
+  if (!mounted) return <>{edge}</>;
+
+  function settleFromEdge(openIt: boolean) {
+    if (openIt) setOpen(true);
+    else timing(x, -WIDTH, 180, EXIT_EASE).start(({ finished }) => finished && setMounted(false));
+  }
 
   function go(it: Item) {
     setOpen(false);
@@ -458,17 +489,113 @@ export default function SideMenu() {
   const backdrop = x.interpolate({ inputRange: [-WIDTH, 0], outputRange: [0, 1] });
 
   return (
+    <>
+    {edge}
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <Animated.View nativeID="side-menu-backdrop" style={[styles.backdrop, { opacity: backdrop }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="ปิดเมนู" />
       </Animated.View>
       <Animated.View
+        {...panelPan.panHandlers}
         style={[styles.panel, { paddingTop: spacing.sm, transform: [{ translateX: x }] }]}
       >
+        <PanelHead />
         <MenuContent active={active} inbox={inbox} onPick={go} />
+        <PanelTools onLeave={() => setOpen(false)} />
       </Animated.View>
     </View>
+    </>
   );
+}
+
+const ROLE_TH: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
+
+/**
+ * หัวเมนูเลื่อนออก (จอแคบ): โลโก้กับคนที่ล็อกอิน — จอแคบไม่มีแถบโลโก้แล้ว (ดู NarrowBar ใน MainNavigator)
+ * แบรนด์จึงมาอยู่ที่นี่ ให้ยังเห็นว่าเป็นแอปของ OTTERI และใครใช้อยู่
+ */
+function PanelHead() {
+  const { user } = useAuth();
+  return (
+    <View style={styles.panelHead}>
+      <View style={styles.panelLogo}>
+        <Image source={require("../../assets/logo-otter.png")} style={{ width: "100%", height: "100%" }} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.panelBrand, headingFont]}>OTTERI</Text>
+        {user ? (
+          <Text style={styles.panelWho} numberOfLines={1}>
+            {user.name} ·{" "}
+            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "Admin Spare Part" : ROLE_TH[user.role] ?? user.role}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** โหมดมืดกับออกจากระบบ (จอแคบ) — ย้ายมาจากแถบบน ใช้ไม่บ่อย ไม่ควรกินที่หัวจอทุกหน้า */
+function PanelTools({ onLeave }: { onLeave: () => void }) {
+  const { logout } = useAuth();
+  return (
+    <View style={styles.panelTools}>
+      <ThemeToggle />
+      <View style={{ flex: 1 }} />
+      <TouchableOpacity
+        style={styles.panelLogout}
+        accessibilityLabel="ออกจากระบบ"
+        onPress={() => {
+          onLeave();
+          showAlert("ยืนยัน", "ต้องการออกจากระบบ?", [
+            { text: "ยกเลิก", style: "cancel" },
+            { text: "ตกลง", onPress: logout },
+          ]);
+        }}
+      >
+        <Ionicons name="log-out-outline" size={18} color="#fff" />
+        <Text style={styles.panelLogoutText}>ออกจากระบบ</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+/**
+ * แถบรับนิ้วที่ขอบซ้ายของจอ (จอแคบ) — ปัดจากขอบเข้ามาเพื่อดึงเมนูออก แบบแอปทั่วไป (เจ้าของงานขอ ต.ค. 69)
+ * กว้างแค่ 20 px ไม่บังปุ่มในหน้า (เนื้อหาเว้นขอบ 16 px อยู่แล้ว) · เริ่มลากเมื่อไปทางขวาชัด ๆ เท่านั้น แตะเฉย ๆ ผ่านลงไปที่หน้าข้างใต้
+ * Safari บน iPhone ใช้ปัดจากขอบเป็น "ย้อนกลับ" ของเบราว์เซอร์ด้วย — ถ้าเปิดเป็นแอปจากหน้าจอโฮมจะไม่ชนกัน
+ */
+function EdgeCatcher({
+  x,
+  onMount,
+  onSettle,
+}: {
+  x: Animated.Value;
+  onMount: () => void;
+  onSettle: (open: boolean) => void;
+}) {
+  const live = useRef({ onMount, onSettle });
+  live.current = { onMount, onSettle };
+  const pan = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, g) => g.dx > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+        onPanResponderGrant: () => {
+          lockSelection(true);
+          live.current.onMount();
+        },
+        onPanResponderMove: (_, g) => x.setValue(Math.min(0, -WIDTH + g.dx)),
+        onPanResponderRelease: (_, g) => {
+          lockSelection(false);
+          live.current.onSettle(g.dx > WIDTH * 0.35 || g.vx > 0.5);
+        },
+        onPanResponderTerminate: () => {
+          lockSelection(false);
+          live.current.onSettle(false);
+        },
+      }),
+    [x],
+  );
+  return <View {...pan.panHandlers} style={styles.edge} nativeID="side-menu-edge" />;
 }
 
 /** ปุ่มสามขีด — จอคอมอยู่หัวเมนูข้าง (หด/ยืด) · จอแคบอยู่แถบชื่อหน้า (เปิดเมนูเลื่อนออก) */
@@ -578,4 +705,38 @@ const styles = StyleSheet.create({
   },
   // จอคอมปุ่มนี้อยู่บนเมนูกรมท่า · จอแคบอยู่แถบชื่อหน้าพื้นขาว สีจึงต่างกัน
   menuBtnDock: { backgroundColor: colors.sideLine },
+  // touchAction: เบราว์เซอร์ไม่เอานิ้วที่แตะแถบนี้ไปเลื่อนหน้า/ย้อนกลับ ส่งให้ PanResponder ทั้งหมด
+  edge: { position: "absolute", top: 0, bottom: 0, left: 0, width: 20, zIndex: 30, touchAction: "none" } as object,
+  panelHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.sideLine,
+  },
+  panelLogo: { width: 40, height: 40, borderRadius: 12, overflow: "hidden", backgroundColor: "#fff" },
+  panelBrand: { fontSize: 18, lineHeight: 24, fontWeight: "800", color: "#fff" },
+  panelWho: { fontSize: 12, lineHeight: 18, color: colors.sideDim },
+  panelTools: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.sideLine,
+  },
+  panelLogout: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: colors.sideLine,
+  },
+  panelLogoutText: { color: "#fff", fontSize: 14, lineHeight: 20, fontWeight: "700" },
 });

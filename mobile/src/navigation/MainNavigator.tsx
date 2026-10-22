@@ -126,8 +126,22 @@ function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps
       </View>
     );
   }
+  return <NarrowBar title={title} crumb={crumb} />;
+}
+
+/**
+ * แถบหัวเดียวของจอแคบ: ☰ ชื่อหน้า | ดูในฐานะ รีเฟรช ผู้ใช้
+ *
+ * เดิมมีสองชั้น (แถบโลโก้ + แถบ "☰ ชื่อหน้า") กินจอมือถือไปราว 120 px ก่อนเห็นงานใบแรก
+ * เจ้าของงานขอให้ลด (ต.ค. 69) — โลโก้ ออกจากระบบ และโหมดมืดย้ายไปอยู่ในเมนูข้าง ซึ่งเปิดไม่บ่อย
+ * ส่วนรีเฟรชกับดูในฐานะอยู่ต่อ เพราะใช้ระหว่างดูงาน
+ * ขอบจอบน (insets) ใส่ที่นี่ เว้นแต่มีแถบส้ม "ดูในฐานะ" อยู่ข้างบนซึ่งเว้นให้แล้ว
+ */
+function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode }) {
+  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   return (
-    <View style={styles.pageHeadNarrow}>
+    <View style={[styles.pageHeadNarrow, { paddingTop: (user?.viewAs ? 0 : insets.top) + spacing.sm }]}>
       <MenuButton />
       <View style={{ flex: 1, minWidth: 0 }}>
         {crumb}
@@ -135,6 +149,9 @@ function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps
           {title}
         </Text>
       </View>
+      <ViewAsButton compact />
+      <RefreshButton />
+      <UserAvatar />
     </View>
   );
 }
@@ -219,6 +236,31 @@ function AppTopBar() {
   const chrome = useChrome();
   // หน้ารายการใบงานบนจอแคบขอให้แถบบนลอยทับและหลบตอนเลื่อนลง (ดู utils/chrome.ts)
   const overlay = chrome.overlay && !canDock;
+  // จอแคบ: ไม่มีแถบโลโก้ — แถบหัวของแต่ละหน้า (NarrowBar) เป็นชั้นเดียวบนสุดแทน
+  if (!canDock) {
+    const banner = viewing ? (
+      <View style={{ paddingTop: insets.top, backgroundColor: "#B45309" }}>
+        <ViewAsBanner />
+      </View>
+    ) : null;
+    if (!overlay) return banner;
+    const move = Math.max(0, chrome.barsH - insets.top);
+    return (
+      <>
+        <Animated.View
+          onLayout={(e) => setChromeBarsHeight(Math.round(e.nativeEvent.layout.height))}
+          style={[
+            styles.barsFloat,
+            { transform: [{ translateY: chromeHide.interpolate({ inputRange: [0, 1], outputRange: [0, -move] }) }] },
+          ]}
+        >
+          {banner}
+          <NarrowBar title={chrome.title} />
+        </Animated.View>
+        {insets.top > 0 ? <View style={[styles.statusCover, { height: insets.top }]} /> : null}
+      </>
+    );
+  }
   const bars = (
     <View>
     {viewing ? (
@@ -310,17 +352,11 @@ function LogoutButton() {
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
 function HomeStackNavigator() {
-  const { user } = useAuth();
-  // แอดมินกับหัวหน้าภาคเปิดแอปมาเจอแผนงานวันนี้ก่อน — คำถามแรกของเช้าคือ
-  // "วันนี้ใครไปไหน" ไม่ใช่เมนู · ช่างเริ่มที่ "งานของฉัน" (เจ้าของงานเลือกแบบ Salesforce ต.ค. 69)
-  const planner = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
-  const tech = user?.role === "EMPLOYEE";
+  // ทุกตำแหน่งเปิดแอปมาเจอ "งานของฉันวันนี้" ก่อน (เจ้าของงานเลือก ต.ค. 69)
+  // เดิมแอดมิน/หัวหน้าภาคเริ่มที่แผนงาน ช่างเริ่มที่งานของฉัน — เปลี่ยนให้ทุกคนเห็นงานที่ออกไปจริงวันนี้ก่อน
+  // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ภาคของตัวเอง · แอดมิน = ทั้งหมด
   return (
-    <HomeStack.Navigator
-      screenOptions={commonScreenOptions}
-      screenLayout={pageEnterLayout}
-      initialRouteName={planner ? "PlanBoard" : tech ? "MyJobs" : "HomeMenu"}
-    >
+    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout} initialRouteName="MyJobs">
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
       <HomeStack.Screen name="MyJobs" component={MyJobsScreen} options={{ title: "งานของฉัน" }} />
       <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
