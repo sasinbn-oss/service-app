@@ -1,6 +1,6 @@
-// ทดสอบ: หน้าต่างทุกบานที่มีปุ่มขยาย เปิดมาแบบขยาย (เจ้าของงานเลือก ต.ค. 69)
-//        · กดย่อครั้งแรกได้ขนาดปกติจริง (ไม่หดหายเป็น 0 — ตอนเปิดยังไม่เคยวัดขนาดปกติ) · กดขยายกลับได้
-//        · ปิดแล้วเปิดใหม่กลับมาขยายอีก · ทั้งหน้าต่างใบงาน (PopupScreen) และฟอร์มเดี่ยว (AppModal) · มือถือ + จอคอม
+// ทดสอบ: หน้าต่างทุกบานที่มีปุ่มขยาย เปิดมาขนาดปกติ (เจ้าของงานขอกลับ ต.ค. 69 หลังลองแบบเปิดมาขยาย)
+//        · กดขยายได้ใหญ่ขึ้นจริง · กดย่อกลับได้ขนาดเดิม
+//        · ขยายไว้แล้วปิด เปิดใหม่กลับมาขนาดปกติ · ทั้งหน้าต่างใบงาน (PopupScreen) และฟอร์มเดี่ยว (AppModal) · มือถือ + จอคอม
 const { chromium } = require("playwright");
 
 (async () => {
@@ -36,27 +36,31 @@ const { chromium } = require("playwright");
     async function check(what, title, open, closeIt) {
       await open();
       await page.waitForTimeout(1500);
-      const big = await size(title);
-      (await shrinkBtn().count()) > 0 ? pass(`${name} · ${what}: เปิดมาแบบขยาย (${big?.w}×${big?.h})`) : fail(`${name} · ${what}: เปิดมาไม่ขยาย`);
-      await shrinkBtn().click();
-      await page.waitForTimeout(1200);
       const small = await size(title);
-      small && big && small.h > 150 && (small.h < big.h || small.w < big.w) && (await growBtn().count()) > 0
-        ? pass(`${name} · ${what}: กดย่อได้ขนาดปกติ (${small.w}×${small.h})`)
-        : fail(`${name} · ${what}: ย่อแล้ว ${JSON.stringify(small)} จาก ${JSON.stringify(big)}`);
+      (await growBtn().count()) > 0 && (await shrinkBtn().count()) === 0
+        ? pass(`${name} · ${what}: เปิดมาขนาดปกติ (${small?.w}×${small?.h})`)
+        : fail(`${name} · ${what}: เปิดมาแบบขยาย`);
       await growBtn().click();
       await page.waitForTimeout(1200);
-      const again = await size(title);
-      again && Math.abs(again.h - big.h) < 4 && Math.abs(again.w - big.w) < 4
-        ? pass(`${name} · ${what}: กดขยายกลับเท่าเดิม`)
-        : fail(`${name} · ${what}: ขยายกลับได้ ${JSON.stringify(again)}`);
+      const big = await size(title);
+      small && big && small.h > 150 && (big.h > small.h || big.w > small.w) && (await shrinkBtn().count()) > 0
+        ? pass(`${name} · ${what}: กดขยายได้ใหญ่ขึ้น (${big.w}×${big.h})`)
+        : fail(`${name} · ${what}: ขยายแล้ว ${JSON.stringify(big)} จาก ${JSON.stringify(small)}`);
       await shrinkBtn().click();
+      await page.waitForTimeout(1200);
+      const again = await size(title);
+      again && Math.abs(again.h - small.h) < 4 && Math.abs(again.w - small.w) < 4
+        ? pass(`${name} · ${what}: กดย่อกลับเท่าเดิม`)
+        : fail(`${name} · ${what}: ย่อกลับได้ ${JSON.stringify(again)}`);
+      await growBtn().click();
       await page.waitForTimeout(1000);
       await closeIt();
       await page.waitForTimeout(1500);
       await open();
       await page.waitForTimeout(1500);
-      (await shrinkBtn().count()) > 0 ? pass(`${name} · ${what}: ย่อไว้แล้วปิด เปิดใหม่กลับมาขยาย`) : fail(`${name} · ${what}: เปิดใหม่ยังย่ออยู่`);
+      (await growBtn().count()) > 0 && (await shrinkBtn().count()) === 0
+        ? pass(`${name} · ${what}: ขยายไว้แล้วปิด เปิดใหม่กลับมาขนาดปกติ`)
+        : fail(`${name} · ${what}: เปิดใหม่ยังขยายอยู่`);
       await closeIt();
       await page.waitForTimeout(1500);
     }
