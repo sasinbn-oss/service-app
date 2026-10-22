@@ -90,6 +90,9 @@ const { setup } = require("./fixture");
     // จอคอม — อ่านลำดับชื่อขั้น
     await page.setViewportSize({ width: 1400, height: 1500 });
     await page.waitForTimeout(1200);
+    // หน้าต่างใบงานเปิดมาขนาดปกติ (ต.ค. 69) แคบจนแถบซ่อนชื่อขั้น — ขยายก่อนอ่านลำดับ
+    await page.getByLabel("ขยายหน้าต่างเต็มจอ").locator("visible=true").last().click().catch(() => {});
+    await page.waitForTimeout(1200);
     await page.screenshot({ path: path.join(DIR, "so-1-quote.png"), fullPage: true });
 
     // อ่านเฉพาะในการ์ด "ขั้นตอนงาน" ไม่ใช่ทั้งหน้า — ชื่อขั้นไปโผล่ที่ป้ายสถานะ
@@ -135,6 +138,8 @@ const { setup } = require("./fixture");
       fail(`ไม่เจอใบที่ไม่ต้องเสนอราคา (${NOQUOTE}) ในรายการ`);
     } else {
       await page.setViewportSize({ width: 1400, height: 1500 });
+      await page.waitForTimeout(1200);
+      await page.getByLabel("ขยายหน้าต่างเต็มจอ").locator("visible=true").last().click().catch(() => {});
       await page.waitForTimeout(1200);
       const chip = page.locator('[aria-label^="ข้าม "][aria-label$=" ขั้น"]').locator("visible=true");
       (await chip.count()) === 1 ? pass(`ขั้นที่ข้ามติดกันยุบเป็นปุ่มเดียว (${await chip.first().getAttribute("aria-label")})`) : fail(`ปุ่มข้าม ${await chip.count()} ปุ่ม`);
