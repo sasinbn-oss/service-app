@@ -125,7 +125,9 @@ export function workStatusForStage(
     // ผู้เรียกส่ง anyPartOutOfStock) — เจ้าของงานขอ ต.ค. 69
     case "PARTS_REQUESTED":
       return "CHECKING_PARTS";
-    // ของมีแล้ว อยู่ระหว่างหัวหน้าภาคไปเบิกจากคลังอื่น — ยังไม่พร้อมส่งช่าง
+    // ของมีแล้ว อยู่ระหว่างหัวหน้าภาคเบิก/โอนจากคลังอื่น — ยังไม่พร้อมส่งช่าง
+    case "PARTS_TRANSFER":
+    case "PARTS_IN_TRANSIT":
     case "PARTS_PICKUP":
       return "CHECKING_PARTS";
     // ใบงานรออะไหล่ที่แยกออกมา — รอของเข้าคลังจริง ๆ
@@ -202,6 +204,8 @@ export const WORK_ORDER_STATUSES = [
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
+  "PARTS_TRANSFER",
+  "PARTS_IN_TRANSIT",
   "PARTS_PICKUP",
   "PARTS_SOURCING",
   "AWAITING_QUOTE",
@@ -238,6 +242,10 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   WAITING_PARTS: "หัวหน้าภาค · รออะไหล่เข้า",
   // เจ้าของงานขอ ต.ค. 69: ขั้นก่อนเสนอราคาคือ "เช็คว่ามีหรือหมด" ขั้นหลังรับเงินคือ "เบิกจริงส่งหน้างาน"
   PARTS_REQUESTED: "แอดมิน · เบิกอะไหล่ (คลัง 94)",
+  // ของอยู่คลังอื่น — หัวหน้าภาคเบิกแล้วโอนมาคลังที่ส่งมอบ (ต.ค. 69) · ถึงแล้วกด "โอนเสร็จแล้ว"
+  PARTS_TRANSFER: "หัวหน้าภาค · เบิกและโอนอะไหล่",
+  PARTS_IN_TRANSIT: "หัวหน้าภาค · รอโอนอะไหล่",
+  // โอนมาถึงคลังที่ไม่ใช่ 94 แล้ว — หัวหน้าภาคเบิกส่งมอบจากคลังนั้น (แอดมินเบิกได้แค่คลัง 94)
   PARTS_PICKUP: "หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)",
   PARTS_SOURCING: "แอดมิน · เช็คอะไหล่ (มี/หมด)",
   AWAITING_QUOTE: "แอดมิน · ส่งใบเสนอราคา",
@@ -264,6 +272,8 @@ export const WORK_ORDER_STAGE_DONE: Record<string, string> = {
   INSPECTING: "ตรวจแล้ว",
   WAITING_PARTS: "อะไหล่เข้าแล้ว",
   PARTS_REQUESTED: "เบิกอะไหล่แล้ว",
+  PARTS_TRANSFER: "เบิกและสั่งโอนแล้ว",
+  PARTS_IN_TRANSIT: "โอนเสร็จแล้ว",
   PARTS_PICKUP: "เบิกคลังอื่นแล้ว",
   PARTS_SOURCING: "เช็คอะไหล่แล้ว",
   AWAITING_QUOTE: "ส่งใบเสนอราคาแล้ว",
@@ -318,6 +328,14 @@ export const WORK_ORDER_STAGE_ORDER = [
   // แอดมินเบิกอะไหล่ออกจากคลัง — ระบุคลังและเลขใบเบิกของแต่ละตัว
   "PARTS_REQUESTED",
   /**
+   * ของอยู่คลังอื่น — หัวหน้าภาคเบิกจากคลังนั้นแล้วโอนมาคลังที่จะส่งมอบ (ปกติคลัง 94) (เจ้าของงานกำหนด ต.ค. 69)
+   *
+   * ลูกค้าจ่ายเงินก่อน (ขั้นเสนอราคาอยู่ก่อนเบิก) แล้วค่อยโอน · ต้องมีเลขใบเบิกจากคลังต้นทางและเลขที่ใบโอน
+   * ของถึงแล้วหัวหน้าภาคกด "โอนเสร็จแล้ว" → โอนมาคลัง 94 กลับไปแอดมินเบิกส่งมอบ · โอนไปคลังอื่นหัวหน้าภาคเบิกเอง (PARTS_PICKUP)
+   */
+  "PARTS_TRANSFER",
+  "PARTS_IN_TRANSIT",
+  /**
    * ของอยู่คลังอื่นที่ไม่ใช่ลาดพร้าว 94 — หัวหน้าภาคเบิกเอง (เจ้าของงานกำหนด ต.ค. 69)
    *
    * แอดมินเช็คได้ทุกคลังแต่เบิกได้เฉพาะคลังลาดพร้าว 94 (ADMIN_WAREHOUSE) จึงบอกแค่ว่าของอยู่คลังไหน
@@ -369,6 +387,8 @@ export const WORK_ORDER_STAGE_ACTOR: Record<string, string> = {
   WAITING_PARTS: "SUPERVISOR",
   PARTS_REQUESTED: "ADMIN",
   // ของอยู่คลังอื่น — หัวหน้าภาคเบิกเอง แอดมินไม่มีสิทธิ์เบิกคลังอื่น
+  PARTS_TRANSFER: "SUPERVISOR",
+  PARTS_IN_TRANSIT: "SUPERVISOR",
   PARTS_PICKUP: "SUPERVISOR",
   // เช็ค/ตามอะไหล่ก่อนเสนอราคา — แอดมินดูคลังและเป็นคนเบิก (เจ้าของงานกำหนด: อยู่ใน "รอแอดมิน")
   PARTS_SOURCING: "ADMIN",
@@ -395,6 +415,8 @@ export const ACTIVE_WORK_ORDER_STATUSES = [
   "INSPECTING",
   "WAITING_PARTS",
   "PARTS_REQUESTED",
+  "PARTS_TRANSFER",
+  "PARTS_IN_TRANSIT",
   "PARTS_PICKUP",
   "PARTS_SOURCING",
   "AWAITING_QUOTE",
@@ -542,6 +564,9 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   PARTS_ETA_CHANGED: "เลื่อนวันคาดว่าอะไหล่เข้า",
   PICKUP_REQUESTED: "ส่งให้หัวหน้าภาคเบิกอะไหล่ (คลังอื่น)",
   PICKED_UP: "หัวหน้าภาคเบิกอะไหล่แล้ว",
+  TRANSFER_REQUESTED: "หัวหน้าภาคเบิกและสั่งโอนอะไหล่",
+  TRANSFER_ARRIVED: "โอนอะไหล่เสร็จแล้ว",
+  TRANSFER_RETURNED: "เบิก/โอนไม่ได้ — ส่งกลับแอดมิน",
   PICKUP_RETURNED: "หัวหน้าภาคเบิกไม่ได้ — ส่งกลับแอดมิน",
   STATUS_CHANGED: "เปลี่ยนสถานะ",
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
@@ -586,7 +611,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
  * ขั้นที่แอดมินกดแทนไม่ได้ — ปกติแอดมินทำแทนได้ทุกขั้นเพราะงานด่วนรอใครไม่ได้
  * แต่เบิกคลังอื่นเป็นเรื่องสิทธิ์ ไม่ใช่เรื่องความเร็ว (เจ้าของงานกำหนด ต.ค. 69)
  */
-export const SUPERVISOR_ONLY_STAGES: readonly string[] = ["PARTS_PICKUP"];
+export const SUPERVISOR_ONLY_STAGES: readonly string[] = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
 
 export function canActOnStage(role: string, stage: string) {
   if (role === "ADMIN") return !SUPERVISOR_ONLY_STAGES.includes(stage);

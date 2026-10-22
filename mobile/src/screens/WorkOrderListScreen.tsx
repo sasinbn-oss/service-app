@@ -214,7 +214,7 @@ const SUP_TABS: { value: SupTab; label: string }[] = [
   // "ใบงาน SUB" — คำที่เจ้าของงานใช้เรียกใบที่จ่ายให้ทีม outsource
   { value: "outsource", label: "ใบงาน SUB" },
 ];
-const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP"];
+const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"];
 function supTabOf(r: WorkOrderRow): SupTab {
   if (r.outsource) return "outsource";
   return DISPATCH_STAGES.includes(r.status) ? "dispatch" : "repair";
@@ -377,6 +377,8 @@ export const STATUS_OWNER: Record<string, Owner> = {
   WAITING_PARTS: "OUTSIDE",
   PARTS_REQUESTED: "ADMIN",
   PARTS_PICKUP: "SUPERVISOR",
+  PARTS_TRANSFER: "SUPERVISOR",
+  PARTS_IN_TRANSIT: "SUPERVISOR",
   PARTS_CHECKED: "SUPERVISOR",
   AWAITING_CONFIRM: "ADMIN",
   ASSIGNED: "SUPERVISOR",

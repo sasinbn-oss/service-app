@@ -81,6 +81,7 @@ const { setup } = require("./fixture");
       const b = document.querySelector('[aria-label="ขั้นตอนงาน"]');
       return b ? { over: b.scrollWidth - b.clientWidth } : null;
     });
+    await page.locator('[aria-label="ขั้นตอนงาน"]').screenshot({ path: path.join(DIR, "so-0-narrow.png") });
     fit && fit.over <= 1 ? pass("จอแคบ แถบขั้นตอนพอดีจอ ไม่ต้องเลื่อนซ้ายขวา") : fail(`แถบล้น ${fit && fit.over}px`);
     (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("เช็คอะไหล่ (มี/หมด)", { exact: true }).locator("visible=true").count()) > 0 &&
     (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("จ่ายงานให้ทีม", { exact: true }).count()) === 0

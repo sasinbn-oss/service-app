@@ -309,13 +309,35 @@ const SKIP_WHY: Record<string, string> = {
   AWAITING_PAYMENT: "ไม่ต้องเสนอราคา",
   WAITING_PARTS: "ไม่ใช่ใบรออะไหล่รุ่นเก่า",
   PARTS_REQUESTED: "ไม่ใช้อะไหล่",
-  PARTS_PICKUP: "ของอยู่คลัง 94 หรือไม่ใช้อะไหล่",
+  PARTS_TRANSFER: "ของอยู่คลัง 94 หรือไม่ใช้อะไหล่",
+  PARTS_IN_TRANSIT: "ของอยู่คลัง 94 หรือไม่ใช้อะไหล่",
+  PARTS_PICKUP: "ไม่ได้โอนไปคลังอื่นนอกจากคลัง 94",
   CLAIM_REVIEW: "ไม่มีเคลมอะไหล่",
 };
 
-/** ตัวที่หัวหน้าภาคต้องเบิกเอง — กฎเดียวกับ pendingPickup ฝั่งเซิร์ฟเวอร์ */
+/** ตัวที่หัวหน้าภาคต้องเบิกส่งมอบจากคลังที่ไม่ใช่ 94 (โอนมาถึงแล้ว) — กฎเดียวกับ pendingPickup ฝั่งเซิร์ฟเวอร์ */
 function isPickup(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
-  return p.inStock === true && !p.offCatalog && !!p.warehouse && p.warehouse !== adminWarehouse && !p.requisitionNo;
+  return (
+    p.inStock === true && !p.offCatalog && !!p.warehouse && p.warehouse !== adminWarehouse && !p.requisitionNo && !!p.transferredAt
+  );
+}
+
+/** ตัวที่หัวหน้าภาคต้องเบิกจากคลังอื่นแล้วโอนมาคลังส่งมอบ — กฎเดียวกับ pendingTransfer ฝั่งเซิร์ฟเวอร์ */
+function isTransfer(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
+  return (
+    p.inStock === true &&
+    !p.offCatalog &&
+    !!p.warehouse &&
+    p.warehouse !== adminWarehouse &&
+    !p.requisitionNo &&
+    !p.transferNo &&
+    !p.transferredAt
+  );
+}
+
+/** กำลังโอน — สั่งโอนแล้ว ของยังไม่ถึงคลังปลายทาง */
+function inTransit(p: StockPart) {
+  return !!p.transferNo && !p.transferredAt;
 }
 
 /**
@@ -333,6 +355,12 @@ function sourcingCheck(o: { status: string; logs: LogEntry[] }): { days: number;
   return { days, stale: days > SOURCING_FRESH_DAYS, at: last.createdAt };
 }
 
+/** ส่วนที่แอดมินพิมพ์เอง — ประวัติเก็บเป็น "รายการ (คลัง) — หมายเหตุ" (หมายเหตุไม่บังคับ) */
+function pickupAdminNote(note: string | null | undefined): string | null {
+  const at = note?.indexOf(" — ") ?? -1;
+  return note && at >= 0 ? note.slice(at + 3).trim() || null : null;
+}
+
 /** หมายเหตุล่าสุดที่แอดมินส่งให้หัวหน้าภาคเบิก */
 function lastPickupRequest(o: { logs: LogEntry[] }): LogEntry | null {
   return [...o.logs].filter((l) => l.action === "PICKUP_REQUESTED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
@@ -348,7 +376,10 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
   // หลังรับเงิน (หรือในประกัน) — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน
   PARTS_REQUESTED: { label: "เบิกอะไหล่ (คลัง 94)", icon: "arrow-forward-circle" },
-  // ของอยู่คลังอื่น (ไม่ใช่ลาดพร้าว 94) — หัวหน้าภาคเบิกเอง แอดมินกดแทนไม่ได้
+  // ของอยู่คลังอื่น — หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ · ของถึงแล้วกดโอนเสร็จ (แอดมินกดแทนไม่ได้)
+  PARTS_TRANSFER: { label: "เบิกและโอนอะไหล่", icon: "swap-horizontal-outline" },
+  PARTS_IN_TRANSIT: { label: "โอนเสร็จแล้ว", icon: "checkmark-done-outline" },
+  // โอนมาถึงคลังที่ไม่ใช่ 94 — หัวหน้าภาคเบิกส่งมอบเอง แอดมินกดแทนไม่ได้
   PARTS_PICKUP: { label: "เบิกอะไหล่ (คลังอื่น)", icon: "cube-outline" },
   // ก่อนเสนอราคา — เช็คว่ามีอะไหล่ไหม มีครบไปเสนอราคา หมดรอของเข้า
   PARTS_SOURCING: { label: "เช็คอะไหล่ (มี/หมด)", icon: "cube-outline" },
@@ -454,6 +485,13 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
         o.needsParts === false ||
         (at(o.status) > at("PARTS_PICKUP") && !o.logs.some((l) => l.action === "PICKED_UP"))
       );
+    // เบิกและโอน — ข้ามเมื่อเลยไปแล้วโดยไม่เคยสั่งโอน (ของอยู่คลัง 94 ทั้งหมด)
+    case "PARTS_TRANSFER":
+    case "PARTS_IN_TRANSIT":
+      return (
+        o.needsParts === false ||
+        (at(o.status) > at(value) && o.status !== "PARTS_REQUESTED" && !o.logs.some((l) => l.action === "TRANSFER_REQUESTED"))
+      );
     case "AWAITING_QUOTE":
       return o.needsQuote === false && !o.hasQuote;
     // ใบที่ไม่ต้องเสนอราคา หรือใบเก่าก่อนมีขั้นนี้ (ไปเสนอราคาตรง ๆ ไม่มีประวัติเช็คก่อน) — ไม่ได้ผ่านขั้นนี้
@@ -505,6 +543,11 @@ interface StockPart extends PickedPart {
   inStock: boolean | null;
   warehouse: string | null;
   requisitionNo: string | null;
+  /** โอนข้ามคลัง — ต้นทาง · ใบเบิกต้นทาง · ใบโอน · ถึงปลายทางเมื่อไร (ว่าง = กำลังโอน/ยังไม่โอน) */
+  transferFrom?: string | null;
+  transferReqNo?: string | null;
+  transferNo?: string | null;
+  transferredAt?: string | null;
 }
 
 interface Technician {
@@ -795,7 +838,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   function myTurn(o: WorkOrder) {
     if (!user) return false;
     // เบิกคลังอื่นเป็นสิทธิ์ของหัวหน้าภาค — แอดมินทำแทนได้ทุกขั้นยกเว้นขั้นนี้ (เซิร์ฟเวอร์กันซ้ำ)
-    if (user.role === "ADMIN") return o.status !== "PARTS_PICKUP";
+    if (user.role === "ADMIN") return !["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"].includes(o.status);
     // ทีม outsource ไม่มีบัญชีในแอป — หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน (เจ้าของงานเลือก ต.ค. 69)
     if (o.status === "IN_PROGRESS" && o.assignedOutsource && user.role === "SUPERVISOR") return true;
     // ผลตรวจหน้างาน หัวหน้าภาคบันทึกแทนได้ เผื่อช่างโทรมาเล่าแทนการกรอกเอง
@@ -978,6 +1021,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           x.value !== "CLAIM_REVIEW" &&
           // ไม่รู้ว่าเลขใบเบิกตัวไหนเป็นของหัวหน้าภาค — ย้อนไปให้แอดมินเบิกใหม่แทน (เซิร์ฟเวอร์ปฏิเสธเหมือนกัน)
           x.value !== "PARTS_PICKUP" &&
+          x.value !== "PARTS_TRANSFER" &&
+          x.value !== "PARTS_IN_TRANSIT" &&
           (!isSkipped(x.value, order, stages) ||
             /**
              * ใบเก่าที่เข้าเสนอราคาก่อนมีขั้นรอเบิกอะไหล่ — แอดมินเช็คหลังบ้านแล้วพบว่าของหมด
@@ -1308,7 +1353,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                           order.rolledBack?.from === stage.value && styles.stepDotFrom,
                         ]}
                       >
-                        {state === "now" ? <StepPulse size={tight ? 24 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
+                        {state === "now" ? <StepPulse size={tight ? 20 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
                         {state === "done" ? (
                           <Ionicons name="checkmark" size={15} color="#fff" />
                         ) : state === "now" && partsOut.length ? (
@@ -2189,6 +2234,8 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   AWAITING_PAYMENT: ["PAID"],
   PARTS_REQUESTED: ["PARTS_CHECKED"],
   PARTS_PICKUP: ["PICKED_UP"],
+  PARTS_TRANSFER: ["TRANSFER_REQUESTED"],
+  PARTS_IN_TRANSIT: ["TRANSFER_ARRIVED"],
   PARTS_SOURCING: ["PARTS_SOURCED", "PARTS_BACKORDERED"],
   PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
@@ -2802,6 +2849,13 @@ function StageModal({
   // ขั้นหัวหน้าภาคเบิก: คลังที่เบิกจริง + เลขใบเบิก รายตัว (อาจเบิกคนละคลังคนละใบ) · เบิกไม่ได้ = ส่งกลับแอดมิน
   const [pickup, setPickup] = useState<Record<number, { warehouse: string | null; requisitionNo: string }>>({});
   const [pickupFail, setPickupFail] = useState(false);
+  // ขั้นเบิกและโอน: รายตัว — เบิกจากคลังไหน · เลขใบเบิก · โอนไปคลังไหน · เลขที่ใบโอน
+  const [transfer, setTransfer] = useState<
+    Record<number, { from: string | null; reqNo: string; to: string | null; transferNo: string }>
+  >({});
+  // ใบขอโอนสินค้า PDF ที่ออกแล้ว ต่อคู่คลัง "ต้นทาง→ปลายทาง" — กดเปิดเองอีกครั้ง (เบราว์เซอร์บล็อกหน้าต่างที่เปิดหลังรอ)
+  const [transferDocs, setTransferDocs] = useState<Record<string, string>>({});
+  const [docBusy, setDocBusy] = useState<string | null>(null);
   // ลูกค้าขอเปลี่ยนวันแต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
   const newDate = rescheduledPending(order);
   const [declineDate, setDeclineDate] = useState(false);
@@ -2903,6 +2957,15 @@ function StageModal({
         order.waitingParts.filter((p) => isPickup(p, adminWarehouse)).map((p) => [p.sparePartId, { warehouse: p.warehouse, requisitionNo: "" }])
       )
     );
+    setTransfer(
+      Object.fromEntries(
+        order.waitingParts
+          .filter((p) => isTransfer(p, adminWarehouse))
+          // ปลายทางตั้งต้นที่คลังที่แอดมินเบิกส่งมอบได้ (คลัง 94) — เลือกคลังที่ใกล้หน้างานแทนได้
+          .map((p) => [p.sparePartId, { from: p.warehouse, reqNo: "", to: adminWarehouse, transferNo: "" }])
+      )
+    );
+    setTransferDocs({});
     setPickupFail(false);
     setNote("");
     setError(null);
@@ -2986,11 +3049,28 @@ function StageModal({
             requisitionNo:
               p.offCatalog || checks[p.sparePartId]?.warehouse !== adminWarehouse ? null : requisitionNo.trim() || null,
           })),
-          pickupNote: toPickup.length ? pickupNote.trim() : undefined,
+          pickupNote: toPickup.length ? pickupNote.trim() || undefined : undefined,
           splitOut: mixed && splitOut,
           expectedAt: checkOut && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
+      } else if (order.status === "PARTS_TRANSFER" || order.status === "PARTS_IN_TRANSIT") {
+        if (pickupFail) {
+          await api.post(`/work-orders/${order.id}/parts-transfer/return`, { reason: note.trim() });
+        } else if (order.status === "PARTS_TRANSFER") {
+          await api.post(`/work-orders/${order.id}/parts-transfer`, {
+            results: transferParts.map((p) => ({
+              sparePartId: p.sparePartId,
+              fromWarehouse: transfer[p.sparePartId]?.from,
+              transferReqNo: transfer[p.sparePartId]?.reqNo.trim(),
+              toWarehouse: transfer[p.sparePartId]?.to,
+              transferNo: transfer[p.sparePartId]?.transferNo.trim(),
+            })),
+            note: note.trim() || undefined,
+          });
+        } else {
+          await api.post(`/work-orders/${order.id}/parts-transfer/arrived`, { note: note.trim() || undefined });
+        }
       } else if (order.status === "PARTS_PICKUP") {
         if (pickupFail) {
           await api.post(`/work-orders/${order.id}/parts-pickup/return`, { reason: note.trim() });
@@ -3087,7 +3167,57 @@ function StageModal({
     (pickupFail
       ? !note.trim()
       : pickupParts.some((p) => !pickup[p.sparePartId]?.warehouse || !pickup[p.sparePartId]?.requisitionNo.trim()));
-  const pickupRequest = order.status === "PARTS_PICKUP" ? lastPickupRequest(order) : null;
+  const pickupRequest = ["PARTS_PICKUP", "PARTS_TRANSFER"].includes(order.status) ? lastPickupRequest(order) : null;
+  // ขั้นเบิกและโอน / รอโอน
+  const transferParts = order.status === "PARTS_TRANSFER" ? order.waitingParts.filter((p) => isTransfer(p, adminWarehouse)) : [];
+  const movingParts = order.status === "PARTS_IN_TRANSIT" ? order.waitingParts.filter(inTransit) : [];
+  const transferBlocked =
+    (order.status === "PARTS_TRANSFER" || order.status === "PARTS_IN_TRANSIT") &&
+    (pickupFail
+      ? !note.trim()
+      : order.status === "PARTS_TRANSFER" &&
+        transferParts.some((p) => {
+          const t = transfer[p.sparePartId];
+          return !t?.from || !t.to || t.from === t.to || !t.reqNo.trim() || !t.transferNo.trim();
+        }));
+  /** ใบขอโอนสินค้า PDF ของคู่คลังหนึ่ง — ใช้ฟอร์มเดียวกับเมนูเอกสารขอโอนสินค้า เติมรายการให้ */
+  async function transferDoc(from: string, to: string, rows: { part: StockPart; transferNo: string }[]) {
+    const key = `${from}→${to}`;
+    setDocBusy(key);
+    setError(null);
+    try {
+      const nos = [...new Set(rows.map((r) => r.transferNo.trim()).filter(Boolean))];
+      const res = await api.post<{ path: string }>("/documents/transfer-request", {
+        format: "pdf",
+        fromWarehouse: from,
+        toWarehouse: to,
+        documentNo: nos.join(", ") || undefined,
+        note: `ใบงาน ${order.code}`,
+        items: rows.map((r) => ({ code: r.part.partCode, name: r.part.name, quantity: r.part.quantity })),
+      });
+      setTransferDocs((d) => ({ ...d, [key]: res.data.path }));
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setDocBusy(null);
+    }
+  }
+  // คู่คลังที่ต้องออกใบขอโอน — ขั้นเบิกและโอนใช้ค่าที่กรอกอยู่ ขั้นรอโอนใช้ค่าที่บันทึกแล้ว
+  const transferPairs = (() => {
+    const rows =
+      order.status === "PARTS_TRANSFER"
+        ? transferParts.map((p) => ({ part: p, from: transfer[p.sparePartId]?.from, to: transfer[p.sparePartId]?.to, transferNo: transfer[p.sparePartId]?.transferNo ?? "" }))
+        : movingParts.map((p) => ({ part: p, from: p.transferFrom, to: p.warehouse, transferNo: p.transferNo ?? "" }));
+    const pairs = new Map<string, { from: string; to: string; rows: { part: StockPart; transferNo: string }[] }>();
+    for (const r of rows) {
+      if (!r.from || !r.to || r.from === r.to) continue;
+      const k = `${r.from}→${r.to}`;
+      const cur = pairs.get(k) ?? { from: r.from, to: r.to, rows: [] };
+      cur.rows.push({ part: r.part, transferNo: r.transferNo });
+      pairs.set(k, cur);
+    }
+    return [...pairs.entries()];
+  })();
   // ขั้นเสนอราคาต้องมีเอกสาร เว้นแต่กดข้ามซึ่งต้องบอกเหตุผลแทน
   const quoteBlocked =
     order.status === "AWAITING_QUOTE" &&
@@ -3143,7 +3273,7 @@ function StageModal({
     unchecked ||
     needsRequisition ||
     pickupBlocked ||
-    (toPickup.length > 0 && !pickupNote.trim()) ||
+    transferBlocked ||
     (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
 
   return (
@@ -3184,6 +3314,14 @@ function StageModal({
                     ? pickupFail
                       ? "ส่งกลับแอดมิน"
                       : "คอนเฟิร์ม เบิกแล้ว"
+                  : order.status === "PARTS_TRANSFER"
+                    ? pickupFail
+                      ? "ส่งกลับแอดมิน"
+                      : "บันทึก · สั่งโอนแล้ว"
+                  : order.status === "PARTS_IN_TRANSIT"
+                    ? pickupFail
+                      ? "ส่งกลับแอดมิน"
+                      : "ของถึงแล้ว · โอนเสร็จแล้ว"
                     : toPickup.length && !checkOut
                       ? `ส่งหัวหน้าภาคเบิก ${toPickup.length} รายการ`
                       : order.status === "INSPECTING"
@@ -3463,11 +3601,15 @@ function StageModal({
                           value={c.warehouse}
                           placeholder="เลือกคลังที่มีของ"
                           accessibilityLabel={`คลังที่มี ${part.partCode}`}
-                          options={warehouses.map((w) => ({
-                            value: w,
-                            label: w,
-                            hint: w === adminWarehouse ? "แอดมินเบิก" : "หัวหน้าภาคเบิก",
-                          }))}
+                          // คลัง 94 ขึ้นบนสุดแยกหัวข้อ — เลือกแล้วรู้ทันทีว่าใครเบิก (เจ้าของงานขอ ต.ค. 69)
+                          options={[...warehouses]
+                            .sort((a, b) => Number(b === adminWarehouse) - Number(a === adminWarehouse))
+                            .map((w) => ({
+                              value: w,
+                              label: w,
+                              hint: w === adminWarehouse ? "แอดมินเบิก" : "หัวหน้าภาคเบิก",
+                              group: w === adminWarehouse ? "แอดมินเบิกเอง" : "หัวหน้าภาคเบิก",
+                            }))}
                           onChange={(next) =>
                             setChecks((v) => ({
                               ...v,
@@ -3478,7 +3620,14 @@ function StageModal({
                       ) : null}
                       {c.inStock === true && !part.offCatalog && c.warehouse && c.warehouse !== adminWarehouse ? (
                         <Text style={styles.pickupTag} accessibilityLabel={`หัวหน้าภาคเบิก ${part.partCode}`}>
-                          หัวหน้าภาคเบิกเองจาก{c.warehouse} — ไม่ใช้เลขใบเบิกข้างบน
+                          {part.transferredAt && part.warehouse === c.warehouse
+                            ? `โอนมาถึง${c.warehouse}แล้ว — หัวหน้าภาคเบิกส่งมอบ ไม่ใช้เลขใบเบิกข้างบน`
+                            : `หัวหน้าภาคเบิกจาก${c.warehouse}แล้วโอนมาคลังส่งมอบ — ไม่ใช้เลขใบเบิกข้างบน`}
+                        </Text>
+                      ) : null}
+                      {part.transferredAt && part.transferFrom ? (
+                        <Text style={styles.linkedText} accessibilityLabel={`โอนมาแล้ว ${part.partCode}`}>
+                          โอนจาก{part.transferFrom}มาถึง{part.warehouse}แล้ว · ใบโอน {part.transferNo}
                         </Text>
                       ) : null}
                     </View>
@@ -3486,19 +3635,20 @@ function StageModal({
                 })}
                 {toPickup.length ? (
                   <View style={styles.pickupBox}>
-                    <Text style={styles.modalLabel}>หมายเหตุถึงหัวหน้าภาค *</Text>
+                    {/* ไม่บังคับ — ชื่อคลังที่เลือกบอกที่เบิกอยู่แล้ว (เจ้าของงานตกลง ต.ค. 69) */}
+                    <Text style={styles.modalLabel}>หมายเหตุถึงหัวหน้าภาค (ไม่บังคับ)</Text>
                     <TextInput
                       style={styles.modalInput}
                       value={pickupNote}
                       onChangeText={setPickupNote}
-                      placeholder="เบิกที่ไหน ติดต่อใคร เช่น มีที่คลังภูเก็ต 2 ตัว ติดต่อพี่เอ"
+                      placeholder="เช่น ติดต่อพี่เอ ที่คลังภูเก็ต"
                       placeholderTextColor={colors.textFaint}
                       multiline
                       numberOfLines={2}
                       accessibilityLabel="หมายเหตุถึงหัวหน้าภาค"
                     />
-                    <Text style={pickupNote.trim() ? styles.linkedText : styles.warn}>
-                      {toPickup.length} รายการอยู่คลังอื่น — ใบงานไปขั้น “หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)” หัวหน้าภาคเบิกเสร็จแล้วไปจ่ายงานต่อ
+                    <Text style={styles.linkedText}>
+                      {toPickup.length} รายการอยู่คลังอื่น — หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ โอนเสร็จแล้วกลับมาให้แอดมินเบิกส่งมอบ (โอนไปคลังอื่นนอกจาก 94 หัวหน้าภาคเบิกส่งมอบเอง)
                     </Text>
                   </View>
                 ) : null}
@@ -3535,14 +3685,170 @@ function StageModal({
               </View>
             ) : null}
 
+            {order.status === "PARTS_TRANSFER" || order.status === "PARTS_IN_TRANSIT" ? (
+              <View style={styles.checkList}>
+                {order.status === "PARTS_TRANSFER" && pickupRequest ? (
+                  <View style={styles.pickupBox} accessibilityLabel="หมายเหตุจากแอดมิน">
+                    <Text style={styles.issuedTitle}>
+                      แอดมินแจ้งว่ามีของที่{pickupRequest.byName ? ` (${pickupRequest.byName} · ${formatDateTime(pickupRequest.createdAt)})` : ""}
+                    </Text>
+                    {transferParts.map((p) => (
+                      <Text key={p.sparePartId} style={styles.pickupNoteText}>
+                        {partTitle(p)} × {p.quantity} — {p.warehouse}
+                      </Text>
+                    ))}
+                    {pickupAdminNote(pickupRequest.note) ? (
+                      <Text style={styles.linkedText}>หมายเหตุ: {pickupAdminNote(pickupRequest.note)}</Text>
+                    ) : null}
+                  </View>
+                ) : null}
+                {order.status === "PARTS_IN_TRANSIT" ? (
+                  <View style={styles.pickupBox} accessibilityLabel="อะไหล่ที่กำลังโอน">
+                    <Text style={styles.issuedTitle}>กำลังโอน — ของถึงคลังปลายทางแล้วกด "โอนเสร็จแล้ว"</Text>
+                    {movingParts.map((p) => (
+                      <Text key={p.sparePartId} style={styles.pickupNoteText}>
+                        {partTitle(p)} × {p.quantity} — {p.transferFrom} (ใบเบิก {p.transferReqNo}) → {p.warehouse} · ใบโอน {p.transferNo}
+                      </Text>
+                    ))}
+                    <Text style={styles.linkedText}>
+                      {movingParts.some((p) => p.warehouse === adminWarehouse)
+                        ? `โอนเสร็จแล้วใบงานกลับไปให้แอดมินเบิกส่งมอบจาก${adminWarehouse}`
+                        : "โอนเสร็จแล้วคุณเบิกส่งมอบจากคลังปลายทางต่อ (แอดมินเบิกได้เฉพาะคลัง 94)"}
+                    </Text>
+                  </View>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.skipRow}
+                  onPress={() => setPickupFail((v) => !v)}
+                  activeOpacity={0.7}
+                  accessibilityLabel="เบิกหรือโอนไม่ได้ ส่งกลับแอดมิน"
+                >
+                  <Ionicons name={pickupFail ? "checkbox" : "square-outline"} size={18} color={pickupFail ? colors.danger : colors.textFaint} />
+                  <Text style={styles.skipText}>
+                    {order.status === "PARTS_TRANSFER" ? "เบิกไม่ได้" : "โอนไม่สำเร็จ"} — ส่งกลับให้แอดมินหาคลังอื่นหรือตอบว่าหมด (ใส่เหตุผลในช่องบันทึกข้างล่าง)
+                  </Text>
+                </TouchableOpacity>
+                {order.status === "PARTS_TRANSFER" && !pickupFail
+                  ? transferParts.map((part) => {
+                      const v = transfer[part.sparePartId] ?? { from: part.warehouse, reqNo: "", to: adminWarehouse, transferNo: "" };
+                      const set = (next: Partial<typeof v>) => setTransfer((cur) => ({ ...cur, [part.sparePartId]: { ...v, ...next } }));
+                      return (
+                        <View key={part.sparePartId} style={styles.checkItem}>
+                          <Text style={styles.checkCode}>
+                            {partTitle(part)} × {part.quantity}
+                          </Text>
+                          <Text style={styles.checkName}>{part.name}</Text>
+                          <Text style={styles.modalLabel}>เบิกจากคลัง</Text>
+                          <Dropdown
+                            value={v.from}
+                            placeholder="คลังที่เบิก"
+                            accessibilityLabel={`เบิกจากคลัง ${part.partCode}`}
+                            options={warehouses.map((w) => ({ value: w, label: w, hint: w === part.warehouse ? "แอดมินบอก" : undefined }))}
+                            onChange={(next) => set({ from: next })}
+                          />
+                          <TextInput
+                            style={[styles.modalInput, styles.modalInputLine]}
+                            value={v.reqNo}
+                            onChangeText={(t) => set({ reqNo: t })}
+                            placeholder="เลขใบเบิกจากคลังต้นทาง"
+                            placeholderTextColor={colors.textFaint}
+                            autoCapitalize="characters"
+                            accessibilityLabel={`เลขใบเบิกต้นทาง ${part.partCode}`}
+                          />
+                          <Text style={styles.modalLabel}>โอนไปคลัง (ที่จะส่งมอบให้ช่าง)</Text>
+                          <Dropdown
+                            value={v.to}
+                            placeholder="คลังปลายทาง"
+                            accessibilityLabel={`โอนไปคลัง ${part.partCode}`}
+                            options={[...warehouses]
+                              .filter((w) => w !== v.from)
+                              .sort((a, b) => Number(b === adminWarehouse) - Number(a === adminWarehouse))
+                              .map((w) => ({ value: w, label: w, hint: w === adminWarehouse ? "แอดมินเบิกส่งมอบ" : "หัวหน้าภาคเบิกส่งมอบ" }))}
+                            onChange={(next) => set({ to: next })}
+                          />
+                          {v.from && v.to && v.from === v.to ? <Text style={styles.warn}>คลังที่โอนไปต้องไม่ใช่คลังเดียวกับที่เบิก</Text> : null}
+                          <TextInput
+                            style={[styles.modalInput, styles.modalInputLine]}
+                            value={v.transferNo}
+                            onChangeText={(t) => set({ transferNo: t })}
+                            placeholder="เลขที่ใบโอน"
+                            placeholderTextColor={colors.textFaint}
+                            autoCapitalize="characters"
+                            accessibilityLabel={`เลขที่ใบโอน ${part.partCode}`}
+                          />
+                        </View>
+                      );
+                    })
+                  : null}
+                {!pickupFail && transferPairs.length ? (
+                  <View style={styles.issuedBox}>
+                    <Text style={styles.issuedTitle}>ใบขอโอนสินค้า (PDF)</Text>
+                    {transferPairs.map(([key, pair]) => (
+                      <View key={key} style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                        <TouchableOpacity
+                          style={styles.docBtn}
+                          onPress={() => transferDoc(pair.from, pair.to, pair.rows)}
+                          disabled={docBusy === key}
+                          activeOpacity={0.8}
+                          accessibilityLabel={`ออกใบขอโอนสินค้า ${key}`}
+                        >
+                          <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
+                          <Text style={styles.docBtnText}>
+                            {docBusy === key ? "กำลังออก…" : `${pair.from} → ${pair.to} (${pair.rows.length} รายการ)`}
+                          </Text>
+                        </TouchableOpacity>
+                        {transferDocs[key] ? (
+                          <TouchableOpacity
+                            onPress={() => openUrl(resolveImageUrl(transferDocs[key])!)}
+                            accessibilityLabel={`เปิดใบขอโอนสินค้า ${key}`}
+                          >
+                            <Text style={styles.docLink}>เปิด PDF</Text>
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {issued.length > 0 ? (
+                  <View style={styles.issuedBox}>
+                    <Text style={styles.issuedTitle}>เบิกส่งมอบแล้ว</Text>
+                    {issued.map((p) => (
+                      <Text key={p.sparePartId} style={styles.issuedLine}>
+                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · ใบเบิก {p.requisitionNo}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+                <Text style={transferBlocked ? styles.warn : styles.linkedText}>
+                  {pickupFail
+                    ? note.trim()
+                      ? "ใบงานกลับไปขั้นแอดมินเบิกอะไหล่"
+                      : "ใส่เหตุผลในช่องบันทึกข้างล่าง"
+                    : order.status === "PARTS_TRANSFER"
+                      ? transferBlocked
+                        ? "ใส่คลัง เลขใบเบิก และเลขที่ใบโอนให้ครบทุกรายการ"
+                        : "บันทึกแล้วใบงานรอของถึงคลังปลายทาง"
+                      : "ของถึงคลังปลายทางแล้วกดปุ่มข้างล่าง"}
+                </Text>
+              </View>
+            ) : null}
+
             {order.status === "PARTS_PICKUP" ? (
               <View style={styles.checkList}>
                 {pickupRequest ? (
                   <View style={styles.pickupBox} accessibilityLabel="หมายเหตุจากแอดมิน">
                     <Text style={styles.issuedTitle}>
-                      จากแอดมิน{pickupRequest.byName ? ` (${pickupRequest.byName} · ${formatDateTime(pickupRequest.createdAt)})` : ""}
+                      แอดมินแจ้งว่ามีของที่{pickupRequest.byName ? ` (${pickupRequest.byName} · ${formatDateTime(pickupRequest.createdAt)})` : ""}
                     </Text>
-                    <Text style={styles.pickupNoteText}>{pickupRequest.note ?? "—"}</Text>
+                    {/* รายตัวจากผลเช็คของแอดมิน ไม่ใช่จากข้อความ — หมายเหตุไม่บังคับแล้ว ข้อความอาจไม่มี */}
+                    {pickupParts.map((p) => (
+                      <Text key={p.sparePartId} style={styles.pickupNoteText}>
+                        {partTitle(p)} × {p.quantity} — {p.warehouse}
+                      </Text>
+                    ))}
+                    {pickupAdminNote(pickupRequest.note) ? (
+                      <Text style={styles.linkedText}>หมายเหตุ: {pickupAdminNote(pickupRequest.note)}</Text>
+                    ) : null}
                   </View>
                 ) : null}
                 <TouchableOpacity
@@ -3930,7 +4236,7 @@ function StageModal({
             {order.status !== "INSPECTING" ? (
               <>
                 <Text style={styles.modalLabel}>
-                  {order.status === "PARTS_PICKUP" && pickupFail
+                  {["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
                     ? "เหตุผลที่เบิกไม่ได้ *"
                     : order.status === "ASSIGNED" && declineDate
                       ? "เหตุผลที่ทีมไม่ว่าง (แอดมินเห็น) *"
@@ -3941,7 +4247,7 @@ function StageModal({
                   value={note}
                   onChangeText={setNote}
                   placeholder={
-                    order.status === "PARTS_PICKUP" && pickupFail
+                    ["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
                       ? "เช่น คลังภูเก็ตของหมดแล้ว"
                       : order.status === "ASSIGNED" && declineDate
                         ? "เช่น ทีมเต็มวันนั้น ขอเป็นสัปดาห์หน้า"
@@ -5605,6 +5911,19 @@ const styles = StyleSheet.create({
   todayHeroText: { fontSize: 13.5, lineHeight: 21, color: colors.text },
   pickupBox: { gap: 6, padding: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.warningTint, borderWidth: 1, borderColor: colors.warningBorder },
   pickupTag: { fontSize: 12, lineHeight: 18, color: colors.warningInk, fontWeight: "600" },
+  docBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.sky200,
+    backgroundColor: colors.sky50,
+    borderRadius: radius.md,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  docBtnText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
+  docLink: { fontSize: 13.5, fontWeight: "700", color: colors.primaryInk, textDecorationLine: "underline" },
   pickupNoteText: { fontSize: 14, lineHeight: 21, color: colors.text },
   rowSub: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: 1 },
   linkRow: {
@@ -5777,12 +6096,14 @@ const styles = StyleSheet.create({
   // จอแคบ ชื่อขั้นปัจจุบันเป็นชื่อเดียวที่โชว์ — ให้ที่มากกว่าช่องอื่น
   stepNowWide: { flexGrow: 3 },
   // จอแคบ: 11 วง × 30 px ก็เกือบเต็มจอมือถือแล้ว — ลดช่องไฟให้วงไม่ล้น
-  stepTight: { paddingHorizontal: 1 },
-  stepSkipGroupTight: { width: 44 },
+  // ขั้นเบิก/โอนอะไหล่ของหัวหน้าภาคเพิ่มมาอีก 2 วง (พ.ย. 69) ช่องไฟ 1 px ก็ล้นแล้ว — วงชิดกันได้ เส้นเชื่อมยังคั่น
+  stepTight: { paddingHorizontal: 0 },
+  stepSkipGroupTight: { width: 40 },
   // วงเล็กลงด้วย — 10 วง × 30 px + ปุ่มข้าม ยังเกินจอมือถือ 360 px
-  stepDotTight: { width: 24, height: 24, borderRadius: 12 },
-  stepNumTight: { fontSize: 11, lineHeight: 15 },
-  stepLineTight: { top: 11, marginLeft: 14, marginRight: 14 },
+  // 13 ขั้นบนจอ 420 เหลือช่องละ 21 px — วง 24 ยื่นเกินช่องสุดท้ายจนแถบเลื่อนได้ 2 px จึงเหลือ 20
+  stepDotTight: { width: 20, height: 20, borderRadius: 10 },
+  stepNumTight: { fontSize: 10, lineHeight: 13 },
+  stepLineTight: { top: 9, marginLeft: 12, marginRight: 12 },
   stepSkipPillTight: { paddingHorizontal: 4, height: 22, marginTop: 1 },
   // อยู่เหนือเส้นเชื่อมของขั้นถัดไป (เส้นลากย้อนมาครึ่งช่องของมันเอง) — ไม่งั้นเส้นพาดทับคำว่า "ข้าม"
   stepSkipGroup: { flexGrow: 0, flexShrink: 0, width: 58, alignItems: "center", zIndex: 2 },
