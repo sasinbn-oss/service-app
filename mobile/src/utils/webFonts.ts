@@ -31,6 +31,8 @@ export function installWebFonts() {
   style.textContent =
     `[class*="css-text"]:not([style*="font-family"]){font-family:${SYSTEM_STACK}}` +
     `body{background:${colors.background};-webkit-font-smoothing:antialiased}` +
+    // ปัดนิ้วแนวนอนให้เป็นของแอป (ดึงเมนูข้าง) ไม่ใช่ "ย้อนกลับ" ของเบราว์เซอร์ — เคยปัดเปิดเมนูแล้วหลุดไปหน้าว่าง
+    "html,body{overscroll-behavior-x:none}" +
     // โหมดมืด: ช่องกรอก ปฏิทินของเบราว์เซอร์ และแถบเลื่อนเป็นแบบมืดตาม
     (isDark ? ":root{color-scheme:dark}" : "") +
     // ช่องกรอกที่กำลังพิมพ์: ขอบฟ้าแบบต้นแบบ (.input:focus) แทนกรอบดำหนาของเบราว์เซอร์

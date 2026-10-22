@@ -352,17 +352,11 @@ function LogoutButton() {
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
 function HomeStackNavigator() {
-  const { user } = useAuth();
-  // แอดมินกับหัวหน้าภาคเปิดแอปมาเจอแผนงานวันนี้ก่อน — คำถามแรกของเช้าคือ
-  // "วันนี้ใครไปไหน" ไม่ใช่เมนู · ช่างเริ่มที่ "งานของฉัน" (เจ้าของงานเลือกแบบ Salesforce ต.ค. 69)
-  const planner = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
-  const tech = user?.role === "EMPLOYEE";
+  // ทุกตำแหน่งเปิดแอปมาเจอ "งานของฉันวันนี้" ก่อน (เจ้าของงานเลือก ต.ค. 69)
+  // เดิมแอดมิน/หัวหน้าภาคเริ่มที่แผนงาน ช่างเริ่มที่งานของฉัน — เปลี่ยนให้ทุกคนเห็นงานที่ออกไปจริงวันนี้ก่อน
+  // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ภาคของตัวเอง · แอดมิน = ทั้งหมด
   return (
-    <HomeStack.Navigator
-      screenOptions={commonScreenOptions}
-      screenLayout={pageEnterLayout}
-      initialRouteName={planner ? "PlanBoard" : tech ? "MyJobs" : "HomeMenu"}
-    >
+    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout} initialRouteName="MyJobs">
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
       <HomeStack.Screen name="MyJobs" component={MyJobsScreen} options={{ title: "งานของฉัน" }} />
       <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
