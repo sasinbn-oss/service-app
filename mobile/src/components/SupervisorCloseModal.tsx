@@ -112,7 +112,7 @@ export default function SupervisorCloseModal({
         // รูปต้องขึ้นก่อน — เซิร์ฟเวอร์เช็คว่ามีรูปหลังซ่อมแล้วตอนรับคำสั่งปิด
         for (const [i, f] of after.entries()) {
           setStage(`กำลังส่งรูป ${i + 1}/${after.length}`);
-          await uploadAttachment(order.id, f, "AFTER");
+          await uploadAttachment(order.id, f, "AFTER", undefined, { index: i, total: after.length });
         }
         setStage(null);
         await api.post(`/work-orders/${order.id}/supervisor-close`, {

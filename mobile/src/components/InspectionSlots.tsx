@@ -90,7 +90,7 @@ export default function InspectionSlots({
       const files = Array.isArray(got) ? got : got ? [got] : [];
       for (const [i, file] of files.entries()) {
         setBusy({ role, label: files.length > 1 ? `กำลังส่ง ${i + 1}/${files.length}` : "กำลังส่ง" });
-        await uploadAttachment(workOrderId, file, role);
+        await uploadAttachment(workOrderId, file, role, undefined, { index: i, total: files.length });
       }
       if (files.length) await onChanged();
     } catch (e) {

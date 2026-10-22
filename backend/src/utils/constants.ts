@@ -955,8 +955,12 @@ export const MAX_ATTACHMENT_DOCUMENT_BYTES = 15 * 1024 * 1024;
 /** รูปย่อที่แอปส่งมาพร้อมไฟล์ ถ้าใหญ่กว่านี้แปลว่าแอปส่งรูปเต็มมาผิดช่อง */
 export const MAX_ATTACHMENT_THUMBNAIL_BYTES = 200 * 1024;
 
-/** กี่ไฟล์ต่อใบงาน — กันคนเผลออัปทั้งอัลบั้ม ไม่ได้กันการใช้งานปกติ */
-export const MAX_ATTACHMENTS_PER_WORK_ORDER = 20;
+/**
+ * กี่ไฟล์ต่อใบงาน — กันคนเผลออัปทั้งอัลบั้ม ไม่ได้กันการใช้งานปกติ
+ * เดิม 20 ตั้งก่อนมีเคลมอะไหล่ — ปิดงานพร้อมเคลมต้องแนบชิ้นละ 4 ไฟล์ + ก่อน/หลัง/ป้ายรุ่น/ใบเหลือง
+ * รวมไฟล์ตอนเปิดใบและตรวจหน้างาน ใบจริง (WO-00133) เต็มจนปิดงานไม่ได้ · เจ้าของงานให้ขยายเป็น 60 (ต.ค. 69)
+ */
+export const MAX_ATTACHMENTS_PER_WORK_ORDER = 60;
 
 export function attachmentKindFor(mimeType: string): "IMAGE" | "VIDEO" | "DOCUMENT" | null {
   const type = mimeType.split(";")[0].trim().toLowerCase();

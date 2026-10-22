@@ -18,7 +18,6 @@ import { colors, radius, spacing } from "../theme";
 export interface ClaimCheckDraft {
   errorCode: string | null;
   checked: string[];
-  install: Record<string, boolean>;
 }
 export interface PlateDraft {
   values: Record<string, PlateValue>;
@@ -38,7 +37,6 @@ export function claimMachineGaps(guide: ClaimGuide | undefined, plate: PlateDraf
     ...(filled.length ? [] : ["ข้อมูลป้ายรุ่น"]),
     ...(scanned && !plate.verified ? ["ติ๊กตรวจค่ากับรูปป้าย"] : []),
     ...(guide.errors.length && !check.errorCode ? ["Error ที่เครื่องขึ้น"] : []),
-    ...(guide.installChecks.some((c) => typeof check.install[c.key] !== "boolean") ? ["เรื่องการติดตั้งฐานเครื่อง"] : []),
   ];
 }
 
@@ -222,28 +220,6 @@ export default function ClaimMachineBox({
               })}
             </>
           ) : null}
-
-          <Text style={[styles.label, { marginTop: spacing.md }]}>
-            การติดตั้งฐานเครื่อง <Text style={{ color: colors.danger }}>*</Text>
-          </Text>
-          <Text style={styles.hint}>ดูใต้เครื่องแล้วตอบตามจริงทุกข้อ</Text>
-          {guide.installChecks.map((c) => {
-            const a = check.install[c.key];
-            const pick = (v: boolean) => onCheck({ ...check, install: { ...check.install, [c.key]: v } });
-            return (
-              <View key={c.key} style={styles.install}>
-                <Text style={styles.installText}>{c.label}</Text>
-                <View style={styles.yn}>
-                  <TouchableOpacity style={[styles.ynBtn, a === false && styles.ynOn]} onPress={() => pick(false)} accessibilityLabel={`${c.label} ไม่มี`}>
-                    <Text style={[styles.ynText, a === false && styles.ynTextOn]}>ไม่มี</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.ynBtn, a === true && styles.ynOn]} onPress={() => pick(true)} accessibilityLabel={`${c.label} มี`}>
-                    <Text style={[styles.ynText, a === true && styles.ynTextOn]}>มี</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          })}
         </>
       ) : (
         <Text style={[styles.hint, { marginTop: spacing.sm }]}>
@@ -335,11 +311,6 @@ const styles = StyleSheet.create({
   checkText: { flex: 1, fontSize: 13, color: colors.text },
   install: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 4 },
   installText: { flex: 1, minWidth: 0, fontSize: 13, color: colors.text },
-  yn: { flexDirection: "row", gap: 6 },
-  ynBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingVertical: 5, paddingHorizontal: 12, backgroundColor: colors.card },
-  ynOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  ynText: { fontSize: 12.5, fontWeight: "700", color: colors.textMuted },
-  ynTextOn: { color: colors.primaryInk },
   sum: { gap: 4, marginTop: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: colors.tile },
   sumHead: { fontSize: 12.5, fontWeight: "800", color: colors.navy, marginTop: 2 },
   sumRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
@@ -368,7 +339,7 @@ export function ClaimMachineSummary({
   } | null;
   /** รูปป้ายเต็มที่ระบบอ่านค่ามา — กดดูขนาดเต็ม */
   photo?: { uri: string | null; open: () => void } | null;
-  fieldCheck?: { errorCode: string; errorName: string; checked: string[]; install: { key: string; label: string; note: string; answer: boolean }[] } | null;
+  fieldCheck?: { errorCode: string; errorName: string; checked: string[]; install?: { key: string; label: string; note: string; answer: boolean }[] } | null;
 }) {
   if (!nameplate?.fields?.length && !fieldCheck) return null;
   return (
@@ -412,8 +383,9 @@ export function ClaimMachineSummary({
               <Text style={styles.checkText}>{c}</Text>
             </View>
           ))}
-          <Text style={[styles.hint, { marginTop: 4 }]}>การติดตั้งฐานเครื่อง (ช่างตอบตามที่เห็น)</Text>
-          {fieldCheck.install.map((c) => (
+          {/* ใบเคลมก่อนเอาเช็คลิสต์ออกยังมีคำตอบ — แสดงไว้ให้ Admin Spare Part เห็นเหมือนเดิม */}
+          {fieldCheck.install?.length ? <Text style={[styles.hint, { marginTop: 4 }]}>การติดตั้งฐานเครื่อง (ช่างตอบตามที่เห็น)</Text> : null}
+          {(fieldCheck.install ?? []).map((c) => (
             <View key={c.key} style={styles.install}>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={styles.installText}>{c.label}</Text>

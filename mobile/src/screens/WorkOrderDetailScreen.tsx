@@ -202,6 +202,9 @@ interface WorkOrder {
   /** รูป/วิดีโอก่อนซ่อม · หลังซ่อม ของรอบนี้ที่แนบไว้แล้ว — ปิดงานบังคับอย่างละอย่างน้อยหนึ่ง */
   beforeCount?: number;
   afterCount?: number;
+  /** ไฟล์ทั้งหมดในใบ (ทุกชนิด) กับเพดาน — หน้าปิดงานเตือนก่อนกดถ้าไฟล์ที่จะส่งเพิ่มจะเกิน */
+  attachmentCount?: number;
+  attachmentLimit?: number;
   /** คนที่เข้าไปทำจริง บันทึกตอนปิดงาน */
   workers: Technician[];
   otherWorkers: string | null;
@@ -247,7 +250,8 @@ interface PartClaim {
     errorCode: string;
     errorName: string;
     checked: string[];
-    install: { key: string; label: string; note: string; answer: boolean }[];
+    /** เช็คลิสต์การติดตั้งฐานเครื่อง — มีเฉพาะใบเคลมก่อน ต.ค. 69 ที่ยังถามอยู่ */
+    install?: { key: string; label: string; note: string; answer: boolean }[];
   } | null;
   status: "PENDING" | "APPROVED" | "REJECTED";
   rejectReason: string | null;
@@ -2358,7 +2362,7 @@ function RollbackModal({
        */
       for (const [i, file] of files.entries()) {
         setBusy(`กำลังส่งไฟล์ ${i + 1}/${files.length}`);
-        await uploadAttachment(order.id, file);
+        await uploadAttachment(order.id, file, undefined, undefined, { index: i, total: files.length });
       }
       setBusy("กำลังส่งกลับ");
       await api.post(`/work-orders/${order.id}/reassess-parts`, {
@@ -2991,7 +2995,7 @@ function StageModal({
     const list = [...docs];
     for (const [n, file] of list.entries()) {
       setBusy(list.length > 1 ? `${label} ${n + 1}/${list.length}` : label);
-      await uploadAttachment(order.id, file, role);
+      await uploadAttachment(order.id, file, role, undefined, { index: n, total: list.length });
       setDocs((prev) => prev.filter((f) => f !== file));
     }
   }
@@ -4996,7 +5000,6 @@ function CloseModal({
   const [check, setCheck] = useState<ClaimCheckDraft>(() => ({
     errorCode: priorClaim?.fieldCheck?.errorCode ?? null,
     checked: priorClaim?.fieldCheck?.checked ?? [],
-    install: Object.fromEntries((priorClaim?.fieldCheck?.install ?? []).map((i) => [i.key, i.answer])),
   }));
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [beforeFiles, setBeforeFiles] = useState<PickedAttachment[]>([]);
@@ -5012,6 +5015,11 @@ function CloseModal({
   const [missing, setMissing] = useState<PickedPart[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /**
+   * ไฟล์ที่ขึ้นเซิร์ฟเวอร์แล้วในรอบนี้ — ปิดไม่ผ่าน (เช่น ข้อมูลเคลมไม่ครบ) แล้วกดใหม่ต้องไม่ส่งซ้ำ
+   * เดิมส่งใหม่ทั้งชุดทุกครั้ง กดซ้ำหลายรอบไฟล์ซ้ำจนเต็มเพดาน แล้วปิดงานไม่ได้อีกเลย (WO-00133)
+   */
+  const sentRef = useRef(new Set<PickedAttachment>());
   const [error, setError] = useState<string | null>(null);
 
   // ใช้อะไหล่แล้วต้องมีใบเหลือง — เซิร์ฟเวอร์ก็กันไว้อีกชั้น แต่บอกตั้งแต่ตรงนี้
@@ -5078,6 +5086,30 @@ function CloseModal({
   const machineGaps = anyClaim ? claimMachineGaps(order.claimGuide, plate, check) : [];
   const claimsMissing = parts.some((p) => claimGaps(p).length > 0) || machineGaps.length > 0;
 
+  /** ไฟล์ที่ยังต้องขึ้นก่อนสั่งปิด — ใช้ทั้งตอนส่งและตอนนับว่าจะเกินเพดานไหม */
+  function uploadQueue() {
+    const claimed = parts.filter((p) => draftFor(p.sparePartId).on);
+    const queue: { file: PickedAttachment; role?: string; sparePartId?: number }[] = [
+      ...beforeFiles.map((file) => ({ file, role: "BEFORE" })),
+      ...afterFiles.map((file) => ({ file, role: "AFTER" })),
+      ...(nameplate ? [{ file: nameplate, role: "NAMEPLATE" }] : []),
+      ...(slip ? [{ file: slip, role: "REQUISITION" }] : []),
+      ...claimed.flatMap((p) =>
+        Object.entries(draftFor(p.sparePartId).files).flatMap(([role, file]) =>
+          file ? [{ file, role, sparePartId: p.sparePartId }] : []
+        )
+      ),
+    ];
+    return queue.filter((q) => !sentRef.current.has(q.file));
+  }
+  /**
+   * บอกก่อนกดว่าไฟล์จะเกินเพดาน — ไม่ใช่ไปโดนปฏิเสธกลางทางตอนส่งไฟล์
+   * ซึ่งไฟล์ก่อนหน้าขึ้นไปแล้วและนับเข้าเพดานด้วย
+   */
+  const pendingUploads = uploadQueue().length;
+  const overLimit =
+    order.attachmentLimit !== undefined && (order.attachmentCount ?? 0) + pendingUploads > order.attachmentLimit;
+
   /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
   /** ไฟล์ปิดงานแต่ละขั้น — หมุนเฉพาะขั้นที่กำลังเตรียมไฟล์ ขั้นอื่นยังเห็นปุ่มตามปกติ */
   const [picking, setPicking] = useState<string | null>(null);
@@ -5126,20 +5158,11 @@ function CloseModal({
        * ส่งไฟล์ทีหลังจะถูกปฏิเสธทั้งที่ไฟล์อยู่ในมือแล้ว
        */
       const claimed = parts.filter((p) => draftFor(p.sparePartId).on);
-      const queue: { file: PickedAttachment; role?: string; sparePartId?: number }[] = [
-        ...beforeFiles.map((file) => ({ file, role: "BEFORE" })),
-        ...afterFiles.map((file) => ({ file, role: "AFTER" })),
-        ...(nameplate ? [{ file: nameplate, role: "NAMEPLATE" }] : []),
-        ...(slip ? [{ file: slip, role: "REQUISITION" }] : []),
-        ...claimed.flatMap((p) =>
-          Object.entries(draftFor(p.sparePartId).files).flatMap(([role, file]) =>
-            file ? [{ file, role, sparePartId: p.sparePartId }] : []
-          )
-        ),
-      ];
+      const queue = uploadQueue();
       for (const [i, item] of queue.entries()) {
         setBusy(`กำลังส่งไฟล์ ${i + 1}/${queue.length}`);
-        await uploadAttachment(order.id, item.file, item.role, item.sparePartId);
+        await uploadAttachment(order.id, item.file, item.role, item.sparePartId, { index: i, total: queue.length });
+        sentRef.current.add(item.file);
       }
       setBusy("กำลังปิดงาน");
       await api.post(`/work-orders/${order.id}/close`, {
@@ -5180,6 +5203,7 @@ function CloseModal({
       });
       // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
       setDrafts({});
+      sentRef.current.clear();
       clearDraft(draftKey);
       setNote("");
       setParts([]);
@@ -5231,12 +5255,12 @@ function CloseModal({
           <TouchableOpacity
             style={[
               styles.modalSave,
-              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || offPartsIncomplete(offParts)) &&
+              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || overLimit || offPartsIncomplete(offParts)) &&
                 styles.modalSaveOff,
             ]}
             onPress={submit}
             disabled={
-              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || offPartsIncomplete(offParts)
+              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || overLimit || offPartsIncomplete(offParts)
             }
             activeOpacity={0.8}
           >
@@ -5824,6 +5848,12 @@ function CloseModal({
         ].filter((x): x is string => !!x)}
         why="ต้องครบก่อนถึงจะกดยืนยันปิดงานได้"
       />
+      {overLimit ? (
+        <Text style={styles.modalError}>
+          ไฟล์เกินเพดาน — ใบนี้มีไฟล์แล้ว {order.attachmentCount} ไฟล์ จะส่งเพิ่มอีก {pendingUploads} ไฟล์ แต่ใบงานหนึ่งแนบได้ไม่เกิน{" "}
+          {order.attachmentLimit} ไฟล์ · ลบไฟล์ที่ไม่ใช้ (เช่น รูปซ้ำ) ในการ์ดไฟล์แนบ หรือเอารูปออกจากฟอร์มนี้บางรูป
+        </Text>
+      ) : null}
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );

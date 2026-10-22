@@ -18,6 +18,7 @@ import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as VideoThumbnails from "expo-video-thumbnails";
 import { api } from "../api/client";
 import { showAlert } from "./alert";
+import { feedback } from "../components/Feedback";
 
 /** ไฟล์ที่เลือกไว้แล้วแต่ยังไม่ได้ส่งขึ้นเซิร์ฟเวอร์ */
 export interface PickedAttachment {
@@ -231,7 +232,12 @@ export async function uploadAttachment(
   /** บอกว่ารูปนี้คืออะไร เช่น NAMEPLATE — ไม่ส่งมาคือรูปอาการธรรมดา */
   role?: string,
   /** หลักฐานเคลม (role CLAIM_*) ต้องบอกว่าเป็นของอะไหล่ชิ้นไหน */
-  sparePartId?: number
+  sparePartId?: number,
+  /**
+   * ไฟล์นี้เป็นไฟล์ที่เท่าไรของชุด — หลอดในหน้าโหลดเต็มจอนับรวมทั้งชุด (ไฟล์ 3/12 · 40%)
+   * ไม่ส่งมา = ไฟล์เดียว · วิดีโอหลายสิบ MB บนเน็ตมือถือใช้เวลาเป็นนาที เห็นแค่ตัวหมุนจะคิดว่าค้าง
+   */
+  batch: { index: number; total: number } = { index: 0, total: 1 }
 ) {
   const form = new FormData();
   await appendFile(form, "file", file.uri, file.name, file.type);
@@ -240,7 +246,15 @@ export async function uploadAttachment(
   }
   if (role) form.append("role", role);
   if (sparePartId !== undefined) form.append("sparePartId", String(sparePartId));
+  // ขึ้นหลอดที่ 0% ทันที ไม่ต้องรอเหตุการณ์แรกจากเบราว์เซอร์ (ไฟล์เล็กบางทีไม่มีเลย)
+  feedback.progress({ done: batch.index, total: batch.total, current: 0 });
   await api.post(`/work-orders/${workOrderId}/attachments`, form, {
     headers: { "Content-Type": "multipart/form-data" },
+    // หน้าโหลดเปิดตอนคำขอเริ่ม (api/client) — ตั้งหลอดหลังจากนั้น ไม่งั้นโดนล้างทิ้งตอนหน้าโหลดปิดระหว่างไฟล์
+    onUploadProgress: (e) => {
+      const current = e.total ? Math.min(1, e.loaded / e.total) : 0;
+      feedback.progress({ done: batch.index, total: batch.total, current });
+    },
+    loadingText: "กำลังส่งไฟล์...",
   });
 }
