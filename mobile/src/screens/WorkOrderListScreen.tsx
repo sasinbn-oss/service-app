@@ -946,7 +946,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       */}
       <View style={styles.pageHead}>
         <View style={styles.pageTitleRow}>
-          <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
+          {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ — ประหยัดที่ให้เห็นใบงานเร็วขึ้น (เจ้าของงานขอ ต.ค. 69) */}
+          {docked ? (
+            <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
+          ) : null}
           {!loading && !error ? (
             <View style={styles.countPill}>
               {/* กล่องงานหัวหน้าภาค: นับทุกแท็บ ให้ตรงกับชิป "กล่องงานของฉัน" — แท็บข้างล่างแบ่งย่อยจากตัวเลขนี้ */}
@@ -968,7 +971,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </TouchableOpacity>
           )}
         </View>
-        <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text>
+        {docked ? <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text> : null}
       </View>
       <ViewTabs
         tabs={FILTERS.map((f) => ({ value: f.value, label: f.label, n: counts[f.value] }))}

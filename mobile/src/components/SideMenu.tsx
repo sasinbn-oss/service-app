@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -17,7 +18,9 @@ import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
 import { MainTabParamList } from "../navigation/types";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, headingFont, radius, shadow, spacing } from "../theme";
+import ThemeToggle from "./ThemeToggle";
+import { showAlert } from "../utils/alert";
 
 /**
  * เมนูข้างแบบเลื่อนออกจากซ้าย (ปุ่มสามขีดบนแถบบน) ตามต้นแบบ OTTERI
@@ -287,7 +290,7 @@ function MenuContent({
   const closed = useClosedGroups();
   return (
     // nativeID = id บนเว็บ — ลากรีเฟรช (PullToRefresh) ไม่จับนิ้วที่อยู่ในเมนู ไม่งั้นเมนูเลื่อนลงตามนิ้ว
-    <ScrollView nativeID="side-menu" contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    <ScrollView nativeID="side-menu" style={{ flex: 1 }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => {
             const items = g.items
               .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
@@ -465,8 +468,61 @@ export default function SideMenu() {
       <Animated.View
         style={[styles.panel, { paddingTop: spacing.sm, transform: [{ translateX: x }] }]}
       >
+        <PanelHead />
         <MenuContent active={active} inbox={inbox} onPick={go} />
+        <PanelTools onLeave={() => setOpen(false)} />
       </Animated.View>
+    </View>
+  );
+}
+
+const ROLE_TH: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
+
+/**
+ * หัวเมนูเลื่อนออก (จอแคบ): โลโก้กับคนที่ล็อกอิน — จอแคบไม่มีแถบโลโก้แล้ว (ดู NarrowBar ใน MainNavigator)
+ * แบรนด์จึงมาอยู่ที่นี่ ให้ยังเห็นว่าเป็นแอปของ OTTERI และใครใช้อยู่
+ */
+function PanelHead() {
+  const { user } = useAuth();
+  return (
+    <View style={styles.panelHead}>
+      <View style={styles.panelLogo}>
+        <Image source={require("../../assets/logo-otter.png")} style={{ width: "100%", height: "100%" }} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.panelBrand, headingFont]}>OTTERI</Text>
+        {user ? (
+          <Text style={styles.panelWho} numberOfLines={1}>
+            {user.name} ·{" "}
+            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "Admin Spare Part" : ROLE_TH[user.role] ?? user.role}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** โหมดมืดกับออกจากระบบ (จอแคบ) — ย้ายมาจากแถบบน ใช้ไม่บ่อย ไม่ควรกินที่หัวจอทุกหน้า */
+function PanelTools({ onLeave }: { onLeave: () => void }) {
+  const { logout } = useAuth();
+  return (
+    <View style={styles.panelTools}>
+      <ThemeToggle />
+      <View style={{ flex: 1 }} />
+      <TouchableOpacity
+        style={styles.panelLogout}
+        accessibilityLabel="ออกจากระบบ"
+        onPress={() => {
+          onLeave();
+          showAlert("ยืนยัน", "ต้องการออกจากระบบ?", [
+            { text: "ยกเลิก", style: "cancel" },
+            { text: "ตกลง", onPress: logout },
+          ]);
+        }}
+      >
+        <Ionicons name="log-out-outline" size={18} color="#fff" />
+        <Text style={styles.panelLogoutText}>ออกจากระบบ</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -578,4 +634,36 @@ const styles = StyleSheet.create({
   },
   // จอคอมปุ่มนี้อยู่บนเมนูกรมท่า · จอแคบอยู่แถบชื่อหน้าพื้นขาว สีจึงต่างกัน
   menuBtnDock: { backgroundColor: colors.sideLine },
+  panelHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.sideLine,
+  },
+  panelLogo: { width: 40, height: 40, borderRadius: 12, overflow: "hidden", backgroundColor: "#fff" },
+  panelBrand: { fontSize: 18, lineHeight: 24, fontWeight: "800", color: "#fff" },
+  panelWho: { fontSize: 12, lineHeight: 18, color: colors.sideDim },
+  panelTools: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.sideLine,
+  },
+  panelLogout: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: colors.sideLine,
+  },
+  panelLogoutText: { color: "#fff", fontSize: 14, lineHeight: 20, fontWeight: "700" },
 });
