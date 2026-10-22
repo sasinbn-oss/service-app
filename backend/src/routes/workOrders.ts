@@ -763,6 +763,10 @@ function partShape(p: {
   inStock?: boolean | null;
   warehouse?: string | null;
   requisitionNo?: string | null;
+  transferFrom?: string | null;
+  transferReqNo?: string | null;
+  transferNo?: string | null;
+  transferredAt?: Date | null;
   unit?: string | null;
   note?: string | null;
   sparePart: { id: number; partCode: string; name: string; brand: string | null; offCatalog?: boolean };
@@ -781,6 +785,11 @@ function partShape(p: {
     inStock: p.inStock ?? null,
     warehouse: p.warehouse ?? null,
     requisitionNo: p.requisitionNo ?? null,
+    // โอนข้ามคลัง — ต้นทาง · ใบเบิกต้นทาง · ใบโอน · ถึงปลายทางเมื่อไร (ว่าง = กำลังโอน/ยังไม่โอน)
+    transferFrom: p.transferFrom ?? null,
+    transferReqNo: p.transferReqNo ?? null,
+    transferNo: p.transferNo ?? null,
+    transferredAt: p.transferredAt ? p.transferredAt.toISOString() : null,
   };
 }
 
@@ -2693,7 +2702,17 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
 
   const waiting = await prisma.workOrderPart.findMany({
     where: { workOrderId: id, kind: "WAITING" },
-    select: { sparePartId: true, inStock: true, requisitionNo: true, quantity: true, unit: true, note: true, sparePart: { select: { offCatalog: true } } },
+    select: {
+      sparePartId: true,
+      inStock: true,
+      warehouse: true,
+      requisitionNo: true,
+      transferredAt: true,
+      quantity: true,
+      unit: true,
+      note: true,
+      sparePart: { select: { offCatalog: true } },
+    },
   });
   // ของนอกสโตร์ไม่ได้ออกจากคลัง — "มี" แปลว่าแอดมินจัดหาได้แล้ว ไม่มีคลังหรือใบเบิกให้ใส่
   const offIds = new Set(waiting.filter((w) => w.sparePart.offCatalog).map((w) => w.sparePartId));
@@ -2736,10 +2755,24 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: "ของที่มีอยู่ ต้องใส่เลขใบเบิกอะไหล่ด้วย" });
     }
   }
-  // ตัวที่หัวหน้าภาคต้องไปเบิกจากคลังอื่น
-  const pickupIds = parsed.data.results
+  /**
+   * ของคลังอื่นแยกสองแบบ (เจ้าของงานกำหนด ต.ค. 69):
+   * - ยังไม่ได้โอน → หัวหน้าภาคเบิกจากคลังนั้นแล้วโอนมาคลังส่งมอบ (PARTS_TRANSFER)
+   * - โอนมาถึงคลังนี้แล้ว (ไม่ใช่ 94) → หัวหน้าภาคเบิกส่งมอบจากคลังนี้ (PARTS_PICKUP)
+   * แอดมินเปลี่ยนไปคลังอื่นที่ไม่ใช่ปลายทางที่โอนมา = ต้องโอนใหม่
+   */
+  const arrivedAt = (sparePartId: number, warehouse: string | null | undefined) => {
+    const w = waiting.find((x) => x.sparePartId === sparePartId);
+    return !!w?.transferredAt && w.warehouse === warehouse;
+  };
+  const otherIds = parsed.data.results
     .filter((r) => r.inStock && !offIds.has(r.sparePartId) && r.warehouse !== ADMIN_WAREHOUSE)
     .map((r) => r.sparePartId);
+  const arrivedIds = new Set(
+    parsed.data.results.filter((r) => otherIds.includes(r.sparePartId) && arrivedAt(r.sparePartId, r.warehouse)).map((r) => r.sparePartId)
+  );
+  const transferIds = otherIds.filter((pid) => !arrivedIds.has(pid));
+  const pickupIds = otherIds.filter((pid) => arrivedIds.has(pid));
   // หมายเหตุถึงหัวหน้าภาคไม่บังคับแล้ว (เจ้าของงานตกลง ต.ค. 69) — ชื่อคลังที่แอดมินเลือกบอกที่เบิกอยู่แล้ว
 
   /**
@@ -2766,7 +2799,13 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   // ของครบถึงไปขั้นจ่ายงาน — เรื่องราคาและเงินจบไปก่อนถึงขั้นนี้แล้ว
   // ของไม่ครบก็ค้างอยู่ที่แอดมินรอของเข้า
   // ของคลังอื่นยังไม่ได้เบิก — ไปให้หัวหน้าภาคเบิกก่อนจ่ายงาน (ของหมดยังค้างที่แอดมินก่อน)
-  const nextStage = anyOut ? "PARTS_REQUESTED" : pickupIds.length ? "PARTS_PICKUP" : "PARTS_CHECKED";
+  const nextStage = anyOut
+    ? "PARTS_REQUESTED"
+    : transferIds.length
+      ? "PARTS_TRANSFER"
+      : pickupIds.length
+        ? "PARTS_PICKUP"
+        : "PARTS_CHECKED";
   const outCodes = stillOut
     ? await partCodesText(
         waiting.filter((w) => outIds.includes(w.sparePartId))
@@ -2785,6 +2824,10 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
           warehouse: r.inStock && !offIds.has(r.sparePartId) ? r.warehouse ?? null : null,
           // ของที่หมดยังไม่ได้เบิก เลขใบเบิกที่ค้างจากรอบก่อนต้องถูกล้าง · ของนอกสโตร์ไม่มีใบเบิก
           requisitionNo: r.inStock && !offIds.has(r.sparePartId) ? r.requisitionNo?.trim() || null : null,
+          // ยังอยู่คลังที่โอนมาถึง = เก็บข้อมูลการโอนไว้ · เปลี่ยนคลัง/หมด = การโอนรอบเดิมไม่เกี่ยวแล้ว
+          ...(arrivedIds.has(r.sparePartId) || (r.inStock && r.warehouse === ADMIN_WAREHOUSE && arrivedAt(r.sparePartId, r.warehouse))
+            ? {}
+            : { transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: null }),
           checkedAt: now,
           checkedById: req.auth!.userId,
         },
@@ -2826,7 +2869,7 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       [
         // รายตัว: คลังไหน · เลขใบเบิก · ใครเบิก — เดิมเขียนแค่ "อะไหล่ครบทุกรายการ" ย้อนดูไม่ได้ว่าตัวไหน
         // แอดมินเบิกจากคลัง 94 ด้วยใบไหน ตัวไหนส่งให้หัวหน้าภาคเบิก (เจ้าของงานขอ ต.ค. 69)
-        await partsCheckLines(waiting, parsed.data.results, offIds),
+        await partsCheckLines(waiting, parsed.data.results, offIds, arrivedIds),
         anyOut
           ? `อะไหล่หมด: ${outCodes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""} — ใบงานรออยู่ที่ขั้นนี้ ของมาถึงแล้วค่อยใส่เลขใบเบิกอีกรอบ`
           : null,
@@ -2835,9 +2878,9 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         .filter(Boolean)
         .join("\n")
     );
-    if (nextStage === "PARTS_PICKUP") {
+    if (nextStage === "PARTS_TRANSFER" || nextStage === "PARTS_PICKUP") {
       const pickupText = waiting
-        .filter((w) => pickupIds.includes(w.sparePartId))
+        .filter((w) => otherIds.includes(w.sparePartId))
         .map((w) => {
           const r = parsed.data.results.find((x) => x.sparePartId === w.sparePartId)!;
           return { ...w, where: r.warehouse };
@@ -2864,8 +2907,31 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
  * ตัวที่หัวหน้าภาคต้องเบิกเอง — แอดมินบอกว่ามีของที่คลังอื่น (ไม่ใช่ลาดพร้าว 94) และยังไม่มีเลขใบเบิก
  * ไม่มีช่องแยกในฐานข้อมูล: แอดมินใส่เลขใบเบิกคลังอื่นไม่ได้อยู่แล้ว (parts-check) จึงแยกออกจากกันได้เสมอ
  */
-function pendingPickup(p: { inStock: boolean | null; warehouse: string | null; requisitionNo: string | null; sparePart: { offCatalog: boolean } }) {
-  return p.inStock === true && !p.sparePart.offCatalog && !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo;
+/** ตัวที่หัวหน้าภาคต้องเบิกส่งมอบจากคลังที่ไม่ใช่ 94 — ต้องโอนมาถึงแล้ว (ยังไม่โอน = ขั้นเบิกและโอน) */
+function pendingPickup(p: {
+  inStock: boolean | null;
+  warehouse: string | null;
+  requisitionNo: string | null;
+  transferredAt: Date | null;
+  sparePart: { offCatalog: boolean };
+}) {
+  return (
+    p.inStock === true && !p.sparePart.offCatalog && !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo && !!p.transferredAt
+  );
+}
+
+/** ตัวที่ต้องเบิกจากคลังอื่นแล้วโอนมาคลังส่งมอบ — แอดมินบอกว่าอยู่คลังอื่น และยังไม่ได้สั่งโอน */
+function pendingTransfer(p: {
+  inStock: boolean | null;
+  warehouse: string | null;
+  requisitionNo: string | null;
+  transferNo: string | null;
+  transferredAt: Date | null;
+  sparePart: { offCatalog: boolean };
+}) {
+  return (
+    p.inStock === true && !p.sparePart.offCatalog && !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo && !p.transferNo && !p.transferredAt
+  );
 }
 
 /**
@@ -2887,6 +2953,178 @@ const pickupSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+/**
+ * หัวหน้าภาคเบิกจากคลังที่แอดมินบอกแล้วสั่งโอนมาคลังที่จะส่งมอบ (เจ้าของงานกำหนด ต.ค. 69)
+ *
+ * ต้องมีทั้งเลขใบเบิกจากคลังต้นทางและเลขที่ใบโอน — ของเคลื่อนสองครั้ง (ออกจากคลังต้นทาง · เข้าคลังปลายทาง)
+ * ต้องตามได้ทั้งสองทาง · คลังปลายทางตั้งต้นที่คลัง 94 เลือกคลังที่ใกล้หน้างานได้ แต่ต้องไม่ใช่คลังเดิม
+ * บันทึกแล้วใบงานรอของถึง (PARTS_IN_TRANSIT) — ยังไม่ได้ส่งมอบ จึงยังไม่ใส่ requisitionNo
+ */
+const transferSchema = z.object({
+  results: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        fromWarehouse: z.string().trim().min(1).max(120),
+        transferReqNo: z.string().trim().min(1, "ต้องใส่เลขใบเบิกจากคลังต้นทางทุกรายการ").max(60),
+        toWarehouse: z.string().trim().min(1).max(120),
+        transferNo: z.string().trim().min(1, "ต้องใส่เลขที่ใบโอนทุกรายการ").max(60),
+      })
+    )
+    .min(1),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/parts-transfer", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = transferSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (!(await guardStage(req, res, id, "PARTS_TRANSFER"))) return;
+
+  const parts = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: {
+      sparePartId: true,
+      quantity: true,
+      inStock: true,
+      warehouse: true,
+      requisitionNo: true,
+      transferNo: true,
+      transferredAt: true,
+      sparePart: { select: { offCatalog: true } },
+    },
+  });
+  const pending = parts.filter(pendingTransfer);
+  const answered = new Map(parsed.data.results.map((r) => [r.sparePartId, r]));
+  if (pending.some((p) => !answered.has(p.sparePartId))) {
+    return res.status(400).json({ error: "ต้องกรอกให้ครบทุกรายการที่ต้องเบิกและโอน" });
+  }
+  for (const r of parsed.data.results) {
+    if (!pending.some((p) => p.sparePartId === r.sparePartId)) {
+      return res.status(400).json({ error: "มีรายการที่ไม่ได้อยู่ในรายการที่ต้องเบิกและโอน" });
+    }
+    for (const w of [r.fromWarehouse, r.toWarehouse]) {
+      if (!WAREHOUSES.includes(w as never)) return res.status(400).json({ error: `ไม่รู้จักคลัง "${w}"` });
+    }
+    if (r.fromWarehouse === r.toWarehouse) {
+      return res.status(400).json({ error: "คลังที่โอนไปต้องไม่ใช่คลังเดียวกับที่เบิก" });
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    for (const r of parsed.data.results) {
+      await tx.workOrderPart.updateMany({
+        where: { workOrderId: id, kind: "WAITING", sparePartId: r.sparePartId },
+        data: {
+          // warehouse กลายเป็นคลังปลายทาง — ขั้นต่อจากนี้ (เบิกส่งมอบ) ดูคลังนี้
+          warehouse: r.toWarehouse,
+          transferFrom: r.fromWarehouse,
+          transferReqNo: r.transferReqNo,
+          transferNo: r.transferNo,
+          transferredAt: null,
+        },
+      });
+    }
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "PARTS_IN_TRANSIT", workStatus: workStatusForStage("PARTS_IN_TRANSIT") },
+    });
+    const lines = await Promise.all(
+      parsed.data.results.map(async (r) => {
+        const p = pending.find((x) => x.sparePartId === r.sparePartId)!;
+        const moved = p.warehouse !== r.fromWarehouse ? ` (แอดมินบอก${p.warehouse})` : "";
+        return `${await partCodesText([p])} · ${r.fromWarehouse}${moved} ใบเบิก ${r.transferReqNo} → ${r.toWarehouse} · ใบโอน ${r.transferNo}`;
+      })
+    );
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "TRANSFER_REQUESTED",
+      "PARTS_IN_TRANSIT",
+      [lines.join("\n"), parsed.data.note].filter(Boolean).join("\n")
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
+  res.json(await detailFor(id));
+});
+
+/**
+ * ของถึงคลังปลายทางแล้ว — ไปเบิกส่งมอบต่อ
+ * มีตัวที่ต้องเบิกจากคลัง 94 → แอดมิน · เหลือแต่คลังอื่น → หัวหน้าภาคเบิกส่งมอบ · ไม่เหลืออะไรให้เบิก → จ่ายงาน
+ */
+router.post("/:id/parts-transfer/arrived", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const note = z.string().trim().max(500).optional().safeParse(req.body?.note ?? undefined);
+  if (!note.success) return res.status(400).json({ error: "หมายเหตุยาวเกินไป" });
+  if (!(await guardStage(req, res, id, "PARTS_IN_TRANSIT"))) return;
+
+  const now = new Date();
+  const parts = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: {
+      sparePartId: true,
+      quantity: true,
+      inStock: true,
+      warehouse: true,
+      requisitionNo: true,
+      transferNo: true,
+      transferredAt: true,
+      sparePart: { select: { offCatalog: true } },
+    },
+  });
+  const moving = parts.filter((p) => p.transferNo && !p.transferredAt);
+  const after = parts.map((p) => (moving.includes(p) ? { ...p, transferredAt: now } : p));
+  const needAdmin = after.some((p) => p.inStock === true && !p.sparePart.offCatalog && p.warehouse === ADMIN_WAREHOUSE && !p.requisitionNo);
+  const next = needAdmin ? "PARTS_REQUESTED" : after.some(pendingPickup) ? "PARTS_PICKUP" : "PARTS_CHECKED";
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrderPart.updateMany({
+      where: { workOrderId: id, kind: "WAITING", transferNo: { not: null }, transferredAt: null },
+      data: { transferredAt: now },
+    });
+    await tx.workOrder.update({ where: { id }, data: { status: next, workStatus: workStatusForStage(next) } });
+    const lines = await Promise.all(moving.map(async (p) => `${await partCodesText([p])} ถึง${p.warehouse}แล้ว`));
+    await writeLog(tx, id, req.auth!.userId, "TRANSFER_ARRIVED", next, [lines.join("\n"), note.data].filter(Boolean).join("\n"));
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
+  res.json(await detailFor(id));
+});
+
+/**
+ * เบิกหรือโอนไม่ได้ (คลังนั้นไม่มีของจริง) — ส่งกลับให้แอดมินหาคลังอื่นหรือตอบว่าหมด
+ * ใช้ได้ทั้งตอนรอเบิกและโอน และตอนรอของถึง (โอนไม่สำเร็จ) · การโอนที่ยังไม่ถึงถูกล้าง แอดมินตอบใหม่
+ */
+router.post("/:id/parts-transfer/return", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const reason = z.string().trim().min(1, "ต้องบอกเหตุผลที่เบิกหรือโอนไม่ได้").max(500).safeParse(req.body?.reason ?? "");
+  if (!reason.success) return res.status(400).json({ error: reason.error.issues[0]?.message });
+  if (!(await guardStage(req, res, id, ["PARTS_TRANSFER", "PARTS_IN_TRANSIT"]))) return;
+  await prisma.$transaction(async (tx) => {
+    // คลังที่ค้างไว้เป็นต้นทางเดิม (ไม่ใช่ปลายทางที่โอนไม่ถึง) — แอดมินเห็นค่าตั้งต้นที่ตัวเองบอกไว้
+    const moving = await tx.workOrderPart.findMany({
+      where: { workOrderId: id, kind: "WAITING", transferNo: { not: null }, transferredAt: null },
+      select: { id: true, transferFrom: true },
+    });
+    for (const m of moving) {
+      await tx.workOrderPart.update({
+        where: { id: m.id },
+        data: { warehouse: m.transferFrom, transferFrom: null, transferReqNo: null, transferNo: null },
+      });
+    }
+    await tx.workOrder.update({
+      where: { id },
+      data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED") },
+    });
+    await writeLog(tx, id, req.auth!.userId, "TRANSFER_RETURNED", "PARTS_REQUESTED", reason.data);
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
+  res.json(await detailFor(id));
+});
+
 router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -2896,7 +3134,15 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
 
   const parts = await prisma.workOrderPart.findMany({
     where: { workOrderId: id, kind: "WAITING" },
-    select: { sparePartId: true, quantity: true, inStock: true, warehouse: true, requisitionNo: true, sparePart: { select: { offCatalog: true } } },
+    select: {
+      sparePartId: true,
+      quantity: true,
+      inStock: true,
+      warehouse: true,
+      requisitionNo: true,
+      transferredAt: true,
+      sparePart: { select: { offCatalog: true } },
+    },
   });
   const pending = parts.filter(pendingPickup);
   const answered = new Map(parsed.data.results.map((r) => [r.sparePartId, r]));
@@ -3777,7 +4023,8 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
 async function partsCheckLines(
   waiting: { sparePartId: number; quantity: number }[],
   results: { sparePartId: number; inStock: boolean; warehouse?: string | null; requisitionNo?: string | null }[],
-  offIds: Set<number>
+  offIds: Set<number>,
+  arrivedIds: Set<number> = new Set()
 ) {
   const found = await prisma.sparePart.findMany({
     where: { id: { in: results.map((r) => r.sparePartId) } },
@@ -3791,7 +4038,8 @@ async function partsCheckLines(
       if (offIds.has(r.sparePartId)) return `${head} — ${r.inStock ? "ได้ของแล้ว" : "ยังไม่ได้ของ"}`;
       if (!r.inStock) return `${head} — หมด`;
       if (r.warehouse === ADMIN_WAREHOUSE) return `${head} · ${r.warehouse} · ใบเบิก ${r.requisitionNo?.trim()} — แอดมินเบิกแล้ว`;
-      return `${head} · ${r.warehouse} — ส่งหัวหน้าภาคเบิก`;
+      if (arrivedIds.has(r.sparePartId)) return `${head} · ${r.warehouse} (โอนมาแล้ว) — ส่งหัวหน้าภาคเบิกส่งมอบ`;
+      return `${head} · ${r.warehouse} — ส่งหัวหน้าภาคเบิกและโอน`;
     })
     .join("\n");
 }
@@ -3955,8 +4203,8 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ย้อนได้เฉพาะขั้นที่ผ่านมาแล้ว" });
   }
   // ย้อนมาที่ขั้นนี้ตรง ๆ ไม่ได้ — ไม่รู้ว่าเลขใบเบิกตัวไหนเป็นของหัวหน้าภาคที่ต้องล้าง ให้ย้อนไปให้แอดมินเบิกใหม่
-  if (toStage === "PARTS_PICKUP") {
-    return res.status(400).json({ error: "ย้อนไปขั้นหัวหน้าภาคเบิกอะไหล่ (คลังอื่น) ตรง ๆ ไม่ได้ — ย้อนไปขั้นแอดมินเบิกอะไหล่แทน" });
+  if (toStage === "PARTS_PICKUP" || toStage === "PARTS_TRANSFER" || toStage === "PARTS_IN_TRANSIT") {
+    return res.status(400).json({ error: "ย้อนไปขั้นหัวหน้าภาคเบิก/โอนอะไหล่ (คลังอื่น) ตรง ๆ ไม่ได้ — ย้อนไปขั้นแอดมินเบิกอะไหล่แทน" });
   }
   if (toStage === "WAITING_PARTS" && wo.parentId === null) {
     return res.status(400).json({ error: "ขั้นรออะไหล่มีเฉพาะใบงานที่แยกมาจากใบอื่น" });
@@ -3995,7 +4243,18 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
     if (to <= at("PARTS_REQUESTED")) {
       await tx.workOrderPart.updateMany({
         where: { workOrderId: id, kind: "WAITING" },
-        data: { inStock: null, warehouse: null, requisitionNo: null, checkedAt: null, checkedById: null },
+        // ข้อมูลการโอนรอบเดิมเก็บอยู่ในประวัติแล้ว (TRANSFER_REQUESTED) — แอดมินเช็คคลังใหม่ว่าของอยู่ไหน
+        data: {
+          inStock: null,
+          warehouse: null,
+          requisitionNo: null,
+          transferFrom: null,
+          transferReqNo: null,
+          transferNo: null,
+          transferredAt: null,
+          checkedAt: null,
+          checkedById: null,
+        },
       });
     }
     await tx.workOrder.update({ where: { id }, data });
@@ -4176,6 +4435,10 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
           inStock: null,
           warehouse: null,
           requisitionNo: null,
+          transferFrom: null,
+          transferReqNo: null,
+          transferNo: null,
+          transferredAt: null,
           checkedAt: null,
           checkedById: null,
         },
