@@ -46,7 +46,7 @@ const { setup } = require("./fixture");
       ? pass("ไม่มีป้ายสถานะย่อยอัตโนมัติ (ใบงานแสดงสถานะเดียว)")
       : fail(`ป้ายสถานะย่อย: ${await sub().count()}`);
 
-    await vis("แก้ไข").last().click();
+    await vis("แก้ไขอาการ/สถานะ").last().click();
     await page.waitForTimeout(1000);
     (await vis("รออะไหล่", false).count()) > 0 && (await label("สถานะรอลูกค้าแจ้งซ่อม").count()) > 0
       ? pass("ฟอร์มมีแค่ อัตโนมัติ / รอลูกค้าแจ้งซ่อม · บอกว่าค่าไหนระบบตั้ง")

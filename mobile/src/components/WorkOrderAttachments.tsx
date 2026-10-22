@@ -32,7 +32,7 @@ import {
 import { useAuth } from "../context/AuthContext";
 import ImageViewer from "./ImageViewer";
 import InspectionSlots, { inspectionFilesOf, missingInspection } from "./InspectionSlots";
-import { colors, radius, spacing } from "../theme";
+import { colors, radius, shadow, spacing } from "../theme";
 
 export interface Attachment {
   id: number;
@@ -168,15 +168,53 @@ export default function WorkOrderAttachments({
   const others = showSlots ? rows.filter((r) => !inspectRows.includes(r)) : rows;
   const missing = inspection?.active ? missingInspection(rows, inspection.since) : [];
 
+  const addButtons = (
+    <View style={styles.addRow}>
+      {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ
+          ปุ่มถ่ายรูปบนเครื่องนั้นไม่ได้ช่วยอะไรนอกจากทำให้แถวปุ่มรก */}
+      {Platform.OS !== "web" ? (
+        <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(true, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
+          <Ionicons name="camera-outline" size={17} color={colors.navy} />
+          <Text style={styles.addText}>ถ่ายรูป</Text>
+        </TouchableOpacity>
+      ) : null}
+      <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(false, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
+        <Ionicons name="images-outline" size={17} color={colors.navy} />
+        <Text style={styles.addText}>เลือกรูป</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.addBtn} onPress={() => add(pickVideoAttachment, "กำลังส่งวิดีโอ")} activeOpacity={0.8}>
+        <Ionicons name="videocam-outline" size={17} color={colors.navy} />
+        <Text style={styles.addText}>วิดีโอ</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <View style={styles.card}>
       {viewing !== null ? (
         <ImageViewer workOrderId={workOrderId} items={rows} startIndex={viewing} onClose={() => setViewing(null)} />
       ) : null}
+      {/* หัวการ์ดตามแบบ ต.ค. 69: ไอคอน + ชื่อ · ชนิดรูปเป็นแถบเลือกมุมขวา (เลือกก่อนแนบ) */}
       <View style={styles.head}>
+        <Ionicons name="camera-outline" size={19} color={colors.primaryInk} />
         <Text style={styles.title}>รูป / วิดีโอหน้างาน</Text>
+        {rows.length > 0 ? <Text style={styles.count}>· {rows.length} ไฟล์</Text> : null}
         <View style={{ flex: 1 }} />
-        {rows.length > 0 ? <Text style={styles.count}>{rows.length} ไฟล์</Text> : null}
+        {canEdit && !busy ? (
+          <View style={styles.seg} accessibilityLabel="รูปนี้คือ">
+            {([["", "รูปหน้างาน"], ["BEFORE", "ก่อนซ่อม"], ["AFTER", "หลังซ่อม"]] as const).map(([v, label]) => (
+              <TouchableOpacity
+                key={v || "site"}
+                style={[styles.tagChip, tag === v && styles.tagChipOn]}
+                onPress={() => setTag(v)}
+                activeOpacity={0.7}
+                accessibilityLabel={`แนบเป็น${label}`}
+              >
+                <Text style={[styles.tagText, tag === v && styles.tagTextOn]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
       </View>
 
       {showSlots && !loading ? (
@@ -211,9 +249,12 @@ export default function WorkOrderAttachments({
       {loading ? (
         <Spinner color={colors.primary} style={{ marginVertical: spacing.md }} />
       ) : showSlots && others.length === 0 ? null : others.length === 0 ? (
-        <Text style={styles.empty}>
-          ยังไม่มีรูป — รูปหน้างานช่วยให้คนที่ไม่ได้ไปเห็นว่าเจออะไรจริง ๆ
-        </Text>
+        <View style={[styles.emptyBox, !canEdit && styles.emptyBoxPlain]}>
+          <Text style={[styles.empty, styles.emptyCenter]}>
+            ยังไม่มีรูป — รูปหน้างานช่วยให้คนที่ไม่ได้ไปเห็นว่าเจออะไรจริง ๆ
+          </Text>
+          {canEdit && !busy ? addButtons : null}
+        </View>
       ) : (
         <View style={styles.grid}>
           {others.map((row) => (
@@ -266,38 +307,7 @@ export default function WorkOrderAttachments({
           </View>
         ) : (
           <>
-          <View style={styles.tagRow}>
-            <Text style={styles.tagLabel}>รูปนี้คือ</Text>
-            {([["", "รูปหน้างาน"], ["BEFORE", "ก่อนซ่อม"], ["AFTER", "หลังซ่อม"]] as const).map(([v, label]) => (
-              <TouchableOpacity
-                key={v || "site"}
-                style={[styles.tagChip, tag === v && styles.tagChipOn]}
-                onPress={() => setTag(v)}
-                activeOpacity={0.7}
-                accessibilityLabel={`แนบเป็น${label}`}
-              >
-                <Text style={[styles.tagText, tag === v && styles.tagTextOn]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={styles.addRow}>
-            {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ
-                ปุ่มถ่ายรูปบนเครื่องนั้นไม่ได้ช่วยอะไรนอกจากทำให้แถวปุ่มรก */}
-            {Platform.OS !== "web" ? (
-              <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(true, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
-                <Ionicons name="camera-outline" size={17} color={colors.primary} />
-                <Text style={styles.addText}>ถ่ายรูป</Text>
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(false, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
-              <Ionicons name="images-outline" size={17} color={colors.primary} />
-              <Text style={styles.addText}>เลือกรูป</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.addBtn} onPress={() => add(pickVideoAttachment, "กำลังส่งวิดีโอ")} activeOpacity={0.8}>
-              <Ionicons name="videocam-outline" size={17} color={colors.primary} />
-              <Text style={styles.addText}>วิดีโอ</Text>
-            </TouchableOpacity>
-          </View>
+          {!loading && others.length === 0 && !showSlots ? null : addButtons}
           </>
         )
       ) : null}
@@ -313,18 +323,27 @@ const styles = StyleSheet.create({
   groupLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted, marginTop: spacing.xs },
   tagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: spacing.sm },
   tagLabel: { fontSize: 12, color: colors.textMuted, marginRight: 2 },
-  tagChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
-  tagChipOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  tagText: { fontSize: 12, lineHeight: 18, color: colors.textMuted, fontWeight: "600" },
-  tagTextOn: { color: colors.primaryInk },
+  // แถบเลือกชนิดรูปแบบ segmented — พื้นเทา ตัวที่เลือกเป็นกล่องขาว (ตามแบบ)
+  seg: { flexDirection: "row", gap: 2, padding: 3, borderRadius: 10, backgroundColor: colors.background },
+  tagChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 8 },
+  tagChipOn: { backgroundColor: colors.card, ...shadow.card },
+  tagText: { fontSize: 13, lineHeight: 20, color: colors.textMuted, fontWeight: "600" },
+  tagTextOn: { color: colors.navy, fontWeight: "700" },
+  emptyBox: { alignItems: "center", gap: spacing.md, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.borderStrong, borderRadius: radius.md, paddingVertical: spacing.xl, paddingHorizontal: spacing.md },
+  emptyBoxPlain: { borderWidth: 0, paddingVertical: 0, alignItems: "flex-start" },
+  emptyCenter: { textAlign: "center" },
+  // ขอบ + เงาเดียวกับการ์ดอื่นในหน้าใบงาน — การ์ดนี้เคยไม่มีขอบ ดูหลุดจากแถวเดียวกัน
   card: {
     backgroundColor: colors.card,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     padding: spacing.lg,
     gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...shadow.card,
   },
-  head: { flexDirection: "row", alignItems: "center" },
-  title: { fontSize: 15, fontWeight: "700", color: colors.text },
+  head: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  title: { fontSize: 17, lineHeight: 26, fontWeight: "700", color: colors.text },
   count: { fontSize: 12, color: colors.textMuted },
   empty: { fontSize: 13, color: colors.textMuted, lineHeight: 20 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
@@ -379,10 +398,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.primarySoft,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
   },
-  addText: { fontSize: 13, fontWeight: "600", color: colors.primary },
+  addText: { fontSize: 14, fontWeight: "700", color: colors.navy },
   busyRow: {
     flexDirection: "row",
     alignItems: "center",

@@ -28,7 +28,8 @@ const { chromium } = require("playwright");
     const bb = await loc.boundingBox().catch(() => null);
     return bb ? Math.round(bb.y) : null;
   };
-  const logo = page.getByText("OTTERI", { exact: true }).first();
+  // มือถือไม่มีแถบโลโก้แล้ว (แถบหัวชั้นเดียว ต.ค. 69) — วัดที่ปุ่ม ☰ บนแถบหัวแทน ซึ่งหลบขึ้นพร้อมกัน
+  const logo = page.getByLabel("เปิดเมนู").locator("visible=true").first();
   const tab = page.getByText("หน้าหลัก", { exact: true }).last();
   const listTop = () =>
     page.evaluate(() => {

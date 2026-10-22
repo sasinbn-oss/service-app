@@ -85,6 +85,9 @@ export const colors = {
    * เมนูข้างสีกรมท่า (แนวทางออกแบบ ต.ค. 69) — โครงของแอปเป็นกรมท่า ฟ้า OTTERI เหลือไว้เป็นแถบเมนูที่เลือก
    * แยกเป็นชุดของตัวเอง เพราะตัวหนังสือบนเมนูเป็นสีอ่อนบนพื้นเข้ม คนละทางกับ text/textMuted ของเนื้อหา
    */
+  // แถวตาราง: พื้นสลับแถว (อ่านตามแถวไม่หลุดบรรทัด) · แถวที่เมาส์ชี้ (เจ้าของงานขอ ต.ค. 69 — ตารางเรียบไปหมด)
+  rowAlt: "#F5F7FA",
+  rowHover: "#DCEEFB",
   sideBg: "#0B2540",
   sideLine: "#1C3A5C",
   sideInk: "#C9D6E5",
@@ -151,6 +154,8 @@ const DARK: Partial<typeof colors> = {
   textMuted: "#8FA2B5",
   textFaint: "#66798C",
   veil: "rgba(11,21,32,0.86)",
+  rowAlt: "#172331",
+  rowHover: "#1B3447",
   sideBg: "#08111B",
   sideLine: "#1A2C42",
   sideInk: "#B8C7D9",

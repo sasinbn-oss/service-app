@@ -1098,6 +1098,14 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const mine =
     order.assignedToName === user?.name ||
     inMyTeam(user, order.assignedTeam);
+  // หน้าตาตามแบบ ต.ค. 69 — กว้างพอค่อยแยกสองคอลัมน์ (คอลัมน์ขวา 380 px + ซ้ายอย่างน้อย ~600 px)
+  const wide = bodyWidth >= 1000;
+  const stageNow = stages.find((x) => x.value === order.status);
+  const liveStages = shownStages.filter((x) => !isSkipped(x.value, order, stages));
+  const stepNo = liveStages.findIndex((x) => x.value === order.status) + 1;
+  const lastLog = [...order.logs].sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id)[0];
+  // เครื่องหายจากไฟล์รายงานแล้ว แต่ใบยังไม่ปิด — ขึ้นทางลัดปิดใบงานตามแบบ
+  const recovered = order.outageId !== null && !order.closedAt && !order.outageStillOpen;
 
   return (
     <PopupScreen
@@ -1109,15 +1117,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {user?.superAdmin ? (
             <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} />
           ) : null}
-          {partsOut.length ? (
-            <View style={[styles.badge, styles.badgeOut]}>
-              <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
-            </View>
-          ) : (
-            <View style={[styles.badge, { backgroundColor: tone.bg }]}>
-              <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
-            </View>
-          )}
         </View>
       }
     >
@@ -1190,47 +1189,50 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {order.closedAt ? <Text style={styles.doneBandWhen}>{formatDateTime(order.closedAt)}</Text> : null}
         </View>
       ) : null}
-      <View style={card}>
-        {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
-        {urgent ? <UrgentGlow radius={radius.xl} /> : null}
-        {/* ไม่มีแถบ "งานด่วน — ทำก่อนใบปกติ" แล้ว (เจ้าของงานขอ ต.ค. 69) — บอกซ้ำกับป้าย "ด่วน" ข้างเลขใบงาน
-            และกินที่ด้านบนการ์ด ออร่าแดงรอบการ์ดยังบอกตั้งแต่เปิดใบว่าเป็นงานด่วน */}
-        <View style={styles.headRow}>
-          <Text style={[styles.code, headingFont]}>{order.code}</Text>
+      {/*
+        หน้าใบงานตามแบบที่เจ้าของงานส่งมา (ต.ค. 69): หัวเรื่อง + ป้าย · การ์ดขั้นตอน · สองคอลัมน์
+        ซ้าย = ขั้นปัจจุบัน (ทำอะไร กับอะไหล่ไหน ปุ่มเดียวท้ายการ์ด) · ขวา = ข้อมูลอ้างอิง ประวัติ เครื่องมือ
+        คนเปิดใบงานมาเพื่อทำขั้นถัดไป จึงรวมอาการ/อะไหล่ไว้ในการ์ดเดียวกับปุ่ม ไม่ต้องเลื่อนไปมา
+        จอแคบเรียงเป็นคอลัมน์เดียวตามลำดับเดียวกัน
+      */}
+      <View style={styles.hero}>
+        <View style={styles.heroRow}>
+          <Text style={[styles.heroTitle, headingFont]}>
+            {order.title}
+            {order.branchCode ? ` — ${order.branchCode}` : ""}
+          </Text>
+          {partsOut.length ? (
+            <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
+              <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
+            </View>
+          ) : (
+            <View style={[styles.statusChip, { backgroundColor: closedOk ? colors.doneSoft : tone.bg }]}>
+              <View style={[styles.statusDot, { backgroundColor: tone.fg }]} />
+              <Text style={[styles.statusChipText, { color: tone.fg }]}>{order.statusLabel}</Text>
+            </View>
+          )}
           {urgent ? <UrgentBadge /> : null}
           {order.rolledBack ? (
             <View style={[styles.badge, styles.badgeBack]} accessibilityLabel="ป้ายย้อนขั้น">
               <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้นมา</Text>
             </View>
           ) : null}
-          <View style={{ flex: 1 }} />
-          {partsOut.length ? (
-            <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
-              <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
-            </View>
-          ) : (
-            <View style={[styles.badge, { backgroundColor: closedOk ? colors.card : tone.bg }, closedOk && styles.badgeDone]}>
-              <Text style={[styles.badgeText, { color: tone.fg }]}>{order.statusLabel}</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.titleRow}>
-          <Text style={[styles.title, headingFont]}>{order.title}</Text>
+          <View style={styles.tagLine}>
+            <Text style={styles.tagLineText}>{order.jobTypeLabel}</Text>
+          </View>
           {/* เครื่อง + ขนาดบนหัวใบงาน (เจ้าของงานขอ ต.ค. 69) — เดิมอยู่ในการ์ดสาขาด้านล่าง ต้องเลื่อนหา */}
           {order.machineCode ? (
-            <View style={styles.machinePill} accessibilityLabel={`เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}`}>
-              <Text style={styles.machinePillText}>เครื่อง {machineTag(order.machineCode, order.machineCapacityKg)}</Text>
+            <View style={styles.tagLine} accessibilityLabel={`เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}`}>
+              <Text style={styles.tagLineText}>เครื่อง {machineTag(order.machineCode, order.machineCapacityKg)}</Text>
             </View>
           ) : null}
         </View>
         {order.detail ? <Text style={styles.detail}>{order.detail}</Text> : null}
-
         {/*
           ใบที่ลิงก์กัน — ใบรออะไหล่กับใบเดิมเป็นงานเดียวกันที่แบ่งเป็นสองรอบ
           ต้องกระโดดไปมาได้ ไม่งั้นคนดูใบหนึ่งไม่รู้ว่าอีกครึ่งของงานอยู่ไหน
         */}
-        {order.parent || order.children.length > 0 || canStepBack ? (
+        {order.parent || order.children.length > 0 ? (
           <View style={styles.linkRow}>
             {order.parent ? (
               <TouchableOpacity
@@ -1259,21 +1261,24 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 </Text>
               </TouchableOpacity>
             ))}
-            <View style={{ flex: 1 }} />
-            {canStepBack ? (
-              <TouchableOpacity
-                style={styles.stepBack}
-                onPress={() => setStageBackOpen(true)}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="arrow-undo-outline" size={15} color={colors.warningInk} />
-                <Text style={styles.stepBackText}>ย้อนขั้นตอน</Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
         ) : null}
+      </View>
 
-
+      <View style={[card, styles.stepsCard]}>
+        <View style={styles.stepsHead}>
+          <Text style={styles.stepsHeadText}>
+            <Text style={[styles.stepsHeadStrong, headingFont]}>ขั้นตอนใบงาน</Text>
+            {stepNo > 0 ? ` · ขั้นที่ ${stepNo} จาก ${liveStages.length}` : ""}
+          </Text>
+          <View style={{ flex: 1 }} />
+          {canStepBack ? (
+            <TouchableOpacity style={styles.stepBack} onPress={() => setStageBackOpen(true)} activeOpacity={0.7}>
+              <Ionicons name="arrow-undo-outline" size={15} color={colors.warningInk} />
+              <Text style={styles.stepBackText}>ย้อนขั้นตอน</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
         {/*
           ขั้นตอนงานอยู่บนสุด ในการ์ดหัวใบงานเลย ตามตัวอย่างที่เจ้าของงานเลือก —
           คนเปิดใบงานส่วนใหญ่เปิดมาเพื่อดูว่าถึงไหนแล้วทำขั้นถัดไป
@@ -1452,6 +1457,73 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           );
         })()}
 
+      </View>
+
+      <View style={wide ? styles.cols : styles.stack}>
+      <View style={wide ? styles.colMain : styles.stack}>
+      {/* เครื่องกลับมาแล้วบนกระดาน — ทางลัดปิดใบงานอยู่ตรงนี้ เพราะเป็นจังหวะที่คนเปิดมาเพื่อปิด */}
+      {recovered && canEnd ? (
+        <View style={[card, styles.recovered]} accessibilityLabel="กล่องเครื่องกลับมาแล้ว">
+          <View style={styles.recoveredIcon}>
+            <Ionicons name="checkmark" size={18} color={colors.success} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.recoveredTitle}>เครื่องกลับมาทำงานแล้ว</Text>
+            <Text style={styles.recoveredText}>
+              เคสบนกระดานปิดไปแล้ว เพราะเครื่องหายไปจากไฟล์รายงาน — ถ้าไม่ต้องซ่อมต่อ ปิดใบงานนี้ได้เลย
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.recoveredBtn} onPress={() => setSupClosing(true)} accessibilityLabel="ปิดใบงาน">
+            <Ionicons name="checkmark-circle-outline" size={17} color={colors.navy} />
+            <Text style={styles.recoveredBtnText}>ปิดใบงาน</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {/*
+        ใบที่ปิดแล้วไม่ต้องขึ้นการ์ดนี้ เพราะคำตอบเดียวกันไปอยู่ในการ์ดผลการทำงาน
+        ซึ่งเป็นที่ที่คนเปิดดูใบที่ปิดแล้วมองหาอยู่แล้ว — สองการ์ดที่พูดเรื่องเดียวกัน
+        คือการบังคับให้คนอ่านสองรอบเพื่อรู้เท่าเดิม
+      */}
+      {order.outageId !== null && !order.closedAt && !(recovered && canEnd) ? (
+        <View style={[card, styles.linked]}>
+          <View style={styles.headRow}>
+            <Ionicons
+              name={order.outageStillOpen ? "alert-circle" : "checkmark-circle"}
+              size={17}
+              color={order.outageStillOpen ? colors.danger : colors.success}
+            />
+            <Text style={styles.linkedTitle}>
+              {order.outageStillOpen ? "เครื่องยังไม่กลับมา" : "เครื่องกลับมาแล้ว"}
+            </Text>
+          </View>
+          <Text style={styles.linkedText}>
+            {order.outageStillOpen
+              ? "เคสบนกระดานยังเปิดอยู่ ระบบจะปิดให้เองเมื่อเครื่องหายไปจากไฟล์รายงานรอบถัดไป — ปิดใบงานไม่ได้ปิดเคส"
+              : "เคสบนกระดานปิดไปแล้ว เพราะเครื่องหายไปจากไฟล์รายงาน"}
+          </Text>
+        </View>
+      ) : null}
+
+
+      <View style={[card, styles.nowCard]}>
+        {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
+        {urgent ? <UrgentGlow radius={radius.xl} /> : null}
+        <View style={styles.nowHead}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.nowEyebrow, { color: done ? colors.textMuted : tone.fg }]}>
+              {done ? "สถานะใบงาน" : `ขั้นปัจจุบัน · ${order.stageActorLabel ?? "—"}`}
+            </Text>
+            <Text style={[styles.nowTitle, headingFont]}>
+              {done ? order.statusLabel : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
+            </Text>
+          </View>
+          {!done && !viewOnly ? (
+            <TouchableOpacity style={styles.editNote} onPress={() => setEditingNote(true)} activeOpacity={0.7}>
+              <Ionicons name="create-outline" size={15} color={colors.primaryInk} />
+              <Text style={styles.editNoteText}>แก้ไขอาการ/สถานะ</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
         {/* ตีกลับเคลม — ช่างต้องเห็นเหตุผลก่อนกดปิดงานอีกรอบ ไม่งั้นแนบของเดิมกลับไปแล้วโดนตีกลับซ้ำ */}
         {order.status === "IN_PROGRESS" && order.claims[0]?.status === "REJECTED" ? (
           <View style={styles.claimRejected}>
@@ -1581,6 +1653,142 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ) : null}
 
         {subStage(order) && (me?.role === "SUPERVISOR" || me?.role === "ADMIN") ? <SubBox order={order} /> : null}
+
+        {/* อาการกับอะไหล่ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
+        {order.symptom || order.inspectionNote || order.waitingParts.length > 0 || order.services.length > 0 ? (
+          <View style={styles.nowBody}>
+            <Row label="อาการ" value={order.symptom ?? "—"} />
+            {/* สถานะหลักอยู่บนป้ายหัวใบงานแล้ว — ขึ้นเฉพาะสถานะย่อยที่คนตั้งเอง (รอลูกค้า ฯลฯ) */}
+            {order.workStatus === MANUAL_STATUS && order.workStatusLabel ? (
+              <Row label="สถานะย่อย" value={order.workStatusLabel} />
+            ) : null}
+            {order.inspectionNote ? (
+              <Row
+                label="ผลตรวจหน้างาน"
+                value={`${order.inspectionNote}${order.inspectedAt ? ` (${formatDate(order.inspectedAt)})` : ""}`}
+              />
+            ) : null}
+            {order.services.length > 0 ? (
+              <>
+                <Text style={styles.partsHead}>ค่าบริการ (เสนอราคาลูกค้า)</Text>
+                {order.services.map((v) => (
+                  <View key={v.id} style={styles.partRow}>
+                    <Text style={styles.partCode}>
+                      {v.name} × {v.quantity}
+                      {v.unit ? ` ${v.unit}` : ""}
+                    </Text>
+                    <Text style={styles.partName} numberOfLines={1}>
+                      {v.note ?? ""}
+                    </Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+            {order.waitingParts.length > 0 ? (
+              <>
+                <View style={styles.ptTop}>
+                  <Text style={styles.ptTitle}>อะไหล่ที่ต้องใช้</Text>
+                  <View style={{ flex: 1 }} />
+                  <Text style={styles.ptSummary}>
+                    {order.waitingParts.length} รายการ · มีของ {order.waitingParts.filter((x) => x.inStock === true).length}
+                    {order.waitingParts.some((x) => x.inStock === false) ? (
+                      <Text style={styles.ptSummaryOut}> · หมด {order.waitingParts.filter((x) => x.inStock === false).length}</Text>
+                    ) : null}
+                  </Text>
+                </View>
+                <View style={styles.ptTable}>
+                  {wide ? (
+                    <View style={[styles.ptRow, styles.ptHeadRow]}>
+                      <Text style={[styles.ptHead, styles.ptCode]}>รหัส</Text>
+                      <Text style={[styles.ptHead, styles.ptName]}>รายการ</Text>
+                      <Text style={[styles.ptHead, styles.ptQty]}>จำนวน</Text>
+                      <Text style={[styles.ptHead, styles.ptStock]}>สถานะ</Text>
+                      <Text style={[styles.ptHead, styles.ptEta]}>วันคาดว่าของเข้า</Text>
+                    </View>
+                  ) : null}
+                  {order.waitingParts.map((part, i) => {
+                    const out = part.inStock === false;
+                    // ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด · ของนอกสโตร์ = จัดหาได้ไหม
+                    const chip =
+                      part.inStock === null
+                        ? { text: "ยังไม่เช็ค", fg: colors.textMuted, bg: colors.background }
+                        : part.inStock
+                          ? { text: part.offCatalog ? "หาได้" : part.warehouse ?? "มีของ", fg: colors.successInk, bg: colors.successSoft }
+                          : { text: part.offCatalog ? "ยังหาไม่ได้" : "หมด", fg: colors.dangerInk, bg: colors.dangerSoft };
+                    const chipView = (
+                      <View style={[styles.ptChip, { backgroundColor: chip.bg }]}>
+                        <View style={[styles.statusDot, { backgroundColor: chip.fg }]} />
+                        <Text style={[styles.ptChipText, { color: chip.fg }]}>{chip.text}</Text>
+                      </View>
+                    );
+                    const qty = `${part.quantity}${part.unit ? ` ${part.unit}` : ""}`;
+                    const eta = out ? (
+                      etaDay ? (
+                        <Text style={[styles.ptEtaText, etaLate && { color: colors.dangerInk }]}>{thaiDate(etaDay)}</Text>
+                      ) : user?.role === "ADMIN" ? (
+                        <TouchableOpacity style={styles.ptEtaBtn} onPress={() => setEtaOpen(true)} accessibilityLabel={`ใส่วันคาดว่าเข้า ${partTitle(part)}`}>
+                          <Ionicons name="calendar-outline" size={14} color={colors.navy} />
+                          <Text style={styles.ptEtaBtnText}>ใส่วันที่</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <Text style={styles.ptEtaText}>ยังไม่ระบุ</Text>
+                      )
+                    ) : (
+                      <Text style={styles.ptEtaText}>—</Text>
+                    );
+                    return wide ? (
+                      <View key={part.sparePartId} style={[styles.ptRow, i > 0 && styles.ptRowLine, out && styles.ptRowOut]}>
+                        <Text style={[styles.ptCell, styles.ptCode, styles.ptStrong]}>{partTitle(part)}</Text>
+                        <View style={styles.ptName}>
+                          <View style={styles.ptNameRow}>
+                            <Text style={styles.ptCell}>{part.offCatalog ? part.note ?? "" : part.name}</Text>
+                            {part.offCatalog ? <OffTag /> : null}
+                          </View>
+                          {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
+                        </View>
+                        <Text style={[styles.ptCell, styles.ptQty]}>{qty}</Text>
+                        <View style={styles.ptStock}>{chipView}</View>
+                        <View style={styles.ptEta}>{eta}</View>
+                      </View>
+                    ) : (
+                      <View key={part.sparePartId} style={[styles.ptCardRow, i > 0 && styles.ptRowLine, out && styles.ptRowOut]}>
+                        <View style={styles.ptNameRow}>
+                          <Text style={[styles.ptCell, styles.ptStrong]}>
+                            {partTitle(part)} × {qty}
+                          </Text>
+                          {part.offCatalog ? <OffTag /> : null}
+                          <View style={{ flex: 1 }} />
+                          {chipView}
+                        </View>
+                        <Text style={styles.ptSub} numberOfLines={2}>
+                          {part.offCatalog ? part.note ?? "" : part.name}
+                        </Text>
+                        {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
+                        {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
+                        {out ? <View style={styles.ptCardEta}>{eta}</View> : null}
+                      </View>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
+          </View>
+        ) : (
+          <Text style={styles.linkedText}>ยังไม่ได้กรอกอาการ — กด "แก้ไขอาการ/สถานะ" เพื่อใส่</Text>
+        )}
+        {order.outageId !== null ? (
+          <Text style={styles.linkedText}>อาการและอะไหล่ที่กรอกที่นี่จะขึ้นบนกระดานติดตามเครื่องเสียของเคสนี้ให้เอง</Text>
+        ) : null}
+
+        {/* ท้ายการ์ด: ใครทำอะไรล่าสุด + ปุ่มของขั้นนี้ (ปุ่มเดียว) — ตามแบบ ปุ่มอยู่มุมขวาล่างของการ์ด */}
+        <View style={[styles.nowFoot, wide && styles.nowFootWide]}>
+          {lastLog ? (
+            <Text style={styles.nowFootMeta}>
+              ล่าสุด: {lastLog.actionLabel} · {formatDateTime(lastLog.createdAt)}
+              {lastLog.byName ? ` · ${lastLog.byName}` : ""}
+            </Text>
+          ) : null}
+          <View style={wide ? styles.nowFootActions : undefined}>
         {order.status === "CLAIM_REVIEW" ? (
           <View style={[styles.waitingCard, styles.waitingInline]}>
             <Ionicons name="shield-checkmark-outline" size={16} color={colors.textMuted} />
@@ -1666,6 +1874,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             </View>
           )
         ) : null}
+          </View>
+        </View>
       </View>
 
       {order.claims.length > 0 ? (
@@ -1675,252 +1885,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           canReview={order.status === "CLAIM_REVIEW" && canReviewClaims(me)}
           onReviewed={() => reloadWithNotice()}
         />
-      ) : null}
-
-      <View style={[styles.infoGrid, twoCol && styles.infoGridWide]}>
-        <View style={[card, styles.infoCard]}>
-          <View style={styles.infoHead}>
-            <Ionicons name="business-outline" size={20} color={colors.primaryInk} />
-            <Text style={[styles.infoTitle, headingFont]}>สาขาและเครื่อง</Text>
-          </View>
-          <Row label="สาขา" value={`${order.branchCode} · ${order.branchName}`} />
-          {order.region ? <Row label="ภาค" value={order.region} /> : null}
-          {order.branchOpenedAt ? (
-            <Row label="วันเปิดร้าน" value={formatDate(order.branchOpenedAt)} />
-          ) : null}
-          {/*
-            ประกันเป็นเรื่องของสาขาแฟรนไชส์เท่านั้น สาขาบริษัท (รหัสขึ้นต้นด้วย C)
-            เครื่องเป็นของบริษัทเอง จึงไม่มีอะไรให้พูดถึง
-
-            ต้องเห็นตั้งแต่หน้านี้ เพราะเป็นตัวตัดสินว่าจะส่งช่างของเราไปหรือ
-            ให้ผู้ขายรับผิดชอบ ซึ่งตัดสินกันตอนดูใบงาน ไม่ใช่ตอนไปถึงหน้างานแล้ว
-          */}
-          {order.branchIsCompany ? (
-            <Row label="ประกัน" value="สาขาบริษัท — ไม่มีประกัน" />
-          ) : order.branchWarrantyExpiresAt ? (
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>ประกัน</Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  order.branchWarrantyExpired ? styles.warrantyOut : styles.warrantyIn,
-                ]}
-              >
-                {order.branchWarrantyExpired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"}
-                {" · ถึง "}
-                {formatDate(order.branchWarrantyExpiresAt)}
-                {/* สาขาเดียวกันประกันหมดไม่พร้อมกันได้ (Oasis 2 ปี · อื่น ๆ 3 ปี) บอกที่มาไว้กันงง */}
-                {order.branchWarrantyYears
-                  ? ` (${order.branchWarrantyBrand ? `${order.branchWarrantyBrand} ` : ""}${order.branchWarrantyYears} ปี)`
-                  : ""}
-              </Text>
-            </View>
-          ) : (
-            <Row label="ประกัน" value="ยังไม่ได้บันทึกวันหมดประกัน" />
-          )}
-          <Row
-            label="เครื่อง"
-            value={
-              order.machineCode
-                ? [
-                    order.machineCode,
-                    order.machineBrand,
-                    order.machineModel,
-                    order.machineCapacityLabel,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : "ทั้งสาขา"
-            }
-          />
-          {order.contactName || order.contactPhone ? (
-            <Row
-              label="ผู้ติดต่อที่สาขา"
-              value={[order.contactName, order.contactPhone].filter(Boolean).join(" · ")}
-            />
-          ) : null}
-        </View>
-
-        <View style={[card, styles.infoCard]}>
-          <View style={styles.infoHead}>
-            <Ionicons name="people-outline" size={20} color={colors.primaryInk} />
-            <Text style={[styles.infoTitle, headingFont]}>การมอบหมาย</Text>
-          </View>
-          <Row label="ประเภทงาน" value={order.jobTypeLabel} />
-          <Row label="ความเร่งด่วน" value={order.priorityLabel} />
-          {/* ใบเก่าจ่ายรายคน ใบใหม่จ่ายเป็นทีม — แสดงตามที่ใบนั้นเป็นจริง */}
-          <Row
-            label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
-            value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
-          />
-          <Row label="วันนัด" value={visitLabel(order)} />
-          {order.appointmentStatusLabel ? (
-            <Row
-              label="สถานะนัด"
-              value={order.appointmentStatusLabel}
-              sub={
-                order.appointmentBy
-                  ? `โดย ${order.appointmentBy.name ?? "—"} · ${formatDateTime(order.appointmentBy.at)}`
-                  : undefined
-              }
-            />
-          ) : null}
-          <Row
-            label="เปิดโดย"
-            value={`${order.createdByName ?? "—"} · ${formatDateTime(order.createdAt)}`}
-          />
-          <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
-        </View>
-      </View>
-
-      {/* ข้อความแจ้งคิวช่างให้ลูกค้า — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69): แอดมินเป็นคนคุยกับร้าน
-          หัวหน้าภาค/ช่างไม่ได้ส่งข้อความหาลูกค้า เห็นแล้วเข้าใจผิดว่าต้องส่งเอง */}
-      {hasCustomerMessage(order) && me?.role === "ADMIN" ? (
-        <CustomerMessageCard order={order} style={card} />
-      ) : null}
-
-      {/* อาการกับสถานะ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
-      <View style={card}>
-        <View style={styles.headRow}>
-          <Text style={styles.sectionTitle}>อาการ / สถานะ</Text>
-          <View style={{ flex: 1 }} />
-          {!done && !viewOnly ? (
-            <TouchableOpacity
-              style={styles.editNote}
-              onPress={() => setEditingNote(true)}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="create-outline" size={15} color={colors.primary} />
-              <Text style={styles.editNoteText}>แก้ไข</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        {order.symptom ||
-        order.inspectionNote ||
-        order.waitingParts.length > 0 ? (
-          <>
-            <Row label="อาการ" value={order.symptom ?? "—"} />
-            {/*
-              ไม่มีค่าที่กรอกไว้ก็บอกตามขั้นของใบงานแทน "ยังไม่ระบุ"
-
-              ขั้นของใบงานบอกได้อยู่แล้วว่าตอนนี้รออะไร คำว่า "ยังไม่ระบุ" จึงเป็น
-              การบอกว่าไม่รู้ ทั้งที่รู้ — และดูแปลกที่สุดบนใบที่ปิดไปแล้ว
-              ซึ่งขึ้นว่ายังไม่ระบุทั้งที่จบไปเรียบร้อย
-            */}
-            {/* สถานะเดียวกับหัวใบงาน — สถานะชั้นที่สอง (ของกระดานเครื่องเสีย) ขัดกับขั้นได้ เช่น "รอช่างเข้าแก้ไข" ตอนรอจ่ายงาน */}
-            <Row
-              label="สถานะ"
-              value={order.workStatus === MANUAL_STATUS && order.workStatusLabel ? `${order.statusLabel} · ${order.workStatusLabel}` : order.statusLabel}
-            />
-            {order.inspectionNote ? (
-              <Row
-                label="ผลตรวจหน้างาน"
-                value={`${order.inspectionNote}${order.inspectedAt ? ` (${formatDate(order.inspectedAt)})` : ""}`}
-              />
-            ) : null}
-            {order.services.length > 0 ? (
-              <>
-                <Text style={styles.partsHead}>ค่าบริการ (เสนอราคาลูกค้า)</Text>
-                {order.services.map((v) => (
-                  <View key={v.id} style={styles.partRow}>
-                    <Text style={styles.partCode}>
-                      {v.name} × {v.quantity}
-                      {v.unit ? ` ${v.unit}` : ""}
-                    </Text>
-                    <Text style={styles.partName} numberOfLines={1}>
-                      {v.note ?? ""}
-                    </Text>
-                  </View>
-                ))}
-              </>
-            ) : null}
-            {order.waitingParts.length > 0 ? (
-              <>
-                <Text style={styles.partsHead}>อะไหล่ที่ต้องใช้</Text>
-                {order.waitingParts.map((part) => (
-                  <View key={part.sparePartId}>
-                    <View style={styles.partRow}>
-                      <Text style={styles.partCode}>
-                        {partTitle(part)} × {part.quantity}
-                        {part.unit ? ` ${part.unit}` : ""}
-                      </Text>
-                      {part.offCatalog ? <OffTag /> : null}
-                      <Text style={styles.partName} numberOfLines={1}>
-                        {part.offCatalog ? part.note ?? "" : part.name}
-                      </Text>
-                      {/* ผลเช็คคลัง — ว่างคือยังไม่มีใครเช็ค ต่างจากเช็คแล้วพบว่าหมด · ของนอกสโตร์ = จัดหาได้ไหม */}
-                      {part.inStock === null ? (
-                        <Text style={styles.stockPending}>ยังไม่เช็ค</Text>
-                      ) : part.inStock ? (
-                        <Text style={styles.stockIn}>{part.offCatalog ? "หาได้" : part.warehouse ?? "มีของ"}</Text>
-                      ) : (
-                        <Text style={partsOut.length ? styles.stockOutPill : styles.stockOut}>
-                          {part.offCatalog ? "ยังหาไม่ได้" : "หมด"}
-                        </Text>
-                      )}
-                    </View>
-                    {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
-                    {part.requisitionNo ? (
-                      <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text>
-                    ) : null}
-                  </View>
-                ))}
-              </>
-            ) : null}
-          </>
-        ) : (
-          <Text style={styles.linkedText}>ยังไม่ได้กรอก — กดแก้ไขเพื่อใส่อาการและสถานะ</Text>
-        )}
-
-        {order.outageId !== null ? (
-          <Text style={styles.linkedText}>
-            ค่าที่กรอกที่นี่จะขึ้นบนกระดานติดตามเครื่องเสียของเคสนี้ให้เอง
-          </Text>
-        ) : null}
-      </View>
-
-      {/*
-        รูปหน้างาน — อยู่ต่อจากอาการเพราะเป็นเรื่องเดียวกัน คือ "เจออะไร"
-        ปิดงานแล้วแนบเพิ่มไม่ได้ ใบที่ปิดแล้วคือบันทึกที่จบไปแล้ว
-        ยกเว้นแอดมินที่ยังต้องเอาของที่ไม่ควรอยู่ในระบบออกได้
-      */}
-      <WorkOrderAttachments
-        workOrderId={order.id}
-        canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
-        reloadKey={filesKey}
-        onLoaded={setFiles}
-        onAdded={load}
-        inspection={
-          order.status === "INSPECTING" || order.inspectedAt
-            ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
-            : undefined
-        }
-      />
-
-      {/*
-        ใบที่ปิดแล้วไม่ต้องขึ้นการ์ดนี้ เพราะคำตอบเดียวกันไปอยู่ในการ์ดผลการทำงาน
-        ซึ่งเป็นที่ที่คนเปิดดูใบที่ปิดแล้วมองหาอยู่แล้ว — สองการ์ดที่พูดเรื่องเดียวกัน
-        คือการบังคับให้คนอ่านสองรอบเพื่อรู้เท่าเดิม
-      */}
-      {order.outageId !== null && !order.closedAt ? (
-        <View style={[card, styles.linked]}>
-          <View style={styles.headRow}>
-            <Ionicons
-              name={order.outageStillOpen ? "alert-circle" : "checkmark-circle"}
-              size={17}
-              color={order.outageStillOpen ? colors.danger : colors.success}
-            />
-            <Text style={styles.linkedTitle}>
-              {order.outageStillOpen ? "เครื่องยังไม่กลับมา" : "เครื่องกลับมาแล้ว"}
-            </Text>
-          </View>
-          <Text style={styles.linkedText}>
-            {order.outageStillOpen
-              ? "เคสบนกระดานยังเปิดอยู่ ระบบจะปิดให้เองเมื่อเครื่องหายไปจากไฟล์รายงานรอบถัดไป — ปิดใบงานไม่ได้ปิดเคส"
-              : "เคสบนกระดานปิดไปแล้ว เพราะเครื่องหายไปจากไฟล์รายงาน"}
-          </Text>
-        </View>
       ) : null}
 
       {order.closedAt || rejected ? (
@@ -2051,92 +2015,201 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      <History logs={order.logs} closed={closedOk} />
-
-      {/*
-        ปุ่มปิดใบงานปุ่มเดียว (เจ้าของงานเลือก ต.ค. 69) — กดแล้วเข้าฟอร์มเหตุผลที่ปิดตามปกติ
-        ชื่อ "ปิดใบงาน" ไม่ใช่ "ปิดงาน" เพราะขั้นเข้างานมีปุ่ม "ปิดงาน" ของช่าง (แนบรูป) อยู่แล้ว แอดมินเห็นทั้งสองปุ่ม
-        เคยลองแผงสามทาง (ซ่อมเสร็จ/ไม่ต้องเข้า/ยกเลิก) แต่เจ้าของงานอยากได้ปุ่มเดียวที่คุ้นมือ
-        ยกเลิกใบงานย้ายไปอยู่ในชิปเครื่องมือด้านล่าง เพราะไม่ใช่ทางปิดงานปกติ
-      */}
-      {canEnd ? (
-        <TouchableOpacity style={styles.closeBtn} onPress={() => setSupClosing(true)} accessibilityLabel="ปิดใบงาน">
-          <Ionicons name="checkmark-done-circle" size={20} color="#fff" />
-          <Text style={styles.closeBtnText}>ปิดใบงาน</Text>
-        </TouchableOpacity>
+      {/* ข้อความแจ้งคิวช่างให้ลูกค้า — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69): แอดมินเป็นคนคุยกับร้าน
+          หัวหน้าภาค/ช่างไม่ได้ส่งข้อความหาลูกค้า เห็นแล้วเข้าใจผิดว่าต้องส่งเอง */}
+      {hasCustomerMessage(order) && me?.role === "ADMIN" ? (
+        <CustomerMessageCard order={order} style={card} />
       ) : null}
 
-      {/* เครื่องมือรอง — ไม่ใช่ทางปิดงานปกติ จึงย่อเป็นชิปให้ไม่แย่งสายตาจากปุ่มปิดงาน */}
-      {canFollowUp || canEnd || (user?.role === "ADMIN" && !order.isTest) ? (
-        <View style={styles.toolRow}>
-          <Text style={styles.toolLabel}>เครื่องมือ</Text>
+      {/*
+        รูปหน้างาน — อยู่ต่อจากอาการเพราะเป็นเรื่องเดียวกัน คือ "เจออะไร"
+        ปิดงานแล้วแนบเพิ่มไม่ได้ ใบที่ปิดแล้วคือบันทึกที่จบไปแล้ว
+        ยกเว้นแอดมินที่ยังต้องเอาของที่ไม่ควรอยู่ในระบบออกได้
+      */}
+      <WorkOrderAttachments
+        workOrderId={order.id}
+        canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
+        reloadKey={filesKey}
+        onLoaded={setFiles}
+        onAdded={load}
+        inspection={
+          order.status === "INSPECTING" || order.inspectedAt
+            ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
+            : undefined
+        }
+      />
+
+      </View>
+
+      <View style={wide ? styles.colSide : styles.stack}>
+      <View style={wide ? styles.sideStack : [styles.infoGrid, twoCol && styles.infoGridWide]}>
+        <View style={[card, styles.infoCard]}>
+          <View style={styles.infoHead}>
+            <Ionicons name="business-outline" size={20} color={colors.primaryInk} />
+            <Text style={[styles.infoTitle, headingFont]}>สาขาและเครื่อง</Text>
+          </View>
+          <Row label="สาขา" value={`${order.branchCode} · ${order.branchName}`} />
+          {order.region ? <Row label="ภาค" value={order.region} /> : null}
+          {order.branchOpenedAt ? (
+            <Row label="วันเปิดร้าน" value={formatDate(order.branchOpenedAt)} />
+          ) : null}
+          {/*
+            ประกันเป็นเรื่องของสาขาแฟรนไชส์เท่านั้น สาขาบริษัท (รหัสขึ้นต้นด้วย C)
+            เครื่องเป็นของบริษัทเอง จึงไม่มีอะไรให้พูดถึง
+
+            ต้องเห็นตั้งแต่หน้านี้ เพราะเป็นตัวตัดสินว่าจะส่งช่างของเราไปหรือ
+            ให้ผู้ขายรับผิดชอบ ซึ่งตัดสินกันตอนดูใบงาน ไม่ใช่ตอนไปถึงหน้างานแล้ว
+          */}
+          {order.branchIsCompany ? (
+            <Row label="ประกัน" value="สาขาบริษัท — ไม่มีประกัน" />
+          ) : order.branchWarrantyExpiresAt ? (
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>ประกัน</Text>
+              <Text
+                style={[
+                  styles.rowValue,
+                  order.branchWarrantyExpired ? styles.warrantyOut : styles.warrantyIn,
+                ]}
+              >
+                {order.branchWarrantyExpired ? "หมดประกันแล้ว" : "ยังอยู่ในประกัน"}
+                {" · ถึง "}
+                {formatDate(order.branchWarrantyExpiresAt)}
+                {/* สาขาเดียวกันประกันหมดไม่พร้อมกันได้ (Oasis 2 ปี · อื่น ๆ 3 ปี) บอกที่มาไว้กันงง */}
+                {order.branchWarrantyYears
+                  ? ` (${order.branchWarrantyBrand ? `${order.branchWarrantyBrand} ` : ""}${order.branchWarrantyYears} ปี)`
+                  : ""}
+              </Text>
+            </View>
+          ) : (
+            <Row label="ประกัน" value="ยังไม่ได้บันทึกวันหมดประกัน" />
+          )}
+          <Row
+            label="เครื่อง"
+            value={
+              order.machineCode
+                ? [
+                    order.machineCode,
+                    order.machineBrand,
+                    order.machineModel,
+                    order.machineCapacityLabel,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "ทั้งสาขา"
+            }
+          />
+          {order.contactName || order.contactPhone ? (
+            <Row
+              label="ผู้ติดต่อที่สาขา"
+              value={[order.contactName, order.contactPhone].filter(Boolean).join(" · ")}
+            />
+          ) : null}
+        </View>
+
+        <View style={[card, styles.infoCard]}>
+          <View style={styles.infoHead}>
+            <Ionicons name="people-outline" size={20} color={colors.primaryInk} />
+            <Text style={[styles.infoTitle, headingFont]}>การมอบหมาย</Text>
+          </View>
+          <Row label="ประเภทงาน" value={order.jobTypeLabel} />
+          <Row label="ความเร่งด่วน" value={order.priorityLabel} />
+          {/* ใบเก่าจ่ายรายคน ใบใหม่จ่ายเป็นทีม — แสดงตามที่ใบนั้นเป็นจริง */}
+          <Row
+            label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
+            value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
+          />
+          <Row label="วันนัด" value={visitLabel(order)} />
+          {order.appointmentStatusLabel ? (
+            <Row
+              label="สถานะนัด"
+              value={order.appointmentStatusLabel}
+              sub={
+                order.appointmentBy
+                  ? `โดย ${order.appointmentBy.name ?? "—"} · ${formatDateTime(order.appointmentBy.at)}`
+                  : undefined
+              }
+            />
+          ) : null}
+          <Row
+            label="เปิดโดย"
+            value={`${order.createdByName ?? "—"} · ${formatDateTime(order.createdAt)}`}
+          />
+          <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
+        </View>
+      </View>
+
+
+      <History logs={order.logs} closed={closedOk} onTimeline={user?.superAdmin ? () => setTimelineOpen(true) : undefined} />
+
+      {/*
+        เครื่องมือเพิ่มเติม — ปิดใบงาน · เปิดใบรออะไหล่ต่อ · คัดลอกเป็นใบทดสอบ · ปิดงานย้อนหลัง · ยกเลิก · ลบถาวร
+        อยู่คอลัมน์ขวาตามแบบ เพราะไม่ใช่ขั้นตอนปกติของใบงาน ปุ่มของขั้นจริงอยู่ในการ์ดขั้นปัจจุบันแล้ว
+        "ปิดใบงาน" ชื่อนี้ ไม่ใช่ "ปิดงาน" เพราะขั้นเข้างานมีปุ่ม "ปิดงาน" ของช่าง (แนบรูป) อยู่แล้ว
+        ลบถาวร (แอดมิน) อยู่ท้ายสุดโดยตั้งใจ: ยกเลิกเก็บใบไว้พร้อมประวัติ ส่วนลบคือหายทั้งใบ
+      */}
+      {canFollowUp || canEnd || user?.role === "ADMIN" ? (
+        <View style={[card, styles.toolsCard]}>
+          <Text style={styles.toolsTitle}>เครื่องมือเพิ่มเติม</Text>
+          {canEnd && !recovered ? (
+            <TouchableOpacity style={styles.toolsClose} onPress={() => setSupClosing(true)} accessibilityLabel="ปิดใบงาน">
+              <Ionicons name="checkmark-done-circle-outline" size={18} color={colors.navy} />
+              <Text style={styles.toolsCloseText}>ปิดใบงาน</Text>
+            </TouchableOpacity>
+          ) : null}
           {canFollowUp ? (
-            <TouchableOpacity style={styles.toolChip} onPress={() => setFollowUpOpen(true)} activeOpacity={0.7}>
-              <Ionicons name="git-branch-outline" size={15} color={colors.primaryInk} />
-              <Text style={styles.toolChipText}>เปิดใบงานรออะไหล่ต่อ</Text>
+            <TouchableOpacity style={styles.toolItem} onPress={() => setFollowUpOpen(true)} activeOpacity={0.7}>
+              <Ionicons name="git-branch-outline" size={18} color={colors.body} />
+              <Text style={styles.toolItemText}>เปิดใบงานรออะไหล่ต่อ</Text>
             </TouchableOpacity>
           ) : null}
           {user?.role === "ADMIN" && !order.isTest ? (
-            <TouchableOpacity style={styles.toolChip} onPress={confirmTestCopy} activeOpacity={0.7}>
-              <Ionicons name="copy-outline" size={15} color={colors.primaryInk} />
-              <Text style={styles.toolChipText}>คัดลอกเป็นใบทดสอบ</Text>
+            <TouchableOpacity style={styles.toolItem} onPress={confirmTestCopy} activeOpacity={0.7}>
+              <Ionicons name="copy-outline" size={18} color={colors.body} />
+              <Text style={styles.toolItemText}>คัดลอกเป็นใบทดสอบ</Text>
             </TouchableOpacity>
           ) : null}
-          {/* ปิดงานย้อนหลังแบบกรอกทุกขั้น — เดิมซ่อนอยู่ใต้ "ซ่อมเสร็จแล้ว" ของแอดมิน ย้ายมาไว้นี่ให้ยังมีทางเข้า */}
           {canEnd && user?.role === "ADMIN" ? (
             <TouchableOpacity
-              style={styles.toolChip}
+              style={styles.toolItem}
               onPress={() => setBackfilling(true)}
               activeOpacity={0.7}
               accessibilityLabel="ปิดงานย้อนหลัง"
             >
-              <Ionicons name="time-outline" size={15} color={colors.primaryInk} />
-              <Text style={styles.toolChipText}>ปิดงานย้อนหลัง (กรอกทุกขั้น)</Text>
+              <Ionicons name="time-outline" size={18} color={colors.body} />
+              <Text style={styles.toolItemText}>ปิดงานย้อนหลัง (กรอกทุกขั้น)</Text>
             </TouchableOpacity>
           ) : null}
           {canEnd ? (
             <TouchableOpacity
-              style={[styles.toolChip, { borderColor: colors.dangerSoft }]}
+              style={styles.toolItem}
               onPress={() => setCancelling(true)}
               activeOpacity={0.7}
               accessibilityLabel="ยกเลิกใบงาน"
             >
-              <Ionicons name="close-circle-outline" size={15} color={colors.danger} />
-              <Text style={[styles.toolChipText, { color: colors.dangerInk }]}>ยกเลิกใบงาน</Text>
+              <Ionicons name="close-circle-outline" size={18} color={colors.body} />
+              <Text style={styles.toolItemText}>ยกเลิกใบงาน</Text>
             </TouchableOpacity>
+          ) : null}
+          {user?.role === "ADMIN" ? (
+            <View style={styles.dangerZone}>
+              <Text style={styles.dangerTitle}>ลบใบงานถาวร</Text>
+              <Text style={styles.dangerHint}>หายทั้งใบพร้อมประวัติ กู้คืนไม่ได้ · ใช้กับใบที่ไม่ควรมีตั้งแต่แรก ถ้าแค่ไม่ทำแล้วให้ "ยกเลิก"</Text>
+              <TouchableOpacity
+                style={styles.dangerBtn}
+                onPress={confirmDelete}
+                disabled={deleting}
+                activeOpacity={0.7}
+                accessibilityLabel="ลบใบงานนี้ถาวร"
+              >
+                {deleting ? <Spinner color={colors.danger} size="small" /> : <Ionicons name="trash-outline" size={15} color={colors.danger} />}
+                <Text style={styles.deleteText}>ลบถาวร…</Text>
+              </TouchableOpacity>
+            </View>
           ) : null}
         </View>
       ) : null}
-
-      {/*
-        ลบถาวร — แอดมินเท่านั้น และอยู่ท้ายสุดโดยตั้งใจ
-
-        ต่างจากยกเลิก: ยกเลิกเก็บใบไว้พร้อมประวัติว่าใครยกเลิกเมื่อไหร่
-        ส่วนลบคือหายไปทั้งใบ มีไว้สำหรับใบที่ไม่ควรมีอยู่ตั้งแต่แรก
-        — เปิดผิดสาขา เปิดซ้ำ หรือใบที่ลองระบบ · กล่องแยกและบอกผลให้ชัด เพราะเดิมหน้าตาเหมือนลิงก์คัดลอก
-      */}
-      {user?.role === "ADMIN" ? (
-        <View style={styles.dangerBox}>
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <Text style={styles.dangerTitle}>ลบใบงานถาวร</Text>
-            <Text style={styles.dangerHint}>หายทั้งใบพร้อมประวัติ กู้คืนไม่ได้ · ใช้กับใบที่ไม่ควรมีตั้งแต่แรก ถ้าแค่ไม่ทำแล้วให้ "ยกเลิก"</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.dangerBtn}
-            onPress={confirmDelete}
-            disabled={deleting}
-            activeOpacity={0.7}
-            accessibilityLabel="ลบใบงานนี้ถาวร"
-          >
-            {deleting ? (
-              <Spinner color={colors.danger} size="small" />
-            ) : (
-              <Ionicons name="trash-outline" size={15} color={colors.danger} />
-            )}
-            <Text style={styles.deleteText}>ลบถาวร…</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+      </View>
+      </View>
 
       <RollbackModal
         visible={rollbackOpen}
@@ -4661,14 +4734,23 @@ const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
   EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "ช่าง" },
 };
 
-function History({ logs, closed }: { logs: WorkOrder["logs"]; closed: boolean }) {
+function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed: boolean; onTimeline?: () => void }) {
   const [all, setAll] = useState(false);
   const ordered = [...logs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
   const minor = ordered.filter((l) => MINOR_ACTIONS.has(l.action)).length;
   const shown = all ? ordered : ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
   return (
     <View style={[styles.card, closed && styles.cardDone]}>
-      <Text style={styles.sectionTitle}>ประวัติ</Text>
+      <View style={styles.hHead}>
+        <Ionicons name="time-outline" size={19} color={colors.primaryInk} />
+        <Text style={[styles.infoTitle, headingFont]}>ประวัติ</Text>
+        <View style={{ flex: 1 }} />
+        {onTimeline ? (
+          <TouchableOpacity onPress={onTimeline} accessibilityLabel="ดูไทม์ไลน์เต็ม">
+            <Text style={styles.hTimeline}>ดูไทม์ไลน์เต็ม</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
       {shown.map((log, i) => {
         const role = log.byRole ? ROLE_DOT[log.byRole] : undefined;
         const fg = role?.fg ?? colors.textFaint;
@@ -6010,13 +6092,6 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 const styles = StyleSheet.create({
-  closeBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: radius.md, backgroundColor: colors.roleSupervisor, marginTop: spacing.md },
-  closeBtnText: { fontSize: 16, fontWeight: "800", color: "#fff" },
-  toolRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
-  toolLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted, letterSpacing: 0.3 },
-  toolChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 7, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
-  toolChipText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
-  dangerBox: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.md, borderWidth: 1, borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.lg },
   dangerTitle: { fontSize: 13.5, fontWeight: "800", color: colors.dangerInk },
   dangerHint: { fontSize: 12, lineHeight: 18, color: colors.body },
   dangerBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.danger, backgroundColor: colors.card },
@@ -6126,7 +6201,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   cardDone: { backgroundColor: colors.doneSoft, borderColor: colors.doneLine },
-  badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
   doneBand: {
     flexDirection: "row",
     alignItems: "center",
@@ -6351,6 +6425,81 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sky50,
   },
   infoGrid: { gap: spacing.md },
+  // ── หน้าตาตามแบบ ต.ค. 69 ──
+  hero: { gap: spacing.sm, paddingHorizontal: 2 },
+  heroRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  heroTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text, marginRight: spacing.xs },
+  statusChip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
+  tagLine: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.card },
+  tagLineText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.body },
+  stepsCard: { paddingTop: spacing.md },
+  stepsHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  stepsHeadText: { fontSize: 15, lineHeight: 22, color: colors.textMuted },
+  stepsHeadStrong: { fontWeight: "700", color: colors.navy },
+  cols: { flexDirection: "row", alignItems: "flex-start", gap: spacing.lg },
+  colMain: { flex: 1, minWidth: 0, gap: spacing.md },
+  colSide: { width: 380, flexShrink: 0, gap: spacing.md },
+  stack: { gap: spacing.md },
+  sideStack: { gap: spacing.md },
+  recovered: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md },
+  recoveredIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.successSoft, alignItems: "center", justifyContent: "center" },
+  recoveredTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
+  recoveredText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  recoveredBtn: { flexDirection: "row", alignItems: "center", gap: 6, height: 40, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.card },
+  recoveredBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.navy },
+  nowCard: { gap: spacing.md },
+  nowHead: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
+  nowEyebrow: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
+  nowTitle: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text },
+  nowBody: { gap: 2 },
+  nowFoot: { gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, marginHorizontal: -spacing.lg, paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  nowFootWide: { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
+  nowFootMeta: { flex: 1, minWidth: 200, fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  nowFootActions: { flexShrink: 0, alignItems: "flex-end", maxWidth: "100%" },
+  ptTop: { flexDirection: "row", alignItems: "center", marginTop: spacing.md, marginBottom: spacing.sm },
+  ptTitle: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.text },
+  ptSummary: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  ptSummaryOut: { color: colors.dangerInk, fontWeight: "700" },
+  ptTable: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, overflow: "hidden" },
+  ptRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: 12 },
+  ptHeadRow: { backgroundColor: colors.background, paddingVertical: 8 },
+  ptRowLine: { borderTopWidth: 1, borderTopColor: colors.border },
+  ptRowOut: { backgroundColor: colors.dangerSoft },
+  ptHead: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  ptCell: { fontSize: 14, lineHeight: 21, color: colors.text },
+  ptStrong: { fontWeight: "700" },
+  ptCode: { width: 130 },
+  ptName: { flex: 1, minWidth: 0 },
+  ptNameRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  ptQty: { width: 70, textAlign: "right" },
+  ptStock: { width: 120 },
+  ptEta: { width: 130 },
+  ptChip: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  ptChipText: { fontSize: 12, lineHeight: 18, fontWeight: "700" },
+  ptEtaText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  ptEtaBtn: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, height: 32, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.card },
+  ptEtaBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.navy },
+  ptCardRow: { paddingHorizontal: spacing.md, paddingVertical: 10, gap: 2 },
+  ptSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  ptCardEta: { marginTop: 4, alignItems: "flex-start" },
+  toolsCard: { gap: 2 },
+  toolsTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.textMuted, marginBottom: spacing.sm },
+  toolsClose: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 44, borderRadius: 10, borderWidth: 1, borderColor: colors.borderStrong, marginBottom: spacing.sm },
+  toolsCloseText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.navy },
+  toolItem: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10 },
+  toolItemText: { fontSize: 15, lineHeight: 22, color: colors.text },
+  dangerZone: { gap: 4, marginTop: spacing.sm, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, alignItems: "flex-start" },
+  hHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: spacing.sm },
+  hTimeline: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   infoGridWide: { flexDirection: "row", alignItems: "stretch" },
   infoCard: { flex: 1, minWidth: 0 },
   infoHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm },
@@ -6365,9 +6514,6 @@ const styles = StyleSheet.create({
   lockText: { marginTop: 4, fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center", maxWidth: 360 },
   lockBtn: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
   lockBtnText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
-  titleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
-  machinePill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 10 },
-  machinePillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   subBox: {
     marginTop: spacing.sm,
     padding: spacing.md,
@@ -6381,7 +6527,6 @@ const styles = StyleSheet.create({
   subText: { fontSize: 13, lineHeight: 20, color: colors.body },
   card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
   badgeOut: { backgroundColor: colors.danger },

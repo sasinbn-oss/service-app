@@ -68,7 +68,7 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(4000);
 
     // ③ ฟอร์มเปิดค้าง → แถบเหลือง ไม่โหลดทับ · บันทึกทับ → 409
-    await page.getByText("แก้ไข", { exact: true }).locator("visible=true").last().click();
+    await page.getByText("แก้ไขอาการ/สถานะ", { exact: true }).locator("visible=true").last().click();
     await page.waitForTimeout(1000);
     await page.getByLabel("ชื่อผู้ติดต่อ").locator("visible=true").fill("คุณทับ");
     await fx.call(fx.A, "PATCH", `/work-orders/${wo.id}`, { symptom: "แก้จากอีกเครื่อง-2" });
@@ -87,7 +87,7 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(3500);
 
     // ④ แถบเหลืองตอนฟอร์มเปิด
-    await page.getByText("แก้ไข", { exact: true }).locator("visible=true").last().click();
+    await page.getByText("แก้ไขอาการ/สถานะ", { exact: true }).locator("visible=true").last().click();
     await page.waitForTimeout(1000);
     await fx.call(fx.A, "PATCH", `/work-orders/${wo.id}`, { symptom: "แก้จากอีกเครื่อง-3" });
     await shown(page);

@@ -263,7 +263,7 @@ const login = async (code) =>
     page = await open(`ZCWP${suf}`);
     // ดูได้อย่างเดียว — ปุ่มแก้ใบงานทุกอย่างหายไป เหลือแค่ปุ่มตรวจเคลม
     const gone = [];
-    for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ลบใบงานถาวร", "แก้ไข", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
+    for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ลบใบงานถาวร", "แก้ไขอาการ/สถานะ", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
     gone.length === 0 ? pass("Admin Spare Part: ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน") : fail(`Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}`);
     await vis(page, "อนุมัติเคลม · ปิดงาน").first().scrollIntoViewIfNeeded();
     (await vis(page, "หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
