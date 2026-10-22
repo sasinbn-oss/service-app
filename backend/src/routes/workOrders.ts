@@ -2692,6 +2692,12 @@ const partsCheckSchema = z.object({
    * ระบบเดาไม่ได้ว่าแบบไหน แอดมินที่ทำใบเสนอราคาเป็นคนรู้ · จ่ายแล้ว → ใบใหม่ไปเบิก · ยังไม่จ่าย → เช็คอะไหล่แล้วเสนอราคาใหม่
    */
   splitPaid: z.boolean().optional(),
+  /**
+   * ของคลังอื่น ต้องโอนไหม (เจ้าของงานขอ ต.ค. 69) — คลังที่อยู่ในพื้นที่หน้างานอยู่แล้วไม่ต้องโอน
+   * หัวหน้าภาคเบิกจากคลังนั้นส่งช่างได้เลย (PARTS_PICKUP) · ต้องโอน → เบิกแล้วโอนมาคลังส่งมอบ (PARTS_TRANSFER)
+   * ไม่ส่งมา = ต้องโอน (แอปรุ่นก่อนที่ยังไม่มีคำถามนี้)
+   */
+  transfer: z.boolean().optional(),
   // ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
   pickupNote: z.string().trim().max(500).optional(),
   // ของหมด — วันที่คาดว่าของเข้า ขึ้นบนแถบขั้นตอนคู่กับป้ายแดง "อะไหล่หมด"
@@ -2777,8 +2783,16 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   const otherIds = parsed.data.results
     .filter((r) => r.inStock && !offIds.has(r.sparePartId) && r.warehouse !== ADMIN_WAREHOUSE)
     .map((r) => r.sparePartId);
+  // ไม่ต้องโอน = ถือว่าของอยู่คลังที่จะเบิกส่งมอบแล้ว เหมือนตัวที่โอนมาถึงแล้ว
+  const noTransferIds = new Set(
+    parsed.data.transfer === false
+      ? parsed.data.results.filter((r) => otherIds.includes(r.sparePartId) && !arrivedAt(r.sparePartId, r.warehouse)).map((r) => r.sparePartId)
+      : []
+  );
   const arrivedIds = new Set(
-    parsed.data.results.filter((r) => otherIds.includes(r.sparePartId) && arrivedAt(r.sparePartId, r.warehouse)).map((r) => r.sparePartId)
+    parsed.data.results
+      .filter((r) => otherIds.includes(r.sparePartId) && (arrivedAt(r.sparePartId, r.warehouse) || noTransferIds.has(r.sparePartId)))
+      .map((r) => r.sparePartId)
   );
   const transferIds = otherIds.filter((pid) => !arrivedIds.has(pid));
   const pickupIds = otherIds.filter((pid) => arrivedIds.has(pid));
@@ -2842,9 +2856,12 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
           // ของที่หมดยังไม่ได้เบิก เลขใบเบิกที่ค้างจากรอบก่อนต้องถูกล้าง · ของนอกสโตร์ไม่มีใบเบิก
           requisitionNo: r.inStock && !offIds.has(r.sparePartId) ? r.requisitionNo?.trim() || null : null,
           // ยังอยู่คลังที่โอนมาถึง = เก็บข้อมูลการโอนไว้ · เปลี่ยนคลัง/หมด = การโอนรอบเดิมไม่เกี่ยวแล้ว
-          ...(arrivedIds.has(r.sparePartId) || (r.inStock && r.warehouse === ADMIN_WAREHOUSE && arrivedAt(r.sparePartId, r.warehouse))
-            ? {}
-            : { transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: null }),
+          // ไม่ต้องโอน — ขั้นหัวหน้าภาคเบิกอ่านว่า "ของอยู่คลังนี้แล้ว" จาก transferredAt (ไม่มีเลขใบโอน = ไม่ได้โอน)
+          ...(noTransferIds.has(r.sparePartId)
+            ? { transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: now }
+            : arrivedIds.has(r.sparePartId) || (r.inStock && r.warehouse === ADMIN_WAREHOUSE && arrivedAt(r.sparePartId, r.warehouse))
+              ? {}
+              : { transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: null }),
           checkedAt: now,
           checkedById: req.auth!.userId,
         },
@@ -2899,7 +2916,7 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       [
         // รายตัว: คลังไหน · เลขใบเบิก · ใครเบิก — เดิมเขียนแค่ "อะไหล่ครบทุกรายการ" ย้อนดูไม่ได้ว่าตัวไหน
         // แอดมินเบิกจากคลัง 94 ด้วยใบไหน ตัวไหนส่งให้หัวหน้าภาคเบิก (เจ้าของงานขอ ต.ค. 69)
-        await partsCheckLines(waiting, parsed.data.results, offIds, arrivedIds),
+        await partsCheckLines(waiting, parsed.data.results, offIds, arrivedIds, noTransferIds),
         anyOut
           ? `อะไหล่หมด: ${outCodes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""} — ใบงานรออยู่ที่ขั้นนี้ ของมาถึงแล้วค่อยใส่เลขใบเบิกอีกรอบ`
           : null,
@@ -4078,7 +4095,8 @@ async function partsCheckLines(
   waiting: { sparePartId: number; quantity: number }[],
   results: { sparePartId: number; inStock: boolean; warehouse?: string | null; requisitionNo?: string | null }[],
   offIds: Set<number>,
-  arrivedIds: Set<number> = new Set()
+  arrivedIds: Set<number> = new Set(),
+  noTransferIds: Set<number> = new Set()
 ) {
   const found = await prisma.sparePart.findMany({
     where: { id: { in: results.map((r) => r.sparePartId) } },
@@ -4092,6 +4110,7 @@ async function partsCheckLines(
       if (offIds.has(r.sparePartId)) return `${head} — ${r.inStock ? "ได้ของแล้ว" : "ยังไม่ได้ของ"}`;
       if (!r.inStock) return `${head} — หมด`;
       if (r.warehouse === ADMIN_WAREHOUSE) return `${head} · ${r.warehouse} · ใบเบิก ${r.requisitionNo?.trim()} — แอดมินเบิกแล้ว`;
+      if (noTransferIds.has(r.sparePartId)) return `${head} · ${r.warehouse} (ไม่ต้องโอน) — ส่งหัวหน้าภาคเบิกส่งมอบ`;
       if (arrivedIds.has(r.sparePartId)) return `${head} · ${r.warehouse} (โอนมาแล้ว) — ส่งหัวหน้าภาคเบิกส่งมอบ`;
       return `${head} · ${r.warehouse} — ส่งหัวหน้าภาคเบิกและโอน`;
     })

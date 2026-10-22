@@ -133,6 +133,22 @@ POST $S work-orders/$W4/parts-transfer/return '{"reason":"ขนส่งตี�
 [ "$(ST $W4)|$(PART $W4 $BELT)|$(XF $W4 $BELT)" = "PARTS_REQUESTED|true|คลังกระบี่|-|-|-|-|false" ] \
   && pass "ส่งกลับระหว่างรอของ: ล้างการโอน คลังกลับเป็นต้นทาง (กระบี่) ให้แอดมินตอบใหม่" || fail "ส่งกลับระหว่างโอน: $(ST $W4) $(PART $W4 $BELT) $(XF $W4 $BELT)"
 
+echo "═══ คลังอื่นที่อยู่ในพื้นที่ — แอดมินเลือกไม่ต้องโอน (ต.ค. 69)"
+W5=$(mk "[{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W5"
+DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W5" >/dev/null
+POST $A work-orders/$W5/parts-check "{\"transfer\":false,\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
+[ "$(ST $W5)|$(XF $W5 $BELT)" = "PARTS_PICKUP|-|-|-|true" ] \
+  && pass "ไม่ต้องโอน → ข้ามขั้นโอน ไปหัวหน้าภาคเบิกอะไหล่ (คลังอื่น) เลย · ไม่มีเลขใบโอน" || fail "ไม่ต้องโอน: $(ST $W5) $(XF $W5 $BELT)"
+DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W5 and action='PARTS_CHECKED'" | grep -q "คลังกระบี่ (ไม่ต้องโอน) — ส่งหัวหน้าภาคเบิกส่งมอบ" \
+  && pass "ประวัติบอกว่าไม่ต้องโอน" || fail "ประวัติไม่บอกว่าไม่ต้องโอน"
+POST $S work-orders/$W5/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"KB-NT5\"}]}" >/dev/null
+[ "$(ST $W5)|$(PART $W5 $BELT)" = "PARTS_CHECKED|true|คลังกระบี่|KB-NT5" ] \
+  && pass "หัวหน้าภาคเบิกจากคลังนั้น (ใส่เลขใบเบิก) → จ่ายงานต่อ" || fail "เบิกหลังไม่โอน: $(ST $W5) $(PART $W5 $BELT)"
+W6=$(mk "[{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W6"
+DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W6" >/dev/null
+POST $A work-orders/$W6/parts-check "{\"transfer\":true,\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
+[ "$(ST $W6)" = "PARTS_TRANSFER" ] && pass "ต้องโอน → หัวหน้าภาคเบิกและโอน (เหมือนเดิม)" || fail "ต้องโอน: $(ST $W6)"
+
 echo "═══ ของอยู่คลัง 94 ทั้งหมด — ไม่ผ่านขั้นเหล่านี้"
 W2=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1}]"); IDS="$IDS $W2"
 DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W2" >/dev/null
