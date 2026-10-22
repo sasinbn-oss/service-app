@@ -40,6 +40,13 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
     await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
     await vis("เข้าสู่ระบบ").last().click();
     await page.waitForTimeout(3500);
+    // แอดมินเปิดแอปมาที่ "งานของฉันวันนี้" (ต.ค. 69) — ไปแผนงานผ่านเมนูข้าง (จอแคบต้องเปิดเมนูก่อน)
+    if ((await vis("แผนงาน").count()) === 0) {
+      await page.getByLabel("เปิดเมนู").locator("visible=true").first().click();
+      await page.waitForTimeout(800);
+    }
+    await vis("แผนงาน").first().click();
+    await page.waitForTimeout(2500);
     await vis("จัดแผน").first().click();
     await page.waitForTimeout(800);
     // หน้าต่างเปิดมาขนาดปกติ (เจ้าของงานขอ ต.ค. 69) — ไม่ต้องกดย่อก่อน
