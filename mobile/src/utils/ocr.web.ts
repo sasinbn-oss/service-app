@@ -54,7 +54,7 @@ export function ocrWorker(): Promise<OcrWorker> {
 
 /**
  * รวมค่าที่อ่านได้หลายรอบเป็นตัวต่อตัว — เอาความยาวที่เจอบ่อยสุด แล้วแต่ละตำแหน่งใช้ตัวที่เจอบ่อยสุด
- * sure = ทุกตำแหน่งชนะขาด (มากกว่าครึ่ง) ไม่งั้นช่างต้องตรวจกับรูป
+ * sure = ทุกรอบอ่านตรงกันทุกตัว — ชนะแค่เสียงข้างมากยังผิดได้ (ป้ายจริง: 6 อ่านเป็น E ห้าในแปดรอบ) จึงให้ช่างตรวจกับรูป
  */
 function majority(reads: string[]): { value: string; sure: boolean } {
   const lens = new Map<number, number>();
@@ -68,7 +68,7 @@ function majority(reads: string[]): { value: string; sure: boolean } {
     for (const r of same) c.set(r[i], (c.get(r[i]) ?? 0) + 1);
     const [ch, k] = [...c.entries()].sort((a, b) => b[1] - a[1])[0];
     value += ch;
-    if (k * 2 <= same.length) sure = false;
+    if (k < same.length) sure = false;
   }
   return { value, sure };
 }

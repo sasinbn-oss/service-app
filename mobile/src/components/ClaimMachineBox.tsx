@@ -165,7 +165,13 @@ export default function ClaimMachineBox({
             </View>
             {v?.needsCheck && v.source === "SCAN" && v.value ? (
               <Text style={styles.doubt}>
-                {f.model && registryModel ? `ไม่ตรงทะเบียน (${registryModel}) — ` : ""}ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9)
+                {/* รุ่นเต็มที่ขึ้นต้นตรงทะเบียนแล้ว — ที่ไม่มั่นใจคือส่วนท้าย ไม่ใช่ "ไม่ตรงทะเบียน" */}
+                {f.model && registryModel
+                  ? v.value.startsWith(registryModel.toUpperCase())
+                    ? "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — "
+                    : `ไม่ตรงทะเบียน (${registryModel}) — `
+                  : ""}
+                ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)
               </Text>
             ) : null}
           </View>
