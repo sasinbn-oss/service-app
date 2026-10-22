@@ -128,20 +128,19 @@ let WO = process.argv[2] || null;
       await page.screenshot({ path: path.join(DIR, "bo-4-after.png"), fullPage: true });
     }
 
-    // อ่านจากป้ายสถานะบนหัวใบงาน ไม่ใช่ทั้งหน้า — แถบขั้นตอนมีชื่อทุกขั้นอยู่แล้ว
-    // ถ้าดูทั้งหน้าจะเจอ "รอหัวหน้าภาคจ่ายงาน" ตลอดไม่ว่าสถานะจริงจะเป็นอะไร
-    // หาใบที่เจาะจง ไม่ใช่ใบแรกที่เจอ — หน้ารายการยังค้างอยู่ใน DOM ข้างหลัง
-    // หน้ารายละเอียด ถ้าเอาใบแรกจะได้ใบอื่นที่ไม่เกี่ยวกับที่กำลังทดสอบ
-    const badge = await page.evaluate((code) => {
+    // อ่านจากการ์ด "ขั้นปัจจุบัน" ของหน้าใบงาน (หน้าตาใหม่ ต.ค. 69) ไม่ใช่ทั้งหน้า — แถบขั้นตอนมีชื่อทุกขั้นอยู่แล้ว
+    // ถ้าดูทั้งหน้าจะเจอ "จ่ายงาน" ตลอดไม่ว่าสถานะจริงจะเป็นอะไร · หัวการ์ดบอกตำแหน่งที่ใบรออยู่
+    const badge = await page.evaluate(() => {
       const hits = [...document.querySelectorAll("*")].filter(
-        (n) => !n.children.length && (n.textContent || "").trim() === code
+        (n) => !n.children.length && /^ขั้นปัจจุบัน · /.test((n.textContent || "").trim()) && n.getBoundingClientRect().width > 0
       );
-      return hits.map((n) => n.parentElement?.textContent?.trim() || "").pop() || "";
-    }, WO);
-    console.log("  ป้ายสถานะ:", badge);
+      const head = hits.pop();
+      return head ? head.parentElement?.textContent?.trim() || "" : "";
+    });
+    console.log("  ขั้นปัจจุบัน:", badge);
     /จ่ายงาน/.test(badge)
       ? pass("ของครบแล้วเดินต่อไปขั้นจ่ายงาน")
-      : fail(`ไม่เดินต่อหลังของมาครบ — ป้ายยังเป็น "${badge}"`);
+      : fail(`ไม่เดินต่อหลังของมาครบ — ขั้นปัจจุบันยังเป็น "${badge}"`);
     (await seen("RQ-2569-0042", false)) > 0 && (await seen("RQ-WEB-2", false)) > 0
       ? pass("เห็นใบเบิกทั้งสองใบในใบงาน")
       : fail("ใบเบิกใบใดใบหนึ่งหายไป");
