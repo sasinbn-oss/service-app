@@ -1,0 +1,81 @@
+# ระบบทดสอบในเครื่อง — ทุกอย่างอยู่ในคอมเครื่องเดียว ไม่แตะระบบจริง (ดูวิธีใช้ใน README.md โฟลเดอร์นี้)
+#
+#   docker compose up -d --build     เปิด (ครั้งแรกใช้เน็ตดาวน์โหลด ~10–15 นาที)
+#   แล้วเปิด http://localhost:8080
+#
+# ⛔ ห้ามเปลี่ยนค่าเชื่อมต่อด้านล่างไปชี้ฐานข้อมูล/ที่เก็บไฟล์ของระบบจริง — ทีมทดสอบลบใบงาน = ลบของจริง
+name: otteri-test
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: otteri
+      POSTGRES_PASSWORD: otteri-local
+      POSTGRES_DB: otteri
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otteri"]
+      interval: 3s
+      retries: 30
+    restart: unless-stopped
+
+  storage:
+    image: node:22-bookworm-slim
+    command: ["node", "/local-test/file-store.js"]
+    volumes:
+      - ./file-store.js:/local-test/file-store.js:ro
+      - files:/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: local-test/backend.Dockerfile
+    environment:
+      DATABASE_URL: postgresql://otteri:otteri-local@db:5432/otteri?connection_limit=5
+      DIRECT_URL: postgresql://otteri:otteri-local@db:5432/otteri?connection_limit=1
+      JWT_SECRET: local-test-only-not-for-production
+      PORT: "4000"
+      STORAGE_ENDPOINT: http://storage:9000
+      STORAGE_REGION: us-east-1
+      STORAGE_ACCESS_KEY_ID: local
+      STORAGE_SECRET_ACCESS_KEY: local-secret
+      STORAGE_BUCKET: service-app
+      STORAGE_BROWSER_RELATIVE: "1"
+    volumes:
+      # วางไฟล์สำรอง .json.gz ไว้ในโฟลเดอร์ backup/ ก่อนเปิดครั้งแรก = คัดลอกข้อมูลจากระบบจริงมาใช้
+      - ./backup:/backup:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_started
+    restart: unless-stopped
+
+  # ใส่ใบงานตัวอย่างครั้งเดียว (ข้ามเองถ้ากู้จากไฟล์สำรอง หรือมีใบงานแล้ว)
+  demo:
+    image: node:22-bookworm-slim
+    command: ["node", "/local-test/demo-orders.js"]
+    volumes:
+      - ./demo-orders.js:/local-test/demo-orders.js:ro
+      - ./demo-files:/local-test/demo-files:ro
+    depends_on:
+      - backend
+    restart: "no"
+
+  web:
+    build:
+      context: ..
+      dockerfile: local-test/web.Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+      - storage
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  files:

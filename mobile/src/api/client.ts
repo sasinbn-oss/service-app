@@ -7,7 +7,14 @@ import { rememberFresh } from "../utils/freshOrder";
 
 // Set EXPO_PUBLIC_API_URL in mobile/.env to the deployed backend, or to your
 // machine's LAN address (e.g. http://192.168.1.20:4000) when running locally.
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:4000";
+//
+// "same-origin" = backend อยู่หลังที่อยู่เดียวกับหน้าเว็บ (ระบบทดสอบในเครื่อง local-test/ — nginx ส่ง /api ต่อให้)
+// เว็บชุดเดียวจึงใช้ได้ทั้ง localhost และจากมือถือในวง Wi-Fi ผ่าน IP ของคอม โดยไม่ต้อง build ใหม่ตาม IP
+const configured = process.env.EXPO_PUBLIC_API_URL;
+export const API_URL =
+  configured === "same-origin" && typeof window !== "undefined" && window.location
+    ? window.location.origin
+    : configured || "http://localhost:4000";
 
 // Spare part images are either a full external URL or a path served by our own
 // API, so relative paths need the backend origin prefixed.
