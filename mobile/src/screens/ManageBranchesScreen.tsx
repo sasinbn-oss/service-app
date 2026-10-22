@@ -674,7 +674,7 @@ const styles = StyleSheet.create({
   empty: { color: colors.textMuted, fontSize: 14, textAlign: "center", paddingVertical: spacing.lg },
   error: { color: colors.danger, fontSize: 14 },
   btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.card, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
-  btnPrimary: { backgroundColor: colors.primary, borderColor: colors.primary },
+  btnPrimary: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   btnDanger: { backgroundColor: colors.danger, borderColor: colors.danger },
   btnDangerGhost: { borderColor: colors.danger, backgroundColor: "transparent" },
   btnText: { fontSize: 13, fontWeight: "700", color: colors.navy },

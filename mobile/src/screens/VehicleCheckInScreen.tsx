@@ -677,7 +677,7 @@ const styles = StyleSheet.create({
   tileBox: { flex: 1, backgroundColor: colors.tile, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 7, minWidth: 0 },
   tileLabel: { fontSize: 12, color: colors.textMuted },
   tileValue: { fontSize: 13.5, fontWeight: "700", color: colors.text },
-  btn: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 14 },
+  btn: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: colors.navyFill, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 14 },
   btnNavy: { backgroundColor: colors.navyFill },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 14.5 },
   btnLocked: { backgroundColor: colors.tile },

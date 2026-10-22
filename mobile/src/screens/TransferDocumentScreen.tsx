@@ -663,7 +663,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: radius.md,
     paddingVertical: spacing.lg,
   },

@@ -323,7 +323,7 @@ const styles = StyleSheet.create({
   spinner: { position: "absolute", top: "50%", left: "50%", marginLeft: -10, marginTop: -10 },
   fileBox: { alignItems: "center", gap: 12 },
   fileText: { color: "#fff", fontSize: 14 },
-  openBtn: { backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 22, paddingVertical: 10 },
+  openBtn: { backgroundColor: colors.navyFill, borderRadius: 12, paddingHorizontal: 22, paddingVertical: 10 },
   openText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   err: { position: "absolute", bottom: 12, color: "#FCA5A5", fontSize: 13 },
   nav: {

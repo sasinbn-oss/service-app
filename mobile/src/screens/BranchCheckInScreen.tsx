@@ -152,7 +152,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   button: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: 8,
     padding: 14,
     alignItems: "center",

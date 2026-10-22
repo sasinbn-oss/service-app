@@ -341,7 +341,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 12,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
   },
   goText: { color: "#fff", fontSize: 14, lineHeight: 22, fontWeight: "700" },
   banner: {

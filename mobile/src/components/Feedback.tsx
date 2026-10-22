@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
   },
   btn: { minHeight: 44, paddingHorizontal: 18, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   btn_light: { backgroundColor: colors.sky50 },
-  btn_primary: { backgroundColor: colors.primary },
+  btn_primary: { backgroundColor: colors.navyFill },
   btn_danger: { backgroundColor: colors.dangerSoft },
   btnText: { fontSize: 15, lineHeight: 22, fontWeight: "700" },
   btnText_light: { color: colors.primaryInk },

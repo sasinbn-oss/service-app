@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
   button: {
     flexDirection: "row",
     gap: 10,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: 14,
     minHeight: 52,
     alignItems: "center",

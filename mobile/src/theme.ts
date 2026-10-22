@@ -70,16 +70,25 @@ export const colors = {
   service: "#0F766E",
   serviceSoft: "#E6F6F4",
   serviceLine: "#99D5CD",
-  background: "#F4F9FD",
+  // แนวทางออกแบบ ต.ค. 69 (เจ้าของงานส่งมา): พื้นเทาอมฟ้าเรียบ เส้นขอบ/ตัวหนังสือรองเข้มขึ้นนิดให้ดูทางการ
+  background: "#F4F6F9",
   card: "#FFFFFF",
-  border: "#E2E8F0",
-  borderStrong: "#CBD5E1",
+  border: "#DDE3EA",
+  borderStrong: "#C3CDD8",
   text: "#0F172A",
   body: "#334155",
-  textMuted: "#64748B",
+  textMuted: "#5B6B7D",
   textFaint: "#94A3B8",
   /** ม่านโปร่งทับเนื้อหาตอนรอ (toast/หน้าต่างโหลด) — สีพื้นหลังแบบโปร่ง */
-  veil: "rgba(244,249,253,0.86)",
+  veil: "rgba(244,246,249,0.86)",
+  /**
+   * เมนูข้างสีกรมท่า (แนวทางออกแบบ ต.ค. 69) — โครงของแอปเป็นกรมท่า ฟ้า OTTERI เหลือไว้เป็นแถบเมนูที่เลือก
+   * แยกเป็นชุดของตัวเอง เพราะตัวหนังสือบนเมนูเป็นสีอ่อนบนพื้นเข้ม คนละทางกับ text/textMuted ของเนื้อหา
+   */
+  sideBg: "#0B2540",
+  sideLine: "#1C3A5C",
+  sideInk: "#C9D6E5",
+  sideDim: "#8FA3BC",
 };
 
 /**
@@ -142,6 +151,10 @@ const DARK: Partial<typeof colors> = {
   textMuted: "#8FA2B5",
   textFaint: "#66798C",
   veil: "rgba(11,21,32,0.86)",
+  sideBg: "#08111B",
+  sideLine: "#1A2C42",
+  sideInk: "#B8C7D9",
+  sideDim: "#7F93AB",
 };
 
 const THEME_KEY = "otteri-theme";
@@ -216,12 +229,16 @@ export const shadow = {
  * ตัวอักษรละตินกับตัวเลขในหัวข้อเลยดูหนาและกลมกว่าเนื้อหา ไทยยังตกไปใช้ Noto Sans Thai เหมือนเดิม
  * ใส่เฉพาะเว็บ — บนมือถือไม่ได้โหลดฟอนต์นี้ ถ้าระบุชื่อไปเครื่องจะหาไม่เจอแล้วเตือน
  */
+/** ฟอนต์ของระบบบนเว็บ — ดู utils/webFonts.ts ว่าทำไมไม่ใช้ฟอนต์จาก Google แล้ว */
+export const SYSTEM_STACK =
+  '-apple-system,BlinkMacSystemFont,"SF Pro Text","Sukhumvit Set","Segoe UI","Leelawadee UI",Roboto,"Noto Sans Thai",system-ui,sans-serif';
+
 export const fonts = {
-  head: Platform.OS === "web" ? "'Plus Jakarta Sans','Noto Sans Thai',system-ui,sans-serif" : undefined,
+  head: Platform.OS === "web" ? SYSTEM_STACK : undefined,
 };
 /**
  * ใส่ใน style ของ <Text> ตรง ๆ แบบ style={[styles.title, headingFont]} ห้ามใส่ใน StyleSheet.create
- * บนเว็บ StyleSheet ถูกแปลงเป็น class แล้วแพ้กฎฟอนต์รวมใน webFonts.ts หัวข้อเลยกลับเป็น Inter
+ * บนเว็บ StyleSheet ถูกแปลงเป็น class แล้วแพ้กฎฟอนต์รวมใน webFonts.ts หัวข้อเลยกลับเป็นฟอนต์เนื้อความ
  * ส่วน style ที่ส่งตรง ๆ กลายเป็น inline ซึ่งกฎนั้นข้ามให้ (แบบเดียวกับไอคอน)
  */
 export const headingFont = { fontFamily: fonts.head, letterSpacing: -0.24 } as const;

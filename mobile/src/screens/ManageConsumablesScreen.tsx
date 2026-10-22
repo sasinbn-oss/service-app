@@ -185,7 +185,7 @@ const styles = StyleSheet.create({
   buttonRow: { flexDirection: "row", gap: 8, marginTop: 4 },
   button: {
     flex: 1,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: 8,
     padding: 12,
     alignItems: "center",

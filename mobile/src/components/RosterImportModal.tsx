@@ -342,7 +342,7 @@ const styles = StyleSheet.create({
     maxWidth: 320,
   },
   footer: { flexDirection: "row", gap: spacing.sm, justifyContent: "flex-end", flexWrap: "wrap" },
-  btn: { flexDirection: "row", gap: 6, alignItems: "center", backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 14 },
+  btn: { flexDirection: "row", gap: 6, alignItems: "center", backgroundColor: colors.navyFill, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 14 },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   btnGhost: { backgroundColor: colors.sky50, borderWidth: 1, borderColor: colors.border },
   btnGhostText: { color: colors.navy, fontWeight: "700", fontSize: 14 },
