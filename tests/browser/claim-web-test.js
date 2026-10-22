@@ -183,25 +183,62 @@ const login = async (code) =>
     await vis(page, "E dL / E dL1 / E dL2 · Door Lock — ประตูล็อก/ปลดล็อก").last().click();
     await page.waitForTimeout(300);
     await label(page, "เช็คแล้ว Solenoid ไม่ฝืด").click();
-    const guide = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimGuide);
-    for (const c of guide.installChecks) await label(page, `${c.label} ไม่มี`).click();
+    (await vis(page, "การติดตั้งฐานเครื่อง", false).count()) === 0
+      ? pass("ไม่มีเช็คลิสต์การติดตั้งฐานเครื่องในฟอร์มแล้ว")
+      : fail("ยังมีเช็คลิสต์การติดตั้งฐานเครื่อง");
     await page.waitForTimeout(500);
     await label(page, "Error ที่เครื่องขึ้น").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-0b-check.png") });
     (await vis(page, "ยังขาด:", false).count()) === 0 ? pass("ครบทุกข้อ ข้อความยังขาดหายไป") : fail(`ยังขึ้นว่าขาด: ${await vis(page, "ยังขาด:", false).first().innerText()}`);
     await page.screenshot({ path: path.join(DIR, "claim-1-close.png") });
+
+    /**
+     * หลอดสถานะตอนส่งไฟล์ + กดใหม่ไม่ส่งซ้ำ (WO-00133 — ไฟล์ซ้ำจนเต็มเพดานแล้วปิดงานไม่ได้)
+     * บีบเน็ตขาขึ้นให้ช้าพอจะเห็นหลอด · คำสั่งปิดรอบแรกให้ล้มหลังไฟล์ขึ้นครบ แล้วกดใหม่
+     * ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
+     */
+    const filesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Network.enable");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 20, downloadThroughput: -1, uploadThroughput: 60 * 1024 });
+    let failOnce = true;
+    await page.route(`**/api/work-orders/${id}/close`, (route) => {
+      if (!failOnce) return route.continue();
+      failOnce = false;
+      return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "ทดสอบ: ปิดไม่ผ่านรอบแรก" }) });
+    });
+    await saveBtn.click();
+    const bar = page.getByRole("progressbar").locator("visible=true");
+    await bar.first().waitFor({ timeout: 15000 }).catch(() => {});
+    if (await bar.count()) {
+      await page.waitForTimeout(800);
+      await page.screenshot({ path: path.join(DIR, "claim-1b-progress.png") });
+      const now = Number(await bar.first().getAttribute("aria-valuenow"));
+      const text = await bar.first().innerText();
+      /ไฟล์ \d+\/\d+/.test(text) && now >= 0 && now <= 100
+        ? pass(`ส่งไฟล์ตอนปิดงานมีหลอดสถานะ (${text.replace(/\s+/g, " ")})`)
+        : fail(`หลอดสถานะ: ${text} · ${now}`);
+    } else fail("ไม่เห็นหลอดสถานะตอนส่งไฟล์");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    await vis(page, "ทดสอบ: ปิดไม่ผ่านรอบแรก").waitFor({ timeout: 120000 });
+    const filesSent = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
+    filesSent > filesBefore ? pass(`รอบแรกไฟล์ขึ้น ${filesSent - filesBefore} ไฟล์ แล้วคำสั่งปิดล้ม`) : fail("รอบแรกไม่มีไฟล์ขึ้น");
     await saveBtn.click();
     await page.waitForTimeout(6000);
+    const filesAfter = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
+    filesAfter === filesSent
+      ? pass("กดปิดใหม่ไม่ส่งไฟล์ซ้ำ (จำนวนไฟล์ในฐานข้อมูลเท่าเดิม)")
+      : fail(`ไฟล์ซ้ำ: รอบแรก ${filesSent} · หลังกดใหม่ ${filesAfter}`);
 
     sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === "CLAIM_REVIEW|SP-BOARD"
       ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม พร้อมรหัสตัวที่เสียที่กรอก (ฐานข้อมูล)")
       : fail(`สถานะ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
-    const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||(select count(*) from jsonb_array_elements("fieldCheck"->'install') x where x->>'answer'='false') from "PartClaim" where "workOrderId"=${id}`);
+    const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||("fieldCheck" ? 'install')::text from "PartClaim" where "workOrderId"=${id}`);
     const fields = JSON.parse(np.split("|")[0]);
     const f = (k) => fields.find((x) => x.key === k) ?? {};
     f("model").value === "HL055L" && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
-      /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|5')
-      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ติดตั้ง 5 ข้อ")
+      /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|false')
+      ? pass("ฐานข้อมูล: รุ่น HL055L · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ไม่มีคำตอบเรื่องติดตั้ง")
       : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}`).join(",")}`);
     sql(`select (c.nameplate->>'photoId')::int = (select max(a.id) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE')
            and (select count(*) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE') >= 1
