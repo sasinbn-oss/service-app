@@ -142,17 +142,9 @@ export async function uploadObject(params: {
  * ใส่ชื่อไฟล์จริงกลับเข้าไปใน header ด้วย ไม่งั้นเวลากดโหลดจะได้ไฟล์ชื่อ
  * 1759000000-IMG-0001.jpg ซึ่งไม่มีใครรู้ว่าของใบงานไหน
  */
-/**
- * ระบบทดสอบในเครื่อง (local-test/) — ที่เก็บไฟล์อยู่หลัง nginx ตัวเดียวกับหน้าเว็บ
- * เบราว์เซอร์จึงต้องได้ลิงก์แบบ "/ชื่อถัง/ไฟล์" (ใช้ได้ทั้ง localhost และ IP ในวง Wi-Fi)
- * ไม่ใช่ http://storage:9000/... ที่มีแต่เครื่องใน docker เท่านั้นที่รู้จัก
- * ระบบจริงไม่ตั้งค่านี้ — ลิงก์เต็มของ Supabase เหมือนเดิม
- */
-const BROWSER_RELATIVE = process.env.STORAGE_BROWSER_RELATIVE === "1";
-
 export async function getDownloadUrl(
   key: string,
-  options: { fileName?: string; inline?: boolean; internal?: boolean } = {}
+  options: { fileName?: string; inline?: boolean } = {}
 ): Promise<string> {
   const { client, bucket } = getClient();
   const disposition = options.fileName
@@ -161,7 +153,7 @@ export async function getDownloadUrl(
       )}`
     : undefined;
 
-  const url = await getSignedUrl(
+  return getSignedUrl(
     client,
     new GetObjectCommand({
       Bucket: bucket,
@@ -170,9 +162,6 @@ export async function getDownloadUrl(
     }),
     { expiresIn: SIGNED_URL_TTL_SECONDS }
   );
-  if (!BROWSER_RELATIVE || options.internal) return url;
-  const u = new URL(url);
-  return u.pathname + u.search;
 }
 
 export async function deleteObject(key: string): Promise<void> {
@@ -238,8 +227,7 @@ export async function checkFileStore(): Promise<{ ok: boolean; step: string; det
   }
 
   try {
-    // เซิร์ฟเวอร์เปิดลิงก์เอง — ต้องเป็นลิงก์เต็ม แม้ระบบทดสอบจะส่งลิงก์สั้นให้เบราว์เซอร์
-    const url = await getDownloadUrl(probeKey, { fileName: "healthcheck.txt", internal: true });
+    const url = await getDownloadUrl(probeKey, { fileName: "healthcheck.txt" });
     const response = await fetch(url);
     if (!response.ok) {
       return {
