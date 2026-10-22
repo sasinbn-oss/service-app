@@ -27,6 +27,8 @@
   ไม่งั้นได้ `P2028 Transaction already closed` เฉพาะตอน deploy จริง
 - **`$executeRaw` กับ array ที่เป็น null ทั้งก้อน** ถูกเดาเป็น `integer[]` แล้ว cast
   เป็น `timestamp[]` ไม่ได้ — ส่งเป็น `text[]` แล้วใช้ `NULLIF(x,'')::type`
+- **migration ที่ INSERT ลงตารางเปล่า** ต้องเพิ่มชื่อตารางใน `SEEDED_BY_MIGRATION`
+  ของ `backend/scripts/restore-backup.js` ไม่งั้นกู้ไฟล์สำรองลงฐานใหม่ไม่ได้เลย (`OutsourceTeam` เคยหลุด)
 - **จำนวน connection** Prisma เปิดตามจำนวน CPU (9 บนเครื่อง deploy) ส่วน pooler
   รับได้ 15 — `src/prisma.ts` จำกัดไว้ที่ 5 แล้ว อย่าเอาออก
 
@@ -57,7 +59,7 @@
 
 ## เทสต์
 
-`tests/` มี 836 ข้อที่ยิงไปที่ backend จริง — **รัน `bash tests/run-all.sh` ก่อนและหลังแก้**
+`tests/` มี 840 ข้อที่ยิงไปที่ backend จริง — **รัน `bash tests/run-all.sh` ก่อนและหลังแก้**
 วิธีเตรียมเครื่องกับกับดักของเทสต์ผ่านเบราว์เซอร์อยู่ใน `tests/README.md`
 
 **เทสต์ที่ผ่านโดยที่แอปไม่ได้ทำงาน เจอมาหลายรอบแล้ว** — ยืนยันผลที่ฐานข้อมูลด้วยเสมอ

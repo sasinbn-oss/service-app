@@ -18,7 +18,9 @@ const { PrismaClient, Prisma } = require("@prisma/client");
 const FORMAT = "otteri-backup";
 // ตารางที่ migration ใส่ค่าเริ่มต้นให้เอง ฐานข้อมูลที่เพิ่ง migrate จึงไม่ว่างจริง — ล้างแล้วใช้ของในไฟล์แทน
 // (ยอมเฉพาะเมื่อตารางอื่นว่างทั้งหมด ซึ่งแปลว่าเป็นฐานข้อมูลใหม่แน่ ๆ)
-const SEEDED_BY_MIGRATION = new Set(["TeamGroup"]);
+// OutsourceTeam ตามมาทีหลัง (20261108 ใส่ทีม outsource ตั้งต้น) — ลืมใส่ตรงนี้แล้วกู้คืนลงฐานใหม่ไม่ได้เลย
+// เจอตอนทดสอบระบบในเครื่อง (local-test/) ต.ค. 69 · migration ใหม่ที่ INSERT ลงตารางเปล่าต้องเพิ่มชื่อที่นี่ด้วย
+const SEEDED_BY_MIGRATION = new Set(["TeamGroup", "OutsourceTeam"]);
 
 async function main() {
   const [file, flag] = process.argv.slice(2);

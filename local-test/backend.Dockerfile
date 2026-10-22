@@ -3,6 +3,8 @@
 FROM node:22-bookworm
 WORKDIR /app/backend
 COPY backend/package.json backend/package-lock.json ./
+# npm ci สั่ง prisma generate เอง (postinstall) — ต้องมี schema ก่อนติดตั้ง
+COPY backend/prisma ./prisma
 # ไม่ตั้ง NODE_ENV=production ตอนติดตั้ง — ts-node (ใช้ใส่ข้อมูลตัวอย่าง) อยู่ใน devDependencies
 RUN npm ci
 COPY backend/ ./
