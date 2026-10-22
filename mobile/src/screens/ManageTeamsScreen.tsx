@@ -1237,7 +1237,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   actions: { flexDirection: "row", gap: spacing.sm, justifyContent: "flex-end", flexWrap: "wrap" },
-  btn: { borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 16, backgroundColor: colors.primary },
+  btn: { borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 16, backgroundColor: colors.navyFill },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   btnGhost: { backgroundColor: colors.sky50, borderWidth: 1, borderColor: colors.border },
   btnGhostText: { color: colors.navy, fontWeight: "700", fontSize: 14 },

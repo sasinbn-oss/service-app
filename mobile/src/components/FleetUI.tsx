@@ -297,7 +297,7 @@ export const fs = StyleSheet.create({
   chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipText: { fontSize: 13, color: colors.body },
   chipTextOn: { color: "#fff", fontWeight: "700" },
-  btn: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 14 },
+  btn: { flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", backgroundColor: colors.navyFill, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 14 },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   btnGhost: { backgroundColor: colors.sky50, borderWidth: 1, borderColor: colors.border },
   btnGhostText: { color: colors.navy, fontWeight: "700", fontSize: 13.5 },

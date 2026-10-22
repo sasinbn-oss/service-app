@@ -149,7 +149,7 @@ const styles = StyleSheet.create({
   field: { flexGrow: 1, flexBasis: 180, gap: 6 },
   error: { color: colors.danger, fontSize: 13 },
   actions: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.md },
-  download: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 10 },
+  download: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.navyFill, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 10 },
   downloadText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   meta: { fontSize: 13, color: colors.textMuted },
   row: { flexDirection: "row", gap: spacing.md, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },

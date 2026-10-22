@@ -318,7 +318,7 @@ function MenuContent({
                     </View>
                   ) : null}
                   {shut ? <Text style={styles.groupCount}>{items.length}</Text> : null}
-                  <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.textMuted} />
+                  <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.sideDim} />
                 </TouchableOpacity>
               )}
               {shown.map((it) => {
@@ -333,7 +333,7 @@ function MenuContent({
                     accessibilityLabel={it.label}
                     {...(rail && Platform.OS === "web" ? ({ title: it.label } as object) : null)}
                   >
-                    <Ionicons name={it.icon} size={22} color={on ? "#fff" : colors.navy} />
+                    <Ionicons name={it.icon} size={22} color={on ? "#fff" : colors.sideInk} />
                     {rail ? (
                       n ? (
                         <View style={[styles.badge, styles.badgeRail, on && styles.badgeOn]}>
@@ -362,7 +362,7 @@ function MenuContent({
           {BUILD_AT && !rail ? (
             <View style={styles.foot}>
               <View style={styles.footHead}>
-                <Ionicons name="cloud-done-outline" size={16} color={colors.primaryInk} />
+                <Ionicons name="cloud-done-outline" size={16} color={colors.primary} />
                 <Text style={styles.footTitle}>รุ่น {BUILD_COMMIT}</Text>
               </View>
               <Text style={styles.footText}>
@@ -476,21 +476,23 @@ export function MenuButton() {
   const { canDock, collapsed: c } = useDocked();
   return (
     <TouchableOpacity
-      style={styles.menuBtn}
+      style={[styles.menuBtn, canDock && styles.menuBtnDock]}
       onPress={() => (canDock ? setCollapsed(!c) : sideMenu.open())}
       accessibilityLabel={canDock ? (c ? "ขยายเมนู" : "ย่อเมนู") : "เปิดเมนู"}
     >
-      <Ionicons name="menu" size={24} color={colors.navy} />
+      <Ionicons name="menu" size={24} color={canDock ? "#fff" : colors.navy} />
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(15,23,42,0.42)" },
+  // เมนูกรมท่าตามแนวทางออกแบบ ต.ค. 69 — เปลี่ยนแค่สี ขนาด/ตำแหน่งปุ่มเหมือนเดิมทุกอย่าง
+  // (เจ้าของงานสั่งไว้: เปลี่ยนหน้าตา ไม่ย้ายปุ่ม คนใช้จำตำแหน่งได้แล้ว)
   docked: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.sideBg,
     borderRightWidth: 1,
-    borderRightColor: colors.border,
+    borderRightColor: colors.sideLine,
     paddingTop: spacing.md,
     overflow: "hidden",
   },
@@ -502,11 +504,11 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
     marginBottom: spacing.xs,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: colors.sideLine,
   },
   dockHeadRail: { justifyContent: "center", paddingHorizontal: 0 },
-  dockHeadText: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.textMuted },
-  railSep: { height: 1, backgroundColor: colors.border, marginVertical: spacing.sm, marginHorizontal: 6 },
+  dockHeadText: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.sideInk },
+  railSep: { height: 1, backgroundColor: colors.sideLine, marginVertical: spacing.sm, marginHorizontal: 6 },
   itemRail: { justifyContent: "center", paddingHorizontal: 0 },
   badgeRail: { position: "absolute", top: 0, right: 2, minWidth: 18, height: 18, paddingHorizontal: 5 },
   panel: {
@@ -516,7 +518,7 @@ const styles = StyleSheet.create({
     left: 0,
     width: WIDTH,
     maxWidth: "86%",
-    backgroundColor: colors.card,
+    backgroundColor: colors.sideBg,
     borderTopRightRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
     ...shadow.raised,
@@ -526,16 +528,16 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: colors.background,
+    backgroundColor: "transparent",
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
     marginTop: spacing.md,
     marginBottom: spacing.xs,
   },
-  groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
-  groupCount: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textFaint },
-  groupText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted, letterSpacing: 0.5 },
+  groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
+  groupCount: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.sideDim },
+  groupText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.sideDim, letterSpacing: 0.5 },
   item: {
     flexDirection: "row",
     alignItems: "center",
@@ -546,9 +548,9 @@ const styles = StyleSheet.create({
     marginVertical: 1,
   },
   itemOn: { backgroundColor: colors.primary, ...shadow.raised },
-  label: { fontSize: 15, lineHeight: 22, fontWeight: "600", color: colors.body },
+  label: { fontSize: 15, lineHeight: 22, fontWeight: "600", color: colors.sideInk },
   labelOn: { color: "#fff" },
-  labelEn: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
+  labelEn: { fontSize: 11, lineHeight: 16, color: colors.sideDim },
   labelEnOn: { color: "rgba(255,255,255,0.88)" },
   badge: {
     minWidth: 22,
@@ -562,10 +564,10 @@ const styles = StyleSheet.create({
   badgeOn: { backgroundColor: "#fff" },
   badgeText: { color: "#fff", fontSize: 12, lineHeight: 18, fontWeight: "700" },
   badgeTextOn: { color: colors.danger },
-  foot: { marginTop: spacing.lg, padding: 14, borderRadius: 14, backgroundColor: colors.background },
+  foot: { marginTop: spacing.lg, padding: 14, borderRadius: 14, backgroundColor: colors.sideLine },
   footHead: { flexDirection: "row", alignItems: "center", gap: 6 },
-  footTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.text },
-  footText: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  footTitle: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: "#fff" },
+  footText: { fontSize: 12, lineHeight: 18, color: colors.sideDim },
   menuBtn: {
     width: 44,
     height: 44,
@@ -574,4 +576,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.sky50,
   },
+  // จอคอมปุ่มนี้อยู่บนเมนูกรมท่า · จอแคบอยู่แถบชื่อหน้าพื้นขาว สีจึงต่างกัน
+  menuBtnDock: { backgroundColor: colors.sideLine },
 });

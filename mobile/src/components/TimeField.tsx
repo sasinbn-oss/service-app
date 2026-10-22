@@ -191,7 +191,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     backgroundColor: colors.background,
   },
-  ownBtn: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  ownBtn: { backgroundColor: colors.navyFill, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   ownBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   clearText: { fontSize: 13, fontWeight: "600", color: colors.textMuted },
   badText: { fontSize: 12, color: colors.danger, paddingHorizontal: 10, paddingBottom: 8 },

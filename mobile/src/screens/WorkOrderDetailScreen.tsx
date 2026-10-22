@@ -6570,7 +6570,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 12,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
   },
   modalSaveOff: { opacity: 0.6 },
   closeFiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },

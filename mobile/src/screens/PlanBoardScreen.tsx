@@ -1004,7 +1004,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: radius.md,
     paddingHorizontal: 14,
     height: 40,

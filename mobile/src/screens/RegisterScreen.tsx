@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   button: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: 8,
     padding: 14,
     alignItems: "center",

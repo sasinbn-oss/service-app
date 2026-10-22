@@ -250,7 +250,7 @@ const styles = StyleSheet.create({
   doneBox: { marginTop: 20, alignItems: "center" },
   doneText: { fontSize: 15, color: colors.success, fontWeight: "700", marginBottom: 12 },
   primaryButton: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: 10,
     paddingVertical: 14,
     paddingHorizontal: 28,

@@ -512,6 +512,6 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   sheetClearText: { fontSize: 15, fontWeight: "700", color: colors.text },
-  sheetGo: { flex: 2, alignItems: "center", justifyContent: "center", height: 46, borderRadius: radius.md, backgroundColor: colors.primary },
+  sheetGo: { flex: 2, alignItems: "center", justifyContent: "center", height: 46, borderRadius: radius.md, backgroundColor: colors.navyFill },
   sheetGoText: { fontSize: 15, fontWeight: "700", color: "#fff" },
 });

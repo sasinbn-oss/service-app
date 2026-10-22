@@ -453,7 +453,7 @@ const styles = StyleSheet.create({
   tabOn: { backgroundColor: colors.navyFill },
   tabText: { fontSize: 13, fontWeight: "700", color: colors.textMuted },
   tabTextOn: { color: "#fff" },
-  download: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
+  download: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.navyFill, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
   downloadText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   searchBox: { flexGrow: 1, flexBasis: 220, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 10 },
   searchInput: { flex: 1, paddingVertical: 8, fontSize: 14, color: colors.text },
@@ -505,7 +505,7 @@ const styles = StyleSheet.create({
   noteInput: { minHeight: 60, borderWidth: 1, borderColor: colors.primary, borderRadius: radius.sm, backgroundColor: colors.card, padding: 8, fontSize: 13.5, color: colors.text, textAlignVertical: "top" },
   noteBtns: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: spacing.md },
   noteCancel: { fontSize: 13, fontWeight: "600", color: colors.textMuted },
-  noteSave: { minWidth: 72, alignItems: "center", backgroundColor: colors.primary, borderRadius: radius.sm, paddingHorizontal: 14, paddingVertical: 7 },
+  noteSave: { minWidth: 72, alignItems: "center", backgroundColor: colors.navyFill, borderRadius: radius.sm, paddingHorizontal: 14, paddingVertical: 7 },
   noteSaveText: { fontSize: 13, fontWeight: "700", color: "#fff" },
   stage: { fontSize: 11.5, fontWeight: "700", color: colors.roleAdmin, backgroundColor: colors.roleAdminSoft, borderRadius: 6, paddingHorizontal: 6, overflow: "hidden" },
 });

@@ -201,7 +201,7 @@ const styles = StyleSheet.create({
   error: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.lg },
   submit: {
     alignItems: "center",
-    backgroundColor: colors.primary,
+    backgroundColor: colors.navyFill,
     borderRadius: radius.sm,
     paddingVertical: spacing.md,
     marginTop: spacing.xl,
