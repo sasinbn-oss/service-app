@@ -55,7 +55,8 @@ const pdf = (name) => ({
     };
 
     // ── ใบเสนอราคา ──
-    await vis("ส่งใบเสนอราคา").first().click();
+    // ชื่อขั้นขึ้นทั้งบนแถบขั้นตอน หัวการ์ดขั้นปัจจุบัน และปุ่ม (หน้าใบงานแบบใหม่ ต.ค. 69) — ปุ่มอยู่ท้ายสุด
+    await vis("ส่งใบเสนอราคา").last().click();
     await page.waitForTimeout(1200);
     await attach([pdf("ใบเสนอราคา-อะไหล่.pdf"), pdf("ใบเสนอราคา-ค่าบริการ.pdf")]);
     await attach([pdf("ใบเสนอราคา-ลบทิ้ง.pdf")]);
@@ -78,7 +79,7 @@ const pdf = (name) => ({
       : fail(`QUOTE=${count("QUOTE")} (${quoteNames}) สถานะ=${status}`);
 
     // ── บิลที่ลูกค้าจ่ายแล้ว ──
-    await vis("แนบบิลรับเงิน").first().click();
+    await vis("แนบบิลรับเงิน").last().click();
     await page.waitForTimeout(1200);
     await attach([pdf("บิล-1.pdf"), pdf("บิล-2.pdf")]);
     await vis("ยืนยัน").last().click();
