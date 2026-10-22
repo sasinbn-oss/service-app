@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
+import { useDocked } from "../components/SideMenu";
 import { useCachedState } from "../utils/pageCache";
 import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
@@ -67,6 +68,7 @@ function Hl({ text, q, style }: { text: string; q: string; style: object }) {
 }
 
 export default function ManageSparePartsScreen() {
+  const { docked } = useDocked();
   const [parts, setParts, cached] = useCachedState<SparePart[]>("ManageSpareParts:parts", []);
   const [loading, setLoading] = useState(!cached);
   const [query, setQuery] = useState("");
@@ -144,7 +146,8 @@ export default function ManageSparePartsScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* หัวหน้าแบบเดียวกับหน้าสิทธิ์ผู้ใช้ — ฟอร์มเพิ่มเดิมกินครึ่งจอบนจนต้องเลื่อนผ่านทุกครั้งที่จะหาอะไหล่ */}
       <View style={styles.pageHead}>
-        <Text style={[styles.pageTitle, headingFont]}>จัดการข้อมูลอะไหล่</Text>
+        {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ (เจ้าของงานขอ ต.ค. 69) */}
+        {docked ? <Text style={[styles.pageTitle, headingFont]}>จัดการข้อมูลอะไหล่</Text> : null}
         <View style={styles.countPill}>
           <Text style={styles.countPillText}>
             {shown.length === parts.length ? `${parts.length} รายการ` : `${shown.length} / ${parts.length} รายการ`}

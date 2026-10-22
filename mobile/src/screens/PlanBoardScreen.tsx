@@ -7,6 +7,7 @@
  *
  * ช่างไม่ได้เข้าหน้านี้ — เมนูไม่ขึ้น และเซิร์ฟเวอร์ตอบ 403 อยู่แล้ว
  */
+import { useDocked } from "../components/SideMenu";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ScrollView,
@@ -161,6 +162,7 @@ function supervisorScopeLabel(u: { region?: string | null; supervisedTeams?: str
 }
 
 export default function PlanBoardScreen({ navigation }: Props) {
+  const { docked } = useDocked();
   const { user } = useAuth();
   const { width } = useWindowDimensions();
   const wide = width >= 1000;
@@ -412,7 +414,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
     <View style={{ flex: 1 }}>
     <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.pageHead}>
-        <Text style={[styles.pageTitle, headingFont]}>แผนงาน</Text>
+        {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ (เจ้าของงานขอ ต.ค. 69) */}
+        {docked ? <Text style={[styles.pageTitle, headingFont]}>แผนงาน</Text> : null}
         <View style={styles.scopePill}>
           <Text style={styles.scopePillText}>
             {user?.role === "SUPERVISOR" ? supervisorScopeLabel(user) : "ทุกภาค"}

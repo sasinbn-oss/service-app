@@ -4,6 +4,7 @@
  * จำเป็นเพราะสายงานใบงานพึ่งบทบาท ถ้าตั้งหัวหน้าภาคไม่ได้ ใบงานจะค้างอยู่ขั้น
  * "รอหัวหน้าภาคระบุอะไหล่" ตลอดไปโดยไม่มีใครมีสิทธิ์ทำต่อ
  */
+import { useDocked } from "../components/SideMenu";
 import React, { useCallback, useMemo, useState } from "react";
 import { useCachedState } from "../utils/pageCache";
 import {
@@ -109,6 +110,7 @@ function coverageGap(u: ManagedUser, teams: Set<string>, regions: Set<string>): 
 }
 
 export default function ManageUsersScreen() {
+  const { docked } = useDocked();
   const { user: me } = useAuth();
   const [users, setUsers, cached] = useCachedState<ManagedUser[]>("ManageUsers:users", []);
   const [regions, setRegions] = useCachedState<string[]>("ManageUsers:regions", []);
@@ -247,7 +249,8 @@ export default function ManageUsersScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* หัวหน้าแบบ OTTERI: ชื่อหน้า ป้ายจำนวน และปุ่มเพิ่มอยู่บรรทัดเดียวกัน */}
       <View style={styles.pageHead}>
-        <Text style={[styles.pageTitle, headingFont]}>สิทธิ์ผู้ใช้</Text>
+        {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ (เจ้าของงานขอ ต.ค. 69) */}
+        {docked ? <Text style={[styles.pageTitle, headingFont]}>สิทธิ์ผู้ใช้</Text> : null}
         <View style={styles.countPill}>
           <Text style={styles.countPillText}>
             {shown.length === users.length ? `${users.length} คน` : `${shown.length} / ${users.length} คน`}
