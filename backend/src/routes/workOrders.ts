@@ -2685,6 +2685,13 @@ const partsCheckSchema = z.object({
    * ไม่มีประโยชน์ เช่น ชุดลูกปืนที่ต้องเปลี่ยนพร้อมกัน — คนเช็คคลังเป็นคนเลือก
    */
   splitOut: z.boolean().optional(),
+  /**
+   * ใบที่เสนอราคาแล้ว — ลูกค้าจ่ายค่าตัวที่หมดไปแล้วหรือยัง (บังคับตอบเมื่อแยก)
+   *
+   * บางครั้งลูกค้าจ่ายแค่ค่าตัวที่มีของ ตัวที่หมดยังไม่ได้เก็บเงิน (เจ้าของงานแจ้ง ต.ค. 69 — WO-00528)
+   * ระบบเดาไม่ได้ว่าแบบไหน แอดมินที่ทำใบเสนอราคาเป็นคนรู้ · จ่ายแล้ว → ใบใหม่ไปเบิก · ยังไม่จ่าย → เช็คอะไหล่แล้วเสนอราคาใหม่
+   */
+  splitPaid: z.boolean().optional(),
   // ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
   pickupNote: z.string().trim().max(500).optional(),
   // ของหมด — วันที่คาดว่าของเข้า ขึ้นบนแถบขั้นตอนคู่กับป้ายแดง "อะไหล่หมด"
@@ -2795,6 +2802,14 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   const outIds = parsed.data.results.filter((r) => !r.inStock).map((r) => r.sparePartId);
   // แยกได้เมื่อเหลือของให้ไปซ่อมจริง ไม่งั้นใบนี้จะไปจ่ายงานทั้งที่ไม่มีอะไหล่สักตัว
   const split = Boolean(parsed.data.splitOut) && stillOut && outIds.length < waiting.length;
+  // ลูกค้าจ่ายเงินไปแล้วในใบนี้ = ใบที่ผ่านเสนอราคา · ใบที่ไม่ต้องเสนอราคาแยกไปเบิกได้เลยเหมือนเดิม
+  const paidHere = split && (await prisma.workOrderLog.count({ where: { workOrderId: id, action: "PAID" } })) > 0;
+  if (paidHere && parsed.data.splitPaid === undefined) {
+    return res.status(400).json({
+      error: "ใบนี้เสนอราคาแล้ว — ต้องบอกว่าลูกค้าจ่ายค่าอะไหล่ที่หมดไปแล้วหรือยัง ก่อนแยกไปใบใหม่",
+    });
+  }
+  const childStart = paidHere && !parsed.data.splitPaid ? "PARTS_SOURCING" : "PARTS_REQUESTED";
   const anyOut = stillOut && !split;
   const now = new Date();
 
@@ -2847,7 +2862,14 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     if (split) {
       // ย้ายแถวอะไหล่ไปทั้งแถว จำนวนและผล "หมด" ติดไปด้วย หัวหน้าภาคที่ดูแล
       // ใบรออะไหล่จะเห็นเลยว่ารอตัวไหนอยู่กี่ชิ้น
-      const child = await createFollowUp(tx, id, req.auth!.userId, `อะไหล่หมด: ${outCodes}`, true);
+      const child = await createFollowUp(
+        tx,
+        id,
+        req.auth!.userId,
+        `อะไหล่หมด: ${outCodes}${childStart === "PARTS_SOURCING" ? " · ลูกค้ายังไม่จ่ายค่าตัวนี้" : ""}`,
+        true,
+        childStart
+      );
       await tx.workOrderPart.updateMany({
         where: { workOrderId: id, kind: "WAITING", sparePartId: { in: outIds } },
         data: { workOrderId: child.id },
@@ -2859,7 +2881,13 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         req.auth!.userId,
         "SPLIT",
         nextStage,
-        `แยก ${outCodes} ไป ${child.code} (รออะไหล่ แอดมินเบิกเมื่อของเข้า) — ใบนี้ไปซ่อมด้วยของที่มี`
+        `แยก ${outCodes} ไป ${child.code} (${
+          childStart === "PARTS_SOURCING"
+            ? "ลูกค้ายังไม่จ่ายค่าตัวนี้ — ของเข้าแล้วเสนอราคาใหม่"
+            : paidHere
+              ? "ลูกค้าจ่ายแล้ว — แอดมินเบิกเมื่อของเข้า"
+              : "รออะไหล่ แอดมินเบิกเมื่อของเข้า"
+        }) — ใบนี้ไปซ่อมด้วยของที่มี`
       );
     }
     await writeLog(
@@ -3839,7 +3867,12 @@ async function createFollowUp(
   userId: number,
   note: string,
   /** ของที่ย้ายมาตอบไว้แล้วว่าหมด (แยกจากขั้นเบิก) — ขึ้นป้ายแดงรออะไหล่ทันที */
-  outOfStock = false
+  outOfStock = false,
+  /**
+   * ปกติเริ่มที่แอดมินเบิก (ของที่ลูกค้าจ่ายแล้ว/ไม่ต้องเสนอราคา)
+   * ของที่ยังไม่ได้เก็บเงิน เริ่มที่เช็คอะไหล่ (มี/หมด) แล้วเดินเสนอราคา → รับเงิน → เบิก ตามใบปกติ
+   */
+  startAt: "PARTS_REQUESTED" | "PARTS_SOURCING" = "PARTS_REQUESTED"
 ) {
   const parent = await tx.workOrder.findUniqueOrThrow({
     where: { id: parentId },
@@ -3868,15 +3901,16 @@ async function createFollowUp(
        * แล้วหัวหน้าภาคกด "ของมาแล้ว" ส่งกลับให้แอดมินเบิก ทั้งที่คนรู้ว่าของเข้าเมื่อไรคือแอดมิน/คลัง
        * ของที่หมดขึ้นป้ายแดงอะไหล่หมดที่ขั้นนี้ แอดมินกด "อะไหล่มาแล้ว" ปุ่มเดียว · WAITING_PARTS เหลือไว้ให้ใบเก่า
        */
-      status: "PARTS_REQUESTED",
+      status: startAt,
       needsParts: true,
-      workStatus: workStatusForStage("PARTS_REQUESTED", { anyPartOutOfStock: outOfStock }),
+      workStatus: workStatusForStage(startAt, { anyPartOutOfStock: outOfStock }),
       createdById: userId,
     },
   });
   const code = workOrderCode(child.id);
   await tx.workOrder.update({ where: { id: child.id }, data: { code } });
-  await writeLog(tx, child.id, userId, "SPLIT_FROM", "PARTS_REQUESTED", `แยกมาจาก ${parentCode} — ${note}`);
+  // สถานะของประวัตินี้คือขั้นที่ใบใหม่เริ่ม — แถบขั้นตอนใช้ตัดว่าขั้นก่อนหน้านั้น "ทำในใบเดิม"
+  await writeLog(tx, child.id, userId, "SPLIT_FROM", startAt, `แยกมาจาก ${parentCode} — ${note}`);
   return { id: child.id, code };
 }
 
@@ -3912,7 +3946,8 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
       status: true,
       assignedTeam: true,
       assignedToId: true,
-      branch: { select: { region: true, zone: true, pmTeam: true } },
+      machine: { select: { brand: true, model: true } },
+      branch: { select: { region: true, zone: true, pmTeam: true, code: true, openedAt: true, warrantyExpiresAt: true } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -3930,8 +3965,25 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
   const codes = await partCodesText(parsed.data.parts);
   const note = [`อะไหล่ที่ยังขาด: ${codes}`, parsed.data.note].filter(Boolean).join(" — ");
 
+  /**
+   * ของที่ขาดคือของใหม่ที่ไม่อยู่ในใบเสนอราคาของใบนี้ — ต้องเสนอราคาก่อนเบิกเหมือนใบปกติ
+   * (เดิมเริ่มที่ขั้นเบิกเสมอ สาขาแฟรนไชส์หมดประกันได้ของไปโดยไม่มีใครเก็บเงิน — WO-00528)
+   * กฎเดียวกับตอนหัวหน้าภาคระบุอะไหล่: แฟรนไชส์หมดประกัน · หรือมีของนอกสโตร์
+   */
+  const offCatalog = await prisma.sparePart.count({
+    where: { id: { in: parsed.data.parts.map((p) => p.sparePartId) }, offCatalog: true },
+  });
+  const quoteFirst =
+    offCatalog > 0 ||
+    needsCustomerQuote({
+      branchCode: wo.branch.code,
+      needsParts: true,
+      openedAt: wo.branch.openedAt,
+      warrantyExpiresAt: wo.branch.warrantyExpiresAt,
+      machineBrand: machineMake(wo.machine),
+    });
   const child = await prisma.$transaction(async (tx) => {
-    const made = await createFollowUp(tx, id, req.auth!.userId, note);
+    const made = await createFollowUp(tx, id, req.auth!.userId, note, false, quoteFirst ? "PARTS_SOURCING" : "PARTS_REQUESTED");
     await replaceParts(tx, made.id, "WAITING", parsed.data.parts);
     await writeLog(tx, id, req.auth!.userId, "SPLIT", wo.status, `เปิด ${made.code} รออะไหล่ — ${note}`);
     return made;

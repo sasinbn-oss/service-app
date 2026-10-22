@@ -469,8 +469,23 @@ function declinedNewDate(o: WorkOrder): LogEntry | null {
   return last?.action === "NEW_DATE_DECLINED" ? last : null;
 }
 
+/**
+ * ขั้นที่ทำไปแล้วในใบเดิม (ใบแยก) — ใบรออะไหล่เริ่มกลางทาง ขั้นก่อนหน้าไม่ได้เกิดในใบนี้
+ *
+ * เดิมแถบขั้นตอนติ๊ก ✓ ทุกขั้นที่อยู่ก่อนขั้นปัจจุบัน ใบแยกจึงขึ้น "ส่งใบเสนอราคาแล้ว · ลูกค้าจ่ายแล้ว"
+ * ทั้งที่ใบนี้ไม่เคยเสนอราคา (WO-00528) — ดูขั้นที่ใบเริ่มจากประวัติ SPLIT_FROM แทน
+ * ขั้นที่ใบนี้เข้าไปจริงภายหลัง (เช่นย้อนกลับไปเช็คอะไหล่) ไม่นับ
+ */
+function doneInParent(value: string, o: WorkOrder, stages: Stage[]) {
+  const start = o.parent ? o.logs.find((l) => l.action === "SPLIT_FROM")?.status : undefined;
+  if (!start || value === o.status) return false;
+  const at = (v: string) => stages.findIndex((x) => x.value === v);
+  return at(value) >= 0 && at(value) < at(start) && !o.logs.some((l) => l.status === value && l.action !== "SPLIT_FROM");
+}
+
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
   const at = (v: string) => stages.findIndex((x) => x.value === v);
+  if (doneInParent(value, o, stages)) return true;
   const recovered = recoveredFrom(o);
   // รวมขั้นที่ใบงานรออยู่ตอนกดปิดด้วย — ขั้นนั้นก็ไม่มีใครทำ (เช่น รอจ่ายงาน แล้วปิดเลยโดยไม่จ่าย)
   if (recovered && value !== "DONE" && at(value) >= at(recovered)) return true;
@@ -1030,7 +1045,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
              */
             (x.value === "PARTS_SOURCING" &&
               order.needsQuote === true &&
-              (order.status === "AWAITING_QUOTE" || order.status === "AWAITING_PAYMENT")))
+              (order.status === "AWAITING_QUOTE" ||
+                order.status === "AWAITING_PAYMENT" ||
+                /**
+                 * ใบแยกที่เริ่มที่ขั้นเบิกทั้งที่ลูกค้ายังไม่จ่ายค่าตัวนั้น (ก่อนมีคำถามจ่ายแล้วหรือยัง — WO-00528)
+                 * ย้อนไปเช็คอะไหล่ แล้วเดินเสนอราคา → รับเงิน → เบิก ตามใบปกติ
+                 */
+                (order.parent !== null && order.status === "PARTS_REQUESTED"))))
       )
       .reverse();
   })();
@@ -1418,7 +1439,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                     // ขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
                     <Text key={r.stage.value} style={[styles.stageLabelFuture, styles.stageLabelSkipped, styles.stepSkipItem]}>
                       {r.stage.action ?? r.stage.label}
-                      {SKIP_WHY[r.stage.value] ? ` — ${SKIP_WHY[r.stage.value]}` : ""}
+                      {doneInParent(r.stage.value, order, stages)
+                        ? ` — ทำในใบเดิม ${order.parent?.code ?? ""}`
+                        : SKIP_WHY[r.stage.value]
+                          ? ` — ${SKIP_WHY[r.stage.value]}`
+                          : ""}
                     </Text>
                   ))}
                 </View>
@@ -2844,6 +2869,11 @@ function StageModal({
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
   // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
   const [splitOut, setSplitOut] = useState(true);
+  /**
+   * ใบที่เสนอราคาแล้ว แยกตัวที่หมด — ลูกค้าจ่ายค่าตัวนั้นแล้วหรือยัง (ต้องเลือก ไม่ตั้งค่าให้)
+   * ลูกค้าบางรายจ่ายแค่ค่าของที่มี ใบใหม่ต้องเสนอราคาเอง — เดาผิดคือของออกไปโดยไม่มีใครเก็บเงิน
+   */
+  const [splitPaid, setSplitPaid] = useState<boolean | null>(null);
   // ขั้นเบิกอะไหล่: ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
   const [pickupNote, setPickupNote] = useState("");
   // ขั้นหัวหน้าภาคเบิก: คลังที่เบิกจริง + เลขใบเบิก รายตัว (อาจเบิกคนละคลังคนละใบ) · เบิกไม่ได้ = ส่งกลับแอดมิน
@@ -2895,6 +2925,7 @@ function StageModal({
       (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order))) ? "MOVE" : null
     );
     setSplitOut(true);
+    setSplitPaid(null);
     // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้
     const oldVisit = pf?.scheduledAt && pf.scheduledAt >= todayBkk() ? pf.scheduledAt : null;
     const visitDay = order.scheduledAt ? order.scheduledAt.slice(0, 10) : prev(null, oldVisit, "วันนัด");
@@ -3051,6 +3082,7 @@ function StageModal({
           })),
           pickupNote: toPickup.length ? pickupNote.trim() || undefined : undefined,
           splitOut: mixed && splitOut,
+          ...(mixed && splitOut && paidOrder ? { splitPaid: splitPaid ?? undefined } : {}),
           expectedAt: checkOut && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
@@ -3250,7 +3282,10 @@ function StageModal({
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
   const inspectMissing = order.status === "INSPECTING" ? missingInspection(files, order.inspectionStartedAt) : [];
 
+  // ใบนี้เก็บเงินลูกค้าไปแล้ว (ผ่านเสนอราคา) — แยกตัวที่หมดต้องบอกว่าตัวนั้นจ่ายแล้วหรือยัง
+  const paidOrder = order.logs.some((l) => l.action === "PAID");
   const blocked =
+    (mixed && splitOut && paidOrder && splitPaid === null) ||
     quoteBlocked ||
     sourcingBlocked ||
     paymentBlocked ||
@@ -3665,9 +3700,43 @@ function StageModal({
                       color={splitOut ? colors.primary : colors.textFaint}
                     />
                     <Text style={styles.skipText}>
-                      แยกตัวที่หมดไปใบงานรออะไหล่ (แอดมินเบิกเมื่อของเข้า) — ใบนี้ไปซ่อมด้วยของที่มีได้เลย
+                      แยกตัวที่หมดไปใบงานรออะไหล่ — ใบนี้ไปซ่อมด้วยของที่มีได้เลย
                     </Text>
                   </TouchableOpacity>
+                ) : null}
+                {mixed && splitOut && paidOrder ? (
+                  <>
+                    <Text style={styles.modalLabel}>
+                      ลูกค้าจ่ายค่าอะไหล่ที่หมดแล้วหรือยัง <Text style={{ color: colors.danger }}>*</Text>
+                    </Text>
+                    <View style={styles.options} accessibilityLabel="ลูกค้าจ่ายค่าอะไหล่ที่หมดแล้วหรือยัง">
+                      <TouchableOpacity
+                        style={[styles.option, splitPaid === false && styles.optionOn]}
+                        onPress={() => setSplitPaid(false)}
+                        accessibilityLabel="ยังไม่จ่าย เสนอราคาใหม่"
+                      >
+                        <Text style={[styles.optionText, splitPaid === false && styles.optionTextOn]}>
+                          ยังไม่จ่าย — จ่ายแค่ค่าของที่มี
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.option, splitPaid === true && styles.optionOn]}
+                        onPress={() => setSplitPaid(true)}
+                        accessibilityLabel="จ่ายแล้ว เบิกเมื่อของเข้า"
+                      >
+                        <Text style={[styles.optionText, splitPaid === true && styles.optionTextOn]}>
+                          จ่ายแล้ว — รวมอยู่ในใบเสนอราคาเดิม
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    {splitPaid !== null ? (
+                      <Text style={styles.linkedText}>
+                        {splitPaid
+                          ? "ใบใหม่เริ่มที่แอดมินเบิกอะไหล่ ของเข้าแล้วเบิกส่งมอบได้เลย"
+                          : "ใบใหม่เริ่มที่แอดมินเช็คอะไหล่ (มี/หมด) — ของเข้าแล้วเสนอราคา → รับเงิน → เบิก เหมือนใบปกติ"}
+                      </Text>
+                    ) : null}
+                  </>
                 ) : null}
                 {checkOut ? (
                   <DateField
