@@ -1353,7 +1353,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                           order.rolledBack?.from === stage.value && styles.stepDotFrom,
                         ]}
                       >
-                        {state === "now" ? <StepPulse size={tight ? 24 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
+                        {state === "now" ? <StepPulse size={tight ? 20 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
                         {state === "done" ? (
                           <Ionicons name="checkmark" size={15} color="#fff" />
                         ) : state === "now" && partsOut.length ? (
@@ -6096,12 +6096,14 @@ const styles = StyleSheet.create({
   // จอแคบ ชื่อขั้นปัจจุบันเป็นชื่อเดียวที่โชว์ — ให้ที่มากกว่าช่องอื่น
   stepNowWide: { flexGrow: 3 },
   // จอแคบ: 11 วง × 30 px ก็เกือบเต็มจอมือถือแล้ว — ลดช่องไฟให้วงไม่ล้น
-  stepTight: { paddingHorizontal: 1 },
-  stepSkipGroupTight: { width: 44 },
+  // ขั้นเบิก/โอนอะไหล่ของหัวหน้าภาคเพิ่มมาอีก 2 วง (พ.ย. 69) ช่องไฟ 1 px ก็ล้นแล้ว — วงชิดกันได้ เส้นเชื่อมยังคั่น
+  stepTight: { paddingHorizontal: 0 },
+  stepSkipGroupTight: { width: 40 },
   // วงเล็กลงด้วย — 10 วง × 30 px + ปุ่มข้าม ยังเกินจอมือถือ 360 px
-  stepDotTight: { width: 24, height: 24, borderRadius: 12 },
-  stepNumTight: { fontSize: 11, lineHeight: 15 },
-  stepLineTight: { top: 11, marginLeft: 14, marginRight: 14 },
+  // 13 ขั้นบนจอ 420 เหลือช่องละ 21 px — วง 24 ยื่นเกินช่องสุดท้ายจนแถบเลื่อนได้ 2 px จึงเหลือ 20
+  stepDotTight: { width: 20, height: 20, borderRadius: 10 },
+  stepNumTight: { fontSize: 10, lineHeight: 13 },
+  stepLineTight: { top: 9, marginLeft: 12, marginRight: 12 },
   stepSkipPillTight: { paddingHorizontal: 4, height: 22, marginTop: 1 },
   // อยู่เหนือเส้นเชื่อมของขั้นถัดไป (เส้นลากย้อนมาครึ่งช่องของมันเอง) — ไม่งั้นเส้นพาดทับคำว่า "ข้าม"
   stepSkipGroup: { flexGrow: 0, flexShrink: 0, width: 58, alignItems: "center", zIndex: 2 },
