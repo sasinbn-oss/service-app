@@ -67,6 +67,7 @@ model User {
   closedWorkOrders     WorkOrder[]           @relation("ClosedWorkOrders")
   workOrderLogs        WorkOrderLog[]
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
+  partsOutNotes        WorkOrderPart[]       @relation("PartsOutNotes")
   workOrderAttachments WorkOrderAttachment[]
   workedWorkOrders     WorkOrderWorker[]
   teamDayPlans         TeamDayPlan[]
@@ -806,6 +807,13 @@ model WorkOrderPart {
   checkedAt     DateTime?
   checkedById   Int?
   checkedBy     User?     @relation("CheckedWorkOrderParts", fields: [checkedById], references: [id])
+  // หมายเหตุในรายงานอะไหล่หมด (เจ้าของงานขอ ต.ค. 69) — ขึ้นเฉพาะหน้ารายงานนั้น ไม่ขึ้นในใบงาน
+  // ผูกกับแถวสาขา+อะไหล่ (เจ้าของงานเลือก) · มีผลเฉพาะเมื่อเขียนหลังเช็คว่าหมดรอบล่าสุด (outNoteAt >= checkedAt)
+  // ของเข้าแล้วหมดซ้ำรอบใหม่ จะได้ไม่เห็นหมายเหตุของรอบก่อนค้างอยู่
+  outNote       String?
+  outNoteAt     DateTime?
+  outNoteById   Int?
+  outNoteBy     User?     @relation("PartsOutNotes", fields: [outNoteById], references: [id], onDelete: SetNull)
 
   @@unique([workOrderId, sparePartId, kind])
 }

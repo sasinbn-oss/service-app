@@ -23,7 +23,7 @@ import { distanceMeters } from "../utils/geo";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
-import { buildPartsOutReport, partsOutWorkbook } from "../reports/partsOutReport";
+import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
 import {
@@ -1402,6 +1402,44 @@ router.get("/reports/parts-out", requireAuth, async (req: AuthRequest, res) => {
     ownerId: req.auth!.userId,
   });
   res.json({ filename: stored.filename, path: documentPath(stored) });
+});
+
+/**
+ * หมายเหตุของแถวสาขา+อะไหล่ในรายงานอะไหล่หมด (เจ้าของงานขอ ต.ค. 69) — ขึ้นเฉพาะหน้ารายงาน ไม่ขึ้นในใบงาน
+ * คนที่เห็นรายงานแก้ได้ (แอดมินทุกคน · หัวหน้าภาคเฉพาะภาค/ทีมที่ดูแล) · ข้อความว่าง = ลบหมายเหตุ
+ * แก้ได้เฉพาะแถวที่ยังอยู่ในรายงาน — ของเข้าแล้วหรือใบขยับไปขั้นอื่นแล้ว หมายเหตุไม่มีที่ให้เห็นอีก
+ */
+const partsOutNoteBody = z.object({
+  partRowId: z.number().int().positive(),
+  note: z.string().max(500, "หมายเหตุยาวได้ไม่เกิน 500 ตัวอักษร"),
+});
+router.put("/reports/parts-out/note", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "รายงานนี้สำหรับแอดมินและหัวหน้าภาค" });
+  }
+  const parsed = partsOutNoteBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : null;
+  const row = await prisma.workOrderPart.findFirst({
+    where: {
+      id: parsed.data.partRowId,
+      kind: "WAITING",
+      inStock: false,
+      workOrder: { AND: [scope ?? {}], status: { in: PARTS_OUT_REPORT_STAGES } },
+    },
+    select: { id: true },
+  });
+  if (!row) return res.status(404).json({ error: "แถวนี้ไม่อยู่ในรายงานอะไหล่หมดแล้ว — ของอาจเข้าแล้ว ลองรีเฟรชหน้า" });
+  const note = parsed.data.note.trim();
+  const saved = await prisma.workOrderPart.update({
+    where: { id: row.id },
+    data: note
+      ? { outNote: note, outNoteAt: new Date(), outNoteById: req.auth!.userId }
+      : { outNote: null, outNoteAt: null, outNoteById: null },
+    select: { outNote: true, outNoteAt: true, outNoteBy: { select: { name: true } } },
+  });
+  res.json({ note: saved.outNote, noteBy: saved.outNoteBy?.name ?? null, noteAt: saved.outNoteAt });
 });
 
 /**

@@ -69,14 +69,19 @@ const { setup } = require("./fixture");
         ? pass(`คอนเฟิร์มแล้วขึ้น "โดย ${aname}" · ใบที่ยังรอคอนเฟิร์มไม่มีชื่อ`) : fail("ชื่อคนคอนเฟิร์มในรายการไม่ถูก");
       (await rowText(page, none.code)).includes("ยังไม่นัด") ? pass("ใบที่ยังไม่มีวัน: ยังไม่นัด") : fail("ใบไม่มีวันไม่ขึ้นยังไม่นัด");
 
-      await vis("วันนัดใกล้สุด").first().click();
+      // การเรียงอยู่ในปุ่ม "เรียง ▾" (ตัวกรองแบบใหม่ ต.ค. 69)
+      await label("เลือก เรียง").first().click();
+      await page.waitForTimeout(500);
+      await label("ตัวกรอง วันนัดใกล้สุด").first().click();
       await page.waitForTimeout(1200);
       const codes = await page.getByText(/^WO-\d+$/).locator("visible=true").allTextContents();
       // ใบที่ยังไม่นัดไปท้ายรายการ — อาจยังไม่ถูกวาด (รายการวาดเท่าที่เห็น) จึงยอมให้ไม่เจอ
       const ni = codes.indexOf(none.code);
       codes.indexOf(late.code) >= 0 && codes.indexOf(late.code) < codes.indexOf(today.code) && (ni === -1 || ni > codes.indexOf(today.code))
         ? pass("เรียงวันนัดใกล้สุด: เลยนัด → วันนี้ → ยังไม่นัดไปท้าย") : fail(`ลำดับ: ${[late.code, today.code, none.code].map((c) => codes.indexOf(c)).join(",")}`);
-      await vis("ด่วนก่อน").first().click();
+      await label("เลือก เรียง").first().click();
+      await page.waitForTimeout(500);
+      await label("ตัวกรอง ด่วนก่อน").first().click();
       await page.waitForTimeout(800);
 
       await label("ตัวกรองคอลัมน์ วันนัด").first().click();

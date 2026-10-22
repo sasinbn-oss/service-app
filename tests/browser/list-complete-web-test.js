@@ -61,12 +61,26 @@ const { chromium } = require("playwright");
     };
 
     await check("เปิดหน้าครั้งแรก");
-    for (const combo of [["ตัวกรอง หัวหน้าภาค"], ["ตัวกรอง DODO"], ["ตัวกรอง ทั้งหมด", "ตัวกรอง แอดมิน"], ["ตัวกรอง ทุกคน"]]) {
-      for (const l of combo) {
-        await page.getByLabel(l, { exact: true }).first().click();
-        await page.waitForTimeout(500);
+    // ตัวกรองแบบใหม่ (ต.ค. 69): จอคอม = ปุ่ม "กลุ่ม ▾" กางรายการ · จอแคบ = หน้าต่างตัวกรอง (หัวข้อละกลุ่ม)
+    const pick = async (group, option) => {
+      const lab = (l) => page.locator(`[aria-label="${l}"]`).locator("visible=true");
+      if (await lab(`เลือก ${group}`).count()) {
+        await lab(`เลือก ${group}`).first().click();
+        await page.waitForTimeout(400);
+        await lab(`ตัวกรอง ${option}`).last().click();
+      } else {
+        await lab("เปิดตัวกรอง").first().click();
+        await page.waitForTimeout(900);
+        // หัวข้อในหน้าต่างเรียง รอใคร → ทีม → สาขา: "ทั้งหมด" ของสาขาคือตัวสุดท้าย
+        await lab(`ตัวกรอง ${option}`).last().click();
+        await page.waitForTimeout(400);
+        await page.locator('[aria-label^="ดู "]').locator("visible=true").last().click();
       }
-      await check(combo.map((l) => l.replace("ตัวกรอง ", "")).join(" + "));
+      await page.waitForTimeout(600);
+    };
+    for (const combo of [[["รอใคร", "หัวหน้าภาค"]], [["สาขา", "DODO"]], [["สาขา", "ทั้งหมด"], ["รอใคร", "แอดมิน"]], [["รอใคร", "ทุกคน"]]]) {
+      for (const [g, o] of combo) await pick(g, o);
+      await check(combo.map(([, o]) => o).join(" + "));
     }
 
     // ค้นไม่เจอ → ลบคำค้น: รายการว่างแล้วกลับมามีใบงาน ต้องวาดครบอีกครั้ง และช่องค้นหาไม่หลุดโฟกัส

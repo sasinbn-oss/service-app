@@ -2,6 +2,7 @@
 //   · การ์ดในเมนูรายงาน · ช่างไม่เห็น
 //   · แท็บแรก "ตามอะไหล่": การ์ดอะไหล่ (ชื่อ รหัส ป้ายหมด ต้องใช้กี่ชิ้น) + สาขาที่รอ เลขใบงาน วันของเข้าเลย/ยังไม่ใส่
 //   · ตัวเลขด้านบนตรงกับฐานข้อมูล · กรองเลยวันของเข้า · แท็บตามสาขา · กดเลขใบงานไปหน้าใบงาน · จอมือถือไม่ล้น
+//   · หมายเหตุทีละแถวสาขา+อะไหล่: เพิ่ม → ลงฐานข้อมูล · ขึ้นทั้งสองแท็บ · แก้แล้วล้างได้ · ไม่ขึ้นในหน้าใบงาน
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
@@ -78,6 +79,39 @@ const { setup } = require("./fixture");
       boardText.includes(b.code) && boardText.includes("ยังไม่ใส่วันของเข้า") ? pass("การ์ดแผงวงจร: ใบที่ไม่ใส่วันบอกว่า \"ยังไม่ใส่วันของเข้า\"") : fail(`การ์ดแผงวงจร: ${boardText.slice(0, 200)}`);
       await page.screenshot({ path: path.join(DIR, "parts-out-cards.png") });
 
+      // ── หมายเหตุ — ผูกกับแถวสาขา+อะไหล่ (สายพานของใบ a)
+      const beltRow = Number(fx.sql(`select id from "WorkOrderPart" where "workOrderId"=${a.id} and "sparePartId"=${BELT} and kind='WAITING'`));
+      const nl = (verb) => page.locator(`[aria-label="${verb} ${a.code} C0006 SP-BELT"]`).locator("visible=true").first();
+      await nl("เพิ่มหมายเหตุ").click();
+      await page.waitForTimeout(400);
+      await nl("ช่องหมายเหตุ").fill("สั่งผู้ขายแล้ว รอ 2 สัปดาห์");
+      await nl("บันทึกหมายเหตุ").click();
+      await page.waitForTimeout(1500);
+      fx.sql(`select coalesce("outNote",'') from "WorkOrderPart" where id=${beltRow}`) === "สั่งผู้ขายแล้ว รอ 2 สัปดาห์"
+        ? pass("เพิ่มหมายเหตุในการ์ดอะไหล่ → ลงฐานข้อมูลที่แถวสาขา+อะไหล่นั้น") : fail("หมายเหตุไม่ลงฐานข้อมูล");
+      ((await belt.first().innerText()).includes("สั่งผู้ขายแล้ว รอ 2 สัปดาห์")) && (await nl("แก้หมายเหตุ").count()) === 1
+        ? pass("หมายเหตุขึ้นใต้แถวสาขาในการ์ด พร้อมแตะเพื่อแก้") : fail("หมายเหตุไม่ขึ้นบนการ์ด");
+      (await page.locator(`[aria-label="แก้หมายเหตุ ${a.code} C0006 SP-BOARD"]`).count()) === 0
+        ? pass("หมายเหตุไม่ไปติดแถวอื่น (ตัวอื่นของสาขาเดียวกันไม่มี)") : fail("หมายเหตุไปโผล่แถวอื่น");
+      await page.screenshot({ path: path.join(DIR, "parts-out-note.png") });
+      await page.locator('[aria-label="แท็บตามสาขา"]').locator("visible=true").first().click();
+      await page.waitForTimeout(800);
+      (await page.locator('[aria-label="สาขา C0006"]').locator("visible=true").first().innerText()).includes("สั่งผู้ขายแล้ว รอ 2 สัปดาห์")
+        ? pass("แท็บตามสาขาเห็นหมายเหตุเดียวกันใต้อะไหล่ตัวนั้น") : fail("แท็บตามสาขาไม่มีหมายเหตุ");
+      await nl("แก้หมายเหตุ").click();
+      await page.waitForTimeout(400);
+      await nl("ช่องหมายเหตุ").fill("");
+      await nl("บันทึกหมายเหตุ").click();
+      await page.waitForTimeout(1500);
+      fx.sql(`select coalesce("outNote",'NULL') from "WorkOrderPart" where id=${beltRow}`) === "NULL" && (await nl("เพิ่มหมายเหตุ").count()) === 1
+        ? pass("ลบข้อความแล้วบันทึก = ล้างหมายเหตุ (ฐานข้อมูลว่าง ปุ่มกลับเป็น + หมายเหตุ)") : fail("ล้างหมายเหตุไม่ได้");
+      await nl("เพิ่มหมายเหตุ").click();
+      await nl("ช่องหมายเหตุ").fill("โน้ตทดสอบห้ามขึ้นในใบงาน");
+      await nl("บันทึกหมายเหตุ").click();
+      await page.waitForTimeout(1500);
+      await page.locator('[aria-label="แท็บตามอะไหล่"]').locator("visible=true").first().click();
+      await page.waitForTimeout(600);
+
       await page.locator('[aria-label="กรองเลยวันของเข้า"]').locator("visible=true").first().click();
       await page.waitForTimeout(800);
       (await vis(a.code).count()) > 0 && (await vis(b.code).count()) === 0 ? pass("กรองเลยวันของเข้า: เหลือใบที่เลย ใบที่ไม่ใส่วันหายไป") : fail("กรองเลยวันไม่ถูก");
@@ -95,6 +129,10 @@ const { setup } = require("./fixture");
       await page.locator(`[aria-label="เปิดใบงาน ${a.code}"]`).locator("visible=true").first().click();
       await page.waitForTimeout(3000);
       (await page.evaluate(() => document.body.innerText)).includes("สาขาและเครื่อง") ? pass("กดเลขใบงานแล้วไปหน้าใบงาน") : fail("กดเลขใบงานไม่ไปหน้าใบงาน");
+      // หน้ารายงานยังอยู่ข้างหลังใบงานที่เด้งทับ ดูจากจอแยกไม่ได้ — ดูที่ข้อมูลใบงานที่หน้าใบงานโหลดแทน
+      const wo = JSON.stringify(await fx.call(fx.A, "GET", `/work-orders/${a.id}`));
+      wo.includes(a.code) && !wo.includes("โน้ตทดสอบห้ามขึ้นในใบงาน")
+        ? pass("หมายเหตุไม่อยู่ในข้อมูลหน้าใบงาน (เฉพาะหน้ารายงาน)") : fail("หมายเหตุหลุดไปอยู่ในข้อมูลใบงาน");
       await ctx.close();
     }
     {

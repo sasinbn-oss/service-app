@@ -56,7 +56,7 @@ const { setup } = require("./fixture");
     const expected = apiRows.filter((r) => openerOf(r) === value).length;
     const codes = await page.getByText(/^WO-\d+$/).locator("visible=true").allTextContents();
     const wrong = codes.filter((c) => openerOf(apiRows.find((r) => r.code === c) ?? {}) !== value);
-    expected > 0 && expected < apiRows.length && codes.includes(wo.code) && !wrong.length && (await vis(`เหลือ ${expected} ใบ`, false).count()) > 0
+    expected > 0 && expected < apiRows.length && codes.includes(wo.code) && !wrong.length && (await vis(`แสดง ${expected} จาก`, false).count()) > 0
       ? pass(`กรอง "${value}" → เหลือ ${expected} ใบ ตรงกับ API`)
       : fail(`กรองผู้เปิด "${value}": API ${expected} · เห็น ${codes.length} · แถวผิด ${wrong.join(",")}`);
     await page.screenshot({ path: path.join(DIR, "opener-wide.png") });

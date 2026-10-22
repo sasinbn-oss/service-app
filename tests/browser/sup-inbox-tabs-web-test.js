@@ -93,7 +93,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     // ตัวเลขต้องไม่ขัดกัน: หัวข้อ = ผลรวมทุกแท็บ = ชิปกล่องงาน · แถวสาขานับตามแท็บ · ไม่มีแถว "รอใคร"
     const tabN = async (name) => Number((await label(`แท็บ ${name}`).first().getAttribute("aria-label")).match(/(\d+) ใบ$/)[1]);
     const total = (await tabN("งานแจ้งซ่อม")) + (await tabN("จ่ายงาน/ปล่อยงาน")) + (await tabN("ใบงาน SUB"));
-    (await vis(`${total} ใบ`).count()) && (await vis(`กล่องงานของฉัน (${total})`).count())
+    (await vis(`${total} ใบ`).count()) && (await label(`กล่องงานของฉัน ${total} ใบ`).count())
       ? pass(`หัวข้อบอก ${total} ใบ เท่ากับผลรวมแท็บและชิปกล่องงาน`) : fail(`หัวข้อ/ชิปไม่ตรงผลรวมแท็บ ${total}`);
     (await vis("ทุกคน").count()) === 0 ? pass("กล่องงานหัวหน้าภาคไม่มีแถว รอใคร (ไม่มีปุ่ม ทุกคน)") : fail("ยังมีแถว รอใคร");
     await page.screenshot({ path: __dirname + "/sup-inbox-tabs-list.png" });
