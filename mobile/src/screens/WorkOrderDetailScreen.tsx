@@ -6092,13 +6092,6 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 const styles = StyleSheet.create({
-  closeBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: radius.md, backgroundColor: colors.roleSupervisor, marginTop: spacing.md },
-  closeBtnText: { fontSize: 16, fontWeight: "800", color: "#fff" },
-  toolRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
-  toolLabel: { fontSize: 12, fontWeight: "700", color: colors.textMuted, letterSpacing: 0.3 },
-  toolChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 7, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
-  toolChipText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
-  dangerBox: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.md, borderWidth: 1, borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.lg },
   dangerTitle: { fontSize: 13.5, fontWeight: "800", color: colors.dangerInk },
   dangerHint: { fontSize: 12, lineHeight: 18, color: colors.body },
   dangerBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.danger, backgroundColor: colors.card },
@@ -6208,7 +6201,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   cardDone: { backgroundColor: colors.doneSoft, borderColor: colors.doneLine },
-  badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
   doneBand: {
     flexDirection: "row",
     alignItems: "center",
@@ -6522,9 +6514,6 @@ const styles = StyleSheet.create({
   lockText: { marginTop: 4, fontSize: 13, lineHeight: 21, color: colors.textMuted, textAlign: "center", maxWidth: 360 },
   lockBtn: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
   lockBtnText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
-  titleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
-  machinePill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 10 },
-  machinePillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   subBox: {
     marginTop: spacing.sm,
     padding: spacing.md,
@@ -6538,7 +6527,6 @@ const styles = StyleSheet.create({
   subText: { fontSize: 13, lineHeight: 20, color: colors.body },
   card: { backgroundColor: colors.card, borderRadius: radius.xl, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
   headRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  code: { fontSize: 22, lineHeight: 30, fontWeight: "800", color: colors.primaryInk },
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
   badgeOut: { backgroundColor: colors.danger },
