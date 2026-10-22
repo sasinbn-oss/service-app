@@ -36,11 +36,11 @@ const path = require("path");
     await page.waitForTimeout(3500);
     (await vis("ระบบหลังบ้าน").count()) === 1 ? pass("โหลดใหม่ยังกางอยู่ (จำไว้)") : fail("ไม่จำการกาง");
 
-    // หน้าแรกของแอดมินคือแผนงาน (กลุ่มงานซ่อม) — ย่อกลุ่มแล้วแผนงานต้องยังอยู่
+    // หน้าแรกคือ "งานของฉันวันนี้" (กลุ่มงานซ่อม · ต.ค. 69) — ย่อกลุ่มแล้วรายการนี้ต้องยังอยู่
     await page.getByLabel("ย่อกลุ่ม งานซ่อม").click();
     await page.waitForTimeout(500);
-    (await vis("แผนงาน").count()) >= 1 && (await vis("กล่องงานของฉัน").count()) === 0
-      ? pass("ย่องานซ่อม: เหลือแผนงาน (หน้าที่เปิด) ซ่อนกล่องงาน") : fail("ย่อกลุ่มที่มีหน้าเปิดอยู่ไม่ถูก");
+    (await page.getByLabel("งานของฉันวันนี้", { exact: true }).locator("visible=true").count()) >= 1 && (await vis("กล่องงานของฉัน").count()) === 0
+      ? pass("ย่องานซ่อม: เหลืองานของฉันวันนี้ (หน้าที่เปิด) ซ่อนกล่องงาน") : fail("ย่อกลุ่มที่มีหน้าเปิดอยู่ไม่ถูก");
     await shot(page, "menu-2-collapsed.png");
     await page.getByLabel("กางกลุ่ม งานซ่อม").click();
 
@@ -71,16 +71,15 @@ const path = require("path");
     await m.getByText("เข้าสู่ระบบ", { exact: true }).click();
     await m.waitForTimeout(4500);
     (await bg(m)) === "rgb(11, 21, 32)" ? pass("มือถือ: จำโหมดมืด") : fail("มือถือไม่มืด");
-    const toggle = m.getByLabel("ปิดโหมดมืด").locator("visible=true");
-    const box = await toggle.boundingBox();
-    box && box.x + box.width <= 400 ? pass(`สวิตช์อยู่ในจอมือถือ (ขวาสุด x=${Math.round(box.x + box.width)})`) : fail(`สวิตช์ล้นจอ ${JSON.stringify(box)}`);
     await m.screenshot({ path: path.join(__dirname, "dark-3-phone.png") });
+    // มือถือ: สวิตช์โหมดมืดย้ายไปท้ายเมนูเลื่อนออก (แถบหัวชั้นเดียว ต.ค. 69)
     await m.getByLabel("เปิดเมนู").locator("visible=true").first().click();
     await m.waitForTimeout(900);
     await m.screenshot({ path: path.join(__dirname, "dark-4-phone-menu.png") });
-    // กลางฉากมืดมีแผงเมนูทับ — แตะขอบขวาที่ยังเห็นฉากมืด
-    await m.mouse.click(390, 500);
-    await m.waitForTimeout(500);
+    const toggle = m.getByLabel("ปิดโหมดมืด").locator("visible=true");
+    const box = await toggle.boundingBox();
+    box && box.x >= 0 && box.x + box.width <= 400 && box.y + box.height <= 860
+      ? pass(`สวิตช์อยู่ในเมนูบนจอมือถือ (x=${Math.round(box.x)}, y=${Math.round(box.y)})`) : fail(`สวิตช์ไม่อยู่ในจอ ${JSON.stringify(box)}`);
 
     await toggle.click();
     await m.waitForLoadState("networkidle");
