@@ -508,7 +508,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           sent += 1;
           setBusy(`กำลังส่งไฟล์ ${sent}/${total}`);
           try {
-            await uploadAttachment(target.id, item.file, item.role);
+            await uploadAttachment(target.id, item.file, item.role, undefined, { index: sent - 1, total });
           } catch {
             failed += 1;
           }

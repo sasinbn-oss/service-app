@@ -25,7 +25,6 @@ export interface PlateTemplate {
 export interface ClaimGuide {
   plate: PlateTemplate;
   errors: { code: string; name: string; checks: string[] }[];
-  installChecks: { key: string; label: string; note: string }[];
 }
 
 /** ค่าในช่องหนึ่งของป้าย — SCAN = ระบบอ่านจากรูป · HAND = พิมพ์/แก้เอง (Admin Spare Part เห็นป้ายต่างกัน) */

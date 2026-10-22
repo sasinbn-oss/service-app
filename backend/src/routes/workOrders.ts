@@ -497,6 +497,8 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     waitingParts: w.parts.filter((p) => p.kind === "WAITING").map(partShape),
     parts: w.parts.filter((p) => p.kind !== "WAITING").map(partShape),
     attachmentCount: w._count.attachments,
+    // หน้าปิดงานเตือนก่อนกดว่าไฟล์จะเกินเพดาน — ไม่ใช่ไปติดกลางทางตอนอัปไฟล์ที่ 15 จาก 20
+    attachmentLimit: MAX_ATTACHMENTS_PER_WORK_ORDER,
     /**
      * หน้าปิดงานต้องรู้ล่วงหน้าว่าขาดอะไรอยู่ ไม่ใช่ไปรู้ตอนกดบันทึกแล้วโดนปฏิเสธ
      *
@@ -4229,7 +4231,6 @@ const closeSchema = z.object({
     .object({
       errorCode: z.string().trim().max(60),
       checked: z.array(z.string().max(200)).max(20).default([]),
-      install: z.record(z.string().max(40), z.boolean()).default({}),
     })
     .nullable()
     .optional(),
@@ -4441,7 +4442,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     const ts = claimTroubleshootingFor(make);
     /**
      * ข้อมูลป้ายรุ่น — ต้องมีอย่างน้อยหนึ่งช่อง (สแกนหรือพิมพ์) · เช็คตามคู่มือเฉพาะยี่ห้อที่มีคู่มือ (Alliance)
-     * ต้องเลือก Error และตอบเรื่องการติดตั้งครบทุกข้อ — ช่างแค่ตอบ ระบบไม่ตัดสินว่ารับประกันหรือไม่
+     * ต้องเลือก Error — ช่างแค่ตอบ ระบบไม่ตัดสินว่ารับประกันหรือไม่
      */
     const guide = claimGuideFor(make);
     const plateFields = (body.claimNameplate?.fields ?? []).filter((f) => f.value);
@@ -4456,15 +4457,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       const chk = body.claimCheck;
       const err = guide.errors.find((e) => e.code === chk?.errorCode);
       if (!chk || !err) return res.status(400).json({ error: "เคลมเครื่องยี่ห้อนี้ต้องเลือก Error ที่เครื่องขึ้น (ตามคู่มือ)" });
-      const unanswered = guide.installChecks.filter((c) => typeof chk.install[c.key] !== "boolean");
-      if (unanswered.length) {
-        return res.status(400).json({ error: `ต้องตอบเรื่องการติดตั้งให้ครบ — ยังไม่ได้ตอบ: ${unanswered.map((c) => c.label).join(" · ")}` });
-      }
       fieldCheck = {
         errorCode: err.code,
         errorName: err.name,
         checked: err.checks.filter((c) => chk.checked.includes(c)),
-        install: guide.installChecks.map((c) => ({ key: c.key, label: c.label, note: c.note, answer: chk.install[c.key] })),
       };
     }
     // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
@@ -5382,7 +5378,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   if (count >= MAX_ATTACHMENTS_PER_WORK_ORDER) {
     return res
       .status(400)
-      .json({ error: `ใบงานหนึ่งแนบได้ไม่เกิน ${MAX_ATTACHMENTS_PER_WORK_ORDER} ไฟล์` });
+      .json({ error: `ใบงานหนึ่งแนบได้ไม่เกิน ${MAX_ATTACHMENTS_PER_WORK_ORDER} ไฟล์ — ลบไฟล์ที่ไม่ใช้ (เช่น รูปซ้ำ) ในการ์ดไฟล์แนบก่อน` });
   }
 
   const thumb = files?.thumbnail?.[0];

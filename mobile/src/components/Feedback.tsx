@@ -7,6 +7,7 @@ import type { AlertButton } from "../utils/alert";
 import Overlay from "./Overlay";
 import { WasherIcon } from "./Spinner";
 import { EXIT_EASE, spring, timing } from "../utils/motion";
+import UploadProgress, { type UploadProgressValue } from "./UploadProgress";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -40,9 +41,11 @@ interface State {
   toasts: ToastItem[];
   dialog: DialogState | null;
   loading: string | null;
+  /** หลอดใต้เครื่องซักผ้าตอนส่งไฟล์ (ดู uploadAttachment) — null = ไม่ใช่การส่งไฟล์ */
+  progress: UploadProgressValue | null;
 }
 
-let state: State = { toasts: [], dialog: null, loading: null };
+let state: State = { toasts: [], dialog: null, loading: null, progress: null };
 let nextId = 1;
 const listeners = new Set<(s: State) => void>();
 
@@ -71,7 +74,11 @@ export const feedback = {
   },
   /** ใช้เฉพาะตอนผู้ใช้กดบันทึกหรือส่งข้อมูล — ส่งข้อความว่ากำลังทำอะไร หรือ null เพื่อปิด */
   loading(text: string | null) {
-    set({ loading: text });
+    // หน้าโหลดปิดแล้วหลอดต้องหายตาม — ไม่งั้นคำขอถัดไปที่ไม่ใช่ไฟล์ขึ้นหลอดค้างของเก่า
+    set(text ? { loading: text } : { loading: null, progress: null });
+  },
+  progress(p: UploadProgressValue | null) {
+    set({ progress: p });
   },
 };
 
@@ -169,11 +176,12 @@ function Dialog({ d }: { d: DialogState }) {
 }
 
 /** หน้าโหลดเต็มจอ — เครื่องซักผ้าตัวเดียวกับที่ใช้ทั้งแอป (components/Spinner) */
-export function WasherLoader({ text }: { text: string }) {
+export function WasherLoader({ text, progress }: { text: string; progress?: UploadProgressValue | null }) {
   return (
     <View style={styles.loaderBox}>
       <WasherIcon size={92} />
       <Text style={styles.loaderText}>{text}</Text>
+      {progress ? <UploadProgress {...progress} /> : null}
     </View>
   );
 }
@@ -192,7 +200,7 @@ export function FeedbackHost() {
     <Overlay>
       {s.loading ? (
         <View style={styles.loader} pointerEvents="auto">
-          <WasherLoader text={s.loading} />
+          <WasherLoader text={s.loading} progress={s.progress} />
         </View>
       ) : null}
       {s.dialog ? <Dialog d={s.dialog} /> : null}

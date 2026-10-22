@@ -127,24 +127,12 @@ export const ALLIANCE_ERRORS: { code: string; name: string; checks: string[] }[]
   { code: "อื่น ๆ", name: "ไม่อยู่ในคู่มือ / ไม่มี Error", checks: [] },
 ];
 
-/**
- * เรื่องการติดตั้งฐานเครื่องในคู่มือ — ช่างตอบ มี/ไม่มี ทุกข้อ (บังคับตอบ) แต่ระบบไม่ตัดสินผล
- * คำอธิบายในวงเล็บคัดจากคู่มือ ให้ทีมที่คุยกับประกันเห็นที่มา
- */
-export const ALLIANCE_INSTALL_CHECKS: { key: string; label: string; note: string }[] = [
-  { key: "groutOverFrame", label: "เทปูนทับฐานเครื่องด้านใน", note: "คู่มือ: Warranty Not Cover" },
-  { key: "springWasher", label: "ใช้แหวนสปริงใต้น็อตยึดฐาน", note: "คู่มือ: Not Accept (ต้องเป็นแหวนแบน/น็อตหน้าแปลน)" },
-  { key: "washerUnderFrame", label: "มีแหวนรองใต้ฐานเครื่อง", note: "คู่มือ: สาเหตุเสียงดัง/สั่น" },
-  { key: "spacerUnderFrame", label: "มี spacer รองใต้ฐานเครื่อง", note: "คู่มือ: สาเหตุเสียงดัง/สั่น" },
-  { key: "boltNotTight", label: "น็อตยึดฐานไม่แน่น", note: "คู่มือ: สาเหตุเสียงดัง/สั่น" },
-];
-
 export function claimGuideFor(make: string | null | undefined) {
   const plate = plateTemplateFor(make);
   return {
     plate,
     // รายการเช็คมีเฉพาะยี่ห้อ Alliance — OASIS/อื่น ๆ ยังไม่มีคู่มือ
+    // เคยมีเช็คลิสต์การติดตั้งฐานเครื่อง 5 ข้อ — เจ้าของงานให้เอาออก (ต.ค. 69) ใบเคลมเก่ายังเก็บคำตอบไว้ใน fieldCheck.install
     errors: plate.family === "ALLIANCE" ? ALLIANCE_ERRORS : [],
-    installChecks: plate.family === "ALLIANCE" ? ALLIANCE_INSTALL_CHECKS : [],
   };
 }
