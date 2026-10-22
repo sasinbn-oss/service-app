@@ -3,7 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <!--
+      ไม่ให้ซูมหน้าเว็บบนมือถือ (เจ้าของงานขอ ต.ค. 69) — เปิดเป็นแอป การซูมเผลอ (นิ้วสองนิ้ว/แตะสองที/แตะช่องกรอก)
+      ทำให้หน้าเลื่อนออกนอกจอแล้วช่างกลับไม่เป็น · Android ทำตาม user-scalable=no · iPhone ไม่สนค่านี้
+      จึงกันเพิ่มสามชั้น: maximum-scale=1 (แตะช่องกรอกไม่ซูม) · touch-action ข้างล่าง (แตะสองทีไม่ซูม) ·
+      สคริปต์ท้ายไฟล์ (นิ้วสองนิ้วไม่ซูม)
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, shrink-to-fit=no" />
     <title>OTTERI Service</title>
     <!--
       เพิ่มไปยังหน้าจอโฮมแล้วดูเป็นแอป (เจ้าของงานเลือก ต.ค. 69 — ชื่อ OTTERI · แถบบนขาว)
@@ -34,6 +40,11 @@
         overflow: hidden;
         background: #ffffff;
       }
+      /* แตะสองทีไม่ซูม — ยังเลื่อนและลากได้ตามปกติ */
+      html,
+      body {
+        touch-action: manipulation;
+      }
       /* These styles make the root element full-height */
       #root {
         display: flex;
@@ -46,5 +57,10 @@
   <body>
     <noscript>ต้องเปิด JavaScript ก่อนใช้งานระบบนี้</noscript>
     <div id="root"></div>
+    <script>
+      // iPhone (Safari) ไม่ทำตาม user-scalable=no — กันนิ้วสองนิ้วซูมด้วยการยกเลิกท่า gesture เอง
+      document.addEventListener("gesturestart", function (e) { e.preventDefault(); }, { passive: false });
+      document.addEventListener("touchmove", function (e) { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+    </script>
   </body>
 </html>
