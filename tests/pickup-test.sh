@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: แอดมินเบิกได้เฉพาะคลังลาดพร้าว 94 · ของอยู่คลังอื่นส่งให้หัวหน้าภาคเบิก (เจ้าของงานกำหนด ต.ค. 69)
-#   · แอดมินใส่เลขใบเบิกคลังอื่นไม่ได้ · ของคลังอื่นต้องมีหมายเหตุถึงหัวหน้าภาค
+#   · แอดมินใส่เลขใบเบิกคลังอื่นไม่ได้ · หมายเหตุถึงหัวหน้าภาคไม่บังคับ (ต.ค. 69)
+#   · ประวัติผลเช็คบอกรายตัว: คลังไหน · เลขใบเบิก · ใครเบิก
 #   · ขั้น "รอหัวหน้าภาคเบิกอะไหล่": แอดมิน/ช่าง/หัวหน้าภาคนอกพื้นที่กดไม่ได้ · ต้องมีเลขใบเบิกทุกตัว
 #   · เปลี่ยนคลังได้ (บันทึกคลังที่เบิกจริง) · เบิกไม่ได้ส่งกลับแอดมินพร้อมเหตุผล · ของคลัง 94 ทั้งหมดไม่ผ่านขั้นนี้
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
@@ -45,8 +46,6 @@ echo "═══ แอดมินเบิกได้เฉพาะคลั�
 R=$(POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-A1\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-A2\"}],\"pickupNote\":\"x\"}")
 echo "$R" | J 'd.error' | grep -q "เฉพาะคลังลาดพร้าว 94" && [ "$(ST $W)" = "PARTS_REQUESTED" ] && [ "$(PART $W $BELT)" = "-|-|-" ] \
   && pass "แอดมินใส่เลขใบเบิกคลังภูเก็ต: ปฏิเสธ ฐานข้อมูลไม่เปลี่ยน" || fail "แอดมินเบิกคลังอื่นได้: $R · $(PART $W $BELT)"
-[ "$(PC $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-A1\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}")" = "400" ] \
-  && [ "$(ST $W)" = "PARTS_REQUESTED" ] && pass "ของคลังอื่นไม่มีหมายเหตุถึงหัวหน้าภาค: 400" || fail "ไม่มีหมายเหตุก็ผ่าน"
 [ "$(PC $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}],\"pickupNote\":\"x\"}")" = "400" ] \
   && pass "คลัง 94 ยังต้องมีเลขใบเบิกเหมือนเดิม" || fail "คลัง 94 ไม่มีเลขใบเบิกก็ผ่าน"
 R=$(POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-A1\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}],\"pickupNote\":\"มีที่ภูเก็ต 2 ตัว ติดต่อพี่เอ\"}")
@@ -55,6 +54,9 @@ R=$(POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"
 [ "$(echo "$R" | J 'd.statusLabel+"|"+d.stageActor')" = "หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)|SUPERVISOR" ] && pass "ขั้นนี้รอหัวหน้าภาค" || fail "ป้าย: $(echo "$R" | J 'd.statusLabel')"
 DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W and action='PICKUP_REQUESTED' order by id desc limit 1" | grep -q "SP-BELT x2 (คลังภูเก็ต) — มีที่ภูเก็ต 2 ตัว ติดต่อพี่เอ" \
   && pass "ประวัติเก็บหมายเหตุถึงหัวหน้าภาค พร้อมรายการและคลัง" || fail "ประวัติ: $(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W and action='PICKUP_REQUESTED'")"
+CHK=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W and action='PARTS_CHECKED' order by id desc limit 1")
+echo "$CHK" | grep -qx "SP-BOARD ×1 · $L94 · ใบเบิก RQ-A1 — แอดมินเบิกแล้ว" && echo "$CHK" | grep -qx "SP-BELT ×2 · คลังภูเก็ต — ส่งหัวหน้าภาคเบิก" \
+  && pass "ประวัติผลเช็คบอกรายตัว: คลัง 94 + เลขใบเบิก (แอดมินเบิก) · คลังภูเก็ต (ส่งหัวหน้าภาคเบิก)" || fail "ประวัติผลเช็ค: $CHK"
 [ "$(curl -s "localhost:4000/api/work-orders?status=INBOX&limit=200" -H "$(H $S)" | J "(d.rows||d).some(r=>r.id===$W)")" = "true" ] \
   && [ "$(curl -s "localhost:4000/api/work-orders?status=INBOX&limit=200" -H "$(H $A)" | J "(d.rows||d).some(r=>r.id===$W)")" = "false" ] \
   && pass "อยู่ในกล่องงานหัวหน้าภาค ไม่อยู่ในกล่องแอดมิน" || fail "กล่องงานไม่ถูก"
@@ -78,8 +80,11 @@ POST $S work-orders/$W/parts-pickup/return '{"reason":"คลังภูเก�
   && [ "$(PART $W $BOARD)" = "true|$L94|RQ-A1" ] && pass "กลับไปรอแอดมินเบิก พร้อมเหตุผล · ตัวที่แอดมินเบิกแล้วยังอยู่" || fail "ส่งกลับ: $(ST $W)"
 [ "$(PC $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-A1\"}]}")" = "400" ] \
   && pass "แอดมินต้องตอบตัวที่ส่งกลับมาใหม่ (ยังไม่มีเลขใบเบิก)" || fail "ข้ามตัวที่ยังไม่ได้เบิกได้"
-POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}],\"pickupNote\":\"ลองคลังกระบี่\"}" >/dev/null
-[ "$(ST $W)|$(PART $W $BELT)|$(PART $W $BOARD)" = "PARTS_PICKUP|true|คลังกระบี่|-|true|$L94|RQ-A1" ] && pass "แอดมินหาคลังใหม่ ส่งให้หัวหน้าภาคอีกรอบ" || fail "รอบสอง: $(ST $W) $(PART $W $BELT)"
+# รอบนี้ไม่เขียนหมายเหตุ — ไม่บังคับแล้ว ชื่อคลังพอ
+POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
+[ "$(ST $W)|$(PART $W $BELT)|$(PART $W $BOARD)" = "PARTS_PICKUP|true|คลังกระบี่|-|true|$L94|RQ-A1" ] && pass "แอดมินหาคลังใหม่ ส่งให้หัวหน้าภาคอีกรอบ — ไม่มีหมายเหตุก็ส่งได้" || fail "รอบสอง: $(ST $W) $(PART $W $BELT)"
+[ "$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W and action='PICKUP_REQUESTED' order by id desc limit 1")" = "SP-BELT x2 (คลังกระบี่)" ] \
+  && pass "ประวัติส่งเบิกไม่มีหมายเหตุ: รายการ + คลังอย่างเดียว" || fail "ประวัติส่งเบิก: $(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W and action='PICKUP_REQUESTED' order by id desc limit 1")"
 
 echo "═══ หัวหน้าภาคเบิกแล้ว"
 R=$(POST $S work-orders/$W/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังสงขลา\",\"requisitionNo\":\"RQ-SUP1\"}],\"note\":\"เบิกสงขลาใกล้กว่า\"}")

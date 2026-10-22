@@ -329,6 +329,12 @@ function sourcingCheck(o: { status: string; logs: LogEntry[] }): { days: number;
   return { days, stale: days > SOURCING_FRESH_DAYS, at: last.createdAt };
 }
 
+/** ส่วนที่แอดมินพิมพ์เอง — ประวัติเก็บเป็น "รายการ (คลัง) — หมายเหตุ" (หมายเหตุไม่บังคับ) */
+function pickupAdminNote(note: string | null | undefined): string | null {
+  const at = note?.indexOf(" — ") ?? -1;
+  return note && at >= 0 ? note.slice(at + 3).trim() || null : null;
+}
+
 /** หมายเหตุล่าสุดที่แอดมินส่งให้หัวหน้าภาคเบิก */
 function lastPickupRequest(o: { logs: LogEntry[] }): LogEntry | null {
   return [...o.logs].filter((l) => l.action === "PICKUP_REQUESTED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
@@ -2982,7 +2988,7 @@ function StageModal({
             requisitionNo:
               p.offCatalog || checks[p.sparePartId]?.warehouse !== adminWarehouse ? null : requisitionNo.trim() || null,
           })),
-          pickupNote: toPickup.length ? pickupNote.trim() : undefined,
+          pickupNote: toPickup.length ? pickupNote.trim() || undefined : undefined,
           splitOut: mixed && splitOut,
           expectedAt: checkOut && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
@@ -3139,7 +3145,6 @@ function StageModal({
     unchecked ||
     needsRequisition ||
     pickupBlocked ||
-    (toPickup.length > 0 && !pickupNote.trim()) ||
     (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
 
   return (
@@ -3459,11 +3464,15 @@ function StageModal({
                           value={c.warehouse}
                           placeholder="เลือกคลังที่มีของ"
                           accessibilityLabel={`คลังที่มี ${part.partCode}`}
-                          options={warehouses.map((w) => ({
-                            value: w,
-                            label: w,
-                            hint: w === adminWarehouse ? "แอดมินเบิก" : "หัวหน้าภาคเบิก",
-                          }))}
+                          // คลัง 94 ขึ้นบนสุดแยกหัวข้อ — เลือกแล้วรู้ทันทีว่าใครเบิก (เจ้าของงานขอ ต.ค. 69)
+                          options={[...warehouses]
+                            .sort((a, b) => Number(b === adminWarehouse) - Number(a === adminWarehouse))
+                            .map((w) => ({
+                              value: w,
+                              label: w,
+                              hint: w === adminWarehouse ? "แอดมินเบิก" : "หัวหน้าภาคเบิก",
+                              group: w === adminWarehouse ? "แอดมินเบิกเอง" : "หัวหน้าภาคเบิก",
+                            }))}
                           onChange={(next) =>
                             setChecks((v) => ({
                               ...v,
@@ -3482,18 +3491,19 @@ function StageModal({
                 })}
                 {toPickup.length ? (
                   <View style={styles.pickupBox}>
-                    <Text style={styles.modalLabel}>หมายเหตุถึงหัวหน้าภาค *</Text>
+                    {/* ไม่บังคับ — ชื่อคลังที่เลือกบอกที่เบิกอยู่แล้ว (เจ้าของงานตกลง ต.ค. 69) */}
+                    <Text style={styles.modalLabel}>หมายเหตุถึงหัวหน้าภาค (ไม่บังคับ)</Text>
                     <TextInput
                       style={styles.modalInput}
                       value={pickupNote}
                       onChangeText={setPickupNote}
-                      placeholder="เบิกที่ไหน ติดต่อใคร เช่น มีที่คลังภูเก็ต 2 ตัว ติดต่อพี่เอ"
+                      placeholder="เช่น ติดต่อพี่เอ ที่คลังภูเก็ต"
                       placeholderTextColor={colors.textFaint}
                       multiline
                       numberOfLines={2}
                       accessibilityLabel="หมายเหตุถึงหัวหน้าภาค"
                     />
-                    <Text style={pickupNote.trim() ? styles.linkedText : styles.warn}>
+                    <Text style={styles.linkedText}>
                       {toPickup.length} รายการอยู่คลังอื่น — ใบงานไปขั้น “หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)” หัวหน้าภาคเบิกเสร็จแล้วไปจ่ายงานต่อ
                     </Text>
                   </View>
@@ -3536,9 +3546,17 @@ function StageModal({
                 {pickupRequest ? (
                   <View style={styles.pickupBox} accessibilityLabel="หมายเหตุจากแอดมิน">
                     <Text style={styles.issuedTitle}>
-                      จากแอดมิน{pickupRequest.byName ? ` (${pickupRequest.byName} · ${formatDateTime(pickupRequest.createdAt)})` : ""}
+                      แอดมินแจ้งว่ามีของที่{pickupRequest.byName ? ` (${pickupRequest.byName} · ${formatDateTime(pickupRequest.createdAt)})` : ""}
                     </Text>
-                    <Text style={styles.pickupNoteText}>{pickupRequest.note ?? "—"}</Text>
+                    {/* รายตัวจากผลเช็คของแอดมิน ไม่ใช่จากข้อความ — หมายเหตุไม่บังคับแล้ว ข้อความอาจไม่มี */}
+                    {pickupParts.map((p) => (
+                      <Text key={p.sparePartId} style={styles.pickupNoteText}>
+                        {partTitle(p)} × {p.quantity} — {p.warehouse}
+                      </Text>
+                    ))}
+                    {pickupAdminNote(pickupRequest.note) ? (
+                      <Text style={styles.linkedText}>หมายเหตุ: {pickupAdminNote(pickupRequest.note)}</Text>
+                    ) : null}
                   </View>
                 ) : null}
                 <TouchableOpacity

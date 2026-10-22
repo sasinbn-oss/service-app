@@ -1,7 +1,8 @@
 // ทดสอบ: แอดมินเบิกได้เฉพาะคลังลาดพร้าว 94 · ของคลังอื่นส่งให้หัวหน้าภาคเบิก (ต.ค. 69)
-//   · แอดมิน: เลือกคลังอื่นแล้วขึ้นป้าย "หัวหน้าภาคเบิก" ต้องเขียนหมายเหตุถึงหัวหน้าภาค · ปุ่มบอกจำนวนที่ส่งต่อ
+//   · แอดมิน: รายการคลังแยกหัวข้อ "แอดมินเบิกเอง" (คลัง 94) / "หัวหน้าภาคเบิก" · เลือกคลังอื่นแล้วขึ้นป้าย "หัวหน้าภาคเบิก"
+//     · หมายเหตุถึงหัวหน้าภาคไม่บังคับ (ต.ค. 69) · ปุ่มบอกจำนวนที่ส่งต่อ · ประวัติบอกรายตัว
 //   · แอดมินไม่มีปุ่มของขั้นหัวหน้าภาคเบิก
-//   · หัวหน้าภาค: เห็นหมายเหตุจากแอดมิน ใส่เลขใบเบิก กดคอนเฟิร์ม → รอหัวหน้าภาคจ่ายงาน (ยืนยันที่ฐานข้อมูล)
+//   · หัวหน้าภาค: เห็นว่าแอดมินแจ้งของตัวไหนอยู่คลังไหน ใส่เลขใบเบิก กดคอนเฟิร์ม → รอหัวหน้าภาคจ่ายงาน (ยืนยันที่ฐานข้อมูล)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
@@ -47,6 +48,16 @@ const { setup } = require("./fixture");
     async function pickWarehouse(p, partCode, name, search) {
       await p.label(`คลังที่มี ${partCode}`).click();
       await p.page.waitForTimeout(600);
+      if (partCode === "SP-BOARD") {
+        // หัวข้อ "แอดมินเบิกเอง" ต้องอยู่บนสุด ตามด้วยคลัง 94 แล้วจึงเป็นหัวข้อ "หัวหน้าภาคเบิก"
+        const order = await p.page.evaluate(() => {
+          const t = document.body.innerText;
+          return [t.indexOf("แอดมินเบิกเอง"), t.indexOf("คลังลาดพร้าว 94", t.indexOf("แอดมินเบิกเอง")), t.lastIndexOf("หัวหน้าภาคเบิก")];
+        });
+        order[0] >= 0 && order[0] < order[1] && order[1] < order[2]
+          ? pass("รายการคลังแยกหัวข้อ: แอดมินเบิกเอง (คลัง 94) อยู่บนสุด แล้วจึงหัวหน้าภาคเบิก") : fail(`ลำดับหัวข้อคลัง: ${order}`);
+        await p.page.screenshot({ path: path.join(DIR, "pickup-warehouse-list.png") });
+      }
       await p.page.getByPlaceholder("ค้นหา").locator("visible=true").first().fill(search);
       await p.page.waitForTimeout(700);
       await p.vis(name).last().click();
@@ -69,10 +80,8 @@ const { setup } = require("./fixture");
       ? pass("เลือกคลังภูเก็ต: ขึ้นป้าย หัวหน้าภาคเบิก (คลัง 94 ไม่ขึ้น)") : fail("ป้ายหัวหน้าภาคเบิกไม่ถูก");
     const btn = a.vis("ส่งหัวหน้าภาคเบิก 1 รายการ").last();
     (await btn.count()) ? pass("ปุ่มบอกจำนวนที่ส่งให้หัวหน้าภาคเบิก") : fail("ปุ่มไม่บอกจำนวน");
-    await btn.click();
-    await a.page.waitForTimeout(1500);
-    st() === "PARTS_REQUESTED" ? pass("ยังไม่เขียนหมายเหตุ: กดไม่ผ่าน") : fail(`ไม่มีหมายเหตุก็ผ่าน: ${st()}`);
-    await a.label("หมายเหตุถึงหัวหน้าภาค").fill("มีที่คลังภูเก็ต ติดต่อพี่เอ (เทสต์)");
+    // ไม่เขียนหมายเหตุ — ไม่บังคับแล้ว ชื่อคลังบอกที่เบิกอยู่แล้ว
+    (await a.vis("หมายเหตุถึงหัวหน้าภาค (ไม่บังคับ)").count()) ? pass("ช่องหมายเหตุถึงหัวหน้าภาคเป็นไม่บังคับ") : fail("ช่องหมายเหตุยังบังคับ");
     await a.page.screenshot({ path: path.join(DIR, "pickup-admin-form.png") });
     await btn.click();
     await a.page.waitForTimeout(3500);
@@ -87,7 +96,12 @@ const { setup } = require("./fixture");
     const s = await open(wo.code, "S001");
     await s.vis("เบิกอะไหล่ (คลังอื่น)").first().click();
     await s.page.waitForTimeout(1200);
-    (await s.vis("มีที่คลังภูเก็ต ติดต่อพี่เอ (เทสต์)", false).count()) ? pass("หัวหน้าภาคเห็นหมายเหตุจากแอดมิน") : fail("ไม่เห็นหมายเหตุ");
+    const box = s.label("หมายเหตุจากแอดมิน");
+    (await box.count()) && /แอดมินแจ้งว่ามีของที่/.test(await box.innerText()) && /SP-BELT[^\n]*× 2 — คลังภูเก็ต/.test(await box.innerText())
+      ? pass("หัวหน้าภาคเห็นว่าแอดมินแจ้ง SP-BELT × 2 มีที่คลังภูเก็ต (ไม่มีหมายเหตุก็เห็น)") : fail(`กล่องจากแอดมิน: ${(await box.count()) ? await box.innerText() : "ไม่มี"}`);
+    (await s.vis("SP-BOARD ×1 · คลังลาดพร้าว 94 · ใบเบิก RQ-WEB-94 — แอดมินเบิกแล้ว", false).count()) &&
+    (await s.vis("SP-BELT ×2 · คลังภูเก็ต — ส่งหัวหน้าภาคเบิก", false).count())
+      ? pass("ประวัติใบงานบอกรายตัว: คลัง 94 + เลขใบเบิก (แอดมินเบิก) · คลังภูเก็ต (ส่งหัวหน้าภาคเบิก)") : fail("ประวัติไม่บอกรายตัว");
     (await s.vis("RQ-WEB-94", false).count()) ? pass("เห็นตัวที่แอดมินเบิกไปแล้ว") : fail("ไม่เห็นตัวที่แอดมินเบิก");
     await s.label("เลขใบเบิก SP-BELT").fill("RQ-WEB-SUP");
     await s.page.screenshot({ path: path.join(DIR, "pickup-supervisor-form.png") });

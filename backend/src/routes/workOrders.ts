@@ -2740,9 +2740,7 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   const pickupIds = parsed.data.results
     .filter((r) => r.inStock && !offIds.has(r.sparePartId) && r.warehouse !== ADMIN_WAREHOUSE)
     .map((r) => r.sparePartId);
-  if (pickupIds.length && !parsed.data.pickupNote) {
-    return res.status(400).json({ error: "ของที่อยู่คลังอื่น ต้องเขียนหมายเหตุถึงหัวหน้าภาคด้วย (เบิกที่ไหน ติดต่อใคร)" });
-  }
+  // หมายเหตุถึงหัวหน้าภาคไม่บังคับแล้ว (เจ้าของงานตกลง ต.ค. 69) — ชื่อคลังที่แอดมินเลือกบอกที่เบิกอยู่แล้ว
 
   /**
    * มีตัวไหนหมด = ใบงานค้างอยู่ขั้นนี้ ไม่ส่งต่อ
@@ -2825,10 +2823,17 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       req.auth!.userId,
       "PARTS_CHECKED",
       nextStage,
-      parsed.data.note ||
-        (anyOut
+      [
+        // รายตัว: คลังไหน · เลขใบเบิก · ใครเบิก — เดิมเขียนแค่ "อะไหล่ครบทุกรายการ" ย้อนดูไม่ได้ว่าตัวไหน
+        // แอดมินเบิกจากคลัง 94 ด้วยใบไหน ตัวไหนส่งให้หัวหน้าภาคเบิก (เจ้าของงานขอ ต.ค. 69)
+        await partsCheckLines(waiting, parsed.data.results, offIds),
+        anyOut
           ? `อะไหล่หมด: ${outCodes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""} — ใบงานรออยู่ที่ขั้นนี้ ของมาถึงแล้วค่อยใส่เลขใบเบิกอีกรอบ`
-          : "อะไหล่ครบทุกรายการ")
+          : null,
+        parsed.data.note || null,
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
     if (nextStage === "PARTS_PICKUP") {
       const pickupText = waiting
@@ -2840,7 +2845,14 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       const codes = await partCodesText(pickupText);
       const where = [...new Set(pickupText.map((w) => w.where))].join(", ");
       // หน้าจอหัวหน้าภาคอ่านหมายเหตุจากรายการนี้ (ตัวล่าสุด)
-      await writeLog(tx, id, req.auth!.userId, "PICKUP_REQUESTED", "PARTS_PICKUP", `${codes} (${where}) — ${parsed.data.pickupNote}`);
+      await writeLog(
+        tx,
+        id,
+        req.auth!.userId,
+        "PICKUP_REQUESTED",
+        "PARTS_PICKUP",
+        `${codes} (${where})${parsed.data.pickupNote ? ` — ${parsed.data.pickupNote}` : ""}`
+      );
     }
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -3759,6 +3771,31 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
 });
 
 /** "SPHB144, D12-X x2" สำหรับเขียนลงประวัติ */
+/**
+ * ผลเช็คคลังรายตัว บรรทัดละตัว ลงประวัติใบงาน — ตัวที่เบิกไปแล้วรอบก่อน (ไม่ได้ตอบมารอบนี้) ไม่ซ้ำ
+ */
+async function partsCheckLines(
+  waiting: { sparePartId: number; quantity: number }[],
+  results: { sparePartId: number; inStock: boolean; warehouse?: string | null; requisitionNo?: string | null }[],
+  offIds: Set<number>
+) {
+  const found = await prisma.sparePart.findMany({
+    where: { id: { in: results.map((r) => r.sparePartId) } },
+    select: { id: true, partCode: true },
+  });
+  return results
+    .map((r) => {
+      const qty = waiting.find((w) => w.sparePartId === r.sparePartId)?.quantity ?? 1;
+      const code = found.find((f) => f.id === r.sparePartId)?.partCode ?? `#${r.sparePartId}`;
+      const head = `${code} ×${qty}`;
+      if (offIds.has(r.sparePartId)) return `${head} — ${r.inStock ? "ได้ของแล้ว" : "ยังไม่ได้ของ"}`;
+      if (!r.inStock) return `${head} — หมด`;
+      if (r.warehouse === ADMIN_WAREHOUSE) return `${head} · ${r.warehouse} · ใบเบิก ${r.requisitionNo?.trim()} — แอดมินเบิกแล้ว`;
+      return `${head} · ${r.warehouse} — ส่งหัวหน้าภาคเบิก`;
+    })
+    .join("\n");
+}
+
 async function partCodesText(parts: { sparePartId: number; quantity: number }[]) {
   const found = await prisma.sparePart.findMany({
     where: { id: { in: parts.map((p) => p.sparePartId) } },
