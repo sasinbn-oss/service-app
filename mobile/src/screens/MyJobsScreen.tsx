@@ -9,6 +9,7 @@
  * ใช้ของหน้าใบงานเดิม (เปิดหน้าใบงานพร้อมสั่งให้เปิดฟอร์มเลย) ไม่ได้ทำฟอร์มซ้ำ
  */
 import { useAuth } from "../context/AuthContext";
+import MyQueue from "./MyQueue";
 import { useDocked } from "../components/SideMenu";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { machineTag } from "../utils/machine";
@@ -83,16 +84,23 @@ async function currentPosition(): Promise<{ latitude: number; longitude: number 
   }
 }
 
-// ทุกตำแหน่งเปิดแอปมาที่หน้านี้ (ต.ค. 69) — หน้าว่างต้องบอกตามมุมของคนดู ไม่ใช่ประโยคของช่างทุกคน
-const EMPTY_HINT: Record<string, string> = {
-  EMPLOYEE: "หัวหน้าภาคปล่อยงานแล้วจะขึ้นที่นี่ทันที",
-  SUPERVISOR: "งานที่คุณปล่อยให้ทีมในภาคจะขึ้นที่นี่ เรียงตามเวลานัด",
-  ADMIN: "งานที่ปล่อยให้ทีมแล้วทุกภาคจะขึ้นที่นี่ เรียงตามเวลานัด",
-};
-
-export default function MyJobsScreen({ navigation }: Props) {
-  const { docked } = useDocked();
+/**
+ * ทุกตำแหน่งเปิดแอปมาที่หน้านี้ (ต.ค. 69) แต่ "งานของฉัน" ของแต่ละตำแหน่งไม่เหมือนกัน (เจ้าของงานกำหนด):
+ * ช่าง = งานหน้าร้านที่ปล่อยให้ทีมแล้ว (ด้านล่าง) · แอดมิน/หัวหน้าภาค = ใบที่ค้างรอตัวเองทำ (MyQueue)
+ * แยกเป็นคอมโพเนนต์คนละตัว — ดูในฐานะคนอื่นแล้วตำแหน่งเปลี่ยน hook ไม่ปนกัน
+ */
+export default function MyJobsScreen(props: Props) {
   const { user } = useAuth();
+  if (user && user.role !== "EMPLOYEE") {
+    return (
+      <MyQueue onOpen={(id, open) => props.navigation.navigate("WorkOrderDetail", { id, ...(open ? { open } : {}) })} />
+    );
+  }
+  return <TechJobs {...props} />;
+}
+
+function TechJobs({ navigation }: Props) {
+  const { docked } = useDocked();
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [today, setToday] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("today");
@@ -212,16 +220,8 @@ export default function MyJobsScreen({ navigation }: Props) {
       ) : list.length === 0 ? (
         <EmptyState
           icon="sunny-outline"
-          title={
-            tab === "today"
-              ? user?.role === "EMPLOYEE"
-                ? "วันนี้ยังไม่มีงานที่ปล่อยให้ทีม"
-                : "วันนี้ยังไม่มีงานที่ออกหน้างาน"
-              : tab === "tomorrow"
-                ? "พรุ่งนี้ยังไม่มีงานที่ปล่อยแล้ว"
-                : "ไม่มีงานค้าง"
-          }
-          text={tab === "late" ? "งานที่นัดผ่านไปแล้วแต่ยังไม่ปิดจะขึ้นที่นี่" : EMPTY_HINT[user?.role ?? "EMPLOYEE"]}
+          title={tab === "today" ? "วันนี้ยังไม่มีงานที่ปล่อยให้ทีม" : tab === "tomorrow" ? "พรุ่งนี้ยังไม่มีงานที่ปล่อยแล้ว" : "ไม่มีงานค้าง"}
+          text={tab === "late" ? "งานที่นัดผ่านไปแล้วแต่ยังไม่ปิดจะขึ้นที่นี่" : "หัวหน้าภาคปล่อยงานแล้วจะขึ้นที่นี่ทันที"}
         />
       ) : (
         list.map((j) => (

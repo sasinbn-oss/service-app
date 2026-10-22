@@ -1138,6 +1138,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 ) : (
                   <WorkOrderTableRow
                     row={item}
+                    stripe={index % 2 === 1}
                     flash={flash.has(item.id)}
                     last={index === items.length - 1}
                     onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
@@ -1154,6 +1155,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             ) : table ? (
               <WorkOrderTableRow
                 row={item}
+                stripe={index % 2 === 1}
                 flash={flash.has(item.id)}
                 last={index === items.length - 1}
                 onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
@@ -1498,21 +1500,40 @@ function Opener({ row }: { row: WorkOrderRow }) {
 const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   row,
   last,
+  stripe,
   flash,
   onPress,
 }: {
   row: WorkOrderRow;
   last: boolean;
+  /** แถวคู่ — พื้นเทาจาง ๆ สลับแถว */
+  stripe?: boolean;
   /** เพิ่งเปลี่ยนจากการรีเฟรช — พื้นเหลืองสักครู่ให้เห็นว่าใบไหน */
   flash?: boolean;
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
   const closed = row.status === "DONE";
+  // แถวที่เมาส์ชี้ขึ้นพื้นฟ้า + แถบสีซ้ายหนาขึ้น (เจ้าของงานขอ ต.ค. 69) — กวาดเมาส์แล้วรู้ว่ากำลังจะเปิดใบไหน
+  const [hover, setHover] = useState(false);
+  const hoverProps = { onPointerEnter: () => setHover(true), onPointerLeave: () => setHover(false) } as object;
   return (
-    <TouchableOpacity style={[styles.tr, !last && styles.trLine, isHot(row) && styles.trUrgent, closed && styles.trDone, flash && styles.flashRow]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity
+      {...hoverProps}
+      style={[
+        styles.tr,
+        !last && styles.trLine,
+        stripe && styles.trAlt,
+        isHot(row) && styles.trUrgent,
+        closed && styles.trDone,
+        flash && styles.flashRow,
+        hover && styles.trHover,
+      ]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
-      <View style={[styles.rowBar, { backgroundColor: tone.fg }]} />
+      <View style={[styles.rowBar, hover && styles.rowBarHover, { backgroundColor: tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
         <View style={styles.rowIcon}>
           <Ionicons name="clipboard-outline" size={18} color={colors.primaryInk} />
@@ -1586,8 +1607,16 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 }) {
   const tone = statusTone(row.status);
   const closed = row.status === "DONE";
+  // การ์ดบนเว็บจอแคบ/แท็บเล็ตที่ใช้เมาส์ก็ต้องเห็นว่าชี้ใบไหน — แบบเดียวกับแถวตาราง
+  const [hover, setHover] = useState(false);
+  const hoverProps = { onPointerEnter: () => setHover(true), onPointerLeave: () => setHover(false) } as object;
   return (
-    <TouchableOpacity style={[styles.card, closed && styles.cardDone, { borderLeftColor: tone.fg }, flash && styles.flashCard]} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity
+      {...hoverProps}
+      style={[styles.card, closed && styles.cardDone, { borderLeftColor: tone.fg }, flash && styles.flashCard, hover && styles.cardHover]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
       {isHot(row) ? <UrgentGlow radius={radius.md} /> : null}
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
@@ -1882,6 +1911,10 @@ const styles = StyleSheet.create({
   },
   tr: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: 12 },
   trLine: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  trAlt: { backgroundColor: colors.rowAlt },
+  cardHover: { backgroundColor: colors.rowHover, borderColor: colors.primary },
+  trHover: { backgroundColor: colors.rowHover },
+  rowBarHover: { width: 6, top: 6, bottom: 6 },
   thead: { backgroundColor: colors.sky50, borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 10 },
   th: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
   td: { fontSize: 14, lineHeight: 21, color: colors.text },
