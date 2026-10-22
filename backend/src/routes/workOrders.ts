@@ -622,6 +622,9 @@ const listSelect = {
   assignedTeam: true,
   assignedTo: { select: { name: true } },
   createdBy: { select: { name: true, role: true } },
+  // ใบงานแจ้งเคลม (ตอนปิดงานส่งอะไหล่เก่าเคลม) — ป้าย + ตัวกรอง "ใบงานเคลม" ในรายการ (เจ้าของงานขอ ต.ค. 69)
+  // เอาแค่รอบล่าสุดตัวเดียว รายการอยากรู้สถานะเคลมตอนนี้ ไม่ใช่ทุกรอบ
+  claims: { select: { status: true }, orderBy: { createdAt: "desc" as const }, take: 1 },
   _count: {
     select: {
       attachments: true,
@@ -757,6 +760,8 @@ function listShape(
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
       : null,
     attachmentCount: w._count.attachments,
+    // สถานะเคลมรอบล่าสุด PENDING / APPROVED / REJECTED — ว่าง = ใบนี้ไม่ได้แจ้งเคลม
+    claimStatus: w.claims[0]?.status ?? null,
   };
 }
 

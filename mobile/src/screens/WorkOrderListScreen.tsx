@@ -98,6 +98,8 @@ export interface WorkOrderRow {
   closeResult?: string | null;
   closeResultLabel: string | null;
   attachmentCount: number;
+  /** ใบงานแจ้งเคลม — สถานะเคลมรอบล่าสุด PENDING / APPROVED / REJECTED · ว่าง = ไม่ได้แจ้งเคลม */
+  claimStatus?: "PENDING" | "APPROVED" | "REJECTED" | null;
   /** ขั้นนี้เป็นของบทบาทไหน — ว่าง = ปิด/ยกเลิกแล้ว */
   stageActor: Role | null;
   /** รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินหัวข้อ "ไม่มีคนรับ" */
@@ -229,8 +231,14 @@ interface ListPrefs {
   supTab: SupTab;
   /** ใบงาน SUB (จ่ายให้ทีม outsource) / ทีมปกติ — เจ้าของงานขอให้แยกไม่ปนกัน ต.ค. 69 */
   kind: "" | "normal" | "sub";
+  /** ใบงานเคลม (เจ้าของงานขอ ต.ค. 69) — "any" = ทุกใบที่แจ้งเคลม หรือเจาะสถานะเคลม */
+  claim?: "" | "any" | "PENDING" | "APPROVED" | "REJECTED";
 }
-const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair", kind: "" };
+const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair", kind: "", claim: "" };
+
+/** ป้าย/ตัวกรองใบงานเคลม — สถานะเคลมเป็นคำที่ Admin Spare Part ใช้ */
+const CLAIM_LABEL: Record<string, string> = { PENDING: "รอตรวจเคลม", APPROVED: "เคลมอนุมัติแล้ว", REJECTED: "เคลมถูกตีกลับ" };
+const claimMatch = (r: WorkOrderRow, v: ListPrefs["claim"]) => !v || (v === "any" ? !!r.claimStatus : r.claimStatus === v);
 
 /**
  * แท็บกล่องงานหัวหน้าภาค (เจ้าของงานขอ ต.ค. 69 — "งานแจ้งมาปนกันหมด")
@@ -529,8 +537,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const kindOn = !supTabs && user?.role !== "EMPLOYEE";
   const byType = useCallback(
     (r: WorkOrderRow) =>
-      (!prefs.btype || r.branchType === prefs.btype) && (!kindOn || !prefs.kind || (prefs.kind === "sub") === !!r.outsource),
-    [prefs.btype, prefs.kind, kindOn]
+      (!prefs.btype || r.branchType === prefs.btype) &&
+      (!kindOn || !prefs.kind || (prefs.kind === "sub") === !!r.outsource) &&
+      claimMatch(r, prefs.claim),
+    [prefs.btype, prefs.kind, prefs.claim, kindOn]
   );
   // ชิป "ต้องรีบดู" — ไม่จำข้ามการเปิดแอปเหมือนตัวกรองหัวคอลัมน์ เปิดมาเจอรายการถูกกรองค้างไว้จะงงว่าใบหายไปไหน
   const [quick, setQuick] = useState<Set<QuickKey>>(new Set());
@@ -926,7 +936,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const activeCount = (mineOnly ? 1 : 0) + quick.size + groups.filter(isSet).length;
   /** ล้างตัวกรองทั้งหมด — การเรียงกับคำค้นไม่ถูกล้าง (ไม่ได้ทำให้ใบหาย และคำค้นมีปุ่ม ✕ ของตัวเอง) */
   function clearAll() {
-    setPrefs((p) => ({ ...p, owner: "", who: "", btype: "", kind: "" }));
+    setPrefs((p) => ({ ...p, owner: "", who: "", btype: "", kind: "", claim: "" }));
     setQuick(new Set());
     setColFilters({});
     if (mineOnly) toggleMine();
@@ -1306,9 +1316,11 @@ function filterGroups({
   const typed = rows.filter(byType);
   const ownerCount = (role: Role | "") => typed.filter((r) => !role || r.stageActor === role).length;
   const typeCount = (t: "" | "DODO" | "COCO") =>
-    rows.filter((r) => byOwner(r) && (!t || r.branchType === t) && (!prefs.kind || (prefs.kind === "sub") === !!r.outsource)).length;
+    rows.filter((r) => byOwner(r) && (!t || r.branchType === t) && (!prefs.kind || (prefs.kind === "sub") === !!r.outsource) && claimMatch(r, prefs.claim)).length;
+  const claimCount = (v: ListPrefs["claim"]) =>
+    rows.filter((r) => byOwner(r) && (!prefs.btype || r.branchType === prefs.btype) && (!prefs.kind || (prefs.kind === "sub") === !!r.outsource) && claimMatch(r, v)).length;
   const kindCount = (k: "" | "normal" | "sub") =>
-    rows.filter((r) => byOwner(r) && (!prefs.btype || r.branchType === prefs.btype) && (!k || (k === "sub") === !!r.outsource)).length;
+    rows.filter((r) => byOwner(r) && (!prefs.btype || r.branchType === prefs.btype) && (!k || (k === "sub") === !!r.outsource) && claimMatch(r, prefs.claim)).length;
   const groups: FilterGroup[] = [];
 
   if (!hideOwner) {
@@ -1356,6 +1368,19 @@ function filterGroups({
         { value: "sub", label: "ใบงาน SUB", hint: "จ่ายให้ทีม outsource", n: kindCount("sub") },
       ],
     });
+  // ใบงานเคลม — ใบที่ตอนปิดงานแจ้งเคลมอะไหล่เก่า (เจ้าของงานขอ ต.ค. 69) · ไม่มีใบเคลมในรายการเลยก็ไม่ต้องโชว์กลุ่มนี้
+  if (rows.some((r) => r.claimStatus))
+    groups.push({
+      key: "claim",
+      label: "ใบงานเคลม",
+      value: prefs.claim ?? "",
+      onPick: (v) => setPref({ claim: v as ListPrefs["claim"] }),
+      options: [
+        { value: "", label: "ทั้งหมด", n: claimCount("") },
+        { value: "any", label: "ใบงานแจ้งเคลม", hint: "ทุกสถานะเคลม", n: claimCount("any") },
+        ...(["PENDING", "APPROVED", "REJECTED"] as const).map((v) => ({ value: v, label: CLAIM_LABEL[v], n: claimCount(v) })),
+      ],
+    });
   groups.push({
     key: "btype",
     label: "สาขา",
@@ -1368,6 +1393,27 @@ function filterGroups({
     ],
   });
   return groups;
+}
+
+/**
+ * ป้าย "แจ้งเคลม" — ใบที่ตอนปิดงานส่งอะไหล่เก่าเคลม (เจ้าของงานขอ ต.ค. 69)
+ * สีม่วงของ Admin Spare Part ซึ่งเป็นคนตรวจ · ตีกลับเป็นแดง เพราะช่างต้องแก้แล้วปิดใหม่
+ */
+function ClaimBadge({ row }: { row: WorkOrderRow }) {
+  if (!row.claimStatus) return null;
+  const bad = row.claimStatus === "REJECTED";
+  const ok = row.claimStatus === "APPROVED";
+  return (
+    <View
+      style={[styles.claimBadge, bad && styles.claimBadgeBad, ok && styles.claimBadgeOk]}
+      accessibilityLabel={`ใบงานแจ้งเคลม ${CLAIM_LABEL[row.claimStatus]}`}
+    >
+      <Ionicons name="shield-checkmark-outline" size={11} color={bad ? colors.dangerInk : ok ? colors.successInk : colors.roleAdmin} />
+      <Text style={[styles.claimBadgeText, bad && { color: colors.dangerInk }, ok && { color: colors.successInk }]}>
+        แจ้งเคลม{bad ? " · ตีกลับ" : ok ? " · อนุมัติ" : ""}
+      </Text>
+    </View>
+  );
 }
 
 /** ป้าย "รอใคร" ในแถว/การ์ด — บทบาท + ชื่อหัวหน้าภาคหรือทีม */
@@ -1542,6 +1588,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
           <View style={styles.codeRow}>
             <Text style={styles.code}>{row.code}</Text>
             {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
+            <ClaimBadge row={row} />
           </View>
           <Text style={styles.td2}>{row.title}</Text>
         </View>
@@ -1621,6 +1668,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
+        <ClaimBadge row={row} />
         <View style={{ flex: 1 }} />
         <RolledBackBadge row={row} />
         <PartsOutBadge row={row} />
@@ -1732,7 +1780,11 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
   return (
     <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
       {groups.map((g) => (
-        <View key={g.key} style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]} accessibilityLabel={`หัวข้อ ${g.title}`}>
+        <View
+          key={g.key}
+          style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]}
+          accessibilityLabel={`หัวข้อ ${g.title}`}
+        >
           <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>{g.title}</Text>
           <Text style={styles.attnHint}>{g.hint}</Text>
           {g.items.map((r) => (
@@ -1800,6 +1852,10 @@ const styles = StyleSheet.create({
   attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
   attnTitleSup: { color: colors.primaryDark },
   attnTitleBad: { color: colors.danger },
+  claimBadge: { flexDirection: "row", alignItems: "center", gap: 3, borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.roleAdminSoft, borderWidth: 1, borderColor: colors.roleAdminLine },
+  claimBadgeBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
+  claimBadgeOk: { backgroundColor: colors.successSoft, borderColor: colors.successLine },
+  claimBadgeText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: colors.roleAdmin },
   attnHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   attnRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
   attnCode: { fontSize: 13.5, fontWeight: "700", color: colors.text },

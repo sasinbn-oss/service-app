@@ -106,6 +106,8 @@ echo
 echo "═══ ใครตรวจได้"
 GET $A "work-orders?status=INBOX" | J 'd.rows.some(r=>r.id==='$ID')?"in":"out"' | grep -q out && pass "แอดมินทั่วไปไม่เห็นในกล่องงาน" || fail "แอดมินทั่วไปเห็นในกล่องงาน"
 GET $PA "work-orders?status=INBOX" | J 'd.rows.some(r=>r.id==='$ID')?"in":"out"' | grep -q in && pass "Admin Spare Part เห็นในกล่องงาน" || fail "Admin Spare Part ไม่เห็นในกล่องงาน"
+# รายการใบงานติดสถานะเคลมรอบล่าสุดมาด้วย — ป้าย "แจ้งเคลม" และตัวกรอง "ใบงานเคลม" ในรายการ (ต.ค. 69)
+GET $A "work-orders?status=ALL" | J 'd.rows.find(r=>r.id==='$ID')?.claimStatus' | grep -q "^PENDING$" && pass "รายการใบงานบอกว่าแจ้งเคลม (รอตรวจ)" || fail "รายการไม่บอกสถานะเคลม"
 POST $A "work-orders/$ID/claim-review" '{"approve":true}' | grep -q "เฉพาะ Admin Spare Part" && pass "แอดมินทั่วไปอนุมัติเคลมไม่ได้" || fail "แอดมินทั่วไปอนุมัติได้"
 POST $A "work-orders/$ID/rollback" '{"toStage":"IN_PROGRESS","reason":"ทดสอบ"}' | grep -q "ตีกลับ" && pass "ย้อนขั้นจากรอตรวจเคลมไม่ได้ (ต้องตีกลับ)" || fail "ย้อนขั้นได้"
 
@@ -119,6 +121,7 @@ R=$(POST $PA "work-orders/$ID/claim-review" '{"approve":false,"reason":"วิ�
   && pass "ตีกลับแล้วผล สรุปงาน คนปิด และผู้เข้าปฏิบัติงานรอบเดิมยังอยู่ (ฐานข้อมูล)" || fail "ข้อมูลปิดงานเดิมหาย"
 [ "$(DB "select status||'|'||\"rejectReason\" from \"PartClaim\" where \"workOrderId\"=$ID")" = "REJECTED|วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่" ] \
   && pass "ใบเคลมบันทึกว่าถูกตีกลับพร้อมเหตุผล" || fail "แถวเคลมหลังตีกลับ"
+GET $A "work-orders?status=ALL" | J 'd.rows.find(r=>r.id==='$ID')?.claimStatus' | grep -q "^REJECTED$" && pass "รายการใบงานเปลี่ยนเป็นเคลมถูกตีกลับ (รอบล่าสุด)" || fail "รายการยังไม่เปลี่ยนสถานะเคลม"
 echo "$R" | J 'd.claims[0].rejectReason' | grep -q "ถ่ายใหม่" && pass "ใบงานส่งเหตุผลตีกลับให้หน้าจอช่าง" || fail "หน้าจอไม่เห็นเหตุผล"
 
 echo
