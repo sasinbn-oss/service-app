@@ -17,7 +17,7 @@ import { showAlert } from "../utils/alert";
 import { PickedFile, pickFile } from "../utils/filePicker";
 import { colors, radius, spacing } from "../theme";
 
-type Status = "NEW" | "IMPORTED" | "OPEN" | "ERROR";
+type Status = "NEW" | "IMPORTED" | "OPEN" | "ERROR" | "SKIPPED";
 interface Row {
   line: number;
   reportedAt: string | null;
@@ -37,6 +37,8 @@ interface Row {
   video: string | null;
   status: Status;
   reason: string | null;
+  /** เครื่องมีใบค้าง แต่แอดมินเลือกเปิดเพิ่ม (คนละเรื่อง) */
+  forced?: boolean;
   /** ใบที่ยังค้างของสาขานี้ทุกเครื่อง — ให้กดดูก่อนยืนยัน เผื่อเป็นเรื่องเดียวกันที่แจ้งมาทางอื่นแล้ว */
   branchOpen: OpenOrder[];
 }
@@ -52,7 +54,7 @@ interface OpenOrder {
 const OPEN_SHOWN = 5;
 interface Result {
   applied: boolean;
-  summary: { new: number; imported: number; open: number; error: number; created?: number };
+  summary: { new: number; imported: number; open: number; error: number; skipped: number; created?: number };
   created?: string[];
   rows: Row[];
 }
@@ -62,14 +64,22 @@ const STATUS: Record<Status, { label: string; fg: string; bg: string }> = {
   IMPORTED: { label: "นำเข้าแล้ว/ซ้ำ — ข้าม", fg: colors.textMuted, bg: colors.background },
   OPEN: { label: "มีใบค้างอยู่ — ข้าม", fg: colors.warningInk, bg: colors.warningSoft },
   ERROR: { label: "นำเข้าไม่ได้", fg: colors.dangerInk, bg: colors.dangerSoft },
+  SKIPPED: { label: "เอาออกแล้ว", fg: colors.textMuted, bg: colors.background },
 };
 // ปัญหาขึ้นก่อน แอดมินจะได้เห็นว่าต้องแก้อะไรโดยไม่ต้องเลื่อนผ่านแถวปกติเป็นร้อย
-const ORDER: Record<Status, number> = { ERROR: 0, OPEN: 1, NEW: 2, IMPORTED: 3 };
+// แถวที่เอาออกอยู่ที่เดิมในกลุ่มใบใหม่ — กดแล้วแถวไม่กระโดดหนีไปท้ายรายการ จะกดเอากลับก็หาเจอ
+const ORDER: Record<Status, number> = { ERROR: 0, OPEN: 1, NEW: 2, SKIPPED: 2, IMPORTED: 3 };
 
-async function send(file: PickedFile, apply: boolean) {
+/** skip = แถวที่เอาออก · force = แถวที่เครื่องมีใบค้างแต่เลือกเปิดเพิ่ม */
+type Picks = { skip: number[]; force: number[] };
+const NO_PICKS: Picks = { skip: [], force: [] };
+
+async function send(file: PickedFile, apply: boolean, picks: Picks) {
   const form = new FormData();
   form.append("file", file.blob, file.name);
   if (apply) form.append("apply", "true");
+  if (picks.skip.length) form.append("skip", picks.skip.join(","));
+  if (picks.force.length) form.append("force", picks.force.join(","));
   return (
     await api.post<Result>("/work-orders/import-form", form, {
       headers: { "Content-Type": "multipart/form-data" },
@@ -97,9 +107,13 @@ export default function RepairImportModal({
   const [preview, setPreview] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** แถวที่เอาออก / เลือกเปิดเพิ่ม — ส่งไปทั้งตอนดูตัวอย่างใหม่และตอนยืนยัน เซิร์ฟเวอร์คิดซ้ำ/ใบค้างใหม่ให้ */
+  const [picks, setPicks] = useState<Picks>(NO_PICKS);
+  const [refreshing, setRefreshing] = useState<number | null>(null);
 
   function close() {
     setFile(null);
+    setPicks(NO_PICKS);
     setPreview(null);
     setError(null);
     onClose();
@@ -111,13 +125,42 @@ export default function RepairImportModal({
     setFile(picked);
     setPreview(null);
     setError(null);
+    setPicks(NO_PICKS);
     setBusy(true);
     try {
-      setPreview(await send(picked, false));
+      setPreview(await send(picked, false, NO_PICKS));
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * เอาออก/เอากลับ หรือเลือกเปิดเพิ่ม/ไม่เปิด แล้วขอตัวอย่างใหม่ — แถวอื่นอาจเปลี่ยนตาม
+   * (เอาแถวแรกของเครื่องออก แถวหลังของเครื่องเดียวกันกลายเป็นใบใหม่) · แถวที่กดเปลี่ยนบนจอทันที ไม่ต้องรอเครือข่าย
+   */
+  async function toggle(line: number, list: keyof Picks, onStatus: Status, offStatus: Status) {
+    if (!file || !preview) return;
+    const has = picks[list].includes(line);
+    const next = { ...picks, [list]: has ? picks[list].filter((x) => x !== line) : [...picks[list], line] };
+    setPicks(next);
+    setRefreshing(line);
+    setPreview({
+      ...preview,
+      rows: preview.rows.map((r) => (r.line === line ? { ...r, status: has ? offStatus : onStatus, forced: list === "force" ? !has : r.forced } : r)),
+    });
+    try {
+      const fresh = await send(file, false, next);
+      // กดรัว ๆ — เอาเฉพาะคำตอบของการกดครั้งล่าสุด
+      setPicks((cur) => {
+        if (JSON.stringify(cur) === JSON.stringify(next)) setPreview(fresh);
+        return cur;
+      });
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setRefreshing((cur) => (cur === line ? null : cur));
     }
   }
 
@@ -126,12 +169,13 @@ export default function RepairImportModal({
     setBusy(true);
     setError(null);
     try {
-      const r = await send(file, true);
+      const r = await send(file, true, picks);
       showAlert(
         "นำเข้าใบแจ้งซ่อมแล้ว",
         `เปิดใบงานใหม่ ${r.summary.created ?? 0} ใบ — อยู่ขั้นแรก (หัวหน้าภาคระบุอะไหล่)` +
           (r.summary.open ? ` · ข้ามเครื่องที่มีใบค้าง ${r.summary.open}` : "") +
-          (r.summary.error ? ` · นำเข้าไม่ได้ ${r.summary.error}` : "")
+          (r.summary.error ? ` · นำเข้าไม่ได้ ${r.summary.error}` : "") +
+          (r.summary.skipped ? ` · เอาออก ${r.summary.skipped}` : "")
       );
       onDone();
       close();
@@ -159,9 +203,9 @@ export default function RepairImportModal({
               <Text style={fs.btnGhostText}>ยกเลิก</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[fs.btn, { flex: 2 }, (busy || !s?.new) && { opacity: 0.5 }]}
+              style={[fs.btn, { flex: 2 }, (busy || refreshing !== null || !s?.new) && { opacity: 0.5 }]}
               onPress={commit}
-              disabled={busy || !s?.new}
+              disabled={busy || refreshing !== null || !s?.new}
               accessibilityLabel="ยืนยันนำเข้าใบแจ้งซ่อม"
             >
               {busy ? <Spinner color="#fff" /> : <Text style={fs.btnText}>{s?.new ? `ยืนยัน · เปิดใบงาน ${s.new} ใบ` : "ไม่มีใบใหม่ให้เปิด"}</Text>}
@@ -193,12 +237,17 @@ export default function RepairImportModal({
             <Stat n={s.open} label="มีใบค้าง (ข้าม)" tone={STATUS.OPEN} />
             <Stat n={s.imported} label="นำเข้าแล้ว / แถวซ้ำ (ข้าม)" tone={STATUS.IMPORTED} />
             <Stat n={s.error} label="นำเข้าไม่ได้" tone={STATUS.ERROR} />
+            {s.skipped ? <Stat n={s.skipped} label="เอาออกเอง" tone={STATUS.SKIPPED} /> : null}
           </View>
           <View style={{ gap: spacing.xs }}>
             {rows.map((r) => {
               const st = STATUS[r.status];
               return (
-                <View key={r.line} style={[styles.row, r.status === "ERROR" && styles.rowBad]} accessibilityLabel={`แถว ${r.line} ${st.label}`}>
+                <View
+                  key={r.line}
+                  style={[styles.row, r.status === "ERROR" && styles.rowBad, r.status === "SKIPPED" && styles.rowOut]}
+                  accessibilityLabel={`แถว ${r.line} ${st.label}`}
+                >
                   <View style={styles.rowTop}>
                     <Text style={styles.lineNo}>แถว {r.line}</Text>
                     <Text style={styles.branch}>
@@ -222,6 +271,13 @@ export default function RepairImportModal({
                     <View style={[styles.badge, { backgroundColor: st.bg }]}>
                       <Text style={[styles.badgeText, { color: st.fg }]}>{st.label}</Text>
                     </View>
+                    <RowAction
+                      r={r}
+                      spinning={refreshing === r.line}
+                      disabled={busy}
+                      onSkip={() => toggle(r.line, "skip", "SKIPPED", "NEW")}
+                      onForce={() => toggle(r.line, "force", "NEW", "OPEN")}
+                    />
                   </View>
                   <Text style={styles.symptom} numberOfLines={2}>
                     {r.symptom}
@@ -265,6 +321,47 @@ export default function RepairImportModal({
   );
 }
 
+/**
+ * ปุ่มท้ายแถว: ใบใหม่ → เอาออก · เอาออกแล้ว → เอากลับ
+ * มีใบค้าง → เปิดเพิ่ม (คนละเรื่อง) · เลือกเปิดเพิ่มแล้ว → ไม่เปิด (กลับไปข้าม)
+ */
+function RowAction({
+  r,
+  spinning,
+  disabled,
+  onSkip,
+  onForce,
+}: {
+  r: Row;
+  spinning: boolean;
+  disabled: boolean;
+  onSkip: () => void;
+  onForce: () => void;
+}) {
+  const a =
+    r.status === "OPEN"
+      ? { text: "เปิดเพิ่ม (คนละเรื่อง)", icon: "add-circle-outline" as const, tone: colors.navy, on: onForce, label: `เปิดแถว ${r.line} เพิ่ม` }
+      : r.forced
+        ? { text: "ไม่เปิดเพิ่ม", icon: "arrow-undo-outline" as const, tone: colors.navy, on: onForce, label: `ไม่เปิดแถว ${r.line} เพิ่ม` }
+        : r.status === "NEW"
+          ? { text: "เอาออก", icon: "trash-outline" as const, tone: colors.dangerInk, on: onSkip, label: `เอาแถว ${r.line} ออก` }
+          : r.status === "SKIPPED"
+            ? { text: "เอากลับ", icon: "arrow-undo-outline" as const, tone: colors.navy, on: onSkip, label: `เอาแถว ${r.line} กลับ` }
+            : null;
+  if (!a) return null;
+  return (
+    <TouchableOpacity
+      style={[styles.actBtn, { borderColor: a.tone === colors.dangerInk ? colors.dangerLine : colors.borderStrong }]}
+      onPress={a.on}
+      disabled={disabled}
+      accessibilityLabel={a.label}
+    >
+      {spinning ? <Spinner color={colors.textMuted} size="small" /> : <Ionicons name={a.icon} size={14} color={a.tone} />}
+      <Text style={[styles.actText, { color: a.tone }]}>{a.text}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function Stat({ n, label, tone }: { n: number; label: string; tone: { fg: string; bg: string } }) {
   return (
     <View style={[styles.stat, { backgroundColor: tone.bg }]}>
@@ -283,6 +380,17 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   row: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, gap: 2 },
   rowBad: { borderColor: colors.dangerLine },
+  rowOut: { opacity: 0.55, borderStyle: "dashed" },
+  actBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  actText: { fontSize: 12, fontWeight: "700" },
   rowTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
   lineNo: { fontSize: 12, color: colors.textFaint, fontVariant: ["tabular-nums"] },
   branch: { fontSize: 14, fontWeight: "700", color: colors.text },
