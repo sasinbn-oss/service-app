@@ -76,6 +76,12 @@ const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Haier", "Maytag"];
 const MODEL_OTHER = "อื่นๆ";
 
 /**
+ * ประเภทงานที่เป็นอุปกรณ์ร้าน ไม่ใช่เครื่องซัก/อบ (เจ้าของงานเลือก ต.ค. 69) — ไม่ถามหมายเลขเครื่อง W/D รุ่น ขนาด ป้ายรุ่น
+ * เหลือแค่อาการกับรูป · ท่อลมร้อนไม่อยู่ในนี้ เพราะเป็นของเครื่องอบ ยังระบุ D ได้
+ */
+const EQUIPMENT_JOBS = new Set(["COIN_CHANGER", "WATER_PUMP", "DETERGENT", "WATER_HEATER"]);
+
+/**
  * ขนาดเครื่องเป็นกิโลกรัม — ค่าสำรองเผื่อโหลดตัวเลือกไม่ทัน เหมือนรายการรุ่น
  *
  * ต่างจากรุ่นคือพิมพ์เลขอื่นได้ ไม่ได้คุมให้เลือกเฉพาะในรายการ เพราะขนาดเป็น
@@ -172,6 +178,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    * เพราะเครื่องมาจากเคสอยู่แล้ว เหลือแค่อาการกับรูปที่ต้องกรอก
    */
   const [rows, setRows] = useState<MachineRow[]>([blankRow()]);
+  // อุปกรณ์ร้านเปิดได้ใบเดียว (ไม่มีเครื่องให้แยกใบ) — แถวที่สองขึ้นไปซ่อนไว้ ไม่ลบ สลับกลับมาเป็นงานเครื่องแล้วยังอยู่
+  const equipment = !fromBoard && EQUIPMENT_JOBS.has(jobType);
+  const shownRows = equipment ? rows.slice(0, 1) : rows;
 
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
   const [capacities, setCapacities] = useState<number[]>(FALLBACK_CAPACITIES);
@@ -415,6 +424,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     }
     if (!fromBoard && !branchCode.trim()) return "ต้องเลือกสาขา";
     if (fromBoard) return null;
+    // งานอุปกรณ์ร้านไม่มีเครื่อง — ใบเดียว ไม่ต้องตรวจหมายเลข/รุ่น
+    if (equipment) return null;
 
     const codes = rows.map((r) => r.code.trim().toUpperCase());
     if (codes.some((c) => !c) && rows.length > 1) {
@@ -471,12 +482,16 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             ...shared,
             ...contact,
             branchCode: branchCode.trim(),
-            machines: rows.map((r) => ({
-              code: r.code.trim().toUpperCase() || undefined,
-              model: resolvedModel(r) || null,
-              capacityKg: resolvedCapacity(r),
-              symptom: r.symptom.trim() || null,
-            })),
+            machines: shownRows.map((r) =>
+              equipment
+                ? { model: null, capacityKg: null, symptom: r.symptom.trim() || null }
+                : {
+                    code: r.code.trim().toUpperCase() || undefined,
+                    model: resolvedModel(r) || null,
+                    capacityKg: resolvedCapacity(r),
+                    symptom: r.symptom.trim() || null,
+                  }
+            ),
           });
 
       // ทางกระดานได้ใบเดียวและไม่มี orders ติดมา ทำให้เป็นรูปแบบเดียวกันก่อนใช้
@@ -493,15 +508,15 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
        * บอกให้ชัดว่ากี่ไฟล์ที่ไม่ขึ้น แล้วให้ไปแนบซ้ำในใบงานได้
        */
       let failed = 0;
-      const total = rows.reduce((sum, r) => sum + r.files.length + (r.nameplate ? 1 : 0), 0);
+      const total = shownRows.reduce((sum, r) => sum + r.files.length + (r.nameplate && !equipment ? 1 : 0), 0);
       let sent = 0;
-      for (const [i, row] of rows.entries()) {
+      for (const [i, row] of shownRows.entries()) {
         const target = orders[i];
         if (!target) break;
         // รูปป้ายรุ่นส่งก่อน เพราะเป็นรูปที่ช่วยคนสั่งอะไหล่มากที่สุด
         // ถ้าเน็ตหลุดกลางทางจะได้ไม่ใช่รูปที่หายไปเป็นอันแรก
         const queue: { file: PickedAttachment; role?: string }[] = [
-          ...(row.nameplate ? [{ file: row.nameplate, role: "NAMEPLATE" }] : []),
+          ...(row.nameplate && !equipment ? [{ file: row.nameplate, role: "NAMEPLATE" }] : []),
           ...row.files.map((file) => ({ file })),
         ];
         for (const item of queue) {
@@ -684,8 +699,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       </View>
 
       <View style={styles.card}>
-        <StepHead n={3} title="เครื่องและอาการ" />
-        {!fromBoard ? (
+        <StepHead n={3} title={equipment ? "อาการ" : "เครื่องและอาการ"} />
+        {!fromBoard && !equipment ? (
           <Text style={styles.stepDesc}>เปิดทีเดียวหลายเครื่องได้ ระบบแยกเป็นใบงานเครื่องละใบ</Text>
         ) : null}
         {/*
@@ -693,14 +708,15 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           เปิดสามเครื่องพร้อมกันแล้วใส่อาการเดียวกันทั้งสามคือข้อมูลที่ไม่จริง
           และไม่ช่วยหัวหน้าภาคที่ต้องระบุอะไหล่ให้แต่ละเครื่อง
         */}
-        {rows.map((row, i) => (
+        {shownRows.map((row, i) => (
           <React.Fragment key={row.key}>
           <MachineCard
             key={row.key}
             row={row}
             index={i}
-            total={rows.length}
+            total={shownRows.length}
             fromBoard={fromBoard}
+            equipment={equipment}
             busy={busy}
             models={models}
             capacities={capacities}
@@ -718,7 +734,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </React.Fragment>
         ))}
 
-        {!fromBoard ? (
+        {!fromBoard && !equipment ? (
           <TouchableOpacity
             style={styles.addRow}
             onPress={() => setRows((current) => [...current, blankRow()])}
@@ -956,6 +972,7 @@ function MachineCard({
   index,
   total,
   fromBoard,
+  equipment,
   busy,
   models,
   capacities,
@@ -968,6 +985,8 @@ function MachineCard({
   index: number;
   total: number;
   fromBoard: boolean;
+  /** งานอุปกรณ์ร้าน — ไม่มีหมายเลขเครื่อง รุ่น ขนาด ป้ายรุ่น */
+  equipment?: boolean;
   busy: string | null;
   models: string[];
   capacities: number[];
@@ -985,8 +1004,8 @@ function MachineCard({
   const badCode = code.length > 0 && !/^[WD]\d{1,4}$/.test(code);
 
   return (
-    <View style={[styles.machineCard, fromBoard && styles.machineCardFlat]}>
-      {!fromBoard ? (
+    <View style={[styles.machineCard, (fromBoard || equipment) && styles.machineCardFlat]}>
+      {!fromBoard && !equipment ? (
         <View style={styles.machineHead}>
           <Text style={styles.machineTitle}>
             {total > 1 ? `เครื่องที่ ${index + 1}` : "เครื่อง"}
@@ -1004,7 +1023,7 @@ function MachineCard({
         </View>
       ) : null}
 
-      {!fromBoard ? (
+      {!fromBoard && !equipment ? (
         <>
           <Text style={styles.subLabel}>หมายเลขเครื่อง</Text>
           <TextInput
