@@ -76,6 +76,7 @@ export default function PopupScreen({
   right,
   backLabel,
   width = 1040,
+  startMaximized = false,
   children,
 }: {
   title: React.ReactNode;
@@ -83,6 +84,8 @@ export default function PopupScreen({
   right?: React.ReactNode;
   backLabel?: string;
   width?: number;
+  /** เปิดมาขยายเต็มกรอบ (จอกว้างเท่านั้น) — ใบงานมีของให้อ่านเยอะ ขนาดปกติต้องเลื่อนตลอด */
+  startMaximized?: boolean;
   children: React.ReactNode;
 }) {
   const navigation = useNavigation();
@@ -132,8 +135,9 @@ export default function PopupScreen({
   );
 
   // ── ขยาย/ย่อ: ยืดจากขนาดปกติไปเต็มกรอบแบบสปริง (วิธีเดียวกับ AppModal) ──
-  // เปิดมาขนาดปกติเหมือน AppModal (เจ้าของงานขอกลับ ต.ค. 69 หลังลองแบบเปิดมาขยายเสมอ) กดขยายเองได้
-  const [max, setMax] = useState(false);
+  // ค่าเริ่มต้นเปิดมาขนาดปกติเหมือน AppModal (เจ้าของงานขอกลับ ต.ค. 69 หลังลองแบบเปิดมาขยายเสมอ) กดขยายเองได้
+  // ยกเว้นหน้าที่ขอ startMaximized — ใบงานเจ้าของงานขอให้เปิดมาจอใหญ่ (ปลาย ต.ค. 69) · แผ่นล่างบนมือถือไม่ขยาย
+  const [max, setMax] = useState(startMaximized && !sheet);
   const [resizing, setResizing] = useState(false);
   const grow = useRef(new Animated.Value(0)).current;
   const box = useRef({ w: 0, h: 0 });
