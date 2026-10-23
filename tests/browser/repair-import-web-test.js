@@ -66,6 +66,16 @@ const ExcelJS = require(path.join(__dirname, "../../backend/node_modules/exceljs
       : fail("กลับมาแล้วตัวอย่างหาย");
     const confirmText = async () =>
       (await page.getByLabel("ยืนยันนำเข้าใบแจ้งซ่อม").locator("visible=true").innerText()).trim();
+    // กดกล่องตัวเลข = กรองเฉพาะหมวดนั้น · กดซ้ำ = กลับมาทุกแถว
+    const rowVisible = async (n) => (await page.locator(`[aria-label^="แถว ${n} "]`).locator("visible=true").count()) > 0;
+    await page.getByLabel("ดูเฉพาะ มีใบค้าง (ข้าม)").locator("visible=true").click();
+    await page.waitForTimeout(800);
+    (await rowVisible(3)) && !(await rowVisible(2)) && (await vis(/แสดงเฉพาะ/, false).count())
+      ? pass("กดกล่อง มีใบค้าง → เหลือเฉพาะแถวที่มีใบค้าง")
+      : fail("กรองตามกล่องตัวเลขไม่ได้");
+    await page.getByLabel("ดูเฉพาะ มีใบค้าง (ข้าม)").locator("visible=true").click();
+    await page.waitForTimeout(800);
+    (await rowVisible(2)) && (await rowVisible(3)) ? pass("กดซ้ำ → กลับมาทุกแถว") : fail("กดซ้ำแล้วไม่กลับมาทุกแถว");
     (await confirmText()).includes("1 ใบ") ? pass("เริ่มต้น: เปิดใหม่ 1 ใบ (แถวเครื่องที่มีใบค้างถูกข้าม)") : fail(`ปุ่มยืนยัน: ${await confirmText()}`);
     await page.getByLabel("เอาแถว 2 ออก").locator("visible=true").click();
     await page.waitForTimeout(2500);

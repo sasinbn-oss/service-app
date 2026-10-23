@@ -110,11 +110,24 @@ export default function RepairImportModal({
   /** แถวที่เอาออก / เลือกเปิดเพิ่ม — ส่งไปทั้งตอนดูตัวอย่างใหม่และตอนยืนยัน เซิร์ฟเวอร์คิดซ้ำ/ใบค้างใหม่ให้ */
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [refreshing, setRefreshing] = useState<number | null>(null);
+  /**
+   * กดกล่องตัวเลขด้านบน = ดูเฉพาะแถวหมวดนั้น (เจ้าของงานขอ ต.ค. 69) · กดซ้ำ = ดูทั้งหมด
+   * แถวที่กดเปลี่ยนระหว่างกรองยังค้างอยู่บนจอ (stuck) — กด "เปิดเพิ่ม" ในหมวดมีใบค้างแล้วแถวหายไปทันที
+   * ดูเหมือนกดแล้วข้อมูลหาย และกดย้อนไม่ได้
+   */
+  const [only, setOnly] = useState<Status | null>(null);
+  const [stuck, setStuck] = useState<number[]>([]);
+  function pickOnly(st: Status) {
+    setOnly((cur) => (cur === st ? null : st));
+    setStuck([]);
+  }
 
   function close() {
     setFile(null);
     setPicks(NO_PICKS);
     setPreview(null);
+    setOnly(null);
+    setStuck([]);
     setError(null);
     onClose();
   }
@@ -124,6 +137,8 @@ export default function RepairImportModal({
     if (!picked) return;
     setFile(picked);
     setPreview(null);
+    setOnly(null);
+    setStuck([]);
     setError(null);
     setPicks(NO_PICKS);
     setBusy(true);
@@ -146,6 +161,7 @@ export default function RepairImportModal({
     const next = { ...picks, [list]: has ? picks[list].filter((x) => x !== line) : [...picks[list], line] };
     setPicks(next);
     setRefreshing(line);
+    if (only) setStuck((cur) => (cur.includes(line) ? cur : [...cur, line]));
     setPreview({
       ...preview,
       rows: preview.rows.map((r) => (r.line === line ? { ...r, status: has ? offStatus : onStatus, forced: list === "force" ? !has : r.forced } : r)),
@@ -187,7 +203,11 @@ export default function RepairImportModal({
   }
 
   const s = preview?.summary;
-  const rows = preview ? [...preview.rows].sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.line - b.line) : [];
+  const rows = preview
+    ? preview.rows
+        .filter((r) => !only || r.status === only || stuck.includes(r.line))
+        .sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.line - b.line)
+    : [];
   return (
     <AppModal
       visible={visible}
@@ -233,12 +253,31 @@ export default function RepairImportModal({
       {s ? (
         <>
           <View style={styles.stats}>
-            <Stat n={s.new} label="เปิดใบใหม่" tone={STATUS.NEW} />
-            <Stat n={s.open} label="มีใบค้าง (ข้าม)" tone={STATUS.OPEN} />
-            <Stat n={s.imported} label="นำเข้าแล้ว / แถวซ้ำ (ข้าม)" tone={STATUS.IMPORTED} />
-            <Stat n={s.error} label="นำเข้าไม่ได้" tone={STATUS.ERROR} />
-            {s.skipped ? <Stat n={s.skipped} label="เอาออกเอง" tone={STATUS.SKIPPED} /> : null}
+            {(
+              [
+                ["NEW", s.new, "เปิดใบใหม่"],
+                ["OPEN", s.open, "มีใบค้าง (ข้าม)"],
+                ["IMPORTED", s.imported, "นำเข้าแล้ว / แถวซ้ำ (ข้าม)"],
+                ["ERROR", s.error, "นำเข้าไม่ได้"],
+                ["SKIPPED", s.skipped, "เอาออกเอง"],
+              ] as const
+            ).map(([st, n, label]) =>
+              st === "SKIPPED" && !n && only !== st ? null : (
+                <Stat key={st} n={n} label={label} tone={STATUS[st]} on={only === st} dim={!!only && only !== st} onPress={() => pickOnly(st)} />
+              )
+            )}
           </View>
+          {only ? (
+            <View style={styles.filterBar}>
+              <Text style={styles.filterText}>
+                แสดงเฉพาะ "{STATUS[only].label}" {rows.length} แถว
+              </Text>
+              <TouchableOpacity onPress={() => setOnly(null)} accessibilityLabel="ดูทุกแถว">
+                <Text style={styles.filterAll}>ดูทั้งหมด {preview!.rows.length} แถว</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {only && rows.length === 0 ? <Text style={styles.empty}>ไม่มีแถวในหมวดนี้</Text> : null}
           <View style={{ gap: spacing.xs }}>
             {rows.map((r) => {
               const st = STATUS[r.status];
@@ -362,12 +401,32 @@ function RowAction({
   );
 }
 
-function Stat({ n, label, tone }: { n: number; label: string; tone: { fg: string; bg: string } }) {
+function Stat({
+  n,
+  label,
+  tone,
+  on,
+  dim,
+  onPress,
+}: {
+  n: number;
+  label: string;
+  tone: { fg: string; bg: string };
+  on: boolean;
+  dim: boolean;
+  onPress: () => void;
+}) {
   return (
-    <View style={[styles.stat, { backgroundColor: tone.bg }]}>
+    <TouchableOpacity
+      style={[styles.stat, { backgroundColor: tone.bg, borderColor: on ? tone.fg : "transparent" }, dim && { opacity: 0.5 }]}
+      onPress={onPress}
+      accessibilityLabel={`ดูเฉพาะ ${label}`}
+      accessibilityState={{ selected: on }}
+    >
       <Text style={[styles.statN, { color: tone.fg }]}>{n}</Text>
       <Text style={styles.statLabel}>{label}</Text>
-    </View>
+      {on ? <Ionicons name="funnel" size={13} color={tone.fg} style={styles.statIcon} /> : null}
+    </TouchableOpacity>
   );
 }
 
@@ -375,7 +434,19 @@ const styles = StyleSheet.create({
   lead: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginBottom: spacing.sm },
   error: { color: colors.danger, marginTop: spacing.sm },
   stats: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md, marginBottom: spacing.sm },
-  stat: { flexGrow: 1, flexBasis: 140, borderRadius: radius.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
+  stat: {
+    flexGrow: 1,
+    flexBasis: 140,
+    borderRadius: radius.md,
+    borderWidth: 2,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  statIcon: { position: "absolute", top: spacing.sm, right: spacing.sm },
+  filterBar: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
+  filterText: { fontSize: 13, fontWeight: "700", color: colors.text },
+  filterAll: { fontSize: 13, fontWeight: "700", color: colors.navy, textDecorationLine: "underline" },
+  empty: { fontSize: 13, color: colors.textMuted, paddingVertical: spacing.md, textAlign: "center" },
   statN: { fontSize: 22, lineHeight: 30, fontWeight: "700", fontVariant: ["tabular-nums"] },
   statLabel: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   row: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, gap: 2 },
