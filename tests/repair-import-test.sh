@@ -57,6 +57,8 @@ R2=$(IMP $A 1)
   && pass "นำเข้าไฟล์เดิมซ้ำ: ไม่เกิดใบซ้ำ (ฐานข้อมูลยังมี 4 ใบ)" || fail "นำเข้าซ้ำ: $(echo "$R2" | J 'JSON.stringify(d.summary)')"
 echo "$(curl -s "localhost:4000/api/work-orders?status=ALL&search=W$N" -H "$(H $A)" | J 'd.rows.find(r=>r.machineCode==="W'$N'")?.source')" | grep -q "^FORM$" \
   && pass "รายการใบงานบอกที่มา FORM (ป้ายฟอร์มแจ้งซ่อม)" || fail "source ในรายการ"
+echo "$R2" | J 'const o=d.rows[0].branchOpen; o.some(w=>w.machineCode==="W'$N'"&&/^WO-/.test(w.code)&&w.id>0)&&o.some(w=>w.machineCode===null)?"ok":"bad"' | grep -q ok \
+  && pass "แถวบอกใบค้างของสาขาเดียวกันทุกเครื่อง (มี id ให้กดเปิดดู)" || fail "branchOpen: $(echo "$R2" | J 'JSON.stringify(d.rows[0].branchOpen)')"
 
 # เก็บกวาด
 for id in $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null; done

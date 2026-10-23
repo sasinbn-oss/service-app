@@ -2058,20 +2058,43 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   const branchBy = new Map(branches.map((b) => [b.code, b]));
   const importedBy = new Map(imported.map((w) => [w.importKey!, w.code]));
   const open = await prisma.workOrder.findMany({
-    where: {
-      branchId: { in: branches.map((b) => b.id) },
-      machineId: { not: null },
-      status: { notIn: ["DONE", "CANCELLED"] },
+    where: { branchId: { in: branches.map((b) => b.id) }, status: { notIn: ["DONE", "CANCELLED"] } },
+    select: {
+      id: true,
+      code: true,
+      title: true,
+      status: true,
+      createdAt: true,
+      branch: { select: { code: true } },
+      machine: { select: { code: true } },
     },
-    select: { code: true, branch: { select: { code: true } }, machine: { select: { code: true } } },
+    orderBy: { createdAt: "desc" },
   });
-  const openBy = new Map(open.map((w) => [`${w.branch.code}|${w.machine!.code}`, w.code]));
+  const openBy = new Map(open.filter((w) => w.machine).map((w) => [`${w.branch.code}|${w.machine!.code}`, w.code]));
+  /**
+   * ใบที่ยังค้างของสาขาเดียวกัน (ทุกเครื่อง ทุกประเภทงาน) — แถวที่สาขาตรงแต่คนละเครื่องไม่ถูกข้าม
+   * แต่แอดมินควรเห็นว่าสาขานี้มีงานอะไรเปิดอยู่ และกดเข้าไปดูได้ก่อนยืนยัน — อาจเป็นเรื่องเดียวกันที่แจ้งคนละช่องทาง
+   * (เจ้าของงานขอ ต.ค. 69)
+   */
+  const branchOpen = new Map<string, { id: number; code: string; title: string; machineCode: string | null; statusLabel: string; createdAt: Date }[]>();
+  for (const w of open) {
+    const list = branchOpen.get(w.branch.code) ?? [];
+    list.push({
+      id: w.id,
+      code: w.code,
+      title: w.title,
+      machineCode: w.machine?.code ?? null,
+      statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+      createdAt: w.createdAt,
+    });
+    branchOpen.set(w.branch.code, list);
+  }
   // สาขากดส่งฟอร์มซ้ำ (ทุกช่องเหมือนกัน) — แถวหลังข้าม ไม่งั้นได้สองใบเรื่องเดียวกัน (เจอในไฟล์จริง ต.ค. 69)
   const seenKey = new Map<string, number>();
 
   const plan = rows.map((r) => {
     const branch = branchBy.get(r.branchCode);
-    const base = { ...r, branchName: branch?.name ?? null, title: formTitle(r) };
+    const base = { ...r, branchName: branch?.name ?? null, title: formTitle(r), branchOpen: branchOpen.get(r.branchCode) ?? [] };
     if (r.problem) return { ...base, status: "ERROR" as const, reason: r.problem, existing: null as string | null };
     if (!branch) return { ...base, status: "ERROR" as const, reason: `ไม่พบสาขา ${r.branchCode} ในระบบ`, existing: null };
     if (branch.cancelledAt) return { ...base, status: "ERROR" as const, reason: "สาขานี้ถูกยกเลิกแล้ว", existing: null };

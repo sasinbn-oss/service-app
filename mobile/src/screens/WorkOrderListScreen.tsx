@@ -40,7 +40,7 @@ import {
 } from "../components/FilterBar";
 import RepairImportModal from "../components/RepairImportModal";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useDocked } from "../components/SideMenu";
@@ -554,6 +554,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const byQuick = useCallback((r: WorkOrderRow) => !quick.size || QUICK.some((q) => quick.has(q.key) && q.test(r)), [quick]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [importing, setImporting] = useState(false);
+  const focused = useIsFocused();
   // ตัวกรองหัวคอลัมน์ (Excel) — ไม่จำข้ามการเปิดแอป ตั้งใจใช้ค้นเฉพาะกิจ จำไว้แล้วลืมจะงงว่าใบหายไปไหน
   const [colFilters, setColFilters] = useState<ColFilters>({});
   const [colSort, setColSort] = useState<{ key: ColKey; dir: SortDir } | null>(null);
@@ -1250,7 +1251,15 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </Animated.View>
       ) : null}
       {foldable ? <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} top={barsH + 8} /> : null}
-      {importing ? <RepairImportModal visible onClose={() => setImporting(false)} onDone={() => load()} /> : null}
+      {importing ? (
+        // ซ่อนตอนไปดูใบเดิม (ไม่ถอดทิ้ง) — กลับมาแล้วตัวอย่างที่อ่านไว้ยังอยู่
+        <RepairImportModal
+          visible={focused}
+          onClose={() => setImporting(false)}
+          onDone={() => load()}
+          onOpenOrder={(id) => navigation.navigate("WorkOrderDetail", { id })}
+        />
+      ) : null}
       <FilterSheet
         visible={sheetOpen && compact}
         onClose={() => setSheetOpen(false)}

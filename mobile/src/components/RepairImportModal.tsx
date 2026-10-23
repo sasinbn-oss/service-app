@@ -37,7 +37,19 @@ interface Row {
   video: string | null;
   status: Status;
   reason: string | null;
+  /** ใบที่ยังค้างของสาขานี้ทุกเครื่อง — ให้กดดูก่อนยืนยัน เผื่อเป็นเรื่องเดียวกันที่แจ้งมาทางอื่นแล้ว */
+  branchOpen: OpenOrder[];
 }
+interface OpenOrder {
+  id: number;
+  code: string;
+  title: string;
+  machineCode: string | null;
+  statusLabel: string;
+  createdAt: string;
+}
+// สาขาใหญ่มีใบค้างได้เป็นสิบ — โชว์ใบล่าสุดพอให้ตัดสินใจ ที่เหลือบอกเป็นจำนวน
+const OPEN_SHOWN = 5;
 interface Result {
   applied: boolean;
   summary: { new: number; imported: number; open: number; error: number; created?: number };
@@ -73,10 +85,13 @@ export default function RepairImportModal({
   visible,
   onClose,
   onDone,
+  onOpenOrder,
 }: {
   visible: boolean;
   onClose: () => void;
   onDone: () => void;
+  /** เปิดหน้ารายละเอียดใบเดิม — หน้าจอแม่ซ่อนหน้าต่างนี้ไว้ก่อน กลับมาแล้วตัวอย่างยังอยู่ ไม่ต้องเลือกไฟล์ใหม่ */
+  onOpenOrder: (id: number) => void;
 }) {
   const [file, setFile] = useState<PickedFile | null>(null);
   const [preview, setPreview] = useState<Result | null>(null);
@@ -215,6 +230,31 @@ export default function RepairImportModal({
                     {[r.contactName, r.contactPhone, r.photo ? "มีรูป" : null, r.video ? "มีวิดีโอ" : null].filter(Boolean).join(" · ")}
                   </Text>
                   {r.reason ? <Text style={[styles.reason, { color: st.fg }]}>{r.reason}</Text> : null}
+                  {r.status !== "ERROR" && r.branchOpen.length ? (
+                    <View style={styles.openWrap}>
+                      <Text style={styles.openHead}>ใบค้างที่สาขานี้ {r.branchOpen.length} ใบ — กดดูรายละเอียด:</Text>
+                      {r.branchOpen.slice(0, OPEN_SHOWN).map((o) => {
+                        const same = !!r.machineCode && o.machineCode === r.machineCode;
+                        return (
+                          <TouchableOpacity
+                            key={o.id}
+                            style={[styles.openChip, same && styles.openChipSame]}
+                            onPress={() => onOpenOrder(o.id)}
+                            accessibilityLabel={`ดูใบงาน ${o.code}`}
+                          >
+                            <Text style={[styles.openCode, same && { color: colors.warningInk }]}>{o.code}</Text>
+                            <Text style={styles.openText} numberOfLines={1}>
+                              {[o.machineCode ?? "ทั้งสาขา", o.title, o.statusLabel, day(o.createdAt)].join(" · ")}
+                            </Text>
+                            <Ionicons name="open-outline" size={13} color={colors.textMuted} />
+                          </TouchableOpacity>
+                        );
+                      })}
+                      {r.branchOpen.length > OPEN_SHOWN ? (
+                        <Text style={styles.openHead}>และอีก {r.branchOpen.length - OPEN_SHOWN} ใบ</Text>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               );
             })}
@@ -251,6 +291,23 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12.5, color: colors.textMuted },
   symptom: { fontSize: 13.5, lineHeight: 20, color: colors.text },
   reason: { fontSize: 12.5, fontWeight: "700" },
+  openWrap: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 4 },
+  openHead: { fontSize: 12, color: colors.textMuted },
+  openChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: "100%",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    backgroundColor: colors.background,
+  },
+  openChipSame: { borderColor: colors.warningInk, backgroundColor: colors.warningSoft },
+  openCode: { fontSize: 12, fontWeight: "700", color: colors.navy, fontVariant: ["tabular-nums"] },
+  openText: { fontSize: 12, color: colors.body, flexShrink: 1 },
   badge: { borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 1 },
   badgeText: { fontSize: 11.5, fontWeight: "700" },
 });
