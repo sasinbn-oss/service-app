@@ -11,12 +11,14 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Image,
+  Linking,
   Platform,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import TouchableOpacity from "./Tap";
+import type { FormLink } from "../utils/formLinks";
 import Spinner from "./Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
@@ -59,6 +61,7 @@ export default function WorkOrderAttachments({
   onLoaded,
   onAdded,
   inspection,
+  formLinks = [],
 }: {
   workOrderId: number;
   canEdit: boolean;
@@ -79,6 +82,8 @@ export default function WorkOrderAttachments({
    * active คือยังรอผลตรวจ (แนบได้ · บอกว่าขาดอะไร) ตรวจเสร็จแล้วกรอบเหลือไว้ให้หัวหน้าภาคดู
    */
   inspection?: { since: string | null; active: boolean };
+  /** รูป/วิดีโอที่สาขาแนบในฟอร์มแจ้งซ่อม — อยู่ใน SharePoint ดึงมาเก็บไม่ได้ จึงเป็นปุ่มเปิดลิงก์ (utils/formLinks.ts) */
+  formLinks?: FormLink[];
 }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Attachment[]>([]);
@@ -217,6 +222,26 @@ export default function WorkOrderAttachments({
         ) : null}
       </View>
 
+      {formLinks.length ? (
+        <View style={styles.formLinks}>
+          {formLinks.map((l) => (
+            <TouchableOpacity
+              key={l.url}
+              style={styles.formLink}
+              onPress={() => Linking.openURL(l.url)}
+              accessibilityLabel={`ดู${l.kind}จากฟอร์มแจ้งซ่อม`}
+            >
+              <Ionicons name={l.kind === "รูป" ? "image-outline" : "videocam-outline"} size={20} color={colors.primaryInk} />
+              <View style={{ flexShrink: 1 }}>
+                <Text style={styles.formLinkTitle}>{l.kind}จากฟอร์มแจ้งซ่อม</Text>
+                <Text style={styles.formLinkSub}>สาขาแนบมา · เปิดใน SharePoint (ต้องล็อกอินบัญชีบริษัท)</Text>
+              </View>
+              <Ionicons name="open-outline" size={15} color={colors.textMuted} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
       {showSlots && !loading ? (
         <>
           {inspection!.active ? (
@@ -251,7 +276,9 @@ export default function WorkOrderAttachments({
       ) : showSlots && others.length === 0 ? null : others.length === 0 ? (
         <View style={[styles.emptyBox, !canEdit && styles.emptyBoxPlain]}>
           <Text style={[styles.empty, styles.emptyCenter]}>
-            ยังไม่มีรูป — รูปหน้างานช่วยให้คนที่ไม่ได้ไปเห็นว่าเจออะไรจริง ๆ
+            {formLinks.length
+              ? "ยังไม่มีรูปที่แนบในระบบ — รูปจากฟอร์มอยู่ด้านบน"
+              : "ยังไม่มีรูป — รูปหน้างานช่วยให้คนที่ไม่ได้ไปเห็นว่าเจออะไรจริง ๆ"}
           </Text>
           {canEdit && !busy ? addButtons : null}
         </View>
@@ -316,6 +343,22 @@ export default function WorkOrderAttachments({
 }
 
 const styles = StyleSheet.create({
+  formLinks: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
+  formLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    flexGrow: 1,
+    flexBasis: 240,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.primarySoft,
+  },
+  formLinkTitle: { fontSize: 13.5, fontWeight: "700", color: colors.primaryInk },
+  formLinkSub: { fontSize: 11.5, color: colors.textMuted },
   progress: { borderRadius: radius.md, paddingVertical: 6, paddingHorizontal: spacing.sm, backgroundColor: colors.warningSoft },
   progressDone: { backgroundColor: colors.successSoft },
   progressText: { fontSize: 12, fontWeight: "700", color: colors.warningInk },
