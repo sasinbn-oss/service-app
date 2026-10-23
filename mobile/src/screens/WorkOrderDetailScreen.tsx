@@ -2134,7 +2134,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             label="เปิดโดย"
             value={`${order.createdByName ?? "—"} · ${formatDateTime(order.createdAt)}`}
           />
-          <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : "เปิดเอง"} />
+          <Row label="ที่มา" value={order.source === "OUTAGE" ? "เปิดจากกระดาน" : order.source === "FORM" ? "นำเข้าจากฟอร์มแจ้งซ่อม" : "เปิดเอง"} />
         </View>
       </View>
 

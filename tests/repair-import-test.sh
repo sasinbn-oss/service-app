@@ -1,0 +1,65 @@
+#!/bin/bash
+# ทดสอบ: นำเข้าใบแจ้งซ่อมจากไฟล์ฟอร์ม COCO (POST /work-orders/import-form) — เจ้าของงานขอ ต.ค. 69
+#   · ดูตัวอย่างไม่บันทึก · ประเภทงานในฟอร์มแปลงเป็นรหัสของระบบ · ช่องเครื่องที่ไม่ใช่ W/D ไม่ทำให้แถวตก
+#   · สาขาไม่มี = นำเข้าไม่ได้ · แถวส่งซ้ำ / เครื่องมีใบค้าง = ข้าม · บันทึกแล้วเช็คที่ฐานข้อมูล
+#   · นำเข้าไฟล์เดิมซ้ำไม่เกิดใบซ้ำ · ช่าง/หัวหน้าภาคนำเข้าไม่ได้
+cd "$(dirname "$0")/.."
+J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
+login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
+A=$(login A001); S=$(login S001)
+H() { echo "Authorization: Bearer $1"; }
+DB() { psql "${DATABASE_URL%%\?*}" -Atc "$1"; }
+pass() { echo "PASS $1"; }
+fail() { echo "FAIL $1"; FAILED=1; }
+
+# เครื่องเลขสูงที่ไม่ชนกับเทสต์อื่น — สุ่มต่อรอบ เผื่อรอบก่อนค้าง
+N=$((RANDOM % 800 + 900))
+X=$(mktemp --suffix=.xlsx)
+NODE_PATH=backend/node_modules node -e '
+  const E=require("exceljs"); const n=process.argv[1]; const wb=new E.Workbook(); const ws=wb.addWorksheet("Sheet1");
+  ws.addRow(["วันที่แจ้ง","รหัสสาขา","ประเภทงาน","เครื่อง","รุ่นของเครื่อง","ขนาดเครื่อง","อาการที่พบ","ผู้ติดต่อที่สาขา","เบอร์ติดต่อสาขา","ชื่อสถานที่","รูปภาพ","วิดีโอ "]);
+  const d=new Date(Date.UTC(2026,9,16));
+  ws.addRow([d,"C0006","CM","W"+n+" ","OASIS","13 Kg","ทดสอบนำเข้า เวลาไม่ลด","คุณกุ้ง","095-000-0000","สาขาทดสอบ",{text:"รูป",hyperlink:"https://example.com/p.jpg"},null]);
+  ws.addRow([d,"C0006","ตู้แลกเหรียญ","",null,null,"ทดสอบนำเข้า เหรียญไม่ออก","คุณกุ้ง","095-000-0000","สาขาทดสอบ",null,null]);
+  ws.addRow([d,"C0006","ระบบ IT","กล่องเกตเวย์",null,null,"ทดสอบนำเข้า ออนไลน์ไม่ได้","คุณกุ้ง","095-000-0000","สาขาทดสอบ",null,null]);
+  ws.addRow([d,"C0006","ตู้แลกเหรียญ","",null,null,"ทดสอบนำเข้า เหรียญไม่ออก","คุณกุ้ง","095-000-0000","สาขาทดสอบ",null,null]);
+  ws.addRow([d,"ZZ999","CM","W1","OASIS","10 Kg","ทดสอบนำเข้า สาขาไม่มี","ก","0","ไม่มี",null,null]);
+  ws.addRow([d,"C0006","ตุ้คอนโทรลปั้มดูดเข้าแท้งค์","",null,null,"ทดสอบนำเข้า ปั๊มเสียงดัง","คุณกุ้ง","095-000-0000","สาขาทดสอบ",null,null]);
+  wb.xlsx.writeFile(process.argv[2]);' "$N" "$X"
+
+IMP() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $1)" -F "file=@$X" ${2:+-F apply=true}; }
+BEFORE=$(DB "select count(*) from \"WorkOrder\" where source='FORM'")
+
+P=$(IMP $A)
+[ "$(echo "$P" | J 'JSON.stringify(d.summary)')" = '{"new":4,"imported":1,"open":0,"error":1}' ] \
+  && pass "ดูตัวอย่าง: เปิดใหม่ 4 · ซ้ำในไฟล์ 1 · สาขาไม่มี 1" || fail "สรุปตัวอย่าง: $(echo "$P" | J 'JSON.stringify(d.summary)||d.error')"
+[ "$(DB "select count(*) from \"WorkOrder\" where source='FORM'")" = "$BEFORE" ] && pass "ดูตัวอย่างไม่บันทึกอะไรลงฐานข้อมูล" || fail "ดูตัวอย่างแล้วมีใบงานเพิ่ม"
+[ "$(echo "$P" | J 'd.rows.map(r=>r.jobType).join(",")')" = "CM,COIN_CHANGER,IT,COIN_CHANGER,CM,WATER_PUMP" ] \
+  && pass "ประเภทงานในฟอร์มแปลงถูก (ตู้คอนโทรลปั้ม → ปั๊มน้ำ · ระบบ IT → IT)" || fail "ประเภทงาน: $(echo "$P" | J 'd.rows.map(r=>r.jobType).join(",")')"
+echo "$P" | J 'const r=d.rows[2]; r.status==="NEW"&&r.machineCode===null&&r.machineNote==="กล่องเกตเวย์"?"ok":"bad"' | grep -q ok \
+  && pass "ช่องเครื่องที่ไม่ใช่ W/D (กล่องเกตเวย์) ไม่ทำให้แถวตก — ไม่ผูกเครื่อง" || fail "แถวกล่องเกตเวย์: $(echo "$P" | J 'JSON.stringify(d.rows[2])')"
+echo "$P" | J 'd.rows[4].status==="ERROR"&&/ไม่พบสาขา ZZ999/.test(d.rows[4].reason)&&/ซ้ำกับแถว 3/.test(d.rows[3].reason)?"ok":"bad"' | grep -q ok \
+  && pass "สาขาไม่มีในระบบ = นำเข้าไม่ได้ · แถวส่งซ้ำบอกว่าซ้ำกับแถวไหน" || fail "เหตุผลแถวที่ข้าม"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:4000/api/work-orders/import-form -H "$(H $S)" -F "file=@$X")" = "403" ] \
+  && pass "หัวหน้าภาคนำเข้าไม่ได้" || fail "หัวหน้าภาคนำเข้าได้"
+
+R=$(IMP $A 1)
+[ "$(echo "$R" | J 'd.summary.created')" = "4" ] && pass "ยืนยันแล้วเปิดใบงาน 4 ใบ" || fail "ยืนยัน: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
+ROW=$(DB "select w.\"jobType\"||'|'||w.title||'|'||w.status||'|'||m.code||'|'||coalesce(m.model,'')||'|'||coalesce(m.\"capacityKg\"::text,'')||'|'||w.\"contactName\"||'|'||(w.detail like '%รูปจากฟอร์ม: https://example.com/p.jpg%') from \"WorkOrder\" w join \"Machine\" m on m.id=w.\"machineId\" where w.source='FORM' and m.code='W$N' and w.\"branchId\"=(select id from \"Branch\" where code='C0006')")
+[ "$ROW" = "CM|งาน CM|NEW|W$N|Oasis|13|คุณกุ้ง|true" ] && pass "ฐานข้อมูล: งาน CM ขั้นแรก เครื่อง W$N รุ่น Oasis 13 kg ผู้ติดต่อ + ลิงก์รูปในรายละเอียด" || fail "แถวเครื่อง: $ROW"
+EQ=$(DB "select string_agg(\"jobType\"||':'||coalesce(\"machineId\"::text,'-'), ',' order by id) from \"WorkOrder\" where source='FORM' and symptom like 'ทดสอบนำเข้า%' and \"machineId\" is null")
+[ "$EQ" = "COIN_CHANGER:-,IT:-,WATER_PUMP:-" ] && pass "ฐานข้อมูล: ตู้แลกเหรียญ / IT / ปั๊มน้ำ ไม่ผูกเครื่อง" || fail "แถวไม่ผูกเครื่อง: $EQ"
+[ "$(DB "select count(*) from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%' and detail like '%อุปกรณ์ตามที่แจ้ง: กล่องเกตเวย์%'")" = "1" ] \
+  && pass "ข้อความในช่องเครื่องเก็บไว้ในรายละเอียด" || fail "ไม่เก็บกล่องเกตเวย์"
+
+R2=$(IMP $A 1)
+[ "$(echo "$R2" | J 'd.summary.created+"|"+d.summary.imported')" = "0|5" ] && [ "$(DB "select count(*) from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'")" = "4" ] \
+  && pass "นำเข้าไฟล์เดิมซ้ำ: ไม่เกิดใบซ้ำ (ฐานข้อมูลยังมี 4 ใบ)" || fail "นำเข้าซ้ำ: $(echo "$R2" | J 'JSON.stringify(d.summary)')"
+echo "$(curl -s "localhost:4000/api/work-orders?status=ALL&search=W$N" -H "$(H $A)" | J 'd.rows.find(r=>r.machineCode==="W'$N'")?.source')" | grep -q "^FORM$" \
+  && pass "รายการใบงานบอกที่มา FORM (ป้ายฟอร์มแจ้งซ่อม)" || fail "source ในรายการ"
+
+# เก็บกวาด
+for id in $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null; done
+DB "delete from \"Machine\" where code='W$N' and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
+rm -f "$X"
+[ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"
