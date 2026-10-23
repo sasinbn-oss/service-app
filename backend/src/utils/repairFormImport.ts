@@ -190,11 +190,9 @@ export function formTitle(r: FormRow): string {
 
 /** รายละเอียดใบงาน — ที่มา + ลิงก์รูป/วิดีโอใน SharePoint (ดึงไฟล์มาเก็บเองไม่ได้ ต้องล็อกอินบัญชีบริษัท) */
 export function formDetail(r: FormRow): string {
-  const when = r.reportedAt
-    ? new Date(r.reportedAt).toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric" })
-    : null;
+  // ไม่มีบรรทัด "แจ้งผ่านฟอร์ม · วันที่ · สถานที่" แล้ว — ที่มาโชว์เป็น "นำเข้าจากฟอร์มแจ้งซ่อม" อยู่แล้ว
+  // เจ้าของงานเห็นแล้วว่ารก (ต.ค. 69) · ลิงก์รูป/วิดีโอหน้าใบงานแสดงเป็นปุ่มสั้น (DetailText)
   return [
-    `แจ้งผ่านฟอร์มแจ้งซ่อม COCO${when ? ` · ${when}` : ""}${r.place ? ` · ${r.place}` : ""}`,
     r.machineNote ? `อุปกรณ์ตามที่แจ้ง: ${r.machineNote}` : null,
     r.photo ? `รูปจากฟอร์ม: ${r.photo}` : null,
     r.video ? `วิดีโอจากฟอร์ม: ${r.video}` : null,

@@ -7,6 +7,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { machineTag } from "../utils/machine";
+import { splitFormDetail } from "../utils/formLinks";
 import {
   Image,
   Platform,
@@ -1105,6 +1106,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const stepNo = liveStages.findIndex((x) => x.value === order.status) + 1;
   const lastLog = [...order.logs].sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id)[0];
   // เครื่องหายจากไฟล์รายงานแล้ว แต่ใบยังไม่ปิด — ขึ้นทางลัดปิดใบงานตามแบบ
+  const formDetail = splitFormDetail(order.detail);
   const recovered = order.outageId !== null && !order.closedAt && !order.outageStillOpen;
 
   return (
@@ -1228,7 +1230,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             </View>
           ) : null}
         </View>
-        {order.detail ? <Text style={styles.detail}>{order.detail}</Text> : null}
+        {/* ลิงก์รูป/วิดีโอจากฟอร์มแจ้งซ่อมย้ายไปอยู่ในการ์ดรูปหน้างาน — ที่นี่เหลือแต่ข้อความ */}
+        {formDetail.text ? <Text style={styles.detail}>{formDetail.text}</Text> : null}
         {/*
           ใบที่ลิงก์กัน — ใบรออะไหล่กับใบเดิมเป็นงานเดียวกันที่แบ่งเป็นสองรอบ
           ต้องกระโดดไปมาได้ ไม่งั้นคนดูใบหนึ่งไม่รู้ว่าอีกครึ่งของงานอยู่ไหน
@@ -2031,6 +2034,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         workOrderId={order.id}
         canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
         reloadKey={filesKey}
+        formLinks={formDetail.links}
         onLoaded={setFiles}
         onAdded={load}
         inspection={
