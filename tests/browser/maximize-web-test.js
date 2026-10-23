@@ -1,6 +1,6 @@
-// ทดสอบ: หน้าต่างทุกบานที่มีปุ่มขยาย เปิดมาขนาดปกติ (เจ้าของงานขอกลับ ต.ค. 69 หลังลองแบบเปิดมาขยาย)
-//        · กดขยายได้ใหญ่ขึ้นจริง · กดย่อกลับได้ขนาดเดิม
-//        · ขยายไว้แล้วปิด เปิดใหม่กลับมาขนาดปกติ · ทั้งหน้าต่างใบงาน (PopupScreen) และฟอร์มเดี่ยว (AppModal) · มือถือ + จอคอม
+// ทดสอบ: หน้าต่างที่มีปุ่มขยาย เปิดมาขนาดปกติ (เจ้าของงานขอกลับ ต.ค. 69 หลังลองแบบเปิดมาขยาย)
+//        ยกเว้นหน้าต่างใบงานบนจอคอม เปิดมาขยาย (เจ้าของงานขอ ปลาย ต.ค. 69)
+//        · กดสลับขนาดได้จริง · กดกลับได้ขนาดเดิม · เปลี่ยนไว้แล้วปิด เปิดใหม่กลับมาขนาดเริ่มต้น · ทั้งหน้าต่างใบงาน (PopupScreen) และฟอร์มเดี่ยว (AppModal) · มือถือ + จอคอม
 const { chromium } = require("playwright");
 
 (async () => {
@@ -33,34 +33,42 @@ const { chromium } = require("playwright");
         }
         return best;
       }, title);
-    async function check(what, title, open, closeIt) {
+    /**
+     * startMax: หน้าต่างใบงานบนจอคอมเปิดมาขยาย (เจ้าของงานขอ ปลาย ต.ค. 69) — ที่เหลือเปิดมาขนาดปกติ
+     * ทุกแบบต้อง: ขยาย/ย่อสลับได้จริง ขนาดเปลี่ยนจริง และปิดแล้วเปิดใหม่กลับมาขนาดเริ่มต้นของมันเสมอ
+     */
+    async function check(what, title, open, closeIt, startMax = false) {
+      const [first, second] = startMax ? [shrinkBtn, growBtn] : [growBtn, shrinkBtn];
+      const atStart = async () => (await first().count()) > 0 && (await second().count()) === 0;
+      const startText = startMax ? "ขยายเต็มกรอบ" : "ขนาดปกติ";
       await open();
       await page.waitForTimeout(1500);
-      const small = await size(title);
-      (await growBtn().count()) > 0 && (await shrinkBtn().count()) === 0
-        ? pass(`${name} · ${what}: เปิดมาขนาดปกติ (${small?.w}×${small?.h})`)
-        : fail(`${name} · ${what}: เปิดมาแบบขยาย`);
-      await growBtn().click();
+      const a = await size(title);
+      (await atStart())
+        ? pass(`${name} · ${what}: เปิดมา${startText} (${a?.w}×${a?.h})`)
+        : fail(`${name} · ${what}: ไม่ได้เปิดมา${startText}`);
+      await first().click();
       await page.waitForTimeout(1200);
-      const big = await size(title);
-      small && big && small.h > 150 && (big.h > small.h || big.w > small.w) && (await shrinkBtn().count()) > 0
-        ? pass(`${name} · ${what}: กดขยายได้ใหญ่ขึ้น (${big.w}×${big.h})`)
-        : fail(`${name} · ${what}: ขยายแล้ว ${JSON.stringify(big)} จาก ${JSON.stringify(small)}`);
-      await shrinkBtn().click();
+      const b = await size(title);
+      const [small, big] = startMax ? [b, a] : [a, b];
+      small && big && small.h > 150 && (big.h > small.h || big.w > small.w) && (await second().count()) > 0
+        ? pass(`${name} · ${what}: สลับขนาดได้จริง (${small.w}×${small.h} ↔ ${big.w}×${big.h})`)
+        : fail(`${name} · ${what}: ขนาด ${JSON.stringify(a)} → ${JSON.stringify(b)}`);
+      await second().click();
       await page.waitForTimeout(1200);
       const again = await size(title);
-      again && Math.abs(again.h - small.h) < 4 && Math.abs(again.w - small.w) < 4
-        ? pass(`${name} · ${what}: กดย่อกลับเท่าเดิม`)
-        : fail(`${name} · ${what}: ย่อกลับได้ ${JSON.stringify(again)}`);
-      await growBtn().click();
+      again && Math.abs(again.h - a.h) < 4 && Math.abs(again.w - a.w) < 4
+        ? pass(`${name} · ${what}: กดกลับได้ขนาดเดิม`)
+        : fail(`${name} · ${what}: กดกลับได้ ${JSON.stringify(again)} จาก ${JSON.stringify(a)}`);
+      await first().click();
       await page.waitForTimeout(1000);
       await closeIt();
       await page.waitForTimeout(1500);
       await open();
       await page.waitForTimeout(1500);
-      (await growBtn().count()) > 0 && (await shrinkBtn().count()) === 0
-        ? pass(`${name} · ${what}: ขยายไว้แล้วปิด เปิดใหม่กลับมาขนาดปกติ`)
-        : fail(`${name} · ${what}: เปิดใหม่ยังขยายอยู่`);
+      (await atStart())
+        ? pass(`${name} · ${what}: เปลี่ยนขนาดไว้แล้วปิด เปิดใหม่กลับมา${startText}`)
+        : fail(`${name} · ${what}: เปิดใหม่ไม่ได้${startText}`);
       await closeIt();
       await page.waitForTimeout(1500);
     }
@@ -77,7 +85,8 @@ const { chromium } = require("playwright");
       return el ? el.innerText : null;
     });
     const closeBtn = () => page.getByLabel("ปิด", { exact: true }).locator("visible=true").last().click();
-    await check("หน้าต่างใบงาน", "ใบงานซ่อม", () => vis(code).first().click(), closeBtn);
+    // มือถือเป็นแผ่นเลื่อนจากล่าง ไม่เปิดมาขยาย
+    await check("หน้าต่างใบงาน", "ใบงานซ่อม", () => vis(code).first().click(), closeBtn, name === "จอคอม");
 
     await (name === "มือถือ" ? vis("Admin").last() : vis("ระบบหลังบ้าน").first()).click();
     await page.waitForTimeout(2000);

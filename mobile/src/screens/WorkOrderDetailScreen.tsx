@@ -872,7 +872,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   if (loading) {
     return (
-      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
         <View style={styles.centered}>
           <Spinner color={colors.primary} />
         </View>
@@ -882,7 +882,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   if (locked) {
     return (
-      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
         <View style={styles.centered} accessibilityLabel="ไม่มีสิทธิ์ดูใบงานนี้">
           <View style={styles.lockIcon}>
             <Ionicons name="lock-closed" size={22} color={colors.textMuted} />
@@ -902,7 +902,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   if (error || !order) {
     return (
-      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม">
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error ?? "ไม่พบใบงานนี้"}</Text>
         </View>
@@ -1112,6 +1112,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       title={order.code}
       subtitle="ใบงานซ่อม"
       backLabel={`ใบงาน ${order.code}`}
+      startMaximized
       right={
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           {user?.superAdmin ? (
