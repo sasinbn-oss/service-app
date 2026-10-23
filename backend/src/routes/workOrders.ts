@@ -26,6 +26,7 @@ import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
+import { EQUIPMENT_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
   buildObjectKey,
   deleteObject,
@@ -2023,6 +2024,156 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       machineCode: r.machine?.code ?? null,
     })),
   });
+});
+
+/**
+ * นำเข้าใบแจ้งซ่อมจากไฟล์ฟอร์ม COCO (Microsoft Forms → .xlsx) — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69)
+ *
+ * แบบเดียวกับนำเข้ารถ/รายชื่อ: ส่งไฟล์ครั้งแรกได้ตัวอย่าง (ไม่บันทึก) · ส่งไฟล์เดิมพร้อม apply=true ถึงบันทึก
+ * เซิร์ฟเวอร์อ่านไฟล์ใหม่ทุกครั้ง ไม่เชื่อรายการที่หน้าจอส่งกลับมา
+ *
+ * แต่ละแถวได้สถานะ:
+ * - NEW เปิดใบงานใหม่
+ * - IMPORTED แถวนี้นำเข้าไปแล้ว (importKey ซ้ำ) — นำเข้าไฟล์เดิม/ไฟล์ที่ต่อท้ายแถวใหม่ได้โดยไม่เกิดใบซ้ำ
+ * - OPEN เครื่องนี้มีใบงานค้างอยู่แล้ว — ไม่เปิดซ้ำ ช่างไปเครื่องเดียวกันสองใบคือสับสน (แอดมินเปิดเองได้ถ้าเป็นคนละเรื่อง)
+ * - ERROR สาขาไม่มีในระบบ / ข้อมูลในแถวไม่ครบ
+ */
+const formUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file"), async (req: AuthRequest, res) => {
+  if (!req.file) return res.status(400).json({ error: "ต้องแนบไฟล์ฟอร์มแจ้งซ่อม (.xlsx)" });
+  let rows: Awaited<ReturnType<typeof parseRepairForm>>;
+  try {
+    rows = await parseRepairForm(req.file.buffer);
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้" });
+  }
+  if (rows.length === 0) return res.status(400).json({ error: "ไฟล์ไม่มีรายการแจ้งซ่อม" });
+
+  // ถามทีเดียวทั้งไฟล์ — สาขา · แถวที่เคยนำเข้า · ใบที่ยังค้างของเครื่องในไฟล์
+  const codes = [...new Set(rows.map((r) => r.branchCode).filter(Boolean))];
+  const [branches, imported] = await Promise.all([
+    prisma.branch.findMany({ where: { code: { in: codes } }, select: { id: true, code: true, name: true, cancelledAt: true } }),
+    prisma.workOrder.findMany({ where: { importKey: { in: rows.map((r) => r.importKey) } }, select: { importKey: true, code: true } }),
+  ]);
+  const branchBy = new Map(branches.map((b) => [b.code, b]));
+  const importedBy = new Map(imported.map((w) => [w.importKey!, w.code]));
+  const open = await prisma.workOrder.findMany({
+    where: { branchId: { in: branches.map((b) => b.id) }, status: { notIn: ["DONE", "CANCELLED"] } },
+    select: {
+      id: true,
+      code: true,
+      title: true,
+      status: true,
+      createdAt: true,
+      branch: { select: { code: true } },
+      machine: { select: { code: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const openBy = new Map(open.filter((w) => w.machine).map((w) => [`${w.branch.code}|${w.machine!.code}`, w.code]));
+  /**
+   * ใบที่ยังค้างของสาขาเดียวกัน (ทุกเครื่อง ทุกประเภทงาน) — แถวที่สาขาตรงแต่คนละเครื่องไม่ถูกข้าม
+   * แต่แอดมินควรเห็นว่าสาขานี้มีงานอะไรเปิดอยู่ และกดเข้าไปดูได้ก่อนยืนยัน — อาจเป็นเรื่องเดียวกันที่แจ้งคนละช่องทาง
+   * (เจ้าของงานขอ ต.ค. 69)
+   */
+  const branchOpen = new Map<string, { id: number; code: string; title: string; machineCode: string | null; statusLabel: string; createdAt: Date }[]>();
+  for (const w of open) {
+    const list = branchOpen.get(w.branch.code) ?? [];
+    list.push({
+      id: w.id,
+      code: w.code,
+      title: w.title,
+      machineCode: w.machine?.code ?? null,
+      statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+      createdAt: w.createdAt,
+    });
+    branchOpen.set(w.branch.code, list);
+  }
+  // สาขากดส่งฟอร์มซ้ำ (ทุกช่องเหมือนกัน) — แถวหลังข้าม ไม่งั้นได้สองใบเรื่องเดียวกัน (เจอในไฟล์จริง ต.ค. 69)
+  const seenKey = new Map<string, number>();
+
+  const plan = rows.map((r) => {
+    const branch = branchBy.get(r.branchCode);
+    const base = { ...r, branchName: branch?.name ?? null, title: formTitle(r), branchOpen: branchOpen.get(r.branchCode) ?? [] };
+    if (r.problem) return { ...base, status: "ERROR" as const, reason: r.problem, existing: null as string | null };
+    if (!branch) return { ...base, status: "ERROR" as const, reason: `ไม่พบสาขา ${r.branchCode} ในระบบ`, existing: null };
+    if (branch.cancelledAt) return { ...base, status: "ERROR" as const, reason: "สาขานี้ถูกยกเลิกแล้ว", existing: null };
+    const done = importedBy.get(r.importKey);
+    if (done) return { ...base, status: "IMPORTED" as const, reason: `นำเข้าไปแล้ว (${done})`, existing: done };
+    const twin = seenKey.get(r.importKey);
+    if (twin) return { ...base, status: "IMPORTED" as const, reason: `ซ้ำกับแถว ${twin} ในไฟล์นี้ (ส่งฟอร์มซ้ำ)`, existing: null };
+    seenKey.set(r.importKey, r.line);
+    const key = r.machineCode ? `${r.branchCode}|${r.machineCode}` : null;
+    const busy = key ? openBy.get(key) : undefined;
+    if (busy) return { ...base, status: "OPEN" as const, reason: `เครื่องนี้มีใบงานค้างอยู่แล้ว (${busy})`, existing: busy };
+    // สองแถวในไฟล์เดียวกันเป็นเครื่องเดียวกัน — แถวหลังถือว่าซ้ำกับแถวแรกที่จะเปิด
+    if (key) openBy.set(key, `แถว ${r.line} ในไฟล์นี้`);
+    return { ...base, status: "NEW" as const, reason: null, existing: null };
+  });
+  const count = (s: string) => plan.filter((p) => p.status === s).length;
+  const summary = { new: count("NEW"), imported: count("IMPORTED"), open: count("OPEN"), error: count("ERROR") };
+
+  if (req.body?.apply !== "true") return res.json({ applied: false, summary, rows: plan });
+
+  /**
+   * เปิดทีละ 20 แถวต่อ transaction — ทั้งไฟล์ (เป็นร้อยใบ) ในก้อนเดียวชนเพดานเวลาของ Prisma บนฐานข้อมูลคนละ region
+   * ถ้าพังกลางทาง ก้อนที่บันทึกไปแล้วมี importKey อยู่ กดนำเข้าไฟล์เดิมอีกรอบได้ ไม่เกิดใบซ้ำ
+   */
+  const todo = plan.filter((p) => p.status === "NEW");
+  const createdCodes: string[] = [];
+  for (let i = 0; i < todo.length; i += 20) {
+    const chunk = todo.slice(i, i + 20);
+    const ids = await prisma.$transaction(
+      async (tx) => {
+        const out: number[] = [];
+        for (const r of chunk) {
+          const branch = branchBy.get(r.branchCode)!;
+          let machine: { id: number; model: string | null; capacityKg: number | null } | null = null;
+          if (r.machineCode && !EQUIPMENT_JOB_TYPES.has(r.jobType)) {
+            // เครื่องที่ยังไม่มีในระบบสร้างให้เลย — เหตุผลเดียวกับเปิดใบงานเอง (ไฟล์รายงานมีแต่เครื่องที่เคยดับ)
+            machine =
+              (await tx.machine.findFirst({
+                where: { branchId: branch.id, code: r.machineCode },
+                select: { id: true, model: true, capacityKg: true },
+              })) ??
+              (await tx.machine.create({
+                data: { branchId: branch.id, code: r.machineCode, type: machineTypeFromCode(r.machineCode)! },
+                select: { id: true, model: true, capacityKg: true },
+              }));
+            await rememberMachineSpec(tx, machine, { model: r.model, capacityKg: r.capacityKg });
+          }
+          const id = await createWorkOrder(
+            tx,
+            {
+              branchId: branch.id,
+              machineId: machine?.id ?? null,
+              outageId: null,
+              source: "FORM",
+              jobType: r.jobType,
+              title: r.title,
+              detail: formDetail(r),
+              priority: "NORMAL",
+              assignedToId: null,
+              scheduledAt: null,
+              symptom: r.symptom,
+              workStatus: null,
+              contactName: r.contactName,
+              contactPhone: r.contactPhone,
+            },
+            [],
+            req.auth!.userId
+          );
+          await tx.workOrder.update({ where: { id }, data: { importKey: r.importKey } });
+          out.push(id);
+        }
+        return out;
+      },
+      { timeout: 30_000, maxWait: 15_000 }
+    );
+    const made = await prisma.workOrder.findMany({ where: { id: { in: ids } }, select: { code: true }, orderBy: { id: "asc" } });
+    createdCodes.push(...made.map((m) => m.code));
+  }
+  res.json({ applied: true, summary: { ...summary, created: createdCodes.length }, created: createdCodes, rows: plan });
 });
 
 const fromOutageSchema = z.object({

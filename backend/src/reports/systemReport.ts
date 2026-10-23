@@ -289,7 +289,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
         w.branch.code, w.branch.name, w.symptom ?? "",
         w.workStatus ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus : WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
         w.branch.region ?? "", w.assignedTeam ?? w.branch.zone ?? "", w.machine?.code ?? "",
-        WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority, w.source === "OUTAGE" ? "จากกระดาน" : "เปิดเอง",
+        WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority, w.source === "OUTAGE" ? "จากกระดาน" : w.source === "FORM" ? "ฟอร์มแจ้งซ่อม" : "เปิดเอง",
         WORK_ORDER_STATUS_LABELS[w.status] ?? w.status, w.status === "DONE" ? thaiDateTime(w.closedAt) : "",
         w.status === "DONE" && w.closeResult ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult : "",
       ]);

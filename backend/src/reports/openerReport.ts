@@ -186,7 +186,7 @@ export async function buildOpenerReport(opts: {
       team: w.assignedTeam ?? w.branch.zone ?? "",
       machine: w.machine?.code ?? "",
       priority: WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority,
-      source: w.source === "OUTAGE" ? "จากกระดาน" : "เปิดเอง",
+      source: w.source === "OUTAGE" ? "จากกระดาน" : w.source === "FORM" ? "ฟอร์มแจ้งซ่อม" : "เปิดเอง",
       status: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
       closedAt: w.status === "DONE" ? w.closedAt : null,
       result: w.status === "DONE" && w.closeResult ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult : "",

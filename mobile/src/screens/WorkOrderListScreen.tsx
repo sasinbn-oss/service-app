@@ -38,8 +38,9 @@ import {
   isSet,
   pickedLabel,
 } from "../components/FilterBar";
+import RepairImportModal from "../components/RepairImportModal";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useDocked } from "../components/SideMenu";
@@ -552,6 +553,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     });
   const byQuick = useCallback((r: WorkOrderRow) => !quick.size || QUICK.some((q) => quick.has(q.key) && q.test(r)), [quick]);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const focused = useIsFocused();
   // ตัวกรองหัวคอลัมน์ (Excel) — ไม่จำข้ามการเปิดแอป ตั้งใจใช้ค้นเฉพาะกิจ จำไว้แล้วลืมจะงงว่าใบหายไปไหน
   const [colFilters, setColFilters] = useState<ColFilters>({});
   const [colSort, setColSort] = useState<{ key: ColKey; dir: SortDir } | null>(null);
@@ -969,6 +972,18 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </View>
           ) : null}
           <View style={{ flex: 1 }} />
+          {/* นำเข้าใบแจ้งซ่อมจากไฟล์ฟอร์ม COCO — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69) · บนเว็บ เลือกไฟล์จากคอมพิวเตอร์ */}
+          {user?.role === "ADMIN" && !user.partsAdmin && Platform.OS === "web" ? (
+            <TouchableOpacity
+              style={styles.importButton}
+              onPress={() => setImporting(true)}
+              activeOpacity={0.8}
+              accessibilityLabel="นำเข้าใบแจ้งซ่อมจากไฟล์"
+            >
+              <Ionicons name="cloud-upload-outline" size={17} color={colors.navy} />
+              {compact ? null : <Text style={styles.importButtonText}>นำเข้าจากไฟล์</Text>}
+            </TouchableOpacity>
+          ) : null}
           {/* Admin Spare Part ดูใบงานได้อย่างเดียว — เปิดใบงานไม่ได้ */}
           {user?.partsAdmin ? null : (
             <TouchableOpacity
@@ -1236,6 +1251,15 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </Animated.View>
       ) : null}
       {foldable ? <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} top={barsH + 8} /> : null}
+      {importing ? (
+        // ซ่อนตอนไปดูใบเดิม (ไม่ถอดทิ้ง) — กลับมาแล้วตัวอย่างที่อ่านไว้ยังอยู่
+        <RepairImportModal
+          visible={focused}
+          onClose={() => setImporting(false)}
+          onDone={() => load()}
+          onOpenOrder={(id) => navigation.navigate("WorkOrderDetail", { id })}
+        />
+      ) : null}
       <FilterSheet
         visible={sheetOpen && compact}
         onClose={() => setSheetOpen(false)}
@@ -1626,7 +1650,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <Opener row={row} />
         <Text style={styles.td2}>{formatDateTime(row.createdAt)}</Text>
         <View style={styles.srcTag}>
-          <Text style={styles.srcTagText}>{row.source === "OUTAGE" ? "จากกระดาน" : "เปิดเอง"}</Text>
+          <Text style={styles.srcTagText}>{row.source === "OUTAGE" ? "จากกระดาน" : row.source === "FORM" ? "ฟอร์มแจ้งซ่อม" : "เปิดเอง"}</Text>
         </View>
       </View>
       <View style={styles.colAction}>
@@ -1721,7 +1745,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <Opener row={row} />
         <Text style={styles.meta}>
           · {formatDateTime(row.createdAt)}
-          {row.source === "OUTAGE" ? " · จากกระดาน" : ""}
+          {row.source === "OUTAGE" ? " · จากกระดาน" : row.source === "FORM" ? " · ฟอร์มแจ้งซ่อม" : ""}
         </Text>
       </View>
 
@@ -1945,6 +1969,18 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.text,
   },
+  importButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+  },
+  importButtonText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.navy },
   addButton: {
     flexDirection: "row",
     alignItems: "center",
