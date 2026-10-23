@@ -1,7 +1,8 @@
 // ทดสอบ: นำเข้าใบแจ้งซ่อมจากไฟล์ — ตัวอย่างบอกใบค้างของสาขาเดียวกัน กดเข้าไปดูใบเดิมได้ (เจ้าของงานขอ ต.ค. 69)
 //   · แถวสาขา D0012 เครื่องใหม่ (ไม่ถูกข้าม) แต่สาขามีใบค้าง → ขึ้นรายการใบค้างพร้อมรหัส
 //   · กดรหัส → ไปหน้ารายละเอียดใบนั้น · กลับมา → ตัวอย่างที่อ่านไว้ยังอยู่ ไม่ต้องเลือกไฟล์ใหม่
-//   · ดูตัวอย่างอย่างเดียว ไม่บันทึกอะไร — ไม่มีอะไรต้องเก็บกวาด
+//   · เอาแถวออก → ปุ่มยืนยันลดจำนวน · แถวที่เครื่องมีใบค้าง กดเปิดเพิ่ม (คนละเรื่อง) → นับเป็นใบใหม่
+//   · ดูตัวอย่างอย่างเดียว ไม่กดยืนยัน — ไม่มีอะไรต้องเก็บกวาด
 const { chromium } = require("playwright");
 const os = require("os");
 const path = require("path");
@@ -17,6 +18,8 @@ const ExcelJS = require(path.join(__dirname, "../../backend/node_modules/exceljs
   const ws = wb.addWorksheet("Sheet1");
   ws.addRow(["วันที่แจ้ง", "รหัสสาขา", "ประเภทงาน", "เครื่อง", "รุ่นของเครื่อง", "ขนาดเครื่อง", "อาการที่พบ", "ผู้ติดต่อที่สาขา", "เบอร์ติดต่อสาขา", "ชื่อสถานที่", "รูปภาพ", "วิดีโอ"]);
   ws.addRow([new Date(), "D0012", "CM", "W998", "OASIS", "13 Kg", "ทดสอบนำเข้าเว็บ เครื่องไม่ปั่น", "คุณทดสอบ", "090-000-0000", "สาขาทดสอบ", null, null]);
+  // W71 ที่ D0012 มีใบค้างอยู่ในข้อมูลทดสอบ — แถวนี้ถูกข้ามเป็นค่าเริ่มต้น
+  ws.addRow([new Date(), "D0012", "CM", "W71", "OASIS", "13 Kg", "ทดสอบนำเข้าเว็บ ประตูล็อค", "คุณทดสอบ", "090-000-0000", "สาขาทดสอบ", null, null]);
   await wb.xlsx.writeFile(file);
 
   const browser = await chromium.launch({
@@ -61,6 +64,20 @@ const ExcelJS = require(path.join(__dirname, "../../backend/node_modules/exceljs
     (await vis("ทดสอบนำเข้าเว็บ เครื่องไม่ปั่น").count()) && (await page.getByLabel("ยืนยันนำเข้าใบแจ้งซ่อม").locator("visible=true").count())
       ? pass("กลับมาแล้วตัวอย่างที่อ่านไว้ยังอยู่")
       : fail("กลับมาแล้วตัวอย่างหาย");
+    const confirmText = async () =>
+      (await page.getByLabel("ยืนยันนำเข้าใบแจ้งซ่อม").locator("visible=true").innerText()).trim();
+    (await confirmText()).includes("1 ใบ") ? pass("เริ่มต้น: เปิดใหม่ 1 ใบ (แถวเครื่องที่มีใบค้างถูกข้าม)") : fail(`ปุ่มยืนยัน: ${await confirmText()}`);
+    await page.getByLabel("เอาแถว 2 ออก").locator("visible=true").click();
+    await page.waitForTimeout(2500);
+    (await page.getByLabel("เอาแถว 2 กลับ").locator("visible=true").count()) && (await confirmText()).includes("ไม่มีใบใหม่")
+      ? pass("กดเอาออก → แถวเป็นเอาออกแล้ว ปุ่มยืนยันไม่มีใบให้เปิด")
+      : fail(`เอาออกไม่ได้: ${await confirmText()}`);
+    await page.getByLabel("เปิดแถว 3 เพิ่ม").locator("visible=true").click();
+    await page.waitForTimeout(2500);
+    (await vis(/เลือกเปิดเพิ่ม/, false).count()) && (await confirmText()).includes("1 ใบ")
+      ? pass("แถวที่เครื่องมีใบค้าง กดเปิดเพิ่ม (คนละเรื่อง) → นับเป็นใบใหม่")
+      : fail(`เปิดเพิ่มไม่ได้: ${await confirmText()}`);
+    await page.screenshot({ path: path.join(__dirname, "repair-import-picks.png") });
     errors.length ? fail(`page error: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
   } finally {
     await browser.close();

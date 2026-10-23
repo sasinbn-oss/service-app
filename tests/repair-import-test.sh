@@ -31,7 +31,7 @@ IMP() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $1)" 
 BEFORE=$(DB "select count(*) from \"WorkOrder\" where source='FORM'")
 
 P=$(IMP $A)
-[ "$(echo "$P" | J 'JSON.stringify(d.summary)')" = '{"new":4,"imported":1,"open":0,"error":1}' ] \
+[ "$(echo "$P" | J 'JSON.stringify(d.summary)')" = '{"new":4,"imported":1,"open":0,"error":1,"skipped":0}' ] \
   && pass "ดูตัวอย่าง: เปิดใหม่ 4 · ซ้ำในไฟล์ 1 · สาขาไม่มี 1" || fail "สรุปตัวอย่าง: $(echo "$P" | J 'JSON.stringify(d.summary)||d.error')"
 [ "$(DB "select count(*) from \"WorkOrder\" where source='FORM'")" = "$BEFORE" ] && pass "ดูตัวอย่างไม่บันทึกอะไรลงฐานข้อมูล" || fail "ดูตัวอย่างแล้วมีใบงานเพิ่ม"
 [ "$(echo "$P" | J 'd.rows.map(r=>r.jobType).join(",")')" = "CM,COIN_CHANGER,IT,COIN_CHANGER,CM,WATER_PUMP" ] \
@@ -59,6 +59,29 @@ echo "$(curl -s "localhost:4000/api/work-orders?status=ALL&search=W$N" -H "$(H $
   && pass "รายการใบงานบอกที่มา FORM (ป้ายฟอร์มแจ้งซ่อม)" || fail "source ในรายการ"
 echo "$R2" | J 'const o=d.rows[0].branchOpen; o.some(w=>w.machineCode==="W'$N'"&&/^WO-/.test(w.code)&&w.id>0)&&o.some(w=>w.machineCode===null)?"ok":"bad"' | grep -q ok \
   && pass "แถวบอกใบค้างของสาขาเดียวกันทุกเครื่อง (มี id ให้กดเปิดดู)" || fail "branchOpen: $(echo "$R2" | J 'JSON.stringify(d.rows[0].branchOpen)')"
+
+# เอาแถวออก / เปิดเพิ่มทั้งที่เครื่องมีใบค้าง (คนละเรื่อง) — เลือกในหน้าตัวอย่าง ส่งเป็นเลขแถว skip / force
+X2=$(mktemp --suffix=.xlsx)
+NODE_PATH=backend/node_modules node -e '
+  const E=require("exceljs"); const n=process.argv[1]; const wb=new E.Workbook(); const ws=wb.addWorksheet("Sheet1");
+  ws.addRow(["วันที่แจ้ง","รหัสสาขา","ประเภทงาน","เครื่อง","รุ่นของเครื่อง","ขนาดเครื่อง","อาการที่พบ","ผู้ติดต่อที่สาขา","เบอร์ติดต่อสาขา","ชื่อสถานที่"]);
+  const d=new Date(Date.UTC(2026,9,17));
+  ws.addRow([d,"C0006","CM","W"+n,"OASIS","13 Kg","ทดสอบนำเข้า ประตูล็อคเปิดไม่ได้","คุณกุ้ง","095-000-0000","สาขาทดสอบ"]);
+  ws.addRow([d,"C0006","ตู้แลกเหรียญ","",null,null,"ทดสอบนำเข้า เอาออกไม่ต้องเปิด","คุณกุ้ง","095-000-0000","สาขาทดสอบ"]);
+  wb.xlsx.writeFile(process.argv[2]);' "$N" "$X2"
+F() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file=@$X2" "$@"; }
+[ "$(F | J 'd.rows.map(r=>r.status).join(",")')" = "OPEN,NEW" ] \
+  && [ "$(F -F skip=3 | J 'JSON.stringify([d.summary.new,d.summary.skipped,d.summary.open,d.rows[1].status])')" = '[0,1,1,"SKIPPED"]' ] \
+  && pass "ดูตัวอย่าง: เอาแถว 3 ออก → นับเป็นเอาออก ไม่เปิด" || fail "skip: $(F -F skip=3 | J 'JSON.stringify(d.summary)')"
+FP=$(F -F force=2 -F skip=3)
+echo "$FP" | J 'const r=d.rows[0]; r.status==="NEW"&&r.forced&&/คนละเรื่อง/.test(r.reason)&&d.summary.new===1?"ok":"bad"' | grep -q ok \
+  && pass "เลือกเปิดเพิ่มแถวที่เครื่องมีใบค้าง → กลายเป็นใบใหม่ บอกว่าเลือกเอง" || fail "force: $(echo "$FP" | J 'JSON.stringify(d.rows[0])')"
+FA=$(F -F force=2 -F skip=3 -F apply=true)
+[ "$(echo "$FA" | J 'd.summary.created')" = "1" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" w join \"Machine\" m on m.id=w.\"machineId\" where w.source='FORM' and m.code='W$N' and w.\"branchId\"=(select id from \"Branch\" where code='C0006')")" = "2" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" where symptom='ทดสอบนำเข้า เอาออกไม่ต้องเปิด'")" = "0" ] \
+  && pass "ยืนยัน: เปิดเพิ่ม 1 ใบ (เครื่อง W$N มี 2 ใบ) · แถวที่เอาออกไม่ถูกเปิด (เช็คที่ฐานข้อมูล)" || fail "apply skip/force: $(echo "$FA" | J 'JSON.stringify(d.summary)')"
+rm -f "$X2"
 
 # เก็บกวาด
 for id in $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null; done

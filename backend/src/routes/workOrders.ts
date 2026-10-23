@@ -2091,6 +2091,25 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   }
   // สาขากดส่งฟอร์มซ้ำ (ทุกช่องเหมือนกัน) — แถวหลังข้าม ไม่งั้นได้สองใบเรื่องเดียวกัน (เจอในไฟล์จริง ต.ค. 69)
   const seenKey = new Map<string, number>();
+  /**
+   * แถวที่แอดมินกดเอาออกในหน้าตัวอย่าง (เลขแถวในไฟล์ คั่นด้วย ,) — เจ้าของงานขอ ต.ค. 69
+   * ส่งมาทั้งตอนดูตัวอย่างและตอนยืนยัน และคิดก่อนกันซ้ำ: แถวที่เอาออกไม่นับเป็น "แถวแรกของเครื่องนี้"
+   * ไม่งั้นเอาแถวแรกออกแล้ว แถวหลังของเครื่องเดียวกันยังถูกข้ามเพราะอ้างถึงแถวที่ไม่ได้เปิดแล้ว
+   */
+  const lines = (v: unknown) =>
+    new Set(
+      String(v ?? "")
+        .split(",")
+        .map((x) => Number(x))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    );
+  const skip = lines(req.body?.skip);
+  /**
+   * แถวที่เครื่องมีใบค้างอยู่ แต่แอดมินดูแล้วเป็นคนละเรื่อง (เช่นใบค้างคือเปลี่ยนสายน้ำ แถวนี้คือประตูล็อค)
+   * กดเลือกให้เปิดเพิ่มได้ — ค่าเริ่มต้นยังข้าม เพราะส่วนใหญ่คือสาขาแจ้งซ้ำเรื่องเดิม (เจ้าของงานขอ ต.ค. 69)
+   * แถวที่ซ้ำทุกช่อง (ส่งฟอร์มซ้ำ / นำเข้าแล้ว) เลือกไม่ได้ — คือเรื่องเดียวกันแน่ ๆ
+   */
+  const force = lines(req.body?.force);
 
   const plan = rows.map((r) => {
     const branch = branchBy.get(r.branchCode);
@@ -2102,16 +2121,27 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     if (done) return { ...base, status: "IMPORTED" as const, reason: `นำเข้าไปแล้ว (${done})`, existing: done };
     const twin = seenKey.get(r.importKey);
     if (twin) return { ...base, status: "IMPORTED" as const, reason: `ซ้ำกับแถว ${twin} ในไฟล์นี้ (ส่งฟอร์มซ้ำ)`, existing: null };
+    if (skip.has(r.line)) return { ...base, status: "SKIPPED" as const, reason: "เอาออกแล้ว — ไม่นำเข้า", existing: null };
     seenKey.set(r.importKey, r.line);
     const key = r.machineCode ? `${r.branchCode}|${r.machineCode}` : null;
     const busy = key ? openBy.get(key) : undefined;
-    if (busy) return { ...base, status: "OPEN" as const, reason: `เครื่องนี้มีใบงานค้างอยู่แล้ว (${busy})`, existing: busy };
+    if (busy && !force.has(r.line))
+      return { ...base, status: "OPEN" as const, reason: `เครื่องนี้มีใบงานค้างอยู่แล้ว (${busy})`, existing: busy, forced: false };
+    // เปิดเพิ่มแล้วไม่แทนที่ใบค้างเดิมใน openBy — แถวหลังของเครื่องเดียวกันยังอ้างถึงใบจริงที่ค้างอยู่
+    if (busy)
+      return { ...base, status: "NEW" as const, reason: `เลือกเปิดเพิ่ม — เครื่องนี้มีใบค้าง (${busy}) แต่คนละเรื่อง`, existing: busy, forced: true };
     // สองแถวในไฟล์เดียวกันเป็นเครื่องเดียวกัน — แถวหลังถือว่าซ้ำกับแถวแรกที่จะเปิด
     if (key) openBy.set(key, `แถว ${r.line} ในไฟล์นี้`);
     return { ...base, status: "NEW" as const, reason: null, existing: null };
   });
   const count = (s: string) => plan.filter((p) => p.status === s).length;
-  const summary = { new: count("NEW"), imported: count("IMPORTED"), open: count("OPEN"), error: count("ERROR") };
+  const summary = {
+    new: count("NEW"),
+    imported: count("IMPORTED"),
+    open: count("OPEN"),
+    error: count("ERROR"),
+    skipped: count("SKIPPED"),
+  };
 
   if (req.body?.apply !== "true") return res.json({ applied: false, summary, rows: plan });
 
