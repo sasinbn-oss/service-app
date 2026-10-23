@@ -16,6 +16,18 @@ echo "$OPT" | J 'd.machineCapacities.includes(10)&&d.machineCapacities.includes(
   && pass "มี 10 กับ 13 ตามที่สั่ง" || fail "ไม่มีขนาดที่สั่งไว้"
 
 echo
+echo "═══ ประเภทงานอุปกรณ์ร้าน (ตามฟอร์มแจ้งซ่อม COCO · ต.ค. 69)"
+echo "$OPT" | J '["COIN_CHANGER","WATER_PUMP","DETERGENT","HOT_AIR_DUCT","WATER_HEATER","OTHER"].every(v=>d.jobTypes.some(t=>t.value===v))&&d.jobTypes.find(t=>t.value==="COIN_CHANGER").label==="ตู้แลกเหรียญ"?"ok":"bad"' | grep -q ok \
+  && pass "ตัวเลือกมีตู้แลกเหรียญ ปั๊มน้ำ ตู้ขายน้ำยา ท่อลมร้อน เครื่องทำน้ำร้อน และยังมีอื่นๆ" || fail "ตัวเลือกประเภทงานไม่ครบ"
+EQ=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d '{"branchCode":"C0006","jobType":"COIN_CHANGER","priority":"NORMAL","machines":[{"model":null,"capacityKg":null,"symptom":"แลก 100 ออก 3 เหรียญ"}]}')
+EQID=$(echo "$EQ" | J 'd.orders?d.orders[0].id:d.id')
+ROW=$(psql "${DATABASE_URL%%\?*}" -Atc "select \"jobType\"||'|'||title||'|'||coalesce(\"machineId\"::text,'-')||'|'||coalesce(symptom,'') from \"WorkOrder\" where id=$EQID" 2>/dev/null)
+[ "$ROW" = "COIN_CHANGER|ตู้แลกเหรียญ|-|แลก 100 ออก 3 เหรียญ" ] \
+  && pass "เปิดใบตู้แลกเหรียญโดยไม่มีเครื่อง: หัวข้อตั้งให้เอง ไม่ผูกเครื่อง (ฐานข้อมูล)" || fail "ใบอุปกรณ์ร้าน: $ROW"
+curl -s -X DELETE "localhost:4000/api/work-orders/$EQID" -H "$(H $A)" >/dev/null
+
+echo
 echo "═══ เปิดใบงานพร้อมขนาด"
 WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactName":"คุณสมหญิง","contactPhone":"0812345678","machines":[{"code":"W41","model":"Huebsch","capacityKg":13,"symptom":"น้ำไม่เข้า"},{"code":"D41","model":"Haier","capacityKg":25,"symptom":"ไม่ร้อน"}]}')
