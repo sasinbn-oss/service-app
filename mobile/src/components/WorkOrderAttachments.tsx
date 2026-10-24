@@ -229,11 +229,11 @@ export default function WorkOrderAttachments({
               key={l.url}
               style={styles.formLink}
               onPress={() => Linking.openURL(l.url)}
-              accessibilityLabel={`ดู${l.kind}จากฟอร์มแจ้งซ่อม`}
+              accessibilityLabel={`ดู${l.label}`}
             >
               <Ionicons name={l.kind === "รูป" ? "image-outline" : "videocam-outline"} size={20} color={colors.primaryInk} />
               <View style={{ flexShrink: 1 }}>
-                <Text style={styles.formLinkTitle}>{l.kind}จากฟอร์มแจ้งซ่อม</Text>
+                <Text style={styles.formLinkTitle}>{l.label}</Text>
                 <Text style={styles.formLinkSub}>สาขาแนบมา · เปิดใน SharePoint (ต้องล็อกอินบัญชีบริษัท)</Text>
               </View>
               <Ionicons name="open-outline" size={15} color={colors.textMuted} />
@@ -349,7 +349,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
     flexGrow: 1,
-    flexBasis: 240,
+    flexBasis: 220,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
