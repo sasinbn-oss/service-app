@@ -97,13 +97,21 @@ function getClient(): { client: S3Client; bucket: string } {
  */
 export function safeName(name: string): string {
   const base = name.trim().split(/[\\/]/).pop() || "file";
-  const cleaned = base
+  /**
+   * อักษร ASCII เท่านั้น — Supabase Storage ไม่รับ key ที่มีอักษรไทย ("Invalid key")
+   * เดิมเปิดให้อักษรไทยผ่าน เครื่องทดสอบ (mock S3) รับ แต่ของจริงอัปไม่ผ่าน
+   * เจอจริง 26 ต.ค. 69: รูปจากฟอร์มแจ้งซ่อม (ชื่อ "ฟอร์มแจ้งซ่อม-แถวN.jpg") ไม่เข้าใบงานสักรูป
+   * ชื่อไทยที่คนเห็นยังอยู่ครบใน fileName — key เป็นแค่ที่อยู่ในถัง
+   */
+  const dot = base.lastIndexOf(".");
+  const ext = dot > 0 ? base.slice(dot + 1).replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toLowerCase() : "";
+  const stem = (dot > 0 ? base.slice(0, dot) : base)
     .normalize("NFC")
-    .replace(/[^\w.\-฀-๿]+/g, "-")
+    .replace(/[^A-Za-z0-9_\-]+/g, "-")
     .replace(/-+/g, "-")
-    .slice(0, 80)
-    .replace(/^[-.]+|[-.]+$/g, "");
-  return cleaned || "file";
+    .slice(0, 70)
+    .replace(/^-+|-+$/g, "");
+  return `${stem || "file"}${ext ? `.${ext}` : ""}`;
 }
 
 /**

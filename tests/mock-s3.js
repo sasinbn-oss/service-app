@@ -26,6 +26,13 @@ const server = http.createServer((req, res) => {
           `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${BUCKET}</Name><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>`
         );
     } else if (req.method === "PUT") {
+      // Supabase Storage ไม่รับ key ที่มีอักษรนอก ASCII (เช่นภาษาไทย) — จำลองให้เหมือน ไม่งั้นเทสต์ผ่านแต่ของจริงอัปไม่ได้
+      // (เจอจริง 26 ต.ค. 69: รูปจากฟอร์มแจ้งซ่อมไม่เข้าใบงานสักรูป เพราะชื่อไฟล์ในถังเป็นไทย)
+      if (/[^\x20-\x7e]/.test(key)) {
+        return res
+          .writeHead(400, { "Content-Type": "application/xml" })
+          .end("<?xml version=\"1.0\"?><Error><Code>InvalidKey</Code><Message>Invalid key</Message></Error>");
+      }
       objects.set(key, Buffer.concat(chunks));
       res.writeHead(200, { ETag: '"x"' }).end();
     } else if (req.method === "DELETE") {

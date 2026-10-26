@@ -91,6 +91,9 @@ G() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F
 [ "$(G | J 'JSON.stringify([d.summary.photos,d.rows[0].photoInFile,d.rows[0].photo,JSON.stringify(d).length<20000])')" = '[1,true,null,true]' ] \
   && pass "ดูตัวอย่าง: เห็นรูปในเซลล์ 1 รูป · ช่องรูปไม่กลายเป็นข้อความ · ไม่ส่งตัวรูปกลับมา" || fail "พรีวิวรูปในเซลล์: $(G | J 'JSON.stringify(d.summary)')"
 G -F apply=true >/dev/null
+# key ในถังต้องเป็น ASCII — Supabase ไม่รับอักษรไทย (tests/mock-s3.js จำลองข้อนี้) · ชื่อไทยอยู่ใน fileName
+KEY=$(DB "select a.\"objectKey\"||'|'||a.\"fileName\" from \"WorkOrderAttachment\" a join \"WorkOrder\" w on w.id=a.\"workOrderId\" where w.symptom='ทดสอบนำเข้า รูปในเซลล์'")
+echo "$KEY" | grep -qP '^[\x20-\x7e]+\|ฟอร์มแจ้งซ่อม-แถว2\.jpg$' && pass "ไฟล์รูปในถังชื่อภาษาอังกฤษ (Supabase ไม่รับไทย) · ชื่อที่คนเห็นยังเป็นไทย" || fail "objectKey: $KEY"
 IMG=$(DB "select a.kind||'|'||a.\"sizeBytes\"||'|'||(a.thumbnail is not null)||'|'||(w.detail not like '%object Object%' or w.detail is null) from \"WorkOrderAttachment\" a join \"WorkOrder\" w on w.id=a.\"workOrderId\" where w.symptom='ทดสอบนำเข้า รูปในเซลล์' and a.\"fileName\" like 'ฟอร์มแจ้งซ่อม-%'")
 [ "$IMG" = "IMAGE|$JB|true|true" ] && pass "ยืนยัน: รูปในเซลล์แนบเข้าใบงานเป็นรูปจริง (ขนาดตรงกับที่ฝัง มีรูปย่อ) ไม่มี [object Object] ในรายละเอียด" || fail "แนบรูป: $IMG (คาด IMAGE|$JB|true|true)"
 DB "delete from \"WorkOrderAttachment\" where \"fileName\" like 'ฟอร์มแจ้งซ่อม-%' and \"workOrderId\"=(select id from \"WorkOrder\" where symptom='ทดสอบนำเข้า รูปในเซลล์')" >/dev/null

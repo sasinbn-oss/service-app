@@ -68,6 +68,7 @@ interface Result {
     photoFill?: number;
     created?: number;
     photosAttached?: number;
+    photosFailed?: number;
     photoFilled?: number;
   };
   created?: string[];
@@ -208,7 +209,9 @@ export default function RepairImportModal({
           (r.summary.error ? ` · นำเข้าไม่ได้ ${r.summary.error}` : "") +
           (r.summary.skipped ? ` · เอาออก ${r.summary.skipped}` : "") +
           (r.summary.photosAttached ? ` · แนบรูปจากไฟล์ ${r.summary.photosAttached} รูป` : "") +
-          (r.summary.photoFilled ? ` (เติมให้ใบเดิม ${r.summary.photoFilled} ใบ)` : "")
+          (r.summary.photoFilled ? ` (เติมให้ใบเดิม ${r.summary.photoFilled} ใบ)` : "") +
+          // อัปรูปไม่ผ่านต้องบอก — เดิมเงียบ คนนำเข้าเห็นว่าสำเร็จแต่ใบไม่มีรูป (26 ต.ค. 69)
+          (r.summary.photosFailed ? ` · แนบรูปไม่สำเร็จ ${r.summary.photosFailed} รูป — นำเข้าไฟล์เดิมอีกรอบเพื่อลองใหม่` : "")
       );
       onDone();
       close();
