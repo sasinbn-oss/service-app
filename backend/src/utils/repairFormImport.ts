@@ -64,7 +64,9 @@ export const EQUIPMENT_JOB_TYPES = new Set(["COIN_CHANGER", "WATER_PUMP", "DETER
 function modelFromForm(raw: string): string | null {
   const t = raw.trim();
   if (!t) return null;
-  const hit = MACHINE_MODELS.find((m) => m.toLowerCase() === t.toLowerCase());
+  // เทียบแบบไม่สนช่องว่าง/วงเล็บ — ฟอร์มเขียน "HUEBSCH TC" "Huebsch(TC)" ได้หลายแบบ ต้องลงชื่อเดียวกับปุ่มในแอป
+  const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const hit = MACHINE_MODELS.find((m) => key(m) === key(t));
   return hit ?? t.slice(0, 100);
 }
 

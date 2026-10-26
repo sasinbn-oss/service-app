@@ -657,6 +657,8 @@ export const MACHINE_MODELS = [
   "Oasis",
   "Oasis(TC)",
   "Huebsch",
+  // เจ้าของงานขอเพิ่ม ต.ค. 69 · ประกันนับแบบ Huebsch (3 ปี — จับคำว่า huebsch)
+  "Huebsch (TC)",
   "Haier",
   "Maytag",
 ] as const;
@@ -674,7 +676,8 @@ export const MACHINE_MODEL_OTHER = "OTHER";
  * ใช้รายการเดียวกันทั้งเครื่องซักและเครื่องอบ ไม่ได้แยกตามชนิด เพราะที่หน้างาน
  * คนอ่านเลขจากป้ายบนตัวเครื่อง ไม่ได้เลือกจากสเปกที่ควรจะเป็น
  */
-export const MACHINE_CAPACITIES_KG = [10, 13, 15, 18, 20, 25] as const;
+// 9 กับ 14 เจ้าของงานขอเพิ่ม ต.ค. 69 (มีเครื่องจริงในไฟล์ฟอร์มแจ้งซ่อม COCO)
+export const MACHINE_CAPACITIES_KG = [9, 10, 13, 14, 15, 18, 20, 25] as const;
 
 /** ขอบเขตที่รับได้ — กันพิมพ์พลาดอย่าง 100 หรือ 0 ไม่ได้อ้างสเปกจริงของรุ่นไหน */
 export const MACHINE_CAPACITY_MIN_KG = 5;
