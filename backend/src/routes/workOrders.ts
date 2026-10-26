@@ -1702,7 +1702,7 @@ const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
  * ตอนนี้ส่งก้อนที่ครบแล้วแอปใช้เลย (mobile/src/utils/freshOrder.ts) · ใบงานกับประวัติอ่านพร้อมกัน ไม่ต่อคิว
  */
 async function loadDetail(id: number) {
-  const [row, logs] = await Promise.all([
+  const [row, logs, , sups] = await Promise.all([
     prisma.workOrder.findUnique({ where: { id }, include: detailInclude }),
     prisma.workOrderLog.findMany({
       where: { workOrderId: id },
@@ -1711,13 +1711,26 @@ async function loadDetail(id: number) {
     }),
     // รายชื่อทีม outsource จำไว้ไม่เกินนาทีละครั้ง — shape() ใช้ตัดสินว่าเป็นใบงาน SUB ไหม
     freshOutsource(),
+    prisma.user.findMany({
+      where: { role: "SUPERVISOR", deletedAt: null },
+      select: { id: true, name: true, region: true, supervisedTeams: true },
+      orderBy: { name: "asc" },
+    }),
   ]);
-  return row ? { row, logs } : null;
+  if (!row) return null;
+  /**
+   * หัวหน้าภาคที่รับผิดชอบใบนี้ — กติกาเดียวกับกล่องงาน (ทีมมาก่อนภาค) โชว์ชื่อหลัง "ขั้นปัจจุบัน · หัวหน้าภาค"
+   * เดิมขึ้นแค่บทบาท คนอ่านใบไม่รู้ว่าต้องตามใคร (เจ้าของงานขอ ต.ค. 69)
+   */
+  const supervisors = withScopes(sups)
+    .filter((u) => coversWorkOrder(u.scope, row))
+    .map((u) => ({ id: u.id, name: u.name }));
+  return { row, logs, supervisors };
 }
 
 type Detail = NonNullable<Awaited<ReturnType<typeof loadDetail>>>;
 
-function detailBody({ row, logs }: Detail) {
+function detailBody({ row, logs, supervisors }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -1733,6 +1746,7 @@ function detailBody({ row, logs }: Detail) {
         ? { name: confirm.user?.name ?? null, at: confirm.createdAt }
         : null,
     // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
+    supervisors,
     rolledBack: activeRollback(row.status, logs),
     rollbackPrefill: rollbackPrefill(row.status, logs),
     logs: logs.map((l) => ({
