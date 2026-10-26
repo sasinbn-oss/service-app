@@ -14,6 +14,10 @@ OPT=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)")
 echo "$OPT" | J '"  ขนาด: "+d.machineCapacities.join(", ")+" · รับได้ "+d.machineCapacityRange.min+"-"+d.machineCapacityRange.max+" kg"'
 echo "$OPT" | J 'd.machineCapacities.includes(10)&&d.machineCapacities.includes(13)?"ok":"bad"' | grep -q ok \
   && pass "มี 10 กับ 13 ตามที่สั่ง" || fail "ไม่มีขนาดที่สั่งไว้"
+echo "$OPT" | J 'd.machineCapacities.includes(9)&&d.machineCapacities.includes(14)?"ok":"bad"' | grep -q ok \
+  && pass "มี 9 กับ 14 kg (เพิ่ม ต.ค. 69)" || fail "ไม่มี 9/14 kg"
+echo "$OPT" | J 'JSON.stringify(d.machineModels||d.models||[]).includes("Huebsch (TC)")?"ok":"bad"' | grep -q ok \
+  && pass "มีรุ่น Huebsch (TC)" || fail "ไม่มี Huebsch (TC): $(echo "$OPT" | head -c 0)"
 
 echo
 echo "═══ ประเภทงานอุปกรณ์ร้าน (ตามฟอร์มแจ้งซ่อม COCO · ต.ค. 69)"

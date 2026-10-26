@@ -72,7 +72,7 @@ interface KnownMachine {
  * เป็นตัวเลือกตายตัวเพราะต้องนับแยกได้ว่ารุ่นไหนเสียบ่อย และเวลาสั่งอะไหล่
  * ต้องรู้ว่ารุ่นอะไร ปล่อยให้พิมพ์เองจะได้ "Huebsch" "huebsch" ปนกัน
  */
-const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Haier", "Maytag"];
+const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Huebsch (TC)", "Haier", "Maytag"];
 const MODEL_OTHER = "อื่นๆ";
 
 /**
@@ -88,7 +88,7 @@ const EQUIPMENT_JOBS = new Set(["COIN_CHANGER", "WATER_PUMP", "DETERGENT", "WATE
  * ตัวเลขอยู่แล้ว เลข 17 ที่พิมพ์เองยังรวมยอดกับเลข 17 อื่นได้ ไม่เหมือนชื่อรุ่น
  * ที่พิมพ์เองแล้วได้ "Huebsch" กับ "huebsch" เป็นสองรุ่น
  */
-const FALLBACK_CAPACITIES = [10, 13, 15, 18, 20, 25];
+const FALLBACK_CAPACITIES = [9, 10, 13, 14, 15, 18, 20, 25];
 const CAPACITY_OTHER = "อื่นๆ";
 
 /** รุ่นที่จะส่งไปเซิร์ฟเวอร์ — ที่พิมพ์เองก็เป็นรุ่นเหมือนกัน */
@@ -720,6 +720,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             busy={busy}
             models={models}
             capacities={capacities}
+            knownMachines={knownMachines}
+            usedCodes={shownRows.filter((r) => r.key !== row.key).map((r) => r.code.trim().toUpperCase())}
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
@@ -976,6 +978,8 @@ function MachineCard({
   busy,
   models,
   capacities,
+  knownMachines = [],
+  usedCodes = [],
   onChange,
   onRemove,
   onAddFile,
@@ -990,6 +994,10 @@ function MachineCard({
   busy: string | null;
   models: string[];
   capacities: number[];
+  /** เครื่องของสาขาที่เลือก — กดเลือกได้แทนการพิมพ์ (เจ้าของงานขอ ต.ค. 69: "เครื่องไม่มีให้เลือกเลย") */
+  knownMachines?: KnownMachine[];
+  /** รหัสที่แถวอื่นเลือกไปแล้ว — ปุ่มจาง กันเปิดเครื่องเดียวกันสองใบในครั้งเดียว */
+  usedCodes?: string[];
   onChange: (patch: Partial<MachineRow>) => void;
   onRemove: () => void;
   onAddFile: (
@@ -1026,6 +1034,44 @@ function MachineCard({
       {!fromBoard && !equipment ? (
         <>
           <Text style={styles.subLabel}>หมายเลขเครื่อง</Text>
+          {knownMachines.length ? (
+            <>
+              {/*
+                เลือกจากเครื่องของสาขาก่อน — พิมพ์เองผิดง่าย (W1 กับ D1) และคนแจ้งฝั่งสาขาไม่รู้ว่าต้องพิมพ์รูปแบบไหน
+                กดแล้วล้างรุ่น/ขนาดเดิม ให้ตัวเติมอัตโนมัติด้านบนใส่ของเครื่องใหม่ (เปลี่ยนเครื่องแล้วรุ่นไม่ค้างของเครื่องก่อน)
+              */}
+              <View style={[styles.options, styles.machinePick]} accessibilityLabel={`เครื่องของสาขานี้ ${knownMachines.length} เครื่อง`}>
+                {[...knownMachines]
+                  .sort((a, b) => a.code.localeCompare(b.code, "en", { numeric: true }))
+                  .map((m) => {
+                    const on = row.code.trim().toUpperCase() === m.code;
+                    const used = !on && usedCodes.includes(m.code);
+                    return (
+                      <TouchableOpacity
+                        key={m.code}
+                        style={[styles.option, on && styles.optionOn, used && { opacity: 0.4 }]}
+                        onPress={() => onChange({ code: m.code, model: "", modelOther: "", capacity: "", capacityOther: "" })}
+                        disabled={used}
+                        activeOpacity={0.7}
+                        accessibilityLabel={`เลือกเครื่อง ${m.code}`}
+                        accessibilityState={{ selected: on, disabled: used }}
+                      >
+                        <Text style={[styles.optionText, on && styles.optionTextOn]}>
+                          {m.code}
+                          {m.model || m.capacityKg ? (
+                            <Text style={styles.machinePickSub}>
+                              {" "}
+                              · {[m.model, m.capacityKg ? `${m.capacityKg} kg` : null].filter(Boolean).join(" ")}
+                            </Text>
+                          ) : null}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+              </View>
+              <Text style={styles.machinePickHint}>เลือกจากเครื่องของสาขานี้ หรือพิมพ์เองถ้าเป็นเครื่องที่ยังไม่มีในรายการ</Text>
+            </>
+          ) : null}
           <TextInput
             style={[styles.input, badCode && styles.inputBad]}
             value={row.code}
@@ -1470,6 +1516,9 @@ const styles = StyleSheet.create({
   busyRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   busyText: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
   options: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  machinePick: { marginBottom: spacing.xs },
+  machinePickSub: { fontWeight: "400", fontSize: 12 },
+  machinePickHint: { fontSize: 12, lineHeight: 18, color: colors.textFaint, marginBottom: spacing.xs },
   option: {
     borderWidth: 1,
     borderColor: colors.border,
