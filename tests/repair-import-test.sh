@@ -31,7 +31,7 @@ IMP() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $1)" 
 BEFORE=$(DB "select count(*) from \"WorkOrder\" where source='FORM'")
 
 P=$(IMP $A)
-[ "$(echo "$P" | J 'JSON.stringify(d.summary)')" = '{"new":4,"imported":1,"open":0,"error":1,"skipped":0}' ] \
+[ "$(echo "$P" | J 'JSON.stringify(d.summary)')" = '{"new":4,"imported":1,"open":0,"error":1,"skipped":0,"photos":0,"photoFill":0}' ] \
   && pass "ดูตัวอย่าง: เปิดใหม่ 4 · ซ้ำในไฟล์ 1 · สาขาไม่มี 1" || fail "สรุปตัวอย่าง: $(echo "$P" | J 'JSON.stringify(d.summary)||d.error')"
 [ "$(DB "select count(*) from \"WorkOrder\" where source='FORM'")" = "$BEFORE" ] && pass "ดูตัวอย่างไม่บันทึกอะไรลงฐานข้อมูล" || fail "ดูตัวอย่างแล้วมีใบงานเพิ่ม"
 [ "$(echo "$P" | J 'd.rows.map(r=>r.jobType).join(",")')" = "CM,COIN_CHANGER,IT,COIN_CHANGER,CM,WATER_PUMP" ] \
@@ -83,8 +83,25 @@ FA=$(F -F force=2 -F skip=3 -F apply=true)
   && pass "ยืนยัน: เปิดเพิ่ม 1 ใบ (เครื่อง W$N มี 2 ใบ) · แถวที่เอาออกไม่ถูกเปิด (เช็คที่ฐานข้อมูล)" || fail "apply skip/force: $(echo "$FA" | J 'JSON.stringify(d.summary)')"
 rm -f "$X2"
 
+# รูปฝังในเซลล์ (ไฟล์ 26 ต.ค. 69) → แนบเป็นรูปจริง · ใบที่นำเข้าแล้วแต่ไม่มีรูป นำเข้าซ้ำแล้วเติมรูปให้
+X3=$(mktemp --suffix=.xlsx)
+M2=$((N + 50))  # เครื่องคนละตัวกับข้างบน — เครื่อง W$N มีใบค้างจากเทสต์ก่อนหน้า แถวจะถูกข้าม
+JB=$(NODE_PATH=backend/node_modules node tests/fixtures-incell-image.js "$X3" C0006 "W$M2" "ทดสอบนำเข้า รูปในเซลล์")
+G() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file=@$X3" "$@"; }
+[ "$(G | J 'JSON.stringify([d.summary.photos,d.rows[0].photoInFile,d.rows[0].photo,JSON.stringify(d).length<20000])')" = '[1,true,null,true]' ] \
+  && pass "ดูตัวอย่าง: เห็นรูปในเซลล์ 1 รูป · ช่องรูปไม่กลายเป็นข้อความ · ไม่ส่งตัวรูปกลับมา" || fail "พรีวิวรูปในเซลล์: $(G | J 'JSON.stringify(d.summary)')"
+G -F apply=true >/dev/null
+IMG=$(DB "select a.kind||'|'||a.\"sizeBytes\"||'|'||(a.thumbnail is not null)||'|'||(w.detail not like '%object Object%' or w.detail is null) from \"WorkOrderAttachment\" a join \"WorkOrder\" w on w.id=a.\"workOrderId\" where w.symptom='ทดสอบนำเข้า รูปในเซลล์' and a.\"fileName\" like 'ฟอร์มแจ้งซ่อม-%'")
+[ "$IMG" = "IMAGE|$JB|true|true" ] && pass "ยืนยัน: รูปในเซลล์แนบเข้าใบงานเป็นรูปจริง (ขนาดตรงกับที่ฝัง มีรูปย่อ) ไม่มี [object Object] ในรายละเอียด" || fail "แนบรูป: $IMG (คาด IMAGE|$JB|true|true)"
+DB "delete from \"WorkOrderAttachment\" where \"fileName\" like 'ฟอร์มแจ้งซ่อม-%' and \"workOrderId\"=(select id from \"WorkOrder\" where symptom='ทดสอบนำเข้า รูปในเซลล์')" >/dev/null
+[ "$(G | J 'd.summary.photoFill+"|"+d.summary.new')" = "1|0" ] && [ "$(G -F apply=true | J 'd.summary.photoFilled')" = "1" ] \
+  && [ "$(DB "select count(*) from \"WorkOrderAttachment\" where \"fileName\" like 'ฟอร์มแจ้งซ่อม-%' and \"workOrderId\"=(select id from \"WorkOrder\" where symptom='ทดสอบนำเข้า รูปในเซลล์')")" = "1" ] \
+  && [ "$(G | J 'd.summary.photoFill')" = "0" ] \
+  && pass "ใบที่นำเข้าแล้วแต่ไม่มีรูป: นำเข้าไฟล์เดิมซ้ำ → เติมรูปให้ 1 รูป · รอบถัดไปไม่เติมซ้ำ" || fail "เติมรูป: $(G | J 'JSON.stringify(d.summary)')"
+rm -f "$X3"
+
 # เก็บกวาด
 for id in $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null; done
-DB "delete from \"Machine\" where code='W$N' and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
+DB "delete from \"Machine\" where code in ('W$N','W$M2') and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
 rm -f "$X"
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

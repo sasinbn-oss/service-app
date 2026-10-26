@@ -8,6 +8,7 @@
  * ไฟล์ที่ไม่มีหัวคอลัมน์ "รหัสสาขา" กับ "อาการที่พบ" ถือว่าผิดไฟล์ ไม่เดาต่อ
  */
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import { createHash } from "crypto";
 import { JOB_TYPE_LABELS, MACHINE_MODELS, isValidMachineCode, normaliseMachineCode } from "./constants";
 
@@ -32,6 +33,8 @@ export interface FormRow {
   video: string | null;
   /** ลายนิ้วมือของแถว — นำเข้าไฟล์เดิมซ้ำ (หรือไฟล์ที่ต่อท้ายแถวใหม่) แล้วแถวเก่าไม่เกิดใบซ้ำ */
   importKey: string;
+  /** รูปที่ฝังอยู่ในช่อง "รูปภาพ" (รูปในเซลล์) — แนบเข้าใบงานเป็นรูปจริง ไม่ต้องไปเปิด SharePoint */
+  photoImage: FormImage | null;
   /** ปัญหาของแถวนี้เอง (ไม่ขึ้นกับฐานข้อมูล) — มีค่า = นำเข้าไม่ได้ */
   problem: string | null;
 }
@@ -78,6 +81,9 @@ function text(v: ExcelJS.CellValue): string {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return v.toISOString();
   if (typeof v === "object") {
+    // เซลล์ที่เป็นรูปฝัง (รูปในเซลล์ของ Excel) ExcelJS อ่านเป็นค่า error #VALUE! — ไม่ใช่ข้อความ
+    // เดิมหลุดเป็น "[object Object]" ลงรายละเอียดใบงาน (เจอจริง 26 ต.ค. 69) · ตัวรูปอ่านแยกที่ cellImages()
+    if ("error" in v) return "";
     if ("hyperlink" in v && typeof v.hyperlink === "string") return v.hyperlink;
     if ("text" in v && typeof v.text === "string") return v.text;
     if ("richText" in v && Array.isArray(v.richText)) return v.richText.map((r) => r.text).join("");
@@ -86,7 +92,7 @@ function text(v: ExcelJS.CellValue): string {
   return String(v).trim();
 }
 
-const HEADERS: Record<keyof Omit<FormRow, "line" | "jobType" | "importKey" | "problem" | "jobTypeRaw" | "machineNote"> | "jobTypeRaw", string[]> = {
+const HEADERS: Record<keyof Omit<FormRow, "line" | "jobType" | "importKey" | "problem" | "jobTypeRaw" | "machineNote" | "photoImage"> | "jobTypeRaw", string[]> = {
   reportedAt: ["วันที่แจ้ง"],
   branchCode: ["รหัสสาขา"],
   jobTypeRaw: ["ประเภทงาน"],
@@ -110,6 +116,11 @@ export async function parseRepairForm(buf: Buffer): Promise<FormRow[]> {
   }
   const ws = wb.worksheets[0];
   if (!ws) throw new Error("ไฟล์ไม่มีชีต");
+  // รูปในเซลล์อ่านพังก็ยังนำเข้าข้อความได้ — แค่ไม่มีรูป ดีกว่าทั้งไฟล์นำเข้าไม่ได้
+  const images = await cellImages(buf).catch((e) => {
+    console.error("[repair-import] อ่านรูปในเซลล์ไม่ได้", e);
+    return new Map<string, FormImage>();
+  });
 
   // หัวตารางอยู่แถวแรกที่มีคำว่า "รหัสสาขา" — ส่งออกจาก Forms อยู่แถว 1 แต่ไฟล์ที่คนแก้ต่ออาจมีแถวชื่อเรื่องข้างบน
   let headerRow = 0;
@@ -172,6 +183,7 @@ export async function parseRepairForm(buf: Buffer): Promise<FormRow[]> {
       contactPhone: get("contactPhone").trim().slice(0, 40) || null,
       place: get("place").trim() || null,
       photo: get("photo").trim() || null,
+      photoImage: col.photo ? images.get(`${colLetter(col.photo)}${r}`) ?? null : null,
       video: get("video").trim() || null,
       // วันที่ + สาขา + เครื่อง + อาการ — แถวเดียวกันในไฟล์ใหม่ (ที่ต่อท้ายแถวใหม่) ได้ค่าเดิมเสมอ
       importKey: createHash("sha1")
@@ -184,12 +196,12 @@ export async function parseRepairForm(buf: Buffer): Promise<FormRow[]> {
 }
 
 /** หัวข้อใบงาน — ประเภทที่ไม่รู้จักใช้ข้อความในไฟล์ (เหมือนเลือก "อื่นๆ" แล้วพิมพ์เอง) */
-export function formTitle(r: FormRow): string {
+export function formTitle(r: Omit<FormRow, "photoImage">): string {
   return r.jobType === "OTHER" ? r.jobTypeRaw.slice(0, 200) || "อื่นๆ" : JOB_TYPE_LABELS[r.jobType] ?? r.jobType;
 }
 
 /** รายละเอียดใบงาน — ที่มา + ลิงก์รูป/วิดีโอใน SharePoint (ดึงไฟล์มาเก็บเองไม่ได้ ต้องล็อกอินบัญชีบริษัท) */
-export function formDetail(r: FormRow): string {
+export function formDetail(r: Omit<FormRow, "photoImage">): string {
   // ไม่มีบรรทัด "แจ้งผ่านฟอร์ม · วันที่ · สถานที่" แล้ว — ที่มาโชว์เป็น "นำเข้าจากฟอร์มแจ้งซ่อม" อยู่แล้ว
   // เจ้าของงานเห็นแล้วว่ารก (ต.ค. 69) · ลิงก์รูป/วิดีโอหน้าใบงานแสดงเป็นปุ่มสั้น (DetailText)
   return [
@@ -199,4 +211,71 @@ export function formDetail(r: FormRow): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export interface FormImage {
+  data: Buffer;
+  mime: string;
+  ext: string;
+}
+
+function colLetter(n: number): string {
+  let s = "";
+  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+const MIME: Record<string, string> = { jpeg: "image/jpeg", jpg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
+
+/**
+ * รูปในเซลล์ (Excel 365 "วางในเซลล์") ของชีตแรก — คืน "K2" → ไฟล์รูป
+ *
+ * ไฟล์ฟอร์มแจ้งซ่อมบางรอบช่อง "รูปภาพ" เป็นรูปฝังแทนลิงก์ SharePoint (ไฟล์ 26 ต.ค. 69: 51 รูป)
+ * ExcelJS ไม่รู้จักรูปแบบนี้ เลยอ่าน XML เอง — เซลล์มี vm="N" → metadata.xml valueMetadata[N-1]
+ * → futureMetadata XLRICHVALUE → rdrichvalue.xml (ค่าแรก = ลำดับใน richValueRel.xml) → rels → xl/media/…
+ * รูปที่ Excel เก็บเป็นขนาดย่อ (ราว 10 KB) ไม่ใช่รูปเต็มจากมือถือ
+ */
+export async function cellImages(buf: Buffer): Promise<Map<string, FormImage>> {
+  const out = new Map<string, FormImage>();
+  const zip = await JSZip.loadAsync(buf);
+  const read = (p: string) => zip.file(p)?.async("string") ?? Promise.resolve(null);
+  const [meta, rv, rel, rels, wbRels, wbXml] = await Promise.all([
+    read("xl/metadata.xml"),
+    read("xl/richData/rdrichvalue.xml"),
+    read("xl/richData/richValueRel.xml"),
+    read("xl/richData/_rels/richValueRel.xml.rels"),
+    read("xl/_rels/workbook.xml.rels"),
+    read("xl/workbook.xml"),
+  ]);
+  if (!meta || !rv || !rel || !rels || !wbRels || !wbXml) return out;
+
+  // ชีตแรกตามลำดับใน workbook.xml (ตัวเดียวกับที่ ExcelJS ใช้)
+  const firstRid = wbXml.match(/<sheet\b[^>]*\br:id="([^"]+)"/)?.[1];
+  const sheetTarget = firstRid && wbRels.match(new RegExp(`<Relationship\\b[^>]*Id="${firstRid}"[^>]*Target="([^"]+)"`))?.[1];
+  const sheetXml = sheetTarget ? await read(`xl/${sheetTarget.replace(/^\/?xl\//, "")}`) : null;
+  if (!sheetXml) return out;
+
+  const blocks = (xml: string, tag: string) => xml.match(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g")) ?? [];
+  const section = (xml: string, tag: string) => xml.match(new RegExp(`<${tag}\\b[\\s\\S]*?</${tag}>`))?.[0] ?? "";
+  const future = blocks(section(meta, "futureMetadata"), "bk").map((b) => Number(b.match(/<xlrd:rvb i="(\d+)"/)?.[1]));
+  const valueMeta = blocks(section(meta, "valueMetadata"), "bk").map((b) => Number(b.match(/<rc [^>]*v="(\d+)"/)?.[1]));
+  const richValues = (rv.match(/<rv\b[^>]*>[\s\S]*?<\/rv>/g) ?? []).map((b) => Number(b.match(/<v>(\d+)<\/v>/)?.[1]));
+  const relIds = [...rel.matchAll(/<rel [^>]*r:id="([^"]+)"/g)].map((m) => m[1]);
+  const targets = new Map([...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].map((m) => [m[1], m[2]]));
+
+  const cache = new Map<string, FormImage | null>();
+  for (const m of sheetXml.matchAll(/<c\b[^>]*\br="([A-Z]+\d+)"[^>]*\bvm="(\d+)"/g)) {
+    const [, ref, vm] = m;
+    const target = targets.get(relIds[richValues[future[valueMeta[Number(vm) - 1]]]]);
+    if (!target) continue;
+    const path = `xl/${target.replace(/^\.\.\//, "")}`;
+    if (!cache.has(path)) {
+      const data = await zip.file(path)?.async("nodebuffer");
+      const ext = (path.split(".").pop() ?? "").toLowerCase();
+      cache.set(path, data && MIME[ext] ? { data, mime: MIME[ext], ext: ext === "jpeg" ? "jpg" : ext } : null);
+    }
+    const img = cache.get(path);
+    if (img) out.set(ref, img);
+  }
+  return out;
 }
