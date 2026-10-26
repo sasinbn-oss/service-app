@@ -2090,7 +2090,8 @@ const FORM_PHOTO_PREFIX = "ฟอร์มแจ้งซ่อม-";
 async function attachFormPhoto(workOrderId: number, code: string, status: string, img: FormImage, line: number, userId: number) {
   const fileName = `${FORM_PHOTO_PREFIX}แถว${line}.${img.ext}`;
   try {
-    const objectKey = buildObjectKey(code || `WO-${workOrderId}`, fileName);
+    // key ในถังเป็นภาษาอังกฤษ (Supabase ไม่รับอักษรไทย) — ชื่อไทยเก็บใน fileName ให้คนเห็น
+    const objectKey = buildObjectKey(code || `WO-${workOrderId}`, `form-row${line}.${img.ext}`);
     await uploadObject({ key: objectKey, body: img.data, contentType: img.mime });
     await prisma.$transaction(async (tx) => {
       await tx.workOrderAttachment.create({
@@ -2302,6 +2303,8 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   const createdCodes: string[] = [];
   const imageOf = new Map(rows.filter((r) => r.photoImage).map((r) => [r.line, r.photoImage!]));
   let photosAttached = 0;
+  // รูปที่อัปไม่สำเร็จต้องบอก — เดิมข้ามเงียบ ๆ คนนำเข้าเห็นว่าสำเร็จแต่ใบไม่มีรูป ไม่รู้ว่าพังตรงไหน
+  let photosFailed = 0;
   const filled: string[] = [];
   // ใบเดิมที่ยังไม่มีรูปจากฟอร์ม — แถวเดียวกันในไฟล์อาจซ้ำหลายแถว (ส่งฟอร์มซ้ำ) เติมครั้งเดียว
   for (const p of plan) {
@@ -2312,7 +2315,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     if (await attachFormPhoto(wo.id, wo.code, wo.status, img, p.line, req.auth!.userId)) {
       filled.push(wo.code);
       photosAttached++;
-    }
+    } else photosFailed++;
   }
   for (let i = 0; i < todo.length; i += 20) {
     const chunk = todo.slice(i, i + 20);
@@ -2368,12 +2371,14 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     // แนบรูปหลังบันทึกใบแล้ว (อัปไฟล์อยู่นอก transaction — ช้าและเป็นระบบอื่น) · id ตรงลำดับกับ chunk
     for (const [j, r] of chunk.entries()) {
       const img = imageOf.get(r.line);
-      if (img && (await attachFormPhoto(ids[j], made.find((m) => m.id === ids[j])?.code ?? "", "NEW", img, r.line, req.auth!.userId))) photosAttached++;
+      if (!img) continue;
+      if (await attachFormPhoto(ids[j], made.find((m) => m.id === ids[j])?.code ?? "", "NEW", img, r.line, req.auth!.userId)) photosAttached++;
+      else photosFailed++;
     }
   }
   res.json({
     applied: true,
-    summary: { ...summary, created: createdCodes.length, photosAttached, photoFilled: filled.length },
+    summary: { ...summary, created: createdCodes.length, photosAttached, photosFailed, photoFilled: filled.length },
     created: createdCodes,
     rows: plan,
   });
