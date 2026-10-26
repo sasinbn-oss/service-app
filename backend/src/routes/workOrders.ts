@@ -2152,6 +2152,28 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
       .filter((w) => w.attachments.length === 0 && w._count.attachments < MAX_ATTACHMENTS_PER_WORK_ORDER)
       .map((w) => [w.importKey!, { id: w.id, code: w.code, status: w.status }])
   );
+  /**
+   * ใบจากฟอร์มที่ยังไม่มีรูป จับคู่แบบหลวมด้วย สาขา + เครื่อง + อาการ — สำรองให้ importKey
+   * เจอจริง 26 ต.ค. 69: ไฟล์ที่อัปรอบแรกกับไฟล์ที่อัปซ้ำต่างกันเล็กน้อย (วันที่/เบอร์) importKey ไม่ตรง
+   * แถวเลยกลายเป็น "มีใบค้าง (ข้าม)" ไม่ใช่ "นำเข้าแล้ว" รูปไม่ถูกเติม ทั้งที่เป็นใบเดียวกัน
+   */
+  const looseKey = (b: string, m: string | null, sym: string) => `${b}|${m ?? ""}|${sym.trim()}`;
+  const formNoPhoto = await prisma.workOrder.findMany({
+    where: {
+      source: "FORM",
+      branchId: { in: branches.map((b) => b.id) },
+      status: { not: "CANCELLED" },
+      attachments: { none: { fileName: { startsWith: FORM_PHOTO_PREFIX } } },
+    },
+    select: { id: true, code: true, status: true, symptom: true, branch: { select: { code: true } }, machine: { select: { code: true } }, _count: { select: { attachments: true } } },
+  });
+  const looseNoPhoto = new Map(
+    formNoPhoto
+      .filter((w) => w._count.attachments < MAX_ATTACHMENTS_PER_WORK_ORDER)
+      .map((w) => [looseKey(w.branch.code, w.machine?.code ?? null, w.symptom ?? ""), { id: w.id, code: w.code, status: w.status }])
+  );
+  // แถว → ใบเดิมที่จะเติมรูปให้ (ตัดสินตอนวางแผน ใช้ตอนยืนยัน)
+  const fillBy = new Map<number, { id: number; code: string; status: string }>();
   const open = await prisma.workOrder.findMany({
     where: { branchId: { in: branches.map((b) => b.id) }, status: { notIn: ["DONE", "CANCELLED"] } },
     select: {
@@ -2220,8 +2242,12 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     if (!branch) return { ...base, status: "ERROR" as const, reason: `ไม่พบสาขา ${r.branchCode} ในระบบ`, existing: null };
     if (branch.cancelledAt) return { ...base, status: "ERROR" as const, reason: "สาขานี้ถูกยกเลิกแล้ว", existing: null };
     const done = importedBy.get(r.importKey);
+    const fillTarget = photoImage
+      ? needsPhoto.get(r.importKey) ?? looseNoPhoto.get(looseKey(r.branchCode, r.machineCode, r.symptom))
+      : undefined;
+    if (fillTarget) fillBy.set(r.line, fillTarget);
     if (done) {
-      const fill = photoImage && needsPhoto.has(r.importKey);
+      const fill = !!fillTarget;
       return {
         ...base,
         status: "IMPORTED" as const,
@@ -2237,7 +2263,16 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     const key = r.machineCode ? `${r.branchCode}|${r.machineCode}` : null;
     const busy = key ? openBy.get(key) : undefined;
     if (busy && !force.has(r.line))
-      return { ...base, status: "OPEN" as const, reason: `เครื่องนี้มีใบงานค้างอยู่แล้ว (${busy})`, existing: busy, forced: false };
+      return {
+        ...base,
+        status: "OPEN" as const,
+        reason: fillTarget
+          ? `เป็นใบเดิม ${fillTarget.code} ที่นำเข้าไปแล้ว · จะเติมรูปจากไฟล์ให้`
+          : `เครื่องนี้มีใบงานค้างอยู่แล้ว (${busy})`,
+        existing: busy,
+        forced: false,
+        photoFill: !!fillTarget,
+      };
     // เปิดเพิ่มแล้วไม่แทนที่ใบค้างเดิมใน openBy — แถวหลังของเครื่องเดียวกันยังอ้างถึงใบจริงที่ค้างอยู่
     if (busy)
       return { ...base, status: "NEW" as const, reason: `เลือกเปิดเพิ่ม — เครื่องนี้มีใบค้าง (${busy}) แต่คนละเรื่อง`, existing: busy, forced: true };
@@ -2271,7 +2306,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   // ใบเดิมที่ยังไม่มีรูปจากฟอร์ม — แถวเดียวกันในไฟล์อาจซ้ำหลายแถว (ส่งฟอร์มซ้ำ) เติมครั้งเดียว
   for (const p of plan) {
     if (!("photoFill" in p) || !p.photoFill) continue;
-    const wo = needsPhoto.get(p.importKey);
+    const wo = fillBy.get(p.line);
     const img = imageOf.get(p.line);
     if (!wo || !img || filled.includes(wo.code)) continue;
     if (await attachFormPhoto(wo.id, wo.code, wo.status, img, p.line, req.auth!.userId)) {
