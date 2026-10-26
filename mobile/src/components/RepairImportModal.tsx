@@ -35,6 +35,10 @@ interface Row {
   contactPhone: string | null;
   photo: string | null;
   video: string | null;
+  /** ช่องรูปภาพเป็นรูปฝังในไฟล์ — แนบเข้าใบงานเป็นรูปจริง */
+  photoInFile?: boolean;
+  /** ใบที่นำเข้าแล้วแต่ยังไม่มีรูป — ยืนยันแล้วเติมรูปจากไฟล์ให้ */
+  photoFill?: boolean;
   status: Status;
   reason: string | null;
   /** เครื่องมีใบค้าง แต่แอดมินเลือกเปิดเพิ่ม (คนละเรื่อง) */
@@ -54,7 +58,18 @@ interface OpenOrder {
 const OPEN_SHOWN = 5;
 interface Result {
   applied: boolean;
-  summary: { new: number; imported: number; open: number; error: number; skipped: number; created?: number };
+  summary: {
+    new: number;
+    imported: number;
+    open: number;
+    error: number;
+    skipped: number;
+    photos?: number;
+    photoFill?: number;
+    created?: number;
+    photosAttached?: number;
+    photoFilled?: number;
+  };
   created?: string[];
   rows: Row[];
 }
@@ -191,7 +206,9 @@ export default function RepairImportModal({
         `เปิดใบงานใหม่ ${r.summary.created ?? 0} ใบ — อยู่ขั้นแรก (หัวหน้าภาคระบุอะไหล่)` +
           (r.summary.open ? ` · ข้ามเครื่องที่มีใบค้าง ${r.summary.open}` : "") +
           (r.summary.error ? ` · นำเข้าไม่ได้ ${r.summary.error}` : "") +
-          (r.summary.skipped ? ` · เอาออก ${r.summary.skipped}` : "")
+          (r.summary.skipped ? ` · เอาออก ${r.summary.skipped}` : "") +
+          (r.summary.photosAttached ? ` · แนบรูปจากไฟล์ ${r.summary.photosAttached} รูป` : "") +
+          (r.summary.photoFilled ? ` (เติมให้ใบเดิม ${r.summary.photoFilled} ใบ)` : "")
       );
       onDone();
       close();
@@ -223,12 +240,22 @@ export default function RepairImportModal({
               <Text style={fs.btnGhostText}>ยกเลิก</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[fs.btn, { flex: 2 }, (busy || refreshing !== null || !s?.new) && { opacity: 0.5 }]}
+              style={[fs.btn, { flex: 2 }, (busy || refreshing !== null || !(s?.new || s?.photoFill)) && { opacity: 0.5 }]}
               onPress={commit}
-              disabled={busy || refreshing !== null || !s?.new}
+              disabled={busy || refreshing !== null || !(s?.new || s?.photoFill)}
               accessibilityLabel="ยืนยันนำเข้าใบแจ้งซ่อม"
             >
-              {busy ? <Spinner color="#fff" /> : <Text style={fs.btnText}>{s?.new ? `ยืนยัน · เปิดใบงาน ${s.new} ใบ` : "ไม่มีใบใหม่ให้เปิด"}</Text>}
+              {busy ? (
+                <Spinner color="#fff" />
+              ) : (
+                <Text style={fs.btnText}>
+                  {s?.new || s?.photoFill
+                    ? ["ยืนยัน", s.new ? `เปิดใบงาน ${s.new} ใบ` : null, s.photoFill ? `เติมรูปใบเดิม ${s.photoFill} ใบ` : null]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : "ไม่มีใบใหม่ให้เปิด"}
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
         ) : undefined
@@ -267,6 +294,17 @@ export default function RepairImportModal({
               )
             )}
           </View>
+          {s.photos || s.photoFill ? (
+            // ไฟล์บางรอบช่องรูปภาพเป็นรูปฝัง (ไม่ใช่ลิงก์ SharePoint) — ดึงมาเป็นรูปจริงในใบงานได้ บอกให้รู้ก่อนยืนยัน
+            <View style={styles.photoNote}>
+              <Ionicons name="images-outline" size={16} color={colors.primaryInk} />
+              <Text style={styles.photoNoteText}>
+                รูปในไฟล์:{s.photos ? ` แนบให้ใบใหม่ ${s.photos} ใบ` : ""}
+                {s.photos && s.photoFill ? " ·" : ""}
+                {s.photoFill ? ` เติมรูปให้ใบที่นำเข้าแล้วแต่ยังไม่มีรูป ${s.photoFill} ใบ` : ""}
+              </Text>
+            </View>
+          ) : null}
           {only ? (
             <View style={styles.filterBar}>
               <Text style={styles.filterText}>
@@ -322,7 +360,14 @@ export default function RepairImportModal({
                     {r.symptom}
                   </Text>
                   <Text style={styles.meta}>
-                    {[r.contactName, r.contactPhone, r.photo ? "มีรูป" : null, r.video ? "มีวิดีโอ" : null].filter(Boolean).join(" · ")}
+                    {[
+                      r.contactName,
+                      r.contactPhone,
+                      r.photoInFile ? "มีรูปในไฟล์" : r.photo ? "มีรูป (ลิงก์)" : null,
+                      r.video ? "มีวิดีโอ" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </Text>
                   {r.reason ? <Text style={[styles.reason, { color: st.fg }]}>{r.reason}</Text> : null}
                   {r.status !== "ERROR" && r.branchOpen.length ? (
@@ -443,6 +488,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   statIcon: { position: "absolute", top: spacing.sm, right: spacing.sm },
+  photoNote: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  photoNoteText: { flex: 1, fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.primaryInk },
   filterBar: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
   filterText: { fontSize: 13, fontWeight: "700", color: colors.text },
   filterAll: { fontSize: 13, fontWeight: "700", color: colors.navy, textDecorationLine: "underline" },

@@ -28,7 +28,7 @@ import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
-import { EQUIPMENT_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
+import { EQUIPMENT_JOB_TYPES, FormImage, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
   buildObjectKey,
   deleteObject,
@@ -2080,6 +2080,41 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
  * - ERROR สาขาไม่มีในระบบ / ข้อมูลในแถวไม่ครบ
  */
 const formUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+/** ชื่อไฟล์รูปที่มาจากฟอร์มแจ้งซ่อม — ใช้หาว่าใบไหนมีรูปจากฟอร์มแล้ว (ไม่เติมซ้ำตอนนำเข้าไฟล์เดิมอีกรอบ) */
+const FORM_PHOTO_PREFIX = "ฟอร์มแจ้งซ่อม-";
+
+/**
+ * แนบรูปที่ฝังในไฟล์ฟอร์มเข้าใบงานเป็นรูปจริง — อัปขึ้นถังก่อนแล้วค่อยบันทึกแถว (เหตุผลเดียวกับแนบรูปปกติ)
+ * รูปจาก Excel เป็นขนาดย่อ (~10 KB) ใช้เป็นรูปย่อในการ์ดได้เลย · พังรูปเดียวไม่ล้มทั้งการนำเข้า
+ */
+async function attachFormPhoto(workOrderId: number, code: string, status: string, img: FormImage, line: number, userId: number) {
+  const fileName = `${FORM_PHOTO_PREFIX}แถว${line}.${img.ext}`;
+  try {
+    const objectKey = buildObjectKey(code || `WO-${workOrderId}`, fileName);
+    await uploadObject({ key: objectKey, body: img.data, contentType: img.mime });
+    await prisma.$transaction(async (tx) => {
+      await tx.workOrderAttachment.create({
+        data: {
+          workOrderId,
+          kind: "IMAGE",
+          fileName,
+          mimeType: img.mime,
+          sizeBytes: img.data.length,
+          objectKey,
+          uploadedAt: new Date(),
+          thumbnail: img.data.length <= MAX_ATTACHMENT_THUMBNAIL_BYTES ? img.data : null,
+          createdById: userId,
+        },
+      });
+      await writeLog(tx, workOrderId, userId, "ATTACHED", status, `รูปจากฟอร์มแจ้งซ่อม: ${fileName}`);
+    }, STAGE_TX);
+    return true;
+  } catch (e) {
+    console.error(`[import-form] แนบรูปแถว ${line} ไม่สำเร็จ`, e);
+    return false;
+  }
+}
+
 router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file"), async (req: AuthRequest, res) => {
   if (!req.file) return res.status(400).json({ error: "ต้องแนบไฟล์ฟอร์มแจ้งซ่อม (.xlsx)" });
   let rows: Awaited<ReturnType<typeof parseRepairForm>>;
@@ -2094,10 +2129,29 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   const codes = [...new Set(rows.map((r) => r.branchCode).filter(Boolean))];
   const [branches, imported] = await Promise.all([
     prisma.branch.findMany({ where: { code: { in: codes } }, select: { id: true, code: true, name: true, cancelledAt: true } }),
-    prisma.workOrder.findMany({ where: { importKey: { in: rows.map((r) => r.importKey) } }, select: { importKey: true, code: true } }),
+    prisma.workOrder.findMany({
+      where: { importKey: { in: rows.map((r) => r.importKey) } },
+      select: {
+        id: true,
+        importKey: true,
+        code: true,
+        status: true,
+        _count: { select: { attachments: true } },
+        attachments: { where: { fileName: { startsWith: FORM_PHOTO_PREFIX } }, select: { id: true }, take: 1 },
+      },
+    }),
   ]);
   const branchBy = new Map(branches.map((b) => [b.code, b]));
   const importedBy = new Map(imported.map((w) => [w.importKey!, w.code]));
+  /**
+   * ใบที่นำเข้าไปแล้วแต่ยังไม่มีรูปจากฟอร์ม — ไฟล์รอบใหม่มีรูปฝังมา (หรือรอบแรกตัวนำเข้ายังอ่านรูปในเซลล์ไม่เป็น)
+   * นำเข้าไฟล์เดิมอีกรอบแล้วเติมรูปให้ใบเดิมได้ ไม่ต้องลบใบเปิดใหม่ (เจ้าของงานเจอ 26 ต.ค. 69: อัปไฟล์แล้วรูปไม่มา)
+   */
+  const needsPhoto = new Map(
+    imported
+      .filter((w) => w.attachments.length === 0 && w._count.attachments < MAX_ATTACHMENTS_PER_WORK_ORDER)
+      .map((w) => [w.importKey!, { id: w.id, code: w.code, status: w.status }])
+  );
   const open = await prisma.workOrder.findMany({
     where: { branchId: { in: branches.map((b) => b.id) }, status: { notIn: ["DONE", "CANCELLED"] } },
     select: {
@@ -2152,14 +2206,30 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
    */
   const force = lines(req.body?.force);
 
-  const plan = rows.map((r) => {
+  const plan = rows.map(({ photoImage, ...r }) => {
     const branch = branchBy.get(r.branchCode);
-    const base = { ...r, branchName: branch?.name ?? null, title: formTitle(r), branchOpen: branchOpen.get(r.branchCode) ?? [] };
+    // ตัวรูป (Buffer) ไม่ส่งกลับไปหน้าจอ — บอกแค่ว่ามีรูปในไฟล์
+    const base = {
+      ...r,
+      photoInFile: !!photoImage,
+      branchName: branch?.name ?? null,
+      title: formTitle(r),
+      branchOpen: branchOpen.get(r.branchCode) ?? [],
+    };
     if (r.problem) return { ...base, status: "ERROR" as const, reason: r.problem, existing: null as string | null };
     if (!branch) return { ...base, status: "ERROR" as const, reason: `ไม่พบสาขา ${r.branchCode} ในระบบ`, existing: null };
     if (branch.cancelledAt) return { ...base, status: "ERROR" as const, reason: "สาขานี้ถูกยกเลิกแล้ว", existing: null };
     const done = importedBy.get(r.importKey);
-    if (done) return { ...base, status: "IMPORTED" as const, reason: `นำเข้าไปแล้ว (${done})`, existing: done };
+    if (done) {
+      const fill = photoImage && needsPhoto.has(r.importKey);
+      return {
+        ...base,
+        status: "IMPORTED" as const,
+        reason: fill ? `นำเข้าไปแล้ว (${done}) · จะเติมรูปจากไฟล์ให้` : `นำเข้าไปแล้ว (${done})`,
+        existing: done,
+        photoFill: !!fill,
+      };
+    }
     const twin = seenKey.get(r.importKey);
     if (twin) return { ...base, status: "IMPORTED" as const, reason: `ซ้ำกับแถว ${twin} ในไฟล์นี้ (ส่งฟอร์มซ้ำ)`, existing: null };
     if (skip.has(r.line)) return { ...base, status: "SKIPPED" as const, reason: "เอาออกแล้ว — ไม่นำเข้า", existing: null };
@@ -2182,6 +2252,9 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     open: count("OPEN"),
     error: count("ERROR"),
     skipped: count("SKIPPED"),
+    // ใบใหม่ที่จะมีรูปติดไป · ใบเดิมที่จะเติมรูป
+    photos: plan.filter((p) => p.status === "NEW" && p.photoInFile).length,
+    photoFill: plan.filter((p) => "photoFill" in p && p.photoFill).length,
   };
 
   if (req.body?.apply !== "true") return res.json({ applied: false, summary, rows: plan });
@@ -2192,6 +2265,20 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
    */
   const todo = plan.filter((p) => p.status === "NEW");
   const createdCodes: string[] = [];
+  const imageOf = new Map(rows.filter((r) => r.photoImage).map((r) => [r.line, r.photoImage!]));
+  let photosAttached = 0;
+  const filled: string[] = [];
+  // ใบเดิมที่ยังไม่มีรูปจากฟอร์ม — แถวเดียวกันในไฟล์อาจซ้ำหลายแถว (ส่งฟอร์มซ้ำ) เติมครั้งเดียว
+  for (const p of plan) {
+    if (!("photoFill" in p) || !p.photoFill) continue;
+    const wo = needsPhoto.get(p.importKey);
+    const img = imageOf.get(p.line);
+    if (!wo || !img || filled.includes(wo.code)) continue;
+    if (await attachFormPhoto(wo.id, wo.code, wo.status, img, p.line, req.auth!.userId)) {
+      filled.push(wo.code);
+      photosAttached++;
+    }
+  }
   for (let i = 0; i < todo.length; i += 20) {
     const chunk = todo.slice(i, i + 20);
     const ids = await prisma.$transaction(
@@ -2241,10 +2328,20 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
       },
       { timeout: 30_000, maxWait: 15_000 }
     );
-    const made = await prisma.workOrder.findMany({ where: { id: { in: ids } }, select: { code: true }, orderBy: { id: "asc" } });
+    const made = await prisma.workOrder.findMany({ where: { id: { in: ids } }, select: { id: true, code: true }, orderBy: { id: "asc" } });
     createdCodes.push(...made.map((m) => m.code));
+    // แนบรูปหลังบันทึกใบแล้ว (อัปไฟล์อยู่นอก transaction — ช้าและเป็นระบบอื่น) · id ตรงลำดับกับ chunk
+    for (const [j, r] of chunk.entries()) {
+      const img = imageOf.get(r.line);
+      if (img && (await attachFormPhoto(ids[j], made.find((m) => m.id === ids[j])?.code ?? "", "NEW", img, r.line, req.auth!.userId))) photosAttached++;
+    }
   }
-  res.json({ applied: true, summary: { ...summary, created: createdCodes.length }, created: createdCodes, rows: plan });
+  res.json({
+    applied: true,
+    summary: { ...summary, created: createdCodes.length, photosAttached, photoFilled: filled.length },
+    created: createdCodes,
+    rows: plan,
+  });
 });
 
 const fromOutageSchema = z.object({

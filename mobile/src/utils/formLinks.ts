@@ -23,6 +23,8 @@ export function splitFormDetail(detail: string | null): { text: string; links: F
     if (m && urls.length) {
       const kind = m[1] as FormLink["kind"];
       urls.forEach((url, i) => links.push({ kind, url, label: urls.length > 1 ? `${kind}ที่ ${i + 1} จากฟอร์มแจ้งซ่อม` : `${kind}จากฟอร์มแจ้งซ่อม` }));
+    } else if (m) {
+      // บรรทัดรูป/วิดีโอที่ไม่มีลิงก์ — ใบที่นำเข้าตอนตัวอ่านยังแปลงรูปในเซลล์เป็น "[object Object]" (26 ต.ค. 69) ตัดทิ้ง
     } else if (!line.startsWith(OLD_HEADER)) keep.push(line);
   }
   return { text: keep.join("\n").trim(), links };
