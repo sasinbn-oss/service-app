@@ -172,6 +172,8 @@ interface WorkOrder {
   jobTypeLabel: string;
   needsParts: boolean | null;
   stageActor: string | null;
+  /** หัวหน้าภาคที่รับผิดชอบใบนี้ (ทีมมาก่อนภาค) — ว่าง = ไม่มีคนรับ */
+  supervisors?: { id: number; name: string }[];
   stageActorLabel: string | null;
   waitingParts: StockPart[];
   /** ค่าบริการที่หัวหน้าช่างให้เสนอราคา — ไม่มีราคา (ราคาอยู่ในใบเสนอราคาจากระบบบัญชี) */
@@ -1522,6 +1524,14 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.nowEyebrow, { color: done ? colors.textMuted : tone.fg }]}>
               {done ? "สถานะใบงาน" : `ขั้นปัจจุบัน · ${order.stageActorLabel ?? "—"}`}
+              {/* ขั้นของหัวหน้าภาคบอกชื่อคนด้วย — เดิมขึ้นแค่บทบาท ไม่รู้ว่าต้องตามใคร (เจ้าของงานขอ ต.ค. 69) */}
+              {!done && order.stageActor === "SUPERVISOR" && order.supervisors ? (
+                order.supervisors.length ? (
+                  <Text style={styles.nowWho}> · {order.supervisors.map((s) => s.name).join(", ")}</Text>
+                ) : (
+                  <Text style={[styles.nowWho, { color: colors.danger }]}> · ยังไม่มีคนรับ</Text>
+                )
+              ) : null}
             </Text>
             <Text style={[styles.nowTitle, headingFont]}>
               {done ? order.statusLabel : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
@@ -6473,6 +6483,7 @@ const styles = StyleSheet.create({
   recoveredBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.navy },
   nowCard: { gap: spacing.md },
   nowHead: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
+  nowWho: { fontWeight: "800" },
   nowEyebrow: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
   nowTitle: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text },
   nowBody: { gap: 2 },
