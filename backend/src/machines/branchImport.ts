@@ -6,6 +6,7 @@
  *
  * ไฟล์นี้แตะเฉพาะข้อมูลทะเบียนสาขา ไม่ยุ่งกับสถานะเครื่องหรือเคสที่เปิดค้างอยู่เลย
  */
+import { cleanName } from "../utils/names";
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
 
@@ -189,9 +190,10 @@ export async function parseBranchWorkbook(buffer: Buffer): Promise<BranchParseRe
     const entry: BranchSheetRow = {
       code,
       name: read(row, "name"),
-      region: read(row, "region") || null,
-      zone: read(row, "zone") || null,
-      pmTeam: read(row, "pmTeam") || null,
+      // ชื่อภาค/ทีมผ่าน cleanName — อักษรมองไม่เห็นจาก Excel ทำให้หัวหน้าภาคที่ติ๊กทีมไว้จับคู่ไม่ได้ (utils/names.ts)
+      region: cleanName(read(row, "region")),
+      zone: cleanName(read(row, "zone")),
+      pmTeam: cleanName(read(row, "pmTeam")),
       grade: read(row, "grade") || null,
       openedAt: readDate(row, "openedAt"),
       warrantyExpiresAt: readDate(row, "warrantyExpiresAt"),

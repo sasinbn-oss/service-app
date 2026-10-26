@@ -10,6 +10,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { cleanName } from "./names";
 
 export interface SupervisorScope {
   region: string | null;
@@ -36,8 +37,14 @@ export function coversWorkOrder(
   s: SupervisorScope,
   wo: { assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
 ) {
-  if (s.region && wo.branch.region === s.region) return true;
-  return [wo.assignedTeam, wo.branch.zone, wo.branch.pmTeam].some((t) => t !== null && s.teams.includes(t));
+  // เทียบหลังทำความสะอาดชื่อ — ข้อมูลที่ยังไม่ผ่าน migration ล้างชื่อ (หรือหลุดมาทางอื่น) ก็ยังจับคู่ได้ ดู utils/names.ts
+  const region = cleanName(s.region);
+  if (region && cleanName(wo.branch.region) === region) return true;
+  const teams = new Set(s.teams.map(cleanName).filter(Boolean));
+  return [wo.assignedTeam, wo.branch.zone, wo.branch.pmTeam].some((t) => {
+    const c = cleanName(t);
+    return c !== null && teams.has(c);
+  });
 }
 
 export const OUT_OF_SCOPE = "ใบงานนี้ไม่อยู่ในภาคหรือทีมที่คุณดูแล";

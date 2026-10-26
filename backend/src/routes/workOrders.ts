@@ -12,6 +12,7 @@ import { Router, Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import { looseKey } from "../utils/names";
 import { prisma } from "../prisma";
 import { coversWorkOrder, OUT_OF_SCOPE, supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { Coverage, coverageOf, covers } from "../utils/teamGroups";
@@ -700,9 +701,18 @@ function listShape(
         ? (() => {
             const team = w.assignedTeam ?? w.branch.zone ?? w.branch.pmTeam;
             const where = `ภาค${w.branch.region ?? " —"} · ทีม${team ?? " —"}`;
-            return !w.branch.region && !team
-              ? `${where} — สาขายังไม่มีภาคและทีม (ตั้งที่จัดการข้อมูลสาขา)`
-              : `${where} — ยังไม่มีหัวหน้าภาคดูแลภาค/ทีมนี้ (ตั้งที่สิทธิ์ผู้ใช้)`;
+            if (!w.branch.region && !team) return `${where} — สาขายังไม่มีภาคและทีม (ตั้งที่จัดการข้อมูลสาขา)`;
+            /**
+             * หัวหน้าภาคที่ติ๊กทีมชื่อ "คล้าย" กัน (ต่างกันแค่ช่องว่างกลางคำ หรือคำว่า "ทีม" นำหน้า) — บอกชื่อคนกับชื่อที่ติ๊ก
+             * แอดมินเห็นแค่ "ไม่มีหัวหน้าภาค" แล้วไปเปิดสิทธิ์ผู้ใช้ เจอว่าติ๊กไว้แล้ว ก็ไม่รู้จะแก้ตรงไหน (ต.ค. 69)
+             */
+            const keys = new Set([w.assignedTeam, w.branch.zone, w.branch.pmTeam].filter(Boolean).map(looseKey));
+            for (const s of ctx.supervisors) {
+              const near = s.supervisedTeams.find((t) => keys.has(looseKey(t)));
+              if (near)
+                return `${where} — ${s.name} ดูแลทีม "${near}" ซึ่งสะกดไม่ตรงกับ "${team}" (รวมทีมที่หน้าทีมช่าง › เปลี่ยนชื่อ)`;
+            }
+            return `${where} — ยังไม่มีหัวหน้าภาคดูแลภาค/ทีมนี้ (ตั้งที่สิทธิ์ผู้ใช้)`;
           })()
         : null,
     // วันนัดผ่านไปแล้วยังไม่ได้คอนเฟิร์มลูกค้า — กล่องงานแอดมินแยกหัวข้อ "เลยนัด"

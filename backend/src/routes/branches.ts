@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import { cleanName } from "../utils/names";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
@@ -263,10 +264,10 @@ router.get("/manage/options", requireAuth, requireAdmin, async (_req, res) => {
  * ใบงานที่จ่ายไปแล้วไม่ย้ายตาม (assignedTeam ของใบ) — มีผลกับใบงานใหม่
  */
 const registrySchema = z.object({
-  region: z.string().trim().min(1).optional(),
+  region: z.string().trim().min(1).transform((v) => cleanName(v)!).optional(),
   ownership: z.string().trim().min(1).optional(),
-  zone: z.string().trim().min(1).optional(),
-  pmTeam: z.string().trim().min(1).optional(),
+  zone: z.string().trim().min(1).transform((v) => cleanName(v)!).optional(),
+  pmTeam: z.string().trim().min(1).transform((v) => cleanName(v)!).optional(),
 });
 
 router.put("/:id/registry", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -506,9 +507,10 @@ const branchSchema = z.object({
   latitude: z.number().min(-90).max(90).nullable().optional(),
   longitude: z.number().min(-180).max(180).nullable().optional(),
   radiusMeters: z.number().int().positive().optional(),
-  region: z.string().optional(),
+  // ชื่อภาค/ทีมผ่าน cleanName — ช่องว่างท้ายทำให้ขอบเขตหัวหน้าภาคจับคู่ไม่ได้ (utils/names.ts)
+  region: z.string().transform((v) => cleanName(v) ?? undefined).optional(),
   ownership: z.enum(["COCO", "DODO"]).optional(),
-  zone: z.string().optional(),
+  zone: z.string().transform((v) => cleanName(v) ?? undefined).optional(),
   grade: z.enum(["A", "B", "C"]).optional(),
   // วันที่ส่งมาเป็น YYYY-MM-DD ส่งค่าว่างมาคือล้างทิ้ง
   openedAt: z.string().nullable().optional(),

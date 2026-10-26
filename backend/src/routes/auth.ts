@@ -1,6 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { cleanName } from "../utils/names";
 import { prisma } from "../prisma";
 import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
@@ -526,12 +527,14 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     data: {
       ...(body.role !== undefined ? { role: body.role } : {}),
       // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้ง
-      ...(body.region !== undefined ? { region: body.region || null } : {}),
+      ...(body.region !== undefined ? { region: cleanName(body.region) } : {}),
       ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null } : {}),
       // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
-      ...(body.team !== undefined ? { team: body.team || null } : {}),
+      ...(body.team !== undefined ? { team: cleanName(body.team) } : {}),
       ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
-      ...(body.supervisedTeams !== undefined ? { supervisedTeams: [...new Set(body.supervisedTeams)] } : {}),
+      ...(body.supervisedTeams !== undefined
+        ? { supervisedTeams: [...new Set(body.supervisedTeams.map(cleanName).filter((t): t is string => !!t))] }
+        : {}),
       ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { supervisedTeams: [] } : {}),
       ...(body.employeeCode !== undefined ? { employeeCode: body.employeeCode } : {}),
       ...(body.name !== undefined ? { name: body.name } : {}),
