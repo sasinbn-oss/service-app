@@ -98,6 +98,12 @@ DB "delete from \"WorkOrderAttachment\" where \"fileName\" like 'ฟอร์ม
   && [ "$(DB "select count(*) from \"WorkOrderAttachment\" where \"fileName\" like 'ฟอร์มแจ้งซ่อม-%' and \"workOrderId\"=(select id from \"WorkOrder\" where symptom='ทดสอบนำเข้า รูปในเซลล์')")" = "1" ] \
   && [ "$(G | J 'd.summary.photoFill')" = "0" ] \
   && pass "ใบที่นำเข้าแล้วแต่ไม่มีรูป: นำเข้าไฟล์เดิมซ้ำ → เติมรูปให้ 1 รูป · รอบถัดไปไม่เติมซ้ำ" || fail "เติมรูป: $(G | J 'JSON.stringify(d.summary)')"
+# ไฟล์ที่อัปซ้ำต่างจากรอบแรกเล็กน้อย (importKey ไม่ตรง) — ยังเติมรูปให้ใบเดิมได้ด้วย สาขา + เครื่อง + อาการ (26 ต.ค. 69)
+WID=$(DB "select id from \"WorkOrder\" where symptom='ทดสอบนำเข้า รูปในเซลล์'")
+DB "update \"WorkOrder\" set \"importKey\"='ทดสอบ-key-ไม่ตรง-$N' where id=$WID; delete from \"WorkOrderAttachment\" where \"workOrderId\"=$WID and \"fileName\" like 'ฟอร์มแจ้งซ่อม-%'" >/dev/null
+[ "$(G | J 'd.rows[0].status+"|"+d.rows[0].photoFill+"|"+d.summary.photoFill')" = "OPEN|true|1" ] && [ "$(G -F apply=true | J 'd.summary.photoFilled+"|"+d.summary.created')" = "1|0" ] \
+  && [ "$(DB "select count(*) from \"WorkOrderAttachment\" where \"workOrderId\"=$WID and \"fileName\" like 'ฟอร์มแจ้งซ่อม-%'")" = "1" ] \
+  && pass "importKey ไม่ตรงแต่ สาขา+เครื่อง+อาการ ตรง → เติมรูปให้ใบเดิม ไม่เปิดใบใหม่ (เช็คที่ฐานข้อมูล)" || fail "เติมรูปแบบหลวม: $(G | J 'JSON.stringify([d.rows[0].status,d.rows[0].reason,d.summary])')"
 rm -f "$X3"
 
 # เก็บกวาด
