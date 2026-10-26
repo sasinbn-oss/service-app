@@ -26,7 +26,7 @@ S=$(login S001 | J 'd.token')
 # ใบงานที่รอหัวหน้าภาคจ่ายงาน (สาขา C0006 ทีมกระบี่)
 newOrder() {
   local id=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","model":"Haier","symptom":"ทดสอบเปลี่ยนสิทธิ์"}]}' | J 'd.orders?d.orders[0].id:d.id')
-  POST $S "work-orders/$id/parts" '{"needsParts":false}' >/dev/null
+  POST $A "work-orders/$id/parts" '{"needsParts":false}' >/dev/null
   echo $id
 }
 
