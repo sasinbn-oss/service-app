@@ -14,7 +14,8 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { looseKey } from "../utils/names";
 import { prisma } from "../prisma";
-import { coversWorkOrder, OUT_OF_SCOPE, supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { coversWorkOrder, OUT_OF_SCOPE, scopesOf, SupervisorScope, supervisorScope, teamsForSupervisor, workOrderInScope } from "../utils/supervisorScope";
+import { cleanName } from "../utils/names";
 import { Coverage, coverageOf, covers } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
@@ -656,7 +657,13 @@ async function autoWorkStatus(id: number, stage: string): Promise<string | null>
 }
 
 /** หัวหน้าภาคพร้อมขอบเขต — ใช้ตอบว่าใบที่รอหัวหน้าภาครอ "ใคร" */
-type SupervisorRef = { id: number; name: string; region: string | null; supervisedTeams: string[] };
+type SupervisorRef = { id: number; name: string; region: string | null; supervisedTeams: string[]; scope: SupervisorScope };
+
+/** เติมขอบเขต (รวมทีมที่คนอื่นดูแล — ทีมมาก่อนภาค) ให้รายชื่อหัวหน้าภาคที่ดึงมาครั้งเดียว */
+function withScopes<T extends { id: number; region: string | null; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
+  const m = scopesOf(sups);
+  return sups.map((u) => ({ ...u, scope: m.get(u.id)! }));
+}
 
 /**
  * ประวัติที่ไม่ได้ขยับขั้น — ไม่นับตอนหาว่าใบงานค้างขั้นนี้มานานเท่าไร
@@ -684,7 +691,7 @@ function listShape(
   const waitingOnSupervisors =
     actor === "SUPERVISOR"
       ? ctx.supervisors
-          .filter((s) => coversWorkOrder({ region: s.region, teams: s.supervisedTeams }, w))
+          .filter((s) => coversWorkOrder(s.scope, w))
           .map((s) => ({ id: s.id, name: s.name, region: s.region }))
       : [];
   return {
@@ -999,9 +1006,10 @@ async function computeOrphanSupervisorIds(): Promise<number[]> {
       where: { status: { in: stages } },
       select: { id: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
     }),
-    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { region: true, supervisedTeams: true } }),
+    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, supervisedTeams: true } }),
   ]);
-  return rows.filter((w) => !sups.some((u) => coversWorkOrder({ region: u.region, teams: u.supervisedTeams }, w))).map((w) => w.id);
+  const scopes = withScopes(sups);
+  return rows.filter((w) => !scopes.some((u) => coversWorkOrder(u.scope, w))).map((w) => w.id);
 }
 
 /** แอดมินทั่วไป (ไม่ใช่ Admin Spare Part) — กล่องงานรวมใบที่ไม่มีหัวหน้าภาครับด้วย */
@@ -1199,9 +1207,10 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     number
   >;
 
+  const supScopes = withScopes(supervisors);
   res.json({
     rows: rows.map((w) => ({
-      ...listShape(w, { supervisors, stageSince }),
+      ...listShape(w, { supervisors: supScopes, stageSince }),
       appointmentByName: confirmedBy.get(w.id) ?? null,
       // ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — กล่องงานติดป้าย "คอนเฟิร์มวันใหม่" แยกจากรับทราบปล่อยงานปกติ
       rescheduled: w.status === "ASSIGNED" && lastConfirmAction.get(w.id) === "RESCHEDULED",
@@ -1550,7 +1559,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
   res.json({ date, by, rows });
 });
 
-router.get("/options", requireAuth, async (_req, res) => {
+router.get("/options", requireAuth, async (req: AuthRequest, res) => {
   await freshOutsource();
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
@@ -1582,8 +1591,16 @@ router.get("/options", requireAuth, async (_req, res) => {
     const k = r.pmTeam?.trim();
     if (k) teamTally.set(k, Math.max(teamTally.get(k) ?? 0, r._count));
   }
-  const teams = [...teamTally.entries()].sort((a, b) => a[0].localeCompare(b[0], "th"));
+  // หัวหน้าภาคเห็นเฉพาะทีมที่จ่ายงานให้ได้ (+ outsource ด้านล่าง) — ไม่โชว์ทีมของหัวหน้าภาคคนอื่น (ต.ค. 69)
+  const mine = req.auth!.role === "SUPERVISOR" ? await teamsForSupervisor(await supervisorScope(req.auth!.userId)) : null;
+  const teams = [...teamTally.entries()]
+    .filter(([name]) => !mine || mine.has(cleanName(name) ?? "") || isOutsourceTeam(name))
+    .sort((a, b) => a[0].localeCompare(b[0], "th"));
+  // ทีมที่หัวหน้าภาคดูแลแต่ยังไม่มีสาขาประจำ (เช่นทีมรวม) ก็ต้องเลือกได้
+  if (mine) for (const t of mine) if (!teams.some(([n]) => cleanName(n) === t)) teams.push([t, 0]);
   res.json({
+    // หน้าจอ: ทีมประจำสาขาที่ไม่อยู่ในรายการไม่ต้องเติมให้ (ปกติเติมให้เลือกข้อมูลสาขาเก่าได้)
+    teamsLimited: !!mine,
     statuses: WORK_ORDER_STATUSES.map((v) => ({ value: v, label: WORK_ORDER_STATUS_LABELS[v] })),
     priorities: WORK_ORDER_PRIORITIES.map((v) => ({
       value: v,
@@ -2744,6 +2761,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: "ใบนี้ยังจ่ายงานไม่ได้ — ต้องผ่านขั้นอะไหล่/เสนอราคาก่อน" });
     }
     if (!knownTeam) return res.status(404).json({ error: `ไม่รู้จักทีม "${assign.team}"` });
+    if (await teamOutOfScope(req, res, assign.team)) return;
   }
 
   await prisma.$transaction(async (tx) => {
@@ -3701,6 +3719,19 @@ async function knownCmTeam(team: string) {
  * ใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
  * วันบังคับใส่ เพราะขั้นถัดไปคือแอดมินโทรถามร้านว่าวันนี้ได้ไหม — ไม่มีวันก็ไม่มีอะไรให้ถาม
  */
+/**
+ * หัวหน้าภาคจ่ายงานได้เฉพาะทีมที่ตัวเองดูแล (หรือทีม outsource) — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว
+ * หน้าจอโชว์เฉพาะทีมเหล่านี้อยู่แล้ว (/options) กันซ้ำที่นี่เผื่อแอปรุ่นเก่า (เจ้าของงานกำหนด ต.ค. 69)
+ */
+async function teamOutOfScope(req: AuthRequest, res: Response, team: string | null | undefined) {
+  if (!team || req.auth!.role !== "SUPERVISOR") return false;
+  if ((await freshOutsource()).has(team)) return false;
+  const allowed = await teamsForSupervisor(await supervisorScope(req.auth!.userId));
+  if (allowed.has(cleanName(team) ?? "")) return false;
+  res.status(403).json({ error: `ทีม ${team} ไม่ได้อยู่ในความดูแลของคุณ — เลือกได้เฉพาะทีมที่คุณดูแลหรือทีม outsource` });
+  return true;
+}
+
 const assignSchema = z.object({
   team: z.string().trim().min(1).max(120),
   scheduledAt: dateField,
@@ -3723,6 +3754,7 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   // ทีมกับข้อความทีมไม่ขึ้นต่อกัน อ่านพร้อมกัน
   const [known, teamText] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้")]);
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+  if (await teamOutOfScope(req, res, team)) return;
 
   // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
   // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
@@ -3848,6 +3880,8 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
   if (team !== cur.assignedTeam && !(await (inspect ? teamExists(team) : knownCmTeam(team)))) {
     return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
   }
+  // ทีมเดิมของใบ (จ่ายไว้แล้ว) ไม่เช็คซ้ำ — เช็คเฉพาะตอนเปลี่ยนทีม
+  if (team !== cur.assignedTeam && (await teamOutOfScope(req, res, team))) return;
   const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
   const text =
     team !== cur.assignedTeam
@@ -4002,6 +4036,7 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
   if (!(await teamExists(team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+  if (await teamOutOfScope(req, res, team)) return;
 
   const data = {
     // ยังไม่ถึงช่าง — แอดมินนัดร้านก่อน (วันที่หัวหน้าภาคใส่คือวันที่เสนอ ลูกค้าอาจขอเลื่อน)

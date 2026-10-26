@@ -20,7 +20,7 @@ REGION=$(DB "select region from \"Branch\" where code='C0006'"); TEAM=$(DB "sele
 IDS=""
 cleanup() {
   for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
-  DB "update \"User\" set region=nullif('$OLD_REGION',''), \"supervisedTeams\"=string_to_array(nullif('$OLD_TEAMS',''),',') where \"employeeCode\"='S001'" >/dev/null
+  DB "update \"User\" set region=nullif('$OLD_REGION',''), \"supervisedTeams\"=coalesce(string_to_array(nullif('$OLD_TEAMS',''),','),'{}') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT
 DB "update \"User\" set region='$REGION', \"supervisedTeams\"='{}' where \"employeeCode\"='S001'" >/dev/null

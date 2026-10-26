@@ -595,7 +595,9 @@ function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | nul
  * (เจ้าของงานขอ ต.ค. 69: ไม่อยากเห็นป้าย "outsource" ต่อชื่อ แต่ต้องไม่ปนกับทีมช่างปกติ)
  * ทีมประจำสาขาขึ้นก่อนเสมอในกลุ่มของมัน — ทีมที่ดูแลสาขาก็เป็น outsource ได้ (เช่น PWS)
  */
-function teamOptions(teams: Team[], suggested: string | null | undefined, jobType: string): DropdownOption[] {
+function teamOptions(teams: Team[], suggested: string | null | undefined, jobType: string, limited = false): DropdownOption[] {
+  // หัวหน้าภาคได้รายการเฉพาะทีมที่ตัวเองดูแล — ทีมประจำสาขาที่เป็นของคนอื่น (เช่น OPL) ไม่เติมกลับเข้ามา (ต.ค. 69)
+  if (limited && !teams.some((t) => t.name === suggested)) suggested = null;
   const OWN = "ทีมช่าง";
   const OUT = "ทีม outsource · หัวหน้าภาคปิดงานแทน";
   const sug = teams.find((t) => t.name === suggested);
@@ -645,6 +647,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [adminWarehouse, setAdminWarehouse] = useState("คลังลาดพร้าว 94");
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  /** หัวหน้าภาค — รายการทีมจากเซิร์ฟเวอร์มีเฉพาะทีมที่ตัวเองดูแล (+ outsource) */
+  const [teamsLimited, setTeamsLimited] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
   const editingNoteRef = useRef(false);
   editingNoteRef.current = editingNote;
@@ -714,6 +718,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           adminWarehouse?: string;
           technicians: Technician[];
           teams: Team[];
+          teamsLimited?: boolean;
         }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
@@ -726,6 +731,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       if (options.data.adminWarehouse) setAdminWarehouse(options.data.adminWarehouse);
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
+      setTeamsLimited(!!options.data.teamsLimited);
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
@@ -2268,6 +2274,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         warehouses={warehouses}
         adminWarehouse={adminWarehouse}
         teams={teams}
+        teamsLimited={teamsLimited}
         files={files}
         onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
@@ -2893,6 +2900,7 @@ function StageModal({
   warehouses,
   adminWarehouse,
   teams,
+  teamsLimited,
   files,
   onFilesChanged,
   onCancel,
@@ -2903,6 +2911,7 @@ function StageModal({
   warehouses: string[];
   adminWarehouse: string;
   teams: Team[];
+  teamsLimited: boolean;
   /** ไฟล์แนบของใบงาน (จากการ์ดไฟล์แนบ) — ฟอร์มผลตรวจบอกว่าแนบอะไรไว้แล้ว */
   files: Attachment[];
   /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
@@ -3053,7 +3062,8 @@ function StageModal({
     setTeam(
       order.assignedTeam ??
         (["PARTS_CHECKED", "INSPECT_DISPATCH"].includes(order.status) ? prev(null, pf?.assignedTeam, "ทีม") : null) ??
-        order.suggestedTeam ??
+        // ทีมประจำสาขาที่หัวหน้าภาคเลือกไม่ได้ (ของคนอื่น) ไม่ตั้งไว้ให้ — ให้เลือกเองจากทีมของตัวเอง
+        (teamsLimited && !teams.some((t) => t.name === order.suggestedTeam) ? null : order.suggestedTeam) ??
         null
     );
     setDocs([]);
@@ -4276,7 +4286,7 @@ function StageModal({
                   onChange={setTeam}
                   placeholder="เลือกทีม"
                   accessibilityLabel="ทีมที่จะรับงาน"
-                  options={teamOptions(teams, order.suggestedTeam, order.jobType)}
+                  options={teamOptions(teams, order.suggestedTeam, order.jobType, teamsLimited)}
                 />
                 {teams.length === 0 ? (
                   <Text style={styles.warn}>

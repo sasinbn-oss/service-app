@@ -59,9 +59,11 @@ async function scopeFor(req: AuthRequest) {
       select: { zone: true, pmTeam: true },
       distinct: ["zone", "pmTeam"],
     });
+    // ทีมที่หัวหน้าภาคคนอื่นดูแลไม่นับ — ทีมมาก่อนภาค (utils/supervisorScope.ts)
+    const claimed = new Set(s.claimed ?? []);
     for (const r of rows) {
-      if (r.zone) teams.add(r.zone);
-      if (r.pmTeam) teams.add(r.pmTeam);
+      if (r.zone && !claimed.has(r.zone)) teams.add(r.zone);
+      if (r.pmTeam && !claimed.has(r.pmTeam)) teams.add(r.pmTeam);
     }
   }
   return { where: workOrderInScope(s), teams };

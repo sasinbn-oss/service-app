@@ -14,7 +14,8 @@ fail() { echo "FAIL $1"; FAILED=1; }
 ZW=$(printf '​')
 SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
-OLD_TEAMS=$(DB "select \"supervisedTeams\"::text from \"User\" where id=$SID")
+# coalesce — เทสต์ชุดอื่นเคยคืนค่าเป็น NULL แล้ว '' ทำให้คำสั่งคืนค่าท้ายเทสต์พังเงียบ ๆ (S001 ค้างทีมทดสอบ)
+OLD_TEAMS=$(DB "select coalesce(\"supervisedTeams\",'{}')::text from \"User\" where id=$SID")
 CODE="ZT$((RANDOM % 900 + 100))"
 
 # สาขาไม่มีภาค ทีม "พิษณุโลก" — พิมพ์มาพร้อมช่องว่างท้ายกับ zero-width space
