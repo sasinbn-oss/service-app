@@ -1237,6 +1237,25 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               <Text style={styles.tagLineText}>เครื่อง {machineTag(order.machineCode, order.machineCapacityKg)}</Text>
             </View>
           ) : null}
+          {/*
+            หัวหน้าภาคที่รับผิดชอบใบนี้ — ติดหัวใบงานทุกใบทุกขั้น (เจ้าของงานขอ ต.ค. 69) ไม่ใช่แค่ตอนรอหัวหน้าภาค
+            ช่างหรือแอดมินเปิดใบไหนก็รู้ว่าเรื่องนี้ต้องคุยกับใคร · ไม่มีใครดูแล = แดง ให้ไปตั้งที่สิทธิ์ผู้ใช้/ทีมช่าง
+          */}
+          {order.supervisors ? (
+            <View
+              style={[styles.tagLine, styles.supTag, !order.supervisors.length && styles.supTagNone]}
+              accessibilityLabel={`หัวหน้าภาค ${order.supervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนรับ"}`}
+            >
+              <Ionicons
+                name="person-circle-outline"
+                size={15}
+                color={order.supervisors.length ? colors.primaryInk : colors.dangerInk}
+              />
+              <Text style={[styles.tagLineText, { color: order.supervisors.length ? colors.primaryInk : colors.dangerInk }]}>
+                หัวหน้าภาค · {order.supervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนรับ"}
+              </Text>
+            </View>
+          ) : null}
         </View>
         {/* ลิงก์รูป/วิดีโอจากฟอร์มแจ้งซ่อมย้ายไปอยู่ในการ์ดรูปหน้างาน — ที่นี่เหลือแต่ข้อความ */}
         {formDetail.text ? <Text style={styles.detail}>{formDetail.text}</Text> : null}
@@ -1827,6 +1846,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                   ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
                   จึงไม่มีขั้นไหนที่ขึ้นทั้งสองปุ่มพร้อมกันอีก
                 */}
+                {/*
+                  แจ้งปัญหาหน้างาน — ปุ่มขนาดเดียวกับปิดงาน วางข้างกัน สีกรอบกรมท่าตามธีม (เจ้าของงานขอ ต.ค. 69)
+                  เดิมเป็นแถบเหลืองยาวเต็มการ์ดใต้ปุ่มปิดงาน ดูเหมือนคำเตือน และจอแคบทับกับปุ่มปิดงาน
+                  รายละเอียด (บอกเหตุ แนบรูป ขอเบิกอะไหล่) อยู่ในฟอร์มที่เปิดขึ้นมาแล้ว
+                */}
+                {order.status === "IN_PROGRESS" ? (
+                  <TouchableOpacity
+                    style={[styles.action, styles.actionProblem]}
+                    onPress={() => setRollbackOpen(true)}
+                    disabled={busy}
+                    activeOpacity={0.8}
+                    accessibilityLabel="แจ้งปัญหาหน้างาน — ปิดงานไม่ได้"
+                  >
+                    <Ionicons name="alert-circle-outline" size={18} color={colors.navy} />
+                    <Text style={styles.actionProblemText}>แจ้งปัญหาหน้างาน</Text>
+                  </TouchableOpacity>
+                ) : null}
                 {order.status === "IN_PROGRESS" ? (
                   <TouchableOpacity
                     style={[styles.action, styles.actionPrimary]}
@@ -1863,23 +1899,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               </View>
 
               {/*
-                ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม
+                ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม — ปุ่ม "แจ้งปัญหาหน้างาน" อยู่ข้างปุ่มปิดงานด้านบน
                 ช่างเลือกอะไหล่ที่จะเบิกได้เลย เพราะเป็นคนเดียวที่เห็นของจริง
                 แล้วใบงานวนกลับไปให้หัวหน้าภาคดูและแอดมินเช็คคลังอีกรอบ
               */}
-              {order.status === "IN_PROGRESS" ? (
-                <TouchableOpacity
-                  style={styles.rollback}
-                  onPress={() => setRollbackOpen(true)}
-                  disabled={busy}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="arrow-undo-outline" size={16} color={colors.warning} />
-                  <Text style={styles.rollbackText}>
-                    แจ้งปัญหาหน้างาน — ปิดงานไม่ได้ (บอกเหตุ แนบรูป ขอเบิกอะไหล่เพิ่มได้)
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
             </>
           ) : (
             <View style={[styles.waitingCard, styles.waitingInline]}>
@@ -6428,18 +6451,6 @@ const styles = StyleSheet.create({
   // ขั้นที่ข้ามขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
   stageLabelSkipped: { textDecorationLine: "line-through" },
   stageActor: { fontSize: 11, lineHeight: 16, color: colors.textFaint, textAlign: "center" },
-  rollback: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.warning,
-    borderRadius: radius.sm,
-    backgroundColor: colors.warningTint,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-  },
-  rollbackText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.warning, fontWeight: "600" },
   waitingCard: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   // ในการ์ดหัวใบงาน — ไม่มีกรอบการ์ดซ้อน แค่แถบฟ้าอ่อนบอกว่ารอใคร
   waitingInline: {
@@ -6459,6 +6470,8 @@ const styles = StyleSheet.create({
   statusChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
   tagLine: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.card },
   tagLineText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.body },
+  supTag: { flexDirection: "row", alignItems: "center", gap: 4, borderColor: colors.primarySoft, backgroundColor: colors.primarySoft },
+  supTagNone: { borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft },
   stepsCard: { paddingTop: spacing.md },
   stepsHead: {
     flexDirection: "row",
@@ -6670,6 +6683,8 @@ const styles = StyleSheet.create({
   actionPrimary: { backgroundColor: colors.navyFill },
   actionPrimaryText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   actionSecondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.primary },
+  actionProblem: { backgroundColor: colors.card, borderWidth: 1.5, borderColor: colors.navy },
+  actionProblemText: { color: colors.navy, fontSize: 15, lineHeight: 24, fontWeight: "700" },
   actionSecondaryText: { color: colors.primary, fontSize: 15, lineHeight: 24, fontWeight: "700" },
   logBody: { flex: 1, minWidth: 0 },
   logAction: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
