@@ -928,14 +928,18 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     blink(new Set(present));
     const index = items.findIndex((it) => !("sep" in it) && present.includes(it.id));
     scrollTries.current = 0;
-    if (index >= 0) setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated: true }), 80);
+    if (index < 0) return;
+    const aim = (animated: boolean) => listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated });
+    setTimeout(() => aim(true), 80);
+    // เล็งซ้ำหลังการ์ดที่เพิ่งวาดวัดความสูงจริงเสร็จ — ระหว่างทางใช้ความสูงเฉลี่ย ใบท้ายรายการยาวจึงคลาดไปได้หลายใบ
+    setTimeout(() => aim(false), 1200);
   }, [rows, loading, filter, prefs.supTab, supTabs, shown, items, jumpTick, blink]);
   /** การ์ดยังไม่ถูกวาด (FlatList วาดเฉพาะแถวใกล้จอ) — กระโดดไปตำแหน่งประมาณก่อน แล้วค่อยเล็งใหม่ */
   const scrollTries = useRef(0);
   const onScrollToIndexFailed = (info: { index: number; averageItemLength: number }) => {
     if (++scrollTries.current > 20) return;
     listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-    setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.3, animated: true }), 120);
+    setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.3, animated: false }), 120);
   };
 
   /**
