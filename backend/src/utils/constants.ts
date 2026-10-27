@@ -15,7 +15,13 @@
  * มองเป็น ADMIN แบบเดียวกับ SUPER_ADMIN · เก็บแยกไว้เพราะจะมีขั้นสุดท้ายหลังช่างปิดงาน
  * (แก้ใบปิดงานกรณีเปลี่ยนสินค้า/เคลมประกัน และตีกลับถ้าช่างปิดไม่ตรงฟอร์ม) ที่เป็นของตำแหน่งนี้
  */
-export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN", "PARTS_ADMIN", "SUPER_ADMIN"] as const;
+/**
+ * AREA · COCO_SUPERVISOR = ทีมฝั่งสาขา COCO (Area Team · เจ้าของงานเพิ่ม ต.ค. 69)
+ * แจ้งและเปิดใบงานได้ ดูความคืบหน้าได้ แต่ไม่ได้ทำขั้นตอนของใคร — ดู utils/areaScope.ts
+ * Area เห็นสาขา COCO ทั้งบริษัท · Supervisor (COCO) เห็นเฉพาะสาขาที่ตัวเองดูแล (Branch.cocoSupervisorId)
+ */
+export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN", "PARTS_ADMIN", "SUPER_ADMIN", "AREA", "COCO_SUPERVISOR"] as const;
+export const AREA_TEAM_ROLES = ["AREA", "COCO_SUPERVISOR"];
 /**
  * บทบาทระดับผู้ดูแลระบบ — นับรวมเวลาเช็คว่า "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน"
  * และตั้ง/ถอดได้เฉพาะ Super Admin — แอดมินอะไหล่ทำได้เท่าแอดมิน ตั้งให้ใครก็คือให้สิทธิ์แอดมิน
@@ -28,6 +34,8 @@ export const ROLE_LABELS: Record<string, string> = {
   ADMIN: "แอดมิน",
   PARTS_ADMIN: "Admin Spare Part",
   SUPER_ADMIN: "Super Admin",
+  AREA: "Area",
+  COCO_SUPERVISOR: "Supervisor (COCO)",
 };
 export type Role = (typeof ROLES)[number];
 

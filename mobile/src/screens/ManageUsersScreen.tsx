@@ -27,6 +27,7 @@ import { showAlert } from "../utils/alert";
 import { Role } from "../types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
 import RosterImportModal from "../components/RosterImportModal";
+import AreaTeamImportModal from "../components/AreaTeamImportModal";
 import { canPickFile } from "../utils/filePicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -52,6 +53,13 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
     value: "PARTS_ADMIN",
     label: "Admin Spare Part",
     hint: "คนเช็คประกัน ทำได้ทุกอย่างเท่าแอดมิน · ตั้งได้เฉพาะ Super Admin",
+  },
+  // Area Team (เจ้าของงานเพิ่ม ต.ค. 69) — สาขาที่ Supervisor (COCO) ดูแลมาจากไฟล์ Area Team ปุ่ม "นำเข้า Area Team"
+  { value: "AREA", label: "Area", hint: "ทีมสาขา COCO: แจ้งและเปิดใบงาน · เห็นสาขา COCO ทั้งหมด · ทำขั้นตอนไม่ได้" },
+  {
+    value: "COCO_SUPERVISOR",
+    label: "Supervisor (COCO)",
+    hint: "ทีมสาขา COCO: แจ้งและเปิดใบงาน · เห็นเฉพาะสาขาที่ดูแล (ผูกจากไฟล์ Area Team)",
   },
   {
     value: "SUPER_ADMIN",
@@ -123,6 +131,7 @@ export default function ManageUsersScreen() {
   const [resetting, setResetting] = useState<ManagedUser | null>(null);
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
+  const [importingArea, setImportingArea] = useState(false);
   const [editing, setEditing] = useState<ManagedUser | null>(null);
   const [gapsOnly, setGapsOnly] = useState(false);
   // ทุกคำที่พิมพ์ต้องเจอ (ไม่จำเป็นต้องติดกัน) — "ช่าง กระบี่" ได้ช่างทีมกระบี่
@@ -266,6 +275,16 @@ export default function ManageUsersScreen() {
           >
             <Ionicons name="document-attach-outline" size={18} color={colors.navy} />
             <Text style={[styles.addButtonText, { color: colors.navy }]}>นำเข้ารายชื่อจากไฟล์</Text>
+          </TouchableOpacity>
+        ) : null}
+        {canPickFile ? (
+          <TouchableOpacity
+            style={[styles.addButton, styles.importButton]}
+            onPress={() => setImportingArea(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="storefront-outline" size={18} color={colors.navy} />
+            <Text style={[styles.addButtonText, { color: colors.navy }]}>นำเข้า Area Team</Text>
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity style={styles.addButton} onPress={() => setCreating(true)} activeOpacity={0.8}>
@@ -580,6 +599,7 @@ export default function ManageUsersScreen() {
       />
 
       <RosterImportModal visible={importing} onClose={() => setImporting(false)} onDone={load} />
+      <AreaTeamImportModal visible={importingArea} onClose={() => setImportingArea(false)} onDone={load} />
 
       <ResetPasswordModal
         user={resetting}

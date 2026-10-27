@@ -12,6 +12,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { teamGroups } from "../utils/teamGroups";
 import { teamDayTimeline } from "../utils/timeline";
 import { requireAuth, requireSuperAdmin, AuthRequest } from "../middleware/auth";
@@ -29,7 +30,8 @@ const ON_BOARD = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING", "AWAITING
 
 function requirePlanner(req: AuthRequest, res: Response, next: NextFunction) {
   const role = req.auth?.role;
-  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+  // Area Team ดูได้อย่างเดียว (ด่านใน requireAuth ปล่อยแค่ GET) — เห็นเฉพาะงานของสาขาตัวเอง
+  if (role !== "ADMIN" && role !== "SUPERVISOR" && !isAreaTeam(req.auth)) {
     return res.status(403).json({ error: "บอร์ดแผนงานเปิดได้เฉพาะแอดมินกับหัวหน้าภาค" });
   }
   next();
@@ -51,6 +53,8 @@ async function scopeFor(req: AuthRequest) {
   if (req.auth!.role === "ADMIN") {
     return { where: null as Prisma.WorkOrderWhereInput | null, teams: null as Set<string> | null };
   }
+  // teams ว่าง = ไม่มีทีมให้จัดแผน · แผนของทีมที่ไม่มีงานในสาขาตัวเองวันนั้นไม่ขึ้น
+  if (isAreaTeam(req.auth)) return { where: areaWorkOrderWhere(req.auth!), teams: new Set<string>() };
   const s = await supervisorScope(req.auth!.userId);
   const teams = new Set<string>(s.teams);
   if (s.region) {

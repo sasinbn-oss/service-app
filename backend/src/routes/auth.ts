@@ -6,7 +6,7 @@ import { prisma } from "../prisma";
 import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { canViewAs } from "../utils/viewAs";
-import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay } from "../utils/constants";
+import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay, AREA_TEAM_ROLES } from "../utils/constants";
 import { forgetUser, passwordChanged, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
 import { coverageOf, teamGroups } from "../utils/teamGroups";
@@ -81,7 +81,13 @@ router.post("/login", async (req, res) => {
   }
   const { employeeCode, password } = parsed.data;
 
-  const user = await prisma.user.findUnique({ where: { employeeCode } });
+  // ชื่อผู้ใช้ของ Area Team เป็นอีเมลส่วนหน้า (kanlaya.l) — พิมพ์ตัวใหญ่ปนมาก็ให้เข้าได้ (คีย์บอร์ดมือถือขึ้นต้นตัวใหญ่ให้เอง)
+  // เฉพาะตำแหน่งนี้ รหัสพนักงานของคนอื่นเป็นตัวเลขอยู่แล้ว
+  const user =
+    (await prisma.user.findUnique({ where: { employeeCode } })) ??
+    (await prisma.user.findFirst({
+      where: { employeeCode: employeeCode.trim().toLowerCase(), role: { in: AREA_TEAM_ROLES } },
+    }));
   if (!user) {
     return res.status(401).json({ error: "Invalid employee code or password" });
   }

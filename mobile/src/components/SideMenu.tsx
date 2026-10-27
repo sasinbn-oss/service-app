@@ -16,6 +16,7 @@ import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { AREA_TEAM_LABELS, isAreaTeam } from "../utils/areaTeam";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
 import { MainTabParamList } from "../navigation/types";
@@ -165,7 +166,7 @@ const GROUPS: Group[] = [
         icon: "calendar-outline",
         tab: "HomeTab",
         screen: "PlanBoard",
-        roles: ["ADMIN", "SUPERVISOR"],
+        roles: ["ADMIN", "SUPERVISOR", "AREA", "COCO_SUPERVISOR"],
       },
       { key: "home", label: "หน้าหลัก", labelEn: "Home", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
       {
@@ -243,6 +244,12 @@ const GROUPS: Group[] = [
  * หน้าแอดมินที่ Admin Spare Part ไม่เห็น — ตำแหน่งนี้ดูได้ทุกอย่างแต่แก้ได้เฉพาะเคลมกับข้อมูลอะไหล่
  * (เจ้าของงานกำหนด ต.ค. 69) "ระบบหลังบ้าน" ยังอยู่ เพราะข้างในเหลือหน้าจัดการข้อมูลอะไหล่
  */
+/**
+ * เมนูของ Area Team — 6 เมนูตามที่เจ้าของงานกำหนด (ต.ค. 69) ที่เหลือซ่อนทั้งหมด
+ * เปลี่ยนรหัสผ่านอยู่ด้วย ไม่งั้นหลังเปลี่ยนรหัสครั้งแรกแล้วจะไม่มีทางเปลี่ยนเองอีก
+ */
+const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password"]);
+
 const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches"]);
 
 /** หน้าแรกของแต่ละแท็บ — ไปหน้าพวกนี้ต้องล้างหน้าที่ซ้อนอยู่ ไม่ใช่ซ้อนเพิ่ม */
@@ -295,6 +302,7 @@ function MenuContent({
             const items = g.items
               .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
               .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
+              .filter((it) => !isAreaTeam(user) || AREA_TEAM_MENU.has(it.key))
               .filter((it) => !it.superAdmin || user?.superAdmin);
             if (!items.length) return null;
             // แถบไอคอน (เมนูหด) ไม่มีหัวกลุ่มให้กด จึงโชว์ทุกปุ่มเสมอ
@@ -508,7 +516,7 @@ export default function SideMenu() {
   );
 }
 
-const ROLE_TH: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
+const ROLE_TH: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง", ...AREA_TEAM_LABELS };
 
 /**
  * หัวเมนูเลื่อนออก (จอแคบ): โลโก้กับคนที่ล็อกอิน — จอแคบไม่มีแถบโลโก้แล้ว (ดู NarrowBar ใน MainNavigator)

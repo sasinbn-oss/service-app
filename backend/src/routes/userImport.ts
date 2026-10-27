@@ -7,12 +7,16 @@
  * แต่ตรวจทุกค่าซ้ำที่นี่ — ชื่อทีมต้องมีจริง และตั้งได้แค่สิทธิ์ช่าง/หัวหน้าภาค
  */
 import { Router } from "express";
+import crypto from "crypto";
+import ExcelJS from "exceljs";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
-import { ADMIN_ROLES } from "../utils/constants";
+import { ADMIN_ROLES, ROLE_LABELS } from "../utils/constants";
+import { parseAreaTeam } from "../users/areaTeamImport";
+import { documentPath, saveDocument } from "../documents/store";
 import { displayName, parseRoster, readRows, suggestTeam } from "../users/rosterImport";
 import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
 import { teamGroups } from "../utils/teamGroups";
@@ -198,6 +202,193 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
   // คนที่เข้าระบบไว้แล้วถูกตั้งเป็นหัวหน้าภาค ต้องใช้สิทธิ์ใหม่ได้ทันที ไม่ใช่หลังเข้าระบบใหม่
   staleUsers();
   res.json({ ok: true, created, updated, withoutTeam });
+});
+
+
+// ── Area Team (Area · Supervisor (COCO)) ─────────────────────
+
+/**
+ * นำเข้าไฟล์ Area Team (แอดมิน · เจ้าของงานขอ ต.ค. 69) — สร้าง/อัปเดตบัญชี Area และ Supervisor (COCO)
+ * แล้วผูกสาขา COCO กับ Supervisor ที่ดูแล (Branch.cocoSupervisorId)
+ *
+ * แบบเดียวกับนำเข้าใบแจ้งซ่อม: ส่งไฟล์ครั้งแรกได้ตัวอย่าง (ไม่บันทึก) · ส่งไฟล์เดิมพร้อม apply=1 ถึงบันทึก
+ * อ่านไฟล์ใหม่ทุกครั้ง ไม่เชื่อรายการที่หน้าจอส่งกลับมา — ไม่มีอะไรให้แก้ในหน้าตัวอย่างอยู่แล้ว
+ *
+ * อัปไฟล์ซ้ำได้ (ย้ายสาขา · เปลี่ยนคน): คนที่มีบัญชีแล้วอัปเดตชื่อ/เบอร์/Area ไม่แตะรหัสผ่าน
+ * สาขาที่ Supervisor ในไฟล์เคยถือแต่ไม่อยู่ในไฟล์แล้ว ถูกปลดออก · คนที่ไม่อยู่ในไฟล์ไม่ถูกแตะ
+ * (ไฟล์ที่มีแค่บาง Area จะไม่ไปปลดสาขาของ Area อื่น — ลบคนออกทำที่หน้าสิทธิ์ผู้ใช้)
+ *
+ * รหัสผ่านสุ่มให้แต่ละคน ไม่ใช่รหัสเดียวกันทั้งไฟล์ เพราะคนในไฟล์เป็นคนนอกฝ่ายช่าง ร้อยกว่าคน
+ * รหัสเดียวกันคือใครรู้รหัสก็เข้าบัญชีคนอื่นได้ทั้งหมดก่อนเขาจะเปลี่ยน · รหัสออกมาในไฟล์ Excel ครั้งเดียว
+ * (เก็บแค่ hash) ทุกคนต้องเปลี่ยนตอนเข้าครั้งแรก · ไฟล์หาย → นำเข้าซ้ำพร้อมเลือก "ตั้งรหัสใหม่ให้คนที่ยังไม่เคยเข้าระบบ"
+ */
+const AREA_ROLES = ["AREA", "COCO_SUPERVISOR"];
+// ไม่มี 0/O/1/l/I — รหัสถูกอ่านจากกระดาษ/แชตไปพิมพ์ในมือถือ
+const PASS_CHARS = "abcdefghjkmnpqrstuvwxyz23456789";
+const randomPassword = () => Array.from({ length: 8 }, () => PASS_CHARS[crypto.randomInt(PASS_CHARS.length)]).join("");
+
+const areaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), async (req: AuthRequest, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "ต้องแนบไฟล์ Area Team (.xlsx)" });
+  const fileName = Buffer.from(file.originalname, "latin1").toString("utf8");
+  let rows: string[][];
+  try {
+    rows = await readRows(file.buffer, fileName);
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้" });
+  }
+  const plan = parseAreaTeam(rows);
+  if (!plan || plan.supervisors.length + plan.areas.length === 0) {
+    return res.status(400).json({ error: 'ไม่พบรายชื่อในไฟล์ — ต้องมีหัวตาราง "ERP", "Name-Surname (Thai)", "Mail", "Area" และ "Mail" ของ Area' });
+  }
+  const apply = req.body?.apply === "1" || req.body?.apply === "true";
+  const resetPending = req.body?.resetPending === "1" || req.body?.resetPending === "true";
+
+  const logins = [...plan.areas.map((a) => a.login), ...plan.supervisors.map((s) => s.login)];
+  const codes = [...plan.areas, ...plan.supervisors].flatMap((s) => s.branches);
+  const [existing, branches] = await Promise.all([
+    prisma.user.findMany({
+      where: { employeeCode: { in: logins }, deletedAt: null },
+      select: { id: true, employeeCode: true, name: true, role: true, mustChangePassword: true },
+    }),
+    prisma.branch.findMany({ where: { code: { in: codes } }, select: { id: true, code: true, cancelledAt: true } }),
+  ]);
+  const byLogin = new Map(existing.map((u) => [u.employeeCode, u]));
+  const knownBranch = new Map(branches.map((b) => [b.code, b]));
+  // ชื่อผู้ใช้ชนกับบัญชีตำแหน่งอื่น (ช่าง/แอดมิน) — ไม่เปลี่ยนตำแหน่งให้ การนำเข้าไม่ใช่ที่ถอด/ย้ายตำแหน่งคนในระบบ
+  const taken = existing.filter((u) => !AREA_ROLES.includes(u.role));
+  const skip = new Set(taken.map((u) => u.employeeCode));
+  const missingBranches = codes.filter((c) => !knownBranch.has(c));
+  const notCoco = codes.filter((c) => knownBranch.has(c) && !/^c/i.test(c));
+
+  const people = [
+    ...plan.areas.map((a) => ({ ...a, role: "AREA", phone: null as string | null, areaLogin: null as string | null })),
+    ...plan.supervisors.map((s) => ({ ...s, role: "COCO_SUPERVISOR" })),
+  ].map((p) => {
+    const u = byLogin.get(p.login);
+    return {
+      ...p,
+      status: skip.has(p.login) ? "TAKEN" : u ? "UPDATE" : "NEW",
+      existingRole: u?.role ?? null,
+      pending: !!u?.mustChangePassword,
+      branches: p.branches.filter((c) => knownBranch.has(c)),
+      unknownBranches: p.branches.filter((c) => !knownBranch.has(c)),
+    };
+  });
+  const summary = {
+    areas: plan.areas.length,
+    supervisors: plan.supervisors.length,
+    branches: codes.length - missingBranches.length,
+    create: people.filter((p) => p.status === "NEW").length,
+    update: people.filter((p) => p.status === "UPDATE").length,
+    taken: taken.map((u) => ({ login: u.employeeCode, name: u.name, role: u.role })),
+    missingBranches,
+    notCoco,
+    problems: plan.problems,
+  };
+  if (!apply) return res.json({ fileName, summary, people });
+
+  // ── บันทึก ──
+  const wanted = people.filter((p) => p.status !== "TAKEN");
+  const fresh = wanted.filter((p) => p.status === "NEW" || (resetPending && p.status === "UPDATE" && p.pending));
+  // hash ก่อนเปิด transaction — bcrypt คนละ ~0.1 วิ ร้อยกว่าคนเกินเพดาน transaction ถ้าทำข้างใน
+  const passwords = new Map<string, string>();
+  const hashes = new Map<string, string>();
+  for (const p of fresh) {
+    const pw = randomPassword();
+    passwords.set(p.login, pw);
+    hashes.set(p.login, await bcrypt.hash(pw, 10));
+  }
+  const now = new Date();
+  await prisma.$transaction(
+    async (tx) => {
+      const created = wanted.filter((p) => p.status === "NEW");
+      if (created.length) {
+        await tx.user.createMany({
+          data: created.map((p) => ({
+            employeeCode: p.login,
+            name: p.name,
+            phone: p.phone,
+            role: p.role,
+            passwordHash: hashes.get(p.login)!,
+            mustChangePassword: true,
+          })),
+        });
+      }
+      const ids = new Map(
+        (await tx.user.findMany({ where: { employeeCode: { in: wanted.map((p) => p.login) }, deletedAt: null }, select: { id: true, employeeCode: true } })).map(
+          (u) => [u.employeeCode, u.id]
+        )
+      );
+      /**
+       * อัปเดตทั้งชุดในคำสั่งเดียว (UNNEST) ไม่ใช่ทีละคน — ฐานข้อมูลจริงอยู่คนละ region
+       * 156 คน + 433 สาขาทีละแถวคือหลายร้อยรอบไปกลับ เกินเพดาน transaction
+       * ส่งเป็น text[] แล้ว cast เอง (CLAUDE.md: array ที่เป็น null ทั้งก้อนถูกเดาชนิดผิด)
+       */
+      const ppl = wanted.map((p) => ({ id: String(ids.get(p.login)), p }));
+      await tx.$executeRaw`
+        UPDATE "User" u SET "name" = d.name, "phone" = COALESCE(NULLIF(d.phone, ''), u."phone"), "role" = d.role,
+          "areaId" = NULLIF(d.area, '')::int
+        FROM UNNEST(${ppl.map((x) => x.id)}::text[], ${ppl.map((x) => x.p.name)}::text[], ${ppl.map((x) => x.p.phone ?? "")}::text[],
+                    ${ppl.map((x) => x.p.role)}::text[], ${ppl.map((x) => (x.p.areaLogin ? String(ids.get(x.p.areaLogin) ?? "") : ""))}::text[])
+          AS d(id, name, phone, role, area)
+        WHERE u.id = d.id::int`;
+      const reset = fresh.filter((p) => p.status === "UPDATE");
+      if (reset.length) {
+        await tx.$executeRaw`
+          UPDATE "User" u SET "passwordHash" = d.hash, "mustChangePassword" = true, "passwordChangedAt" = ${now}
+          FROM UNNEST(${reset.map((p) => String(ids.get(p.login)))}::text[], ${reset.map((p) => hashes.get(p.login)!)}::text[]) AS d(id, hash)
+          WHERE u.id = d.id::int`;
+      }
+      // สาขาที่ Supervisor ในไฟล์เคยถือ แต่ไฟล์รอบนี้ไม่ได้ให้แล้ว (ย้ายไปคนอื่น/ปิดสาขา) — ปลดก่อนผูกใหม่
+      const supIds = ppl.map((x) => Number(x.id));
+      if (supIds.length) await tx.branch.updateMany({ where: { cocoSupervisorId: { in: supIds } }, data: { cocoSupervisorId: null } });
+      const links = wanted.flatMap((p) => p.branches.map((code) => ({ code, id: String(ids.get(p.login)) })));
+      if (links.length) {
+        await tx.$executeRaw`
+          UPDATE "Branch" b SET "cocoSupervisorId" = d.sup::int
+          FROM UNNEST(${links.map((l) => l.code)}::text[], ${links.map((l) => l.id)}::text[]) AS d(code, sup)
+          WHERE b.code = d.code`;
+      }
+    },
+    { timeout: 60_000, maxWait: 15_000 }
+  );
+  // ตำแหน่งใหม่ต้องมีผลทันที (ตัวตรวจสิทธิ์จำ role ไว้) · คนที่ถูกตั้งรหัสใหม่ต้องหลุดจากเครื่องเดิม
+  staleUsers();
+
+  let credentials: { filename: string; path: string } | null = null;
+  if (passwords.size) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("บัญชีผู้ใช้");
+    ws.addRow(["ชื่อผู้ใช้", "รหัสผ่านเริ่มต้น", "ชื่อ", "ตำแหน่ง", "Area", "สาขา", "เบอร์"]).font = { bold: true };
+    const areaName = new Map(plan.areas.map((a) => [a.login, a.name]));
+    for (const p of fresh) {
+      ws.addRow([p.login, passwords.get(p.login), p.name, ROLE_LABELS[p.role], p.areaLogin ? areaName.get(p.areaLogin) ?? "" : "", p.role === "AREA" ? "COCO ทั้งหมด" : p.branches.join(" "), p.phone ?? ""]);
+    }
+    ws.addRow([]);
+    ws.addRow(["ทุกคนต้องเปลี่ยนรหัสผ่านตอนเข้าระบบครั้งแรก · ไฟล์นี้คือรหัสผ่านจริง ส่งให้เจ้าของบัญชีแล้วลบทิ้ง"]).font = { italic: true };
+    [18, 16, 36, 18, 30, 40, 14].forEach((w, i) => (ws.getColumn(i + 1).width = w));
+    const stamp = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const stored = saveDocument({
+      filename: `บัญชี-Area-Team-${stamp}.xlsx`,
+      asciiFilename: `area-team-accounts-${stamp}.xlsx`,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      data: Buffer.from(await wb.xlsx.writeBuffer()),
+      ownerId: req.auth!.userId,
+    });
+    credentials = { filename: stored.filename, path: documentPath(stored) };
+  }
+  res.json({
+    ok: true,
+    created: wanted.filter((p) => p.status === "NEW").length,
+    updated: wanted.filter((p) => p.status === "UPDATE").length,
+    passwordsIssued: passwords.size,
+    branchesLinked: wanted.reduce((n, p) => n + p.branches.length, 0),
+    skipped: taken.length,
+    credentials,
+  });
 });
 
 export default router;

@@ -24,6 +24,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 import { HomeStackParamList } from "../navigation/types";
 import PartPicker from "../components/PartPicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
@@ -378,6 +379,11 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         showAlert("ดูได้อย่างเดียว", "Admin Spare Part เปิดใบงานไม่ได้ — ให้แอดมินหรือหัวหน้าภาคเปิด");
         return;
       }
+      // Area Team เปิดใบงานผ่านฟอร์มปกติ (กรอกครบตามที่บังคับ) ไม่ใช่ผูกกับเคสบนกระดาน — การผูกเคสแก้ข้อมูลเคสด้วย
+      if (isAreaTeam(user)) {
+        navigation.navigate("WorkOrderForm", { branchCode: row.branchCode });
+        return;
+      }
       navigation.navigate("WorkOrderForm", {
         outageId: row.id,
         branchCode: row.branchCode,
@@ -386,8 +392,10 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         machineCode: row.machineCode ?? undefined,
       });
     },
-    [navigation, user?.partsAdmin]
+    [navigation, user]
   );
+  // Area Team ดูกระดานได้อย่างเดียว — กดแถวแล้วไปใบงาน/เปิดใบงาน แทนหน้าต่างกรอกอาการ/สถานะของเคส
+  const editRow = isAreaTeam(user) ? openWorkOrder : setEditing;
 
   const load = useCallback(
     async (opts: { refresh?: boolean } = {}) => {
@@ -805,7 +813,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         ) : null}
         <View style={{ flexGrow: 1 }} />
         <View style={styles.topActions}>
-          <HeadButton icon="time-outline" label="ประวัติการกรอก" onPress={() => setShowActivity(true)} />
+          {!isAreaTeam(user) ? (
+            <HeadButton icon="time-outline" label="ประวัติการกรอก" onPress={() => setShowActivity(true)} />
+          ) : null}
           {user?.role === "ADMIN" ? (
             <HeadButton
               icon="cloud-upload-outline"
@@ -813,7 +823,9 @@ export default function MachineDashboardScreen({ navigation }: Props) {
               onPress={() => navigation.navigate("MachineImport")}
             />
           ) : null}
-          <HeadButton icon="download-outline" label="ส่งออก Excel" onPress={exportExcel} disabled={exporting || !data} />
+          {!isAreaTeam(user) ? (
+            <HeadButton icon="download-outline" label="ส่งออก Excel" onPress={exportExcel} disabled={exporting || !data} />
+          ) : null}
         </View>
       </View>
 
@@ -1141,7 +1153,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                 sortKey={sortKey}
                 sortAsc={sortAsc}
                 onSort={toggleSort}
-                onEdit={setEditing}
+                onEdit={editRow}
                 onWorkOrder={openWorkOrder}
                 available={tableWidth}
                 slaLimit={slaHours}
@@ -1153,7 +1165,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
                     key={row.id}
                     row={row}
                     isMachines={isMachines}
-                    onEdit={setEditing}
+                    onEdit={editRow}
                     onWorkOrder={openWorkOrder}
                   />
                 ))}

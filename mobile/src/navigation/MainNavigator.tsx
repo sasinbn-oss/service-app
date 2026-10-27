@@ -53,6 +53,7 @@ import ManageBranchesScreen from "../screens/ManageBranchesScreen";
 import ManageUsersScreen from "../screens/ManageUsersScreen";
 
 import { useAuth } from "../context/AuthContext";
+import { AREA_TEAM_LABELS, isAreaTeam } from "../utils/areaTeam";
 import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
@@ -316,6 +317,7 @@ function AppTopBar() {
 }
 
 const ROLE_LABEL: Record<string, string> = {
+  ...AREA_TEAM_LABELS,
   ADMIN: "แอดมิน",
   SUPERVISOR: "หัวหน้าภาค",
   EMPLOYEE: "ช่าง",
@@ -352,11 +354,13 @@ function LogoutButton() {
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
 function HomeStackNavigator() {
+  const { user } = useAuth();
+  // Area Team ไม่มีงานออกหน้างาน (งานของฉันวันนี้คือของช่าง) — เปิดมาเจอแผนงาน เมนูแรกของตำแหน่งนี้
   // ทุกตำแหน่งเปิดแอปมาเจอ "งานของฉันวันนี้" ก่อน (เจ้าของงานเลือก ต.ค. 69)
   // เดิมแอดมิน/หัวหน้าภาคเริ่มที่แผนงาน ช่างเริ่มที่งานของฉัน — เปลี่ยนให้ทุกคนเห็นงานที่ออกไปจริงวันนี้ก่อน
   // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ภาคของตัวเอง · แอดมิน = ทั้งหมด
   return (
-    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout} initialRouteName="MyJobs">
+    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout} initialRouteName={isAreaTeam(user) ? "PlanBoard" : "MyJobs"}>
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
       <HomeStack.Screen name="MyJobs" component={MyJobsScreen} options={{ title: "งานของฉัน" }} />
       <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
@@ -687,6 +691,8 @@ export default function MainNavigator() {
               ),
             }}
           />
+          {/* Area Team ไม่มีประวัติส่วนตัว (รถ ลงเวลา เบิกของ) — ใบที่ตัวเองเปิดอยู่ในใบงานซ่อมแล้ว */}
+          {!isAreaTeam(user) && (
           <Tab.Screen
             name="HistoryTab"
             component={HistoryStackNavigator}
@@ -698,6 +704,7 @@ export default function MainNavigator() {
               ),
             }}
           />
+          )}
           {isAdmin && (
             <Tab.Screen
               name="AdminTab"
