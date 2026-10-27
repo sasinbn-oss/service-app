@@ -106,11 +106,12 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await page.waitForTimeout(1500);
     await label("ทีมที่จะรับงาน").first().click();
     await page.waitForTimeout(800);
-    const own = vis("ทีมช่าง"), out = vis("ทีม outsource · หัวหน้าภาคปิดงานแทน"), osRow = vis(os);
+    // หัวหน้าภาค: กลุ่มแรกคือ "ทีมที่คุณดูแล" (ทีมของคนอื่นอยู่กลุ่ม "ทีมนอกความดูแล" ถัดไป — จ่ายข้ามทีมได้ ต.ค. 69)
+    const own = vis("ทีมที่คุณดูแล"), out = vis("ทีม outsource · หัวหน้าภาคปิดงานแทน"), osRow = vis(os);
     if ((await own.count()) && (await out.count()) && (await osRow.count())) {
       const y = async (l) => (await l.first().boundingBox()).y;
       (await y(own)) < (await y(out)) && (await y(out)) < (await y(osRow))
-        ? pass("ช่องเลือกทีม: ทีมช่างก่อน แล้วหัวข้อทีม outsource แยกท้าย · ชื่อทีมไม่มีป้ายต่อท้าย")
+        ? pass("ช่องเลือกทีม: ทีมที่คุณดูแลก่อน แล้วหัวข้อทีม outsource แยกท้าย · ชื่อทีมไม่มีป้ายต่อท้าย")
         : fail("ลำดับกลุ่มไม่ถูก");
     } else fail(`ไม่เห็นหัวข้อกลุ่ม/ชื่อทีม ${os}`);
     (await vis(`${os} · outsource`).count()) === 0 ? pass("ไม่มีชื่อแบบ “· outsource” ต่อท้ายแล้ว") : fail("ยังมีป้ายต่อท้ายชื่อ");

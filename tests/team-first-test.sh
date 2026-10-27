@@ -1,7 +1,8 @@
 #!/bin/bash
 # ทดสอบ: ทีมมาก่อนภาค (เจ้าของงานกำหนด ต.ค. 69 — "ทำไมหัวหน้าภาคคนอื่นถึงเห็นทีม OPL")
 #   · สาขาที่ทีมประจำมีหัวหน้าภาคดูแลแล้ว → ใบเข้าเฉพาะคนดูแลทีม ไม่เข้าคนที่ดูแลตามภาค
-#   · ช่อง "ทีมที่จะรับงาน" ของหัวหน้าภาค = เฉพาะทีมที่ตัวเองดูแล · จ่ายทีมนอกขอบเขต = 403 (กันที่เซิร์ฟเวอร์)
+#   · ช่อง "ทีมที่จะรับงาน" ของหัวหน้าภาค = ทุกทีม ติดธงทีมของตัวเอง (จ่ายข้ามทีมได้ ต.ค. 69 — ดู cross-team-test.sh)
+#     จ่ายข้ามไปแล้วใบยังเป็นของคนจ่าย ไม่ตามทีมที่รับ
 #   · คนดูแลทีมหมดสิทธิ์ → ใบกลับเข้าคนดูแลภาค
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -33,16 +34,15 @@ seen() { curl -s "localhost:4000/api/work-orders?status=ALL&search=$CODE" -H "$(
 [ "$(seen $Z)|$(seen $S)" = "true|false" ] && pass "คนดูแลทีมเห็นใบ · คนดูแลภาคไม่เห็น" || fail "เห็นใบ: ทีม=$(seen $Z) ภาค=$(seen $S)"
 [ "$(curl -s -o /dev/null -w '%{http_code}' localhost:4000/api/work-orders/$WO -H "$(H $S)")" = "403" ] && pass "คนดูแลภาคเปิดใบด้วยเลขตรง ๆ ไม่ได้" || fail "S001 เปิดใบได้"
 
-# ช่องทีมที่จะรับงาน
+# ช่องทีมที่จะรับงาน — ทุกทีม แต่บอกว่าทีมไหนของตัวเอง
 OPT() { curl -s localhost:4000/api/work-orders/options -H "$(H $1)" | J "$2"; }
-[ "$(OPT $S 'd.teamsLimited+"|"+d.teams.some(t=>t.name==="กระบี่")')|$(OPT $Z 'd.teams.filter(t=>!t.outsource).map(t=>t.name).join()')|$(OPT $A 'd.teamsLimited+"|"+(d.teams.length>2)')" = "true|false|กระบี่|false|true" ] \
-  && pass "รายการทีม: S001 ไม่เห็นกระบี่ · คนดูแลทีมเห็นแค่กระบี่ (+outsource) · แอดมินเห็นทุกทีม" || fail "options: S=$(OPT $S 'd.teams.map(t=>t.name).join()') Z=$(OPT $Z 'd.teams.map(t=>t.name).join()')"
+MINE='d.teams.filter(t=>t.mine).map(t=>t.name).join()'
+[ "$(OPT $S 'd.teams.find(t=>t.name==="กระบี่").mine')|$(OPT $Z "$MINE")|$(OPT $A 'd.teams.length>2')" = "false|กระบี่|true" ] \
+  && pass "รายการทีม: กระบี่ไม่ใช่ทีมของ S001 · คนดูแลทีมมีกระบี่เป็นทีมตัวเอง · แอดมินเห็นทุกทีม" || fail "options: S=$(OPT $S "$MINE") Z=$(OPT $Z "$MINE")"
 OTHER=$(DB "select zone from \"Branch\" where zone is not null and zone<>'กระบี่' and \"cancelledAt\" is null limit 1")
 R=$(POST $Z "work-orders/$WO/assign" "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-12-01\"}")
-[ "$(DB "select status||'|'||coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$WO")" = "PARTS_CHECKED|-" ] && echo "$R" | grep -q "ไม่ได้อยู่ในความดูแลของคุณ" \
-  && pass "จ่ายให้ทีมนอกขอบเขต ($OTHER) = 403 ฐานข้อมูลไม่เปลี่ยน" || fail "จ่ายข้ามขอบเขตได้: $R"
-R=$(POST $Z "work-orders/$WO/assign" '{"team":"กระบี่","scheduledAt":"2026-12-01"}')
-[ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$WO")" = "กระบี่" ] && pass "จ่ายให้ทีมตัวเองได้" || fail "จ่ายทีมตัวเองไม่ได้: $R"
+[ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$WO")" = "$OTHER" ] && [ "$(seen $Z)|$(seen $S)" = "true|false" ] \
+  && pass "จ่ายข้ามไปทีม $OTHER ได้ · ใบยังอยู่กับคนดูแลทีมกระบี่ ไม่ไปที่ S001" || fail "จ่ายข้ามทีม: $R · เห็น Z=$(seen $Z) S=$(seen $S)"
 
 # คนดูแลทีมหมดสิทธิ์ → ใบกลับเข้าคนดูแลภาค
 PATCH $A "auth/users/$ZID" '{"role":"EMPLOYEE"}' >/dev/null
