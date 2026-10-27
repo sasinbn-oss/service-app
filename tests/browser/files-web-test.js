@@ -160,7 +160,7 @@ function imageWidth(buf) {
     await page.waitForTimeout(1000);
 
     // ── ที่เก็บไม่ตอบ CORS → เปิดผ่านเซิร์ฟเวอร์ ──
-    await page.route(/:9100\/.*quote-sample/, (r) => r.abort());
+    await page.route(/:9100\/.*quote-2pages/, (r) => r.abort());
     requests.length = 0;
     await openPdfTile();
     pages = await canvasInfo();
@@ -169,7 +169,7 @@ function imageWidth(buf) {
       : fail(`ทางสำรอง: หน้า=${pages.length} file=${requests.some((u) => /\/file$/.test(u))}`);
     await page.getByLabel("ปิดรูป", { exact: true }).locator("visible=true").last().click();
     await page.waitForTimeout(800);
-    await page.unroute(/:9100\/.*quote-sample/);
+    await page.unroute(/:9100\/.*quote-2pages/);
 
     // ── รูปเต็มโหลดช้า → บอกว่ายังเป็นรูปย่อ ──
     await page.route(/:9100\/.*doc-3000/, async (r) => {
