@@ -82,13 +82,18 @@ const MODEL_OTHER = "อื่นๆ";
  * เหลือแค่อาการกับรูป · ท่อลมร้อนไม่อยู่ในนี้ เพราะเป็นของเครื่องอบ ยังระบุ D ได้
  */
 const EQUIPMENT_JOBS = new Set(["COIN_CHANGER", "WATER_PUMP", "DETERGENT", "WATER_HEATER"]);
+/**
+ * งานที่ไม่ระบุเครื่อง — อุปกรณ์ร้าน กับ PM ที่เข้าทำทั้งร้าน (เจ้าของงานกำหนด ต.ค. 69)
+ * ใบเดียวต่อสาขา ฟอร์มเหลือแค่อาการกับรูป · เซิร์ฟเวอร์ไม่รับเลขเครื่องกับใบ PM
+ */
+const NO_MACHINE_JOBS = new Set([...EQUIPMENT_JOBS, "PM"]);
 
 /**
  * Area Team ต้องกรอกครบก่อนเปิดใบงาน (เจ้าของงานกำหนด ต.ค. 69 — "ล็อกการใส่ข้อมูลทั้งหมด")
  * ทีมสาขาแจ้งแล้วไม่ได้อยู่ต่อ ข้อมูลที่ขาดคือแอดมินต้องโทรถามทีหลัง · เซิร์ฟเวอร์เช็คซ้ำ (areaTeamMissing)
  * ยกเว้นรูป — อัปหลังสร้างใบงาน เช็คได้ที่นี่ที่เดียว · งานที่ไม่ผูกเครื่องซัก/อบไม่บังคับหมายเลขเครื่อง
  */
-const AREA_MACHINE_JOBS = new Set(["CM", "PM", "INSPECT", "HOT_AIR_DUCT"]);
+const AREA_MACHINE_JOBS = new Set(["CM", "INSPECT", "HOT_AIR_DUCT"]);
 const AREA_SYMPTOM_MIN = 10;
 
 /**
@@ -189,8 +194,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    */
   const [rows, setRows] = useState<MachineRow[]>([blankRow()]);
   // อุปกรณ์ร้านเปิดได้ใบเดียว (ไม่มีเครื่องให้แยกใบ) — แถวที่สองขึ้นไปซ่อนไว้ ไม่ลบ สลับกลับมาเป็นงานเครื่องแล้วยังอยู่
-  const equipment = !fromBoard && EQUIPMENT_JOBS.has(jobType);
-  const shownRows = equipment ? rows.slice(0, 1) : rows;
+  const noMachine = !fromBoard && NO_MACHINE_JOBS.has(jobType);
+  const shownRows = noMachine ? rows.slice(0, 1) : rows;
 
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
   const [capacities, setCapacities] = useState<number[]>(FALLBACK_CAPACITIES);
@@ -224,8 +229,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    * รูปหน้างานบังคับทุกตำแหน่ง (เจ้าของงานกำหนด ต.ค. 69) — ช่างกับหัวหน้าภาคระบุอะไหล่จากรูปก่อนไปหน้างาน
    * ใบที่ไม่มีรูปคือต้องโทรถามร้านหรือขับไปดูก่อนรอบหนึ่ง · บังคับที่ฟอร์มเท่านั้น เพราะรูปอัปหลังสร้างใบงาน
    * (นำเข้าจากไฟล์ฟอร์ม COCO ไม่ผ่านด่านนี้ — แถวในไฟล์ที่ไม่มีรูปยังนำเข้าได้)
+   *
+   * ยกเว้นใบ PM (เจ้าของงานขอ ต.ค. 69) — เป็นงานตามรอบ ไม่ได้เปิดเพราะมีอาการให้ถ่าย และไม่ต้องเตรียมอะไหล่จากรูป
    */
-  if (shownRows.some((r) => r.files.length === 0)) missing.push("รูปหน้างาน");
+  const photoRequired = jobType !== "PM";
+  if (photoRequired && shownRows.some((r) => r.files.length === 0)) missing.push("รูปหน้างาน");
 
   // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
   const regionHint = branchRegion ? ` (ภาค${branchRegion})` : "";
@@ -453,8 +461,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     }
     if (!fromBoard && !branchCode.trim()) return "ต้องเลือกสาขา";
     if (fromBoard) return null;
-    // งานอุปกรณ์ร้านไม่มีเครื่อง — ใบเดียว ไม่ต้องตรวจหมายเลข/รุ่น
-    if (equipment) return null;
+    // งานที่ไม่ระบุเครื่อง (อุปกรณ์ร้าน · PM ทั้งร้าน) — ใบเดียว ไม่ต้องตรวจหมายเลข/รุ่น
+    if (noMachine) return null;
 
     const codes = rows.map((r) => r.code.trim().toUpperCase());
     if (codes.some((c) => !c) && rows.length > 1) {
@@ -512,7 +520,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             ...contact,
             branchCode: branchCode.trim(),
             machines: shownRows.map((r) =>
-              equipment
+              noMachine
                 ? { model: null, capacityKg: null, symptom: r.symptom.trim() || null }
                 : {
                     code: r.code.trim().toUpperCase() || undefined,
@@ -537,7 +545,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
        * บอกให้ชัดว่ากี่ไฟล์ที่ไม่ขึ้น แล้วให้ไปแนบซ้ำในใบงานได้
        */
       let failed = 0;
-      const total = shownRows.reduce((sum, r) => sum + r.files.length + (r.nameplate && !equipment ? 1 : 0), 0);
+      const total = shownRows.reduce((sum, r) => sum + r.files.length + (r.nameplate && !noMachine ? 1 : 0), 0);
       let sent = 0;
       for (const [i, row] of shownRows.entries()) {
         const target = orders[i];
@@ -545,7 +553,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         // รูปป้ายรุ่นส่งก่อน เพราะเป็นรูปที่ช่วยคนสั่งอะไหล่มากที่สุด
         // ถ้าเน็ตหลุดกลางทางจะได้ไม่ใช่รูปที่หายไปเป็นอันแรก
         const queue: { file: PickedAttachment; role?: string }[] = [
-          ...(row.nameplate && !equipment ? [{ file: row.nameplate, role: "NAMEPLATE" }] : []),
+          ...(row.nameplate && !noMachine ? [{ file: row.nameplate, role: "NAMEPLATE" }] : []),
           ...row.files.map((file) => ({ file })),
         ];
         for (const item of queue) {
@@ -728,8 +736,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       </View>
 
       <View style={styles.card}>
-        <StepHead n={3} title={equipment ? "อาการ" : "เครื่องและอาการ"} />
-        {!fromBoard && !equipment ? (
+        <StepHead n={3} title={noMachine ? "อาการ" : "เครื่องและอาการ"} />
+        {!fromBoard && !noMachine ? (
           <Text style={styles.stepDesc}>เปิดทีเดียวหลายเครื่องได้ ระบบแยกเป็นใบงานเครื่องละใบ</Text>
         ) : null}
         {/*
@@ -745,11 +753,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             index={i}
             total={shownRows.length}
             fromBoard={fromBoard}
-            equipment={equipment}
+            noMachine={noMachine}
             busy={busy}
             models={models}
             capacities={capacities}
-            photoRequired
+            photoRequired={photoRequired}
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
@@ -764,7 +772,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </React.Fragment>
         ))}
 
-        {!fromBoard && !equipment ? (
+        {!fromBoard && !noMachine ? (
           <TouchableOpacity
             style={styles.addRow}
             onPress={() => setRows((current) => [...current, blankRow()])}
@@ -1014,7 +1022,7 @@ function MachineCard({
   index,
   total,
   fromBoard,
-  equipment,
+  noMachine,
   busy,
   models,
   capacities,
@@ -1028,8 +1036,8 @@ function MachineCard({
   index: number;
   total: number;
   fromBoard: boolean;
-  /** งานอุปกรณ์ร้าน — ไม่มีหมายเลขเครื่อง รุ่น ขนาด ป้ายรุ่น */
-  equipment?: boolean;
+  /** งานที่ไม่ระบุเครื่อง (อุปกรณ์ร้าน · PM ทั้งร้าน) — ไม่มีหมายเลขเครื่อง รุ่น ขนาด ป้ายรุ่น */
+  noMachine?: boolean;
   busy: string | null;
   models: string[];
   capacities: number[];
@@ -1049,8 +1057,8 @@ function MachineCard({
   const badCode = code.length > 0 && !/^[WD]\d{1,4}$/.test(code);
 
   return (
-    <View style={[styles.machineCard, (fromBoard || equipment) && styles.machineCardFlat]}>
-      {!fromBoard && !equipment ? (
+    <View style={[styles.machineCard, (fromBoard || noMachine) && styles.machineCardFlat]}>
+      {!fromBoard && !noMachine ? (
         <View style={styles.machineHead}>
           <Text style={styles.machineTitle}>
             {total > 1 ? `เครื่องที่ ${index + 1}` : "เครื่อง"}
@@ -1068,7 +1076,7 @@ function MachineCard({
         </View>
       ) : null}
 
-      {!fromBoard && !equipment ? (
+      {!fromBoard && !noMachine ? (
         <>
           <Text style={styles.subLabel}>หมายเลขเครื่อง</Text>
           <TextInput

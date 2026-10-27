@@ -85,7 +85,7 @@ echo "$R" | J 'd.hasRequisitionSlip===true?"ok":"bad"' | grep -q ok && pass "ใ
 echo
 echo "═══ งานที่ไม่ใช้อะไหล่ ปิดได้โดยไม่ต้องมีใบเหลือง"
 WO2=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"code":"D5","model":"Haier","symptom":"ตรวจตามรอบ"}]}')
+  -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"symptom":"ตรวจตามรอบ"}]}')
 ID2=$(echo "$WO2" | J 'd.orders?d.orders[0].id:d.id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null

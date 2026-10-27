@@ -109,6 +109,18 @@ DB "update \"WorkOrder\" set \"importKey\"='ทดสอบ-key-ไม่ตร�
   && pass "importKey ไม่ตรงแต่ สาขา+เครื่อง+อาการ ตรง → เติมรูปให้ใบเดิม ไม่เปิดใบใหม่ (เช็คที่ฐานข้อมูล)" || fail "เติมรูปแบบหลวม: $(G | J 'JSON.stringify([d.rows[0].status,d.rows[0].reason,d.summary])')"
 rm -f "$X3"
 
+# ใบ PM ในไฟล์ที่ใส่เลขเครื่องมา → เปิดเป็นงานทั้งร้าน (PM ไม่ระบุเครื่อง · เจ้าของงานกำหนด ต.ค. 69) · ดูตัวอย่างอย่างเดียว ไม่บันทึก
+X4=$(mktemp --suffix=.xlsx)
+NODE_PATH=backend/node_modules node -e '
+  const E=require("exceljs"); const n=process.argv[1]; const wb=new E.Workbook(); const ws=wb.addWorksheet("Sheet1");
+  ws.addRow(["วันที่แจ้ง","รหัสสาขา","ประเภทงาน","เครื่อง","รุ่นของเครื่อง","ขนาดเครื่อง","อาการที่พบ","ผู้ติดต่อที่สาขา","เบอร์ติดต่อสาขา","ชื่อสถานที่"]);
+  ws.addRow([new Date(Date.UTC(2026,9,18)),"C0006","PM","W"+n,"OASIS","13 Kg","ทดสอบนำเข้า PM ตามรอบ","คุณกุ้ง","095-000-0000","สาขาทดสอบ"]);
+  wb.xlsx.writeFile(process.argv[2]);' "$N" "$X4"
+curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file=@$X4" \
+  | J 'const r=d.rows[0]; r.jobType==="PM"&&r.machineCode===null&&r.machineNote==="W'$N'"?"ok":JSON.stringify(r)' | grep -q '^ok$' \
+  && pass "แถว PM ที่ใส่เครื่องมา: เปิดเป็นงานทั้งร้าน ไม่ผูกเครื่อง (เลขเครื่องเก็บไว้ในรายละเอียด)" || fail "แถว PM ผูกเครื่อง"
+rm -f "$X4"
+
 # เก็บกวาด
 for id in $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null; done
 DB "delete from \"Machine\" where code in ('W$N','W$M2') and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null

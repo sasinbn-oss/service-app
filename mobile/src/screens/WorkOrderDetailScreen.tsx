@@ -5273,7 +5273,9 @@ function CloseModal({
   const slipMissing = parts.length > 0 && !slip && !order.hasRequisitionSlip;
   // รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร ต้องมีอย่างน้อยหนึ่ง
   // ก่อน/หลังซ่อมของรอบนี้ อย่างละอย่างน้อยหนึ่ง (เจ้าของงานขอ ต.ค. 69) — เซิร์ฟเวอร์เช็คซ้ำ
-  const beforeMissing = beforeFiles.length === 0 && !order.beforeCount;
+  // ใบ PM ใส่แค่รูปหลังทำ (เจ้าของงานขอ ต.ค. 69) — งานตามรอบ เครื่องไม่ได้เสียมา ไม่มีสภาพก่อนทำให้เทียบ
+  const isPm = order.jobType === "PM";
+  const beforeMissing = !isPm && beforeFiles.length === 0 && !order.beforeCount;
   const afterMissing = afterFiles.length === 0 && !order.afterCount;
   const shotsMissing = beforeMissing || afterMissing;
   // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
@@ -5289,7 +5291,8 @@ function CloseModal({
   const workersMissing = isSub ? !subTeam : workerIds.length === 0 && !otherWorkers.trim();
   const summaryMissing = !note.trim();
   // ป้ายรุ่นต้องถ่ายรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง — รูปเก่าใช้แทนไม่ได้
-  const nameplateMissing = !nameplate && !order.hasNameplate;
+  // ใบ PM เข้าทำทั้งร้าน ไม่ได้ผูกเครื่องไหน (เจ้าของงานกำหนด ต.ค. 69) — ไม่มีป้ายรุ่นให้ถ่าย · ใบ PM เก่าที่เคยใส่เครื่องก็เหมือนกัน
+  const nameplateMissing = !isPm && !nameplate && !order.hasNameplate;
   // ติ๊กว่าอะไหล่ไม่ครบแต่ไม่ได้บอกว่าขาดตัวไหน — ใบรออะไหล่เปล่า ๆ ไม่มีใครตามของได้
   const followUpMissing = followUp && missing.length === 0;
 
@@ -5534,7 +5537,7 @@ function CloseModal({
         {([
           ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0],
           ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วเครื่องกลับมาใช้ได้", afterFiles, setAfterFiles, order.afterCount ?? 0],
-        ] as const).map(([role, label, hint, list, setList, already], i) => {
+        ] as const).filter(([role]) => !(isPm && role === "BEFORE")).map(([role, label, hint, list, setList, already], i) => {
           const add = (files: PickedAttachment[]) => setList((v) => [...v, ...files]);
           const count = list.length + already;
           return (
@@ -5582,41 +5585,44 @@ function CloseModal({
           ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
           ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
           บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
+          ใบ PM ไม่มีขั้นนี้ — เข้าทำทั้งร้าน ไม่ได้อยู่หน้าเครื่องตัวเดียว
         */}
-        <EvidenceStep
-          n={3}
-          title="ป้ายรุ่นของเครื่อง"
-          hint={
-            order.machineCode
-              ? `ในระบบบันทึกไว้ว่า ${order.machineCode}${order.machineModel ? ` · ${order.machineModel}` : ""}${
-                  order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""
-                } — ถ่ายป้ายรุ่นมาเทียบ`
-              : "ถ่ายป้ายรุ่นของรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง"
-          }
-          done={!nameplateMissing}
-          doneText="✓ แนบแล้ว"
-          // ป้ายรุ่นใช้รูปเดียว — แนบแล้วเปลี่ยนได้ด้วยการลบรูปในแถบรูปย่อ ไม่ต้องมีปุ่มเพิ่ม
-          canEdit={nameplateMissing}
-          busy={picking === "NAMEPLATE" ? busy : null}
-          primary={{
-            label: "ถ่ายป้ายรุ่น",
-            icon: "camera",
-            onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage), (f) => setNameplate(f[0] ?? null)),
-            accessibilityLabel: "ถ่ายป้ายรุ่น",
-          }}
-          secondary={{
-            label: "เลือกจากอัลบั้ม",
-            icon: "images-outline",
-            onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage), (f) => setNameplate(f[0] ?? null)),
-            accessibilityLabel: "เลือกรูปป้ายรุ่น",
-          }}
-        >
-          {nameplate ? (
-            <FileStrip files={[nameplate]} onChange={(next) => setNameplate(next[0] ?? null)} />
-          ) : order.hasNameplate ? (
-            <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
-          ) : null}
-        </EvidenceStep>
+        {!isPm ? (
+          <EvidenceStep
+            n={3}
+            title="ป้ายรุ่นของเครื่อง"
+            hint={
+              order.machineCode
+                ? `ในระบบบันทึกไว้ว่า ${order.machineCode}${order.machineModel ? ` · ${order.machineModel}` : ""}${
+                    order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""
+                  } — ถ่ายป้ายรุ่นมาเทียบ`
+                : "ถ่ายป้ายรุ่นของรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง"
+            }
+            done={!nameplateMissing}
+            doneText="✓ แนบแล้ว"
+            // ป้ายรุ่นใช้รูปเดียว — แนบแล้วเปลี่ยนได้ด้วยการลบรูปในแถบรูปย่อ ไม่ต้องมีปุ่มเพิ่ม
+            canEdit={nameplateMissing}
+            busy={picking === "NAMEPLATE" ? busy : null}
+            primary={{
+              label: "ถ่ายป้ายรุ่น",
+              icon: "camera",
+              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage), (f) => setNameplate(f[0] ?? null)),
+              accessibilityLabel: "ถ่ายป้ายรุ่น",
+            }}
+            secondary={{
+              label: "เลือกจากอัลบั้ม",
+              icon: "images-outline",
+              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage), (f) => setNameplate(f[0] ?? null)),
+              accessibilityLabel: "เลือกรูปป้ายรุ่น",
+            }}
+          >
+            {nameplate ? (
+              <FileStrip files={[nameplate]} onChange={(next) => setNameplate(next[0] ?? null)} />
+            ) : order.hasNameplate ? (
+              <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
+            ) : null}
+          </EvidenceStep>
+        ) : null}
       </View>
 
       <Text style={styles.modalLabel}>ผลการทำงาน</Text>

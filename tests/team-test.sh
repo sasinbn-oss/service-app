@@ -102,7 +102,7 @@ echo "$R" | J 'd.workers.length===1?"ok":"bad"' | grep -q ok && pass "บัน�
 echo
 echo "═══ จ่ายข้ามทีมได้ และบันทึกว่าข้าม"
 WO2=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"code":"D8","model":"Oasis","symptom":"ทดสอบข้ามทีม"}]}')
+  -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"symptom":"ทดสอบข้ามทีม"}]}')
 ID2=$(echo "$WO2" | J 'd.orders?d.orders[0].id:d.id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
 TEAMS=$(curl -s localhost:4000/api/branches/teams -H "$(H $A)" | J 'd.map(t=>t.name).join("|")')
