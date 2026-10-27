@@ -59,6 +59,8 @@ export function jobTypeFromForm(raw: string): string {
 
 /** อุปกรณ์ร้าน — ไม่ผูกเครื่อง (ตรงกับ EQUIPMENT_JOBS ของฟอร์มเปิดใบงาน) */
 export const EQUIPMENT_JOB_TYPES = new Set(["COIN_CHANGER", "WATER_PUMP", "DETERGENT", "WATER_HEATER"]);
+/** งานที่ไม่ผูกเครื่อง — อุปกรณ์ร้าน + PM ที่เข้าทำทั้งร้าน (เจ้าของงานกำหนด ต.ค. 69) */
+export const NO_MACHINE_JOB_TYPES = new Set([...EQUIPMENT_JOB_TYPES, "PM"]);
 
 /** "OASIS" "huebsch " → ชื่อรุ่นตามรายการของระบบ · ไม่อยู่ในรายการเก็บตามที่พิมพ์ */
 function modelFromForm(raw: string): string | null {
@@ -156,7 +158,7 @@ export async function parseRepairForm(buf: Buffer): Promise<FormRow[]> {
     const jobTypeRaw = get("jobTypeRaw").trim();
     const jobType = jobTypeFromForm(jobTypeRaw);
     const rawCode = get("machineCode").trim();
-    const equipment = EQUIPMENT_JOB_TYPES.has(jobType);
+    const noMachine = NO_MACHINE_JOB_TYPES.has(jobType);
     const code = rawCode ? normaliseMachineCode(rawCode) : "";
     const validCode = !!code && isValidMachineCode(code);
     const dateRaw = col.reportedAt ? row.getCell(col.reportedAt).value : null;
@@ -169,7 +171,7 @@ export async function parseRepairForm(buf: Buffer): Promise<FormRow[]> {
     // ช่องเครื่องที่ไม่ใช่รหัส W/D (สาขาพิมพ์ชื่ออุปกรณ์ เช่น "กล่องเกตเวย์") ไม่ทำให้แถวตก —
     // เปิดเป็นงานทั้งสาขา แล้วเก็บข้อความไว้ในรายละเอียด ไม่เดาว่าเป็นเครื่องไหน
 
-    const machineCode = !equipment && validCode ? code : null;
+    const machineCode = !noMachine && validCode ? code : null;
     rows.push({
       line: r,
       reportedAt: reportedAt && !Number.isNaN(Date.parse(reportedAt)) ? reportedAt : null,

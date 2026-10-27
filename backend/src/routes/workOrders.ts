@@ -30,7 +30,7 @@ import { areaTeamWorkbook } from "../reports/areaTeamReport";
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
-import { EQUIPMENT_JOB_TYPES, FormImage, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
+import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
   buildObjectKey,
   deleteObject,
@@ -1957,7 +1957,7 @@ async function createWorkOrder(
  *
  * งานอุปกรณ์ร้าน (ตู้แลกเหรียญ ปั๊มน้ำ ฯลฯ) · IT · อื่นๆ ไม่ผูกกับเครื่องซัก/อบ จึงไม่บังคับช่องเครื่อง
  */
-const MACHINE_REQUIRED_JOBS = new Set(["CM", "PM", "INSPECT", "HOT_AIR_DUCT"]);
+const MACHINE_REQUIRED_JOBS = new Set(["CM", "INSPECT", "HOT_AIR_DUCT"]);
 const AREA_SYMPTOM_MIN = 10;
 
 function areaTeamMissing(body: z.infer<typeof createSchema>): string[] {
@@ -2000,6 +2000,14 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const wanted =
     body.machines ??
     [{ code: body.machineCode, model: null, capacityKg: null, symptom: body.symptom }];
+
+  /**
+   * PM เข้าทำทั้งร้าน ไม่ระบุเครื่อง (เจ้าของงานกำหนด ต.ค. 69) — ใบเดียวต่อสาขา
+   * ไม่ตัดเลขเครื่องทิ้งเงียบ ๆ: ส่งมาสามเครื่องแล้วได้ใบเดียว คนเปิดจะไม่รู้ว่าข้อมูลหายไปไหน
+   */
+  if (body.jobType === "PM" && wanted.some((m) => m.code?.trim())) {
+    return res.status(400).json({ error: "งาน PM เข้าทำทั้งร้าน ไม่ต้องระบุเครื่อง — เอาหมายเลขเครื่องออก" });
+  }
 
   // เว้นรหัสเครื่องว่าง = งานทั้งสาขา ซึ่งมีได้ใบเดียว ไม่ใช่สามใบที่ไม่รู้ว่าต่างกันตรงไหน
   const blank = wanted.filter((m) => !m.code?.trim());
@@ -2404,7 +2412,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
         for (const r of chunk) {
           const branch = branchBy.get(r.branchCode)!;
           let machine: { id: number; model: string | null; capacityKg: number | null } | null = null;
-          if (r.machineCode && !EQUIPMENT_JOB_TYPES.has(r.jobType)) {
+          if (r.machineCode && !NO_MACHINE_JOB_TYPES.has(r.jobType)) {
             // เครื่องที่ยังไม่มีในระบบสร้างให้เลย — เหตุผลเดียวกับเปิดใบงานเอง (ไฟล์รายงานมีแต่เครื่องที่เคยดับ)
             machine =
               (await tx.machine.findFirst({
@@ -5145,6 +5153,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     select: {
       status: true,
       code: true,
+      jobType: true,
       assignedToId: true,
       assignedTeam: true,
       // ทีม outsource — หัวหน้าภาคในพื้นที่ปิดแทนได้ (ดู blockedForTeam)
@@ -5238,8 +5247,11 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * รูปคือสิ่งเดียวที่บอกได้ว่าไปถึงจริง เจออะไร และซ่อมแล้วเครื่องกลับมาจริง — สรุปงานที่พิมพ์มา
    * เป็นคำบอกเล่า · ก่อน/หลังแยกกันเพราะคนตรวจย้อนอยากเทียบสองภาพนี้ ไม่ใช่ไล่หาในกองรูป
    * นับเฉพาะรอบนี้เหมือนป้ายรุ่น — ใบที่วนกลับมา รูปหลังซ่อมของรอบก่อนไม่ได้บอกว่ารอบนี้ซ่อมเสร็จ
+   *
+   * ใบ PM บังคับแค่รูปหลังทำ (เจ้าของงานขอ ต.ค. 69) — งานตามรอบ เครื่องไม่ได้เสียมา
+   * รูปก่อนทำไม่มีอาการอะไรให้เทียบ สิ่งที่ต้องพิสูจน์คือทำเสร็จจริง
    */
-  if (!has("BEFORE")) {
+  if (current.jobType !== "PM" && !has("BEFORE")) {
     return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอก่อนซ่อมอย่างน้อยหนึ่งไฟล์" });
   }
   if (!has("AFTER")) {
@@ -5256,7 +5268,8 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    *
    * ตอนเปิดใบงานยังไม่บังคับเหมือนเดิม เพราะคนเปิดใบงานบางทีรับแจ้งทางโทรศัพท์
    */
-  if (!has("NAMEPLATE")) {
+  // ใบ PM เข้าทำทั้งร้าน ไม่ได้ผูกเครื่องไหน (เจ้าของงานกำหนด ต.ค. 69) — ไม่มีป้ายรุ่นให้เทียบ
+  if (current.jobType !== "PM" && !has("NAMEPLATE")) {
     return res.status(400).json({
       error: "ต้องแนบรูปป้ายรุ่นของเครื่องที่ถ่ายรอบนี้ก่อนปิดงาน",
     });
