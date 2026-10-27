@@ -18,6 +18,8 @@ export function WasherIcon({ size = 92, color = colors.primary }: { size?: numbe
         duration: 1400,
         easing: Easing.linear,
         useNativeDriver: Platform.OS !== "web",
+        // วนไม่รู้จบ — ดูเหตุผลที่ useBreath ใน Urgent.tsx
+        isInteraction: false,
       })
     );
     loop.start();

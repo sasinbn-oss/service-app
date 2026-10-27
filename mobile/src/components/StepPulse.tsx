@@ -31,13 +31,17 @@ export default function StepPulse({ size, color = colors.primary }: { size: numb
     const useNativeDriver = Platform.OS !== "web";
     const loops = waves.map((v, i) =>
       Animated.sequence([
-        Animated.delay((PERIOD / 2) * i),
+        // ไม่ใช้ Animated.delay — มันเป็น interaction ด้วย (ดูเหตุผลที่ useBreath ใน Urgent.tsx)
+        // ใบด่วนในรายการถูกสร้างใหม่ตลอดตอนเลื่อน ทุกใบจะกันรายการไม่ให้วาดต่อครึ่งรอบ
+        Animated.timing(v, { toValue: 0, duration: 0, delay: (PERIOD / 2) * i, useNativeDriver, isInteraction: false }),
         Animated.loop(
           Animated.timing(v, {
             toValue: 1,
             duration: PERIOD,
             easing: Easing.bezier(0.2, 0.6, 0.3, 1),
             useNativeDriver,
+            // วนไม่รู้จบ — ดูเหตุผลที่ useBreath ใน Urgent.tsx
+            isInteraction: false,
           })
         ),
       ])

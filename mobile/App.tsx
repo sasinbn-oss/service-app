@@ -1,5 +1,5 @@
 import React, { useRef } from "react";
-import { View } from "react-native";
+import { InteractionManager, Platform, View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { navigationRef, takeScreenAfterReload } from "./src/navigation/navigationRef";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -17,6 +17,15 @@ import { colors } from "./src/theme";
 import { installWebFonts } from "./src/utils/webFonts";
 
 installWebFonts();
+
+/**
+ * เว็บ: ให้ InteractionManager ใช้ setTimeout แทน requestIdleCallback (react-native-web สลับให้เมื่อตั้ง deadline)
+ *
+ * FlatList วาดใบงานรอบถัดไปผ่าน runAfterInteractions — ซึ่งบนเว็บรอ requestIdleCallback
+ * แต่ Chrome ยิง idle callback เฉพาะตอนยังมีเฟรมใหม่เกิดอยู่ พอเลื่อนจนสุดส่วนที่วาดไว้แล้วจอนิ่ง
+ * รอบถัดไปค้างได้เป็นนาที (วัดได้ ต.ค. 69 จอ 400 px) · 16 ms = ทำงานค้างได้ไม่เกินหนึ่งเฟรมแล้วค่อยต่อรอบหน้า
+ */
+if (Platform.OS === "web") InteractionManager.setDeadline(16);
 
 function RootNavigator() {
   const { user, loading } = useAuth();

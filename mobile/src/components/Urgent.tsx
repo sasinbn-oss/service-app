@@ -30,10 +30,16 @@ function useBreath(reduced: boolean, period = 2400) {
     }
     // web ไม่มี native driver — ส่ง true ไป RN-web จะเตือนทุกครั้งที่เริ่ม
     const useNativeDriver = Platform.OS !== "web";
+    /**
+     * isInteraction: false — ภาพเคลื่อนไหวที่ไม่ใช้ native driver (ทุกตัวบนเว็บ) นับเป็น "interaction" โดยปริยาย
+     * วนไม่รู้จบ = InteractionManager ไม่เคยว่าง แล้ว FlatList รอ runAfterInteractions ก่อนวาดใบถัดไป
+     * เจอจริง (ต.ค. 69): หน้ารายการบนมือถือที่มีใบด่วน การ์ดถูกวาดเฉพาะตอนจอชนขอบส่วนที่วาดไว้ (ล่วงหน้าเหลือ ~300 px)
+     * ตัวที่วนตลอดตัวใหม่ต้องใส่ค่านี้ด้วย (ดู StepPulse · Spinner · RefreshButton)
+     */
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(v, { toValue: 1, duration: period / 2, easing: Easing.inOut(Easing.ease), useNativeDriver }),
-        Animated.timing(v, { toValue: 0, duration: period / 2, easing: Easing.inOut(Easing.ease), useNativeDriver }),
+        Animated.timing(v, { toValue: 1, duration: period / 2, easing: Easing.inOut(Easing.ease), useNativeDriver, isInteraction: false }),
+        Animated.timing(v, { toValue: 0, duration: period / 2, easing: Easing.inOut(Easing.ease), useNativeDriver, isInteraction: false }),
       ])
     );
     loop.start();

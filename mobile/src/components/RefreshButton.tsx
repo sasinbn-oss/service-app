@@ -121,6 +121,8 @@ export default function RefreshButton() {
         duration: 900,
         easing: Easing.linear,
         useNativeDriver: Platform.OS !== "web",
+        // หมุนค้างตลอดที่โหลดเบื้องหลัง — ดูเหตุผลที่ useBreath ใน Urgent.tsx
+        isInteraction: false,
       })
     );
     loop.start();

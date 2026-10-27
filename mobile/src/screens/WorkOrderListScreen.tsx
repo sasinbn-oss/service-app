@@ -130,6 +130,18 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 
 /** ใบด่วนที่ยังค้าง — ดึงขึ้นบนสุดและมีออร่า (ใบที่ปิดแล้วไม่มี stageActor) */
 const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
+
+/**
+ * ช่องไฟระหว่างการ์ด — ต้องอยู่ "ใน" แถวของ FlatList (ItemSeparatorComponent) ห้ามใช้ gap/margin ของกล่องรายการ
+ *
+ * FlatList หาว่าขอบหน้าต่างวาดตกที่ใบไหนด้วยการค้นตำแหน่งการ์ดที่วัดได้ โดยถือว่าการ์ดต่อกันสนิท
+ * ขอบไปตกในช่องว่างระหว่างใบเมื่อไร ผลค้นเป็น "ไม่พบ" แล้วมันแปลว่า "วาดไปจนถึงใบสุดท้าย"
+ * เจอจริง (ต.ค. 69 จอ 400 px): หน้าต่างวาดพุ่งไปไกลกว่าที่ควรเกือบหมื่นพิกเซลแล้วหดกลับ
+ * list-complete ขาดท้ายรายการเป็นบางรอบ (ใบที่วาดล่วงหน้าไว้แล้วไม่นับเป็นใบใหม่ เลื่อนต่ออีกหลายจอก็ไม่เจอใบใหม่)
+ */
+function CardGap() {
+  return <View style={{ height: spacing.md }} />;
+}
 type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
 type ListData = { rows: WorkOrderRow[]; counts: Record<string, number> };
 type Sort = "urgent" | "new" | "old" | "az" | "za" | "appt";
@@ -1128,6 +1140,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             overlayOn ? { paddingBottom: tabH + spacing.lg } : null,
           ]}
           refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
+          ItemSeparatorComponent={table ? undefined : CardGap}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
@@ -1136,6 +1149,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               {/* แถบบนลอยทับ — เว้นที่ไว้ให้หัวหน้าเริ่มใต้แถบ */}
               {barsH ? <View style={{ height: barsH }} /> : null}
               {foldable ? header : null}
+              {/* ช่องไฟใต้หัวรายการ — แทน gap ของกล่องรายการ (ดู CardGap) */}
+              {table ? null : <CardGap />}
               {table && !status ? (
                 <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
                   <TableHead
@@ -2085,7 +2100,8 @@ const styles = StyleSheet.create({
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
   pageSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginTop: 2 },
-  list: { padding: spacing.lg, paddingTop: 0, gap: spacing.md },
+  // ไม่มี gap — ช่องไฟระหว่างการ์ดอยู่ใน CardGap (ดูเหตุผลที่นั่น)
+  list: { padding: spacing.lg, paddingTop: 0 },
   card: {
     backgroundColor: colors.card,
     borderLeftWidth: 4,
