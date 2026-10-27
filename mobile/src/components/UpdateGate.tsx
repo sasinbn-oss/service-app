@@ -1,29 +1,29 @@
 /**
- * มีรุ่นใหม่แล้วอัปเดตให้เอง (เว็บ — เจ้าของงานขอ ต.ค. 69)
+ * มีระบบรุ่นใหม่ → ขึ้นปุ่ม "อัปเดต" ให้กดเองเมื่อสะดวก (เว็บ — เจ้าของงานขอ ต.ค. 69)
  *
- * merge รุ่นใหม่แล้ว คนที่เปิดเว็บค้างไว้ยังรันโค้ดชุดเก่า — ไม่เห็นของใหม่ และส่งข้อมูลแบบเก่า
- * ไปให้เซิร์ฟเวอร์ใหม่ที่อาจไม่รับแล้ว · ถาม /version.json (เขียนตอน build — scripts/write-build-info.js)
+ * merge รุ่นใหม่แล้ว คนที่เปิดเว็บค้างไว้ยังรันโค้ดชุดเก่า · ถาม /version.json (เขียนตอน build — scripts/write-build-info.js)
  * ทุก 5 นาทีและตอนกลับมาที่แท็บ เทียบกับรุ่นที่ฝังในแอป (buildInfo.ts):
  *
- * - รุ่นไม่ตรง ไม่มีฟอร์มเปิด → โหลดหน้าใหม่เลย · มีฟอร์มเปิด → แถบฟ้า แล้วโหลดเองเมื่อปิดฟอร์มหมด
- *   (ไม่โหลดทับระหว่างกรอก — ที่พิมพ์ค้างไว้จะหาย)
- * - build ก่อน minBuiltAt → หน้า "ต้องอัปเดตก่อนใช้งานต่อ" (รอบที่หน้าจอเก่าใช้กับเซิร์ฟเวอร์ใหม่ไม่ได้)
+ * - รุ่นไม่ตรง → ปุ่ม "อัปเดต" บนแถบบน (UpdateButton) + แจ้งครั้งเดียว · **ไม่โหลดหน้าใหม่เอง** ใช้รุ่นเดิมต่อได้จนกว่าจะกด
+ *   เดิมโหลดเองทันทีที่ไม่มีฟอร์มเปิด — คนที่กำลังดู/เลื่อนรายการอยู่ หน้าเด้งกลับไปเริ่มใหม่ต่อหน้า (เจ้าของงานเจอ ต.ค. 69)
+ * - build ก่อน minBuiltAt → หน้า "ต้องอัปเดตก่อนใช้งานต่อ" — ใช้เฉพาะรอบที่หน้าจอเก่าใช้กับเซิร์ฟเวอร์ใหม่ไม่ได้จริง ๆ
+ *   (ตั้งเองใน write-build-info.js) · ยังไม่โหลดเอง รอให้กดเหมือนกัน
  *
- * โหลดใหม่ด้วย ?v=รุ่น หลบแคชหน้าเว็บ (ดู freshReload) · ถ้ายังได้รุ่นเดิม → ไม่โหลดวนซ้ำ เหลือแค่แถบให้กดเอง
- * ตอนพัฒนา (expo start) ไม่มีไฟล์นี้ — ไม่ทำอะไร
+ * ยังไม่ได้เข้าระบบ (หน้าเข้าสู่ระบบไม่มีแถบบน) → แถบลอยบนจอแทนปุ่ม
+ * โหลดใหม่ด้วย ?v=รุ่น หลบแคชหน้าเว็บ (ดู freshReload) · ตอนพัฒนา (expo start) ไม่มีไฟล์นี้ — ไม่ทำอะไร
  */
-import React, { useEffect, useRef, useState } from "react";
-import { Platform, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
-import { anyModalOpen, onPageShown, pageVisible, subscribeModals } from "../utils/liveSync";
+import { anyModalOpen, onPageShown, pageVisible } from "../utils/liveSync";
+import { showAlert } from "../utils/alert";
+import { feedback } from "./Feedback";
+import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
 
 const POLL_MS = 5 * 60_000;
-const TRIED_KEY = "update-reloaded-for";
-
-type State = { kind: "none" } | { kind: "soft"; commit: string } | { kind: "must" };
 
 /**
  * โหลดหน้าใหม่ด้วย ?v=รุ่น ไม่ใช่ reload() เฉย ๆ — หน้าเว็บผ่านแคช (Cloudflare หน้า Render) ที่เก็บหน้าแรกไว้ 5 นาที
@@ -34,34 +34,66 @@ function freshReload(commit: string) {
   window.location.replace(`${window.location.pathname}?v=${encodeURIComponent(commit)}`);
 }
 
-function reloadFor(commit: string) {
-  try {
-    // จำว่าโหลดใหม่เพื่อรุ่นนี้ไปแล้ว — ถ้าโหลดแล้วยังเป็นรุ่นเก่าอยู่ จะไม่โหลดวน
-    window.sessionStorage.setItem(TRIED_KEY, commit);
-  } catch {
-    // โหมดไม่บันทึกประวัติ — โหลดได้ตามปกติ แค่กันวนไม่ได้
-  }
-  freshReload(commit);
+/** กดอัปเดตตอนมีฟอร์มเปิดค้าง — ถามก่อน ที่กรอกไว้จะหาย */
+function updateNow(commit: string) {
+  if (!anyModalOpen()) return freshReload(commit);
+  showAlert("อัปเดตตอนนี้เลยไหม", "มีฟอร์มที่เปิดค้างอยู่ — อัปเดตตอนนี้ ข้อมูลที่กรอกแต่ยังไม่ได้บันทึกจะหาย", [
+    { text: "ไว้ทีหลัง", style: "cancel" },
+    { text: "อัปเดตเลย", onPress: () => freshReload(commit) },
+  ]);
 }
 
-function triedAlready(commit: string) {
-  try {
-    return window.sessionStorage.getItem(TRIED_KEY) === commit;
-  } catch {
-    return false;
-  }
+/** รุ่นใหม่ที่เจอ (null = ยังเป็นรุ่นล่าสุด) — ปุ่มบนแถบบนอ่านจากที่นี่ */
+let latest: string | null = null;
+const listeners = new Set<(c: string | null) => void>();
+function setLatest(commit: string) {
+  if (latest === commit) return;
+  latest = commit;
+  listeners.forEach((l) => l(commit));
+}
+function useNewVersion() {
+  const [commit, setCommit] = useState(latest);
+  useEffect(() => {
+    listeners.add(setCommit);
+    setCommit(latest);
+    return () => {
+      listeners.delete(setCommit);
+    };
+  }, []);
+  return commit;
+}
+
+/** ปุ่ม "อัปเดต" บนแถบบน (MainNavigator) — ขึ้นเฉพาะเมื่อมีรุ่นใหม่ · compact = จอแคบ */
+export function UpdateButton({ compact }: { compact?: boolean }) {
+  const commit = useNewVersion();
+  // จอแคบกว่า 420 แถบบนของแอดมินมีปุ่มอีกสามปุ่ม (ดูในฐานะ · การใช้งาน · รีเฟรช) — ใส่คำด้วยแล้วชื่อหน้าหายหมด
+  const { width } = useWindowDimensions();
+  if (!commit) return null;
+  const iconOnly = compact && width < 420;
+  return (
+    <TouchableOpacity
+      style={[styles.topBtn, iconOnly && styles.topBtnIcon]}
+      onPress={() => updateNow(commit)}
+      activeOpacity={0.8}
+      accessibilityLabel="มีระบบรุ่นใหม่ กดเพื่ออัปเดต"
+    >
+      <Ionicons name="arrow-up-circle" size={iconOnly ? 20 : 17} color="#fff" />
+      {iconOnly ? null : <Text style={styles.topBtnText}>{compact ? "อัปเดต" : "มีระบบรุ่นใหม่ · อัปเดต"}</Text>}
+    </TouchableOpacity>
+  );
 }
 
 export default function UpdateGate() {
-  const [state, setState] = useState<State>({ kind: "none" });
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const { user } = useAuth();
+  const commit = useNewVersion();
+  const [must, setMust] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
     // ล้าง ?v= ที่ใส่ไว้หลบแคชตอนโหลดรอบก่อน — ที่อยู่ในแถบเบราว์เซอร์กลับเป็นปกติ
     if (/[?&]v=/.test(window.location.search)) window.history.replaceState(null, "", window.location.pathname);
     let stopped = false;
+    let told: string | null = null;
     const check = async () => {
       if (stopped || !pageVisible()) return;
       let info: { commit?: string; minBuiltAt?: string | null };
@@ -73,31 +105,25 @@ export default function UpdateGate() {
         return; // เน็ตหลุด — รอบหน้าค่อยถาม
       }
       if (stopped || !info.commit || info.commit === BUILD_COMMIT) return;
-      if (info.minBuiltAt && BUILD_AT && BUILD_AT < info.minBuiltAt) {
-        setState({ kind: "must" });
-        return;
+      if (info.minBuiltAt && BUILD_AT && BUILD_AT < info.minBuiltAt) setMust(true);
+      setLatest(info.commit);
+      // บอกครั้งเดียวต่อรุ่น — ปุ่มบนแถบบนอยู่ต่อจนกว่าจะกด
+      if (told !== info.commit) {
+        told = info.commit;
+        feedback.toast("info", "มีระบบรุ่นใหม่ — กดปุ่มอัปเดต (ลูกศรสีฟ้า) ด้านบนเมื่อสะดวก ระหว่างนี้ใช้งานต่อได้ตามปกติ");
       }
-      if (!anyModalOpen() && !triedAlready(info.commit)) reloadFor(info.commit);
-      else setState({ kind: "soft", commit: info.commit });
     };
     void check();
     const timer = setInterval(check, POLL_MS);
     const offShown = onPageShown(check);
-    // ปิดฟอร์มหมดแล้ว — ถ้ามีรุ่นใหม่รออยู่ โหลดตอนนี้
-    const offModals = subscribeModals((n) => {
-      const s = stateRef.current;
-      if (n === 0 && s.kind === "soft" && !triedAlready(s.commit)) reloadFor(s.commit);
-    });
     return () => {
       stopped = true;
       clearInterval(timer);
       offShown();
-      offModals();
     };
   }, []);
 
-  if (state.kind === "none") return null;
-  if (state.kind === "must") {
+  if (must) {
     return (
       <View style={styles.over} accessibilityLabel="ต้องอัปเดตก่อนใช้งานต่อ">
         <View style={styles.box}>
@@ -111,11 +137,13 @@ export default function UpdateGate() {
       </View>
     );
   }
+  // เข้าระบบแล้วปุ่มอยู่บนแถบบน — แถบลอยเฉพาะหน้าเข้าสู่ระบบ
+  if (!commit || user) return null;
   return (
     <View style={styles.bar} accessibilityLabel="มีระบบรุ่นใหม่">
       <Ionicons name="sparkles-outline" size={16} color={colors.primaryInk} />
-      <Text style={styles.barText}>มีระบบรุ่นใหม่ — อัปเดตให้เองเมื่อปิดฟอร์มที่เปิดอยู่</Text>
-      <TouchableOpacity style={styles.barBtn} onPress={() => freshReload(state.commit)} accessibilityLabel="อัปเดตเลย">
+      <Text style={styles.barText}>มีระบบรุ่นใหม่</Text>
+      <TouchableOpacity style={styles.barBtn} onPress={() => freshReload(commit)} accessibilityLabel="อัปเดตเลย">
         <Text style={styles.btnText}>อัปเดตเลย</Text>
       </TouchableOpacity>
     </View>
@@ -145,6 +173,17 @@ const styles = StyleSheet.create({
   },
   barText: { flex: 1, minWidth: 180, fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   barBtn: { backgroundColor: colors.navyFill, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 6 },
+  topBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+  },
+  topBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  topBtnIcon: { width: 38, height: 38, paddingHorizontal: 0, paddingVertical: 0, justifyContent: "center" },
   over: {
     position: "absolute",
     top: 0,
