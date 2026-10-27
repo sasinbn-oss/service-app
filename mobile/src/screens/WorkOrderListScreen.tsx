@@ -1098,6 +1098,21 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     />
   ) : null;
 
+  /**
+   * ปิด scroll anchoring ของเบราว์เซอร์ที่กล่องเลื่อนของรายการ (เว็บเท่านั้น)
+   *
+   * FlatList เว้นที่ว่างไว้แทนการ์ดที่ยังไม่วาด (ประมาณความสูงจากการ์ดที่วาดแล้ว) พอวาดจริงความสูงไม่ตรง
+   * เบราว์เซอร์จะเลื่อนตำแหน่งให้เอง "เพื่อไม่ให้ของบนจอขยับ" — แต่กับรายการเสมือนมันกระโดดข้ามไปทีละหลายพัน px
+   * การ์ดช่วงนั้นถูกข้ามไปไม่เคยโผล่ (รายการราว 200 ใบบนมือถือ เลื่อนช้า ๆ เห็นแค่ 157 · ต.ค. 69)
+   * ตั้งทุกครั้งที่รายการถูกสร้างใหม่ (key เปลี่ยนระหว่างว่าง/มีใบงาน)
+   */
+  const listKey = status ? "empty" : "list";
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const node = (listRef.current as unknown as { getScrollableNode?: () => HTMLElement | null } | null)?.getScrollableNode?.();
+    if (node?.style) node.style.setProperty("overflow-anchor", "none");
+  }, [listKey]);
+
   return (
     <View style={styles.container}>
       {foldable ? null : header}
@@ -1115,7 +1130,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       }
       <View style={{ flex: 1 }}>
         <FlatList
-          key={status ? "empty" : "list"}
+          key={listKey}
           ref={listRef}
           onScroll={onListScroll}
           scrollEventThrottle={16}
