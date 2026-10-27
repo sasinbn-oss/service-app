@@ -73,6 +73,7 @@ export type AdminStackParamList = {
   ManageUsers: undefined;
   ManageTeams: undefined;
   Backup: undefined;
+  AppUsage: undefined;
 };
 
 export type MainTabParamList = {

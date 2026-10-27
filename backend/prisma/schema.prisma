@@ -48,6 +48,7 @@ model User {
   area                 User?                 @relation("AreaMembers", fields: [areaId], references: [id], onDelete: SetNull)
   areaMembers          User[]                @relation("AreaMembers")
   cocoBranches         Branch[]              @relation("CocoSupervisor")
+  usageSlots           UsageSlot[]
   // ต้องเปลี่ยนรหัสก่อนใช้งาน
   //
   // ตั้งเป็น true ตอนแอดมินสร้างบัญชีให้ หรือตอนแอดมินตั้งรหัสใหม่ให้
@@ -1118,4 +1119,21 @@ model Backup {
   dataBytes  Int
   // จำนวนแถวของตารางหลัก ไว้โชว์ในรายการ (ใบงาน / สาขา / ผู้ใช้)
   summary    Json?
+}
+
+// ช่วงเวลาที่ผู้ใช้ใช้แอปอยู่ — แถวละ 5 นาทีต่อคน (หน้า "การใช้งานแอป" ของ Super Admin/แอดมิน · ต.ค. 69)
+//
+// จดเป็นช่วง ไม่ใช่ทุกคำขอ — แอปยิงคำขอหลายสิบครั้งต่อนาที เก็บทุกครั้งตารางโตเป็นล้านแถวต่อเดือน
+// ทั้งที่คำถามจริงมีแค่ "ใช้ตอนไหน นานเท่าไร" · ไม่จดว่าเปิดหน้าไหน/ทำอะไร (เป็นงานของไทม์ไลน์ใบงาน)
+// เก็บ 90 วัน (ลบของเก่าวันละครั้ง — utils/usage.ts)
+model UsageSlot {
+  userId Int
+  // จุดเริ่มของช่วง 5 นาที (UTC)
+  slot   DateTime
+  // WEB = คอม · MOBILE = มือถือ — เดาจาก User-Agent ของคำขอแรกในช่วงนั้น
+  device String
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, slot])
+  @@index([slot])
 }

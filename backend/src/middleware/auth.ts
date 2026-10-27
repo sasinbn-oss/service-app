@@ -3,6 +3,7 @@ import { peekToken, verifyToken, TokenPayload } from "../utils/jwt";
 import { currentRole, issuedBeforePasswordChange } from "../utils/userGate";
 import { canViewAs } from "../utils/viewAs";
 import { AREA_TEAM_ALLOWED, isAreaTeam } from "../utils/areaScope";
+import { recordUsage } from "../utils/usage";
 
 export interface AuthRequest extends Request {
   auth?: TokenPayload;
@@ -55,6 +56,8 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ error: "รหัสผ่านของบัญชีนี้ถูกเปลี่ยน — เข้าสู่ระบบใหม่ด้วยรหัสผ่านล่าสุด", passwordChanged: true });
   }
   req.auth = { ...req.auth, role };
+  // ดูในฐานะไม่นับ — คนที่ถูกดูไม่ได้ใช้แอปจริงตอนนั้น
+  if (!viewAs) recordUsage(req.auth.userId, req.headers["user-agent"]);
 
   // Super Admin ทำได้ทุกอย่างเท่าแอดมิน — มองเป็น ADMIN ที่นี่ที่เดียว
   // ทุกจุดที่เช็ค role === "ADMIN" (ราว 20 จุด) จึงใช้ได้ทันทีโดยไม่ต้องไล่แก้ทีละจุด

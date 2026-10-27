@@ -30,8 +30,12 @@ export const BACKUP_FORMAT = "otteri-backup";
 export const BACKUP_VERSION = 1;
 export const BACKUP_KEEP_DAYS = 30;
 
-/** ตารางที่ไม่ใส่ในไฟล์สำรองเลย — ดูเหตุผลที่หัวไฟล์ */
-const SKIP_MODELS = new Set(["VehicleCard", "Backup"]);
+/**
+ * ตารางที่ไม่ใส่ในไฟล์สำรองเลย — ดูเหตุผลที่หัวไฟล์
+ * UsageSlot (ช่วงเวลาใช้แอป) โตถึงราวล้านแถวใน 90 วัน ไฟล์สำรองทำในหน่วยความจำ (512 MB บน Render)
+ * และหายไปก็ไม่เสียงาน — แค่กราฟการใช้งานย้อนหลังว่าง
+ */
+const SKIP_MODELS = new Set(["VehicleCard", "Backup", "UsageSlot"]);
 /** ช่องที่ไม่ใส่ใน Excel (ไฟล์กู้คืนยังมี) */
 const EXCEL_SKIP_FIELDS = new Set(["passwordHash"]);
 
