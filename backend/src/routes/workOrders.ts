@@ -2629,10 +2629,24 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const body = parsed.data;
 
-  const current = await prisma.workOrder.findUnique({
-    where: { id },
-    select: { status: true, workStatus: true, ...VIEW_SELECT },
-  });
+  /**
+   * มีคนอื่นเปลี่ยนใบงานหลังเปิดฟอร์ม — ปฏิเสธ ไม่ให้บันทึกทับ (เดิมคนกดทีหลังทับของอีกคนเงียบ ๆ)
+   * ของที่ตัวเองทำ (แนบรูประหว่างนั้น) ไม่นับ · แอปรุ่นเก่าไม่ส่ง expectedVersion มา = ไม่เช็ค
+   * ถามพร้อมกับอ่านใบงาน ไม่ต่อคิว — ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ (เจ้าของงานบ่นอัปสถานะช้า ต.ค. 69)
+   */
+  const [current, newer] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: { status: true, workStatus: true, ...VIEW_SELECT },
+    }),
+    body.expectedVersion !== undefined
+      ? prisma.workOrderLog.findFirst({
+          where: { workOrderId: id, id: { gt: body.expectedVersion }, NOT: { userId: req.auth!.userId } },
+          orderBy: { id: "desc" },
+          select: { createdAt: true, user: { select: { name: true } } },
+        })
+      : null,
+  ]);
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   // แก้ได้เฉพาะใบที่เปิดดูได้ — เดิมใครก็แก้ใบไหนก็ได้ (ตรวจระบบ ต.ค. 69)
   if (await blockedForViewer(req, res, current)) return;
@@ -2640,16 +2654,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ใบงานนี้ปิดไปแล้ว แก้ไขไม่ได้" });
   }
 
-  /**
-   * มีคนอื่นเปลี่ยนใบงานหลังเปิดฟอร์ม — ปฏิเสธ ไม่ให้บันทึกทับ (เดิมคนกดทีหลังทับของอีกคนเงียบ ๆ)
-   * ของที่ตัวเองทำ (แนบรูประหว่างนั้น) ไม่นับ · แอปรุ่นเก่าไม่ส่ง expectedVersion มา = ไม่เช็ค
-   */
-  if (body.expectedVersion !== undefined) {
-    const newer = await prisma.workOrderLog.findFirst({
-      where: { workOrderId: id, id: { gt: body.expectedVersion }, NOT: { userId: req.auth!.userId } },
-      orderBy: { id: "desc" },
-      select: { createdAt: true, user: { select: { name: true } } },
-    });
+  {
     if (newer) {
       const at = newer.createdAt.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
       return res.status(409).json({

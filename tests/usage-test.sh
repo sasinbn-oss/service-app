@@ -61,6 +61,17 @@ ROWS=$(NODE_PATH=backend/node_modules node -e 'const E=require("exceljs");const 
 [ "$ROWS" = "08:00/10:05/25/2 07:00/07:05/5/1" ] && pass "Excel: แถวละคนละวัน เข้าครั้งแรก/ใช้ล่าสุด/นาที/ครั้ง ถูก" || fail "Excel: $ROWS"
 
 echo
+echo "═══ ย้อนหลังตั้งแต่เปิดบัญชี (ช่วงที่ประมาณจากการทำงาน · ACTION)"
+DB "update \"User\" set \"createdAt\"=now() - interval '400 days' where id=$UID_" >/dev/null
+DB "insert into \"UsageSlot\" values ($UID_, date_trunc('hour', now() - interval '200 days'), 'ACTION')" >/dev/null
+ALLD=$(curl -s "localhost:4000/api/usage/user/$UID_?days=all" -H "$(H $A)")
+[ "$(echo "$ALLD" | J 'const o=d.days[d.days.length-1]; [d.days.length, o.bars[0].device, d.days.every(x=>x.minutes>0)].join("|")')" = "3|ACTION|true" ] \
+  && pass "ตั้งแต่เปิดบัญชี: เห็นวันที่ 200 วันก่อน (สีเทา ACTION) · แสดงเฉพาะวันที่ใช้ (3 วัน)" || fail "ตั้งแต่เปิดบัญชี: $(echo "$ALLD" | head -c 300)"
+echo "$ALLD" | J 'Date.now()-new Date(d.firstUse).getTime() > 199*864e5 ? "ok":"bad"' | grep -q ok && pass "ใช้ครั้งแรก = ช่วงเก่าสุด" || fail "ใช้ครั้งแรก"
+[ "$(curl -s "localhost:4000/api/usage?range=all&q=$(ENC ทดสอบการใช้งาน)" -H "$(H $A)" | J 'd.people[0].activeDays+"|"+d.heatmap.days.length')" = "3|30" ] \
+  && pass "ภาพรวมตั้งแต่เปิดบัญชี: นับวันใช้รวมของเก่า · ตารางสีโชว์ 30 วันล่าสุด" || fail "ภาพรวม all"
+
+echo
 echo "═══ ดูในฐานะไม่นับเป็นการใช้ของคนที่ถูกดู"
 BEFORE=$(DB "select count(*) from \"UsageSlot\" where \"userId\"=(select id from \"User\" where \"employeeCode\"='T001') and slot >= now() - interval '6 minutes'")
 DB "delete from \"UsageSlot\" where \"userId\"=(select id from \"User\" where \"employeeCode\"='T001') and slot >= now() - interval '6 minutes'" >/dev/null
