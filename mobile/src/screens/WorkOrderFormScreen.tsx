@@ -216,11 +216,16 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     if (jobType === "OTHER" && !otherDetail.trim()) missing.push("รายละเอียดงาน");
     if (AREA_MACHINE_JOBS.has(jobType) && shownRows.some((r) => !r.code.trim())) missing.push("เครื่อง");
     if (shownRows.some((r) => r.symptom.trim().length < AREA_SYMPTOM_MIN)) missing.push("อาการที่พบ");
-    if (shownRows.some((r) => r.files.length === 0)) missing.push("รูปหน้างาน");
     if (!contactName.trim()) missing.push("ผู้ติดต่อที่สาขา");
     const digits = contactPhone.replace(/\D/g, "").length;
     if (digits < 9 || digits > 10) missing.push("เบอร์ติดต่อสาขา");
   }
+  /**
+   * รูปหน้างานบังคับทุกตำแหน่ง (เจ้าของงานกำหนด ต.ค. 69) — ช่างกับหัวหน้าภาคระบุอะไหล่จากรูปก่อนไปหน้างาน
+   * ใบที่ไม่มีรูปคือต้องโทรถามร้านหรือขับไปดูก่อนรอบหนึ่ง · บังคับที่ฟอร์มเท่านั้น เพราะรูปอัปหลังสร้างใบงาน
+   * (นำเข้าจากไฟล์ฟอร์ม COCO ไม่ผ่านด่านนี้ — แถวในไฟล์ที่ไม่มีรูปยังนำเข้าได้)
+   */
+  if (shownRows.some((r) => r.files.length === 0)) missing.push("รูปหน้างาน");
 
   // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
   const regionHint = branchRegion ? ` (ภาค${branchRegion})` : "";
@@ -744,7 +749,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             busy={busy}
             models={models}
             capacities={capacities}
-            photoRequired={strict}
+            photoRequired
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}

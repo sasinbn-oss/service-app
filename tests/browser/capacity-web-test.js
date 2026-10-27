@@ -1,5 +1,6 @@
 // ทดสอบ: ขนาดเครื่องในฟอร์ม · เติมของเดิมให้ · เปิดจากกระดานแล้วผู้ติดต่อไม่หาย
 const { chromium } = require("playwright");
+const { attachPhoto } = require("./photo");
 const path = require("path");
 const DIR = __dirname;
 
@@ -116,6 +117,12 @@ const DIR = __dirname;
     await symptom.fill("น้ำไม่เข้า ทดสอบขนาด");
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(DIR, "cap-2-filled.png") });
+    // รูปหน้างานบังคับทุกตำแหน่ง — แอดมินก็กดเปิดไม่ได้จนกว่าจะแนบรูป
+    (await seen("ยังบันทึกไม่ได้ — ขาด 1 ช่อง: รูปหน้างาน", false)) > 0
+      ? pass("แอดมิน: ยังไม่แนบรูปหน้างาน = บันทึกไม่ได้")
+      : fail("แอดมินบันทึกได้ทั้งที่ยังไม่มีรูป");
+    await attachPhoto(page);
+    (await seen("ยังบันทึกไม่ได้", false)) === 0 ? pass("แนบรูปแล้วปลดล็อก") : fail("แนบรูปแล้วยังล็อก");
     await submitForm();
     await page.waitForTimeout(5000);
     await page.screenshot({ path: path.join(DIR, "cap-3-detail.png") });
@@ -203,6 +210,7 @@ const DIR = __dirname;
       const bs = page.getByLabel("อาการที่พบของเครื่องที่ 1").locator("visible=true").first();
       await bs.fill("ทดสอบเปิดจากกระดาน");
       await page.waitForTimeout(400);
+      await attachPhoto(page);
       await submitForm();
       await page.waitForTimeout(5500);
       await page.screenshot({ path: path.join(DIR, "cap-6-board-detail.png") });
