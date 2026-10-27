@@ -11,7 +11,7 @@ import { Router, Response, NextFunction } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
-import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { supervisorScope, workOrderVisible } from "../utils/supervisorScope";
 import { areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { teamGroups } from "../utils/teamGroups";
 import { teamDayTimeline } from "../utils/timeline";
@@ -70,7 +70,8 @@ async function scopeFor(req: AuthRequest) {
       if (r.pmTeam && !claimed.has(r.pmTeam)) teams.add(r.pmTeam);
     }
   }
-  return { where: workOrderInScope(s), teams };
+  // ใบที่จ่ายข้ามทีมมาให้ทีมของตัวเองขึ้นบนแผนด้วย — เป็นคิวของทีมนี้จริง แม้ใบจะเป็นของหัวหน้าภาคอื่น
+  return { where: await workOrderVisible(s), teams };
 }
 
 /** ไทม์ไลน์ทั้งวันของทีม (Super Admin) — รับรถ รายงานตัว ทุกการกดในใบงานของทีม คืนรถ */

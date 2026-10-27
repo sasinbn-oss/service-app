@@ -108,14 +108,11 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Con
 TEAMS=$(curl -s localhost:4000/api/branches/teams -H "$(H $A)" | J 'd.map(t=>t.name).join("|")')
 OTHER=$(echo "$TEAMS" | tr '|' '\n' | grep -v "กระบี่" | head -1)
 if [ -n "$OTHER" ]; then
-  # หัวหน้าภาคจ่ายได้เฉพาะทีมที่ตัวเองดูแล (เจ้าของงานกำหนด ต.ค. 69) — ทีมนอกขอบเขตโดนกัน ฐานข้อมูลไม่เปลี่ยน
-  [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-10-08\"}")" = "403" ] \
-    && [ -z "$(psql "${DATABASE_URL%%\?*}" -Atc "select \"assignedTeam\" from \"WorkOrder\" where id=$ID2")" ] \
-    && pass "หัวหน้าภาคจ่ายให้ทีมที่ไม่ได้ดูแลไม่ได้ (403 · ฐานข้อมูลไม่เปลี่ยน)" || fail "หัวหน้าภาคจ่ายข้ามขอบเขตได้"
-  # แอดมินยังจ่ายข้ามทีมได้ และประวัติบอกว่าข้าม
-  R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-10-08\"}")
-  curl -s "localhost:4000/api/work-orders/$ID2" -H "$(H $A)" | J '"  ประวัติ: "+d.logs.find(l=>l.action==="ASSIGNED").note' | grep -q "ข้ามทีม" \
-    && pass "แอดมินจ่ายข้ามทีมได้ และประวัติบอกว่าข้าม" || fail "ประวัติไม่บอกว่าข้ามทีม: $R"
+  # หัวหน้าภาคจ่ายให้ทีมไหนก็ได้ (เจ้าของงานขอ ต.ค. 69 — เดิมเฉพาะทีมที่ดูแล) และประวัติบอกว่าข้าม
+  R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-10-08\"}")
+  [ "$(psql "${DATABASE_URL%%\?*}" -Atc "select \"assignedTeam\" from \"WorkOrder\" where id=$ID2")" = "$OTHER" ] \
+    && curl -s "localhost:4000/api/work-orders/$ID2" -H "$(H $A)" | J '"  ประวัติ: "+d.logs.find(l=>l.action==="ASSIGNED").note' | grep -q "ข้ามทีม" \
+    && pass "หัวหน้าภาคจ่ายข้ามทีมได้ (ฐานข้อมูลเปลี่ยน) และประวัติบอกว่าข้าม" || fail "จ่ายข้ามทีมไม่ได้: $(echo "$R" | head -c 160)"
   # ลูกค้าคอนเฟิร์มวันเดิม = CONFIRMED ไม่ใช่เลื่อน · ตอนยืนยันออกงานหัวหน้าภาคเปลี่ยนกลับเป็นทีมของสาขาได้
   curl -s -X POST "localhost:4000/api/work-orders/$ID2/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
   curl -s -X POST "localhost:4000/api/work-orders/$ID2/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"กระบี่"}' >/dev/null

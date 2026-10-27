@@ -1153,7 +1153,7 @@ function MachineCard({
               {Platform.OS !== "web" ? (
                 <TouchableOpacity
                   style={styles.fileButton}
-                  onPress={() => onAddNameplate((stage) => pickImageAttachment(true, stage))}
+                  onPress={() => onAddNameplate((stage) => pickImageAttachment(true, stage, { doc: true }))}
                   activeOpacity={0.8}
                 >
                   <Ionicons name="camera-outline" size={16} color={colors.primary} />
@@ -1162,7 +1162,7 @@ function MachineCard({
               ) : null}
               <TouchableOpacity
                 style={styles.fileButton}
-                onPress={() => onAddNameplate((stage) => pickImageAttachment(false, stage))}
+                onPress={() => onAddNameplate((stage) => pickImageAttachment(false, stage, { doc: true }))}
                 activeOpacity={0.8}
               >
                 <Ionicons name="images-outline" size={16} color={colors.primary} />

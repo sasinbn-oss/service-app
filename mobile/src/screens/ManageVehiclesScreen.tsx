@@ -1071,13 +1071,16 @@ function InfoForm({
   );
 }
 
-/** เลือกรูปจากกล้องหรืออัลบั้ม — บนเว็บเปิดตัวเลือกไฟล์ (ซึ่งมีปุ่มกล้องของมือถือในตัว) */
+/**
+ * เลือกรูปจากกล้องหรืออัลบั้ม — บนเว็บเปิดตัวเลือกไฟล์ (ซึ่งมีปุ่มกล้องของมือถือในตัว)
+ * ใช้กับเอกสารรถและใบเสร็จ — ความละเอียดแบบเอกสาร (utils/attachments DOC_MAX_WIDTH) ตัวเลขในใบอ่านออก
+ */
 function chooseImage(): Promise<PickedAttachment | null> {
-  if (Platform.OS === "web") return pickImageAttachment(false);
+  if (Platform.OS === "web") return pickImageAttachment(false, undefined, { doc: true });
   return new Promise((resolve) =>
     showAlert("เพิ่มรูป", undefined, [
-      { text: "ถ่ายรูป", onPress: () => pickImageAttachment(true).then(resolve) },
-      { text: "เลือกจากอัลบั้ม", onPress: () => pickImageAttachment(false).then(resolve) },
+      { text: "ถ่ายรูป", onPress: () => pickImageAttachment(true, undefined, { doc: true }).then(resolve) },
+      { text: "เลือกจากอัลบั้ม", onPress: () => pickImageAttachment(false, undefined, { doc: true }).then(resolve) },
       { text: "ยกเลิก", style: "cancel", onPress: () => resolve(null) },
     ])
   );

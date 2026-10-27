@@ -31,6 +31,7 @@ import {
   uploadAttachment,
   attachmentIcon,
 } from "../utils/attachments";
+import { haveThumbs, prefetchLinks, withThumbs } from "../utils/attachmentCache";
 import { useAuth } from "../context/AuthContext";
 import ImageViewer from "./ImageViewer";
 import InspectionSlots, { inspectionFilesOf, missingInspection } from "./InspectionSlots";
@@ -50,6 +51,9 @@ export interface Attachment {
   createdById: number | null;
   createdByName: string | null;
   thumbnailDataUrl: string | null;
+  /** มีรูปย่อ — เซิร์ฟเวอร์ไม่ส่งรูปย่อที่แอปบอกว่าจำไว้แล้ว (thumbnailDataUrl = null) ดู utils/attachmentCache */
+  hasThumbnail?: boolean;
+  mimeType?: string;
   /** หลักฐานเคลม (role CLAIM_*) เป็นของอะไหล่ชิ้นไหน */
   sparePartId?: number | null;
 }
@@ -97,9 +101,15 @@ export default function WorkOrderAttachments({
 
   const load = useCallback(async () => {
     try {
-      const res = await api.get<{ rows: Attachment[] }>(`/work-orders/${workOrderId}/attachments`);
-      setRows(res.data.rows);
-      onLoaded?.(res.data.rows);
+      // บอกเซิร์ฟเวอร์ว่ารูปย่อใบไหนจำไว้แล้ว ไม่ต้องส่งซ้ำ (utils/attachmentCache)
+      const res = await api.get<{ rows: Attachment[] }>(`/work-orders/${workOrderId}/attachments`, {
+        params: { have: haveThumbs(workOrderId) },
+      });
+      const next = withThumbs(workOrderId, res.data.rows);
+      setRows(next);
+      onLoaded?.(next);
+      // ลิงก์ของทุกไฟล์รวดเดียวเบื้องหลัง — กดดูไฟล์แล้วเริ่มโหลดตัวไฟล์ได้ทันที
+      if (next.some((r) => r.available)) void prefetchLinks(workOrderId).catch(() => undefined);
     } catch {
       // เงียบไว้ ไฟล์แนบไม่ใช่เนื้อหาหลักของหน้า ถ้าโหลดไม่ได้ก็ไม่ควรบังหน้าจอ
       // ส่วนที่เหลือทั้งใบ ซึ่งเป็นข้อมูลที่คนเปิดมาดูจริง ๆ
@@ -303,6 +313,12 @@ export default function WorkOrderAttachments({
                     <Ionicons name="play" size={13} color="#fff" />
                   </View>
                 ) : null}
+                {/* PDF ที่มีรูปหน้าแรกหน้าตาเหมือนรูปถ่ายเอกสาร — บอกว่าเป็นไฟล์ PDF (กดแล้วเปิดดูทุกหน้าได้) */}
+                {row.kind === "DOCUMENT" ? (
+                  <View style={styles.pdfBadge}>
+                    <Text style={styles.pdfBadgeText}>PDF</Text>
+                  </View>
+                ) : null}
                 {/* ป้ายบอกว่าเป็นรูปป้ายรุ่น ไม่ใช่รูปอาการ — เวลาสั่งอะไหล่
                     ต้องหยิบรูปนี้ให้ถูกใบจากกองรูปที่หน้าตาคล้ายกันหมด */}
                 {row.roleLabel ? (
@@ -420,6 +436,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  pdfBadge: {
+    position: "absolute",
+    left: spacing.xs,
+    bottom: spacing.xs,
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    backgroundColor: colors.danger,
+  },
+  pdfBadgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
   tileMeta: { fontSize: 10, color: colors.textFaint, marginTop: 2 },
   removeBtn: {
     position: "absolute",

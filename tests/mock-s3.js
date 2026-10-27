@@ -43,7 +43,8 @@ const server = http.createServer((req, res) => {
       if (!data) return res.writeHead(404).end();
       // ลิงก์ presigned ส่งชื่อไฟล์มาทาง query แบบเดียวกับ S3 จริง — ไม่ตอบกลับ เบราว์เซอร์จะเปิดไฟล์แทนการดาวน์โหลด
       const cd = new URLSearchParams(query).get("response-content-disposition");
-      res.writeHead(200, cd ? { "Content-Disposition": cd } : {}).end(data);
+      // CORS แบบที่เก็บไฟล์จริง (Supabase) — ตัวแสดง PDF ในแอปอ่านไฟล์ด้วย fetch ข้ามโดเมน
+      res.writeHead(200, { "Access-Control-Allow-Origin": "*", ...(cd ? { "Content-Disposition": cd } : {}) }).end(data);
     } else {
       res.writeHead(400).end();
     }

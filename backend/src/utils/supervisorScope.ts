@@ -53,46 +53,119 @@ export async function supervisorScope(userId: number): Promise<SupervisorScope> 
   return scopesOf(sups).get(userId) ?? { region: null, teams: [] };
 }
 
-/** ทีมของใบงาน — ทีมที่จ่ายไปแล้ว ไม่งั้นทีมประจำสาขา (CM ก่อน PM) · ตัวเดียวกับที่โชว์ในเหตุผล "ไม่มีคนรับ" */
-function teamOf(wo: { assignedTeam: string | null; branch: { zone: string | null; pmTeam: string | null } }) {
-  return cleanName(wo.assignedTeam ?? wo.branch.zone ?? wo.branch.pmTeam);
+type ScopedOrder = {
+  jobType: string;
+  assignedTeam: string | null;
+  branch: { region: string | null; zone: string | null; pmTeam: string | null };
+};
+
+/**
+ * ทีมประจำสาขาของงานประเภทนี้ — งาน PM มีทีมดูแลของตัวเอง (ไม่ได้ตั้งไว้ก็ทีม CM)
+ * ตัวเดียวกับที่ประวัติใช้บอกว่า "ข้ามทีม" (teamNote ใน routes/workOrders.ts)
+ */
+export function ownTeamOf(wo: { jobType: string; branch: { zone: string | null; pmTeam: string | null } }) {
+  return cleanName(wo.jobType === "PM" ? wo.branch.pmTeam ?? wo.branch.zone : wo.branch.zone);
 }
 
-/** เงื่อนไขของใบงานในขอบเขต — ใส่ใน AND เสมอ จะได้ไม่ชนกับ OR/branch ของตัวกรองอื่น */
+/**
+ * จ่ายข้ามทีม — ทีมที่รับงานไม่ใช่ทีมประจำสาขาของงานนี้ · สาขาที่ไม่มีทีมประจำไม่นับ (ไม่มีอะไรให้ข้าม)
+ *
+ * เจ้าของงานขอ ต.ค. 69: "ใบงานอยู่ในพื้นที่รับผิดชอบเรา แต่อยากจ่ายงานให้ทีมอื่นเข้าไป"
+ * ใบยังเป็นของหัวหน้าภาคเจ้าของพื้นที่ (กดปล่อยงานเอง) · หัวหน้าภาคของทีมที่รับเห็นใบแต่ทำอะไรไม่ได้
+ * · ช่างปิดงานได้ทั้งทีมที่รับและทีมประจำสาขา
+ */
+export function isCrossTeam(wo: ScopedOrder) {
+  const own = ownTeamOf(wo);
+  const sent = cleanName(wo.assignedTeam);
+  return own !== null && sent !== null && own !== sent;
+}
+
+/**
+ * ทีมที่ตัดสินว่าใบนี้เป็นของหัวหน้าภาคคนไหน (ทีมมาก่อนภาค) · ตัวเดียวกับที่โชว์ในเหตุผล "ไม่มีคนรับ"
+ * ยังไม่จ่าย = ทีมประจำสาขา (CM ก่อน PM) · จ่ายแล้ว = ทีมประจำสาขาของงานประเภทนี้ ซึ่งคือทีมที่รับงานพอดี
+ * ถ้าไม่ได้จ่ายข้ามทีม — จ่ายข้ามทีมไปแล้วใบจึงไม่ตามทีมที่รับไป · สาขาไม่มีทีมประจำ = ทีมที่รับงาน
+ */
+function teamOf(wo: ScopedOrder) {
+  if (wo.assignedTeam === null) return cleanName(wo.branch.zone ?? wo.branch.pmTeam);
+  return ownTeamOf(wo) ?? cleanName(wo.assignedTeam);
+}
+
+/** ทีมประจำสาขาของงาน (แบบ ownTeamOf) เข้าเงื่อนไข cond — ใช้ใน where ที่เทียบสองคอลัมน์ข้ามตารางตรง ๆ ไม่ได้ */
+export function ownTeamWhere(cond: Prisma.StringNullableFilter): Prisma.WorkOrderWhereInput {
+  return {
+    OR: [
+      { jobType: { not: "PM" }, branch: { zone: cond } },
+      { jobType: "PM", branch: { pmTeam: cond } },
+      { jobType: "PM", branch: { pmTeam: null, zone: cond } },
+    ],
+  };
+}
+
+const NO_OWN_TEAM: Prisma.WorkOrderWhereInput = {
+  OR: [
+    { jobType: { not: "PM" }, branch: { zone: null } },
+    { jobType: "PM", branch: { zone: null, pmTeam: null } },
+  ],
+};
+
+/**
+ * ใบงานที่หัวหน้าภาคคนนี้ "เป็นเจ้าของ" (ทำขั้นของหัวหน้าภาคได้ · เข้ากล่องงาน) — ใส่ใน AND เสมอ
+ * จะได้ไม่ชนกับ OR/branch ของตัวกรองอื่น · ที่เห็นได้ (รวมใบที่ทีมตัวเองรับข้ามทีมมา) ดู workOrderVisible
+ */
 export function workOrderInScope(s: SupervisorScope): Prisma.WorkOrderWhereInput {
   const or: Prisma.WorkOrderWhereInput[] = [];
   if (s.region) {
     const c = s.claimed ?? [];
-    // ทีมของใบ (assignedTeam ?? zone ?? pmTeam) ต้องไม่ใช่ทีมที่คนอื่นดูแล — เขียนแยกกรณีเพราะ NOT IN ตัดแถว null ทิ้ง
+    // ทีมของใบ (teamOf) ต้องไม่ใช่ทีมที่คนอื่นดูแล — เขียนแยกกรณีเพราะ NOT IN ตัดแถว null ทิ้ง
     const unclaimed: Prisma.WorkOrderWhereInput = c.length
       ? {
           OR: [
-            { assignedTeam: { not: null, notIn: c } },
             { assignedTeam: null, branch: { zone: { not: null, notIn: c } } },
             { assignedTeam: null, branch: { zone: null, OR: [{ pmTeam: null }, { pmTeam: { notIn: c } }] } },
+            { assignedTeam: { not: null }, ...ownTeamWhere({ not: null, notIn: c }) },
+            { AND: [{ assignedTeam: { not: null, notIn: c } }, NO_OWN_TEAM] },
           ],
         }
       : {};
     or.push({ AND: [{ branch: { region: s.region } }, unclaimed] });
   }
   if (s.teams.length) {
-    or.push({ assignedTeam: { in: s.teams } }, { branch: { zone: { in: s.teams } } }, { branch: { pmTeam: { in: s.teams } } });
+    or.push(
+      { branch: { zone: { in: s.teams } } },
+      { branch: { pmTeam: { in: s.teams } } },
+      // ตามทีมที่รับงานเฉพาะสาขาที่ไม่มีทีมประจำ — ใบที่จ่ายข้ามทีมเข้ามา คนดูแลทีมที่รับแค่เห็น
+      { AND: [{ assignedTeam: { in: s.teams } }, NO_OWN_TEAM] }
+    );
   }
   // ยังไม่ได้ตั้งภาคหรือทีม = ไม่เห็นอะไร (แบบเดิมที่ไม่มีภาค)
   return or.length ? { OR: or } : { id: -1 };
 }
 
-export function coversWorkOrder(
-  s: SupervisorScope,
-  wo: { assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
-) {
+/** ใบที่จ่ายข้ามทีมมาให้ทีมเหล่านี้ (ทีมที่รับไม่ใช่ทีมประจำสาขา) — เทียบทีละทีมเพราะ where เทียบสองคอลัมน์ไม่ได้ */
+function receivedWhere(teams: Iterable<string>): Prisma.WorkOrderWhereInput[] {
+  return [...teams].map((t) => ({ assignedTeam: t, ...ownTeamWhere({ not: null, notIn: [t] }) }));
+}
+
+/**
+ * ใบงานที่หัวหน้าภาคคนนี้ "เห็น" = ใบที่เป็นเจ้าของ + ใบในพื้นที่คนอื่นที่จ่ายข้ามทีมมาให้ทีมที่ตัวเองดูแล
+ * (เจ้าของงานเลือก ต.ค. 69: เห็นทั้งสองคน คนจ่ายเป็นคนปล่อยงาน) — ใช้กับรายการ/แผนงาน ไม่ใช้กับกล่องงาน
+ */
+export async function workOrderVisible(s: SupervisorScope): Promise<Prisma.WorkOrderWhereInput> {
+  const own = workOrderInScope(s);
+  const received = receivedWhere(await teamsForSupervisor(s));
+  return received.length ? { OR: [own, ...received] } : own;
+}
+
+/** หัวหน้าภาคคนนี้เป็นเจ้าของใบไหม (ทำขั้นของหัวหน้าภาคได้) — กติกาเดียวกับ workOrderInScope */
+export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
   // เทียบหลังทำความสะอาดชื่อ — ข้อมูลที่ยังไม่ผ่าน migration ล้างชื่อ (หรือหลุดมาทางอื่น) ก็ยังจับคู่ได้ ดู utils/names.ts
   const teams = new Set(s.teams.map(cleanName).filter(Boolean));
-  if ([wo.assignedTeam, wo.branch.zone, wo.branch.pmTeam].some((t) => {
+  const mine = (t: string | null) => {
     const c = cleanName(t);
     return c !== null && teams.has(c);
-  }))
-    return true;
+  };
+  if (mine(wo.branch.zone) || mine(wo.branch.pmTeam)) return true;
+  if (ownTeamOf(wo) === null && mine(wo.assignedTeam)) return true;
   const region = cleanName(s.region);
   if (!region || cleanName(wo.branch.region) !== region) return false;
   const team = teamOf(wo);
@@ -100,22 +173,51 @@ export function coversWorkOrder(
 }
 
 /**
- * ทีมที่หัวหน้าภาคจ่ายงานให้ได้ = ทีมที่ดูแล + ทีมประจำสาขาในภาคที่ยังไม่มีหัวหน้าภาคคนอื่นดูแล (ชื่อผ่าน cleanName)
+ * หัวหน้าภาคคนนี้เปิดดูใบได้ไหม — เป็นเจ้าของ หรือใบถูกจ่ายข้ามทีมมาให้ทีมที่ดูแล (ดูอย่างเดียว)
+ * teams = teamsForSupervisor ของคนนั้น
+ */
+export function seesWorkOrder(s: SupervisorScope, teams: Set<string>, wo: ScopedOrder) {
+  if (coversWorkOrder(s, wo)) return true;
+  const sent = cleanName(wo.assignedTeam);
+  return isCrossTeam(wo) && sent !== null && teams.has(sent);
+}
+
+/**
+ * ทีมประจำสาขาในแต่ละภาค — จำไว้ 60 วินาที รายการ/กล่องงานถามทุกครั้งที่โหลด (ฐานข้อมูลอยู่ไกล รอบละ ~0.2 วิ)
+ * แก้ทีมของสาขาแล้วช้าไปไม่เกินนาที ไม่มีผลกับงาน
+ */
+let regionTeamCache: { at: number; byRegion: Map<string, string[]> } | null = null;
+async function regionTeams(region: string): Promise<string[]> {
+  if (!regionTeamCache || Date.now() - regionTeamCache.at > 60_000) {
+    const rows = await prisma.branch.findMany({
+      where: { cancelledAt: null, region: { not: null } },
+      select: { region: true, zone: true, pmTeam: true },
+      distinct: ["region", "zone", "pmTeam"],
+    });
+    const byRegion = new Map<string, string[]>();
+    for (const r of rows) {
+      const list = byRegion.get(r.region!) ?? [];
+      for (const t of [r.zone, r.pmTeam].map(cleanName)) if (t && !list.includes(t)) list.push(t);
+      byRegion.set(r.region!, list);
+    }
+    regionTeamCache = { at: Date.now(), byRegion };
+  }
+  return regionTeamCache.byRegion.get(region) ?? [];
+}
+
+/**
+ * ทีมที่หัวหน้าภาคดูแล = ทีมที่ตั้งให้ดูแล + ทีมประจำสาขาในภาคที่ยังไม่มีหัวหน้าภาคคนอื่นดูแล (ชื่อผ่าน cleanName)
  * ทีม outsource จุดเรียกอนุญาตเพิ่มเอง — เจ้าของงานกำหนด ต.ค. 69: หัวหน้าภาคเห็นทีม OPL ของคนอื่นในช่องจ่ายงาน
  */
 export async function teamsForSupervisor(s: SupervisorScope): Promise<Set<string>> {
   const out = new Set(s.teams.map(cleanName).filter((t): t is string => !!t));
   if (s.region) {
     const claimed = new Set(s.claimed ?? []);
-    const rows = await prisma.branch.findMany({
-      where: { region: s.region, cancelledAt: null },
-      select: { zone: true, pmTeam: true },
-      distinct: ["zone", "pmTeam"],
-    });
-    for (const r of rows)
-      for (const t of [r.zone, r.pmTeam].map(cleanName)) if (t && !claimed.has(t)) out.add(t);
+    for (const t of await regionTeams(s.region)) if (!claimed.has(t)) out.add(t);
   }
   return out;
 }
 
 export const OUT_OF_SCOPE = "ใบงานนี้ไม่อยู่ในภาคหรือทีมที่คุณดูแล";
+/** เห็นใบได้แต่ไม่ใช่เจ้าของ (ทีมตัวเองรับงานข้ามทีมมา) — บอกให้รู้ว่าทำไมกดไม่ได้ ไม่ใช่ "ไม่อยู่ในภาค" ทั้งที่เปิดดูอยู่ */
+export const VIEW_ONLY = "ใบนี้จ่ายข้ามทีมมาให้ทีมที่คุณดูแลเข้าทำ — หัวหน้าภาคเจ้าของพื้นที่เป็นคนจัดการ คุณดูได้อย่างเดียว";

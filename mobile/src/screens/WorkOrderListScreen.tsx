@@ -78,6 +78,8 @@ export interface WorkOrderRow {
   machineCapacityKg?: number | null;
   /** ทีมที่รับงาน — ใบใหม่จ่ายเป็นทีม */
   assignedTeam: string | null;
+  /** จ่ายข้ามทีม — ทีมประจำสาขาที่ถูกข้าม (ช่างปิดงานได้ทั้งสองทีม) · ไม่ข้าม = null */
+  crossFrom?: string | null;
   /** ช่างรายคน — ใบเก่าก่อนเปลี่ยนมาจ่ายเป็นทีม */
   assignedToName: string | null;
   scheduledAt: string | null;
@@ -1890,6 +1892,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       <Text style={[styles.td, styles.colMachine]}>{machineTag(row.machineCode, row.machineCapacityKg) ?? "—"}</Text>
       <Text style={[styles.td, styles.colTeam, !(row.assignedToName ?? row.assignedTeam) && styles.tdMuted]}>
         {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมาย"}
+        {row.crossFrom ? <Text style={styles.crossTag}> · ข้ามทีม</Text> : null}
       </Text>
       <View style={styles.colAppt}>
         <Appointment row={row} />
@@ -2004,7 +2007,10 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
       <View style={styles.metaRow}>
         <Ionicons name="people-outline" size={13} color={colors.textFaint} />
-        <Text style={styles.meta}>{row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}</Text>
+        <Text style={styles.meta}>
+          {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}
+          {row.crossFrom ? <Text style={styles.crossTag}> · ข้ามทีมจาก {row.crossFrom}</Text> : null}
+        </Text>
       </View>
       {row.scheduledAt ? (
         <View style={styles.metaRow}>
@@ -2286,6 +2292,8 @@ const styles = StyleSheet.create({
   td: { fontSize: 14, lineHeight: 21, color: colors.text },
   td2: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   tdMuted: { color: colors.textFaint },
+  // จ่ายข้ามทีม — สีหัวหน้าภาค (เรื่องการจ่ายงาน) ไม่ใช่สีเตือน เพราะไม่ใช่ความผิดปกติ
+  crossTag: { color: colors.roleSupervisor, fontWeight: "700" },
   colWo: { flex: 2.4, minWidth: 0 },
   colBranch: { flex: 2.2, minWidth: 0 },
   colMachine: { flex: 0.8 },

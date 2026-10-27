@@ -15,7 +15,21 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { looseKey } from "../utils/names";
 import { prisma } from "../prisma";
-import { coversWorkOrder, OUT_OF_SCOPE, scopesOf, SupervisorScope, supervisorScope, teamsForSupervisor, workOrderInScope } from "../utils/supervisorScope";
+import {
+  coversWorkOrder,
+  isCrossTeam,
+  OUT_OF_SCOPE,
+  ownTeamOf,
+  ownTeamWhere,
+  scopesOf,
+  seesWorkOrder,
+  SupervisorScope,
+  supervisorScope,
+  teamsForSupervisor,
+  VIEW_ONLY,
+  workOrderInScope,
+  workOrderVisible,
+} from "../utils/supervisorScope";
 import { cleanName } from "../utils/names";
 import { Coverage, coverageOf, covers } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
@@ -35,6 +49,7 @@ import {
   buildObjectKey,
   deleteObject,
   getDownloadUrl,
+  getObjectBytes,
   isFileStoreConfigured,
   uploadObject,
   SIGNED_URL_TTL_SECONDS,
@@ -608,6 +623,7 @@ const listSelect = {
   id: true,
   code: true,
   source: true,
+  jobType: true,
   title: true,
   status: true,
   priority: true,
@@ -699,6 +715,8 @@ function listShape(
   return {
     stageActor: actor,
     waitingOnSupervisors,
+    // จ่ายข้ามทีม — ทีมประจำสาขาที่ถูกข้าม (รายการติด "ข้ามทีม" ต่อชื่อทีม) · ไม่ข้าม = null
+    crossFrom: isCrossTeam(w) ? ownTeamOf(w) : null,
     // รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินแยกหัวข้อ "ไม่มีคนรับ"
     orphan: actor === "SUPERVISOR" && waitingOnSupervisors.length === 0,
     /**
@@ -826,12 +844,23 @@ function partShape(p: {
  * ช่างที่ยังไม่ได้จัดทีมจะเหลือแค่เงื่อนไขหลัง ซึ่งเป็นพฤติกรรมเดิมพอดี
  * แอดมินจึงทยอยจัดทีมให้ทีละคนได้โดยไม่มีใครมองไม่เห็นงานตัวเองระหว่างทาง
  */
-async function teamScope(team: string | null, userId: number): Promise<Prisma.WorkOrderWhereInput> {
+async function teamScope(team: string | null, userId: number, withHome = true): Promise<Prisma.WorkOrderWhereInput> {
   const mine: Prisma.WorkOrderWhereInput[] = [{ assignedToId: userId }];
   // ทีมรวม (utils/teamGroups.ts) = เห็นงานของทุกทีมที่ครอบคลุม
   const c = await coverageOf(team);
   if (!c) return { OR: mine };
-  return { OR: [...mine, c.all ? { assignedTeam: { not: null } } : { assignedTeam: { in: c.teams } }] };
+  if (c.all) return { OR: [...mine, { assignedTeam: { not: null } }] };
+  return {
+    OR: [
+      ...mine,
+      { assignedTeam: { in: c.teams } },
+      /**
+       * งานของสาขาที่ทีมนี้ประจำ แต่หัวหน้าภาคจ่ายข้ามให้ทีมอื่นเข้าไป — ยังเห็นและปิดงานได้ (เจ้าของงานเลือก ต.ค. 69)
+       * withHome = false สำหรับกล่องงาน/งานวันนี้ — ทีมที่รับเป็นคนไป ไม่ใช่งานที่รอทีมนี้
+       */
+      ...(withHome ? [{ assignedTeam: { not: null }, ...ownTeamWhere({ in: c.teams }) }] : []),
+    ],
+  };
 }
 
 /**
@@ -843,14 +872,17 @@ async function teamScope(team: string | null, userId: number): Promise<Prisma.Wo
 async function blockedForTeam(
   req: AuthRequest,
   res: Response,
-  wo: { assignedTeam: string | null; assignedToId: number | null; branch?: { region: string | null; zone: string | null; pmTeam: string | null } }
+  wo: {
+    jobType: string;
+    assignedTeam: string | null;
+    assignedToId: number | null;
+    branch: { region: string | null; zone: string | null; pmTeam: string | null };
+  }
 ) {
   if (req.auth!.role === "ADMIN") return false;
   // ทีม outsource ไม่มีบัญชีในแอป — หัวหน้าภาคที่ดูแลสาขานั้นปิดงาน/แจ้งปัญหาแทน (เจ้าของงานเลือก ต.ค. 69)
-  if (req.auth!.role === "SUPERVISOR" && wo.branch && (await freshOutsource()).has(wo.assignedTeam ?? "")) {
-    if (coversWorkOrder(await supervisorScope(req.auth!.userId), { assignedTeam: wo.assignedTeam, branch: wo.branch })) return false;
-    res.status(403).json({ error: OUT_OF_SCOPE });
-    return true;
+  if (req.auth!.role === "SUPERVISOR" && (await freshOutsource()).has(wo.assignedTeam ?? "")) {
+    return blockedForSupervisor(req, res, wo);
   }
   // ยังไม่ได้จ่ายให้ใครเลย — ปล่อยผ่านเหมือนเดิม ขั้นตอนอื่นกันไว้อยู่แล้ว
   if (wo.assignedTeam === null && wo.assignedToId === null) return false;
@@ -869,6 +901,7 @@ async function blockedForTeam(
 
 type ViewableWorkOrder = {
   id: number;
+  jobType: string;
   assignedTeam: string | null;
   assignedToId: number | null;
   createdById: number | null;
@@ -882,11 +915,12 @@ type ViewableWorkOrder = {
  * และรูปในร้านของทั้งบริษัท · ตอนนี้ใช้กฎเดียวกับหน้ารายการ บวกใบที่ช่างคนนั้นเปิดเอง
  * (เปิดใบงานเสร็จต้องเข้าดู/แนบรูปใบตัวเองได้ ทั้งที่ยังไม่จ่ายทีม) และใบที่เคยไปทำ (ประวัติงานตัวเอง)
  */
-async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder) {
+async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder, known?: SupervisorScope) {
   const role = req.auth!.role;
   if (role === "ADMIN") return false;
   if (role === "SUPERVISOR") {
-    if (coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) return false;
+    const scope = known ?? (await supervisorScope(req.auth!.userId));
+    if (seesWorkOrder(scope, await teamsForSupervisor(scope), wo)) return false;
     res.status(403).json({ error: OUT_OF_SCOPE });
     return true;
   }
@@ -899,7 +933,7 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
     return true;
   }
   const user = await prisma.user.findUnique({ where: { id: me }, select: { team: true } });
-  if (covers(await coverageOf(user?.team ?? null), wo.assignedTeam)) return false;
+  if (canTouch(wo, { coverage: await coverageOf(user?.team ?? null), id: me })) return false;
   if ((await prisma.workOrderWorker.count({ where: { workOrderId: wo.id, userId: me } })) > 0) return false;
   res.status(403).json({ error: "ใบงานนี้ไม่ใช่ของทีมคุณ — ถ้าต้องช่วยงานนี้ ให้หัวหน้าภาคจ่ายงานให้ทีมคุณ", notYourTeam: true });
   return true;
@@ -907,19 +941,24 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
 
 const VIEW_SELECT = {
   id: true,
+  jobType: true,
   assignedTeam: true,
   assignedToId: true,
   createdById: true,
   branch: { select: { region: true, zone: true, pmTeam: true } },
 } as const;
 
-/** ช่างคนนี้แตะใบงานนี้ได้ไหม — ทีมของตัวเอง (หรือทีมที่ทีมรวมครอบคลุม) หรืองานเก่าที่จ่ายให้ตัวเอง */
+/**
+ * ช่างคนนี้แตะใบงานนี้ได้ไหม — ทีมของตัวเอง (หรือทีมที่ทีมรวมครอบคลุม) หรืองานเก่าที่จ่ายให้ตัวเอง
+ * จ่ายข้ามทีม: ทีมประจำสาขาก็ปิดงานได้ด้วย (เจ้าของงานเลือก ต.ค. 69 — "ได้ทั้งสองทีม")
+ */
 function canTouch(
-  wo: { assignedTeam: string | null; assignedToId: number | null },
+  wo: { jobType: string; assignedTeam: string | null; assignedToId: number | null; branch: { zone: string | null; pmTeam: string | null } },
   me: { coverage: Coverage | null; id: number }
 ) {
   if (wo.assignedToId !== null && wo.assignedToId === me.id) return true;
-  return covers(me.coverage, wo.assignedTeam);
+  if (covers(me.coverage, wo.assignedTeam)) return true;
+  return wo.assignedTeam !== null && covers(me.coverage, ownTeamOf(wo));
 }
 
 /**
@@ -1012,7 +1051,7 @@ async function computeOrphanSupervisorIds(): Promise<number[]> {
   const [rows, sups] = await Promise.all([
     prisma.workOrder.findMany({
       where: { status: { in: stages } },
-      select: { id: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
+      select: { id: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
     }),
     prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, supervisedTeams: true } }),
   ]);
@@ -1054,9 +1093,16 @@ const listQuery = z.object({
  * ขอบเขตใบงานที่คนนี้เห็น — แอดมินไม่ต้องถามฐานข้อมูล หัวหน้าภาค/ช่างถามรอบเดียว
  * แยกออกมาให้รายการ ตัวเลขกล่องงาน และการเช็คของใหม่ใช้ชุดเดียวกัน
  */
-async function scopeFor(req: AuthRequest): Promise<Prisma.WorkOrderWhereInput> {
+async function scopeFor(req: AuthRequest, inbox = false): Promise<Prisma.WorkOrderWhereInput> {
   if (req.auth!.role === "ADMIN") return {};
-  if (req.auth!.role === "SUPERVISOR") return workOrderInScope(await supervisorScope(req.auth!.userId));
+  /**
+   * กล่องงาน (inbox) = ใบที่ต้องทำเอง · รายการ = ใบที่เห็นได้ ซึ่งรวมใบที่จ่ายข้ามทีม (เจ้าของงานเลือก ต.ค. 69):
+   * หัวหน้าภาคของทีมที่รับเห็นใบแต่ไม่ใช่งานที่รอเขา · ทีมประจำสาขาเห็นใบที่ทีมอื่นเข้าไปทำ แต่ไม่ใช่งานที่ต้องไป
+   */
+  if (req.auth!.role === "SUPERVISOR") {
+    const s = await supervisorScope(req.auth!.userId);
+    return inbox ? workOrderInScope(s) : workOrderVisible(s);
+  }
   if (isAreaTeam(req.auth)) return areaWorkOrderWhere(req.auth!);
   // ช่างเห็นงานของทีมตัวเอง เพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
   //
@@ -1064,7 +1110,7 @@ async function scopeFor(req: AuthRequest): Promise<Prisma.WorkOrderWhereInput> {
   // จ่ายเป็นทีม ต้องไม่หายไปจากรายการของคนที่กำลังทำอยู่
   // ช่างที่ยังไม่ได้จัดทีมจึงยังเห็นงานเดิมของตัวเองตามปกติ
   const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
-  return teamScope(me?.team ?? null, req.auth!.userId);
+  return teamScope(me?.team ?? null, req.auth!.userId, !inbox);
 }
 
 /**
@@ -1076,11 +1122,12 @@ async function scopeFor(req: AuthRequest): Promise<Prisma.WorkOrderWhereInput> {
 async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
   const keyword = q.search?.trim();
   const inboxStages = stagesWaitingOn(req.auth);
-  const [orphans, outsourceNow, scope] = await Promise.all([
+  const [orphans, outsourceNow, scope, inboxScope] = await Promise.all([
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     // รีเฟรชก่อนเสมอ — แถวในรายการติดธง outsource จากรายชื่อนี้ (แท็บ "ใบงาน SUB" ของกล่องงานหัวหน้าภาค)
     freshOutsource(),
     scopeFor(req),
+    scopeFor(req, true),
   ]);
   // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
   const outsourceInbox: Prisma.WorkOrderWhereInput[] =
@@ -1112,7 +1159,7 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
    */
   const where: Prisma.WorkOrderWhereInput = {
     AND: [
-      scope,
+      q.status === "INBOX" ? inboxScope : scope,
       ...(keyword
         ? [
             {
@@ -1133,13 +1180,13 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
     ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
     ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
   };
-  return { where, scope, inboxStages, orphans, outsourceInbox };
+  return { where, scope, inboxScope, inboxStages, orphans, outsourceInbox };
 }
 
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { where, scope, inboxStages, orphans, outsourceInbox } = await listWhere(req, parsed.data);
+  const { where, scope, inboxScope, inboxStages, orphans, outsourceInbox } = await listWhere(req, parsed.data);
 
   /**
    * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
@@ -1149,7 +1196,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
    *
    * รายการ ตัวเลขชิป และรายชื่อหัวหน้าภาค ไม่ขึ้นต่อกัน — ยิงพร้อมกันรอบเดียว (เดิมทีละคำถาม)
    */
-  const [rows, counts, outsourceOpen, supervisors] = await Promise.all([
+  const [rows, counts, inboxWaiting, outsourceOpen, supervisors] = await Promise.all([
     prisma.workOrder.findMany({
       where,
       select: listSelect,
@@ -1159,7 +1206,9 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
     }),
     prisma.workOrder.groupBy({ by: ["status"], where: scope, _count: true }),
-    outsourceInbox.length ? prisma.workOrder.count({ where: { AND: [scope, ...outsourceInbox] } }) : Promise.resolve(0),
+    // นับกล่องงานจากขอบเขตกล่องงาน ไม่ใช่จากตัวเลขชิป — ใบที่จ่ายข้ามทีมมาเห็นในรายการแต่ไม่ได้รอคนนี้
+    prisma.workOrder.count({ where: { AND: [inboxScope], status: { in: inboxStages } } }),
+    outsourceInbox.length ? prisma.workOrder.count({ where: { AND: [inboxScope, ...outsourceInbox] } }) : Promise.resolve(0),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
       select: { id: true, name: true, region: true, supervisedTeams: true },
@@ -1240,7 +1289,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
       ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
-      INBOX: inboxStages.reduce((n, st) => n + (byStatus[st] ?? 0), 0) + orphans.length + outsourceOpen,
+      INBOX: inboxWaiting + orphans.length + outsourceOpen,
     },
   });
 });
@@ -1326,7 +1375,8 @@ router.get("/locate", requireAuth, async (req: AuthRequest, res) => {
  * ถึงหน้างานแล้วหรือยังอ่านจากประวัติ ARRIVED หลังถูกปล่อยงานรอบล่าสุด — ไม่เก็บซ้ำในใบงาน
  */
 router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
-  const scope = await scopeFor(req);
+  // งานที่ทีมตัวเองต้องไป — ไม่รวมใบของสาขาประจำที่จ่ายข้ามให้ทีมอื่นเข้าไป
+  const scope = await scopeFor(req, true);
   const today = bangkokDay(new Date());
   const { from } = bangkokDayRange(today);
   const rows = await prisma.workOrder.findMany({
@@ -1405,7 +1455,7 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
 router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
   // ขอบเขต · ใบไม่มีคนรับ · รายชื่อ outsource ไม่ขึ้นต่อกัน — ถามพร้อมกัน แล้วนับสองอย่างพร้อมกัน
   const [scope, orphans, outsource] = await Promise.all([
-    scopeFor(req),
+    scopeFor(req, true),
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     req.auth!.role === "SUPERVISOR" ? freshOutsource() : Promise.resolve(new Set<string>()),
   ]);
@@ -1658,6 +1708,18 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
   res.json({ date, by, rows });
 });
 
+/** ทีม → ชื่อหัวหน้าภาคที่ดูแล (ทีมมาก่อนภาค) — บอกในช่องจ่ายงานว่าจ่ายข้ามไปแล้วใครจะเห็นใบนี้ */
+async function teamOwners(): Promise<Map<string, string[]>> {
+  const sups = await prisma.user.findMany({
+    where: { role: "SUPERVISOR", deletedAt: null },
+    select: { id: true, name: true, region: true, supervisedTeams: true },
+    orderBy: { name: "asc" },
+  });
+  const out = new Map<string, string[]>();
+  for (const u of withScopes(sups)) for (const t of await teamsForSupervisor(u.scope)) out.set(t, [...(out.get(t) ?? []), u.name]);
+  return out;
+}
+
 router.get("/options", requireAuth, async (req: AuthRequest, res) => {
   await freshOutsource();
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
@@ -1690,16 +1752,21 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
     const k = r.pmTeam?.trim();
     if (k) teamTally.set(k, Math.max(teamTally.get(k) ?? 0, r._count));
   }
-  // หัวหน้าภาคเห็นเฉพาะทีมที่จ่ายงานให้ได้ (+ outsource ด้านล่าง) — ไม่โชว์ทีมของหัวหน้าภาคคนอื่น (ต.ค. 69)
+  /**
+   * หัวหน้าภาคได้ทุกทีม (เจ้าของงานขอ ต.ค. 69: จ่ายข้ามไปทีมนอกความดูแลได้) พร้อมธงว่าทีมไหนของตัวเอง
+   * หน้าจอแยกทีมของตัวเองไว้บน ทีมของคนอื่นไว้กลุ่มล่างพร้อมชื่อคนดูแล — เดิมปนกันแล้วถูกบ่นว่าเห็นทีม OPL ของคนอื่น
+   */
   const mine = req.auth!.role === "SUPERVISOR" ? await teamsForSupervisor(await supervisorScope(req.auth!.userId)) : null;
-  const teams = [...teamTally.entries()]
-    .filter(([name]) => !mine || mine.has(cleanName(name) ?? "") || isOutsourceTeam(name))
-    .sort((a, b) => a[0].localeCompare(b[0], "th"));
+  const owners = mine ? await teamOwners() : null;
+  const teams = [...teamTally.entries()].sort((a, b) => a[0].localeCompare(b[0], "th"));
   // ทีมที่หัวหน้าภาคดูแลแต่ยังไม่มีสาขาประจำ (เช่นทีมรวม) ก็ต้องเลือกได้
   if (mine) for (const t of mine) if (!teams.some(([n]) => cleanName(n) === t)) teams.push([t, 0]);
+  const ownership = (name: string) => {
+    if (!mine || !owners) return {};
+    const key = cleanName(name) ?? "";
+    return mine.has(key) ? { mine: true } : { mine: false, supervisors: owners.get(key) ?? [] };
+  };
   res.json({
-    // หน้าจอ: ทีมประจำสาขาที่ไม่อยู่ในรายการไม่ต้องเติมให้ (ปกติเติมให้เลือกข้อมูลสาขาเก่าได้)
-    teamsLimited: !!mine,
     statuses: WORK_ORDER_STATUSES.map((v) => ({ value: v, label: WORK_ORDER_STATUS_LABELS[v] })),
     priorities: WORK_ORDER_PRIORITIES.map((v) => ({
       value: v,
@@ -1725,7 +1792,7 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
     // ส่งมาที่เดียวกับตัวเลือกอื่น หน้าจอจะได้ไม่ต้องยิงเพิ่มอีกรอบตอนเปิดฟอร์ม
     teams: [
       // ทีมที่ดูแลสาขาแต่เป็นบริษัทภายนอก (เช่น PWS) ก็ติดป้าย outsource — หัวหน้าภาคปิดงานแทนเหมือนกัน
-      ...teams.map(([name, branches]) => ({ name, branches, ...(isOutsourceTeam(name) ? { outsource: true } : {}) })),
+      ...teams.map(([name, branches]) => ({ name, branches, ...(isOutsourceTeam(name) ? { outsource: true } : {}), ...ownership(name) })),
       // ทีม outsource ต่อท้าย พร้อมป้าย — รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ
       ...outsourceList()
         .filter((n) => !teams.some(([t]) => t === n))
@@ -1821,15 +1888,25 @@ async function loadDetail(id: number) {
    * หัวหน้าภาคที่รับผิดชอบใบนี้ — กติกาเดียวกับกล่องงาน (ทีมมาก่อนภาค) โชว์ชื่อหลัง "ขั้นปัจจุบัน · หัวหน้าภาค"
    * เดิมขึ้นแค่บทบาท คนอ่านใบไม่รู้ว่าต้องตามใคร (เจ้าของงานขอ ต.ค. 69)
    */
-  const supervisors = withScopes(sups)
-    .filter((u) => coversWorkOrder(u.scope, row))
-    .map((u) => ({ id: u.id, name: u.name }));
-  return { row, logs, supervisors };
+  const scoped = withScopes(sups);
+  const supervisors = scoped.filter((u) => coversWorkOrder(u.scope, row)).map((u) => ({ id: u.id, name: u.name }));
+  /**
+   * จ่ายข้ามทีม — หน้าใบงานขึ้นแถบบอกว่าทีมไหนเข้าแทนทีมประจำสาขา และหัวหน้าภาคของทีมที่รับ (เห็นใบ ดูอย่างเดียว)
+   * คนเปิดใบจะได้ไม่งงว่าทำไมทีมอื่นมาอยู่ในใบ หรือทำไมหัวหน้าภาคอีกคนเห็นแต่กดไม่ได้
+   */
+  let crossTeam: { ownTeam: string; assignedTeam: string; watchers: string[] } | null = null;
+  if (isCrossTeam(row)) {
+    const sent = cleanName(row.assignedTeam) ?? "";
+    const watchers: string[] = [];
+    for (const u of scoped) if (!coversWorkOrder(u.scope, row) && (await teamsForSupervisor(u.scope)).has(sent)) watchers.push(u.name);
+    crossTeam = { ownTeam: ownTeamOf(row) ?? "", assignedTeam: row.assignedTeam ?? "", watchers };
+  }
+  return { row, logs, supervisors, crossTeam };
 }
 
 type Detail = NonNullable<Awaited<ReturnType<typeof loadDetail>>>;
 
-function detailBody({ row, logs, supervisors }: Detail) {
+function detailBody({ row, logs, supervisors, crossTeam }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -1846,6 +1923,7 @@ function detailBody({ row, logs, supervisors }: Detail) {
         : null,
     // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
     supervisors,
+    crossTeam,
     rolledBack: activeRollback(row.status, logs),
     rollbackPrefill: rollbackPrefill(row.status, logs),
     logs: logs.map((l) => ({
@@ -1872,10 +1950,14 @@ async function detailFor(id: number) {
 router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const d = await loadDetail(id);
+  const [d, scope] = await Promise.all([
+    loadDetail(id),
+    req.auth!.role === "SUPERVISOR" ? supervisorScope(req.auth!.userId) : Promise.resolve(undefined),
+  ]);
   if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (await blockedForViewer(req, res, d.row)) return;
-  res.json(detailBody(d));
+  if (await blockedForViewer(req, res, d.row, scope)) return;
+  // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
+  res.json({ ...detailBody(d), ...(scope && !coversWorkOrder(scope, d.row) ? { viewOnly: true } : {}) });
 });
 
 // ── เปิดใบงาน ──────────────────────────────────────────
@@ -2711,6 +2793,8 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   // แก้ได้เฉพาะใบที่เปิดดูได้ — เดิมใครก็แก้ใบไหนก็ได้ (ตรวจระบบ ต.ค. 69)
   if (await blockedForViewer(req, res, current)) return;
+  // หัวหน้าภาคของทีมที่รับงานข้ามทีมมาเปิดดูได้ แต่แก้ไม่ได้ — ใบเป็นของเจ้าของพื้นที่
+  if (req.auth!.role === "SUPERVISOR" && (await blockedForSupervisor(req, res, current))) return;
   if (current.status === "DONE" || current.status === "CANCELLED") {
     return res.status(400).json({ error: "ใบงานนี้ปิดไปแล้ว แก้ไขไม่ได้" });
   }
@@ -2826,6 +2910,7 @@ async function guardStage(
         scheduledAt: true,
         scheduledTime: true,
         outageId: true,
+        jobType: true,
         branch: { select: { region: true, zone: true, pmTeam: true } },
       },
     }),
@@ -2838,7 +2923,7 @@ async function guardStage(
 
   if (scope) {
     if (!coversWorkOrder(scope, wo)) {
-      res.status(403).json({ error: OUT_OF_SCOPE });
+      res.status(403).json({ error: await outOfScopeReason(scope, wo) });
       return null;
     }
   }
@@ -3057,7 +3142,6 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: "ใบนี้ยังจ่ายงานไม่ได้ — ต้องผ่านขั้นอะไหล่/เสนอราคาก่อน" });
     }
     if (!knownTeam) return res.status(404).json({ error: `ไม่รู้จักทีม "${assign.team}"` });
-    if (await teamOutOfScope(req, res, assign.team)) return;
   }
 
   await prisma.$transaction(async (tx) => {
@@ -4014,20 +4098,10 @@ async function knownCmTeam(team: string) {
  * จ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
  * ใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
  * วันบังคับใส่ เพราะขั้นถัดไปคือแอดมินโทรถามร้านว่าวันนี้ได้ไหม — ไม่มีวันก็ไม่มีอะไรให้ถาม
+ *
+ * หัวหน้าภาคจ่ายให้ทีมไหนก็ได้ (เจ้าของงานขอ ต.ค. 69 — เดิมเฉพาะทีมที่ดูแล + outsource)
+ * ใบในพื้นที่ตัวเองแต่ให้ทีมอื่นเข้าไป: ใบยังเป็นของคนจ่าย ดู isCrossTeam ใน utils/supervisorScope.ts
  */
-/**
- * หัวหน้าภาคจ่ายงานได้เฉพาะทีมที่ตัวเองดูแล (หรือทีม outsource) — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว
- * หน้าจอโชว์เฉพาะทีมเหล่านี้อยู่แล้ว (/options) กันซ้ำที่นี่เผื่อแอปรุ่นเก่า (เจ้าของงานกำหนด ต.ค. 69)
- */
-async function teamOutOfScope(req: AuthRequest, res: Response, team: string | null | undefined) {
-  if (!team || req.auth!.role !== "SUPERVISOR") return false;
-  if ((await freshOutsource()).has(team)) return false;
-  const allowed = await teamsForSupervisor(await supervisorScope(req.auth!.userId));
-  if (allowed.has(cleanName(team) ?? "")) return false;
-  res.status(403).json({ error: `ทีม ${team} ไม่ได้อยู่ในความดูแลของคุณ — เลือกได้เฉพาะทีมที่คุณดูแลหรือทีม outsource` });
-  return true;
-}
-
 const assignSchema = z.object({
   team: z.string().trim().min(1).max(120),
   scheduledAt: dateField,
@@ -4050,7 +4124,6 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   // ทีมกับข้อความทีมไม่ขึ้นต่อกัน อ่านพร้อมกัน
   const [known, teamText] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้")]);
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
-  if (await teamOutOfScope(req, res, team)) return;
 
   // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
   // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
@@ -4176,8 +4249,6 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
   if (team !== cur.assignedTeam && !(await (inspect ? teamExists(team) : knownCmTeam(team)))) {
     return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
   }
-  // ทีมเดิมของใบ (จ่ายไว้แล้ว) ไม่เช็คซ้ำ — เช็คเฉพาะตอนเปลี่ยนทีม
-  if (team !== cur.assignedTeam && (await teamOutOfScope(req, res, team))) return;
   const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
   const text =
     team !== cur.assignedTeam
@@ -4219,7 +4290,7 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
       code: true,
       status: true,
       assignedToId: true,
-      assignedTeam: true,
+      jobType: true, assignedTeam: true,
       branchId: true,
       branch: { select: { region: true, zone: true, pmTeam: true, latitude: true, longitude: true, radiusMeters: true } },
     },
@@ -4332,7 +4403,6 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
   if (!(await teamExists(team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
-  if (await teamOutOfScope(req, res, team)) return;
 
   const data = {
     // ยังไม่ถึงช่าง — แอดมินนัดร้านก่อน (วันที่หัวหน้าภาคใส่คือวันที่เสนอ ลูกค้าอาจขอเลื่อน)
@@ -4387,7 +4457,7 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
       code: true,
       status: true,
       workStatus: true,
-      assignedTeam: true,
+      jobType: true, assignedTeam: true,
       assignedToId: true,
       branch: { select: { region: true, zone: true, pmTeam: true } },
     },
@@ -4446,15 +4516,26 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
   res.json(await detailFor(id));
 });
 
-/** หัวหน้าภาคแตะได้เฉพาะใบงานในภาค/ทีมที่ดูแล — คืน true เมื่อ "ห้าม" แบบเดียวกับ blockedForTeam */
+/**
+ * หัวหน้าภาคแตะได้เฉพาะใบงานที่ตัวเองเป็นเจ้าของ (ภาค/ทีมที่ดูแล) — คืน true เมื่อ "ห้าม" แบบเดียวกับ blockedForTeam
+ * ใบที่จ่ายข้ามทีมมาให้ทีมของตัวเองเปิดดูได้ แต่กดอะไรไม่ได้ — ตอบว่าดูได้อย่างเดียว ไม่ใช่ "ไม่อยู่ในภาค"
+ */
 async function blockedForSupervisor(
   req: AuthRequest,
   res: Response,
-  wo: { assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
+  wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
 ) {
-  if (coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) return false;
-  res.status(403).json({ error: OUT_OF_SCOPE });
+  const scope = await supervisorScope(req.auth!.userId);
+  if (coversWorkOrder(scope, wo)) return false;
+  res.status(403).json({ error: (await outOfScopeReason(scope, wo)) });
   return true;
+}
+
+async function outOfScopeReason(
+  scope: SupervisorScope,
+  wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
+) {
+  return seesWorkOrder(scope, await teamsForSupervisor(scope), wo) ? VIEW_ONLY : OUT_OF_SCOPE;
 }
 
 /**
@@ -4547,7 +4628,7 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
     select: {
       code: true,
       status: true,
-      assignedTeam: true,
+      jobType: true, assignedTeam: true,
       assignedToId: true,
       machine: { select: { brand: true, model: true } },
       branch: { select: { region: true, zone: true, pmTeam: true, code: true, openedAt: true, warrantyExpiresAt: true } },
@@ -4830,7 +4911,7 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       code: true,
       status: true,
       parentId: true,
-      assignedTeam: true,
+      jobType: true, assignedTeam: true,
       // ค่าที่การย้อนจะล้าง — เก็บไว้ในประวัติ ให้ขั้นที่ย้อนไปเติมค่าเดิมได้ (ดู RollbackSnapshot)
       needsParts: true,
       scheduledAt: true,
@@ -4989,7 +5070,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
       code: true,
       status: true,
       assignedToId: true,
-      assignedTeam: true,
+      jobType: true, assignedTeam: true,
       branch: { select: { region: true, zone: true, pmTeam: true } },
     },
   });
@@ -5900,7 +5981,7 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
 
   const wo = await prisma.workOrder.findUnique({
     where: { id },
-    select: { code: true, status: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
+    select: { code: true, status: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return;
@@ -6017,7 +6098,7 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
     select: { status: true, code: true, ...VIEW_SELECT },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (role === "SUPERVISOR" && (await blockedForViewer(req, res, current))) return;
+  if (role === "SUPERVISOR" && (await blockedForSupervisor(req, res, current))) return;
   if (current.status === "DONE" || current.status === "CANCELLED") {
     return res.status(400).json({ error: `${current.code} ${current.status === "DONE" ? "ปิดไปแล้ว" : "ถูกยกเลิกไปแล้ว"} ยกเลิกไม่ได้` });
   }
@@ -6172,7 +6253,9 @@ function attachmentUpload(req: AuthRequest, res: Response, next: (err?: any) => 
 async function loadAttachableWorkOrder(
   req: AuthRequest,
   res: Response,
-  id: number
+  id: number,
+  /** แนบ/ลบไฟล์ — หัวหน้าภาคต้องเป็นเจ้าของใบ ไม่ใช่แค่เห็น (ใบที่ทีมตัวเองรับข้ามทีมมา ดูได้อย่างเดียว) */
+  write = false
 ): Promise<{ id: number; code: string; status: string; createdById: number | null } | null> {
   const wo = await prisma.workOrder.findUnique({
     where: { id },
@@ -6184,6 +6267,7 @@ async function loadAttachableWorkOrder(
   }
   // กฎเดียวกับเปิดดูใบงาน — เดิมช่างเปิดรูปของใบที่ยังไม่จ่ายทีมได้ทุกภาค (ภาพในร้านลูกค้า)
   if (await blockedForViewer(req, res, wo)) return null;
+  if (write && req.auth!.role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return null;
 
   return { id: wo.id, code: wo.code, status: wo.status, createdById: wo.createdById };
 }
@@ -6210,8 +6294,11 @@ type AttachmentRow = {
  * ถ้าแยก หน้าจอต้องยิงเพิ่มอีกรูปละครั้ง และรูปพวกนี้ต้องล็อกอินถึงจะดูได้
  * แต่ <Image> บนเว็บแนบ header ไม่ได้ จะต้องไปทำลิงก์ชั่วคราวให้รูปย่อด้วย
  * ทั้งที่มันแค่ไม่กี่สิบ KB — ส่งติดไปเลยจบกว่าและเปิดหน้าได้ไวกว่า
+ *
+ * skipThumb = แอปมีรูปย่อของไฟล์นี้อยู่แล้ว (ดู ?have= ของ GET /:id/attachments) — ไม่ส่งซ้ำ
+ * hasThumbnail บอกว่ามีรูปย่อ แอปจะได้หยิบจากที่จำไว้ ไม่ใช่เข้าใจว่าไม่มีรูปย่อ
  */
-function attachmentShape(a: AttachmentRow) {
+function attachmentShape(a: AttachmentRow, skipThumb = false) {
   return {
     id: a.id,
     kind: a.kind,
@@ -6232,7 +6319,8 @@ function attachmentShape(a: AttachmentRow) {
     // ถ้าหน้าจอเทียบด้วยชื่อ ช่างสองคนที่ชื่อเหมือนกันจะลบไฟล์ของกันและกันได้
     createdById: a.createdById,
     createdByName: a.createdBy?.name ?? null,
-    thumbnailDataUrl: a.thumbnail
+    hasThumbnail: !!a.thumbnail,
+    thumbnailDataUrl: a.thumbnail && !skipThumb
       ? `data:image/jpeg;base64,${Buffer.from(a.thumbnail).toString("base64")}`
       : null,
   };
@@ -6261,12 +6349,52 @@ router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
   const wo = await loadAttachableWorkOrder(req, res, id);
   if (!wo) return;
 
+  /**
+   * ?have=1,2,3 — รูปย่อที่แอปจำไว้แล้ว ไม่ต้องส่งซ้ำ (เจ้าของงานบ่นว่าไฟล์แนบโหลดช้า ต.ค. 69)
+   * รายการนี้โหลดใหม่ทุกครั้งที่แนบ/ลบ/กลับมาที่ใบงาน ใบที่มี 20 ไฟล์เดิมส่งรูปย่อชุดเดิมซ้ำทุกรอบ (หลายร้อย KB)
+   * รูปย่อของไฟล์หนึ่งไม่เคยเปลี่ยน จำไว้ที่เครื่องได้ตลอด
+   */
+  const have = new Set(
+    String(req.query.have ?? "")
+      .split(",")
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0)
+  );
   const rows = await prisma.workOrderAttachment.findMany({
     where: { workOrderId: id },
     select: attachmentSelect,
     orderBy: { createdAt: "asc" },
   });
-  res.json({ rows: rows.map(attachmentShape) });
+  res.json({ rows: rows.map((r) => attachmentShape(r, have.has(r.id))) });
+});
+
+/**
+ * ลิงก์เปิดไฟล์ของทุกไฟล์ในใบงาน — คำขอเดียว (เจ้าของงานขอให้ไฟล์แนบโหลดไวขึ้น ต.ค. 69)
+ *
+ * เดิมกดดูไฟล์ไหนก็ถามลิงก์ของไฟล์นั้นทีละครั้ง เซิร์ฟเวอร์อยู่ไกลจากคนใช้และฐานข้อมูล
+ * จึงรอราว 1 วินาทีก่อนไฟล์จะเริ่มโหลดทุกครั้ง · แอปขอชุดนี้เบื้องหลังตอนเปิดใบงาน กดแล้วโหลดไฟล์ได้ทันที
+ * การเซ็นลิงก์ทำในเครื่อง ไม่ได้ถามที่เก็บไฟล์ — 20 ไฟล์ก็ยังเร็ว · อายุลิงก์เท่ากับ /link (2 ชั่วโมง)
+ */
+router.get("/:id/attachments/links", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+
+  const rows = await prisma.workOrderAttachment.findMany({
+    where: { workOrderId: id, objectKey: { not: null }, uploadedAt: { not: null } },
+    select: { id: true, objectKey: true, fileName: true },
+  });
+  try {
+    const pairs = await Promise.all(
+      rows.map(async (r) => [r.id, await getDownloadUrl(r.objectKey!, { fileName: r.fileName, inline: true })] as const)
+    );
+    res.json({ links: Object.fromEntries(pairs), expiresInSeconds: SIGNED_URL_TTL_SECONDS });
+  } catch (error: any) {
+    console.error("presign failed", error);
+    res.status(502).json({ error: "ขอลิงก์เปิดไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง" });
+  }
 });
 
 router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthRequest, res) => {
@@ -6279,7 +6407,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
     });
   }
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const wo = await loadAttachableWorkOrder(req, res, id, true);
   if (!wo) return;
   // Area Team แนบรูปได้เฉพาะใบที่ตัวเองเปิด (รูปหน้างานตอนแจ้ง) — ใบอื่นดูได้อย่างเดียว
   if (isAreaTeam(req.auth) && wo.createdById !== req.auth!.userId) {
@@ -6436,6 +6564,38 @@ router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthR
 });
 
 /**
+ * ตัวไฟล์ PDF ผ่านเซิร์ฟเวอร์ — ทางสำรองของหน้าดูไฟล์ในแอป (ต.ค. 69)
+ *
+ * ตัวแสดง PDF ในแอปอ่านไฟล์ด้วย fetch ซึ่งต้องให้ที่เก็บไฟล์ตอบ CORS — ถ้าที่เก็บไม่ตอบ แอปมาขอที่นี่แทน
+ * (ส่งผ่านเซิร์ฟเวอร์ช้ากว่าโหลดตรง จึงไม่ใช่ทางหลัก) · เฉพาะ PDF — รูป/วิดีโอแสดงด้วย <img>/<video> ไม่ติด CORS
+ */
+router.get("/:id/attachments/:attachmentId/file", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const attachmentId = Number(req.params.attachmentId);
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) {
+    return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
+  }
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+  const row = await prisma.workOrderAttachment.findFirst({
+    where: { id: attachmentId, workOrderId: id },
+    select: { objectKey: true, kind: true, mimeType: true },
+  });
+  if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
+  if (row.kind !== "DOCUMENT") return res.status(400).json({ error: "เปิดผ่านทางนี้ได้เฉพาะไฟล์ PDF" });
+  if (!row.objectKey) return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ" });
+  try {
+    const bytes = await getObjectBytes(row.objectKey);
+    res.setHeader("Content-Type", row.mimeType || "application/pdf");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.end(Buffer.from(bytes));
+  } catch (error: any) {
+    console.error("file read failed", error);
+    res.status(502).json({ error: "อ่านไฟล์จากที่เก็บไม่สำเร็จ ลองใหม่อีกครั้ง" });
+  }
+});
+
+/**
  * ลบไฟล์แนบ — คนที่อัปเองหรือแอดมินเท่านั้น
  *
  * ไม่ให้ใครก็ได้ลบ เพราะรูปหน้างานเป็นหลักฐาน และคนที่มีเหตุผลจะลบมีแค่สองแบบ
@@ -6448,7 +6608,7 @@ router.delete("/:id/attachments/:attachmentId", requireAuth, async (req: AuthReq
     return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
   }
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const wo = await loadAttachableWorkOrder(req, res, id, true);
   if (!wo) return;
 
   const row = await prisma.workOrderAttachment.findFirst({

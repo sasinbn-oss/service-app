@@ -175,6 +175,13 @@ interface WorkOrder {
   stageActor: string | null;
   /** หัวหน้าภาคที่รับผิดชอบใบนี้ (ทีมมาก่อนภาค) — ว่าง = ไม่มีคนรับ */
   supervisors?: { id: number; name: string }[];
+  /**
+   * จ่ายข้ามทีม (เจ้าของงานขอ ต.ค. 69) — ทีมที่รับไม่ใช่ทีมประจำสาขา · ช่างปิดงานได้ทั้งสองทีม
+   * watchers = หัวหน้าภาคของทีมที่รับ เห็นใบแต่ดูได้อย่างเดียว
+   */
+  crossTeam?: { ownTeam: string; assignedTeam: string; watchers: string[] } | null;
+  /** คนเปิดเป็นหัวหน้าภาคของทีมที่รับงานข้ามทีมมา — ดูได้อย่างเดียว (เซิร์ฟเวอร์กันอีกชั้น) */
+  viewOnly?: boolean;
   stageActorLabel: string | null;
   waitingParts: StockPart[];
   /** ค่าบริการที่หัวหน้าช่างให้เสนอราคา — ไม่มีราคา (ราคาอยู่ในใบเสนอราคาจากระบบบัญชี) */
@@ -282,6 +289,10 @@ interface Team {
   branches: number;
   /** ทีม outsource — รับงานเป็นครั้ง ๆ ไม่มีสาขาประจำ หัวหน้าภาคปิดงานแทน */
   outsource?: boolean;
+  /** หัวหน้าภาคเท่านั้น: ทีมที่ตัวเองดูแลไหม (แอดมินไม่มีค่านี้) */
+  mine?: boolean;
+  /** ทีมนอกความดูแล — หัวหน้าภาคที่ดูแลทีมนั้น (จ่ายข้ามไปแล้วคนเหล่านี้เห็นใบ) */
+  supervisors?: string[];
 }
 
 interface LinkedOrder {
@@ -588,6 +599,17 @@ function inMyTeam(u: { team?: string | null; teamCoverage?: { all: boolean; team
   return !!c && (c.all || c.teams.includes(team));
 }
 
+/**
+ * ใบนี้เป็นงานของทีมช่างคนนี้ไหม — ทีมที่รับงาน หรือทีมประจำสาขาเมื่อใบถูกจ่ายข้ามทีม
+ * (เจ้าของงานเลือก ต.ค. 69: ปิดงานได้ทั้งสองทีม · เซิร์ฟเวอร์ใช้กฎเดียวกันใน canTouch)
+ */
+function ourTeamOrder(
+  u: Parameters<typeof inMyTeam>[0],
+  o: { assignedTeam: string | null; crossTeam?: { ownTeam: string } | null }
+) {
+  return inMyTeam(u, o.assignedTeam) || (!!o.crossTeam && inMyTeam(u, o.crossTeam.ownTeam));
+}
+
 /** ตรวจเคลมได้เฉพาะ Admin Spare Part (Super Admin ทำแทนได้) — ตรงกับ canReviewClaims ฝั่งเซิร์ฟเวอร์ */
 function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | null) {
   return !!u && (!!u.partsAdmin || !!u.superAdmin);
@@ -597,32 +619,49 @@ function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | nul
  * ตัวเลือกทีมตอนจ่ายงาน — ทีม outsource ใช้ชื่อทีมเหมือนทีมอื่น แต่แยกไว้กลุ่มของตัวเองท้ายรายการ
  * (เจ้าของงานขอ ต.ค. 69: ไม่อยากเห็นป้าย "outsource" ต่อชื่อ แต่ต้องไม่ปนกับทีมช่างปกติ)
  * ทีมประจำสาขาขึ้นก่อนเสมอในกลุ่มของมัน — ทีมที่ดูแลสาขาก็เป็น outsource ได้ (เช่น PWS)
+ *
+ * หัวหน้าภาคได้ทุกทีม (จ่ายข้ามทีมได้ ต.ค. 69) — ทีมที่ดูแลอยู่กลุ่มบน ทีมของคนอื่นแยกกลุ่มล่างพร้อมชื่อคนดูแล
+ * เดิมโชว์ทุกทีมปนกันแล้วถูกบ่นว่าเห็นทีม OPL ของคนอื่น — แยกกลุ่มให้รู้ว่าเลือกข้ามไปหาทีมคนอื่น
  */
-function teamOptions(teams: Team[], suggested: string | null | undefined, jobType: string, limited = false): DropdownOption[] {
-  // หัวหน้าภาคได้รายการเฉพาะทีมที่ตัวเองดูแล — ทีมประจำสาขาที่เป็นของคนอื่น (เช่น OPL) ไม่เติมกลับเข้ามา (ต.ค. 69)
-  if (limited && !teams.some((t) => t.name === suggested)) suggested = null;
-  const OWN = "ทีมช่าง";
+function teamOptions(teams: Team[], suggested: string | null | undefined, jobType: string): DropdownOption[] {
+  // ธง mine มาเฉพาะหัวหน้าภาค — แอดมินเห็นทุกทีมเป็นกลุ่มเดียวเหมือนเดิม
+  const scoped = teams.some((t) => t.mine !== undefined);
+  const OWN = scoped ? "ทีมที่คุณดูแล" : "ทีมช่าง";
+  const OTHER = "ทีมนอกความดูแล · จ่ายข้ามทีมได้";
   const OUT = "ทีม outsource · หัวหน้าภาคปิดงานแทน";
+  const groupOf = (t: Team) => (t.outsource ? OUT : t.mine === false ? OTHER : OWN);
+  const own = `ทีม ${jobType === "PM" ? "PM" : "CM"} ของสาขานี้`;
   const sug = teams.find((t) => t.name === suggested);
   const opt = (t: Team): DropdownOption => ({
     value: t.name,
     label: t.name,
-    group: t.outsource ? OUT : OWN,
-    hint:
-      t.name === suggested
-        ? `ทีม ${jobType === "PM" ? "PM" : "CM"} ของสาขานี้`
-        : t.branches
-          ? `ดูแล ${t.branches} สาขา`
-          : "รับงานเป็นครั้ง",
+    group: groupOf(t),
+    hint: [
+      t.name === suggested ? own : t.branches ? `ดูแล ${t.branches} สาขา` : "รับงานเป็นครั้ง",
+      t.mine === false && !t.outsource ? (t.supervisors?.length ? `${t.supervisors.join(", ")} ดูแล` : "ยังไม่มีหัวหน้าภาคดูแล") : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
   });
   const rest = teams.filter((t) => t.name !== suggested);
   // ทีมประจำสาขาที่ไม่อยู่ในรายชื่อทีม (ข้อมูลสาขาเก่า) ยังให้เลือกได้ เหมือนเดิม
   const head: DropdownOption[] = suggested
-    ? [sug ? opt(sug) : { value: suggested, label: suggested, group: OWN, hint: `ทีม ${jobType === "PM" ? "PM" : "CM"} ของสาขานี้` }]
+    ? [sug ? opt(sug) : { value: suggested, label: suggested, group: OWN, hint: own }]
     : [];
-  const own = [...head.filter((o) => o.group === OWN), ...rest.filter((t) => !t.outsource).map(opt)];
-  const out = [...head.filter((o) => o.group === OUT), ...rest.filter((t) => t.outsource).map(opt)];
-  return [...own, ...out];
+  return [OWN, OTHER, OUT].flatMap((g) => [...head.filter((o) => o.group === g), ...rest.filter((t) => groupOf(t) === g).map(opt)]);
+}
+
+/**
+ * ต่อท้ายคำเตือนจ่ายข้ามทีม — หลังจ่ายแล้วใครทำอะไรได้ (เจ้าของงานเลือก ต.ค. 69)
+ * ใบยังอยู่กับคนจ่าย · ช่างปิดงานได้ทั้งสองทีม · หัวหน้าภาคของทีมนอกความดูแลเห็นใบแต่ดูอย่างเดียว
+ * ทีม outsource ไม่มีช่างในแอป หัวหน้าภาคปิดแทน — ไม่ต้องต่อท้าย (ป้ายกลุ่มบอกไว้แล้ว)
+ */
+function crossNote(t: Team | undefined, team: string, own: string | null | undefined) {
+  if (t?.outsource) return "";
+  const close = own ? ` · ช่างปิดงานได้ทั้ง ${team} และ ${own}` : "";
+  if (t?.mine !== false) return close;
+  const who = t.supervisors?.length ? `หัวหน้าภาค ${t.supervisors.join(", ")}` : "หัวหน้าภาคของทีมนั้น";
+  return `${close}\nทีมนอกความดูแล — ใบยังอยู่กับคุณ (คุณกดปล่อยงานเอง) · ${who} เห็นใบนี้แต่ดูได้อย่างเดียว`;
 }
 
 export default function WorkOrderDetailScreen({ route, navigation }: Props) {
@@ -633,14 +672,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * ตัด user ทิ้งสำหรับปุ่มทั้งหมดในหน้านี้ — ทุกปุ่มที่เช็คสิทธิ์จาก user หายไปพร้อมกัน
    * ไม่ต้องไล่ใส่เงื่อนไขทีละปุ่ม (เซิร์ฟเวอร์กันอีกชั้นใน middleware/auth.ts)
    */
+  const [order, setOrder] = useState<WorkOrder | null>(null);
   // Area Team ก็ดูอย่างเดียวเหมือนกัน — แจ้งและเปิดใบงานได้ แต่ไม่ได้ทำขั้นตอนของใคร (เจ้าของงานกำหนด ต.ค. 69)
-  const viewOnly = !!me?.partsAdmin || isAreaTeam(me);
+  // หัวหน้าภาคของทีมที่รับงานข้ามทีมมาก็ดูอย่างเดียว — ใบเป็นของหัวหน้าภาคเจ้าของพื้นที่ (เซิร์ฟเวอร์บอกมา)
+  const viewOnly = !!me?.partsAdmin || isAreaTeam(me) || !!order?.viewOnly;
   const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [supClosing, setSupClosing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [order, setOrder] = useState<WorkOrder | null>(null);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
   const [sendBackReasons, setSendBackReasons] = useState<Option[]>([]);
@@ -651,8 +691,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [adminWarehouse, setAdminWarehouse] = useState("คลังลาดพร้าว 94");
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
-  /** หัวหน้าภาค — รายการทีมจากเซิร์ฟเวอร์มีเฉพาะทีมที่ตัวเองดูแล (+ outsource) */
-  const [teamsLimited, setTeamsLimited] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
   const editingNoteRef = useRef(false);
   editingNoteRef.current = editingNote;
@@ -722,7 +760,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           adminWarehouse?: string;
           technicians: Technician[];
           teams: Team[];
-          teamsLimited?: boolean;
         }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
@@ -735,7 +772,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       if (options.data.adminWarehouse) setAdminWarehouse(options.data.adminWarehouse);
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
-      setTeamsLimited(!!options.data.teamsLimited);
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
@@ -875,7 +911,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       // ใบเก่าที่จ่ายรายคนยังเช็คด้วย assignedToId เหมือนเดิม เพื่อให้คนที่กำลัง
       // ทำอยู่ตอนเปลี่ยนระบบไม่โดนล็อกออกจากงานของตัวเอง
       if (o.assignedToId !== null) return o.assignedToId === user.id;
-      if (o.assignedTeam !== null) return inMyTeam(user, o.assignedTeam);
+      if (o.assignedTeam !== null) return ourTeamOrder(user, o);
       return true;
     }
     return o.stageActor === user.role;
@@ -1079,7 +1115,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     ["IN_PROGRESS", "DONE"].includes(order.status) &&
     (user?.role === "ADMIN" ||
       user?.role === "SUPERVISOR" ||
-      inMyTeam(user, order.assignedTeam));
+      ourTeamOrder(user, order));
 
   // ทางจบใบงาน — หัวหน้าภาค/แอดมินเท่านั้น (Admin Spare Part ถูกตัด user ทิ้งแล้ว · ดูในฐานะ ไม่ขึ้น)
   const canEnd =
@@ -1108,7 +1144,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const card = closedOk ? [styles.card, styles.cardDone] : styles.card;
   const mine =
     order.assignedToName === user?.name ||
-    inMyTeam(user, order.assignedTeam);
+    ourTeamOrder(user, order);
   // หน้าตาตามแบบ ต.ค. 69 — กว้างพอค่อยแยกสองคอลัมน์ (คอลัมน์ขวา 380 px + ซ้ายอย่างน้อย ~600 px)
   const wide = bodyWidth >= 1000;
   const stageNow = stages.find((x) => x.value === order.status);
@@ -1597,6 +1633,32 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           ช่างส่งกลับ — หัวหน้าภาคต้องเห็นก่อนอย่างอื่นว่าทำไมใบนี้กลับมา ใครส่ง เมื่อไร
           ข้อมูลเดิมอยู่ครบในการ์ดข้างล่าง แก้ได้ที่ปุ่ม "แก้ไข" แล้วส่งตรวจหรือเดินต่อจากปุ่มขั้นนี้
         */}
+        {/*
+          จ่ายข้ามทีม (เจ้าของงานขอ ต.ค. 69) — ใบในพื้นที่หนึ่งแต่อีกทีมเข้าไปทำ คนเปิดใบต้องรู้ว่าทำไมทีมอื่นอยู่ในใบ
+          และใครกดอะไรได้: ช่างปิดได้ทั้งสองทีม · หัวหน้าภาคของทีมที่รับเห็นใบแต่ดูอย่างเดียว
+        */}
+        {order.crossTeam && !done ? (
+          <View style={[styles.sentBack, styles.crossTeamBox]} accessibilityLabel="กล่องจ่ายข้ามทีม">
+            <Ionicons name="swap-horizontal" size={18} color={colors.roleSupervisor} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.sentBackTitle, { color: colors.roleSupervisor }]}>
+                จ่ายข้ามทีม — {order.crossTeam.assignedTeam} เข้าทำแทนทีมประจำสาขา ({order.crossTeam.ownTeam})
+              </Text>
+              <Text style={styles.sentBackText}>
+                {order.viewOnly
+                  ? `ทีมที่คุณดูแลรับงานนี้มา — ใบยังเป็นของหัวหน้าภาค${
+                      order.supervisors?.length ? ` ${order.supervisors.map((s) => s.name).join(", ")}` : "เจ้าของพื้นที่"
+                    } (ปล่อยงาน/แก้ไข) คุณดูได้อย่างเดียว`
+                  : `ช่างปิดงานได้ทั้ง ${order.crossTeam.assignedTeam} และ ${order.crossTeam.ownTeam}`}
+              </Text>
+              {!order.viewOnly && order.crossTeam.watchers.length ? (
+                <Text style={styles.sentBackMeta}>
+                  หัวหน้าภาค {order.crossTeam.watchers.join(", ")} (ดูแล {order.crossTeam.assignedTeam}) เห็นใบนี้ด้วย ดูได้อย่างเดียว
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
         {/*
           ย้อนขั้นมา (เจ้าของงานขอ ต.ค. 69) — คนที่เปิดใบต้องรู้ก่อนอย่างอื่นว่าใบนี้ถอยมา เพราะอะไร ใครย้อน
           ข้อมูลเดิมไม่หาย: ฟอร์มขั้นนี้เติมค่าก่อนย้อนไว้ให้ (rollbackPrefill) · หายเองเมื่อกดผ่านขั้นนี้
@@ -2309,7 +2371,6 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         warehouses={warehouses}
         adminWarehouse={adminWarehouse}
         teams={teams}
-        teamsLimited={teamsLimited}
         files={files}
         onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
@@ -2935,7 +2996,6 @@ function StageModal({
   warehouses,
   adminWarehouse,
   teams,
-  teamsLimited,
   files,
   onFilesChanged,
   onCancel,
@@ -2946,7 +3006,6 @@ function StageModal({
   warehouses: string[];
   adminWarehouse: string;
   teams: Team[];
-  teamsLimited: boolean;
   /** ไฟล์แนบของใบงาน (จากการ์ดไฟล์แนบ) — ฟอร์มผลตรวจบอกว่าแนบอะไรไว้แล้ว */
   files: Attachment[];
   /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
@@ -3097,8 +3156,7 @@ function StageModal({
     setTeam(
       order.assignedTeam ??
         (["PARTS_CHECKED", "INSPECT_DISPATCH"].includes(order.status) ? prev(null, pf?.assignedTeam, "ทีม") : null) ??
-        // ทีมประจำสาขาที่หัวหน้าภาคเลือกไม่ได้ (ของคนอื่น) ไม่ตั้งไว้ให้ — ให้เลือกเองจากทีมของตัวเอง
-        (teamsLimited && !teams.some((t) => t.name === order.suggestedTeam) ? null : order.suggestedTeam) ??
+        order.suggestedTeam ??
         null
     );
     setDocs([]);
@@ -4216,7 +4274,7 @@ function StageModal({
                           <TouchableOpacity
                             style={styles.option}
                             onPress={() =>
-                              pickDoc((stage) => pickImageAttachment(true, stage))
+                              pickDoc((stage) => pickImageAttachment(true, stage, { doc: true }))
                             }
                             activeOpacity={0.7}
                           >
@@ -4225,7 +4283,7 @@ function StageModal({
                         ) : null}
                         <TouchableOpacity
                           style={styles.option}
-                          onPress={() => pickDoc((stage) => pickImageAttachments(stage))}
+                          onPress={() => pickDoc((stage) => pickImageAttachments(stage, { doc: true }))}
                           activeOpacity={0.7}
                         >
                           <Text style={styles.optionText}>เลือกรูป</Text>
@@ -4321,7 +4379,7 @@ function StageModal({
                   onChange={setTeam}
                   placeholder="เลือกทีม"
                   accessibilityLabel="ทีมที่จะรับงาน"
-                  options={teamOptions(teams, order.suggestedTeam, order.jobType, teamsLimited)}
+                  options={teamOptions(teams, order.suggestedTeam, order.jobType)}
                 />
                 {teams.length === 0 ? (
                   <Text style={styles.warn}>
@@ -4332,6 +4390,7 @@ function StageModal({
                   <Text style={styles.warn}>
                     จ่ายข้ามทีม — งาน{order.jobType === "PM" ? " PM " : " "}ของสาขานี้เป็นของ{" "}
                     {order.suggestedTeam ?? "ทีมที่ยังไม่ระบุ"}
+                    {crossNote(teams.find((t) => t.name === team), team, order.suggestedTeam)}
                   </Text>
                 ) : order.jobType === "PM" && !order.branchPmTeam && order.suggestedTeam ? (
                   <Text style={styles.linkedText}>
@@ -5606,13 +5665,13 @@ function CloseModal({
             primary={{
               label: "ถ่ายป้ายรุ่น",
               icon: "camera",
-              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage), (f) => setNameplate(f[0] ?? null)),
+              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
               accessibilityLabel: "ถ่ายป้ายรุ่น",
             }}
             secondary={{
               label: "เลือกจากอัลบั้ม",
               icon: "images-outline",
-              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage), (f) => setNameplate(f[0] ?? null)),
+              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
               accessibilityLabel: "เลือกรูปป้ายรุ่น",
             }}
           >
@@ -5813,7 +5872,7 @@ function CloseModal({
               {Platform.OS !== "web" ? (
                 <TouchableOpacity
                   style={styles.option}
-                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage), setSlip)}
+                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage, { doc: true }), setSlip)}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
@@ -5821,7 +5880,7 @@ function CloseModal({
               ) : null}
               <TouchableOpacity
                 style={styles.option}
-                onPress={() => pickOne((stage) => pickImageAttachment(false, stage), setSlip)}
+                onPress={() => pickOne((stage) => pickImageAttachment(false, stage, { doc: true }), setSlip)}
                 activeOpacity={0.7}
               >
                 <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
@@ -6625,6 +6684,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningTint,
   },
   rolledBack: { borderColor: colors.rollback, backgroundColor: colors.rollbackSoft },
+  crossTeamBox: { borderColor: colors.sky200, backgroundColor: colors.roleSupervisorSoft },
   cancelledBox: { borderColor: colors.borderStrong, backgroundColor: colors.background },
   keepBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.successLine, backgroundColor: colors.successSoft },
   keepTitle: { fontSize: 13, fontWeight: "800", color: colors.successInk },

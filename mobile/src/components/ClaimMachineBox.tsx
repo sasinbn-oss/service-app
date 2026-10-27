@@ -67,6 +67,8 @@ export default function ClaimMachineBox({
 
   async function shoot(fromCamera: boolean) {
     setReadErr(null);
+    // ความละเอียดแบบรูปถ่าย ไม่ใช่แบบเอกสาร — ตัวอ่านป้ายตั้งค่าไว้กับรูปกว้าง 1600
+    // ลองให้รูปกว้าง 2400 แล้วอ่านรหัสรุ่นผิด (เทสต์ claim-web ต.ค. 69)
     const photo = await pickImageAttachment(fromCamera, setStage);
     if (!photo) return setStage(null);
     onPhoto(photo);

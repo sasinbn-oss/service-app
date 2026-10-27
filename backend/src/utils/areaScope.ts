@@ -62,7 +62,7 @@ export const AREA_TEAM_ALLOWED: RegExp[] = [
   // ใบงานซ่อม · กล่องงานของฉัน · รายละเอียดใบงาน
   /^GET \/api\/work-orders\/?$/,
   /^GET \/api\/work-orders\/(version|inbox-count|options|locate)$/,
-  /^GET \/api\/work-orders\/\d+(\/(version|attachments|attachments\/\d+\/link))?$/,
+  /^GET \/api\/work-orders\/\d+(\/(version|attachments|attachments\/links|attachments\/\d+\/(link|file)))?$/,
   // รายงาน — ปุ่มเดียว
   /^GET \/api\/work-orders\/reports\/area-team$/,
   // เปิดใบงาน + แนบรูปหน้างาน (แนบได้เฉพาะใบที่ตัวเองเปิด — เช็คใน route)
