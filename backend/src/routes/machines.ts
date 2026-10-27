@@ -11,7 +11,9 @@
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { areaBranchWhere, isAreaTeam } from "../utils/areaScope";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport, resolveSnapshot } from "../machines/import";
 import { applyTeamAliases } from "../utils/teamAliases";
@@ -148,8 +150,14 @@ function noteFields(o: NoteShape) {
   };
 }
 
-function branchFilter(query: z.infer<typeof listSchema>) {
+/** สาขาที่ Area Team เห็น — ว่าง = ทุกสาขา (ตำแหน่งอื่นเห็นกระดานทั้งบริษัทเหมือนเดิม) */
+function areaOf(req: AuthRequest): Prisma.BranchWhereInput | undefined {
+  return isAreaTeam(req.auth) ? areaBranchWhere(req.auth!) : undefined;
+}
+
+function branchFilter(query: z.infer<typeof listSchema>, area?: Prisma.BranchWhereInput): Prisma.BranchWhereInput {
   return {
+    ...(area ? { AND: [area] } : {}),
     ...(query.ownership ? { ownership: query.ownership } : {}),
     ...(query.grade ? { grade: query.grade } : {}),
     // NONE = สาขาที่ยังไม่มีภาคในทะเบียน ต้องกรองหาได้เหมือนกัน
@@ -197,7 +205,7 @@ function summarise(rows: { ownership: string | null; branchCode: string; breache
  * รายการเครื่องดับ — แยกเป็นฟังก์ชันเพื่อให้หน้าจอกับไฟล์ Excel ได้ข้อมูลชุดเดียวกัน
  * (ส่งออกไม่ต้องคำนวณ SLA/คะแนนซ้ำอีกที่ ตัวเลขในไฟล์จึงตรงกับบนจอเสมอ)
  */
-async function listMachineOff(query: z.infer<typeof listSchema>) {
+async function listMachineOff(query: z.infer<typeof listSchema>, area?: Prisma.BranchWhereInput) {
   const now = new Date();
   const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
   const keyword = query.search?.trim();
@@ -208,7 +216,7 @@ async function listMachineOff(query: z.infer<typeof listSchema>) {
       endedAt: null,
       ...(query.breachedOnly === "true" ? { startedAt: { lt: breachBefore } } : {}),
       ...workStatusFilter(query.workStatus),
-      branch: branchFilter(query),
+      branch: branchFilter(query, area),
       ...(keyword
         ? {
             OR: [
@@ -278,16 +286,16 @@ async function listMachineOff(query: z.infer<typeof listSchema>) {
   };
 }
 
-router.get("/outages", requireAuth, async (req, res) => {
+router.get("/outages", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listSchema.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const query = parsed.data;
-  res.json(await listMachineOff(query));
+  res.json(await listMachineOff(query, areaOf(req)));
 });
 
 /** สาขาที่สัญญาณหาย — รายสาขา ไม่ใช่รายเครื่อง */
 /** รายการสาขาที่สัญญาณหาย — แยกเป็นฟังก์ชันด้วยเหตุผลเดียวกับ listMachineOff */
-async function listSignalLost(query: z.infer<typeof listSchema>) {
+async function listSignalLost(query: z.infer<typeof listSchema>, area?: Prisma.BranchWhereInput) {
   const now = new Date();
   const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
   const keyword = query.search?.trim();
@@ -298,7 +306,7 @@ async function listSignalLost(query: z.infer<typeof listSchema>) {
       endedAt: null,
       ...(query.breachedOnly === "true" ? { startedAt: { lt: breachBefore } } : {}),
       ...workStatusFilter(query.workStatus),
-      branch: branchFilter(query),
+      branch: branchFilter(query, area),
       ...(keyword
         ? {
             OR: [
@@ -360,11 +368,11 @@ async function listSignalLost(query: z.infer<typeof listSchema>) {
   };
 }
 
-router.get("/signal-lost", requireAuth, async (req, res) => {
+router.get("/signal-lost", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listSchema.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const query = parsed.data;
-  res.json(await listSignalLost(query));
+  res.json(await listSignalLost(query, areaOf(req)));
 });
 
 /**
@@ -409,17 +417,20 @@ router.post("/export", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /** ตัวเลขรวมของทั้งสองแท็บ ใช้ตอนเปิดหน้าเพื่อขึ้นตัวเลขบนแท็บ */
-router.get("/overview", requireAuth, async (_req, res) => {
+router.get("/overview", requireAuth, async (req: AuthRequest, res) => {
   const now = new Date();
   const breachBefore = new Date(now.getTime() - SLA_HOURS * 3_600_000);
+  // ตัวเลขบนแท็บต้องนับเท่าที่รายการข้างในโชว์ — Area Team นับเฉพาะสาขาตัวเอง
+  const area = areaOf(req);
+  const inArea = area ? { branch: area } : {};
   const [machineOff, signalLost, machineBreached, signalBreached, lastImport] = await Promise.all([
-    prisma.outage.count({ where: { kind: "MACHINE_OFF", endedAt: null } }),
-    prisma.outage.count({ where: { kind: "SIGNAL_LOST", endedAt: null } }),
+    prisma.outage.count({ where: { kind: "MACHINE_OFF", endedAt: null, ...inArea } }),
+    prisma.outage.count({ where: { kind: "SIGNAL_LOST", endedAt: null, ...inArea } }),
     prisma.outage.count({
-      where: { kind: "MACHINE_OFF", endedAt: null, startedAt: { lt: breachBefore } },
+      where: { kind: "MACHINE_OFF", endedAt: null, startedAt: { lt: breachBefore }, ...inArea },
     }),
     prisma.outage.count({
-      where: { kind: "SIGNAL_LOST", endedAt: null, startedAt: { lt: breachBefore } },
+      where: { kind: "SIGNAL_LOST", endedAt: null, startedAt: { lt: breachBefore }, ...inArea },
     }),
     prisma.machineImport.findFirst({ orderBy: { createdAt: "desc" } }),
   ]);

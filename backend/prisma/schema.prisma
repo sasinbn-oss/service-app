@@ -40,6 +40,14 @@ model User {
   // (สองคนแบ่ง กทม. กันตามเขต · คนหนึ่งดูสองภาค · คนหนึ่งดู OPL) ภาคเดียวต่อคนจึงไม่พอ
   // ขอบเขตของหัวหน้าภาค = สาขาในภาค (region) รวมกับสาขา/ใบงานของทีมเหล่านี้
   supervisedTeams      String[]              @default([])
+  // Area ที่ Supervisor (COCO) คนนี้อยู่ใต้ — จากคอลัมน์ Area ในไฟล์ Area Team
+  //
+  // ใช้แค่แสดงผลและออกรายงาน (คอลัมน์ Area) ไม่ได้ใช้คุมสิทธิ์ — Area เห็นสาขา COCO ทั้งหมดอยู่แล้ว
+  // ไม่ใช่เฉพาะของลูกทีมตัวเอง (เจ้าของงานกำหนด ต.ค. 69)
+  areaId               Int?
+  area                 User?                 @relation("AreaMembers", fields: [areaId], references: [id], onDelete: SetNull)
+  areaMembers          User[]                @relation("AreaMembers")
+  cocoBranches         Branch[]              @relation("CocoSupervisor")
   // ต้องเปลี่ยนรหัสก่อนใช้งาน
   //
   // ตั้งเป็น true ตอนแอดมินสร้างบัญชีให้ หรือตอนแอดมินตั้งรหัสใหม่ให้
@@ -274,6 +282,12 @@ model Branch {
   // ถ้าไม่กันไว้ เคสจะเปิดค้างตลอดกาล สะสม SLA และคะแนนทั้งที่ไม่มีอะไรให้ซ่อม
   cancelledAt       DateTime?
   cancelledNote     String?
+  // Supervisor (COCO) ที่ดูแลสาขานี้ — คอลัมน์ ERP → Name-Surname ในไฟล์ Area Team
+  //
+  // เก็บที่สาขา ไม่ใช่รายการรหัสสาขาที่ผู้ใช้ เพราะสาขาหนึ่งมี Supervisor คนเดียว
+  // เก็บที่ผู้ใช้จะมีสองคนถือสาขาเดียวกันได้หลังย้ายคน แล้วต้องคอยลบออกจากคนเก่า
+  cocoSupervisorId  Int?
+  cocoSupervisor    User?            @relation("CocoSupervisor", fields: [cocoSupervisorId], references: [id], onDelete: SetNull)
   createdAt         DateTime         @default(now())
   checkIns          BranchCheckIn[]
   workLogs          WorkLog[]
@@ -283,6 +297,8 @@ model Branch {
   workOrders        WorkOrder[]
   teamMoves         BranchTeamMove[]
   pins              BranchPin[]
+
+  @@index([cocoSupervisorId])
 }
 
 // One washer or dryer installed at a branch.

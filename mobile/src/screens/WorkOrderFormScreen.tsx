@@ -25,6 +25,8 @@ import PopupScreen from "../components/PopupScreen";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
+import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 import {
   MAX_ATTACHMENTS,
   PickedAttachment,
@@ -80,6 +82,14 @@ const MODEL_OTHER = "อื่นๆ";
  * เหลือแค่อาการกับรูป · ท่อลมร้อนไม่อยู่ในนี้ เพราะเป็นของเครื่องอบ ยังระบุ D ได้
  */
 const EQUIPMENT_JOBS = new Set(["COIN_CHANGER", "WATER_PUMP", "DETERGENT", "WATER_HEATER"]);
+
+/**
+ * Area Team ต้องกรอกครบก่อนเปิดใบงาน (เจ้าของงานกำหนด ต.ค. 69 — "ล็อกการใส่ข้อมูลทั้งหมด")
+ * ทีมสาขาแจ้งแล้วไม่ได้อยู่ต่อ ข้อมูลที่ขาดคือแอดมินต้องโทรถามทีหลัง · เซิร์ฟเวอร์เช็คซ้ำ (areaTeamMissing)
+ * ยกเว้นรูป — อัปหลังสร้างใบงาน เช็คได้ที่นี่ที่เดียว · งานที่ไม่ผูกเครื่องซัก/อบไม่บังคับหมายเลขเครื่อง
+ */
+const AREA_MACHINE_JOBS = new Set(["CM", "PM", "INSPECT", "HOT_AIR_DUCT"]);
+const AREA_SYMPTOM_MIN = 10;
 
 /**
  * ขนาดเครื่องเป็นกิโลกรัม — ค่าสำรองเผื่อโหลดตัวเลือกไม่ทัน เหมือนรายการรุ่น
@@ -198,6 +208,24 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const submitting = useRef(false);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
+  const strict = isAreaTeam(user) && !fromBoard;
+  const missing: string[] = [];
+  if (strict) {
+    if (!branchCode.trim()) missing.push("สาขา");
+    if (jobType === "OTHER" && !otherDetail.trim()) missing.push("รายละเอียดงาน");
+    if (AREA_MACHINE_JOBS.has(jobType) && shownRows.some((r) => !r.code.trim())) missing.push("เครื่อง");
+    if (shownRows.some((r) => r.symptom.trim().length < AREA_SYMPTOM_MIN)) missing.push("อาการที่พบ");
+    if (!contactName.trim()) missing.push("ผู้ติดต่อที่สาขา");
+    const digits = contactPhone.replace(/\D/g, "").length;
+    if (digits < 9 || digits > 10) missing.push("เบอร์ติดต่อสาขา");
+  }
+  /**
+   * รูปหน้างานบังคับทุกตำแหน่ง (เจ้าของงานกำหนด ต.ค. 69) — ช่างกับหัวหน้าภาคระบุอะไหล่จากรูปก่อนไปหน้างาน
+   * ใบที่ไม่มีรูปคือต้องโทรถามร้านหรือขับไปดูก่อนรอบหนึ่ง · บังคับที่ฟอร์มเท่านั้น เพราะรูปอัปหลังสร้างใบงาน
+   * (นำเข้าจากไฟล์ฟอร์ม COCO ไม่ผ่านด่านนี้ — แถวในไฟล์ที่ไม่มีรูปยังนำเข้าได้)
+   */
+  if (shownRows.some((r) => r.files.length === 0)) missing.push("รูปหน้างาน");
 
   // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
   const regionHint = branchRegion ? ` (ภาค${branchRegion})` : "";
@@ -419,6 +447,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   /** ตรวจก่อนส่ง — บอกให้ชัดว่าแถวไหนขาดอะไร ไม่ใช่แค่ "กรอกไม่ครบ" */
   function validate(): string | null {
+    if (missing.length) return `กรอกไม่ครบ: ${missing.join(" · ")}`;
     if (jobType === "OTHER" && !otherDetail.trim()) {
       return 'เลือกประเภทงาน "อื่นๆ" แล้วต้องระบุรายละเอียดด้วย';
     }
@@ -720,6 +749,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             busy={busy}
             models={models}
             capacities={capacities}
+            photoRequired
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
@@ -749,7 +779,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       </View>
 
       <View style={styles.card}>
-        <StepHead n={4} title="ผู้ติดต่อที่สาขา" optional />
+        <StepHead n={4} title="ผู้ติดต่อที่สาขา" optional={!strict} />
         {/*
           คนที่สาขาให้ติดต่อ — ช่างโทรหาใครก่อนไปหน้างาน
 
@@ -810,12 +840,24 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           </Text>
         </View>
 
+        {missing.length ? (
+          <View style={styles.missing} accessibilityLabel={`ยังบันทึกไม่ได้ ขาด ${missing.length} ช่อง`}>
+            <Ionicons name="lock-closed-outline" size={16} color={colors.dangerInk} />
+            <Text style={styles.missingText}>
+              ยังบันทึกไม่ได้ — ขาด {missing.length} ช่อง: {missing.join(" · ")}
+              {missing.includes("อาการที่พบ") ? `\nอาการต้องยาวอย่างน้อย ${AREA_SYMPTOM_MIN} ตัวอักษร` : ""}
+              {missing.includes("รูปหน้างาน") ? "\nแนบรูปหน้างานอย่างน้อย 1 รูปต่อเครื่อง" : ""}
+              {missing.includes("เบอร์ติดต่อสาขา") ? "\nเบอร์ 9–10 หลัก" : ""}
+            </Text>
+          </View>
+        ) : null}
+
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <TouchableOpacity
-          style={[styles.submit, saving && styles.submitOff]}
+          style={[styles.submit, (saving || missing.length > 0) && styles.submitOff]}
           onPress={submit}
-          disabled={saving}
+          disabled={saving || missing.length > 0}
           activeOpacity={0.8}
         >
           {saving ? (
@@ -976,6 +1018,7 @@ function MachineCard({
   busy,
   models,
   capacities,
+  photoRequired = false,
   onChange,
   onRemove,
   onAddFile,
@@ -990,6 +1033,8 @@ function MachineCard({
   busy: string | null;
   models: string[];
   capacities: number[];
+  /** Area Team ต้องแนบรูปหน้างานอย่างน้อย 1 รูป — ป้ายไม่ควรบอกว่าไม่บังคับ */
+  photoRequired?: boolean;
   onChange: (patch: Partial<MachineRow>) => void;
   onRemove: () => void;
   onAddFile: (
@@ -1178,7 +1223,7 @@ function MachineCard({
 
         ไฟล์ยังไม่ถูกส่งตอนนี้ รอจนใบงานถูกบันทึกและได้เลขก่อน
       */}
-      <Text style={fromBoard ? styles.label : styles.subLabel}>รูป / วิดีโอหน้างาน (ไม่บังคับ)</Text>
+      <Text style={fromBoard ? styles.label : styles.subLabel}>รูป / วิดีโอหน้างาน {photoRequired ? "(อย่างน้อย 1 รูป)" : "(ไม่บังคับ)"}</Text>
       {row.files.length > 0 ? (
         <View style={styles.files}>
           {row.files.map((file, n) => (
@@ -1493,5 +1538,15 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   submitOff: { opacity: 0.6 },
+  missing: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "flex-start",
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  missingText: { flex: 1, fontSize: 13, lineHeight: 21, color: colors.dangerInk },
   submitText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
 });

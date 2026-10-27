@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { peekToken, verifyToken, TokenPayload } from "../utils/jwt";
 import { currentRole, issuedBeforePasswordChange } from "../utils/userGate";
 import { canViewAs } from "../utils/viewAs";
+import { AREA_TEAM_ALLOWED, isAreaTeam } from "../utils/areaScope";
 
 export interface AuthRequest extends Request {
   auth?: TokenPayload;
@@ -74,6 +75,17 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     // ดูในฐานะไม่เปิดให้ดู Super Admin (เช็คตอนเริ่มแล้ว) — คนที่ถูกดูกลายเป็น Super Admin ทีหลังก็ไม่ได้สิทธิ์นั้นไปด้วย
     if (viewAs) return res.status(401).json({ error: "ดูในฐานะ Super Admin ไม่ได้", viewAsEnded: true });
     req.auth = { ...req.auth, role: "ADMIN", superAdmin: true };
+  }
+
+  /**
+   * Area Team (Area · Supervisor (COCO)) — รายการอนุญาตทั้งอ่านและเขียน (ดู utils/areaScope.ts)
+   * คนที่ยังไม่เปลี่ยนรหัสปล่อยให้ด่านถัดไปตอบ 423 แอปจึงพาไปหน้าเปลี่ยนรหัสได้ ไม่ใช่เจอ 403
+   */
+  if (isAreaTeam(req.auth) && !req.auth.mustChangePassword) {
+    const path = req.baseUrl + req.path;
+    if (!AREA_TEAM_ALLOWED.some((r) => r.test(`${req.method} ${path}`))) {
+      return res.status(403).json({ error: "ตำแหน่งนี้แจ้งและเปิดใบงานได้ ส่วนอื่นดูได้อย่างเดียว" });
+    }
   }
 
   /**

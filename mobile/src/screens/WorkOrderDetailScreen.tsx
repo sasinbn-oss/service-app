@@ -58,6 +58,7 @@ import {
   pickImageAttachments,
 } from "../utils/attachments";
 import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
@@ -632,7 +633,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * ตัด user ทิ้งสำหรับปุ่มทั้งหมดในหน้านี้ — ทุกปุ่มที่เช็คสิทธิ์จาก user หายไปพร้อมกัน
    * ไม่ต้องไล่ใส่เงื่อนไขทีละปุ่ม (เซิร์ฟเวอร์กันอีกชั้นใน middleware/auth.ts)
    */
-  const viewOnly = !!me?.partsAdmin;
+  // Area Team ก็ดูอย่างเดียวเหมือนกัน — แจ้งและเปิดใบงานได้ แต่ไม่ได้ทำขั้นตอนของใคร (เจ้าของงานกำหนด ต.ค. 69)
+  const viewOnly = !!me?.partsAdmin || isAreaTeam(me);
   const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);

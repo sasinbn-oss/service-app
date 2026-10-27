@@ -10,6 +10,7 @@
  * ทำเพราะบันทึกแบ่งทีม (เช่น 4 ต.ค. 69) ตั้งทีมใหม่ที่ทะเบียนสาขายังไม่มี ทีมที่ไม่มีสาขา
  * เลือกให้ช่างไม่ได้ (รายชื่อทีมมาจากสาขา) แอดมินต้องรอคนแก้ไฟล์ต้นฉบับก่อนถึงจะใช้งานได้
  */
+import { areaBranchWhere, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../prisma";
@@ -108,11 +109,20 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
  * ช่างที่ทีมไม่มีในทะเบียนและไม่ใช่ทีมรวม นับเป็น "ยังไม่มีสังกัด" เพราะไม่มีใบงานผูกกับชื่อนั้น (ผลเท่ากัน)
  */
 router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
+  // Area Team เห็นเฉพาะทีมช่าง/หัวหน้าภาคที่ดูแลสาขาของตัวเอง — รู้ว่าสาขาตัวเองต้องติดต่อใคร
+  const area = isAreaTeam(req.auth);
   const [branches, orders, users, groups] = await Promise.all([
-    prisma.branch.findMany({ where: { cancelledAt: null }, select: { region: true, zone: true, pmTeam: true } }),
+    prisma.branch.findMany({
+      where: { cancelledAt: null, ...(area ? { AND: [areaBranchWhere(req.auth!)] } : {}) },
+      select: { region: true, zone: true, pmTeam: true },
+    }),
     prisma.workOrder.groupBy({
       by: ["assignedTeam"],
-      where: { assignedTeam: { not: null }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+      where: {
+        assignedTeam: { not: null },
+        status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
+        ...(area ? { AND: [areaWorkOrderWhere(req.auth!)] } : {}),
+      },
       _count: true,
     }),
     prisma.user.findMany({
@@ -153,9 +163,11 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
       .map(([name, teams]) => ({ name, teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")) })),
     supervisors: users
       .filter((u) => u.role === "SUPERVISOR")
+      .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || (!!u.region && regions.has(u.region)))
       .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, region: u.region, teams: u.supervisedTeams })),
     technicians: users
       .filter((u) => u.role === "EMPLOYEE")
+      .filter((u) => !area || (!!u.team && known.has(u.team)))
       .map((u) => ({
         id: u.id,
         name: u.name,

@@ -33,6 +33,7 @@ import TimeField from "../components/TimeField";
 import EmptyState from "../components/EmptyState";
 import Spinner, { WasherIcon } from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 import TimelineModal, { TimelineButton, TimelineTarget } from "../components/TimelineModal";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
@@ -184,7 +185,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
   const [timeline, setTimeline] = useState<TimelineTarget | null>(null);
   const showTimeline = user?.superAdmin ? setTimeline : undefined;
   // Admin Spare Part ดูแผนงานได้ แต่จัดแผนไม่ได้ (เจ้าของงานกำหนด ต.ค. 69 · เซิร์ฟเวอร์กันอีกชั้น)
-  const canPlan = !user?.partsAdmin;
+  // Area Team ก็เช่นกัน — เห็นแผนของงานในสาขาตัวเองเพื่อรู้ว่าช่างจะมาเมื่อไร
+  const canPlan = !user?.partsAdmin && !isAreaTeam(user);
 
   const monthKey = date.slice(0, 7);
   /**
@@ -418,7 +420,13 @@ export default function PlanBoardScreen({ navigation }: Props) {
         {docked ? <Text style={[styles.pageTitle, headingFont]}>แผนงาน</Text> : null}
         <View style={styles.scopePill}>
           <Text style={styles.scopePillText}>
-            {user?.role === "SUPERVISOR" ? supervisorScopeLabel(user) : "ทุกภาค"}
+            {user?.role === "SUPERVISOR"
+              ? supervisorScopeLabel(user)
+              : user?.role === "AREA"
+              ? "สาขา COCO ทั้งหมด"
+              : user?.role === "COCO_SUPERVISOR"
+              ? "สาขาที่ดูแล"
+              : "ทุกภาค"}
           </Text>
         </View>
         <View style={{ flex: 1 }} />

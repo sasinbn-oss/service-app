@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Response, Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
@@ -6,6 +6,7 @@ import { cleanName } from "../utils/names";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
+import { AREA_OUT_OF_SCOPE, areaBranchWhere, areaCoversBranch, isAreaTeam } from "../utils/areaScope";
 import { resolveMapLink } from "../utils/mapLink";
 import { applyTeamAliases } from "../utils/teamAliases";
 import { applyBranchPins, pinBranchField, recordTeamMove } from "../utils/branchPins";
@@ -95,10 +96,14 @@ router.post("/cancelled-import", requireAuth, requireAdmin, upload.single("file"
  * ต้องการทั้งชุด ส่วนช่องค้นหาในฟอร์มใบงานส่ง search มาเพื่อไม่ต้องดึงพันกว่าแถว
  * มากรองในเครื่องผู้ใช้
  */
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const keyword = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  // Area Team เลือกได้เฉพาะสาขา COCO ที่ตัวเองเห็น — ค้นสาขาอื่นเจอแล้วเปิดไม่ได้ ดีกว่าไม่ให้เจอเลย
+  const area = isAreaTeam(req.auth) ? areaBranchWhere(req.auth!) : null;
   const branches = await prisma.branch.findMany({
-    where: keyword
+    where: area
+      ? { AND: [area, keyword ? { cancelledAt: null, OR: [{ code: { contains: keyword, mode: "insensitive" } }, { name: { contains: keyword, mode: "insensitive" } }] } : {}] }
+      : keyword
       ? {
           // สาขาที่ยกเลิกแล้วไม่ควรถูกเลือกไปเปิดใบงานใหม่
           cancelledAt: null,
@@ -388,7 +393,17 @@ router.get("/teams", requireAuth, async (_req, res) => {
  * จึงเป็นการเดาที่ดีที่สุดที่มี ไม่ใช่ความจริงที่ต้องรักษาให้ตรงตลอด —
  * คนเปิดใบงานเห็นแล้วแก้ทับได้ทันทีถ้าเปลี่ยนคน
  */
-router.get("/:code/last-contact", requireAuth, async (req, res) => {
+/** Area Team ดูข้อมูลได้เฉพาะสาขาที่ตัวเองเห็น — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว */
+async function blockedForArea(req: AuthRequest, res: Response) {
+  if (!isAreaTeam(req.auth)) return false;
+  const b = await prisma.branch.findUnique({ where: { code: req.params.code }, select: { code: true, cocoSupervisorId: true } });
+  if (b && areaCoversBranch(req.auth!, b)) return false;
+  res.status(403).json({ error: AREA_OUT_OF_SCOPE });
+  return true;
+}
+
+router.get("/:code/last-contact", requireAuth, async (req: AuthRequest, res) => {
+  if (await blockedForArea(req, res)) return;
   const last = await prisma.workOrder.findFirst({
     where: {
       branch: { code: req.params.code },
@@ -415,8 +430,10 @@ router.get("/:code/last-contact", requireAuth, async (req, res) => {
  * แต่ไม่เห็นอาการ/ชื่อคน/ทีมของสาขาอื่น และเปิดจากกล่องเตือนไม่ได้ (เจ้าของงานเลือก)
  */
 router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res) => {
+  if (await blockedForArea(req, res)) return;
   const role = req.auth!.role;
-  const limited = role !== "ADMIN" && role !== "SUPERVISOR";
+  // Area Team เห็นครบ — ผ่าน blockedForArea มาแล้ว สาขานี้จึงเป็นสาขาของตัวเอง
+  const limited = role !== "ADMIN" && role !== "SUPERVISOR" && !isAreaTeam(req.auth);
   const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : {};
   const rows = await prisma.workOrder.findMany({
     where: {
@@ -482,7 +499,8 @@ router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res)
  *
  * เครื่องที่ถอดออกไปแล้วไม่ส่งมา — เปิดใบงานให้เครื่องที่ไม่มีอยู่ไม่ได้อยู่แล้ว
  */
-router.get("/:code/machines", requireAuth, async (req, res) => {
+router.get("/:code/machines", requireAuth, async (req: AuthRequest, res) => {
+  if (await blockedForArea(req, res)) return;
   const branch = await prisma.branch.findUnique({
     where: { code: req.params.code },
     select: { id: true },

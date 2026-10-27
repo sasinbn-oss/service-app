@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -6,6 +6,11 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { HomeStackParamList, ReportKind } from "../navigation/types";
 import { colors, radius, shadow, spacing } from "../theme";
 import { useAuth } from "../context/AuthContext";
+import DateField, { todayBkk } from "../components/DateField";
+import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { openUrl } from "../utils/share";
+import { showAlert } from "../utils/alert";
+import { isAreaTeam } from "../utils/areaTeam";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
@@ -106,8 +111,68 @@ const ENTRIES: Entry[] = [
   },
 ];
 
+/**
+ * รายงานของ Area Team — ปุ่มเดียว (เจ้าของงานกำหนด ต.ค. 69): ใบงานทั้งหมดของสาขาที่เห็น ตามช่วงวันที่แจ้ง
+ * ไม่มีสรุปบนจอ — ตำแหน่งนี้เอาไฟล์ไปกรอง/ส่งต่อเอง ส่วนติดตามรายใบดูในใบงานซ่อมได้อยู่แล้ว
+ */
+function AreaTeamReport({ area }: { area: boolean }) {
+  const [from, setFrom] = useState(`${todayBkk().slice(0, 8)}01`);
+  const [to, setTo] = useState(todayBkk());
+  const [busy, setBusy] = useState(false);
+  async function download() {
+    if (from > to) return showAlert("ช่วงวันที่ไม่ถูกต้อง", "วันที่เริ่มต้องไม่หลังวันที่สิ้นสุด");
+    setBusy(true);
+    try {
+      const res = await api.get<{ path: string; count: number }>("/work-orders/reports/area-team", {
+        params: { from, to },
+        loadingText: "กำลังสร้างไฟล์ Excel...",
+      });
+      const url = resolveImageUrl(res.data.path);
+      if (url) await openUrl(url);
+    } catch (e) {
+      showAlert("ดาวน์โหลดไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={[styles.card, { flexDirection: "column", alignItems: "stretch" }]}>
+        <View style={{ flexDirection: "row", gap: spacing.md, alignItems: "center" }}>
+          <View style={[styles.icon, { backgroundColor: colors.successSoft }]}>
+            <Ionicons name="document-text-outline" size={22} color={colors.successInk} />
+          </View>
+          <View style={styles.body}>
+            <Text style={styles.label}>รายงานใบงานทั้งหมด (Excel)</Text>
+            <Text style={styles.question}>
+              {area ? "ใบงานทุกสถานะของสาขา COCO ทั้งหมด" : "ใบงานทุกสถานะของสาขาที่คุณดูแล"} — แถวละใบ ทุกคอลัมน์ในแถวเดียว
+            </Text>
+          </View>
+        </View>
+        <View style={styles.dates}>
+          <View style={styles.dateField}>
+            <DateField label="วันที่แจ้งตั้งแต่" value={from} onChange={setFrom} required />
+          </View>
+          <View style={styles.dateField}>
+            <DateField label="ถึงวันที่" value={to} onChange={setTo} required />
+          </View>
+        </View>
+        <TouchableOpacity style={[styles.download, busy && { opacity: 0.6 }]} onPress={download} disabled={busy} activeOpacity={0.8}>
+          <Ionicons name="download-outline" size={18} color="#fff" />
+          <Text style={styles.downloadText}>{busy ? "กำลังสร้างไฟล์..." : "ดาวน์โหลด Excel"}</Text>
+        </TouchableOpacity>
+        <Text style={styles.who}>
+          คอลัมน์: เลขใบงาน · วันที่แจ้ง · สาขา · Supervisor · Area · ประเภทงาน · เครื่อง · อาการ · ขั้นปัจจุบัน/รอใคร · ทีมช่าง ·
+          วันนัด · อะไหล่ · วันปิด · ผลการซ่อม · ระยะเวลา (วัน)
+        </Text>
+      </View>
+    </ScrollView>
+  );
+}
+
 export default function ReportsMenuScreen({ navigation }: Props) {
   const { user } = useAuth();
+  if (isAreaTeam(user)) return <AreaTeamReport area={user?.role === "AREA"} />;
   const admin = user?.role === "ADMIN";
   const manager = admin || user?.role === "SUPERVISOR";
   return (
@@ -168,4 +233,17 @@ const styles = StyleSheet.create({
   question: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
   who: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
   caveat: { fontSize: 11, lineHeight: 19, color: colors.warningInk, marginTop: 2 },
+  dates: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md, marginTop: spacing.md },
+  dateField: { flexGrow: 1, flexBasis: 180 },
+  download: {
+    marginTop: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.navyFill,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+  },
+  downloadText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 });

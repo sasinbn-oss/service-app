@@ -52,6 +52,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
 import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
 import { thaiDate, todayBkk } from "../components/DateField";
@@ -1002,7 +1003,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         tabs={FILTERS.map((f) => ({ value: f.value, label: f.label, n: counts[f.value] }))}
         value={filter}
         onPick={(v) => chooseFilter(v as Filter)}
-        right={compact ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
+        right={compact || isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
       />
       {supTabs && !loading && !error ? (
         <View style={styles.supTabs}>
@@ -1268,7 +1269,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         quick={rows.length ? quickItems : []}
         quickOn={quick}
         toggleQuick={toggleQuick}
-        extra={<Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
+        extra={isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
         shown={shown.length}
         onClearAll={clearAll}
       />

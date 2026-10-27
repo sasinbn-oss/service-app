@@ -3,6 +3,7 @@
 //   · ใส่เครื่องที่มีใบค้าง → บรรทัดแดงบอกเลขใบงาน · กดการ์ดแล้วไปหน้าใบงานนั้น กลับมาฟอร์มยังอยู่
 //   · ยังเปิดใบใหม่ได้ (ไม่บล็อก) · ดับเบิลคลิกปุ่มเปิดใบงาน = ได้ใบเดียว (ฐานข้อมูล)
 const { chromium } = require("playwright");
+const { attachPhoto } = require("./photo");
 const path = require("path");
 const DIR = __dirname;
 const { setup } = require("./fixture");
@@ -74,6 +75,7 @@ const { setup } = require("./fixture");
     (await vis(red).count()) > 0 ? pass("กลับมาฟอร์มยังอยู่ (สาขา เครื่อง ไม่หาย)") : fail("กลับมาแล้วฟอร์มหาย");
 
     await page.getByPlaceholder("เช่น ประตูไม่ล็อก / บอร์ดควบคุมไหม้").locator("visible=true").first().fill("อาการใหม่ทดสอบกดซ้ำ");
+    await attachPhoto(page);
     const btn = vis("เปิดใบงาน").last();
     await btn.dblclick();
     await page.waitForTimeout(6000);

@@ -8,6 +8,7 @@
  * ความจริงว่าเครื่องกลับมาหรือยัง ช่างปิดงานแล้วเครื่องยังไม่กลับมาก็มี
  * และต้องเห็นว่าเป็นแบบนั้น ไม่ใช่กลบด้วยการปิดเคสให้อัตโนมัติ
  */
+import { AREA_OUT_OF_SCOPE, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router, Response } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -25,6 +26,7 @@ import { distanceMeters } from "../utils/geo";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
+import { areaTeamWorkbook } from "../reports/areaTeamReport";
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
@@ -890,6 +892,12 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
   }
   const me = req.auth!.userId;
   if (wo.assignedToId === me || wo.createdById === me) return false;
+  if (isAreaTeam(req.auth)) {
+    const b = await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: { code: true, cocoSupervisorId: true } } } });
+    if (b && areaCoversBranch(req.auth!, b.branch)) return false;
+    res.status(403).json({ error: AREA_OUT_OF_SCOPE });
+    return true;
+  }
   const user = await prisma.user.findUnique({ where: { id: me }, select: { team: true } });
   if (covers(await coverageOf(user?.team ?? null), wo.assignedTeam)) return false;
   if ((await prisma.workOrderWorker.count({ where: { workOrderId: wo.id, userId: me } })) > 0) return false;
@@ -1018,6 +1026,8 @@ function inboxTakesOrphans(auth: AuthRequest["auth"]) {
 }
 
 function stagesWaitingOn(auth: AuthRequest["auth"]): string[] {
+  // Area Team ไม่ได้ทำขั้นไหนเลย — "กล่องงานของฉัน" คือใบที่ยังไม่ปิดของสาขาที่ตัวเองเห็น (ตามตัวอย่างที่ตกลง)
+  if (isAreaTeam(auth)) return [...ACTIVE_WORK_ORDER_STATUSES];
   // Admin Spare Part ทำอะไรกับใบงานไม่ได้นอกจากตรวจเคลม — "งานของฉัน" จึงมีแค่ใบที่รอตรวจเคลม
   if (auth?.partsAdmin) return ["CLAIM_REVIEW"];
   return WORK_ORDER_STAGE_ORDER.filter(
@@ -1047,6 +1057,7 @@ const listQuery = z.object({
 async function scopeFor(req: AuthRequest): Promise<Prisma.WorkOrderWhereInput> {
   if (req.auth!.role === "ADMIN") return {};
   if (req.auth!.role === "SUPERVISOR") return workOrderInScope(await supervisorScope(req.auth!.userId));
+  if (isAreaTeam(req.auth)) return areaWorkOrderWhere(req.auth!);
   // ช่างเห็นงานของทีมตัวเอง เพราะงานถูกจ่ายให้ทีม ไม่ได้จ่ายรายคน
   //
   // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
@@ -1403,6 +1414,41 @@ router.get("/reports/by-opener", requireAuth, async (req: AuthRequest, res) => {
     ownerId: req.auth!.userId,
   });
   res.json({ filename: stored.filename, path: documentPath(stored) });
+});
+
+/**
+ * รายงานของ Area Team — ปุ่มเดียว ใบงานทั้งหมดของสาขาที่เห็น ตามช่วงวันที่แจ้ง (src/reports/areaTeamReport.ts)
+ * ตำแหน่งอื่นใช้รายงานของตัวเองอยู่แล้ว ไม่เปิดให้ — ขอบเขตต้องมาจาก areaWorkOrderWhere เท่านั้น
+ */
+const areaReportQuery = z
+  .object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่เริ่มไม่ถูกต้อง"),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่สิ้นสุดไม่ถูกต้อง"),
+  })
+  .refine((q) => q.from <= q.to, { message: "วันที่เริ่มต้องไม่หลังวันที่สิ้นสุด" })
+  .refine((q) => bkkDayStart(q.to).getTime() - bkkDayStart(q.from).getTime() <= 366 * 24 * 3600_000, {
+    message: "เลือกช่วงได้ไม่เกิน 1 ปี",
+  });
+router.get("/reports/area-team", requireAuth, async (req: AuthRequest, res) => {
+  if (!isAreaTeam(req.auth)) return res.status(403).json({ error: "รายงานนี้สำหรับ Area และ Supervisor (COCO)" });
+  const parsed = areaReportQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { from, to } = parsed.data;
+  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
+  const { data, count } = await areaTeamWorkbook({
+    scope: areaWorkOrderWhere(req.auth!),
+    from,
+    to,
+    viewer: { name: me?.name ?? "", role: req.auth!.role },
+  });
+  const stored = saveDocument({
+    filename: `ใบงานทั้งหมด-${from}_${to}.xlsx`,
+    asciiFilename: `work-orders-${from}_${to}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data,
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored), count });
 });
 
 /**
@@ -1902,6 +1948,29 @@ async function createWorkOrder(
   return created.id;
 }
 
+/**
+ * ช่องที่ Area Team ต้องกรอกครบก่อนเปิดใบงาน (เจ้าของงานกำหนด ต.ค. 69 — "ล็อกการใส่ข้อมูลทั้งหมด")
+ *
+ * ทีมสาขาแจ้งเรื่องมาแล้วไม่ได้อยู่ต่อ ข้อมูลที่ขาดตอนนี้คือแอดมินต้องโทรถามทีหลัง
+ * เช็คซ้ำที่เซิร์ฟเวอร์ ไม่ได้พึ่งแค่ปุ่มบันทึกที่กดไม่ได้ในฟอร์ม · รูปหน้างานเช็คในฟอร์มเท่านั้น
+ * เพราะรูปอัปหลังสร้างใบงาน (ใบงานต้องมีก่อนจึงมีที่ให้แนบ)
+ *
+ * งานอุปกรณ์ร้าน (ตู้แลกเหรียญ ปั๊มน้ำ ฯลฯ) · IT · อื่นๆ ไม่ผูกกับเครื่องซัก/อบ จึงไม่บังคับช่องเครื่อง
+ */
+const MACHINE_REQUIRED_JOBS = new Set(["CM", "PM", "INSPECT", "HOT_AIR_DUCT"]);
+const AREA_SYMPTOM_MIN = 10;
+
+function areaTeamMissing(body: z.infer<typeof createSchema>): string[] {
+  const missing: string[] = [];
+  const rows = body.machines ?? [{ code: body.machineCode, symptom: body.symptom }];
+  if (MACHINE_REQUIRED_JOBS.has(body.jobType) && rows.some((m) => !m.code?.trim())) missing.push("เครื่อง");
+  if (rows.some((m) => (m.symptom?.trim().length ?? 0) < AREA_SYMPTOM_MIN)) missing.push(`อาการ (อย่างน้อย ${AREA_SYMPTOM_MIN} ตัวอักษร)`);
+  if (!body.contactName?.trim()) missing.push("ผู้ติดต่อที่สาขา");
+  const digits = (body.contactPhone ?? "").replace(/\D/g, "");
+  if (digits.length < 9 || digits.length > 10) missing.push("เบอร์ติดต่อสาขา (9–10 หลัก)");
+  return missing;
+}
+
 router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -1909,11 +1978,21 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 
   const branch = await prisma.branch.findUnique({
     where: { code: body.branchCode },
-    select: { id: true, cancelledAt: true },
+    select: { id: true, code: true, cancelledAt: true, cocoSupervisorId: true },
   });
   if (!branch) return res.status(404).json({ error: `ไม่พบสาขา ${body.branchCode}` });
   if (branch.cancelledAt) {
     return res.status(400).json({ error: "สาขานี้ถูกทำเครื่องหมายว่ายกเลิกแล้ว" });
+  }
+  if (isAreaTeam(req.auth)) {
+    if (!areaCoversBranch(req.auth!, branch)) return res.status(403).json({ error: AREA_OUT_OF_SCOPE });
+    const missing = areaTeamMissing(body);
+    if (missing.length) return res.status(400).json({ error: `กรอกไม่ครบ: ${missing.join(" · ")}`, missing });
+    // แจ้งและเปิดใบงานเท่านั้น — จ่ายช่าง นัดวัน ระบุอะไหล่ เป็นขั้นของคนอื่น ส่งมาก็ไม่รับ
+    body.assignedToId = null;
+    body.scheduledAt = null;
+    body.waitingParts = [];
+    body.workStatus = null;
   }
 
   // รูปแบบเดิม (machineCode + symptom) กับรูปแบบใหม่ (machines[]) เป็นเรื่องเดียวกัน
@@ -6023,7 +6102,7 @@ async function loadAttachableWorkOrder(
   req: AuthRequest,
   res: Response,
   id: number
-): Promise<{ id: number; code: string; status: string } | null> {
+): Promise<{ id: number; code: string; status: string; createdById: number | null } | null> {
   const wo = await prisma.workOrder.findUnique({
     where: { id },
     select: { code: true, status: true, ...VIEW_SELECT },
@@ -6035,7 +6114,7 @@ async function loadAttachableWorkOrder(
   // กฎเดียวกับเปิดดูใบงาน — เดิมช่างเปิดรูปของใบที่ยังไม่จ่ายทีมได้ทุกภาค (ภาพในร้านลูกค้า)
   if (await blockedForViewer(req, res, wo)) return null;
 
-  return { id: wo.id, code: wo.code, status: wo.status };
+  return { id: wo.id, code: wo.code, status: wo.status, createdById: wo.createdById };
 }
 
 type AttachmentRow = {
@@ -6131,6 +6210,10 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
 
   const wo = await loadAttachableWorkOrder(req, res, id);
   if (!wo) return;
+  // Area Team แนบรูปได้เฉพาะใบที่ตัวเองเปิด (รูปหน้างานตอนแจ้ง) — ใบอื่นดูได้อย่างเดียว
+  if (isAreaTeam(req.auth) && wo.createdById !== req.auth!.userId) {
+    return res.status(403).json({ error: "แนบรูปได้เฉพาะใบงานที่คุณเปิดเอง" });
+  }
 
   const files = req.files as Record<string, Express.Multer.File[]> | undefined;
   const file = files?.file?.[0];
