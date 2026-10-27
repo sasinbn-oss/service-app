@@ -11,6 +11,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import { anyModalOpen, onPageShown, pageVisible } from "../utils/liveSync";
 import { colors } from "../theme";
+import { quietly } from "../api/client";
 
 /**
  * เรียก check ทุก ms ระหว่างที่หน้านี้เปิดอยู่ และทุกครั้งที่กลับมาเปิดแท็บ
@@ -22,7 +23,7 @@ export function useBackgroundCheck(check: () => Promise<unknown>, ms = 60_000) {
   useFocusEffect(
     useCallback(() => {
       const tick = () => {
-        if (pageVisible() && !anyModalOpen()) void ref.current().catch(() => undefined);
+        if (pageVisible() && !anyModalOpen()) void quietly(() => ref.current()).catch(() => undefined);
       };
       const timer = setInterval(tick, ms);
       const off = onPageShown(tick);

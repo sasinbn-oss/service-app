@@ -9,6 +9,7 @@ import AuthNavigator from "./src/navigation/AuthNavigator";
 import MainNavigator from "./src/navigation/MainNavigator";
 import AppShell from "./src/components/AppShell";
 import { FeedbackHost, WasherLoader } from "./src/components/Feedback";
+import LoadingBar from "./src/components/LoadingBar";
 import UpdateGate from "./src/components/UpdateGate";
 import PullToRefresh from "./src/components/PullToRefresh";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
@@ -61,6 +62,7 @@ export default function App() {
         <StatusBar style="auto" />
         <View style={{ flex: 1 }}>
           <RootNavigator />
+          <LoadingBar />
           <FeedbackHost />
           <UpdateGate />
           <PullToRefresh />

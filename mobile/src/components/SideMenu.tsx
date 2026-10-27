@@ -409,7 +409,7 @@ export function DockedSideMenu() {
     const refresh = () => {
       setActive(currentKey());
       api
-        .get<{ inbox: number }>("/work-orders/inbox-count")
+        .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
         .then((r) => setInbox(r.data.inbox))
         .catch(() => undefined);
     };
@@ -470,7 +470,7 @@ export default function SideMenu() {
       setActive(currentKey());
       // ตัวเลขบนกล่องงานโหลดตอนเปิดเมนู ไม่ใช่ค้างค่าเก่าจากตอนเข้าแอป
       api
-        .get<{ inbox: number }>("/work-orders/inbox-count")
+        .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
         .then((r) => setInbox(r.data.inbox))
         .catch(() => undefined);
     }

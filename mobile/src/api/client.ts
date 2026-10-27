@@ -79,9 +79,25 @@ export function subscribeBackgroundReads(listener: (busy: boolean) => void): () 
 
 type Tracked = { __track?: "read" | string };
 
+/**
+ * การอ่านเบื้องหลังที่ผู้ใช้ไม่ได้สั่ง (เช็คของใหม่ทุกนาที · ตัวเลขกล่องงาน) — ไม่ขึ้นแถบ "กำลังโหลดข้อมูล"
+ * ไม่งั้นแถบกะพริบขึ้นเองทุกนาทีทั้งที่ไม่มีใครกดอะไร แล้วคนจะเลิกเชื่อว่าแถบหมายถึงสิ่งที่ตัวเองเพิ่งกด
+ * ห่อทั้งก้อน (ไม่ใช่ใส่ loadingText: false ทีละคำขอ) เพราะตัวเช็คเรียกฟังก์ชันโหลดเดียวกับตอนผู้ใช้กดเอง
+ */
+let quiet = 0;
+export async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+  quiet++;
+  try {
+    return await fn();
+  } finally {
+    quiet--;
+  }
+}
+
 function begin(config: { method?: string; url?: string; loadingText?: string | false } & Tracked) {
   const method = (config.method ?? "get").toLowerCase();
   if (!WRITE_METHODS.includes(method)) {
+    if (config.loadingText === false || quiet > 0) return;
     config.__track = "read";
     setReading(1);
     return;
