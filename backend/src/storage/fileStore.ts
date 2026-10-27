@@ -172,6 +172,17 @@ export async function getDownloadUrl(
   );
 }
 
+/**
+ * อ่านตัวไฟล์ผ่านเซิร์ฟเวอร์ — ใช้เฉพาะทางสำรองของการเปิด PDF ในแอป (GET /:id/attachments/:id/file)
+ * ปกติแอปโหลดตรงจากที่เก็บด้วยลิงก์ชั่วคราว แต่ถ้าที่เก็บไม่ตอบ CORS ตัวแสดง PDF อ่านไฟล์ข้ามโดเมนไม่ได้
+ */
+export async function getObjectBytes(key: string): Promise<Uint8Array> {
+  const { client, bucket } = getClient();
+  const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!out.Body) throw new Error("ไฟล์ว่าง");
+  return out.Body.transformToByteArray();
+}
+
 export async function deleteObject(key: string): Promise<void> {
   const { client, bucket } = getClient();
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));

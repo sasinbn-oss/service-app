@@ -46,3 +46,5 @@ public/version.json
 
 # ตัวอ่าน OCR — scripts/copy-ocr.js สร้างจาก node_modules ทุกครั้ง
 public/ocr/
+# ตัวแสดง PDF — scripts/copy-pdfjs.js สร้างจาก node_modules ทุกครั้ง
+public/pdfjs/

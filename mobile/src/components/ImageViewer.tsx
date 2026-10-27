@@ -25,8 +25,11 @@ import {
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Overlay from "./Overlay";
-import { api, apiErrorMessage } from "../api/client";
+import { apiErrorMessage } from "../api/client";
 import { openUrl } from "../utils/share";
+import { linkFor } from "../utils/attachmentCache";
+import { pdfSupported } from "../utils/pdf";
+import PdfPages from "./PdfPages";
 import { attachmentIcon } from "../utils/attachments";
 import { colors } from "../theme";
 import type { Attachment } from "./WorkOrderAttachments";
@@ -55,10 +58,15 @@ export default function ImageViewer({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const item = items[index];
   const isImage = item?.kind === "IMAGE";
+  /** PDF เปิดดูในหน้านี้ได้เลยบนเว็บ (PdfPages) — แอปมือถือยังเป็นปุ่มเปิดไฟล์ ให้ระบบของเครื่องเปิด */
+  const isPdf = item?.kind === "DOCUMENT" && pdfSupported;
+  /** เปิด PDF ในหน้านี้ไม่ได้ทั้งโหลดตรงและผ่านเซิร์ฟเวอร์ — กลับไปใช้ปุ่มเปิดไฟล์ */
+  const [pdfFail, setPdfFail] = useState<Record<number, string>>({});
+  const showPdf = isPdf && !pdfFail[item.id];
 
   // เก็บค่าล่าสุดไว้ใน ref — PanResponder สร้างครั้งเดียว อ่าน state ตรง ๆ จะได้ค่าเก่าตอนสร้าง
-  const live = useRef({ scale, pan, index });
-  live.current = { scale, pan, index };
+  const live = useRef({ scale, pan, index, kind: item?.kind });
+  live.current = { scale, pan, index, kind: item?.kind };
 
   const go = useCallback(
     (d: number) => {
@@ -75,15 +83,21 @@ export default function ImageViewer({
     if (next === 1) setPan({ x: 0, y: 0 });
   }, []);
 
-  // ขอลิงก์ของรูปที่กำลังดู และรูปถัดไป (เปิดรูปถัดไปแล้วขึ้นทันที ไม่ต้องรอ)
+  /**
+   * ลิงก์ของรูปที่กำลังดูกับรูปถัดไป — ส่วนใหญ่ได้ทันทีจากชุดที่รายการไฟล์ขอไว้แล้ว (utils/attachmentCache)
+   * รูปถัดไปโหลดตัวรูปรอไว้ด้วย (Image.prefetch) ปัดไปแล้วขึ้นทันที ไม่ต้องรอ (เจ้าของงานบ่นว่าโหลดช้า ต.ค. 69)
+   */
   useEffect(() => {
     let alive = true;
     for (const i of [index, index + 1]) {
       const it = items[i];
       if (!it || urls[it.id] || !it.available) continue;
-      api
-        .get<{ url: string }>(`/work-orders/${workOrderId}/attachments/${it.id}/link`)
-        .then((res) => alive && setUrls((u) => ({ ...u, [it.id]: res.data.url })))
+      linkFor(workOrderId, it.id)
+        .then((url) => {
+          if (!alive) return;
+          setUrls((u) => ({ ...u, [it.id]: url }));
+          if (i !== index && it.kind === "IMAGE") Image.prefetch(url).catch(() => undefined);
+        })
         .catch((e) => alive && i === index && setError(apiErrorMessage(e)));
     }
     setError(null);
@@ -120,6 +134,8 @@ export default function ImageViewer({
     const el = stageEl as unknown as HTMLElement | null;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // PDF: ล้อเมาส์เลื่อนหน้าตามปกติ ซูมด้วย Ctrl+ล้อ (ท่าเดียวกับโปรแกรมเปิด PDF ทั่วไป) · รูป: ล้อ = ซูม
+      if (live.current.kind !== "IMAGE" && !e.ctrlKey) return;
       e.preventDefault();
       zoomTo(live.current.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
     };
@@ -196,7 +212,7 @@ export default function ImageViewer({
             {item.createdByName ? ` · ${item.createdByName}` : ""}
           </Text>
         </View>
-        {isImage ? (
+        {isImage || showPdf ? (
           <View style={styles.zoomBox}>
             <TouchableOpacity style={styles.iconBtn} onPress={() => zoomTo(scale / 1.4)} accessibilityLabel="ซูมออก">
               <Ionicons name="remove" size={20} color="#fff" />
@@ -244,6 +260,15 @@ export default function ImageViewer({
             ) : null}
             {!loaded[item.id] && !error ? <ActivityIndicator color="#fff" style={styles.spinner} /> : null}
           </View>
+        ) : showPdf ? (
+          <PdfPages
+            workOrderId={workOrderId}
+            attachmentId={item.id}
+            url={url}
+            width={Math.min(width - 24, 900)}
+            zoom={scale}
+            onFail={(m) => setPdfFail((f) => ({ ...f, [item.id]: m }))}
+          />
         ) : (
           <View style={styles.fileBox}>
             <Ionicons name={attachmentIcon(item.kind)} size={56} color="#fff" />
@@ -257,6 +282,14 @@ export default function ImageViewer({
             )}
           </View>
         )}
+        {/* รูปย่อเบลอระหว่างรอรูปเต็ม — บอกให้ชัด โหลดช้าเมื่อไหร่คนเข้าใจว่าไฟล์เบลอ (เจ้าของงานเจอ ต.ค. 69) */}
+        {isImage && item.available && !loaded[item.id] && !error && item.thumbnailDataUrl ? (
+          <View style={styles.loadingTag} pointerEvents="none">
+            <ActivityIndicator color="#fff" size="small" />
+            <Text style={styles.loadingTagText}>กำลังโหลดรูปเต็ม… รูปนี้ยังเป็นรูปย่อ</Text>
+          </View>
+        ) : null}
+        {isPdf && pdfFail[item.id] ? <Text style={styles.err}>เปิด PDF ในหน้านี้ไม่ได้ ({pdfFail[item.id]}) — กดปุ่มเปิดไฟล์แทน</Text> : null}
         {!item.available ? <Text style={styles.err}>ไฟล์นี้ส่งขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ</Text> : null}
         {error ? <Text style={styles.err}>{error}</Text> : null}
       </View>
@@ -326,6 +359,18 @@ const styles = StyleSheet.create({
   openBtn: { backgroundColor: colors.navyFill, borderRadius: 12, paddingHorizontal: 22, paddingVertical: 10 },
   openText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   err: { position: "absolute", bottom: 12, color: "#FCA5A5", fontSize: 13 },
+  loadingTag: {
+    position: "absolute",
+    bottom: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(11,18,25,0.85)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  loadingTagText: { color: "#fff", fontSize: 13, fontWeight: "700" },
   nav: {
     position: "absolute",
     top: "45%",

@@ -4216,7 +4216,7 @@ function StageModal({
                           <TouchableOpacity
                             style={styles.option}
                             onPress={() =>
-                              pickDoc((stage) => pickImageAttachment(true, stage))
+                              pickDoc((stage) => pickImageAttachment(true, stage, { doc: true }))
                             }
                             activeOpacity={0.7}
                           >
@@ -4225,7 +4225,7 @@ function StageModal({
                         ) : null}
                         <TouchableOpacity
                           style={styles.option}
-                          onPress={() => pickDoc((stage) => pickImageAttachments(stage))}
+                          onPress={() => pickDoc((stage) => pickImageAttachments(stage, { doc: true }))}
                           activeOpacity={0.7}
                         >
                           <Text style={styles.optionText}>เลือกรูป</Text>
@@ -5606,13 +5606,13 @@ function CloseModal({
             primary={{
               label: "ถ่ายป้ายรุ่น",
               icon: "camera",
-              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage), (f) => setNameplate(f[0] ?? null)),
+              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
               accessibilityLabel: "ถ่ายป้ายรุ่น",
             }}
             secondary={{
               label: "เลือกจากอัลบั้ม",
               icon: "images-outline",
-              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage), (f) => setNameplate(f[0] ?? null)),
+              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
               accessibilityLabel: "เลือกรูปป้ายรุ่น",
             }}
           >
@@ -5813,7 +5813,7 @@ function CloseModal({
               {Platform.OS !== "web" ? (
                 <TouchableOpacity
                   style={styles.option}
-                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage), setSlip)}
+                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage, { doc: true }), setSlip)}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
@@ -5821,7 +5821,7 @@ function CloseModal({
               ) : null}
               <TouchableOpacity
                 style={styles.option}
-                onPress={() => pickOne((stage) => pickImageAttachment(false, stage), setSlip)}
+                onPress={() => pickOne((stage) => pickImageAttachment(false, stage, { doc: true }), setSlip)}
                 activeOpacity={0.7}
               >
                 <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>

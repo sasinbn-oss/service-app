@@ -19,6 +19,7 @@ import * as VideoThumbnails from "expo-video-thumbnails";
 import { api } from "../api/client";
 import { showAlert } from "./alert";
 import { feedback } from "../components/Feedback";
+import { pdfThumbnail } from "./pdf";
 
 /** ไฟล์ที่เลือกไว้แล้วแต่ยังไม่ได้ส่งขึ้นเซิร์ฟเวอร์ */
 export interface PickedAttachment {
@@ -32,6 +33,17 @@ export interface PickedAttachment {
 
 /** กว้างสุดของรูปที่ส่งขึ้นไป — พอเห็นรายละเอียดหน้างานโดยไม่ต้องส่งไฟล์ดิบ */
 const MAX_WIDTH = 1600;
+/**
+ * รูปเอกสาร (ใบเสนอราคา · บิล · ใบเหลือง · ป้ายรุ่น · เอกสารรถ) ละเอียดกว่ารูปหน้างาน (เจ้าของงานขอ ต.ค. 69)
+ * ใบ A4 ที่ตัวเลขเล็กเต็มหน้า กว้าง 1600 คุณภาพ 70% อ่านตัวเลขท้ายใบไม่ออก — ไฟล์ใหญ่ขึ้นราวสองเท่า (ยังไม่ถึง 1 MB)
+ * รูปหน้างานคงเดิม: ส่งบ่อยกว่ามาก และดูอาการ ไม่ได้อ่านตัวหนังสือ
+ */
+const DOC_MAX_WIDTH = 2400;
+const DOC_QUALITY = 0.85;
+const PHOTO_QUALITY = 0.7;
+
+/** doc = รูปเอกสาร ใช้ความละเอียดสูงกว่า (ดู DOC_MAX_WIDTH) */
+export type ImageOptions = { doc?: boolean };
 /** รูปย่อที่ส่งไปด้วย ใช้แสดงในหน้าใบงาน เก็บในฐานข้อมูลไม่กี่สิบ KB */
 const THUMB_WIDTH = 320;
 /** วิดีโอยาวสุดที่รับ — ยาวกว่านี้ไม่ได้ช่วยให้เข้าใจอาการเพิ่ม แต่ไฟล์โตตามตรง */
@@ -74,7 +86,8 @@ async function shrink(uri: string, width: number, compress: number): Promise<str
  */
 export async function pickImageAttachment(
   fromCamera: boolean,
-  onStage?: (label: string) => void
+  onStage?: (label: string) => void,
+  opts: ImageOptions = {}
 ): Promise<PickedAttachment | null> {
   // เว็บเปิดกล้องผ่าน <input capture> ซึ่งไม่ต้องขอสิทธิ์ — ขอผ่าน getUserMedia บนคอมที่ไม่มีกล้อง
   // จะได้ "ไม่อนุญาต" ทั้งที่แค่อยากเลือกไฟล์ (ปุ่มถ่ายทันทีเปิดบนเว็บตั้งแต่ ต.ค. 69)
@@ -99,7 +112,7 @@ export async function pickImageAttachment(
   if (result.canceled || result.assets.length === 0) return null;
 
   onStage?.("กำลังย่อรูป");
-  return prepareImage(result.assets[0]);
+  return prepareImage(result.assets[0], opts);
 }
 
 /**
@@ -107,7 +120,8 @@ export async function pickImageAttachment(
  * กดเลือกทีละรูปสิบรอบคือเหตุผลที่คนส่งแค่รูปเดียว
  */
 export async function pickImageAttachments(
-  onStage?: (label: string) => void
+  onStage?: (label: string) => void,
+  opts: ImageOptions = {}
 ): Promise<PickedAttachment[]> {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
@@ -124,15 +138,19 @@ export async function pickImageAttachments(
   const out: PickedAttachment[] = [];
   for (const [i, asset] of result.assets.entries()) {
     onStage?.(result.assets.length > 1 ? `กำลังย่อรูป ${i + 1}/${result.assets.length}` : "กำลังย่อรูป");
-    out.push(await prepareImage(asset));
+    out.push(await prepareImage(asset, opts));
   }
   return out;
 }
 
-async function prepareImage(asset: ImagePicker.ImagePickerAsset): Promise<PickedAttachment> {
+async function prepareImage(asset: ImagePicker.ImagePickerAsset, opts: ImageOptions): Promise<PickedAttachment> {
   // ย่อก่อนส่งเสมอ ไม่ใช่แค่ลดคุณภาพ — quality อย่างเดียวได้ไฟล์ 1.5-2.5 MB
   // เพราะความกว้างยังเท่าเดิม ต้องลดขนาดภาพจริงถึงจะเหลือหลักแสนไบต์
-  const uri = await shrink(asset.uri, MAX_WIDTH, 0.7);
+  // ไม่ขยายรูปที่เล็กกว่าเพดาน — เดิมย่อเป็นกว้าง 1600 เสมอ ภาพแคปหน้าจอ/รูปจาก LINE (กว้าง ~1100)
+  // จึงถูกขยายขึ้น ตัวหนังสือแตกเบลอและไฟล์ใหญ่ขึ้นเปล่า ๆ (เจ้าของงานเจอกับใบเสนอราคา ต.ค. 69)
+  const cap = opts.doc ? DOC_MAX_WIDTH : MAX_WIDTH;
+  const width = asset.width > 0 ? Math.min(asset.width, cap) : cap;
+  const uri = await shrink(asset.uri, width, opts.doc ? DOC_QUALITY : PHOTO_QUALITY);
   // ทำรูปย่อจากรูปที่ย่อแล้ว ไม่ใช่จากไฟล์ดิบอีกรอบ — การถอดรหัสรูป 12 ล้าน
   // พิกเซลคือส่วนที่ช้าที่สุดของทั้งขั้นตอน ทำสองรอบคือรอนานเป็นสองเท่า
   // โดยที่รูปย่อขนาด 320 px ออกมาหน้าตาเหมือนกัน
@@ -212,12 +230,15 @@ export async function pickPdfAttachments(): Promise<PickedAttachment[]> {
   if (big.length) {
     showAlert("ไฟล์ใหญ่เกินไป", `PDF แนบได้ไม่เกิน ${formatSize(MAX_PDF_BYTES)} — ไม่ได้แนบ: ${big.map((a) => a.name).join(", ")}`);
   }
-  return result.assets
-    .filter((a) => !big.includes(a))
-    .map((asset) => {
+  const kept = result.assets.filter((a) => !big.includes(a));
+  // รูปหน้าแรกเป็นรูปย่อ (เว็บ) — รายการไฟล์แนบเห็นว่าเป็นเอกสารอะไรก่อนกด · ทำไม่ได้ก็แนบได้ตามปกติ
+  return Promise.all(
+    kept.map(async (asset) => {
       const name = /\.pdf$/i.test(asset.name) ? asset.name : `${asset.name || "document"}.pdf`;
-      return { uri: asset.uri, name, type: "application/pdf", kind: "DOCUMENT" as const, thumbnailUri: null };
-    });
+      const thumbnailUri = await pdfThumbnail(asset.uri);
+      return { uri: asset.uri, name, type: "application/pdf", kind: "DOCUMENT" as const, thumbnailUri };
+    })
+  );
 }
 
 /** ไอคอนแทนรูปย่อ สำหรับไฟล์ที่ไม่มีรูปย่อ */

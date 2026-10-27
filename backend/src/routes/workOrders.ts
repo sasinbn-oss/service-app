@@ -35,6 +35,7 @@ import {
   buildObjectKey,
   deleteObject,
   getDownloadUrl,
+  getObjectBytes,
   isFileStoreConfigured,
   uploadObject,
   SIGNED_URL_TTL_SECONDS,
@@ -6210,8 +6211,11 @@ type AttachmentRow = {
  * ถ้าแยก หน้าจอต้องยิงเพิ่มอีกรูปละครั้ง และรูปพวกนี้ต้องล็อกอินถึงจะดูได้
  * แต่ <Image> บนเว็บแนบ header ไม่ได้ จะต้องไปทำลิงก์ชั่วคราวให้รูปย่อด้วย
  * ทั้งที่มันแค่ไม่กี่สิบ KB — ส่งติดไปเลยจบกว่าและเปิดหน้าได้ไวกว่า
+ *
+ * skipThumb = แอปมีรูปย่อของไฟล์นี้อยู่แล้ว (ดู ?have= ของ GET /:id/attachments) — ไม่ส่งซ้ำ
+ * hasThumbnail บอกว่ามีรูปย่อ แอปจะได้หยิบจากที่จำไว้ ไม่ใช่เข้าใจว่าไม่มีรูปย่อ
  */
-function attachmentShape(a: AttachmentRow) {
+function attachmentShape(a: AttachmentRow, skipThumb = false) {
   return {
     id: a.id,
     kind: a.kind,
@@ -6232,7 +6236,8 @@ function attachmentShape(a: AttachmentRow) {
     // ถ้าหน้าจอเทียบด้วยชื่อ ช่างสองคนที่ชื่อเหมือนกันจะลบไฟล์ของกันและกันได้
     createdById: a.createdById,
     createdByName: a.createdBy?.name ?? null,
-    thumbnailDataUrl: a.thumbnail
+    hasThumbnail: !!a.thumbnail,
+    thumbnailDataUrl: a.thumbnail && !skipThumb
       ? `data:image/jpeg;base64,${Buffer.from(a.thumbnail).toString("base64")}`
       : null,
   };
@@ -6261,12 +6266,52 @@ router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
   const wo = await loadAttachableWorkOrder(req, res, id);
   if (!wo) return;
 
+  /**
+   * ?have=1,2,3 — รูปย่อที่แอปจำไว้แล้ว ไม่ต้องส่งซ้ำ (เจ้าของงานบ่นว่าไฟล์แนบโหลดช้า ต.ค. 69)
+   * รายการนี้โหลดใหม่ทุกครั้งที่แนบ/ลบ/กลับมาที่ใบงาน ใบที่มี 20 ไฟล์เดิมส่งรูปย่อชุดเดิมซ้ำทุกรอบ (หลายร้อย KB)
+   * รูปย่อของไฟล์หนึ่งไม่เคยเปลี่ยน จำไว้ที่เครื่องได้ตลอด
+   */
+  const have = new Set(
+    String(req.query.have ?? "")
+      .split(",")
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0)
+  );
   const rows = await prisma.workOrderAttachment.findMany({
     where: { workOrderId: id },
     select: attachmentSelect,
     orderBy: { createdAt: "asc" },
   });
-  res.json({ rows: rows.map(attachmentShape) });
+  res.json({ rows: rows.map((r) => attachmentShape(r, have.has(r.id))) });
+});
+
+/**
+ * ลิงก์เปิดไฟล์ของทุกไฟล์ในใบงาน — คำขอเดียว (เจ้าของงานขอให้ไฟล์แนบโหลดไวขึ้น ต.ค. 69)
+ *
+ * เดิมกดดูไฟล์ไหนก็ถามลิงก์ของไฟล์นั้นทีละครั้ง เซิร์ฟเวอร์อยู่ไกลจากคนใช้และฐานข้อมูล
+ * จึงรอราว 1 วินาทีก่อนไฟล์จะเริ่มโหลดทุกครั้ง · แอปขอชุดนี้เบื้องหลังตอนเปิดใบงาน กดแล้วโหลดไฟล์ได้ทันที
+ * การเซ็นลิงก์ทำในเครื่อง ไม่ได้ถามที่เก็บไฟล์ — 20 ไฟล์ก็ยังเร็ว · อายุลิงก์เท่ากับ /link (2 ชั่วโมง)
+ */
+router.get("/:id/attachments/links", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+
+  const rows = await prisma.workOrderAttachment.findMany({
+    where: { workOrderId: id, objectKey: { not: null }, uploadedAt: { not: null } },
+    select: { id: true, objectKey: true, fileName: true },
+  });
+  try {
+    const pairs = await Promise.all(
+      rows.map(async (r) => [r.id, await getDownloadUrl(r.objectKey!, { fileName: r.fileName, inline: true })] as const)
+    );
+    res.json({ links: Object.fromEntries(pairs), expiresInSeconds: SIGNED_URL_TTL_SECONDS });
+  } catch (error: any) {
+    console.error("presign failed", error);
+    res.status(502).json({ error: "ขอลิงก์เปิดไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง" });
+  }
 });
 
 router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthRequest, res) => {
@@ -6432,6 +6477,38 @@ router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthR
   } catch (error: any) {
     console.error("presign failed", error);
     res.status(502).json({ error: "ขอลิงก์เปิดไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง" });
+  }
+});
+
+/**
+ * ตัวไฟล์ PDF ผ่านเซิร์ฟเวอร์ — ทางสำรองของหน้าดูไฟล์ในแอป (ต.ค. 69)
+ *
+ * ตัวแสดง PDF ในแอปอ่านไฟล์ด้วย fetch ซึ่งต้องให้ที่เก็บไฟล์ตอบ CORS — ถ้าที่เก็บไม่ตอบ แอปมาขอที่นี่แทน
+ * (ส่งผ่านเซิร์ฟเวอร์ช้ากว่าโหลดตรง จึงไม่ใช่ทางหลัก) · เฉพาะ PDF — รูป/วิดีโอแสดงด้วย <img>/<video> ไม่ติด CORS
+ */
+router.get("/:id/attachments/:attachmentId/file", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const attachmentId = Number(req.params.attachmentId);
+  if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) {
+    return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
+  }
+  const wo = await loadAttachableWorkOrder(req, res, id);
+  if (!wo) return;
+  const row = await prisma.workOrderAttachment.findFirst({
+    where: { id: attachmentId, workOrderId: id },
+    select: { objectKey: true, kind: true, mimeType: true },
+  });
+  if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
+  if (row.kind !== "DOCUMENT") return res.status(400).json({ error: "เปิดผ่านทางนี้ได้เฉพาะไฟล์ PDF" });
+  if (!row.objectKey) return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ" });
+  try {
+    const bytes = await getObjectBytes(row.objectKey);
+    res.setHeader("Content-Type", row.mimeType || "application/pdf");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.end(Buffer.from(bytes));
+  } catch (error: any) {
+    console.error("file read failed", error);
+    res.status(502).json({ error: "อ่านไฟล์จากที่เก็บไม่สำเร็จ ลองใหม่อีกครั้ง" });
   }
 });
 
