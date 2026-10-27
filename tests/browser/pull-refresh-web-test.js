@@ -90,8 +90,9 @@ const { setup } = require("./fixture");
     fx.sql(`update "WorkOrder" set title='ทดสอบปุ่มมีอัปเดต', "updatedAt"=now() where id=${w2.id}`);
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await page.waitForTimeout(2500);
-    (await page.getByText(/^มีอัปเดต 1 ใบงาน$/).locator("visible=true").count()) > 0
-      ? pass("เช็คเบื้องหลังเจอของใหม่ → ขึ้นปุ่ม \"มีอัปเดต 1 ใบงาน\"")
+    // ต่อท้ายว่าใบอยู่แท็บไหน (ต.ค. 69) — แก้ชื่อใบไม่ได้ทำให้ใบย้ายแท็บ จึงเป็น "ในแท็บนี้"
+    (await page.getByText(/^มีอัปเดต 1 ใบงาน · ในแท็บนี้$/).locator("visible=true").count()) > 0
+      ? pass("เช็คเบื้องหลังเจอของใหม่ → ขึ้นปุ่ม \"มีอัปเดต 1 ใบงาน · ในแท็บนี้\"")
       : fail("ไม่ขึ้นปุ่มมีอัปเดต");
     (await vis("ทดสอบปุ่มมีอัปเดต", false).count()) === 0 ? pass("ยังไม่สลับรายการให้เองก่อนกดปุ่ม") : fail("รายการสลับเองทั้งที่ยังไม่กด");
     await page.screenshot({ path: path.join(DIR, "pull-3-pill.png") });
@@ -110,6 +111,10 @@ const { setup } = require("./fixture");
     await page.screenshot({ path: path.join(DIR, "pull-4-applied.png") });
 
     // ── เมนูข้างเปิดอยู่: ลากลงบนเมนูต้องไม่ลากเมนูลงมา และไม่รีเฟรชหน้าข้างหลัง (เจ้าของงานเจอบนมือถือ ต.ค. 69) ──
+    // ปุ่มมีอัปเดตเลื่อนไปที่ใบที่เปลี่ยน (ไม่ใช่บนสุด) แถบบนเลยหลบไป — เลื่อนกลับขึ้นให้ปุ่มเมนูโผล่ก่อน
+    await page.mouse.move(200, 500);
+    await page.mouse.wheel(0, -4000);
+    await page.waitForTimeout(900);
     await page.locator('[aria-label="เปิดเมนู"]').locator("visible=true").first().click();
     await page.waitForTimeout(900);
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 120, y: 300 }] });

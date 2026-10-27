@@ -61,7 +61,7 @@ export const AREA_TEAM_ALLOWED: RegExp[] = [
   /^POST \/api\/auth\/(change-password|view-as\/stop)$/,
   // ใบงานซ่อม · กล่องงานของฉัน · รายละเอียดใบงาน
   /^GET \/api\/work-orders\/?$/,
-  /^GET \/api\/work-orders\/(version|inbox-count|options)$/,
+  /^GET \/api\/work-orders\/(version|inbox-count|options|locate)$/,
   /^GET \/api\/work-orders\/\d+(\/(version|attachments|attachments\/\d+\/link))?$/,
   // รายงาน — ปุ่มเดียว
   /^GET \/api\/work-orders\/reports\/area-team$/,
