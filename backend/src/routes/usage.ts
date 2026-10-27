@@ -2,6 +2,7 @@
  * การใช้งานแอป — ใครใช้ตอนไหน นานเท่าไร (Super Admin และแอดมิน · เจ้าของงานขอ ต.ค. 69)
  *
  * ข้อมูลมาจาก UsageSlot (แถวละ 5 นาทีต่อคน · utils/usage.ts) "เวลาใช้" = จำนวนช่วง × 5 นาที
+ * ก่อนวันที่เริ่มจดจริง มีช่วงที่ประมาณจากการทำงานในระบบ (device ACTION · migration usage_backfill) — นับแค่ตอนที่ทำอะไร
  * ไม่ใช่เวลาตั้งแต่เปิดถึงปิดแอป — เปิดค้างไว้เฉย ๆ แต่ไม่ได้แตะ ไม่นับ
  * ครั้ง (session) = ช่วงที่ต่อกัน ห่างไม่เกิน 15 นาทีนับเป็นครั้งเดียว
  *
@@ -56,13 +57,19 @@ const ROLE_GROUPS: Record<string, string[]> = {
 };
 
 const listQuery = z.object({
-  range: z.enum(["today", "7d", "30d"]).default("today"),
+  // all = ตั้งแต่เปิดบัญชี — รวมช่วงที่ประมาณจากการทำงาน (ACTION) ก่อนเริ่มจดจริง
+  range: z.enum(["today", "7d", "30d", "all"]).default("today"),
   role: z.enum(["ALL", "EMPLOYEE", "SUPERVISOR", "ADMIN", "AREA_TEAM"]).default("ALL"),
   // ค้นหาชื่อ / รหัสพนักงาน / ทีม / ภาค — กรองที่เซิร์ฟเวอร์ ตัวเลขด้านบนนับตามคนที่ค้นเจอด้วย
   q: z.string().trim().max(100).optional(),
 });
 
-const rangeDays = (r: string) => (r === "30d" ? 30 : r === "7d" ? 7 : 1);
+const rangeDays = (r: string) => (r === "all" ? 0 : r === "30d" ? 30 : r === "7d" ? 7 : 1);
+/** วันแรกของช่วง (UTC ms) — all = ไม่จำกัด */
+const rangeFrom = (r: string) => (r === "all" ? 0 : bkkMidnight(rangeDays(r) - 1));
+/** WEB = คอม · MOBILE = มือถือ · ACTION = ประมาณจากการทำงานในระบบ (ก่อนเริ่มจดจริง) */
+const DEVICES = ["WEB", "MOBILE", "ACTION"];
+const DEVICE_LABEL: Record<string, string> = { WEB: "คอม", MOBILE: "มือถือ", ACTION: "จากการทำงานในระบบ" };
 
 async function usersFor(role: string, q?: string) {
   const words = (q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -93,19 +100,22 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
   if (!parsed.success) return res.status(400).json({ error: "ตัวกรองไม่ถูกต้อง" });
   const { range, role, q } = parsed.data;
   const days = rangeDays(range);
-  const from = bkkMidnight(days - 1);
-  const heatFrom = bkkMidnight(Math.max(days, 7) - 1);
+  const from = rangeFrom(range);
+  // ตารางสีโชว์ไม่เกิน 30 วันล่าสุด — "ตั้งแต่เปิดบัญชี" ยาวหลายเดือน เป็นแถวยาวเหยียดอ่านไม่ออก
+  const heatDaysN = range === "all" ? 30 : Math.max(days, 7);
+  const heatFrom = bkkMidnight(heatDaysN - 1);
+  const loadFrom = Math.min(from, heatFrom);
   const users = await usersFor(role, q);
   const ids = users.map((u) => u.id);
 
   const [slots, last, firsts] = await Promise.all([
     // ช่วงทั้งหมดของคนกลุ่มนี้ตั้งแต่ต้นตาราง heatmap — 30 วันสูงสุดราวสามแสนแถว พอจะคิดในหน่วยความจำได้
     prisma.usageSlot.findMany({
-      where: { userId: { in: ids }, slot: { gte: new Date(heatFrom) } },
+      where: { userId: { in: ids }, slot: { gte: new Date(loadFrom) } },
       select: { userId: true, slot: true, device: true },
     }),
     prisma.usageSlot.groupBy({ by: ["userId"], where: { userId: { in: ids } }, _max: { slot: true } }),
-    prisma.usageSlot.aggregate({ _min: { slot: true } }),
+    prisma.usageSlot.aggregate({ where: { device: { not: "ACTION" } }, _min: { slot: true } }),
   ]);
   const lastSeen = new Map(last.map((r) => [r.userId, r._max.slot!.getTime()]));
   const now = Date.now();
@@ -117,8 +127,10 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
   for (const s of slots) {
     const t = s.slot.getTime();
     const key = `${dayKey(t)}|${new Date(t + BKK).getUTCHours()}`;
-    if (!heat.has(key)) heat.set(key, new Set());
-    heat.get(key)!.add(s.userId);
+    if (t >= heatFrom) {
+      if (!heat.has(key)) heat.set(key, new Set());
+      heat.get(key)!.add(s.userId);
+    }
     if (t < from) continue;
     let u = perUser.get(s.userId);
     if (!u) perUser.set(s.userId, (u = { slots: [], today: [], devices: new Set(), days: new Set() }));
@@ -141,7 +153,7 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
       const p = perUser.get(u.id);
       // แถบวันนี้แยกคอม/มือถือ — ช่วงติดกันที่อุปกรณ์เดียวกันรวมเป็นแท่งเดียว
       const bars: { from: number; to: number; device: string }[] = [];
-      for (const d of ["WEB", "MOBILE"]) {
+      for (const d of DEVICES) {
         for (const [a, b] of sessionsOf((p?.today ?? []).filter((x) => x.device === d).map((x) => x.t))) bars.push({ from: a, to: b, device: d });
       }
       const ls = lastSeen.get(u.id) ?? null;
@@ -165,10 +177,10 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
     .sort((a, b) => (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0) || a.name.localeCompare(b.name, "th"));
 
   const heatDays: string[] = [];
-  for (let i = Math.max(days, 7) - 1; i >= 0; i--) heatDays.push(dayKey(bkkMidnight(i)));
+  for (let i = heatDaysN - 1; i >= 0; i--) heatDays.push(dayKey(bkkMidnight(i)));
   res.json({
     range,
-    // เริ่มนับตั้งแต่วันที่ขึ้นระบบ — ก่อนหน้านั้นไม่มีข้อมูล หน้าจอบอกไว้ คนจะได้ไม่เข้าใจผิดว่าไม่มีใครใช้
+    // วันที่เริ่มจดจริง — ก่อนหน้านั้นเป็นช่วงที่ประมาณจากการทำงาน (สีเทา) หน้าจอบอกไว้ คนจะได้ไม่เข้าใจผิด
     since: firsts._min.slot,
     stats: {
       online: people.filter((p) => p.online).length,
@@ -190,9 +202,15 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
 /** ย้อนหลังรายวันของคนหนึ่ง — กดชื่อในรายการ */
 router.get("/user/:id", requireAuth, requireUsageViewer, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
-  const days = Math.min(30, Math.max(1, Number(req.query.days) || 7));
-  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, name: true, role: true, team: true, region: true, employeeCode: true } });
+  const all = req.query.days === "all";
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: { id: true, name: true, role: true, team: true, region: true, employeeCode: true, createdAt: true },
+  });
   if (!user) return res.status(404).json({ error: "ไม่พบผู้ใช้" });
+  // ตั้งแต่เปิดบัญชี: นับวันจากวันสร้างบัญชี (ไม่เกิน 2 ปี กันแถวยาวเกิน) — หน้าจอโชว์เฉพาะวันที่มีการใช้
+  const sinceAccount = Math.ceil((bkkMidnight(0) - user.createdAt.getTime()) / DAY) + 1;
+  const days = all ? Math.min(730, Math.max(1, sinceAccount)) : Math.min(90, Math.max(1, Number(req.query.days) || 7));
   const slots = await prisma.usageSlot.findMany({
     where: { userId: id, slot: { gte: new Date(bkkMidnight(days - 1)) } },
     select: { slot: true, device: true },
@@ -208,7 +226,7 @@ router.get("/user/:id", requireAuth, requireUsageViewer, async (req: AuthRequest
   for (let i = 0; i < days; i++) {
     const d = dayKey(bkkMidnight(i));
     const list = byDay.get(d) ?? [];
-    const bars = ["WEB", "MOBILE"].flatMap((dev) =>
+    const bars = DEVICES.flatMap((dev) =>
       sessionsOf(list.filter((x) => x.device === dev).map((x) => x.t)).map(([a, b]) => ({ from: new Date(a), to: new Date(b), device: dev }))
     );
     rows.push({
@@ -220,7 +238,11 @@ router.get("/user/:id", requireAuth, requireUsageViewer, async (req: AuthRequest
       bars,
     });
   }
-  res.json({ user: { ...user, roleLabel: ROLE_LABELS[user.role] ?? user.role }, days: rows });
+  res.json({
+    user: { ...user, roleLabel: ROLE_LABELS[user.role] ?? user.role },
+    firstUse: slots[0]?.slot ?? null,
+    days: all ? rows.filter((r) => r.minutes > 0) : rows,
+  });
 });
 
 /** Excel รายคนรายวัน — เข้าครั้งแรก · ใช้ล่าสุด · รวมเวลา · ครั้ง · อุปกรณ์ */
@@ -228,11 +250,10 @@ router.get("/export", requireAuth, requireUsageViewer, async (req: AuthRequest, 
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: "ตัวกรองไม่ถูกต้อง" });
   const { range, role, q } = parsed.data;
-  const days = rangeDays(range);
   const users = await usersFor(role, q);
   const byId = new Map(users.map((u) => [u.id, u]));
   const slots = await prisma.usageSlot.findMany({
-    where: { userId: { in: users.map((u) => u.id) }, slot: { gte: new Date(bkkMidnight(days - 1)) } },
+    where: { userId: { in: users.map((u) => u.id) }, slot: { gte: new Date(rangeFrom(range)) } },
     select: { userId: true, slot: true, device: true },
     orderBy: { slot: "asc" },
   });
@@ -251,7 +272,7 @@ router.get("/export", requireAuth, requireUsageViewer, async (req: AuthRequest, 
     const [uid, d] = k.split("|");
     const u = byId.get(Number(uid))!;
     const list = groups.get(k)!;
-    const devs = [...new Set(list.map((x) => (x.device === "MOBILE" ? "มือถือ" : "คอม")))].join(" + ");
+    const devs = [...new Set(list.map((x) => DEVICE_LABEL[x.device] ?? x.device))].join(" + ");
     ws.addRow([d, u.name, u.employeeCode, ROLE_LABELS[u.role] ?? u.role, u.team ?? u.region ?? "", hm(list[0].t), hm(list[list.length - 1].t + SLOT_MS), list.length * 5, sessionsOf(list.map((x) => x.t)).length, devs]);
   }
   [12, 30, 16, 18, 22, 12, 12, 14, 8, 14].forEach((w, i) => (ws.getColumn(i + 1).width = w));

@@ -28,6 +28,10 @@ export function recordUsage(userId: number, userAgent: string | undefined, now =
   // ลบของเก่ากว่า 90 วัน วันละครั้ง — ไม่ต้องมีงานตั้งเวลาแยก
   if (now - lastPurge > 24 * 3600_000) {
     lastPurge = now;
-    prisma.usageSlot.deleteMany({ where: { slot: { lt: new Date(now - USAGE_KEEP_DAYS * 24 * 3600_000) } } }).catch(() => {});
+    // ช่วงที่ประมาณจากการทำงาน (ACTION — migration usage_backfill) เก็บถาวร: ไม่กี่แถวต่อคนต่อวัน
+    // และเป็นทางเดียวที่ดูย้อนหลังถึงวันเปิดบัญชีได้ (เจ้าของงานขอ ต.ค. 69)
+    prisma.usageSlot
+      .deleteMany({ where: { device: { not: "ACTION" }, slot: { lt: new Date(now - USAGE_KEEP_DAYS * 24 * 3600_000) } } })
+      .catch(() => {});
   }
 }

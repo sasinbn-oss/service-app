@@ -17,12 +17,13 @@ import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import { colors, headingFont, radius, spacing } from "../theme";
 
-type Range = "today" | "7d" | "30d";
+type Range = "today" | "7d" | "30d" | "all";
 type RoleF = "ALL" | "EMPLOYEE" | "SUPERVISOR" | "ADMIN" | "AREA_TEAM";
 interface Bar {
   from: string;
   to: string;
-  device: "WEB" | "MOBILE";
+  /** ACTION = ประมาณจากการทำงานในระบบ (ก่อนเริ่มจดจริง) */
+  device: "WEB" | "MOBILE" | "ACTION";
 }
 interface Person {
   id: number;
@@ -57,6 +58,7 @@ const RANGES: { v: Range; l: string }[] = [
   { v: "today", l: "วันนี้" },
   { v: "7d", l: "7 วัน" },
   { v: "30d", l: "30 วัน" },
+  { v: "all", l: "ตั้งแต่เปิดบัญชี" },
 ];
 const ROLES: { v: RoleF; l: string }[] = [
   { v: "ALL", l: "ทุกตำแหน่ง" },
@@ -76,6 +78,10 @@ const hm = (iso: string) => bkk(iso).toISOString().slice(11, 16);
 const dayLabel = (ymd: string) => {
   const d = new Date(`${ymd}T00:00:00Z`);
   return `${TH_DAY[d.getUTCDay()]} ${d.getUTCDate()}`;
+};
+const fullDate = (iso: string) => {
+  const d = bkk(iso);
+  return `${d.getUTCDate()} ${TH_MONTH[d.getUTCMonth()]} ${d.getUTCFullYear() + 543}`;
 };
 const duration = (min: number) => (min >= 60 ? `${Math.floor(min / 60)} ชม. ${String(min % 60).padStart(2, "0")} น.` : `${min} น.`);
 
@@ -112,6 +118,7 @@ function TimeBar({ bars, height = 16 }: { bars: Bar[]; height?: number }) {
               styles.barSeg,
               { left: `${l * 100}%`, width: `${Math.max(0.8, (r - l) * 100)}%` },
               b.device === "MOBILE" && { backgroundColor: colors.success },
+              b.device === "ACTION" && { backgroundColor: colors.textFaint },
             ]}
           />
         );
@@ -209,7 +216,8 @@ export default function AppUsageScreen() {
           {/* ชื่อหน้าอยู่บนแถบหัวแล้ว (ทั้งจอกว้างและจอแคบ) ไม่พิมพ์ซ้ำ */}
           <Text style={styles.sub}>
             ใครใช้ตอนไหน นานเท่าไร · นับเป็นช่วง 5 นาทีที่มีการใช้จริง
-            {data?.since ? ` · เริ่มนับตั้งแต่ ${dayLabel(bkk(data.since).toISOString().slice(0, 10))} ${TH_MONTH[bkk(data.since).getUTCMonth()]}` : ""}
+            {data?.since ? ` · จดจริงตั้งแต่ ${dayLabel(bkk(data.since).toISOString().slice(0, 10))} ${TH_MONTH[bkk(data.since).getUTCMonth()]}` : ""}
+            {" "}· ก่อนหน้านั้น (สีเทา) ประมาณจากการทำงานในระบบ — นับเฉพาะตอนที่กดทำอะไร เปิดดูเฉย ๆ ไม่นับ
           </Text>
         </View>
         <TouchableOpacity style={styles.dl} onPress={download} accessibilityLabel="ดาวน์โหลด Excel การใช้งาน">
@@ -293,7 +301,9 @@ export default function AppUsageScreen() {
               <View style={[styles.legendDot, { backgroundColor: colors.primary }]} />
               <Text style={styles.hint}>คอม</Text>
               <View style={[styles.legendDot, { backgroundColor: colors.success }]} />
-              <Text style={styles.hint}>มือถือ · แถบ = วันนี้ {T0}:00–{T1}:00 · กดชื่อเพื่อดูย้อนหลัง</Text>
+              <Text style={styles.hint}>มือถือ</Text>
+              <View style={[styles.legendDot, { backgroundColor: colors.textFaint }]} />
+              <Text style={styles.hint}>จากการทำงานในระบบ · แถบ = วันนี้ {T0}:00–{T1}:00 · กดชื่อเพื่อดูย้อนหลัง</Text>
             </View>
             {wide ? (
               <View style={[styles.pRow, styles.pHead]}>
@@ -370,12 +380,18 @@ function Tile({ n, label, tone }: { n: number | string; label: string; tone?: st
 
 function PersonDetail({ person, onClose }: { person: Person; onClose: () => void }) {
   const [days, setDays] = useState<DayRow[] | null>(null);
-  const [span, setSpan] = useState<7 | 30>(7);
+  const [span, setSpan] = useState<"7" | "30" | "90" | "all">("7");
+  const [firstUse, setFirstUse] = useState<string | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
   useEffect(() => {
     setDays(null);
     api
-      .get<{ days: DayRow[] }>(`/usage/user/${person.id}`, { params: { days: span }, loadingText: false })
-      .then((r) => setDays(r.data.days))
+      .get<{ days: DayRow[]; firstUse: string | null; user: { createdAt: string } }>(`/usage/user/${person.id}`, { params: { days: span } })
+      .then((r) => {
+        setDays(r.data.days);
+        setFirstUse(r.data.firstUse);
+        setOpened(r.data.user.createdAt);
+      })
       .catch((e) => {
         showAlert("โหลดไม่สำเร็จ", apiErrorMessage(e));
         onClose();
@@ -394,14 +410,27 @@ function PersonDetail({ person, onClose }: { person: Person; onClose: () => void
   return (
     <AppModal visible onClose={onClose} title={person.name} subtitle={`${person.roleLabel}${person.team ? ` · ${person.team}` : ""} · ${person.code}`} width={720}>
       <View style={{ gap: spacing.sm }}>
-        <Chips items={[{ v: "7" as const, l: "7 วัน" }, { v: "30" as const, l: "30 วัน" }]} value={String(span) as "7" | "30"} onPick={(v) => setSpan(Number(v) as 7 | 30)} />
+        <Chips
+          items={[
+            { v: "7" as const, l: "7 วัน" },
+            { v: "30" as const, l: "30 วัน" },
+            { v: "90" as const, l: "90 วัน" },
+            { v: "all" as const, l: "ตั้งแต่เปิดบัญชี" },
+          ]}
+          value={span}
+          onPick={setSpan}
+        />
         {!days ? (
           <Spinner />
         ) : (
           <>
             <Text style={styles.sub}>
-              ใช้ {used.length} จาก {days.length} วัน · เข้าครั้งแรกของวันเฉลี่ย {avg((d) => d.first)} · เลิกใช้เฉลี่ย {avg((d) => d.last)}
+              {span === "all"
+                ? `เปิดบัญชี ${opened ? fullDate(opened) : "—"} · ใช้ครั้งแรก ${firstUse ? fullDate(firstUse) : "ยังไม่เคยใช้"} · ใช้ทั้งหมด ${used.length} วัน`
+                : `ใช้ ${used.length} จาก ${days.length} วัน`}
+              {" "}· เข้าครั้งแรกของวันเฉลี่ย {avg((d) => d.first)} · เลิกใช้เฉลี่ย {avg((d) => d.last)}
             </Text>
+            {span === "all" && !days.length ? <Text style={styles.hint}>ยังไม่มีการใช้งานเลย</Text> : null}
             <View style={styles.dRow}>
               <Text style={styles.dDay} />
               <View style={{ flex: 1 }}>
@@ -411,7 +440,11 @@ function PersonDetail({ person, onClose }: { person: Person; onClose: () => void
             </View>
             {days.map((d) => (
               <View key={d.day} style={styles.dRow}>
-                <Text style={styles.dDay}>{dayLabel(d.day)}</Text>
+                {/* ตั้งแต่เปิดบัญชียาวหลายเดือน — วันเฉย ๆ ไม่พอ ต้องมีเดือนด้วย */}
+                <Text style={[styles.dDay, span === "all" && { width: 84 }]}>
+                  {dayLabel(d.day)}
+                  {span === "all" ? ` ${TH_MONTH[Number(d.day.slice(5, 7)) - 1]}` : ""}
+                </Text>
                 <View style={{ flex: 1 }}>
                   <TimeBar bars={d.bars} height={14} />
                 </View>
