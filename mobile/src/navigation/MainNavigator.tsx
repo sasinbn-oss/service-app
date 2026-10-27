@@ -17,6 +17,7 @@ import PlanBoardScreen from "../screens/PlanBoardScreen";
 import MyJobsScreen from "../screens/MyJobsScreen";
 import AppUsageScreen from "../screens/AppUsageScreen";
 import UsageButton from "../components/UsageButton";
+import { UpdateButton } from "../components/UpdateGate";
 import ReportsMenuScreen from "../screens/ReportsMenuScreen";
 import OpenerReportScreen from "../screens/OpenerReportScreen";
 import SystemReportScreen from "../screens/SystemReportScreen";
@@ -152,6 +153,8 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
           {title}
         </Text>
       </View>
+      {/* มีระบบรุ่นใหม่ — กดเองเมื่อสะดวก ไม่โหลดหน้าใหม่ให้เอง (เจ้าของงานขอ ต.ค. 69) */}
+      <UpdateButton compact />
       <ViewAsButton compact />
       <UsageButton compact />
       <RefreshButton />
@@ -275,6 +278,7 @@ function AppTopBar() {
     <View style={[styles.topBar, { paddingTop: (viewing ? 0 : insets.top) + 10 }]}>
       <Brand subtitle="ระบบงานช่างซ่อม" compact={width < 480} />
       <View style={{ flex: 1 }} />
+      <UpdateButton compact={!wide} />
       <ViewAsButton compact={!wide} />
       {/* ข้างชื่อ (เจ้าของงานขอ ต.ค. 69) — Super Admin/แอดมินเท่านั้น ซ่อนเองสำหรับคนอื่น */}
       <UsageButton compact={!wide} />

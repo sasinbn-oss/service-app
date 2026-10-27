@@ -2,7 +2,7 @@
 //   · ปุ่ม "รีเฟรช" บนหน้าใบงานโหลดใหม่จริง
 //   · อีกคนเปลี่ยนขั้น → หน้าจอนี้โหลดใหม่เองพร้อมบอกชื่อ (ใช้เหตุการณ์กลับมาที่แท็บแทนรอ 20 วิ)
 //   · เปิดฟอร์มค้างอยู่ → ไม่โหลดทับ ขึ้นแถบเหลือง · กดบันทึกทับ → 409 บอกชื่อ ฐานข้อมูลไม่เปลี่ยน
-//   · version.json รุ่นใหม่ → ไม่มีฟอร์มเปิด = โหลดหน้าใหม่เอง · build เก่ากว่า minBuiltAt = หน้า "ต้องอัปเดต"
+//   · version.json รุ่นใหม่ → ปุ่มอัปเดตบนแถบบน ไม่โหลดเอง กดแล้วค่อยโหลด · build เก่ากว่า minBuiltAt = หน้า "ต้องอัปเดต"
 // ต้องมี DATABASE_URL · เขียน mobile/public/version.json ชั่วคราวแล้วลบทิ้ง
 const { chromium } = require("playwright");
 const fs = require("fs");
@@ -96,15 +96,23 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(2500);
     (await has(page, "แก้จากอีกเครื่อง-3")) ? pass("ปิดฟอร์มแล้ว → โหลดของที่ค้างไว้ให้เอง") : fail("ปิดฟอร์มแล้วยังเป็นของเก่า");
 
-    // ⑤ รุ่นแอปใหม่
+    // ⑤ รุ่นแอปใหม่ — ขึ้นปุ่มให้กดเอง ไม่โหลดหน้าใหม่ให้เอง (เจ้าของงานขอ ต.ค. 69: กำลังใช้อยู่แล้วหน้าเด้ง)
     await page.evaluate(() => (window.__mark = 1));
     fs.writeFileSync(VERSION_FILE, JSON.stringify({ commit: "test-new", builtAt: new Date().toISOString(), minBuiltAt: null }));
     await shown(page);
     await page.waitForTimeout(6000);
-    (await page.evaluate(() => window.__mark)) === undefined ? pass("version.json รุ่นใหม่ ไม่มีฟอร์มเปิด → โหลดหน้าใหม่เอง") : fail("ไม่โหลดหน้าใหม่");
+    const updBtn = page.locator('[aria-label="มีระบบรุ่นใหม่ กดเพื่ออัปเดต"]').locator("visible=true");
+    (await page.evaluate(() => window.__mark)) === 1 && (await updBtn.count()) > 0
+      ? pass("version.json รุ่นใหม่ → ขึ้นปุ่มอัปเดตบนแถบบน หน้าไม่โหลดใหม่เอง")
+      : fail(`รุ่นใหม่: mark=${await page.evaluate(() => window.__mark)} ปุ่ม=${await updBtn.count()}`);
+    await page.screenshot({ path: path.join(DIR, "live-update-button.png") });
+    await shown(page);
     await page.waitForTimeout(3000);
-    (await page.evaluate(() => window.sessionStorage.getItem("update-reloaded-for"))) === "test-new"
-      ? pass("จำว่าโหลดเพื่อรุ่นนี้แล้ว — ไม่โหลดวนถ้ายังได้หน้าเก่า") : fail("ไม่ได้จำ");
+    (await page.evaluate(() => window.__mark)) === 1 && (await has(page, "แก้จากอีกเครื่อง-3"))
+      ? pass("ยังไม่กด — ใช้หน้าเดิมต่อได้ (เช็คซ้ำแล้วก็ไม่โหลดเอง)") : fail("หน้าโหลดใหม่เองทั้งที่ยังไม่กด");
+    await updBtn.first().click();
+    await page.waitForTimeout(6000);
+    (await page.evaluate(() => window.__mark)) === undefined ? pass("กดปุ่มอัปเดต → โหลดหน้าใหม่") : fail("กดแล้วไม่โหลดหน้าใหม่");
     fs.writeFileSync(VERSION_FILE, JSON.stringify({ commit: "test-must", builtAt: new Date().toISOString(), minBuiltAt: "2999-01-01T00:00:00.000Z" }));
     await shown(page);
     await page.waitForTimeout(2500);
