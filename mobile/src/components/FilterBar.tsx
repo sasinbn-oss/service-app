@@ -13,7 +13,7 @@
  * ตัวเลือกที่นับได้ 0 ใบยังแสดง (จาง กดไม่ได้) แทนที่จะหายไป — ปุ่มที่โผล่/หายตามข้อมูล
  * ทำให้ตำแหน่งปุ่มเลื่อนไปมา คนจำที่กดไม่ได้
  */
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
@@ -58,24 +58,45 @@ export function ViewTabs({
   onPick,
   right,
 }: {
-  tabs: { value: string; label: string; n?: number }[];
+  /** dot = มีใบที่อัปเดตรอให้ดูในแท็บนั้น (ปุ่ม "อีก n ใบ" ของหน้ารายการใบงาน) */
+  tabs: { value: string; label: string; n?: number; dot?: boolean }[];
   value: string;
   onPick: (v: string) => void;
   right?: React.ReactNode;
 }) {
+  /**
+   * แท็บที่เลือกต้องอยู่ในจอเสมอ — ปุ่ม "มีอัปเดต" พาไปแท็บท้าย ๆ (ปิดแล้ว · ทั้งหมด) ได้
+   * จอมือถือแถบแท็บเลื่อนข้างอยู่ ถ้าไม่เลื่อนตามจะไม่เห็นว่าตอนนี้อยู่แท็บไหน
+   */
+  const scroller = useRef<ScrollView>(null);
+  const xs = useRef<Record<string, number>>({});
+  useEffect(() => {
+    const x = xs.current[value];
+    if (x !== undefined) scroller.current?.scrollTo({ x: Math.max(0, x - 16), animated: true });
+  }, [value]);
   return (
     <View style={styles.tabsWrap}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs} style={{ flexGrow: 1, flexShrink: 1 }}>
+      <ScrollView
+        ref={scroller}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabs}
+        style={{ flexGrow: 1, flexShrink: 1 }}
+      >
         {tabs.map((t) => {
           const on = t.value === value;
           return (
             <TouchableOpacity
               key={t.value}
+              onLayout={(e) => (xs.current[t.value] = e.nativeEvent.layout.x)}
               style={[styles.tab, on && styles.tabOn]}
               onPress={() => onPick(t.value)}
               // ตัวเลขอยู่ในป้ายแยก — ชื่อปุ่มรวมไว้ให้โปรแกรมอ่านจออ่านต่อกัน ("ที่ยังค้าง 91 ใบ")
               accessibilityLabel={t.n ? `${t.label} ${t.n} ใบ` : t.label}
+              // role=tab + aria-selected — โปรแกรมอ่านจอ/เทสต์รู้ว่าตอนนี้อยู่แท็บไหน (เว็บไม่แปลง accessibilityState เป็น aria-selected)
+              accessibilityRole="tab"
               accessibilityState={{ selected: on }}
+              aria-selected={on}
             >
               <Text style={[styles.tabText, on && styles.tabTextOn]}>{t.label}</Text>
               {t.n ? (
@@ -83,6 +104,7 @@ export function ViewTabs({
                   <Text style={[styles.tabNText, on && styles.tabNTextOn]}>{t.n.toLocaleString("th-TH")}</Text>
                 </View>
               ) : null}
+              {t.dot ? <View style={styles.tabDot} accessibilityLabel="มีใบที่อัปเดต" /> : null}
             </TouchableOpacity>
           );
         })}
@@ -394,6 +416,7 @@ const styles = StyleSheet.create({
   tabNOn: { backgroundColor: colors.primary },
   tabNText: { fontSize: 11.5, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
   tabNTextOn: { color: "#fff" },
+  tabDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, marginLeft: -2 },
   toggle: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 },
   track: { width: 38, height: 22, borderRadius: 11, backgroundColor: colors.borderStrong, padding: 3 },
   trackOn: { backgroundColor: colors.primary },

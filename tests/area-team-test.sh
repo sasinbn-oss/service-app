@@ -97,6 +97,9 @@ has "$IA" $W1 && has "$IA" $W6 && ! has "$IA" $WD && pass "Area เห็นส�
 [ "$(CODE $S1 branches/C0006/machines)" = "403" ] && [ "$(CODE $S1 branches/C0001/machines)" = "200" ] && pass "เครื่องของสาขาคนอื่นดูไม่ได้" || fail "เครื่องสาขาคนอื่น"
 N=$(GET $S1 work-orders/inbox-count | J 'd.inbox'); E=$(DB "select count(*) from \"WorkOrder\" w join \"Branch\" b on b.id=w.\"branchId\" where (b.\"cocoSupervisorId\"=(select id from \"User\" where \"employeeCode\"='zz.sup1') or w.\"createdById\"=(select id from \"User\" where \"employeeCode\"='zz.sup1')) and b.code like 'C%' and w.status not in ('DONE','CANCELLED')")
 [ "$N" = "$E" ] && [ "$N" -ge 2 ] && pass "กล่องงานของฉัน = ใบที่ยังไม่ปิดของสาขาตัวเอง ($N ใบ)" || fail "กล่องงาน $N · ฐานข้อมูล $E"
+# ปุ่ม "มีอัปเดต" ถามว่าใบไปอยู่แท็บไหน — ตอบเฉพาะใบในขอบเขต (W6 สาขาคนอื่น · WD แฟรนไชส์ ไม่อยู่ในคำตอบ)
+[ "$(GET $S1 "work-orders/locate?ids=$W1,$W6,$WD" | J 'd.rows.map(r=>r.id+":"+r.tab).join()')" = "$W1:INBOX" ] \
+  && pass "หาแท็บของใบงาน: ตอบเฉพาะใบของสาขาตัวเอง (ใบใหม่อยู่กล่องงาน)" || fail "locate: $(GET $S1 "work-orders/locate?ids=$W1,$W6,$WD")"
 [ "$(GET $S1 'machines/overview' | J 'typeof d.machineOff')" = "number" ] && pass "ติดตามเครื่องเสียเปิดได้" || fail "ติดตามเครื่องเสีย"
 [ "$(GET $S1 'teams/coverage-map' | J 'd.canEdit===false&&Array.isArray(d.regions)?"ok":"bad"')" = "ok" ] && pass "ผังผู้รับผิดชอบเปิดได้ แก้ไม่ได้" || fail "ผังผู้รับผิดชอบ"
 [ "$(CODE $S1 'plans/day?date=2026-10-27')" = "200" ] && pass "แผนงานดูได้" || fail "แผนงาน"

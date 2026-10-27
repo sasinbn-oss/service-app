@@ -40,12 +40,21 @@ export default function UpdatePill({
   unit,
   onPress,
   top = 10,
+  hint,
+  label,
+  tone = "primary",
 }: {
   count: number;
   unit: string;
   onPress: () => void;
   /** ระยะจากขอบบนของกล่องรายการ — หน้าที่มีแถบลอยทับด้านบนส่งความสูงแถบมา */
   top?: number;
+  /** ต่อท้ายตัวอักษรเล็ก เช่น "อยู่แท็บ จ่ายงาน/ปล่อยงาน" — หน้ารายการใบงานบอกว่าใบที่อัปเดตอยู่ไหน */
+  hint?: string;
+  /** ข้อความแทน "มีอัปเดต n …" — ปุ่ม "อีก n ใบ · แท็บ …" ของหน้ารายการใบงาน */
+  label?: string;
+  /** navy = ปุ่มไปต่อ (ไม่ใช่ของใหม่) ให้แยกสีจากปุ่มมีอัปเดต */
+  tone?: "primary" | "navy";
 }) {
   // ซ่อน = เลื่อนพ้นขอบบนของกล่องจริง ๆ ไม่ใช่แค่ขึ้นไปหลบใต้แถบบน (มือถือมีแถบลอยสูงกว่า 70)
   const hidden = -(top + 70);
@@ -57,7 +66,13 @@ export default function UpdatePill({
    */
   const opacity = y.interpolate({ inputRange: [hidden, hidden / 2, 0], outputRange: [0, 0, 1], extrapolate: "clamp" });
   const shown = useRef(count);
-  if (count > 0) shown.current = count;
+  const text = useRef("");
+  if (count > 0) {
+    shown.current = count;
+    text.current = label ?? `มีอัปเดต ${count} ${unit}`;
+  }
+  const lastHint = useRef(hint);
+  if (count > 0) lastHint.current = hint;
   useEffect(() => {
     Animated.spring(y, {
       toValue: count > 0 ? 0 : hidden,
@@ -68,11 +83,17 @@ export default function UpdatePill({
   }, [count, y, hidden]);
   return (
     <Animated.View pointerEvents={count > 0 ? "box-none" : "none"} style={[styles.wrap, { top, opacity, transform: [{ translateY: y }] }]}>
-      <TouchableOpacity style={styles.pill} onPress={onPress} accessibilityLabel="ดูข้อมูลที่อัปเดต">
-        <Ionicons name="arrow-up" size={15} color="#fff" />
-        <Text style={styles.text}>
-          มีอัปเดต {shown.current} {unit}
+      <TouchableOpacity
+        style={[styles.pill, tone === "navy" && styles.pillNavy]}
+        onPress={onPress}
+        accessibilityLabel={label ? label : "ดูข้อมูลที่อัปเดต"}
+      >
+        {label ? null : <Ionicons name="arrow-up" size={15} color="#fff" />}
+        <Text style={styles.text} numberOfLines={1}>
+          {text.current}
+          {lastHint.current ? <Text style={styles.hint}> · {lastHint.current}</Text> : null}
         </Text>
+        {label ? <Ionicons name="arrow-forward" size={15} color="#fff" /> : null}
       </TouchableOpacity>
     </Animated.View>
   );
@@ -94,5 +115,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 5 },
     elevation: 6,
   },
-  text: { color: "#fff", fontWeight: "700", fontSize: 13.5 },
+  pillNavy: { backgroundColor: colors.navyFill, shadowColor: colors.navyFill },
+  text: { color: "#fff", fontWeight: "700", fontSize: 13.5, flexShrink: 1 },
+  hint: { fontWeight: "500" },
 });

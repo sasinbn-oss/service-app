@@ -1106,24 +1106,32 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
    * ขอบเขตใส่ใน AND — เดิมกระจายลงไปตรง ๆ แล้วชนกับตัวกรองสาขา (คีย์ branch) และ
    * คำค้น (คีย์ OR) ค้นหาหรือกรองสาขาเมื่อไหร่ ขอบเขตหายไปเลย เห็นใบงานทั้งระบบ
    */
+  /**
+   * คำค้นอยู่ใน AND ไม่ใช่คีย์ OR ระดับบน — กล่องงาน (statusFilter) ก็ใช้คีย์ OR
+   * เดิมกระจายลงมาตรง ๆ คำค้นทับเงื่อนไขกล่องงานทิ้ง: กล่องงาน + ค้นหา ได้ทุกใบที่ตรงคำค้น (เจอตอนทำ /locate ต.ค. 69)
+   */
   const where: Prisma.WorkOrderWhereInput = {
-    AND: [scope],
+    AND: [
+      scope,
+      ...(keyword
+        ? [
+            {
+              OR: [
+                { code: { contains: keyword, mode: "insensitive" as const } },
+                { title: { contains: keyword, mode: "insensitive" as const } },
+                { branch: { code: { contains: keyword, mode: "insensitive" as const } } },
+                { branch: { name: { contains: keyword, mode: "insensitive" as const } } },
+                { machine: { code: { contains: keyword, mode: "insensitive" as const } } },
+                // หาใบที่ตัวเองหรือเพื่อนเปิดไว้ — คนจำชื่อคนเปิดได้ง่ายกว่ารหัสใบงาน
+                { createdBy: { name: { contains: keyword, mode: "insensitive" as const } } },
+              ],
+            },
+          ]
+        : []),
+    ],
     ...statusFilter,
     ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
     ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
-    ...(keyword
-      ? {
-          OR: [
-            { code: { contains: keyword, mode: "insensitive" as const } },
-            { title: { contains: keyword, mode: "insensitive" as const } },
-            { branch: { code: { contains: keyword, mode: "insensitive" as const } } },
-            { branch: { name: { contains: keyword, mode: "insensitive" as const } } },
-            { machine: { code: { contains: keyword, mode: "insensitive" as const } } },
-            // หาใบที่ตัวเองหรือเพื่อนเปิดไว้ — คนจำชื่อคนเปิดได้ง่ายกว่ารหัสใบงาน
-            { createdBy: { name: { contains: keyword, mode: "insensitive" as const } } },
-          ],
-        }
-      : {}),
   };
   return { where, scope, inboxStages, orphans, outsourceInbox };
 }
@@ -1262,6 +1270,51 @@ router.get("/version", requireAuth, async (req: AuthRequest, res) => {
     .join(",");
   res.json({
     version: [agg._count, agg._max.updatedAt?.getTime() ?? 0, lastLog._max.id ?? 0, chip].join("|"),
+  });
+});
+
+/**
+ * ใบงานเหล่านี้ตอนนี้อยู่แท็บไหนของหน้ารายการ — ปุ่ม "มีอัปเดต" ใช้พาไปแท็บที่ใบอยู่แล้วกระพริบใบนั้น
+ * (เจ้าของงานขอ ต.ค. 69 · เดิมใบที่ย้ายออกจากแท็บที่เปิดอยู่หายไปเฉย ๆ ไม่รู้ไปอยู่ไหน)
+ *
+ * ตอบแท็บที่เจาะจงที่สุด: กล่องงานของฉันก่อน แล้วค่อยแท็บสถานะ — ใบเดียวอยู่ได้หลายแท็บ ("ที่ยังค้าง" รวมทุกใบที่ยังไม่จบ)
+ * ใช้ขอบเขต/คำค้น/"มอบหมายให้ฉัน" ชุดเดียวกับรายการ · ใบที่ไม่ได้อยู่ในคำตอบ = ไม่อยู่ในรายการที่คนนี้เห็นแล้ว
+ * outsource ส่งไปด้วย — หน้าจอแบ่งกล่องงานหัวหน้าภาคเป็นแท็บย่อยจากสถานะกับธงนี้ (supTabOf)
+ */
+router.get("/locate", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = listQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const ids = String(req.query.ids ?? "")
+    .split(",")
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .slice(0, 200);
+  if (!ids.length) return res.json({ rows: [] });
+  const [all, inbox] = await Promise.all([
+    listWhere(req, { ...parsed.data, status: "ALL" }),
+    listWhere(req, { ...parsed.data, status: "INBOX" }),
+  ]);
+  const [rows, inInbox] = await Promise.all([
+    prisma.workOrder.findMany({ where: { AND: [all.where, { id: { in: ids } }] }, select: { id: true, status: true, assignedTeam: true } }),
+    prisma.workOrder.findMany({ where: { AND: [inbox.where, { id: { in: ids } }] }, select: { id: true } }),
+  ]);
+  const inboxIds = new Set(inInbox.map((r) => r.id));
+  const active = new Set<string>(ACTIVE_WORK_ORDER_STATUSES);
+  res.json({
+    rows: rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      outsource: isOutsourceTeam(r.assignedTeam),
+      tab: inboxIds.has(r.id)
+        ? "INBOX"
+        : r.status === "AWAITING_CONFIRM" || r.status === "INSPECT_CONFIRM"
+          ? "AWAITING_CONFIRM"
+          : r.status === "IN_PROGRESS" || r.status === "DONE"
+            ? r.status
+            : active.has(r.status)
+              ? "ACTIVE"
+              : "ALL",
+    })),
   });
 });
 

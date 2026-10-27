@@ -48,6 +48,7 @@ import { chromeHide, setChromeOverlay, TAB_BAR_STYLE, useChrome } from "../utils
 import { countChanges } from "../utils/liveSync";
 import { useRefreshHandler } from "../components/RefreshButton";
 import UpdatePill, { useBackgroundCheck } from "../components/UpdatePill";
+import { feedback } from "../components/Feedback";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
@@ -257,7 +258,7 @@ const SUP_TABS: { value: SupTab; label: string }[] = [
   { value: "outsource", label: "ใบงาน SUB" },
 ];
 const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"];
-function supTabOf(r: WorkOrderRow): SupTab {
+function supTabOf(r: { outsource?: boolean; status: string }): SupTab {
   if (r.outsource) return "outsource";
   return DISPATCH_STAGES.includes(r.status) ? "dispatch" : "repair";
 }
@@ -345,6 +346,38 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "DONE", label: "ปิดแล้ว" },
   { value: "ALL", label: "ทั้งหมด" },
 ];
+
+/**
+ * แท็บที่ใบงานอยู่ — ปุ่ม "มีอัปเดต" พาไปแท็บนั้นแล้วกระพริบใบ (เจ้าของงานขอ ต.ค. 69)
+ * เดิมกดแล้วโหลดแท็บเดิมเลื่อนขึ้นบนสุด ใบที่ย้ายแท็บไปหายเฉย ๆ ไม่รู้ไปอยู่ไหน
+ * supTab มีเฉพาะกล่องงานหัวหน้าภาค (แท็บย่อย งานแจ้งซ่อม / จ่ายงาน / SUB)
+ */
+type Spot = { filter: Filter; supTab?: SupTab };
+type JumpGroup = Spot & { ids: number[] };
+/** คำตอบของ GET /work-orders/locate — tab คือแท็บที่เจาะจงที่สุด (กล่องงานก่อน แล้วค่อยแท็บสถานะ) */
+interface Located {
+  id: number;
+  status: string;
+  outsource: boolean;
+  tab: Filter;
+}
+const sameSpot = (a: Spot, b: Spot) => a.filter === b.filter && (a.supTab ?? "") === (b.supTab ?? "");
+function spotLabel(s: Spot) {
+  return (s.supTab ? SUP_TABS.find((t) => t.value === s.supTab)?.label : FILTERS.find((f) => f.value === s.filter)?.label) ?? "";
+}
+/** ลำดับแท็บซ้ายไปขวา — อัปเดตหลายแท็บพาไปตามลำดับที่ตาเห็น */
+const spotOrder = (s: Spot) => FILTERS.findIndex((f) => f.value === s.filter) * 10 + (s.supTab ? SUP_TABS.findIndex((t) => t.value === s.supTab) : 0);
+/** บรรทัดใต้การ์ดที่อัปเดต — บอกว่าเปลี่ยนอะไร เทียบกับที่จอถืออยู่ก่อนกดปุ่ม */
+function changeText(before: WorkOrderRow | undefined, after: WorkOrderRow) {
+  if (!before) return "ใบใหม่ในแท็บนี้";
+  if (statusText(before) !== statusText(after)) return `${statusText(before)} → ${statusText(after)}`;
+  const a = apptOf(before);
+  const b = apptOf(after);
+  if ((a?.ymd ?? "") !== (b?.ymd ?? "") || (a?.time ?? "") !== (b?.time ?? "")) {
+    return b ? `วันนัด ${a ? `${a.date} → ` : ""}${b.date}${b.time ? ` ${b.time}` : ""}` : "ยกเลิกวันนัด";
+  }
+  return "มีการแก้ไขในใบงาน";
+}
 
 /** ป้ายส้ม "↩ ย้อนขั้น" (เจ้าของงานขอ ต.ค. 69) — ใบที่ถอยมาต้องเห็นจากรายการ ไม่ใช่ต้องเปิดเข้าไปอ่านประวัติ */
 function RolledBackBadge({ row }: { row: { rolledBackFrom?: string | null } }) {
@@ -674,28 +707,56 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    */
   const pendingRef = useRef<ListData | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  /** ใบในของใหม่อยู่แท็บไหนบ้าง · ใบที่ออกไปนอกรายการที่คนนี้เห็นแล้ว (รหัส) — ตั้งคู่กับ pendingRef */
+  const pendingGroups = useRef<JumpGroup[]>([]);
+  const pendingGone = useRef<string[]>([]);
   const [flash, setFlash] = useState<Set<string | number>>(new Set());
   const rowsRef = useRef<WorkOrderRow[]>([]);
   rowsRef.current = rows;
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearPending = () => {
     pendingRef.current = null;
+    pendingGroups.current = [];
+    pendingGone.current = [];
     setPendingCount(0);
   };
+  /** กระพริบการ์ด (3 ครั้ง · ดู Blink) — ป้าย "อัปเดต" ค้างตาม marked ไม่ใช่ตามตัวนี้ */
+  const blink = useCallback((keys: Set<string | number>) => {
+    setFlash(keys);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(new Set()), 2600);
+  }, []);
   /** เอาข้อมูลชุดใหม่ขึ้นจอ แล้วไฮไลต์ใบที่เปลี่ยนสักครู่ — คืนจำนวนที่เปลี่ยน */
   const applyFresh = useCallback((data: ListData) => {
     const { changed, keys } = countChanges(rowsRef.current, data.rows, (r) => r.id);
     setRows(data.rows);
     setCounts(data.counts);
-    pendingRef.current = null;
-    setPendingCount(0);
-    if (keys.size) {
-      setFlash(keys);
-      if (flashTimer.current) clearTimeout(flashTimer.current);
-      flashTimer.current = setTimeout(() => setFlash(new Set()), 2600);
-    }
+    clearPending();
+    if (keys.size) blink(keys);
     return changed;
-  }, []);
+  }, [blink]);
+
+  /**
+   * การ์ดที่ปุ่ม "มีอัปเดต" พามาดู: id → เปลี่ยนอะไร · ขอบเหลือง + ป้าย "อัปเดต" ค้างไว้หลังกระพริบจบ
+   * หายเมื่อกดเข้าไปดูใบนั้น หรือสลับแท็บเอง — กระพริบอย่างเดียวแล้วหาย เผลอมองไปทางอื่นก็ไม่รู้ว่าใบไหน
+   */
+  const [marked, setMarked] = useState<Map<number, string>>(new Map());
+  const unmark = useCallback(
+    (id: number) =>
+      setMarked((m) => {
+        if (!m.has(id)) return m;
+        const next = new Map(m);
+        next.delete(id);
+        return next;
+      }),
+    []
+  );
+  /** แท็บที่ยังต้องพาไปต่อ (ปุ่ม "อีก n ใบ") · กลุ่มที่รอให้แท็บโหลดเสร็จแล้วค่อยกระพริบ */
+  const [jumpQueue, setJumpQueue] = useState<JumpGroup[]>([]);
+  const jumpTarget = useRef<(JumpGroup & { cleared?: boolean }) | null>(null);
+  const [jumpTick, setJumpTick] = useState(0);
+  /** หน้าตาของแต่ละใบก่อนกดปุ่ม — ไว้เขียนบรรทัด "เปลี่ยนอะไร" ใต้การ์ด (ใบที่ย้ายแท็บไม่อยู่ใน rows แล้ว) */
+  const beforeRows = useRef(new Map<number, WorkOrderRow>());
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
@@ -739,6 +800,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     if (next === filter) return;
     setLoading(true);
     setFilter(next);
+    setMarked(new Map());
   }
 
   // โหลดใหม่ทุกครั้งที่กลับมาหน้านี้ เพราะเพิ่งไปปิดงานมาแล้วตัวเลขต้องเปลี่ยน
@@ -760,21 +822,121 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     if (seq !== loadSeq.current) return;
     const data = await fetchList();
     if (seq !== loadSeq.current) return; // ระหว่างรอ มีการโหลดใหม่หรือเปลี่ยนตัวกรอง — ของนี้เก่าแล้ว
-    const { changed } = countChanges(rowsRef.current, data.rows, (r) => r.id);
+    const { changed, keys } = countChanges(rowsRef.current, data.rows, (r) => r.id);
     if (changed > 0) {
+      // ใบที่ยังอยู่ในรายการนี้อยู่แท็บนี้ (กล่องงานหัวหน้าภาคแยกแท็บย่อยตามขั้นใหม่) · ใบที่หลุดออกไปถามเซิร์ฟเวอร์ว่าไปอยู่ไหน
+      const spots: [number, Spot][] = data.rows
+        .filter((r) => keys.has(r.id))
+        .map((r) => [r.id, supTabs ? { filter, supTab: supTabOf(r) } : { filter }]);
+      const now = new Set(data.rows.map((r) => r.id));
+      const left = rowsRef.current.filter((r) => !now.has(r.id));
+      const gone: string[] = [];
+      if (left.length) {
+        const { data: loc } = await api.get<{ rows: Located[] }>("/work-orders/locate", {
+          params: { ...listParams, ids: left.map((r) => r.id).join(",") },
+          loadingText: false,
+        });
+        if (seq !== loadSeq.current) return;
+        const found = new Map(loc.rows.map((l) => [l.id, l]));
+        for (const r of left) {
+          const l = found.get(r.id);
+          if (!l) gone.push(r.code);
+          else spots.push([r.id, l.tab === "INBOX" && user?.role === "SUPERVISOR" ? { filter: "INBOX", supTab: supTabOf(l) } : { filter: l.tab }]);
+        }
+      }
+      const groups: JumpGroup[] = [];
+      for (const [id, spot] of spots) {
+        const g = groups.find((x) => sameSpot(x, spot));
+        if (g) g.ids.push(id);
+        else groups.push({ ...spot, ids: [id] });
+      }
       pendingRef.current = data;
+      pendingGroups.current = groups;
+      pendingGone.current = gone;
       setPendingCount(changed);
     } else {
       clearPending();
       setCounts(data.counts);
     }
   });
-  const showPending = useCallback(() => {
+  const here: Spot = supTabs ? { filter, supTab: prefs.supTab } : { filter };
+  /** ต่อท้ายปุ่ม "มีอัปเดต" — ใบอยู่ไหน (คิดตอนวาด แท็บย่อยที่เลือกอาจเปลี่ยนหลังเช็คเจอ) */
+  const pendingHint = !pendingCount
+    ? undefined
+    : pendingGroups.current.length > 1
+      ? `${pendingGroups.current.length} แท็บ`
+      : pendingGroups.current.length === 1
+        ? sameSpot(pendingGroups.current[0], here)
+          ? "ในแท็บนี้"
+          : `อยู่แท็บ ${spotLabel(pendingGroups.current[0])}`
+        : undefined;
+
+  /** พาไปแท็บของกลุ่มแรก — แท็บโหลดเสร็จแล้ว effect ข้างล่างค่อยกระพริบ · กลุ่มที่เหลือรอปุ่ม "อีก n ใบ" */
+  const goTo = (queue: JumpGroup[]) => {
+    const [g, ...rest] = queue;
+    setJumpQueue(rest);
+    if (!g) return;
+    jumpTarget.current = g;
+    if (!sameSpot(g, here)) feedback.toast("info", `ไปแท็บ ${spotLabel(g)}`);
+    if (g.filter !== filter) {
+      setLoading(true);
+      setFilter(g.filter);
+    }
+    if (g.supTab && g.supTab !== prefs.supTab) setPref({ supTab: g.supTab });
+    setJumpTick((t) => t + 1);
+  };
+  const showPending = () => {
     const data = pendingRef.current;
     if (!data) return;
-    listRef.current?.scrollToOffset({ offset: 0, animated: true });
-    applyFresh(data);
-  }, [applyFresh]);
+    const groups = [...pendingGroups.current].sort((a, b) =>
+      sameSpot(a, here) ? -1 : sameSpot(b, here) ? 1 : spotOrder(a) - spotOrder(b)
+    );
+    const gone = pendingGone.current;
+    beforeRows.current = new Map(rowsRef.current.map((r) => [r.id, r]));
+    setRows(data.rows);
+    setCounts(data.counts);
+    clearPending();
+    setMarked(new Map());
+    if (gone.length) feedback.toast("info", `${gone.join(", ")} ไม่อยู่ในรายการที่คุณเห็นแล้ว`);
+    if (groups.length) goTo(groups);
+    else listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  };
+
+  /**
+   * แท็บที่พามาโหลดเสร็จแล้ว — ติดป้าย "อัปเดต" เลื่อนไปที่ใบแรก แล้วกระพริบ
+   * ใบถูกตัวกรองของหน้านี้ซ่อนอยู่ (รอใคร · สาขา · ต้องรีบดู · หัวคอลัมน์) ล้างให้ครั้งเดียว ไม่งั้นพามาแล้วไม่เห็นอะไร
+   */
+  useEffect(() => {
+    const g = jumpTarget.current;
+    if (!g || loading || g.filter !== filter || (g.supTab && supTabs && g.supTab !== prefs.supTab)) return;
+    const present = g.ids.filter((id) => rows.some((r) => r.id === id));
+    if (!g.cleared && present.some((id) => !shown.some((r) => r.id === id))) {
+      g.cleared = true;
+      setPrefs((p) => ({ ...p, owner: "", who: "", btype: "", kind: "", claim: "" }));
+      setQuick(new Set());
+      setColFilters({});
+      feedback.toast("info", "ล้างตัวกรองให้แล้ว — ใบที่อัปเดตถูกตัวกรองซ่อนอยู่");
+      return;
+    }
+    jumpTarget.current = null;
+    if (!present.length) return;
+    setMarked((m) => {
+      const next = new Map(m);
+      for (const id of present) next.set(id, changeText(beforeRows.current.get(id), rows.find((r) => r.id === id)!));
+      return next;
+    });
+    blink(new Set(present));
+    const index = items.findIndex((it) => !("sep" in it) && present.includes(it.id));
+    scrollTries.current = 0;
+    if (index >= 0) setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated: true }), 80);
+  }, [rows, loading, filter, prefs.supTab, supTabs, shown, items, jumpTick, blink]);
+  /** การ์ดยังไม่ถูกวาด (FlatList วาดเฉพาะแถวใกล้จอ) — กระโดดไปตำแหน่งประมาณก่อน แล้วค่อยเล็งใหม่ */
+  const scrollTries = useRef(0);
+  const onScrollToIndexFailed = (info: { index: number; averageItemLength: number }) => {
+    if (++scrollTries.current > 20) return;
+    listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+    setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.3, animated: true }), 120);
+  };
 
   /**
    * มือถือ: หัวหน้า+ตัวกรองเลื่อนขึ้นไปพร้อมรายการตามนิ้ว แล้วเหลือแถบสรุปแถบเดียวติดบน
@@ -1000,7 +1162,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         {docked ? <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text> : null}
       </View>
       <ViewTabs
-        tabs={FILTERS.map((f) => ({ value: f.value, label: f.label, n: counts[f.value] }))}
+        tabs={FILTERS.map((f) => ({
+          value: f.value,
+          label: f.label,
+          n: counts[f.value],
+          dot: jumpQueue.some((g) => g.filter === f.value),
+        }))}
         value={filter}
         onPick={(v) => chooseFilter(v as Filter)}
         right={compact || isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
@@ -1013,14 +1180,22 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               <TouchableOpacity
                 key={t.value}
                 style={[styles.supTab, on && styles.supTabOn]}
-                onPress={() => setPref({ supTab: t.value })}
+                onPress={() => {
+                  setPref({ supTab: t.value });
+                  setMarked(new Map());
+                }}
                 accessibilityLabel={`แท็บ ${t.label} ${supTabCounts[t.value]} ใบ`}
+                accessibilityRole="tab"
                 accessibilityState={{ selected: on }}
+                aria-selected={on}
               >
                 <Text style={[styles.supTabText, on && styles.supTabTextOn]}>{t.label}</Text>
                 <View style={[styles.supTabN, on && styles.supTabNOn]}>
                   <Text style={[styles.supTabNText, on && styles.supTabNTextOn]}>{supTabCounts[t.value]}</Text>
                 </View>
+                {jumpQueue.some((g) => g.filter === "INBOX" && g.supTab === t.value) ? (
+                  <View style={styles.tabDot} accessibilityLabel="มีใบที่อัปเดต" />
+                ) : null}
               </TouchableOpacity>
             );
           })}
@@ -1143,6 +1318,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             overlayOn ? { paddingBottom: tabH + spacing.lg } : null,
           ]}
           refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
+          onScrollToIndexFailed={onScrollToIndexFailed}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
@@ -1181,8 +1357,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                     row={item}
                     stripe={index % 2 === 1}
                     flash={flash.has(item.id)}
+                    mark={marked.get(item.id)}
                     last={index === items.length - 1}
-                    onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
+                    onPress={() => {
+                      unmark(item.id);
+                      navigation.navigate("WorkOrderDetail", { id: item.id });
+                    }}
                   />
                 )}
               </View>
@@ -1198,21 +1378,29 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 row={item}
                 stripe={index % 2 === 1}
                 flash={flash.has(item.id)}
+                mark={marked.get(item.id)}
                 last={index === items.length - 1}
-                onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
+                onPress={() => {
+                  unmark(item.id);
+                  navigation.navigate("WorkOrderDetail", { id: item.id });
+                }}
               />
             ) : (
               <WorkOrderCard
                 row={item}
                 flash={flash.has(item.id)}
-                onPress={() => navigation.navigate("WorkOrderDetail", { id: item.id })}
+                mark={marked.get(item.id)}
+                onPress={() => {
+                  unmark(item.id);
+                  navigation.navigate("WorkOrderDetail", { id: item.id });
+                }}
               />
             )
           }
         />
         {/* จอคอม: ลอยเหนือรายการในกรอบนี้ · มือถือวาดท้ายหน้า (ข้างล่าง) — กรอบนี้เป็นชั้นของตัวเอง
             (react-native-web ให้ทุก View zIndex 0) แถบสรุปที่ลอยทับจะบังปุ่มจนกดไม่ได้ */}
-        {foldable ? null : <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} />}
+        {foldable ? null : <UpdatePill count={pendingCount} unit="ใบงาน" hint={pendingHint} onPress={showPending} />}
       </View>
       {foldable ? (
         <Animated.View
@@ -1266,7 +1454,18 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ) : null}
         </Animated.View>
       ) : null}
-      {foldable ? <UpdatePill count={pendingCount} unit="ใบงาน" onPress={showPending} top={barsH + 8} /> : null}
+      {foldable ? <UpdatePill count={pendingCount} unit="ใบงาน" hint={pendingHint} onPress={showPending} top={barsH + 8} /> : null}
+      {/* อัปเดตหลายแท็บ: ไปแท็บแรกแล้ว ที่เหลือกดไปต่อจากปุ่มนี้ (ที่เดียวกับปุ่มมีอัปเดต · ของใหม่มาอีกรอบปุ่มนั้นขึ้นแทน) */}
+      {jumpQueue.length ? (
+        <UpdatePill
+          count={pendingCount ? 0 : jumpQueue.reduce((n, g) => n + g.ids.length, 0)}
+          unit="ใบงาน"
+          label={`อีก ${jumpQueue.reduce((n, g) => n + g.ids.length, 0)} ใบ · แท็บ ${spotLabel(jumpQueue[0])}`}
+          tone="navy"
+          onPress={() => goTo(jumpQueue)}
+          top={foldable ? barsH + 8 : 10}
+        />
+      ) : null}
       {importing ? (
         // ซ่อนตอนไปดูใบเดิม (ไม่ถอดทิ้ง) — กลับมาแล้วตัวอย่างที่อ่านไว้ยังอยู่
         <RepairImportModal
@@ -1583,19 +1782,55 @@ function Opener({ row }: { row: WorkOrderRow }) {
   );
 }
 
+/**
+ * กระพริบ 3 ครั้งทับการ์ด/แถว — ใบที่ปุ่ม "มีอัปเดต" พามา (เจ้าของงานขอ ต.ค. 69 "กระพริบใบงานนั้นๆ")
+ * วาดใหม่ทุกครั้งที่ flash เปิด (ถอดออกเมื่อปิด) จึงเล่นจากต้นเสมอ
+ * เว็บใช้ CSS animation ไม่ใช่ Animated — Animated บนเว็บขยับด้วย JavaScript ทีละเฟรม แย่งเวลากับการวาดรายการ (ดู LoadingBar)
+ */
+const WEB_BLINK = {
+  animationKeyframes: [{ "0%": { opacity: 0 }, "50%": { opacity: 1 }, "100%": { opacity: 0 } }],
+  animationDuration: "0.62s",
+  animationTimingFunction: "ease-in-out",
+  animationIterationCount: "3",
+  animationFillMode: "forwards",
+} as object;
+function Blink({ radius: r = 0 }: { radius?: number }) {
+  const web = Platform.OS === "web";
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (web) return;
+    const pulse = Animated.sequence([
+      Animated.timing(v, { toValue: 1, duration: 310, useNativeDriver: true }),
+      Animated.timing(v, { toValue: 0, duration: 310, useNativeDriver: true }),
+    ]);
+    const run = Animated.loop(pulse, { iterations: 3 });
+    run.start();
+    return () => run.stop();
+  }, [v, web]);
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[styles.blink, { borderRadius: r }, web ? [{ opacity: 0 }, WEB_BLINK] : { opacity: v }]}
+    />
+  );
+}
+
 const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   row,
   last,
   stripe,
   flash,
+  mark,
   onPress,
 }: {
   row: WorkOrderRow;
   last: boolean;
   /** แถวคู่ — พื้นเทาจาง ๆ สลับแถว */
   stripe?: boolean;
-  /** เพิ่งเปลี่ยนจากการรีเฟรช — พื้นเหลืองสักครู่ให้เห็นว่าใบไหน */
+  /** เพิ่งเปลี่ยน (รีเฟรช / ปุ่มมีอัปเดต) — กระพริบ 3 ครั้ง */
   flash?: boolean;
+  /** ปุ่มมีอัปเดตพามาดู — เปลี่ยนอะไร · ขอบเหลืองค้างไว้จนกดเข้าไปดู */
+  mark?: string;
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
@@ -1612,12 +1847,13 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         stripe && styles.trAlt,
         isHot(row) && styles.trUrgent,
         closed && styles.trDone,
-        flash && styles.flashRow,
+        mark && !flash && styles.flashRow,
         hover && styles.trHover,
       ]}
       onPress={onPress}
       activeOpacity={0.7}
     >
+      {flash ? <Blink /> : null}
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
       <View style={[styles.rowBar, hover && styles.rowBarHover, { backgroundColor: tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
@@ -1631,6 +1867,12 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
             <ClaimBadge row={row} />
           </View>
           <Text style={styles.td2}>{row.title}</Text>
+          {mark ? (
+            <Text style={styles.markText}>
+              <Text style={styles.flashTag}>อัปเดต · </Text>
+              {mark}
+            </Text>
+          ) : null}
         </View>
       </View>
       <View style={styles.colBranch}>
@@ -1686,10 +1928,14 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
 const WorkOrderCard = React.memo(function WorkOrderCard({
   row,
   flash,
+  mark,
   onPress,
 }: {
   row: WorkOrderRow;
+  /** เพิ่งเปลี่ยน (รีเฟรช / ปุ่มมีอัปเดต) — กระพริบ 3 ครั้ง */
   flash?: boolean;
+  /** ปุ่มมีอัปเดตพามาดู — เปลี่ยนอะไร · ขอบเหลืองค้างไว้จนกดเข้าไปดู */
+  mark?: string;
   onPress: () => void;
 }) {
   const tone = statusTone(row.status);
@@ -1700,11 +1946,18 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
   return (
     <TouchableOpacity
       {...hoverProps}
-      style={[styles.card, closed && styles.cardDone, { borderLeftColor: tone.fg }, flash && styles.flashCard, hover && styles.cardHover]}
+      style={[
+        styles.card,
+        closed && styles.cardDone,
+        { borderLeftColor: tone.fg },
+        (flash || mark) && styles.flashCard,
+        hover && styles.cardHover,
+      ]}
       onPress={onPress}
       activeOpacity={0.8}
     >
       {isHot(row) ? <UrgentGlow radius={radius.md} /> : null}
+      {flash ? <Blink radius={radius.md} /> : null}
       <View style={styles.cardTop}>
         <Text style={styles.code}>{row.code}</Text>
         {row.priority === "URGENT" ? <UrgentBadge size="sm" /> : null}
@@ -1719,8 +1972,9 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 
       <Text style={styles.title} numberOfLines={2}>
         {row.title}
-        {flash ? <Text style={styles.flashTag}> อัปเดต</Text> : null}
+        {flash || mark ? <Text style={styles.flashTag}> อัปเดต</Text> : null}
       </Text>
+      {mark ? <Text style={styles.markText}>{mark}</Text> : null}
 
       <View style={styles.metaRow}>
         <Ionicons name="business-outline" size={13} color={colors.textFaint} />
@@ -2056,8 +2310,33 @@ const styles = StyleSheet.create({
   trUrgent: { backgroundColor: colors.dangerSoft },
   // ใบที่เพิ่งเปลี่ยนหลังรีเฟรช — เหลืองแบบเดียวกับตัวอย่างที่เจ้าของงานเลือก
   flashRow: { backgroundColor: colors.warningSoft },
-  flashCard: { backgroundColor: colors.warningSoft, borderColor: colors.warning },
+  // กรอบเหลืองอย่างเดียว ไม่ใส่พื้น — พื้นเหลืองเป็นของ Blink ถ้าการ์ดเหลืองอยู่แล้วกระพริบจะไม่เห็น
+  // ขอบซ้ายยังเป็นสีสถานะ (borderLeftWidth/Color ของ card ชนะ borderWidth/Color)
+  flashCard: { borderWidth: 2, borderColor: colors.warning },
   flashTag: { fontSize: 11.5, fontWeight: "800", color: colors.warningInk },
+  /** บรรทัด "เปลี่ยนอะไร" ของใบที่ปุ่มมีอัปเดตพามา */
+  markText: {
+    alignSelf: "flex-start",
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: colors.warningInk,
+    backgroundColor: colors.warningSoft,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginTop: 4,
+  },
+  blink: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.warningSoft,
+    borderWidth: 2,
+    borderColor: colors.warning,
+  },
+  tabDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, marginLeft: 6 },
   sepRow: { paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: colors.tile, borderBottomWidth: 1, borderBottomColor: colors.border },
   sepCard: { paddingHorizontal: 4, paddingTop: 2 },
   sepUrgent: { backgroundColor: colors.dangerSoft },
