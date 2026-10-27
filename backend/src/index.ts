@@ -14,6 +14,7 @@ import compression from "compression";
 import cors from "cors";
 import authRoutes from "./routes/auth";
 import userImportRoutes from "./routes/userImport";
+import usageRoutes from "./routes/usage";
 import teamRoutes from "./routes/teams";
 import vehicleRoutes from "./routes/vehicles";
 import vehicleLogRoutes from "./routes/vehicleLogs";
@@ -194,6 +195,7 @@ app.use("/api/work-orders", workOrderRoutes);
 app.use("/api/plans", planRoutes);
 app.use("/api/backups", backupRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/usage", usageRoutes);
 
 /**
  * กันคำขอที่พังให้ตอบอะไรกลับไปเสมอ

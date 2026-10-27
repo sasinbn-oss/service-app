@@ -15,6 +15,8 @@ import WorkOrderFormScreen from "../screens/WorkOrderFormScreen";
 import WorkOrderDetailScreen from "../screens/WorkOrderDetailScreen";
 import PlanBoardScreen from "../screens/PlanBoardScreen";
 import MyJobsScreen from "../screens/MyJobsScreen";
+import AppUsageScreen from "../screens/AppUsageScreen";
+import UsageButton from "../components/UsageButton";
 import ReportsMenuScreen from "../screens/ReportsMenuScreen";
 import OpenerReportScreen from "../screens/OpenerReportScreen";
 import SystemReportScreen from "../screens/SystemReportScreen";
@@ -151,6 +153,7 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
         </Text>
       </View>
       <ViewAsButton compact />
+      <UsageButton compact />
       <RefreshButton />
       <UserAvatar />
     </View>
@@ -273,6 +276,8 @@ function AppTopBar() {
       <Brand subtitle="ระบบงานช่างซ่อม" compact={width < 480} />
       <View style={{ flex: 1 }} />
       <ViewAsButton compact={!wide} />
+      {/* ข้างชื่อ (เจ้าของงานขอ ต.ค. 69) — Super Admin/แอดมินเท่านั้น ซ่อนเองสำหรับคนอื่น */}
+      <UsageButton compact={!wide} />
       {wide && user ? (
         <View style={styles.who}>
           <Text style={styles.whoName} numberOfLines={1}>
@@ -623,6 +628,7 @@ function AdminStackNavigator() {
         options={{ title: "ทีมช่าง" }}
       />
       <AdminStack.Screen name="Backup" component={BackupScreen} options={{ title: "สำรองข้อมูล" }} />
+      <AdminStack.Screen name="AppUsage" component={AppUsageScreen} options={{ title: "การใช้งานแอป" }} />
     </AdminStack.Navigator>
   );
 }
