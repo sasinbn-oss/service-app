@@ -1,5 +1,5 @@
 #!/bin/bash
-# ทดสอบ: เลขใบเบิกอะไหล่ตอนแอดมินเช็ค + รูปใบเหลืองตอนปิดงาน
+# ทดสอบ: เลขใบเบิกอะไหล่ตอนแอดมินเบิก (หลังลูกค้าคอนเฟิร์ม — นัดลูกค้าก่อนเบิก ต.ค. 69) + รูปใบเหลืองตอนปิดงาน
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -28,35 +28,42 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD_ID,\"quantity\":1},{\"sparePartId\":$BELT_ID,\"quantity\":2}]}" >/dev/null
 
 echo
-echo "═══ เช็คอะไหล่โดยไม่ใส่เลขใบเบิก — ต้องถูกปฏิเสธ"
+echo "═══ นัดลูกค้าก่อนเบิก: เช็คอะไหล่ (มี/หมด) → นัดวัน → คอนเฟิร์ม → เบิก"
+TECH=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)" | J 'd.technicians.find(t=>t.employeeCode==="T001").id')
+# จ่ายเป็นทีม และจัดช่างทดสอบเข้าทีมของสาขา C0006 ตามไฟล์ทะเบียนจริง
+TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
+curl -s -X PATCH "localhost:4000/api/auth/users/$TECH" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}")
+echo "$R" | J 'd.statusLabel' | grep -q "นัดวันเข้า" && pass "เช็คอะไหล่ครบ (ยังไม่เบิก) → หัวหน้าภาคนัดวันเข้า" || fail "หลังเช็คอะไหล่: $R"
+echo "$R" | J 'd.waitingParts.every(p=>p.inStock===true&&!p.requisitionNo)?"ok":"bad"' | grep -q ok \
+  && pass "ขั้นเช็คไม่ตัดของ — ยังไม่มีเลขใบเบิก" || fail "ขั้นเช็คมีเลขใบเบิกติดมา"
+curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
+echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วไปขั้นแอดมินเบิกอะไหล่" || fail "หลังคอนเฟิร์ม: $(echo "$R" | J 'd.statusLabel')"
+
+echo
+echo "═══ เบิกโดยไม่ใส่เลขใบเบิก — ต้องถูกปฏิเสธ"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}")
 echo "$R" | grep -q "เลขใบเบิก" && pass "ไม่ใส่เลขใบเบิกแล้วถูกปฏิเสธ" || fail "รับไปทั้งที่ไม่มีเลขใบเบิก: $R"
 
 echo
-echo "═══ ของที่หมดไม่ต้องมีเลขใบเบิก"
+echo "═══ ตอนเบิกเจอของหมด (ลูกค้าคอนเฟิร์มแล้ว) — ต้องแยกใบ หรือแจ้งเลื่อนนัด ค้างที่ขั้นเบิกไม่ได้"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":false}]}")
-echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "เช็คผ่านโดยตัวที่หมดไม่ต้องมีเลขใบเบิก" || fail "เช็คไม่ผ่าน: $R"
-echo "$R" | J 'd.waitingParts.map(p=>p.partCode+" คลัง="+(p.warehouse||"-")+" ใบเบิก="+(p.requisitionNo||"-")).join(" · ")'
-echo "$R" | J 'd.waitingParts.find(p=>p.inStock===false).requisitionNo===null?"ok":"bad"' | grep -q ok \
-  && pass "ตัวที่หมดไม่มีเลขใบเบิกค้างไว้" || fail "ตัวที่หมดมีเลขใบเบิกติดมา"
-# ของหมดทำให้ใบงานค้างอยู่ขั้นนี้ ต้องรอของเข้าแล้วเบิกอีกรอบถึงจะเดินต่อ
-echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ของหมด ใบงานยังค้างอยู่ที่แอดมิน" || fail "ส่งต่อทั้งที่ของไม่ครบ"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0099\"}]}")
-echo "$R" | J 'd.statusLabel' | grep -q "จ่ายงานให้ทีม" && pass "ของมาแล้วเบิกรอบสอง ใบงานเดินต่อ" || fail "เบิกรอบสองแล้วไม่เดินต่อ: $R"
-echo "$R" | J 'd.waitingParts.find(p=>p.partCode==="SP-BOARD").requisitionNo==="RQ-2569-0042"?"ok":"bad"' | grep -q ok \
-  && pass "ใบเบิกรอบแรกไม่ถูกเขียนทับ" || fail "ใบเบิกรอบแรกถูกทับ"
+echo "$R" | grep -q "ของไม่พอ" && pass "ของหมดตอนเบิกโดยไม่แยกใบ ถูกปฏิเสธ (บอกทางไป)" || fail "รับไป: $R"
+[ "$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.waitingParts.filter(p=>p.requisitionNo).length')" = "0" ] \
+  && pass "ถูกปฏิเสธแล้วไม่มีของตัดออกจากคลังครึ่ง ๆ" || fail "มีเลขใบเบิกค้างทั้งที่ถูกปฏิเสธ"
 
 echo
-echo "═══ จ่ายงานและนัดวัน"
-TECH=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)" | J 'd.technicians.find(t=>t.employeeCode==="T001").id')
-# จ่ายเป็นทีม และจัดช่างทดสอบเข้าทีมของสาขา C0006 ตามไฟล์ทะเบียนจริง
-TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
-curl -s -X PATCH "localhost:4000/api/auth/users/$TECH" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+echo "═══ เบิกครบ → หัวหน้าภาคปล่อยงาน (ไม่ต้องจ่ายงาน/คอนเฟิร์มซ้ำ)"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"}]}")
+echo "$R" | J 'd.statusLabel' | grep -q "ปล่อยงาน" && pass "เบิกครบแล้วไปหัวหน้าภาคปล่อยงาน" || fail "เบิกแล้วไม่ไปปล่อยงาน: $R"
+echo "$R" | J 'd.waitingParts.map(p=>p.partCode+" คลัง="+(p.warehouse||"-")+" ใบเบิก="+(p.requisitionNo||"-")).join(" · ")'
+echo "$R" | J 'd.waitingParts.every(p=>p.requisitionNo==="RQ-2569-0042")?"ok":"bad"' | grep -q ok \
+  && pass "เลขใบเบิกบันทึกครบทุกตัว" || fail "เลขใบเบิกไม่ครบ"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 
 echo
