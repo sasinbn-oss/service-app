@@ -22,6 +22,8 @@ export type HomeStackParamList = {
   /** สรุปเคสที่คอนเฟิร์มลูกค้าแล้ว — คัดลอกส่งกลุ่มไลน์ช่าง */
   ConfirmedReport: undefined;
   PartsOutReport: undefined;
+  /** อะไหล่เบิกแล้ว · งานยังไม่จบ — ของออกจากคลังแล้ว ค้างอยู่ใบไหน */
+  IssuedPartsReport: undefined;
   MachineDashboard: undefined;
   MachineImport: undefined;
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม · search = ค้นต่อจากงานของฉันวันนี้ (ค้นในใบทั้งหมด) */

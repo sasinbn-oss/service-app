@@ -42,6 +42,7 @@ import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
 import { areaTeamWorkbook } from "../reports/areaTeamReport";
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
+import { buildIssuedReport, issuedWorkbook } from "../reports/issuedPartsReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
@@ -1852,6 +1853,30 @@ router.get("/reports/parts-out", requireAuth, async (req: AuthRequest, res) => {
     asciiFilename: `parts-out-${stamp}.xlsx`,
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     data: await partsOutWorkbook(report),
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored) });
+});
+
+/**
+ * อะไหล่เบิกแล้ว · งานยังไม่จบ (เจ้าของงานขอ ต.ค. 69 · src/reports/issuedPartsReport.ts)
+ * ใบที่ยังไม่ปิดแต่ของออกจากคลังแล้ว — format=xlsx = ไฟล์ Excel (แถวละอะไหล่ที่เบิกแล้ว) · ไม่ส่ง = แถว JSON
+ * สิทธิ์เดียวกับรายงานอะไหล่หมด: แอดมินเห็นทั้งหมด · หัวหน้าภาคเฉพาะภาค/ทีมที่ดูแล · ช่างไม่เห็น
+ */
+router.get("/reports/issued-parts", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") {
+    return res.status(403).json({ error: "รายงานนี้สำหรับแอดมินและหัวหน้าภาค" });
+  }
+  const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : null;
+  const report = await buildIssuedReport({ scope, scopeLabel: scope ? "เฉพาะภาค/ทีมที่ดูแล" : "ทุกภาค" });
+  if (req.query.format !== "xlsx") return res.json(report);
+  const stamp = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const stored = saveDocument({
+    filename: `อะไหล่เบิกแล้ว-งานยังไม่จบ-${stamp}.xlsx`,
+    asciiFilename: `issued-parts-${stamp}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: await issuedWorkbook(report),
     ownerId: req.auth!.userId,
   });
   res.json({ filename: stored.filename, path: documentPath(stored) });
