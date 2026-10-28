@@ -1,4 +1,4 @@
-// ทดสอบ: แถบขั้นตอนเรียงใหม่ — เสนอราคา/จ่ายเงิน มาก่อนเบิกอะไหล่
+// ทดสอบ: แถบขั้นตอนเรียงใหม่ — เช็คอะไหล่ → เสนอราคา/จ่ายเงิน → นัดวัน → คอนเฟิร์ม → เบิกอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69)
 // และขั้นที่ไม่ต้องทำต้องขึ้นว่า "ข้าม" ไม่ใช่ขึ้นว่าทำแล้ว
 // ขั้นที่ข้ามติดกันยุบเป็นปุ่ม "ข้าม N" (กดดูชื่อ) · แถบไม่เลื่อนซ้ายขวา จอแคบซ่อนชื่อขั้นอื่น (ต.ค. 69)
 const { chromium } = require("playwright");
@@ -25,7 +25,7 @@ const { setup } = require("./fixture");
       const labels = [
         // ชื่อบนแถบ (ต.ค. 69): ขั้นที่ยังไม่ผ่าน = การกระทำ · ผ่านแล้ว = "…แล้ว"
         "ระบุอะไหล่แล้ว", "ระบุอะไหล่", "เช็คอะไหล่ (มี/หมด)", "ส่งใบเสนอราคา", "แนบบิลรับเงิน",
-        "เบิกอะไหล่ (คลัง 94)", "จ่ายงานให้ทีม", "คอนเฟิร์มลูกค้า", "รับทราบ ปล่อยงาน", "เข้างาน/ปิดงาน", "ปิดงานแล้ว",
+        "นัดวันเข้า", "คอนเฟิร์มลูกค้า", "เบิกอะไหล่ (คลัง 94)", "รับทราบ ปล่อยงาน", "เข้างาน/ปิดงาน", "ปิดงานแล้ว",
       ];
       const out = [];
       for (const el of document.querySelectorAll("*")) {
@@ -65,7 +65,10 @@ const { setup } = require("./fixture");
       const board = fx.part("SP-BOARD");
       const dOld = fx.sql(`select code from "Branch" where code like 'D%' and "cancelledAt" is null and "openedAt" < now() - interval '3 years' order by "openedAt" limit 1`);
       QUOTE = (await fx.workOrder(dOld, [{ sparePartId: board, quantity: 1 }])).code;
-      NOQUOTE = (await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }])).code;
+      const nq = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+      // เช็คอะไหล่แล้ว (มีครบ) → ไปนัดวัน — เสนอราคา/รับเงินอยู่ก่อนขั้นปัจจุบัน ต้องขึ้นว่าข้าม
+      await fx.source(nq.id);
+      NOQUOTE = nq.code;
       console.log(`เตรียมใบงาน ${QUOTE} (ต้องเสนอราคา · สาขา ${dOld}) · ${NOQUOTE} (ไม่ต้อง)`);
     }
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle", timeout: 180000 });
@@ -84,7 +87,7 @@ const { setup } = require("./fixture");
     await page.locator('[aria-label="ขั้นตอนงาน"]').screenshot({ path: path.join(DIR, "so-0-narrow.png") });
     fit && fit.over <= 1 ? pass("จอแคบ แถบขั้นตอนพอดีจอ ไม่ต้องเลื่อนซ้ายขวา") : fail(`แถบล้น ${fit && fit.over}px`);
     (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("เช็คอะไหล่ (มี/หมด)", { exact: true }).locator("visible=true").count()) > 0 &&
-    (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("จ่ายงานให้ทีม", { exact: true }).count()) === 0
+    (await page.locator('[aria-label="ขั้นตอนงาน"]').getByText("นัดวันเข้า", { exact: true }).count()) === 0
       ? pass("จอแคบ เห็นชื่อขั้นปัจจุบัน ชื่อขั้นอื่นซ่อน")
       : fail("จอแคบ ชื่อขั้นไม่ตรงที่ควร");
     // จอคอม — อ่านลำดับชื่อขั้น
@@ -106,7 +109,7 @@ const { setup } = require("./fixture");
         const card = { querySelectorAll: () => [...bar.querySelectorAll("*"), ...(document.querySelector('[aria-label="ขั้นที่ข้าม"]')?.querySelectorAll("*") ?? [])] };
         const labels = [
           "ระบุอะไหล่แล้ว", "ระบุอะไหล่", "เช็คอะไหล่ (มี/หมด)", "ส่งใบเสนอราคา", "แนบบิลรับเงิน",
-          "เบิกอะไหล่ (คลัง 94)", "จ่ายงานให้ทีม", "คอนเฟิร์มลูกค้า", "รับทราบ ปล่อยงาน", "เข้างาน/ปิดงาน", "ปิดงานแล้ว",
+          "นัดวันเข้า", "คอนเฟิร์มลูกค้า", "เบิกอะไหล่ (คลัง 94)", "รับทราบ ปล่อยงาน", "เข้างาน/ปิดงาน", "ปิดงานแล้ว",
         ];
         // รายการขั้นที่ข้ามต่อท้ายเหตุผล "ชื่อขั้น — ไม่ต้องเสนอราคา" — เทียบเฉพาะชื่อ
         const name = (n) => (n.textContent || "").trim().split(" — ")[0];
@@ -128,9 +131,12 @@ const { setup } = require("./fixture");
     const names = bar.map((b) => b.label);
     const qi = names.indexOf("ส่งใบเสนอราคา");
     const pi = names.indexOf("แนบบิลรับเงิน");
+    const si = names.indexOf("เช็คอะไหล่ (มี/หมด)");
+    const ni = names.indexOf("นัดวันเข้า");
+    const fi = names.indexOf("คอนเฟิร์มลูกค้า");
     const ci = names.indexOf("เบิกอะไหล่ (คลัง 94)");
-    qi >= 0 && pi === qi + 1 && ci === pi + 1
-      ? pass("เสนอราคา → จ่ายเงิน → เบิกอะไหล่ เรียงถูกแล้ว")
+    si >= 0 && qi === si + 1 && pi === qi + 1 && ni === pi + 1 && fi === ni + 1 && ci === fi + 1
+      ? pass("เช็คอะไหล่ → เสนอราคา → จ่ายเงิน → นัดวัน → คอนเฟิร์ม → เบิกอะไหล่ เรียงถูกแล้ว")
       : fail(`ลำดับไม่ถูก: ${names.join(" → ")}`);
 
     // ── ใบที่ไม่ต้องเสนอราคา (สาขา C) — สองขั้นนั้นต้องขึ้นว่าข้าม ──
@@ -139,8 +145,9 @@ const { setup } = require("./fixture");
     } else {
       await page.setViewportSize({ width: 1400, height: 1500 });
       await page.waitForTimeout(1200);
-      const chip = page.locator('[aria-label^="ข้าม "][aria-label$=" ขั้น"]').locator("visible=true");
-      (await chip.count()) === 1 ? pass(`ขั้นที่ข้ามติดกันยุบเป็นปุ่มเดียว (${await chip.first().getAttribute("aria-label")})`) : fail(`ปุ่มข้าม ${await chip.count()} ปุ่ม`);
+      // ตรวจหน้างาน (ข้าม 3) กับ เสนอราคา+รับเงิน (ข้าม 2) คั่นด้วยเช็คอะไหล่ที่ทำแล้ว จึงเป็นสองปุ่ม
+      const chip = page.locator('[aria-label="ข้าม 2 ขั้น"]').locator("visible=true");
+      (await chip.count()) === 1 ? pass("เสนอราคา + รับเงินที่ข้ามติดกันยุบเป็นปุ่มเดียว (ข้าม 2 ขั้น)") : fail(`ปุ่มข้าม 2 ขั้น: ${await chip.count()} ปุ่ม`);
       await chip.first().click();
       await page.waitForTimeout(600);
       await page.screenshot({ path: path.join(DIR, "so-2-noquote.png"), fullPage: true });

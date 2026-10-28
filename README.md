@@ -930,7 +930,8 @@ SLA กับคะแนนหายเกลี้ยงทั้งที่�
 
 อะไหล่บางตัวมี บางตัวหมด — ไม่แยก ใบค้างทั้งใบที่ขั้นเช็คอะไหล่จนของครบ · ขั้นเช็คอะไหล่ (และขั้นเบิก) มีช่อง
 **แยกตัวที่หมดไปใบงานรออะไหล่** ตัวที่หมดย้ายไปใบใหม่พร้อมจำนวน (รอของที่ขั้นเช็คอะไหล่ · วันคาดเข้าตามไป)
-ใบเดิมไปนัด (หรือไปตามนัดที่คอนเฟิร์มแล้ว) ด้วยของที่มี · ไม่ติ๊กไว้ให้ — งานที่เปลี่ยนครึ่งเดียวไม่มีประโยชน์ แอดมินต้องเลือกเอง
+ใบเดิมไปนัด (หรือไปตามนัดที่คอนเฟิร์มแล้ว) ด้วยของที่มี · **ไม่ติ๊กไว้ให้** (เดิมติ๊กไว้ — เปลี่ยนพร้อมนัดลูกค้าก่อนเบิก
+เพราะเจ้าของงานตกลงว่าของต้องครบก่อนส่งนัด และของไม่พอตอนเบิก = แจ้งเลื่อนนัด) · งานที่เปลี่ยนครึ่งเดียวไม่มีประโยชน์ แอดมินต้องเลือกเอง
 
 ไปหน้างานแล้วพบว่าอะไหล่ไม่ครบ — ตอนปิดงานติ๊ก **อะไหล่ไม่ครบ — เปิดใบงานรออะไหล่ต่อ**
 แล้วเลือกตัวที่ขาด (หรือกด "เปิดใบงานรออะไหล่ต่อ" ท้ายใบงาน) ใบนี้ปิดได้ตามที่ทำจริง
@@ -2950,14 +2951,21 @@ npx ts-node scripts/diagnose-flowchart.ts "C:\path\DryerTroubleshoot.xlsx"
 - `POST /api/work-orders/:id/inspection` — ทีม (หรือหัวหน้าภาค/แอดมิน) บันทึกผลตรวจ `{ note }` → `NEW`
   (ต้องมีไฟล์ `INSPECT_SITE` · `INSPECT_PART` · `INSPECT_VIDEO` ของรอบตรวจนี้ครบ ไม่ครบได้ 400 "ยังขาด: …"
   — หน้ารายละเอียดส่ง `inspectionStartedAt` กับ `inspectionFiles` ไว้ให้หน้าจอนับ)
-- `POST /api/work-orders/:id/parts-check` — ขั้น 3 แอดมินเช็คคลัง
-  `{ results: [{ sparePartId, inStock, warehouse?, requisitionNo? }], splitOut?, note? }` (ต้องครบทุกตัว)
-  `splitOut: true` + มีทั้งของที่มีและที่หมด = ย้ายตัวที่หมดไปใบรออะไหล่ใบใหม่
-- `POST /api/work-orders/:id/assign` — ขั้น 4 หัวหน้าภาคจ่ายงาน `{ team, scheduledAt, scheduledTime?, note? }` → `AWAITING_CONFIRM`
-  (ไม่มีวัน = "ต้องระบุวันเข้างาน")
-- `POST /api/work-orders/:id/confirm-appointment` — ขั้น 5 แอดมินคอนเฟิร์มลูกค้า `{ scheduledAt?, scheduledTime?, note? }` → `ASSIGNED`
+- `POST /api/work-orders/:id/parts-sourcing` — ขั้น 2 แอดมินเช็คอะไหล่ (มี/หมด) ก่อนนัด
+  `{ results: [{ sparePartId, inStock, warehouse? }], expectedAt?, splitOut?, note? }` (ต้องครบทุกตัวที่ยังไม่เบิก ·
+  มีของต้องบอกคลัง เว้นของนอกสโตร์) → ครบ: `AWAITING_QUOTE` หรือ `PARTS_CHECKED` · หมด: ค้างขั้นเดิม
+- `POST /api/work-orders/:id/assign` — ขั้น 3 หัวหน้าภาคนัดวันเข้า `{ team, scheduledAt, scheduledTime?, note? }` → `AWAITING_CONFIRM`
+  (ไม่มีวัน = "ต้องระบุวันเข้างาน" · ของอยู่คลังอื่นที่ยังไม่เบิก/โอน นัดก่อน 7 วันข้างหน้า = 400 บอกวันแรกที่นัดได้)
+- `POST /api/work-orders/:id/confirm-appointment` — ขั้น 4 แอดมินคอนเฟิร์มลูกค้า `{ scheduledAt?, scheduledTime?, note? }`
+  → `PARTS_REQUESTED` (ยังมีของต้องเบิก) หรือ `ASSIGNED` (เบิกครบแล้ว/ไม่ใช้อะไหล่) · เลื่อนเข้ามาก่อน 7 วันเมื่อของต้องโอน = 400
   — ใช้นัดตรวจหน้างานด้วย: ใบที่อยู่ `INSPECT_CONFIRM` → `INSPECT_DISPATCH` (ใบเก่าที่ไม่มีวันเสนอต้องส่ง `scheduledAt`)
   (ไม่ส่งวัน = ตกลงวันเดิม `CONFIRMED` · วัน/เวลาต่างจากเดิม = `RESCHEDULED`)
+- `POST /api/work-orders/:id/parts-check` — ขั้น 5 แอดมินเบิกอะไหล่ (หลังลูกค้าคอนเฟิร์ม)
+  `{ results: [{ sparePartId, inStock, warehouse?, requisitionNo? }], splitOut?, splitPaid?, noTransfer?, note? }` (ต้องครบทุกตัว)
+  `splitOut: true` + มีทั้งของที่มีและที่หมด = ย้ายตัวที่หมดไปใบรออะไหล่ใบใหม่ · มีตัวหมดโดยไม่แยก = 400 (ใช้ `parts-short`)
+  → `ASSIGNED` (คอนเฟิร์มแล้ว) / `PARTS_TRANSFER` / `PARTS_PICKUP` · ใบที่ยังไม่ได้นัด → `PARTS_CHECKED`
+- `POST /api/work-orders/:id/parts-short` — ของไม่พอตอนเบิก `{ sparePartIds, expectedAt?, note? }` → `PARTS_SOURCING`
+  (ตัวนั้นเป็นหมด · ล้างวันนัด/ทีม/คอนเฟิร์ม · ประวัติ `PARTS_SHORT` เก็บวันนัดเดิม · ตัวที่เบิกแล้ว = 400)
 - `POST /api/work-orders/:id/dispatch` — ขั้น 6 หัวหน้าภาคยืนยันออกงาน `{ team?, note? }` → `IN_PROGRESS` (ส่งทีมมา = เปลี่ยนทีม)
 - `POST /api/work-orders/:id/decline-new-date` — ลูกค้าเปลี่ยนวันแต่ทีมไม่ว่าง `{ reason }` (ต้องมี) → `AWAITING_CONFIRM` ทีมเดิม นัด `PENDING`
 - `POST /api/work-orders/:id/arrive` — ช่างถึงหน้างาน `{ latitude?, longitude? }` (เฉพาะ `IN_PROGRESS`/`INSPECTING` ของทีมตัวเอง) — ไม่เดินขั้น

@@ -76,17 +76,30 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     };
     (await label("แท็บ งานแจ้งซ่อม").count()) && (await label("แท็บ จ่ายงาน/ปล่อยงาน").count()) && (await label("แท็บ ใบงาน SUB").count())
       ? pass("กล่องงานหัวหน้าภาคมีสามแท็บ") : fail("ไม่เห็นแท็บ");
-    await tab("งานแจ้งซ่อม");
-    (await has(R.code)) && !(await has(D.code)) && !(await has(O.code))
-      ? pass("แท็บงานแจ้งซ่อม: เห็นแต่ใบใหม่") : fail(`แท็บงานแจ้งซ่อม ${[R, D, O].map((x) => x.code)}`);
-    await tab("จ่ายงาน/ปล่อยงาน");
-    (await has(D.code)) && !(await has(R.code)) && !(await has(O.code))
-      ? pass("แท็บจ่ายงาน/ปล่อยงาน: เห็นแต่ใบรอจ่ายงานทีมปกติ") : fail("แท็บจ่ายงานปนใบอื่น");
-    await tab("ใบงาน SUB");
-    (await has(O.code)) && !(await has(R.code)) && !(await has(D.code))
-      ? pass("แท็บทีม outsource: เห็นแต่ใบทีม outsource") : fail("แท็บ outsource ปนใบอื่น");
+    // ค้นทีละเลขใบในแท็บ — ฐานข้อมูลทดสอบมีใบค้างหลายสิบใบ รายการวาดทีละช่วง ใบที่สร้างใหม่อาจอยู่ท้ายรายการ
+    const search = page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first();
+    const inTab = async (name, code) => {
+      await tab(name);
+      await search.fill(code);
+      await page.waitForTimeout(1200);
+      return has(code);
+    };
+    const where = async (name) => [await inTab(name, R.code), await inTab(name, D.code), await inTab(name, O.code)];
+    const repairTab = await where("งานแจ้งซ่อม");
+    repairTab.join() === "true,false,false"
+      ? pass("แท็บงานแจ้งซ่อม: เห็นแต่ใบใหม่") : fail(`แท็บงานแจ้งซ่อม (ใหม่/รอนัด/SUB) = ${repairTab}`);
+    const dispatchTab = await where("จ่ายงาน/ปล่อยงาน");
+    dispatchTab.join() === "false,true,false"
+      ? pass("แท็บจ่ายงาน/ปล่อยงาน: เห็นแต่ใบรอนัดวัน/ปล่อยงานทีมปกติ") : fail(`แท็บจ่ายงาน (ใหม่/รอนัด/SUB) = ${dispatchTab}`);
+    const subTab = await where("ใบงาน SUB");
+    subTab.join() === "false,false,true"
+      ? pass("แท็บทีม outsource: เห็นแต่ใบทีม outsource") : fail(`แท็บ SUB (ใหม่/รอนัด/SUB) = ${subTab}`);
+    await search.fill(O.code);
+    await page.waitForTimeout(1200);
     (await vis("ตามผลงาน SUB จากทีม", false).count())
       ? pass("ค้างเกิน 2 วัน ขึ้นเตือนให้ตามทีม outsource ปิดงาน") : fail("ไม่มีเตือนค้างเกินกำหนด");
+    await search.fill("");
+    await page.waitForTimeout(1200);
     const n = await label("แท็บ ใบงาน SUB").first().getAttribute("aria-label");
     const want = sql(`select count(*) from "WorkOrder" w where w."assignedTeam" in (select name from "OutsourceTeam") and w.status in ('ASSIGNED','IN_PROGRESS') and w."branchId" in (select id from "Branch" where region='${region}')`);
     n === `แท็บ ใบงาน SUB ${want} ใบ` ? pass(`ตัวเลขบนแท็บตรงกับฐานข้อมูล (${want})`) : fail(`ตัวเลขแท็บ ${n} · ฐานข้อมูล ${want}`);
@@ -100,9 +113,11 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
 
     // ช่องเลือกทีมตอนจ่ายงาน
     await tab("จ่ายงาน/ปล่อยงาน");
+    await search.fill(D.code);
+    await page.waitForTimeout(1200);
     await vis(D.code).first().click();
     await page.waitForTimeout(3500);
-    await vis("จ่ายงานให้ทีม").last().click();
+    await vis("นัดวันเข้า").last().click();
     await page.waitForTimeout(1500);
     await label("ทีมที่จะรับงาน").first().click();
     await page.waitForTimeout(800);

@@ -1,6 +1,7 @@
 // ทดสอบ: แยกตัวที่หมดจากใบที่เก็บเงินลูกค้าแล้ว ต้องตอบว่าลูกค้าจ่ายค่าตัวที่หมดแล้วหรือยัง (WO-00528 ต.ค. 69)
-//   · ฟอร์มเบิกขึ้นคำถามเฉพาะตอนแยก · ยังไม่ตอบ ปุ่มยืนยันกดไม่ได้
-//   · ตอบ "ยังไม่จ่าย" → ใบใหม่เริ่มที่เช็คอะไหล่ (ฐานข้อมูล)
+//   · ตอบว่าหมดแต่ยังไม่ติ๊กแยก = ปุ่ม "ของไม่พอ — แจ้งเลื่อนนัด" (ไม่แยกเป็นค่าตั้งต้น — ของต้องครบก่อนนัด)
+//   · ติ๊กแยก → ฟอร์มเบิกขึ้นคำถาม · ยังไม่ตอบ ปุ่มยืนยันกดไม่ได้
+//   · ตอบ "ยังไม่จ่าย" → ใบใหม่รอของที่เช็คอะไหล่ · ใบเดิมไปตามนัด (ปล่อยงาน) (ฐานข้อมูล)
 //   · แถบขั้นตอนของใบใหม่: ขั้นก่อนหน้าขึ้นว่า "ทำในใบเดิม WO-…" ไม่ใช่ ✓
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
@@ -32,12 +33,14 @@ const { setup } = require("./fixture");
       fd.append("role", role);
       await fetch(`http://localhost:4000/api/work-orders/${wo.id}/attachments`, { method: "POST", headers: { Authorization: `Bearer ${fx.A}` }, body: fd });
     };
-    await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-sourcing`, { results: [{ sparePartId: board, inStock: true }, { sparePartId: belt, inStock: true }] });
+    await fx.source(wo.id);
     await up("quote-sample.pdf", "QUOTE", "application/pdf");
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/quote`, {});
     await up("site-photo.png", "RECEIPT", "image/png");
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/payment`, {});
-    fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "PARTS_REQUESTED" ? pass("เตรียมใบ: เสนอราคา รับเงินแล้ว ถึงขั้นเบิก") : fail("เตรียมใบไม่ถึงขั้นเบิก");
+    await fx.schedule(wo.id);
+    fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "PARTS_REQUESTED"
+      ? pass("เตรียมใบ: เสนอราคา รับเงิน นัด คอนเฟิร์มแล้ว ถึงขั้นเบิก") : fail(`เตรียมใบไม่ถึงขั้นเบิก: ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
 
     page = await browser.newPage({ viewport: { width: 420, height: 900 } });
     page.on("pageerror", (e) => errors.push(String(e)));
@@ -60,16 +63,15 @@ const { setup } = require("./fixture");
       await page.waitForTimeout(3000);
     }
     await open(wo.code);
-    await vis("เบิกอะไหล่ (คลัง 94)").first().click();
+    // ปุ่มขั้นอยู่ท้ายการ์ดขั้นปัจจุบัน — ชื่อซ้ำกับหัวการ์ด/ป้ายสถานะ เอาตัวสุดท้าย
+    await vis("เบิกอะไหล่ (คลัง 94)").last().click();
     await page.waitForTimeout(1200);
-    // ผลเช็คก่อนเสนอราคา (ไม่เกิน 3 วัน) เติม "มีของ" ให้แล้ว — เหลือเลือกคลัง
-    await label("คลังที่มี SP-BOARD").click();
-    await page.waitForTimeout(600);
-    await page.getByPlaceholder("ค้นหา").locator("visible=true").first().fill("ลาดพร้าว");
-    await page.waitForTimeout(700);
-    await vis("คลังลาดพร้าว 94").last().click();
-    await page.waitForTimeout(400);
+    // ผลเช็คอะไหล่ (ไม่เกิน 3 วัน) เติม "มีของ · คลัง 94" ให้แล้ว — สายพานถูกงานอื่นใช้ไป ตอบหมด
     await vis("หมด").last().click();
+    await page.waitForTimeout(400);
+    (await vis("ของไม่พอ — แจ้งเลื่อนนัด").count()) > 0
+      ? pass("ตอบหมด (ยังไม่ติ๊กแยก) → ปุ่มเป็น \"ของไม่พอ — แจ้งเลื่อนนัด\"") : fail("ปุ่มไม่เปลี่ยนเป็นของไม่พอ");
+    await label("แยกตัวที่หมดไปใบงานรออะไหล่").click();
     await page.waitForTimeout(400);
     await label("เลขใบเบิกอะไหล่").fill("RQ-SQ-WEB");
     await page.waitForTimeout(400);
@@ -80,15 +82,15 @@ const { setup } = require("./fixture");
     (await dim()) !== "1" ? pass("ยังไม่ตอบ ปุ่มยืนยันกดไม่ได้") : fail("ยังไม่ตอบแต่ปุ่มกดได้");
     await label("ยังไม่จ่าย เสนอราคาใหม่").click();
     await page.waitForTimeout(400);
-    (await vis("ใบใหม่เริ่มที่แอดมินเช็คอะไหล่", false).count()) ? pass("ตอบยังไม่จ่าย: บอกว่าใบใหม่เริ่มที่เช็คอะไหล่แล้วเสนอราคา") : fail("ไม่มีคำอธิบายผล");
+    (await vis("ใบใหม่รอของเข้าที่ขั้นเช็คอะไหล่ — ของเข้าแล้วเสนอราคา", false).count()) ? pass("ตอบยังไม่จ่าย: บอกว่าใบใหม่รอของที่เช็คอะไหล่แล้วเสนอราคา") : fail("ไม่มีคำอธิบายผล");
     await page.screenshot({ path: path.join(DIR, "split-quote-form.png") });
     await save.click();
     await page.waitForTimeout(3500);
     const child = fx.sql(`select id||'|'||code||'|'||status from "WorkOrder" where "parentId"=${wo.id}`);
     const [cid, ccode, cst] = child.split("|");
     if (cid) extra.push(Number(cid));
-    cst === "PARTS_SOURCING" && fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "PARTS_CHECKED"
-      ? pass(`ฐานข้อมูล: ใบใหม่ ${ccode} เริ่มที่เช็คอะไหล่ · ใบเดิมไปจ่ายงาน`) : fail(`ใบใหม่: ${child} · ใบเดิม ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
+    cst === "PARTS_SOURCING" && fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "ASSIGNED"
+      ? pass(`ฐานข้อมูล: ใบใหม่ ${ccode} รอของที่เช็คอะไหล่ · ใบเดิมไปตามนัด (ปล่อยงาน)`) : fail(`ใบใหม่: ${child} · ใบเดิม ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
 
     // ── แถบขั้นตอนของใบใหม่
     await open(ccode);

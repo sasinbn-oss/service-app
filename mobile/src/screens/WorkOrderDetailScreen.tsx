@@ -3161,8 +3161,9 @@ function StageModal({
   // ขั้นนัดลูกค้า
   // ขั้นคอนเฟิร์มลูกค้า: ลูกค้าตกลงวันเดิม หรือขอเลื่อน (เลื่อนแล้วถึงจะขึ้นช่องวันให้แก้)
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
-  // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
-  const [splitOut, setSplitOut] = useState(true);
+  // ขั้นเช็คอะไหล่/เบิก: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ แต่ตั้งต้นเป็นไม่แยก
+  // (เจ้าของงานตกลง ต.ค. 69: ของต้องครบก่อนส่งไปนัด · ของไม่พอตอนเบิก = แจ้งเลื่อนนัด) — แยกต้องเลือกเอง
+  const [splitOut, setSplitOut] = useState(false);
   /**
    * ใบที่เสนอราคาแล้ว แยกตัวที่หมด — ลูกค้าจ่ายค่าตัวนั้นแล้วหรือยัง (ต้องเลือก ไม่ตั้งค่าให้)
    * ลูกค้าบางรายจ่ายแค่ค่าของที่มี ใบใหม่ต้องเสนอราคาเอง — เดาผิดคือของออกไปโดยไม่มีใครเก็บเงิน
@@ -3224,7 +3225,7 @@ function StageModal({
     setConfirmChoice(
       (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order))) ? "MOVE" : null
     );
-    setSplitOut(true);
+    setSplitOut(false);
     setSplitPaid(null);
     setTransferChoice({});
     // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้

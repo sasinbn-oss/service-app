@@ -25,9 +25,10 @@ const { setup } = require("./fixture");
     const parts = [{ sparePartId: BOARD, quantity: 1 }, { sparePartId: BELT, quantity: 2 }];
     const a = await fx.workOrder("C0006", parts);
     const b = await fx.workOrder("C0006", parts);
-    const ok = (id, n) => ({ sparePartId: id, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-W${n}` });
-    await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-check`, { expectedAt: "2026-01-05", results: [ok(BOARD, 1), { sparePartId: BELT, inStock: false }] });
-    await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-check`, { results: [{ sparePartId: BOARD, inStock: false }, ok(BELT, 2)] });
+    // ของหมดรู้ตั้งแต่ขั้นเช็คอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69)
+    const ok = (id) => ({ sparePartId: id, inStock: true, warehouse: "คลังลาดพร้าว 94" });
+    await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-sourcing`, { expectedAt: "2026-01-05", results: [ok(BOARD), { sparePartId: BELT, inStock: false }] });
+    await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-sourcing`, { results: [{ sparePartId: BOARD, inStock: false }, ok(BELT)] });
     const outRows = Number(fx.sql(`select count(*) from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId"
       where p.kind='WAITING' and p."inStock"=false and not w."isTest" and w.status in ('PARTS_SOURCING','PARTS_REQUESTED','WAITING_PARTS')`));
     const outOrders = Number(fx.sql(`select count(distinct w.id) from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId"

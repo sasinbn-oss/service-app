@@ -1,7 +1,7 @@
 // ทดสอบ: ขั้น "รอแอดมินเช็คอะไหล่" (ก่อนเสนอราคา) ผ่านหน้าจอแอดมิน
 //   · ใบงานสาขาแฟรนไชส์หมดประกัน + ใช้อะไหล่ → รอแอดมินเช็คอะไหล่ (ฐานข้อมูล)
 //   · ปุ่มยืนยันกดไม่ได้จนตอบครบ · ตอบ "หมด" → ปุ่มเป็น "อะไหล่หมด — รอของเข้า" → ค้างที่ขั้นนี้ หน้าใบงานบอกว่ารอของตัวไหน
-//   · เปิดใหม่ตอบ "มีอะไหล่" → ปุ่มเป็น "มีอะไหล่ — ไปเสนอราคา" → ไปรอเสนอราคา (ฐานข้อมูล)
+//   · เปิดใหม่ตอบ "มีอะไหล่" → ต้องเลือกคลังก่อน (หัวหน้าภาคใช้นัดวัน) → ปุ่ม "มีครบ — ไปเสนอราคา" → ไปรอเสนอราคา (ฐานข้อมูล)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
@@ -48,7 +48,7 @@ const { setup } = require("./fixture");
     (await vis("ปิดงาน — เครื่องใช้งานได้แล้ว", false).count()) === 0 ? pass("ไม่มีปุ่ม \"ปิดงาน — เครื่องใช้งานได้แล้ว\" แล้ว") : fail("ยังมีปุ่มปิดงาน — เครื่องใช้งานได้แล้ว");
     await vis("เช็คอะไหล่ (มี/หมด)").first().click();
     await page.waitForTimeout(1200);
-    const save = () => page.getByText(/^(ยืนยัน|อะไหล่หมด — รอของเข้า|มีอะไหล่ — ไปเสนอราคา)$/).locator("visible=true").last();
+    const save = () => page.getByText(/^(ยืนยัน|อะไหล่หมด — รอของเข้า|มีครบ — ไปเสนอราคา)$/).locator("visible=true").last();
     await save().click();
     await page.waitForTimeout(800);
     db("status") === "PARTS_SOURCING" ? pass("ยังไม่ตอบว่ามีหรือหมด กดยืนยันแล้วไม่ไปไหน") : fail("ผ่านทั้งที่ยังไม่ตอบ");
@@ -71,9 +71,25 @@ const { setup } = require("./fixture");
     await page.waitForTimeout(1200);
     await page.locator('[aria-label^="มีของ "]').locator("visible=true").last().click();
     await page.waitForTimeout(500);
-    (await vis("มีอะไหล่ — ไปเสนอราคา").count()) > 0 ? pass("ของมาแล้ว ตอบมีของ → ปุ่มเป็น \"มีอะไหล่ — ไปเสนอราคา\"") : fail("ปุ่มไม่เปลี่ยน");
-    await vis("มีอะไหล่ — ไปเสนอราคา").last().click();
+    (await vis("มีครบ — ไปเสนอราคา").count()) > 0 ? pass("ของมาแล้ว ตอบมีของ → ปุ่มเป็น \"มีครบ — ไปเสนอราคา\"") : fail("ปุ่มไม่เปลี่ยน");
+    await vis("มีครบ — ไปเสนอราคา").last().click();
+    await page.waitForTimeout(1200);
+    db("status") === "PARTS_SOURCING" ? pass("มีของแต่ยังไม่เลือกคลัง กดแล้วไม่ไปไหน") : fail("ผ่านทั้งที่ไม่บอกคลัง");
+    // คลังที่มีของ — dropdown ค้นได้ แยกกลุ่มคลังส่งมอบ / คลังอื่น
+    await vis("อยู่คลังไหน").last().click();
+    await page.waitForTimeout(800);
+    await page.getByPlaceholder("ค้นหา").locator("visible=true").first().fill("ลาดพร้าว");
+    await page.waitForTimeout(800);
+    const opt = page.getByText("คลังลาดพร้าว 94", { exact: true }).locator("visible=true").last();
+    await opt.click().catch(async () => {
+      await opt.evaluate((n) => (n.closest("[tabindex]") || n).click());
+    });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(DIR, "parts-sourcing-ready.png") });
+    await vis("มีครบ — ไปเสนอราคา").last().click();
     await page.waitForTimeout(3000);
+    fx.sql(`select warehouse from "WorkOrderPart" where "workOrderId"=${wo.id} and kind='WAITING'`) === "คลังลาดพร้าว 94"
+      ? pass("บันทึกคลังที่มีของ (ฐานข้อมูล)") : fail("คลังไม่ถูกบันทึก");
     db("status") === "AWAITING_QUOTE" ? pass("ไปขั้นรอเสนอราคา (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
     (await vis("แอดมิน · ส่งใบเสนอราคา").count()) > 0 ? pass("หน้าใบงานขึ้นแอดมิน · ส่งใบเสนอราคา") : fail("หน้าใบงานไม่อัปเดต");
   } catch (e) {

@@ -1,5 +1,6 @@
 // ทดสอบ: อะไหล่หมด — ป้ายแดงบนแถบขั้นตอน/หัวใบงาน/รายการ · แอดมินเลื่อนวัน · ของมาแล้วอัปเดตสถานะ
 //   · ทุกครั้งที่เปลี่ยนสถานะ เด้งแจ้งสถานะใหม่ (จากไหน → ไปไหน)
+//   · ของหมดค้างที่ขั้นเช็คอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69) — ของมาแล้วตอบมีพร้อมคลัง ส่งหัวหน้าภาคนัด ไม่มีเลขใบเบิก
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
@@ -21,10 +22,10 @@ const { setup } = require("./fixture");
     const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
     const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
-    await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
+    await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-sourcing`, {
       expectedAt: "2026-11-20",
       results: [
-        { sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-WEB1" },
+        { sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94" },
         { sparePartId: belt, inStock: false },
       ],
     });
@@ -71,20 +72,20 @@ const { setup } = require("./fixture");
     // ของมาแล้ว
     await vis("อะไหล่มาแล้ว — อัปเดตสถานะ").first().click();
     await page.waitForTimeout(1200);
-    // ปุ่มมีของ/หมดของฟอร์มเช็คคลังไม่มีชื่อ — หาด้วยข้อความ (ตัวที่เบิกไปแล้วไม่มีปุ่ม เหลือแถวเดียว)
-    await vis("มีของ").last().click();
+    // ผลรอบก่อนเติมไว้ (บอร์ดมี · คลัง 94) — เปลี่ยนเฉพาะสายพานเป็นมี แล้วเลือกคลัง
+    await label("มีของ SP-BELT").click();
     await page.waitForTimeout(300);
     await label("คลังที่มี SP-BELT").click();
     await page.waitForTimeout(400);
     await vis("คลังลาดพร้าว 94").last().click();
     await page.waitForTimeout(300);
-    await page.getByPlaceholder("เลขใบเบิกจากระบบคลัง").locator("visible=true").last().fill("RQ-WEB2");
-    await page.waitForTimeout(300);
+    (await page.getByPlaceholder("เลขใบเบิกจากระบบคลัง").locator("visible=true").count()) === 0
+      ? pass("ขั้นเช็คไม่มีช่องเลขใบเบิก (เบิกหลังลูกค้าคอนเฟิร์ม)") : fail("ขั้นเช็คยังถามเลขใบเบิก");
     await page.screenshot({ path: path.join(DIR, "parts-out-form.png") });
-    await page.getByText(/^(ยืนยัน|บันทึก)$/).locator("visible=true").last().click();
+    await vis("มีครบ — ส่งหัวหน้าภาคนัดวัน").last().click();
     await page.waitForTimeout(3000);
     db("status") === "PARTS_CHECKED" && db(`coalesce("partsExpectedAt"::text,'-')`) === "-"
-      ? pass("ของครบ → เช็คอะไหล่แล้ว · วันคาดว่าเข้าถูกล้าง (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
+      ? pass("ของครบ → หัวหน้าภาคนัดวันเข้า · วันคาดว่าเข้าถูกล้าง (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
     (await vis("อัปเดตสถานะแล้ว", false).count()) > 0 && (await vis("→", false).count()) > 0
       ? pass("เด้งแจ้งสถานะใหม่ (จากไหน → ไปไหน)") : fail("ไม่เด้งแจ้งสถานะ");
     await page.screenshot({ path: path.join(DIR, "parts-out-toast.png") });

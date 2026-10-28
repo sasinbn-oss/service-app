@@ -79,14 +79,15 @@ const { setup } = require("./fixture");
     after !== "NEW" && db('"needsParts"') === "true" ? pass(`กดยืนยันได้เลยโดยไม่ต้องเลือกใหม่ — ใช้อะไหล่ = เดิม (ฐานข้อมูล) ไป ${after}`) : fail(`หลังยืนยัน ${after} needsParts=${db('"needsParts"')}`);
     (await lbl("ป้ายย้อนขั้น").count()) === 0 && (await lbl("กล่องย้อนขั้น").count()) === 0 ? pass("กดผ่านขั้นที่ย้อนไปแล้ว ป้าย/กล่องย้อนขั้นหาย") : fail("ป้ายยังอยู่หลังเดินขั้น");
 
-    // ข้ามไปขั้นจ่ายงาน (ส่วนที่แอดมินทำระหว่างทางไม่ใช่เรื่องที่ทดสอบ) — ฟอร์มต้องเติมทีม/วันเดิม
+    // ข้ามไปขั้นนัดวัน (ส่วนที่แอดมินทำระหว่างทางไม่ใช่เรื่องที่ทดสอบ) — ฟอร์มต้องเติมทีม/วันเดิม
     fx.sql(`update "WorkOrder" set status='PARTS_CHECKED' where id=${wo.id}`);
     await page.locator('[aria-label="ปิด"]').locator("visible=true").last().click().catch(() => {});
     await page.waitForTimeout(1500);
     await openOrder();
     await vis(wo.code).last().click();
     await page.waitForTimeout(3000);
-    await vis("จ่ายงานให้ทีม").first().click();
+    // ปุ่มขั้น "นัดวันเข้า" (เดิม "จ่ายงานให้ทีม") อยู่ท้ายการ์ดขั้นปัจจุบัน — เอาตัวสุดท้าย
+    await vis("นัดวันเข้า").last().click();
     await page.waitForTimeout(1500);
     const prev2 = (await lbl("ค่าเดิมก่อนย้อน").count()) ? await lbl("ค่าเดิมก่อนย้อน").first().innerText() : "";
     prev2.includes("ทีม") && prev2.includes("วันนัด") ? pass("ฟอร์มจ่ายงานเติมทีมและวันนัดเดิมให้") : fail(`กล่องค่าเดิม: ${prev2}`);
