@@ -47,6 +47,8 @@
   ผ่าน portal เพราะถ้าอยู่ในต้นไม้ปกติจะไปอยู่ใต้ `<Modal>` ที่เปิดค้างอยู่
 - **Modal ซ้อน Modal ไม่น่าเชื่อถือ** `Dropdown` จึงเป็นแบบกางในที่ ไม่ใช่ Modal
 - **ปุ่มไม่ได้เป็น `role=button`** เวลาเขียนเทสต์ให้หาด้วยข้อความ
+- **`animationKeyframes` ต้องอยู่ใน `StyleSheet.create`** ส่งเป็น style ตรง ๆ ถูกทิ้งเงียบ ๆ และ `transform`
+  ในคีย์เฟรมต้องเป็นข้อความ CSS (`"translateX(10px)"`) — แถบโหลดเคยค้างนิ่งเพราะเรื่องนี้ (ดู `LoadingBar.tsx`)
 
 ### การ deploy (Render + Supabase)
 

@@ -1830,13 +1830,16 @@ function Opener({ row }: { row: WorkOrderRow }) {
  * วาดใหม่ทุกครั้งที่ flash เปิด (ถอดออกเมื่อปิด) จึงเล่นจากต้นเสมอ
  * เว็บใช้ CSS animation ไม่ใช่ Animated — Animated บนเว็บขยับด้วย JavaScript ทีละเฟรม แย่งเวลากับการวาดรายการ (ดู LoadingBar)
  */
-const WEB_BLINK = {
-  animationKeyframes: [{ "0%": { opacity: 0 }, "50%": { opacity: 1 }, "100%": { opacity: 0 } }],
-  animationDuration: "0.62s",
-  animationTimingFunction: "ease-in-out",
-  animationIterationCount: "3",
-  animationFillMode: "forwards",
-} as object;
+// ผ่าน StyleSheet.create — react-native-web ทิ้ง animationKeyframes ที่ส่งเป็น style ตรง ๆ (ดู LoadingBar)
+const WEB_BLINK = StyleSheet.create({
+  blink: {
+    animationKeyframes: [{ "0%": { opacity: 0 }, "50%": { opacity: 1 }, "100%": { opacity: 0 } }],
+    animationDuration: "0.62s",
+    animationTimingFunction: "ease-in-out",
+    animationIterationCount: "3",
+    animationFillMode: "forwards",
+  },
+} as Record<string, object>).blink;
 function Blink({ radius: r = 0 }: { radius?: number }) {
   const web = Platform.OS === "web";
   const v = useRef(new Animated.Value(0)).current;

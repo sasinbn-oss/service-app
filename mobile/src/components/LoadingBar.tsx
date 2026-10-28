@@ -19,18 +19,24 @@ const SHOW_AFTER_MS = 300;
  * บนเว็บใช้ CSS animation (animationKeyframes ของ react-native-web) ไม่ใช่ Animated —
  * Animated บนเว็บขยับทีละเฟรมด้วย JavaScript (useNativeDriver ใช้ไม่ได้) แย่งเวลากับการวาดรายการใบงาน
  * จนเลื่อนรายการยาวแล้ววาดไม่ทัน (เทสต์ list-complete จับได้) · CSS ให้เบราว์เซอร์ขยับเอง ไม่กินเวลา JS เลย
+ *
+ * ต้องผ่าน StyleSheet.create — react-native-web ทิ้ง animationKeyframes ที่ส่งเป็น style ตรง ๆ เงียบ ๆ
+ * (เดิมส่งตรง แถบเลยค้างนิ่งที่มุมซ้าย ดูเหมือนแถบความคืบหน้าที่ค้าง 10% — เจ้าของงานถาม ต.ค. 69)
  */
-const WEB_RUN = {
-  animationKeyframes: [{ "0%": { transform: [{ translateX: "-30vw" }] }, "100%": { transform: [{ translateX: "100vw" }] } }],
-  animationDuration: "1.1s",
-  animationTimingFunction: "ease-in-out",
-  animationIterationCount: "infinite",
-} as object;
-const WEB_PULSE = {
-  animationKeyframes: [{ "0%": { opacity: 1 }, "50%": { opacity: 0.25 }, "100%": { opacity: 1 } }],
-  animationDuration: "0.9s",
-  animationIterationCount: "infinite",
-} as object;
+const webAnim = StyleSheet.create({
+  run: {
+    // transform เป็นข้อความ CSS — แบบ array ({ translateX }) ในคีย์เฟรมถูกแปลงออกมาว่าง แถบไม่ขยับ
+    animationKeyframes: [{ "0%": { transform: "translateX(-30vw)" }, "100%": { transform: "translateX(100vw)" } }],
+    animationDuration: "1.1s",
+    animationTimingFunction: "ease-in-out",
+    animationIterationCount: "infinite",
+  },
+  pulse: {
+    animationKeyframes: [{ "0%": { opacity: 1 }, "50%": { opacity: 0.25 }, "100%": { opacity: 1 } }],
+    animationDuration: "0.9s",
+    animationIterationCount: "infinite",
+  },
+} as Record<string, object>);
 
 export default function LoadingBar() {
   const [shown, setShown] = useState(false);
@@ -63,14 +69,14 @@ export default function LoadingBar() {
       {/* ป้ายอยู่ล่างกลางจอ — บนสุดมีปุ่มของแถบหัว (ดูในฐานะ · การใช้งาน) ป้ายจะไปบังปุ่ม · เหนือแถบแท็บล่างของมือถือ */}
       <View style={styles.pillWrap} pointerEvents="none">
         <View style={styles.pill}>
-          <View style={[styles.dot, web && WEB_PULSE]} />
+          <View style={[styles.dot, web && webAnim.pulse]} />
           <Text style={styles.text}>กำลังโหลดข้อมูล…</Text>
         </View>
       </View>
       <View style={styles.wrap} pointerEvents="none" accessibilityLabel="กำลังโหลดข้อมูล" accessibilityLiveRegion="polite">
         <View style={styles.track}>
           {web ? (
-            <View style={[styles.runner, WEB_RUN]} />
+            <View style={[styles.runner, webAnim.run]} />
           ) : (
             <Animated.View
               style={[styles.runner, { transform: [{ translateX: slide.interpolate({ inputRange: [0, 1], outputRange: [-160, 1600] }) }] }]}
