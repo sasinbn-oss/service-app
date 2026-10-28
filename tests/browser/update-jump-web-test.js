@@ -110,6 +110,16 @@ const login = async (code) =>
       ? pass('ปุ่มขึ้น "มีอัปเดต 2 ใบงาน · 2 แท็บ"')
       : fail(`ปุ่มไม่บอกแท็บ: ${await page.locator('[aria-label="ดูข้อมูลที่อัปเดต"]').allInnerTexts()}`);
     await pill(/2 แท็บ/).last().click();
+    // กรอบกระพริบอยู่แค่ ~2 วิหลังพาไป — เช็คว่ามี animation จริงระหว่างนั้น (เดิม keyframes ถูกทิ้งเงียบ ๆ ไม่เคยกระพริบ)
+    let blink = null;
+    for (let i = 0; i < 30 && !blink; i++) {
+      blink = await page.evaluate(() => {
+        const el = [...document.querySelectorAll("div")].find((n) => getComputedStyle(n).animationDuration === "0.62s");
+        return el ? getComputedStyle(el).animationName : null;
+      });
+      if (!blink) await page.waitForTimeout(150);
+    }
+    blink && blink !== "none" ? pass(`ใบที่พาไปกระพริบจริง (${blink})`) : fail(`ใบที่พาไปไม่กระพริบ: ${blink}`);
     await page.waitForTimeout(4000);
     const cardA = await card(codeA);
     (await selected("กล่องงานของฉัน")) && (await selected("จ่ายงาน/ปล่อยงาน"))
