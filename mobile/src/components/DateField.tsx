@@ -54,7 +54,8 @@ export function Calendar({
   min?: string;
 }) {
   const today = todayBkk();
-  const start = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today;
+  // ยังไม่เลือกวัน + มีวันแรกที่เลือกได้ในอนาคต (ของต้องโอน 7 วัน) — เปิดที่เดือนนั้น ไม่ใช่เดือนที่ขีดฆ่าทั้งเดือน
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : min && min > today ? min : today;
   const [view, setView] = useState(() => ({ y: Number(start.slice(0, 4)), m: Number(start.slice(5, 7)) - 1 }));
   const shift = (n: number) =>
     setView((v) => {
