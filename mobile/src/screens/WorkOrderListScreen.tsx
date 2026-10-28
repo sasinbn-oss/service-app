@@ -21,6 +21,7 @@ import {
   View,
 } from "react-native";
 import TouchableOpacity from "../components/Tap";
+import { AdminReviewTag, type AdminReviewInfo } from "../components/AdminReview";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -91,6 +92,8 @@ export interface WorkOrderRow {
   appointmentByName?: string | null;
   /** ย้อนขั้นมาจากขั้นไหน (ยังไม่มีใครกดผ่านขั้นนี้) — ไม่ได้ย้อน = null */
   rolledBackFrom?: string | null;
+  /** หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ (ยังไม่ตอบ / ตอบแล้วรอรับทราบ) — ขั้นตอนไม่เปลี่ยน */
+  adminReview?: AdminReviewInfo | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
   partsExpectedAt?: string | null;
   /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
@@ -1903,6 +1906,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         </View>
         <PartsOutBadge row={row} />
         <RolledBackBadge row={row} />
+        <AdminReviewTag review={row.adminReview} />
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
         {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
         {row.stageActor ? <StuckText row={row} style={styles.td2} /> : null}
@@ -1971,6 +1975,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <ClaimBadge row={row} />
         <View style={{ flex: 1 }} />
         <RolledBackBadge row={row} />
+        <AdminReviewTag review={row.adminReview} />
         <PartsOutBadge row={row} />
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{statusText(row)}</Text>

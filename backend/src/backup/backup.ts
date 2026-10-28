@@ -47,6 +47,7 @@ const SHEET_TITLE: Record<string, string> = {
   WorkOrderWorker: "ผู้เข้าปฏิบัติงาน",
   WorkOrderAttachment: "ไฟล์แนบใบงาน",
   PartClaim: "ใบเคลมอะไหล่",
+  AdminReview: "คำขอให้แอดมินตรวจ",
   Branch: "สาขา",
   Machine: "เครื่อง",
   Outage: "เคสเครื่องดับ",

@@ -8,6 +8,10 @@
  * รูปย่อ: ไม่เคยเปลี่ยนหลังแนบ — รายการไฟล์โหลดใหม่บ่อย (แนบ/ลบ/กลับมาที่ใบงาน) ส่ง ?have= บอกว่ามีแล้ว
  * เซิร์ฟเวอร์จะไม่ส่งรูปย่อชุดเดิมซ้ำ (ใบที่มี 20 ไฟล์ = หลายร้อย KB ทุกรอบ)
  * อยู่ในหน่วยความจำเท่านั้น — ปิดแท็บแล้วหาย ไม่เก็บรูปลูกค้าค้างไว้ในเครื่อง
+ *
+ * รอบสอง (เจ้าของงานบอกว่ายังช้า ต.ค. 69): รายการไฟล์ส่งลิงก์มาด้วยแล้ว (seedLinks) ไม่ต้องขอ /links ต่ออีกทอด
+ * และหน้าใบงานเริ่มโหลดรายการไฟล์ตั้งแต่เปิดหน้า พร้อมกับตัวใบงาน (prefetchAttachments) —
+ * เดิมรอใบงานมาก่อน การ์ดไฟล์แนบถึงขึ้นแล้วค่อยเริ่มโหลด ต่อคิวกันสามทอด (ใบงาน → รายการ → ลิงก์)
  */
 import { api } from "../api/client";
 
@@ -56,6 +60,18 @@ export async function linkFor(workOrderId: number, attachmentId: number): Promis
   return res.data.url;
 }
 
+/**
+ * ลิงก์ที่มากับรายการไฟล์ — จำไว้แทนการขอ /links แยก · คืน false ถ้ารายการไม่มีลิงก์มาเลย
+ * (เซิร์ฟเวอร์รุ่นก่อน ต.ค. 69 หรือยังไม่ได้ตั้งที่เก็บไฟล์) ให้คนเรียกขอ /links แบบเดิม
+ */
+export function seedLinks(workOrderId: number, rows: { id: number; url?: string | null }[]): boolean {
+  const urls: Record<number, string> = {};
+  for (const r of rows) if (r.url) urls[r.id] = r.url;
+  if (!Object.keys(urls).length) return false;
+  links.set(workOrderId, { at: Date.now(), urls });
+  return true;
+}
+
 /** ไฟล์ถูกลบ/แนบเพิ่ม — ลิงก์ชุดเดิมไม่ครบแล้ว */
 export function forgetLinks(workOrderId: number) {
   links.delete(workOrderId);
@@ -82,4 +98,31 @@ export function withThumbs<T extends ThumbRow>(workOrderId: number, rows: T[]): 
     const kept = r.hasThumbnail ? thumbs.get(r.id) : undefined;
     return kept ? { ...r, thumbnailDataUrl: kept } : r;
   });
+}
+
+/** รายการไฟล์ของใบงาน — บอกเซิร์ฟเวอร์ว่ารูปย่อใบไหนจำไว้แล้ว ไม่ต้องส่งซ้ำ */
+export function fetchAttachments<T extends ThumbRow>(workOrderId: number): Promise<T[]> {
+  return api
+    .get<{ rows: T[] }>(`/work-orders/${workOrderId}/attachments`, { params: { have: haveThumbs(workOrderId) } })
+    .then((res) => res.data.rows);
+}
+
+const listLoads = new Map<number, { at: number; rows: Promise<ThumbRow[]> }>();
+/** รายการที่เริ่มโหลดไว้เก่ากว่านี้ไม่ใช้ — ไฟล์อาจถูกแนบ/ลบไปแล้ว */
+const LIST_KEEP_MS = 30_000;
+
+/** เริ่มโหลดรายการไฟล์ตั้งแต่เปิดหน้าใบงาน — การ์ดไฟล์แนบมารับผลไปใช้ (takeAttachments) */
+export function prefetchAttachments(workOrderId: number) {
+  for (const [id, x] of listLoads) if (Date.now() - x.at > LIST_KEEP_MS) listLoads.delete(id);
+  const rows = fetchAttachments(workOrderId);
+  // ไม่มีใครมารับ (เปิดใบไม่ได้/ออกจากหน้าก่อน) ก็ไม่ต้องเตือนว่า promise พังโดยไม่มีคนจับ
+  rows.catch(() => undefined);
+  listLoads.set(workOrderId, { at: Date.now(), rows });
+}
+
+/** รายการที่เริ่มโหลดไว้ — ใช้ได้ครั้งเดียว โหลดรอบหลัง (แนบ/ลบ/อัปเดต) ต้องได้ของใหม่ · ไม่มี = null */
+export function takeAttachments<T extends ThumbRow>(workOrderId: number): Promise<T[]> | null {
+  const x = listLoads.get(workOrderId);
+  listLoads.delete(workOrderId);
+  return x && Date.now() - x.at <= LIST_KEEP_MS ? (x.rows as Promise<T[]>) : null;
 }

@@ -94,6 +94,8 @@ import {
   SUPERVISOR_CLOSE_MIN_NOTE,
   SEND_BACK_REASONS,
   SEND_BACK_REASON_LABELS,
+  ADMIN_REVIEW_REASONS,
+  ADMIN_REVIEW_REASON_LABELS,
   MANUAL_WORK_STATUSES,
   WORK_ORDER_STATUSES,
   WORK_ORDER_STATUS_LABELS,
@@ -120,7 +122,61 @@ import {
 
 const router = Router();
 
+/**
+ * คำขอให้แอดมินตรวจสอบที่ยังค้าง — ยังไม่ตอบ หรือตอบแล้วแต่หัวหน้าภาคยังไม่รับทราบ (เอาแค่ล่าสุด)
+ * การ์ดในกล่องงานกับหน้าใบงานโชว์กล่องม่วง (รอแอดมิน) หรือเขียว (แอดมินตอบแล้ว) จากตัวนี้
+ */
+const activeReviewSelect = {
+  where: { cancelledAt: null, ackAt: null },
+  orderBy: { createdAt: "desc" as const },
+  take: 1,
+  select: {
+    id: true,
+    reason: true,
+    note: true,
+    status: true,
+    createdAt: true,
+    reply: true,
+    repliedAt: true,
+    createdBy: { select: { name: true } },
+    repliedBy: { select: { name: true } },
+  },
+};
+
+function reviewShape(
+  r:
+    | {
+        id: number;
+        reason: string;
+        note: string;
+        status: string;
+        createdAt: Date;
+        reply: string | null;
+        repliedAt: Date | null;
+        createdBy: { name: string } | null;
+        repliedBy: { name: string } | null;
+      }
+    | undefined
+) {
+  if (!r) return null;
+  return {
+    id: r.id,
+    reason: r.reason,
+    reasonLabel: ADMIN_REVIEW_REASON_LABELS[r.reason] ?? r.reason,
+    note: r.note,
+    // ขั้นตอนส่ง — แอดมินเห็นว่าใบอยู่ขั้นไหนตอนหัวหน้าภาคส่งมา (ระหว่างรอใบเดินต่อได้)
+    statusLabel: WORK_ORDER_STATUS_LABELS[r.status] ?? r.status,
+    byName: r.createdBy?.name ?? null,
+    at: r.createdAt,
+    answered: r.repliedAt !== null,
+    reply: r.reply,
+    replyByName: r.repliedBy?.name ?? null,
+    repliedAt: r.repliedAt,
+  };
+}
+
 const detailInclude = {
+  adminReviews: activeReviewSelect,
   branch: {
     select: {
       code: true,
@@ -400,6 +456,7 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
   return {
     id: w.id,
     code: w.code,
+    adminReview: reviewShape(w.adminReviews[0]),
     source: w.source,
     isTest: w.isTest,
     jobType: w.jobType,
@@ -624,6 +681,7 @@ const listSelect = {
   code: true,
   source: true,
   jobType: true,
+  adminReviews: activeReviewSelect,
   title: true,
   status: true,
   priority: true,
@@ -688,7 +746,18 @@ function withScopes<T extends { id: number; region: string | null; supervisedTea
  * แนบรูปเพิ่มตอนบ่ายไม่ได้แปลว่าใบงานเพิ่งเข้าขั้นนี้
  */
 // ARRIVED (ช่างถึงหน้างาน) ไม่ใช่การเดินขั้น — ใบยังอยู่ "ช่าง · เข้างาน/ปิดงาน" นับวันค้างต่อจากเดิม
-const NON_STAGE_ACTIONS = ["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED", "STATUS_CHANGED", "ARRIVED"];
+const NON_STAGE_ACTIONS = [
+  "ATTACHED",
+  "ATTACHMENT_REMOVED",
+  "EDITED",
+  "PARTS_ETA_CHANGED",
+  "STATUS_CHANGED",
+  "ARRIVED",
+  // ส่งกลับให้แอดมินตรวจสอบ/ตอบกลับ — ขั้นตอนไม่เปลี่ยน (เจ้าของงานกำหนด ต.ค. 69) ไม่นับเป็นการเข้าขั้นใหม่
+  "ADMIN_REVIEW_REQUESTED",
+  "ADMIN_REVIEW_CANCELLED",
+  "ADMIN_REVIEW_ANSWERED",
+];
 
 type WorkOrderListRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
@@ -715,6 +784,7 @@ function listShape(
   return {
     stageActor: actor,
     waitingOnSupervisors,
+    adminReview: reviewShape(w.adminReviews[0]),
     // จ่ายข้ามทีม — ทีมประจำสาขาที่ถูกข้าม (รายการติด "ข้ามทีม" ต่อชื่อทีม) · ไม่ข้าม = null
     crossFrom: isCrossTeam(w) ? ownTeamOf(w) : null,
     // รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินแยกหัวข้อ "ไม่มีคนรับ"
@@ -905,8 +975,22 @@ type ViewableWorkOrder = {
   assignedTeam: string | null;
   assignedToId: number | null;
   createdById: number | null;
-  branch: { region: string | null; zone: string | null; pmTeam: string | null };
+  /** code/cocoSupervisorId ใช้เช็ค Area Team — อ่านมากับใบงานแล้วไม่ต้องถามซ้ำ (ไม่มีก็ถามเอง) */
+  branch: { region: string | null; zone: string | null; pmTeam: string | null; code?: string; cocoSupervisorId?: number | null };
 };
+
+/**
+ * ข้อมูลของคนถามที่การเช็คสิทธิ์ต้องใช้ — ถามพร้อมกับอ่านใบงานได้ ไม่ต้องรอใบงานก่อน
+ * (เจ้าของงานบ่นไฟล์แนบยังช้า ต.ค. 69: ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ เดิมอ่านใบงาน → ถามขอบเขต → อ่านไฟล์ ทีละคิว)
+ */
+type Viewer = { scope?: SupervisorScope; coverage?: Coverage | null };
+async function viewerOf(req: AuthRequest): Promise<Viewer> {
+  const role = req.auth!.role;
+  if (role === "ADMIN" || isAreaTeam(req.auth)) return {};
+  if (role === "SUPERVISOR") return { scope: await supervisorScope(req.auth!.userId) };
+  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
+  return { coverage: await coverageOf(user?.team ?? null) };
+}
 
 /**
  * เปิดดูใบงานนี้ได้ไหม (ตรวจระบบ ต.ค. 69) — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว
@@ -915,11 +999,11 @@ type ViewableWorkOrder = {
  * และรูปในร้านของทั้งบริษัท · ตอนนี้ใช้กฎเดียวกับหน้ารายการ บวกใบที่ช่างคนนั้นเปิดเอง
  * (เปิดใบงานเสร็จต้องเข้าดู/แนบรูปใบตัวเองได้ ทั้งที่ยังไม่จ่ายทีม) และใบที่เคยไปทำ (ประวัติงานตัวเอง)
  */
-async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder, known?: SupervisorScope) {
+async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder, viewer: Viewer = {}) {
   const role = req.auth!.role;
   if (role === "ADMIN") return false;
   if (role === "SUPERVISOR") {
-    const scope = known ?? (await supervisorScope(req.auth!.userId));
+    const scope = viewer.scope ?? (await supervisorScope(req.auth!.userId));
     if (seesWorkOrder(scope, await teamsForSupervisor(scope), wo)) return false;
     res.status(403).json({ error: OUT_OF_SCOPE });
     return true;
@@ -927,13 +1011,20 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
   const me = req.auth!.userId;
   if (wo.assignedToId === me || wo.createdById === me) return false;
   if (isAreaTeam(req.auth)) {
-    const b = await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: { code: true, cocoSupervisorId: true } } } });
+    const { code, cocoSupervisorId } = wo.branch;
+    const b =
+      code !== undefined && cocoSupervisorId !== undefined
+        ? { branch: { code, cocoSupervisorId } }
+        : await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: { code: true, cocoSupervisorId: true } } } });
     if (b && areaCoversBranch(req.auth!, b.branch)) return false;
     res.status(403).json({ error: AREA_OUT_OF_SCOPE });
     return true;
   }
-  const user = await prisma.user.findUnique({ where: { id: me }, select: { team: true } });
-  if (canTouch(wo, { coverage: await coverageOf(user?.team ?? null), id: me })) return false;
+  const coverage =
+    viewer.coverage !== undefined
+      ? viewer.coverage
+      : await coverageOf((await prisma.user.findUnique({ where: { id: me }, select: { team: true } }))?.team ?? null);
+  if (canTouch(wo, { coverage, id: me })) return false;
   if ((await prisma.workOrderWorker.count({ where: { workOrderId: wo.id, userId: me } })) > 0) return false;
   res.status(403).json({ error: "ใบงานนี้ไม่ใช่ของทีมคุณ — ถ้าต้องช่วยงานนี้ ให้หัวหน้าภาคจ่ายงานให้ทีมคุณ", notYourTeam: true });
   return true;
@@ -945,7 +1036,7 @@ const VIEW_SELECT = {
   assignedTeam: true,
   assignedToId: true,
   createdById: true,
-  branch: { select: { region: true, zone: true, pmTeam: true } },
+  branch: { select: { region: true, zone: true, pmTeam: true, code: true, cocoSupervisorId: true } },
 } as const;
 
 /**
@@ -1129,16 +1220,14 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
     scopeFor(req),
     scopeFor(req, true),
   ]);
-  // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
-  const outsourceInbox: Prisma.WorkOrderWhereInput[] =
-    req.auth!.role === "SUPERVISOR" ? [{ status: "IN_PROGRESS", assignedTeam: { in: [...outsourceNow] } }] : [];
+  const inbox = inboxFilter(req.auth, inboxStages, orphans, outsourceNow);
   const statusFilter =
     q.status === "ALL"
       ? {}
       : q.status === "ACTIVE"
         ? { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } }
         : q.status === "INBOX"
-          ? { OR: [{ status: { in: inboxStages } }, { id: { in: orphans } }, ...outsourceInbox] }
+          ? inbox
           : q.status === "AWAITING_CONFIRM"
             ? // ชิป "รอคอนเฟิร์มลูกค้า" คือรายการร้านที่แอดมินต้องโทร — นัดตรวจหน้างานก็เป็นการโทรแบบเดียวกัน
               { status: { in: ["AWAITING_CONFIRM", "INSPECT_CONFIRM"] } }
@@ -1180,13 +1269,45 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
     ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
     ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
   };
-  return { where, scope, inboxScope, inboxStages, orphans, outsourceInbox };
+  return { where, scope, inboxScope, inbox };
+}
+
+/** คำขอที่รอแอดมินตอบ — ไม่ขึ้นกับขั้นของใบ (ขั้นตอนไม่เปลี่ยนตอนส่ง) · ใบที่ปิด/ยกเลิกไปแล้วไม่ค้างในกล่อง */
+const REVIEW_WAITING: Prisma.WorkOrderWhereInput = {
+  status: { notIn: ["DONE", "CANCELLED"] },
+  adminReviews: { some: { cancelledAt: null, repliedAt: null } },
+};
+/** แอดมินตอบแล้ว รอหัวหน้าภาครับทราบ — ใบอาจเดินไปขั้นที่ไม่ใช่ของหัวหน้าภาคแล้ว คำตอบต้องยังเห็น */
+const REVIEW_ANSWERED: Prisma.WorkOrderWhereInput = {
+  status: { notIn: ["DONE", "CANCELLED"] },
+  adminReviews: { some: { cancelledAt: null, repliedAt: { not: null }, ackAt: null } },
+};
+
+/**
+ * "อยู่ในกล่องงานของคนนี้" (นอกจากขอบเขต) — แท็บกล่องงานกับตัวเลขกล่องงานใช้ตัวเดียวกัน จะได้ตรงกันเสมอ
+ * ขั้นที่รอคนนี้ · ใบไม่มีคนรับ (แอดมิน) · ใบ outsource ที่หัวหน้าภาคปิดแทน · คำขอให้แอดมินตรวจสอบ
+ */
+function inboxFilter(
+  auth: AuthRequest["auth"],
+  inboxStages: string[],
+  orphans: number[],
+  outsourceNow: Set<string>
+): Prisma.WorkOrderWhereInput {
+  const or: Prisma.WorkOrderWhereInput[] = [{ status: { in: inboxStages } }];
+  if (orphans.length) or.push({ id: { in: orphans } });
+  if (auth?.role === "SUPERVISOR") {
+    // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
+    or.push({ status: "IN_PROGRESS", assignedTeam: { in: [...outsourceNow] } }, REVIEW_ANSWERED);
+  }
+  // แอดมินทั่วไปเท่านั้น — Admin Spare Part ไม่ได้ดูแลข้อมูลใบงาน
+  if (inboxTakesOrphans(auth)) or.push(REVIEW_WAITING);
+  return { OR: or };
 }
 
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { where, scope, inboxScope, inboxStages, orphans, outsourceInbox } = await listWhere(req, parsed.data);
+  const { where, scope, inboxScope, inbox } = await listWhere(req, parsed.data);
 
   /**
    * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
@@ -1196,7 +1317,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
    *
    * รายการ ตัวเลขชิป และรายชื่อหัวหน้าภาค ไม่ขึ้นต่อกัน — ยิงพร้อมกันรอบเดียว (เดิมทีละคำถาม)
    */
-  const [rows, counts, inboxWaiting, outsourceOpen, supervisors] = await Promise.all([
+  const [rows, counts, inboxCount, supervisors] = await Promise.all([
     prisma.workOrder.findMany({
       where,
       select: listSelect,
@@ -1207,8 +1328,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     }),
     prisma.workOrder.groupBy({ by: ["status"], where: scope, _count: true }),
     // นับกล่องงานจากขอบเขตกล่องงาน ไม่ใช่จากตัวเลขชิป — ใบที่จ่ายข้ามทีมมาเห็นในรายการแต่ไม่ได้รอคนนี้
-    prisma.workOrder.count({ where: { AND: [inboxScope], status: { in: inboxStages } } }),
-    outsourceInbox.length ? prisma.workOrder.count({ where: { AND: [inboxScope, ...outsourceInbox] } }) : Promise.resolve(0),
+    // นับครั้งเดียวด้วยเงื่อนไขเดียวกับแท็บ ใบที่เข้ากล่องได้สองทาง (เช่น รอแอดมินและมีคำขอให้ตรวจ) ไม่นับซ้ำ
+    prisma.workOrder.count({ where: { AND: [inboxScope, inbox] } }),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
       select: { id: true, name: true, region: true, supervisedTeams: true },
@@ -1289,7 +1410,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
       ACTIVE: ACTIVE_WORK_ORDER_STATUSES.reduce((n, st) => n + (byStatus[st] ?? 0), 0),
-      INBOX: inboxWaiting + orphans.length + outsourceOpen,
+      INBOX: inboxCount,
     },
   });
 });
@@ -1459,13 +1580,10 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     req.auth!.role === "SUPERVISOR" ? freshOutsource() : Promise.resolve(new Set<string>()),
   ]);
-  const [waiting, outsourceOpen] = await Promise.all([
-    prisma.workOrder.count({ where: { AND: [scope], status: { in: stagesWaitingOn(req.auth) } } }),
-    req.auth!.role === "SUPERVISOR"
-      ? prisma.workOrder.count({ where: { AND: [scope], status: "IN_PROGRESS", assignedTeam: { in: [...outsource] } } })
-      : Promise.resolve(0),
-  ]);
-  res.json({ inbox: waiting + orphans.length + outsourceOpen });
+  const inbox = await prisma.workOrder.count({
+    where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource)] },
+  });
+  res.json({ inbox });
 });
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */
@@ -1950,14 +2068,11 @@ async function detailFor(id: number) {
 router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const [d, scope] = await Promise.all([
-    loadDetail(id),
-    req.auth!.role === "SUPERVISOR" ? supervisorScope(req.auth!.userId) : Promise.resolve(undefined),
-  ]);
+  const [d, viewer] = await Promise.all([loadDetail(id), viewerOf(req)]);
   if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (await blockedForViewer(req, res, d.row, scope)) return;
+  if (await blockedForViewer(req, res, d.row, viewer)) return;
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
-  res.json({ ...detailBody(d), ...(scope && !coversWorkOrder(scope, d.row) ? { viewOnly: true } : {}) });
+  res.json({ ...detailBody(d), ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}) });
 });
 
 // ── เปิดใบงาน ──────────────────────────────────────────
@@ -4523,9 +4638,10 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
 async function blockedForSupervisor(
   req: AuthRequest,
   res: Response,
-  wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
+  wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } },
+  known?: SupervisorScope
 ) {
-  const scope = await supervisorScope(req.auth!.userId);
+  const scope = known ?? (await supervisorScope(req.auth!.userId));
   if (coversWorkOrder(scope, wo)) return false;
   res.status(403).json({ error: (await outOfScopeReason(scope, wo)) });
   return true;
@@ -6080,6 +6196,140 @@ const cancelSchema = z.object({
   note: z.string().trim().max(300).optional(),
 });
 
+
+// ── ส่งกลับให้แอดมินตรวจสอบ (เจ้าของงานขอ ต.ค. 69 · ตามตัวอย่างที่ตกลง) ─────────────
+//
+// หัวหน้าภาคเจอข้อมูลในใบที่แอดมินกรอกไม่ถูก (เลขเครื่อง เบอร์ร้าน ใบซ้ำ) — เดิมต้องโทรบอกกันเอง
+// ไม่มีที่ให้ตามว่าแอดมินแก้แล้วหรือยัง · ขั้นตอนไม่เปลี่ยน ระหว่างรอหัวหน้าภาคยังเดินขั้นต่อได้ (ไม่ล็อกใบ)
+// คำขอที่รอตอบเข้ากล่องงานแอดมิน (REVIEW_WAITING) · ตอบแล้วเข้ากล่องหัวหน้าภาคจนกดรับทราบ (REVIEW_ANSWERED)
+
+const ADMIN_REVIEW_MIN_NOTE = 5;
+const adminReviewSchema = z.object({
+  reason: z.enum(ADMIN_REVIEW_REASONS, { errorMap: () => ({ message: "เลือกเรื่องที่ให้แอดมินตรวจ" }) }),
+  note: z.string().trim().max(500, "รายละเอียดยาวได้ไม่เกิน 500 ตัวอักษร"),
+});
+const adminReplySchema = z.object({
+  reply: z.string().trim().max(500, "คำตอบยาวได้ไม่เกิน 500 ตัวอักษร"),
+});
+
+/** ใบงานที่หัวหน้าภาคจะส่ง/ยกเลิก/รับทราบได้ — ต้องเป็นเจ้าของใบ (ใบที่ทีมตัวเองรับข้ามทีมมา ดูอย่างเดียว) */
+async function reviewableBySupervisor(req: AuthRequest, res: Response, id: number) {
+  if (req.auth!.role !== "SUPERVISOR") {
+    res.status(403).json({ error: "ส่งกลับให้แอดมินตรวจสอบได้เฉพาะหัวหน้าภาค" });
+    return null;
+  }
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: { code: true, status: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
+  });
+  if (!wo) {
+    res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+  if (await blockedForSupervisor(req, res, wo)) return null;
+  return wo;
+}
+
+router.post("/:id/admin-review", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = adminReviewSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { reason, note } = parsed.data;
+  if (note.length < ADMIN_REVIEW_MIN_NOTE) {
+    return res.status(400).json({ error: `พิมพ์รายละเอียดอย่างน้อย ${ADMIN_REVIEW_MIN_NOTE} ตัวอักษร — บอกแอดมินว่าต้องตรวจอะไร` });
+  }
+  const wo = await reviewableBySupervisor(req, res, id);
+  if (!wo) return;
+  if (wo.status === "DONE" || wo.status === "CANCELLED") {
+    return res.status(400).json({ error: `${wo.code} ${wo.status === "DONE" ? "ปิดไปแล้ว" : "ถูกยกเลิกไปแล้ว"} — ส่งให้แอดมินตรวจสอบไม่ได้` });
+  }
+  // ทีละคำขอ — สองคำขอค้างพร้อมกันแอดมินไม่รู้ว่าตอบอันไหน
+  const waiting = await prisma.adminReview.findFirst({
+    where: { workOrderId: id, cancelledAt: null, repliedAt: null },
+    select: { reason: true },
+  });
+  if (waiting) {
+    return res.status(409).json({
+      error: `${wo.code} ส่งให้แอดมินตรวจสอบอยู่แล้ว (${ADMIN_REVIEW_REASON_LABELS[waiting.reason] ?? waiting.reason}) — รอแอดมินตอบ หรือยกเลิกคำขอเดิมก่อน`,
+    });
+  }
+  await prisma.$transaction(async (tx) => {
+    // คำตอบรอบก่อนที่ยังไม่กดรับทราบ — ส่งเรื่องใหม่แปลว่าเห็นแล้ว
+    await tx.adminReview.updateMany({ where: { workOrderId: id, cancelledAt: null, ackAt: null }, data: { ackAt: new Date() } });
+    await tx.adminReview.create({ data: { workOrderId: id, reason, note, status: wo.status, createdById: req.auth!.userId } });
+    await writeLog(tx, id, req.auth!.userId, "ADMIN_REVIEW_REQUESTED", wo.status, `${ADMIN_REVIEW_REASON_LABELS[reason]} — ${note}`);
+  }, STAGE_TX);
+  res.json(await detailFor(id));
+});
+
+/** ยกเลิกคำขอที่แอดมินยังไม่ตอบ — ส่งผิดใบ/ผิดเรื่อง หรือหัวหน้าภาคจัดการเองได้แล้ว */
+router.post("/:id/admin-review/cancel", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const wo = await reviewableBySupervisor(req, res, id);
+  if (!wo) return;
+  const waiting = await prisma.adminReview.findFirst({
+    where: { workOrderId: id, cancelledAt: null, repliedAt: null },
+    select: { id: true },
+  });
+  if (!waiting) return res.status(409).json({ error: "ไม่มีคำขอที่รอแอดมินอยู่ — แอดมินอาจตอบไปแล้ว ลองรีเฟรช" });
+  await prisma.$transaction(async (tx) => {
+    // updateMany + เงื่อนไขเดิม — แอดมินตอบมาระหว่างนั้นก็ไม่ไปยกเลิกคำขอที่ตอบแล้ว
+    const done = await tx.adminReview.updateMany({ where: { id: waiting.id, repliedAt: null, cancelledAt: null }, data: { cancelledAt: new Date() } });
+    if (done.count) await writeLog(tx, id, req.auth!.userId, "ADMIN_REVIEW_CANCELLED", wo.status, null);
+  }, STAGE_TX);
+  res.json(await detailFor(id));
+});
+
+/** หัวหน้าภาคเห็นคำตอบแล้ว — การ์ดเลิกโชว์กล่องคำตอบ (คำตอบยังอยู่ในประวัติใบงาน) */
+router.post("/:id/admin-review/ack", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const wo = await reviewableBySupervisor(req, res, id);
+  if (!wo) return;
+  await prisma.adminReview.updateMany({
+    where: { workOrderId: id, cancelledAt: null, repliedAt: { not: null }, ackAt: null },
+    data: { ackAt: new Date() },
+  });
+  res.json(await detailFor(id));
+});
+
+/**
+ * แอดมินตรวจแล้วตอบกลับ — ต้องบอกว่าตรวจ/แก้อะไรไป · ขั้นตอนไม่เปลี่ยน
+ * แก้ข้อมูลในใบทำที่ปุ่ม "แก้ไข" ตามปกติ ตรงนี้แค่ปิดเรื่องและบอกหัวหน้าภาค
+ */
+router.post("/:id/admin-review/reply", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  // แอดมินทั่วไปเท่านั้น — Admin Spare Part ดูอย่างเดียว (กันอีกชั้นใน middleware ด้วย)
+  if (req.auth!.role !== "ADMIN" || req.auth!.partsAdmin) {
+    return res.status(403).json({ error: "ตอบคำขอตรวจสอบได้เฉพาะแอดมิน" });
+  }
+  const parsed = adminReplySchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const reply = parsed.data.reply;
+  if (reply.length < ADMIN_REVIEW_MIN_NOTE) {
+    return res.status(400).json({ error: `พิมพ์คำตอบอย่างน้อย ${ADMIN_REVIEW_MIN_NOTE} ตัวอักษร — บอกหัวหน้าภาคว่าตรวจ/แก้อะไรไป` });
+  }
+  const [wo, waiting] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { status: true } }),
+    prisma.adminReview.findFirst({ where: { workOrderId: id, cancelledAt: null, repliedAt: null }, select: { id: true } }),
+  ]);
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (!waiting) return res.status(409).json({ error: "คำขอนี้ถูกยกเลิกหรือตอบไปแล้ว — ลองรีเฟรช" });
+  const answered = await prisma.$transaction(async (tx) => {
+    // หัวหน้าภาคยกเลิกมาระหว่างนั้น — ไม่ตอบทับ
+    const done = await tx.adminReview.updateMany({
+      where: { id: waiting.id, repliedAt: null, cancelledAt: null },
+      data: { reply, repliedAt: new Date(), repliedById: req.auth!.userId },
+    });
+    if (done.count) await writeLog(tx, id, req.auth!.userId, "ADMIN_REVIEW_ANSWERED", wo.status, reply);
+    return done.count > 0;
+  }, STAGE_TX);
+  if (!answered) return res.status(409).json({ error: "หัวหน้าภาคยกเลิกคำขอนี้ไปแล้ว — ลองรีเฟรช" });
+  res.json(await detailFor(id));
+});
 router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -6257,17 +6507,18 @@ async function loadAttachableWorkOrder(
   /** แนบ/ลบไฟล์ — หัวหน้าภาคต้องเป็นเจ้าของใบ ไม่ใช่แค่เห็น (ใบที่ทีมตัวเองรับข้ามทีมมา ดูได้อย่างเดียว) */
   write = false
 ): Promise<{ id: number; code: string; status: string; createdById: number | null } | null> {
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: { code: true, status: true, ...VIEW_SELECT },
-  });
+  // ใบงานกับข้อมูลคนถามอ่านพร้อมกัน — ไม่ต่อคิว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
+  const [wo, viewer] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true, ...VIEW_SELECT } }),
+    viewerOf(req),
+  ]);
   if (!wo) {
     res.status(404).json({ error: "ไม่พบใบงานนี้" });
     return null;
   }
   // กฎเดียวกับเปิดดูใบงาน — เดิมช่างเปิดรูปของใบที่ยังไม่จ่ายทีมได้ทุกภาค (ภาพในร้านลูกค้า)
-  if (await blockedForViewer(req, res, wo)) return null;
-  if (write && req.auth!.role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return null;
+  if (await blockedForViewer(req, res, wo, viewer)) return null;
+  if (write && req.auth!.role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo, viewer.scope))) return null;
 
   return { id: wo.id, code: wo.code, status: wo.status, createdById: wo.createdById };
 }
@@ -6346,7 +6597,11 @@ router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  // อ่านไฟล์พร้อมกับเช็คสิทธิ์ — เช็คไม่ผ่านก็แค่ไม่ส่งออกไป (ไม่ต้องเสียรอบไปกลับฐานข้อมูลรอเช็คก่อน)
+  const [wo, rows] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findMany({ where: { workOrderId: id }, select: attachmentSelect, orderBy: { createdAt: "asc" } }),
+  ]);
   if (!wo) return;
 
   /**
@@ -6360,12 +6615,25 @@ router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
       .map(Number)
       .filter((n) => Number.isInteger(n) && n > 0)
   );
-  const rows = await prisma.workOrderAttachment.findMany({
-    where: { workOrderId: id },
-    select: attachmentSelect,
-    orderBy: { createdAt: "asc" },
+  /**
+   * ลิงก์เปิดไฟล์มากับรายการเลย (ต.ค. 69) — เดิมแอปขอ /links ต่ออีกคำขอหลังรายการมาถึง กดดูไฟล์เร็ว ๆ ต้องรอลิงก์
+   * เซ็นลิงก์ในเครื่อง ไม่ได้ถามที่เก็บไฟล์ — ไม่เพิ่มเวลา · เซ็นไม่ได้ (ยังไม่ตั้งที่เก็บ) ก็ส่งรายการไปโดยไม่มีลิงก์
+   */
+  const urls = new Map<number, string>();
+  if (isFileStoreConfigured()) {
+    try {
+      for (const r of rows) {
+        if (r.objectKey && r.uploadedAt) urls.set(r.id, await getDownloadUrl(r.objectKey, { fileName: r.fileName, inline: true }));
+      }
+    } catch (error: any) {
+      console.error("presign failed", error);
+      urls.clear();
+    }
+  }
+  res.json({
+    rows: rows.map((r) => ({ ...attachmentShape(r, have.has(r.id)), url: urls.get(r.id) ?? null })),
+    expiresInSeconds: SIGNED_URL_TTL_SECONDS,
   });
-  res.json({ rows: rows.map((r) => attachmentShape(r, have.has(r.id))) });
 });
 
 /**
@@ -6379,13 +6647,14 @@ router.get("/:id/attachments/links", requireAuth, async (req: AuthRequest, res) 
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const [wo, rows] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findMany({
+      where: { workOrderId: id, objectKey: { not: null }, uploadedAt: { not: null } },
+      select: { id: true, objectKey: true, fileName: true },
+    }),
+  ]);
   if (!wo) return;
-
-  const rows = await prisma.workOrderAttachment.findMany({
-    where: { workOrderId: id, objectKey: { not: null }, uploadedAt: { not: null } },
-    select: { id: true, objectKey: true, fileName: true },
-  });
   try {
     const pairs = await Promise.all(
       rows.map(async (r) => [r.id, await getDownloadUrl(r.objectKey!, { fileName: r.fileName, inline: true })] as const)
@@ -6542,13 +6811,14 @@ router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthR
     return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
   }
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const [wo, row] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findFirst({
+      where: { id: attachmentId, workOrderId: id },
+      select: { objectKey: true, fileName: true, kind: true },
+    }),
+  ]);
   if (!wo) return;
-
-  const row = await prisma.workOrderAttachment.findFirst({
-    where: { id: attachmentId, workOrderId: id },
-    select: { objectKey: true, fileName: true, kind: true },
-  });
   if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
   if (!row.objectKey) {
     return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ" });
@@ -6575,12 +6845,14 @@ router.get("/:id/attachments/:attachmentId/file", requireAuth, async (req: AuthR
   if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) {
     return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
   }
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const [wo, row] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findFirst({
+      where: { id: attachmentId, workOrderId: id },
+      select: { objectKey: true, kind: true, mimeType: true },
+    }),
+  ]);
   if (!wo) return;
-  const row = await prisma.workOrderAttachment.findFirst({
-    where: { id: attachmentId, workOrderId: id },
-    select: { objectKey: true, kind: true, mimeType: true },
-  });
   if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
   if (row.kind !== "DOCUMENT") return res.status(400).json({ error: "เปิดผ่านทางนี้ได้เฉพาะไฟล์ PDF" });
   if (!row.objectKey) return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ" });

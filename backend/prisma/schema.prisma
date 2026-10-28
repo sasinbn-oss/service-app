@@ -75,6 +75,8 @@ model User {
   assignedWorkOrders   WorkOrder[]           @relation("AssignedWorkOrders")
   closedWorkOrders     WorkOrder[]           @relation("ClosedWorkOrders")
   workOrderLogs        WorkOrderLog[]
+  adminReviewsSent     AdminReview[]         @relation("AdminReviewsSent")
+  adminReviewsAnswered AdminReview[]         @relation("AdminReviewsAnswered")
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
   partsOutNotes        WorkOrderPart[]       @relation("PartsOutNotes")
   workOrderAttachments WorkOrderAttachment[]
@@ -762,6 +764,7 @@ model WorkOrder {
   claims      PartClaim[]
   workers     WorkOrderWorker[]
   vehicleLogs VehicleLog[]
+  adminReviews AdminReview[]
 
   @@index([status, createdAt])
   @@index([assignedToId, status])
@@ -876,6 +879,33 @@ model WorkOrderLog {
   // ข้อมูลประกอบของรายการ — ตอนนี้ใช้กับ ROLLED_BACK: ค่าที่ถูกล้างตอนย้อนขั้น (ทีม วันนัด ผลเช็คคลัง ฯลฯ)
   // เก็บที่ประวัติไม่ใช่ที่ใบงาน เพราะใบงานต้องว่างจริง (ไม่งั้นโผล่บนบอร์ดแผนงานทีมเดิม) แต่ขั้นที่ย้อนไปต้องเติมค่าเดิมได้
   meta         Json?
+
+  @@index([workOrderId, createdAt])
+}
+
+// หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ โดยขั้นตอนไม่เปลี่ยน (เจ้าของงานขอ ต.ค. 69)
+// เช่น เลขเครื่องผิด เบอร์ร้านผิด น่าจะเป็นใบซ้ำ — เดิมต้องโทรบอกกันเอง ไม่มีที่ให้ตามว่าแอดมินแก้แล้วหรือยัง
+// แยกตารางไม่ใส่ในใบงาน: ใบหนึ่งส่งได้หลายรอบ และคำขอที่จบแล้วต้องเหลือไว้ดูย้อนหลัง
+// ยังเปิด = ยังไม่ตอบและไม่ยกเลิก (เข้ากล่องงานแอดมิน) · ตอบแล้วแต่ยังไม่รับทราบ = การ์ดหัวหน้าภาคโชว์คำตอบ
+model AdminReview {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  // เรื่องที่ให้ตรวจ — ADMIN_REVIEW_REASONS ใน utils/constants.ts
+  reason      String
+  note        String
+  // ขั้นของใบตอนส่ง — ระหว่างรอ หัวหน้าภาคยังเดินขั้นต่อได้ แอดมินต้องรู้ว่าส่งมาตอนอยู่ขั้นไหน
+  status      String
+  createdById Int?
+  createdBy   User?     @relation("AdminReviewsSent", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  reply       String?
+  repliedById Int?
+  repliedBy   User?     @relation("AdminReviewsAnswered", fields: [repliedById], references: [id], onDelete: SetNull)
+  repliedAt   DateTime?
+  // หัวหน้าภาคกดรับทราบคำตอบ — การ์ดเลิกโชว์กล่องคำตอบ
+  ackAt       DateTime?
+  cancelledAt DateTime?
 
   @@index([workOrderId, createdAt])
 }

@@ -31,7 +31,7 @@ import {
   uploadAttachment,
   attachmentIcon,
 } from "../utils/attachments";
-import { haveThumbs, prefetchLinks, withThumbs } from "../utils/attachmentCache";
+import { fetchAttachments, prefetchLinks, seedLinks, takeAttachments, withThumbs } from "../utils/attachmentCache";
 import { useAuth } from "../context/AuthContext";
 import ImageViewer from "./ImageViewer";
 import InspectionSlots, { inspectionFilesOf, missingInspection } from "./InspectionSlots";
@@ -56,6 +56,8 @@ export interface Attachment {
   mimeType?: string;
   /** หลักฐานเคลม (role CLAIM_*) เป็นของอะไหล่ชิ้นไหน */
   sparePartId?: number | null;
+  /** ลิงก์เปิดไฟล์ (อายุ 2 ชม.) มากับรายการ — ไม่มี = ไฟล์ยังไม่ขึ้นที่เก็บ หรือเซิร์ฟเวอร์รุ่นเก่า */
+  url?: string | null;
 }
 
 export default function WorkOrderAttachments({
@@ -101,15 +103,17 @@ export default function WorkOrderAttachments({
 
   const load = useCallback(async () => {
     try {
-      // บอกเซิร์ฟเวอร์ว่ารูปย่อใบไหนจำไว้แล้ว ไม่ต้องส่งซ้ำ (utils/attachmentCache)
-      const res = await api.get<{ rows: Attachment[] }>(`/work-orders/${workOrderId}/attachments`, {
-        params: { have: haveThumbs(workOrderId) },
-      });
-      const next = withThumbs(workOrderId, res.data.rows);
+      // หน้าใบงานเริ่มโหลดไว้แล้วตั้งแต่เปิดหน้า (utils/attachmentCache) — ครั้งแรกรับผลนั้น ไม่ยิงซ้ำ
+      // ที่เริ่มไว้พัง (เน็ตสะดุดตอนเปิดหน้า) ก็ขอใหม่อีกรอบ ไม่ปล่อยการ์ดว่าง
+      const started = takeAttachments<Attachment>(workOrderId);
+      const raw = started
+        ? await started.catch(() => fetchAttachments<Attachment>(workOrderId))
+        : await fetchAttachments<Attachment>(workOrderId);
+      const next = withThumbs(workOrderId, raw);
       setRows(next);
       onLoaded?.(next);
-      // ลิงก์ของทุกไฟล์รวดเดียวเบื้องหลัง — กดดูไฟล์แล้วเริ่มโหลดตัวไฟล์ได้ทันที
-      if (next.some((r) => r.available)) void prefetchLinks(workOrderId).catch(() => undefined);
+      // ลิงก์มากับรายการแล้ว — เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา ค่อยขอทุกไฟล์รวดเดียวเบื้องหลังแบบเดิม
+      if (!seedLinks(workOrderId, raw) && next.some((r) => r.available)) void prefetchLinks(workOrderId).catch(() => undefined);
     } catch {
       // เงียบไว้ ไฟล์แนบไม่ใช่เนื้อหาหลักของหน้า ถ้าโหลดไม่ได้ก็ไม่ควรบังหน้าจอ
       // ส่วนที่เหลือทั้งใบ ซึ่งเป็นข้อมูลที่คนเปิดมาดูจริง ๆ

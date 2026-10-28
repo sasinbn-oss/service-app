@@ -547,6 +547,20 @@ export const SEND_BACK_REASON_LABELS: Record<string, string> = {
   OTHER: "อื่น ๆ",
 };
 
+/**
+ * เรื่องที่หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ (เจ้าของงานขอ ต.ค. 69 · ตกลงตามตัวอย่าง) — ขั้นตอนไม่เปลี่ยน
+ * เป็นเรื่องข้อมูลในใบที่แอดมินเป็นคนกรอก/ติดต่อร้าน · เรื่องหน้างานใช้ "ย้อนขั้น" หรือช่างแจ้งปัญหาแทน
+ */
+export const ADMIN_REVIEW_REASONS = ["BRANCH", "MACHINE", "CONTACT", "SYMPTOM", "DUPLICATE", "OTHER"] as const;
+export const ADMIN_REVIEW_REASON_LABELS: Record<string, string> = {
+  BRANCH: "ข้อมูลสาขาไม่ถูก",
+  MACHINE: "เครื่อง/รุ่นไม่ถูก",
+  CONTACT: "เบอร์/ผู้ติดต่อไม่ถูก",
+  SYMPTOM: "อาการไม่ชัด ขอข้อมูลเพิ่ม",
+  DUPLICATE: "น่าจะเป็นใบซ้ำ",
+  OTHER: "อื่น ๆ",
+};
+
 export const WORK_ORDER_RESULTS = ["FIXED", "NO_FAULT"] as const;
 
 /**
@@ -633,6 +647,10 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CLAIM_SUBMITTED: "ส่งเคลมอะไหล่เก่า",
   CLAIM_APPROVED: "อนุมัติเคลม · ปิดงาน",
   CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",
+  // ส่งกลับให้แอดมินตรวจสอบ — ไม่เดินขั้น (ดู NON_STAGE_ACTIONS ใน routes/workOrders.ts)
+  ADMIN_REVIEW_REQUESTED: "ส่งกลับให้แอดมินตรวจสอบ",
+  ADMIN_REVIEW_CANCELLED: "ยกเลิกคำขอให้แอดมินตรวจสอบ",
+  ADMIN_REVIEW_ANSWERED: "แอดมินตรวจแล้ว",
 };
 
 /**
