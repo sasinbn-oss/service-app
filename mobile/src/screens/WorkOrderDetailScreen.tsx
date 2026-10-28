@@ -43,6 +43,7 @@ import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import { prefetchAttachments } from "../utils/attachmentCache";
+import { AdminReplyModal, AdminReviewBox, ackAdminReview, cancelAdminReview, type AdminReviewInfo } from "../components/AdminReview";
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
@@ -183,6 +184,8 @@ interface WorkOrder {
   crossTeam?: { ownTeam: string; assignedTeam: string; watchers: string[] } | null;
   /** คนเปิดเป็นหัวหน้าภาคของทีมที่รับงานข้ามทีมมา — ดูได้อย่างเดียว (เซิร์ฟเวอร์กันอีกชั้น) */
   viewOnly?: boolean;
+  /** หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ — ยังไม่ตอบ / ตอบแล้วรอรับทราบ (ขั้นตอนไม่เปลี่ยน) */
+  adminReview?: AdminReviewInfo | null;
   stageActorLabel: string | null;
   waitingParts: StockPart[];
   /** ค่าบริการที่หัวหน้าช่างให้เสนอราคา — ไม่มีราคา (ราคาอยู่ในใบเสนอราคาจากระบบบัญชี) */
@@ -682,6 +685,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [backfilling, setBackfilling] = useState(false);
   const [supClosing, setSupClosing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [replying, setReplying] = useState(false);
   const [results, setResults] = useState<Option[]>([]);
   const [workStatuses, setWorkStatuses] = useState<Option[]>([]);
   const [sendBackReasons, setSendBackReasons] = useState<Option[]>([]);
@@ -1639,6 +1643,53 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           ช่างส่งกลับ — หัวหน้าภาคต้องเห็นก่อนอย่างอื่นว่าทำไมใบนี้กลับมา ใครส่ง เมื่อไร
           ข้อมูลเดิมอยู่ครบในการ์ดข้างล่าง แก้ได้ที่ปุ่ม "แก้ไข" แล้วส่งตรวจหรือเดินต่อจากปุ่มขั้นนี้
         */}
+        {/*
+          ส่งกลับให้แอดมินตรวจสอบ (ต.ค. 69) — ขั้นตอนไม่เปลี่ยน แต่คนเปิดใบต้องเห็นว่ามีเรื่องค้างถามแอดมินอยู่
+          หัวหน้าภาคยกเลิก/รับทราบได้ แอดมินตอบได้จากตรงนี้ (การ์ดในกล่องงานมีปุ่มเดียวกัน)
+        */}
+        {order.adminReview && !done ? (
+          <View style={{ gap: spacing.sm }}>
+            <AdminReviewBox review={order.adminReview} viewer={user?.role === "ADMIN" ? "admin" : user?.role === "SUPERVISOR" ? "supervisor" : "other"} />
+            {user?.role === "SUPERVISOR" ? (
+              <TouchableOpacity
+                style={[styles.reviewAction, { borderColor: order.adminReview.answered ? colors.success : colors.borderStrong }]}
+                onPress={() =>
+                  order.adminReview!.answered ? ackAdminReview(order, async () => void (await load())) : cancelAdminReview(order, async () => void (await load()))
+                }
+                accessibilityLabel={order.adminReview.answered ? "รับทราบคำตอบแอดมิน" : "ยกเลิกคำขอให้แอดมินตรวจสอบ"}
+              >
+                <Ionicons
+                  name={order.adminReview.answered ? "checkmark" : "close"}
+                  size={16}
+                  color={order.adminReview.answered ? colors.successInk : colors.textMuted}
+                />
+                <Text style={[styles.reviewActionText, { color: order.adminReview.answered ? colors.successInk : colors.textMuted }]}>
+                  {order.adminReview.answered ? "รับทราบ" : "ยกเลิกคำขอ"}
+                </Text>
+              </TouchableOpacity>
+            ) : user?.role === "ADMIN" && !order.adminReview.answered ? (
+              <TouchableOpacity
+                style={[styles.reviewAction, { backgroundColor: colors.roleAdmin, borderColor: colors.roleAdmin }]}
+                onPress={() => setReplying(true)}
+                accessibilityLabel="ตรวจแล้ว ตอบกลับหัวหน้าภาค"
+              >
+                <Ionicons name="checkmark-circle" size={16} color="#fff" />
+                <Text style={[styles.reviewActionText, { color: "#fff" }]}>ตรวจแล้ว · ตอบกลับ</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+        {replying && order.adminReview ? (
+          <AdminReplyModal
+            order={order}
+            review={order.adminReview}
+            onClose={() => setReplying(false)}
+            onDone={async () => {
+              setReplying(false);
+              await load();
+            }}
+          />
+        ) : null}
         {/*
           จ่ายข้ามทีม (เจ้าของงานขอ ต.ค. 69) — ใบในพื้นที่หนึ่งแต่อีกทีมเข้าไปทำ คนเปิดใบต้องรู้ว่าทำไมทีมอื่นอยู่ในใบ
           และใครกดอะไรได้: ช่างปิดได้ทั้งสองทีม · หัวหน้าภาคของทีมที่รับเห็นใบแต่ดูอย่างเดียว
@@ -6691,6 +6742,18 @@ const styles = StyleSheet.create({
   },
   rolledBack: { borderColor: colors.rollback, backgroundColor: colors.rollbackSoft },
   crossTeamBox: { borderColor: colors.sky200, backgroundColor: colors.roleSupervisorSoft },
+  reviewAction: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    backgroundColor: colors.card,
+  },
+  reviewActionText: { fontSize: 13.5, fontWeight: "700" },
   cancelledBox: { borderColor: colors.borderStrong, backgroundColor: colors.background },
   keepBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.successLine, backgroundColor: colors.successSoft },
   keepTitle: { fontSize: 13, fontWeight: "800", color: colors.successInk },
