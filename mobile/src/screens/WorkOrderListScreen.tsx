@@ -68,6 +68,8 @@ export interface WorkOrderRow {
   code: string;
   source: string;
   title: string;
+  /** อาการบรรทัดแรก — ใบจากฟอร์มชื่อ "งาน CM" เหมือนกันหมด อาการจึงเป็นตัวบอกว่าใบไหน */
+  symptom?: string | null;
   status: string;
   statusLabel: string;
   priority: string;
@@ -526,7 +528,15 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     if (inboxParam !== undefined) setFilter(inboxParam ? "INBOX" : "ACTIVE");
   }, [inboxParam]);
   const [mineOnly, setMineOnly] = useState(false);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(route.params?.search ?? "");
+  // มาจาก "ค้นในใบงานซ่อมทั้งหมด" ของงานของฉันวันนี้ — ใบที่หาไม่เจอในงานของตัวเองมักรอคนอื่นอยู่หรือปิดไปแล้ว
+  // จึงค้นทุกสถานะ · หน้านี้ถูกใช้ซ้ำ (ไม่ขึ้นหน้าใหม่) ต้องตามค่าที่ส่งมาเองเหมือน inbox
+  const searchParam = route.params?.search;
+  useEffect(() => {
+    if (searchParam === undefined) return;
+    setSearch(searchParam);
+    setFilter("ALL");
+  }, [searchParam]);
   // ช่องค้นหาอัปเดตทันทีให้คนพิมพ์เห็น แต่ตัวโหลดใช้ค่าที่หยุดพิมพ์แล้ว
   // ไม่งั้นพิมพ์รหัสใบงานหนึ่งรหัสจะยิงขอข้อมูลเท่าจำนวนตัวอักษร
   const settledSearch = useDebounced(search);

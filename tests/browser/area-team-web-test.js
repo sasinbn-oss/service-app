@@ -2,6 +2,7 @@
 // · เปิดได้จริง (เช็คฐานข้อมูล) · หน้าใบงานไม่มีปุ่มทำขั้นตอน · ไม่มีคำขอที่โดนปฏิเสธ (403) ระหว่างใช้งานปกติ
 // สร้างบัญชี Supervisor (COCO) ชั่วคราวผูกกับสาขา C0006 แล้วลบทิ้งตอนจบ
 const { chromium } = require("playwright");
+const { confirmDuplicate } = require("./dup");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -97,6 +98,8 @@ function cleanup() {
     (await seen("ยังบันทึกไม่ได้", false)) === 0 ? pass("แนบรูปแล้วแถบช่องที่ขาดหายไป") : fail("แนบรูปแล้วยังล็อก");
     await page.screenshot({ path: path.join(DIR, "area-2-ready.png") });
     await vis("เปิดใบงาน").last().click();
+    // สาขาทดสอบมีใบค้างอยู่ — ป๊อปอัพยืนยันเปิดซ้ำ (ต.ค. 69)
+    await confirmDuplicate(page);
     await page.waitForTimeout(7000);
     const row = sql(`select w.code||'|'||b.code||'|'||coalesce(w."contactPhone",'')||'|'||(select count(*) from "WorkOrderAttachment" a where a."workOrderId"=w.id)
                      from "WorkOrder" w join "Branch" b on b.id=w."branchId" where w."createdById"=(select id from "User" where "employeeCode"='${LOGIN}') order by w.id desc limit 1`);

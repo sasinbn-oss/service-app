@@ -1,9 +1,11 @@
 // ทดสอบ: เตือนใบงานซ้ำในฟอร์มเปิดใบงาน (เจ้าของงานเลือกแบบเตือน ไม่บล็อก ต.ค. 69)
 //   · เลือกสาขาที่มีใบค้าง → กล่องเหลืองบอกจำนวนตรงกับฐานข้อมูล · โชว์ 3 ใบ + "ดูทั้งหมด (N)" กดแล้วครบ
 //   · ใส่เครื่องที่มีใบค้าง → บรรทัดแดงบอกเลขใบงาน · กดการ์ดแล้วไปหน้าใบงานนั้น กลับมาฟอร์มยังอยู่
-//   · ยังเปิดใบใหม่ได้ (ไม่บล็อก) · ดับเบิลคลิกปุ่มเปิดใบงาน = ได้ใบเดียว (ฐานข้อมูล)
+//   · กดเปิดใบงาน → ป๊อปอัพยืนยัน (ต.ค. 69): เครื่องเดียวกันขึ้นแดง ยังไม่บันทึก · ไม่ติ๊กกดยืนยันไม่ได้ · กลับไปแก้ฟอร์มอยู่
+//     ติ๊กแล้วยืนยัน = เปิดได้ · ดับเบิลคลิกปุ่มเปิดใบงาน = ได้ใบเดียว (ฐานข้อมูล)
 const { chromium } = require("playwright");
 const { attachPhoto } = require("./photo");
+const { confirmDuplicate } = require("./dup");
 const path = require("path");
 const DIR = __dirname;
 const { setup } = require("./fixture");
@@ -77,10 +79,29 @@ const { setup } = require("./fixture");
     await page.getByPlaceholder("เช่น ประตูไม่ล็อก / บอร์ดควบคุมไหม้").locator("visible=true").first().fill("อาการใหม่ทดสอบกดซ้ำ");
     await attachPhoto(page);
     const btn = vis("เปิดใบงาน").last();
+    const made = () => fx.sql(`select coalesce(string_agg(id::text, ','), '') from "WorkOrder" where id>${maxBefore} and symptom like 'อาการใหม่ทดสอบกดซ้ำ%'`);
     await btn.dblclick();
+    await page.waitForTimeout(3000);
+    (await vis("เครื่อง W77 มีใบงานค้างอยู่แล้ว").count()) && (await vis(`เครื่องเดียวกัน · W77`).count()) && made() === ""
+      ? pass("กดเปิดใบงาน → ป๊อปอัพ: เครื่องเดียวกัน (W77) ขึ้นแดง · ยังไม่บันทึกจนกว่าจะยืนยัน (ฐานข้อมูล)")
+      : fail(`ป๊อปอัพไม่ขึ้น/บันทึกไปแล้ว: ${made()}`);
+    // ดับเบิลคลิกคลิกที่สองตกลงบนป๊อปอัพแล้วลากคลุมข้อความ — ล้างก่อนถ่ายภาพไว้ดู
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await page.screenshot({ path: path.join(DIR, "open-orders-popup.png") });
+    await page.getByLabel("ยืนยัน เปิดใบใหม่", { exact: true }).locator("visible=true").first().click({ force: true }).catch(() => {});
+    await page.waitForTimeout(2000);
+    made() === "" ? pass("ยังไม่ติ๊กยืนยัน กดปุ่มเปิดไม่ได้ (ฐานข้อมูลไม่มีใบใหม่)") : fail("เปิดได้ทั้งที่ยังไม่ติ๊ก");
+    await page.getByLabel("กลับไปแก้", { exact: true }).locator("visible=true").first().click();
+    await page.waitForTimeout(1500);
+    (await page.getByLabel("ยืนยัน เปิดใบใหม่", { exact: true }).locator("visible=true").count()) === 0 && (await vis(red).count()) > 0
+      ? pass("กลับไปแก้: ป๊อปอัพปิด ฟอร์มยังอยู่ครบ")
+      : fail("กลับไปแก้แล้วป๊อปอัพไม่ปิด/ฟอร์มหาย");
+    await btn.dblclick();
+    (await confirmDuplicate(page)) ? null : fail("กดเปิดอีกรอบแล้วป๊อปอัพไม่ขึ้น");
     await page.waitForTimeout(6000);
-    const made = fx.sql(`select string_agg(id::text, ',') from "WorkOrder" where id>${maxBefore} and symptom like 'อาการใหม่ทดสอบกดซ้ำ%'`);
-    made && !made.includes(",") ? pass("ยังเปิดใบใหม่ได้ (ไม่บล็อก) · ดับเบิลคลิกได้ใบเดียว (ฐานข้อมูล)") : fail(`ใบที่ได้: ${made || "ไม่มี"}`);
+    made() && !made().includes(",")
+      ? pass("ติ๊กแล้วยืนยัน = เปิดใบใหม่ได้ · ดับเบิลคลิกได้ใบเดียว (ฐานข้อมูล)")
+      : fail(`ใบที่ได้: ${made() || "ไม่มี"}`);
     await ctx.close();
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {

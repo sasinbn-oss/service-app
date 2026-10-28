@@ -683,6 +683,8 @@ const listSelect = {
   jobType: true,
   adminReviews: activeReviewSelect,
   title: true,
+  // ใบที่เปิดจากฟอร์มชื่อ "งาน CM" ทุกใบ — อาการคือสิ่งที่บอกว่าใบไหนเป็นใบไหน และคนค้นด้วยคำนี้
+  symptom: true,
   status: true,
   priority: true,
   scheduledAt: true,
@@ -837,6 +839,8 @@ function listShape(
     code: w.code,
     source: w.source,
     title: w.title,
+    // บรรทัดแรกพอ — รายการโหลดทีละหลายร้อยใบผ่าน 4G อาการเต็มอยู่ในหน้ารายละเอียด
+    symptom: (w.symptom ?? "").split("\n")[0].trim().slice(0, 160) || null,
     status: w.status,
     statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
     priority: w.priority,
@@ -1255,6 +1259,7 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
               OR: [
                 { code: { contains: keyword, mode: "insensitive" as const } },
                 { title: { contains: keyword, mode: "insensitive" as const } },
+                { symptom: { contains: keyword, mode: "insensitive" as const } },
                 { branch: { code: { contains: keyword, mode: "insensitive" as const } } },
                 { branch: { name: { contains: keyword, mode: "insensitive" as const } } },
                 { machine: { code: { contains: keyword, mode: "insensitive" as const } } },

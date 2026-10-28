@@ -424,6 +424,8 @@ router.get("/:code/last-contact", requireAuth, async (req: AuthRequest, res) => 
  *
  * ส่งทั้งหมดใหม่ก่อนเก่า หน้าจอตัดเหลือ 3 ใบเอง (ต้องรู้จำนวนทั้งหมดไว้บอก "ดูทั้งหมด")
  * ไม่นับใบทดสอบ — แอดมินคัดลอกไว้ลองระบบ ไม่ใช่งานจริงที่ช่างจะไป
+ * ไม่นับใบที่รอตรวจเคลม (CLAIM_REVIEW) — ช่างปิดงานซ่อมแล้ว เหลือแค่เอกสารเคลม เครื่องเสียอีกคือเรื่องใหม่
+ * (เจ้าของงานเลือก ต.ค. 69 ตอนเพิ่มป๊อปอัพยืนยันก่อนเปิดใบซ้ำ — กล่องเตือนกับป๊อปอัพใช้รายการนี้ทั้งคู่)
  *
  * ใครเห็นอะไร (ตรวจระบบ ต.ค. 69 — เดิมทุกคนเห็นทุกสาขาครบทุกช่อง):
  * หัวหน้าภาคเฉพาะใบในพื้นที่ · ช่างเห็นแบบย่อ (เลขใบงาน เครื่อง ขั้น) พอให้รู้ว่ามีใบอยู่แล้ว
@@ -439,7 +441,7 @@ router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res)
     where: {
       AND: [scope],
       branch: { code: req.params.code },
-      status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
+      status: { in: ACTIVE_WORK_ORDER_STATUSES.filter((st) => st !== "CLAIM_REVIEW") },
       isTest: false,
     },
     orderBy: { createdAt: "desc" },

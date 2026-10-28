@@ -3,6 +3,7 @@
 //          เปิดได้โดยไม่มีรูป ไม่ผูกเครื่อง (ฐานข้อมูล)
 //        · ฟอร์มปิดงานใบ PM: ไม่มีขั้นรูปก่อนซ่อมกับป้ายรุ่น เตือนแค่หลังซ่อม · แนบหลังซ่อมแล้วปิดได้ (ฐานข้อมูล)
 const { chromium } = require("playwright");
+const { confirmDuplicate } = require("./dup");
 const { execSync } = require("child_process");
 const path = require("path");
 const DIR = __dirname;
@@ -91,6 +92,8 @@ const login = async (code) =>
     const submit = vis("เปิดใบงาน").last();
     await submit.scrollIntoViewIfNeeded().catch(() => {});
     await submit.click().catch(async () => submit.evaluate((n) => (n.closest("[tabindex]") || n).click()));
+    // สาขามีใบค้างอยู่ — ป๊อปอัพยืนยันเปิดซ้ำ (ต.ค. 69)
+    await confirmDuplicate(page);
     await page.waitForTimeout(5000);
     const made = sql(`select id||'|'||"jobType"||'|'||coalesce("machineId"::text,'ทั้งร้าน')||'|'||(select count(*) from "WorkOrderAttachment" a where a."workOrderId"=w.id) from "WorkOrder" w where id>${startId} and "createdById"=(select id from "User" where "employeeCode"='A001') order by id desc limit 1`);
     const [newId, jt, machine, files] = made.split("|");

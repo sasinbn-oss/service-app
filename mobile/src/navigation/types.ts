@@ -24,8 +24,8 @@ export type HomeStackParamList = {
   PartsOutReport: undefined;
   MachineDashboard: undefined;
   MachineImport: undefined;
-  /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม */
-  WorkOrderList: { inbox?: boolean } | undefined;
+  /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม · search = ค้นต่อจากงานของฉันวันนี้ (ค้นในใบทั้งหมด) */
+  WorkOrderList: { inbox?: boolean; search?: string } | undefined;
   // มาจากกระดานได้ ถ้าเปิดจากเคสจะพกรหัสเคสกับข้อความตั้งต้นมาด้วย
   // machineCode ติดมาจากกระดานเพื่อเติมรุ่นกับขนาดที่เคยกรอกไว้ของเครื่องตัวนั้น
   // ฟอร์มไม่มีช่องรหัสเครื่องในทางนี้ จึงหาเองจากที่พิมพ์ไม่ได้เหมือนทางเปิดเอง

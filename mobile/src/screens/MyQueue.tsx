@@ -7,9 +7,12 @@
  *
  * ข้อมูลชุดเดียวกับ "กล่องงานของฉัน" (GET /work-orders?status=INBOX) ไม่มี endpoint ใหม่
  * ต่างกันที่หน้านี้จัดเป็นรายการสิ่งที่ต้องทำ มีปุ่มของขั้นนั้นบนการ์ดเลย กดแล้วเปิดใบงานพร้อมฟอร์มของขั้น
+ *
+ * ช่องค้นหา (เจ้าของงานขอ ต.ค. 69 ตามตัวอย่างที่ตกลง) — กรองในเครื่องทันทีที่พิมพ์ ไม่ถามเซิร์ฟเวอร์
+ * เพราะหน้านี้โหลดใบที่รอทั้งหมดมาแล้ว (ไม่แบ่งหน้า) · ตัวเลขสรุปด้านบนนับจากทั้งหมดเสมอ ไม่ตามคำค้น
  */
-import React, { useCallback, useMemo, useRef, useState } from "react";
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "../components/Tap";
@@ -39,7 +42,38 @@ const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTim
 /** "แอดมิน · เบิกอะไหล่ (คลัง 94)" → "เบิกอะไหล่ (คลัง 94)" — ตำแหน่งรู้อยู่แล้วว่าเป็นของตัวเอง */
 const stageName = (label: string) => label.split(" · ").slice(1).join(" · ") || label;
 
-type Props = { onOpen: (id: number, open?: "stage" | "close") => void };
+type Props = {
+  onOpen: (id: number, open?: "stage" | "close") => void;
+  /** ค้นไม่เจอในงานของตัวเอง → ค้นต่อในใบงานซ่อมทั้งหมด */
+  onSearchAll?: (q: string) => void;
+};
+
+/** ข้อความที่ค้นได้ของการ์ดหนึ่งใบ — ตรงกับที่การ์ดแสดง คนค้นด้วยสิ่งที่เห็นบนการ์ด */
+const haystack = (r: WorkOrderRow) =>
+  [r.code, r.branchCode, r.branchName, r.title, r.symptom, r.machineCode, r.assignedTeam].filter(Boolean).join(" ").toLowerCase();
+
+/** ไฮไลต์คำที่ค้นในข้อความ — ตัวพิมพ์เล็ก/ใหญ่ไม่ต่างกัน (c0042 = C0042) */
+function Hi({ text, q, style, numberOfLines }: { text: string; q: string; style?: object | object[]; numberOfLines?: number }) {
+  if (!q) return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
+  const lower = text.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let i = 0;
+  for (let at = lower.indexOf(q); at >= 0; at = lower.indexOf(q, at + q.length)) {
+    if (at > i) parts.push(text.slice(i, at));
+    parts.push(
+      <Text key={at} style={styles.mark}>
+        {text.slice(at, at + q.length)}
+      </Text>
+    );
+    i = at + q.length;
+  }
+  parts.push(text.slice(i));
+  return (
+    <Text style={style} numberOfLines={numberOfLines}>
+      {parts}
+    </Text>
+  );
+}
 
 /**
  * กลุ่มที่ไม่ใช่ขั้นของใบ — ส่งกลับให้แอดมินตรวจสอบ (ต.ค. 69) ปักไว้บนสุด เพราะอีกฝ่ายรอคำตอบอยู่
@@ -50,13 +84,15 @@ const REVIEW_GROUP = "หัวหน้าภาคส่งให้ตรว�
 const ANSWER_GROUP = "แอดมินตอบแล้ว";
 type GroupKind = "stage" | "review" | "answer";
 
-export default function MyQueue({ onOpen }: Props) {
+export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const { user } = useAuth();
   const { docked } = useDocked();
   const [rows, setRows] = useState<WorkOrderRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sendFor, setSendFor] = useState<WorkOrderRow | null>(null);
   const [replyFor, setReplyFor] = useState<WorkOrderRow | null>(null);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<TextInput>(null);
   const seq = useRef(0);
   // แท็บที่ไม่ได้เปิดอยู่บนเว็บยังวาดค้างไว้แบบโปร่งใส (ท่าจางเข้าเวลาสลับแท็บ) — รายการรหัสใบงานที่นี่
   // ไปปนกับหน้ารายการใบงาน (เทสต์ appointment-list นับรหัสเกิน) วาดรายการเฉพาะตอนแท็บนี้เปิดอยู่
@@ -107,20 +143,74 @@ export default function MyQueue({ onOpen }: Props) {
     ];
   }, [rows, isAdmin]);
 
+  // ค้นในใบที่โหลดมาแล้ว — กลุ่มที่ไม่มีใบตรงซ่อน · total = จำนวนในกลุ่มก่อนค้น (บอก "2 จาก 75")
+  const q = query.trim().toLowerCase();
+  const shown = useMemo(
+    () =>
+      groups
+        .map((g) => ({ ...g, total: g.list.length, list: q ? g.list.filter((r) => haystack(r).includes(q)) : g.list }))
+        .filter((g) => g.list.length > 0),
+    [groups, q]
+  );
+  const found = shown.reduce((n, g) => n + g.list.length, 0);
+
+  // จอคอม: กด / ที่ไหนก็ได้ไปที่ช่องค้นหา (ยกเว้นกำลังพิมพ์อยู่ในช่องอื่น)
+  useEffect(() => {
+    if (Platform.OS !== "web" || !focused) return;
+    const key = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "/" || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [focused]);
+
   const all = rows ?? [];
   const urgent = all.filter((r) => r.priority === "URGENT").length;
   const stale = all.filter((r) => daysSince(r.stageSince) > STALE_DAYS).length;
   const out = all.filter((r) => (r.partsOut ?? 0) > 0).length;
   const roleLabel = user?.role === "ADMIN" ? "แอดมิน" : "หัวหน้าภาค";
 
+  const searchBox = (
+    <View style={[styles.search, docked && styles.searchDocked, !!q && styles.searchOn]}>
+      <Ionicons name="search" size={17} color={q ? colors.navy : colors.textMuted} />
+      <TextInput
+        ref={searchRef}
+        style={styles.searchInput}
+        value={query}
+        onChangeText={setQuery}
+        placeholder="ค้นหาเลขใบงาน สาขา เครื่อง อาการ"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="ค้นหาในงานของฉัน"
+        returnKeyType="search"
+      />
+      {query ? (
+        <TouchableOpacity style={styles.searchClear} onPress={() => setQuery("")} accessibilityLabel="ล้างคำค้น">
+          <Ionicons name="close" size={16} color={colors.body} />
+        </TouchableOpacity>
+      ) : docked && Platform.OS === "web" ? (
+        <Text style={styles.kbd}>/</Text>
+      ) : null}
+    </View>
+  );
+
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}>
+    <ScrollView
+      style={styles.page}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
+      // มือถือ: ช่องค้นหาติดอยู่ใต้แถบหัว เลื่อนลงไปไกลแค่ไหนก็พิมพ์ได้ (ลูกตัวที่ 3 = แถวค้นหา)
+      stickyHeaderIndices={!docked && rows && all.length ? [2] : undefined}
+    >
       <View style={styles.head}>
         {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ */}
         {docked ? <Text style={[styles.title, headingFont]}>งานของฉันวันนี้</Text> : null}
         <View style={styles.rolePill}>
           <Text style={styles.rolePillText}>งานที่รอ{roleLabel}ทำ</Text>
         </View>
+        {docked && rows && all.length ? searchBox : null}
       </View>
 
       {rows ? (
@@ -132,20 +222,55 @@ export default function MyQueue({ onOpen }: Props) {
         </View>
       ) : null}
 
+      {!docked && rows && all.length ? (
+        <View style={styles.stickySearch}>
+          {searchBox}
+          {q ? <Text style={[styles.foundText, !found && { color: colors.dangerInk }]}>{found ? `พบ ${found} จาก ${all.length} ใบ` : `ไม่พบใน ${all.length} ใบที่รอคุณ`}</Text> : null}
+        </View>
+      ) : null}
+      {docked && q && found ? (
+        <View style={styles.result}>
+          <Text style={styles.resultText}>
+            แสดง <Text style={{ fontWeight: "700" }}>{found} ใบ</Text> ที่ตรงกับ <Text style={{ fontWeight: "700" }}>“{query.trim()}”</Text> จากทั้งหมด {all.length} ใบ
+          </Text>
+          <TouchableOpacity style={styles.resultClear} onPress={() => setQuery("")} accessibilityLabel="ล้างคำค้นหา">
+            <Text style={styles.resultClearText}>ล้างคำค้น</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {error ? (
         <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={error} />
       ) : !rows ? (
         <Spinner color={colors.primary} style={{ marginTop: spacing.xl }} />
       ) : all.length === 0 ? (
         <EmptyState icon="checkmark-done-outline" title="ไม่มีงานค้างรอคุณ" text="ใบงานที่ถึงขั้นของคุณจะขึ้นที่นี่ทันที" />
-      ) : !focused ? null : (
-        groups.map((g) => (
+      ) : !focused ? null : q && !found ? (
+        <View style={styles.none}>
+          <View style={styles.noneIcon}>
+            <Ionicons name="search" size={26} color={colors.navy} />
+          </View>
+          <Text style={styles.noneTitle}>ไม่มี “{query.trim()}” ในงานของฉันวันนี้</Text>
+          <Text style={styles.noneText}>ใบงานนั้นอาจรอคนอื่นอยู่หรือปิดไปแล้ว — ค้นในใบงานซ่อมทั้งหมดได้</Text>
+          {onSearchAll ? (
+            <TouchableOpacity style={styles.noneGo} onPress={() => onSearchAll(query.trim())} accessibilityLabel="ค้นในใบงานซ่อมทั้งหมด">
+              <Ionicons name="clipboard-outline" size={18} color="#fff" />
+              <Text style={styles.noneGoText}>ค้นในใบงานซ่อมทั้งหมด</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity style={styles.noneClear} onPress={() => setQuery("")} accessibilityLabel="ล้างคำค้นหา">
+            <Text style={styles.resultClearText}>ล้างคำค้น</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        shown.map((g) => (
           <View key={g.label} style={styles.group} accessibilityLabel={`กลุ่ม ${g.label}`}>
             <View style={styles.groupHead}>
               <Text style={[styles.groupTitle, headingFont]}>{g.label}</Text>
               <View style={styles.groupCount}>
                 <Text style={styles.groupCountText}>{g.list.length}</Text>
               </View>
+              {q ? <Text style={styles.groupOf}>จาก {g.total}</Text> : null}
             </View>
             {g.list.map((r) => {
               const d = daysSince(r.stageSince);
@@ -153,7 +278,7 @@ export default function MyQueue({ onOpen }: Props) {
               return (
                 <View key={r.id} style={[styles.card, hot && styles.cardHot]}>
                   <View style={styles.cardTop}>
-                    <Text style={[styles.code, headingFont]}>{r.code}</Text>
+                    <Hi text={r.code} q={q} style={[styles.code, headingFont]} />
                     {hot ? (
                       <View style={styles.tagHot}>
                         <Text style={styles.tagHotText}>ด่วน</Text>
@@ -168,14 +293,16 @@ export default function MyQueue({ onOpen }: Props) {
                     <View style={{ flex: 1 }} />
                     <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>{d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}</Text>
                   </View>
-                  <Text style={styles.branch} numberOfLines={1}>
-                    {r.branchCode} {r.branchName}
-                  </Text>
-                  <Text style={styles.meta} numberOfLines={2}>
-                    {[r.title, r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : null, r.assignedTeam ? `ทีม ${r.assignedTeam}` : null]
+                  <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={styles.branch} numberOfLines={1} />
+                  {/* อาการก่อนชื่อใบ — ใบจากฟอร์มชื่อ "งาน CM" ทุกใบ บอกอะไรไม่ได้ (ชื่อเรื่องยังใช้กับใบไฟดับ/PM ที่ไม่มีอาการ) */}
+                  <Hi
+                    text={[r.symptom || r.title, r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : null, r.assignedTeam ? `ทีม ${r.assignedTeam}` : null]
                       .filter(Boolean)
                       .join(" · ")}
-                  </Text>
+                    q={q}
+                    style={styles.meta}
+                    numberOfLines={2}
+                  />
                   {r.orphan && r.orphanReason ? <Text style={styles.note}>{r.orphanReason}</Text> : null}
                   {r.adminReview ? <AdminReviewBox review={r.adminReview} viewer={isAdmin ? "admin" : "supervisor"} /> : null}
                   <CardActions
@@ -361,6 +488,73 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   rolePill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   rolePillText: { fontSize: 13, lineHeight: 24, fontWeight: "700", color: colors.primaryInk },
+  search: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 46,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    paddingLeft: 12,
+    paddingRight: 6,
+  },
+  searchDocked: { marginLeft: "auto", width: 330, maxWidth: "100%", minHeight: 42 },
+  searchOn: { borderWidth: 1.5, borderColor: colors.navy },
+  searchInput: { flex: 1, minWidth: 0, fontSize: 14.5, lineHeight: 22, color: colors.text, paddingVertical: 8 },
+  searchClear: { width: 34, height: 34, borderRadius: 8, backgroundColor: colors.rowAlt, alignItems: "center", justifyContent: "center" },
+  kbd: {
+    fontSize: 11.5,
+    fontWeight: "700",
+    color: colors.textMuted,
+    borderWidth: 1,
+    borderBottomWidth: 2,
+    borderColor: colors.border,
+    borderRadius: 5,
+    paddingHorizontal: 6,
+    lineHeight: 18,
+    marginRight: 4,
+  },
+  stickySearch: { backgroundColor: colors.background, paddingVertical: 6, gap: 4 },
+  foundText: { fontSize: 12.5, fontWeight: "700", color: colors.navy, paddingLeft: 4 },
+  result: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: colors.sky50,
+    borderWidth: 1,
+    borderColor: colors.sky200,
+    borderRadius: radius.md,
+    paddingLeft: 14,
+    paddingRight: 8,
+    paddingVertical: 8,
+  },
+  resultText: { flexShrink: 1, fontSize: 13.5, lineHeight: 20, color: colors.navy },
+  resultClear: { marginLeft: "auto", borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: colors.card },
+  resultClearText: { fontSize: 13, fontWeight: "700", color: colors.navy },
+  mark: { backgroundColor: colors.warningTint, color: colors.text, borderRadius: 3 },
+  groupOf: { fontSize: 12.5, color: colors.textMuted },
+  none: { alignItems: "center", gap: 10, paddingVertical: spacing.xl, paddingHorizontal: spacing.lg },
+  noneIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" },
+  noneTitle: { fontSize: 17, lineHeight: 26, fontWeight: "700", color: colors.text, textAlign: "center" },
+  noneText: { fontSize: 13.5, lineHeight: 21, color: colors.textMuted, textAlign: "center" },
+  noneGo: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    alignSelf: "stretch",
+    maxWidth: 380,
+    width: "100%",
+    marginHorizontal: "auto",
+    minHeight: 46,
+    borderRadius: radius.md,
+    backgroundColor: colors.navyFill,
+  },
+  noneGoText: { color: "#fff", fontWeight: "700", fontSize: 14.5 },
+  noneClear: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 18, minHeight: 44, justifyContent: "center", backgroundColor: colors.card },
   stats: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   stat: {
     flexGrow: 1,

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ทดสอบ: ใบงานเปิดค้างของสาขา (GET /branches/:code/open-work-orders) — ฟอร์มเปิดใบงานใช้เตือนก่อนเปิดซ้ำ
 #   · ใบที่เพิ่งเปิดขึ้น ใหม่ก่อนเก่า · ชื่อขั้น · รหัสเครื่อง · อาการบรรทัดแรก · คนเปิด
-#   · ใบที่ปิด/ยกเลิกแล้วไม่ขึ้น · ใบทดสอบไม่ขึ้น · สาขาอื่นไม่ปน · ไม่ล็อกอิน 401
+#   · ใบที่ปิด/ยกเลิกแล้วไม่ขึ้น · ใบรอตรวจเคลม (ช่างปิดงานแล้ว) ไม่ขึ้น (ต.ค. 69) · ใบทดสอบไม่ขึ้น · สาขาอื่นไม่ปน · ไม่ล็อกอิน 401
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -26,13 +26,16 @@ newwo() { POST $A work-orders "{\"branchCode\":\"$1\",\"jobType\":\"CM\",\"prior
 W1=$(newwo $BR W5 "ไม่ปั่นหมาดทดสอบเปิดซ้ำ"); sleep 1
 W2=$(newwo $BR D2 "อบไม่ร้อนทดสอบเปิดซ้ำ")
 W3=$(newwo $BR W6 "ปิดแล้วทดสอบ"); W4=$(newwo $BR W7 "ใบทดสอบ"); W5=$(newwo $OTHER W5 "สาขาอื่นทดสอบ")
-IDS="$W1 $W2 $W3 $W4 $W5"
+W6=$(newwo $BR W8 "รอตรวจเคลมทดสอบ")
+IDS="$W1 $W2 $W3 $W4 $W5 $W6"
 DB "update \"WorkOrder\" set symptom=symptom||chr(10)||'สาเหตุ: ภายในทดสอบ' where id=$W1" >/dev/null
 DB "update \"WorkOrder\" set status='DONE' where id=$W3" >/dev/null
 DB "update \"WorkOrder\" set \"isTest\"=true where id=$W4" >/dev/null
+# ช่างปิดงานแล้ว รอแค่ตรวจเคลมอะไหล่ — เครื่องเสียอีกคือเรื่องใหม่ ไม่ต้องเตือน (เจ้าของงานเลือก ต.ค. 69)
+DB "update \"WorkOrder\" set status='CLAIM_REVIEW' where id=$W6" >/dev/null
 R=$(OPEN $A $BR)
 
-[ "$(echo "$R" | J 'd.map(o=>o.id).join(",")')" = "$W2,$W1" ] && pass "ขึ้นเฉพาะใบค้างจริง ใหม่ก่อนเก่า — ไม่มีใบปิดแล้ว ใบทดสอบ หรือใบสาขาอื่น" \
+[ "$(echo "$R" | J 'd.map(o=>o.id).join(",")')" = "$W2,$W1" ] && pass "ขึ้นเฉพาะใบค้างจริง ใหม่ก่อนเก่า — ไม่มีใบปิดแล้ว ใบรอตรวจเคลม ใบทดสอบ หรือใบสาขาอื่น" \
   || fail "รายการ: $(echo "$R" | J 'd.map(o=>o.code+":"+o.status).join(",")')"
 [ "$(echo "$R" | J "d.find(o=>o.id==$W1).symptom")" = "ไม่ปั่นหมาดทดสอบเปิดซ้ำ" ] && pass "อาการบรรทัดแรกเท่านั้น (ไม่มีบรรทัดสาเหตุ)" || fail "อาการ: $(echo "$R" | J "d.find(o=>o.id==$W1).symptom")"
 [ "$(echo "$R" | J "const o=d.find(o=>o.id==$W1); [o.machineCode,o.statusLabel,!!o.createdBy,!!o.createdAt].join('|')")" = "W5|หัวหน้าภาค · ระบุอะไหล่|true|true" ] \
