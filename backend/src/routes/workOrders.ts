@@ -78,6 +78,7 @@ import {
   ROLE_LABELS,
   WORK_ORDER_STAGE_ACTOR,
   WORK_ORDER_STAGE_ORDER,
+  TRANSFER_LEAD_DAYS,
   OFF_CATALOG_PREFIX,
   bangkokDay,
   bangkokDayRange,
@@ -414,6 +415,125 @@ async function mergeWaitingParts(
 const isIssued = (p: { inStock: boolean | null; requisitionNo: string | null }) => p.inStock === true && !!p.requisitionNo;
 
 /**
+ * นัดลูกค้าก่อนเบิก (เจ้าของงานกำหนด ต.ค. 69) — ใบเดินต่อไปไหนหลังแต่ละจังหวะ
+ *
+ * ใบเดียวกันวนกลับได้หลายทาง (ทีมไม่ว่างวันใหม่ · ร้านปิด · ย้อนขั้น) ทั้งก่อนและหลังเบิกของ
+ * จึงตัดสินจากสิ่งที่เกิดขึ้นแล้วจริงในใบ ไม่ใช่จากว่ามาจากปุ่มไหน
+ */
+
+/** ประวัติที่เริ่มรอบอะไหล่ใหม่ — หลังจากนี้ผลเบิกรอบก่อนไม่นับ (ระบุอะไหล่ใหม่ · เช็คใหม่ · ของไม่พอตอนเบิก) */
+const PARTS_ROUND_ACTIONS = ["PARTS_REQUESTED", "NO_PARTS", "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
+
+/**
+ * คอนเฟิร์มลูกค้าแล้วไปไหน — ยังมีของต้องเบิก → แอดมินเบิก · เบิกครบแล้ว (วนกลับมาคอนเฟิร์มใหม่) → หัวหน้าภาคปล่อยงาน
+ * ของนอกสโตร์ไม่มีเลขใบเบิก — ดูว่าแอดมินผ่านขั้นเบิกไปแล้วหลังรอบเช็คล่าสุดหรือยัง
+ */
+async function afterConfirm(id: number): Promise<"PARTS_REQUESTED" | "ASSIGNED"> {
+  const [parts, logs] = await Promise.all([
+    prisma.workOrderPart.findMany({
+      where: { workOrderId: id, kind: "WAITING" },
+      select: { inStock: true, requisitionNo: true, sparePart: { select: { offCatalog: true } } },
+    }),
+    prisma.workOrderLog.findMany({
+      where: { workOrderId: id, action: { in: [...PARTS_ROUND_ACTIONS, "PARTS_CHECKED"] } },
+      orderBy: { createdAt: "desc" },
+      take: 1,
+      select: { action: true },
+    }),
+  ]);
+  if (parts.length === 0) return "ASSIGNED";
+  const storeLeft = parts.some((p) => !p.sparePart.offCatalog && !isIssued(p));
+  const offLeft = parts.some((p) => p.sparePart.offCatalog) && logs[0]?.action !== "PARTS_CHECKED";
+  return storeLeft || offLeft ? "PARTS_REQUESTED" : "ASSIGNED";
+}
+
+/**
+ * เบิก/โอน/เบิกคลังอื่นครบแล้วไปไหน — ลูกค้าคอนเฟิร์มวันแล้ว (สายงานใหม่) → หัวหน้าภาคปล่อยงาน
+ * ยังไม่ได้นัด (ใบที่อยู่ระหว่างเบิกตอนเปลี่ยนสายงาน) → หัวหน้าภาคนัดวันเข้า แล้วคอนเฟิร์ม/ปล่อยงานตามปกติ
+ */
+function afterIssue(cur: { appointmentStatus: string | null; scheduledAt: Date | null }): "ASSIGNED" | "PARTS_CHECKED" {
+  return cur.appointmentStatus === "CONFIRMED" && cur.scheduledAt ? "ASSIGNED" : "PARTS_CHECKED";
+}
+
+/** ตัวที่ยังต้องเบิก/โอนจากคลังอื่น — แอดมินบอกว่ามีที่คลังที่ไม่ใช่ 94 และยังไม่ได้เบิกหรือโอนมาถึง */
+function needsTransferPart(p: {
+  inStock: boolean | null;
+  warehouse: string | null;
+  requisitionNo: string | null;
+  transferredAt: Date | null;
+  sparePart: { offCatalog: boolean };
+}) {
+  return p.inStock === true && !p.sparePart.offCatalog && !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo && !p.transferredAt;
+}
+
+/**
+ * วันแรกที่นัดเข้างานได้ — ของอยู่คลังอื่นต้องเผื่อเวลาเบิก/โอน (TRANSFER_LEAD_DAYS · เจ้าของงานกำหนด ต.ค. 69)
+ * ไม่มีของต้องโอน = ไม่มีข้อจำกัด (null)
+ */
+async function earliestVisit(id: number): Promise<{ day: string; warehouses: string[] } | null> {
+  const parts = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: { inStock: true, warehouse: true, requisitionNo: true, transferredAt: true, sparePart: { select: { offCatalog: true } } },
+  });
+  const far = parts.filter(needsTransferPart);
+  if (far.length === 0) return null;
+  const day = bangkokDay(new Date(Date.now() + TRANSFER_LEAD_DAYS * 86_400_000));
+  return { day, warehouses: [...new Set(far.map((p) => p.warehouse!))] };
+}
+
+/** วันนัดเร็วกว่าที่ของโอนทัน — ข้อความบอกวันแรกที่นัดได้ (ส่งกลับเป็น 400) */
+function tooSoonText(visit: string, early: { day: string; warehouses: string[] } | null) {
+  if (!early || visit >= early.day) return null;
+  return `อะไหล่อยู่${early.warehouses.join(", ")} ต้องเบิก/โอนก่อน — นัดได้ตั้งแต่ ${visitText(early.day, null)} (ล่วงหน้า ${TRANSFER_LEAD_DAYS} วัน)`;
+}
+
+/**
+ * เช็คอะไหล่ครบแล้วไปไหน — ต้องเสนอราคา → เสนอราคา · ไม่ต้อง → หัวหน้าภาคนัดวันเข้า
+ *
+ * กฎเดียวกับตอนหัวหน้าภาคระบุอะไหล่ (อะไหล่นอก · ค่าบริการ · แฟรนไชส์หมดประกัน) — ตัดสินซ้ำตรงนี้
+ * เพราะทุกใบที่ใช้อะไหล่มาเช็คก่อนแล้ว ไม่ใช่เฉพาะใบเสนอราคาเหมือนเดิม
+ * ใบแยกที่ลูกค้าจ่ายค่าตัวนั้นไปแล้วในใบเดิม (PREPAID) ไม่เสนอราคาซ้ำ — จนกว่าจะระบุอะไหล่ใหม่
+ */
+async function afterSourcing(id: number, movedOut: number[] = []): Promise<"AWAITING_QUOTE" | "PARTS_CHECKED"> {
+  const [wo, prepaid, respecified] = await Promise.all([
+    prisma.workOrder.findUniqueOrThrow({
+      where: { id },
+      select: {
+        needsParts: true,
+        branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+        machine: { select: { brand: true, model: true } },
+        _count: { select: { services: true } },
+        parts: {
+          where: { kind: "WAITING" },
+          select: { sparePartId: true, inStock: true, requisitionNo: true, sparePart: { select: { offCatalog: true } } },
+        },
+      },
+    }),
+    prisma.workOrderLog.findFirst({ where: { workOrderId: id, action: "PREPAID" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: { in: ["PARTS_REQUESTED", "NO_PARTS"] } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
+  ]);
+  if (prepaid && (!respecified || respecified.createdAt < prepaid.createdAt)) return "PARTS_CHECKED";
+  // ตัวที่กำลังแยกไปใบรออะไหล่ไม่ใช่ของใบนี้แล้ว — ใบใหม่ตัดสินเรื่องเสนอราคาเองตอนของเข้า
+  const open = wo.parts.filter((p) => !isIssued(p) && !movedOut.includes(p.sparePartId));
+  const quote =
+    wo._count.services > 0 ||
+    open.some((p) => p.sparePart.offCatalog) ||
+    (open.length > 0 &&
+      needsCustomerQuote({
+        branchCode: wo.branch.code,
+        needsParts: true,
+        openedAt: wo.branch.openedAt,
+        warrantyExpiresAt: wo.branch.warrantyExpiresAt,
+        machineBrand: machineMake(wo.machine),
+      }));
+  return quote ? "AWAITING_QUOTE" : "PARTS_CHECKED";
+}
+
+/**
  * จำรุ่นกับขนาดไว้ที่ตัวเครื่อง ไม่ใช่ที่ใบงาน
  *
  * ทั้งสองเป็นของตัวเครื่อง ไม่ได้เปลี่ยนไปตามงาน — เครื่อง W5 ที่เป็น Huebsch
@@ -706,6 +826,12 @@ const listSelect = {
   // ใบงานแจ้งเคลม (ตอนปิดงานส่งอะไหล่เก่าเคลม) — ป้าย + ตัวกรอง "ใบงานเคลม" ในรายการ (เจ้าของงานขอ ต.ค. 69)
   // เอาแค่รอบล่าสุดตัวเดียว รายการอยากรู้สถานะเคลมตอนนี้ ไม่ใช่ทุกรอบ
   claims: { select: { status: true }, orderBy: { createdAt: "desc" as const }, take: 1 },
+  /**
+   * ป้ายอะไหล่บนการ์ด (นัดลูกค้าก่อนเบิก ต.ค. 69) — สี่ช่องพอตัดสิน ส่งออกไปแค่ผล (partsState) ไม่ใช่รายการ
+   * ช่างที่เปิดรายการผ่าน 4G ไม่ต้องโหลดอะไหล่ทุกใบ (ดูเหตุผลข้างบน)
+   */
+  needsParts: true,
+  parts: { where: { kind: "WAITING" }, select: { inStock: true, warehouse: true, requisitionNo: true, transferredAt: true } },
   _count: {
     select: {
       attachments: true,
@@ -714,6 +840,35 @@ const listSelect = {
     },
   },
 } as const;
+
+/**
+ * ป้ายอะไหล่ (เจ้าของงานตกลงตามแบบ ต.ค. 69) — คำเดียวกันทั้งกล่องงานแอดมินและหัวหน้าภาค
+ * ไม่ต้องเปิดใบงานก็รู้ว่าของพร้อมหรือยัง · ขั้นที่ป้ายไม่บอกอะไรเพิ่ม (ก่อนระบุอะไหล่ ช่างเข้างานแล้ว) = null
+ *
+ * CHECK รอแอดมินเช็ค · OUT อะไหล่หมด (มีวันคาดเข้าแยก) · READY ครบ ยังไม่เบิก (คลัง 94 นัดได้ทันที)
+ * · TRANSFER ครบ แต่อยู่คลังอื่น ต้องโอน (นัดล่วงหน้า 7 วัน) · ISSUED เบิกแล้ว
+ */
+const PARTS_STATE_STAGES = new Set([
+  "PARTS_SOURCING",
+  "AWAITING_QUOTE",
+  "AWAITING_PAYMENT",
+  "PARTS_CHECKED",
+  "AWAITING_CONFIRM",
+  "PARTS_REQUESTED",
+  "ASSIGNED",
+]);
+function partsState(w: {
+  status: string;
+  needsParts: boolean | null;
+  parts: { inStock: boolean | null; warehouse: string | null; requisitionNo: string | null; transferredAt: Date | null }[];
+}): "CHECK" | "OUT" | "READY" | "TRANSFER" | "ISSUED" | null {
+  if (w.needsParts !== true || w.parts.length === 0 || !PARTS_STATE_STAGES.has(w.status)) return null;
+  if (w.status === "ASSIGNED") return "ISSUED";
+  if (w.parts.some((p) => p.inStock === false)) return w.status === "PARTS_SOURCING" || w.status === "PARTS_REQUESTED" ? "OUT" : "CHECK";
+  if (w.status === "PARTS_SOURCING" || w.parts.some((p) => p.inStock === null)) return "CHECK";
+  const far = w.parts.some((p) => !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo && !p.transferredAt);
+  return far ? "TRANSFER" : "READY";
+}
 
 /**
  * ขั้นที่ผล "หมด" ยังหมายถึงตอนนี้ — ทุกทางที่ออกจากขั้นเหล่านี้ (ของครบ · ของมาแล้ว · ย้อนขั้น)
@@ -859,6 +1014,7 @@ function listShape(
     appointmentStatusLabel: w.appointmentStatus ? APPOINTMENT_STATUS_LABELS[w.appointmentStatus] ?? w.appointmentStatus : null,
     partsExpectedAt: w.partsExpectedAt,
     partsOut: PARTS_OUT_STAGES.has(w.status) ? w._count.parts : 0,
+    partsState: partsState(w),
     // ใบรออะไหล่ที่แยกมาจากใบอื่น — รายการขึ้นป้ายให้รู้ว่าเป็นงานต่อเนื่อง
     isFollowUp: w.parentId !== null,
     // ใบที่ไม่มีผู้เปิด (ระบบสร้างเอง หรือบัญชีผู้เปิดถูกลบ) ส่ง null ให้แอปขึ้นว่า "ระบบ"
@@ -3014,6 +3170,7 @@ async function guardStage(
   assignedTeam: string | null;
   scheduledAt: Date | null;
   scheduledTime: string | null;
+  appointmentStatus: string | null;
   outageId: number | null;
 } | null> {
   const role = req.auth!.role;
@@ -3029,6 +3186,7 @@ async function guardStage(
         assignedTeam: true,
         scheduledAt: true,
         scheduledTime: true,
+        appointmentStatus: true,
         outageId: true,
         jobType: true,
         branch: { select: { region: true, zone: true, pmTeam: true } },
@@ -3073,6 +3231,8 @@ async function guardStage(
     // ปุ่มส่วนใหญ่ต้องใช้ทีม/วันนัดต่อ — คืนไปเลย ไม่ต้องอ่านใบงานซ้ำอีกรอบ
     scheduledAt: wo.scheduledAt,
     scheduledTime: wo.scheduledTime,
+    // เบิกเสร็จแล้วไปไหน — ลูกค้าคอนเฟิร์มแล้วไปปล่อยงาน ยังไม่ได้นัดไปนัดวัน (afterIssue)
+    appointmentStatus: wo.appointmentStatus,
     outageId: wo.outageId,
   };
 }
@@ -3247,16 +3407,17 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
       return !!was && was.quantity === p.quantity && isIssued(was);
     });
 
-  // ต้องเสนอราคา → เช็คอะไหล่ก่อน (รอเบิกอะไหล่) แล้วค่อยเสนอราคาด้วยของที่มีจริง
-  // ไม่ใช้อะไหล่แต่มีค่าบริการ → ตรงไปเสนอราคา (ไม่มีอะไหล่ให้เช็ค) · จ่ายเงินแล้วไปจ่ายงานเลย (ดู afterPayment)
+  /**
+   * ใช้อะไหล่ → แอดมินเช็คอะไหล่ (มี/หมด) ก่อนทุกใบ (นัดลูกค้าก่อนเบิก — เจ้าของงานกำหนด ต.ค. 69)
+   * เสนอราคาหรือไม่ตัดสินอีกทีตอนเช็คครบ (ดู afterSourcing) · ไม่ใช้อะไหล่แต่มีค่าบริการ → ตรงไปเสนอราคา
+   * (ไม่มีอะไหล่ให้เช็ค) · จ่ายเงินแล้วไปนัดวันเข้า (ดู afterPayment)
+   */
   const nextStatus =
     !needsParts || allIssued
       ? services.length > 0
         ? "AWAITING_QUOTE"
         : "PARTS_CHECKED"
-      : quoteFirst
-      ? "PARTS_SOURCING"
-      : "PARTS_REQUESTED";
+      : "PARTS_SOURCING";
   if (assign) {
     if (nextStatus !== "PARTS_CHECKED") {
       return res.status(400).json({ error: "ใบนี้ยังจ่ายงานไม่ได้ — ต้องผ่านขั้นอะไหล่/เสนอราคาก่อน" });
@@ -3282,9 +3443,9 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
           : allIssued
           ? "อะไหล่ชุดเดิมเบิกไปแล้วทุกตัว — ข้ามไปจัดคิวช่าง"
           : asked
-          ? "มีอะไหล่นอก/ค่าบริการ — เช็คอะไหล่ก่อน แล้วแอดมินทำใบเสนอราคาและเก็บเงินก่อนเบิกของ"
+          ? "มีอะไหล่นอก/ค่าบริการ — เช็คอะไหล่ก่อน แล้วแอดมินทำใบเสนอราคาและเก็บเงินก่อนนัด"
           : quoteFirst
-          ? "อะไหล่ขายลูกค้าแฟรนไชส์ — เช็คอะไหล่ก่อน แล้วเสนอราคาและเก็บเงินก่อนเบิกของ"
+          ? "อะไหล่ขายลูกค้าแฟรนไชส์ — เช็คอะไหล่ก่อน แล้วเสนอราคาและเก็บเงินก่อนนัด"
           : null);
     const partsAction = needsParts ? "PARTS_REQUESTED" : "NO_PARTS";
     if (!assign) {
@@ -3341,19 +3502,31 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * รอเบิกอะไหล่ (ก่อนเสนอราคา) — แอดมินบอกว่าอะไหล่แต่ละตัวมีหรือหมด (เจ้าของงานขอ ต.ค. 69)
+ * เช็คอะไหล่ (มี/หมด) — ขั้นแรกของทุกใบที่ใช้อะไหล่ (นัดลูกค้าก่อนเบิก · เจ้าของงานกำหนด ต.ค. 69)
  *
- * มีครบ → ไปเสนอราคาทันที · หมดบางตัว → ค้างที่ขั้นนี้ พร้อมวันที่คาดว่าของเข้า (ไม่บังคับ)
- * ของมาแล้วกดซ้ำด้วยผล "มีครบ" — ใช้เส้นทางเดียวกัน ไม่ต้องมีปุ่มแยกฝั่งเซิร์ฟเวอร์
- * เก็บผลไว้ที่อะไหล่ (inStock) ให้ขั้นเช็คคลังหลังรับเงินเห็นผลเดิมเป็นค่าตั้งต้น แต่ยังต้องเช็คซ้ำ
+ * ดูคลังอย่างเดียว ยังไม่ตัดของ — เลขใบเบิกใส่ทีหลังตอนลูกค้าคอนเฟิร์มวันแล้ว (parts-check)
+ * มีครบ → เสนอราคา (ถ้าต้อง) หรือหัวหน้าภาคนัดวันเข้า · หมดบางตัว → ค้างที่ขั้นนี้จนของเข้าครบ
+ * (เจ้าของงานเลือก — ไม่ส่งไปนัดพร้อมวันคาดว่าเข้า) · ของมาแล้วกดซ้ำด้วยผล "มีครบ" ("ของเข้าแล้ว ส่งนัด")
+ *
+ * มีของต้องบอกคลังด้วย — ของอยู่คลังอื่นต้องเผื่อเวลาโอน หัวหน้าภาคนัดได้ตั้งแต่ 7 วันข้างหน้า (earliestVisit)
+ * มีบางตัว หมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ ใบนี้ไปนัดด้วยของที่มี (เหมือนขั้นเบิกเดิม)
  */
 const partsSourcingSchema = z.object({
-  results: z.array(z.object({ sparePartId: z.number().int().positive(), inStock: z.boolean() })).min(1),
+  results: z
+    .array(
+      z.object({
+        sparePartId: z.number().int().positive(),
+        inStock: z.boolean(),
+        warehouse: z.string().trim().max(120).nullable().optional(),
+      })
+    )
+    .min(1),
   expectedAt: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่คาดว่าของเข้าต้องเป็น ปี-เดือน-วัน")
     .nullable()
     .optional(),
+  splitOut: z.boolean().optional(),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -3364,54 +3537,164 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   if (!(await guardStage(req, res, id, "PARTS_SOURCING"))) return;
 
-  // ตัวที่เบิกไปแล้วรอบก่อนจ่ายเงินไปแล้ว — เช็คและเสนอราคาเฉพาะตัวที่เพิ่มมา
-  const parts = (
-    await prisma.workOrderPart.findMany({
-      where: { workOrderId: id, kind: "WAITING" },
-      include: { sparePart: { select: { partCode: true, name: true } } },
-    })
-  ).filter((p) => !isIssued(p));
-  const result = new Map(parsed.data.results.map((r) => [r.sparePartId, r.inStock]));
-  // ต้องตอบครบทุกตัว — ตอบบางตัวแล้วถือว่าครบคือเสนอราคาของที่ยังไม่รู้ว่ามี
+  // ตัวที่เบิกไปแล้วรอบก่อนไม่ต้องเช็คซ้ำ — เช็คเฉพาะตัวที่เพิ่มมา
+  const all = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    include: { sparePart: { select: { partCode: true, name: true, offCatalog: true } } },
+  });
+  const parts = all.filter((p) => !isIssued(p));
+  const result = new Map(parsed.data.results.map((r) => [r.sparePartId, r]));
+  // ต้องตอบครบทุกตัว — ตอบบางตัวแล้วถือว่าครบคือนัดลูกค้าด้วยของที่ยังไม่รู้ว่ามี
   const missing = parts.filter((p) => !result.has(p.sparePartId));
   if (missing.length) {
     return res.status(400).json({ error: `ยังไม่ได้บอกว่ามีหรือหมด: ${missing.map((p) => p.sparePart.partCode).join(", ")}` });
   }
-  const out = parts.filter((p) => result.get(p.sparePartId) === false);
+  for (const p of parts) {
+    const r = result.get(p.sparePartId)!;
+    if (!r.inStock || p.sparePart.offCatalog) continue;
+    // คลังบอกว่าต้องโอนไหม — หัวหน้าภาคนัดวันจากตรงนี้ (ของคลังอื่นนัดล่วงหน้า 7 วัน)
+    if (!r.warehouse) return res.status(400).json({ error: `${p.sparePart.partCode} มีของ — ต้องบอกด้วยว่าอยู่คลังไหน` });
+    if (!WAREHOUSES.includes(r.warehouse as never)) return res.status(400).json({ error: `ไม่รู้จักคลัง "${r.warehouse}"` });
+  }
+  const out = parts.filter((p) => result.get(p.sparePartId)!.inStock === false);
   const allIn = out.length === 0;
+  // แยกได้เมื่อเหลือของให้ไปซ่อมจริง ไม่งั้นใบนี้จะไปนัดทั้งที่ไม่มีอะไหล่สักตัว
+  const split = !allIn && Boolean(parsed.data.splitOut) && out.length < all.length;
+  const waiting = !allIn && !split;
   const expected = !allIn && parsed.data.expectedAt ? new Date(`${parsed.data.expectedAt}T00:00:00.000Z`) : null;
+  // ตัดสินก่อนเปิดทรานแซกชัน — อ่านนอกทรานแซกชันจะยังเห็นแถวที่กำลังย้ายไปใบแยก
+  const to = waiting ? "PARTS_SOURCING" : await afterSourcing(id, split ? out.map((p) => p.sparePartId) : []);
   const now = new Date();
 
   await prisma.$transaction(async (tx) => {
     for (const p of parts) {
+      const r = result.get(p.sparePartId)!;
       await tx.workOrderPart.update({
         where: { id: p.id },
-        data: { inStock: result.get(p.sparePartId)!, checkedAt: now, checkedById: req.auth!.userId },
+        data: {
+          inStock: r.inStock,
+          // คลังที่มีของ (ยังไม่ใช่คลังที่เบิก — ขั้นเบิกเลือกใหม่ได้) · หมด/ของนอกสโตร์ไม่มีคลัง
+          warehouse: r.inStock && !p.sparePart.offCatalog ? r.warehouse ?? null : null,
+          checkedAt: now,
+          checkedById: req.auth!.userId,
+        },
       });
+    }
+    const outText = out.map((p) => (p.quantity > 1 ? `${p.sparePart.partCode} x${p.quantity}` : p.sparePart.partCode)).join(", ");
+    if (split) {
+      const child = await createFollowUp(tx, id, req.auth!.userId, `อะไหล่หมด: ${outText}`, true);
+      await tx.workOrderPart.updateMany({
+        where: { workOrderId: id, kind: "WAITING", sparePartId: { in: out.map((p) => p.sparePartId) } },
+        data: { workOrderId: child.id },
+      });
+      if (expected) await tx.workOrder.update({ where: { id: child.id }, data: { partsExpectedAt: expected } });
+      await writeLog(tx, id, req.auth!.userId, "SPLIT", "PARTS_SOURCING", `แยก ${outText} ไป ${child.code} (รอของเข้า) — ใบนี้ไปนัดด้วยของที่มี`);
     }
     await tx.workOrder.update({
       where: { id },
-      data: allIn
-        ? { status: "AWAITING_QUOTE", partsExpectedAt: null, workStatus: workStatusForStage("AWAITING_QUOTE") }
-        : { partsExpectedAt: expected, workStatus: workStatusForStage("PARTS_SOURCING", { anyPartOutOfStock: true }) },
+      data: waiting
+        ? { partsExpectedAt: expected, workStatus: workStatusForStage("PARTS_SOURCING", { anyPartOutOfStock: true }) }
+        : { status: to, partsExpectedAt: null, workStatus: workStatusForStage(to) },
     });
-    const outText = out.map((p) => p.sparePart.name || p.sparePart.partCode).join(", ");
+    const lines = parts
+      .filter((p) => !split || !out.includes(p))
+      .map((p) => {
+        const r = result.get(p.sparePartId)!;
+        const head = `${p.sparePart.partCode} ×${p.quantity}`;
+        if (p.sparePart.offCatalog) return `${head} — ${r.inStock ? "หาได้" : "ยังหาไม่ได้"}`;
+        return r.inStock ? `${head} · มีที่${r.warehouse}` : `${head} — หมด`;
+      });
     await writeLog(
       tx,
       id,
       req.auth!.userId,
-      allIn ? "PARTS_SOURCED" : "PARTS_BACKORDERED",
-      allIn ? "AWAITING_QUOTE" : "PARTS_SOURCING",
+      waiting ? "PARTS_BACKORDERED" : "PARTS_SOURCED",
+      to,
       [
-        allIn ? null : `หมด: ${outText}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""}`,
+        lines.join("\n"),
+        waiting ? `หมด: ${outText}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""} — รอของเข้าครบแล้วส่งนัด` : null,
         parsed.data.note || null,
       ]
         .filter(Boolean)
-        .join(" — ") || null
+        .join("\n") || null
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
 
+  res.json(await detailFor(id));
+});
+
+/**
+ * ของไม่พอตอนเบิก (ลูกค้าคอนเฟิร์มวันแล้ว) — ของที่เช็คว่ามีถูกงานอื่นใช้ไปก่อน (เจ้าของงานตกลง ต.ค. 69)
+ *
+ * ทั้งใบกลับไปขั้นเช็คอะไหล่ รอของเข้าครบ แล้วหัวหน้าภาคนัดใหม่ — แอดมินโทรแจ้งลูกค้าว่าเลื่อนนัด
+ * (ของต้องครบก่อนส่งไปนัด เหมือนตอนเช็ครอบแรก) · วันนัด/ทีมเดิมล้าง ไม่งั้นใบโผล่บนแผนงานวันเดิมทั้งที่ไม่มีใครไป
+ * ตัวอื่นที่ยังไม่เบิกเก็บผลเช็คไว้ · อยากไปตามนัดด้วยของที่มี ใช้ "แยกตัวที่หมดไปใบใหม่" ในฟอร์มเบิกแทน
+ */
+const partsShortSchema = z.object({
+  sparePartIds: z.array(z.number().int().positive()).min(1, "ต้องบอกว่าตัวไหนไม่พอ").max(20),
+  expectedAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่คาดว่าของเข้าต้องเป็น ปี-เดือน-วัน")
+    .nullable()
+    .optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+router.post("/:id/parts-short", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = partsShortSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const cur = await guardStage(req, res, id, "PARTS_REQUESTED");
+  if (!cur) return;
+  const parts = await prisma.workOrderPart.findMany({
+    where: { workOrderId: id, kind: "WAITING" },
+    select: { id: true, sparePartId: true, quantity: true, inStock: true, requisitionNo: true },
+  });
+  const short = parts.filter((p) => parsed.data.sparePartIds.includes(p.sparePartId));
+  if (short.length !== parsed.data.sparePartIds.length) {
+    return res.status(400).json({ error: "มีรายการที่ไม่ได้อยู่ในใบนี้" });
+  }
+  if (short.some(isIssued)) return res.status(400).json({ error: "ตัวที่เบิกไปแล้วแจ้งว่าไม่พอไม่ได้" });
+  const codes = await partCodesText(short);
+  const was = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : null;
+  const expected = parsed.data.expectedAt ? new Date(`${parsed.data.expectedAt}T00:00:00.000Z`) : null;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workOrderPart.updateMany({
+      where: { id: { in: short.map((p) => p.id) } },
+      data: { inStock: false, warehouse: null, requisitionNo: null, checkedAt: new Date(), checkedById: req.auth!.userId },
+    });
+    await tx.workOrder.update({
+      where: { id },
+      data: {
+        status: "PARTS_SOURCING",
+        partsExpectedAt: expected,
+        scheduledAt: null,
+        scheduledTime: null,
+        appointmentStatus: null,
+        assignedTeam: null,
+        assignedToId: null,
+        workStatus: workStatusForStage("PARTS_SOURCING", { anyPartOutOfStock: true }),
+      },
+    });
+    await writeLog(
+      tx,
+      id,
+      req.auth!.userId,
+      "PARTS_SHORT",
+      "PARTS_SOURCING",
+      [
+        `ของไม่พอตอนเบิก: ${codes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""}`,
+        `เลื่อนนัด${was ? `เดิม ${was}${cur.assignedTeam ? ` ทีม${cur.assignedTeam}` : ""}` : ""} — ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่`,
+        parsed.data.note || null,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+  }, STAGE_TX);
   res.json(await detailFor(id));
 });
 
@@ -3468,7 +3751,8 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = partsCheckSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (!(await guardStage(req, res, id, "PARTS_REQUESTED"))) return;
+  const cur = await guardStage(req, res, id, "PARTS_REQUESTED");
+  if (!cur) return;
 
   const waiting = await prisma.workOrderPart.findMany({
     where: { workOrderId: id, kind: "WAITING" },
@@ -3583,20 +3867,22 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       error: "ใบนี้เสนอราคาแล้ว — ต้องบอกว่าลูกค้าจ่ายค่าอะไหล่ที่หมดไปแล้วหรือยัง ก่อนแยกไปใบใหม่",
     });
   }
-  const childStart = paidHere && !parsed.data.splitPaid ? "PARTS_SOURCING" : "PARTS_REQUESTED";
-  const anyOut = stillOut && !split;
+  /**
+   * ของไม่พอตอนเบิก (นัดลูกค้าก่อนเบิก ต.ค. 69) — ลูกค้าคอนเฟิร์มวันแล้ว ค้างรอของที่ขั้นนี้ไม่ได้
+   * ไปตามนัดด้วยของที่มี = แยกตัวที่หมดไปใบใหม่ · ทั้งใบรอของ = "ของไม่พอ — แจ้งเลื่อนนัด" (parts-short)
+   */
+  if (stillOut && !split) {
+    return res.status(400).json({
+      error: "มีตัวที่หมด — แยกตัวที่หมดไปใบใหม่ (ใบนี้ไปตามนัด) หรือกด “ของไม่พอ — แจ้งเลื่อนนัด”",
+    });
+  }
+  // ใบแยกรอของเข้าที่ขั้นเช็คอะไหล่ แล้วนัด/คอนเฟิร์ม/เบิกของมันเอง · ลูกค้าจ่ายแล้ว = ไม่เสนอราคาซ้ำ (PREPAID)
+  const childPaid = paidHere && parsed.data.splitPaid === true;
   const now = new Date();
 
-  // ของครบถึงไปขั้นจ่ายงาน — เรื่องราคาและเงินจบไปก่อนถึงขั้นนี้แล้ว
-  // ของไม่ครบก็ค้างอยู่ที่แอดมินรอของเข้า
-  // ของคลังอื่นยังไม่ได้เบิก — ไปให้หัวหน้าภาคเบิกก่อนจ่ายงาน (ของหมดยังค้างที่แอดมินก่อน)
-  const nextStage = anyOut
-    ? "PARTS_REQUESTED"
-    : transferIds.length
-      ? "PARTS_TRANSFER"
-      : pickupIds.length
-        ? "PARTS_PICKUP"
-        : "PARTS_CHECKED";
+  // เบิกครบ → ลูกค้าคอนเฟิร์มแล้วไปปล่อยงาน (ใบที่เบิกค้างตั้งแต่ก่อนเปลี่ยนสายงานไปนัดวัน — afterIssue)
+  // ของคลังอื่นยังไม่ได้เบิก — ไปให้หัวหน้าภาคเบิก/โอนก่อน
+  const nextStage = transferIds.length ? "PARTS_TRANSFER" : pickupIds.length ? "PARTS_PICKUP" : afterIssue(cur);
   const outCodes = stillOut
     ? await partCodesText(
         waiting.filter((w) => outIds.includes(w.sparePartId))
@@ -3632,26 +3918,27 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
       data: {
         status: nextStage,
         // สถานะการดำเนินการมาจากขั้น ไม่ต้องรอใครมากรอกซ้ำ
-        workStatus: workStatusForStage(nextStage, { anyPartOutOfStock: anyOut }),
-        partsExpectedAt: anyOut ? expected : null,
+        workStatus: workStatusForStage(nextStage),
+        partsExpectedAt: null,
       },
     });
     if (split) {
-      // ย้ายแถวอะไหล่ไปทั้งแถว จำนวนและผล "หมด" ติดไปด้วย หัวหน้าภาคที่ดูแล
-      // ใบรออะไหล่จะเห็นเลยว่ารอตัวไหนอยู่กี่ชิ้น
+      // ย้ายแถวอะไหล่ไปทั้งแถว จำนวนและผล "หมด" ติดไปด้วย — ใบใหม่รอของเข้าที่ขั้นเช็คอะไหล่
       const child = await createFollowUp(
         tx,
         id,
         req.auth!.userId,
-        `อะไหล่หมด: ${outCodes}${childStart === "PARTS_SOURCING" ? " · ลูกค้ายังไม่จ่ายค่าตัวนี้" : ""}`,
-        true,
-        childStart
+        `อะไหล่หมด: ${outCodes}${paidHere && !childPaid ? " · ลูกค้ายังไม่จ่ายค่าตัวนี้" : ""}`,
+        true
       );
       await tx.workOrderPart.updateMany({
         where: { workOrderId: id, kind: "WAITING", sparePartId: { in: outIds } },
         data: { workOrderId: child.id },
       });
       if (expected) await tx.workOrder.update({ where: { id: child.id }, data: { partsExpectedAt: expected } });
+      if (childPaid) {
+        await writeLog(tx, child.id, req.auth!.userId, "PREPAID", "PARTS_SOURCING", `ลูกค้าจ่ายค่า ${outCodes} แล้ว (รวมในใบเสนอราคาของใบเดิม) — ของเข้าแล้วไม่ต้องเสนอราคาใหม่`);
+      }
       await writeLog(
         tx,
         id,
@@ -3659,12 +3946,12 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         "SPLIT",
         nextStage,
         `แยก ${outCodes} ไป ${child.code} (${
-          childStart === "PARTS_SOURCING"
+          paidHere && !childPaid
             ? "ลูกค้ายังไม่จ่ายค่าตัวนี้ — ของเข้าแล้วเสนอราคาใหม่"
-            : paidHere
-              ? "ลูกค้าจ่ายแล้ว — แอดมินเบิกเมื่อของเข้า"
-              : "รออะไหล่ แอดมินเบิกเมื่อของเข้า"
-        }) — ใบนี้ไปซ่อมด้วยของที่มี`
+            : childPaid
+              ? "ลูกค้าจ่ายแล้ว — ของเข้าแล้วนัดได้เลย"
+              : "รอของเข้า แล้วนัดใหม่"
+        }) — ใบนี้ไปตามนัดด้วยของที่มี`
       );
     }
     await writeLog(
@@ -3677,9 +3964,6 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
         // รายตัว: คลังไหน · เลขใบเบิก · ใครเบิก — เดิมเขียนแค่ "อะไหล่ครบทุกรายการ" ย้อนดูไม่ได้ว่าตัวไหน
         // แอดมินเบิกจากคลัง 94 ด้วยใบไหน ตัวไหนส่งให้หัวหน้าภาคเบิก (เจ้าของงานขอ ต.ค. 69)
         await partsCheckLines(waiting, parsed.data.results, offIds, arrivedIds, noTransferIds),
-        anyOut
-          ? `อะไหล่หมด: ${outCodes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""} — ใบงานรออยู่ที่ขั้นนี้ ของมาถึงแล้วค่อยใส่เลขใบเบิกอีกรอบ`
-          : null,
         parsed.data.note || null,
       ]
         .filter(Boolean)
@@ -3870,14 +4154,15 @@ router.post("/:id/parts-transfer", requireAuth, async (req: AuthRequest, res) =>
 
 /**
  * ของถึงคลังปลายทางแล้ว — ไปเบิกส่งมอบต่อ
- * มีตัวที่ต้องเบิกจากคลัง 94 → แอดมิน · เหลือแต่คลังอื่น → หัวหน้าภาคเบิกส่งมอบ · ไม่เหลืออะไรให้เบิก → จ่ายงาน
+ * มีตัวที่ต้องเบิกจากคลัง 94 → แอดมิน · เหลือแต่คลังอื่น → หัวหน้าภาคเบิกส่งมอบ · ไม่เหลืออะไรให้เบิก → ปล่อยงาน (afterIssue)
  */
 router.post("/:id/parts-transfer/arrived", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const note = z.string().trim().max(500).optional().safeParse(req.body?.note ?? undefined);
   if (!note.success) return res.status(400).json({ error: "หมายเหตุยาวเกินไป" });
-  if (!(await guardStage(req, res, id, "PARTS_IN_TRANSIT"))) return;
+  const cur = await guardStage(req, res, id, "PARTS_IN_TRANSIT");
+  if (!cur) return;
 
   const now = new Date();
   const parts = await prisma.workOrderPart.findMany({
@@ -3896,7 +4181,7 @@ router.post("/:id/parts-transfer/arrived", requireAuth, async (req: AuthRequest,
   const moving = parts.filter((p) => p.transferNo && !p.transferredAt);
   const after = parts.map((p) => (moving.includes(p) ? { ...p, transferredAt: now } : p));
   const needAdmin = after.some((p) => p.inStock === true && !p.sparePart.offCatalog && p.warehouse === ADMIN_WAREHOUSE && !p.requisitionNo);
-  const next = needAdmin ? "PARTS_REQUESTED" : after.some(pendingPickup) ? "PARTS_PICKUP" : "PARTS_CHECKED";
+  const next = needAdmin ? "PARTS_REQUESTED" : after.some(pendingPickup) ? "PARTS_PICKUP" : afterIssue(cur);
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrderPart.updateMany({
@@ -3949,7 +4234,9 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = pickupSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
-  if (!(await guardStage(req, res, id, "PARTS_PICKUP"))) return;
+  const cur = await guardStage(req, res, id, "PARTS_PICKUP");
+  if (!cur) return;
+  const next = afterIssue(cur);
 
   const parts = await prisma.workOrderPart.findMany({
     where: { workOrderId: id, kind: "WAITING" },
@@ -3985,7 +4272,7 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
     }
     await tx.workOrder.update({
       where: { id },
-      data: { status: "PARTS_CHECKED", workStatus: workStatusForStage("PARTS_CHECKED") },
+      data: { status: next, workStatus: workStatusForStage(next) },
     });
     const lines = await Promise.all(
       parsed.data.results.map(async (r) => {
@@ -3999,7 +4286,7 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
       id,
       req.auth!.userId,
       "PICKED_UP",
-      "PARTS_CHECKED",
+      next,
       [lines.join(" / "), parsed.data.note].filter(Boolean).join(" — ")
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
@@ -4044,12 +4331,11 @@ const quoteSchema = z.object({
 });
 
 /**
- * หลังรับเงิน (หรือข้ามเสนอราคา) ไปไหนต่อ — มีอะไหล่ไปเบิก · ไม่มี (มีแต่ค่าบริการ) ไปจ่ายงานเลย
- * ไม่งั้นใบค่าบริการล้วนไปค้างที่ขั้นเบิกซึ่งไม่มีอะไรให้เบิก แอดมินกดผ่านไม่ได้
+ * หลังรับเงิน (หรือข้ามเสนอราคา) ไปไหนต่อ — หัวหน้าภาคนัดวันเข้าเสมอ (นัดลูกค้าก่อนเบิก ต.ค. 69)
+ * อะไหล่เช็คไปแล้วก่อนเสนอราคา · เบิกจริงหลังลูกค้าคอนเฟิร์มวัน (afterConfirm)
  */
-async function afterPayment(id: number): Promise<"PARTS_REQUESTED" | "PARTS_CHECKED"> {
-  const waiting = await prisma.workOrderPart.count({ where: { workOrderId: id, kind: "WAITING" } });
-  return waiting > 0 ? "PARTS_REQUESTED" : "PARTS_CHECKED";
+async function afterPayment(_id: number): Promise<"PARTS_CHECKED"> {
+  return "PARTS_CHECKED";
 }
 
 router.post("/:id/quote", requireAuth, async (req: AuthRequest, res) => {
@@ -4146,7 +4432,7 @@ router.post("/:id/payment", requireAuth, async (req: AuthRequest, res) => {
       "PAID",
       after,
       parsed.data.note ||
-        (after === "PARTS_CHECKED" ? "ลูกค้าจ่ายเงินแล้ว — ไม่มีอะไหล่ให้เบิก ไปจ่ายงานได้เลย" : "ลูกค้าจ่ายเงินแล้ว — เบิกอะไหล่ออกจากคลังได้")
+        "ลูกค้าจ่ายเงินแล้ว — ส่งหัวหน้าภาคนัดวันเข้า"
     );
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -4242,8 +4528,11 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
   // ทีมกับข้อความทีมไม่ขึ้นต่อกัน อ่านพร้อมกัน
-  const [known, teamText] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้")]);
+  const [known, teamText, early] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้"), earliestVisit(id)]);
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+  // ของอยู่คลังอื่น — เบิก/โอนหลังลูกค้าคอนเฟิร์ม นัดใกล้กว่านี้ของไม่ทันวันเข้างาน (เจ้าของงานกำหนด ต.ค. 69)
+  const soon = tooSoonText(scheduledAt, early);
+  if (soon) return res.status(400).json({ error: soon });
 
   // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
   // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
@@ -4298,13 +4587,19 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   const before = await guardStage(req, res, id, ["AWAITING_CONFIRM", "INSPECT_CONFIRM"]);
   if (!before) return;
   const inspect = before.status === "INSPECT_CONFIRM";
-  const next = inspect ? "INSPECT_DISPATCH" : "ASSIGNED";
+  // นัดลูกค้าก่อนเบิก (ต.ค. 69) — ลูกค้าคอนเฟิร์มแล้วแอดมินเบิกอะไหล่ต่อ · เบิกครบแล้ว (วนกลับมาคอนเฟิร์มใหม่) ไปปล่อยงาน
+  const next = inspect ? "INSPECT_DISPATCH" : await afterConfirm(id);
 
   const oldDate = before.scheduledAt ? before.scheduledAt.toISOString().slice(0, 10) : null;
   const newDate = parsed.data.scheduledAt ?? oldDate;
   const newTime = parsed.data.scheduledTime !== undefined ? parsed.data.scheduledTime : before.scheduledTime;
   if (!newDate) return res.status(400).json({ error: "ต้องระบุวันเข้างาน" });
   const moved = newDate !== oldDate || (newTime ?? null) !== (before.scheduledTime ?? null);
+  // ลูกค้าขอเลื่อนเข้ามาใกล้กว่าที่ของโอนทัน — กฎเดียวกับตอนหัวหน้าภาคนัด
+  if (!inspect && moved && newDate !== oldDate) {
+    const soon = tooSoonText(newDate, await earliestVisit(id));
+    if (soon) return res.status(400).json({ error: soon });
+  }
 
   const data = {
     status: next,
@@ -4671,14 +4966,14 @@ async function createFollowUp(
   parentId: number,
   userId: number,
   note: string,
-  /** ของที่ย้ายมาตอบไว้แล้วว่าหมด (แยกจากขั้นเบิก) — ขึ้นป้ายแดงรออะไหล่ทันที */
-  outOfStock = false,
-  /**
-   * ปกติเริ่มที่แอดมินเบิก (ของที่ลูกค้าจ่ายแล้ว/ไม่ต้องเสนอราคา)
-   * ของที่ยังไม่ได้เก็บเงิน เริ่มที่เช็คอะไหล่ (มี/หมด) แล้วเดินเสนอราคา → รับเงิน → เบิก ตามใบปกติ
-   */
-  startAt: "PARTS_REQUESTED" | "PARTS_SOURCING" = "PARTS_REQUESTED"
+  /** ของที่ย้ายมาตอบไว้แล้วว่าหมด (แยกจากขั้นเช็ค/เบิก) — ขึ้นป้ายแดงรออะไหล่ทันที */
+  outOfStock = false
 ) {
+  /**
+   * เริ่มที่แอดมินเช็คอะไหล่ (มี/หมด) เสมอ (นัดลูกค้าก่อนเบิก ต.ค. 69) — ของเข้าครบแล้ว [เสนอราคา →]
+   * หัวหน้าภาคนัด → คอนเฟิร์ม → เบิก ตามใบปกติ · ลูกค้าจ่ายแล้วในใบเดิม = ผู้เรียกเขียน PREPAID ไว้ (afterSourcing)
+   */
+  const startAt = "PARTS_SOURCING";
   const parent = await tx.workOrder.findUniqueOrThrow({
     where: { id: parentId },
     select: {
@@ -4702,9 +4997,8 @@ async function createFollowUp(
       source: "MANUAL",
       parentId,
       /**
-       * เริ่มที่แอดมินเบิกอะไหล่ตรง ๆ (เจ้าของงานเลือก ต.ค. 69) — เดิมเริ่มที่ "รออะไหล่เข้า" ของหัวหน้าภาค
-       * แล้วหัวหน้าภาคกด "ของมาแล้ว" ส่งกลับให้แอดมินเบิก ทั้งที่คนรู้ว่าของเข้าเมื่อไรคือแอดมิน/คลัง
-       * ของที่หมดขึ้นป้ายแดงอะไหล่หมดที่ขั้นนี้ แอดมินกด "อะไหล่มาแล้ว" ปุ่มเดียว · WAITING_PARTS เหลือไว้ให้ใบเก่า
+       * อยู่ที่แอดมิน ไม่ใช่ "รออะไหล่เข้า" ของหัวหน้าภาคแบบเดิม — คนรู้ว่าของเข้าเมื่อไรคือแอดมิน/คลัง
+       * ของที่หมดขึ้นป้ายแดงอะไหล่หมดที่ขั้นนี้ · WAITING_PARTS เหลือไว้ให้ประวัติใบเก่า
        */
       status: startAt,
       needsParts: true,
@@ -4788,7 +5082,8 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
       machineBrand: machineMake(wo.machine),
     });
   const child = await prisma.$transaction(async (tx) => {
-    const made = await createFollowUp(tx, id, req.auth!.userId, note, false, quoteFirst ? "PARTS_SOURCING" : "PARTS_REQUESTED");
+    // เริ่มที่เช็คอะไหล่ — เสนอราคาหรือไม่ตัดสินตอนเช็คครบ (afterSourcing ใช้กฎเดียวกับ quoteFirst ข้างบน)
+    const made = await createFollowUp(tx, id, req.auth!.userId, quoteFirst ? `${note} · ต้องเสนอราคาก่อนนัด` : note);
     await replaceParts(tx, made.id, "WAITING", parsed.data.parts);
     await writeLog(tx, id, req.auth!.userId, "SPLIT", wo.status, `เปิด ${made.code} รออะไหล่ — ${note}`);
     return made;
@@ -4974,9 +5269,10 @@ router.post("/:id/parts-eta", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * ใบรออะไหล่ — ของมาแล้ว หัวหน้าภาคส่งต่อให้แอดมินเบิก
+ * ใบรออะไหล่รุ่นเก่า — ของมาแล้ว ส่งต่อให้แอดมินเช็คอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69)
  *
  * ผลเช็คคลังที่ติดมาจากใบเดิม ("หมด") ถูกล้าง แอดมินต้องเช็คใหม่จากของที่มีจริงวันนี้
+ * (ตอนเปลี่ยนสายงานย้ายใบพวกนี้ไปขั้นเช็คอะไหล่แล้ว — ปุ่มนี้เหลือไว้กันใบที่หลุดมา)
  */
 router.post("/:id/parts-arrived", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -4992,9 +5288,9 @@ router.post("/:id/parts-arrived", requireAuth, async (req: AuthRequest, res) => 
     });
     await tx.workOrder.update({
       where: { id },
-      data: { status: "PARTS_REQUESTED", workStatus: workStatusForStage("PARTS_REQUESTED"), partsExpectedAt: null },
+      data: { status: "PARTS_SOURCING", workStatus: workStatusForStage("PARTS_SOURCING"), partsExpectedAt: null },
     });
-    await writeLog(tx, id, req.auth!.userId, "PARTS_ARRIVED", "PARTS_REQUESTED", note.data || null);
+    await writeLog(tx, id, req.auth!.userId, "PARTS_ARRIVED", "PARTS_SOURCING", note.data || null);
   }, STAGE_TX);
 
   res.json(await detailFor(id));
@@ -5095,13 +5391,24 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   }
   if (toStage === "NEW") data.needsParts = null;
   // วันที่คาดว่าของเข้าเป็นของรอบเช็คอะไหล่ที่ถูกย้อนทิ้ง — ผล "หมด" ถูกล้างที่ขั้นเดียวกัน (ข้างล่าง)
-  if (to <= at("PARTS_REQUESTED")) data.partsExpectedAt = null;
+  if (to <= at("PARTS_SOURCING")) data.partsExpectedAt = null;
   const ws = workStatusForStage(toStage);
   if (ws !== undefined) data.workStatus = ws;
 
   await prisma.$transaction(async (tx) => {
-    // ย้อนไปถึงขั้นเช็คคลังหรือก่อนนั้น ผลเช็ครอบเดิมใช้ไม่ได้แล้ว — แอดมินต้องเช็คใหม่
-    if (to <= at("PARTS_REQUESTED")) {
+    /**
+     * นัดลูกค้าก่อนเบิก (ต.ค. 69): เช็คอะไหล่อยู่ก่อนนัด เบิกอยู่หลังคอนเฟิร์ม — ย้อนไปขั้นนัด/คอนเฟิร์ม
+     * (ลูกค้าเปลี่ยนวัน) ไม่ได้ทำให้ของที่เบิกไปแล้วกลับเข้าคลัง จึงไม่ล้างผลเช็ค/เลขใบเบิก
+     * ย้อนไปขั้นเบิก = เบิกใหม่ ล้างเลขใบเบิก/การโอน แต่เก็บผลเช็ค (มีที่คลังไหน) ไว้เป็นค่าตั้งต้น
+     */
+    if (toStage === "PARTS_REQUESTED") {
+      await tx.workOrderPart.updateMany({
+        where: { workOrderId: id, kind: "WAITING" },
+        data: { requisitionNo: null, transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: null },
+      });
+    }
+    // ย้อนไปถึงขั้นเช็คอะไหล่หรือก่อนนั้น ผลเช็ครอบเดิมใช้ไม่ได้แล้ว — แอดมินต้องเช็คใหม่
+    if (to <= at("PARTS_SOURCING")) {
       await tx.workOrderPart.updateMany({
         where: { workOrderId: id, kind: "WAITING" },
         // ข้อมูลการโอนรอบเดิมเก็บอยู่ในประวัติแล้ว (TRANSFER_REQUESTED) — แอดมินเช็คคลังใหม่ว่าของอยู่ไหน
@@ -5913,7 +6220,14 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
 
   const wo = await prisma.workOrder.findUnique({
     where: { id },
-    select: { code: true, status: true, createdAt: true, assignedTeam: true },
+    select: {
+      code: true,
+      status: true,
+      createdAt: true,
+      assignedTeam: true,
+      // เบิกไปแล้วก่อนปิดย้อนหลัง (ใบที่เบิกตั้งแต่สายงานเดิม แล้วค้างที่นัดวัน) — ไม่เติมประวัติเบิกซ้ำ
+      parts: { where: { kind: "WAITING" }, select: { inStock: true, requisitionNo: true } },
+    },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (wo.status === "DONE") return res.status(400).json({ error: `${wo.code} ปิดไปแล้ว` });
@@ -5994,7 +6308,7 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
       if (paidAt && before("AWAITING_PAYMENT")) {
         await log("PAID", "PARTS_REQUESTED", paidAt, b.paymentRef ? `หลักฐานการจ่าย ${b.paymentRef}` : null);
       }
-      if (usedParts.length && before("PARTS_REQUESTED")) {
+      if (usedParts.length && before("PARTS_REQUESTED") && !(wo.parts.length > 0 && wo.parts.every(isIssued))) {
         await log(
           "PARTS_CHECKED",
           "PARTS_CHECKED",

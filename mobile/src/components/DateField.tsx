@@ -44,11 +44,14 @@ export function Calendar({
   value,
   onPick,
   marked,
+  min,
 }: {
   value: string;
   onPick: (ymd: string) => void;
   /** วันที่มีอะไรอยู่แล้ว (เช่น มีงานนัด) — ขึ้นจุดใต้วัน */
   marked?: Set<string>;
+  /** วันแรกที่เลือกได้ — วันก่อนหน้าขีดฆ่า กดไม่ได้ (เช่น ของต้องโอน นัดล่วงหน้า 7 วัน) */
+  min?: string;
 }) {
   const today = todayBkk();
   const start = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today;
@@ -102,15 +105,17 @@ export function Calendar({
         ))}
         {grid.map((c) => {
           const sel = c.key === value;
+          const off = !!min && c.key < min;
           return (
             <TouchableOpacity
               key={c.key}
               style={[styles.day, c.key === today && styles.today, sel && styles.sel]}
               onPress={() => onPick(c.key)}
+              disabled={off}
               accessibilityLabel={thaiDateLong(c.key)}
-              accessibilityState={{ selected: sel }}
+              accessibilityState={{ selected: sel, disabled: off }}
             >
-              <Text style={[styles.dayText, c.out && styles.dayOut, sel && styles.selText]}>{c.d}</Text>
+              <Text style={[styles.dayText, c.out && styles.dayOut, off && styles.dayOff, sel && styles.selText]}>{c.d}</Text>
               {marked?.has(c.key) ? <View style={[styles.dot, sel && { backgroundColor: "#fff" }]} /> : null}
             </TouchableOpacity>
           );
@@ -128,10 +133,13 @@ export default function DateField({
   required,
   marked,
   labelStyle,
+  min,
 }: {
   value: string;
   onChange: (next: string) => void;
   label: string;
+  /** วันแรกที่เลือกได้ (ดู Calendar) */
+  min?: string;
   /** ข้อความในช่องตอนยังไม่เลือก */
   emptyHint?: string;
   /** ต้องมีวันเสมอ — ไม่มีปุ่ม "ไม่ระบุวัน" */
@@ -165,6 +173,7 @@ export default function DateField({
         <Calendar
           value={value}
           marked={marked}
+          min={min}
           onPick={(d) => {
             onChange(d);
             setOpen(false);
@@ -227,6 +236,7 @@ const styles = StyleSheet.create({
   day: { width: `${100 / 7}%`, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 8 },
   dayText: { fontSize: 14, color: colors.text, fontVariant: ["tabular-nums"] },
   dayOut: { color: colors.textFaint },
+  dayOff: { color: colors.textFaint, textDecorationLine: "line-through" },
   today: { borderWidth: 1.5, borderColor: colors.primary },
   sel: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   selText: { color: "#fff", fontWeight: "700" },
