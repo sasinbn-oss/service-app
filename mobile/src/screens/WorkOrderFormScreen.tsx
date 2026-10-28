@@ -38,7 +38,7 @@ import {
 import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
-import OpenOrdersWarning, { MachineOpenWarning, OpenOrder } from "../components/OpenOrdersWarning";
+import OpenOrdersWarning, { DuplicateConfirmModal, MachineOpenWarning, OpenOrder } from "../components/OpenOrdersWarning";
 import { colors, radius, shadow, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderForm">;
@@ -211,6 +211,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    * สองคลิกติดกันได้ใบเหมือนกันเป๊ะสองใบ ref เปลี่ยนทันทีไม่ต้องรอวาด
    */
   const submitting = useRef(false);
+  // ป๊อปอัพยืนยันเปิดซ้ำ — รายการใบค้างที่ดึงใหม่ตอนกดบันทึก · ยืนยันแล้วกดบันทึกรอบนั้นไม่ถามซ้ำ
+  const [dupOrders, setDupOrders] = useState<OpenOrder[] | null>(null);
+  const dupConfirmed = useRef(false);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
@@ -492,6 +495,24 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     submitting.current = true;
     setSaving(true);
     setError(null);
+    /**
+     * สาขามีใบที่ยังไม่ปิด → ถามยืนยันก่อน (เจ้าของงานขอ ต.ค. 69) — ดึงใหม่ตอนกด ไม่ใช้รายการตอนเลือกสาขา
+     * เพราะฟอร์มอาจเปิดค้างไว้นานจนมีคนเปิดใบเดียวกันไปแล้ว · ดึงไม่ได้ = ไม่บล็อก (กล่องเหลืองยังเตือนอยู่)
+     */
+    if (!dupConfirmed.current && branchCode.trim()) {
+      const open = await api
+        .get<OpenOrder[]>(`/branches/${encodeURIComponent(branchCode.trim())}/open-work-orders`, { loadingText: "กำลังเช็คใบงานค้างของสาขา…" })
+        .then((r) => r.data)
+        .catch(() => [] as OpenOrder[]);
+      if (open.length) {
+        setOpenOrders(open);
+        setDupOrders(open);
+        submitting.current = false;
+        setSaving(false);
+        return;
+      }
+    }
+    dupConfirmed.current = false;
     try {
       // ส่งเฉพาะสิ่งที่ขั้นนี้รู้ อะไหล่ ช่าง และวันนัดเป็นของขั้นถัดไป
       // ส่ง title เฉพาะตอนเลือก "อื่นๆ" — ประเภทอื่นเซิร์ฟเวอร์ตั้งหัวข้อให้เอง
@@ -884,6 +905,42 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    {dupOrders ? (
+      <DuplicateConfirmModal
+        orders={dupOrders}
+        sameCodes={
+          fromBoard
+            ? [(route.params?.machineCode ?? "").trim().toUpperCase()].filter(Boolean)
+            : noMachine
+              ? []
+              : shownRows.map((r) => r.code.trim().toUpperCase()).filter(Boolean)
+        }
+        branch={`${branchCode.trim()}${branchName ? ` ${branchName}` : ""}`}
+        opening={[
+          fromBoard
+            ? route.params?.machineCode ? `เครื่อง ${route.params.machineCode}` : null
+            : noMachine
+              ? "งานทั้งสาขา (ไม่ระบุเครื่อง)"
+              : shownRows.map((r) => r.code.trim().toUpperCase()).filter(Boolean).length
+                ? `เครื่อง ${shownRows.map((r) => r.code.trim().toUpperCase()).filter(Boolean).join(", ")}`
+                : "ไม่ระบุเครื่อง",
+          rows[0]?.symptom.trim() || null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        onBack={() => setDupOrders(null)}
+        onView={(id) => {
+          // ไปดูใบเดิมแล้วกลับมา ฟอร์มยังอยู่ครบ — กดบันทึกใหม่ก็ถามใหม่
+          setDupOrders(null);
+          navigation.push("WorkOrderDetail", { id });
+        }}
+        onConfirm={() => {
+          setDupOrders(null);
+          dupConfirmed.current = true;
+          submit();
+        }}
+      />
+    ) : null}
     </PopupScreen>
   );
 }

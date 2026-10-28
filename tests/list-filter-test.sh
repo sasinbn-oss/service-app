@@ -69,4 +69,13 @@ DB "update \"WorkOrder\" set \"createdById\"=null where id=$D" >/dev/null
   && pass "ใบที่ไม่มีผู้เปิดส่งค่าว่าง (แอปขึ้นว่า ระบบ)" || fail "ไม่มีผู้เปิด: $(row $D 'r.createdByName')"
 
 echo
+echo "═══ อาการในรายการ (การ์ดงานของฉันวันนี้ + ช่องค้นหา — ใบจากฟอร์มชื่อ \"งาน CM\" ทุกใบ)"
+DB "update \"WorkOrder\" set symptom=E'ทดสอบอาการบรรทัดแรก\\nบรรทัดสองไม่ต้องส่ง' where id=$D" >/dev/null
+[ "$(row $D 'r.symptom')" = "ทดสอบอาการบรรทัดแรก" ] \
+  && pass "แถวในรายการมีอาการบรรทัดแรกเท่านั้น" || fail "อาการในแถว: $(row $D 'JSON.stringify(r.symptom)')"
+curl -s -G "localhost:4000/api/work-orders" --data-urlencode "status=ALL" --data-urlencode "search=อาการบรรทัดแรก" -H "$(H $A)" \
+  | J "d.rows.some(r=>r.id===$D)?'ok':'none'" | grep -q ok \
+  && pass "ค้นด้วยอาการแล้วเจอใบงาน (ปุ่มค้นในใบงานซ่อมทั้งหมด)" || fail "ค้นอาการไม่เจอ"
+
+echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || { echo "── มีข้อที่ไม่ผ่าน ──"; exit 1; }

@@ -1,5 +1,6 @@
 // ทดสอบ: ขนาดเครื่องในฟอร์ม · เติมของเดิมให้ · เปิดจากกระดานแล้วผู้ติดต่อไม่หาย
 const { chromium } = require("playwright");
+const { confirmDuplicate } = require("./dup");
 const { attachPhoto } = require("./photo");
 const path = require("path");
 const DIR = __dirname;
@@ -52,6 +53,8 @@ const DIR = __dirname;
     await b.click().catch(async () => {
       await b.evaluate((n) => (n.closest("[tabindex]") || n).click());
     });
+    // สาขามีใบค้างอยู่ — ป๊อปอัพยืนยันเปิดซ้ำ (ต.ค. 69)
+    await confirmDuplicate(page);
   };
 
   try {

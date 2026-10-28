@@ -93,7 +93,10 @@ export default function MyJobsScreen(props: Props) {
   const { user } = useAuth();
   if (user && user.role !== "EMPLOYEE") {
     return (
-      <MyQueue onOpen={(id, open) => props.navigation.navigate("WorkOrderDetail", { id, ...(open ? { open } : {}) })} />
+      <MyQueue
+        onOpen={(id, open) => props.navigation.navigate("WorkOrderDetail", { id, ...(open ? { open } : {}) })}
+        onSearchAll={(q) => props.navigation.navigate("WorkOrderList", { search: q })}
+      />
     );
   }
   return <TechJobs {...props} />;
