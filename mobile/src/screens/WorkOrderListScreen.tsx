@@ -100,6 +100,11 @@ export interface WorkOrderRow {
   partsExpectedAt?: string | null;
   /** อะไหล่ที่เช็คแล้วหมด (นับเฉพาะขั้นที่ยังรอของอยู่) — มากกว่า 0 = ขึ้นป้ายแดง */
   partsOut?: number;
+  /**
+   * ป้ายอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69) — คำเดียวกันทั้งฝั่งแอดมินและหัวหน้าภาค
+   * CHECK รอแอดมินเช็ค · OUT หมด · READY ครบ ยังไม่เบิก · TRANSFER ครบ ต้องโอน · ISSUED เบิกแล้ว · null ไม่มีป้าย
+   */
+  partsState?: "CHECK" | "OUT" | "READY" | "TRANSFER" | "ISSUED" | null;
   /** ผู้เปิดใบงาน — ว่าง = ระบบสร้างเอง หรือบัญชีผู้เปิดถูกลบไปแล้ว */
   createdByName?: string | null;
   createdByRole?: Role | null;
@@ -416,8 +421,27 @@ function StuckText({ row, style }: { row: WorkOrderRow; style: object }) {
 }
 
 /** ป้ายแดง "อะไหล่หมด" — ใบที่ติดของต้องเห็นจากรายการเลย ไม่ใช่ต้องเปิดเข้าไปอ่านรายการอะไหล่ */
-function PartsOutBadge({ row }: { row: { partsOut?: number } }) {
-  if (!row.partsOut) return null;
+/**
+ * ป้ายอะไหล่ (นัดลูกค้าก่อนเบิก · แบบที่เจ้าของงานตกลง ต.ค. 69) — คำเดียวกับการ์ดงานของฉันวันนี้
+ * หมดใช้ป้ายแดงเดิม · ที่เหลือบอกว่าของพร้อมแค่ไหน ไม่ต้องเปิดใบงานดู
+ */
+const PARTS_BADGE: Record<string, { text: string; fg: string; bg: string }> = {
+  CHECK: { text: "รอแอดมินเช็คอะไหล่", fg: colors.textMuted, bg: colors.background },
+  READY: { text: "อะไหล่ครบ · ยังไม่เบิก", fg: colors.successInk, bg: colors.successSoft },
+  TRANSFER: { text: "อะไหล่ครบ · ต้องโอน", fg: colors.warningInk, bg: colors.warningSoft },
+  ISSUED: { text: "เบิกแล้ว", fg: "#fff", bg: colors.navyFill },
+};
+
+function PartsOutBadge({ row }: { row: { partsOut?: number; partsState?: WorkOrderRow["partsState"] } }) {
+  if (!row.partsOut) {
+    const t = row.partsState ? PARTS_BADGE[row.partsState] : undefined;
+    if (!t) return null;
+    return (
+      <View style={[styles.badge, { backgroundColor: t.bg, alignSelf: "flex-start" }]} accessibilityLabel={`ป้ายอะไหล่ ${t.text}`}>
+        <Text style={[styles.badgeText, { color: t.fg }]}>{t.text}</Text>
+      </View>
+    );
+  }
   return (
     <View style={[styles.badge, { backgroundColor: colors.danger, alignSelf: "flex-start" }]} accessibilityLabel="ป้ายอะไหล่หมด">
       <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด {row.partsOut}</Text>

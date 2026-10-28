@@ -29,15 +29,17 @@ echo
 echo "═══ สถานะการดำเนินการต้องขยับตามขั้นเอง"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-001\"}]}" >/dev/null
+echo "  ระบุอะไหล่ → $(ws $ID)"
+ws $ID | grep -q "แอดมิน · เช็คอะไหล่" && pass "ระบุอะไหล่แล้วไปแอดมินเช็คอะไหล่ (มี/หมด) ก่อนนัด" || fail "ไม่ไปขั้นเช็ค: $(ws $ID)"
+curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 echo "  เช็คอะไหล่ครบ → $(ws $ID)"
 ws $ID | grep -q "รอช่างเข้าแก้ไข" && pass "ของครบแล้วขึ้น 'รอช่างเข้าแก้ไข' ให้เอง" || fail "สถานะไม่ขยับ"
 
 echo
-echo "═══ หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน"
+echo "═══ หัวหน้าภาคนัดวันเข้า → แอดมินคอนเฟิร์มลูกค้า → แอดมินเบิก → หัวหน้าภาคปล่อยงาน (นัดลูกค้าก่อนเบิก)"
 P() { curl -s -X POST "localhost:4000/api/work-orders/$ID/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
-ws $ID | grep -q "หัวหน้าภาค · จ่ายงานให้ทีม" && pass "ของครบแล้วขึ้นว่าหัวหน้าภาค · จ่ายงานให้ทีม" || fail "ป้ายขั้นผิด: $(ws $ID)"
+ws $ID | grep -q "หัวหน้าภาค · นัดวันเข้า" && pass "ของครบแล้วขึ้นว่าหัวหน้าภาค · นัดวันเข้า" || fail "ป้ายขั้นผิด: $(ws $ID)"
 R=$(P $T assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-20\"}")
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงานเองไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R | head -c 120)"
 R=$(P $S assign "{\"team\":\"$TEAM\"}")
@@ -47,7 +49,9 @@ ws $ID | grep -q "แอดมิน · คอนเฟิร์มลูกค�
 R=$(P $S confirm-appointment '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "หัวหน้าภาคกดคอนเฟิร์มลูกค้าแทนแอดมินไม่ได้" || fail "หัวหน้าภาคคอนเฟิร์มได้: $(echo $R | head -c 120)"
 P $A confirm-appointment '{}' >/dev/null
-ws $ID | grep -q "หัวหน้าภาค · รับทราบ ปล่อยงาน" && pass "ลูกค้าคอนเฟิร์มแล้วกลับไปให้หัวหน้าภาคยืนยันออกงาน" || fail "ไม่กลับไปหัวหน้าภาค: $(ws $ID)"
+ws $ID | grep -q "แอดมิน · เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วแอดมินเบิกอะไหล่ (ของออกจากคลังหลังลูกค้าตกลงวัน)" || fail "ไม่ไปขั้นเบิก: $(ws $ID)"
+P $A parts-check "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-001\"}]}" >/dev/null
+ws $ID | grep -q "หัวหน้าภาค · รับทราบ ปล่อยงาน" && pass "เบิกแล้วไปให้หัวหน้าภาคยืนยันออกงาน" || fail "ไม่กลับไปหัวหน้าภาค: $(ws $ID)"
 P $S dispatch '{}' >/dev/null
 ws $ID | grep -q "ช่าง · เข้างาน/ปิดงาน" && pass "ยืนยันออกงานแล้วถึงคิวช่างเข้างาน" || fail "ยืนยันออกงานไม่ได้: $(ws $ID)"
 
@@ -72,10 +76,12 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $T)" \
 echo "  (แนบใบเหลืองไว้ตอนนี้ = ก่อนถูกจ่ายงานรอบใหม่)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-002\"}]}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-21\"}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-002\"}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 # ป้ายรุ่นกับรูปก่อน/หลังซ่อมของรอบนี้ต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทนใบเหลือง
 # (รูปก่อน/หลังซ่อมของรอบแรกไม่นับ เหมือนใบเหลือง)

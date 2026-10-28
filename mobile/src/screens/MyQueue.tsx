@@ -23,6 +23,7 @@ import { useDocked } from "../components/SideMenu";
 import { api, apiErrorMessage } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { machineTag } from "../utils/machine";
+import { thaiDate } from "../components/DateField";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import type { WorkOrderRow } from "./WorkOrderListScreen";
 import {
@@ -285,7 +286,15 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                       </View>
                     ) : null}
                     {r.rolledBackFrom ? <Tag text="↩ ย้อนขั้นมา" fg={colors.rollbackInk} bg={colors.rollbackSoft} /> : null}
-                    {(r.partsOut ?? 0) > 0 ? <Tag text={`อะไหล่หมด ${r.partsOut}`} fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
+                    {(r.partsOut ?? 0) > 0 ? (
+                      <Tag
+                        text={`อะไหล่หมด ${r.partsOut}${r.partsExpectedAt ? ` · คาดเข้า ${thaiDate(r.partsExpectedAt.slice(0, 10))}` : ""}`}
+                        fg={colors.dangerInk}
+                        bg={colors.dangerSoft}
+                      />
+                    ) : (
+                      <PartsTag state={r.partsState} />
+                    )}
                     {r.orphan ? <Tag text="ไม่มีคนรับ" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     {r.overdue ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
                     {r.rescheduled ? <Tag text="ลูกค้าขอเปลี่ยนวัน" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
@@ -471,6 +480,21 @@ function Stat({ n, label, tone }: { n: number; label: string; tone?: "danger" | 
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
+}
+
+/**
+ * ป้ายอะไหล่ — คำเดียวกันทั้งกล่องงานแอดมินและหัวหน้าภาค (แบบที่เจ้าของงานตกลง ต.ค. 69)
+ * ไม่ต้องเปิดใบงานก็รู้ว่าของพร้อมหรือยัง · หมดใช้ป้ายแดง "อะไหล่หมด" เดิมข้างบน
+ */
+const PARTS_TAG: Record<string, { text: string; fg: string; bg: string }> = {
+  CHECK: { text: "รอแอดมินเช็คอะไหล่", fg: colors.textMuted, bg: colors.background },
+  READY: { text: "อะไหล่ครบ · ยังไม่เบิก", fg: colors.successInk, bg: colors.successSoft },
+  TRANSFER: { text: "อะไหล่ครบ · ต้องโอน", fg: colors.warningInk, bg: colors.warningSoft },
+  ISSUED: { text: "เบิกแล้ว", fg: "#fff", bg: colors.navyFill },
+};
+function PartsTag({ state }: { state: WorkOrderRow["partsState"] }) {
+  const t = state ? PARTS_TAG[state] : undefined;
+  return t ? <Tag text={t.text} fg={t.fg} bg={t.bg} /> : null;
 }
 
 function Tag({ text, fg, bg }: { text: string; fg: string; bg: string }) {

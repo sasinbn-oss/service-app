@@ -30,7 +30,7 @@ ID=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMA
 [ "$(ws $ID)" = "WAITING_CUSTOMER" ] && pass "เปิดใบงานพร้อม \"รอลูกค้าแจ้งซ่อม\" → ยกมาได้" || fail "สถานะตอนเปิด: $(ws $ID)"
 
 echo
-echo "═══ ถึงขั้นเบิกอะไหล่ — รอลูกค้าหมดอายุ ระบบตั้งตามขั้น"
+echo "═══ ถึงขั้นเช็คอะไหล่ — รอลูกค้าหมดอายุ ระบบตั้งตามขั้น"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
 [ "$(ws $ID)" = "CHECKING_PARTS" ] && pass "เปลี่ยนขั้นแล้ว \"รอลูกค้า\" หาย → รอแอดมินเช็คอะไหล่" || fail "หลังเปลี่ยนขั้น: $(ws $ID)"
 
@@ -58,17 +58,19 @@ DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='STAT
 
 echo
 echo "═══ อัตโนมัติคิดผลเช็คคลังด้วย"
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":false}]}" >/dev/null
 PATCH $ID '{"workStatus":"WAITING_CUSTOMER","workStatusNote":"ทดสอบ"}' >/dev/null
 PATCH $ID '{"workStatus":null}' >/dev/null
 [ "$(ws $ID)" = "WAITING_PARTS" ] && pass "อะไหล่หมดอยู่ กลับเป็นอัตโนมัติ → รออะไหล่" || fail "อัตโนมัติ+หมด: $(ws $ID)"
 
 echo
 echo "═══ ช่างส่งกลับ — ล้างสถานะรอบก่อน"
-POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SG1\"}]}" >/dev/null
+POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
 POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-10\"}" >/dev/null
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
+[ "$(ws $ID)" = "CHECKING_PARTS" ] && pass "คอนเฟิร์มแล้วถึงขั้นเบิก → รอแอดมินเช็คอะไหล่ (ไม่ค้าง \"รอช่าง\")" || fail "ขั้นเบิก: $(ws $ID)"
+POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SG1\"}]}" >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(ws $ID)" = "WAITING_TECH" ] && pass "ช่างเข้างาน → รอช่างเข้าแก้ไข" || fail "ช่างเข้างาน: $(ws $ID)"
 POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"PARTS","reason":"อะไหล่ไม่ตรง"}' >/dev/null

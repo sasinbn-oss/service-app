@@ -95,7 +95,8 @@ const login = async (code, password = "test1234") =>
       await openOrder();
       await vis(code).last().click();
       await page.waitForTimeout(3000);
-      await vis("จ่ายงานให้ทีม").first().click();
+      // ปุ่มขั้น "นัดวันเข้า" อยู่ท้ายการ์ดขั้นปัจจุบัน — ชื่อซ้ำกับแถบขั้นตอน/หัวการ์ด เอาตัวสุดท้าย
+      await vis("นัดวันเข้า").last().click();
       await page.waitForTimeout(1500);
       await lbl("ทีมที่จะรับงาน").last().click();
       await page.waitForTimeout(800);

@@ -35,7 +35,7 @@ import PartPicker, { PickedPart } from "../components/PartPicker";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
-import DateField, { thaiDate, todayBkk } from "../components/DateField";
+import DateField, { thaiDate, thaiDateLong, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown, { DropdownOption } from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
@@ -323,7 +323,8 @@ const SKIP_WHY: Record<string, string> = {
   INSPECT_CONFIRM: "ไม่ได้ตรวจหน้างาน",
   INSPECT_DISPATCH: "ไม่ได้ตรวจหน้างาน",
   INSPECTING: "ไม่ได้ตรวจหน้างาน",
-  PARTS_SOURCING: "ไม่ต้องเสนอราคา",
+  // นัดลูกค้าก่อนเบิก (ต.ค. 69) — ทุกใบที่ใช้อะไหล่ผ่านขั้นนี้ · ข้ามเมื่อไม่ใช้อะไหล่ หรือใบที่เช็คพร้อมเบิกในสายงานเดิม
+  PARTS_SOURCING: "ไม่ใช้อะไหล่ / เช็คพร้อมเบิก (สายงานเดิม)",
   AWAITING_QUOTE: "ไม่ต้องเสนอราคา",
   AWAITING_PAYMENT: "ไม่ต้องเสนอราคา",
   WAITING_PARTS: "ไม่ใช่ใบรออะไหล่รุ่นเก่า",
@@ -360,12 +361,24 @@ function inTransit(p: StockPart) {
 }
 
 /**
- * ผลเช็คอะไหล่ก่อนเสนอราคา (ขั้นเช็คอะไหล่ มี/หมด) ยังใช้ได้ไหมตอนเบิก — เจ้าของงานเลือก ต.ค. 69
+ * ผลเช็คอะไหล่ (ขั้นเช็คอะไหล่ มี/หมด) ยังใช้ได้ไหมตอนเบิก — เจ้าของงานเลือก ต.ค. 69
  *
- * ลูกค้าจ่ายเงินภายใน 3 วัน = ผล "มีครบ" ยังเชื่อได้ ฟอร์มเบิกเติมให้ เหลือเลือกคลังกับใส่เลขใบเบิก
- * เกิน 3 วัน = ของอาจถูกงานอื่นใช้ไประหว่างรอเงิน เปิดให้เช็คใหม่ทั้งหมดเหมือนเดิม
+ * เช็คไว้ไม่เกิน 3 วัน = ผล "มีครบ" ยังเชื่อได้ ฟอร์มเบิกเติมให้ เหลือใส่เลขใบเบิก
+ * เกิน 3 วัน = ของอาจถูกงานอื่นใช้ไประหว่างรอเงิน/รอนัด เปิดให้เช็คใหม่ทั้งหมด
+ * (นัดลูกค้าก่อนเบิก — ช่วงนี้ยาวขึ้น ใบส่วนใหญ่จะต้องดูคลังอีกรอบ ซึ่งคือสิ่งที่ต้องการ)
  */
 const SOURCING_FRESH_DAYS = 3;
+
+/** ของอยู่คลังอื่น (ต้องเบิก/โอน) นัดได้ตั้งแต่ N วันข้างหน้า — ตรงกับ TRANSFER_LEAD_DAYS ฝั่ง backend */
+const TRANSFER_LEAD_DAYS = 7;
+function addDaysYmd(ymd: string, n: number) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+/** ตัวที่ยังต้องเบิก/โอนจากคลังอื่น — กฎเดียวกับ needsTransferPart ฝั่งเซิร์ฟเวอร์ */
+function farPart(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
+  return p.inStock === true && !p.offCatalog && !!p.warehouse && p.warehouse !== adminWarehouse && !p.requisitionNo && !p.transferredAt;
+}
 function sourcingCheck(o: { status: string; logs: LogEntry[] }): { days: number; stale: boolean; at: string } | null {
   if (o.status !== "PARTS_REQUESTED") return null;
   const last = [...o.logs].filter((l) => l.action === "PARTS_SOURCED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -393,19 +406,19 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   INSPECT_DISPATCH: { label: "ส่งช่างตรวจ", icon: "checkmark-circle-outline" },
   INSPECTING: { label: "ตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
-  // หลังรับเงิน (หรือในประกัน) — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน
+  // ลูกค้าคอนเฟิร์มวันแล้ว — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน (นัดลูกค้าก่อนเบิก ต.ค. 69)
   PARTS_REQUESTED: { label: "เบิกอะไหล่ (คลัง 94)", icon: "arrow-forward-circle" },
   // ของอยู่คลังอื่น — หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ · ของถึงแล้วกดโอนเสร็จ (แอดมินกดแทนไม่ได้)
   PARTS_TRANSFER: { label: "เบิกและโอนอะไหล่", icon: "swap-horizontal-outline" },
   PARTS_IN_TRANSIT: { label: "โอนเสร็จแล้ว", icon: "checkmark-done-outline" },
   // โอนมาถึงคลังที่ไม่ใช่ 94 — หัวหน้าภาคเบิกส่งมอบเอง แอดมินกดแทนไม่ได้
   PARTS_PICKUP: { label: "เบิกอะไหล่ (คลังอื่น)", icon: "cube-outline" },
-  // ก่อนเสนอราคา — เช็คว่ามีอะไหล่ไหม มีครบไปเสนอราคา หมดรอของเข้า
+  // ขั้นแรกของทุกใบที่ใช้อะไหล่ — เช็คว่ามีไหม อยู่คลังไหน ยังไม่เบิก · มีครบไปเสนอราคา/นัด หมดรอของเข้า
   PARTS_SOURCING: { label: "เช็คอะไหล่ (มี/หมด)", icon: "cube-outline" },
   AWAITING_QUOTE: { label: "ส่งใบเสนอราคา", icon: "document-text-outline" },
   AWAITING_PAYMENT: { label: "แนบบิลรับเงิน", icon: "cash-outline" },
-  // หัวหน้าภาคจ่ายงาน+วัน → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคยืนยันออกงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
-  PARTS_CHECKED: { label: "จ่ายงานให้ทีม", icon: "arrow-forward-circle" },
+  // หัวหน้าภาคนัดวันเข้า (ทีม+วัน) → แอดมินคอนเฟิร์มลูกค้า → แอดมินเบิก → หัวหน้าภาคปล่อยงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
+  PARTS_CHECKED: { label: "นัดวันเข้า", icon: "calendar-outline" },
   AWAITING_CONFIRM: { label: "คอนเฟิร์มลูกค้า", icon: "call-outline" },
   ASSIGNED: { label: "รับทราบ ปล่อยงาน", icon: "checkmark-circle-outline" },
 };
@@ -502,9 +515,44 @@ function doneInParent(value: string, o: WorkOrder, stages: Stage[]) {
   return at(value) >= 0 && at(value) < at(start) && !o.logs.some((l) => l.status === value && l.action !== "SPLIT_FROM");
 }
 
+/** ขั้นเบิก/โอน — อยู่หลังคอนเฟิร์มลูกค้าในสายงานใหม่ (นัดลูกค้าก่อนเบิก ต.ค. 69) */
+const ISSUE_STAGES = ["PARTS_REQUESTED", "PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
+
+/**
+ * ใบที่ค้างระหว่างเบิกตอนเปลี่ยนสายงาน (ยังไม่ได้นัดลูกค้า) — ขั้นนัดวัน/คอนเฟิร์มอยู่ "ก่อน" ขั้นปัจจุบันตามลำดับ
+ * แต่ยังไม่ได้ทำ เบิกเสร็จแล้วใบวนกลับไปนัด (afterIssue ฝั่งเซิร์ฟเวอร์) — ต้องขึ้นว่ายังไม่ถึง ไม่ใช่ทำแล้ว
+ */
+function aheadAgain(value: string, o: WorkOrder) {
+  return (
+    (value === "PARTS_CHECKED" || value === "AWAITING_CONFIRM") &&
+    ISSUE_STAGES.includes(o.status) &&
+    o.appointmentStatus !== "CONFIRMED"
+  );
+}
+
+/**
+ * ขั้นเบิก/โอนที่อยู่ "หลัง" ขั้นปัจจุบัน แต่ของเบิกไปแล้ว — ใบที่เบิกตั้งแต่สายงานเดิมแล้วค้างที่นัดวัน
+ * หรือวนกลับมานัด/คอนเฟิร์มใหม่หลังเบิก (ทีมไม่ว่างวันใหม่ · ร้านปิด) · ทำจริง = ทำแล้ว · ไม่เคยผ่าน = ข้าม
+ */
+function issuedAhead(value: string, o: WorkOrder, stages: Stage[]): "done" | "skip" | null {
+  if (!ISSUE_STAGES.includes(value) || o.needsParts !== true) return null;
+  const at = (v: string) => stages.findIndex((x) => x.value === v);
+  if (o.status === "DONE" || o.status === "CANCELLED" || at(o.status) >= at(value)) return null;
+  const store = o.waitingParts.filter((p) => !p.offCatalog);
+  if (store.length === 0 || !store.every((p) => p.inStock === true && !!p.requisitionNo)) return null;
+  const did: Record<string, string> = {
+    PARTS_REQUESTED: "PARTS_CHECKED",
+    PARTS_TRANSFER: "TRANSFER_REQUESTED",
+    PARTS_IN_TRANSIT: "TRANSFER_ARRIVED",
+    PARTS_PICKUP: "PICKED_UP",
+  };
+  return o.logs.some((l) => l.action === did[value]) ? "done" : "skip";
+}
+
 function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
   const at = (v: string) => stages.findIndex((x) => x.value === v);
   if (doneInParent(value, o, stages)) return true;
+  if (issuedAhead(value, o, stages) === "skip") return true;
   const recovered = recoveredFrom(o);
   // รวมขั้นที่ใบงานรออยู่ตอนกดปิดด้วย — ขั้นนั้นก็ไม่มีใครทำ (เช่น รอจ่ายงาน แล้วปิดเลยโดยไม่จ่าย)
   if (recovered && value !== "DONE" && at(value) >= at(recovered)) return true;
@@ -528,11 +576,13 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
       );
     case "AWAITING_QUOTE":
       return o.needsQuote === false && !o.hasQuote;
-    // ใบที่ไม่ต้องเสนอราคา หรือใบเก่าก่อนมีขั้นนี้ (ไปเสนอราคาตรง ๆ ไม่มีประวัติเช็คก่อน) — ไม่ได้ผ่านขั้นนี้
+    // ไม่ใช้อะไหล่ · หรือเลยขั้นนี้มาแล้วโดยไม่มีประวัติเช็ค (ใบที่เช็คพร้อมเบิกในสายงานเดิม ก่อนนัดลูกค้าก่อนเบิก ต.ค. 69)
     case "PARTS_SOURCING":
       return (
         o.status !== "PARTS_SOURCING" &&
-        (o.needsQuote === false || !o.logs.some((l) => l.action === "PARTS_SOURCED" || l.action === "PARTS_BACKORDERED"))
+        (o.needsParts === false ||
+          ((o.status === "DONE" || at(o.status) > at("PARTS_SOURCING")) &&
+            !o.logs.some((l) => l.action === "PARTS_SOURCED" || l.action === "PARTS_BACKORDERED")))
       );
     case "AWAITING_PAYMENT":
       return o.needsQuote === false && !o.hasReceipt;
@@ -549,6 +599,7 @@ function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
       return (
         o.status !== "AWAITING_CONFIRM" &&
         (o.status === "DONE" || at(o.status) > at("AWAITING_CONFIRM")) &&
+        !aheadAgain(value, o) &&
         !o.logs.some((l) => l.action === "CONFIRMED" || l.action === "RESCHEDULED")
       );
     default:
@@ -1377,12 +1428,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             // ตามลำดับ แต่ทำไปแล้วจริง — ต้องขึ้นว่าทำแล้ว ไม่ใช่ยังไม่ถึง
             const doneOutOfOrder =
               (stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING") ||
-              (stage.value === "INSPECT_CONFIRM" && inspectBooked(order) && order.status !== "INSPECT_CONFIRM");
+              (stage.value === "INSPECT_CONFIRM" && inspectBooked(order) && order.status !== "INSPECT_CONFIRM") ||
+              // เบิกไปแล้วก่อนวนกลับมานัด/คอนเฟิร์ม — ของออกจากคลังแล้วจริง (นัดลูกค้าก่อนเบิก ต.ค. 69)
+              issuedAhead(stage.value, order, stages) === "done";
             const state = skipped
               ? "skipped"
               : order.status === "CANCELLED"
                 ? "future"
-                : i < currentIndex || order.status === "DONE" || doneOutOfOrder
+                : aheadAgain(stage.value, order)
+                  ? "future"
+                  : i < currentIndex || order.status === "DONE" || doneOutOfOrder
                   ? "done"
                   : i === currentIndex
                     ? "now"
@@ -2525,7 +2580,8 @@ function StepInfo({
   const goesTo: Record<string, string[]> = {
     INSPECT_CONFIRM: ["INSPECT_DISPATCH", "INSPECTING"],
     INSPECT_DISPATCH: ["INSPECTING"],
-    AWAITING_CONFIRM: ["ASSIGNED"],
+    // คอนเฟิร์มแล้วไปเบิก (สายงานใหม่) หรือไปปล่อยงาน (เบิกแล้ว / สายงานเดิม)
+    AWAITING_CONFIRM: ["ASSIGNED", "PARTS_REQUESTED"],
     ASSIGNED: ["IN_PROGRESS"],
   };
   const to = stageValue ? goesTo[stageValue] : undefined;
@@ -3105,8 +3161,9 @@ function StageModal({
   // ขั้นนัดลูกค้า
   // ขั้นคอนเฟิร์มลูกค้า: ลูกค้าตกลงวันเดิม หรือขอเลื่อน (เลื่อนแล้วถึงจะขึ้นช่องวันให้แก้)
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
-  // ขั้นเช็คคลัง: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ (ตั้งต้นเป็นแยก)
-  const [splitOut, setSplitOut] = useState(true);
+  // ขั้นเช็คอะไหล่/เบิก: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ แต่ตั้งต้นเป็นไม่แยก
+  // (เจ้าของงานตกลง ต.ค. 69: ของต้องครบก่อนส่งไปนัด · ของไม่พอตอนเบิก = แจ้งเลื่อนนัด) — แยกต้องเลือกเอง
+  const [splitOut, setSplitOut] = useState(false);
   /**
    * ใบที่เสนอราคาแล้ว แยกตัวที่หมด — ลูกค้าจ่ายค่าตัวนั้นแล้วหรือยัง (ต้องเลือก ไม่ตั้งค่าให้)
    * ลูกค้าบางรายจ่ายแค่ค่าของที่มี ใบใหม่ต้องเสนอราคาเอง — เดาผิดคือของออกไปโดยไม่มีใครเก็บเงิน
@@ -3168,7 +3225,7 @@ function StageModal({
     setConfirmChoice(
       (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order))) ? "MOVE" : null
     );
-    setSplitOut(true);
+    setSplitOut(false);
     setSplitPaid(null);
     setTransferChoice({});
     // วันเดิมที่ผ่านไปแล้วไม่เติม — นัดวันที่เลยมาแล้วคือนัดที่ไม่มีใครไปได้
@@ -3313,6 +3370,12 @@ function StageModal({
           assign: noPartsAssign ? { team, scheduledAt: visit, scheduledTime: visitTime || null } : undefined,
           note: note.trim() || undefined,
         });
+      } else if (order.status === "PARTS_REQUESTED" && partsShort) {
+        await api.post(`/work-orders/${order.id}/parts-short`, {
+          sparePartIds: thisRound.filter((p) => checks[p.sparePartId]?.inStock === false).map((p) => p.sparePartId),
+          expectedAt: expectedAt || null,
+          note: note.trim() || undefined,
+        });
       } else if (order.status === "PARTS_REQUESTED") {
         await api.post(`/work-orders/${order.id}/parts-check`, {
           // ส่งเฉพาะตัวที่ยังไม่ได้เบิก ตัวที่เบิกไปแล้วเซิร์ฟเวอร์ไม่แตะ
@@ -3364,7 +3427,12 @@ function StageModal({
         }
       } else if (order.status === "PARTS_SOURCING") {
         await api.post(`/work-orders/${order.id}/parts-sourcing`, {
-          results: thisRound.map((p) => ({ sparePartId: p.sparePartId, inStock: checks[p.sparePartId]?.inStock === true })),
+          results: thisRound.map((p) => ({
+            sparePartId: p.sparePartId,
+            inStock: checks[p.sparePartId]?.inStock === true,
+            warehouse: p.offCatalog || checks[p.sparePartId]?.inStock !== true ? null : checks[p.sparePartId]?.warehouse ?? null,
+          })),
+          splitOut: sourcingSplit,
           expectedAt: sourcingOut.length && expectedAt ? expectedAt : null,
           note: note.trim() || undefined,
         });
@@ -3507,9 +3575,27 @@ function StageModal({
   // ขั้นรอเบิกอะไหล่ต้องตอบครบทุกตัวที่ยังไม่ได้เบิก — ตอบบางตัวแล้วไปเสนอราคา คือเสนอราคาของที่ยังไม่รู้ว่ามี
   // (ตัวที่เบิกไปแล้วรอบก่อน ลูกค้าจ่ายไปแล้ว ไม่ต้องเช็คและเสนอราคาซ้ำ)
   const sourcingOut = order.status === "PARTS_SOURCING" ? thisRound.filter((p) => checks[p.sparePartId]?.inStock === false) : [];
+  // มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ ใบนี้ไปนัดด้วยของที่มี (ตั้งต้นเป็นแยก เหมือนขั้นเบิกเดิม)
+  const sourcingMixed =
+    order.status === "PARTS_SOURCING" &&
+    sourcingOut.length > 0 &&
+    (issued.length > 0 || thisRound.some((p) => checks[p.sparePartId]?.inStock === true));
+  const sourcingSplit = sourcingMixed && splitOut;
+  // มีครบแล้วไปไหนต่อ — ตามกฎเสนอราคาเดียวกับเซิร์ฟเวอร์ (ใบแยกที่ลูกค้าจ่ายแล้วในใบเดิมไม่เสนอราคาซ้ำ)
+  const quoteNext = order.needsQuote && !order.logs.some((l) => l.action === "PREPAID");
+  // ของอยู่คลังอื่น — บอกตั้งแต่ตอนเช็คว่าหัวหน้าภาคต้องนัดล่วงหน้า 7 วัน
+  const sourcingFar =
+    order.status === "PARTS_SOURCING"
+      ? thisRound.filter((p) => {
+          const c = checks[p.sparePartId];
+          return !p.offCatalog && c?.inStock === true && !!c.warehouse && c.warehouse !== adminWarehouse;
+        })
+      : [];
   const sourcingBlocked =
     order.status === "PARTS_SOURCING" &&
     (thisRound.some((p) => typeof checks[p.sparePartId]?.inStock !== "boolean") ||
+      // มีของต้องบอกคลัง — หัวหน้าภาคนัดวันจากคลังนี้ (ของคลังอื่นต้องโอน)
+      thisRound.some((p) => !p.offCatalog && checks[p.sparePartId]?.inStock === true && !checks[p.sparePartId]?.warehouse) ||
       (expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt)));
   const paymentBlocked =
     order.status === "AWAITING_PAYMENT" && docs.length === 0 && !order.hasReceipt;
@@ -3524,7 +3610,28 @@ function StageModal({
     (issued.length > 0 || thisRound.some((p) => checks[p.sparePartId]?.inStock === true));
   // ตอบว่าหมดสักตัว = มีของให้รอ ถามวันคาดว่าเข้า (แยกใบแล้ววันนี้ไปติดใบรออะไหล่)
   const checkOut = order.status === "PARTS_REQUESTED" && thisRound.some((p) => checks[p.sparePartId]?.inStock === false);
+  /**
+   * ของไม่พอตอนเบิก (ลูกค้าคอนเฟิร์มวันแล้ว · นัดลูกค้าก่อนเบิก ต.ค. 69) — ไม่แยกใบ = ทั้งใบกลับไปเช็คอะไหล่ รอของเข้า
+   * แล้วหัวหน้าภาคนัดใหม่ แอดมินโทรแจ้งลูกค้าว่าเลื่อน (parts-short) · ตัวที่มีไม่ต้องใส่เลขใบเบิก เพราะยังไม่เบิก
+   */
+  const partsShort = checkOut && !(mixed && splitOut);
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
+  /**
+   * ของอยู่คลังอื่นยังไม่เบิก/โอน — นัดได้ตั้งแต่ 7 วันข้างหน้า (เจ้าของงานกำหนด ต.ค. 69) · เซิร์ฟเวอร์กันซ้ำ
+   * ใช้ทั้งตอนหัวหน้าภาคนัด และตอนแอดมินเลื่อนวันตามที่ลูกค้าขอ
+   */
+  const farNow = order.needsParts === true ? order.waitingParts.filter((p) => farPart(p, adminWarehouse)) : [];
+  const minVisit = farNow.length ? addDaysYmd(todayBkk(), TRANSFER_LEAD_DAYS) : undefined;
+  const visitTooSoon =
+    !!minVisit &&
+    validDate &&
+    visit < minVisit &&
+    (order.status === "PARTS_CHECKED" || (order.status === "AWAITING_CONFIRM" && confirmChoice === "MOVE"));
+  // คอนเฟิร์มแล้วไปไหน — ยังมีของต้องเบิก = แอดมินเบิกต่อ · เบิกแล้ว (วนกลับมาคอนเฟิร์มใหม่) = หัวหน้าภาคปล่อยงาน
+  const confirmToIssue =
+    order.status === "AWAITING_CONFIRM" &&
+    order.needsParts === true &&
+    order.waitingParts.some((p) => (p.offCatalog ? true : !(p.inStock === true && p.requisitionNo)));
   // ไม่ใช้อะไหล่ และไม่มีค่าบริการให้เสนอราคา = ขั้นถัดไปคือจ่ายงาน → จ่ายในฟอร์มนี้เลย
   const noPartsAssign = order.status === "NEW" && !inspectFirst && needsParts === false && offPartsPayload(services).length === 0;
   const timeOk = visitTime === "" || isTime(visitTime);
@@ -3536,7 +3643,7 @@ function StageModal({
   const paidOrder = order.logs.some((l) => l.action === "PAID");
   const blocked =
     (mixed && splitOut && paidOrder && splitPaid === null) ||
-    askTransfer.some((pid) => transferChoice[pid] === undefined) ||
+    (!partsShort && askTransfer.some((pid) => transferChoice[pid] === undefined)) ||
     quoteBlocked ||
     sourcingBlocked ||
     paymentBlocked ||
@@ -3551,13 +3658,14 @@ function StageModal({
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
+    visitTooSoon ||
     (order.status === "ASSIGNED" && declineDate && !note.trim()) ||
     ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
         (confirmChoice === "MOVE" &&
           (!validDate || !timeOk || (visit === (order.scheduledAt ?? "").slice(0, 10) && visitTime === (order.scheduledTime ?? "")))))) ||
-    unchecked ||
-    needsRequisition ||
+    (unchecked && !partsShort) ||
+    (needsRequisition && !partsShort) ||
     pickupBlocked ||
     transferBlocked ||
     (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
@@ -3587,9 +3695,15 @@ function StageModal({
             ) : (
               <Text style={styles.modalSaveText}>
                 {order.status === "PARTS_SOURCING"
-                  ? sourcingOut.length
+                  ? sourcingOut.length && !sourcingSplit
                     ? "อะไหล่หมด — รอของเข้า"
-                    : "มีอะไหล่ — ไปเสนอราคา"
+                    : sourcingSplit
+                      ? `แยกตัวที่หมด · ${quoteNext ? "ไปเสนอราคา" : "ส่งนัดวัน"}`
+                      : quoteNext
+                        ? "มีครบ — ไปเสนอราคา"
+                        : "มีครบ — ส่งหัวหน้าภาคนัดวัน"
+                  : partsShort
+                    ? "ของไม่พอ — แจ้งเลื่อนนัด"
                   : order.status === "ASSIGNED"
                     ? declineDate
                       ? "ส่งกลับให้แอดมินนัดใหม่"
@@ -3724,14 +3838,15 @@ function StageModal({
 
             {order.status === "PARTS_SOURCING" ? (
               <View style={styles.checkList}>
+                {/* นัดลูกค้าก่อนเบิก (เจ้าของงานกำหนด ต.ค. 69) — ขั้นนี้ดูคลังอย่างเดียว ไม่ตัดของ */}
                 <Text style={styles.linkedText}>
-                  งานนี้ต้องเสนอราคาลูกค้า — เช็คอะไหล่ตามที่หัวหน้าภาคระบุว่ามีหรือหมด มีครบกด “มีอะไหล่” ไปเสนอราคา หมดตัวไหนรอของเข้าที่ขั้นนี้
-                  (ยังไม่ต้องใส่คลังหรือเลขใบเบิก — เบิกจริงหลังลูกค้าจ่ายเงิน)
+                  เช็คอะไหล่ตามที่หัวหน้าภาคระบุว่ามีหรือหมด อยู่คลังไหน — ยังไม่ต้องเบิกหรือใส่เลขใบเบิก
+                  เบิกจริงหลังลูกค้าคอนเฟิร์มวันแล้ว
                 </Text>
                 {thisRound.map((part) => {
                   const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
                   const set = (inStock: boolean) =>
-                    setChecks((v) => ({ ...v, [part.sparePartId]: { inStock, warehouse: c.warehouse } }));
+                    setChecks((v) => ({ ...v, [part.sparePartId]: { inStock, warehouse: inStock ? c.warehouse : null } }));
                   return (
                     <View key={part.sparePartId} style={styles.checkItem}>
                       <Text style={styles.checkCode}>
@@ -3762,9 +3877,37 @@ function StageModal({
                           </Text>
                         </TouchableOpacity>
                       </View>
+                      {/* คลังที่มีของ — ของอยู่คลังอื่นต้องเผื่อเวลาโอน หัวหน้าภาคนัดได้ตั้งแต่ 7 วันข้างหน้า */}
+                      {c.inStock === true && !part.offCatalog ? (
+                        <Dropdown
+                          value={c.warehouse}
+                          placeholder="อยู่คลังไหน"
+                          accessibilityLabel={`คลังที่มี ${part.partCode}`}
+                          options={[...warehouses]
+                            .sort((a, b) => Number(b === adminWarehouse) - Number(a === adminWarehouse))
+                            .map((w) => ({
+                              value: w,
+                              label: w,
+                              hint: w === adminWarehouse ? "นัดได้ทันที" : `ต้องโอน · นัดล่วงหน้า ${TRANSFER_LEAD_DAYS} วัน`,
+                              group: w === adminWarehouse ? "คลังส่งมอบ" : "คลังอื่น (ต้องเบิก/โอน)",
+                            }))}
+                          onChange={(next) => setChecks((v) => ({ ...v, [part.sparePartId]: { inStock: true, warehouse: next } }))}
+                        />
+                      ) : null}
                     </View>
                   );
                 })}
+                {sourcingMixed ? (
+                  <TouchableOpacity
+                    style={styles.skipRow}
+                    onPress={() => setSplitOut((v) => !v)}
+                    activeOpacity={0.7}
+                    accessibilityLabel="แยกตัวที่หมดไปใบงานรออะไหล่"
+                  >
+                    <Ionicons name={splitOut ? "checkbox" : "square-outline"} size={18} color={splitOut ? colors.primary : colors.textFaint} />
+                    <Text style={styles.skipText}>แยกตัวที่หมดไปใบงานรออะไหล่ — ใบนี้ไปนัดด้วยของที่มีได้เลย</Text>
+                  </TouchableOpacity>
+                ) : null}
                 {sourcingOut.length ? (
                   <DateField
                     value={expectedAt}
@@ -3774,20 +3917,40 @@ function StageModal({
                   />
                 ) : null}
                 <Text style={styles.linkedText}>
-                  {sourcingOut.length
-                    ? `หมด ${sourcingOut.length} รายการ — ใบงานรอที่ขั้นนี้ ของมาแล้วกดเช็คอีกรอบแล้วตอบว่ามีครบ`
-                    : thisRound.every((p) => checks[p.sparePartId]?.inStock === true)
-                      ? "มีครบทุกตัว — ส่งต่อไปเสนอราคาได้เลย"
-                      : "ตอบให้ครบทุกตัวก่อน"}
+                  {sourcingOut.length && !sourcingSplit
+                    ? `หมด ${sourcingOut.length} รายการ — ใบงานรอที่ขั้นนี้จนของเข้าครบ แล้วกดเช็คอีกรอบตอบว่ามีครบ (ของต้องครบก่อนส่งไปนัด)`
+                    : sourcingSplit
+                      ? `ตัวที่หมดย้ายไปใบงานใหม่ (รอของเข้าที่ขั้นนี้) — ใบนี้${quoteNext ? "ไปเสนอราคา" : "ส่งให้หัวหน้าภาคนัดวันเข้า"}ด้วยของที่มี`
+                      : thisRound.every((p) => checks[p.sparePartId]?.inStock === true)
+                        ? quoteNext
+                          ? "มีครบทุกตัว — ส่งต่อไปเสนอราคา แล้วค่อยนัดลูกค้า"
+                          : "มีครบทุกตัว — ส่งให้หัวหน้าภาคนัดวันเข้า"
+                        : "ตอบให้ครบทุกตัวก่อน"}
                 </Text>
+                {sourcingFar.length && (!sourcingOut.length || sourcingSplit) ? (
+                  <Text style={styles.pickupTag} accessibilityLabel="ของอยู่คลังอื่น นัดล่วงหน้า">
+                    {sourcingFar.length} รายการอยู่คลังอื่น ({[...new Set(sourcingFar.map((p) => checks[p.sparePartId]?.warehouse))].join(", ")}) —
+                    หัวหน้าภาคนัดได้ตั้งแต่ {TRANSFER_LEAD_DAYS} วันข้างหน้า (เผื่อเบิก/โอนหลังลูกค้าคอนเฟิร์ม)
+                  </Text>
+                ) : null}
               </View>
             ) : null}
             {order.status === "PARTS_REQUESTED" && sourcingCheck(order) ? (
               <Text style={sourcingCheck(order)!.stale ? styles.warn : styles.linkedText} accessibilityLabel="ผลเช็คก่อนเสนอราคา">
                 {sourcingCheck(order)!.stale
-                  ? `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days} วันก่อน (ก่อนเสนอราคา) — นานเกิน ${SOURCING_FRESH_DAYS} วัน เช็คใหม่ทุกตัว`
-                  : `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days === 0 ? "วันนี้" : `${sourcingCheck(order)!.days} วันก่อน`} (ก่อนเสนอราคา) — มีครบ ไม่ต้องเช็คซ้ำ เลือกคลังและใส่เลขใบเบิก`}
+                  ? `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days} วันก่อน — นานเกิน ${SOURCING_FRESH_DAYS} วัน ดูในคลังอีกรอบทุกตัวก่อนใส่เลขใบเบิก (ของอาจถูกงานอื่นใช้ไประหว่างรอนัด)`
+                  : `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days === 0 ? "วันนี้" : `${sourcingCheck(order)!.days} วันก่อน`} — มีครบ ไม่ต้องเช็คซ้ำ เลือกคลังและใส่เลขใบเบิก`}
               </Text>
+            ) : null}
+            {order.status === "PARTS_REQUESTED" && order.appointmentStatus === "CONFIRMED" ? (
+              // เบิกหลังลูกค้าตกลงวัน (นัดลูกค้าก่อนเบิก ต.ค. 69) — เห็นนัดที่ของต้องไปให้ทัน
+              <View style={styles.issuedBox} accessibilityLabel="ลูกค้าคอนเฟิร์มแล้ว">
+                <Text style={styles.issuedTitle}>ลูกค้าคอนเฟิร์มแล้ว — เบิกของให้ทันวันเข้างาน</Text>
+                <Text style={styles.issuedLine}>
+                  {visitLabel(order)}
+                  {order.assignedTeam ? ` · ทีม${order.assignedTeam}` : ""}
+                </Text>
+              </View>
             ) : null}
             {order.status === "PARTS_REQUESTED" ? (
               <View style={styles.checkList}>
@@ -3958,7 +4121,7 @@ function StageModal({
                     <Text style={styles.linkedText}>
                       {askTransfer.some((pid) => transferChoice[pid] !== false)
                         ? `${toPickup.length} รายการอยู่คลังอื่น — ชิ้นที่ต้องโอน หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ ชิ้นที่ไม่ต้องโอนเบิกพร้อมกันตอนส่งมอบ (โอนมาคลัง 94 กลับมาให้แอดมินเบิกส่งมอบก่อน)`
-                        : `${toPickup.length} รายการอยู่คลังอื่น — ไม่ต้องโอน หัวหน้าภาคเบิกจากคลังนั้นแล้วจ่ายงานได้เลย`}
+                        : `${toPickup.length} รายการอยู่คลังอื่น — ไม่ต้องโอน หัวหน้าภาคเบิกจากคลังนั้นแล้วปล่อยงานได้เลย`}
                     </Text>
                   </View>
                 ) : null}
@@ -3975,7 +4138,7 @@ function StageModal({
                       color={splitOut ? colors.primary : colors.textFaint}
                     />
                     <Text style={styles.skipText}>
-                      แยกตัวที่หมดไปใบงานรออะไหล่ — ใบนี้ไปซ่อมด้วยของที่มีได้เลย
+                      แยกตัวที่หมดไปใบงานรออะไหล่ — ใบนี้ไปตามนัดด้วยของที่มี
                     </Text>
                   </TouchableOpacity>
                 ) : null}
@@ -4007,8 +4170,8 @@ function StageModal({
                     {splitPaid !== null ? (
                       <Text style={styles.linkedText}>
                         {splitPaid
-                          ? "ใบใหม่เริ่มที่แอดมินเบิกอะไหล่ ของเข้าแล้วเบิกส่งมอบได้เลย"
-                          : "ใบใหม่เริ่มที่แอดมินเช็คอะไหล่ (มี/หมด) — ของเข้าแล้วเสนอราคา → รับเงิน → เบิก เหมือนใบปกติ"}
+                          ? "ใบใหม่รอของเข้าที่ขั้นเช็คอะไหล่ — ของเข้าแล้วนัดได้เลย ไม่ต้องเสนอราคาใหม่"
+                          : "ใบใหม่รอของเข้าที่ขั้นเช็คอะไหล่ — ของเข้าแล้วเสนอราคา → รับเงิน → นัด เหมือนใบปกติ"}
                       </Text>
                     ) : null}
                   </>
@@ -4021,10 +4184,12 @@ function StageModal({
                     emptyHint="ไม่บังคับ — ใส่แล้วขึ้นบนแถบขั้นตอนคู่กับป้าย “อะไหล่หมด”"
                   />
                 ) : null}
-                <Text style={styles.linkedText}>
-                  {mixed && splitOut
-                    ? "ตัวที่หมดจะย้ายไปใบงานใหม่ที่ลิงก์กับใบนี้ ใบนี้ไปขั้นจ่ายงานต่อ"
-                    : "มีตัวไหนหมด ใบงานจะขึ้นป้ายแดง “อะไหล่หมด” และค้างที่ขั้นนี้จนของครบ — ของมาแล้วกดเช็คอีกรอบ"}
+                <Text style={partsShort ? styles.warn : styles.linkedText} accessibilityLabel="ผลของการเบิก">
+                  {partsShort
+                    ? "ของไม่พอ — ทั้งใบกลับไปขั้นเช็คอะไหล่ (ป้ายแดง “อะไหล่หมด”) วันนัดเดิมถูกยกเลิก · โทรแจ้งลูกค้าว่าเลื่อนนัด ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่"
+                    : mixed && splitOut
+                      ? "ตัวที่หมดย้ายไปใบงานใหม่ (รอของเข้า แล้วนัดใหม่) — ใบนี้ไปตามนัดด้วยของที่มี"
+                      : "ลูกค้าคอนเฟิร์มวันแล้ว — เบิกครบแล้วใบไปให้หัวหน้าภาคปล่อยงาน · ของที่เช็คว่ามีถูกใช้ไปแล้ว กด “หมด” ที่ตัวนั้น"}
                 </Text>
               </View>
             ) : null}
@@ -4266,7 +4431,9 @@ function StageModal({
                       : "ใส่เหตุผลที่เบิกไม่ได้ในช่องบันทึกข้างล่าง"
                     : pickupBlocked
                       ? "ใส่คลังและเลขใบเบิกให้ครบทุกรายการ"
-                      : "เบิกครบแล้ว — ใบงานไปขั้นจ่ายงานให้ช่างต่อ"}
+                      : order.appointmentStatus === "CONFIRMED"
+                        ? "เบิกครบแล้ว — ลูกค้าคอนเฟิร์มวันแล้ว ใบไปขั้นปล่อยงานให้ช่าง"
+                        : "เบิกครบแล้ว — ใบไปขั้นนัดวันเข้า"}
                 </Text>
               </View>
             ) : null}
@@ -4413,10 +4580,13 @@ function StageModal({
               <>
                 {order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH" ? <DispatchNote order={order} /> : null}
                 {order.status === "PARTS_CHECKED" ? (
-                  <Text style={styles.linkedText}>
-                    เลือกทีมและวันเข้างาน แล้วแอดมินจะโทรคอนเฟิร์มกับร้าน — ร้านขอเลื่อน แอดมินเปลี่ยนวันให้
-                    แล้วส่งกลับมาให้คุณยืนยันออกงานอีกครั้ง
-                  </Text>
+                  <>
+                    <Text style={styles.linkedText}>
+                      เลือกทีมและวันเข้างาน → แอดมินโทรคอนเฟิร์มกับร้าน (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) →
+                      แอดมินเบิกอะไหล่ → กลับมาให้คุณปล่อยงาน
+                    </Text>
+                    <PartsReady order={order} adminWarehouse={adminWarehouse} />
+                  </>
                 ) : null}
                 <Text style={styles.modalLabel}>
                   {(order.status === "NEW" && inspectFirst) || order.status === "INSPECT_DISPATCH" ? "ทีมที่จะไปตรวจ" : "ทีมที่จะรับงาน"}
@@ -4529,7 +4699,14 @@ function StageModal({
                   onChange={setVisit}
                   label={prevUsed.includes("วันนัด") ? "วันเข้างาน · ค่าเดิมก่อนย้อน" : "วันเข้างาน"}
                   emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
+                  min={minVisit}
                 />
+                {minVisit ? (
+                  <Text style={visitTooSoon ? styles.warn : styles.linkedText} accessibilityLabel="นัดได้ตั้งแต่">
+                    อะไหล่อยู่{[...new Set(farNow.map((p) => p.warehouse))].join(", ")} ต้องเบิก/โอนหลังลูกค้าคอนเฟิร์ม —
+                    นัดได้ตั้งแต่ {thaiDateLong(minVisit)} (ล่วงหน้า {TRANSFER_LEAD_DAYS} วัน) วันก่อนหน้านั้นขีดฆ่าไว้
+                  </Text>
+                ) : null}
                 <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
               </>
             ) : null}
@@ -4554,10 +4731,16 @@ function StageModal({
                         ] as const)
                       : // ใบที่ส่งตรวจก่อนบังคับวัน (ก่อน ต.ค. 69 รอบสอง) — ไม่มีวันให้ลูกค้า "ตกลง"
                         ([["MOVE", "นัดวันเข้าตรวจ", "ใส่วันที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"]] as const)
-                    : ([
-                        ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
-                        ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
-                      ] as const)
+                    : confirmToIssue
+                      ? // นัดลูกค้าก่อนเบิก (ต.ค. 69) — คอนเฟิร์มแล้วแอดมินเบิกต่อ ไม่ใช่ส่งหัวหน้าภาคทันที
+                        ([
+                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ต่อไปเบิกอะไหล่ แล้วหัวหน้าภาคปล่อยงาน"],
+                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วเบิกอะไหล่ต่อ"],
+                        ] as const)
+                      : ([
+                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
+                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
+                        ] as const)
                   ).map(([v, label, hint]) => (
                     <TouchableOpacity
                       key={v}
@@ -4578,7 +4761,13 @@ function StageModal({
                       onChange={setVisit}
                       label={order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "วันเข้าตรวจ" : "วันใหม่"}
                       emptyHint="เลือกวันที่ลูกค้าสะดวก"
+                      min={order.status === "AWAITING_CONFIRM" ? minVisit : undefined}
                     />
+                    {order.status === "AWAITING_CONFIRM" && minVisit ? (
+                      <Text style={visitTooSoon ? styles.warn : styles.linkedText}>
+                        อะไหล่ต้องโอนจากคลังอื่น — วันใหม่ต้องตั้งแต่ {thaiDateLong(minVisit)} (ล่วงหน้า {TRANSFER_LEAD_DAYS} วัน)
+                      </Text>
+                    ) : null}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
@@ -4987,6 +5176,55 @@ function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null;
  * ลูกค้าเลื่อนวันคือเหตุผลหลักที่ขั้นนี้มีอยู่ (ทีมเดิมอาจไม่ว่างวันใหม่) จึงต้องเด่น
  * อ่านจากประวัติล่าสุดของขั้นคอนเฟิร์ม ไม่เก็บซ้ำในใบงาน — ประวัติคือของจริงอยู่แล้ว
  */
+/**
+ * อะไหล่พร้อมแค่ไหน — กล่องบนฟอร์มนัดวันเข้า (นัดลูกค้าก่อนเบิก · แบบที่เจ้าของงานตกลง ต.ค. 69)
+ * หัวหน้าภาคเห็นผลเช็คของแอดมินรายตัว ไม่ต้องโทรถาม · ของครบเสมอ (ของหมดค้างที่แอดมินจนของเข้า)
+ * ตัวที่อยู่คลังอื่นคือตัวที่ทำให้ต้องนัดล่วงหน้า และหัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน
+ */
+function PartsReady({ order, adminWarehouse }: { order: WorkOrder; adminWarehouse: string }) {
+  if (order.needsParts !== true || order.waitingParts.length === 0) return null;
+  const issuedAll = order.waitingParts.every((p) => p.offCatalog || (p.inStock === true && !!p.requisitionNo));
+  const far = order.waitingParts.filter((p) => farPart(p, adminWarehouse));
+  const checked = [...order.logs]
+    .filter((l) => l.action === "PARTS_SOURCED")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return (
+    <View style={[styles.readyBox, far.length > 0 && styles.readyBoxFar]} accessibilityLabel="อะไหล่พร้อมแค่ไหน">
+      <Text style={[styles.readyTitle, far.length > 0 && styles.readyTitleFar]}>
+        {issuedAll ? "อะไหล่เบิกแล้ว" : far.length ? "อะไหล่ครบ · ต้องโอนจากคลังอื่น" : "อะไหล่ครบ · ยังไม่เบิก"}
+      </Text>
+      {order.waitingParts.map((p) => {
+        const isFar = far.includes(p);
+        return (
+          <View key={p.sparePartId} style={styles.readyRow}>
+            <Ionicons
+              name={isFar ? "alert-circle-outline" : "checkmark"}
+              size={15}
+              color={isFar ? colors.warningInk : colors.success}
+            />
+            <Text style={styles.readyLine}>
+              {partTitle(p)} × {p.quantity} —{" "}
+              {p.offCatalog
+                ? "หาได้แล้ว (นอกสโตร์)"
+                : p.requisitionNo
+                  ? `เบิกแล้ว · ${p.warehouse ?? "-"} · ใบเบิก ${p.requisitionNo}`
+                  : isFar
+                    ? `${p.warehouse} · คุณเบิก/โอนก่อนปล่อยงาน`
+                    : `มี · ${p.warehouse ?? adminWarehouse}`}
+            </Text>
+          </View>
+        );
+      })}
+      {checked ? (
+        <Text style={styles.readyMeta}>
+          แอดมินเช็คเมื่อ {formatDateTime(checked.createdAt)}
+          {checked.byName ? ` · ${checked.byName}` : ""}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function DispatchNote({ order }: { order: WorkOrder }) {
   const last = order.logs
     .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
@@ -6363,6 +6601,21 @@ const styles = StyleSheet.create({
   checkCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   checkName: { fontSize: 12, lineHeight: 20, color: colors.textMuted },
   // ของที่เบิกไปแล้วรอบก่อน — อ่านอย่างเดียว ไม่ใช่ของที่ต้องตอบในรอบนี้
+  readyBox: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.successSoft,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    gap: 4,
+    marginTop: spacing.sm,
+  },
+  readyBoxFar: { borderColor: colors.warningBorder, backgroundColor: colors.warningSoft },
+  readyTitle: { fontSize: 14, fontWeight: "700", color: colors.successInk },
+  readyTitleFar: { color: colors.warningInk },
+  readyRow: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  readyLine: { flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 18, color: colors.text },
+  readyMeta: { fontSize: 11.5, color: colors.textFaint },
   issuedBox: {
     gap: 3,
     marginTop: spacing.md,

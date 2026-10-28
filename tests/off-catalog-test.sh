@@ -3,10 +3,11 @@
 #   · หัวหน้าภาคระบุของในสโตร์ + นอกสโตร์ในใบเดียว / มีแต่นอกสโตร์ก็ได้ · ชื่อว่างไม่ได้
 #   · แฟรนไชส์หมดประกัน → ยังผ่านขั้นเช็คอะไหล่/เสนอราคา · หน่วยกับหมายเหตุถูกเก็บ
 #   · ชื่อเดียวกันข้ามใบงาน = แถวเดียวกัน · ไม่ขึ้นในรายการอะไหล่/ช่องค้นหา · ไม่ปนในรายงานอะไหล่ที่ต้องสั่ง
-#   · เบิก: ของนอกสโตร์ "มี" ไม่ต้องมีคลัง/เลขใบเบิก (ของในสโตร์ยังต้อง) · แก้หมายเหตุอย่างเดียวผลเช็คไม่หาย
+#   · เช็ค/เบิก: ของนอกสโตร์ "มี" ไม่ต้องมีคลัง/เลขใบเบิก (ของในสโตร์ยังต้อง) · แก้หมายเหตุอย่างเดียวผลเช็คไม่หาย
+#   · ของนอกสโตร์ผ่านขั้นเบิกเสมอหลังลูกค้าคอนเฟิร์ม (แอดมินยืนยันว่าซื้อแล้ว) แม้ของในสโตร์เบิกครบ
 #   · ปิดงาน: ช่างเพิ่มของนอกสโตร์ได้ · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง
 #   · มีของนอกสโตร์/ค่าบริการ = เสนอราคาเสมอ แม้สาขาบริษัท (เจ้าของงานเลือก ต.ค. 69)
-#   · ค่าบริการล้วน (ไม่ใช้อะไหล่): ตรงไปเสนอราคา → จ่ายเงิน → จ่ายงาน ไม่ค้างที่ขั้นเบิก — เช็คฐานข้อมูลทุกข้อ
+#   · ค่าบริการล้วน (ไม่ใช้อะไหล่): ตรงไปเสนอราคา → จ่ายเงิน → นัดวัน ไม่ค้างที่ขั้นเบิก — เช็คฐานข้อมูลทุกข้อ
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -87,16 +88,20 @@ POST $S "work-orders/$W3/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\
 OFF1=$(DB "select id from \"SparePart\" where name='$NAME1'")
 [ "$(st $W3)" = "PARTS_SOURCING" ] && [ "$(GET $A "work-orders/$W3" | J 'String(d.needsQuote)')" = "true" ] \
   && pass "สาขาบริษัทแต่มีของนอกสโตร์ → ต้องเสนอราคา (ไปเช็คอะไหล่ก่อนเสนอราคา)" || fail "สถานะ: $(st $W3)"
-POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
+R=$(POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
+echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PARTS_SOURCING" ] && pass "เช็คอะไหล่: ของในสโตร์ต้องบอกคลัง ของนอกสโตร์ไม่ต้อง" || fail "ของในสโตร์ผ่านโดยไม่มีคลัง: $(echo $R|head -c 120)"
+POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
 POST $A "work-orders/$W3/quote" '{"skip":true,"note":"ทดสอบ — ข้ามเสนอราคา"}' >/dev/null
-[ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "มีอะไหล่ → หลังเสนอราคา/รับเงินไปขั้นเบิกตามเดิม" || fail "หลังเสนอราคา: $(st $W3)"
+[ "$(st $W3)" = "PARTS_CHECKED" ] && pass "มีอะไหล่ → หลังเสนอราคา/รับเงินไปหัวหน้าภาคนัดวัน (ยังไม่เบิก)" || fail "หลังเสนอราคา: $(st $W3)"
+POST $S "work-orders/$W3/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+POST $A "work-orders/$W3/confirm-appointment" '{}' >/dev/null
+[ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "ลูกค้าคอนเฟิร์มแล้วไปขั้นเบิก" || fail "หลังคอนเฟิร์ม: $(st $W3)"
 R=$(POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
-echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "ของในสโตร์ยังต้องระบุคลัง/เลขใบเบิก" || fail "ของในสโตร์ผ่านโดยไม่มีคลัง: $(echo $R|head -c 120)"
+echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "เบิก: ของในสโตร์ยังต้องระบุคลัง/เลขใบเบิก" || fail "ของในสโตร์เบิกโดยไม่มีคลัง: $(echo $R|head -c 120)"
 # แก้หมายเหตุอย่างเดียวก่อนเบิก — ไม่ใช่ของคนละชิ้น ผลเช็คเดิม (ยังไม่มี) ไม่เกี่ยว แค่ต้องไม่สร้างแถวใหม่
 POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-OFF1\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
-[ "$(st $W3)" = "PARTS_CHECKED" ] && [ "$(DB "select \"inStock\"||'|'||coalesce(warehouse,'-')||'|'||coalesce(\"requisitionNo\",'-') from \"WorkOrderPart\" where \"workOrderId\"=$W3 and \"sparePartId\"=$OFF1")" = "true|-|-" ] \
-  && pass "ของนอกสโตร์ \"มี\" ผ่านได้โดยไม่มีคลังและเลขใบเบิก (ฐานข้อมูล)" || fail "เบิก: $(st $W3)"
-POST $S "work-orders/$W3/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+[ "$(st $W3)" = "ASSIGNED" ] && [ "$(DB "select \"inStock\"||'|'||coalesce(warehouse,'-')||'|'||coalesce(\"requisitionNo\",'-') from \"WorkOrderPart\" where \"workOrderId\"=$W3 and \"sparePartId\"=$OFF1")" = "true|-|-" ] \
+  && pass "ของนอกสโตร์ \"มี\" ผ่านได้โดยไม่มีคลังและเลขใบเบิก → ปล่อยงาน (ฐานข้อมูล)" || fail "เบิก: $(st $W3)"
 for r in NAMEPLATE BEFORE AFTER; do
   curl -s -X POST "localhost:4000/api/work-orders/$W3/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
 done
@@ -128,8 +133,11 @@ SV() { DB "select string_agg(name||'|'||quantity||'|'||coalesce(unit,'-')||'|'||
 UPQ() { curl -s -X POST "localhost:4000/api/work-orders/$W5/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$1" >/dev/null; }
 UPQ QUOTE; POST $A "work-orders/$W5/quote" '{}' >/dev/null
 UPQ RECEIPT; POST $A "work-orders/$W5/payment" '{}' >/dev/null
-[ "$(st $W5)" = "PARTS_CHECKED" ] && DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W5 and action='PAID'" | grep -q "ไม่มีอะไหล่ให้เบิก" \
-  && pass "แนบใบเสนอราคา → รับเงิน → ไปจ่ายงานเลย ไม่ค้างที่ขั้นเบิก (ฐานข้อมูล)" || fail "หลังรับเงิน: $(st $W5)"
+[ "$(st $W5)" = "PARTS_CHECKED" ] && DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W5 and action='PAID'" | grep -q "นัดวันเข้า" \
+  && pass "แนบใบเสนอราคา → รับเงิน → ไปนัดวันเลย (ฐานข้อมูล)" || fail "หลังรับเงิน: $(st $W5)"
+POST $S "work-orders/$W5/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+POST $A "work-orders/$W5/confirm-appointment" '{}' >/dev/null
+[ "$(st $W5)" = "ASSIGNED" ] && pass "ค่าบริการล้วน คอนเฟิร์มแล้วข้ามขั้นเบิก ไปปล่อยงาน" || fail "หลังคอนเฟิร์ม: $(st $W5)"
 
 W6=$(newwo $COMP); IDS="$IDS $W6"
 POST $S "work-orders/$W6/parts" '{"needsParts":false,"services":[{"name":"ค่าแรงทดสอบ","quantity":1}]}' >/dev/null

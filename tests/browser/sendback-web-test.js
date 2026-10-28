@@ -23,11 +23,13 @@ const { setup } = require("./fixture");
     const board = fx.part("SP-BOARD");
     const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }]);
     const S = await fx.login("S001");
+    // เช็คอะไหล่ → นัด → คอนเฟิร์ม → เบิก (นัดลูกค้าก่อนเบิก ต.ค. 69)
+    await fx.source(wo.id);
+    await fx.call(S, "POST", `/work-orders/${wo.id}/assign`, { team, scheduledAt: "2026-11-10" });
+    await fx.call(fx.A, "POST", `/work-orders/${wo.id}/confirm-appointment`, {});
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
       results: [{ sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-WSB" }],
     });
-    await fx.call(S, "POST", `/work-orders/${wo.id}/assign`, { team, scheduledAt: "2026-11-10" });
-    await fx.call(fx.A, "POST", `/work-orders/${wo.id}/confirm-appointment`, {});
     await fx.call(S, "POST", `/work-orders/${wo.id}/dispatch`, {});
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
     db("status") === "IN_PROGRESS" ? pass("เตรียมใบงานถึงขั้นช่างเข้างาน") : fail(`เตรียมไม่ถึง: ${db("status")}`);

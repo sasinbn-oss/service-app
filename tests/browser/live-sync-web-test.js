@@ -57,12 +57,10 @@ const { setup } = require("./fixture");
     (await has(page, "แก้จากอีกเครื่อง-1")) ? pass("ปุ่มรีเฟรชบนหน้าใบงานโหลดข้อมูลใหม่จริง") : fail("กดรีเฟรชแล้วข้อมูลไม่เปลี่ยน");
 
     // ② อีกคนเปลี่ยนขั้น → โหลดเองพร้อมบอกชื่อ
-    await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
-      results: [{ sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-LIVE" }],
-    });
+    await fx.source(wo.id);
     await shown(page);
     await page.waitForTimeout(2500);
-    (await has(page, `${aName} อัปเดตใบงานนี้`)) && (await has(page, "หัวหน้าภาค · จ่ายงานให้ทีม"))
+    (await has(page, `${aName} อัปเดตใบงานนี้`)) && (await has(page, "หัวหน้าภาค · นัดวันเข้า"))
       ? pass("อีกคนเปลี่ยนขั้น → หน้าจอนี้โหลดใหม่เอง บอกว่าใครเปลี่ยน")
       : fail("ไม่โหลดเอง / ไม่บอกชื่อ");
     await page.waitForTimeout(4000);

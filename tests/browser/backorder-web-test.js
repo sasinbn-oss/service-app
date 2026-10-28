@@ -1,9 +1,11 @@
-// ทดสอบหน้าจอ: ของที่เบิกไปแล้วแยกออกมา ไม่ต้องตอบซ้ำ และเลขใบเบิกไม่ถูกเติมค่าเก่า
+// ทดสอบหน้าจอ: เบิกรอบสอง — ของที่เบิกไปแล้วแยกออกมา ไม่ต้องตอบซ้ำ และเลขใบเบิกไม่ถูกเติมค่าเก่า
+//   (นัดลูกค้าก่อนเบิก ต.ค. 69 — ของหมดค้างที่ขั้นเช็คอะไหล่ ขั้นเบิกจึงเจอแค่ใบที่ช่างขอของเพิ่ม)
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
 const { setup } = require("./fixture");
-// ส่งเลขใบงานมาเองได้ ไม่ส่งก็สร้างใบที่ตรงเงื่อนไขให้: บอร์ดเบิกไปแล้ว (RQ-2569-0042) สายพานหมด
+// ส่งเลขใบงานมาเองได้ ไม่ส่งก็สร้างใบที่ตรงเงื่อนไขให้: บอร์ดเบิกไปแล้ว (RQ-2569-0042) ช่างขอสายพานเพิ่ม
+// เช็คแล้วว่ามี ลูกค้าคอนเฟิร์มวันใหม่แล้ว → ถึงขั้นเบิกรอบสอง
 let WO = process.argv[2] || null;
 
 (async () => {
@@ -34,13 +36,24 @@ let WO = process.argv[2] || null;
     if (!WO) {
       fx = await setup();
       const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
-      const wo = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
+      const wo = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+      await fx.source(wo.id);
+      await fx.schedule(wo.id);
       await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
-        results: [
-          { sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-2569-0042" },
-          { sparePartId: belt, inStock: false },
-        ],
+        results: [{ sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-2569-0042" }],
       });
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/dispatch`, {});
+      // ช่างแจ้งว่าต้องใช้สายพานด้วย → หัวหน้าภาคระบุเพิ่ม → เช็ค → นัดใหม่ → คอนเฟิร์ม
+      await fx.call(fx.A, "POST", `/work-orders/${wo.id}/reassess-parts`, {
+        reasonCode: "PARTS", reason: "ต้องเปลี่ยนสายพานด้วย", parts: [{ sparePartId: belt, quantity: 2 }],
+      });
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, {
+        needsParts: true, parts: [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }],
+      });
+      await fx.source(wo.id);
+      await fx.schedule(wo.id, "2026-12-03");
+      const st = fx.sql(`select status from "WorkOrder" where id=${wo.id}`);
+      if (st !== "PARTS_REQUESTED") throw new Error(`เตรียมใบไม่ถึงขั้นเบิก: ${st}`);
       WO = wo.code;
       console.log(`เตรียมใบงาน ${WO}`);
     }
@@ -62,16 +75,12 @@ let WO = process.argv[2] || null;
     await page.waitForTimeout(3000);
     await page.screenshot({ path: path.join(DIR, "bo-1-detail.png"), fullPage: true });
 
-    // สถานะเดียว (ต.ค. 69) — ของหมดขึ้นเป็นป้ายแดง "อะไหล่หมด" แทนสถานะชั้นที่สอง "รออะไหล่"
-    (await seen("อะไหล่หมด", false)) > 0
-      ? pass("ใบงานขึ้นป้ายอะไหล่หมด")
-      : fail("ไม่ขึ้นป้ายอะไหล่หมด");
     (await seen("แอดมิน · เบิกอะไหล่ (คลัง 94)", false)) > 0
-      ? pass("ใบงานยังค้างอยู่ขั้นแอดมิน ไม่เลยไปจ่ายงาน")
-      : fail("ไม่ได้ค้างที่ขั้นแอดมิน");
+      ? pass("ลูกค้าคอนเฟิร์มแล้ว ใบงานอยู่ขั้นแอดมินเบิก")
+      : fail("ไม่ได้อยู่ขั้นแอดมินเบิก");
 
-    // เปิดฟอร์มเบิกอะไหล่ — ของหมดอยู่ ปุ่มขั้นนี้เป็น "อะไหล่มาแล้ว — อัปเดตสถานะ"
-    await tap("อะไหล่มาแล้ว — อัปเดตสถานะ", false);
+    // ปุ่มขั้นอยู่ท้ายการ์ด "ขั้นปัจจุบัน" — ชื่อเดียวกับหัวการ์ดและป้ายสถานะ จึงเอาตัวสุดท้าย
+    await page.getByText("เบิกอะไหล่ (คลัง 94)", { exact: true }).locator("visible=true").last().click();
     await page.waitForTimeout(2000);
     await page.screenshot({ path: path.join(DIR, "bo-2-modal.png"), fullPage: true });
 
@@ -95,21 +104,7 @@ let WO = process.argv[2] || null;
       ? pass("เหลือให้ตอบแค่ตัวที่ยังไม่ได้เบิก (1 ตัว)")
       : fail(`ยังให้ตอบ ${inStockButtons} ตัว ควรเหลือ 1`);
 
-    // ของมาแล้ว — ตอบมีของ เลือกคลัง ใส่ใบเบิกใบใหม่ แล้วบันทึก
-    await tap("มีของ");
-    await page.waitForTimeout(600);
-    await tap("เลือกคลังที่มีของ", false);
-    await page.waitForTimeout(800);
-    // ค้นในช่องของ dropdown ก่อน ไม่งั้นคำว่า "คลังลาดพร้าว 94" ไปโดนข้อความ
-    // ในกล่อง "เบิกไปแล้วรอบก่อน" ซึ่งอยู่เหนือกว่าใน DOM
-    const find = page.getByPlaceholder("ค้นหา").locator("visible=true").first();
-    await find.fill("ลาดพร้าว");
-    await page.waitForTimeout(900);
-    const opt = page.getByText("คลังลาดพร้าว 94", { exact: true }).locator("visible=true").last();
-    await opt.click().catch(async () => {
-      await opt.evaluate((n) => (n.closest("[tabindex]") || n).click());
-    });
-    await page.waitForTimeout(700);
+    // ผลเช็คอะไหล่ (มีของ · คลัง 94) เติมไว้ให้แล้ว — เหลือใส่ใบเบิกใบใหม่ แล้วบันทึก
     await box.fill("RQ-WEB-2");
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(DIR, "bo-3-filled.png"), fullPage: true });
@@ -128,19 +123,10 @@ let WO = process.argv[2] || null;
       await page.screenshot({ path: path.join(DIR, "bo-4-after.png"), fullPage: true });
     }
 
-    // อ่านจากการ์ด "ขั้นปัจจุบัน" ของหน้าใบงาน (หน้าตาใหม่ ต.ค. 69) ไม่ใช่ทั้งหน้า — แถบขั้นตอนมีชื่อทุกขั้นอยู่แล้ว
-    // ถ้าดูทั้งหน้าจะเจอ "จ่ายงาน" ตลอดไม่ว่าสถานะจริงจะเป็นอะไร · หัวการ์ดบอกตำแหน่งที่ใบรออยู่
-    const badge = await page.evaluate(() => {
-      const hits = [...document.querySelectorAll("*")].filter(
-        (n) => !n.children.length && /^ขั้นปัจจุบัน · /.test((n.textContent || "").trim()) && n.getBoundingClientRect().width > 0
-      );
-      const head = hits.pop();
-      return head ? head.parentElement?.textContent?.trim() || "" : "";
-    });
-    console.log("  ขั้นปัจจุบัน:", badge);
-    /จ่ายงาน/.test(badge)
-      ? pass("ของครบแล้วเดินต่อไปขั้นจ่ายงาน")
-      : fail(`ไม่เดินต่อหลังของมาครบ — ขั้นปัจจุบันยังเป็น "${badge}"`);
+    // ป้ายสถานะหัวใบงาน "ใคร · ทำอะไร" — แถบขั้นตอนมีชื่อทุกขั้นอยู่แล้ว ดูชื่อขั้นอย่างเดียวไม่พอ
+    (await seen("หัวหน้าภาค · รับทราบ ปล่อยงาน", true)) > 0
+      ? pass("เบิกครบแล้ว ลูกค้าคอนเฟิร์มแล้ว → หัวหน้าภาคปล่อยงาน")
+      : fail("ไม่เดินต่อไปปล่อยงานหลังเบิกครบ");
     (await seen("RQ-2569-0042", false)) > 0 && (await seen("RQ-WEB-2", false)) > 0
       ? pass("เห็นใบเบิกทั้งสองใบในใบงาน")
       : fail("ใบเบิกใบใดใบหนึ่งหายไป");
@@ -148,8 +134,8 @@ let WO = process.argv[2] || null;
     if (fx) {
       // ยืนยันที่ฐานข้อมูลด้วย ไม่ใช่เชื่อป้ายบนจออย่างเดียว
       const db = fx.sql(`select w.status||'|'||(select string_agg(p."requisitionNo",',' order by p."requisitionNo") from "WorkOrderPart" p where p."workOrderId"=w.id) from "WorkOrder" w where w.code='${WO}'`);
-      db === "PARTS_CHECKED|RQ-2569-0042,RQ-WEB-2"
-        ? pass("DB: ไปขั้นจ่ายงาน ใบเบิกสองใบครบ ไม่ถูกทับ")
+      db === "ASSIGNED|RQ-2569-0042,RQ-WEB-2"
+        ? pass("DB: ไปขั้นปล่อยงาน ใบเบิกสองใบครบ ไม่ถูกทับ")
         : fail(`DB: ${db}`);
     }
     errors.length === 0 ? pass("ไม่มี error ในหน้า") : fail(`error: ${errors.slice(0, 2).join(" | ")}`);
