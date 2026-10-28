@@ -343,12 +343,18 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
           WHERE u.id = d.id::int`;
       }
       // สาขาที่ Supervisor ในไฟล์เคยถือ แต่ไฟล์รอบนี้ไม่ได้ให้แล้ว (ย้ายไปคนอื่น/ปิดสาขา) — ปลดก่อนผูกใหม่
+      // ป้าย "ดูแลแทน" ที่ตั้งจากผังฝั่ง Area ล้างด้วย — ไฟล์คือคำตอบล่าสุดว่าสาขาเป็นของใคร
       const supIds = ppl.map((x) => Number(x.id));
-      if (supIds.length) await tx.branch.updateMany({ where: { cocoSupervisorId: { in: supIds } }, data: { cocoSupervisorId: null } });
+      if (supIds.length) {
+        await tx.branch.updateMany({
+          where: { cocoSupervisorId: { in: supIds } },
+          data: { cocoSupervisorId: null, coverForId: null, coverForName: null, coverSince: null },
+        });
+      }
       const links = wanted.flatMap((p) => p.branches.map((code) => ({ code, id: String(ids.get(p.login)) })));
       if (links.length) {
         await tx.$executeRaw`
-          UPDATE "Branch" b SET "cocoSupervisorId" = d.sup::int
+          UPDATE "Branch" b SET "cocoSupervisorId" = d.sup::int, "coverForId" = NULL, "coverForName" = NULL, "coverSince" = NULL
           FROM UNNEST(${links.map((l) => l.code)}::text[], ${links.map((l) => l.id)}::text[]) AS d(code, sup)
           WHERE b.code = d.code`;
       }

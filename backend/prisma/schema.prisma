@@ -48,6 +48,7 @@ model User {
   area                 User?                 @relation("AreaMembers", fields: [areaId], references: [id], onDelete: SetNull)
   areaMembers          User[]                @relation("AreaMembers")
   cocoBranches         Branch[]              @relation("CocoSupervisor")
+  coveredBranches      Branch[]              @relation("CoverFor")
   usageSlots           UsageSlot[]
   // ต้องเปลี่ยนรหัสก่อนใช้งาน
   //
@@ -291,6 +292,14 @@ model Branch {
   // เก็บที่ผู้ใช้จะมีสองคนถือสาขาเดียวกันได้หลังย้ายคน แล้วต้องคอยลบออกจากคนเก่า
   cocoSupervisorId  Int?
   cocoSupervisor    User?            @relation("CocoSupervisor", fields: [cocoSupervisorId], references: [id], onDelete: SetNull)
+  // สาขานี้มีคนดูแลแทนอยู่ — เป็นสาขาของ coverFor (เช่นลาออก) ที่ฝากให้ cocoSupervisor ถือไว้ก่อน (เจ้าของงานขอ ต.ค. 69)
+  //
+  // จำไว้เพื่อส่งต่อให้คนใหม่ได้ทีเดียวเฉพาะสาขาที่ฝากไว้ สาขาเดิมของคนดูแลแทนไม่ติดไปด้วย
+  // เก็บชื่อแยกเพราะบัญชีคนที่ลาออกอาจถูกลบจริง (ไม่มีประวัติ) แล้ว coverForId กลายเป็นว่าง
+  coverForId        Int?
+  coverFor          User?            @relation("CoverFor", fields: [coverForId], references: [id], onDelete: SetNull)
+  coverForName      String?
+  coverSince        DateTime?
   createdAt         DateTime         @default(now())
   checkIns          BranchCheckIn[]
   workLogs          WorkLog[]

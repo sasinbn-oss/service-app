@@ -1,6 +1,6 @@
 #!/bin/bash
 # ทดสอบ: ผังผู้รับผิดชอบพื้นที่ (GET /api/teams/coverage-map) — ทุกบทบาทอ่านได้ · แก้ได้เฉพาะแอดมิน (canEdit) ·
-#        ไม่ส่งเบอร์โทร · ภาคของทีม = ภาคที่สาขามากที่สุด · ช่างที่ทีมไม่มีในทะเบียน = ยังไม่มีสังกัด
+#        ส่งเบอร์โทรของคนที่มีเบอร์ (เจ้าของงานขอ ต.ค. 69 — เดิมไม่ส่ง) · ภาคของทีม = ภาคที่สาขามากที่สุด · ช่างที่ทีมไม่มีในทะเบียน = ยังไม่มีสังกัด
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -27,7 +27,8 @@ echo "$R" | J 'd.canEdit===false&&Array.isArray(d.regions)&&d.technicians.length
 [ "$(MAP $S | J 'd.canEdit')" = "false" ] && pass "หัวหน้าภาคดูได้ แก้ไม่ได้" || fail "หัวหน้าภาค canEdit"
 [ "$(MAP $PA | J 'd.canEdit')" = "false" ] && pass "Admin Spare Part ดูได้ แก้ไม่ได้" || fail "Admin Spare Part canEdit"
 [ "$(MAP $A | J 'd.canEdit')" = "true" ] && pass "แอดมินแก้ได้ (canEdit=true)" || fail "แอดมิน canEdit"
-MAP $A | grep -q "089-999-9999" && fail "ส่งเบอร์โทรออกไป" || pass "ไม่ส่งเบอร์โทร (ทุกคนเห็นผังนี้)"
+[ "$(MAP $T | J "d.technicians.find(x=>x.code==='ZCMX$SUF').phone")" = "089-999-9999" ] \
+  && pass "ส่งเบอร์โทรของคนที่มีเบอร์ — ช่างเปิดดูก็เห็น (เจ้าของงานตกลงให้ทุกคนเห็น)" || fail "ไม่มีเบอร์โทรในผัง"
 [ "$(MAP $A | J "d.regions.find(r=>r.teams.some(t=>t.name==='ทีมผัง$SUF')).name+'|'+d.regions.flatMap(r=>r.teams).find(t=>t.name==='ทีมผัง$SUF').branches")" = "ภาคผังA$SUF|3" ] \
   && pass "ทีมอยู่ภาคที่สาขาส่วนใหญ่อยู่ (2 ใน 3) นับสาขาครบ" || fail "ภาคของทีม: $(MAP $A | J "JSON.stringify(d.regions.filter(r=>r.name.includes('ผัง')))")"
 [ "$(MAP $A | J "const t=d.technicians.find(x=>x.code==='ZCMX$SUF'); (t.team===null)+'|'+t.staleTeam")" = "true|ทีมไม่มีจริง$SUF" ] \

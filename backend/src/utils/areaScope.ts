@@ -75,6 +75,7 @@ export const AREA_TEAM_ALLOWED: RegExp[] = [
   /^GET \/api\/plans\/(day|month|pending)$/,
   // ติดตามเครื่องเสีย
   /^GET \/api\/machines\/(outages|signal-lost|overview|work-statuses)$/,
-  // ผังผู้รับผิดชอบ
-  /^GET \/api\/teams\/coverage-map$/,
+  // ผังผู้รับผิดชอบ (ฝ่ายบริการ · ฝั่ง Area) — บันทึกผังฝั่ง Area: route เช็คเองว่าเป็น Area (Supervisor (COCO) ได้ 403)
+  /^GET \/api\/teams\/(coverage-map|area-map)$/,
+  /^POST \/api\/teams\/area-map$/,
 ];

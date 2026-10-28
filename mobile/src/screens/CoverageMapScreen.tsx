@@ -2,6 +2,8 @@
  * ผังผู้รับผิดชอบพื้นที่ — ฝ่ายบริการ → ภาค → หัวหน้าภาค → ทีมช่าง → ช่าง (เจ้าของงานขอ ต.ค. 69)
  *
  * ทุกคนเปิดดูได้ · แอดมินกด "แก้ไขผัง" แล้วลากชื่อย้ายได้ (บนจอคอม) หรือแตะชื่อแล้วแตะปลายทาง (มือถือ)
+ * มีเบอร์โทรใต้ชื่อทุกคนที่มีเบอร์ (แตะแล้วโทร) · ปุ่มสลับไปผังฝั่ง Area (components/AreaMap.tsx) — เจ้าของงานขอ ต.ค. 69
+ * จอแคบเรียงภาคลงมาทีละภาคเต็มความกว้าง แทนเลื่อนซ้ายขวา — บนมือถือเลื่อนข้างทีละคอลัมน์หาคนไม่เจอ
  * - ช่าง → ทีม (หรือทีมรวม) · หัวหน้าภาค → หัวภาค (ดูแลทั้งภาค) หรือทีม (ดูแลเพิ่ม/ย้ายทีมที่ดูแล)
  * - ลากไปที่ "ยังไม่มีสังกัด" = เอาออก · คนที่ยังไม่มีสังกัดลากจากกล่องนั้นเข้าทีมได้
  * ย้ายแล้วยังไม่บันทึกจนกด "บันทึก" — ลากพลาดหนึ่งครั้งไม่ควรทำให้ช่างทั้งคนมองไม่เห็นงาน
@@ -11,7 +13,7 @@
  * ลากบนเว็บใช้ HTML5 drag & drop ผ่าน DOM ของ react-native-web ตรง ๆ (ref ของ View คือ element จริงบนเว็บ)
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
@@ -22,6 +24,9 @@ import { feedback } from "../components/Feedback";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, headingFont, radius, shadow } from "../theme";
+import AreaMap, { ChartKind, ChartSwitch } from "../components/AreaMap";
+import { CallButton, PhoneLine, phoneDigits } from "../components/PhoneLink";
+import { useAuth } from "../context/AuthContext";
 
 interface TeamInfo {
   name: string;
@@ -32,8 +37,8 @@ interface MapData {
   asOf: string;
   canEdit: boolean;
   regions: { name: string; teams: TeamInfo[] }[];
-  supervisors: { id: number; name: string; code: string; region: string | null; teams: string[] }[];
-  technicians: { id: number; name: string; code: string; team: string | null; staleTeam: string | null }[];
+  supervisors: { id: number; name: string; code: string; phone: string | null; region: string | null; teams: string[] }[];
+  technicians: { id: number; name: string; code: string; phone: string | null; team: string | null; staleTeam: string | null }[];
   groups: { name: string; covers: string[]; allTeams: boolean }[];
 }
 type SupState = { region: string | null; teams: string[] };
@@ -78,6 +83,7 @@ function Person({
   grab,
   name,
   code,
+  phone,
   role,
   sup,
   small,
@@ -85,6 +91,7 @@ function Person({
   grab: Grab;
   name: string;
   code: string;
+  phone?: string | null;
   role: string;
   sup?: boolean;
   small?: boolean;
@@ -92,7 +99,9 @@ function Person({
   const d = useDnD();
   const zone = useContext(ZoneContext);
   const ref = useRef<View>(null);
-  const hit = !!d.query && `${name} ${code}`.includes(d.query);
+  const narrow = useWindowDimensions().width < 700;
+  const qd = /^[\d\s-]+$/.test(d.query) ? d.query.replace(/\D/g, "") : "";
+  const hit = !!d.query && (`${name} ${code} ${phone ?? ""}`.includes(d.query) || (!!qd && phoneDigits(phone).includes(qd)));
   const selected = d.grab?.id === grab.id && d.grab.kind === grab.kind;
 
   useEffect(() => {
@@ -142,7 +151,9 @@ function Person({
           <Text style={styles.pr}>
             {role} · {code}
           </Text>
+          {phone ? <PhoneLine phone={phone} name={name} /> : null}
         </View>
+        {narrow && phone ? <CallButton phone={phone} name={name} /> : null}
       </View>
     </TouchableOpacity>
   );
@@ -210,6 +221,12 @@ function DropZone({ zone, style, children, label }: { zone: Zone; style?: object
 // ── หน้าหลัก ─────────────────────────────────────────────
 
 export default function CoverageMapScreen() {
+  const { user } = useAuth();
+  const narrow = useWindowDimensions().width < 700;
+  // ทีม Area เปิดมาเจอผังฝั่งตัวเองก่อน — ผังฝ่ายบริการยังกดสลับไปดูได้
+  const [which, setWhich] = useState<ChartKind>(user?.role === "AREA" || user?.role === "COCO_SUPERVISOR" ? "area" : "service");
+  const [areaEditing, setAreaEditing] = useState(false);
+  const areaReload = useRef<(() => Promise<void>) | null>(null);
   const [data, setData] = useState<MapData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"chart" | "table">("chart");
@@ -288,7 +305,8 @@ export default function CoverageMapScreen() {
       load();
     }, [load])
   );
-  useRefreshHandler(load);
+  // ปุ่มรีเฟรช/ลากรีเฟรชโหลดผังที่เปิดอยู่ — ผังฝั่ง Area โหลดของตัวเอง (components/AreaMap.tsx)
+  useRefreshHandler(() => (which === "area" && areaReload.current ? areaReload.current() : load()));
 
   const regionOfTeam = useMemo(() => {
     const m = new Map<string, string>();
@@ -393,6 +411,38 @@ export default function CoverageMapScreen() {
 
   const dnd: DnD = { editing, grab, setGrab, drop, dragging, setDragging, query: query.trim(), setQuery };
 
+  const head = (kind: ChartKind) => (
+    <>
+      <View style={styles.dochead}>
+        <View style={styles.brand}>
+          <View style={styles.mark}>
+            <Text style={styles.markText}>OTR</Text>
+          </View>
+          <View style={{ flexShrink: 1 }}>
+            <Text style={styles.kicker}>{kind === "area" ? "OTTERI SERVICE · สาขา COCO (Area Team)" : "OTTERI SERVICE · ฝ่ายบริการซ่อมบำรุง"}</Text>
+            <Text style={[styles.h1, headingFont]}>{kind === "area" ? "ผังผู้ดูแลฝั่ง Area" : "ผังผู้รับผิดชอบพื้นที่ให้บริการ"}</Text>
+          </View>
+        </View>
+        <Text style={styles.asof}>
+          {kind === "service" && data ? `ข้อมูล ณ ${fmtAsOf(data.asOf)}\n` : ""}อ้างอิง: {kind === "area" ? "ไฟล์ Area Team · ทะเบียนสาขา" : "ทะเบียนสาขา · สิทธิ์ผู้ใช้"}
+        </Text>
+      </View>
+      <ChartSwitch value={kind} onChange={setWhich} locked={kind === "area" ? areaEditing : editing} />
+    </>
+  );
+
+  if (which === "area") {
+    return (
+      <AreaMap
+        head={head("area")}
+        onEditingChange={setAreaEditing}
+        registerReload={(fn) => {
+          areaReload.current = fn;
+        }}
+      />
+    );
+  }
+
   if (!data) {
     return (
       <View style={styles.center}>
@@ -417,7 +467,10 @@ export default function CoverageMapScreen() {
     (g.kind === "SUP" ? data.supervisors.find((x) => x.id === g.id) : data.technicians.find((x) => x.id === g.id))?.name ?? "";
   const allTeams = data.regions.flatMap((r) => r.teams.map((t) => ({ r: r.name, t })));
   const q = query.trim();
-  const dim = (text: string) => !!q && !text.includes(q);
+  // พิมพ์เบอร์แบบมีขีดหรือไม่มีก็เจอ — ข้อความที่ค้นมีเบอร์แบบตัวเลขล้วนต่อท้ายไว้ (who())
+  const qd = /^[\d\s-]+$/.test(q) ? q.replace(/\D/g, "") : "";
+  const dim = (text: string) => !!q && !text.includes(q) && !(qd && text.includes(qd));
+  const who = (x: { name: string; code: string; phone: string | null }) => `${x.name} ${x.code} ${x.phone ?? ""} ${phoneDigits(x.phone)}`;
 
   const issues: [string, string][] = [];
   for (const { r, t } of allTeams) {
@@ -429,31 +482,17 @@ export default function CoverageMapScreen() {
   }
   const supCount = data.supervisors.length - freeSups.length;
 
-  const chart = (
-    <ScrollView horizontal contentContainerStyle={styles.chartScroll}>
-      <View style={{ alignItems: "center" }}>
-        <View style={styles.root}>
-          <Text style={styles.rootT}>ฝ่ายบริการซ่อมบำรุง</Text>
-          <Text style={styles.rootS}>OTTERI SERVICE</Text>
-        </View>
-        <View style={styles.stem} />
-        {data.regions.length > 1 ? (
-          <View
-            style={[styles.hline, { width: (data.regions.length - 1) * (COL_W + COL_GAP) }]}
-          />
-        ) : null}
-        <View style={{ flexDirection: "row", gap: COL_GAP, alignItems: "flex-start" }}>
-          {data.regions.map((r) => {
+  const cols = data.regions.map((r) => {
             const whole = wholeOf(r.name);
             const partial = data.supervisors.filter(
               (s) => sup(s.id).region !== r.name && sup(s.id).teams.some((t) => regionOfTeam.get(t) === r.name)
             );
             const br = r.teams.reduce((n, t) => n + t.branches, 0);
             const tc = r.teams.reduce((n, t) => n + techsOf(t.name).length, 0);
-            const regionText = `${r.name} ${r.teams.map((t) => t.name).join(" ")} ${whole.map((s) => s.name).join(" ")}`;
+            const regionText = `${r.name} ${r.teams.map((t) => t.name).join(" ")} ${whole.map(who).join(" ")}`;
             return (
-              <View key={r.name} style={[styles.col, dim(regionText + r.teams.map((t) => techsOf(t.name).map((x) => x.name).join(" ")).join(" ")) && styles.dim]}>
-                <View style={styles.stub} />
+              <View key={r.name} style={[narrow ? styles.colNarrow : styles.col, dim(regionText + r.teams.map((t) => techsOf(t.name).map(who).join(" ")).join(" ")) && styles.dim]}>
+                {!narrow ? <View style={styles.stub} /> : null}
                 <DropZone zone={{ kind: "region", target: r.name }} style={styles.rband} label={`หัวภาค ${r.name}`}>
                   <Text style={[styles.rname, headingFont]}>ภาค{r.name}</Text>
                   <Text style={styles.rmeta}>
@@ -468,6 +507,7 @@ export default function CoverageMapScreen() {
                         grab={{ id: s.id, kind: "SUP", from: { kind: "region", target: r.name } }}
                         name={s.name}
                         code={s.code}
+                        phone={s.phone}
                         role="หัวหน้าภาค · ทั้งภาค"
                         sup
                       />
@@ -494,7 +534,7 @@ export default function CoverageMapScreen() {
                   {r.teams.map((t) => {
                     const ts = techsOf(t.name);
                     const extra = partOf(r.name, t.name);
-                    const text = `${t.name} ${ts.map((x) => `${x.name} ${x.code}`).join(" ")} ${extra.map((x) => x.name).join(" ")} ${r.name}`;
+                    const text = `${t.name} ${ts.map(who).join(" ")} ${extra.map(who).join(" ")} ${r.name}`;
                     return (
                       <View key={t.name} style={[styles.teamWrap, dim(text) && styles.dim]}>
                         <View style={styles.tick} />
@@ -513,6 +553,7 @@ export default function CoverageMapScreen() {
                                   grab={{ id: s.id, kind: "SUP", from: { kind: "team", target: t.name } }}
                                   name={s.name}
                                   code={s.code}
+                                  phone={s.phone}
                                   role="ดูแลทีมนี้"
                                   sup
                                   small
@@ -528,6 +569,7 @@ export default function CoverageMapScreen() {
                                   grab={{ id: x.id, kind: "TECH", from: { kind: "team", target: t.name } }}
                                   name={x.name}
                                   code={x.code}
+                                  phone={x.phone}
                                   role="ช่าง"
                                   small
                                 />
@@ -543,8 +585,19 @@ export default function CoverageMapScreen() {
                 </View>
               </View>
             );
-          })}
+  });
+  const chart = narrow ? (
+    <View style={styles.stack}>{cols}</View>
+  ) : (
+    <ScrollView horizontal contentContainerStyle={styles.chartScroll}>
+      <View style={{ alignItems: "center" }}>
+        <View style={styles.root}>
+          <Text style={styles.rootT}>ฝ่ายบริการซ่อมบำรุง</Text>
+          <Text style={styles.rootS}>OTTERI SERVICE</Text>
         </View>
+        <View style={styles.stem} />
+        {data.regions.length > 1 ? <View style={[styles.hline, { width: (data.regions.length - 1) * (COL_W + COL_GAP) }]} /> : null}
+        <View style={{ flexDirection: "row", gap: COL_GAP, alignItems: "flex-start" }}>{cols}</View>
       </View>
     </ScrollView>
   );
@@ -562,7 +615,7 @@ export default function CoverageMapScreen() {
         {allTeams.map(({ r, t }) => {
           const s = supsOfTeam(r, t.name);
           const ts = techsOf(t.name);
-          const text = `${r} ${t.name} ${s.map((x) => x.name).join(" ")} ${ts.map((x) => `${x.name} ${x.code}`).join(" ")}`;
+          const text = `${r} ${t.name} ${s.map(who).join(" ")} ${ts.map(who).join(" ")}`;
           return (
             <View key={t.name} style={[styles.tr, dim(text) && styles.dim]}>
               <Text style={[styles.td, TABLE_COLS[0]]}>{r}</Text>
@@ -585,21 +638,7 @@ export default function CoverageMapScreen() {
       <View style={{ flex: 1, backgroundColor: colors.background }}>
         <ScrollView ref={scrollRef} contentContainerStyle={[styles.page, editing && { paddingBottom: 340 }]}>
           <View style={[styles.sheet, editing && { borderColor: GOLD }]}>
-            <View style={styles.dochead}>
-              <View style={styles.brand}>
-                <View style={styles.mark}>
-                  <Text style={styles.markText}>OTR</Text>
-                </View>
-                <View style={{ flexShrink: 1 }}>
-                  <Text style={styles.kicker}>OTTERI SERVICE · ฝ่ายบริการซ่อมบำรุง</Text>
-                  <Text style={[styles.h1, headingFont]}>ผังผู้รับผิดชอบพื้นที่ให้บริการ</Text>
-                </View>
-              </View>
-              <Text style={styles.asof}>
-                ข้อมูล ณ {fmtAsOf(data.asOf)}
-                {"\n"}อ้างอิง: ทะเบียนสาขา · สิทธิ์ผู้ใช้
-              </Text>
-            </View>
+            {head("service")}
 
             <View style={styles.tools}>
               <View style={styles.search}>
@@ -608,7 +647,7 @@ export default function CoverageMapScreen() {
                   style={styles.searchInput}
                   value={query}
                   onChangeText={setQuery}
-                  placeholder="ค้นหาชื่อ รหัสพนักงาน ทีม หรือภาค"
+                  placeholder="ค้นหาชื่อ รหัสพนักงาน เบอร์โทร ทีม หรือภาค"
                   placeholderTextColor={colors.textFaint}
                   accessibilityLabel="ค้นหาในผัง"
                 />
@@ -707,6 +746,7 @@ export default function CoverageMapScreen() {
                             grab={{ id: x.id, kind: "TECH", from: { kind: "team", target: g.name } }}
                             name={x.name}
                             code={x.code}
+                            phone={x.phone}
                             role="ช่าง"
                             small
                           />
@@ -774,7 +814,7 @@ export default function CoverageMapScreen() {
               ) : (
                 <ScrollView style={{ maxHeight: 112 }} contentContainerStyle={styles.trayList}>
                   {trayFree.sups.map((s) => (
-                    <Person key={`s${s.id}`} grab={{ id: s.id, kind: "SUP", from: null }} name={s.name} code={s.code} role="หัวหน้าภาค" sup small />
+                    <Person key={`s${s.id}`} grab={{ id: s.id, kind: "SUP", from: null }} name={s.name} code={s.code} phone={s.phone} role="หัวหน้าภาค" sup small />
                   ))}
                   {trayFree.techs.map((t) => {
                     const stale = data.technicians.find((x) => x.id === t.id)?.staleTeam;
@@ -784,6 +824,7 @@ export default function CoverageMapScreen() {
                         grab={{ id: t.id, kind: "TECH", from: null }}
                         name={t.name}
                         code={t.code}
+                        phone={t.phone}
                         role={stale && !t.team ? `ช่าง · เดิม ${stale}` : "ช่าง"}
                         small
                       />
@@ -920,6 +961,8 @@ const styles = StyleSheet.create({
   stem: { width: 2, height: 20, backgroundColor: colors.borderStrong },
   hline: { height: 2, backgroundColor: colors.borderStrong },
   col: { width: COL_W },
+  colNarrow: { width: "100%" },
+  stack: { padding: 12, gap: 16 },
   stub: { width: 2, height: 20, backgroundColor: colors.borderStrong, alignSelf: "center" },
   rband: {
     backgroundColor: colors.sky50,

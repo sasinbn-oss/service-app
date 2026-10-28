@@ -103,7 +103,8 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
  *
  * ทุกคนเปิดดูได้ (ช่างรู้ว่าทีมไหนมีใคร หัวหน้าภาคเห็นภาพรวม) — แก้ได้เฉพาะแอดมิน ผ่าน PATCH /auth/users/:id
  * ตัวเดียวกับหน้าสิทธิ์ผู้ใช้ ไม่มีเส้นทางเขียนแยก จะได้ไม่มีกฎสองชุด
- * ไม่ส่งเบอร์โทร — ผังนี้ช่างทุกคนเห็น ชื่อและรหัสพอสำหรับรู้ว่าใครอยู่ทีมไหน
+ * มีเบอร์โทรของทุกคนที่มีเบอร์ในระบบ — เดิมไม่ส่งเพราะช่างทุกคนเห็นผังนี้ เจ้าของงานตัดสินใจให้ใส่ (ต.ค. 69)
+ * ผังมีไว้ให้รู้ว่าต้องโทรหาใคร ชื่ออย่างเดียวต้องไปหาเบอร์ต่อที่อื่น
  *
  * ภาคของทีม = ภาคที่สาขาของทีมนั้น (CM หรือ PM) อยู่มากที่สุด — ทะเบียนสาขาไม่มีตารางทีม
  * ช่างที่ทีมไม่มีในทะเบียนและไม่ใช่ทีมรวม นับเป็น "ยังไม่มีสังกัด" เพราะไม่มีใบงานผูกกับชื่อนั้น (ผลเท่ากัน)
@@ -127,7 +128,7 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
     }),
     prisma.user.findMany({
       where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
-      select: { id: true, name: true, employeeCode: true, role: true, team: true, region: true, supervisedTeams: true },
+      select: { id: true, name: true, employeeCode: true, phone: true, role: true, team: true, region: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
     prisma.teamGroup.findMany({ orderBy: { name: "asc" } }),
@@ -164,7 +165,7 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
     supervisors: users
       .filter((u) => u.role === "SUPERVISOR")
       .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || (!!u.region && regions.has(u.region)))
-      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, region: u.region, teams: u.supervisedTeams })),
+      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, phone: u.phone, region: u.region, teams: u.supervisedTeams })),
     technicians: users
       .filter((u) => u.role === "EMPLOYEE")
       .filter((u) => !area || (!!u.team && known.has(u.team)))
@@ -172,12 +173,182 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
         id: u.id,
         name: u.name,
         code: u.employeeCode,
+        phone: u.phone,
         // ทีมที่ไม่มีในทะเบียนและไม่ใช่ทีมรวม = ไม่มีสังกัด (เก็บชื่อเดิมไว้ให้เห็นว่าเคยอยู่ไหน)
         team: u.team && (known.has(u.team) || groupNames.has(u.team)) ? u.team : null,
         staleTeam: u.team && !known.has(u.team) && !groupNames.has(u.team) ? u.team : null,
       })),
     groups: groups.map((g) => ({ name: g.name, covers: g.covers, allTeams: g.allTeams })),
   });
+});
+
+/**
+ * ผังผู้ดูแลฝั่ง Area — Area → Supervisor (COCO) → สาขา COCO (เจ้าของงานขอ ต.ค. 69)
+ *
+ * ทุกคนเปิดดูได้ รวมช่างและหัวหน้าภาค — จะได้รู้ว่าสาขา COCO แต่ละแห่งต้องโทรหาใคร (เจ้าของงานเลือก)
+ * แก้ได้: แอดมิน (ไม่ใช่ Admin Spare Part) และ Area ทุกคน ย้ายได้ทุก Area เท่ากับแอดมิน · ผังฝ่ายบริการยังแก้ได้แค่แอดมิน
+ *
+ * คนที่ถูกลบบัญชีแล้วแต่สาขายังผูกอยู่ (ลาออก) ถูกส่งมาด้วย (left) — ถ้าไม่ส่ง สาขาของเขาจะหายจากผัง
+ * ทั้งที่ยังไม่มีใครดูแล และกด "ย้ายสาขาทั้งหมด" ให้คนดูแลแทนไม่ได้
+ */
+const AREA_HOLDER_ROLES = ["AREA", "COCO_SUPERVISOR"];
+const COCO_CODE = { startsWith: "C", mode: "insensitive" as const };
+const canEditAreaMap = (auth: AuthRequest["auth"]) =>
+  !!auth && !auth.viewAs && ((auth.role === "ADMIN" && !auth.partsAdmin) || auth.role === "AREA");
+
+router.get("/area-map", requireAuth, async (req: AuthRequest, res) => {
+  const [people, branches, orders] = await Promise.all([
+    prisma.user.findMany({
+      where: {
+        role: { in: AREA_HOLDER_ROLES },
+        OR: [{ deletedAt: null }, { cocoBranches: { some: { cancelledAt: null, code: COCO_CODE } } }],
+      },
+      select: { id: true, name: true, employeeCode: true, phone: true, role: true, areaId: true, deletedAt: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.branch.findMany({
+      where: { cancelledAt: null, code: COCO_CODE },
+      select: { id: true, code: true, name: true, cocoSupervisorId: true, coverForId: true, coverForName: true, coverSince: true },
+      orderBy: { code: "asc" },
+    }),
+    prisma.workOrder.groupBy({
+      by: ["branchId"],
+      where: { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, branch: { cancelledAt: null, code: COCO_CODE } },
+      _count: true,
+    }),
+  ]);
+  const openById = new Map(orders.map((o) => [o.branchId, o._count]));
+  const areaIds = new Set(people.filter((p) => p.role === "AREA" && !p.deletedAt).map((p) => p.id));
+  const known = new Set(people.map((p) => p.id));
+
+  res.json({
+    asOf: new Date(),
+    canEdit: canEditAreaMap(req.auth),
+    people: people.map((p) => ({
+      id: p.id,
+      name: p.name,
+      code: p.employeeCode.replace(/~ลบ\d+$/, ""),
+      phone: p.phone,
+      role: p.role,
+      // Area ที่ถูกลบแล้ว = ไม่มี Area · ผังไม่มีคอลัมน์ให้คนที่ลาออก
+      areaId: p.role === "COCO_SUPERVISOR" && p.areaId && areaIds.has(p.areaId) ? p.areaId : null,
+      left: !!p.deletedAt,
+    })),
+    branches: branches.map((b) => ({
+      code: b.code,
+      name: b.name,
+      // ผูกกับคนที่ไม่ใช่ทีม Area (ข้อมูลเก่า/ตำแหน่งถูกเปลี่ยน) = ไม่มีผู้ดูแล
+      holderId: b.cocoSupervisorId && known.has(b.cocoSupervisorId) ? b.cocoSupervisorId : null,
+      open: openById.get(b.id) ?? 0,
+      cover: b.coverForName ? { forId: b.coverForId, forName: b.coverForName, since: b.coverSince } : null,
+    })),
+  });
+});
+
+const areaMapSchema = z.object({
+  supervisors: z.array(z.object({ id: z.number().int(), areaId: z.number().int().nullable() })).max(2000).default([]),
+  branches: z
+    .array(
+      z.object({
+        code: z.string().min(1),
+        holderId: z.number().int().nullable(),
+        // ดูแลแทน — สาขาของใคร · ไม่ส่ง/null = ของคนที่ถือเลย (ย้ายถาวร หรือส่งต่อให้คนใหม่แล้ว)
+        coverForId: z.number().int().nullable().optional(),
+      })
+    )
+    .max(5000)
+    .default([]),
+});
+
+/**
+ * บันทึกผังฝั่ง Area ทั้งชุดในคำสั่งเดียว — หน้าจอเก็บการย้ายไว้จนกด "บันทึก" แล้วส่งมาทีเดียว
+ *
+ * เส้นทางแยกจาก PATCH /auth/users/:id เพราะ Area ต้องใช้ได้ด้วย และ Area ไม่ควรแตะช่องอื่นของผู้ใช้ (ตำแหน่ง รหัสผ่าน)
+ * ตรวจทุกค่าที่นี่: ย้ายได้เฉพาะ Supervisor (COCO) · ปลายทางต้องเป็น Area/Supervisor ที่ยังอยู่ · สาขาต้องเป็น COCO ที่ยังเปิด
+ * ย้ายสาขา = เปลี่ยนว่าใครเห็นใบงานของสาขานั้น (areaBranchWhere) มีผลทันทีหลังบันทึก
+ */
+router.post("/area-map", requireAuth, async (req: AuthRequest, res) => {
+  if (!canEditAreaMap(req.auth)) return res.status(403).json({ error: "แก้ผังฝั่ง Area ได้เฉพาะแอดมินและ Area" });
+  const parsed = areaMapSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "ข้อมูลการย้ายไม่ถูกต้อง" });
+  const { supervisors, branches } = parsed.data;
+  if (!supervisors.length && !branches.length) return res.status(400).json({ error: "ไม่มีการเปลี่ยนแปลง" });
+
+  const ids = new Set<number>();
+  for (const s of supervisors) {
+    ids.add(s.id);
+    if (s.areaId) ids.add(s.areaId);
+  }
+  for (const b of branches) {
+    if (b.holderId) ids.add(b.holderId);
+    if (b.coverForId) ids.add(b.coverForId);
+  }
+  const [users, found] = await Promise.all([
+    prisma.user.findMany({ where: { id: { in: [...ids] } }, select: { id: true, name: true, role: true, deletedAt: true } }),
+    prisma.branch.findMany({
+      where: { code: { in: branches.map((b) => b.code) } },
+      select: { code: true, cancelledAt: true, cocoSupervisorId: true, coverForId: true, coverSince: true },
+    }),
+  ]);
+  const user = new Map(users.map((u) => [u.id, u]));
+  const active = (id: number, roles: string[]) => {
+    const u = user.get(id);
+    return !!u && !u.deletedAt && roles.includes(u.role);
+  };
+  for (const s of supervisors) {
+    if (!active(s.id, ["COCO_SUPERVISOR"])) return res.status(400).json({ error: "ย้ายได้เฉพาะ Supervisor (COCO) ที่ยังมีบัญชีอยู่" });
+    if (s.areaId && !active(s.areaId, ["AREA"])) return res.status(400).json({ error: "Area ปลายทางไม่มีในระบบแล้ว — โหลดผังใหม่" });
+  }
+  const branchBy = new Map(found.map((b) => [b.code, b]));
+  for (const b of branches) {
+    const row = branchBy.get(b.code);
+    if (!row || row.cancelledAt || !/^c/i.test(b.code)) return res.status(400).json({ error: `สาขา ${b.code} ไม่ใช่สาขา COCO ที่เปิดอยู่` });
+    if (b.holderId && !active(b.holderId, AREA_HOLDER_ROLES)) {
+      return res.status(400).json({ error: "คนที่จะรับสาขาไม่มีในระบบแล้ว — โหลดผังใหม่" });
+    }
+    if (b.coverForId) {
+      // คนที่ฝากสาขาไว้ ลาออก/ถูกลบไปแล้วได้ — นั่นคือเหตุผลที่ต้องมีคนดูแลแทน
+      const f = user.get(b.coverForId);
+      if (!f || !AREA_HOLDER_ROLES.includes(f.role)) return res.status(400).json({ error: "ไม่พบเจ้าของสาขาที่ดูแลแทน" });
+      if (!b.holderId || b.holderId === b.coverForId) return res.status(400).json({ error: "ดูแลแทนต้องย้ายไปให้คนอื่น" });
+    }
+  }
+
+  const now = new Date();
+  await prisma.$transaction(
+    async (tx) => {
+      if (supervisors.length) {
+        // ทั้งชุดในคำสั่งเดียว — ฐานข้อมูลอยู่คนละ region ทีละคนเกินเพดาน transaction (CLAUDE.md)
+        await tx.$executeRaw`
+          UPDATE "User" u SET "areaId" = NULLIF(d.area, '')::int
+          FROM UNNEST(${supervisors.map((s) => String(s.id))}::text[], ${supervisors.map((s) => (s.areaId ? String(s.areaId) : ""))}::text[]) AS d(id, area)
+          WHERE u.id = d.id::int`;
+      }
+      if (branches.length) {
+        const rows = branches.map((b) => {
+          const prev = branchBy.get(b.code)!;
+          const forId = b.coverForId ?? null;
+          return {
+            code: b.code,
+            holder: b.holderId ? String(b.holderId) : "",
+            forId: forId ? String(forId) : "",
+            forName: forId ? user.get(forId)!.name : "",
+            // ย้ายระหว่างคนดูแลแทนด้วยกัน (เจ้าของเดิมคนเดียวกัน) — นับวันเริ่มเดิม ไม่เริ่มใหม่
+            since: forId ? (prev.coverForId === forId && prev.coverSince ? prev.coverSince : now).toISOString() : "",
+          };
+        });
+        await tx.$executeRaw`
+          UPDATE "Branch" b SET "cocoSupervisorId" = NULLIF(d.holder, '')::int, "coverForId" = NULLIF(d.for_id, '')::int,
+            "coverForName" = NULLIF(d.for_name, ''), "coverSince" = NULLIF(d.since, '')::timestamp
+          FROM UNNEST(${rows.map((r) => r.code)}::text[], ${rows.map((r) => r.holder)}::text[], ${rows.map((r) => r.forId)}::text[],
+                      ${rows.map((r) => r.forName)}::text[], ${rows.map((r) => r.since)}::text[]) AS d(code, holder, for_id, for_name, since)
+          WHERE b.code = d.code`;
+      }
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  console.log(`[AREA-MAP] userId=${req.auth!.userId} — Supervisor ${supervisors.length} · สาขา ${branches.length}`);
+  res.json({ ok: true, supervisors: supervisors.length, branches: branches.length });
 });
 
 const renameSchema = z.object({
