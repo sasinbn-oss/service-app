@@ -25,12 +25,16 @@ import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import {
   PickedAttachment,
+  asList,
+  filesToAttachments,
   formatSize,
   pickImageAttachment,
-  pickVideoAttachment,
-  uploadAttachment,
+  pickImageAttachments,
+  pickVideoAttachments,
+  uploadAttachments,
   attachmentIcon,
 } from "../utils/attachments";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { fetchAttachments, prefetchLinks, seedLinks, takeAttachments, withThumbs } from "../utils/attachmentCache";
 import { useAuth } from "../context/AuthContext";
 import ImageViewer from "./ImageViewer";
@@ -130,23 +134,30 @@ export default function WorkOrderAttachments({
   }, [load, reloadKey]);
 
   async function add(
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>,
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>,
     sending: string
   ) {
     setBusy("กำลังเตรียมไฟล์");
+    let sent = false;
     try {
-      const file = await pick(setBusy);
-      if (!file) return;
-      setBusy(sending);
-      await uploadAttachment(workOrderId, file, tag || undefined);
-      await load();
-      onAdded?.();
+      const files = asList(await pick(setBusy));
+      if (!files.length) return;
+      setBusy(files.length > 1 ? `${sending} ${files.length} ไฟล์` : sending);
+      sent = true;
+      await uploadAttachments(workOrderId, files, tag || undefined);
     } catch (e) {
       showAlert("แนบไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
+      // ส่งไม่ครบชุดก็โหลดใหม่ — ไฟล์ที่ขึ้นไปแล้วต้องเห็น ไม่งั้นคนจะแนบซ้ำ
+      if (sent) {
+        await load();
+        onAdded?.();
+      }
       setBusy(null);
     }
   }
+  const dropped = (files: File[]) =>
+    add((stage) => filesToAttachments(files, { image: true, video: true }, stage), "กำลังส่งไฟล์");
 
   // กดรูปแล้วเปิดดูเต็มจอในแอป (เลื่อนรูป · ซูม) แทนเปิดแท็บใหม่ทีละรูป
   const [viewing, setViewing] = useState<number | null>(null);
@@ -188,28 +199,32 @@ export default function WorkOrderAttachments({
   const missing = inspection?.active ? missingInspection(rows, inspection.since) : [];
 
   const addButtons = (
-    <View style={styles.addRow}>
-      {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ
-          ปุ่มถ่ายรูปบนเครื่องนั้นไม่ได้ช่วยอะไรนอกจากทำให้แถวปุ่มรก */}
-      {Platform.OS !== "web" ? (
-        <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(true, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
-          <Ionicons name="camera-outline" size={17} color={colors.navy} />
-          <Text style={styles.addText}>ถ่ายรูป</Text>
+    <View>
+      <View style={styles.addRow}>
+        {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ
+            ปุ่มถ่ายรูปบนเครื่องนั้นไม่ได้ช่วยอะไรนอกจากทำให้แถวปุ่มรก */}
+        {Platform.OS !== "web" ? (
+          <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(true, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
+            <Ionicons name="camera-outline" size={17} color={colors.navy} />
+            <Text style={styles.addText}>ถ่ายรูป</Text>
+          </TouchableOpacity>
+        ) : null}
+        {/* เลือกได้หลายไฟล์ทีเดียว (เจ้าของงานขอ ต.ค. 69) — ช่างถ่ายมาเป็นชุด กดเลือกทีละรูปคือเหตุผลที่คนส่งแค่รูปเดียว */}
+        <TouchableOpacity style={styles.addBtn} onPress={() => add(pickImageAttachments, "กำลังส่งรูป")} activeOpacity={0.8}>
+          <Ionicons name="images-outline" size={17} color={colors.navy} />
+          <Text style={styles.addText}>เลือกรูป</Text>
         </TouchableOpacity>
-      ) : null}
-      <TouchableOpacity style={styles.addBtn} onPress={() => add((stage) => pickImageAttachment(false, stage), "กำลังส่งรูป")} activeOpacity={0.8}>
-        <Ionicons name="images-outline" size={17} color={colors.navy} />
-        <Text style={styles.addText}>เลือกรูป</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.addBtn} onPress={() => add(pickVideoAttachment, "กำลังส่งวิดีโอ")} activeOpacity={0.8}>
-        <Ionicons name="videocam-outline" size={17} color={colors.navy} />
-        <Text style={styles.addText}>วิดีโอ</Text>
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.addBtn} onPress={() => add(pickVideoAttachments, "กำลังส่งวิดีโอ")} activeOpacity={0.8}>
+          <Ionicons name="videocam-outline" size={17} color={colors.navy} />
+          <Text style={styles.addText}>วิดีโอ</Text>
+        </TouchableOpacity>
+      </View>
+      <DropHint />
     </View>
   );
 
   return (
-    <View style={styles.card}>
+    <FileDropZone style={styles.card} onFiles={dropped} hint="รูป · วิดีโอ" disabled={!canEdit || !!busy} label="วางไฟล์แนบใบงาน">
       {viewing !== null ? (
         <ImageViewer workOrderId={workOrderId} items={rows} startIndex={viewing} onClose={() => setViewing(null)} />
       ) : null}
@@ -358,7 +373,7 @@ export default function WorkOrderAttachments({
           </>
         )
       ) : null}
-    </View>
+    </FileDropZone>
   );
 }
 

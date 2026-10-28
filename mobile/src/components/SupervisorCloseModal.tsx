@@ -15,7 +15,15 @@ import AppModal from "./AppModal";
 import Dropdown from "./Dropdown";
 import DateField, { todayBkk } from "./DateField";
 import PartPicker, { PickedPart } from "./PartPicker";
-import { PickedAttachment, pickImageAttachment, uploadAttachment } from "../utils/attachments";
+import {
+  PickedAttachment,
+  asList,
+  filesToAttachments,
+  pickImageAttachment,
+  pickImageAttachments,
+  uploadAttachment,
+} from "../utils/attachments";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
@@ -92,10 +100,10 @@ export default function SupervisorCloseModal({
   const afterMissing = fixed && after.length === 0 && !order.afterCount;
   const ready = !!reason && len >= MIN_NOTE && !whoMissing && !afterMissing && (!fixed || !!visitDate);
 
-  async function pickAfter(fromCamera: boolean) {
+  async function pickAfter(pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>) {
     try {
-      const f = await pickImageAttachment(fromCamera, setStage);
-      if (f) setAfter((v) => [...v, f]);
+      const got = asList(await pick(setStage));
+      if (got.length) setAfter((v) => [...v, ...got]);
     } catch (e) {
       showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -231,26 +239,35 @@ export default function SupervisorCloseModal({
             />
             <DateField value={visitDate} onChange={setVisitDate} label="วันที่ช่างเข้าซ่อม *" required labelStyle={styles.label} />
             <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ (ถ้ามี)" />
-            <Text style={styles.label}>
-              รูปหลังซ่อม <Text style={styles.req}>*</Text>
-            </Text>
-            {order.afterCount ? <Text style={styles.muted}>ใบนี้มีรูปหลังซ่อมแล้ว {order.afterCount} ไฟล์ — เพิ่มได้อีก</Text> : null}
-            {after.length ? <Text style={styles.muted}>เลือกไว้ {after.length} รูป (ส่งตอนกดยืนยัน)</Text> : null}
-            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-              {Platform.OS !== "web" ? (
-                <TouchableOpacity style={[styles.btn, styles.ghost]} onPress={() => pickAfter(true)} disabled={busy}>
-                  <Text style={styles.ghostText}>ถ่ายรูป</Text>
+            <FileDropZone
+              hint="รูป"
+              disabled={busy}
+              label="วางรูปหลังซ่อม"
+              onFiles={(files) => pickAfter((s) => filesToAttachments(files, { image: true }, s))}
+              style={{ gap: 6 }}
+            >
+              <Text style={styles.label}>
+                รูปหลังซ่อม <Text style={styles.req}>*</Text>
+              </Text>
+              {order.afterCount ? <Text style={styles.muted}>ใบนี้มีรูปหลังซ่อมแล้ว {order.afterCount} ไฟล์ — เพิ่มได้อีก</Text> : null}
+              {after.length ? <Text style={styles.muted}>เลือกไว้ {after.length} รูป (ส่งตอนกดยืนยัน)</Text> : null}
+              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity style={[styles.btn, styles.ghost]} onPress={() => pickAfter((s) => pickImageAttachment(true, s))} disabled={busy}>
+                    <Text style={styles.ghostText}>ถ่ายรูป</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={[styles.btn, styles.ghost]}
+                  onPress={() => pickAfter(pickImageAttachments)}
+                  disabled={busy}
+                  accessibilityLabel="เลือกรูปหลังซ่อม"
+                >
+                  <Text style={styles.ghostText}>เลือกรูป</Text>
                 </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                style={[styles.btn, styles.ghost]}
-                onPress={() => pickAfter(false)}
-                disabled={busy}
-                accessibilityLabel="เลือกรูปหลังซ่อม"
-              >
-                <Text style={styles.ghostText}>เลือกรูป</Text>
-              </TouchableOpacity>
-            </View>
+              </View>
+              <DropHint />
+            </FileDropZone>
           </View>
         ) : null}
 

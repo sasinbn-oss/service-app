@@ -1,10 +1,12 @@
 /**
- * ขอบเขตของ Area Team (Area · Supervisor (COCO)) — เจ้าของงานกำหนด ต.ค. 69
+ * ขอบเขตของ Area Team (Area · Supervisor (COCO) · Maid (COCO)) — เจ้าของงานกำหนด ต.ค. 69
  *
  * ทีมฝั่งสาขา COCO แจ้งและเปิดใบงานได้ ดูความคืบหน้าได้ แต่ไม่ได้ทำขั้นตอนของใคร
  * เห็นเฉพาะสาขาบริษัท (COCO) — สาขาแฟรนไชส์และงานของสาขาอื่นไม่ขึ้นเลย:
  * - Area เห็นสาขา COCO ทั้งบริษัท ไม่ใช่เฉพาะของลูกทีมตัวเอง (ตอบตัวอย่างรอบ 2)
  * - Supervisor (COCO) เห็นเฉพาะสาขาที่ตัวเองดูแล (Branch.cocoSupervisorId จากไฟล์ Area Team)
+ * - Maid (COCO) สิทธิ์เท่า Supervisor (COCO) แต่เห็นเฉพาะสาขาที่ประจำ (CocoMaidBranch จากไฟล์รายชื่อ Maid / หน้าสิทธิ์ผู้ใช้)
+ *   — ไม่ใช่สาขาทั้งหมดของหัวหน้า เพราะ Maid อยู่ร้านเดียว (เจ้าของงานเลือก ต.ค. 69)
  *
  * แยกจากขอบเขตหัวหน้าภาค (supervisorScope.ts) เพราะคนละแกน — หัวหน้าภาคแบ่งตามทีมช่าง/ภาค
  * ส่วนทีม COCO แบ่งตามสาขา ทีมช่างที่รับงานเปลี่ยนไปก็ไม่ทำให้ Supervisor (COCO) มองไม่เห็นสาขาตัวเอง
@@ -22,11 +24,12 @@ export function isAreaTeam(auth: Auth): boolean {
  * สาขาบริษัทดูจากรหัสขึ้นต้นด้วย C แบบเดียวกับ isCompanyBranch() — ช่อง ownership มาจาก CRM
  * ซึ่งบางแถวว่าง ใช้ช่องนั้นจะทำให้สาขา COCO ที่ไฟล์ไม่ได้กรอกหายไปจากสายตา Area
  */
-const COCO_BRANCH: Prisma.BranchWhereInput = { code: { startsWith: "C", mode: "insensitive" } };
+export const COCO_BRANCH: Prisma.BranchWhereInput = { code: { startsWith: "C", mode: "insensitive" } };
 
 /** สาขาที่คนนี้เห็น — ใช้กับทุกหน้าที่แสดงสาขา (แผนงาน · ติดตามเครื่องเสีย · ผังผู้รับผิดชอบ · ฟอร์มเปิดใบงาน) */
 export function areaBranchWhere(auth: { userId: number; role: string }): Prisma.BranchWhereInput {
   if (auth.role === "AREA") return COCO_BRANCH;
+  if (auth.role === "COCO_MAID") return { AND: [COCO_BRANCH, { cocoMaids: { some: { userId: auth.userId } } }] };
   return { AND: [COCO_BRANCH, { cocoSupervisorId: auth.userId }] };
 }
 
@@ -38,13 +41,26 @@ export function areaWorkOrderWhere(auth: { userId: number; role: string }): Pris
   return { OR: [{ branch: areaBranchWhere(auth) }, { createdById: auth.userId }] };
 }
 
+/** อ่านพร้อมสาขาเพื่อเช็ค areaCoversBranch — Maid ต้องรู้ว่าใครประจำสาขานี้ */
+export const AREA_BRANCH_SELECT = { code: true, cocoSupervisorId: true, cocoMaids: { select: { userId: true } } } as const;
+
+/**
+ * ช่องสาขาที่ areaCoversBranch ต้องใช้ ตามตำแหน่งของคนถาม — รายชื่อ Maid ดึงเฉพาะตอนคนถามเป็น Maid
+ * ความสัมพันธ์ใน select = Prisma ยิงคำสั่งแยกอีกรอบ (ฐานข้อมูลอยู่คนละ region · รอบละ ~0.2 วิ) ตำแหน่งอื่นไม่ต้องจ่าย
+ */
+export function areaBranchSelect(auth: { role: string } | undefined) {
+  return auth?.role === "COCO_MAID" ? AREA_BRANCH_SELECT : ({ code: true, cocoSupervisorId: true } as const);
+}
+
 /** สาขานี้อยู่ในขอบเขตไหม — สำหรับเช็คทีละสาขา (เปิดใบงาน · เปิดดูใบงาน) โดยไม่ต้องถามฐานข้อมูลซ้ำ */
 export function areaCoversBranch(
   auth: { userId: number; role: string },
-  branch: { code: string; cocoSupervisorId: number | null }
+  branch: { code: string; cocoSupervisorId: number | null; cocoMaids?: { userId: number }[] }
 ): boolean {
   if (!/^c/i.test(branch.code)) return false;
-  return auth.role === "AREA" || branch.cocoSupervisorId === auth.userId;
+  if (auth.role === "AREA") return true;
+  if (auth.role === "COCO_MAID") return !!branch.cocoMaids?.some((m) => m.userId === auth.userId);
+  return branch.cocoSupervisorId === auth.userId;
 }
 
 export const AREA_OUT_OF_SCOPE = "สาขานี้ไม่อยู่ในความดูแลของคุณ";

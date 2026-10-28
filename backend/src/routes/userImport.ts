@@ -15,7 +15,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_ROLES, ROLE_LABELS } from "../utils/constants";
-import { parseAreaTeam } from "../users/areaTeamImport";
+import { parseAreaTeam, parseMaidList } from "../users/areaTeamImport";
 import { documentPath, saveDocument } from "../documents/store";
 import { displayName, parseRoster, readRows, suggestTeam } from "../users/rosterImport";
 import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
@@ -205,7 +205,7 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
 });
 
 
-// ── Area Team (Area · Supervisor (COCO)) ─────────────────────
+// ── Area Team (Area · Supervisor (COCO) · Maid (COCO)) ─────────────────────
 
 /**
  * นำเข้าไฟล์ Area Team (แอดมิน · เจ้าของงานขอ ต.ค. 69) — สร้าง/อัปเดตบัญชี Area และ Supervisor (COCO)
@@ -218,11 +218,15 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
  * สาขาที่ Supervisor ในไฟล์เคยถือแต่ไม่อยู่ในไฟล์แล้ว ถูกปลดออก · คนที่ไม่อยู่ในไฟล์ไม่ถูกแตะ
  * (ไฟล์ที่มีแค่บาง Area จะไม่ไปปลดสาขาของ Area อื่น — ลบคนออกทำที่หน้าสิทธิ์ผู้ใช้)
  *
+ * ปุ่มเดียวกันรับไฟล์รายชื่อ Maid (COCO) ด้วย (เจ้าของงานขอ ต.ค. 69 — แอดมินไม่ต้องจำว่าไฟล์ไหนเข้าปุ่มไหน)
+ * แยกจากหัวตาราง: ไฟล์ Maid มีคอลัมน์ User แทน Mail · สาขาของ Maid ในไฟล์แทนที่ของเดิมทั้งชุด (CocoMaidBranch)
+ * ชื่อผู้ใช้ที่เป็นตำแหน่งอื่นอยู่แล้ว (รวม Area/Supervisor) ถูกข้าม — Maid เป็นตำแหน่งที่เห็นแคบสุด ไม่ลดตำแหน่งใครจากไฟล์
+ *
  * รหัสผ่านสุ่มให้แต่ละคน ไม่ใช่รหัสเดียวกันทั้งไฟล์ เพราะคนในไฟล์เป็นคนนอกฝ่ายช่าง ร้อยกว่าคน
  * รหัสเดียวกันคือใครรู้รหัสก็เข้าบัญชีคนอื่นได้ทั้งหมดก่อนเขาจะเปลี่ยน · รหัสออกมาในไฟล์ Excel ครั้งเดียว
  * (เก็บแค่ hash) ทุกคนต้องเปลี่ยนตอนเข้าครั้งแรก · ไฟล์หาย → นำเข้าซ้ำพร้อมเลือก "ตั้งรหัสใหม่ให้คนที่ยังไม่เคยเข้าระบบ"
  */
-const AREA_ROLES = ["AREA", "COCO_SUPERVISOR"];
+const AREA_ROLES = ["AREA", "COCO_SUPERVISOR", "COCO_MAID"];
 // ไม่มี 0/O/1/l/I — รหัสถูกอ่านจากกระดาษ/แชตไปพิมพ์ในมือถือ
 const PASS_CHARS = "abcdefghjkmnpqrstuvwxyz23456789";
 const randomPassword = () => Array.from({ length: 8 }, () => PASS_CHARS[crypto.randomInt(PASS_CHARS.length)]).join("");
@@ -239,15 +243,19 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
   } catch (e) {
     return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้" });
   }
-  const plan = parseAreaTeam(rows);
-  if (!plan || plan.supervisors.length + plan.areas.length === 0) {
-    return res.status(400).json({ error: 'ไม่พบรายชื่อในไฟล์ — ต้องมีหัวตาราง "ERP", "Name-Surname (Thai)", "Mail", "Area" และ "Mail" ของ Area' });
+  const plan = parseAreaTeam(rows) ?? parseMaidList(rows);
+  if (!plan || plan.supervisors.length + plan.areas.length + plan.maids.length === 0) {
+    return res.status(400).json({
+      error:
+        'ไม่พบรายชื่อในไฟล์ — ไฟล์ Area Team ต้องมีหัวตาราง "ERP", "Name-Surname (Thai)", "Mail", "Area" และ "Mail" ของ Area · ' +
+        'ไฟล์รายชื่อ Maid ต้องมี "ERP", "Name-Surname (Thai)" และ "User"',
+    });
   }
   const apply = req.body?.apply === "1" || req.body?.apply === "true";
   const resetPending = req.body?.resetPending === "1" || req.body?.resetPending === "true";
 
-  const logins = [...plan.areas.map((a) => a.login), ...plan.supervisors.map((s) => s.login)];
-  const codes = [...plan.areas, ...plan.supervisors].flatMap((s) => s.branches);
+  const logins = [...plan.areas, ...plan.supervisors, ...plan.maids].map((p) => p.login);
+  const codes = [...plan.areas, ...plan.supervisors, ...plan.maids].flatMap((s) => s.branches);
   const [existing, branches] = await Promise.all([
     prisma.user.findMany({
       where: { employeeCode: { in: logins }, deletedAt: null },
@@ -258,7 +266,9 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
   const byLogin = new Map(existing.map((u) => [u.employeeCode, u]));
   const knownBranch = new Map(branches.map((b) => [b.code, b]));
   // ชื่อผู้ใช้ชนกับบัญชีตำแหน่งอื่น (ช่าง/แอดมิน) — ไม่เปลี่ยนตำแหน่งให้ การนำเข้าไม่ใช่ที่ถอด/ย้ายตำแหน่งคนในระบบ
-  const taken = existing.filter((u) => !AREA_ROLES.includes(u.role));
+  // ไฟล์ Maid ข้ามทุกตำแหน่งที่ไม่ใช่ Maid — Area/Supervisor ที่ชื่อผู้ใช้ชนกันจะได้ไม่ถูกลดเป็น Maid
+  const maidLogins = new Set(plan.maids.map((m) => m.login));
+  const taken = existing.filter((u) => (maidLogins.has(u.employeeCode) ? u.role !== "COCO_MAID" : !AREA_ROLES.includes(u.role)));
   const skip = new Set(taken.map((u) => u.employeeCode));
   const missingBranches = codes.filter((c) => !knownBranch.has(c));
   const notCoco = codes.filter((c) => knownBranch.has(c) && !/^c/i.test(c));
@@ -266,6 +276,7 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
   const people = [
     ...plan.areas.map((a) => ({ ...a, role: "AREA", phone: null as string | null, areaLogin: null as string | null })),
     ...plan.supervisors.map((s) => ({ ...s, role: "COCO_SUPERVISOR" })),
+    ...plan.maids.map((m) => ({ ...m, role: "COCO_MAID", areaLogin: null as string | null })),
   ].map((p) => {
     const u = byLogin.get(p.login);
     return {
@@ -280,6 +291,7 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
   const summary = {
     areas: plan.areas.length,
     supervisors: plan.supervisors.length,
+    maids: plan.maids.length,
     branches: codes.length - missingBranches.length,
     create: people.filter((p) => p.status === "NEW").length,
     update: people.filter((p) => p.status === "UPDATE").length,
@@ -342,16 +354,26 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
           FROM UNNEST(${reset.map((p) => String(ids.get(p.login)))}::text[], ${reset.map((p) => hashes.get(p.login)!)}::text[]) AS d(id, hash)
           WHERE u.id = d.id::int`;
       }
+      // สาขาที่ Maid ประจำ — ไฟล์คือคำตอบล่าสุด แทนที่ของเดิมทั้งชุด · คนที่ไฟล์ Area Team เลื่อนจาก Maid
+      // ขึ้นเป็น Area/Supervisor ล้างด้วย ไม่งั้นเปลี่ยนกลับเป็น Maid ทีหลังจะเห็นสาขาเก่าที่ลืมไปแล้ว
+      await tx.cocoMaidBranch.deleteMany({ where: { userId: { in: ppl.map((x) => Number(x.id)) } } });
+      const maidLinks = ppl
+        .filter((x) => x.p.role === "COCO_MAID")
+        .flatMap((x) => x.p.branches.map((code) => ({ userId: Number(x.id), branchId: knownBranch.get(code)!.id })));
+      if (maidLinks.length) await tx.cocoMaidBranch.createMany({ data: maidLinks, skipDuplicates: true });
+
       // สาขาที่ Supervisor ในไฟล์เคยถือ แต่ไฟล์รอบนี้ไม่ได้ให้แล้ว (ย้ายไปคนอื่น/ปิดสาขา) — ปลดก่อนผูกใหม่
       // ป้าย "ดูแลแทน" ที่ตั้งจากผังฝั่ง Area ล้างด้วย — ไฟล์คือคำตอบล่าสุดว่าสาขาเป็นของใคร
-      const supIds = ppl.map((x) => Number(x.id));
+      // Maid ไม่ใช่ผู้ดูแลสาขา — สาขาของ Maid ห้ามไปทับ Supervisor ของสาขานั้น
+      const holders = ppl.filter((x) => x.p.role !== "COCO_MAID");
+      const supIds = holders.map((x) => Number(x.id));
       if (supIds.length) {
         await tx.branch.updateMany({
           where: { cocoSupervisorId: { in: supIds } },
           data: { cocoSupervisorId: null, coverForId: null, coverForName: null, coverSince: null },
         });
       }
-      const links = wanted.flatMap((p) => p.branches.map((code) => ({ code, id: String(ids.get(p.login)) })));
+      const links = holders.flatMap((x) => x.p.branches.map((code) => ({ code, id: x.id })));
       if (links.length) {
         await tx.$executeRaw`
           UPDATE "Branch" b SET "cocoSupervisorId" = d.sup::int, "coverForId" = NULL, "coverForName" = NULL, "coverSince" = NULL
@@ -368,10 +390,11 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
   if (passwords.size) {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("บัญชีผู้ใช้");
-    ws.addRow(["ชื่อผู้ใช้", "รหัสผ่านเริ่มต้น", "ชื่อ", "ตำแหน่ง", "Area", "สาขา", "เบอร์"]).font = { bold: true };
+    ws.addRow(["ชื่อผู้ใช้", "รหัสผ่านเริ่มต้น", "ชื่อ", "ตำแหน่ง", "Area (หัวหน้า)", "สาขา", "เบอร์"]).font = { bold: true };
     const areaName = new Map(plan.areas.map((a) => [a.login, a.name]));
     for (const p of fresh) {
-      ws.addRow([p.login, passwords.get(p.login), p.name, ROLE_LABELS[p.role], p.areaLogin ? areaName.get(p.areaLogin) ?? "" : "", p.role === "AREA" ? "COCO ทั้งหมด" : p.branches.join(" "), p.phone ?? ""]);
+      const lead = "lead" in p ? p.lead ?? "" : p.areaLogin ? areaName.get(p.areaLogin) ?? "" : "";
+      ws.addRow([p.login, passwords.get(p.login), p.name, ROLE_LABELS[p.role], lead, p.role === "AREA" ? "COCO ทั้งหมด" : p.branches.join(" "), p.phone ?? ""]);
     }
     ws.addRow([]);
     ws.addRow(["ทุกคนต้องเปลี่ยนรหัสผ่านตอนเข้าระบบครั้งแรก · ไฟล์นี้คือรหัสผ่านจริง ส่งให้เจ้าของบัญชีแล้วลบทิ้ง"]).font = { italic: true };

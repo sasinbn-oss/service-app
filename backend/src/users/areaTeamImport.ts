@@ -12,6 +12,8 @@ export interface AreaTeamPlan {
   /** branches = สาขาที่ Area คนนี้ดูแลเองโดยตรง (ไฟล์จริงมี Area ที่ใส่ตัวเองเป็น Supervisor ของบางสาขา) */
   areas: { login: string; name: string; branches: string[] }[];
   supervisors: { login: string; name: string; phone: string | null; areaLogin: string; branches: string[] }[];
+  /** Maid (COCO) จากไฟล์รายชื่อ Maid — lead = ชื่อในคอลัมน์ "Area (หัวหน้า)" ไว้โชว์เฉย ๆ (ไฟล์ไม่มีอีเมลหัวหน้า) */
+  maids: { login: string; name: string; phone: string | null; lead: string | null; branches: string[] }[];
   /** แถวที่อ่านไม่ได้/ขัดกันเอง — ไม่ทำให้ทั้งไฟล์ใช้ไม่ได้ แค่แถวนั้นถูกข้าม */
   problems: string[];
 }
@@ -84,5 +86,56 @@ export function parseAreaTeam(rows: string[][]): AreaTeamPlan | null {
       sups.delete(login);
     }
   }
-  return { areas: [...areas.values()], supervisors: [...sups.values()], problems };
+  return { areas: [...areas.values()], supervisors: [...sups.values()], maids: [], problems };
+}
+
+/**
+ * ไฟล์รายชื่อ Maid (COCO) — ลำดับ · Area (หัวหน้า) · Name-Surname (Thai) · Nickname · Tel · ERP · Project Name · Position · Remark · User
+ *
+ * คนละแบบกับไฟล์ Area Team: ชื่อผู้ใช้มากับคอลัมน์ User เลย (ไม่มีอีเมล) · แถวละสาขา
+ * Maid คนเดียวอยู่หลายแถวได้ = ประจำหลายสาขา · แถวที่ Position ไม่ใช่ Maid ถูกข้าม
+ * (Area/Supervisor ต้องมาจากไฟล์ Area Team ที่มีอีเมลและสายบังคับบัญชาครบ)
+ */
+export function parseMaidList(rows: string[][]): AreaTeamPlan | null {
+  const headAt = rows.findIndex((r) => r.some((c) => norm(c) === "erp") && r.some((c) => norm(c) === "user"));
+  if (headAt < 0) return null;
+  const head = rows[headAt].map(norm);
+  const col = (pred: (h: string) => boolean) => head.findIndex(pred);
+  const c = {
+    branch: col((h) => h === "erp"),
+    login: col((h) => h === "user"),
+    name: col((h) => h.startsWith("name-surname(thai)") || h === "name-surname"),
+    nick: col((h) => h === "nickname"),
+    tel: col((h) => h === "tel"),
+    position: col((h) => h === "position"),
+    lead: col((h) => h.startsWith("area")),
+  };
+  if ([c.branch, c.login, c.name].some((i) => i < 0)) return null;
+
+  const problems: string[] = [];
+  const maids = new Map<string, AreaTeamPlan["maids"][number]>();
+  rows.slice(headAt + 1).forEach((r, i) => {
+    const line = headAt + i + 2;
+    const at = (k: number) => (k >= 0 ? (r[k] ?? "").trim() : "");
+    const branch = at(c.branch).toUpperCase();
+    const thai = at(c.name);
+    if (!branch && !thai) return;
+    const position = at(c.position);
+    if (position && !/maid/i.test(position)) {
+      return void problems.push(`แถว ${line} (${thai}): ตำแหน่ง "${position}" ไม่ใช่ Maid — ข้าม (Area/Supervisor นำเข้าจากไฟล์ Area Team)`);
+    }
+    // คอลัมน์ User บางคนกรอกเป็นอีเมล — ใช้ส่วนหน้า @ แบบเดียวกับไฟล์ Area Team
+    const raw = at(c.login).toLowerCase();
+    const login = raw.includes("@") ? loginOf(raw) : raw.replace(/\s+/g, "");
+    if (!login || !/^[a-z0-9._-]+$/.test(login)) return void problems.push(`แถว ${line} (${thai || branch}): ไม่มีชื่อผู้ใช้ในคอลัมน์ User`);
+    if (!branch) return void problems.push(`แถว ${line} (${thai}): ไม่มีรหัสสาขาในคอลัมน์ ERP`);
+    let m = maids.get(login);
+    if (!m) {
+      const nick = at(c.nick);
+      m = { login, name: nick ? `${thai} (${nick})` : thai, phone: at(c.tel) || null, lead: at(c.lead) || null, branches: [] };
+      maids.set(login, m);
+    }
+    if (!m.branches.includes(branch)) m.branches.push(branch);
+  });
+  return { areas: [], supervisors: [], maids: [...maids.values()], problems };
 }

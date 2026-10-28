@@ -12,6 +12,7 @@ import { StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Spinner from "./Spinner";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
 
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -38,6 +39,8 @@ export default function EvidenceStep({
   busy,
   accessibilityLabel,
   children,
+  onDropFiles,
+  dropHint,
 }: {
   n: number;
   title: string;
@@ -59,9 +62,19 @@ export default function EvidenceStep({
   accessibilityLabel?: string;
   /** รูปย่อของไฟล์ที่แนบแล้ว */
   children?: React.ReactNode;
+  /** ลากไฟล์มาวางที่การ์ดนี้ได้ (เว็บ) — ได้ผลเท่ากับกดปุ่มเลือก */
+  onDropFiles?: (files: File[]) => void;
+  /** การ์ดนี้รับอะไร เช่น "รูป" · "วิดีโอ" — ขึ้นตอนลากไฟล์มา */
+  dropHint?: string;
 }) {
   return (
-    <View style={[styles.card, done && styles.cardDone]} accessibilityLabel={accessibilityLabel}>
+    <FileDropZone
+      style={[styles.card, done && styles.cardDone]}
+      label={accessibilityLabel}
+      onFiles={(files) => onDropFiles?.(files)}
+      disabled={!onDropFiles || !canEdit || !!busy}
+      hint={dropHint}
+    >
       <View style={styles.head}>
         <View style={[styles.num, done && styles.numDone]}>
           {done ? (
@@ -139,9 +152,10 @@ export default function EvidenceStep({
               {footTip ? <Text style={styles.tip}>{footTip}</Text> : null}
             </View>
           ) : null}
+          {onDropFiles ? <DropHint /> : null}
         </>
       )}
-    </View>
+    </FileDropZone>
   );
 }
 

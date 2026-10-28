@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { useDocked } from "../components/SideMenu";
 import { useCachedState } from "../utils/pageCache";
-import { FlatList, Image, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, Image, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
@@ -9,6 +9,7 @@ import AppModal from "../components/AppModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { showAlert } from "../utils/alert";
 import { appendFile } from "../utils/attachments";
+import FileDropZone from "../components/FileDropZone";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
@@ -43,6 +44,16 @@ async function pickImage(): Promise<PickedImage | null> {
   if (result.canceled || result.assets.length === 0) return null;
   const a = result.assets[0];
   return { uri: a.uri, name: a.fileName ?? "part.jpg", type: a.mimeType ?? "image/jpeg" };
+}
+
+/** รูปที่ลากมาวาง (เว็บ) — อะไหล่มีรูปเดียว ลากมาหลายรูปใช้รูปแรกที่เป็นรูป */
+function droppedImage(files: File[]): PickedImage | null {
+  const f = files.find((x) => x.type.startsWith("image/"));
+  if (!f) {
+    showAlert("แนบไม่ได้", "รูปอะไหล่ต้องเป็นไฟล์รูป (JPEG, PNG หรือ WebP)");
+    return null;
+  }
+  return { uri: URL.createObjectURL(f), name: f.name, type: f.type };
 }
 
 async function uploadImage(partId: number, img: PickedImage) {
@@ -109,8 +120,8 @@ export default function ManageSparePartsScreen() {
     );
   }, [parts, q, brand]);
 
-  async function handlePickImage(part: SparePart) {
-    const img = await pickImage();
+  async function handlePickImage(part: SparePart, given?: PickedImage | null) {
+    const img = given === undefined ? await pickImage() : given;
     if (!img) return;
     setUploadingId(part.id);
     try {
@@ -209,7 +220,13 @@ export default function ManageSparePartsScreen() {
           renderItem={({ item }) => {
             const uri = thumbUri(item);
             return (
-              <View style={styles.card}>
+              <FileDropZone
+                style={styles.card}
+                hint="รูปอะไหล่ 1 รูป"
+                label={`วางรูป ${item.partCode}`}
+                disabled={uploadingId === item.id}
+                onFiles={(files) => handlePickImage(item, droppedImage(files))}
+              >
                 {uri ? (
                   <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
                 ) : (
@@ -240,7 +257,7 @@ export default function ManageSparePartsScreen() {
                     </TouchableOpacity>
                   </View>
                 </View>
-              </View>
+              </FileDropZone>
             );
           }}
         />
@@ -408,27 +425,29 @@ function PartModal({
       <Text style={styles.label}>
         รูปอะไหล่ <Text style={styles.optional}>(ไม่บังคับ)</Text>
       </Text>
-      <TouchableOpacity
-        style={styles.pick}
-        onPress={async () => {
-          const img = await pickImage();
-          if (img) setImage(img);
-        }}
-        disabled={saving}
-        accessibilityLabel="เลือกรูปอะไหล่"
-      >
-        {preview ? (
-          <Image source={{ uri: preview }} style={styles.thumb} resizeMode="cover" />
-        ) : (
-          <View style={[styles.thumb, styles.thumbPlaceholder]}>
-            <Ionicons name="image-outline" size={22} color={colors.textFaint} />
+      <FileDropZone hint="รูปอะไหล่ 1 รูป" label="วางรูปอะไหล่" disabled={saving} onFiles={(files) => setImage(droppedImage(files) ?? image)}>
+        <TouchableOpacity
+          style={styles.pick}
+          onPress={async () => {
+            const img = await pickImage();
+            if (img) setImage(img);
+          }}
+          disabled={saving}
+          accessibilityLabel="เลือกรูปอะไหล่"
+        >
+          {preview ? (
+            <Image source={{ uri: preview }} style={styles.thumb} resizeMode="cover" />
+          ) : (
+            <View style={[styles.thumb, styles.thumbPlaceholder]}>
+              <Ionicons name="image-outline" size={22} color={colors.textFaint} />
+            </View>
+          )}
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.pickTitle}>{preview ? "เปลี่ยนรูป" : "เลือกรูป"}</Text>
+            <Text style={styles.meta}>{image ? image.name : Platform.OS === "web" ? "JPEG, PNG หรือ WebP · ลากรูปมาวางได้" : "JPEG, PNG หรือ WebP"}</Text>
           </View>
-        )}
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.pickTitle}>{preview ? "เปลี่ยนรูป" : "เลือกรูป"}</Text>
-          <Text style={styles.meta}>{image ? image.name : "JPEG, PNG หรือ WebP"}</Text>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </FileDropZone>
     </AppModal>
   );
 }

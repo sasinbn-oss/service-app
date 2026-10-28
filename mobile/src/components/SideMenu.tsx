@@ -166,7 +166,7 @@ const GROUPS: Group[] = [
         icon: "calendar-outline",
         tab: "HomeTab",
         screen: "PlanBoard",
-        roles: ["ADMIN", "SUPERVISOR", "AREA", "COCO_SUPERVISOR"],
+        roles: ["ADMIN", "SUPERVISOR", "AREA", "COCO_SUPERVISOR", "COCO_MAID"],
       },
       { key: "home", label: "หน้าหลัก", labelEn: "Home", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
       {

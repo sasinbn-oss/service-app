@@ -49,6 +49,7 @@ const SHEET_TITLE: Record<string, string> = {
   PartClaim: "ใบเคลมอะไหล่",
   AdminReview: "คำขอให้แอดมินตรวจ",
   Branch: "สาขา",
+  CocoMaidBranch: "สาขาที่ Maid ประจำ",
   Machine: "เครื่อง",
   Outage: "เคสเครื่องดับ",
   User: "ผู้ใช้",

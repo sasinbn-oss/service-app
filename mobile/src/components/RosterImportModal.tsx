@@ -14,7 +14,8 @@ import Dropdown from "./Dropdown";
 import Spinner from "./Spinner";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
-import { PickedFile, pickFile } from "../utils/filePicker";
+import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
 
 interface Person {
@@ -39,6 +40,8 @@ interface Preview {
 }
 
 const MIN_PASSWORD = 8;
+
+const ACCEPT = ".ods,.xlsx,application/vnd.oasis.opendocument.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 export default function RosterImportModal({
   visible,
@@ -66,8 +69,9 @@ export default function RosterImportModal({
     onClose();
   }
 
-  async function choose() {
-    const picked = await pickFile(".ods,.xlsx,application/vnd.oasis.opendocument.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  // given = ไฟล์ที่ลากมาวาง (FileDropZone) — ไม่ส่ง = เปิดหน้าต่างเลือกไฟล์
+  async function choose(given?: PickedFile | null) {
+    const picked = given !== undefined ? given : await pickFile(ACCEPT);
     if (!picked) return;
     setFile(picked);
     setPreview(null);
@@ -177,10 +181,13 @@ export default function RosterImportModal({
             ระบบอ่านหัวข้อ "หัวหน้าภาค" กับ "หัวหน้าภาค: ชื่อ" ในบันทึกเพื่อแยกหัวหน้าภาคกับช่าง และดูว่าช่างอยู่ใต้หัวหน้าภาคคนไหน
             ยังไม่บันทึกอะไรจนกว่าจะกดยืนยันในหน้าถัดไป
           </Text>
-          <TouchableOpacity style={[styles.btn, { alignSelf: "flex-start" }]} onPress={choose} disabled={checking}>
-            {checking ? <Spinner color="#fff" /> : <Ionicons name="document-attach-outline" size={18} color="#fff" />}
-            <Text style={styles.btnText}>{checking ? "กำลังอ่านไฟล์..." : "เลือกไฟล์"}</Text>
-          </TouchableOpacity>
+          <FileDropZone hint="ไฟล์ .ods / .xlsx" disabled={checking} label="วางไฟล์รายชื่อ" onFiles={(files) => choose(droppedFile(files, ACCEPT))}>
+            <TouchableOpacity style={[styles.btn, { alignSelf: "flex-start" }]} onPress={() => choose()} disabled={checking}>
+              {checking ? <Spinner color="#fff" /> : <Ionicons name="document-attach-outline" size={18} color="#fff" />}
+              <Text style={styles.btnText}>{checking ? "กำลังอ่านไฟล์..." : "เลือกไฟล์"}</Text>
+            </TouchableOpacity>
+            <DropHint text="หรือลากไฟล์มาวางตรงนี้" />
+          </FileDropZone>
           {file && error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
       ) : (
