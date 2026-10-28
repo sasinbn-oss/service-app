@@ -42,6 +42,7 @@ import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
+import { prefetchAttachments } from "../utils/attachmentCache";
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
@@ -790,6 +791,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       load();
     }, [load])
   );
+
+  // รายการไฟล์แนบเริ่มโหลดพร้อมตัวใบงาน — การ์ดไฟล์แนบขึ้นจอหลังใบงานมาถึงแล้วรับผลไปใช้เลย (utils/attachmentCache)
+  useEffect(() => {
+    prefetchAttachments(id);
+  }, [id]);
 
   /**
    * โหลดใหม่แล้วเด้งบอกสถานะใหม่ทุกครั้งที่มีการเปลี่ยน (เจ้าของงานขอ ต.ค. 69)

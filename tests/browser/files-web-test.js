@@ -2,7 +2,8 @@
 //   · ส่งใบเสนอราคา: PDF 2 หน้า + รูปเอกสารกว้าง 1170 กับ 3000 → ฐานข้อมูล: PDF มีรูปย่อหน้าแรก ·
 //     รูป 1170 ไม่ถูกขยาย (ยังกว้าง 1170) · รูป 3000 ย่อเหลือ 2400 (เดิม 1600 ทั้งคู่)
 //   · การ์ดไฟล์แนบ: PDF มีป้าย PDF · เปิด PDF แล้วเห็นทั้งสองหน้าในหน้าดูไฟล์ (canvas มีภาพจริง) · ซูมแล้ววาดใหม่กว้างขึ้น
-//   · เปิดไฟล์ไม่ถามลิงก์ทีละไฟล์ (ใช้ชุดที่ขอไว้ตอนโหลดรายการ /attachments/links)
+//   · เปิดไฟล์ไม่ถามลิงก์ทีละไฟล์ (ลิงก์มากับรายการไฟล์ ไม่ต้องขอ /attachments/links แยก — รอบสอง ต.ค. 69)
+//   · เปิดใบงาน: รายการไฟล์เริ่มโหลดพร้อมตัวใบงาน ไม่รอใบงานมาก่อน
 //   · ที่เก็บไฟล์ไม่ตอบ CORS (จำลองด้วยการบล็อก) → เปิดผ่านเซิร์ฟเวอร์ (/file) ได้เหมือนเดิม
 //   · รูปเต็มโหลดช้า (จำลองหน่วง) → ขึ้น "กำลังโหลดรูปเต็ม… รูปนี้ยังเป็นรูปย่อ" แล้วหายเมื่อรูปขึ้น
 // ต้องมี DATABASE_URL · mock-s3 ตัวล่าสุด (ตอบ CORS) · รูปทดสอบสร้างด้วย Python PIL
@@ -62,6 +63,10 @@ function imageWidth(buf) {
     page.on("pageerror", (e) => errors.push(String(e)));
     const requests = [];
     page.on("request", (r) => requests.push(r.url()));
+    // เวลาเริ่ม/ได้คำตอบ — เช็คว่ารายการไฟล์ไม่ต่อคิวรอตัวใบงาน
+    const timed = [];
+    page.on("request", (r) => timed.push({ kind: "req", u: r.url(), t: Date.now() }));
+    page.on("response", (r) => timed.push({ kind: "res", u: r.url(), t: Date.now() }));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
     await page.getByPlaceholder("รหัสพนักงาน").fill("A001");
@@ -114,8 +119,16 @@ function imageWidth(buf) {
     // ปิดใบงานแล้วเปิดใหม่ — รายการไฟล์โหลดใหม่ บอกเซิร์ฟเวอร์ว่ารูปย่อใบไหนมีแล้ว และรูปย่อยังขึ้นครบ
     await page.getByLabel("ปิด", { exact: true }).locator("visible=true").last().click();
     await page.waitForTimeout(1500);
+    timed.length = 0;
     await vis(wo.code).last().click();
     await page.waitForTimeout(3500);
+    const first = (kind, re) => timed.find((x) => x.kind === kind && re.test(x.u))?.t;
+    const detailBack = first("res", new RegExp(`/work-orders/${wo.id}$`));
+    const listStart = first("req", new RegExp(`/work-orders/${wo.id}/attachments\\?`));
+    const linksAsked = timed.some((x) => x.kind === "req" && /\/attachments\/links/.test(x.u));
+    detailBack && listStart && listStart < detailBack && !linksAsked
+      ? pass("เปิดใบงาน: รายการไฟล์เริ่มโหลดก่อนตัวใบงานมาถึง (ไม่ต่อคิว) · ไม่ขอ /links แยก (ลิงก์มากับรายการ)")
+      : fail(`ลำดับคำขอ: รายการเริ่ม ${listStart} · ใบงานมาถึง ${detailBack} · ขอ links แยก ${linksAsked}`);
     const tilesWithImage = await page.evaluate(
       () => [...document.querySelectorAll('[aria-label^="ดูไฟล์ "]')].filter((t) => t.offsetParent && t.querySelector("img")).length
     );

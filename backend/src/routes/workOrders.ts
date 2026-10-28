@@ -905,8 +905,22 @@ type ViewableWorkOrder = {
   assignedTeam: string | null;
   assignedToId: number | null;
   createdById: number | null;
-  branch: { region: string | null; zone: string | null; pmTeam: string | null };
+  /** code/cocoSupervisorId ใช้เช็ค Area Team — อ่านมากับใบงานแล้วไม่ต้องถามซ้ำ (ไม่มีก็ถามเอง) */
+  branch: { region: string | null; zone: string | null; pmTeam: string | null; code?: string; cocoSupervisorId?: number | null };
 };
+
+/**
+ * ข้อมูลของคนถามที่การเช็คสิทธิ์ต้องใช้ — ถามพร้อมกับอ่านใบงานได้ ไม่ต้องรอใบงานก่อน
+ * (เจ้าของงานบ่นไฟล์แนบยังช้า ต.ค. 69: ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ เดิมอ่านใบงาน → ถามขอบเขต → อ่านไฟล์ ทีละคิว)
+ */
+type Viewer = { scope?: SupervisorScope; coverage?: Coverage | null };
+async function viewerOf(req: AuthRequest): Promise<Viewer> {
+  const role = req.auth!.role;
+  if (role === "ADMIN" || isAreaTeam(req.auth)) return {};
+  if (role === "SUPERVISOR") return { scope: await supervisorScope(req.auth!.userId) };
+  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
+  return { coverage: await coverageOf(user?.team ?? null) };
+}
 
 /**
  * เปิดดูใบงานนี้ได้ไหม (ตรวจระบบ ต.ค. 69) — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว
@@ -915,11 +929,11 @@ type ViewableWorkOrder = {
  * และรูปในร้านของทั้งบริษัท · ตอนนี้ใช้กฎเดียวกับหน้ารายการ บวกใบที่ช่างคนนั้นเปิดเอง
  * (เปิดใบงานเสร็จต้องเข้าดู/แนบรูปใบตัวเองได้ ทั้งที่ยังไม่จ่ายทีม) และใบที่เคยไปทำ (ประวัติงานตัวเอง)
  */
-async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder, known?: SupervisorScope) {
+async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWorkOrder, viewer: Viewer = {}) {
   const role = req.auth!.role;
   if (role === "ADMIN") return false;
   if (role === "SUPERVISOR") {
-    const scope = known ?? (await supervisorScope(req.auth!.userId));
+    const scope = viewer.scope ?? (await supervisorScope(req.auth!.userId));
     if (seesWorkOrder(scope, await teamsForSupervisor(scope), wo)) return false;
     res.status(403).json({ error: OUT_OF_SCOPE });
     return true;
@@ -927,13 +941,20 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
   const me = req.auth!.userId;
   if (wo.assignedToId === me || wo.createdById === me) return false;
   if (isAreaTeam(req.auth)) {
-    const b = await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: { code: true, cocoSupervisorId: true } } } });
+    const { code, cocoSupervisorId } = wo.branch;
+    const b =
+      code !== undefined && cocoSupervisorId !== undefined
+        ? { branch: { code, cocoSupervisorId } }
+        : await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: { code: true, cocoSupervisorId: true } } } });
     if (b && areaCoversBranch(req.auth!, b.branch)) return false;
     res.status(403).json({ error: AREA_OUT_OF_SCOPE });
     return true;
   }
-  const user = await prisma.user.findUnique({ where: { id: me }, select: { team: true } });
-  if (canTouch(wo, { coverage: await coverageOf(user?.team ?? null), id: me })) return false;
+  const coverage =
+    viewer.coverage !== undefined
+      ? viewer.coverage
+      : await coverageOf((await prisma.user.findUnique({ where: { id: me }, select: { team: true } }))?.team ?? null);
+  if (canTouch(wo, { coverage, id: me })) return false;
   if ((await prisma.workOrderWorker.count({ where: { workOrderId: wo.id, userId: me } })) > 0) return false;
   res.status(403).json({ error: "ใบงานนี้ไม่ใช่ของทีมคุณ — ถ้าต้องช่วยงานนี้ ให้หัวหน้าภาคจ่ายงานให้ทีมคุณ", notYourTeam: true });
   return true;
@@ -945,7 +966,7 @@ const VIEW_SELECT = {
   assignedTeam: true,
   assignedToId: true,
   createdById: true,
-  branch: { select: { region: true, zone: true, pmTeam: true } },
+  branch: { select: { region: true, zone: true, pmTeam: true, code: true, cocoSupervisorId: true } },
 } as const;
 
 /**
@@ -1950,14 +1971,11 @@ async function detailFor(id: number) {
 router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const [d, scope] = await Promise.all([
-    loadDetail(id),
-    req.auth!.role === "SUPERVISOR" ? supervisorScope(req.auth!.userId) : Promise.resolve(undefined),
-  ]);
+  const [d, viewer] = await Promise.all([loadDetail(id), viewerOf(req)]);
   if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (await blockedForViewer(req, res, d.row, scope)) return;
+  if (await blockedForViewer(req, res, d.row, viewer)) return;
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
-  res.json({ ...detailBody(d), ...(scope && !coversWorkOrder(scope, d.row) ? { viewOnly: true } : {}) });
+  res.json({ ...detailBody(d), ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}) });
 });
 
 // ── เปิดใบงาน ──────────────────────────────────────────
@@ -4523,9 +4541,10 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
 async function blockedForSupervisor(
   req: AuthRequest,
   res: Response,
-  wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
+  wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } },
+  known?: SupervisorScope
 ) {
-  const scope = await supervisorScope(req.auth!.userId);
+  const scope = known ?? (await supervisorScope(req.auth!.userId));
   if (coversWorkOrder(scope, wo)) return false;
   res.status(403).json({ error: (await outOfScopeReason(scope, wo)) });
   return true;
@@ -6257,17 +6276,18 @@ async function loadAttachableWorkOrder(
   /** แนบ/ลบไฟล์ — หัวหน้าภาคต้องเป็นเจ้าของใบ ไม่ใช่แค่เห็น (ใบที่ทีมตัวเองรับข้ามทีมมา ดูได้อย่างเดียว) */
   write = false
 ): Promise<{ id: number; code: string; status: string; createdById: number | null } | null> {
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: { code: true, status: true, ...VIEW_SELECT },
-  });
+  // ใบงานกับข้อมูลคนถามอ่านพร้อมกัน — ไม่ต่อคิว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
+  const [wo, viewer] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true, ...VIEW_SELECT } }),
+    viewerOf(req),
+  ]);
   if (!wo) {
     res.status(404).json({ error: "ไม่พบใบงานนี้" });
     return null;
   }
   // กฎเดียวกับเปิดดูใบงาน — เดิมช่างเปิดรูปของใบที่ยังไม่จ่ายทีมได้ทุกภาค (ภาพในร้านลูกค้า)
-  if (await blockedForViewer(req, res, wo)) return null;
-  if (write && req.auth!.role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return null;
+  if (await blockedForViewer(req, res, wo, viewer)) return null;
+  if (write && req.auth!.role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo, viewer.scope))) return null;
 
   return { id: wo.id, code: wo.code, status: wo.status, createdById: wo.createdById };
 }
@@ -6346,7 +6366,11 @@ router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  // อ่านไฟล์พร้อมกับเช็คสิทธิ์ — เช็คไม่ผ่านก็แค่ไม่ส่งออกไป (ไม่ต้องเสียรอบไปกลับฐานข้อมูลรอเช็คก่อน)
+  const [wo, rows] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findMany({ where: { workOrderId: id }, select: attachmentSelect, orderBy: { createdAt: "asc" } }),
+  ]);
   if (!wo) return;
 
   /**
@@ -6360,12 +6384,25 @@ router.get("/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
       .map(Number)
       .filter((n) => Number.isInteger(n) && n > 0)
   );
-  const rows = await prisma.workOrderAttachment.findMany({
-    where: { workOrderId: id },
-    select: attachmentSelect,
-    orderBy: { createdAt: "asc" },
+  /**
+   * ลิงก์เปิดไฟล์มากับรายการเลย (ต.ค. 69) — เดิมแอปขอ /links ต่ออีกคำขอหลังรายการมาถึง กดดูไฟล์เร็ว ๆ ต้องรอลิงก์
+   * เซ็นลิงก์ในเครื่อง ไม่ได้ถามที่เก็บไฟล์ — ไม่เพิ่มเวลา · เซ็นไม่ได้ (ยังไม่ตั้งที่เก็บ) ก็ส่งรายการไปโดยไม่มีลิงก์
+   */
+  const urls = new Map<number, string>();
+  if (isFileStoreConfigured()) {
+    try {
+      for (const r of rows) {
+        if (r.objectKey && r.uploadedAt) urls.set(r.id, await getDownloadUrl(r.objectKey, { fileName: r.fileName, inline: true }));
+      }
+    } catch (error: any) {
+      console.error("presign failed", error);
+      urls.clear();
+    }
+  }
+  res.json({
+    rows: rows.map((r) => ({ ...attachmentShape(r, have.has(r.id)), url: urls.get(r.id) ?? null })),
+    expiresInSeconds: SIGNED_URL_TTL_SECONDS,
   });
-  res.json({ rows: rows.map((r) => attachmentShape(r, have.has(r.id))) });
 });
 
 /**
@@ -6379,13 +6416,14 @@ router.get("/:id/attachments/links", requireAuth, async (req: AuthRequest, res) 
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const [wo, rows] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findMany({
+      where: { workOrderId: id, objectKey: { not: null }, uploadedAt: { not: null } },
+      select: { id: true, objectKey: true, fileName: true },
+    }),
+  ]);
   if (!wo) return;
-
-  const rows = await prisma.workOrderAttachment.findMany({
-    where: { workOrderId: id, objectKey: { not: null }, uploadedAt: { not: null } },
-    select: { id: true, objectKey: true, fileName: true },
-  });
   try {
     const pairs = await Promise.all(
       rows.map(async (r) => [r.id, await getDownloadUrl(r.objectKey!, { fileName: r.fileName, inline: true })] as const)
@@ -6542,13 +6580,14 @@ router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthR
     return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
   }
 
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const [wo, row] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findFirst({
+      where: { id: attachmentId, workOrderId: id },
+      select: { objectKey: true, fileName: true, kind: true },
+    }),
+  ]);
   if (!wo) return;
-
-  const row = await prisma.workOrderAttachment.findFirst({
-    where: { id: attachmentId, workOrderId: id },
-    select: { objectKey: true, fileName: true, kind: true },
-  });
   if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
   if (!row.objectKey) {
     return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ เหลือแต่รูปย่อ" });
@@ -6575,12 +6614,14 @@ router.get("/:id/attachments/:attachmentId/file", requireAuth, async (req: AuthR
   if (!Number.isInteger(id) || !Number.isInteger(attachmentId)) {
     return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
   }
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  const [wo, row] = await Promise.all([
+    loadAttachableWorkOrder(req, res, id),
+    prisma.workOrderAttachment.findFirst({
+      where: { id: attachmentId, workOrderId: id },
+      select: { objectKey: true, kind: true, mimeType: true },
+    }),
+  ]);
   if (!wo) return;
-  const row = await prisma.workOrderAttachment.findFirst({
-    where: { id: attachmentId, workOrderId: id },
-    select: { objectKey: true, kind: true, mimeType: true },
-  });
   if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
   if (row.kind !== "DOCUMENT") return res.status(400).json({ error: "เปิดผ่านทางนี้ได้เฉพาะไฟล์ PDF" });
   if (!row.objectKey) return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ" });

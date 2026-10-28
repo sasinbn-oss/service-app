@@ -2,6 +2,7 @@
 # ทดสอบ: ไฟล์แนบโหลดไวขึ้น + เปิด PDF ในแอป (เจ้าของงานขอ ต.ค. 69)
 #   · GET /:id/attachments/links — ลิงก์ของทุกไฟล์ในคำขอเดียว · เปิดแต่ละลิงก์ได้ไฟล์ตรงกับที่อัป
 #   · GET /:id/attachments?have= — รูปย่อที่แอปจำไว้แล้วไม่ส่งซ้ำ (hasThumbnail ยังบอกว่ามี)
+#   · GET /:id/attachments ส่งลิงก์เปิดไฟล์มาด้วย (รอบสอง ต.ค. 69 — ไม่ต้องขอ /links แยก) · เปิดลิงก์ได้ไฟล์ตรงกับที่อัป
 #   · GET /:id/attachments/:aid/file — ทางสำรองของตัวแสดง PDF: ได้ไฟล์ PDF เดิมทุกไบต์ · รูปขอทางนี้ไม่ได้
 #   · หัวหน้าภาคนอกขอบเขตขอลิงก์/ไฟล์ไม่ได้ (403)
 # ยืนยันกับฐานข้อมูลและไฟล์จริง (CLAUDE.md)
@@ -49,6 +50,13 @@ R=$(curl -s "localhost:4000/api/work-orders/$W/attachments?have=$I1" -H "$(H $A)
 [ "$(curl -s "localhost:4000/api/work-orders/$W/attachments" -H "$(H $A)" | J 'd.rows.filter(r=>r.thumbnailDataUrl).length')" = "2" ] \
   && pass "ไม่ส่ง have = ส่งรูปย่อครบเหมือนเดิม (แอปรุ่นเก่ายังใช้ได้)" || fail "ไม่มี have แล้วรูปย่อหาย"
 
+echo "═══ ลิงก์มากับรายการไฟล์"
+R=$(curl -s "localhost:4000/api/work-orders/$W/attachments" -H "$(H $A)")
+[ "$(echo "$R" | J "d.rows.every(r=>/^http/.test(r.url))&&d.rows.length===3&&d.expiresInSeconds===7200")" = "true" ] \
+  && curl -s -o "$TMP/lp.pdf" "$(echo "$R" | J "d.rows.find(r=>r.id===$P1).url")" && cmp -s "$TMP/lp.pdf" "$SP/quote-2pages.pdf" \
+  && curl -s -o "$TMP/li.png" "$(echo "$R" | J "d.rows.find(r=>r.id===$I2).url")" && cmp -s "$TMP/li.png" "$SP/site-photo.png" \
+  && pass "รายการไฟล์มีลิงก์ครบ 3 ไฟล์ อายุ 2 ชั่วโมง · เปิดได้ไฟล์ตรงกับที่อัปทุกไบต์" || fail "ลิงก์ในรายการ: $(echo "$R" | J 'JSON.stringify(d.rows.map(r=>[r.id,!!r.url]))+" "+d.expiresInSeconds')"
+
 echo "═══ ทางสำรองของตัวแสดง PDF"
 [ "$(curl -s -o "$TMP/f.pdf" -w '%{http_code}|%{content_type}' "localhost:4000/api/work-orders/$W/attachments/$P1/file" -H "$(H $A)")" = "200|application/pdf" ] \
   && cmp -s "$TMP/f.pdf" "$SP/quote-2pages.pdf" && pass "PDF ผ่านเซิร์ฟเวอร์ได้ไฟล์เดิมทุกไบต์ (application/pdf)" || fail "file proxy"
@@ -59,6 +67,7 @@ echo "═══ ขอบเขต"
 DB "update \"User\" set region='ภาคที่ไม่มีจริง' where \"employeeCode\"='S001'" >/dev/null
 S=$(login S001)
 [ "$(CODE "localhost:4000/api/work-orders/$W/attachments/links" -H "$(H $S)")" = "403" ] && [ "$(CODE "localhost:4000/api/work-orders/$W/attachments/$P1/file" -H "$(H $S)")" = "403" ] \
-  && pass "หัวหน้าภาคนอกขอบเขต ขอลิงก์/ไฟล์ไม่ได้ (403)" || fail "นอกขอบเขตได้ลิงก์"
+  && [ "$(curl -s "localhost:4000/api/work-orders/$W/attachments" -H "$(H $S)" | J 'd.error && !d.rows ? "blocked" : "leak"')" = "blocked" ] \
+  && pass "หัวหน้าภาคนอกขอบเขต ขอรายการ/ลิงก์/ไฟล์ไม่ได้ (403 · รายการไม่หลุดออกมา)" || fail "นอกขอบเขตได้ลิงก์หรือรายการ"
 
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"
