@@ -7,6 +7,7 @@ import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { canViewAs } from "../utils/viewAs";
 import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay, AREA_TEAM_ROLES } from "../utils/constants";
+import { COCO_BRANCH } from "../utils/areaScope";
 import { forgetUser, passwordChanged, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
 import { coverageOf, teamGroups } from "../utils/teamGroups";
@@ -212,25 +213,61 @@ router.get("/view-as/logs", requireAuth, requireSuperAdmin, async (_req, res) =>
  * ต้องมีหน้านี้เพราะสายงานใบงานพึ่งบทบาท ถ้าตั้งหัวหน้าภาคไม่ได้ ใบงานจะค้าง
  * อยู่ขั้น "รอหัวหน้าภาคระบุอะไหล่" ตลอดไปโดยไม่มีใครมีสิทธิ์ทำต่อ
  */
+const MANAGED_USER_SELECT = {
+  id: true,
+  employeeCode: true,
+  name: true,
+  phone: true,
+  role: true,
+  region: true,
+  team: true,
+  supervisedTeams: true,
+  mustChangePassword: true,
+  createdAt: true,
+  maidBranches: { select: { branch: { select: { code: true, name: true } } }, orderBy: { branch: { code: "asc" } } },
+} as const;
+
+/** สาขาที่ Maid ประจำ ส่งเป็นรายการแบน ๆ — หน้าจอไม่ต้องรู้ว่ามีตารางเชื่อมอยู่ตรงกลาง */
+function managedUser<T extends { maidBranches: { branch: { code: string; name: string } }[] }>(u: T) {
+  return { ...u, maidBranches: u.maidBranches.map((m) => m.branch) };
+}
+
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
     where: { deletedAt: null },
-    select: {
-      id: true,
-      employeeCode: true,
-      name: true,
-      phone: true,
-      role: true,
-      region: true,
-      team: true,
-      supervisedTeams: true,
-      mustChangePassword: true,
-      createdAt: true,
-    },
+    select: MANAGED_USER_SELECT,
     orderBy: [{ role: "asc" }, { name: "asc" }],
   });
-  res.json(users);
+  res.json(users.map(managedUser));
 });
+
+/** สาขา COCO ที่ยังเปิดอยู่ — ตัวเลือก "สาขาที่ประจำ" ของ Maid (COCO) ในหน้าสิทธิ์ผู้ใช้ */
+router.get("/users/coco-branches", requireAuth, requireAdmin, async (_req, res) => {
+  const branches = await prisma.branch.findMany({
+    where: { AND: [COCO_BRANCH, { cancelledAt: null }] },
+    select: { code: true, name: true },
+    orderBy: { code: "asc" },
+  });
+  res.json(branches);
+});
+
+/**
+ * แปลงรหัสสาขาที่ Maid ประจำเป็น id — ต้องเป็นสาขา COCO ที่ยังเปิดอยู่
+ * สาขาที่ไม่ใช่ COCO ผูกไปก็ไม่มีผล (ขอบเขตกรองรหัส C อยู่แล้ว) บอกตั้งแต่ตอนบันทึกดีกว่าให้เงียบ
+ */
+async function maidBranchIds(codes: string[]): Promise<{ ids: number[] } | { error: string }> {
+  const wanted = [...new Set(codes.map((c) => c.trim().toUpperCase()).filter(Boolean))];
+  const found = await prisma.branch.findMany({
+    where: { code: { in: wanted, mode: "insensitive" }, cancelledAt: null },
+    select: { id: true, code: true },
+  });
+  const byCode = new Map(found.map((b) => [b.code.toUpperCase(), b]));
+  const missing = wanted.filter((c) => !byCode.has(c));
+  if (missing.length) return { error: `ไม่พบสาขา ${missing.join(", ")} (หรือปิดสาขาแล้ว)` };
+  const notCoco = wanted.filter((c) => !c.startsWith("C"));
+  if (notCoco.length) return { error: `${notCoco.join(", ")} ไม่ใช่สาขา COCO — Maid (COCO) ประจำได้เฉพาะสาขา COCO` };
+  return { ids: wanted.map((c) => byCode.get(c)!.id) };
+}
 
 
 /**
@@ -313,6 +350,8 @@ const createUserSchema = z.object({
   role: z.enum(ROLES).default("EMPLOYEE"),
   region: z.string().trim().max(120).nullable().optional(),
   password: z.string().min(MIN_PASSWORD, `รหัสตั้งต้นต้องยาวอย่างน้อย ${MIN_PASSWORD} ตัว`),
+  // รหัสสาขาที่ Maid (COCO) ประจำ — บทบาทอื่นไม่ใช้
+  maidBranches: z.array(z.string().trim().min(1).max(30)).max(50).optional(),
 });
 
 /**
@@ -343,10 +382,23 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
   if (ADMIN_ROLES.includes(body.role) && !(await canManageAdmins(req.auth!.userId))) {
     return res.status(403).json({ error: NEED_SUPER });
   }
+  // Area Team เข้าระบบด้วยชื่อผู้ใช้ตัวเล็ก (ล็อกอินแปลงเป็นตัวเล็กให้) — ช่องในฟอร์มขึ้นตัวใหญ่ให้เอง
+  // เก็บตัวใหญ่ไว้แล้วจะเข้าระบบไม่ได้เลย ทั้งที่พิมพ์ตรงกับที่แอดมินตั้ง
+  if (AREA_TEAM_ROLES.includes(body.role)) body.employeeCode = body.employeeCode.toLowerCase();
 
   const existing = await prisma.user.findUnique({ where: { employeeCode: body.employeeCode } });
   if (existing) {
     return res.status(409).json({ error: `ชื่อผู้ใช้ "${body.employeeCode}" มีอยู่แล้ว` });
+  }
+  // Maid ที่ไม่มีสาขาเข้าระบบแล้วเห็นหน้าว่างทุกหน้า โดยไม่รู้ว่าผิดที่บัญชี — บังคับเลือกตั้งแต่สร้าง
+  let maidIds: number[] = [];
+  if (body.role === "COCO_MAID") {
+    if (!body.maidBranches?.length) {
+      return res.status(400).json({ error: "Maid (COCO) ต้องเลือกสาขาที่ประจำอย่างน้อยหนึ่งสาขา" });
+    }
+    const r = await maidBranchIds(body.maidBranches);
+    if ("error" in r) return res.status(400).json({ error: r.error });
+    maidIds = r.ids;
   }
 
   const user = await prisma.user.create({
@@ -359,18 +411,11 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
       region: body.role === "SUPERVISOR" ? body.region || null : null,
       passwordHash: await bcrypt.hash(body.password, 10),
       mustChangePassword: true,
+      ...(maidIds.length ? { maidBranches: { create: maidIds.map((branchId) => ({ branchId })) } } : {}),
     },
-    select: {
-      id: true,
-      employeeCode: true,
-      name: true,
-      phone: true,
-      role: true,
-      region: true,
-      mustChangePassword: true,
-    },
+    select: MANAGED_USER_SELECT,
   });
-  res.status(201).json(user);
+  res.status(201).json(managedUser(user));
 });
 
 const resetSchema = z.object({
@@ -474,6 +519,8 @@ const userUpdateSchema = z.object({
     .optional(),
   name: z.string().trim().min(1, "ต้องใส่ชื่อ").max(120).optional(),
   phone: z.string().trim().max(30).nullable().optional(),
+  // สาขาที่ Maid (COCO) ประจำ — ส่งมาทั้งชุด (แทนที่ของเดิม)
+  maidBranches: z.array(z.string().trim().min(1).max(30)).max(50).optional(),
 });
 
 router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -528,39 +575,46 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     }
   }
 
-  const updated = await prisma.user.update({
-    where: { id },
-    data: {
-      ...(body.role !== undefined ? { role: body.role } : {}),
-      // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้ง
-      ...(body.region !== undefined ? { region: cleanName(body.region) } : {}),
-      ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null } : {}),
-      // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
-      ...(body.team !== undefined ? { team: cleanName(body.team) } : {}),
-      ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
-      ...(body.supervisedTeams !== undefined
-        ? { supervisedTeams: [...new Set(body.supervisedTeams.map(cleanName).filter((t): t is string => !!t))] }
-        : {}),
-      ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { supervisedTeams: [] } : {}),
-      ...(body.employeeCode !== undefined ? { employeeCode: body.employeeCode } : {}),
-      ...(body.name !== undefined ? { name: body.name } : {}),
-      ...(body.phone !== undefined ? { phone: body.phone || null } : {}),
+  const finalRole = body.role ?? target.role;
+  let maidIds: number[] | null = null;
+  if (body.maidBranches !== undefined) {
+    if (finalRole !== "COCO_MAID") return res.status(400).json({ error: "สาขาที่ประจำใช้กับ Maid (COCO) เท่านั้น" });
+    const r = await maidBranchIds(body.maidBranches);
+    if ("error" in r) return res.status(400).json({ error: r.error });
+    maidIds = r.ids;
+  }
+  // เปลี่ยนเป็นบทบาทอื่น → ล้างสาขาที่ประจำ ไม่งั้นเปลี่ยนกลับเป็น Maid ทีหลังจะเห็นสาขาเก่าที่ลืมไปแล้ว
+  const clearMaid = finalRole !== "COCO_MAID" && target.role === "COCO_MAID";
+
+  const updated = await prisma.$transaction(
+    async (tx) => {
+      if (maidIds !== null || clearMaid) await tx.cocoMaidBranch.deleteMany({ where: { userId: id } });
+      if (maidIds?.length) await tx.cocoMaidBranch.createMany({ data: maidIds.map((branchId) => ({ userId: id, branchId })) });
+      return tx.user.update({
+        where: { id },
+        data: {
+          ...(body.role !== undefined ? { role: body.role } : {}),
+          // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้ง
+          ...(body.region !== undefined ? { region: cleanName(body.region) } : {}),
+          ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null } : {}),
+          // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
+          ...(body.team !== undefined ? { team: cleanName(body.team) } : {}),
+          ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
+          ...(body.supervisedTeams !== undefined
+            ? { supervisedTeams: [...new Set(body.supervisedTeams.map(cleanName).filter((t): t is string => !!t))] }
+            : {}),
+          ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { supervisedTeams: [] } : {}),
+          ...(body.employeeCode !== undefined ? { employeeCode: body.employeeCode } : {}),
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.phone !== undefined ? { phone: body.phone || null } : {}),
+        },
+        select: MANAGED_USER_SELECT,
+      });
     },
-    select: {
-      id: true,
-      employeeCode: true,
-      name: true,
-      phone: true,
-      role: true,
-      region: true,
-      team: true,
-      supervisedTeams: true,
-      mustChangePassword: true,
-      createdAt: true,
-    },
-  });
+    { timeout: 30_000, maxWait: 15_000 }
+  );
   rememberUser(updated.id, updated.role as Role);
-  res.json(updated);
+  res.json(managedUser(updated));
 });
 
 /**

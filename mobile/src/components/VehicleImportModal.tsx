@@ -14,7 +14,8 @@ import Spinner from "./Spinner";
 import { fs } from "./FleetUI";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
-import { PickedFile, pickFile } from "../utils/filePicker";
+import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
 
 interface Row {
@@ -57,6 +58,8 @@ async function send(file: PickedFile, apply: boolean) {
   ).data;
 }
 
+const ACCEPT = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
 export default function VehicleImportModal({
   visible,
   onClose,
@@ -78,8 +81,9 @@ export default function VehicleImportModal({
     onClose();
   }
 
-  async function choose() {
-    const picked = await pickFile(".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  // given = ไฟล์ที่ลากมาวาง (FileDropZone) — ไม่ส่ง = เปิดหน้าต่างเลือกไฟล์
+  async function choose(given?: PickedFile | null) {
+    const picked = given !== undefined ? given : await pickFile(ACCEPT);
     if (!picked) return;
     setFile(picked);
     setPreview(null);
@@ -146,10 +150,13 @@ export default function VehicleImportModal({
         ไฟล์แบบ "รถช่าง Service" — ตอนรถบริษัท / รถเช่า / รถส่วนตัว และชีต Easy pass จับคู่รถเดิมด้วยทะเบียน
         เลข Fleet Card และ Easy Pass เห็นเฉพาะแอดมิน · รถส่วนตัวหัวหน้าภาคไม่นำเข้า
       </Text>
-      <TouchableOpacity style={[fs.btn, fs.btnGhost, { alignSelf: "flex-start" }]} onPress={choose} disabled={busy} accessibilityLabel="เลือกไฟล์รถ">
-        <Ionicons name="document-attach-outline" size={17} color={colors.navy} />
-        <Text style={fs.btnGhostText}>{file ? `เลือกไฟล์ใหม่ (${file.name})` : "เลือกไฟล์ .xlsx"}</Text>
-      </TouchableOpacity>
+      <FileDropZone hint="ไฟล์ .xlsx" disabled={busy} label="วางไฟล์รถ" onFiles={(files) => choose(droppedFile(files, ACCEPT))}>
+        <TouchableOpacity style={[fs.btn, fs.btnGhost, { alignSelf: "flex-start" }]} onPress={() => choose()} disabled={busy} accessibilityLabel="เลือกไฟล์รถ">
+          <Ionicons name="document-attach-outline" size={17} color={colors.navy} />
+          <Text style={fs.btnGhostText}>{file ? `เลือกไฟล์ใหม่ (${file.name})` : "เลือกไฟล์ .xlsx"}</Text>
+        </TouchableOpacity>
+        <DropHint text="หรือลากไฟล์มาวางตรงนี้" />
+      </FileDropZone>
       {busy && !preview ? <Spinner color={colors.primary} style={{ marginTop: spacing.md }} /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
 

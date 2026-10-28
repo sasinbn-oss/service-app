@@ -51,14 +51,19 @@ import { takeFresh } from "../utils/freshOrder";
 import ClaimMachineBox, { ClaimCheckDraft, claimMachineGaps, ClaimMachineSummary, PlateDraft } from "../components/ClaimMachineBox";
 import type { ClaimGuide } from "../utils/nameplate";
 import {
+  AcceptKinds,
   PickedAttachment,
+  asList,
+  filesToAttachments,
   pickImageAttachment,
   pickVideoAttachment,
+  pickVideoAttachments,
   uploadAttachment,
   attachmentIcon,
   pickPdfAttachments,
   pickImageAttachments,
 } from "../utils/attachments";
+import FileDropZone, { DropHint } from "../components/FileDropZone";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
 import { HomeStackParamList } from "../navigation/types";
@@ -2656,12 +2661,12 @@ function RollbackModal({
   }, [visible]);
 
   async function addFile(
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
   ) {
     setBusy("กำลังเตรียมไฟล์");
     try {
-      const file = await pick(setBusy);
-      if (file) setFiles((v) => [...v, file]);
+      const got = asList(await pick(setBusy));
+      if (got.length) setFiles((v) => [...v, ...got]);
     } catch (e) {
       showAlert("เตรียมไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -2766,39 +2771,47 @@ function RollbackModal({
         พาไปสู่การตัดสินใจคนละแบบ
       */}
       <Text style={styles.modalLabel}>รูป / วิดีโอที่เจอหน้างาน (ไม่บังคับ)</Text>
-      <FileStrip files={files} onChange={setFiles} />
-      {busy ? (
-        <View style={styles.slipRow}>
-          <Spinner color={colors.primary} size="small" />
-          <Text style={styles.linkedText}>{busy}…</Text>
-        </View>
-      ) : (
-        <View style={styles.options}>
-          {Platform.OS !== "web" ? (
+      <FileDropZone
+        hint="รูป · วิดีโอ"
+        disabled={!!busy}
+        label="วางรูปที่เจอหน้างาน"
+        onFiles={(dropped) => addFile((stage) => filesToAttachments(dropped, { image: true, video: true }, stage))}
+      >
+        <FileStrip files={files} onChange={setFiles} />
+        {busy ? (
+          <View style={styles.slipRow}>
+            <Spinner color={colors.primary} size="small" />
+            <Text style={styles.linkedText}>{busy}…</Text>
+          </View>
+        ) : (
+          <View style={styles.options}>
+            {Platform.OS !== "web" ? (
+              <TouchableOpacity
+                style={styles.option}
+                onPress={() => addFile((stage) => pickImageAttachment(true, stage))}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.optionText}>ถ่ายรูป</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               style={styles.option}
-              onPress={() => addFile((stage) => pickImageAttachment(true, stage))}
+              onPress={() => addFile(pickImageAttachments)}
               activeOpacity={0.7}
             >
-              <Text style={styles.optionText}>ถ่ายรูป</Text>
+              <Text style={styles.optionText}>เลือกรูป</Text>
             </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity
-            style={styles.option}
-            onPress={() => addFile((stage) => pickImageAttachment(false, stage))}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.optionText}>เลือกรูป</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.option}
-            onPress={() => addFile(pickVideoAttachment)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.optionText}>วิดีโอ</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+            <TouchableOpacity
+              style={styles.option}
+              onPress={() => addFile(pickVideoAttachments)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.optionText}>วิดีโอ</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {!busy ? <DropHint /> : null}
+      </FileDropZone>
 
       {/* ช่างเห็นของจริงว่าเสียตรงไหน จึงเลือกเองได้เลย ไม่ต้องรอให้ใครเดาแทน */}
       <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ขอเบิกเพิ่ม" />
@@ -4477,7 +4490,12 @@ function StageModal({
                 ) : null}
 
                 {skipQuote ? null : (
-                  <>
+                  <FileDropZone
+                    hint="รูปเอกสาร · PDF"
+                    disabled={!!busy}
+                    label={order.status === "AWAITING_QUOTE" ? "วางใบเสนอราคา" : "วางบิล"}
+                    onFiles={(dropped) => pickDoc((stage) => filesToAttachments(dropped, { image: true, pdf: true, doc: true }, stage))}
+                  >
                     <Text style={styles.modalLabel}>
                       {order.status === "AWAITING_QUOTE" ? "ใบเสนอราคา" : "บิลที่ลูกค้าจ่ายแล้ว"}
                     </Text>
@@ -4521,7 +4539,8 @@ function StageModal({
                         </TouchableOpacity>
                       </View>
                     )}
-                  </>
+                    {!busy ? <DropHint /> : null}
+                  </FileDropZone>
                 )}
 
                 {/*
@@ -5749,6 +5768,9 @@ function CloseModal({
       setBusy(null);
     }
   }
+  /** ช่องที่เก็บไฟล์เดียว (ใบเหลือง · หลักฐานเคลมแต่ละอย่าง) — ลากมาหลายไฟล์เก็บไฟล์แรก */
+  const dropOne = (files: File[], accept: AcceptKinds, keep: (file: PickedAttachment) => void) =>
+    pickOne(async (stage) => (await filesToAttachments(files.slice(0, 1), accept, stage))[0] ?? null, keep);
 
   async function submit() {
     setSaving(true);
@@ -5920,11 +5942,13 @@ function CloseModal({
                 {
                   label: "วิดีโอ",
                   icon: "videocam-outline",
-                  onPress: () => pickFor(role, (stage) => pickVideoAttachment(stage), add),
+                  onPress: () => pickFor(role, pickVideoAttachments, add),
                   accessibilityLabel: `เลือกวิดีโอ${label}`,
                 },
               ]}
-              footLeft="เลือกจากอัลบั้มได้หลายรูปพร้อมกัน · วิดีโอไม่เกิน 60 วินาที"
+              footLeft="เลือกได้หลายรูป/หลายคลิปพร้อมกัน · วิดีโอไม่เกิน 60 วินาที"
+              dropHint="รูป · วิดีโอ"
+              onDropFiles={(files) => pickFor(role, (stage) => filesToAttachments(files, { image: true, video: true }, stage), add)}
             >
               {already > 0 ? <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text> : null}
               <FileStrip files={[...list]} onChange={(next) => setList(next)} />
@@ -5969,6 +5993,11 @@ function CloseModal({
               onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
               accessibilityLabel: "เลือกรูปป้ายรุ่น",
             }}
+            // ป้ายรุ่นใช้รูปเดียว — ลากมาหลายรูปเก็บรูปแรก
+            dropHint="รูปป้ายรุ่น 1 รูป"
+            onDropFiles={(files) =>
+              pickFor("NAMEPLATE", (stage) => filesToAttachments(files.slice(0, 1), { image: true, doc: true }, stage), (f) => setNameplate(f[0] ?? null))
+            }
           >
             {nameplate ? (
               <FileStrip files={[nameplate]} onChange={(next) => setNameplate(next[0] ?? null)} />
@@ -6134,54 +6163,62 @@ function CloseModal({
       */}
       {parts.length > 0 ? (
         <>
-          <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
-          {order.hasRequisitionSlip && !slip ? (
-            <Text style={styles.linkedText}>
-              แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
-            </Text>
-          ) : null}
-          {slip ? (
-            <View style={styles.slipRow}>
-              {slip.thumbnailUri ? (
-                <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
-              ) : (
-                <View style={[styles.slipThumb, styles.slipBlank]}>
-                  <Ionicons name="document-outline" size={22} color={colors.textFaint} />
-                </View>
-              )}
-              <TouchableOpacity
-                onPress={() => setSlip(null)}
-                accessibilityLabel="เอารูปใบเหลืองออก"
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="close-circle" size={20} color={colors.textFaint} />
-              </TouchableOpacity>
-            </View>
-          ) : busy ? (
-            <View style={styles.slipRow}>
-              <Spinner color={colors.primary} size="small" />
-              <Text style={styles.linkedText}>{busy}…</Text>
-            </View>
-          ) : (
-            <View style={styles.options}>
-              {Platform.OS !== "web" ? (
+          <FileDropZone
+            hint="รูปใบเหลือง 1 รูป"
+            disabled={!!busy}
+            label="วางรูปใบเหลือง"
+            onFiles={(files) => dropOne(files, { image: true, doc: true }, setSlip)}
+          >
+            <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
+            {order.hasRequisitionSlip && !slip ? (
+              <Text style={styles.linkedText}>
+                แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
+              </Text>
+            ) : null}
+            {slip ? (
+              <View style={styles.slipRow}>
+                {slip.thumbnailUri ? (
+                  <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
+                ) : (
+                  <View style={[styles.slipThumb, styles.slipBlank]}>
+                    <Ionicons name="document-outline" size={22} color={colors.textFaint} />
+                  </View>
+                )}
+                <TouchableOpacity
+                  onPress={() => setSlip(null)}
+                  accessibilityLabel="เอารูปใบเหลืองออก"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+                </TouchableOpacity>
+              </View>
+            ) : busy ? (
+              <View style={styles.slipRow}>
+                <Spinner color={colors.primary} size="small" />
+                <Text style={styles.linkedText}>{busy}…</Text>
+              </View>
+            ) : (
+              <View style={styles.options}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity
+                    style={styles.option}
+                    onPress={() => pickOne((stage) => pickImageAttachment(true, stage, { doc: true }), setSlip)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity
                   style={styles.option}
-                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage, { doc: true }), setSlip)}
+                  onPress={() => pickOne((stage) => pickImageAttachment(false, stage, { doc: true }), setSlip)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
+                  <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
                 </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                style={styles.option}
-                onPress={() => pickOne((stage) => pickImageAttachment(false, stage, { doc: true }), setSlip)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+              </View>
+            )}
+            {!slip && !busy ? <DropHint text="หรือลากรูปใบเหลืองมาวางตรงนี้" /> : null}
+          </FileDropZone>
           {slipMissing ? (
             <Text style={styles.warn}>
               ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
@@ -6289,7 +6326,14 @@ function CloseModal({
                           return { ...all, [p.sparePartId]: { ...cur, files: { ...cur.files, [e.role]: f } } };
                         });
                       return (
-                        <View key={e.role} style={styles.claimSlot}>
+                        <FileDropZone
+                          key={e.role}
+                          style={styles.claimSlot}
+                          hint={e.video ? "วิดีโอ 1 คลิป" : "รูป 1 รูป"}
+                          disabled={!!busy || !!picked}
+                          label={`วาง${e.label} ${p.partCode}`}
+                          onFiles={(files) => dropOne(files, e.video ? { video: true } : { image: true }, keep)}
+                        >
                           <Ionicons
                             name={picked || already ? "checkmark-circle" : "ellipse-outline"}
                             size={18}
@@ -6340,7 +6384,7 @@ function CloseModal({
                               </TouchableOpacity>
                             </View>
                           )}
-                        </View>
+                        </FileDropZone>
                       );
                     })}
                     <Text style={styles.claimHeader}>รูป Nameplate ใช้รูปป้ายรุ่นด้านบน</Text>

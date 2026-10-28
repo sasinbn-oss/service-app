@@ -6,7 +6,7 @@ import { cleanName } from "../utils/names";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
-import { AREA_OUT_OF_SCOPE, areaBranchWhere, areaCoversBranch, isAreaTeam } from "../utils/areaScope";
+import { AREA_OUT_OF_SCOPE, areaBranchSelect, areaBranchWhere, areaCoversBranch, isAreaTeam } from "../utils/areaScope";
 import { resolveMapLink } from "../utils/mapLink";
 import { applyTeamAliases } from "../utils/teamAliases";
 import { applyBranchPins, pinBranchField, recordTeamMove } from "../utils/branchPins";
@@ -396,7 +396,7 @@ router.get("/teams", requireAuth, async (_req, res) => {
 /** Area Team ดูข้อมูลได้เฉพาะสาขาที่ตัวเองเห็น — คืน true เมื่อ "ห้าม" และตอบ 403 ให้แล้ว */
 async function blockedForArea(req: AuthRequest, res: Response) {
   if (!isAreaTeam(req.auth)) return false;
-  const b = await prisma.branch.findUnique({ where: { code: req.params.code }, select: { code: true, cocoSupervisorId: true } });
+  const b = await prisma.branch.findUnique({ where: { code: req.params.code }, select: areaBranchSelect(req.auth) });
   if (b && areaCoversBranch(req.auth!, b)) return false;
   res.status(403).json({ error: AREA_OUT_OF_SCOPE });
   return true;

@@ -27,6 +27,7 @@ import { colors, headingFont, radius, shadow } from "../theme";
 import AreaMap, { ChartKind, ChartSwitch } from "../components/AreaMap";
 import { CallButton, PhoneLine, phoneDigits } from "../components/PhoneLink";
 import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 
 interface TeamInfo {
   name: string;
@@ -224,7 +225,7 @@ export default function CoverageMapScreen() {
   const { user } = useAuth();
   const narrow = useWindowDimensions().width < 700;
   // ทีม Area เปิดมาเจอผังฝั่งตัวเองก่อน — ผังฝ่ายบริการยังกดสลับไปดูได้
-  const [which, setWhich] = useState<ChartKind>(user?.role === "AREA" || user?.role === "COCO_SUPERVISOR" ? "area" : "service");
+  const [which, setWhich] = useState<ChartKind>(isAreaTeam(user) ? "area" : "service");
   const [areaEditing, setAreaEditing] = useState(false);
   const areaReload = useRef<(() => Promise<void>) | null>(null);
   const [data, setData] = useState<MapData | null>(null);

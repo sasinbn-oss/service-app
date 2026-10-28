@@ -30,11 +30,15 @@ import { isAreaTeam } from "../utils/areaTeam";
 import {
   MAX_ATTACHMENTS,
   PickedAttachment,
+  asList,
+  filesToAttachments,
   pickImageAttachment,
-  pickVideoAttachment,
+  pickImageAttachments,
+  pickVideoAttachments,
   uploadAttachment,
   attachmentIcon,
 } from "../utils/attachments";
+import FileDropZone, { DropHint } from "../components/FileDropZone";
 import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
@@ -412,7 +416,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   async function addFile(
     row: MachineRow,
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
   ) {
     if (row.files.length >= MAX_ATTACHMENTS) {
       showAlert(`แนบได้ไม่เกิน ${MAX_ATTACHMENTS} ไฟล์ต่อเครื่อง`, "ลบไฟล์ที่ไม่ต้องการออกก่อน");
@@ -420,10 +424,16 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     }
     setBusy("กำลังเตรียมไฟล์");
     try {
-      const file = await pick(setBusy);
-      if (file) {
+      const got = asList(await pick(setBusy));
+      // เลือกมาหลายไฟล์จนเกินเพดาน — เก็บเท่าที่ใส่ได้แล้วบอก ไม่ทิ้งทั้งชุด
+      const room = MAX_ATTACHMENTS - row.files.length;
+      if (got.length > room) {
+        showAlert(`แนบได้ไม่เกิน ${MAX_ATTACHMENTS} ไฟล์ต่อเครื่อง`, `เก็บไว้ ${room} ไฟล์แรก จากที่เลือก ${got.length} ไฟล์`);
+      }
+      const keep = got.slice(0, room);
+      if (keep.length) {
         setRows((current) =>
-          current.map((r) => (r.key === row.key ? { ...r, files: [...r.files, file] } : r))
+          current.map((r) => (r.key === row.key ? { ...r, files: [...r.files, ...keep] } : r))
         );
       }
     } catch (e) {
@@ -441,11 +451,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    */
   async function addNameplate(
     row: MachineRow,
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
   ) {
     setBusy("กำลังเตรียมรูปป้ายรุ่น");
     try {
-      const file = await pick(setBusy);
+      const file = asList(await pick(setBusy))[0];
       if (file) {
         setRows((current) => current.map((r) => (r.key === row.key ? { ...r, nameplate: file } : r)));
       }
@@ -1103,10 +1113,10 @@ function MachineCard({
   onChange: (patch: Partial<MachineRow>) => void;
   onRemove: () => void;
   onAddFile: (
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
   ) => void;
   onAddNameplate: (
-    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>
+    pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
   ) => void;
 }) {
   const code = row.code.trim().toUpperCase();
@@ -1184,49 +1194,57 @@ function MachineCard({
             เอาไว้ย้อนดูตอนสงสัยว่าใส่รุ่นถูกหรือเปล่า ซึ่งเกิดขึ้นตอนสั่งอะไหล่
             แล้วของมาไม่ตรง ไม่ใช่ตอนเปิดใบงาน
           */}
-          <Text style={styles.subLabel}>รูปป้ายรุ่น (ไม่บังคับ)</Text>
-          {row.nameplate ? (
-            <View style={styles.files}>
-              <View style={styles.file}>
-                {row.nameplate.thumbnailUri ? (
-                  <Image source={{ uri: row.nameplate.thumbnailUri }} style={styles.thumb} />
-                ) : (
-                  <View style={[styles.thumb, styles.thumbBlank]}>
-                    <Ionicons name="image-outline" size={24} color={colors.textFaint} />
-                  </View>
-                )}
-                <TouchableOpacity
-                  style={styles.removeFile}
-                  onPress={() => onChange({ nameplate: null })}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`ลบรูปป้ายรุ่นของเครื่องที่ ${index + 1}`}
-                >
-                  <Ionicons name="close" size={13} color="#fff" />
-                </TouchableOpacity>
+          <FileDropZone
+            hint="รูปป้ายรุ่น 1 รูป"
+            disabled={!!busy}
+            label={`วางรูปป้ายรุ่นของเครื่องที่ ${index + 1}`}
+            // ป้ายรุ่นช่องเดียวต่อเครื่อง — ลากมาหลายรูปเก็บรูปแรก
+            onFiles={(files) => onAddNameplate((stage) => filesToAttachments(files.slice(0, 1), { image: true, doc: true }, stage))}
+          >
+            <Text style={styles.subLabel}>รูปป้ายรุ่น (ไม่บังคับ)</Text>
+            {row.nameplate ? (
+              <View style={styles.files}>
+                <View style={styles.file}>
+                  {row.nameplate.thumbnailUri ? (
+                    <Image source={{ uri: row.nameplate.thumbnailUri }} style={styles.thumb} />
+                  ) : (
+                    <View style={[styles.thumb, styles.thumbBlank]}>
+                      <Ionicons name="image-outline" size={24} color={colors.textFaint} />
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={styles.removeFile}
+                    onPress={() => onChange({ nameplate: null })}
+                    activeOpacity={0.7}
+                    accessibilityLabel={`ลบรูปป้ายรุ่นของเครื่องที่ ${index + 1}`}
+                  >
+                    <Ionicons name="close" size={13} color="#fff" />
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
-          ) : busy ? null : (
-            <View style={styles.fileButtons}>
-              {Platform.OS !== "web" ? (
+            ) : busy ? null : (
+              <View style={styles.fileButtons}>
+                {Platform.OS !== "web" ? (
+                  <TouchableOpacity
+                    style={styles.fileButton}
+                    onPress={() => onAddNameplate((stage) => pickImageAttachment(true, stage, { doc: true }))}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="camera-outline" size={16} color={colors.primary} />
+                    <Text style={styles.fileButtonText}>ถ่ายป้ายรุ่น</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity
                   style={styles.fileButton}
-                  onPress={() => onAddNameplate((stage) => pickImageAttachment(true, stage, { doc: true }))}
+                  onPress={() => onAddNameplate((stage) => pickImageAttachment(false, stage, { doc: true }))}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="camera-outline" size={16} color={colors.primary} />
-                  <Text style={styles.fileButtonText}>ถ่ายป้ายรุ่น</Text>
+                  <Ionicons name="images-outline" size={16} color={colors.primary} />
+                  <Text style={styles.fileButtonText}>เลือกรูปป้ายรุ่น</Text>
                 </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                style={styles.fileButton}
-                onPress={() => onAddNameplate((stage) => pickImageAttachment(false, stage, { doc: true }))}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="images-outline" size={16} color={colors.primary} />
-                <Text style={styles.fileButtonText}>เลือกรูปป้ายรุ่น</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+              </View>
+            )}
+          </FileDropZone>
         </>
       ) : null}
 
@@ -1288,75 +1306,83 @@ function MachineCard({
 
         ไฟล์ยังไม่ถูกส่งตอนนี้ รอจนใบงานถูกบันทึกและได้เลขก่อน
       */}
-      <Text style={fromBoard ? styles.label : styles.subLabel}>รูป / วิดีโอหน้างาน {photoRequired ? "(อย่างน้อย 1 รูป)" : "(ไม่บังคับ)"}</Text>
-      {row.files.length > 0 ? (
-        <View style={styles.files}>
-          {row.files.map((file, n) => (
-            <View key={`${file.name}-${n}`} style={styles.file}>
-              {file.thumbnailUri ? (
-                <Image source={{ uri: file.thumbnailUri }} style={styles.thumb} />
-              ) : (
-                <View style={[styles.thumb, styles.thumbBlank]}>
-                  <Ionicons
-                    name={attachmentIcon(file.kind)}
-                    size={24}
-                    color={colors.textFaint}
-                  />
-                </View>
-              )}
-              {file.kind === "VIDEO" ? (
-                <View style={styles.playBadge}>
-                  <Ionicons name="play" size={12} color="#fff" />
-                </View>
-              ) : null}
-              <TouchableOpacity
-                style={styles.removeFile}
-                onPress={() => onChange({ files: row.files.filter((_, k) => k !== n) })}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="close" size={13} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          ))}
-        </View>
-      ) : null}
+      <FileDropZone
+        hint="รูป · วิดีโอ"
+        disabled={!!busy}
+        label={`วางรูปหน้างานของเครื่องที่ ${index + 1}`}
+        onFiles={(files) => onAddFile((stage) => filesToAttachments(files, { image: true, video: true }, stage))}
+      >
+        <Text style={fromBoard ? styles.label : styles.subLabel}>รูป / วิดีโอหน้างาน {photoRequired ? "(อย่างน้อย 1 รูป)" : "(ไม่บังคับ)"}</Text>
+        {row.files.length > 0 ? (
+          <View style={styles.files}>
+            {row.files.map((file, n) => (
+              <View key={`${file.name}-${n}`} style={styles.file}>
+                {file.thumbnailUri ? (
+                  <Image source={{ uri: file.thumbnailUri }} style={styles.thumb} />
+                ) : (
+                  <View style={[styles.thumb, styles.thumbBlank]}>
+                    <Ionicons
+                      name={attachmentIcon(file.kind)}
+                      size={24}
+                      color={colors.textFaint}
+                    />
+                  </View>
+                )}
+                {file.kind === "VIDEO" ? (
+                  <View style={styles.playBadge}>
+                    <Ionicons name="play" size={12} color="#fff" />
+                  </View>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.removeFile}
+                  onPress={() => onChange({ files: row.files.filter((_, k) => k !== n) })}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="close" size={13} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        ) : null}
 
-      {busy ? (
-        <View style={styles.busyRow}>
-          <Spinner color={colors.primary} size="small" />
-          <Text style={styles.busyText}>{busy}…</Text>
-        </View>
-      ) : (
-        <View style={styles.fileButtons}>
-          {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ */}
-          {Platform.OS !== "web" ? (
+        {busy ? (
+          <View style={styles.busyRow}>
+            <Spinner color={colors.primary} size="small" />
+            <Text style={styles.busyText}>{busy}…</Text>
+          </View>
+        ) : (
+          <View style={styles.fileButtons}>
+            {/* กล้องเฉพาะบนมือถือ — คนที่เปิดจากคอมพิวเตอร์คือแอดมินที่นั่งโต๊ะ */}
+            {Platform.OS !== "web" ? (
+              <TouchableOpacity
+                style={styles.fileButton}
+                onPress={() => onAddFile((stage) => pickImageAttachment(true, stage))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="camera-outline" size={16} color={colors.primary} />
+                <Text style={styles.fileButtonText}>ถ่ายรูป</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               style={styles.fileButton}
-              onPress={() => onAddFile((stage) => pickImageAttachment(true, stage))}
+              onPress={() => onAddFile(pickImageAttachments)}
               activeOpacity={0.8}
             >
-              <Ionicons name="camera-outline" size={16} color={colors.primary} />
-              <Text style={styles.fileButtonText}>ถ่ายรูป</Text>
+              <Ionicons name="images-outline" size={16} color={colors.primary} />
+              <Text style={styles.fileButtonText}>เลือกรูป</Text>
             </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity
-            style={styles.fileButton}
-            onPress={() => onAddFile((stage) => pickImageAttachment(false, stage))}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="images-outline" size={16} color={colors.primary} />
-            <Text style={styles.fileButtonText}>เลือกรูป</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.fileButton}
-            onPress={() => onAddFile(pickVideoAttachment)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="videocam-outline" size={16} color={colors.primary} />
-            <Text style={styles.fileButtonText}>วิดีโอ</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+            <TouchableOpacity
+              style={styles.fileButton}
+              onPress={() => onAddFile(pickVideoAttachments)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="videocam-outline" size={16} color={colors.primary} />
+              <Text style={styles.fileButtonText}>วิดีโอ</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {!busy ? <DropHint /> : null}
+      </FileDropZone>
     </View>
   );
 }

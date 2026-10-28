@@ -11,7 +11,8 @@ import { Image, Platform, StyleSheet, Text, View } from "react-native";
 import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
-import { PickedAttachment, pickImageAttachment } from "../utils/attachments";
+import { PickedAttachment, asList, filesToAttachments, pickImageAttachment, pickImageAttachments } from "../utils/attachments";
+import FileDropZone from "./FileDropZone";
 import { showAlert } from "../utils/alert";
 import { uploadVehiclePhoto } from "../utils/vehicles";
 import { WasherIcon } from "./Spinner";
@@ -94,20 +95,38 @@ export default forwardRef<
     }
   }
 
-  async function pick(key: number | "new", fromCamera: boolean) {
-    const file = await pickImageAttachment(fromCamera);
-    if (!file) return;
-    let target = key;
-    if (target === "new") {
-      if (latest.current.length >= max) return showAlert("รูปเต็มแล้ว", `เพิ่มรูปได้สูงสุด ${max} รูป`);
-      const s: Slot = { key: seq++, label: "รูปเพิ่มเติม", file: null, status: "empty", id: null };
-      commit([...latest.current, s]);
-      target = s.key;
-    } else {
-      const old = latest.current.find((s) => s.key === key);
+  /**
+   * ใส่รูปลงช่อง — เลือก/ลากมาหลายรูปพร้อมกันได้ (เจ้าของงานขอ ต.ค. 69)
+   * key = ช่องที่แตะ: รูปแรกลงช่องนั้น ที่เหลือลงช่องว่างถัดไปตามลำดับ
+   * "new" = ปุ่มเพิ่มรูป: เป็นรูปเพิ่มเติมทั้งหมด · "auto" = ลากมาวาง: เติมช่องว่างก่อน แล้วค่อยเป็นรูปเพิ่มเติม
+   * เกินเพดานบอกว่ากี่รูปที่ไม่ได้ใส่ ไม่ทิ้งทั้งชุด
+   */
+  function place(files: PickedAttachment[], key: number | "new" | "auto") {
+    let next = latest.current;
+    const targets: number[] = [];
+    if (typeof key === "number") {
+      const old = next.find((s) => s.key === key);
       if (old?.id) discard(old.id);
+      targets.push(key);
     }
-    upload(target as number, file);
+    if (key !== "new") {
+      for (const s of next) if (targets.length < files.length && !s.file && !targets.includes(s.key)) targets.push(s.key);
+    }
+    while (targets.length < files.length && next.length < max) {
+      const s: Slot = { key: seq++, label: "รูปเพิ่มเติม", file: null, status: "empty", id: null };
+      next = [...next, s];
+      targets.push(s.key);
+    }
+    if (next !== latest.current) commit(next);
+    if (files.length > targets.length) {
+      showAlert("รูปเต็มแล้ว", `เพิ่มรูปได้สูงสุด ${max} รูป — ไม่ได้ใส่ ${files.length - targets.length} รูป`);
+    }
+    targets.forEach((k, i) => upload(k, files[i]));
+  }
+
+  async function pick(key: number | "new", fromCamera: boolean) {
+    const files = fromCamera ? asList(await pickImageAttachment(true)) : await pickImageAttachments();
+    if (files.length) place(files, key);
   }
 
   function choose(key: number | "new") {
@@ -133,7 +152,12 @@ export default forwardRef<
   const done = slots.filter((s) => s.status === "done").length;
 
   return (
-    <View style={{ gap: spacing.sm }}>
+    <FileDropZone
+      style={{ gap: spacing.sm }}
+      hint="รูป"
+      label="วางรูปรถ"
+      onFiles={(files) => filesToAttachments(files, { image: true }).then((got) => got.length && place(got, "auto"))}
+    >
       <View style={styles.head}>
         <Ionicons name="camera-outline" size={18} color={colors.text} />
         <Text style={styles.count}>
@@ -151,7 +175,9 @@ export default forwardRef<
       </View>
       <Text style={[styles.status, failed ? styles.statusBad : done && !busy ? styles.statusOk : null]}>
         {!count
-          ? "แตะช่องเพื่อถ่ายรูปหรือเลือกจากอัลบั้ม — รูปอัปโหลดทันทีเบื้องหลัง"
+          ? Platform.OS === "web"
+            ? "แตะช่องเพื่อเลือกรูป (หลายรูปพร้อมกันได้) หรือลากรูปมาวาง — รูปอัปโหลดทันทีเบื้องหลัง"
+            : "แตะช่องเพื่อถ่ายรูปหรือเลือกจากอัลบั้ม (หลายรูปพร้อมกันได้) — รูปอัปโหลดทันทีเบื้องหลัง"
           : failed
             ? `อัปไม่สำเร็จ ${failed} รูป — แตะรูปสีแดงเพื่อลองใหม่`
             : busy
@@ -208,7 +234,7 @@ export default forwardRef<
           </TouchableOpacity>
         ) : null}
       </View>
-    </View>
+    </FileDropZone>
   );
 });
 

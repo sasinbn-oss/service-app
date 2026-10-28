@@ -8,7 +8,7 @@
  * ความจริงว่าเครื่องกลับมาหรือยัง ช่างปิดงานแล้วเครื่องยังไม่กลับมาก็มี
  * และต้องเห็นว่าเป็นแบบนั้น ไม่ใช่กลบด้วยการปิดเคสให้อัตโนมัติ
  */
-import { AREA_OUT_OF_SCOPE, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
+import { AREA_BRANCH_SELECT, AREA_OUT_OF_SCOPE, areaBranchSelect, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router, Response } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -1136,8 +1136,15 @@ type ViewableWorkOrder = {
   assignedTeam: string | null;
   assignedToId: number | null;
   createdById: number | null;
-  /** code/cocoSupervisorId ใช้เช็ค Area Team — อ่านมากับใบงานแล้วไม่ต้องถามซ้ำ (ไม่มีก็ถามเอง) */
-  branch: { region: string | null; zone: string | null; pmTeam: string | null; code?: string; cocoSupervisorId?: number | null };
+  /** code/cocoSupervisorId/cocoMaids ใช้เช็ค Area Team — อ่านมากับใบงานแล้วไม่ต้องถามซ้ำ (ไม่มีก็ถามเอง) */
+  branch: {
+    region: string | null;
+    zone: string | null;
+    pmTeam: string | null;
+    code?: string;
+    cocoSupervisorId?: number | null;
+    cocoMaids?: { userId: number }[];
+  };
 };
 
 /**
@@ -1172,11 +1179,12 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
   const me = req.auth!.userId;
   if (wo.assignedToId === me || wo.createdById === me) return false;
   if (isAreaTeam(req.auth)) {
-    const { code, cocoSupervisorId } = wo.branch;
+    const { code, cocoSupervisorId, cocoMaids } = wo.branch;
+    // รายชื่อ Maid ของสาขาไม่ได้อ่านมากับใบงาน (คำสั่งแยกอีกรอบ — ดู areaBranchSelect) ถามเพิ่มเฉพาะ Maid
     const b =
-      code !== undefined && cocoSupervisorId !== undefined
-        ? { branch: { code, cocoSupervisorId } }
-        : await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: { code: true, cocoSupervisorId: true } } } });
+      code !== undefined && cocoSupervisorId !== undefined && (cocoMaids !== undefined || role !== "COCO_MAID")
+        ? { branch: { code, cocoSupervisorId, cocoMaids } }
+        : await prisma.workOrder.findUnique({ where: { id: wo.id }, select: { branch: { select: AREA_BRANCH_SELECT } } });
     if (b && areaCoversBranch(req.auth!, b.branch)) return false;
     res.status(403).json({ error: AREA_OUT_OF_SCOPE });
     return true;
@@ -2414,7 +2422,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 
   const branch = await prisma.branch.findUnique({
     where: { code: body.branchCode },
-    select: { id: true, code: true, cancelledAt: true, cocoSupervisorId: true },
+    select: { id: true, cancelledAt: true, ...areaBranchSelect(req.auth) },
   });
   if (!branch) return res.status(404).json({ error: `ไม่พบสาขา ${body.branchCode}` });
   if (branch.cancelledAt) {

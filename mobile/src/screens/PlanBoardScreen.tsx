@@ -426,6 +426,8 @@ export default function PlanBoardScreen({ navigation }: Props) {
               ? "สาขา COCO ทั้งหมด"
               : user?.role === "COCO_SUPERVISOR"
               ? "สาขาที่ดูแล"
+              : user?.role === "COCO_MAID"
+              ? "สาขาที่ประจำ"
               : "ทุกภาค"}
           </Text>
         </View>

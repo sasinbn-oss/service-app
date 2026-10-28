@@ -21,7 +21,8 @@ import DateField, { thaiDate } from "../components/DateField";
 import { fs, Notice, Tag } from "../components/FleetUI";
 import { useCachedState } from "../utils/pageCache";
 import { showAlert } from "../utils/alert";
-import { pickImageAttachment, PickedAttachment } from "../utils/attachments";
+import { filesToAttachments, pickImageAttachment, PickedAttachment } from "../utils/attachments";
+import FileDropZone from "../components/FileDropZone";
 import { fmtNum, openSigned, postImageForm } from "../utils/vehicles";
 import { colors, headingFont, radius, shadow } from "../theme";
 import { useDocked } from "../components/SideMenu";
@@ -1071,6 +1072,11 @@ function InfoForm({
   );
 }
 
+/** รูปเอกสาร/ใบเสร็จที่ลากมาวาง (เว็บ) — ช่องละรูปเดียว ลากมาหลายรูปใช้รูปแรก */
+async function droppedImage(files: File[]): Promise<PickedAttachment | null> {
+  return (await filesToAttachments(files.slice(0, 1), { image: true, doc: true }))[0] ?? null;
+}
+
 /**
  * เลือกรูปจากกล้องหรืออัลบั้ม — บนเว็บเปิดตัวเลือกไฟล์ (ซึ่งมีปุ่มกล้องของมือถือในตัว)
  * ใช้กับเอกสารรถและใบเสร็จ — ความละเอียดแบบเอกสาร (utils/attachments DOC_MAX_WIDTH) ตัวเลขในใบอ่านออก
@@ -1104,8 +1110,8 @@ function DocsTab({ vehicle, fleet, onChanged }: { vehicle: FleetVehicle; fleet: 
   }, [vehicle.id]);
   useEffect(load, [load]);
 
-  async function upload(kind: string) {
-    const file = await chooseImage();
+  async function upload(kind: string, given?: PickedAttachment | null) {
+    const file = given === undefined ? await chooseImage() : given;
     if (!file) return;
     try {
       await postImageForm(`/vehicles/${vehicle.id}/docs`, file, { kind }, "กำลังอัปโหลดเอกสาร...");
@@ -1124,7 +1130,13 @@ function DocsTab({ vehicle, fleet, onChanged }: { vehicle: FleetVehicle; fleet: 
         {fleet.docKinds.map((k) => {
           const d = docs.find((x) => x.kind === k.value);
           return (
-            <View key={k.value} style={[fs.card, { flexGrow: 1, flexBasis: 160, padding: 12 }]}>
+            <FileDropZone
+              key={k.value}
+              style={[fs.card, { flexGrow: 1, flexBasis: 160, padding: 12 }]}
+              hint="รูปเอกสาร 1 รูป"
+              label={`วาง${k.label}`}
+              onFiles={async (files) => upload(k.value, await droppedImage(files))}
+            >
               <Text style={fs.bold}>{k.label}</Text>
               <TouchableOpacity
                 style={{ height: 110, borderRadius: radius.md, backgroundColor: colors.tile, overflow: "hidden", alignItems: "center", justifyContent: "center" }}
@@ -1142,7 +1154,7 @@ function DocsTab({ vehicle, fleet, onChanged }: { vehicle: FleetVehicle; fleet: 
               <TouchableOpacity style={[fs.btn, fs.btnGhost, fs.small]} onPress={() => upload(k.value)}>
                 <Text style={fs.btnGhostText}>{d ? "เปลี่ยนรูป" : "อัปโหลด"}</Text>
               </TouchableOpacity>
-            </View>
+            </FileDropZone>
           );
         })}
       </View>
@@ -1260,13 +1272,18 @@ function MaintTab({ vehicle, fleet, onChanged }: { vehicle: FleetVehicle; fleet:
             <Field label="ร้าน / ศูนย์" value={f.shop} onChange={set("shop")} />
           </View>
           <Field label="รายละเอียด" value={f.detail} onChange={set("detail")} grow={false} placeholder="เช่น เปลี่ยนผ้าเบรกหน้า" />
-          <View style={fs.row}>
+          <FileDropZone
+            style={fs.row}
+            hint="รูปใบเสร็จ 1 รูป"
+            label="วางรูปใบเสร็จ"
+            onFiles={async (files) => setFile((await droppedImage(files)) ?? file)}
+          >
             <TouchableOpacity style={[fs.btn, fs.btnGhost, fs.small]} onPress={async () => setFile((await chooseImage()) ?? file)}>
               <Ionicons name="camera-outline" size={16} color={colors.navy} />
               <Text style={fs.btnGhostText}>{file ? "เปลี่ยนรูปใบเสร็จ" : "แนบรูปใบเสร็จ (ไม่บังคับ)"}</Text>
             </TouchableOpacity>
             {file ? <Image source={{ uri: file.thumbnailUri ?? file.uri }} style={{ width: 54, height: 42, borderRadius: 6 }} /> : null}
-          </View>
+          </FileDropZone>
           {vehicle.maintNote ? (
             <TouchableOpacity style={fs.row} onPress={() => setClearNote((c) => !c)} accessibilityRole="checkbox" accessibilityState={{ checked: clearNote }}>
               <Ionicons name={clearNote ? "checkbox" : "square-outline"} size={20} color={colors.primary} />

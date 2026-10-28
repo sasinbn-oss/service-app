@@ -14,7 +14,8 @@ import Spinner from "./Spinner";
 import { fs } from "./FleetUI";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
-import { PickedFile, pickFile } from "../utils/filePicker";
+import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
 
 type Status = "NEW" | "IMPORTED" | "OPEN" | "ERROR" | "SKIPPED";
@@ -107,6 +108,8 @@ async function send(file: PickedFile, apply: boolean, picks: Picks) {
 const day = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" }) : "—";
 
+const ACCEPT = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
 export default function RepairImportModal({
   visible,
   onClose,
@@ -148,8 +151,9 @@ export default function RepairImportModal({
     onClose();
   }
 
-  async function choose() {
-    const picked = await pickFile(".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  // given = ไฟล์ที่ลากมาวาง (FileDropZone) — ไม่ส่ง = เปิดหน้าต่างเลือกไฟล์
+  async function choose(given?: PickedFile | null) {
+    const picked = given !== undefined ? given : await pickFile(ACCEPT);
     if (!picked) return;
     setFile(picked);
     setPreview(null);
@@ -268,15 +272,18 @@ export default function RepairImportModal({
         ส่งออกไฟล์จากฟอร์มแจ้งซ่อม (Excel) แล้วเลือกไฟล์ที่นี่ — ระบบอ่านทีละแถวให้ดูก่อน ยังไม่บันทึกจนกว่าจะกดยืนยัน{"\n"}
         แต่ละแถวเป็นใบงานหนึ่งใบที่ขั้นแรก (หัวหน้าภาคระบุอะไหล่) · รูป/วิดีโอในฟอร์มแนบเป็นลิงก์ · นำเข้าไฟล์เดิมซ้ำได้ แถวที่เข้าไปแล้วถูกข้ามให้เอง
       </Text>
-      <TouchableOpacity
-        style={[fs.btn, fs.btnGhost, { alignSelf: "flex-start" }]}
-        onPress={choose}
-        disabled={busy}
-        accessibilityLabel="เลือกไฟล์ฟอร์มแจ้งซ่อม"
-      >
-        <Ionicons name="document-attach-outline" size={17} color={colors.navy} />
-        <Text style={fs.btnGhostText}>{file ? `เลือกไฟล์ใหม่ (${file.name})` : "เลือกไฟล์ .xlsx"}</Text>
-      </TouchableOpacity>
+      <FileDropZone hint="ไฟล์ .xlsx" disabled={busy} label="วางไฟล์ฟอร์มแจ้งซ่อม" onFiles={(files) => choose(droppedFile(files, ACCEPT))}>
+        <TouchableOpacity
+          style={[fs.btn, fs.btnGhost, { alignSelf: "flex-start" }]}
+          onPress={() => choose()}
+          disabled={busy}
+          accessibilityLabel="เลือกไฟล์ฟอร์มแจ้งซ่อม"
+        >
+          <Ionicons name="document-attach-outline" size={17} color={colors.navy} />
+          <Text style={fs.btnGhostText}>{file ? `เลือกไฟล์ใหม่ (${file.name})` : "เลือกไฟล์ .xlsx"}</Text>
+        </TouchableOpacity>
+        <DropHint text="หรือลากไฟล์มาวางตรงนี้" />
+      </FileDropZone>
       {busy && !preview ? <Spinner color={colors.primary} style={{ marginTop: spacing.md }} /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
 

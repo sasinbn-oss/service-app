@@ -28,6 +28,7 @@ import { Role } from "../types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
 import RosterImportModal from "../components/RosterImportModal";
 import AreaTeamImportModal from "../components/AreaTeamImportModal";
+import Dropdown from "../components/Dropdown";
 import { canPickFile } from "../utils/filePicker";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -42,7 +43,14 @@ interface ManagedUser {
   team: string | null;
   /** ทีมช่างที่หัวหน้าภาคดูแล — หลายทีมได้ ใช้ร่วมกับภาค */
   supervisedTeams: string[];
+  /** สาขาที่ Maid (COCO) ประจำ — Maid เห็นเฉพาะสาขาเหล่านี้ */
+  maidBranches?: CocoBranch[];
   mustChangePassword: boolean;
+}
+
+interface CocoBranch {
+  code: string;
+  name: string;
 }
 
 const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
@@ -60,6 +68,12 @@ const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
     value: "COCO_SUPERVISOR",
     label: "Supervisor (COCO)",
     hint: "ทีมสาขา COCO: แจ้งและเปิดใบงาน · เห็นเฉพาะสาขาที่ดูแล (ผูกจากไฟล์ Area Team)",
+  },
+  // สิทธิ์เท่า Supervisor (COCO) แต่ผูกสาขาเป็นรายคน — Maid อยู่ประจำร้าน ไม่ได้ดูแลทั้งกลุ่มสาขา
+  {
+    value: "COCO_MAID",
+    label: "Maid (COCO)",
+    hint: "ทีมสาขา COCO: แจ้งและเปิดใบงาน · เห็นเฉพาะสาขาที่ประจำ (เลือกด้านล่าง หรือนำเข้าไฟล์รายชื่อ Maid)",
   },
   {
     value: "SUPER_ADMIN",
@@ -82,7 +96,8 @@ function roleOptions(meSuper: boolean, current?: Role) {
  */
 function searchText(u: ManagedUser) {
   const role = ROLE_OPTIONS.find((r) => r.value === u.role)?.label ?? "";
-  return [u.name, u.employeeCode, u.phone, u.team, u.region, ...(u.supervisedTeams ?? []), role]
+  const maid = (u.maidBranches ?? []).flatMap((b) => [b.code, b.name]);
+  return [u.name, u.employeeCode, u.phone, u.team, u.region, ...(u.supervisedTeams ?? []), ...maid, role]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -124,6 +139,7 @@ export default function ManageUsersScreen() {
   const [regions, setRegions] = useCachedState<string[]>("ManageUsers:regions", []);
   const [teams, setTeams] = useCachedState<string[]>("ManageUsers:teams", []);
   const [groups, setGroups] = useCachedState<Group[]>("ManageUsers:groups", []);
+  const [cocoBranches, setCocoBranches] = useCachedState<CocoBranch[]>("ManageUsers:coco", []);
   const [loading, setLoading] = useState(!cached);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -172,13 +188,15 @@ export default function ManageUsersScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [list, regionList, teamList, groupList] = await Promise.all([
+      const [list, regionList, teamList, groupList, cocoList] = await Promise.all([
         api.get<ManagedUser[]>("/auth/users"),
         api.get<{ name: string }[]>("/branches/regions"),
         api.get<{ name: string }[]>("/branches/teams"),
         api.get<Group[]>("/teams/groups"),
+        api.get<CocoBranch[]>("/auth/users/coco-branches"),
       ]);
       setGroups(groupList.data);
+      setCocoBranches(cocoList.data);
       setUsers(list.data);
       // ภาคมาจากทะเบียนสาขาทั้งหมด ไม่ใช่เฉพาะภาคที่มีเคสค้าง — ภาคที่ทุกอย่างปกติ
       // ก็ยังต้องมีหัวหน้าภาคดูแล
@@ -201,7 +219,7 @@ export default function ManageUsersScreen() {
 
   async function update(
     id: number,
-    patch: { role?: Role; region?: string | null; team?: string | null; supervisedTeams?: string[] }
+    patch: { role?: Role; region?: string | null; team?: string | null; supervisedTeams?: string[]; maidBranches?: string[] }
   ) {
     setSavingId(id);
     try {
@@ -545,6 +563,26 @@ export default function ManageUsersScreen() {
             </>
           ) : null}
 
+          {u.role === "COCO_MAID" ? (
+            <>
+              <Text style={styles.label}>สาขาที่ประจำ (เลือกได้หลายสาขา)</Text>
+              <MaidBranchPicker
+                value={(u.maidBranches ?? []).map((b) => b.code)}
+                known={u.maidBranches ?? []}
+                options={cocoBranches}
+                disabled={savingId !== null}
+                onChange={(codes) => update(u.id, { maidBranches: codes })}
+                who={u.name}
+              />
+              {!(u.maidBranches ?? []).length ? (
+                <View style={styles.warn}>
+                  <Ionicons name="alert-circle" size={14} color={colors.danger} />
+                  <Text style={styles.warnText}>ยังไม่ได้เลือกสาขาที่ประจำ จะไม่เห็นใบงานใดเลย</Text>
+                </View>
+              ) : null}
+            </>
+          ) : null}
+
           <View style={styles.actions}>
             <TouchableOpacity
               style={styles.resetLink}
@@ -582,6 +620,7 @@ export default function ManageUsersScreen() {
       <CreateUserModal
         visible={creating}
         regions={regions}
+        cocoBranches={cocoBranches}
         onCancel={() => setCreating(false)}
         onDone={async () => {
           setCreating(false);
@@ -620,11 +659,13 @@ const MIN_PASSWORD = 8;
 function CreateUserModal({
   visible,
   regions,
+  cocoBranches,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   regions: string[];
+  cocoBranches: CocoBranch[];
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -634,6 +675,7 @@ function CreateUserModal({
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState<Role>("EMPLOYEE");
   const [region, setRegion] = useState<string | null>(null);
+  const [maidBranches, setMaidBranches] = useState<string[]>([]);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -645,6 +687,7 @@ function CreateUserModal({
     setPhone("");
     setRole("EMPLOYEE");
     setRegion(null);
+    setMaidBranches([]);
     setPassword("");
     setError(null);
   }, [visible]);
@@ -653,7 +696,8 @@ function CreateUserModal({
     employeeCode.trim().length >= 2 &&
     name.trim().length > 0 &&
     password.length >= MIN_PASSWORD &&
-    (role !== "SUPERVISOR" || !!region);
+    (role !== "SUPERVISOR" || !!region) &&
+    (role !== "COCO_MAID" || maidBranches.length > 0);
 
   async function submit() {
     setSaving(true);
@@ -666,6 +710,7 @@ function CreateUserModal({
         role,
         region,
         password,
+        ...(role === "COCO_MAID" ? { maidBranches } : {}),
       });
       showAlert(
         "สร้างบัญชีแล้ว",
@@ -747,6 +792,7 @@ function CreateUserModal({
             onPress={() => {
               setRole(r.value);
               if (r.value !== "SUPERVISOR") setRegion(null);
+              if (r.value !== "COCO_MAID") setMaidBranches([]);
             }}
             activeOpacity={0.7}
           >
@@ -774,6 +820,17 @@ function CreateUserModal({
               </TouchableOpacity>
             ))}
           </View>
+        </>
+      ) : null}
+
+      {role === "COCO_MAID" ? (
+        <>
+          <Text style={styles.label}>สาขาที่ประจำ</Text>
+          <MaidBranchPicker value={maidBranches} known={[]} options={cocoBranches} onChange={setMaidBranches} who="ผู้ใช้ใหม่" />
+          <Text style={styles.hint}>
+            เห็นและเปิดใบงานได้เฉพาะสาขาที่เลือก · ชื่อผู้ใช้เก็บเป็นตัวเล็ก (เช่น sukanya.y) — มีหลายคน ใช้ปุ่ม “นำเข้า Area Team”
+            กับไฟล์รายชื่อ Maid ได้เลย
+          </Text>
         </>
       ) : null}
 
@@ -805,6 +862,60 @@ function CreateUserModal({
  * แก้ชื่อผู้ใช้ ชื่อ และเบอร์โทร — สิทธิ์/ทีม/ภาคแก้ที่การ์ดได้อยู่แล้ว ไม่ต้องมีซ้ำในหน้าต่างนี้
  * ไม่แตะรหัสผ่าน (มีปุ่มตั้งรหัสผ่านใหม่แยกไว้แล้ว)
  */
+/**
+ * สาขาที่ Maid (COCO) ประจำ — ป้ายสาขาที่เลือกแล้ว (กด × เอาออก) + dropdown ค้นหาเพิ่มทีละสาขา
+ * สาขา COCO มีหลายร้อยแห่ง เลือกจากปุ่มเรียงทั้งหมดแบบทีมช่างไม่ไหว ต้องค้นด้วยรหัสหรือชื่อ
+ * known = ชื่อสาขาที่บัญชีผูกอยู่แล้ว เผื่อสาขาถูกปิดไปแล้ว (ไม่อยู่ในตัวเลือก) จะได้ยังขึ้นชื่อให้เอาออกได้
+ */
+function MaidBranchPicker({
+  value,
+  known,
+  options,
+  onChange,
+  disabled,
+  who,
+}: {
+  value: string[];
+  known: CocoBranch[];
+  options: CocoBranch[];
+  onChange: (codes: string[]) => void;
+  disabled?: boolean;
+  who: string;
+}) {
+  const nameOf = new Map([...known, ...options].map((b) => [b.code, b.name]));
+  return (
+    <>
+      {value.length ? (
+        <View style={[styles.options, { marginBottom: spacing.xs }]}>
+          {value.map((code) => (
+            <TouchableOpacity
+              key={code}
+              style={[styles.option, styles.optionOn, styles.branchChip]}
+              onPress={() => onChange(value.filter((c) => c !== code))}
+              disabled={disabled}
+              activeOpacity={0.7}
+              accessibilityLabel={`เอาสาขา ${code} ออกจาก ${who}`}
+            >
+              <Text style={[styles.optionText, styles.optionTextOn, { flexShrink: 1 }]} numberOfLines={1}>
+                {code} · {nameOf.get(code) ?? ""}
+              </Text>
+              <Ionicons name="close" size={14} color={colors.primaryDark} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+      <Dropdown
+        value={null}
+        options={options.filter((b) => !value.includes(b.code)).map((b) => ({ value: b.code, label: `${b.code} · ${b.name}` }))}
+        onChange={(code) => code && onChange([...value, code])}
+        placeholder={value.length ? "เพิ่มสาขาอื่น" : "เลือกสาขาที่ประจำ"}
+        disabled={disabled}
+        accessibilityLabel={`เพิ่มสาขาที่ประจำ ${who}`}
+      />
+    </>
+  );
+}
+
 function EditUserModal({
   user,
   onCancel,
@@ -1144,6 +1255,7 @@ const styles = StyleSheet.create({
   optionOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   optionText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
   optionTextOn: { color: colors.primaryDark },
+  branchChip: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" },
   hint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
   warn: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
   warnText: { fontSize: 12, lineHeight: 20, color: colors.danger },

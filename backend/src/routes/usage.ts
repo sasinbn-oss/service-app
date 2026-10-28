@@ -53,7 +53,7 @@ const ROLE_GROUPS: Record<string, string[]> = {
   EMPLOYEE: ["EMPLOYEE"],
   SUPERVISOR: ["SUPERVISOR"],
   ADMIN: ["ADMIN", "PARTS_ADMIN", "SUPER_ADMIN"],
-  AREA_TEAM: ["AREA", "COCO_SUPERVISOR"],
+  AREA_TEAM: ["AREA", "COCO_SUPERVISOR", "COCO_MAID"],
 };
 
 const listQuery = z.object({

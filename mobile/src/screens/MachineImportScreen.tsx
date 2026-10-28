@@ -10,7 +10,8 @@ import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
-import { canPickFile, pickFile, PickedFile } from "../utils/filePicker";
+import { canPickFile, droppedFile, pickFile, PickedFile } from "../utils/filePicker";
+import FileDropZone, { DropHint } from "../components/FileDropZone";
 import { colors, radius, shadow, spacing } from "../theme";
 
 type Kind = "machines" | "branches" | "cancelled";
@@ -72,6 +73,8 @@ interface ImportPlan {
   warnings: string[];
 }
 
+const XLSX = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
 export default function MachineImportScreen() {
   const [kind, setKind] = useState<Kind>("machines");
   const [file, setFile] = useState<PickedFile | null>(null);
@@ -108,10 +111,9 @@ export default function MachineImportScreen() {
     setError(null);
   }
 
-  async function choose() {
-    const picked = await pickFile(
-      ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
+  // given = ไฟล์ที่ลากมาวาง (FileDropZone) — ไม่ส่ง = เปิดหน้าต่างเลือกไฟล์
+  async function choose(given?: PickedFile | null) {
+    const picked = given !== undefined ? given : await pickFile(XLSX);
     if (!picked) return;
 
     setFile(picked);
@@ -203,12 +205,15 @@ export default function MachineImportScreen() {
               : "ไฟล์ .xlsx คอลัมน์ code อย่างเดียว = ยกเลิกทั้งสาขา · ใส่คอลัมน์ num (หมายเลขเครื่อง) ด้วย = ถอดเฉพาะเครื่องนั้น"}
         </Text>
 
-        <TouchableOpacity style={styles.pickButton} onPress={choose} activeOpacity={0.8}>
-          <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
-          <Text style={styles.pickButtonText}>
-            {file ? "เลือกไฟล์อื่น" : "เลือกไฟล์ Excel"}
-          </Text>
-        </TouchableOpacity>
+        <FileDropZone hint="ไฟล์ .xlsx" label="วางไฟล์ Excel" onFiles={(files) => choose(droppedFile(files, XLSX))}>
+          <TouchableOpacity style={styles.pickButton} onPress={() => choose()} activeOpacity={0.8}>
+            <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
+            <Text style={styles.pickButtonText}>
+              {file ? "เลือกไฟล์อื่น" : "เลือกไฟล์ Excel"}
+            </Text>
+          </TouchableOpacity>
+          <DropHint text="หรือลากไฟล์มาวางตรงนี้" />
+        </FileDropZone>
 
         {file ? (
           <View style={styles.fileRow}>

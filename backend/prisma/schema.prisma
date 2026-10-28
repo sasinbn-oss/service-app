@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   // ดึงตารางที่เกี่ยวข้อง (สาขา เครื่อง อะไหล่ ฯลฯ) ใน SQL คำสั่งเดียวแทนคำสั่งละตาราง
   // ฐานข้อมูลจริงอยู่คนละ region (ไปกลับ ~220 ms) — หน้าใบงานเคยรอ 12 รอบต่อกัน
   previewFeatures = ["relationJoins"]
@@ -48,6 +48,8 @@ model User {
   area                 User?                 @relation("AreaMembers", fields: [areaId], references: [id], onDelete: SetNull)
   areaMembers          User[]                @relation("AreaMembers")
   cocoBranches         Branch[]              @relation("CocoSupervisor")
+  // Maid (COCO) — สาขาที่ประจำอยู่ (เจ้าของงานเพิ่ม ต.ค. 69) · แยกจาก cocoBranches เพราะสาขาหนึ่งมีทั้ง Supervisor และ Maid
+  maidBranches         CocoMaidBranch[]      @relation("CocoMaid")
   coveredBranches      Branch[]              @relation("CoverFor")
   usageSlots           UsageSlot[]
   // ต้องเปลี่ยนรหัสก่อนใช้งาน
@@ -57,7 +59,7 @@ model User {
   mustChangePassword   Boolean               @default(false)
   // เปลี่ยน/รีเซ็ตรหัสผ่านล่าสุด — โทเคนที่ออกก่อนเวลานี้ใช้ไม่ได้ (มือถือหาย คนลาออกแต่ยังล็อกอินค้าง)
   // เดิมรีเซ็ตรหัสแล้วเครื่องเก่ายังเข้าได้อีก 30 วันจนโทเคนหมดอายุ
-  passwordChangedAt  DateTime?
+  passwordChangedAt    DateTime?
   createdAt            DateTime              @default(now())
   // ถูกลบโดย Super Admin — ตั้งเฉพาะคนที่มีประวัติในระบบแล้ว (คนที่ไม่มีประวัติถูกลบจริง)
   //
@@ -292,6 +294,7 @@ model Branch {
   // เก็บที่ผู้ใช้จะมีสองคนถือสาขาเดียวกันได้หลังย้ายคน แล้วต้องคอยลบออกจากคนเก่า
   cocoSupervisorId  Int?
   cocoSupervisor    User?            @relation("CocoSupervisor", fields: [cocoSupervisorId], references: [id], onDelete: SetNull)
+  cocoMaids         CocoMaidBranch[]
   // สาขานี้มีคนดูแลแทนอยู่ — เป็นสาขาของ coverFor (เช่นลาออก) ที่ฝากให้ cocoSupervisor ถือไว้ก่อน (เจ้าของงานขอ ต.ค. 69)
   //
   // จำไว้เพื่อส่งต่อให้คนใหม่ได้ทีเดียวเฉพาะสาขาที่ฝากไว้ สาขาเดิมของคนดูแลแทนไม่ติดไปด้วย
@@ -648,11 +651,11 @@ model ConsumableRequestItem {
 // สองอย่างนี้จึงปิดคนละเวลาได้ ปิดใบงานแล้วเครื่องยังไม่กลับมาก็เป็นไปได้
 // และต้องเห็นด้วยว่าเป็นแบบนั้น
 model WorkOrder {
-  id     Int    @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   // รหัสที่คนอ่าน เช่น WO-00042 — ตั้งจาก id หลังสร้าง จึงไม่มีทางชนกัน
-  code   String @unique
+  code      String  @unique
   // OUTAGE (เปิดจากกระดานติดตาม) | MANUAL (เปิดเอง) | FORM (นำเข้าจากไฟล์ฟอร์มแจ้งซ่อม COCO)
-  source String @default("MANUAL")
+  source    String  @default("MANUAL")
   // แถวในไฟล์ฟอร์มแจ้งซ่อมที่เป็นต้นเรื่อง (ลายนิ้วมือของแถว) — นำเข้าไฟล์เดิมซ้ำแล้วไม่เกิดใบซ้ำ · เปิดเอง = ว่าง
   importKey String? @unique
 
@@ -766,13 +769,13 @@ model WorkOrder {
   // รายงานจะนับได้ว่าแต่ละทีม SUB ทำไปกี่งาน ถ้าเก็บเป็นข้อความรวมกับชื่อคนจะนับไม่ได้
   closeSubTeam      String?
 
-  parts       WorkOrderPart[]
-  services    WorkOrderService[]
-  logs        WorkOrderLog[]
-  attachments WorkOrderAttachment[]
-  claims      PartClaim[]
-  workers     WorkOrderWorker[]
-  vehicleLogs VehicleLog[]
+  parts        WorkOrderPart[]
+  services     WorkOrderService[]
+  logs         WorkOrderLog[]
+  attachments  WorkOrderAttachment[]
+  claims       PartClaim[]
+  workers      WorkOrderWorker[]
+  vehicleLogs  VehicleLog[]
   adminReviews AdminReview[]
 
   @@index([status, createdAt])
@@ -1175,4 +1178,19 @@ model UsageSlot {
 
   @@id([userId, slot])
   @@index([slot])
+}
+
+// Maid (COCO) ประจำสาขาไหน (เจ้าของงานเพิ่ม ต.ค. 69 · ไฟล์รายชื่อ Maid คอลัมน์ ERP)
+// แยกเป็นตารางไม่ใช่ช่องในสาขาแบบ cocoSupervisorId — สาขาหนึ่งมี Maid ได้หลายคน (หลายกะ) และ Maid หนึ่งคนดูหลายสาขาได้
+// มี id ของตัวเองเพราะระบบสำรองข้อมูลไล่อ่านทีละหน้าตามคอลัมน์ id
+model CocoMaidBranch {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation("CocoMaid", fields: [userId], references: [id], onDelete: Cascade)
+  branchId  Int
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, branchId])
+  @@index([branchId])
 }

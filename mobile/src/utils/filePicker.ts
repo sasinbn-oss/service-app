@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { showAlert } from "./alert";
 
 export interface PickedFile {
   name: string;
@@ -43,3 +44,20 @@ export function pickFile(accept: string): Promise<PickedFile | null> {
 }
 
 export const canPickFile = Platform.OS === "web";
+
+/**
+ * ไฟล์ที่ลากมาวาง (เว็บ · components/FileDropZone) → แบบเดียวกับที่ pickFile คืน
+ * accept รูปแบบเดียวกับ pickFile (".xlsx,application/…") · ลากมาหลายไฟล์ใช้ไฟล์แรกที่ตรงชนิด
+ * ไม่มีไฟล์ไหนตรง → บอกว่าต้องเป็นไฟล์อะไร แล้วคืน null
+ */
+export function droppedFile(files: File[], accept: string): PickedFile | null {
+  const rules = accept.split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+  const exts = rules.filter((r) => r.startsWith("."));
+  const ok = (f: File) => exts.some((e) => f.name.toLowerCase().endsWith(e)) || rules.includes(f.type.toLowerCase());
+  const file = files.find(ok);
+  if (!file) {
+    showAlert("ไฟล์นี้นำเข้าไม่ได้", `ต้องเป็นไฟล์ ${exts.join(" หรือ ")} — ไฟล์ที่ลากมา: ${files.map((f) => f.name).join(", ")}`);
+    return null;
+  }
+  return { name: file.name, blob: file };
+}

@@ -12,7 +12,8 @@ import TouchableOpacity from "./Tap";
 import Dropdown from "./Dropdown";
 import { ClaimGuide, PlateValue, plateFields } from "../utils/nameplate";
 import { readPlatePhoto } from "../utils/ocr";
-import { pickImageAttachment, type PickedAttachment } from "../utils/attachments";
+import { filesToAttachments, pickImageAttachment, type PickedAttachment } from "../utils/attachments";
+import FileDropZone from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
 
 export interface ClaimCheckDraft {
@@ -65,11 +66,9 @@ export default function ClaimMachineBox({
   const scanned = fields.some((f) => plate.values[f.key]?.source === "SCAN" && plate.values[f.key]?.value);
   const missed = plate.photo ? fields.filter((f) => !plate.values[f.key]?.value) : [];
 
-  async function shoot(fromCamera: boolean) {
+  async function shoot(pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>) {
     setReadErr(null);
-    // ความละเอียดแบบรูปถ่าย ไม่ใช่แบบเอกสาร — ตัวอ่านป้ายตั้งค่าไว้กับรูปกว้าง 1600
-    // ลองให้รูปกว้าง 2400 แล้วอ่านรหัสรุ่นผิด (เทสต์ claim-web ต.ค. 69)
-    const photo = await pickImageAttachment(fromCamera, setStage);
+    const photo = await pick(setStage);
     if (!photo) return setStage(null);
     onPhoto(photo);
     try {
@@ -84,8 +83,13 @@ export default function ClaimMachineBox({
     }
   }
 
+  // ความละเอียดแบบรูปถ่าย ไม่ใช่แบบเอกสาร (ไม่ส่ง doc) — ตัวอ่านป้ายตั้งค่าไว้กับรูปกว้าง 1600
+  // ลองให้รูปกว้าง 2400 แล้วอ่านรหัสรุ่นผิด (เทสต์ claim-web ต.ค. 69) · ลากมาหลายรูปใช้รูปแรก (ป้ายมีป้ายเดียว)
+  const dropped = (files: File[]) =>
+    shoot(async (s) => (await filesToAttachments(files.slice(0, 1), { image: true }, s))[0] ?? null);
+
   return (
-    <View style={styles.box} accessibilityLabel="ข้อมูลเครื่องสำหรับเคลม">
+    <FileDropZone style={styles.box} label="ข้อมูลเครื่องสำหรับเคลม" hint="รูปป้ายรุ่น 1 รูป" disabled={!!stage} onFiles={dropped}>
       <Text style={styles.title}>ข้อมูลเครื่องสำหรับเคลม</Text>
       <Text style={styles.hint}>ใช้ร่วมทุกชิ้นที่ส่งเคลม · ส่งให้ Admin Spare Part</Text>
 
@@ -97,7 +101,7 @@ export default function ClaimMachineBox({
       <View style={styles.btnRow}>
         <TouchableOpacity
           style={[styles.scanBtn, stage && styles.scanBusy]}
-          onPress={() => shoot(true)}
+          onPress={() => shoot((s) => pickImageAttachment(true, s))}
           disabled={!!stage}
           activeOpacity={0.8}
           accessibilityLabel="ถ่ายรูปป้ายรุ่น"
@@ -107,7 +111,7 @@ export default function ClaimMachineBox({
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.pickBtn}
-          onPress={() => shoot(false)}
+          onPress={() => shoot((s) => pickImageAttachment(false, s))}
           disabled={!!stage}
           activeOpacity={0.8}
           accessibilityLabel="เลือกรูปป้ายรุ่น"
@@ -235,7 +239,7 @@ export default function ClaimMachineBox({
         </Text>
       )}
 
-    </View>
+    </FileDropZone>
   );
 }
 

@@ -210,7 +210,11 @@ function isMisconfiguredWebBuild(): boolean {
   return !servedLocally && /localhost|127\.0\.0\.1/.test(API_URL);
 }
 
+/** ข้อผิดพลาดที่ข้อความเขียนไว้ให้ผู้ใช้อ่านแล้ว (ภาษาไทย) — apiErrorMessage ส่งต่อข้อความตรง ๆ */
+export class UserFacingError extends Error {}
+
 export function apiErrorMessage(error: unknown): string {
+  if (error instanceof UserFacingError) return error.message;
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { error?: unknown } | undefined;
     if (typeof data?.error === "string") return data.error;

@@ -62,7 +62,7 @@ export async function areaTeamWorkbook(opts: {
   ws.addRow([`รายงานใบงานทั้งหมด — ${opts.viewer.name} (${ROLE_LABELS[opts.viewer.role] ?? opts.viewer.role})`]).font = { bold: true, size: 14 };
   ws.addRow([
     `วันที่แจ้ง ${thaiDateTime(start, false)} – ${thaiDateTime(bkkDayStart(opts.to), false)} · ` +
-      (opts.viewer.role === "AREA" ? "สาขา COCO ทั้งหมด" : "สาขาที่ดูแล") +
+      (opts.viewer.role === "AREA" ? "สาขา COCO ทั้งหมด" : opts.viewer.role === "COCO_MAID" ? "สาขาที่ประจำ" : "สาขาที่ดูแล") +
       ` · ${rows.length} ใบ · ออกรายงาน ${thaiDateTime(new Date())}`,
   ]);
   ws.addRow([]);

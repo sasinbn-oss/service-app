@@ -18,10 +18,13 @@ import { showAlert } from "../utils/alert";
 import {
   PickedAttachment,
   attachmentIcon,
+  asList,
+  filesToAttachments,
   pickImageAttachment,
   pickImageAttachments,
   pickVideoAttachment,
-  uploadAttachment,
+  pickVideoAttachments,
+  uploadAttachments,
 } from "../utils/attachments";
 import type { Attachment } from "./WorkOrderAttachments";
 import { colors, radius, spacing } from "../theme";
@@ -37,7 +40,7 @@ export const INSPECTION_SLOTS = [
   },
   {
     role: "INSPECT_VIDEO", label: "วิดีโอการทำงาน", video: true, camera: "อัดวิดีโอทันที",
-    hint: "คลิปสั้นตอนเครื่องทำงาน ให้เห็นอาการผิดปกติหรือเสียง", foot: "ไม่เกิน 60 วินาที",
+    hint: "คลิปสั้นตอนเครื่องทำงาน ให้เห็นอาการผิดปกติหรือเสียง", foot: "ไม่เกิน 60 วินาที · เลือกได้หลายคลิป",
   },
 ] as const;
 
@@ -85,17 +88,18 @@ export default function InspectionSlots({
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment[] | PickedAttachment | null>
   ) {
     setBusy({ role, label: "กำลังเตรียมไฟล์" });
+    let sent = false;
     try {
-      const got = await pick((label) => setBusy({ role, label }));
-      const files = Array.isArray(got) ? got : got ? [got] : [];
-      for (const [i, file] of files.entries()) {
-        setBusy({ role, label: files.length > 1 ? `กำลังส่ง ${i + 1}/${files.length}` : "กำลังส่ง" });
-        await uploadAttachment(workOrderId, file, role, undefined, { index: i, total: files.length });
-      }
-      if (files.length) await onChanged();
+      const files = asList(await pick((label) => setBusy({ role, label })));
+      if (!files.length) return;
+      setBusy({ role, label: files.length > 1 ? `กำลังส่ง ${files.length} ไฟล์` : "กำลังส่ง" });
+      sent = true;
+      await uploadAttachments(workOrderId, files, role);
     } catch (e) {
       showAlert("แนบไฟล์ไม่สำเร็จ", apiErrorMessage(e));
     } finally {
+      // ส่งไม่ครบชุดก็โหลดใหม่ — ไฟล์ที่ขึ้นไปแล้วต้องเห็น ไม่งั้นคนจะแนบซ้ำ
+      if (sent) await onChanged();
       setBusy(null);
     }
   }
@@ -126,12 +130,17 @@ export default function InspectionSlots({
             secondary={{
               label: got.length ? "เลือกเพิ่ม" : slot.video ? "เลือกคลิปวิดีโอ" : "เลือกจากอัลบั้ม",
               icon: slot.video ? "film-outline" : "images-outline",
-              onPress: () => add(slot.role, slot.video ? (stage) => pickVideoAttachment(stage) : pickImageAttachments),
+              onPress: () => add(slot.role, slot.video ? pickVideoAttachments : pickImageAttachments),
               // มีแล้วชื่อปุ่มเป็น "เพิ่ม…" — เทสต์และโปรแกรมอ่านหน้าจอแยกได้ว่านี่คือการเพิ่มไม่ใช่เริ่มใหม่
               accessibilityLabel: `${got.length ? "เพิ่ม" : "เลือก"}${slot.label}`,
             }}
             footLeft={slot.foot}
             footTip={slot.video ? "แนะนำ 15-30 วินาที" : undefined}
+            // กรอบนี้รับเฉพาะชนิดของตัวเอง (เซิร์ฟเวอร์ก็บังคับ) — วางรูปในกรอบวิดีโอถูกตัดออกพร้อมบอกชื่อ
+            dropHint={slot.video ? "วิดีโอ" : "รูป"}
+            onDropFiles={(files) =>
+              add(slot.role, (stage) => filesToAttachments(files, slot.video ? { video: true } : { image: true }, stage))
+            }
           >
             {got.length ? (
               <View style={styles.thumbs}>

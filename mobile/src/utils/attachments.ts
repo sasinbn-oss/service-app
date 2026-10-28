@@ -11,12 +11,12 @@
  * ได้ชัดเท่ากันที่ขนาดไม่ถึงหนึ่งในสิบ ช่างหน้างานที่เน็ตไม่ดีคือคนที่ได้ประโยชน์
  * ที่สุดจากตรงนี้ — รอส่งรูป 3 MB ผ่าน 4G ในซอยคือเหตุผลที่คนเลิกส่งรูป
  */
-import { Platform } from "react-native";
+import { Image, Platform } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as VideoThumbnails from "expo-video-thumbnails";
-import { api } from "../api/client";
+import { api, apiErrorMessage, UserFacingError } from "../api/client";
 import { showAlert } from "./alert";
 import { feedback } from "../components/Feedback";
 import { pdfThumbnail } from "./pdf";
@@ -191,6 +191,43 @@ export async function pickVideoAttachment(
   }
 
   onStage?.("กำลังเตรียมวิดีโอ");
+  return prepareVideo(asset);
+}
+
+/**
+ * เลือกวิดีโอจากคลังทีละหลายคลิป (เจ้าของงานขอ ต.ค. 69 — แนบไฟล์ได้หลายไฟล์ทีเดียวทั้งระบบ)
+ * คลิปที่ยาวเกินถูกตัดออกแล้วบอกชื่อ คลิปที่เหลือยังแนบได้ ไม่ต้องเลือกใหม่ทั้งชุด
+ */
+export async function pickVideoAttachments(onStage?: (label: string) => void): Promise<PickedAttachment[]> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) {
+    showAlert("ต้องการสิทธิ์", "กรุณาอนุญาตให้แอปเข้าถึงคลังวิดีโอ");
+    return [];
+  }
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ["videos"],
+    videoMaxDuration: MAX_VIDEO_SECONDS,
+    allowsMultipleSelection: true,
+    selectionLimit: 10,
+  });
+  if (result.canceled) return [];
+  const long = result.assets.filter((a) => a.duration && a.duration > (MAX_VIDEO_SECONDS + 5) * 1000);
+  if (long.length) {
+    showAlert(
+      "คลิปยาวเกินไป",
+      `รับได้ไม่เกิน ${MAX_VIDEO_SECONDS} วินาที — ไม่ได้แนบ: ${long.map((a) => a.fileName ?? "วิดีโอ").join(", ")}`
+    );
+  }
+  const out: PickedAttachment[] = [];
+  const kept = result.assets.filter((a) => !long.includes(a));
+  for (const [i, asset] of kept.entries()) {
+    onStage?.(kept.length > 1 ? `กำลังเตรียมวิดีโอ ${i + 1}/${kept.length}` : "กำลังเตรียมวิดีโอ");
+    out.push(await prepareVideo(asset));
+  }
+  return out;
+}
+
+async function prepareVideo(asset: { uri: string; fileName?: string | null; mimeType?: string | null }): Promise<PickedAttachment> {
   let thumbnailUri: string | null = null;
   try {
     // เว็บทำรูปปกวิดีโอไม่ได้ (expo-video-thumbnails ไม่รองรับ) ปล่อยว่างไว้
@@ -200,11 +237,97 @@ export async function pickVideoAttachment(
   } catch {
     thumbnailUri = null;
   }
-
   const name = asset.fileName ?? `video-${Date.now()}.mp4`;
-  const type =
-    asset.mimeType ?? (name.toLowerCase().endsWith(".mov") ? "video/quicktime" : "video/mp4");
+  const type = asset.mimeType || (name.toLowerCase().endsWith(".mov") ? "video/quicktime" : "video/mp4");
   return { uri: asset.uri, name, type, kind: "VIDEO", thumbnailUri };
+}
+
+/** ชนิดไฟล์ที่ที่แนบแต่ละที่รับ — ใช้กับไฟล์ที่ลากมาวาง (filesToAttachments) */
+export interface AcceptKinds {
+  image?: boolean;
+  video?: boolean;
+  pdf?: boolean;
+  /** รูปเป็นรูปเอกสาร — ย่อแบบละเอียด (ดู DOC_MAX_WIDTH) */
+  doc?: boolean;
+}
+
+/** ข้อความบอกว่าที่นี่รับไฟล์อะไร — ขึ้นตอนลากไฟล์มาวาง และตอนวางไฟล์ผิดชนิด */
+export function acceptLabel(accept: AcceptKinds) {
+  return [accept.image && "รูป", accept.video && "วิดีโอ", accept.pdf && "PDF"].filter(Boolean).join(" · ");
+}
+
+function imageWidth(uri: string): Promise<number> {
+  return new Promise((resolve) => Image.getSize(uri, (w) => resolve(w), () => resolve(0)));
+}
+
+/** ความยาวคลิป (วินาที) จากไฟล์บนเว็บ — อ่านไม่ได้ให้ผ่านไป เซิร์ฟเวอร์ยังมีเพดานขนาดกันอยู่ */
+function videoSeconds(uri: string): Promise<number | null> {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    const done = (s: number | null) => {
+      clearTimeout(timer);
+      v.removeAttribute("src");
+      resolve(s);
+    };
+    const timer = setTimeout(() => done(null), 5000);
+    v.preload = "metadata";
+    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
+    v.onerror = () => done(null);
+    v.src = uri;
+  });
+}
+
+/** ตรงกับเพดานวิดีโอฝั่งเซิร์ฟเวอร์ (60 MB) — ไฟล์ที่ลากมาวางไม่ผ่านตัวเลือกคลิปที่ตัดความยาวให้ */
+const MAX_VIDEO_BYTES = 60 * 1024 * 1024;
+
+/**
+ * ไฟล์ที่ลากมาวาง (เว็บ — ดู components/FileDropZone) → ไฟล์แนบที่ย่อ/ทำรูปย่อแล้ว แบบเดียวกับที่เลือกผ่านปุ่ม
+ *
+ * ไฟล์ที่ที่นี่ไม่รับ (ชนิดผิด · ใหญ่เกิน · คลิปยาวเกิน) ถูกตัดออกแล้วบอกชื่อทีเดียว ไฟล์ที่เหลือยังแนบได้
+ * — ลากมาทั้งโฟลเดอร์แล้วมีไฟล์ Word ปนมาไฟล์เดียว ไม่ควรทำให้ต้องลากใหม่ทั้งชุด
+ */
+export async function filesToAttachments(
+  files: File[],
+  accept: AcceptKinds,
+  onStage?: (label: string) => void
+): Promise<PickedAttachment[]> {
+  const out: PickedAttachment[] = [];
+  const rejected: string[] = [];
+  for (const [i, file] of files.entries()) {
+    const step = files.length > 1 ? ` ${i + 1}/${files.length}` : "";
+    const type = file.type || "";
+    const uri = URL.createObjectURL(file);
+    try {
+      if (type.startsWith("image/") && accept.image) {
+        onStage?.(`กำลังย่อรูป${step}`);
+        out.push(await prepareImage({ uri, width: await imageWidth(uri), height: 0, fileName: file.name } as ImagePicker.ImagePickerAsset, { doc: accept.doc }));
+      } else if (type.startsWith("video/") && accept.video) {
+        const secs = await videoSeconds(uri);
+        if (file.size > MAX_VIDEO_BYTES) rejected.push(`${file.name} (ใหญ่เกิน ${formatSize(MAX_VIDEO_BYTES)})`);
+        else if (secs && secs > MAX_VIDEO_SECONDS + 5) rejected.push(`${file.name} (ยาวเกิน ${MAX_VIDEO_SECONDS} วินาที)`);
+        else {
+          onStage?.(`กำลังเตรียมวิดีโอ${step}`);
+          out.push(await prepareVideo({ uri, fileName: file.name, mimeType: type }));
+        }
+      } else if ((type === "application/pdf" || /\.pdf$/i.test(file.name)) && accept.pdf) {
+        if (file.size > MAX_PDF_BYTES) rejected.push(`${file.name} (ใหญ่เกิน ${formatSize(MAX_PDF_BYTES)})`);
+        else {
+          const name = /\.pdf$/i.test(file.name) ? file.name : `${file.name || "document"}.pdf`;
+          out.push({ uri, name, type: "application/pdf", kind: "DOCUMENT", thumbnailUri: await pdfThumbnail(uri) });
+        }
+      } else {
+        rejected.push(file.name);
+      }
+    } catch {
+      // รูปที่เบราว์เซอร์เปิดไม่ได้ (เช่น HEIC จาก iPhone บนคอม Windows) — บอกชื่อ ไม่ทำให้ไฟล์อื่นพัง
+      rejected.push(`${file.name} (เปิดไฟล์ไม่ได้)`);
+    }
+  }
+  if (rejected.length) {
+    showAlert("บางไฟล์แนบที่นี่ไม่ได้", `ที่นี่รับ ${acceptLabel(accept)} — ไม่ได้แนบ: ${rejected.join(", ")}`);
+  }
+  return out;
 }
 
 /** ตรงกับเพดาน PDF ฝั่งเซิร์ฟเวอร์ — เช็คก่อนส่งจะได้ไม่ต้องรออัปจนจบแล้วค่อยรู้ว่าใหญ่ไป */
@@ -278,4 +401,24 @@ export async function uploadAttachment(
     },
     loadingText: "กำลังส่งไฟล์...",
   });
+}
+
+/**
+ * ส่งหลายไฟล์ต่อกันทีละไฟล์ (หลอดในหน้าโหลดนับรวมทั้งชุด)
+ * ไฟล์ที่พังกลางชุดหยุดตรงนั้นแล้วบอกว่าส่งไปแล้วกี่ไฟล์ — ไฟล์ก่อนหน้าขึ้นใบงานแล้ว ไม่ต้องเลือกซ้ำ
+ */
+export async function uploadAttachments(workOrderId: number, files: PickedAttachment[], role?: string, sparePartId?: number) {
+  for (const [index, file] of files.entries()) {
+    try {
+      await uploadAttachment(workOrderId, file, role, sparePartId, { index, total: files.length });
+    } catch (e) {
+      if (index === 0) throw e;
+      throw new UserFacingError(`ส่งแล้ว ${index} จาก ${files.length} ไฟล์ — ${file.name}: ${apiErrorMessage(e)}`);
+    }
+  }
+}
+
+/** ตัวเลือกไฟล์บางตัวคืนไฟล์เดียว บางตัวคืนหลายไฟล์ — ที่แนบทุกที่รับได้ทั้งสองแบบ */
+export function asList(picked: PickedAttachment | PickedAttachment[] | null): PickedAttachment[] {
+  return Array.isArray(picked) ? picked : picked ? [picked] : [];
 }

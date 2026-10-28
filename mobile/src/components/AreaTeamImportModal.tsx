@@ -1,5 +1,6 @@
 /**
  * นำเข้าไฟล์ Area Team (แอดมิน · เจ้าของงานขอ ต.ค. 69) — สร้าง/อัปเดตบัญชี Area และ Supervisor (COCO) แล้วผูกสาขา
+ * ไฟล์รายชื่อ Maid (COCO) เข้าปุ่มเดียวกัน — เซิร์ฟเวอร์ดูหัวตารางเองว่าเป็นไฟล์แบบไหน (คอลัมน์ User แทน Mail)
  *
  * เลือกไฟล์ → เซิร์ฟเวอร์อ่านแล้วบอกว่าจะสร้างใคร อัปเดตใคร สาขาไหนยังไม่มีในระบบ → ยืนยัน (ส่งไฟล์เดิมพร้อม apply)
  * หลังยืนยัน ระบบให้ดาวน์โหลด Excel รายชื่อ + รหัสผ่านเริ่มต้นครั้งเดียว (เก็บในระบบแค่ hash) — ปุ่มดาวน์โหลดค้างอยู่
@@ -14,15 +15,18 @@ import Spinner from "./Spinner";
 import { fs } from "./FleetUI";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
-import { PickedFile, pickFile } from "../utils/filePicker";
+import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
+import FileDropZone, { DropHint } from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
 
 interface Person {
   login: string;
   name: string;
-  role: "AREA" | "COCO_SUPERVISOR";
+  role: "AREA" | "COCO_SUPERVISOR" | "COCO_MAID";
   phone: string | null;
   areaLogin: string | null;
+  /** Maid: ชื่อหัวหน้าจากคอลัมน์ "Area (หัวหน้า)" */
+  lead?: string | null;
   branches: string[];
   unknownBranches: string[];
   status: "NEW" | "UPDATE" | "TAKEN";
@@ -34,6 +38,7 @@ interface Preview {
   summary: {
     areas: number;
     supervisors: number;
+    maids: number;
     branches: number;
     create: number;
     update: number;
@@ -72,6 +77,8 @@ const STATUS = {
   TAKEN: { label: "ชื่อผู้ใช้ซ้ำ — ข้าม", fg: colors.dangerInk, bg: colors.dangerSoft },
 };
 
+const ACCEPT = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
 export default function AreaTeamImportModal({ visible, onClose, onDone }: { visible: boolean; onClose: () => void; onDone: () => void }) {
   const [file, setFile] = useState<PickedFile | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -89,8 +96,9 @@ export default function AreaTeamImportModal({ visible, onClose, onDone }: { visi
     onClose();
   }
 
-  async function choose() {
-    const picked = await pickFile(".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  // given = ไฟล์ที่ลากมาวาง (FileDropZone) — ไม่ส่ง = เปิดหน้าต่างเลือกไฟล์
+  async function choose(given?: PickedFile | null) {
+    const picked = given !== undefined ? given : await pickFile(ACCEPT);
     if (!picked) return;
     setFile(picked);
     setPreview(null);
@@ -138,7 +146,7 @@ export default function AreaTeamImportModal({ visible, onClose, onDone }: { visi
       onClose={close}
       busy={busy}
       title="นำเข้า Area Team"
-      subtitle="ไฟล์ Area Team (.xlsx) — ERP · Name-Surname · Mail · Area"
+      subtitle="ไฟล์ Area Team (ERP · Name-Surname · Mail · Area) หรือไฟล์รายชื่อ Maid (ERP · Name-Surname · User) — .xlsx"
       width={820}
       footer={
         applied ? (
@@ -194,13 +202,16 @@ export default function AreaTeamImportModal({ visible, onClose, onDone }: { visi
         </View>
       ) : (
         <View style={styles.block}>
-          <TouchableOpacity style={[fs.btn, fs.btnGhost, styles.pick]} onPress={choose} disabled={busy} accessibilityLabel="เลือกไฟล์ Area Team">
-            <Ionicons name="document-attach-outline" size={18} color={colors.navy} />
-            <Text style={fs.btnGhostText}>{file ? `เปลี่ยนไฟล์ (${file.name})` : "เลือกไฟล์ Area Team"}</Text>
-          </TouchableOpacity>
+          <FileDropZone hint="ไฟล์ .xlsx" disabled={busy} label="วางไฟล์ Area Team" onFiles={(files) => choose(droppedFile(files, ACCEPT))}>
+            <TouchableOpacity style={[fs.btn, fs.btnGhost, styles.pick]} onPress={() => choose()} disabled={busy} accessibilityLabel="เลือกไฟล์ Area Team">
+              <Ionicons name="document-attach-outline" size={18} color={colors.navy} />
+              <Text style={fs.btnGhostText}>{file ? `เปลี่ยนไฟล์ (${file.name})` : "เลือกไฟล์ Area Team / รายชื่อ Maid"}</Text>
+            </TouchableOpacity>
+            <DropHint text="หรือลากไฟล์มาวางตรงนี้" />
+          </FileDropZone>
           <Text style={styles.muted}>
-            ชื่อผู้ใช้ = อีเมลส่วนหน้า @ (เช่น kanlaya.l) · รหัสผ่านสุ่มให้แต่ละคน · นำเข้าไฟล์ใหม่ทีหลังได้ — ย้ายสาขา/เปลี่ยนคน
-            ระบบอัปเดตให้ ไม่สร้างซ้ำ และไม่เปลี่ยนรหัสของคนที่มีบัญชีแล้ว
+            ชื่อผู้ใช้ = อีเมลส่วนหน้า @ (เช่น kanlaya.l) · ไฟล์ Maid ใช้คอลัมน์ User · รหัสผ่านสุ่มให้แต่ละคน · นำเข้าไฟล์ใหม่ทีหลังได้ —
+            ย้ายสาขา/เปลี่ยนคน ระบบอัปเดตให้ ไม่สร้างซ้ำ และไม่เปลี่ยนรหัสของคนที่มีบัญชีแล้ว
           </Text>
           {busy && !preview ? <Spinner /> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -208,9 +219,9 @@ export default function AreaTeamImportModal({ visible, onClose, onDone }: { visi
           {s ? (
             <>
               <View style={styles.tiles}>
+                {/* ไฟล์หนึ่งเป็นแบบเดียว — ไฟล์ Maid ไม่มี Area/Supervisor และกลับกัน ไม่ต้องโชว์ช่องที่เป็น 0 */}
                 {[
-                  [s.areas, "Area"],
-                  [s.supervisors, "Supervisor (COCO)"],
+                  ...(s.maids ? [[s.maids, "Maid (COCO)"]] : [[s.areas, "Area"], [s.supervisors, "Supervisor (COCO)"]]),
                   [s.branches, "สาขาที่ผูก"],
                   [s.create, "บัญชีใหม่"],
                   [s.update, "อัปเดต"],
@@ -230,12 +241,12 @@ export default function AreaTeamImportModal({ visible, onClose, onDone }: { visi
               ) : null}
               {s.notCoco.length ? (
                 <Text style={styles.alert}>
-                  รหัสสาขาที่ไม่ขึ้นต้นด้วย C (ไม่ใช่สาขา COCO) — Supervisor จะมองไม่เห็นสาขาเหล่านี้: {s.notCoco.join(" ")}
+                  รหัสสาขาที่ไม่ขึ้นต้นด้วย C (ไม่ใช่สาขา COCO) — Supervisor/Maid จะมองไม่เห็นสาขาเหล่านี้: {s.notCoco.join(" ")}
                 </Text>
               ) : null}
               {s.taken.length ? (
                 <Text style={styles.alert}>
-                  ชื่อผู้ใช้ซ้ำกับบัญชีตำแหน่งอื่น — ข้ามไว้ ไม่เปลี่ยนตำแหน่งให้:{" "}
+                  ชื่อผู้ใช้ซ้ำกับบัญชีตำแหน่งอื่น — ข้ามไว้ ไม่เปลี่ยนตำแหน่งให้ (แก้ที่การ์ดของคนนั้นในหน้านี้):{" "}
                   {s.taken.map((t) => `${t.login} (${t.name})`).join(", ")}
                 </Text>
               ) : null}
@@ -264,7 +275,11 @@ export default function AreaTeamImportModal({ visible, onClose, onDone }: { visi
                         {p.name} <Text style={styles.login}>· {p.login}</Text>
                       </Text>
                       <Text style={styles.sub} numberOfLines={2}>
-                        {p.role === "AREA" ? "Area · เห็นสาขา COCO ทั้งหมด" : `Supervisor (COCO) · Area: ${areaName.get(p.areaLogin ?? "") ?? p.areaLogin}`}
+                        {p.role === "AREA"
+                          ? "Area · เห็นสาขา COCO ทั้งหมด"
+                          : p.role === "COCO_MAID"
+                          ? `Maid (COCO)${p.lead ? ` · หัวหน้า: ${p.lead}` : ""}`
+                          : `Supervisor (COCO) · Area: ${areaName.get(p.areaLogin ?? "") ?? p.areaLogin}`}
                         {p.branches.length ? ` · ${p.branches.length} สาขา: ${p.branches.join(" ")}` : ""}
                         {p.unknownBranches.length ? ` · ไม่มีในระบบ: ${p.unknownBranches.join(" ")}` : ""}
                       </Text>
