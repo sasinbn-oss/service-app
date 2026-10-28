@@ -23,6 +23,7 @@ import OpenerReportScreen from "../screens/OpenerReportScreen";
 import SystemReportScreen from "../screens/SystemReportScreen";
 import ConfirmedReportScreen from "../screens/ConfirmedReportScreen";
 import PartsOutReportScreen from "../screens/PartsOutReportScreen";
+import IssuedPartsReportScreen from "../screens/IssuedPartsReportScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
@@ -414,6 +415,11 @@ function HomeStackNavigator() {
         name="PartsOutReport"
         component={PartsOutReportScreen}
         options={{ title: "อะไหล่หมด" }}
+      />
+      <HomeStack.Screen
+        name="IssuedPartsReport"
+        component={IssuedPartsReportScreen}
+        options={{ title: "อะไหล่เบิกแล้ว · งานยังไม่จบ" }}
       />
       <HomeStack.Screen
         name="MachineImport"
