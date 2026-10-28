@@ -85,6 +85,21 @@ const { setup } = require("./fixture");
     (await vis("เครื่อง W77 มีใบงานค้างอยู่แล้ว").count()) && (await vis(`เครื่องเดียวกัน · W77`).count()) && made() === ""
       ? pass("กดเปิดใบงาน → ป๊อปอัพ: เครื่องเดียวกัน (W77) ขึ้นแดง · ยังไม่บันทึกจนกว่าจะยืนยัน (ฐานข้อมูล)")
       : fail(`ป๊อปอัพไม่ขึ้น/บันทึกไปแล้ว: ${made()}`);
+    // สาขามีใบค้างเยอะ: ใบเครื่องเดียวกันครบ + ใบอื่น 3 ใบ + "ดูใบอื่นอีก N ใบ" (ช่องติ๊กไม่ไปจมอยู่ล่างสุด)
+    {
+      const sameN = await vis("เครื่องเดียวกัน · W77").count();
+      const views = () => page.getByText("เปิดดูใบเดิม", { exact: true }).locator("visible=true").count();
+      const rest = openCount - sameN;
+      const moreLabel = `ดูใบอื่นอีก ${rest - 3} ใบ`;
+      rest > 3 && (await views()) === sameN + 3 && (await vis(moreLabel).count())
+        ? pass(`ป๊อปอัพโชว์ใบเครื่องเดียวกัน ${sameN} ใบ + ใบอื่น 3 ใบ · "${moreLabel}"`)
+        : fail(`ป๊อปอัพ: ปุ่มเปิดดู ${await views()} · เครื่องเดียวกัน ${sameN} · ใบอื่น ${rest}`);
+      if (rest > 3) {
+        await vis(moreLabel).click();
+        await page.waitForTimeout(600);
+        (await views()) === openCount ? pass("กดดูใบอื่นแล้วครบทุกใบ") : fail(`ดูใบอื่นแล้วได้ ${await views()} ใบ`);
+      }
+    }
     // ดับเบิลคลิกคลิกที่สองตกลงบนป๊อปอัพแล้วลากคลุมข้อความ — ล้างก่อนถ่ายภาพไว้ดู
     await page.evaluate(() => window.getSelection()?.removeAllRanges());
     await page.screenshot({ path: path.join(DIR, "open-orders-popup.png") });

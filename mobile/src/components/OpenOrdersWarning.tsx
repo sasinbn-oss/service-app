@@ -134,9 +134,14 @@ export function DuplicateConfirmModal({
   onView: (id: number) => void;
 }) {
   const [ticked, setTicked] = useState(false);
+  const [all, setAll] = useState(false);
   const isSame = (o: OpenOrder) => !!o.machineCode && sameCodes.includes(o.machineCode);
   const same = orders.filter(isSame);
-  const sorted = [...same, ...orders.filter((o) => !isSame(o))];
+  const others = orders.filter((o) => !isSame(o));
+  // สาขาใหญ่มีใบค้างเป็นสิบ — ถ้าโชว์ครบ ช่องติ๊กยืนยันไปอยู่ล่างสุดจนต้องเลื่อนหา
+  // ใบเครื่องเดียวกันโชว์ครบเสมอ (คือเหตุผลที่ป๊อปอัพขึ้น) ใบอื่นโชว์ 3 ใบแล้วกดดูเพิ่ม
+  const hidden = all ? 0 : Math.max(0, others.length - FIRST);
+  const sorted = [...same, ...(all ? others : others.slice(0, FIRST))];
   const strong = same.length > 0;
   const sameMachines = [...new Set(same.map((o) => o.machineCode!))];
   const ready = !strong || ticked;
@@ -191,6 +196,11 @@ export function DuplicateConfirmModal({
             </View>
           );
         })}
+        {hidden > 0 ? (
+          <TouchableOpacity onPress={() => setAll(true)} accessibilityLabel={`ดูใบอื่นอีก ${hidden} ใบ`}>
+            <Text style={styles.more}>ดูใบอื่นอีก {hidden} ใบ</Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.dupNew}>
           <Text style={styles.dupNewTitle}>ใบใหม่ที่กำลังจะเปิด</Text>
           <Text style={styles.symptom}>{opening}</Text>
