@@ -60,6 +60,11 @@ export const colors = {
   roleArea: "#0E7490",
   roleAreaSoft: "#E3F4F8",
   roleAreaLine: "#A5D8E4",
+  // Maid (COCO) — ชมพูกุหลาบ (ผังฝั่ง Area ต.ค. 69) แยกจากฟ้าอมเขียวของ Area และฟ้าของ Supervisor ชัด ๆ แม้มองผ่าน ๆ
+  roleMaid: "#BE185D",
+  roleMaidInk: "#9D174D",
+  roleMaidSoft: "#FCE7F3",
+  roleMaidLine: "#F9A8D4",
   // เขียวเสจ (เจ้าของงานเลือก ต.ค. 69) — เขียวมะกอกเดิมอมเหลือง ดูสดเกินสำหรับงานที่จบแล้ว
   // ตั้งใจให้หม่นและต่างจากเขียวมรกตของ "รอช่าง" ชัด ๆ
   doneInk: "#2F5A46",
@@ -142,6 +147,10 @@ const DARK: Partial<typeof colors> = {
   roleArea: "#22A6C0",
   roleAreaSoft: "#0C262E",
   roleAreaLine: "#1E5866",
+  roleMaid: "#DB2777",
+  roleMaidInk: "#F9A8D4",
+  roleMaidSoft: "#3A1428",
+  roleMaidLine: "#831843",
   doneInk: "#A3CDB7",
   doneBand: "#4A7D65",
   doneSoft: "#13231C",

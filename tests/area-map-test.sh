@@ -3,6 +3,7 @@
 #   · ผังฝ่ายบริการมีเบอร์ของคนที่มีเบอร์ · ผังฝั่ง Area ทุกคนเปิดได้ มีเบอร์ ดูแลสาขาไหน ใบงานค้าง
 #   · แก้ผังฝั่ง Area ได้เฉพาะแอดมินและ Area (Area ย้ายได้ทุก Area) — ช่าง/หัวหน้าภาค/Supervisor (COCO)/Admin Spare Part ไม่ได้
 #   · ย้าย Supervisor ไป Area อื่น · ย้ายสาขาระหว่าง Supervisor (เปลี่ยนว่าใครเห็นใบงาน) · ตรวจค่าที่ส่งมาทุกตัว
+#   · Maid (COCO): ส่งแยก (maids + branches[].maids) — ผังวาดใต้คนที่ถือสาขา · ไม่อยู่ใน people · ลบบัญชีแล้วไม่ขึ้น
 #   · คนลาออก: ย้ายสาขาทั้งหมดให้คนดูแลแทน (จำว่าเป็นของใคร) → คนใหม่มา ส่งต่อเฉพาะสาขาที่ดูแลแทน
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -64,6 +65,23 @@ M=$(GET $T teams/area-map)
 [ "$(echo "$M" | J "d.branches.filter(b=>b.holderId===$SUP1).map(b=>b.code).join(',')")" = "C0001,C0006" ] \
   && pass "สาขาที่แต่ละคนดูแล (C0001 C0006 = ซุปหนึ่ง)" || fail "สาขาของ sup1: $(echo "$M" | J 'JSON.stringify(d.branches)')"
 [ "$(echo "$M" | J 'd.branches.every(b=>/^c/i.test(b.code))')" = "true" ] && pass "มีแต่สาขา COCO" || fail "มีสาขาที่ไม่ใช่ COCO"
+
+# Maid (COCO) — ไม่ใช่ผู้ดูแลสาขา จึงไม่อยู่ใน people แต่ผังต้องรู้ว่าสาขาไหนมีใครประจำ (ขึ้นใต้คนที่ถือสาขา)
+mkuser zm.maid1 "ทดสอบ แม่บ้าน (ฝน)" "089-300-0001" COCO_MAID ""
+mkuser zm.maid2 "ทดสอบ แม่บ้านลาออก (นิด)" "089-300-0002" COCO_MAID ""
+MAID1=$(id zm.maid1); MAID2=$(id zm.maid2)
+DB "insert into \"CocoMaidBranch\"(\"userId\",\"branchId\") select $MAID1, id from \"Branch\" where code in ('C0006','CNX')" >/dev/null
+DB "insert into \"CocoMaidBranch\"(\"userId\",\"branchId\") select $MAID2, id from \"Branch\" where code='C0006'" >/dev/null
+DB "update \"User\" set \"deletedAt\"=now() where id=$MAID2" >/dev/null
+M=$(GET $T teams/area-map)
+[ "$(echo "$M" | J "const m=d.maids.find(x=>x.id===$MAID1); m ? [m.name,m.code,m.phone].join('|') : '-'")" = "ทดสอบ แม่บ้าน (ฝน)|zm.maid1|089-300-0001" ] \
+  && pass "Maid (COCO): ชื่อ รหัส เบอร์ (ช่างเปิดผังก็เห็น)" || fail "maids: $(echo "$M" | J 'JSON.stringify(d.maids)')"
+[ "$(echo "$M" | J "['C0001','C0006','CNX'].map(c=>c+':'+d.branches.find(b=>b.code===c).maids.join('+')).join(',')")" = "C0001:,C0006:$MAID1,CNX:$MAID1" ] \
+  && pass "สาขาบอกว่ามี Maid คนไหนประจำ — Maid คนเดียวประจำได้หลายสาขา · ลบบัญชีแล้วไม่ขึ้น" || fail "branches[].maids: $(echo "$M" | J "JSON.stringify(d.branches.filter(b=>b.maids.length))")"
+[ "$(echo "$M" | J "d.people.some(p=>p.id===$MAID1||p.id===$MAID2) || d.maids.some(m=>m.id===$MAID2)")" = "false" ] \
+  && pass "Maid ไม่อยู่ใน people (ไม่ใช่ที่วางสาขา) · Maid ที่ลบบัญชีแล้วไม่อยู่ใน maids" || fail "Maid หลุดเข้า people หรือ Maid ลาออกยังอยู่"
+[ "$(GET $(login zm.maid1) teams/area-map | J 'Array.isArray(d.maids) && d.canEdit === false')" = "true" ] \
+  && pass "Maid (COCO) เปิดผังได้ แต่แก้ไม่ได้" || fail "Maid เปิดผัง/สิทธิ์แก้ไม่ถูก"
 canEdit() { GET $1 teams/area-map | J 'd.canEdit'; }
 [ "$(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $C1)|$(canEdit $PA)" = "true|true|false|false|false|false" ] \
   && pass "ปุ่มแก้ไข: แอดมิน · Area เท่านั้น" || fail "canEdit: $(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $C1)|$(canEdit $PA)"

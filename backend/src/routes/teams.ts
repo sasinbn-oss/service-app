@@ -190,6 +190,9 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
  *
  * คนที่ถูกลบบัญชีแล้วแต่สาขายังผูกอยู่ (ลาออก) ถูกส่งมาด้วย (left) — ถ้าไม่ส่ง สาขาของเขาจะหายจากผัง
  * ทั้งที่ยังไม่มีใครดูแล และกด "ย้ายสาขาทั้งหมด" ให้คนดูแลแทนไม่ได้
+ *
+ * Maid (COCO) ส่งเป็น maids แยก + branches[].maids (ผังขึ้นใต้คนที่ถือสาขา) — เบอร์เห็นเท่ากับเบอร์ Supervisor
+ * คือทุกคนที่เปิดผังได้ (ตามตัวอย่างที่เจ้าของงานตกลง ต.ค. 69) · Maid ที่ลบบัญชีแล้วไม่ส่ง เพราะไม่ได้ถือสาขา ไม่มีอะไรต้องย้ายต่อ
  */
 const AREA_HOLDER_ROLES = ["AREA", "COCO_SUPERVISOR"];
 const COCO_CODE = { startsWith: "C", mode: "insensitive" as const };
@@ -197,7 +200,7 @@ const canEditAreaMap = (auth: AuthRequest["auth"]) =>
   !!auth && !auth.viewAs && ((auth.role === "ADMIN" && !auth.partsAdmin) || auth.role === "AREA");
 
 router.get("/area-map", requireAuth, async (req: AuthRequest, res) => {
-  const [people, branches, orders] = await Promise.all([
+  const [people, branches, orders, maidLinks] = await Promise.all([
     prisma.user.findMany({
       where: {
         role: { in: AREA_HOLDER_ROLES },
@@ -216,8 +219,20 @@ router.get("/area-map", requireAuth, async (req: AuthRequest, res) => {
       where: { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, branch: { cancelledAt: null, code: COCO_CODE } },
       _count: true,
     }),
+    // Maid (COCO) ไม่ใช่ผู้ดูแลสาขา จึงไม่อยู่ใน people (ไม่มีที่ให้ลากวาง) — ส่งแยกไว้ให้หน้าจอวาดใต้คนที่ถือสาขาที่ Maid ประจำ
+    prisma.cocoMaidBranch.findMany({
+      where: { user: { role: "COCO_MAID", deletedAt: null }, branch: { cancelledAt: null, code: COCO_CODE } },
+      select: { branchId: true, user: { select: { id: true, name: true, employeeCode: true, phone: true } } },
+      orderBy: { user: { name: "asc" } },
+    }),
   ]);
   const openById = new Map(orders.map((o) => [o.branchId, o._count]));
+  const maidsByBranch = new Map<number, number[]>();
+  const maids = new Map<number, { id: number; name: string; code: string; phone: string | null }>();
+  for (const l of maidLinks) {
+    maidsByBranch.set(l.branchId, [...(maidsByBranch.get(l.branchId) ?? []), l.user.id]);
+    maids.set(l.user.id, { id: l.user.id, name: l.user.name, code: l.user.employeeCode, phone: l.user.phone });
+  }
   const areaIds = new Set(people.filter((p) => p.role === "AREA" && !p.deletedAt).map((p) => p.id));
   const known = new Set(people.map((p) => p.id));
 
@@ -241,7 +256,9 @@ router.get("/area-map", requireAuth, async (req: AuthRequest, res) => {
       holderId: b.cocoSupervisorId && known.has(b.cocoSupervisorId) ? b.cocoSupervisorId : null,
       open: openById.get(b.id) ?? 0,
       cover: b.coverForName ? { forId: b.coverForId, forName: b.coverForName, since: b.coverSince } : null,
+      maids: maidsByBranch.get(b.id) ?? [],
     })),
+    maids: [...maids.values()],
   });
 });
 
