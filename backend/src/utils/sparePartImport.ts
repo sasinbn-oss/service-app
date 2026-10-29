@@ -8,6 +8,8 @@
  * - เทียบด้วยรหัสสินค้า — มีแล้วแก้ให้ตรงไฟล์ · ใหม่เพิ่ม · **ไม่ลบ** อะไหล่ที่ไม่อยู่ในไฟล์ (ใบงานเก่ายังอ้างถึง)
  * - ช่องว่างในไฟล์ไม่ลบค่าเดิม (Part No. ว่าง = คงค่าเดิม) — ไฟล์บางยี่ห้อไม่มีคอลัมน์นั้นเลย
  * - รูปในไฟล์ต่างจากรูปเดิม = แทนรูปเดิม (ค่าตั้งต้น) หรือเก็บรูปเดิมไว้ เติมเฉพาะที่ยังไม่มีรูป
+ * - รูปเทียบกันด้วย sha256 ของรูปต้นฉบับ — เบราว์เซอร์ย่อรูปใหญ่ก่อนส่ง (ไฟล์เกิน 50 MB) แล้วส่งค่าของรูปก่อนย่อมาด้วย
+ *   (mobile/src/utils/shrinkXlsx.ts) ย่อซ้ำได้ไบต์ไม่เหมือนเดิม ถ้าเทียบไบต์ที่เก็บ รูปจะ "เปลี่ยน" ทุกรอบ
  */
 import crypto from "crypto";
 import ExcelJS from "exceljs";
@@ -31,6 +33,9 @@ const ALIASES: Record<Field, string[]> = {
 };
 const IGNORED = ["ลำดับ", "ลําดับ", "no", "seq"];
 const norm = (s: string) => s.toLowerCase().replace(/[\s_\-.()/\\:#*]/g, "");
+
+/** เท่ากับที่ฟอร์มแก้ไขรับ (routes/spareParts.ts) — ยาวกว่านี้นำเข้าได้แต่แก้ในฟอร์มไม่ได้ */
+export const PART_NO_MAX = 2000;
 
 export const FIELD_LABEL: Record<"name" | "brand" | "category" | "partNo", string> = {
   name: "ชื่อ",
@@ -68,7 +73,8 @@ function text(v: ExcelJS.CellValue): string {
   if (typeof v === "object") {
     const o = v as unknown as Record<string, unknown>;
     if (Array.isArray(o.richText)) return (o.richText as { text: string }[]).map((t) => t.text).join("").trim();
-    if (typeof o.text === "string") return o.text.trim();
+    // ลิงก์ที่ข้อความจัดรูปแบบบางส่วน (ตัวหนา) — ExcelJS อ่านเป็น { text: { richText }, hyperlink }
+    if (o.text !== undefined && o.text !== null) return typeof o.text === "string" ? o.text.trim() : text(o.text as ExcelJS.CellValue);
     if (o.result !== undefined && o.result !== null && typeof o.result !== "object") return String(o.result).trim();
     if (v instanceof Date) return v.toISOString().slice(0, 10);
     return ""; // { error: "#VALUE!" } = รูปในเซลล์
@@ -93,7 +99,8 @@ export interface ImportRow {
   brand: string;
   category: string;
   partNo: string;
-  image: (FormImage & { md5: string }) | null;
+  /** hash = sha256 ของรูปต้นฉบับ · source = มาจากเบราว์เซอร์ (รูปถูกย่อ เก็บไว้เทียบรอบหน้า) */
+  image: (FormImage & { hash: string; source: boolean }) | null;
 }
 export interface Problem {
   line: number;
@@ -109,7 +116,8 @@ export interface ParsedFile {
 }
 
 /** อ่านชีตแรก — หัวตารางอยู่ในห้าแถวแรก (แถวแรกที่หาคอลัมน์รหัสสินค้าเจอ) */
-export async function parsePartsWorkbook(buf: Buffer): Promise<ParsedFile> {
+/** sourceHashes = { "xl/media/image3.png": sha256 ของรูปก่อนย่อ } จากเบราว์เซอร์ — รูปที่ไม่ได้ย่อคิดจากไบต์ในไฟล์ */
+export async function parsePartsWorkbook(buf: Buffer, sourceHashes: Record<string, string> = {}): Promise<ParsedFile> {
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(buf as unknown as ArrayBuffer);
@@ -118,15 +126,18 @@ export async function parsePartsWorkbook(buf: Buffer): Promise<ParsedFile> {
   }
   const ws = wb.worksheets[0];
   if (!ws) throw new Error("ไฟล์ไม่มีชีต");
+  // แถวหัวตาราง = แถวแรกที่เจอทั้งรหัสและชื่อ — แถวชื่อเรื่องด้านบน ("ข้อมูลรหัสสินค้าอะไหล่ Haier") มีคำว่ารหัสสินค้าแต่ไม่ใช่หัวตาราง
+  // ไม่เจอครบ ใช้แถวแรกที่เจอรหัสไว้บอกว่าขาดคอลัมน์ไหน
   let headerRow = 0;
   let cols: ReturnType<typeof detect> = {};
   for (let r = 1; r <= Math.min(5, ws.rowCount); r++) {
     const c = detect(ws.getRow(r));
-    if (c.partCode) {
+    if (c.partCode && c.name) {
       headerRow = r;
       cols = c;
       break;
     }
+    if (c.partCode && !cols.partCode) cols = c;
   }
   if (!cols.partCode) throw new Error("หาคอลัมน์ “รหัสสินค้า” ไม่เจอ — ไฟล์นี้ไม่ได้อัปเดต");
   if (!cols.name) throw new Error("หาคอลัมน์ “ชื่อรวม (ไทย)” ไม่เจอ — ไฟล์นี้ไม่ได้อัปเดต");
@@ -150,10 +161,14 @@ export async function parsePartsWorkbook(buf: Buffer): Promise<ParsedFile> {
   const rows: ImportRow[] = [];
   const problems: Problem[] = [];
   const seen = new Map<string, number>();
-  const md5 = new Map<Buffer, string>();
+  const hashOf = new Map<Buffer, { hash: string; source: boolean }>();
   const at = (r: ExcelJS.Row, f: Field) => (cols[f] ? text(r.getCell(cols[f]!.col).value) : "");
   for (let line = headerRow + 1; line <= ws.rowCount; line++) {
     const r = ws.getRow(line);
+    // เซลล์ที่ถูกผสานกับแถวบน ExcelJS คืนค่าของแถวบนมาให้ — หัวตารางสองชั้น (รหัสสินค้าผสานลงมา) กลายเป็นอะไหล่ชื่อ "ไทย"
+    // และอะไหล่ที่ผสานรหัสลงสองแถว แถวล่างที่ว่างจะชนะเป็น "รหัสซ้ำ ใช้แถวหลัง" ทิ้งรูป/Part No. ของแถวจริง
+    const codeCell = r.getCell(cols.partCode!.col);
+    if (codeCell.isMerged && codeCell.master !== codeCell) continue;
     const partCode = clean(at(r, "partCode")).toUpperCase();
     const name = clean(at(r, "name"));
     const img = rowImages.get(line) ?? null;
@@ -166,6 +181,11 @@ export async function parsePartsWorkbook(buf: Buffer): Promise<ParsedFile> {
       problems.push({ line, partCode, name: null, note: "ไม่มีชื่อ — ข้ามแถวนี้" });
       continue;
     }
+    const partNo = cleanPartNo(at(r, "partNo"));
+    if (partNo.length > PART_NO_MAX) {
+      problems.push({ line, partCode, name, note: `Part No. ยาวเกิน ${PART_NO_MAX.toLocaleString("en-US")} ตัวอักษร — ข้ามแถวนี้` });
+      continue;
+    }
     const prev = seen.get(partCode);
     if (prev !== undefined) {
       // แถวล่างคือแถวที่คนเพิ่งแก้ (ต่อท้ายไฟล์) — ใช้แถวหลัง และบอกให้รู้
@@ -174,15 +194,18 @@ export async function parsePartsWorkbook(buf: Buffer): Promise<ParsedFile> {
       rows.splice(i, 1);
     }
     seen.set(partCode, line);
-    if (img && !md5.has(img.data)) md5.set(img.data, crypto.createHash("md5").update(img.data).digest("hex"));
+    if (img && !hashOf.has(img.data)) {
+      const given = img.path ? sourceHashes[img.path] : undefined;
+      hashOf.set(img.data, given ? { hash: given, source: true } : { hash: crypto.createHash("sha256").update(img.data).digest("hex"), source: false });
+    }
     rows.push({
       line,
       partCode,
       name,
       brand: clean(at(r, "brand")),
       category: clean(at(r, "category")),
-      partNo: cleanPartNo(at(r, "partNo")),
-      image: img ? { ...img, md5: md5.get(img.data)! } : null,
+      partNo,
+      image: img ? { ...img, ...hashOf.get(img.data)! } : null,
     });
   }
   const columns = Object.fromEntries(Object.entries(cols).map(([k, v]) => [k, v!.header])) as ParsedFile["columns"];
@@ -215,16 +238,33 @@ export interface Plan {
 }
 
 /**
+ * รูปในไฟล์เทียบกับรูปเดิม
+ * - รูปเดิมเป็นลิงก์ภายนอก (สคริปต์นำเข้าเก่าเก็บ URL ตรง ๆ ไม่มีแถวรูป) = มีรูปแล้ว — "เก็บรูปเดิม" ต้องไม่ทับ
+ * - รูปเดียวกัน (hash ต้นฉบับตรงกัน) แต่อะไหล่ไม่มีลิงก์รูป (อัปเดตรอบก่อนพังหลังเขียนรูป) = เขียนลิงก์ให้ ไม่งั้นรูปไม่ขึ้นตลอดไป
+ */
+function imageAction(cur: { id: number; imageUrl: string | null; hash: string | null }, hash: string | null, replace: boolean): PlanItem["image"] {
+  if (!hash) return null;
+  if (cur.hash === hash) return cur.imageUrl ? null : "NEW";
+  const hasPhoto = !!cur.hash || (!!cur.imageUrl && cur.imageUrl !== `/api/spare-parts/${cur.id}/image`);
+  if (!hasPhoto) return "NEW";
+  return replace ? "CHANGED" : "KEPT";
+}
+
+/**
  * เทียบกับในระบบ — อ่านทีเดียวทั้งไฟล์ (ฐานข้อมูลอยู่ไกล รอบละ ~0.2 วิ)
- * รูปเดิมเทียบด้วย md5 ที่ฐานข้อมูลคิดให้ ไม่ดึงรูปทั้งก้อนมาเทียบ (หลายร้อยรูป = หลายสิบ MB)
+ * รูปเดิมเทียบด้วย hash ที่ฐานข้อมูลคิดให้ ไม่ดึงรูปทั้งก้อนมาเทียบ (หลายร้อยรูป = หลายสิบ MB)
+ * รูปที่มาจากไฟล์ที่ถูกย่อ ใช้ค่ารูปต้นฉบับที่เก็บไว้ (sourceHash) ไม่ใช่ไบต์ที่ย่อแล้ว
  */
 export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean): Promise<Plan> {
   const codes = parsed.rows.map((r) => r.partCode);
   const brands = [...new Set(parsed.rows.map((r) => r.brand).filter(Boolean))];
   const [existing, others] = await Promise.all([
     codes.length
-      ? prisma.$queryRaw<{ id: number; partCode: string; name: string; brand: string | null; category: string | null; partNo: string | null; md5: string | null }[]>`
-          SELECT p.id, p."partCode", p.name, p.brand, p.category, p."partNo", md5(i.data) AS md5
+      ? prisma.$queryRaw<
+          { id: number; partCode: string; name: string; brand: string | null; category: string | null; partNo: string | null; imageUrl: string | null; hash: string | null }[]
+        >`
+          SELECT p.id, p."partCode", p.name, p.brand, p.category, p."partNo", p."imageUrl",
+            COALESCE(i."sourceHash", encode(sha256(i.data), 'hex')) AS hash
           FROM "SparePart" p LEFT JOIN "SparePartImage" i ON i."sparePartId" = p.id
           WHERE upper(p."partCode") = ANY(${codes}::text[])`
       : Promise.resolve([]),
@@ -238,7 +278,8 @@ export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean
       : Promise.resolve([]),
   ]);
   const byCode = new Map(existing.map((p) => [p.partCode.toUpperCase(), p]));
-  const inFile = new Set(codes);
+  // แถวที่ข้าม (ไม่มีชื่อ ฯลฯ) ก็อยู่ในไฟล์ — ไม่ใช่ทั้ง "ข้าม" และ "ไม่อยู่ในไฟล์"
+  const inFile = new Set([...codes, ...parsed.problems.flatMap((p) => (p.partCode ? [p.partCode] : []))]);
 
   const items: PlanItem[] = parsed.rows.map((r) => {
     const cur = byCode.get(r.partCode);
@@ -252,7 +293,7 @@ export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean
       // ช่องว่างในไฟล์ = คงค่าเดิม
       if (to && to !== from) diffs.push({ field: f, label: FIELD_LABEL[f], from: from || "(ว่าง)", to });
     }
-    const image: PlanItem["image"] = !r.image ? null : !cur.md5 ? "NEW" : cur.md5 === r.image.md5 ? null : replaceImages ? "CHANGED" : "KEPT";
+    const image = imageAction(cur, r.image?.hash ?? null, replaceImages);
     const action = diffs.length ? "UPDATE" : "SAME";
     return { ...base, id: cur.id, action, diffs, image };
   });
@@ -320,24 +361,24 @@ export async function applyPartsImport(parsed: ParsedFile, plan: Plan) {
   const imageIds: number[] = [];
   for (let k = 0; k < withImage.length; k += IMAGE_CHUNK) {
     const chunk = withImage.slice(k, k + IMAGE_CHUNK).filter((i) => idOf.has(i.partCode));
-    await prisma.$transaction(
-      chunk.map((i) => {
+    const ids = chunk.map((i) => idOf.get(i.partCode)!);
+    // ลิงก์รูปเขียนในก้อนเดียวกับรูป — เดิมเขียนท้ายสุดครั้งเดียว พังกลางทางแล้วรูปเข้าแต่ลิงก์ไม่มา รูปไม่ขึ้น
+    // เวลาแก้ล่าสุดคือตัวกันแคชรูปในแอป (?v=updatedAt) — รูปเปลี่ยนแต่เวลาไม่ขยับ เครื่องเดิมยังเห็นรูปเก่าทั้งวัน
+    await prisma.$transaction([
+      ...chunk.map((i) => {
         const img = row.get(i.partCode)!.image!;
         const sparePartId = idOf.get(i.partCode)!;
-        imageIds.push(sparePartId);
         return prisma.sparePartImage.upsert({
           where: { sparePartId },
-          update: { mimeType: img.mime, data: img.data },
-          create: { sparePartId, mimeType: img.mime, data: img.data },
+          update: { mimeType: img.mime, data: img.data, sourceHash: img.source ? img.hash : null },
+          create: { sparePartId, mimeType: img.mime, data: img.data, sourceHash: img.source ? img.hash : null },
         });
-      })
-    );
-  }
-  if (imageIds.length) {
-    // เวลาแก้ล่าสุดคือตัวกันแคชรูปในแอป (?v=updatedAt) — รูปเปลี่ยนแต่เวลาไม่ขยับ เครื่องเดิมยังเห็นรูปเก่าทั้งวัน
-    await prisma.$executeRaw`
-      UPDATE "SparePart" SET "imageUrl" = '/api/spare-parts/' || id || '/image', "updatedAt" = now()
-      WHERE id = ANY(${imageIds}::int[])`;
+      }),
+      prisma.$executeRaw`
+        UPDATE "SparePart" SET "imageUrl" = '/api/spare-parts/' || id || '/image', "updatedAt" = now()
+        WHERE id = ANY(${ids}::int[])`,
+    ]);
+    imageIds.push(...ids);
   }
   return { created: creates.length, updated: updates.length, images: imageIds.length };
 }
@@ -352,7 +393,29 @@ export function reportDetails(fileName: string, parsed: ParsedFile, plan: Plan) 
       .map(({ line, partCode, name, brand, partNo, action, diffs, image }) => ({ line, partCode, name, brand, partNo, action, diffs, image })),
     problems: parsed.problems,
     notInFile: plan.notInFile,
+    // รหัสทุกแถวที่ใช้ได้ (แถวที่ข้ามอยู่ใน problems) — ยี่ห้อเดียวแยกหลายไฟล์ในรอบเดียว "ไม่อยู่ในไฟล์" ต้องหักรหัสที่อยู่ไฟล์อื่นออก
+    // และหน้าตรวจใช้หารหัสซ้ำข้ามไฟล์
+    codes: parsed.rows.map((r) => r.partCode),
   };
 }
 
 export type ReportDetails = ReturnType<typeof reportDetails>;
+type Gone = Plan["notInFile"][number];
+
+/**
+ * "ไม่อยู่ในไฟล์" ของทั้งรอบ — แต่ละไฟล์คิดเฉพาะรหัสของตัวเอง ไฟล์ยี่ห้อเดียวกันสองไฟล์ (แยกเพราะไฟล์ใหญ่)
+ * จะฟ้องว่าอีกครึ่งไม่อยู่ในไฟล์ทั้งหมด — หักรหัสที่อยู่ในไฟล์ใดก็ได้ของรอบ และนับตัวละครั้ง
+ * แถวประวัติก่อนมี codes ใช้รหัสจากรายการที่เปลี่ยน/ปัญหาแทน (ขาดแถวที่เหมือนเดิมไป — ดีกว่าไม่หักเลย)
+ */
+export function notInBatch(files: { details: Pick<ReportDetails, "notInFile" | "items" | "problems"> & { codes?: string[] } }[]) {
+  const inBatch = new Set<string>();
+  for (const { details: d } of files) {
+    for (const c of d.codes ?? []) inBatch.add(c.toUpperCase());
+    for (const i of d.items) inBatch.add(i.partCode.toUpperCase());
+    for (const p of d.problems) if (p.partCode) inBatch.add(p.partCode.toUpperCase());
+  }
+  const gone = new Map<string, Gone>();
+  for (const { details: d } of files)
+    for (const g of d.notInFile) if (!inBatch.has(g.partCode.toUpperCase())) gone.set(g.partCode.toUpperCase(), g);
+  return [...gone.values()].sort((a, b) => a.partCode.localeCompare(b.partCode));
+}

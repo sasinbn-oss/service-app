@@ -611,6 +611,10 @@ model SparePartImage {
   sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
   mimeType    String
   data        Bytes
+  // sha256 ของรูปต้นฉบับในไฟล์ Excel ก่อนเบราว์เซอร์ย่อรูป (ไฟล์อะไหล่ที่รูปเต็มขนาดเกิน 50 MB)
+  // อัปเดตรอบหน้าเทียบกับค่านี้ — ย่อซ้ำแต่ละครั้งได้ไบต์ไม่เหมือนเดิม ถ้าเทียบ data รูปจะ "เปลี่ยน" ทุกรอบ
+  // null = data คือรูปต้นฉบับเอง (อัปโหลดในแอป / ไม่ได้ย่อ)
+  sourceHash  String?
   updatedAt   DateTime  @updatedAt
 }
 

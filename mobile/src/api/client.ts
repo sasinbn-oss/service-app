@@ -17,6 +17,16 @@ export function resolveImageUrl(imageUrl?: string | null): string | undefined {
   return `${API_URL}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
 }
 
+/**
+ * รูปอะไหล่ — ต่อท้ายด้วยเวลาแก้ล่าสุด เพราะลิงก์รูป (/api/spare-parts/:id/image) เป็นลิงก์เดิมตลอดและถูกแคช 1 วัน
+ * อัปเดตรูปจากไฟล์แล้ว ถ้าลิงก์ไม่เปลี่ยน ช่างยังเห็นรูปเก่าทั้งวัน
+ */
+export function partImageUri(part: { imageUrl?: string | null; updatedAt?: string | null }): string | undefined {
+  const uri = resolveImageUrl(part.imageUrl);
+  if (!uri || !part.updatedAt) return uri;
+  return `${uri}${uri.includes("?") ? "&" : "?"}v=${encodeURIComponent(part.updatedAt)}`;
+}
+
 export const TOKEN_KEY = "service-app/token";
 /** โทเคนตัวจริงของ Super Admin ระหว่างดูในฐานะคนอื่น — TOKEN_KEY ถือโทเคนของคนที่ถูกดูแทน */
 export const SELF_TOKEN_KEY = "service-app/token-self";

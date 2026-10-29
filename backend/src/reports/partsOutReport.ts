@@ -39,6 +39,8 @@ export interface PartsOutRow {
   partName: string;
   brand: string | null;
   imageUrl: string | null;
+  /** ตัวกันแคชรูป (?v=) — รูปอะไหล่ถูกแทนจากไฟล์ได้ ลิงก์เดิมแคชไว้ 1 วัน */
+  updatedAt: string;
   offCatalog: boolean;
   quantity: number;
   unit: string | null;
@@ -88,7 +90,7 @@ export async function buildPartsOutReport(opts: {
       unit: true,
       checkedAt: true,
       checkedBy: { select: { name: true } },
-      sparePart: { select: { partCode: true, name: true, brand: true, imageUrl: true, offCatalog: true } },
+      sparePart: { select: { partCode: true, name: true, brand: true, imageUrl: true, updatedAt: true, offCatalog: true } },
       workOrder: {
         select: {
           id: true,
@@ -124,6 +126,7 @@ export async function buildPartsOutReport(opts: {
       partName: p.sparePart.name,
       brand: p.sparePart.brand,
       imageUrl: p.sparePart.imageUrl,
+      updatedAt: p.sparePart.updatedAt.toISOString(),
       offCatalog: p.sparePart.offCatalog,
       quantity: p.quantity,
       unit: p.unit,

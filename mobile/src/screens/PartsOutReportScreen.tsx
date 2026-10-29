@@ -12,7 +12,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import { useRefreshHandler } from "../components/RefreshButton";
-import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { api, apiErrorMessage, partImageUri, resolveImageUrl } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
 import { HomeStackParamList } from "../navigation/types";
@@ -36,6 +36,7 @@ interface Row {
   partName: string;
   brand: string | null;
   imageUrl: string | null;
+  updatedAt?: string;
   offCatalog: boolean;
   quantity: number;
   unit: string | null;
@@ -317,7 +318,7 @@ export default function PartsOutReportScreen({ navigation }: Props) {
         <View style={styles.grid}>
           {byPart.map((list) => {
             const p = list[0];
-            const uri = resolveImageUrl(p.imageUrl);
+            const uri = partImageUri(p);
             const qty = list.reduce((n, r) => n + r.quantity, 0);
             const branches = new Set(list.map((r) => r.branchCode)).size;
             const late = list.filter(isLate).length;

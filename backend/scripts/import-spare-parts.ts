@@ -143,7 +143,7 @@ async function saveImage(sparePartId: number, image: ExtractedImage) {
   await prisma.$transaction([
     prisma.sparePartImage.upsert({
       where: { sparePartId },
-      update: { mimeType: image.mimeType, data: image.buffer },
+      update: { mimeType: image.mimeType, data: image.buffer, sourceHash: null },
       create: { sparePartId, mimeType: image.mimeType, data: image.buffer },
     }),
     prisma.sparePart.update({

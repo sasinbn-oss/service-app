@@ -3,7 +3,7 @@ import { useRefreshHandler } from "../components/RefreshButton";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import Spinner from "../components/Spinner";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { api, apiErrorMessage, partImageUri } from "../api/client";
 import { colors, headingFont } from "../theme";
 import { SparePart } from "../types";
 import { HomeStackParamList } from "../navigation/types";
@@ -41,7 +41,7 @@ export default function SparePartDetailScreen({ route }: Props) {
     );
   }
 
-  const uri = resolveImageUrl(part.imageUrl);
+  const uri = partImageUri(part);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
