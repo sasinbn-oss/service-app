@@ -221,6 +221,8 @@ export interface FormImage {
   data: Buffer;
   mime: string;
   ext: string;
+  /** ที่อยู่ในไฟล์ (xl/media/image3.png) — อัปเดตอะไหล่ใช้จับคู่กับค่ารูปต้นฉบับที่เบราว์เซอร์ส่งมาตอนย่อรูป */
+  path?: string;
 }
 
 function colLetter(n: number): string {
@@ -276,7 +278,7 @@ export async function cellImages(buf: Buffer): Promise<Map<string, FormImage>> {
     if (!cache.has(path)) {
       const data = await zip.file(path)?.async("nodebuffer");
       const ext = (path.split(".").pop() ?? "").toLowerCase();
-      cache.set(path, data && MIME[ext] ? { data, mime: MIME[ext], ext: ext === "jpeg" ? "jpg" : ext } : null);
+      cache.set(path, data && MIME[ext] ? { data, mime: MIME[ext], ext: ext === "jpeg" ? "jpg" : ext, path } : null);
     }
     const img = cache.get(path);
     if (img) out.set(ref, img);

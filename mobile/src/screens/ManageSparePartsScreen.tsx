@@ -13,7 +13,7 @@ import FileDropZone from "../components/FileDropZone";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
-import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { api, apiErrorMessage, partImageUri } from "../api/client";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
 import SparePartImportModal, { Batch, ImportReportModal } from "../components/SparePartImportModal";
@@ -26,10 +26,7 @@ const ALL = "ทั้งหมด";
 
 // รูปอะไหล่เสิร์ฟจาก URL เดิมทุกครั้ง (/spare-parts/:id/image) — ต่อท้ายด้วยเวลาที่แก้ล่าสุด
 // ไม่งั้นเบราว์เซอร์โชว์รูปเก่าจากแคชหลังเปลี่ยนรูปจนกว่าจะรีเฟรชหน้า
-function thumbUri(part: SparePart) {
-  const uri = resolveImageUrl(part.imageUrl);
-  return uri ? `${uri}${uri.includes("?") ? "&" : "?"}v=${encodeURIComponent(part.updatedAt)}` : null;
-}
+const thumbUri = (part: SparePart) => partImageUri(part) ?? null;
 
 async function pickImage(): Promise<PickedImage | null> {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -196,6 +193,7 @@ export default function ManageSparePartsScreen() {
               {new Date(latest.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </Text>
             {latest.byName ? ` โดย ${latest.byName}` : ""} · เพิ่ม {latest.totals.created} · แก้ไข {latest.totals.updated} · รูป {latest.totals.images}
+            {latest.totals.incomplete ? <Text style={{ color: colors.dangerInk, fontWeight: "700" }}> · อัปเดตไม่ครบ {latest.totals.incomplete} ไฟล์</Text> : null}
           </Text>
           <TouchableOpacity onPress={() => setReport(latest)} accessibilityLabel="ดูรายละเอียดการอัปเดตล่าสุด">
             <Text style={styles.action}>ดูรายละเอียด</Text>

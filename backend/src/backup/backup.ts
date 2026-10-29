@@ -26,6 +26,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { deleteObject, isFileStoreConfigured, uploadObject } from "../storage/fileStore";
 
+const EXCEL_CELL_MAX = 32000;
+
 export const BACKUP_FORMAT = "otteri-backup";
 export const BACKUP_VERSION = 1;
 export const BACKUP_KEEP_DAYS = 30;
@@ -190,7 +192,10 @@ export async function writeBackupFiles(dir: string, migrations: string[]) {
         for (const f of cols) {
           const v = r[f.name];
           // Json เป็นข้อความ — Excel ใส่ออบเจ็กต์ลงช่องไม่ได้
-          row[f.name] = v !== null && typeof v === "object" && !(v instanceof Date) ? JSON.stringify(v) : v;
+          const cell = v !== null && typeof v === "object" && !(v instanceof Date) ? JSON.stringify(v) : v;
+          // ช่องละไม่เกิน 32,767 ตัวอักษร — เกินแล้ว Excel ขึ้น "พบปัญหา ต้องซ่อมไฟล์" ทั้งไฟล์ (รายละเอียดอัปเดตอะไหล่หลายร้อยรายการ)
+          // ไฟล์กู้คืน (.json.gz) เก็บครบอยู่แล้ว ไฟล์ Excel มีไว้ให้คนเปิดดู
+          row[f.name] = typeof cell === "string" && cell.length > EXCEL_CELL_MAX ? `${cell.slice(0, EXCEL_CELL_MAX)}…(ตัดเพราะยาวเกินช่อง Excel — ข้อมูลเต็มอยู่ในไฟล์กู้คืน)` : cell;
         }
         ws.addRow(row).commit();
       }

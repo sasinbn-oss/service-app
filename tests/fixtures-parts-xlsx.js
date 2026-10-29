@@ -3,7 +3,8 @@
 // ใช้: node tests/fixtures-parts-xlsx.js <ออก.xlsx> '<JSON>'
 //   JSON = { "headers": [...], "rows": [[...], ...], "images": { "B2": "a", "B3": "b" } }
 //   ค่าใน images คือ "เมล็ด" ของรูป — เมล็ดเดียวกัน = ไบต์เดียวกัน (ไว้เทสต์รูปเหมือนเดิม/เปลี่ยนรูป)
-// พิมพ์ md5 ของรูปแต่ละเซลล์ออกมาเป็น JSON
+//   "merges": ["C1:C2", ...] = ผสานเซลล์ (หัวตารางสองชั้น / อะไหล่ที่ผสานรหัสลงหลายแถว) · "title": "..." = แถวชื่อเรื่องเหนือหัวตาราง
+// พิมพ์ md5 ของรูปแต่ละเซลล์ออกมาเป็น JSON (+ "_sha": sha256 ไว้เทสต์ค่ารูปต้นฉบับของรูปที่เบราว์เซอร์ย่อ)
 const E = require("exceljs");
 const JSZip = require("jszip");
 const crypto = require("crypto");
@@ -15,17 +16,20 @@ const JPG = Buffer.from(
   "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
   "base64"
 );
-const imageOf = (seed) => Buffer.concat([JPG, Buffer.from(`seed:${seed}`)]);
+// "file:/path/x.jpg" = ใช้รูปจริงจากไฟล์ (เทสต์ไฟล์รูปเต็มขนาดเกิน 50 MB ที่เบราว์เซอร์ต้องย่อ)
+const imageOf = (seed) => (seed.startsWith("file:") ? fs.readFileSync(seed.slice(5)) : Buffer.concat([JPG, Buffer.from(`seed:${seed}`)]));
 (async () => {
   const wb = new E.Workbook();
   const ws = wb.addWorksheet("Sheet1");
+  if (spec.title) ws.addRow([spec.title]);
   ws.addRow(spec.headers);
   for (const r of spec.rows) ws.addRow(r);
+  for (const m of spec.merges || []) ws.mergeCells(m);
   const zip = await JSZip.loadAsync(await wb.xlsx.writeBuffer());
   const sheetPath = Object.keys(zip.files).find((p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
   let sheet = await zip.file(sheetPath).async("string");
   const refs = Object.keys(spec.images || {});
-  const md5 = {};
+  const md5 = { _sha: {} };
   refs.forEach((ref, k) => {
     // เซลล์รูป → ค่า error ที่ชี้ไปรูปลำดับที่ k+1 แบบที่ Excel เขียน (เซลล์ว่างยังไม่มีใน XML ก็เติมให้)
     const cell = `<c r="${ref}" t="e" vm="${k + 1}"><v>#VALUE!</v></c>`;
@@ -37,6 +41,7 @@ const imageOf = (seed) => Buffer.concat([JPG, Buffer.from(`seed:${seed}`)]);
     }
     const data = imageOf(spec.images[ref]);
     md5[ref] = crypto.createHash("md5").update(data).digest("hex");
+    md5._sha[ref] = crypto.createHash("sha256").update(data).digest("hex");
     zip.file(`xl/media/image${k + 1}.jpeg`, data);
   });
   zip.file(sheetPath, sheet);

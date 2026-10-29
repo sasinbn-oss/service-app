@@ -5,7 +5,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { documentPath, saveDocument } from "../documents/store";
-import { ReportDetails, applyPartsImport, parsePartsWorkbook, planPartsImport, reportDetails } from "../utils/sparePartImport";
+import { PART_NO_MAX, ReportDetails, applyPartsImport, notInBatch, parsePartsWorkbook, planPartsImport, reportDetails } from "../utils/sparePartImport";
 
 const router = Router();
 
@@ -75,9 +75,20 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
   const batchId = String(req.body?.batchId ?? "").slice(0, 64);
   if (apply && !/^[A-Za-z0-9_-]{6,64}$/.test(batchId)) return res.status(400).json({ error: "ไม่มีรหัสรอบอัปเดต — ลองเลือกไฟล์ใหม่" });
 
+  // ค่ารูปต้นฉบับของรูปที่เบราว์เซอร์ย่อก่อนส่ง (mobile/src/utils/shrinkXlsx.ts) — ค่าผิดรูปแบบทิ้ง ใช้ไบต์ที่ส่งมาแทน
+  const sourceHashes: Record<string, string> = {};
+  try {
+    const given = JSON.parse(String(req.body?.imageHashes ?? "{}"));
+    if (given && typeof given === "object") {
+      for (const [p, h] of Object.entries(given)) if (/^xl\/media\/[^/]+$/.test(p) && typeof h === "string" && /^[0-9a-f]{64}$/.test(h)) sourceHashes[p] = h;
+    }
+  } catch {
+    // ไม่มี / อ่านไม่ได้ = ถือว่าไม่ได้ย่อรูป
+  }
+
   let parsed: Awaited<ReturnType<typeof parsePartsWorkbook>>;
   try {
-    parsed = await parsePartsWorkbook(req.file.buffer);
+    parsed = await parsePartsWorkbook(req.file.buffer, sourceHashes);
   } catch (e) {
     return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้", fileName });
   }
@@ -94,33 +105,43 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
       if (n++ >= THUMB_MAX_COUNT) break;
       thumbs[r.partCode] = `data:${r.image.mime};base64,${r.image.data.toString("base64")}`;
     }
-    return res.json({ applied: false, imageCount: parsed.imageCount, summary: plan.summary, ...details, codes: parsed.rows.map((r) => r.partCode), thumbs });
+    return res.json({ applied: false, imageCount: parsed.imageCount, summary: plan.summary, ...details, thumbs });
   }
 
-  const done = await applyPartsImport(parsed, plan);
+  // เขียนประวัติก่อนลงมือ — พังกลางทาง (ฐานข้อมูลหลุด/เซิร์ฟเวอร์รีสตาร์ท) ส่วนที่บันทึกไปแล้วต้องยังมีในรายงาน
+  // ไม่งั้นกดอัปเดตซ้ำรอบหน้าเห็นเป็น "เหมือนเดิม" และไม่มีรายงานไหนบอกว่าอะไหล่พวกนั้นถูกเพิ่ม/แก้ไปแล้ว
   const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
-  const summary = { ...plan.summary, images: done.images };
   const log = await prisma.sparePartImport.create({
-    data: { batchId, byUserId: req.auth!.userId, byName: me?.name ?? null, fileName, summary, details: details as object },
+    data: { batchId, byUserId: req.auth!.userId, byName: me?.name ?? null, fileName, summary: { ...plan.summary, incomplete: true }, details: details as object },
   });
+  let done: Awaited<ReturnType<typeof applyPartsImport>>;
+  try {
+    done = await applyPartsImport(parsed, plan);
+  } catch (e) {
+    console.error(`[spare-part-import] ${fileName} หยุดกลางทาง`, e);
+    return res.status(500).json({
+      error: `${fileName} อัปเดตไม่ครบ — บางรายการอาจบันทึกไปแล้ว กดอัปเดตไฟล์นี้ซ้ำได้ (ทำเฉพาะส่วนที่ยังต่าง)`,
+    });
+  }
+  const summary = { ...plan.summary, images: done.images };
+  await prisma.sparePartImport.update({ where: { id: log.id }, data: { summary } });
   console.log(`[spare-part-import] ${fileName} โดย userId=${req.auth!.userId} — เพิ่ม ${done.created} · แก้ ${done.updated} · รูป ${done.images}`);
   res.json({ applied: true, id: log.id, imageCount: parsed.imageCount, summary, ...details });
 });
 
 type ImportRow = Awaited<ReturnType<typeof prisma.sparePartImport.findMany>>[number];
 const batchShape = (rows: ImportRow[]) => {
-  const totals = { changed: 0, created: 0, updated: 0, images: 0, same: 0, skipped: 0, notInFile: 0 };
+  const totals = { changed: 0, created: 0, updated: 0, images: 0, same: 0, skipped: 0, notInFile: 0, incomplete: 0 };
   for (const r of rows) {
-    const s = r.summary as Record<string, number>;
-    for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] += s[k] ?? 0;
+    const s = r.summary as Record<string, number | boolean>;
+    for (const k of ["changed", "created", "updated", "images", "same", "skipped"] as const) totals[k] += Number(s[k] ?? 0);
+    if (s.incomplete) totals.incomplete++;
   }
-  return {
-    batchId: rows[0].batchId,
-    createdAt: rows[rows.length - 1].createdAt,
-    byName: rows[0].byName,
-    totals,
-    files: rows.map((r) => ({ id: r.id, fileName: r.fileName, createdAt: r.createdAt, summary: r.summary, details: r.details as unknown as ReportDetails })),
-  };
+  const files = rows.map((r) => ({ id: r.id, fileName: r.fileName, createdAt: r.createdAt, summary: r.summary, details: r.details as unknown as ReportDetails }));
+  // ไม่อยู่ในไฟล์ = ไม่อยู่ในไฟล์ไหนเลยของรอบนี้ (ไฟล์ยี่ห้อเดียวกันแยกสองไฟล์ ต่างคนต่างฟ้องว่าอีกครึ่งหาย) · นับตัวละครั้ง
+  const notInFile = notInBatch(files);
+  totals.notInFile = notInFile.length;
+  return { batchId: rows[0].batchId, createdAt: rows[rows.length - 1].createdAt, byName: rows[0].byName, totals, notInFile, files };
 };
 
 /** รอบอัปเดตล่าสุด — แถบ "อัปเดตจากไฟล์ล่าสุด … ดูรายละเอียด" บนหน้าจัดการข้อมูลอะไหล่ (ไม่มีรายละเอียด ให้หน้าโหลดไว) */
@@ -128,7 +149,7 @@ router.get("/imports/latest", requireAuth, requireAdmin, async (_req, res) => {
   const last = await prisma.sparePartImport.findFirst({ orderBy: { createdAt: "desc" }, select: { batchId: true } });
   if (!last) return res.json(null);
   const rows = await prisma.sparePartImport.findMany({ where: { batchId: last.batchId }, orderBy: { createdAt: "asc" } });
-  const b = batchShape(rows);
+  const { notInFile: _n, ...b } = batchShape(rows);
   res.json({ ...b, files: b.files.map(({ details: _d, ...f }) => f) });
 });
 
@@ -168,9 +189,12 @@ router.get("/imports/batch/:batchId/excel", requireAuth, requireAdmin, async (re
       ws.addRow([f.fileName, i.line, i.partCode, i.name, result, detail]);
     }
     for (const p of f.details.problems) ws.addRow([f.fileName, p.line, p.partCode ?? "", p.name ?? "", "ข้าม / มีปัญหา", p.note]);
-    for (const p of f.details.notInFile) {
-      ws.addRow([f.fileName, "", p.partCode, p.name, "ไม่อยู่ในไฟล์ (ไม่ลบ)", p.usedIn ? `ใบงานอ้างถึง ${p.usedIn} ใบ` : "ยังไม่เคยใช้ในใบงาน"]);
+    if ((f.summary as { incomplete?: boolean }).incomplete) {
+      ws.addRow([f.fileName, "", "", "", "อัปเดตไม่ครบ", "หยุดกลางทาง — รายการของไฟล์นี้บางส่วนอาจยังไม่ถูกบันทึก กดอัปเดตไฟล์นี้ซ้ำได้"]);
     }
+  }
+  for (const p of b.notInFile) {
+    ws.addRow(["(ทุกไฟล์ในรอบ)", "", p.partCode, p.name, "ไม่อยู่ในไฟล์ (ไม่ลบ)", p.usedIn ? `ใบงานอ้างถึง ${p.usedIn} ใบ` : "ยังไม่เคยใช้ในใบงาน"]);
   }
   const stamp = new Date(b.createdAt).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
   const stored = saveDocument({
@@ -213,14 +237,34 @@ const sparePartSchema = z.object({
   partNo: z
     .string()
     .trim()
-    .max(200)
+    .max(PART_NO_MAX)
     .optional()
     .transform((v) => (v === undefined ? undefined : v || null)),
 });
 
+/** ข้อความผิดพลาดของฟอร์มเป็นภาษาไทย — เดิมส่งโครง zod ไป แอปโชว์เป็น JSON ภาษาอังกฤษ */
+const FIELD_TH: Record<string, string> = {
+  partCode: "รหัสสินค้า",
+  name: "ชื่ออะไหล่",
+  brand: "ยี่ห้อ",
+  category: "หมวดหมู่",
+  description: "รายละเอียด",
+  imageUrl: "ลิงก์รูป",
+  partNo: "Part No.",
+};
+const formError = (e: z.ZodError) =>
+  e.issues
+    .map((i) => {
+      const label = FIELD_TH[String(i.path[0])] ?? String(i.path[0] ?? "ข้อมูล");
+      if (i.code === "too_big") return `${label} ยาวเกิน ${Number(i.maximum).toLocaleString("en-US")} ตัวอักษร`;
+      if (i.code === "too_small") return `ต้องกรอก${label}`;
+      return `${label} ไม่ถูกต้อง`;
+    })
+    .join(" · ");
+
 router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const parsed = sparePartSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: formError(parsed.error) });
 
   const existing = await prisma.sparePart.findUnique({ where: { partCode: parsed.data.partCode } });
   if (existing) return res.status(409).json({ error: "รหัสสินค้านี้มีอยู่แล้ว" });
@@ -232,7 +276,7 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
 router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const parsed = sparePartSchema.partial().safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: formError(parsed.error) });
 
   try {
     const part = await prisma.sparePart.update({ where: { id }, data: parsed.data });
@@ -265,7 +309,8 @@ router.post(
     const [, updated] = await prisma.$transaction([
       prisma.sparePartImage.upsert({
         where: { sparePartId: id },
-        update: { mimeType: req.file.mimetype, data: req.file.buffer },
+        // รูปที่อัปโหลดเองคือต้นฉบับ — ล้างค่ารูปต้นฉบับจากไฟล์ Excel ไม่งั้นอัปเดตรอบหน้าเทียบกับรูปเก่า
+        update: { mimeType: req.file.mimetype, data: req.file.buffer, sourceHash: null },
         create: { sparePartId: id, mimeType: req.file.mimetype, data: req.file.buffer },
       }),
       prisma.sparePart.update({ where: { id }, data: { imageUrl } }),

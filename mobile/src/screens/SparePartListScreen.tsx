@@ -13,7 +13,7 @@ import EmptyState from "../components/EmptyState";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRefreshHandler } from "../components/RefreshButton";
-import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { api, apiErrorMessage, partImageUri } from "../api/client";
 import { colors, radius, shadow } from "../theme";
 import { SparePart } from "../types";
 import { HomeStackParamList } from "../navigation/types";
@@ -75,7 +75,7 @@ export default function SparePartListScreen({ navigation }: Props) {
           keyExtractor={(item) => String(item.id)}
           ListEmptyComponent={<EmptyState icon="search-outline" text="ไม่พบอะไหล่ที่ค้นหา" />}
           renderItem={({ item }) => {
-            const uri = resolveImageUrl(item.imageUrl);
+            const uri = partImageUri(item);
             return (
               <TouchableOpacity
                 style={styles.card}

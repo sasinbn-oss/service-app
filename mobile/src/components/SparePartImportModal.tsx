@@ -16,6 +16,7 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
 import { PickedFile, droppedFiles, pickFiles } from "../utils/filePicker";
+import { PreparedSheet, shrinkXlsx } from "../utils/shrinkXlsx";
 import { colors, radius, spacing } from "../theme";
 
 type Action = "CREATE" | "UPDATE" | "SAME";
@@ -43,6 +44,8 @@ interface Gone {
   usedIn: number;
 }
 interface Summary {
+  /** อัปเดตหยุดกลางทาง — บางรายการอาจบันทึกไปแล้ว (เซิร์ฟเวอร์เขียนประวัติก่อนลงมือ) */
+  incomplete?: boolean;
   rows: number;
   changed: number;
   created: number;
@@ -64,12 +67,18 @@ interface FileResult {
   thumbs?: Record<string, string>;
 }
 /** ผลตรวจต่อไฟล์ — ไฟล์ที่อ่านไม่ได้เก็บข้อความไว้ ไฟล์อื่นยังอัปเดตได้ */
-type Checked = { file: PickedFile; result: FileResult | null; error: string | null };
+/** upload = ไฟล์ที่ย่อรูปแล้ว — ตอนกดอัปเดตส่งไฟล์เดียวกับที่ตรวจ ไม่ย่อใหม่ */
+type Checked = { file: PickedFile; upload: PreparedSheet | null; result: FileResult | null; error: string | null };
+/** เท่ากับที่เซิร์ฟเวอร์รับ (routes/spareParts.ts MAX_SHEET_BYTES) */
+const MAX_SHEET_BYTES = 50 * 1024 * 1024;
+const mb = (n: number) => `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 export interface Batch {
   batchId: string;
   createdAt: string;
   byName: string | null;
-  totals: { changed: number; created: number; updated: number; images: number; same: number; skipped: number; notInFile: number };
+  totals: { changed: number; created: number; updated: number; images: number; same: number; skipped: number; notInFile: number; incomplete?: number };
+  /** ไม่อยู่ในไฟล์ไหนเลยของรอบ (รายงานเต็มเท่านั้น) */
+  notInFile?: Gone[];
   files: { id: number; fileName: string; createdAt: string; summary: Summary; details?: FileResult }[];
 }
 
@@ -105,9 +114,10 @@ const IMAGE_NOTE: Record<"NEW" | "CHANGED" | "KEPT", string> = {
 
 const newBatchId = () => `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
-async function send(file: PickedFile, opts: { apply: boolean; replaceImages: boolean; batchId: string }) {
+async function send(file: PickedFile, upload: PreparedSheet, opts: { apply: boolean; replaceImages: boolean; batchId: string }) {
   const form = new FormData();
-  form.append("file", file.blob, file.name);
+  form.append("file", upload.blob, file.name);
+  if (upload.shrunk) form.append("imageHashes", JSON.stringify(upload.hashes));
   if (opts.apply) form.append("apply", "true");
   form.append("replaceImages", opts.replaceImages ? "true" : "false");
   form.append("batchId", opts.batchId);
@@ -121,18 +131,45 @@ async function send(file: PickedFile, opts: { apply: boolean; replaceImages: boo
   ).data;
 }
 
+/**
+ * รหัสเดียวกันอยู่หลายไฟล์ = ไฟล์ที่อัปเดตทีหลังทับ — นับเฉพาะรายการของไฟล์หลัง
+ * (แต่ละไฟล์ตรวจแยกกันกับฐานข้อมูล ถ้าไม่หัก รหัสใหม่ตัวเดียวที่อยู่สองไฟล์นับเป็น "เพิ่ม 2")
+ */
+function lastItems(results: FileResult[]) {
+  const last = new Map<string, Item>();
+  for (const r of results) for (const i of r.items) last.set(i.partCode, i);
+  return last;
+}
+
+/**
+ * ไม่อยู่ในไฟล์ของทั้งรอบ — แต่ละไฟล์คิดเฉพาะรหัสของตัวเอง ไฟล์ยี่ห้อเดียวกันสองไฟล์ต่างคนต่างฟ้องว่าอีกครึ่งหาย
+ * หักรหัสที่อยู่ในไฟล์ใดก็ได้ของรอบ แล้วนับตัวละครั้ง (เซิร์ฟเวอร์ทำแบบเดียวกันในรายงาน — notInBatch)
+ */
+function goneOf(results: FileResult[]) {
+  const inBatch = new Set<string>();
+  for (const r of results) {
+    for (const c of r.codes ?? []) inBatch.add(c.toUpperCase());
+    for (const p of r.problems) if (p.partCode) inBatch.add(p.partCode.toUpperCase());
+  }
+  const gone = new Map<string, Gone>();
+  for (const r of results) for (const g of r.notInFile) if (!inBatch.has(g.partCode.toUpperCase())) gone.set(g.partCode.toUpperCase(), g);
+  return [...gone.values()].sort((a, b) => a.partCode.localeCompare(b.partCode));
+}
+
 /** ตัวเลขรวมทุกไฟล์ — รูปที่เลือกเก็บไว้ไม่นับเป็นงานที่ต้องทำ */
 function totalsOf(results: FileResult[], replace: boolean) {
-  const all = results.flatMap((r) => r.items);
+  const all = [...lastItems(results).values()];
   const img = (i: Item) => i.image === "NEW" || (i.image === "CHANGED" && replace) || (i.image === "KEPT" && replace);
+  const work = all.filter((i) => i.action !== "SAME" || img(i)).length;
+  const rows = new Set(results.flatMap((r) => r.codes ?? [])).size;
   return {
     new: all.filter((i) => i.action === "CREATE").length,
     chg: all.filter((i) => i.action === "UPDATE").length,
     img: all.filter(img).length,
-    same: results.reduce((n, r) => n + r.summary.rows, 0) - all.filter((i) => i.action !== "SAME" || img(i)).length,
+    same: Math.max(0, rows - work),
     bad: results.reduce((n, r) => n + r.problems.length, 0),
-    gone: results.reduce((n, r) => n + r.notInFile.length, 0),
-    work: all.filter((i) => i.action !== "SAME" || img(i)).length,
+    gone: goneOf(results).length,
+    work,
   };
 }
 
@@ -145,6 +182,8 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
   const [shown, setShown] = useState(PAGE);
   const [batch, setBatch] = useState<Batch | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  /** ไฟล์ที่ยังไม่ได้อัปเดตเพราะหยุดกลางทาง (ไฟล์ที่พัง + ไฟล์ถัดไป) — บอกในรายงานและกดตรวจต่อได้ */
+  const [remaining, setRemaining] = useState<{ file: PickedFile; error: string }[]>([]);
   const busy = progress !== null;
 
   function add(more: PickedFile[]) {
@@ -152,17 +191,28 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
     // ไฟล์ชื่อเดียวกันลากมาซ้ำ = ไฟล์ใหม่แทนไฟล์เดิม (แก้ไฟล์แล้วลากมาใหม่)
     setFiles((cur) => [...cur.filter((f) => !more.some((m) => m.name === f.name)), ...more]);
     setChecked(null);
+    setApplyError(null);
   }
 
-  async function check() {
+  async function check(list: PickedFile[] = files) {
     const out: Checked[] = [];
     const id = newBatchId();
-    for (let k = 0; k < files.length; k++) {
-      setProgress(`กำลังอ่าน ${files[k].name} (${k + 1}/${files.length}) — ไฟล์ที่มีรูปเยอะใช้เวลาสักครู่`);
+    setApplyError(null);
+    for (let k = 0; k < list.length; k++) {
+      const f = list[k];
+      const at = `${f.name} (${k + 1}/${list.length})`;
+      let upload: PreparedSheet | null = null;
       try {
-        out.push({ file: files[k], result: await send(files[k], { apply: false, replaceImages, batchId: id }), error: null });
+        // ย่อรูปใหญ่ก่อนส่ง — ไฟล์รูปเต็มขนาดเกิน 50 MB ได้ (Huebsch / Oasis)
+        upload = await shrinkXlsx(f.blob, (n, total) => setProgress(`กำลังย่อรูปใน ${at} — รูป ${n}/${total}`));
+        if (upload.after > MAX_SHEET_BYTES) {
+          out.push({ file: f, upload, result: null, error: `ย่อรูปแล้วยังใหญ่ ${mb(upload.after)} (เกิน 50 MB) — แยกไฟล์ให้เล็กลง` });
+          continue;
+        }
+        setProgress(`กำลังอ่าน ${at} — ไฟล์ที่มีรูปเยอะใช้เวลาสักครู่`);
+        out.push({ file: f, upload, result: await send(f, upload, { apply: false, replaceImages, batchId: id }), error: null });
       } catch (e) {
-        out.push({ file: files[k], result: null, error: apiErrorMessage(e) });
+        out.push({ file: f, upload, result: null, error: apiErrorMessage(e) });
       }
     }
     setProgress(null);
@@ -180,32 +230,55 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
     const ok = checked.filter((c) => c.result);
     setApplyError(null);
     let done = 0;
-    for (const c of ok) {
-      setProgress(`กำลังอัปเดต ${c.file.name} (${done + 1}/${ok.length})`);
+    let stopped: { at: number; error: string } | null = null;
+    for (let k = 0; k < ok.length; k++) {
+      setProgress(`กำลังอัปเดต ${ok[k].file.name} (${k + 1}/${ok.length})`);
       try {
-        await send(c.file, { apply: true, replaceImages, batchId: id });
+        await send(ok[k].file, ok[k].upload!, { apply: true, replaceImages, batchId: id });
         done++;
       } catch (e) {
-        // ไฟล์ก่อนหน้าบันทึกไปแล้ว — บอกตรง ๆ ว่าหยุดที่ไฟล์ไหน กดอัปเดตซ้ำได้ (ทำแค่ส่วนที่ยังต่าง)
-        setApplyError(`${c.file.name}: ${apiErrorMessage(e)} — ไฟล์ก่อนหน้านี้อัปเดตแล้ว ${done} ไฟล์ · แก้แล้วกดอัปเดตซ้ำได้`);
+        stopped = { at: k, error: apiErrorMessage(e) };
         break;
       }
     }
-    setProgress(null);
     onDone();
-    if (done) {
-      try {
-        setBatch((await api.get<Batch>(`/spare-parts/imports/batch/${id}`)).data);
-      } catch (e) {
-        showAlert("อัปเดตแล้ว แต่เปิดรายงานไม่ได้", apiErrorMessage(e));
-      }
+    if (!done) {
+      setProgress(null);
+      setApplyError(`${ok[stopped?.at ?? 0]?.file.name ?? ""}: ${stopped?.error ?? ""} — ยังไม่ได้อัปเดตไฟล์ไหน กดอัปเดตซ้ำได้`);
+      return;
+    }
+    const rest = stopped ? ok.slice(stopped.at).map((c, k) => ({ file: c.file, error: k === 0 ? stopped!.error : "หยุดก่อนถึงไฟล์นี้" })) : [];
+    setRemaining(rest);
+    // ยังไม่ปล่อยปุ่ม — ระหว่างรอรายงาน ปุ่มอัปเดตยังเป็นแผนเดิม กดซ้ำได้รอบเปล่าที่ทับแถบ "อัปเดตล่าสุด"
+    setProgress("อัปเดตแล้ว — กำลังเปิดรายงาน…");
+    try {
+      setBatch((await api.get<Batch>(`/spare-parts/imports/batch/${id}`)).data);
+    } catch (e) {
+      setChecked(null);
+      setFiles(rest.map((r) => r.file));
+      showAlert("อัปเดตแล้ว แต่เปิดรายงานไม่ได้", `${apiErrorMessage(e)} — ดูได้จาก “อัปเดตจากไฟล์ล่าสุด” บนหน้าจัดการข้อมูลอะไหล่`);
+    } finally {
+      setProgress(null);
     }
   }
 
   if (batch) {
-    // ไฟล์ที่อ่านไม่ได้ไม่ได้บันทึกอะไร — บอกไว้ในรายงานด้วย ไม่งั้นนึกว่ายี่ห้อนั้นอัปเดตแล้ว (แบบตามตัวอย่าง)
-    const failed = (checked ?? []).filter((c) => c.error).map((c) => ({ name: c.file.name, error: c.error! }));
-    return <ImportReportModal batch={batch} onClose={onClose} error={applyError} failed={failed} />;
+    // ไฟล์ที่อ่านไม่ได้ / ยังไม่ได้อัปเดตเพราะหยุดกลางทาง — บอกไว้ในรายงาน ไม่งั้นนึกว่ายี่ห้อนั้นอัปเดตแล้ว
+    const failed = [
+      ...(checked ?? []).filter((c) => c.error).map((c) => ({ name: c.file.name, error: c.error! })),
+      ...remaining.map((r) => ({ name: r.file.name, error: r.error })),
+    ];
+    const retry = remaining.length
+      ? () => {
+          const list = remaining.map((r) => r.file);
+          setBatch(null);
+          setRemaining([]);
+          setChecked(null);
+          setFiles(list);
+          check(list);
+        }
+      : undefined;
+    return <ImportReportModal batch={batch} onClose={onClose} failed={failed} onRetry={retry} />;
   }
 
   const results = (checked ?? []).filter((c) => c.result).map((c) => c.result!);
@@ -225,7 +298,15 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
       footer={
         <View style={styles.actions}>
           {checked ? (
-            <TouchableOpacity style={styles.secondary} onPress={() => setChecked(null)} disabled={busy} accessibilityLabel="เลือกไฟล์ใหม่">
+            <TouchableOpacity
+              style={styles.secondary}
+              onPress={() => {
+                setChecked(null);
+                setApplyError(null);
+              }}
+              disabled={busy}
+              accessibilityLabel="เลือกไฟล์ใหม่"
+            >
               <Text style={styles.secondaryText}>← เลือกไฟล์ใหม่</Text>
             </TouchableOpacity>
           ) : (
@@ -251,7 +332,7 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
           ) : (
             <TouchableOpacity
               style={[styles.primary, (busy || !files.length) && styles.off]}
-              onPress={check}
+              onPress={() => check()}
               disabled={busy || !files.length}
               accessibilityLabel="ตรวจก่อนอัปเดต"
             >
@@ -343,7 +424,7 @@ function PickStep({
         <Text style={styles.noteText}>
           รหัสสินค้า (ตัวเทียบ) · ชื่อรวม (ไทย) · ยี่ห้อสินค้า · Category · Part No. · รูปภาพประกอบ (รูปที่วางในเซลล์) — ลำดับข้ามไป
         </Text>
-        <Text style={styles.noteText}>หัวคอลัมน์สลับที่ได้ · ชีตแรกของแต่ละไฟล์ · ไฟล์ละไม่เกิน 50 MB</Text>
+        <Text style={styles.noteText}>หัวคอลัมน์สลับที่ได้ · ชีตแรกของแต่ละไฟล์ · รูปใหญ่ในไฟล์ย่อให้เองก่อนส่ง (ด้านยาว 1,600 px) ไฟล์รูปเต็มขนาดเกิน 50 MB ก็ได้</Text>
       </View>
     </View>
   );
@@ -382,11 +463,34 @@ function PreviewStep({
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     const t = TABS.find((x) => x.id === tab)!;
+    if (tab === "same") {
+      // แถวที่เหมือนเดิมไม่ได้ส่งมาทีละแถว (หลายร้อย) — บอกเป็นจำนวน
+      const files = results.map((r) => r.fileName).join(" · ");
+      return [{ key: "same", file: files, title: `เหมือนเดิม ${totals.same} รายการ`, meta: `ทุกช่องและรูปตรงกับในระบบแล้ว ไม่ต้องทำอะไร · ${files}`, tag: t.label, fg: t.fg, bg: t.bg, lines: [] }];
+    }
+    if (tab === "gone") {
+      return goneOf(results).map((g) => ({
+        key: `g${g.partCode}`,
+        file: "",
+        title: g.name,
+        meta: [g.partCode, g.brand, "อยู่ในระบบ ไม่อยู่ในไฟล์ที่เลือก"].filter(Boolean).join(" · "),
+        tag: "ไม่ลบ",
+        fg: t.fg,
+        bg: t.bg,
+        lines: [
+          <Text key="n" style={[styles.diff, { color: t.fg }]}>
+            {g.usedIn ? `ไม่ลบ — ใบงานอ้างถึง ${g.usedIn} ใบ` : "ไม่ลบ — ยังไม่เคยใช้ในใบงาน ลบเองได้ที่หน้าจัดการข้อมูลอะไหล่"}
+          </Text>,
+        ],
+      }));
+    }
+    // รหัสที่อยู่หลายไฟล์ โชว์เฉพาะของไฟล์หลัง (ไฟล์ที่ทับ) — ตัวเลขบนกล่องนับแบบเดียวกัน
+    const last = lastItems(results);
     for (const r of results) {
       const base = (i: Item) => ({ key: `${r.fileName}|${i.partCode}`, file: r.fileName, title: i.name, thumb: r.thumbs?.[i.partCode] });
       const meta = (i: Item) => [i.partCode, i.brand, i.partNo ? `Part No. ${i.partNo}` : null, `${r.fileName} แถว ${i.line}`].filter(Boolean).join(" · ");
       if (tab === "new" || tab === "chg") {
-        for (const i of r.items.filter((x) => x.action === (tab === "new" ? "CREATE" : "UPDATE"))) {
+        for (const i of r.items.filter((x) => x.action === (tab === "new" ? "CREATE" : "UPDATE") && last.get(x.partCode) === x)) {
           out.push({
             ...base(i),
             meta: meta(i),
@@ -404,15 +508,11 @@ function PreviewStep({
           });
         }
       } else if (tab === "img") {
-        for (const i of r.items.filter((x) => x.image)) {
+        for (const i of r.items.filter((x) => x.image && last.get(x.partCode) === x)) {
           const state = i.image === "CHANGED" || i.image === "KEPT" ? (replaceImages ? "CHANGED" : "KEPT") : "NEW";
           if (state === "KEPT") continue;
           out.push({ ...base(i), meta: meta(i), tag: "รูป", fg: t.fg, bg: t.bg, lines: [<Text key="n" style={[styles.diff, { color: t.fg }]}>{IMAGE_NOTE[state]}</Text>] });
         }
-      } else if (tab === "same") {
-        // แถวที่เหมือนเดิมไม่ได้ส่งมาทีละแถว (หลายร้อย) — บอกเป็นจำนวนต่อไฟล์
-        const n = r.summary.rows - r.items.filter((i) => i.action !== "SAME" || (i.image && (i.image === "NEW" || replaceImages))).length;
-        out.push({ key: r.fileName, file: r.fileName, title: `${r.fileName} — เหมือนเดิม ${n} รายการ`, meta: "ทุกช่องและรูปตรงกับในระบบแล้ว ไม่ต้องทำอะไร", tag: t.label, fg: t.fg, bg: t.bg, lines: [] });
       } else if (tab === "bad") {
         for (const p of r.problems) {
           out.push({
@@ -424,23 +524,6 @@ function PreviewStep({
             fg: t.fg,
             bg: t.bg,
             lines: [<Text key="n" style={[styles.diff, { color: t.fg, fontWeight: "600" }]}>{p.note}</Text>],
-          });
-        }
-      } else {
-        for (const g of r.notInFile) {
-          out.push({
-            key: `${r.fileName}|g${g.partCode}`,
-            file: r.fileName,
-            title: g.name,
-            meta: [g.partCode, g.brand, `อยู่ในระบบ ไม่อยู่ใน ${r.fileName}`].filter(Boolean).join(" · "),
-            tag: "ไม่ลบ",
-            fg: t.fg,
-            bg: t.bg,
-            lines: [
-              <Text key="n" style={[styles.diff, { color: t.fg }]}>
-                {g.usedIn ? `ไม่ลบ — ใบงานอ้างถึง ${g.usedIn} ใบ` : "ไม่ลบ — ยังไม่เคยใช้ในใบงาน ลบเองได้ที่หน้าจัดการข้อมูลอะไหล่"}
-              </Text>,
-            ],
           });
         }
       }
@@ -460,7 +543,7 @@ function PreviewStep({
       }
     }
     return out;
-  }, [results, tab, replaceImages, dupes]);
+  }, [results, tab, replaceImages, dupes, totals.same]);
 
   const count: Record<Tab, number> = { new: totals.new, chg: totals.chg, img: totals.img, same: totals.same, bad: totals.bad + dupes.length, gone: totals.gone };
   const cur = TABS.find((x) => x.id === tab)!;
@@ -477,6 +560,7 @@ function PreviewStep({
               {c.result ? (
                 <Text style={styles.muted}>
                   {c.result.summary.rows} แถว · รูปในเซลล์ {c.result.imageCount} รูป ·{" "}
+                  {c.upload?.shrunk ? `ย่อรูปใหญ่ ${c.upload.shrunk} รูป (${mb(c.upload.before)} → ${mb(c.upload.after)}) · ` : ""}
                   {COLS.map(([k, label]) => colNote(c.result!.columns[k], label)).join(" · ")}
                 </Text>
               ) : (
@@ -545,13 +629,14 @@ function PreviewStep({
 export function ImportReportModal({
   batch,
   onClose,
-  error,
   failed = [],
+  onRetry,
 }: {
   batch: Batch;
   onClose: () => void;
-  error?: string | null;
   failed?: { name: string; error: string }[];
+  /** หยุดกลางทาง — ตรวจแล้วอัปเดตเฉพาะไฟล์ที่ยังไม่ได้ทำ */
+  onRetry?: () => void;
 }) {
   const [full, setFull] = useState<Batch | null>(batch.files.every((f) => f.details) ? batch : null);
   const [open, setOpen] = useState<number | null>(batch.files[0]?.id ?? null);
@@ -590,6 +675,11 @@ export function ImportReportModal({
       subtitle={`${when} · โดย ${batch.byName ?? "—"} · ${batch.files.map((f) => f.fileName).join(" · ")}`}
       footer={
         <View style={styles.actions}>
+          {onRetry ? (
+            <TouchableOpacity style={styles.secondary} onPress={onRetry} accessibilityLabel="ตรวจไฟล์ที่ยังไม่ได้อัปเดต">
+              <Text style={styles.secondaryText}>ตรวจไฟล์ที่ยังไม่ได้อัปเดต</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={styles.secondary} onPress={download} disabled={downloading} accessibilityLabel="ดาวน์โหลดรายงาน">
             {downloading ? <Spinner size="small" color={colors.primary} /> : <Text style={styles.secondaryText}>ดาวน์โหลดรายงาน (Excel)</Text>}
           </TouchableOpacity>
@@ -599,7 +689,6 @@ export function ImportReportModal({
         </View>
       }
     >
-      {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.tiles}>
         {(
           [
@@ -630,6 +719,9 @@ export function ImportReportModal({
                 {f.fileName} — เพิ่ม {s.created} · แก้ไข {s.updated} · รูป {s.images} · ข้าม {s.skipped}
               </Text>
             </TouchableOpacity>
+            {s.incomplete ? (
+              <Text style={styles.error}>อัปเดตไม่ครบ — หยุดกลางทาง รายการข้างล่างบางส่วนอาจยังไม่ถูกบันทึก เลือกไฟล์นี้แล้วกดอัปเดตซ้ำได้</Text>
+            ) : null}
             {isOpen ? (
               <View style={{ gap: 4, paddingTop: 6 }}>
                 {d.items.map((i) => (
@@ -647,18 +739,18 @@ export function ImportReportModal({
                     <Text style={{ fontWeight: "700", color: colors.dangerInk }}>ข้าม/มีปัญหา</Text> แถว {p.line} {p.partCode ?? ""} {p.name ?? ""} — {p.note}
                   </Text>
                 ))}
-                {d.notInFile.length ? (
-                  <Text style={[styles.reportLine, { color: colors.warningInk }]}>
-                    ไม่อยู่ในไฟล์ (ไม่ลบ) {d.notInFile.length} รายการ: {d.notInFile.slice(0, 10).map((g) => g.partCode).join(", ")}
-                    {d.notInFile.length > 10 ? ` และอีก ${d.notInFile.length - 10}` : ""}
-                  </Text>
-                ) : null}
                 {!d.items.length && !d.problems.length ? <Text style={styles.muted}>ไม่มีอะไรเปลี่ยนในไฟล์นี้</Text> : null}
               </View>
             ) : null}
           </View>
         );
       })}
+      {full?.notInFile?.length ? (
+        <Text style={[styles.reportLine, { color: colors.warningInk }]}>
+          ไม่อยู่ในไฟล์ไหนเลยของรอบนี้ (ไม่ลบ) {full.notInFile.length} รายการ: {full.notInFile.slice(0, 10).map((g) => g.partCode).join(", ")}
+          {full.notInFile.length > 10 ? ` และอีก ${full.notInFile.length - 10}` : ""}
+        </Text>
+      ) : null}
       {failed.map((f) => (
         <View key={f.name} style={[styles.fileBox, styles.fileBad]}>
           <Text style={[styles.reportLine, { color: colors.dangerInk, fontWeight: "600" }]}>
