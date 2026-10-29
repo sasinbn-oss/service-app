@@ -120,12 +120,12 @@ const DIR = __dirname;
     await symptom.fill("น้ำไม่เข้า ทดสอบขนาด");
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(DIR, "cap-2-filled.png") });
-    // รูปหน้างานบังคับทุกตำแหน่ง — แอดมินก็กดเปิดไม่ได้จนกว่าจะแนบรูป
-    (await seen("ยังบันทึกไม่ได้ — ขาด 1 ช่อง: รูปหน้างาน", false)) > 0
-      ? pass("แอดมิน: ยังไม่แนบรูปหน้างาน = บันทึกไม่ได้")
-      : fail("แอดมินบันทึกได้ทั้งที่ยังไม่มีรูป");
+    // แอดมินไม่บังคับรูปหน้างาน (เจ้าของงานขอ ต.ค. 69 — ตำแหน่งอื่นยังบังคับ ดู admin-photo-web-test) · ยังแนบได้ตามปกติ
+    (await seen("ยังบันทึกไม่ได้", false)) === 0 && (await seen("แอดมินไม่บังคับ", true)) > 0
+      ? pass("แอดมิน: ยังไม่แนบรูปหน้างานก็ไม่ล็อก มีป้าย \"แอดมินไม่บังคับ\"")
+      : fail("แอดมินถูกล็อกเรื่องรูป หรือไม่มีป้าย");
     await attachPhoto(page);
-    (await seen("ยังบันทึกไม่ได้", false)) === 0 ? pass("แนบรูปแล้วปลดล็อก") : fail("แนบรูปแล้วยังล็อก");
+    (await seen("ยังบันทึกไม่ได้", false)) === 0 ? pass("แนบรูปแล้วยังเปิดได้") : fail("แนบรูปแล้วกลับล็อก");
     await submitForm();
     await page.waitForTimeout(5000);
     await page.screenshot({ path: path.join(DIR, "cap-3-detail.png") });
