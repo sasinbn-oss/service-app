@@ -1,6 +1,6 @@
 #!/bin/bash
 # ทดสอบ: ของหมด = ใบค้างที่แอดมินขั้นเช็คอะไหล่จนของเข้าครบ แล้วค่อยส่งหัวหน้าภาคนัด (นัดลูกค้าก่อนเบิก ต.ค. 69)
-#        ของไม่พอตอนเบิก → กลับไปเช็คอะไหล่ วันนัดล้าง · ของอยู่คลังอื่นนัดล่วงหน้า 7 วัน
+#        ของไม่พอตอนเบิก → กลับไปเช็คอะไหล่ วันนัดล้าง · วันนัดตั้งแต่วันนี้ (ของคลังอื่นไม่ต้องล่วงหน้า 7 วันแล้ว)
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -67,7 +67,7 @@ curl -s "localhost:4000/api/work-orders?search=W61" -H "$(H $A)" | J 'const r=(d
 echo
 echo "═══ นัด → ลูกค้าคอนเฟิร์ม → ถึงขั้นเบิก แต่ของถูกงานอื่นใช้ไปแล้ว"
 post $ID assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 3)\",\"scheduledTime\":\"09:00\"}" $S >/dev/null
-st $ID | grep -q "คอนเฟิร์ม" && pass "ของคลัง 94 ทั้งหมด นัดภายใน 7 วันได้" || fail "หลังนัด: $(st $ID)"
+st $ID | grep -q "คอนเฟิร์ม" && pass "ของคลัง 94 ทั้งหมด นัดอีก 3 วันได้" || fail "หลังนัด: $(st $ID)"
 post $ID confirm-appointment '{}' >/dev/null
 st $ID | grep -q "^แอดมิน · เบิกอะไหล่" && pass "คอนเฟิร์มแล้วไปแอดมินเบิกอะไหล่" || fail "หลังคอนเฟิร์ม: $(st $ID)"
 RR=$(post $ID parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-ROUND-1\"},{\"sparePartId\":$BELT,\"inStock\":false}]}")
@@ -100,7 +100,7 @@ curl -s "localhost:4000/api/work-orders?search=W61" -H "$(H $A)" | J 'const r=(d
   && pass "การ์ดขึ้นป้าย เบิกแล้ว" || fail "ป้ายอะไหล่บนการ์ดไม่ใช่ ISSUED"
 
 echo
-echo "═══ ของอยู่คลังอื่น — นัดล่วงหน้าอย่างน้อย 7 วัน (เผื่อเบิก/โอน)"
+echo "═══ วันนัด: ตั้งแต่วันนี้ · ของอยู่คลังอื่นไม่ต้องนัดล่วงหน้า 7 วันแล้ว (เจ้าของงานยกเลิก ต.ค. 69)"
 WO3=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W63","symptom":"ของคลังอื่น"}]}')
 ID3=$(echo "$WO3" | J 'd.orders[0].id')
@@ -109,16 +109,28 @@ post $ID3 parts-sourcing "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true
 st $ID3 | grep -q "^หัวหน้าภาค · นัดวันเข้า" && pass "ของครบรอบเดียว ส่งหัวหน้าภาคนัดทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
 curl -s "localhost:4000/api/work-orders?search=W63" -H "$(H $A)" | J 'const r=(d.rows||d).find(x=>x.id==='$ID3'); r.partsState' | grep -q "^TRANSFER$" \
   && pass "การ์ดขึ้นป้าย อะไหล่ครบ · ต้องโอน" || fail "ป้ายอะไหล่บนการ์ดไม่ใช่ TRANSFER"
-RR=$(post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 2)\"}" $S)
-echo "$RR" | grep -q "คลังภูเก็ต.*ล่วงหน้า 7 วัน" && pass "นัดเร็วกว่า 7 วัน ถูกปฏิเสธ พร้อมบอกวันแรกที่นัดได้" || fail "นัดเร็วได้: $RR"
-post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 8)\"}" $S >/dev/null
-st $ID3 | grep -q "คอนเฟิร์ม" && pass "นัดหลัง 7 วันได้" || fail "นัด +8 วันไม่ผ่าน: $(st $ID3)"
-RR=$(post $ID3 confirm-appointment "{\"scheduledAt\":\"$(day 3)\"}")
-echo "$RR" | grep -q "ล่วงหน้า 7 วัน" && pass "ลูกค้าขอเลื่อนเข้ามาเร็วกว่า 7 วัน ถูกปฏิเสธเหมือนกัน" || fail "เลื่อนเร็วได้: $RR"
-post $ID3 confirm-appointment "{\"scheduledAt\":\"$(day 9)\"}" >/dev/null
-st $ID3 | grep -q "^แอดมิน · เบิกอะไหล่" && pass "เลื่อนออกไปได้ แล้วไปขั้นเบิก" || fail "หลังเลื่อน: $(st $ID3)"
+RR=$(post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day -1)\"}" $S)
+echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status from \"WorkOrder\" where id=$ID3")" = "PARTS_CHECKED" ] \
+  && pass "นัดเมื่อวานถูกปฏิเสธ (ใบยังรอนัด)" || fail "นัดย้อนหลังได้: $RR"
+post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 0)\"}" $S >/dev/null
+[ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM|$(day 0)" ] \
+  && pass "ของอยู่คลังอื่นก็นัดวันนี้ได้ (ไม่ต้องล่วงหน้า 7 วันแล้ว — ฐานข้อมูล)" || fail "นัดวันนี้ไม่ผ่าน: $(st $ID3)"
+RR=$(post $ID3 confirm-appointment "{\"scheduledAt\":\"$(day -1)\"}")
+echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && pass "ลูกค้าขอเลื่อนเป็นเมื่อวาน ถูกปฏิเสธเหมือนกัน" || fail "เลื่อนย้อนหลังได้: $RR"
+# โทรคอนเฟิร์มช้า วันเดิมเลยมาแล้ว — คอนเฟิร์มวันเดิม (ไม่เปลี่ยนวัน) ไม่ใช่การนัดใหม่ ต้องผ่าน
+DB "update \"WorkOrder\" set \"scheduledAt\"='$(day -1)' where id=$ID3" >/dev/null
+post $ID3 confirm-appointment '{"scheduledTime":"13:00"}' >/dev/null
+st $ID3 | grep -q "^แอดมิน · เบิกอะไหล่" && pass "คอนเฟิร์มวันเดิมที่เลยมาแล้ว (เปลี่ยนแค่เวลา) ได้ แล้วไปขั้นเบิก" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
+# ไม่ใช้อะไหล่จ่ายพร้อมระบุ · ส่งตรวจหน้างาน — เลือกวันนัดเหมือนกัน กฎเดียวกัน
+WO4=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W64","symptom":"วันนัดย้อนหลัง"}]}')
+ID4=$(echo "$WO4" | J 'd.orders[0].id')
+R1=$(post $ID4 parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day -1)\"}}" $S)
+R2=$(post $ID4 inspect-request "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day -2)\"}" $S)
+echo "$R1" | grep -q "วันนัดย้อนหลังไม่ได้" && echo "$R2" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status from \"WorkOrder\" where id=$ID4")" = "NEW" ] \
+  && pass "จ่ายงานพร้อมระบุว่าไม่ใช้อะไหล่ / ส่งตรวจหน้างาน ด้วยวันย้อนหลัง ถูกปฏิเสธ (ใบยังอยู่ขั้นเดิม)" || fail "ย้อนหลังผ่าน: $R1 | $R2"
 
 echo
 curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J '"ประวัติ: "+d.logs.filter(l=>/PARTS_/.test(l.action)).map(l=>l.action).reverse().join(" → ")'
-echo "IDS=$ID,$ID3"
+echo "IDS=$ID,$ID3,$ID4"
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

@@ -35,7 +35,7 @@ import PartPicker, { PickedPart } from "../components/PartPicker";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
-import DateField, { thaiDate, thaiDateLong, todayBkk } from "../components/DateField";
+import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown, { DropdownOption } from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
@@ -374,13 +374,7 @@ function inTransit(p: StockPart) {
  */
 const SOURCING_FRESH_DAYS = 3;
 
-/** ของอยู่คลังอื่น (ต้องเบิก/โอน) นัดได้ตั้งแต่ N วันข้างหน้า — ตรงกับ TRANSFER_LEAD_DAYS ฝั่ง backend */
-const TRANSFER_LEAD_DAYS = 7;
-function addDaysYmd(ymd: string, n: number) {
-  const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-}
-/** ตัวที่ยังต้องเบิก/โอนจากคลังอื่น — กฎเดียวกับ needsTransferPart ฝั่งเซิร์ฟเวอร์ */
+/** ตัวที่ยังต้องเบิก/โอนจากคลังอื่น — คลังอื่นที่ไม่ใช่คลังส่งมอบ และยังไม่ได้เบิกหรือโอนมาถึง (ป้าย TRANSFER ฝั่งเซิร์ฟเวอร์) */
 function farPart(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
   return p.inStock === true && !p.offCatalog && !!p.warehouse && p.warehouse !== adminWarehouse && !p.requisitionNo && !p.transferredAt;
 }
@@ -3596,7 +3590,7 @@ function StageModal({
   const sourcingSplit = sourcingMixed && splitOut;
   // มีครบแล้วไปไหนต่อ — ตามกฎเสนอราคาเดียวกับเซิร์ฟเวอร์ (ใบแยกที่ลูกค้าจ่ายแล้วในใบเดิมไม่เสนอราคาซ้ำ)
   const quoteNext = order.needsQuote && !order.logs.some((l) => l.action === "PREPAID");
-  // ของอยู่คลังอื่น — บอกตั้งแต่ตอนเช็คว่าหัวหน้าภาคต้องนัดล่วงหน้า 7 วัน
+  // ของอยู่คลังอื่น — บอกตั้งแต่ตอนเช็คว่าหัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน
   const sourcingFar =
     order.status === "PARTS_SOURCING"
       ? thisRound.filter((p) => {
@@ -3629,17 +3623,6 @@ function StageModal({
    */
   const partsShort = checkOut && !(mixed && splitOut);
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
-  /**
-   * ของอยู่คลังอื่นยังไม่เบิก/โอน — นัดได้ตั้งแต่ 7 วันข้างหน้า (เจ้าของงานกำหนด ต.ค. 69) · เซิร์ฟเวอร์กันซ้ำ
-   * ใช้ทั้งตอนหัวหน้าภาคนัด และตอนแอดมินเลื่อนวันตามที่ลูกค้าขอ
-   */
-  const farNow = order.needsParts === true ? order.waitingParts.filter((p) => farPart(p, adminWarehouse)) : [];
-  const minVisit = farNow.length ? addDaysYmd(todayBkk(), TRANSFER_LEAD_DAYS) : undefined;
-  const visitTooSoon =
-    !!minVisit &&
-    validDate &&
-    visit < minVisit &&
-    (order.status === "PARTS_CHECKED" || (order.status === "AWAITING_CONFIRM" && confirmChoice === "MOVE"));
   // คอนเฟิร์มแล้วไปไหน — ยังมีของต้องเบิก = แอดมินเบิกต่อ · เบิกแล้ว (วนกลับมาคอนเฟิร์มใหม่) = หัวหน้าภาคปล่อยงาน
   const confirmToIssue =
     order.status === "AWAITING_CONFIRM" &&
@@ -3648,6 +3631,21 @@ function StageModal({
   // ไม่ใช้อะไหล่ และไม่มีค่าบริการให้เสนอราคา = ขั้นถัดไปคือจ่ายงาน → จ่ายในฟอร์มนี้เลย
   const noPartsAssign = order.status === "NEW" && !inspectFirst && needsParts === false && offPartsPayload(services).length === 0;
   const timeOk = visitTime === "" || isTime(visitTime);
+  /**
+   * วันนัดเลือกได้ตั้งแต่วันนี้ (เจ้าของงานกำหนด ต.ค. 69 — แทนกฎ "ของคลังอื่นนัดล่วงหน้า 7 วัน" ที่ยกเลิก) · เซิร์ฟเวอร์กันซ้ำ
+   * ปฏิทินขีดฆ่าวันที่ผ่านมาแล้ว แต่วันที่กรอกค้างมาก่อน (เปิดฟอร์มทิ้งไว้ข้ามวัน) ยังเป็นอดีตได้ — กันปุ่มไว้ด้วย
+   * ลูกค้าขอเลื่อน: เช็คเฉพาะเมื่อเปลี่ยนวัน (เปลี่ยนแค่เวลาของวันเดิมไม่ใช่การนัดใหม่)
+   */
+  const minVisit = todayBkk();
+  const visitPast =
+    validDate &&
+    visit < minVisit &&
+    (order.status === "PARTS_CHECKED" ||
+      (order.status === "NEW" && (inspectFirst || noPartsAssign)) ||
+      ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
+        confirmChoice === "MOVE" &&
+        visit !== (order.scheduledAt ?? "").slice(0, 10)));
+  const pastWarn = visitPast ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null;
 
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
   const inspectMissing = order.status === "INSPECTING" ? missingInspection(files, order.inspectionStartedAt) : [];
@@ -3671,7 +3669,7 @@ function StageModal({
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
-    visitTooSoon ||
+    visitPast ||
     (order.status === "ASSIGNED" && declineDate && !note.trim()) ||
     ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
@@ -3818,7 +3816,9 @@ function StageModal({
                       onChange={setVisit}
                       label="วันเข้าตรวจหน้างาน"
                       emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
+                      min={minVisit}
                     />
+                    {pastWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : needsParts === true ? (
@@ -3833,7 +3833,8 @@ function StageModal({
                       ไม่ใช้อะไหล่ — จ่ายงานในฟอร์มนี้เลย แล้วแอดมินโทรคอนเฟิร์มร้าน · ไปถึงแล้วต้องเปลี่ยนอะไหล่
                       ช่างแจ้งกลับมาให้ระบุอะไหล่ได้
                     </Text>
-                    <DateField value={visit} onChange={setVisit} label="วันเข้างาน" emptyHint="ต้องระบุวันก่อนจึงจะจ่ายงานได้" />
+                    <DateField value={visit} onChange={setVisit} label="วันเข้างาน" emptyHint="ต้องระบุวันก่อนจึงจะจ่ายงานได้" min={minVisit} />
+                    {pastWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
@@ -3890,7 +3891,7 @@ function StageModal({
                           </Text>
                         </TouchableOpacity>
                       </View>
-                      {/* คลังที่มีของ — ของอยู่คลังอื่นต้องเผื่อเวลาโอน หัวหน้าภาคนัดได้ตั้งแต่ 7 วันข้างหน้า */}
+                      {/* คลังที่มีของ — ของอยู่คลังอื่นหัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน */}
                       {c.inStock === true && !part.offCatalog ? (
                         <Dropdown
                           value={c.warehouse}
@@ -3901,7 +3902,7 @@ function StageModal({
                             .map((w) => ({
                               value: w,
                               label: w,
-                              hint: w === adminWarehouse ? "นัดได้ทันที" : `ต้องโอน · นัดล่วงหน้า ${TRANSFER_LEAD_DAYS} วัน`,
+                              hint: w === adminWarehouse ? "ไม่ต้องโอน" : "ต้องเบิก/โอนก่อนปล่อยงาน",
                               group: w === adminWarehouse ? "คลังส่งมอบ" : "คลังอื่น (ต้องเบิก/โอน)",
                             }))}
                           onChange={(next) => setChecks((v) => ({ ...v, [part.sparePartId]: { inStock: true, warehouse: next } }))}
@@ -3941,9 +3942,9 @@ function StageModal({
                         : "ตอบให้ครบทุกตัวก่อน"}
                 </Text>
                 {sourcingFar.length && (!sourcingOut.length || sourcingSplit) ? (
-                  <Text style={styles.pickupTag} accessibilityLabel="ของอยู่คลังอื่น นัดล่วงหน้า">
+                  <Text style={styles.pickupTag} accessibilityLabel="ของอยู่คลังอื่น ต้องโอน">
                     {sourcingFar.length} รายการอยู่คลังอื่น ({[...new Set(sourcingFar.map((p) => checks[p.sparePartId]?.warehouse))].join(", ")}) —
-                    หัวหน้าภาคนัดได้ตั้งแต่ {TRANSFER_LEAD_DAYS} วันข้างหน้า (เผื่อเบิก/โอนหลังลูกค้าคอนเฟิร์ม)
+                    หัวหน้าภาคเบิก/โอนหลังลูกค้าคอนเฟิร์ม ก่อนปล่อยงาน
                   </Text>
                 ) : null}
               </View>
@@ -4720,12 +4721,7 @@ function StageModal({
                   emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
                   min={minVisit}
                 />
-                {minVisit ? (
-                  <Text style={visitTooSoon ? styles.warn : styles.linkedText} accessibilityLabel="นัดได้ตั้งแต่">
-                    อะไหล่อยู่{[...new Set(farNow.map((p) => p.warehouse))].join(", ")} ต้องเบิก/โอนหลังลูกค้าคอนเฟิร์ม —
-                    นัดได้ตั้งแต่ {thaiDateLong(minVisit)} (ล่วงหน้า {TRANSFER_LEAD_DAYS} วัน) วันก่อนหน้านั้นขีดฆ่าไว้
-                  </Text>
-                ) : null}
+                {pastWarn}
                 <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
               </>
             ) : null}
@@ -4780,13 +4776,9 @@ function StageModal({
                       onChange={setVisit}
                       label={order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "วันเข้าตรวจ" : "วันใหม่"}
                       emptyHint="เลือกวันที่ลูกค้าสะดวก"
-                      min={order.status === "AWAITING_CONFIRM" ? minVisit : undefined}
+                      min={minVisit}
                     />
-                    {order.status === "AWAITING_CONFIRM" && minVisit ? (
-                      <Text style={visitTooSoon ? styles.warn : styles.linkedText}>
-                        อะไหล่ต้องโอนจากคลังอื่น — วันใหม่ต้องตั้งแต่ {thaiDateLong(minVisit)} (ล่วงหน้า {TRANSFER_LEAD_DAYS} วัน)
-                      </Text>
-                    ) : null}
+                    {pastWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
