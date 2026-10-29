@@ -36,6 +36,7 @@ interface SparePartOption {
   partCode: string;
   name: string;
   brand: string | null;
+  partNo?: string | null;
 }
 
 export default function PartPicker({
@@ -136,7 +137,7 @@ export default function PartPicker({
           style={styles.pickerInput}
           value={term}
           onChangeText={setTerm}
-          placeholder="ค้นหารหัสหรือชื่ออะไหล่"
+          placeholder="ค้นหารหัส ชื่อ หรือ Part No."
           placeholderTextColor={colors.textFaint}
         />
         {searching ? <Spinner size="small" color={colors.textFaint} /> : null}
@@ -154,6 +155,8 @@ export default function PartPicker({
               <Text style={styles.pickedCode}>{option.partCode}</Text>
               <Text style={styles.pickerResultName} numberOfLines={1}>
                 {option.name}
+                {/* ช่างมักค้นด้วยเลขบนชิ้นส่วนจริง — โชว์ให้เห็นว่าเจอเพราะ Part No. */}
+                {option.partNo ? ` · ${option.partNo}` : ""}
               </Text>
               <Ionicons name="add-circle-outline" size={17} color={colors.primary} />
             </TouchableOpacity>

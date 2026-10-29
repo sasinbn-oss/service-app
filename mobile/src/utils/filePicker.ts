@@ -45,6 +45,41 @@ export function pickFile(accept: string): Promise<PickedFile | null> {
 
 export const canPickFile = Platform.OS === "web";
 
+/** เลือกหลายไฟล์พร้อมกัน (เว็บ) — เช่นไฟล์อะไหล่ยี่ห้อละไฟล์ ไม่ต้องกดเลือกทีละไฟล์ */
+export function pickFiles(accept: string): Promise<PickedFile[]> {
+  if (Platform.OS !== "web" || typeof document === "undefined") return Promise.resolve([]);
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.multiple = true;
+    input.style.display = "none";
+    const cleanup = () => input.remove();
+    input.onchange = () => {
+      const files = [...(input.files ?? [])].map((f) => ({ name: f.name, blob: f as Blob }));
+      cleanup();
+      resolve(files);
+    };
+    input.oncancel = () => {
+      cleanup();
+      resolve([]);
+    };
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/** ไฟล์ที่ลากมาวางทั้งหมดที่ตรงชนิด — ไม่มีไฟล์ไหนตรงบอกว่าต้องเป็นไฟล์อะไร (แบบ droppedFile) */
+export function droppedFiles(files: File[], accept: string): PickedFile[] {
+  const rules = accept.split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+  const exts = rules.filter((r) => r.startsWith("."));
+  const ok = files.filter((f) => exts.some((e) => f.name.toLowerCase().endsWith(e)) || rules.includes(f.type.toLowerCase()));
+  if (!ok.length) {
+    showAlert("ไฟล์นี้นำเข้าไม่ได้", `ต้องเป็นไฟล์ ${exts.join(" หรือ ")} — ไฟล์ที่ลากมา: ${files.map((f) => f.name).join(", ")}`);
+  }
+  return ok.map((f) => ({ name: f.name, blob: f }));
+}
+
 /**
  * ไฟล์ที่ลากมาวาง (เว็บ · components/FileDropZone) → แบบเดียวกับที่ pickFile คืน
  * accept รูปแบบเดียวกับ pickFile (".xlsx,application/…") · ลากมาหลายไฟล์ใช้ไฟล์แรกที่ตรงชนิด

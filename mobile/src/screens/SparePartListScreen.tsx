@@ -58,7 +58,7 @@ export default function SparePartListScreen({ navigation }: Props) {
       <View style={styles.searchWrapper}>
         <TextInput
           style={styles.search}
-          placeholder="ค้นหาจากชื่อ รหัสสินค้า หรือยี่ห้อ"
+          placeholder="ค้นหาจากชื่อ รหัสสินค้า ยี่ห้อ หรือ Part No."
           value={search}
           onChangeText={setSearch}
         />
@@ -93,6 +93,11 @@ export default function SparePartListScreen({ navigation }: Props) {
                     {item.name}
                   </Text>
                   <Text style={styles.code}>รหัส: {item.partCode}</Text>
+                  {item.partNo ? (
+                    <Text style={styles.brand} numberOfLines={1}>
+                      Part No.: {item.partNo}
+                    </Text>
+                  ) : null}
                   {item.brand ? <Text style={styles.brand}>ยี่ห้อ: {item.brand}</Text> : null}
                 </View>
               </TouchableOpacity>

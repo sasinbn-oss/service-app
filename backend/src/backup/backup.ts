@@ -54,6 +54,7 @@ const SHEET_TITLE: Record<string, string> = {
   Outage: "เคสเครื่องดับ",
   User: "ผู้ใช้",
   SparePart: "อะไหล่",
+  SparePartImport: "ประวัติอัปเดตอะไหล่",
   Vehicle: "รถ",
   VehicleLog: "ประวัติใช้รถ",
   VehicleMaintenance: "ซ่อมบำรุงรถ",
