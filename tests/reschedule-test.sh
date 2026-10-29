@@ -7,6 +7,8 @@
 #   · ก่อนหัวหน้าภาคนัด (ระบุอะไหล่ · นัดวันเข้า · แอดมินนัดตรวจ) 409
 #   · เลื่อนระหว่างเบิกแล้วคอนเฟิร์มเฉย ๆ ทีหลัง หัวหน้าภาคยังเห็น "คอนเฟิร์มวันใหม่" (rescheduled) ทั้งรายการและหน้าใบงาน
 #   · ใบผูกเคสเครื่องเสีย วันเข้าบนเคสตามไปด้วย · /options ส่ง rescheduleStages ให้แอป
+#   · กดพร้อมกัน (จำลองด้วยทรานแซกชันที่ค้างล็อกแถวใบงานไว้): ดึงคืน vs ช่างกดถึงหน้างาน · ปล่อยงาน/คอนเฟิร์ม vs เลื่อนวัน
+#     ฝั่งที่มาทีหลังได้ 409 ไม่เขียนทับ (ฐานข้อมูล)
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -28,6 +30,18 @@ BOARD() { GET $A "plans/day?date=$2" | J "const s=d.lanes.flatMap(l=>l.stops).fi
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
 D1=$(day 14); D2=$(day 16); D3=$(day 18); D4=$(day 20); PAST=$(day -2)
 MOVE() { echo "{\"scheduledAt\":\"$1\",\"reason\":\"${2:-ทดสอบเลื่อน}\"$3}"; }
+# อีกคนกดค้างอยู่: ทรานแซกชันที่แก้แถวใบงาน (ล็อกแถว) แล้วรอ 2 วิค่อย COMMIT — คำขอที่ยิงตามไปอ่านค่าเดิมได้
+# (ฐานข้อมูลไม่บล็อกการอ่าน) แต่ตอนเขียนต้องรอแถวนี้ = ช่องว่างระหว่าง "อ่าน" กับ "เขียน" ที่เกิดจริงเวลากดพร้อมกัน
+HOLD() {
+  PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -q -v ON_ERROR_STOP=1 \
+    -c "BEGIN; $1; SELECT pg_sleep(2) /* hold-$SUF */; COMMIT;" >/dev/null &
+  HOLD_PID=$!
+  for _ in $(seq 50); do
+    [ "$(DB "select count(*) from pg_stat_activity where query like '%hold-$SUF */%' and pid<>pg_backend_pid() and state='active'")" = "1" ] && return
+    sleep 0.1
+  done
+  fail "HOLD: ทรานแซกชันจำลองไม่เริ่ม"
+}
 
 A=$(login A001)
 BR=C0006
@@ -117,10 +131,36 @@ R=$(POST $A work-orders/$R1/reschedule "$(MOVE $D4 ร้านปิดวั�
 [ "$(WO $R1)" = "ASSIGNED|CONFIRMED|$TEAM|$D4|13:30" ] && [ "$(LASTLOG $R1)" = "APPOINTMENT_RECALLED|ASSIGNED|A001" ] \
   && pass "ช่างยังไม่ถึง: ดึงคืนไปหัวหน้าภาคปล่อยงาน วันใหม่ สถานะนัดคอนเฟิร์มคงเดิม (ฐานข้อมูล)" || fail "ดึงคืน: $(WO $R1) $(LASTLOG $R1) $(echo $R | head -c 150)"
 N=$(LASTNOTE $R1)
-echo "$N" | grep -q "ดึงงานคืนจากช่าง" && echo "$N" | grep -q "แอดมินตกลงวันใหม่กับร้านแล้ว" && echo "$N" | grep -q "ร้านปิดวันนั้น" \
-  && pass "บันทึกบอกว่าดึงงานคืน · แอดมินตกลงวันใหม่กับร้านแล้ว · เหตุผล" || fail "บันทึกดึงคืน: $N"
+# ชื่อประวัติ (APPOINTMENT_RECALLED) บอก "ดึงงานคืนจากช่าง" แล้ว — บันทึกไม่พูดซ้ำ กล่องส้มตอนปล่อยงานอ่านต่อกันครั้งเดียว
+echo "$N" | grep -q "^เลื่อนนัดจาก .* — ช่างยังไม่ถึงหน้างาน — แอดมินตกลงวันใหม่กับร้านแล้ว — ร้านปิดวันนั้น$" && ! echo "$N" | grep -q "ดึงงานคืน" \
+  && [ "$(GET $A work-orders/$R1 | J 'd.logs[0].actionLabel')" = "แอดมินเลื่อนวันนัด — ดึงงานคืนจากช่าง" ] \
+  && pass "บันทึก: เลื่อนจาก…เป็น… — ช่างยังไม่ถึงหน้างาน — ตกลงกับร้านแล้ว — เหตุผล (ไม่ซ้ำกับชื่อประวัติ \"ดึงงานคืนจากช่าง\")" || fail "บันทึกดึงคืน: $N"
 [ "$(RS $R1)" = "true" ] && [ "$(ROW $S INBOX $R1 'String(r.rescheduled)')" = "true" ] && pass "ดึงคืนแล้วหัวหน้าภาคเห็น \"คอนเฟิร์มวันใหม่\"" || fail "rescheduled หลังดึงคืน"
 POST $S "work-orders/$R1/dispatch" '{}' >/dev/null
+[ "$(WO $R1 | cut -d'|' -f1)" = "IN_PROGRESS" ] || fail "ปล่อยงาน R1 รอบสอง: $(WO $R1)"
+
+# แอดมินดึงคืนค้างอยู่ (ยังไม่ COMMIT) ตอนช่างกดถึงหน้างาน — ช่างอ่านได้ว่ายังอยู่ในมือ แต่เขียนต้องรอแถว
+ARR0=$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R1 and action='ARRIVED'")
+CI0=$(DB "select count(*) from \"BranchCheckIn\" where id>$CHECKIN0")
+HOLD "update \"WorkOrder\" set status='ASSIGNED', \"updatedAt\"=now() where id=$R1; insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") select $R1,id,'APPOINTMENT_RECALLED','ASSIGNED','ทดสอบ — ดึงคืนพร้อมกัน',now() from \"User\" where \"employeeCode\"='A001'"
+R=$(curl -s -w '|%{http_code}' -X POST "localhost:4000/api/work-orders/$R1/arrive" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"latitude":13.75,"longitude":100.5}')
+wait $HOLD_PID
+[ "${R##*|}" = "409" ] && echo "$R" | grep -q "ไม่ได้อยู่ในมือช่างตอนนี้" && [ "$(WO $R1 | cut -d'|' -f1)" = "ASSIGNED" ] \
+  && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R1 and action='ARRIVED'")" = "$ARR0" ] \
+  && [ "$(DB "select count(*) from \"BranchCheckIn\" where id>$CHECKIN0")" = "$CI0" ] \
+  && pass "ดึงคืนก่อน → ช่างกดถึงหน้างานพร้อมกันได้ 409 ไม่ลงประวัติถึงหน้างาน/รายงานตัวบนใบที่กลับไปหัวหน้าภาค (ฐานข้อมูล)" \
+  || fail "ถึงหน้างานชนดึงคืน: ${R:0:200} $(WO $R1) ARRIVED=$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R1 and action='ARRIVED'")"
+POST $S "work-orders/$R1/dispatch" '{}' >/dev/null
+[ "$(WO $R1 | cut -d'|' -f1)" = "IN_PROGRESS" ] || fail "ปล่อยงาน R1 รอบสาม: $(WO $R1)"
+
+# ช่างกดถึงหน้างานค้างอยู่ (แตะแถวใบงาน + ลงประวัติ ยังไม่ COMMIT) ตอนแอดมินเลื่อน — แอดมินเช็คประวัติไม่เห็น ARRIVED
+# แต่การดึงคืนต้องไม่ผ่าน (updatedAt ที่อ่านไว้ไม่ตรงแล้ว)
+HOLD "update \"WorkOrder\" set \"updatedAt\"=now() where id=$R1; insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") select $R1,id,'ARRIVED','IN_PROGRESS','ทดสอบ — ถึงหน้างานพร้อมกัน',now() from \"User\" where \"employeeCode\"='T001'"
+R=$(curl -s -w '|%{http_code}' -X POST "localhost:4000/api/work-orders/$R1/reschedule" -H "$(H $A)" -H 'Content-Type: application/json' -d "$(MOVE $(day 22) ชนกัน)")
+wait $HOLD_PID
+[ "${R##*|}" = "409" ] && [ "$(WO $R1)" = "IN_PROGRESS|CONFIRMED|$TEAM|$D4|13:30" ] && [ "$(LASTLOG $R1)" = "ARRIVED|IN_PROGRESS|T001" ] \
+  && pass "ช่างถึงหน้างานก่อน → แอดมินเลื่อนพร้อมกันได้ 409 ใบยังอยู่กับช่าง วันเดิม (ฐานข้อมูล)" || fail "ดึงคืนชนถึงหน้างาน: ${R:0:200} $(WO $R1) $(LASTLOG $R1)"
+
 POST $T "work-orders/$R1/arrive" '{}' >/dev/null
 R=$(POST $A work-orders/$R1/reschedule "$(MOVE $(day 22))")
 echo "$R" | grep -q "ช่างถึงหน้างานแล้ว" && [ "$(WO $R1)" = "IN_PROGRESS|CONFIRMED|$TEAM|$D4|13:30" ] \
@@ -166,6 +206,28 @@ POST $A work-orders/$R4/reschedule "$(MOVE $D3 ร้านขอเลื่อ
   && pass "ของกำลังโอน: เลื่อนได้ เลขใบเบิกต้นทาง/เลขที่ใบโอนไม่หาย (ฐานข้อมูล)" || fail "เลื่อนระหว่างโอน: $(WO $R4) $(XF)"
 
 echo
+echo "═══ คอนเฟิร์มลูกค้า / ปล่อยงาน ชนกับแอดมินอีกคนเลื่อนวัน (ขั้นไม่เปลี่ยน) — 409 ไม่เขียนทับวันใหม่"
+R7=$(mk W65); spec $R7 "$L94"; assign $R7 "$D1"
+POST $A "work-orders/$R7/parts-check" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS7\"}]}" >/dev/null
+[ "$(WO $R7)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D1|-" ] || fail "เตรียม R7: $(WO $R7)"
+MOVED_SQL() { echo "update \"WorkOrder\" set \"scheduledAt\"='$2', \"updatedAt\"=now() where id=$1; insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") select $1,id,'APPOINTMENT_MOVED',(select status from \"WorkOrder\" where id=$1),'ทดสอบ — เลื่อนพร้อมกัน',now() from \"User\" where \"employeeCode\"='A001'"; }
+HOLD "$(MOVED_SQL $R7 $D2)"
+C=$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$R7/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
+wait $HOLD_PID
+[ "$C" = "409" ] && [ "$(WO $R7)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D2|-" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R7 and action in ('CONFIRMED','RESCHEDULED')")" = "0" ] \
+  && pass "คอนเฟิร์มที่อ่านวันเดิมไว้: 409 วันใหม่ไม่ถูกเขียนทับ ไม่ลงคอนเฟิร์ม (ฐานข้อมูล)" || fail "คอนเฟิร์มชนเลื่อน: $C $(WO $R7)"
+POST $A "work-orders/$R7/confirm-appointment" '{}' >/dev/null
+[ "$(WO $R7)" = "ASSIGNED|CONFIRMED|$TEAM|$D2|-" ] || fail "คอนเฟิร์ม R7: $(WO $R7)"
+HOLD "$(MOVED_SQL $R7 $D3)"
+C=$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$R7/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}')
+wait $HOLD_PID
+[ "$C" = "409" ] && [ "$(WO $R7)" = "ASSIGNED|CONFIRMED|$TEAM|$D3|-" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R7 and action='DISPATCHED'")" = "0" ] \
+  && pass "ปล่อยงานที่อ่านวันเดิมไว้: 409 ใบยังรอหัวหน้าภาครับทราบวันใหม่ ไม่ถึงช่าง (ฐานข้อมูล)" || fail "ปล่อยงานชนเลื่อน: $C $(WO $R7)"
+POST $S "work-orders/$R7/dispatch" '{}' >/dev/null
+[ "$(WO $R7 | cut -d'|' -f1,4)" = "IN_PROGRESS|$D3" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R7 and action='DISPATCHED'")" = "1" ] \
+  && pass "กดใหม่หลังโหลด → ปล่อยงานวันใหม่" || fail "ปล่อยงาน R7: $(WO $R7)"
+
+echo
 echo "═══ ใบผูกเคสเครื่องเสีย — วันเข้าบนเคสตามไปด้วย"
 OUT=$(DB "insert into \"Outage\"(kind,\"branchId\",\"startedAt\",\"lastSeenAt\") select 'MACHINE_OFF',id,now(),now() from \"Branch\" where code='$BR' returning id" | head -1)
 R5=$(POST $A "work-orders/from-outage/$OUT" "{\"jobType\":\"CM\",\"symptom\":\"$SYMPTOM\"}" | J 'd.id')
@@ -174,6 +236,14 @@ spec $R5 "$L94"; assign $R5 "$D1"
 POST $A work-orders/$R5/reschedule "$(MOVE $D2 ร้านขอ)" >/dev/null
 [ "$(DB "select \"scheduledVisitAt\"::date from \"Outage\" where id=$OUT")" = "$D2" ] && [ "$(WO $R5)" = "PARTS_REQUESTED|PENDING|$TEAM|$D2|-" ] \
   && pass "Outage.scheduledVisitAt ตามวันใหม่ ใบอยู่ขั้นเดิม (ฐานข้อมูล)" || fail "เคส: $(DB "select \"scheduledVisitAt\" from \"Outage\" where id=$OUT") $(WO $R5)"
+# ใบผูกเคสคอนเฟิร์มผ่านทรานแซกชัน (ซิงก์เคส) ไม่ใช่ moveStage — ต้องกันเขียนทับวันใหม่แบบเดียวกัน
+POST $A "work-orders/$R5/parts-check" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS5\"}]}" >/dev/null
+[ "$(WO $R5)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D2|-" ] || fail "เตรียม R5 คอนเฟิร์ม: $(WO $R5)"
+HOLD "$(MOVED_SQL $R5 $D3)"
+C=$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$R5/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
+wait $HOLD_PID
+[ "$C" = "409" ] && [ "$(WO $R5)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D3|-" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R5 and action in ('CONFIRMED','RESCHEDULED')")" = "0" ] \
+  && pass "ใบผูกเคส: คอนเฟิร์มที่อ่านวันเดิมไว้ 409 วันใหม่ไม่ถูกเขียนทับ (ฐานข้อมูล)" || fail "คอนเฟิร์มใบผูกเคสชนเลื่อน: $C $(WO $R5)"
 
 echo
 echo "═══ ตรวจหน้างาน: เลื่อนตอนรอส่งช่างตรวจ · ทีมไม่ว่างส่งกลับได้ · ดึงคืนจากช่างตรวจ"

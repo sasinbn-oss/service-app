@@ -37,7 +37,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
      * ถ้าปล่อยให้บันทึกได้ ประวัติใบงานจะขึ้นชื่อคนที่ถูกดู ทั้งที่เขาไม่ได้ทำ
      */
     const path = req.baseUrl + req.path;
-    if (!READ_METHODS.has(req.method) && !ALLOWED_WHILE_VIEWING.has(path)) {
+    if (!READ_METHODS.has(req.method) && !ALLOWED_WHILE_VIEWING.has(path) && !READ_POSTS_WHILE_VIEWING.some((r) => r.test(path))) {
       return res.status(403).json({
         error: "กำลังดูในฐานะผู้ใช้อื่น — ดูได้อย่างเดียว แก้ไขไม่ได้",
         viewAsReadOnly: true,
@@ -114,6 +114,12 @@ const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * export ส่งรายการ id มาทาง body เพราะยาวเกิน URL · stop ต้องเรียกได้เพื่อปิดบันทึก
  */
 const ALLOWED_WHILE_VIEWING = new Set(["/api/machines/export", "/api/auth/view-as/stop"]);
+/**
+ * แบบเดียวกันแต่มีเลขใบงาน/เลขเคลมในทาง จึงเป็นรูปแบบ ไม่ใช่ข้อความตรงตัว
+ * ลิงก์ใบเคลม PDF แค่สร้างไฟล์ชั่วคราวให้เบราว์เซอร์เปิด ไม่แตะข้อมูลงาน — ดูในฐานะหัวหน้าภาคต้องเปิดใบเคลม
+ * จากหน้าประวัติเคลม/หน้าใบงานได้เหมือนที่หัวหน้าภาคเห็นจริง (ขอบเขตใบงานยังตรวจใน route ตามคนที่ถูกดู)
+ */
+const READ_POSTS_WHILE_VIEWING = [/^\/api\/work-orders\/\d+\/claims\/\d+\/pdf-link$/];
 
 /** สิ่งที่ Admin Spare Part แก้ได้ — นอกจากนี้ดูได้อย่างเดียว (ดู requireAuth) */
 const PARTS_ADMIN_WRITES = [

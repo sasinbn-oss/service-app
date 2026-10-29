@@ -1,8 +1,8 @@
 /**
  * ทางเข้าหน้าประวัติเคลมนอกเมนูข้าง (ตามตัวอย่างที่เจ้าของงานตกลง ต.ค. 69)
  *
- * ClaimHistoryCard — การ์ดใน "งานของฉัน" ของ Admin Spare Part: เดือนนี้ตรวจไปเท่าไร + ลิงก์ "ดูประวัติเคลม"
- *   (ใบที่รอตรวจอยู่ในกล่องงานด้านล่างอยู่แล้ว การ์ดนี้แค่พาไปดูย้อนหลัง)
+ * ClaimHistoryCard — การ์ดใน "งานของฉัน" ของ Admin Spare Part: เคลมที่ส่งเดือนนี้ผลเป็นอย่างไร + ป้ายรอตรวจ
+ *   + ลิงก์ "ดูประวัติเคลม" (ใบที่รอตรวจอยู่ในกล่องงานด้านล่างอยู่แล้ว การ์ดนี้แค่พาไปดูย้อนหลัง)
  * ClaimHistoryLinks — ลิงก์ในส่วนเคลมของหน้าใบงาน "เคลมเครื่องนี้/สาขานี้ทั้งหมด (n)" เปิดหน้าประวัติกรองให้เลย
  *   ไว้ดูว่าเครื่องเดิมเคลมชิ้นเดิมซ้ำไหม — คนที่ตัดสินเคลมต้องเห็นตอนกำลังตัดสิน ไม่ใช่ไปค้นทีหลัง
  *
@@ -22,12 +22,21 @@ type Counts = { ALL: number; PENDING: number; APPROVED: number; REJECTED: number
 
 export function ClaimHistoryCard() {
   const [counts, setCounts] = useState<Counts | null>(null);
+  const [pending, setPending] = useState<number | null>(null);
   useEffect(() => {
-    // ตัวเลขชุดเดียวกับหน้าประวัติตอนเปิดมา (เดือนนี้ · รอบล่าสุด) — กดเข้าไปแล้วต้องเห็นเลขเดียวกัน
+    // บรรทัดล่าง: ชุดเดียวกับหน้าประวัติตอนเปิดมา (ส่งเดือนนี้ · รอบล่าสุด) — กดเข้าไปแล้วต้องเห็นเลขเดียวกัน
     const today = todayBkk();
     api
       .get<{ counts: Counts }>("/part-claims", { params: { from: `${today.slice(0, 8)}01`, to: today, limit: 1 }, loadingText: false })
       .then((r) => setCounts(r.data.counts))
+      .catch(() => undefined);
+    /**
+     * ป้ายรอตรวจ = ทุกแถวที่ยังรอตรวจ ไม่จำกัดเดือน ตัวเดียวกับป้ายข้างเมนู — เดิมนับจากชุดเดือนนี้
+     * ส่งปลายเดือนก่อนแล้วยังไม่ได้ตรวจก็หายจากการ์ด ป้ายสองที่บนจอเดียวกันได้คนละเลข
+     */
+    api
+      .get<{ pending: number }>("/part-claims/pending-count", { loadingText: false })
+      .then((r) => setPending(r.data.pending))
       .catch(() => undefined);
   }, []);
   return (
@@ -35,15 +44,16 @@ export function ClaimHistoryCard() {
       <View style={styles.cardHead}>
         <Ionicons name="shield-checkmark-outline" size={20} color={colors.primaryInk} />
         <Text style={[styles.title, headingFont]}>ประวัติเคลม</Text>
-        {counts?.PENDING ? (
-          <View style={styles.pending}>
-            <Text style={styles.pendingText}>รอตรวจ {counts.PENDING}</Text>
+        {pending ? (
+          <View style={styles.pending} accessibilityLabel={`ประวัติเคลม รอตรวจ ${pending}`}>
+            <Text style={styles.pendingText}>รอตรวจ {pending}</Text>
           </View>
         ) : null}
       </View>
       <View style={styles.cardFoot}>
         <Text style={styles.stat}>
-          {counts ? `เดือนนี้อนุมัติแล้ว ${counts.APPROVED} · ตีกลับ ${counts.REJECTED}` : "ทุกชิ้นที่เคยส่งเคลม ดูย้อนหลังได้ทุกเดือน"}
+          {/* นับตามวันที่ส่งเคลม ไม่ใช่วันที่ตรวจ — ส่งเดือนก่อนแล้วมาอนุมัติเดือนนี้ไม่อยู่ในบรรทัดนี้ ชื่อจึงต้องบอกว่า "ส่งเคลมเดือนนี้" */}
+          {counts ? `ส่งเคลมเดือนนี้ ${counts.ALL} · อนุมัติ ${counts.APPROVED} · ตีกลับ ${counts.REJECTED}` : "ทุกชิ้นที่เคยส่งเคลม ดูย้อนหลังได้ทุกเดือน"}
         </Text>
         <TouchableOpacity style={styles.go} onPress={() => openClaimHistory()} accessibilityLabel="ดูประวัติเคลม">
           <Text style={styles.goText}>ดูประวัติเคลม</Text>

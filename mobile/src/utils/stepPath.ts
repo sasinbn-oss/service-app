@@ -46,7 +46,10 @@ export type FlowVariant = "target" | "confirmFirst" | "issueFirst";
 
 export interface FlowInfo {
   variant: FlowVariant;
+  /** รอบนี้โอนของจริง (สั่งโอน · กำลังโอน) — ขั้นย่อยโอนใต้ "เบิกอะไหล่" */
   transfer: boolean;
+  /** รอบนี้หัวหน้าภาคเบิกส่งมอบจากคลังที่ไม่ใช่ 94 (โอนมาก่อนหรือไม่ก็ได้) */
+  pickup: boolean;
   quote: boolean;
   inspect: boolean;
   inspectRounds: number;
@@ -62,7 +65,6 @@ export interface PathPart {
   inStock: boolean | null;
   requisitionNo: string | null;
   offCatalog?: boolean;
-  transferNo?: string | null;
 }
 export interface PathOrder {
   status: string;
@@ -104,6 +106,7 @@ export interface StepRow {
   label: string;
   /** ชื่อการกระทำ — ใช้ในรายการขั้นที่ข้าม (ขีดฆ่า) */
   action: string;
+  /** "ขั้น 4 เบิกอะไหล่ · ทำอยู่" — โปรแกรมอ่านจอแยกขั้นได้โดยไม่ต้องเห็นวง/ติ๊ก และเทสต์อ่านสถานะจากชื่อนี้ */
   a11y: string;
   actorLabel: string | null;
   /** ป้ายเล็กใต้ชื่อ — ขั้น 1 ระหว่างตรวจหน้างาน */
@@ -143,6 +146,15 @@ const KEYS: StepKey[] = [
 /** ประวัติที่บอกว่าเคยผ่านขั้นเช็คอะไหล่ / ขั้นเบิก — ใช้ตัดสินว่าใบนี้เดินทางที่ใช้อะไหล่ */
 const SOURCING_LOGS = ["PARTS_SOURCED", "PARTS_BACKORDERED"];
 export const ISSUE_LOGS = ["PARTS_CHECKED", "PICKUP_REQUESTED", "TRANSFER_REQUESTED", "TRANSFER_ARRIVED", "PICKED_UP"];
+/** หัวหน้าภาคระบุอะไหล่ใหม่ — เริ่มรอบใหม่ทั้งหมด (specRound ฝั่งเซิร์ฟเวอร์) */
+const SPEC_LOGS = ["PARTS_REQUESTED", "NO_PARTS"];
+/** เริ่มรอบอะไหล่ใหม่ — ตรงกับ PARTS_ROUND_ACTIONS ฝั่งเซิร์ฟเวอร์ */
+const PARTS_ROUND_LOGS = [...SPEC_LOGS, "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
+/**
+ * รอบเบิกล่าสุด — หัวหน้าภาคส่งกลับ (โอน/เบิกคลังอื่นไม่ได้) แล้วแอดมินตอบคลังใหม่ทั้งรอบ
+ * การโอน/เบิกของรอบที่ถูกส่งกลับไม่ได้เกิดขึ้นจริง ห้ามนับ (issueRound ฝั่งเซิร์ฟเวอร์ — กฎเดียวกัน)
+ */
+const ISSUE_ROUND_LOGS = [...PARTS_ROUND_LOGS, "TRANSFER_RETURNED", "PICKUP_RETURNED"];
 
 /**
  * ชื่อสั้นตามแบบที่เจ้าของงานเลือก — ชื่อเต็มของเซิร์ฟเวอร์ ("เช็คอะไหล่ (มี/หมด)" · "เบิกอะไหล่ (คลัง 94)"
@@ -153,6 +165,15 @@ const SHORT: Partial<Record<StepKey, [string, string]>> = {
   ISSUE: ["เบิกอะไหล่", "เบิกอะไหล่แล้ว"],
   ASSIGNED: ["ปล่อยงาน", "ปล่อยงานแล้ว"],
 };
+/** สถานะของขั้นเป็นคำ — วงสี/ติ๊กบนแถบอ่านด้วยโปรแกรมอ่านจอไม่ได้ */
+const STATE_WORD: Record<StepState, string> = {
+  done: "เสร็จแล้ว",
+  now: "ทำอยู่",
+  loop: "รอผลตรวจหน้างาน",
+  future: "ยังไม่ถึง",
+  skipped: "ข้าม",
+};
+
 /** เผื่อเซิร์ฟเวอร์ไม่ส่งชื่อขั้นมา (โหลดตัวเลือกไม่ทัน) — แถบยังอ่านออก */
 const FALLBACK: Record<StepKey, [string, string]> = {
   NEW: ["ระบุอะไหล่", "ระบุอะไหล่แล้ว"],
@@ -171,6 +192,12 @@ const FALLBACK: Record<StepKey, [string, string]> = {
 /** ใหม่ก่อนเก่า — ประวัติย้อนหลัง (ปิดงานย้อนหลัง) เลขแถวใหม่แต่วันเก่า จึงเรียงด้วยวันก่อน */
 const newest = (a: PathLog, b: PathLog) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id;
 const after = (l: PathLog, mark: PathLog) => newest(l, mark) < 0;
+/** ประวัติหลังรายการล่าสุดที่อยู่ใน actions (ไม่รวมตัวมันเอง) ใหม่ก่อนเก่า — ไม่เคยมี = ทั้งหมด */
+function since(logs: PathLog[], actions: string[]): PathLog[] {
+  const sorted = [...logs].sort(newest);
+  const i = sorted.findIndex((l) => actions.includes(l.action));
+  return i < 0 ? sorted : sorted.slice(0, i);
+}
 
 /** สถานะของเซิร์ฟเวอร์ → ขั้นบนแถบ · ปิด/ยกเลิกไม่มีขั้นของตัวเอง */
 export function stepKeyOf(status: string | null | undefined): StepKey | null {
@@ -239,11 +266,13 @@ function guessVariant(o: PathOrder): FlowVariant {
 export function flowOf(o: PathOrder): FlowInfo {
   const has = (...a: string[]) => o.logs.some((l) => a.includes(l.action));
   const f = o.flow ?? {};
+  const issueRound = since(o.logs, ISSUE_ROUND_LOGS);
   return {
     variant: f.variant ?? guessVariant(o),
-    transfer:
-      f.transfer ??
-      (["PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(o.status) || has("TRANSFER_REQUESTED") || o.waitingParts.some((p) => !!p.transferNo)),
+    // โอนจริงเท่านั้น — เบิกคลังอื่นเฉย ๆ (ไม่ต้องโอน) ไม่มีขั้นสั่งโอน/รอของถึง เดิมนับรวมกันแล้วแถบติ๊กขั้นที่ไม่ได้ทำ
+    transfer: f.transfer ?? (["PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(o.status) || issueRound.some((l) => l.action === "TRANSFER_REQUESTED")),
+    // ดูจาก PICKED_UP ไม่ใช่ PICKUP_REQUESTED — ประวัตินั้นเขียนทุกครั้งที่มีของคลังอื่น รวมใบที่โอนเข้าคลัง 94
+    pickup: f.pickup ?? (o.status === "PARTS_PICKUP" || issueRound.some((l) => l.action === "PICKED_UP")),
     // ของที่เกิดขึ้นจริงชนะกฎวันนี้ — กฎประกัน 3 ปีทำให้แฟรนไชส์ 245 สาขากลับมาอยู่ในประกัน ใบที่เสนอราคาไปแล้ว
     // (มีใบเสนอราคา/บิลแนบอยู่) ต้องยังเห็นขั้นนั้น ไม่ใช่หายไปตามกฎใหม่
     // ใบแยกที่ลูกค้าจ่ายในใบเดิมแล้ว (PREPAID) ไม่เสนอราคาซ้ำ — กฎเดียวกับ quoteNext ในฟอร์มเช็คอะไหล่
@@ -278,12 +307,15 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
   const pos = (k: StepKey | null) => (k ? full.indexOf(k) : -1);
 
   // ระบุอะไหล่ยังไม่ตอบ (null) โชว์ทางที่ใช้อะไหล่ — ใบส่วนใหญ่ใช้ · ตอบว่าไม่ใช้แล้วขั้นเช็ค/เบิกหายไป
+  // ประวัติเช็ค/เบิก/รอของนับเฉพาะรอบที่ระบุล่าสุด — ใบที่ย้อนไประบุใหม่ว่าไม่ใช้อะไหล่ ขั้นของรอบก่อนต้องไม่โผล่มาติ๊กว่าทำแล้ว
+  const specRound = since(o.logs, SPEC_LOGS);
+  const inSpec = (...a: string[]) => specRound.some((l) => a.includes(l.action));
   const parts =
     o.needsParts !== false ||
     ISSUE_STAGES.includes(o.status) ||
     o.status === "PARTS_SOURCING" ||
-    has(...SOURCING_LOGS, ...ISSUE_LOGS);
-  const waiting = o.status === "WAITING_PARTS" || has("PARTS_ARRIVED");
+    inSpec(...SOURCING_LOGS, ...ISSUE_LOGS);
+  const waiting = o.status === "WAITING_PARTS" || inSpec("PARTS_ARRIVED");
   const claim = o.status === "CLAIM_REVIEW" || o.claims.length > 0;
   const cur = stepKeyOf(o.status);
   const keys = full.filter((k) => {
@@ -337,12 +369,11 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     if (why) return "skipped";
     const p = pos(k);
     if (o.status === "DONE") return "done";
+    // ใบที่ค้างระหว่างเบิกโดยยังไม่มีวัน — ขั้นนัด/คอนเฟิร์มยังไม่ได้ทำ แม้ลำดับจะอยู่ก่อน
+    // ใบที่ยกเลิกตอนค้างแบบนั้นด้วย: เซิร์ฟเวอร์ดูลำดับจากสถานะ พอยกเลิกแล้วเลยให้ลำดับปกติ (นัดก่อนเบิก)
+    if (p < ci && (k === "PARTS_CHECKED" || k === "AWAITING_CONFIRM") && (cur ?? cancelledAt) === "ISSUE" && !o.scheduledAt) return "future";
     if (cancelledAt) return p < ci ? "done" : "future";
-    if (p < ci) {
-      // ใบที่ค้างระหว่างเบิกโดยยังไม่มีวัน — ขั้นนัด/คอนเฟิร์มยังไม่ได้ทำ แม้ลำดับจะอยู่ก่อน
-      if ((k === "PARTS_CHECKED" || k === "AWAITING_CONFIRM") && cur === "ISSUE" && !o.scheduledAt) return "future";
-      return "done";
-    }
+    if (p < ci) return "done";
     if (p === ci) return inspecting ? "loop" : "now";
     return k === "ISSUE" && issuedAll && has(...ISSUE_LOGS) ? "done" : "future";
   };
@@ -359,28 +390,34 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     // ตอบว่าไม่ใช้อะไหล่ — ขั้น 1 บอกคำตอบเลย ไม่ใช่ "ระบุอะไหล่แล้ว" ทั้งที่ไม่มีอะไหล่ (ตามแบบที่เลือก)
     if (k === "NEW" && state === "done" && o.needsParts === false) label = "ระบุ: ไม่ใช้อะไหล่";
     let actorLabel = server?.actorLabel ?? null;
+    const sub = k === "ISSUE" && flow.transfer ? transferSubs(o, state, st) : undefined;
     if (k === "ISSUE") {
       // คนเบิกเปลี่ยนตามขั้นย่อย — คลัง 94 แอดมิน · คลังอื่นหัวหน้าภาค
+      // เบิกคลังอื่นโดยไม่โอน (ไม่มีขั้นย่อย) บอกที่ชื่อคนทำแทน — ไม่งั้นดูเหมือนแอดมินเบิกคลัง 94 ตามปกติ
+      const pickupOnly = `${st("PARTS_PICKUP")?.actorLabel ?? "หัวหน้าภาค"} · เบิกคลังอื่น`;
       actorLabel =
         state !== "now"
-          ? st("PARTS_REQUESTED")?.actorLabel ?? "แอดมิน"
-          : o.status === "PARTS_PICKUP" && !flow.transfer
-            ? `${st("PARTS_PICKUP")?.actorLabel ?? "หัวหน้าภาค"} · เบิกคลังอื่น`
+          ? flow.pickup && !sub
+            ? pickupOnly
+            : st("PARTS_REQUESTED")?.actorLabel ?? "แอดมิน"
+          : o.status === "PARTS_PICKUP" && !sub
+            ? pickupOnly
             : st(o.status)?.actorLabel ?? null;
     }
     if (state !== "skipped") n += 1;
+    const number = state === "skipped" ? 0 : n;
     return {
       key: k,
       label,
       action,
-      a11y: server?.label ?? action,
+      a11y: state === "skipped" ? `${action} · ${STATE_WORD.skipped}` : `ขั้น ${number} ${action} · ${STATE_WORD[state]}`,
       actorLabel,
       note: state === "loop" ? "รอผลตรวจหน้างาน" : undefined,
       state,
-      number: state === "skipped" ? 0 : n,
+      number,
       why,
       stages: stagesOf(k),
-      sub: k === "ISSUE" && flow.transfer ? transferSubs(o, state, st) : undefined,
+      sub,
     };
   });
 
@@ -403,26 +440,29 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
 /**
  * ขั้นย่อยของใบที่โอนจากคลังอื่น — เบิก+สั่งโอน → รอของถึง → เบิกส่งมอบ
  *
- * นับเฉพาะรอบล่าสุด: หัวหน้าภาคส่งกลับแอดมิน (เบิก/โอนไม่ได้) แล้วแอดมินส่งมาใหม่ = เริ่มนับใหม่
+ * นับเฉพาะรอบเบิกล่าสุด: หัวหน้าภาคส่งกลับแอดมิน (เบิก/โอนไม่ได้) แล้วแอดมินส่งมาใหม่ = เริ่มนับใหม่
  * โชว์ตลอดแม้โอนเสร็จแล้ว ประวัติว่าของมาจากไหนยังเห็นอยู่ · ส่งมอบที่คลัง 94 แอดมินเบิก ที่คลังอื่นหัวหน้าภาคเบิก
+ * ติ๊กเฉพาะขั้นที่มีประวัติจริงในรอบนั้น — เดิมขั้นเบิกเสร็จแล้วติ๊กครบสามขั้นเลย ใบที่เบิกคลังอื่นเฉย ๆ
+ * (ไม่ได้โอน) ขึ้นว่าสั่งโอนแล้ว กดดูก็ไม่เจอประวัติ · ไม่มีการโอนในรอบนี้ = ไม่มีขั้นย่อย (undefined)
  */
-function transferSubs(o: PathOrder, row: StepState, st: (v: string) => PathStage | undefined): StepSub[] {
-  const sorted = [...o.logs].sort(newest);
-  const reset = sorted.find((l) => l.action === "TRANSFER_RETURNED" || l.action === "PICKUP_RETURNED");
-  const round = sorted.filter((l) => !reset || after(l, reset));
+function transferSubs(o: PathOrder, row: StepState, st: (v: string) => PathStage | undefined): StepSub[] | undefined {
+  const round = since(o.logs, ISSUE_ROUND_LOGS);
+  const moving = o.status === "PARTS_TRANSFER" || o.status === "PARTS_IN_TRANSIT";
   const requested = round.some((l) => l.action === "TRANSFER_REQUESTED");
+  if (!moving && !requested) return undefined;
   const arrivedLog = round.find((l) => l.action === "TRANSFER_ARRIVED");
-  const arrived = !!arrivedLog;
+  // ส่งมอบ = แอดมินเบิกคลัง 94 (PARTS_CHECKED) หรือหัวหน้าภาคเบิกคลังอื่น (PICKED_UP) หลังของถึง
+  const handed = !!arrivedLog && round.some((l) => (l.action === "PARTS_CHECKED" || l.action === "PICKED_UP") && after(l, arrivedLog));
   // ส่งมอบที่ใคร — ประวัติ "โอนเสร็จ" บอกว่าใบไปไหนต่อ: ถึงคลัง 94 กลับไปแอดมินเบิก · คลังอื่นหัวหน้าภาคเบิกเอง
   const hand = arrivedLog?.status === "PARTS_REQUESTED" ? "PARTS_REQUESTED" : "PARTS_PICKUP";
+  const did = (b: boolean): SubState => (b ? "done" : "skipped");
   let s: [SubState, SubState, SubState];
-  if (row === "done") s = ["done", "done", "done"];
+  if (row === "done") s = [did(requested), did(!!arrivedLog), did(handed)];
   else if (row !== "now") s = ["future", "future", "future"];
   else if (o.status === "PARTS_TRANSFER") s = ["now", "future", "future"];
   else if (o.status === "PARTS_IN_TRANSIT") s = ["done", "now", "future"];
-  else if (o.status === "PARTS_PICKUP") s = requested || arrived ? ["done", "done", "now"] : ["skipped", "skipped", "now"];
-  // แอดมินยังไม่ส่งให้โอนรอบนี้ (ส่งกลับมาแล้ว) — ยังไม่เริ่ม · ของถึงคลัง 94 แล้ว = แอดมินเบิกส่งมอบ
-  else s = arrived ? ["done", "done", "now"] : ["future", "future", "future"];
+  // ของถึงแล้ว รอเบิกส่งมอบ (แอดมินที่คลัง 94 · หัวหน้าภาคที่คลังอื่น)
+  else s = [did(requested), did(!!arrivedLog), "now"];
   const actor = (v: string) => st(v)?.actorLabel ?? null;
   return [
     { key: "PARTS_TRANSFER", label: "เบิก + สั่งโอน", a11y: st("PARTS_TRANSFER")?.label ?? "เบิกและโอนอะไหล่", actorLabel: actor("PARTS_TRANSFER"), state: s[0] },

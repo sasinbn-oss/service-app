@@ -8,6 +8,13 @@
 //   · ใบที่ส่งตรวจหน้างาน: รอบตรวจเป็นแถบเล็กเหนือแถบหลัก · ขั้น 1 ยังไม่ติ๊ก (ตรวจแล้ววนกลับมาระบุ)
 //   · ใบไม่ใช้อะไหล่: 5 ขั้น ไม่มีเช็ค/เบิก
 //   · ใบที่คอนเฟิร์มลูกค้าก่อนเบิก (ค้างอยู่ตอนสลับลำดับ): ลูกค้าคอนเฟิร์มแล้ว ✓ อยู่ก่อนเบิกอะไหล่ ไม่ขึ้นว่าข้าม
+//   · ขั้นย่อยโอนติ๊กเฉพาะที่เกิดจริง: โอนครบ → ✓ทั้งสาม · เบิกคลังอื่นไม่โอน → ไม่มีขั้นย่อย คนทำ "หัวหน้าภาค · เบิกคลังอื่น"
+//     · หัวหน้าภาคส่งกลับ (โอนไม่ได้) แล้วแอดมินเบิกคลัง 94 → ไม่มีขั้นย่อยโอน (เดิมติ๊กว่าสั่งโอน/ของถึงแล้ว)
+//   · ย้อนไประบุใหม่ว่าไม่ใช้อะไหล่ → 5 ขั้น ไม่มีขั้นเช็ค/เบิกของรอบก่อนติ๊กค้าง
+//   · ใบที่ยกเลิกตอนค้างเบิกโดยยังไม่มีวัน → นัดวันไม่ติ๊ก
+//   · ใบตรวจหน้างาน (ขั้น 1 ↻) ยังย้อนกลับไประบุอะไหล่ได้
+//   · ใบที่มีของนอกสโตร์ เบิกแล้วถึงขั้นคอนเฟิร์ม → ฟอร์ม "คอนเฟิร์มออกหน้างาน" ปกติ ไม่ใช่ข้อความของใบเก่า
+//   ขั้นหลักแต่ละขั้นมีชื่อ "ขั้น k ชื่อขั้น · สถานะ" — เทสต์อ่านสถานะจากชื่อนี้ ไม่ต้องเดาจากวง/ติ๊ก
 //   ยืนยันสถานะใบที่ฐานข้อมูลก่อนเปิดจอทุกใบ — แถบที่ "ถูก" กับใบที่อยู่ผิดขั้นไม่ได้พิสูจน์อะไร
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
@@ -53,8 +60,8 @@ const { setup, visitDay } = require("./fixture");
 
   /**
    * อ่านแถบขั้นตอนจากโครงของหน้า ไม่ใช่สีหรือ style — ขั้นหลักคือลูกที่มีชื่อ (aria-label) ชั้นแรกของ "ขั้นตอนงาน"
-   * ยกเว้นรอบตรวจ ขั้นย่อย และรายการขั้นที่ข้าม · สถานะ: วงที่มีเลข = ยังไม่ทำ/กำลังทำ (เทียบกับ "ขั้นที่ k จาก N")
-   * วงที่ไม่มีเลข = ติ๊กแล้ว · ↻ = ขั้น 1 ระหว่างตรวจหน้างาน
+   * ยกเว้นรอบตรวจ ขั้นย่อย และรายการขั้นที่ข้าม · สถานะอ่านจากชื่อ "ขั้น k ชื่อขั้น · เสร็จแล้ว/ทำอยู่/ยังไม่ถึง/รอผลตรวจหน้างาน"
+   * ชื่อที่โชว์ (label) อ่านจากตัวหนังสือบนจอ — ขั้นที่ทำแล้วขึ้น "…แล้ว"
    */
   const readBar = () =>
     page.evaluate(() => {
@@ -70,11 +77,12 @@ const { setup, visitDay } = require("./fixture");
           const aria = n.getAttribute("aria-label");
           const ls = leaves(n);
           if (/^ข้าม \d+ ขั้น$/.test(aria)) return { aria, skip: true, label: ls.join(" "), state: "skipped" };
+          const m = aria.match(/^ขั้น (\d+) (.+) · (เสร็จแล้ว|ทำอยู่|ยังไม่ถึง|รอผลตรวจหน้างาน)$/);
+          const STATE = { "เสร็จแล้ว": "done", "ทำอยู่": "now", "ยังไม่ถึง": "future", "รอผลตรวจหน้างาน": "loop" };
           // ไอคอนติ๊กเป็นตัวอักษรในช่วง Private Use ของฟอนต์ไอคอน
           const label = ls.find((t) => !/^\d+$/.test(t) && !/^[-]$/.test(t) && t !== "↻" && t !== "!");
-          const num = ls.find((t) => /^\d+$/.test(t));
-          const state = ls.includes("↻") ? "loop" : num == null ? "done" : Number(num) === head[0] ? "now" : "future";
-          return { aria, label, num: num == null ? null : Number(num), state, text: ls.join(" ") };
+          if (!m) return { aria, label, num: null, state: "unknown", text: ls.join(" ") };
+          return { aria, label, num: Number(m[1]), state: STATE[m[3]], text: ls.join(" ") };
         });
       const sub = root.querySelector('[aria-label="ขั้นย่อยเบิกอะไหล่"]');
       const track = root.querySelector('[aria-label="ตรวจหน้างาน (วนกลับ)"]');
@@ -118,11 +126,52 @@ const { setup, visitDay } = require("./fixture");
     await fx.schedule(O.id, visitDay(30));
     fx.sql(`update "WorkOrder" set status='AWAITING_CONFIRM' where id=${O.id}`);
     await fx.confirm(O.id);
+    // ใบเบิกคลังอื่นไม่โอน: แอดมินบอกว่าของอยู่คลังภูเก็ต ไม่ต้องโอน → หัวหน้าภาคเบิกจากคลังนั้นเลย
+    const K = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    await fx.source(K.id, "คลังภูเก็ต");
+    await fx.schedule(K.id, visitDay(30));
+    await fx.call(fx.A, "POST", `/work-orders/${K.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }], transfer: false });
+    // ใบที่ส่งให้โอนแล้วหัวหน้าภาคส่งกลับ (คลังนั้นไม่มีของ) → แอดมินเบิกคลัง 94 แทน → ถึงขั้นคอนเฟิร์ม
+    const B = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    await fx.source(B.id, "คลังภูเก็ต");
+    await fx.schedule(B.id, visitDay(30));
+    await fx.call(fx.A, "POST", `/work-orders/${B.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }] });
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${B.id}/parts-transfer/return`, { reason: "คลังภูเก็ตไม่มีของ (เทสต์)" });
+    await fx.issue(B.id);
+    // ใบที่เบิกแล้ว ย้อนกลับไประบุอะไหล่ → ระบุใหม่ว่าไม่ใช้อะไหล่ → นัดวัน → ถึงขั้นคอนเฟิร์ม
+    const R = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    await fx.source(R.id);
+    await fx.schedule(R.id, visitDay(30));
+    await fx.issue(R.id);
+    await fx.call(fx.A, "POST", `/work-orders/${R.id}/rollback`, { toStage: "NEW", reason: "ระบุอะไหล่ผิดใบ (เทสต์)" });
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${R.id}/parts`, { needsParts: false });
+    await fx.schedule(R.id, visitDay(30));
+    // ใบเก่าที่ค้างขั้นเบิกโดยยังไม่มีวัน (ย้ายมาจากสายงานเดิม) แล้วถูกยกเลิก
+    const X = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    await fx.source(X.id);
+    fx.sql(`update "WorkOrder" set status='PARTS_REQUESTED' where id=${X.id}`);
+    await fx.call(fx.A, "POST", `/work-orders/${X.id}/cancel`, { reasonCode: "CUSTOMER", note: "ลูกค้ายกเลิก (เทสต์)" });
+    // ใบที่มีของนอกสโตร์: เช็ค → ข้ามเสนอราคา → นัดวัน → เบิก → ถึงขั้นคอนเฟิร์มลูกค้า
+    const F = await fx.workOrder("C0006", null);
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${F.id}/parts`, { needsParts: true, offParts: [{ name: `สายพานนอกสโตร์ทดสอบ ${F.id}`, quantity: 1 }] });
+    await fx.source(F.id);
+    await fx.call(fx.A, "POST", `/work-orders/${F.id}/quote`, { skip: true, note: "บริษัทออกให้ (เทสต์)" });
+    await fx.schedule(F.id, visitDay(30));
+    await fx.issue(F.id);
+    const offCatalog = Number(fx.sql(`select p."sparePartId" from "WorkOrderPart" p where p."workOrderId"=${F.id} and p.kind='WAITING' limit 1`));
 
-    const ready = [Q, N, T, I, P, O].map((x) => st(x.id)).join(",");
-    ready === "PARTS_SOURCING|-,PARTS_REQUESTED|PENDING,PARTS_TRANSFER|PENDING,INSPECT_CONFIRM|PENDING,PARTS_CHECKED|-,PARTS_REQUESTED|CONFIRMED"
-      ? pass("เตรียมใบ (ฐานข้อมูล): เช็คอะไหล่ · เบิก · เบิก+โอน · นัดร้านตรวจ · นัดวัน · เบิก (คอนเฟิร์มแล้ว)")
+    const ready = [Q, N, T, I, P, O, K, B, R, X, F].map((x) => st(x.id)).join(",");
+    ready ===
+    "PARTS_SOURCING|-,PARTS_REQUESTED|PENDING,PARTS_TRANSFER|PENDING,INSPECT_CONFIRM|PENDING,PARTS_CHECKED|-,PARTS_REQUESTED|CONFIRMED," +
+      "PARTS_PICKUP|PENDING,AWAITING_CONFIRM|PENDING,AWAITING_CONFIRM|PENDING,CANCELLED|-,AWAITING_CONFIRM|PENDING"
+      ? pass("เตรียมใบ (ฐานข้อมูล): เช็คอะไหล่ · เบิก · เบิก+โอน · นัดร้านตรวจ · นัดวัน · เบิก (คอนเฟิร์มแล้ว) · เบิกคลังอื่น · ส่งกลับแล้วเบิก 94 · ย้อนไปไม่ใช้อะไหล่ · ยกเลิก · ของนอกสโตร์")
       : fail(`เตรียมใบ: ${ready}`);
+    fx.sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${B.id} and action='TRANSFER_RETURNED'`) === "1" &&
+    fx.sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${R.id} and action='NO_PARTS'`) === "1" &&
+    fx.sql(`select coalesce(to_char("scheduledAt",'YYYY-MM-DD'),'-') from "WorkOrder" where id=${X.id}`) === "-" &&
+    fx.sql(`select "offCatalog" from "SparePart" where id=${offCatalog}`) === "t"
+      ? pass("ฐานข้อมูล: ส่งกลับโอนแล้วจริง · ระบุใหม่ว่าไม่ใช้อะไหล่ · ใบยกเลิกไม่มีวันนัด · อะไหล่นอกสโตร์")
+      : fail("ประวัติ/ข้อมูลของใบที่เตรียมไม่ตรง");
 
     // ── จอแคบ (420) — ใบเสนอราคา ──
     await open(Q.code);
@@ -171,6 +220,53 @@ const { setup, visitDay } = require("./fixture");
     t.sub && t.sub.includes("● เบิก + สั่งโอน") && t.sub.includes("○ รอของถึง") && t.sub.includes("○ เบิกส่งมอบ")
       ? pass("ขั้นย่อยใต้เบิกอะไหล่: ● เบิก + สั่งโอน · ○ รอของถึง · ○ เบิกส่งมอบ")
       : fail(`ขั้นย่อย: ${t.sub && t.sub.join(" | ")}`);
+    // โอนครบจริง (เบิก+สั่งโอน → ของถึงคลัง 94 → แอดมินเบิกส่งมอบ) — ติ๊กครบสามขั้นเพราะเกิดขึ้นจริงทุกขั้น
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${T.id}/parts-transfer`, {
+      results: [{ sparePartId: belt, fromWarehouse: "คลังภูเก็ต", transferReqNo: `TR-WEB-${T.id}`, toWarehouse: "คลังลาดพร้าว 94", transferNo: `TN-WEB-${T.id}` }],
+    });
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${T.id}/parts-transfer/arrived`, {});
+    await fx.issue(T.id);
+    st(T.id) === "AWAITING_CONFIRM|PENDING" &&
+    fx.sql(`select string_agg(action, ',' order by id) from "WorkOrderLog" where "workOrderId"=${T.id} and action in ('TRANSFER_REQUESTED','TRANSFER_ARRIVED')`) === "TRANSFER_REQUESTED,TRANSFER_ARRIVED"
+      ? pass("ใบโอน: สั่งโอน → ของถึง → แอดมินเบิก → คอนเฟิร์มลูกค้า (ฐานข้อมูล)")
+      : fail(`ใบโอนหลังโอนครบ: ${st(T.id)}`);
+    await open(T.code);
+    const t2 = await readBar();
+    console.log("  ใบโอนครบ:", show(t2), "· ขั้นย่อย:", (t2.sub || []).join(" "));
+    t2.items[3] && t2.items[3].state === "done" && t2.sub && same(t2.sub, ["เบิกอะไหล่ · โอนจากคลังอื่น:", "✓ เบิก + สั่งโอน", "✓ รอของถึง", "✓ เบิกส่งมอบ"])
+      ? pass("โอนครบแล้ว: เบิกอะไหล่แล้ว ✓ · ขั้นย่อย ✓ เบิก + สั่งโอน · ✓ รอของถึง · ✓ เบิกส่งมอบ")
+      : fail(`ใบโอนครบ: ${show(t2)} · ${t2.sub && t2.sub.join(" | ")}`);
+
+    // เบิกคลังอื่นไม่โอน — ไม่มีขั้นย่อยโอน (ไม่ได้สั่งโอน/รอของ) · คนทำขั้นเบิกบอกว่าหัวหน้าภาคเบิกคลังอื่น
+    await open(K.code);
+    const k = await readBar();
+    console.log("  ใบเบิกคลังอื่น:", show(k));
+    const kNow = k.items.find((x) => x.state === "now");
+    same(k.items.map((x) => x.label), STEP7) && kNow && kNow.num === 4 && same(k.head, [4, 7]) && k.sub === null
+      ? pass("เบิกคลังอื่นไม่โอน: ขั้นที่ 4 เบิกอะไหล่ (ทำอยู่) ไม่มีขั้นย่อยสั่งโอน/รอของถึง")
+      : fail(`ใบเบิกคลังอื่น: ${JSON.stringify(k.head)} ${show(k)} · ขั้นย่อย ${k.sub && k.sub.join(" | ")}`);
+    kNow && kNow.text.includes("หัวหน้าภาค · เบิกคลังอื่น") && kNow.aria === "ขั้น 4 เบิกอะไหล่ · ทำอยู่"
+      ? pass("ขั้นเบิกบอกคนทำ: หัวหน้าภาค · เบิกคลังอื่น · ชื่อขั้น \"ขั้น 4 เบิกอะไหล่ · ทำอยู่\"")
+      : fail(`คนทำขั้นเบิก: ${kNow && kNow.text} · ${kNow && kNow.aria}`);
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${K.id}/parts-pickup`, { results: [{ sparePartId: belt, warehouse: "คลังภูเก็ต", requisitionNo: `RQ-PK-${K.id}` }] });
+    st(K.id) === "AWAITING_CONFIRM|PENDING" &&
+    fx.sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${K.id} and action in ('TRANSFER_REQUESTED','TRANSFER_ARRIVED')`) === "0"
+      ? pass("หัวหน้าภาคเบิกคลังอื่นแล้ว → คอนเฟิร์มลูกค้า · ไม่มีประวัติโอน (ฐานข้อมูล)")
+      : fail(`หลังเบิกคลังอื่น: ${st(K.id)}`);
+    await open(K.code);
+    const k2 = await readBar();
+    console.log("  ใบเบิกคลังอื่น (เบิกแล้ว):", show(k2));
+    same(k2.items.map((x) => x.state), ["done", "done", "done", "done", "now", "future", "future"]) && k2.sub === null
+      ? pass("เบิกคลังอื่นเสร็จ: เบิกอะไหล่แล้ว ✓ ไม่มีขั้นย่อย \"สั่งโอน\" ติ๊กทั้งที่ไม่ได้โอน")
+      : fail(`ใบเบิกคลังอื่นหลังเบิก: ${show(k2)} · ขั้นย่อย ${k2.sub && k2.sub.join(" | ")}`);
+
+    // ส่งกลับแล้วแอดมินเบิกคลัง 94 — การโอนรอบที่ถูกส่งกลับไม่ได้เกิดขึ้น ต้องไม่มีขั้นย่อยติ๊ก
+    await open(B.code);
+    const b = await readBar();
+    console.log("  ใบส่งกลับแล้วเบิก 94:", show(b));
+    b.items[3] && b.items[3].state === "done" && b.items[4].state === "now" && b.sub === null
+      ? pass("โอนถูกส่งกลับ แล้วแอดมินเบิกคลัง 94: เบิกอะไหล่แล้ว ✓ ไม่มีขั้นย่อยโอนที่ไม่ได้เกิด")
+      : fail(`ใบส่งกลับ: ${show(b)} · ขั้นย่อย ${b.sub && b.sub.join(" | ")}`);
 
     await open(I.code);
     const i = await readBar();
@@ -183,6 +279,17 @@ const { setup, visitDay } = require("./fixture");
       ? pass("ระหว่างตรวจ ขั้น 1 ไม่ติ๊ก (↻ ระบุอะไหล่) และยังไม่มีขั้นไหนติ๊ก")
       : fail(`ขั้น 1 ระหว่างตรวจ: ${show(i)}`);
     (await vis("ตรวจหน้างาน (ย่อย 1/3) ก่อนขั้นที่ 1", false).count()) > 0 ? pass("หัวการ์ดบอก ตรวจหน้างาน (ย่อย 1/3) ก่อนขั้นที่ 1") : fail("หัวการ์ดไม่บอกรอบตรวจ");
+    // ส่งตรวจผิดใบ — ขั้น 1 ยังไม่ติ๊ก (↻) แต่ใบผ่านขั้นระบุอะไหล่มาแล้วจริง ต้องย้อนกลับไปได้
+    if ((await vis("ย้อนขั้นตอน").count()) > 0) {
+      await vis("ย้อนขั้นตอน").first().click();
+      await page.waitForTimeout(1200);
+      const back = await page.evaluate(() => [...document.querySelectorAll('[aria-label^="ย้อนไป "]')].map((n) => n.getAttribute("aria-label")));
+      back.some((x) => x.includes("ระบุอะไหล่"))
+        ? pass("ใบที่รอนัดร้านตรวจ: ย้อนขั้นตอนกลับไประบุอะไหล่ได้")
+        : fail(`ตัวเลือกย้อนขั้น: ${back.join(" | ")}`);
+      await vis("ยกเลิก").last().click();
+      await page.waitForTimeout(600);
+    } else fail("ใบที่รอนัดร้านตรวจไม่มีปุ่มย้อนขั้นตอน");
 
     await open(P.code);
     const p = await readBar();
@@ -199,11 +306,43 @@ const { setup, visitDay } = require("./fixture");
     o.items[4].state === "now" && !o.items.some((x) => x.skip)
       ? pass("ใบที่คอนเฟิร์มก่อนเบิก: ลูกค้าคอนเฟิร์มแล้ว ✓ อยู่ก่อนเบิกอะไหล่ (ขั้นปัจจุบัน) ไม่ขึ้นว่าข้าม")
       : fail(`ใบคอนเฟิร์มก่อนเบิก: ${show(o)}`);
+
+    // ย้อนไประบุใหม่ว่าไม่ใช้อะไหล่ — ขั้นเช็ค/เบิกของรอบก่อนไม่โผล่มาติ๊ก
+    await open(R.code);
+    const r = await readBar();
+    console.log("  ใบย้อนไปไม่ใช้อะไหล่:", show(r));
+    same(r.items.map((x) => x.label), ["ระบุ: ไม่ใช้อะไหล่", "นัดวันแล้ว", "คอนเฟิร์มลูกค้า", "ปล่อยงาน", "เข้างาน/ปิดงาน"]) && same(r.head, [3, 5])
+      ? pass("ย้อนไประบุใหม่ว่าไม่ใช้อะไหล่: 5 ขั้น ไม่มีเช็ค/เบิกของรอบก่อน · ขั้นที่ 3 จาก 5")
+      : fail(`ใบย้อนไปไม่ใช้อะไหล่: ${JSON.stringify(r.head)} ${show(r)}`);
+
+    // ยกเลิกตอนค้างเบิกโดยยังไม่มีวัน — ไม่เคยนัด ขั้นนัดวันต้องไม่ติ๊ก
+    await open(X.code);
+    const x = await readBar();
+    console.log("  ใบยกเลิก (ไม่มีวัน):", show(x));
+    const xSched = x.items.find((i) => /^ขั้น \d+ นัดวันเข้า · /.test(i.aria));
+    xSched && xSched.state !== "done" && !x.items.some((i) => i.label === "นัดวันแล้ว")
+      ? pass("ใบยกเลิกที่ยังไม่มีวันนัด: ขั้นนัดวันไม่ติ๊ก")
+      : fail(`ใบยกเลิก: ${show(x)}`);
+
+    // ของนอกสโตร์เบิกแล้ว ถึงขั้นคอนเฟิร์ม — ฟอร์มคอนเฟิร์มออกหน้างานปกติ ไม่ใช่ข้อความของใบเก่าที่ยังไม่เบิก
+    await open(F.code);
+    await vis("คอนเฟิร์มลูกค้า").last().click();
+    await page.waitForTimeout(1500);
+    (await vis(`คอนเฟิร์มออกหน้างาน · ${F.code}`, false).count()) > 0 &&
+    (await vis("ส่งให้หัวหน้าภาคปล่อยงาน", false).count()) > 0 &&
+    (await vis("ใบนี้นัดก่อนเปลี่ยนลำดับ", false).count()) === 0
+      ? pass("ของนอกสโตร์เบิกแล้ว: ฟอร์ม คอนเฟิร์มออกหน้างาน → ส่งให้หัวหน้าภาคปล่อยงาน (ไม่ใช่ข้อความใบเก่า)")
+      : fail("ใบของนอกสโตร์ขึ้นฟอร์มคอนเฟิร์มของใบเก่า");
+    await page.screenshot({ path: path.join(DIR, "so-6-offcatalog-confirm.png") });
   } catch (e) {
     await page.screenshot({ path: path.join(DIR, "so-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${String(e).split("\n")[0].slice(0, 300)}`);
   } finally {
-    if (fx) await fx.cleanup();
+    if (fx) {
+      await fx.cleanup();
+      // อะไหล่นอกสโตร์ถูกสร้างเป็นแถวใน SparePart ตอนระบุ — ลบใบแล้วแถวนี้ยังค้าง ลบเฉพาะที่ไม่มีใบไหนใช้แล้ว
+      fx.sql(`delete from "SparePart" s where s."offCatalog" and s.name like 'สายพานนอกสโตร์ทดสอบ %' and not exists (select 1 from "WorkOrderPart" p where p."sparePartId"=s.id)`);
+    }
     errors.length ? fail(`error บนหน้า: ${errors[0].slice(0, 200)}`) : pass("ไม่มี error บนหน้า");
     await browser.close();
   }

@@ -74,6 +74,7 @@ import { useRefreshHandler } from "../components/RefreshButton";
 import { feedback } from "../components/Feedback";
 import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
 import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, type FlowInfo, type StepState } from "../utils/stepPath";
+import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -469,32 +470,15 @@ function rescheduledPending(o: WorkOrder) {
   return pendingMove(o) !== null;
 }
 
-/** หัวหน้าภาคส่งกลับเพราะทีมไม่ว่างวันใหม่ — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่ */
+/** หัวหน้าภาคส่งกลับเพราะทีมไม่ว่างวันใหม่ — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่ (งานซ่อม · นัดตรวจหน้างาน) */
 function declinedNewDate(o: WorkOrder): LogEntry | null {
-  if (o.status !== "AWAITING_CONFIRM") return null;
+  if (o.status !== "AWAITING_CONFIRM" && o.status !== "INSPECT_CONFIRM") return null;
   const last = [...o.logs]
     .filter((l) => !NOT_A_MOVE.includes(l.action))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   return last?.action === "NEW_DATE_DECLINED" ? last : null;
 }
 
-/**
- * ขั้นที่ปุ่ม "เลื่อนวันนัด" ขึ้นได้ — ค่าตั้งต้นเผื่อเซิร์ฟเวอร์รุ่นเก่า ตัวจริงมากับ options.rescheduleStages
- * ตั้งแต่หัวหน้าภาคนัดวันจนช่างถึงหน้างาน (เจ้าของงานเลือก "ได้ตลอดจนช่างเข้างาน" ต.ค. 69)
- */
-const RESCHEDULE_STAGES = [
-  "PARTS_REQUESTED",
-  "PARTS_TRANSFER",
-  "PARTS_IN_TRANSIT",
-  "PARTS_PICKUP",
-  "AWAITING_CONFIRM",
-  "ASSIGNED",
-  "INSPECT_DISPATCH",
-  "IN_PROGRESS",
-  "INSPECTING",
-];
-/** ปล่อยให้ช่างแล้ว — เลื่อนได้จนช่างกดถึงหน้างาน ใบถูกดึงคืนให้หัวหน้าภาคปล่อยใหม่ */
-const RECALL_STAGES = ["IN_PROGRESS", "INSPECTING"];
 
 /** ช่างกดถึงหน้างานแล้วในรอบนี้ (หลังปล่อยงานครั้งล่าสุด) — เลื่อนวันไม่ได้แล้ว ช่างใช้ "แจ้งปัญหาหน้างาน" แทน */
 function techArrived(o: WorkOrder) {
@@ -502,12 +486,21 @@ function techArrived(o: WorkOrder) {
   return o.logs.some((l) => l.action === "ARRIVED" && (!sent || l.createdAt >= sent.createdAt));
 }
 
+/** เริ่มรอบเช็ค/เบิกใหม่ — ตรงกับ PARTS_ROUND_ACTIONS ฝั่งเซิร์ฟเวอร์ */
+const PARTS_ROUND_LOGS = ["PARTS_REQUESTED", "NO_PARTS", "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
+
 /**
- * ยังมีของต้องเบิกไหม — ของในสโตร์ที่ยังไม่มีเลขใบเบิก · ของนอกสโตร์นับว่ายังต้องผ่านขั้นเบิกเสมอ
- * (ใกล้เคียง partsToIssue ฝั่งเซิร์ฟเวอร์ — ใช้แค่เลือกข้อความ เซิร์ฟเวอร์เป็นคนตัดสินว่าใบไปไหน)
+ * ยังมีของต้องเบิกไหม — กฎเดียวกับ issueLeft ฝั่งเซิร์ฟเวอร์ (ใช้เลือกข้อความ เซิร์ฟเวอร์เป็นคนตัดสินว่าใบไปไหน)
+ * ของในสโตร์: ยังไม่มีเลขใบเบิก · ของนอกสโตร์ไม่มีเลขใบเบิก — ดูว่าแอดมินผ่านขั้นเบิก (PARTS_CHECKED) หลังรอบเช็คล่าสุดหรือยัง
+ * เดิมนับของนอกสโตร์ว่ายังต้องเบิกเสมอ ใบที่มีของนอกสโตร์ถึงขั้นคอนเฟิร์มแล้วขึ้นฟอร์มของใบเก่า ("ไปเบิกอะไหล่ต่อ") ผิดทุกใบ
  */
 function partsToIssue(o: WorkOrder) {
-  return o.needsParts === true && o.waitingParts.some((p) => (p.offCatalog ? true : !(p.inStock === true && p.requisitionNo)));
+  if (o.needsParts !== true) return false;
+  const last = o.logs
+    .filter((l) => l.action === "PARTS_CHECKED" || PARTS_ROUND_LOGS.includes(l.action))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0];
+  const offLeft = o.waitingParts.some((p) => p.offCatalog) && last?.action !== "PARTS_CHECKED";
+  return offLeft || o.waitingParts.some((p) => !p.offCatalog && !(p.inStock === true && p.requisitionNo));
 }
 
 /**
@@ -676,9 +669,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
   const [stageBackOpen, setStageBackOpen] = useState(false);
   const [etaOpen, setEtaOpen] = useState(false);
-  // แอดมินเลื่อนวันนัด (ต.ค. 69) — ขั้นคอนเฟิร์มลูกค้าใช้ฟอร์มคอนเฟิร์มที่เปิดมาที่ "ลูกค้าขอเลื่อน" แทน (stageChoice)
+  // แอดมินเลื่อนวันนัด (ต.ค. 69) — ทุกขั้นที่เลื่อนได้ รวมขั้นคอนเฟิร์มลูกค้า (ใบอยู่ขั้นเดิม ไม่ใช่การคอนเฟิร์ม)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  const [stageChoice, setStageChoice] = useState<"MOVE" | null>(null);
   const [rescheduleStages, setRescheduleStages] = useState<string[]>(RESCHEDULE_STAGES);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -695,18 +687,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * ตั้งแต่มีวันนัดจนช่างกดถึงหน้างาน (เซิร์ฟเวอร์กันซ้ำ) — ช่างถึงแล้วเลื่อนไม่ได้ ใช้ "แจ้งปัญหาหน้างาน" ของช่าง
    */
   const reschedulable = (o: WorkOrder) =>
-    user?.role === "ADMIN" &&
-    !user.viewAs &&
+    canMoveDates(user) &&
     !!o.scheduledAt &&
     rescheduleStages.includes(o.status) &&
     !(RECALL_STAGES.includes(o.status) && techArrived(o));
-  /** ขั้นคอนเฟิร์มลูกค้ามีทางเลื่อนวันอยู่แล้ว ("ลูกค้าขอเลื่อน") — ทุกทางเข้าเปิดฟอร์มนั้น ไม่ให้มีสองที่ทำเรื่องเดียวกัน */
-  const openReschedule = (o: WorkOrder) => {
-    if (o.status === "AWAITING_CONFIRM") {
-      setStageChoice("MOVE");
-      setStageOpen(true);
-    } else setRescheduleOpen(true);
-  };
+  /**
+   * ทุกทางเข้า "เลื่อนวันนัด" เปิดฟอร์มเดียวกัน (POST /reschedule — ใบอยู่ขั้นเดิม) รวมขั้นคอนเฟิร์มลูกค้า
+   * เดิมขั้นคอนเฟิร์มเปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน" ซึ่งบันทึกว่าลูกค้าคอนเฟิร์มแล้วและส่งใบไปปล่อยงาน
+   * ทั้งที่แอดมินแค่ย้ายวัน (ของโอนไม่ทัน · เลยนัด) ยังไม่ได้โทรร้าน — ช่างไปร้านที่ไม่ได้ตกลงวัน
+   * "ลูกค้าขอเลื่อน" ในฟอร์มคอนเฟิร์มยังอยู่ สำหรับตอนโทรแล้วร้านตกลงวันอื่นจริง
+   */
+  const openReschedule = () => setRescheduleOpen(true);
   useEffect(() => {
     const want = openOnLoad.current;
     if (!want || !order) return;
@@ -714,12 +705,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     if (want === "close" && order.status === "IN_PROGRESS") setClosing(true);
     else if (want === "stage" && order.status === "INSPECTING") setStageOpen(true);
     else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
-    else if (want === "reschedule" && reschedulable(order)) openReschedule(order);
+    else if (want === "reschedule" && reschedulable(order)) openReschedule();
   }, [order]);
-  // ปิดฟอร์มขั้นแล้วล้างตัวเลือกที่สั่งเปิดไว้ — กดปุ่มขั้นครั้งต่อไปต้องเปิดตามปกติ ไม่ค้างที่ "ลูกค้าขอเลื่อน"
-  useEffect(() => {
-    if (!stageOpen) setStageChoice(null);
-  }, [stageOpen]);
   // ขยับเมื่อมีไฟล์ถูกแนบจากที่อื่นนอกการ์ดไฟล์แนบ เพื่อสั่งให้การ์ดโหลดใหม่
   const [filesKey, setFilesKey] = useState(0);
   // รายการไฟล์ที่การ์ดไฟล์แนบโหลดมาแล้ว — ยืมมาใช้ต่อในการ์ดผลการทำงาน
@@ -1069,9 +1056,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   /** แถบขั้นตอน — เฉพาะขั้นที่ใบนี้ต้องผ่าน เรียงตามลำดับที่ใบนี้เดินจริง (utils/stepPath) */
   const path = buildStepPath(order, stages);
-  /** ขั้นของเซิร์ฟเวอร์นี้ ใบนี้ทำผ่านมาแล้วจริงไหม — บนแถบหลัก บนรอบตรวจหน้างาน หรือขั้นย่อยโอน */
+  /**
+   * ขั้นของเซิร์ฟเวอร์นี้ ใบนี้ทำผ่านมาแล้วจริงไหม — บนแถบหลัก บนรอบตรวจหน้างาน หรือขั้นย่อยโอน
+   * ระหว่างตรวจหน้างาน ขั้น 1 เป็น "loop" (ยังไม่ติ๊ก เพราะตรวจแล้ววนกลับมาระบุ) แต่ใบผ่านขั้นระบุอะไหล่มาแล้วจริง
+   * (หัวหน้าภาคเลือกส่งตรวจที่ขั้นนั้น) — ส่งตรวจผิดใบต้องย้อนกลับไประบุอะไหล่ได้เหมือนเดิม
+   */
   const passedStage = (value: string) =>
-    path.rows.some((r) => r.stages.includes(value) && r.state === "done") ||
+    path.rows.some((r) => r.stages.includes(value) && (r.state === "done" || (r.state === "loop" && value === "NEW"))) ||
     !!path.track?.items.some((t) => t.key === value && t.state === "done");
   /**
    * ขั้นที่ย้อนกลับไปได้ — ขั้นก่อนหน้าที่ใบนี้ผ่านมาจริง ไม่นับขั้นที่ข้าม
@@ -1157,13 +1148,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const canReschedule = reschedulable(order);
   /**
    * เลื่อนวันนัด (แอดมิน ต.ค. 69) — ปุ่มรองในท้ายการ์ดขั้นปัจจุบัน ขึ้นทั้งตอนเป็นคิวแอดมินและตอนรอคนอื่น
-   * ขั้นคอนเฟิร์มลูกค้าไม่ขึ้นปุ่มแยก: ปุ่ม "คอนเฟิร์มลูกค้า" มี "ลูกค้าขอเลื่อน" อยู่แล้ว ไม่ให้มีสองทางทำเรื่องเดียวกัน
+   * ขั้นคอนเฟิร์มลูกค้าก็ขึ้น: ย้ายวันโดยยังไม่ได้คอนเฟิร์ม (ใบอยู่ขั้นเดิม) คนละเรื่องกับ "ลูกค้าขอเลื่อน" ในฟอร์มคอนเฟิร์ม
    */
   const rescheduleBtn =
-    canReschedule && order.status !== "AWAITING_CONFIRM" ? (
+    canReschedule ? (
       <TouchableOpacity
         style={[styles.action, styles.actionProblem]}
-        onPress={() => openReschedule(order)}
+        onPress={openReschedule}
         disabled={busy}
         activeOpacity={0.8}
         accessibilityLabel="เลื่อนวันนัด"
@@ -2367,7 +2358,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
             value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
           />
-          {/* แอดมินเลื่อนวันได้ตรงที่เห็นวัน (ต.ค. 69) — ขั้นคอนเฟิร์มลูกค้าเปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน" */}
+          {/* แอดมินเลื่อนวันได้ตรงที่เห็นวัน (ต.ค. 69) — ฟอร์มเดียวกับปุ่มเลื่อนวันนัดทุกขั้น ใบอยู่ขั้นเดิม */}
           {canReschedule ? (
             <View style={styles.row}>
               <Text style={styles.rowLabel}>วันนัด</Text>
@@ -2375,7 +2366,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 <Text style={styles.dateRowText}>{visitLabel(order)}</Text>
                 <TouchableOpacity
                   style={styles.moveDateBtn}
-                  onPress={() => openReschedule(order)}
+                  onPress={openReschedule}
                   activeOpacity={0.7}
                   accessibilityLabel="เลื่อนวันนัด จากการ์ดการมอบหมาย"
                 >
@@ -2550,9 +2541,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         adminWarehouse={adminWarehouse}
         teams={teams}
         files={files}
-        initialChoice={stageChoice}
         onReschedule={
-          canReschedule && order.status !== "AWAITING_CONFIRM"
+          canReschedule
             ? () => {
                 setStageOpen(false);
                 setRescheduleOpen(true);
@@ -3205,9 +3195,20 @@ function RescheduleModal({
             ? "ใบยังอยู่ที่หัวหน้าภาค — ต้องคอนเฟิร์มวันใหม่ก่อนปล่อยงาน (ทีมไม่ว่าง → ส่งกลับให้คุณนัดใหม่)"
             : confirmed
               ? `ใบยังอยู่ขั้น “${stage}” · บอร์ดแผนงานย้ายไปวันใหม่ · ลูกค้าตกลงวันใหม่แล้ว · หัวหน้าภาคคอนเฟิร์มวันใหม่ก่อนปล่อยงาน`
-              : `ใบยังอยู่ขั้น “${stage}” · บอร์ดแผนงานย้ายไปวันใหม่ · ของพร้อมแล้วแอดมินโทรคอนเฟิร์มลูกค้าตามวันใหม่ · หัวหน้าภาคคอนเฟิร์มวันใหม่ก่อนปล่อยงาน`}
+              : order.status === "AWAITING_CONFIRM"
+                ? `ใบยังอยู่ขั้น “${stage}” (ยังไม่นับว่าลูกค้าคอนเฟิร์ม) · บอร์ดแผนงานย้ายไปวันใหม่ · โทรคอนเฟิร์มลูกค้าตามวันใหม่ด้วยปุ่มคอนเฟิร์มลูกค้า · หัวหน้าภาคคอนเฟิร์มวันใหม่ก่อนปล่อยงาน`
+                : `ใบยังอยู่ขั้น “${stage}” · บอร์ดแผนงานย้ายไปวันใหม่ · ของพร้อมแล้วแอดมินโทรคอนเฟิร์มลูกค้าตามวันใหม่ · หัวหน้าภาคคอนเฟิร์มวันใหม่ก่อนปล่อยงาน`}
         {confirmed ? " · บันทึกแล้วเปิดข้อความแจ้งวันใหม่ให้ร้าน" : ""}
       </NextBox>
+      {/*
+        ขั้นคอนเฟิร์มมีสองทางเปลี่ยนวัน — ฟอร์มนี้ย้ายวันเฉย ๆ (ร้านยังไม่ได้ตกลง)
+        ร้านตกลงวันอื่นแล้วต้องใช้ "ลูกค้าขอเลื่อน" ในฟอร์มคอนเฟิร์ม ไม่งั้นใบค้างรอคอนเฟิร์มทั้งที่โทรแล้ว
+      */}
+      {order.status === "AWAITING_CONFIRM" && !confirmed ? (
+        <Text style={styles.linkedText} accessibilityLabel="โทรแล้วร้านตกลงวันอื่น">
+          โทรแล้วร้านตกลงวันอื่น → ใช้ปุ่มคอนเฟิร์มลูกค้า เลือก “ลูกค้าขอเลื่อน / เปลี่ยนวัน” แทน (บันทึกว่าลูกค้าคอนเฟิร์มแล้ว)
+        </Text>
+      ) : null}
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );
@@ -3362,7 +3363,6 @@ function StageModal({
   adminWarehouse,
   teams,
   files,
-  initialChoice,
   onReschedule,
   onFilesChanged,
   onCancel,
@@ -3373,8 +3373,6 @@ function StageModal({
   warehouses: string[];
   adminWarehouse: string;
   teams: Team[];
-  /** เปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน" เลย — แอดมินกด "เลื่อนวันนัด" ตอนใบอยู่ขั้นคอนเฟิร์มลูกค้า */
-  initialChoice?: "MOVE" | null;
   /** ปิดฟอร์มนี้แล้วเปิดฟอร์มเลื่อนวันนัด (แอดมิน) — ไม่ส่งมา = ไม่มีลิงก์ */
   onReschedule?: () => void;
   /** ไฟล์แนบของใบงาน (จากการ์ดไฟล์แนบ) — ฟอร์มผลตรวจบอกว่าแนบอะไรไว้แล้ว */
@@ -3446,9 +3444,10 @@ function StageModal({
   const [transferDocs, setTransferDocs] = useState<Record<string, string>>({});
   const [docBusy, setDocBusy] = useState<string | null>(null);
   // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) แต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
-  // ส่งกลับได้เฉพาะงานซ่อม (decline-new-date) — นัดตรวจที่ถูกเลื่อนแค่ขึ้นป้ายให้เช็คทีม แล้วส่งช่าง/เปลี่ยนทีมตามปกติ
+  // นัดตรวจหน้างานด้วย: แอดมินเลื่อนวันตรวจได้แล้ว (ต.ค. 69) ทีมวันใหม่อาจไม่ว่างเหมือนกัน → กลับไปนัดร้าน (ตรวจหน้างาน)
   const newDate = rescheduledPending(order);
-  const canDecline = newDate && order.status === "ASSIGNED";
+  const canDecline = newDate && (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH");
+  const inspectRelease = order.status === "INSPECT_DISPATCH";
   const [declineDate, setDeclineDate] = useState(false);
   // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
   const [prevUsed, setPrevUsed] = useState<string[]>([]);
@@ -3481,14 +3480,14 @@ function StageModal({
     // ข้อความผลตรวจที่พิมพ์ค้างไว้ (ปิดฟอร์ม/แอปหลุด) — จำไว้ในเครื่องโดยไม่ต้องกดบันทึกร่าง
     if (order.status === "INSPECTING") loadDraft(`inspect:${order.id}`).then((v) => v && setFinding(v));
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
-    // ช่างแจ้งร้านปิด — วันเดิมใช้ไม่ได้แล้ว เปิดที่ "ลูกค้าขอเลื่อน" เลย
-    // แอดมินกด "เลื่อนวันนัด" ที่ขั้นคอนเฟิร์ม — ทางเดียวกับ "ลูกค้าขอเลื่อน" เปิดมาที่ช่องวันเลย
+    // ช่างแจ้งร้านปิด / หัวหน้าภาคส่งกลับเพราะทีมไม่ว่าง — วันเดิมใช้ไม่ได้แล้ว เปิดที่ "ลูกค้าขอเลื่อน" เลย
     setConfirmChoice(
-      initialChoice ??
-        ((order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order)))
-          ? "MOVE"
-          : null)
+      (order.status === "INSPECT_CONFIRM" && (!order.scheduledAt || declinedNewDate(order))) ||
+        (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order)))
+        ? "MOVE"
+        : null
     );
+    setDeclineDate(false);
     setSplitOut(false);
     setSplitPaid(null);
     setTransferChoice({});
@@ -3711,7 +3710,7 @@ function StageModal({
       } else if (order.status === "AWAITING_PAYMENT") {
         await uploadDocs("RECEIPT", "กำลังส่งบิล");
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
-      } else if (order.status === "ASSIGNED" && declineDate) {
+      } else if (canDecline && declineDate) {
         await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim() });
       } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
@@ -3885,7 +3884,7 @@ function StageModal({
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
   /**
    * คอนเฟิร์มแล้วไปไหน — ปกติของเบิกครบแล้ว (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) ไปให้หัวหน้าภาคปล่อยงาน
-   * ยังมีของต้องเบิก = ใบเก่าที่นัดก่อนเปลี่ยนลำดับและหลุดการย้ายขั้นมา — เซิร์ฟเวอร์ส่งไปเบิกต่อ (afterConfirm) จึงบอกให้ตรง
+   * ยังมีของต้องเบิก = ใบเก่าที่นัดก่อนเปลี่ยนลำดับและหลุดการย้ายขั้นมา — เซิร์ฟเวอร์ส่งไปเบิกต่อ (issueLeft ใน /confirm-appointment) จึงบอกให้ตรง
    */
   const confirmToIssue = order.status === "AWAITING_CONFIRM" && partsToIssue(order);
   // ไม่ใช้อะไหล่ และไม่มีค่าบริการให้เสนอราคา = ขั้นถัดไปคือจ่ายงาน → จ่ายในฟอร์มนี้เลย
@@ -3928,7 +3927,7 @@ function StageModal({
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
     (order.status === "PARTS_CHECKED" && (!team || !validDate || !timeOk)) ||
     visitPast ||
-    (order.status === "ASSIGNED" && declineDate && !note.trim()) ||
+    (canDecline && declineDate && !note.trim()) ||
     ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
         (confirmChoice === "MOVE" &&
@@ -3982,12 +3981,14 @@ function StageModal({
                       : order.scheduledAt
                         ? "ของไม่พอ — ยกเลิกนัด รอของเข้า"
                         : "ของไม่พอ — รอของเข้า"
+                  : canDecline && declineDate
+                    ? inspectRelease
+                      ? "ส่งกลับให้แอดมินนัดตรวจใหม่"
+                      : "ส่งกลับให้แอดมินนัดใหม่"
                   : order.status === "ASSIGNED"
-                    ? declineDate
-                      ? "ส่งกลับให้แอดมินนัดใหม่"
-                      : newDate
-                        ? "คอนเฟิร์มวันใหม่ ปล่อยงาน"
-                        : "รับทราบ ปล่อยงานให้ช่าง"
+                    ? newDate
+                      ? "คอนเฟิร์มวันใหม่ ปล่อยงาน"
+                      : "รับทราบ ปล่อยงานให้ช่าง"
                   : order.status === "PARTS_PICKUP"
                     ? pickupFail
                       ? "ส่งกลับแอดมิน"
@@ -4881,17 +4882,20 @@ function StageModal({
                     onPress={() => setDeclineDate(true)}
                     accessibilityLabel="ทีมไม่ว่าง ส่งกลับแอดมิน"
                   >
-                    <Text style={[styles.optionText, declineDate && styles.optionTextOn]}>ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่</Text>
+                    <Text style={[styles.optionText, declineDate && styles.optionTextOn]}>ทีมไม่ว่าง — ส่งกลับแอดมิน{inspectRelease ? "นัดตรวจใหม่" : "นัดใหม่"}</Text>
                   </TouchableOpacity>
                 </View>
                 {declineDate ? (
-                  <Text style={styles.linkedText}>ใบกลับไปให้แอดมินโทรนัดร้านใหม่ ทีมเดิมยังอยู่ — ใส่เหตุผลในช่องด้านล่าง แอดมินจะเห็น</Text>
+                  <Text style={styles.linkedText}>
+                    {inspectRelease
+                      ? "กลับไปให้แอดมินนัดตรวจใหม่ (โทรนัดร้าน) ทีมเดิมยังอยู่ — ใส่เหตุผลในช่องด้านล่าง แอดมินจะเห็น"
+                      : "ใบกลับไปให้แอดมินโทรนัดร้านใหม่ ทีมเดิมยังอยู่ — ใส่เหตุผลในช่องด้านล่าง แอดมินจะเห็น"}
+                  </Text>
                 ) : null}
               </>
             ) : null}
 
-            {(order.status === "ASSIGNED" && !declineDate) ||
-            order.status === "INSPECT_DISPATCH" ||
+            {((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !(canDecline && declineDate)) ||
             order.status === "PARTS_CHECKED" ||
             (order.status === "NEW" && (inspectFirst || noPartsAssign)) ? (
               <>
@@ -5095,7 +5099,7 @@ function StageModal({
                 <Text style={styles.modalLabel}>
                   {["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
                     ? "เหตุผลที่เบิกไม่ได้ *"
-                    : order.status === "ASSIGNED" && declineDate
+                    : canDecline && declineDate
                       ? "เหตุผลที่ทีมไม่ว่าง (แอดมินเห็น) *"
                       : "บันทึกเพิ่มเติม"}
                 </Text>
@@ -5106,7 +5110,7 @@ function StageModal({
                   placeholder={
                     ["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
                       ? "เช่น คลังภูเก็ตของหมดแล้ว"
-                      : order.status === "ASSIGNED" && declineDate
+                      : canDecline && declineDate
                         ? "เช่น ทีมเต็มวันนั้น ขอเป็นสัปดาห์หน้า"
                         : "ไม่ใส่ก็ได้"
                   }

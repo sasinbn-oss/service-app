@@ -8,7 +8,10 @@
 --   · ใบที่เบิกครบแล้ว (ร้านปิด/ทีมไม่ว่าง วนกลับมาคอนเฟิร์ม) · ใบไม่ใช้อะไหล่
 -- "ยังไม่ได้เบิก" ใช้กฎเดียวกับ issueLeft ในโค้ด: ของในสโตร์ที่ยังไม่มีเลขใบเบิก
 --   · ของนอกสโตร์ (ไม่มีใบเบิก) ที่แอดมินยังไม่ผ่านขั้นเบิกหลังรอบเช็คอะไหล่ล่าสุด
--- ไม่ซิงก์ Outage.workStatus เหมือน migration นัดก่อนเบิก — สถานะเดิม (CHECKING_PARTS/รอช่าง) ตามไปเองเมื่อใบขยับครั้งถัดไป
+-- ซิงก์ Outage.workStatus ของใบที่ย้ายด้วย (คำสั่งเดียวกัน) — ทุกทางในโค้ดซิงก์ผ่าน syncOutageFromWorkOrder
+--   ถ้าไม่ซิงก์ กระดานเครื่องเสียขึ้น "รอช่าง" และตัวกรอง "กำลังเช็คอะไหล่" ไม่เจอใบนี้ตลอดขั้นเบิก
+--   (ใบขยับครั้งถัดไปคือตอนแอดมินเบิกเสร็จ) · ไม่เขียน OutageNoteLog แบบ 20261101090000_checking_parts_status —
+--   ประวัติของใบงานบอกเหตุผลแล้ว (FLOW_MIGRATED)
 -- ใส่ประวัติให้ทุกใบที่ย้าย คนเปิดใบงานจะได้รู้ว่าทำไมขั้นเปลี่ยนเอง · ฐานข้อมูลเปล่าไม่มีอะไรให้ย้าย (ไม่ต้องเพิ่ม SEEDED_BY_MIGRATION)
 
 WITH moved AS (
@@ -40,7 +43,15 @@ WITH moved AS (
           )
         )
     )
-  RETURNING w."id"
+  RETURNING w."id", w."outageId"
+),
+-- CTE ที่แก้ข้อมูลทำงานแม้ไม่มีใครอ้างถึง · เห็นใบงานก่อนแก้ จึงใช้ outageId จาก RETURNING ไม่ join "WorkOrder" ใหม่
+synced AS (
+  UPDATE "Outage" o
+  SET "workStatus" = 'CHECKING_PARTS'
+  FROM moved m
+  WHERE o."id" = m."outageId"
+  RETURNING o."id"
 )
 INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
 SELECT "id", NULL, 'FLOW_MIGRATED', 'PARTS_REQUESTED',

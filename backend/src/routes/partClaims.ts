@@ -44,35 +44,59 @@ async function claimScope(req: AuthRequest, res: Response): Promise<Prisma.WorkO
 
 // ช่องว่างจากแอป (ตัวกรองที่ล้างแล้ว) = ไม่กรอง — ไม่ใช่ "หาค่าว่าง"
 const blank = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
-const text = (max: number) => z.preprocess(blank, z.string().trim().max(max).optional());
-// วันที่ไม่มีจริง (31 ก.พ.) ต้องไม่หลุดไปเป็นวันอื่นเงียบ ๆ
+/**
+ * ทุกช่องมีข้อความไทยของตัวเองครบทุกแบบที่ผิดได้ — ข้อความตั้งต้นของ zod เป็นอังกฤษ ("Invalid enum value...")
+ * ซึ่งแอปเอาไปขึ้นจอตรง ๆ · invalid_type คือส่งช่องเดียวกันซ้ำ (?q=a&q=b) Express ให้มาเป็น array
+ */
+const text = (max: number, label: string) =>
+  z.preprocess(blank, z.string({ invalid_type_error: `${label}ไม่ถูกต้อง` }).trim().max(max, `${label}ยาวเกิน ${max} ตัวอักษร`).optional());
+const choice = <T extends [string, ...string[]]>(values: T, fallback: T[number], msg: string) =>
+  z.preprocess(blank, z.enum(values, { errorMap: () => ({ message: msg }) }).default(fallback as z.util.noUndefined<T[number]>));
+const count = (min: number, fallback: number, msg: string, max = Number.MAX_SAFE_INTEGER) =>
+  z.preprocess(blank, z.coerce.number({ invalid_type_error: msg }).int(msg).min(min, msg).max(max, msg).default(fallback));
+/**
+ * วันที่ไม่มีจริง (31 ก.พ.) ต้องไม่หลุดไปเป็นวันอื่นเงียบ ๆ
+ * refine ยังทำงานแม้ regex ไม่ผ่าน (zod แค่ติดธงไว้) และเดือน 13 / วันที่ 32 / ข้อความมั่ว ได้ Invalid Date
+ * ซึ่ง toISOString() โยน RangeError — zod ไม่จับ error ใน refine คำขอจึงกลายเป็น 500 แทน 400 ภาษาไทย
+ */
 const ymd = (msg: string) =>
   z.preprocess(
     blank,
     z
-      .string()
+      .string({ invalid_type_error: msg })
       .regex(/^\d{4}-\d{2}-\d{2}$/, msg)
-      .refine((s) => new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, msg)
+      .refine((s) => {
+        const d = new Date(`${s}T00:00:00Z`);
+        return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+      }, msg)
       .optional()
   );
 
 const filterSchema = z.object({
   from: ymd("วันที่เริ่มไม่ถูกต้อง"),
   to: ymd("วันที่สิ้นสุดไม่ถูกต้อง"),
-  status: z.preprocess(blank, z.enum(["ALL", "PENDING", "APPROVED", "REJECTED"]).default("ALL")),
-  brand: text(100),
-  q: text(100),
-  rounds: z.preprocess(blank, z.enum(["latest", "all"]).default("latest")),
+  status: choice(["ALL", "PENDING", "APPROVED", "REJECTED"], "ALL", "สถานะที่เลือกไม่ถูกต้อง"),
+  brand: text(100, "ยี่ห้อ"),
+  q: text(100, "คำค้น"),
+  rounds: choice(["latest", "all"], "latest", "ตัวเลือกรอบไม่ถูกต้อง"),
   // ลิงก์ "เคลมเครื่องนี้/สาขานี้ทั้งหมด" จากหน้าใบงาน — ตรงตัว ไม่ใช่ค้นบางส่วน (W1 ต้องไม่ได้ W12)
-  branchCode: text(50),
-  machineCode: text(50),
+  branchCode: text(50, "รหัสสาขา"),
+  machineCode: text(50, "เลขเครื่อง"),
 });
 type Filters = z.infer<typeof filterSchema>;
 
 const listSchema = filterSchema.extend({
   // แบ่งหน้า — ปีหนึ่งมีได้หลายพันชิ้น ส่งทั้งหมดทีเดียวมือถือที่เปิดจากหน้างานรอนาน
-  limit: z.preprocess(blank, z.coerce.number().int().min(1).max(500).default(100)),
-  offset: z.preprocess(blank, z.coerce.number().int().min(0).default(0)),
+  limit: count(1, 100, "ขอได้ครั้งละ 1–500 รายการ", 500),
+  offset: count(0, 0, "ตำแหน่งเริ่มของหน้าไม่ถูกต้อง"),
+  // หน้าถัดไป = แถวที่ส่งก่อนแถวสุดท้ายที่แอปมีอยู่ ("เวลาส่ง ISO|id" ของแถวนั้น) — ดู GET / ว่าทำไมไม่ใช้ offset
+  before: z.preprocess(
+    blank,
+    z
+      .string({ invalid_type_error: "ตำแหน่งหน้าถัดไปไม่ถูกต้อง" })
+      .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\|\d+$/, "ตำแหน่งหน้าถัดไปไม่ถูกต้อง")
+      .optional()
+  ),
 });
 
 function parse<T extends z.ZodTypeAny>(schema: T, req: AuthRequest, res: Response): z.infer<T> | undefined {
@@ -304,7 +328,8 @@ async function brandOptions(scope: Prisma.WorkOrderWhereInput) {
 /**
  * GET /api/part-claims — รายการเคลม + ตัวเลขสรุป
  * ?from&to (YYYY-MM-DD วันที่ส่งเคลม เวลาไทย · ไม่ส่ง = ไม่จำกัด) &status=ALL|PENDING|APPROVED|REJECTED &brand &q
- * &rounds=latest|all &branchCode &machineCode (ตรงตัว) &limit&offset
+ * &rounds=latest|all &branchCode &machineCode (ตรงตัว) &limit &offset|before
+ * rest = แถวที่ยังเหลือหลังหน้านี้ (ปุ่ม "แสดงเพิ่ม" ดูจากตัวนี้ ไม่ใช่ total − ที่มี ซึ่งรวมเคลมใหม่ที่อยู่บนสุด)
  */
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const scope = await claimScope(req, res);
@@ -312,10 +337,24 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const f = parse(listSchema, req, res);
   if (!f) return;
   const [built, brands] = await Promise.all([buildHistory(scope, f), brandOptions(scope)]);
+  /**
+   * หน้าถัดไปต่อจากแถวสุดท้ายที่แอปมี (before) ไม่ใช่นับลำดับ — รายการเรียงส่งล่าสุดก่อน ถ้ามีเคลมใหม่เข้ามา
+   * ระหว่างกด "แสดงเพิ่ม" ทุกแถวเลื่อนลงหนึ่งช่อง นับลำดับจะได้แถวสุดท้ายของหน้าก่อนซ้ำ (ขึ้นสองแถว key ชนกัน)
+   * กลับกันแถวที่หลุดตัวกรองไป (เพิ่งอนุมัติขณะกรองรอตรวจ) ทำให้ข้ามไปหนึ่งแถวเงียบ ๆ
+   * เทียบเวลาเป็นข้อความได้ — toISOString ยาวเท่ากันทุกแถว และคอลัมน์เก็บละเอียดแค่มิลลิวินาทีเท่ากับ Date
+   */
+  let start = f.offset;
+  if (f.before) {
+    const [at, id] = f.before.split("|");
+    const i = built.shown.findIndex((r) => r.createdAt < at || (r.createdAt === at && r.id < Number(id)));
+    start = i < 0 ? built.shown.length : i;
+  }
+  const rows = built.shown.slice(start, start + f.limit);
   res.json({
-    rows: built.shown.slice(f.offset, f.offset + f.limit),
+    rows,
     total: built.shown.length,
-    offset: f.offset,
+    rest: built.shown.length - start - rows.length,
+    offset: start,
     limit: f.limit,
     tiles: built.tiles,
     counts: built.counts,
@@ -341,8 +380,15 @@ router.get("/pending-count", requireAuth, async (req: AuthRequest, res) => {
  * ไว้ดูว่าเครื่องเดิมเคลมชิ้นเดิมซ้ำไหม · เลขเครื่องซ้ำกันข้ามสาขา (W1 มีทุกร้าน) จึงนับเครื่องภายในสาขาเสมอ
  */
 const relatedSchema = z.object({
-  branchCode: z.preprocess(blank, z.string().trim().min(1, "ต้องระบุรหัสสาขา").max(50)),
-  machineCode: text(50),
+  branchCode: z.preprocess(
+    blank,
+    z
+      .string({ required_error: "ต้องระบุรหัสสาขา", invalid_type_error: "รหัสสาขาไม่ถูกต้อง" })
+      .trim()
+      .min(1, "ต้องระบุรหัสสาขา")
+      .max(50, "รหัสสาขายาวเกิน 50 ตัวอักษร")
+  ),
+  machineCode: text(50, "เลขเครื่อง"),
 });
 router.get("/related", requireAuth, async (req: AuthRequest, res) => {
   const scope = await claimScope(req, res);

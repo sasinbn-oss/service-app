@@ -35,6 +35,7 @@ import {
   cancelAdminReview,
 } from "../components/AdminReview";
 import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
+import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 
 /** ค้างเกินนี้ขึ้นแดง — ตัวเลขเดียวกับชิป "ค้างขั้นเดิมเกิน 3 วัน" ในหน้ารายการ */
 const STALE_DAYS = 3;
@@ -386,6 +387,7 @@ function CardActions({
   onReply: () => void;
   onChanged: () => Promise<void>;
 }) {
+  const { user } = useAuth();
   const detail = (
     <TouchableOpacity style={styles.detailBtn} onPress={() => onOpen(r.id)} accessibilityLabel={`รายละเอียด ${r.code}`}>
       <Ionicons name="document-text-outline" size={16} color={colors.navy} />
@@ -434,12 +436,13 @@ function CardActions({
   );
   // แอดมินไม่มีปุ่มส่งกลับ — เป็นปุ่มของหัวหน้าภาคเท่านั้น
   // ใบเลยนัด: วันที่ร้านไม่ได้ตกลงผ่านไปแล้ว สิ่งแรกที่ต้องทำคือนัดวันใหม่ — ปุ่มลัดเปิดฟอร์มเลื่อนวันนัด (ต.ค. 69)
-  // หน้าใบงานเช็คสิทธิ์/ขั้นอีกรอบ (ขั้นคอนเฟิร์มลูกค้าเปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน")
+  // ขึ้นเฉพาะใบที่หน้าใบงานจะเปิดฟอร์มให้จริง (ขั้น + สิทธิ์เดียวกัน) — ใบนัดตรวจที่เลยนัดก็ติดป้ายเลยนัด
+  // แต่เลื่อนด้วยฟอร์มนี้ไม่ได้ (แก้วันในฟอร์มนัดร้าน) และ Admin Spare Part ดูอย่างเดียว · กดแล้วไม่มีฟอร์มดูเหมือนปุ่มเสีย
   if (isAdmin) {
     return (
       <View style={styles.actions}>
         {detail}
-        {r.overdue && r.scheduledAt ? (
+        {r.overdue && r.scheduledAt && RESCHEDULE_STAGES.includes(r.status) && canMoveDates(user) ? (
           <TouchableOpacity style={[styles.sideBtn, styles.moveBtn]} onPress={() => onOpen(r.id, "reschedule")} accessibilityLabel={`เลื่อนวันนัด ${r.code}`}>
             <Ionicons name="calendar-outline" size={16} color={colors.navy} />
             <Text style={[styles.sideText, { color: colors.navy }]} numberOfLines={1}>

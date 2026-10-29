@@ -7,6 +7,9 @@
 #     (รันไฟล์ SQL จริงในทรานแซกชันแล้ว ROLLBACK — ใบอื่นในฐานข้อมูลไม่โดน)
 #   · ข้อความของไม่พอตอนเบิก: ยังไม่คอนเฟิร์ม = ยกเลิกนัด ไม่ต้องแจ้งร้าน · คอนเฟิร์มแล้ว = แจ้งร้านว่าเลื่อน
 #   · detail.flow บอกลำดับที่ใบนี้เดินจริง (target · confirmFirst · issueFirst) ให้แถบขั้นตอนวาด · เลยวันนัดขั้นเบิกติดป้าย
+#     confirmFirst เฉพาะเมื่อนัดที่คอนเฟิร์มก่อนเบิกยังใช้อยู่ — ร้านปิดส่งกลับ/ย้ายสายงานแล้ว = target
+#     transfer = โอนจริงในรอบนี้ · pickup = หัวหน้าภาคเบิกคลังอื่น (โอนมาก่อนหรือไม่ก็ได้) · ส่งกลับแล้วเบิก 94 = ไม่นับทั้งคู่
+#   · migration ซิงก์สถานะเคสเครื่องเสีย (Outage.workStatus) ของใบที่ย้ายด้วย
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -20,7 +23,7 @@ GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
 ST() { DB "select status||'|'||coalesce(\"appointmentStatus\",'-') from \"WorkOrder\" where id=$1"; }
 APPT() { DB "select coalesce(\"assignedTeam\",'-')||'|'||coalesce(\"scheduledAt\"::date::text,'-') from \"WorkOrder\" where id=$1"; }
 LOGS() { DB "select string_agg(action||':'||status, ',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action not in ('CREATED','PARTS_REQUESTED','PARTS_SOURCED')"; }
-FLOW() { GET $A "work-orders/$1" | J 'const f=d.flow; f?[f.variant,f.transfer,f.quote,f.inspect].join("|"):"none"'; }
+FLOW() { GET $A "work-orders/$1" | J 'const f=d.flow; f?[f.variant,f.transfer,f.quote,f.inspect,f.pickup].join("|"):"none"'; }
 # รายการ (กล่องงาน/ชิป) ของใบนี้ — หาด้วยเลขใบงาน ไม่ต้องดึงทั้งหมด
 ROW() { GET $1 "work-orders?status=$2&search=$(DB "select code from \"WorkOrder\" where id=$3")" | J "const r=(d.rows||d).find(x=>x.id===$3); r?$4:'missing'"; }
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
@@ -34,8 +37,10 @@ OFFNAME="ของนอกสโตร์ทดสอบย้ายสาย�
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 # ใบที่เทสต์นี้สร้างหาจากอาการที่มีเลขสุ่มของรอบนี้ — สร้างใน $(...) ตัวแปรในเชลล์ลูกไม่กลับมา
 SYMPTOM="ทดสอบเบิกก่อนคอนเฟิร์ม $SUF"
+OUT=""
 cleanup() {
   for i in $(DB "select id from \"WorkOrder\" where symptom='$SYMPTOM'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  [ -n "$OUT" ] && DB "delete from \"Outage\" where id=$OUT" >/dev/null
   DB "delete from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
@@ -82,7 +87,7 @@ echo "$R" | grep -q "ขั้นนี้เป็นของ" && [ "$(ST $W1)
   && pass "หัวหน้าภาคกดคอนเฟิร์มลูกค้าแทนแอดมินไม่ได้" || fail "หัวหน้าภาคคอนเฟิร์มได้: $(echo $R | head -c 150)"
 POST $A "work-orders/$W1/confirm-appointment" '{}' >/dev/null
 [ "$(ST $W1)" = "ASSIGNED|CONFIRMED" ] && pass "คอนเฟิร์มลูกค้าแล้ว → หัวหน้าภาคปล่อยงาน" || fail "หลังคอนเฟิร์ม: $(ST $W1)"
-[ "$(FLOW $W1)" = "target|false|false|false" ] && pass "detail.flow = target (นัด → เบิก → คอนเฟิร์ม) ไม่มีโอน/เสนอราคา/ตรวจ" || fail "flow: $(FLOW $W1)"
+[ "$(FLOW $W1)" = "target|false|false|false|false" ] && pass "detail.flow = target (นัด → เบิก → คอนเฟิร์ม) ไม่มีโอน/เสนอราคา/ตรวจ/เบิกคลังอื่น" || fail "flow: $(FLOW $W1)"
 POST $S "work-orders/$W1/dispatch" '{}' >/dev/null
 [ "$(ST $W1)" = "IN_PROGRESS|CONFIRMED" ] && pass "ปล่อยงานแล้วถึงช่าง" || fail "หลังปล่อยงาน: $(ST $W1)"
 [ "$(LOGS $W1)" = "ASSIGNED:PARTS_REQUESTED,PARTS_CHECKED:AWAITING_CONFIRM,CONFIRMED:ASSIGNED,DISPATCHED:IN_PROGRESS" ] \
@@ -100,7 +105,8 @@ POST $S "work-orders/$W2/parts-transfer/arrived" '{}' >/dev/null
 [ "$(ST $W2)" = "PARTS_REQUESTED|PENDING" ] && pass "ของถึงคลัง 94 → แอดมินเบิกส่งมอบ" || fail "หลังของถึง: $(ST $W2)"
 issue94 $W2 RQ-CAI2
 [ "$(ST $W2)|$(APPT $W2)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D1" ] && pass "เบิกส่งมอบแล้ว → คอนเฟิร์มลูกค้า วันนัดเดิมอยู่" || fail "หลังเบิกส่งมอบ: $(ST $W2) $(APPT $W2)"
-[ "$(FLOW $W2)" = "target|true|false|false" ] && pass "detail.flow.transfer = true (ขั้นย่อยใต้เบิกอะไหล่)" || fail "flow โอน: $(FLOW $W2)"
+# โอนเข้าคลัง 94 แล้วแอดมินเบิกเอง — มีประวัติ PICKUP_REQUESTED (เขียนทุกครั้งที่มีของคลังอื่น) แต่ไม่มีใครเบิกคลังอื่น
+[ "$(FLOW $W2)" = "target|true|false|false|false" ] && pass "detail.flow.transfer = true (ขั้นย่อยใต้เบิกอะไหล่) · pickup = false (ของถึง 94 แอดมินเบิก)" || fail "flow โอน: $(FLOW $W2)"
 POST $A "work-orders/$W2/confirm-appointment" '{}' >/dev/null
 [ "$(ST $W2)" = "ASSIGNED|CONFIRMED" ] && pass "คอนเฟิร์มลูกค้า → ปล่อยงาน" || fail "หลังคอนเฟิร์ม (โอน): $(ST $W2)"
 # PICKUP_REQUESTED ลงสถานะ PARTS_PICKUP เสมอ (เขียนไว้ก่อนเปลี่ยนสายงาน) — ดูเฉพาะลำดับ
@@ -113,9 +119,45 @@ W3=$(sourced W73 "คลังภูเก็ต")
 assign $W3
 POST $A "work-orders/$W3/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
 [ "$(ST $W3)" = "PARTS_PICKUP|PENDING" ] && pass "ไม่ต้องโอน → หัวหน้าภาคเบิกคลังอื่น" || fail "หลังเช็ค (ไม่โอน): $(ST $W3)"
+[ "$(FLOW $W3 | cut -d'|' -f2,5)" = "false|true" ] && pass "detail.flow: ไม่ได้โอน (transfer=false) · เบิกคลังอื่น (pickup=true) — แถบไม่ติ๊ก \"สั่งโอน\"" || fail "flow เบิกคลังอื่น: $(FLOW $W3)"
 POST $S "work-orders/$W3/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"PK-CAI3\"}]}" >/dev/null
 [ "$(ST $W3)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(DB "select \"requisitionNo\" from \"WorkOrderPart\" where \"workOrderId\"=$W3 and kind='WAITING'")" = "PK-CAI3" ] \
   && pass "หัวหน้าภาคเบิกแล้ว → แอดมินคอนเฟิร์มลูกค้า (เลขใบเบิกบันทึก)" || fail "หลังเบิกคลังอื่น: $(ST $W3)"
+[ "$(FLOW $W3 | cut -d'|' -f2,5)" = "false|true" ] && pass "เบิกเสร็จแล้ว flow ยังบอกว่าเบิกคลังอื่น ไม่ได้โอน" || fail "flow หลังเบิกคลังอื่น: $(FLOW $W3)"
+
+echo
+echo "═══ โอนเข้าคลังอื่น (ไม่ใช่ 94) แล้วหัวหน้าภาคเบิกส่งมอบ — transfer + pickup"
+W9=$(sourced W89 "คลังขอนแก่น")
+assign $W9
+POST $A "work-orders/$W9/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+[ "$(FLOW $W9 | cut -d'|' -f2,5)" = "true|false" ] && pass "รอหัวหน้าภาคเบิก+โอน: transfer=true · ยังไม่รู้ปลายทาง pickup=false" || fail "flow W9 ก่อนโอน: $(FLOW $W9)"
+POST $S "work-orders/$W9/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI9\",\"toWarehouse\":\"คลังภูเก็ต\",\"transferNo\":\"TR-CAI9\"}]}" >/dev/null
+POST $S "work-orders/$W9/parts-transfer/arrived" '{}' >/dev/null
+[ "$(ST $W9)" = "PARTS_PICKUP|PENDING" ] && [ "$(FLOW $W9 | cut -d'|' -f2,5)" = "true|true" ] \
+  && pass "ของถึงคลังภูเก็ต → หัวหน้าภาคเบิกส่งมอบ: transfer=true · pickup=true" || fail "flow W9 ของถึง: $(ST $W9) $(FLOW $W9)"
+POST $S "work-orders/$W9/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"PK-CAI9\"}]}" >/dev/null
+[ "$(ST $W9)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $W9 | cut -d'|' -f2,5)" = "true|true" ] \
+  && pass "เบิกส่งมอบแล้ว → คอนเฟิร์มลูกค้า · flow ยังบอกทั้งโอนและเบิกคลังอื่น" || fail "flow W9 หลังเบิก: $(ST $W9) $(FLOW $W9)"
+
+echo
+echo "═══ หัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) แล้วแอดมินเบิกคลัง 94 — รอบที่ถูกส่งกลับไม่นับ"
+W10=$(sourced W90 "คลังขอนแก่น")
+assign $W10
+POST $A "work-orders/$W10/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $S "work-orders/$W10/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI10\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-CAI10\"}]}" >/dev/null
+POST $S "work-orders/$W10/parts-transfer/return" '{"reason":"ทดสอบ — ขอนแก่นไม่มีของจริง"}' >/dev/null
+[ "$(ST $W10)" = "PARTS_REQUESTED|PENDING" ] || fail "เตรียม W10 ส่งกลับ: $(ST $W10)"
+issue94 $W10 RQ-CAI10
+[ "$(ST $W10)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $W10 | cut -d'|' -f2,5)" = "false|false" ] \
+  && pass "สั่งโอนแล้วถูกส่งกลับ → แอดมินเบิก 94: transfer=false pickup=false (ฐานข้อมูลมี TRANSFER_REQUESTED ก่อนส่งกลับ)" || fail "flow W10: $(ST $W10) $(FLOW $W10)"
+[ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W10 and action in ('TRANSFER_REQUESTED','TRANSFER_RETURNED')")" = "2" ] || fail "W10 ประวัติโอน/ส่งกลับไม่ครบ"
+W11=$(sourced W91 "คลังภูเก็ต")
+assign $W11
+POST $A "work-orders/$W11/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+POST $S "work-orders/$W11/parts-pickup/return" '{"reason":"ทดสอบ — ภูเก็ตไม่มีของจริง"}' >/dev/null
+issue94 $W11 RQ-CAI11
+[ "$(ST $W11)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $W11 | cut -d'|' -f2,5)" = "false|false" ] \
+  && pass "เบิกคลังอื่นถูกส่งกลับ → แอดมินเบิก 94: transfer=false pickup=false" || fail "flow W11: $(ST $W11) $(FLOW $W11)"
 
 echo
 echo "═══ ใบไม่ใช้อะไหล่ — เหมือนเดิม: นัด → คอนเฟิร์ม → ปล่อยงาน"
@@ -142,11 +184,30 @@ assign $X1
 DB "update \"WorkOrder\" set status='AWAITING_CONFIRM', \"workStatus\"='WAITING_TECH' where id=$X1; update \"WorkOrderLog\" set status='AWAITING_CONFIRM' where \"workOrderId\"=$X1 and action='ASSIGNED'" >/dev/null
 POST $A "work-orders/$X1/confirm-appointment" '{}' >/dev/null
 [ "$(ST $X1)" = "PARTS_REQUESTED|CONFIRMED" ] && pass "คอนเฟิร์มใบเดิมที่ยังไม่เบิก → ไปขั้นเบิก (ทางสำรองของใบที่ไม่ได้ย้าย)" || fail "X1 หลังคอนเฟิร์ม: $(ST $X1)"
-[ "$(FLOW $X1)" = "confirmFirst|false|false|false" ] && pass "detail.flow = confirmFirst (คอนเฟิร์มก่อนเบิก)" || fail "flow X1: $(FLOW $X1)"
+[ "$(FLOW $X1)" = "confirmFirst|false|false|false|false" ] && pass "detail.flow = confirmFirst (คอนเฟิร์มก่อนเบิก)" || fail "flow X1: $(FLOW $X1)"
 issue94 $X1 RQ-CAIX1
 [ "$(ST $X1)" = "ASSIGNED|CONFIRMED" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$X1 and action='CONFIRMED'")" = "1" ] \
   && pass "เบิกครบ → ปล่อยงานเลย ไม่วนไปคอนเฟิร์มซ้ำ" || fail "X1 หลังเบิก: $(ST $X1)"
-[ "$(FLOW $X1)" = "confirmFirst|false|false|false" ] && pass "ปล่อยงานแล้ว flow ยังเป็น confirmFirst (แถบวาดตามที่เกิดจริง)" || fail "flow X1 หลังเบิก: $(FLOW $X1)"
+[ "$(FLOW $X1)" = "confirmFirst|false|false|false|false" ] && pass "ปล่อยงานแล้ว flow ยังเป็น confirmFirst (แถบวาดตามที่เกิดจริง)" || fail "flow X1 หลังเบิก: $(FLOW $X1)"
+# ร้านปิด → นัดกลับเป็นรอคอนเฟิร์ม (ไม่มีประวัตินัดใหม่) — ของเบิกแล้ว คอนเฟิร์มรอบหน้าไปปล่อยงาน = สายงานปัจจุบัน
+POST $S "work-orders/$X1/dispatch" '{}' >/dev/null
+POST $A "work-orders/$X1/reassess-parts" '{"reasonCode":"SHOP","reason":"ทดสอบ — ไปถึงร้านปิด"}' >/dev/null
+[ "$(ST $X1)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $X1 | cut -d'|' -f1)" = "target" ] \
+  && pass "ร้านปิดส่งกลับ (เบิกแล้ว รอคอนเฟิร์มใหม่): flow = target ไม่วาดคอนเฟิร์มก่อนเบิก" || fail "flow X1 หลังร้านปิด: $(ST $X1) $(FLOW $X1)"
+POST $A "work-orders/$X1/confirm-appointment" '{}' >/dev/null
+[ "$(ST $X1)" = "ASSIGNED|CONFIRMED" ] && [ "$(FLOW $X1 | cut -d'|' -f1)" = "target" ] \
+  && pass "คอนเฟิร์มใหม่ → ปล่อยงาน: flow ยังเป็น target (ไม่สลับกลับ)" || fail "flow X1 หลังคอนเฟิร์มใหม่: $(ST $X1) $(FLOW $X1)"
+# ใบสายงานเดิมที่ถูกย้อนจากขั้นเบิกไปรอคอนเฟิร์ม แล้ว migration ย้ายกลับมาขั้นเบิก (นัดรอคอนเฟิร์ม) — เบิกแล้วไปคอนเฟิร์ม
+X4=$(sourced W92 "$L94")
+assign $X4
+DB "update \"WorkOrder\" set status='AWAITING_CONFIRM', \"workStatus\"='WAITING_TECH' where id=$X4" >/dev/null
+POST $A "work-orders/$X4/confirm-appointment" '{}' >/dev/null
+[ "$(ST $X4)" = "PARTS_REQUESTED|CONFIRMED" ] || fail "เตรียม X4: $(ST $X4)"
+DB "update \"WorkOrder\" set \"appointmentStatus\"='PENDING' where id=$X4; insert into \"WorkOrderLog\"(\"workOrderId\",action,status,note,\"createdAt\") values ($X4,'FLOW_MIGRATED','PARTS_REQUESTED','ทดสอบ — ย้อนแล้วย้ายสายงาน',now())" >/dev/null
+[ "$(FLOW $X4 | cut -d'|' -f1)" = "target" ] && pass "ขั้นเบิก นัดกลับเป็นรอคอนเฟิร์ม (มีคอนเฟิร์มเก่าในประวัติ): flow = target" || fail "flow X4: $(FLOW $X4)"
+issue94 $X4 RQ-CAIX4
+[ "$(ST $X4)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $X4 | cut -d'|' -f1)" = "target" ] \
+  && pass "เบิกแล้วไปคอนเฟิร์มลูกค้าตามที่แถบวาด" || fail "X4 หลังเบิก: $(ST $X4) $(FLOW $X4)"
 # X2: คอนเฟิร์มแล้ว ของกำลังโอน (สายงานเดิม) → ของถึง → เบิกส่งมอบ → ปล่อยงาน
 X2=$(sourced W77 "คลังขอนแก่น")
 assign $X2
@@ -220,12 +281,20 @@ M5=$(offwo W86)
 M6=$(offwo W87)
 DB "insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") values ($M6,(select id from \"User\" where \"employeeCode\"='A001'),'PARTS_CHECKED','AWAITING_CONFIRM','ทดสอบ — ของนอกสโตร์ผ่านขั้นเบิกแล้ว',now())" >/dev/null
 M7=$(sourced W88 "$L94"); assign $M7
+# M8: ผูกเคสเครื่องเสีย รอคอนเฟิร์ม ยังไม่เบิก → ย้าย และสถานะบนเคสต้องตาม (กระดาน/ตัวกรองอ่านจากเคส)
+OUT=$(DB "insert into \"Outage\"(kind,\"branchId\",\"startedAt\",\"lastSeenAt\") select 'MACHINE_OFF',id,now(),now() from \"Branch\" where code='$BR' returning id" | head -1)
+M8=$(POST $A "work-orders/from-outage/$OUT" "{\"jobType\":\"CM\",\"symptom\":\"$SYMPTOM\"}" | J 'd.id')
+POST $S "work-orders/$M8/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
+POST $A "work-orders/$M8/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
+toConfirm $M8
+DB "update \"Outage\" set \"workStatus\"='WAITING_TECH' where id=$OUT" >/dev/null
 GOT=$(PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -At -v ON_ERROR_STOP=1 <<SQL
 BEGIN;
 \i $MIG
 SELECT w.id||'|'||w.status||'|'||coalesce(w."workStatus",'-')||'|'||coalesce(w."appointmentStatus",'-')||'|'||coalesce(w."assignedTeam",'-')||'|'||coalesce(w."scheduledAt"::date::text,'-')||'|'||
   (SELECT count(*) FROM "WorkOrderLog" l WHERE l."workOrderId"=w.id AND l.action='FLOW_MIGRATED' AND l.status='PARTS_REQUESTED')
-FROM "WorkOrder" w WHERE w.id IN ($M1,$M2,$M3,$M4,$M5,$M6,$M7) ORDER BY w.id;
+FROM "WorkOrder" w WHERE w.id IN ($M1,$M2,$M3,$M4,$M5,$M6,$M7,$M8) ORDER BY w.id;
+SELECT 'outage|'||coalesce("workStatus",'-') FROM "Outage" WHERE id=$OUT;
 ROLLBACK;
 SQL
 )
@@ -238,6 +307,9 @@ row() { echo "$GOT" | grep "^$1|" | cut -d'|' -f2-; }
 [ "$(row $M4)" = "AWAITING_CONFIRM|WAITING_TECH|PENDING|$TEAM|$D1|0" ] && pass "ไม่ใช้อะไหล่ → ไม่แตะ" || fail "M4: $(row $M4)"
 [ "$(row $M6)" = "AWAITING_CONFIRM|WAITING_TECH|PENDING|$TEAM|$D1|0" ] && pass "ของนอกสโตร์ผ่านขั้นเบิกแล้ว → ไม่แตะ" || fail "M6: $(row $M6)"
 [ "$(row $M7 | cut -d'|' -f1,6)" = "PARTS_REQUESTED|0" ] && pass "อยู่ขั้นเบิกอยู่แล้ว → ไม่แตะ ไม่มีประวัติย้ายซ้ำ" || fail "M7: $(row $M7)"
+[ "$(row $M8 | cut -d'|' -f1,2)|$(row outage)" = "PARTS_REQUESTED|CHECKING_PARTS|CHECKING_PARTS" ] \
+  && pass "ใบผูกเคสเครื่องเสีย: ย้ายไปขั้นเบิก และ Outage.workStatus ตามเป็นกำลังเช็คอะไหล่ (ไม่ค้างรอช่าง)" || fail "M8: $(row $M8) เคส=$(row outage)"
+[ "$(DB "select coalesce(\"workStatus\",'-') from \"Outage\" where id=$OUT")" = "WAITING_TECH" ] || fail "ROLLBACK แล้วเคสไม่กลับ"
 [ "$(DB "select string_agg(status,',' order by id) from \"WorkOrder\" where id in ($M1,$M5)")|$(DB "select count(*) from \"WorkOrderLog\" where action='FLOW_MIGRATED' and \"workOrderId\" in ($M1,$M5)")" = "AWAITING_CONFIRM,AWAITING_CONFIRM|0" ] \
   && pass "ROLLBACK แล้วฐานข้อมูลกลับเหมือนเดิม (ไม่กระทบใบอื่น)" || fail "ROLLBACK ไม่กลับ"
 # ใบที่ย้ายแล้วเดินต่อได้: เบิก → คอนเฟิร์ม → ปล่อยงาน (จำลองผลย้ายในฐานข้อมูลจริง)

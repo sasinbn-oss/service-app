@@ -60,6 +60,8 @@ interface Row {
 interface Data {
   rows: Row[];
   total: number;
+  /** แถวที่ยังเหลือต่อจากแถวสุดท้ายที่มี — ปุ่มแสดงเพิ่มดูจากตัวนี้ (total รวมเคลมใหม่ที่อยู่บนสุดซึ่งหน้าถัดไปไม่มีวันได้) */
+  rest: number;
   tiles: { pending: number; approved: number; rejected: number; total: number; orders: number };
   counts: Record<Status, number>;
   brands: string[];
@@ -67,6 +69,8 @@ interface Data {
 
 /** ทีละหน้า — ปีหนึ่งมีได้หลายพันชิ้น มือถือที่เปิดจากหน้างานไม่ควรรอโหลดทั้งปี */
 const PAGE = 100;
+/** เพดานแถวต่อครั้งของ GET /part-claims */
+const MAX_LIMIT = 500;
 
 /** สีของป้ายผลตรวจ — ตามตัวอย่าง: เหลือง รอตรวจ · เขียว อนุมัติ · แดง ตีกลับ · เทา รอบเก่าที่ส่งใหม่แล้ว */
 const LOOK: Record<Look, { fg: string; bg: string; bd: string }> = {
@@ -139,6 +143,12 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
   const [deep, setDeep] = useState(deepParams);
   const [from, setFrom] = useState(() => (deepParams ? "" : rangeOf("month")[0]));
   const [to, setTo] = useState(() => (deepParams ? "" : rangeOf("month")[1]));
+  /**
+   * ปุ่มช่วงที่กดไว้ — จำไว้ ไม่ใช่เดาจากวันที่ เพราะบางช่วงได้วันเดียวกัน (มีนาคม: 3 เดือน = ปีนี้ = 1 ม.ค.–วันนี้
+   * · มกราคม: เดือนนี้ = ปีนี้) เดาแล้วปุ่มแรกที่ตรงชนะ กดปีนี้แต่ปุ่ม 3 เดือนติดและชิปบนมือถือขึ้น "3 เดือน"
+   * เลือกวันเองในช่องวันที่ = ไม่ใช่ปุ่มไหน
+   */
+  const [preset, setPreset] = useState<Preset | null>(deepParams ? null : "month");
   const [status, setStatus] = useState<Status>("ALL");
   const [brand, setBrand] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -167,11 +177,13 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
       setDeep({ branchCode: p.branchCode, machineCode: p.machineCode });
       setFrom("");
       setTo("");
+      setPreset(null);
     } else {
       setDeep(null);
       const [f, t] = rangeOf("month");
       setFrom(f);
       setTo(t);
+      setPreset("month");
     }
     setStatus("ALL");
     setBrand(null);
@@ -193,12 +205,22 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
     [from, to, status, brand, q, rounds, deep]
   );
 
+  // ข้อมูลที่แสดงอยู่ (ไว้อ่านใน load โดยไม่ต้องให้ load เปลี่ยนทุกครั้งที่ข้อมูลเปลี่ยน — ไม่งั้นโหลดวนไม่จบ)
+  const dataRef = useRef<{ data: Data; params: typeof params } | null>(null);
   const load = useCallback(async () => {
     const n = ++seq.current;
     setError(null);
+    /**
+     * กลับมาจากหน้าใบงาน/ดึงรีเฟรช ด้วยตัวกรองเดิม = โหลดเท่าจำนวนที่กดแสดงเพิ่มไว้แล้ว ไม่ใช่หน้าแรกหน้าเดียว
+     * เดิมรายการหดเหลือ 100 แถวทุกครั้งที่กลับมา ตำแหน่งที่เลื่อนลงไปก็หาย · เปลี่ยนตัวกรอง = เริ่มหน้าแรกใหม่
+     */
+    const had = dataRef.current?.params === params ? dataRef.current.data.rows.length : 0;
     try {
-      const res = await api.get<Data>("/part-claims", { params: { ...params, limit: PAGE } });
-      if (n === seq.current) setData(res.data);
+      const res = await api.get<Data>("/part-claims", { params: { ...params, limit: Math.min(Math.max(PAGE, had), MAX_LIMIT) } });
+      if (n === seq.current) {
+        dataRef.current = { data: res.data, params };
+        setData(res.data);
+      }
     } catch (e) {
       if (n === seq.current) setError(apiErrorMessage(e));
     }
@@ -212,13 +234,21 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
   useRefreshHandler(load);
 
   async function loadMore() {
-    if (!data) return;
+    const last = data?.rows[data.rows.length - 1];
+    if (!data || !last) return;
     const n = seq.current;
     setMore(true);
     try {
-      const res = await api.get<Data>("/part-claims", { params: { ...params, limit: PAGE, offset: data.rows.length } });
-      // ตัวกรองเปลี่ยนระหว่างรอ — หน้าถัดไปของชุดเก่าต่อท้ายชุดใหม่ไม่ได้
-      if (n === seq.current) setData((d) => d && { ...res.data, rows: [...d.rows, ...res.data.rows] });
+      // ต่อจากแถวสุดท้ายที่มี ไม่ใช่นับลำดับ — มีเคลมใหม่เข้ามาระหว่างนี้ แถวเดิมจะไม่ซ้ำ (ดู GET /part-claims)
+      const res = await api.get<Data>("/part-claims", { params: { ...params, limit: PAGE, before: `${last.createdAt}|${last.id}` } });
+      // ตัวกรองเปลี่ยน/โหลดใหม่ระหว่างรอ — หน้าถัดไปของชุดเก่าต่อท้ายชุดใหม่ไม่ได้
+      if (n === seq.current && dataRef.current?.data === data) {
+        // กันซ้ำอีกชั้น: key ซ้ำทำให้ React วาดแถวผิด และแถวเดียวกันขึ้นสองครั้ง
+        const have = new Set(data.rows.map((r) => r.id));
+        const next = { ...res.data, rows: [...data.rows, ...res.data.rows.filter((r) => !have.has(r.id))] };
+        dataRef.current = { data: next, params };
+        setData(next);
+      }
     } catch (e) {
       showAlert("โหลดเพิ่มไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -256,14 +286,11 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
   }
 
   const openOrder = (r: Row) => navigation.navigate("WorkOrderDetail", { id: r.workOrderId });
-  const preset = PRESETS.find((p) => {
-    const [f, t] = rangeOf(p.k);
-    return f === from && t === to;
-  })?.k ?? null;
   const pickPreset = (p: Preset) => {
     const [f, t] = rangeOf(p);
     setFrom(f);
     setTo(t);
+    setPreset(p);
   };
   // ล้างตัวกรองจากลิงก์ผ่าน params — กดลิงก์เดิมในใบงานซ้ำทีหลังจะได้ทำงานอีกครั้ง (ค่าเปลี่ยนจริง)
   const clearDeep = () => navigation.setParams({ branchCode: undefined, machineCode: undefined });
@@ -298,17 +325,43 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
       {PRESETS.map((p) => {
         const on = preset === p.k;
         return (
-          <TouchableOpacity key={p.k} style={[styles.chip, on && styles.chipOn]} onPress={() => pickPreset(p.k)} accessibilityLabel={`ช่วง ${p.label}`}>
+          <TouchableOpacity
+            key={p.k}
+            style={[styles.chip, on && styles.chipOn]}
+            onPress={() => pickPreset(p.k)}
+            accessibilityLabel={`ช่วง ${p.label}`}
+            // เว็บไม่แปลง accessibilityState เป็น aria-selected — ใส่เองให้โปรแกรมอ่านจอ/เทสต์รู้ว่าช่วงไหนเลือกอยู่
+            accessibilityState={{ selected: on }}
+            aria-selected={on}
+          >
             <Text style={[styles.chipText, on && styles.chipTextOn]}>{p.label}</Text>
           </TouchableOpacity>
         );
       })}
       <View style={styles.dates}>
         <View style={styles.dateBox}>
-          <DateField label="ตั้งแต่" value={from} onChange={setFrom} emptyHint="แรกสุด" labelStyle={styles.dateLabel} />
+          <DateField
+            label="ตั้งแต่"
+            value={from}
+            onChange={(v) => {
+              setFrom(v);
+              setPreset(null);
+            }}
+            emptyHint="แรกสุด"
+            labelStyle={styles.dateLabel}
+          />
         </View>
         <View style={styles.dateBox}>
-          <DateField label="ถึง" value={to} onChange={setTo} emptyHint="วันนี้" labelStyle={styles.dateLabel} />
+          <DateField
+            label="ถึง"
+            value={to}
+            onChange={(v) => {
+              setTo(v);
+              setPreset(null);
+            }}
+            emptyHint="วันนี้"
+            labelStyle={styles.dateLabel}
+          />
         </View>
       </View>
     </View>
@@ -446,7 +499,7 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
           <View style={[COL[7], styles.actions]}>{actions(r)}</View>
         </View>
       ))}
-      <Foot shown={rows.length} total={data.total} more={more} onMore={loadMore} />
+      <Foot shown={rows.length} total={data.total} rest={data.rest} more={more} onMore={loadMore} />
     </View>
   ) : (
     <>
@@ -487,7 +540,7 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ))}
       </View>
-      <Foot shown={rows.length} total={data.total} more={more} onMore={loadMore} plain />
+      <Foot shown={rows.length} total={data.total} rest={data.rest} more={more} onMore={loadMore} plain />
     </>
   );
 
@@ -569,16 +622,16 @@ function Tile({ label, n, hint, color }: { label: string; n: number; hint: strin
   );
 }
 
-function Foot({ shown, total, more, onMore, plain }: { shown: number; total: number; more: boolean; onMore: () => void; plain?: boolean }) {
+function Foot({ shown, total, rest, more, onMore, plain }: { shown: number; total: number; rest: number; more: boolean; onMore: () => void; plain?: boolean }) {
   return (
     <View style={[styles.foot, plain && styles.footPlain]}>
       <Text style={styles.sub}>
         แสดง {shown} จาก {total} รายการ · เรียงจากส่งล่าสุด
       </Text>
-      {shown < total ? (
+      {rest > 0 ? (
         <TouchableOpacity style={styles.more} onPress={onMore} disabled={more} accessibilityLabel="แสดงเพิ่ม">
           {more ? <Spinner size="small" color={colors.primaryInk} /> : null}
-          <Text style={styles.moreText}>แสดงเพิ่มอีก {Math.min(PAGE, total - shown)} รายการ</Text>
+          <Text style={styles.moreText}>แสดงเพิ่มอีก {Math.min(PAGE, rest)} รายการ</Text>
         </TouchableOpacity>
       ) : (
         <Text style={styles.sub}>Excel ได้ตามตัวกรองที่เลือกอยู่</Text>

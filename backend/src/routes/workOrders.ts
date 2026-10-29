@@ -2253,8 +2253,14 @@ const BEFORE_SCHEDULE = ["NEW", ...INSPECT_STAGES, "WAITING_PARTS", "PARTS_SOURC
  * variant — ลำดับเบิก/คอนเฟิร์มของรอบนี้ (ใบที่เปิดก่อนสลับลำดับยังเดินอยู่ ต้องวาดตามที่เกิดจริง):
  * - target: นัดวัน → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (สายงานปัจจุบัน)
  * - confirmFirst: คอนเฟิร์มแล้วค่อยเบิก — ใบสายงานเดิม · ใบที่ย้อนมาเบิกใหม่หลังคอนเฟิร์ม (เบิกเสร็จไปปล่อยงานเลย)
+ *   นับเฉพาะเมื่อนัดที่คอนเฟิร์มนั้นยังใช้อยู่ (ดู confirmFirst ข้างล่าง)
  * - issueFirst: เบิกก่อนนัด — ใบที่เบิกตั้งแต่ก่อนเปลี่ยนเป็นนัดก่อนเบิก
- * transfer — รอบอะไหล่นี้ผ่านหัวหน้าภาคเบิก/โอนคลังอื่น (ขั้นย่อยใต้เบิกอะไหล่)
+ * transfer — รอบอะไหล่นี้โอนของจริง (หัวหน้าภาคสั่งโอน หรือกำลังอยู่ขั้นเบิกและโอน/รอของถึง) → ขั้นย่อยใต้เบิกอะไหล่
+ * pickup — รอบนี้หัวหน้าภาคเบิกส่งมอบจากคลังที่ไม่ใช่ 94 (ไม่ว่าจะโอนมาก่อนหรือไม่)
+ *   แยกจาก transfer เพราะเบิกคลังอื่นเฉย ๆ ไม่มีขั้นสั่งโอน/รอของถึง — เดิมรวมกัน แถบติ๊ก "สั่งโอน" ทั้งที่ไม่ได้โอน
+ *   ดูจากขั้น PARTS_PICKUP / ประวัติ PICKED_UP ไม่ใช่ PICKUP_REQUESTED — ประวัตินั้นเขียนทุกครั้งที่มีของคลังอื่น
+ *   รวมใบที่ต้องโอนเข้าคลัง 94 แล้วแอดมินเบิกเอง (ไม่มีใครเบิกคลังอื่น)
+ *   รอบ = หลังรอบระบุ/เช็คอะไหล่ล่าสุด หรือหลังหัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) — แอดมินตอบใหม่ทั้งรอบ
  * quote — รอบนี้ต้องเสนอราคา (ยังเช็คอะไหล่อยู่ = คาดจากกฎเดียวกับ afterSourcing)
  * inspect/inspectRounds — เคยส่งตรวจหน้างาน กี่รอบ (วาดเป็นวงแยกเหนือแถบ)
  */
@@ -2271,11 +2277,22 @@ function flowOf(
   const scheduleRound = since(["ASSIGNED"]);
   const partsRound = since(PARTS_ROUND_ACTIONS);
   const specRound = since(["PARTS_REQUESTED", "NO_PARTS"]);
+  // หัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) → แอดมินตอบคลังใหม่ทั้งรอบ · การโอน/เบิกคลังอื่นของรอบที่ถูกส่งกลับไม่นับ
+  const issueRound = since([...PARTS_ROUND_ACTIONS, "TRANSFER_RETURNED", "PICKUP_RETURNED"]);
 
+  /**
+   * คอนเฟิร์มก่อนเบิก = คอนเฟิร์มครั้งล่าสุดของรอบนัดนี้ไปขั้นเบิก และนัดนั้นยังคอนเฟิร์มอยู่
+   * ทำไมต้องสองอย่าง: ร้านปิด/ทีมไม่ว่าง/ย้อนขั้น ทำให้นัดกลับเป็นรอคอนเฟิร์ม (ไม่มีประวัตินัดใหม่) — ใบเบิกไปแล้ว
+   * คอนเฟิร์มรอบหน้าไปปล่อยงานเลย = สายงานปัจจุบัน · เดิมดูแค่ "เคยมี" แถบจึงวาดคอนเฟิร์มก่อนเบิกทั้งที่เบิกเสร็จแล้ว
+   * คอนเฟิร์มใหม่หลังเบิกเสร็จ (ไปปล่อยงาน) ก็เป็นคอนเฟิร์มล่าสุด → ไม่ใช่ confirmFirst แล้ว แถบไม่สลับไปมา
+   */
+  const lastConfirm = scheduleRound.find((l) => l.action === "CONFIRMED" || l.action === "RESCHEDULED");
   const confirmFirst =
     (ISSUE_STAGES.includes(row.status) && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")) ||
     (!BEFORE_SCHEDULE.includes(row.status) &&
-      scheduleRound.some((l) => (l.action === "CONFIRMED" || l.action === "RESCHEDULED") && ISSUE_STAGES.includes(l.status)));
+      APPOINTMENT_DONE.includes(row.appointmentStatus ?? "") &&
+      !!lastConfirm &&
+      ISSUE_STAGES.includes(lastConfirm.status));
   // ประวัติ "แอดมินเบิกอะไหล่" (action PARTS_CHECKED) ที่ใบไปขั้นนัดวันต่อ (status PARTS_CHECKED) = เบิกก่อนนัด
   const issueFirst =
     partsRound.some((l) => l.action === "PARTS_CHECKED" && l.status === "PARTS_CHECKED") ||
@@ -2286,8 +2303,8 @@ function flowOf(
   return {
     variant: confirmFirst ? ("confirmFirst" as const) : issueFirst ? ("issueFirst" as const) : ("target" as const),
     transfer:
-      ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"].includes(row.status) ||
-      partsRound.some((l) => l.action === "PICKUP_REQUESTED" || l.action === "TRANSFER_REQUESTED"),
+      ["PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(row.status) || issueRound.some((l) => l.action === "TRANSFER_REQUESTED"),
+    pickup: row.status === "PARTS_PICKUP" || issueRound.some((l) => l.action === "PICKED_UP"),
     quote:
       ["AWAITING_QUOTE", "AWAITING_PAYMENT"].includes(row.status) ||
       specRound.some((l) => l.action === "QUOTED" || l.action === "QUOTE_SKIPPED" || l.action === "PAID") ||
@@ -3373,22 +3390,31 @@ async function moveStage(
   from: string,
   /** undefined = ไม่แตะช่องนั้น (เหมือน Prisma update) */
   data: Record<string, StageValue | undefined>,
-  log: { userId: number | undefined; action: string; status: string; note?: string | null }
+  log: { userId: number | undefined; action: string; status: string; note?: string | null },
+  /**
+   * ค่าที่อ่านไว้ตอนตัดสินใจต้องยังเหมือนเดิม (นอกจากขั้น) — ไม่งั้นคืน false (409) เหมือนมีคนเดินขั้นไปก่อน
+   * ทำไม: แอดมินเลื่อนวันนัดไม่เปลี่ยนขั้น เช็คแค่ status จึงไม่พอ — หัวหน้าภาคปล่อยงาน/แอดมินอีกคนคอนเฟิร์ม
+   * ที่อ่านวันเดิมไว้เสี้ยววินาทีก่อนจะเขียนทับวันใหม่ หรือข้ามป้าย "คอนเฟิร์มวันใหม่" ไปเงียบ ๆ
+   * updatedAt = ห้ามมีใครแตะใบเลย (ช่างกดถึงหน้างานขยับ updatedAt — ดู /arrive)
+   */
+  expect?: Record<string, StageValue>
 ): Promise<boolean> {
   const now = new Date().toISOString();
   const val = (v: StageValue) =>
     v instanceof Date ? Prisma.sql`CAST(${v.toISOString()} AS timestamp(3))` : v === null ? Prisma.sql`NULL` : Prisma.sql`${v}`;
-  const sets = Object.entries(data).flatMap(([k, v]) => {
-    if (v === undefined) return [];
-    // ชื่อคอลัมน์มาจากโค้ดเท่านั้น — กันพิมพ์ผิดแล้วไปแก้คอลัมน์ที่ไม่ตั้งใจ
-    if (!STAGE_COLUMNS.has(k)) throw new Error(`moveStage: ไม่รู้จักคอลัมน์ ${k}`);
-    return [Prisma.sql`${Prisma.raw(`"${k}"`)} = ${val(v)}`];
-  });
+  // ชื่อคอลัมน์มาจากโค้ดเท่านั้น — กันพิมพ์ผิดแล้วไปแก้คอลัมน์ที่ไม่ตั้งใจ
+  const column = (k: string, extra: string[] = []) => {
+    if (!STAGE_COLUMNS.has(k) && !extra.includes(k)) throw new Error(`moveStage: ไม่รู้จักคอลัมน์ ${k}`);
+    return Prisma.raw(`"${k}"`);
+  };
+  const sets = Object.entries(data).flatMap(([k, v]) => (v === undefined ? [] : [Prisma.sql`${column(k)} = ${val(v)}`]));
+  // IS NOT DISTINCT FROM — ไม่มีเวลานัด (NULL) ต้องเท่ากับ NULL ด้วย ( = ให้ผล NULL ไม่ใช่ true)
+  const same = Object.entries(expect ?? {}).map(([k, v]) => Prisma.sql` AND ${column(k, ["updatedAt"])} IS NOT DISTINCT FROM ${val(v)}`);
   const rows = await prisma.$queryRaw<{ id: number }[]>`
     WITH moved AS (
       UPDATE "WorkOrder"
       SET ${Prisma.join(sets)}, "updatedAt" = CAST(${now} AS timestamp(3))
-      WHERE "id" = ${id} AND "status" = ${from}
+      WHERE "id" = ${id} AND "status" = ${from}${same.length ? Prisma.join(same, "") : Prisma.empty}
       RETURNING "id"
     )
     INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
@@ -3401,9 +3427,12 @@ async function moveStage(
   return rows.length > 0;
 }
 
-/** มีคนกดขั้นนี้ไปก่อน — แอปโหลดใบงานใหม่เองเมื่อได้ 409 (api/client.ts) */
+/**
+ * มีคนกดขั้นนี้ไปก่อน หรือวันนัดเพิ่งถูกเลื่อน (moveStage expect) — แอปโหลดใบงานใหม่เองเมื่อได้ 409 (api/client.ts)
+ * บอกทั้งสองอย่าง: คนที่เจอเพราะวันถูกเลื่อนจะได้ดูวันนัดใหม่ก่อนกดซ้ำ ไม่ใช่หาว่าขั้นไหนเปลี่ยน
+ */
 function stageMoved(res: Response) {
-  res.status(409).json({ error: "ใบงานนี้ถูกเปลี่ยนขั้นไปแล้ว — โหลดใหม่ให้แล้ว ลองดูอีกครั้ง" });
+  res.status(409).json({ error: "ใบงานนี้เพิ่งถูกเปลี่ยน (ขั้นหรือวันนัด) — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด" });
 }
 
 /**
@@ -4769,15 +4798,23 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
       .filter(Boolean)
       .join(" — "),
   };
+  /**
+   * วันที่อ่านไว้ต้องยังเป็นวันเดิม — แอดมินอีกคนเลื่อนวันนัด (ใบไม่ขยับขั้น) ระหว่างนี้ แล้วปุ่มนี้เขียนวันเดิมกลับ
+   * = การเลื่อนหายเงียบ ๆ ทั้งที่ประวัติบอกวันใหม่ · 409 แล้วแอปโหลดใบใหม่ให้เห็นวันล่าสุดก่อนคอนเฟิร์ม
+   */
+  const readDate = { scheduledAt: before.scheduledAt, scheduledTime: before.scheduledTime };
   if (!before.outageId) {
-    if (!(await moveStage(id, before.status, data, log))) return stageMoved(res);
+    if (!(await moveStage(id, before.status, data, log, readDate))) return stageMoved(res);
   } else {
-    // ผูกกับเคสเครื่องเสีย — ต้องซิงก์สถานะเคสในทรานแซกชันเดียวกัน
-    await prisma.$transaction(async (tx) => {
-      await tx.workOrder.update({ where: { id }, data });
+    // ผูกกับเคสเครื่องเสีย — ต้องซิงก์สถานะเคสในทรานแซกชันเดียวกัน · กันเขียนทับแบบเดียวกับ moveStage
+    const done = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.workOrder.updateMany({ where: { id, status: before.status, ...readDate }, data });
+      if (count === 0) return false;
       await writeLog(tx, id, log.userId, log.action, log.status, log.note);
       await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+      return true;
     }, STAGE_TX);
+    if (!done) return stageMoved(res);
   }
 
   res.json(await detailFor(id));
@@ -4822,7 +4859,10 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
 
   const wo = await prisma.workOrder.findUnique({
     where: { id },
-    select: { code: true, status: true, scheduledAt: true, scheduledTime: true, appointmentStatus: true, assignedTeam: true, outageId: true },
+    select: {
+      code: true, status: true, scheduledAt: true, scheduledTime: true, appointmentStatus: true, assignedTeam: true, outageId: true,
+      updatedAt: true,
+    },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   const recallTo = RESCHEDULE_RECALL_STAGES[wo.status] as string | undefined;
@@ -4841,6 +4881,8 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
      * ช่างถึงหน้างานแล้ว (หรือปิดงานไปแล้วรอบนี้ — ตีกลับเคลมกลับมาที่ช่าง) = เลื่อนจากออฟฟิศไม่ได้
      * ช่างใช้ "แจ้งปัญหาหน้างาน" (ร้านปิด/ลูกค้าไม่สะดวก) ซึ่งส่งกลับให้แอดมินนัดใหม่แทน
      * ดูเฉพาะหลังปล่อยงานครั้งล่าสุด — ถึงหน้างานของรอบก่อนไม่นับ
+     * อ่านหลังอ่านใบงาน (ไม่ยิงพร้อมกัน) — ช่างกดถึงหน้างานหลังจากนี้ขยับ updatedAt ที่อ่านไว้แล้ว
+     * การดึงคืนข้างล่างจึงไม่ผ่าน (expect updatedAt) · ถึงก่อนหน้านี้ก็เห็นในประวัติที่อ่านตรงนี้
      */
     const last = await prisma.workOrderLog.findFirst({
       where: { workOrderId: id, action: { in: ["DISPATCHED", "ARRIVED", "CLOSED"] } },
@@ -4878,20 +4920,30 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
     status: next,
     note: [
       `เลื่อนนัดจาก ${visitText(oldDate, wo.scheduledTime)} เป็น ${visitText(scheduledAt, newTime)}${wo.assignedTeam ? ` · ทีม${wo.assignedTeam}` : ""}`,
-      recallTo ? "ดึงงานคืนจากช่าง (ยังไม่ถึงหน้างาน) — หัวหน้าภาครับทราบวันใหม่แล้วปล่อยงานอีกครั้ง" : null,
+      // "ดึงงานคืนจากช่าง" อยู่ในชื่อประวัติแล้ว (APPOINTMENT_RECALLED) — กล่องส้มในฟอร์มปล่อยงานต่อสองอย่างนี้ ไม่พูดซ้ำ
+      recallTo ? "ช่างยังไม่ถึงหน้างาน" : null,
       confirmed ? "แอดมินตกลงวันใหม่กับร้านแล้ว" : "ยังไม่ได้คอนเฟิร์มลูกค้า",
       reason,
     ]
       .filter(Boolean)
       .join(" — "),
   };
+  /**
+   * WHERE status = เดิม — มีคนเดินขั้นไปก่อนเสี้ยววินาที (เช่น หัวหน้าภาคปล่อยงาน) = 409 ไม่เขียนทับ
+   * วัน/เวลาเดิม — แอดมินอีกคนเลื่อนไปก่อน (ขั้นไม่เปลี่ยน) ไม่ทับกัน และบันทึก "เลื่อนนัดจาก …" ไม่อ้างวันเก่า
+   * ดึงคืนจากช่าง: updatedAt เดิมด้วย — ช่างกดถึงหน้างานหลังเช็คประวัติข้างบน (ดู /arrive) = 409 ไม่ดึงใบจากคนที่อยู่หน้าร้าน
+   */
+  const expect = {
+    scheduledAt: wo.scheduledAt,
+    scheduledTime: wo.scheduledTime,
+    ...(recallTo ? { updatedAt: wo.updatedAt } : {}),
+  };
   if (!wo.outageId) {
-    // WHERE status = เดิม — มีคนเดินขั้นไปก่อนเสี้ยววินาที (เช่น หัวหน้าภาคปล่อยงาน) = 409 ไม่เขียนทับ
-    if (!(await moveStage(id, wo.status, data, log))) return stageMoved(res);
+    if (!(await moveStage(id, wo.status, data, log, expect))) return stageMoved(res);
   } else {
     // ผูกเคสเครื่องเสีย — วันเข้าบนกระดานต้องตามไปด้วยในทรานแซกชันเดียวกัน · กันเขียนทับแบบเดียวกับ moveStage
     const done = await prisma.$transaction(async (tx) => {
-      const { count } = await tx.workOrder.updateMany({ where: { id, status: wo.status }, data });
+      const { count } = await tx.workOrder.updateMany({ where: { id, status: wo.status, ...expect }, data });
       if (count === 0) return false;
       await writeLog(tx, id, log.userId, log.action, log.status, log.note);
       await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
@@ -4942,7 +4994,10 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
     id,
     cur.status,
     { status: next, assignedTeam: team, assignedToId: null, workStatus: workStatusForStage(next) },
-    { userId: req.auth!.userId, action: "DISPATCHED", status: next, note: [text, parsed.data.note].filter(Boolean).join(" — ") }
+    { userId: req.auth!.userId, action: "DISPATCHED", status: next, note: [text, parsed.data.note].filter(Boolean).join(" — ") },
+    // แอดมินเลื่อนวันนัดได้ที่ขั้นนี้โดยใบไม่ขยับขั้น — วันเปลี่ยนระหว่างอ่านกับเขียน = 409 ให้หัวหน้าภาคเห็นวันใหม่
+    // (ป้าย "คอนเฟิร์มวันใหม่") ก่อนปล่อย ไม่ใช่ส่งช่างไปวันที่ไม่เคยเห็น โดยประวัติยังเขียนวันเดิม
+    { scheduledAt: cur.scheduledAt, scheduledTime: cur.scheduledTime }
   );
   if (!moved) return stageMoved(res);
 
@@ -4996,7 +5051,14 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
         ? "ถึงหน้างาน (ไม่มีพิกัดจากเครื่อง)"
         : "ถึงหน้างาน (สาขายังไม่มีพิกัด เทียบระยะไม่ได้)"
       : `ถึงหน้างาน · ห่างสาขา ${Math.round(distance)} ม. · ${within ? "ในรัศมี" : "นอกรัศมี"}`;
-  await prisma.$transaction(async (tx) => {
+  const arrived = await prisma.$transaction(async (tx) => {
+    /**
+     * แตะแถวใบงานก่อนเขียนอะไร (WHERE ขั้นยังอยู่ในมือช่าง) — แอดมินเลื่อนวันนัดแล้วดึงงานคืน (reschedule)
+     * พร้อมกับที่ช่างกดถึงหน้างาน สองคำสั่งต้องรอกันที่แถวนี้: ดึงคืนก่อน = ที่นี่ไม่เจอแถว 409 ·
+     * ถึงก่อน = updatedAt ขยับ การดึงคืนที่อ่านค่าเดิมไว้ไม่ผ่าน · เดิมเขียนแค่ประวัติ สองฝั่งไม่เห็นกันเลย
+     */
+    const { count } = await tx.workOrder.updateMany({ where: { id, status: wo.status }, data: { updatedAt: new Date() } });
+    if (count === 0) return false;
     if (distance != null) {
       await tx.branchCheckIn.create({
         data: {
@@ -5011,7 +5073,11 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
       });
     }
     await writeLog(tx, id, req.auth!.userId, "ARRIVED", wo.status, note);
+    return true;
   }, STAGE_TX);
+  if (!arrived) {
+    return res.status(409).json({ error: `${wo.code} ไม่ได้อยู่ในมือช่างตอนนี้ — แอดมินเพิ่งเลื่อนวันนัดหรือมีคนเปลี่ยนขั้น โหลดใหม่แล้วดูวันนัดล่าสุด` });
+  }
   res.json({ ok: true, note, distance: distance != null ? Math.round(distance) : null, withinRadius: within });
 });
 
@@ -5045,7 +5111,9 @@ router.post("/:id/decline-new-date", requireAuth, async (req: AuthRequest, res) 
       action: "NEW_DATE_DECLINED",
       status: back,
       note: `ทีม${cur.assignedTeam ?? " —"} ไม่ว่างวันที่ลูกค้าขอ (${when}) — ${parsed.data.reason}`,
-    }
+    },
+    // ตอบว่าไม่ว่าง "วันที่เห็น" — แอดมินเลื่อนไปวันอื่นพร้อมกัน = 409 ให้ดูวันใหม่ก่อน (เหมือนปล่อยงาน)
+    { scheduledAt: cur.scheduledAt, scheduledTime: cur.scheduledTime }
   );
   if (!moved) return stageMoved(res);
   res.json(await detailFor(id));

@@ -31,6 +31,7 @@ cleanup() {
   for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code in ('$BC1','$BC2'));
       delete from \"Branch\" where code in ('$BC1','$BC2');
+      delete from \"ViewAsLog\" where \"byUserId\" in (select id from \"User\" where \"employeeCode\" like 'ZCH_$SUF');
       delete from \"User\" where \"employeeCode\" like 'ZCH_$SUF';
       update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   rm -f "$XLSX" "$PDF"
@@ -154,6 +155,19 @@ GET $A part-claims | J "d.brands.includes('$BRA')&&d.brands.includes('$BRB')?'ok
   && pass "ตัวเลขบนลิงก์ไม่นับใบนอกขอบเขตหัวหน้าภาค" || fail "related นอกขอบเขต"
 GET $A "part-claims?from=2025-05-01&to=2025-04-01" | J 'd.error' | grep -q "วันที่เริ่มต้องไม่หลัง" && pass "วันที่เริ่มหลังวันสิ้นสุด = 400 ข้อความไทย" || fail "วันที่กลับด้าน"
 [ "$(CODE $A "part-claims?from=2025-02-30")" = "400" ] && [ "$(CODE $A "part-claims?status=OOPS")" = "400" ] && pass "วันที่ไม่มีจริง / สถานะมั่ว = 400" || fail "ตรวจตัวกรองผิด"
+# ตัวกรองผิดทุกแบบ = 400 ข้อความไทยของช่องนั้น — เดือน 13 / วันที่ 32 / ข้อความมั่ว เคยทำให้ refine โยน RangeError
+# กลายเป็น 500 · สถานะ/รอบ/แบ่งหน้า/ไม่ส่งรหัสสาขา เคยตอบข้อความอังกฤษของ zod ("Invalid enum value...", "Required")
+BADQ=""
+for c in "part-claims?from=2026-13-01|วันที่เริ่มไม่ถูกต้อง" "part-claims?to=2026-00-10|วันที่สิ้นสุดไม่ถูกต้อง" "part-claims?from=2026-01-32|วันที่เริ่มไม่ถูกต้อง" \
+         "part-claims/export?from=abc|วันที่เริ่มไม่ถูกต้อง" "part-claims?status=OOPS|สถานะที่เลือกไม่ถูกต้อง" "part-claims?rounds=x|ตัวเลือกรอบไม่ถูกต้อง" \
+         "part-claims?limit=abc|ขอได้ครั้งละ 1–500 รายการ" "part-claims?limit=501|ขอได้ครั้งละ 1–500 รายการ" "part-claims?offset=-1|ตำแหน่งเริ่มของหน้าไม่ถูกต้อง" \
+         "part-claims?before=xx|ตำแหน่งหน้าถัดไปไม่ถูกต้อง" "part-claims?q=a&q=b|คำค้นไม่ถูกต้อง" "part-claims?brand=$(printf 'x%.0s' {1..101})|ยี่ห้อยาวเกิน 100 ตัวอักษร" \
+         "part-claims/related|ต้องระบุรหัสสาขา" "part-claims/related?branchCode=$(printf 'x%.0s' {1..51})|รหัสสาขายาวเกิน 50 ตัวอักษร"; do
+  u="${c%%|*}"; want="${c##*|}"
+  got="$(CODE $A "$u") $(GET $A "$u" | J 'd.error')"
+  [ "$got" = "400 $want" ] || BADQ="$BADQ [${u:0:45} → $got]"
+done
+[ -z "$BADQ" ] && pass "ตัวกรองผิด 14 แบบ = 400 ข้อความไทยของช่องนั้น (ไม่มี 500 / ข้อความอังกฤษ)" || fail "ตัวกรองผิด:$BADQ"
 
 echo
 echo "═══ ตัวเลขสรุป เทียบกับที่คิดจากฐานข้อมูลเอง"
@@ -193,11 +207,51 @@ LINK=$(POST $PA "work-orders/$W1/claims/$K2/pdf-link" '{}' | J 'd.path')
 curl -s "localhost:4000$LINK" -o "$PDF"; [ "$(head -c 4 "$PDF")" = "%PDF" ] && pass "ปุ่มใบเคลม PDF (ลิงก์เดิมของใบงาน) เปิดได้จากแถวในประวัติ" || fail "PDF: $LINK"
 # ใบ 2 ถึงขั้นรอตรวจเคลม แล้ว Admin Spare Part กดอนุมัติจริง — ประวัติต้องเปลี่ยนตามฐานข้อมูล
 DB "update \"WorkOrder\" set status='CLAIM_REVIEW' where id=$W2" >/dev/null
+# Super Admin ดูในฐานะหัวหน้าภาค — หน้าประวัติเคลมเปิดให้หัวหน้าภาค ปุ่มใบเคลม PDF (POST ที่ไม่แก้อะไร) ต้องกดได้
+# เดิมด่านดูอย่างเดียวกัน POST ทุกเส้นที่ไม่อยู่ในรายการตรงตัว ปุ่มนี้จึงตอบ 403 "ดูได้อย่างเดียว" ทุกแถว
+SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
+SV=$(POST $SA auth/view-as "{\"userId\":$SID}" | J 'd.token||""')
+[ -n "$SV" ] || fail "Super Admin เริ่มดูในฐานะหัวหน้าภาคไม่ได้"
+LINK=$(POST $SV "work-orders/$W1/claims/$K2/pdf-link" '{}' | J 'd.path||""')
+rm -f "$PDF"; [ -n "$LINK" ] && curl -s "localhost:4000$LINK" -o "$PDF"
+[ -n "$LINK" ] && [ "$(head -c 4 "$PDF")" = "%PDF" ] && pass "ดูในฐานะหัวหน้าภาค: ปุ่มใบเคลม PDF เปิดได้" || fail "ดูในฐานะเปิด PDF ไม่ได้: $(POST $SV "work-orders/$W1/claims/$K2/pdf-link" '{}')"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$W3/claims/$K5/pdf-link" -H "$(H $SV)")" != "201" ] \
+  && pass "ดูในฐานะ: ใบเคลมนอกภาคของหัวหน้าภาคยังเปิดไม่ได้ (ขอบเขตตามคนที่ถูกดู)" || fail "ดูในฐานะเปิดใบเคลมนอกภาคได้"
+# ยังเขียนอย่างอื่นไม่ได้ — ตรวจเคลม (เส้นที่อยู่ข้างลิงก์ PDF) · เปิดใบงาน
+RO=$(for p in "work-orders/$W2/claim-review|{\"approve\":true}" "work-orders|{\"branchCode\":\"$BC1\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W1\",\"symptom\":\"ทดสอบ\"}]}"; do
+  POST $SV "${p%%|*}" "${p#*|}" | J 'd.viewAsReadOnly===true?"y":"n:"+JSON.stringify(d).slice(0,80)'; done | tr '\n' ' ')
+[ "$RO" = "y y " ] && [ "$(DB "select c.status||'|'||w.status from \"PartClaim\" c join \"WorkOrder\" w on w.id=c.\"workOrderId\" where c.id=$K4")" = "PENDING|CLAIM_REVIEW" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" w join \"Branch\" b on b.id=w.\"branchId\" where b.code='$BC1'")" = "3" ] \
+  && pass "ดูในฐานะ: ตรวจเคลม / เปิดใบงาน ยัง 403 ดูได้อย่างเดียว · ฐานข้อมูลไม่เปลี่ยน" || fail "ดูในฐานะเขียนได้: $RO"
+POST $SV auth/view-as/stop '{}' >/dev/null
 POST $PA "work-orders/$W2/claim-review" '{"approve":true}' >/dev/null
 [ "$(DB "select c.status||'|'||w.status||'|'||(c.\"reviewedById\"=$PAID) from \"PartClaim\" c join \"WorkOrder\" w on w.id=c.\"workOrderId\" where c.id=$K4")" = "APPROVED|DONE|true" ] \
   && [ "$(row $K4 '[r.status,r.statusLabel,r.reviewerName,r.orderStatus].join("|")' $BC1)" = "APPROVED|อนุมัติ|$PANAME|DONE" ] \
   && pass "อนุมัติผ่าน API แล้ว แถวในประวัติเป็นอนุมัติ ชื่อคนตรวจ ใบงานปิด (ตรงฐานข้อมูล)" || fail "หลังอนุมัติ: $(row $K4 'JSON.stringify(r)' $BC1)"
 [ "$(GET $S part-claims/pending-count | J d.pending)" = "0" ] && pass "ตรวจแล้วตัวเลขข้างเมนูลด (0)" || fail "pending หลังตรวจ: $(GET $S part-claims/pending-count)"
+
+echo
+echo "═══ แสดงเพิ่ม ระหว่างที่มีเคลมใหม่เข้ามา"
+# หน้าแรก 1 แถว (ใบ 2 ส่งล่าสุดของสาขา 1) → ช่างส่งเคลมชิ้นอื่นใหม่กว่า → หน้าถัดไปต่อจากแถวสุดท้ายที่มี (before)
+# นับลำดับ (offset=1) ได้แถวเดิมซ้ำ เพราะทุกแถวเลื่อนลงหนึ่งช่อง — แอปเคยต่อท้ายแถวซ้ำ ขึ้นสองแถว key ชนกัน
+cur() { J 'encodeURIComponent(d.rows[d.rows.length-1].createdAt+"|"+d.rows[d.rows.length-1].id)'; }
+P1=$(GET $A "part-claims?branchCode=$BC1&limit=1")
+K7=$(ins $W1 null SP-OTHER$SUF ชิ้นอื่นทดสอบ OTHER-OLD$SUF 1 $BC1 "$BRA" W1 PENDING "2025-05-01 03:00" "" "")
+P2=$(GET $A "part-claims?branchCode=$BC1&limit=1&before=$(echo "$P1" | cur)")
+P3=$(GET $A "part-claims?branchCode=$BC1&limit=5&before=$(echo "$P2" | cur)")
+[ "$(echo "$P1" | J '[d.rows[0].id,d.rest].join("|")')" = "$K4|2" ] \
+  && [ "$(GET $A "part-claims?branchCode=$BC1&limit=1&offset=1" | J 'd.rows[0].id')" = "$K4" ] \
+  && [ "$(echo "$P2" | J '[d.rows[0].id,d.total,d.rest].join("|")')" = "$K2|4|1" ] \
+  && [ "$(echo "$P3" | J '[d.rows.map(r=>r.id).join(","),d.rest].join("|")')" = "$K3|0" ] \
+  && pass "หน้าถัดไปต่อจากแถวสุดท้ายที่มี: ไม่ซ้ำแถวเดิม (offset ซ้ำ) · ไม่ข้ามแถว · rest บอกที่เหลือจริง" \
+  || fail "แสดงเพิ่ม: P1 $(echo "$P1" | J '[d.rows[0].id,d.rest]') · P2 $(echo "$P2" | J '[d.rows[0].id,d.total,d.rest]') · P3 $(echo "$P3" | J '[d.rows.map(r=>r.id),d.rest]') (K2=$K2 K3=$K3 K4=$K4 K7=$K7)"
+# ช่างส่งสายพานใหม่ → แถวสายพานเดิม (K3) หลุดจากรอบล่าสุดระหว่างแบ่งหน้า — หน้าถัดจาก K2 ต้องว่าง
+# (นับลำดับ offset=2 จะได้ K2 ซ้ำ เพราะแถวใหม่อยู่บนสุดสองแถว)
+K8=$(ins $W1 $BELT SP-BELT สายพานทดสอบ BELT-NEW$SUF 1 $BC1 "$BRA" W1 PENDING "2025-05-02 03:00" "" "")
+[ "$(GET $A "part-claims?branchCode=$BC1&limit=5&before=$(echo "$P2" | cur)" | J '[d.rows.length,d.rest,d.total].join("|")')" = "0|0|4" ] \
+  && [ "$(DB "select count(*) from \"PartClaim\" where \"workOrderId\"=$W1 and \"sparePartId\"=$BELT")" = "2" ] \
+  && pass "แถวที่หลุดรอบล่าสุดระหว่างแบ่งหน้า ไม่ทำให้หยิบแถวผิด (ฐานข้อมูลมีสายพานสองรอบ)" \
+  || fail "หลังสายพานส่งใหม่: $(GET $A "part-claims?branchCode=$BC1&limit=5&before=$(echo "$P2" | cur)" | head -c 200)"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

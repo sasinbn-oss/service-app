@@ -131,7 +131,8 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
       // ขั้น 1 ระหว่างตรวจ — ยังไม่ได้ระบุอะไหล่ (เลือกส่งตรวจเพราะยังระบุไม่ได้) ต้องไม่ติ๊ก ไม่ใช่ "ระบุอะไหล่แล้ว"
       const step1 = await page.evaluate(() => {
         const bar = document.querySelector('[aria-label="ขั้นตอนงาน"]');
-        const s = bar && bar.querySelector('[aria-label="หัวหน้าภาค · ระบุอะไหล่"]');
+        // ขั้นหลักมีชื่อ "ขั้น k ชื่อขั้น · สถานะ" (แยกขั้นได้โดยไม่ต้องเห็นวง) — ขั้น 1 ระหว่างตรวจคือ "รอผลตรวจหน้างาน"
+        const s = bar && bar.querySelector('[aria-label="ขั้น 1 ระบุอะไหล่ · รอผลตรวจหน้างาน"]');
         return s ? s.textContent : null;
       });
       step1 && !step1.includes("ระบุอะไหล่แล้ว") && step1.includes("↻") && step1.includes("รอผลตรวจหน้างาน")
