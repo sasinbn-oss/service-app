@@ -18,6 +18,9 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 22)
 A=$(login A001)
 ME=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
@@ -93,7 +96,7 @@ echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PART
 POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
 POST $A "work-orders/$W3/quote" '{"skip":true,"note":"ทดสอบ — ข้ามเสนอราคา"}' >/dev/null
 [ "$(st $W3)" = "PARTS_CHECKED" ] && pass "มีอะไหล่ → หลังเสนอราคา/รับเงินไปหัวหน้าภาคนัดวัน (ยังไม่เบิก)" || fail "หลังเสนอราคา: $(st $W3)"
-POST $S "work-orders/$W3/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+POST $S "work-orders/$W3/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$W3/confirm-appointment" '{}' >/dev/null
 [ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "ลูกค้าคอนเฟิร์มแล้วไปขั้นเบิก" || fail "หลังคอนเฟิร์ม: $(st $W3)"
 R=$(POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
@@ -112,7 +115,7 @@ R=$(POST $A "work-orders/$W3/close" "{\"result\":\"FIXED\",\"note\":\"ใช้�
 
 W4=$(newwo $COMP); IDS="$IDS $W4"
 POST $S "work-orders/$W4/parts" '{"needsParts":false}' >/dev/null
-POST $S "work-orders/$W4/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+POST $S "work-orders/$W4/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 for r in NAMEPLATE BEFORE AFTER; do
   curl -s -X POST "localhost:4000/api/work-orders/$W4/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
 done
@@ -135,7 +138,7 @@ UPQ QUOTE; POST $A "work-orders/$W5/quote" '{}' >/dev/null
 UPQ RECEIPT; POST $A "work-orders/$W5/payment" '{}' >/dev/null
 [ "$(st $W5)" = "PARTS_CHECKED" ] && DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W5 and action='PAID'" | grep -q "นัดวันเข้า" \
   && pass "แนบใบเสนอราคา → รับเงิน → ไปนัดวันเลย (ฐานข้อมูล)" || fail "หลังรับเงิน: $(st $W5)"
-POST $S "work-orders/$W5/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+POST $S "work-orders/$W5/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$W5/confirm-appointment" '{}' >/dev/null
 [ "$(st $W5)" = "ASSIGNED" ] && pass "ค่าบริการล้วน คอนเฟิร์มแล้วข้ามขั้นเบิก ไปปล่อยงาน" || fail "หลังคอนเฟิร์ม: $(st $W5)"
 

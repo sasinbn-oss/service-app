@@ -5,6 +5,7 @@
 const { chromium } = require("playwright");
 const { confirmDuplicate } = require("./dup");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const path = require("path");
 const DIR = __dirname;
 const PHOTO = path.join(DIR, "..", "site-photo.png");
@@ -109,7 +110,7 @@ const login = async (code) =>
     const S = await login("S001");
     const team = sql(`select zone from "Branch" where code='C0006'`);
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: false });
-    await call(S, "POST", `/work-orders/${id}/assign`, { team, scheduledAt: "2026-11-10" });
+    await call(S, "POST", `/work-orders/${id}/assign`, { team, scheduledAt: visitDay(12) });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(S, "POST", `/work-orders/${id}/dispatch`, {});
     if (sql(`select status from "WorkOrder" where id=${id}`) !== "IN_PROGRESS") throw new Error("เตรียมใบงานไม่ถึงขั้นเข้างาน");

@@ -14,6 +14,9 @@ POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: 
 CODE() { curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 33)
 A=$(login A001); S=$(login S001); T=$(login T001)
 [ "$(DB "select region from \"User\" where \"employeeCode\"='S001'")|$(DB "select region from \"Branch\" where code='C0006'")" = "ใต้|ใต้" ] \
   || { echo "FAIL ข้อมูลตั้งต้นไม่ตรง (S001 ภาคใต้ · C0006 ภาคใต้)"; exit 1; }
@@ -69,7 +72,7 @@ echo
 echo "═══ แอดมินตอบ → หัวหน้าภาครับทราบ"
 POST $S "work-orders/$W/admin-review" '{"reason":"CONTACT","note":"เบอร์ร้านโทรไม่ติด ขอเบอร์ใหม่"}' >/dev/null
 # ใบเดินไปขั้นของแอดมิน (รอคอนเฟิร์มลูกค้า) — คำตอบต้องยังเข้ากล่องหัวหน้าภาค
-POST $S "work-orders/$W/assign" '{"team":"กระบี่","scheduledAt":"2026-12-01"}' >/dev/null
+POST $S "work-orders/$W/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 [ "$(CODE $S "work-orders/$W/admin-review/reply" '{"reply":"หัวหน้าภาคลองตอบเอง"}')|$(CODE $A "work-orders/$W/admin-review/reply" '{"reply":"สั้น"}')" = "403|400" ] \
   && pass "หัวหน้าภาคตอบเองไม่ได้ (403) · แอดมินตอบสั้นเกิน (400)" || fail "สิทธิ์ตอบ"
 R=$(POST $A "work-orders/$W/admin-review/reply" '{"reply":"โทรเช็คแล้ว แก้เบอร์ร้านในใบแล้ว"}')

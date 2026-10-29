@@ -20,6 +20,7 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
   // ล้างของค้างจากรอบที่ถูกตัดกลางทางก่อน ไม่งั้นรหัสพนักงานซ้ำแล้วทุกรอบหลังจากนั้นพัง
   const zw = `('zw.area','zw.sup','zw.maid','zw.maid2')`;
   const cleanZw = () => sql(`delete from "ViewAsLog" where "targetUserId" in (select id from "User" where "employeeCode" in ${zw});
+       delete from "Branch" where code='CZW01';
        update "User" set "areaId"=null where "employeeCode" in ${zw}; delete from "User" where "employeeCode" in ${zw}`);
   cleanZw();
   sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
@@ -32,7 +33,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
        insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid'), id from "Branch" where code='C0006';
        insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
          select 'zw.maid2', 'Maid สาขาอื่นดูแทน', 'COCO_MAID', "passwordHash", false from "User" where "employeeCode"='T001';
-       insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid2'), id from "Branch" where code='C0001';`);
+       insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid2'), id from "Branch" where code='C0001';
+       insert into "Branch"(code,name,"cocoSupervisorId") values ('CZW01','สาขาทดลองดูแทน',(select id from "User" where "employeeCode"='zw.sup'));`);
   const maidId = sql(`select id from "User" where "employeeCode"='zw.maid'`);
   const before = Number(sql(`select coalesce(max(id),0) from "ViewAsLog"`));
   try {
@@ -75,6 +77,14 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     await page.waitForTimeout(400);
     (await vis("Area Area ทดลองดูแทน").count()) && (await vis("Supervisor ทดลองดูแทน").count())
       ? pass("Supervisor (COCO) จัดกลุ่มตาม Area ที่สังกัด") : fail("ไม่เห็นกลุ่ม Area ของ Supervisor (COCO)");
+    // ร้านโทรมาบอกรหัสสาขา — ค้นแล้วเจอคนดูแล และบอกว่าเจอเพราะสาขาไหน (เจ้าของงานขอ ต.ค. 69)
+    await label("ค้นหาผู้ใช้ที่จะดู").fill("czw01");
+    await page.waitForTimeout(600);
+    const supRows = await page.locator('[aria-label^="เลือก "]').locator("visible=true").count();
+    (await vis("zw.sup · ดูแล CZW01 สาขาทดลองดูแทน", false).count()) && supRows === 1
+      ? pass("แท็บ Supervisor (COCO) ค้นด้วยรหัสสาขาที่ดูแลเจอ (คนอื่นถูกกรองออก) และบอกสาขาที่ตรง")
+      : fail(`ค้น Supervisor ด้วยรหัสสาขา: แถว=${supRows}`);
+    await label("ค้นหาผู้ใช้ที่จะดู").fill("");
     await label("ตำแหน่ง Maid (COCO)").click();
     await label("ค้นหาผู้ใช้ที่จะดู").fill("c0006");
     await page.waitForTimeout(600);

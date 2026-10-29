@@ -241,6 +241,7 @@ function managedUser<T extends { maidBranches: { branch: { code: string; name: s
  *
  * นับ/จัดกลุ่มด้วยกฎเดียวกับผังฝั่ง Area (routes/teams.ts) — Area ที่ถูกลบ/เปลี่ยนตำแหน่งแล้ว = ไม่มี Area ·
  * นับเฉพาะ Supervisor (COCO) และสาขา COCO ที่เปิดอยู่ ไม่งั้นแอดมินคุยกับคนเดียวกันแล้วสองหน้าจอบอกคนละอย่าง
+ * สาขาที่ Supervisor (COCO) ดูแลส่งเป็นรายการ ไม่ใช่แค่จำนวน — ร้านโทรมาบอกรหัสสาขา แอดมินค้นหาคนดูแลจากรหัสได้ (เจ้าของงานขอ ต.ค. 69)
  */
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
@@ -248,12 +249,8 @@ router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
     select: {
       ...MANAGED_USER_SELECT,
       area: { select: { id: true, name: true, role: true, deletedAt: true } },
-      _count: {
-        select: {
-          areaMembers: { where: { deletedAt: null, role: "COCO_SUPERVISOR" } },
-          cocoBranches: { where: { AND: [COCO_BRANCH, { cancelledAt: null }] } },
-        },
-      },
+      cocoBranches: { where: { AND: [COCO_BRANCH, { cancelledAt: null }] }, select: { code: true, name: true }, orderBy: { code: "asc" } },
+      _count: { select: { areaMembers: { where: { deletedAt: null, role: "COCO_SUPERVISOR" } } } },
     },
     orderBy: [{ role: "asc" }, { name: "asc" }],
   });

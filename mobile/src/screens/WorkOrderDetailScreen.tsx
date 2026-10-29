@@ -3634,7 +3634,7 @@ function StageModal({
   /**
    * วันนัดเลือกได้ตั้งแต่วันนี้ (เจ้าของงานกำหนด ต.ค. 69 — แทนกฎ "ของคลังอื่นนัดล่วงหน้า 7 วัน" ที่ยกเลิก) · เซิร์ฟเวอร์กันซ้ำ
    * ปฏิทินขีดฆ่าวันที่ผ่านมาแล้ว แต่วันที่กรอกค้างมาก่อน (เปิดฟอร์มทิ้งไว้ข้ามวัน) ยังเป็นอดีตได้ — กันปุ่มไว้ด้วย
-   * ลูกค้าขอเลื่อน: เช็คเฉพาะเมื่อเปลี่ยนวัน (เปลี่ยนแค่เวลาของวันเดิมไม่ใช่การนัดใหม่)
+   * ลูกค้าขอเลื่อน = นัดใหม่ เช็คเสมอ (ร้านปิด/ช่างส่งกลับ ฟอร์มเปิดมาพร้อมวันเดิมที่ผ่านไปแล้ว) · "ลูกค้าคอนเฟิร์มวันนี้" ไม่เช็ค
    */
   const minVisit = todayBkk();
   const visitPast =
@@ -3642,9 +3642,7 @@ function StageModal({
     visit < minVisit &&
     (order.status === "PARTS_CHECKED" ||
       (order.status === "NEW" && (inspectFirst || noPartsAssign)) ||
-      ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
-        confirmChoice === "MOVE" &&
-        visit !== (order.scheduledAt ?? "").slice(0, 10)));
+      ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") && confirmChoice === "MOVE"));
   const pastWarn = visitPast ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null;
 
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
@@ -5190,7 +5188,7 @@ function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null;
 /**
  * อะไหล่พร้อมแค่ไหน — กล่องบนฟอร์มนัดวันเข้า (นัดลูกค้าก่อนเบิก · แบบที่เจ้าของงานตกลง ต.ค. 69)
  * หัวหน้าภาคเห็นผลเช็คของแอดมินรายตัว ไม่ต้องโทรถาม · ของครบเสมอ (ของหมดค้างที่แอดมินจนของเข้า)
- * ตัวที่อยู่คลังอื่นคือตัวที่ทำให้ต้องนัดล่วงหน้า และหัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน
+ * ตัวที่อยู่คลังอื่นคือตัวที่หัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน (เคยบังคับนัดล่วงหน้า 7 วัน — เจ้าของงานยกเลิก ต.ค. 69)
  */
 function PartsReady({ order, adminWarehouse }: { order: WorkOrder; adminWarehouse: string }) {
   if (order.needsParts !== true || order.waitingParts.length === 0) return null;

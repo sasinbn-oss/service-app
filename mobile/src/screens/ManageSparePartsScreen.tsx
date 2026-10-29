@@ -16,8 +16,9 @@ import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
+import SparePartImportModal, { Batch, ImportReportModal } from "../components/SparePartImportModal";
 
-const emptyForm = { partCode: "", name: "", brand: "", category: "", description: "" };
+const emptyForm = { partCode: "", name: "", brand: "", category: "", partNo: "", description: "" };
 type Form = typeof emptyForm;
 type PickedImage = { uri: string; name: string; type: string };
 
@@ -87,6 +88,16 @@ export default function ManageSparePartsScreen() {
   // null = ป๊อปอัพปิด · "new" = เพิ่มใหม่ · อะไหล่ = แก้ไขตัวนั้น
   const [editing, setEditing] = useState<SparePart | "new" | null>(null);
   const [uploadingId, setUploadingId] = useState<number | null>(null);
+  // อัปเดตจากไฟล์ Excel (เจ้าของงานขอ ต.ค. 69) — รอบล่าสุดโชว์เป็นแถบ กดดูรายงานย้อนหลังได้
+  const [importing, setImporting] = useState(false);
+  const [latest, setLatest] = useState<Batch | null>(null);
+  const [report, setReport] = useState<Batch | null>(null);
+  const loadLatest = useCallback(() => {
+    api
+      .get<Batch | null>("/spare-parts/imports/latest", { loadingText: false })
+      .then((res) => setLatest(res.data))
+      .catch(() => undefined);
+  }, []);
 
   const loadParts = useCallback(() => {
     // ไม่เปิดตัวโหลดซ้ำตอนกลับมาที่หน้านี้ ข้อมูลเดิมแสดงไว้ระหว่างอัปเดตเบื้องหลัง (ครั้งแรกเริ่มเป็น true อยู่แล้ว)
@@ -100,7 +111,8 @@ export default function ManageSparePartsScreen() {
   useFocusEffect(
     useCallback(() => {
       loadParts();
-    }, [loadParts])
+      loadLatest();
+    }, [loadParts, loadLatest])
   );
   useRefreshHandler(loadParts);
 
@@ -116,7 +128,7 @@ export default function ManageSparePartsScreen() {
       (p) =>
         (brand === ALL || p.brand?.trim() === brand) &&
         (!needle ||
-          [p.partCode, p.name, p.brand, p.category].some((v) => v?.toLowerCase().includes(needle)))
+          [p.partCode, p.name, p.brand, p.category, p.partNo].some((v) => v?.toLowerCase().includes(needle)))
     );
   }, [parts, q, brand]);
 
@@ -165,11 +177,31 @@ export default function ManageSparePartsScreen() {
           </Text>
         </View>
         <View style={{ flex: 1 }} />
+        <TouchableOpacity style={styles.importButton} onPress={() => setImporting(true)} activeOpacity={0.8} accessibilityLabel="อัปเดตจากไฟล์ Excel">
+          <Ionicons name="cloud-upload-outline" size={18} color={colors.navy} />
+          <Text style={styles.importButtonText}>อัปเดตจากไฟล์ Excel</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.addButton} onPress={() => setEditing("new")} activeOpacity={0.8}>
           <Ionicons name="add" size={18} color="#fff" />
           <Text style={styles.addButtonText}>เพิ่มอะไหล่ใหม่</Text>
         </TouchableOpacity>
       </View>
+
+      {latest ? (
+        <View style={styles.lastImport}>
+          <Ionicons name="time-outline" size={18} color={colors.primaryInk} />
+          <Text style={styles.lastImportText}>
+            อัปเดตจากไฟล์ล่าสุด{" "}
+            <Text style={{ fontWeight: "800" }}>
+              {new Date(latest.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </Text>
+            {latest.byName ? ` โดย ${latest.byName}` : ""} · เพิ่ม {latest.totals.created} · แก้ไข {latest.totals.updated} · รูป {latest.totals.images}
+          </Text>
+          <TouchableOpacity onPress={() => setReport(latest)} accessibilityLabel="ดูรายละเอียดการอัปเดตล่าสุด">
+            <Text style={styles.action}>ดูรายละเอียด</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <View style={styles.search}>
         <Ionicons name="search" size={18} color={colors.textFaint} />
@@ -177,7 +209,7 @@ export default function ManageSparePartsScreen() {
           style={styles.searchInput}
           value={query}
           onChangeText={setQuery}
-          placeholder="ค้นรหัสสินค้า ชื่ออะไหล่ ยี่ห้อ หรือหมวดหมู่"
+          placeholder="ค้นรหัสสินค้า ชื่ออะไหล่ Part No. ยี่ห้อ หรือหมวดหมู่"
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
           autoCorrect={false}
@@ -240,6 +272,8 @@ export default function ManageSparePartsScreen() {
                     <Hl text={item.partCode} q={q} style={styles.meta} />
                     {item.brand ? " · " : ""}
                     {item.brand ? <Hl text={item.brand} q={q} style={styles.meta} /> : null}
+                    {item.partNo ? " · Part No. " : ""}
+                    {item.partNo ? <Hl text={item.partNo} q={q} style={styles.meta} /> : null}
                   </Text>
                   <View style={styles.actionRow}>
                     <TouchableOpacity onPress={() => handlePickImage(item)} disabled={uploadingId === item.id}>
@@ -262,6 +296,20 @@ export default function ManageSparePartsScreen() {
           }}
         />
       )}
+
+      {importing ? (
+        <SparePartImportModal
+          onClose={() => {
+            setImporting(false);
+            loadLatest();
+          }}
+          onDone={() => {
+            loadParts();
+            loadLatest();
+          }}
+        />
+      ) : null}
+      {report ? <ImportReportModal batch={report} onClose={() => setReport(null)} /> : null}
 
       {editing ? (
         <PartModal
@@ -293,6 +341,7 @@ function PartModal({
           name: part.name,
           brand: part.brand ?? "",
           category: part.category ?? "",
+          partNo: part.partNo ?? "",
           description: part.description ?? "",
         }
       : emptyForm
@@ -311,6 +360,8 @@ function PartModal({
       name: form.name.trim(),
       brand: form.brand.trim() || undefined,
       category: form.category.trim() || undefined,
+      // ล้างช่องแล้วบันทึก = ลบ Part No. (ส่ง "" ไม่ใช่ไม่ส่ง ไม่งั้นค่าเดิมค้าง)
+      partNo: part ? form.partNo.trim() : form.partNo.trim() || undefined,
       description: form.description.trim() || undefined,
     };
     let saved: SparePart;
@@ -402,6 +453,18 @@ function PartModal({
         accessibilityLabel="ชื่ออะไหล่"
       />
       <Text style={styles.label}>
+        Part No. <Text style={styles.optional}>(ไม่บังคับ · หลายเลขคั่นด้วยจุลภาค)</Text>
+      </Text>
+      <TextInput
+        style={styles.input}
+        value={form.partNo}
+        onChangeText={set("partNo")}
+        autoCapitalize="characters"
+        placeholder="เช่น W11129524, W10731758"
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel="Part No."
+      />
+      <Text style={styles.label}>
         หมวดหมู่ <Text style={styles.optional}>(ไม่บังคับ)</Text>
       </Text>
       <TextInput
@@ -459,6 +522,30 @@ const styles = StyleSheet.create({
   pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   countPill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
   countPillText: { fontSize: 13, lineHeight: 24, fontWeight: "800", color: colors.primaryInk },
+  importButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderWidth: 1.5,
+    borderColor: colors.navy,
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    minHeight: 44,
+    paddingHorizontal: 16,
+  },
+  importButtonText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.navy },
+  lastImport: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  lastImportText: { flexShrink: 1, fontSize: 13.5, lineHeight: 21, color: colors.primaryInk },
   addButton: {
     flexDirection: "row",
     alignItems: "center",

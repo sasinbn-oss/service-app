@@ -5,6 +5,7 @@
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
 const API = "http://localhost:4000/api";
 const call = async (token, method, path, body) => {
@@ -47,7 +48,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     const D = await mk(2); // รอจ่ายงาน ทีมปกติ
     await call(S, "POST", `work-orders/${D.id}/parts`, { needsParts: false });
     const O = await mk(3); // ทีม outsource เข้างานอยู่
-    await call(S, "POST", `work-orders/${O.id}/parts`, { needsParts: false, assign: { team: os, scheduledAt: "2026-12-03" } });
+    await call(S, "POST", `work-orders/${O.id}/parts`, { needsParts: false, assign: { team: os, scheduledAt: visitDay(35) } });
     await call(A, "POST", `work-orders/${O.id}/confirm-appointment`, {});
     await call(S, "POST", `work-orders/${O.id}/dispatch`, {});
     // ย้อนเวลาเข้าขั้นไป 3 วัน — ค้างเกินกำหนด

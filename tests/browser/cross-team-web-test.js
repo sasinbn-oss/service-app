@@ -5,6 +5,7 @@
 //   · ช่างทีมประจำสาขาและทีมที่รับเห็นปุ่มปิดงานทั้งคู่
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const path = require("path");
 const DIR = __dirname;
 const API = "http://localhost:4000/api";
@@ -64,8 +65,9 @@ const login = async (code, password = "test1234") =>
     id = wo.orders ? wo.orders[0].id : wo.id;
     const code = sql(`select code from "WorkOrder" where id=${id}`);
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: false });
-    // วันเข้างานเติมให้ฟอร์ม — เรื่องที่ทดสอบคือทีม ไม่ใช่ปฏิทิน
-    sql(`update "WorkOrder" set "scheduledAt"='2026-12-01' where id=${id}`);
+    // วันเข้างานเติมให้ฟอร์ม — เรื่องที่ทดสอบคือทีม ไม่ใช่ปฏิทิน · ต้องไม่ใช่วันที่ผ่านมาแล้ว
+    // (วันย้อนหลังฟอร์มกันปุ่มยืนยัน และเซิร์ฟเวอร์ตอบ 400 "วันนัดย้อนหลังไม่ได้")
+    sql(`update "WorkOrder" set "scheduledAt"='${visitDay(33)}' where id=${id}`);
 
     const session = async (user, password = "test1234") => {
       const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });

@@ -13,6 +13,8 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 REP() { curl -s "localhost:4000/api/work-orders/reports/confirmed?date=$2${3:+&by=$3}" -H "$(H $1)"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
 A=$(login A001); T=$(login T001)
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 BR=C0006
@@ -28,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 TODAY=$(TZ=Asia/Bangkok date +%F)
 YDAY=$(TZ=Asia/Bangkok date -d yesterday +%F)
-VISIT=2026-12-03
+VISIT=$(day 35)
 newwo() { POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W3\",\"symptom\":\"$1\"}]}" | J 'd.orders?d.orders[0].id:d.id'; }
 confirmed() { # $1 id — จ่ายงาน+วัน → แอดมินคอนเฟิร์ม
   POST $S "work-orders/$1/parts" '{"needsParts":false}' >/dev/null

@@ -87,7 +87,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await page.waitForTimeout(1200);
     await vis("ใช้อะไหล่").first().click();
     await page.waitForTimeout(500);
-    await page.getByPlaceholder("ค้นหารหัสหรือชื่ออะไหล่").locator("visible=true").first().fill(part[0]);
+    await page.getByPlaceholder("ค้นหารหัส ชื่อ หรือ Part No.").locator("visible=true").first().fill(part[0]);
     await page.waitForTimeout(1500);
     await vis(part[0]).last().click();
     await page.waitForTimeout(600);

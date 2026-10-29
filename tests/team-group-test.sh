@@ -12,6 +12,9 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 PATCH() { curl -s -X PATCH "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 12)
 SUF=$RANDOM
 NS=$(printf "97%05d" $SUF); NT=$(printf "96%05d" $SUF)
 G1="กลุ่มทดสอบกระบี่$SUF"; G2="กลุ่มทดสอบกรุงเทพ$SUF"; GA="กลุ่มทดสอบทุกทีม$SUF"
@@ -53,7 +56,7 @@ echo "═══ ใบงานของทีมกระบี่"
 WO=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","model":"Haier","symptom":"ทดสอบทีมรวม"}]}')
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); IDS="$IDS $ID"
 POST $S "work-orders/$ID/parts" '{"needsParts":false}' >/dev/null
-POST $S "work-orders/$ID/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}' >/dev/null
+POST $S "work-orders/$ID/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(DB "select \"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "กระบี่" ] && pass "DB: ใบงานจ่ายให้ทีมกระบี่ (ทีมช่างจริง)" || fail "จ่ายงานไม่ได้"

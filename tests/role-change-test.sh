@@ -13,6 +13,9 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}"; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 PATCH() { curl -s -X PATCH "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 12)
 SUF=$RANDOM
 IDS=""
 cleanup() {
@@ -37,12 +40,12 @@ UID_=$(DB "select id from \"User\" where \"employeeCode\"='ZR$SUF'")
 
 echo "═══ ช่าง → หัวหน้าภาค (โทเคนเดิม)"
 W1=$(newOrder); IDS="$IDS $W1"
-R=$(POST $T "work-orders/$W1/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}')
+R=$(POST $T "work-orders/$W1/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}")
 echo "$R" | grep -q "ไม่ใช่ของคุณ" && pass "ตอนเป็นช่าง จ่ายงานไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R | head -c 120)"
 
 PATCH $A "auth/users/$UID_" '{"role":"SUPERVISOR","supervisedTeams":["กระบี่"]}' >/dev/null
 [ "$(DB "select role from \"User\" where id=$UID_")" = "SUPERVISOR" ] && pass "DB: ตั้งเป็นหัวหน้าภาคแล้ว" || fail "DB: role ไม่เปลี่ยน"
-R=$(POST $T "work-orders/$W1/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}')
+R=$(POST $T "work-orders/$W1/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}")
 [ "$(DB "select status||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$W1")" = "AWAITING_CONFIRM|กระบี่" ] \
   && pass "โทเคนเดิมจ่ายงานได้ทันทีหลังเลื่อนเป็นหัวหน้าภาค (DB: AWAITING_CONFIRM กระบี่)" || fail "ยังจ่ายไม่ได้: $(echo $R | head -c 160)"
 
@@ -52,7 +55,7 @@ echo "═══ หัวหน้าภาค → ช่าง (โทเคน
 TS=$(login "ZR$SUF" test12345 | J 'd.token')
 W2=$(newOrder); IDS="$IDS $W2"
 PATCH $A "auth/users/$UID_" '{"role":"EMPLOYEE"}' >/dev/null
-R=$(POST $TS "work-orders/$W2/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}')
+R=$(POST $TS "work-orders/$W2/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}")
 [ "$(DB "select status from \"WorkOrder\" where id=$W2")" = "PARTS_CHECKED" ] && echo "$R" | grep -q "ไม่ใช่ของคุณ" \
   && pass "ถอดสิทธิ์แล้วโทเคนเดิมจ่ายงานไม่ได้ (DB: ยังรอจ่ายงาน)" || fail "ถอดสิทธิ์แล้วยังจ่ายได้: $(echo $R | head -c 120)"
 R=$(curl -s localhost:4000/api/auth/users -H "$(H $TS)")

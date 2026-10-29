@@ -17,6 +17,15 @@ async function login(code) {
   return (await res.json()).token;
 }
 
+/**
+ * วันนัด n วันจากวันนี้ (เวลาไทย) — เซิร์ฟเวอร์ไม่รับวันนัดย้อนหลัง (pastVisitText · ต.ค. 69)
+ * วันตายตัวอย่าง "2026-11-10" ใช้ได้แค่จนถึงวันนั้น แล้วเทสต์พังทั้งที่แอปไม่ได้ผิด
+ * คิดแบบเดียวกับ todayBkk ของแอป — ปฏิทินขีดฆ่าวันที่ก่อน "วันนี้" ตัวเดียวกันนี้
+ */
+function visitDay(n = 0) {
+  return new Date(Date.now() + 7 * 3600_000 + n * 86_400_000).toISOString().slice(0, 10);
+}
+
 async function call(token, method, url, body) {
   const res = await fetch(API + url, {
     method,
@@ -53,7 +62,7 @@ async function setup() {
   }
   /**
    * แอดมินเช็คอะไหล่ว่ามีครบทุกตัวที่ยังไม่เบิก (นัดลูกค้าก่อนเบิก ต.ค. 69 — ทุกใบที่ใช้อะไหล่ผ่านขั้นนี้)
-   * คลัง 94 = นัดได้ทันที · ส่งคลังอื่นมาได้ถ้าเทสต์อยากให้ต้องโอน (นัดล่วงหน้า 7 วัน)
+   * คลัง 94 = ไม่ต้องโอน · ส่งคลังอื่นมาได้ถ้าเทสต์อยากให้ต้องโอน (หัวหน้าภาคเบิก/โอนก่อนปล่อยงาน)
    */
   async function source(id, warehouse = "คลังลาดพร้าว 94") {
     const d = await call(A, "GET", `/work-orders/${id}`);
@@ -63,7 +72,7 @@ async function setup() {
     return call(A, "POST", `/work-orders/${id}/parts-sourcing`, { results });
   }
   /** หัวหน้าภาคนัดวัน (ทีมประจำสาขา) → แอดมินคอนเฟิร์มลูกค้า — ใบที่ยังไม่เบิกไปถึงขั้นเบิก ใบที่เบิกครบไปปล่อยงาน */
-  async function schedule(id, scheduledAt = "2026-12-01") {
+  async function schedule(id, scheduledAt = visitDay(30)) {
     const d = await call(A, "GET", `/work-orders/${id}`);
     await call(S, "POST", `/work-orders/${id}/assign`, { team: d.suggestedTeam, scheduledAt });
     return call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
@@ -75,4 +84,4 @@ async function setup() {
   return { A, sql, call, login, part, workOrder, source, schedule, supervisor: () => S, cleanup };
 }
 
-module.exports = { setup };
+module.exports = { setup, visitDay };

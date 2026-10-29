@@ -14,6 +14,9 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 ST() { DB "select status from \"WorkOrder\" where id=$1"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+D1=$(day 14); D2=$(day 16)  # วันนัดแรก · วันที่ลูกค้าขอเลื่อนไป (ต้องต่างจากวันแรก ถึงจะนับเป็นการเปลี่ยนวัน)
 MIG="$(cd "$(dirname "$0")/.." && pwd)/backend/prisma/migrations/20261130090000_schedule_first/migration.sql"
 
 A=$(login A001)
@@ -82,27 +85,27 @@ echo "═══ ใบที่เบิกไปแล้วก่อนเป�
 # C: เบิกตัวที่เหลือ — ยังไม่ได้นัด จึงไปหัวหน้าภาคนัดวัน ไม่ใช่ปล่อยงาน
 POST $A "work-orders/$WC/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-NEW-C\"}]}" >/dev/null
 [ "$(ST $WC)" = "PARTS_CHECKED" ] && pass "เบิกครบแล้วแต่ยังไม่ได้นัด → หัวหน้าภาคนัดวันเข้า" || fail "C หลังเบิก: $(ST $WC)"
-POST $S "work-orders/$WC/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-12\"}" >/dev/null
+POST $S "work-orders/$WC/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
 POST $A "work-orders/$WC/confirm-appointment" '{}' >/dev/null
 [ "$(ST $WC)" = "ASSIGNED" ] && pass "คอนเฟิร์มแล้วไปปล่อยงานเลย — เบิกไว้ครบแล้ว ไม่ต้องเบิกซ้ำ" || fail "C หลังคอนเฟิร์ม: $(ST $WC)"
 [ "$(DB "select string_agg(\"requisitionNo\",',' order by \"requisitionNo\") from \"WorkOrderPart\" where \"workOrderId\"=$WC")" = "RQ-NEW-C,RQ-OLD-C" ] \
   && pass "เลขใบเบิกเดิมกับรอบใหม่อยู่ครบ" || fail "เลขใบเบิก C"
 # E: เบิกครบรอจ่ายงาน (ชื่อขั้นใหม่ = นัดวันเข้า)
 curl -s "localhost:4000/api/work-orders/$WE" -H "$(H $A)" | J 'd.statusLabel' | grep -q "^หัวหน้าภาค · นัดวันเข้า" && pass "ใบเดิมที่รอจ่ายงาน ขึ้นชื่อขั้นใหม่ \"นัดวันเข้า\"" || fail "ชื่อขั้น E"
-POST $S "work-orders/$WE/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-12\"}" >/dev/null
+POST $S "work-orders/$WE/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
 POST $A "work-orders/$WE/confirm-appointment" '{}' >/dev/null
 [ "$(ST $WE)" = "ASSIGNED" ] && pass "เบิกครบก่อนเปลี่ยนสายงาน → คอนเฟิร์มแล้วข้ามขั้นเบิก" || fail "E หลังคอนเฟิร์ม: $(ST $WE)"
 # F: หัวหน้าภาคเบิกคลังอื่นเสร็จ — ยังไม่ได้นัด
 POST $S "work-orders/$WF/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-PK-1\"},{\"sparePartId\":$BELT,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-PK-2\"}]}" >/dev/null
 [ "$(ST $WF)" = "PARTS_CHECKED" ] && pass "เบิกคลังอื่นเสร็จ ยังไม่ได้นัด → หัวหน้าภาคนัดวันเข้า" || fail "F หลังเบิก: $(ST $WF)"
-R=$(POST $S "work-orders/$WF/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(node -e 'console.log(new Date(Date.now()+7*3600e3+2*86400e3).toISOString().slice(0,10))')\"}")
-[ "$(ST $WF)" = "AWAITING_CONFIRM" ] && pass "เบิกมาแล้ว ไม่ต้องรอ 7 วัน นัดใกล้ได้" || fail "F นัดใกล้ไม่ได้: $(echo $R | head -c 150)"
+R=$(POST $S "work-orders/$WF/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 2)\"}")
+[ "$(ST $WF)" = "AWAITING_CONFIRM" ] && pass "เบิกคลังอื่นเสร็จแล้ว นัดวันเข้าได้ → รอคอนเฟิร์มลูกค้า" || fail "F นัดไม่ผ่าน: $(echo $R | head -c 150)"
 
 echo
 echo "═══ ทีมไม่ว่างวันที่ลูกค้าขอ → แอดมินคอนเฟิร์มใหม่ → ปล่อยงาน (ไม่กลับไปเบิก)"
 POST $S "work-orders/$WE/decline-new-date" '{"reason":"ทีมติดงานด่วน"}' >/dev/null
 [ "$(ST $WE)" = "AWAITING_CONFIRM" ] && pass "หัวหน้าภาคตีกลับให้แอดมินคอนเฟิร์มใหม่" || fail "decline: $(ST $WE)"
-POST $A "work-orders/$WE/confirm-appointment" '{"scheduledAt":"2026-11-14"}' >/dev/null
+POST $A "work-orders/$WE/confirm-appointment" "{\"scheduledAt\":\"$D2\"}" >/dev/null
 [ "$(ST $WE)" = "ASSIGNED" ] && pass "คอนเฟิร์มวันใหม่ → ปล่อยงาน ไม่วนไปขั้นเบิก" || fail "หลังคอนเฟิร์มใหม่: $(ST $WE)"
 
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

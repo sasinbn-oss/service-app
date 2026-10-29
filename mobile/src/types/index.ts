@@ -112,6 +112,8 @@ export interface SparePart {
   category?: string | null;
   description?: string | null;
   imageUrl?: string | null;
+  /** Part No. ของผู้ผลิต (จากไฟล์อะไหล่ Huebsch/Maytag) — หลายเลขคั่นด้วย ", " */
+  partNo?: string | null;
   createdAt: string;
   updatedAt: string;
 }

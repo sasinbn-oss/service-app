@@ -590,6 +590,9 @@ model SparePart {
   // Either a full external URL, or a path served by this API
   // ("/api/spare-parts/:id/image") when a photo was uploaded.
   imageUrl       String?
+  // Part No. ของผู้ผลิต (คอลัมน์ "Part No." ในไฟล์อะไหล่ Huebsch/Maytag — เจ้าของงานขอ ต.ค. 69)
+  // ช่างค้นด้วยเลขที่พิมพ์บนตัวอะไหล่ (W11327190) ได้ · หลายเลขคั่นด้วย ", "
+  partNo         String?
   // อะไหล่นอกสโตร์ (ไม่มี SKU) — หัวหน้าภาค/ช่างพิมพ์ชื่อเอง (เจ้าของงานขอ ต.ค. 69)
   // เก็บเป็นแถวในตารางนี้ให้ทุกขั้นของใบงาน (เช็ค แยกใบรออะไหล่ ปิดงาน) ใช้ทางเดียวกับของในสโตร์
   // partCode = "[นอกสโตร์] ชื่อ" ชื่อเดียวกันคือแถวเดียวกัน · ไม่ขึ้นในหน้ารายการอะไหล่/ค้นหา
@@ -1193,4 +1196,23 @@ model CocoMaidBranch {
 
   @@unique([userId, branchId])
   @@index([branchId])
+}
+
+// อัปเดตข้อมูลอะไหล่จากไฟล์ Excel ในแอป (เจ้าของงานขอ ต.ค. 69) — 1 แถวต่อไฟล์ที่อัปเดต
+// เก็บรายงานไว้เปิดดูย้อนหลัง/ดาวน์โหลดได้ ("อัปเดตจากไฟล์ล่าสุด … ดูรายละเอียด") ไม่ต้องจำเองว่าเปลี่ยนอะไรไป
+// batchId = รอบที่กดอัปเดตพร้อมกันหลายไฟล์ (แอปส่งไฟล์ทีละไฟล์ เพราะไฟล์ที่มีรูปในเซลล์ใหญ่ได้หลายสิบ MB)
+model SparePartImport {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  batchId   String
+  byUserId  Int?
+  byName    String?
+  fileName  String
+  // จำนวนต่อผล: created · updated · images · same · skipped · notInFile
+  summary   Json
+  // รายการที่เปลี่ยน/ข้าม (ไม่มีรูป) — ใช้ทำหน้ารายงานและไฟล์ Excel
+  details   Json
+
+  @@index([batchId])
+  @@index([createdAt])
 }

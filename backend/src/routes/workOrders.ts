@@ -4491,10 +4491,6 @@ async function teamNote(id: number, team: string, verb: string) {
 }
 
 /**
- * ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
- * ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
- */
-/**
  * วันนัดย้อนหลังไม่ได้ — นัดได้ตั้งแต่วันนี้ (เวลาไทย) เป็นต้นไป (เจ้าของงานกำหนด ต.ค. 69 แทนกฎ "ของอยู่คลังอื่นนัดล่วงหน้า 7 วัน"
  * ที่ยกเลิกไป — หัวหน้าภาคกะเวลาโอนเอง) · ใช้กับทุกที่ที่เลือกวันนัด: จ่ายงาน · จ่ายพร้อมระบุอะไหล่ · ส่งตรวจหน้างาน · ลูกค้าขอเลื่อน
  */
@@ -4503,6 +4499,10 @@ function pastVisitText(date: string) {
   return date < today ? `วันนัดย้อนหลังไม่ได้ — นัดได้ตั้งแต่วันนี้ (${visitText(today, null)}) เป็นต้นไป` : null;
 }
 
+/**
+ * ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
+ * ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
+ */
 async function knownCmTeam(team: string) {
   // ทีม outsource ไม่มีสาขาประจำ แต่จ่ายงานให้ได้ (เจ้าของงานเพิ่ม ต.ค. 69)
   if ((await freshOutsource()).has(team)) return true;
@@ -4606,8 +4606,9 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   const newTime = parsed.data.scheduledTime !== undefined ? parsed.data.scheduledTime : before.scheduledTime;
   if (!newDate) return res.status(400).json({ error: "ต้องระบุวันเข้างาน" });
   const moved = newDate !== oldDate || (newTime ?? null) !== (before.scheduledTime ?? null);
-  // เปลี่ยนวันเท่านั้นที่เช็ค — คอนเฟิร์มวันเดิมที่เลยมาแล้ว (โทรช้า) ไม่ใช่การนัดใหม่
-  const pastMove = newDate !== oldDate ? pastVisitText(newDate) : null;
+  // เปลี่ยนวันหรือเวลา = นัดใหม่ ต้องไม่ย้อนหลัง · คอนเฟิร์มนัดเดิมเฉย ๆ (ไม่เปลี่ยนอะไร) ที่เลยมาแล้วเพราะโทรช้าได้
+  // เคยเช็คแค่ตอนเปลี่ยนวัน — ร้านปิด/ช่างส่งกลับ ใบกลับมาพร้อมวันเดิมที่ผ่านไปแล้ว แก้แค่เวลาก็นัดเมื่อวานได้
+  const pastMove = moved ? pastVisitText(newDate) : null;
   if (pastMove) return res.status(400).json({ error: pastMove });
 
   const data = {

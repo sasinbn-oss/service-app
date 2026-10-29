@@ -15,6 +15,9 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
 ws() { DB "select coalesce(\"workStatus\",'-') from \"WorkOrder\" where id=$1"; }
 nlog() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='STATUS_CHANGED'"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 12)
 
 PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
@@ -67,7 +70,7 @@ echo
 echo "═══ ช่างส่งกลับ — ล้างสถานะรอบก่อน"
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
-POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-10\"}" >/dev/null
+POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 [ "$(ws $ID)" = "CHECKING_PARTS" ] && pass "คอนเฟิร์มแล้วถึงขั้นเบิก → รอแอดมินเช็คอะไหล่ (ไม่ค้าง \"รอช่าง\")" || fail "ขั้นเบิก: $(ws $ID)"
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SG1\"}]}" >/dev/null

@@ -116,11 +116,17 @@ post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 0)\"}" $S >/dev/nu
 [ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM|$(day 0)" ] \
   && pass "ของอยู่คลังอื่นก็นัดวันนี้ได้ (ไม่ต้องล่วงหน้า 7 วันแล้ว — ฐานข้อมูล)" || fail "นัดวันนี้ไม่ผ่าน: $(st $ID3)"
 RR=$(post $ID3 confirm-appointment "{\"scheduledAt\":\"$(day -1)\"}")
-echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && pass "ลูกค้าขอเลื่อนเป็นเมื่อวาน ถูกปฏิเสธเหมือนกัน" || fail "เลื่อนย้อนหลังได้: $RR"
-# โทรคอนเฟิร์มช้า วันเดิมเลยมาแล้ว — คอนเฟิร์มวันเดิม (ไม่เปลี่ยนวัน) ไม่ใช่การนัดใหม่ ต้องผ่าน
+echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM|$(day 0)" ] \
+  && pass "ลูกค้าขอเลื่อนเป็นเมื่อวาน ถูกปฏิเสธเหมือนกัน (ใบไม่ขยับ)" || fail "เลื่อนย้อนหลังได้: $RR"
+# ร้านปิด/ช่างส่งกลับ ใบกลับมาพร้อมวันเดิมที่ผ่านไปแล้ว — แก้แค่เวลาก็คือนัดใหม่บนวันที่ผ่านไปแล้ว ต้องไม่ผ่าน
 DB "update \"WorkOrder\" set \"scheduledAt\"='$(day -1)' where id=$ID3" >/dev/null
-post $ID3 confirm-appointment '{"scheduledTime":"13:00"}' >/dev/null
-st $ID3 | grep -q "^แอดมิน · เบิกอะไหล่" && pass "คอนเฟิร์มวันเดิมที่เลยมาแล้ว (เปลี่ยนแค่เวลา) ได้ แล้วไปขั้นเบิก" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
+RR=$(post $ID3 confirm-appointment '{"scheduledTime":"13:00"}')
+echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM" ] \
+  && pass "วันเดิมผ่านไปแล้ว เปลี่ยนแค่เวลา ถูกปฏิเสธ (นัดใหม่บนวันที่ผ่านไปแล้ว)" || fail "เปลี่ยนเวลาบนวันที่ผ่านไปแล้วได้: $RR"
+# โทรคอนเฟิร์มช้า — ตกลงนัดเดิมเฉย ๆ (ไม่เปลี่ยนอะไร) ไม่ใช่การนัดใหม่ ต้องผ่าน
+post $ID3 confirm-appointment '{}' >/dev/null
+[ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "PARTS_REQUESTED|CONFIRMED|$(day -1)" ] \
+  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปขั้นเบิก (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
 # ไม่ใช้อะไหล่จ่ายพร้อมระบุ · ส่งตรวจหน้างาน — เลือกวันนัดเหมือนกัน กฎเดียวกัน
 WO4=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W64","symptom":"วันนัดย้อนหลัง"}]}')
