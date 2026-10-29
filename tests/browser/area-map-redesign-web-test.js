@@ -153,6 +153,14 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
       await lbl("ค้นหาในผังฝั่ง Area").first().press("Enter");
       await page.waitForTimeout(800);
       (await vis("พบ 9 · 2/9").count()) ? pass("Enter → ไปผลถัดไป (2/9)") : fail("Enter ไม่เลื่อนผลค้นหา");
+      await click(lbl(`ย่อ Area ${AREAS[0]}`));
+      await page.waitForTimeout(600);
+      (await vis(SUP(1, 1)).count()) === 0 && (await vis(SUP(2, 1)).count()) === 0
+        ? pass("ระหว่างค้นหา กดย่อ Area ของผลที่กำลังดูได้จริง (ไม่ไปกาง Area อื่นแทน)")
+        : fail("ย่อ Area ระหว่างค้นหาไม่ได้");
+      await lbl("ผลค้นหาถัดไป").first().click();
+      await page.waitForTimeout(800);
+      (await vis(SUP(1, 1)).count()) ? pass("กดไล่ผลถัดไป → Area ที่เคยย่อกางให้อีกครั้ง") : fail("ไล่ผลแล้ว Area ของผลไม่กาง");
       await lbl("ล้างคำค้น").first().click();
       await page.waitForTimeout(500);
 
@@ -206,6 +214,42 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
       await click(lbl("บันทึกผังฝั่ง Area"));
       await page.waitForTimeout(3000);
       holderOf("CY001") === id("zx.sup31") ? pass("บันทึกแล้ว CY001 เป็นของซุป31 (ฐานข้อมูล)") : fail(`ฐานข้อมูล CY001=${holderOf("CY001")}`);
+
+      // ลากด้วยเมาส์จริง (HTML5 drag) — วางบนชื่อ Area ต้องยังถือสาขาไว้ · ลากกลับคนเดิมต้องนับเป็นการย้าย
+      // ต้นทางกับปลายทางต้องอยู่บนจอพร้อมกัน (ตัวจำลองลากของ Playwright ไม่ลากข้ามการเลื่อนหน้า) — ปลายทางเป็นชื่อ Area
+      // ในแถบเครื่องมือที่ติดบนสุด หรือการ์ด Supervisor ข้าง ๆ ในแถวเดียวกัน
+      await lbl(`ค้นหาในผังฝั่ง Area`).first().fill("");
+      await click(lbl("แก้ไขผังฝั่ง Area"));
+      await page.waitForTimeout(600);
+      if (!(await vis(SUP(1, 2)).count())) await click(lbl(`กางดู Area ${AREAS[0]}`));
+      await page.waitForTimeout(400);
+      const center = async (code) => {
+        await page.evaluate((c) => document.getElementById(`am-b${c}`)?.scrollIntoView({ block: "center" }), code);
+        await page.waitForTimeout(500);
+      };
+      await center("CY010");
+      await lbl("สาขา CY010").first().dragTo(lbl(`ย้ายไป Area ${AREAS[3]}`).first());
+      await page.waitForTimeout(900);
+      (await vis("กำลังย้าย สาขา CY010", false).count()) && (await vis(SUP(4, 1)).count()) && (await vis("รอบันทึก", false).count()) === 0
+        ? pass("ลาก CY010 ไปวางบนชื่อ Area 4 → กาง Area 4 และยังถือสาขาไว้ (ป้ายกำลังย้ายขึ้น)")
+        : fail(`ลากวางบน Area: ป้าย=${await vis("กำลังย้าย สาขา CY010", false).count()} Area4=${await vis(SUP(4, 1)).count()}`);
+      if (await lbl("ยกเลิกการย้าย").count()) await lbl("ยกเลิกการย้าย").first().click();
+      await page.waitForTimeout(300);
+      await center("CY010");
+      await lbl("สาขา CY010").first().dragTo(lbl(`Supervisor ${SUP(1, 3)}`).first());
+      await page.waitForTimeout(800);
+      await center("CY010");
+      await lbl("สาขา CY010").first().dragTo(lbl(`Supervisor ${SUP(1, 2)}`).first());
+      await page.waitForTimeout(800);
+      const pendText = await page.evaluate(() => document.body.innerText.match(/รอบันทึก \d+ รายการ/)?.[0] || "ไม่มีรายการ");
+      pendText === "รอบันทึก 2 รายการ"
+        ? pass("ลาก CY010 ไปซุป13 แล้วลากกลับซุป12 ได้ (ครั้งที่สองไม่ถูกมองว่าไม่เปลี่ยน) — รอบันทึก 2 รายการ")
+        : fail(`ลากไป-กลับ: ${pendText}`);
+      await click(lbl("ยกเลิกทั้งหมด"));
+      await page.waitForTimeout(1500);
+      await click(lbl("เสร็จสิ้นการแก้ไข"));
+      await page.waitForTimeout(500);
+      holderOf("CY010") === id("zx.sup12") ? pass("ยกเลิกทั้งหมด → ฐานข้อมูลไม่เปลี่ยน (CY010 ยังเป็นของซุป12)") : fail(`CY010=${holderOf("CY010")}`);
       // กล่อง Maid ใต้การ์ดซุป31 (id am-m<maid>-<holder>) — และไม่อยู่ใต้ซุป11 แล้ว
       const rows = await page.evaluate(([m, to, from]) => [!!document.getElementById(`am-m${m}-${to}`), !!document.getElementById(`am-m${m}-${from}`)], [id("zx.maid1"), id("zx.sup31"), id("zx.sup11")]);
       rows[0] && !rows[1] ? pass("หลังบันทึก Maid ฝนทิพย์ขึ้นใต้ซุป31 ไม่อยู่ใต้ซุป11 แล้ว") : fail(`กล่อง Maid หลังย้าย: ใต้ซุป31=${rows[0]} ใต้ซุป11=${rows[1]}`);
@@ -245,6 +289,20 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
         return !!r && r.top >= 0 && r.bottom <= window.innerHeight;
       });
       sb && sb.y < 160 && !zoomInView ? pass("มือถือ: เลื่อนแล้วติดบนสุดแค่ช่องค้นหา (ปุ่มอื่นเลื่อนไปกับผัง)") : fail(`มือถือ sticky: ${JSON.stringify(sb)} zoomInView=${zoomInView}`);
+      await lbl(`กางดู Area ${AREAS[0]}`).first().click();
+      await page.waitForTimeout(800);
+      await lbl(`แสดงสาขาของ ${SUP(1, 1)} ทั้งหมด`).first().click();
+      await page.waitForTimeout(500);
+      const fit = await page.evaluate(([sid]) => {
+        const card = document.getElementById(`am-p${sid}`);
+        const r = card && card.getBoundingClientRect();
+        const call = [...card.querySelectorAll('[aria-label^="โทรหา"]')][0];
+        const c = call && call.getBoundingClientRect();
+        return { w: r && Math.round(r.width), right: r && Math.round(r.right), callRight: c && Math.round(c.right), vw: window.innerWidth };
+      }, [id("zx.sup11")]);
+      fit.right <= fit.vw && fit.callRight <= fit.vw && fit.w > fit.vw * 0.75
+        ? pass(`มือถือ: การ์ด Supervisor 9 สาขาเต็มกว้างไม่ล้นจอ ปุ่มโทรอยู่ในจอ (${fit.w}px)`)
+        : fail(`การ์ดล้นจอ: ${JSON.stringify(fit)}`);
       await search("CY017");
       await page.waitForTimeout(800);
       (await lbl("โทรหา ฝนทิพย์ แม่บ้านทดสอบ").count()) ? pass("มือถือ: ค้นรหัสสาขา → ปุ่มโทรหา Maid ในคำตอบด่วน") : fail("ไม่มีปุ่มโทรหา Maid");
