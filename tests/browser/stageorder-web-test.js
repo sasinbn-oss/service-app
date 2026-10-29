@@ -14,6 +14,8 @@
 //   · ใบที่ยกเลิกตอนค้างเบิกโดยยังไม่มีวัน → นัดวันไม่ติ๊ก
 //   · ใบตรวจหน้างาน (ขั้น 1 ↻) ยังย้อนกลับไประบุอะไหล่ได้
 //   · ใบที่มีของนอกสโตร์ เบิกแล้วถึงขั้นคอนเฟิร์ม → ฟอร์ม "คอนเฟิร์มออกหน้างาน" ปกติ ไม่ใช่ข้อความของใบเก่า
+//     → ย้อนกลับไปนัดวันเข้า: แถบติ๊ก "เบิกอะไหล่แล้ว" ล่วงหน้าตาม issueLeft ของเซิร์ฟเวอร์ และนัดแล้วใบข้ามไปคอนเฟิร์มจริง
+//     (เดิมแถบดูแค่ของในสโตร์ ใบที่มีแต่ของนอกสโตร์ขึ้นว่ายังต้องเบิก ทั้งที่กดนัดแล้วใบไม่ผ่านขั้นเบิก)
 //   ขั้นหลักแต่ละขั้นมีชื่อ "ขั้น k ชื่อขั้น · สถานะ" — เทสต์อ่านสถานะจากชื่อนี้ ไม่ต้องเดาจากวง/ติ๊ก
 //   ยืนยันสถานะใบที่ฐานข้อมูลก่อนเปิดจอทุกใบ — แถบที่ "ถูก" กับใบที่อยู่ผิดขั้นไม่ได้พิสูจน์อะไร
 // ต้องมี DATABASE_URL
@@ -334,6 +336,29 @@ const { setup, visitDay } = require("./fixture");
       ? pass("ของนอกสโตร์เบิกแล้ว: ฟอร์ม คอนเฟิร์มออกหน้างาน → ส่งให้หัวหน้าภาคปล่อยงาน (ไม่ใช่ข้อความใบเก่า)")
       : fail("ใบของนอกสโตร์ขึ้นฟอร์มคอนเฟิร์มของใบเก่า");
     await page.screenshot({ path: path.join(DIR, "so-6-offcatalog-confirm.png") });
+    await vis("ยกเลิก").last().click();
+    await page.waitForTimeout(600);
+
+    // ย้อนกลับไปนัดวันเข้า (ร้านขอเปลี่ยนทีม) — ของนอกสโตร์เบิกไปแล้ว ขั้นเบิกที่อยู่ข้างหน้าทำแล้วจริง
+    await fx.call(fx.A, "POST", `/work-orders/${F.id}/rollback`, { toStage: "PARTS_CHECKED", reason: "ร้านขอเปลี่ยนทีม (เทสต์)" });
+    const fd = await fx.call(fx.A, "GET", `/work-orders/${F.id}`);
+    st(F.id).startsWith("PARTS_CHECKED|") && fd.issueLeft === false
+      ? pass("ย้อนไปนัดวันเข้า (ฐานข้อมูล) · เซิร์ฟเวอร์บอกว่าไม่มีของต้องเบิกแล้ว (issueLeft = false)")
+      : fail(`ใบของนอกสโตร์หลังย้อน: ${st(F.id)} · issueLeft=${fd.issueLeft}`);
+    await open(F.code);
+    const f = await readBar();
+    console.log("  ใบของนอกสโตร์ย้อนไปนัดวัน:", show(f));
+    const fNow = f.items.find((i) => i.state === "now");
+    const fIssue = f.items.find((i) => /^ขั้น \d+ เบิกอะไหล่ · /.test(i.aria));
+    fNow && /^ขั้น \d+ นัดวันเข้า · ทำอยู่$/.test(fNow.aria) && fIssue && fIssue.state === "done" && fIssue.label === "เบิกอะไหล่แล้ว" && fIssue.num === fNow.num + 1
+      ? pass("แถบ: นัดวันเข้า (ทำอยู่) → เบิกอะไหล่แล้ว ✓ ล่วงหน้า (ตาม issueLeft ของเซิร์ฟเวอร์)")
+      : fail(`แถบใบของนอกสโตร์หลังย้อน: ${show(f)}`);
+    await page.locator('[aria-label="ขั้นตอนงาน"]').screenshot({ path: path.join(DIR, "so-7-offcatalog-rollback.png") });
+    // แถบต้องตรงกับที่ /assign ทำจริง — นัดแล้วใบไปคอนเฟิร์มลูกค้าเลย ไม่ผ่านขั้นเบิก
+    await fx.schedule(F.id, visitDay(31));
+    st(F.id) === "AWAITING_CONFIRM|PENDING"
+      ? pass("นัดวันแล้วใบไปคอนเฟิร์มลูกค้าเลย ไม่กลับไปเบิก (ฐานข้อมูล) — ตรงกับแถบ")
+      : fail(`หลังนัดใบของนอกสโตร์: ${st(F.id)}`);
   } catch (e) {
     await page.screenshot({ path: path.join(DIR, "so-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${String(e).split("\n")[0].slice(0, 300)}`);

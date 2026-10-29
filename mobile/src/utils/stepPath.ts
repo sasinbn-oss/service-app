@@ -82,6 +82,8 @@ export interface PathOrder {
   waitingParts: PathPart[];
   /** เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา — คิดเองจากประวัติด้วยกฎเดียวกัน */
   flow?: Partial<FlowInfo> | null;
+  /** ยังมีของต้องเบิก — ค่าเดียวกับที่ /assign และ /confirm-appointment ใช้ตัดสิน · เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา (ดู issueLeftOf) */
+  issueLeft?: boolean | null;
 }
 export interface PathStage {
   value: string;
@@ -197,6 +199,20 @@ function since(logs: PathLog[], actions: string[]): PathLog[] {
   const sorted = [...logs].sort(newest);
   const i = sorted.findIndex((l) => actions.includes(l.action));
   return i < 0 ? sorted : sorted.slice(0, i);
+}
+
+/**
+ * ยังมีของต้องเบิกไหม — ใช้ค่าของเซิร์ฟเวอร์ (detail.issueLeft) ซึ่งเป็นตัวเดียวกับที่ /assign และ /confirm-appointment
+ * ใช้ตัดสินว่าใบไปขั้นเบิกหรือข้ามไปคอนเฟิร์ม — เดิมแอปคิดเองคนละสูตรกับเซิร์ฟเวอร์ (แถบติ๊ก "เบิกอะไหล่แล้ว"
+ * ทั้งที่กดนัดแล้วใบไปขั้นเบิก) · คิดเองเฉพาะเซิร์ฟเวอร์รุ่นเก่าที่ไม่ส่งมา ด้วยกฎเดียวกับ issueLeft ฝั่งเซิร์ฟเวอร์:
+ * ของในสโตร์ยังไม่มีเลขใบเบิก · ของนอกสโตร์ (ไม่มีเลขใบเบิก) นับว่าเบิกแล้วเมื่อล่าสุดของรอบเช็ค/เบิกคือแอดมินผ่านขั้นเบิก
+ */
+export function issueLeftOf(o: Pick<PathOrder, "issueLeft" | "logs" | "waitingParts">): boolean {
+  if (typeof o.issueLeft === "boolean") return o.issueLeft;
+  if (o.waitingParts.length === 0) return false;
+  const last = [...o.logs].sort(newest).find((l) => l.action === "PARTS_CHECKED" || PARTS_ROUND_LOGS.includes(l.action));
+  const offLeft = o.waitingParts.some((p) => p.offCatalog) && last?.action !== "PARTS_CHECKED";
+  return offLeft || o.waitingParts.some((p) => !p.offCatalog && !(p.inStock === true && p.requisitionNo));
 }
 
 /** สถานะของเซิร์ฟเวอร์ → ขั้นบนแถบ · ปิด/ยกเลิกไม่มีขั้นของตัวเอง */
@@ -345,9 +361,10 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     pos(k) < pos(splitStart) &&
     !o.logs.some((l) => l.action !== "SPLIT_FROM" && stagesOf(k).includes(l.status));
 
-  // ของในสโตร์เบิกครบแล้ว — ขั้นเบิกที่อยู่ "หลัง" ขั้นปัจจุบันทำไปแล้วจริง (ย้อนมานัดใหม่หลังเบิก · ช่างส่งกลับ)
-  const store = o.waitingParts.filter((p) => !p.offCatalog);
-  const issuedAll = o.needsParts === true && store.length > 0 && store.every((p) => p.inStock === true && !!p.requisitionNo);
+  // เบิกครบแล้ว — ขั้นเบิกที่อยู่ "หลัง" ขั้นปัจจุบันทำไปแล้วจริง (ย้อนมานัดใหม่หลังเบิก · ช่างส่งกลับ)
+  // กฎเดียวกับที่เซิร์ฟเวอร์ใช้ส่งใบต่อ (issueLeftOf) — ใบที่มีแต่ของนอกสโตร์ก็นับ และของนอกสโตร์ที่เพิ่มทีหลังทำให้ยังไม่ครบ
+  // เดิมดูแค่ของในสโตร์: แถบบอกว่าเบิกแล้ว แต่กดนัดแล้วใบไปขั้นเบิก (หรือกลับกัน) ขัดกับข้อความในฟอร์มหน้าเดียวกัน
+  const issuedAll = o.needsParts === true && o.waitingParts.length > 0 && !issueLeftOf(o);
   const lastQuote = [...o.logs].sort(newest).find((l) => l.action === "QUOTED" || l.action === "QUOTE_SKIPPED");
   const quoteSkipped = lastQuote?.action === "QUOTE_SKIPPED";
 

@@ -9,6 +9,11 @@
 #   · ใบผูกเคสเครื่องเสีย วันเข้าบนเคสตามไปด้วย · /options ส่ง rescheduleStages ให้แอป
 #   · กดพร้อมกัน (จำลองด้วยทรานแซกชันที่ค้างล็อกแถวใบงานไว้): ดึงคืน vs ช่างกดถึงหน้างาน · ปล่อยงาน/คอนเฟิร์ม vs เลื่อนวัน
 #     ฝั่งที่มาทีหลังได้ 409 ไม่เขียนทับ (ฐานข้อมูล)
+#   · ช่างปิดงานรอบนี้แล้ว (เคลมถูกตีกลับ ใบกลับมาที่ช่าง ไม่มีถึงหน้างาน) → 409 ข้อความ "ช่างปิดงานรอบนี้แล้ว" ไม่ใช่ "ช่างถึงหน้างานแล้ว"
+#   · ขั้นเบิก/โอน/เบิกส่งมอบคลังอื่น (ขั้นหัวหน้าภาค) ที่เลยนัด → เข้ากล่องงานแอดมินทั่วไป + ตัวเลขกล่องงาน (ยังไม่เลย = ไม่เข้า)
+#   · ฟอร์มที่เปิดค้างก่อนแอดมินเลื่อน: คอนเฟิร์ม/ปล่อยงาน/ส่งกลับ ส่ง seenScheduledAt/seenScheduledTime ที่เห็น → ไม่ตรง 409
+#     ไม่เขียนอะไร · ตรง 200 · ไม่ส่ง = แบบเดิม · ใบผูกเคสก็กันแบบเดียวกัน
+#   · บันทึกส่งกลับ (ทีมไม่ว่าง) บอกเหตุตามจริง: แอดมินเลื่อน/ดึงคืน = "ไม่ว่างวันที่แอดมินเลื่อน" · ลูกค้าขอ = "ไม่ว่างวันที่ลูกค้าขอ"
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -166,6 +171,19 @@ R=$(POST $A work-orders/$R1/reschedule "$(MOVE $(day 22))")
 echo "$R" | grep -q "ช่างถึงหน้างานแล้ว" && [ "$(WO $R1)" = "IN_PROGRESS|CONFIRMED|$TEAM|$D4|13:30" ] \
   && pass "ช่างกดถึงหน้างานแล้ว: 409 (ให้ช่างแจ้งปัญหาหน้างาน) ฐานข้อมูลไม่เปลี่ยน" || fail "หลังถึงหน้างาน: $(WO $R1) $(echo $R | head -c 150)"
 
+# เคลมถูกตีกลับ → ใบกลับมาที่ช่าง (IN_PROGRESS) ทั้งที่ช่างปิดงานรอบนี้ไปแล้ว — ถึงหน้างานไม่บังคับกด จึงมักไม่มี ARRIVED
+# (จำลองประวัติปิดงาน + ตีกลับที่ตรวจเคลมเขียน — ฟอร์มปิดงานพร้อมเคลมต้องมีไฟล์หลักฐาน ไม่ใช่เรื่องของเทสต์นี้)
+R10=$(mk W68)
+POST $S "work-orders/$R10/parts" '{"needsParts":false}' >/dev/null
+assign $R10 "$D1"; POST $A "work-orders/$R10/confirm-appointment" '{}' >/dev/null; POST $S "work-orders/$R10/dispatch" '{}' >/dev/null
+DB "insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") select $R10,id,'CLOSED','DONE','ทดสอบ — ปิดงานพร้อมเคลม',now()+interval '1 second' from \"User\" where \"employeeCode\"='T001';
+    insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") select $R10,id,'CLAIM_REJECTED','IN_PROGRESS','ทดสอบ — ตีกลับ',now()+interval '2 second' from \"User\" where \"employeeCode\"='A001'" >/dev/null
+[ "$(WO $R10)" = "IN_PROGRESS|CONFIRMED|$TEAM|$D1|-" ] || fail "เตรียม R10: $(WO $R10)"
+R=$(curl -s -w '|%{http_code}' -X POST "localhost:4000/api/work-orders/$R10/reschedule" -H "$(H $A)" -H 'Content-Type: application/json' -d "$(MOVE $D2)")
+[ "${R##*|}" = "409" ] && echo "$R" | grep -q "ช่างปิดงานรอบนี้แล้ว" && ! echo "$R" | grep -q "ช่างถึงหน้างานแล้ว" \
+  && [ "$(WO $R10)" = "IN_PROGRESS|CONFIRMED|$TEAM|$D1|-" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R10 and action like 'APPOINTMENT_%'")" = "0" ] \
+  && pass "ช่างปิดงานรอบนี้แล้ว (เคลมถูกตีกลับ): 409 บอกตามจริง ไม่อ้างว่าช่างถึงหน้างาน · ฐานข้อมูลไม่เปลี่ยน" || fail "ปิดแล้วดึงคืน: ${R:0:200} $(WO $R10)"
+
 echo
 echo "═══ ขั้นที่ยังเลื่อนไม่ได้ (หัวหน้าภาคยังไม่นัด) — 409"
 R3=$(mk W62)
@@ -206,6 +224,38 @@ POST $A work-orders/$R4/reschedule "$(MOVE $D3 ร้านขอเลื่อ
   && pass "ของกำลังโอน: เลื่อนได้ เลขใบเบิกต้นทาง/เลขที่ใบโอนไม่หาย (ฐานข้อมูล)" || fail "เลื่อนระหว่างโอน: $(WO $R4) $(XF)"
 
 echo
+echo "═══ ขั้นหัวหน้าภาคเบิก/โอน/เบิกส่งมอบคลังอื่นที่เลยนัด → กล่องงานแอดมิน (คนเดียวที่เลื่อนวันนัดได้)"
+INBOXN() { GET $1 work-orders/inbox-count | J 'd.inbox'; }
+# ยังไม่เลยนัด — ระหว่างโอนตามปกติเป็นงานหัวหน้าภาค ไม่ใช่ของแอดมิน
+[ "$(ROW $A INBOX $R4 'r.status')" = "missing" ] && [ "$(ROW $S INBOX $R4 'r.status')" = "PARTS_IN_TRANSIT" ] \
+  && pass "ของกำลังโอน วันนัดยังไม่ถึง: อยู่กล่องหัวหน้าภาค ไม่อยู่กล่องแอดมิน" || fail "ก่อนเลยนัด: A=$(ROW $A INBOX $R4 'r.status') S=$(ROW $S INBOX $R4 'r.status')"
+# วันนัดผ่านไประหว่างของกำลังมา (จำลองในฐานข้อมูล) · ตัวเลขกล่องงานนับทั้งระบบ — มีใบอื่นขยับพร้อมกันได้ ลองซ้ำอีกรอบ
+for _ in 1 2 3; do
+  N0=$(INBOXN $A)
+  DB "update \"WorkOrder\" set \"scheduledAt\"='$PAST' where id=$R4" >/dev/null
+  N1=$(INBOXN $A)
+  [ "$N1" = "$((N0 + 1))" ] && break
+  DB "update \"WorkOrder\" set \"scheduledAt\"='$D3' where id=$R4" >/dev/null
+done
+[ "$(ROW $A INBOX $R4 'r.status+"|"+r.overdue+"|"+r.stageActor')" = "PARTS_IN_TRANSIT|true|SUPERVISOR" ] && [ "$N1" = "$((N0 + 1))" ] \
+  && pass "รอของถึงที่เลยนัด: เข้ากล่องงานแอดมิน overdue=true (ขั้นยังเป็นของหัวหน้าภาค — บอกได้ว่าต้องตามใคร) · inbox-count +1" \
+  || fail "เลยนัดระหว่างโอน: $(ROW $A INBOX $R4 'r.status+"|"+r.overdue+"|"+r.stageActor') count $N0→$N1"
+[ "$(ROW $S INBOX $R4 'String(r.overdue)')" = "true" ] && [ "$(ROW $PA INBOX $R4 'r.status')" = "missing" ] \
+  && pass "หัวหน้าภาคยังเห็นในกล่องตัวเอง · Admin Spare Part ไม่เห็น (ไม่ได้ดูแลวันนัด)" || fail "S=$(ROW $S INBOX $R4 'String(r.overdue)') PA=$(ROW $PA INBOX $R4 'r.status')"
+POST $A work-orders/$R4/reschedule "$(MOVE $D3 ของโอนช้า)" >/dev/null
+[ "$(WO $R4)" = "PARTS_IN_TRANSIT|PENDING|$TEAM|$D3|-" ] && [ "$(XF)" = "$X1" ] && [ "$(ROW $A INBOX $R4 'r.status')" = "missing" ] \
+  && pass "แอดมินเลื่อนวันนัดจากกล่องงาน → ใบอยู่ขั้นเดิม ของโอนไม่แตะ แล้วหลุดจากกล่องแอดมิน (ฐานข้อมูล)" || fail "เลื่อนใบเลยนัดระหว่างโอน: $(WO $R4) A=$(ROW $A INBOX $R4 'r.status')"
+R8=$(mk W66); spec $R8 "คลังภูเก็ต"; assign $R8 "$D1"
+POST $A "work-orders/$R8/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+R9=$(mk W67); spec $R9 "คลังขอนแก่น"; assign $R9 "$D1"
+POST $A "work-orders/$R9/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+[ "$(WO $R8 | cut -d'|' -f1)|$(WO $R9 | cut -d'|' -f1)" = "PARTS_PICKUP|PARTS_TRANSFER" ] || fail "เตรียม R8/R9: $(WO $R8) $(WO $R9)"
+[ "$(ROW $A INBOX $R8 'r.status')|$(ROW $A INBOX $R9 'r.status')" = "missing|missing" ] || fail "เบิกส่งมอบ/เบิกและโอนที่ยังไม่เลยนัดอยู่กล่องแอดมิน"
+DB "update \"WorkOrder\" set \"scheduledAt\"='$PAST' where id in ($R8,$R9)" >/dev/null
+[ "$(ROW $A INBOX $R8 'r.status+"|"+r.overdue')|$(ROW $A INBOX $R9 'r.status+"|"+r.overdue')" = "PARTS_PICKUP|true|PARTS_TRANSFER|true" ] \
+  && pass "เบิกส่งมอบคลังอื่น / เบิกและโอน ที่เลยนัด: เข้ากล่องงานแอดมินเหมือนกัน" || fail "pickup/transfer เลยนัด: $(ROW $A INBOX $R8 'r.status+"|"+r.overdue') $(ROW $A INBOX $R9 'r.status+"|"+r.overdue')"
+
+echo
 echo "═══ คอนเฟิร์มลูกค้า / ปล่อยงาน ชนกับแอดมินอีกคนเลื่อนวัน (ขั้นไม่เปลี่ยน) — 409 ไม่เขียนทับวันใหม่"
 R7=$(mk W65); spec $R7 "$L94"; assign $R7 "$D1"
 POST $A "work-orders/$R7/parts-check" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS7\"}]}" >/dev/null
@@ -244,6 +294,13 @@ C=$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orde
 wait $HOLD_PID
 [ "$C" = "409" ] && [ "$(WO $R5)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D3|-" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R5 and action in ('CONFIRMED','RESCHEDULED')")" = "0" ] \
   && pass "ใบผูกเคส: คอนเฟิร์มที่อ่านวันเดิมไว้ 409 วันใหม่ไม่ถูกเขียนทับ (ฐานข้อมูล)" || fail "คอนเฟิร์มใบผูกเคสชนเลื่อน: $C $(WO $R5)"
+# ฟอร์มยังโชว์วันเดิม (D2) — ทางที่ผ่านทรานแซกชันซิงก์เคสต้องกันด้วยวันที่เห็นเหมือนกัน
+C=$(PC $A work-orders/$R5/confirm-appointment "{\"seenScheduledAt\":\"$D2\",\"seenScheduledTime\":null}")
+[ "$C" = "409" ] && [ "$(WO $R5)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D3|-" ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$R5 and action in ('CONFIRMED','RESCHEDULED')")" = "0" ] \
+  && pass "ใบผูกเคส: คอนเฟิร์มจากฟอร์มที่เห็นวันเดิม (seenScheduledAt) 409 ไม่ลงคอนเฟิร์ม (ฐานข้อมูล)" || fail "ใบผูกเคส seen เก่า: $C $(WO $R5)"
+C=$(PC $A work-orders/$R5/confirm-appointment "{\"seenScheduledAt\":\"$D3\",\"seenScheduledTime\":null}")
+[ "$C" = "200" ] && [ "$(WO $R5)" = "ASSIGNED|CONFIRMED|$TEAM|$D3|-" ] && [ "$(DB "select \"scheduledVisitAt\"::date from \"Outage\" where id=$OUT")" = "$D3" ] \
+  && pass "ใบผูกเคส: วันที่เห็นตรงกับใบ → คอนเฟิร์มได้ เคสตามวันนัด (ฐานข้อมูล)" || fail "ใบผูกเคส seen ตรง: $C $(WO $R5) เคส=$(DB "select \"scheduledVisitAt\" from \"Outage\" where id=$OUT")"
 
 echo
 echo "═══ ตรวจหน้างาน: เลื่อนตอนรอส่งช่างตรวจ · ทีมไม่ว่างส่งกลับได้ · ดึงคืนจากช่างตรวจ"
@@ -257,6 +314,9 @@ POST $A work-orders/$R6/reschedule "$(MOVE $D2 ร้านขอ)" >/dev/null
   && pass "รอส่งช่างตรวจ: เลื่อนได้ อยู่ขั้นเดิม หัวหน้าภาคเห็นคอนเฟิร์มวันใหม่" || fail "เลื่อนตรวจ: $(WO $R6) $(LASTLOG $R6) rs=$(RS $R6)"
 POST $S "work-orders/$R6/decline-new-date" '{"reason":"ทีมเต็มวันนั้น"}' >/dev/null
 [ "$(WO $R6)" = "INSPECT_CONFIRM|PENDING|$TEAM|$D2|-" ] && pass "ทีมไม่ว่างวันใหม่ → กลับไปแอดมินนัดตรวจใหม่" || fail "ส่งกลับตรวจ: $(WO $R6)"
+N=$(LASTNOTE $R6)
+echo "$N" | grep -q "^ทีม$TEAM ไม่ว่างวันที่แอดมินเลื่อน (.*) — ทีมเต็มวันนั้น$" && ! echo "$N" | grep -q "ลูกค้าขอ" \
+  && pass "บันทึกส่งกลับนัดตรวจที่แอดมินเลื่อน: \"ไม่ว่างวันที่แอดมินเลื่อน\" (ร้านไม่ได้ขอ)" || fail "บันทึกส่งกลับตรวจ: $N"
 POST $A "work-orders/$R6/confirm-appointment" "{\"scheduledAt\":\"$D3\"}" >/dev/null
 POST $S "work-orders/$R6/dispatch" '{}' >/dev/null
 [ "$(WO $R6 | cut -d'|' -f1)" = "INSPECTING" ] || fail "เตรียมช่างตรวจ: $(WO $R6)"
@@ -264,5 +324,52 @@ POST $A work-orders/$R6/reschedule "$(MOVE $D4 ร้านปิด)" >/dev/nul
 [ "$(WO $R6)" = "INSPECT_DISPATCH|CONFIRMED|$TEAM|$D4|-" ] && [ "$(LASTLOG $R6)" = "APPOINTMENT_RECALLED|INSPECT_DISPATCH|A001" ] \
   && pass "ช่างตรวจยังไม่ถึง: ดึงคืนไปรอส่งช่างตรวจ (ฐานข้อมูล)" || fail "ดึงคืนตรวจ: $(WO $R6) $(LASTLOG $R6)"
 [ "$(GET $A work-orders/$R6 | J '[d.flow.inspect,d.flow.inspectRounds].join("|")')" = "true|1" ] && pass "detail.flow: มีรอบตรวจหน้างาน 1 รอบ" || fail "flow ตรวจ: $(GET $A work-orders/$R6 | J 'JSON.stringify(d.flow)')"
+
+echo
+echo "═══ ฟอร์มที่เปิดไว้ก่อนแอดมินเลื่อน (seenScheduledAt/seenScheduledTime) · บันทึกส่งกลับตามเหตุ"
+CNT() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action in ($2)"; }
+SEEN() { echo "{\"seenScheduledAt\":\"$1\",\"seenScheduledTime\":${2:-null}$3}"; }
+N1=$(mk W69)
+POST $S "work-orders/$N1/parts" '{"needsParts":false}' >/dev/null
+assign $N1 "$D1"
+[ "$(WO $N1)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D1|-" ] || fail "เตรียม N1: $(WO $N1)"
+# แอดมิน B เปิดฟอร์มคอนเฟิร์มเห็น D1 · แอดมิน A เลื่อนเป็น D2 (ใบไม่ขยับขั้น) · B กด "ลูกค้าคอนเฟิร์ม"
+POST $A work-orders/$N1/reschedule "$(MOVE $D2 ของมาช้า)" >/dev/null
+C=$(PC $A work-orders/$N1/confirm-appointment "$(SEEN $D1)")
+[ "$C" = "409" ] && [ "$(WO $N1)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D2|-" ] && [ "$(CNT $N1 "'CONFIRMED','RESCHEDULED'")" = "0" ] \
+  && pass "คอนเฟิร์มจากฟอร์มที่เห็นวันก่อนเลื่อน: 409 ไม่บันทึกว่าลูกค้าคอนเฟิร์มวันที่ไม่ได้คุยกัน (ฐานข้อมูล)" || fail "คอนเฟิร์ม seen เก่า: $C $(WO $N1)"
+C=$(PC $A work-orders/$N1/confirm-appointment "$(SEEN $D2 '"10:00"')")
+[ "$C" = "409" ] && [ "$(CNT $N1 "'CONFIRMED','RESCHEDULED'")" = "0" ] && pass "วันตรงแต่เวลาที่เห็นไม่ตรง: 409 เหมือนกัน" || fail "คอนเฟิร์ม seen เวลาเก่า: $C $(WO $N1)"
+C=$(PC $A work-orders/$N1/confirm-appointment "$(SEEN $D2)")
+[ "$C" = "200" ] && [ "$(WO $N1)" = "ASSIGNED|CONFIRMED|$TEAM|$D2|-" ] && [ "$(LASTLOG $N1)" = "CONFIRMED|ASSIGNED|A001" ] \
+  && pass "วัน/เวลาที่เห็นตรงกับใบ: คอนเฟิร์มได้ (ฐานข้อมูล)" || fail "คอนเฟิร์ม seen ตรง: $C $(WO $N1)"
+# หัวหน้าภาคเปิดฟอร์มปล่อยงานเห็น D2 · แอดมินเลื่อนเป็น D3 · หัวหน้าภาคกดส่งกลับ/ปล่อยงานจากฟอร์มเดิม
+POST $A work-orders/$N1/reschedule "$(MOVE $D3 ร้านขอ)" >/dev/null
+C1=$(PC $S work-orders/$N1/decline-new-date "$(SEEN $D2 null ',"reason":"ทีมเต็ม"')")
+C2=$(PC $S work-orders/$N1/dispatch "$(SEEN $D2)")
+[ "$C1|$C2" = "409|409" ] && [ "$(WO $N1)" = "ASSIGNED|CONFIRMED|$TEAM|$D3|-" ] && [ "$(CNT $N1 "'NEW_DATE_DECLINED','DISPATCHED'")" = "0" ] \
+  && pass "ส่งกลับ/ปล่อยงานจากฟอร์มที่เห็นวันก่อนเลื่อน: 409 ทั้งคู่ ไม่ลงประวัติ ใบรอหัวหน้าภาคดูวันใหม่ (ฐานข้อมูล)" || fail "seen เก่า ส่งกลับ=$C1 ปล่อย=$C2 $(WO $N1)"
+C=$(PC $S work-orders/$N1/decline-new-date "$(SEEN $D3 null ',"reason":"ทีมเต็ม"')")
+N=$(LASTNOTE $N1)
+[ "$C" = "200" ] && [ "$(WO $N1)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D3|-" ] && [ "$(LASTLOG $N1)" = "NEW_DATE_DECLINED|AWAITING_CONFIRM|S001" ] \
+  && echo "$N" | grep -q "^ทีม$TEAM ไม่ว่างวันที่แอดมินเลื่อน (.*) — ทีมเต็ม$" && ! echo "$N" | grep -q "ลูกค้าขอ" \
+  && pass "ส่งกลับด้วยวันที่เห็นตรง: 200 · บันทึก \"ไม่ว่างวันที่แอดมินเลื่อน\" (แอดมินเลื่อน ร้านไม่ได้ขอ)" || fail "ส่งกลับหลังแอดมินเลื่อน: $C $(WO $N1) · $N"
+# ลูกค้าขอเลื่อนตอนแอดมินโทร (ไม่ส่ง seen = แอปรุ่นเก่า ทำงานแบบเดิม) → หัวหน้าภาคส่งกลับ (ไม่ส่ง seen เหมือนกัน)
+C=$(PC $A work-orders/$N1/confirm-appointment "{\"scheduledAt\":\"$D4\"}")
+[ "$C|$(WO $N1)|$(LASTLOG $N1)" = "200|ASSIGNED|CONFIRMED|$TEAM|$D4|-|RESCHEDULED|ASSIGNED|A001" ] || fail "ลูกค้าขอเลื่อน: $C $(WO $N1) $(LASTLOG $N1)"
+C=$(PC $S work-orders/$N1/decline-new-date '{"reason":"ทีมลา"}')
+N=$(LASTNOTE $N1)
+[ "$C" = "200" ] && [ "$(WO $N1)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D4|-" ] && echo "$N" | grep -q "^ทีม$TEAM ไม่ว่างวันที่ลูกค้าขอ (.*) — ทีมลา$" \
+  && pass "ไม่ส่ง seen (แอปรุ่นเก่า) ทำงานแบบเดิม · ลูกค้าขอเลื่อน → บันทึก \"ไม่ว่างวันที่ลูกค้าขอ\"" || fail "ส่งกลับวันที่ลูกค้าขอ: $C $(WO $N1) · $N"
+# ปล่อยงานด้วยวันที่เห็นตรง → แอดมินดึงคืน (ช่างยังไม่ถึง) → หัวหน้าภาคส่งกลับ
+POST $A work-orders/$N1/confirm-appointment '{}' >/dev/null
+C=$(PC $S work-orders/$N1/dispatch "$(SEEN $D4)")
+[ "$C" = "200" ] && [ "$(WO $N1 | cut -d'|' -f1,4)" = "IN_PROGRESS|$D4" ] && pass "ปล่อยงานด้วยวันที่เห็นตรง: 200 ถึงช่าง (ฐานข้อมูล)" || fail "ปล่อยงาน seen ตรง: $C $(WO $N1)"
+POST $A work-orders/$N1/reschedule "$(MOVE $(day 22) ร้านปิด)" >/dev/null
+[ "$(LASTLOG $N1)" = "APPOINTMENT_RECALLED|ASSIGNED|A001" ] || fail "ดึงคืน N1: $(LASTLOG $N1)"
+POST $S work-orders/$N1/decline-new-date '{"reason":"ทีมเต็ม"}' >/dev/null
+N=$(LASTNOTE $N1)
+[ "$(WO $N1 | cut -d'|' -f1,2)" = "AWAITING_CONFIRM|PENDING" ] && echo "$N" | grep -q "^ทีม$TEAM ไม่ว่างวันที่แอดมินเลื่อน (" \
+  && pass "ดึงคืนจากช่างแล้วทีมไม่ว่าง → บันทึก \"ไม่ว่างวันที่แอดมินเลื่อน\"" || fail "ส่งกลับหลังดึงคืน: $(WO $N1) · $N"
 
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

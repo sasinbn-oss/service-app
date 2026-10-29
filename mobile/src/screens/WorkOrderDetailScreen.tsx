@@ -73,7 +73,7 @@ import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { feedback } from "../components/Feedback";
 import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
-import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, type FlowInfo, type StepState } from "../utils/stepPath";
+import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo, type StepState } from "../utils/stepPath";
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
@@ -148,6 +148,8 @@ interface WorkOrder {
   rescheduled?: boolean;
   /** ใบนี้เดินลำดับไหน + ขั้นทางเลือกที่ผ่าน — แถบขั้นตอนเรียงตามนี้ (utils/stepPath) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
   flow?: FlowInfo | null;
+  /** ยังมีของต้องเบิก — ค่าที่ /assign และ /confirm-appointment ใช้ตัดสินจริง · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง (issueLeftOf คิดเอง) */
+  issueLeft?: boolean;
   /** ย้อนขั้นมาและยังไม่มีใครกดผ่านขั้นนี้ — ป้าย/กล่อง "↩ ย้อนขั้น" (null = ไม่ได้ย้อน) */
   rolledBack?: { from: string | null; fromLabel: string | null; reason: string | null; byName: string | null; at: string } | null;
   /** ค่าที่การย้อนรอบล่าสุดล้างไป — ฟอร์มขั้นเติมให้เฉพาะช่องที่ว่าง จนกว่าจะผ่านขั้นเดิมไปแล้ว */
@@ -444,8 +446,15 @@ function sentBackLog(o: WorkOrder): LogEntry | null {
   return last?.action === "PARTS_ROLLBACK" && last.status === o.status ? last : null;
 }
 
+/** แอดมินเลื่อนวันนัด (ใบอยู่ขั้นเดิม · ดึงคืนจากช่าง) — ฟอร์มขั้นที่เปิดค้างไว้ถือวันเก่า ต้องปิดแล้วโหลดใหม่ */
+const ADMIN_DATE_MOVES = ["APPOINTMENT_MOVED", "APPOINTMENT_RECALLED"];
 /** การเลื่อนวันหลังหัวหน้าภาคนัด/ปล่อยรอบล่าสุด — ลูกค้าขอเลื่อนตอนคอนเฟิร์ม · แอดมินเลื่อนวันนัด */
-const DATE_MOVES = ["RESCHEDULED", "APPOINTMENT_MOVED", "APPOINTMENT_RECALLED"];
+const DATE_MOVES = ["RESCHEDULED", ...ADMIN_DATE_MOVES];
+/**
+ * ขั้นที่ฟอร์มขั้นยืนยันวันนัดที่โชว์อยู่ (คอนเฟิร์มลูกค้า · ปล่อยงาน/ทีมไม่ว่างวันใหม่) และขั้นที่ถูกดึงคืนได้
+ * (ผลตรวจหน้างาน — ดึงคืนแล้วใบไม่อยู่ขั้นนั้นแล้ว)
+ */
+const DATE_FORM_STAGES = ["AWAITING_CONFIRM", "INSPECT_CONFIRM", "ASSIGNED", "INSPECT_DISPATCH", "IN_PROGRESS", "INSPECTING"];
 /** ประวัติที่ตัดสินป้าย "คอนเฟิร์มวันใหม่" — นัด/ปล่อยของหัวหน้าภาคปิดป้าย การเลื่อนเปิดป้าย (ตรงกับฝั่งเซิร์ฟเวอร์) */
 const DATE_SETTLES = ["ASSIGNED", "INSPECT_REQUESTED", "DISPATCHED", ...DATE_MOVES];
 
@@ -480,27 +489,27 @@ function declinedNewDate(o: WorkOrder): LogEntry | null {
 }
 
 
-/** ช่างกดถึงหน้างานแล้วในรอบนี้ (หลังปล่อยงานครั้งล่าสุด) — เลื่อนวันไม่ได้แล้ว ช่างใช้ "แจ้งปัญหาหน้างาน" แทน */
+/**
+ * ช่างถึงหน้างาน หรือปิดงานไปแล้วในรอบนี้ — เลื่อนวัน (ดึงใบคืน) ไม่ได้แล้ว ช่างใช้ "แจ้งปัญหาหน้างาน" แทน
+ * กฎเดียวกับ /reschedule ฝั่งเซิร์ฟเวอร์: ล่าสุดของ ปล่อยงาน/ถึงหน้างาน/ปิดงาน ต้องเป็นปล่อยงาน
+ * เดิมดูแค่ "ถึงหน้างาน" — ใบที่เคลมถูกตีกลับกลับมาอยู่ขั้นช่าง (ช่างปิดไปแล้ว ไม่จำเป็นต้องกดถึงหน้างาน)
+ * ขึ้นปุ่มเลื่อนวันนัดที่เซิร์ฟเวอร์ปฏิเสธทุกครั้ง หลังแอดมินกรอกเหตุผลไปแล้ว
+ */
+const VISIT_LOGS = ["DISPATCHED", "ARRIVED", "CLOSED"];
 function techArrived(o: WorkOrder) {
-  const sent = o.logs.filter((l) => l.action === "DISPATCHED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  return o.logs.some((l) => l.action === "ARRIVED" && (!sent || l.createdAt >= sent.createdAt));
+  const last = o.logs
+    .filter((l) => VISIT_LOGS.includes(l.action))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0];
+  return !!last && last.action !== "DISPATCHED";
 }
 
-/** เริ่มรอบเช็ค/เบิกใหม่ — ตรงกับ PARTS_ROUND_ACTIONS ฝั่งเซิร์ฟเวอร์ */
-const PARTS_ROUND_LOGS = ["PARTS_REQUESTED", "NO_PARTS", "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
-
 /**
- * ยังมีของต้องเบิกไหม — กฎเดียวกับ issueLeft ฝั่งเซิร์ฟเวอร์ (ใช้เลือกข้อความ เซิร์ฟเวอร์เป็นคนตัดสินว่าใบไปไหน)
- * ของในสโตร์: ยังไม่มีเลขใบเบิก · ของนอกสโตร์ไม่มีเลขใบเบิก — ดูว่าแอดมินผ่านขั้นเบิก (PARTS_CHECKED) หลังรอบเช็คล่าสุดหรือยัง
- * เดิมนับของนอกสโตร์ว่ายังต้องเบิกเสมอ ใบที่มีของนอกสโตร์ถึงขั้นคอนเฟิร์มแล้วขึ้นฟอร์มของใบเก่า ("ไปเบิกอะไหล่ต่อ") ผิดทุกใบ
+ * ยังมีของต้องเบิกไหม — ใช้เลือกข้อความในฟอร์มนัด/คอนเฟิร์ม (ไปเบิกต่อ หรือข้ามไปคอนเฟิร์ม/ปล่อยงาน)
+ * อ่านค่าที่เซิร์ฟเวอร์ใช้ตัดสินจริง (detail.issueLeft) ไม่คิดเองอีกสูตร — ข้อความต้องตรงกับที่ใบไปจริงหลังกด
+ * และตรงกับแถบขั้นตอนบนหน้าเดียวกัน (ใช้ issueLeftOf ตัวเดียวกัน)
  */
 function partsToIssue(o: WorkOrder) {
-  if (o.needsParts !== true) return false;
-  const last = o.logs
-    .filter((l) => l.action === "PARTS_CHECKED" || PARTS_ROUND_LOGS.includes(l.action))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0];
-  const offLeft = o.waitingParts.some((p) => p.offCatalog) && last?.action !== "PARTS_CHECKED";
-  return offLeft || o.waitingParts.some((p) => !p.offCatalog && !(p.inStock === true && p.requisitionNo));
+  return issueLeftOf(o);
 }
 
 /**
@@ -512,6 +521,16 @@ function afterIssueText(o: WorkOrder) {
   if (!o.scheduledAt) return "ใบไปขั้นหัวหน้าภาคนัดวันเข้า";
   if (APPOINTMENT_DONE.includes(o.appointmentStatus ?? "")) return "ลูกค้าคอนเฟิร์มวันแล้ว ใบไปให้หัวหน้าภาคปล่อยงาน";
   return "ใบไปให้แอดมินคอนเฟิร์มลูกค้า (ของพร้อมแล้ว)";
+}
+
+/**
+ * วันนัดที่หน้าจอโชว์อยู่ตอนเปิดฟอร์ม — ส่งไปกับคอนเฟิร์มลูกค้า / ปล่อยงาน / ทีมไม่ว่างวันใหม่
+ * แอดมินเลื่อนวันนัดได้โดยใบอยู่ขั้นเดิม (ต.ค. 69) ฟอร์มที่เปิดค้างไว้ก่อนเลื่อนจึงยังโชว์วันเก่า
+ * เซิร์ฟเวอร์เทียบกับวันในฐานข้อมูล ไม่ตรง = 409 แล้วหน้าจอโหลดใหม่ — ไม่งั้นกดคอนเฟิร์ม "จันทร์" ที่คุยกับร้าน
+ * แต่บันทึกว่าลูกค้าคอนเฟิร์ม "พุธ" ที่อีกคนเพิ่งเลื่อน ทีมไปพุธ ร้านรอจันทร์
+ */
+function seenAppointment(o: WorkOrder) {
+  return { seenScheduledAt: o.scheduledAt ? o.scheduledAt.slice(0, 10) : null, seenScheduledTime: o.scheduledTime ?? null };
 }
 
 interface Option {
@@ -818,9 +837,20 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * ปิดฟอร์มแล้วเช็คอีกรอบทันที · ถามแค่เลขประวัติล่าสุด (เบา) ไม่โหลดทั้งใบทุกรอบ
    */
   const [staleNote, setStaleNote] = useState<string | null>(null);
-  const live = useRef({ order, load });
-  live.current = { order, load };
-  const checkRemote = useCallback(async () => {
+  // ฟอร์มที่ถือวันนัดอยู่ — ฟอร์มขั้นอื่น (เบิก · โอน) ไม่ได้ใช้วันนัด เปิดค้างไว้ได้ตามเดิม
+  const dateForm = rescheduleOpen || (stageOpen && !!order && DATE_FORM_STAGES.includes(order.status));
+  const live = useRef({ order, load, dateForm });
+  live.current = { order, load, dateForm };
+  // รุ่นข้อมูลที่ดูประวัติไปแล้วระหว่างฟอร์มเปิด — ไม่โหลดใบทั้งก้อนซ้ำทุก 20 วินาทีระหว่างที่ฟอร์มยังเปิดอยู่
+  const peeked = useRef(0);
+  // เลขประวัติล่าสุดที่โหลดมาแล้ว — live.current.order เปลี่ยนตอนวาดจอใหม่ ซึ่งช้ากว่าโหลดเสร็จ
+  // รอบถัดไปที่ตามมาติด ๆ (ปิดฟอร์มแล้วเช็คทันที) จะเห็นใบเก่าแล้วโหลดซ้ำ เด้งข้อความซ้ำ
+  const known = useRef(0);
+  const reload = useCallback(async () => {
+    const next = await live.current.load();
+    if (next) known.current = Math.max(known.current, latestLogId(next));
+  }, []);
+  const checkOnce = useCallback(async () => {
     const cur = live.current.order;
     if (!cur || !pageVisible()) return;
     let r: { v: number; byId: number | null; byName: string | null; actionLabel: string | null; at: string | null; statusLabel: string };
@@ -829,9 +859,33 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     } catch {
       return; // เน็ตหลุด / เซิร์ฟเวอร์หลับ — รอบหน้าค่อยถาม
     }
-    if (r.v <= latestLogId(cur)) return;
+    if (r.v <= Math.max(latestLogId(cur), known.current)) return;
     // ของที่ตัวเองทำจากอีกแท็บ/อีกเครื่อง โหลดเงียบ ๆ ไม่ต้องบอก
     const who = r.byId !== null && r.byId !== user?.id ? r.byName ?? "มีคน" : null;
+    /**
+     * แอดมินเลื่อนวันนัดระหว่างที่ฟอร์มขั้น (คอนเฟิร์มลูกค้า · ปล่อยงาน · ทีมไม่ว่างวันใหม่) หรือฟอร์มเลื่อนวันเปิดอยู่
+     * — ใบอยู่ขั้นเดิมแต่วันในฟอร์มเก่าแล้ว แถบเหลืองหลังฟอร์มไม่พอ: คนที่คุยกับร้านเรื่องวันเดิมอยู่จะกดยืนยันวันที่ไม่ได้คุย
+     * ปิดฟอร์มแล้วโหลดใหม่ให้เห็นวันใหม่ก่อน (เซิร์ฟเวอร์กันซ้ำด้วยวันที่ฟอร์มส่งไป แต่ปิดก่อนดีกว่ากรอกเสร็จแล้วโดนปฏิเสธ)
+     * ดูประวัติใหม่ทั้งหมด ไม่ใช่แค่แถวล่าสุด — เลื่อนแล้วมีคนแนบรูปต่อ แถวล่าสุดก็ไม่ใช่การเลื่อนแล้ว
+     */
+    if (who && live.current.dateForm && r.v > peeked.current) {
+      peeked.current = r.v;
+      let fresh: WorkOrder | null = null;
+      try {
+        fresh = (await api.get<WorkOrder>(`/work-orders/${cur.id}`, { loadingText: false })).data;
+      } catch {
+        fresh = null; // ดูไม่ได้ — ใช้แถบเหลืองตามเดิม เซิร์ฟเวอร์ยังกันด้วยวันที่ฟอร์มส่งไป
+      }
+      const since = latestLogId(cur);
+      if (fresh?.logs.some((l) => l.id > since && ADMIN_DATE_MOVES.includes(l.action))) {
+        setStageOpen(false);
+        setRescheduleOpen(false);
+        setStaleNote(null);
+        await reload();
+        feedback.toast("warn", "แอดมินเพิ่งเลื่อนวันนัด — โหลดใหม่แล้ว");
+        return;
+      }
+    }
     if (anyModalOpen()) {
       if (who) {
         const at = r.at ? new Date(r.at).toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }) : "";
@@ -839,10 +893,31 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       }
       return;
     }
-    await live.current.load();
+    await reload();
     setStaleNote(null);
     if (who) feedback.toast("info", `${who} อัปเดตใบงานนี้ — ${r.statusLabel}`);
-  }, [user?.id]);
+  }, [user?.id, reload]);
+  /**
+   * ถามทีละรอบ — รอบเวลา · กลับมาที่แท็บ · ปิดฟอร์ม ยิงพร้อมกันได้ รอบที่ซ้อนกันโหลดใบซ้ำและเด้งข้อความซ้ำ
+   * (เจอตอนปิดฟอร์มเพราะวันนัดถูกเลื่อน: ขึ้นทั้ง "แอดมินเพิ่งเลื่อนวันนัด" และ "…อัปเดตใบงานนี้") · ระหว่างถามมีคนเรียกอีก = ถามซ้ำอีกรอบหลังจบ
+   */
+  const checking = useRef(false);
+  const recheck = useRef(false);
+  const checkRemote = useCallback(async () => {
+    if (checking.current) {
+      recheck.current = true;
+      return;
+    }
+    checking.current = true;
+    try {
+      do {
+        recheck.current = false;
+        await checkOnce();
+      } while (recheck.current);
+    } finally {
+      checking.current = false;
+    }
+  }, [checkOnce]);
   useFocusEffect(
     useCallback(() => {
       const timer = setInterval(checkRemote, 20_000);
@@ -1826,11 +1901,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             </View>
           </View>
         ) : null}
+        {/* หัวข้อไม่บอกว่าใครขอวันนั้น — วันใหม่มาได้ทั้งจากลูกค้าขอเลื่อนและแอดมินเลื่อนเอง (ต.ค. 69) สาเหตุอยู่ในบันทึกข้างล่าง */}
         {declinedNewDate(order) ? (
           <View style={styles.sentBack} accessibilityLabel="กล่องหัวหน้าภาคส่งกลับนัดใหม่">
             <Ionicons name="calendar-outline" size={18} color={colors.warningInk} />
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.sentBackTitle}>หัวหน้าภาคส่งกลับ — ทีมไม่ว่างวันที่ลูกค้าขอ โทรนัดร้านใหม่</Text>
+              <Text style={styles.sentBackTitle}>หัวหน้าภาคส่งกลับ — ทีมไม่ว่างวันใหม่ โทรนัดร้านใหม่</Text>
               <Text style={styles.sentBackText}>{declinedNewDate(order)!.note ?? "—"}</Text>
               <Text style={styles.sentBackMeta}>
                 {declinedNewDate(order)!.byName ?? "—"} · {formatDateTime(declinedNewDate(order)!.createdAt)}
@@ -3617,8 +3693,8 @@ function StageModal({
         await api.post(
           `/work-orders/${order.id}/confirm-appointment`,
           confirmChoice === "MOVE"
-            ? { scheduledAt: visit, scheduledTime: visitTime || null, note: note.trim() || undefined }
-            : { note: note.trim() || undefined }
+            ? { scheduledAt: visit, scheduledTime: visitTime || null, note: note.trim() || undefined, ...seenAppointment(order) }
+            : { note: note.trim() || undefined, ...seenAppointment(order) }
         );
         onDone("confirmed");
         return;
@@ -3711,11 +3787,12 @@ function StageModal({
         await uploadDocs("RECEIPT", "กำลังส่งบิล");
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
       } else if (canDecline && declineDate) {
-        await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim() });
+        await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim(), ...seenAppointment(order) });
       } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
           team,
           note: note.trim() || undefined,
+          ...seenAppointment(order),
         });
       } else {
         await api.post(`/work-orders/${order.id}/assign`, {
@@ -4869,7 +4946,7 @@ function StageModal({
             {canDecline ? (
               <>
                 {declineDate ? <DispatchNote order={order} /> : null}
-                <View style={styles.options} accessibilityLabel="ลูกค้าขอเปลี่ยนวัน ทีมว่างไหม">
+                <View style={styles.options} accessibilityLabel="วันนัดเปลี่ยน ทีมว่างไหม">
                   <TouchableOpacity
                     style={[styles.option, !declineDate && styles.optionOn]}
                     onPress={() => setDeclineDate(false)}

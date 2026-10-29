@@ -44,6 +44,8 @@ const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTim
 
 /** "แอดมิน · เบิกอะไหล่ (คลัง 94)" → "เบิกอะไหล่ (คลัง 94)" — ตำแหน่งรู้อยู่แล้วว่าเป็นของตัวเอง */
 const stageName = (label: string) => label.split(" · ").slice(1).join(" · ") || label;
+/** ขั้นโอน/เบิกคลังอื่น — ของหัวหน้าภาคเท่านั้น (myTurn ในหน้าใบงานตัดแอดมินออกเหมือนกัน) */
+const SUPERVISOR_ISSUE_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
 
 type Props = {
   onOpen: (id: number, open?: "stage" | "close" | "reschedule") => void;
@@ -439,6 +441,12 @@ function CardActions({
   // ขึ้นเฉพาะใบที่หน้าใบงานจะเปิดฟอร์มให้จริง (ขั้น + สิทธิ์เดียวกัน) — ใบนัดตรวจที่เลยนัดก็ติดป้ายเลยนัด
   // แต่เลื่อนด้วยฟอร์มนี้ไม่ได้ (แก้วันในฟอร์มนัดร้าน) และ Admin Spare Part ดูอย่างเดียว · กดแล้วไม่มีฟอร์มดูเหมือนปุ่มเสีย
   if (isAdmin) {
+    /**
+     * ขั้นโอน/เบิกคลังอื่นเป็นของหัวหน้าภาค แอดมินทำแทนไม่ได้ (หน้าใบงานไม่มีปุ่มให้) — ใบมาอยู่ในกล่องแอดมินเพราะเลยนัด
+     * หรือไม่มีหัวหน้าภาครับ · ปุ่ม "ทำขั้น…" จะพาไปหน้าที่ไม่มีอะไรให้กด จึงบอกว่ารอใครแทน
+     * สิ่งที่แอดมินทำได้คือเลื่อนวันนัด (ปุ่มข้างหน้า) แล้วตามหัวหน้าภาค
+     */
+    const supOnly = SUPERVISOR_ISSUE_STAGES.includes(r.status);
     return (
       <View style={styles.actions}>
         {detail}
@@ -450,7 +458,15 @@ function CardActions({
             </Text>
           </TouchableOpacity>
         ) : null}
-        {go}
+        {supOnly ? (
+          <View style={styles.supWait} accessibilityLabel={`รอหัวหน้าภาค ${r.code}`}>
+            <Text style={styles.supWaitText} numberOfLines={1}>
+              รอหัวหน้าภาค{stageLabel ? ` · ${stageLabel}` : ""}
+            </Text>
+          </View>
+        ) : (
+          go
+        )}
       </View>
     );
   }
@@ -692,4 +708,18 @@ const styles = StyleSheet.create({
   replyBtn: { backgroundColor: colors.roleAdmin },
   // กรอบกรมท่าแบบปุ่มรองในหน้าใบงาน ("เลื่อนวันนัด" · "แจ้งปัญหาหน้างาน")
   moveBtn: { borderWidth: 1.5, borderColor: colors.navy },
+  // ไม่ใช่ปุ่ม — ขนาดเท่าปุ่มขั้นให้แถวไม่กระโดด แต่เส้นประจาง ๆ บอกว่ากดไม่ได้ ขั้นนี้รอคนอื่น
+  supWait: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+  },
+  supWaitText: { fontSize: 13.5, lineHeight: 20, fontWeight: "700", color: colors.textMuted, flexShrink: 1 },
 });

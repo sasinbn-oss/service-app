@@ -10,6 +10,8 @@
 #     confirmFirst เฉพาะเมื่อนัดที่คอนเฟิร์มก่อนเบิกยังใช้อยู่ — ร้านปิดส่งกลับ/ย้ายสายงานแล้ว = target
 #     transfer = โอนจริงในรอบนี้ · pickup = หัวหน้าภาคเบิกคลังอื่น (โอนมาก่อนหรือไม่ก็ได้) · ส่งกลับแล้วเบิก 94 = ไม่นับทั้งคู่
 #   · migration ซิงก์สถานะเคสเครื่องเสีย (Outage.workStatus) ของใบที่ย้ายด้วย
+#   · detail.issueLeft = กฎเดียวกับที่ /assign · /confirm-appointment ใช้ส่งใบต่อ (ของในสโตร์ · ของนอกสโตร์อย่างเดียว ·
+#     ของนอกสโตร์ที่เพิ่มหลังเบิกของในสโตร์แล้ว · ย้อนมานัดใหม่หลังเบิก) — เทียบกับขั้นที่ใบไปจริงในฐานข้อมูล
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -258,6 +260,45 @@ POST $A "work-orders/$W8/parts-short" "{\"sparePartIds\":[$BOARD]}" >/dev/null
 N=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W8 and action='PARTS_SHORT'")
 [ "$(ST $W8)|$(APPT $W8)" = "PARTS_SOURCING|-|-|-" ] && echo "$N" | grep -q "แจ้งร้านว่าเลื่อน" \
   && pass "คอนเฟิร์มแล้ว: ล้างนัด ประวัติบอกให้แอดมินแจ้งร้านว่าเลื่อน (ฐานข้อมูล)" || fail "PARTS_SHORT CONFIRMED: $(ST $W8) · $N"
+
+echo
+echo "═══ detail.issueLeft — ค่าเดียวกับที่ /assign ใช้ตัดสินว่าใบไปขั้นเบิก (แถบขั้นตอน/ฟอร์มอ่านค่านี้)"
+IL() { GET $A "work-orders/$1" | J 'String(d.issueLeft)'; }
+I1=$(sourced W93 "$L94")
+[ "$(IL $I1)" = "true" ] || fail "ของในสโตร์ยังไม่เบิก (ขั้นนัดวัน): issueLeft=$(IL $I1)"
+assign $I1
+[ "$(IL $I1)|$(ST $I1)" = "true|PARTS_REQUESTED|PENDING" ] \
+  && pass "ของในสโตร์ยังไม่มีเลขใบเบิก: issueLeft=true · /assign ส่งไปขั้นเบิกจริง (ฐานข้อมูล)" || fail "I1 ก่อนเบิก: $(IL $I1) $(ST $I1)"
+issue94 $I1 RQ-IL1
+[ "$(IL $I1)|$(ST $I1)" = "false|AWAITING_CONFIRM|PENDING" ] && pass "เบิกครบแล้ว: issueLeft=false" || fail "I1 หลังเบิก: $(IL $I1) $(ST $I1)"
+[ "$(IL $W4)" = "false" ] && pass "ไม่ใช้อะไหล่: issueLeft=false" || fail "ไม่ใช้อะไหล่: $(IL $W4)"
+# ของนอกสโตร์อย่างเดียว — ไม่มีเลขใบเบิก ตัดสินจากว่าแอดมินผ่านขั้นเบิกหลังรอบเช็คล่าสุดหรือยัง
+I2=$(mk W94)
+POST $S "work-orders/$I2/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1}]}" >/dev/null
+OFF=$(DB "select id from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'")
+POST $A "work-orders/$I2/parts-sourcing" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
+# ขั้นเสนอราคาไม่ใช่เรื่องของเทสต์นี้ — พาใบไปขั้นนัดวันเข้าในฐานข้อมูล
+DB "update \"WorkOrder\" set status='PARTS_CHECKED' where id=$I2" >/dev/null
+[ "$(IL $I2)" = "true" ] || fail "ของนอกสโตร์ยังไม่ผ่านขั้นเบิก: issueLeft=$(IL $I2)"
+assign $I2
+[ "$(ST $I2)" = "PARTS_REQUESTED|PENDING" ] && pass "ของนอกสโตร์อย่างเดียว ยังไม่ผ่านขั้นเบิก: issueLeft=true · /assign ไปขั้นเบิก (ฐานข้อมูล)" || fail "I2 หลังนัด: $(ST $I2)"
+POST $A "work-orders/$I2/parts-check" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
+[ "$(IL $I2)|$(ST $I2)" = "false|AWAITING_CONFIRM|PENDING" ] && pass "แอดมินผ่านขั้นเบิกของนอกสโตร์แล้ว: issueLeft=false" || fail "I2 หลังเบิก: $(IL $I2) $(ST $I2)"
+# เบิกแล้ว คอนเฟิร์มแล้ว แล้วย้อนกลับมานัดวันเข้า — แถบเคยวาด "เบิกอะไหล่" เป็นขั้นที่ยังต้องทำ ทั้งที่ /assign ข้ามไปคอนเฟิร์ม
+POST $A "work-orders/$I2/confirm-appointment" '{}' >/dev/null
+R=$(POST $A "work-orders/$I2/rollback" '{"toStage":"PARTS_CHECKED","reason":"ทดสอบ — ย้อนมานัดใหม่"}')
+[ "$(ST $I2 | cut -d'|' -f1)" = "PARTS_CHECKED" ] || fail "ย้อน I2: $(ST $I2) $(echo $R | head -c 150)"
+[ "$(IL $I2)" = "false" ] || fail "ย้อนมานัดใหม่หลังเบิกของนอกสโตร์: issueLeft=$(IL $I2)"
+assign $I2
+[ "$(ST $I2)" = "AWAITING_CONFIRM|PENDING" ] && pass "ย้อนมานัดใหม่หลังเบิกของนอกสโตร์: issueLeft=false · /assign ข้ามขั้นเบิกไปคอนเฟิร์ม (ฐานข้อมูล)" || fail "I2 นัดใหม่: $(ST $I2)"
+# ของในสโตร์เบิกแล้ว แล้วมีของนอกสโตร์เพิ่มเข้ามา (ระบุอะไหล่ใหม่เก็บแถวที่เบิกแล้วไว้ — mergeWaitingParts)
+I3=$(sourced W95 "$L94")
+DB "update \"WorkOrderPart\" set \"requisitionNo\"='RQ-IL3' where \"workOrderId\"=$I3" >/dev/null
+[ "$(IL $I3)" = "false" ] || fail "ของในสโตร์เบิกครบ: issueLeft=$(IL $I3)"
+DB "insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",kind,quantity,\"inStock\") values ($I3,$OFF,'WAITING',1,true)" >/dev/null
+[ "$(IL $I3)" = "true" ] || fail "เพิ่มของนอกสโตร์หลังเบิก: issueLeft=$(IL $I3)"
+assign $I3
+[ "$(ST $I3)" = "PARTS_REQUESTED|PENDING" ] && pass "ของในสโตร์เบิกแล้ว + ของนอกสโตร์ที่เพิ่มทีหลัง: issueLeft=true · /assign ไปขั้นเบิก (ฐานข้อมูล)" || fail "I3 หลังนัด: $(ST $I3)"
 
 echo
 echo "═══ migration ย้ายใบรอคอนเฟิร์มที่ยังไม่เบิก (รันไฟล์จริงแล้ว ROLLBACK)"

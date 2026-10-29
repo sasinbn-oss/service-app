@@ -449,15 +449,31 @@ async function issueLeft(id: number): Promise<boolean> {
       select: { inStock: true, requisitionNo: true, sparePart: { select: { offCatalog: true } } },
     }),
     prisma.workOrderLog.findMany({
-      where: { workOrderId: id, action: { in: [...PARTS_ROUND_ACTIONS, "PARTS_CHECKED"] } },
-      orderBy: { createdAt: "desc" },
+      where: { workOrderId: id, action: { in: ISSUE_ROUND_ACTIONS } },
+      // เวลาเท่ากันเรียงตามลำดับที่เขียน — แบบเดียวกับประวัติในหน้าใบงาน ให้ detail.issueLeft ตอบตรงกันทุกกรณี
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 1,
       select: { action: true },
     }),
   ]);
+  return issueLeftOf(parts, logs[0]?.action);
+}
+
+/** ประวัติที่ตัดสินว่าของนอกสโตร์ผ่านขั้นเบิกรอบนี้แล้วหรือยัง — ตัวล่าสุดเป็น PARTS_CHECKED = ผ่านแล้ว */
+const ISSUE_ROUND_ACTIONS = [...PARTS_ROUND_ACTIONS, "PARTS_CHECKED"];
+
+/**
+ * กฎของ issueLeft จากข้อมูลที่อ่านมาแล้ว — หน้าใบงาน (detail.issueLeft) ใช้ตัวเดียวกับ /assign และ /confirm-appointment
+ * แอปเคยคิดเอง (ดูแค่ของในสโตร์) แถบขั้นตอนจึงติ๊ก "เบิกแล้ว" ทั้งที่ของนอกสโตร์ยังไม่ผ่านขั้นเบิก แล้ว /assign ส่งไปเบิก
+ * latestRoundAction = ประวัติล่าสุดในชุด ISSUE_ROUND_ACTIONS
+ */
+function issueLeftOf(
+  parts: { inStock: boolean | null; requisitionNo: string | null; sparePart: { offCatalog: boolean } }[],
+  latestRoundAction: string | undefined
+): boolean {
   if (parts.length === 0) return false;
   const storeLeft = parts.some((p) => !p.sparePart.offCatalog && !isIssued(p));
-  const offLeft = parts.some((p) => p.sparePart.offCatalog) && logs[0]?.action !== "PARTS_CHECKED";
+  const offLeft = parts.some((p) => p.sparePart.offCatalog) && latestRoundAction !== "PARTS_CHECKED";
   return storeLeft || offLeft;
 }
 
@@ -1488,9 +1504,23 @@ function inboxFilter(
     or.push({ status: "IN_PROGRESS", assignedTeam: { in: [...outsourceNow] } }, REVIEW_ANSWERED);
   }
   // แอดมินทั่วไปเท่านั้น — Admin Spare Part ไม่ได้ดูแลข้อมูลใบงาน
-  if (inboxTakesOrphans(auth)) or.push(REVIEW_WAITING);
+  if (inboxTakesOrphans(auth)) {
+    or.push(REVIEW_WAITING, {
+      status: { in: OVERDUE_SUPERVISOR_STAGES },
+      // ตรงกับ overdue ในแถวรายการ — วันนัดเก็บเป็นเที่ยงคืน UTC ของวันนั้น
+      scheduledAt: { lt: dayStart(bangkokDay()) },
+    });
+  }
   return { OR: or };
 }
+
+/**
+ * ขั้นเบิก/โอนคลังอื่นของหัวหน้าภาคที่เลยวันนัดแล้ว — เข้ากล่องงานแอดมินทั่วไปด้วย (หัวข้อ "เลยนัด")
+ * คนเลื่อนวันนัดได้มีแต่แอดมิน (/reschedule) แต่ขั้นพวกนี้รอหัวหน้าภาค เดิมจึงไม่อยู่ในกล่องแอดมินเลย:
+ * หัวหน้าภาคเห็นป้ายเลยนัดแต่เลื่อนเองไม่ได้ วันที่ผ่านไปแล้วค้างจนของถึงและใบมาถึงขั้นคอนเฟิร์ม (ตรวจโค้ดรอบสอง ต.ค. 69)
+ * ยังไม่เลยนัดไม่เข้า — ระหว่างโอนตามปกติไม่ใช่งานของแอดมิน
+ */
+const OVERDUE_SUPERVISOR_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
 
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
@@ -2333,6 +2363,12 @@ function detailBody({ row, logs, supervisors, crossTeam }: Detail) {
     // กฎเดียวกับป้ายในรายการ — หน้าใบงานไม่ต้องไล่ประวัติเอง (ดู isRescheduled)
     rescheduled: isRescheduled(row.status, logs.find((l) => DATE_SETTLE_ACTIONS.includes(l.action))?.action),
     flow: flowOf(row, logs, base.needsQuote),
+    // ยังมีของต้องเบิกไหม — กฎเดียวกับที่ /assign และ /confirm-appointment ใช้ตัดสินว่าใบไปขั้นเบิกหรือข้าม
+    // แถบขั้นตอนกับข้อความในฟอร์มอ่านค่านี้ ไม่คิดเองอีกชุด (เคยคิดต่างกันจนแถบกับฟอร์มขัดกันบนหน้าเดียว)
+    issueLeft: issueLeftOf(
+      row.parts.filter((p) => p.kind === "WAITING"),
+      logs.find((l) => ISSUE_ROUND_ACTIONS.includes(l.action))?.action
+    ),
     // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
     supervisors,
     crossTeam,
@@ -4617,6 +4653,33 @@ function dayStart(date: string) {
 }
 
 /**
+ * นัดที่คนกดเห็นอยู่บนหน้าจอ — /confirm-appointment · /dispatch · /decline-new-date รับเพิ่มได้ (ไม่บังคับ)
+ *
+ * ทำไม: แอดมินเลื่อนวันนัดได้โดยใบไม่ขยับขั้น (/reschedule) ฟอร์มคอนเฟิร์ม/ปล่อยงานที่เปิดค้างไว้ก่อนเลื่อนยังโชว์วันเดิม
+ * กันเขียนทับด้วยค่าที่เพิ่งอ่านตอนกด (ซึ่งเป็นวันใหม่แล้ว) จับไม่ได้ — ร้านตกลงวันจันทร์ ประวัติบันทึกว่าลูกค้าคอนเฟิร์มวันพุธ
+ * ทีมไปวันพุธ ร้านรอวันจันทร์ (ตรวจโค้ดรอบสอง ต.ค. 69) · ส่งมาแล้วไม่ตรงกับใบ = 409 ไม่เขียนอะไร แอปโหลดใหม่
+ * ตรง = ค่าที่เพิ่งอ่านคือค่าที่หน้าจอเห็น moveStage กันเขียนทับด้วยค่านั้นต่อ (เลื่อนระหว่างอ่านกับเขียน = 409 เหมือนเดิม)
+ * ไม่ส่ง (แอปรุ่นเก่า) = แบบเดิม · null = เห็นว่าไม่มีวัน/ไม่ระบุเวลา
+ */
+const seenDateFields = {
+  seenScheduledAt: dateField.nullable().optional(),
+  seenScheduledTime: timeField,
+};
+type SeenDate = { seenScheduledAt?: string | null; seenScheduledTime?: string | null };
+
+/**
+ * หน้าจอเห็นนัดเดียวกับในใบไหม · ช่องที่ไม่ส่งถือว่าตรง
+ * เทียบวันแบบ ปี-เดือน-วัน (แอปส่งมาแค่นั้น) ไม่ใช่เวลาเต็ม — ใบเก่าที่วันนัดไม่ได้เก็บเป็นเที่ยงคืนจะไม่ติด 409 ตลอดไป
+ */
+function seenMatches(cur: { scheduledAt: Date | null; scheduledTime: string | null }, seen: SeenDate) {
+  const day = cur.scheduledAt ? cur.scheduledAt.toISOString().slice(0, 10) : null;
+  return (
+    (seen.seenScheduledAt === undefined || seen.seenScheduledAt === day) &&
+    (seen.seenScheduledTime === undefined || (seen.seenScheduledTime ?? null) === (cur.scheduledTime ?? null))
+  );
+}
+
+/**
  * "พ. 22 ต.ค. 69 เวลา 13:00 น." — ข้อความนี้ลงประวัติและขึ้นตรง ๆ ในฟอร์มยืนยันออกงาน
  * คนอ่านคือหัวหน้าภาคกับแอดมิน ไม่ใช่โปรแกรม — 2026-10-22 ต้องแปลในหัวก่อนว่าวันอะไร
  */
@@ -4749,6 +4812,7 @@ const confirmSchema = z.object({
   scheduledAt: dateField.optional(),
   scheduledTime: timeField,
   note: z.string().trim().max(500).optional(),
+  ...seenDateFields,
 });
 
 router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, res) => {
@@ -4760,6 +4824,8 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   // ทั้งสองแบบกลับไปให้หัวหน้าภาคปล่อยงานให้ช่าง (ดู WORK_ORDER_STAGE_ORDER)
   const before = await guardStage(req, res, id, ["AWAITING_CONFIRM", "INSPECT_CONFIRM"]);
   if (!before) return;
+  // วันที่ฟอร์มโชว์ไม่ใช่วันในใบแล้ว (แอดมินอีกคนเลื่อนระหว่างโทร) — ไม่บันทึกว่าลูกค้าคอนเฟิร์มวันที่ไม่ได้คุยกัน
+  if (!seenMatches(before, parsed.data)) return stageMoved(res);
   const inspect = before.status === "INSPECT_CONFIRM";
   /**
    * สายงานปัจจุบันเบิกครบก่อนถึงขั้นนี้แล้ว → หัวหน้าภาคปล่อยงานเสมอ
@@ -4799,8 +4865,8 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
       .join(" — "),
   };
   /**
-   * วันที่อ่านไว้ต้องยังเป็นวันเดิม — แอดมินอีกคนเลื่อนวันนัด (ใบไม่ขยับขั้น) ระหว่างนี้ แล้วปุ่มนี้เขียนวันเดิมกลับ
-   * = การเลื่อนหายเงียบ ๆ ทั้งที่ประวัติบอกวันใหม่ · 409 แล้วแอปโหลดใบใหม่ให้เห็นวันล่าสุดก่อนคอนเฟิร์ม
+   * วันที่อ่านไว้ (= ที่ฟอร์มโชว์ ถ้าส่งมา — seenMatches) ต้องยังเป็นวันเดิม — แอดมินอีกคนเลื่อนวันนัด (ใบไม่ขยับขั้น) ระหว่างนี้
+   * แล้วปุ่มนี้เขียนวันเดิมกลับ = การเลื่อนหายเงียบ ๆ ทั้งที่ประวัติบอกวันใหม่ · 409 แล้วแอปโหลดใบใหม่ให้เห็นวันล่าสุดก่อนคอนเฟิร์ม
    */
   const readDate = { scheduledAt: before.scheduledAt, scheduledTime: before.scheduledTime };
   if (!before.outageId) {
@@ -4889,6 +4955,17 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: { action: true },
     });
+    /**
+     * ไม่มีประวัติปล่อยงานเลย (ใบทดสอบที่คัดลอกมาเป็นขั้นช่าง · ใบเก่าก่อนมีขั้นปล่อยงาน) = ไม่รู้ว่าช่างไปหรือยัง ยอมให้ดึงคืน
+     * ปิดงานแล้ว (เคลมถูกตีกลับ ใบกลับมาที่ช่างโดยไม่มีถึงหน้างาน — ถึงหน้างานไม่บังคับกด) ต้องบอกตามจริง
+     * เดิมขึ้น "ช่างถึงหน้างานแล้ว" ทั้งที่ไม่มีใครกดถึง แอดมินงงว่าใครไป
+     */
+    if (last && last.action === "CLOSED") {
+      return res.status(409).json({
+        error: `${wo.code} ช่างปิดงานรอบนี้แล้ว (เคลมถูกตีกลับให้ช่างแก้) — เลื่อนวันนัดไม่ได้ ช่างแก้ตามที่ตีกลับแล้วส่งปิดงานอีกครั้ง`,
+        status: wo.status,
+      });
+    }
     if (last && last.action !== "DISPATCHED") {
       return res.status(409).json({
         error: `${wo.code} ช่างถึงหน้างานแล้ว — เลื่อนวันนัดไม่ได้ ให้ช่างกด “แจ้งปัญหาหน้างาน” (ร้านปิด/ลูกค้าไม่สะดวก) แล้วแอดมินนัดใหม่`,
@@ -4964,6 +5041,7 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
 const dispatchSchema = z.object({
   team: z.string().trim().min(1).max(120).optional(),
   note: z.string().trim().max(500).optional(),
+  ...seenDateFields,
 });
 
 router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
@@ -4975,6 +5053,8 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
   // ต่างกันแค่ปลายทาง: ซ่อม → รอช่างเข้างาน · ตรวจ → รอทีมตรวจหน้างาน
   const cur = await guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]);
   if (!cur) return;
+  // ฟอร์มที่เปิดไว้ก่อนแอดมินเลื่อนวัน — หัวหน้าภาคยังไม่เห็นวันใหม่ (ไม่ได้ผ่านป้าย "คอนเฟิร์มวันใหม่") ห้ามปล่อย
+  if (!seenMatches(cur, parsed.data)) return stageMoved(res);
   const inspect = cur.status === "INSPECT_DISPATCH";
   const next = inspect ? "INSPECTING" : "IN_PROGRESS";
 
@@ -5091,15 +5171,38 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
  */
 const declineNewDateSchema = z.object({
   reason: z.string().trim().min(1, "ต้องบอกเหตุผลให้แอดมิน เช่น ทีมเต็มวันนั้น").max(500),
+  ...seenDateFields,
 });
+
+/**
+ * ใครเป็นคนทำให้วันเปลี่ยน — บันทึกส่งกลับต้องบอกเหตุตามจริง เพราะอยู่ในประวัติถาวรและกล่องที่แอดมินอ่านก่อนโทรร้าน
+ * เดิมเขียน "วันที่ลูกค้าขอ" เสมอ ทั้งที่ป้ายนี้เปิดจากแอดมินเลื่อนเองได้ด้วย (ของโอนไม่ทัน · ทีมติดงาน) ซึ่งร้านไม่ได้ขอ
+ * move = ประวัติล่าสุดในชุด DATE_SETTLE_ACTIONS (ตัวที่เปิดป้าย "คอนเฟิร์มวันใหม่" — isRescheduled)
+ */
+function declinedDateText(move: string | undefined) {
+  if (move === "RESCHEDULED") return "ไม่ว่างวันที่ลูกค้าขอ";
+  if (move === "APPOINTMENT_MOVED" || move === "APPOINTMENT_RECALLED") return "ไม่ว่างวันที่แอดมินเลื่อน";
+  // ไม่มีป้ายวันใหม่ (แอปไม่เปิดทางนี้ — เรียก API ตรง) ไม่เดาว่าใครขอ
+  return "ไม่ว่างวันนัด";
+}
 
 router.post("/:id/decline-new-date", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = declineNewDateSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
-  const cur = await guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]);
+  // ประวัติที่เปิดป้ายวันใหม่อ่านพร้อมใบงาน ไม่ต่อคิว — ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ
+  const [cur, move] = await Promise.all([
+    guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: { in: DATE_SETTLE_ACTIONS } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { action: true },
+    }),
+  ]);
   if (!cur) return;
+  // ตอบว่าไม่ว่าง "วันที่เห็น" — ฟอร์มที่เปิดไว้ก่อนแอดมินเลื่อนไปวันอื่น = 409 ให้ดูวันใหม่ก่อน (ทีมอาจว่างวันนั้น)
+  if (!seenMatches(cur, parsed.data)) return stageMoved(res);
   const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
   const back = cur.status === "INSPECT_DISPATCH" ? "INSPECT_CONFIRM" : "AWAITING_CONFIRM";
   const moved = await moveStage(
@@ -5110,9 +5213,9 @@ router.post("/:id/decline-new-date", requireAuth, async (req: AuthRequest, res) 
       userId: req.auth!.userId,
       action: "NEW_DATE_DECLINED",
       status: back,
-      note: `ทีม${cur.assignedTeam ?? " —"} ไม่ว่างวันที่ลูกค้าขอ (${when}) — ${parsed.data.reason}`,
+      note: `ทีม${cur.assignedTeam ?? " —"} ${declinedDateText(move?.action)} (${when}) — ${parsed.data.reason}`,
     },
-    // ตอบว่าไม่ว่าง "วันที่เห็น" — แอดมินเลื่อนไปวันอื่นพร้อมกัน = 409 ให้ดูวันใหม่ก่อน (เหมือนปล่อยงาน)
+    // แอดมินเลื่อนไปวันอื่นพร้อมกัน (หลังเช็คข้างบน) = 409 เหมือนปล่อยงาน
     { scheduledAt: cur.scheduledAt, scheduledTime: cur.scheduledTime }
   );
   if (!moved) return stageMoved(res);

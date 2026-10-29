@@ -11,6 +11,11 @@
 //   5) หัวหน้าภาค: ไม่มีปุ่มเลื่อนวันนัด · กล่องงานขึ้น "คอนเฟิร์มวันใหม่" ทั้งใบที่ถูกดึงคืนและใบที่เลื่อนระหว่างเบิกแล้วคอนเฟิร์มวันเดิม
 //      · ฟอร์มปล่อยงานบอกว่าแอดมินเลื่อนวันนัด + ทางเลือกทีมว่าง/ไม่ว่าง · คอนเฟิร์มวันใหม่แล้วใบถึงช่าง (ฐานข้อมูล)
 //      · นัดตรวจที่แอดมินเลื่อนวัน: ส่งกลับแอดมินนัดตรวจใหม่ได้ → นัดร้าน (ตรวจหน้างาน) (ฐานข้อมูล)
+//   6) แอดมินเห็นกล่องส่งกลับหัวข้อกลาง ๆ "ทีมไม่ว่างวันใหม่" — วันนั้นแอดมินเลื่อนเอง ไม่ใช่ลูกค้าขอ (ประวัติบอกสาเหตุตามจริง)
+//   7) ใบที่ช่างปิดงานแล้วแต่เคลมถูกตีกลับ (กลับมาขั้นช่าง ไม่เคยกดถึงหน้างาน): ไม่มีปุ่มเลื่อนวันนัด · เซิร์ฟเวอร์ปฏิเสธ
+//      ด้วยเหตุผล "ช่างปิดงานรอบนี้แล้ว" ไม่ใช่ "ช่างถึงหน้างานแล้ว" (ฐานข้อมูลไม่เปลี่ยน)
+//   8) ฟอร์มคอนเฟิร์มลูกค้าที่เปิดค้างไว้ก่อนวันนัดถูกเลื่อน: กดยืนยันแล้วเซิร์ฟเวอร์ปฏิเสธ (วันที่ฟอร์มเห็นไม่ตรง)
+//      ไม่บันทึกว่าลูกค้าคอนเฟิร์มวันที่ไม่ได้คุย (ฐานข้อมูล) · คนอื่นเลื่อน → หน้าจอปิดฟอร์มแล้วโหลดใหม่เอง
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
@@ -176,9 +181,16 @@ const dayLabel = (ymd) => {
     await fx.schedule(L.id, visitDay(20));
     const LI = await fx.workOrder("C0006", null);
     await fx.call(fx.supervisor(), "POST", `/work-orders/${LI.id}/inspect-request`, { team, scheduledAt: visitDay(20) });
-    fx.sql(`update "WorkOrder" set "scheduledAt"='${visitDay(-2)}' where id in (${L.id},${LI.id})`);
-    row(L.id) === `AWAITING_CONFIRM|PENDING|${visitDay(-2)}|${team}` && row(LI.id).startsWith(`INSPECT_CONFIRM|PENDING|${visitDay(-2)}|`)
-      ? pass("เตรียมใบเลยนัด (ฐานข้อมูล): คอนเฟิร์มลูกค้า · นัดร้านตรวจ") : fail(`เตรียมใบเลยนัด: ${row(L.id)} · ${row(LI.id)}`);
+    // ใบค้างโอนจากคลังอื่น (ขั้นของหัวหน้าภาค) ที่วันนัดผ่านไประหว่างโอน — แอดมินคนเดียวที่เลื่อนวันได้ต้องเห็นในงานของตัวเอง
+    const belt = fx.part("SP-BELT");
+    const LT = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    await fx.source(LT.id, "คลังภูเก็ต");
+    await fx.schedule(LT.id, visitDay(20));
+    await fx.call(fx.A, "POST", `/work-orders/${LT.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }] });
+    fx.sql(`update "WorkOrder" set "scheduledAt"='${visitDay(-2)}' where id in (${L.id},${LI.id},${LT.id})`);
+    row(L.id) === `AWAITING_CONFIRM|PENDING|${visitDay(-2)}|${team}` && row(LI.id).startsWith(`INSPECT_CONFIRM|PENDING|${visitDay(-2)}|`) &&
+    row(LT.id) === `PARTS_TRANSFER|PENDING|${visitDay(-2)}|${team}`
+      ? pass("เตรียมใบเลยนัด (ฐานข้อมูล): คอนเฟิร์มลูกค้า · นัดร้านตรวจ · ค้างโอนคลังอื่น") : fail(`เตรียมใบเลยนัด: ${row(L.id)} · ${row(LI.id)} · ${row(LT.id)}`);
     await a.page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
     await a.page.waitForTimeout(4000);
     const q = a.page.getByLabel("ค้นหาในงานของฉัน", { exact: true }).locator("visible=true").first();
@@ -189,6 +201,13 @@ const dayLabel = (ymd) => {
     await a.page.waitForTimeout(800);
     (await a.label(`รายละเอียด ${LI.code}`).count()) > 0 && (await a.label(`เลื่อนวันนัด ${LI.code}`).count()) === 0
       ? pass("งานของฉัน: ใบนัดร้านตรวจที่เลยนัดไม่มีปุ่มลัด (ฟอร์มเลื่อนวันนัดเปิดไม่ได้)") : fail("ใบนัดตรวจที่เลยนัดมีปุ่มลัด หรือไม่อยู่ในงานของฉัน");
+    await q.fill(LT.code);
+    await a.page.waitForTimeout(800);
+    (await a.label(`เลื่อนวันนัด ${LT.code}`).count()) > 0 && (await a.label(`รอหัวหน้าภาค ${LT.code}`).count()) > 0 &&
+    (await a.page.locator(`[aria-label^="ทำขั้น "][aria-label$=" ${LT.code}"]`).count()) === 0
+      ? pass("งานของฉัน: ใบค้างโอนคลังอื่นที่เลยนัดมาอยู่ที่แอดมิน — ปุ่มลัดเลื่อนวันนัด + \"รอหัวหน้าภาค\" แทนปุ่มทำขั้น")
+      : fail("ใบค้างโอนที่เลยนัดไม่อยู่ในงานแอดมิน หรือมีปุ่มทำขั้นที่แอดมินทำไม่ได้");
+    await a.page.screenshot({ path: path.join(DIR, "reschedule-5-queue-transfer.png") });
     await q.fill(L.code);
     await a.page.waitForTimeout(800);
     await a.label(`เลื่อนวันนัด ${L.code}`).first().click();
@@ -256,6 +275,90 @@ const dayLabel = (ymd) => {
         : fail(`หลังส่งกลับนัดตรวจ: ${row(V.id)} · ${lastLog(V.id)}`);
     } else fail("ฟอร์มส่งช่างตรวจที่วันถูกเลื่อนไม่มีทางเลือก ทีมไม่ว่าง");
     await s.ctx.close();
+    // วันที่ทีมไม่ว่างมาจากแอดมินเลื่อน — ประวัติต้องไม่เขียนว่าลูกค้าขอ
+    const declined = lastLog(V.id);
+    declined.includes("ไม่ว่างวันที่แอดมินเลื่อน") && !declined.includes("วันที่ลูกค้าขอ")
+      ? pass("ฐานข้อมูล: ประวัติส่งกลับบอกว่าไม่ว่างวันที่แอดมินเลื่อน (ไม่ใช่ \"วันที่ลูกค้าขอ\")")
+      : fail(`ประวัติส่งกลับ: ${declined}`);
+
+    // ── 6) แอดมิน: กล่องส่งกลับหัวข้อกลาง ๆ ──
+    const b = await openAs("A001", 1400);
+    await b.open(V);
+    (await b.vis("หัวหน้าภาคส่งกลับ — ทีมไม่ว่างวันใหม่ โทรนัดร้านใหม่").count()) > 0 && (await b.vis("วันที่ลูกค้าขอ", false).count()) === 0
+      ? pass("แอดมินเห็นกล่อง หัวหน้าภาคส่งกลับ — ทีมไม่ว่างวันใหม่ (ไม่บอกว่าลูกค้าขอ)")
+      : fail("หัวข้อกล่องส่งกลับไม่ตรง");
+
+    // ── 7) ช่างปิดงานแล้ว เคลมถูกตีกลับ → ใบกลับมาขั้นช่าง: ดึงคืนไม่ได้ ──
+    const W = await fx.workOrder("C0006", []);
+    const dW = visitDay(24);
+    await fx.schedule(W.id, dW);
+    await fx.confirm(W.id);
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${W.id}/dispatch`, {});
+    // สภาพที่ "ตีกลับเคลม" ทิ้งไว้: ประวัติปิดงาน → ตีกลับ ใบกลับมาขั้นช่าง ไม่มีประวัติถึงหน้างาน (ถึงหน้างานไม่บังคับ)
+    // ใส่ตรงฐานข้อมูล — ปิดงานจริงต้องมีรูปและเคลมให้ตรวจ ซึ่งไม่ใช่เรื่องที่เทสต์นี้ดู · เวลาเป็น UTC แบบที่แอปเขียน
+    fx.sql(`insert into "WorkOrderLog" ("workOrderId", action, status, note, "createdAt") values
+      (${W.id}, 'CLOSED', 'CLAIM_REVIEW', 'ปิดงาน (เทสต์)', (now() at time zone 'utc') + interval '1 second'),
+      (${W.id}, 'CLAIM_REJECTED', 'IN_PROGRESS', 'รูปไม่ชัด (เทสต์)', (now() at time zone 'utc') + interval '2 second')`);
+    row(W.id) === `IN_PROGRESS|CONFIRMED|${dW}|${team}` && fx.sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${W.id} and action='ARRIVED'`) === "0"
+      ? pass("เตรียมใบ (ฐานข้อมูล): ขั้นช่าง · ปิดงานแล้วเคลมถูกตีกลับ · ไม่เคยกดถึงหน้างาน")
+      : fail(`เตรียมใบตีกลับเคลม: ${row(W.id)}`);
+    await b.page.waitForTimeout(1500);
+    await b.open(W);
+    (await b.label("ขั้นตอนงาน").count()) > 0 && (await b.label("เลื่อนวันนัด").count()) === 0 && (await b.label("เลื่อนวันนัด จากการ์ดการมอบหมาย").count()) === 0
+      ? pass("ใบที่ช่างปิดงานรอบนี้แล้ว (เคลมถูกตีกลับ): ไม่มีปุ่มเลื่อนวันนัด ทั้งการ์ดขั้นและการ์ดการมอบหมาย")
+      : fail("ใบที่ช่างปิดงานแล้วยังมีปุ่มเลื่อนวันนัด (เซิร์ฟเวอร์ปฏิเสธแน่นอน)");
+    await b.page.screenshot({ path: path.join(DIR, "reschedule-8-closed-no-recall.png") });
+    const refused = await fx.call(fx.A, "POST", `/work-orders/${W.id}/reschedule`, { scheduledAt: visitDay(27), reason: "ทดสอบดึงคืน (เทสต์)" });
+    String(refused.error || "").includes("ช่างปิดงานรอบนี้แล้ว") && row(W.id) === `IN_PROGRESS|CONFIRMED|${dW}|${team}`
+      ? pass("เซิร์ฟเวอร์ปฏิเสธด้วย \"ช่างปิดงานรอบนี้แล้ว\" (ไม่ใช่ช่างถึงหน้างาน) · ฐานข้อมูลไม่เปลี่ยน")
+      : fail(`ดึงคืนใบที่ปิดแล้ว: ${refused.error} · ${row(W.id)}`);
+
+    // ── 8) ฟอร์มคอนเฟิร์มลูกค้าเปิดค้างไว้ แล้ววันนัดถูกเลื่อน ──
+    const dC = visitDay(28), newC = visitDay(31);
+    const confirmedLogs = (id) => fx.sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${id} and action in ('CONFIRMED','RESCHEDULED')`);
+    const C = await fx.workOrder("C0006", []);
+    await fx.schedule(C.id, dC);
+    row(C.id) === `AWAITING_CONFIRM|PENDING|${dC}|${team}` ? pass(`เตรียมใบ (ฐานข้อมูล): รอคอนเฟิร์มลูกค้า วันที่ ${dC}`) : fail(`เตรียมใบคอนเฟิร์ม: ${row(C.id)}`);
+    await b.open(C);
+    await b.vis("คอนเฟิร์มลูกค้า").last().click();
+    await b.page.waitForTimeout(1500);
+    (await b.vis(`คอนเฟิร์มออกหน้างาน · ${C.code}`, false).count()) > 0 ? pass("เปิดฟอร์มคอนเฟิร์มออกหน้างาน (วันเดิม)") : fail("ฟอร์มคอนเฟิร์มไม่เปิด");
+    await b.label("ลูกค้าคอนเฟิร์มวันนี้").last().click();
+    await b.page.waitForTimeout(300);
+    // ระหว่างที่ฟอร์มเปิด แอดมินเลื่อนวัน (API บัญชีเดียวกัน — หน้าจอไม่เด้งเตือนของที่ตัวเองทำ จึงต้องเป็นเซิร์ฟเวอร์ที่กัน)
+    await fx.call(fx.A, "POST", `/work-orders/${C.id}/reschedule`, { scheduledAt: newC, reason: "ของโอนไม่ทัน (เทสต์)" });
+    row(C.id) === `AWAITING_CONFIRM|PENDING|${newC}|${team}` ? pass(`วันนัดถูกเลื่อนเป็น ${newC} ระหว่างที่ฟอร์มเปิด (ฐานข้อมูล)`) : fail(`หลังเลื่อน: ${row(C.id)}`);
+    await b.vis("ยืนยัน").last().click();
+    await b.page.waitForTimeout(4000);
+    row(C.id) === `AWAITING_CONFIRM|PENDING|${newC}|${team}` && confirmedLogs(C.id) === "0"
+      ? pass("ฐานข้อมูล: ไม่บันทึกว่าลูกค้าคอนเฟิร์มวันที่เพิ่งเลื่อน — ใบยังรอคอนเฟิร์ม (เซิร์ฟเวอร์ปฏิเสธฟอร์มที่เห็นวันเก่า)")
+      : fail(`ฟอร์มวันเก่าคอนเฟิร์มวันใหม่ได้: ${row(C.id)} · ${lastLog(C.id)}`);
+    (await b.vis(`คอนเฟิร์มออกหน้างาน · ${C.code}`, false).count()) === 0
+      ? pass("ฟอร์มวันเก่าปิดแล้วโหลดใบใหม่") : fail("ฟอร์มวันเก่ายังเปิดค้าง");
+    await b.page.screenshot({ path: path.join(DIR, "reschedule-9-stale-confirm.png") });
+
+    // คนอื่นเลื่อนวันระหว่างที่ฟอร์มเปิด — หน้าจอเห็นเองแล้วปิดฟอร์ม ไม่ต้องรอกดยืนยันแล้วโดนปฏิเสธ
+    const C2 = await fx.workOrder("C0006", []);
+    await fx.schedule(C2.id, dC);
+    await b.open(C2);
+    await b.vis("คอนเฟิร์มลูกค้า").last().click();
+    await b.page.waitForTimeout(1500);
+    await fx.call(fx.A, "POST", `/work-orders/${C2.id}/reschedule`, { scheduledAt: newC, reason: "ของโอนไม่ทัน (เทสต์)" });
+    // แอดมินทดสอบมีบัญชีเดียว (A001 — SOPADM เป็นของงานทำคู่มือ ห้ามแตะ) ย้ายชื่อคนเลื่อนในประวัติเป็นคนอื่น
+    // ให้หน้าจอเห็นว่าเป็นการเลื่อนของคนอื่น (ของที่ตัวเองทำจากอีกแท็บไม่เด้งเตือน)
+    fx.sql(`update "WorkOrderLog" set "userId"=(select id from "User" where "employeeCode"='S001') where id=(select max(id) from "WorkOrderLog" where "workOrderId"=${C2.id} and action='APPOINTMENT_MOVED')`);
+    // ถามรุ่นข้อมูลทันที — ปกติถามทุก 20 วินาทีและตอนกลับมาที่แท็บ (visibilitychange)
+    await b.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await b.page.getByText("แอดมินเพิ่งเลื่อนวันนัด — โหลดใหม่แล้ว", { exact: false }).first().waitFor({ timeout: 10000 })
+      .then(() => pass("คนอื่นเลื่อนวันระหว่างฟอร์มเปิด → เด้ง \"แอดมินเพิ่งเลื่อนวันนัด — โหลดใหม่แล้ว\""), () => fail("ไม่เด้งบอกว่าวันนัดถูกเลื่อน"));
+    await b.page.waitForTimeout(1000);
+    (await b.vis(`คอนเฟิร์มออกหน้างาน · ${C2.code}`, false).count()) === 0 ? pass("ปิดฟอร์มคอนเฟิร์มที่ถือวันเก่าให้เอง") : fail("ฟอร์มคอนเฟิร์มวันเก่ายังเปิดอยู่");
+    // ปิดฟอร์มแล้วเช็คซ้ำทันที — ต้องไม่โหลดซ้ำแล้วเด้ง "…อัปเดตใบงานนี้" ซ้อนอีกอัน (เคยขึ้นสองข้อความ)
+    (await b.vis("อัปเดตใบงานนี้", false).count()) === 0 ? pass("เด้งข้อความเดียว ไม่โหลดซ้ำหลังปิดฟอร์ม") : fail("เด้งข้อความซ้ำหลังปิดฟอร์ม");
+    row(C2.id) === `AWAITING_CONFIRM|PENDING|${newC}|${team}` && confirmedLogs(C2.id) === "0"
+      ? pass("ฐานข้อมูล: ใบยังรอคอนเฟิร์มลูกค้าวันใหม่") : fail(`หลังปิดฟอร์ม: ${row(C2.id)}`);
+    await b.page.screenshot({ path: path.join(DIR, "reschedule-10-remote-move.png") });
+    await b.ctx.close();
   } catch (e) {
     fail(String(e).split("\n")[0].slice(0, 300));
   } finally {
