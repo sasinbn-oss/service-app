@@ -840,6 +840,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     setLoading(true);
     setFilter(next);
     setMarked(new Map());
+    stopAim();
   }
 
   // โหลดใหม่ทุกครั้งที่กลับมาหน้านี้ เพราะเพิ่งไปปิดงานมาแล้วตัวเลขต้องเปลี่ยน
@@ -915,6 +916,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     const [g, ...rest] = queue;
     setJumpQueue(rest);
     if (!g) return;
+    stopAim();
     jumpTarget.current = g;
     if (!sameSpot(g, here)) feedback.toast("info", `ไปแท็บ ${spotLabel(g)}`);
     if (g.filter !== filter) {
@@ -964,21 +966,88 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       for (const id of present) next.set(id, changeText(beforeRows.current.get(id), rows.find((r) => r.id === id)!));
       return next;
     });
-    blink(new Set(present));
-    const index = items.findIndex((it) => !("sep" in it) && present.includes(it.id));
-    scrollTries.current = 0;
-    if (index < 0) return;
-    const aim = (animated: boolean) => listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated });
-    setTimeout(() => aim(true), 80);
-    // เล็งซ้ำหลังการ์ดที่เพิ่งวาดวัดความสูงจริงเสร็จ — ระหว่างทางใช้ความสูงเฉลี่ย ใบท้ายรายการยาวจึงคลาดไปได้หลายใบ
-    setTimeout(() => aim(false), 1200);
+    const first = items.find((it): it is WorkOrderRow => !("sep" in it) && present.includes(it.id));
+    if (first) aimAt(first.id, () => blink(new Set(present)));
+    else blink(new Set(present));
   }, [rows, loading, filter, prefs.supTab, supTabs, shown, items, jumpTick, blink]);
-  /** การ์ดยังไม่ถูกวาด (FlatList วาดเฉพาะแถวใกล้จอ) — กระโดดไปตำแหน่งประมาณก่อน แล้วค่อยเล็งใหม่ */
-  const scrollTries = useRef(0);
-  const onScrollToIndexFailed = (info: { index: number; averageItemLength: number }) => {
-    if (++scrollTries.current > 20) return;
+
+  /**
+   * เลื่อนไปหาการ์ดที่พามาดู — ลองทุกเฟรมจนถึง แล้วเล็งซ้ำทุกครั้งที่รายการเปลี่ยนขนาดจนนิ่ง
+   *
+   * FlatList รู้ตำแหน่งเฉพาะการ์ดที่วาดแล้ว และเลื่อนเลยการ์ดที่วัดแล้วไม่ได้ (ที่ว่างท้ายรายการถูกตัดไว้แค่นั้น)
+   * ใบลึก ๆ ของรายการยาวจึงต้องไต่ลงไปทีละชุดที่รายการวาดเพิ่ม (~10 ใบ): scrollToIndex ล้ม → กระโดดไปท้ายสุดที่วัดแล้ว
+   * → รายการวาดชุดถัดไป → ลองใหม่ · เดิมลองใหม่ทุก 120 ms ไม่เกิน 20 ครั้ง บวกการเล็งซ้ำที่ 1.2 วิอีกสายที่นับโควตาเดียวกัน
+   * ครั้งที่ลองก่อนรายการวาดชุดใหม่เสร็จเสียเปล่า — ใบที่ 119 จาก 121 ในแท็บทั้งหมดใช้ไป 17 ครั้ง เครื่องช้าลงนิดเดียว
+   * โควตาหมดก่อนถึง การ์ดถูกวาดแล้วแต่ค้างนอกจอ (update-jump-web-test ไม่ผ่าน 1 ใน 5 รอบ ต.ค. 69)
+   * จึงไม่นับครั้ง เลิกเมื่อรายการไม่วาดการ์ดเพิ่มแล้ว 2 วิเท่านั้น · ลองทุกเฟรมแทนตั้งเวลา ไต่ได้เร็วเท่าที่รายการวาดทัน
+   * (ใบเดียวกันถึงใน 1.7 วิ จากเดิมราว 2.5 วิ)
+   *
+   * ถึงแล้วการ์ดรอบ ๆ ยังถูกวาด/วัดความสูงจริงแทนค่าประมาณ ตำแหน่งจึงยังขยับได้ — เล็งซ้ำจนรายการนิ่ง 0.6 วิ
+   * กระพริบตอนถึง ไม่ใช่ตอนเริ่ม (ไต่นาน ๆ กระพริบจบไปก่อนการ์ดขึ้นจอ) · หาตำแหน่งจาก id ทุกรอบ รายการเปลี่ยนระหว่างทางก็ไม่เล็งผิดใบ
+   * คนแตะ/เลื่อนรายการเองระหว่างนั้นเลิกพาไปทันที ไม่แย่งนิ้ว
+   */
+  const aiming = useRef<{
+    id: number;
+    onReach: () => void;
+    frame: number;
+    /** ยังไม่เคยล้ม = การ์ดอยู่ใกล้ เลื่อนแบบนุ่มได้ · ไต่แล้วกระโดดตรง ๆ */
+    smooth: boolean;
+    failed: boolean;
+    reached: boolean;
+    /** รายการเปลี่ยนขนาดหลังถึงแล้ว — ต้องเล็งใหม่ */
+    moved: boolean;
+    measured: number;
+    /** เวลาที่รายการคืบหน้าล่าสุด (วัดการ์ดเพิ่ม / ถึง / เปลี่ยนขนาด) */
+    progressAt: number;
+  } | null>(null);
+  const listItems = useRef<ListItem[]>([]);
+  const stopAim = useCallback(() => {
+    if (aiming.current) cancelAnimationFrame(aiming.current.frame);
+    aiming.current = null;
+  }, []);
+  const aimStep = useCallback(() => {
+    const a = aiming.current;
+    if (!a) return;
+    const data = listItems.current;
+    const index = data.findIndex((it) => !("sep" in it) && it.id === a.id);
+    if (index < 0 && data.length) return stopAim();
+    if (index >= 0 && (!a.reached || a.moved)) {
+      a.failed = false;
+      a.moved = false;
+      listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated: a.smooth });
+      if (!a.failed && !a.reached) {
+        a.reached = true;
+        a.progressAt = Date.now();
+        a.onReach();
+      }
+    }
+    if (Date.now() - a.progressAt > (a.reached ? 600 : 2000)) return stopAim();
+    a.frame = requestAnimationFrame(aimStep);
+  }, [stopAim]);
+  const aimAt = (id: number, onReach: () => void) => {
+    stopAim();
+    const a = { id, onReach, frame: 0, smooth: true, failed: false, reached: false, moved: false, measured: -1, progressAt: Date.now() };
+    aiming.current = a;
+    a.frame = requestAnimationFrame(aimStep);
+  };
+  useEffect(() => stopAim, [stopAim]);
+  /** การ์ดยังไม่ถูกวาด (FlatList วาดเฉพาะแถวใกล้จอ) — กระโดดไปท้ายสุดที่วัดแล้ว รายการจะวาดชุดถัดไป แล้วเฟรมหน้าลองใหม่ */
+  const onScrollToIndexFailed = (info: { index: number; averageItemLength: number; highestMeasuredFrameIndex: number }) => {
+    const a = aiming.current;
+    if (!a) return;
+    a.failed = true;
+    a.smooth = false;
+    if (info.highestMeasuredFrameIndex > a.measured) {
+      a.measured = info.highestMeasuredFrameIndex;
+      a.progressAt = Date.now();
+    }
     listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-    setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.3, animated: false }), 120);
+  };
+  const onListContentSize = () => {
+    const a = aiming.current;
+    if (!a?.reached) return;
+    a.moved = true;
+    a.progressAt = Date.now();
   };
 
   /**
@@ -1323,13 +1392,18 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * เบราว์เซอร์จะเลื่อนตำแหน่งให้เอง "เพื่อไม่ให้ของบนจอขยับ" — แต่กับรายการเสมือนมันกระโดดข้ามไปทีละหลายพัน px
    * การ์ดช่วงนั้นถูกข้ามไปไม่เคยโผล่ (รายการราว 200 ใบบนมือถือ เลื่อนช้า ๆ เห็นแค่ 157 · ต.ค. 69)
    * ตั้งทุกครั้งที่รายการถูกสร้างใหม่ (key เปลี่ยนระหว่างว่าง/มีใบงาน)
+   * ล้อเมาส์ไม่ผ่าน onTouchStart/onScrollBeginDrag จึงฟังที่กล่องเดียวกันนี้ — หมุนล้อเองแล้วเลิกพาไปหาการ์ด (aimAt)
    */
   const listKey = status ? "empty" : "list";
+  // ชุดเดียวกับ data ของ FlatList — ระหว่างโหลดรายการว่าง เลขแถวที่คิดจาก items ใช้กับมันไม่ได้
+  listItems.current = status ? [] : items;
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const node = (listRef.current as unknown as { getScrollableNode?: () => HTMLElement | null } | null)?.getScrollableNode?.();
     if (node?.style) node.style.setProperty("overflow-anchor", "none");
-  }, [listKey]);
+    node?.addEventListener?.("wheel", stopAim, { passive: true });
+    return () => node?.removeEventListener?.("wheel", stopAim);
+  }, [listKey, stopAim]);
 
   return (
     <View style={styles.container}>
@@ -1362,6 +1436,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ]}
           refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
           onScrollToIndexFailed={onScrollToIndexFailed}
+          onContentSizeChange={onListContentSize}
+          onTouchStart={stopAim}
+          onScrollBeginDrag={stopAim}
           initialNumToRender={table ? 20 : 8}
           windowSize={7}
           removeClippedSubviews
