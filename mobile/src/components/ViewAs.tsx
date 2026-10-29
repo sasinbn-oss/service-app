@@ -7,6 +7,7 @@ import AppModal from "./AppModal";
 import { api, apiErrorMessage } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { showAlert } from "../utils/alert";
+import { AREA_TEAM_LABELS } from "../utils/areaTeam";
 import { colors, radius, spacing } from "../theme";
 
 /**
@@ -16,7 +17,7 @@ import { colors, radius, spacing } from "../theme";
  * เพราะสิ่งที่แต่ละคนเห็นตัดสินที่เซิร์ฟเวอร์ทั้งหมด ดูได้อย่างเดียว — เซิร์ฟเวอร์ปฏิเสธทุกคำขอที่แก้ข้อมูล
  */
 
-type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN";
+type Role = "EMPLOYEE" | "SUPERVISOR" | "AREA" | "COCO_SUPERVISOR" | "COCO_MAID" | "ADMIN";
 type Person = {
   id: number;
   employeeCode: string;
@@ -25,18 +26,31 @@ type Person = {
   region: string | null;
   team: string | null;
   supervisedTeams: string[];
+  maidBranches?: { code: string; name: string }[];
+  area?: { id: number; name: string } | null;
+  _count?: { areaMembers: number; cocoBranches: number };
 };
 
+/** สีตามผังฝั่ง Area — Area ฟ้าอมเขียว · Supervisor (COCO) ฟ้า · Maid ชมพู ให้จำได้ชุดเดียวทั้งแอป */
 const TABS: { role: Role; label: string; fg: string; bg: string }[] = [
   { role: "EMPLOYEE", label: "ช่าง", fg: colors.roleTech, bg: colors.roleTechSoft },
   { role: "SUPERVISOR", label: "หัวหน้าภาค", fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft },
+  { role: "AREA", label: AREA_TEAM_LABELS.AREA, fg: colors.roleArea, bg: colors.roleAreaSoft },
+  { role: "COCO_SUPERVISOR", label: AREA_TEAM_LABELS.COCO_SUPERVISOR, fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft },
+  { role: "COCO_MAID", label: AREA_TEAM_LABELS.COCO_MAID, fg: colors.roleMaid, bg: colors.roleMaidSoft },
   { role: "ADMIN", label: "แอดมิน", fg: colors.roleAdmin, bg: colors.roleAdminSoft },
 ];
+const AREA_TEAM_TABS = new Set<string>(["AREA", "COCO_SUPERVISOR", "COCO_MAID"]);
 
-/** กลุ่มในรายชื่อ — ช่างตามทีม หัวหน้าภาคตามภาค เพราะคนที่มาดูมักนึกถึงพื้นที่ก่อนชื่อคน */
+/**
+ * กลุ่มในรายชื่อ — ช่างตามทีม หัวหน้าภาคตามภาค Supervisor (COCO) ตาม Area เพราะคนที่มาดูมักนึกถึงพื้นที่ก่อนชื่อคน
+ * Maid ไม่แบ่งกลุ่ม — สาขาหนึ่งอยู่ใต้หลาย Area ได้ (Supervisor หลายคน) จัดลงกลุ่มเดียวจะหลอกตา ค้นรหัสสาขาเอาเร็วกว่า
+ */
 function groupOf(p: Person) {
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
   if (p.role === "SUPERVISOR") return p.region ? `ภาค${p.region}` : "ดูแลเป็นรายทีม";
+  if (p.role === "COCO_SUPERVISOR") return p.area ? `Area ${p.area.name}` : "ยังไม่อยู่ใต้ Area";
+  if (AREA_TEAM_TABS.has(p.role)) return AREA_TEAM_LABELS[p.role];
   return "แอดมิน";
 }
 
@@ -46,12 +60,25 @@ function detailOf(p: Person) {
     return [p.region ? `ภาค${p.region}` : null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
   }
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
+  if (p.role === "AREA") {
+    const n = p._count?.areaMembers ?? 0;
+    return n ? `Supervisor ${n} คน · เห็นสาขา COCO ทั้งหมด` : "ยังไม่มี Supervisor · เห็นสาขา COCO ทั้งหมด";
+  }
+  if (p.role === "COCO_SUPERVISOR") {
+    const n = p._count?.cocoBranches ?? 0;
+    return n ? `ดูแล ${n} สาขา` : "ยังไม่ได้ดูแลสาขา";
+  }
+  if (p.role === "COCO_MAID") {
+    const b = p.maidBranches ?? [];
+    if (!b.length) return "ยังไม่ได้ผูกสาขา";
+    return b.length === 1 ? `ประจำ ${b[0].code} ${b[0].name}` : `ประจำ ${b.length} สาขา: ${b.map((x) => x.code).join(", ")}`;
+  }
   return p.role === "PARTS_ADMIN" ? "Admin Spare Part" : "แอดมิน";
 }
 
 /**
  * ปุ่มบนแถบบน — Super Admin และแอดมิน (ไม่ใช่ Admin Spare Part) ที่ยังเป็นตัวเองอยู่
- * แอดมินดูได้เฉพาะหัวหน้าภาคกับช่าง (เจ้าของงานเพิ่ม ต.ค. 69 · เซิร์ฟเวอร์กันซ้ำ — utils/viewAs.ts)
+ * แอดมินดูได้เฉพาะหัวหน้าภาค ช่าง และทีม Area (เจ้าของงานเพิ่ม ต.ค. 69 · เซิร์ฟเวอร์กันซ้ำ — utils/viewAs.ts)
  */
 export function ViewAsButton({ compact }: { compact?: boolean }) {
   const { user } = useAuth();
@@ -84,11 +111,14 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     api
       .get<Person[]>("/auth/users")
-      // แอดมินทั่วไปดูได้เฉพาะหัวหน้าภาค/ช่าง — ไม่ขึ้นรายชื่อแอดมินให้เลือกแล้วโดนปฏิเสธ
+      // แอดมินทั่วไปดูได้เฉพาะหัวหน้าภาค/ช่าง/ทีม Area — ไม่ขึ้นรายชื่อแอดมินให้เลือกแล้วโดนปฏิเสธ
       .then((r) =>
         setPeople(
           r.data.filter(
-            (p) => p.role !== "SUPER_ADMIN" && p.id !== user?.id && (user?.superAdmin || p.role === "SUPERVISOR" || p.role === "EMPLOYEE")
+            (p) =>
+              p.role !== "SUPER_ADMIN" &&
+              p.id !== user?.id &&
+              (user?.superAdmin || p.role === "SUPERVISOR" || p.role === "EMPLOYEE" || AREA_TEAM_TABS.has(p.role))
           )
         )
       )
@@ -107,7 +137,9 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
         .filter(
           (p) =>
             !q ||
-            [p.name, p.employeeCode, p.team, p.region, groupOf(p)].some((v) => v?.toLowerCase().includes(q))
+            [p.name, p.employeeCode, p.team, p.region, groupOf(p), ...(p.maidBranches ?? []).flatMap((b) => [b.code, b.name])].some(
+              (v) => v?.toLowerCase().includes(q)
+            )
         )
         .sort((a, b) => groupOf(a).localeCompare(groupOf(b), "th") || a.name.localeCompare(b.name, "th")),
     [people, tab, q]
@@ -178,7 +210,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
           style={styles.searchInput}
           value={query}
           onChangeText={setQuery}
-          placeholder="ค้นชื่อ รหัสพนักงาน ทีม หรือภาค"
+          placeholder={AREA_TEAM_TABS.has(tab) ? "ค้นชื่อ รหัสพนักงาน Area หรือสาขา" : "ค้นชื่อ รหัสพนักงาน ทีม หรือภาค"}
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
           autoCorrect={false}
@@ -188,7 +220,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
       {!people ? (
         <Spinner color={colors.primary} style={{ marginVertical: spacing.xl }} />
       ) : rows.length === 0 ? (
-        <Text style={styles.empty}>{q ? `ไม่พบ “${query.trim()}” ในตำแหน่ง${tone.label}` : `ยังไม่มี${tone.label}ในระบบ`}</Text>
+        <Text style={styles.empty}>{q ? `ไม่พบ “${query.trim()}” ในตำแหน่ง ${tone.label}` : `ยังไม่มีผู้ใช้ตำแหน่ง ${tone.label}`}</Text>
       ) : (
         groups.map((g) => (
           <View key={g} style={{ gap: spacing.xs }}>
@@ -226,7 +258,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
   );
 }
 
-const ROLE_LABEL: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง" };
+const ROLE_LABEL: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง", ...AREA_TEAM_LABELS };
 
 /**
  * แถบส้มค้างบนสุดตลอดที่ดูในฐานะคนอื่น

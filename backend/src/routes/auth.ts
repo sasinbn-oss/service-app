@@ -171,9 +171,12 @@ router.post("/view-as", requireAuth, async (req: AuthRequest, res) => {
   // Super Admin เห็นทุกอย่างเท่ากันอยู่แล้ว และหน้าจอของเขามีเครื่องมือที่ไม่ควรเปิดผ่านทางอ้อม
   if (target.role === "SUPER_ADMIN") return res.status(400).json({ error: "ดูในฐานะ Super Admin ไม่ได้" });
   if (!canViewAs(req.auth!.superAdmin ? "SUPER_ADMIN" : "ADMIN", target.role)) {
-    return res.status(403).json({ error: "แอดมินดูในฐานะได้เฉพาะหัวหน้าภาคและช่าง" });
+    return res.status(403).json({ error: "แอดมินดูในฐานะได้เฉพาะหัวหน้าภาค ช่าง และทีม Area" });
   }
 
+  // บอกด่าน requireAuth ว่ามีบัญชีนี้ แบบเดียวกับตอนล็อกอิน — คนที่เพิ่งนำเข้าแล้วยังไม่เคยเข้าระบบ (ทีม Area ทั้งไฟล์)
+  // รายชื่อที่จำไว้ยังไม่มี คำขอแรกของการดูจะถูกตีกลับว่า "สิทธิ์ถูกยกเลิก" ทั้งที่เพิ่งอนุญาต (utils/userGate.ts)
+  rememberUser(target.id, target.role as Role);
   const log = await prisma.viewAsLog.create({ data: { byUserId: req.auth!.userId, targetUserId: target.id } });
   const token = signViewAsToken({
     userId: target.id,
@@ -232,10 +235,20 @@ function managedUser<T extends { maidBranches: { branch: { code: string; name: s
   return { ...u, maidBranches: u.maidBranches.map((m) => m.branch) };
 }
 
+/**
+ * area กับจำนวน Supervisor/สาขา — ให้หน้า "ดูในฐานะ" จัดกลุ่ม Supervisor (COCO) ตาม Area และบอกว่าแต่ละคนดูแลแค่ไหน
+ * คนโทรมาถามมักบอกชื่อ Area หรือสาขา ไม่ใช่ชื่อคน
+ */
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
     where: { deletedAt: null },
-    select: MANAGED_USER_SELECT,
+    select: {
+      ...MANAGED_USER_SELECT,
+      area: { select: { id: true, name: true } },
+      _count: {
+        select: { areaMembers: { where: { deletedAt: null } }, cocoBranches: { where: { cancelledAt: null } } },
+      },
+    },
     orderBy: [{ role: "asc" }, { name: "asc" }],
   });
   res.json(users.map(managedUser));

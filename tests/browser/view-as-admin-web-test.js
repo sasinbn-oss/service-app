@@ -1,6 +1,7 @@
-// ทดสอบ: แอดมินดูในฐานะหัวหน้าภาค/ช่างได้ (เจ้าของงานเพิ่ม ต.ค. 69)
-//   · แอดมินเห็นปุ่ม "ดูในฐานะ…" · ตัวเลือกมีแค่ ช่าง/หัวหน้าภาค (ไม่มีแท็บแอดมิน)
+// ทดสอบ: แอดมินดูในฐานะหัวหน้าภาค/ช่าง/ทีม Area ได้ (เจ้าของงานเพิ่ม ต.ค. 69)
+//   · แอดมินเห็นปุ่ม "ดูในฐานะ…" · ตัวเลือกมี ช่าง/หัวหน้าภาค/Area/Supervisor (COCO)/Maid (COCO) (ไม่มีแท็บแอดมิน)
 //   · เลือก T001 → แถบ "กำลังดูในฐานะ" + บันทึกในฐานข้อมูลว่าใครดูใคร · กลับเป็นตัวเองได้ (บันทึกเวลาเลิกดู)
+//   · Supervisor (COCO) จัดกลุ่มตาม Area · ค้น Maid ด้วยรหัสสาขา → ดูในฐานะ Maid ได้ แถบบอกตำแหน่ง Maid (COCO)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -15,6 +16,16 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     args: ["--no-sandbox"],
   });
   const aid = sql(`select id from "User" where "employeeCode"='A001'`);
+  // ทีม Area ที่ยังไม่เคยเข้าระบบ (เหมือนเพิ่งนำเข้าจากไฟล์) — Maid ประจำ C0006
+  sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
+         select 'zw.area', 'Area ทดลองดูแทน', 'AREA', "passwordHash", false from "User" where "employeeCode"='T001';
+       insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword","areaId")
+         select 'zw.sup', 'Supervisor ทดลองดูแทน', 'COCO_SUPERVISOR', "passwordHash", false, (select id from "User" where "employeeCode"='zw.area')
+         from "User" where "employeeCode"='T001';
+       insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
+         select 'zw.maid', 'Maid ทดลองดูแทน', 'COCO_MAID', "passwordHash", false from "User" where "employeeCode"='T001';
+       insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid'), id from "Branch" where code='C0006';`);
+  const maidId = sql(`select id from "User" where "employeeCode"='zw.maid'`);
   const before = Number(sql(`select coalesce(max(id),0) from "ViewAsLog"`));
   try {
     const page = await (await browser.newContext({ viewport: { width: 1300, height: 900 } })).newPage();
@@ -30,8 +41,11 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     (await label("ดูในฐานะผู้ใช้อื่น").count()) ? pass("แอดมินเห็นปุ่ม ดูในฐานะ…") : fail("แอดมินไม่เห็นปุ่ม");
     await label("ดูในฐานะผู้ใช้อื่น").first().click();
     await page.waitForTimeout(1500);
-    (await label("ตำแหน่ง ช่าง").count()) && (await label("ตำแหน่ง หัวหน้าภาค").count()) && !(await label("ตำแหน่ง แอดมิน").count())
-      ? pass("ตัวเลือกมีแค่ ช่าง/หัวหน้าภาค — ไม่มีแท็บแอดมิน") : fail("แท็บตัวเลือกไม่ถูก");
+    const tabs = ["ช่าง", "หัวหน้าภาค", "Area", "Supervisor (COCO)", "Maid (COCO)"];
+    const have = [];
+    for (const t of tabs) if (await label(`ตำแหน่ง ${t}`).count()) have.push(t);
+    have.length === tabs.length && !(await label("ตำแหน่ง แอดมิน").count())
+      ? pass("ตัวเลือกมี ช่าง/หัวหน้าภาค/Area/Supervisor (COCO)/Maid (COCO) — ไม่มีแท็บแอดมิน") : fail(`แท็บตัวเลือกไม่ถูก: ${have.join(",")}`);
     await label("ค้นหาผู้ใช้ที่จะดู").fill("T001");
     await page.waitForTimeout(600);
     await page.locator('[aria-label^="เลือก "]').locator("visible=true").first().click();
@@ -45,11 +59,34 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     await page.waitForTimeout(3000);
     const ended = sql(`select ("endedAt" is not null)::text from "ViewAsLog" where id>${before} order by id desc limit 1`);
     (await label("ดูในฐานะผู้ใช้อื่น").count()) && ended === "true" ? pass("กลับเป็นตัวเองได้ · บันทึกเวลาเลิกดู") : fail(`กลับเป็นตัวเอง: ${ended}`);
+
+    // ทีม Area — คนโทรมาถามมักบอกชื่อ Area หรือสาขา จึงจัด Supervisor ตาม Area และค้น Maid ด้วยรหัสสาขาได้
+    await label("ดูในฐานะผู้ใช้อื่น").first().click();
+    await page.waitForTimeout(1500);
+    await label("ตำแหน่ง Supervisor (COCO)").click();
+    await page.waitForTimeout(400);
+    (await vis("Area Area ทดลองดูแทน").count()) && (await vis("Supervisor ทดลองดูแทน").count())
+      ? pass("Supervisor (COCO) จัดกลุ่มตาม Area ที่สังกัด") : fail("ไม่เห็นกลุ่ม Area ของ Supervisor (COCO)");
+    await label("ตำแหน่ง Maid (COCO)").click();
+    await label("ค้นหาผู้ใช้ที่จะดู").fill("c0006");
+    await page.waitForTimeout(600);
+    (await vis("Maid ทดลองดูแทน").count()) && (await vis("zw.maid · ประจำ C0006", false).count())
+      ? pass("ค้น Maid ด้วยรหัสสาขาเจอ และบอกสาขาที่ประจำ") : fail("ค้น Maid ด้วยรหัสสาขาไม่เจอ");
+    await label("เลือก Maid ทดลองดูแทน").click();
+    await page.waitForTimeout(300);
+    await label("ดูในฐานะคนนี้").click();
+    await page.waitForTimeout(4000);
+    const mlog = sql(`select "byUserId"||'|'||"targetUserId" from "ViewAsLog" where id>${before} order by id desc limit 1`);
+    (await vis("(zw.maid · Maid (COCO))", false).count()) && mlog === `${aid}|${maidId}`
+      ? pass("ดูในฐานะ Maid ได้ (บัญชีที่ยังไม่เคยเข้าระบบ) · แถบบอกตำแหน่ง Maid (COCO) · ฐานข้อมูลบันทึก") : fail(`ดู Maid: ${mlog}`);
+    await label("กลับเป็นตัวเอง").first().click();
+    await page.waitForTimeout(3000);
+    (await label("ดูในฐานะผู้ใช้อื่น").count()) ? pass("กลับจาก Maid เป็นตัวเองได้") : fail("กลับจาก Maid ไม่ได้");
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    sql(`delete from "ViewAsLog" where id>${before}`);
+    sql(`delete from "ViewAsLog" where id>${before}; delete from "User" where "employeeCode" in ('zw.sup','zw.maid','zw.area')`);
     await browser.close();
   }
 })();
