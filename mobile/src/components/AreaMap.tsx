@@ -613,7 +613,14 @@ export default function AreaMap({
   const [, setTick] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
   const dockRef = useRef<View>(null);
+  const toolbarRef = useRef<View>(null);
   const toolbarH = useRef(0);
+  // ความสูงพื้นที่เลื่อนจริง — จอเตี้ย (โน้ตบุ๊ก 768 · มือถือแนวนอน) ของที่ติดบนสุดต้องน้อยลง ไม่งั้นเหลือที่ดูผังไม่กี่บรรทัด
+  const [viewH, setViewH] = useState(0);
+  // จอเตี้ย: ติดบนสุดแค่ช่องค้นหา/ปุ่ม + แถบ Area (คำอธิบายสี/แถบแก้ไขเลื่อนไปกับผัง) · เตี้ยมากแบบมือถือแนวนอน: แถบ Area ไม่ติดด้วย
+  // วัดจากพื้นที่เลื่อนจริง — โน้ตบุ๊ก 1366×768 เหลือราว 590px แถบเต็มชุดตอนแก้ไขกินไปเกินครึ่ง
+  const shortH = viewH > 0 && viewH < 800;
+  const tinyH = viewH > 0 && viewH < 500;
   const showTopRef = useRef(false);
   /** element ที่ต้องเลื่อนไปหลังวาดเสร็จ ("cur" = ผลค้นหาปัจจุบัน) — เลื่อนก่อนวาดไม่ได้เพราะ Area ที่กางให้ยังไม่มีบนจอ */
   const pendingScroll = useRef<string | null>(null);
@@ -700,7 +707,8 @@ export default function AreaMap({
   // รอจนรู้ความกว้างแถบก่อน (วาดรอบแรกยังเป็น 0)
   useEffect(() => {
     const id = revealRef.current;
-    if (id == null || !strip.w) return;
+    // ยังไม่มีแถบ (อยู่หน้าตาราง) = เก็บไว้เลื่อนตอนกลับมาที่ผัง ไม่ทิ้ง
+    if (id == null || !strip.w || !stripRef.current) return;
     revealRef.current = null;
     const { tw, ids } = stripGeo.current;
     const i = ids.indexOf(id);
@@ -709,6 +717,12 @@ export default function AreaMap({
     if (x0 >= strip.x && x0 + tw <= strip.x + strip.w) return;
     stripRef.current?.scrollTo({ x: Math.max(0, x0 - (strip.w - tw) / 2), animated: true });
   });
+
+  // ออกจากผังไปหน้าตาราง แถบ Area ถูกถอดออก กลับมาเป็นแถบใหม่ที่ซ้ายสุด — ล้างตำแหน่งเดิมทิ้ง
+  // ไม่งั้น "เห็น 4–7" ปุ่ม ‹ › และการเลื่อนหาการ์ดคิดจากตำแหน่งเก่า
+  useEffect(() => {
+    if (view !== "chart") setStrip((st) => (st.x || st.w || st.cw ? { x: 0, w: 0, cw: 0 } : st));
+  }, [view]);
 
   // เลื่อนไปที่ element หลังวาดเสร็จ — ไล่ผลค้นหา · คำตอบด่วน · แสดงในผัง · ถาดสาขาไม่มีผู้ดูแล
   useEffect(() => {
@@ -730,7 +744,15 @@ export default function AreaMap({
         const r = el.getBoundingClientRect();
         if (box && r.top >= box.top + toolbarH.current && r.bottom <= box.bottom) return;
       }
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      // วางกลางพื้นที่ "ใต้" แถบที่ติดบนสุด — scrollIntoView กลางจอเฉย ๆ หัวการ์ดจมใต้แถบบนจอเตี้ย · การ์ดสูงกว่าที่เหลือ ชิดบน
+      // (ไม่ใช้ scroll-padding ของ CSS: เบราว์เซอร์จะมองแถบที่ติดบนสุดว่าโดนบัง แล้วเลื่อนหน้าเองตอนโฟกัสช่องค้นหา/การ์ดในแถบ)
+      const node = (scrollRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.();
+      if (!node) return el.scrollIntoView({ block: "center", behavior: "smooth" });
+      const box = node.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      const top = box.top + toolbarH.current;
+      const room = box.bottom - top;
+      node.scrollBy({ top: r.top - top - (r.height > room - 24 ? 12 : (room - r.height) / 2), behavior: "smooth" });
     });
   });
   const scrollToEl = (id: string) => {
@@ -753,7 +775,9 @@ export default function AreaMap({
       last = Date.now();
       const r = node.getBoundingClientRect();
       // แถบเครื่องมือ (มีแถบ Area) ติดบนสุด — โซนเลื่อนขึ้นอยู่ใต้แถบ ไม่ใช่บนแถบ ไม่งั้นลากไปวางบนการ์ด Area แล้วหน้าวิ่งขึ้น
-      const top = r.top + toolbarH.current;
+      // ใช้ขอบล่างจริงของแถบ — ตอนหน้ายังเลื่อนไม่สุด แถบยังไม่ติดบน อยู่ต่ำกว่า r.top + ความสูงแถบ
+      const tb = domOf(toolbarRef)?.getBoundingClientRect();
+      const top = tb ? Math.max(r.top, tb.bottom) : r.top + toolbarH.current;
       const dock = domOf(dockRef);
       const bottom = Math.min(r.bottom, dock ? dock.getBoundingClientRect().top : r.bottom);
       const y = e.clientY;
@@ -773,10 +797,11 @@ export default function AreaMap({
       if (hspeed && stripNode) stripNode.scrollLeft += hspeed;
       frame = requestAnimationFrame(tick);
     };
-    document.addEventListener("dragover", over);
+    // capture: การ์ด Area เป็นที่วาง (Drop) ซึ่งหยุด dragover ไม่ให้ขึ้นมาถึง document — ฟังขาลงแทน ไม่งั้นลากค้างที่ขอบแถบแล้วแถบไม่เลื่อน
+    document.addEventListener("dragover", over, true);
     frame = requestAnimationFrame(tick);
     return () => {
-      document.removeEventListener("dragover", over);
+      document.removeEventListener("dragover", over, true);
       cancelAnimationFrame(frame);
     };
   }, [dragging]);
@@ -1289,8 +1314,9 @@ export default function AreaMap({
         <TouchableOpacity
           onPress={press}
           style={[styles.tilePress, narrow && styles.tilePressNarrow]}
-          accessibilityLabel={`${open ? "ย่อ" : "กางดู"} Area ${a.name}`}
-          accessibilityState={{ expanded: open }}
+          // ชื่อปุ่มตามสิ่งที่จะเกิดจริง (selectArea): กางอยู่ใบเดียว = ย่อ · กางอยู่หลายใบ = ดูใบนี้ใบเดียว
+          accessibilityLabel={`${open ? (effOpen.size === 1 ? "ย่อ" : "ดูเฉพาะ") : "กางดู"} Area ${a.name}`}
+          accessibilityState={{ expanded: open, selected: open }}
         >
           <View style={styles.tileTop}>
             {narrow ? null : (
@@ -1377,8 +1403,9 @@ export default function AreaMap({
   const fits = strip.cw <= strip.w + 2;
   const atStart = strip.x < 4;
   const atEnd = fits || strip.x + strip.w >= strip.cw - 4;
-  const firstSeen = Math.min(areas.length, Math.floor((strip.x + 4) / span) + 1);
-  const lastSeen = Math.max(firstSeen, Math.min(areas.length, Math.floor((strip.x + strip.w + 4) / span)));
+  // นับเฉพาะการ์ดที่เห็นเต็มใบ (การ์ดใบที่ k อยู่ที่ 2+(k−1)·span ถึง k·span−10) เผื่อ 2px — สูตรเดิมเลื่อนสุดแล้วยังไม่นับใบสุดท้าย
+  const firstSeen = Math.min(areas.length, Math.max(1, Math.ceil((strip.x - 4) / span) + 1));
+  const lastSeen = Math.max(firstSeen, Math.min(areas.length, Math.floor((strip.x + strip.w + GAP) / span)));
   const rangeText = !strip.w || fits ? `${areas.length} Area` : `เห็น ${firstSeen}–${lastSeen} จาก ${areas.length}${atEnd ? "" : " · เลื่อนดูเพิ่ม →"}`;
   const moveStrip = (dir: number) =>
     stripRef.current?.scrollTo({ x: Math.max(0, Math.min(strip.cw - strip.w, strip.x + dir * Math.max(span, strip.w - tileW))), animated: true });
@@ -1459,7 +1486,14 @@ export default function AreaMap({
       {areas.length && !openList.length ? (
         <View style={styles.pickHint}>
           <Text style={styles.pickHintText}>
-            {searching ? "ไม่พบใน Area ใด — ลองค้นด้วยรหัสสาขา ชื่อ หรือเบอร์อื่น" : "กดการ์ด Area ในแถบด้านบน เพื่อดู Supervisor (COCO) และ Maid (COCO) ของ Area นั้น"}
+            {/* ค้นอยู่แล้วกดย่อ Area ที่พบ — ห้ามบอกว่าไม่พบ ทั้งที่ตัวนับ/ป้าย "พบ" บนการ์ดยังขึ้นอยู่ */}
+            {!searching
+              ? "กดการ์ด Area ในแถบด้านบน เพื่อดู Supervisor (COCO) และ Maid (COCO) ของ Area นั้น"
+              : areas.some((a) => (areaHitN.get(a.id) ?? 0) > 0)
+                ? "กดการ์ด Area ที่มีป้าย “พบ” ในแถบด้านบน เพื่อดูผลค้นหา"
+                : hits.length
+                  ? "ไม่พบใน Area ใด — ผลค้นหาอยู่ด้านล่าง"
+                  : "ไม่พบใน Area ใด — ลองค้นด้วยรหัสสาขา ชื่อ หรือเบอร์อื่น"}
           </Text>
         </View>
       ) : null}
@@ -1631,6 +1665,7 @@ export default function AreaMap({
         <View style={{ flex: 1, backgroundColor: colors.background }}>
           <ScrollView
             ref={scrollRef}
+            onLayout={(e) => setViewH(Math.round(e.nativeEvent.layout.height))}
             stickyHeaderIndices={[1]}
             onScroll={onScroll}
             scrollEventThrottle={100}
@@ -1694,7 +1729,11 @@ export default function AreaMap({
             </View>
 
             {/* [1] แถบเครื่องมือ — ติดบนสุดตลอด ไม่ต้องเลื่อนกลับขึ้นไปค้นหา/ย่อ/ขยาย */}
-            <View style={[styles.toolbar, editing && styles.toolbarEdit]} onLayout={(e) => (toolbarH.current = e.nativeEvent.layout.height)}>
+            <View
+              ref={toolbarRef}
+              style={[styles.toolbar, editing && styles.toolbarEdit]}
+              onLayout={(e) => (toolbarH.current = e.nativeEvent.layout.height)}
+            >
               <View style={styles.toolRow}>
                 <View style={[styles.search, searching && styles.searchOn]}>
                   <Ionicons name="search-outline" size={17} color={colors.textMuted} />
@@ -1731,10 +1770,10 @@ export default function AreaMap({
                 </View>
                 {narrow ? null : controls}
               </View>
-              {!narrow && view === "chart" ? legend : null}
-              {!narrow && editing ? editRow : null}
+              {!narrow && !shortH && view === "chart" ? legend : null}
+              {!narrow && !shortH && editing ? editRow : null}
               {/* แถบ Area ติดบนสุดด้วย — เลื่อนลงไปดู Supervisor แล้วเปลี่ยน Area ได้ทันที และระหว่างแก้ไขการ์ดในแถบคือที่วางที่เห็นตลอด */}
-              {stripBlock}
+              {tinyH ? null : stripBlock}
             </View>
 
             {/* [2] ผัง/ตาราง */}
@@ -1746,7 +1785,13 @@ export default function AreaMap({
                   {view === "chart" ? legend : null}
                   {editing ? editRow : null}
                 </View>
+              ) : shortH && (view === "chart" || editing) ? (
+                <View style={styles.narrowTools}>
+                  {view === "chart" ? legend : null}
+                  {editing ? editRow : null}
+                </View>
               ) : null}
+              {tinyH && stripBlock ? <View style={styles.narrowTools}>{stripBlock}</View> : null}
               {quick.length ? (
                 <View nativeID="am-quick" style={styles.quick}>
                   <Text style={styles.quickTitle}>คำตอบด่วน — ใครดูแล โทรหาใคร</Text>

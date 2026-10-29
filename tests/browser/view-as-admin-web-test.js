@@ -16,7 +16,12 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     args: ["--no-sandbox"],
   });
   const aid = sql(`select id from "User" where "employeeCode"='A001'`);
-  // ทีม Area ที่ยังไม่เคยเข้าระบบ (เหมือนเพิ่งนำเข้าจากไฟล์) — Maid ประจำ C0006
+  // ทีม Area ที่ยังไม่เคยเข้าระบบ — Maid ประจำ C0006 · Maid อีกคนประจำสาขาอื่น ไว้เช็คว่าค้นรหัสสาขาแล้วกรองออกจริง
+  // ล้างของค้างจากรอบที่ถูกตัดกลางทางก่อน ไม่งั้นรหัสพนักงานซ้ำแล้วทุกรอบหลังจากนั้นพัง
+  const zw = `('zw.area','zw.sup','zw.maid','zw.maid2')`;
+  const cleanZw = () => sql(`delete from "ViewAsLog" where "targetUserId" in (select id from "User" where "employeeCode" in ${zw});
+       update "User" set "areaId"=null where "employeeCode" in ${zw}; delete from "User" where "employeeCode" in ${zw}`);
+  cleanZw();
   sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
          select 'zw.area', 'Area ทดลองดูแทน', 'AREA', "passwordHash", false from "User" where "employeeCode"='T001';
        insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword","areaId")
@@ -24,7 +29,10 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
          from "User" where "employeeCode"='T001';
        insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
          select 'zw.maid', 'Maid ทดลองดูแทน', 'COCO_MAID', "passwordHash", false from "User" where "employeeCode"='T001';
-       insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid'), id from "Branch" where code='C0006';`);
+       insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid'), id from "Branch" where code='C0006';
+       insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
+         select 'zw.maid2', 'Maid สาขาอื่นดูแทน', 'COCO_MAID', "passwordHash", false from "User" where "employeeCode"='T001';
+       insert into "CocoMaidBranch"("userId","branchId") select (select id from "User" where "employeeCode"='zw.maid2'), id from "Branch" where code='C0001';`);
   const maidId = sql(`select id from "User" where "employeeCode"='zw.maid'`);
   const before = Number(sql(`select coalesce(max(id),0) from "ViewAsLog"`));
   try {
@@ -70,8 +78,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     await label("ตำแหน่ง Maid (COCO)").click();
     await label("ค้นหาผู้ใช้ที่จะดู").fill("c0006");
     await page.waitForTimeout(600);
-    (await vis("Maid ทดลองดูแทน").count()) && (await vis("zw.maid · ประจำ C0006", false).count())
-      ? pass("ค้น Maid ด้วยรหัสสาขาเจอ และบอกสาขาที่ประจำ") : fail("ค้น Maid ด้วยรหัสสาขาไม่เจอ");
+    (await vis("Maid ทดลองดูแทน").count()) && (await vis("zw.maid · ประจำ C0006", false).count()) && !(await vis("Maid สาขาอื่นดูแทน").count())
+      ? pass("ค้น Maid ด้วยรหัสสาขาเจอ บอกสาขาที่ประจำ และ Maid สาขาอื่นถูกกรองออก") : fail("ค้น Maid ด้วยรหัสสาขาไม่ถูก");
     await label("เลือก Maid ทดลองดูแทน").click();
     await page.waitForTimeout(300);
     await label("ดูในฐานะคนนี้").click();
@@ -86,7 +94,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    sql(`delete from "ViewAsLog" where id>${before}; delete from "User" where "employeeCode" in ('zw.sup','zw.maid','zw.area')`);
+    sql(`delete from "ViewAsLog" where id>${before}`);
+    cleanZw();
     await browser.close();
   }
 })();

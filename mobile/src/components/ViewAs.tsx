@@ -41,6 +41,12 @@ const TABS: { role: Role; label: string; fg: string; bg: string }[] = [
   { role: "ADMIN", label: "แอดมิน", fg: colors.roleAdmin, bg: colors.roleAdminSoft },
 ];
 const AREA_TEAM_TABS = new Set<string>(["AREA", "COCO_SUPERVISOR", "COCO_MAID"]);
+/** บอกเฉพาะสิ่งที่แท็บนั้นค้นได้จริง — Supervisor (COCO) ไม่มีรายการสาขามาด้วย ค้นด้วยรหัสสาขาไม่เจอ */
+const SEARCH_HINT: Record<string, string> = {
+  AREA: "ค้นชื่อ Area หรือรหัสพนักงาน",
+  COCO_SUPERVISOR: "ค้นชื่อ รหัสพนักงาน หรือ Area",
+  COCO_MAID: "ค้นชื่อ รหัสพนักงาน หรือสาขาที่ประจำ",
+};
 
 /**
  * กลุ่มในรายชื่อ — ช่างตามทีม หัวหน้าภาคตามภาค Supervisor (COCO) ตาม Area เพราะคนที่มาดูมักนึกถึงพื้นที่ก่อนชื่อคน
@@ -49,7 +55,7 @@ const AREA_TEAM_TABS = new Set<string>(["AREA", "COCO_SUPERVISOR", "COCO_MAID"])
 function groupOf(p: Person) {
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
   if (p.role === "SUPERVISOR") return p.region ? `ภาค${p.region}` : "ดูแลเป็นรายทีม";
-  if (p.role === "COCO_SUPERVISOR") return p.area ? `Area ${p.area.name}` : "ยังไม่อยู่ใต้ Area";
+  if (p.role === "COCO_SUPERVISOR") return p.area ? `Area ${p.area.name}` : "ยังไม่มี Area";
   if (AREA_TEAM_TABS.has(p.role)) return AREA_TEAM_LABELS[p.role];
   return "แอดมิน";
 }
@@ -210,7 +216,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
           style={styles.searchInput}
           value={query}
           onChangeText={setQuery}
-          placeholder={AREA_TEAM_TABS.has(tab) ? "ค้นชื่อ รหัสพนักงาน Area หรือสาขา" : "ค้นชื่อ รหัสพนักงาน ทีม หรือภาค"}
+          placeholder={SEARCH_HINT[tab] ?? "ค้นชื่อ รหัสพนักงาน ทีม หรือภาค"}
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
           autoCorrect={false}

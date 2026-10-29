@@ -174,8 +174,8 @@ router.post("/view-as", requireAuth, async (req: AuthRequest, res) => {
     return res.status(403).json({ error: "แอดมินดูในฐานะได้เฉพาะหัวหน้าภาค ช่าง และทีม Area" });
   }
 
-  // บอกด่าน requireAuth ว่ามีบัญชีนี้ แบบเดียวกับตอนล็อกอิน — คนที่เพิ่งนำเข้าแล้วยังไม่เคยเข้าระบบ (ทีม Area ทั้งไฟล์)
-  // รายชื่อที่จำไว้ยังไม่มี คำขอแรกของการดูจะถูกตีกลับว่า "สิทธิ์ถูกยกเลิก" ทั้งที่เพิ่งอนุญาต (utils/userGate.ts)
+  // บอกด่าน requireAuth ว่ามีบัญชีนี้ แบบเดียวกับตอนล็อกอิน — บัญชีที่เกิดหลังรอบโหลดรายชื่อล่าสุดและยังไม่เคยเข้าระบบ
+  // ถ้าเริ่มดูภายใน 5 วินาทีหลังรอบนั้น คำขอแรกของการดูจะถูกตีกลับว่า "สิทธิ์ถูกยกเลิก" ทั้งที่เพิ่งอนุญาต (utils/userGate.ts)
   rememberUser(target.id, target.role as Role);
   const log = await prisma.viewAsLog.create({ data: { byUserId: req.auth!.userId, targetUserId: target.id } });
   const token = signViewAsToken({
@@ -238,20 +238,31 @@ function managedUser<T extends { maidBranches: { branch: { code: string; name: s
 /**
  * area กับจำนวน Supervisor/สาขา — ให้หน้า "ดูในฐานะ" จัดกลุ่ม Supervisor (COCO) ตาม Area และบอกว่าแต่ละคนดูแลแค่ไหน
  * คนโทรมาถามมักบอกชื่อ Area หรือสาขา ไม่ใช่ชื่อคน
+ *
+ * นับ/จัดกลุ่มด้วยกฎเดียวกับผังฝั่ง Area (routes/teams.ts) — Area ที่ถูกลบ/เปลี่ยนตำแหน่งแล้ว = ไม่มี Area ·
+ * นับเฉพาะ Supervisor (COCO) และสาขา COCO ที่เปิดอยู่ ไม่งั้นแอดมินคุยกับคนเดียวกันแล้วสองหน้าจอบอกคนละอย่าง
  */
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
     where: { deletedAt: null },
     select: {
       ...MANAGED_USER_SELECT,
-      area: { select: { id: true, name: true } },
+      area: { select: { id: true, name: true, role: true, deletedAt: true } },
       _count: {
-        select: { areaMembers: { where: { deletedAt: null } }, cocoBranches: { where: { cancelledAt: null } } },
+        select: {
+          areaMembers: { where: { deletedAt: null, role: "COCO_SUPERVISOR" } },
+          cocoBranches: { where: { AND: [COCO_BRANCH, { cancelledAt: null }] } },
+        },
       },
     },
     orderBy: [{ role: "asc" }, { name: "asc" }],
   });
-  res.json(users.map(managedUser));
+  res.json(
+    users.map(({ area, ...u }) => ({
+      ...managedUser(u),
+      area: area && area.role === "AREA" && !area.deletedAt ? { id: area.id, name: area.name } : null,
+    }))
+  );
 });
 
 /** สาขา COCO ที่ยังเปิดอยู่ — ตัวเลือก "สาขาที่ประจำ" ของ Maid (COCO) ในหน้าสิทธิ์ผู้ใช้ */

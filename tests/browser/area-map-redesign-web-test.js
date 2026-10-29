@@ -6,7 +6,9 @@
 //     Enter ไปผลถัดไป · แก้ไขผัง: ย้ายสาขาที่มี Maid → รายการรอบันทึกบอกว่า Maid ย้ายตาม → บันทึก (ฐานข้อมูล) → Maid ขึ้นใต้คนใหม่
 //     วางรหัสสาขาบนการ์ด Area = กาง Area นั้น ไม่ได้ยกสาขาให้คน Area (ฐานข้อมูลไม่เปลี่ยน)
 //   · Area / Maid (COCO): เปิดมาเจอ Area ของตัวเองกางรอ
-//   · ช่าง (มือถือ): ติดบนสุดแค่ช่องค้นหา · ค้นรหัสสาขาแล้วได้ปุ่มโทรหา Maid
+//   · จอเตี้ย (1366×650): คำอธิบายสีไม่ติดบนสุด เหลือช่องค้นหา + แถบ Area · ไล่ผลค้นหาแล้วการ์ดไม่จมใต้แถบ
+//     มือถือแนวนอน (844×390): แถบ Area ไม่ติดบนสุดด้วย · สลับตาราง ↔ ผัง แล้ว "เห็น 1–n" กลับมาถูก · ลากค้างขอบแถบ = แถบเลื่อนเอง
+//   · ช่าง (มือถือ): ติดบนสุดแค่ช่องค้นหา + แถบ Area · ค้นรหัสสาขาแล้วได้ปุ่มโทรหา Maid
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -170,6 +172,9 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
       (await vis(SUP(1, 1)).count()) === 0 && (await vis(SUP(2, 1)).count()) === 0
         ? pass("ระหว่างค้นหา กดย่อ Area ของผลที่กำลังดูได้จริง (ไม่ไปกาง Area อื่นแทน)")
         : fail("ย่อ Area ระหว่างค้นหาไม่ได้");
+      (await vis("กดการ์ด Area ที่มีป้าย “พบ” ในแถบด้านบน เพื่อดูผลค้นหา").count()) && !(await vis("ไม่พบใน Area ใด", false).count())
+        ? pass("ย่อ Area ที่พบระหว่างค้นหา → คำแนะนำบอกให้กดการ์ดที่มีป้าย “พบ” (ไม่บอกว่าไม่พบ)")
+        : fail("ย่อแล้วคำแนะนำบอกว่าไม่พบ ทั้งที่ยังมีผลค้นหา");
       await lbl("ผลค้นหาถัดไป").first().click();
       await page.waitForTimeout(800);
       (await vis(SUP(1, 1)).count()) ? pass("กดไล่ผลถัดไป → Area ที่เคยย่อกางให้อีกครั้ง") : fail("ไล่ผลแล้ว Area ของผลไม่กาง");
@@ -191,6 +196,10 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
       await click(lbl("กางทุก Area"));
       await page.waitForTimeout(800);
       (await vis(SUP(5, 3)).count()) && (await lbl("ย่อทุก Area").count()) ? pass("กางทั้งหมด → เห็นทุก Area · ปุ่มเปลี่ยนเป็นย่อทั้งหมด") : fail("กางทั้งหมดไม่ได้");
+      // กางหลายใบ การ์ดไม่ได้ "ย่อ" — กดแล้วดูใบนั้นใบเดียว ชื่อปุ่ม (โปรแกรมอ่านจอ) ต้องบอกแบบนั้น
+      (await lbl(`ดูเฉพาะ Area ${AREAS[1]}`).count()) && (await lbl(`กางดู Area ${AREAS[1]}`).count()) === 0
+        ? pass("กางหลาย Area: การ์ดชื่อปุ่ม “ดูเฉพาะ Area …” ตรงกับที่กดแล้วเกิดจริง")
+        : fail("ชื่อปุ่มการ์ดตอนกางหลาย Area ไม่ตรง");
       await page.mouse.move(800, 700);
       await page.mouse.wheel(0, 2000);
       await page.waitForTimeout(800);
@@ -240,15 +249,23 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
         await page.waitForTimeout(500);
       };
       await center("CY010");
-      const firstTile = await page.evaluate(() =>
-        [...document.querySelectorAll('[aria-label^="หัว Area "]')].find((e) => e.offsetParent && !e.getAttribute("aria-label").includes("อัมพร"))?.getAttribute("aria-label")
-      );
+      // การ์ดของ Area ที่ยังไม่กาง — ถ้าเลือกใบที่กางอยู่แล้ว เทสต์นี้ผ่านได้แม้การวางไม่ได้ทำอะไร
+      const firstTile = await page.evaluate(() => {
+        const b = [...document.querySelectorAll('[aria-label^="กางดู Area "]')].find((e) => e.offsetParent && !e.getAttribute("aria-label").includes("อัมพร"));
+        return b ? `หัว Area ${b.getAttribute("aria-label").slice("กางดู Area ".length)}` : null;
+      });
       const ti = AREAS.findIndex((a) => firstTile && firstTile.endsWith(a));
+      const shutBefore = ti >= 0 && (await vis(SUP(ti + 1, 1)).count()) === 0;
       await lbl("สาขา CY010").first().dragTo(page.locator(`[aria-label="${firstTile}"]`).first());
       await page.waitForTimeout(900);
-      (await vis("กำลังย้าย สาขา CY010", false).count()) && ti >= 0 && (await vis(SUP(ti + 1, 1)).count()) && (await vis("รอบันทึก", false).count()) === 0
+      shutBefore && (await vis(`CY010 — เลือก Supervisor (COCO) ใน Area ${AREAS[ti]} ที่จะรับสาขา`, false).count()) &&
+      (await vis("กำลังย้าย สาขา CY010", false).count()) && (await vis(SUP(ti + 1, 1)).count()) && (await vis("รอบันทึก", false).count()) === 0
         ? pass(`ลาก CY010 ไปวางบนการ์ด ${firstTile} ในแถบ → เปิด Area นั้นและยังถือสาขาไว้ (ป้ายกำลังย้ายขึ้น)`)
-        : fail(`ลากวางบน Area: ${firstTile} ป้าย=${await vis("กำลังย้าย สาขา CY010", false).count()}`);
+        : fail(
+            `ลากวางบน Area: ${firstTile} ปิดก่อนลาก=${shutBefore} ป้าย=${await vis("กำลังย้าย สาขา CY010", false).count()} ` +
+              `แจ้ง=${await vis("เลือก Supervisor (COCO) ใน Area", false).count()} กาง=${ti >= 0 ? await vis(SUP(ti + 1, 1)).count() : "-"} ` +
+              `รอบันทึก=${await vis("รอบันทึก", false).count()}`
+          );
       if (await lbl("ยกเลิกการย้าย").count()) await lbl("ยกเลิกการย้าย").first().click();
       await page.waitForTimeout(300);
       await center("CY010");
@@ -284,6 +301,101 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
       const sl1 = await page.evaluate(() => document.querySelector(".am-strip")?.scrollLeft ?? -1);
       const range2 = await page.evaluate(() => document.body.innerText.match(/เห็น \d–\d จาก 5/)?.[0] || "");
       sl0 === 0 && sl1 > 100 && range2 !== range1 ? pass(`กด › แล้วแถบเลื่อนไปทางขวา (${range1} → ${range2})`) : fail(`ปุ่ม › : scrollLeft ${sl0}→${sl1} ${range1}→${range2}`);
+      for (let i = 0; i < 4 && !(await page.locator('[aria-label="เลื่อนแถบ Area ไปทางขวา"][aria-disabled="true"]').count()); i++) {
+        await lbl("เลื่อนแถบ Area ไปทางขวา").first().click();
+        await page.waitForTimeout(700);
+      }
+      const rangeEnd = await page.evaluate(() => document.body.innerText.match(/เห็น \d–\d จาก 5/)?.[0] || "");
+      /–5 จาก 5$/.test(rangeEnd) && !(await vis("เลื่อนดูเพิ่ม", false).count())
+        ? pass(`เลื่อนสุดขวา → นับการ์ดใบสุดท้ายด้วย (${rangeEnd})`)
+        : fail(`สุดขวาแล้วยังไม่นับใบสุดท้าย: ${rangeEnd}`);
+      // สลับไปตารางแล้วกลับ — แถบใหม่อยู่ซ้ายสุด ตัวบอก/ปุ่มต้องตามแถบจริง ไม่ใช่ตำแหน่งก่อนสลับ
+      await vis("ตาราง").first().click();
+      await page.waitForTimeout(800);
+      await vis("ผังองค์กร").first().click();
+      await page.waitForTimeout(1200);
+      const back = await page.evaluate(() => [document.querySelector(".am-strip")?.scrollLeft ?? -1, document.body.innerText.match(/เห็น \d–\d จาก 5/)?.[0] || ""]);
+      back[0] === 0 && back[1] === range1 && (await page.locator('[aria-label="เลื่อนแถบ Area ไปทางซ้าย"][aria-disabled="true"]').count())
+        ? pass(`สลับตาราง → ผัง: แถบกลับซ้ายสุด ตัวบอกเป็น “${range1}” ปุ่ม ‹ ปิด`)
+        : fail(`สลับแล้วตัวบอกค้างตำแหน่งเดิม: scrollLeft=${back[0]} “${back[1]}”`);
+      // ลากรหัสสาขาค้างที่ขอบขวาของแถบ → แถบเลื่อนเอง (การ์ด Area เป็นที่วาง เคยกลืน dragover จนแถบไม่ขยับ)
+      await lbl(`กางดู Area ${AREAS[0]}`).first().click();
+      await page.waitForTimeout(700);
+      await lbl("แก้ไขผังฝั่ง Area").first().click();
+      await page.waitForTimeout(700);
+      const chip = await lbl("สาขา CY003").first().boundingBox();
+      const sbox = await page.evaluate(() => {
+        const r = document.querySelector(".am-strip").getBoundingClientRect();
+        return { x: r.right - 25, y: r.top + r.height / 2 };
+      });
+      await page.mouse.move(chip.x + chip.width / 2, chip.y + chip.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(chip.x + 40, chip.y + 10, { steps: 5 });
+      await page.mouse.move(sbox.x, sbox.y, { steps: 10 });
+      for (let i = 0; i < 15; i++) {
+        await page.mouse.move(sbox.x + (i % 2), sbox.y, { steps: 1 });
+        await page.waitForTimeout(100);
+      }
+      const slDrag = await page.evaluate(() => document.querySelector(".am-strip")?.scrollLeft ?? -1);
+      await page.mouse.move(chip.x + chip.width / 2, chip.y + chip.height / 2, { steps: 10 });
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+      slDrag > 50 ? pass(`ลากสาขาค้างที่ขอบขวาของแถบ Area → แถบเลื่อนเอง (scrollLeft ${slDrag})`) : fail(`ลากค้างขอบแถบแล้วแถบไม่เลื่อน (scrollLeft ${slDrag})`);
+      if (await lbl("ยกเลิกการย้าย").count()) await lbl("ยกเลิกการย้าย").first().click();
+      if (await lbl("ยกเลิกทั้งหมด").count()) await lbl("ยกเลิกทั้งหมด").first().click();
+      await page.waitForTimeout(800);
+      if (await lbl("เสร็จสิ้นการแก้ไข").count()) await lbl("เสร็จสิ้นการแก้ไข").first().click();
+      await page.waitForTimeout(500);
+      await ctx.close();
+    }
+
+    // ════ จอเตี้ย: โน้ตบุ๊ก 1366×650 · มือถือแนวนอน 844×390 — ของที่ติดบนสุดต้องไม่กินจอ ════
+    {
+      const inSticky = (page, sel) =>
+        page.evaluate((q) => {
+          const el = [...document.querySelectorAll(q.css)].find((e) => e.offsetParent && (!q.text || e.textContent === q.text));
+          let n = el;
+          while (n && getComputedStyle(n).position !== "sticky") n = n.parentElement;
+          return el ? !!n : null;
+        }, sel);
+      const { ctx, page, lbl, open } = await session("A001", { width: 1366, height: 650 });
+      await open();
+      const legendSticky = await inSticky(page, { css: "div", text: "เลขแดง = ใบงานค้าง" });
+      const tileSticky = await inSticky(page, { css: `[aria-label="หัว Area ${AREAS[0]}"]` });
+      legendSticky === false && tileSticky === true
+        ? pass("จอเตี้ย 1366×650: คำอธิบายสีเลื่อนไปกับผัง ติดบนสุดแค่ช่องค้นหา/ปุ่ม + แถบ Area")
+        : fail(`จอเตี้ย: คำอธิบายติดบน=${legendSticky} แถบ Area ติดบน=${tileSticky}`);
+      // ไล่ผลค้นหาไปที่การ์ดสูง ๆ — ต้องไม่จมใต้แถบที่ติดบนสุด
+      await lbl("ค้นหาในผังฝั่ง Area").first().fill(SUP(1, 1));
+      await page.waitForTimeout(900);
+      await lbl("ค้นหาในผังฝั่ง Area").first().press("Enter");
+      await page.waitForTimeout(1500);
+      const under = await page.evaluate((sid) => {
+        const inp = document.querySelector('[aria-label="ค้นหาในผังฝั่ง Area"]');
+        let tb = inp;
+        while (tb && getComputedStyle(tb).position !== "sticky") tb = tb.parentElement;
+        const card = document.getElementById(`am-p${sid}`);
+        return tb && card ? Math.round(card.getBoundingClientRect().top - tb.getBoundingClientRect().bottom) : null;
+      }, id("zx.sup11"));
+      under !== null && under >= -2 ? pass(`จอเตี้ย: ไล่ผลค้นหาแล้วหัวการ์ดอยู่ใต้แถบที่ติดบนสุด (ห่าง ${under}px)`) : fail(`การ์ดผลค้นหาจมใต้แถบ: ${under}`);
+      await ctx.close();
+    }
+    {
+      const { ctx, page, open } = await session("A001", { width: 844, height: 390 });
+      await open();
+      const res = await page.evaluate((name) => {
+        const sticky = (el) => {
+          let n = el;
+          while (n && getComputedStyle(n).position !== "sticky") n = n.parentElement;
+          return !!n;
+        };
+        const s = [...document.querySelectorAll('[aria-label="ค้นหาในผังฝั่ง Area"]')].find((e) => e.offsetParent);
+        const t = [...document.querySelectorAll(`[aria-label="หัว Area ${name}"]`)].find((e) => e.offsetParent);
+        return [s ? sticky(s) : null, t ? sticky(t) : null];
+      }, AREAS[0]);
+      res[0] === true && res[1] === false
+        ? pass("มือถือแนวนอน 844×390: ติดบนสุดแค่ช่องค้นหา แถบ Area เลื่อนไปกับผัง (ไม่งั้นเต็มจอ)")
+        : fail(`มือถือแนวนอน: ช่องค้นหาติด=${res[0]} แถบ Area ติด=${res[1]}`);
       await ctx.close();
     }
 
@@ -325,7 +437,7 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
         const r = el && el.getBoundingClientRect();
         return !!r && r.top >= 0 && r.bottom <= window.innerHeight;
       });
-      sb && sb.y < 160 && tileOnTop && tileOnTop.y < 300 && !zoomInView
+      sb && sb.y > 40 && sb.y < 160 && tileOnTop && tileOnTop.y > sb.y && tileOnTop.y < 300 && !zoomInView
         ? pass("มือถือ: เลื่อนแล้วติดบนสุดแค่ช่องค้นหา + แถบ Area (ปุ่มอื่นเลื่อนไปกับผัง)")
         : fail(`มือถือ sticky: ${JSON.stringify(sb)} แถบ=${JSON.stringify(tileOnTop)} zoomInView=${zoomInView}`);
       const fit = await page.evaluate(([sid]) => {
