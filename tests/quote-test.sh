@@ -13,6 +13,10 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 # รอแอดมินเช็คอะไหล่ — ตอบว่ามีครบ (คลัง 94) แล้วไปเสนอราคา / นัดวัน
 source_ok() { curl -s -X POST "localhost:4000/api/work-orders/$1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}"; }
 st() { curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.statusLabel+" / "+(d.workStatusLabel||"—")'; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# วันนัดหลังลูกค้าจ่ายเงิน (วันที่คาดว่าของเข้าไม่ใช่วันนัด ไม่ถูกกฎนี้ — ใช้วันตายตัวต่อได้)
+D1=$(day 7)
 
 PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
@@ -133,7 +137,7 @@ st $ID1 | grep -q "^หัวหน้าภาค · นัดวันเข�
 R=$(checkparts $ID1)
 echo "$R" | grep -q "ยังไม่ถึงขั้นนี้" && pass "ยังไม่คอนเฟิร์มลูกค้า เบิกอะไหล่ไม่ได้" || fail "เบิกได้ก่อนคอนเฟิร์ม: $R"
 TEAM1=$(curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.suggestedTeam')
-curl -s -X POST "localhost:4000/api/work-orders/$ID1/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM1\",\"scheduledAt\":\"2026-12-01\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID1/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM1\",\"scheduledAt\":\"$D1\"}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 st $ID1 | grep -q "^แอดมิน · เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วมาถึงขั้นเบิกอะไหล่" || fail "ไม่มาขั้นเบิกอะไหล่: $(st $ID1)"
 [ "$(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")" = "CHECKING_PARTS" ] \

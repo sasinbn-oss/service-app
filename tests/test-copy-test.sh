@@ -10,6 +10,9 @@ fail() { echo "FAIL $1"; FAILED=1; }
 DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 12)
 SUF=$RANDOM
 BC="DZTC$SUF"
 IDS=""
@@ -36,7 +39,7 @@ ID=$(POST $A work-orders "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\
 IDS="$ID"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":2}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
-POST $S "work-orders/$ID/assign" '{"team":"กระบี่","scheduledAt":"2026-11-10"}' >/dev/null
+POST $S "work-orders/$ID/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-TC$SUF\"}]}" >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null

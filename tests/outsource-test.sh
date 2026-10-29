@@ -14,6 +14,9 @@ login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: applic
 CODE() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 PC() { CODE -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+D1=$(day 34)
 A=$(login A001); T=$(login T001)
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 REGION=$(DB "select region from \"Branch\" where code='C0006'"); BTEAM=$(DB "select zone from \"Branch\" where code='C0006'")
@@ -50,7 +53,7 @@ DB "delete from \"OutsourceTeam\" where name='$BTEAM'" >/dev/null
 
 echo "═══ จ่ายงานให้ทีม outsource"
 W=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactPhone":"089-111-2222","machines":[{"code":"W64","symptom":"ทดสอบ outsource"}]}' | J 'd.orders?d.orders[0].id:d.id'); IDS="$W"
-POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$OS\",\"scheduledAt\":\"2026-12-02\"}}" >/dev/null
+POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$OS\",\"scheduledAt\":\"$D1\"}}" >/dev/null
 [ "$(ST $W)" = "AWAITING_CONFIRM|$OS" ] && pass "จ่ายงานให้ทีม outsource ได้ (ไม่มีสาขาประจำ)" || fail "จ่ายไม่ได้: $(ST $W)"
 POST $A work-orders/$W/confirm-appointment '{}' >/dev/null
 POST $S work-orders/$W/dispatch '{}' >/dev/null
@@ -60,7 +63,7 @@ POST $S work-orders/$W/dispatch '{}' >/dev/null
   && pass "ใบที่ทีม outsource เข้างานอยู่ เข้ากล่องงานหัวหน้าภาค (ต้องปิดแทน)" || fail "ไม่อยู่ในกล่องหัวหน้าภาค"
 # แท็บ "ทีม outsource" ของกล่องงานหัวหน้าภาคแยกจากธงนี้ — ใบทีมปกติต้องไม่ติด
 W2=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactPhone":"089-111-2222","machines":[{"code":"W65","symptom":"ทดสอบทีมปกติ"}]}' | J 'd.orders?d.orders[0].id:d.id'); IDS="$IDS $W2"
-POST $S work-orders/$W2/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$BTEAM\",\"scheduledAt\":\"2026-12-02\"}}" >/dev/null
+POST $S work-orders/$W2/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$BTEAM\",\"scheduledAt\":\"$D1\"}}" >/dev/null
 LIST=$(curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $S)")
 [ "$(echo "$LIST" | J "[d.rows.find(r=>r.id===$W).outsource, d.rows.find(r=>r.id===$W2).outsource].join()")" = "true,false" ] \
   && [ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$W2")" = "$BTEAM" ] \

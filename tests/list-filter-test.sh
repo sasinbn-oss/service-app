@@ -8,6 +8,10 @@ fail() { echo "FAIL $1"; FAILED=1; }
 DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# วันนัดตอนจ่ายงานให้ทีมกระบี่
+D1=$(day 7)
 A=$(login A001); S=$(login S001)
 SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
@@ -28,7 +32,7 @@ echo "═══ รอใคร"
 [ "$(row $C "r.stageActor+'|'+r.waitingOnSupervisors.some(s=>s.id===$SID)")" = "SUPERVISOR|true" ] \
   && pass "ใบใหม่รอหัวหน้าภาค และบอกชื่อหัวหน้าภาคที่ดูแลภาคนั้น" || fail "รอใคร: $(row $C 'JSON.stringify([r.stageActor,r.waitingOnSupervisors])')"
 POST $S "work-orders/$C/parts" '{"needsParts":false}' >/dev/null
-POST $S "work-orders/$C/assign" '{"team":"กระบี่","scheduledAt":"2026-11-20"}' >/dev/null
+POST $S "work-orders/$C/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$D1\"}" >/dev/null
 [ "$(row $C 'r.stageActor+"|"+r.waitingOnSupervisors.length')" = "ADMIN|0" ] \
   && pass "จ่ายงานแล้วไปแอดมิน · คอนเฟิร์มลูกค้า (แอดมินไม่แยกรายคน)" || fail "หลังจ่ายงาน: $(row $C 'r.stageActor')"
 POST $A "work-orders/$C/confirm-appointment" '{}' >/dev/null

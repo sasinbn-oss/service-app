@@ -26,8 +26,11 @@ R=$(echo "$BR" | J 'd[0].region'); TEAM=$(echo "$BR" | J 'd[0].zone')
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$R\"}" >/dev/null
 S=$(login S001)
 L94="คลังลาดพร้าว 94"
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+D1=$(day 12); D2=$(day 14); D3=$(day 16)  # นัดปกติ · คอนเฟิร์มวันใหม่ (ต้องต่างจาก D1) · นัดรอบเบิกใหม่
 toWork() {  # PARTS_CHECKED → IN_PROGRESS · ตัวที่ยังไม่เบิก เบิกหลังลูกค้าคอนเฟิร์ม (เลขใบเบิก $2)
-  POST $S "work-orders/$1/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-10\"}" >/dev/null
+  POST $S "work-orders/$1/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
   POST $A "work-orders/$1/confirm-appointment" '{}' >/dev/null
   if [ "$(status $1)" = "PARTS_REQUESTED" ]; then
     local res=$(DB "select string_agg('{\"sparePartId\":'||\"sparePartId\"||',\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"$2\"}', ',') from \"WorkOrderPart\" where \"workOrderId\"=$1 and kind='WAITING' and \"requisitionNo\" is null")
@@ -60,7 +63,7 @@ GET "work-orders/options" | J 'd.sendBackReasons.length' | grep -q "^5$" && pass
 
 echo
 echo "═══ เครื่องมือ/คนไม่พอ → หัวหน้าภาคนัดวันใหม่"
-POST $A "work-orders/$ID/confirm-appointment" '{"scheduledAt":"2026-11-12"}' >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" "{\"scheduledAt\":\"$D2\"}" >/dev/null
 [ "$(status $ID)" = "ASSIGNED" ] && pass "อะไหล่เบิกไว้แล้ว คอนเฟิร์มวันใหม่แล้วไปปล่อยงานเลย ไม่เบิกซ้ำ" || fail "หลังคอนเฟิร์มใหม่: $(status $ID)"
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"RESOURCES","reason":"บันไดไม่พอ ต้องไปสองคน"}' >/dev/null
@@ -97,7 +100,7 @@ POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\
 [ "$(status $ID)" = "PARTS_SOURCING" ] && pass "มีตัวต้องเบิกใหม่ → ไปแอดมินเช็คอะไหล่" || fail "สถานะ: $(status $ID)"
 R=$(POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"$L94\"}]}")
 [ "$(status $ID)" = "PARTS_CHECKED" ] && pass "แอดมินเช็คเฉพาะตัวใหม่ แล้วส่งหัวหน้าภาคนัด" || fail "หลังเช็ค: $(status $ID) $R"
-POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-14\"}" >/dev/null
+POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D3\"}" >/dev/null
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 [ "$(status $ID)" = "PARTS_REQUESTED" ] && pass "คอนเฟิร์มแล้วไปเบิกตัวใหม่" || fail "หลังคอนเฟิร์ม: $(status $ID)"
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-SB2\"}]}" >/dev/null

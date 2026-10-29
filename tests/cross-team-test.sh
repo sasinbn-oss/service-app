@@ -15,6 +15,10 @@ PATCH() { curl -s -X PATCH "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type
 CODEOF() { curl -s -o /dev/null -w '%{http_code}' -X "$2" "localhost:4000/api/$3" -H "$(H $1)" -H 'Content-Type: application/json' -d "${4:-{\}}"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+# (ชื่อ day ใช้กับงานวันนี้ของช่างข้างล่างแล้ว)
+VD() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(VD 33)
 A=$(login A001); S=$(login S001)
 [ "$(DB "select region from \"User\" where \"employeeCode\"='S001'")|$(DB "select region||'|'||zone from \"Branch\" where code='C0006'")|$(DB "select region||'|'||zone from \"Branch\" where code='C0001'")" = "ใต้|ใต้|กระบี่|กลาง-ตะวันตก|กรุงเทพ" ] \
   || { echo "FAIL ข้อมูลตั้งต้นไม่ตรง (S001 ภาคใต้ · C0006 ใต้/กระบี่ · C0001 กลาง-ตะวันตก/กรุงเทพ)"; exit 1; }
@@ -58,7 +62,7 @@ open_order() {
   echo "$id"
 }
 W1=$(open_order W2)
-R=$(POST $S "work-orders/$W1/assign" '{"team":"กรุงเทพ","scheduledAt":"2026-12-01"}')
+R=$(POST $S "work-orders/$W1/assign" "{\"team\":\"กรุงเทพ\",\"scheduledAt\":\"$VISIT\"}")
 [ "$(DB "select status||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$W1")" = "AWAITING_CONFIRM|กรุงเทพ" ] \
   && GET $A "work-orders/$W1" | J 'd.logs.find(l=>l.action==="ASSIGNED").note' | grep -q "ข้ามทีม — งานCM ของสาขานี้เป็นของ กระบี่" \
   && pass "จ่ายทีมนอกความดูแลได้ (ฐานข้อมูลเปลี่ยน) · ประวัติบอกว่าข้ามทีม" || fail "จ่ายข้ามทีม: $(echo "$R" | head -c 200)"
@@ -118,7 +122,7 @@ R=$(POST $K "work-orders/$W1/close" "{\"result\":\"FIXED\",\"note\":\"ทีม�
 echo
 echo "═══ ใบที่ 2: ทีมประจำสาขาเป็นคนปิด"
 W2=$(open_order W3)
-POST $S "work-orders/$W2/assign" '{"team":"กรุงเทพ","scheduledAt":"2026-12-01"}' >/dev/null
+POST $S "work-orders/$W2/assign" "{\"team\":\"กรุงเทพ\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$W2/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$W2/dispatch" '{}' >/dev/null
 photos $T $W2

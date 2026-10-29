@@ -13,6 +13,9 @@ POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: 
 PATCH() { curl -s -X PATCH "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 33)
 A=$(login A001); S=$(login S001)
 SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
 [ "$(DB "select region from \"User\" where id=$SID")|$(DB "select region||'|'||zone from \"Branch\" where code='C0006'")" = "ใต้|ใต้|กระบี่" ] || { echo "FAIL ข้อมูลตั้งต้นไม่ตรง (S001 ภาคใต้ · C0006 ใต้/กระบี่)"; exit 1; }
@@ -40,7 +43,7 @@ MINE='d.teams.filter(t=>t.mine).map(t=>t.name).join()'
 [ "$(OPT $S 'd.teams.find(t=>t.name==="กระบี่").mine')|$(OPT $Z "$MINE")|$(OPT $A 'd.teams.length>2')" = "false|กระบี่|true" ] \
   && pass "รายการทีม: กระบี่ไม่ใช่ทีมของ S001 · คนดูแลทีมมีกระบี่เป็นทีมตัวเอง · แอดมินเห็นทุกทีม" || fail "options: S=$(OPT $S "$MINE") Z=$(OPT $Z "$MINE")"
 OTHER=$(DB "select zone from \"Branch\" where zone is not null and zone<>'กระบี่' and \"cancelledAt\" is null limit 1")
-R=$(POST $Z "work-orders/$WO/assign" "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-12-01\"}")
+R=$(POST $Z "work-orders/$WO/assign" "{\"team\":\"$OTHER\",\"scheduledAt\":\"$VISIT\"}")
 [ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$WO")" = "$OTHER" ] && [ "$(seen $Z)|$(seen $S)" = "true|false" ] \
   && pass "จ่ายข้ามไปทีม $OTHER ได้ · ใบยังอยู่กับคนดูแลทีมกระบี่ ไม่ไปที่ S001" || fail "จ่ายข้ามทีม: $R · เห็น Z=$(seen $Z) S=$(seen $S)"
 

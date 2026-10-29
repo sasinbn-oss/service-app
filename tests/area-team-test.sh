@@ -14,6 +14,10 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
 GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
 CODE() { curl -s -o /dev/null -w "%{http_code}" -X "${3:-GET}" "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' ${4:+-d "$4"}; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+# (ที่นี่เซิร์ฟเวอร์ทิ้งวันนัดที่ Area Team ส่งมา — ให้เป็นวันข้างหน้าเพื่อให้ทดสอบเรื่อง "ไม่บันทึก" ไม่ใช่ "วันย้อนหลัง")
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 33)
 
 LOGINS="'zz.area','zz.sup1','zz.sup2'"
 cleanup() {
@@ -75,7 +79,7 @@ echo "$R" | J 'const m=d.missing||[]; m.includes("เครื่อง")&&m.som
   && pass "ขาดเครื่อง/อาการ/ผู้ติดต่อ/เบอร์ → บอกครบทุกช่องที่ขาด" || fail "ช่องที่ขาด: $R"
 R=$(NEW $S1 '{"branchCode":"C0006","jobType":"CM","contactName":"คุณทดสอบ","contactPhone":"081-111-2222","machines":[{"code":"W1","symptom":"เครื่องไม่ปั่นเลยครับ"}]}')
 echo "$R" | grep -q "ไม่อยู่ในความดูแล" && pass "Supervisor เปิดใบสาขาคนอื่นไม่ได้" || fail "เปิดสาขาคนอื่นได้: $(echo $R | head -c 120)"
-R=$(NEW $S1 '{"branchCode":"C0001","jobType":"CM","contactName":"คุณทดสอบ","contactPhone":"081-111-2222","assignedToId":1,"scheduledAt":"2026-12-01","machines":[{"code":"W1","symptom":"เครื่องไม่ปั่นเลยครับ"}]}')
+R=$(NEW $S1 "{\"branchCode\":\"C0001\",\"jobType\":\"CM\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-111-2222\",\"assignedToId\":1,\"scheduledAt\":\"$VISIT\",\"machines\":[{\"code\":\"W1\",\"symptom\":\"เครื่องไม่ปั่นเลยครับ\"}]}")
 W1=$(echo "$R" | J 'd.id')
 [ "$(DB "select status||'|'||coalesce(\"assignedToId\"::text,'-')||'|'||coalesce(\"scheduledAt\"::text,'-') from \"WorkOrder\" where id=$W1")" = "NEW|-|-" ] \
   && pass "กรอกครบเปิดได้ · จ่ายช่าง/นัดวันที่ส่งมาไม่ถูกบันทึก (ฐานข้อมูล)" || fail "ใบงาน: $(DB "select status, \"assignedToId\", \"scheduledAt\" from \"WorkOrder\" where id=$W1")"

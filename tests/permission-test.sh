@@ -15,6 +15,10 @@ loginpw() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: appl
 login() { loginpw "$1" test1234; }
 CODE() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# วันนัดที่ถูกต้องทุกอย่าง — หน้าแก้ไขต้องปฏิเสธเพราะเป็นช่องของขั้นตอน ไม่ใช่เพราะวันย้อนหลัง
+D1=$(day 7)
 BR=C0006
 A=$(login A001); T=$(login T001)
 TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'")
@@ -52,7 +56,7 @@ R=$(curl -s localhost:4000/api/branches/$BR/open-work-orders -H "$(H $T)")
   && pass "กล่องเตือนใบซ้ำ: ช่างได้แบบย่อ (เลข ขั้น — ไม่มีอาการ/ชื่อคน/เลขเปิด)" || fail "แบบย่อไม่ถูก: $(echo "$R" | head -c 300)"
 
 echo "═══ แอดมินก็แก้ผู้รับงาน/วันนัด/อะไหล่ทางนี้ไม่ได้"
-for f in "{\"assignedToId\":$TID}" '{"scheduledAt":"2026-12-01"}' '{"waitingParts":[]}'; do
+for f in "{\"assignedToId\":$TID}" "{\"scheduledAt\":\"$D1\"}" '{"waitingParts":[]}'; do
   [ "$(CODE -X PATCH localhost:4000/api/work-orders/$W -H "$(H $A)" -H 'Content-Type: application/json' -d "$f")" = "400" ] || fail "แอดมินส่ง $f ผ่าน"
 done
 [ "$(STATUS $W)" = "$BEFORE" ] && pass "ผู้รับงาน/วันนัด/อะไหล่ ผ่านหน้าแก้ไข: 400 ทั้งหมด ฐานข้อมูลไม่เปลี่ยน" || fail "เปลี่ยน: $(STATUS $W)"

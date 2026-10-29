@@ -13,6 +13,9 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 CODE() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 33)
 A=$(login A001)
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 OLD_TEAMS=$(DB "select array_to_string(\"supervisedTeams\",',') from \"User\" where \"employeeCode\"='S001'")
@@ -30,12 +33,12 @@ ST() { DB "select status||'|'||coalesce(\"assignedTeam\",'-')||'|'||coalesce(\"s
 
 echo "═══ ไม่ใช้อะไหล่ + จ่ายงานในฟอร์มเดียว"
 W=$(mk C0006 61); IDS="$W"
-[ "$(CODE -X POST localhost:4000/api/work-orders/$W/parts -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false,"assign":{"team":"ทีมที่ไม่มีจริง","scheduledAt":"2026-12-01"}}')" = "404" ] \
+[ "$(CODE -X POST localhost:4000/api/work-orders/$W/parts -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"needsParts\":false,\"assign\":{\"team\":\"ทีมที่ไม่มีจริง\",\"scheduledAt\":\"$VISIT\"}}")" = "404" ] \
   && [ "$(ST $W)" = "NEW|-|-|-|-" ] && pass "ทีมที่ไม่มีในระบบ: 404 ฐานข้อมูลไม่เปลี่ยน" || fail "ทีมปลอมผ่าน: $(ST $W)"
-[ "$(CODE -X POST localhost:4000/api/work-orders/$W/parts -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"needsParts\":false,\"services\":[{\"name\":\"ค่าแรง\"}],\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-12-01\"}}")" = "400" ] \
+[ "$(CODE -X POST localhost:4000/api/work-orders/$W/parts -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"needsParts\":false,\"services\":[{\"name\":\"ค่าแรง\"}],\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}}")" = "400" ] \
   && [ "$(ST $W)" = "NEW|-|-|-|-" ] && pass "มีค่าบริการ (ต้องเสนอราคาก่อน) จ่ายงานพร้อมกันไม่ได้: 400" || fail "มีค่าบริการก็จ่ายได้: $(ST $W)"
-POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-12-01\",\"scheduledTime\":\"10:00\"}}" >/dev/null
-[ "$(ST $W)" = "AWAITING_CONFIRM|$TEAM|2026-12-01|10:00|PENDING" ] && pass "ไปรอแอดมินคอนเฟิร์มลูกค้าทันที พร้อมทีม วัน เวลา" || fail "หลังจ่าย: $(ST $W)"
+POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\",\"scheduledTime\":\"10:00\"}}" >/dev/null
+[ "$(ST $W)" = "AWAITING_CONFIRM|$TEAM|$VISIT|10:00|PENDING" ] && pass "ไปรอแอดมินคอนเฟิร์มลูกค้าทันที พร้อมทีม วัน เวลา" || fail "หลังจ่าย: $(ST $W)"
 [ "$(DB "select string_agg(action||'>'||status, ',' order by id) from \"WorkOrderLog\" where \"workOrderId\"=$W and action in ('NO_PARTS','ASSIGNED')")" = "NO_PARTS>PARTS_CHECKED,ASSIGNED>AWAITING_CONFIRM" ] \
   && pass "ประวัติสองแถว (ไม่ใช้อะไหล่ · จ่ายงาน) แถบขั้นตอนจึงขึ้นว่าผ่านขั้นจ่ายงานแล้ว" || fail "ประวัติ: $(DB "select string_agg(action||'>'||status, ',') from \"WorkOrderLog\" where \"workOrderId\"=$W")"
 W2=$(mk C0006 62); IDS="$IDS $W2"

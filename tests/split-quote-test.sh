@@ -16,6 +16,9 @@ login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: applic
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 UP() { curl -s -X POST "localhost:4000/api/work-orders/$1/attachments" -H "$(H $A)" -F "file=@$SP/$2" -F "role=$3" >/dev/null; }
 ST() { DB "select status from \"WorkOrder\" where id=$1"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+VISIT=$(day 22)
 
 A=$(login A001); S=$(login S001)
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
@@ -49,7 +52,7 @@ source_in() {  # $1=id $2.. = อะไหล่ที่ตอบว่าม�
 }
 toIssue() {  # หัวหน้าภาคนัด → ลูกค้าคอนเฟิร์ม → ถึงขั้นเบิก
   local team=$(curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.suggestedTeam')
-  POST $S "work-orders/$1/assign" "{\"team\":\"$team\",\"scheduledAt\":\"2026-11-20\"}" >/dev/null
+  POST $S "work-orders/$1/assign" "{\"team\":\"$team\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
   POST $A "work-orders/$1/confirm-appointment" '{}' >/dev/null
 }
 paid() {  # เช็คครบ → เสนอราคา → รับเงิน → นัด → คอนเฟิร์ม → ถึงขั้นเบิก
