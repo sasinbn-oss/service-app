@@ -95,6 +95,13 @@ POST $A "work-orders/$O/confirm-appointment" '{}' >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$C3")|$(DB "select status from \"WorkOrder\" where id=$O")" = "ASSIGNED|ASSIGNED" ] \
   && pass "คอนเฟิร์มแล้วใบทดสอบกับใบจริงไปปล่อยงานเหมือนกัน (ฐานข้อมูล)" \
   || fail "คอนเฟิร์ม: ใบทดสอบ $(DB "select status from \"WorkOrder\" where id=$C3") · ใบจริง $(DB "select status from \"WorkOrder\" where id=$O")"
+# ใบต้นทางปิดแล้ว — ใบทดสอบเริ่มที่ช่าง ต้องได้บรรทัดผลเบิกด้วย ไม่งั้นช่างส่งกลับ (ร้านปิด) แล้วคอนเฟิร์มไปขั้นเบิก
+DB "update \"WorkOrder\" set status='DONE', \"closedAt\"=now() where id=$O" >/dev/null
+C4=$(POST $A "work-orders/$O/test-copy" '{}' | J 'd.id'); IDS="$C4 $IDS"
+[ "$(DB "select status from \"WorkOrder\" where id=$C4")|$(DB "select string_agg(action,',' order by id) from \"WorkOrderLog\" where \"workOrderId\"=$C4")" = "IN_PROGRESS|TEST_COPY,PARTS_CHECKED" ] \
+  && curl -s "localhost:4000/api/work-orders/$C4" -H "$(H $A)" | J 'd.issueLeft' | grep -qx false \
+  && pass "คัดลอกใบที่ปิดแล้ว (มีของนอกสโตร์ที่เบิกแล้ว): เริ่มที่ช่าง ได้บรรทัดผลเบิก issueLeft=false (ฐานข้อมูล)" \
+  || fail "คัดลอกใบปิดแล้ว: $(DB "select status from \"WorkOrder\" where id=$C4") · $(DB "select string_agg(action,',' order by id) from \"WorkOrderLog\" where \"workOrderId\"=$C4")"
 
 echo
 echo "═══ คัดลอกใบที่ปิดแล้ว"
