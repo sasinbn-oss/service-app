@@ -15,11 +15,12 @@ const call = (phone: string) => Linking.openURL(`tel:${phone.replace(/[^\d+]/g, 
 /** ตัวเลขล้วนของเบอร์ — ให้ค้นด้วย 0812345678 เจอเบอร์ที่บันทึกเป็น 081-234-5678 */
 export const phoneDigits = (phone: string | null | undefined) => (phone ?? "").replace(/\D/g, "");
 
-export function PhoneLine({ phone, name }: { phone: string; name: string }) {
+/** size — ผังฝั่ง Area ปรับขนาดตัวอักษรได้ (กะทัดรัด/ปกติ/ใหญ่) เบอร์ต้องโตตามชื่อ ไม่งั้นเบอร์เล็กกว่าชื่อจนอ่านยาก */
+export function PhoneLine({ phone, name, size }: { phone: string; name: string; size?: number }) {
   return (
     <TouchableOpacity onPress={() => call(phone)} accessibilityLabel={`เบอร์ ${name} ${phone}`} style={styles.line}>
-      <Ionicons name="call" size={11} color={colors.primaryInk} />
-      <Text style={styles.num}>{phone}</Text>
+      <Ionicons name="call" size={size ? Math.round(size * 0.88) : 11} color={colors.primaryInk} />
+      <Text style={[styles.num, size ? { fontSize: size } : null]}>{phone}</Text>
     </TouchableOpacity>
   );
 }
