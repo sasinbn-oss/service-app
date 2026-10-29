@@ -9,80 +9,133 @@
  * ไม่บังจอ ไม่กันการกด (ดูของเก่าระหว่างรอได้) · การเช็คเบื้องหลังทุกนาทีไม่ขึ้น (ดู quietly ใน api/client)
  */
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Easing, Platform, StyleSheet, Text, View } from "react-native";
+import { Animated, Platform, StyleSheet, Text, View } from "react-native";
 import { subscribeBackgroundReads } from "../api/client";
 import { colors } from "../theme";
 
 const SHOW_AFTER_MS = 300;
+/** เริ่มที่เท่านี้ทันทีที่แถบขึ้น — เห็นว่ามีอะไรเกิดขึ้นตั้งแต่จังหวะแรก */
+const START = 15;
+/** ระหว่างรอเข้าใกล้เท่านี้เรื่อย ๆ แต่ไม่ถึง — ถึงสุดเมื่อโหลดเสร็จจริงเท่านั้น */
+const CEIL = 90;
+const TICK_MS = 300;
+/** เติมจนสุดแล้วค้างให้เห็นแป๊บหนึ่งก่อนจาง · จางหาย */
+const FULL_MS = 350;
+const FADE_MS = 350;
 
 /**
- * บนเว็บใช้ CSS animation (animationKeyframes ของ react-native-web) ไม่ใช่ Animated —
- * Animated บนเว็บขยับทีละเฟรมด้วย JavaScript (useNativeDriver ใช้ไม่ได้) แย่งเวลากับการวาดรายการใบงาน
- * จนเลื่อนรายการยาวแล้ววาดไม่ทัน (เทสต์ list-complete จับได้) · CSS ให้เบราว์เซอร์ขยับเอง ไม่กินเวลา JS เลย
+ * แถบเติมจากซ้ายไปขวาครั้งเดียว (เจ้าของงานขอ ต.ค. 69 ตามตัวอย่างที่ตกลง — แบบเดิมเป็นขีดวิ่งวนไปมา "ลายตา")
+ * ระหว่างรอค่อย ๆ ช้าลงเข้าใกล้ CEIL · เสร็จแล้วเติมเต็มแล้วจางหาย · ไม่วิ่งย้อนกลับ ไม่วนซ้ำ
  *
- * ต้องผ่าน StyleSheet.create — react-native-web ทิ้ง animationKeyframes ที่ส่งเป็น style ตรง ๆ เงียบ ๆ
- * (เดิมส่งตรง แถบเลยค้างนิ่งที่มุมซ้าย ดูเหมือนแถบความคืบหน้าที่ค้าง 10% — เจ้าของงานถาม ต.ค. 69)
+ * บนเว็บตั้งความกว้างแค่ ~3 ครั้งต่อวินาที แล้วให้ CSS transition ไล่ให้ลื่นเอง — ไม่ใช้ Animated
+ * เพราะ Animated บนเว็บขยับทีละเฟรมด้วย JavaScript แย่งเวลากับการวาดรายการใบงานยาว ๆ (เทสต์ list-complete จับได้)
+ * มือถือใช้ Animated ตามปกติ (แถบสูง 3 px คำนวณน้อยมาก)
  */
-const webAnim = StyleSheet.create({
-  run: {
-    // transform เป็นข้อความ CSS — แบบ array ({ translateX }) ในคีย์เฟรมถูกแปลงออกมาว่าง แถบไม่ขยับ
-    animationKeyframes: [{ "0%": { transform: "translateX(-30vw)" }, "100%": { transform: "translateX(100vw)" } }],
-    animationDuration: "1.1s",
-    animationTimingFunction: "ease-in-out",
-    animationIterationCount: "infinite",
-  },
-  pulse: {
-    animationKeyframes: [{ "0%": { opacity: 1 }, "50%": { opacity: 0.25 }, "100%": { opacity: 1 } }],
-    animationDuration: "0.9s",
-    animationIterationCount: "infinite",
-  },
-} as Record<string, object>);
-
 export default function LoadingBar() {
-  const [shown, setShown] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const slide = useRef(new Animated.Value(0)).current;
   const web = Platform.OS === "web";
-
-  useEffect(
-    () =>
-      subscribeBackgroundReads((busy) => {
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = null;
-        if (busy) timer.current = setTimeout(() => setShown(true), SHOW_AFTER_MS);
-        else setShown(false);
-      }),
-    []
-  );
+  const [shown, setShown] = useState(false);
+  const [p, setP] = useState(0);
+  const [fading, setFading] = useState(false);
+  /** ตั้งค่ากระโดดโดยไม่ไล่ (ตอนเริ่มใหม่จาก 0) — ไม่งั้นเห็นแถบหดกลับจากขวาไปซ้าย */
+  const [instant, setInstant] = useState(true);
+  const native = useRef(new Animated.Value(0)).current;
+  const t = useRef<{ show?: ReturnType<typeof setTimeout>; tick?: ReturnType<typeof setInterval>; ends: ReturnType<typeof setTimeout>[] }>({ ends: [] });
+  const state = useRef({ shown: false, finishing: false });
 
   useEffect(() => {
-    if (!shown || web) return;
-    slide.setValue(0);
-    const loop = Animated.loop(Animated.timing(slide, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }));
-    loop.start();
-    return () => loop.stop();
-  }, [shown, slide, web]);
+    const timers = t.current;
+    const clearEnds = () => {
+      timers.ends.forEach(clearTimeout);
+      timers.ends = [];
+    };
+    const start = () => {
+      timers.show = undefined;
+      clearEnds();
+      state.current = { shown: true, finishing: false };
+      setInstant(true);
+      setFading(false);
+      setP(0);
+      setShown(true);
+      // รอให้ 0% วาดก่อนหนึ่งจังหวะ แล้วค่อยเปิดการไล่ — ไม่งั้นเบราว์เซอร์ข้ามไป 15% เลยโดยไม่เห็นว่าเริ่มจากซ้าย
+      timers.ends.push(
+        setTimeout(() => {
+          setInstant(false);
+          setP(START);
+        }, 30)
+      );
+      if (timers.tick) clearInterval(timers.tick);
+      timers.tick = setInterval(() => setP((v) => (v < START ? v : v + (CEIL - v) * 0.12)), TICK_MS);
+    };
+    const finish = () => {
+      if (timers.tick) clearInterval(timers.tick);
+      timers.tick = undefined;
+      state.current.finishing = true;
+      setInstant(false);
+      setP(100);
+      timers.ends.push(setTimeout(() => setFading(true), FULL_MS));
+      timers.ends.push(
+        setTimeout(() => {
+          state.current = { shown: false, finishing: false };
+          setShown(false);
+          setFading(false);
+          setInstant(true);
+          setP(0);
+        }, FULL_MS + FADE_MS)
+      );
+    };
+    const off = subscribeBackgroundReads((busy) => {
+      if (busy) {
+        // เสร็จไปแล้วกำลังจาง มีคำขอใหม่ต่อ — เริ่มรอบใหม่ทันที (เพิ่งเห็นแถบอยู่ ไม่ต้องรอ 300 ms อีก)
+        if (state.current.finishing) start();
+        else if (!state.current.shown && !timers.show) timers.show = setTimeout(start, SHOW_AFTER_MS);
+      } else {
+        if (timers.show) clearTimeout(timers.show);
+        timers.show = undefined;
+        if (state.current.shown && !state.current.finishing) finish();
+      }
+    });
+    return () => {
+      off();
+      if (timers.show) clearTimeout(timers.show);
+      if (timers.tick) clearInterval(timers.tick);
+      clearEnds();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (web) return;
+    if (instant) native.setValue(p);
+    else Animated.timing(native, { toValue: p, duration: TICK_MS, useNativeDriver: false }).start();
+  }, [p, instant, web, native]);
 
   if (!shown) return null;
+  const opacity = fading ? 0 : 1;
   return (
     <>
-      {/* ป้ายอยู่ล่างกลางจอ — บนสุดมีปุ่มของแถบหัว (ดูในฐานะ · การใช้งาน) ป้ายจะไปบังปุ่ม · เหนือแถบแท็บล่างของมือถือ */}
-      <View style={styles.pillWrap} pointerEvents="none">
-        <View style={styles.pill}>
-          <View style={[styles.dot, web && webAnim.pulse]} />
-          <Text style={styles.text}>กำลังโหลดข้อมูล…</Text>
+      {/* ป้ายอยู่ล่างกลางจอ — บนสุดมีปุ่มของแถบหัว (ดูในฐานะ · การใช้งาน) ป้ายจะไปบังปุ่ม · เหนือแถบแท็บล่างของมือถือ
+          จุดนิ่ง ไม่กะพริบ (ตามตัวอย่างที่ตกลง) — แถบด้านบนบอกอยู่แล้วว่ายังโหลด · ป้ายหายตอนแถบเติมเต็ม */}
+      {p < 100 ? (
+        <View style={styles.pillWrap} pointerEvents="none">
+          <View style={styles.pill}>
+            <View style={styles.dot} />
+            <Text style={styles.text}>กำลังโหลดข้อมูล…</Text>
+          </View>
         </View>
-      </View>
+      ) : null}
       <View style={styles.wrap} pointerEvents="none" accessibilityLabel="กำลังโหลดข้อมูล" accessibilityLiveRegion="polite">
-        <View style={styles.track}>
-          {web ? (
-            <View style={[styles.runner, webAnim.run]} />
-          ) : (
-            <Animated.View
-              style={[styles.runner, { transform: [{ translateX: slide.interpolate({ inputRange: [0, 1], outputRange: [-160, 1600] }) }] }]}
-            />
-          )}
-        </View>
+        {web ? (
+          <View
+            style={[
+              styles.bar,
+              { width: `${p}%`, opacity },
+              instant ? null : ({ transitionProperty: "width, opacity", transitionDuration: `${TICK_MS}ms, ${FADE_MS}ms`, transitionTimingFunction: "ease-out" } as object),
+            ]}
+          />
+        ) : (
+          <Animated.View
+            style={[styles.bar, { opacity, width: native.interpolate({ inputRange: [0, 100], outputRange: ["0%", "100%"] }) }]}
+          />
+        )}
       </View>
     </>
   );
@@ -95,11 +148,11 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    alignItems: "center",
+    height: 3,
     zIndex: 80,
   },
-  track: { alignSelf: "stretch", height: 3, overflow: "hidden", backgroundColor: colors.primarySoft },
-  runner: { width: 160, height: 3, borderRadius: 2, backgroundColor: colors.primary },
+  // ไม่มีรางพื้นหลัง — เห็นแค่ส่วนที่เติมแล้ว อ่านเป็น "ไปได้ถึงไหนแล้ว" ไม่ใช่ขีดลอยในราง
+  bar: { height: 3, borderTopRightRadius: 2, borderBottomRightRadius: 2, backgroundColor: colors.primary },
   pillWrap: {
     position: (Platform.OS === "web" ? "fixed" : "absolute") as "absolute",
     bottom: 84,
