@@ -231,6 +231,10 @@ function Drop({
   const [over, setOver] = useState(false);
   const dwell = useRef(onDwell);
   dwell.current = onDwell;
+  // ตัวฟัง DOM ผูกครั้งเดียวต่อโหมดแก้ไข — อ่าน d ล่าสุดผ่าน ref ไม่งั้น drop เห็นผังก่อนการย้ายครั้งก่อน
+  // (ลากสาขากลับไปคนเดิมแล้วถูกมองว่า "ไม่เปลี่ยน" · บันทึกต้นทางผิด)
+  const dRef = useRef(d);
+  dRef.current = d;
   useEffect(() => {
     const el = domOf(ref);
     if (!el || !d.editing) return;
@@ -261,14 +265,16 @@ function Drop({
       e.stopPropagation();
       stop();
       setOver(false);
-      d.setDragging(false);
+      const cur = dRef.current;
+      cur.setDragging(false);
+      // ปล่อยของก่อนแล้วค่อยวาง (ลำดับเดียวกับแตะ) — วางรหัสสาขาบนการ์ด Area ต้องหยิบสาขาไว้ต่อได้
+      cur.setGrab(null);
       try {
         const g = JSON.parse(e.dataTransfer?.getData("text/plain") || "null") as Grab | null;
-        if (g && (g.kind === "SUP" || g.kind === "BRANCH")) d.drop(g, zone);
+        if (g && (g.kind === "SUP" || g.kind === "BRANCH")) cur.drop(g, zone);
       } catch {
         // ลากของอื่นมาวาง (ข้อความ ไฟล์) — ไม่ใช่คนหรือสาขา ไม่ต้องทำอะไร
       }
-      d.setGrab(null);
     };
     el.addEventListener("dragover", enter);
     el.addEventListener("dragleave", leave);
@@ -975,15 +981,17 @@ export default function AreaMap({
   const curKey = hits.length ? hits[hitPos].key : null;
   curKeyRef.current = curKey;
 
-  // Area ที่กางอยู่จริง = ที่ผู้ใช้กาง + ตอนค้นหากาง 2 Area แรกที่พบให้ (เว้นที่ผู้ใช้กดย่อเอง) + Area ของผลที่กำลังดู
+  // Area ที่กางอยู่จริง = ที่ผู้ใช้กาง + ตอนค้นหากาง 2 Area แรกที่พบให้ + Area ของผลที่กำลังดู
+  // เลือก 2 Area แรกก่อนแล้วค่อยตัดที่ผู้ใช้กดย่อเอง — ย่ออันหนึ่งแล้วไม่ไปกาง Area ที่ 3 แทน และกดย่อ Area ของผลปัจจุบันได้จริง
   const effOpen = new Set(openIds ?? []);
   if (searching) {
     areas
-      .filter((a) => (areaHitN.get(a.id) ?? 0) > 0 && !closed.has(a.id))
+      .filter((a) => (areaHitN.get(a.id) ?? 0) > 0)
       .slice(0, 2)
+      .filter((a) => !closed.has(a.id))
       .forEach((a) => effOpen.add(a.id));
     const curArea = hits[hitPos]?.area;
-    if (curArea) effOpen.add(curArea);
+    if (curArea && !closed.has(curArea)) effOpen.add(curArea);
   }
   const toggleArea = (id: number) => {
     if (!effOpen.has(id)) return openArea(id);
@@ -1012,6 +1020,10 @@ export default function AreaMap({
   };
   const step = (dir: number) => {
     if (!hits.length) return;
+    // ผลค้นหาอยู่บนผังเท่านั้น — อยู่หน้าตารางแล้วกดไล่ผล สลับกลับไปผังให้ · Area ของผลถัดไปที่เคยกดย่อไว้ กางให้อีกครั้ง
+    if (view !== "chart") setView("chart");
+    const next = hits[(((hitPos + dir) % hits.length) + hits.length) % hits.length];
+    if (next.area && closed.has(next.area)) openArea(next.area);
     pendingScroll.current = "cur";
     setHitIdx((i) => i + dir);
   };
@@ -1081,6 +1093,7 @@ export default function AreaMap({
     if (sig && !pendingScroll.current) pendingScroll.current = "?am-quick";
   }
   const showIn = (item: QuickItem) => {
+    if (view !== "chart") setView("chart");
     if (item.area) openArea(item.area);
     if (searching && !showAll) setShowAll(true);
     scrollToEl(item.target);
@@ -1092,7 +1105,10 @@ export default function AreaMap({
   const tileW = narrow ? W : Math.floor((W - (tileCols - 1) * GAP) / tileCols);
   const panelInner = W - 2 * 14 - 2;
   const supCols = narrow ? 1 : Math.max(1, Math.floor((panelInner + GAP) / (dens.supMin + GAP)));
+  // มือถือ: การ์ดเต็มความกว้างเสมอ — ปล่อยให้กว้างตามเนื้อหา การ์ดที่มีหลายสาขาล้นจอ ปุ่มโทรหลุดขอบ (กล่องเลื่อนตั้งซ่อนแนวนอน)
+  const fullW = { width: "100%" } as const;
   const supW = narrow ? undefined : Math.floor((panelInner - (supCols - 1) * GAP) / supCols);
+  const supOuter = supW ? { width: supW } : fullW;
 
   const areaStats = (a: AreaPerson) => {
     const ss = supsOf(a.id);
@@ -1116,7 +1132,7 @@ export default function AreaMap({
   );
 
   const supHit = (s: AreaPerson) => personHit(s) || codesShown(s.id).some(branchHit) || maidItemsOf(s.id).some((x) => x.hit);
-  const supCard = (s: AreaPerson, w?: number) => {
+  const supCard = (s: AreaPerson, outer: object) => {
     const own = ownOf(s.id);
     const covers = coverGroups(s.id);
     const all = branchesOf(s.id);
@@ -1128,7 +1144,7 @@ export default function AreaMap({
       <Drop
         key={s.id}
         zone={{ kind: "holder", id: s.id }}
-        outer={w ? { width: w } : undefined}
+        outer={outer}
         nativeID={`am-p${s.id}`}
         style={[styles.card, personHit(s) && styles.ring, curKey === `p${s.id}` && styles.cur, s.id === me && styles.mineCard]}
         label={`Supervisor ${s.name}`}
@@ -1161,10 +1177,15 @@ export default function AreaMap({
     );
   };
 
-  const leftCard = (p: AreaPerson, w?: number) => (
-    <View key={p.id} nativeID={`am-p${p.id}`} style={[styles.card, styles.leftCard, w ? { width: w } : null, personHit(p) && styles.ring, curKey === `p${p.id}` && styles.cur]}>
+  // คนลบบัญชีแล้วแต่ยังถือสาขา — วาดสาขาและ Maid แบบเดียวกับการ์ด Supervisor (ผลค้นหานับ Maid ใต้คนนี้ด้วย ต้องมีให้เห็น)
+  const leftCard = (p: AreaPerson, outer: object) => {
+    const maids = maidItemsOf(p.id).map((x) => ({ ...x, cur: curKey === x.key }));
+    return (
+    <View key={p.id} nativeID={`am-p${p.id}`} style={[styles.card, styles.leftCard, outer, personHit(p) && styles.ring, curKey === `p${p.id}` && styles.cur]}>
       <PersonRow p={p} meta={`ลบบัญชีแล้ว · ยังถือ ${branchesOf(p.id).length} สาขา`} k={k} narrow={narrow} editing={editing} />
-      <Chips codes={branchesOf(p.id)} byCode={byCode} />
+      {ownOf(p.id).length ? <Chips codes={ownOf(p.id)} byCode={byCode} /> : null}
+      {coverGroups(p.id).map(coverBox(p.id))}
+      {maids.length ? <MaidBlock items={maids} k={k} narrow={narrow} editing={editing} /> : null}
       {editing ? (
         <TouchableOpacity style={styles.allBtn} onPress={() => setMoveAll(p.id)} accessibilityLabel={`ย้ายสาขาทั้งหมดของ ${p.name}`}>
           <Ionicons name="swap-horizontal" size={14} color={colors.navy} />
@@ -1172,7 +1193,8 @@ export default function AreaMap({
         </TouchableOpacity>
       ) : null}
     </View>
-  );
+    );
+  };
 
   // การ์ด Area — กดกาง/ย่อ · ระหว่างแก้ไขเป็นที่วางชื่อ Supervisor (ลากรหัสสาขาค้างไว้ = กาง)
   const tile = (a: AreaPerson) => {
@@ -1207,7 +1229,7 @@ export default function AreaMap({
       <Drop
         key={a.id}
         zone={{ kind: "area", id: a.id }}
-        outer={narrow ? undefined : { width: tileW }}
+        outer={narrow ? fullW : { width: tileW }}
         nativeID={`am-t${a.id}`}
         style={[narrow ? styles.rowTile : styles.tile, open && styles.tileOpen, mine && styles.tileMine, fade && styles.fade]}
         label={`หัว Area ${a.name}`}
@@ -1230,7 +1252,7 @@ export default function AreaMap({
               {n ? <Text style={styles.hitBadgeInline}>พบ {n}</Text> : null}
               <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.navy} />
             </TouchableOpacity>
-            {a.phone ? <CallButton phone={a.phone} name={a.name} /> : null}
+            {a.phone && !editing ? <CallButton phone={a.phone} name={a.name} /> : null}
           </View>
         ) : (
           <TouchableOpacity
@@ -1314,7 +1336,7 @@ export default function AreaMap({
           </TouchableOpacity>
         ) : null}
         <View style={styles.grid}>
-          {shownSups.length ? shownSups.map((s) => supCard(s, supW)) : !hidden ? <Text style={styles.none}>ยังไม่มี Supervisor (COCO)</Text> : null}
+          {shownSups.length ? shownSups.map((s) => supCard(s, supOuter)) : !hidden ? <Text style={styles.none}>ยังไม่มี Supervisor (COCO)</Text> : null}
         </View>
       </View>
     );
@@ -1374,8 +1396,8 @@ export default function AreaMap({
             </Text>
           </Drop>
           <View style={styles.grid}>
-            {freeSups.filter((s) => !searching || showAll || supHit(s)).map((s) => supCard(s, supW))}
-            {leftHolders.filter((p) => !searching || showAll || supHit(p)).map((p) => leftCard(p, supW))}
+            {freeSups.filter((s) => !searching || showAll || supHit(s)).map((s) => supCard(s, supOuter))}
+            {leftHolders.filter((p) => !searching || showAll || supHit(p)).map((p) => leftCard(p, supOuter))}
           </View>
         </View>
       ) : null}
@@ -1694,20 +1716,6 @@ export default function AreaMap({
             </View>
           </ScrollView>
 
-          {grab && !dragging ? (
-            <View style={styles.moving} pointerEvents="box-none">
-              <View style={styles.movingPill}>
-                <Text style={styles.movingText} numberOfLines={2}>
-                  กำลังย้าย {grabName(grab)} — {web ? "คลิก" : "แตะ"}
-                  {grab.kind === "SUP" ? "การ์ด Area ที่ต้องการ" : "การ์ด Supervisor ที่จะรับสาขา"}
-                  {web ? " (Esc ยกเลิก)" : ""}
-                </Text>
-                <TouchableOpacity onPress={() => setGrab(null)} accessibilityLabel="ยกเลิกการย้าย">
-                  <Ionicons name="close" size={18} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : null}
 
           {showTop && !editing ? (
             <TouchableOpacity style={styles.fab} onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })} accessibilityLabel="กลับขึ้นบน">
@@ -1717,6 +1725,21 @@ export default function AreaMap({
           ) : null}
 
           <View style={styles.bottomStack} pointerEvents="box-none">
+            {/* ป้ายกำลังย้ายอยู่เหนือแถบวางล่างจอ — ถ้าลอยบนสุดจะบังช่องค้นหา/ปุ่มไล่ผลที่ติดบนสุด ตอนหยิบแล้วค้นหาคนรับ */}
+            {grab && !dragging ? (
+              <View style={styles.movingRow} pointerEvents="box-none">
+                <View style={styles.movingPill}>
+                  <Text style={styles.movingText} numberOfLines={2}>
+                    กำลังย้าย {grabName(grab)} — {web ? "คลิก" : "แตะ"}
+                    {grab.kind === "SUP" ? "การ์ด Area ที่ต้องการ" : "การ์ด Supervisor ที่จะรับสาขา"}
+                    {web ? " (Esc ยกเลิก)" : ""}
+                  </Text>
+                  <TouchableOpacity onPress={() => setGrab(null)} accessibilityLabel="ยกเลิกการย้าย">
+                    <Ionicons name="close" size={18} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
             {editing ? (
               // ที่วาง "เอาออก" ลอยติดล่างจอ — ผังยาวหลาย Area ลากไปถาดท้ายผังไม่ถึง
               <View ref={dockRef} style={styles.dock}>
@@ -1914,7 +1937,8 @@ const styles = StyleSheet.create({
   quickT: { fontSize: 17, lineHeight: 24, fontWeight: "800", color: colors.text, fontVariant: ["tabular-nums"] },
   quickS: { fontSize: 12.5, color: colors.textMuted },
   quickLines: { flexDirection: "row", flexWrap: "wrap", gap: 8, flexGrow: 1, flexShrink: 1 },
-  quickLine: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 6, paddingLeft: 8, paddingRight: 12, flexGrow: 0, minWidth: 200 },
+  // flexShrink: ชื่อยาวบนมือถือต้องตัดบรรทัด ไม่ดันปุ่มโทรหลุดจอ
+  quickLine: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 6, paddingLeft: 8, paddingRight: 12, flexGrow: 0, flexShrink: 1, minWidth: 200 },
   rolePill: { fontSize: 11, fontWeight: "700", borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2, overflow: "hidden" },
   quickName: { fontSize: 13.5, fontWeight: "600", color: colors.text },
   noPhone: { fontSize: 12, color: colors.textMuted },
@@ -2058,7 +2082,7 @@ const styles = StyleSheet.create({
   dockZone: { flexGrow: 1, padding: 10, gap: 6, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: "transparent" },
   dockTitle: { fontSize: 13, fontWeight: "700", color: colors.warningInk },
   dockHint: { fontSize: 12, color: colors.textMuted },
-  moving: { position: "absolute", top: 10, left: 0, right: 0, alignItems: "center", zIndex: 20 },
+  movingRow: { alignItems: "center" },
   movingPill: { flexDirection: "row", alignItems: "center", gap: 10, maxWidth: "92%", backgroundColor: colors.navyFill, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8, ...shadow.card },
   movingText: { color: "#fff", fontSize: 13, fontWeight: "600", flexShrink: 1 },
   pending: { backgroundColor: colors.navyFill, borderRadius: radius.md, padding: 14, flexDirection: "row", flexWrap: "wrap", gap: 12, alignItems: "center", ...shadow.card },
