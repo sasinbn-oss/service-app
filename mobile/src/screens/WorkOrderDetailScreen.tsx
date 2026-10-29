@@ -5576,7 +5576,9 @@ function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null;
  */
 function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: WorkOrder; adminWarehouse: string; viewer?: "supervisor" | "admin" }) {
   if (order.needsParts !== true || order.waitingParts.length === 0) return null;
-  const issuedAll = order.waitingParts.every((p) => p.offCatalog || (p.inStock === true && !!p.requisitionNo));
+  // หัวกล่องใช้กฎเดียวกับเซิร์ฟเวอร์ (issueLeftOf) — ของนอกสโตร์ไม่มีเลขใบเบิก นับว่าเบิกแล้วต่อเมื่อแอดมินผ่านขั้นเบิกรอบนี้
+  // เดิมนับนอกสโตร์เป็นเบิกแล้วเสมอ หัวกล่องขึ้น "อะไหล่เบิกแล้ว" ทั้งที่กดนัดแล้วใบไปขั้นเบิก (ข้อความเหนือกล่องบอกอีกอย่าง)
+  const issuedAll = !issueLeftOf(order);
   const far = order.waitingParts.filter((p) => farPart(p, adminWarehouse));
   const checked = [...order.logs]
     .filter((l) => l.action === "PARTS_SOURCED")

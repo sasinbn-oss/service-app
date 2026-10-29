@@ -5552,6 +5552,21 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
   if (!src) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   const ended = ["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(src.status);
   const status = ended ? (src.assignedTeam || src.assignedToId ? "IN_PROGRESS" : "NEW") : src.status;
+  // ของนอกสโตร์ไม่มีเลขใบเบิก — "เบิกแล้วหรือยัง" อ่านจากประวัติรอบเช็ค/เบิก (issueLeftOf) แต่ใบทดสอบไม่คัดลอกประวัติ
+  // ใบทดสอบของใบที่เบิกครบแล้วจึงถูกนับว่ายังไม่เบิก คอนเฟิร์มแล้วไปขั้นเบิก ทั้งที่ใบจริงไปปล่อยงาน = ทดสอบคนละเส้นทาง
+  // คัดลอกบรรทัดผลเบิกล่าสุดของใบต้นทางมาด้วย (สถานะเดิม) ให้ใบทดสอบเดินเส้นทางเดียวกับใบจริง
+  const [lastIssue, offCount] =
+    !ended && src.parts.length > 0
+      ? await Promise.all([
+          prisma.workOrderLog.findFirst({
+            where: { workOrderId: id, action: { in: ISSUE_ROUND_ACTIONS } },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: { action: true, status: true },
+          }),
+          prisma.sparePart.count({ where: { offCatalog: true, id: { in: src.parts.map((p) => p.sparePartId) } } }),
+        ])
+      : [null, 0];
+  const copyIssue = lastIssue?.action === "PARTS_CHECKED" && offCount > 0 ? lastIssue : null;
 
   const made = await prisma.$transaction(async (tx) => {
     const copy = await tx.workOrder.create({
@@ -5608,6 +5623,9 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
       });
     }
     await writeLog(tx, copy.id, req.auth!.userId, "TEST_COPY", status, `ใบทดสอบ คัดลอกจาก ${src.code} — ทดสอบเสร็จให้ลบทิ้ง`);
+    if (copyIssue) {
+      await writeLog(tx, copy.id, req.auth!.userId, "PARTS_CHECKED", copyIssue.status ?? status, `คัดลอกผลเบิกจาก ${src.code} (ของนอกสโตร์)`);
+    }
     return { id: copy.id, code };
   }, STAGE_TX);
   res.status(201).json(made);

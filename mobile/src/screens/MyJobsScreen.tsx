@@ -158,6 +158,9 @@ function TechJobs({ navigation }: Props) {
       await load();
     } catch (e) {
       showAlert("บันทึกไม่ได้", apiErrorMessage(e));
+      // 409 = งานไม่อยู่ในมือช่างแล้ว (แอดมินเลื่อนวันนัดดึงงานคืน · มีคนเปลี่ยนขั้น) — โหลดรายการใหม่
+      // ไม่งั้นการ์ดเดิมยังค้างพร้อมปุ่ม "ถึงหน้างาน" ที่กดกี่ครั้งก็ไม่ผ่าน จนกว่าจะออกจากหน้านี้แล้วกลับมา
+      if ((e as { response?: { status?: number } })?.response?.status === 409) await load();
     } finally {
       setBusyId(null);
     }
