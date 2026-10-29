@@ -74,9 +74,10 @@ const login = async (code) =>
     await page.waitForTimeout(2400);
     await tap("ถนนอุตรกิจ", false);
     await page.waitForTimeout(1800);
-    (await seen("ยังบันทึกไม่ได้ — ขาด 1 ช่อง: รูปหน้างาน")) > 0
-      ? pass("ใบ CM (ค่าเริ่มต้น) ยังไม่มีรูป = บันทึกไม่ได้เหมือนเดิม")
-      : fail("ใบ CM ไม่ล็อกเรื่องรูป");
+    // แอดมินไม่บังคับรูปหน้างานตั้งแต่ ต.ค. 69 — ใบ CM ของตำแหน่งอื่นยังล็อก (ดู admin-photo-web-test)
+    (await seen("แอดมินไม่บังคับ")) > 0
+      ? pass("ใบ CM (ค่าเริ่มต้น) ของแอดมิน: ป้ายบอกว่าแอดมินไม่บังคับรูป")
+      : fail("ใบ CM ของแอดมินไม่มีป้ายแอดมินไม่บังคับ");
     await tap("งาน PM");
     await page.waitForTimeout(800);
     (await page.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").count()) === 0 &&

@@ -233,13 +233,17 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     if (digits < 9 || digits > 10) missing.push("เบอร์ติดต่อสาขา");
   }
   /**
-   * รูปหน้างานบังคับทุกตำแหน่ง (เจ้าของงานกำหนด ต.ค. 69) — ช่างกับหัวหน้าภาคระบุอะไหล่จากรูปก่อนไปหน้างาน
+   * รูปหน้างานบังคับ (เจ้าของงานกำหนด ต.ค. 69) — ช่างกับหัวหน้าภาคระบุอะไหล่จากรูปก่อนไปหน้างาน
    * ใบที่ไม่มีรูปคือต้องโทรถามร้านหรือขับไปดูก่อนรอบหนึ่ง · บังคับที่ฟอร์มเท่านั้น เพราะรูปอัปหลังสร้างใบงาน
    * (นำเข้าจากไฟล์ฟอร์ม COCO ไม่ผ่านด่านนี้ — แถวในไฟล์ที่ไม่มีรูปยังนำเข้าได้)
    *
    * ยกเว้นใบ PM (เจ้าของงานขอ ต.ค. 69) — เป็นงานตามรอบ ไม่ได้เปิดเพราะมีอาการให้ถ่าย และไม่ต้องเตรียมอะไหล่จากรูป
+   * ยกเว้นแอดมิน (เจ้าของงานขอ ต.ค. 69 · ทุกระดับ — Super Admin กับ Admin Spare Part ก็เป็น ADMIN ในแอป)
+   * ช่าง · หัวหน้าภาค · ทีม COCO ยังบังคับเหมือนเดิม · ใบที่แอดมินเปิดไม่มีรูป หัวหน้าภาคอาจต้องโทรถามร้านก่อนระบุอะไหล่
+   * ฟอร์มจึงยังชวนให้แนบถ้ามีรูปในมือ (ดู adminPhotoOptional ใน MachineCard)
    */
-  const photoRequired = jobType !== "PM";
+  const adminPhotoOptional = user?.role === "ADMIN" && jobType !== "PM";
+  const photoRequired = jobType !== "PM" && !adminPhotoOptional;
   if (photoRequired && shownRows.some((r) => r.files.length === 0)) missing.push("รูปหน้างาน");
 
   // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
@@ -789,6 +793,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             models={models}
             capacities={capacities}
             photoRequired={photoRequired}
+            adminPhotoOptional={adminPhotoOptional}
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
@@ -1094,6 +1099,7 @@ function MachineCard({
   models,
   capacities,
   photoRequired = false,
+  adminPhotoOptional = false,
   onChange,
   onRemove,
   onAddFile,
@@ -1110,6 +1116,8 @@ function MachineCard({
   capacities: number[];
   /** Area Team ต้องแนบรูปหน้างานอย่างน้อย 1 รูป — ป้ายไม่ควรบอกว่าไม่บังคับ */
   photoRequired?: boolean;
+  /** แอดมินเปิดใบได้โดยไม่มีรูป — ป้ายบอกว่าไม่บังคับเฉพาะแอดมิน และชวนให้แนบถ้ามีรูปจากสาขา */
+  adminPhotoOptional?: boolean;
   onChange: (patch: Partial<MachineRow>) => void;
   onRemove: () => void;
   onAddFile: (
@@ -1312,7 +1320,14 @@ function MachineCard({
         label={`วางรูปหน้างานของเครื่องที่ ${index + 1}`}
         onFiles={(files) => onAddFile((stage) => filesToAttachments(files, { image: true, video: true }, stage))}
       >
-        <Text style={fromBoard ? styles.label : styles.subLabel}>รูป / วิดีโอหน้างาน {photoRequired ? "(อย่างน้อย 1 รูป)" : "(ไม่บังคับ)"}</Text>
+        {adminPhotoOptional ? (
+          <View style={styles.photoHead}>
+            <Text style={[fromBoard ? styles.label : styles.subLabel, styles.photoHeadText]}>รูป / วิดีโอหน้างาน</Text>
+            <Text style={styles.adminChip}>แอดมินไม่บังคับ</Text>
+          </View>
+        ) : (
+          <Text style={fromBoard ? styles.label : styles.subLabel}>รูป / วิดีโอหน้างาน {photoRequired ? "(อย่างน้อย 1 รูป)" : "(ไม่บังคับ)"}</Text>
+        )}
         {row.files.length > 0 ? (
           <View style={styles.files}>
             {row.files.map((file, n) => (
@@ -1382,6 +1397,14 @@ function MachineCard({
           </View>
         )}
         {!busy ? <DropHint /> : null}
+        {adminPhotoOptional && !busy && row.files.length === 0 ? (
+          <View style={styles.adminNote}>
+            <Ionicons name="information-circle-outline" size={16} color={colors.primaryInk} />
+            <Text style={styles.adminNoteText}>
+              ไม่มีรูปก็เปิดใบงานได้ — ถ้าสาขาส่งรูปมาทาง LINE แนบไว้ด้วย หัวหน้าภาคจะระบุอะไหล่ได้โดยไม่ต้องโทรถามร้าน
+            </Text>
+          </View>
+        ) : null}
       </FileDropZone>
     </View>
   );
@@ -1639,5 +1662,30 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   missingText: { flex: 1, fontSize: 13, lineHeight: 21, color: colors.dangerInk },
+  photoHead: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.xs, marginTop: spacing.md, marginBottom: spacing.xs },
+  // ระยะบน/ล่างอยู่ที่แถว ไม่ใช่ที่ข้อความ — ป้ายข้างข้อความจะได้อยู่บรรทัดเดียวกันพอดี
+  photoHeadText: { marginTop: 0, marginBottom: 0 },
+  adminChip: {
+    fontSize: 11,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: colors.roleAdmin,
+    backgroundColor: colors.roleAdminSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: 9,
+    overflow: "hidden",
+  },
+  adminNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.card,
+  },
+  adminNoteText: { flex: 1, fontSize: 12.5, lineHeight: 20, color: colors.primaryInk },
   submitText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
 });
