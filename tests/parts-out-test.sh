@@ -80,5 +80,6 @@ POST $A "work-orders/$ID3/parts-sourcing" "{\"expectedAt\":\"2026-11-21\",\"resu
 POST $A "work-orders/$ID3/rollback" '{"toStage":"NEW","reason":"ทดสอบ"}' >/dev/null
 [ "$(eta $ID3)" = "-" ] && pass "ย้อนขั้นแล้ววันคาดว่าเข้าถูกล้าง" || fail "วันค้าง: $(eta $ID3)"
 
-echo "IDS=$ID,$ID2,$CH,$ID3"
+# เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
+for i in $CH $ID $ID2 $ID3; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

@@ -49,6 +49,7 @@ import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/Evide
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
 import { takeFresh } from "../utils/freshOrder";
 import ClaimMachineBox, { ClaimCheckDraft, claimMachineGaps, ClaimMachineSummary, PlateDraft } from "../components/ClaimMachineBox";
+import { ClaimHistoryLinks } from "../components/ClaimHistoryEntry";
 import type { ClaimGuide } from "../utils/nameplate";
 import {
   AcceptKinds,
@@ -72,6 +73,7 @@ import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { feedback } from "../components/Feedback";
 import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
+import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, type FlowInfo, type StepState } from "../utils/stepPath";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -141,6 +143,10 @@ interface WorkOrder {
   appointmentStatusLabel: string | null;
   /** คนคอนเฟิร์มนัดกับลูกค้าล่าสุด (จากประวัติ) — มีเฉพาะนัดที่ตกลงแล้ว */
   appointmentBy?: { name: string | null; at: string } | null;
+  /** วันเข้าถูกเลื่อนหลังหัวหน้าภาคนัด/ปล่อยรอบล่าสุด — ต้องคอนเฟิร์มวันใหม่ก่อนปล่อยงาน (กฎเดียวกับป้ายในรายการ) */
+  rescheduled?: boolean;
+  /** ใบนี้เดินลำดับไหน + ขั้นทางเลือกที่ผ่าน — แถบขั้นตอนเรียงตามนี้ (utils/stepPath) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  flow?: FlowInfo | null;
   /** ย้อนขั้นมาและยังไม่มีใครกดผ่านขั้นนี้ — ป้าย/กล่อง "↩ ย้อนขั้น" (null = ไม่ได้ย้อน) */
   rolledBack?: { from: string | null; fromLabel: string | null; reason: string | null; byName: string | null; at: string } | null;
   /** ค่าที่การย้อนรอบล่าสุดล้างไป — ฟอร์มขั้นเติมให้เฉพาะช่องที่ว่าง จนกว่าจะผ่านขั้นเดิมไปแล้ว */
@@ -323,23 +329,6 @@ const MANUAL_STATUS = "WAITING_CUSTOMER";
 /** ขั้นที่ผล "หมด" ยังเป็นเรื่องของตอนนี้ — ตรงกับ PARTS_OUT_STAGES ฝั่ง backend */
 const PARTS_OUT_STAGES = ["PARTS_SOURCING", "PARTS_REQUESTED", "WAITING_PARTS"];
 
-/** ข้ามขั้นเพราะอะไร — แถบขั้นตอนเดิมขึ้นแค่ "ข้าม 6" ไม่บอกเหตุผล */
-const SKIP_WHY: Record<string, string> = {
-  INSPECT_CONFIRM: "ไม่ได้ตรวจหน้างาน",
-  INSPECT_DISPATCH: "ไม่ได้ตรวจหน้างาน",
-  INSPECTING: "ไม่ได้ตรวจหน้างาน",
-  // นัดลูกค้าก่อนเบิก (ต.ค. 69) — ทุกใบที่ใช้อะไหล่ผ่านขั้นนี้ · ข้ามเมื่อไม่ใช้อะไหล่ หรือใบที่เช็คพร้อมเบิกในสายงานเดิม
-  PARTS_SOURCING: "ไม่ใช้อะไหล่ / เช็คพร้อมเบิก (สายงานเดิม)",
-  AWAITING_QUOTE: "ไม่ต้องเสนอราคา",
-  AWAITING_PAYMENT: "ไม่ต้องเสนอราคา",
-  WAITING_PARTS: "ไม่ใช่ใบรออะไหล่รุ่นเก่า",
-  PARTS_REQUESTED: "ไม่ใช้อะไหล่",
-  PARTS_TRANSFER: "ของอยู่คลัง 94 หรือไม่ใช้อะไหล่",
-  PARTS_IN_TRANSIT: "ของอยู่คลัง 94 หรือไม่ใช้อะไหล่",
-  PARTS_PICKUP: "ไม่ได้โอนไปคลังอื่นนอกจากคลัง 94",
-  CLAIM_REVIEW: "ไม่มีเคลมอะไหล่",
-};
-
 /** ตัวที่หัวหน้าภาคต้องเบิกส่งมอบจากคลังที่ไม่ใช่ 94 (โอนมาถึงแล้ว) — กฎเดียวกับ pendingPickup ฝั่งเซิร์ฟเวอร์ */
 function isPickup(p: StockPart & { offCatalog?: boolean }, adminWarehouse: string) {
   return (
@@ -405,7 +394,7 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   INSPECT_DISPATCH: { label: "ส่งช่างตรวจ", icon: "checkmark-circle-outline" },
   INSPECTING: { label: "ตรวจหน้างาน", icon: "search-outline" },
   WAITING_PARTS: { label: "อะไหล่มาแล้ว ส่งต่อให้เบิก", icon: "cube-outline" },
-  // ลูกค้าคอนเฟิร์มวันแล้ว — เบิกจริง ใส่คลัง + เลขใบเบิก ส่งของไปหน้างาน (นัดลูกค้าก่อนเบิก ต.ค. 69)
+  // หัวหน้าภาคนัดวันแล้ว — เบิกจริง ใส่คลัง + เลขใบเบิก ให้ของพร้อมก่อนโทรคอนเฟิร์มลูกค้า (ต.ค. 69 รอบสอง)
   PARTS_REQUESTED: { label: "เบิกอะไหล่ (คลัง 94)", icon: "arrow-forward-circle" },
   // ของอยู่คลังอื่น — หัวหน้าภาคเบิกแล้วโอนมาคลังส่งมอบ · ของถึงแล้วกดโอนเสร็จ (แอดมินกดแทนไม่ได้)
   PARTS_TRANSFER: { label: "เบิกและโอนอะไหล่", icon: "swap-horizontal-outline" },
@@ -416,7 +405,7 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   PARTS_SOURCING: { label: "เช็คอะไหล่ (มี/หมด)", icon: "cube-outline" },
   AWAITING_QUOTE: { label: "ส่งใบเสนอราคา", icon: "document-text-outline" },
   AWAITING_PAYMENT: { label: "แนบบิลรับเงิน", icon: "cash-outline" },
-  // หัวหน้าภาคนัดวันเข้า (ทีม+วัน) → แอดมินคอนเฟิร์มลูกค้า → แอดมินเบิก → หัวหน้าภาคปล่อยงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
+  // นัดวันเข้า → แอดมินเบิก → [หัวหน้าภาคเบิก/โอน] → แอดมินคอนเฟิร์มลูกค้า (ของพร้อม) → ปล่อยงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
   PARTS_CHECKED: { label: "นัดวันเข้า", icon: "calendar-outline" },
   AWAITING_CONFIRM: { label: "คอนเฟิร์มลูกค้า", icon: "call-outline" },
   ASSIGNED: { label: "รับทราบ ปล่อยงาน", icon: "checkmark-circle-outline" },
@@ -430,180 +419,106 @@ function visitLabel(o: { scheduledAt: string | null; scheduledTime: string | nul
 }
 
 /**
- * ขั้นที่ใบนี้ไม่ได้ผ่าน — แถบขั้นตอนขึ้นว่า "ข้าม" ไม่ใช่ "ทำแล้ว"
- *
- * "ไม่ต้องทำ" ตัดสินจากกฎวันนี้ ส่วน "ทำไปแล้ว" เป็นของที่เกิดขึ้นจริง
- * ของจริงชนะกฎเสมอ — ใบที่มีใบเสนอราคาแนบอยู่ คือใบที่เสนอราคาไปแล้ว
- *
- * สำคัญกับใบเก่า: กฎประกัน 3 ปีทำให้สาขาแฟรนไชส์ 245 สาขากลับมาอยู่ใน
- * ประกัน ใบที่เคยผ่านขั้นเสนอราคาไปแล้วตอนที่ระบบยังตีว่าหมดประกัน
- * จะกลายเป็น "ไม่ต้องเสนอราคา" ตามกฎใหม่ ถ้าดูแต่กฎ แถบขั้นตอนจะขึ้นว่า
- * ข้ามทั้งที่ทำไปแล้วจริง และมีเอกสารแนบอยู่ในใบนั้น
- */
-/** แอดมินนัดร้านให้ไปตรวจหน้างานแล้วอย่างน้อยหนึ่งครั้ง — ใบก่อน ต.ค. 69 รอบสองนัดแล้วไป INSPECTING ตรง */
-function inspectBooked(o: WorkOrder) {
-  return o.logs.some(
-    (l) => (l.action === "CONFIRMED" || l.action === "RESCHEDULED") && (l.status === "INSPECT_DISPATCH" || l.status === "INSPECTING")
-  );
-}
-
-/** หัวหน้าภาคส่งช่างเข้าตรวจแล้ว — ใบเก่าไม่มีขั้นนี้ (นัดแล้วถึงช่างเลย) */
-function inspectDispatched(o: WorkOrder) {
-  return o.logs.some((l) => l.action === "DISPATCHED" && l.status === "INSPECTING");
-}
-
-/**
- * ใบที่หัวหน้าภาคปิดเอง (SUPERVISOR_CLOSED และ RECOVERED ของใบเก่าจากปุ่มรอบแรก) — ขั้นที่ใบงานรออยู่
- * และขั้นที่ยังไปไม่ถึงตอนปิดไม่มีใครทำ ต้องขึ้นว่าข้าม ไม่ใช่ติ๊กว่าทำแล้ว
- * ขั้นตอนปิดอ่านจากประวัติแถวสุดท้ายก่อนปิด (สถานะหลังแถวนั้น)
- */
-const SUPERVISOR_CLOSES: Record<string, string> = { RECOVERED: "RECOVERED_CLOSED", SUPERVISOR_CLOSED: "SUPERVISOR_CLOSED" };
-function recoveredFrom(o: WorkOrder): string | null {
-  const action = o.closeResult ? SUPERVISOR_CLOSES[o.closeResult] : undefined;
-  if (!action) return null;
-  const done = o.logs.find((l) => l.action === action);
-  if (!done) return null;
-  const prior = o.logs.filter((l) => l.id < done.id).sort((a, b) => b.id - a.id)[0];
-  return prior?.status ?? "NEW";
-}
-
-/**
  * ใบที่ช่างเพิ่งส่งกลับ — ขั้นล่าสุดที่ขยับคือ "ช่างส่งกลับ" และยังอยู่ที่ขั้นแรก
  * แนบรูป/แก้ข้อความหลังจากนั้นไม่นับ เพราะไม่ได้ทำให้ใบงานเดินไปไหน
+ * แอดมินเลื่อนวันนัดก็ไม่นับ (ใบอยู่ขั้นเดิม) — ไม่งั้นเลื่อนวันแล้วกล่อง "ช่างแจ้งปัญหา" หายทั้งที่ยังไม่ได้แก้
  */
+const NOT_A_MOVE = [
+  "ATTACHED",
+  "ATTACHMENT_REMOVED",
+  "EDITED",
+  "PARTS_ETA_CHANGED",
+  "STATUS_CHANGED",
+  "ARRIVED",
+  "APPOINTMENT_MOVED",
+  "ADMIN_REVIEW_REQUESTED",
+  "ADMIN_REVIEW_CANCELLED",
+  "ADMIN_REVIEW_ANSWERED",
+];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
-    .filter((l) => !["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED"].includes(l.action))
+    .filter((l) => !NOT_A_MOVE.includes(l.action))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   // ช่างแจ้งปัญหาแล้วใบไปต่อตามเหตุผล (ระบุอะไหล่ / คอนเฟิร์มลูกค้าใหม่ / จ่ายงานใหม่) — กล่องขึ้นที่ขั้นนั้น
   return last?.action === "PARTS_ROLLBACK" && last.status === o.status ? last : null;
 }
 
+/** การเลื่อนวันหลังหัวหน้าภาคนัด/ปล่อยรอบล่าสุด — ลูกค้าขอเลื่อนตอนคอนเฟิร์ม · แอดมินเลื่อนวันนัด */
+const DATE_MOVES = ["RESCHEDULED", "APPOINTMENT_MOVED", "APPOINTMENT_RECALLED"];
+/** ประวัติที่ตัดสินป้าย "คอนเฟิร์มวันใหม่" — นัด/ปล่อยของหัวหน้าภาคปิดป้าย การเลื่อนเปิดป้าย (ตรงกับฝั่งเซิร์ฟเวอร์) */
+const DATE_SETTLES = ["ASSIGNED", "INSPECT_REQUESTED", "DISPATCHED", ...DATE_MOVES];
+
+/** การเลื่อนวันที่หัวหน้าภาคยังไม่ได้รับทราบ — null = วันที่จะเข้าคือวันที่หัวหน้าภาคนัด/ปล่อยไว้เอง */
+function pendingMove(o: WorkOrder): LogEntry | null {
+  const last = o.logs
+    .filter((l) => DATE_SETTLES.includes(l.action))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0];
+  return last && DATE_MOVES.includes(last.action) ? last : null;
+}
+
 /**
- * ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ (เจ้าของงานเลือก ต.ค. 69)
+ * วันเข้าถูกเลื่อน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ (เจ้าของงานเลือก ต.ค. 69)
  * — ป้าย/ปุ่ม "คอนเฟิร์มวันใหม่" แยกจาก "รับทราบ ปล่อยงาน" ปกติ เพราะต้องดูคิวทีมวันใหม่ก่อน ไม่ใช่กดผ่าน
+ *
+ * เซิร์ฟเวอร์คิดให้ (detail.rescheduled) — กฎเดียวกับป้ายในรายการ · คิดเองเฉพาะเซิร์ฟเวอร์รุ่นเก่า
+ * CONFIRMED ไม่ปิดป้าย: แอดมินเลื่อนวันระหว่างเบิกแล้วลูกค้าตกลงวันนั้นทีหลัง หัวหน้าภาคก็ยังไม่ได้ดูคิวทีมวันใหม่
  */
 function rescheduledPending(o: WorkOrder) {
-  if (o.status !== "ASSIGNED") return false;
-  const last = o.logs
-    .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  return last?.action === "RESCHEDULED";
+  if (o.status !== "ASSIGNED" && o.status !== "INSPECT_DISPATCH") return false;
+  if (typeof o.rescheduled === "boolean") return o.rescheduled;
+  return pendingMove(o) !== null;
 }
 
 /** หัวหน้าภาคส่งกลับเพราะทีมไม่ว่างวันใหม่ — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่ */
 function declinedNewDate(o: WorkOrder): LogEntry | null {
   if (o.status !== "AWAITING_CONFIRM") return null;
   const last = [...o.logs]
-    .filter((l) => !["ATTACHED", "ATTACHMENT_REMOVED", "EDITED", "PARTS_ETA_CHANGED"].includes(l.action))
+    .filter((l) => !NOT_A_MOVE.includes(l.action))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   return last?.action === "NEW_DATE_DECLINED" ? last : null;
 }
 
 /**
- * ขั้นที่ทำไปแล้วในใบเดิม (ใบแยก) — ใบรออะไหล่เริ่มกลางทาง ขั้นก่อนหน้าไม่ได้เกิดในใบนี้
- *
- * เดิมแถบขั้นตอนติ๊ก ✓ ทุกขั้นที่อยู่ก่อนขั้นปัจจุบัน ใบแยกจึงขึ้น "ส่งใบเสนอราคาแล้ว · ลูกค้าจ่ายแล้ว"
- * ทั้งที่ใบนี้ไม่เคยเสนอราคา (WO-00528) — ดูขั้นที่ใบเริ่มจากประวัติ SPLIT_FROM แทน
- * ขั้นที่ใบนี้เข้าไปจริงภายหลัง (เช่นย้อนกลับไปเช็คอะไหล่) ไม่นับ
+ * ขั้นที่ปุ่ม "เลื่อนวันนัด" ขึ้นได้ — ค่าตั้งต้นเผื่อเซิร์ฟเวอร์รุ่นเก่า ตัวจริงมากับ options.rescheduleStages
+ * ตั้งแต่หัวหน้าภาคนัดวันจนช่างถึงหน้างาน (เจ้าของงานเลือก "ได้ตลอดจนช่างเข้างาน" ต.ค. 69)
  */
-function doneInParent(value: string, o: WorkOrder, stages: Stage[]) {
-  const start = o.parent ? o.logs.find((l) => l.action === "SPLIT_FROM")?.status : undefined;
-  if (!start || value === o.status) return false;
-  const at = (v: string) => stages.findIndex((x) => x.value === v);
-  return at(value) >= 0 && at(value) < at(start) && !o.logs.some((l) => l.status === value && l.action !== "SPLIT_FROM");
-}
+const RESCHEDULE_STAGES = [
+  "PARTS_REQUESTED",
+  "PARTS_TRANSFER",
+  "PARTS_IN_TRANSIT",
+  "PARTS_PICKUP",
+  "AWAITING_CONFIRM",
+  "ASSIGNED",
+  "INSPECT_DISPATCH",
+  "IN_PROGRESS",
+  "INSPECTING",
+];
+/** ปล่อยให้ช่างแล้ว — เลื่อนได้จนช่างกดถึงหน้างาน ใบถูกดึงคืนให้หัวหน้าภาคปล่อยใหม่ */
+const RECALL_STAGES = ["IN_PROGRESS", "INSPECTING"];
 
-/** ขั้นเบิก/โอน — อยู่หลังคอนเฟิร์มลูกค้าในสายงานใหม่ (นัดลูกค้าก่อนเบิก ต.ค. 69) */
-const ISSUE_STAGES = ["PARTS_REQUESTED", "PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
-
-/**
- * ใบที่ค้างระหว่างเบิกตอนเปลี่ยนสายงาน (ยังไม่ได้นัดลูกค้า) — ขั้นนัดวัน/คอนเฟิร์มอยู่ "ก่อน" ขั้นปัจจุบันตามลำดับ
- * แต่ยังไม่ได้ทำ เบิกเสร็จแล้วใบวนกลับไปนัด (afterIssue ฝั่งเซิร์ฟเวอร์) — ต้องขึ้นว่ายังไม่ถึง ไม่ใช่ทำแล้ว
- */
-function aheadAgain(value: string, o: WorkOrder) {
-  return (
-    (value === "PARTS_CHECKED" || value === "AWAITING_CONFIRM") &&
-    ISSUE_STAGES.includes(o.status) &&
-    o.appointmentStatus !== "CONFIRMED"
-  );
+/** ช่างกดถึงหน้างานแล้วในรอบนี้ (หลังปล่อยงานครั้งล่าสุด) — เลื่อนวันไม่ได้แล้ว ช่างใช้ "แจ้งปัญหาหน้างาน" แทน */
+function techArrived(o: WorkOrder) {
+  const sent = o.logs.filter((l) => l.action === "DISPATCHED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return o.logs.some((l) => l.action === "ARRIVED" && (!sent || l.createdAt >= sent.createdAt));
 }
 
 /**
- * ขั้นเบิก/โอนที่อยู่ "หลัง" ขั้นปัจจุบัน แต่ของเบิกไปแล้ว — ใบที่เบิกตั้งแต่สายงานเดิมแล้วค้างที่นัดวัน
- * หรือวนกลับมานัด/คอนเฟิร์มใหม่หลังเบิก (ทีมไม่ว่างวันใหม่ · ร้านปิด) · ทำจริง = ทำแล้ว · ไม่เคยผ่าน = ข้าม
+ * ยังมีของต้องเบิกไหม — ของในสโตร์ที่ยังไม่มีเลขใบเบิก · ของนอกสโตร์นับว่ายังต้องผ่านขั้นเบิกเสมอ
+ * (ใกล้เคียง partsToIssue ฝั่งเซิร์ฟเวอร์ — ใช้แค่เลือกข้อความ เซิร์ฟเวอร์เป็นคนตัดสินว่าใบไปไหน)
  */
-function issuedAhead(value: string, o: WorkOrder, stages: Stage[]): "done" | "skip" | null {
-  if (!ISSUE_STAGES.includes(value) || o.needsParts !== true) return null;
-  const at = (v: string) => stages.findIndex((x) => x.value === v);
-  if (o.status === "DONE" || o.status === "CANCELLED" || at(o.status) >= at(value)) return null;
-  const store = o.waitingParts.filter((p) => !p.offCatalog);
-  if (store.length === 0 || !store.every((p) => p.inStock === true && !!p.requisitionNo)) return null;
-  const did: Record<string, string> = {
-    PARTS_REQUESTED: "PARTS_CHECKED",
-    PARTS_TRANSFER: "TRANSFER_REQUESTED",
-    PARTS_IN_TRANSIT: "TRANSFER_ARRIVED",
-    PARTS_PICKUP: "PICKED_UP",
-  };
-  return o.logs.some((l) => l.action === did[value]) ? "done" : "skip";
+function partsToIssue(o: WorkOrder) {
+  return o.needsParts === true && o.waitingParts.some((p) => (p.offCatalog ? true : !(p.inStock === true && p.requisitionNo)));
 }
 
-function isSkipped(value: string, o: WorkOrder, stages: Stage[]) {
-  const at = (v: string) => stages.findIndex((x) => x.value === v);
-  if (doneInParent(value, o, stages)) return true;
-  if (issuedAhead(value, o, stages) === "skip") return true;
-  const recovered = recoveredFrom(o);
-  // รวมขั้นที่ใบงานรออยู่ตอนกดปิดด้วย — ขั้นนั้นก็ไม่มีใครทำ (เช่น รอจ่ายงาน แล้วปิดเลยโดยไม่จ่าย)
-  if (recovered && value !== "DONE" && at(value) >= at(recovered)) return true;
-  switch (value) {
-    case "PARTS_REQUESTED":
-      return o.needsParts === false;
-    // ใบที่ของอยู่คลังลาดพร้าว 94 ทั้งหมดไม่ผ่านขั้นนี้
-    // ข้ามเมื่อไม่ใช้อะไหล่ หรือเลยขั้นนี้ไปแล้วโดยไม่ได้ผ่าน — ก่อนถึงขั้นเบิกยังไม่รู้ว่าของจะอยู่คลังไหน
-    // (เดิมขึ้นว่าข้ามตั้งแต่ใบยังไม่ถึงขั้นเบิก ทั้งที่แอดมินอาจส่งมาให้หัวหน้าภาคเบิก)
-    case "PARTS_PICKUP":
-      return (
-        o.needsParts === false ||
-        (at(o.status) > at("PARTS_PICKUP") && !o.logs.some((l) => l.action === "PICKED_UP"))
-      );
-    // เบิกและโอน — ข้ามเมื่อเลยไปแล้วโดยไม่เคยสั่งโอน (ของอยู่คลัง 94 ทั้งหมด)
-    case "PARTS_TRANSFER":
-    case "PARTS_IN_TRANSIT":
-      return (
-        o.needsParts === false ||
-        (at(o.status) > at(value) && o.status !== "PARTS_REQUESTED" && !o.logs.some((l) => l.action === "TRANSFER_REQUESTED"))
-      );
-    case "AWAITING_QUOTE":
-      return o.needsQuote === false && !o.hasQuote;
-    // ไม่ใช้อะไหล่ · หรือเลยขั้นนี้มาแล้วโดยไม่มีประวัติเช็ค (ใบที่เช็คพร้อมเบิกในสายงานเดิม ก่อนนัดลูกค้าก่อนเบิก ต.ค. 69)
-    case "PARTS_SOURCING":
-      return (
-        o.status !== "PARTS_SOURCING" &&
-        (o.needsParts === false ||
-          ((o.status === "DONE" || at(o.status) > at("PARTS_SOURCING")) &&
-            !o.logs.some((l) => l.action === "PARTS_SOURCED" || l.action === "PARTS_BACKORDERED")))
-      );
-    case "AWAITING_PAYMENT":
-      return o.needsQuote === false && !o.hasReceipt;
-    // ตรวจหน้างานเป็นทางเลือก — ใบที่ไม่เคยส่งตรวจไม่ได้ผ่านขั้นนี้
-    case "INSPECTING":
-      return o.status !== "INSPECTING" && !o.inspectedAt;
-    // ใบที่ส่งตรวจก่อนมีขั้นนัดก็ไม่ได้ผ่านขั้นนี้ — ดูจากประวัตินัดที่ส่งต่อไปขั้นตรวจ
-    case "INSPECT_CONFIRM":
-      return o.status !== "INSPECT_CONFIRM" && !inspectBooked(o);
-    case "INSPECT_DISPATCH":
-      return o.status !== "INSPECT_DISPATCH" && !inspectDispatched(o);
-    // ใบเก่าบางใบนัดแล้วไปเลยโดยไม่ได้ผ่านขั้นคอนเฟิร์ม — ไม่มีประวัติคอนเฟิร์ม/เลื่อน = ข้าม
-    case "AWAITING_CONFIRM":
-      return (
-        o.status !== "AWAITING_CONFIRM" &&
-        (o.status === "DONE" || at(o.status) > at("AWAITING_CONFIRM")) &&
-        !aheadAgain(value, o) &&
-        !o.logs.some((l) => l.action === "CONFIRMED" || l.action === "RESCHEDULED")
-      );
-    default:
-      return false;
-  }
+/**
+ * เบิกครบแล้วใบไปไหน — ตรงกับ afterIssue ฝั่งเซิร์ฟเวอร์
+ * นัดแล้วยังไม่คอนเฟิร์ม (สายงานปัจจุบัน) → แอดมินโทรคอนเฟิร์มลูกค้าตอนของอยู่ในมือ
+ * คอนเฟิร์มไปก่อนสลับลำดับ → ปล่อยงานเลย ไม่โทรซ้ำ · ใบเก่าที่ยังไม่มีวัน → ไปนัดวันเข้า
+ */
+function afterIssueText(o: WorkOrder) {
+  if (!o.scheduledAt) return "ใบไปขั้นหัวหน้าภาคนัดวันเข้า";
+  if (APPOINTMENT_DONE.includes(o.appointmentStatus ?? "")) return "ลูกค้าคอนเฟิร์มวันแล้ว ใบไปให้หัวหน้าภาคปล่อยงาน";
+  return "ใบไปให้แอดมินคอนเฟิร์มลูกค้า (ของพร้อมแล้ว)";
 }
 
 interface Option {
@@ -761,6 +676,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
   const [stageBackOpen, setStageBackOpen] = useState(false);
   const [etaOpen, setEtaOpen] = useState(false);
+  // แอดมินเลื่อนวันนัด (ต.ค. 69) — ขั้นคอนเฟิร์มลูกค้าใช้ฟอร์มคอนเฟิร์มที่เปิดมาที่ "ลูกค้าขอเลื่อน" แทน (stageChoice)
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [stageChoice, setStageChoice] = useState<"MOVE" | null>(null);
+  const [rescheduleStages, setRescheduleStages] = useState<string[]>(RESCHEDULE_STAGES);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -771,6 +690,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    * ช่างกดครั้งเดียวถึงฟอร์ม ไม่ต้องเปิดใบงานแล้วหาปุ่มอีกรอบ · เปิดครั้งเดียวต่อการเข้าหน้า
    */
   const openOnLoad = useRef(route.params.open ?? null);
+  /**
+   * แอดมินเลื่อนวันนัดได้ไหม — แอดมิน (รวม Super Admin) ที่ไม่ได้ดูในฐานะคนอื่น · Admin Spare Part ถูกตัด user ทิ้งแล้ว
+   * ตั้งแต่มีวันนัดจนช่างกดถึงหน้างาน (เซิร์ฟเวอร์กันซ้ำ) — ช่างถึงแล้วเลื่อนไม่ได้ ใช้ "แจ้งปัญหาหน้างาน" ของช่าง
+   */
+  const reschedulable = (o: WorkOrder) =>
+    user?.role === "ADMIN" &&
+    !user.viewAs &&
+    !!o.scheduledAt &&
+    rescheduleStages.includes(o.status) &&
+    !(RECALL_STAGES.includes(o.status) && techArrived(o));
+  /** ขั้นคอนเฟิร์มลูกค้ามีทางเลื่อนวันอยู่แล้ว ("ลูกค้าขอเลื่อน") — ทุกทางเข้าเปิดฟอร์มนั้น ไม่ให้มีสองที่ทำเรื่องเดียวกัน */
+  const openReschedule = (o: WorkOrder) => {
+    if (o.status === "AWAITING_CONFIRM") {
+      setStageChoice("MOVE");
+      setStageOpen(true);
+    } else setRescheduleOpen(true);
+  };
   useEffect(() => {
     const want = openOnLoad.current;
     if (!want || !order) return;
@@ -778,7 +714,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     if (want === "close" && order.status === "IN_PROGRESS") setClosing(true);
     else if (want === "stage" && order.status === "INSPECTING") setStageOpen(true);
     else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
+    else if (want === "reschedule" && reschedulable(order)) openReschedule(order);
   }, [order]);
+  // ปิดฟอร์มขั้นแล้วล้างตัวเลือกที่สั่งเปิดไว้ — กดปุ่มขั้นครั้งต่อไปต้องเปิดตามปกติ ไม่ค้างที่ "ลูกค้าขอเลื่อน"
+  useEffect(() => {
+    if (!stageOpen) setStageChoice(null);
+  }, [stageOpen]);
   // ขยับเมื่อมีไฟล์ถูกแนบจากที่อื่นนอกการ์ดไฟล์แนบ เพื่อสั่งให้การ์ดโหลดใหม่
   const [filesKey, setFilesKey] = useState(0);
   // รายการไฟล์ที่การ์ดไฟล์แนบโหลดมาแล้ว — ยืมมาใช้ต่อในการ์ดผลการทำงาน
@@ -815,6 +756,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           adminWarehouse?: string;
           technicians: Technician[];
           teams: Team[];
+          rescheduleStages?: string[];
         }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
@@ -827,6 +769,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       if (options.data.adminWarehouse) setAdminWarehouse(options.data.adminWarehouse);
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
+      if (options.data.rescheduleStages) setRescheduleStages(options.data.rescheduleStages);
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
@@ -946,6 +889,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         setRollbackOpen(false);
         setStageBackOpen(false);
         setEtaOpen(false);
+        setRescheduleOpen(false);
         feedback.toast("warn", `${message ?? "ข้อมูลใบงานนี้เปลี่ยนไปแล้ว"} — โหลดข้อมูลล่าสุดให้แล้ว`);
       }),
     [id]
@@ -1017,13 +961,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     );
   }
 
-  /** กดวงกลมขั้นตอน: ขั้นปัจจุบัน = ทำขั้นนี้ (ถ้าถึงคิวเรา) · ขั้นที่ทำแล้ว = ดูว่าใครทำ */
-  function pressStep(value: string, state: string) {
+  /**
+   * กดวงกลมขั้นตอน: ขั้นปัจจุบัน = ทำขั้นนี้ (ถ้าถึงคิวเรา) · ขั้นที่ทำแล้ว = ดูว่าใครทำ
+   * key เป็นขั้นบนแถบ ("ISSUE" รวมขั้นเบิก/โอน) หรือขั้นของเซิร์ฟเวอร์ (รอบตรวจหน้างาน · ขั้นย่อยโอน)
+   * ขั้นปัจจุบันเปิดฟอร์มของสถานะจริงของใบเสมอ — ขั้น 1 ระหว่างตรวจหน้างาน (loop) เปิดฟอร์มขั้นตรวจที่ค้างอยู่
+   */
+  function pressStep(key: string, state: StepState) {
     if (state === "done") {
-      setStepInfo(value);
+      setStepInfo(key);
       return;
     }
-    if (state !== "now" || !order || !myTurn(order) || busy) return;
+    if ((state !== "now" && state !== "loop") || !order || !myTurn(order) || busy) return;
     // ตรวจเคลมทำที่การ์ดใบเคลมด้านล่าง ไม่มีฟอร์มขั้นตอนให้เปิด
     if (order.status === "CLAIM_REVIEW") return;
     if (order.status === "IN_PROGRESS") setClosing(true);
@@ -1119,23 +1067,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     }
   }
 
-  /**
-   * ขั้นรออะไหล่มีเฉพาะใบที่แยกออกมาจากใบอื่น — ใบปกติไม่ต้องเห็นขั้นนี้เลย
-   * แม้แต่ในรูป "ข้าม" เพราะมันไม่ใช่ทางเลือกของใบปกติ ขึ้นไว้มีแต่ทำให้งง
-   */
-  const shownStages = stages.filter(
-    (x) =>
-      (x.value !== "WAITING_PARTS" || order.parent !== null || order.status === "WAITING_PARTS") &&
-      // ขั้นตรวจเคลมมีเฉพาะใบที่ส่งอะไหล่เก่าเคลม — ใบส่วนใหญ่ไม่มี ขึ้นไว้มีแต่ทำให้ดูเหมือนงานยังไม่จบ
-      (x.value !== "CLAIM_REVIEW" || order.status === "CLAIM_REVIEW" || order.claims.length > 0)
-  );
+  /** แถบขั้นตอน — เฉพาะขั้นที่ใบนี้ต้องผ่าน เรียงตามลำดับที่ใบนี้เดินจริง (utils/stepPath) */
+  const path = buildStepPath(order, stages);
+  /** ขั้นของเซิร์ฟเวอร์นี้ ใบนี้ทำผ่านมาแล้วจริงไหม — บนแถบหลัก บนรอบตรวจหน้างาน หรือขั้นย่อยโอน */
+  const passedStage = (value: string) =>
+    path.rows.some((r) => r.stages.includes(value) && r.state === "done") ||
+    !!path.track?.items.some((t) => t.key === value && t.state === "done");
   /**
    * ขั้นที่ย้อนกลับไปได้ — ขั้นก่อนหน้าที่ใบนี้ผ่านมาจริง ไม่นับขั้นที่ข้าม
    * ย้อนไปขั้นที่ไม่เคยผ่านคือการเดินใบงานไปทางที่ไม่ควรมีอยู่
+   * "ก่อนหน้า" ใช้ลำดับของเซิร์ฟเวอร์ ไม่ใช่ลำดับบนแถบ — เซิร์ฟเวอร์รับเฉพาะขั้นที่อยู่ก่อนตามลำดับของมัน
+   * (ใบคอนเฟิร์มก่อนเบิกที่ค้างอยู่ขั้นเบิก ย้อนไปคอนเฟิร์มไม่ได้แล้ว แต่ย้อนไปนัดวันได้)
    */
   const backTargets = (() => {
-    const at = shownStages.findIndex((x) => x.value === order.status);
-    return shownStages
+    const at = stages.findIndex((x) => x.value === order.status);
+    return stages
       .slice(0, Math.max(0, at))
       .filter(
         (x) =>
@@ -1145,7 +1091,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           x.value !== "PARTS_PICKUP" &&
           x.value !== "PARTS_TRANSFER" &&
           x.value !== "PARTS_IN_TRANSIT" &&
-          (!isSkipped(x.value, order, stages) ||
+          (passedStage(x.value) ||
             /**
              * ใบเก่าที่เข้าเสนอราคาก่อนมีขั้นรอเบิกอะไหล่ — แอดมินเช็คหลังบ้านแล้วพบว่าของหมด
              * ต้องส่งกลับไปขั้นนั้นได้ ไม่งั้นเสนอราคา/เก็บเงินของที่ไม่มี (เจ้าของงานขอ ต.ค. 69)
@@ -1208,8 +1154,24 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   // หน้าตาตามแบบ ต.ค. 69 — กว้างพอค่อยแยกสองคอลัมน์ (คอลัมน์ขวา 380 px + ซ้ายอย่างน้อย ~600 px)
   const wide = bodyWidth >= 1000;
   const stageNow = stages.find((x) => x.value === order.status);
-  const liveStages = shownStages.filter((x) => !isSkipped(x.value, order, stages));
-  const stepNo = liveStages.findIndex((x) => x.value === order.status) + 1;
+  const canReschedule = reschedulable(order);
+  /**
+   * เลื่อนวันนัด (แอดมิน ต.ค. 69) — ปุ่มรองในท้ายการ์ดขั้นปัจจุบัน ขึ้นทั้งตอนเป็นคิวแอดมินและตอนรอคนอื่น
+   * ขั้นคอนเฟิร์มลูกค้าไม่ขึ้นปุ่มแยก: ปุ่ม "คอนเฟิร์มลูกค้า" มี "ลูกค้าขอเลื่อน" อยู่แล้ว ไม่ให้มีสองทางทำเรื่องเดียวกัน
+   */
+  const rescheduleBtn =
+    canReschedule && order.status !== "AWAITING_CONFIRM" ? (
+      <TouchableOpacity
+        style={[styles.action, styles.actionProblem]}
+        onPress={() => openReschedule(order)}
+        disabled={busy}
+        activeOpacity={0.8}
+        accessibilityLabel="เลื่อนวันนัด"
+      >
+        <Ionicons name="calendar-outline" size={18} color={colors.navy} />
+        <Text style={styles.actionProblemText}>เลื่อนวันนัด</Text>
+      </TouchableOpacity>
+    ) : null;
   const lastLog = [...order.logs].sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id)[0];
   // เครื่องหายจากไฟล์รายงานแล้ว แต่ใบยังไม่ปิด — ขึ้นทางลัดปิดใบงานตามแบบ
   const formDetail = splitFormDetail(order.detail);
@@ -1235,6 +1197,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     {backfilling ? (
       <BackfillCloseModal
         order={order}
+        stages={stages.map((x) => x.value)}
         teams={teams.map((t) => t.name)}
         technicians={technicians}
         results={results}
@@ -1398,7 +1361,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         <View style={styles.stepsHead}>
           <Text style={styles.stepsHeadText}>
             <Text style={[styles.stepsHeadStrong, headingFont]}>ขั้นตอนใบงาน</Text>
-            {stepNo > 0 ? ` · ขั้นที่ ${stepNo} จาก ${liveStages.length}` : ""}
+            {/* ระหว่างตรวจหน้างานยังไม่ถึงขั้นที่ 1 — บอกว่าอยู่รอบตรวจย่อยไหน ไม่ใช่ "ขั้นที่ 1" ซึ่งชวนให้คิดว่าระบุอะไหล่แล้ว */}
+            {path.current.sub
+              ? ` · ตรวจหน้างาน (ย่อย ${path.current.sub.no}/${path.current.sub.total}) ก่อนขั้นที่ 1`
+              : path.current.no > 0
+                ? ` · ขั้นที่ ${path.current.no} จาก ${path.current.total}`
+                : ""}
           </Text>
           <View style={{ flex: 1 }} />
           {canStepBack ? (
@@ -1414,41 +1382,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           กดวงกลมขั้นปัจจุบันได้เหมือนกดปุ่ม ขั้นที่ทำแล้วกดดูว่าใครทำเมื่อไร
         */}
         {/*
-          ไม่เลื่อนซ้ายขวาแล้ว (เจ้าของงานเลือกแบบ 1 ต.ค. 69) — เดิมขั้นละอย่างน้อย 104 px · 12 ขั้น = 1,248 px
-          ซูมแล้วกลายเป็นเลื่อนที่ไม่มีแถบเลื่อนให้เห็น ขั้นแรกถูกตัดครึ่ง ขั้นท้ายหายไปเฉย ๆ
-          ตอนนี้: ขั้นที่ข้ามติดกันยุบเป็นปุ่มเดียว "ข้าม N" (กดดูชื่อ) · ทุกช่องแบ่งความกว้างเท่ากัน ·
-          แคบจนชื่ออ่านไม่ออก ซ่อนชื่อขั้นอื่น เหลือวงกับเลข ชื่อขั้นปัจจุบันยังเห็นเต็ม
+          ไม่เลื่อนซ้ายขวา (เจ้าของงานเลือกแบบ 1 ต.ค. 69) — ทุกช่องแบ่งความกว้างเท่ากัน · แคบจนชื่ออ่านไม่ออก
+          ซ่อนชื่อขั้นอื่น เหลือวงกับเลข ชื่อขั้นปัจจุบันยังเห็นเต็ม
+          โชว์เฉพาะขั้นที่ใบนี้ต้องผ่าน (แบบที่ตกลง ต.ค. 69 รอบสอง) — ใบส่วนใหญ่ 7 ขั้น ไม่ใช่ 12 ขั้นที่ครึ่งหนึ่งขึ้นว่าข้าม
+          ตรวจหน้างานเป็นรอบแยกเหนือแถบ · โอนคลังอื่นเป็นขั้นย่อยใต้แถบ · "ข้าม N" เหลือเฉพาะขั้นบนทางที่ไม่ได้ทำจริง
         */}
         {(() => {
-          const currentIndex = shownStages.findIndex((x) => x.value === order.status);
-          const rows = shownStages.map((stage, i) => {
-            const skipped = isSkipped(stage.value, order, stages);
-            // ตรวจหน้างานแล้วใบงานวนกลับไปขั้นแรก ขั้นตรวจจึงอยู่ "หลัง" ขั้นปัจจุบัน
-            // ตามลำดับ แต่ทำไปแล้วจริง — ต้องขึ้นว่าทำแล้ว ไม่ใช่ยังไม่ถึง
-            const doneOutOfOrder =
-              (stage.value === "INSPECTING" && !!order.inspectedAt && order.status !== "INSPECTING") ||
-              (stage.value === "INSPECT_CONFIRM" && inspectBooked(order) && order.status !== "INSPECT_CONFIRM") ||
-              // เบิกไปแล้วก่อนวนกลับมานัด/คอนเฟิร์ม — ของออกจากคลังแล้วจริง (นัดลูกค้าก่อนเบิก ต.ค. 69)
-              issuedAhead(stage.value, order, stages) === "done";
-            const state = skipped
-              ? "skipped"
-              : order.status === "CANCELLED"
-                ? "future"
-                : aheadAgain(stage.value, order)
-                  ? "future"
-                  : i < currentIndex || order.status === "DONE" || doneOutOfOrder
-                  ? "done"
-                  : i === currentIndex
-                    ? "now"
-                    : "future";
-            // เลขขั้นนับเฉพาะขั้นที่ไม่ถูกข้าม คนอ่าน "ขั้น 3" จะได้ตรงกับที่ทำจริง
-            const number = shownStages.slice(0, i + 1).filter((x) => !isSkipped(x.value, order, stages)).length;
-            return { stage, state, number };
-          });
+          const rolledFrom = order.rolledBack?.from ?? null;
+          type PathRow = (typeof path.rows)[number];
           // ขั้นที่ข้ามติดกันรวมเป็นกลุ่มเดียว
-          type Row = (typeof rows)[number];
-          const items: ({ kind: "step"; row: Row } | { kind: "skip"; rows: Row[]; at: number })[] = [];
-          rows.forEach((r, i) => {
+          const items: ({ kind: "step"; row: PathRow } | { kind: "skip"; rows: PathRow[]; at: number })[] = [];
+          path.rows.forEach((r, i) => {
             const last = items[items.length - 1];
             if (r.state === "skipped" && last?.kind === "skip") last.rows.push(r);
             else if (r.state === "skipped") items.push({ kind: "skip", rows: [r], at: i });
@@ -1457,15 +1401,60 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           // ช่องละไม่ถึง ~74 px ชื่อขั้นภาษาไทยขึ้นบรรทัดละสองสามตัวอักษร อ่านไม่ออก — ซ่อนดีกว่า
           const tight = stepBarW > 0 && stepBarW / items.length < 74;
           const opened = items.find((it) => it.kind === "skip" && it.at === skipOpen);
+          const issueSub = path.rows.find((r) => r.key === "ISSUE")?.sub;
           return (
-            <>
-              <View
-                // ชื่อของแถบ — หัวข้อ "ขั้นตอนงาน" ถูกเอาออกตอนย้ายแถบขึ้นบนสุด
-                // คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder-web-test) หาแถบนี้จากชื่อนี้
-                accessibilityLabel="ขั้นตอนงาน"
-                style={styles.steps}
-                onLayout={(e) => setStepBarW(e.nativeEvent.layout.width)}
-              >
+            // ชื่อของทั้งส่วน (รอบตรวจ + แถบ + ขั้นย่อย) — คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder · inspect-confirm) หาจากชื่อนี้
+            <View accessibilityLabel="ขั้นตอนงาน">
+              {/*
+                รอบตรวจหน้างาน — เหนือแถบ ไม่นับเป็นขั้นหลัก (แบบที่ตกลง ต.ค. 69 รอบสอง)
+                เดิมเป็นสามขั้นต่อจากขั้น 1 และขั้น 1 ติ๊กว่าระบุอะไหล่แล้ว ทั้งที่เลือกส่งตรวจเพราะยังระบุไม่ได้
+              */}
+              {path.track ? (
+                <View style={styles.trackRow} accessibilityLabel="ตรวจหน้างาน (วนกลับ)">
+                  <View style={styles.trackPill}>
+                    <Text style={styles.trackPillText}>
+                      ↻ ตรวจหน้างาน{path.track.rounds > 1 ? ` รอบ ${path.track.rounds}` : ""}
+                    </Text>
+                  </View>
+                  {path.track.items.map((t, i) => (
+                    <View key={t.key} style={styles.trackStep}>
+                      {i > 0 ? <View style={[styles.miniLine, t.state !== "future" && styles.stepLineDone]} /> : null}
+                      <TouchableOpacity
+                        style={styles.trackItem}
+                        onPress={() => pressStep(t.key, t.state)}
+                        activeOpacity={0.7}
+                        accessibilityLabel={t.a11y}
+                      >
+                        <View
+                          style={[
+                            styles.miniDot,
+                            t.state === "done" && styles.stepDotDone,
+                            t.state === "now" && { backgroundColor: tone.fg, borderColor: tone.fg },
+                            t.state === "skipped" && styles.stepDotSkipped,
+                            rolledFrom === t.key && styles.stepDotFrom,
+                          ]}
+                        >
+                          {t.state === "now" ? <StepPulse size={18} color={tone.fg} /> : null}
+                          {t.state === "done" ? <Ionicons name="checkmark" size={11} color="#fff" /> : null}
+                        </View>
+                        <Text
+                          style={[
+                            styles.trackLabel,
+                            t.state === "now" && [styles.stageLabelNow, { color: tone.fg }],
+                            t.state === "future" && styles.stageLabelFuture,
+                            t.state === "skipped" && [styles.stageLabelFuture, styles.stageLabelSkipped],
+                          ]}
+                        >
+                          {t.label}
+                        </Text>
+                        {t.state === "now" && t.actorLabel ? <Text style={styles.stageActor}>{t.actorLabel}</Text> : null}
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <Text style={styles.trackBack}>→ กลับไประบุอะไหล่</Text>
+                </View>
+              ) : null}
+              <View style={styles.steps} onLayout={(e) => setStepBarW(e.nativeEvent.layout.width)}>
                 {items.map((it, k) => {
                   if (it.kind === "skip") {
                     const isOpen = skipOpen === it.at;
@@ -1485,15 +1474,18 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                       </TouchableOpacity>
                     );
                   }
-                  const { stage, state, number } = it.row;
-                  const showLabel = !tight || state === "now";
+                  const row = it.row;
+                  const { state } = row;
+                  const current = state === "now" || state === "loop";
+                  const showLabel = !tight || current;
+                  const fromHere = !!rolledFrom && row.stages.includes(rolledFrom);
                   return (
                     <TouchableOpacity
-                      key={stage.value}
-                      style={[styles.step, tight && styles.stepTight, tight && state === "now" && styles.stepNowWide]}
+                      key={row.key}
+                      style={[styles.step, tight && styles.stepTight, tight && current && styles.stepNowWide]}
                       activeOpacity={0.7}
-                      onPress={() => pressStep(stage.value, state)}
-                      accessibilityLabel={stage.label}
+                      onPress={() => pressStep(row.key, state)}
+                      accessibilityLabel={row.a11y}
                     >
                       {k > 0 ? (
                         <View
@@ -1508,8 +1500,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                           // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
                           state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
                           state === "now" && partsOut.length > 0 && styles.stepDotOut,
+                          // ขั้น 1 ระหว่างตรวจหน้างาน — ยังไม่ได้ทำ ไม่ติ๊ก ไม่มีคลื่น แค่วงเส้นประสีคนที่ใบรอ
+                          state === "loop" && [styles.stepDotLoop, { borderColor: tone.fg }],
                           // ขั้นที่ย้อนมาจาก — วงเส้นประสีส้ม คู่กับกล่อง "ย้อนขั้นมา" ข้างล่าง
-                          order.rolledBack?.from === stage.value && styles.stepDotFrom,
+                          fromHere && styles.stepDotFrom,
                         ]}
                       >
                         {state === "now" ? <StepPulse size={tight ? 20 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
@@ -1517,9 +1511,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                           <Ionicons name="checkmark" size={15} color="#fff" />
                         ) : state === "now" && partsOut.length ? (
                           <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
+                        ) : state === "loop" ? (
+                          <Text style={[styles.stepNum, headingFont, tight && styles.stepNumTight, { color: tone.fg }]}>↻</Text>
                         ) : (
                           <Text style={[styles.stepNum, headingFont, tight && styles.stepNumTight, state === "now" && styles.stepNumNow]}>
-                            {number}
+                            {row.number}
                           </Text>
                         )}
                       </View>
@@ -1531,16 +1527,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                             state === "future" && styles.stageLabelFuture,
                           ]}
                         >
-                          {state === "done" ? stage.doneLabel ?? stage.label : stage.action ?? stage.label}
+                          {row.label}
                         </Text>
                       ) : null}
+                      {showLabel && row.note ? <Text style={styles.stageActor}>{row.note}</Text> : null}
                       {/*
                         สถานะย่อย — ตอนนี้ติดอะไรอยู่ในขั้นนี้ (เจ้าของงานขอ ต.ค. 69)
-                        ขึ้นเฉพาะตอนบอกอะไรเพิ่มจากชื่อขั้น: รอลูกค้า (คนตั้งเอง) ทุกขั้น ·
-                        ขั้นเบิกอะไหล่ที่ยังไม่เช็คคลัง · อะไหล่หมดใช้ป้ายแดงข้างล่าง
-                        ที่เหลือ ("รอช่างเข้าแก้ไข" ใต้ขั้นของแอดมิน ฯลฯ) ซ้ำหรือขัดกับชื่อขั้น ไม่ขึ้น
+                        ขึ้นเฉพาะตอนบอกอะไรเพิ่มจากชื่อขั้น: รอลูกค้า (คนตั้งเอง) ทุกขั้น · อะไหล่หมดใช้ป้ายแดงข้างล่าง
                       */}
-                      {order.rolledBack?.from === stage.value ? (
+                      {fromHere ? (
                         <View style={styles.stepFromPill} accessibilityLabel="ขั้นที่ย้อนมา">
                           {/* แถบแคบ (มือถือ) คอลัมน์กว้างไม่กี่ตัวอักษร — ข้อความยาวจะตัดเป็นแนวตั้ง โชว์แค่ลูกศร วงประส้มบอกที่เหลือ */}
                           <Text style={styles.stepFromPillText}>{tight ? "↩" : "↩ ย้อนจากตรงนี้"}</Text>
@@ -1563,30 +1558,58 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                             </Text>
                           ) : null}
                         </>
-                      ) : showLabel && stage.actorLabel && state !== "done" ? (
-                        <Text style={styles.stageActor}>{stage.actorLabel}</Text>
+                      ) : showLabel && row.actorLabel && state !== "done" && state !== "skipped" ? (
+                        <Text style={styles.stageActor}>{row.actorLabel}</Text>
                       ) : null}
                     </TouchableOpacity>
                   );
                 })}
               </View>
+              {/*
+                ขั้นย่อยเบิกอะไหล่ของใบที่โอนจากคลังอื่น — ไม่นับเป็นขั้นหลัก (แบบที่ตกลง) แต่ต้องเห็นว่าของถึงไหน
+                โชว์ต่อแม้โอนเสร็จแล้ว ประวัติว่าของมาจากไหนยังอยู่
+              */}
+              {issueSub ? (
+                <View style={styles.subTrack} accessibilityLabel="ขั้นย่อยเบิกอะไหล่">
+                  <Text style={styles.subTrackHead}>เบิกอะไหล่ · โอนจากคลังอื่น:</Text>
+                  {issueSub.map((s, i) => (
+                    <TouchableOpacity
+                      key={`${s.key}-${i}`}
+                      style={styles.subItem}
+                      onPress={() => pressStep(s.key, s.state)}
+                      activeOpacity={0.7}
+                      accessibilityLabel={s.a11y}
+                    >
+                      <Text
+                        style={[
+                          styles.subItemText,
+                          s.state === "done" && { color: colors.successInk },
+                          s.state === "now" && [styles.stageLabelNow, { color: tone.fg }],
+                          (s.state === "future" || s.state === "skipped") && styles.stageLabelFuture,
+                          s.state === "skipped" && styles.stageLabelSkipped,
+                          rolledFrom === s.key && { color: colors.rollbackInk },
+                        ]}
+                      >
+                        {s.state === "done" ? "✓" : s.state === "now" ? "●" : "○"} {s.label}
+                      </Text>
+                      {s.state === "now" && s.actorLabel ? <Text style={styles.stageActor}> · {s.actorLabel}</Text> : null}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
               {opened && opened.kind === "skip" ? (
                 <View style={styles.stepSkipList} accessibilityLabel="ขั้นที่ข้าม">
                   <Text style={styles.stepSkipListHead}>ใบนี้ไม่ได้ผ่าน {opened.rows.length} ขั้น:</Text>
                   {opened.rows.map((r) => (
                     // ขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
-                    <Text key={r.stage.value} style={[styles.stageLabelFuture, styles.stageLabelSkipped, styles.stepSkipItem]}>
-                      {r.stage.action ?? r.stage.label}
-                      {doneInParent(r.stage.value, order, stages)
-                        ? ` — ทำในใบเดิม ${order.parent?.code ?? ""}`
-                        : SKIP_WHY[r.stage.value]
-                          ? ` — ${SKIP_WHY[r.stage.value]}`
-                          : ""}
+                    <Text key={r.key} style={[styles.stageLabelFuture, styles.stageLabelSkipped, styles.stepSkipItem]}>
+                      {r.action}
+                      {r.why ? ` — ${r.why}` : ""}
                     </Text>
                   ))}
                 </View>
               ) : null}
-            </>
+            </View>
           );
         })()}
 
@@ -2026,6 +2049,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                   เดิมเป็นแถบเหลืองยาวเต็มการ์ดใต้ปุ่มปิดงาน ดูเหมือนคำเตือน และจอแคบทับกับปุ่มปิดงาน
                   รายละเอียด (บอกเหตุ แนบรูป ขอเบิกอะไหล่) อยู่ในฟอร์มที่เปิดขึ้นมาแล้ว
                 */}
+                {/* จอกว้าง: ปุ่มรองอยู่ซ้ายปุ่มขั้น · จอแคบปุ่มขึ้นบรรทัดใหม่ — ปุ่มขั้นต้องอยู่บนสุด ไม่ถูกปุ่มรองดันลงไป */}
+                {wide ? rescheduleBtn : null}
                 {order.status === "IN_PROGRESS" ? (
                   <TouchableOpacity
                     style={[styles.action, styles.actionProblem]}
@@ -2071,6 +2096,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                     </Text>
                   </TouchableOpacity>
                 )}
+                {wide ? null : rescheduleBtn}
               </View>
 
               {/*
@@ -2080,15 +2106,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               */}
             </>
           ) : (
-            <View style={[styles.waitingCard, styles.waitingInline]}>
-              <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
-              <Text style={styles.waitingText}>
-                {viewOnly ? "ดูได้อย่างเดียว · " : ""}ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
-                {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
-                  ? ` (${order.assignedToName ?? order.assignedTeam}${order.assignedOutsource ? " — หัวหน้าภาคปิดงานแทน" : ""})`
-                  : ""}
-                {viewOnly ? "" : " — ยังไม่ถึงคิวของคุณ"}
-              </Text>
+            <View style={rescheduleBtn ? styles.waitingRow : undefined}>
+              <View style={[styles.waitingCard, styles.waitingInline, rescheduleBtn ? { flex: 1, minWidth: 220 } : null]}>
+                <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
+                <Text style={styles.waitingText}>
+                  {viewOnly ? "ดูได้อย่างเดียว · " : ""}ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
+                  {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
+                    ? ` (${order.assignedToName ?? order.assignedTeam}${order.assignedOutsource ? " — หัวหน้าภาคปิดงานแทน" : ""})`
+                    : ""}
+                  {viewOnly ? "" : " — ยังไม่ถึงคิวของคุณ"}
+                </Text>
+              </View>
+              {/* ขั้นเบิก/โอนคลังอื่นกับปล่อยงานไม่ใช่คิวแอดมิน แต่วันนัดเป็นเรื่องที่แอดมินคุยกับร้าน — เลื่อนได้จากตรงนี้ */}
+              {rescheduleBtn}
             </View>
           )
         ) : null}
@@ -2337,7 +2367,26 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             label={order.assignedToName ? "ช่างที่รับผิดชอบ" : "ทีมที่รับผิดชอบ"}
             value={order.assignedToName ?? order.assignedTeam ?? "ยังไม่มอบหมาย"}
           />
-          <Row label="วันนัด" value={visitLabel(order)} />
+          {/* แอดมินเลื่อนวันได้ตรงที่เห็นวัน (ต.ค. 69) — ขั้นคอนเฟิร์มลูกค้าเปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน" */}
+          {canReschedule ? (
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>วันนัด</Text>
+              <View style={styles.dateRowValue}>
+                <Text style={styles.dateRowText}>{visitLabel(order)}</Text>
+                <TouchableOpacity
+                  style={styles.moveDateBtn}
+                  onPress={() => openReschedule(order)}
+                  activeOpacity={0.7}
+                  accessibilityLabel="เลื่อนวันนัด จากการ์ดการมอบหมาย"
+                >
+                  <Ionicons name="calendar-outline" size={14} color={colors.primaryInk} />
+                  <Text style={styles.moveDateBtnText}>เลื่อนวันนัด</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <Row label="วันนัด" value={visitLabel(order)} />
+          )}
           {order.appointmentStatusLabel ? (
             <Row
               label="สถานะนัด"
@@ -2465,10 +2514,28 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         />
       ) : null}
 
+      {rescheduleOpen ? (
+        <RescheduleModal
+          order={order}
+          adminWarehouse={adminWarehouse}
+          onCancel={() => setRescheduleOpen(false)}
+          onDone={async () => {
+            setRescheduleOpen(false);
+            // ลูกค้าตกลงวันไปแล้ว (คอนเฟิร์มก่อนสลับลำดับ · ปล่อยงานแล้ว) — ต้องส่งข้อความวันใหม่ให้ร้าน
+            // ยังไม่คอนเฟิร์ม = ร้านยังไม่รู้วันเลย ไม่มีอะไรต้องแจ้ง (โทรตอนคอนเฟิร์มลูกค้า)
+            const confirmed = APPOINTMENT_DONE.includes(order.appointmentStatus ?? "");
+            await reloadWithNotice("เลื่อนวันนัดแล้ว");
+            if (confirmed) setMessageOpen(true);
+          }}
+        />
+      ) : null}
+
       <StageBackModal
         visible={stageBackOpen}
         order={order}
         targets={backTargets}
+        stages={stages}
+        canReschedule={canReschedule}
         onCancel={() => setStageBackOpen(false)}
         onDone={async () => {
           setStageBackOpen(false);
@@ -2483,6 +2550,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         adminWarehouse={adminWarehouse}
         teams={teams}
         files={files}
+        initialChoice={stageChoice}
+        onReschedule={
+          canReschedule && order.status !== "AWAITING_CONFIRM"
+            ? () => {
+                setStageOpen(false);
+                setRescheduleOpen(true);
+              }
+            : undefined
+        }
         onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
         onDone={async (kind) => {
@@ -2554,6 +2630,8 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   PARTS_TRANSFER: ["TRANSFER_REQUESTED"],
   PARTS_IN_TRANSIT: ["TRANSFER_ARRIVED"],
   PARTS_SOURCING: ["PARTS_SOURCED", "PARTS_BACKORDERED"],
+  // "เบิกอะไหล่" บนแถบรวมทั้งแอดมินเบิก ส่งให้หัวหน้าภาคเบิก/โอน และของถึง — โชว์เป็นรายการ ไม่ใช่แค่แถวล่าสุด
+  ISSUE: ISSUE_LOGS,
   PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
   ASSIGNED: ["DISPATCHED", "ASSIGNED"],
@@ -2573,6 +2651,11 @@ function StepInfo({
 }) {
   const stage = stages.find((x) => x.value === stageValue);
   const actions = stageValue ? STAGE_ACTIONS[stageValue] ?? [] : [];
+  // ขั้นเบิกหลายคนทำต่อกัน (แอดมินเบิก → หัวหน้าภาคเบิก/โอน → ของถึง → เบิกส่งมอบ) — เรียงเก่าไปใหม่ให้อ่านเป็นลำดับ
+  const many =
+    stageValue === "ISSUE"
+      ? logs.filter((l) => actions.includes(l.action)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+      : null;
   // ประวัติเรียงใหม่ก่อนเก่า ตัวแรกที่เจอคือครั้งล่าสุด (ขั้นที่ถูกส่งกลับมาทำซ้ำจะเห็นรอบล่าสุด)
   // คอนเฟิร์ม/เลื่อน และส่งช่าง ใช้ทั้งงานตรวจและงานซ่อม — แยกด้วยขั้นที่ส่งต่อไป
   // (นัดตรวจของใบเก่าไป INSPECTING ตรง ใบใหม่ไป INSPECT_DISPATCH)
@@ -2588,11 +2671,25 @@ function StepInfo({
   return (
     <AppModal
       visible={stageValue !== null}
-      title={`${stage?.label ?? ""} — ทำแล้ว`}
+      title={`${stageValue === "ISSUE" ? "เบิกอะไหล่" : stage?.label ?? ""} — ทำแล้ว`}
       onClose={onClose}
       width={560}
     >
-      {log ? (
+      {many ? (
+        many.length ? (
+          many.map((l) => (
+            <View key={l.id} style={styles.stepInfoRow}>
+              <Text style={styles.logAction}>{l.actionLabel}</Text>
+              <Text style={styles.logMeta}>
+                {l.byName ?? "—"} · {formatDateTime(l.createdAt)}
+              </Text>
+              {l.note ? <Text style={styles.sentBackText}>{l.note}</Text> : null}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.waitingText}>ไม่พบบันทึกการเบิกในประวัติ (ใบเก่าก่อนมีระบบประวัติ)</Text>
+        )
+      ) : log ? (
         <>
           <ModalRow label="ทำโดย">{log.byName ?? "—"}</ModalRow>
           <ModalRow label="เมื่อ">{formatDateTime(log.createdAt)}</ModalRow>
@@ -2726,9 +2823,19 @@ function RollbackModal({
         </View>
       }
     >
+      {/*
+        ใบไปไหนต่อขึ้นกับเหตุผล (กฎเดียวกับ reassess-parts ฝั่งเซิร์ฟเวอร์) — เดิมบอกว่าวันนัดถูกล้างทุกกรณี
+        ทั้งที่ร้านปิดวันเดิมยังอยู่ให้แอดมินนัดใหม่ ทีมเดิม อะไหล่เดิม
+      */}
       <Text style={styles.linkedText}>
-        ใบงานกลับไปที่หัวหน้าภาค ข้อมูลเดิมอยู่ครบ (อะไหล่ที่เบิกแล้ว ทีม รูป ประวัติ) หัวหน้าภาคแก้ได้ทั้งหมด
-        แล้วส่งช่างเข้าตรวจหรือเดินต่อ — วันนัดรอบนี้ถูกล้าง
+        {parts.length > 0 || reasonCode === "PARTS" || reasonCode === "INSPECT"
+          ? "ใบกลับไปให้หัวหน้าภาคระบุอะไหล่ใหม่ (หรือส่งช่างเข้าตรวจ) — วันนัดรอบนี้ถูกล้าง"
+          : reasonCode === "SHOP"
+            ? "ใบไปให้แอดมินโทรนัดร้านใหม่ — ทีมเดิม อะไหล่เดิม แล้วหัวหน้าภาครับทราบก่อนปล่อยงานอีกครั้ง"
+            : reasonCode
+              ? "ใบกลับไปให้หัวหน้าภาคจ่ายงานใหม่ (เปลี่ยนทีม/วันได้) — วันนัดรอบนี้ถูกล้าง"
+              : "เลือกเหตุผลก่อน — ใบไปต่อตามเหตุผลที่เลือก"}
+        {" · "}ข้อมูลเดิมอยู่ครบ (อะไหล่ที่เบิกแล้ว รูป ประวัติ)
       </Text>
 
       {/* หมวดก่อนข้อความ — หัวหน้าภาคเห็นทันทีว่าต้องแก้เรื่องไหน (เจ้าของงานขอ ต.ค. 69: "ด้วยเหตุอะไรก็ตาม") */}
@@ -2987,16 +3094,141 @@ function PartsEtaModal({
   );
 }
 
+/**
+ * แอดมินเลื่อนวันนัด (เจ้าของงานขอ ต.ค. 69 — "ได้ตลอดจนช่างเข้างาน")
+ *
+ * เดิมเปลี่ยนวันได้แค่ในฟอร์มคอนเฟิร์ม หรือย้อนขั้นไปนัดใหม่ ซึ่งล้างทีมและเลขใบโอนของที่กำลังโอน
+ * ตอนนี้ใบอยู่ขั้นเบิก/โอนหลายวันโดยมีวันนัดแล้ว — แก้แค่วัน/เวลา ใบอยู่ขั้นเดิม ทีม อะไหล่ การโอน สถานะนัดไม่แตะ
+ * ปล่อยให้ช่างแล้วแต่ช่างยังไม่ถึงหน้างาน = ดึงใบคืนให้หัวหน้าภาครับทราบวันใหม่แล้วปล่อยใหม่ (ทีมวันใหม่อาจไม่ว่าง)
+ * บังคับเหตุผล — หัวหน้าภาคต้องรู้ว่าทำไมวันเปลี่ยน ตอนคอนเฟิร์มวันใหม่ก่อนปล่อยงาน
+ */
+function RescheduleModal({
+  order,
+  adminWarehouse,
+  onCancel,
+  onDone,
+}: {
+  order: WorkOrder;
+  adminWarehouse: string;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const oldDay = order.scheduledAt ? order.scheduledAt.slice(0, 10) : "";
+  const [day, setDay] = useState(oldDay);
+  const [time, setTime] = useState(order.scheduledTime ?? "");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const validDay = /^\d{4}-\d{2}-\d{2}$/.test(day);
+  // ปฏิทินขีดฆ่าวันที่ผ่านแล้ว แต่วันเดิมที่เติมไว้อาจผ่านไปแล้ว (ใบเลยนัด) — กันปุ่มไว้ด้วย เซิร์ฟเวอร์กันซ้ำ
+  const past = validDay && day < todayBkk();
+  const timeOk = time === "" || isTime(time);
+  const unchanged = day === oldDay && time === (order.scheduledTime ?? "");
+  const recall = RECALL_STAGES.includes(order.status);
+  const confirmed = APPOINTMENT_DONE.includes(order.appointmentStatus ?? "");
+  // ของยังโอนไม่ถึง แล้วเลื่อนให้เร็วขึ้น — ของอาจไปไม่ทันวันใหม่ (แค่เตือน ไม่กัน: แอดมินอาจรู้ว่าของจะถึงทัน)
+  const moving = order.waitingParts.filter((p) => inTransit(p) || isTransfer(p, adminWarehouse));
+  const earlier = validDay && !!oldDay && day < oldDay;
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/reschedule`, { scheduledAt: day, scheduledTime: time || null, reason: reason.trim() });
+      onDone();
+    } catch (e) {
+      // 409 (ขั้นเปลี่ยน · ช่างถึงหน้างานแล้ว) หน้าใบงานปิดฟอร์มและโหลดใหม่ให้เอง (subscribeWorkOrderStale)
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const off = saving || !validDay || past || !timeOk || unchanged || !reason.trim();
+  const stage = order.statusLabel.split(" · ").slice(1).join(" · ") || order.statusLabel;
+  return (
+    <AppModal
+      visible
+      onClose={onCancel}
+      busy={saving}
+      title={<>เลื่อนวันนัด · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, off && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={off}
+            activeOpacity={0.8}
+            accessibilityLabel="บันทึกวันนัดใหม่"
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>บันทึกวันนัดใหม่</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <View style={styles.issuedBox} accessibilityLabel="นัดเดิม">
+        <Text style={styles.issuedTitle}>นัดเดิม</Text>
+        <Text style={styles.issuedLine}>
+          {visitLabel(order)}
+          {order.assignedTeam ? ` · ทีม${order.assignedTeam}` : ""}
+          {order.appointmentStatusLabel ? ` · ${order.appointmentStatusLabel}` : ""}
+        </Text>
+      </View>
+      <DateField value={day} onChange={setDay} label="วันนัดใหม่" required min={todayBkk()} />
+      {past ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null}
+      <TimeField value={time} onChange={setTime} label="เวลา (ไม่ใส่ก็ได้)" />
+      {unchanged && validDay ? <Text style={styles.linkedText}>ยังเป็นวันและเวลาเดิม — เลือกวันหรือเวลาใหม่</Text> : null}
+      {moving.length && earlier ? (
+        <Text style={styles.warn} accessibilityLabel="ของยังโอนไม่ถึง">
+          ของยังโอนไม่ถึง
+          {moving.some((p) => p.transferNo) ? ` (ใบโอน ${[...new Set(moving.map((p) => p.transferNo).filter(Boolean))].join(", ")})` : ""} — เลื่อนเร็วขึ้นอาจไม่ทัน
+        </Text>
+      ) : null}
+      <Text style={styles.modalLabel}>เหตุผลที่เลื่อน *</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={reason}
+        onChangeText={setReason}
+        placeholder="เช่น ลูกค้าขอเลื่อน · ของโอนไม่ทัน · ทีมติดงานด่วน"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={2}
+        accessibilityLabel="เหตุผลที่เลื่อนวันนัด"
+      />
+      <NextBox>
+        {recall
+          ? "ช่างยังไม่ถึงหน้างาน — ใบถูกดึงคืนจากช่าง กลับไปให้หัวหน้าภาคคอนเฟิร์มวันใหม่แล้วปล่อยงานอีกครั้ง (ทีมไม่ว่าง → ส่งกลับให้คุณนัดใหม่)"
+          : order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH"
+            ? "ใบยังอยู่ที่หัวหน้าภาค — ต้องคอนเฟิร์มวันใหม่ก่อนปล่อยงาน (ทีมไม่ว่าง → ส่งกลับให้คุณนัดใหม่)"
+            : confirmed
+              ? `ใบยังอยู่ขั้น “${stage}” · บอร์ดแผนงานย้ายไปวันใหม่ · ลูกค้าตกลงวันใหม่แล้ว · หัวหน้าภาคคอนเฟิร์มวันใหม่ก่อนปล่อยงาน`
+              : `ใบยังอยู่ขั้น “${stage}” · บอร์ดแผนงานย้ายไปวันใหม่ · ของพร้อมแล้วแอดมินโทรคอนเฟิร์มลูกค้าตามวันใหม่ · หัวหน้าภาคคอนเฟิร์มวันใหม่ก่อนปล่อยงาน`}
+        {confirmed ? " · บันทึกแล้วเปิดข้อความแจ้งวันใหม่ให้ร้าน" : ""}
+      </NextBox>
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
 function StageBackModal({
   visible,
   order,
   targets,
+  stages,
+  canReschedule,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   order: WorkOrder;
   targets: Stage[];
+  /** ลำดับขั้นของเซิร์ฟเวอร์ — อะไรถูกล้างตัดสินจากลำดับนี้ (rollback ฝั่งเซิร์ฟเวอร์ใช้ลำดับเดียวกัน) */
+  stages: Stage[];
+  /** แอดมินที่เลื่อนวันนัดได้ — บอกทางลัด ไม่ต้องย้อนขั้นเพื่อเปลี่ยนวัน */
+  canReschedule: boolean;
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -3014,15 +3246,21 @@ function StageBackModal({
   }, [visible, targets]);
 
   const order_ = targets.map((t) => t.value);
+  /**
+   * ย้อนแล้วอะไรถูกเอาออกจากใบ — กฎเดียวกับ rollback ฝั่งเซิร์ฟเวอร์ ตามลำดับขั้นของเซิร์ฟเวอร์
+   * (เดิมเขียนลำดับไว้ในแอปเอง แล้วลำดับเปลี่ยนสองรอบ รายการนี้บอกผิดโดยไม่มีใครเห็น)
+   */
   function clears(value: string) {
-    const all = ["NEW", "INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED", "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED"];
+    const all = stages.map((x) => x.value);
     const idx = all.indexOf(value);
+    const upTo = (stage: string) => idx >= 0 && idx <= all.indexOf(stage);
     const lost: string[] = [];
-    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && value !== "INSPECT_DISPATCH" && order.scheduledAt) lost.push("วันนัด");
-    if (idx >= 0 && idx <= all.indexOf("PARTS_CHECKED") && !["INSPECTING", "INSPECT_DISPATCH", "INSPECT_CONFIRM"].includes(value) && order.assignedTeam)
+    if (upTo("PARTS_CHECKED") && value !== "INSPECT_DISPATCH" && order.scheduledAt) lost.push("วันนัด");
+    if (upTo("PARTS_CHECKED") && !["INSPECTING", "INSPECT_DISPATCH", "INSPECT_CONFIRM"].includes(value) && order.assignedTeam)
       lost.push("ทีมที่รับงาน");
-    if (idx >= 0 && idx <= all.indexOf("PARTS_REQUESTED") && order.waitingParts.some((p) => p.inStock !== null))
-      lost.push("ผลเช็คคลังและเลขใบเบิก");
+    if (value === "PARTS_REQUESTED" && order.waitingParts.some((p) => p.requisitionNo || p.transferNo))
+      lost.push("เลขใบเบิกและการโอน (ผลเช็คคลังยังอยู่)");
+    if (upTo("PARTS_SOURCING") && order.waitingParts.some((p) => p.inStock !== null)) lost.push("ผลเช็คคลังและเลขใบเบิก");
     if (value === "NEW" && order.needsParts !== null) lost.push("ใช้อะไหล่ไหม");
     return lost;
   }
@@ -3094,12 +3332,19 @@ function StageBackModal({
           ) : null}
         </View>
       ) : null}
+      {target === "AWAITING_CONFIRM" && APPOINTMENT_DONE.includes(order.appointmentStatus ?? "") ? (
+        <Text style={styles.linkedText}>สถานะนัดกลับเป็นรอคอนเฟิร์ม — แอดมินโทรคอนเฟิร์มร้านอีกครั้ง</Text>
+      ) : null}
       <Text style={styles.modalLabel}>เหตุผลที่ย้อน</Text>
+      {/* แค่เปลี่ยนวันไม่ต้องย้อนขั้น — ย้อนไปนัดใหม่ล้างทีมและการโอนไปด้วย ซึ่งไม่ได้ตั้งใจ */}
+      {canReschedule ? (
+        <Text style={styles.linkedText}>แค่เลื่อนวัน ใช้ปุ่ม “เลื่อนวันนัด” — ไม่ต้องย้อนขั้น</Text>
+      ) : null}
       <TextInput
         style={styles.modalInput}
         value={reason}
         onChangeText={setReason}
-        placeholder="เช่น ลูกค้าขอเลื่อนนัด · จ่ายผิดทีม · เช็คคลังผิดตัว"
+        placeholder="เช่น จ่ายผิดทีม · เช็คคลังผิดตัว"
         placeholderTextColor={colors.textFaint}
         multiline
         numberOfLines={2}
@@ -3117,6 +3362,8 @@ function StageModal({
   adminWarehouse,
   teams,
   files,
+  initialChoice,
+  onReschedule,
   onFilesChanged,
   onCancel,
   onDone,
@@ -3126,6 +3373,10 @@ function StageModal({
   warehouses: string[];
   adminWarehouse: string;
   teams: Team[];
+  /** เปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน" เลย — แอดมินกด "เลื่อนวันนัด" ตอนใบอยู่ขั้นคอนเฟิร์มลูกค้า */
+  initialChoice?: "MOVE" | null;
+  /** ปิดฟอร์มนี้แล้วเปิดฟอร์มเลื่อนวันนัด (แอดมิน) — ไม่ส่งมา = ไม่มีลิงก์ */
+  onReschedule?: () => void;
   /** ไฟล์แนบของใบงาน (จากการ์ดไฟล์แนบ) — ฟอร์มผลตรวจบอกว่าแนบอะไรไว้แล้ว */
   files: Attachment[];
   /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
@@ -3194,8 +3445,10 @@ function StageModal({
   // ใบขอโอนสินค้า PDF ที่ออกแล้ว ต่อคู่คลัง "ต้นทาง→ปลายทาง" — กดเปิดเองอีกครั้ง (เบราว์เซอร์บล็อกหน้าต่างที่เปิดหลังรอ)
   const [transferDocs, setTransferDocs] = useState<Record<string, string>>({});
   const [docBusy, setDocBusy] = useState<string | null>(null);
-  // ลูกค้าขอเปลี่ยนวันแต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
+  // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) แต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
+  // ส่งกลับได้เฉพาะงานซ่อม (decline-new-date) — นัดตรวจที่ถูกเลื่อนแค่ขึ้นป้ายให้เช็คทีม แล้วส่งช่าง/เปลี่ยนทีมตามปกติ
   const newDate = rescheduledPending(order);
+  const canDecline = newDate && order.status === "ASSIGNED";
   const [declineDate, setDeclineDate] = useState(false);
   // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
   const [prevUsed, setPrevUsed] = useState<string[]>([]);
@@ -3229,8 +3482,12 @@ function StageModal({
     if (order.status === "INSPECTING") loadDraft(`inspect:${order.id}`).then((v) => v && setFinding(v));
     // นัดตรวจที่หัวหน้าภาคไม่ได้ใส่วันเสนอ — ไม่มีวันให้ลูกค้า "ตกลง" มีแต่ต้องใส่วันนัด
     // ช่างแจ้งร้านปิด — วันเดิมใช้ไม่ได้แล้ว เปิดที่ "ลูกค้าขอเลื่อน" เลย
+    // แอดมินกด "เลื่อนวันนัด" ที่ขั้นคอนเฟิร์ม — ทางเดียวกับ "ลูกค้าขอเลื่อน" เปิดมาที่ช่องวันเลย
     setConfirmChoice(
-      (order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order))) ? "MOVE" : null
+      initialChoice ??
+        ((order.status === "INSPECT_CONFIRM" && !order.scheduledAt) || (order.status === "AWAITING_CONFIRM" && (sentBackLog(order) || declinedNewDate(order)))
+          ? "MOVE"
+          : null)
     );
     setSplitOut(false);
     setSplitPaid(null);
@@ -3590,7 +3847,7 @@ function StageModal({
   const sourcingSplit = sourcingMixed && splitOut;
   // มีครบแล้วไปไหนต่อ — ตามกฎเสนอราคาเดียวกับเซิร์ฟเวอร์ (ใบแยกที่ลูกค้าจ่ายแล้วในใบเดิมไม่เสนอราคาซ้ำ)
   const quoteNext = order.needsQuote && !order.logs.some((l) => l.action === "PREPAID");
-  // ของอยู่คลังอื่น — บอกตั้งแต่ตอนเช็คว่าหัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน
+  // ของอยู่คลังอื่น — บอกตั้งแต่ตอนเช็คว่าหัวหน้าภาคต้องเบิก/โอนเองหลังนัดวัน
   const sourcingFar =
     order.status === "PARTS_SOURCING"
       ? thisRound.filter((p) => {
@@ -3618,16 +3875,19 @@ function StageModal({
   // ตอบว่าหมดสักตัว = มีของให้รอ ถามวันคาดว่าเข้า (แยกใบแล้ววันนี้ไปติดใบรออะไหล่)
   const checkOut = order.status === "PARTS_REQUESTED" && thisRound.some((p) => checks[p.sparePartId]?.inStock === false);
   /**
-   * ของไม่พอตอนเบิก (ลูกค้าคอนเฟิร์มวันแล้ว · นัดลูกค้าก่อนเบิก ต.ค. 69) — ไม่แยกใบ = ทั้งใบกลับไปเช็คอะไหล่ รอของเข้า
-   * แล้วหัวหน้าภาคนัดใหม่ แอดมินโทรแจ้งลูกค้าว่าเลื่อน (parts-short) · ตัวที่มีไม่ต้องใส่เลขใบเบิก เพราะยังไม่เบิก
+   * ของไม่พอตอนเบิก — ไม่แยกใบ = ทั้งใบกลับไปเช็คอะไหล่ รอของเข้า แล้วหัวหน้าภาคนัดใหม่ (parts-short)
+   * ตัวที่มีไม่ต้องใส่เลขใบเบิก เพราะยังไม่เบิก
+   * เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง): ส่วนใหญ่ร้านยังไม่รู้วัน — แค่ยกเลิกวันที่หัวหน้าภาคจองไว้ ไม่ต้องโทร
+   * ใบที่คอนเฟิร์มไปก่อนสลับลำดับ ร้านรู้วันแล้ว — ยังต้องโทรแจ้งเลื่อนเหมือนเดิม
    */
   const partsShort = checkOut && !(mixed && splitOut);
+  const shopKnows = APPOINTMENT_DONE.includes(order.appointmentStatus ?? "");
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(visit);
-  // คอนเฟิร์มแล้วไปไหน — ยังมีของต้องเบิก = แอดมินเบิกต่อ · เบิกแล้ว (วนกลับมาคอนเฟิร์มใหม่) = หัวหน้าภาคปล่อยงาน
-  const confirmToIssue =
-    order.status === "AWAITING_CONFIRM" &&
-    order.needsParts === true &&
-    order.waitingParts.some((p) => (p.offCatalog ? true : !(p.inStock === true && p.requisitionNo)));
+  /**
+   * คอนเฟิร์มแล้วไปไหน — ปกติของเบิกครบแล้ว (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) ไปให้หัวหน้าภาคปล่อยงาน
+   * ยังมีของต้องเบิก = ใบเก่าที่นัดก่อนเปลี่ยนลำดับและหลุดการย้ายขั้นมา — เซิร์ฟเวอร์ส่งไปเบิกต่อ (afterConfirm) จึงบอกให้ตรง
+   */
+  const confirmToIssue = order.status === "AWAITING_CONFIRM" && partsToIssue(order);
   // ไม่ใช้อะไหล่ และไม่มีค่าบริการให้เสนอราคา = ขั้นถัดไปคือจ่ายงาน → จ่ายในฟอร์มนี้เลย
   const noPartsAssign = order.status === "NEW" && !inspectFirst && needsParts === false && offPartsPayload(services).length === 0;
   const timeOk = visitTime === "" || isTime(visitTime);
@@ -3685,7 +3945,12 @@ function StageModal({
       onClose={onCancel}
       busy={saving}
       title={<>
-              {newDate ? "คอนเฟิร์มวันใหม่" : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}{" "}
+              {newDate
+                ? "คอนเฟิร์มวันใหม่"
+                : // ฟอร์มนี้คือ "คอนเฟิร์มออกหน้างาน" (คำของเจ้าของงาน) — ปุ่มบนแถบ/การ์ดยังชื่อ "คอนเฟิร์มลูกค้า"
+                  order.status === "AWAITING_CONFIRM" && !confirmToIssue
+                  ? "คอนเฟิร์มออกหน้างาน"
+                  : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}{" "}
               · {order.code}
             </>}
       footer={
@@ -3712,7 +3977,11 @@ function StageModal({
                         ? "มีครบ — ไปเสนอราคา"
                         : "มีครบ — ส่งหัวหน้าภาคนัดวัน"
                   : partsShort
-                    ? "ของไม่พอ — แจ้งเลื่อนนัด"
+                    ? shopKnows
+                      ? "ของไม่พอ — แจ้งเลื่อนนัด"
+                      : order.scheduledAt
+                        ? "ของไม่พอ — ยกเลิกนัด รอของเข้า"
+                        : "ของไม่พอ — รอของเข้า"
                   : order.status === "ASSIGNED"
                     ? declineDate
                       ? "ส่งกลับให้แอดมินนัดใหม่"
@@ -3850,10 +4119,10 @@ function StageModal({
 
             {order.status === "PARTS_SOURCING" ? (
               <View style={styles.checkList}>
-                {/* นัดลูกค้าก่อนเบิก (เจ้าของงานกำหนด ต.ค. 69) — ขั้นนี้ดูคลังอย่างเดียว ไม่ตัดของ */}
+                {/* เช็คกับเบิกแยกกัน (เจ้าของงานกำหนด ต.ค. 69) — ขั้นนี้ดูคลังอย่างเดียว ไม่ตัดของ · เบิกหลังนัดวัน ก่อนโทรร้าน */}
                 <Text style={styles.linkedText}>
                   เช็คอะไหล่ตามที่หัวหน้าภาคระบุว่ามีหรือหมด อยู่คลังไหน — ยังไม่ต้องเบิกหรือใส่เลขใบเบิก
-                  เบิกจริงหลังลูกค้าคอนเฟิร์มวันแล้ว
+                  เบิกจริงหลังหัวหน้าภาคนัดวันเข้า (ก่อนโทรคอนเฟิร์มลูกค้า)
                 </Text>
                 {thisRound.map((part) => {
                   const c = checks[part.sparePartId] ?? { inStock: null, warehouse: null };
@@ -3889,7 +4158,7 @@ function StageModal({
                           </Text>
                         </TouchableOpacity>
                       </View>
-                      {/* คลังที่มีของ — ของอยู่คลังอื่นหัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน */}
+                      {/* คลังที่มีของ — ของอยู่คลังอื่นหัวหน้าภาคเบิก/โอนเองหลังนัดวัน ให้ถึงก่อนคอนเฟิร์มลูกค้า */}
                       {c.inStock === true && !part.offCatalog ? (
                         <Dropdown
                           value={c.warehouse}
@@ -3900,7 +4169,7 @@ function StageModal({
                             .map((w) => ({
                               value: w,
                               label: w,
-                              hint: w === adminWarehouse ? "ไม่ต้องโอน" : "ต้องเบิก/โอนก่อนปล่อยงาน",
+                              hint: w === adminWarehouse ? "ไม่ต้องโอน" : "หัวหน้าภาคเบิก/โอนหลังนัดวัน",
                               group: w === adminWarehouse ? "คลังส่งมอบ" : "คลังอื่น (ต้องเบิก/โอน)",
                             }))}
                           onChange={(next) => setChecks((v) => ({ ...v, [part.sparePartId]: { inStock: true, warehouse: next } }))}
@@ -3942,7 +4211,7 @@ function StageModal({
                 {sourcingFar.length && (!sourcingOut.length || sourcingSplit) ? (
                   <Text style={styles.pickupTag} accessibilityLabel="ของอยู่คลังอื่น ต้องโอน">
                     {sourcingFar.length} รายการอยู่คลังอื่น ({[...new Set(sourcingFar.map((p) => checks[p.sparePartId]?.warehouse))].join(", ")}) —
-                    หัวหน้าภาคเบิก/โอนหลังลูกค้าคอนเฟิร์ม ก่อนปล่อยงาน
+                    หัวหน้าภาคเบิก/โอนหลังนัดวัน — ของต้องถึงก่อนแอดมินคอนเฟิร์มลูกค้า
                   </Text>
                 ) : null}
               </View>
@@ -3954,14 +4223,26 @@ function StageModal({
                   : `เช็คอะไหล่ไว้เมื่อ ${sourcingCheck(order)!.days === 0 ? "วันนี้" : `${sourcingCheck(order)!.days} วันก่อน`} — มีครบ ไม่ต้องเช็คซ้ำ เลือกคลังและใส่เลขใบเบิก`}
               </Text>
             ) : null}
-            {order.status === "PARTS_REQUESTED" && order.appointmentStatus === "CONFIRMED" ? (
-              // เบิกหลังลูกค้าตกลงวัน (นัดลูกค้าก่อนเบิก ต.ค. 69) — เห็นนัดที่ของต้องไปให้ทัน
-              <View style={styles.issuedBox} accessibilityLabel="ลูกค้าคอนเฟิร์มแล้ว">
-                <Text style={styles.issuedTitle}>ลูกค้าคอนเฟิร์มแล้ว — เบิกของให้ทันวันเข้างาน</Text>
+            {order.status === "PARTS_REQUESTED" && order.scheduledAt ? (
+              /**
+               * นัดที่ของต้องไปให้ทัน — หัวหน้าภาคนัดวันแล้ว เบิกให้พร้อมแล้วแอดมินค่อยโทรคอนเฟิร์มร้าน (ต.ค. 69 รอบสอง)
+               * ใบที่คอนเฟิร์มไปก่อนสลับลำดับ ร้านรู้วันแล้ว ข้อความเดิม
+               */
+              <View style={styles.issuedBox} accessibilityLabel="นัดที่ต้องเบิกให้ทัน">
+                <Text style={styles.issuedTitle}>
+                  {APPOINTMENT_DONE.includes(order.appointmentStatus ?? "")
+                    ? "ลูกค้าคอนเฟิร์มแล้ว — เบิกของให้ทันวันเข้างาน"
+                    : "หัวหน้าภาคนัดไว้ — เบิกของให้พร้อมก่อนโทรคอนเฟิร์มลูกค้า"}
+                </Text>
                 <Text style={styles.issuedLine}>
                   {visitLabel(order)}
                   {order.assignedTeam ? ` · ทีม${order.assignedTeam}` : ""}
                 </Text>
+                {onReschedule ? (
+                  <TouchableOpacity onPress={onReschedule} accessibilityLabel="เลื่อนวันนัด จากฟอร์มเบิก">
+                    <Text style={styles.docLink}>เลื่อนวันนัด</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             ) : null}
             {order.status === "PARTS_REQUESTED" ? (
@@ -4198,14 +4479,34 @@ function StageModal({
                 ) : null}
                 <Text style={partsShort ? styles.warn : styles.linkedText} accessibilityLabel="ผลของการเบิก">
                   {partsShort
-                    ? "ของไม่พอ — ทั้งใบกลับไปขั้นเช็คอะไหล่ (ป้ายแดง “อะไหล่หมด”) วันนัดเดิมถูกยกเลิก · โทรแจ้งลูกค้าว่าเลื่อนนัด ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่"
+                    ? shopKnows
+                      ? "ของไม่พอ — ทั้งใบกลับไปขั้นเช็คอะไหล่ (ป้ายแดง “อะไหล่หมด”) วันนัดเดิมถูกยกเลิก · โทรแจ้งลูกค้าว่าเลื่อนนัด ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่"
+                      : order.scheduledAt
+                        ? `ของไม่พอ — ทั้งใบกลับไปขั้นเช็คอะไหล่ (ป้ายแดง “อะไหล่หมด”) · วันนัดที่หัวหน้าภาคจองไว้ (${visitLabel(order)}) ถูกยกเลิก — ยังไม่ได้แจ้งลูกค้า ไม่ต้องโทร · ของเข้าครบแล้วหัวหน้าภาคนัดใหม่`
+                        : "ของไม่พอ — ทั้งใบกลับไปขั้นเช็คอะไหล่ (ป้ายแดง “อะไหล่หมด”) · ของเข้าครบแล้วส่งหัวหน้าภาคนัดวัน"
                     : mixed && splitOut
                       ? "ตัวที่หมดย้ายไปใบงานใหม่ (รอของเข้า แล้วนัดใหม่) — ใบนี้ไปตามนัดด้วยของที่มี"
-                      : "ลูกค้าคอนเฟิร์มวันแล้ว — เบิกครบแล้วใบไปให้หัวหน้าภาคปล่อยงาน · ของที่เช็คว่ามีถูกใช้ไปแล้ว กด “หมด” ที่ตัวนั้น"}
+                      : toPickup.length
+                        ? `ของคลังอื่นส่งให้หัวหน้าภาคเบิก/โอนก่อน — ครบแล้ว${afterIssueText(order)}`
+                        : `เบิกครบแล้ว — ${afterIssueText(order)} · ของที่เช็คว่ามีถูกใช้ไปแล้ว กด “หมด” ที่ตัวนั้น`}
                 </Text>
               </View>
             ) : null}
 
+            {["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"].includes(order.status) && order.scheduledAt ? (
+              /**
+               * วันนัดที่ของต้องไปถึง — หัวหน้าภาคนัดวันก่อนเบิก/โอน (ต.ค. 69 รอบสอง) แอดมินโทรคอนเฟิร์มร้านเมื่อของพร้อม
+               * ของไปไม่ทันให้แอดมินเลื่อนวันนัด (ใบอยู่ขั้นนี้ต่อ การโอนไม่หาย) ไม่ใช่ปล่อยให้เลยนัดเงียบ ๆ
+               */
+              <View style={styles.issuedBox} accessibilityLabel="วันนัดที่ของต้องถึง">
+                <Text style={styles.issuedTitle}>
+                  นัดเข้างาน {visitLabel(order)}
+                  {order.assignedTeam ? ` · ทีม${order.assignedTeam}` : ""}
+                  {APPOINTMENT_DONE.includes(order.appointmentStatus ?? "") ? " · ลูกค้าคอนเฟิร์มแล้ว" : ""}
+                </Text>
+                <Text style={styles.issuedLine}>ของต้องถึงก่อนวันนัด · ไม่ทันให้แจ้งแอดมินเลื่อนวันนัด</Text>
+              </View>
+            ) : null}
             {order.status === "PARTS_TRANSFER" || order.status === "PARTS_IN_TRANSIT" ? (
               <View style={styles.checkList}>
                 {order.status === "PARTS_TRANSFER" && pickupRequest ? (
@@ -4443,9 +4744,7 @@ function StageModal({
                       : "ใส่เหตุผลที่เบิกไม่ได้ในช่องบันทึกข้างล่าง"
                     : pickupBlocked
                       ? "ใส่คลังและเลขใบเบิกให้ครบทุกรายการ"
-                      : order.appointmentStatus === "CONFIRMED"
-                        ? "เบิกครบแล้ว — ลูกค้าคอนเฟิร์มวันแล้ว ใบไปขั้นปล่อยงานให้ช่าง"
-                        : "เบิกครบแล้ว — ใบไปขั้นนัดวันเข้า"}
+                      : `เบิกครบแล้ว — ${afterIssueText(order)}`}
                 </Text>
               </View>
             ) : null}
@@ -4462,7 +4761,7 @@ function StageModal({
                     ? quoteAsked.length
                       ? `หัวหน้าช่างขอให้เสนอราคา: ${quoteAsked.join(" · ")} — ทำใบเสนอราคาจากระบบบัญชีแล้วแนบที่นี่`
                       : "สาขานี้เป็นแฟรนไชส์ที่หมดประกันแล้ว อะไหล่ที่ใช้เป็นของที่ขายให้ลูกค้า — ส่งใบเสนอราคาให้ลูกค้าก่อน"
-                    : "ส่งใบเสนอราคาไปแล้ว รอลูกค้าจ่ายเงิน — ได้เงินแล้วแนบบิลเพื่อส่งต่อให้หัวหน้าภาคจ่ายงาน"}
+                    : "ส่งใบเสนอราคาไปแล้ว รอลูกค้าจ่ายเงิน — ได้เงินแล้วแนบบิลเพื่อส่งต่อให้หัวหน้าภาคนัดวันเข้า"}
                 </Text>
                 {/* รายการที่ต้องอยู่ในใบเสนอราคา — ใบเสนอราคาออกจากระบบบัญชี แอดมินดูจากตรงนี้แล้วไปพิมพ์ราคาที่นั่น */}
                 {order.waitingParts.length || order.services.length ? (
@@ -4566,7 +4865,7 @@ function StageModal({
               </>
             ) : null}
 
-            {newDate ? (
+            {canDecline ? (
               <>
                 {declineDate ? <DispatchNote order={order} /> : null}
                 <View style={styles.options} accessibilityLabel="ลูกค้าขอเปลี่ยนวัน ทีมว่างไหม">
@@ -4599,9 +4898,11 @@ function StageModal({
                 {order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH" ? <DispatchNote order={order} /> : null}
                 {order.status === "PARTS_CHECKED" ? (
                   <>
+                    {/* นัดวัน → เบิก → คอนเฟิร์มลูกค้าตอนของพร้อม (ต.ค. 69 รอบสอง) · ไม่ใช้อะไหล่/เบิกครบแล้วไม่มีขั้นเบิกคั่น */}
                     <Text style={styles.linkedText}>
-                      เลือกทีมและวันเข้างาน → แอดมินโทรคอนเฟิร์มกับร้าน (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) →
-                      แอดมินเบิกอะไหล่ → กลับมาให้คุณปล่อยงาน
+                      {partsToIssue(order)
+                        ? "เลือกทีมและวันเข้างาน → แอดมินเบิกอะไหล่ (ของคลังอื่นคุณเบิก/โอนให้ถึงก่อนวันนัด) → แอดมินโทรคอนเฟิร์มลูกค้าเมื่อของพร้อม (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) → กลับมาให้คุณปล่อยงาน"
+                        : "เลือกทีมและวันเข้างาน → แอดมินโทรคอนเฟิร์มลูกค้า (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) → กลับมาให้คุณปล่อยงาน"}
                     </Text>
                     <PartsReady order={order} adminWarehouse={adminWarehouse} />
                   </>
@@ -4731,9 +5032,14 @@ function StageModal({
                     ? `หัวหน้าภาคส่ง${order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"}ไปตรวจหน้างาน · ${
                         order.scheduledAt ? `วันที่เสนอ ${visitLabel(order)}` : "ยังไม่ได้ระบุวัน"
                       }`
-                    : `หัวหน้าภาคจ่าย ${order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"} เข้า ${visitLabel(order)}`}
+                    : confirmToIssue
+                      ? `หัวหน้าภาคจ่าย ${order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"} เข้า ${visitLabel(order)}`
+                      : // คอนเฟิร์มออกหน้างาน (เจ้าของงานเรียก ต.ค. 69) — ของอยู่ในมือแล้ว โทรบอกร้านว่าไปแน่
+                        `คอนเฟิร์มออกหน้างาน — ${order.assignedTeam ? `ทีม${order.assignedTeam}` : "ทีม"} เข้า ${visitLabel(order)}`}
                   {order.contactPhone ? ` · โทร ${order.contactPhone}` : ""}
                 </Text>
+                {/* ของพร้อมแค่ไหน — โทรร้านตอนของอยู่ในมือแล้วเท่านั้น (ต.ค. 69 รอบสอง) แอดมินเห็นก่อนยกหูโทร */}
+                {order.status === "AWAITING_CONFIRM" ? <PartsReady order={order} adminWarehouse={adminWarehouse} viewer="admin" /> : null}
                 <Text style={styles.modalLabel}>ลูกค้าตอบว่าอย่างไร</Text>
                 <View style={{ gap: spacing.xs }}>
                   {(order.status === "INSPECT_CONFIRM"
@@ -4745,14 +5051,14 @@ function StageModal({
                       : // ใบที่ส่งตรวจก่อนบังคับวัน (ก่อน ต.ค. 69 รอบสอง) — ไม่มีวันให้ลูกค้า "ตกลง"
                         ([["MOVE", "นัดวันเข้าตรวจ", "ใส่วันที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"]] as const)
                     : confirmToIssue
-                      ? // นัดลูกค้าก่อนเบิก (ต.ค. 69) — คอนเฟิร์มแล้วแอดมินเบิกต่อ ไม่ใช่ส่งหัวหน้าภาคทันที
+                      ? // กันใบเก่า: นัดก่อนเปลี่ยนลำดับแล้วยังไม่เบิก (ปกติย้ายไปขั้นเบิกตอนเปลี่ยนสายงานแล้ว) — คอนเฟิร์มแล้วเบิกต่อ
                         ([
-                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ต่อไปเบิกอะไหล่ แล้วหัวหน้าภาคปล่อยงาน"],
-                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วเบิกอะไหล่ต่อ"],
+                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ใบนี้นัดก่อนเปลี่ยนลำดับ — คอนเฟิร์มแล้วไปเบิกอะไหล่ แล้วหัวหน้าภาคปล่อยงาน"],
+                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "ใบนี้นัดก่อนเปลี่ยนลำดับ — เลือกวันใหม่แล้วไปเบิกอะไหล่ต่อ"],
                         ] as const)
                       : ([
-                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคยืนยันออกงาน"],
-                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคยืนยัน"],
+                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคปล่อยงาน"],
+                          ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ แล้วส่งให้หัวหน้าภาคคอนเฟิร์มวันใหม่"],
                         ] as const)
                   ).map(([v, label, hint]) => (
                     <TouchableOpacity
@@ -5167,9 +5473,10 @@ function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed
 function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null; off: number; services: number }) {
   const offCount = needsParts ? off : 0;
   if (needsParts === null || (offCount === 0 && services === 0)) return null;
+  // ลำดับหลังรับเงินตามสายงานปัจจุบัน (ต.ค. 69 รอบสอง): นัดวัน → เบิก → คอนเฟิร์มลูกค้าตอนของพร้อม
   const chain = needsParts
-    ? ["แอดมินเช็คอะไหล่", "แอดมินแนบใบเสนอราคา", "ลูกค้าจ่ายเงิน", "เบิกอะไหล่", "จ่ายงาน"]
-    : ["แอดมินแนบใบเสนอราคา", "ลูกค้าจ่ายเงิน", "จ่ายงาน"];
+    ? ["แอดมินเช็คอะไหล่", "แอดมินแนบใบเสนอราคา", "ลูกค้าจ่ายเงิน", "หัวหน้าภาคนัดวัน", "เบิกอะไหล่", "คอนเฟิร์มลูกค้า"]
+    : ["แอดมินแนบใบเสนอราคา", "ลูกค้าจ่ายเงิน", "หัวหน้าภาคนัดวัน", "คอนเฟิร์มลูกค้า"];
   const why = [offCount ? `อะไหล่นอก ${offCount}` : "", services ? `ค่าบริการ ${services}` : ""].filter(Boolean).join(" · ");
   return (
     <View style={styles.quoteRoute} accessibilityLabel="ใบนี้จะส่งให้แอดมินทำใบเสนอราคา">
@@ -5180,17 +5487,13 @@ function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null;
 }
 
 /**
- * หัวฟอร์มยืนยันออกงาน — บอกว่าแอดมินคุยกับลูกค้าได้ข้อสรุปว่าอะไร
- *
- * ลูกค้าเลื่อนวันคือเหตุผลหลักที่ขั้นนี้มีอยู่ (ทีมเดิมอาจไม่ว่างวันใหม่) จึงต้องเด่น
- * อ่านจากประวัติล่าสุดของขั้นคอนเฟิร์ม ไม่เก็บซ้ำในใบงาน — ประวัติคือของจริงอยู่แล้ว
- */
-/**
- * อะไหล่พร้อมแค่ไหน — กล่องบนฟอร์มนัดวันเข้า (นัดลูกค้าก่อนเบิก · แบบที่เจ้าของงานตกลง ต.ค. 69)
+ * อะไหล่พร้อมแค่ไหน — กล่องบนฟอร์มนัดวันเข้า และฟอร์มคอนเฟิร์มออกหน้างาน (แบบที่เจ้าของงานตกลง ต.ค. 69)
  * หัวหน้าภาคเห็นผลเช็คของแอดมินรายตัว ไม่ต้องโทรถาม · ของครบเสมอ (ของหมดค้างที่แอดมินจนของเข้า)
- * ตัวที่อยู่คลังอื่นคือตัวที่หัวหน้าภาคต้องเบิก/โอนเองก่อนปล่อยงาน (เคยบังคับนัดล่วงหน้า 7 วัน — เจ้าของงานยกเลิก ต.ค. 69)
+ * ตัวที่อยู่คลังอื่นคือตัวที่หัวหน้าภาคต้องเบิก/โอนเองหลังนัด ให้ถึงก่อนคอนเฟิร์มลูกค้า
+ * (เคยบังคับนัดล่วงหน้า 7 วัน — เจ้าของงานยกเลิก ต.ค. 69)
+ * แอดมินเห็นกล่องเดียวกันตอนจะโทรคอนเฟิร์ม — ปกติขึ้น "อะไหล่เบิกแล้ว" ทุกตัว ถ้ามีตัวยังไม่ถึงคือยังไม่ควรโทร
  */
-function PartsReady({ order, adminWarehouse }: { order: WorkOrder; adminWarehouse: string }) {
+function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: WorkOrder; adminWarehouse: string; viewer?: "supervisor" | "admin" }) {
   if (order.needsParts !== true || order.waitingParts.length === 0) return null;
   const issuedAll = order.waitingParts.every((p) => p.offCatalog || (p.inStock === true && !!p.requisitionNo));
   const far = order.waitingParts.filter((p) => farPart(p, adminWarehouse));
@@ -5218,7 +5521,9 @@ function PartsReady({ order, adminWarehouse }: { order: WorkOrder; adminWarehous
                 : p.requisitionNo
                   ? `เบิกแล้ว · ${p.warehouse ?? "-"} · ใบเบิก ${p.requisitionNo}`
                   : isFar
-                    ? `${p.warehouse} · คุณเบิก/โอนก่อนปล่อยงาน`
+                    ? viewer === "admin"
+                      ? `${p.warehouse} · ของอยู่คลังอื่น — ยังไม่ถึง`
+                      : `${p.warehouse} · คุณเบิก/โอนหลังนัด ให้ถึงก่อนคอนเฟิร์มลูกค้า`
                     : `มี · ${p.warehouse ?? adminWarehouse}`}
             </Text>
           </View>
@@ -5234,11 +5539,23 @@ function PartsReady({ order, adminWarehouse }: { order: WorkOrder; adminWarehous
   );
 }
 
+/**
+ * หัวฟอร์มปล่อยงาน — วันที่จะเข้าเป็นวันที่หัวหน้าภาคนัด/ปล่อยไว้เอง หรือถูกเลื่อนมา
+ *
+ * ถูกเลื่อน (ลูกค้าขอตอนคอนเฟิร์ม · แอดมินเลื่อนวันนัด) = กล่องส้ม บอกว่าเลื่อนเพราะอะไร ใครเลื่อน
+ * หัวหน้าภาคต้องเช็คคิวทีมวันใหม่ก่อนกด · ลูกค้าตกลงวันใหม่ทีหลังก็ยังส้ม (คอนเฟิร์มไม่ใช่การเช็คทีม) แต่บอกว่าร้านตกลงแล้ว
+ * ไม่ถูกเลื่อน = กล่องเขียว ลูกค้าคอนเฟิร์มแล้ว
+ * อ่านจากประวัติ ไม่เก็บซ้ำในใบงาน — ประวัติคือของจริงอยู่แล้ว
+ */
 function DispatchNote({ order }: { order: WorkOrder }) {
-  const last = order.logs
+  const move = rescheduledPending(order) ? pendingMove(order) : null;
+  const confirm = order.logs
     .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const moved = last?.action === "RESCHEDULED";
+  const moved = !!move;
+  // แอดมินเลื่อนแล้วลูกค้าตกลงวันนั้นทีหลัง — ร้านรู้วันใหม่แล้ว เหลือแค่เช็คทีม
+  const agreedAfter = !!move && move.action !== "RESCHEDULED" && confirm?.action === "CONFIRMED" && confirm.createdAt > move.createdAt;
+  const shown = move ?? confirm;
   // ออกงานวันนี้ — ตัวใหญ่บนสุด ย้ำให้หัวหน้าภาครู้ว่ากดแล้วทีมต้องออกวันนี้ (เจ้าของงานขอ ต.ค. 69)
   const today = order.status === "ASSIGNED" && order.scheduledAt?.slice(0, 10) === todayBkk();
   return (
@@ -5260,12 +5577,17 @@ function DispatchNote({ order }: { order: WorkOrder }) {
       />
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.dispatchText, { color: moved ? colors.warningInk : colors.successInk }]}>
-          {moved ? last.note : `ลูกค้าคอนเฟิร์มแล้ว · ${order.status === "INSPECT_DISPATCH" ? "เข้าตรวจ" : "เข้างาน"} ${visitLabel(order)}`}
+          {move
+            ? move.action === "RESCHEDULED"
+              ? move.note ?? move.actionLabel
+              : `${move.actionLabel}${move.note ? ` — ${move.note}` : ""}`
+            : `ลูกค้าคอนเฟิร์มแล้ว · ${order.status === "INSPECT_DISPATCH" ? "เข้าตรวจ" : "เข้างาน"} ${visitLabel(order)}`}
         </Text>
-        {last ? (
+        {shown ? (
           <Text style={styles.linkedText}>
-            {last.byName ?? "—"} · {formatDateTime(last.createdAt)}
-            {moved ? " — เช็คว่าทีมยังว่างวันใหม่ หรือเปลี่ยนทีมด้านล่าง" : ""}
+            {shown.byName ?? "—"} · {formatDateTime(shown.createdAt)}
+            {moved ? ` — วันใหม่ ${visitLabel(order)} · เช็คว่าทีมยังว่างวันใหม่ หรือเปลี่ยนทีมด้านล่าง` : ""}
+            {agreedAfter ? " · ลูกค้าคอนเฟิร์มวันใหม่แล้ว" : ""}
           </Text>
         ) : null}
       </View>
@@ -5370,6 +5692,8 @@ function ClaimsCard({
         <Ionicons name="shield-checkmark-outline" size={20} color={colors.primaryInk} />
         <Text style={[styles.infoTitle, headingFont]}>เคลมอะไหล่เก่า</Text>
       </View>
+      {/* เครื่องเดิมเคลมชิ้นเดิมซ้ำไหม — เปิดหน้าประวัติเคลมกรองให้เลย (แอดมิน/หัวหน้าภาคเท่านั้น · ช่างไม่เห็น) */}
+      <ClaimHistoryLinks branchCode={order.branchCode} machineCode={order.machineCode} />
       {viewing ? (
         <ImageViewer
           workOrderId={order.id}
@@ -7050,6 +7374,56 @@ const styles = StyleSheet.create({
   stepDotFrom: { borderStyle: "dashed", borderColor: colors.rollback, borderWidth: 2 },
   stepFromPill: { marginTop: 3, borderRadius: 6, paddingHorizontal: 5, backgroundColor: colors.rollbackSoft },
   stepFromPillText: { fontSize: 10.5, fontWeight: "700", color: colors.rollbackInk },
+  // ขั้น 1 ระหว่างตรวจหน้างาน — วงเส้นประสีคนที่ใบรอ ไม่ทึบ: ยังไม่ได้ทำ แต่ใบกำลังจะวนกลับมาที่นี่
+  stepDotLoop: { borderStyle: "dashed", backgroundColor: colors.card },
+  // ── รอบตรวจหน้างาน (เหนือแถบ) · ขั้นย่อยโอนคลังอื่น (ใต้แถบ) — แบบที่ตกลง ต.ค. 69 รอบสอง ──
+  // ม่วงเดียวกับป้าย "ตรวจหน้างาน" บนบอร์ดแผนงาน · กรอบเส้นประบอกว่าเป็นรอบแยก ไม่ใช่ขั้นหลัก
+  trackRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 6,
+    marginTop: spacing.md,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.roleAdminLine,
+  },
+  trackPill: { borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: colors.roleAdminSoft },
+  trackPillText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.roleAdmin },
+  trackStep: { flexDirection: "row", alignItems: "center", gap: 6 },
+  trackItem: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 2 },
+  trackLabel: { fontSize: 12, lineHeight: 18, color: colors.text },
+  trackBack: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  miniDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  miniLine: { width: 14, height: 2, backgroundColor: colors.border },
+  subTrack: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.sky200,
+    backgroundColor: colors.sky50,
+  },
+  subTrackHead: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  subItem: { flexDirection: "row", alignItems: "center" },
+  subItemText: { fontSize: 12, lineHeight: 18, color: colors.text },
   prevBox: { gap: 2, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: colors.warningTint },
   prevBoxTitle: { fontSize: 13, fontWeight: "800", color: colors.warningInk },
   prevBoxText: { fontSize: 12, color: colors.warningInk },
@@ -7073,6 +7447,22 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   outEtaBtnText: { fontSize: 12.5, fontWeight: "700", color: colors.dangerInk },
+  dateRowValue: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  // ตัวหนังสือเดียวกับ rowValue แต่ไม่ยืด — rowValue มี flex: 1 ในแถวที่มีปุ่มต่อท้าย ตัวหนังสือถูกบีบเหลือตัวละบรรทัด
+  dateRowText: { fontSize: 13, lineHeight: 21, color: colors.text, fontWeight: "600" },
+  // ปุ่มเล็กข้างวันนัด — แบบเดียวกับ "เลื่อนวัน" ของวันคาดว่าอะไหล่เข้า แต่สีฟ้า (ไม่ใช่เรื่องของหมด)
+  moveDateBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.card,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  moveDateBtnText: { fontSize: 12.5, fontWeight: "700", color: colors.primaryInk },
   title: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text, marginTop: 2 },
   detail: { fontSize: 13, lineHeight: 21, color: colors.textMuted, marginTop: spacing.xs },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: spacing.md },
@@ -7093,7 +7483,9 @@ const styles = StyleSheet.create({
   linked: { borderLeftWidth: 3, borderLeftColor: colors.primary },
   linkedTitle: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.text },
   linkedText: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: spacing.xs },
-  actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
+  // ตอนช่างเข้างานแอดมินมีสามปุ่ม (เลื่อนวันนัด · แจ้งปัญหา · ปิดงาน) — จอมือถือไม่พอแถวเดียว ขึ้นบรรทัดใหม่แทนการบีบ
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
+  waitingRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", gap: spacing.sm },
   // ปุ่มของขั้นนี้ใต้แถบขั้นตอน — สีกรมท่าแบบในตัวอย่าง กว้างตามข้อความ ไม่ยืดเต็มการ์ด
   action: {
     flexDirection: "row",
@@ -7113,6 +7505,7 @@ const styles = StyleSheet.create({
   logBody: { flex: 1, minWidth: 0 },
   logAction: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   logMeta: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
+  stepInfoRow: { paddingVertical: spacing.xs, borderBottomWidth: 1, borderBottomColor: colors.border },
   editNote: { flexDirection: "row", alignItems: "center", gap: 2 },
   editNoteText: { fontSize: 13, lineHeight: 21, color: colors.primary, fontWeight: "700" },
 

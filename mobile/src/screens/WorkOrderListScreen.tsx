@@ -121,11 +121,11 @@ export interface WorkOrderRow {
   orphan?: boolean;
   /** ทำไมไม่มีคนรับ: สาขายังไม่มีภาค/ทีม หรือภาค/ทีมนี้ยังไม่มีหัวหน้าภาค */
   orphanReason?: string | null;
-  /** วันนัดผ่านไปแล้วยังไม่คอนเฟิร์มลูกค้า — กล่องงานแอดมินหัวข้อ "เลยนัด" */
+  /** วันนัดผ่านไปแล้วใบยังไม่ถึงช่าง (ขั้นเบิก/โอน/คอนเฟิร์มลูกค้า) — กล่องงานแอดมินหัวข้อ "เลยนัด" */
   overdue?: boolean;
   /** จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บ "ใบงาน SUB" */
   outsource?: boolean;
-  /** ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — ป้ายแยกจากรับทราบปล่อยงานปกติ */
+  /** วันถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อนวันนัด) รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — ป้ายแยกจากรับทราบปล่อยงานปกติ */
   rescheduled?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
   waitingOnSupervisors: { id: number; name: string; region: string | null }[];
@@ -2096,7 +2096,8 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
  * หัวข้อบนสุดของกล่องงาน (เจ้าของงานเลือก ต.ค. 69)
  *
  * หัวหน้าภาค: "ออกงานวันนี้" — ลูกค้าคอนเฟิร์มแล้ว รอรับทราบปล่อยงาน เน้นย้ำว่ามีงานออกวันนี้ ไม่ให้ปนกับใบอื่น
- * แอดมิน: "ไม่มีคนรับ" (รอหัวหน้าภาคแต่ภาค/ทีมนั้นไม่มีคน) · "เลยนัด" (วันนัดผ่านแล้วยังไม่คอนเฟิร์ม)
+ * แอดมิน: "ไม่มีคนรับ" (รอหัวหน้าภาคแต่ภาค/ทีมนั้นไม่มีคน) · "เลยนัด" (วันนัดผ่านแล้วใบยังไม่ถึงช่าง —
+ *   เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง ใบค้างขั้นเบิก/โอนได้หลายวัน วันที่หัวหน้าภาคนัดไว้จึงเลยได้ก่อนถึงขั้นคอนเฟิร์ม)
  * ใบพวกนี้ยังอยู่ในรายการข้างล่างตามปกติ — หัวข้อนี้แค่ดึงขึ้นมาให้เห็นก่อน
  */
 function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: string | null; onOpen: (id: number) => void }) {
@@ -2120,7 +2121,13 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
         items: [...orphan].sort((a, b) => (a.orphanReason ?? "").localeCompare(b.orphanReason ?? "", "th")),
       });
     if (overdue.length)
-      groups.push({ key: "overdue", title: `เลยนัด ${overdue.length}`, hint: "วันนัดผ่านไปแล้ว ยังไม่ได้คอนเฟิร์มลูกค้า — โทรนัดใหม่", tone: "bad", items: overdue });
+      groups.push({
+        key: "overdue",
+        title: `เลยนัด ${overdue.length}`,
+        hint: "วันนัดผ่านไปแล้ว ใบยังไม่ถึงช่าง — เลื่อนวันนัด/โทรนัดใหม่",
+        tone: "bad",
+        items: overdue,
+      });
   }
   if (!groups.length) return null;
   return (
@@ -2148,6 +2155,8 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
                     : g.key === "overdue" && r.scheduledAt
                       ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}`
                       : null,
+                  // เลยนัดได้หลายขั้นแล้ว (เบิก · โอน · คอนเฟิร์ม) — บอกว่าค้างที่ไหน จะได้รู้ว่าต้องตามใคร
+                  g.key === "overdue" ? r.statusLabel : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

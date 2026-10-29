@@ -88,7 +88,8 @@ X3=$(mktemp --suffix=.xlsx)
 M2=$((N + 50))  # เครื่องคนละตัวกับข้างบน — เครื่อง W$N มีใบค้างจากเทสต์ก่อนหน้า แถวจะถูกข้าม
 JB=$(NODE_PATH=backend/node_modules node tests/fixtures-incell-image.js "$X3" C0006 "W$M2" "ทดสอบนำเข้า รูปในเซลล์")
 G() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file=@$X3" "$@"; }
-[ "$(G | J 'JSON.stringify([d.summary.photos,d.rows[0].photoInFile,d.rows[0].photo,JSON.stringify(d).length<20000])')" = '[1,true,null,true]' ] \
+# วัดขนาดโดยไม่นับ branchOpen (ใบค้างของสาขา — โตตามข้อมูลในฐานข้อมูล ไม่เกี่ยวกับรูป) ไม่งั้นสาขาทดสอบมีใบค้างเยอะแล้วตกเอง
+[ "$(G | J 'JSON.stringify([d.summary.photos,d.rows[0].photoInFile,d.rows[0].photo,JSON.stringify({...d,rows:d.rows.map(r=>({...r,branchOpen:undefined}))}).length<20000])')" = '[1,true,null,true]' ] \
   && pass "ดูตัวอย่าง: เห็นรูปในเซลล์ 1 รูป · ช่องรูปไม่กลายเป็นข้อความ · ไม่ส่งตัวรูปกลับมา" || fail "พรีวิวรูปในเซลล์: $(G | J 'JSON.stringify(d.summary)')"
 G -F apply=true >/dev/null
 # key ในถังต้องเป็น ASCII — Supabase ไม่รับอักษรไทย (tests/mock-s3.js จำลองข้อนี้) · ชื่อไทยอยู่ใน fileName

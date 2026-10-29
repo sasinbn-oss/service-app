@@ -71,11 +71,13 @@ echo "═══ ช่างส่งกลับ — ล้างสถาน�
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
 POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
-POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
-[ "$(ws $ID)" = "CHECKING_PARTS" ] && pass "คอนเฟิร์มแล้วถึงขั้นเบิก → รอแอดมินเช็คอะไหล่ (ไม่ค้าง \"รอช่าง\")" || fail "ขั้นเบิก: $(ws $ID)"
+[ "$(ws $ID)" = "CHECKING_PARTS" ] && pass "นัดแล้วถึงขั้นเบิก → รอแอดมินเช็คอะไหล่ (ไม่ค้าง \"รอช่าง\")" || fail "ขั้นเบิก: $(ws $ID)"
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-SG1\"}]}" >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
-[ "$(ws $ID)" = "WAITING_TECH" ] && pass "ช่างเข้างาน → รอช่างเข้าแก้ไข" || fail "ช่างเข้างาน: $(ws $ID)"
+# ดูขั้นที่ฐานข้อมูลด้วย — "รอช่างเข้าแก้ไข" ขึ้นตั้งแต่ขั้นคอนเฟิร์มลูกค้า ป้ายอย่างเดียวผ่านได้ทั้งที่ยังไม่ถึงช่าง
+[ "$(ws $ID)" = "WAITING_TECH" ] && [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] \
+  && pass "เบิก → คอนเฟิร์มลูกค้า → ช่างเข้างาน → รอช่างเข้าแก้ไข" || fail "ช่างเข้างาน: $(ws $ID)"
 POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"PARTS","reason":"อะไหล่ไม่ตรง"}' >/dev/null
 [ "$(ws $ID)" = "-" ] && pass "ช่างส่งกลับ → ล้างสถานะ (ไม่ค้าง \"รอช่างเข้าแก้ไข\")" || fail "หลังส่งกลับ: $(ws $ID)"
 

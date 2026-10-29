@@ -86,6 +86,7 @@ echo "═══ ใบที่เบิกไปแล้วก่อนเป�
 POST $A "work-orders/$WC/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-NEW-C\"}]}" >/dev/null
 [ "$(ST $WC)" = "PARTS_CHECKED" ] && pass "เบิกครบแล้วแต่ยังไม่ได้นัด → หัวหน้าภาคนัดวันเข้า" || fail "C หลังเบิก: $(ST $WC)"
 POST $S "work-orders/$WC/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
+[ "$(ST $WC)" = "AWAITING_CONFIRM" ] && pass "นัดแล้วข้ามขั้นเบิก (เบิกครบแล้ว) ไปคอนเฟิร์มลูกค้า" || fail "C หลังนัด: $(ST $WC)"
 POST $A "work-orders/$WC/confirm-appointment" '{}' >/dev/null
 [ "$(ST $WC)" = "ASSIGNED" ] && pass "คอนเฟิร์มแล้วไปปล่อยงานเลย — เบิกไว้ครบแล้ว ไม่ต้องเบิกซ้ำ" || fail "C หลังคอนเฟิร์ม: $(ST $WC)"
 [ "$(DB "select string_agg(\"requisitionNo\",',' order by \"requisitionNo\") from \"WorkOrderPart\" where \"workOrderId\"=$WC")" = "RQ-NEW-C,RQ-OLD-C" ] \

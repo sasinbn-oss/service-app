@@ -23,7 +23,8 @@ import { colors, radius, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "IssuedPartsReport">;
 
-type Bucket = "transfer" | "dispatch" | "field" | "claim" | "other";
+/** confirm = เบิกครบแล้ว รอแอดมินโทรคอนเฟิร์มลูกค้า — ที่พักปกติของของที่เบิกแล้ว (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) */
+type Bucket = "transfer" | "confirm" | "dispatch" | "field" | "claim" | "other";
 
 interface Row {
   partRowId: number;
@@ -80,6 +81,7 @@ const OLD_DAYS = 7;
 const CHIPS: { value: Chip; label: string }[] = [
   { value: "all", label: "ทั้งหมด" },
   { value: "transfer", label: "กำลังโอน / เบิกคลังอื่น" },
+  { value: "confirm", label: "รอคอนเฟิร์มลูกค้า" },
   { value: "dispatch", label: "รอปล่อยงาน" },
   { value: "field", label: "ช่างเข้างาน" },
   { value: "claim", label: "รอตรวจเคลม" },

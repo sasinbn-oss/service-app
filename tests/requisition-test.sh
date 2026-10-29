@@ -1,5 +1,5 @@
 #!/bin/bash
-# ทดสอบ: เลขใบเบิกอะไหล่ตอนแอดมินเบิก (หลังลูกค้าคอนเฟิร์ม — นัดลูกค้าก่อนเบิก ต.ค. 69) + รูปใบเหลืองตอนปิดงาน
+# ทดสอบ: เลขใบเบิกอะไหล่ตอนแอดมินเบิก (หลังนัดวัน ก่อนคอนเฟิร์มลูกค้า — ต.ค. 69 รอบสอง) + รูปใบเหลืองตอนปิดงาน
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -19,6 +19,16 @@ BELT_ID=$(echo "$PARTS" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.part
 
 # ตั้งภาคให้หัวหน้าภาคตรงกับสาขาที่ทดสอบ ไม่งั้นลำดับการรันเทสต์มีผลต่อผลลัพธ์
 SUPID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
+# เก็บกวาดตอนจบ (ผ่านหรือไม่ก็ตาม) — ลบใบที่สร้าง คืนภาค/ทีมของผู้ใช้ทดสอบ (CLAUDE.md)
+DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
+OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where \"employeeCode\"='T001'")
+ID=""; ID2=""
+cleanup() {
+  for i in $ID $ID2; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'; update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null
+}
+trap cleanup EXIT
 TESTREGION=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].region')
 curl -s -X PATCH "localhost:4000/api/auth/users/$SUPID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$TESTREGION\"}" >/dev/null
 
@@ -32,7 +42,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD_ID,\"quantity\":1},{\"sparePartId\":$BELT_ID,\"quantity\":2}]}" >/dev/null
 
 echo
-echo "═══ นัดลูกค้าก่อนเบิก: เช็คอะไหล่ (มี/หมด) → นัดวัน → คอนเฟิร์ม → เบิก"
+echo "═══ เช็คอะไหล่ (มี/หมด) → นัดวัน → เบิก → คอนเฟิร์ม"
 TECH=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)" | J 'd.technicians.find(t=>t.employeeCode==="T001").id')
 # จ่ายเป็นทีม และจัดช่างทดสอบเข้าทีมของสาขา C0006 ตามไฟล์ทะเบียนจริง
 TEAM=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].zone')
@@ -42,9 +52,8 @@ R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H 
 echo "$R" | J 'd.statusLabel' | grep -q "นัดวันเข้า" && pass "เช็คอะไหล่ครบ (ยังไม่เบิก) → หัวหน้าภาคนัดวันเข้า" || fail "หลังเช็คอะไหล่: $R"
 echo "$R" | J 'd.waitingParts.every(p=>p.inStock===true&&!p.requisitionNo)?"ok":"bad"' | grep -q ok \
   && pass "ขั้นเช็คไม่ตัดของ — ยังไม่มีเลขใบเบิก" || fail "ขั้นเช็คมีเลขใบเบิกติดมา"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
-echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วไปขั้นแอดมินเบิกอะไหล่" || fail "หลังคอนเฟิร์ม: $(echo "$R" | J 'd.statusLabel')"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}")
+echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "นัดวันแล้วไปขั้นแอดมินเบิกอะไหล่ (ยังไม่คอนเฟิร์มลูกค้า)" || fail "หลังนัดวัน: $(echo "$R" | J 'd.statusLabel')"
 
 echo
 echo "═══ เบิกโดยไม่ใส่เลขใบเบิก — ต้องถูกปฏิเสธ"
@@ -53,21 +62,26 @@ R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)
 echo "$R" | grep -q "เลขใบเบิก" && pass "ไม่ใส่เลขใบเบิกแล้วถูกปฏิเสธ" || fail "รับไปทั้งที่ไม่มีเลขใบเบิก: $R"
 
 echo
-echo "═══ ตอนเบิกเจอของหมด (ลูกค้าคอนเฟิร์มแล้ว) — ต้องแยกใบ หรือแจ้งเลื่อนนัด ค้างที่ขั้นเบิกไม่ได้"
+echo "═══ ตอนเบิกเจอของหมด (นัดวันแล้ว ยังไม่คอนเฟิร์มลูกค้า) — ต้องแยกใบ หรือยกเลิกนัดรอของ ค้างที่ขั้นเบิกไม่ได้"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":false}]}")
 echo "$R" | grep -q "ของไม่พอ" && pass "ของหมดตอนเบิกโดยไม่แยกใบ ถูกปฏิเสธ (บอกทางไป)" || fail "รับไป: $R"
+# ร้านยังไม่รู้วัน — ปุ่มที่บอกต้องเป็น "ยกเลิกนัด" ไม่ใช่ "แจ้งเลื่อนนัด" (คำนั้นเฉพาะใบที่คอนเฟิร์มแล้ว)
+echo "$R" | grep -q "ของไม่พอ — ยกเลิกนัด รอของเข้า" && ! echo "$R" | grep -q "แจ้งเลื่อนนัด" \
+  && pass "ยังไม่คอนเฟิร์มลูกค้า ข้อความบอกปุ่ม “ยกเลิกนัด รอของเข้า”" || fail "ข้อความปุ่มของไม่พอ: $R"
 [ "$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.waitingParts.filter(p=>p.requisitionNo).length')" = "0" ] \
   && pass "ถูกปฏิเสธแล้วไม่มีของตัดออกจากคลังครึ่ง ๆ" || fail "มีเลขใบเบิกค้างทั้งที่ถูกปฏิเสธ"
 
 echo
-echo "═══ เบิกครบ → หัวหน้าภาคปล่อยงาน (ไม่ต้องจ่ายงาน/คอนเฟิร์มซ้ำ)"
+echo "═══ เบิกครบ → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคปล่อยงาน (ไม่ต้องจ่ายงานซ้ำ)"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"},{\"sparePartId\":$BELT_ID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-2569-0042\"}]}")
-echo "$R" | J 'd.statusLabel' | grep -q "ปล่อยงาน" && pass "เบิกครบแล้วไปหัวหน้าภาคปล่อยงาน" || fail "เบิกแล้วไม่ไปปล่อยงาน: $R"
+echo "$R" | J 'd.statusLabel' | grep -q "คอนเฟิร์มลูกค้า" && pass "เบิกครบแล้วไปแอดมินคอนเฟิร์มลูกค้า (ของอยู่ในมือแล้ว)" || fail "เบิกแล้วไม่ไปคอนเฟิร์มลูกค้า: $(echo "$R" | J 'd.statusLabel')"
 echo "$R" | J 'd.waitingParts.map(p=>p.partCode+" คลัง="+(p.warehouse||"-")+" ใบเบิก="+(p.requisitionNo||"-")).join(" · ")'
 echo "$R" | J 'd.waitingParts.every(p=>p.requisitionNo==="RQ-2569-0042")?"ok":"bad"' | grep -q ok \
   && pass "เลขใบเบิกบันทึกครบทุกตัว" || fail "เลขใบเบิกไม่ครบ"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
+echo "$R" | J 'd.statusLabel' | grep -q "ปล่อยงาน" && pass "ลูกค้าคอนเฟิร์มแล้วไปหัวหน้าภาคปล่อยงาน (ไม่วนกลับไปเบิก)" || fail "หลังคอนเฟิร์ม: $(echo "$R" | J 'd.statusLabel')"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 
 echo

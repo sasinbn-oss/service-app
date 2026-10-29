@@ -44,8 +44,8 @@ ID=$(POST $A work-orders "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 POST $S "work-orders/$ID/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
-POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-CL$SUF\"}]}" >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] || { echo "FAIL เตรียมใบงานไม่ถึงขั้นเข้างาน"; exit 1; }
 UP image/png -F "role=BEFORE" >/dev/null

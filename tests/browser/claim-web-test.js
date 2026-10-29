@@ -64,15 +64,15 @@ const login = async (code) =>
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: true, parts: [{ sparePartId: Number(sp), quantity: 1 }] });
-    // เช็คอะไหล่ → นัด → คอนเฟิร์ม → เบิก (นัดลูกค้าก่อนเบิก ต.ค. 69)
+    // เช็คอะไหล่ → นัด → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง)
     await call(A, "POST", `/work-orders/${id}/parts-sourcing`, {
       results: [{ sparePartId: Number(sp), inStock: true, warehouse: "คลังลาดพร้าว 94" }],
     });
     await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: visitDay(12) });
-    await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(A, "POST", `/work-orders/${id}/parts-check`, {
       results: [{ sparePartId: Number(sp), inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-CW${suf}` }],
     });
+    await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(S, "POST", `/work-orders/${id}/dispatch`, {});
     for (const role of ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"]) {
       const form = new FormData();

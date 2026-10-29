@@ -1,7 +1,7 @@
 // ทดสอบ: รายงานอะไหล่เบิกแล้ว · งานยังไม่จบ (เจ้าของงานขอ ต.ค. 69 · ตามตัวอย่างที่ตกลง)
 //   · การ์ดในเมนูรายงาน · ช่างไม่เห็นการ์ด
 //   · ตัวเลข "ใบงาน" ตรงกับฐานข้อมูล · จอคอมเป็นตารางจัดกลุ่มตามขั้น เห็นเลขใบเบิก · เลยวันนัดขึ้นป้าย
-//   · ปุ่มกรองเลยวันนัด · ค้นเลขใบเบิก · แท็บตามอะไหล่ · กดเลขใบงานไปหน้าใบงาน · จอมือถือเป็นการ์ดไม่ล้นจอ
+//   · ปุ่มกรองเลยวันนัด · ปุ่มกรองรอคอนเฟิร์มลูกค้า (เบิกครบแล้ว รอโทรร้าน — ต.ค. 69 รอบสอง) · ค้นเลขใบเบิก · แท็บตามอะไหล่ · กดเลขใบงานไปหน้าใบงาน · จอมือถือเป็นการ์ดไม่ล้นจอ
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
@@ -21,7 +21,8 @@ const { setup, visitDay } = require("./fixture");
     fx = await setup();
     const board = fx.part("SP-BOARD");
     const L94 = "คลังลาดพร้าว 94";
-    // a: เบิกแล้ว รอปล่อยงาน · b: ช่างเข้างาน เลยวันนัด 2 วัน · c: เช็คแล้ว ยังไม่เบิก (ไม่ขึ้น)
+    // a: เบิกแล้ว รอคอนเฟิร์มลูกค้า (ที่พักปกติของของที่เบิกแล้ว) · b: ช่างเข้างาน เลยวันนัด 2 วัน · c: เช็คแล้ว ยังไม่เบิก (ไม่ขึ้น)
+    // นัดวัน → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (ต.ค. 69 รอบสอง)
     const a = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
     await fx.source(a.id);
     await fx.schedule(a.id, visitDay(30));
@@ -30,12 +31,13 @@ const { setup, visitDay } = require("./fixture");
     await fx.source(b.id);
     await fx.schedule(b.id, visitDay(31));
     await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-check`, { results: [{ sparePartId: board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR2" }] });
+    await fx.confirm(b.id);
     await fx.call(fx.supervisor(), "POST", `/work-orders/${b.id}/dispatch`, {});
     fx.sql(`update "WorkOrder" set "scheduledAt"=(now() at time zone 'Asia/Bangkok')::date - 2 where id=${b.id}`);
     const c = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
     await fx.source(c.id);
     const st = fx.sql(`select string_agg(status,',' order by id) from "WorkOrder" where id in (${a.id},${b.id},${c.id})`);
-    st === "ASSIGNED,IN_PROGRESS,PARTS_CHECKED" ? pass("เตรียมใบ: รอปล่อยงาน · ช่างเข้างาน · ยังไม่เบิก (ฐานข้อมูล)") : fail(`เตรียมใบ: ${st}`);
+    st === "AWAITING_CONFIRM,IN_PROGRESS,PARTS_CHECKED" ? pass("เตรียมใบ: เบิกแล้วรอคอนเฟิร์มลูกค้า · ช่างเข้างาน · ยังไม่เบิก (ฐานข้อมูล)") : fail(`เตรียมใบ: ${st}`);
     const dbOrders = fx.sql(`select count(distinct w.id) from "WorkOrder" w join "WorkOrderPart" p on p."workOrderId"=w.id join "SparePart" s on s.id=p."sparePartId"
       where p.kind='WAITING' and not s."offCatalog" and w.status not in ('DONE','CANCELLED') and not w."isTest"
       and ((p."inStock" and p."requisitionNo" is not null) or p."transferReqNo" is not null)`);
@@ -78,7 +80,7 @@ const { setup, visitDay } = require("./fixture");
       await page.waitForTimeout(800);
       (await label(page, `แถวใบงาน ${a.code}`).count()) && (await label(page, `แถวใบงาน ${b.code}`).count()) && !(await label(page, `แถวใบงาน ${c.code}`).count())
         ? pass("ค้นเลขใบเบิก: เจอสองใบที่เบิก ไม่มีใบที่ยังไม่เบิก") : fail("ค้นเลขใบเบิกไม่ตรง");
-      (await vis("ใบเบิก RQ-WEB-IR1", false).count()) > 0 && (await vis("หัวหน้าภาค · รับทราบ ปล่อยงาน").count()) > 0
+      (await vis("ใบเบิก RQ-WEB-IR1", false).count()) > 0 && (await vis("แอดมิน · คอนเฟิร์มลูกค้า").count()) > 0
         ? pass("ตาราง: บอกคลัง + เลขใบเบิก และจัดกลุ่มตามขั้น") : fail("ตารางไม่บอกใบเบิก/กลุ่มขั้น");
       (await vis("เลยนัด 2 วัน · ยังไม่ปิดงาน").count()) > 0 ? pass("ใบที่ช่างเข้างานแล้ววันนัดผ่านไป 2 วัน ขึ้นป้ายเลยนัด") : fail("ไม่ขึ้นป้ายเลยนัด");
       await page.screenshot({ path: path.join(DIR, "issued-2-table.png") });
@@ -86,6 +88,11 @@ const { setup, visitDay } = require("./fixture");
       await page.waitForTimeout(600);
       (await label(page, `แถวใบงาน ${b.code}`).count()) && !(await label(page, `แถวใบงาน ${a.code}`).count())
         ? pass("กรองเลยวันนัด: เหลือใบที่เลยนัด") : fail("กรองเลยวันนัดไม่ถูก");
+      // กลุ่มใหม่: เบิกครบแล้ว รอแอดมินโทรคอนเฟิร์มลูกค้า — ใบ a อยู่ ใบ b (ช่างเข้างานแล้ว) ไม่อยู่
+      await label(page, "กรองรอคอนเฟิร์มลูกค้า").click();
+      await page.waitForTimeout(600);
+      (await label(page, `แถวใบงาน ${a.code}`).count()) && !(await label(page, `แถวใบงาน ${b.code}`).count())
+        ? pass("กรองรอคอนเฟิร์มลูกค้า: เหลือใบที่เบิกแล้วรอโทรร้าน") : fail("กรองรอคอนเฟิร์มลูกค้าไม่ถูก");
       await label(page, "กรองทั้งหมด").click();
       await page.waitForTimeout(400);
       await label(page, "แท็บตามอะไหล่").click();
@@ -99,7 +106,7 @@ const { setup, visitDay } = require("./fixture");
       await page.waitForTimeout(500);
       await label(page, `เปิดใบงาน ${a.code}`).click();
       await page.waitForTimeout(3000);
-      (await vis(a.code, false).count()) > 0 && (await vis("รับทราบ ปล่อยงาน", false).count()) > 0
+      (await vis(a.code, false).count()) > 0 && (await vis("คอนเฟิร์มลูกค้า", false).count()) > 0
         ? pass("กดเลขใบงานแล้วเปิดหน้าใบงาน") : fail("กดเลขใบงานแล้วไม่ไปหน้าใบงาน");
       await ctx.close();
     }

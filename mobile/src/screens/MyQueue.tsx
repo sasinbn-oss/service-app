@@ -34,6 +34,7 @@ import {
   ackAdminReview,
   cancelAdminReview,
 } from "../components/AdminReview";
+import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
 
 /** ค้างเกินนี้ขึ้นแดง — ตัวเลขเดียวกับชิป "ค้างขั้นเดิมเกิน 3 วัน" ในหน้ารายการ */
 const STALE_DAYS = 3;
@@ -44,7 +45,7 @@ const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTim
 const stageName = (label: string) => label.split(" · ").slice(1).join(" · ") || label;
 
 type Props = {
-  onOpen: (id: number, open?: "stage" | "close") => void;
+  onOpen: (id: number, open?: "stage" | "close" | "reschedule") => void;
   /** ค้นไม่เจอในงานของตัวเอง → ค้นต่อในใบงานซ่อมทั้งหมด */
   onSearchAll?: (q: string) => void;
 };
@@ -240,6 +241,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         </View>
       ) : null}
 
+      {/* Admin Spare Part ดูย้อนหลังได้จากหน้าแรกของตัวเอง (เจ้าของงานขอ ต.ค. 69) — ใบที่รอตรวจอยู่ในรายการด้านล่างแล้ว
+          วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices) */}
+      {user?.partsAdmin ? <ClaimHistoryCard /> : null}
       {error ? (
         <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={error} />
       ) : !rows ? (
@@ -297,7 +301,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     )}
                     {r.orphan ? <Tag text="ไม่มีคนรับ" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     {r.overdue ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
-                    {r.rescheduled ? <Tag text="ลูกค้าขอเปลี่ยนวัน" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
+                    {/* วันถูกเลื่อน (ลูกค้าขอตอนคอนเฟิร์ม หรือแอดมินเลื่อนวันนัด ต.ค. 69) — หัวหน้าภาคต้องเช็คทีมวันใหม่ก่อนปล่อย */}
+                    {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     <AdminReviewTag review={r.adminReview} />
                     <View style={{ flex: 1 }} />
                     <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>{d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}</Text>
@@ -428,10 +433,20 @@ function CardActions({
     </TouchableOpacity>
   );
   // แอดมินไม่มีปุ่มส่งกลับ — เป็นปุ่มของหัวหน้าภาคเท่านั้น
+  // ใบเลยนัด: วันที่ร้านไม่ได้ตกลงผ่านไปแล้ว สิ่งแรกที่ต้องทำคือนัดวันใหม่ — ปุ่มลัดเปิดฟอร์มเลื่อนวันนัด (ต.ค. 69)
+  // หน้าใบงานเช็คสิทธิ์/ขั้นอีกรอบ (ขั้นคอนเฟิร์มลูกค้าเปิดฟอร์มคอนเฟิร์มที่ "ลูกค้าขอเลื่อน")
   if (isAdmin) {
     return (
       <View style={styles.actions}>
         {detail}
+        {r.overdue && r.scheduledAt ? (
+          <TouchableOpacity style={[styles.sideBtn, styles.moveBtn]} onPress={() => onOpen(r.id, "reschedule")} accessibilityLabel={`เลื่อนวันนัด ${r.code}`}>
+            <Ionicons name="calendar-outline" size={16} color={colors.navy} />
+            <Text style={[styles.sideText, { color: colors.navy }]} numberOfLines={1}>
+              เลื่อนวันนัด
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         {go}
       </View>
     );
@@ -672,4 +687,6 @@ const styles = StyleSheet.create({
   undoBtn: { borderWidth: 1, borderColor: colors.borderStrong },
   ackBtn: { flex: 1, borderWidth: 1.5, borderColor: colors.success },
   replyBtn: { backgroundColor: colors.roleAdmin },
+  // กรอบกรมท่าแบบปุ่มรองในหน้าใบงาน ("เลื่อนวันนัด" · "แจ้งปัญหาหน้างาน")
+  moveBtn: { borderWidth: 1.5, borderColor: colors.navy },
 });

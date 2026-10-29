@@ -1,7 +1,8 @@
 // ทดสอบ: แยกตัวที่หมดจากใบที่เก็บเงินลูกค้าแล้ว ต้องตอบว่าลูกค้าจ่ายค่าตัวที่หมดแล้วหรือยัง (WO-00528 ต.ค. 69)
-//   · ตอบว่าหมดแต่ยังไม่ติ๊กแยก = ปุ่ม "ของไม่พอ — แจ้งเลื่อนนัด" (ไม่แยกเป็นค่าตั้งต้น — ของต้องครบก่อนนัด)
+//   · ตอบว่าหมดแต่ยังไม่ติ๊กแยก = ปุ่ม "ของไม่พอ — ยกเลิกนัด รอของเข้า" (ไม่แยกเป็นค่าตั้งต้น — ของต้องครบก่อนนัด)
+//     ลูกค้ายังไม่ได้คอนเฟิร์ม (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) จึงไม่ใช่ "แจ้งเลื่อนนัด" — ยังไม่มีอะไรให้แจ้งร้าน
 //   · ติ๊กแยก → ฟอร์มเบิกขึ้นคำถาม · ยังไม่ตอบ ปุ่มยืนยันกดไม่ได้
-//   · ตอบ "ยังไม่จ่าย" → ใบใหม่รอของที่เช็คอะไหล่ · ใบเดิมไปตามนัด (ปล่อยงาน) (ฐานข้อมูล)
+//   · ตอบ "ยังไม่จ่าย" → ใบใหม่รอของที่เช็คอะไหล่ · ใบเดิมไปแอดมินคอนเฟิร์มลูกค้า (ฐานข้อมูล)
 //   · แถบขั้นตอนของใบใหม่: ขั้นก่อนหน้าขึ้นว่า "ทำในใบเดิม WO-…" ไม่ใช่ ✓
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
@@ -40,7 +41,7 @@ const { setup } = require("./fixture");
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/payment`, {});
     await fx.schedule(wo.id);
     fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "PARTS_REQUESTED"
-      ? pass("เตรียมใบ: เสนอราคา รับเงิน นัด คอนเฟิร์มแล้ว ถึงขั้นเบิก") : fail(`เตรียมใบไม่ถึงขั้นเบิก: ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
+      ? pass("เตรียมใบ: เสนอราคา รับเงิน นัดวันแล้ว ถึงขั้นเบิก (ยังไม่คอนเฟิร์มลูกค้า)") : fail(`เตรียมใบไม่ถึงขั้นเบิก: ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
 
     page = await browser.newPage({ viewport: { width: 420, height: 900 } });
     page.on("pageerror", (e) => errors.push(String(e)));
@@ -69,8 +70,9 @@ const { setup } = require("./fixture");
     // ผลเช็คอะไหล่ (ไม่เกิน 3 วัน) เติม "มีของ · คลัง 94" ให้แล้ว — สายพานถูกงานอื่นใช้ไป ตอบหมด
     await vis("หมด").last().click();
     await page.waitForTimeout(400);
-    (await vis("ของไม่พอ — แจ้งเลื่อนนัด").count()) > 0
-      ? pass("ตอบหมด (ยังไม่ติ๊กแยก) → ปุ่มเป็น \"ของไม่พอ — แจ้งเลื่อนนัด\"") : fail("ปุ่มไม่เปลี่ยนเป็นของไม่พอ");
+    // ลูกค้ายังไม่คอนเฟิร์ม — ปุ่มบอกว่ายกเลิกวันที่หัวหน้าภาคนัดไว้ ไม่ใช่ให้ไปแจ้งร้านว่าเลื่อน
+    (await vis("ของไม่พอ — ยกเลิกนัด รอของเข้า").count()) > 0 && (await vis("ของไม่พอ — แจ้งเลื่อนนัด").count()) === 0
+      ? pass("ตอบหมด (ยังไม่ติ๊กแยก · ลูกค้ายังไม่คอนเฟิร์ม) → ปุ่มเป็น \"ของไม่พอ — ยกเลิกนัด รอของเข้า\"") : fail("ปุ่มไม่เปลี่ยนเป็นของไม่พอ (ยกเลิกนัด)");
     await label("แยกตัวที่หมดไปใบงานรออะไหล่").click();
     await page.waitForTimeout(400);
     await label("เลขใบเบิกอะไหล่").fill("RQ-SQ-WEB");
@@ -89,8 +91,8 @@ const { setup } = require("./fixture");
     const child = fx.sql(`select id||'|'||code||'|'||status from "WorkOrder" where "parentId"=${wo.id}`);
     const [cid, ccode, cst] = child.split("|");
     if (cid) extra.push(Number(cid));
-    cst === "PARTS_SOURCING" && fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "ASSIGNED"
-      ? pass(`ฐานข้อมูล: ใบใหม่ ${ccode} รอของที่เช็คอะไหล่ · ใบเดิมไปตามนัด (ปล่อยงาน)`) : fail(`ใบใหม่: ${child} · ใบเดิม ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
+    cst === "PARTS_SOURCING" && fx.sql(`select status from "WorkOrder" where id=${wo.id}`) === "AWAITING_CONFIRM"
+      ? pass(`ฐานข้อมูล: ใบใหม่ ${ccode} รอของที่เช็คอะไหล่ · ใบเดิมเบิกครบไปคอนเฟิร์มลูกค้า`) : fail(`ใบใหม่: ${child} · ใบเดิม ${fx.sql(`select status from "WorkOrder" where id=${wo.id}`)}`);
 
     // ── แถบขั้นตอนของใบใหม่
     await open(ccode);

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Image,
@@ -19,6 +19,7 @@ import { useAuth } from "../context/AuthContext";
 import { AREA_TEAM_LABELS, isAreaTeam } from "../utils/areaTeam";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
+import { canSeeClaimHistory } from "../utils/claimHistory";
 import { MainTabParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import ThemeToggle from "./ThemeToggle";
@@ -133,6 +134,8 @@ interface Item {
   screen: string;
   params?: object;
   badge?: boolean;
+  /** ตัวเลขเคลมที่ยังรอตรวจ (ป้ายเหลือง "รอตรวจ n") — คนละตัวกับกล่องงาน */
+  claims?: boolean;
   /** เห็นเฉพาะบทบาทเหล่านี้ — ไม่ใส่ = ทุกคน */
   roles?: string[];
   /** เห็นเฉพาะ Super Admin */
@@ -196,11 +199,32 @@ const GROUPS: Group[] = [
       { key: "coverage", label: "ผังผู้รับผิดชอบ", labelEn: "Coverage Map", icon: "git-network-outline", tab: "HomeTab", screen: "CoverageMap" },
     ],
   },
+  /**
+   * อะไหล่ (ต.ค. 69 ตามตัวอย่างหน้าประวัติเคลมที่เจ้าของงานตกลง) — รายการอะไหล่ย้ายมาจากกลุ่มหน้างาน
+   * ประวัติเคลมเห็นเฉพาะแอดมินทุกแบบกับหัวหน้าภาค (utils/claimHistory) · ช่างเห็นกลุ่มนี้แค่รายการอะไหล่
+   */
+  {
+    title: "อะไหล่",
+    items: [
+      { key: "parts", label: "รายการอะไหล่", labelEn: "Spare Parts", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
+      {
+        key: "claims",
+        label: "ประวัติเคลม",
+        labelEn: "Claim History",
+        icon: "shield-checkmark-outline",
+        tab: "HomeTab",
+        screen: "ClaimHistory",
+        // {} ไม่ใช่ undefined — เปิดจากเมนูต้องล้างตัวกรองเครื่อง/สาขาที่ค้างจากลิงก์ในใบงาน
+        params: {},
+        claims: true,
+        roles: ["ADMIN", "SUPERVISOR"],
+      },
+    ],
+  },
   {
     title: "หน้างาน",
     items: [
       { key: "flow", label: "วินิจฉัยอาการเสีย", labelEn: "Diagnose", icon: "git-branch-outline", tab: "HomeTab", screen: "FlowList" },
-      { key: "parts", label: "รายการอะไหล่", labelEn: "Spare Parts", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
       { key: "checkin", label: "รายงานตัวเข้าสาขา", labelEn: "Branch Check-in", icon: "location-outline", tab: "HomeTab", screen: "BranchCheckIn" },
       { key: "worklog", label: "บันทึกการทำงาน", labelEn: "Work Log", icon: "create-outline", tab: "HomeTab", screen: "WorkLogForm" },
       { key: "guides", label: "คู่มือแก้ปัญหา", labelEn: "Guides", icon: "book-outline", tab: "HistoryTab", screen: "GuideList" },
@@ -280,14 +304,26 @@ function navigateTo(it: Item) {
   (navigationRef.navigate as (tab: Tab, p: object) => void)(it.tab, nested);
 }
 
+/** ป้าย "รอตรวจ n" ข้างเมนูประวัติเคลม — ตามตัวอย่างที่ตกลง (ไม่ใช่วงกลมแดงแบบกล่องงาน) */
+function ClaimPill({ n }: { n: number }) {
+  return (
+    <View style={styles.claimPill} accessibilityLabel={`เคลมรอตรวจ ${n}`}>
+      <Text style={styles.claimPillText}>รอตรวจ {n}</Text>
+    </View>
+  );
+}
+
 function MenuContent({
   active,
   inbox,
+  claims = 0,
   onPick,
   rail,
 }: {
   active: string | null;
   inbox: number;
+  /** เคลมที่ยังรอตรวจ — ป้ายข้างเมนูประวัติเคลม */
+  claims?: number;
   onPick: (it: Item) => void;
   /** แถบไอคอนตอนเมนูหด — ไม่มีชื่อ ไม่มีหัวกลุ่ม */
   rail?: boolean;
@@ -310,6 +346,7 @@ function MenuContent({
             const shown = shut ? items.filter((it) => it.key === active) : items;
             // ตัวเลขกล่องงานต้องไม่หายไปกับกลุ่มที่ย่อ — ย้ายไปติดที่หัวกลุ่มแทน
             const hiddenBadge = shut && items.some((it) => it.badge && it.key !== active) ? inbox : 0;
+            const hiddenClaims = shut && items.some((it) => it.claims && it.key !== active) ? claims : 0;
             return (
             <View key={g.title}>
               {rail ? (
@@ -328,6 +365,7 @@ function MenuContent({
                       <Text style={styles.badgeText}>{hiddenBadge}</Text>
                     </View>
                   ) : null}
+                  {hiddenClaims ? <ClaimPill n={hiddenClaims} /> : null}
                   {shut ? <Text style={styles.groupCount}>{items.length}</Text> : null}
                   <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.sideDim} />
                 </TouchableOpacity>
@@ -335,6 +373,7 @@ function MenuContent({
               {shown.map((it) => {
                 const on = active === it.key;
                 const n = it.badge ? inbox : 0;
+                const waiting = it.claims ? claims : 0;
                 return (
                   <TouchableOpacity
                     key={it.key}
@@ -350,6 +389,10 @@ function MenuContent({
                         <View style={[styles.badge, styles.badgeRail, on && styles.badgeOn]}>
                           <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
                         </View>
+                      ) : waiting ? (
+                        <View style={[styles.badge, styles.badgeRail, styles.claimBadge]}>
+                          <Text style={[styles.badgeText, styles.claimText]}>{waiting}</Text>
+                        </View>
                       ) : null
                     ) : (
                     <>
@@ -362,6 +405,7 @@ function MenuContent({
                         <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
                       </View>
                     ) : null}
+                    {waiting ? <ClaimPill n={waiting} /> : null}
                     </>
                     )}
                   </TouchableOpacity>
@@ -391,6 +435,30 @@ function MenuContent({
 }
 
 /**
+ * ตัวเลข "รอตรวจ" ข้างเมนูประวัติเคลม — ถามเฉพาะตำแหน่งที่เห็นเมนูนี้ (ช่าง/Area Team ไม่ยิงคำขอที่ได้ 403 ทุกหน้า)
+ * หัวหน้าภาคได้เฉพาะใบในขอบเขตตัวเอง (เซิร์ฟเวอร์กรอง) · สลับดูในฐานะคนอื่นแล้วตำแหน่งเปลี่ยน ตัวเลขต้องเปลี่ยนตาม
+ */
+function useClaimsWaiting(): [number, () => void] {
+  const { user } = useAuth();
+  const allowed = canSeeClaimHistory(user);
+  const allowedRef = useRef(allowed);
+  allowedRef.current = allowed;
+  const [n, setN] = useState(0);
+  const reload = useCallback(() => {
+    if (!allowedRef.current) {
+      setN(0);
+      return;
+    }
+    api
+      .get<{ pending: number }>("/part-claims/pending-count", { loadingText: false })
+      .then((r) => setN(r.data.pending))
+      .catch(() => undefined);
+  }, []);
+  // ไม่โหลดเองตอนสร้าง — เมนูค้างโหลดทุกครั้งที่เปลี่ยนหน้า (รวมครั้งแรก) เมนูเลื่อนออกโหลดตอนเปิด แบบเดียวกับตัวเลขกล่องงาน
+  return [n, reload];
+}
+
+/**
  * เมนูที่ค้างไว้ด้านซ้ายบนจอคอม
  *
  * ฟังการเปลี่ยนหน้าเองเพื่อย้ายแถบฟ้าตามหน้าที่เปิด และโหลดตัวเลขกล่องงานใหม่
@@ -400,6 +468,7 @@ export function DockedSideMenu() {
   const { collapsed: rail } = useDocked();
   const [active, setActive] = useState<string | null>(currentKey());
   const [inbox, setInbox] = useState(0);
+  const [claims, reloadClaims] = useClaimsWaiting();
   // ยืด/หดแบบค่อย ๆ ไม่ตัดฉับ ตามต้นแบบ — เห็นว่าเมนูไปไหน ไม่ใช่หายวับไป
   const width = useRef(new Animated.Value(rail ? RAIL_WIDTH : DOCK_WIDTH)).current;
   useEffect(() => {
@@ -412,17 +481,19 @@ export function DockedSideMenu() {
         .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
         .then((r) => setInbox(r.data.inbox))
         .catch(() => undefined);
+      // ตรวจเคลมเสร็จแล้วกลับมา ตัวเลขรอตรวจต้องลดทันทีแบบเดียวกับกล่องงาน
+      reloadClaims();
     };
     refresh();
     return navigationRef.addListener("state", refresh);
-  }, []);
+  }, [reloadClaims]);
   return (
     <Animated.View style={[styles.docked, { width }]}>
       <View style={[styles.dockHead, rail && styles.dockHeadRail]}>
         <MenuButton />
         {rail ? null : <Text style={styles.dockHeadText}>ย่อเมนู</Text>}
       </View>
-      <MenuContent active={active} inbox={inbox} onPick={navigateTo} rail={rail} />
+      <MenuContent active={active} inbox={inbox} claims={claims} onPick={navigateTo} rail={rail} />
     </Animated.View>
   );
 }
@@ -433,6 +504,7 @@ export default function SideMenu() {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [inbox, setInbox] = useState(0);
+  const [claims, reloadClaims] = useClaimsWaiting();
   const [active, setActive] = useState<string | null>(null);
   const x = useRef(new Animated.Value(-WIDTH)).current;
 
@@ -473,12 +545,13 @@ export default function SideMenu() {
         .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
         .then((r) => setInbox(r.data.inbox))
         .catch(() => undefined);
+      reloadClaims();
     }
     // เปิดแบบสปริงตามนิ้ว ปิดเร่งออกเร็ว ๆ — จังหวะเดียวกับหน้าต่างอื่นในแอป (utils/motion)
     (open ? spring(x, 0, "push") : timing(x, -WIDTH, 220, EXIT_EASE)).start(({ finished }) => {
       if (finished && !open) setMounted(false);
     });
-  }, [open, x]);
+  }, [open, x, reloadClaims]);
 
   // แถบขอบจออยู่ตลอด ตำแหน่งเดิมในต้นไม้เสมอ — ถ้าถูกถอดตอนแผงโผล่ นิ้วที่กำลังลากจะหลุดกลางทาง
   const edge = <EdgeCatcher x={x} onMount={() => setMounted(true)} onSettle={settleFromEdge} />;
@@ -508,7 +581,7 @@ export default function SideMenu() {
         style={[styles.panel, { paddingTop: spacing.sm, transform: [{ translateX: x }] }]}
       >
         <PanelHead />
-        <MenuContent active={active} inbox={inbox} onPick={go} />
+        <MenuContent active={active} inbox={inbox} claims={claims} onPick={go} />
         <PanelTools onLeave={() => setOpen(false)} />
       </Animated.View>
     </View>
@@ -697,6 +770,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   badgeOn: { backgroundColor: "#fff" },
+  // เคลมรอตรวจ — เหลืองแบบป้าย "รอตรวจ" ในหน้าประวัติเคลม แยกจากแดงของกล่องงาน (คนละเรื่อง ไม่ใช่งานที่ค้างรอตัวเองเสมอไป)
+  claimBadge: { backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  claimText: { color: colors.warningInk },
+  claimPill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  claimPillText: { fontSize: 11.5, lineHeight: 16, fontWeight: "700", color: colors.warningInk },
   badgeText: { color: "#fff", fontSize: 12, lineHeight: 18, fontWeight: "700" },
   badgeTextOn: { color: colors.danger },
   foot: { marginTop: spacing.lg, padding: 14, borderRadius: 14, backgroundColor: colors.sideLine },
