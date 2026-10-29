@@ -28,7 +28,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   const viewAs = req.auth.viewAs;
   if (viewAs) {
     // คนที่ขอดูต้องยังมีสิทธิ์ดูคนนี้อยู่ — ถูกถอดสิทธิ์ (หรือคนที่ถูกดูถูกเลื่อนเป็นแอดมิน) ระหว่างดู
-    // ก็ต้องหยุดทันที ไม่ใช่รอครบชั่วโมง (แอดมินดูได้เฉพาะหัวหน้าภาค/ช่าง — ดู canViewAs)
+    // ก็ต้องหยุดทันที ไม่ใช่รอครบชั่วโมง (แอดมินดูได้เฉพาะหัวหน้าภาค/ช่าง/ทีม Area — ดู canViewAs)
     if (!canViewAs(await currentRole(viewAs.by), await currentRole(req.auth.userId))) {
       return res.status(401).json({ error: "สิทธิ์ดูในฐานะผู้ใช้อื่นถูกยกเลิกแล้ว", viewAsEnded: true });
     }
