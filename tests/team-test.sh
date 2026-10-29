@@ -8,6 +8,10 @@ A=$(login A001); S=$(login S001); T=$(login T001)
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# วันนัดเดียวใช้ทั้งไฟล์ — ลูกค้าคอนเฟิร์มวันเดิมต้องเป็น CONFIRMED ไม่ใช่เลื่อน
+D1=$(day 7)
 
 TECH=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)" | J 'd.technicians.find(t=>t.employeeCode==="T001").id')
 # ตั้งภาคให้หัวหน้าภาคตรงกับสาขาที่ทดสอบ ไม่งั้นลำดับการรันเทสต์มีผลต่อผลลัพธ์
@@ -30,17 +34,17 @@ ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); CODE=$(echo "$WO" | J 'd.or
 echo "  $CODE (id=$ID)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
 # จ่ายงานและวันเข้างานเป็นของหัวหน้าภาค ช่างแตะไม่ได้ไม่ว่าจะอยู่ทีมไหน
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $T)" -H 'Content-Type: application/json' -d '{"team":"กระบี่","scheduledAt":"2026-10-08"}')
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $T)" -H 'Content-Type: application/json' -d "{\"team\":\"กระบี่\",\"scheduledAt\":\"$D1\"}")
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงาน/นัดวันเองไม่ได้" || fail "ช่างยังจ่ายงานได้: $R"
 
 echo
 echo "═══ ทีมที่ไม่มีในทะเบียนต้องถูกปฏิเสธ"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"ทีมที่ไม่มีจริง","scheduledAt":"2026-10-08"}')
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"ทีมที่ไม่มีจริง\",\"scheduledAt\":\"$D1\"}")
 echo "$R" | grep -q "ไม่รู้จักทีม" && pass "ทีมมั่วถูกปฏิเสธ" || fail "รับทีมมั่ว: $R"
 
 echo
 echo "═══ จ่ายให้ทีมของสาขาเอง"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"team":"กระบี่","scheduledAt":"2026-10-08"}')
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"กระบี่\",\"scheduledAt\":\"$D1\"}")
 echo "$R" | J 'd.assignedTeam' | grep -q "กระบี่" && pass "จ่ายให้ทีมได้" || fail "จ่ายไม่ได้: $R"
 curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
@@ -109,7 +113,7 @@ TEAMS=$(curl -s localhost:4000/api/branches/teams -H "$(H $A)" | J 'd.map(t=>t.n
 OTHER=$(echo "$TEAMS" | tr '|' '\n' | grep -v "กระบี่" | head -1)
 if [ -n "$OTHER" ]; then
   # หัวหน้าภาคจ่ายให้ทีมไหนก็ได้ (เจ้าของงานขอ ต.ค. 69 — เดิมเฉพาะทีมที่ดูแล) และประวัติบอกว่าข้าม
-  R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\",\"scheduledAt\":\"2026-10-08\"}")
+  R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$OTHER\",\"scheduledAt\":\"$D1\"}")
   [ "$(psql "${DATABASE_URL%%\?*}" -Atc "select \"assignedTeam\" from \"WorkOrder\" where id=$ID2")" = "$OTHER" ] \
     && curl -s "localhost:4000/api/work-orders/$ID2" -H "$(H $A)" | J '"  ประวัติ: "+d.logs.find(l=>l.action==="ASSIGNED").note' | grep -q "ข้ามทีม" \
     && pass "หัวหน้าภาคจ่ายข้ามทีมได้ (ฐานข้อมูลเปลี่ยน) และประวัติบอกว่าข้าม" || fail "จ่ายข้ามทีมไม่ได้: $(echo "$R" | head -c 160)"

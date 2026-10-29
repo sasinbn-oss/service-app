@@ -79,7 +79,6 @@ import {
   ROLE_LABELS,
   WORK_ORDER_STAGE_ACTOR,
   WORK_ORDER_STAGE_ORDER,
-  TRANSFER_LEAD_DAYS,
   OFF_CATALOG_PREFIX,
   bangkokDay,
   bangkokDayRange,
@@ -456,38 +455,6 @@ function afterIssue(cur: { appointmentStatus: string | null; scheduledAt: Date |
   return cur.appointmentStatus === "CONFIRMED" && cur.scheduledAt ? "ASSIGNED" : "PARTS_CHECKED";
 }
 
-/** ตัวที่ยังต้องเบิก/โอนจากคลังอื่น — แอดมินบอกว่ามีที่คลังที่ไม่ใช่ 94 และยังไม่ได้เบิกหรือโอนมาถึง */
-function needsTransferPart(p: {
-  inStock: boolean | null;
-  warehouse: string | null;
-  requisitionNo: string | null;
-  transferredAt: Date | null;
-  sparePart: { offCatalog: boolean };
-}) {
-  return p.inStock === true && !p.sparePart.offCatalog && !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo && !p.transferredAt;
-}
-
-/**
- * วันแรกที่นัดเข้างานได้ — ของอยู่คลังอื่นต้องเผื่อเวลาเบิก/โอน (TRANSFER_LEAD_DAYS · เจ้าของงานกำหนด ต.ค. 69)
- * ไม่มีของต้องโอน = ไม่มีข้อจำกัด (null)
- */
-async function earliestVisit(id: number): Promise<{ day: string; warehouses: string[] } | null> {
-  const parts = await prisma.workOrderPart.findMany({
-    where: { workOrderId: id, kind: "WAITING" },
-    select: { inStock: true, warehouse: true, requisitionNo: true, transferredAt: true, sparePart: { select: { offCatalog: true } } },
-  });
-  const far = parts.filter(needsTransferPart);
-  if (far.length === 0) return null;
-  const day = bangkokDay(new Date(Date.now() + TRANSFER_LEAD_DAYS * 86_400_000));
-  return { day, warehouses: [...new Set(far.map((p) => p.warehouse!))] };
-}
-
-/** วันนัดเร็วกว่าที่ของโอนทัน — ข้อความบอกวันแรกที่นัดได้ (ส่งกลับเป็น 400) */
-function tooSoonText(visit: string, early: { day: string; warehouses: string[] } | null) {
-  if (!early || visit >= early.day) return null;
-  return `อะไหล่อยู่${early.warehouses.join(", ")} ต้องเบิก/โอนก่อน — นัดได้ตั้งแต่ ${visitText(early.day, null)} (ล่วงหน้า ${TRANSFER_LEAD_DAYS} วัน)`;
-}
-
 /**
  * เช็คอะไหล่ครบแล้วไปไหน — ต้องเสนอราคา → เสนอราคา · ไม่ต้อง → หัวหน้าภาคนัดวันเข้า
  *
@@ -847,7 +814,7 @@ const listSelect = {
  * ไม่ต้องเปิดใบงานก็รู้ว่าของพร้อมหรือยัง · ขั้นที่ป้ายไม่บอกอะไรเพิ่ม (ก่อนระบุอะไหล่ ช่างเข้างานแล้ว) = null
  *
  * CHECK รอแอดมินเช็ค · OUT อะไหล่หมด (มีวันคาดเข้าแยก) · READY ครบ ยังไม่เบิก (คลัง 94 นัดได้ทันที)
- * · TRANSFER ครบ แต่อยู่คลังอื่น ต้องโอน (นัดล่วงหน้า 7 วัน) · ISSUED เบิกแล้ว
+ * · TRANSFER ครบ แต่อยู่คลังอื่น ต้องโอน · ISSUED เบิกแล้ว
  */
 const PARTS_STATE_STAGES = new Set([
   "PARTS_SOURCING",
@@ -3382,6 +3349,8 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "บอกว่าต้องใช้อะไหล่ ต้องระบุอย่างน้อยหนึ่งรายการ" });
   }
   const assign = parsed.data.assign;
+  const pastAssign = assign ? pastVisitText(assign.scheduledAt) : null;
+  if (pastAssign) return res.status(400).json({ error: pastAssign });
   /**
    * ทุกอย่างที่ต้องอ่านก่อนตัดสิน อ่านพร้อมกันรอบเดียว ไม่ต่อคิวทีละอย่าง — ฐานข้อมูลอยู่ไกล
    * รอบละ ~0.23 วิ เดิมห้ารอบต่อกัน (เจ้าของงานถามว่าทำไมบันทึกช้า ต.ค. 69) · ไม่มีตัวไหนขึ้นต่อกัน
@@ -3541,7 +3510,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
  * มีครบ → เสนอราคา (ถ้าต้อง) หรือหัวหน้าภาคนัดวันเข้า · หมดบางตัว → ค้างที่ขั้นนี้จนของเข้าครบ
  * (เจ้าของงานเลือก — ไม่ส่งไปนัดพร้อมวันคาดว่าเข้า) · ของมาแล้วกดซ้ำด้วยผล "มีครบ" ("ของเข้าแล้ว ส่งนัด")
  *
- * มีของต้องบอกคลังด้วย — ของอยู่คลังอื่นต้องเผื่อเวลาโอน หัวหน้าภาคนัดได้ตั้งแต่ 7 วันข้างหน้า (earliestVisit)
+ * มีของต้องบอกคลังด้วย — ของอยู่คลังอื่นหัวหน้าภาคต้องเบิก/โอนเองหลังลูกค้าคอนเฟิร์ม (ป้าย TRANSFER)
  * มีบางตัว หมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ ใบนี้ไปนัดด้วยของที่มี (เหมือนขั้นเบิกเดิม)
  */
 const partsSourcingSchema = z.object({
@@ -3585,7 +3554,7 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
   for (const p of parts) {
     const r = result.get(p.sparePartId)!;
     if (!r.inStock || p.sparePart.offCatalog) continue;
-    // คลังบอกว่าต้องโอนไหม — หัวหน้าภาคนัดวันจากตรงนี้ (ของคลังอื่นนัดล่วงหน้า 7 วัน)
+    // คลังบอกว่าต้องโอนไหม — ของคลังอื่นหัวหน้าภาคต้องเบิก/โอนก่อนปล่อยงาน
     if (!r.warehouse) return res.status(400).json({ error: `${p.sparePart.partCode} มีของ — ต้องบอกด้วยว่าอยู่คลังไหน` });
     if (!WAREHOUSES.includes(r.warehouse as never)) return res.status(400).json({ error: `ไม่รู้จักคลัง "${r.warehouse}"` });
   }
@@ -4525,6 +4494,15 @@ async function teamNote(id: number, team: string, verb: string) {
  * ทีมต้องเป็นทีมที่มีอยู่จริงในทะเบียนสาขา ไม่ใช่ข้อความอะไรก็ได้ —
  * ทีมที่สะกดผิดคือใบงานที่ไม่มีใครเห็น เพราะไม่มีช่างคนไหนสังกัดทีมนั้น
  */
+/**
+ * วันนัดย้อนหลังไม่ได้ — นัดได้ตั้งแต่วันนี้ (เวลาไทย) เป็นต้นไป (เจ้าของงานกำหนด ต.ค. 69 แทนกฎ "ของอยู่คลังอื่นนัดล่วงหน้า 7 วัน"
+ * ที่ยกเลิกไป — หัวหน้าภาคกะเวลาโอนเอง) · ใช้กับทุกที่ที่เลือกวันนัด: จ่ายงาน · จ่ายพร้อมระบุอะไหล่ · ส่งตรวจหน้างาน · ลูกค้าขอเลื่อน
+ */
+function pastVisitText(date: string) {
+  const today = bangkokDay();
+  return date < today ? `วันนัดย้อนหลังไม่ได้ — นัดได้ตั้งแต่วันนี้ (${visitText(today, null)}) เป็นต้นไป` : null;
+}
+
 async function knownCmTeam(team: string) {
   // ทีม outsource ไม่มีสาขาประจำ แต่จ่ายงานให้ได้ (เจ้าของงานเพิ่ม ต.ค. 69)
   if ((await freshOutsource()).has(team)) return true;
@@ -4561,11 +4539,11 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
   // ทีมกับข้อความทีมไม่ขึ้นต่อกัน อ่านพร้อมกัน
-  const [known, teamText, early] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้"), earliestVisit(id)]);
+  // ของอยู่คลังอื่นนัดวันไหนก็ได้ — เคยบังคับล่วงหน้า 7 วันเผื่อโอน เจ้าของงานยกเลิก (ต.ค. 69) หัวหน้าภาคกะเวลาโอนเอง
+  const past = pastVisitText(scheduledAt);
+  if (past) return res.status(400).json({ error: past });
+  const [known, teamText] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้")]);
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
-  // ของอยู่คลังอื่น — เบิก/โอนหลังลูกค้าคอนเฟิร์ม นัดใกล้กว่านี้ของไม่ทันวันเข้างาน (เจ้าของงานกำหนด ต.ค. 69)
-  const soon = tooSoonText(scheduledAt, early);
-  if (soon) return res.status(400).json({ error: soon });
 
   // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
   // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
@@ -4628,11 +4606,9 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   const newTime = parsed.data.scheduledTime !== undefined ? parsed.data.scheduledTime : before.scheduledTime;
   if (!newDate) return res.status(400).json({ error: "ต้องระบุวันเข้างาน" });
   const moved = newDate !== oldDate || (newTime ?? null) !== (before.scheduledTime ?? null);
-  // ลูกค้าขอเลื่อนเข้ามาใกล้กว่าที่ของโอนทัน — กฎเดียวกับตอนหัวหน้าภาคนัด
-  if (!inspect && moved && newDate !== oldDate) {
-    const soon = tooSoonText(newDate, await earliestVisit(id));
-    if (soon) return res.status(400).json({ error: soon });
-  }
+  // เปลี่ยนวันเท่านั้นที่เช็ค — คอนเฟิร์มวันเดิมที่เลยมาแล้ว (โทรช้า) ไม่ใช่การนัดใหม่
+  const pastMove = newDate !== oldDate ? pastVisitText(newDate) : null;
+  if (pastMove) return res.status(400).json({ error: pastMove });
 
   const data = {
     status: next,
@@ -4850,6 +4826,8 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
   if (!cur) return;
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
+  const past = pastVisitText(scheduledAt);
+  if (past) return res.status(400).json({ error: past });
   if (!(await teamExists(team))) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
 
   const data = {

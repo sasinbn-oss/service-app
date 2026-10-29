@@ -14,6 +14,10 @@ fail() { echo "FAIL $1"; FAILED=1; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
 st() { DB "select status from \"WorkOrder\" where id=$1"; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# D1 วันที่หัวหน้าภาคเสนอเข้าตรวจ · D2 วันที่ลูกค้าขอเลื่อนมา (วันเดียวกับนัดเข้างานและบอร์ดแผนงาน) · D3/D4 ใบตรวจซ้ำ — วันติดกัน
+D1=$(day 5); D2=$(day 6); D3=$(day 7); D4=$(day 8)
 
 BR=$(curl -s "localhost:4000/api/branches?search=C0001" -H "$(H $A)" | J 'd[0].region+"|"+d[0].zone')
 REGION=${BR%%|*}; TEAM=${BR##*|}
@@ -35,7 +39,7 @@ CREATED=""
 echo "═══ ตรวจหน้างาน"
 ID=$(newwo INSPECT); CREATED="$CREATED $ID"
 [ "$(DB "select \"jobType\" from \"WorkOrder\" where id=$ID")" = "INSPECT" ] && pass "เปิดใบงานประเภทตรวจสอบหน้างานได้" || fail "ประเภทงานไม่ถูกบันทึก"
-POST $S "work-orders/$ID/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-03\",\"scheduledTime\":\"09:30\"}" >/dev/null
+POST $S "work-orders/$ID/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\",\"scheduledTime\":\"09:30\"}" >/dev/null
 [ "$(DB "select status||'|'||\"assignedTeam\"||'|'||\"scheduledTime\"||'|'||\"appointmentStatus\" from \"WorkOrder\" where id=$ID")" = "INSPECT_CONFIRM|$TEAM|09:30|PENDING" ] \
   && pass "หัวหน้าภาคส่งทีมไปตรวจ พร้อมวันเสนอ — ไปรอแอดมินนัดลูกค้าก่อน ยังไม่ถึงช่าง" || fail "ส่งตรวจไม่สำเร็จ: $(st $ID)"
 # ก่อนแอดมินนัด ช่างยังบันทึกผลตรวจไม่ได้ · ช่าง/หัวหน้าภาคนัดแทนไม่ได้
@@ -50,8 +54,8 @@ done
   && pass "ใบรอนัดตรวจขึ้นในกล่องงานของแอดมิน" || fail "ไม่อยู่ในกล่องงานแอดมิน"
 [ "$(curl -s "localhost:4000/api/work-orders?status=AWAITING_CONFIRM" -H "$(H $A)" | J 'String(d.rows.some(r=>r.id==='$ID'))')" = "true" ] \
   && pass "ชิป \"รอคอนเฟิร์มลูกค้า\" รวมใบรอนัดตรวจด้วย" || fail "ชิปรอคอนเฟิร์มไม่รวมนัดตรวจ"
-POST $A "work-orders/$ID/confirm-appointment" '{"scheduledAt":"2026-11-04","scheduledTime":"10:00"}' >/dev/null
-[ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"scheduledTime\"||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "INSPECT_DISPATCH|CONFIRMED|2026-11-04|10:00|$TEAM" ] \
+POST $A "work-orders/$ID/confirm-appointment" "{\"scheduledAt\":\"$D2\",\"scheduledTime\":\"10:00\"}" >/dev/null
+[ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"scheduledTime\"||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "INSPECT_DISPATCH|CONFIRMED|$D2|10:00|$TEAM" ] \
   && pass "แอดมินนัด (ลูกค้าขอเลื่อนวัน) แล้วกลับไปให้หัวหน้าภาคส่งช่าง — ยังไม่ถึงช่าง" || fail "นัดไม่สำเร็จ: $(st $ID)"
 DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='RESCHEDULED' and status='INSPECT_DISPATCH'" | grep -q "09:30.*10:00" \
   && pass "ประวัติบันทึกว่าเลื่อนนัดตรวจจากวันเสนอเป็นวันใหม่" || fail "ไม่มีประวัติเลื่อนนัดตรวจ"
@@ -64,7 +68,7 @@ echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่
 [ "$(curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $S)" | J 'String(d.rows.some(r=>r.id==='$ID'))')" = "true" ] \
   && pass "ใบรอส่งช่างตรวจขึ้นในกล่องงานของหัวหน้าภาค" || fail "ไม่อยู่ในกล่องงานหัวหน้าภาค"
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
-[ "$(DB "select status||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "INSPECTING|2026-11-04|$TEAM" ] \
+[ "$(DB "select status||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD')||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "INSPECTING|$D2|$TEAM" ] \
   && DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='DISPATCHED' and status='INSPECTING'" | grep -q "ส่งตรวจหน้างาน $TEAM" \
   && pass "หัวหน้าภาคส่งช่างเข้าตรวจ → ช่าง · ตรวจหน้างาน วันนัดคงเดิม มีประวัติ" || fail "ส่งช่างตรวจไม่สำเร็จ: $(st $ID)"
 R=$(POST $T "work-orders/$ID/inspection" '{"note":""}')
@@ -97,14 +101,14 @@ ID2=$(newwo INSPECT); CREATED="$CREATED $ID2"
 R=$(POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\"}")
 echo "$R" | grep -q "scheduledAt" && [ "$(st $ID2)" = "NEW" ] \
   && pass "ส่งตรวจโดยไม่ใส่วันเข้าตรวจไม่ได้ (บังคับวัน)" || fail "ส่งตรวจได้ทั้งที่ไม่มีวัน: $(echo $R|head -c 120)"
-POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-05\"}" >/dev/null
+POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D3\"}" >/dev/null
 POST $A "work-orders/$ID2/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID2/dispatch" '{}' >/dev/null
 for r in INSPECT_SITE INSPECT_PART; do UPI $ID2 "site-photo.png;type=image/png" $r >/dev/null; done
 UPI $ID2 "site-clip.mp4;type=video/mp4" INSPECT_VIDEO >/dev/null
 POST $T "work-orders/$ID2/inspection" '{"note":"รอบแรก"}' >/dev/null
 sleep 1
-POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-06\"}" >/dev/null
+POST $S "work-orders/$ID2/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D4\"}" >/dev/null
 POST $A "work-orders/$ID2/confirm-appointment" '{}' >/dev/null
 [ "$(st $ID2)" = "INSPECT_DISPATCH" ] && pass "ลูกค้าตกลงวันที่หัวหน้าภาคเสนอ แอดมินกดคอนเฟิร์มได้เลย" || fail "คอนเฟิร์มวันเสนอไม่ได้: $(st $ID2)"
 POST $S "work-orders/$ID2/dispatch" '{}' >/dev/null
@@ -117,9 +121,9 @@ echo "═══ หัวหน้าภาคนัดวัน → แอด�
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 [ "$(st $ID)" = "PARTS_CHECKED" ] && pass "ของครบแล้วไปหัวหน้าภาค · นัดวันเข้า" || fail "ไม่ได้ไปรอนัดวัน: $(st $ID)"
-R=$(POST $T "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-04\"}")
+R=$(POST $T "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D2\"}")
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงานเองไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R|head -c 120)"
-POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-04\",\"scheduledTime\":\"10:00\"}" >/dev/null
+POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D2\",\"scheduledTime\":\"10:00\"}" >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"assignedTeam\"||'|'||\"scheduledTime\" from \"WorkOrder\" where id=$ID")" = "AWAITING_CONFIRM|PENDING|$TEAM|10:00" ] \
   && pass "จ่ายงานพร้อมวันเวลา แล้วไปแอดมิน · คอนเฟิร์มลูกค้า" || fail "จ่ายงานไม่สำเร็จ: $(st $ID)"
 ABY() { curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.appointmentBy?d.appointmentBy.name:"-"'; }
@@ -129,7 +133,7 @@ R=$(POST $T "work-orders/$ID/confirm-appointment" '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างกดคอนเฟิร์มแทนไม่ได้" || fail "ช่างคอนเฟิร์มได้: $(echo $R|head -c 120)"
 R=$(POST $S "work-orders/$ID/confirm-appointment" '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "หัวหน้าภาคกดคอนเฟิร์มแทนแอดมินไม่ได้" || fail "หัวหน้าภาคคอนเฟิร์มได้: $(echo $R|head -c 120)"
-POST $A "work-orders/$ID/confirm-appointment" '{"scheduledAt":"2026-11-04","scheduledTime":"13:30"}' >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" "{\"scheduledAt\":\"$D2\",\"scheduledTime\":\"13:30\"}" >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"scheduledTime\" from \"WorkOrder\" where id=$ID")" = "PARTS_REQUESTED|CONFIRMED|13:30" ] \
   && pass "ลูกค้าขอเลื่อนเวลา แอดมินเปลี่ยนได้เลย แล้วไปเบิกอะไหล่" || fail "คอนเฟิร์มไม่สำเร็จ: $(st $ID)"
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL1\"}]}" >/dev/null
@@ -146,14 +150,14 @@ POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 
 echo
 echo "═══ บอร์ดแผนงาน"
-R=$(curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $T)")
+R=$(curl -s "localhost:4000/api/plans/day?date=$D2" -H "$(H $T)")
 echo "$R" | grep -q "เฉพาะแอดมินกับหัวหน้าภาค" && pass "ช่างเปิดบอร์ดไม่ได้" || fail "ช่างเปิดบอร์ดได้"
 VID=$(DB "select id from \"Vehicle\" order by id limit 1")
 R=$(curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
-  -d "{\"date\":\"2026-11-04\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$TID]}")
-[ "$(DB "select count(*) from \"TeamDayPlanMember\" m join \"TeamDayPlan\" p on p.id=m.\"planId\" where p.team='$TEAM' and p.date='2026-11-04' and p.\"plannedById\"=$SID")" = "1" ] \
+  -d "{\"date\":\"$D2\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$TID]}")
+[ "$(DB "select count(*) from \"TeamDayPlanMember\" m join \"TeamDayPlan\" p on p.id=m.\"planId\" where p.team='$TEAM' and p.date='$D2' and p.\"plannedById\"=$SID")" = "1" ] \
   && pass "หัวหน้าภาคจัดคนลงแผนได้ และบันทึกว่าใครจัด" || fail "จัดแผนไม่สำเร็จ: $R"
-R=$(curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $S)")
+R=$(curl -s "localhost:4000/api/plans/day?date=$D2" -H "$(H $S)")
 echo "$R" | J "const l=d.lanes.find(x=>x.team==='$TEAM'); l&&l.stops.some(s=>s.id===$ID&&s.time==='13:30')&&l.plan.members.length===1?'ok':'bad'" | grep -q ok \
   && pass "บอร์ดโชว์ใบงานในทีม พร้อมเวลา และคนที่ไป" || fail "บอร์ดไม่ตรง: $(echo $R|head -c 200)"
 # ฟอร์มจัดแผนของหัวหน้าภาคต้องมีแต่ทีมของตัวเอง — ทีมอื่นบันทึกไม่ได้อยู่แล้ว ให้เลือกได้คือหลอกให้เสียเวลา
@@ -161,18 +165,18 @@ MINE=$(DB "select string_agg(distinct z,',' order by z) from (select zone z from
 GOT=$(echo "$R" | J '[...d.plannableTeams].sort().join(",")')
 [ "$(echo "$MINE" | tr ',' '\n' | sort | paste -sd,)" = "$GOT" ] && ! echo "$GOT" | tr ',' '\n' | grep -qx "$(DB "select zone from \"Branch\" where coalesce(region,'')<>'$REGION' and zone is not null and zone not in (select zone from \"Branch\" where region='$REGION' and zone is not null) limit 1")" \
   && pass "ทีมให้เลือกในฟอร์มจัดแผน = ทีมในภาคของหัวหน้าภาคเท่านั้น ($GOT)" || fail "ทีมในฟอร์ม '$GOT' ≠ ทีมในภาค '$MINE'"
-curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $A)" | J 'd.plannableTeams===null?"ok":"bad"' | grep -q ok \
+curl -s "localhost:4000/api/plans/day?date=$D2" -H "$(H $A)" | J 'd.plannableTeams===null?"ok":"bad"' | grep -q ok \
   && pass "แอดมินเลือกได้ทุกทีม (plannableTeams = null)" || fail "แอดมินถูกจำกัดทีม"
-curl -s "localhost:4000/api/plans/month?month=2026-11" -H "$(H $A)" | J 'd.days["2026-11-04"]>=1?"ok":"bad"' | grep -q ok \
+curl -s "localhost:4000/api/plans/month?month=${D2:0:7}" -H "$(H $A)" | J "d.days['$D2']>=1?'ok':'bad'" | grep -q ok \
   && pass "ปฏิทินเดือนนับวันที่มีแผน" || fail "ปฏิทินไม่มีจุด"
 # เวลาเข้าหน้างานของทีม
 R=$(curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
-  -d "{\"date\":\"2026-11-04\",\"team\":\"$TEAM\",\"memberIds\":[$TID],\"startTime\":\"25:00\"}")
+  -d "{\"date\":\"$D2\",\"team\":\"$TEAM\",\"memberIds\":[$TID],\"startTime\":\"25:00\"}")
 echo "$R" | grep -q "ชั่วโมง:นาที" && pass "เวลาเข้าหน้างานผิดรูปแบบ ถูกปฏิเสธเป็นภาษาไทย" || fail "รับเวลาผิด: $(echo $R|head -c 120)"
 curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
-  -d "{\"date\":\"2026-11-04\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$TID],\"startTime\":\"08:30\"}" >/dev/null
-[ "$(DB "select \"startTime\" from \"TeamDayPlan\" where team='$TEAM' and date='2026-11-04'")" = "08:30" ] \
-  && curl -s "localhost:4000/api/plans/day?date=2026-11-04" -H "$(H $S)" | J "d.lanes.find(x=>x.team==='$TEAM').plan.startTime" | grep -q "08:30" \
+  -d "{\"date\":\"$D2\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$TID],\"startTime\":\"08:30\"}" >/dev/null
+[ "$(DB "select \"startTime\" from \"TeamDayPlan\" where team='$TEAM' and date='$D2'")" = "08:30" ] \
+  && curl -s "localhost:4000/api/plans/day?date=$D2" -H "$(H $S)" | J "d.lanes.find(x=>x.team==='$TEAM').plan.startTime" | grep -q "08:30" \
   && pass "บันทึกเวลาเข้าหน้างาน 08:30 และบอร์ดส่งกลับมา" || fail "เวลาเข้าหน้างานไม่ถูกบันทึก"
 
 echo
@@ -223,7 +227,7 @@ echo
 echo "═══ เข้าหน้างานแล้วอะไหล่ไม่ครบ — เปิดใบรออะไหล่ต่อ"
 R=$(POST $T "work-orders/$ID2/follow-up" "{\"parts\":[{\"sparePartId\":$P2,\"quantity\":1}]}")
 echo "$R" | grep -q "ยังไม่ถึงขั้นเข้าหน้างาน" && pass "ก่อนนัดวันยังเปิดใบต่อไม่ได้" || fail "เปิดใบต่อได้ก่อนเข้าหน้างาน"
-POST $S "work-orders/$ID2/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-11-05\"}" >/dev/null
+POST $S "work-orders/$ID2/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D3\"}" >/dev/null
 POST $A "work-orders/$ID2/confirm-appointment" '{}' >/dev/null
 POST $A "work-orders/$ID2/parts-check" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-PL2\"}]}" >/dev/null
 POST $S "work-orders/$ID2/dispatch" '{}' >/dev/null
@@ -236,6 +240,6 @@ CH2=$(echo "$R" | J 'd.createdChild?d.createdChild.id:""')
 echo
 # เก็บกวาด — ลบใบงานที่สร้าง แผนที่จัด และคืนค่าทีม/ภาคของผู้ใช้ทดสอบ
 for x in $CREATED; do curl -s -X DELETE "localhost:4000/api/work-orders/$x" -H "$(H $A)" >/dev/null; done
-DB "delete from \"TeamDayPlan\" where date='2026-11-04' and team='$TEAM'" >/dev/null
+DB "delete from \"TeamDayPlan\" where date='$D2' and team='$TEAM'" >/dev/null
 DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID; update \"User\" set team=nullif('$OLD_TEAM','') where id=$TID" >/dev/null
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

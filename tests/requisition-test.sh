@@ -8,6 +8,10 @@ A=$(login A001); S=$(login S001); T=$(login T001)
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# วันนัดของทั้งสองใบ (ใบเบิกอะไหล่ · ใบไม่ใช้อะไหล่)
+D1=$(day 7)
 
 PARTS=$(curl -s "localhost:4000/api/spare-parts?search=SP-" -H "$(H $A)")
 BOARD_ID=$(echo "$PARTS" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BOARD").id')
@@ -38,7 +42,7 @@ R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H 
 echo "$R" | J 'd.statusLabel' | grep -q "นัดวันเข้า" && pass "เช็คอะไหล่ครบ (ยังไม่เบิก) → หัวหน้าภาคนัดวันเข้า" || fail "หลังเช็คอะไหล่: $R"
 echo "$R" | J 'd.waitingParts.every(p=>p.inStock===true&&!p.requisitionNo)?"ok":"bad"' | grep -q ok \
   && pass "ขั้นเช็คไม่ตัดของ — ยังไม่มีเลขใบเบิก" || fail "ขั้นเช็คมีเลขใบเบิกติดมา"
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
 echo "$R" | J 'd.statusLabel' | grep -q "เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วไปขั้นแอดมินเบิกอะไหล่" || fail "หลังคอนเฟิร์ม: $(echo "$R" | J 'd.statusLabel')"
 
@@ -95,7 +99,7 @@ WO2=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Ty
   -d '{"branchCode":"C0006","jobType":"PM","priority":"NORMAL","machines":[{"symptom":"ตรวจตามรอบ"}]}')
 ID2=$(echo "$WO2" | J 'd.orders?d.orders[0].id:d.id')
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-02\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID2/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID2/attachments" -H "$(H $T)" \
