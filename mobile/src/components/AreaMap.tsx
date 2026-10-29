@@ -2,15 +2,16 @@
  * ผังผู้ดูแลฝั่ง Area — Area → Supervisor (COCO) → สาขา COCO · Maid (COCO) ใต้คนที่ถือสาขา (เจ้าของงานขอ ต.ค. 69 · ตามตัวอย่างที่ตกลง)
  *
  * หน้าตา (ตัวอย่างรอบสอง ต.ค. 69 — ผังเดิมใหญ่ดูยาก ไม่มีแถบเลื่อน ต้องเลื่อนไปล่างสุด และไม่มี Maid):
- * - ดูภาพรวมก่อน: การ์ด Area เรียงเป็นตาราง กดการ์ดไหนกาง Supervisor (COCO) + Maid (COCO) ของ Area นั้นใต้แถวของการ์ด
- *   ไม่มีผังกิ่งไม้ที่ต้องเลื่อนข้าง — 11 Area × ~14 คนวางเรียงกันเป็นคอลัมน์ยาวจนหาใครไม่เจอ
- * - แถบเครื่องมือติดบนสุดตลอด (ค้นหา · ผัง/ตาราง · กาง/ย่อทั้งหมด · ขนาด · แก้ไข) · แถบเลื่อนเห็นตลอดบนเว็บ · ปุ่มกลับขึ้นบน
+ * - ดูภาพรวมก่อน: การ์ด Area เรียงแถวเดียวในแถบเลื่อนซ้าย-ขวา (ปุ่ม ‹ › · "เห็น 1–5 จาก 11") กดการ์ด = ดู Supervisor (COCO)
+ *   + Maid (COCO) ของ Area นั้นใต้แถบ (ทีละ Area แบบแท็บ · "กางทั้งหมด" ดูหลาย Area) — ไม่มีผังกิ่งไม้ที่ต้องเลื่อนข้าง
+ *   รอบแรกเป็นตารางหลายแถว แผงที่กางแทรกระหว่างแถว Area แถวหลังเลยไปอยู่ล่างสุด เจ้าของงานงง จึงเปลี่ยนเป็นแถบ (ต.ค. 69)
+ * - แถบเครื่องมือ + แถบ Area ติดบนสุดตลอด (ค้นหา · ผัง/ตาราง · กาง/ย่อทั้งหมด · ขนาด · แก้ไข) · แถบเลื่อนเห็นตลอดบนเว็บ · ปุ่มกลับขึ้นบน
  * - ค้นหา: บอกจำนวนที่พบ ไล่ทีละอันได้ (Enter / ‹ ›) · กาง Area ที่พบให้เอง · รหัสสาขาตรงตัวขึ้น "คำตอบด่วน" พร้อมเบอร์
  * - Maid (COCO) ไม่ใช่ผู้ดูแลสาขา จึงลากไม่ได้ — ขึ้นใต้คนที่ถือสาขาที่ Maid ประจำ ย้ายสาขาแล้ว Maid ย้ายตามเอง
  *
  * ทุกคนเปิดดูได้ (ช่าง/หัวหน้าภาครู้ว่าสาขา COCO ไหนต้องโทรหาใคร) · แก้ได้เฉพาะแอดมินและ Area — เซิร์ฟเวอร์เช็คซ้ำ
  * ลาก/แตะแบบเดียวกับผังฝ่ายบริการ:
- * - ชื่อ Supervisor → การ์ด Area / ชื่อในแถว "ย้ายไป Area" หรือแถบ "ยังไม่มี Area"
+ * - ชื่อ Supervisor → การ์ด Area ในแถบ หรือแถบ "ยังไม่มี Area"
  * - รหัสสาขา → Supervisor คนอื่น (หรือ Area ที่ดูแลสาขาเอง) หรือแถบ "สาขาไม่มีผู้ดูแล"
  *   วางรหัสสาขาบนการ์ด Area = กาง Area นั้นให้เลือกคน ไม่ได้ยกสาขาให้คน Area (เคยเป็นแบบนั้น แล้วสาขาไปอยู่กับ Area โดยไม่ตั้งใจ)
  * - "ย้ายสาขาทั้งหมด" (คนลาออก) แบบดูแลแทนชั่วคราว = จำว่าเป็นของใคร มีคนใหม่แล้ว "ส่งต่อ" ได้ทีเดียว
@@ -116,7 +117,7 @@ function writeUi(p: UiPrefs) {
  * Chrome ที่ตั้ง scrollbar-color แล้วจะไม่ใช้ ::-webkit-scrollbar จึงใส่ scrollbar-color ให้เฉพาะเบราว์เซอร์ที่ไม่มี (Firefox)
  */
 let scrollbarCss: HTMLStyleElement | null = null;
-function markScrollable(node: HTMLElement | undefined | null) {
+function markScrollable(node: HTMLElement | undefined | null, cls: "am-scroll" | "am-strip" = "am-scroll") {
   if (!web || !node || typeof document === "undefined") return;
   if (!scrollbarCss) {
     scrollbarCss = document.createElement("style");
@@ -125,10 +126,15 @@ function markScrollable(node: HTMLElement | undefined | null) {
       `.am-scroll::-webkit-scrollbar-track{background:${colors.sky50};border-left:1px solid ${colors.border}}` +
       `.am-scroll::-webkit-scrollbar-thumb{background:${colors.borderStrong};border-radius:999px;border:2px solid ${colors.sky50}}` +
       `.am-scroll::-webkit-scrollbar-thumb:hover{background:${colors.textFaint}}` +
-      `@supports not selector(::-webkit-scrollbar){.am-scroll{scrollbar-width:auto;scrollbar-color:${colors.borderStrong} ${colors.sky50}}}`;
+      // แถบ Area: แถบเลื่อนแนวนอนหนาพอให้เห็นว่ายังมีการ์ดทางขวา (เจ้าของงานขอแถบเลื่อน ต.ค. 69)
+      `.am-strip::-webkit-scrollbar{height:10px}` +
+      `.am-strip::-webkit-scrollbar-track{background:${colors.sky50};border-radius:999px}` +
+      `.am-strip::-webkit-scrollbar-thumb{background:${colors.textFaint};border-radius:999px}` +
+      `.am-strip::-webkit-scrollbar-thumb:hover{background:${colors.textMuted}}` +
+      `@supports not selector(::-webkit-scrollbar){.am-scroll,.am-strip{scrollbar-width:auto;scrollbar-color:${colors.borderStrong} ${colors.sky50}}}`;
     document.head.appendChild(scrollbarCss);
   }
-  node.classList.add("am-scroll");
+  node.classList.add(cls);
 }
 
 // ── ลาก/วาง (แบบเดียวกับผังฝ่ายบริการ: เว็บลากได้ · มือถือแตะแล้วแตะ) ─────────
@@ -592,6 +598,8 @@ export default function AreaMap({
   // หน้าตาผัง — Area ที่กางไว้ (null = ยังไม่ได้ตั้งตามคนที่เปิด) · Area ที่ผู้ใช้กดย่อเองระหว่างค้นหา · ขนาด
   const [openIds, setOpenIds] = useState<Set<number> | null>(null);
   const [closed, setClosed] = useState<Set<number>>(new Set());
+  // Area ที่ผู้ใช้เปิดเองระหว่างค้นหา — Area ที่ดูค้างไว้ก่อนค้นแต่ไม่มีผลค้นหา ซ่อนไว้ก่อน (ล้างคำค้นแล้วกลับมา)
+  const [searchOpen, setSearchOpen] = useState<Set<number>>(new Set());
   const [zoom, setZoom] = useState(() => {
     const z = readUi().z;
     return typeof z === "number" && z >= 0 && z < DENSITY.length ? z : 1;
@@ -611,6 +619,12 @@ export default function AreaMap({
   const pendingScroll = useRef<string | null>(null);
   const curKeyRef = useRef<string | null>(null);
   const quickSig = useRef("");
+  // แถบ Area เลื่อนซ้าย-ขวา — ตำแหน่ง/ความกว้างไว้คำนวณ "เห็น 1–5 จาก 11" และปุ่ม ‹ ›
+  const stripRef = useRef<ScrollView>(null);
+  const [strip, setStrip] = useState({ x: 0, w: 0, cw: 0 });
+  const stripGeo = useRef<{ tw: number; ids: number[] }>({ tw: 200, ids: [] });
+  const revealRef = useRef<number | null>(null);
+  const lastQ = useRef("");
 
   const setEditing = (v: boolean) => {
     setEditingRaw(v);
@@ -669,6 +683,9 @@ export default function AreaMap({
     const init = new Set(ids.length <= 3 ? ids : Array.isArray(stored) ? stored.filter((id) => ids.includes(id)) : []);
     myAreas.forEach((a) => init.add(a));
     setOpenIds(init);
+    // Area ที่กางอยู่ไกลทางขวาของแถบ — เลื่อนแถบให้เห็นการ์ดของมัน ไม่งั้นไม่รู้ว่ากำลังดู Area ไหน
+    const first = ids.find((id) => init.has(id));
+    if (first) revealRef.current = first;
   }, [data, openIds, myAreas]);
   useEffect(() => {
     if (openIds) writeUi({ z: zoom, open: [...openIds] });
@@ -676,6 +693,21 @@ export default function AreaMap({
 
   useEffect(() => {
     markScrollable((scrollRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.());
+    markScrollable((stripRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.(), "am-strip");
+  });
+
+  // เลื่อนแถบ Area ให้เห็นการ์ดที่เพิ่งถูกเลือกให้ (ค้นหา · ไล่ผล · แสดงในผัง · เปิดครั้งแรก) — เห็นอยู่แล้วไม่ขยับ
+  // รอจนรู้ความกว้างแถบก่อน (วาดรอบแรกยังเป็น 0)
+  useEffect(() => {
+    const id = revealRef.current;
+    if (id == null || !strip.w) return;
+    revealRef.current = null;
+    const { tw, ids } = stripGeo.current;
+    const i = ids.indexOf(id);
+    if (i < 0) return;
+    const x0 = i * (tw + GAP);
+    if (x0 >= strip.x && x0 + tw <= strip.x + strip.w) return;
+    stripRef.current?.scrollTo({ x: Math.max(0, x0 - (strip.w - tw) / 2), animated: true });
   });
 
   // เลื่อนไปที่ element หลังวาดเสร็จ — ไล่ผลค้นหา · คำตอบด่วน · แสดงในผัง · ถาดสาขาไม่มีผู้ดูแล
@@ -711,23 +743,34 @@ export default function AreaMap({
     if (!web || !dragging) return;
     const node = (scrollRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.();
     if (!node) return;
+    const stripNode = (stripRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.();
     let speed = 0;
+    let hspeed = 0;
     let frame = 0;
     let last = 0;
     const ZONE = 80;
     const over = (e: DragEvent) => {
       last = Date.now();
       const r = node.getBoundingClientRect();
-      // แถบเครื่องมือติดบนสุดบังขอบบน — นับโซนเลื่อนขึ้นจากใต้แถบ
+      // แถบเครื่องมือ (มีแถบ Area) ติดบนสุด — โซนเลื่อนขึ้นอยู่ใต้แถบ ไม่ใช่บนแถบ ไม่งั้นลากไปวางบนการ์ด Area แล้วหน้าวิ่งขึ้น
       const top = r.top + toolbarH.current;
       const dock = domOf(dockRef);
       const bottom = Math.min(r.bottom, dock ? dock.getBoundingClientRect().top : r.bottom);
       const y = e.clientY;
-      speed = y < top + ZONE ? -Math.ceil((top + ZONE - y) / 4) : y > bottom - ZONE && y < bottom ? Math.ceil((y - (bottom - ZONE)) / 4) : 0;
+      speed = y >= top && y < top + ZONE ? -Math.ceil((top + ZONE - y) / 4) : y > bottom - ZONE && y < bottom ? Math.ceil((y - (bottom - ZONE)) / 4) : 0;
+      // ลากค้างใกล้ขอบซ้าย/ขวาของแถบ Area — แถบเลื่อนเอง ไปหา Area ที่อยู่นอกจอ
+      hspeed = 0;
+      const s = stripNode?.getBoundingClientRect();
+      if (s && y >= s.top && y <= s.bottom) {
+        const x = e.clientX;
+        if (x < s.left + 60) hspeed = -Math.ceil((s.left + 60 - x) / 3);
+        else if (x > s.right - 60) hspeed = Math.ceil((x - (s.right - 60)) / 3);
+      }
     };
     const tick = () => {
-      if (Date.now() - last > 500) speed = 0;
+      if (Date.now() - last > 500) speed = hspeed = 0;
       if (speed) node.scrollTop += speed;
+      if (hspeed && stripNode) stripNode.scrollLeft += hspeed;
       frame = requestAnimationFrame(tick);
     };
     document.addEventListener("dragover", over);
@@ -757,6 +800,7 @@ export default function AreaMap({
 
   const openArea = useCallback((id: number) => {
     setOpenIds((s) => new Set(s ?? []).add(id));
+    setSearchOpen((s) => (s.has(id) ? s : new Set(s).add(id)));
     setClosed((s) => {
       if (!s.has(id)) return s;
       const n = new Set(s);
@@ -983,7 +1027,7 @@ export default function AreaMap({
 
   // Area ที่กางอยู่จริง = ที่ผู้ใช้กาง + ตอนค้นหากาง 2 Area แรกที่พบให้ + Area ของผลที่กำลังดู
   // เลือก 2 Area แรกก่อนแล้วค่อยตัดที่ผู้ใช้กดย่อเอง — ย่ออันหนึ่งแล้วไม่ไปกาง Area ที่ 3 แทน และกดย่อ Area ของผลปัจจุบันได้จริง
-  const effOpen = new Set(openIds ?? []);
+  const effOpen = new Set([...(openIds ?? [])].filter((id) => !searching || (areaHitN.get(id) ?? 0) > 0 || searchOpen.has(id)));
   if (searching) {
     areas
       .filter((a) => (areaHitN.get(a.id) ?? 0) > 0)
@@ -1002,6 +1046,20 @@ export default function AreaMap({
     });
     setClosed((s) => new Set(s).add(id));
   };
+  // กดการ์ดในแถบ = ดู Area นั้นแทนอันที่เปิดอยู่ (แบบแท็บ · ตามตัวอย่างที่ตกลง) — การ์ดอยู่แถวเดียวแล้ว ถ้ากางซ้อนกันไปเรื่อย ๆ
+  // ต้องเลื่อนหาว่าแผงไหนของ Area ไหน · กดซ้ำ = ย่อ · อยากดูหลาย Area ใช้ "กางทั้งหมด"
+  const selectArea = (id: number) => {
+    if (effOpen.has(id) && effOpen.size === 1) return toggleArea(id);
+    setOpenIds(new Set([id]));
+    setSearchOpen(new Set([id]));
+    setClosed(new Set(areas.filter((a) => a.id !== id).map((a) => a.id)));
+  };
+  // ค้นหาใหม่ → เลื่อนแถบไปหา Area แรกที่พบ (อาจอยู่นอกจอทางขวา)
+  if (q !== lastQ.current) {
+    lastQ.current = q;
+    const firstHit = areas.find((a) => (areaHitN.get(a.id) ?? 0) > 0);
+    if (firstHit) revealRef.current = firstHit.id;
+  }
   const allOpen = areas.length > 0 && areas.every((a) => effOpen.has(a.id));
   const toggleAll = () => {
     if (allOpen) {
@@ -1009,6 +1067,7 @@ export default function AreaMap({
       setClosed(new Set(areas.map((a) => a.id)));
     } else {
       setOpenIds(new Set(areas.map((a) => a.id)));
+      setSearchOpen(new Set(areas.map((a) => a.id)));
       setClosed(new Set());
     }
   };
@@ -1017,6 +1076,7 @@ export default function AreaMap({
     setHitIdx(0);
     setShowAll(false);
     setClosed(new Set());
+    setSearchOpen(new Set());
   };
   const step = (dir: number) => {
     if (!hits.length) return;
@@ -1024,6 +1084,7 @@ export default function AreaMap({
     if (view !== "chart") setView("chart");
     const next = hits[(((hitPos + dir) % hits.length) + hits.length) % hits.length];
     if (next.area && closed.has(next.area)) openArea(next.area);
+    if (next.area) revealRef.current = next.area;
     pendingScroll.current = "cur";
     setHitIdx((i) => i + dir);
   };
@@ -1094,15 +1155,18 @@ export default function AreaMap({
   }
   const showIn = (item: QuickItem) => {
     if (view !== "chart") setView("chart");
-    if (item.area) openArea(item.area);
+    if (item.area) {
+      openArea(item.area);
+      revealRef.current = item.area;
+    }
     if (searching && !showAll) setShowAll(true);
     scrollToEl(item.target);
   };
 
   // ── ขนาดคอลัมน์ (ตามความกว้างจริงของพื้นที่ผัง) ──
   const W = bodyW || Math.max(320, width - 64);
-  const tileCols = narrow ? 1 : Math.max(2, Math.min(8, Math.floor((W + GAP) / (dens.tileMin + GAP))));
-  const tileW = narrow ? W : Math.floor((W - (tileCols - 1) * GAP) / tileCols);
+  const tileW = Math.round((narrow ? 150 : dens.tileMin + 16) * (narrow ? k : 1));
+  stripGeo.current = { tw: tileW, ids: areas.map((a) => a.id) };
   const panelInner = W - 2 * 14 - 2;
   const supCols = narrow ? 1 : Math.max(1, Math.floor((panelInner + GAP) / (dens.supMin + GAP)));
   // มือถือ: การ์ดเต็มความกว้างเสมอ — ปล่อยให้กว้างตามเนื้อหา การ์ดที่มีหลายสาขาล้นจอ ปุ่มโทรหลุดขอบ (กล่องเลื่อนตั้งซ่อนแนวนอน)
@@ -1196,7 +1260,7 @@ export default function AreaMap({
     );
   };
 
-  // การ์ด Area — กดกาง/ย่อ · ระหว่างแก้ไขเป็นที่วางชื่อ Supervisor (ลากรหัสสาขาค้างไว้ = กาง)
+  // การ์ด Area ในแถบเลื่อน — กดดู/ย่อ · ระหว่างแก้ไขเป็นที่วางชื่อ Supervisor (ลากรหัสสาขาค้างไว้ = เปิด Area นั้น)
   const tile = (a: AreaPerson) => {
     const st = areaStats(a);
     const open = effOpen.has(a.id);
@@ -1209,84 +1273,51 @@ export default function AreaMap({
         setGrab(null);
         return drop(g, { kind: "area", id: a.id });
       }
-      toggleArea(a.id);
+      selectArea(a.id);
     };
-    const badges = (
-      <View style={styles.badges}>
-        {st.maids ? <Text style={[styles.badge, styles.badgeMaid, { fontSize: 11.5 * k }]}>Maid {st.maids}</Text> : null}
-        {st.open ? <Text style={[styles.badge, styles.badgeOpen, { fontSize: 11.5 * k }]}>ค้าง {st.open}</Text> : null}
-        {mine ? <Text style={[styles.badge, styles.badgeMine, { fontSize: 11.5 * k }]}>Area ของคุณ</Text> : null}
-      </View>
-    );
-    const av = Math.round(34 * k);
-    const avatar = (
-      <View style={[styles.av, styles.avArea, { width: av, height: av, borderRadius: av / 2 }]}>
-        <Text style={[styles.avText, { fontSize: 14 * k }]}>{ini(a.name)}</Text>
-      </View>
-    );
-    const counts = `${st.sups} Supervisor · ${fmt(st.codes)} สาขา`;
+    const av = Math.round((narrow ? 26 : 30) * k);
     return (
       <Drop
         key={a.id}
         zone={{ kind: "area", id: a.id }}
-        outer={narrow ? fullW : { width: tileW }}
+        outer={{ width: tileW }}
         nativeID={`am-t${a.id}`}
-        style={[narrow ? styles.rowTile : styles.tile, open && styles.tileOpen, mine && styles.tileMine, fade && styles.fade]}
+        style={[styles.tile, open && styles.tileOpen, mine && styles.tileMine, fade && styles.fade]}
         label={`หัว Area ${a.name}`}
         onDwell={() => openArea(a.id)}
       >
-        {narrow ? (
-          <View style={styles.rowTileIn}>
-            <TouchableOpacity
-              style={styles.rowTilePress}
-              onPress={press}
-              accessibilityLabel={`${open ? "ย่อ" : "กางดู"} Area ${a.name}`}
-              accessibilityState={{ expanded: open }}
-            >
-              {avatar}
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <Text style={[styles.tileName, { fontSize: 14.5 * k }]}>{a.name}</Text>
-                <Text style={[styles.tileMeta, { fontSize: 12 * k }]}>{counts}</Text>
-                {badges}
+        <TouchableOpacity
+          onPress={press}
+          style={[styles.tilePress, narrow && styles.tilePressNarrow]}
+          accessibilityLabel={`${open ? "ย่อ" : "กางดู"} Area ${a.name}`}
+          accessibilityState={{ expanded: open }}
+        >
+          <View style={styles.tileTop}>
+            {narrow ? null : (
+              <View style={[styles.av, styles.avArea, { width: av, height: av, borderRadius: av / 2 }]}>
+                <Text style={[styles.avText, { fontSize: 13 * k }]}>{ini(a.name)}</Text>
               </View>
-              {n ? <Text style={styles.hitBadgeInline}>พบ {n}</Text> : null}
-              <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.navy} />
-            </TouchableOpacity>
-            {a.phone && !editing ? <CallButton phone={a.phone} name={a.name} /> : null}
+            )}
+            <Text style={[styles.tileName, { fontSize: (narrow ? 13 : 13.5) * k, lineHeight: (narrow ? 17 : 18) * k }]} numberOfLines={2}>
+              {a.name}
+            </Text>
           </View>
-        ) : (
-          <TouchableOpacity
-            onPress={press}
-            style={styles.tilePress}
-            accessibilityLabel={`${open ? "ย่อ" : "กางดู"} Area ${a.name}`}
-            accessibilityState={{ expanded: open }}
-          >
-            <View style={styles.tileTop}>
-              {avatar}
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[styles.tileName, { fontSize: 14 * k }]} numberOfLines={2}>
-                  {a.name}
-                </Text>
-                <Text style={[styles.tileMeta, { fontSize: 11.5 * k }]}>Area · {a.code}</Text>
-              </View>
-              <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.navy} />
-            </View>
-            {a.phone ? (
-              <View style={styles.tilePhone}>
-                <Ionicons name="call" size={Math.round(11 * k)} color={colors.primaryInk} />
-                <Text style={[styles.tilePhoneText, { fontSize: 12.5 * k }]}>{a.phone}</Text>
-              </View>
-            ) : null}
-            <Text style={[styles.tileCounts, { fontSize: 12.5 * k }]}>{counts}</Text>
-            {badges}
-            {n ? <Text style={styles.hitBadge}>พบ {n}</Text> : null}
-          </TouchableOpacity>
-        )}
+          <Text style={[styles.tileCounts, { fontSize: (narrow ? 11.5 : 12) * k }]}>
+            {st.sups} Supervisor · {fmt(st.codes)} สาขา
+          </Text>
+          <View style={styles.badges}>
+            {n ? <Text style={[styles.badge, styles.badgeHit, { fontSize: 11 * k }]}>พบ {n}</Text> : null}
+            {st.open ? <Text style={[styles.badge, styles.badgeOpen, { fontSize: 11 * k }]}>ค้าง {st.open}</Text> : null}
+            {st.maids ? <Text style={[styles.badge, styles.badgeMaid, { fontSize: 11 * k }]}>Maid {st.maids}</Text> : null}
+            {mine ? <Text style={[styles.badge, styles.badgeMine, { fontSize: 11 * k }]}>Area ของคุณ</Text> : null}
+            {open ? <Text style={[styles.badge, styles.badgeOn, { fontSize: 11 * k }]}>กำลังดู ▾</Text> : null}
+          </View>
+        </TouchableOpacity>
       </Drop>
     );
   };
 
-  const panel = (a: AreaPerson, notchLeft: number | null) => {
+  const panel = (a: AreaPerson) => {
     const ss = supsOf(a.id);
     let shownSups = ss;
     let hidden = 0;
@@ -1299,7 +1330,6 @@ export default function AreaMap({
     const maids = maidItemsOf(a.id).map((x) => ({ ...x, cur: curKey === x.key }));
     return (
       <View key={`panel${a.id}`} style={styles.panel}>
-        {notchLeft !== null ? <View style={[styles.notch, { left: notchLeft }]} /> : null}
         <View style={styles.panelHead}>
           <Drop
             zone={{ kind: "holder", id: a.id }}
@@ -1342,8 +1372,63 @@ export default function AreaMap({
     );
   };
 
-  const rows: AreaPerson[][] = [];
-  for (let i = 0; i < areas.length; i += tileCols) rows.push(areas.slice(i, i + tileCols));
+  // แถบ Area: แถวเดียวเลื่อนซ้าย-ขวา (เจ้าของงานขอ ต.ค. 69 — แบบตารางหลายแถว แผงที่กางแทรกระหว่างแถว Area ที่เหลือเลยไปอยู่ล่างสุด)
+  const span = tileW + GAP;
+  const fits = strip.cw <= strip.w + 2;
+  const atStart = strip.x < 4;
+  const atEnd = fits || strip.x + strip.w >= strip.cw - 4;
+  const firstSeen = Math.min(areas.length, Math.floor((strip.x + 4) / span) + 1);
+  const lastSeen = Math.max(firstSeen, Math.min(areas.length, Math.floor((strip.x + strip.w + 4) / span)));
+  const rangeText = !strip.w || fits ? `${areas.length} Area` : `เห็น ${firstSeen}–${lastSeen} จาก ${areas.length}${atEnd ? "" : " · เลื่อนดูเพิ่ม →"}`;
+  const moveStrip = (dir: number) =>
+    stripRef.current?.scrollTo({ x: Math.max(0, Math.min(strip.cw - strip.w, strip.x + dir * Math.max(span, strip.w - tileW))), animated: true });
+  const stripBlock =
+    view === "chart" && areas.length ? (
+      <View style={styles.stripWrap}>
+        <View style={styles.stripHead}>
+          <Text style={styles.stripT}>{narrow ? `Area ${areas.length} คน` : `Area ทั้งหมด ${areas.length} คน`}</Text>
+          {!narrow ? (
+            <Text style={styles.stripS}>
+              {editing ? "ลากรหัสสาขาไปค้างบนการ์ด Area = เปิด Area นั้น · วางชื่อ Supervisor บนการ์ด = ย้ายไป Area นั้น" : "เลื่อนซ้าย-ขวาเพื่อดูครบ · กดการ์ดเพื่อดู Supervisor (COCO) และ Maid (COCO)"}
+            </Text>
+          ) : null}
+          <View style={{ flex: 1 }} />
+          <Text style={styles.stripRange} accessibilityLiveRegion="polite">
+            {narrow && !fits && strip.w ? rangeText.replace("เลื่อนดูเพิ่ม", "ปัดดูเพิ่ม") : rangeText}
+          </Text>
+        </View>
+        <View style={styles.stripRow}>
+          {!narrow ? (
+            <TouchableOpacity style={[styles.stripBtn, atStart && styles.stripBtnOff]} onPress={() => moveStrip(-1)} disabled={atStart} accessibilityLabel="เลื่อนแถบ Area ไปทางซ้าย">
+              <Ionicons name="chevron-back" size={18} color={atStart ? colors.borderStrong : colors.navy} />
+            </TouchableOpacity>
+          ) : null}
+          <ScrollView
+            ref={stripRef}
+            horizontal
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.stripContent}
+            onScroll={(e) => {
+              const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+              setStrip({ x: contentOffset.x, w: layoutMeasurement.width, cw: contentSize.width });
+            }}
+            scrollEventThrottle={50}
+            onLayout={(e) => {
+              const w = e.nativeEvent.layout.width;
+              setStrip((st) => (st.w === w ? st : { ...st, w }));
+            }}
+            onContentSizeChange={(cw) => setStrip((st) => (st.cw === cw ? st : { ...st, cw }))}
+          >
+            {areas.map(tile)}
+          </ScrollView>
+          {!narrow ? (
+            <TouchableOpacity style={[styles.stripBtn, atEnd && styles.stripBtnOff]} onPress={() => moveStrip(1)} disabled={atEnd} accessibilityLabel="เลื่อนแถบ Area ไปทางขวา">
+              <Ionicons name="chevron-forward" size={18} color={atEnd ? colors.borderStrong : colors.navy} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+    ) : null;
 
   const legend = (
     <View style={styles.legend}>
@@ -1367,25 +1452,18 @@ export default function AreaMap({
     </View>
   );
 
+  const openList = areas.filter((a) => effOpen.has(a.id));
   const overview = (
-    <View>
-      <View style={styles.caption}>
-        <Text style={styles.captionT}>Area ทั้งหมด {areas.length} คน</Text>
-        <Text style={styles.captionS}>
-          {searching
-            ? "กาง Area ที่พบให้แล้ว · Area อื่นจางลง"
-            : editing
-              ? "ลากรหัสสาขาไปค้างบนการ์ด Area = กาง Area นั้น แล้ววางที่การ์ด Supervisor ที่จะรับ"
-              : "กดการ์ดเพื่อกางดู Supervisor (COCO) และ Maid (COCO) ของ Area นั้น · กางได้หลาย Area พร้อมกัน"}
-        </Text>
-      </View>
+    <View style={{ gap: 16 }}>
       {!areas.length ? <Text style={[styles.none, { paddingVertical: 12 }]}>ยังไม่มีบัญชี Area — นำเข้าไฟล์ Area Team หรือสร้างที่หน้าสิทธิ์ผู้ใช้</Text> : null}
-      {rows.map((row, ri) => (
-        <View key={ri} style={{ marginBottom: GAP }}>
-          <View style={styles.tileRow}>{row.map(tile)}</View>
-          {row.map((a, i) => (effOpen.has(a.id) ? panel(a, narrow ? null : i * (tileW + GAP) + tileW / 2 - 9) : null))}
+      {areas.length && !openList.length ? (
+        <View style={styles.pickHint}>
+          <Text style={styles.pickHintText}>
+            {searching ? "ไม่พบใน Area ใด — ลองค้นด้วยรหัสสาขา ชื่อ หรือเบอร์อื่น" : "กดการ์ด Area ในแถบด้านบน เพื่อดู Supervisor (COCO) และ Maid (COCO) ของ Area นั้น"}
+          </Text>
         </View>
-      ))}
+      ) : null}
+      {openList.map((a) => panel(a))}
 
       {/* คนที่ยังไม่มี Area / ลาออกแต่ยังถือสาขา ต้องยังหาเจอในผัง — คนเปิดผังมาหาเบอร์ของ Supervisor คนนั้น */}
       {(freeSups.length || leftHolders.length) && (!searching || showAll || [...freeSups, ...leftHolders].some(supHit)) ? (
@@ -1534,17 +1612,9 @@ export default function AreaMap({
   const editRow = (
     <View style={styles.editRow}>
       <Text style={styles.editbandText}>
-        โหมดแก้ไข — {web ? "ลากชื่อหรือรหัสสาขา หรือคลิกแล้วคลิก" : "แตะชื่อหรือรหัสสาขา แล้วแตะ"}ปลายทาง · ชื่อ Supervisor → การ์ด Area หรือชื่อด้านล่าง · รหัสสาขา → การ์ด
+        โหมดแก้ไข — {web ? "ลากชื่อหรือรหัสสาขา หรือคลิกแล้วคลิก" : "แตะชื่อหรือรหัสสาขา แล้วแตะ"}ปลายทาง · ชื่อ Supervisor → การ์ด Area ในแถบ · รหัสสาขา → การ์ด
         Supervisor · Maid (COCO) ย้ายตามสาขาเอง · ยังไม่บันทึกจนกด “บันทึก”
       </Text>
-      <View style={styles.areaDrops}>
-        <Text style={styles.areaDropsLabel}>ย้ายไป Area:</Text>
-        {areas.map((a) => (
-          <Drop key={a.id} zone={{ kind: "area", id: a.id }} style={styles.areaDrop} label={`ย้ายไป Area ${a.name}`} onDwell={() => openArea(a.id)}>
-            <Text style={styles.areaDropText}>{a.name}</Text>
-          </Drop>
-        ))}
-      </View>
     </View>
   );
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -1663,11 +1733,13 @@ export default function AreaMap({
               </View>
               {!narrow && view === "chart" ? legend : null}
               {!narrow && editing ? editRow : null}
+              {/* แถบ Area ติดบนสุดด้วย — เลื่อนลงไปดู Supervisor แล้วเปลี่ยน Area ได้ทันที และระหว่างแก้ไขการ์ดในแถบคือที่วางที่เห็นตลอด */}
+              {stripBlock}
             </View>
 
             {/* [2] ผัง/ตาราง */}
             <View style={styles.body} onLayout={(e) => setBodyW(Math.round(e.nativeEvent.layout.width))}>
-              {/* มือถือ: ติดบนสุดแค่ช่องค้นหา — ปุ่มทั้งหมดติดด้วยกินจอไปครึ่งหนึ่ง */}
+              {/* มือถือ: ติดบนสุดแค่ช่องค้นหากับแถบ Area — ปุ่มอื่นติดด้วยกินจอไปครึ่งหนึ่ง */}
               {narrow ? (
                 <View style={styles.narrowTools}>
                   <View style={styles.toolRow}>{controls}</View>
@@ -1897,10 +1969,6 @@ const styles = StyleSheet.create({
   editText: { fontWeight: "700", color: colors.navy, fontSize: 13.5 },
   editRow: { gap: 8, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder, borderRadius: 8, padding: 10 },
   editbandText: { color: colors.warningInk, fontSize: 13, lineHeight: 20 },
-  areaDrops: { flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" },
-  areaDropsLabel: { fontSize: 13, fontWeight: "700", color: colors.warningInk },
-  areaDrop: { borderWidth: 1, borderStyle: "dashed", borderColor: colors.primary, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: colors.card },
-  areaDropText: { fontSize: 12.5, fontWeight: "600", color: colors.navy },
   legend: { flexDirection: "row", flexWrap: "wrap", gap: 16, rowGap: 6, alignItems: "center", paddingVertical: 2 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   legendText: { fontSize: 12, color: colors.textMuted },
@@ -1925,9 +1993,6 @@ const styles = StyleSheet.create({
   body: { paddingTop: 16 },
   sheetGap: { marginBottom: 12 },
   narrowTools: { gap: 10, marginBottom: 14 },
-  caption: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 10 },
-  captionT: { fontSize: 15, fontWeight: "700", color: colors.text },
-  captionS: { fontSize: 12.5, color: colors.textMuted, flexShrink: 1 },
 
   // คำตอบด่วน
   quick: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.primary, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, marginBottom: 16, gap: 8 },
@@ -1946,44 +2011,40 @@ const styles = StyleSheet.create({
   showBtn: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: colors.card, marginLeft: "auto" },
   showText: { fontSize: 13, fontWeight: "700", color: colors.navy },
 
+  // แถบ Area (เลื่อนซ้าย-ขวา)
+  stripWrap: { gap: 6, paddingTop: 2 },
+  stripHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", gap: 10 },
+  stripT: { fontSize: 14, fontWeight: "700", color: colors.text },
+  stripS: { fontSize: 12.5, color: colors.textMuted, flexShrink: 1 },
+  stripRange: { fontSize: 12.5, fontWeight: "700", color: colors.navy, fontVariant: ["tabular-nums"] },
+  stripRow: { flexDirection: "row", alignItems: "stretch", gap: 8 },
+  // เว้นล่างให้แถบเลื่อนแนวนอน (เว็บ) ไม่ทับการ์ด
+  stripContent: { gap: GAP, paddingVertical: 2, paddingHorizontal: 2, paddingBottom: 12 },
+  stripBtn: { width: 40, marginBottom: 14, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.card },
+  stripBtnOff: { backgroundColor: colors.rowAlt },
+  pickHint: { borderWidth: 1, borderStyle: "dashed", borderColor: colors.borderStrong, borderRadius: 12, padding: 24, alignItems: "center" },
+  pickHintText: { fontSize: 14, color: colors.textMuted, textAlign: "center" },
+
   // การ์ด Area
-  tileRow: { flexDirection: "row", flexWrap: "wrap", gap: GAP },
-  tile: { minHeight: 124, borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.card },
-  tilePress: { padding: 12, gap: 5, minHeight: 122 },
-  tileTop: { flexDirection: "row", alignItems: "center", gap: 10 },
+  tile: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.card },
+  tilePress: { paddingHorizontal: 12, paddingVertical: 10, gap: 4, minHeight: 92 },
+  tilePressNarrow: { paddingHorizontal: 10, paddingVertical: 8, minHeight: 74 },
+  tileTop: { flexDirection: "row", alignItems: "center", gap: 8 },
   tileOpen: { borderColor: colors.navy, borderWidth: 2, margin: -1, backgroundColor: colors.sky50 },
   tileMine: { borderColor: colors.roleArea, borderWidth: 2, margin: -1 },
-  tileName: { fontWeight: "700", color: colors.text },
-  tileMeta: { color: colors.textMuted },
-  tilePhone: { flexDirection: "row", alignItems: "center", gap: 4 },
-  tilePhoneText: { fontWeight: "700", color: colors.primaryInk, fontVariant: ["tabular-nums"] },
+  tileName: { flex: 1, minWidth: 0, fontWeight: "700", color: colors.text },
   tileCounts: { color: colors.body, fontVariant: ["tabular-nums"] },
-  rowTile: { borderWidth: 1, borderColor: colors.border, borderRadius: 12, backgroundColor: colors.card },
-  rowTileIn: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, paddingLeft: 12, paddingRight: 10 },
-  rowTilePress: { flex: 1, minHeight: 52, flexDirection: "row", alignItems: "center", gap: 10 },
-  badges: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  badge: { fontWeight: "700", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, overflow: "hidden" },
+  badges: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  badge: { fontWeight: "700", borderRadius: 999, paddingHorizontal: 7, paddingVertical: 1, overflow: "hidden" },
   badgeMaid: { color: colors.roleMaidInk, backgroundColor: colors.roleMaidSoft },
   badgeOpen: { color: colors.dangerInk, backgroundColor: colors.dangerSoft },
   badgeMine: { color: colors.roleArea, backgroundColor: colors.roleAreaSoft },
-  hitBadge: { position: "absolute", top: -9, right: 10, fontSize: 11.5, fontWeight: "700", color: "#78350F", backgroundColor: "#FCD34D", borderRadius: 999, paddingHorizontal: 9, paddingVertical: 1, overflow: "hidden" },
-  hitBadgeInline: { fontSize: 11.5, fontWeight: "700", color: "#78350F", backgroundColor: "#FCD34D", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, overflow: "hidden" },
+  badgeOn: { color: "#fff", backgroundColor: colors.navyFill },
+  badgeHit: { color: "#78350F", backgroundColor: "#FCD34D" },
   fade: { opacity: 0.45 },
 
   // แผง Area ที่กางอยู่
   panel: { marginTop: 16, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.roleAreaLine, borderTopWidth: 3, borderTopColor: colors.roleArea, borderRadius: 12, padding: 14, gap: 12 },
-  notch: {
-    position: "absolute",
-    top: -12,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 9,
-    borderRightWidth: 9,
-    borderBottomWidth: 9,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderBottomColor: colors.roleArea,
-  },
   panelHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: 12 },
   panelPerson: { gap: 8, borderRadius: 8, padding: 2 },
   closeBtn: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 40, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 8, paddingHorizontal: 12, backgroundColor: colors.card },
