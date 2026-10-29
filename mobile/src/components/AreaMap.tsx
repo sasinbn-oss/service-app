@@ -362,8 +362,13 @@ interface ChipEnv {
 }
 const ChipContext = createContext<ChipEnv>({ k: 1, hit: () => false, cur: null, maid: () => false, view: () => {} });
 
-function PersonRow({ p, meta, k, narrow, mine }: { p: AreaPerson; meta: string; k: number; narrow: boolean; mine?: boolean }) {
+/**
+ * แถวชื่อคน — ระหว่างแก้ไขเบอร์เป็นตัวหนังสือเฉย ๆ ไม่ใช่ปุ่มโทร: การ์ดทั้งใบเป็นที่วาง แตะกลางการ์ดแล้วไปโดนเบอร์
+ * กลายเป็นโทรออกแทนที่จะวางสาขา (เจอจากเทสต์ — ผังใหม่เบอร์อยู่กลางการ์ดพอดี)
+ */
+function PersonRow({ p, meta, k, narrow, mine, editing }: { p: AreaPerson; meta: string; k: number; narrow: boolean; mine?: boolean; editing?: boolean }) {
   const av = Math.round(32 * k);
+  const phone = p.phone && !p.left ? p.phone : null;
   return (
     <View style={styles.person}>
       <View style={[styles.av, { width: av, height: av, borderRadius: av / 2 }, p.role === "AREA" ? styles.avArea : styles.avCoco, p.left && styles.avLeft]}>
@@ -376,9 +381,10 @@ function PersonRow({ p, meta, k, narrow, mine }: { p: AreaPerson; meta: string; 
           {mine ? <Text style={styles.mine}> · คุณ</Text> : null}
         </Text>
         <Text style={[styles.pr, { fontSize: 11.5 * k, lineHeight: 17 * k }]}>{meta}</Text>
-        {p.phone && !p.left ? <PhoneLine phone={p.phone} name={p.name} size={12.5 * k} /> : null}
+        {phone && editing ? <Text style={[styles.phoneText, { fontSize: 12.5 * k }]}>{phone}</Text> : null}
+        {phone && !editing ? <PhoneLine phone={phone} name={p.name} size={12.5 * k} /> : null}
       </View>
-      {narrow && p.phone && !p.left ? <CallButton phone={p.phone} name={p.name} /> : null}
+      {narrow && phone && !editing ? <CallButton phone={phone} name={p.name} /> : null}
     </View>
   );
 }
@@ -410,9 +416,10 @@ function MaidBlock({ items, k, narrow, editing }: { items: MaidItem[]; k: number
               {x.mine ? <Text style={styles.mine}> · คุณ</Text> : null}
               <Text style={[styles.maidCodes, { fontSize: 11.5 * k }]}> · {x.codes.join(" · ")}</Text>
             </Text>
-            {x.maid.phone ? <PhoneLine phone={x.maid.phone} name={x.maid.name} size={12.5 * k} /> : null}
+            {x.maid.phone && editing ? <Text style={[styles.phoneText, { fontSize: 12.5 * k }]}>{x.maid.phone}</Text> : null}
+            {x.maid.phone && !editing ? <PhoneLine phone={x.maid.phone} name={x.maid.name} size={12.5 * k} /> : null}
           </View>
-          {narrow && x.maid.phone ? <CallButton phone={x.maid.phone} name={x.maid.name} /> : null}
+          {narrow && x.maid.phone && !editing ? <CallButton phone={x.maid.phone} name={x.maid.name} /> : null}
         </View>
       ))}
     </View>
@@ -630,18 +637,22 @@ export default function AreaMap({
   );
   useEffect(() => registerReload?.(load), [load]);
 
-  // Area ของคนที่เปิดผัง — Area ตัวเอง · Supervisor อยู่ใต้ Area ไหน · Maid ประจำสาขาของใคร
-  const myArea = useMemo(() => {
-    if (!data || !user) return null;
+  // Area ของคนที่เปิดผัง — Area ตัวเอง · Supervisor อยู่ใต้ Area ไหน · Maid ประจำสาขาของใคร (สาขาอยู่คนละ Area ได้ จึงเป็นหลาย Area)
+  const myAreas = useMemo(() => {
+    const out = new Set<number>();
+    if (!data || !user) return out;
     const p = data.people.find((x) => x.id === user.id && !x.left);
-    if (p?.role === "AREA") return p.id;
-    if (p?.role === "COCO_SUPERVISOR") return p.areaId;
-    if (user.role === "COCO_MAID") {
-      const b = data.branches.find((x) => x.maids?.includes(user.id) && x.holderId);
-      const h = b ? data.people.find((x) => x.id === b.holderId) : null;
-      return h ? (h.role === "AREA" ? h.id : h.areaId) : null;
+    if (p?.role === "AREA") out.add(p.id);
+    else if (p?.role === "COCO_SUPERVISOR" && p.areaId) out.add(p.areaId);
+    else if (user.role === "COCO_MAID") {
+      for (const b of data.branches) {
+        if (!b.holderId || !b.maids?.includes(user.id)) continue;
+        const h = data.people.find((x) => x.id === b.holderId);
+        const a = h ? (h.role === "AREA" ? h.id : h.areaId) : null;
+        if (a) out.add(a);
+      }
     }
-    return null;
+    return out;
   }, [data, user?.id, user?.role]);
 
   // เปิดครั้งแรก: ทีม Area เจอ Area ของตัวเองกางรอ · แอดมิน/ช่างเห็นภาพรวมก่อน · Area น้อย (≤3) กางหมด
@@ -649,10 +660,10 @@ export default function AreaMap({
     if (!data || openIds) return;
     const ids = data.people.filter((p) => p.role === "AREA" && !p.left).map((p) => p.id);
     const stored = readUi().open;
-    let init = ids.length <= 3 ? ids : Array.isArray(stored) ? stored.filter((id) => ids.includes(id)) : [];
-    if (myArea && !init.includes(myArea)) init = [...init, myArea];
-    setOpenIds(new Set(init));
-  }, [data, openIds, myArea]);
+    const init = new Set(ids.length <= 3 ? ids : Array.isArray(stored) ? stored.filter((id) => ids.includes(id)) : []);
+    myAreas.forEach((a) => init.add(a));
+    setOpenIds(init);
+  }, [data, openIds, myAreas]);
   useEffect(() => {
     if (openIds) writeUi({ z: zoom, open: [...openIds] });
   }, [zoom, openIds]);
@@ -1123,7 +1134,7 @@ export default function AreaMap({
         label={`Supervisor ${s.name}`}
       >
         <Draggable grab={{ kind: "SUP", id: s.id }} label={`Supervisor (COCO) ${s.name}`}>
-          <PersonRow p={s} meta={`Supervisor (COCO) · ${all.length} สาขา${openOf(all) ? ` · ค้าง ${openOf(all)}` : ""}`} k={k} narrow={narrow} mine={s.id === me} />
+          <PersonRow p={s} meta={`Supervisor (COCO) · ${all.length} สาขา${openOf(all) ? ` · ค้าง ${openOf(all)}` : ""}`} k={k} narrow={narrow} mine={s.id === me} editing={editing} />
         </Draggable>
         {own.length ? (
           <Chips
@@ -1152,7 +1163,7 @@ export default function AreaMap({
 
   const leftCard = (p: AreaPerson, w?: number) => (
     <View key={p.id} nativeID={`am-p${p.id}`} style={[styles.card, styles.leftCard, w ? { width: w } : null, personHit(p) && styles.ring, curKey === `p${p.id}` && styles.cur]}>
-      <PersonRow p={p} meta={`ลบบัญชีแล้ว · ยังถือ ${branchesOf(p.id).length} สาขา`} k={k} narrow={narrow} />
+      <PersonRow p={p} meta={`ลบบัญชีแล้ว · ยังถือ ${branchesOf(p.id).length} สาขา`} k={k} narrow={narrow} editing={editing} />
       <Chips codes={branchesOf(p.id)} byCode={byCode} />
       {editing ? (
         <TouchableOpacity style={styles.allBtn} onPress={() => setMoveAll(p.id)} accessibilityLabel={`ย้ายสาขาทั้งหมดของ ${p.name}`}>
@@ -1169,7 +1180,7 @@ export default function AreaMap({
     const open = effOpen.has(a.id);
     const n = areaHitN.get(a.id) ?? 0;
     const fade = searching && !n;
-    const mine = a.id === myArea;
+    const mine = myAreas.has(a.id);
     const press = () => {
       if (editing && grab) {
         const g = grab;
@@ -1281,6 +1292,7 @@ export default function AreaMap({
               k={k}
               narrow={narrow}
               mine={a.id === me}
+              editing={editing}
             />
             {own.length ? (
               <>
@@ -1973,6 +1985,7 @@ const styles = StyleSheet.create({
   avText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   pn: { fontSize: 13.5, fontWeight: "600", color: colors.text },
   pnLeft: { textDecorationLine: "line-through", color: colors.textMuted },
+  phoneText: { fontWeight: "700", color: colors.textMuted, fontVariant: ["tabular-nums"] },
   pr: { fontSize: 11.5, color: colors.textMuted, lineHeight: 17 },
   mine: { color: colors.roleArea, fontWeight: "700" },
   none: { fontSize: 12, color: colors.textMuted },
