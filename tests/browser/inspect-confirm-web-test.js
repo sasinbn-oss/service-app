@@ -115,11 +115,15 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
       // แถบขั้นตอน — ขั้นนัดและขั้นส่งช่างต้องไม่ถูกขีดฆ่า (ทำแล้วจริง ไม่ใช่ข้าม)
       const struck = await page.evaluate(() => {
         const card = document.querySelector('[aria-label="ขั้นตอนงาน"]');
-        const of = (t) => {
-          const n = card && [...card.querySelectorAll("*")].find((x) => !x.children.length && x.textContent.trim() === t);
+        // แถบแน่น (14 ขั้น) ขึ้นชื่อเฉพาะขั้นปัจจุบัน ขั้นที่ทำแล้วเหลือแต่วงกลม — ชื่อขั้นอยู่ใน aria-label ของวงกลมแทน
+        // ขั้นที่ถูกข้ามไปรวมอยู่ในป้าย "ข้าม n" ไม่มีวงกลมของตัวเอง เจอวงกลม = ไม่ได้ถูกข้าม
+        const of = (done, stage) => {
+          const n =
+            card &&
+            ([...card.querySelectorAll("*")].find((x) => !x.children.length && x.textContent.trim() === done) || card.querySelector(`[aria-label="${stage}"]`));
           return n ? getComputedStyle(n).textDecorationLine : "missing";
         };
-        return [of("นัดร้านแล้ว"), of("ส่งช่างตรวจแล้ว")];
+        return [of("นัดร้านแล้ว", "แอดมิน · นัดร้าน (ตรวจหน้างาน)"), of("ส่งช่างตรวจแล้ว", "หัวหน้าภาค · ส่งช่างตรวจ")];
       });
       struck.every((x) => x !== "missing" && !x.includes("line-through"))
         ? pass("แถบขั้นตอนมีขั้นนัดตรวจและขั้นส่งช่าง ขึ้นว่าทำแล้วทั้งคู่")

@@ -4,6 +4,7 @@
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const fs = require("fs");
 const path = require("path");
 const DIR = __dirname;
@@ -67,7 +68,7 @@ const login = async (code) =>
     await call(A, "POST", `/work-orders/${id}/parts-sourcing`, {
       results: [{ sparePartId: Number(sp), inStock: true, warehouse: "คลังลาดพร้าว 94" }],
     });
-    await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: "2026-11-10" });
+    await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: visitDay(12) });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(A, "POST", `/work-orders/${id}/parts-check`, {
       results: [{ sparePartId: Number(sp), inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-CW${suf}` }],

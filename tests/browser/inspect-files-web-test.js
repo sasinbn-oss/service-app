@@ -4,6 +4,7 @@
 //        · ตรวจเสร็จแล้วกรอบเหลือไว้ให้ดู — เช็คฐานข้อมูลทุกขั้น
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const fs = require("fs");
 const path = require("path");
 const DIR = __dirname;
@@ -52,7 +53,7 @@ const login = async (code) =>
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     // ส่งตรวจ → แอดมินนัดร้าน → หัวหน้าภาคส่งช่าง — ไม่ใช่เรื่องที่ทดสอบในชุดนี้ (ดู inspect-confirm-web-test.js)
-    await call(S, "POST", `/work-orders/${id}/inspect-request`, { team: "กระบี่", scheduledAt: "2026-11-10" });
+    await call(S, "POST", `/work-orders/${id}/inspect-request`, { team: "กระบี่", scheduledAt: visitDay(12) });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(S, "POST", `/work-orders/${id}/dispatch`, {});
     const code = sql(`select code from "WorkOrder" where id=${id}`);

@@ -6,6 +6,7 @@
 //        · เช็คสถานะที่ฐานข้อมูลทุกขั้น (CLAUDE.md) · ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const path = require("path");
 const DIR = __dirname;
 const API = "http://localhost:4000/api";
@@ -53,7 +54,7 @@ const login = async (code) =>
       });
       const id = wo.orders ? wo.orders[0].id : wo.id;
       ids.push(id);
-      await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: false, assign: { team, scheduledAt: "2026-11-20" } });
+      await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: false, assign: { team, scheduledAt: visitDay(22) } });
       return id;
     };
     const [a, b, c] = [await mk(1), await mk(2), await mk(3)];

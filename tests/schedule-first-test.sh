@@ -99,7 +99,7 @@ POST $A "work-orders/$WE/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$WF/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-PK-1\"},{\"sparePartId\":$BELT,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-PK-2\"}]}" >/dev/null
 [ "$(ST $WF)" = "PARTS_CHECKED" ] && pass "เบิกคลังอื่นเสร็จ ยังไม่ได้นัด → หัวหน้าภาคนัดวันเข้า" || fail "F หลังเบิก: $(ST $WF)"
 R=$(POST $S "work-orders/$WF/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 2)\"}")
-[ "$(ST $WF)" = "AWAITING_CONFIRM" ] && pass "เบิกมาแล้ว ไม่ต้องรอ 7 วัน นัดใกล้ได้" || fail "F นัดใกล้ไม่ได้: $(echo $R | head -c 150)"
+[ "$(ST $WF)" = "AWAITING_CONFIRM" ] && pass "เบิกคลังอื่นเสร็จแล้ว นัดวันเข้าได้ → รอคอนเฟิร์มลูกค้า" || fail "F นัดไม่ผ่าน: $(echo $R | head -c 150)"
 
 echo
 echo "═══ ทีมไม่ว่างวันที่ลูกค้าขอ → แอดมินคอนเฟิร์มใหม่ → ปล่อยงาน (ไม่กลับไปเบิก)"

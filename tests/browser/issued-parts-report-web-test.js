@@ -6,7 +6,7 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
-const { setup } = require("./fixture");
+const { setup, visitDay } = require("./fixture");
 
 (async () => {
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
@@ -24,11 +24,11 @@ const { setup } = require("./fixture");
     // a: เบิกแล้ว รอปล่อยงาน · b: ช่างเข้างาน เลยวันนัด 2 วัน · c: เช็คแล้ว ยังไม่เบิก (ไม่ขึ้น)
     const a = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
     await fx.source(a.id);
-    await fx.schedule(a.id, "2026-12-01");
+    await fx.schedule(a.id, visitDay(30));
     await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-check`, { results: [{ sparePartId: board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR1" }] });
     const b = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 2 }]);
     await fx.source(b.id);
-    await fx.schedule(b.id, "2026-12-02");
+    await fx.schedule(b.id, visitDay(31));
     await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-check`, { results: [{ sparePartId: board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR2" }] });
     await fx.call(fx.supervisor(), "POST", `/work-orders/${b.id}/dispatch`, {});
     fx.sql(`update "WorkOrder" set "scheduledAt"=(now() at time zone 'Asia/Bangkok')::date - 2 where id=${b.id}`);

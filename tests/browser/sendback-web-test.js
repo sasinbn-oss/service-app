@@ -5,7 +5,7 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
-const { setup } = require("./fixture");
+const { setup, visitDay } = require("./fixture");
 
 (async () => {
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
@@ -25,7 +25,7 @@ const { setup } = require("./fixture");
     const S = await fx.login("S001");
     // เช็คอะไหล่ → นัด → คอนเฟิร์ม → เบิก (นัดลูกค้าก่อนเบิก ต.ค. 69)
     await fx.source(wo.id);
-    await fx.call(S, "POST", `/work-orders/${wo.id}/assign`, { team, scheduledAt: "2026-11-10" });
+    await fx.call(S, "POST", `/work-orders/${wo.id}/assign`, { team, scheduledAt: visitDay(12) });
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/confirm-appointment`, {});
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-check`, {
       results: [{ sparePartId: board, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: "RQ-WSB" }],

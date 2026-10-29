@@ -3,7 +3,7 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
-const { setup } = require("./fixture");
+const { setup, visitDay } = require("./fixture");
 // ส่งเลขใบงานมาเองได้ ไม่ส่งก็สร้างใบที่ตรงเงื่อนไขให้: บอร์ดเบิกไปแล้ว (RQ-2569-0042) ช่างขอสายพานเพิ่ม
 // เช็คแล้วว่ามี ลูกค้าคอนเฟิร์มวันใหม่แล้ว → ถึงขั้นเบิกรอบสอง
 let WO = process.argv[2] || null;
@@ -51,7 +51,7 @@ let WO = process.argv[2] || null;
         needsParts: true, parts: [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }],
       });
       await fx.source(wo.id);
-      await fx.schedule(wo.id, "2026-12-03");
+      await fx.schedule(wo.id, visitDay(32));
       const st = fx.sql(`select status from "WorkOrder" where id=${wo.id}`);
       if (st !== "PARTS_REQUESTED") throw new Error(`เตรียมใบไม่ถึงขั้นเบิก: ${st}`);
       WO = wo.code;

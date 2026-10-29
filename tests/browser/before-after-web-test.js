@@ -4,6 +4,7 @@
 //        · การ์ดผลการทำงานวางก่อน | หลัง คู่กัน — เช็คฐานข้อมูลทุกขั้น
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
+const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const fs = require("fs");
 const path = require("path");
 const DIR = __dirname;
@@ -50,7 +51,7 @@ const login = async (code) =>
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: false });
-    await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: "2026-11-10" });
+    await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: visitDay(12) });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(S, "POST", `/work-orders/${id}/dispatch`, {});
     const np = new FormData();
