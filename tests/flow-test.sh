@@ -10,6 +10,10 @@ H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
 ws() { curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.statusLabel+" / "+(d.workStatusLabel||"—")'; }
+# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
+day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
+# D1 นัดรอบแรก · D2 นัดรอบสองหลังช่างส่งกลับ (วันถัดไป)
+D1=$(day 7); D2=$(day 8)
 
 BR=$(curl -s "localhost:4000/api/branches?search=C0001" -H "$(H $A)" | J 'd[0].region+"|"+d[0].zone')
 REGION=${BR%%|*}; TEAM=${BR##*|}
@@ -40,11 +44,11 @@ echo
 echo "═══ หัวหน้าภาคนัดวันเข้า → แอดมินคอนเฟิร์มลูกค้า → แอดมินเบิก → หัวหน้าภาคปล่อยงาน (นัดลูกค้าก่อนเบิก)"
 P() { curl -s -X POST "localhost:4000/api/work-orders/$ID/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 ws $ID | grep -q "หัวหน้าภาค · นัดวันเข้า" && pass "ของครบแล้วขึ้นว่าหัวหน้าภาค · นัดวันเข้า" || fail "ป้ายขั้นผิด: $(ws $ID)"
-R=$(P $T assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-20\"}")
+R=$(P $T assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}")
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่างจ่ายงานเองไม่ได้" || fail "ช่างจ่ายงานได้: $(echo $R | head -c 120)"
 R=$(P $S assign "{\"team\":\"$TEAM\"}")
 echo "$R" | grep -q "ต้องระบุวันเข้างาน" && pass "จ่ายงานต้องใส่วันเข้างานด้วย" || fail "จ่ายได้โดยไม่มีวัน: $(echo $R | head -c 120)"
-P $S assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-20\"}" >/dev/null
+P $S assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
 ws $ID | grep -q "แอดมิน · คอนเฟิร์มลูกค้า" && pass "จ่ายงานแล้วไปรอแอดมินโทรคอนเฟิร์มลูกค้า" || fail "ไม่ไปขั้นคอนเฟิร์ม: $(ws $ID)"
 R=$(P $S confirm-appointment '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "หัวหน้าภาคกดคอนเฟิร์มลูกค้าแทนแอดมินไม่ได้" || fail "หัวหน้าภาคคอนเฟิร์มได้: $(echo $R | head -c 120)"
@@ -78,7 +82,7 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"2026-10-21\"}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D2\"}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-002\"}]}" >/dev/null
