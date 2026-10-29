@@ -5,13 +5,14 @@
  * ส่งเซิร์ฟเวอร์ทีละไฟล์ — ไฟล์ที่มีรูปในเซลล์ใหญ่ได้หลายสิบ MB รวมกันคำขอเดียวเซิร์ฟเวอร์หน่วยความจำไม่พอ
  * ตอนอัปเดตส่งไฟล์เดิมอีกรอบ เซิร์ฟเวอร์อ่านใหม่ ไม่เชื่อรายการบนจอ (แบบนำเข้าอื่น)
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Image, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import AppModal from "./AppModal";
 import Spinner from "./Spinner";
 import FileDropZone, { DropHint } from "./FileDropZone";
+import axios from "axios";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
@@ -65,7 +66,19 @@ interface FileResult {
   notInFile: Gone[];
   codes?: string[];
   thumbs?: Record<string, string>;
+  /** ค่าทุกแถวของไฟล์ (หน้าตรวจเท่านั้น) — ใช้จำลองรหัสที่อยู่หลายไฟล์ */
+  rowValues?: Record<string, RowVal>;
 }
+interface RowVal {
+  line: number;
+  name: string;
+  brand: string;
+  category: string;
+  partNo: string;
+  hasImage: boolean;
+}
+const FIELDS = ["name", "brand", "category", "partNo"] as const;
+const FIELD_LABEL: Record<(typeof FIELDS)[number], string> = { name: "ชื่อ", brand: "ยี่ห้อ", category: "หมวดหมู่", partNo: "Part No." };
 /** ผลตรวจต่อไฟล์ — ไฟล์ที่อ่านไม่ได้เก็บข้อความไว้ ไฟล์อื่นยังอัปเดตได้ */
 /** upload = ไฟล์ที่ย่อรูปแล้ว — ตอนกดอัปเดตส่งไฟล์เดียวกับที่ตรวจ ไม่ย่อใหม่ */
 type Checked = { file: PickedFile; upload: PreparedSheet | null; result: FileResult | null; error: string | null };
@@ -131,14 +144,66 @@ async function send(file: PickedFile, upload: PreparedSheet, opts: { apply: bool
   ).data;
 }
 
+/** รายการที่จะเปลี่ยนจริง ต่อรหัส — file/thumb ไว้โชว์ว่ามาจากไฟล์ไหน */
+type Planned = { item: Item; file: string; thumb?: string };
+
 /**
- * รหัสเดียวกันอยู่หลายไฟล์ = ไฟล์ที่อัปเดตทีหลังทับ — นับเฉพาะรายการของไฟล์หลัง
- * (แต่ละไฟล์ตรวจแยกกันกับฐานข้อมูล ถ้าไม่หัก รหัสใหม่ตัวเดียวที่อยู่สองไฟล์นับเป็น "เพิ่ม 2")
+ * รายการที่จะเกิดจริงหลังอัปเดตทุกไฟล์ตามลำดับ
+ *
+ * แต่ละไฟล์ถูกเทียบกับฐานข้อมูลแยกกัน รหัสเดียวกันอยู่หลายไฟล์จึงนับซ้ำ ("เพิ่ม 2" ทั้งที่เพิ่มตัวเดียว)
+ * และ "ไฟล์หลังชนะ" ก็ไม่จริงเสมอ: ช่องว่างในไฟล์หลังคงค่าจากไฟล์ก่อน · ไฟล์หลังที่ตรงกับฐานข้อมูลเขียนค่ากลับ
+ * จึงจำลองเอง: ค่าในฐานข้อมูลรู้จาก diff (ค่าเดิม) หรือจากแถวที่ไม่ต่าง (= ค่าในฐานข้อมูล) แล้วไล่ทับตามลำดับไฟล์
+ * รูป: แทนรูป = รูปของไฟล์สุดท้ายที่มีรูปชนะ · เก็บรูปเดิม = ไฟล์แรกที่มีรูปเท่านั้นที่ใส่ได้ (ตอนนั้นยังไม่มีรูป)
  */
-function lastItems(results: FileResult[]) {
-  const last = new Map<string, Item>();
-  for (const r of results) for (const i of r.items) last.set(i.partCode, i);
-  return last;
+function plannedItems(results: FileResult[], replace: boolean): Planned[] {
+  const norm = (i: Item): Item => (i.image === "CHANGED" || i.image === "KEPT" ? { ...i, image: replace ? "CHANGED" : "KEPT" } : i);
+  const seqs = new Map<string, { r: FileResult; row?: RowVal; item?: Item }[]>();
+  for (const r of results) {
+    const items = new Map(r.items.map((i) => [i.partCode, i]));
+    for (const c of r.codes ?? []) seqs.set(c, [...(seqs.get(c) ?? []), { r, row: r.rowValues?.[c], item: items.get(c) }]);
+  }
+  const out: Planned[] = [];
+  for (const [code, seq] of seqs) {
+    const last = seq[seq.length - 1];
+    const thumb = [...seq].reverse().find((x) => x.r.thumbs?.[code])?.r.thumbs?.[code];
+    if (seq.length === 1) {
+      if (last.item) out.push({ item: norm(last.item), file: last.r.fileName, thumb });
+      continue;
+    }
+    const created = seq.some((x) => x.item?.action === "CREATE");
+    const db: Partial<Record<(typeof FIELDS)[number], string>> = {};
+    if (!created) {
+      for (const x of seq) {
+        for (const f of FIELDS) {
+          const d = x.item?.diffs.find((y) => y.field === f);
+          if (d) db[f] = d.from === "(ว่าง)" ? "" : d.from;
+          else if (x.row?.[f] && db[f] === undefined) db[f] = x.row[f];
+        }
+      }
+    }
+    const fin = { ...db };
+    for (const x of seq) for (const f of FIELDS) if (x.row?.[f]) fin[f] = x.row[f];
+    const diffs = created
+      ? []
+      : FIELDS.filter((f) => fin[f] !== undefined && fin[f] !== (db[f] ?? "")).map((f) => ({ field: f, label: FIELD_LABEL[f], from: db[f] || "(ว่าง)", to: fin[f]! }));
+    const withImg = seq.filter((x) => x.row?.hasImage);
+    let image: ImageState = null;
+    if (withImg.length) {
+      if (created) image = "NEW";
+      else {
+        const decisive = replace ? withImg[withImg.length - 1] : withImg[0];
+        image = decisive.item?.image ? norm(decisive.item).image : null;
+      }
+    }
+    const action: Action = created ? "CREATE" : diffs.length ? "UPDATE" : "SAME";
+    if (action === "SAME" && !image) continue;
+    out.push({
+      item: { line: last.row?.line ?? last.item?.line ?? 0, partCode: code, name: fin.name ?? last.row?.name ?? "", brand: fin.brand ?? "", partNo: fin.partNo ?? "", action, diffs, image },
+      file: seq.map((x) => x.r.fileName).join(" → "),
+      thumb,
+    });
+  }
+  return out;
 }
 
 /**
@@ -158,8 +223,8 @@ function goneOf(results: FileResult[]) {
 
 /** ตัวเลขรวมทุกไฟล์ — รูปที่เลือกเก็บไว้ไม่นับเป็นงานที่ต้องทำ */
 function totalsOf(results: FileResult[], replace: boolean) {
-  const all = [...lastItems(results).values()];
-  const img = (i: Item) => i.image === "NEW" || (i.image === "CHANGED" && replace) || (i.image === "KEPT" && replace);
+  const all = plannedItems(results, replace).map((p) => p.item);
+  const img = (i: Item) => i.image === "NEW" || i.image === "CHANGED";
   const work = all.filter((i) => i.action !== "SAME" || img(i)).length;
   const rows = new Set(results.flatMap((r) => r.codes ?? [])).size;
   return {
@@ -194,10 +259,24 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
     setApplyError(null);
   }
 
+  // กันกดซ้ำ — อ่านไฟล์ 200 MB ใช้เวลาเป็นวินาทีก่อนจะมีความคืบหน้าแรก ระหว่างนั้นปุ่มยังกดได้
+  const running = useRef(false);
+
   async function check(list: PickedFile[] = files) {
+    if (running.current || !list.length) return;
+    running.current = true;
+    try {
+      await checkFiles(list);
+    } finally {
+      running.current = false;
+    }
+  }
+
+  async function checkFiles(list: PickedFile[]) {
     const out: Checked[] = [];
     const id = newBatchId();
     setApplyError(null);
+    setProgress(`กำลังเปิด ${list[0].name}…`);
     for (let k = 0; k < list.length; k++) {
       const f = list[k];
       const at = `${f.name} (${k + 1}/${list.length})`;
@@ -210,13 +289,18 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
           )
         );
         if (upload.after > MAX_SHEET_BYTES) {
-          out.push({ file: f, upload, result: null, error: `ย่อรูปแล้วยังใหญ่ ${mb(upload.after)} (เกิน 50 MB) — แยกไฟล์ให้เล็กลง` });
+          const error = upload.shrunk
+            ? `ย่อรูปแล้วยังใหญ่ ${mb(upload.after)} (เกิน 50 MB) — แยกไฟล์ให้เล็กลง`
+            : `ไฟล์ใหญ่ ${mb(upload.after)} (เกิน 50 MB) และไม่มีรูปที่ย่อได้ — แยกไฟล์ให้เล็กลง`;
+          out.push({ file: f, upload, result: null, error });
           continue;
         }
         setProgress(`กำลังอ่าน ${at} — ไฟล์ที่มีรูปเยอะใช้เวลาสักครู่`);
         out.push({ file: f, upload, result: await send(f, upload, { apply: false, replaceImages, batchId: id }), error: null });
       } catch (e) {
-        out.push({ file: f, upload, result: null, error: apiErrorMessage(e) });
+        // ข้อผิดพลาดที่ไม่ได้มาจากเซิร์ฟเวอร์ (ย่อรูปในเครื่องพัง) — apiErrorMessage ให้ข้อความภาษาอังกฤษ
+        const error = axios.isAxiosError(e) ? apiErrorMessage(e) : "เปิดหรือย่อรูปในไฟล์ไม่สำเร็จ — ไฟล์อาจเสีย ลองเปิดใน Excel แล้วบันทึกใหม่";
+        out.push({ file: f, upload, result: null, error });
       }
     }
     setProgress(null);
@@ -229,7 +313,16 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
   }
 
   async function apply() {
-    if (!checked) return;
+    if (!checked || running.current) return;
+    running.current = true;
+    try {
+      await applyFiles(checked);
+    } finally {
+      running.current = false;
+    }
+  }
+
+  async function applyFiles(checked: Checked[]) {
     const id = newBatchId();
     const ok = checked.filter((c) => c.result);
     setApplyError(null);
@@ -246,21 +339,29 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
       }
     }
     onDone();
-    if (!done) {
-      setProgress(null);
-      setApplyError(`${ok[stopped?.at ?? 0]?.file.name ?? ""}: ${stopped?.error ?? ""} — ยังไม่ได้อัปเดตไฟล์ไหน กดอัปเดตซ้ำได้`);
-      return;
-    }
     const rest = stopped ? ok.slice(stopped.at).map((c, k) => ({ file: c.file, error: k === 0 ? stopped!.error : "หยุดก่อนถึงไฟล์นี้" })) : [];
-    setRemaining(rest);
     // ยังไม่ปล่อยปุ่ม — ระหว่างรอรายงาน ปุ่มอัปเดตยังเป็นแผนเดิม กดซ้ำได้รอบเปล่าที่ทับแถบ "อัปเดตล่าสุด"
-    setProgress("อัปเดตแล้ว — กำลังเปิดรายงาน…");
+    setProgress("กำลังเปิดรายงาน…");
     try {
-      setBatch((await api.get<Batch>(`/spare-parts/imports/batch/${id}`)).data);
+      // ไฟล์แรกพังกลางทางก็มีรายงาน (เซิร์ฟเวอร์เขียนประวัติก่อนลงมือ) — บางส่วนอาจบันทึกไปแล้ว ต้องให้เห็น
+      const report = (await api.get<Batch>(`/spare-parts/imports/batch/${id}`)).data;
+      setRemaining(rest);
+      setBatch(report);
     } catch (e) {
+      if (!done && axios.isAxiosError(e) && e.response?.status === 404) {
+        setApplyError(`${rest[0]?.file.name ?? ""}: ${stopped?.error ?? ""} — ยังไม่ได้อัปเดตไฟล์ไหน กดอัปเดตซ้ำได้`);
+        return;
+      }
+      // อัปเดตไปแล้ว (บางไฟล์) — ห้ามปล่อยให้กดแผนเดิมซ้ำ
       setChecked(null);
       setFiles(rest.map((r) => r.file));
-      showAlert("อัปเดตแล้ว แต่เปิดรายงานไม่ได้", `${apiErrorMessage(e)} — ดูได้จาก “อัปเดตจากไฟล์ล่าสุด” บนหน้าจัดการข้อมูลอะไหล่`);
+      if (rest.length) {
+        setApplyError(`${rest[0].file.name}: ${stopped!.error} — ยังไม่ได้อัปเดต ${rest.map((r) => r.file.name).join(", ")} · กดตรวจก่อนอัปเดตเพื่อทำต่อ`);
+      }
+      showAlert(
+        rest.length ? "อัปเดตได้บางไฟล์ แต่เปิดรายงานไม่ได้" : "อัปเดตแล้ว แต่เปิดรายงานไม่ได้",
+        `${apiErrorMessage(e)} — ดูได้จาก “อัปเดตจากไฟล์ล่าสุด” บนหน้าจัดการข้อมูลอะไหล่`
+      );
     } finally {
       setProgress(null);
     }
@@ -268,9 +369,11 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
 
   if (batch) {
     // ไฟล์ที่อ่านไม่ได้ / ยังไม่ได้อัปเดตเพราะหยุดกลางทาง — บอกไว้ในรายงาน ไม่งั้นนึกว่ายี่ห้อนั้นอัปเดตแล้ว
+    // ไฟล์ที่พังกลางทางแต่มีประวัติ (บันทึกไปบางส่วน) บอกว่า "อัปเดตไม่ครบ" ไม่ใช่ "ไม่ได้อัปเดต"
+    const partial = new Set(batch.files.filter((f) => f.summary.incomplete).map((f) => f.fileName));
     const failed = [
-      ...(checked ?? []).filter((c) => c.error).map((c) => ({ name: c.file.name, error: c.error! })),
-      ...remaining.map((r) => ({ name: r.file.name, error: r.error })),
+      ...(checked ?? []).filter((c) => c.error).map((c) => ({ name: c.file.name, note: `ไม่ได้อัปเดต: ${c.error}` })),
+      ...remaining.map((r) => ({ name: r.file.name, note: `${partial.has(r.file.name) ? "อัปเดตไม่ครบ" : "ไม่ได้อัปเดต"}: ${r.error}` })),
     ];
     const retry = remaining.length
       ? () => {
@@ -489,35 +592,38 @@ function PreviewStep({
       }));
     }
     // รหัสที่อยู่หลายไฟล์ โชว์เฉพาะของไฟล์หลัง (ไฟล์ที่ทับ) — ตัวเลขบนกล่องนับแบบเดียวกัน
-    const last = lastItems(results);
+    // เพิ่มใหม่ / แก้ไข / รูป มาจากผลจำลองทั้งรอบ (รหัสที่อยู่หลายไฟล์รวมเป็นแถวเดียว บอกลำดับไฟล์)
+    if (tab === "new" || tab === "chg" || tab === "img") {
+      for (const p of plannedItems(results, replaceImages)) {
+        const i = p.item;
+        const meta = [i.partCode, i.brand, i.partNo ? `Part No. ${i.partNo}` : null, `${p.file} แถว ${i.line}`].filter(Boolean).join(" · ");
+        const base = { key: `${p.file}|${i.partCode}`, file: p.file, title: i.name, thumb: p.thumb, meta };
+        if (tab === "img") {
+          if (i.image === "NEW" || i.image === "CHANGED") {
+            out.push({ ...base, tag: "รูป", fg: t.fg, bg: t.bg, lines: [<Text key="n" style={[styles.diff, { color: t.fg }]}>{IMAGE_NOTE[i.image]}</Text>] });
+          }
+          continue;
+        }
+        if (i.action !== (tab === "new" ? "CREATE" : "UPDATE")) continue;
+        out.push({
+          ...base,
+          tag: t.label,
+          fg: t.fg,
+          bg: t.bg,
+          lines: i.diffs.map((d) => (
+            <Text key={d.field} style={styles.diff}>
+              <Text style={styles.diffLabel}>{d.label} </Text>
+              <Text style={styles.from}>{d.from}</Text>
+              <Text style={styles.muted}> → </Text>
+              <Text style={styles.to}>{d.to}</Text>
+            </Text>
+          )),
+        });
+      }
+      return out;
+    }
     for (const r of results) {
-      const base = (i: Item) => ({ key: `${r.fileName}|${i.partCode}`, file: r.fileName, title: i.name, thumb: r.thumbs?.[i.partCode] });
-      const meta = (i: Item) => [i.partCode, i.brand, i.partNo ? `Part No. ${i.partNo}` : null, `${r.fileName} แถว ${i.line}`].filter(Boolean).join(" · ");
-      if (tab === "new" || tab === "chg") {
-        for (const i of r.items.filter((x) => x.action === (tab === "new" ? "CREATE" : "UPDATE") && last.get(x.partCode) === x)) {
-          out.push({
-            ...base(i),
-            meta: meta(i),
-            tag: t.label,
-            fg: t.fg,
-            bg: t.bg,
-            lines: i.diffs.map((d) => (
-              <Text key={d.field} style={styles.diff}>
-                <Text style={styles.diffLabel}>{d.label} </Text>
-                <Text style={styles.from}>{d.from}</Text>
-                <Text style={styles.muted}> → </Text>
-                <Text style={styles.to}>{d.to}</Text>
-              </Text>
-            )),
-          });
-        }
-      } else if (tab === "img") {
-        for (const i of r.items.filter((x) => x.image && last.get(x.partCode) === x)) {
-          const state = i.image === "CHANGED" || i.image === "KEPT" ? (replaceImages ? "CHANGED" : "KEPT") : "NEW";
-          if (state === "KEPT") continue;
-          out.push({ ...base(i), meta: meta(i), tag: "รูป", fg: t.fg, bg: t.bg, lines: [<Text key="n" style={[styles.diff, { color: t.fg }]}>{IMAGE_NOTE[state]}</Text>] });
-        }
-      } else if (tab === "bad") {
+      if (tab === "bad") {
         for (const p of r.problems) {
           out.push({
             key: `${r.fileName}|p${p.line}`,
@@ -542,7 +648,7 @@ function PreviewStep({
           tag: t.label,
           fg: t.fg,
           bg: t.bg,
-          lines: [<Text key="n" style={[styles.diff, { color: t.fg, fontWeight: "600" }]}>{`รหัสซ้ำข้ามไฟล์ — ใช้ข้อมูลจาก ${fs[fs.length - 1]} (ไฟล์ที่อัปเดตทีหลัง)`}</Text>],
+          lines: [<Text key="n" style={[styles.diff, { color: t.fg, fontWeight: "600" }]}>{`รหัสซ้ำข้ามไฟล์ — อัปเดตตามลำดับไฟล์ ช่องที่ไฟล์หลังเว้นว่างใช้ค่าจากไฟล์ก่อน (ผลรวมดูในกล่องเพิ่มใหม่/แก้ไข)`}</Text>],
         });
       }
     }
@@ -640,7 +746,7 @@ export function ImportReportModal({
 }: {
   batch: Batch;
   onClose: () => void;
-  failed?: { name: string; error: string }[];
+  failed?: { name: string; note: string }[];
   /** หยุดกลางทาง — ตรวจแล้วอัปเดตเฉพาะไฟล์ที่ยังไม่ได้ทำ */
   onRetry?: () => void;
 }) {
@@ -760,7 +866,7 @@ export function ImportReportModal({
       {failed.map((f) => (
         <View key={f.name} style={[styles.fileBox, styles.fileBad]}>
           <Text style={[styles.reportLine, { color: colors.dangerInk, fontWeight: "600" }]}>
-            {f.name} — ไม่ได้อัปเดต: {f.error}
+            {f.name} — {f.note}
           </Text>
         </View>
       ))}

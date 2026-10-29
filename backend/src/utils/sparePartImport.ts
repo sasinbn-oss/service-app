@@ -47,6 +47,9 @@ export const FIELD_LABEL: Record<"name" | "brand" | "category" | "partNo", strin
 function detect(row: ExcelJS.Row) {
   const found: { col: number; field: Field; score: number; header: string }[] = [];
   row.eachCell((cell, col) => {
+    // ช่องที่ถูกผสาน ExcelJS คืนค่าของช่องหลักมาให้ — ชื่อเรื่องที่ผสานยาวทั้งแถว ("รายการรหัสสินค้าและชื่อสินค้า Haier")
+    // จะกลายเป็นหัวทุกคอลัมน์ นับเฉพาะช่องหลัก
+    if (cell.isMerged && cell.master !== cell) return;
     const header = text(cell.value);
     const key = norm(header);
     if (!key || IGNORED.some((h) => norm(h) === key)) return;
@@ -162,13 +165,49 @@ export async function parsePartsWorkbook(buf: Buffer, sourceHashes: Record<strin
   const problems: Problem[] = [];
   const seen = new Map<string, number>();
   const hashOf = new Map<Buffer, { hash: string; source: boolean }>();
-  const at = (r: ExcelJS.Row, f: Field) => (cols[f] ? text(r.getCell(cols[f]!.col).value) : "");
+  /**
+   * ค่าในช่อง — ช่องที่ผสานแนวนอนกับช่องข้าง ๆ ในแถวเดียวกัน = ว่าง (แถวหัวข้อ "หมวด: ชุดประตู" ผสานยาว
+   * ไม่ใช่อะไหล่ชื่อเดียวกับรหัส) · ผสานแนวตั้ง (ยี่ห้อผสานลงทั้งกลุ่ม) ใช้ค่าของช่องหลักตามเดิม
+   */
+  const at = (r: ExcelJS.Row, f: Field) => {
+    if (!cols[f]) return "";
+    const c = r.getCell(cols[f]!.col);
+    if (c.isMerged && c.master !== c && Number(c.master.row) === r.number) return "";
+    return text(c.value);
+  };
+  /** ช่องของแถวนี้เอง (ไม่ใช่ค่าที่ผสานมาจากแถวบน) */
+  const own = (r: ExcelJS.Row, f: Field) => {
+    if (!cols[f]) return "";
+    const c = r.getCell(cols[f]!.col);
+    return c.isMerged && c.master !== c ? "" : text(c.value);
+  };
+  const hashed = (img: FormImage) => {
+    if (!hashOf.has(img.data)) {
+      const given = img.path ? sourceHashes[img.path] : undefined;
+      hashOf.set(img.data, given ? { hash: given, source: true } : { hash: crypto.createHash("sha256").update(img.data).digest("hex"), source: false });
+    }
+    return { ...img, ...hashOf.get(img.data)! };
+  };
   for (let line = headerRow + 1; line <= ws.rowCount; line++) {
     const r = ws.getRow(line);
     // เซลล์ที่ถูกผสานกับแถวบน ExcelJS คืนค่าของแถวบนมาให้ — หัวตารางสองชั้น (รหัสสินค้าผสานลงมา) กลายเป็นอะไหล่ชื่อ "ไทย"
     // และอะไหล่ที่ผสานรหัสลงสองแถว แถวล่างที่ว่างจะชนะเป็น "รหัสซ้ำ ใช้แถวหลัง" ทิ้งรูป/Part No. ของแถวจริง
     const codeCell = r.getCell(cols.partCode!.col);
-    if (codeCell.isMerged && codeCell.master !== codeCell) continue;
+    if (codeCell.isMerged && codeCell.master !== codeCell) {
+      // แถวล่างของอะไหล่ที่ผสานรหัสลงหลายแถว — Part No. / รูป ที่อยู่ในแถวล่างเป็นของอะไหล่แถวบน รวมเข้าไป ไม่ทิ้งเงียบ ๆ
+      const target = rows.find((x) => x.line === Number(codeCell.master.row));
+      if (!target) continue; // หัวตารางสองชั้น หรืออะไหล่แถวบนถูกข้ามไปแล้ว
+      const extra = cleanPartNo(own(r, "partNo"));
+      if (extra) {
+        const merged = cleanPartNo([...new Set([...target.partNo.split(", "), ...extra.split(", ")].filter(Boolean))].join(", "));
+        if (merged.length <= PART_NO_MAX) target.partNo = merged;
+        else problems.push({ line, partCode: target.partCode, name: target.name, note: `Part No. ในแถวนี้รวมกับแถว ${target.line} แล้วยาวเกิน ${PART_NO_MAX.toLocaleString("en-US")} ตัวอักษร — ไม่ได้ใช้` });
+      }
+      for (const f of ["brand", "category"] as const) if (!target[f]) target[f] = clean(own(r, f));
+      const img = rowImages.get(line);
+      if (img && !target.image) target.image = hashed(img);
+      continue;
+    }
     const partCode = clean(at(r, "partCode")).toUpperCase();
     const name = clean(at(r, "name"));
     const img = rowImages.get(line) ?? null;
@@ -194,10 +233,6 @@ export async function parsePartsWorkbook(buf: Buffer, sourceHashes: Record<strin
       rows.splice(i, 1);
     }
     seen.set(partCode, line);
-    if (img && !hashOf.has(img.data)) {
-      const given = img.path ? sourceHashes[img.path] : undefined;
-      hashOf.set(img.data, given ? { hash: given, source: true } : { hash: crypto.createHash("sha256").update(img.data).digest("hex"), source: false });
-    }
     rows.push({
       line,
       partCode,
@@ -205,7 +240,7 @@ export async function parsePartsWorkbook(buf: Buffer, sourceHashes: Record<strin
       brand: clean(at(r, "brand")),
       category: clean(at(r, "category")),
       partNo,
-      image: img ? { ...img, ...hashOf.get(img.data)! } : null,
+      image: img ? hashed(img) : null,
     });
   }
   const columns = Object.fromEntries(Object.entries(cols).map(([k, v]) => [k, v!.header])) as ParsedFile["columns"];
@@ -320,19 +355,30 @@ export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean
 /** แบ่งงานเขียนเป็นก้อน — แต่ละก้อนสำเร็จทั้งก้อนหรือไม่เลย · พังกลางทางกดอัปเดตซ้ำได้ (ทำแค่ส่วนที่ยังต่าง) */
 const IMAGE_CHUNK = 20;
 
-export async function applyPartsImport(parsed: ParsedFile, plan: Plan) {
+/** ทำไปถึงไหนแล้ว — พังกลางทาง ประวัติต้องบอกยอดที่บันทึกจริง ไม่ใช่ยอดที่ตั้งใจจะทำ */
+export interface ApplyProgress {
+  created: number;
+  updated: number;
+  images: number;
+  codes: Set<string>;
+}
+export const newProgress = (): ApplyProgress => ({ created: 0, updated: 0, images: 0, codes: new Set() });
+
+export async function applyPartsImport(parsed: ParsedFile, plan: Plan, progress: ApplyProgress = newProgress()) {
   const row = new Map(parsed.rows.map((r) => [r.partCode, r]));
   const creates = plan.items.filter((i) => i.action === "CREATE");
   const updates = plan.items.filter((i) => i.action === "UPDATE");
 
   if (creates.length) {
-    await prisma.sparePart.createMany({
+    const made = await prisma.sparePart.createMany({
       data: creates.map((i) => {
         const r = row.get(i.partCode)!;
         return { partCode: r.partCode, name: r.name, brand: r.brand || null, category: r.category || null, partNo: r.partNo || null };
       }),
       skipDuplicates: true,
     });
+    progress.created = made.count;
+    for (const i of creates) progress.codes.add(i.partCode);
   }
   if (updates.length) {
     // แก้ทุกแถวในคำสั่งเดียว — ทีละแถวคือรอบละ ~0.2 วิ คูณหลายร้อยแถว
@@ -349,6 +395,8 @@ export async function applyPartsImport(parsed: ParsedFile, plan: Plan) {
       FROM unnest(${ids}::int[], ${v("name")}::text[], ${v("brand")}::text[], ${v("category")}::text[], ${v("partNo")}::text[])
         AS v(id, name, brand, category, part_no)
       WHERE p.id = v.id`;
+    progress.updated = updates.length;
+    for (const i of updates) progress.codes.add(i.partCode);
   }
 
   // รูป: ต้องรู้ id ของแถวที่เพิ่งสร้างก่อน
@@ -379,6 +427,8 @@ export async function applyPartsImport(parsed: ParsedFile, plan: Plan) {
         WHERE id = ANY(${ids}::int[])`,
     ]);
     imageIds.push(...ids);
+    progress.images += ids.length;
+    for (const i of chunk) progress.codes.add(i.partCode);
   }
   return { created: creates.length, updated: updates.length, images: imageIds.length };
 }
