@@ -28,7 +28,9 @@ type Person = {
   supervisedTeams: string[];
   maidBranches?: { code: string; name: string }[];
   area?: { id: number; name: string } | null;
-  _count?: { areaMembers: number; cocoBranches: number };
+  /** สาขาที่ Supervisor (COCO) ดูแล (เฉพาะสาขา COCO ที่เปิดอยู่) */
+  cocoBranches?: { code: string; name: string }[];
+  _count?: { areaMembers: number };
 };
 
 /** สีตามผังฝั่ง Area — Area ฟ้าอมเขียว · Supervisor (COCO) ฟ้า · Maid ชมพู ให้จำได้ชุดเดียวทั้งแอป */
@@ -41,10 +43,10 @@ const TABS: { role: Role; label: string; fg: string; bg: string }[] = [
   { role: "ADMIN", label: "แอดมิน", fg: colors.roleAdmin, bg: colors.roleAdminSoft },
 ];
 const AREA_TEAM_TABS = new Set<string>(["AREA", "COCO_SUPERVISOR", "COCO_MAID"]);
-/** บอกเฉพาะสิ่งที่แท็บนั้นค้นได้จริง — Supervisor (COCO) ไม่มีรายการสาขามาด้วย ค้นด้วยรหัสสาขาไม่เจอ */
+/** บอกเฉพาะสิ่งที่แท็บนั้นค้นได้จริง — Area เห็นสาขา COCO ทั้งหมด ค้นด้วยสาขาไม่ได้ช่วยแยกคน */
 const SEARCH_HINT: Record<string, string> = {
   AREA: "ค้นชื่อ Area หรือรหัสพนักงาน",
-  COCO_SUPERVISOR: "ค้นชื่อ รหัสพนักงาน หรือ Area",
+  COCO_SUPERVISOR: "ค้นชื่อ รหัสพนักงาน Area หรือสาขาที่ดูแล",
   COCO_MAID: "ค้นชื่อ รหัสพนักงาน หรือสาขาที่ประจำ",
 };
 
@@ -60,7 +62,12 @@ function groupOf(p: Person) {
   return "แอดมิน";
 }
 
-function detailOf(p: Person) {
+/** สาขาที่ผูกกับคนนี้ — Maid ประจำ / Supervisor (COCO) ดูแล · ร้านโทรมาบอกรหัสสาขาก่อนชื่อคน */
+function branchesOf(p: Person) {
+  return p.role === "COCO_MAID" ? p.maidBranches ?? [] : p.role === "COCO_SUPERVISOR" ? p.cocoBranches ?? [] : [];
+}
+
+function detailOf(p: Person, q = "") {
   if (p.role === "SUPERVISOR") {
     const n = p.supervisedTeams?.length ?? 0;
     return [p.region ? `ภาค${p.region}` : null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
@@ -71,8 +78,12 @@ function detailOf(p: Person) {
     return n ? `Supervisor ${n} คน · เห็นสาขา COCO ทั้งหมด` : "ยังไม่มี Supervisor · เห็นสาขา COCO ทั้งหมด";
   }
   if (p.role === "COCO_SUPERVISOR") {
-    const n = p._count?.cocoBranches ?? 0;
-    return n ? `ดูแล ${n} สาขา` : "ยังไม่ได้ดูแลสาขา";
+    const b = p.cocoBranches ?? [];
+    if (!b.length) return "ยังไม่ได้ดูแลสาขา";
+    // ค้นด้วยสาขา — บอกว่าเจอเพราะสาขาไหน ไม่งั้นเห็นแค่ "ดูแล 12 สาขา" แล้วไม่แน่ใจว่าใช่คนนี้ไหม
+    const hit = q ? b.find((x) => x.code.toLowerCase().includes(q) || x.name.toLowerCase().includes(q)) : undefined;
+    if (hit) return `ดูแล ${hit.code} ${hit.name}${b.length > 1 ? ` · และอีก ${b.length - 1} สาขา` : ""}`;
+    return `ดูแล ${b.length} สาขา`;
   }
   if (p.role === "COCO_MAID") {
     const b = p.maidBranches ?? [];
@@ -143,7 +154,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
         .filter(
           (p) =>
             !q ||
-            [p.name, p.employeeCode, p.team, p.region, groupOf(p), ...(p.maidBranches ?? []).flatMap((b) => [b.code, b.name])].some(
+            [p.name, p.employeeCode, p.team, p.region, groupOf(p), ...branchesOf(p).flatMap((b) => [b.code, b.name])].some(
               (v) => v?.toLowerCase().includes(q)
             )
         )
@@ -250,7 +261,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
                         {p.name}
                       </Text>
                       <Text style={styles.personMeta} numberOfLines={1}>
-                        {p.employeeCode} · {detailOf(p)}
+                        {p.employeeCode} · {detailOf(p, q)}
                       </Text>
                     </View>
                     {on ? <Ionicons name="checkmark-circle" size={22} color={colors.warningInk} /> : null}

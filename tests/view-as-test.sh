@@ -106,11 +106,11 @@ CSID=$(DB "select id from \"User\" where \"employeeCode\"='ZVAC$SUF'"); MDID=$(D
 DB "update \"Branch\" set \"cocoSupervisorId\"=$CSID where code='C0006' and \"cocoSupervisorId\" is null;
     update \"Branch\" set \"cocoSupervisorId\"=$CSID where id=(select id from \"Branch\" where code not ilike 'C%' and \"cocoSupervisorId\" is null and \"cancelledAt\" is null order by id limit 1);
     insert into \"CocoMaidBranch\"(\"userId\",\"branchId\") select $MDID, id from \"Branch\" where code='C0006'" >/dev/null
-NCS=$(DB "select count(*) from \"Branch\" where \"cocoSupervisorId\"=$CSID and \"cancelledAt\" is null and code ilike 'C%'")
+NCS=$(DB "select string_agg(code, ',' order by code) from \"Branch\" where \"cocoSupervisorId\"=$CSID and \"cancelledAt\" is null and code ilike 'C%'")
 # นับ/จัดกลุ่มกฎเดียวกับผังฝั่ง Area: Maid ที่ค้าง areaId ไม่นับเป็น Supervisor · Area ที่ลาออกแล้ว = ไม่มี Area
 GET $A auth/users | J 'const f=(c)=>d.find(u=>u.employeeCode===c+"'$SUF'");
-  [f("ZVAR")._count.areaMembers, f("ZVAC").area&&f("ZVAC").area.name, f("ZVAC")._count.cocoBranches, f("ZVAM").maidBranches.map(b=>b.code).join(), f("ZVAE").area].join("|")' \
-  | grep -q "^1|Area ดูแทน|$NCS|C0006|$" && pass "รายชื่อผู้ใช้บอก Area ของ Supervisor (COCO) (Area ที่ลาออก = ไม่มี) จำนวน Supervisor/สาขา COCO และสาขาที่ Maid ประจำ" \
+  [f("ZVAR")._count.areaMembers, f("ZVAC").area&&f("ZVAC").area.name, f("ZVAC").cocoBranches.map(b=>b.code).join(), f("ZVAM").maidBranches.map(b=>b.code).join(), f("ZVAE").area].join("|")' \
+  | grep -q "^1|Area ดูแทน|$NCS|C0006|$" && pass "รายชื่อผู้ใช้บอก Area ของ Supervisor (COCO) (Area ที่ลาออก = ไม่มี) จำนวน Supervisor · สาขา COCO ที่ดูแล (ไว้ค้นด้วยรหัสสาขา) และสาขาที่ Maid ประจำ" \
   || fail "รายชื่อ (คาด 1|Area ดูแทน|$NCS|C0006|): $(GET $A auth/users | J 'JSON.stringify(d.filter(u=>/^ZVA[RCME]/.test(u.employeeCode)).map(u=>[u.employeeCode,u.area,u._count,u.maidBranches]))')"
 for X in "ZVAR:AREA" "ZVAC:COCO_SUPERVISOR" "ZVAM:COCO_MAID"; do
   C=${X%%:*}$SUF; R=${X##*:}
