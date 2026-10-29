@@ -234,6 +234,18 @@ function colLetter(n: number): string {
 const MIME: Record<string, string> = { jpeg: "image/jpeg", jpg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
 
 /**
+ * ชนิดรูปจากไบต์หัวไฟล์ — ไม่เชื่อนามสกุล: อัปเดตอะไหล่จากไฟล์ใหญ่ เบราว์เซอร์แปลงรูป PNG (รูปที่ก๊อปวาง) เป็น JPEG
+ * โดยคงชื่อไฟล์ image3.png ไว้ (ไม่ต้องแก้ความสัมพันธ์ในไฟล์ Excel) — ถ้าดูนามสกุลจะเก็บรูป JPEG เป็น image/png
+ */
+function sniffExt(data: Buffer, fallback: string): string {
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return "jpeg";
+  if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (data.subarray(0, 4).toString("latin1") === "GIF8") return "gif";
+  if (data.subarray(0, 4).toString("latin1") === "RIFF" && data.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  return fallback;
+}
+
+/**
  * รูปในเซลล์ (Excel 365 "วางในเซลล์") ของชีตแรก — คืน "K2" → ไฟล์รูป
  *
  * ไฟล์ฟอร์มแจ้งซ่อมบางรอบช่อง "รูปภาพ" เป็นรูปฝังแทนลิงก์ SharePoint (ไฟล์ 26 ต.ค. 69: 51 รูป)
@@ -277,7 +289,7 @@ export async function cellImages(buf: Buffer): Promise<Map<string, FormImage>> {
     const path = `xl/${target.replace(/^\.\.\//, "")}`;
     if (!cache.has(path)) {
       const data = await zip.file(path)?.async("nodebuffer");
-      const ext = (path.split(".").pop() ?? "").toLowerCase();
+      const ext = data ? sniffExt(data, (path.split(".").pop() ?? "").toLowerCase()) : "";
       cache.set(path, data && MIME[ext] ? { data, mime: MIME[ext], ext: ext === "jpeg" ? "jpg" : ext, path } : null);
     }
     const img = cache.get(path);

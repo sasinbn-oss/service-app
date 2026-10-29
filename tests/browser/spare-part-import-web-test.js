@@ -5,8 +5,9 @@
 //   · ค้นหาด้วย Part No. ในหน้าจัดการ · ฟอร์มแก้ไขมีช่อง Part No. · จอมือถือไม่ล้นข้าง
 //   แก้จากตรวจโค้ด: รหัสซ้ำข้ามไฟล์นับครั้งเดียว · อัปเดตหยุดกลางทาง (ทำให้ไฟล์ที่สองพังด้วยการดักคำขอ) →
 //   รายงานบอกไฟล์ที่พังและไฟล์ที่ยังไม่ถึง · ปุ่มตรวจไฟล์ที่เหลือ → อัปเดตต่อได้ · รูปในหน้ารายการอะไหล่มีตัวกันแคช (?v=)
-//   ไฟล์เกิน 50 MB (รูปกล้องเต็มขนาด — เจ้าของงานเจอกับ Huebsch/Oasis): เบราว์เซอร์ย่อรูปก่อนส่ง → อัปเดตได้ ·
-//   รูปในฐานข้อมูลเล็กลง เก็บค่ารูปต้นฉบับ · เลือกไฟล์เดิมอีกรอบ รูปไม่ขึ้นว่าเปลี่ยน
+//   ไฟล์ 200 MB (รูปถ่ายก๊อปวางเป็น PNG — เจ้าของงานเจอกับ Huebsch/Oasis): เบราว์เซอร์ย่อรูป + แปลงเป็น JPEG ก่อนส่ง →
+//   อัปเดตได้ · รูปในฐานข้อมูลเป็น JPEG เล็กลง เก็บค่ารูปต้นฉบับ · เลือกไฟล์เดิมอีกรอบ รูปไม่ขึ้นว่าเปลี่ยน ·
+//   รูปเยอะจนย่อรอบแรกยังเกินเป้า → ย่อเพิ่มอีกรอบจนต่ำกว่า 45 MB
 const { chromium } = require("playwright");
 const os = require("os");
 const path = require("path");
@@ -24,7 +25,9 @@ const FA = path.join(dir, `zztw-a-${SUF}.xlsx`);
 const FB = path.join(dir, `zztw-b-${SUF}.xlsx`);
 const FC = path.join(dir, `zztw-c-${SUF}.xlsx`);
 const FBIG = path.join(dir, `zztw-big-${SUF}.xlsx`);
-const BIG_N = 8;
+const BIG_N = 10;
+const FMANY = path.join(dir, `zztw-many-${SUF}.xlsx`);
+const MANY_N = 50;
 const fixture = (out, spec) =>
   execSync(`node ${path.join(__dirname, "../fixtures-parts-xlsx.js")} ${out} '${JSON.stringify(spec)}'`, {
     env: { ...process.env, NODE_PATH: path.join(__dirname, "../../backend/node_modules") },
@@ -34,7 +37,7 @@ const cleanup = () => {
   sql(`delete from "SparePartImport" where "fileName" like 'zztw-%${SUF}.xlsx';
        delete from "SparePartImage" where "sparePartId" in (select id from "SparePart" where "partCode" like '${P}%');
        delete from "SparePart" where "partCode" like '${P}%';`);
-  for (const f of [F1, F2, FA, FB, FC, FBIG]) require("fs").rmSync(f, { force: true });
+  for (const f of [F1, F2, FA, FB, FC, FBIG, FMANY]) require("fs").rmSync(f, { force: true });
 };
 
 (async () => {
@@ -221,28 +224,32 @@ const cleanup = () => {
     await label("กลับไปหน้าข้อมูลอะไหล่").click();
     await page.waitForTimeout(1000);
 
-    // ── ไฟล์เกิน 50 MB: รูปกล้องเต็มขนาด (สุ่มจุดให้บีบไม่ลง) วาดด้วย canvas ของเบราว์เซอร์เอง ──
+    // ── ไฟล์ 200 MB (เจ้าของงานเจอ): รูปถ่ายที่ก๊อปวาง Excel เก็บเป็น PNG รูปละ 20 MB — สุ่มจุดให้บีบไม่ลง วาดด้วย canvas ──
+    const noise = (kind, w, h, q, seed) =>
+      page.evaluate(
+        ({ kind, w, h, q, seed }) => {
+          const c = document.createElement("canvas");
+          c.width = w;
+          c.height = h;
+          const ctx = c.getContext("2d");
+          const img = ctx.createImageData(w, h);
+          let x = seed * 9973 + 1;
+          for (let i = 0; i < img.data.length; i += 4) {
+            x = (x * 1103515245 + 12345) & 0x7fffffff;
+            img.data[i] = x & 255;
+            img.data[i + 1] = (x >> 8) & 255;
+            img.data[i + 2] = (x >> 16) & 255;
+            img.data[i + 3] = 255;
+          }
+          ctx.putImageData(img, 0, 0);
+          return c.toDataURL(kind, q).split(",")[1];
+        },
+        { kind, w, h, q, seed }
+      );
     const shots = [];
     for (let k = 0; k < BIG_N; k++) {
-      const b64 = await page.evaluate((seed) => {
-        const c = document.createElement("canvas");
-        c.width = 3000;
-        c.height = 2400;
-        const ctx = c.getContext("2d");
-        const img = ctx.createImageData(c.width, c.height);
-        let x = seed * 9973 + 1;
-        for (let i = 0; i < img.data.length; i += 4) {
-          x = (x * 1103515245 + 12345) & 0x7fffffff;
-          img.data[i] = x & 255;
-          img.data[i + 1] = (x >> 8) & 255;
-          img.data[i + 2] = (x >> 16) & 255;
-          img.data[i + 3] = 255;
-        }
-        ctx.putImageData(img, 0, 0);
-        return c.toDataURL("image/jpeg", 0.97).split(",")[1];
-      }, k + 1);
-      const f = path.join(dir, `zztw-shot-${SUF}-${k}.jpg`);
-      require("fs").writeFileSync(f, Buffer.from(b64, "base64"));
+      const f = path.join(dir, `zztw-shot-${SUF}-${k}.png`);
+      require("fs").writeFileSync(f, Buffer.from(await noise("image/png", 3000, 2400, 1, k + 1), "base64"));
       shots.push(f);
     }
     const bigMd5 = JSON.parse(
@@ -250,48 +257,75 @@ const cleanup = () => {
         headers: ["รูปภาพประกอบ", "รหัสสินค้า", "ชื่อรวม (ไทย)", "ยี่ห้อสินค้า"],
         rows: shots.map((_, k) => [null, `${P}G${k}`, `รูปใหญ่ทดสอบเว็บ ${k}`, BRAND]),
         images: Object.fromEntries(shots.map((f, k) => [`A${k + 2}`, `file:${f}`])),
+        imageExt: "png",
       })
     );
+    const shot0 = require("fs").statSync(shots[0]).size;
+    for (const f of shots) require("fs").rmSync(f, { force: true });
     const bigSize = require("fs").statSync(FBIG).size;
-    bigSize > 50 * 1024 * 1024 ? pass(`ไฟล์ทดสอบใหญ่ ${(bigSize / 1048576).toFixed(0)} MB (เกิน 50 MB แบบไฟล์จริง)`) : fail(`ไฟล์ทดสอบเล็กไป ${bigSize}`);
-    const pickBig = async () => {
+    bigSize > 180 * 1024 * 1024 ? pass(`ไฟล์ทดสอบ ${(bigSize / 1048576).toFixed(0)} MB รูป PNG ${BIG_N} รูป (แบบไฟล์จริง 200 MB)`) : fail(`ไฟล์ทดสอบเล็กไป ${bigSize}`);
+    const pickFile = async (file) => {
       await label("อัปเดตจากไฟล์ Excel").click();
       await page.waitForTimeout(1000);
       const [chB] = await Promise.all([page.waitForEvent("filechooser"), label("เลือกไฟล์อะไหล่").click()]);
-      await chB.setFiles([FBIG]);
+      await chB.setFiles([file]);
       await page.waitForTimeout(600);
       await label("ตรวจก่อนอัปเดต").click();
-      await vis("ตรวจก่อนอัปเดต — ยังไม่เปลี่ยนอะไรในระบบ").waitFor({ timeout: 240000 });
+      await vis("ตรวจก่อนอัปเดต — ยังไม่เปลี่ยนอะไรในระบบ").waitFor({ timeout: 300000 });
       await page.waitForTimeout(800);
     };
-    await pickBig();
+    const closeImport = async () => {
+      await label("เลือกไฟล์ใหม่").click();
+      await page.waitForTimeout(500);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+      if (await vis("อัปเดตข้อมูลอะไหล่จากไฟล์ Excel").count()) await label("ปิด").last().click().catch(() => {});
+      await page.waitForTimeout(800);
+    };
+    await pickFile(FBIG);
     const shrinkNote = await vis(new RegExp(`ย่อรูปใหญ่ ${BIG_N} รูป \\(\\d+ MB → [\\d.]+ MB\\)`), false).first().innerText().catch(() => "");
     shrinkNote && (await label(`เพิ่มใหม่ ${BIG_N} รายการ`).count())
-      ? pass(`ไฟล์เกิน 50 MB ตรวจได้ — เบราว์เซอร์ย่อรูปก่อนส่ง (${(shrinkNote.match(/ย่อรูปใหญ่[^)]*\)/) || [""])[0]})`)
+      ? pass(`ไฟล์ 200 MB ตรวจได้ — เบราว์เซอร์ย่อรูป + แปลง PNG เป็น JPEG ก่อนส่ง (${(shrinkNote.match(/ย่อรูปใหญ่[^)]*\)/) || [""])[0]})`)
       : fail(`ไฟล์ใหญ่: ${(await page.locator("body").innerText()).slice(0, 300)}`);
     await page.screenshot({ path: path.join(__dirname, "spare-import-7-big.png") });
     await label("อัปเดตอะไหล่").click();
-    await vis(/^อัปเดตข้อมูลอะไหล่แล้ว \d+ รายการ$/, false).waitFor({ timeout: 240000 });
-    const g0 = sql(`select length(i.data)||'|'||coalesce(i."sourceHash",'') from "SparePartImage" i join "SparePart" p on p.id=i."sparePartId" where p."partCode"='${P}G0'`).split("|");
-    const shot0 = require("fs").statSync(shots[0]).size;
+    await vis(/^อัปเดตข้อมูลอะไหล่แล้ว \d+ รายการ$/, false).waitFor({ timeout: 300000 });
+    const g0 = sql(`select length(i.data)||'|'||i."mimeType"||'|'||coalesce(i."sourceHash",'') from "SparePartImage" i join "SparePart" p on p.id=i."sparePartId" where p."partCode"='${P}G0'`).split("|");
     sql(`select count(*) from "SparePartImage" i join "SparePart" p on p.id=i."sparePartId" where p."partCode" like '${P}G%'`) === String(BIG_N) &&
-    Number(g0[0]) < shot0 / 2 && g0[1] === bigMd5._sha.A2
-      ? pass(`ฐานข้อมูล: รูปครบ ${BIG_N} รูป ย่อแล้ว (${(shot0 / 1048576).toFixed(1)} MB → ${(Number(g0[0]) / 1048576).toFixed(1)} MB) เก็บค่ารูปต้นฉบับ`)
+    Number(g0[0]) < shot0 / 5 && g0[1] === "image/jpeg" && g0[2] === bigMd5._sha.A2
+      ? pass(`ฐานข้อมูล: รูปครบ ${BIG_N} รูป PNG ${(shot0 / 1048576).toFixed(1)} MB → JPEG ${(Number(g0[0]) / 1048576).toFixed(1)} MB · เก็บค่ารูปต้นฉบับ`)
       : fail(`รูปจากไฟล์ใหญ่: ${g0.join(" | ")} ต้นฉบับ ${shot0}`);
     await label("กลับไปหน้าข้อมูลอะไหล่").click();
     await page.waitForTimeout(1000);
     // เลือกไฟล์เดิมอีกรอบ — ย่อใหม่ได้ไบต์ไม่ตรงเดิมก็ได้ แต่ต้นฉบับเดิม = ไม่มีอะไรเปลี่ยน
-    await pickBig();
+    await pickFile(FBIG);
     (await label("รูปใหม่ / เปลี่ยนรูป 0 รายการ").count()) && (await label(`เหมือนเดิม ${BIG_N} รายการ`).count())
       ? pass("เลือกไฟล์ใหญ่เดิมซ้ำ: รูปไม่ขึ้นว่าเปลี่ยน (เทียบด้วยรูปต้นฉบับ)")
       : fail(`ไฟล์ใหญ่ซ้ำ: ${await applyText()}`);
-    await label("เลือกไฟล์ใหม่").click();
-    await page.waitForTimeout(500);
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
-    if (await vis("อัปเดตข้อมูลอะไหล่จากไฟล์ Excel").count()) await label("ปิด").last().click().catch(() => {});
-    await page.waitForTimeout(800);
-    for (const f of [...shots, FBIG]) require("fs").rmSync(f, { force: true });
+    await closeImport();
+    require("fs").rmSync(FBIG, { force: true });
+
+    // ── ย่อรอบแรกแล้วยังเกินเป้า (รูปเยอะ) — ย่อเพิ่มอีกรอบจนส่งได้ ──
+    const many = [];
+    for (let k = 0; k < MANY_N; k++) {
+      const f = path.join(dir, `zztw-many-${SUF}-${k}.jpg`);
+      require("fs").writeFileSync(f, Buffer.from(await noise("image/jpeg", 1600, 1280, 0.95, 100 + k), "base64"));
+      many.push(f);
+    }
+    fixture(FMANY, {
+      headers: ["รูปภาพประกอบ", "รหัสสินค้า", "ชื่อรวม (ไทย)", "ยี่ห้อสินค้า"],
+      rows: many.map((_, k) => [null, `${P}R${k}`, `รูปเยอะทดสอบเว็บ ${k}`, BRAND]),
+      images: Object.fromEntries(many.map((f, k) => [`A${k + 2}`, `file:${f}`])),
+    });
+    for (const f of many) require("fs").rmSync(f, { force: true });
+    await pickFile(FMANY);
+    const manyNote = await vis(/ย่อรูปใหญ่ \d+ รูป \([^)]*ย่อ \d+ รอบ\)/, false).first().innerText().catch(() => "");
+    const after = Number((manyNote.match(/→ ([\d.]+) MB/) || [])[1]);
+    manyNote && after <= 45
+      ? pass(`รูปเยอะ ย่อรอบแรกยังเกิน → ย่อเพิ่มจนต่ำกว่าเป้า (${(manyNote.match(/ย่อรูปใหญ่[^)]*\)/) || [""])[0]})`)
+      : fail(`ย่อหลายรอบ: ${manyNote || (await page.locator("body").innerText()).slice(0, 300)}`);
+    await closeImport();
+    require("fs").rmSync(FMANY, { force: true });
 
     // หน้ารายการอะไหล่ (ช่างใช้) — รูปต้องมีตัวกันแคช รูปถูกแทนจากไฟล์แล้วเห็นรูปใหม่ทันที
     await vis("รายการอะไหล่").first().click();

@@ -3,6 +3,7 @@
 // ใช้: node tests/fixtures-parts-xlsx.js <ออก.xlsx> '<JSON>'
 //   JSON = { "headers": [...], "rows": [[...], ...], "images": { "B2": "a", "B3": "b" } }
 //   ค่าใน images คือ "เมล็ด" ของรูป — เมล็ดเดียวกัน = ไบต์เดียวกัน (ไว้เทสต์รูปเหมือนเดิม/เปลี่ยนรูป)
+//   "imageExt": "png" = ตั้งชื่อไฟล์รูปในไฟล์เป็น .png (รูปก๊อปวางที่ Excel เก็บเป็น PNG) — ค่าตั้งต้น .jpeg
 //   "merges": ["C1:C2", ...] = ผสานเซลล์ (หัวตารางสองชั้น / อะไหล่ที่ผสานรหัสลงหลายแถว) · "title": "..." = แถวชื่อเรื่องเหนือหัวตาราง
 // พิมพ์ md5 ของรูปแต่ละเซลล์ออกมาเป็น JSON (+ "_sha": sha256 ไว้เทสต์ค่ารูปต้นฉบับของรูปที่เบราว์เซอร์ย่อ)
 const E = require("exceljs");
@@ -42,7 +43,7 @@ const imageOf = (seed) => (seed.startsWith("file:") ? fs.readFileSync(seed.slice
     const data = imageOf(spec.images[ref]);
     md5[ref] = crypto.createHash("md5").update(data).digest("hex");
     md5._sha[ref] = crypto.createHash("sha256").update(data).digest("hex");
-    zip.file(`xl/media/image${k + 1}.jpeg`, data);
+    zip.file(`xl/media/image${k + 1}.${spec.imageExt || "jpeg"}`, data);
   });
   zip.file(sheetPath, sheet);
   if (refs.length) {
@@ -65,7 +66,7 @@ const imageOf = (seed) => (seed.startsWith("file:") ? fs.readFileSync(seed.slice
     zip.file(
       "xl/richData/_rels/richValueRel.xml.rels",
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${each(
-        (k) => `<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${k + 1}.jpeg"/>`
+        (k) => `<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${k + 1}.${spec.imageExt || "jpeg"}"/>`
       )}</Relationships>`
     );
   }

@@ -9,7 +9,8 @@
 #   · รูปเข้าแต่ลิงก์รูปหาย ซ่อมให้ · ยี่ห้อเดียวแยกสองไฟล์ในรอบเดียวไม่ฟ้อง "ไม่อยู่ในไฟล์" · แถวที่ข้ามไม่นับเป็นไม่อยู่ในไฟล์
 #   · Part No. ยาวเกินข้าม · ข้อความผิดพลาดของฟอร์มเป็นภาษาไทย
 #   ไฟล์เกิน 50 MB (เบราว์เซอร์ย่อรูปก่อนส่ง): เก็บค่ารูปต้นฉบับ (imageHashes) — ย่อใหม่ได้ไบต์ต่างแต่ต้นฉบับเดิม = เหมือนเดิม ·
-#   ไฟล์ต้นฉบับไม่ย่อก็ = เหมือนเดิม · ค่าผิดรูปแบบถูกทิ้ง · อัปโหลดรูปเองล้างค่าต้นฉบับ
+#   ไฟล์ต้นฉบับไม่ย่อก็ = เหมือนเดิม · ค่าผิดรูปแบบถูกทิ้ง · อัปโหลดรูปเองล้างค่าต้นฉบับ ·
+#   รูปชื่อ .png ที่ข้างในเป็น JPEG (เบราว์เซอร์แปลง PNG เป็น JPEG แต่คงชื่อ) เก็บเป็น image/jpeg — ดูจากไบต์ ไม่ใช่นามสกุล
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -266,5 +267,13 @@ curl -s -X POST localhost:4000/api/spare-parts/$HID/image -H "$(H $A)" -F "image
 [ "$(DB "select coalesce(\"sourceHash\",'NULL') from \"SparePartImage\" where \"sparePartId\"=$HID")" = "NULL" ] \
   && [ "$(IMP $A h0.xlsx | J 'd.items[0]&&d.items[0].image')" = "CHANGED" ] \
   && pass "อัปโหลดรูปเองในแอป: ล้างค่าต้นฉบับ — ไฟล์เดิมขึ้นว่ารูปต่างจากที่อัปโหลด" || fail "อัปโหลดเองไม่ล้าง sourceHash"
+
+# เบราว์เซอร์แปลงรูป PNG (ก๊อปวาง) เป็น JPEG แต่คงชื่อ image1.png — เซิร์ฟเวอร์ต้องดูชนิดจากไบต์
+xlsx p1.xlsx "{\"headers\":$HH,\"rows\":[[\"${P}J\",\"ชนิดรูปทดสอบ\",null]],\"images\":{\"C2\":\"jpg-in-png-$SUF\"},\"imageExt\":\"png\"}" >/dev/null
+IMP $A p1.xlsx -F apply=true -F batchId=$B5ID >/dev/null
+JID=$(DB "select id from \"SparePart\" where \"partCode\"='${P}J'")
+[ "$(DB "select \"mimeType\" from \"SparePartImage\" where \"sparePartId\"=$JID")" = "image/jpeg" ] \
+  && [ "$(curl -s -o /dev/null -w '%{content_type}' localhost:4000/api/spare-parts/$JID/image)" = "image/jpeg" ] \
+  && pass "รูปชื่อ .png ที่ข้างในเป็น JPEG เก็บและส่งเป็น image/jpeg" || fail "ชนิดรูป: $(DB "select \"mimeType\" from \"SparePartImage\" where \"sparePartId\"=$JID")"
 
 [ -z "$FAILED" ]

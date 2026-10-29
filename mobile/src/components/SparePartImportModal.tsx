@@ -204,7 +204,11 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
       let upload: PreparedSheet | null = null;
       try {
         // ย่อรูปใหญ่ก่อนส่ง — ไฟล์รูปเต็มขนาดเกิน 50 MB ได้ (Huebsch / Oasis)
-        upload = await shrinkXlsx(f.blob, (n, total) => setProgress(`กำลังย่อรูปใน ${at} — รูป ${n}/${total}`));
+        upload = await shrinkXlsx(f.blob, (n, total, round) =>
+          setProgress(
+            round === 1 ? `กำลังย่อรูปใน ${at} — รูป ${n}/${total}` : `${at} ยังใหญ่เกิน — ย่อรูปเพิ่ม รอบ ${round} — รูป ${n}/${total}`
+          )
+        );
         if (upload.after > MAX_SHEET_BYTES) {
           out.push({ file: f, upload, result: null, error: `ย่อรูปแล้วยังใหญ่ ${mb(upload.after)} (เกิน 50 MB) — แยกไฟล์ให้เล็กลง` });
           continue;
@@ -424,7 +428,7 @@ function PickStep({
         <Text style={styles.noteText}>
           รหัสสินค้า (ตัวเทียบ) · ชื่อรวม (ไทย) · ยี่ห้อสินค้า · Category · Part No. · รูปภาพประกอบ (รูปที่วางในเซลล์) — ลำดับข้ามไป
         </Text>
-        <Text style={styles.noteText}>หัวคอลัมน์สลับที่ได้ · ชีตแรกของแต่ละไฟล์ · รูปใหญ่ในไฟล์ย่อให้เองก่อนส่ง (ด้านยาว 1,600 px) ไฟล์รูปเต็มขนาดเกิน 50 MB ก็ได้</Text>
+        <Text style={styles.noteText}>หัวคอลัมน์สลับที่ได้ · ชีตแรกของแต่ละไฟล์ · รูปใหญ่ในไฟล์ย่อให้เองก่อนส่ง (ด้านยาว 1,600 px · ไฟล์ใหญ่มากย่อเพิ่มจนส่งได้) ไฟล์ 200 MB ก็ได้</Text>
       </View>
     </View>
   );
@@ -560,7 +564,9 @@ function PreviewStep({
               {c.result ? (
                 <Text style={styles.muted}>
                   {c.result.summary.rows} แถว · รูปในเซลล์ {c.result.imageCount} รูป ·{" "}
-                  {c.upload?.shrunk ? `ย่อรูปใหญ่ ${c.upload.shrunk} รูป (${mb(c.upload.before)} → ${mb(c.upload.after)}) · ` : ""}
+                  {c.upload?.shrunk
+                    ? `ย่อรูปใหญ่ ${c.upload.shrunk} รูป (${mb(c.upload.before)} → ${mb(c.upload.after)}${c.upload.rounds > 1 ? ` · ย่อ ${c.upload.rounds} รอบ` : ""}) · `
+                    : ""}
                   {COLS.map(([k, label]) => colNote(c.result!.columns[k], label)).join(" · ")}
                 </Text>
               ) : (
