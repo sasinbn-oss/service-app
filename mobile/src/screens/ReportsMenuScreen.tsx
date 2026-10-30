@@ -143,10 +143,11 @@ const ENTRIES: Entry[] = [
 ];
 
 /**
- * รายงานของ Area Team — ปุ่มเดียว (เจ้าของงานกำหนด ต.ค. 69): ใบงานทั้งหมดของสาขาที่เห็น ตามช่วงวันที่แจ้ง
+ * รายงานของ Area — ปุ่มเดียว (เจ้าของงานกำหนด ต.ค. 69): ใบงานทั้งหมดของสาขา COCO ตามช่วงวันที่แจ้ง
  * ไม่มีสรุปบนจอ — ตำแหน่งนี้เอาไฟล์ไปกรอง/ส่งต่อเอง ส่วนติดตามรายใบดูในใบงานซ่อมได้อยู่แล้ว
+ * Supervisor (COCO) / Maid (COCO) ไม่มีเมนูรายงานแล้ว (เจ้าของงานขอ ต.ค. 69 · AreaOnlyGate กันไว้ก่อนถึงหน้านี้)
  */
-function AreaTeamReport({ area }: { area: boolean }) {
+function AreaTeamReport() {
   const [from, setFrom] = useState(`${todayBkk().slice(0, 8)}01`);
   const [to, setTo] = useState(todayBkk());
   const [busy, setBusy] = useState(false);
@@ -176,7 +177,7 @@ function AreaTeamReport({ area }: { area: boolean }) {
           <View style={styles.body}>
             <Text style={styles.label}>รายงานใบงานทั้งหมด (Excel)</Text>
             <Text style={styles.question}>
-              {area ? "ใบงานทุกสถานะของสาขา COCO ทั้งหมด" : "ใบงานทุกสถานะของสาขาที่คุณดูแล"} — แถวละใบ ทุกคอลัมน์ในแถวเดียว
+              ใบงานทุกสถานะของสาขา COCO ทั้งหมด — แถวละใบ ทุกคอลัมน์ในแถวเดียว
             </Text>
           </View>
         </View>
@@ -203,7 +204,7 @@ function AreaTeamReport({ area }: { area: boolean }) {
 
 export default function ReportsMenuScreen({ navigation }: Props) {
   const { user } = useAuth();
-  if (isAreaTeam(user)) return <AreaTeamReport area={user?.role === "AREA"} />;
+  if (isAreaTeam(user)) return <AreaTeamReport />;
   const admin = user?.role === "ADMIN";
   const manager = admin || user?.role === "SUPERVISOR";
   return (

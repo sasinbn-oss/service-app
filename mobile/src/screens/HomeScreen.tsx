@@ -11,6 +11,7 @@ import { colors, isDark, radius, shadow, spacing, headingFont } from "../theme";
 import { regionsOf, regionsText } from "../utils/regions";
 import { ROLE_LABELS } from "../utils/roles";
 import { teamsOf, teamsText } from "../utils/teams";
+import { canOpenScreen } from "../utils/areaTeam";
 import { MenuEntry } from "../components/MenuList";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { HomeStackParamList } from "../navigation/types";
@@ -113,7 +114,7 @@ export default function HomeScreen({ navigation }: Props) {
       onPress: () => navigation.navigate("WorkOrderList", { inbox: false }),
     },
     {
-      key: "Reports",
+      key: "ReportsMenu",
       group: "repair",
       labelEn: "Reports",
       label: "รายงาน",
@@ -271,6 +272,9 @@ export default function HomeScreen({ navigation }: Props) {
           <View style={styles.grid}>
             {entries
               .filter((e) => e.group === group.key)
+              // การ์ดของหน้าที่เหลือให้ Area คนเดียวใช้ key = ชื่อหน้า (MachineDashboard · ReportsMenu) —
+              // Supervisor (COCO) / Maid (COCO) ไม่เห็น ตามกฎเดียวกับเมนูข้าง (utils/areaTeam.ts · เจ้าของงานขอ ต.ค. 69)
+              .filter((e) => canOpenScreen(user, e.key))
               .map((entry) => (
                 <View key={entry.key} style={twoCol ? styles.cellHalf : styles.cellFull}>
                   <MenuTile entry={entry} />

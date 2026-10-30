@@ -3,6 +3,7 @@
 #   · นำเข้าไฟล์รายชื่อ Maid ผ่านปุ่ม "นำเข้า Area Team": ตัวอย่างไม่บันทึก · สร้างบัญชี + ผูกสาขา + รหัสสุ่มในไฟล์ Excel
 #     แถวตำแหน่งอื่น/ไม่มี User ถูกข้าม · ชื่อผู้ใช้ที่เป็น Supervisor อยู่แล้วไม่ถูกลดเป็น Maid · ไม่ไปทับ Supervisor ของสาขา
 #   · Maid เห็นและเปิดใบงานได้เฉพาะสาขาที่ประจำ · ทำขั้นตอน/หน้าอื่นไม่ได้
+#   · ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69): Maid 403 ข้อความไทย · endpoint ที่ยังใช้ยัง 200
 #   · เพิ่มทีละคนในหน้าสิทธิ์ผู้ใช้: ต้องเลือกสาขา COCO · แก้สาขาได้ · เปลี่ยนตำแหน่งแล้วสาขาถูกล้าง
 #   · นำเข้าซ้ำ = แทนที่สาขาเดิม ไม่แตะรหัสผ่าน
 cd "$(dirname "$0")/.."
@@ -86,7 +87,18 @@ has "$I1" $W1 && ! has "$I1" $W6 && pass "รายการใบงาน: เ
   && pass "จ่ายงาน/แก้ใบงานไม่ได้" || fail "Maid ทำขั้นตอนได้"
 OK=1; for p in vehicles auth/users spare-parts branches/manage teams; do c=$(CODE $M1 $p); [ "$c" = "403" ] || { OK=; echo "    $p → $c"; }; done
 [ -n "$OK" ] && pass "หน้าอื่นนอกเมนู Area Team ตอบ 403" || fail "API นอกเมนูเปิดได้"
-[ "$(GET $M1 "work-orders/reports/area-team?from=2026-01-01&to=2026-12-31" | J 'd.path ? "ok" : JSON.stringify(d)')" = "ok" ] && pass "ออกรายงาน Area Team ได้" || fail "รายงาน Maid"
+# ทีม Area เห็นว่าสามเมนูนี้ไม่จำเป็นกับแม่บ้าน (เจ้าของงานขอ ต.ค. 69) — ยิงตรงต้องได้ 403 ไม่ใช่แค่ไม่มีเมนู
+ERR() { curl -s -X "${3:-GET}" "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' ${4:+-d "$4"} | J 'd.error'; }
+OK=1; for p in machines/outages machines/signal-lost machines/overview machines/work-statuses "work-orders/reports/area-team?from=2026-01-01&to=2026-12-31" teams/coverage-map teams/area-map; do
+  r="$(CODE $M1 "$p")|$(ERR $M1 "$p")"; [ "$r" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] || { OK=; echo "    $p → $r"; }
+done
+r="$(CODE $M1 teams/area-map POST '{}')|$(ERR $M1 teams/area-map POST '{}')"; [ "$r" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] || { OK=; echo "    POST teams/area-map → $r"; }
+[ -n "$OK" ] && pass "Maid: ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ (อ่าน+บันทึกผัง) → 403 \"เมนูนี้สำหรับทีม Area เท่านั้น\"" || fail "Maid ยังเรียกเมนูของ Area ได้"
+TODAY=$(node -e "console.log(new Date(Date.now()+7*3600e3).toISOString().slice(0,10))")
+OK=1; for p in auth/me work-orders work-orders/version work-orders/inbox-count work-orders/options "work-orders/locate?ids=$W1" work-orders/$W1 work-orders/$W1/version work-orders/$W1/attachments work-orders/$W1/attachments/links "branches?search=C" branches/C0001/machines branches/C0001/open-work-orders branches/C0001/last-contact "plans/day?date=$TODAY" "plans/month?month=${TODAY:0:7}" plans/pending; do
+  c=$(CODE $M1 "$p"); [ "$c" = "200" ] || { OK=; echo "    $p → $c"; }
+done
+[ -n "$OK" ] && pass "Maid: endpoint ที่ใบงาน/กล่องงาน/ฟอร์มเปิดใบงาน/แผนงานใช้ ยัง 200 ทุกตัว (17 ตัว)" || fail "Maid เสีย endpoint ที่ยังต้องใช้"
 
 echo
 echo "═══ เพิ่มทีละคนในหน้าสิทธิ์ผู้ใช้"

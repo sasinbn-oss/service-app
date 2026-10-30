@@ -150,7 +150,10 @@ function noteFields(o: NoteShape) {
   };
 }
 
-/** สาขาที่ Area Team เห็น — ว่าง = ทุกสาขา (ตำแหน่งอื่นเห็นกระดานทั้งบริษัทเหมือนเดิม) */
+/**
+ * สาขาที่ Area เห็น — ว่าง = ทุกสาขา (ตำแหน่งอื่นเห็นกระดานทั้งบริษัทเหมือนเดิม)
+ * ในทีม Area มีแค่ Area ที่มาถึงกระดานนี้ — Supervisor (COCO) / Maid (COCO) ได้ 403 ก่อน (เจ้าของงานขอ ต.ค. 69 · AREA_ONLY_ALLOWED)
+ */
 function areaOf(req: AuthRequest): Prisma.BranchWhereInput | undefined {
   return isAreaTeam(req.auth) ? areaBranchWhere(req.auth!) : undefined;
 }

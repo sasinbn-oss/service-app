@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: ผังผู้รับผิดชอบ — เบอร์โทร + ผังฝั่ง Area (เจ้าของงานขอ ต.ค. 69 · ตามตัวอย่างที่ตกลง)
 #   · ผังฝ่ายบริการมีเบอร์ของคนที่มีเบอร์ · ผังฝั่ง Area ทุกคนเปิดได้ มีเบอร์ ดูแลสาขาไหน ใบงานค้าง
+#     — ยกเว้น Supervisor (COCO) / Maid (COCO) ที่ได้ 403 ทั้งสองผัง (เจ้าของงานขอ ต.ค. 69 · ทีม Area ให้เหลือเฉพาะ Area)
 #   · แก้ผังฝั่ง Area ได้เฉพาะแอดมินและ Area (Area ย้ายได้ทุก Area) — ช่าง/หัวหน้าภาค/Supervisor (COCO)/Admin Spare Part ไม่ได้
 #   · ย้าย Supervisor ไป Area อื่น · ย้ายสาขาระหว่าง Supervisor (เปลี่ยนว่าใครเห็นใบงาน) · ตรวจค่าที่ส่งมาทุกตัว
 #   · Maid (COCO): ส่งแยก (maids + branches[].maids) — ผังวาดใต้คนที่ถือสาขา · ไม่อยู่ใน people · ลบบัญชีแล้วไม่ขึ้น
@@ -53,12 +54,16 @@ CM=$(GET $T teams/coverage-map)
   && pass "ช่างที่มีเบอร์ในระบบ: ผังส่งเบอร์มา (ช่างเปิดดูเองก็เห็น)" || fail "ไม่มีเบอร์ของ T001: $(echo "$CM" | head -c 200)"
 [ "$(echo "$CM" | J 'd.supervisors.find(s=>s.code==="S001").phone')" = "null" ] && pass "คนที่ไม่มีเบอร์ = null (หน้าจอไม่ขึ้นบรรทัดเบอร์)" || fail "เบอร์ S001 ไม่ใช่ null"
 
-echo "═══ ผังฝั่ง Area: ทุกคนเปิดได้"
-for who in T S C2 AR1 A; do
+echo "═══ ผังฝั่ง Area: ทุกคนเปิดได้ ยกเว้น Supervisor (COCO) / Maid (COCO)"
+for who in T S AR1 A; do
   M=$(GET ${!who} teams/area-map)
   [ "$(echo "$M" | J 'Array.isArray(d.people) && Array.isArray(d.branches)')" = "true" ] || fail "$who เปิดผังฝั่ง Area ไม่ได้: $(echo "$M" | head -c 150)"
 done
-pass "ช่าง · หัวหน้าภาค · Supervisor (COCO) · Area · แอดมิน เปิดผังฝั่ง Area ได้"
+pass "ช่าง · หัวหน้าภาค · Area · แอดมิน เปิดผังฝั่ง Area ได้"
+GCODE() { curl -s -o /dev/null -w "%{http_code}" "localhost:4000/api/$2" -H "$(H $1)"; }
+[ "$(GCODE $C2 teams/area-map)|$(GCODE $C2 teams/coverage-map)|$(GET $C2 teams/area-map | J 'd.error')" = "403|403|เมนูนี้สำหรับทีม Area เท่านั้น" ] \
+  && pass "Supervisor (COCO): ผังฝั่ง Area และผังฝ่ายบริการ → 403 \"เมนูนี้สำหรับทีม Area เท่านั้น\" (เจ้าของงานขอ ต.ค. 69)" \
+  || fail "Supervisor (COCO) เปิดผัง: $(GCODE $C2 teams/area-map)|$(GCODE $C2 teams/coverage-map)|$(GET $C2 teams/area-map | J 'd.error')"
 M=$(GET $T teams/area-map)
 [ "$(echo "$M" | J "const p=d.people.find(x=>x.id===$SUP1); [p.phone,p.areaId,p.role].join('|')")" = "089-100-0001|$AREA1|COCO_SUPERVISOR" ] \
   && pass "Supervisor (COCO): เบอร์ · อยู่ใต้ Area ไหน" || fail "ข้อมูล sup1: $(echo "$M" | J "JSON.stringify(d.people.find(x=>x.id===$SUP1))")"
@@ -80,11 +85,12 @@ M=$(GET $T teams/area-map)
   && pass "สาขาบอกว่ามี Maid คนไหนประจำ — Maid คนเดียวประจำได้หลายสาขา · ลบบัญชีแล้วไม่ขึ้น" || fail "branches[].maids: $(echo "$M" | J "JSON.stringify(d.branches.filter(b=>b.maids.length))")"
 [ "$(echo "$M" | J "d.people.some(p=>p.id===$MAID1||p.id===$MAID2) || d.maids.some(m=>m.id===$MAID2)")" = "false" ] \
   && pass "Maid ไม่อยู่ใน people (ไม่ใช่ที่วางสาขา) · Maid ที่ลบบัญชีแล้วไม่อยู่ใน maids" || fail "Maid หลุดเข้า people หรือ Maid ลาออกยังอยู่"
-[ "$(GET $(login zm.maid1) teams/area-map | J 'Array.isArray(d.maids) && d.canEdit === false')" = "true" ] \
-  && pass "Maid (COCO) เปิดผังได้ แต่แก้ไม่ได้" || fail "Maid เปิดผัง/สิทธิ์แก้ไม่ถูก"
+MD1=$(login zm.maid1)
+[ "$(GCODE $MD1 teams/area-map)|$(GET $MD1 teams/area-map | J 'd.error')" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] \
+  && pass "Maid (COCO) เปิดผังไม่ได้ (403 · เหลือเฉพาะ Area ตั้งแต่ ต.ค. 69) — แต่ยังขึ้นในผังของคนอื่นตามข้างบน" || fail "Maid เปิดผัง: $(GCODE $MD1 teams/area-map)"
 canEdit() { GET $1 teams/area-map | J 'd.canEdit'; }
-[ "$(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $C1)|$(canEdit $PA)" = "true|true|false|false|false|false" ] \
-  && pass "ปุ่มแก้ไข: แอดมิน · Area เท่านั้น" || fail "canEdit: $(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $C1)|$(canEdit $PA)"
+[ "$(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $PA)" = "true|true|false|false|false" ] \
+  && pass "ปุ่มแก้ไข: แอดมิน · Area เท่านั้น" || fail "canEdit: $(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $PA)"
 
 echo "═══ ใครบันทึกได้"
 MOVE="{\"supervisors\":[{\"id\":$SUP2,\"areaId\":$AREA2}]}"

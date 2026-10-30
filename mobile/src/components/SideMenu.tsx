@@ -16,7 +16,7 @@ import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { isAreaTeam } from "../utils/areaTeam";
+import { canOpenScreen, isAreaTeam } from "../utils/areaTeam";
 import { sessionRoleLabel } from "../utils/roles";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
@@ -196,7 +196,7 @@ const GROUPS: Group[] = [
       },
       { key: "dash", label: "ติดตามเครื่องเสีย", labelEn: "Machine Monitor", icon: "pulse-outline", tab: "HomeTab", screen: "MachineDashboard" },
       { key: "reports", label: "รายงาน", labelEn: "Reports", icon: "document-text-outline", tab: "HomeTab", screen: "ReportsMenu" },
-      // ทุกคนดูได้ — ช่างรู้ว่าทีมไหนมีใคร · แอดมินลากแก้ได้ในหน้าเดียวกัน
+      // ทุกคนดูได้ (ยกเว้น Supervisor (COCO) / Maid (COCO) — ดู AREA_ONLY_SCREENS) — ช่างรู้ว่าทีมไหนมีใคร · แอดมินลากแก้ได้ในหน้าเดียวกัน
       { key: "coverage", label: "ผังผู้รับผิดชอบ", labelEn: "Coverage Map", icon: "git-network-outline", tab: "HomeTab", screen: "CoverageMap" },
     ],
   },
@@ -272,6 +272,8 @@ const GROUPS: Group[] = [
 /**
  * เมนูของ Area Team — 6 เมนูตามที่เจ้าของงานกำหนด (ต.ค. 69) ที่เหลือซ่อนทั้งหมด
  * เปลี่ยนรหัสผ่านอยู่ด้วย ไม่งั้นหลังเปลี่ยนรหัสครั้งแรกแล้วจะไม่มีทางเปลี่ยนเองอีก
+ * ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area — Supervisor (COCO) / Maid (COCO) ถูกกรองออกอีกชั้น
+ * ด้วย canOpenScreen (utils/areaTeam.ts) ซึ่งเป็นกฎเดียวกับการ์ดหน้าหลักและประตูหน้าจอ ไม่ได้แยกชุดเมนูไว้ที่นี่
  */
 const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password"]);
 
@@ -340,6 +342,7 @@ function MenuContent({
               .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
               .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
               .filter((it) => !isAreaTeam(user) || AREA_TEAM_MENU.has(it.key))
+              .filter((it) => canOpenScreen(user, it.screen))
               .filter((it) => !it.superAdmin || user?.superAdmin);
             if (!items.length) return null;
             // แถบไอคอน (เมนูหด) ไม่มีหัวกลุ่มให้กด จึงโชว์ทุกปุ่มเสมอ

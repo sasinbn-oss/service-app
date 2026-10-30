@@ -1,7 +1,8 @@
 // ทดสอบ: Maid (COCO) ผ่านเบราว์เซอร์ (เจ้าของงานเพิ่ม ต.ค. 69)
 //   · หน้าสิทธิ์ผู้ใช้: ปุ่มตำแหน่ง Maid (COCO) · ต้องเลือกสาขาที่ประจำก่อนสร้าง · เพิ่ม/เอาสาขาออกจากการ์ด (เช็คฐานข้อมูล)
 //   · ปุ่ม "นำเข้า Area Team" รับไฟล์รายชื่อ Maid: ตัวอย่างบอกจำนวน Maid · ยืนยันแล้วมีบัญชี + สาขา (ฐานข้อมูล)
-//   · Maid เข้าระบบ: หัวจอบอกตำแหน่ง · เห็นเฉพาะใบงานสาขาที่ประจำ
+//   · Maid เข้าระบบ: หัวจอบอกตำแหน่ง · เมนู 3 อย่าง (ไม่มีติดตามเครื่องเสีย/รายงาน/ผังผู้รับผิดชอบ — เหลือเฉพาะ Area ต.ค. 69)
+//     · เปิดมาเจอแผนงาน · เห็นเฉพาะใบงานสาขาที่ประจำ
 // ต้องมี DATABASE_URL · สร้างบัญชีชั่วคราว zz.web.maid* แล้วลบทิ้งตอนจบ
 const { chromium } = require("playwright");
 const path = require("path");
@@ -139,6 +140,19 @@ function cleanup() {
     const m = await open("zz.web.maid", 1280);
     const mv = (t, exact = true) => m.getByText(t, { exact }).locator("visible=true");
     (await mv("Maid (COCO)").count()) > 0 ? pass("หัวจอบอกตำแหน่ง Maid (COCO)") : fail("ไม่บอกตำแหน่ง");
+    // เมนูเหลือ 3 อย่าง — ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69)
+    // หาเมนูด้วย aria-label (ชื่อเมนู) ปุ่มบนเว็บไม่ได้เป็น role=button
+    const menuCount = (t) => m.locator(`[aria-label="${t}"]`).locator("visible=true").count();
+    const mMissing = [];
+    for (const t of ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", "เปลี่ยนรหัสผ่าน"]) if ((await menuCount(t)) === 0) mMissing.push(t);
+    const mLeaked = [];
+    for (const t of ["ติดตามเครื่องเสีย", "รายงาน", "ผังผู้รับผิดชอบ", "งานของฉันวันนี้", "หน้าหลัก"]) if ((await menuCount(t)) > 0) mLeaked.push(t);
+    !mMissing.length && !mLeaked.length
+      ? pass("Maid เห็น แผนงาน · กล่องงานของฉัน · ใบงานซ่อม · เปลี่ยนรหัสผ่าน — ไม่มี ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ")
+      : fail(`เมนู Maid: หาย=[${mMissing}] เกิน=[${mLeaked}]`);
+    // ป้ายขอบเขต "สาขาที่ประจำ" มีเฉพาะหน้าแผนงานของ Maid — หน้าแรกหลังเข้าระบบต้องเป็นแผนงาน
+    (await mv("สาขาที่ประจำ").count()) > 0 ? pass("Maid เข้าระบบแล้วเปิดมาเจอแผนงาน (สาขาที่ประจำ)") : fail("หน้าแรกของ Maid ไม่ใช่แผนงาน");
+    await m.screenshot({ path: path.join(DIR, "maid-4-menu.png") });
     await m.locator('[aria-label="ใบงานซ่อม"]').locator("visible=true").last().click();
     await m.waitForTimeout(3000);
     (await mv(w1.code, false).count()) > 0 && (await mv(w6.code, false).count()) === 0

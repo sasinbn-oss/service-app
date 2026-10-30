@@ -8,7 +8,7 @@
  * ความจริงว่าเครื่องกลับมาหรือยัง ช่างปิดงานแล้วเครื่องยังไม่กลับมาก็มี
  * และต้องเห็นว่าเป็นแบบนั้น ไม่ใช่กลบด้วยการปิดเคสให้อัตโนมัติ
  */
-import { AREA_BRANCH_SELECT, AREA_OUT_OF_SCOPE, areaBranchSelect, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
+import { AREA_BRANCH_SELECT, AREA_ONLY_MESSAGE, AREA_OUT_OF_SCOPE, areaBranchSelect, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router, Response } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -1870,8 +1870,10 @@ router.get("/reports/by-opener", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * รายงานของ Area Team — ปุ่มเดียว ใบงานทั้งหมดของสาขาที่เห็น ตามช่วงวันที่แจ้ง (src/reports/areaTeamReport.ts)
+ * รายงานของ Area — ปุ่มเดียว ใบงานทั้งหมดของสาขา COCO ตามช่วงวันที่แจ้ง (src/reports/areaTeamReport.ts)
  * ตำแหน่งอื่นใช้รายงานของตัวเองอยู่แล้ว ไม่เปิดให้ — ขอบเขตต้องมาจาก areaWorkOrderWhere เท่านั้น
+ * Supervisor (COCO) / Maid (COCO) ไม่ได้แล้ว (เจ้าของงานขอ ต.ค. 69 · AREA_ONLY_ALLOWED กันก่อนถึงที่นี่) — เช็คซ้ำตรงนี้
+ * เพราะถ้าวันหน้ามีคนย้าย endpoint นี้กลับไปรายการรวมของทีม Area รายงานจะหลุดไปถึงสองตำแหน่งนั้นเงียบ ๆ
  */
 const areaReportQuery = z
   .object({
@@ -1883,7 +1885,7 @@ const areaReportQuery = z
     message: "เลือกช่วงได้ไม่เกิน 1 ปี",
   });
 router.get("/reports/area-team", requireAuth, async (req: AuthRequest, res) => {
-  if (!isAreaTeam(req.auth)) return res.status(403).json({ error: "รายงานนี้สำหรับ Area และ Supervisor (COCO)" });
+  if (req.auth?.role !== "AREA") return res.status(403).json({ error: AREA_ONLY_MESSAGE });
   const parsed = areaReportQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   const { from, to } = parsed.data;

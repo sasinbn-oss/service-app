@@ -122,7 +122,20 @@ for X in "ZVAR:AREA" "ZVAC:COCO_SUPERVISOR" "ZVAM:COCO_MAID"; do
   OWN=$(GET "$(login $C)" "work-orders?filter=ALL" | J '(d.rows||[]).map(r=>r.id).sort().join()')
   SEEN=$(GET "$AV" "work-orders?filter=ALL" | J '(d.rows||[]).map(r=>r.id).sort().join()')
   W=$(POST "$AV" work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W9","symptom":"x"}]}')
+  # ติดตามเครื่องเสีย · ผังผู้รับผิดชอบ · รายงาน เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69) — ดูในฐานะต้องเจอเท่าเจ้าตัว
+  # ถ้าแอดมินดูในฐานะ Supervisor/Maid แล้วยังเปิดได้ จะตอบคนที่โทรมาถามว่า "ทำไมไม่มีเมนูนี้" ผิด
+  AO=""
+  for p in machines/overview teams/coverage-map teams/area-map "work-orders/reports/area-team?from=2026-01-01&to=2026-12-31"; do
+    AO="$AO$(curl -s -o /dev/null -w "%{http_code}" "localhost:4000/api/$p" -H "$(H "$AV")"),"
+  done
+  AOE=$(GET "$AV" machines/overview | J 'd.error||""')
   POST "$AV" auth/view-as/stop '{}' >/dev/null
+  if [ "$R" = "AREA" ]; then
+    [ "$AO" = "200,200,200,200," ] && pass "ดูในฐานะ Area: ติดตามเครื่องเสีย · ผังผู้รับผิดชอบ · รายงาน เปิดได้ (200)" || fail "ดูในฐานะ Area เปิดเมนูของ Area ไม่ได้: $AO"
+  else
+    [ "$AO|$AOE" = "403,403,403,403,|เมนูนี้สำหรับทีม Area เท่านั้น" ] \
+      && pass "ดูในฐานะ $R: ติดตามเครื่องเสีย · ผังผู้รับผิดชอบ · รายงาน → 403 \"เมนูนี้สำหรับทีม Area เท่านั้น\" เท่าเจ้าตัว" || fail "ดูในฐานะ $R เมนูของ Area: $AO $AOE"
+  fi
   [ -n "$AV" ] && [ "$ME" = "$C|$R" ] && [ "$OWN" = "$SEEN" ] && echo "$W" | grep -q "ดูได้อย่างเดียว" \
     && pass "แอดมินดูในฐานะ $R ได้ (บัญชีที่เซิร์ฟเวอร์ยังไม่รู้จัก) — เห็นใบงานตรงกับที่เจ้าตัวเห็น และแก้อะไรไม่ได้" || fail "ดู $R: me=$(echo "$MER" | head -c 160) เอง=[$OWN] ดูแทน=[$SEEN] เขียน=$(echo "$W" | head -c 80)"
 done
