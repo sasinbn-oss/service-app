@@ -23,8 +23,8 @@ export default function AreaOnlyGate({ screen, children }: { screen: string; chi
     <View style={styles.center}>
       <EmptyState
         icon="lock-closed-outline"
-        title="เมนูนี้สำหรับทีม Area เท่านั้น"
-        text="ตำแหน่งของคุณใช้แผนงาน กล่องงานของฉัน และใบงานซ่อม — ทีม Area เห็นว่าเมนูนี้ไม่จำเป็นกับ Supervisor และ Maid"
+        title="เมนูนี้สำหรับตำแหน่ง Area เท่านั้น"
+        text="ตำแหน่งของคุณใช้แผนงาน กล่องงานของฉัน และใบงานซ่อม"
       />
       <TouchableOpacity
         style={styles.btn}

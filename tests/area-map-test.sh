@@ -61,8 +61,8 @@ for who in T S AR1 A; do
 done
 pass "ช่าง · หัวหน้าภาค · Area · แอดมิน เปิดผังฝั่ง Area ได้"
 GCODE() { curl -s -o /dev/null -w "%{http_code}" "localhost:4000/api/$2" -H "$(H $1)"; }
-[ "$(GCODE $C2 teams/area-map)|$(GCODE $C2 teams/coverage-map)|$(GET $C2 teams/area-map | J 'd.error')" = "403|403|เมนูนี้สำหรับทีม Area เท่านั้น" ] \
-  && pass "Supervisor (COCO): ผังฝั่ง Area และผังฝ่ายบริการ → 403 \"เมนูนี้สำหรับทีม Area เท่านั้น\" (เจ้าของงานขอ ต.ค. 69)" \
+[ "$(GCODE $C2 teams/area-map)|$(GCODE $C2 teams/coverage-map)|$(GET $C2 teams/area-map | J 'd.error')" = "403|403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] \
+  && pass "Supervisor (COCO): ผังฝั่ง Area และผังฝ่ายบริการ → 403 \"เมนูนี้สำหรับตำแหน่ง Area เท่านั้น\" (เจ้าของงานขอ ต.ค. 69)" \
   || fail "Supervisor (COCO) เปิดผัง: $(GCODE $C2 teams/area-map)|$(GCODE $C2 teams/coverage-map)|$(GET $C2 teams/area-map | J 'd.error')"
 M=$(GET $T teams/area-map)
 [ "$(echo "$M" | J "const p=d.people.find(x=>x.id===$SUP1); [p.phone,p.areaId,p.role].join('|')")" = "089-100-0001|$AREA1|COCO_SUPERVISOR" ] \
@@ -86,7 +86,7 @@ M=$(GET $T teams/area-map)
 [ "$(echo "$M" | J "d.people.some(p=>p.id===$MAID1||p.id===$MAID2) || d.maids.some(m=>m.id===$MAID2)")" = "false" ] \
   && pass "Maid ไม่อยู่ใน people (ไม่ใช่ที่วางสาขา) · Maid ที่ลบบัญชีแล้วไม่อยู่ใน maids" || fail "Maid หลุดเข้า people หรือ Maid ลาออกยังอยู่"
 MD1=$(login zm.maid1)
-[ "$(GCODE $MD1 teams/area-map)|$(GET $MD1 teams/area-map | J 'd.error')" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] \
+[ "$(GCODE $MD1 teams/area-map)|$(GET $MD1 teams/area-map | J 'd.error')" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] \
   && pass "Maid (COCO) เปิดผังไม่ได้ (403 · เหลือเฉพาะ Area ตั้งแต่ ต.ค. 69) — แต่ยังขึ้นในผังของคนอื่นตามข้างบน" || fail "Maid เปิดผัง: $(GCODE $MD1 teams/area-map)"
 canEdit() { GET $1 teams/area-map | J 'd.canEdit'; }
 [ "$(canEdit $A)|$(canEdit $AR2)|$(canEdit $T)|$(canEdit $S)|$(canEdit $PA)" = "true|true|false|false|false" ] \

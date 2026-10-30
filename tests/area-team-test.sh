@@ -129,10 +129,10 @@ echo "═══ ติดตามเครื่องเสีย · ราย
 # ทีม Area ลองใช้แล้วเห็นว่าสามเมนูนี้ไม่จำเป็นกับซุปและแม่บ้าน — ปิดที่เซิร์ฟเวอร์ด้วย ไม่ใช่แค่ซ่อนเมนู (ยิงตรงต้องได้ 403)
 ERR() { curl -s -X "${3:-GET}" "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' ${4:+-d "$4"} | J 'd.error'; }
 AREA_ONLY="machines/outages machines/signal-lost machines/overview machines/work-statuses work-orders/reports/area-team?from=2026-01-01&to=2026-12-31 teams/coverage-map teams/area-map"
-OK=1; for p in $AREA_ONLY; do r="$(CODE $S1 "$p")|$(ERR $S1 "$p")"; [ "$r" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] || { OK=; echo "    $p → $r"; }; done
-[ -n "$OK" ] && pass "Supervisor (COCO): ติดตามเครื่องเสีย 4 · รายงาน · ผังผู้รับผิดชอบ 2 → 403 \"เมนูนี้สำหรับทีม Area เท่านั้น\" ทุกตัว" || fail "Supervisor (COCO) ยังเรียกเมนูของ Area ได้"
+OK=1; for p in $AREA_ONLY; do r="$(CODE $S1 "$p")|$(ERR $S1 "$p")"; [ "$r" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] || { OK=; echo "    $p → $r"; }; done
+[ -n "$OK" ] && pass "Supervisor (COCO): ติดตามเครื่องเสีย 4 · รายงาน · ผังผู้รับผิดชอบ 2 → 403 \"เมนูนี้สำหรับตำแหน่ง Area เท่านั้น\" ทุกตัว" || fail "Supervisor (COCO) ยังเรียกเมนูของ Area ได้"
 R="$(CODE $S1 teams/area-map POST '{}')|$(ERR $S1 teams/area-map POST '{}')"
-[ "$R" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] && pass "Supervisor (COCO): บันทึกผังฝั่ง Area → 403 ข้อความเดียวกัน" || fail "Supervisor (COCO) บันทึกผัง: $R"
+[ "$R" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] && pass "Supervisor (COCO): บันทึกผังฝั่ง Area → 403 ข้อความเดียวกัน" || fail "Supervisor (COCO) บันทึกผัง: $R"
 OK=1; for p in $AREA_ONLY; do c=$(CODE $AR "$p"); [ "$c" = "200" ] || { OK=; echo "    $p → $c"; }; done
 [ -n "$OK" ] && pass "Area: สามเมนูยังเปิดได้ทุก endpoint (200)" || fail "Area เปิดเมนูของตัวเองไม่ได้"
 [ "$(CODE $AR teams/area-map POST '{}')" = "400" ] && pass "Area: บันทึกผังฝั่ง Area ผ่านด่านไปถึง route (400 ไม่มีการเปลี่ยนแปลง ไม่ใช่ 403)" || fail "Area บันทึกผัง: $(CODE $AR teams/area-map POST '{}')"

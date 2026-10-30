@@ -2,7 +2,7 @@
 // · เปิดได้จริง (เช็คฐานข้อมูล) · หน้าใบงานไม่มีปุ่มทำขั้นตอน · ไม่มีคำขอที่โดนปฏิเสธ (403) ระหว่างใช้งานปกติ
 // · เมนู: Supervisor (COCO) เห็น 3 เมนู (แผนงาน · กล่องงานของฉัน · ใบงานซ่อม) ไม่มีติดตามเครื่องเสีย/รายงาน/ผังผู้รับผิดชอบ
 //   (เจ้าของงานขอ ต.ค. 69 — เหลือเฉพาะ Area) · เปิดมาเจอแผนงาน · หลุดไปหน้าเหล่านั้น (หน้าที่จำไว้ข้ามการโหลดใหม่) ได้หน้ากุญแจ ไม่ยิง API
-// · Area เห็นครบ 6 เมนู · ติดตามเครื่องเสียไม่มีปุ่มส่งออก · รายงานปุ่มเดียว
+// · Area เห็นครบ 6 เมนู · ติดตามเครื่องเสียเปิดได้จริง ไม่มีปุ่มส่งออก · ผังผู้รับผิดชอบเปิดมาเจอผังฝั่ง Area · รายงานปุ่มเดียว
 // สร้างบัญชี Supervisor (COCO) ชั่วคราวผูกกับสาขา C0006 + บัญชี Area ชั่วคราว แล้วลบทิ้งตอนจบ
 const { chromium } = require("playwright");
 const { confirmDuplicate } = require("./dup");
@@ -158,19 +158,19 @@ function cleanup() {
       );
       await page.reload({ waitUntil: "networkidle" });
       await page.waitForTimeout(4000);
-      const lock = await seen("เมนูนี้สำหรับทีม Area เท่านั้น", true);
+      const lock = await seen("เมนูนี้สำหรับตำแหน่ง Area เท่านั้น", true);
       return { lock, denied: denied.slice(before) };
     };
     for (const screen of ["MachineDashboard", "ReportsMenu", "CoverageMap"]) {
       const r = await lockedOn(screen);
       r.lock > 0 && r.denied.length === 0
-        ? pass(`Supervisor (COCO) หลุดไป ${screen}: ขึ้นหน้ากุญแจ "เมนูนี้สำหรับทีม Area เท่านั้น" ไม่ยิง API ที่โดน 403`)
+        ? pass(`Supervisor (COCO) หลุดไป ${screen}: ขึ้นหน้ากุญแจ "เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ไม่ยิง API ที่โดน 403`)
         : fail(`${screen}: หน้ากุญแจ=${r.lock} คำขอโดนปฏิเสธ=${r.denied.join(", ")}`);
     }
     await page.screenshot({ path: path.join(DIR, "area-4-locked-screen.png") });
     await tap("ไปที่แผนงาน");
     await page.waitForTimeout(2500);
-    (await seen("สาขาที่ดูแล", true)) > 0 && (await seen("เมนูนี้สำหรับทีม Area เท่านั้น", true)) === 0
+    (await seen("สาขาที่ดูแล", true)) > 0 && (await seen("เมนูนี้สำหรับตำแหน่ง Area เท่านั้น", true)) === 0
       ? pass("ปุ่ม ไปที่แผนงาน บนหน้ากุญแจพากลับแผนงาน")
       : fail("ปุ่ม ไปที่แผนงาน ไม่พากลับ");
     denied.length ? fail(`มีคำขอโดนปฏิเสธระหว่างใช้งาน: ${[...new Set(denied)].join(", ")}`) : pass("Supervisor (COCO) ใช้งานทุกหน้าไม่มีคำขอโดนปฏิเสธ (403)");
@@ -193,9 +193,20 @@ function cleanup() {
     for (const m of ["ติดตามเครื่องเสีย", "ผังผู้รับผิดชอบ", "รายงาน", "กล่องงานของฉัน"]) {
       await ap.locator(`[aria-label="${m}"]`).locator("visible=true").last().click();
       await ap.waitForTimeout(3000);
-      if (m !== "กล่องงานของฉัน" && (await aSeen("เมนูนี้สำหรับทีม Area เท่านั้น", true)) > 0) fail(`Area เปิด ${m} แล้วเจอหน้ากุญแจ`);
+      if (m !== "กล่องงานของฉัน" && (await aSeen("เมนูนี้สำหรับตำแหน่ง Area เท่านั้น", true)) > 0) fail(`Area เปิด ${m} แล้วเจอหน้ากุญแจ`);
+      // เช็คตอนหน้านั้นยังเปิดอยู่ — กดเมนูถัดไปแล้วหน้าเดิมถูกซ่อน นับปุ่มทีหลังได้ 0 เสมอ (เคยผ่านทั้งที่ไม่ได้ดูหน้าจริง)
+      // ต้องเห็นของที่มีแค่หน้านั้นด้วย ไม่งั้น "ไม่มีหน้ากุญแจ" อย่างเดียวผ่านได้แม้หน้าโหลดไม่ขึ้น
+      if (m === "ติดตามเครื่องเสีย") {
+        (await aSeen("Power Off")) > 0 && (await aSeen("ส่งออก Excel", true)) === 0
+          ? pass("Area ติดตามเครื่องเสีย: เปิดหน้าได้จริง (แท็บเครื่องดับ) ไม่มีปุ่มส่งออก")
+          : fail("Area ติดตามเครื่องเสีย: ไม่เห็นแท็บเครื่องดับ หรือยังมีปุ่มส่งออก");
+      }
+      if (m === "ผังผู้รับผิดชอบ") {
+        (await aSeen("ผังผู้ดูแลฝั่ง Area", true)) > 0 && (await aSeen("โหลดผังฝั่ง Area ไม่ได้", true)) === 0
+          ? pass("Area ผังผู้รับผิดชอบ: เปิดมาเจอผังผู้ดูแลฝั่ง Area โหลดได้")
+          : fail("Area ผังผู้รับผิดชอบ: ไม่เห็นผังผู้ดูแลฝั่ง Area หรือโหลดไม่ได้");
+      }
     }
-    (await aSeen("ส่งออก Excel", true)) === 0 ? pass("Area ติดตามเครื่องเสีย: ไม่มีปุ่มส่งออก/แก้ไข") : fail("ยังมีปุ่มส่งออก");
     await ap.locator('[aria-label="รายงาน"]').locator("visible=true").last().click();
     await ap.waitForTimeout(2500);
     (await aSeen("ดาวน์โหลด Excel", true)) === 1 && (await aSeen("รายงานตามผู้เปิดใบงาน", false)) === 0 && (await aSeen("ใบงานทุกสถานะของสาขา COCO ทั้งหมด", false)) > 0

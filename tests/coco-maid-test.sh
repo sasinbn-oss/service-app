@@ -90,10 +90,10 @@ OK=1; for p in vehicles auth/users spare-parts branches/manage teams; do c=$(COD
 # ทีม Area เห็นว่าสามเมนูนี้ไม่จำเป็นกับแม่บ้าน (เจ้าของงานขอ ต.ค. 69) — ยิงตรงต้องได้ 403 ไม่ใช่แค่ไม่มีเมนู
 ERR() { curl -s -X "${3:-GET}" "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' ${4:+-d "$4"} | J 'd.error'; }
 OK=1; for p in machines/outages machines/signal-lost machines/overview machines/work-statuses "work-orders/reports/area-team?from=2026-01-01&to=2026-12-31" teams/coverage-map teams/area-map; do
-  r="$(CODE $M1 "$p")|$(ERR $M1 "$p")"; [ "$r" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] || { OK=; echo "    $p → $r"; }
+  r="$(CODE $M1 "$p")|$(ERR $M1 "$p")"; [ "$r" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] || { OK=; echo "    $p → $r"; }
 done
-r="$(CODE $M1 teams/area-map POST '{}')|$(ERR $M1 teams/area-map POST '{}')"; [ "$r" = "403|เมนูนี้สำหรับทีม Area เท่านั้น" ] || { OK=; echo "    POST teams/area-map → $r"; }
-[ -n "$OK" ] && pass "Maid: ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ (อ่าน+บันทึกผัง) → 403 \"เมนูนี้สำหรับทีม Area เท่านั้น\"" || fail "Maid ยังเรียกเมนูของ Area ได้"
+r="$(CODE $M1 teams/area-map POST '{}')|$(ERR $M1 teams/area-map POST '{}')"; [ "$r" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] || { OK=; echo "    POST teams/area-map → $r"; }
+[ -n "$OK" ] && pass "Maid: ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ (อ่าน+บันทึกผัง) → 403 \"เมนูนี้สำหรับตำแหน่ง Area เท่านั้น\"" || fail "Maid ยังเรียกเมนูของ Area ได้"
 TODAY=$(node -e "console.log(new Date(Date.now()+7*3600e3).toISOString().slice(0,10))")
 OK=1; for p in auth/me work-orders work-orders/version work-orders/inbox-count work-orders/options "work-orders/locate?ids=$W1" work-orders/$W1 work-orders/$W1/version work-orders/$W1/attachments work-orders/$W1/attachments/links "branches?search=C" branches/C0001/machines branches/C0001/open-work-orders branches/C0001/last-contact "plans/day?date=$TODAY" "plans/month?month=${TODAY:0:7}" plans/pending; do
   c=$(CODE $M1 "$p"); [ "$c" = "200" ] || { OK=; echo "    $p → $c"; }

@@ -109,7 +109,9 @@ export const AREA_ONLY_ALLOWED: RegExp[] = [
   /^POST \/api\/teams\/area-map$/,
 ];
 
-export const AREA_ONLY_MESSAGE = "เมนูนี้สำหรับทีม Area เท่านั้น";
+// "ตำแหน่ง Area" ไม่ใช่ "ทีม Area" — ในแอป "ทีม Area" หมายถึงทั้งสามตำแหน่ง (เช่น error ดูในฐานะ)
+// Supervisor (COCO) ที่อ่าน "สำหรับทีม Area" จะงงว่าตัวเองก็อยู่ทีมนั้น · ข้อความเดียวกับหน้ากุญแจ (AreaOnlyGate.tsx)
+export const AREA_ONLY_MESSAGE = "เมนูนี้สำหรับตำแหน่ง Area เท่านั้น";
 
 /**
  * Area Team เรียก `${method} ${path}` นี้ได้ไหม — ได้ตอบ null · ไม่ได้ตอบข้อความภาษาไทยที่จะส่งกลับพร้อม 403
