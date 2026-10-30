@@ -13,8 +13,15 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth } from "../middleware/auth";
-import { ROLE_LABELS } from "../utils/constants";
+import { ROLE_LABELS, TECH_ROLES } from "../utils/constants";
 import { SLOT_MS } from "../utils/usage";
+import { regionsOf } from "../utils/supervisorScope";
+import { teamsOf } from "../utils/teamGroups";
+
+/** ทุกทีม (Senior ช่างถือได้หลายทีม) หรือภาคที่ดูแลทุกภาค (หัวหน้าภาคเลือกได้หลายภาค) — ช่อง "ทีม/ภาค" ในรายการและไฟล์ */
+function teamOrRegions(u: { role: string; team: string | null; extraTeams: string[]; region: string | null; extraRegions: string[] }) {
+  return teamsOf(u).join(" · ") || regionsOf(u).join(" · ") || null;
+}
 import { documentPath, saveDocument } from "../documents/store";
 
 const router = Router();
@@ -50,7 +57,8 @@ function sessionsOf(slots: number[]): [number, number][] {
 }
 
 const ROLE_GROUPS: Record<string, string[]> = {
-  EMPLOYEE: ["EMPLOYEE"],
+  // ปุ่ม "ช่าง" รวม Senior ช่าง — สิทธิ์เท่าช่าง ป้ายในรายการบอกอยู่แล้วว่าใครเป็น Senior
+  EMPLOYEE: TECH_ROLES,
   SUPERVISOR: ["SUPERVISOR"],
   ADMIN: ["ADMIN", "PARTS_ADMIN", "SUPER_ADMIN"],
   AREA_TEAM: ["AREA", "COCO_SUPERVISOR", "COCO_MAID"],
@@ -75,13 +83,13 @@ async function usersFor(role: string, q?: string) {
   const words = (q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const users = await prisma.user.findMany({
     where: { deletedAt: null, ...(role !== "ALL" ? { role: { in: ROLE_GROUPS[role] } } : {}) },
-    select: { id: true, name: true, employeeCode: true, role: true, team: true, region: true },
+    select: { id: true, name: true, employeeCode: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true },
     orderBy: { name: "asc" },
   });
   // ทุกคำต้องเจอ แต่ไม่ต้องติดกัน — แบบเดียวกับค้นหาในหน้าสิทธิ์ผู้ใช้ ("ช่าง กระบี่")
   return users.filter((u) => {
     if (!words.length) return true;
-    const text = [u.name, u.employeeCode, u.team, u.region, ROLE_LABELS[u.role]].filter(Boolean).join(" ").toLowerCase();
+    const text = [u.name, u.employeeCode, ...teamsOf(u), ...regionsOf(u), ROLE_LABELS[u.role]].filter(Boolean).join(" ").toLowerCase();
     return words.every((w) => text.includes(w));
   });
 }
@@ -163,7 +171,7 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
         code: u.employeeCode,
         role: u.role,
         roleLabel: ROLE_LABELS[u.role] ?? u.role,
-        team: u.team ?? u.region,
+        team: teamOrRegions(u),
         lastSeen: ls ? new Date(ls) : null,
         online: !!ls && now - ls < ONLINE_MS,
         sessions: p ? sessionsOf(p.slots).length : 0,
@@ -205,7 +213,7 @@ router.get("/user/:id", requireAuth, requireUsageViewer, async (req: AuthRequest
   const all = req.query.days === "all";
   const user = await prisma.user.findUnique({
     where: { id },
-    select: { id: true, name: true, role: true, team: true, region: true, employeeCode: true, createdAt: true },
+    select: { id: true, name: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true, employeeCode: true, createdAt: true },
   });
   if (!user) return res.status(404).json({ error: "ไม่พบผู้ใช้" });
   // ตั้งแต่เปิดบัญชี: นับวันจากวันสร้างบัญชี (ไม่เกิน 2 ปี กันแถวยาวเกิน) — หน้าจอโชว์เฉพาะวันที่มีการใช้
@@ -239,7 +247,7 @@ router.get("/user/:id", requireAuth, requireUsageViewer, async (req: AuthRequest
     });
   }
   res.json({
-    user: { ...user, roleLabel: ROLE_LABELS[user.role] ?? user.role },
+    user: { ...user, regions: regionsOf(user), teams: teamsOf(user), roleLabel: ROLE_LABELS[user.role] ?? user.role },
     firstUse: slots[0]?.slot ?? null,
     days: all ? rows.filter((r) => r.minutes > 0) : rows,
   });
@@ -273,7 +281,7 @@ router.get("/export", requireAuth, requireUsageViewer, async (req: AuthRequest, 
     const u = byId.get(Number(uid))!;
     const list = groups.get(k)!;
     const devs = [...new Set(list.map((x) => DEVICE_LABEL[x.device] ?? x.device))].join(" + ");
-    ws.addRow([d, u.name, u.employeeCode, ROLE_LABELS[u.role] ?? u.role, u.team ?? u.region ?? "", hm(list[0].t), hm(list[list.length - 1].t + SLOT_MS), list.length * 5, sessionsOf(list.map((x) => x.t)).length, devs]);
+    ws.addRow([d, u.name, u.employeeCode, ROLE_LABELS[u.role] ?? u.role, teamOrRegions(u) ?? "", hm(list[0].t), hm(list[list.length - 1].t + SLOT_MS), list.length * 5, sessionsOf(list.map((x) => x.t)).length, devs]);
   }
   [12, 30, 16, 18, 22, 12, 12, 14, 8, 14].forEach((w, i) => (ws.getColumn(i + 1).width = w));
   const stamp = dayKey(Date.now());

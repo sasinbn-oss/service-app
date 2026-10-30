@@ -7,6 +7,8 @@
  */
 import { prisma } from "../prisma";
 import {
+  ROLE_LABELS,
+  TECH_ROLES,
   WORK_ORDER_ACTION_LABELS,
   WORK_ORDER_STATUS_LABELS,
   bangkokDayRange,
@@ -17,6 +19,8 @@ export type TimelineRole = "ADMIN" | "SUPERVISOR" | "EMPLOYEE" | "SYSTEM";
 export interface TimelineEvent {
   at: string;
   role: TimelineRole;
+  /** ชื่อบทบาทบนป้ายเมื่อไม่ตรงกับกลุ่มสี — ตอนนี้มีแค่ Senior ช่าง (สีช่าง แต่ป้ายต้องตรงกับประวัติใบงานและรายการ) */
+  roleLabel?: string;
   who: string;
   what: string;
   note?: string | null;
@@ -24,9 +28,20 @@ export interface TimelineEvent {
   workOrder?: { id: number; code: string };
 }
 
-// Super Admin ทำงานแบบแอดมิน — สีเดียวกัน ไม่ต้องแยกบทบาทในไทม์ไลน์
+// Super Admin ทำงานแบบแอดมิน — สีเดียวกัน ไม่ต้องแยกบทบาทในไทม์ไลน์ · Senior ช่างเป็นช่าง (เดิมตกไปเป็นสีแอดมิน)
 const roleOf = (r: string | null | undefined): TimelineRole =>
-  r === "SUPERVISOR" ? "SUPERVISOR" : r === "EMPLOYEE" ? "EMPLOYEE" : r ? "ADMIN" : "SYSTEM";
+  r === "SUPERVISOR" ? "SUPERVISOR" : r && TECH_ROLES.includes(r) ? "EMPLOYEE" : r ? "ADMIN" : "SYSTEM";
+
+/**
+ * role (กลุ่มสี/ตัวกรอง) + roleLabel — Senior ช่างใช้สีและตัวกรองของช่าง แต่ป้ายบอก "Senior ช่าง"
+ * ไม่งั้นคนเดียวกันเป็น "ช่าง" ในไทม์ไลน์ แต่เป็น "Senior ช่าง" ในประวัติใบงานบนหน้าเดียวกัน
+ * Super Admin ยังยุบเป็นแอดมินทั้งสีและป้าย (ทำงานแบบแอดมินทุกอย่าง แยกไว้ก็ไม่ได้บอกอะไรเพิ่ม)
+ */
+const actor = (r: string | null | undefined): { role: TimelineRole; roleLabel?: string } =>
+  r === "SENIOR_TECH" ? { role: "EMPLOYEE", roleLabel: ROLE_LABELS.SENIOR_TECH } : { role: roleOf(r) };
+
+/** ช่างที่ถือทีม/ทีมรวมชื่อนี้ — รวม Senior ช่างที่ถือเป็นทีมที่เพิ่ม (รายงานตัวของเขาเกี่ยวกับงานทีมนี้เหมือนกัน) */
+const holdsTeam = (team: string) => ({ OR: [{ team }, { role: "SENIOR_TECH", extraTeams: { has: team } }] });
 
 const sort = (e: TimelineEvent[]) => e.sort((a, b) => a.at.localeCompare(b.at));
 
@@ -82,7 +97,7 @@ export async function workOrderTimeline(id: number) {
     if (l.userId) people.add(l.userId);
     events.push({
       at: l.createdAt.toISOString(),
-      role: roleOf(l.user?.role),
+      ...actor(l.user?.role),
       who: l.user?.name ?? "ระบบ",
       what: WORK_ORDER_ACTION_LABELS[l.action] ?? l.action,
       note: l.note,
@@ -96,7 +111,7 @@ export async function workOrderTimeline(id: number) {
   for (const v of wo.vehicleLogs) {
     events.push({
       at: v.startedAt.toISOString(),
-      role: roleOf(v.user.role),
+      ...actor(v.user.role),
       who: v.user.name,
       what: `รับรถ ${v.vehicle.plateNumber}`,
       note: `ไมล์ ${km(v.startMileage)}`,
@@ -104,7 +119,7 @@ export async function workOrderTimeline(id: number) {
     if (v.endedAt) {
       events.push({
         at: v.endedAt.toISOString(),
-        role: roleOf(v.user.role),
+        ...actor(v.user.role),
         who: v.user.name,
         what: `คืนรถ ${v.vehicle.plateNumber}`,
         note: [
@@ -120,7 +135,7 @@ export async function workOrderTimeline(id: number) {
   // รายงานตัวที่สาขานี้ ระหว่างเปิดใบงานจนปิด (+1 วันเผื่อรายงานตัวหลังกดปิด) — ของคนที่ไปทำงานใบนี้
   // หรือช่างทีมที่รับงาน · คนอื่นที่บังเอิญแวะสาขาเดียวกันไม่เกี่ยวกับใบนี้
   const team = wo.assignedTeam
-    ? await prisma.user.findMany({ where: { team: wo.assignedTeam }, select: { id: true } })
+    ? await prisma.user.findMany({ where: holdsTeam(wo.assignedTeam), select: { id: true } })
     : [];
   const relevant = [...new Set([...wo.workers.map((w) => w.userId), ...team.map((t) => t.id)])];
   const until = new Date((wo.closedAt ?? new Date()).getTime() + 86_400_000);
@@ -134,7 +149,7 @@ export async function workOrderTimeline(id: number) {
   for (const c of checkIns) {
     events.push({
       at: c.checkedInAt.toISOString(),
-      role: roleOf(c.user.role),
+      ...actor(c.user.role),
       who: c.user.name,
       what: `รายงานตัวที่ ${wo.branch.name}`,
       tags: [
@@ -161,7 +176,7 @@ export async function workOrderTimeline(id: number) {
     if (plan) {
       events.push({
         at: plan.updatedAt.toISOString(),
-        role: roleOf(plan.plannedBy?.role),
+        ...actor(plan.plannedBy?.role),
         who: plan.plannedBy?.name ?? "ระบบ",
         what: `จัดแผนทีม ${wo.assignedTeam}`,
         note: [
@@ -233,7 +248,7 @@ export async function teamDayTimeline(day: string, team: string) {
   const memberIds = [
     ...new Set([
       ...(plan?.members.map((m) => m.userId) ?? []),
-      ...(await prisma.user.findMany({ where: { team, deletedAt: null }, select: { id: true } })).map((u) => u.id),
+      ...(await prisma.user.findMany({ where: { ...holdsTeam(team), deletedAt: null }, select: { id: true } })).map((u) => u.id),
     ]),
   ];
 
@@ -284,7 +299,7 @@ export async function teamDayTimeline(day: string, team: string) {
   if (plan) {
     events.push({
       at: plan.updatedAt.toISOString(),
-      role: roleOf(plan.plannedBy?.role),
+      ...actor(plan.plannedBy?.role),
       who: plan.plannedBy?.name ?? "ระบบ",
       what: "จัดแผนทีม",
       note: [plan.vehicle ? `รถ ${plan.vehicle.plateNumber}` : null, plan.startTime ? `เข้า ${plan.startTime} น.` : null].filter(Boolean).join(" · ") || null,
@@ -296,7 +311,7 @@ export async function teamDayTimeline(day: string, team: string) {
       const late = plan?.startTime && v.startedAt > new Date(`${day}T${plan.startTime}:00+07:00`);
       events.push({
         at: v.startedAt.toISOString(),
-        role: roleOf(v.user.role),
+        ...actor(v.user.role),
         who: v.user.name,
         what: `รับรถ ${v.vehicle.plateNumber}`,
         note: `ไมล์ ${km(v.startMileage)}`,
@@ -306,7 +321,7 @@ export async function teamDayTimeline(day: string, team: string) {
     if (v.endedAt && v.endedAt >= from && v.endedAt < to) {
       events.push({
         at: v.endedAt.toISOString(),
-        role: roleOf(v.user.role),
+        ...actor(v.user.role),
         who: v.user.name,
         what: `คืนรถ ${v.vehicle.plateNumber}`,
         note:
@@ -322,7 +337,7 @@ export async function teamDayTimeline(day: string, team: string) {
   for (const c of checkIns) {
     events.push({
       at: c.checkedInAt.toISOString(),
-      role: roleOf(c.user.role),
+      ...actor(c.user.role),
       who: c.user.name,
       what: `รายงานตัว ${c.branch.name}`,
       tags: [{ text: `GPS ห่าง ${Math.round(c.distanceMeters)} ม. · ${c.withinRadius ? "ในรัศมี" : "นอกรัศมี"}`, tone: c.withinRadius ? "ok" : "warn" }],
@@ -331,7 +346,7 @@ export async function teamDayTimeline(day: string, team: string) {
   for (const l of logs) {
     events.push({
       at: l.createdAt.toISOString(),
-      role: roleOf(l.user?.role),
+      ...actor(l.user?.role),
       who: l.user?.name ?? "ระบบ",
       what: `${WORK_ORDER_ACTION_LABELS[l.action] ?? l.action} ${l.workOrder.code}`,
       note: l.note,

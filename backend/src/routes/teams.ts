@@ -12,21 +12,75 @@
  */
 import { areaBranchWhere, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
-import { ACTIVE_WORK_ORDER_STATUSES, bangkokDay } from "../utils/constants";
-import { forgetTeamGroups, teamGroups } from "../utils/teamGroups";
+import { ACTIVE_WORK_ORDER_STATUSES, TECH_ROLES, bangkokDay } from "../utils/constants";
+import { forgetTeamGroups, teamGroups, teamsOf } from "../utils/teamGroups";
 import { recordTeamMove } from "../utils/branchPins";
 import { refreshOutsource } from "../utils/outsource";
+import { regionsOf } from "../utils/supervisorScope";
 
 const router = Router();
+
+/**
+ * ชื่อทีม/ทีมรวมใน extraTeams ของ Senior ช่าง — เปลี่ยนชื่อ (to = ชื่อใหม่) หรือเอาออก (to = null)
+ *
+ * คงลำดับที่แอดมินเลือกไว้ (DISTINCT ธรรมดาเรียงใหม่ตามตัวอักษร) และตัดอันที่ซ้ำกับทีมแรก — รวมทีมเข้าทีมแรกของเขาเอง
+ * ต้องเรียกหลังย้าย User.team แล้ว · ทีมแรกที่ถูกล้างจนว่าง ให้ทีมถัดไปขึ้นแทน ไม่งั้นคนที่ยังดูแลทีมอื่นอยู่
+ * โผล่เป็น "ยังไม่ได้จัดทีม" ในหน้าที่อ่านแค่ team (แอปรุ่นเก่า รายงาน) ทั้งที่ยังเห็นงานอยู่
+ * คืนจำนวน Senior ที่ถือชื่อนี้เป็นทีมที่เพิ่ม (ใช้รายงานผลเปลี่ยนชื่อ) — การลบนับเองด้วย holderSplit ก่อนแก้
+ * เพราะหลังแก้แยกไม่ออกแล้วว่าใครเหลือทีมอื่น
+ */
+async function cascadeExtraTeams(tx: Prisma.TransactionClient, from: string, to: string | null): Promise<number> {
+  const changed =
+    to === null
+      ? await tx.$executeRaw`
+          UPDATE "User" SET "extraTeams" = array_remove("extraTeams", ${from}) WHERE ${from} = ANY("extraTeams")`
+      : await tx.$executeRaw`
+          UPDATE "User" u SET "extraTeams" = ARRAY(
+            SELECT x.t FROM unnest(array_replace(u."extraTeams", ${from}, ${to})) WITH ORDINALITY AS x(t, i)
+            WHERE x.t IS DISTINCT FROM u."team"
+            GROUP BY x.t ORDER BY min(x.i)
+          ) WHERE ${from} = ANY(u."extraTeams")`;
+  // ทีมแรกถูกเปลี่ยนเป็นชื่อที่อยู่ในรายการเพิ่มอยู่แล้ว (รวมทีม) — ตัดตัวซ้ำออก
+  await tx.$executeRaw`UPDATE "User" SET "extraTeams" = array_remove("extraTeams", "team") WHERE "team" = ANY("extraTeams")`;
+  await tx.$executeRaw`
+    UPDATE "User" SET "team" = "extraTeams"[1], "extraTeams" = "extraTeams"[2:]
+    WHERE "team" IS NULL AND "role" = 'SENIOR_TECH' AND cardinality("extraTeams") > 0`;
+  return Number(changed);
+}
+
+/** ช่างที่ถือชื่อนี้ — ทีมแรกของทุกคน หรือทีมที่เพิ่มของ Senior ช่าง (ค่าค้างของบทบาทอื่นไม่นับ เหมือน teamsOf) */
+const holdsTeam = (name: string): Prisma.UserWhereInput => ({
+  OR: [{ team: name }, { role: "SENIOR_TECH", extraTeams: { has: name } }],
+});
+
+/**
+ * คนที่ถือชื่อนี้ แยกตามผลของการลบชื่อนี้ — noTeam = จะไม่เหลือทีมเลย (ช่างธรรมดา + Senior ที่ถือแค่ชื่อนี้)
+ * · seniorsKeep = Senior ที่ยังเหลือทีมอื่น
+ *
+ * ต้องนับก่อนลบ และใช้ชุดเดียวกันทั้งตอนเตือนและตอนรายงานผล: นับจากผลของ updateMany({team}) ทำให้ Senior
+ * ที่ทีมแรกถูกลบ (แล้วทีมถัดไปขึ้นแทน) ถูกบอกว่า "ไม่มีสังกัดแล้ว" ส่วนนับจาก role อย่างเดียวทำให้ Senior ที่ถือทีมนี้ทีมเดียว
+ * ถูกบอกว่า "ทีมอื่นยังอยู่" ทั้งที่หลังลบไม่เห็นงานเลย
+ */
+async function holderSplit(db: Prisma.TransactionClient, name: string) {
+  const held = await db.user.findMany({ where: { ...holdsTeam(name), deletedAt: null }, select: { role: true, team: true, extraTeams: true } });
+  const seniors = held.filter((u) => u.role === "SENIOR_TECH");
+  const seniorsKeep = seniors.filter((u) => teamsOf(u).some((t) => t !== name)).length;
+  return { holders: held.length, seniors: seniors.length, seniorsKeep, noTeam: held.length - seniorsKeep };
+}
 
 interface TeamRow {
   name: string;
   cmBranches: number;
   pmBranches: number;
   technicians: number;
+  /** Senior ช่างในจำนวน technicians (นับทุกทีมที่ถือ) */
+  seniors: number;
+  /** ในจำนวน seniors ถือชื่อนี้ชื่อเดียว — ลบชื่อนี้แล้วไม่เหลือทีม (หน้าจอเตือนรวมกับ "จะไม่มีสังกัด") */
+  seniorsSole: number;
   supervisors: number;
   openOrders: number;
   /** ไม่มีสาขาไหนใช้ชื่อนี้ — มักเป็นชื่อที่สะกดผิดหรือทีมที่ถูกเปลี่ยนชื่อในไฟล์แล้ว */
@@ -35,10 +89,12 @@ interface TeamRow {
 
 router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   const active = [...ACTIVE_WORK_ORDER_STATUSES];
-  const [cm, pm, techs, sups, orders, renames] = await Promise.all([
+  const [cm, pm, techs, seniors, sups, orders, renames] = await Promise.all([
     prisma.branch.groupBy({ by: ["zone"], where: { zone: { not: null }, cancelledAt: null }, _count: true }),
     prisma.branch.groupBy({ by: ["pmTeam"], where: { pmTeam: { not: null }, cancelledAt: null }, _count: true }),
     prisma.user.groupBy({ by: ["team"], where: { team: { not: null }, deletedAt: null }, _count: true }),
+    // Senior ช่างนับในทุกทีมที่ถือ ไม่ใช่แค่ทีมแรก — การ์ดทีมต้องบอกว่ามีใครเห็นงานทีมนี้บ้าง
+    prisma.user.findMany({ where: { role: "SENIOR_TECH", deletedAt: null }, select: { role: true, team: true, extraTeams: true } }),
     prisma.user.findMany({ where: { deletedAt: null, supervisedTeams: { isEmpty: false } }, select: { supervisedTeams: true } }),
     prisma.workOrder.groupBy({ by: ["assignedTeam"], where: { assignedTeam: { not: null }, status: { in: active } }, _count: true }),
     prisma.teamRename.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
@@ -53,7 +109,7 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   const row = (name: string) => {
     let r = rows.get(name);
     if (!r) {
-      r = { name, cmBranches: 0, pmBranches: 0, technicians: 0, supervisors: 0, openOrders: 0, orphan: false };
+      r = { name, cmBranches: 0, pmBranches: 0, technicians: 0, seniors: 0, seniorsSole: 0, supervisors: 0, openOrders: 0, orphan: false };
       rows.set(name, r);
     }
     return r;
@@ -61,6 +117,15 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
   for (const c of cm) row(c.zone!).cmBranches = c._count;
   for (const p of pm) row(p.pmTeam!).pmBranches = p._count;
   for (const t of techs) row(t.team!).technicians = t._count;
+  // ทีมแรกนับใน technicians แล้ว (groupBy team) — ที่เหลือบวกเพิ่ม · seniors = ในจำนวนนั้นเป็น Senior กี่คน
+  for (const u of seniors) {
+    const held = teamsOf(u);
+    for (const t of held) {
+      row(t).seniors++;
+      if (held.length === 1) row(t).seniorsSole++;
+      if (t !== u.team) row(t).technicians++;
+    }
+  }
   for (const s of sups) for (const t of new Set(s.supervisedTeams)) row(t).supervisors++;
   for (const o of orders) row(o.assignedTeam!).openOrders = o._count;
   for (const r of rows.values()) r.orphan = r.cmBranches === 0 && r.pmBranches === 0;
@@ -83,6 +148,8 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
       covers: g.covers,
       allTeams: g.allTeams,
       technicians: rows.get(g.name)?.technicians ?? 0,
+      seniors: rows.get(g.name)?.seniors ?? 0,
+      seniorsSole: rows.get(g.name)?.seniorsSole ?? 0,
       supervisors: rows.get(g.name)?.supervisors ?? 0,
     })),
     outsource: outsource.map((o) => ({ id: o.id, name: o.name, openOrders: rows.get(o.name)?.openOrders ?? 0 })),
@@ -127,8 +194,8 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
       _count: true,
     }),
     prisma.user.findMany({
-      where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
-      select: { id: true, name: true, employeeCode: true, phone: true, role: true, team: true, region: true, supervisedTeams: true },
+      where: { deletedAt: null, role: { in: [...TECH_ROLES, "SUPERVISOR"] } },
+      select: { id: true, name: true, employeeCode: true, phone: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
     prisma.teamGroup.findMany({ orderBy: { name: "asc" } }),
@@ -161,23 +228,38 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
     regions: [...regions]
       // ภาคที่ไม่ระบุไว้ท้ายสุด ที่เหลือเรียงตามชื่อ
       .sort(([a], [b]) => (a === NO_REGION ? 1 : b === NO_REGION ? -1 : a.localeCompare(b, "th")))
-      .map(([name, teams]) => ({ name, teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")) })),
+      // noRegion = คอลัมน์รวมทีมที่สาขาส่วนใหญ่ไม่ได้ตั้งภาค ไม่ใช่ภาคจริง — ผังห้ามวางหัวหน้าภาคที่หัวคอลัมน์นี้
+      // เพราะชื่อ "ไม่ระบุภาค" ไม่มีในทะเบียนสาขา บันทึกแล้วเซิร์ฟเวอร์ปฏิเสธกลางคัน (คนที่อยู่ถัดไปในรายการรอบันทึกไม่ถูกบันทึก)
+      .map(([name, teams]) => ({
+        name,
+        ...(name === NO_REGION ? { noRegion: true } : {}),
+        teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")),
+      })),
     supervisors: users
       .filter((u) => u.role === "SUPERVISOR")
-      .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || (!!u.region && regions.has(u.region)))
-      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, phone: u.phone, region: u.region, teams: u.supervisedTeams })),
+      .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || regionsOf(u).some((r) => regions.has(r)))
+      // regions = ทุกภาคที่ดูแล (ผังวางคนเดียวกันไว้ได้หลายภาค) · region (ภาคแรก) คงไว้ให้แอปรุ่นเก่า
+      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, phone: u.phone, region: u.region, regions: regionsOf(u), teams: u.supervisedTeams })),
     technicians: users
-      .filter((u) => u.role === "EMPLOYEE")
-      .filter((u) => !area || (!!u.team && known.has(u.team)))
-      .map((u) => ({
-        id: u.id,
-        name: u.name,
-        code: u.employeeCode,
-        phone: u.phone,
-        // ทีมที่ไม่มีในทะเบียนและไม่ใช่ทีมรวม = ไม่มีสังกัด (เก็บชื่อเดิมไว้ให้เห็นว่าเคยอยู่ไหน)
-        team: u.team && (known.has(u.team) || groupNames.has(u.team)) ? u.team : null,
-        staleTeam: u.team && !known.has(u.team) && !groupNames.has(u.team) ? u.team : null,
-      })),
+      .filter((u) => TECH_ROLES.includes(u.role))
+      .map((u) => ({ u, held: teamsOf(u) }))
+      .filter(({ held }) => !area || held.some((t) => known.has(t)))
+      .map(({ u, held }) => {
+        const live = (t: string) => known.has(t) || groupNames.has(t);
+        return {
+          id: u.id,
+          name: u.name,
+          code: u.employeeCode,
+          phone: u.phone,
+          // ทีมที่ไม่มีในทะเบียนและไม่ใช่ทีมรวม = ไม่มีสังกัด (เก็บชื่อเดิมไว้ให้เห็นว่าเคยอยู่ไหน) · ทีมแรกคงไว้ให้แอปรุ่นเก่า
+          team: u.team && live(u.team) ? u.team : null,
+          staleTeam: u.team && !live(u.team) ? u.team : null,
+          // Senior ช่างอยู่ใต้ทุกทีม/ทีมรวมที่ดูแล (ป้าย "Senior") — "ทีมนี้มีใคร" ต้องตอบครบ ไม่ใช่แค่ทีมแรก
+          senior: u.role === "SENIOR_TECH",
+          teams: held.filter(live),
+          staleTeams: held.filter((t) => !live(t)),
+        };
+      }),
     groups: groups.map((g) => ({ name: g.name, covers: g.covers, allTeams: g.allTeams })),
   });
 });
@@ -386,7 +468,7 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
     (
       await Promise.all([
         prisma.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } }),
-        prisma.user.count({ where: { OR: [{ team: name }, { supervisedTeams: { has: name } }] } }),
+        prisma.user.count({ where: { OR: [{ team: name }, { extraTeams: { has: name } }, { supervisedTeams: { has: name } }] } }),
         prisma.workOrder.count({ where: { assignedTeam: name } }),
         prisma.teamDayPlan.count({ where: { team: name } }),
       ])
@@ -402,6 +484,7 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
       const branchesCm = await tx.branch.updateMany({ where: { zone: from }, data: { zone: to } });
       const branchesPm = await tx.branch.updateMany({ where: { pmTeam: from }, data: { pmTeam: to } });
       const technicians = await tx.user.updateMany({ where: { team: from }, data: { team: to } });
+      const seniors = await cascadeExtraTeams(tx, from, to);
       // แทนชื่อในอาร์เรย์ แล้วตัดซ้ำ (หัวหน้าภาคที่ดูแลทั้งสองทีมอยู่แล้วตอนรวมทีม)
       const supervisors = await tx.$executeRaw`
         UPDATE "User" SET "supervisedTeams" = ARRAY(
@@ -459,6 +542,8 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
       return {
         branches: branchesCm.count + branchesPm.count,
         technicians: technicians.count,
+        // Senior ช่างที่ถือชื่อนี้เป็นทีมที่เพิ่ม (ทีมแรกนับใน technicians แล้ว)
+        seniors,
         supervisors: Number(supervisors),
         workOrders: orders.count,
         plans: plans.length,
@@ -529,7 +614,7 @@ router.post("/move-branches", requireAuth, requireAdmin, async (req: AuthRequest
   );
 
   const [technicians, supervisors] = await Promise.all([
-    prisma.user.count({ where: { team, deletedAt: null } }),
+    prisma.user.count({ where: { ...holdsTeam(team), deletedAt: null } }),
     prisma.user.count({ where: { supervisedTeams: { has: team }, deletedAt: null } }),
   ]);
   res.json({ ok: true, team, branches: branches.length, moved, isNew, technicians, supervisors });
@@ -625,6 +710,7 @@ router.put("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
       if (name !== old.name) {
         // เปลี่ยนชื่อทีมรวม = ช่าง หัวหน้าภาค และแผนที่ผูกกับชื่อเดิมย้ายตามทั้งหมด
         await tx.user.updateMany({ where: { team: old.name }, data: { team: name } });
+        await cascadeExtraTeams(tx, old.name, name);
         await tx.$executeRaw`
           UPDATE "User" SET "supervisedTeams" = ARRAY(SELECT DISTINCT unnest(array_replace("supervisedTeams", ${old.name}, ${name})))
           WHERE ${old.name} = ANY("supervisedTeams")`;
@@ -640,6 +726,7 @@ router.put("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
 /**
  * ลบทีมรวม — ช่างที่สังกัดกลายเป็นไม่มีสังกัด (เจ้าของระบบต้องการแบบนี้: ให้แอดมินตามจัดทีมใหม่เอง
  * ผ่านแถบ "ยังไม่มีพื้นที่รับผิดชอบ") · หัวหน้าภาคเลิกดูแล · แผนของทีมรวมตั้งแต่วันนี้ไปถูกลบ
+ * · Senior ช่างเสียแค่ชื่อนี้ ทีมอื่นที่เลือกไว้ยังอยู่ (ถือชื่อนี้ชื่อเดียว = ไม่มีสังกัดเหมือนช่างธรรมดา)
  */
 router.delete("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
@@ -647,12 +734,16 @@ router.delete("/groups/:id", requireAuth, requireAdmin, async (req, res) => {
   if (!g) return res.status(404).json({ error: "ไม่พบทีมรวมนี้" });
   const result = await prisma.$transaction(
     async (tx) => {
-      const technicians = await tx.user.updateMany({ where: { team: g.name }, data: { team: null } });
+      const split = await holderSplit(tx, g.name);
+      await tx.user.updateMany({ where: { team: g.name }, data: { team: null } });
+      // Senior ที่ถือทีมรวมนี้ไว้ด้วยเสียแค่ทีมรวมนี้ ทีมอื่นที่ดูแลยังอยู่ (ทีมถัดไปขึ้นเป็นทีมแรก)
+      await cascadeExtraTeams(tx, g.name, null);
       const supervisors = await tx.$executeRaw`
         UPDATE "User" SET "supervisedTeams" = array_remove("supervisedTeams", ${g.name}) WHERE ${g.name} = ANY("supervisedTeams")`;
       const plans = await tx.teamDayPlan.deleteMany({ where: { team: g.name, date: { gte: todayStart() } } });
       await tx.teamGroup.delete({ where: { id } });
-      return { technicians: technicians.count, supervisors: Number(supervisors), plans: plans.count };
+      // technicians = คนที่ไม่เหลือทีมแล้ว (รวม Senior ที่ถือทีมรวมนี้อันเดียว) · seniors = Senior ที่ยังเหลือทีมอื่น
+      return { technicians: split.noTeam, seniors: split.seniorsKeep, supervisors: Number(supervisors), plans: plans.count };
     },
     { timeout: 30_000, maxWait: 15_000 }
   );
@@ -668,13 +759,22 @@ function todayStart() {
 /** ผลกระทบของการลบทีมช่าง — ให้หน้าจอบอกก่อนกดยืนยัน */
 async function teamUsage(name: string) {
   const active = [...ACTIVE_WORK_ORDER_STATUSES];
-  const [branches, technicians, supervisors, openOrders] = await Promise.all([
+  const [branches, split, supervisors, openOrders] = await Promise.all([
     prisma.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } }),
-    prisma.user.count({ where: { team: name, deletedAt: null } }),
+    holderSplit(prisma, name),
     prisma.user.count({ where: { supervisedTeams: { has: name }, deletedAt: null } }),
     prisma.workOrder.count({ where: { assignedTeam: name, status: { in: active } } }),
   ]);
-  return { branches, technicians, supervisors, openOrders };
+  return {
+    branches,
+    // technicians รวม Senior ที่ถือทีมนี้ · seniors = ในจำนวนนั้นเป็น Senior กี่คน (ความหมายเดียวกับการ์ดทีมใน GET /teams)
+    technicians: split.holders,
+    seniors: split.seniors,
+    // ในจำนวน seniors ถือทีมนี้ทีมเดียว — ลบแล้วไม่เหลือทีม หน้าจอต้องเตือนรวมกับ "จะไม่มีสังกัด" ไม่ใช่ "ทีมอื่นยังอยู่"
+    seniorsSole: split.seniors - split.seniorsKeep,
+    supervisors,
+    openOrders,
+  };
 }
 
 router.get("/usage", requireAuth, requireAdmin, async (req, res) => {
@@ -691,19 +791,39 @@ router.get("/usage", requireAuth, requireAdmin, async (req, res) => {
 router.get("/members", requireAuth, requireAdmin, async (req, res) => {
   const name = String(req.query.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "ต้องระบุชื่อทีม" });
-  const pick = { id: true, employeeCode: true, name: true, phone: true, role: true, region: true } as const;
-  const [technicians, supervisors, groups] = await Promise.all([
-    prisma.user.findMany({ where: { team: name, deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
+  const pick = { id: true, employeeCode: true, name: true, phone: true, role: true, region: true, extraRegions: true } as const;
+  const [techRows, supRows, seniorRows, groups] = await Promise.all([
+    // รวม Senior ช่างที่ถือชื่อนี้เป็นทีมที่เพิ่ม — role ติดไปด้วย การ์ดติดป้าย "Senior ช่าง" ได้
+    prisma.user.findMany({ where: { ...holdsTeam(name), deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
     prisma.user.findMany({ where: { supervisedTeams: { has: name }, deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { role: "SENIOR_TECH", deletedAt: null }, select: { ...pick, team: true, extraTeams: true }, orderBy: { name: "asc" } }),
     teamGroups(),
   ]);
+  // ป้าย "ภาคX" ของหัวหน้าภาคต้องครบทุกภาค — ส่ง regions ไว้ข้าง region (ภาคแรก) แทนคอลัมน์ดิบ extraRegions
+  const shape = ({ extraRegions, ...u }: (typeof techRows)[number]) => ({ ...u, regions: regionsOf({ region: u.region, extraRegions }) });
+  const technicians = techRows.map(shape);
+  const supervisors = supRows.map(shape);
   const group = groups.get(name);
+  /**
+   * Senior ช่างทุกคนที่เห็นงานของชื่อนี้ — ถือตรง ๆ หรือถือทีมรวมที่ครอบคลุม (via = ชื่อที่ทำให้เห็น)
+   * แยกจาก technicians เพราะคนที่เห็นผ่านทีมรวมไม่ได้ "อยู่" ทีมนี้ ลบ/รวมทีมนี้ไม่กระทบเขา
+   */
+  const seniors = seniorRows
+    .map(({ team, extraTeams, ...u }) => {
+      const via = teamsOf({ role: u.role, team, extraTeams }).filter((t) => {
+        const g = groups.get(t);
+        return t === name || (!!g && !group && (g.allTeams || g.covers.includes(name)));
+      });
+      return { ...shape(u), via };
+    })
+    .filter((u) => u.via.length > 0);
   res.json({
     name,
     isGroup: !!group,
     covers: group ? (group.allTeams ? null : group.covers) : undefined,
     technicians,
     supervisors,
+    seniors,
     // ทีมรวมที่เห็นงานของทีมนี้ (เช่น Senior · QC) — ช่างของทีมรวมก็ไปงานทีมนี้ได้
     coveredBy: group
       ? []
@@ -719,6 +839,7 @@ const deleteSchema = z.object({
 
 /**
  * ลบทีมช่าง — ช่างในทีมกลายเป็นไม่มีสังกัด หัวหน้าภาคเลิกดูแล (ตามที่เจ้าของระบบต้องการ)
+ * · Senior ช่างเสียแค่ทีมนี้ ทีมอื่นที่เลือกไว้ยังอยู่ (ถือทีมนี้ทีมเดียว = ไม่มีสังกัดเหมือนช่างธรรมดา)
  *
  * สาขาและใบงานที่ยังค้างจะทิ้งไว้กับชื่อที่ไม่มีแล้วไม่ได้ — สาขาไม่มีทีมดูแล ใบงานไม่มีใครเห็น
  * จึงต้องเลือกทีมที่รับต่อ · จำชื่อเดิม → ทีมใหม่ไว้ (TeamRename) ไม่งั้นอัปไฟล์ทะเบียนครั้งถัดไป
@@ -777,11 +898,14 @@ router.post("/delete", requireAuth, requireAdmin, async (req: AuthRequest, res) 
       } else {
         await tx.$executeRaw`UPDATE "TeamGroup" SET "covers" = array_remove("covers", ${name}) WHERE ${name} = ANY("covers")`;
       }
-      const technicians = (await tx.user.updateMany({ where: { team: name }, data: { team: null } })).count;
+      const split = await holderSplit(tx, name);
+      await tx.user.updateMany({ where: { team: name }, data: { team: null } });
+      await cascadeExtraTeams(tx, name, null);
       const supervisors = await tx.$executeRaw`
         UPDATE "User" SET "supervisedTeams" = array_remove("supervisedTeams", ${name}) WHERE ${name} = ANY("supervisedTeams")`;
       const plans = (await tx.teamDayPlan.deleteMany({ where: { team: name, date: { gte: todayStart() } } })).count;
-      return { branches, orders, technicians, supervisors: Number(supervisors), plans };
+      // technicians = คนที่ไม่เหลือทีมแล้ว (รวม Senior ที่ถือทีมนี้ทีมเดียว) · seniors = Senior ที่ยังเหลือทีมอื่น
+      return { branches, orders, technicians: split.noTeam, seniors: split.seniorsKeep, supervisors: Number(supervisors), plans };
     },
     { timeout: 30_000, maxWait: 15_000 }
   );

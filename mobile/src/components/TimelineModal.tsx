@@ -17,6 +17,8 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE" | "SYSTEM";
 interface Event {
   at: string;
   role: Role;
+  /** ป้ายบทบาทที่ไม่ตรงกับกลุ่มสี (Senior ช่าง ใช้สีช่าง) — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  roleLabel?: string;
   who: string;
   what: string;
   note?: string | null;
@@ -55,6 +57,19 @@ const ROLE_COLOR: Record<Role, { fg: string; bg: string }> = {
   EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft },
   SYSTEM: { fg: colors.textMuted, bg: colors.background },
 };
+/**
+ * เซิร์ฟเวอร์ยุบบทบาทเหลือ 4 กลุ่มให้แล้ว (utils/timeline.ts roleOf) — กันไว้อีกชั้นเผื่อเซิร์ฟเวอร์รุ่นที่ยังไม่รู้จักบทบาทใหม่
+ * ส่ง role ดิบมา (เช่น SENIOR_TECH) ถ้าไม่กัน ทั้งหน้าต่างพังเพราะอ่านสีของบทบาทที่ไม่มีในตาราง
+ */
+function foldRoles(events: Event[]): Event[] {
+  return events.map((e) =>
+    e.role in ROLE_COLOR
+      ? e
+      : (e.role as string) === "SENIOR_TECH"
+        ? { ...e, role: "EMPLOYEE", roleLabel: "Senior ช่าง" }
+        : { ...e, role: "SYSTEM" }
+  );
+}
 // สีของแถบสัดส่วนเวลา — ตามคนที่ถือลูกบอลในขั้นนั้น
 const STAGE_COLOR: Record<string, string> = {
   NEW: ROLE_COLOR.SUPERVISOR.fg,
@@ -108,8 +123,10 @@ export default function TimelineModal({ target, onClose }: { target: TimelineTar
   useEffect(() => {
     const req =
       target.kind === "wo"
-        ? api.get<WoTimeline>(`/work-orders/${target.id}/timeline`).then((r) => setWo(r.data))
-        : api.get<TeamTimeline>("/plans/timeline", { params: { date: target.date, team: target.team } }).then((r) => setTeam(r.data));
+        ? api.get<WoTimeline>(`/work-orders/${target.id}/timeline`).then((r) => setWo({ ...r.data, events: foldRoles(r.data.events) }))
+        : api
+            .get<TeamTimeline>("/plans/timeline", { params: { date: target.date, team: target.team } })
+            .then((r) => setTeam({ ...r.data, events: foldRoles(r.data.events) }));
     req.catch((e) => setError(apiErrorMessage(e)));
   }, [target]);
 
@@ -224,7 +241,7 @@ export default function TimelineModal({ target, onClose }: { target: TimelineTar
                 <View style={styles.body}>
                   <View style={styles.whoRow}>
                     <Text style={[styles.role, { color: ROLE_COLOR[e.role].fg, backgroundColor: ROLE_COLOR[e.role].bg }]}>
-                      {ROLE_LABEL[e.role]}
+                      {e.roleLabel ?? ROLE_LABEL[e.role]}
                     </Text>
                     <Text style={styles.who}>{e.who}</Text>
                   </View>

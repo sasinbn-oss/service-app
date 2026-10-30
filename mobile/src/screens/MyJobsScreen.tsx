@@ -104,6 +104,11 @@ export default function MyJobsScreen(props: Props) {
 
 function TechJobs({ navigation }: Props) {
   const { docked } = useDocked();
+  const { user } = useAuth();
+  // คนที่เห็นงานหลายทีม (Senior ช่าง · ทีมรวม) ต้องรู้ว่างานนี้ของทีมไหน — วันหนึ่งมีงานจากสามสี่ทีมปนกัน
+  // ช่างทีมเดียวไม่ต้องเห็น ทุกใบเป็นทีมตัวเองอยู่แล้ว
+  const cov = user?.teamCoverage;
+  const manyTeams = !!user?.seniorTech || !!cov?.all || (cov?.teams.length ?? 0) > 1;
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [today, setToday] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("today");
@@ -231,7 +236,15 @@ function TechJobs({ navigation }: Props) {
         />
       ) : (
         list.map((j) => (
-          <JobCard key={j.id} job={j} late={tab === "late"} busy={busyId === j.id} onArrive={() => arrive(j)} onOpen={(w) => open(j, w)} />
+          <JobCard
+            key={j.id}
+            job={j}
+            late={tab === "late"}
+            showTeam={manyTeams}
+            busy={busyId === j.id}
+            onArrive={() => arrive(j)}
+            onOpen={(w) => open(j, w)}
+          />
         ))
       )}
     </ScrollView>
@@ -241,12 +254,14 @@ function TechJobs({ navigation }: Props) {
 function JobCard({
   job,
   late,
+  showTeam,
   busy,
   onArrive,
   onOpen,
 }: {
   job: Job;
   late: boolean;
+  showTeam: boolean;
   busy: boolean;
   onArrive: () => void;
   onOpen: (what?: "close" | "stage" | "problem") => void;
@@ -280,7 +295,8 @@ function JobCard({
         {job.branchCode} {job.branchName}
       </Text>
       <Text style={styles.meta}>
-        {job.code} · {job.inspect ? "ตรวจหน้างาน" : job.jobType === "PM" ? "งาน PM" : "งานซ่อม"}
+        {job.code}
+        {showTeam && job.team ? ` · ทีม${job.team}` : ""} · {job.inspect ? "ตรวจหน้างาน" : job.jobType === "PM" ? "งาน PM" : "งานซ่อม"}
         {job.machineCode ? ` · เครื่อง ${machineTag(job.machineCode, job.machineCapacityKg)}` : " · ทั้งสาขา"}
         {job.symptom ? ` · ${job.symptom}` : ""}
       </Text>

@@ -39,7 +39,9 @@ async function main() {
     await prisma.user.upsert({
       where: { employeeCode: u.employeeCode },
       // ไม่ทับ region/team ที่เทสต์ตั้งเอง แต่คืนรหัสผ่านกับตำแหน่งให้ตรงเสมอ
-      update: { passwordHash, role: u.role, mustChangePassword: false },
+      // ภาคที่เพิ่ม (extraRegions) ล้างทุกครั้ง — ไม่มีเทสต์ไหนพึ่งค่าค้าง และเทสต์หลายภาคที่ล้มกลางทางจะไม่ลาก
+      // ภาคแถมไปให้ S001 ในชุดอื่นอีกเป็นพันข้อ (เห็นใบเกินมาแล้วผลเพี้ยนแบบหาสาเหตุยาก) · ทีมที่เพิ่ม (extraTeams) เหตุผลเดียวกัน
+      update: { passwordHash, role: u.role, mustChangePassword: false, extraRegions: [], extraTeams: [] },
       create: { ...u, passwordHash, mustChangePassword: false },
     });
   }

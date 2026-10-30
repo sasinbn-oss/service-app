@@ -1,7 +1,8 @@
 /**
  * SUPERVISOR = หัวหน้าภาค อยู่ระหว่างช่างกับแอดมินในสายงาน
  *
- * ผูกกับภาคผ่าน User.region — เห็นและจัดการเฉพาะใบงานของสาขาในภาคตัวเอง
+ * ผูกกับภาคผ่าน User.region + User.extraRegions (เลือกได้หลายภาค) และทีมที่ดูแล
+ * — เห็นและจัดการเฉพาะใบงานของสาขาในภาค/ทีมตัวเอง (ขอบเขตอยู่ที่ utils/supervisorScope.ts)
  * แอดมินเห็นทุกภาค ช่างเห็นเฉพาะงานที่ถูกจ่ายให้ตัวเอง
  */
 /**
@@ -21,8 +22,20 @@
  * Area เห็นสาขา COCO ทั้งบริษัท · Supervisor (COCO) เห็นเฉพาะสาขาที่ตัวเองดูแล (Branch.cocoSupervisorId)
  * · Maid (COCO) สิทธิ์เท่า Supervisor (COCO) แต่เห็นเฉพาะสาขาที่ประจำ (CocoMaidBranch · เจ้าของงานเลือก)
  */
-export const ROLES = ["EMPLOYEE", "SUPERVISOR", "ADMIN", "PARTS_ADMIN", "SUPER_ADMIN", "AREA", "COCO_SUPERVISOR", "COCO_MAID"] as const;
+/**
+ * SENIOR_TECH = Senior ช่าง (เจ้าของงานขอ ต.ค. 69) — สิทธิ์เท่าช่างทุกอย่าง แต่ดูได้หลายทีม/หลายทีมรวมพร้อมกัน
+ * ตัวตรวจสิทธิ์ (middleware/auth.ts) มองเป็น EMPLOYEE แบบเดียวกับที่ PARTS_ADMIN/SUPER_ADMIN มองเป็น ADMIN
+ * โค้ดที่ตัดสินจากบทบาทของคนที่ล็อกอิน (ขั้นของใคร กล่องงาน ปุ่ม) จึงไม่ต้องรู้ว่ามี Senior
+ * ที่ต้องรู้คือที่อ่าน role จากแถวในฐานข้อมูลตรง ๆ (รายชื่อช่าง ผัง รายงาน) — ใช้ TECH_ROLES
+ * ทีมที่ดูแลอยู่ที่ team + extraTeams อ่านผ่าน teamsOf (utils/teamGroups.ts) เท่านั้น
+ */
+export const ROLES = ["EMPLOYEE", "SENIOR_TECH", "SUPERVISOR", "ADMIN", "PARTS_ADMIN", "SUPER_ADMIN", "AREA", "COCO_SUPERVISOR", "COCO_MAID"] as const;
 export const AREA_TEAM_ROLES = ["AREA", "COCO_SUPERVISOR", "COCO_MAID"];
+/**
+ * บทบาทที่เป็นช่าง — ใช้กับ role ที่อ่านจากฐานข้อมูล (รายชื่อผู้เข้าปฏิบัติงาน ผังผู้รับผิดชอบ รายงาน)
+ * เขียน role === "EMPLOYEE" กับแถวในฐานข้อมูลเมื่อไร Senior ช่างหายจากรายการนั้นเงียบ ๆ
+ */
+export const TECH_ROLES = ["EMPLOYEE", "SENIOR_TECH"];
 /**
  * บทบาทระดับผู้ดูแลระบบ — นับรวมเวลาเช็คว่า "ต้องเหลือแอดมินอย่างน้อยหนึ่งคน"
  * และตั้ง/ถอดได้เฉพาะ Super Admin — แอดมินอะไหล่ทำได้เท่าแอดมิน ตั้งให้ใครก็คือให้สิทธิ์แอดมิน
@@ -31,6 +44,7 @@ export const ADMIN_ROLES = ["ADMIN", "PARTS_ADMIN", "SUPER_ADMIN"];
 
 export const ROLE_LABELS: Record<string, string> = {
   EMPLOYEE: "ช่าง",
+  SENIOR_TECH: "Senior ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
   PARTS_ADMIN: "Admin Spare Part",

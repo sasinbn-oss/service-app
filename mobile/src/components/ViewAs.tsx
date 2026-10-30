@@ -8,6 +8,9 @@ import { api, apiErrorMessage } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { showAlert } from "../utils/alert";
 import { AREA_TEAM_LABELS } from "../utils/areaTeam";
+import { regionsOf, regionsText } from "../utils/regions";
+import { isTechRole, sessionRoleLabel } from "../utils/roles";
+import { teamsOf, teamsText } from "../utils/teams";
 import { colors, radius, spacing } from "../theme";
 
 /**
@@ -24,7 +27,11 @@ type Person = {
   name: string;
   role: string;
   region: string | null;
+  /** ทุกภาคที่หัวหน้าภาคดูแล — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง อ่านผ่าน regionsOf() */
+  regions?: string[];
   team: string | null;
+  /** ทุกทีมที่ Senior ช่างเลือกไว้ — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง อ่านผ่าน teamsOf() */
+  teams?: string[];
   supervisedTeams: string[];
   maidBranches?: { code: string; name: string }[];
   area?: { id: number; name: string } | null;
@@ -56,10 +63,23 @@ const SEARCH_HINT: Record<string, string> = {
  */
 function groupOf(p: Person) {
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
-  if (p.role === "SUPERVISOR") return p.region ? `ภาค${p.region}` : "ดูแลเป็นรายทีม";
+  // Senior ช่างรวมกลุ่มเดียว ไม่กระจายไปทุกทีมที่ดูแล — คนเดียวขึ้นซ้ำหลายกลุ่มแล้วดูเหมือนมีหลายคน (เหตุผลเดียวกับหัวหน้าภาคหลายภาค)
+  if (p.role === "SENIOR_TECH") return "Senior ช่าง";
+  // คนดูแลหลายภาคอยู่กลุ่มเดียว ("ภาคใต้ · ภาคกลาง") ไม่ซ้ำชื่อในหลายกลุ่ม — เหตุผลเดียวกับ Maid ด้านบน
+  // คนดูแลภาคเดียวยังอยู่กลุ่มเดิม
+  if (p.role === "SUPERVISOR") return regionsText(regionsOf(p), "ภาค") || "ดูแลเป็นรายทีม";
   if (p.role === "COCO_SUPERVISOR") return p.area ? `Area ${p.area.name}` : "ยังไม่มี Area";
   if (AREA_TEAM_TABS.has(p.role)) return AREA_TEAM_LABELS[p.role];
   return "แอดมิน";
+}
+
+/**
+ * คนนี้อยู่แท็บไหน — แอดมินอะไหล่อยู่แท็บแอดมิน · Senior ช่างอยู่แท็บช่าง (หน้าจอที่เห็นเหมือนช่างทุกอย่าง แค่หลายทีม)
+ * ไม่เพิ่มแท็บของตัวเอง เพราะมีไม่กี่คน แท็บที่ 7 ทำให้แถวตำแหน่งตกบรรทัดบนจอมือถือเปล่า ๆ
+ */
+function inTab(p: Person, tab: Role) {
+  if (p.role === tab) return true;
+  return (tab === "ADMIN" && p.role === "PARTS_ADMIN") || (tab === "EMPLOYEE" && p.role === "SENIOR_TECH");
 }
 
 /** สาขาที่ผูกกับคนนี้ — Maid ประจำ / Supervisor (COCO) ดูแล · ร้านโทรมาบอกรหัสสาขาก่อนชื่อคน */
@@ -70,9 +90,10 @@ function branchesOf(p: Person) {
 function detailOf(p: Person, q = "") {
   if (p.role === "SUPERVISOR") {
     const n = p.supervisedTeams?.length ?? 0;
-    return [p.region ? `ภาค${p.region}` : null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
+    return [regionsText(regionsOf(p), "ภาค") || null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
   }
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
+  if (p.role === "SENIOR_TECH") return `Senior ช่าง · ${teamsText(teamsOf(p)) || "ยังไม่ได้เลือกทีม"}`;
   if (p.role === "AREA") {
     const n = p._count?.areaMembers ?? 0;
     return n ? `Supervisor ${n} คน · เห็นสาขา COCO ทั้งหมด` : "ยังไม่มี Supervisor · เห็นสาขา COCO ทั้งหมด";
@@ -135,7 +156,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
             (p) =>
               p.role !== "SUPER_ADMIN" &&
               p.id !== user?.id &&
-              (user?.superAdmin || p.role === "SUPERVISOR" || p.role === "EMPLOYEE" || AREA_TEAM_TABS.has(p.role))
+              (user?.superAdmin || p.role === "SUPERVISOR" || isTechRole(p.role) || AREA_TEAM_TABS.has(p.role))
           )
         )
       )
@@ -149,12 +170,11 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
   const rows = useMemo(
     () =>
       (people ?? [])
-        // แอดมินอะไหล่อยู่แท็บเดียวกับแอดมิน — หน้าจอที่เห็นเหมือนแอดมินทุกอย่าง
-        .filter((p) => p.role === tab || (tab === "ADMIN" && p.role === "PARTS_ADMIN"))
+        .filter((p) => inTab(p, tab))
         .filter(
           (p) =>
             !q ||
-            [p.name, p.employeeCode, p.team, p.region, groupOf(p), ...branchesOf(p).flatMap((b) => [b.code, b.name])].some(
+            [p.name, p.employeeCode, ...teamsOf(p), ...regionsOf(p), groupOf(p), ...branchesOf(p).flatMap((b) => [b.code, b.name])].some(
               (v) => v?.toLowerCase().includes(q)
             )
         )
@@ -202,7 +222,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
       <View style={styles.tabs}>
         {TABS.filter((t) => user?.superAdmin || t.role !== "ADMIN").map((t) => {
           const on = t.role === tab;
-          const n = (people ?? []).filter((p) => p.role === t.role || (t.role === "ADMIN" && p.role === "PARTS_ADMIN")).length;
+          const n = (people ?? []).filter((p) => inTab(p, t.role)).length;
           return (
             <TouchableOpacity
               key={t.role}
@@ -275,8 +295,6 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
   );
 }
 
-const ROLE_LABEL: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง", ...AREA_TEAM_LABELS };
-
 /**
  * แถบส้มค้างบนสุดตลอดที่ดูในฐานะคนอื่น
  *
@@ -301,7 +319,7 @@ export function ViewAsBanner() {
       <Ionicons name="eye" size={18} color="#fff" />
       <Text style={styles.bannerText} numberOfLines={narrow ? 2 : 1}>
         กำลังดูในฐานะ <Text style={{ fontWeight: "800" }}>{user.name}</Text>
-        {` (${user.employeeCode} · ${user.partsAdmin ? "Admin Spare Part" : ROLE_LABEL[user.role] ?? user.role})`}
+        {` (${user.employeeCode} · ${sessionRoleLabel(user)})`}
         {narrow ? "" : ` — ดูได้อย่างเดียว · เหลือ ${left} นาที`}
       </Text>
       <TouchableOpacity

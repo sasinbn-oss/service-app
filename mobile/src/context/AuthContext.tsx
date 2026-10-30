@@ -26,6 +26,10 @@ function asSession(u: User): User {
   if (u.role === "SUPER_ADMIN") return { ...u, role: "ADMIN", superAdmin: true };
   // แอดมินอะไหล่สิทธิ์เท่าแอดมินทุกอย่าง — ทุกที่ที่เช็ค role === "ADMIN" ใช้ได้เลย ป้ายชื่อดูที่ partsAdmin
   if (u.role === "PARTS_ADMIN") return { ...u, role: "ADMIN", partsAdmin: true };
+  // Senior ช่างสิทธิ์เท่าช่างทุกอย่าง แค่เห็นหลายทีม — มองเป็น EMPLOYEE ทุกที่ที่เช็คว่า "เป็นช่าง" (งานของฉัน
+  // กล่องงาน หน้าแรก) ใช้ได้เลย ขอบเขตทีมมาจาก teamCoverage ที่เซิร์ฟเวอร์รวมให้แล้ว ไม่ต้องคิดซ้ำในแอป
+  // รับธง seniorTech ด้วย เผื่อเซิร์ฟเวอร์แปลง role ให้ก่อนส่ง (ถ้าไม่รับ ป้ายชื่อจะกลายเป็น "ช่าง" เฉย ๆ)
+  if (u.role === "SENIOR_TECH" || (u.role === "EMPLOYEE" && u.seniorTech)) return { ...u, role: "EMPLOYEE", seniorTech: true };
   return u;
 }
 

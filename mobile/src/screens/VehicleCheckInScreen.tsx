@@ -22,6 +22,7 @@ import { useAuth } from "../context/AuthContext";
 import { showAlert } from "../utils/alert";
 import { duration, fmtNum, VehicleLogRow } from "../utils/vehicles";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
+import { teamsOf, teamsText } from "../utils/teams";
 
 interface VehicleCard {
   id: number;
@@ -140,7 +141,8 @@ export default function VehicleCheckInScreen() {
           </View>
         </View>
         <Text style={[styles.welcomeName, headingFont]}>{user?.name}</Text>
-        {user?.team ? <Text style={styles.welcomeSmall}>ทีม {user.team}</Text> : null}
+        {/* Senior ช่างโชว์ทุกทีมที่ดูแล ไม่ใช่แค่ทีมแรก */}
+        {teamsOf(user).length ? <Text style={styles.welcomeSmall}>{teamsText(teamsOf(user), "ทีม ")}</Text> : null}
         <View style={styles.wstats}>
           {[
             ["พร้อมเบิก", n("AVAILABLE")],

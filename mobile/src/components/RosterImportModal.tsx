@@ -17,6 +17,7 @@ import { showAlert } from "../utils/alert";
 import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
 import FileDropZone, { DropHint } from "./FileDropZone";
 import { colors, radius, spacing } from "../theme";
+import { teamsOf, teamsText } from "../utils/teams";
 
 interface Person {
   code: string;
@@ -27,7 +28,9 @@ interface Person {
   area: string | null;
   supervisorCode: string | null;
   group: string;
-  existing: { name: string; role: string; team: string | null } | null;
+  /** teams = ทุกทีมที่ถืออยู่ (Senior ช่างมีหลายทีม · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+  existing: { name: string; role: string; team: string | null; teams?: string[] } | null;
+  /** คงตำแหน่งเดิม — แอดมินทุกระดับ และ Senior ช่างที่ไฟล์ระบุเป็นช่าง (ไฟล์ไม่มีตำแหน่ง Senior) */
   keepsRole: boolean;
 }
 
@@ -291,15 +294,34 @@ export default function RosterImportModal({
                   .filter((p) => p.group === g)
                   .map((p) => {
                     const team = p.role === "EMPLOYEE" && p.area ? teamMap[p.area] : null;
+                    // Senior ช่าง: เซิร์ฟเวอร์คงตำแหน่งและทีมเดิมไว้ แล้วเพิ่มทีมในไฟล์ต่อท้าย (ไม่ทับ) — บอกตามนั้น
+                    // ไม่งั้นขึ้นแค่ "ทีม X" แล้วแอดมินนึกว่า Senior จะเหลือทีมเดียว
+                    const senior = p.existing?.role === "SENIOR_TECH" && p.role === "EMPLOYEE";
+                    const held = senior ? teamsOf(p.existing) : [];
+                    const adds = senior && !!team && !held.includes(team);
                     return (
                       <View key={p.code} style={styles.personRow}>
                         <Text style={styles.code}>{p.code}</Text>
                         <Text style={[styles.body, { flex: 2, minWidth: 180 }]}>{p.name}</Text>
                         <Text style={[styles.muted, { flex: 2, minWidth: 160 }]}>
-                          {p.role === "SUPERVISOR" ? "หัวหน้าภาค" : team ? `ทีม ${team}` : `ยังไม่มีทีม (${p.area ?? "—"})`}
+                          {senior
+                            ? `Senior ช่าง · ${teamsText(held) || "ยังไม่มีทีม"}${adds ? ` + ${team}` : ""}`
+                            : p.role === "SUPERVISOR"
+                              ? "หัวหน้าภาค"
+                              : team
+                                ? `ทีม ${team}`
+                                : `ยังไม่มีทีม (${p.area ?? "—"})`}
                         </Text>
                         <Text style={[p.existing ? styles.tagUpd : styles.tagNew]}>
-                          {p.keepsRole ? "แอดมินอยู่แล้ว · แก้แค่ชื่อ" : p.existing ? "อัปเดต" : "ใหม่"}
+                          {senior
+                            ? adds
+                              ? "Senior ช่างอยู่แล้ว · เพิ่มทีมจากไฟล์"
+                              : "Senior ช่างอยู่แล้ว · คงทีมเดิม"
+                            : p.keepsRole
+                              ? "แอดมินอยู่แล้ว · แก้แค่ชื่อ"
+                              : p.existing
+                                ? "อัปเดต"
+                                : "ใหม่"}
                         </Text>
                       </View>
                     );

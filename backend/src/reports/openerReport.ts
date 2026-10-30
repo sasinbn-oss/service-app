@@ -12,6 +12,7 @@
 import ExcelJS from "exceljs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { regionsOf } from "../utils/supervisorScope";
 import {
   JOB_TYPE_LABELS,
   WORK_STATUS_LABELS,
@@ -30,6 +31,8 @@ const ROLE_LABELS: Record<string, string> = {
   PARTS_ADMIN: "Admin Spare Part",
   SUPERVISOR: "หัวหน้าภาค",
   EMPLOYEE: "ช่าง",
+  // ไม่มีในรายการ = ขึ้นรหัสอังกฤษดิบในไฟล์ (SENIOR_TECH) — คนกรองคอลัมน์ "ตำแหน่ง" หาไม่เจอ
+  SENIOR_TECH: "Senior ช่าง",
 };
 const SYSTEM = "ระบบ (ไม่มีผู้เปิด)";
 const TH_MONTH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
@@ -135,7 +138,7 @@ export async function buildOpenerReport(opts: {
       assignedTeam: true,
       branch: { select: { code: true, name: true, region: true, zone: true } },
       machine: { select: { code: true } },
-      createdBy: { select: { id: true, name: true, employeeCode: true, role: true, region: true } },
+      createdBy: { select: { id: true, name: true, employeeCode: true, role: true, region: true, extraRegions: true } },
     },
   });
 
@@ -151,7 +154,8 @@ export async function buildOpenerReport(opts: {
         name: u?.name ?? SYSTEM,
         employeeCode: u?.employeeCode ?? null,
         role: u ? ROLE_LABELS[u.role] ?? u.role : "—",
-        region: u?.region ?? null,
+        // ภาคของผู้เปิดทุกภาค (หัวหน้าภาคเลือกได้หลายภาค) — ช่องเดิมเป็นข้อความเดียว แอปกับไฟล์ไม่ต้องเปลี่ยน
+        region: u ? regionsOf(u).join(" · ") || null : null,
         total: 0,
         fromBoard: 0,
         manual: 0,

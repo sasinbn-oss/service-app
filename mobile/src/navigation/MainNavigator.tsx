@@ -58,7 +58,8 @@ import ManageBranchesScreen from "../screens/ManageBranchesScreen";
 import ManageUsersScreen from "../screens/ManageUsersScreen";
 
 import { useAuth } from "../context/AuthContext";
-import { AREA_TEAM_LABELS, isAreaTeam } from "../utils/areaTeam";
+import { isAreaTeam } from "../utils/areaTeam";
+import { sessionRoleLabel } from "../utils/roles";
 import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
@@ -290,7 +291,7 @@ function AppTopBar() {
             {user.name}
           </Text>
           <Text style={styles.whoRole}>
-            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "Admin Spare Part" : ROLE_LABEL[user.role] ?? user.role}
+            {sessionRoleLabel(user)}
           </Text>
         </View>
       ) : null}
@@ -327,13 +328,6 @@ function AppTopBar() {
   );
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  ...AREA_TEAM_LABELS,
-  ADMIN: "แอดมิน",
-  SUPERVISOR: "หัวหน้าภาค",
-  EMPLOYEE: "ช่าง",
-};
-
 /**
  * ออกจากระบบอยู่บนแถบบนเพื่อให้ทุกแท็บกดได้
  *
@@ -369,7 +363,7 @@ function HomeStackNavigator() {
   // Area Team ไม่มีงานออกหน้างาน (งานของฉันวันนี้คือของช่าง) — เปิดมาเจอแผนงาน เมนูแรกของตำแหน่งนี้
   // ทุกตำแหน่งเปิดแอปมาเจอ "งานของฉันวันนี้" ก่อน (เจ้าของงานเลือก ต.ค. 69)
   // เดิมแอดมิน/หัวหน้าภาคเริ่มที่แผนงาน ช่างเริ่มที่งานของฉัน — เปลี่ยนให้ทุกคนเห็นงานที่ออกไปจริงวันนี้ก่อน
-  // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ภาคของตัวเอง · แอดมิน = ทั้งหมด
+  // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ทุกภาค/ทีมที่ดูแล · แอดมิน = ทั้งหมด
   return (
     <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout} initialRouteName={isAreaTeam(user) ? "PlanBoard" : "MyJobs"}>
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />

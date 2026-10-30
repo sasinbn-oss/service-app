@@ -5,7 +5,11 @@
  * มีเบอร์โทรใต้ชื่อทุกคนที่มีเบอร์ (แตะแล้วโทร) · ปุ่มสลับไปผังฝั่ง Area (components/AreaMap.tsx) — เจ้าของงานขอ ต.ค. 69
  * จอแคบเรียงภาคลงมาทีละภาคเต็มความกว้าง แทนเลื่อนซ้ายขวา — บนมือถือเลื่อนข้างทีละคอลัมน์หาคนไม่เจอ
  * - ช่าง → ทีม (หรือทีมรวม) · หัวหน้าภาค → หัวภาค (ดูแลทั้งภาค) หรือทีม (ดูแลเพิ่ม/ย้ายทีมที่ดูแล)
- * - ลากไปที่ "ยังไม่มีสังกัด" = เอาออก · คนที่ยังไม่มีสังกัดลากจากกล่องนั้นเข้าทีมได้
+ * - Senior ช่างถือได้หลายทีม/ทีมรวม (ต.ค. 69) — ชื่อขึ้นในทุกกล่องที่ถือ มีป้าย "Senior" · วางที่ทีม = "เพิ่ม" ไม่ย้าย
+ *   (กติกาเดียวกับหัวหน้าภาคหลายภาค) · ลากชื่อในกล่องไป "ยังไม่มีสังกัด" = เลิกดูแลเฉพาะทีมนั้น
+ * - หัวหน้าภาคถือได้หลายภาค (ต.ค. 69) — วางที่หัวภาค = "เพิ่ม" ภาคนั้น ไม่ทับภาคเดิม ชื่อจึงขึ้นในทุกภาคที่ถือ
+ *   ย้ายภาค = วางที่ภาคใหม่ แล้วลากชื่อในภาคเก่าไป "ยังไม่มีสังกัด" (สองบรรทัดในรายการรอบันทึก เห็นชัดว่าทำอะไร)
+ * - ลากไปที่ "ยังไม่มีสังกัด" = เอาออกเฉพาะที่ที่ลากมา (ทีมนั้น/ภาคนั้น) · คนที่ยังไม่มีสังกัดลากจากกล่องนั้นเข้าทีมได้
  * ย้ายแล้วยังไม่บันทึกจนกด "บันทึก" — ลากพลาดหนึ่งครั้งไม่ควรทำให้ช่างทั้งคนมองไม่เห็นงาน
  * บันทึกผ่าน PATCH /auth/users/:id ตัวเดียวกับหน้าสิทธิ์ผู้ใช้ (กฎชุดเดียว)
  *
@@ -28,6 +32,8 @@ import AreaMap, { ChartKind, ChartSwitch } from "../components/AreaMap";
 import { CallButton, PhoneLine, phoneDigits } from "../components/PhoneLink";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
+import { regionsBody, regionsOf } from "../utils/regions";
+import { teamsBody, teamsOf } from "../utils/teams";
 
 interface TeamInfo {
   name: string;
@@ -37,12 +43,39 @@ interface TeamInfo {
 interface MapData {
   asOf: string;
   canEdit: boolean;
-  regions: { name: string; teams: TeamInfo[] }[];
-  supervisors: { id: number; name: string; code: string; phone: string | null; region: string | null; teams: string[] }[];
-  technicians: { id: number; name: string; code: string; phone: string | null; team: string | null; staleTeam: string | null }[];
+  /** noRegion = คอลัมน์ "ไม่ระบุภาค" (ทีมที่สาขาไม่ได้ตั้งภาค) — ไม่ใช่ภาคที่หัวหน้าภาคถือได้ */
+  regions: { name: string; noRegion?: boolean; teams: TeamInfo[] }[];
+  /** regions = ทุกภาคที่ถือ (หลายภาคได้) — เซิร์ฟเวอร์รุ่นเก่าส่งแค่ region อ่านผ่าน regionsOf() */
+  supervisors: { id: number; name: string; code: string; phone: string | null; region: string | null; regions?: string[]; teams: string[] }[];
+  technicians: Tech[];
   groups: { name: string; covers: string[]; allTeams: boolean }[];
 }
-type SupState = { region: string | null; teams: string[] };
+interface Tech {
+  id: number;
+  name: string;
+  code: string;
+  phone: string | null;
+  team: string | null;
+  staleTeam: string | null;
+  /** Senior ช่าง — ถือได้หลายทีม/ทีมรวม (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+  senior?: boolean;
+  role?: string;
+  /** ทุกทีม/ทีมรวมที่ถือ · staleTeams = ชื่อที่ไม่มีในทะเบียนแล้ว */
+  teams?: string[];
+  staleTeams?: string[];
+}
+const isSenior = (t: Tech) => !!t.senior || t.role === "SENIOR_TECH";
+/**
+ * ทุกชื่อที่ Senior ถืออยู่ รวมชื่อที่ไม่มีในทะเบียนแล้ว — ตอนบันทึกส่งทั้งชุด (teams แทนที่ของเดิม)
+ * ถ้าทิ้งชื่อค้างไว้ตรงนี้ ลากเพิ่มทีมเดียวแล้วชื่อเก่าหายไปด้วยโดยไม่มีใครสั่ง
+ */
+function seniorHeld(t: Tech) {
+  const out: string[] = [];
+  for (const x of [...teamsOf(t), t.staleTeam, ...(t.staleTeams ?? [])]) if (x && !out.includes(x)) out.push(x);
+  return out;
+}
+const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+type SupState = { regions: string[]; teams: string[] };
 /** ที่ที่วางได้ — หัวภาค · ทีม (รวมทีมรวม) · กล่องยังไม่มีสังกัด */
 type Zone = { kind: "region" | "team" | "tray"; target: string | null };
 /** คนที่ถูกจับอยู่ และจับมาจากไหน — หัวหน้าภาคที่จับจากทีมคือย้าย "ทีมนั้น" ไม่ใช่ทั้งหมด */
@@ -88,6 +121,7 @@ function Person({
   role,
   sup,
   small,
+  badge,
 }: {
   grab: Grab;
   name: string;
@@ -96,6 +130,8 @@ function Person({
   role: string;
   sup?: boolean;
   small?: boolean;
+  /** ป้ายเล็กท้ายชื่อ — "Senior" ให้เห็นทันทีว่าคนนี้ดูหลายทีม ชื่อเดียวกันในกล่องอื่นคือคนเดียวกัน */
+  badge?: string;
 }) {
   const d = useDnD();
   const zone = useContext(ZoneContext);
@@ -103,7 +139,9 @@ function Person({
   const narrow = useWindowDimensions().width < 700;
   const qd = /^[\d\s-]+$/.test(d.query) ? d.query.replace(/\D/g, "") : "";
   const hit = !!d.query && (`${name} ${code} ${phone ?? ""}`.includes(d.query) || (!!qd && phoneDigits(phone).includes(qd)));
-  const selected = d.grab?.id === grab.id && d.grab.kind === grab.kind;
+  // หัวหน้าภาคหลายภาคมีชื่อหลายที่ — ไฮไลต์เฉพาะชื่อที่แตะ (ที่มาบอกว่าลากออกแล้วจะเอาภาคไหนออก)
+  const selected =
+    d.grab?.id === grab.id && d.grab.kind === grab.kind && d.grab.from?.kind === grab.from?.kind && d.grab.from?.target === grab.from?.target;
 
   useEffect(() => {
     const el = domOf(ref);
@@ -147,7 +185,15 @@ function Person({
         <View style={{ flexShrink: 1 }}>
           {/* ชื่อตัดบรรทัดได้ ไม่ตัดเป็น … — คอลัมน์ภาคกว้างคงที่ ชื่อจริง+นามสกุล+ชื่อเล่นยาวเกินบรรทัดเดียวบ่อย
               ตัดแล้วชื่อเล่นหาย ซึ่งเป็นส่วนที่คนใช้เรียกกันจริง (เจ้าของงานแจ้งว่าผังขึ้นไม่ครบ ต.ค. 69) */}
-          <Text style={styles.pn}>{name}</Text>
+          <Text style={styles.pn}>
+            {name}
+            {badge ? (
+              <>
+                {" "}
+                <Text style={styles.badge}>{` ${badge} `}</Text>
+              </>
+            ) : null}
+          </Text>
           {/* รหัสพนักงานก็ต้องเห็นครบ — คนใช้ค้นหาด้วยรหัส */}
           <Text style={styles.pr}>
             {role} · {code}
@@ -236,6 +282,8 @@ export default function CoverageMapScreen() {
   const [grab, setGrab] = useState<Grab | null>(null);
   const [dragging, setDragging] = useState(false);
   const [techTeam, setTechTeam] = useState<Map<number, string | null>>(new Map());
+  // Senior ช่าง: ทุกทีม/ทีมรวมที่ถือ (ช่างธรรมดาใช้ techTeam ทีมเดียว)
+  const [seniorTeams, setSeniorTeams] = useState<Map<number, string[]>>(new Map());
   const [supState, setSupState] = useState<Map<number, SupState>>(new Map());
   const [log, setLog] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -294,7 +342,8 @@ export default function CoverageMapScreen() {
       const res = await api.get<MapData>("/teams/coverage-map");
       setData(res.data);
       setTechTeam(new Map(res.data.technicians.map((t) => [t.id, t.team])));
-      setSupState(new Map(res.data.supervisors.map((s) => [s.id, { region: s.region, teams: [...s.teams] }])));
+      setSeniorTeams(new Map(res.data.technicians.filter(isSenior).map((t) => [t.id, seniorHeld(t)])));
+      setSupState(new Map(res.data.supervisors.map((s) => [s.id, { regions: regionsOf(s), teams: [...s.teams] }])));
       setLog([]);
       setError(null);
     } catch (e) {
@@ -315,10 +364,41 @@ export default function CoverageMapScreen() {
     return m;
   }, [data]);
   const groupNames = useMemo(() => new Set((data?.groups ?? []).map((g) => g.name)), [data]);
+  const pseudoRegions = useMemo(() => new Set((data?.regions ?? []).filter((r) => r.noRegion).map((r) => r.name)), [data]);
+  // ชื่อที่มีกล่องในผัง (ทีมช่าง + ทีมรวม) — ชื่อที่ Senior ถือแต่ไม่อยู่ในนี้ = ไม่มีในทะเบียนแล้ว
+  const placeable = useMemo(
+    () => new Set([...(data?.regions ?? []).flatMap((r) => r.teams.map((t) => t.name)), ...groupNames]),
+    [data, groupNames]
+  );
 
   const drop = useCallback(
     (g: Grab, z: Zone) => {
       if (!data) return;
+      if (g.kind === "TECH" && isSenior(data.technicians.find((x) => x.id === g.id)!)) {
+        const t = data.technicians.find((x) => x.id === g.id)!;
+        const cur = seniorTeams.get(g.id) ?? [];
+        const fromTeam = g.from?.kind === "team" ? g.from.target : null;
+        if (z.kind === "region") return feedback.toast("info", "Senior ช่างต้องอยู่ในทีม — วางที่กล่องทีมช่างหรือทีมรวม");
+        let next: string[];
+        let text: string;
+        if (z.kind === "tray") {
+          // เอาออกเฉพาะกล่องที่ลากมา ทีมอื่นที่ถืออยู่ไม่หายตาม (แบบเดียวกับหัวหน้าภาคหลายภาค)
+          if (!fromTeam || !cur.includes(fromTeam)) return;
+          next = cur.filter((x) => x !== fromTeam);
+          text = `${t.name} (Senior ช่าง): เลิกดูแลทีม${fromTeam}${next.some((x) => placeable.has(x)) ? "" : " → ไม่มีสังกัด"}`;
+        } else {
+          const team = z.target!;
+          if (cur.includes(team)) {
+            return fromTeam === team ? undefined : feedback.toast("info", `${t.name} ดูแลทีม${team} อยู่แล้ว`);
+          }
+          // เพิ่ม ไม่ย้าย — ต่อท้ายให้ทีมแรก (team ที่แอปรุ่นเก่าอ่าน) คงเดิม · จะย้ายก็ลากชื่อในกล่องเดิมไปแถบเหลือง
+          next = [...cur, team];
+          text = `${t.name} (Senior ช่าง): ดูแลเพิ่มทีม${team}`;
+        }
+        setSeniorTeams((m) => new Map(m).set(g.id, next));
+        setLog((l) => [...l, text]);
+        return;
+      }
       if (g.kind === "TECH") {
         const t = data.technicians.find((x) => x.id === g.id)!;
         const cur = techTeam.get(g.id) ?? null;
@@ -333,30 +413,47 @@ export default function CoverageMapScreen() {
         return;
       }
       const s = data.supervisors.find((x) => x.id === g.id)!;
-      const cur = supState.get(g.id) ?? { region: null, teams: [] };
-      let next: SupState = { region: cur.region, teams: [...cur.teams] };
+      const cur = supState.get(g.id) ?? { regions: [], teams: [] };
+      let next: SupState = { regions: [...cur.regions], teams: [...cur.teams] };
       let text = "";
       const fromTeam = g.from?.kind === "team" ? g.from.target : null;
+      const fromRegion = g.from?.kind === "region" ? g.from.target : null;
       if (z.kind === "tray") {
         if (fromTeam) {
           next.teams = next.teams.filter((t) => t !== fromTeam);
           text = `${s.name} (หัวหน้าภาค): เลิกดูแลทีม${fromTeam}`;
+        } else if (fromRegion) {
+          // ชื่อในหัวภาคหนึ่ง = คู่ (คน, ภาคนั้น) — เอาออกแค่ภาคนั้น ภาคอื่นที่ถืออยู่ไม่หายตาม
+          if (!cur.regions.includes(fromRegion)) return;
+          next.regions = next.regions.filter((r) => r !== fromRegion);
+          text = `${s.name} (หัวหน้าภาค): เลิกดูแลภาค${fromRegion}`;
         } else {
-          if (!cur.region && !cur.teams.length) return;
-          next = { region: null, teams: [] };
+          if (!cur.regions.length && !cur.teams.length) return;
+          next = { regions: [], teams: [] };
           text = `${s.name} (หัวหน้าภาค): เลิกดูแลทั้งหมด → ไม่มีสังกัด`;
         }
       } else if (z.kind === "region") {
-        if (cur.region === z.target && !fromTeam) return;
-        next.region = z.target;
+        const region = z.target!;
+        // ห้ามตั้งแต่ตอนวาง ไม่ใช่รอให้บันทึกแล้วเซิร์ฟเวอร์ตอบ 400 — บันทึกทีละคน พังกลางทางแล้วคนที่เหลือในรายการหายตอนโหลดใหม่
+        if (pseudoRegions.has(region)) {
+          return feedback.toast("info", `ทีมกลุ่ม "${region}" สาขายังไม่ได้ตั้งภาคในทะเบียนสาขา — วางหัวหน้าภาคที่ทีมแทน`);
+        }
+        if (cur.regions.includes(region) && !fromTeam) {
+          // วางกลับที่เดิม (ลากหลุดมือในภาคตัวเอง) ไม่ต้องเตือน — เตือนเฉพาะลากมาจากที่อื่น
+          return fromRegion === region ? undefined : feedback.toast("info", `${s.name} ดูแลภาค${region} อยู่แล้ว`);
+        }
+        // เพิ่ม ไม่ทับ — ต่อท้ายเพื่อให้ภาคแรก (region ที่แอปรุ่นเก่าอ่าน) คงเดิม
+        if (!next.regions.includes(region)) next.regions.push(region);
         if (fromTeam) next.teams = next.teams.filter((t) => t !== fromTeam);
-        // ทีมในภาคใหม่ไม่ต้องติ๊กซ้ำ — ดูแลทั้งภาคครอบคลุมอยู่แล้ว
-        next.teams = next.teams.filter((t) => regionOfTeam.get(t) !== z.target);
-        text = `${s.name} (หัวหน้าภาค): ${cur.region && cur.region !== z.target ? `ย้ายจากภาค${cur.region} → ` : ""}ดูแลทั้งภาค${z.target}`;
+        // ทีมในภาคที่เพิ่มไม่ต้องติ๊กซ้ำ — ดูแลทั้งภาคครอบคลุมอยู่แล้ว
+        next.teams = next.teams.filter((t) => regionOfTeam.get(t) !== region);
+        text = cur.regions.includes(region)
+          ? `${s.name} (หัวหน้าภาค): เลิกดูแลทีม${fromTeam} (ดูแลทั้งภาค${region} อยู่แล้ว)`
+          : `${s.name} (หัวหน้าภาค): ${fromTeam ? `ย้ายจากทีม${fromTeam} → ` : ""}${cur.regions.length ? "ดูแลเพิ่มทั้งภาค" : "ดูแลทั้งภาค"}${region}`;
       } else {
         const team = z.target!;
         if (groupNames.has(team)) return feedback.toast("info", "หัวหน้าภาคดูแลทีมรวมได้จากหน้าสิทธิ์ผู้ใช้ — ผังนี้วางที่ทีมช่าง");
-        if (next.teams.includes(team) || (next.region && regionOfTeam.get(team) === next.region)) {
+        if (next.teams.includes(team) || next.regions.includes(regionOfTeam.get(team) ?? "")) {
           return feedback.toast("info", `${s.name} ดูแลทีม${team} อยู่แล้ว`);
         }
         if (fromTeam) next.teams = next.teams.filter((t) => t !== fromTeam);
@@ -366,7 +463,7 @@ export default function CoverageMapScreen() {
       setSupState((m) => new Map(m).set(g.id, next));
       setLog((l) => [...l, text]);
     },
-    [data, techTeam, supState, regionOfTeam, groupNames]
+    [data, techTeam, seniorTeams, supState, regionOfTeam, groupNames, pseudoRegions, placeable]
   );
 
   async function save() {
@@ -375,6 +472,14 @@ export default function CoverageMapScreen() {
     let done = 0;
     try {
       for (const t of data.technicians) {
+        if (isSenior(t)) {
+          const now = seniorTeams.get(t.id) ?? [];
+          if (!sameSet(now, seniorHeld(t))) {
+            await api.patch(`/auth/users/${t.id}`, teamsBody(now), { loadingText: false });
+            done++;
+          }
+          continue;
+        }
         const to = techTeam.get(t.id) ?? null;
         if (to !== t.team) {
           await api.patch(`/auth/users/${t.id}`, { team: to }, { loadingText: false });
@@ -383,9 +488,11 @@ export default function CoverageMapScreen() {
       }
       for (const s of data.supervisors) {
         const st = supState.get(s.id)!;
-        const same = st.region === s.region && st.teams.length === s.teams.length && st.teams.every((t) => s.teams.includes(t));
+        const was = regionsOf(s);
+        const same = sameSet(st.regions, was) && sameSet(st.teams, s.teams);
         if (!same) {
-          await api.patch(`/auth/users/${s.id}`, { region: st.region, supervisedTeams: st.teams }, { loadingText: false });
+          // regions ทั้งชุด (เซิร์ฟเวอร์ใหม่ใช้ตัวนี้) + region ภาคแรกให้เซิร์ฟเวอร์รุ่นเก่าช่วง deploy — ดู regionsBody
+          await api.patch(`/auth/users/${s.id}`, { ...regionsBody(st.regions), supervisedTeams: st.teams }, { loadingText: false });
           done++;
         }
       }
@@ -453,14 +560,22 @@ export default function CoverageMapScreen() {
   }
 
   // ── ข้อมูลที่แสดง (ตามที่ลากไว้ ยังไม่บันทึกก็เห็นผลแล้ว) ──
-  const techsOf = (team: string) => data.technicians.filter((t) => (techTeam.get(t.id) ?? null) === team);
-  const sup = (id: number) => supState.get(id) ?? { region: null, teams: [] };
-  const wholeOf = (region: string) => data.supervisors.filter((s) => sup(s.id).region === region);
+  const held = (t: Tech) => seniorTeams.get(t.id) ?? [];
+  const techsOf = (team: string) =>
+    data.technicians.filter((t) => (isSenior(t) ? held(t).includes(team) : (techTeam.get(t.id) ?? null) === team));
+  /** ป้ายใต้ชื่อช่างในกล่องทีม — Senior บอกทีมอื่นที่ถือด้วย คนดูผังจะรู้ว่าชื่อซ้ำในอีกกล่องคือคนเดียวกัน */
+  const techRole = (t: Tech, here: string) => {
+    if (!isSenior(t)) return "ช่าง";
+    const also = held(t).filter((x) => x !== here && placeable.has(x));
+    return also.length ? `Senior ช่าง (ดูแล ${also.join(" · ")} ด้วย)` : "Senior ช่าง";
+  };
+  const sup = (id: number): SupState => supState.get(id) ?? { regions: [], teams: [] };
+  const wholeOf = (region: string) => data.supervisors.filter((s) => sup(s.id).regions.includes(region));
   const partOf = (region: string, team: string) =>
-    data.supervisors.filter((s) => sup(s.id).region !== region && sup(s.id).teams.includes(team));
+    data.supervisors.filter((s) => !sup(s.id).regions.includes(region) && sup(s.id).teams.includes(team));
   const supsOfTeam = (region: string, team: string) => [...wholeOf(region), ...partOf(region, team)];
-  const freeTechs = data.technicians.filter((t) => !techTeam.get(t.id));
-  const freeSups = data.supervisors.filter((s) => !sup(s.id).region && !sup(s.id).teams.length);
+  const freeTechs = data.technicians.filter((t) => (isSenior(t) ? !held(t).some((x) => placeable.has(x)) : !techTeam.get(t.id)));
+  const freeSups = data.supervisors.filter((s) => !sup(s.id).regions.length && !sup(s.id).teams.length);
   const tq = trayQuery.trim();
   const inTray = (x: { name: string; code: string }) => !tq || `${x.name} ${x.code}`.includes(tq);
   const trayFree = { sups: freeSups.filter(inTray), techs: freeTechs.filter(inTray) };
@@ -486,10 +601,11 @@ export default function CoverageMapScreen() {
   const cols = data.regions.map((r) => {
             const whole = wholeOf(r.name);
             const partial = data.supervisors.filter(
-              (s) => sup(s.id).region !== r.name && sup(s.id).teams.some((t) => regionOfTeam.get(t) === r.name)
+              (s) => !sup(s.id).regions.includes(r.name) && sup(s.id).teams.some((t) => regionOfTeam.get(t) === r.name)
             );
             const br = r.teams.reduce((n, t) => n + t.branches, 0);
-            const tc = r.teams.reduce((n, t) => n + techsOf(t.name).length, 0);
+            // นับคน ไม่นับชื่อ — Senior ที่ถือสองทีมในภาคเดียวกันคือช่างคนเดียว
+            const tc = new Set(r.teams.flatMap((t) => techsOf(t.name).map((x) => x.id))).size;
             const regionText = `${r.name} ${r.teams.map((t) => t.name).join(" ")} ${whole.map(who).join(" ")}`;
             return (
               <View key={r.name} style={[narrow ? styles.colNarrow : styles.col, dim(regionText + r.teams.map((t) => techsOf(t.name).map(who).join(" ")).join(" ")) && styles.dim]}>
@@ -502,17 +618,21 @@ export default function CoverageMapScreen() {
                 </DropZone>
                 <ZoneContext.Provider value={{ kind: "region", target: r.name }}>
                   <View style={styles.supbox}>
-                    {whole.map((s) => (
-                      <Person
-                        key={s.id}
-                        grab={{ id: s.id, kind: "SUP", from: { kind: "region", target: r.name } }}
-                        name={s.name}
-                        code={s.code}
-                        phone={s.phone}
-                        role="หัวหน้าภาค · ทั้งภาค"
-                        sup
-                      />
-                    ))}
+                    {whole.map((s) => {
+                      // ถือหลายภาค — บอกภาคอื่นที่ถือด้วย คนดูผังจะได้รู้ว่าชื่อเดียวกันในอีกคอลัมน์คือคนเดียวกัน
+                      const also = sup(s.id).regions.filter((x) => x !== r.name);
+                      return (
+                        <Person
+                          key={s.id}
+                          grab={{ id: s.id, kind: "SUP", from: { kind: "region", target: r.name } }}
+                          name={s.name}
+                          code={s.code}
+                          phone={s.phone}
+                          role={`หัวหน้าภาค · ทั้งภาค${also.length ? ` (ดูแลภาค${also.join(" · ภาค")} ด้วย)` : ""}`}
+                          sup
+                        />
+                      );
+                    })}
                     {partial.map((s) => (
                       <View key={s.id} style={styles.partial}>
                         <View style={[styles.av, styles.avSup, styles.avSmall]}>
@@ -571,7 +691,8 @@ export default function CoverageMapScreen() {
                                   name={x.name}
                                   code={x.code}
                                   phone={x.phone}
-                                  role="ช่าง"
+                                  role={techRole(x, t.name)}
+                                  badge={isSenior(x) ? "Senior" : undefined}
                                   small
                                 />
                               ))}
@@ -623,7 +744,7 @@ export default function CoverageMapScreen() {
               <Text style={[styles.td, TABLE_COLS[1], { fontWeight: "700" }]}>ทีม{t.name}</Text>
               <Text style={[styles.td, TABLE_COLS[2], !s.length && styles.missing]}>{s.map((x) => x.name).join("\n") || "ไม่มี"}</Text>
               <Text style={[styles.td, TABLE_COLS[3], !ts.length && styles.missing]}>
-                {ts.map((x) => `${x.name} (${x.code})`).join("\n") || "ไม่มี"}
+                {ts.map((x) => `${x.name} (${x.code})${isSenior(x) ? " · Senior" : ""}`).join("\n") || "ไม่มี"}
               </Text>
               <Text style={[styles.td, TABLE_COLS[4], styles.num]}>{fmt(t.branches)}</Text>
               <Text style={[styles.td, TABLE_COLS[5], styles.num]}>{t.open}</Text>
@@ -684,7 +805,9 @@ export default function CoverageMapScreen() {
                 <View style={styles.editband}>
                   <Text style={styles.editbandText}>
                     โหมดแก้ไข — {Platform.OS === "web" ? "ลากชื่อ หรือคลิกชื่อแล้วคลิก" : "แตะชื่อ แล้วแตะ"}ไปที่ทีมหรือหัวภาค · คนที่ยังไม่มีสังกัดอยู่ในแถบเหลืองล่างจอ ·
-                    ช่าง → ทีม · หัวหน้าภาค → หัวภาค (ทั้งภาค) หรือทีม · การเปลี่ยนแปลงยังไม่ถูกบันทึกจนกว่าจะกด "บันทึก"
+                    ช่าง → ทีม · Senior ช่าง → ทีม/ทีมรวม (เพิ่มทีมที่ดูแล หลายทีมได้) · หัวหน้าภาค → หัวภาค (เพิ่มภาคที่ดูแล หลายภาคได้) หรือทีม ·
+                    ลากชื่อในหัวภาคหรือชื่อ Senior ในทีมไปแถบเหลือง = เลิกดูแลเฉพาะที่นั้น ·
+                    การเปลี่ยนแปลงยังไม่ถูกบันทึกจนกว่าจะกด "บันทึก"
                   </Text>
                 </View>
               </>
@@ -748,7 +871,8 @@ export default function CoverageMapScreen() {
                             name={x.name}
                             code={x.code}
                             phone={x.phone}
-                            role="ช่าง"
+                            role={techRole(x, g.name)}
+                            badge={isSenior(x) ? "Senior" : undefined}
                             small
                           />
                         ))
@@ -818,7 +942,10 @@ export default function CoverageMapScreen() {
                     <Person key={`s${s.id}`} grab={{ id: s.id, kind: "SUP", from: null }} name={s.name} code={s.code} phone={s.phone} role="หัวหน้าภาค" sup small />
                   ))}
                   {trayFree.techs.map((t) => {
-                    const stale = data.technicians.find((x) => x.id === t.id)?.staleTeam;
+                    const senior = isSenior(t);
+                    // Senior ที่ทุกชื่อไม่มีในทะเบียนแล้ว — บอกชื่อเดิมทั้งหมด ไม่ใช่แค่ชื่อแรก
+                    const stale = senior ? held(t).join(" · ") : t.staleTeam;
+                    const label = senior ? "Senior ช่าง" : "ช่าง";
                     return (
                       <Person
                         key={`t${t.id}`}
@@ -826,7 +953,8 @@ export default function CoverageMapScreen() {
                         name={t.name}
                         code={t.code}
                         phone={t.phone}
-                        role={stale && !t.team ? `ช่าง · เดิม ${stale}` : "ช่าง"}
+                        role={stale && (senior || !t.team) ? `${label} · เดิม ${stale}` : label}
+                        badge={senior ? "Senior" : undefined}
                         small
                       />
                     );
@@ -1018,6 +1146,7 @@ const styles = StyleSheet.create({
   avTech: { backgroundColor: colors.roleTech },
   avText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   pn: { fontSize: 13.5, fontWeight: "600", color: colors.text },
+  badge: { fontSize: 10.5, fontWeight: "800", color: colors.roleTech, backgroundColor: colors.roleTechSoft, borderRadius: 4 },
   pr: { fontSize: 11.5, color: colors.textMuted, lineHeight: 17 },
   hit: { backgroundColor: colors.warningTint },
   selected: { backgroundColor: colors.warningTint, borderWidth: 2, borderColor: GOLD },

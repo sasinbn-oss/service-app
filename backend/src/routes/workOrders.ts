@@ -31,7 +31,7 @@ import {
   workOrderVisible,
 } from "../utils/supervisorScope";
 import { cleanName } from "../utils/names";
-import { Coverage, coverageOf, covers } from "../utils/teamGroups";
+import { Coverage, TEAM_HOLDER_SELECT, coverageOfTeams, coverageOfUserId, covers, teamsOf } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_WAREHOUSE, WAREHOUSES } from "../documents/warehouses";
@@ -122,6 +122,7 @@ import {
   RESCHEDULE_STAGES,
   RESCHEDULE_STAY_STAGES,
   RESCHEDULE_RECALL_STAGES,
+  TECH_ROLES,
 } from "../utils/constants";
 
 const router = Router();
@@ -897,10 +898,10 @@ async function autoWorkStatus(id: number, stage: string): Promise<string | null>
 }
 
 /** หัวหน้าภาคพร้อมขอบเขต — ใช้ตอบว่าใบที่รอหัวหน้าภาครอ "ใคร" */
-type SupervisorRef = { id: number; name: string; region: string | null; supervisedTeams: string[]; scope: SupervisorScope };
+type SupervisorRef = { id: number; name: string; region: string | null; extraRegions: string[]; supervisedTeams: string[]; scope: SupervisorScope };
 
 /** เติมขอบเขต (รวมทีมที่คนอื่นดูแล — ทีมมาก่อนภาค) ให้รายชื่อหัวหน้าภาคที่ดึงมาครั้งเดียว */
-function withScopes<T extends { id: number; region: string | null; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
+function withScopes<T extends { id: number; region: string | null; extraRegions: string[]; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
   const m = scopesOf(sups);
   return sups.map((u) => ({ ...u, scope: m.get(u.id)! }));
 }
@@ -972,7 +973,8 @@ function listShape(
     actor === "SUPERVISOR"
       ? ctx.supervisors
           .filter((s) => coversWorkOrder(s.scope, w))
-          .map((s) => ({ id: s.id, name: s.name, region: s.region }))
+          // region (ภาคแรก) คงไว้ให้แอปรุ่นเก่าที่ยังเปิดค้าง · regions = ทุกภาคที่คนนั้นดูแล
+          .map((s) => ({ id: s.id, name: s.name, region: s.region, regions: s.scope.regions }))
       : [];
   return {
     stageActor: actor,
@@ -1108,11 +1110,10 @@ function partShape(p: {
  *
  * ช่างที่ยังไม่ได้จัดทีมจะเหลือแค่เงื่อนไขหลัง ซึ่งเป็นพฤติกรรมเดิมพอดี
  * แอดมินจึงทยอยจัดทีมให้ทีละคนได้โดยไม่มีใครมองไม่เห็นงานตัวเองระหว่างทาง
+ * c = ขอบเขตรวมของทุกทีม/ทีมรวมที่ถือ (coverageOfUser) — Senior ช่างได้ทุกทีมที่เลือกรวมกัน
  */
-async function teamScope(team: string | null, userId: number, withHome = true): Promise<Prisma.WorkOrderWhereInput> {
+function teamScope(c: Coverage | null, userId: number, withHome = true): Prisma.WorkOrderWhereInput {
   const mine: Prisma.WorkOrderWhereInput[] = [{ assignedToId: userId }];
-  // ทีมรวม (utils/teamGroups.ts) = เห็นงานของทุกทีมที่ครอบคลุม
-  const c = await coverageOf(team);
   if (!c) return { OR: mine };
   if (c.all) return { OR: [...mine, { assignedTeam: { not: null } }] };
   return {
@@ -1151,11 +1152,7 @@ async function blockedForTeam(
   }
   // ยังไม่ได้จ่ายให้ใครเลย — ปล่อยผ่านเหมือนเดิม ขั้นตอนอื่นกันไว้อยู่แล้ว
   if (wo.assignedTeam === null && wo.assignedToId === null) return false;
-  const me = await prisma.user.findUnique({
-    where: { id: req.auth!.userId },
-    select: { team: true },
-  });
-  if (canTouch(wo, { coverage: await coverageOf(me?.team ?? null), id: req.auth!.userId })) return false;
+  if (canTouch(wo, { coverage: await coverageOfUserId(req.auth!.userId), id: req.auth!.userId })) return false;
   res.status(403).json({
     error: wo.assignedTeam
       ? `ใบงานนี้จ่ายให้ ${wo.assignedTeam} ไม่ใช่ทีมของคุณ`
@@ -1190,8 +1187,7 @@ async function viewerOf(req: AuthRequest): Promise<Viewer> {
   const role = req.auth!.role;
   if (role === "ADMIN" || isAreaTeam(req.auth)) return {};
   if (role === "SUPERVISOR") return { scope: await supervisorScope(req.auth!.userId) };
-  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
-  return { coverage: await coverageOf(user?.team ?? null) };
+  return { coverage: await coverageOfUserId(req.auth!.userId) };
 }
 
 /**
@@ -1223,10 +1219,7 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
     res.status(403).json({ error: AREA_OUT_OF_SCOPE });
     return true;
   }
-  const coverage =
-    viewer.coverage !== undefined
-      ? viewer.coverage
-      : await coverageOf((await prisma.user.findUnique({ where: { id: me }, select: { team: true } }))?.team ?? null);
+  const coverage = viewer.coverage !== undefined ? viewer.coverage : await coverageOfUserId(me);
   if (canTouch(wo, { coverage, id: me })) return false;
   if ((await prisma.workOrderWorker.count({ where: { workOrderId: wo.id, userId: me } })) > 0) return false;
   res.status(403).json({ error: "ใบงานนี้ไม่ใช่ของทีมคุณ — ถ้าต้องช่วยงานนี้ ให้หัวหน้าภาคจ่ายงานให้ทีมคุณ", notYourTeam: true });
@@ -1347,7 +1340,7 @@ async function computeOrphanSupervisorIds(): Promise<number[]> {
       where: { status: { in: stages } },
       select: { id: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
     }),
-    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, supervisedTeams: true } }),
+    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, extraRegions: true, supervisedTeams: true } }),
   ]);
   const scopes = withScopes(sups);
   return rows.filter((w) => !scopes.some((u) => coversWorkOrder(u.scope, w))).map((w) => w.id);
@@ -1403,8 +1396,8 @@ async function scopeFor(req: AuthRequest, inbox = false): Promise<Prisma.WorkOrd
   // รวมงานที่เคยจ่ายให้ตัวเองแบบรายคนด้วย — ใบที่ค้างอยู่ตอนเปลี่ยนมา
   // จ่ายเป็นทีม ต้องไม่หายไปจากรายการของคนที่กำลังทำอยู่
   // ช่างที่ยังไม่ได้จัดทีมจึงยังเห็นงานเดิมของตัวเองตามปกติ
-  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
-  return teamScope(me?.team ?? null, req.auth!.userId, !inbox);
+  // Senior ช่าง = ทุกทีม/ทีมรวมที่เลือกรวมกัน — รายการ กล่องงาน งานวันนี้ และตัวเลขกล่องงานมาจากที่นี่ทั้งหมด
+  return teamScope(await coverageOfUserId(req.auth!.userId), req.auth!.userId, !inbox);
 }
 
 /**
@@ -1550,7 +1543,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     prisma.workOrder.count({ where: { AND: [inboxScope, inbox] } }),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, region: true, supervisedTeams: true },
+      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
   ]);
@@ -2024,7 +2017,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
     select: {
       id: true, code: true, status: true, assignedTeam: true, scheduledAt: true, scheduledTime: true,
       symptom: true, contactName: true, contactPhone: true,
-      branch: { select: { code: true, name: true, zone: true, latitude: true, longitude: true } },
+      branch: { select: { code: true, name: true, region: true, zone: true, latitude: true, longitude: true } },
       machine: { select: { code: true, capacityKg: true } },
     },
   });
@@ -2048,6 +2041,9 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
         // งานตรวจ: ยังอยู่ขั้นตรวจ หรือคอนเฟิร์มแล้วส่งต่อไปขั้นตรวจ (ใบที่ตรวจเสร็จกลับไประบุอะไหล่แล้วนับเป็นซ่อม)
         kind: inspectStages.includes(o.status) ? ("INSPECT" as const) : ("REPAIR" as const),
         team: o.assignedTeam ?? o.branch.zone ?? null,
+        // ภาคของสาขา — หัวหน้าภาคที่ถือหลายภาคได้ใบของทุกภาคปนกันในรายงานเดียว ช่องนี้บอกว่าแถวไหนมาจากภาคไหน
+        // (หน้าสรุปตอนนี้ยังจัดกลุ่ม/คัดลอกตามทีมอย่างเดียว ยังไม่มีหน้าจอไหนอ่านช่องนี้ — เทสต์ใช้ยืนยันว่าได้ใบครบทุกภาค)
+        region: o.branch.region,
         scheduledAt: o.scheduledAt!.toISOString().slice(0, 10),
         scheduledTime: o.scheduledTime,
         branchCode: o.branch.code,
@@ -2082,7 +2078,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
 async function teamOwners(): Promise<Map<string, string[]>> {
   const sups = await prisma.user.findMany({
     where: { role: "SUPERVISOR", deletedAt: null },
-    select: { id: true, name: true, region: true, supervisedTeams: true },
+    select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
     orderBy: { name: "asc" },
   });
   const out = new Map<string, string[]>();
@@ -2094,11 +2090,25 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
   await freshOutsource();
   // เฉพาะช่าง — จ่ายงานให้แอดมินหรือหัวหน้าภาคไม่ใช่สิ่งที่สายงานนี้ทำ
   // และรายชื่อที่มีทุกคนปนอยู่ทำให้กดผิดคนได้ง่าย
-  const technicians = await prisma.user.findMany({
-    where: { role: "EMPLOYEE", deletedAt: null },
-    select: { id: true, name: true, employeeCode: true, team: true },
+  // รวม Senior ช่าง — เป็นช่างที่ออกงานจริง ต้องเลือกเป็นผู้เข้าปฏิบัติงานตอนปิดงานและใส่ในแผนทีมได้
+  const techRows = await prisma.user.findMany({
+    where: { role: { in: TECH_ROLES }, deletedAt: null },
+    select: { id: true, name: true, employeeCode: true, ...TEAM_HOLDER_SELECT },
     orderBy: { name: "asc" },
   });
+  /**
+   * senior/teams/covers ให้หน้าจอวาง Senior ไว้ใต้ทุกทีมที่ดูแล (บอร์ดแผนงาน · ตัวเลือกผู้เข้าปฏิบัติงาน)
+   * covers = ทีมช่างจริงที่เห็นงาน หลังแตกทีมรวมแล้ว · null = ทุกทีม — หน้าจอไม่ต้องรู้จักทีมรวมเอง
+   * Senior ไม่อยู่ใน teams (ตัวเลือก "จ่ายงานให้ทีม") — งานยังจ่ายให้ทีม Senior เห็นผ่านทีมที่ดูแล
+   */
+  const technicians = await Promise.all(
+    techRows.map(async ({ extraTeams, ...u }) => {
+      const teams = teamsOf({ ...u, extraTeams });
+      if (u.role !== "SENIOR_TECH") return { ...u, senior: false, teams };
+      const c = await coverageOfTeams(teams);
+      return { ...u, senior: true, teams, covers: c ? (c.all ? null : c.teams) : [] };
+    })
+  );
   // ทีมมาจากสองคอลัมน์ (ผู้ดูแล CM / ผู้ดูแล PM) บางทีมรับเฉพาะงาน CM
   // จึงโผล่แค่คอลัมน์เดียว เอาแค่คอลัมน์เดียวจะมีทีมหายไปจากรายการเลือก
   const [cmTeams, pmTeams] = await Promise.all([
@@ -2244,7 +2254,7 @@ async function loadDetail(id: number) {
     freshOutsource(),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, region: true, supervisedTeams: true },
+      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
   ]);

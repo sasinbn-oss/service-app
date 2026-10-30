@@ -19,6 +19,7 @@ import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
+import { regionsOf, regionsText } from "../utils/regions";
 import { colors, radius, shadow, spacing } from "../theme";
 
 interface Summary {
@@ -26,7 +27,12 @@ interface Summary {
   name: string;
   employeeCode: string | null;
   role: string;
+  /**
+   * ภาคของผู้เปิด — ตอนนี้เซิร์ฟเวอร์ต่อหลายภาคเป็นข้อความเดียวมาใน region (ตรงกับคอลัมน์ใน Excel)
+   * ถ้ามี regions มาด้วยจะใช้ regions แทน (regionsOf) จึงไม่ต้องแก้หน้านี้อีกถ้าเซิร์ฟเวอร์เปลี่ยนไปส่งเป็นรายการ
+   */
   region: string | null;
+  regions?: string[];
   total: number;
   fromBoard: number;
   manual: number;
@@ -41,7 +47,7 @@ interface Report {
   scopeLabel: string;
   openerLabel: string;
   summary: Summary[];
-  totals: Omit<Summary, "userId" | "name" | "employeeCode" | "role" | "region">;
+  totals: Omit<Summary, "userId" | "name" | "employeeCode" | "role" | "region" | "regions">;
   count: number;
 }
 
@@ -190,7 +196,7 @@ export default function OpenerReportScreen() {
                   <Text style={styles.role}>
                     {s.role}
                     {s.employeeCode ? ` · ${s.employeeCode}` : ""}
-                    {s.region ? ` · ${s.region}` : ""}
+                    {regionsOf(s).length ? ` · ${regionsText(regionsOf(s))}` : ""}
                   </Text>
                 </View>
                 {COLS.map((c) => (
