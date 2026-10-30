@@ -5,6 +5,7 @@
 #   · ขั้น "เบิกและโอนอะไหล่": แอดมิน/ช่าง/หัวหน้าภาคนอกพื้นที่กดไม่ได้ · ต้องมีเลขใบเบิกต้นทาง + เลขที่ใบโอนทุกตัว
 #   · โอนเสร็จแล้ว: ปลายทางคลัง 94 → แอดมินเบิกส่งมอบ · ปลายทางคลังอื่น → หัวหน้าภาคเบิกส่งมอบ
 #   · เบิก/โอนไม่ได้ส่งกลับแอดมินพร้อมเหตุผล (ทั้งก่อนโอนและระหว่างรอของ) · ของคลัง 94 ทั้งหมดไม่ผ่านขั้นเหล่านี้
+#   · เบิกครบ (นัดวันแล้ว) → แอดมินคอนเฟิร์มลูกค้า (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) · ใบเก่าที่ยังไม่มีวันนัด → หัวหน้าภาคนัดวัน
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -36,14 +37,19 @@ mk() {
   echo $id
 }
 ST() { DB "select status from \"WorkOrder\" where id=$1"; }
+# ใบถึงขั้นเบิกแบบที่เกิดจริง: หัวหน้าภาคนัดแล้ว (ทีม + วัน + รอลูกค้าคอนเฟิร์ม) — ข้ามเช็คอะไหล่/เสนอราคาไปตรง ๆ
+# ให้ทดสอบเฉพาะเรื่องเบิก/โอน · ใบที่ไม่มีวันนัด (DB status อย่างเดียว) = ใบเก่าที่เบิกก่อนนัด
+TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
+VISIT=$(node -e "console.log(new Date(Date.now()+7*3600e3+10*86400e3).toISOString().slice(0,10))")
+toIssue() { DB "update \"WorkOrder\" set status='PARTS_REQUESTED', \"assignedTeam\"='$TEAM', \"scheduledAt\"='$VISIT', \"appointmentStatus\"='PENDING' where id=$1" >/dev/null; }
+APPT() { DB "select coalesce(\"assignedTeam\",'-')||'|'||coalesce(\"scheduledAt\"::date::text,'-')||'|'||coalesce(\"appointmentStatus\",'-') from \"WorkOrder\" where id=$1"; }
 XF() { DB "select coalesce(\"transferFrom\",'-')||'|'||coalesce(\"transferReqNo\",'-')||'|'||coalesce(\"transferNo\",'-')||'|'||(\"transferredAt\" is not null) from \"WorkOrderPart\" where \"workOrderId\"=$1 and \"sparePartId\"=$2 and kind='WAITING'"; }
 LOG() { DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='$2' order by id desc limit 1"; }
 LABEL() { curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.statusLabel+"|"+d.stageActor'; }
 PART() { DB "select coalesce(\"inStock\"::text,'-')||'|'||coalesce(warehouse,'-')||'|'||coalesce(\"requisitionNo\",'-') from \"WorkOrderPart\" where \"workOrderId\"=$1 and \"sparePartId\"=$2 and kind='WAITING'"; }
 
 W=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]"); IDS="$W"
-# ลูกค้าอาจต้องเสนอราคาก่อน — ข้ามไปขั้นเบิกตรง ๆ ให้ทดสอบเฉพาะเรื่องเบิก/โอน
-DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W" >/dev/null
+toIssue $W
 [ "$(ST $W)" = "PARTS_REQUESTED" ] || fail "เตรียมข้อมูล: ใบไม่อยู่ขั้นเบิก"
 
 echo "═══ แอดมินเบิกได้เฉพาะคลังลาดพร้าว 94"
@@ -84,7 +90,8 @@ echo "═══ เบิกไม่ได้ ส่งกลับแอดม
 [ "$(PC $S work-orders/$W/parts-transfer/return '{"reason":"  "}')" = "400" ] && [ "$(ST $W)" = "PARTS_TRANSFER" ] && pass "ส่งกลับโดยไม่มีเหตุผล: 400" || fail "ส่งกลับได้โดยไม่มีเหตุผล"
 POST $S work-orders/$W/parts-transfer/return '{"reason":"คลังภูเก็ตของหมดแล้ว"}' >/dev/null
 [ "$(ST $W)|$(LOG $W TRANSFER_RETURNED)" = "PARTS_REQUESTED|คลังภูเก็ตของหมดแล้ว" ] && [ "$(PART $W $BOARD)" = "true|$L94|RQ-A1" ] \
-  && pass "กลับไปรอแอดมินเบิก พร้อมเหตุผล · ตัวที่แอดมินเบิกแล้วยังอยู่" || fail "ส่งกลับ: $(ST $W)"
+  && [ "$(APPT $W)" = "$TEAM|$VISIT|PENDING" ] \
+  && pass "กลับไปรอแอดมินเบิก พร้อมเหตุผล · ตัวที่แอดมินเบิกแล้วยังอยู่ · ทีม/วันนัดเดิมอยู่" || fail "ส่งกลับ: $(ST $W) $(APPT $W)"
 [ "$(PC $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-A1\"}]}")" = "400" ] \
   && pass "แอดมินต้องตอบตัวที่ส่งกลับมาใหม่" || fail "ข้ามตัวที่ยังไม่ได้เบิกได้"
 POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
@@ -104,16 +111,20 @@ POST $S work-orders/$W/parts-transfer/arrived '{}' >/dev/null
 [ "$(ST $W)|$(XF $W $BELT)" = "PARTS_REQUESTED|คลังกระบี่|KB-1|TR-1|true" ] \
   && pass "โอนเสร็จแล้ว (ปลายทางคลัง 94) → กลับไปแอดมินเบิกส่งมอบ · บันทึกเวลาถึง" || fail "โอนเสร็จ: $(ST $W) $(XF $W $BELT)"
 POST $A work-orders/$W/parts-check "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-A2\"}]}" >/dev/null
-[ "$(ST $W)|$(PART $W $BELT)|$(XF $W $BELT)" = "PARTS_CHECKED|true|$L94|RQ-A2|คลังกระบี่|KB-1|TR-1|true" ] \
-  && pass "แอดมินเบิกส่งมอบจากคลัง 94 → จ่ายงาน · ข้อมูลการโอนยังอยู่" || fail "เบิกส่งมอบ: $(ST $W) $(PART $W $BELT) $(XF $W $BELT)"
+[ "$(ST $W)|$(PART $W $BELT)|$(XF $W $BELT)" = "AWAITING_CONFIRM|true|$L94|RQ-A2|คลังกระบี่|KB-1|TR-1|true" ] && [ "$(APPT $W)" = "$TEAM|$VISIT|PENDING" ] \
+  && pass "แอดมินเบิกส่งมอบจากคลัง 94 → คอนเฟิร์มลูกค้า · ข้อมูลการโอนยังอยู่ · นัดเดิมรอคอนเฟิร์ม" || fail "เบิกส่งมอบ: $(ST $W) $(PART $W $BELT) $(XF $W $BELT) $(APPT $W)"
 for st in PARTS_TRANSFER PARTS_IN_TRANSIT PARTS_PICKUP; do
   [ "$(PC $A work-orders/$W/rollback "{\"toStage\":\"$st\",\"reason\":\"ทดสอบ\"}")" = "400" ] || fail "ย้อนมา $st ได้"
 done
-[ "$(ST $W)" = "PARTS_CHECKED" ] && pass "ย้อนมาขั้นหัวหน้าภาคเบิก/โอนตรง ๆ ไม่ได้" || fail "ย้อนแล้วสถานะเปลี่ยน"
+[ "$(ST $W)" = "AWAITING_CONFIRM" ] && pass "ย้อนมาขั้นหัวหน้าภาคเบิก/โอนตรง ๆ ไม่ได้" || fail "ย้อนแล้วสถานะเปลี่ยน"
+# ย้อนไปขั้นแอดมินเบิกได้ — ล้างเลขใบเบิกและการโอนรอบนี้ เบิกใหม่ทั้งหมด · ทีม/วันนัดไม่หาย
+POST $A work-orders/$W/rollback '{"toStage":"PARTS_REQUESTED","reason":"เบิกผิดตัว"}' >/dev/null
+[ "$(ST $W)|$(PART $W $BOARD)|$(PART $W $BELT)|$(XF $W $BELT)" = "PARTS_REQUESTED|true|$L94|-|true|$L94|-|-|-|-|false" ] && [ "$(APPT $W)" = "$TEAM|$VISIT|PENDING" ] \
+  && pass "ย้อนจากคอนเฟิร์มไปแอดมินเบิก: ล้างเลขใบเบิก/การโอน ทีม/วันนัดอยู่ (ฐานข้อมูล)" || fail "ย้อนไปเบิก: $(ST $W) $(PART $W $BELT) $(XF $W $BELT) $(APPT $W)"
 
 echo "═══ โอนไปคลังที่ใกล้หน้างาน (ไม่ใช่ 94) — หัวหน้าภาคเบิกส่งมอบ"
 W3=$(mk "[{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W3"
-DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W3" >/dev/null
+toIssue $W3
 POST $A work-orders/$W3/parts-check "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
 POST $S work-orders/$W3/parts-transfer "{\"results\":[{\"sparePartId\":$BELT,\"fromWarehouse\":\"คลังกระบี่\",\"transferReqNo\":\"KB-3\",\"toWarehouse\":\"คลังภูเก็ต\",\"transferNo\":\"TR-3\"}]}" >/dev/null
 POST $S work-orders/$W3/parts-transfer/arrived '{}' >/dev/null
@@ -121,29 +132,29 @@ POST $S work-orders/$W3/parts-transfer/arrived '{}' >/dev/null
   && pass "โอนเสร็จ (ปลายทางคลังภูเก็ต) → หัวหน้าภาคเบิกส่งมอบเอง ไม่ผ่านแอดมิน" || fail "ปลายทางคลังอื่น: $(ST $W3) $(PART $W3 $BELT)"
 [ "$(PC $A work-orders/$W3/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-X\"}]}")" = "403" ] && pass "แอดมินเบิกส่งมอบคลังอื่นแทนไม่ได้" || fail "แอดมินเบิกคลังอื่นได้"
 POST $S work-orders/$W3/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-SUP3\"}]}" >/dev/null
-[ "$(ST $W3)|$(PART $W3 $BELT)|$(XF $W3 $BELT)" = "PARTS_CHECKED|true|คลังภูเก็ต|RQ-SUP3|คลังกระบี่|KB-3|TR-3|true" ] \
-  && pass "หัวหน้าภาคเบิกส่งมอบจากคลังภูเก็ต → จ่ายงาน (ฐานข้อมูล)" || fail "เบิกส่งมอบ: $(ST $W3) $(PART $W3 $BELT)"
+[ "$(ST $W3)|$(PART $W3 $BELT)|$(XF $W3 $BELT)" = "AWAITING_CONFIRM|true|คลังภูเก็ต|RQ-SUP3|คลังกระบี่|KB-3|TR-3|true" ] \
+  && pass "หัวหน้าภาคเบิกส่งมอบจากคลังภูเก็ต → คอนเฟิร์มลูกค้า (ฐานข้อมูล)" || fail "เบิกส่งมอบ: $(ST $W3) $(PART $W3 $BELT)"
 
 echo "═══ ระหว่างรอของ โอนไม่สำเร็จ — ส่งกลับแอดมิน"
 W4=$(mk "[{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W4"
-DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W4" >/dev/null
+toIssue $W4
 POST $A work-orders/$W4/parts-check "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
 POST $S work-orders/$W4/parts-transfer "{\"results\":[{\"sparePartId\":$BELT,\"fromWarehouse\":\"คลังกระบี่\",\"transferReqNo\":\"KB-4\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-4\"}]}" >/dev/null
 POST $S work-orders/$W4/parts-transfer/return '{"reason":"ขนส่งตีกลับ"}' >/dev/null
-[ "$(ST $W4)|$(PART $W4 $BELT)|$(XF $W4 $BELT)" = "PARTS_REQUESTED|true|คลังกระบี่|-|-|-|-|false" ] \
-  && pass "ส่งกลับระหว่างรอของ: ล้างการโอน คลังกลับเป็นต้นทาง (กระบี่) ให้แอดมินตอบใหม่" || fail "ส่งกลับระหว่างโอน: $(ST $W4) $(PART $W4 $BELT) $(XF $W4 $BELT)"
+[ "$(ST $W4)|$(PART $W4 $BELT)|$(XF $W4 $BELT)" = "PARTS_REQUESTED|true|คลังกระบี่|-|-|-|-|false" ] && [ "$(APPT $W4)" = "$TEAM|$VISIT|PENDING" ] \
+  && pass "ส่งกลับระหว่างรอของ: ล้างการโอน คลังกลับเป็นต้นทาง (กระบี่) ให้แอดมินตอบใหม่ · นัดเดิมอยู่" || fail "ส่งกลับระหว่างโอน: $(ST $W4) $(PART $W4 $BELT) $(XF $W4 $BELT) $(APPT $W4)"
 
 echo "═══ คลังอื่นที่อยู่ในพื้นที่ — แอดมินเลือกไม่ต้องโอน (ต.ค. 69)"
 W5=$(mk "[{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W5"
-DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W5" >/dev/null
+toIssue $W5
 POST $A work-orders/$W5/parts-check "{\"transfer\":false,\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
 [ "$(ST $W5)|$(XF $W5 $BELT)" = "PARTS_PICKUP|-|-|-|true" ] \
   && pass "ไม่ต้องโอน → ข้ามขั้นโอน ไปหัวหน้าภาคเบิกอะไหล่ (คลังอื่น) เลย · ไม่มีเลขใบโอน" || fail "ไม่ต้องโอน: $(ST $W5) $(XF $W5 $BELT)"
 DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W5 and action='PARTS_CHECKED'" | grep -q "คลังกระบี่ (ไม่ต้องโอน) — ส่งหัวหน้าภาคเบิกส่งมอบ" \
   && pass "ประวัติบอกว่าไม่ต้องโอน" || fail "ประวัติไม่บอกว่าไม่ต้องโอน"
 POST $S work-orders/$W5/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"KB-NT5\"}]}" >/dev/null
-[ "$(ST $W5)|$(PART $W5 $BELT)" = "PARTS_CHECKED|true|คลังกระบี่|KB-NT5" ] \
-  && pass "หัวหน้าภาคเบิกจากคลังนั้น (ใส่เลขใบเบิก) → จ่ายงานต่อ" || fail "เบิกหลังไม่โอน: $(ST $W5) $(PART $W5 $BELT)"
+[ "$(ST $W5)|$(PART $W5 $BELT)" = "AWAITING_CONFIRM|true|คลังกระบี่|KB-NT5" ] \
+  && pass "หัวหน้าภาคเบิกจากคลังนั้น (ใส่เลขใบเบิก) → คอนเฟิร์มลูกค้า" || fail "เบิกหลังไม่โอน: $(ST $W5) $(PART $W5 $BELT)"
 W6=$(mk "[{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W6"
 DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W6" >/dev/null
 POST $A work-orders/$W6/parts-check "{\"transfer\":true,\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}" >/dev/null
@@ -151,7 +162,7 @@ POST $A work-orders/$W6/parts-check "{\"transfer\":true,\"results\":[{\"sparePar
 
 echo "═══ ใบเดียวมีทั้งชิ้นที่ต้องโอนและไม่ต้องโอน (เลือกทีละชิ้น · แบบ ก.)"
 W7=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W7"
-DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W7" >/dev/null
+toIssue $W7
 MIX="{\"noTransfer\":[$BELT],\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังกระบี่\"}]}"
 POST $A work-orders/$W7/parts-check "$MIX" >/dev/null
 [ "$(ST $W7)|$(XF $W7 $BOARD)|$(XF $W7 $BELT)" = "PARTS_TRANSFER|-|-|-|false|-|-|-|true" ] \
@@ -164,7 +175,7 @@ POST $A work-orders/$W7/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inS
 [ "$(ST $W7)|$(PART $W7 $BOARD)" = "PARTS_PICKUP|true|$L94|RQ-M7" ] \
   && pass "แอดมินเบิกชิ้นคลัง 94 → หัวหน้าภาคเบิกชิ้นที่ไม่ต้องโอน (ไม่ถามโอนซ้ำ)" || fail "หลังแอดมินเบิก: $(ST $W7) $(PART $W7 $BOARD)"
 POST $S work-orders/$W7/parts-pickup "{\"results\":[{\"sparePartId\":$BELT,\"warehouse\":\"คลังกระบี่\",\"requisitionNo\":\"KB-M7\"}]}" >/dev/null
-[ "$(ST $W7)" = "PARTS_CHECKED" ] && pass "เบิกครบทุกชิ้น → จ่ายงาน" || fail "เบิกครบ: $(ST $W7)"
+[ "$(ST $W7)" = "AWAITING_CONFIRM" ] && pass "เบิกครบทุกชิ้น → คอนเฟิร์มลูกค้า" || fail "เบิกครบ: $(ST $W7)"
 W8=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":1}]"); IDS="$IDS $W8"
 DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W8" >/dev/null
 POST $A work-orders/$W8/parts-check "$MIX" >/dev/null
@@ -172,11 +183,12 @@ POST $S work-orders/$W8/parts-transfer/return '{"reason":"คลังขอน�
 [ "$(ST $W8)|$(XF $W8 $BELT)" = "PARTS_REQUESTED|-|-|-|false" ] \
   && pass "ส่งกลับแอดมิน → ล้าง \"ไม่ต้องโอน\" ให้แอดมินตอบใหม่ทุกชิ้น" || fail "ส่งกลับ: $(ST $W8) $(XF $W8 $BELT)"
 
-echo "═══ ของอยู่คลัง 94 ทั้งหมด — ไม่ผ่านขั้นเหล่านี้"
+echo "═══ ของอยู่คลัง 94 ทั้งหมด — ไม่ผ่านขั้นเหล่านี้ (ใบเก่าที่ถึงขั้นเบิกก่อนนัดวัน)"
 W2=$(mk "[{\"sparePartId\":$BOARD,\"quantity\":1}]"); IDS="$IDS $W2"
+# ไม่มีวันนัด = ใบที่เบิกก่อนเปลี่ยนเป็นนัดก่อนเบิก — เบิกเสร็จต้องไปให้หัวหน้าภาคนัดวัน ไม่ใช่คอนเฟิร์มลูกค้า
 DB "update \"WorkOrder\" set status='PARTS_REQUESTED' where id=$W2" >/dev/null
 POST $A work-orders/$W2/parts-check "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-B1\"}]}" >/dev/null
 [ "$(ST $W2)|$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W2 and (action like 'PICKUP%' or action like 'TRANSFER%')")" = "PARTS_CHECKED|0" ] \
-  && pass "แอดมินเบิกเองครบ → หัวหน้าภาค · จ่ายงานให้ทีมทันที" || fail "ใบคลัง 94: $(ST $W2)"
+  && pass "แอดมินเบิกเองครบ (ใบเก่า ยังไม่มีวันนัด) → หัวหน้าภาค · นัดวันเข้า" || fail "ใบคลัง 94: $(ST $W2)"
 
 [ -z "$FAILED" ]

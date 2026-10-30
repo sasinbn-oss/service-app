@@ -3,13 +3,14 @@
 //     · หมายเหตุถึงหัวหน้าภาคไม่บังคับ (ต.ค. 69) · ปุ่มบอกจำนวนที่ส่งต่อ · ประวัติบอกรายตัว
 //   · แอดมินไม่มีปุ่มของขั้นหัวหน้าภาคเบิก
 //   · หัวหน้าภาค: เห็นว่าแอดมินแจ้งของตัวไหนอยู่คลังไหน · เบิกจากคลังนั้น + เลขใบเบิก · โอนไปคลัง 94 (ค่าตั้งต้น) + เลขที่ใบโอน
-//     · ออกใบขอโอนสินค้า PDF ได้ · บันทึก → รอโอน · กด "โอนเสร็จแล้ว" → กลับไปแอดมินเบิกส่งมอบจากคลัง 94 → จ่ายงาน
+//     · ออกใบขอโอนสินค้า PDF ได้ · บันทึก → รอโอน · กด "โอนเสร็จแล้ว" → กลับไปแอดมินเบิกส่งมอบจากคลัง 94 → คอนเฟิร์มลูกค้า
+//     · ฟอร์มโอนบอกวันนัดที่ของต้องถึง (นัดวันก่อนเบิก ต.ค. 69 รอบสอง — วันถูกนัดไว้แล้วตอนโอน)
 //     (ยืนยันที่ฐานข้อมูลทุกขั้น)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
-const { setup } = require("./fixture");
+const { setup, visitDay } = require("./fixture");
 
 (async () => {
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
@@ -22,11 +23,13 @@ const { setup } = require("./fixture");
   let fx = null;
   try {
     fx = await setup();
-    const branch = fx.sql(`select code from "Branch" where code like 'C%' and "cancelledAt" is null and region is not null order by code limit 1`);
+    const branch = fx.sql(`select code from "Branch" where code like 'C%' and "cancelledAt" is null and region is not null and zone is not null order by code limit 1`);
     const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
     const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
-    // ข้ามเสนอราคา (ถ้ามี) — ทดสอบเฉพาะขั้นเบิก
-    fx.sql(`update "WorkOrder" set status='PARTS_REQUESTED' where id=${wo.id}`);
+    // ข้ามเสนอราคา (ถ้ามี) — ทดสอบเฉพาะขั้นเบิก · ขั้นเบิกอยู่หลังนัดวันแล้ว (ต.ค. 69 รอบสอง) ใบจริงมีทีม วัน และยังไม่คอนเฟิร์ม
+    // ถ้าไม่ใส่วัน เบิกครบแล้วเซิร์ฟเวอร์ส่งไปนัดวัน (ทางของใบเก่า) แทนที่จะไปคอนเฟิร์มลูกค้า
+    const visit = visitDay(10);
+    fx.sql(`update "WorkOrder" set status='PARTS_REQUESTED', "assignedTeam"=(select zone from "Branch" where code='${branch}'), "scheduledAt"='${visit}', "appointmentStatus"='PENDING' where id=${wo.id}`);
     const st = () => fx.sql(`select status from "WorkOrder" where id=${wo.id}`);
     const part = (id) => fx.sql(`select coalesce(warehouse,'-')||'|'||coalesce("requisitionNo",'-') from "WorkOrderPart" where "workOrderId"=${wo.id} and "sparePartId"=${id} and kind='WAITING'`);
 
@@ -68,7 +71,8 @@ const { setup } = require("./fixture");
 
     // ── แอดมิน
     const a = await open(wo.code, "A001");
-    await a.vis("เบิกอะไหล่ (คลัง 94)").first().click();
+    // ปุ่มขั้นอยู่ท้ายการ์ดขั้นปัจจุบัน — ชื่อเดียวกับหัวการ์ด (ซึ่งกดไม่ได้) จึงเอาตัวสุดท้าย
+    await a.vis("เบิกอะไหล่ (คลัง 94)").last().click();
     await a.page.waitForTimeout(1200);
     await a.vis("มีของ").first().click();
     await a.page.waitForTimeout(300);
@@ -103,8 +107,10 @@ const { setup } = require("./fixture");
     const xf = (id) =>
       fx.sql(`select coalesce("transferFrom",'-')||'|'||coalesce("transferReqNo",'-')||'|'||coalesce("transferNo",'-')||'|'||("transferredAt" is not null) from "WorkOrderPart" where "workOrderId"=${wo.id} and "sparePartId"=${id} and kind='WAITING'`);
     const s = await open(wo.code, "S001");
-    await s.vis("เบิกและโอนอะไหล่").first().click();
+    await s.vis("เบิกและโอนอะไหล่").last().click();
     await s.page.waitForTimeout(1200);
+    (await s.label("วันนัดที่ของต้องถึง").count()) > 0
+      ? pass("ฟอร์มเบิกและโอนบอกวันนัดที่ของต้องถึง") : fail("ฟอร์มโอนไม่บอกวันนัด");
     const box = s.label("หมายเหตุจากแอดมิน");
     (await box.count()) && /แอดมินแจ้งว่ามีของที่/.test(await box.innerText()) && /SP-BELT[^\n]*× 2 — คลังภูเก็ต/.test(await box.innerText())
       ? pass("หัวหน้าภาคเห็นว่าแอดมินแจ้ง SP-BELT × 2 มีที่คลังภูเก็ต (ไม่มีหมายเหตุก็เห็น)") : fail(`กล่องจากแอดมิน: ${(await box.count()) ? await box.innerText() : "ไม่มี"}`);
@@ -135,7 +141,7 @@ const { setup } = require("./fixture");
     const sent = `${st()}|${part(belt)}|${xf(belt)}`;
     sent === "PARTS_IN_TRANSIT|คลังลาดพร้าว 94|-|คลังภูเก็ต|PK-WEB-1|TR-WEB-1|false"
       ? pass("ฐานข้อมูล: รอโอนอะไหล่ · ปลายทางคลัง 94 · ต้นทางภูเก็ต + เลขใบเบิก + เลขที่ใบโอน") : fail(`หลังสั่งโอน: ${sent}`);
-    await s.vis("โอนเสร็จแล้ว").first().click();
+    await s.vis("โอนเสร็จแล้ว").last().click();
     await s.page.waitForTimeout(1200);
     (await s.label("อะไหล่ที่กำลังโอน").innerText()).includes("คลังภูเก็ต (ใบเบิก PK-WEB-1) → คลังลาดพร้าว 94 · ใบโอน TR-WEB-1")
       ? pass("ขั้นรอโอนบอก ต้นทาง · ใบเบิก · ปลายทาง · ใบโอน") : fail(`กล่องกำลังโอน: ${await s.label("อะไหล่ที่กำลังโอน").innerText()}`);
@@ -147,7 +153,7 @@ const { setup } = require("./fixture");
 
     // ── แอดมินเบิกส่งมอบจากคลัง 94
     const a2 = await open(wo.code, "A001");
-    await a2.vis("เบิกอะไหล่ (คลัง 94)").first().click();
+    await a2.vis("เบิกอะไหล่ (คลัง 94)").last().click();
     await a2.page.waitForTimeout(1200);
     (await a2.label("โอนมาแล้ว SP-BELT").count()) ? pass("แอดมินเห็นว่า SP-BELT โอนจากคลังภูเก็ตมาถึงแล้ว") : fail("แอดมินไม่เห็นข้อมูลการโอน");
     await a2.vis("มีของ").last().click();
@@ -157,8 +163,11 @@ const { setup } = require("./fixture");
     await a2.vis("ยืนยัน").last().click();
     await a2.page.waitForTimeout(3500);
     const fin = `${st()}|${part(belt)}|${xf(belt)}`;
-    fin === "PARTS_CHECKED|คลังลาดพร้าว 94|RQ-WEB-2|คลังภูเก็ต|PK-WEB-1|TR-WEB-1|true"
-      ? pass("แอดมินเบิกส่งมอบแล้ว → หัวหน้าภาค · จ่ายงานให้ทีม · ข้อมูลการโอนยังอยู่ (ฐานข้อมูล)") : fail(`เบิกส่งมอบ: ${fin}`);
+    fin === "AWAITING_CONFIRM|คลังลาดพร้าว 94|RQ-WEB-2|คลังภูเก็ต|PK-WEB-1|TR-WEB-1|true"
+      ? pass("แอดมินเบิกส่งมอบแล้ว → แอดมิน · คอนเฟิร์มลูกค้า · ข้อมูลการโอนยังอยู่ (ฐานข้อมูล)") : fail(`เบิกส่งมอบ: ${fin}`);
+    // ทีม วันนัด และสถานะนัดที่หัวหน้าภาคนัดไว้ต้องอยู่ครบหลังเบิก/โอน — แอดมินโทรคอนเฟิร์มวันนี้กับร้าน
+    const appt = fx.sql(`select ("assignedTeam" is not null)||'|'||"scheduledAt"::date||'|'||"appointmentStatus" from "WorkOrder" where id=${wo.id}`);
+    appt === `true|${visit}|PENDING` ? pass("ทีม + วันนัดยังอยู่ · รอคอนเฟิร์มลูกค้า (PENDING) (ฐานข้อมูล)") : fail(`นัดหลังเบิก: ${appt}`);
 
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {

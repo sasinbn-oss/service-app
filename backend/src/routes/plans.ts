@@ -26,7 +26,24 @@ const router = Router();
 
 /** ขั้นที่ถือว่า "มีกำหนดไปหน้างานวันนั้น" — ปิดแล้วก็ยังโชว์ว่าวันนั้นไปทำอะไรมา */
 // INSPECT_CONFIRM อยู่บนบอร์ดด้วย — ใบที่หัวหน้าภาคใส่วันเสนอไว้แล้ว ทีมนั้นถูกจองวันนั้นแม้ร้านยังไม่ตอบ
-const ON_BOARD = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING", "AWAITING_CONFIRM", "IN_PROGRESS", "CLAIM_REVIEW", "DONE"];
+// เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง): หัวหน้าภาคนัดแล้วทีมถูกจองตั้งแต่ขั้นเบิก/โอน จนรอปล่อยงาน — เดิมใบหายจากบอร์ด
+// ระหว่างคอนเฟิร์มถึงปล่อยงาน (และจะหายตั้งแต่นัดถึงคอนเฟิร์มด้วยถ้าไม่เพิ่ม) · ใบที่ยังไม่มีวันไม่ขึ้นอยู่แล้ว (กรองตามวัน)
+const ON_BOARD = [
+  "INSPECT_CONFIRM",
+  "INSPECT_DISPATCH",
+  "INSPECTING",
+  "PARTS_REQUESTED",
+  "PARTS_TRANSFER",
+  "PARTS_IN_TRANSIT",
+  "PARTS_PICKUP",
+  "AWAITING_CONFIRM",
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "CLAIM_REVIEW",
+  "DONE",
+];
+/** ช่างเข้าแล้ว/ปิดแล้ว — สถานะนัดที่ค้างไม่ได้แปลว่ายังต้องโทรร้าน */
+const SETTLED_ON_BOARD = ["IN_PROGRESS", "CLAIM_REVIEW", "DONE"];
 
 function requirePlanner(req: AuthRequest, res: Response, next: NextFunction) {
   const role = req.auth?.role;
@@ -227,7 +244,9 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       teams: working.length,
       people: working.reduce((n, l) => n + (l.plan?.members.length ?? 0), 0),
       stops: orders.length,
-      awaitingConfirm: orders.filter((o) => o.status === "AWAITING_CONFIRM" || o.status === "INSPECT_CONFIRM").length,
+      // นัดที่ยังไม่ได้ตกลงกับร้าน — รวมใบที่ยังเบิก/โอนอยู่ (ยังไม่ถึงขั้นโทร) ไม่ใช่แค่ใบที่รอแอดมินโทร
+      // ใบที่ปิดไปแล้ว (หัวหน้าภาคปิดเองก่อนคอนเฟิร์ม) ไม่นับ — ไม่มีอะไรต้องโทรแล้ว
+      awaitingConfirm: orders.filter((o) => o.appointmentStatus === "PENDING" && !SETTLED_ON_BOARD.includes(o.status)).length,
     },
     lanes: rows,
     // ทีมที่จัดแผนได้ (null = ทุกทีม) — ฟอร์มจัดแผนแสดงเฉพาะทีมพวกนี้ ไม่งั้นหัวหน้าภาคเลือกทีมคนอื่นได้

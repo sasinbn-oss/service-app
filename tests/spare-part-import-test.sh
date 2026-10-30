@@ -10,7 +10,8 @@
 #   · Part No. ยาวเกินข้าม · ข้อความผิดพลาดของฟอร์มเป็นภาษาไทย
 #   ไฟล์เกิน 50 MB (เบราว์เซอร์ย่อรูปก่อนส่ง): เก็บค่ารูปต้นฉบับ (imageHashes) — ย่อใหม่ได้ไบต์ต่างแต่ต้นฉบับเดิม = เหมือนเดิม ·
 #   ไฟล์ต้นฉบับไม่ย่อก็ = เหมือนเดิม · ค่าผิดรูปแบบถูกทิ้ง · อัปโหลดรูปเองล้างค่าต้นฉบับ ·
-#   รูปชื่อ .png ที่ข้างในเป็น JPEG (เบราว์เซอร์แปลง PNG เป็น JPEG แต่คงชื่อ) เก็บเป็น image/jpeg — ดูจากไบต์ ไม่ใช่นามสกุล
+#   รูปชื่อ .png ที่ข้างในเป็น JPEG (เบราว์เซอร์แปลง PNG เป็น JPEG แต่คงชื่อ) เก็บเป็น image/jpeg — ดูจากไบต์ ไม่ใช่นามสกุล ·
+#   ผสานแนวนอน (ชื่อเรื่อง/หัวข้อหมวด) · แถวล่างของอะไหล่ที่ผสานรหัสมี Part No./รูปเอง รวมเข้าแถวบน · ค่าทุกแถวให้หน้าตรวจ
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -275,5 +276,22 @@ JID=$(DB "select id from \"SparePart\" where \"partCode\"='${P}J'")
 [ "$(DB "select \"mimeType\" from \"SparePartImage\" where \"sparePartId\"=$JID")" = "image/jpeg" ] \
   && [ "$(curl -s -o /dev/null -w '%{content_type}' localhost:4000/api/spare-parts/$JID/image)" = "image/jpeg" ] \
   && pass "รูปชื่อ .png ที่ข้างในเป็น JPEG เก็บและส่งเป็น image/jpeg" || fail "ชนิดรูป: $(DB "select \"mimeType\" from \"SparePartImage\" where \"sparePartId\"=$JID")"
+
+# ผสานแนวนอน: ชื่อเรื่องผสานทั้งแถวเหนือหัวตาราง (มีทั้งคำว่ารหัสสินค้าและชื่อสินค้า) · แถวหัวข้อหมวดผสานยาวจากช่องรหัส ·
+# ผสานแนวตั้ง: แถวล่างของอะไหล่มี Part No. และรูปของตัวเอง → รวมเข้าอะไหล่แถวบน ไม่ทิ้งเงียบ ๆ
+xlsx g1.xlsx "{\"title\":\"รายการรหัสสินค้าและชื่อสินค้า ทดสอบ\",
+  \"headers\":[\"รูปภาพประกอบ\",\"รหัสสินค้า\",\"ชื่อสินค้า\",\"ยี่ห้อ\",\"Part No.\"],
+  \"rows\":[[null,\"หมวด: ชุดประตูทดสอบ\",null,null,null],
+    [null,\"${P}V\",\"ผสานแนวตั้งทดสอบ\",\"$BB\",\"W111\"],
+    [null,null,null,null,\"W222\"]],
+  \"merges\":[\"A1:E1\",\"B3:E3\",\"B4:B5\",\"C4:C5\",\"D4:D5\"],
+  \"images\":{\"A5\":\"v-low-$SUF\"}}" >/dev/null
+R=$(IMP $A g1.xlsx)
+echo "$R" | J 'd.columns.partCode==="รหัสสินค้า"&&d.columns.name==="ชื่อสินค้า"&&!d.items.some(i=>/หมวด|รายการรหัส/.test(i.partCode+i.name))?"ok":"bad"' | grep -q ok \
+  && pass "ชื่อเรื่องผสานทั้งแถวไม่ถูกจับเป็นหัวตาราง · แถวหัวข้อหมวดไม่กลายเป็นอะไหล่" || fail "ผสานแนวนอน: $(echo "$R" | J 'JSON.stringify([d.columns,d.items.map(i=>i.partCode+"|"+i.name),d.problems])||d.error')"
+echo "$R" | J 'const v=d.items.find(i=>i.partCode==="'$P'V"); v&&v.partNo==="W111, W222"&&v.image==="NEW"&&!d.problems.some(p=>/รหัสซ้ำ/.test(p.note))?"ok":"bad"' | grep -q ok \
+  && pass "แถวล่างของอะไหล่ที่ผสานรหัส: Part No. และรูปของแถวล่างรวมเข้าอะไหล่แถวบน" || fail "ผสานแนวตั้ง: $(echo "$R" | J 'JSON.stringify([d.items,d.problems])')"
+echo "$R" | J 'const v=d.rowValues&&d.rowValues["'$P'V"]; v&&v.line===4&&v.partNo==="W111, W222"&&v.hasImage===true&&v.brand==="'$BB'"?"ok":"bad"' | grep -q ok \
+  && pass "หน้าตรวจได้ค่าทุกแถว (ไว้จำลองรหัสที่อยู่หลายไฟล์)" || fail "rowValues: $(echo "$R" | J 'JSON.stringify(d.rowValues)')"
 
 [ -z "$FAILED" ]

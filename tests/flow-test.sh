@@ -19,6 +19,16 @@ BR=$(curl -s "localhost:4000/api/branches?search=C0001" -H "$(H $A)" | J 'd[0].r
 REGION=${BR%%|*}; TEAM=${BR##*|}
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
 TID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="T001").id')
+# เก็บกวาดตอนจบ (ผ่านหรือไม่ก็ตาม) — ลบใบที่สร้าง คืนภาค/ทีมของผู้ใช้ทดสอบ (CLAUDE.md)
+DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
+OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where id=$TID")
+ID=""
+cleanup() {
+  [ -n "$ID" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$ID" -H "$(H $A)" >/dev/null
+  DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID; update \"User\" set team=nullif('$OLD_TEAM','') where id=$TID" >/dev/null
+}
+trap cleanup EXIT
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$REGION\"}" >/dev/null
 curl -s -X PATCH "localhost:4000/api/auth/users/$TID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
 PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
@@ -41,7 +51,7 @@ echo "  เช็คอะไหล่ครบ → $(ws $ID)"
 ws $ID | grep -q "รอช่างเข้าแก้ไข" && pass "ของครบแล้วขึ้น 'รอช่างเข้าแก้ไข' ให้เอง" || fail "สถานะไม่ขยับ"
 
 echo
-echo "═══ หัวหน้าภาคนัดวันเข้า → แอดมินคอนเฟิร์มลูกค้า → แอดมินเบิก → หัวหน้าภาคปล่อยงาน (นัดลูกค้าก่อนเบิก)"
+echo "═══ หัวหน้าภาคนัดวันเข้า → แอดมินเบิก → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคปล่อยงาน (เบิกก่อนคอนเฟิร์ม)"
 P() { curl -s -X POST "localhost:4000/api/work-orders/$ID/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 ws $ID | grep -q "หัวหน้าภาค · นัดวันเข้า" && pass "ของครบแล้วขึ้นว่าหัวหน้าภาค · นัดวันเข้า" || fail "ป้ายขั้นผิด: $(ws $ID)"
 R=$(P $T assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}")
@@ -49,13 +59,14 @@ echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "ช่
 R=$(P $S assign "{\"team\":\"$TEAM\"}")
 echo "$R" | grep -q "ต้องระบุวันเข้างาน" && pass "จ่ายงานต้องใส่วันเข้างานด้วย" || fail "จ่ายได้โดยไม่มีวัน: $(echo $R | head -c 120)"
 P $S assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D1\"}" >/dev/null
-ws $ID | grep -q "แอดมิน · คอนเฟิร์มลูกค้า" && pass "จ่ายงานแล้วไปรอแอดมินโทรคอนเฟิร์มลูกค้า" || fail "ไม่ไปขั้นคอนเฟิร์ม: $(ws $ID)"
+ws $ID | grep -q "แอดมิน · เบิกอะไหล่" && pass "นัดวันแล้วแอดมินเบิกอะไหล่ก่อน (ยังไม่โทรร้าน)" || fail "ไม่ไปขั้นเบิก: $(ws $ID)"
+P $A parts-check "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-001\"}]}" >/dev/null
+ws $ID | grep -q "แอดมิน · คอนเฟิร์มลูกค้า" && pass "เบิกครบแล้วไปรอแอดมินโทรคอนเฟิร์มลูกค้า (ของอยู่ในมือแล้ว)" || fail "ไม่ไปขั้นคอนเฟิร์ม: $(ws $ID)"
+# ต้องเช็คตอนใบอยู่ขั้นคอนเฟิร์มแล้ว — ขั้นอื่นได้ 409 "ยังไม่ถึงขั้นนี้" ก่อนดูบทบาท
 R=$(P $S confirm-appointment '{}')
 echo "$R" | grep -q "ขั้นนี้เป็นของ" && pass "หัวหน้าภาคกดคอนเฟิร์มลูกค้าแทนแอดมินไม่ได้" || fail "หัวหน้าภาคคอนเฟิร์มได้: $(echo $R | head -c 120)"
 P $A confirm-appointment '{}' >/dev/null
-ws $ID | grep -q "แอดมิน · เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วแอดมินเบิกอะไหล่ (ของออกจากคลังหลังลูกค้าตกลงวัน)" || fail "ไม่ไปขั้นเบิก: $(ws $ID)"
-P $A parts-check "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-001\"}]}" >/dev/null
-ws $ID | grep -q "หัวหน้าภาค · รับทราบ ปล่อยงาน" && pass "เบิกแล้วไปให้หัวหน้าภาคยืนยันออกงาน" || fail "ไม่กลับไปหัวหน้าภาค: $(ws $ID)"
+ws $ID | grep -q "หัวหน้าภาค · รับทราบ ปล่อยงาน" && pass "ลูกค้าคอนเฟิร์มแล้วไปให้หัวหน้าภาคยืนยันออกงาน" || fail "ไม่กลับไปหัวหน้าภาค: $(ws $ID)"
 P $S dispatch '{}' >/dev/null
 ws $ID | grep -q "ช่าง · เข้างาน/ปิดงาน" && pass "ยืนยันออกงานแล้วถึงคิวช่างเข้างาน" || fail "ยืนยันออกงานไม่ได้: $(ws $ID)"
 
@@ -83,9 +94,9 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D2\"}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
   -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-002\"}]}" >/dev/null
+curl -s -X POST "localhost:4000/api/work-orders/$ID/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/dispatch" -H "$(H $S)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 # ป้ายรุ่นกับรูปก่อน/หลังซ่อมของรอบนี้ต้องมีก่อน ไม่งั้นจะโดนปฏิเสธด้วยเหตุผลอื่นแทนใบเหลือง
 # (รูปก่อน/หลังซ่อมของรอบแรกไม่นับ เหมือนใบเหลือง)

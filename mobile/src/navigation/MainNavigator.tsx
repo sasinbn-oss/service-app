@@ -24,6 +24,7 @@ import SystemReportScreen from "../screens/SystemReportScreen";
 import ConfirmedReportScreen from "../screens/ConfirmedReportScreen";
 import PartsOutReportScreen from "../screens/PartsOutReportScreen";
 import IssuedPartsReportScreen from "../screens/IssuedPartsReportScreen";
+import ClaimHistoryScreen from "../screens/ClaimHistoryScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
@@ -421,6 +422,7 @@ function HomeStackNavigator() {
         component={IssuedPartsReportScreen}
         options={{ title: "อะไหล่เบิกแล้ว · งานยังไม่จบ" }}
       />
+      <HomeStack.Screen name="ClaimHistory" component={ClaimHistoryScreen} options={{ title: "ประวัติเคลม" }} />
       <HomeStack.Screen
         name="MachineImport"
         component={MachineImportScreen}

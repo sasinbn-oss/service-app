@@ -119,6 +119,9 @@ import {
   workOrderCode,
   needsCustomerQuote,
   workStatusForStage,
+  RESCHEDULE_STAGES,
+  RESCHEDULE_STAY_STAGES,
+  RESCHEDULE_RECALL_STAGES,
 } from "../utils/constants";
 
 const router = Router();
@@ -415,9 +418,10 @@ async function mergeWaitingParts(
 const isIssued = (p: { inStock: boolean | null; requisitionNo: string | null }) => p.inStock === true && !!p.requisitionNo;
 
 /**
- * นัดลูกค้าก่อนเบิก (เจ้าของงานกำหนด ต.ค. 69) — ใบเดินต่อไปไหนหลังแต่ละจังหวะ
+ * นัดวัน → เบิก → คอนเฟิร์มลูกค้า (เจ้าของงานกำหนด ต.ค. 69 รอบสอง) — ใบเดินต่อไปไหนหลังแต่ละจังหวะ
  *
  * ใบเดียวกันวนกลับได้หลายทาง (ทีมไม่ว่างวันใหม่ · ร้านปิด · ย้อนขั้น) ทั้งก่อนและหลังเบิกของ
+ * และใบที่เปิดก่อนสลับลำดับยังเดินอยู่ (คอนเฟิร์มแล้วค้างเบิก · เบิกแล้วค้างนัด)
  * จึงตัดสินจากสิ่งที่เกิดขึ้นแล้วจริงในใบ ไม่ใช่จากว่ามาจากปุ่มไหน
  */
 
@@ -425,34 +429,66 @@ const isIssued = (p: { inStock: boolean | null; requisitionNo: string | null }) 
 const PARTS_ROUND_ACTIONS = ["PARTS_REQUESTED", "NO_PARTS", "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
 
 /**
- * คอนเฟิร์มลูกค้าแล้วไปไหน — ยังมีของต้องเบิก → แอดมินเบิก · เบิกครบแล้ว (วนกลับมาคอนเฟิร์มใหม่) → หัวหน้าภาคปล่อยงาน
- * ของนอกสโตร์ไม่มีเลขใบเบิก — ดูว่าแอดมินผ่านขั้นเบิกไปแล้วหลังรอบเช็คล่าสุดหรือยัง
+ * ใครคอนเฟิร์มนัดกับลูกค้า (เจ้าของงานขอ ต.ค. 69) — คนกดคอนเฟิร์ม/เลื่อนนัดครั้งล่าสุด อ่านจากประวัติ ไม่เก็บซ้ำ
+ * ไม่นับประวัติที่ "ปิดงานย้อนหลัง" สร้างให้ (backfilledAt) — คนกดปิดย้อนหลังไม่ได้เป็นคนคุยกับร้าน
+ * โชว์เฉพาะนัดที่ตกลงแล้ว — ยังรอคอนเฟิร์มอยู่ ชื่อของรอบก่อนจะทำให้เข้าใจผิดว่าคอนเฟิร์มแล้ว
+ * แอดมินเลื่อนวันนัดของใบที่คอนเฟิร์มแล้ว = แอดมินตกลงวันใหม่กับร้านเอง จึงนับด้วย (สรุปไลน์รายวันขึ้นวันใหม่)
  */
-async function afterConfirm(id: number): Promise<"PARTS_REQUESTED" | "ASSIGNED"> {
+const APPOINTMENT_BY_ACTIONS = ["CONFIRMED", "RESCHEDULED", "APPOINTMENT_MOVED", "APPOINTMENT_RECALLED"];
+const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
+
+/**
+ * ยังมีของต้องเบิกไหม — ของในสโตร์ที่ยังไม่มีเลขใบเบิก · ของนอกสโตร์ที่ยังไม่ผ่านขั้นเบิกหลังรอบเช็คล่าสุด
+ * (ของนอกสโตร์ไม่มีเลขใบเบิก — ดูว่าแอดมินผ่านขั้นเบิกไปแล้วหลังรอบเช็คล่าสุดหรือยัง)
+ * หัวหน้าภาคนัดแล้วไปขั้นเบิกหรือข้ามไปคอนเฟิร์มเลย ตัดสินจากตรงนี้
+ */
+async function issueLeft(id: number): Promise<boolean> {
   const [parts, logs] = await Promise.all([
     prisma.workOrderPart.findMany({
       where: { workOrderId: id, kind: "WAITING" },
       select: { inStock: true, requisitionNo: true, sparePart: { select: { offCatalog: true } } },
     }),
     prisma.workOrderLog.findMany({
-      where: { workOrderId: id, action: { in: [...PARTS_ROUND_ACTIONS, "PARTS_CHECKED"] } },
-      orderBy: { createdAt: "desc" },
+      where: { workOrderId: id, action: { in: ISSUE_ROUND_ACTIONS } },
+      // เวลาเท่ากันเรียงตามลำดับที่เขียน — แบบเดียวกับประวัติในหน้าใบงาน ให้ detail.issueLeft ตอบตรงกันทุกกรณี
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 1,
       select: { action: true },
     }),
   ]);
-  if (parts.length === 0) return "ASSIGNED";
+  return issueLeftOf(parts, logs[0]?.action);
+}
+
+/** ประวัติที่ตัดสินว่าของนอกสโตร์ผ่านขั้นเบิกรอบนี้แล้วหรือยัง — ตัวล่าสุดเป็น PARTS_CHECKED = ผ่านแล้ว */
+const ISSUE_ROUND_ACTIONS = [...PARTS_ROUND_ACTIONS, "PARTS_CHECKED"];
+
+/**
+ * กฎของ issueLeft จากข้อมูลที่อ่านมาแล้ว — หน้าใบงาน (detail.issueLeft) ใช้ตัวเดียวกับ /assign และ /confirm-appointment
+ * แอปเคยคิดเอง (ดูแค่ของในสโตร์) แถบขั้นตอนจึงติ๊ก "เบิกแล้ว" ทั้งที่ของนอกสโตร์ยังไม่ผ่านขั้นเบิก แล้ว /assign ส่งไปเบิก
+ * latestRoundAction = ประวัติล่าสุดในชุด ISSUE_ROUND_ACTIONS
+ */
+function issueLeftOf(
+  parts: { inStock: boolean | null; requisitionNo: string | null; sparePart: { offCatalog: boolean } }[],
+  latestRoundAction: string | undefined
+): boolean {
+  if (parts.length === 0) return false;
   const storeLeft = parts.some((p) => !p.sparePart.offCatalog && !isIssued(p));
-  const offLeft = parts.some((p) => p.sparePart.offCatalog) && logs[0]?.action !== "PARTS_CHECKED";
-  return storeLeft || offLeft ? "PARTS_REQUESTED" : "ASSIGNED";
+  const offLeft = parts.some((p) => p.sparePart.offCatalog) && latestRoundAction !== "PARTS_CHECKED";
+  return storeLeft || offLeft;
 }
 
 /**
- * เบิก/โอน/เบิกคลังอื่นครบแล้วไปไหน — ลูกค้าคอนเฟิร์มวันแล้ว (สายงานใหม่) → หัวหน้าภาคปล่อยงาน
- * ยังไม่ได้นัด (ใบที่อยู่ระหว่างเบิกตอนเปลี่ยนสายงาน) → หัวหน้าภาคนัดวันเข้า แล้วคอนเฟิร์ม/ปล่อยงานตามปกติ
+ * เบิก/โอน/เบิกคลังอื่นครบแล้วไปไหน (เบิกก่อนคอนเฟิร์มลูกค้า — เจ้าของงานกำหนด ต.ค. 69 รอบสอง)
+ * - นัดแล้ว ยังไม่คอนเฟิร์ม (สายงานปัจจุบัน) → แอดมินคอนเฟิร์มลูกค้า ตอนของอยู่ในมือแล้ว
+ * - คอนเฟิร์มไปแล้ว (ใบที่คอนเฟิร์มก่อนสลับลำดับ · ย้อนมาเบิกใหม่หลังคอนเฟิร์ม) → หัวหน้าภาคปล่อยงาน ไม่โทรร้านซ้ำ
+ * - ยังไม่มีวันนัด (ใบที่เบิกก่อนเปลี่ยนเป็นนัดก่อนเบิก) → หัวหน้าภาคนัดวันเข้า แล้วคอนเฟิร์ม/ปล่อยงานตามปกติ
  */
-function afterIssue(cur: { appointmentStatus: string | null; scheduledAt: Date | null }): "ASSIGNED" | "PARTS_CHECKED" {
-  return cur.appointmentStatus === "CONFIRMED" && cur.scheduledAt ? "ASSIGNED" : "PARTS_CHECKED";
+function afterIssue(cur: {
+  appointmentStatus: string | null;
+  scheduledAt: Date | null;
+}): "AWAITING_CONFIRM" | "ASSIGNED" | "PARTS_CHECKED" {
+  if (!cur.scheduledAt) return "PARTS_CHECKED";
+  return APPOINTMENT_DONE.includes(cur.appointmentStatus ?? "") ? "ASSIGNED" : "AWAITING_CONFIRM";
 }
 
 /**
@@ -832,6 +868,9 @@ function partsState(w: {
 }): "CHECK" | "OUT" | "READY" | "TRANSFER" | "ISSUED" | null {
   if (w.needsParts !== true || w.parts.length === 0 || !PARTS_STATE_STAGES.has(w.status)) return null;
   if (w.status === "ASSIGNED") return "ISSUED";
+  // เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง) — ใบที่ถึงขั้นคอนเฟิร์มลูกค้าเบิกครบแล้ว (ของนอกสโตร์ไม่มีคลัง/ใบเบิก นับว่าพร้อม)
+  // เดิมขึ้น "ครบ · ยังไม่เบิก" ทั้งที่ของอยู่ในมือแล้ว · ใบเก่าที่ยังไม่เบิก (ไม่ได้ย้ายสายงาน) ตกไปกฎเดิมข้างล่าง
+  if (w.status === "AWAITING_CONFIRM" && w.parts.every((p) => p.inStock === true && (!!p.requisitionNo || !p.warehouse))) return "ISSUED";
   if (w.parts.some((p) => p.inStock === false)) return w.status === "PARTS_SOURCING" || w.status === "PARTS_REQUESTED" ? "OUT" : "CHECK";
   if (w.status === "PARTS_SOURCING" || w.parts.some((p) => p.inStock === null)) return "CHECK";
   const far = w.parts.some((p) => !!p.warehouse && p.warehouse !== ADMIN_WAREHOUSE && !p.requisitionNo && !p.transferredAt);
@@ -882,7 +921,36 @@ const NON_STAGE_ACTIONS = [
   "ADMIN_REVIEW_REQUESTED",
   "ADMIN_REVIEW_CANCELLED",
   "ADMIN_REVIEW_ANSWERED",
+  // แอดมินเลื่อนวันนัด ใบอยู่ขั้นเดิม (เจ้าของงานขอ ต.ค. 69) — "ค้างขั้นนี้มา N วัน" ไม่เริ่มนับใหม่
+  // (ดึงงานคืนจากช่าง APPOINTMENT_RECALLED เป็นการเดินขั้นจริง ไม่อยู่ในรายการนี้)
+  "APPOINTMENT_MOVED",
 ];
+
+/**
+ * ป้าย "คอนเฟิร์มวันใหม่" ตอนหัวหน้าภาคปล่อยงาน — วันที่จะเข้าไม่ใช่วันที่หัวหน้าภาคนัด/ปล่อยไว้รอบล่าสุด
+ * (ลูกค้าขอเลื่อนตอนคอนเฟิร์ม · แอดมินเลื่อนวันนัด) หัวหน้าภาคต้องดูคิวทีมวันใหม่ก่อน ไม่ใช่กดผ่าน
+ *
+ * ดูประวัติล่าสุดในชุดนี้: การนัด/ปล่อยของหัวหน้าภาค (ASSIGNED · INSPECT_REQUESTED · DISPATCHED) ปิดป้าย
+ * การเลื่อนเปิดป้าย · CONFIRMED ไม่อยู่ในชุด — เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง) แอดมินเลื่อนระหว่างเบิก
+ * แล้วคอนเฟิร์มเฉย ๆ ทีหลัง ป้ายต้องยังอยู่ (เดิมดูแค่ CONFIRMED/RESCHEDULED ตัวล่าสุด ป้ายหายตรงนี้)
+ */
+const DATE_MOVE_ACTIONS = ["RESCHEDULED", "APPOINTMENT_MOVED", "APPOINTMENT_RECALLED"];
+const DATE_SETTLE_ACTIONS = ["ASSIGNED", "INSPECT_REQUESTED", "DISPATCHED", ...DATE_MOVE_ACTIONS];
+const RELEASE_STAGES = ["ASSIGNED", "INSPECT_DISPATCH"];
+/** latestAction = ประวัติล่าสุดในชุด DATE_SETTLE_ACTIONS ของใบนี้ */
+function isRescheduled(status: string, latestAction: string | null | undefined) {
+  return RELEASE_STAGES.includes(status) && DATE_MOVE_ACTIONS.includes(latestAction ?? "");
+}
+
+/** ขั้นที่วันนัดยังเป็นแผน (ยังไม่ปล่อยให้ช่าง) — เลยวันแล้วติดป้าย "เลยนัด" */
+const OVERDUE_STAGES = new Set([
+  "INSPECT_CONFIRM",
+  "PARTS_REQUESTED",
+  "PARTS_TRANSFER",
+  "PARTS_IN_TRANSIT",
+  "PARTS_PICKUP",
+  "AWAITING_CONFIRM",
+]);
 
 type WorkOrderListRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
@@ -938,10 +1006,9 @@ function listShape(
           })()
         : null,
     // วันนัดผ่านไปแล้วยังไม่ได้คอนเฟิร์มลูกค้า — กล่องงานแอดมินแยกหัวข้อ "เลยนัด"
+    // เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง): วันที่หัวหน้าภาคนัดเลยไปได้ระหว่างเบิก/โอนด้วย — ต้องเลื่อนวันนัด
     overdue:
-      (w.status === "AWAITING_CONFIRM" || w.status === "INSPECT_CONFIRM") &&
-      !!w.scheduledAt &&
-      w.scheduledAt.toISOString().slice(0, 10) < bangkokDay(new Date()),
+      OVERDUE_STAGES.has(w.status) && !!w.scheduledAt && w.scheduledAt.toISOString().slice(0, 10) < bangkokDay(new Date()),
     waitingOnTeam: actor === "EMPLOYEE" ? w.assignedTeam : null,
     // ใบที่จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บของตัวเอง ไม่ปนกับงานทีมช่างปกติ
     outsource: isOutsourceTeam(w.assignedTeam),
@@ -1437,9 +1504,23 @@ function inboxFilter(
     or.push({ status: "IN_PROGRESS", assignedTeam: { in: [...outsourceNow] } }, REVIEW_ANSWERED);
   }
   // แอดมินทั่วไปเท่านั้น — Admin Spare Part ไม่ได้ดูแลข้อมูลใบงาน
-  if (inboxTakesOrphans(auth)) or.push(REVIEW_WAITING);
+  if (inboxTakesOrphans(auth)) {
+    or.push(REVIEW_WAITING, {
+      status: { in: OVERDUE_SUPERVISOR_STAGES },
+      // ตรงกับ overdue ในแถวรายการ — วันนัดเก็บเป็นเที่ยงคืน UTC ของวันนั้น
+      scheduledAt: { lt: dayStart(bangkokDay()) },
+    });
+  }
   return { OR: or };
 }
+
+/**
+ * ขั้นเบิก/โอนคลังอื่นของหัวหน้าภาคที่เลยวันนัดแล้ว — เข้ากล่องงานแอดมินทั่วไปด้วย (หัวข้อ "เลยนัด")
+ * คนเลื่อนวันนัดได้มีแต่แอดมิน (/reschedule) แต่ขั้นพวกนี้รอหัวหน้าภาค เดิมจึงไม่อยู่ในกล่องแอดมินเลย:
+ * หัวหน้าภาคเห็นป้ายเลยนัดแต่เลื่อนเองไม่ได้ วันที่ผ่านไปแล้วค้างจนของถึงและใบมาถึงขั้นคอนเฟิร์ม (ตรวจโค้ดรอบสอง ต.ค. 69)
+ * ยังไม่เลยนัดไม่เข้า — ระหว่างโอนตามปกติไม่ใช่งานของแอดมิน
+ */
+const OVERDUE_SUPERVISOR_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
 
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
@@ -1477,7 +1558,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
   // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — คำถามรวดพร้อมกัน ไม่ใช่ทีละแถว
   const ids = rows.map((r) => r.id);
-  const [lastMoves, confirms, rollbacks] = await Promise.all([
+  const releaseIds = rows.filter((r) => RELEASE_STAGES.includes(r.status)).map((r) => r.id);
+  const [lastMoves, confirms, rollbacks, settles] = await Promise.all([
     ids.length
       ? prisma.workOrderLog.groupBy({
           by: ["workOrderId"],
@@ -1507,9 +1589,18 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
           select: { workOrderId: true, createdAt: true },
         })
       : Promise.resolve([]),
+    // ป้าย "คอนเฟิร์มวันใหม่" — ถามเฉพาะใบที่รอหัวหน้าภาคปล่อยงาน (ดู isRescheduled)
+    releaseIds.length
+      ? prisma.workOrderLog.findMany({
+          where: { workOrderId: { in: releaseIds }, action: { in: DATE_SETTLE_ACTIONS } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          distinct: ["workOrderId"],
+          select: { workOrderId: true, action: true },
+        })
+      : Promise.resolve([]),
   ]);
   const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
-  const lastConfirmAction = new Map(confirms.map((c) => [c.workOrderId, c.action]));
+  const lastSettle = new Map(settles.map((c) => [c.workOrderId, c.action]));
   const rolledBackFrom = new Map<number, ReturnType<typeof activeRollback>>();
   if (rollbacks.length) {
     const since = new Date(Math.min(...rollbacks.map((r) => r.createdAt.getTime())));
@@ -1538,8 +1629,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     rows: rows.map((w) => ({
       ...listShape(w, { supervisors: supScopes, stageSince }),
       appointmentByName: confirmedBy.get(w.id) ?? null,
-      // ลูกค้าขอเปลี่ยนวัน รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — กล่องงานติดป้าย "คอนเฟิร์มวันใหม่" แยกจากรับทราบปล่อยงานปกติ
-      rescheduled: w.status === "ASSIGNED" && lastConfirmAction.get(w.id) === "RESCHEDULED",
+      // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — กล่องงานติดป้าย "คอนเฟิร์มวันใหม่"
+      rescheduled: isRescheduled(w.status, lastSettle.get(w.id)),
       // ขั้นที่ย้อนมา (ไม่ได้ย้อน = null) — รายการติดป้าย ↩ ย้อนขั้น
       rolledBackFrom: rolledBackFrom.get(w.id)?.fromLabel ?? null,
     })),
@@ -2097,6 +2188,8 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
         ? ROLE_LABELS[WORK_ORDER_STAGE_ACTOR[v]] ?? null
         : null,
     })),
+    // ขั้นที่แอดมินกด "เลื่อนวันนัด" ได้ — ตัดสินที่นี่ที่เดียว แอปเช็คบทบาท/วันนัดเองอีกชั้น (ดู RESCHEDULE_STAGES)
+    rescheduleStages: RESCHEDULE_STAGES,
     technicians,
   });
 });
@@ -2132,14 +2225,6 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * ใครคอนเฟิร์มนัดกับลูกค้า (เจ้าของงานขอ ต.ค. 69) — คนกดคอนเฟิร์ม/เลื่อนนัดครั้งล่าสุด อ่านจากประวัติ ไม่เก็บซ้ำ
- * ไม่นับประวัติที่ "ปิดงานย้อนหลัง" สร้างให้ (backfilledAt) — คนกดปิดย้อนหลังไม่ได้เป็นคนคุยกับร้าน
- * โชว์เฉพาะนัดที่ตกลงแล้ว — ยังรอคอนเฟิร์มอยู่ ชื่อของรอบก่อนจะทำให้เข้าใจผิดว่าคอนเฟิร์มแล้ว
- */
-const APPOINTMENT_BY_ACTIONS = ["CONFIRMED", "RESCHEDULED"];
-const APPOINTMENT_DONE = ["CONFIRMED", "ADMIN_PICKED"];
-
-/**
  * หน้าใบงานทั้งก้อน — GET /:id กับทุกปุ่มที่เปลี่ยนขั้นส่งก้อนเดียวกันนี้กลับ
  *
  * เดิมปุ่มเปลี่ยนขั้นส่ง shape(row) เปล่า ๆ (ไม่มีประวัติเต็ม/ค่าก่อนย้อน) แอปเลยทิ้งแล้วโหลดใบงานใหม่อีกรอบ
@@ -2152,7 +2237,8 @@ async function loadDetail(id: number) {
     prisma.workOrderLog.findMany({
       where: { workOrderId: id },
       include: { user: { select: { name: true, role: true } } },
-      orderBy: { createdAt: "desc" },
+      // เวลาเท่ากันเรียงตามลำดับที่เขียน — ปิดย้อนหลังลงหลายขั้นในเวลาเดียวกัน (ดู flowOf · isRescheduled)
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     }),
     // รายชื่อทีม outsource จำไว้ไม่เกินนาทีละครั้ง — shape() ใช้ตัดสินว่าเป็นใบงาน SUB ไหม
     freshOutsource(),
@@ -2185,6 +2271,79 @@ async function loadDetail(id: number) {
 
 type Detail = NonNullable<Awaited<ReturnType<typeof loadDetail>>>;
 
+const ISSUE_STAGES = ["PARTS_REQUESTED", "PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
+const INSPECT_STAGES = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING"];
+/** ขั้นก่อนหัวหน้าภาคนัดวันรอบนี้ — ประวัตินัด/คอนเฟิร์มรอบก่อนไม่ได้บอกทางของรอบนี้ */
+const BEFORE_SCHEDULE = ["NEW", ...INSPECT_STAGES, "WAITING_PARTS", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "PARTS_CHECKED"];
+
+/**
+ * ใบนี้เดินทางไหน — แถบขั้นตอนวาดเฉพาะขั้นที่ใบนี้ผ่านจริง ไม่มีชิป "ข้าม" (แบบที่เจ้าของงานตกลง ต.ค. 69)
+ * คิดที่เซิร์ฟเวอร์ที่เดียว แอปไม่ต้องไล่ประวัติเอง · logs เรียงใหม่ก่อนเก่า
+ *
+ * variant — ลำดับเบิก/คอนเฟิร์มของรอบนี้ (ใบที่เปิดก่อนสลับลำดับยังเดินอยู่ ต้องวาดตามที่เกิดจริง):
+ * - target: นัดวัน → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (สายงานปัจจุบัน)
+ * - confirmFirst: คอนเฟิร์มแล้วค่อยเบิก — ใบสายงานเดิม · ใบที่ย้อนมาเบิกใหม่หลังคอนเฟิร์ม (เบิกเสร็จไปปล่อยงานเลย)
+ *   นับเฉพาะเมื่อนัดที่คอนเฟิร์มนั้นยังใช้อยู่ (ดู confirmFirst ข้างล่าง)
+ * - issueFirst: เบิกก่อนนัด — ใบที่เบิกตั้งแต่ก่อนเปลี่ยนเป็นนัดก่อนเบิก
+ * transfer — รอบอะไหล่นี้โอนของจริง (หัวหน้าภาคสั่งโอน หรือกำลังอยู่ขั้นเบิกและโอน/รอของถึง) → ขั้นย่อยใต้เบิกอะไหล่
+ * pickup — รอบนี้หัวหน้าภาคเบิกส่งมอบจากคลังที่ไม่ใช่ 94 (ไม่ว่าจะโอนมาก่อนหรือไม่)
+ *   แยกจาก transfer เพราะเบิกคลังอื่นเฉย ๆ ไม่มีขั้นสั่งโอน/รอของถึง — เดิมรวมกัน แถบติ๊ก "สั่งโอน" ทั้งที่ไม่ได้โอน
+ *   ดูจากขั้น PARTS_PICKUP / ประวัติ PICKED_UP ไม่ใช่ PICKUP_REQUESTED — ประวัตินั้นเขียนทุกครั้งที่มีของคลังอื่น
+ *   รวมใบที่ต้องโอนเข้าคลัง 94 แล้วแอดมินเบิกเอง (ไม่มีใครเบิกคลังอื่น)
+ *   รอบ = หลังรอบระบุ/เช็คอะไหล่ล่าสุด หรือหลังหัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) — แอดมินตอบใหม่ทั้งรอบ
+ * quote — รอบนี้ต้องเสนอราคา (ยังเช็คอะไหล่อยู่ = คาดจากกฎเดียวกับ afterSourcing)
+ * inspect/inspectRounds — เคยส่งตรวจหน้างาน กี่รอบ (วาดเป็นวงแยกเหนือแถบ)
+ */
+function flowOf(
+  row: { status: string; appointmentStatus: string | null; scheduledAt: Date | null },
+  logs: { action: string; status: string }[],
+  predictedQuote: boolean
+) {
+  /** ประวัติหลังรายการล่าสุดที่อยู่ใน actions (ไม่รวมตัวมันเอง) — ไม่เคยมี = ทั้งหมด */
+  const since = (actions: string[]) => {
+    const i = logs.findIndex((l) => actions.includes(l.action));
+    return i < 0 ? logs : logs.slice(0, i);
+  };
+  const scheduleRound = since(["ASSIGNED"]);
+  const partsRound = since(PARTS_ROUND_ACTIONS);
+  const specRound = since(["PARTS_REQUESTED", "NO_PARTS"]);
+  // หัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) → แอดมินตอบคลังใหม่ทั้งรอบ · การโอน/เบิกคลังอื่นของรอบที่ถูกส่งกลับไม่นับ
+  const issueRound = since([...PARTS_ROUND_ACTIONS, "TRANSFER_RETURNED", "PICKUP_RETURNED"]);
+
+  /**
+   * คอนเฟิร์มก่อนเบิก = คอนเฟิร์มครั้งล่าสุดของรอบนัดนี้ไปขั้นเบิก และนัดนั้นยังคอนเฟิร์มอยู่
+   * ทำไมต้องสองอย่าง: ร้านปิด/ทีมไม่ว่าง/ย้อนขั้น ทำให้นัดกลับเป็นรอคอนเฟิร์ม (ไม่มีประวัตินัดใหม่) — ใบเบิกไปแล้ว
+   * คอนเฟิร์มรอบหน้าไปปล่อยงานเลย = สายงานปัจจุบัน · เดิมดูแค่ "เคยมี" แถบจึงวาดคอนเฟิร์มก่อนเบิกทั้งที่เบิกเสร็จแล้ว
+   * คอนเฟิร์มใหม่หลังเบิกเสร็จ (ไปปล่อยงาน) ก็เป็นคอนเฟิร์มล่าสุด → ไม่ใช่ confirmFirst แล้ว แถบไม่สลับไปมา
+   */
+  const lastConfirm = scheduleRound.find((l) => l.action === "CONFIRMED" || l.action === "RESCHEDULED");
+  const confirmFirst =
+    (ISSUE_STAGES.includes(row.status) && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")) ||
+    (!BEFORE_SCHEDULE.includes(row.status) &&
+      APPOINTMENT_DONE.includes(row.appointmentStatus ?? "") &&
+      !!lastConfirm &&
+      ISSUE_STAGES.includes(lastConfirm.status));
+  // ประวัติ "แอดมินเบิกอะไหล่" (action PARTS_CHECKED) ที่ใบไปขั้นนัดวันต่อ (status PARTS_CHECKED) = เบิกก่อนนัด
+  const issueFirst =
+    partsRound.some((l) => l.action === "PARTS_CHECKED" && l.status === "PARTS_CHECKED") ||
+    (ISSUE_STAGES.includes(row.status) && !row.scheduledAt);
+  const prepaid = specRound.some((l) => l.action === "PREPAID");
+  const inspectRounds = logs.filter((l) => l.action === "INSPECT_REQUESTED").length;
+  const inInspect = INSPECT_STAGES.includes(row.status);
+  return {
+    variant: confirmFirst ? ("confirmFirst" as const) : issueFirst ? ("issueFirst" as const) : ("target" as const),
+    transfer:
+      ["PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(row.status) || issueRound.some((l) => l.action === "TRANSFER_REQUESTED"),
+    pickup: row.status === "PARTS_PICKUP" || issueRound.some((l) => l.action === "PICKED_UP"),
+    quote:
+      ["AWAITING_QUOTE", "AWAITING_PAYMENT"].includes(row.status) ||
+      specRound.some((l) => l.action === "QUOTED" || l.action === "QUOTE_SKIPPED" || l.action === "PAID") ||
+      (row.status === "PARTS_SOURCING" && predictedQuote && !prepaid),
+    inspect: inspectRounds > 0 || inInspect,
+    inspectRounds: Math.max(inspectRounds, inInspect ? 1 : 0),
+  };
+}
+
 function detailBody({ row, logs, supervisors, crossTeam }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
@@ -2194,12 +2353,22 @@ function detailBody({ row, logs, supervisors, crossTeam }: Detail) {
   const inspectStart = logs.find((l) => l.action === "INSPECT_REQUESTED")?.createdAt ?? row.createdAt;
 
   const confirm = logs.find((l) => APPOINTMENT_BY_ACTIONS.includes(l.action) && !l.backfilledAt);
+  const base = shape(row, roundStart, inspectStart);
   return {
-    ...shape(row, roundStart, inspectStart),
+    ...base,
     appointmentBy:
       confirm && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")
         ? { name: confirm.user?.name ?? null, at: confirm.createdAt }
         : null,
+    // กฎเดียวกับป้ายในรายการ — หน้าใบงานไม่ต้องไล่ประวัติเอง (ดู isRescheduled)
+    rescheduled: isRescheduled(row.status, logs.find((l) => DATE_SETTLE_ACTIONS.includes(l.action))?.action),
+    flow: flowOf(row, logs, base.needsQuote),
+    // ยังมีของต้องเบิกไหม — กฎเดียวกับที่ /assign และ /confirm-appointment ใช้ตัดสินว่าใบไปขั้นเบิกหรือข้าม
+    // แถบขั้นตอนกับข้อความในฟอร์มอ่านค่านี้ ไม่คิดเองอีกชุด (เคยคิดต่างกันจนแถบกับฟอร์มขัดกันบนหน้าเดียว)
+    issueLeft: issueLeftOf(
+      row.parts.filter((p) => p.kind === "WAITING"),
+      logs.find((l) => ISSUE_ROUND_ACTIONS.includes(l.action))?.action
+    ),
     // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
     supervisors,
     crossTeam,
@@ -3032,7 +3201,7 @@ const updateSchema = z.object({
  */
 const STAGE_ONLY_FIELDS: Record<string, string> = {
   assignedToId: "ผู้รับงานเปลี่ยนที่ขั้นจ่ายงาน",
-  scheduledAt: "วันนัดเปลี่ยนที่ขั้นจ่ายงาน/คอนเฟิร์มลูกค้า",
+  scheduledAt: "วันนัดเปลี่ยนที่ขั้นนัดวัน/คอนเฟิร์มลูกค้า หรือปุ่มเลื่อนวันนัดของแอดมิน",
   waitingParts: "อะไหล่เปลี่ยนที่ขั้นระบุอะไหล่",
 };
 
@@ -3231,7 +3400,7 @@ async function guardStage(
     // ปุ่มส่วนใหญ่ต้องใช้ทีม/วันนัดต่อ — คืนไปเลย ไม่ต้องอ่านใบงานซ้ำอีกรอบ
     scheduledAt: wo.scheduledAt,
     scheduledTime: wo.scheduledTime,
-    // เบิกเสร็จแล้วไปไหน — ลูกค้าคอนเฟิร์มแล้วไปปล่อยงาน ยังไม่ได้นัดไปนัดวัน (afterIssue)
+    // เบิกเสร็จแล้วไปไหน — ยังไม่คอนเฟิร์มไปคอนเฟิร์มลูกค้า · คอนเฟิร์มแล้วไปปล่อยงาน · ยังไม่ได้นัดไปนัดวัน (afterIssue)
     appointmentStatus: wo.appointmentStatus,
     outageId: wo.outageId,
   };
@@ -3257,22 +3426,31 @@ async function moveStage(
   from: string,
   /** undefined = ไม่แตะช่องนั้น (เหมือน Prisma update) */
   data: Record<string, StageValue | undefined>,
-  log: { userId: number | undefined; action: string; status: string; note?: string | null }
+  log: { userId: number | undefined; action: string; status: string; note?: string | null },
+  /**
+   * ค่าที่อ่านไว้ตอนตัดสินใจต้องยังเหมือนเดิม (นอกจากขั้น) — ไม่งั้นคืน false (409) เหมือนมีคนเดินขั้นไปก่อน
+   * ทำไม: แอดมินเลื่อนวันนัดไม่เปลี่ยนขั้น เช็คแค่ status จึงไม่พอ — หัวหน้าภาคปล่อยงาน/แอดมินอีกคนคอนเฟิร์ม
+   * ที่อ่านวันเดิมไว้เสี้ยววินาทีก่อนจะเขียนทับวันใหม่ หรือข้ามป้าย "คอนเฟิร์มวันใหม่" ไปเงียบ ๆ
+   * updatedAt = ห้ามมีใครแตะใบเลย (ช่างกดถึงหน้างานขยับ updatedAt — ดู /arrive)
+   */
+  expect?: Record<string, StageValue>
 ): Promise<boolean> {
   const now = new Date().toISOString();
   const val = (v: StageValue) =>
     v instanceof Date ? Prisma.sql`CAST(${v.toISOString()} AS timestamp(3))` : v === null ? Prisma.sql`NULL` : Prisma.sql`${v}`;
-  const sets = Object.entries(data).flatMap(([k, v]) => {
-    if (v === undefined) return [];
-    // ชื่อคอลัมน์มาจากโค้ดเท่านั้น — กันพิมพ์ผิดแล้วไปแก้คอลัมน์ที่ไม่ตั้งใจ
-    if (!STAGE_COLUMNS.has(k)) throw new Error(`moveStage: ไม่รู้จักคอลัมน์ ${k}`);
-    return [Prisma.sql`${Prisma.raw(`"${k}"`)} = ${val(v)}`];
-  });
+  // ชื่อคอลัมน์มาจากโค้ดเท่านั้น — กันพิมพ์ผิดแล้วไปแก้คอลัมน์ที่ไม่ตั้งใจ
+  const column = (k: string, extra: string[] = []) => {
+    if (!STAGE_COLUMNS.has(k) && !extra.includes(k)) throw new Error(`moveStage: ไม่รู้จักคอลัมน์ ${k}`);
+    return Prisma.raw(`"${k}"`);
+  };
+  const sets = Object.entries(data).flatMap(([k, v]) => (v === undefined ? [] : [Prisma.sql`${column(k)} = ${val(v)}`]));
+  // IS NOT DISTINCT FROM — ไม่มีเวลานัด (NULL) ต้องเท่ากับ NULL ด้วย ( = ให้ผล NULL ไม่ใช่ true)
+  const same = Object.entries(expect ?? {}).map(([k, v]) => Prisma.sql` AND ${column(k, ["updatedAt"])} IS NOT DISTINCT FROM ${val(v)}`);
   const rows = await prisma.$queryRaw<{ id: number }[]>`
     WITH moved AS (
       UPDATE "WorkOrder"
       SET ${Prisma.join(sets)}, "updatedAt" = CAST(${now} AS timestamp(3))
-      WHERE "id" = ${id} AND "status" = ${from}
+      WHERE "id" = ${id} AND "status" = ${from}${same.length ? Prisma.join(same, "") : Prisma.empty}
       RETURNING "id"
     )
     INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
@@ -3285,9 +3463,12 @@ async function moveStage(
   return rows.length > 0;
 }
 
-/** มีคนกดขั้นนี้ไปก่อน — แอปโหลดใบงานใหม่เองเมื่อได้ 409 (api/client.ts) */
+/**
+ * มีคนกดขั้นนี้ไปก่อน หรือวันนัดเพิ่งถูกเลื่อน (moveStage expect) — แอปโหลดใบงานใหม่เองเมื่อได้ 409 (api/client.ts)
+ * บอกทั้งสองอย่าง: คนที่เจอเพราะวันถูกเลื่อนจะได้ดูวันนัดใหม่ก่อนกดซ้ำ ไม่ใช่หาว่าขั้นไหนเปลี่ยน
+ */
 function stageMoved(res: Response) {
-  res.status(409).json({ error: "ใบงานนี้ถูกเปลี่ยนขั้นไปแล้ว — โหลดใหม่ให้แล้ว ลองดูอีกครั้ง" });
+  res.status(409).json({ error: "ใบงานนี้เพิ่งถูกเปลี่ยน (ขั้นหรือวันนัด) — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด" });
 }
 
 /**
@@ -3464,6 +3645,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
     } else {
       /**
        * เหมือน /assign ทุกอย่าง — ประวัติสองแถว แถบขั้นตอนจึงขึ้นว่าผ่านขั้นจ่ายงานแล้วตามจริง
+       * ไปคอนเฟิร์มลูกค้าเลย ไม่ผ่านขั้นเบิก: จ่ายพร้อมระบุได้เฉพาะใบไม่ใช้อะไหล่หรือเบิกครบแล้ว (ไม่มีของต้องเบิก)
        * แต่เขียนใบงานครั้งเดียวด้วยค่าสุดท้าย และสองแถวประวัติในคำสั่งเดียว (เดิมสี่คำสั่ง) ·
        * แถวจ่ายงานช้ากว่า 1 ms ทามไลน์เรียงตามเวลาจะได้ไม่สลับกัน
        */
@@ -3504,13 +3686,13 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * เช็คอะไหล่ (มี/หมด) — ขั้นแรกของทุกใบที่ใช้อะไหล่ (นัดลูกค้าก่อนเบิก · เจ้าของงานกำหนด ต.ค. 69)
+ * เช็คอะไหล่ (มี/หมด) — ขั้นแรกของทุกใบที่ใช้อะไหล่ (นัดวันก่อนเบิก · เจ้าของงานกำหนด ต.ค. 69)
  *
- * ดูคลังอย่างเดียว ยังไม่ตัดของ — เลขใบเบิกใส่ทีหลังตอนลูกค้าคอนเฟิร์มวันแล้ว (parts-check)
+ * ดูคลังอย่างเดียว ยังไม่ตัดของ — เลขใบเบิกใส่ทีหลังตอนหัวหน้าภาคนัดวันแล้ว (parts-check)
  * มีครบ → เสนอราคา (ถ้าต้อง) หรือหัวหน้าภาคนัดวันเข้า · หมดบางตัว → ค้างที่ขั้นนี้จนของเข้าครบ
  * (เจ้าของงานเลือก — ไม่ส่งไปนัดพร้อมวันคาดว่าเข้า) · ของมาแล้วกดซ้ำด้วยผล "มีครบ" ("ของเข้าแล้ว ส่งนัด")
  *
- * มีของต้องบอกคลังด้วย — ของอยู่คลังอื่นหัวหน้าภาคต้องเบิก/โอนเองหลังลูกค้าคอนเฟิร์ม (ป้าย TRANSFER)
+ * มีของต้องบอกคลังด้วย — ของอยู่คลังอื่นหัวหน้าภาคต้องเบิก/โอนเองหลังนัดวัน ก่อนคอนเฟิร์มลูกค้า (ป้าย TRANSFER)
  * มีบางตัว หมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ ใบนี้ไปนัดด้วยของที่มี (เหมือนขั้นเบิกเดิม)
  */
 const partsSourcingSchema = z.object({
@@ -3627,10 +3809,12 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
 });
 
 /**
- * ของไม่พอตอนเบิก (ลูกค้าคอนเฟิร์มวันแล้ว) — ของที่เช็คว่ามีถูกงานอื่นใช้ไปก่อน (เจ้าของงานตกลง ต.ค. 69)
+ * ของไม่พอตอนเบิก — ของที่เช็คว่ามีถูกงานอื่นใช้ไปก่อน (เจ้าของงานตกลง ต.ค. 69)
  *
- * ทั้งใบกลับไปขั้นเช็คอะไหล่ รอของเข้าครบ แล้วหัวหน้าภาคนัดใหม่ — แอดมินโทรแจ้งลูกค้าว่าเลื่อนนัด
- * (ของต้องครบก่อนส่งไปนัด เหมือนตอนเช็ครอบแรก) · วันนัด/ทีมเดิมล้าง ไม่งั้นใบโผล่บนแผนงานวันเดิมทั้งที่ไม่มีใครไป
+ * ทั้งใบกลับไปขั้นเช็คอะไหล่ รอของเข้าครบ แล้วหัวหน้าภาคนัดใหม่ (ของต้องครบก่อนส่งไปนัด เหมือนตอนเช็ครอบแรก)
+ * · วันนัด/ทีมเดิมล้าง ไม่งั้นใบโผล่บนแผนงานวันเดิมทั้งที่ไม่มีใครไป
+ * เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง): ส่วนใหญ่ยังไม่ได้โทรร้าน วันที่หัวหน้าภาคนัดแค่ยกเลิก ไม่ต้องแจ้งใคร —
+ * เฉพาะใบที่คอนเฟิร์มไปแล้ว (ใบเก่า · ย้อนมาเบิกใหม่) แอดมินต้องโทรแจ้งร้านว่าเลื่อน บันทึกจึงแยกสองแบบ
  * ตัวอื่นที่ยังไม่เบิกเก็บผลเช็คไว้ · อยากไปตามนัดด้วยของที่มี ใช้ "แยกตัวที่หมดไปใบใหม่" ในฟอร์มเบิกแทน
  */
 const partsShortSchema = z.object({
@@ -3662,6 +3846,8 @@ router.post("/:id/parts-short", requireAuth, async (req: AuthRequest, res) => {
   const codes = await partCodesText(short);
   const was = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : null;
   const expected = parsed.data.expectedAt ? new Date(`${parsed.data.expectedAt}T00:00:00.000Z`) : null;
+  const confirmed = APPOINTMENT_DONE.includes(cur.appointmentStatus ?? "");
+  const team = cur.assignedTeam ? ` ทีม${cur.assignedTeam}` : "";
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrderPart.updateMany({
@@ -3689,7 +3875,9 @@ router.post("/:id/parts-short", requireAuth, async (req: AuthRequest, res) => {
       "PARTS_SOURCING",
       [
         `ของไม่พอตอนเบิก: ${codes}${expected ? ` · คาดว่าเข้า ${parsed.data.expectedAt}` : ""}`,
-        `เลื่อนนัด${was ? `เดิม ${was}${cur.assignedTeam ? ` ทีม${cur.assignedTeam}` : ""}` : ""} — ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่`,
+        confirmed
+          ? `เลื่อนนัด${was ? `เดิม ${was}${team}` : ""} — แอดมินแจ้งร้านว่าเลื่อน · ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่`
+          : `ยกเลิกวันที่หัวหน้าภาคนัดไว้${was ? ` (${was}${team})` : ""} — ยังไม่ได้คอนเฟิร์มลูกค้า ไม่ต้องแจ้งร้าน · ของเข้าครบแล้วส่งหัวหน้าภาคนัดใหม่`,
         parsed.data.note || null,
       ]
         .filter(Boolean)
@@ -3870,20 +4058,22 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     });
   }
   /**
-   * ของไม่พอตอนเบิก (นัดลูกค้าก่อนเบิก ต.ค. 69) — ลูกค้าคอนเฟิร์มวันแล้ว ค้างรอของที่ขั้นนี้ไม่ได้
-   * ไปตามนัดด้วยของที่มี = แยกตัวที่หมดไปใบใหม่ · ทั้งใบรอของ = "ของไม่พอ — แจ้งเลื่อนนัด" (parts-short)
+   * ของไม่พอตอนเบิก (ต.ค. 69) — หัวหน้าภาคนัดวันแล้ว ค้างรอของที่ขั้นนี้ไม่ได้
+   * ไปตามนัดด้วยของที่มี = แยกตัวที่หมดไปใบใหม่ · ทั้งใบรอของ = ปุ่มของไม่พอ (parts-short)
+   * ชื่อปุ่มตามสถานะนัด — ยังไม่ได้โทรร้าน (เบิกก่อนคอนเฟิร์ม) แค่ยกเลิกวันที่นัดไว้ · คอนเฟิร์มแล้วต้องแจ้งร้านว่าเลื่อน
    */
   if (stillOut && !split) {
+    const button = APPOINTMENT_DONE.includes(cur.appointmentStatus ?? "") ? "ของไม่พอ — แจ้งเลื่อนนัด" : "ของไม่พอ — ยกเลิกนัด รอของเข้า";
     return res.status(400).json({
-      error: "มีตัวที่หมด — แยกตัวที่หมดไปใบใหม่ (ใบนี้ไปตามนัด) หรือกด “ของไม่พอ — แจ้งเลื่อนนัด”",
+      error: `มีตัวที่หมด — แยกตัวที่หมดไปใบใหม่ (ใบนี้ไปตามนัด) หรือกด “${button}”`,
     });
   }
   // ใบแยกรอของเข้าที่ขั้นเช็คอะไหล่ แล้วนัด/คอนเฟิร์ม/เบิกของมันเอง · ลูกค้าจ่ายแล้ว = ไม่เสนอราคาซ้ำ (PREPAID)
   const childPaid = paidHere && parsed.data.splitPaid === true;
   const now = new Date();
 
-  // เบิกครบ → ลูกค้าคอนเฟิร์มแล้วไปปล่อยงาน (ใบที่เบิกค้างตั้งแต่ก่อนเปลี่ยนสายงานไปนัดวัน — afterIssue)
-  // ของคลังอื่นยังไม่ได้เบิก — ไปให้หัวหน้าภาคเบิก/โอนก่อน
+  // เบิกครบ → แอดมินคอนเฟิร์มลูกค้า (ของอยู่ในมือแล้ว) · ใบที่คอนเฟิร์มไปแล้วไปปล่อยงาน · ยังไม่มีวันนัดไปนัดวัน (afterIssue)
+  // ของคลังอื่นยังไม่ได้เบิก — ไปให้หัวหน้าภาคเบิก/โอนก่อน ของต้องถึงก่อนโทรร้าน
   const nextStage = transferIds.length ? "PARTS_TRANSFER" : pickupIds.length ? "PARTS_PICKUP" : afterIssue(cur);
   const outCodes = stillOut
     ? await partCodesText(
@@ -4156,7 +4346,8 @@ router.post("/:id/parts-transfer", requireAuth, async (req: AuthRequest, res) =>
 
 /**
  * ของถึงคลังปลายทางแล้ว — ไปเบิกส่งมอบต่อ
- * มีตัวที่ต้องเบิกจากคลัง 94 → แอดมิน · เหลือแต่คลังอื่น → หัวหน้าภาคเบิกส่งมอบ · ไม่เหลืออะไรให้เบิก → ปล่อยงาน (afterIssue)
+ * มีตัวที่ต้องเบิกจากคลัง 94 → แอดมิน · เหลือแต่คลังอื่น → หัวหน้าภาคเบิกส่งมอบ
+ * · ไม่เหลืออะไรให้เบิก → คอนเฟิร์มลูกค้า (คอนเฟิร์มไปแล้ว = ปล่อยงาน — afterIssue)
  */
 router.post("/:id/parts-transfer/arrived", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -4333,8 +4524,8 @@ const quoteSchema = z.object({
 });
 
 /**
- * หลังรับเงิน (หรือข้ามเสนอราคา) ไปไหนต่อ — หัวหน้าภาคนัดวันเข้าเสมอ (นัดลูกค้าก่อนเบิก ต.ค. 69)
- * อะไหล่เช็คไปแล้วก่อนเสนอราคา · เบิกจริงหลังลูกค้าคอนเฟิร์มวัน (afterConfirm)
+ * หลังรับเงิน (หรือข้ามเสนอราคา) ไปไหนต่อ — หัวหน้าภาคนัดวันเข้าเสมอ (นัดวันก่อนเบิก ต.ค. 69)
+ * อะไหล่เช็คไปแล้วก่อนเสนอราคา · เบิกจริงหลังหัวหน้าภาคนัดวัน ก่อนคอนเฟิร์มลูกค้า (issueLeft ใน /assign)
  */
 async function afterPayment(_id: number): Promise<"PARTS_CHECKED"> {
   return "PARTS_CHECKED";
@@ -4462,6 +4653,33 @@ function dayStart(date: string) {
 }
 
 /**
+ * นัดที่คนกดเห็นอยู่บนหน้าจอ — /confirm-appointment · /dispatch · /decline-new-date รับเพิ่มได้ (ไม่บังคับ)
+ *
+ * ทำไม: แอดมินเลื่อนวันนัดได้โดยใบไม่ขยับขั้น (/reschedule) ฟอร์มคอนเฟิร์ม/ปล่อยงานที่เปิดค้างไว้ก่อนเลื่อนยังโชว์วันเดิม
+ * กันเขียนทับด้วยค่าที่เพิ่งอ่านตอนกด (ซึ่งเป็นวันใหม่แล้ว) จับไม่ได้ — ร้านตกลงวันจันทร์ ประวัติบันทึกว่าลูกค้าคอนเฟิร์มวันพุธ
+ * ทีมไปวันพุธ ร้านรอวันจันทร์ (ตรวจโค้ดรอบสอง ต.ค. 69) · ส่งมาแล้วไม่ตรงกับใบ = 409 ไม่เขียนอะไร แอปโหลดใหม่
+ * ตรง = ค่าที่เพิ่งอ่านคือค่าที่หน้าจอเห็น moveStage กันเขียนทับด้วยค่านั้นต่อ (เลื่อนระหว่างอ่านกับเขียน = 409 เหมือนเดิม)
+ * ไม่ส่ง (แอปรุ่นเก่า) = แบบเดิม · null = เห็นว่าไม่มีวัน/ไม่ระบุเวลา
+ */
+const seenDateFields = {
+  seenScheduledAt: dateField.nullable().optional(),
+  seenScheduledTime: timeField,
+};
+type SeenDate = { seenScheduledAt?: string | null; seenScheduledTime?: string | null };
+
+/**
+ * หน้าจอเห็นนัดเดียวกับในใบไหม · ช่องที่ไม่ส่งถือว่าตรง
+ * เทียบวันแบบ ปี-เดือน-วัน (แอปส่งมาแค่นั้น) ไม่ใช่เวลาเต็ม — ใบเก่าที่วันนัดไม่ได้เก็บเป็นเที่ยงคืนจะไม่ติด 409 ตลอดไป
+ */
+function seenMatches(cur: { scheduledAt: Date | null; scheduledTime: string | null }, seen: SeenDate) {
+  const day = cur.scheduledAt ? cur.scheduledAt.toISOString().slice(0, 10) : null;
+  return (
+    (seen.seenScheduledAt === undefined || seen.seenScheduledAt === day) &&
+    (seen.seenScheduledTime === undefined || (seen.seenScheduledTime ?? null) === (cur.scheduledTime ?? null))
+  );
+}
+
+/**
  * "พ. 22 ต.ค. 69 เวลา 13:00 น." — ข้อความนี้ลงประวัติและขึ้นตรง ๆ ในฟอร์มยืนยันออกงาน
  * คนอ่านคือหัวหน้าภาคกับแอดมิน ไม่ใช่โปรแกรม — 2026-10-22 ต้องแปลในหัวก่อนว่าวันอะไร
  */
@@ -4514,7 +4732,9 @@ async function knownCmTeam(team: string) {
  *
  * จ่ายให้ "ทีม" ไม่ใช่ "คน" เพราะทีมเป็นหน่วยที่รับผิดชอบสาขาจริง
  * ใครไปจริงในวันนั้นเป็นเรื่องที่รู้ตอนปิดงาน ไม่ใช่ตอนจ่ายงาน
- * วันบังคับใส่ เพราะขั้นถัดไปคือแอดมินโทรถามร้านว่าวันนี้ได้ไหม — ไม่มีวันก็ไม่มีอะไรให้ถาม
+ * วันบังคับใส่ เพราะเป็นเป้าของการเบิก/โอน และเป็นวันที่แอดมินจะโทรถามร้าน — ไม่มีวันก็ไม่มีอะไรให้ถาม
+ * มีของต้องเบิก → แอดมินเบิกก่อน (ของถึงมือแล้วค่อยโทรคอนเฟิร์ม — เจ้าของงานกำหนด ต.ค. 69 รอบสอง)
+ * · ไม่มี (ไม่ใช้อะไหล่ · เบิกครบแล้วตั้งแต่รอบก่อน) → คอนเฟิร์มลูกค้าเลย
  *
  * หัวหน้าภาคจ่ายให้ทีมไหนก็ได้ (เจ้าของงานขอ ต.ค. 69 — เดิมเฉพาะทีมที่ดูแล + outsource)
  * ใบในพื้นที่ตัวเองแต่ให้ทีมอื่นเข้าไป: ใบยังเป็นของคนจ่าย ดู isCrossTeam ใน utils/supervisorScope.ts
@@ -4542,24 +4762,27 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
   // ของอยู่คลังอื่นนัดวันไหนก็ได้ — เคยบังคับล่วงหน้า 7 วันเผื่อโอน เจ้าของงานยกเลิก (ต.ค. 69) หัวหน้าภาคกะเวลาโอนเอง
   const past = pastVisitText(scheduledAt);
   if (past) return res.status(400).json({ error: past });
-  const [known, teamText] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้")]);
+  // ถามพร้อมกันรอบเดียว — ยังมีของต้องเบิกไหมไม่ขึ้นกับทีม ไม่เพิ่มเวลารอ
+  const [known, teamText, issue] = await Promise.all([knownCmTeam(team), teamNote(id, team, "จ่ายงานให้"), issueLeft(id)]);
   if (!known) return res.status(404).json({ error: `ไม่รู้จักทีม "${team}"` });
+  const next = issue ? "PARTS_REQUESTED" : "AWAITING_CONFIRM";
 
   // ล้างช่างรายคนของใบเก่าทิ้ง ไม่งั้นใบที่เคยจ่ายให้คนหนึ่งแล้วจ่ายใหม่ให้อีกทีม
   // จะยังค้างอยู่ในรายการของคนเดิมทั้งที่ไม่ใช่งานเขาแล้ว
+  // นัดยังไม่ได้ตกลงกับร้าน (PENDING) ตลอดช่วงเบิก — แอดมินโทรคอนเฟิร์มหลังของพร้อม
   const data = {
-    status: "AWAITING_CONFIRM",
+    status: next,
     assignedTeam: team,
     assignedToId: null,
     scheduledAt: dayStart(scheduledAt),
     scheduledTime: scheduledTime ?? null,
     appointmentStatus: "PENDING",
-    workStatus: workStatusForStage("AWAITING_CONFIRM"),
+    workStatus: workStatusForStage(next),
   };
   const log = {
     userId: req.auth!.userId,
     action: "ASSIGNED",
-    status: "AWAITING_CONFIRM",
+    status: next,
     note: [`${teamText} · เข้างาน ${visitText(scheduledAt, scheduledTime)}`, parsed.data.note].filter(Boolean).join(" — "),
   };
   if (!cur.outageId) {
@@ -4576,7 +4799,10 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * แอดมินโทรคอนเฟิร์มลูกค้า — ลูกค้าตกลงวันเดิม หรือขอเลื่อน
+ * แอดมินโทรคอนเฟิร์มลูกค้า ("คอนเฟิร์มออกหน้างาน") — ลูกค้าตกลงวันเดิม หรือขอเลื่อน
+ *
+ * เบิกก่อนคอนเฟิร์ม (เจ้าของงานกำหนด ต.ค. 69 รอบสอง): ถึงขั้นนี้ของอยู่ในมือแล้ว โทรบอกร้านได้ว่าไปแน่
+ * เดิมโทรก่อนเบิก ของคลังอื่นโอนมาไม่ทันวันที่บอกร้านไปแล้ว ต้องโทรเลื่อนซ้ำ
  *
  * ลูกค้าขอเลื่อน แอดมินเปลี่ยนวันได้ในขั้นนี้เลย ไม่ต้องตีกลับไปให้หัวหน้าภาคจ่ายใหม่ —
  * ลูกค้าที่ตอบว่า "ได้ แต่ขอวันพฤหัส" มีบ่อยกว่าลูกค้าที่ตอบรับตามนัดเป๊ะ
@@ -4586,6 +4812,7 @@ const confirmSchema = z.object({
   scheduledAt: dateField.optional(),
   scheduledTime: timeField,
   note: z.string().trim().max(500).optional(),
+  ...seenDateFields,
 });
 
 router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, res) => {
@@ -4597,9 +4824,15 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   // ทั้งสองแบบกลับไปให้หัวหน้าภาคปล่อยงานให้ช่าง (ดู WORK_ORDER_STAGE_ORDER)
   const before = await guardStage(req, res, id, ["AWAITING_CONFIRM", "INSPECT_CONFIRM"]);
   if (!before) return;
+  // วันที่ฟอร์มโชว์ไม่ใช่วันในใบแล้ว (แอดมินอีกคนเลื่อนระหว่างโทร) — ไม่บันทึกว่าลูกค้าคอนเฟิร์มวันที่ไม่ได้คุยกัน
+  if (!seenMatches(before, parsed.data)) return stageMoved(res);
   const inspect = before.status === "INSPECT_CONFIRM";
-  // นัดลูกค้าก่อนเบิก (ต.ค. 69) — ลูกค้าคอนเฟิร์มแล้วแอดมินเบิกอะไหล่ต่อ · เบิกครบแล้ว (วนกลับมาคอนเฟิร์มใหม่) ไปปล่อยงาน
-  const next = inspect ? "INSPECT_DISPATCH" : await afterConfirm(id);
+  /**
+   * สายงานปัจจุบันเบิกครบก่อนถึงขั้นนี้แล้ว → หัวหน้าภาคปล่อยงานเสมอ
+   * กันไว้อีกชั้น: ใบเก่าที่ค้างรอคอนเฟิร์มโดยยังไม่เบิก (migration ย้ายไปขั้นเบิกแล้ว — ใบที่หลุดมา)
+   * ไปเบิกต่อ แล้ว afterIssue เห็นว่าคอนเฟิร์มแล้ว ไปปล่อยงานเลย ไม่วนกลับมาโทรซ้ำ
+   */
+  const next = inspect ? "INSPECT_DISPATCH" : (await issueLeft(id)) ? "PARTS_REQUESTED" : "ASSIGNED";
 
   const oldDate = before.scheduledAt ? before.scheduledAt.toISOString().slice(0, 10) : null;
   const newDate = parsed.data.scheduledAt ?? oldDate;
@@ -4631,15 +4864,169 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
       .filter(Boolean)
       .join(" — "),
   };
+  /**
+   * วันที่อ่านไว้ (= ที่ฟอร์มโชว์ ถ้าส่งมา — seenMatches) ต้องยังเป็นวันเดิม — แอดมินอีกคนเลื่อนวันนัด (ใบไม่ขยับขั้น) ระหว่างนี้
+   * แล้วปุ่มนี้เขียนวันเดิมกลับ = การเลื่อนหายเงียบ ๆ ทั้งที่ประวัติบอกวันใหม่ · 409 แล้วแอปโหลดใบใหม่ให้เห็นวันล่าสุดก่อนคอนเฟิร์ม
+   */
+  const readDate = { scheduledAt: before.scheduledAt, scheduledTime: before.scheduledTime };
   if (!before.outageId) {
-    if (!(await moveStage(id, before.status, data, log))) return stageMoved(res);
+    if (!(await moveStage(id, before.status, data, log, readDate))) return stageMoved(res);
   } else {
-    // ผูกกับเคสเครื่องเสีย — ต้องซิงก์สถานะเคสในทรานแซกชันเดียวกัน
-    await prisma.$transaction(async (tx) => {
-      await tx.workOrder.update({ where: { id }, data });
+    // ผูกกับเคสเครื่องเสีย — ต้องซิงก์สถานะเคสในทรานแซกชันเดียวกัน · กันเขียนทับแบบเดียวกับ moveStage
+    const done = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.workOrder.updateMany({ where: { id, status: before.status, ...readDate }, data });
+      if (count === 0) return false;
       await writeLog(tx, id, log.userId, log.action, log.status, log.note);
       await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+      return true;
     }, STAGE_TX);
+    if (!done) return stageMoved(res);
+  }
+
+  res.json(await detailFor(id));
+});
+
+/**
+ * แอดมินเลื่อนวันนัด (เจ้าของงานขอ ต.ค. 69 — "ให้ admin เลื่อนวันนัดลูกค้าได้" · เลือก "ได้ตลอดจนช่างเข้างาน")
+ *
+ * ตั้งแต่หัวหน้าภาคนัดวันจนช่างกดถึงหน้างาน (RESCHEDULE_STAGES) — เดิมทางเดียวคือย้อนขั้นไปนัดใหม่
+ * ซึ่งล้างทีม และใบที่ของกำลังโอนเลขใบโอนหาย
+ * - ระหว่างเบิก/โอน/รอคอนเฟิร์ม/รอปล่อยงาน: เปลี่ยนแค่วัน/เวลา ใบอยู่ขั้นเดิม ทีม อะไหล่ การโอนไม่แตะ
+ * - ปล่อยให้ช่างแล้วแต่ช่างยังไม่ถึง: ดึงใบคืนให้หัวหน้าภาครับทราบวันใหม่แล้วปล่อยอีกครั้ง (ทีมวันใหม่อาจไม่ว่าง)
+ * สถานะนัดไม่เปลี่ยน — ยังไม่คอนเฟิร์ม = วันที่วางแผน (ยังต้องโทรคอนเฟิร์ม) · คอนเฟิร์มแล้ว = แอดมินตกลงวันใหม่กับร้านแล้ว
+ * หัวหน้าภาครับทราบวันใหม่ตอนปล่อยงานเสมอ (ป้าย "คอนเฟิร์มวันใหม่" — isRescheduled)
+ *
+ * แอดมินเท่านั้น (คนคุยกับร้าน) · ขั้นเบิก/โอนคลังอื่นแอดมินกดแทนไม่ได้ แต่วันนัดไม่ใช่เรื่องคลัง จึงไม่ใช้ guardStage
+ * บันทึกเป็น APPOINTMENT_MOVED ไม่ใช่ RESCHEDULED — แอปอ่าน RESCHEDULED ว่า "คอนเฟิร์มลูกค้าแล้ว"
+ */
+const rescheduleSchema = z.object({
+  scheduledAt: z.string({ required_error: "ต้องระบุวันนัดใหม่" }).regex(DATE_PATTERN, "วันที่ต้องเป็น ปี-เดือน-วัน"),
+  // ไม่ส่ง = เวลาเดิม · null = ไม่ระบุเวลา (เหมือน confirm-appointment)
+  scheduledTime: timeField,
+  // คนที่เปิดใบทีหลัง (หัวหน้าภาคที่ต้องรับทราบ) ต้องรู้ว่าเลื่อนเพราะอะไร
+  reason: z
+    .string({ required_error: "ต้องบอกเหตุผลที่เลื่อน เช่น ลูกค้าขอเลื่อน · อะไหล่มาไม่ทัน" })
+    .trim()
+    .min(1, "ต้องบอกเหตุผลที่เลื่อน เช่น ลูกค้าขอเลื่อน · อะไหล่มาไม่ทัน")
+    .max(500),
+});
+
+router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  // Admin Spare Part กับ "ดูในฐานะผู้ใช้อื่น" ถูกกันที่ middleware แล้ว (เขียนไม่ได้)
+  if (req.auth!.role !== "ADMIN") {
+    return res.status(403).json({
+      error: "เลื่อนวันนัดได้เฉพาะแอดมิน (คนคุยกับร้าน) — ทีมไม่ว่างวันนัด ใช้ “ทีมไม่ว่าง — ส่งกลับแอดมิน” ตอนปล่อยงาน",
+    });
+  }
+  const parsed = rescheduleSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      code: true, status: true, scheduledAt: true, scheduledTime: true, appointmentStatus: true, assignedTeam: true, outageId: true,
+      updatedAt: true,
+    },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  const recallTo = RESCHEDULE_RECALL_STAGES[wo.status] as string | undefined;
+  if (!RESCHEDULE_STAY_STAGES.includes(wo.status) && !recallTo) {
+    return res.status(409).json({
+      error: `${wo.code} อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}" — เลื่อนวันนัดได้ตั้งแต่หัวหน้าภาคนัดวันแล้วจนช่างถึงหน้างาน`,
+      status: wo.status,
+    });
+  }
+  // ใบที่เบิกตั้งแต่ก่อนเปลี่ยนเป็นนัดก่อนเบิก ยังไม่มีวันให้เลื่อน — หัวหน้าภาคนัดหลังเบิกเสร็จ
+  if (!wo.scheduledAt) {
+    return res.status(409).json({ error: `${wo.code} ยังไม่มีวันนัด — หัวหน้าภาคนัดวันเข้าหลังเบิกเสร็จ`, status: wo.status });
+  }
+  if (recallTo) {
+    /**
+     * ช่างถึงหน้างานแล้ว (หรือปิดงานไปแล้วรอบนี้ — ตีกลับเคลมกลับมาที่ช่าง) = เลื่อนจากออฟฟิศไม่ได้
+     * ช่างใช้ "แจ้งปัญหาหน้างาน" (ร้านปิด/ลูกค้าไม่สะดวก) ซึ่งส่งกลับให้แอดมินนัดใหม่แทน
+     * ดูเฉพาะหลังปล่อยงานครั้งล่าสุด — ถึงหน้างานของรอบก่อนไม่นับ
+     * อ่านหลังอ่านใบงาน (ไม่ยิงพร้อมกัน) — ช่างกดถึงหน้างานหลังจากนี้ขยับ updatedAt ที่อ่านไว้แล้ว
+     * การดึงคืนข้างล่างจึงไม่ผ่าน (expect updatedAt) · ถึงก่อนหน้านี้ก็เห็นในประวัติที่อ่านตรงนี้
+     */
+    const last = await prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: { in: ["DISPATCHED", "ARRIVED", "CLOSED"] } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { action: true },
+    });
+    /**
+     * ไม่มีประวัติปล่อยงานเลย (ใบทดสอบที่คัดลอกมาเป็นขั้นช่าง · ใบเก่าก่อนมีขั้นปล่อยงาน) = ไม่รู้ว่าช่างไปหรือยัง ยอมให้ดึงคืน
+     * ปิดงานแล้ว (เคลมถูกตีกลับ ใบกลับมาที่ช่างโดยไม่มีถึงหน้างาน — ถึงหน้างานไม่บังคับกด) ต้องบอกตามจริง
+     * เดิมขึ้น "ช่างถึงหน้างานแล้ว" ทั้งที่ไม่มีใครกดถึง แอดมินงงว่าใครไป
+     */
+    if (last && last.action === "CLOSED") {
+      return res.status(409).json({
+        error: `${wo.code} ช่างปิดงานรอบนี้แล้ว (เคลมถูกตีกลับให้ช่างแก้) — เลื่อนวันนัดไม่ได้ ช่างแก้ตามที่ตีกลับแล้วส่งปิดงานอีกครั้ง`,
+        status: wo.status,
+      });
+    }
+    if (last && last.action !== "DISPATCHED") {
+      return res.status(409).json({
+        error: `${wo.code} ช่างถึงหน้างานแล้ว — เลื่อนวันนัดไม่ได้ ให้ช่างกด “แจ้งปัญหาหน้างาน” (ร้านปิด/ลูกค้าไม่สะดวก) แล้วแอดมินนัดใหม่`,
+        status: wo.status,
+      });
+    }
+  }
+
+  const { scheduledAt, reason } = parsed.data;
+  const oldDate = wo.scheduledAt.toISOString().slice(0, 10);
+  const newTime = parsed.data.scheduledTime !== undefined ? parsed.data.scheduledTime : wo.scheduledTime;
+  if (scheduledAt === oldDate && (newTime ?? null) === (wo.scheduledTime ?? null)) {
+    return res.status(400).json({ error: "วันและเวลาเดิม — ไม่ได้เลื่อน" });
+  }
+  const past = pastVisitText(scheduledAt);
+  if (past) return res.status(400).json({ error: past });
+
+  const next = recallTo ?? wo.status;
+  const confirmed = APPOINTMENT_DONE.includes(wo.appointmentStatus ?? "");
+  const data = {
+    scheduledAt: dayStart(scheduledAt),
+    scheduledTime: newTime ?? null,
+    ...(recallTo ? { status: recallTo, workStatus: workStatusForStage(recallTo) ?? null } : {}),
+  };
+  const log = {
+    userId: req.auth!.userId,
+    action: recallTo ? "APPOINTMENT_RECALLED" : "APPOINTMENT_MOVED",
+    // เลื่อนเฉย ๆ ไม่ใช่การเดินขั้น (ดู NON_STAGE_ACTIONS) · ดึงคืนจากช่าง = ขั้นที่กลับไป
+    status: next,
+    note: [
+      `เลื่อนนัดจาก ${visitText(oldDate, wo.scheduledTime)} เป็น ${visitText(scheduledAt, newTime)}${wo.assignedTeam ? ` · ทีม${wo.assignedTeam}` : ""}`,
+      // "ดึงงานคืนจากช่าง" อยู่ในชื่อประวัติแล้ว (APPOINTMENT_RECALLED) — กล่องส้มในฟอร์มปล่อยงานต่อสองอย่างนี้ ไม่พูดซ้ำ
+      recallTo ? "ช่างยังไม่ถึงหน้างาน" : null,
+      confirmed ? "แอดมินตกลงวันใหม่กับร้านแล้ว" : "ยังไม่ได้คอนเฟิร์มลูกค้า",
+      reason,
+    ]
+      .filter(Boolean)
+      .join(" — "),
+  };
+  /**
+   * WHERE status = เดิม — มีคนเดินขั้นไปก่อนเสี้ยววินาที (เช่น หัวหน้าภาคปล่อยงาน) = 409 ไม่เขียนทับ
+   * วัน/เวลาเดิม — แอดมินอีกคนเลื่อนไปก่อน (ขั้นไม่เปลี่ยน) ไม่ทับกัน และบันทึก "เลื่อนนัดจาก …" ไม่อ้างวันเก่า
+   * ดึงคืนจากช่าง: updatedAt เดิมด้วย — ช่างกดถึงหน้างานหลังเช็คประวัติข้างบน (ดู /arrive) = 409 ไม่ดึงใบจากคนที่อยู่หน้าร้าน
+   */
+  const expect = {
+    scheduledAt: wo.scheduledAt,
+    scheduledTime: wo.scheduledTime,
+    ...(recallTo ? { updatedAt: wo.updatedAt } : {}),
+  };
+  if (!wo.outageId) {
+    if (!(await moveStage(id, wo.status, data, log, expect))) return stageMoved(res);
+  } else {
+    // ผูกเคสเครื่องเสีย — วันเข้าบนกระดานต้องตามไปด้วยในทรานแซกชันเดียวกัน · กันเขียนทับแบบเดียวกับ moveStage
+    const done = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.workOrder.updateMany({ where: { id, status: wo.status, ...expect }, data });
+      if (count === 0) return false;
+      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+      return true;
+    }, STAGE_TX);
+    if (!done) return stageMoved(res);
   }
 
   res.json(await detailFor(id));
@@ -4654,6 +5041,7 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
 const dispatchSchema = z.object({
   team: z.string().trim().min(1).max(120).optional(),
   note: z.string().trim().max(500).optional(),
+  ...seenDateFields,
 });
 
 router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
@@ -4665,6 +5053,8 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
   // ต่างกันแค่ปลายทาง: ซ่อม → รอช่างเข้างาน · ตรวจ → รอทีมตรวจหน้างาน
   const cur = await guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]);
   if (!cur) return;
+  // ฟอร์มที่เปิดไว้ก่อนแอดมินเลื่อนวัน — หัวหน้าภาคยังไม่เห็นวันใหม่ (ไม่ได้ผ่านป้าย "คอนเฟิร์มวันใหม่") ห้ามปล่อย
+  if (!seenMatches(cur, parsed.data)) return stageMoved(res);
   const inspect = cur.status === "INSPECT_DISPATCH";
   const next = inspect ? "INSPECTING" : "IN_PROGRESS";
 
@@ -4684,7 +5074,10 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
     id,
     cur.status,
     { status: next, assignedTeam: team, assignedToId: null, workStatus: workStatusForStage(next) },
-    { userId: req.auth!.userId, action: "DISPATCHED", status: next, note: [text, parsed.data.note].filter(Boolean).join(" — ") }
+    { userId: req.auth!.userId, action: "DISPATCHED", status: next, note: [text, parsed.data.note].filter(Boolean).join(" — ") },
+    // แอดมินเลื่อนวันนัดได้ที่ขั้นนี้โดยใบไม่ขยับขั้น — วันเปลี่ยนระหว่างอ่านกับเขียน = 409 ให้หัวหน้าภาคเห็นวันใหม่
+    // (ป้าย "คอนเฟิร์มวันใหม่") ก่อนปล่อย ไม่ใช่ส่งช่างไปวันที่ไม่เคยเห็น โดยประวัติยังเขียนวันเดิม
+    { scheduledAt: cur.scheduledAt, scheduledTime: cur.scheduledTime }
   );
   if (!moved) return stageMoved(res);
 
@@ -4738,7 +5131,14 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
         ? "ถึงหน้างาน (ไม่มีพิกัดจากเครื่อง)"
         : "ถึงหน้างาน (สาขายังไม่มีพิกัด เทียบระยะไม่ได้)"
       : `ถึงหน้างาน · ห่างสาขา ${Math.round(distance)} ม. · ${within ? "ในรัศมี" : "นอกรัศมี"}`;
-  await prisma.$transaction(async (tx) => {
+  const arrived = await prisma.$transaction(async (tx) => {
+    /**
+     * แตะแถวใบงานก่อนเขียนอะไร (WHERE ขั้นยังอยู่ในมือช่าง) — แอดมินเลื่อนวันนัดแล้วดึงงานคืน (reschedule)
+     * พร้อมกับที่ช่างกดถึงหน้างาน สองคำสั่งต้องรอกันที่แถวนี้: ดึงคืนก่อน = ที่นี่ไม่เจอแถว 409 ·
+     * ถึงก่อน = updatedAt ขยับ การดึงคืนที่อ่านค่าเดิมไว้ไม่ผ่าน · เดิมเขียนแค่ประวัติ สองฝั่งไม่เห็นกันเลย
+     */
+    const { count } = await tx.workOrder.updateMany({ where: { id, status: wo.status }, data: { updatedAt: new Date() } });
+    if (count === 0) return false;
     if (distance != null) {
       await tx.branchCheckIn.create({
         data: {
@@ -4753,7 +5153,11 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
       });
     }
     await writeLog(tx, id, req.auth!.userId, "ARRIVED", wo.status, note);
+    return true;
   }, STAGE_TX);
+  if (!arrived) {
+    return res.status(409).json({ error: `${wo.code} ไม่ได้อยู่ในมือช่างตอนนี้ — แอดมินเพิ่งเลื่อนวันนัดหรือมีคนเปลี่ยนขั้น โหลดใหม่แล้วดูวันนัดล่าสุด` });
+  }
   res.json({ ok: true, note, distance: distance != null ? Math.round(distance) : null, withinRadius: within });
 });
 
@@ -4763,29 +5167,56 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
  * เดิมทางเดียวคือเปลี่ยนทีมแล้วปล่อยงาน — แต่บางวันไม่มีทีมไหนว่าง ต้องให้ร้านเลือกวันอื่น
  * ซึ่งคนที่คุยกับร้านคือแอดมิน ใบจึงกลับไปขั้นคอนเฟิร์มลูกค้า ทีมเดิมยังอยู่ วันที่ลูกค้าขอยังอยู่ให้แอดมินเห็น
  * ต้องบอกเหตุผล — แอดมินต้องรู้ว่าจะไปต่อรองกับร้านว่าอะไร
+ * งานตรวจหน้างานด้วย (ต.ค. 69) — แอดมินเลื่อนวันนัดตรวจได้ (reschedule) หัวหน้าภาคจึงต้องส่งกลับได้แบบเดียวกัน
  */
 const declineNewDateSchema = z.object({
   reason: z.string().trim().min(1, "ต้องบอกเหตุผลให้แอดมิน เช่น ทีมเต็มวันนั้น").max(500),
+  ...seenDateFields,
 });
+
+/**
+ * ใครเป็นคนทำให้วันเปลี่ยน — บันทึกส่งกลับต้องบอกเหตุตามจริง เพราะอยู่ในประวัติถาวรและกล่องที่แอดมินอ่านก่อนโทรร้าน
+ * เดิมเขียน "วันที่ลูกค้าขอ" เสมอ ทั้งที่ป้ายนี้เปิดจากแอดมินเลื่อนเองได้ด้วย (ของโอนไม่ทัน · ทีมติดงาน) ซึ่งร้านไม่ได้ขอ
+ * move = ประวัติล่าสุดในชุด DATE_SETTLE_ACTIONS (ตัวที่เปิดป้าย "คอนเฟิร์มวันใหม่" — isRescheduled)
+ */
+function declinedDateText(move: string | undefined) {
+  if (move === "RESCHEDULED") return "ไม่ว่างวันที่ลูกค้าขอ";
+  if (move === "APPOINTMENT_MOVED" || move === "APPOINTMENT_RECALLED") return "ไม่ว่างวันที่แอดมินเลื่อน";
+  // ไม่มีป้ายวันใหม่ (แอปไม่เปิดทางนี้ — เรียก API ตรง) ไม่เดาว่าใครขอ
+  return "ไม่ว่างวันนัด";
+}
 
 router.post("/:id/decline-new-date", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = declineNewDateSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
-  const cur = await guardStage(req, res, id, "ASSIGNED");
+  // ประวัติที่เปิดป้ายวันใหม่อ่านพร้อมใบงาน ไม่ต่อคิว — ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ
+  const [cur, move] = await Promise.all([
+    guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: { in: DATE_SETTLE_ACTIONS } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { action: true },
+    }),
+  ]);
   if (!cur) return;
+  // ตอบว่าไม่ว่าง "วันที่เห็น" — ฟอร์มที่เปิดไว้ก่อนแอดมินเลื่อนไปวันอื่น = 409 ให้ดูวันใหม่ก่อน (ทีมอาจว่างวันนั้น)
+  if (!seenMatches(cur, parsed.data)) return stageMoved(res);
   const when = cur.scheduledAt ? visitText(cur.scheduledAt.toISOString().slice(0, 10), cur.scheduledTime) : "—";
+  const back = cur.status === "INSPECT_DISPATCH" ? "INSPECT_CONFIRM" : "AWAITING_CONFIRM";
   const moved = await moveStage(
     id,
-    "ASSIGNED",
-    { status: "AWAITING_CONFIRM", appointmentStatus: "PENDING", workStatus: workStatusForStage("AWAITING_CONFIRM") },
+    cur.status,
+    { status: back, appointmentStatus: "PENDING", workStatus: workStatusForStage(back) },
     {
       userId: req.auth!.userId,
       action: "NEW_DATE_DECLINED",
-      status: "AWAITING_CONFIRM",
-      note: `ทีม${cur.assignedTeam ?? " —"} ไม่ว่างวันที่ลูกค้าขอ (${when}) — ${parsed.data.reason}`,
-    }
+      status: back,
+      note: `ทีม${cur.assignedTeam ?? " —"} ${declinedDateText(move?.action)} (${when}) — ${parsed.data.reason}`,
+    },
+    // แอดมินเลื่อนไปวันอื่นพร้อมกัน (หลังเช็คข้างบน) = 409 เหมือนปล่อยงาน
+    { scheduledAt: cur.scheduledAt, scheduledTime: cur.scheduledTime }
   );
   if (!moved) return stageMoved(res);
   res.json(await detailFor(id));
@@ -4982,8 +5413,8 @@ async function createFollowUp(
   outOfStock = false
 ) {
   /**
-   * เริ่มที่แอดมินเช็คอะไหล่ (มี/หมด) เสมอ (นัดลูกค้าก่อนเบิก ต.ค. 69) — ของเข้าครบแล้ว [เสนอราคา →]
-   * หัวหน้าภาคนัด → คอนเฟิร์ม → เบิก ตามใบปกติ · ลูกค้าจ่ายแล้วในใบเดิม = ผู้เรียกเขียน PREPAID ไว้ (afterSourcing)
+   * เริ่มที่แอดมินเช็คอะไหล่ (มี/หมด) เสมอ (นัดวันก่อนเบิก ต.ค. 69) — ของเข้าครบแล้ว [เสนอราคา →]
+   * หัวหน้าภาคนัด → เบิก → คอนเฟิร์ม ตามใบปกติ · ลูกค้าจ่ายแล้วในใบเดิม = ผู้เรียกเขียน PREPAID ไว้ (afterSourcing)
    */
   const startAt = "PARTS_SOURCING";
   const parent = await tx.workOrder.findUniqueOrThrow({
@@ -5121,6 +5552,23 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
   if (!src) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   const ended = ["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(src.status);
   const status = ended ? (src.assignedTeam || src.assignedToId ? "IN_PROGRESS" : "NEW") : src.status;
+  // ของนอกสโตร์ไม่มีเลขใบเบิก — "เบิกแล้วหรือยัง" อ่านจากประวัติรอบเช็ค/เบิก (issueLeftOf) แต่ใบทดสอบไม่คัดลอกประวัติ
+  // ใบทดสอบของใบที่เบิกครบแล้วจึงถูกนับว่ายังไม่เบิก คอนเฟิร์มแล้วไปขั้นเบิก ทั้งที่ใบจริงไปปล่อยงาน = ทดสอบคนละเส้นทาง
+  // คัดลอกบรรทัดผลเบิกล่าสุดของใบต้นทางมาด้วย (สถานะเดิม) ให้ใบทดสอบเดินเส้นทางเดียวกับใบจริง
+  // ตัดสินจากขั้นที่ใบทดสอบจะอยู่ ไม่ใช่ว่าใบต้นทางจบแล้วไหม — ใบที่ปิดแล้วคัดลอกมาเริ่มที่ช่าง ช่างส่งกลับ (ร้านปิด)
+  // แล้วคอนเฟิร์มต้องไปปล่อยงานเหมือนใบจริง · เริ่มที่ระบุอะไหล่ (NEW) ไม่ต้อง หัวหน้าภาคระบุใหม่ = เริ่มรอบอะไหล่ใหม่อยู่แล้ว
+  const [lastIssue, offCount] =
+    status !== "NEW" && src.parts.length > 0
+      ? await Promise.all([
+          prisma.workOrderLog.findFirst({
+            where: { workOrderId: id, action: { in: ISSUE_ROUND_ACTIONS } },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: { action: true, status: true },
+          }),
+          prisma.sparePart.count({ where: { offCatalog: true, id: { in: src.parts.map((p) => p.sparePartId) } } }),
+        ])
+      : [null, 0];
+  const copyIssue = lastIssue?.action === "PARTS_CHECKED" && offCount > 0 ? lastIssue : null;
 
   const made = await prisma.$transaction(async (tx) => {
     const copy = await tx.workOrder.create({
@@ -5177,6 +5625,9 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
       });
     }
     await writeLog(tx, copy.id, req.auth!.userId, "TEST_COPY", status, `ใบทดสอบ คัดลอกจาก ${src.code} — ทดสอบเสร็จให้ลบทิ้ง`);
+    if (copyIssue) {
+      await writeLog(tx, copy.id, req.auth!.userId, "PARTS_CHECKED", copyIssue.status ?? status, `คัดลอกผลเบิกจาก ${src.code} (ของนอกสโตร์)`);
+    }
     return { id: copy.id, code };
   }, STAGE_TX);
   res.status(201).json(made);
@@ -5383,6 +5834,21 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   }
 
   const at = (stage: string) => order.indexOf(stage);
+  /**
+   * ของกำลังโอนอยู่ (มีใบโอน ยังไม่ถึง) แล้วย้อนไปก่อนขั้นเบิก — เลขใบโอนค้างอยู่ แต่พอนัดใหม่แอดมินเบิกรอบใหม่
+   * แล้วข้อมูลการโอนถูกล้าง ทั้งที่ของยังเดินทางอยู่จริง (ต.ค. 69) · ย้อนไปเช็คอะไหล่ใหม่ (ล้างหมดตั้งใจ) ไม่กัน
+   * เปลี่ยนวันใช้ "เลื่อนวันนัด" ได้แล้ว ไม่ต้องย้อน
+   */
+  if (to < at("PARTS_REQUESTED") && to > at("PARTS_SOURCING")) {
+    const moving = await prisma.workOrderPart.count({
+      where: { workOrderId: id, kind: "WAITING", transferNo: { not: null }, transferredAt: null },
+    });
+    if (moving > 0) {
+      return res.status(400).json({
+        error: "ของกำลังโอนอยู่ (ยังไม่ถึงคลังปลายทาง) — ย้อนไปขั้นนี้แล้วข้อมูลการโอนจะหาย · เปลี่ยนวันใช้ “เลื่อนวันนัด” · โอนไม่ได้ใช้ “เบิก/โอนไม่ได้ — ส่งกลับแอดมิน”",
+      });
+    }
+  }
   const data: Record<string, unknown> = { status: toStage };
   // วันนัดผูกกับรอบที่ถูกย้อนทิ้ง — ค้างไว้จะโผล่บนบอร์ดแผนงานทั้งที่ไม่มีใครจะไป
   // ยกเว้นย้อนไปให้หัวหน้าภาคส่งช่างตรวจ — วันนั้นร้านคอนเฟิร์มแล้ว แค่เปลี่ยนทีม/ส่งใหม่
@@ -5409,9 +5875,11 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
 
   await prisma.$transaction(async (tx) => {
     /**
-     * นัดลูกค้าก่อนเบิก (ต.ค. 69): เช็คอะไหล่อยู่ก่อนนัด เบิกอยู่หลังคอนเฟิร์ม — ย้อนไปขั้นนัด/คอนเฟิร์ม
+     * นัดวัน → เบิก → คอนเฟิร์ม (ต.ค. 69 รอบสอง): เช็คอะไหล่อยู่ก่อนนัด เบิกอยู่หลังนัด ก่อนคอนเฟิร์ม — ย้อนไปขั้นนัด/คอนเฟิร์ม
      * (ลูกค้าเปลี่ยนวัน) ไม่ได้ทำให้ของที่เบิกไปแล้วกลับเข้าคลัง จึงไม่ล้างผลเช็ค/เลขใบเบิก
+     * (นัดใหม่แล้ว issueLeft เห็นว่าเบิกครบ ข้ามไปคอนเฟิร์มเลย)
      * ย้อนไปขั้นเบิก = เบิกใหม่ ล้างเลขใบเบิก/การโอน แต่เก็บผลเช็ค (มีที่คลังไหน) ไว้เป็นค่าตั้งต้น
+     * สถานะนัดไม่แตะ — ใบที่คอนเฟิร์มแล้วเบิกใหม่เสร็จไปปล่อยงานเลย ไม่โทรร้านซ้ำ (afterIssue)
      */
     if (toStage === "PARTS_REQUESTED") {
       await tx.workOrderPart.updateMany({
@@ -6237,6 +6705,8 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
       status: true,
       createdAt: true,
       assignedTeam: true,
+      // คอนเฟิร์มไปแล้ว (ใบสายงานเดิมที่ค้างขั้นเบิก) — ไม่เติมประวัติคอนเฟิร์มซ้ำ
+      appointmentStatus: true,
       // เบิกไปแล้วก่อนปิดย้อนหลัง (ใบที่เบิกตั้งแต่สายงานเดิม แล้วค้างที่นัดวัน) — ไม่เติมประวัติเบิกซ้ำ
       parts: { where: { kind: "WAITING" }, select: { inStock: true, requisitionNo: true } },
     },
@@ -6317,23 +6787,32 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
           usedParts.length ? "ระบุตามอะไหล่ที่ใช้จริง" : "ไม่ได้ใช้อะไหล่"
         );
       }
+      // รับเงินแล้วไปนัดวัน (afterPayment) — เดิมลงขั้นเบิก ซึ่งเป็นลำดับก่อนนัดลูกค้าก่อนเบิก
       if (paidAt && before("AWAITING_PAYMENT")) {
-        await log("PAID", "PARTS_REQUESTED", paidAt, b.paymentRef ? `หลักฐานการจ่าย ${b.paymentRef}` : null);
+        await log("PAID", "PARTS_CHECKED", paidAt, b.paymentRef ? `หลักฐานการจ่าย ${b.paymentRef}` : null);
       }
-      if (usedParts.length && before("PARTS_REQUESTED") && !(wo.parts.length > 0 && wo.parts.every(isIssued))) {
+      /**
+       * ลำดับสายงานปัจจุบัน (ต.ค. 69 รอบสอง): นัดวัน+ทีม (หัวหน้าภาค) → เบิก (แอดมิน) → คอนเฟิร์มลูกค้า (แอดมิน)
+       * → ยืนยันออกงาน (หัวหน้าภาค) · นัดไม่รู้เวลาจริง ลงเวลาเดียวกับเบิก (ไม่มีวันเบิก = วันเข้างาน)
+       * เวลาเท่ากันเรียงตามลำดับที่เขียน (หน้าใบงานเรียงตาม id ด้วย)
+       */
+      const issue = usedParts.length > 0 && before("PARTS_REQUESTED") && !(wo.parts.length > 0 && wo.parts.every(isIssued));
+      // คอนเฟิร์มไปแล้ว (ใบสายงานเดิมที่ค้างขั้นเบิก) ไม่ลงคอนเฟิร์มซ้ำ — ประวัติจะมีคอนเฟิร์มสองครั้งทั้งที่โทรครั้งเดียว
+      const confirm = before("AWAITING_CONFIRM") && !APPOINTMENT_DONE.includes(wo.appointmentStatus ?? "");
+      const afterIssueStage = confirm ? "AWAITING_CONFIRM" : "ASSIGNED";
+      const when = `${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""}`;
+      if (before("PARTS_CHECKED") || wo.assignedTeam !== b.team) {
+        await log("ASSIGNED", issue ? "PARTS_REQUESTED" : afterIssueStage, reqAt ?? visit, `จ่ายงานให้ ${b.team} · เข้างาน ${when}`);
+      }
+      if (issue) {
         await log(
           "PARTS_CHECKED",
-          "PARTS_CHECKED",
+          afterIssueStage,
           reqAt ?? visit,
           [b.warehouse ? `เบิกจาก ${b.warehouse}` : null, b.requisitionRef ? `ใบเบิก ${b.requisitionRef}` : null].filter(Boolean).join(" · ") || null
         );
       }
-      // ลำดับ: จ่ายงาน+วัน (หัวหน้าภาค) → คอนเฟิร์มลูกค้า (แอดมิน) → ยืนยันออกงาน (หัวหน้าภาค)
-      const when = `${b.visitDate}${b.visitTime ? ` เวลา ${b.visitTime} น.` : ""}`;
-      if (before("PARTS_CHECKED") || wo.assignedTeam !== b.team) {
-        await log("ASSIGNED", "AWAITING_CONFIRM", visit, `จ่ายงานให้ ${b.team} · เข้างาน ${when}`);
-      }
-      if (before("AWAITING_CONFIRM")) {
+      if (confirm) {
         await log("CONFIRMED", "ASSIGNED", visit, `เข้างาน ${when} (ไม่ผ่านคอนเฟิร์มในระบบ)`);
       }
       if (before("ASSIGNED")) {
@@ -6768,12 +7247,19 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({
       where: { id },
-      // เปิดงานใหม่ = ต้องไปอีกรอบ เริ่มที่แอดมินนัดลูกค้าใหม่ แล้วหัวหน้าภาคจ่ายงาน
+      // เปิดงานใหม่ = ต้องไปอีกรอบ เริ่มที่หัวหน้าภาคนัดวันเข้า แล้วเบิก (ถ้ามีของต้องเบิก) → คอนเฟิร์มลูกค้า → ปล่อยงาน
       data: {
         status: "PARTS_CHECKED",
         closedAt: null,
         closedById: null,
         closeResult: null,
+        /**
+         * วันนัด/คอนเฟิร์มของรอบที่ปิดไปแล้วไม่ใช่ของรอบนี้ — ค้างไว้ข้อความแจ้งลูกค้าในแอปขึ้นวันเก่า
+         * และใบโผล่ว่า "คอนเฟิร์มแล้ว" ทั้งที่ยังไม่ได้นัด (เหมือนย้อนขั้นไปนัดวัน ซึ่งล้างสามช่องนี้)
+         */
+        scheduledAt: null,
+        scheduledTime: null,
+        appointmentStatus: null,
         // ทุกขั้นตั้งสถานะใหม่ — สถานะว่างของใบที่ปิดไปแล้วไม่ใช่ของรอบนี้
         workStatus: workStatusForStage("PARTS_CHECKED"),
       },

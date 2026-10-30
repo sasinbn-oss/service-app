@@ -128,21 +128,22 @@ R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/payment" -H "$(H $A)" -
 echo "$R" | grep -q "ต้องแนบบิล" && pass "ไม่มีบิล ส่งต่อไม่ได้" || fail "ผ่านไปได้: $R"
 
 echo
-echo "═══ จ่ายเงินแล้วไปนัดวัน → คอนเฟิร์มลูกค้า → ถึงเบิกอะไหล่ได้ (นัดลูกค้าก่อนเบิก)"
+echo "═══ จ่ายเงินแล้วไปนัดวัน → ถึงเบิกอะไหล่ → คอนเฟิร์มลูกค้า (เบิกก่อนคอนเฟิร์ม)"
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/attachments" -H "$(H $A)" \
   -F "file=@$SP/site-photo.png;type=image/png" -F "role=RECEIPT" | J '"  แนบแล้ว: "+d.roleLabel'
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/payment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
 echo "  $(st $ID1)"
 st $ID1 | grep -q "^หัวหน้าภาค · นัดวันเข้า" && pass "จ่ายเงินแล้วไปหัวหน้าภาคนัดวันเข้า (ยังไม่เบิก)" || fail "หลังจ่ายเงิน: $(st $ID1)"
 R=$(checkparts $ID1)
-echo "$R" | grep -q "ยังไม่ถึงขั้นนี้" && pass "ยังไม่คอนเฟิร์มลูกค้า เบิกอะไหล่ไม่ได้" || fail "เบิกได้ก่อนคอนเฟิร์ม: $R"
+echo "$R" | grep -q "ยังไม่ถึงขั้นนี้" && pass "ยังไม่นัดวัน เบิกอะไหล่ไม่ได้" || fail "เบิกได้ก่อนนัดวัน: $R"
 TEAM1=$(curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.suggestedTeam')
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/assign" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM1\",\"scheduledAt\":\"$D1\"}" >/dev/null
-curl -s -X POST "localhost:4000/api/work-orders/$ID1/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
-st $ID1 | grep -q "^แอดมิน · เบิกอะไหล่" && pass "ลูกค้าคอนเฟิร์มแล้วมาถึงขั้นเบิกอะไหล่" || fail "ไม่มาขั้นเบิกอะไหล่: $(st $ID1)"
+st $ID1 | grep -q "^แอดมิน · เบิกอะไหล่" && pass "นัดวันแล้วมาถึงขั้นเบิกอะไหล่" || fail "ไม่มาขั้นเบิกอะไหล่: $(st $ID1)"
 [ "$(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")" = "CHECKING_PARTS" ] \
   && pass "ถึงขั้นเบิกอะไหล่ สถานะเป็น \"รอแอดมินเช็คอะไหล่\" ไม่ใช่ \"รออะไหล่\"" || fail "สถานะขั้นเบิกอะไหล่: $(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")"
-checkparts $ID1 | J 'd.statusLabel' | grep -q "ปล่อยงาน" && pass "เบิกอะไหล่เสร็จไปหัวหน้าภาคปล่อยงาน" || fail "เบิกแล้วไม่ไปปล่อยงาน"
+checkparts $ID1 | J 'd.statusLabel' | grep -q "^แอดมิน · คอนเฟิร์มลูกค้า" && pass "เบิกอะไหล่เสร็จไปแอดมินคอนเฟิร์มลูกค้า" || fail "เบิกแล้วไม่ไปคอนเฟิร์มลูกค้า: $(st $ID1)"
+curl -s -X POST "localhost:4000/api/work-orders/$ID1/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}' >/dev/null
+st $ID1 | grep -q "ปล่อยงาน" && pass "ลูกค้าคอนเฟิร์มแล้วไปหัวหน้าภาคปล่อยงาน" || fail "คอนเฟิร์มแล้วไม่ไปปล่อยงาน: $(st $ID1)"
 curl -s "localhost:4000/api/work-orders/$ID1" -H "$(H $A)" | J 'd.logs.map(l=>l.action).reverse().join(" → ")' | sed 's/^/  ประวัติ: /'
 
 echo
@@ -229,5 +230,6 @@ for i in $IDO $IDH; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H 
 DB "delete from \"Machine\" where \"branchId\"=$BID; delete from \"Branch\" where id=$BID" >/dev/null
 
 echo
-echo "IDS=$ID1,$ID2,$ID3,$ID4,$ID5,$ID6"
+# เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
+for i in $ID1 $ID2 $ID3 $ID4 $ID5 $ID6; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

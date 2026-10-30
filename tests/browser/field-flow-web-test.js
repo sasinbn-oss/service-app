@@ -94,7 +94,9 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     (await vis(t, "งานของฉัน").count()) && (await vis(t, J.code, false).count())
       ? pass("ช่างเปิดแอปมาเจอ งานของฉัน และเห็นใบที่ปล่อยให้ทีม") : fail("ช่างไม่ได้เริ่มที่งานของฉัน");
     (await vis(t, R.code, false).count()) === 0 ? pass("ใบที่ยังไม่ปล่อยงานไม่ขึ้นให้ช่าง") : fail("ใบยังไม่ปล่อยขึ้นให้ช่าง");
-    (await vis(t, "เบิกอะไหล่ (คลัง 94)").count()) === 0 ? pass("ไม่เห็นขั้นของแอดมิน/หัวหน้าภาค") : fail("ช่างเห็นแถบขั้นตอน");
+    // แถบขั้นตอนแบบใหม่ใช้ชื่อสั้น "เบิกอะไหล่" (ต.ค. 69 รอบสอง) — เช็คทั้งสองชื่อ ไม่งั้นข้อนี้ผ่านเองแม้แถบโผล่
+    (await vis(t, "เบิกอะไหล่ (คลัง 94)").count()) === 0 && (await vis(t, "เบิกอะไหล่").count()) === 0 && (await t.locator('[aria-label="ขั้นตอนงาน"]').count()) === 0
+      ? pass("ไม่เห็นขั้นของแอดมิน/หัวหน้าภาค") : fail("ช่างเห็นแถบขั้นตอน");
     const card = t.locator(`[aria-label="งาน ${J.code}"]`).locator("visible=true");
     await card.locator('[aria-label="ถึงหน้างาน"]').click();
     await t.waitForTimeout(4000);

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ใบรออะไหล่ที่แยกออกมา ต้องเสนอราคาเมื่อลูกค้ายังไม่ได้จ่ายค่าของตัวนั้น (เจ้าของงานแจ้ง ต.ค. 69 — WO-00528)
 #   · แยกตัวที่หมดจากใบที่เก็บเงินแล้ว ต้องบอกว่าลูกค้าจ่ายค่าตัวที่หมดแล้วหรือยัง (ไม่บอก = 400 ใบไม่ขยับ)
-#   · ใบแยกทุกใบรอของที่เช็คอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69) · ของเข้าแล้ว: ยังไม่จ่าย → เสนอราคา ·
+#   · ใบแยกทุกใบรอของที่เช็คอะไหล่ (นัดก่อนเบิก ต.ค. 69) · ของเข้าแล้ว: ยังไม่จ่าย → เสนอราคา ·
 #     จ่ายแล้ว → ไปนัดเลย (ไม่เสนอราคาซ้ำ จนกว่าจะระบุอะไหล่ใหม่) · ใบที่ไม่ต้องเสนอราคาไม่ถาม
 #   · แยกตอนเช็คอะไหล่ (ก่อนเสนอราคา) ไม่ถาม — ยังไม่มีใครจ่ายอะไร
 #   · อะไหล่ไม่ครบตอนปิดงาน (ของใหม่) ใช้กฎเสนอราคาเดียวกับระบุอะไหล่
@@ -50,12 +50,11 @@ source_in() {  # $1=id $2.. = อะไหล่ที่ตอบว่าม�
   local r=$(for p in "$@"; do printf '{"sparePartId":%s,"inStock":true,%s},' "$p" "$L94"; done)
   POST $A "work-orders/$id/parts-sourcing" "{\"results\":[${r%,}]}"
 }
-toIssue() {  # หัวหน้าภาคนัด → ลูกค้าคอนเฟิร์ม → ถึงขั้นเบิก
+toIssue() {  # หัวหน้าภาคนัด → ถึงขั้นเบิก (เบิกก่อนคอนเฟิร์มลูกค้า)
   local team=$(curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.suggestedTeam')
   POST $S "work-orders/$1/assign" "{\"team\":\"$team\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
-  POST $A "work-orders/$1/confirm-appointment" '{}' >/dev/null
 }
-paid() {  # เช็คครบ → เสนอราคา → รับเงิน → นัด → คอนเฟิร์ม → ถึงขั้นเบิก
+paid() {  # เช็คครบ → เสนอราคา → รับเงิน → นัด → ถึงขั้นเบิก
   source_in $1 $BOARD $BELT >/dev/null
   UP $1 quote-sample.pdf QUOTE; POST $A "work-orders/$1/quote" '{}' >/dev/null
   UP $1 site-photo.png RECEIPT; POST $A "work-orders/$1/payment" '{}' >/dev/null
@@ -68,14 +67,14 @@ CHILD() { DB "select id from \"WorkOrder\" where \"parentId\"=$1 order by id des
 
 echo "═══ แยกตัวที่หมดจากใบที่เก็บเงินแล้ว ($DOLD แฟรนไชส์หมดประกัน)"
 ID=$(open $DOLD); IDS="$IDS $ID"; paid $ID
-[ "$(ST $ID)" = "PARTS_REQUESTED" ] && pass "เตรียมใบ: เสนอราคา + รับเงิน + ลูกค้าคอนเฟิร์มแล้ว ถึงขั้นเบิก" || fail "เตรียมใบไม่ถึงขั้นเบิก: $(ST $ID)"
+[ "$(ST $ID)" = "PARTS_REQUESTED" ] && pass "เตรียมใบ: เสนอราคา + รับเงิน + นัดวันแล้ว ถึงขั้นเบิก" || fail "เตรียมใบไม่ถึงขั้นเบิก: $(ST $ID)"
 R=$(SPLIT $ID "")
 echo "$R" | grep -q "ลูกค้าจ่ายค่าอะไหล่ที่หมดไปแล้วหรือยัง" && [ "$(ST $ID)" = "PARTS_REQUESTED" ] && [ -z "$(CHILD $ID)" ] \
   && pass "ไม่บอกว่าลูกค้าจ่ายตัวที่หมดหรือยัง แยกไม่ได้ ใบไม่ขยับ ไม่มีใบใหม่" || fail "แยกได้โดยไม่ถาม: $(echo $R | head -c 150)"
 SPLIT $ID ',"splitPaid":false' >/dev/null
 C=$(CHILD $ID)
-[ -n "$C" ] && [ "$(ST $C)" = "PARTS_SOURCING" ] && [ "$(ST $ID)" = "ASSIGNED" ] \
-  && pass "ยังไม่จ่าย → ใบใหม่รอของที่เช็คอะไหล่ · ใบเดิมไปตามนัดด้วยของที่มี (ปล่อยงาน)" || fail "ใบใหม่ $C: $(ST ${C:-0}) · ใบเดิม $(ST $ID)"
+[ -n "$C" ] && [ "$(ST $C)" = "PARTS_SOURCING" ] && [ "$(ST $ID)" = "AWAITING_CONFIRM" ] \
+  && pass "ยังไม่จ่าย → ใบใหม่รอของที่เช็คอะไหล่ · ใบเดิมไปคอนเฟิร์มลูกค้าด้วยของที่มี" || fail "ใบใหม่ $C: $(ST ${C:-0}) · ใบเดิม $(ST $ID)"
 [ "$(DB "select string_agg(sp.\"partCode\"||':'||coalesce(p.\"inStock\"::text,'null'),',') from \"WorkOrderPart\" p join \"SparePart\" sp on sp.id=p.\"sparePartId\" where p.\"workOrderId\"=$C and p.kind='WAITING'")" = "SP-BELT:false" ] \
   && pass "ใบใหม่มีแต่ตัวที่หมด และยังขึ้นว่าหมด (ป้ายแดง)" || fail "อะไหล่ใบใหม่ผิด"
 [ "$(DB "select status||'|'||(note like '%ลูกค้ายังไม่จ่าย%')::text from \"WorkOrderLog\" where \"workOrderId\"=$C and action='SPLIT_FROM'")" = "PARTS_SOURCING|true" ] \
@@ -112,7 +111,7 @@ source_in $ID $BOARD $BELT >/dev/null
 toIssue $ID
 R=$(SPLIT $ID "")
 C=$(CHILD $ID)
-[ -n "$C" ] && [ "$(ST $C)" = "PARTS_SOURCING" ] && [ "$(ST $ID)" = "ASSIGNED" ] && pass "สาขาบริษัท แยกได้โดยไม่ถาม ใบใหม่รอของที่เช็คอะไหล่" || fail "สาขาบริษัท: $(echo $R | head -c 150)"
+[ -n "$C" ] && [ "$(ST $C)" = "PARTS_SOURCING" ] && [ "$(ST $ID)" = "AWAITING_CONFIRM" ] && pass "สาขาบริษัท แยกได้โดยไม่ถาม ใบใหม่รอของที่เช็คอะไหล่ (ใบเดิมไปคอนเฟิร์มลูกค้า)" || fail "สาขาบริษัท: $(echo $R | head -c 150)"
 source_in $C $BELT >/dev/null
 [ "$(ST $C)" = "PARTS_CHECKED" ] && pass "ของเข้าแล้วไปนัดเลย (ไม่ต้องเสนอราคา)" || fail "สาขาบริษัทใบแยก: $(ST $C)"
 

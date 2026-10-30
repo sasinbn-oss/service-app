@@ -21,6 +21,8 @@ VISIT=$(day 33)
 
 LOGINS="'zz.area','zz.sup1','zz.sup2'"
 cleanup() {
+  # ใบที่แอดมินเปิดไว้เทียบขอบเขต (สาขาคนอื่น · แฟรนไชส์) — ไม่ได้สร้างโดยบัญชีทดสอบ ต้องลบเอง ไม่งั้นค้างสะสม
+  for w in ${W6:-} ${WD:-}; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$w" -H "$(H $A)"; done
   DB "delete from \"WorkOrder\" where \"createdById\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null
   DB "update \"Branch\" set \"cocoSupervisorId\"=null where \"cocoSupervisorId\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null
   DB "update \"User\" set \"areaId\"=null where \"employeeCode\" in ($LOGINS)" >/dev/null

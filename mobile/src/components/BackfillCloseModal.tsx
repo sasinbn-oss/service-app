@@ -17,10 +17,6 @@ import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
 
-const ORDER = [
-  "NEW", "INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", "PARTS_REQUESTED",
-  "PARTS_CHECKED", "AWAITING_CONFIRM", "ASSIGNED", "IN_PROGRESS", "DONE",
-];
 const REASONS = [
   "ช่างซ่อมเสร็จแล้วแต่ไม่ได้กดในแอป",
   "งานเก่าก่อนใช้ระบบ",
@@ -51,6 +47,7 @@ export interface BackfillOrder {
 
 export default function BackfillCloseModal({
   order,
+  stages,
   teams,
   technicians,
   results,
@@ -58,14 +55,19 @@ export default function BackfillCloseModal({
   onDone,
 }: {
   order: BackfillOrder;
+  /**
+   * ลำดับขั้นของเซิร์ฟเวอร์ (options.stages) — ถามขั้นไหนตัดสินด้วย before() เดียวกับ backfill-close ฝั่งเซิร์ฟเวอร์
+   * เดิมเขียนลำดับไว้ในไฟล์นี้แล้วตกขั้นโอน/เบิกคลังอื่น ใบที่ค้างขั้นนั้นหาตำแหน่งไม่เจอ ถามทุกขั้นซ้ำ
+   */
+  stages: string[];
   teams: string[];
   technicians: { id: number; name: string; employeeCode: string; team?: string | null }[];
   results: { value: string; label: string }[];
   onClose: () => void;
   onDone: () => void;
 }) {
-  const at = ORDER.indexOf(order.status);
-  const before = (s: string) => at <= ORDER.indexOf(s);
+  const at = stages.indexOf(order.status);
+  const before = (s: string) => at <= stages.indexOf(s);
   // อะไหล่ที่รู้อยู่แล้วในใบนี้ — ส่วนใหญ่คือของที่ใช้จริง แอดมินเอาออกได้ถ้าไม่ได้ใช้
   const knownParts = useMemo(() => {
     const m = new Map<number, Part>();

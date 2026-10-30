@@ -24,6 +24,11 @@ export type HomeStackParamList = {
   PartsOutReport: undefined;
   /** อะไหล่เบิกแล้ว · งานยังไม่จบ — ของออกจากคลังแล้ว ค้างอยู่ใบไหน */
   IssuedPartsReport: undefined;
+  /**
+   * ประวัติเคลม — ทุกชิ้นที่ช่างเคยส่งเคลม · branchCode/machineCode = มาจากลิงก์ "เคลมเครื่องนี้/สาขานี้ทั้งหมด"
+   * ในใบงาน (กรองตรงตัว ทุกช่วงเวลา) · เปิดจากเมนูส่ง {} เพื่อล้างตัวกรองที่ค้างจากลิงก์
+   */
+  ClaimHistory: { branchCode?: string; machineCode?: string } | undefined;
   MachineDashboard: undefined;
   MachineImport: undefined;
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม · search = ค้นต่อจากงานของฉันวันนี้ (ค้นในใบทั้งหมด) */
@@ -34,7 +39,8 @@ export type HomeStackParamList = {
   WorkOrderForm:
     | { outageId?: number; presetTitle?: string; branchCode?: string; machineCode?: string }
     | undefined;
-  WorkOrderDetail: { id: number; open?: "close" | "stage" | "problem" };
+  /** open = เปิดฟอร์มให้เลยเมื่อโหลดเสร็จ (มาจากปุ่มบนการ์ดงานของฉัน) · reschedule = แอดมินเลื่อนวันนัด */
+  WorkOrderDetail: { id: number; open?: "close" | "stage" | "problem" | "reschedule" };
   TransferDocument: undefined;
   FlowList: undefined;
   FlowRun: { id: number; title: string };

@@ -20,6 +20,7 @@ cleanup() {
   for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$BC');
       delete from \"Branch\" where code='$BC';
+      delete from \"SparePart\" where \"offCatalog\" and name='${OFFNAME:-__ไม่มี__}';
       delete from \"User\" where \"employeeCode\"='ZTCP$SUF';
       update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
@@ -40,8 +41,8 @@ IDS="$ID"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":2}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 POST $S "work-orders/$ID/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
-POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-TC$SUF\"}]}" >/dev/null
+POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 curl -s -X POST "localhost:4000/api/work-orders/$ID/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] || { echo "FAIL เตรียมใบงานไม่ถึงขั้นเข้างาน"; exit 1; }
@@ -69,6 +70,38 @@ T=$(login T001)
 DB "update \"User\" set team='กระบี่' where \"employeeCode\"='T001'" >/dev/null
 curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $T)" | J 'd.rows.some(r=>r.id==='$C')?"in":"out"' | grep -q in && pass "ช่างในทีมเห็นใบทดสอบในกล่องงาน (ปิดงานทดสอบได้)" || fail "ช่างไม่เห็นใบทดสอบ"
 DB "update \"User\" set team='กรุงเทพ' where \"employeeCode\"='T001'" >/dev/null
+
+echo
+echo "═══ คัดลอกใบที่เบิกของนอกสโตร์แล้ว — ใบทดสอบต้องเดินเส้นทางเดียวกับใบจริง"
+# ของนอกสโตร์ไม่มีเลขใบเบิก "เบิกแล้ว" อ่านจากประวัติ — ใบทดสอบที่ไม่มีประวัติเคยถูกนับว่ายังไม่เบิก
+# คอนเฟิร์มแล้วไปขั้นเบิก ทั้งที่ใบจริงไปปล่อยงาน
+OFFNAME="ปะเก็นทดสอบคัดลอก$SUF"
+DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W2','WASHER','HB - Huebsch',now())" >/dev/null
+O=$(POST $A work-orders "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W2\",\"model\":\"Huebsch\",\"symptom\":\"น้ำรั่วที่ประตู\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+IDS="$O $IDS"
+POST $S "work-orders/$O/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1}]}" >/dev/null
+OFF=$(DB "select id from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'")
+POST $A "work-orders/$O/parts-sourcing" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
+# ขั้นเสนอราคาไม่ใช่เรื่องของเทสต์นี้ — พาใบไปขั้นนัดวันเข้าในฐานข้อมูล
+DB "update \"WorkOrder\" set status='PARTS_CHECKED' where id=$O" >/dev/null
+POST $S "work-orders/$O/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
+POST $A "work-orders/$O/parts-check" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
+[ "$(DB "select status from \"WorkOrder\" where id=$O")" = "AWAITING_CONFIRM" ] || fail "เตรียมใบนอกสโตร์ไม่ถึงขั้นคอนเฟิร์ม: $(DB "select status from \"WorkOrder\" where id=$O")"
+C3=$(POST $A "work-orders/$O/test-copy" '{}' | J 'd.id'); IDS="$C3 $IDS"
+curl -s "localhost:4000/api/work-orders/$C3" -H "$(H $A)" | J 'd.issueLeft' | grep -qx false \
+  && pass "ใบทดสอบของใบที่เบิกของนอกสโตร์แล้ว: issueLeft=false เหมือนใบจริง" || fail "ใบทดสอบ issueLeft: $(curl -s "localhost:4000/api/work-orders/$C3" -H "$(H $A)" | J 'd.issueLeft')"
+POST $A "work-orders/$C3/confirm-appointment" '{}' >/dev/null
+POST $A "work-orders/$O/confirm-appointment" '{}' >/dev/null
+[ "$(DB "select status from \"WorkOrder\" where id=$C3")|$(DB "select status from \"WorkOrder\" where id=$O")" = "ASSIGNED|ASSIGNED" ] \
+  && pass "คอนเฟิร์มแล้วใบทดสอบกับใบจริงไปปล่อยงานเหมือนกัน (ฐานข้อมูล)" \
+  || fail "คอนเฟิร์ม: ใบทดสอบ $(DB "select status from \"WorkOrder\" where id=$C3") · ใบจริง $(DB "select status from \"WorkOrder\" where id=$O")"
+# ใบต้นทางปิดแล้ว — ใบทดสอบเริ่มที่ช่าง ต้องได้บรรทัดผลเบิกด้วย ไม่งั้นช่างส่งกลับ (ร้านปิด) แล้วคอนเฟิร์มไปขั้นเบิก
+DB "update \"WorkOrder\" set status='DONE', \"closedAt\"=now() where id=$O" >/dev/null
+C4=$(POST $A "work-orders/$O/test-copy" '{}' | J 'd.id'); IDS="$C4 $IDS"
+[ "$(DB "select status from \"WorkOrder\" where id=$C4")|$(DB "select string_agg(action,',' order by id) from \"WorkOrderLog\" where \"workOrderId\"=$C4")" = "IN_PROGRESS|TEST_COPY,PARTS_CHECKED" ] \
+  && curl -s "localhost:4000/api/work-orders/$C4" -H "$(H $A)" | J 'd.issueLeft' | grep -qx false \
+  && pass "คัดลอกใบที่ปิดแล้ว (มีของนอกสโตร์ที่เบิกแล้ว): เริ่มที่ช่าง ได้บรรทัดผลเบิก issueLeft=false (ฐานข้อมูล)" \
+  || fail "คัดลอกใบปิดแล้ว: $(DB "select status from \"WorkOrder\" where id=$C4") · $(DB "select string_agg(action,',' order by id) from \"WorkOrderLog\" where \"workOrderId\"=$C4")"
 
 echo
 echo "═══ คัดลอกใบที่ปิดแล้ว"

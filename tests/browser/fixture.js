@@ -62,7 +62,7 @@ async function setup() {
   }
   /**
    * แอดมินเช็คอะไหล่ว่ามีครบทุกตัวที่ยังไม่เบิก (นัดลูกค้าก่อนเบิก ต.ค. 69 — ทุกใบที่ใช้อะไหล่ผ่านขั้นนี้)
-   * คลัง 94 = ไม่ต้องโอน · ส่งคลังอื่นมาได้ถ้าเทสต์อยากให้ต้องโอน (หัวหน้าภาคเบิก/โอนก่อนปล่อยงาน)
+   * คลัง 94 = ไม่ต้องโอน · ส่งคลังอื่นมาได้ถ้าเทสต์อยากให้ต้องโอน (หัวหน้าภาคเบิก/โอนก่อนคอนเฟิร์มลูกค้า)
    */
   async function source(id, warehouse = "คลังลาดพร้าว 94") {
     const d = await call(A, "GET", `/work-orders/${id}`);
@@ -71,17 +71,35 @@ async function setup() {
       .map((p) => ({ sparePartId: p.sparePartId, inStock: true, ...(p.offCatalog ? {} : { warehouse }) }));
     return call(A, "POST", `/work-orders/${id}/parts-sourcing`, { results });
   }
-  /** หัวหน้าภาคนัดวัน (ทีมประจำสาขา) → แอดมินคอนเฟิร์มลูกค้า — ใบที่ยังไม่เบิกไปถึงขั้นเบิก ใบที่เบิกครบไปปล่อยงาน */
+  /**
+   * หัวหน้าภาคนัดวัน (ทีมประจำสาขา) อย่างเดียว — ไม่คอนเฟิร์มลูกค้าให้แล้ว
+   * สายงานใหม่ (ต.ค. 69 รอบสอง) เบิกก่อนแล้วค่อยโทรคอนเฟิร์ม ใบที่ยังไม่เบิกจึงไปขั้นเบิก (PARTS_REQUESTED)
+   * ใบที่เบิกครบแล้ว/ไม่ใช้อะไหล่ไปขั้นคอนเฟิร์มลูกค้า — เดิม helper นี้คอนเฟิร์มต่อเลย
+   * พอลำดับสลับ การคอนเฟิร์มตรงนี้โดนกันด้วย 409 เงียบ ๆ แล้วเทสต์ไปพังไกลจากต้นเหตุ
+   */
   async function schedule(id, scheduledAt = visitDay(30)) {
     const d = await call(A, "GET", `/work-orders/${id}`);
-    await call(S, "POST", `/work-orders/${id}/assign`, { team: d.suggestedTeam, scheduledAt });
-    return call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
+    return call(S, "POST", `/work-orders/${id}/assign`, { team: d.suggestedTeam, scheduledAt });
+  }
+  /** แอดมินเบิกทุกตัวที่ยังไม่เบิกจากคลัง 94 (ขั้นเบิก) — ใบที่ลูกค้ายังไม่คอนเฟิร์มไปขั้นคอนเฟิร์มลูกค้า */
+  async function issue(id, requisitionNo = `RQ-WEB-${id}`) {
+    const d = await call(A, "GET", `/work-orders/${id}`);
+    const results = d.waitingParts
+      .filter((p) => !(p.inStock === true && p.requisitionNo))
+      .map((p) => (p.offCatalog
+        ? { sparePartId: p.sparePartId, inStock: true }
+        : { sparePartId: p.sparePartId, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo }));
+    return call(A, "POST", `/work-orders/${id}/parts-check`, { results });
+  }
+  /** แอดมินคอนเฟิร์มลูกค้า (ของพร้อมแล้ว) — body ว่าง = ร้านตกลงวันเดิม */
+  async function confirm(id, body = {}) {
+    return call(A, "POST", `/work-orders/${id}/confirm-appointment`, body);
   }
   async function cleanup() {
     for (const id of created) await call(A, "DELETE", `/work-orders/${id}`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
   }
-  return { A, sql, call, login, part, workOrder, source, schedule, supervisor: () => S, cleanup };
+  return { A, sql, call, login, part, workOrder, source, schedule, issue, confirm, supervisor: () => S, cleanup };
 }
 
 module.exports = { setup, visitDay };

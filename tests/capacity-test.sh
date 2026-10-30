@@ -36,6 +36,8 @@ echo "═══ เปิดใบงานพร้อมขนาด"
 WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactName":"คุณสมหญิง","contactPhone":"0812345678","machines":[{"code":"W41","model":"Huebsch","capacityKg":13,"symptom":"น้ำไม่เข้า"},{"code":"D41","model":"Haier","capacityKg":25,"symptom":"ไม่ร้อน"}]}')
 ID=$(echo "$WO" | J 'd.orders[0].id')
+# สองเครื่อง = สองใบ — เก็บใบที่สองไว้ลบตอนจบด้วย
+ID1B=$(echo "$WO" | J 'd.orders[1]?d.orders[1].id:""')
 echo "$WO" | J 'd.orders.map(o=>o.code).join(" ")' | sed 's/^/  เปิดได้: /'
 R=$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)")
 echo "$R" | J '"  "+d.machineCode+" · "+d.machineModel+" · "+d.machineCapacityLabel'
@@ -78,5 +80,6 @@ if [ -z "$OID" ]; then echo "  (ข้าม — ไม่มีเคสว่�
 fi
 
 echo
-echo "IDS=$ID,$ID2"
+# เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
+for i in $ID $ID1B $ID2; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

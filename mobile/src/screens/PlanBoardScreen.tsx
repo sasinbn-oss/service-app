@@ -34,6 +34,7 @@ import EmptyState from "../components/EmptyState";
 import Spinner, { WasherIcon } from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
+import { APPOINTMENT_DONE, ISSUE_STAGES } from "../utils/stepPath";
 import TimelineModal, { TimelineButton, TimelineTarget } from "../components/TimelineModal";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
@@ -579,7 +580,17 @@ function stopTag(s: Stop) {
   // ร้านตกลงวันแล้ว แต่หัวหน้าภาคยังไม่ส่งช่าง — เหมือน "รอยืนยันออกงาน" ของงานซ่อม
   if (s.status === "INSPECT_DISPATCH") return { text: "ตรวจหน้างาน · รอส่งช่าง", tone: "warn" as const };
   if (s.kind === "INSPECT") return { text: "ตรวจหน้างาน", tone: "violet" as const };
-  if (s.status === "AWAITING_CONFIRM") return { text: "ยังไม่คอนเฟิร์มลูกค้า", tone: "warn" as const };
+  /**
+   * เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง) — ใบอยู่ขั้นเบิก/โอนหลายวันโดยมีวันนัดแล้ว ทีมถูกจองวันนั้นไว้
+   * แต่ของยังไม่พร้อม และส่วนใหญ่ร้านยังไม่รู้วัน · ใบที่คอนเฟิร์มไปก่อนสลับลำดับ ร้านรู้วันแล้ว เหลือแค่รอของ
+   */
+  if (ISSUE_STAGES.includes(s.status))
+    return {
+      text: APPOINTMENT_DONE.includes(s.appointmentStatus ?? "") ? "คอนเฟิร์มแล้ว · รอเบิก/โอนอะไหล่" : "รอเบิก/โอนอะไหล่ · ยังไม่คอนเฟิร์มลูกค้า",
+      tone: "warn" as const,
+    };
+  // ถึงขั้นนี้ของพร้อมแล้ว เหลือโทรบอกร้าน
+  if (s.status === "AWAITING_CONFIRM") return { text: "ของพร้อม · ยังไม่คอนเฟิร์มลูกค้า", tone: "warn" as const };
   if (s.status === "ASSIGNED") return { text: "ยังไม่ปล่อยงาน", tone: "warn" as const };
   return { text: s.appointmentLabel ?? s.statusLabel, tone: "ok" as const };
 }

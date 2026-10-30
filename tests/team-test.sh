@@ -14,6 +14,12 @@ day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOStrin
 D1=$(day 7)
 
 TECH=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)" | J 'd.technicians.find(t=>t.employeeCode==="T001").id')
+# คืนภาค/ทีมของผู้ใช้ทดสอบตอนจบ (CLAUDE.md) — ไม่งั้นทีม "กระบี่" ที่ตั้งข้างล่างค้างไปถึงชุดถัดไป ผลชุดอื่นขึ้นกับลำดับการรัน
+TDB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+OLD_REGION=$(TDB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
+OLD_TEAM=$(TDB "select coalesce(team,'') from \"User\" where \"employeeCode\"='T001'")
+restore_users() { TDB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'; update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null; }
+trap restore_users EXIT
 # ตั้งภาคให้หัวหน้าภาคตรงกับสาขาที่ทดสอบ ไม่งั้นลำดับการรันเทสต์มีผลต่อผลลัพธ์
 SUPID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
 TESTREGION=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].region')
@@ -129,5 +135,6 @@ else
 fi
 
 echo
-echo "IDS=$ID,$ID2"
+# เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
+for i in $ID $ID2; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

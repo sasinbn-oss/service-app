@@ -5,7 +5,16 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { documentPath, saveDocument } from "../documents/store";
-import { PART_NO_MAX, ReportDetails, applyPartsImport, notInBatch, parsePartsWorkbook, planPartsImport, reportDetails } from "../utils/sparePartImport";
+import {
+  PART_NO_MAX,
+  ReportDetails,
+  applyPartsImport,
+  newProgress,
+  notInBatch,
+  parsePartsWorkbook,
+  planPartsImport,
+  reportDetails,
+} from "../utils/sparePartImport";
 
 const router = Router();
 
@@ -105,7 +114,12 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
       if (n++ >= THUMB_MAX_COUNT) break;
       thumbs[r.partCode] = `data:${r.image.mime};base64,${r.image.data.toString("base64")}`;
     }
-    return res.json({ applied: false, imageCount: parsed.imageCount, summary: plan.summary, ...details, thumbs });
+    // ค่าทุกแถว (เฉพาะหน้าตรวจ ไม่เก็บ) — รหัสเดียวกันอยู่หลายไฟล์ หน้าตรวจจำลองการอัปเดตตามลำดับไฟล์เอง
+    // (ช่องว่างในไฟล์หลังคงค่าจากไฟล์ก่อน) แต่ละไฟล์ถูกเทียบกับฐานข้อมูลแยกกัน ผลรวมจึงคิดที่เซิร์ฟเวอร์ไม่ได้
+    const rowValues = Object.fromEntries(
+      parsed.rows.map((r) => [r.partCode, { line: r.line, name: r.name, brand: r.brand, category: r.category, partNo: r.partNo, hasImage: !!r.image }])
+    );
+    return res.json({ applied: false, imageCount: parsed.imageCount, summary: plan.summary, ...details, thumbs, rowValues });
   }
 
   // เขียนประวัติก่อนลงมือ — พังกลางทาง (ฐานข้อมูลหลุด/เซิร์ฟเวอร์รีสตาร์ท) ส่วนที่บันทึกไปแล้วต้องยังมีในรายงาน
@@ -115,10 +129,28 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
     data: { batchId, byUserId: req.auth!.userId, byName: me?.name ?? null, fileName, summary: { ...plan.summary, incomplete: true }, details: details as object },
   });
   let done: Awaited<ReturnType<typeof applyPartsImport>>;
+  const progress = newProgress();
   try {
-    done = await applyPartsImport(parsed, plan);
+    done = await applyPartsImport(parsed, plan, progress);
   } catch (e) {
     console.error(`[spare-part-import] ${fileName} หยุดกลางทาง`, e);
+    // ยอดในประวัติ = ที่บันทึกจริง — เดิมเป็นยอดที่ตั้งใจ (แถบล่าสุด/รายงานบอก "เพิ่ม 300" ทั้งที่ไม่ได้เพิ่มสักตัว)
+    // ถ้าฐานข้อมูลหลุดจนแก้ประวัติไม่ได้ ประวัติยังติดป้ายอัปเดตไม่ครบจากตอนสร้าง
+    await prisma.sparePartImport
+      .update({
+        where: { id: log.id },
+        data: {
+          summary: {
+            ...plan.summary,
+            created: progress.created,
+            updated: progress.updated,
+            images: progress.images,
+            changed: progress.codes.size,
+            incomplete: true,
+          },
+        },
+      })
+      .catch(() => undefined);
     return res.status(500).json({
       error: `${fileName} อัปเดตไม่ครบ — บางรายการอาจบันทึกไปแล้ว กดอัปเดตไฟล์นี้ซ้ำได้ (ทำเฉพาะส่วนที่ยังต่าง)`,
     });

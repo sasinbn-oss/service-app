@@ -34,6 +34,8 @@ import {
   ackAdminReview,
   cancelAdminReview,
 } from "../components/AdminReview";
+import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
+import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 
 /** ค้างเกินนี้ขึ้นแดง — ตัวเลขเดียวกับชิป "ค้างขั้นเดิมเกิน 3 วัน" ในหน้ารายการ */
 const STALE_DAYS = 3;
@@ -42,9 +44,11 @@ const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTim
 
 /** "แอดมิน · เบิกอะไหล่ (คลัง 94)" → "เบิกอะไหล่ (คลัง 94)" — ตำแหน่งรู้อยู่แล้วว่าเป็นของตัวเอง */
 const stageName = (label: string) => label.split(" · ").slice(1).join(" · ") || label;
+/** ขั้นโอน/เบิกคลังอื่น — ของหัวหน้าภาคเท่านั้น (myTurn ในหน้าใบงานตัดแอดมินออกเหมือนกัน) */
+const SUPERVISOR_ISSUE_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
 
 type Props = {
-  onOpen: (id: number, open?: "stage" | "close") => void;
+  onOpen: (id: number, open?: "stage" | "close" | "reschedule") => void;
   /** ค้นไม่เจอในงานของตัวเอง → ค้นต่อในใบงานซ่อมทั้งหมด */
   onSearchAll?: (q: string) => void;
 };
@@ -240,6 +244,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         </View>
       ) : null}
 
+      {/* Admin Spare Part ดูย้อนหลังได้จากหน้าแรกของตัวเอง (เจ้าของงานขอ ต.ค. 69) — ใบที่รอตรวจอยู่ในรายการด้านล่างแล้ว
+          วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices) */}
+      {user?.partsAdmin ? <ClaimHistoryCard /> : null}
       {error ? (
         <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={error} />
       ) : !rows ? (
@@ -297,7 +304,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     )}
                     {r.orphan ? <Tag text="ไม่มีคนรับ" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     {r.overdue ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
-                    {r.rescheduled ? <Tag text="ลูกค้าขอเปลี่ยนวัน" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
+                    {/* วันถูกเลื่อน (ลูกค้าขอตอนคอนเฟิร์ม หรือแอดมินเลื่อนวันนัด ต.ค. 69) — หัวหน้าภาคต้องเช็คทีมวันใหม่ก่อนปล่อย */}
+                    {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     <AdminReviewTag review={r.adminReview} />
                     <View style={{ flex: 1 }} />
                     <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>{d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}</Text>
@@ -381,6 +389,7 @@ function CardActions({
   onReply: () => void;
   onChanged: () => Promise<void>;
 }) {
+  const { user } = useAuth();
   const detail = (
     <TouchableOpacity style={styles.detailBtn} onPress={() => onOpen(r.id)} accessibilityLabel={`รายละเอียด ${r.code}`}>
       <Ionicons name="document-text-outline" size={16} color={colors.navy} />
@@ -428,11 +437,36 @@ function CardActions({
     </TouchableOpacity>
   );
   // แอดมินไม่มีปุ่มส่งกลับ — เป็นปุ่มของหัวหน้าภาคเท่านั้น
+  // ใบเลยนัด: วันที่ร้านไม่ได้ตกลงผ่านไปแล้ว สิ่งแรกที่ต้องทำคือนัดวันใหม่ — ปุ่มลัดเปิดฟอร์มเลื่อนวันนัด (ต.ค. 69)
+  // ขึ้นเฉพาะใบที่หน้าใบงานจะเปิดฟอร์มให้จริง (ขั้น + สิทธิ์เดียวกัน) — ใบนัดตรวจที่เลยนัดก็ติดป้ายเลยนัด
+  // แต่เลื่อนด้วยฟอร์มนี้ไม่ได้ (แก้วันในฟอร์มนัดร้าน) และ Admin Spare Part ดูอย่างเดียว · กดแล้วไม่มีฟอร์มดูเหมือนปุ่มเสีย
   if (isAdmin) {
+    /**
+     * ขั้นโอน/เบิกคลังอื่นเป็นของหัวหน้าภาค แอดมินทำแทนไม่ได้ (หน้าใบงานไม่มีปุ่มให้) — ใบมาอยู่ในกล่องแอดมินเพราะเลยนัด
+     * หรือไม่มีหัวหน้าภาครับ · ปุ่ม "ทำขั้น…" จะพาไปหน้าที่ไม่มีอะไรให้กด จึงบอกว่ารอใครแทน
+     * สิ่งที่แอดมินทำได้คือเลื่อนวันนัด (ปุ่มข้างหน้า) แล้วตามหัวหน้าภาค
+     */
+    const supOnly = SUPERVISOR_ISSUE_STAGES.includes(r.status);
     return (
       <View style={styles.actions}>
         {detail}
-        {go}
+        {r.overdue && r.scheduledAt && RESCHEDULE_STAGES.includes(r.status) && canMoveDates(user) ? (
+          <TouchableOpacity style={[styles.sideBtn, styles.moveBtn]} onPress={() => onOpen(r.id, "reschedule")} accessibilityLabel={`เลื่อนวันนัด ${r.code}`}>
+            <Ionicons name="calendar-outline" size={16} color={colors.navy} />
+            <Text style={[styles.sideText, { color: colors.navy }]} numberOfLines={1}>
+              เลื่อนวันนัด
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        {supOnly ? (
+          <View style={styles.supWait} accessibilityLabel={`รอหัวหน้าภาค ${r.code}`}>
+            <Text style={styles.supWaitText} numberOfLines={1}>
+              รอหัวหน้าภาค{stageLabel ? ` · ${stageLabel}` : ""}
+            </Text>
+          </View>
+        ) : (
+          go
+        )}
       </View>
     );
   }
@@ -672,4 +706,20 @@ const styles = StyleSheet.create({
   undoBtn: { borderWidth: 1, borderColor: colors.borderStrong },
   ackBtn: { flex: 1, borderWidth: 1.5, borderColor: colors.success },
   replyBtn: { backgroundColor: colors.roleAdmin },
+  // กรอบกรมท่าแบบปุ่มรองในหน้าใบงาน ("เลื่อนวันนัด" · "แจ้งปัญหาหน้างาน")
+  moveBtn: { borderWidth: 1.5, borderColor: colors.navy },
+  // ไม่ใช่ปุ่ม — ขนาดเท่าปุ่มขั้นให้แถวไม่กระโดด แต่เส้นประจาง ๆ บอกว่ากดไม่ได้ ขั้นนี้รอคนอื่น
+  supWait: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+  },
+  supWaitText: { fontSize: 13.5, lineHeight: 20, fontWeight: "700", color: colors.textMuted, flexShrink: 1 },
 });
