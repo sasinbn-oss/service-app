@@ -30,7 +30,7 @@ import AreaMap, { ChartKind, ChartSwitch } from "../components/AreaMap";
 import { CallButton, PhoneLine, phoneDigits } from "../components/PhoneLink";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
-import { regionsOf } from "../utils/regions";
+import { regionsBody, regionsOf } from "../utils/regions";
 
 interface TeamInfo {
   name: string;
@@ -40,7 +40,8 @@ interface TeamInfo {
 interface MapData {
   asOf: string;
   canEdit: boolean;
-  regions: { name: string; teams: TeamInfo[] }[];
+  /** noRegion = คอลัมน์ "ไม่ระบุภาค" (ทีมที่สาขาไม่ได้ตั้งภาค) — ไม่ใช่ภาคที่หัวหน้าภาคถือได้ */
+  regions: { name: string; noRegion?: boolean; teams: TeamInfo[] }[];
   /** regions = ทุกภาคที่ถือ (หลายภาคได้) — เซิร์ฟเวอร์รุ่นเก่าส่งแค่ region อ่านผ่าน regionsOf() */
   supervisors: { id: number; name: string; code: string; phone: string | null; region: string | null; regions?: string[]; teams: string[] }[];
   technicians: { id: number; name: string; code: string; phone: string | null; team: string | null; staleTeam: string | null }[];
@@ -321,6 +322,7 @@ export default function CoverageMapScreen() {
     return m;
   }, [data]);
   const groupNames = useMemo(() => new Set((data?.groups ?? []).map((g) => g.name)), [data]);
+  const pseudoRegions = useMemo(() => new Set((data?.regions ?? []).filter((r) => r.noRegion).map((r) => r.name)), [data]);
 
   const drop = useCallback(
     (g: Grab, z: Zone) => {
@@ -360,6 +362,10 @@ export default function CoverageMapScreen() {
         }
       } else if (z.kind === "region") {
         const region = z.target!;
+        // ห้ามตั้งแต่ตอนวาง ไม่ใช่รอให้บันทึกแล้วเซิร์ฟเวอร์ตอบ 400 — บันทึกทีละคน พังกลางทางแล้วคนที่เหลือในรายการหายตอนโหลดใหม่
+        if (pseudoRegions.has(region)) {
+          return feedback.toast("info", `ทีมกลุ่ม "${region}" สาขายังไม่ได้ตั้งภาคในทะเบียนสาขา — วางหัวหน้าภาคที่ทีมแทน`);
+        }
         if (cur.regions.includes(region) && !fromTeam) {
           // วางกลับที่เดิม (ลากหลุดมือในภาคตัวเอง) ไม่ต้องเตือน — เตือนเฉพาะลากมาจากที่อื่น
           return fromRegion === region ? undefined : feedback.toast("info", `${s.name} ดูแลภาค${region} อยู่แล้ว`);
@@ -385,7 +391,7 @@ export default function CoverageMapScreen() {
       setSupState((m) => new Map(m).set(g.id, next));
       setLog((l) => [...l, text]);
     },
-    [data, techTeam, supState, regionOfTeam, groupNames]
+    [data, techTeam, supState, regionOfTeam, groupNames, pseudoRegions]
   );
 
   async function save() {
@@ -406,8 +412,8 @@ export default function CoverageMapScreen() {
         const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
         const same = sameSet(st.regions, was) && sameSet(st.teams, s.teams);
         if (!same) {
-          // ส่ง regions ทั้งชุด ไม่ส่ง region เดี่ยว — region เดี่ยวคือภาษาของแอปรุ่นเก่า (เซิร์ฟเวอร์ถือว่าแทนภาคแรก)
-          await api.patch(`/auth/users/${s.id}`, { regions: st.regions, supervisedTeams: st.teams }, { loadingText: false });
+          // regions ทั้งชุด (เซิร์ฟเวอร์ใหม่ใช้ตัวนี้) + region ภาคแรกให้เซิร์ฟเวอร์รุ่นเก่าช่วง deploy — ดู regionsBody
+          await api.patch(`/auth/users/${s.id}`, { ...regionsBody(st.regions), supervisedTeams: st.teams }, { loadingText: false });
           done++;
         }
       }

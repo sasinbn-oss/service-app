@@ -346,7 +346,7 @@ export default function IssuedPartsReportScreen({ navigation }: Props) {
             />
           </View>
         ) : null}
-        {/* หัวหน้าภาคเห็นภาคเดียวอยู่แล้ว — ช่องภาคขึ้นเมื่อมีให้เลือกจริง */}
+        {/* ช่องภาคขึ้นเมื่อมีให้เลือกจริง — หัวหน้าภาคที่ถือภาคเดียวไม่ต้องเห็นช่องที่มีตัวเลือกเดียว ส่วนคนที่ถือหลายภาคได้ช่องนี้เอง */}
         {regions.length > 1 ? (
           <View style={styles.dd}>
             <Dropdown

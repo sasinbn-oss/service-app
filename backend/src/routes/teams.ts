@@ -162,7 +162,13 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
     regions: [...regions]
       // ภาคที่ไม่ระบุไว้ท้ายสุด ที่เหลือเรียงตามชื่อ
       .sort(([a], [b]) => (a === NO_REGION ? 1 : b === NO_REGION ? -1 : a.localeCompare(b, "th")))
-      .map(([name, teams]) => ({ name, teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")) })),
+      // noRegion = คอลัมน์รวมทีมที่สาขาส่วนใหญ่ไม่ได้ตั้งภาค ไม่ใช่ภาคจริง — ผังห้ามวางหัวหน้าภาคที่หัวคอลัมน์นี้
+      // เพราะชื่อ "ไม่ระบุภาค" ไม่มีในทะเบียนสาขา บันทึกแล้วเซิร์ฟเวอร์ปฏิเสธกลางคัน (คนที่อยู่ถัดไปในรายการรอบันทึกไม่ถูกบันทึก)
+      .map(([name, teams]) => ({
+        name,
+        ...(name === NO_REGION ? { noRegion: true } : {}),
+        teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")),
+      })),
     supervisors: users
       .filter((u) => u.role === "SUPERVISOR")
       .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || regionsOf(u).some((r) => regions.has(r)))

@@ -30,7 +30,7 @@ import RosterImportModal from "../components/RosterImportModal";
 import AreaTeamImportModal from "../components/AreaTeamImportModal";
 import Dropdown from "../components/Dropdown";
 import { canPickFile } from "../utils/filePicker";
-import { regionsOf } from "../utils/regions";
+import { regionsBody, regionsOf } from "../utils/regions";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
@@ -234,7 +234,7 @@ export default function ManageUsersScreen() {
 
   async function update(
     id: number,
-    patch: { role?: Role; regions?: string[]; team?: string | null; supervisedTeams?: string[]; maidBranches?: string[] }
+    patch: { role?: Role; regions?: string[]; region?: string | null; team?: string | null; supervisedTeams?: string[]; maidBranches?: string[] }
   ) {
     setSavingId(id);
     try {
@@ -493,7 +493,7 @@ export default function ManageUsersScreen() {
                   value={regionsOf(u)}
                   options={regions}
                   // เอาภาคออกหมดได้ — หัวหน้าภาคที่ดูแลตามทีมอย่างเดียวไม่ต้องมีภาค
-                  onChange={(next) => update(u.id, { regions: next })}
+                  onChange={(next) => update(u.id, regionsBody(next))}
                   disabled={savingId !== null}
                 />
               )}
@@ -717,8 +717,8 @@ function CreateUserModal({
         name: name.trim(),
         phone: phone.trim() || undefined,
         role,
-        // หลายภาคได้ — เซิร์ฟเวอร์เก็บภาคแรกเป็น region ที่เหลือเป็น extraRegions
-        ...(role === "SUPERVISOR" ? { regions: picked } : {}),
+        // หลายภาคได้ — เซิร์ฟเวอร์เก็บภาคแรกเป็น region ที่เหลือเป็น extraRegions (regionsBody: เหตุที่ส่ง region คู่ไปด้วย)
+        ...(role === "SUPERVISOR" ? regionsBody(picked) : {}),
         password,
         ...(role === "COCO_MAID" ? { maidBranches } : {}),
       });

@@ -397,6 +397,9 @@ router.get("/users/unassigned-report", requireAuth, requireAdmin, async (req: Au
  */
 const MIN_PASSWORD = 8;
 
+/** ชื่อภาคหนึ่งชื่อในรายการ regions — ข้อความต้องเป็นไทย เพราะ handler ส่งข้อความแรกของ zod ไปขึ้นหน้าจอตรง ๆ */
+const REGION_NAME = z.string().trim().min(1, "ชื่อภาคว่างไม่ได้").max(120, "ชื่อภาคยาวเกิน 120 ตัวอักษร");
+
 const createUserSchema = z.object({
   employeeCode: z.string().trim().min(2, "ชื่อผู้ใช้สั้นเกินไป").max(50),
   name: z.string().trim().min(1, "ต้องใส่ชื่อ").max(120),
@@ -404,7 +407,7 @@ const createUserSchema = z.object({
   role: z.enum(ROLES).default("EMPLOYEE"),
   region: z.string().trim().max(120).nullable().optional(),
   // ภาคที่ดูแลทั้งหมด (หัวหน้าภาคเลือกได้หลายภาค) — ส่งมาแล้วใช้แทน region
-  regions: z.array(z.string().trim().min(1).max(120)).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
+  regions: z.array(REGION_NAME).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
   password: z.string().min(MIN_PASSWORD, `รหัสตั้งต้นต้องยาวอย่างน้อย ${MIN_PASSWORD} ตัว`),
   // รหัสสาขาที่ Maid (COCO) ประจำ — บทบาทอื่นไม่ใช้
   maidBranches: z.array(z.string().trim().min(1).max(30)).max(50).optional(),
@@ -433,7 +436,8 @@ const NEED_SUPER = "เฉพาะ Super Admin เท่านั้นที�
 /** แอดมินสร้างบัญชีให้ พร้อมรหัสตั้งต้นที่เจ้าของต้องเปลี่ยนเองตอนเข้าครั้งแรก */
 router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const parsed = createUserSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  // ส่งข้อความแรกแบบเดียวกับ PATCH — ก้อน flatten ขึ้นในกล่องแจ้งเตือนเป็น JSON ดิบ ทั้งที่ข้อความข้างในเป็นไทยอยู่แล้ว
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   const body = parsed.data;
   if (ADMIN_ROLES.includes(body.role) && !(await canManageAdmins(req.auth!.userId))) {
     return res.status(403).json({ error: NEED_SUPER });
@@ -572,7 +576,7 @@ const userUpdateSchema = z.object({
    */
   region: z.string().trim().max(120).nullable().optional(),
   // ภาคที่ดูแลทั้งชุด (แทนที่ของเดิม) — ส่งมาพร้อม region ใช้ตัวนี้
-  regions: z.array(z.string().trim().min(1).max(120)).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
+  regions: z.array(REGION_NAME).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
   // ทีมช่างที่สังกัด — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
   team: z.string().trim().max(120).nullable().optional(),
   // ทีมช่างที่หัวหน้าภาคดูแล (หลายทีมได้) — ดู User.supervisedTeams

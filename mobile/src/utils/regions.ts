@@ -19,3 +19,12 @@ export function regionsOf(u: { region?: string | null; regions?: string[] | null
 export function regionsText(regions: string[], prefix = "") {
   return regions.map((r) => prefix + r).join(" · ");
 }
+
+/**
+ * ภาคที่จะส่งไปบันทึก — ส่ง region (ภาคแรก) คู่กับ regions เสมอ
+ * เว็บกับ backend deploy คนละ service บน Render ช่วงที่เว็บใหม่ขึ้นก่อน เซิร์ฟเวอร์รุ่นเก่าตัด regions ทิ้งเงียบ ๆ
+ * (zod ไม่ strict) — ส่ง regions อย่างเดียวจะได้หัวหน้าภาคที่ไม่มีภาคเลยโดยไม่มีใครรู้ · เซิร์ฟเวอร์ใหม่เห็นทั้งคู่ใช้ regions
+ */
+export function regionsBody(regions: string[]) {
+  return { regions, region: regions[0] ?? null };
+}

@@ -2049,7 +2049,8 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
         // งานตรวจ: ยังอยู่ขั้นตรวจ หรือคอนเฟิร์มแล้วส่งต่อไปขั้นตรวจ (ใบที่ตรวจเสร็จกลับไประบุอะไหล่แล้วนับเป็นซ่อม)
         kind: inspectStages.includes(o.status) ? ("INSPECT" as const) : ("REPAIR" as const),
         team: o.assignedTeam ?? o.branch.zone ?? null,
-        // ภาคของสาขา — หัวหน้าภาคที่ดูแลหลายภาคได้ใบของทุกภาคปนกันในรายงานเดียว แต่ส่งไลน์คนละกลุ่มตามภาค
+        // ภาคของสาขา — หัวหน้าภาคที่ถือหลายภาคได้ใบของทุกภาคปนกันในรายงานเดียว ช่องนี้บอกว่าแถวไหนมาจากภาคไหน
+        // (หน้าสรุปตอนนี้ยังจัดกลุ่ม/คัดลอกตามทีมอย่างเดียว ยังไม่มีหน้าจอไหนอ่านช่องนี้ — เทสต์ใช้ยืนยันว่าได้ใบครบทุกภาค)
         region: o.branch.region,
         scheduledAt: o.scheduledAt!.toISOString().slice(0, 10),
         scheduledTime: o.scheduledTime,

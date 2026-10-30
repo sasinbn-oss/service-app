@@ -4,6 +4,8 @@
 //     ก่อนกดบันทึกฐานข้อมูลยังไม่เปลี่ยน · บันทึกแล้วฐานข้อมูลเปลี่ยน · ยกเลิกทั้งหมดแล้วไม่มีอะไรเปลี่ยน
 //   · หัวหน้าภาคหลายภาค (ต.ค. 69): แตะไปหัวภาคที่สอง = เพิ่มภาค ไม่ย้าย (ภาคแรกคงเดิม · extraRegions) ·
 //     ชื่อขึ้นทั้งสองภาคพร้อมบอกภาคอื่นที่ถือ · ลากชื่อในภาคที่สองไป "ยังไม่มีสังกัด" = เอาออกเฉพาะภาคนั้น (ฐานข้อมูล)
+//   · คอลัมน์ "ไม่ระบุภาค" (ทีมที่สาขาไม่ได้ตั้งภาค) ไม่ใช่ภาคจริง — วางหัวหน้าภาคที่หัวคอลัมน์ถูกปฏิเสธตั้งแต่ตอนวาง
+//     (ไม่เข้ารายการรอบันทึก) ไม่งั้นบันทึกแล้วเซิร์ฟเวอร์ตอบ 400 กลางคัน คนที่อยู่ถัดไปในรายการไม่ถูกบันทึก
 // สร้างผู้ใช้ทดสอบเองแล้วลบทิ้ง (ต้องมี DATABASE_URL)
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -33,7 +35,8 @@ const EXTRA = `ผังเพิ่ม${SUF}`;
        select '${TECH}','${TECH_NAME}','EMPLOYEE',"passwordHash",false from "User" where "employeeCode"='A001';
        insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
        select '${SUP}','${SUP_NAME}','SUPERVISOR',"passwordHash",false from "User" where "employeeCode"='A001';
-       insert into "Branch"(code,name,zone,region) values ('ZCMB${SUF}','สาขาผังภาคเพิ่ม','ทีม${EXTRA}','${EXTRA}')`);
+       insert into "Branch"(code,name,zone,region) values ('ZCMB${SUF}','สาขาผังภาคเพิ่ม','ทีม${EXTRA}','${EXTRA}');
+       insert into "Branch"(code,name,zone,region) values ('ZCMN${SUF}','สาขาผังไม่มีภาค','ทีมไม่มีภาค${SUF}',null)`);
   const db = (code) => sql(`select coalesce(team,'-')||'|'||coalesce(region,'-')||'|'||array_to_string("supervisedTeams",',') from "User" where "employeeCode"='${code}'`);
   const regionsDb = (code) => sql(`select coalesce(region,'-')||'|'||array_to_string("extraRegions",',') from "User" where "employeeCode"='${code}'`);
   try {
@@ -117,6 +120,14 @@ const EXTRA = `ผังเพิ่ม${SUF}`;
     // ════ หัวหน้าภาคหลายภาค: วางที่หัวภาคที่สอง = เพิ่ม ไม่ย้าย ════
     await label(page, "แก้ไขผัง").click();
     await page.waitForTimeout(800);
+    // คอลัมน์ไม่ระบุภาคก่อน — ถูกปฏิเสธแล้วต้องไม่มีอะไรค้างในรายการ (ข้อถัดไปเช็คว่ารอบันทึกมี 1 รายการพอดี)
+    await label(page, `หัวหน้าภาค · ทั้งภาค ${SUP_NAME}`).click();
+    await page.waitForTimeout(300);
+    await label(page, "หัวภาค ไม่ระบุภาค").click();
+    await page.waitForTimeout(800);
+    (await vis("วางหัวหน้าภาคที่ทีมแทน", false).count()) > 0 && (await vis("รอบันทึก", false).count()) === 0 && regionsDb(SUP) === `${region}|`
+      ? pass('วางหัวหน้าภาคที่หัวคอลัมน์ "ไม่ระบุภาค" → แจ้งให้วางที่ทีมแทน · ไม่เข้ารายการรอบันทึก · ฐานข้อมูลไม่เปลี่ยน')
+      : fail(`ไม่ระบุภาค: ${regionsDb(SUP)}`);
     await label(page, `หัวหน้าภาค · ทั้งภาค ${SUP_NAME}`).click();
     await page.waitForTimeout(300);
     await label(page, `หัวภาค ${EXTRA}`).click();
@@ -146,7 +157,7 @@ const EXTRA = `ผังเพิ่ม${SUF}`;
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {
-    sql(`delete from "User" where "employeeCode" in ('${TECH}','${SUP}'); delete from "Branch" where code='ZCMB${SUF}'`);
+    sql(`delete from "User" where "employeeCode" in ('${TECH}','${SUP}'); delete from "Branch" where code in ('ZCMB${SUF}','ZCMN${SUF}')`);
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();
   }

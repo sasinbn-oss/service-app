@@ -6,6 +6,8 @@
 //     — สมัยภาคเดียว กดภาคอื่นก็ทับภาคเก่าไปเอง พอเลือกได้หลายภาค ภาคที่ไม่มีปุ่มจะค้างตลอดไป
 //   · ภาคที่หัวหน้าภาคคนอื่นถือด้วย มีบรรทัดบอก "ภาคX มี <ชื่อ> ดูแลด้วย — ใบงานเข้ากล่องทั้งสองคน"
 //   · หน้าต่างเพิ่มบัญชี: หัวหน้าภาคยังไม่เลือกภาค = สร้างไม่ได้ · เลือกสองภาค → ฐานข้อมูลเก็บครบ (ภาคแรก = ที่กดก่อน)
+//   · ทุกคำขอที่บันทึกภาคส่ง region (ภาคแรก) คู่กับ regions — เซิร์ฟเวอร์รุ่นเก่าช่วง deploy ตัด regions ทิ้ง
+//     ถ้าส่ง regions อย่างเดียวจะได้หัวหน้าภาคที่ไม่มีภาคเลย
 // ภาคทดสอบมาจากสาขาชั่วคราวที่ไม่มีทีม — ไม่แตะภาคจริงที่ใบงาน/เทสต์อื่นใช้ · สร้างผู้ใช้เองแล้วลบ (ต้องมี DATABASE_URL)
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -26,6 +28,9 @@ const R1 = `เว็บก${SUF}`, R2 = `เว็บข${SUF}`, STALE = `เ�
 const MAIN = `zmrw${SUF}`, MAIN_NAME = `หัวหน้าหลายภาคเว็บ${SUF}`;
 const OTHER = `zmrv${SUF}`, OTHER_NAME = `หัวหน้าร่วมเว็บ${SUF}`;
 const NEW = `zmrn${SUF}`, NEW_NAME = `หัวหน้าใหม่หลายภาค${SUF}`;
+// คำขอบันทึกผู้ใช้ที่หน้าจอส่งจริง (PATCH/POST /auth/users) — ไว้เช็คว่ามี region คู่กับ regions
+const sent = [];
+const lastSent = (method) => [...sent].reverse().find((x) => x.method === method && x.body && "regions" in x.body)?.body;
 const db = (code) => sql(`select coalesce(region,'-')||'|'||array_to_string("extraRegions",',') from "User" where "employeeCode"='${code}'`);
 function cleanup() {
   sql(`delete from "User" where "employeeCode" in ('${MAIN}','${OTHER}','${NEW}');
@@ -48,6 +53,11 @@ function cleanup() {
     // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — สิทธิ์ผู้ใช้อยู่กลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
     await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
+    page.on("request", (r) => {
+      if (/\/api\/auth\/users/.test(r.url()) && ["PATCH", "POST"].includes(r.method())) {
+        try { sent.push({ method: r.method(), body: r.postDataJSON() }); } catch { /* ไม่มี body */ }
+      }
+    });
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle", timeout: 180000 });
     await page.getByPlaceholder("รหัสพนักงาน").fill("A001");
     await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
@@ -81,6 +91,8 @@ function cleanup() {
     await page.waitForTimeout(2000);
     db(MAIN) === `${R1}|${R2}` && `${await sel(R1)}|${await sel(R2)}` === "true|true"
       ? pass("กดภาคที่สอง = เพิ่ม ไม่ทับ · ภาคแรกยังเป็นภาคเดิม (ฐานข้อมูล region + extraRegions)") : fail(`เพิ่มภาค: ${db(MAIN)}`);
+    JSON.stringify(lastSent("PATCH")) === JSON.stringify({ regions: [R1, R2], region: R1 })
+      ? pass("PATCH จากการ์ดส่ง region (ภาคแรก) คู่กับ regions") : fail(`PATCH body: ${JSON.stringify(lastSent("PATCH"))}`);
     await page.screenshot({ path: path.join(DIR, "manage-users-regions-1.png") });
     await search(R2);
     (await vis(MAIN_NAME).count()) > 0 ? pass("ค้นหาผู้ใช้ด้วยภาคที่เพิ่มเจอ") : fail("ค้นด้วยภาคที่เพิ่มไม่เจอ");
@@ -140,6 +152,9 @@ function cleanup() {
     await page.waitForTimeout(2500);
     const row = sql(`select role||'|'||coalesce(region,'-')||'|'||array_to_string("extraRegions",',') from "User" where "employeeCode"='${NEW}'`);
     row === `SUPERVISOR|${R1}|${R2}` ? pass("สร้างหัวหน้าภาคสองภาค → ฐานข้อมูลภาคแรก = ที่กดก่อน ภาคที่สองเก็บใน extraRegions") : fail(`สร้างบัญชี: ${row}`);
+    const posted = lastSent("POST");
+    posted?.region === R1 && JSON.stringify(posted?.regions) === JSON.stringify([R1, R2])
+      ? pass("หน้าต่างเพิ่มบัญชีส่ง region (ภาคแรก) คู่กับ regions") : fail(`POST body: ${JSON.stringify(posted)}`);
     await vis("ตกลง").last().click().catch(() => {});
     await page.close();
   } catch (e) {

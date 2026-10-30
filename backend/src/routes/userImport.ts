@@ -339,15 +339,13 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
        * อัปเดตทั้งชุดในคำสั่งเดียว (UNNEST) ไม่ใช่ทีละคน — ฐานข้อมูลจริงอยู่คนละ region
        * 156 คน + 433 สาขาทีละแถวคือหลายร้อยรอบไปกลับ เกินเพดาน transaction
        * ส่งเป็น text[] แล้ว cast เอง (CLAUDE.md: array ที่เป็น null ทั้งก้อนถูกเดาชนิดผิด)
-       * หัวหน้าภาคที่ไฟล์นี้เปลี่ยนเป็นทีม Area ล้างภาคทิ้ง (u."role" ฝั่งขวาคือค่าก่อนอัปเดต) แบบเดียวกับเปลี่ยนบทบาทที่การ์ด
-       * — ภาคที่ค้างไม่มีผลกับสิทธิ์ แต่ยังขึ้นในรายงานผู้เปิดใบงาน/การใช้งานว่าคนนี้ดูแลภาคนั้น
+       * ไม่ต้องล้างภาค (region/extraRegions) ตรงนี้ — บัญชีหัวหน้าภาคที่ชื่อผู้ใช้ชนกับไฟล์ถูกข้ามเป็น TAKEN ตั้งแต่ข้างบน
+       * ไฟล์นี้จึงอัปเดตได้แค่บัญชีฝั่ง Area ซึ่งไม่มีภาคอยู่แล้ว
        */
       const ppl = wanted.map((p) => ({ id: String(ids.get(p.login)), p }));
       await tx.$executeRaw`
         UPDATE "User" u SET "name" = d.name, "phone" = COALESCE(NULLIF(d.phone, ''), u."phone"), "role" = d.role,
-          "areaId" = NULLIF(d.area, '')::int,
-          "region" = CASE WHEN u."role" = 'SUPERVISOR' THEN NULL ELSE u."region" END,
-          "extraRegions" = CASE WHEN u."role" = 'SUPERVISOR' THEN ARRAY[]::text[] ELSE u."extraRegions" END
+          "areaId" = NULLIF(d.area, '')::int
         FROM UNNEST(${ppl.map((x) => x.id)}::text[], ${ppl.map((x) => x.p.name)}::text[], ${ppl.map((x) => x.p.phone ?? "")}::text[],
                     ${ppl.map((x) => x.p.role)}::text[], ${ppl.map((x) => (x.p.areaLogin ? String(ids.get(x.p.areaLogin) ?? "") : ""))}::text[])
           AS d(id, name, phone, role, area)

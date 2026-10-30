@@ -2,6 +2,8 @@
 # ทดสอบ: หัวหน้าภาคดูแลได้หลายภาค (เจ้าของงานขอ ต.ค. 69 · User.region = ภาคแรก + User.extraRegions = ภาคที่เพิ่ม)
 #   · แอดมินตั้งหลายภาคผ่าน PATCH regions → ฐานข้อมูลเก็บภาคแรกที่ region ที่เหลือที่ extraRegions (ตัดช่องว่าง/ซ้ำ)
 #   · ชื่อภาคที่ไม่มีในทะเบียนสาขา 400 ภาษาไทย (ทั้งสร้างและแก้) · เกิน 20 ภาค 400 · ภาคที่ถืออยู่แล้วแม้หายจากทะเบียน เอาภาคอื่นออกได้
+#   · ชื่อภาคว่าง/ยาวเกินได้ข้อความไทย · สร้างบัญชีที่ไม่ผ่านได้ error เป็นข้อความ (ไม่ใช่ก้อน JSON ที่แอปโชว์ดิบ)
+#   · ผัง: คอลัมน์ "ไม่ระบุภาค" มีธง noRegion ให้ผังห้ามวางหัวหน้าภาค (ชื่อนี้เซิร์ฟเวอร์ไม่รับ)
 #   · แอปรุ่นเก่าส่ง region เดี่ยว: แทนภาคแรก ภาคที่เพิ่มไว้อยู่ต่อ (ตัวซ้ำถูกตัด) · null = ภาคถัดไปขึ้นแทน · ส่งทั้งคู่ regions ชนะ
 #     — แอปรุ่นเก่ามองไม่เห็นภาคที่เพิ่ม จะให้มันลบสิ่งที่มองไม่เห็นไม่ได้
 #   · ภาคที่เพิ่มได้สิทธิ์เต็มเท่าภาคแรก: รายการ · หน้าใบงาน (ไม่ใช่ดูอย่างเดียว) · กล่องงาน · ระบุอะไหล่ → นัด → ปล่อยงาน
@@ -59,7 +61,7 @@ cleanup() {
   DB "delete from \"ViewAsLog\" where id>$VSTART and \"targetUserId\"=$SID" >/dev/null
   # % ท้าย — บัญชีที่ลบแบบเก็บประวัติถูกเปลี่ยนรหัสเป็น "<รหัส>~ลบ<id>" (ปล่อยรหัสเดิมให้ใช้ซ้ำได้)
   DB "delete from \"User\" where \"employeeCode\" like 'ZMR%$SUF%'" >/dev/null
-  DB "delete from \"Branch\" where code='ZMRB$SUF'" >/dev/null
+  DB "delete from \"Branch\" where code in ('ZMRB$SUF','ZMRN$SUF')" >/dev/null
   local R E T
   IFS='|' read -r R E T <<< "$SNAP"
   DB "update \"User\" set region=nullif('$R',''), \"extraRegions\"=coalesce(string_to_array(nullif('$E',''),','),'{}'),
@@ -104,6 +106,14 @@ MANY=$(node -e 'console.log(JSON.stringify({regions:Array.from({length:21},(_,i)
 R=$(SEND PATCH $A auth/users/$SID "$MANY")
 echo "$R" | grep -q "เลือกภาคได้ไม่เกิน 20 ภาค" && [ "$(REG S001)" = "ใต้|กลาง-ตะวันตก" ] \
   && pass "เกิน 20 ภาค → 400 \"เลือกภาคได้ไม่เกิน 20 ภาค\"" || fail "21 ภาค: $(echo "$R" | head -c 150)"
+# ข้อความจาก zod ขึ้นหน้าจอตรง ๆ — ต้องเป็นไทย และ POST ต้องเป็นข้อความ ไม่ใช่ก้อน flatten ที่แอปโชว์เป็น JSON ดิบ
+LONG=$(node -e 'console.log("ก".repeat(121))')
+[ "$(SEND PATCH $A auth/users/$SID '{"regions":["  "]}' | J 'd.error')|$(SEND PATCH $A auth/users/$SID "{\"regions\":[\"$LONG\"]}" | J 'd.error')|$(REG S001)" \
+  = "ชื่อภาคว่างไม่ได้|ชื่อภาคยาวเกิน 120 ตัวอักษร|ใต้|กลาง-ตะวันตก" ] \
+  && pass "ชื่อภาคว่าง/ยาวเกิน → 400 ภาษาไทย · ฐานข้อมูลไม่เปลี่ยน" || fail "ข้อความชื่อภาค: $(SEND PATCH $A auth/users/$SID '{"regions":["  "]}')"
+MANYP=$(node -e 'console.log(JSON.stringify({employeeCode:"ZMRY"+process.argv[1],name:"หัวหน้าภาคเกินยี่สิบ",role:"SUPERVISOR",password:"temp12345",regions:Array.from({length:21},(_,i)=>"ภาค"+i)}))' $SUF)
+[ "$(SEND POST $A auth/users "$MANYP" | J 'typeof d.error+"|"+d.error')|$(DB "select count(*) from \"User\" where \"employeeCode\"='ZMRY$SUF'")" = "string|เลือกภาคได้ไม่เกิน 20 ภาค|0" ] \
+  && pass "สร้างบัญชีเกิน 20 ภาค → error เป็นข้อความไทย (ไม่ใช่ก้อน JSON) · ไม่สร้างบัญชี" || fail "POST 21 ภาค: $(SEND POST $A auth/users "$MANYP" | head -c 200)"
 R=$(SEND POST $A auth/users "{\"employeeCode\":\"ZMRX$SUF\",\"name\":\"หัวหน้าภาคชื่อภาคผิด\",\"role\":\"SUPERVISOR\",\"regions\":[\"ไม่มีภาคนี้$SUF\"],\"password\":\"temp12345\"}")
 [ "$(echo "$R" | J 'd.error')" = "ไม่มีภาค “ไม่มีภาคนี้$SUF” ในทะเบียนสาขา" ] && [ "$(DB "select count(*) from \"User\" where \"employeeCode\"='ZMRX$SUF'")" = "0" ] \
   && pass "สร้างบัญชีด้วยภาคที่ไม่มีจริง → 400 ไม่สร้างบัญชี" || fail "POST ภาคไม่มีจริง: $R"
@@ -216,6 +226,14 @@ echo
 echo "═══ ผังผู้รับผิดชอบ · รายงานคนไม่มีพื้นที่"
 [ "$(GET $A teams/coverage-map | J "const s=d.supervisors.find(x=>x.id===$SID); JSON.stringify(s.regions)+'|'+s.region")" = '["ใต้","กลาง-ตะวันตก"]|ใต้' ] \
   && pass "ผัง: S001 มี regions ครบ (วางชื่อได้ทุกภาค) · region = ภาคแรกสำหรับแอปรุ่นเก่า" || fail "coverage-map: $(GET $A teams/coverage-map | J "JSON.stringify(d.supervisors.find(x=>x.id===$SID))")"
+# คอลัมน์ "ไม่ระบุภาค" ในผัง (ทีมที่สาขาไม่ได้ตั้งภาค) ไม่ใช่ภาคจริง — ผังต้องรู้จากธง noRegion ว่าห้ามวางหัวหน้าภาคที่หัวคอลัมน์
+# เพราะเซิร์ฟเวอร์ปฏิเสธชื่อนี้ตอนบันทึก (ไม่มีในทะเบียนสาขา) · สาขาชั่วคราวลบทันทีหลังเช็ค ทีมนี้จะได้ไม่โผล่ในหน้าจอของใคร
+DB "insert into \"Branch\"(code,name,zone,region) values ('ZMRN$SUF','สาขาทดสอบไม่มีภาค','ทีมไม่มีภาค$SUF',null)" >/dev/null
+NOREG=$(GET $A teams/coverage-map | J "d.regions.filter(r=>r.noRegion).map(r=>r.name+':'+r.teams.some(t=>t.name==='ทีมไม่มีภาค$SUF')).join(',')+'|'+d.regions.filter(r=>r.name!=='ไม่ระบุภาค').every(r=>!r.noRegion)")
+R=$(SEND PATCH $A auth/users/$SID '{"regions":["ใต้","กลาง-ตะวันตก","ไม่ระบุภาค"]}')
+DB "delete from \"Branch\" where code='ZMRN$SUF'" >/dev/null
+[ "$NOREG" = "ไม่ระบุภาค:true|true" ] && [ "$(echo "$R" | J 'd.error')|$(REG S001)" = "ไม่มีภาค “ไม่ระบุภาค” ในทะเบียนสาขา|ใต้|กลาง-ตะวันตก" ] \
+  && pass "ผัง: คอลัมน์ไม่ระบุภาคมีธง noRegion (ภาคจริงไม่มี) · ตั้งภาคชื่อนี้ 400 ภาษาไทย ฐานข้อมูลไม่เปลี่ยน" || fail "ไม่ระบุภาค: $NOREG / $R / $(REG S001)"
 HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='T001'")
 DB "insert into \"User\"(\"employeeCode\",name,role,region,\"extraRegions\",\"supervisedTeams\",\"passwordHash\",\"mustChangePassword\") values
   ('ZMRG1$SUF','ภาคเพิ่มมีจริงอย่างเดียว','SUPERVISOR',null,'{กลาง-ตะวันตก}','{}','$HASH',false),
