@@ -1,7 +1,8 @@
 /**
  * ขอบเขตของหัวหน้าภาค — ใบงาน/สาขาไหนที่เห็นและแตะได้
  *
- * = สาขาในภาคที่ตั้งไว้ (User.region แบบเดิม) รวมกับทีมที่ดูแล (User.supervisedTeams)
+ * = สาขาในทุกภาคที่ตั้งไว้ (User.region + User.extraRegions) รวมกับทีมที่ดูแล (User.supervisedTeams)
+ * ทุกภาคได้สิทธิ์เท่ากัน — เจ้าของงานกำหนด ต.ค. 69: ภาคที่เลือกเพิ่มต้องทำได้เหมือนภาคแรก ไม่ใช่ดูอย่างเดียว
  * ทีมนับทั้งทีมที่ดูแลสาขา (zone / pmTeam) และทีมที่ใบงานถูกจ่ายไป — ใบที่ยังไม่จ่าย
  * ต้องเห็นตามสาขา ไม่งั้นหัวหน้าภาคจะจ่ายงานใบนั้นไม่ได้เพราะมองไม่เห็น
  *
@@ -13,7 +14,8 @@ import { prisma } from "../prisma";
 import { cleanName } from "./names";
 
 export interface SupervisorScope {
-  region: string | null;
+  /** ภาคที่ดูแลทั้งหมด (ผ่าน cleanName แล้ว) — ว่าง = ดูแลตามทีมอย่างเดียว */
+  regions: string[];
   teams: string[];
   /**
    * ทีมที่หัวหน้าภาค "คนอื่น" ดูแลอยู่ — ใบของทีมเหล่านี้ไม่เข้ามาทางภาค (ทีมมาก่อนภาค)
@@ -25,7 +27,23 @@ export interface SupervisorScope {
   claimed?: string[];
 }
 
-type SupervisorRow = { id: number; region: string | null; supervisedTeams: string[] };
+type SupervisorRow = { id: number; region: string | null; extraRegions?: string[] | null; supervisedTeams: string[] };
+
+/**
+ * ภาคทั้งหมดของผู้ใช้หนึ่งคน = region ตามด้วย extraRegions · ตัดค่าว่าง/ซ้ำ เรียงตามที่ตั้ง
+ *
+ * ทุกที่ที่อ่านภาคของคนต้องผ่านตัวนี้ — อ่าน region ตรง ๆ คือเห็นแค่ภาคแรก แล้วภาคที่เพิ่ม
+ * ใช้ได้ในกล่องงานแต่หายจากรายงาน/หน้าผัง (หรือกลับกัน) โดยไม่มีอะไรเตือน
+ * ?? [] — คอลัมน์เป็น NULL ได้ถ้ามีคนแก้ฐานข้อมูลตรง ๆ หรือกู้จากไฟล์สำรองก่อนมีคอลัมน์นี้
+ */
+export function regionsOf(u: { region: string | null; extraRegions?: string[] | null }): string[] {
+  const out: string[] = [];
+  for (const r of [u.region, ...(u.extraRegions ?? [])]) {
+    const c = cleanName(r);
+    if (c && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
 
 /** ขอบเขตของหัวหน้าภาคทุกคนจากรายชื่อชุดเดียว — claimed ของแต่ละคน = ทีมของคนอื่นที่ตัวเองไม่ได้ดูแล */
 export function scopesOf(sups: SupervisorRow[]): Map<number, SupervisorScope> {
@@ -40,7 +58,7 @@ export function scopesOf(sups: SupervisorRow[]): Map<number, SupervisorScope> {
     sups.map((u) => {
       const mine = new Set((u.supervisedTeams ?? []).map(cleanName));
       const claimed = [...owners.entries()].filter(([t, ids]) => !mine.has(t) && [...ids].some((id) => id !== u.id)).map(([t]) => t);
-      return [u.id, { region: u.region, teams: u.supervisedTeams ?? [], claimed }];
+      return [u.id, { regions: regionsOf(u), teams: u.supervisedTeams ?? [], claimed }];
     })
   );
 }
@@ -48,9 +66,9 @@ export function scopesOf(sups: SupervisorRow[]): Map<number, SupervisorScope> {
 export async function supervisorScope(userId: number): Promise<SupervisorScope> {
   const sups = await prisma.user.findMany({
     where: { OR: [{ id: userId }, { role: "SUPERVISOR", deletedAt: null }] },
-    select: { id: true, region: true, supervisedTeams: true },
+    select: { id: true, region: true, extraRegions: true, supervisedTeams: true },
   });
-  return scopesOf(sups).get(userId) ?? { region: null, teams: [] };
+  return scopesOf(sups).get(userId) ?? { regions: [], teams: [] };
 }
 
 type ScopedOrder = {
@@ -114,7 +132,7 @@ const NO_OWN_TEAM: Prisma.WorkOrderWhereInput = {
  */
 export function workOrderInScope(s: SupervisorScope): Prisma.WorkOrderWhereInput {
   const or: Prisma.WorkOrderWhereInput[] = [];
-  if (s.region) {
+  if (s.regions.length) {
     const c = s.claimed ?? [];
     // ทีมของใบ (teamOf) ต้องไม่ใช่ทีมที่คนอื่นดูแล — เขียนแยกกรณีเพราะ NOT IN ตัดแถว null ทิ้ง
     const unclaimed: Prisma.WorkOrderWhereInput = c.length
@@ -127,7 +145,7 @@ export function workOrderInScope(s: SupervisorScope): Prisma.WorkOrderWhereInput
           ],
         }
       : {};
-    or.push({ AND: [{ branch: { region: s.region } }, unclaimed] });
+    or.push({ AND: [{ branch: { region: { in: s.regions } } }, unclaimed] });
   }
   if (s.teams.length) {
     or.push(
@@ -166,8 +184,8 @@ export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
   };
   if (mine(wo.branch.zone) || mine(wo.branch.pmTeam)) return true;
   if (ownTeamOf(wo) === null && mine(wo.assignedTeam)) return true;
-  const region = cleanName(s.region);
-  if (!region || cleanName(wo.branch.region) !== region) return false;
+  const region = cleanName(wo.branch.region);
+  if (!region || !s.regions.some((r) => cleanName(r) === region)) return false;
   const team = teamOf(wo);
   return !(team && (s.claimed ?? []).includes(team));
 }
@@ -211,9 +229,9 @@ async function regionTeams(region: string): Promise<string[]> {
  */
 export async function teamsForSupervisor(s: SupervisorScope): Promise<Set<string>> {
   const out = new Set(s.teams.map(cleanName).filter((t): t is string => !!t));
-  if (s.region) {
+  if (s.regions.length) {
     const claimed = new Set(s.claimed ?? []);
-    for (const t of await regionTeams(s.region)) if (!claimed.has(t)) out.add(t);
+    for (const r of s.regions) for (const t of await regionTeams(r)) if (!claimed.has(t)) out.add(t);
   }
   return out;
 }

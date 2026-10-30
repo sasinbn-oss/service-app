@@ -34,6 +34,7 @@ import EmptyState from "../components/EmptyState";
 import Spinner, { WasherIcon } from "../components/Spinner";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
+import { regionsOf, regionsText } from "../utils/regions";
 import { APPOINTMENT_DONE, ISSUE_STAGES } from "../utils/stepPath";
 import TimelineModal, { TimelineButton, TimelineTarget } from "../components/TimelineModal";
 import { HomeStackParamList } from "../navigation/types";
@@ -156,9 +157,11 @@ function longDate(s: string) {
  * ป้ายขอบเขตของหัวหน้าภาค — เดิมดูแค่ภาค หัวหน้าภาคที่ตั้งเป็น "ทีมที่ดูแล" จากไฟล์รายชื่อ
  * (ไม่ได้ตั้งภาค) จึงขึ้น "ภาคที่ยังไม่ระบุ" ทั้งที่เห็นแผนของทีมตัวเองครบ คนเลยเข้าใจว่ายังไม่ได้จัดทีม
  */
-function supervisorScopeLabel(u: { region?: string | null; supervisedTeams?: string[] }) {
+function supervisorScopeLabel(u: { region?: string | null; regions?: string[]; supervisedTeams?: string[] }) {
   const teams = u.supervisedTeams ?? [];
-  if (u.region) return `ภาค${u.region}${teams.length ? ` + ${teams.length} ทีม` : ""}`;
+  // หลายภาค (ต.ค. 69) ขึ้นครบทุกภาค — แผนที่เห็นคือทุกภาครวมกัน ป้ายบอกแค่ภาคแรกจะดูเหมือนแผนภาคอื่นหลุดมา
+  const regions = regionsOf(u);
+  if (regions.length) return `${regionsText(regions, "ภาค")}${teams.length ? ` + ${teams.length} ทีม` : ""}`;
   if (!teams.length) return "ยังไม่ได้ตั้งทีมที่ดูแล";
   return teams.length <= 3 ? teams.join(" · ") : `${teams.slice(0, 2).join(" · ")} และอีก ${teams.length - 2} ทีม`;
 }

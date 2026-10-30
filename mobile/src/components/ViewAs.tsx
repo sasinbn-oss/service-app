@@ -8,6 +8,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { showAlert } from "../utils/alert";
 import { AREA_TEAM_LABELS } from "../utils/areaTeam";
+import { regionsOf, regionsText } from "../utils/regions";
 import { colors, radius, spacing } from "../theme";
 
 /**
@@ -24,6 +25,8 @@ type Person = {
   name: string;
   role: string;
   region: string | null;
+  /** ทุกภาคที่หัวหน้าภาคดูแล — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง อ่านผ่าน regionsOf() */
+  regions?: string[];
   team: string | null;
   supervisedTeams: string[];
   maidBranches?: { code: string; name: string }[];
@@ -56,7 +59,9 @@ const SEARCH_HINT: Record<string, string> = {
  */
 function groupOf(p: Person) {
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
-  if (p.role === "SUPERVISOR") return p.region ? `ภาค${p.region}` : "ดูแลเป็นรายทีม";
+  // คนดูแลหลายภาคอยู่กลุ่มเดียว ("ภาคใต้ · ภาคกลาง") ไม่ซ้ำชื่อในหลายกลุ่ม — เหตุผลเดียวกับ Maid ด้านบน
+  // คนดูแลภาคเดียวยังอยู่กลุ่มเดิม
+  if (p.role === "SUPERVISOR") return regionsText(regionsOf(p), "ภาค") || "ดูแลเป็นรายทีม";
   if (p.role === "COCO_SUPERVISOR") return p.area ? `Area ${p.area.name}` : "ยังไม่มี Area";
   if (AREA_TEAM_TABS.has(p.role)) return AREA_TEAM_LABELS[p.role];
   return "แอดมิน";
@@ -70,7 +75,7 @@ function branchesOf(p: Person) {
 function detailOf(p: Person, q = "") {
   if (p.role === "SUPERVISOR") {
     const n = p.supervisedTeams?.length ?? 0;
-    return [p.region ? `ภาค${p.region}` : null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
+    return [regionsText(regionsOf(p), "ภาค") || null, n ? `ดูแล ${n} ทีม` : null].filter(Boolean).join(" · ") || "ยังไม่มีพื้นที่";
   }
   if (p.role === "EMPLOYEE") return p.team ? `ทีม${p.team}` : "ยังไม่มีทีม";
   if (p.role === "AREA") {
@@ -154,7 +159,7 @@ function ViewAsPicker({ onClose }: { onClose: () => void }) {
         .filter(
           (p) =>
             !q ||
-            [p.name, p.employeeCode, p.team, p.region, groupOf(p), ...branchesOf(p).flatMap((b) => [b.code, b.name])].some(
+            [p.name, p.employeeCode, p.team, ...regionsOf(p), groupOf(p), ...branchesOf(p).flatMap((b) => [b.code, b.name])].some(
               (v) => v?.toLowerCase().includes(q)
             )
         )

@@ -19,6 +19,7 @@ import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { useCachedState } from "../utils/pageCache";
 import { showAlert } from "../utils/alert";
+import { regionsOf, regionsText } from "../utils/regions";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
 interface Team {
@@ -1058,6 +1059,8 @@ interface Member {
   phone: string | null;
   role: string;
   region: string | null;
+  /** ทุกภาคที่หัวหน้าภาคคนนี้ดูแล — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง อ่านผ่าน regionsOf() */
+  regions?: string[];
 }
 interface Members {
   name: string;
@@ -1130,7 +1133,7 @@ function MembersModal({ name, onClose }: { name: string; onClose: () => void }) 
           <View style={{ gap: spacing.sm }}>
             <Text style={styles.section}>หัวหน้าภาคที่ดูแล</Text>
             {data.supervisors.length ? (
-              data.supervisors.map((m) => person(m, m.region ? `ภาค${m.region}` : null))
+              data.supervisors.map((m) => person(m, regionsText(regionsOf(m), "ภาค") || null))
             ) : (
               <Text style={styles.muted}>ยังไม่มีหัวหน้าภาคดูแลทีมนี้ — ตั้งที่หน้าสิทธิ์ผู้ใช้</Text>
             )}

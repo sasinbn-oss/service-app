@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { colors, isDark, radius, shadow, spacing, headingFont } from "../theme";
+import { regionsOf, regionsText } from "../utils/regions";
 import { MenuEntry } from "../components/MenuList";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { HomeStackParamList } from "../navigation/types";
@@ -224,7 +225,11 @@ export default function HomeScreen({ navigation }: Props) {
         role={user?.superAdmin ? "SUPER_ADMIN" : user?.partsAdmin ? "PARTS_ADMIN" : user?.role}
         // หัวหน้าภาคส่วนใหญ่ถูกตั้งเป็น "ทีมที่ดูแล" จากไฟล์รายชื่อ ไม่ได้ตั้งภาค —
         // ดูแค่ team/region จะขึ้น "ยังไม่ได้จัดทีม" ทั้งที่เห็นและจ่ายงานของทีมได้ตามปกติ
-        area={user?.team ?? user?.region ?? (user?.supervisedTeams?.length ? user.supervisedTeams.join(" · ") : null)}
+        area={
+          user?.team ||
+          regionsText(regionsOf(user)) ||
+          (user?.supervisedTeams?.length ? user.supervisedTeams.join(" · ") : null)
+        }
         summary={summary}
         onRefresh={() => load().catch(() => undefined)}
       />

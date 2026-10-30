@@ -11,7 +11,7 @@ import { Router, Response, NextFunction } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
-import { supervisorScope, workOrderVisible } from "../utils/supervisorScope";
+import { supervisorScope, teamsForSupervisor, workOrderVisible } from "../utils/supervisorScope";
 import { areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { teamGroups } from "../utils/teamGroups";
 import { teamDayTimeline } from "../utils/timeline";
@@ -63,7 +63,7 @@ function dayStart(date: string) {
 /**
  * ขอบเขตของคนที่ถาม — หัวหน้าภาคเห็นเฉพาะภาค/ทีมที่ดูแล แบบเดียวกับรายการใบงาน
  *
- * teams คือทีมที่ดูแลสาขาในภาคนั้นรวมกับทีมที่ตั้งให้ดูแลตรง ๆ ใช้กรองแผนของทีมที่ยังไม่มีงาน
+ * teams คือทีมที่ดูแลสาขาในทุกภาคที่ดูแลรวมกับทีมที่ตั้งให้ดูแลตรง ๆ ใช้กรองแผนของทีมที่ยังไม่มีงาน
  * ในวันนั้น (จัดคนไว้ก่อนแล้วค่อยนัดงาน) ซึ่งกรองจากใบงานไม่ได้เพราะยังไม่มีใบ
  */
 async function scopeFor(req: AuthRequest) {
@@ -73,20 +73,9 @@ async function scopeFor(req: AuthRequest) {
   // teams ว่าง = ไม่มีทีมให้จัดแผน · แผนของทีมที่ไม่มีงานในสาขาตัวเองวันนั้นไม่ขึ้น
   if (isAreaTeam(req.auth)) return { where: areaWorkOrderWhere(req.auth!), teams: new Set<string>() };
   const s = await supervisorScope(req.auth!.userId);
-  const teams = new Set<string>(s.teams);
-  if (s.region) {
-    const rows = await prisma.branch.findMany({
-      where: { region: s.region, cancelledAt: null },
-      select: { zone: true, pmTeam: true },
-      distinct: ["zone", "pmTeam"],
-    });
-    // ทีมที่หัวหน้าภาคคนอื่นดูแลไม่นับ — ทีมมาก่อนภาค (utils/supervisorScope.ts)
-    const claimed = new Set(s.claimed ?? []);
-    for (const r of rows) {
-      if (r.zone && !claimed.has(r.zone)) teams.add(r.zone);
-      if (r.pmTeam && !claimed.has(r.pmTeam)) teams.add(r.pmTeam);
-    }
-  }
+  // ตัวเดียวกับช่องจ่ายงาน (ทีมมาก่อนภาค · ทุกภาคที่ดูแล) — เดิมคัดลอกตรรกะภาคมาไว้ที่นี่
+  // พอหัวหน้าภาคเลือกได้หลายภาค สำเนานี้ยังดูแค่ภาคแรก ทีมของภาคที่เพิ่มจัดแผนไม่ได้ทั้งที่จ่ายงานได้
+  const teams = await teamsForSupervisor(s);
   // ใบที่จ่ายข้ามทีมมาให้ทีมของตัวเองขึ้นบนแผนด้วย — เป็นคิวของทีมนี้จริง แม้ใบจะเป็นของหัวหน้าภาคอื่น
   return { where: await workOrderVisible(s), teams };
 }

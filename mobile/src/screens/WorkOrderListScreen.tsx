@@ -55,6 +55,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
+import { regionsOf, regionsText } from "../utils/regions";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
 import { thaiDate, todayBkk } from "../components/DateField";
@@ -128,7 +129,8 @@ export interface WorkOrderRow {
   /** วันถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อนวันนัด) รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — ป้ายแยกจากรับทราบปล่อยงานปกติ */
   rescheduled?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
-  waitingOnSupervisors: { id: number; name: string; region: string | null }[];
+  /** regions = ทุกภาคที่คนนั้นดูแล (หลายภาคได้) — เซิร์ฟเวอร์รุ่นเก่าส่งแค่ region */
+  waitingOnSupervisors: { id: number; name: string; region: string | null; regions?: string[] }[];
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
   waitingOnTeam: string | null;
   branchType: "DODO" | "COCO";
@@ -1542,7 +1544,10 @@ function whoLabel(rows: WorkOrderRow[], who: Who, owner: Role | "", withRegion =
   if (who.startsWith("t:")) return `ทีม${who.slice(2)}`;
   for (const r of rows) {
     const sup = r.waitingOnSupervisors.find((x) => `s:${x.id}` === who);
-    if (sup) return withRegion && sup.region ? `${sup.name} (${sup.region})` : sup.name;
+    if (!sup) continue;
+    // ภาคต่อท้ายใช้แยกคนชื่อซ้ำ — คนดูแลหลายภาคขึ้นครบทุกภาค (ภาคเดียวคงหน้าตาเดิม)
+    const rs = withRegion ? regionsOf(sup) : [];
+    return rs.length ? `${sup.name} (${regionsText(rs)})` : sup.name;
   }
   return "";
 }

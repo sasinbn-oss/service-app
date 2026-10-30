@@ -897,10 +897,10 @@ async function autoWorkStatus(id: number, stage: string): Promise<string | null>
 }
 
 /** หัวหน้าภาคพร้อมขอบเขต — ใช้ตอบว่าใบที่รอหัวหน้าภาครอ "ใคร" */
-type SupervisorRef = { id: number; name: string; region: string | null; supervisedTeams: string[]; scope: SupervisorScope };
+type SupervisorRef = { id: number; name: string; region: string | null; extraRegions: string[]; supervisedTeams: string[]; scope: SupervisorScope };
 
 /** เติมขอบเขต (รวมทีมที่คนอื่นดูแล — ทีมมาก่อนภาค) ให้รายชื่อหัวหน้าภาคที่ดึงมาครั้งเดียว */
-function withScopes<T extends { id: number; region: string | null; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
+function withScopes<T extends { id: number; region: string | null; extraRegions: string[]; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
   const m = scopesOf(sups);
   return sups.map((u) => ({ ...u, scope: m.get(u.id)! }));
 }
@@ -972,7 +972,8 @@ function listShape(
     actor === "SUPERVISOR"
       ? ctx.supervisors
           .filter((s) => coversWorkOrder(s.scope, w))
-          .map((s) => ({ id: s.id, name: s.name, region: s.region }))
+          // region (ภาคแรก) คงไว้ให้แอปรุ่นเก่าที่ยังเปิดค้าง · regions = ทุกภาคที่คนนั้นดูแล
+          .map((s) => ({ id: s.id, name: s.name, region: s.region, regions: s.scope.regions }))
       : [];
   return {
     stageActor: actor,
@@ -1347,7 +1348,7 @@ async function computeOrphanSupervisorIds(): Promise<number[]> {
       where: { status: { in: stages } },
       select: { id: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
     }),
-    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, supervisedTeams: true } }),
+    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, extraRegions: true, supervisedTeams: true } }),
   ]);
   const scopes = withScopes(sups);
   return rows.filter((w) => !scopes.some((u) => coversWorkOrder(u.scope, w))).map((w) => w.id);
@@ -1550,7 +1551,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     prisma.workOrder.count({ where: { AND: [inboxScope, inbox] } }),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, region: true, supervisedTeams: true },
+      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
   ]);
@@ -2082,7 +2083,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
 async function teamOwners(): Promise<Map<string, string[]>> {
   const sups = await prisma.user.findMany({
     where: { role: "SUPERVISOR", deletedAt: null },
-    select: { id: true, name: true, region: true, supervisedTeams: true },
+    select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
     orderBy: { name: "asc" },
   });
   const out = new Map<string, string[]>();
@@ -2244,7 +2245,7 @@ async function loadDetail(id: number) {
     freshOutsource(),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, region: true, supervisedTeams: true },
+      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
   ]);
