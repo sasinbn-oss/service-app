@@ -43,6 +43,15 @@ import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports
 import { areaTeamWorkbook } from "../reports/areaTeamReport";
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
 import { buildIssuedReport, issuedWorkbook } from "../reports/issuedPartsReport";
+import {
+  BRANCH_PARTS_FORBIDDEN,
+  buildBranchPartsCounts,
+  buildBranchPartsDetail,
+  buildBranchPartsPage,
+  buildBranchPartsWorkbook,
+  canSeeBranchParts,
+  parseQuery as parseBranchPartsQuery,
+} from "../reports/branchPartsReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
@@ -620,6 +629,8 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
       isCompanyBranch(w.branch.code) || w.branch.warrantyExpiresAt ? null : warrantyYearsFor(machineMake(w.machine)),
     // ยี่ห้อที่ใช้คิด — จากไฟล์รายงานเครื่อง หรือรุ่นที่เลือกตอนเปิดใบงาน
     branchWarrantyBrand: machineMake(w.machine),
+    // ลิงก์ "เฉพาะเครื่องนี้" ไปรายงานอะไหล่ที่ไปแต่ละสาขากรองด้วย id เครื่อง — รหัสเครื่องซ้ำกันข้ามสาขา ("3") ใช้แทนไม่ได้
+    machineId: w.machineId,
     machineCode: w.machine?.code ?? null,
     machineType: w.machine?.type ?? null,
     machineBrand: w.machine?.brand ?? null,
@@ -1939,6 +1950,46 @@ router.get("/reports/issued-parts", requireAuth, async (req: AuthRequest, res) =
     ownerId: req.auth!.userId,
   });
   res.json({ filename: stored.filename, path: documentPath(stored) });
+});
+
+/**
+ * อะไหล่ที่ไปแต่ละสาขา (เจ้าของงานขอ ต.ค. 69 · src/reports/branchPartsReport.ts) — นับเป็นชิ้น แยก "ใช้แล้ว" กับ
+ * "เบิกแล้ว · งานยังไม่จบ" · ค่าเริ่มต้นทั้งหมดตั้งแต่เริ่มใช้ระบบ · หัวกลุ่มทีละหน้า แถวของกลุ่มโหลดตอนกดเปิด (/detail)
+ * เฉพาะแอดมินและ Super Admin (เจ้าของงานกำหนด) — ต่างจากรายงานอะไหล่อื่นที่หัวหน้าภาค/Admin Spare Part เห็นด้วย
+ * ดูในฐานะใช้ตัวตนของคนที่ถูกดู จึงโดน 403 ตามตำแหน่งของคนนั้นเอง
+ */
+router.get("/reports/branch-parts", requireAuth, async (req: AuthRequest, res) => {
+  if (!canSeeBranchParts(req.auth)) return res.status(403).json({ error: BRANCH_PARTS_FORBIDDEN });
+  const q = parseBranchPartsQuery(req.query);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  if (q.format === "json") return res.json(await buildBranchPartsPage(q));
+  const { data, rowCount } = await buildBranchPartsWorkbook(q.filters);
+  const stamp = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const stored = saveDocument({
+    filename: `อะไหล่ที่ไปแต่ละสาขา-${stamp}.xlsx`,
+    asciiFilename: `branch-parts-${stamp}.xlsx`,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data,
+    ownerId: req.auth!.userId,
+  });
+  res.json({ filename: stored.filename, path: documentPath(stored), rowCount });
+});
+
+router.get("/reports/branch-parts/detail", requireAuth, async (req: AuthRequest, res) => {
+  if (!canSeeBranchParts(req.auth)) return res.status(403).json({ error: BRANCH_PARTS_FORBIDDEN });
+  const q = parseBranchPartsQuery(req.query);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  if (!q.key) return res.status(400).json({ error: "ไม่ได้ระบุว่าจะดูสาขาหรืออะไหล่ไหน" });
+  res.json(await buildBranchPartsDetail({ view: q.view, key: q.key, filters: q.filters, offset: q.offset, limit: q.limit }));
+});
+
+/** ตัวเลขบนลิงก์ในใบงาน — "อะไหล่ที่สาขานี้ได้ไปแล้ว (N ชิ้น)" · "เฉพาะเครื่องนี้ (N ชิ้น)" */
+router.get("/reports/branch-parts/counts", requireAuth, async (req: AuthRequest, res) => {
+  if (!canSeeBranchParts(req.auth)) return res.status(403).json({ error: BRANCH_PARTS_FORBIDDEN });
+  const q = parseBranchPartsQuery(req.query);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  if (!q.filters.branchCode) return res.status(400).json({ error: "ไม่ได้ระบุสาขา" });
+  res.json(await buildBranchPartsCounts(q.filters));
 });
 
 /**

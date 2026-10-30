@@ -50,6 +50,7 @@ import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
 import { takeFresh } from "../utils/freshOrder";
 import ClaimMachineBox, { ClaimCheckDraft, claimMachineGaps, ClaimMachineSummary, PlateDraft } from "../components/ClaimMachineBox";
 import { ClaimHistoryLinks } from "../components/ClaimHistoryEntry";
+import { BranchPartsLinks } from "../components/BranchPartsEntry";
 import type { ClaimGuide } from "../utils/nameplate";
 import {
   AcceptKinds,
@@ -131,6 +132,8 @@ interface WorkOrder {
   /** ยี่ห้อที่ใช้คิดประกัน — จากไฟล์รายงานเครื่อง หรือรุ่นที่เลือกตอนเปิดใบงาน */
   branchWarrantyBrand?: string | null;
   branchIsCompany: boolean;
+  /** id เครื่อง — ลิงก์ "เฉพาะเครื่องนี้" ไปรายงานอะไหล่ที่ไปแต่ละสาขา (รหัสเครื่องซ้ำข้ามสาขา) */
+  machineId?: number | null;
   machineCode: string | null;
   machineBrand: string | null;
   machineModel: string | null;
@@ -2423,6 +2426,14 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               value={[order.contactName, order.contactPhone].filter(Boolean).join(" · ")}
             />
           ) : null}
+          {/* แอดมิน/Super Admin เท่านั้น (ซ่อนเองในตัว) — ตัวเลขโหลดใหม่เมื่อใบเปลี่ยนขั้น */}
+          <BranchPartsLinks
+            branchCode={order.branchCode}
+            branchName={order.branchName}
+            machineId={order.machineId}
+            machineCode={order.machineCode}
+            reloadKey={order.status}
+          />
         </View>
 
         <View style={[card, styles.infoCard]}>

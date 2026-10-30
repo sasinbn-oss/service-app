@@ -11,16 +11,22 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import { isAreaTeam } from "../utils/areaTeam";
+import { canSeeBranchParts } from "../utils/branchParts";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
 interface Entry {
   /** byOpener/system มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
-  kind: ReportKind | "byOpener" | "system" | "confirmed" | "partsOut" | "issuedParts";
+  kind: ReportKind | "byOpener" | "system" | "confirmed" | "partsOut" | "issuedParts" | "branchParts";
   /** เฉพาะแอดมิน/หัวหน้าภาค — ช่างเปิดแล้วเซิร์ฟเวอร์ปฏิเสธ ไม่ควรเห็นการ์ดตั้งแต่แรก */
   managersOnly?: boolean;
   /** เฉพาะแอดมิน — รายงานทั้งระบบมีข้อมูลทั้งบริษัทรวมเบอร์โทรพนักงาน */
   adminOnly?: boolean;
+  /**
+   * เฉพาะแอดมินและ Super Admin — เจ้าของงาน: "admin ดูได้ superadmin ดูได้" (Admin Spare Part ไม่เห็น ต่างจาก adminOnly)
+   * กฎเดียวกับเซิร์ฟเวอร์ ดู utils/branchParts
+   */
+  branchPartsOnly?: boolean;
   label: string;
   who: string;
   question: string;
@@ -112,6 +118,17 @@ const ENTRIES: Entry[] = [
     managersOnly: true,
   },
   {
+    // ถัดจาก "อะไหล่เบิกแล้ว" ตามตัวอย่างที่ตกลง — แบบร่างเขียนคนอ่านรวม Admin Spare Part/หัวหน้าภาค แต่คำตอบของเจ้าของงานชนะ
+    kind: "branchParts",
+    label: "อะไหล่ที่ไปแต่ละสาขา",
+    who: "แอดมิน · Super Admin",
+    question: "สาขาไหนได้อะไหล่อะไรไปแล้วบ้าง",
+    icon: "storefront-outline",
+    tint: colors.successSoft,
+    iconColor: colors.successInk,
+    branchPartsOnly: true,
+  },
+  {
     kind: "parts",
     label: "อะไหล่ที่ต้องสั่ง",
     who: "ฝ่ายจัดซื้อ · คลัง",
@@ -192,7 +209,9 @@ export default function ReportsMenuScreen({ navigation }: Props) {
         ทุกใบดูบนหน้าจอได้ และกดดาวน์โหลดเป็น Excel เพื่อส่งต่อหรือทำต่อได้
       </Text>
 
-      {ENTRIES.filter((e) => (!e.managersOnly || manager) && (!e.adminOnly || admin)).map((entry) => (
+      {ENTRIES.filter(
+        (e) => (!e.managersOnly || manager) && (!e.adminOnly || admin) && (!e.branchPartsOnly || canSeeBranchParts(user))
+      ).map((entry) => (
         <TouchableOpacity
           key={entry.kind}
           style={styles.card}
@@ -208,6 +227,9 @@ export default function ReportsMenuScreen({ navigation }: Props) {
               ? navigation.navigate("PartsOutReport")
               : entry.kind === "issuedParts"
               ? navigation.navigate("IssuedPartsReport")
+              : entry.kind === "branchParts"
+              ? // {} ล้างตัวกรองสาขา/เครื่องที่ค้างจากลิงก์ในใบงาน — หน้านี้อาจยังค้างอยู่ในชุดหน้าเดียวกัน
+                navigation.navigate("BranchPartsReport", {})
               : navigation.navigate("Report", { kind: entry.kind, title: entry.label })
           }
         >
