@@ -27,7 +27,10 @@ interface Summary {
   name: string;
   employeeCode: string | null;
   role: string;
-  /** ภาคของผู้เปิด (ภาคแรก) — regions คือทุกภาค เซิร์ฟเวอร์รุ่นเก่าส่งแค่ region */
+  /**
+   * ภาคของผู้เปิด — ตอนนี้เซิร์ฟเวอร์ต่อหลายภาคเป็นข้อความเดียวมาใน region (ตรงกับคอลัมน์ใน Excel)
+   * ถ้ามี regions มาด้วยจะใช้ regions แทน (regionsOf) จึงไม่ต้องแก้หน้านี้อีกถ้าเซิร์ฟเวอร์เปลี่ยนไปส่งเป็นรายการ
+   */
   region: string | null;
   regions?: string[];
   total: number;

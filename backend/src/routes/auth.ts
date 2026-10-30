@@ -10,6 +10,7 @@ import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay, AREA_
 import { COCO_BRANCH } from "../utils/areaScope";
 import { forgetUser, passwordChanged, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
+import { regionsOf } from "../utils/supervisorScope";
 import { coverageOf, teamGroups } from "../utils/teamGroups";
 import { documentPath, saveDocument } from "../documents/store";
 import ExcelJS from "exceljs";
@@ -111,6 +112,8 @@ router.post("/login", async (req, res) => {
       name: user.name,
       role: user.role,
       region: user.region,
+      // ภาคทั้งหมดที่ดูแล (ภาคแรก = region) — หน้าแรก/บอร์ดแผนงานโชว์ครบทุกภาค ไม่ใช่แค่ภาคแรก
+      regions: regionsOf(user),
       // ทีมต้องติดมาตั้งแต่ตอนล็อกอิน ไม่ใช่รอให้หน้าจอไปถาม /auth/me อีกรอบ —
       // ระหว่างนั้นช่างจะมองไม่เห็นปุ่มของงานตัวเอง เพราะระบบยังไม่รู้ว่าอยู่ทีมไหน
       team: user.team,
@@ -134,6 +137,7 @@ async function meOf(user: MeUser, auth?: AuthRequest["auth"]) {
     phone: user.phone,
     role: user.role,
     region: user.region,
+    regions: regionsOf(user),
     team: user.team,
     teamCoverage: await coverageOf(user.team),
     supervisedTeams: user.supervisedTeams,
@@ -223,6 +227,7 @@ const MANAGED_USER_SELECT = {
   phone: true,
   role: true,
   region: true,
+  extraRegions: true,
   team: true,
   supervisedTeams: true,
   mustChangePassword: true,
@@ -230,9 +235,37 @@ const MANAGED_USER_SELECT = {
   maidBranches: { select: { branch: { select: { code: true, name: true } } }, orderBy: { branch: { code: "asc" } } },
 } as const;
 
-/** สาขาที่ Maid ประจำ ส่งเป็นรายการแบน ๆ — หน้าจอไม่ต้องรู้ว่ามีตารางเชื่อมอยู่ตรงกลาง */
-function managedUser<T extends { maidBranches: { branch: { code: string; name: string } }[] }>(u: T) {
-  return { ...u, maidBranches: u.maidBranches.map((m) => m.branch) };
+/**
+ * สาขาที่ Maid ประจำ ส่งเป็นรายการแบน ๆ — หน้าจอไม่ต้องรู้ว่ามีตารางเชื่อมอยู่ตรงกลาง
+ * regions = ภาคทั้งหมดรวมเป็นรายการเดียว หน้าจอไม่ต้องรู้ว่าภาคแรกเก็บแยกคอลัมน์
+ */
+function managedUser<T extends { region: string | null; extraRegions: string[]; maidBranches: { branch: { code: string; name: string } }[] }>(u: T) {
+  return { ...u, regions: regionsOf(u), maidBranches: u.maidBranches.map((m) => m.branch) };
+}
+
+/**
+ * ภาคที่เลือกมา → เก็บเป็น region (ภาคแรก) + extraRegions (ที่เหลือ)
+ *
+ * ชื่อใหม่ต้องมีในทะเบียนสาขา — เดิมไม่ได้ตรวจ ชื่อสะกดผิดเก็บได้เงียบ ๆ แล้วหัวหน้าภาคไม่เห็นใบงานสักใบ
+ * (รู้ตัวอีกทีจากรายงาน "ยังไม่มีพื้นที่รับผิดชอบ") · ภาคที่คนนี้ถืออยู่แล้วผ่านเสมอ แม้สาขาของภาคนั้นถูกย้ายออกหมดแล้ว
+ * ไม่งั้นแอดมินเอาภาคอื่นออกไม่ได้เลยเพราะภาคเก่าที่ค้างอยู่ทำให้บันทึกทั้งชุดไม่ผ่าน
+ */
+async function resolveRegions(
+  input: (string | null)[],
+  held: string[]
+): Promise<{ region: string | null; extraRegions: string[] } | { error: string }> {
+  const wanted: string[] = [];
+  for (const r of input) {
+    const c = cleanName(r);
+    if (c && !wanted.includes(c)) wanted.push(c);
+  }
+  const fresh = wanted.filter((r) => !held.includes(r));
+  if (fresh.length) {
+    const known = await prisma.branch.findMany({ where: { region: { in: fresh } }, distinct: ["region"], select: { region: true } });
+    const missing = fresh.filter((r) => !known.some((k) => k.region === r));
+    if (missing.length) return { error: `ไม่มีภาค ${missing.map((m) => `“${m}”`).join(", ")} ในทะเบียนสาขา` };
+  }
+  return { region: wanted[0] ?? null, extraRegions: wanted.slice(1) };
 }
 
 /**
@@ -299,7 +332,7 @@ router.get("/users/unassigned-report", requireAuth, requireAdmin, async (req: Au
   const [users, zones, pm, regionRows] = await Promise.all([
     prisma.user.findMany({
       where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
-      select: { employeeCode: true, name: true, phone: true, role: true, team: true, region: true, supervisedTeams: true, mustChangePassword: true },
+      select: { employeeCode: true, name: true, phone: true, role: true, team: true, region: true, extraRegions: true, supervisedTeams: true, mustChangePassword: true },
       orderBy: [{ role: "asc" }, { name: "asc" }],
     }),
     prisma.branch.findMany({ where: { zone: { not: null }, cancelledAt: null }, select: { zone: true }, distinct: ["zone"] }),
@@ -370,6 +403,8 @@ const createUserSchema = z.object({
   phone: z.string().trim().max(30).optional(),
   role: z.enum(ROLES).default("EMPLOYEE"),
   region: z.string().trim().max(120).nullable().optional(),
+  // ภาคที่ดูแลทั้งหมด (หัวหน้าภาคเลือกได้หลายภาค) — ส่งมาแล้วใช้แทน region
+  regions: z.array(z.string().trim().min(1).max(120)).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
   password: z.string().min(MIN_PASSWORD, `รหัสตั้งต้นต้องยาวอย่างน้อย ${MIN_PASSWORD} ตัว`),
   // รหัสสาขาที่ Maid (COCO) ประจำ — บทบาทอื่นไม่ใช้
   maidBranches: z.array(z.string().trim().min(1).max(30)).max(50).optional(),
@@ -411,6 +446,13 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
   if (existing) {
     return res.status(409).json({ error: `ชื่อผู้ใช้ "${body.employeeCode}" มีอยู่แล้ว` });
   }
+  // ภาคมีความหมายเฉพาะกับหัวหน้าภาค
+  let regionData: { region: string | null; extraRegions: string[] } = { region: null, extraRegions: [] };
+  if (body.role === "SUPERVISOR") {
+    const r = await resolveRegions(body.regions ?? [body.region ?? null], []);
+    if ("error" in r) return res.status(400).json({ error: r.error });
+    regionData = r;
+  }
   // Maid ที่ไม่มีสาขาเข้าระบบแล้วเห็นหน้าว่างทุกหน้า โดยไม่รู้ว่าผิดที่บัญชี — บังคับเลือกตั้งแต่สร้าง
   let maidIds: number[] = [];
   if (body.role === "COCO_MAID") {
@@ -428,8 +470,7 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
       name: body.name,
       phone: body.phone || null,
       role: body.role,
-      // ภาคมีความหมายเฉพาะกับหัวหน้าภาค
-      region: body.role === "SUPERVISOR" ? body.region || null : null,
+      ...regionData,
       passwordHash: await bcrypt.hash(body.password, 10),
       mustChangePassword: true,
       ...(maidIds.length ? { maidBranches: { create: maidIds.map((branchId) => ({ branchId })) } } : {}),
@@ -524,7 +565,14 @@ router.post("/change-password", requireAuth, async (req: AuthRequest, res) => {
 
 const userUpdateSchema = z.object({
   role: z.enum(ROLES).optional(),
+  /**
+   * ภาคเดียว — แอปรุ่นที่ยังเลือกได้ภาคเดียว (เปิดค้างอยู่ในเครื่องคนได้อีกพักหนึ่ง) ส่งแบบนี้
+   * แทนที่ภาคแรกเท่านั้น ภาคที่เพิ่มไว้ยังอยู่ (เว้นตัวที่ซ้ำกับภาคใหม่) · null = เอาภาคแรกออก ภาคถัดไปขึ้นแทน
+   * แอปรุ่นเก่าไม่เห็นภาคที่เพิ่ม จะให้มันลบสิ่งที่มองไม่เห็นไม่ได้
+   */
   region: z.string().trim().max(120).nullable().optional(),
+  // ภาคที่ดูแลทั้งชุด (แทนที่ของเดิม) — ส่งมาพร้อม region ใช้ตัวนี้
+  regions: z.array(z.string().trim().min(1).max(120)).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
   // ทีมช่างที่สังกัด — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
   team: z.string().trim().max(120).nullable().optional(),
   // ทีมช่างที่หัวหน้าภาคดูแล (หลายทีมได้) — ดู User.supervisedTeams
@@ -553,7 +601,10 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   const body = parsed.data;
 
-  const target = await prisma.user.findUnique({ where: { id }, select: { role: true, deletedAt: true, employeeCode: true } });
+  const target = await prisma.user.findUnique({
+    where: { id },
+    select: { role: true, deletedAt: true, employeeCode: true, region: true, extraRegions: true },
+  });
   if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
 
   const detailsChanged = body.employeeCode !== undefined || body.name !== undefined || body.phone !== undefined;
@@ -606,6 +657,14 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
   }
   // เปลี่ยนเป็นบทบาทอื่น → ล้างสาขาที่ประจำ ไม่งั้นเปลี่ยนกลับเป็น Maid ทีหลังจะเห็นสาขาเก่าที่ลืมไปแล้ว
   const clearMaid = finalRole !== "COCO_MAID" && target.role === "COCO_MAID";
+  let regionData: { region: string | null; extraRegions: string[] } | null = null;
+  if (body.regions !== undefined || body.region !== undefined) {
+    const held = regionsOf(target);
+    // ภาคเดียวแบบเดิม: ขึ้นเป็นภาคแรก ภาคที่เพิ่มไว้อยู่ต่อ (ตัวซ้ำถูกตัดใน resolveRegions) · null = ภาคถัดไปขึ้นแทน
+    const r = await resolveRegions(body.regions ?? [body.region ?? null, ...held.slice(1)], held);
+    if ("error" in r) return res.status(400).json({ error: r.error });
+    regionData = r;
+  }
 
   const updated = await prisma.$transaction(
     async (tx) => {
@@ -615,9 +674,10 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
         where: { id },
         data: {
           ...(body.role !== undefined ? { role: body.role } : {}),
-          // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้ง
-          ...(body.region !== undefined ? { region: cleanName(body.region) } : {}),
-          ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null } : {}),
+          // ภาคมีความหมายเฉพาะกับหัวหน้าภาค เปลี่ยนเป็นบทบาทอื่นก็ล้างทิ้งทุกภาค
+          // (ค้างไว้ = เปลี่ยนกลับเป็นหัวหน้าภาคทีหลังได้ภาคเก่าที่ลืมไปแล้วติดมา และรายงานยังโชว์ภาคของคนที่ไม่ได้ดูแลแล้ว)
+          ...(regionData ?? {}),
+          ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null, extraRegions: [] } : {}),
           // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
           ...(body.team !== undefined ? { team: cleanName(body.team) } : {}),
           ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
@@ -729,6 +789,7 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
           // ทีม/ภาคเป็นตัวกำหนดว่าเห็นงานไหนและอยู่ในทีมไหน — คนที่ไม่อยู่แล้วต้องไม่ถูกนับในทีม
           team: null,
           region: null,
+          extraRegions: [],
         },
       });
       // ถอดออกจากแผนทีมวันนี้เป็นต้นไป ส่วนแผนวันที่ผ่านมาแล้วเก็บไว้เป็นประวัติ

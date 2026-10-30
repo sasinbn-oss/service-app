@@ -1,3 +1,5 @@
+import { regionsOf } from "./supervisorScope";
+
 /**
  * ใครยังไม่มีพื้นที่รับผิดชอบ — ช่างที่ไม่มีทีม หัวหน้าภาคที่ไม่มีทั้งภาคและทีมที่ดูแล
  *
@@ -9,6 +11,7 @@ export interface CoverageUser {
   role: string;
   team: string | null;
   region: string | null;
+  extraRegions?: string[] | null;
   supervisedTeams: string[];
 }
 
@@ -19,9 +22,11 @@ export function coverageGap(u: CoverageUser, teams: Set<string>, regions: Set<st
     return null;
   }
   if (u.role === "SUPERVISOR") {
-    if ((u.region && regions.has(u.region)) || u.supervisedTeams.some((t) => teams.has(t))) return null;
-    if (!u.region && u.supervisedTeams.length === 0) return "ยังไม่ได้ตั้งภาคหรือทีมที่ดูแล";
-    return `ภาค/ทีมที่ตั้งไว้ไม่มีในทะเบียนสาขา (${[u.region, ...u.supervisedTeams].filter(Boolean).join(", ")})`;
+    // ภาคไหนก็ได้ที่ยังมีสาขา = มีพื้นที่แล้ว · ถามแค่ "มีงานให้เห็นไหม" ภาคที่ค้างชื่อเก่าหน้าสิทธิ์ผู้ใช้โชว์ให้เอาออกเอง
+    const mine = regionsOf(u);
+    if (mine.some((r) => regions.has(r)) || u.supervisedTeams.some((t) => teams.has(t))) return null;
+    if (mine.length === 0 && u.supervisedTeams.length === 0) return "ยังไม่ได้ตั้งภาคหรือทีมที่ดูแล";
+    return `ภาค/ทีมที่ตั้งไว้ไม่มีในทะเบียนสาขา (${[...mine, ...u.supervisedTeams].join(", ")})`;
   }
   return null;
 }

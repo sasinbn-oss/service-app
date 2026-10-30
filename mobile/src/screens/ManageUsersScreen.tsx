@@ -30,6 +30,7 @@ import RosterImportModal from "../components/RosterImportModal";
 import AreaTeamImportModal from "../components/AreaTeamImportModal";
 import Dropdown from "../components/Dropdown";
 import { canPickFile } from "../utils/filePicker";
+import { regionsOf } from "../utils/regions";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
@@ -38,10 +39,13 @@ interface ManagedUser {
   name: string;
   phone: string | null;
   role: Role;
+  /** ภาคแรก — อ่านผ่าน regionsOf() เสมอ เซิร์ฟเวอร์รุ่นเก่าส่งแค่ช่องนี้ */
   region: string | null;
+  /** ทุกภาคที่หัวหน้าภาคดูแล (หลายภาคได้ สิทธิ์เต็มทุกภาค) */
+  regions?: string[];
   /** ทีมช่างที่สังกัด — ตัวบอกว่าช่างคนนี้เห็นงานของทีมไหน */
   team: string | null;
-  /** ทีมช่างที่หัวหน้าภาคดูแล — หลายทีมได้ ใช้ร่วมกับภาค */
+  /** ทีมช่างที่หัวหน้าภาคดูแล — หลายทีมได้ ใช้ร่วมกับภาคที่เลือก */
   supervisedTeams: string[];
   /** สาขาที่ Maid (COCO) ประจำ — Maid เห็นเฉพาะสาขาเหล่านี้ */
   maidBranches?: CocoBranch[];
@@ -55,7 +59,7 @@ interface CocoBranch {
 
 const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
   { value: "EMPLOYEE", label: "ช่าง", hint: "รับงานที่ถูกจ่ายให้ บันทึกผลตรวจหน้างาน และปิดงาน" },
-  { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาคหรือทีมที่ดูแล" },
+  { value: "SUPERVISOR", label: "หัวหน้าภาค", hint: "ระบุอะไหล่และจ่ายงานให้ช่าง ในภาค (หลายภาคได้) หรือทีมที่ดูแล" },
   { value: "ADMIN", label: "แอดมิน", hint: "เปิดใบงาน เช็คคลัง และทำแทนได้ทุกขั้น" },
   {
     value: "PARTS_ADMIN",
@@ -97,7 +101,7 @@ function roleOptions(meSuper: boolean, current?: Role) {
 function searchText(u: ManagedUser) {
   const role = ROLE_OPTIONS.find((r) => r.value === u.role)?.label ?? "";
   const maid = (u.maidBranches ?? []).flatMap((b) => [b.code, b.name]);
-  return [u.name, u.employeeCode, u.phone, u.team, u.region, ...(u.supervisedTeams ?? []), ...maid, role]
+  return [u.name, u.employeeCode, u.phone, u.team, ...regionsOf(u), ...(u.supervisedTeams ?? []), ...maid, role]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -125,8 +129,10 @@ function coverageGap(u: ManagedUser, teams: Set<string>, regions: Set<string>): 
   }
   if (u.role === "SUPERVISOR") {
     const st = u.supervisedTeams ?? [];
-    if ((u.region && regions.has(u.region)) || st.some((t) => teams.has(t))) return null;
-    if (!u.region && st.length === 0) return "ยังไม่ได้ตั้งภาคหรือทีมที่ดูแล";
+    const rs = regionsOf(u);
+    // หลายภาค: มีภาคเดียวที่ยังมีในทะเบียนก็ยังเห็นงานอยู่ — ไม่นับเป็นคนไม่มีพื้นที่
+    if (rs.some((r) => regions.has(r)) || st.some((t) => teams.has(t))) return null;
+    if (!rs.length && st.length === 0) return "ยังไม่ได้ตั้งภาคหรือทีมที่ดูแล";
     return "ภาค/ทีมที่ตั้งไว้ไม่มีในทะเบียนสาขา";
   }
   return null;
@@ -164,6 +170,15 @@ export default function ManageUsersScreen() {
     }
     return m;
   }, [users, teams, regions, groups]);
+  // ใครถือภาคไหนบ้าง — ใช้บอกตอนเลือกภาคว่ามีหัวหน้าภาคคนอื่นดูแลภาคนั้นอยู่ด้วย
+  const holders = useMemo(() => {
+    const m: Holders = new Map();
+    for (const u of users) {
+      if (u.role !== "SUPERVISOR") continue;
+      for (const r of regionsOf(u)) m.set(r, [...(m.get(r) ?? []), { id: u.id, name: u.name }]);
+    }
+    return m;
+  }, [users]);
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const base = gapsOnly ? users.filter((u) => gaps.has(u.id)) : users;
@@ -219,7 +234,7 @@ export default function ManageUsersScreen() {
 
   async function update(
     id: number,
-    patch: { role?: Role; region?: string | null; team?: string | null; supervisedTeams?: string[]; maidBranches?: string[] }
+    patch: { role?: Role; regions?: string[]; team?: string | null; supervisedTeams?: string[]; maidBranches?: string[] }
   ) {
     setSavingId(id);
     try {
@@ -468,34 +483,25 @@ export default function ManageUsersScreen() {
 
           {u.role === "SUPERVISOR" ? (
             <>
-              <Text style={styles.label}>ภาคที่ดูแล (กดซ้ำเพื่อเอาออก)</Text>
-              {regions.length === 0 ? (
+              <Text style={styles.label}>ภาคที่ดูแล (เลือกได้หลายภาค · กดซ้ำเพื่อเอาออก)</Text>
+              {regions.length === 0 && !regionsOf(u).length ? (
                 <Text style={styles.hint}>
                   ยังไม่มีภาคในทะเบียนสาขา — อัปโหลดไฟล์ทะเบียนสาขาก่อน
                 </Text>
               ) : (
-                <View style={styles.options}>
-                  {regions.map((region) => (
-                    <TouchableOpacity
-                      key={region}
-                      style={[styles.option, u.region === region && styles.optionOn]}
-                      // กดซ้ำเพื่อเอาภาคออก — หัวหน้าภาคที่ดูแลตามทีมอย่างเดียวไม่ต้องมีภาค
-                      onPress={() => update(u.id, { region: u.region === region ? null : region })}
-                      disabled={savingId !== null}
-                      activeOpacity={0.7}
-                    >
-                      <Text
-                        style={[styles.optionText, u.region === region && styles.optionTextOn]}
-                      >
-                        {region}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                <RegionChips
+                  value={regionsOf(u)}
+                  options={regions}
+                  // เอาภาคออกหมดได้ — หัวหน้าภาคที่ดูแลตามทีมอย่างเดียวไม่ต้องมีภาค
+                  onChange={(next) => update(u.id, { regions: next })}
+                  disabled={savingId !== null}
+                />
               )}
+              <SharedRegionHint regions={regionsOf(u)} holders={holders} self={u.id} />
               {/*
                 ทีมที่ดูแลเลือกได้หลายทีม — บันทึกแบ่งทีมแบ่งหัวหน้าภาคตามทีม ไม่ตรงกับภาค
-                (สองคนแบ่ง กทม. กันตามเขต · คนหนึ่งดูสองภาค) เห็นงาน = ภาคที่เลือก รวมกับทีมเหล่านี้
+                (สองคนแบ่ง กทม. กันตามเขต) เห็นงาน = ทุกภาคที่เลือก รวมกับทีมเหล่านี้
+                คนที่ดูทั้งภาคหลายภาคเลือกที่ปุ่มภาคด้านบนได้แล้ว ไม่ต้องไล่ติ๊กทีมทีละทีมแบบเดิม
               */}
               <Text style={styles.label}>ทีมช่างที่ดูแล (เลือกได้หลายทีม)</Text>
               {teams.length === 0 ? (
@@ -554,7 +560,7 @@ export default function ManageUsersScreen() {
                   </View>
                 </>
               ) : null}
-              {!u.region && !(u.supervisedTeams ?? []).length ? (
+              {!regionsOf(u).length && !(u.supervisedTeams ?? []).length ? (
                 <View style={styles.warn}>
                   <Ionicons name="alert-circle" size={14} color={colors.danger} />
                   <Text style={styles.warnText}>ยังไม่ได้เลือกภาคหรือทีม จะไม่เห็นใบงานใดเลย</Text>
@@ -620,6 +626,7 @@ export default function ManageUsersScreen() {
       <CreateUserModal
         visible={creating}
         regions={regions}
+        holders={holders}
         cocoBranches={cocoBranches}
         onCancel={() => setCreating(false)}
         onDone={async () => {
@@ -659,12 +666,14 @@ const MIN_PASSWORD = 8;
 function CreateUserModal({
   visible,
   regions,
+  holders,
   cocoBranches,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   regions: string[];
+  holders: Holders;
   cocoBranches: CocoBranch[];
   onCancel: () => void;
   onDone: () => void;
@@ -674,7 +683,7 @@ function CreateUserModal({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState<Role>("EMPLOYEE");
-  const [region, setRegion] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
   const [maidBranches, setMaidBranches] = useState<string[]>([]);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
@@ -686,7 +695,7 @@ function CreateUserModal({
     setName("");
     setPhone("");
     setRole("EMPLOYEE");
-    setRegion(null);
+    setPicked([]);
     setMaidBranches([]);
     setPassword("");
     setError(null);
@@ -696,7 +705,7 @@ function CreateUserModal({
     employeeCode.trim().length >= 2 &&
     name.trim().length > 0 &&
     password.length >= MIN_PASSWORD &&
-    (role !== "SUPERVISOR" || !!region) &&
+    (role !== "SUPERVISOR" || picked.length > 0) &&
     (role !== "COCO_MAID" || maidBranches.length > 0);
 
   async function submit() {
@@ -708,7 +717,8 @@ function CreateUserModal({
         name: name.trim(),
         phone: phone.trim() || undefined,
         role,
-        region,
+        // หลายภาคได้ — เซิร์ฟเวอร์เก็บภาคแรกเป็น region ที่เหลือเป็น extraRegions
+        ...(role === "SUPERVISOR" ? { regions: picked } : {}),
         password,
         ...(role === "COCO_MAID" ? { maidBranches } : {}),
       });
@@ -791,7 +801,7 @@ function CreateUserModal({
             style={[styles.option, role === r.value && styles.optionOn]}
             onPress={() => {
               setRole(r.value);
-              if (r.value !== "SUPERVISOR") setRegion(null);
+              if (r.value !== "SUPERVISOR") setPicked([]);
               if (r.value !== "COCO_MAID") setMaidBranches([]);
             }}
             activeOpacity={0.7}
@@ -805,21 +815,9 @@ function CreateUserModal({
 
       {role === "SUPERVISOR" ? (
         <>
-          <Text style={styles.label}>ภาคที่ดูแล</Text>
-          <View style={styles.options}>
-            {regions.map((r) => (
-              <TouchableOpacity
-                key={r}
-                style={[styles.option, region === r && styles.optionOn]}
-                onPress={() => setRegion(r)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.optionText, region === r && styles.optionTextOn]}>
-                  {r}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={styles.label}>ภาคที่ดูแล (เลือกได้หลายภาค · กดซ้ำเพื่อเอาออก)</Text>
+          <RegionChips value={picked} options={regions} onChange={setPicked} />
+          <SharedRegionHint regions={picked} holders={holders} />
         </>
       ) : null}
 
@@ -855,6 +853,82 @@ function CreateUserModal({
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </AppModal>
+  );
+}
+
+/** ภาค → หัวหน้าภาคที่ถือภาคนั้นอยู่ (หลายคนได้) */
+type Holders = Map<string, { id: number; name: string }[]>;
+
+/**
+ * ปุ่มภาคที่ดูแล — เลือกได้หลายภาค กดซ้ำเพื่อเอาออก (เจ้าของงานขอ ต.ค. 69) ทุกภาคได้สิทธิ์เต็มเท่ากัน
+ * ไม่มีภาคหลัก/ภาครองในสายตาผู้ใช้ — ปุ่มเรียงตามทะเบียนสาขา
+ *
+ * ภาคที่ถืออยู่แต่ไม่มีในทะเบียนสาขาแล้ว (เปลี่ยนชื่อภาค · ปิดสาขาหมด) ยังขึ้นปุ่มให้กดเอาออก —
+ * สมัยเลือกได้ภาคเดียว กดภาคอื่นก็ทับภาคเก่าไปเอง พอเลือกได้หลายภาค ภาคที่ไม่มีปุ่มจะค้างอยู่ตลอดไป
+ */
+function RegionChips({
+  value,
+  options,
+  onChange,
+  disabled,
+}: {
+  value: string[];
+  options: string[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+}) {
+  const stale = value.filter((r) => !options.includes(r));
+  return (
+    <View style={styles.options}>
+      {[...options, ...stale].map((r) => {
+        const on = value.includes(r);
+        const gone = !options.includes(r);
+        return (
+          <TouchableOpacity
+            key={r}
+            style={[styles.option, on && styles.optionOn, gone && styles.staleOption]}
+            // ต่อท้าย ไม่เรียงใหม่ — ภาคแรกคือ region ที่แอปรุ่นเก่ากับรายงานเดิมอ่าน เพิ่มภาคแล้วภาคเดิมไม่ควรเปลี่ยน
+            onPress={() => onChange(on ? value.filter((x) => x !== r) : [...value, r])}
+            disabled={disabled}
+            activeOpacity={0.7}
+            // เว็บไม่แปลง accessibilityState เป็น aria-selected (แบบเดียวกับ FilterBar) — โปรแกรมอ่านจอ/เทสต์
+            // ต้องรู้ว่าภาคไหนติดอยู่โดยไม่ต้องเดาจากสี เลือกได้หลายภาคแล้วสีอย่างเดียวไม่พอ
+            accessibilityState={{ selected: on }}
+            aria-selected={on}
+          >
+            <Text style={[styles.optionText, on && styles.optionTextOn, gone && { color: colors.dangerInk }]}>
+              {gone ? `${r} · ไม่มีในทะเบียนสาขา` : r}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * ภาคที่หัวหน้าภาคคนอื่นถืออยู่ด้วย — ทำได้ตามที่เจ้าของงานตอบ (ทั้งสองคนได้ใบงานของภาคนั้น ใครกดก่อนได้ก่อน)
+ * แต่พอเลือกได้หลายภาค การซ้อนกันเกิดได้ง่ายโดยไม่ตั้งใจ บอกตอนเลือกเลย ดีกว่าให้หัวหน้าภาคสองคนงงทีหลัง
+ * ว่าทำไมใบเดียวกันอยู่ในกล่องทั้งคู่ · ทีมที่อีกคนติ๊กไว้ใน "ทีมที่ดูแล" ยังไปที่คนนั้นคนเดียวตามกฎเดิม
+ */
+function SharedRegionHint({ regions, holders, self }: { regions: string[]; holders: Holders; self?: number }) {
+  const lines = regions.flatMap((r) => {
+    const others = (holders.get(r) ?? []).filter((h) => h.id !== self);
+    return others.length ? [{ r, others }] : [];
+  });
+  if (!lines.length) return null;
+  return (
+    <View style={styles.sharedBox}>
+      {lines.map(({ r, others }) => (
+        <View key={r} style={styles.shared}>
+          <Ionicons name="people-outline" size={14} color={colors.roleSupervisor} style={{ marginTop: 3 }} />
+          <Text style={styles.sharedText}>
+            ภาค{r} มี {others.map((o) => o.name).join(", ")} ดูแลด้วย — ใบงานเข้ากล่อง
+            {others.length === 1 ? "ทั้งสองคน" : `ทั้ง ${others.length + 1} คน`}
+          </Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -1256,6 +1330,10 @@ const styles = StyleSheet.create({
   optionText: { fontSize: 13, lineHeight: 21, color: colors.textMuted, fontWeight: "600" },
   optionTextOn: { color: colors.primaryDark },
   branchChip: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" },
+  staleOption: { borderStyle: "dashed", borderColor: colors.danger },
+  sharedBox: { gap: 2, marginTop: spacing.xs },
+  shared: { flexDirection: "row", alignItems: "flex-start", gap: spacing.xs },
+  sharedText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   hint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, marginTop: spacing.xs },
   warn: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
   warnText: { fontSize: 12, lineHeight: 20, color: colors.danger },

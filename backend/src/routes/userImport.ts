@@ -188,7 +188,8 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
                   // รวมกับทีมเดิม ไม่แทนที่ — ไฟล์ที่มีช่างแค่บางคนของหัวหน้าภาค (เพิ่มคนใหม่ทีละชุด)
                   // เคยทำให้ทีมอื่นที่เขาดูแลหายไปเงียบ ๆ แล้วมองไม่เห็นงานของทีมเหล่านั้น · เอาทีมออกทำที่การ์ด
                   supervisedTeams: p.role === "SUPERVISOR" ? [...new Set([...u.supervisedTeams, ...supTeams])] : [],
-                  ...(p.role !== "SUPERVISOR" ? { region: null } : {}),
+                  // ไม่ใช่หัวหน้าภาคแล้ว = ล้างทุกภาค · ยังเป็นหัวหน้าภาค = คงภาคเดิม (ไฟล์รายชื่อไม่มีคอลัมน์ภาค)
+                  ...(p.role !== "SUPERVISOR" ? { region: null, extraRegions: [] } : {}),
                 }),
           },
         });
@@ -338,11 +339,15 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
        * อัปเดตทั้งชุดในคำสั่งเดียว (UNNEST) ไม่ใช่ทีละคน — ฐานข้อมูลจริงอยู่คนละ region
        * 156 คน + 433 สาขาทีละแถวคือหลายร้อยรอบไปกลับ เกินเพดาน transaction
        * ส่งเป็น text[] แล้ว cast เอง (CLAUDE.md: array ที่เป็น null ทั้งก้อนถูกเดาชนิดผิด)
+       * หัวหน้าภาคที่ไฟล์นี้เปลี่ยนเป็นทีม Area ล้างภาคทิ้ง (u."role" ฝั่งขวาคือค่าก่อนอัปเดต) แบบเดียวกับเปลี่ยนบทบาทที่การ์ด
+       * — ภาคที่ค้างไม่มีผลกับสิทธิ์ แต่ยังขึ้นในรายงานผู้เปิดใบงาน/การใช้งานว่าคนนี้ดูแลภาคนั้น
        */
       const ppl = wanted.map((p) => ({ id: String(ids.get(p.login)), p }));
       await tx.$executeRaw`
         UPDATE "User" u SET "name" = d.name, "phone" = COALESCE(NULLIF(d.phone, ''), u."phone"), "role" = d.role,
-          "areaId" = NULLIF(d.area, '')::int
+          "areaId" = NULLIF(d.area, '')::int,
+          "region" = CASE WHEN u."role" = 'SUPERVISOR' THEN NULL ELSE u."region" END,
+          "extraRegions" = CASE WHEN u."role" = 'SUPERVISOR' THEN ARRAY[]::text[] ELSE u."extraRegions" END
         FROM UNNEST(${ppl.map((x) => x.id)}::text[], ${ppl.map((x) => x.p.name)}::text[], ${ppl.map((x) => x.p.phone ?? "")}::text[],
                     ${ppl.map((x) => x.p.role)}::text[], ${ppl.map((x) => (x.p.areaLogin ? String(ids.get(x.p.areaLogin) ?? "") : ""))}::text[])
           AS d(id, name, phone, role, area)

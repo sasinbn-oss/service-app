@@ -19,6 +19,7 @@ import { ACTIVE_WORK_ORDER_STATUSES, bangkokDay } from "../utils/constants";
 import { forgetTeamGroups, teamGroups } from "../utils/teamGroups";
 import { recordTeamMove } from "../utils/branchPins";
 import { refreshOutsource } from "../utils/outsource";
+import { regionsOf } from "../utils/supervisorScope";
 
 const router = Router();
 
@@ -128,7 +129,7 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
     }),
     prisma.user.findMany({
       where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
-      select: { id: true, name: true, employeeCode: true, phone: true, role: true, team: true, region: true, supervisedTeams: true },
+      select: { id: true, name: true, employeeCode: true, phone: true, role: true, team: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
     prisma.teamGroup.findMany({ orderBy: { name: "asc" } }),
@@ -164,8 +165,9 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
       .map(([name, teams]) => ({ name, teams: teams.sort((a, b) => a.name.localeCompare(b.name, "th")) })),
     supervisors: users
       .filter((u) => u.role === "SUPERVISOR")
-      .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || (!!u.region && regions.has(u.region)))
-      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, phone: u.phone, region: u.region, teams: u.supervisedTeams })),
+      .filter((u) => !area || u.supervisedTeams.some((t) => known.has(t)) || regionsOf(u).some((r) => regions.has(r)))
+      // regions = ทุกภาคที่ดูแล (ผังวางคนเดียวกันไว้ได้หลายภาค) · region (ภาคแรก) คงไว้ให้แอปรุ่นเก่า
+      .map((u) => ({ id: u.id, name: u.name, code: u.employeeCode, phone: u.phone, region: u.region, regions: regionsOf(u), teams: u.supervisedTeams })),
     technicians: users
       .filter((u) => u.role === "EMPLOYEE")
       .filter((u) => !area || (!!u.team && known.has(u.team)))
@@ -691,12 +693,16 @@ router.get("/usage", requireAuth, requireAdmin, async (req, res) => {
 router.get("/members", requireAuth, requireAdmin, async (req, res) => {
   const name = String(req.query.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "ต้องระบุชื่อทีม" });
-  const pick = { id: true, employeeCode: true, name: true, phone: true, role: true, region: true } as const;
-  const [technicians, supervisors, groups] = await Promise.all([
+  const pick = { id: true, employeeCode: true, name: true, phone: true, role: true, region: true, extraRegions: true } as const;
+  const [techRows, supRows, groups] = await Promise.all([
     prisma.user.findMany({ where: { team: name, deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
     prisma.user.findMany({ where: { supervisedTeams: { has: name }, deletedAt: null }, select: pick, orderBy: { name: "asc" } }),
     teamGroups(),
   ]);
+  // ป้าย "ภาคX" ของหัวหน้าภาคต้องครบทุกภาค — ส่ง regions ไว้ข้าง region (ภาคแรก) แทนคอลัมน์ดิบ extraRegions
+  const shape = ({ extraRegions, ...u }: (typeof techRows)[number]) => ({ ...u, regions: regionsOf({ region: u.region, extraRegions }) });
+  const technicians = techRows.map(shape);
+  const supervisors = supRows.map(shape);
   const group = groups.get(name);
   res.json({
     name,

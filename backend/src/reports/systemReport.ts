@@ -25,6 +25,7 @@ import {
   warrantyStatus,
 } from "../utils/constants";
 import { bkkDayStart, thaiDateTime } from "./openerReport";
+import { regionsOf } from "../utils/supervisorScope";
 
 const ROLE_LABELS: Record<string, string> = {
   ADMIN: "แอดมิน",
@@ -66,7 +67,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
   // ── ข้อมูลที่ทุกชีตใช้ (ขนาดเท่าจำนวนคน/สาขา/เครื่อง ไม่ใช่ใบงาน) ──
   const [users, branches, machines, downMachines, woByMachine, woOpenByTeam, woByStatus] = await Promise.all([
     prisma.user.findMany({
-      select: { id: true, employeeCode: true, name: true, phone: true, role: true, team: true, region: true, supervisedTeams: true, mustChangePassword: true, deletedAt: true },
+      select: { id: true, employeeCode: true, name: true, phone: true, role: true, team: true, region: true, extraRegions: true, supervisedTeams: true, mustChangePassword: true, deletedAt: true },
     }),
     prisma.branch.findMany({ orderBy: { code: "asc" } }),
     prisma.machine.findMany({
@@ -138,7 +139,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
   );
   block("บัญชีที่ต้องตามต่อ", ["รายการ", "จำนวน"], [
     ["ช่างที่ยังไม่มีทีม", active.filter((u) => u.role === "EMPLOYEE" && !u.team).length],
-    ["หัวหน้าภาคที่ยังไม่มีพื้นที่ดูแล", active.filter((u) => u.role === "SUPERVISOR" && !u.region && !u.supervisedTeams.length).length],
+    ["หัวหน้าภาคที่ยังไม่มีพื้นที่ดูแล", active.filter((u) => u.role === "SUPERVISOR" && !regionsOf(u).length && !u.supervisedTeams.length).length],
     ["ยังไม่เคยเข้าระบบ (ใช้รหัสตั้งต้นอยู่)", active.filter((u) => u.mustChangePassword).length],
   ]);
   const liveBranches = branches.filter((b) => !b.cancelledAt);
@@ -191,7 +192,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
       u.name,
       ROLE_LABELS[u.role] ?? u.role,
       u.team ?? "",
-      u.role === "SUPERVISOR" ? [u.region ? `${u.region} (ทั้งภาค)` : "", ...u.supervisedTeams].filter(Boolean).join(", ") : "",
+      u.role === "SUPERVISOR" ? [...regionsOf(u).map((r) => `${r} (ทั้งภาค)`), ...u.supervisedTeams].join(", ") : "",
       u.phone ?? "",
       // ระบบไม่ได้เก็บเวลาเข้าระบบล่าสุด — บอกได้แค่ว่าเปลี่ยนรหัสตั้งต้นแล้วหรือยัง (= เคยเข้ามาแล้ว)
       u.mustChangePassword ? "ยังไม่เคย (ใช้รหัสตั้งต้น)" : "เคยแล้ว",
@@ -199,7 +200,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
         ? `ถูกลบ ${thaiDateTime(u.deletedAt, false)}`
         : u.role === "EMPLOYEE" && !u.team
           ? "ใช้งาน · ยังไม่มีทีม"
-          : u.role === "SUPERVISOR" && !u.region && !u.supervisedTeams.length
+          : u.role === "SUPERVISOR" && !regionsOf(u).length && !u.supervisedTeams.length
             ? "ใช้งาน · ยังไม่มีพื้นที่"
             : "ใช้งาน",
     ])
@@ -214,7 +215,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
     const regionCount = new Map<string, number>();
     bs.forEach((b) => b.region && regionCount.set(b.region, (regionCount.get(b.region) ?? 0) + 1));
     const region = [...regionCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
-    const sups = active.filter((u) => u.role === "SUPERVISOR" && ((region && u.region === region) || u.supervisedTeams.includes(t)));
+    const sups = active.filter((u) => u.role === "SUPERVISOR" && ((region && regionsOf(u).includes(region)) || u.supervisedTeams.includes(t)));
     const techs = active.filter((u) => u.role === "EMPLOYEE" && u.team === t);
     const ids = new Set(bs.map((b) => b.id));
     teamRows.push([

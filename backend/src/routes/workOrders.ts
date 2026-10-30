@@ -2025,7 +2025,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
     select: {
       id: true, code: true, status: true, assignedTeam: true, scheduledAt: true, scheduledTime: true,
       symptom: true, contactName: true, contactPhone: true,
-      branch: { select: { code: true, name: true, zone: true, latitude: true, longitude: true } },
+      branch: { select: { code: true, name: true, region: true, zone: true, latitude: true, longitude: true } },
       machine: { select: { code: true, capacityKg: true } },
     },
   });
@@ -2049,6 +2049,8 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
         // งานตรวจ: ยังอยู่ขั้นตรวจ หรือคอนเฟิร์มแล้วส่งต่อไปขั้นตรวจ (ใบที่ตรวจเสร็จกลับไประบุอะไหล่แล้วนับเป็นซ่อม)
         kind: inspectStages.includes(o.status) ? ("INSPECT" as const) : ("REPAIR" as const),
         team: o.assignedTeam ?? o.branch.zone ?? null,
+        // ภาคของสาขา — หัวหน้าภาคที่ดูแลหลายภาคได้ใบของทุกภาคปนกันในรายงานเดียว แต่ส่งไลน์คนละกลุ่มตามภาค
+        region: o.branch.region,
         scheduledAt: o.scheduledAt!.toISOString().slice(0, 10),
         scheduledTime: o.scheduledTime,
         branchCode: o.branch.code,
