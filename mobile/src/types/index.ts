@@ -1,4 +1,13 @@
-export type Role = "EMPLOYEE" | "SUPERVISOR" | "ADMIN" | "PARTS_ADMIN" | "SUPER_ADMIN" | "AREA" | "COCO_SUPERVISOR" | "COCO_MAID";
+export type Role =
+  | "EMPLOYEE"
+  | "SENIOR_TECH"
+  | "SUPERVISOR"
+  | "ADMIN"
+  | "PARTS_ADMIN"
+  | "SUPER_ADMIN"
+  | "AREA"
+  | "COCO_SUPERVISOR"
+  | "COCO_MAID";
 
 export interface User {
   id: number;
@@ -10,8 +19,13 @@ export interface User {
   region?: string | null;
   /** ทุกภาคที่หัวหน้าภาคดูแล (หลายภาคได้ สิทธิ์เต็มทุกภาค) — เซิร์ฟเวอร์รุ่นเก่าไม่ส่งช่องนี้ */
   regions?: string[];
-  /** ทีมช่างที่สังกัด — ตัวบอกว่าช่างคนนี้เห็นงานของทีมไหน ว่างสำหรับบทบาทอื่น */
+  /** ทีมช่างที่สังกัด — ตัวบอกว่าช่างคนนี้เห็นงานของทีมไหน ว่างสำหรับบทบาทอื่น · Senior ช่าง = ทีมแรกที่เลือก */
   team?: string | null;
+  /**
+   * ทุกทีมช่าง/ทีมรวมที่เลือกไว้ (Senior ช่างเลือกได้หลายอัน) — อ่านผ่าน teamsOf() (utils/teams) ไม่อ่านตรง ๆ
+   * เพราะเซิร์ฟเวอร์รุ่นเก่าไม่ส่งช่องนี้
+   */
+  teams?: string[];
   /**
    * ทีมที่ช่างคนนี้เห็นงาน — ทีมช่างธรรมดา = [team] · ทีมรวม = ทุกทีมที่ครอบคลุม · all = ทุกทีม
    * ใช้ตัดสินว่าใบงานที่จ่ายให้ทีมไหน "เป็นงานของฉัน" (ปุ่มของขั้นตอน)
@@ -31,6 +45,11 @@ export interface User {
   superAdmin?: boolean;
   /** true = แอดมินอะไหล่ (คนเช็คประกัน) — role ถูกมองเป็น "ADMIN" แบบเดียวกับ superAdmin ตั้งใน AuthContext */
   partsAdmin?: boolean;
+  /**
+   * true = Senior ช่าง — role ถูกมองเป็น "EMPLOYEE" (สิทธิ์เท่าช่างทุกอย่าง แค่เห็นหลายทีม) ตั้งใน AuthContext
+   * ทุกที่ที่เช็คว่า "เป็นช่าง" จึงใช้ได้เลย ป้ายชื่อตำแหน่งดูที่ธงนี้
+   */
+  seniorTech?: boolean;
 }
 
 export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE" | "INACTIVE";

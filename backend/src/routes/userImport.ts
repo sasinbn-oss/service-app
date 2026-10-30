@@ -19,7 +19,7 @@ import { parseAreaTeam, parseMaidList } from "../users/areaTeamImport";
 import { documentPath, saveDocument } from "../documents/store";
 import { displayName, parseRoster, readRows, suggestTeam } from "../users/rosterImport";
 import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
-import { teamGroups } from "../utils/teamGroups";
+import { teamGroups, teamsOf } from "../utils/teamGroups";
 import { staleUsers } from "../utils/userGate";
 
 const router = Router();
@@ -63,7 +63,7 @@ router.post("/preview", requireAuth, requireAdmin, upload.single("file"), async 
     teamAliasMap(),
     prisma.user.findMany({
       where: { employeeCode: { in: people.map((p) => p.code) }, deletedAt: null },
-      select: { id: true, employeeCode: true, name: true, role: true, team: true },
+      select: { id: true, employeeCode: true, name: true, role: true, team: true, extraTeams: true },
     }),
   ]);
   const byCode = new Map(existing.map((u) => [u.employeeCode, u]));
@@ -86,9 +86,11 @@ router.post("/preview", requireAuth, requireAdmin, upload.single("file"), async 
       return {
         ...p,
         name: displayName(p),
-        existing: u ? { name: u.name, role: u.role, team: u.team } : null,
+        // teams = ทุกทีมที่ถืออยู่ — หน้าตัวอย่างบอกได้ว่า Senior ช่างคนนี้คงทีมเดิมไว้ครบ
+        existing: u ? { name: u.name, role: u.role, team: u.team, teams: teamsOf(u) } : null,
         // แอดมินที่อยู่ในบันทึกด้วย (เช่นเป็นหัวหน้าภาคด้วย) ไม่ถูกลดสิทธิ์ — การนำเข้าไม่ใช่ที่ถอดแอดมิน
-        keepsRole: !!u && ADMIN_ROLES.includes(u.role),
+        // Senior ช่างที่ไฟล์ระบุเป็นช่างก็คงเป็น Senior — ไฟล์บันทึกแบ่งทีมไม่มีตำแหน่งนี้ (ดูหน้า commit)
+        keepsRole: !!u && (ADMIN_ROLES.includes(u.role) || (u.role === "SENIOR_TECH" && p.role === "EMPLOYEE")),
       };
     }),
   });
@@ -137,7 +139,7 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
     (
       await prisma.user.findMany({
         where: { employeeCode: { in: people.map((p) => p.code) }, deletedAt: null },
-        select: { id: true, employeeCode: true, role: true, team: true, supervisedTeams: true },
+        select: { id: true, employeeCode: true, role: true, team: true, extraTeams: true, supervisedTeams: true },
       })
     ).map((u) => [u.employeeCode, u])
   );
@@ -158,7 +160,7 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
         const name = displayName(p);
         const team = p.role === "EMPLOYEE" ? teamOf(p.area) : null;
         const supTeams = p.role === "SUPERVISOR" ? [...(supervised.get(p.code) ?? [])] : [];
-        if (p.role === "EMPLOYEE" && !team && !u?.team) withoutTeam++;
+        if (p.role === "EMPLOYEE" && !team && !(u && teamsOf(u).length)) withoutTeam++;
         if (!u) {
           await tx.user.create({
             data: {
@@ -175,6 +177,18 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
           continue;
         }
         const keepRole = ADMIN_ROLES.includes(u.role);
+        /**
+         * Senior ช่างที่ไฟล์ระบุเป็นช่าง — ไฟล์บันทึกแบ่งทีมไม่มีตำแหน่ง Senior และมีทีมเดียวต่อคน
+         * เดิมนำเข้าแล้วถูกลดเป็นช่างทีมเดียวเงียบ ๆ (ทีมที่เพิ่มหาย เห็นงานน้อยลงทันที) — คงตำแหน่ง แล้วรวมทีมในไฟล์เข้าไป
+         * ไม่แทนที่ (กติกาเดียวกับ supervisedTeams ข้างล่าง) · เอาทีมออกทำที่การ์ด · ไฟล์ระบุเป็นหัวหน้าภาค = เปลี่ยนตามไฟล์
+         */
+        if (!keepRole && u.role === "SENIOR_TECH" && p.role === "EMPLOYEE") {
+          const held = teamsOf(u);
+          const all = team && !held.includes(team) ? [...held, team] : held;
+          await tx.user.update({ where: { id: u.id }, data: { name, team: all[0] ?? null, extraTeams: all.slice(1) } });
+          updated++;
+          continue;
+        }
         await tx.user.update({
           where: { id: u.id },
           data: {
@@ -185,6 +199,8 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
                   role: p.role,
                   // ไม่มีคู่ทีม = คงทีมเดิมไว้ ดีกว่าล้างทิ้งจนช่างมองไม่เห็นงานของทีม
                   team: p.role === "EMPLOYEE" ? team ?? u.team : null,
+                  // ทีมที่เพิ่มเป็นของ Senior เท่านั้น — คนที่ไม่ใช่ Senior หลังนำเข้าไม่ควรมีค่าค้าง
+                  extraTeams: [],
                   // รวมกับทีมเดิม ไม่แทนที่ — ไฟล์ที่มีช่างแค่บางคนของหัวหน้าภาค (เพิ่มคนใหม่ทีละชุด)
                   // เคยทำให้ทีมอื่นที่เขาดูแลหายไปเงียบ ๆ แล้วมองไม่เห็นงานของทีมเหล่านั้น · เอาทีมออกทำที่การ์ด
                   supervisedTeams: p.role === "SUPERVISOR" ? [...new Set([...u.supervisedTeams, ...supTeams])] : [],

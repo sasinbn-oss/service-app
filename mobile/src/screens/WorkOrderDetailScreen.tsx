@@ -75,6 +75,7 @@ import { feedback } from "../components/Feedback";
 import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
 import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo, type StepState } from "../utils/stepPath";
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
+import { techPickHint } from "../utils/teams";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -567,6 +568,8 @@ interface Technician {
   employeeCode: string;
   /** ทีมที่สังกัด — ช่วยให้เลือกคนถูกตอนชื่อคล้ายกัน */
   team?: string | null;
+  /** Senior ช่าง (เห็นหลายทีม) — ตัวเลือกบอกตำแหน่งแทนทีมแรก */
+  senior?: boolean;
 }
 
 /**
@@ -5483,6 +5486,8 @@ const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
   SUPER_ADMIN: { fg: colors.roleAdmin, bg: colors.roleAdminSoft, label: "แอดมิน" },
   SUPERVISOR: { fg: colors.roleSupervisor, bg: colors.roleSupervisorSoft, label: "หัวหน้าภาค" },
   EMPLOYEE: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "ช่าง" },
+  // byRole คือ role ดิบในฐานข้อมูล — ไม่มีแถวนี้ จุดสีกับป้ายของ Senior ช่างหายไปเฉย ๆ
+  SENIOR_TECH: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "Senior ช่าง" },
 };
 
 function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed: boolean; onTimeline?: () => void }) {
@@ -6519,8 +6524,7 @@ function CloseModal({
               .map((t) => ({
                 value: String(t.id),
                 label: t.name,
-                // ชื่อซ้ำกันเกิดขึ้นจริงในทีมช่าง รหัสพนักงานเป็นตัวแยก
-                hint: `${t.employeeCode}${t.team ? ` · ${t.team}` : ""}`,
+                hint: techPickHint(t),
               }))}
           />
         </View>

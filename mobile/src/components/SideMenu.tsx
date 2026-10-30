@@ -16,7 +16,8 @@ import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { AREA_TEAM_LABELS, isAreaTeam } from "../utils/areaTeam";
+import { isAreaTeam } from "../utils/areaTeam";
+import { sessionRoleLabel } from "../utils/roles";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
 import { canSeeClaimHistory } from "../utils/claimHistory";
@@ -589,8 +590,6 @@ export default function SideMenu() {
   );
 }
 
-const ROLE_TH: Record<string, string> = { ADMIN: "แอดมิน", SUPERVISOR: "หัวหน้าภาค", EMPLOYEE: "ช่าง", ...AREA_TEAM_LABELS };
-
 /**
  * หัวเมนูเลื่อนออก (จอแคบ): โลโก้กับคนที่ล็อกอิน — จอแคบไม่มีแถบโลโก้แล้ว (ดู NarrowBar ใน MainNavigator)
  * แบรนด์จึงมาอยู่ที่นี่ ให้ยังเห็นว่าเป็นแอปของ OTTERI และใครใช้อยู่
@@ -607,7 +606,7 @@ function PanelHead() {
         {user ? (
           <Text style={styles.panelWho} numberOfLines={1}>
             {user.name} ·{" "}
-            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "Admin Spare Part" : ROLE_TH[user.role] ?? user.role}
+            {sessionRoleLabel(user)}
           </Text>
         ) : null}
       </View>

@@ -127,7 +127,8 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
         vehicle: { select: { id: true, plateNumber: true } },
         plannedBy: { select: { name: true, role: true } },
         members: {
-          include: { user: { select: { id: true, name: true, employeeCode: true } } },
+          // role ให้บอร์ดติดป้าย Senior ช่าง — Senior ไม่มีแถวของตัวเอง ถูกใส่เป็นคนในทีมไหนก็ได้ในวันนั้น
+          include: { user: { select: { id: true, name: true, employeeCode: true, role: true } } },
           orderBy: { position: "asc" },
         },
       },
@@ -141,7 +142,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       vehiclePlate: string | null;
       /** ใครเบิกรถคันนี้อยู่ตอนนี้ — จากลงทะเบียนใช้รถ ว่าง = ยังไม่มีใครเบิก */
       vehicleInUseBy: string | null;
-      members: { id: number; name: string; employeeCode: string }[];
+      members: { id: number; name: string; employeeCode: string; role: string }[];
       note: string | null;
       startTime: string | null;
       plannedByName: string | null;

@@ -27,6 +27,7 @@ import FileDropZone, { DropHint } from "./FileDropZone";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
+import { techPickHint } from "../utils/teams";
 
 /** ตรงกับ SUPERVISOR_CLOSE_REASONS ฝั่งเซิร์ฟเวอร์ (utils/constants.ts) — เพิ่มเหตุผลต้องแก้ทั้งสองที่ */
 const REASONS = [
@@ -72,7 +73,7 @@ export default function SupervisorCloseModal({
 }: {
   order: SupervisorCloseOrder;
   /** ช่างในระบบ — เลือกคนที่เข้าซ่อม (ช่างเข้าแก้ไขเรียบร้อย) */
-  technicians?: { id: number; name: string; employeeCode: string; team?: string | null }[];
+  technicians?: { id: number; name: string; employeeCode: string; team?: string | null; senior?: boolean }[];
   /** ทีม outsource — ใบงาน SUB เลือกทีมที่เข้าทำ */
   subTeams?: string[];
   onClose: () => void;
@@ -224,7 +225,7 @@ export default function SupervisorCloseModal({
                   options={technicians.map((t) => ({
                     value: String(t.id),
                     label: t.name,
-                    hint: `${t.employeeCode}${t.team ? ` · ${t.team}` : ""}`,
+                    hint: techPickHint(t),
                   }))}
                 />
               </>

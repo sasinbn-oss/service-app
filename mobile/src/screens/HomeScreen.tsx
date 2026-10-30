@@ -9,6 +9,8 @@ import { useAuth } from "../context/AuthContext";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { colors, isDark, radius, shadow, spacing, headingFont } from "../theme";
 import { regionsOf, regionsText } from "../utils/regions";
+import { ROLE_LABELS } from "../utils/roles";
+import { teamsOf, teamsText } from "../utils/teams";
 import { MenuEntry } from "../components/MenuList";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { HomeStackParamList } from "../navigation/types";
@@ -222,11 +224,12 @@ export default function HomeScreen({ navigation }: Props) {
     >
       <Hero
         name={user?.name ?? ""}
-        role={user?.superAdmin ? "SUPER_ADMIN" : user?.partsAdmin ? "PARTS_ADMIN" : user?.role}
+        role={user?.superAdmin ? "SUPER_ADMIN" : user?.partsAdmin ? "PARTS_ADMIN" : user?.seniorTech ? "SENIOR_TECH" : user?.role}
         // หัวหน้าภาคส่วนใหญ่ถูกตั้งเป็น "ทีมที่ดูแล" จากไฟล์รายชื่อ ไม่ได้ตั้งภาค —
         // ดูแค่ team/region จะขึ้น "ยังไม่ได้จัดทีม" ทั้งที่เห็นและจ่ายงานของทีมได้ตามปกติ
+        // Senior ช่างโชว์ครบทุกทีมที่เลือก ไม่ใช่แค่ทีมแรก — ทีมแรกเป็นแค่ลำดับที่กด ไม่ใช่ทีมหลัก
         area={
-          user?.team ||
+          teamsText(teamsOf(user)) ||
           regionsText(regionsOf(user)) ||
           (user?.supervisedTeams?.length ? user.supervisedTeams.join(" · ") : null)
         }
@@ -298,14 +301,6 @@ const GROUPS: { key: HomeEntry["group"]; title: string; titleEn: string }[] = [
   { key: "office", title: "เอกสารและบัญชี", titleEn: "Office" },
 ];
 
-const ROLE_LABEL: Record<string, string> = {
-  EMPLOYEE: "ช่าง",
-  SUPERVISOR: "หัวหน้าภาค",
-  ADMIN: "แอดมิน",
-  PARTS_ADMIN: "Admin Spare Part",
-  SUPER_ADMIN: "Super Admin",
-};
-
 /** ทักตามช่วงเวลาไทย ไม่ใช่เวลาเครื่อง เพราะเครื่องที่เปิดเว็บอาจตั้งโซนเวลาอื่นไว้ */
 function greeting() {
   const hour = Number(
@@ -352,7 +347,7 @@ function Hero({
         {role ? (
           <View style={styles.heroBadge}>
             <View style={styles.heroBadgeDot} />
-            <Text style={styles.heroBadgeText}>{ROLE_LABEL[role] ?? role}</Text>
+            <Text style={styles.heroBadgeText}>{ROLE_LABELS[role] ?? role}</Text>
           </View>
         ) : null}
         <View style={{ flex: 1 }} />

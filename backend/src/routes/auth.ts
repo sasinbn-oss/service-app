@@ -6,12 +6,12 @@ import { prisma } from "../prisma";
 import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { canViewAs } from "../utils/viewAs";
-import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, Role, bangkokDay, AREA_TEAM_ROLES } from "../utils/constants";
+import { ACTIVE_WORK_ORDER_STATUSES, ADMIN_ROLES, ROLES, ROLE_LABELS, Role, TECH_ROLES, bangkokDay, AREA_TEAM_ROLES } from "../utils/constants";
 import { COCO_BRANCH } from "../utils/areaScope";
 import { forgetUser, passwordChanged, rememberUser } from "../utils/userGate";
 import { coverageGap } from "../utils/coverage";
 import { regionsOf } from "../utils/supervisorScope";
-import { coverageOf, teamGroups } from "../utils/teamGroups";
+import { coverageOfUser, teamGroups, teamsOf } from "../utils/teamGroups";
 import { documentPath, saveDocument } from "../documents/store";
 import ExcelJS from "exceljs";
 import { deleteObject } from "../storage/fileStore";
@@ -117,8 +117,10 @@ router.post("/login", async (req, res) => {
       // ทีมต้องติดมาตั้งแต่ตอนล็อกอิน ไม่ใช่รอให้หน้าจอไปถาม /auth/me อีกรอบ —
       // ระหว่างนั้นช่างจะมองไม่เห็นปุ่มของงานตัวเอง เพราะระบบยังไม่รู้ว่าอยู่ทีมไหน
       team: user.team,
-      // ทีมรวม — แอปใช้ตัดสินว่าใบงานของทีมไหนเป็นงานของช่างคนนี้ (ปุ่มของขั้นตอน)
-      teamCoverage: await coverageOf(user.team),
+      // ทีม/ทีมรวมทั้งหมดที่ถือ (อันแรก = team) — Senior ช่างมีหลายอัน หน้าแรกโชว์ครบ ไม่ใช่แค่อันแรก
+      teams: teamsOf(user),
+      // ทีมที่เห็นงานจริงหลังแตกทีมรวมแล้ว (Senior = ทุกอันรวมกัน) — แอปใช้ตัดสินว่าใบงานของทีมไหนเป็นงานของช่างคนนี้ (ปุ่มของขั้นตอน)
+      teamCoverage: await coverageOfUser(user),
       supervisedTeams: user.supervisedTeams,
       mustChangePassword: user.mustChangePassword,
     },
@@ -139,7 +141,8 @@ async function meOf(user: MeUser, auth?: AuthRequest["auth"]) {
     region: user.region,
     regions: regionsOf(user),
     team: user.team,
-    teamCoverage: await coverageOf(user.team),
+    teams: teamsOf(user),
+    teamCoverage: await coverageOfUser(user),
     supervisedTeams: user.supervisedTeams,
     // ระหว่างดูในฐานะ ไม่บังคับเปลี่ยนรหัสแทนเจ้าของบัญชี — Super Admin แค่มาดูหน้าจอ
     mustChangePassword: viewAs ? false : user.mustChangePassword,
@@ -229,6 +232,7 @@ const MANAGED_USER_SELECT = {
   region: true,
   extraRegions: true,
   team: true,
+  extraTeams: true,
   supervisedTeams: true,
   mustChangePassword: true,
   createdAt: true,
@@ -238,9 +242,19 @@ const MANAGED_USER_SELECT = {
 /**
  * สาขาที่ Maid ประจำ ส่งเป็นรายการแบน ๆ — หน้าจอไม่ต้องรู้ว่ามีตารางเชื่อมอยู่ตรงกลาง
  * regions = ภาคทั้งหมดรวมเป็นรายการเดียว หน้าจอไม่ต้องรู้ว่าภาคแรกเก็บแยกคอลัมน์
+ * teams = ทีม/ทีมรวมทั้งหมดของช่าง/Senior ช่าง (อันแรก = team) ด้วยเหตุผลเดียวกัน
  */
-function managedUser<T extends { region: string | null; extraRegions: string[]; maidBranches: { branch: { code: string; name: string } }[] }>(u: T) {
-  return { ...u, regions: regionsOf(u), maidBranches: u.maidBranches.map((m) => m.branch) };
+function managedUser<
+  T extends {
+    role: string;
+    region: string | null;
+    extraRegions: string[];
+    team: string | null;
+    extraTeams: string[];
+    maidBranches: { branch: { code: string; name: string } }[];
+  },
+>(u: T) {
+  return { ...u, regions: regionsOf(u), teams: teamsOf(u), maidBranches: u.maidBranches.map((m) => m.branch) };
 }
 
 /**
@@ -267,6 +281,42 @@ async function resolveRegions(
   }
   return { region: wanted[0] ?? null, extraRegions: wanted.slice(1) };
 }
+
+/**
+ * ทีมที่เลือกมา → เก็บเป็น team (อันแรก) + extraTeams (ที่เหลือ) · เรียงตามที่เลือก ตัดซ้ำ
+ *
+ * ชื่อใหม่ต้องเป็นทีมช่างของสาขา (CM/PM) หรือทีมรวม — ชื่อที่ไม่มีใบงานผูกอยู่ให้ไปก็มองไม่เห็นงานสักใบ
+ * แบบเดียวกับภาค: ชื่อที่ถืออยู่แล้วผ่านเสมอ แม้ทีมนั้นถูกย้ายสาขาออกหมดแล้ว ไม่งั้นเอาทีมอื่นออกไม่ได้
+ * ชื่อทีมรวมกับทีมช่างชนกันไม่ได้ (checkGroup ใน routes/teams.ts) จึงเก็บปนกันในรายการเดียวได้
+ */
+async function resolveTeams(
+  input: (string | null | undefined)[],
+  held: string[]
+): Promise<{ team: string | null; extraTeams: string[] } | { error: string }> {
+  const wanted: string[] = [];
+  for (const t of input) {
+    const c = cleanName(t);
+    if (c && !wanted.includes(c)) wanted.push(c);
+  }
+  const fresh = wanted.filter((t) => !held.includes(t));
+  if (fresh.length) {
+    const [rows, groups] = await Promise.all([
+      prisma.branch.findMany({
+        where: { cancelledAt: null, OR: [{ zone: { in: fresh } }, { pmTeam: { in: fresh } }] },
+        select: { zone: true, pmTeam: true },
+        distinct: ["zone", "pmTeam"],
+      }),
+      teamGroups(),
+    ]);
+    const known = new Set(rows.flatMap((r) => [r.zone, r.pmTeam]));
+    const missing = fresh.filter((t) => !known.has(t) && !groups.has(t));
+    if (missing.length) return { error: `ไม่มีทีม ${missing.map((m) => `“${m}”`).join(", ")} ในทะเบียนสาขาหรือทีมรวม` };
+  }
+  return { team: wanted[0] ?? null, extraTeams: wanted.slice(1) };
+}
+
+/** ช่างธรรมดาถือได้ทีมเดียว — บอกทางไปให้ด้วย เพราะคนที่ส่งหลายทีมมาคือคนที่ต้องการ Senior ช่าง */
+const ONE_TEAM_ONLY = "ช่างเลือกได้ทีมเดียว — ถ้าต้องดูหลายทีมให้ตั้งเป็น Senior ช่าง";
 
 /**
  * area กับจำนวน Supervisor/สาขา — ให้หน้า "ดูในฐานะ" จัดกลุ่ม Supervisor (COCO) ตาม Area และบอกว่าแต่ละคนดูแลแค่ไหน
@@ -331,8 +381,8 @@ async function maidBranchIds(codes: string[]): Promise<{ ids: number[] } | { err
 router.get("/users/unassigned-report", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const [users, zones, pm, regionRows] = await Promise.all([
     prisma.user.findMany({
-      where: { deletedAt: null, role: { in: ["EMPLOYEE", "SUPERVISOR"] } },
-      select: { employeeCode: true, name: true, phone: true, role: true, team: true, region: true, extraRegions: true, supervisedTeams: true, mustChangePassword: true },
+      where: { deletedAt: null, role: { in: [...TECH_ROLES, "SUPERVISOR"] } },
+      select: { employeeCode: true, name: true, phone: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true, supervisedTeams: true, mustChangePassword: true },
       orderBy: [{ role: "asc" }, { name: "asc" }],
     }),
     prisma.branch.findMany({ where: { zone: { not: null }, cancelledAt: null }, select: { zone: true }, distinct: ["zone"] }),
@@ -364,7 +414,7 @@ router.get("/users/unassigned-report", requireAuth, requireAdmin, async (req: Au
       no: i + 1,
       code: u.employeeCode,
       name: u.name,
-      role: u.role === "SUPERVISOR" ? "หัวหน้าภาค" : "ช่าง",
+      role: ROLE_LABELS[u.role] ?? u.role,
       gap,
       phone: u.phone ?? "",
       // เปลี่ยนรหัสตั้งต้นแล้ว = เคยเข้าระบบ — คนที่ยังไม่เคยเข้าอาจยังไม่ได้รับแจ้งเลย
@@ -399,6 +449,10 @@ const MIN_PASSWORD = 8;
 
 /** ชื่อภาคหนึ่งชื่อในรายการ regions — ข้อความต้องเป็นไทย เพราะ handler ส่งข้อความแรกของ zod ไปขึ้นหน้าจอตรง ๆ */
 const REGION_NAME = z.string().trim().min(1, "ชื่อภาคว่างไม่ได้").max(120, "ชื่อภาคยาวเกิน 120 ตัวอักษร");
+/** ทีม/ทีมรวมทั้งชุดของ Senior ช่าง (แทนที่ของเดิม · อันแรกเก็บที่ team) — ข้อความไทยด้วยเหตุผลเดียวกัน */
+const TEAM_LIST = z
+  .array(z.string().trim().min(1, "ชื่อทีมว่างไม่ได้").max(120, "ชื่อทีมยาวเกิน 120 ตัวอักษร"))
+  .max(50, "เลือกทีมได้ไม่เกิน 50 ทีม");
 
 const createUserSchema = z.object({
   employeeCode: z.string().trim().min(2, "ชื่อผู้ใช้สั้นเกินไป").max(50),
@@ -408,6 +462,9 @@ const createUserSchema = z.object({
   region: z.string().trim().max(120).nullable().optional(),
   // ภาคที่ดูแลทั้งหมด (หัวหน้าภาคเลือกได้หลายภาค) — ส่งมาแล้วใช้แทน region
   regions: z.array(REGION_NAME).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
+  // ทีมช่างที่สังกัด (ช่าง) · ทีมทั้งชุด (Senior ช่าง เลือกได้หลายทีมตั้งแต่สร้าง) — บทบาทอื่นไม่ใช้
+  team: z.string().trim().max(120).nullable().optional(),
+  teams: TEAM_LIST.optional(),
   password: z.string().min(MIN_PASSWORD, `รหัสตั้งต้นต้องยาวอย่างน้อย ${MIN_PASSWORD} ตัว`),
   // รหัสสาขาที่ Maid (COCO) ประจำ — บทบาทอื่นไม่ใช้
   maidBranches: z.array(z.string().trim().min(1).max(30)).max(50).optional(),
@@ -457,6 +514,14 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
     if ("error" in r) return res.status(400).json({ error: r.error });
     regionData = r;
   }
+  // ทีมมีความหมายเฉพาะกับช่าง/Senior ช่าง — บทบาทอื่นส่งมาก็ไม่เก็บ (แบบเดียวกับภาค)
+  let teamData: { team: string | null; extraTeams: string[] } = { team: null, extraTeams: [] };
+  if (TECH_ROLES.includes(body.role) && (body.teams !== undefined || body.team !== undefined)) {
+    const r = await resolveTeams(body.teams ?? [body.team], []);
+    if ("error" in r) return res.status(400).json({ error: r.error });
+    if (body.role === "EMPLOYEE" && r.extraTeams.length) return res.status(400).json({ error: ONE_TEAM_ONLY });
+    teamData = r;
+  }
   // Maid ที่ไม่มีสาขาเข้าระบบแล้วเห็นหน้าว่างทุกหน้า โดยไม่รู้ว่าผิดที่บัญชี — บังคับเลือกตั้งแต่สร้าง
   let maidIds: number[] = [];
   if (body.role === "COCO_MAID") {
@@ -475,6 +540,7 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
       phone: body.phone || null,
       role: body.role,
       ...regionData,
+      ...teamData,
       passwordHash: await bcrypt.hash(body.password, 10),
       mustChangePassword: true,
       ...(maidIds.length ? { maidBranches: { create: maidIds.map((branchId) => ({ branchId })) } } : {}),
@@ -577,8 +643,14 @@ const userUpdateSchema = z.object({
   region: z.string().trim().max(120).nullable().optional(),
   // ภาคที่ดูแลทั้งชุด (แทนที่ของเดิม) — ส่งมาพร้อม region ใช้ตัวนี้
   regions: z.array(REGION_NAME).max(20, "เลือกภาคได้ไม่เกิน 20 ภาค").optional(),
-  // ทีมช่างที่สังกัด — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
+  /**
+   * ทีมช่างที่สังกัด — ตรงกับ Branch.zone ซึ่งมาจากคอลัมน์ "ทีมช่าง" ในไฟล์ทะเบียนสาขา
+   * Senior ช่าง: แทนที่ทีมแรกเท่านั้น ทีมที่เพิ่มไว้ยังอยู่ — แอปรุ่นที่เลือกได้ทีมเดียวมองไม่เห็นทีมที่เพิ่ม
+   * จะให้มันลบสิ่งที่มองไม่เห็นไม่ได้ (กติกาเดียวกับ region/regions)
+   */
   team: z.string().trim().max(120).nullable().optional(),
+  // ทีม/ทีมรวมทั้งชุด (แทนที่ของเดิม · อันแรกเก็บที่ team) — ส่งมาพร้อม team ใช้ตัวนี้ · ช่างธรรมดาส่งได้ไม่เกินหนึ่ง
+  teams: TEAM_LIST.optional(),
   // ทีมช่างที่หัวหน้าภาคดูแล (หลายทีมได้) — ดู User.supervisedTeams
   supervisedTeams: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
   // รายละเอียดบัญชี — ปุ่ม "แก้ไขรายละเอียด" ในหน้าสิทธิ์ผู้ใช้
@@ -607,7 +679,7 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
 
   const target = await prisma.user.findUnique({
     where: { id },
-    select: { role: true, deletedAt: true, employeeCode: true, region: true, extraRegions: true },
+    select: { role: true, deletedAt: true, employeeCode: true, region: true, extraRegions: true, team: true, extraTeams: true },
   });
   if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
 
@@ -669,12 +741,30 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     if ("error" in r) return res.status(400).json({ error: r.error });
     regionData = r;
   }
+  /**
+   * ทีมของช่าง/Senior ช่าง — ตรวจชื่อและแยกเป็น team + extraTeams
+   * ทีมเดียวแบบเดิมกับ Senior: ขึ้นเป็นทีมแรก ทีมที่เพิ่มไว้อยู่ต่อ · null = ทีมถัดไปขึ้นแทน
+   * บทบาทอื่นยังรับ team แบบเดิม (ไม่ตรวจ) — เปลี่ยนบทบาทออกจากช่างก็ถูกล้างข้างล่างอยู่แล้ว
+   */
+  let teamData: { team: string | null; extraTeams: string[] } | null = null;
+  if (body.teams !== undefined || body.team !== undefined) {
+    if (TECH_ROLES.includes(finalRole)) {
+      const held = teamsOf(target);
+      const input = body.teams ?? (finalRole === "SENIOR_TECH" ? [body.team, ...held.slice(1)] : [body.team]);
+      const r = await resolveTeams(input, held);
+      if ("error" in r) return res.status(400).json({ error: r.error });
+      if (finalRole === "EMPLOYEE" && r.extraTeams.length) return res.status(400).json({ error: ONE_TEAM_ONLY });
+      teamData = r;
+    } else if (body.teams !== undefined) {
+      return res.status(400).json({ error: "เลือกหลายทีมได้เฉพาะ Senior ช่าง" });
+    }
+  }
 
   const updated = await prisma.$transaction(
     async (tx) => {
       if (maidIds !== null || clearMaid) await tx.cocoMaidBranch.deleteMany({ where: { userId: id } });
       if (maidIds?.length) await tx.cocoMaidBranch.createMany({ data: maidIds.map((branchId) => ({ userId: id, branchId })) });
-      return tx.user.update({
+      const u = await tx.user.update({
         where: { id },
         data: {
           ...(body.role !== undefined ? { role: body.role } : {}),
@@ -682,9 +772,16 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
           // (ค้างไว้ = เปลี่ยนกลับเป็นหัวหน้าภาคทีหลังได้ภาคเก่าที่ลืมไปแล้วติดมา และรายงานยังโชว์ภาคของคนที่ไม่ได้ดูแลแล้ว)
           ...(regionData ?? {}),
           ...(body.role !== undefined && body.role !== "SUPERVISOR" ? { region: null, extraRegions: [] } : {}),
-          // ทีมมีความหมายเฉพาะกับช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
-          ...(body.team !== undefined ? { team: cleanName(body.team) } : {}),
-          ...(body.role !== undefined && body.role !== "EMPLOYEE" ? { team: null } : {}),
+          // ทีมมีความหมายเฉพาะกับช่าง/Senior ช่าง เพราะเป็นตัวบอกว่าเห็นงานของทีมไหน
+          // (เดิมเทียบกับ EMPLOYEE ตรง ๆ — ตั้งเป็น Senior แล้วทีมถูกล้างทิ้งทันที)
+          ...(teamData ?? (body.team !== undefined ? { team: cleanName(body.team) } : {})),
+          ...(body.role !== undefined && !TECH_ROLES.includes(body.role) ? { team: null } : {}),
+          // ทีมที่เพิ่มเป็นของ Senior เท่านั้น — ลดเป็นช่างธรรมดาคงทีมแรกไว้ ที่เหลือล้าง
+          // (teamsOf ไม่อ่านค่าค้างอยู่แล้ว แต่ค้างไว้ = ตั้งกลับเป็น Senior ทีหลังได้ทีมเก่าที่ลืมไปแล้วติดมา)
+          ...(finalRole !== "SENIOR_TECH" ? { extraTeams: [] } : {}),
+          // ตั้งเป็น Senior โดยไม่ได้เลือกทีม (กดชิปบทบาทบนการ์ด) = เริ่มจากทีมแรกที่เห็นบนการ์ดเท่านั้น
+          // ค่าค้างในคอลัมน์ (แก้ฐานข้อมูลด้วยมือ หรือบันทึกที่ชนกับการลดบทบาท) ไม่มีแอดมินคนไหนเลือก แต่จะกลายเป็นสิทธิ์ทันที
+          ...(teamData === null && finalRole === "SENIOR_TECH" && target.role !== "SENIOR_TECH" ? { extraTeams: [] } : {}),
           ...(body.supervisedTeams !== undefined
             ? { supervisedTeams: [...new Set(body.supervisedTeams.map(cleanName).filter((t): t is string => !!t))] }
             : {}),
@@ -695,6 +792,12 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
         },
         select: MANAGED_USER_SELECT,
       });
+      // บันทึกทีมที่อ่านบทบาทตอนยังเป็น Senior แต่มีแอดมินอีกคนลดบทบาทไปก่อนถึงคิวเขียน — แถวที่เขียนแล้วบอกบทบาทจริง
+      // ทีมที่เพิ่มบนคนที่ไม่ใช่ Senior ไม่ให้สิทธิ์อยู่แล้ว (teamsOf) แต่ค้างไว้ = ตั้งกลับเป็น Senior ทีหลังได้ทีมนั้นติดมา
+      if (u.role !== "SENIOR_TECH" && u.extraTeams.length) {
+        return tx.user.update({ where: { id }, data: { extraTeams: [] }, select: MANAGED_USER_SELECT });
+      }
+      return u;
     },
     { timeout: 30_000, maxWait: 15_000 }
   );
@@ -792,6 +895,7 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
           employeeCode: `${target.employeeCode}~ลบ${id}`,
           // ทีม/ภาคเป็นตัวกำหนดว่าเห็นงานไหนและอยู่ในทีมไหน — คนที่ไม่อยู่แล้วต้องไม่ถูกนับในทีม
           team: null,
+          extraTeams: [],
           region: null,
           extraRegions: [],
         },

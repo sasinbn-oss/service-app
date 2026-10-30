@@ -16,6 +16,7 @@ import TimeField from "./TimeField";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
+import { techPickHint } from "../utils/teams";
 
 const REASONS = [
   "ช่างซ่อมเสร็จแล้วแต่ไม่ได้กดในแอป",
@@ -61,7 +62,7 @@ export default function BackfillCloseModal({
    */
   stages: string[];
   teams: string[];
-  technicians: { id: number; name: string; employeeCode: string; team?: string | null }[];
+  technicians: { id: number; name: string; employeeCode: string; team?: string | null; senior?: boolean }[];
   results: { value: string; label: string }[];
   onClose: () => void;
   onDone: () => void;
@@ -263,7 +264,7 @@ export default function BackfillCloseModal({
             }
             options={technicians
               .filter((t) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
-              .map((t) => ({ value: String(t.id), label: t.name, hint: `${t.employeeCode}${t.team ? ` · ${t.team}` : ""}` }))}
+              .map((t) => ({ value: String(t.id), label: t.name, hint: techPickHint(t) }))}
           />
         ))}
         <TextInput style={styles.input} value={otherWorkers} onChangeText={setOtherWorkers} placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)" placeholderTextColor={colors.textFaint} accessibilityLabel="คนอื่นที่ไปด้วย" />

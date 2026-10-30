@@ -40,8 +40,8 @@ async function main() {
       where: { employeeCode: u.employeeCode },
       // ไม่ทับ region/team ที่เทสต์ตั้งเอง แต่คืนรหัสผ่านกับตำแหน่งให้ตรงเสมอ
       // ภาคที่เพิ่ม (extraRegions) ล้างทุกครั้ง — ไม่มีเทสต์ไหนพึ่งค่าค้าง และเทสต์หลายภาคที่ล้มกลางทางจะไม่ลาก
-      // ภาคแถมไปให้ S001 ในชุดอื่นอีกเป็นพันข้อ (เห็นใบเกินมาแล้วผลเพี้ยนแบบหาสาเหตุยาก)
-      update: { passwordHash, role: u.role, mustChangePassword: false, extraRegions: [] },
+      // ภาคแถมไปให้ S001 ในชุดอื่นอีกเป็นพันข้อ (เห็นใบเกินมาแล้วผลเพี้ยนแบบหาสาเหตุยาก) · ทีมที่เพิ่ม (extraTeams) เหตุผลเดียวกัน
+      update: { passwordHash, role: u.role, mustChangePassword: false, extraRegions: [], extraTeams: [] },
       create: { ...u, passwordHash, mustChangePassword: false },
     });
   }

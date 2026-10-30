@@ -58,7 +58,8 @@ import ManageBranchesScreen from "../screens/ManageBranchesScreen";
 import ManageUsersScreen from "../screens/ManageUsersScreen";
 
 import { useAuth } from "../context/AuthContext";
-import { AREA_TEAM_LABELS, isAreaTeam } from "../utils/areaTeam";
+import { isAreaTeam } from "../utils/areaTeam";
+import { sessionRoleLabel } from "../utils/roles";
 import { colors, radius, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import RefreshButton from "../components/RefreshButton";
@@ -290,7 +291,7 @@ function AppTopBar() {
             {user.name}
           </Text>
           <Text style={styles.whoRole}>
-            {user.superAdmin ? "Super Admin" : user.partsAdmin ? "Admin Spare Part" : ROLE_LABEL[user.role] ?? user.role}
+            {sessionRoleLabel(user)}
           </Text>
         </View>
       ) : null}
@@ -326,13 +327,6 @@ function AppTopBar() {
     </>
   );
 }
-
-const ROLE_LABEL: Record<string, string> = {
-  ...AREA_TEAM_LABELS,
-  ADMIN: "แอดมิน",
-  SUPERVISOR: "หัวหน้าภาค",
-  EMPLOYEE: "ช่าง",
-};
 
 /**
  * ออกจากระบบอยู่บนแถบบนเพื่อให้ทุกแท็บกดได้

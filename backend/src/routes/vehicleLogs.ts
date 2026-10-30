@@ -14,7 +14,7 @@
  */
 import { Router, Response } from "express";
 import ExcelJS from "exceljs";
-import { coverageOf } from "../utils/teamGroups";
+import { TEAM_HOLDER_SELECT, coverageOfUser, teamsOf } from "../utils/teamGroups";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
@@ -37,7 +37,7 @@ const fmt = (n: number) => n.toLocaleString("th-TH");
 
 const logInclude = {
   vehicle: { select: { id: true, plateNumber: true, brand: true, model: true, type: true } },
-  user: { select: { id: true, name: true, employeeCode: true, team: true } },
+  user: { select: { id: true, name: true, employeeCode: true, ...TEAM_HOLDER_SELECT } },
   workOrder: { select: { id: true, code: true, title: true, branch: { select: { code: true, name: true } } } },
   returnedBy: { select: { name: true } },
   _count: { select: { photos: true } },
@@ -59,7 +59,8 @@ function logShape(l: LogRow) {
     vehicleType: l.vehicle.type,
     userId: l.userId,
     userName: l.user.name,
-    userTeam: l.user.team,
+    // Senior ช่างถือหลายทีม — ขึ้นครบ ไม่ใช่แค่ทีมแรก
+    userTeam: teamsOf(l.user).join(" · ") || null,
     purpose: l.purpose,
     destination: l.destination,
     note: l.note,
@@ -86,14 +87,15 @@ function logShape(l: LogRow) {
  *
  * ดูทั้งทีมที่สังกัดและแผนที่ระบุชื่อคนนี้ไว้ (ยืมข้ามทีม) เพราะช่างที่ถูกยืม
  * ไปช่วยทีมอื่นวันนั้นต้องขับรถของทีมที่ไปด้วย ไม่ใช่รถของทีมตัวเอง
+ * Senior ช่าง = ทุกทีม/ทีมรวมที่ถือ (teams) — ถือหลายทีมก็ไปกับทีมไหนก็ได้ในวันนั้น
  */
-async function plannedVehicleIds(userId: number, team: string | null): Promise<Set<number>> {
+async function plannedVehicleIds(userId: number, teams: string[]): Promise<Set<number>> {
   const day = new Date(`${bangkokDay()}T00:00:00.000Z`);
   const plans = await prisma.teamDayPlan.findMany({
     where: {
       date: day,
       vehicleId: { not: null },
-      OR: [...(team ? [{ team }] : []), { members: { some: { userId } } }],
+      OR: [...(teams.length ? [{ team: { in: teams } }] : []), { members: { some: { userId } } }],
     },
     select: { vehicleId: true },
   });
@@ -104,7 +106,7 @@ async function plannedVehicleIds(userId: number, team: string | null): Promise<S
 
 /** ทุกอย่างที่หน้า "ลงทะเบียนใช้รถ" ต้องใช้ในคำขอเดียว */
 router.get("/status", requireAuth, async (req: AuthRequest, res) => {
-  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { team: true } });
+  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: TEAM_HOLDER_SELECT });
   const [active, vehicles, ongoing, planned] = await Promise.all([
     prisma.vehicleLog.findFirst({ where: { userId: req.auth!.userId, status: "ONGOING" }, include: logInclude }),
     prisma.vehicle.findMany({ where: { status: { not: "INACTIVE" } }, orderBy: { plateNumber: "asc" } }),
@@ -112,13 +114,13 @@ router.get("/status", requireAuth, async (req: AuthRequest, res) => {
       where: { status: "ONGOING" },
       select: { vehicleId: true, user: { select: { name: true } } },
     }),
-    plannedVehicleIds(req.auth!.userId, me?.team ?? null),
+    plannedVehicleIds(req.auth!.userId, me ? teamsOf(me) : []),
   ]);
   const usedBy = new Map(ongoing.map((o) => [o.vehicleId, o.user.name]));
 
   // ใบงานที่ช่างน่าจะขับรถไป — งานของทีมที่ยังเปิดอยู่ เรียงงานที่นัดใกล้ที่สุดก่อน
   // ทีมรวมเห็นใบงานของทุกทีมที่ครอบคลุม — แบบเดียวกับรายการใบงาน (utils/teamGroups.ts)
-  const cov = await coverageOf(me?.team ?? null);
+  const cov = me ? await coverageOfUser(me) : null;
   const workOrders = cov
     ? await prisma.workOrder.findMany({
         where: {

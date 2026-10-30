@@ -20,21 +20,26 @@ import {
   WORK_ORDER_RESULT_LABELS,
   WORK_ORDER_STATUS_LABELS,
   WORK_STATUS_LABELS,
+  TECH_ROLES,
   isCompanyBranch,
   machineMake,
   warrantyStatus,
 } from "../utils/constants";
 import { bkkDayStart, thaiDateTime } from "./openerReport";
 import { regionsOf } from "../utils/supervisorScope";
+import { teamsOf } from "../utils/teamGroups";
 
 const ROLE_LABELS: Record<string, string> = {
   ADMIN: "แอดมิน",
   SUPER_ADMIN: "Super Admin",
   PARTS_ADMIN: "Admin Spare Part",
   SUPERVISOR: "หัวหน้าภาค",
+  SENIOR_TECH: "Senior ช่าง",
   EMPLOYEE: "ช่าง",
 };
-const ROLE_ORDER = ["SUPER_ADMIN", "ADMIN", "PARTS_ADMIN", "SUPERVISOR", "EMPLOYEE"];
+const ROLE_ORDER = ["SUPER_ADMIN", "ADMIN", "PARTS_ADMIN", "SUPERVISOR", "SENIOR_TECH", "EMPLOYEE"];
+/** ช่างทุกแบบ — รายงานนี้เทียบบทบาทกับแถวในฐานข้อมูลตรง ๆ Senior ช่างจะหลุดจากแถว "ช่าง" ถ้าไม่รวม */
+const isTech = (role: string) => TECH_ROLES.includes(role);
 const CLOSED = ["DONE", "CANCELLED"];
 const HEAD_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF2F7" } };
 const TOTAL_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7F9FC" } };
@@ -67,7 +72,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
   // ── ข้อมูลที่ทุกชีตใช้ (ขนาดเท่าจำนวนคน/สาขา/เครื่อง ไม่ใช่ใบงาน) ──
   const [users, branches, machines, downMachines, woByMachine, woOpenByTeam, woByStatus] = await Promise.all([
     prisma.user.findMany({
-      select: { id: true, employeeCode: true, name: true, phone: true, role: true, team: true, region: true, extraRegions: true, supervisedTeams: true, mustChangePassword: true, deletedAt: true },
+      select: { id: true, employeeCode: true, name: true, phone: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true, supervisedTeams: true, mustChangePassword: true, deletedAt: true },
     }),
     prisma.branch.findMany({ orderBy: { code: "asc" } }),
     prisma.machine.findMany({
@@ -138,7 +143,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
     ["รวม", active.length]
   );
   block("บัญชีที่ต้องตามต่อ", ["รายการ", "จำนวน"], [
-    ["ช่างที่ยังไม่มีทีม", active.filter((u) => u.role === "EMPLOYEE" && !u.team).length],
+    ["ช่างที่ยังไม่มีทีม", active.filter((u) => isTech(u.role) && !teamsOf(u).length).length],
     ["หัวหน้าภาคที่ยังไม่มีพื้นที่ดูแล", active.filter((u) => u.role === "SUPERVISOR" && !regionsOf(u).length && !u.supervisedTeams.length).length],
     ["ยังไม่เคยเข้าระบบ (ใช้รหัสตั้งต้นอยู่)", active.filter((u) => u.mustChangePassword).length],
   ]);
@@ -191,14 +196,14 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
       u.employeeCode,
       u.name,
       ROLE_LABELS[u.role] ?? u.role,
-      u.team ?? "",
+      teamsOf(u).join(", "),
       u.role === "SUPERVISOR" ? [...regionsOf(u).map((r) => `${r} (ทั้งภาค)`), ...u.supervisedTeams].join(", ") : "",
       u.phone ?? "",
       // ระบบไม่ได้เก็บเวลาเข้าระบบล่าสุด — บอกได้แค่ว่าเปลี่ยนรหัสตั้งต้นแล้วหรือยัง (= เคยเข้ามาแล้ว)
       u.mustChangePassword ? "ยังไม่เคย (ใช้รหัสตั้งต้น)" : "เคยแล้ว",
       u.deletedAt
         ? `ถูกลบ ${thaiDateTime(u.deletedAt, false)}`
-        : u.role === "EMPLOYEE" && !u.team
+        : isTech(u.role) && !teamsOf(u).length
           ? "ใช้งาน · ยังไม่มีทีม"
           : u.role === "SUPERVISOR" && !regionsOf(u).length && !u.supervisedTeams.length
             ? "ใช้งาน · ยังไม่มีพื้นที่"
@@ -208,7 +213,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
 
   // ── 3) ทีมช่าง ──
   // ทีม = ทีม CM ของสาขา + ทีมที่ช่างสังกัด · ภาคของทีม = ภาคที่สาขาของทีมอยู่มากที่สุด (กฎเดียวกับผังผู้รับผิดชอบ)
-  const teamNames = new Set<string>([...liveBranches.map((b) => b.zone).filter((z): z is string => !!z), ...active.map((u) => u.team).filter((t): t is string => !!t)]);
+  const teamNames = new Set<string>([...liveBranches.map((b) => b.zone).filter((z): z is string => !!z), ...active.flatMap((u) => teamsOf(u))]);
   const teamRows: Cell[][] = [];
   for (const t of [...teamNames].sort((a, b) => a.localeCompare(b, "th"))) {
     const bs = liveBranches.filter((b) => b.zone === t);
@@ -216,14 +221,15 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
     bs.forEach((b) => b.region && regionCount.set(b.region, (regionCount.get(b.region) ?? 0) + 1));
     const region = [...regionCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
     const sups = active.filter((u) => u.role === "SUPERVISOR" && ((region && regionsOf(u).includes(region)) || u.supervisedTeams.includes(t)));
-    const techs = active.filter((u) => u.role === "EMPLOYEE" && u.team === t);
+    // Senior ช่างอยู่ในทุกทีมที่ถือ (ต่อท้ายชื่อว่า Senior) — ทีมนี้มีใครเห็นงานบ้างต้องครบ
+    const techs = active.filter((u) => isTech(u.role) && teamsOf(u).includes(t));
     const ids = new Set(bs.map((b) => b.id));
     teamRows.push([
       t,
       region,
       sups.map((s) => s.name).join(", ") || "— ไม่มี",
       techs.length,
-      techs.map((s) => s.name).join(", ") || "— ยังไม่มีช่าง",
+      techs.map((s) => (s.role === "SENIOR_TECH" ? `${s.name} (Senior)` : s.name)).join(", ") || "— ยังไม่มีช่าง",
       bs.length,
       liveMachines.filter((m) => ids.has(m.branchId)).length,
       openByTeam.get(t) ?? 0,

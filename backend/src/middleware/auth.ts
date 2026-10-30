@@ -79,6 +79,14 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     if (viewAs) return res.status(401).json({ error: "ดูในฐานะ Super Admin ไม่ได้", viewAsEnded: true });
     req.auth = { ...req.auth, role: "ADMIN", superAdmin: true };
   }
+  /**
+   * Senior ช่าง ทำได้ทุกอย่างเท่าช่าง (เจ้าของงานกำหนด ต.ค. 69) — มองเป็น EMPLOYEE ที่นี่ที่เดียว
+   * ทุกจุดที่ตัดสินว่าขั้นไหนเป็นของช่าง/ช่างเห็นอะไร (ราว 60 จุด) ใช้ได้ทันที ที่ต่างคือขอบเขตทีมซึ่งอ่านจากฐานข้อมูลทุกครั้ง
+   * (teamsOf · utils/teamGroups.ts) ไม่ได้อยู่ในโทเคน — เปลี่ยนทีม/ลดเป็นช่างธรรมดาแล้วมีผลคำขอถัดไปทันที
+   */
+  if ((req.auth.role as string) === "SENIOR_TECH") {
+    req.auth = { ...req.auth, role: "EMPLOYEE", seniorTech: true };
+  }
 
   /**
    * Area Team (Area · Supervisor (COCO)) — รายการอนุญาตทั้งอ่านและเขียน (ดู utils/areaScope.ts)

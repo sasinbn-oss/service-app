@@ -31,6 +31,8 @@ const ROLE_LABELS: Record<string, string> = {
   PARTS_ADMIN: "Admin Spare Part",
   SUPERVISOR: "หัวหน้าภาค",
   EMPLOYEE: "ช่าง",
+  // ไม่มีในรายการ = ขึ้นรหัสอังกฤษดิบในไฟล์ (SENIOR_TECH) — คนกรองคอลัมน์ "ตำแหน่ง" หาไม่เจอ
+  SENIOR_TECH: "Senior ช่าง",
 };
 const SYSTEM = "ระบบ (ไม่มีผู้เปิด)";
 const TH_MONTH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];

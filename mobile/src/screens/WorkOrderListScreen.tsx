@@ -163,7 +163,16 @@ const ROLE_LABEL: Record<Role, string> = { ADMIN: "แอดมิน", SUPERVIS
  */
 function roleGroup(role: string | null | undefined): Role | null {
   if (role === "SUPER_ADMIN") return "ADMIN";
+  // Senior ช่างใช้สีช่าง — สิทธิ์เท่าช่างทุกอย่าง ป้ายชื่อเท่านั้นที่ต่าง (openerLabel)
+  if (role === "SENIOR_TECH") return "EMPLOYEE";
   return role === "ADMIN" || role === "SUPERVISOR" || role === "EMPLOYEE" ? role : null;
+}
+
+/** ป้ายบทบาทของคนเปิดใบ — Senior ช่างบอกตรง ๆ ไม่ยุบเป็น "ช่าง" คนอ่านจะได้รู้ว่าเปิดจากคนที่ดูหลายทีม */
+function openerLabel(role: string | null | undefined) {
+  const g = roleGroup(role);
+  if (!g) return null;
+  return role === "SENIOR_TECH" ? "Senior ช่าง" : ROLE_LABEL[g];
 }
 
 /**
@@ -320,8 +329,8 @@ type ColFilters = Partial<Record<ColKey, Set<string>>>;
 
 function openerText(row: WorkOrderRow) {
   if (!row.createdByName) return "ระบบ";
-  const role = roleGroup(row.createdByRole);
-  return role ? `${row.createdByName} (${ROLE_LABEL[role]})` : row.createdByName;
+  const label = openerLabel(row.createdByRole);
+  return label ? `${row.createdByName} (${label})` : row.createdByName;
 }
 
 function waitText(row: WorkOrderRow) {
@@ -1823,7 +1832,7 @@ function Opener({ row }: { row: WorkOrderRow }) {
       </Text>
       <View style={[styles.roleChip, { backgroundColor: tone.bg }]}>
         <Text style={[styles.roleChipText, { color: tone.fg }]}>
-          {role ? ROLE_LABEL[role] : "อัตโนมัติ"}
+          {openerLabel(row.createdByRole) ?? "อัตโนมัติ"}
         </Text>
       </View>
     </View>

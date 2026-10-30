@@ -27,9 +27,21 @@ interface Team {
   cmBranches: number;
   pmBranches: number;
   technicians: number;
+  /** Senior ช่างในจำนวน technicians (นับทุกทีมที่ถือ) — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  seniors?: number;
   supervisors: number;
   openOrders: number;
   orphan: boolean;
+}
+
+/**
+ * คนที่จะไม่เหลือทีมเลย กับ Senior ที่ยังเหลือทีมอื่น เมื่อลบชื่อนี้ — Senior ที่ถือชื่อนี้ชื่อเดียว (seniorsSole)
+ * ไม่เหลืออะไรเหมือนช่างธรรมดา ต้องนับอยู่ฝั่ง "จะไม่มีสังกัด" ไม่ใช่ "ทีมอื่นยังอยู่"
+ */
+function lossSplit(u: { technicians: number; seniors?: number; seniorsSole?: number }) {
+  const seniors = u.seniors ?? 0;
+  const sole = u.seniorsSole ?? 0;
+  return { noTeam: u.technicians - seniors + sole, keep: seniors - sole };
 }
 interface Move {
   id: number;
@@ -46,6 +58,8 @@ interface Group {
   covers: string[];
   allTeams: boolean;
   technicians: number;
+  seniors?: number;
+  seniorsSole?: number;
   supervisors: number;
 }
 interface Data {
@@ -274,7 +288,7 @@ export default function ManageTeamsScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.muted}>
-              สาขา CM {t.cmBranches} · PM {t.pmBranches} · ช่าง {t.technicians} คน · หัวหน้าภาคดูแล {t.supervisors} คน ·
+              สาขา CM {t.cmBranches} · PM {t.pmBranches} · ช่าง {t.technicians} คน{seniorsText(t.seniors)} · หัวหน้าภาคดูแล {t.supervisors} คน ·
               ใบงานค้าง {t.openOrders}
             </Text>
             <Text style={styles.seeMembers}>ดูรายชื่อในทีม ›</Text>
@@ -310,7 +324,7 @@ export default function ManageTeamsScreen() {
             </View>
             <Text style={styles.muted}>เห็นงานของ: {g.allTeams ? "ทุกทีม" : g.covers.join(" · ") || "—"}</Text>
             <Text style={styles.muted}>
-              ช่าง {g.technicians} คน · หัวหน้าภาคดูแล {g.supervisors} คน
+              ช่าง {g.technicians} คน{seniorsText(g.seniors)} · หัวหน้าภาคดูแล {g.supervisors} คน
             </Text>
             <Text style={styles.seeMembers}>ดูรายชื่อในทีม ›</Text>
           </TouchableOpacity>
@@ -712,7 +726,15 @@ function DeleteTeamModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [usage, setUsage] = useState<{ branches: number; technicians: number; supervisors: number; openOrders: number } | null>(null);
+  const [usage, setUsage] = useState<{
+    branches: number;
+    /** รวม Senior ช่างที่ถือทีมนี้ (seniors = ในจำนวนนั้นเป็น Senior กี่คน · seniorsSole = ถือทีมนี้ทีมเดียว · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+    technicians: number;
+    seniors?: number;
+    seniorsSole?: number;
+    supervisors: number;
+    openOrders: number;
+  } | null>(null);
   const [moveTo, setMoveTo] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
@@ -726,6 +748,7 @@ function DeleteTeamModal({
 
   // มีสาขาหรือใบงานค้าง = ต้องมีทีมรับต่อ ไม่งั้นสาขาไม่มีใครดูแลและใบงานไม่มีใครเห็น
   const needsTarget = !!usage && (usage.branches > 0 || usage.openOrders > 0);
+  const loss = lossSplit(usage ?? { technicians: 0 });
   const ready = !!usage && (!needsTarget || !!moveTo);
   const f = filter.trim();
   const shown = f ? others.filter((o) => o.includes(f)) : others;
@@ -733,7 +756,7 @@ function DeleteTeamModal({
   async function remove() {
     setBusy(true);
     try {
-      const res = await api.post<{ technicians: number; supervisors: number; branches: number; orders: number }>(
+      const res = await api.post<{ technicians: number; seniors?: number; supervisors: number; branches: number; orders: number }>(
         "/teams/delete",
         { name: team.name, moveTo: needsTarget ? moveTo : null },
         { loadingText: "กำลังลบทีม..." }
@@ -744,6 +767,7 @@ function DeleteTeamModal({
         [
           r.branches ? `สาขา ${r.branches} แห่ง · ใบงานค้าง ${r.orders} ใบ ย้ายไป ${moveTo}` : "",
           r.technicians ? `ช่าง ${r.technicians} คนไม่มีสังกัดแล้ว — จัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้` : "",
+          r.seniors ? `Senior ช่าง ${r.seniors} คนเลิกเห็นทีมนี้ — ทีมอื่นที่เลือกไว้ยังอยู่` : "",
           r.supervisors ? `หัวหน้าภาค ${r.supervisors} คนเลิกดูแลทีมนี้` : "",
         ]
           .filter(Boolean)
@@ -786,7 +810,9 @@ function DeleteTeamModal({
           <View style={styles.warnBox}>
             <Ionicons name="alert-circle" size={16} color={colors.warningInk} />
             <Text style={styles.warnText}>
-              {usage.technicians ? `ช่าง ${usage.technicians} คนจะไม่มีสังกัด — ไม่เห็นใบงานจนกว่าจะจัดทีมใหม่\n` : ""}
+              {/* Senior ที่ถือหลายทีม ลบทีมนี้แล้วยังเห็นทีมอื่นที่เลือกไว้ — นับรวมกับช่างที่ "จะไม่มีสังกัด" ไม่ได้ */}
+              {loss.noTeam ? `ช่าง ${loss.noTeam} คนจะไม่มีสังกัด — ไม่เห็นใบงานจนกว่าจะจัดทีมใหม่\n` : ""}
+              {loss.keep ? `Senior ช่าง ${loss.keep} คนจะเลิกเห็นทีมนี้ — ทีมอื่นที่เลือกไว้ยังอยู่\n` : ""}
               {usage.supervisors ? `หัวหน้าภาค ${usage.supervisors} คนจะเลิกดูแลทีมนี้\n` : ""}
               แผนของทีมนี้ตั้งแต่วันนี้ถูกลบ · ใบงานที่ปิดแล้วคงชื่อทีมเดิมไว้เป็นประวัติ
             </Text>
@@ -869,10 +895,16 @@ function GroupModal({
 
   function remove() {
     if (!group) return;
+    const loss = lossSplit(group);
     showAlert(
       `ลบทีมรวม ${group.name}?`,
       [
-        group.technicians ? `ช่าง ${group.technicians} คนจะไม่มีสังกัด — ต้องจัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้` : "ยังไม่มีช่างในทีมรวมนี้",
+        loss.noTeam
+          ? `ช่าง ${loss.noTeam} คนจะไม่มีสังกัด — ต้องจัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้`
+          : loss.keep
+            ? ""
+            : "ยังไม่มีช่างในทีมรวมนี้",
+        loss.keep ? `Senior ช่าง ${loss.keep} คนจะเลิกเห็นทีมรวมนี้ — ทีมอื่นที่เลือกไว้ยังอยู่` : "",
         group.supervisors ? `หัวหน้าภาค ${group.supervisors} คนเลิกดูแลทีมรวมนี้` : "",
         "แผนของทีมรวมตั้งแต่วันนี้ถูกลบ",
       ]
@@ -885,8 +917,18 @@ function GroupModal({
         style: "destructive",
         onPress: async () => {
           try {
-            const res = await api.delete<{ technicians: number }>(`/teams/groups/${group.id}`);
-            if (res.data.technicians) showAlert(`ลบ ${group.name} แล้ว`, `ช่าง ${res.data.technicians} คนไม่มีสังกัดแล้ว — จัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้`);
+            const res = await api.delete<{ technicians: number; seniors?: number }>(`/teams/groups/${group.id}`);
+            const r = res.data;
+            if (r.technicians || r.seniors)
+              showAlert(
+                `ลบ ${group.name} แล้ว`,
+                [
+                  r.technicians ? `ช่าง ${r.technicians} คนไม่มีสังกัดแล้ว — จัดทีมใหม่ที่หน้าสิทธิ์ผู้ใช้` : "",
+                  r.seniors ? `Senior ช่าง ${r.seniors} คนเลิกเห็นทีมรวมนี้ — ทีมอื่นที่เลือกไว้ยังอยู่` : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n")
+              );
             onDone();
           } catch (e) {
             showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
@@ -984,6 +1026,8 @@ function RenameModal({
       const res = await api.post<{
         branches: number;
         technicians: number;
+        /** Senior ช่างที่ถือชื่อนี้เป็นทีมที่เพิ่ม (ทีมแรกนับใน technicians แล้ว) */
+        seniors?: number;
         supervisors: number;
         workOrders: number;
         plans: number;
@@ -992,7 +1036,7 @@ function RenameModal({
       const r = res.data;
       showAlert(
         r.merged ? `รวม ${team.name} เข้ากับ ${clean} แล้ว` : `เปลี่ยนชื่อเป็น ${clean} แล้ว`,
-        `สาขา ${r.branches} · ช่าง ${r.technicians} · หัวหน้าภาค ${r.supervisors} · ใบงาน ${r.workOrders} · แผน ${r.plans}\n` +
+        `สาขา ${r.branches} · ช่าง ${r.technicians}${r.seniors ? ` · Senior ช่าง ${r.seniors}` : ""} · หัวหน้าภาค ${r.supervisors} · ใบงาน ${r.workOrders} · แผน ${r.plans}\n` +
           "อย่าลืมแก้ชื่อในไฟล์ทะเบียนสาขาต้นฉบับด้วย (ระหว่างนี้ระบบแปลงชื่อเดิมให้เอง)"
       );
       onDone();
@@ -1061,7 +1105,14 @@ interface Member {
   region: string | null;
   /** ทุกภาคที่หัวหน้าภาคคนนี้ดูแล — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง อ่านผ่าน regionsOf() */
   regions?: string[];
+  /** Senior ช่าง: ชื่อทีม/ทีมรวมที่ทำให้เห็นงานของทีมนี้ */
+  via?: string[];
 }
+/** "(Senior 2)" ต่อท้ายจำนวนช่าง — Senior นับในทุกทีมที่ถือ บอกแยกไว้ คนอ่านจะไม่งงว่าทำไมรวมทุกทีมแล้วเกินจำนวนช่างจริง */
+function seniorsText(n?: number) {
+  return n ? ` (Senior ${n})` : "";
+}
+
 interface Members {
   name: string;
   isGroup: boolean;
@@ -1069,10 +1120,14 @@ interface Members {
   covers?: string[] | null;
   technicians: Member[];
   supervisors: Member[];
+  /** Senior ช่างทุกคนที่เห็นงานของทีมนี้ (ถือตรง ๆ หรือผ่านทีมรวม) — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  seniors?: Member[];
   coveredBy: string[];
 }
 
 const ROLE_LABEL: Record<string, string> = {
+  // ช่างธรรมดาไม่มีป้าย (อยู่ในหัวข้อ "ช่างในทีม" อยู่แล้ว) — Senior มีป้าย เพราะคนเดียวกันขึ้นในหลายทีม
+  SENIOR_TECH: "Senior ช่าง",
   SUPERVISOR: "หัวหน้าภาค",
   ADMIN: "แอดมิน",
   PARTS_ADMIN: "Admin Spare Part",
@@ -1093,6 +1148,7 @@ function MembersModal({ name, onClose }: { name: string; onClose: () => void }) 
       .catch((e) => setError(apiErrorMessage(e)));
   }, [name]);
 
+  const viaGroup = (data?.seniors ?? []).filter((m) => !data?.technicians.some((t) => t.id === m.id));
   const person = (m: Member, sub?: string | null) => (
     <View key={m.id} style={styles.memberRow}>
       <View style={styles.avatar}>
@@ -1146,6 +1202,16 @@ function MembersModal({ name, onClose }: { name: string; onClose: () => void }) 
               <Text style={styles.muted}>ยังไม่มีช่างสังกัดทีมนี้ — จัดทีมให้ช่างที่หน้าสิทธิ์ผู้ใช้</Text>
             )}
           </View>
+          {/*
+            Senior ที่เห็นงานทีมนี้ผ่านทีมรวม ไม่ได้ "อยู่" ทีมนี้ (ลบ/รวมทีมนี้ไม่กระทบเขา) จึงแยกหัวข้อ
+            คนที่ถือทีมนี้ตรง ๆ อยู่ในหัวข้อช่างในทีมแล้ว (มีป้าย Senior ช่าง) ไม่ขึ้นซ้ำ
+          */}
+          {viaGroup.length ? (
+            <View style={{ gap: spacing.sm }}>
+              <Text style={styles.section}>Senior ช่างที่เห็นงานทีมนี้ผ่านทีมรวม ({viaGroup.length})</Text>
+              {viaGroup.map((m) => person(m, m.via?.length ? `ผ่าน ${m.via.join(" · ")}` : null))}
+            </View>
+          ) : null}
           {data.coveredBy.length ? (
             <View style={{ gap: spacing.sm }}>
               <Text style={styles.section}>ทีมรวมที่เห็นงานของทีมนี้ด้วย</Text>

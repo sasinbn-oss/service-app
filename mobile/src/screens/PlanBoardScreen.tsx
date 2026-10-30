@@ -8,7 +8,7 @@
  * ช่างไม่ได้เข้าหน้านี้ — เมนูไม่ขึ้น และเซิร์ฟเวอร์ตอบ 403 อยู่แล้ว
  */
 import { useDocked } from "../components/SideMenu";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -39,6 +39,7 @@ import { APPOINTMENT_DONE, ISSUE_STAGES } from "../utils/stepPath";
 import TimelineModal, { TimelineButton, TimelineTarget } from "../components/TimelineModal";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
+import { teamsOf, teamsText } from "../utils/teams";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "PlanBoard">;
 
@@ -67,6 +68,13 @@ interface Member {
   id: number;
   name: string;
   employeeCode: string;
+  /** บทบาทจริง — Senior ช่างไม่มีแถวของตัวเอง ถูกใส่เป็นคนในทีมไหนก็ได้ ป้ายบอกว่าไม่ใช่ช่างประจำทีมนี้ (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+  role?: string;
+}
+
+/** ป้าย "Senior" ท้ายชื่อในแถวทีม — แบบเดียวกับผังพื้นที่ จะได้จำได้ว่าเป็นคนเดียวกับที่ขึ้นหลายทีม */
+function SeniorTag({ m }: { m: Member }) {
+  return m.role === "SENIOR_TECH" ? <Text style={styles.seniorTag}>{" Senior "}</Text> : null;
 }
 
 interface Lane {
@@ -114,6 +122,29 @@ interface Technician {
   name: string;
   employeeCode: string;
   team: string | null;
+  /** Senior ช่าง — ไม่มีแผนทีมของตัวเอง ขึ้นเป็นตัวเลือกในทุกทีมที่ดูแล (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+  senior?: boolean;
+  /** ทีม/ทีมรวมทั้งหมดที่ถือ */
+  teams?: string[];
+  /** ทีมช่างที่เห็นงานจริงหลังแตกทีมรวมแล้ว · null = ทุกทีม */
+  covers?: string[] | null;
+}
+
+/** ทีมของช่างในรายการยืม — Senior บอกตำแหน่งกับทุกทีมที่ถือ ไม่ใช่แค่ทีมแรก */
+function techHint(t: Technician) {
+  if (t.senior) return `Senior ช่าง · ${teamsText(teamsOf(t)) || "ยังไม่มีทีม"}`;
+  return t.team ?? "ยังไม่มีทีม";
+}
+
+/**
+ * ช่างคนนี้อยู่ในทีมของแผนนี้ไหม — Senior ช่างนับทุกทีมที่ดูแล (รวมทีมที่ทีมรวมครอบคลุม)
+ * จะได้ไม่ต้องกด "ยืมช่างจากทีมอื่น" ทุกครั้งที่จัด Senior ลงทีมที่ตัวเองดูแลอยู่แล้ว
+ */
+function belongsTo(t: Technician, team: string | null) {
+  if (!team) return false;
+  if (t.team === team) return true;
+  if (!t.senior) return false;
+  return t.covers === null || !!t.teams?.includes(team) || !!t.covers?.includes(team);
 }
 
 interface Vehicle {
@@ -632,8 +663,16 @@ function LaneCard({
         <Text style={styles.crew} numberOfLines={2}>
           {lead ? (
             <>
-              <Text style={styles.crewLead}>{lead.name}</Text> (หัวหน้าทีม)
-              {rest.length > 0 ? ` ไปกับ ${rest.map((m) => m.name).join(", ")}` : " ไปคนเดียว"}
+              <Text style={styles.crewLead}>{lead.name}</Text>
+              <SeniorTag m={lead} /> (หัวหน้าทีม)
+              {rest.length > 0 ? " ไปกับ " : " ไปคนเดียว"}
+              {rest.map((m, i) => (
+                <Fragment key={m.id}>
+                  {i > 0 ? ", " : ""}
+                  {m.name}
+                  <SeniorTag m={m} />
+                </Fragment>
+              ))}
             </>
           ) : (
             <Text style={styles.warnText}>ยังไม่ได้จัดคน</Text>
@@ -849,8 +888,8 @@ function PlanModal({
     setError(null);
   }, [visible, date, initialTeam, lane]);
 
-  const inTeam = technicians.filter((t) => t.team === team);
-  const others = technicians.filter((t) => t.team !== team);
+  const inTeam = technicians.filter((t) => belongsTo(t, team));
+  const others = technicians.filter((t) => !belongsTo(t, team));
   const shown = inTeam;
   // ช่างทีมอื่นที่ยืมมาแล้วขึ้นเป็นชิปต่อท้ายทีม ที่เหลือเลือกจากกล่องลอย "ยืมช่างจากทีมอื่น"
   // (เดิมกางรายชื่อทั้งบริษัทลงในหน้าต่าง หน้าต่างยืดยาวจนหาปุ่มบันทึกไม่เจอ)
@@ -941,7 +980,7 @@ function PlanModal({
                   <Text style={[styles.personText, at >= 0 && { color: "#fff" }]}>
                     {at === 0 ? "★ " : at > 0 ? `${at + 1}. ` : ""}
                     {t.name}
-                    {t.team && t.team !== team ? ` · ${t.team}` : ""}
+                    {t.senior ? " · Senior" : t.team && t.team !== team ? ` · ${t.team}` : ""}
                   </Text>
                 </TouchableOpacity>
               );
@@ -960,7 +999,7 @@ function PlanModal({
               label="ช่างทีมอื่น"
               options={others
                 .filter((t) => !memberIds.includes(t.id))
-                .map((t) => ({ value: String(t.id), label: t.name, hint: t.team ?? "ยังไม่มีทีม" }))}
+                .map((t) => ({ value: String(t.id), label: t.name, hint: techHint(t) }))}
               onPick={(id) => {
                 if (id) toggle(Number(id));
                 setBorrowing(false);
@@ -1118,6 +1157,7 @@ const styles = StyleSheet.create({
   avatarText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   crew: { fontSize: 13, color: colors.body, flexShrink: 1 },
   crewLead: { fontWeight: "700", color: colors.text },
+  seniorTag: { fontSize: 10.5, fontWeight: "800", color: colors.roleTech, backgroundColor: colors.roleTechSoft, borderRadius: 4 },
   warnText: { color: colors.warningInk, fontWeight: "600" },
   car: {
     flexDirection: "row",
