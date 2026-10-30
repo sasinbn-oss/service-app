@@ -8,6 +8,7 @@
  */
 import { navigationRef } from "../navigation/navigationRef";
 import type { HomeStackParamList } from "../navigation/types";
+import { fmtNum } from "./vehicles";
 
 export function canSeeBranchParts(u: { role: string; partsAdmin?: boolean } | null | undefined) {
   return !!u && u.role === "ADMIN" && !u.partsAdmin;
@@ -34,8 +35,11 @@ export function openBranchParts(params?: BranchPartsParams) {
  * ทุกที่ที่โชว์ยอด (ลิงก์ในใบงาน หัวกลุ่มบนมือถือ) จึงบอกทั้งสองแบบแยกกัน แบบที่เป็นศูนย์ไม่ต้องพูด
  */
 export function piecesText(c: { used: number; issued: number }) {
+  // จุลภาคหลักพันแบบเดียวกับหน้ารายงาน — สาขาใหญ่ตั้งแต่เริ่มใช้ระบบมีได้เป็นพันชิ้น
+  const u = fmtNum(c.used);
+  const i = fmtNum(c.issued);
   if (!c.used && !c.issued) return "ยังไม่มี";
-  if (!c.issued) return `ใช้แล้ว ${c.used} ชิ้น`;
-  if (!c.used) return `เบิกแล้ว ${c.issued} ชิ้น`;
-  return `ใช้แล้ว ${c.used} · เบิกแล้ว ${c.issued} ชิ้น`;
+  if (!c.issued) return `ใช้แล้ว ${u} ชิ้น`;
+  if (!c.used) return `เบิกแล้ว ${i} ชิ้น`;
+  return `ใช้แล้ว ${u} · เบิกแล้ว ${i} ชิ้น`;
 }

@@ -801,6 +801,9 @@ model WorkOrder {
   adminReviews AdminReview[]
 
   @@index([status, createdAt])
+  // รายงานอะไหล่ที่ไปแต่ละสาขา: ตัวเลขบนลิงก์ในใบงาน (ถามทุกครั้งที่แอดมินเปิดใบงาน) และ Excel อ่านใบงานทีละสาขา — ไม่มี index
+  // ฐานข้อมูลต้องไล่ใบงานทั้งระบบทุกครั้ง
+  @@index([branchId])
   @@index([assignedToId, status])
   @@index([assignedTeam, status])
   @@index([outageId])

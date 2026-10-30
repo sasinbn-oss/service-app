@@ -27,6 +27,7 @@ import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
 import { useDebounced } from "../utils/useDebounced";
 import { machineTag } from "../utils/machine";
+import { fmtNum } from "../utils/vehicles";
 import { HomeStackParamList } from "../navigation/types";
 import { formatDateTime } from "./WorkOrderListScreen";
 import { colors, headingFont, radius, spacing } from "../theme";
@@ -124,7 +125,8 @@ interface Loaded {
 }
 
 const PRESETS: { k: Exclude<RangeKey, "custom">; label: string; short: string }[] = [
-  { k: "all", label: "ทั้งหมด (ตั้งแต่เริ่มใช้ระบบ)", short: "ทั้งหมด" },
+  // มือถือก็เขียนเต็ม — คำของเจ้าของงาน "ตั้งแต่เริ่มใช้ระบบ" ต้องเห็นโดยไม่ต้องกางตัวกรอง (แถบชิปเลื่อนข้างได้ ไม่ล้น)
+  { k: "all", label: "ทั้งหมด (ตั้งแต่เริ่มใช้ระบบ)", short: "ทั้งหมด (ตั้งแต่เริ่มใช้ระบบ)" },
   { k: "thisMonth", label: "เดือนนี้", short: "เดือนนี้" },
   { k: "lastMonth", label: "เดือนก่อน", short: "เดือนก่อน" },
   { k: "3months", label: "3 เดือน", short: "3 เดือน" },
@@ -148,7 +150,14 @@ const ROWS_PAGE = 100;
 
 const machineText = (r: Row) =>
   r.machineCode ? `${r.machineBrand ? `${r.machineBrand} ` : ""}เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : "ทั้งสาขา";
-const qtyText = (r: Row) => `${r.quantity}${r.unit ? ` ${r.unit}` : ""}`;
+/**
+ * ตัวเลขทุกตัวบนหน้านี้มีจุลภาคหลักพัน — ค่าเริ่มต้นทั้งหมดตั้งแต่เริ่มใช้ระบบ × ~1,200 สาขา ยอดเป็นแสน
+ * ช่องตัวเลขบนสุดมีจุลภาคแต่ชิปใต้มันไม่มี ("145,290" กับ "145290 ชิ้น") อ่านเหมือนคนละเลข
+ */
+const n0 = (n: number) => fmtNum(n);
+const qtyText = (r: Row) => `${n0(r.quantity)}${r.unit ? ` ${r.unit}` : ""}`;
+/** ของนอกสโตร์ไม่มีรหัสจริง (partCode = "[นอกสโตร์] ชื่อ") — โชว์ชื่อกับป้ายนอกสโตร์พอ เขียนรหัสด้วยเท่ากับชื่อซ้ำสองรอบ */
+const codeOf = (x: { partCode: string; offCatalog: boolean }) => (x.offCatalog ? null : x.partCode);
 const isBranch = (g: BranchGroup | PartGroup): g is BranchGroup => "branchCode" in g;
 
 function rangeShort(key: RangeKey, from: string, to: string) {
@@ -162,12 +171,12 @@ function KindPills({ c, small }: { c: { used: number; issued: number }; small?: 
     <>
       {c.used ? (
         <View style={[styles.pill, small && styles.pillSmall, { backgroundColor: LOOK.USED.bg, borderColor: LOOK.USED.bd }]}>
-          <Text style={[styles.pillText, small && styles.pillTextSmall, { color: LOOK.USED.fg }]}>ใช้แล้ว {c.used} ชิ้น</Text>
+          <Text style={[styles.pillText, small && styles.pillTextSmall, { color: LOOK.USED.fg }]}>ใช้แล้ว {n0(c.used)} ชิ้น</Text>
         </View>
       ) : null}
       {c.issued ? (
         <View style={[styles.pill, small && styles.pillSmall, { backgroundColor: LOOK.ISSUED.bg, borderColor: LOOK.ISSUED.bd }]}>
-          <Text style={[styles.pillText, small && styles.pillTextSmall, { color: LOOK.ISSUED.fg }]}>เบิกแล้ว {c.issued} ชิ้น</Text>
+          <Text style={[styles.pillText, small && styles.pillTextSmall, { color: LOOK.ISSUED.fg }]}>เบิกแล้ว {n0(c.issued)} ชิ้น</Text>
         </View>
       ) : null}
     </>
@@ -178,8 +187,8 @@ function KindPills({ c, small }: { c: { used: number; issued: number }; small?: 
 function KindTimes({ c }: { c: { used: number; issued: number } }) {
   return (
     <>
-      {c.used ? <Text style={[styles.times, { color: LOOK.USED.fg }]}> ใช้แล้ว ×{c.used}</Text> : null}
-      {c.issued ? <Text style={[styles.times, { color: LOOK.ISSUED.fg }]}> เบิกแล้ว ×{c.issued}</Text> : null}
+      {c.used ? <Text style={[styles.times, { color: LOOK.USED.fg }]}> ใช้แล้ว ×{n0(c.used)}</Text> : null}
+      {c.issued ? <Text style={[styles.times, { color: LOOK.ISSUED.fg }]}> เบิกแล้ว ×{n0(c.issued)}</Text> : null}
     </>
   );
 }
@@ -225,6 +234,8 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [more, setMore] = useState(false);
+  /** ลำดับกลุ่มเลื่อนระหว่าง "โหลดเพิ่ม" (มีใบปิดระหว่างนั้น) — บอกให้โหลดใหม่ ไม่ปล่อยให้สาขาที่เลื่อนขึ้นไปหายเงียบ ๆ */
+  const [drift, setDrift] = useState(false);
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [details, setDetails] = useState<Record<string, DetailState>>({});
   const [panel, setPanel] = useState(false);
@@ -289,6 +300,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
         const next = { page: res.data, params, gen: n };
         loadedRef.current = next;
         setLoaded(next);
+        setDrift(false);
         // แถวที่เปิดไว้โหลดใหม่ตามตัวกรองใหม่ (กลุ่มที่เปิดไว้ยังเปิดอยู่ — เปลี่ยนสถานะแล้วดูสาขาเดิมต่อได้)
         setDetails({});
         // เหลือกลุ่มเดียว (มาจากลิงก์สาขา/เครื่อง หรือค้นเจอสาขาเดียว) เปิดให้เลย — คนมาเพื่อดูแถวของกลุ่มนั้น
@@ -316,9 +328,15 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
       // ตัวกรองเปลี่ยน/โหลดใหม่ระหว่างรอ — หน้าถัดไปของชุดเก่าต่อท้ายชุดใหม่ไม่ได้
       if (loadedRef.current !== base) return;
       const have = new Set(base.page.groups.map((g) => g.key));
-      const next = { ...base, page: { ...res.data, groups: [...base.page.groups, ...res.data.groups.filter((g) => !have.has(g.key))] } };
+      const fresh = res.data.groups.filter((g) => !have.has(g.key));
+      const next = { ...base, page: { ...res.data, groups: [...base.page.groups, ...fresh] } };
       loadedRef.current = next;
       setLoaded(next);
+      /**
+       * หน้าถัดไปนับจากตำแหน่ง (เรียงตามชิ้นมากสุด) — ระหว่างกดมีใบปิด สาขาหนึ่งเลื่อนขึ้นไปหน้าที่โหลดแล้ว อีกสาขาเลื่อนลงมาซ้ำ
+       * เจอกลุ่มซ้ำ หรือหมดหน้าแล้วยังได้ไม่ครบ = มีกลุ่มที่ข้ามไป บอกให้โหลดใหม่ (โหลดใหม่เองตอนคนกำลังเลื่อนดูจะกระโดด)
+       */
+      if (fresh.length < res.data.groups.length || (!res.data.nextCursor && next.page.groups.length < res.data.groupCount)) setDrift(true);
     } catch (e) {
       showAlert("โหลดเพิ่มไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -436,7 +454,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
         return (
           <TouchableOpacity
             key={p.k}
-            style={[styles.chip, on && styles.chipOn]}
+            style={[styles.chip, !wide && styles.chipTall, on && styles.chipOn]}
             onPress={() => pickRange(p.k)}
             accessibilityLabel={`ช่วง ${p.label}`}
             // เว็บไม่แปลง accessibilityState เป็น aria-selected — ใส่เองให้โปรแกรมอ่านจอ/เทสต์รู้ว่าช่วงไหนเลือกอยู่
@@ -447,11 +465,12 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         );
       })}
-      <View style={styles.dates}>
-        <View style={styles.dateBox}>
+      {/* มือถือ: สองช่องแบ่งความกว้างกัน — กว้างตายตัว 200 คู่กันเกินกล่องตัวกรอง (~330 px) ช่อง "ถึง" ล้นขอบจอ */}
+      <View style={[styles.dates, !wide && styles.datesPhone]}>
+        <View style={wide ? styles.dateBox : styles.dateBoxPhone}>
           <DateField label="ตั้งแต่" value={shownFrom} onChange={(v) => editDate("from", v)} emptyHint="แรกสุด" labelStyle={styles.dateLabel} />
         </View>
-        <View style={styles.dateBox}>
+        <View style={wide ? styles.dateBox : styles.dateBoxPhone}>
           <DateField label="ถึง" value={shownTo} onChange={(v) => editDate("to", v)} emptyHint="วันนี้" labelStyle={styles.dateLabel} />
         </View>
       </View>
@@ -466,7 +485,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
     return (
       <TouchableOpacity
         key={c.k}
-        style={[styles.chip, on && styles.chipOn]}
+        style={[styles.chip, !wide && styles.chipTall, on && styles.chipOn]}
         onPress={() => setKind(c.k)}
         accessibilityLabel={`สถานะ ${c.label}${n != null ? ` ${n} ชิ้น` : ""}`}
         accessibilityState={{ selected: on }}
@@ -474,7 +493,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
       >
         <Text style={[styles.chipText, { color: on ? "#fff" : c.fg }, on && styles.chipTextOn]}>
           {c.label}
-          {n != null ? ` · ${n} ชิ้น` : ""}
+          {n != null ? ` · ${n0(n)} ชิ้น` : ""}
         </Text>
       </TouchableOpacity>
     );
@@ -494,7 +513,8 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
         maxLength={100}
       />
       {search ? (
-        <TouchableOpacity onPress={() => setSearch("")} accessibilityLabel="ล้างคำค้น">
+        // กล่องกด 44 px รอบไอคอน 17 px — ไอคอนเปล่ากดด้วยนิ้วพลาดง่าย
+        <TouchableOpacity onPress={() => setSearch("")} accessibilityLabel="ล้างคำค้น" style={styles.clearBtn}>
           <Ionicons name="close-circle" size={17} color={colors.textFaint} />
         </TouchableOpacity>
       ) : null}
@@ -506,13 +526,13 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
       <View style={styles.dd}>
         {wide ? <Text style={styles.ddLabel}>ภาค</Text> : null}
         <View style={{ flex: 1 }}>
-          <Dropdown value={region ?? ""} options={regionOptions} onChange={(v) => setRegion(v || null)} accessibilityLabel="ภาค" />
+          <Dropdown value={region ?? ""} options={regionOptions} onChange={(v) => setRegion(v || null)} accessibilityLabel="ภาค" fieldStyle={styles.ddField} />
         </View>
       </View>
       <View style={styles.dd}>
         {wide ? <Text style={styles.ddLabel}>ทีม</Text> : null}
         <View style={{ flex: 1 }}>
-          <Dropdown value={team ?? ""} options={teamOptions} onChange={(v) => setTeam(v || null)} accessibilityLabel="ทีม" />
+          <Dropdown value={team ?? ""} options={teamOptions} onChange={(v) => setTeam(v || null)} accessibilityLabel="ทีม" fieldStyle={styles.ddField} />
         </View>
       </View>
     </>
@@ -537,7 +557,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
         {deep.machineId !== undefined ? `เฉพาะเครื่อง ${deep.machineCode ?? ""} · ` : ""}สาขา {deep.branchCode}
         {deep.branchName ? ` ${deep.branchName}` : ""}
       </Text>
-      <TouchableOpacity onPress={clearDeep} accessibilityLabel="เลิกกรองสาขา/เครื่อง" hitSlop={8}>
+      <TouchableOpacity onPress={clearDeep} accessibilityLabel="เลิกกรองสาขา/เครื่อง" hitSlop={14}>
         <Ionicons name="close" size={16} color={colors.primaryInk} />
       </TouchableOpacity>
     </View>
@@ -587,12 +607,12 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
     const rowsFoot = (
       <View style={styles.rowsFoot}>
         <Text style={styles.sub}>
-          แสดง {d.rows.length} จาก {d.rowCount} แถว · ใหม่สุดก่อน
+          แสดง {n0(d.rows.length)} จาก {n0(d.rowCount)} แถว · ใหม่สุดก่อน
         </Text>
         {d.nextCursor ? (
           <TouchableOpacity style={styles.more} onPress={() => d.nextCursor && fetchDetail(key, d.nextCursor)} disabled={d.more} accessibilityLabel="แสดงแถวเพิ่ม">
             {d.more ? <Spinner size="small" color={colors.primaryInk} /> : null}
-            <Text style={styles.moreText}>แสดงเพิ่มอีก {Math.min(ROWS_PAGE, d.rowCount - d.rows.length)} แถว</Text>
+            <Text style={styles.moreText}>แสดงเพิ่มอีก {n0(Math.min(ROWS_PAGE, d.rowCount - d.rows.length))} แถว</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -615,7 +635,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
                   <>
                     <Text style={styles.strong}>{r.partName}</Text>
                     <View style={styles.codeLine}>
-                      <Text style={styles.code}>{r.partCode}</Text>
+                      {codeOf(r) ? <Text style={styles.code}>{codeOf(r)}</Text> : null}
                       {r.offCatalog ? <OffTag /> : null}
                     </View>
                   </>
@@ -661,7 +681,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
             </View>
             <Text style={styles.mRowLine}>
               {[
-                branchView ? r.partCode : null,
+                branchView ? codeOf(r) : null,
                 thaiDate(r.day),
                 r.code,
                 r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : "ทั้งสาขา",
@@ -689,7 +709,8 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
         "partCode" in x ? (
           <View key={x.sparePartId} style={styles.atChip}>
             <Text style={styles.atChipText}>
-              {x.partName} <Text style={styles.code}>{x.partCode}</Text>
+              {x.partName}
+              {codeOf(x) ? <Text style={styles.code}> {codeOf(x)}</Text> : null}
               <KindTimes c={x} />
             </Text>
             {x.offCatalog ? <OffTag /> : null}
@@ -737,7 +758,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
           </TouchableOpacity>
           <View style={styles.groupNums}>
             <KindPills c={g} small={!wide} />
-            <Text style={styles.groupSub}>{g.orders} ใบงาน</Text>
+            <Text style={styles.groupSub}>{n0(g.orders)} ใบงาน</Text>
             {wide ? (
               <TouchableOpacity
                 onPress={() => navigation.navigate("WorkOrderList", { search: g.branchCode })}
@@ -756,7 +777,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
         ) : (
           <View style={styles.groupBody}>
             {breakdownChips(g.topParts)}
-            {g.partCount > g.topParts.length ? <Text style={styles.sub}>และอีก {g.partCount - g.topParts.length} รายการอะไหล่</Text> : null}
+            {g.partCount > g.topParts.length ? <Text style={styles.sub}>และอีก {n0(g.partCount - g.topParts.length)} รายการอะไหล่</Text> : null}
           </View>
         )}
         {expandButton(expanded, g.branchCode, g.key)}
@@ -780,14 +801,14 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
           >
             <Text style={[styles.groupTitle, styles.groupTitleSmall, headingFont]}>{g.partName}</Text>
             <View style={styles.codeLine}>
-              <Text style={styles.groupSub}>{[g.partCode, g.brand].filter(Boolean).join(" · ")}</Text>
+              <Text style={styles.groupSub}>{[codeOf(g), g.brand].filter(Boolean).join(" · ")}</Text>
               {g.offCatalog ? <OffTag /> : null}
             </View>
           </TouchableOpacity>
           <View style={styles.groupNums}>
             <KindPills c={g} small />
             <Text style={styles.groupSub}>
-              {g.branchCount} สาขา · {g.orders} ใบงาน
+              {n0(g.branchCount)} สาขา · {n0(g.orders)} ใบงาน
             </Text>
           </View>
         </View>
@@ -795,7 +816,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
           <Text style={styles.atLabel}>ไปที่สาขาไหนบ้าง</Text>
           {breakdownChips(expanded && d?.status === "ok" ? d.breakdown : g.topBranches)}
           {!(expanded && d?.status === "ok") && g.branchCount > g.topBranches.length ? (
-            <Text style={styles.sub}>และอีก {g.branchCount - g.topBranches.length} สาขา</Text>
+            <Text style={styles.sub}>และอีก {n0(g.branchCount - g.topBranches.length)} สาขา</Text>
           ) : null}
         </View>
         {expanded ? detailBody(id, g.key, false) : null}
@@ -830,17 +851,17 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
               <View style={[PCOL[0], styles.cell]}>
                 <Text style={styles.strong}>{g.partName}</Text>
                 <View style={styles.codeLine}>
-                  <Text style={styles.code}>{[g.partCode, g.brand].filter(Boolean).join(" · ")}</Text>
+                  <Text style={styles.code}>{[codeOf(g), g.brand].filter(Boolean).join(" · ")}</Text>
                   {g.offCatalog ? <OffTag /> : null}
                 </View>
               </View>
-              <Text style={[styles.td, styles.num, PCOL[1], { color: g.used ? LOOK.USED.fg : colors.textFaint }]}>{g.used || "–"}</Text>
-              <Text style={[styles.td, styles.num, PCOL[2], { color: g.issued ? LOOK.ISSUED.fg : colors.textFaint }]}>{g.issued || "–"}</Text>
-              <Text style={[styles.td, styles.qty, PCOL[3]]}>{g.branchCount}</Text>
+              <Text style={[styles.td, styles.num, PCOL[1], { color: g.used ? LOOK.USED.fg : colors.textFaint }]}>{g.used ? n0(g.used) : "–"}</Text>
+              <Text style={[styles.td, styles.num, PCOL[2], { color: g.issued ? LOOK.ISSUED.fg : colors.textFaint }]}>{g.issued ? n0(g.issued) : "–"}</Text>
+              <Text style={[styles.td, styles.qty, PCOL[3]]}>{n0(g.branchCount)}</Text>
               <View style={[PCOL[4], styles.cell]}>
                 {breakdownChips(expanded && d?.status === "ok" ? d.breakdown : g.topBranches)}
                 {!(expanded && d?.status === "ok") && g.branchCount > g.topBranches.length ? (
-                  <Text style={styles.sub}>และอีก {g.branchCount - g.topBranches.length} สาขา — กดเพื่อดูครบ</Text>
+                  <Text style={styles.sub}>และอีก {n0(g.branchCount - g.topBranches.length)} สาขา — กดเพื่อดูครบ</Text>
                 ) : null}
               </View>
               <View style={[PCOL[5], { alignItems: "flex-end" }]}>
@@ -859,16 +880,26 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
     <View style={styles.foot}>
       <Text style={[styles.sub, { flexShrink: 1 }]}>
         {/* ตารางกดได้เฉพาะเลขใบงาน · การ์ด (จอแคบ) กดได้ทั้งแถว */}
-        แสดง {page.groups.length} จาก {page.groupCount} {groupNoun} · มากสุดก่อน · {table ? "กดเลขใบงาน" : "กดแถว"}เพื่อเปิดใบงาน · Excel
+        แสดง {n0(page.groups.length)} จาก {n0(page.groupCount)} {groupNoun} · มากสุดก่อน · {table ? "กดเลขใบงาน" : "กดแถว"}เพื่อเปิดใบงาน · Excel
         ได้ตามตัวกรองที่เลือกอยู่ (แถวละสาขา+อะไหล่+ใบงาน)
       </Text>
       {page.nextCursor ? (
         <TouchableOpacity style={styles.more} onPress={loadMore} disabled={more} accessibilityLabel="โหลดเพิ่ม">
           {more ? <Spinner size="small" color={colors.primaryInk} /> : null}
           <Text style={styles.moreText}>
-            โหลดเพิ่ม ({Math.min(50, page.groupCount - page.groups.length)} {groupNoun})
+            โหลดเพิ่ม ({n0(Math.min(50, page.groupCount - page.groups.length))} {groupNoun})
           </Text>
         </TouchableOpacity>
+      ) : null}
+      {drift ? (
+        <View style={styles.drift}>
+          <Text style={[styles.driftText, { flexShrink: 1 }]}>
+            ตัวเลขเปลี่ยนระหว่างโหลด (มีใบงานปิดเพิ่ม) — ลำดับสาขาเลื่อน อาจมีบางกลุ่มที่ยังไม่ขึ้น
+          </Text>
+          <TouchableOpacity style={styles.more} onPress={() => load()} accessibilityLabel="โหลดใหม่ตั้งแต่ต้น">
+            <Text style={styles.moreText}>โหลดใหม่</Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
     </View>
   ) : null;
@@ -947,7 +978,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
             <TouchableOpacity
-              style={[styles.chip, styles.chipOn]}
+              style={[styles.chip, styles.chipTall, styles.chipOn]}
               onPress={() => setPanel((v) => !v)}
               accessibilityLabel="ช่วงวันที่และตัวกรองอื่น"
               accessibilityState={{ expanded: panel }}
@@ -964,7 +995,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
             ).map(([m, label]) => (
               <TouchableOpacity
                 key={m}
-                style={[styles.chip, mode === m && styles.chipOn]}
+                style={[styles.chip, styles.chipTall, mode === m && styles.chipOn]}
                 onPress={() => setMode(m)}
                 accessibilityLabel={`มุมมอง ${label}`}
                 accessibilityState={{ selected: mode === m }}
@@ -974,7 +1005,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
               </TouchableOpacity>
             ))}
             <TouchableOpacity
-              style={[styles.chip, (region || team) && styles.chipOn]}
+              style={[styles.chip, styles.chipTall, (region || team) && styles.chipOn]}
               onPress={() => setPanel((v) => !v)}
               accessibilityLabel="ภาคและทีม"
             >
@@ -982,6 +1013,16 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
                 {[region ?? "ทุกภาค", team ? `ทีม${team}` : null].filter(Boolean).join(" · ")} ▾
               </Text>
             </TouchableOpacity>
+            {/* สถานะที่กรองอยู่ต้องเห็นตอนพับตัวกรอง — ไม่งั้นเหลือแค่ "ใช้แล้ว 0 ชิ้น" ในบรรทัดสรุป อ่านเหมือนไม่มีของใช้ไปเลย */}
+            {kind !== "all" ? (
+              <TouchableOpacity
+                style={[styles.chip, styles.chipTall, styles.chipOn]}
+                onPress={() => setKind("all")}
+                accessibilityLabel={`เลิกกรองสถานะ ${kind === "used" ? "ใช้แล้ว" : "เบิกแล้ว · งานยังไม่จบ"}`}
+              >
+                <Text style={[styles.chipText, styles.chipTextOn]}>{kind === "used" ? "ใช้แล้ว" : "เบิกแล้ว · งานยังไม่จบ"} ✕</Text>
+              </TouchableOpacity>
+            ) : null}
           </ScrollView>
           {panel ? (
             <View style={styles.panel}>
@@ -993,9 +1034,20 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
           {deepPill}
           {s ? (
             <Text style={styles.sub} accessibilityLabel={`สรุป สาขา ${s.branches} อะไหล่ ${s.parts} ใช้แล้ว ${s.used} เบิกแล้ว ${s.issued}`}>
-              {s.branches} สาขา · {s.parts} รายการอะไหล่ ·{" "}
-              <Text style={{ color: LOOK.USED.fg, fontWeight: "700" }}>ใช้แล้ว {s.used} ชิ้น</Text> ·{" "}
-              <Text style={{ color: LOOK.ISSUED.fg, fontWeight: "700" }}>เบิกแล้ว · งานยังไม่จบ {s.issued} ชิ้น</Text>
+              {n0(s.branches)} สาขา · {n0(s.parts)} รายการอะไหล่
+              {/* แบบที่ไม่อยู่ในสถานะที่เลือกไม่ขึ้น (ไม่ใช่ศูนย์) — ชิปสถานะด้านบนบอกอยู่แล้วว่ากรองอะไร */}
+              {kind !== "issued" ? (
+                <>
+                  {" · "}
+                  <Text style={{ color: LOOK.USED.fg, fontWeight: "700" }}>ใช้แล้ว {n0(s.used)} ชิ้น</Text>
+                </>
+              ) : null}
+              {kind !== "used" ? (
+                <>
+                  {" · "}
+                  <Text style={{ color: LOOK.ISSUED.fg, fontWeight: "700" }}>เบิกแล้ว · งานยังไม่จบ {n0(s.issued)} ชิ้น</Text>
+                </>
+              ) : null}
             </Text>
           ) : null}
         </View>
@@ -1009,7 +1061,7 @@ function Tile({ label, n, hint, color, dim }: { label: string; n: number; hint: 
   return (
     <View style={[styles.tile, dim && { opacity: 0.55 }]} accessibilityLabel={`ตัวเลข ${label} ${n}`}>
       <Text style={[styles.tileLabel, { color }]}>{label}</Text>
-      <Text style={[styles.tileNum, headingFont]}>{n.toLocaleString("th-TH")}</Text>
+      <Text style={[styles.tileNum, headingFont]}>{n0(n)}</Text>
       <Text style={styles.sub}>{hint}</Text>
     </View>
   );
@@ -1033,7 +1085,7 @@ const styles = StyleSheet.create({
   head: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.md },
   lead: { fontSize: 15, lineHeight: 24, color: colors.body, minWidth: 260 },
   excel: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.roleTech, borderRadius: radius.md, paddingHorizontal: 16, minHeight: 44 },
-  excelSmall: { paddingHorizontal: 12, minHeight: 40 },
+  excelSmall: { paddingHorizontal: 12, minHeight: 44 },
   excelText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   tiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
   tile: { flexGrow: 1, flexBasis: 180, backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 16, paddingVertical: 12, gap: 2 },
@@ -1043,18 +1095,24 @@ const styles = StyleSheet.create({
   filterRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
   filterLabel: { fontSize: 14, color: colors.textMuted, minWidth: 64 },
   chip: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.card },
+  /** มือถือ: กดด้วยนิ้ว สูง 44 (จอคอมคงขนาดตามตัวอย่าง) */
+  chipTall: { minHeight: 44, justifyContent: "center" },
   chipOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
   chipText: { fontSize: 14, color: colors.text },
   chipTextOn: { color: "#fff", fontWeight: "700" },
   chipRow: { gap: spacing.sm, paddingRight: spacing.lg },
   dates: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", gap: spacing.sm },
   dateBox: { width: 200 },
+  datesPhone: { width: "100%", flexWrap: "nowrap" },
+  dateBoxPhone: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
   dateLabel: { marginTop: 0, marginBottom: 0, fontSize: 12, lineHeight: 16, fontWeight: "600", color: colors.textMuted },
   hint: { fontSize: 13, lineHeight: 18, fontWeight: "700", color: colors.warningInk },
   searchBox: { flexGrow: 1, flexBasis: 260, flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.md, paddingHorizontal: 12, minHeight: 44, backgroundColor: colors.card },
   searchInput: { flex: 1, minWidth: 0, fontSize: 15, color: colors.text, paddingVertical: 8 },
   dd: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 170, flexBasis: 220, flexGrow: 1, maxWidth: 300 },
   ddLabel: { fontSize: 14, color: colors.body },
+  ddField: { minHeight: 44 },
+  clearBtn: { width: 44, height: 44, marginRight: -12, alignItems: "center", justifyContent: "center" },
   deep: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   deepText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   tabs: { flexDirection: "row", gap: 4, borderBottomWidth: 2, borderBottomColor: colors.border },
@@ -1086,7 +1144,7 @@ const styles = StyleSheet.create({
   atChip: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, maxWidth: "100%" },
   atChipText: { fontSize: 13, lineHeight: 18, color: colors.text, flexShrink: 1 },
   atLabel: { fontSize: 12.5, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
-  expand: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, minHeight: 40, borderTopWidth: 1, borderTopColor: colors.border },
+  expand: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, minHeight: 44, borderTopWidth: 1, borderTopColor: colors.border },
   expandText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
   tr: { flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border, alignItems: "flex-start" },
   trOpen: { backgroundColor: colors.rowAlt },
@@ -1113,6 +1171,8 @@ const styles = StyleSheet.create({
   detailError: { padding: spacing.md, gap: spacing.sm, alignItems: "flex-start" },
   errorText: { fontSize: 14, color: colors.dangerInk },
   foot: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
-  more: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: colors.primary, borderRadius: radius.md, paddingHorizontal: 12, minHeight: 40, backgroundColor: colors.card },
+  more: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: colors.primary, borderRadius: radius.md, paddingHorizontal: 12, minHeight: 44, backgroundColor: colors.card },
+  drift: { flexBasis: "100%", flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, backgroundColor: colors.warningSoft, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8 },
+  driftText: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.warningInk },
   moreText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
 });

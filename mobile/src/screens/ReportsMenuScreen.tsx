@@ -35,6 +35,8 @@ interface Entry {
   iconColor: string;
   /** บอกตรง ๆ ว่าใบไหนยังไม่มีข้อมูลพอ ดีกว่าให้เปิดไปเจอศูนย์แล้วงง */
   caveat?: string;
+  /** ป้าย "ใหม่" ข้างชื่อ (ตามตัวอย่างที่ตกลง) — การ์ดเพิ่มเข้ามาในหน้าที่มีสิบกว่าใบ ไม่มีป้ายคนมองข้าม เอาออกเมื่อคนใช้กันคุ้นแล้ว */
+  isNew?: boolean;
 }
 
 const ENTRIES: Entry[] = [
@@ -127,6 +129,7 @@ const ENTRIES: Entry[] = [
     tint: colors.successSoft,
     iconColor: colors.successInk,
     branchPartsOnly: true,
+    isNew: true,
   },
   {
     kind: "parts",
@@ -237,7 +240,14 @@ export default function ReportsMenuScreen({ navigation }: Props) {
             <Ionicons name={entry.icon} size={22} color={entry.iconColor} />
           </View>
           <View style={styles.body}>
-            <Text style={styles.label}>{entry.label}</Text>
+            <View style={styles.labelRow}>
+              <Text style={styles.label}>{entry.label}</Text>
+              {entry.isNew ? (
+                <View style={styles.newBadge}>
+                  <Text style={styles.newBadgeText}>ใหม่</Text>
+                </View>
+              ) : null}
+            </View>
             <Text style={styles.question}>“{entry.question}”</Text>
             <Text style={styles.who}>{entry.who}</Text>
             {entry.caveat ? <Text style={styles.caveat}>{entry.caveat}</Text> : null}
@@ -264,7 +274,10 @@ const styles = StyleSheet.create({
   },
   icon: { width: 44, height: 44, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
   body: { flex: 1, minWidth: 0, gap: 2 },
-  label: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
+  label: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text, flexShrink: 1 },
+  labelRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  newBadge: { backgroundColor: colors.roleAdminSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  newBadgeText: { fontSize: 11, lineHeight: 16, fontWeight: "700", color: colors.roleAdmin },
   question: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
   who: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
   caveat: { fontSize: 11, lineHeight: 19, color: colors.warningInk, marginTop: 2 },

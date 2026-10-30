@@ -1,11 +1,12 @@
 #!/bin/bash
 # ทดสอบ: อะไหล่ที่ไปแต่ละสาขา (GET /work-orders/reports/branch-parts — เจ้าของงานขอ ต.ค. 69)
 #   · นับเป็นชิ้น (quantity 3 = 3) แยก "ใช้แล้ว" (USED ของใบที่ช่างปิดแล้ว) กับ "เบิกแล้ว · งานยังไม่จบ" (ออกจากคลังแล้ว ใบยังไม่ปิด)
-#     ใบหนึ่งอยู่แบบเดียว — ใบที่ปิดแล้วไม่นับตัวที่เบิกซ้ำ · ใบที่เปิดกลับมาไม่นับ USED ที่ค้าง
+#     ใบหนึ่งอยู่แบบเดียว — ใบที่ปิดแล้วไม่นับตัวที่เบิกซ้ำ · ใบที่แอดมินเปิดงานใหม่ไม่นับ USED ที่ค้าง
+#     · ใบที่เคลมถูกตีกลับ (รอช่างปิดใหม่) ยังนับใช้แล้วตามรอบที่ปิด ไม่นับตัวที่เบิก
 #   · ของนอกสโตร์อยู่ใน "ใช้แล้ว" พร้อมป้าย ไม่มีวันเป็น "เบิกแล้ว" · ยกเลิก/ใบทดสอบไม่นับ · ใบรออะไหล่ (ใบแยก) · ใบงาน SUB นับปกติ
 #   · ค่าเริ่มต้น = ทั้งหมด (ใบปี 2566 ยังขึ้น) · ปุ่มช่วงวันที่แต่ละแบบตัดตามวันไทยตรงขอบ · วันเบิกโอน = ประวัติโอน
 #   · กรองภาค/ทีม/ค้นหา (ไม่ตีความ % เป็น wildcard) · ตามอะไหล่รวมได้เท่าตามสาขา · หน้าถัดไป · แถวของกลุ่ม · สาขา/เครื่อง (ลิงก์ในใบงาน)
-#   · Excel อ่านได้ ยอดตรง · สิทธิ์: แอดมิน/Super Admin เท่านั้น — ดูในฐานะหัวหน้าภาคก็ 403
+#   · Excel อ่านได้ ยอดตรง ใช้แล้ว/เบิกแล้วคนละคอลัมน์ ไม่มีช่องรวม · คำขอผิดได้ 400 ภาษาไทย (30 ก.พ. · ปี 0000 · NUL · ช่องซ้ำ) · สิทธิ์: แอดมิน/Super Admin เท่านั้น — ดูในฐานะหัวหน้าภาคก็ 403
 #   ตัวเลขทุกชุดเทียบกับฐานข้อมูลตรง ๆ ด้วย psql ไม่ใช่เทียบกับ API อย่างเดียว
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
@@ -22,14 +23,14 @@ enc() { node -pe 'encodeURIComponent(process.argv[1])' "$1"; }
 
 SUF=$((RANDOM % 90000 + 10000))
 # สาขาขึ้นต้น C = สาขาบริษัท — ใบที่เดินผ่าน API จริงไม่ต้องเสนอราคา
-M="CZB$SUF"; BA="${M}A"; BB="${M}B"; BC="${M}C"; BD="CZD$SUF"
+M="CZB$SUF"; BA="${M}A"; BB="${M}B"; BC="${M}C"; BD="CZD$SUF"; BE="CZE$SUF"
 R1="ภาคทดสอบอะไหล่สาขา$SUF-1"; R2="ภาคทดสอบอะไหล่สาขา$SUF-2"; R3="ภาคทดสอบอะไหล่สาขา$SUF-3"
 T1="ทีมทดสอบอะไหล่$SUF-1"; T2="ทีมทดสอบอะไหล่$SUF-2"; T3="ทีมทดสอบอะไหล่$SUF-3"
 L94="คลังลาดพร้าว 94"
 START=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 cleanup() {
-  DB "delete from \"WorkOrder\" where code like 'ZBW$SUF-%' or \"branchId\" in (select id from \"Branch\" where code in ('$BA','$BB','$BC','$BD'));
-      delete from \"Branch\" where code in ('$BA','$BB','$BC','$BD');
+  DB "delete from \"WorkOrder\" where code like 'ZBW$SUF-%' or \"branchId\" in (select id from \"Branch\" where code in ('$BA','$BB','$BC','$BD','$BE'));
+      delete from \"Branch\" where code in ('$BA','$BB','$BC','$BD','$BE');
       delete from \"SparePart\" where \"partCode\" like 'ZBP-$SUF-%' or \"partCode\" = '[นอกสโตร์] สายพานร้านข้างนอก $SUF';
       delete from \"ViewAsLog\" where id > $START;
       delete from \"User\" where \"employeeCode\" like 'ZBP%$SUF';
@@ -44,7 +45,7 @@ TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'"); TNAME=$(DB "s
 # ── สาขา อะไหล่ เครื่อง (ข้อมูลสมมติทั้งหมด) ──
 DB "insert into \"Branch\"(code,name,region,zone) values
   ('$BA','ร้านทดสอบ$SUF เอ','$R1','$T1'),('$BB','ร้านทดสอบ$SUF บี','$R1','$T2'),
-  ('$BC','ร้านทดสอบ$SUF ซี','$R2','$T2'),('$BD','ร้านทดสอบช่วงวันที่ $SUF','$R3','$T3')"
+  ('$BC','ร้านทดสอบ$SUF ซี','$R2','$T2'),('$BD','ร้านทดสอบช่วงวันที่ $SUF','$R3','$T3'),('$BE','ร้านทดสอบเคลมตีกลับ $SUF','$R3','$T3')"
 DB "insert into \"SparePart\"(\"partCode\",name,\"offCatalog\",\"updatedAt\") values
   ('ZBP-$SUF-P1','ตลับลูกปืนทดสอบ $SUF',false,now()),('ZBP-$SUF-P2','บอร์ดทดสอบ $SUF',false,now()),
   ('ZBP-$SUF-P3','วาล์วทดสอบ $SUF',false,now()),('ZBP-$SUF-DT','อะไหล่ทดสอบช่วงวันที่ $SUF',false,now()),
@@ -76,8 +77,8 @@ part $O1 $P1 3 USED; part $O1 $OFF 1 USED; part $O1 $P1 3 WAITING "$ISS" "$(iss 
 O2=$(wo 02 $BA AWAITING_CONFIRM null $MA1)
 part $O2 $P2 2 WAITING "$ISS" "$(iss RQ-ZBP2 "now()-interval '2 days'")"
 part $O2 $P3 1 WAITING ',"inStock",warehouse,"checkedAt"' ",true,'$L94',now()-interval '2 days'"
-# O3 สาขา B ช่างเข้างานอีกรอบ (เคลมถูกตีกลับ): P1 ×1 เบิกเพื่อโอน (เช็คเมื่อ 20 วันก่อน โอนเมื่อ 5 วันก่อน)
-#    USED P2 ×5 ค้างจากรอบที่ถูกตีกลับ (ไม่นับ) · ของนอกสโตร์มีเลขใบเบิก (ข้อมูลผิดปกติ — ต้องไม่เป็น "เบิกแล้ว")
+# O3 สาขา B แอดมินเปิดงานใหม่ ช่างเข้างานอีกรอบ (คนปิดถูกล้าง): P1 ×1 เบิกเพื่อโอน (เช็คเมื่อ 20 วันก่อน โอนเมื่อ 5 วันก่อน)
+#    USED P2 ×5 ค้างจากรอบก่อน (ไม่นับ — รอบใหม่) · ของนอกสโตร์มีเลขใบเบิก (ข้อมูลผิดปกติ — ต้องไม่เป็น "เบิกแล้ว")
 O3=$(wo 03 $BB IN_PROGRESS null $MB1)
 part $O3 $P1 1 WAITING ',"inStock",warehouse,"transferFrom","transferReqNo","transferNo","checkedAt"' \
   ",true,'$L94','คลังภูเก็ต','PK-ZBP3','TR-ZBP3',now()-interval '20 days'"
@@ -102,6 +103,15 @@ part $O7 $P3 2 USED
 # O8 สาขา A ปิดไปตั้งแต่ปี 2566 (เครื่อง W2): ใช้ P3 ×1 — ค่าเริ่มต้น "ทั้งหมด" ต้องเห็น
 O8=$(wo 08 $BA DONE "'2023-03-15 03:00:00'" $MA2)
 part $O8 $P3 1 USED
+# O10 สาขา E เคลมถูกตีกลับ รอช่างปิดใหม่ (ตีกลับล้างแค่เวลาปิด คนปิดยังอยู่): ช่างใส่ P1 ×2 ไปแล้วตอนปิด 8 วันก่อน
+#     → ยังนับใช้แล้ว 2 ลงวันที่ปิดรอบนั้น · ตัวที่เบิกไว้ (P1 ×1) ไม่นับเป็นเบิกแล้ว (ใบหนึ่งอยู่แบบเดียว)
+O10=$(wo 10 $BE IN_PROGRESS null "")
+DB "update \"WorkOrder\" set \"closedById\"=$TID where id=$O10"
+part $O10 $P1 2 USED; part $O10 $P1 1 WAITING "$ISS" "$(iss RQ-ZBP10 "now()-interval '9 days'")"
+DB "insert into \"WorkOrderLog\"(\"workOrderId\",action,status,\"createdAt\") values
+    ($O10,'CLOSED','CLAIM_REVIEW',now()-interval '8 days'),($O10,'CLAIM_REJECTED','IN_PROGRESS',now()-interval '6 days')"
+DB "insert into \"PartClaim\"(\"workOrderId\",\"sparePartId\",\"partCode\",\"partName\",\"branchCode\",\"branchName\",symptom,\"checkNote\",status)
+    values ($O10,$P1,'ZBP-$SUF-P1','ตลับลูกปืนทดสอบ $SUF','$BE','ร้านทดสอบเคลมตีกลับ $SUF','ทดสอบ','ทดสอบ','REJECTED')"
 
 # O9 สาขา A เดินผ่าน API จริง: ระบุอะไหล่ → เช็คคลัง → นัดวัน → แอดมินเบิก (ใบเบิก RQ-ZBP9) → รอคอนเฟิร์มลูกค้า
 O9=$(POST $A work-orders "{\"branchCode\":\"$BA\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W9\",\"symptom\":\"ทดสอบรายงานอะไหล่ที่ไปแต่ละสาขา\"}]}" | J 'd.orders[0].id')
@@ -148,8 +158,8 @@ G() { echo "$R" | J "d.groups.map(g=>[g.key,g.used,g.issued,g.pieces,g.orders,g.
   && pass "ตามสาขา: A ใช้ 5 เบิก 4 · B ใช้ 1 (รอตรวจเคลม) เบิก 1 (โอน) · C ใช้ 2 (ใบแยก) — มากสุดก่อน" || fail "กลุ่มสาขา: $(G)"
 [ "$(echo "$R" | J "d.groups[0].topParts.filter(p=>p.sparePartId==$P1).map(p=>p.used+':'+p.issued).join()")" = "3:0" ] \
   && pass "จำนวน 3 = 3 ชิ้น (P1 ที่สาขา A) · ตัวที่เบิกไว้ก่อนปิดงานไม่นับซ้ำ" || fail "P1 ที่ A: $(echo "$R" | J 'JSON.stringify(d.groups[0].topParts)')"
-DBA=$(DB "select coalesce(sum(p.quantity) filter (where p.kind='USED' and w.status in ('DONE','CLAIM_REVIEW')),0)||':'||
-  coalesce(sum(p.quantity) filter (where p.kind='WAITING' and w.status not in ('DONE','CLAIM_REVIEW','CANCELLED') and not s.\"offCatalog\"
+DBA=$(DB "select coalesce(sum(p.quantity) filter (where p.kind='USED' and (w.status in ('DONE','CLAIM_REVIEW') or (w.\"closedById\" is not null and w.status<>'CANCELLED'))),0)||':'||
+  coalesce(sum(p.quantity) filter (where p.kind='WAITING' and w.status not in ('DONE','CLAIM_REVIEW','CANCELLED') and w.\"closedById\" is null and not s.\"offCatalog\"
     and ((p.\"inStock\" and coalesce(p.\"requisitionNo\",'')<>'') or coalesce(p.\"transferReqNo\",'')<>'')),0)
   from \"WorkOrderPart\" p join \"WorkOrder\" w on w.id=p.\"workOrderId\" join \"Branch\" b on b.id=w.\"branchId\" join \"SparePart\" s on s.id=p.\"sparePartId\"
   where b.code='$BA' and not w.\"isTest\"")
@@ -188,6 +198,14 @@ OLD2=$(node -e "console.log(new Date(Date.now()+7*3600e3-10*86400e3).toISOString
   && pass "เบิกเพื่อโอนนับวันจากประวัติโอน (5 วันก่อน) ไม่ใช่วันเช็คคลัง (20 วันก่อน)" || fail "วันเบิกโอน"
 [ "$(CODE $A "?range=custom&from=$TODAY")|$(REP $A "?from=$TODAY&to=$OLD" | J d.error)|$(CODE $A "?view=xyz")" = "400|วันที่เริ่มต้องไม่หลังวันที่สิ้นสุด|400" ] \
   && pass "ช่วงไม่ครบ / กลับหัว / มุมมองผิด = 400 ข้อความไทย" || fail "ตรวจคำขอผิด"
+BAD=""
+for qs in "?range=custom&from=2026-02-30&to=2026-03-05" "?from=0000-01-01&to=2026-01-01" "/counts?branchCode=$BA&from=0001-01-01&to=2026-01-01" \
+          "?q=a%00b" "/detail?view=branch&key=a%00b" "?q=a&q=b" "?cursor=1&cursor=2" "?format=csv"; do
+  OUT=$(curl -g -s -w '|%{http_code}' "localhost:4000/api/work-orders/reports/branch-parts$qs" -H "$(H $A)")
+  echo "$OUT" | grep -qE '^\{"error":"[^"]*[ก-๙][^"]*"\}\|400$' || BAD="$BAD [$qs → $OUT]"
+done
+[ -z "$BAD" ] && pass "30 ก.พ. · ปี 0000/0001 · ตัวอักษร NUL · ช่องซ้ำ · รูปแบบไฟล์ผิด = 400 ข้อความไทย (ไม่ใช่ 500/อังกฤษ/ปัดไปวันอื่น)" || fail "คำขอผิด:$BAD"
+[ "$(REP $A "?range=custom&from=2024-02-29&to=2024-02-29" | J 'd.range.from')" = "2024-02-29" ] && pass "29 ก.พ. ปีอธิกสุรทินยังใช้ได้" || fail "29 ก.พ. 2567"
 
 echo "═══ ตัวกรอง · ค้นหา · หน้าถัดไป"
 [ "$(REP $A "?region=$(enc "$R1")" | J "d.groups.map(g=>g.key).join(' ')+'|'+d.summary.pieces")" = "$BA $BB|11" ] \
@@ -206,8 +224,8 @@ P1J=$(REP $A "?q=$M&limit=2"); C1=$(echo "$P1J" | J 'd.nextCursor'); P2J=$(REP $
   && pass "ตามอะไหล่หน้าสอง: เหลือของนอกสโตร์" || fail "หน้าถัดไปตามอะไหล่"
 
 echo "═══ ยอดทั้งระบบเทียบฐานข้อมูล"
-TOT_DB=$(DB "select coalesce(sum(p.quantity) filter (where p.kind='USED' and w.status in ('DONE','CLAIM_REVIEW')),0)||'|'||
-  coalesce(sum(p.quantity) filter (where p.kind='WAITING' and w.status not in ('DONE','CLAIM_REVIEW','CANCELLED') and not s.\"offCatalog\"
+TOT_DB=$(DB "select coalesce(sum(p.quantity) filter (where p.kind='USED' and (w.status in ('DONE','CLAIM_REVIEW') or (w.\"closedById\" is not null and w.status<>'CANCELLED'))),0)||'|'||
+  coalesce(sum(p.quantity) filter (where p.kind='WAITING' and w.status not in ('DONE','CLAIM_REVIEW','CANCELLED') and w.\"closedById\" is null and not s.\"offCatalog\"
     and ((p.\"inStock\" and coalesce(p.\"requisitionNo\",'')<>'') or coalesce(p.\"transferReqNo\",'')<>'')),0)
   from \"WorkOrderPart\" p join \"WorkOrder\" w on w.id=p.\"workOrderId\" join \"SparePart\" s on s.id=p.\"sparePartId\" where not w.\"isTest\"")
 sumall() {  # ไล่ทุกหน้าของมุมมอง $1 รวมชิ้นทั้งหมด
@@ -232,16 +250,16 @@ DA=$(DET $A "?view=branch&key=$BA")
 ROW() { echo "$1" | J "JSON.stringify(d.rows.find(r=>$2))"; }
 [ "$(ROW "$DA" "r.workOrderId==$O2" | J '[d.kindLabel,d.warehouse,d.requisitionNo,d.machineCode,d.machineBrand,d.detail].join("|")')" = "เบิกแล้ว · งานยังไม่จบ|$L94|RQ-ZBP2|W1|Speed Queen|$L94 · ใบเบิก RQ-ZBP2 · แอดมิน · คอนเฟิร์มลูกค้า" ] \
   && pass "แถวเบิกแล้ว: คลัง · เลขใบเบิก · เครื่อง · ขั้นตอน (P3 ที่ยังไม่มีเลขใบเบิกไม่ขึ้น)" || fail "แถว O2: $(ROW "$DA" "r.workOrderId==$O2")"
-[ "$(ROW "$DA" "r.sparePartId==$OFF" | J '[d.kind,d.offCatalog,d.quantity,d.closedBy,d.detail.endsWith("นอกสโตร์"),d.requisitionNo].join("|")')" = "USED|true|1|$TNAME|true|" ] \
-  && pass "ของนอกสโตร์: ใช้แล้ว · ป้ายนอกสโตร์ · ช่างที่ปิด" || fail "แถวนอกสโตร์: $(ROW "$DA" "r.sparePartId==$OFF")"
+[ "$(ROW "$DA" "r.sparePartId==$OFF" | J '[d.kind,d.offCatalog,d.quantity,d.closedBy,d.detail.includes("นอกสโตร์"),/^ปิดงาน \d+ \S+ \d{2} · /.test(d.detail),d.requisitionNo].join("|")')" = "USED|true|1|$TNAME|false|true|" ] \
+  && pass "ของนอกสโตร์: ใช้แล้ว · offCatalog (หน้าจอติดป้ายเอง บรรทัดรายละเอียดไม่พูดซ้ำ) · ช่างที่ปิด · วันปิดปีสองหลัก" || fail "แถวนอกสโตร์: $(ROW "$DA" "r.sparePartId==$OFF")"
 [ "$(ROW "$DA" "r.workOrderId==$O9" | J '[d.kind,d.requisitionNo,d.quantity].join("|")')" = "ISSUED|RQ-ZBP9|2" ] \
   && pass "ใบที่เดินผ่าน API จริงขึ้นเป็นเบิกแล้ว 2 ชิ้น ใบเบิก RQ-ZBP9" || fail "แถว O9: $(ROW "$DA" "r.workOrderId==$O9")"
 PG1=$(DET $A "?view=branch&key=$BA&limit=2"); PG3=$(DET $A "?view=branch&key=$BA&limit=2&cursor=4")
 [ "$(echo "$PG1" | J 'd.rows.length+"|"+d.nextCursor')|$(echo "$PG3" | J 'd.rows.length+"|"+d.nextCursor+"|"+d.rows[0].day')" = "2|2|1|null|2023-03-15" ] \
   && pass "แถวทีละหน้า: หน้าแรก 2 แถว · หน้าสุดท้ายแถวปี 2566 (วันไทย)" || fail "detail paging"
 DP=$(DET $A "?view=part&key=$P1")
-[ "$(echo "$DP" | J "d.rowCount+'|'+d.breakdown.map(b=>b.branchCode+':'+b.used+'/'+b.issued).join(' ')")" = "2|$BA:3/0 $BB:0/1" ] \
-  && pass "เปิดอะไหล่ P1: 2 แถว · ไปที่ A (ใช้ 3) · B (เบิก 1)" || fail "detail P1: $(echo "$DP" | J "JSON.stringify(d.breakdown)")"
+[ "$(echo "$DP" | J "d.rowCount+'|'+d.breakdown.map(b=>b.branchCode+':'+b.used+'/'+b.issued).join(' ')")" = "3|$BA:3/0 $BE:2/0 $BB:0/1" ] \
+  && pass "เปิดอะไหล่ P1: 3 แถว · ไปที่ A (ใช้ 3) · E (ใช้ 2 — เคลมถูกตีกลับ) · B (เบิก 1)" || fail "detail P1: $(echo "$DP" | J "JSON.stringify(d.breakdown)")"
 [ "$(ROW "$DP" "r.workOrderId==$O3" | J '[d.transferFrom,d.transferReqNo,d.transferNo,d.transferArrived,d.detail].join("|")')" = "คลังภูเก็ต|PK-ZBP3|TR-ZBP3|false|กำลังโอน คลังภูเก็ต → $L94 · ใบโอน TR-ZBP3 · ช่าง · เข้างาน/ปิดงาน" ] \
   && pass "แถวเบิกเพื่อโอน: ต้นทาง ใบเบิกต้นทาง ใบโอน กำลังโอน" || fail "แถว O3: $(ROW "$DP" "r.workOrderId==$O3")"
 C1CODE=$(DB "select code from \"WorkOrder\" where id=$O1")
@@ -251,6 +269,16 @@ C1CODE=$(DB "select code from \"WorkOrder\" where id=$O1")
   && pass "ใบรอตรวจเคลม = ใช้แล้ว (ช่างปิดแล้ว) บอกว่าส่งเคลม รอตรวจ" || fail "แถว O4"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "localhost:4000/api/work-orders/reports/branch-parts/detail?view=branch" -H "$(H $A)")" = "400" ] \
   && pass "เปิดกลุ่มโดยไม่บอกกลุ่ม = 400" || fail "detail ไม่มี key"
+
+echo "═══ เคลมถูกตีกลับ (รอช่างปิดใหม่)"
+DE=$(DET $A "?view=branch&key=$BE")
+CLOSED8=$(node -e "console.log(new Date(Date.now()+7*3600e3-8*86400e3).toISOString().slice(0,10))")
+[ "$(REP $A "?branchCode=$BE" | J 'd.summary.used+"|"+d.summary.issued')|$(echo "$DE" | J "d.rows.map(r=>[r.kind,r.quantity,r.day,r.closedBy,r.detail.includes('เคลมถูกตีกลับ · รอช่างปิดงานใหม่')].join(',')).join(' ')")" = "2|0|USED,2,$CLOSED8,$TNAME,true" ] \
+  && pass "เคลมถูกตีกลับ: ยังนับใช้แล้ว 2 (ของใส่ที่สาขาแล้ว) ลงวันที่ปิดรอบนั้น บอกว่ารอช่างปิดใหม่ · ตัวที่เบิกไม่นับซ้ำ" || fail "เคลมตีกลับ: $(echo "$DE" | J 'JSON.stringify(d.rows)')"
+D9=$(node -e "console.log(new Date(Date.now()+7*3600e3-9*86400e3).toISOString().slice(0,10))")
+D7=$(node -e "console.log(new Date(Date.now()+7*3600e3-7*86400e3).toISOString().slice(0,10))")
+[ "$(REP $A "?branchCode=$BE&from=$D9&to=$D7" | J 'd.summary.used')|$(REP $A "?branchCode=$BE&from=$D7&to=$TODAY" | J 'd.summary.pieces')|$(curl -s "localhost:4000/api/work-orders/reports/branch-parts/counts?branchCode=$BE" -H "$(H $A)" | J 'd.branch.used+","+d.branch.issued')" = "2|0|2,0" ] \
+  && pass "เคลมถูกตีกลับ: ช่วงวันที่ตามวันปิด (ไม่ใช่วันตีกลับ) · ตัวเลขบนลิงก์ในใบงานเท่ากัน" || fail "เคลมตีกลับ ช่วงวันที่/counts"
 
 echo "═══ ลิงก์ในใบงาน: สาขานี้ · เฉพาะเครื่องนี้"
 [ "$(REP $A "?branchCode=$BA" | J 'd.summary.pieces')|$(REP $A "?machineId=$MA1" | J 'd.summary.used+","+d.summary.issued')|$(REP $A "?machineId=$MA2" | J 'd.summary.pieces')" = "9|4,2|1" ] \
@@ -271,14 +299,16 @@ const s=n=>wb.getWorksheet(n), v=(ws,r)=>ws.getRow(r).values.slice(1);
 const flat=s("รายการทั้งหมด"), br=s("รวมตามสาขา"), pt=s("รวมตามอะไหล่");
 const rows=[];flat.eachRow((r,i)=>{if(i>4)rows.push(r.values.slice(1))});
 const data=rows.filter(r=>r[0]!=="รวม"), total=rows.find(r=>r[0]==="รวม");
-const all=JSON.stringify(rows);
-console.log([wb.worksheets.map(w=>w.name).join(","), data.length, data.reduce((n,r)=>n+r[8],0), total[8],
-  v(br,5).slice(0,7).join(":"), v(pt,5).slice(2,6).join(":"), all.includes("RQ-ZBP9"), all.includes("RQ-ZBP5"), all.includes("นอกสโตร์")].join("|"))})()' "$X")
+const all=JSON.stringify(rows), heads=JSON.stringify([v(flat,4),v(br,4),v(pt,4)]), P=process.argv[2];
+const one=data.every(r=>(r[8]==null)!==(r[9]==null)), bA=v(br,5), p1=pt.getRows(5,10).map(r=>r.values.slice(1)).find(r=>r[0]===P+"-P1");
+console.log([wb.worksheets.map(w=>w.name).join(","), data.length, data.reduce((n,r)=>n+(r[8]??0),0), data.reduce((n,r)=>n+(r[9]??0),0), total[8], total[9], one,
+  bA.slice(0,7).join(":"), bA[7].startsWith(P+"-P2 เบิกแล้ว ×4, "+P+"-P1 ใช้แล้ว ×3, "), v(pt,5).slice(2,5).join(":"), p1&&p1[6],
+  /รวม \(ชิ้น\)|"จำนวน \(ชิ้น\)"/.test(heads), all.includes("RQ-ZBP9"), all.includes("RQ-ZBP5"), all.includes("นอกสโตร์")].join("|"))})()' "$X" "ZBP-$SUF")
 rm -f "$X"
 [ "$(echo "$XR" | J 'd.filename.replace(/\d{4}-\d{2}-\d{2}/,"D")+"|"+d.rowCount')" = "อะไหล่ที่ไปแต่ละสาขา-D.xlsx|8" ] \
   && pass "ไฟล์ชื่อ อะไหล่ที่ไปแต่ละสาขา-วันที่.xlsx · ได้ทุกแถว (8) ไม่ตัดหน้า ไม่ขึ้นกับมุมมอง" || fail "ชื่อไฟล์/จำนวน: $XR"
-[ "$XS" = "รายการทั้งหมด,รวมตามสาขา,รวมตามอะไหล่|8|13|13|$BA:ร้านทดสอบ$SUF เอ:$R1:$T1:5:4:9|1:4:5:2|true|false|true" ] \
-  && pass "Excel อ่านได้: 3 ชีต · 8 แถว รวม 13 ชิ้น · รวมตามสาขา A ใช้ 5 เบิก 4 · รวมตามอะไหล่ P2 5 ชิ้น 2 สาขา · ไม่มีใบยกเลิก" || fail "Excel: $XS"
+[ "$XS" = "รายการทั้งหมด,รวมตามสาขา,รวมตามอะไหล่|8|8|5|8|5|true|$BA:ร้านทดสอบ$SUF เอ:$R1:$T1:5:4:4|true|1:4:2|$BA ใช้แล้ว ×3, $BB เบิกแล้ว ×1|false|true|false|true" ] \
+  && pass "Excel อ่านได้: 3 ชีต · 8 แถว ใช้แล้ว 8 / เบิกแล้ว 5 คนละคอลัมน์ (แถวละแบบเดียว ไม่มีช่องรวม) · รวมตามสาขา A ใช้ 5 เบิก 4 บอกแบบทุกอะไหล่ · P1 ไป A ใช้แล้ว ×3 · B เบิกแล้ว ×1 · ไม่มีใบยกเลิก" || fail "Excel: $XS"
 
 echo "═══ สิทธิ์ (แอดมินและ Super Admin เท่านั้น)"
 HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='T001'")

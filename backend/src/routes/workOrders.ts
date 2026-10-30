@@ -1963,7 +1963,10 @@ router.get("/reports/branch-parts", requireAuth, async (req: AuthRequest, res) =
   const q = parseBranchPartsQuery(req.query);
   if ("error" in q) return res.status(400).json({ error: q.error });
   if (q.format === "json") return res.json(await buildBranchPartsPage(q));
+  const started = Date.now();
   const { data, rowCount } = await buildBranchPartsWorkbook(q.filters);
+  // ค่าเริ่มต้นคือทั้งหมดตั้งแต่เริ่มใช้ระบบ ไฟล์โตตามประวัติ — ดูใน log ของ Render ว่าช้า/ใหญ่ขึ้นก่อนจะมีปัญหา (แบบรายงานทั้งระบบ)
+  console.log(`[branch-parts-xlsx] user=${req.auth!.userId} rows=${rowCount} bytes=${data.length} ms=${Date.now() - started}`);
   const stamp = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const stored = saveDocument({
     filename: `อะไหล่ที่ไปแต่ละสาขา-${stamp}.xlsx`,

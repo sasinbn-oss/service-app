@@ -1,7 +1,7 @@
 // ทดสอบ: อะไหล่ที่ไปแต่ละสาขา (เจ้าของงานขอ ต.ค. 69 · ตามตัวอย่างที่ตกลง)
 //   · แอดมิน: การ์ดในหน้ารายงาน → เปิดได้ · ค่าเริ่มต้น "ทั้งหมด (ตั้งแต่เริ่มใช้ระบบ)" อยู่ปุ่มแรกและถูกเลือก
 //   · ตัวเลขบนสุดตรงกับฐานข้อมูล (psql) ทั้งระบบ และเมื่อกรองภาค · ใช้แล้ว/เบิกแล้วไม่รวมเป็นเลขเดียว
-//   · หัวกลุ่มทีละ 50 สาขา + "โหลดเพิ่ม" · กดเปิดกลุ่มแล้วโหลดแถว (วันที่ · อะไหล่ · จำนวน · เครื่อง · ใบงาน · สถานะ) · ป้ายนอกสโตร์
+//   · หัวกลุ่มทีละ 50 สาขา + "โหลดเพิ่ม" (ลำดับเลื่อนระหว่างโหลด = บอกให้โหลดใหม่ ไม่ทำสาขาหาย) · กดเปิดกลุ่มแล้วโหลดแถว (วันที่ · อะไหล่ · จำนวน · เครื่อง · ใบงาน · สถานะ) · ป้ายนอกสโตร์
 //   · ปุ่มสถานะ · ค้นหาที่เซิร์ฟเวอร์ · ตามอะไหล่ (ไปที่สาขาไหนบ้าง) · Excel ได้ไฟล์จริง แถวตรงตัวกรอง
 //   · ใบงาน: ลิงก์ "อะไหล่ที่สาขานี้ได้ไปแล้ว" / "เฉพาะเครื่องนี้" ตัวเลขตรงฐานข้อมูล → เปิดรายงานกรองสาขา/เครื่องให้
 //   · Super Admin เห็นการ์ด · Admin Spare Part และหัวหน้าภาคไม่เห็นการ์ดและลิงก์ (และไม่ยิงคำขอที่ได้ 403) · จอมือถือไม่ล้น
@@ -19,17 +19,18 @@ const sql = (q) =>
 
 /**
  * ยอดจากฐานข้อมูลตรง ๆ ตามกฎในสัญญา API (เขียนแยกจาก SQL ของเซิร์ฟเวอร์ — เทียบกันจึงมีความหมาย)
- * ใช้แล้ว = USED ของใบที่ช่างปิดแล้ว (DONE/รอตรวจเคลม) · เบิกแล้ว = WAITING ที่ออกจากคลังของใบที่ยังไม่ปิด ไม่ใช่นอกสโตร์
+ * ใช้แล้ว = USED ของใบที่ช่างปิดแล้ว (DONE/รอตรวจเคลม/เคลมถูกตีกลับรอปิดใหม่ = คนปิดยังอยู่) · เบิกแล้ว = WAITING ที่ออกจากคลัง
+ * ของใบที่ยังไม่มีใครปิด ไม่ใช่นอกสโตร์
  * ไม่นับใบทดสอบ · where = เงื่อนไขเพิ่ม (b = สาขา, w = ใบงาน)
  */
 const dbTiles = (where = "true") =>
   sql(`with r as (
       select w."branchId", p."sparePartId", p.quantity q, 'U' k from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId" join "Branch" b on b.id=w."branchId"
-        where p.kind='USED' and w.status in ('DONE','CLAIM_REVIEW') and not w."isTest" and ${where}
+        where p.kind='USED' and (w.status in ('DONE','CLAIM_REVIEW') or (w."closedById" is not null and w.status<>'CANCELLED')) and not w."isTest" and ${where}
       union all
       select w."branchId", p."sparePartId", p.quantity, 'I' from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId" join "Branch" b on b.id=w."branchId"
         join "SparePart" s on s.id=p."sparePartId"
-        where p.kind='WAITING' and not s."offCatalog" and not w."isTest" and w.status not in ('DONE','CLAIM_REVIEW','CANCELLED')
+        where p.kind='WAITING' and not s."offCatalog" and not w."isTest" and w.status not in ('DONE','CLAIM_REVIEW','CANCELLED') and w."closedById" is null
           and ((p."inStock" and coalesce(p."requisitionNo",'')<>'') or coalesce(p."transferReqNo",'')<>'') and ${where})
     select count(distinct "branchId")||'|'||count(distinct "sparePartId")||'|'||coalesce(sum(q) filter (where k='U'),0)||'|'||coalesce(sum(q) filter (where k='I'),0) from r`);
 
@@ -187,10 +188,26 @@ const dbTiles = (where = "true") =>
       headA.includes("ใช้แล้ว 4 ชิ้น") && headA.includes("เบิกแล้ว 2 ชิ้น") && !headA.includes("6 ชิ้น")
         ? pass("หัวสาขา A: ใช้แล้ว 4 ชิ้น กับ เบิกแล้ว 2 ชิ้น แยกกัน ไม่รวมเป็น 6") : fail(`หัวสาขา A: ${headA.slice(0, 200)}`);
       await page.screenshot({ path: path.join(DIR, "branch-parts-2-branches.png") });
+      // ลำดับเลื่อนระหว่างโหลดเพิ่ม: สาขาท้ายสุด (อยู่หน้า 2) ได้ใบปิดใหม่ 2 ชิ้น ขึ้นไปอันดับ 2 — หน้า 2 ที่นับจากตำแหน่งได้กลุ่มซ้ำ
+      // และสาขานั้นไม่เคยขึ้น ต้องบอกให้โหลดใหม่ (เดิม: เงียบ ๆ "แสดง 51 จาก 52" ไม่มีปุ่มโหลดเพิ่ม สาขานั้นหายจนรีเฟรช)
+      const bump = wo("BUMP", `${M}F50`, "DONE", "now()-interval '2 days'", null);
+      sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind) values (${bump},${p2},2,'USED')`);
       await exact(page, "โหลดเพิ่ม").first().click();
       await page.waitForTimeout(2500);
-      (await groups(page).count()) === 52 && (await exact(page, "โหลดเพิ่ม").count()) === 0
+      const driftShown = (await vis("ตัวเลขเปลี่ยนระหว่างโหลด", false).count()) > 0;
+      await exact(page, "โหลดใหม่ตั้งแต่ต้น").first().click().catch(() => {});
+      await page.waitForTimeout(3000);
+      const top2 = await groups(page).evaluateAll((els) => els.slice(0, 2).map((e) => e.getAttribute("aria-label")).join(","));
+      driftShown && top2 === `กล่องสาขา ${BA},กล่องสาขา ${M}F50` && (await vis("ตัวเลขเปลี่ยนระหว่างโหลด", false).count()) === 0 &&
+        (await groups(page).count()) === 50
+        ? pass("ลำดับเลื่อนระหว่างโหลดเพิ่ม: บอกว่าตัวเลขเปลี่ยน · กดโหลดใหม่ได้สาขาที่เลื่อนขึ้นมาอันดับ 2 (ไม่หายเงียบ ๆ)")
+        : fail(`ลำดับเลื่อน: แจ้ง=${driftShown} · บนสุด ${top2} · ${await groups(page).count()} กลุ่ม`);
+      await exact(page, "โหลดเพิ่ม").first().click();
+      await page.waitForTimeout(2500);
+      (await groups(page).count()) === 52 && (await exact(page, "โหลดเพิ่ม").count()) === 0 && (await vis("ตัวเลขเปลี่ยนระหว่างโหลด", false).count()) === 0
         ? pass("โหลดเพิ่ม: ครบ 52 สาขา ปุ่มหายเมื่อไม่มีหน้าถัดไป") : fail(`หลังโหลดเพิ่ม ${await groups(page).count()} กลุ่ม`);
+      // คืนตัวเลขเดิม — ขั้นต่อไปเทียบกับยอดที่เตรียมไว้ (ตัวกรองถัดไปโหลดใหม่จากฐานข้อมูลเอง)
+      sql(`delete from "WorkOrder" where id=${bump}`);
 
       // เปิดกลุ่มสาขา A → โหลดแถวของกลุ่ม
       await exact(page, `ดูทีละใบงาน ${BA}`).first().click();
@@ -240,10 +257,11 @@ const dbTiles = (where = "true") =>
         const data = [];
         flat.eachRow((r, i) => i > 4 && r.values[1] !== "รวม" && data.push(r.values.slice(1)));
         xs = [buf.subarray(0, 2).toString(), /อะไหล่ที่ไปแต่ละสาขา-\d{4}-\d{2}-\d{2}\.xlsx/.test(disp), wb.worksheets.map((w) => w.name).join(","),
-          data.length, data.reduce((n, r) => n + r[8], 0), data.some((r) => r[1] === BA && r[2] === `ร้านทดสอบเว็บ${SUF} เอ`)].join("|");
+          data.length, data.reduce((n, r) => n + (r[8] ?? 0), 0), data.reduce((n, r) => n + (r[9] ?? 0), 0),
+          data.some((r) => r[1] === BA && r[2] === `ร้านทดสอบเว็บ${SUF} เอ`)].join("|");
       }
-      xs === "PK|true|รายการทั้งหมด,รวมตามสาขา,รวมตามอะไหล่|54|57|true"
-        ? pass("Excel: ไฟล์ อะไหล่ที่ไปแต่ละสาขา-วันที่.xlsx จริง 3 ชีต · 54 แถวของภาคทดสอบ รวม 57 ชิ้น (ตามตัวกรอง)") : fail(`Excel: ${xs}`);
+      xs === "PK|true|รายการทั้งหมด,รวมตามสาขา,รวมตามอะไหล่|54|55|2|true"
+        ? pass("Excel: ไฟล์ อะไหล่ที่ไปแต่ละสาขา-วันที่.xlsx จริง 3 ชีต · 54 แถวของภาคทดสอบ ใช้แล้ว 55 / เบิกแล้ว 2 คนละคอลัมน์ (ตามตัวกรอง)") : fail(`Excel: ${xs}`);
       for (const p of ctx.pages()) if (p !== page) await p.close().catch(() => {});
 
       // ค้นหาที่เซิร์ฟเวอร์ — ยอดตามคำค้น
@@ -371,6 +389,22 @@ const dbTiles = (where = "true") =>
       over <= 1 && sum === "สรุป สาขา 1 อะไหล่ 3 ใช้แล้ว 4 เบิกแล้ว 2" && (await groups(page).count()) === 1 && (await rows(page, W("01")).count()) === 2
         ? pass("จอมือถือ: สรุปบรรทัดเดียว · การ์ดสาขาเปิดให้เลยเมื่อเหลือกลุ่มเดียว · ไม่ล้นจอ") : fail(`จอมือถือ: ล้น ${over}px · ${sum}`);
       await page.screenshot({ path: path.join(DIR, "branch-parts-9-phone.png"), fullPage: true });
+      // กางตัวกรอง — ช่องตั้งแต่/ถึงต้องอยู่ในจอทั้งคู่ (เคยกว้างตายตัว 200 คู่กัน ช่อง "ถึง" ล้นขอบขวา ตัดกรอบและลูกศร)
+      // ชิปช่วงบอก "ตั้งแต่เริ่มใช้ระบบ" ตั้งแต่ยังไม่กาง (คำของเจ้าของงาน)
+      const rangeChip = await label(page, "ช่วงวันที่และตัวกรองอื่น").innerText();
+      await label(page, "ช่วงวันที่และตัวกรองอื่น").click();
+      await page.waitForTimeout(800);
+      const fields = await page.evaluate(() => {
+        const w = document.documentElement.clientWidth;
+        const hints = [...document.querySelectorAll("div")].filter((d) => d.children.length === 0 && /^(แรกสุด|วันนี้)$/.test((d.innerText || "").trim()));
+        // กรอบช่องคือบรรพบุรุษที่มีเส้นขอบ — วัดขอบขวาของกรอบ ไม่ใช่แค่ตัวหนังสือ
+        return { w, rights: hints.map((h) => { let p = h; while (p && getComputedStyle(p).borderRightWidth === "0px") p = p.parentElement; return Math.round((p || h).getBoundingClientRect().right); }),
+          over: document.documentElement.scrollWidth - w };
+      });
+      fields.rights.length === 2 && fields.rights.every((r) => r <= fields.w) && fields.over <= 1 && rangeChip.includes("ทั้งหมด (ตั้งแต่เริ่มใช้ระบบ)")
+        ? pass("จอมือถือ กางตัวกรอง: ช่องตั้งแต่/ถึงอยู่ในจอทั้งคู่ · ชิปช่วงบอก ทั้งหมด (ตั้งแต่เริ่มใช้ระบบ) ตั้งแต่ยังไม่กาง")
+        : fail(`จอมือถือ กางตัวกรอง: ขอบขวาช่องวันที่ ${fields.rights} (จอ ${fields.w}) · ล้น ${fields.over} · ชิป "${rangeChip}"`);
+      await page.screenshot({ path: path.join(DIR, "branch-parts-10-phone-filters.png") });
       await ctx.close();
     }
   } catch (e) {

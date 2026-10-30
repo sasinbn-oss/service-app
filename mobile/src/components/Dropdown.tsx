@@ -9,7 +9,7 @@
  * สิ่งที่ dropdown ควรแก้ ไม่ใช่สิ่งที่มันควรสร้างขึ้นมาใหม่
  */
 import React, { useMemo, useRef, useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ScrollView, StyleProp, StyleSheet, Text, TextInput, View, ViewStyle } from "react-native";
 import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Popover from "./Popover";
@@ -98,6 +98,7 @@ export default function Dropdown({
   disabled,
   clearable,
   accessibilityLabel,
+  fieldStyle,
 }: {
   value: string | null;
   options: DropdownOption[];
@@ -107,6 +108,8 @@ export default function Dropdown({
   /** ให้เลือกเป็น "ไม่ระบุ" ได้ ใช้กับช่องที่ไม่บังคับ */
   clearable?: boolean;
   accessibilityLabel?: string;
+  /** ปรับกล่องที่กดเฉพาะจุด (เช่นสูง 44 บนหน้าที่ใช้นิ้วกดบนมือถือ) — ไม่ส่ง = หน้าตาเดิมทุกหน้า */
+  fieldStyle?: StyleProp<ViewStyle>;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<View>(null);
@@ -116,7 +119,7 @@ export default function Dropdown({
     <View>
       <View ref={anchor}>
         <TouchableOpacity
-          style={[styles.field, open && styles.fieldOpen, disabled && styles.fieldOff]}
+          style={[styles.field, fieldStyle, open && styles.fieldOpen, disabled && styles.fieldOff]}
           onPress={() => !disabled && setOpen((v) => !v)}
           activeOpacity={0.7}
           accessibilityLabel={accessibilityLabel}
