@@ -858,8 +858,9 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
   const foot = page && page.groups.length ? (
     <View style={styles.foot}>
       <Text style={[styles.sub, { flexShrink: 1 }]}>
-        แสดง {page.groups.length} จาก {page.groupCount} {groupNoun} · มากสุดก่อน · กดเลขใบงานเพื่อเปิดใบงาน · Excel ได้ตามตัวกรองที่เลือกอยู่
-        (แถวละสาขา+อะไหล่+ใบงาน)
+        {/* ตารางกดได้เฉพาะเลขใบงาน · การ์ด (จอแคบ) กดได้ทั้งแถว */}
+        แสดง {page.groups.length} จาก {page.groupCount} {groupNoun} · มากสุดก่อน · {table ? "กดเลขใบงาน" : "กดแถว"}เพื่อเปิดใบงาน · Excel
+        ได้ตามตัวกรองที่เลือกอยู่ (แถวละสาขา+อะไหล่+ใบงาน)
       </Text>
       {page.nextCursor ? (
         <TouchableOpacity style={styles.more} onPress={loadMore} disabled={more} accessibilityLabel="โหลดเพิ่ม">
