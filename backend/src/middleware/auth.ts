@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { peekToken, verifyToken, TokenPayload } from "../utils/jwt";
 import { currentRole, issuedBeforePasswordChange } from "../utils/userGate";
 import { canViewAs } from "../utils/viewAs";
-import { AREA_TEAM_ALLOWED, isAreaTeam } from "../utils/areaScope";
+import { areaTeamDenied, isAreaTeam } from "../utils/areaScope";
 import { recordUsage } from "../utils/usage";
 
 export interface AuthRequest extends Request {
@@ -89,14 +89,13 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   }
 
   /**
-   * Area Team (Area · Supervisor (COCO)) — รายการอนุญาตทั้งอ่านและเขียน (ดู utils/areaScope.ts)
+   * Area Team (Area · Supervisor (COCO) · Maid (COCO)) — รายการอนุญาตทั้งอ่านและเขียน
+   * บางเมนูเหลือให้ Area คนเดียว (ดู AREA_ONLY_ALLOWED ใน utils/areaScope.ts)
    * คนที่ยังไม่เปลี่ยนรหัสปล่อยให้ด่านถัดไปตอบ 423 แอปจึงพาไปหน้าเปลี่ยนรหัสได้ ไม่ใช่เจอ 403
    */
   if (isAreaTeam(req.auth) && !req.auth.mustChangePassword) {
-    const path = req.baseUrl + req.path;
-    if (!AREA_TEAM_ALLOWED.some((r) => r.test(`${req.method} ${path}`))) {
-      return res.status(403).json({ error: "ตำแหน่งนี้แจ้งและเปิดใบงานได้ ส่วนอื่นดูได้อย่างเดียว" });
-    }
+    const denied = areaTeamDenied(req.auth.role, `${req.method} ${req.baseUrl + req.path}`);
+    if (denied) return res.status(403).json({ error: denied });
   }
 
   /**

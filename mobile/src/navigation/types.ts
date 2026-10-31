@@ -29,6 +29,12 @@ export type HomeStackParamList = {
    * ในใบงาน (กรองตรงตัว ทุกช่วงเวลา) · เปิดจากเมนูส่ง {} เพื่อล้างตัวกรองที่ค้างจากลิงก์
    */
   ClaimHistory: { branchCode?: string; machineCode?: string } | undefined;
+  /**
+   * อะไหล่ที่ไปแต่ละสาขา — แอดมินและ Super Admin · branchCode/machineId = มาจากลิงก์ "อะไหล่ที่สาขานี้ได้ไปแล้ว"
+   * / "เฉพาะเครื่องนี้" ในใบงาน (ทั้งหมดตั้งแต่เริ่มใช้ระบบ) · branchName/machineCode ไว้เขียนป้ายตัวกรองเท่านั้น
+   * (id เครื่องอ่านไม่ออก) · เปิดจากเมนูส่ง {} เพื่อล้างตัวกรองที่ค้างจากลิงก์
+   */
+  BranchPartsReport: { branchCode?: string; branchName?: string; machineId?: number; machineCode?: string } | undefined;
   MachineDashboard: undefined;
   MachineImport: undefined;
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม · search = ค้นต่อจากงานของฉันวันนี้ (ค้นในใบทั้งหมด) */

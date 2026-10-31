@@ -2,6 +2,7 @@
 //   · แอดมินเห็นปุ่ม "ดูในฐานะ…" · ตัวเลือกมี ช่าง/หัวหน้าภาค/Area/Supervisor (COCO)/Maid (COCO) (ไม่มีแท็บแอดมิน)
 //   · เลือก T001 → แถบ "กำลังดูในฐานะ" + บันทึกในฐานข้อมูลว่าใครดูใคร · กลับเป็นตัวเองได้ (บันทึกเวลาเลิกดู)
 //   · Supervisor (COCO) จัดกลุ่มตาม Area · ค้น Maid ด้วยรหัสสาขา → ดูในฐานะ Maid ได้ แถบบอกตำแหน่ง Maid (COCO)
+//     · ระหว่างดูในฐานะ Maid เมนูไม่มีติดตามเครื่องเสีย/รายงาน/ผังผู้รับผิดชอบ และเปิดมาเจอแผนงาน (เท่าที่ Maid เห็น · ต.ค. 69)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -97,6 +98,12 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     const mlog = sql(`select "byUserId"||'|'||"targetUserId" from "ViewAsLog" where id>${before} order by id desc limit 1`);
     (await vis("(zw.maid · Maid (COCO))", false).count()) && mlog === `${aid}|${maidId}`
       ? pass("ดูในฐานะ Maid ได้ (บัญชีที่ยังไม่เคยเข้าระบบ) · แถบบอกตำแหน่ง Maid (COCO) · ฐานข้อมูลบันทึก") : fail(`ดู Maid: ${mlog}`);
+    // แอดมินต้องเห็นเท่าที่ Maid เห็น — ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69)
+    const asMaid = [];
+    for (const t of ["ติดตามเครื่องเสีย", "รายงาน", "ผังผู้รับผิดชอบ"]) if (await label(t).count()) asMaid.push(t);
+    !asMaid.length && (await label("ใบงานซ่อม").count()) && (await vis("สาขาที่ประจำ").count())
+      ? pass("ดูในฐานะ Maid: เมนูไม่มี ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ · เปิดมาเจอแผนงาน (เท่าที่ Maid เห็น)")
+      : fail(`ดูในฐานะ Maid เห็นเมนูของ Area: [${asMaid}] หรือไม่ได้เปิดที่แผนงาน`);
     await label("กลับเป็นตัวเอง").first().click();
     await page.waitForTimeout(3000);
     (await label("ดูในฐานะผู้ใช้อื่น").count()) ? pass("กลับจาก Maid เป็นตัวเองได้") : fail("กลับจาก Maid ไม่ได้");

@@ -4,6 +4,8 @@
 #   · Area เห็นสาขา COCO ทั้งหมด · Supervisor (COCO) เห็นเฉพาะสาขาตัวเอง · สาขาแฟรนไชส์ไม่เห็นเลย
 #   · เปิดใบงานต้องกรอกครบ · เปิดสาขานอกขอบเขตไม่ได้ · จ่ายงาน/ทำขั้นตอนไม่ได้ · API อื่นนอกเมนู 403
 #   · รายงาน Excel ปุ่มเดียว · นำเข้าซ้ำย้ายสาขาได้โดยไม่แตะรหัสผ่าน · ล็อกอินตัวใหญ่ปนได้
+#   · ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69): Supervisor (COCO) 403 ข้อความไทยทุก endpoint
+#     · Area ยัง 200 · Supervisor (COCO) ยัง 200 ทุก endpoint ที่หน้าใบงาน/ฟอร์มเปิดใบงาน/แผนงานใช้
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -106,8 +108,8 @@ N=$(GET $S1 work-orders/inbox-count | J 'd.inbox'); E=$(DB "select count(*) from
 # ปุ่ม "มีอัปเดต" ถามว่าใบไปอยู่แท็บไหน — ตอบเฉพาะใบในขอบเขต (W6 สาขาคนอื่น · WD แฟรนไชส์ ไม่อยู่ในคำตอบ)
 [ "$(GET $S1 "work-orders/locate?ids=$W1,$W6,$WD" | J 'd.rows.map(r=>r.id+":"+r.tab).join()')" = "$W1:INBOX" ] \
   && pass "หาแท็บของใบงาน: ตอบเฉพาะใบของสาขาตัวเอง (ใบใหม่อยู่กล่องงาน)" || fail "locate: $(GET $S1 "work-orders/locate?ids=$W1,$W6,$WD")"
-[ "$(GET $S1 'machines/overview' | J 'typeof d.machineOff')" = "number" ] && pass "ติดตามเครื่องเสียเปิดได้" || fail "ติดตามเครื่องเสีย"
-[ "$(GET $S1 'teams/coverage-map' | J 'd.canEdit===false&&Array.isArray(d.regions)?"ok":"bad"')" = "ok" ] && pass "ผังผู้รับผิดชอบเปิดได้ แก้ไม่ได้" || fail "ผังผู้รับผิดชอบ"
+[ "$(GET $AR 'machines/overview' | J 'typeof d.machineOff')" = "number" ] && pass "Area: ติดตามเครื่องเสียเปิดได้" || fail "Area: ติดตามเครื่องเสีย"
+[ "$(GET $AR 'teams/coverage-map' | J 'd.canEdit===false&&Array.isArray(d.regions)?"ok":"bad"')" = "ok" ] && pass "Area: ผังผู้รับผิดชอบเปิดได้ แก้ผังฝ่ายบริการไม่ได้" || fail "Area: ผังผู้รับผิดชอบ"
 [ "$(CODE $S1 'plans/day?date=2026-10-27')" = "200" ] && pass "แผนงานดูได้" || fail "แผนงาน"
 
 echo
@@ -123,7 +125,24 @@ PNG=$(mktemp --suffix=.png); printf '\x89PNG\r\n\x1a\n' > "$PNG"
 rm -f "$PNG"
 
 echo
-echo "═══ รายงาน Excel ปุ่มเดียว"
+echo "═══ ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ — เฉพาะ Area (เจ้าของงานขอ ต.ค. 69)"
+# ทีม Area ลองใช้แล้วเห็นว่าสามเมนูนี้ไม่จำเป็นกับซุปและแม่บ้าน — ปิดที่เซิร์ฟเวอร์ด้วย ไม่ใช่แค่ซ่อนเมนู (ยิงตรงต้องได้ 403)
+ERR() { curl -s -X "${3:-GET}" "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' ${4:+-d "$4"} | J 'd.error'; }
+AREA_ONLY="machines/outages machines/signal-lost machines/overview machines/work-statuses work-orders/reports/area-team?from=2026-01-01&to=2026-12-31 teams/coverage-map teams/area-map"
+OK=1; for p in $AREA_ONLY; do r="$(CODE $S1 "$p")|$(ERR $S1 "$p")"; [ "$r" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] || { OK=; echo "    $p → $r"; }; done
+[ -n "$OK" ] && pass "Supervisor (COCO): ติดตามเครื่องเสีย 4 · รายงาน · ผังผู้รับผิดชอบ 2 → 403 \"เมนูนี้สำหรับตำแหน่ง Area เท่านั้น\" ทุกตัว" || fail "Supervisor (COCO) ยังเรียกเมนูของ Area ได้"
+R="$(CODE $S1 teams/area-map POST '{}')|$(ERR $S1 teams/area-map POST '{}')"
+[ "$R" = "403|เมนูนี้สำหรับตำแหน่ง Area เท่านั้น" ] && pass "Supervisor (COCO): บันทึกผังฝั่ง Area → 403 ข้อความเดียวกัน" || fail "Supervisor (COCO) บันทึกผัง: $R"
+OK=1; for p in $AREA_ONLY; do c=$(CODE $AR "$p"); [ "$c" = "200" ] || { OK=; echo "    $p → $c"; }; done
+[ -n "$OK" ] && pass "Area: สามเมนูยังเปิดได้ทุก endpoint (200)" || fail "Area เปิดเมนูของตัวเองไม่ได้"
+[ "$(CODE $AR teams/area-map POST '{}')" = "400" ] && pass "Area: บันทึกผังฝั่ง Area ผ่านด่านไปถึง route (400 ไม่มีการเปลี่ยนแปลง ไม่ใช่ 403)" || fail "Area บันทึกผัง: $(CODE $AR teams/area-map POST '{}')"
+TODAY=$(day 0)
+KEEP="auth/me work-orders work-orders/version work-orders/inbox-count work-orders/options work-orders/locate?ids=$W1 work-orders/$W1 work-orders/$W1/version work-orders/$W1/attachments work-orders/$W1/attachments/links branches?search=C branches/C0001/machines branches/C0001/open-work-orders branches/C0001/last-contact plans/day?date=$TODAY plans/month?month=${TODAY:0:7} plans/pending"
+OK=1; for p in $KEEP; do c=$(CODE $S1 "$p"); [ "$c" = "200" ] || { OK=; echo "    $p → $c"; }; done
+[ -n "$OK" ] && pass "Supervisor (COCO): endpoint ที่ใบงาน/กล่องงาน/ฟอร์มเปิดใบงาน/แผนงานใช้ ยัง 200 ทุกตัว (17 ตัว)" || fail "Supervisor (COCO) เสีย endpoint ที่ยังต้องใช้"
+
+echo
+echo "═══ รายงาน Excel ปุ่มเดียว (Area)"
 R=$(GET $AR "work-orders/reports/area-team?from=2026-01-01&to=2026-12-31")
 XR=$(mktemp --suffix=.xlsx); curl -s "localhost:4000$(echo "$R" | J 'd.path')" -o "$XR"
 CODES=$(NODE_PATH=backend/node_modules node -e 'const E=require("exceljs");const w=new E.Workbook();w.xlsx.readFile(process.argv[1]).then(()=>{const s=w.worksheets[0];const o=[];s.eachRow((r,i)=>{if(i>4)o.push(r.getCell(1).text)});console.log(o.join(" "))})' "$XR"); rm -f "$XR"

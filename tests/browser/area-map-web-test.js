@@ -4,7 +4,7 @@
 //     ระหว่างแก้ไขสลับผังไม่ได้
 //   · Area (จอคอม): เปิดมาเจอผังฝั่ง Area · ย้ายสาขาทั้งหมดของคนลาออกให้คนดูแลแทน (ฐานข้อมูล: จำว่าเป็นของใคร)
 //     → มีคนใหม่ ส่งต่อเฉพาะสาขาที่ดูแลแทน (ฐานข้อมูล: สาขาเดิมของคนดูแลแทนไม่ติดไป)
-//   · Supervisor (COCO): เห็นผังแต่ไม่มีปุ่มแก้ไข
+//   · Supervisor (COCO): ไม่มีเมนูผังผู้รับผิดชอบ (เจ้าของงานขอ ต.ค. 69 — เหลือเฉพาะ Area)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -173,13 +173,14 @@ const id = (code) => sql(`select id from "User" where "employeeCode"='${code}'`)
       await ctx.close();
     }
 
-    // ════ Supervisor (COCO) ════
+    // ════ Supervisor (COCO) — ไม่มีเมนูผังผู้รับผิดชอบแล้ว (เจ้าของงานขอ ต.ค. 69 · เหลือเฉพาะ Area) ════
     {
-      const { ctx, page, lbl, vis, open } = await session("zw.sup3", { width: 1280, height: 900 });
-      await open();
-      (await vis("ผังผู้ดูแลฝั่ง Area").count()) && (await lbl("แก้ไขผังฝั่ง Area").count()) === 0
-        ? pass("Supervisor (COCO): เห็นผังฝั่ง Area แต่ไม่มีปุ่มแก้ไข")
-        : fail("Supervisor (COCO) เห็นปุ่มแก้ไข/ไม่เห็นผัง");
+      const { ctx, page, vis } = await session("zw.sup3", { width: 1280, height: 900 });
+      // จอ 1280 เมนูข้างค้างอยู่ — หาด้วย aria-label ของเมนู (ปุ่มบนเว็บไม่ได้เป็น role=button)
+      const menu = (t) => page.locator(`[aria-label="${t}"]`).locator("visible=true").count();
+      (await menu("ใบงานซ่อม")) > 0 && (await menu("ผังผู้รับผิดชอบ")) === 0 && (await vis("ผังผู้ดูแลฝั่ง Area").count()) === 0
+        ? pass("Supervisor (COCO): ไม่มีเมนูผังผู้รับผิดชอบ (เมนูอื่นยังอยู่)")
+        : fail("Supervisor (COCO) ยังเห็นเมนูผังผู้รับผิดชอบ/ไม่เห็นเมนูข้าง");
       await ctx.close();
     }
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");

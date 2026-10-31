@@ -25,6 +25,7 @@ import ConfirmedReportScreen from "../screens/ConfirmedReportScreen";
 import PartsOutReportScreen from "../screens/PartsOutReportScreen";
 import IssuedPartsReportScreen from "../screens/IssuedPartsReportScreen";
 import ClaimHistoryScreen from "../screens/ClaimHistoryScreen";
+import BranchPartsReportScreen from "../screens/BranchPartsReportScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
 import AdminMenuScreen from "../screens/AdminMenuScreen";
@@ -67,6 +68,7 @@ import { ViewAsBanner, ViewAsButton } from "../components/ViewAs";
 import ThemeToggle from "../components/ThemeToggle";
 import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
+import AreaOnlyGate from "../components/AreaOnlyGate";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
 import {
   AdminStackParamList,
@@ -358,6 +360,14 @@ function LogoutButton() {
 
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
+/**
+ * หน้าที่เหลือให้ Area คนเดียว (ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ) อยู่ในแท็บนี้ทั้งหมด —
+ * ครอบทุกหน้าของแท็บด้วยประตูที่ดูจากชื่อหน้า (AreaOnlyGate) Supervisor (COCO) / Maid (COCO) ที่หลุดมาถึงได้หน้ากุญแจ
+ * ไม่ใช่หน้าที่โหลดไม่ขึ้น (เจ้าของงานขอ ต.ค. 69) · หน้าอื่นผ่านประตูไปเฉย ๆ
+ */
+const homeLayout = (p: Parameters<typeof pageEnterLayout>[0] & { route: { name: string } }) =>
+  pageEnterLayout({ ...p, children: <AreaOnlyGate screen={p.route.name}>{p.children}</AreaOnlyGate> });
+
 function HomeStackNavigator() {
   const { user } = useAuth();
   // Area Team ไม่มีงานออกหน้างาน (งานของฉันวันนี้คือของช่าง) — เปิดมาเจอแผนงาน เมนูแรกของตำแหน่งนี้
@@ -365,7 +375,7 @@ function HomeStackNavigator() {
   // เดิมแอดมิน/หัวหน้าภาคเริ่มที่แผนงาน ช่างเริ่มที่งานของฉัน — เปลี่ยนให้ทุกคนเห็นงานที่ออกไปจริงวันนี้ก่อน
   // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ทุกภาค/ทีมที่ดูแล · แอดมิน = ทั้งหมด
   return (
-    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={pageEnterLayout} initialRouteName={isAreaTeam(user) ? "PlanBoard" : "MyJobs"}>
+    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={homeLayout} initialRouteName={isAreaTeam(user) ? "PlanBoard" : "MyJobs"}>
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
       <HomeStack.Screen name="MyJobs" component={MyJobsScreen} options={{ title: "งานของฉัน" }} />
       <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
@@ -415,6 +425,11 @@ function HomeStackNavigator() {
         name="IssuedPartsReport"
         component={IssuedPartsReportScreen}
         options={{ title: "อะไหล่เบิกแล้ว · งานยังไม่จบ" }}
+      />
+      <HomeStack.Screen
+        name="BranchPartsReport"
+        component={BranchPartsReportScreen}
+        options={{ title: "อะไหล่ที่ไปแต่ละสาขา" }}
       />
       <HomeStack.Screen name="ClaimHistory" component={ClaimHistoryScreen} options={{ title: "ประวัติเคลม" }} />
       <HomeStack.Screen

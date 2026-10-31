@@ -11,16 +11,22 @@ import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import { isAreaTeam } from "../utils/areaTeam";
+import { canSeeBranchParts } from "../utils/branchParts";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "ReportsMenu">;
 
 interface Entry {
   /** byOpener/system มีหน้าของตัวเอง (เลือกช่วงวันที่) ไม่ใช่หน้ารายงานทั่วไป */
-  kind: ReportKind | "byOpener" | "system" | "confirmed" | "partsOut" | "issuedParts";
+  kind: ReportKind | "byOpener" | "system" | "confirmed" | "partsOut" | "issuedParts" | "branchParts";
   /** เฉพาะแอดมิน/หัวหน้าภาค — ช่างเปิดแล้วเซิร์ฟเวอร์ปฏิเสธ ไม่ควรเห็นการ์ดตั้งแต่แรก */
   managersOnly?: boolean;
   /** เฉพาะแอดมิน — รายงานทั้งระบบมีข้อมูลทั้งบริษัทรวมเบอร์โทรพนักงาน */
   adminOnly?: boolean;
+  /**
+   * เฉพาะแอดมินและ Super Admin — เจ้าของงาน: "admin ดูได้ superadmin ดูได้" (Admin Spare Part ไม่เห็น ต่างจาก adminOnly)
+   * กฎเดียวกับเซิร์ฟเวอร์ ดู utils/branchParts
+   */
+  branchPartsOnly?: boolean;
   label: string;
   who: string;
   question: string;
@@ -29,6 +35,8 @@ interface Entry {
   iconColor: string;
   /** บอกตรง ๆ ว่าใบไหนยังไม่มีข้อมูลพอ ดีกว่าให้เปิดไปเจอศูนย์แล้วงง */
   caveat?: string;
+  /** ป้าย "ใหม่" ข้างชื่อ (ตามตัวอย่างที่ตกลง) — การ์ดเพิ่มเข้ามาในหน้าที่มีสิบกว่าใบ ไม่มีป้ายคนมองข้าม เอาออกเมื่อคนใช้กันคุ้นแล้ว */
+  isNew?: boolean;
 }
 
 const ENTRIES: Entry[] = [
@@ -112,6 +120,18 @@ const ENTRIES: Entry[] = [
     managersOnly: true,
   },
   {
+    // ถัดจาก "อะไหล่เบิกแล้ว" ตามตัวอย่างที่ตกลง — แบบร่างเขียนคนอ่านรวม Admin Spare Part/หัวหน้าภาค แต่คำตอบของเจ้าของงานชนะ
+    kind: "branchParts",
+    label: "อะไหล่ที่ไปแต่ละสาขา",
+    who: "แอดมิน · Super Admin",
+    question: "สาขาไหนได้อะไหล่อะไรไปแล้วบ้าง",
+    icon: "storefront-outline",
+    tint: colors.successSoft,
+    iconColor: colors.successInk,
+    branchPartsOnly: true,
+    isNew: true,
+  },
+  {
     kind: "parts",
     label: "อะไหล่ที่ต้องสั่ง",
     who: "ฝ่ายจัดซื้อ · คลัง",
@@ -123,10 +143,11 @@ const ENTRIES: Entry[] = [
 ];
 
 /**
- * รายงานของ Area Team — ปุ่มเดียว (เจ้าของงานกำหนด ต.ค. 69): ใบงานทั้งหมดของสาขาที่เห็น ตามช่วงวันที่แจ้ง
+ * รายงานของ Area — ปุ่มเดียว (เจ้าของงานกำหนด ต.ค. 69): ใบงานทั้งหมดของสาขา COCO ตามช่วงวันที่แจ้ง
  * ไม่มีสรุปบนจอ — ตำแหน่งนี้เอาไฟล์ไปกรอง/ส่งต่อเอง ส่วนติดตามรายใบดูในใบงานซ่อมได้อยู่แล้ว
+ * Supervisor (COCO) / Maid (COCO) ไม่มีเมนูรายงานแล้ว (เจ้าของงานขอ ต.ค. 69 · AreaOnlyGate กันไว้ก่อนถึงหน้านี้)
  */
-function AreaTeamReport({ area }: { area: boolean }) {
+function AreaTeamReport() {
   const [from, setFrom] = useState(`${todayBkk().slice(0, 8)}01`);
   const [to, setTo] = useState(todayBkk());
   const [busy, setBusy] = useState(false);
@@ -156,7 +177,7 @@ function AreaTeamReport({ area }: { area: boolean }) {
           <View style={styles.body}>
             <Text style={styles.label}>รายงานใบงานทั้งหมด (Excel)</Text>
             <Text style={styles.question}>
-              {area ? "ใบงานทุกสถานะของสาขา COCO ทั้งหมด" : "ใบงานทุกสถานะของสาขาที่คุณดูแล"} — แถวละใบ ทุกคอลัมน์ในแถวเดียว
+              ใบงานทุกสถานะของสาขา COCO ทั้งหมด — แถวละใบ ทุกคอลัมน์ในแถวเดียว
             </Text>
           </View>
         </View>
@@ -183,7 +204,7 @@ function AreaTeamReport({ area }: { area: boolean }) {
 
 export default function ReportsMenuScreen({ navigation }: Props) {
   const { user } = useAuth();
-  if (isAreaTeam(user)) return <AreaTeamReport area={user?.role === "AREA"} />;
+  if (isAreaTeam(user)) return <AreaTeamReport />;
   const admin = user?.role === "ADMIN";
   const manager = admin || user?.role === "SUPERVISOR";
   return (
@@ -192,7 +213,9 @@ export default function ReportsMenuScreen({ navigation }: Props) {
         ทุกใบดูบนหน้าจอได้ และกดดาวน์โหลดเป็น Excel เพื่อส่งต่อหรือทำต่อได้
       </Text>
 
-      {ENTRIES.filter((e) => (!e.managersOnly || manager) && (!e.adminOnly || admin)).map((entry) => (
+      {ENTRIES.filter(
+        (e) => (!e.managersOnly || manager) && (!e.adminOnly || admin) && (!e.branchPartsOnly || canSeeBranchParts(user))
+      ).map((entry) => (
         <TouchableOpacity
           key={entry.kind}
           style={styles.card}
@@ -208,6 +231,9 @@ export default function ReportsMenuScreen({ navigation }: Props) {
               ? navigation.navigate("PartsOutReport")
               : entry.kind === "issuedParts"
               ? navigation.navigate("IssuedPartsReport")
+              : entry.kind === "branchParts"
+              ? // {} ล้างตัวกรองสาขา/เครื่องที่ค้างจากลิงก์ในใบงาน — หน้านี้อาจยังค้างอยู่ในชุดหน้าเดียวกัน
+                navigation.navigate("BranchPartsReport", {})
               : navigation.navigate("Report", { kind: entry.kind, title: entry.label })
           }
         >
@@ -215,7 +241,14 @@ export default function ReportsMenuScreen({ navigation }: Props) {
             <Ionicons name={entry.icon} size={22} color={entry.iconColor} />
           </View>
           <View style={styles.body}>
-            <Text style={styles.label}>{entry.label}</Text>
+            <View style={styles.labelRow}>
+              <Text style={styles.label}>{entry.label}</Text>
+              {entry.isNew ? (
+                <View style={styles.newBadge}>
+                  <Text style={styles.newBadgeText}>ใหม่</Text>
+                </View>
+              ) : null}
+            </View>
             <Text style={styles.question}>“{entry.question}”</Text>
             <Text style={styles.who}>{entry.who}</Text>
             {entry.caveat ? <Text style={styles.caveat}>{entry.caveat}</Text> : null}
@@ -242,7 +275,10 @@ const styles = StyleSheet.create({
   },
   icon: { width: 44, height: 44, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
   body: { flex: 1, minWidth: 0, gap: 2 },
-  label: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text },
+  label: { fontSize: 15, lineHeight: 24, fontWeight: "700", color: colors.text, flexShrink: 1 },
+  labelRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  newBadge: { backgroundColor: colors.roleAdminSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  newBadgeText: { fontSize: 11, lineHeight: 16, fontWeight: "700", color: colors.roleAdmin },
   question: { fontSize: 13, lineHeight: 21, color: colors.textMuted },
   who: { fontSize: 12, lineHeight: 20, color: colors.textFaint },
   caveat: { fontSize: 11, lineHeight: 19, color: colors.warningInk, marginTop: 2 },

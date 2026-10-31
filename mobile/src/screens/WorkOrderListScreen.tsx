@@ -54,7 +54,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { useDebounced } from "../utils/useDebounced";
 import { useAuth } from "../context/AuthContext";
-import { isAreaTeam } from "../utils/areaTeam";
+import { canOpenScreen, isAreaTeam } from "../utils/areaTeam";
 import { regionsOf, regionsText } from "../utils/regions";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
@@ -1317,7 +1317,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     <EmptyState
       icon="clipboard-outline"
       title="ไม่มีใบงานในหมวดนี้"
-      text="เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
+      // Supervisor (COCO) / Maid (COCO) ไม่มีกระดานติดตามเครื่องเสีย (เจ้าของงานขอ ต.ค. 69) — อย่าชี้ไปหน้าที่เขาเปิดไม่ได้
+      text={
+        canOpenScreen(user, "MachineDashboard")
+          ? "เปิดใบงานได้จากกระดานติดตามเครื่องเสีย หรือกดปุ่มเพิ่มใบงานด้านบน"
+          : "กดปุ่มเพิ่มใบงานด้านบนเพื่อแจ้งซ่อมของสาขาคุณ"
+      }
     />
   ) : shown.length === 0 ? (
     <EmptyState
