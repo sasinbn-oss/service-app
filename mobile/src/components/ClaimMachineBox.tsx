@@ -6,11 +6,11 @@
  * รายการทั้งหมดมาจากเซิร์ฟเวอร์ (claimGuide) — ยี่ห้อที่ไม่มีคู่มือ (OASIS ฯลฯ) มีแค่ข้อมูลป้าย
  */
 import React, { useState } from "react";
-import { Image, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, ImageStyle, StyleProp, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Dropdown from "./Dropdown";
-import { ClaimGuide, PlateValue, plateFields } from "../utils/nameplate";
+import { ClaimGuide, PlateValue, isBrandOnly, plateFields } from "../utils/nameplate";
 import { readPlatePhoto } from "../utils/ocr";
 import { filesToAttachments, pickImageAttachment, type PickedAttachment } from "../utils/attachments";
 import FileDropZone from "./FileDropZone";
@@ -65,6 +65,7 @@ export default function ClaimMachineBox({
   const err = guide.errors.find((e) => e.code === check.errorCode);
   const scanned = fields.some((f) => plate.values[f.key]?.source === "SCAN" && plate.values[f.key]?.value);
   const missed = plate.photo ? fields.filter((f) => !plate.values[f.key]?.value) : [];
+  const brandOnly = isBrandOnly(registryModel);
 
   async function shoot(pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>) {
     setReadErr(null);
@@ -151,8 +152,17 @@ export default function ClaimMachineBox({
                 )
               ) : null}
             </View>
+            {v?.crop ? <PlateCrop uri={v.crop} label={f.label} /> : null}
+            {/*
+              รุ่นเต็มยาว 18 ตัว (HL055LWHPRXG6W0000) ล้นช่องกรอกบนมือถือ เห็นแค่ครึ่งเดียว ตัวท้ายที่อ่านพลาดบ่อยที่สุดจึงไม่มีใครเห็น
+              เขียนค่าตัวใหญ่ ตัวเว้นห่าง ตัดบรรทัดได้ ไว้เหนือช่อง ให้เทียบกับภาพตัดด้านบนได้ทีละตัว
+            */}
+            {f.model && v?.value ? (
+              <Text style={styles.modelValue} accessibilityLabel={`รุ่นที่จะส่ง ${v.value}`}>
+                {v.value}
+              </Text>
+            ) : null}
             <View style={styles.fieldRow}>
-              {v?.crop ? <Image source={{ uri: v.crop }} style={styles.crop} resizeMode="contain" /> : null}
               <TextInput
                 style={[styles.input, v?.needsCheck && v.source === "SCAN" && styles.inputDoubt]}
                 value={v?.value ?? ""}
@@ -172,12 +182,16 @@ export default function ClaimMachineBox({
             {v?.needsCheck && v.source === "SCAN" && v.value ? (
               <Text style={styles.doubt}>
                 {/* รุ่นเต็มที่ขึ้นต้นตรงทะเบียนแล้ว — ที่ไม่มั่นใจคือส่วนท้าย ไม่ใช่ "ไม่ตรงทะเบียน" */}
-                {f.model && registryModel
-                  ? v.value.startsWith(registryModel.toUpperCase())
-                    ? "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — "
-                    : `ไม่ตรงทะเบียน (${registryModel}) — `
-                  : ""}
-                ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)
+                {/* ทะเบียนมีแค่ยี่ห้อ — ไม่มีรุ่นให้เทียบ ไม่ใช่ "ไม่ตรง" (ดู isBrandOnly) */}
+                {f.model && brandOnly
+                  ? "ทะเบียนยังไม่มีรุ่นเต็ม — ดูกับรูปทีละตัว (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)"
+                  : `${
+                      f.model && registryModel
+                        ? v.value.startsWith(registryModel.toUpperCase())
+                          ? "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — "
+                          : `ไม่ตรงทะเบียน (${registryModel}) — `
+                        : ""
+                    }ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)`}
               </Text>
             ) : null}
           </View>
@@ -290,7 +304,9 @@ const styles = StyleSheet.create({
   tagScan: { color: colors.successInk, backgroundColor: colors.successSoft },
   tagHand: { color: colors.roleAdmin, backgroundColor: colors.roleAdminSoft },
   fieldRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  crop: { width: 120, height: 26, borderRadius: 4, backgroundColor: colors.tile },
+  crop: { width: "100%", height: 64, borderRadius: 4, backgroundColor: colors.tile },
+  cropBig: { height: 160 },
+  modelValue: { fontSize: 20, lineHeight: 30, fontWeight: "800", letterSpacing: 2, fontFamily: "monospace", color: colors.text },
   input: {
     flex: 1,
     minWidth: 0,
@@ -330,11 +346,32 @@ const styles = StyleSheet.create({
   sumValue: { fontSize: 13.5, fontWeight: "800", color: colors.text, fontFamily: "monospace" },
   sumPhoto: { width: "100%", height: 200, borderRadius: radius.sm, backgroundColor: colors.card },
   link: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
-  sumCrop: { width: 140, height: 28, borderRadius: 4, backgroundColor: colors.card },
+  sumCrop: { backgroundColor: colors.card },
   ans: { fontSize: 12.5, fontWeight: "800", color: colors.textMuted },
   // "มี" เด่นขึ้นให้ผู้ตรวจไม่พลาด — แต่ไม่ใช้สีแดง เพราะระบบไม่ได้ตัดสินว่าไม่รับประกัน
   ansYes: { color: colors.warningInk },
 });
+
+/**
+ * ภาพตัดบรรทัดจากรูปป้าย (ค่าที่ระบบอ่านมาจากตรงนี้) — เต็มความกว้างช่อง สูง 64 แตะแล้วขยายเป็น 160
+ *
+ * เดิม 120×26 ตัวหนังสือในภาพเล็กกว่าตัวในช่องกรอก เทียบทีละตัวไม่ได้ ทั้งช่างที่ยืนยันและผู้ตรวจเคลม
+ * ไม่เปิดตัวดูรูป เพราะภาพตัดเป็นข้อมูลในตัว (data URL) ไม่ใช่ไฟล์ของใบงาน — ขยายในที่ก็พอ
+ */
+function PlateCrop({ uri, label, style }: { uri: string; label: string; style?: StyleProp<ImageStyle> }) {
+  const [big, setBig] = useState(false);
+  return (
+    <TouchableOpacity
+      onPress={() => setBig((b) => !b)}
+      activeOpacity={0.85}
+      accessibilityLabel={`ภาพตัดจากรูปป้าย ${label}`}
+      accessibilityHint={big ? "แตะเพื่อย่อ" : "แตะเพื่อขยาย"}
+      style={{ width: "100%" }}
+    >
+      <Image source={{ uri }} style={[styles.crop, style, big && styles.cropBig]} resizeMode="contain" />
+    </TouchableOpacity>
+  );
+}
 
 /**
  * สรุปข้อมูลเครื่องในการ์ดเคลม (Admin Spare Part ตรวจ / ทุกคนที่เปิดดู) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
@@ -378,7 +415,7 @@ export function ClaimMachineSummary({
               <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>
                 {f.source === "SCAN" ? "อ่านจากรูป" : "พิมพ์เอง"}
               </Text>
-              {f.crop ? <Image source={{ uri: f.crop }} style={styles.sumCrop} resizeMode="contain" /> : null}
+              {f.crop ? <PlateCrop uri={f.crop} label={f.label} style={styles.sumCrop} /> : null}
             </View>
           ))}
         </>

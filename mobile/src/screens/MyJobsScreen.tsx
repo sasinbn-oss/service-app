@@ -265,11 +265,17 @@ function JobCard({
   onOpen: (what?: "close" | "stage" | "problem") => void;
 }) {
   const arrived = !!job.arrivedAt;
+  /**
+   * ส่งเคลมแล้ว รอ Admin Spare Part ตรวจ — เซิร์ฟเวอร์นับว่าจบจากมือช่างแล้ว (done) แต่ยังไม่ใช่ปิดงาน
+   * เดิมขึ้น "✓ ปิดงานแล้ว" ช่างเลยไม่รู้ว่าใบนี้ยังอาจถูกตีกลับมาให้แก้ (เจ้าของงานเลือกข้อความนี้จากตัวอย่าง ต.ค. 69)
+   * การ์ดไม่จางแบบงานที่จบแล้ว — ยังเป็นเรื่องที่ช่างต้องติดตาม
+   */
+  const review = job.status === "CLAIM_REVIEW";
   const map =
     job.latitude != null && job.longitude != null ? `https://maps.google.com/?q=${job.latitude},${job.longitude}` : null;
   return (
     <View
-      style={[styles.card, arrived && !job.done && styles.cardNow, job.done && styles.cardDone]}
+      style={[styles.card, arrived && !job.done && styles.cardNow, job.done && !review && styles.cardDone, review && styles.cardReview]}
       accessibilityLabel={`งาน ${job.code}`}
     >
       <View style={styles.cardTop}>
@@ -281,7 +287,11 @@ function JobCard({
           </View>
         ) : null}
         <View style={{ flex: 1 }} />
-        {job.done ? (
+        {review ? (
+          <View style={styles.reviewChip}>
+            <Text style={styles.reviewChipText}>รอตรวจเคลม</Text>
+          </View>
+        ) : job.done ? (
           <Text style={styles.doneText}>✓ ปิดงานแล้ว{job.closedAt ? ` ${hhmm(job.closedAt)}` : ""}</Text>
         ) : arrived ? (
           <View style={styles.arrivedPill}>
@@ -301,6 +311,7 @@ function JobCard({
       {job.parts.length ? (
         <Text style={styles.meta}>อะไหล่: {job.parts.map((p) => `${p.name} x${p.quantity}${p.unit ? ` ${p.unit}` : ""}`).join(", ")}</Text>
       ) : null}
+      {review ? <Text style={styles.reviewNote}>ยังไม่นับว่าปิดงาน จนกว่าจะอนุมัติ — อาจถูกตีกลับมาให้แก้</Text> : null}
 
       {job.done ? null : (
         <>
@@ -384,6 +395,16 @@ const styles = StyleSheet.create({
   },
   cardNow: { borderWidth: 2, borderColor: colors.primary },
   cardDone: { opacity: 0.6 },
+  cardReview: { borderWidth: 2, borderColor: colors.warning },
+  reviewChip: {
+    backgroundColor: colors.warningSoft,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+  },
+  reviewChipText: { fontSize: 13, lineHeight: 22, fontWeight: "700", color: colors.warningInk },
+  reviewNote: { fontSize: 13, lineHeight: 19, color: colors.textMuted },
   cardTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   time: { fontSize: 20, lineHeight: 28, fontWeight: "800", color: colors.text, fontVariant: ["tabular-nums"] },
   lateText: { fontSize: 12.5, fontWeight: "700", color: colors.dangerInk },

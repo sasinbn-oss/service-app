@@ -54,6 +54,7 @@ import {
 } from "../reports/branchPartsReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
+import { firstSubmittedAt, isSubmittedEvidence } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
   buildObjectKey,
@@ -586,6 +587,19 @@ function closeVerdict(w: WorkOrderRow): "CLEARED" | "STILL_DOWN" | null {
   return w.outage.endedAt === null ? "STILL_DOWN" : "CLEARED";
 }
 
+/**
+ * ชื่อคนที่ขั้นนี้รอ (แถบขั้นตอน · "รอใคร") — ส่วนใหญ่คือชื่อบทบาทใน WORK_ORDER_STAGE_ACTOR
+ *
+ * ยกเว้นตรวจเคลม: สิทธิ์มองเป็น ADMIN (Admin Spare Part ถูกมองเป็นแอดมินที่อ่านได้ทุกที่ — ดู middleware/auth.ts)
+ * แต่คนที่กดได้จริงมีแค่ Admin Spare Part (และ Super Admin) — ขึ้นว่า "รอแอดมิน" แอดมินทั่วไปเข้าใจว่าเป็นงานตัวเอง
+ * และช่างไปตามแอดมินผิดคน จึงแก้ที่ชื่อที่แสดง ไม่แตะตัวกั้นสิทธิ์
+ */
+function actorLabelFor(stage: string): string | null {
+  if (stage === "CLAIM_REVIEW") return ROLE_LABELS.PARTS_ADMIN;
+  const actor = WORK_ORDER_STAGE_ACTOR[stage];
+  return actor ? ROLE_LABELS[actor] ?? null : null;
+}
+
 function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
   return {
     id: w.id,
@@ -675,6 +689,8 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     createdAt: w.createdAt,
     closedAt: w.closedAt,
     closedByName: w.closedBy?.name ?? null,
+    // ฟอร์มปิดงานที่กดส่งซ้ำแล้วได้ 409 CLOSE_ALREADY_SENT เทียบกับตัวเองว่าคำสั่งปิดรอบก่อนผ่านแล้วไหม — เทียบ id ไม่ใช่ชื่อ (ชื่อซ้ำกันได้)
+    closedById: w.closedById ?? null,
     closeResult: w.closeResult,
     closeResultLabel: w.closeResult
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
@@ -684,9 +700,7 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
     needsParts: w.needsParts,
     // ขั้นนี้รอใคร ให้หน้าจอตัดสินใจได้ว่าจะโชว์ปุ่มอะไรโดยไม่ต้องรู้กติกาเอง
     stageActor: WORK_ORDER_STAGE_ACTOR[w.status] ?? null,
-    stageActorLabel: WORK_ORDER_STAGE_ACTOR[w.status]
-      ? ROLE_LABELS[WORK_ORDER_STAGE_ACTOR[w.status]] ?? null
-      : null,
+    stageActorLabel: actorLabelFor(w.status),
     // อาการกับสถานะ — ชุดเดียวกับที่กระดานเคยให้กรอก
     symptom: w.symptom,
     workStatus: w.workStatus,
@@ -2250,9 +2264,7 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
       action: WORK_ORDER_STAGE_ACTIONS[v] ?? WORK_ORDER_STATUS_LABELS[v],
       doneLabel: WORK_ORDER_STAGE_DONE[v] ?? WORK_ORDER_STATUS_LABELS[v],
       actor: WORK_ORDER_STAGE_ACTOR[v] ?? null,
-      actorLabel: WORK_ORDER_STAGE_ACTOR[v]
-        ? ROLE_LABELS[WORK_ORDER_STAGE_ACTOR[v]] ?? null
-        : null,
+      actorLabel: actorLabelFor(v),
     })),
     // ขั้นที่แอดมินกด "เลื่อนวันนัด" ได้ — ตัดสินที่นี่ที่เดียว แอปเช็คบทบาท/วันนัดเองอีกชั้น (ดู RESCHEDULE_STAGES)
     rescheduleStages: RESCHEDULE_STAGES,
@@ -3451,9 +3463,8 @@ async function guardStage(
   }
 
   if (!canActOnStage(role, wo.status)) {
-    const actor = WORK_ORDER_STAGE_ACTOR[wo.status];
     res.status(403).json({
-      error: `ขั้นนี้เป็นของ${ROLE_LABELS[actor] ?? actor} ไม่ใช่ของคุณ`,
+      error: `ขั้นนี้เป็นของ${actorLabelFor(wo.status) ?? WORK_ORDER_STAGE_ACTOR[wo.status]} ไม่ใช่ของคุณ`,
     });
     return null;
   }
@@ -5561,7 +5572,9 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   // ก่อนจ่ายงานยังไม่มีใครไปหน้างาน ของที่ขาดยังแก้ในขั้นระบุอะไหล่/เช็คคลังได้
   // ทีมรับงานแล้ว (ลำดับใหม่ ทีมได้งานตอนจ่ายงานซึ่งเป็นขั้นสุดท้ายก่อนช่างเข้า)
-  if (!["IN_PROGRESS", "DONE"].includes(wo.status)) {
+  // รอตรวจเคลม = ปิดงานแล้ว ซ่อมเสร็จแล้วเหมือน DONE เหลือแค่เอกสารเคลม — ของที่ขาดไม่เกี่ยวกับการตรวจเคลม
+  // ถ้ากันไว้ ปิดงานพร้อมเคลมแล้วติ๊ก "อะไหล่ไม่ครบ" ใบรออะไหล่ไม่เกิดทุกครั้ง ของที่ขาดหลุดไปเงียบ ๆ
+  if (!["IN_PROGRESS", "CLAIM_REVIEW", "DONE"].includes(wo.status)) {
     return res.status(409).json({
       error: `${wo.code} ยังไม่ถึงขั้นเข้าหน้างาน — แก้รายการอะไหล่ในใบนี้ได้เลย`,
     });
@@ -6269,14 +6282,23 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (current.status === "DONE") {
-    return res.status(400).json({ error: `${current.code} ปิดไปแล้ว` });
+  /**
+   * ส่งปิดงานไปแล้ว — ส่วนใหญ่คือกดซ้ำหลังเน็ตหลุดตอนรอคำตอบรอบแรก (เซิร์ฟเวอร์บันทึกไปแล้วแต่คำตอบไม่ถึงมือถือ)
+   * ตอบ 409 พร้อม code ให้ฟอร์มปิดงานจัดการเอง: โหลดใบใหม่ ถ้าคนปิดคือตัวเองก็นับว่าส่งสำเร็จ ไม่ใช่ error ซ้อน
+   * (409 ทั่วไปของใบงานแอปจะปิดฟอร์มแล้วขึ้นเตือนว่าใบถูกแก้ — ดู HANDLED_409_CODES ใน mobile/src/api/client.ts)
+   */
+  if (current.status === "DONE" || current.status === "CLAIM_REVIEW") {
+    return res.status(409).json({
+      error:
+        current.status === "DONE"
+          ? `${current.code} ปิดงานแล้ว`
+          : `${current.code} ปิดงานแล้ว กำลังรอ Admin Spare Part ตรวจเคลม`,
+      code: "CLOSE_ALREADY_SENT",
+      status: current.status,
+    });
   }
   if (current.status === "CANCELLED") {
     return res.status(400).json({ error: `${current.code} ถูกยกเลิกไปแล้ว` });
-  }
-  if (current.status === "CLAIM_REVIEW") {
-    return res.status(400).json({ error: `${current.code} ปิดงานแล้ว กำลังรอ Admin Spare Part ตรวจเคลม` });
   }
   // ปิดได้ตั้งแต่ถูกจ่ายงานแล้ว เผื่อไปถึงหน้างานวันเดียวกันโดยไม่ได้นัดล่วงหน้า
   if (!["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS"].includes(current.status)) {
@@ -6683,7 +6705,7 @@ async function claimPdf(req: AuthRequest, res: Response) {
     res.status(404).json({ error: "ไม่พบใบเคลมนี้" });
     return null;
   }
-  const [requester, files] = await Promise.all([
+  const [requester, files, chain, reopened] = await Promise.all([
     claim.createdById
       ? prisma.user.findUnique({ where: { id: claim.createdById }, select: { name: true } })
       : Promise.resolve(null),
@@ -6691,10 +6713,22 @@ async function claimPdf(req: AuthRequest, res: Response) {
       where: { workOrderId: id, sparePartId: claim.sparePartId, role: { in: [...CLAIM_EVIDENCE_ROLES] } },
       select: { role: true },
     }),
+    // แถวก่อนหน้าของชิ้นเดียวกัน — หาวันที่ส่งครั้งแรกของห่วงโซ่ "ตีกลับ → ส่งใหม่" (วันที่เปลี่ยนอะไหล่จริง)
+    prisma.partClaim.findMany({
+      where: { workOrderId: id, createdAt: { lte: claim.createdAt } },
+      select: { id: true, sparePartId: true, partCode: true, status: true, createdAt: true },
+    }),
+    // เปิดใบใหม่ = ซ่อมครั้งใหม่ แถวก่อนหน้านั้นไม่ใช่ห่วงโซ่เดียวกัน
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: "REOPENED", createdAt: { lte: claim.createdAt } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
   ]);
   const pdf = await buildPartClaimPdf({
     workOrderCode: wo.code,
     claim,
+    repairedAt: firstSubmittedAt(claim, chain, reopened?.createdAt),
     requesterName: requester?.name ?? null,
     evidence: [...new Set(files.map((f) => ATTACHMENT_ROLE_LABELS[f.role!]?.replace(" (เคลม)", "") ?? f.role!))],
   });
@@ -7549,6 +7583,16 @@ router.get("/:id/attachments/links", requireAuth, async (req: AuthRequest, res) 
   }
 });
 
+/** ขั้นที่ช่างกดปิดงานได้ (ดู POST /:id/close) — หลักฐานเคลมแนบได้เฉพาะช่วงนี้ */
+const CLOSE_STAGES = ["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS"];
+/** ชนิดไฟล์ของหลักฐานเคลมแต่ละช่อง */
+const CLAIM_EVIDENCE_KIND: Record<string, "IMAGE" | "VIDEO"> = {
+  CLAIM_PART: "IMAGE",
+  CLAIM_SYMPTOM: "IMAGE",
+  CLAIM_ERROR_VIDEO: "VIDEO",
+  CLAIM_CHECK_VIDEO: "VIDEO",
+};
+
 router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -7584,9 +7628,47 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   // หลักฐานเคลมต้องบอกว่าเป็นของอะไหล่ชิ้นไหน — ไม่บอกก็นับให้ชิ้นไหนไม่ได้ จึงปฏิเสธเลย
   // ดีกว่ารับไว้แล้วตอนปิดงานขึ้นว่า "ยังขาดรูปอะไหล่เก่า" ทั้งที่ช่างเพิ่งแนบไป
   const isClaimEvidence = !!role && (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(role);
+  if (isClaimEvidence) {
+    // หลักฐานเคลมมาจากฟอร์มปิดงานของช่างเท่านั้น — ทีม Area แนบรูปตอนแจ้งงานได้ แต่ไม่ใช่คนส่งเคลม
+    if (isAreaTeam(req.auth)) {
+      return res.status(403).json({ error: "หลักฐานเคลมแนบได้จากฟอร์มปิดงานเท่านั้น" });
+    }
+    /**
+     * แนบได้เฉพาะช่วงที่ใบยังอยู่กับช่าง — ส่งตรวจเคลมแล้วห้ามเพิ่ม
+     * ถ้าปล่อยให้แนบระหว่างรอตรวจ ไฟล์ใหม่จะไปปนกับหลักฐานที่ Admin Spare Part กำลังดูอยู่ และหลังตีกลับ
+     * ระบบแยกไม่ได้ว่าไฟล์ไหนคือของรอบที่ถูกตีกลับ · ต้องแก้ = Admin Spare Part ตีกลับ แล้วใบกลับมาที่ช่าง
+     */
+    if (!CLOSE_STAGES.includes(wo.status)) {
+      return res.status(409).json({
+        error:
+          wo.status === "CLAIM_REVIEW"
+            ? `${wo.code} ส่งตรวจเคลมแล้ว — แนบหลักฐานเคลมเพิ่มไม่ได้ ถ้าต้องแก้ Admin Spare Part จะตีกลับมาให้`
+            : wo.status === "DONE" || wo.status === "CANCELLED"
+              ? `${wo.code} ปิดแล้ว — แนบหลักฐานเคลมไม่ได้`
+              : `${wo.code} ยังไม่ถึงขั้นปิดงาน — แนบหลักฐานเคลมไม่ได้`,
+        status: wo.status,
+        /**
+         * ใบที่ส่งปิดงานไปแล้ว (รอตรวจเคลม/ปิด) ได้ code เดียวกับ POST /close — ฟอร์มปิดงานแนบไฟล์ก่อนสั่งปิด
+         * กดซ้ำหลังเน็ตหลุดพร้อมไฟล์เคลมที่เลือกใหม่ คำขอแรกที่ถูกปฏิเสธคือการแนบ ไม่ใช่การปิด
+         * ไม่มี code = ฟอร์มนับเป็นส่งไม่สำเร็จ ทั้งที่การปิดรอบก่อนผ่านไปแล้ว (ใบรออะไหล่ไม่เปิด ร่างไม่ล้าง)
+         */
+        ...(wo.status === "CLAIM_REVIEW" || wo.status === "DONE" ? { code: "CLOSE_ALREADY_SENT" } : {}),
+      });
+    }
+  }
   const sparePartId = Number(req.body?.sparePartId);
   if (isClaimEvidence && !Number.isInteger(sparePartId)) {
     return res.status(400).json({ error: "หลักฐานเคลมต้องระบุว่าเป็นของอะไหล่ชิ้นไหน" });
+  }
+  // วิดีโอ Error/การตรวจเช็คต้องเห็นการเคลื่อนไหว ส่วนรูปอะไหล่/อาการต้องซูมอ่านรหัสได้ — แนบผิดชนิดแล้วนับว่าครบ
+  // ผู้ขายปฏิเสธทีหลัง ตอนนั้นอะไหล่เก่าอาจทิ้งไปแล้ว จึงกันตั้งแต่ตอนแนบ
+  if (isClaimEvidence && kind !== CLAIM_EVIDENCE_KIND[role!]) {
+    const label = ATTACHMENT_ROLE_LABELS[role!].replace(" (เคลม)", "");
+    // ชื่อที่ลงท้ายด้วยคำอังกฤษ ("วิดีโอ Error code") เว้นวรรคก่อนข้อความไทย อ่านง่ายกว่าเขียนติดกัน
+    const gap = /[A-Za-z0-9]$/.test(label) ? " " : "";
+    return res.status(400).json({
+      error: `${label}${gap}ต้องเป็น${CLAIM_EVIDENCE_KIND[role!] === "VIDEO" ? "ไฟล์วิดีโอ" : "รูปภาพ"}`,
+    });
   }
 
   // กรอบวิดีโอการทำงานมีไว้ให้เห็นอาการตอนเครื่องเดิน รูปนิ่งบอกไม่ได้ ส่วนกรอบรูปตรวจรับวิดีโอก็จะ
@@ -7768,12 +7850,41 @@ router.delete("/:id/attachments/:attachmentId", requireAuth, async (req: AuthReq
 
   const row = await prisma.workOrderAttachment.findFirst({
     where: { id: attachmentId, workOrderId: id },
-    select: { id: true, objectKey: true, fileName: true, kind: true, createdById: true },
+    select: { id: true, objectKey: true, fileName: true, kind: true, role: true, createdById: true },
   });
   if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
 
   if (req.auth!.role !== "ADMIN" && row.createdById !== req.auth!.userId) {
     return res.status(403).json({ error: "ลบได้เฉพาะไฟล์ที่ตัวเองแนบไว้" });
+  }
+
+  /**
+   * ไฟล์ที่ส่งไปเป็นหลักฐานเคลมแล้ว ช่างลบเองไม่ได้ — Admin Spare Part กำลังดู หรือออกใบเคลมให้ผู้ขายไปแล้ว
+   * ถ้ายอมให้ลบ: ใบเคลมที่ผ่านแล้วไม่มีรูป/วิดีโอให้ผู้ขาย · ระหว่างรอตรวจ ผู้ตรวจเห็นช่องว่างตรงที่เมื่อกี้ยังมีไฟล์
+   * "ส่งไปแล้ว" ตัดสินด้วยกติกาเดียวกับที่ผู้ตรวจและใบเคลมใช้ (claimEvidenceFor) — ไฟล์ของชิ้นที่ไม่ได้ส่งเคลม
+   * ไฟล์ที่ถูกแนบใหม่แทน และไฟล์ที่แนบหลังส่งรอบล่าสุด ยังลบได้ เพดาน 60 ไฟล์จึงยังบอกให้ลบไฟล์ที่ไม่ใช้ได้จริง
+   * แอดมินยังลบได้ (แก้ไฟล์ผิดใบ/ภาพหลุดที่ไม่ควรอยู่ในระบบ)
+   */
+  if (req.auth!.role !== "ADMIN" && row.role && (row.role === "NAMEPLATE" || row.role.startsWith("CLAIM_"))) {
+    const [claims, files, logs] = await Promise.all([
+      prisma.partClaim.findMany({
+        where: { workOrderId: id },
+        select: { id: true, sparePartId: true, partCode: true, status: true, createdAt: true, nameplate: true },
+      }),
+      prisma.workOrderAttachment.findMany({
+        where: { workOrderId: id, role: { in: [...CLAIM_EVIDENCE_ROLES, "NAMEPLATE"] } },
+        select: { id: true, role: true, sparePartId: true, createdAt: true },
+      }),
+      prisma.workOrderLog.findMany({
+        where: { workOrderId: id, action: { in: ["ASSIGNED", "REOPENED"] } },
+        select: { action: true, createdAt: true },
+      }),
+    ]);
+    if (isSubmittedEvidence(row.id, claims, files, logs)) {
+      // code ให้แอปรู้ว่าเป็นการปฏิเสธ ไม่ใช่ใบงานข้อมูลเก่า — 409 ไม่มี code แอปจะโหลดใบใหม่ ปิดฟอร์มที่เปิดอยู่
+      // แล้วเตือนว่า "โหลดข้อมูลล่าสุดให้แล้ว" ซ้อนกับ "ลบไม่สำเร็จ" ทั้งที่ไม่มีอะไรเปลี่ยน (ดู HANDLED_409_CODES ฝั่งแอป)
+      return res.status(409).json({ error: "ไฟล์นี้เป็นหลักฐานของใบเคลมที่ส่งไปแล้ว ลบไม่ได้", code: "CLAIM_EVIDENCE_LOCKED" });
+    }
   }
 
   // ลบแถวก่อน แล้วค่อยลบไฟล์ — ถ้าลบไฟล์บนที่เก็บไม่ผ่านแล้วหยุดไว้แค่นั้น

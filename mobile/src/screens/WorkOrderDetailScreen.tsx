@@ -28,7 +28,7 @@ import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
@@ -73,7 +73,7 @@ import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { feedback } from "../components/Feedback";
-import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
+import { anyModalOpen, notifyWorkOrderStale, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
 import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo, type StepState } from "../utils/stepPath";
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 import { techPickHint } from "../utils/teams";
@@ -179,6 +179,8 @@ interface WorkOrder {
   createdAt: string;
   closedAt: string | null;
   closedByName: string | null;
+  /** คนที่กดปิดงาน — ฟอร์มปิดงานใช้ดูว่าคำสั่งปิดที่คำตอบหายไปกลางทางผ่านไปแล้วหรือยัง (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+  closedById?: number | null;
   closeResult?: string | null;
   closeResultLabel: string | null;
   closeNote: string | null;
@@ -1189,8 +1191,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     backTargets.length > 0;
 
   // เปิดใบรออะไหล่ต่อได้ตั้งแต่ทีมรับงานแล้ว — ก่อนนั้นยังแก้รายการอะไหล่ในใบนี้ได้เอง
+  // รอตรวจเคลมนับด้วย (ปิดงานแล้ว เหลือแค่เอกสารเคลม) — ชุดเดียวกับที่เซิร์ฟเวอร์รับใน POST /:id/follow-up
+  // ไม่งั้นปิดพร้อมเคลมแล้วเปิดใบรออะไหล่ไม่สำเร็จ ข้อความบอกให้กดปุ่มนี้ แต่ปุ่มไม่ขึ้นจนกว่าจะตรวจเคลมเสร็จ
   const canFollowUp =
-    ["IN_PROGRESS", "DONE"].includes(order.status) &&
+    ["IN_PROGRESS", "CLAIM_REVIEW", "DONE"].includes(order.status) &&
     (user?.role === "ADMIN" ||
       user?.role === "SUPERVISOR" ||
       ourTeamOrder(user, order));
@@ -5785,6 +5789,12 @@ function ClaimsCard({
     }
   }
 
+  /**
+   * ใบเคลมของรอบล่าสุด = แถวที่ส่งพร้อมกันในการปิดงานครั้งล่าสุด (เวลาส่งเดียวกัน) — แถวที่เก่ากว่านั้นจางลง
+   * เดิมจางทุกแถวยกเว้นแถวแรก ใบที่เคลมสองชิ้นรอบเดียวกันชิ้นที่สองจึงดูเหมือนรอบเก่าที่ไม่ต้องตรวจ
+   */
+  const latestClaimAt = Math.max(...order.claims.map((c) => Date.parse(c.createdAt)));
+
   return (
     <View style={[styles.card, canReview && styles.claimCardReview]}>
       <View style={styles.infoHead}>
@@ -5801,14 +5811,15 @@ function ClaimsCard({
           onClose={() => setViewing(null)}
         />
       ) : null}
-      {order.claims.map((c, i) => {
-        const tone = CLAIM_STATUS[c.status];
+      {order.claims.map((c) => {
+        // สถานะที่แอปรุ่นนี้ยังไม่รู้จัก (เซิร์ฟเวอร์ใหม่กว่าแอป) ขึ้นแบบ "รอตรวจ" แทน — อ่านค่าว่างแล้วทั้งหน้าใบงานพัง
+        const tone = (CLAIM_STATUS as Record<string, (typeof CLAIM_STATUS)[PartClaim["status"]] | undefined>)[c.status] ?? CLAIM_STATUS.PENDING;
         // หลักฐานที่แนบก่อนส่งใบเคลมใบนี้ — ไฟล์ที่แนบหลังจากนั้นเป็นของรอบถัดไป
         const evidence = files.filter(
           (f) => f.sparePartId === c.sparePartId && f.role?.startsWith("CLAIM_") && f.createdAt <= c.createdAt
         );
         return (
-          <View key={c.id} style={[styles.claimBlock, i > 0 && styles.claimBlockOld]}>
+          <View key={c.id} style={[styles.claimBlock, Date.parse(c.createdAt) < latestClaimAt && styles.claimBlockOld]}>
             <View style={styles.headRow}>
               <Text style={[styles.partCode, { flexShrink: 1 }]}>
                 {c.partCode} · {c.partName}
@@ -5946,6 +5957,11 @@ function ClaimsCard({
   );
 }
 
+/** ปุ่มส่งของฟอร์มปิดงาน — แถบ "ส่งไม่สำเร็จ" บอกให้กดปุ่มนี้อีกครั้ง ชื่อต้องตรงกับที่ช่างเห็นบนปุ่มจริง */
+const SUBMIT_LABEL = "ยืนยันปิดงาน";
+/** บอกว่าส่งไม่สำเร็จแล้วต้องทำอะไรต่อ — ช่างกลัวว่าต้องกรอกใหม่หมดเลยปิดฟอร์มทิ้ง ทั้งที่ทุกอย่างยังอยู่ */
+const keptText = `ข้อมูลที่กรอกไว้ยังอยู่ — กด "${SUBMIT_LABEL}" อีกครั้ง`;
+
 function CloseModal({
   visible,
   order,
@@ -6052,7 +6068,19 @@ function CloseModal({
    * เดิมส่งใหม่ทั้งชุดทุกครั้ง กดซ้ำหลายรอบไฟล์ซ้ำจนเต็มเพดาน แล้วปิดงานไม่ได้อีกเลย (WO-00133)
    */
   const sentRef = useRef(new Set<PickedAttachment>());
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * ส่งไม่สำเร็จ — ปักไว้ใต้หัวฟอร์ม (AppModal banner) จนกว่าจะกดส่งครั้งต่อไป ไม่หายเอง
+   * เดิมข้อความอยู่ท้ายฟอร์มยาว ช่างที่กดปุ่มตอนอยู่กลางฟอร์มไม่เห็นว่าส่งไม่ผ่าน และไม่รู้ว่าที่กรอกไว้ยังอยู่ไหม
+   * lost = คำตอบไม่กลับมาเลย (เน็ตหลุด) · ไม่ใช่ = เซิร์ฟเวอร์ตอบว่าไม่รับพร้อมเหตุผล — เรียกว่าเน็ตหลุดจะพาช่างไปแก้ผิดที่
+   */
+  const [sendError, setSendError] = useState<{ lost: boolean; message: string | null } | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const { user: me } = useAuth();
+  /** เวลาที่เปิดฟอร์มรอบนี้ — ใช้แยก "ปิดงานที่เพิ่งส่งไปเมื่อกี้" ออกจากการปิดงานครั้งเก่า (ดู closedByUs) */
+  const openedAt = useRef(0);
+  useEffect(() => {
+    if (visible) openedAt.current = Date.now();
+  }, [visible]);
 
   // ใช้อะไหล่แล้วต้องมีใบเหลือง — เซิร์ฟเวอร์ก็กันไว้อีกชั้น แต่บอกตั้งแต่ตรงนี้
   // ดีกว่าให้กดบันทึกแล้วค่อยเด้งกลับมาว่าขาดรูป
@@ -6185,9 +6213,82 @@ function CloseModal({
   const dropOne = (files: File[], accept: AcceptKinds, keep: (file: PickedAttachment) => void) =>
     pickOne(async (stage) => (await filesToAttachments(files.slice(0, 1), accept, stage))[0] ?? null, keep);
 
+  /**
+   * ปิดงานสำเร็จแล้ว — ล้างฟอร์ม เปิดใบรออะไหล่ (ถ้าติ๊กไว้) แล้วบอกหน้าใบงาน
+   * ใช้ทั้งตอนคำตอบกลับมาปกติ และตอนพบว่าคำสั่งปิดรอบก่อนผ่านไปแล้วแต่คำตอบหาย (closedByUs)
+   * สองทางต้องเหมือนกันทุกอย่าง ไม่งั้นทางหลังจะลืมเปิดใบรออะไหล่ หรือร่างเก่ากลับมาโผล่ในฟอร์ม
+   */
+  async function finishClosed() {
+    // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
+    setDrafts({});
+    sentRef.current.clear();
+    clearDraft(draftKey);
+    setSendError(null);
+    setNote("");
+    setParts([]);
+    setSlip(null);
+    setBeforeFiles([]);
+    setAfterFiles([]);
+    setNameplate(null);
+    setWorkerIds([]);
+    setOtherWorkers("");
+    /**
+     * ใบรออะไหล่เปิดหลังปิดงานสำเร็จแล้วเท่านั้น — ปิดไม่ผ่านแต่เปิดใบต่อไปแล้ว
+     * จะได้ใบรออะไหล่ลอย ๆ ของงานที่ยังไม่จบ ซึ่งพอกดปิดอีกรอบก็เปิดซ้ำอีกใบ
+     */
+    if (followUp && missing.length > 0) {
+      try {
+        setBusy("กำลังเปิดใบงานรออะไหล่");
+        await api.post(`/work-orders/${order.id}/follow-up`, {
+          parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        });
+      } catch (e) {
+        showAlert(
+          "ปิดงานแล้ว แต่เปิดใบรออะไหล่ไม่สำเร็จ",
+          `${apiErrorMessage(e)}\n\nเปิดใหม่ได้จากปุ่ม “เปิดใบงานรออะไหล่ต่อ” ในใบงานนี้`
+        );
+      }
+    }
+    setFollowUp(false);
+    setMissing([]);
+    onDone();
+  }
+
+  /**
+   * กดส่งซ้ำแล้วเซิร์ฟเวอร์ตอบว่าใบนี้ส่งปิดงานไปแล้ว (409 CLOSE_ALREADY_SENT) — คำสั่งปิดรอบก่อนของเราผ่านไปแล้วไหม
+   *
+   * เน็ตหลุดตอนรอคำตอบ: เซิร์ฟเวอร์ปิดงานไปแล้วแต่ช่างเห็นว่าส่งไม่สำเร็จ แล้วกดใหม่ ถ้านับเป็นความผิดพลาดรอบที่สอง
+   * ช่างจะลองซ้ำไม่จบหรือโทรตามแอดมิน — โหลดใบมาดู ถ้าปิดโดยเราหลังเปิดฟอร์มรอบนี้ = ปิดสำเร็จจริง
+   * เผื่อนาฬิกามือถือกับเซิร์ฟเวอร์ไม่ตรงกัน 10 นาที (เวลาปิดงานเป็นเวลาเซิร์ฟเวอร์ เวลาเปิดฟอร์มเป็นเวลามือถือ)
+   * คืน "other" = คนอื่นปิดไปแล้ว · null = ไม่ใช่กรณีนี้ หรือโหลดใบมาดูไม่ได้ (ขึ้นว่าส่งไม่สำเร็จตามปกติ)
+   */
+  async function closedByUs(e: unknown): Promise<"us" | "other" | null> {
+    const res = (e as { response?: { status?: number; data?: { code?: string } } }).response;
+    if (res?.status !== 409 || res.data?.code !== "CLOSE_ALREADY_SENT") return null;
+    try {
+      const now = (await api.get<WorkOrder>(`/work-orders/${order.id}`)).data;
+      if (now.status !== "CLAIM_REVIEW" && now.status !== "DONE") return null;
+      // เซิร์ฟเวอร์รุ่นที่ยังไม่ส่ง closedById — เทียบชื่อคนปิดแทน
+      const mine = typeof now.closedById === "number" ? now.closedById === me?.id : !!me && now.closedByName === me.name;
+      const fresh = !!now.closedAt && Date.parse(now.closedAt) >= openedAt.current - 10 * 60_000;
+      return mine && fresh ? "us" : "other";
+    } catch {
+      return null;
+    }
+  }
+
+  /** ส่งไม่สำเร็จ — ปักแถบไว้บนสุดของฟอร์ม เลื่อนกลับขึ้นไปให้เห็น แล้วบอกซ้ำแบบแจ้งเตือน (มือถือที่ฟอร์มยาว) */
+  function failed(e: unknown) {
+    const lost = noResponse(e);
+    const message = lost ? null : apiErrorMessage(e);
+    setSendError({ lost, message });
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    showAlert(lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ", [message, keptText].filter(Boolean).join(" · "));
+  }
+
   async function submit() {
     setSaving(true);
-    setError(null);
+    setSendError(null);
     try {
       /**
        * ไฟล์ทั้งหมดต้องขึ้นก่อนสั่งปิด
@@ -6239,40 +6340,26 @@ function CloseModal({
           };
         }),
       });
-      // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
-      setDrafts({});
-      sentRef.current.clear();
-      clearDraft(draftKey);
-      setNote("");
-      setParts([]);
-      setSlip(null);
-      setBeforeFiles([]);
-      setAfterFiles([]);
-      setNameplate(null);
-      setWorkerIds([]);
-      setOtherWorkers("");
-      /**
-       * ใบรออะไหล่เปิดหลังปิดงานสำเร็จแล้วเท่านั้น — ปิดไม่ผ่านแต่เปิดใบต่อไปแล้ว
-       * จะได้ใบรออะไหล่ลอย ๆ ของงานที่ยังไม่จบ ซึ่งพอกดปิดอีกรอบก็เปิดซ้ำอีกใบ
-       */
-      if (followUp && missing.length > 0) {
-        try {
-          setBusy("กำลังเปิดใบงานรออะไหล่");
-          await api.post(`/work-orders/${order.id}/follow-up`, {
-            parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
-          });
-        } catch (e) {
-          showAlert(
-            "ปิดงานแล้ว แต่เปิดใบรออะไหล่ไม่สำเร็จ",
-            `${apiErrorMessage(e)}\n\nเปิดใหม่ได้จากปุ่ม “เปิดใบงานรออะไหล่ต่อ” ในใบงานนี้`
-          );
+      await finishClosed();
+    } catch (e) {
+      const who = await closedByUs(e);
+      if (who === "us") {
+        await finishClosed();
+        // ที่ถูกปฏิเสธคือไฟล์เคลมที่เลือกใหม่ก่อนกดซ้ำ ไม่ใช่การปิด — ปิดสำเร็จแล้ว แต่ไฟล์นั้นไม่ได้ขึ้นไป
+        // บอกตรง ๆ ไม่งั้นช่างเข้าใจว่าผู้ตรวจเห็นรูปใหม่ที่เพิ่งถ่าย
+        if (/\/attachments/.test(String((e as { config?: { url?: string } }).config?.url ?? ""))) {
+          showAlert("ปิดงานไปแล้วตั้งแต่ครั้งก่อน", `ไฟล์ที่เลือกใหม่ไม่ได้ส่ง · ${apiErrorMessage(e)}`);
         }
       }
-      setFollowUp(false);
-      setMissing([]);
-      onDone();
-    } catch (e) {
-      setError(apiErrorMessage(e));
+      // คนอื่นปิดไปแล้ว — ให้หน้าใบงานจัดการแบบ 409 ทั่วไป (โหลดใบใหม่ · ปิดฟอร์ม · บอกเหตุผลจากเซิร์ฟเวอร์)
+      else if (who === "other") notifyWorkOrderStale(order.id, apiErrorMessage(e));
+      /**
+       * 409 ที่หน้าใบงานรับไปแล้ว (ถูกย้อนขั้น · เพื่อนร่วมทีมแจ้งปัญหาหน้างาน ฯลฯ) — ฟอร์มถูกปิดพร้อมคำเตือนสีเหลือง
+       * และเหตุผลไปแล้ว ถ้าบอก "ส่งไม่สำเร็จ · กด ยืนยันปิดงาน อีกครั้ง" ซ้ำ ช่างได้สองข้อความที่ขัดกัน
+       * และถูกสั่งให้กดปุ่มที่หายไปแล้ว · แถบแดงก็ต้องไม่ค้างไว้รอโผล่ตอนเปิดฟอร์มครั้งหน้า
+       */
+      else if (staleWorkOrderId(e) !== null) setSendError(null);
+      else failed(e);
     } finally {
       setSaving(false);
       setBusy(null);
@@ -6285,6 +6372,24 @@ function CloseModal({
       onClose={onCancel}
       busy={saving}
       title={order.assignedOutsource && !reclosing ? <>บันทึกผลงาน SUB {order.code}</> : <>ปิดงาน {order.code}</>}
+      scrollRef={scrollRef}
+      banner={
+        sendError ? (
+          <View style={styles.sendErr} accessibilityRole="alert">
+            <Ionicons
+              name={sendError.lost ? "cloud-offline-outline" : "alert-circle-outline"}
+              size={22}
+              color={colors.dangerInk}
+              style={{ marginTop: 1 }}
+            />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.sendErrTitle}>{sendError.lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ"}</Text>
+              {sendError.message ? <Text style={styles.sendErrText}>{sendError.message}</Text> : null}
+              <Text style={styles.sendErrText}>{keptText}</Text>
+            </View>
+          </View>
+        ) : null
+      }
       footer={
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
@@ -6308,7 +6413,7 @@ function CloseModal({
                 {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
               </>
             ) : (
-              <Text style={styles.modalSaveText}>ยืนยันปิดงาน</Text>
+              <Text style={styles.modalSaveText}>{SUBMIT_LABEL}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -6558,8 +6663,9 @@ function CloseModal({
       ) : null}
 
       {/*
-        อะไหล่ · ใบเหลือง · เคลม อยู่ก่อนรูปก่อน/หลังซ่อม — เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอ
-        ว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
+        อะไหล่ · ใบเหลือง · เคลม อยู่ต่อจากรูปหน้างาน สรุปงาน และคนที่ไป (รูปอยู่บนสุดเพราะถ่ายตอนยืนหน้าเครื่อง)
+        แต่อยู่ก่อนใบรออะไหล่ — เคลมขึ้นทีละชิ้นตามรายการอะไหล่ที่ใช้ จึงต้องอยู่ติดรายการนั้น
+        เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
       */}
       <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
       <OffPartEditor
@@ -6916,7 +7022,6 @@ function CloseModal({
           {order.attachmentLimit} ไฟล์ · ลบไฟล์ที่ไม่ใช้ (เช่น รูปซ้ำ) ในการ์ดไฟล์แนบ หรือเอารูปออกจากฟอร์มนี้บางรูป
         </Text>
       ) : null}
-      {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );
 }
@@ -7653,6 +7758,19 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.md },
+  // แถบส่งไม่สำเร็จใต้หัวฟอร์ม — ตัวหนังสือเข้มบนพื้นแดงอ่อน อ่านออกกลางแดด (ตามตัวอย่างที่เจ้าของงานเลือก)
+  sendErr: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+    backgroundColor: colors.dangerSoft,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.danger,
+  },
+  sendErrTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.dangerInk },
+  sendErrText: { fontSize: 13, lineHeight: 19, color: colors.dangerInk },
   modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
   modalCancel: {
     flex: 1,

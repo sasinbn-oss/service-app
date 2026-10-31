@@ -46,6 +46,11 @@ export interface PartClaimPdfData {
     createdAt: Date;
     reviewedAt: Date | null;
   };
+  /**
+   * วันที่เปลี่ยนอะไหล่จริง = วันที่ส่งเคลมชิ้นนี้ครั้งแรก (ก่อนถูกตีกลับ) — ดู firstSubmittedAt ใน utils/claimRules.ts
+   * ไม่ส่งมา = ใช้วันที่ส่งใบนี้ · ช่องลายเซ็นผู้ขอเคลมยังลงวันที่ส่งใบนี้ เพราะเป็นวันที่ช่างยืนยันข้อมูลชุดนี้
+   */
+  repairedAt?: Date | null;
   requesterName: string | null;
   /** ชื่อหลักฐานที่แนบในระบบ (รูปอะไหล่เก่า · วิดีโอ Error code …) */
   evidence: string[];
@@ -55,6 +60,16 @@ function thaiDate(d: Date | null) {
   if (!d) return "—";
   return d.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "long", year: "numeric" });
 }
+
+/**
+ * ขนาดตัวอักษรของเนื้อหา — ใบเคลมที่กรอกยาวปกติ (อาการ ~300 ตัว · เช็คอะไรบ้าง ~600 ตัว · Troubleshooting 5 ข้อ)
+ * ต้องจบในหน้าเดียวพร้อมช่องลายเซ็น ผู้ขายพิมพ์แผ่นเดียวแล้วเซ็นรับ — Sarabun 11 pt ยังอ่านง่ายบนกระดาษ A4
+ * (Sarabun ตัวใหญ่กว่า TH Sarabun ที่ขนาดเท่ากัน) และเหลือที่ให้บรรทัดที่จะเพิ่มทีหลัง (Error ที่เครื่องขึ้น · ภาพตัดป้าย)
+ */
+const BODY = 11;
+const LABEL_W = 150;
+/** ระยะจากหัวช่องลายเซ็นถึงบรรทัดหลักฐาน — ช่องลายเซ็นทั้งก้อนต้องอยู่หน้าเดียวกัน (ดูท้ายฟังก์ชัน) */
+const SIG_TO_EVIDENCE = 84;
 
 export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
   const { claim } = data;
@@ -68,38 +83,63 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
+    /**
+     * ทุกอย่างที่วางด้วยพิกัดตายตัวต้องเช็คก่อนว่ายังพอที่ในหน้านี้
+     *
+     * pdfkit ขึ้นหน้าใหม่เองเมื่อข้อความไหลเกินขอบล่าง แต่ข้อความที่สั่งวางที่ y ตายตัวซึ่งเลยขอบไปแล้ว
+     * จะถูกยกไปหน้าใหม่ทีละชิ้น — ใบเคลมเคยออกมา 6 หน้า (หัวช่องลายเซ็นหน้า 1 ชื่อหน้า 2 วันที่หน้า 3 …)
+     * เพราะช่องลายเซ็นวางต่อจากเนื้อหาด้วยพิกัดตายตัวโดยไม่ดูว่าเหลือที่เท่าไหร่
+     */
+    const bottom = PAGE.height - MARGIN;
+    const ensure = (h: number) => {
+      if (doc.y + h > bottom) doc.addPage();
+    };
+
     try {
       doc.registerFont(REGULAR, path.join(FONT_DIR, "Sarabun-Regular.ttf"));
       doc.registerFont(BOLD, path.join(FONT_DIR, "Sarabun-Bold.ttf"));
 
       // ── หัวกระดาษ ── เต็มความกว้างเนื้อหา สูงตามสัดส่วนรูป (1880 × 170)
-      const top = 34;
+      const top = 30;
       const headH = (WIDTH * 170) / 1880;
       doc.image(LETTERHEAD, MARGIN, top, { width: WIDTH });
-      doc.moveTo(MARGIN, top + headH + 8).lineTo(MARGIN + WIDTH, top + headH + 8).lineWidth(0.8).strokeColor(NAVY).stroke().lineWidth(1);
+      doc.moveTo(MARGIN, top + headH + 6).lineTo(MARGIN + WIDTH, top + headH + 6).lineWidth(0.8).strokeColor(NAVY).stroke().lineWidth(1);
 
-      doc.font(BOLD).fontSize(22).fillColor("#000").text("เอกสารใบเคลมอะไหล่", MARGIN, top + headH + 20, { width: WIDTH, align: "center" });
-      doc.font(REGULAR).fontSize(11).fillColor("#555")
+      doc.font(BOLD).fontSize(18).fillColor("#000").text("เอกสารใบเคลมอะไหล่", MARGIN, top + headH + 12, { width: WIDTH, align: "center" });
+      doc.font(REGULAR).fontSize(10.5).fillColor("#555")
         .text(`อ้างอิงใบงาน ${data.workOrderCode}`, { width: WIDTH, align: "center" });
       // ยังไม่อนุมัติ = ร่าง — ผู้ขายต้องไม่ได้รับใบที่ Admin Spare Part ยังไม่ได้ตรวจ
       if (claim.status !== "APPROVED") {
-        doc.font(BOLD).fontSize(12).fillColor("#B91C1C")
+        doc.font(BOLD).fontSize(11).fillColor("#B91C1C")
           .text("ร่าง — ยังไม่ผ่านการตรวจของ Admin Spare Part", { width: WIDTH, align: "center" });
       }
-      doc.fillColor("#000").moveDown(1);
-      doc.font(BOLD).fontSize(15).text("ข้อมูลแจ้งเคลม", { underline: true });
-      doc.moveDown(0.4);
+      doc.fillColor("#000").moveDown(0.5);
+      doc.font(BOLD).fontSize(13).text("ข้อมูลแจ้งเคลม", MARGIN, doc.y, { underline: true });
+      doc.moveDown(0.25);
 
+      /**
+       * หนึ่งบรรทัดของฟอร์ม: หัวข้อซ้าย ค่าขวา เส้นประใต้ค่า
+       * ค่ายาวขึ้นบรรทัดใหม่ได้ — วัดความสูงก่อนแล้วยกทั้งแถวไปหน้าใหม่ ไม่ให้หัวข้ออยู่คนละหน้ากับค่า
+       */
       const line = (label: string, value: string) => {
+        doc.font(REGULAR).fontSize(BODY);
+        const valueH = doc.heightOfString(value || "—", { width: WIDTH - LABEL_W });
+        doc.font(BOLD).fontSize(BODY);
+        const labelH = doc.heightOfString(label, { width: LABEL_W - 6 });
+        ensure(Math.max(valueH, labelH) + 3);
         const y = doc.y;
-        doc.font(BOLD).fontSize(13).text(label, MARGIN, y, { width: 150 });
-        doc.font(REGULAR).fontSize(13).text(value || "—", MARGIN + 150, y, { width: WIDTH - 150 });
-        doc.moveTo(MARGIN + 150, doc.y).lineTo(MARGIN + WIDTH, doc.y).dash(1, { space: 2 }).strokeColor("#999").stroke().undash();
-        doc.moveDown(0.35);
+        doc.font(BOLD).fontSize(BODY).text(label, MARGIN, y, { width: LABEL_W - 6 });
+        const afterLabel = doc.y;
+        doc.font(REGULAR).fontSize(BODY).text(value || "—", MARGIN + LABEL_W, y, { width: WIDTH - LABEL_W });
+        const rowEnd = Math.max(afterLabel, doc.y);
+        doc.moveTo(MARGIN + LABEL_W, rowEnd).lineTo(MARGIN + WIDTH, rowEnd).dash(1, { space: 2 }).strokeColor("#999").stroke().undash();
+        doc.x = MARGIN;
+        doc.y = rowEnd + 2.5;
       };
       line("สาขา", `${claim.branchCode} · ${claim.branchName}`);
       line("วันที่เปิดสาขา", thaiDate(claim.branchOpenedAt));
-      line("วันที่เปลี่ยนอะไหล่", thaiDate(claim.createdAt));
+      // วันที่ซ่อมจริง ไม่ใช่วันที่ส่งรอบล่าสุด — ใบที่ถูกตีกลับแล้วส่งใหม่ ผู้ขายต้องเห็นวันเดียวกับที่เปลี่ยนของ
+      line("วันที่เปลี่ยนอะไหล่", thaiDate(data.repairedAt ?? claim.createdAt));
       line("ยี่ห้อ", claim.brand ?? "");
       line("โมเดล/รุ่นเครื่อง", claim.model ?? "");
       line("หมายเลขเครื่อง", claim.machineCode ?? "");
@@ -115,10 +155,13 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
       line("ชื่ออะไหล่", claim.quantity > 1 ? `${claim.partName} × ${claim.quantity}` : claim.partName);
       line("อะไหล่ที่เปลี่ยนใส่", claim.partCode);
 
+      // หัวข้อกับบรรทัดแรกของเนื้อหาต้องอยู่หน้าเดียวกัน — เนื้อหาที่ยาวกว่านั้นไหลข้ามหน้าเองได้
       const block = (title: string, body: string) => {
-        doc.moveDown(0.5);
-        doc.font(BOLD).fontSize(13).text(title, MARGIN, doc.y, { width: WIDTH, underline: true });
-        doc.font(REGULAR).fontSize(13).text(body, MARGIN, doc.y + 2, { width: WIDTH });
+        doc.moveDown(0.35);
+        doc.font(REGULAR).fontSize(BODY);
+        ensure(doc.currentLineHeight(true) * 2 + 2);
+        doc.font(BOLD).fontSize(BODY).text(title, MARGIN, doc.y, { width: WIDTH, underline: true });
+        doc.font(REGULAR).fontSize(BODY).text(body, MARGIN, doc.y + 1, { width: WIDTH });
       };
       block("อาการ/สาเหตุ", claim.symptom);
       block("ช่างเข้าเช็คเครื่องอะไรบ้าง จึงระบุว่าควรเปลี่ยนอะไหล่ชิ้นนี้", claim.checkNote);
@@ -126,21 +169,28 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
         block(`Troubleshooting ${claim.brand ?? ""} ที่ทำแล้ว`, claim.troubleshooting.map((t) => `• ${t}`).join("\n"));
       }
 
-      // ลายเซ็น — ผู้ขอเคลมคือช่างที่ปิดงาน · ผู้รับเคลมเว้นว่างให้เซ็นจริง
-      doc.moveDown(2.2);
+      /**
+       * ลายเซ็น + บรรทัดหลักฐาน — ผู้ขอเคลมคือช่างที่ปิดงาน · ผู้รับเคลมเว้นว่างให้เซ็นจริง
+       * วางเป็นก้อนเดียว: วัดความสูงทั้งก้อน (รวมบรรทัดหลักฐานที่อาจยาวสองบรรทัด) ไม่พอก็ขึ้นหน้าใหม่ทั้งก้อน
+       * ลายเซ็นจึงไม่มีวันแยกจากชื่อ/วันที่ และอยู่หลังเนื้อหาสุดท้ายเสมอ
+       */
+      const evidenceText = `หลักฐานที่แนบในระบบ: Nameplate · ${data.evidence.join(" · ") || "—"}`;
+      doc.font(REGULAR).fontSize(10);
+      const evidenceH = doc.heightOfString(evidenceText, { width: WIDTH });
+      doc.y += 18;
+      ensure(SIG_TO_EVIDENCE + evidenceH);
       const sigY = doc.y;
       const col = WIDTH / 2;
       const sig = (x: number, title: string, name: string, date: string) => {
-        doc.font(BOLD).fontSize(13).text(title, x, sigY, { width: col - 20, align: "center" });
-        doc.moveTo(x + 20, sigY + 54).lineTo(x + col - 40, sigY + 54).dash(1, { space: 2 }).strokeColor("#999").stroke().undash();
-        doc.font(REGULAR).fontSize(12).text(name, x, sigY + 58, { width: col - 20, align: "center" });
-        doc.text(`วันที่ ${date}`, x, sigY + 76, { width: col - 20, align: "center" });
+        doc.font(BOLD).fontSize(BODY + 0.5).text(title, x, sigY, { width: col - 20, align: "center" });
+        doc.moveTo(x + 20, sigY + 42).lineTo(x + col - 40, sigY + 42).dash(1, { space: 2 }).strokeColor("#999").stroke().undash();
+        doc.font(REGULAR).fontSize(BODY).text(name, x, sigY + 45, { width: col - 20, align: "center" });
+        doc.text(`วันที่ ${date}`, x, sigY + 61, { width: col - 20, align: "center" });
       };
       sig(MARGIN, "ผู้ขอเคลม", data.requesterName ?? "", thaiDate(claim.createdAt));
       sig(MARGIN + col, "ผู้รับเคลม", "", "....................");
 
-      doc.font(REGULAR).fontSize(10.5).fillColor("#444")
-        .text(`หลักฐานที่แนบในระบบ: Nameplate · ${data.evidence.join(" · ") || "—"}`, MARGIN, sigY + 120, { width: WIDTH });
+      doc.font(REGULAR).fontSize(10).fillColor("#444").text(evidenceText, MARGIN, sigY + SIG_TO_EVIDENCE, { width: WIDTH });
       doc.end();
     } catch (e) {
       reject(e);
