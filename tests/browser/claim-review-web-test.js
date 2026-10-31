@@ -164,12 +164,12 @@ const login = async (code) =>
     const closeBody = (symptomOf) => ({
       result: "FIXED", note: "เปลี่ยนบอร์ดกับสายพาน ทดสอบแล้วปกติ", workerIds: [tid], parts: both.map((s) => ({ sparePartId: s, quantity: 1 })),
       claims: both.map((s) => ({ sparePartId: s, brokenPartCode: `OLD-${s}`, symptom: symptomOf(s), checkNote: "วัดไฟเข้าบอร์ด 220V ปกติ", troubleshooting: ts })),
+      // ยืนยันรุ่นกับ Serial ทีละช่อง (เคลมก้อน 5) — ป้ายที่ไม่มี confirmed เซิร์ฟเวอร์ถือว่าเป็นแอปรุ่นเก่า ไม่รับ
       claimNameplate: {
         fields: [
-          { key: "model", label: "รุ่น", value: "HL055LWHPRXG6W0000", source: "SCAN", crop: CROP },
-          { key: "serial", label: "Serial", value: "2402600330", source: "HAND" },
+          { key: "model", label: "รุ่น", value: "HL055LWHPRXG6W0000", source: "SCAN", crop: CROP, confirmed: true, read: "HL055LWHPRXG6W0000" },
+          { key: "serial", label: "Serial", value: "2402600330", source: "HAND", confirmed: true },
         ],
-        verified: true,
       },
       claimCheck: { errorCode: "E dL / E dL1 / E dL2", checked: ["Solenoid ไม่ฝืด"] },
     });

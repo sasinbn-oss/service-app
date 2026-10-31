@@ -13,7 +13,7 @@
 #   SA Super Admin (เฉพาะเมื่อตั้ง CLAIM_SETUP_SUPER=1 ก่อน source) · BC/BID สาขาทดสอบ · SUF เลขสุ่มของรอบ
 #   หลัง claim_order: ID ใบงาน · PID/PID2 อะไหล่ (ตัวแฝดที่ตรงยี่ห้อเครื่อง — fx_part) · PCODE/PCODE2 รหัสของสองตัวนั้น
 #   PARTS = รายการอะไหล่ที่ใช้ (JSON) ที่ CLOSE ส่ง · TS = รายการ Troubleshooting ของเครื่อง (JSON)
-# ตัวช่วย: J H pass fail DB login POST GET CODE day UPAS UP claim_files claim_json CLOSE
+# ตัวช่วย: J H pass fail DB login POST GET CODE day UPAS UP claim_files claim_json claim_skips CLOSE
 # เก็บกวาด: trap EXIT ลบใบงานทุกใบที่เปิด (IDS) สาขา เครื่อง ผู้ใช้ที่สร้าง และคืนภาคของ S001 — สคริปต์ที่ source
 #   ไฟล์นี้ถ้าต้องเก็บกวาดเพิ่ม ให้ใส่ใน claim_extra_cleanup() (ถูกเรียกก่อนลบของในไฟล์นี้) ไม่ใช่ตั้ง trap ใหม่ทับ
 #
@@ -88,7 +88,8 @@ BID=$(DB "select id from \"Branch\" where code='$BC'")
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W1','WASHER','HB - Huebsch',now())" >/dev/null
 
 # ข้อมูลป้ายรุ่น + เช็คตามคู่มือ (Huebsch = Alliance) ค่าตั้งต้นที่ปิดงานผ่าน — ชุดที่ต้องการค่าอื่นส่งเองใน CLOSE $2/$3
-PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA"},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND"}],"verified":true}'
+# รุ่นกับ Serial กดยืนยันทีละช่องแล้ว (confirmed · เคลมก้อน 5 บังคับ แม้พิมพ์เอง)
+PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA","confirmed":true},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND","confirmed":true}]}'
 CHECK='{"errorCode":"E dL / E dL1 / E dL2","checked":["Solenoid ไม่ฝืด"]}'
 
 # เปิดใบใหม่ให้ $ID — $1 = จำนวนอะไหล่ (1 หรือ 2) · ใบเดินจริงทุกขั้นถึงขั้นเข้างาน แล้วช่างแนบรูปที่ปิดงานบังคับ
@@ -135,7 +136,18 @@ claim_json() {
   echo "{\"sparePartId\":$1,\"brokenPartCode\":\"OLD-$1\",\"symptom\":\"$sym\",\"checkNote\":\"$note\",\"troubleshooting\":$TS}"
 }
 
+# เหตุผล "ไม่ส่งเคลม" ของทุกชิ้นใน PARTS ที่ไม่อยู่ใน claims ($1) — สาขาทดสอบอยู่ในประกัน ก้อน 5 บังคับเหตุผลชิ้นที่ไม่ส่ง
+# ค่าตั้งต้นที่ปิดงานผ่าน (แบบเดียวกับ PLATE) ให้ชุดที่ทดสอบเรื่องอื่นไม่ต้องรู้กติกานี้ · ชิ้นที่ล็อกแล้ว (ผ่าน/ปิดเคลม) เซิร์ฟเวอร์ไม่สนเหตุผล
+claim_skips() {
+  # claims ที่ไม่ใช่ JSON (ชุดที่ทดสอบคำขอเสีย) = ไม่เติมเหตุผล ปล่อยให้เซิร์ฟเวอร์ตอบเรื่องนั้นเอง
+  node -e 'let claims; try { claims = JSON.parse(process.argv[2] || "[]"); } catch { claims = null; }
+    const used = JSON.parse(process.argv[1]), on = new Set(Array.isArray(claims) ? claims.map((c) => c && c.sparePartId) : []);
+    console.log(Array.isArray(claims) ? JSON.stringify([...new Set(used.map((p) => p.sparePartId))].filter((id) => !on.has(id)).map((id) => ({ sparePartId: id, reason: "DAMAGED_LOST" }))) : "[]")' "$PARTS" "$1"
+}
+
 # ช่างปิดงาน — $1 claims (JSON) · $2 ข้อมูลป้าย · $3 เช็คตามคู่มือ (ไม่ส่ง = ค่าตั้งต้นที่ผ่าน)
+# $4 เหตุผลชิ้นที่ไม่ส่งเคลม (claimSkips) — ไม่ส่ง = claim_skips ใส่ให้ · ส่ง '[]' = ไม่บอกเหตุผลเลย (ทดสอบกติกานั้นเอง)
 CLOSE() {
-  POST $T "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนอะไหล่ ทดสอบแล้วปกติ\",\"workerIds\":[$TID],\"parts\":$PARTS,\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK}}"
+  local skips=${4-$(claim_skips "$1")}
+  POST $T "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนอะไหล่ ทดสอบแล้วปกติ\",\"workerIds\":[$TID],\"parts\":$PARTS,\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK},\"claimSkips\":$skips}"
 }

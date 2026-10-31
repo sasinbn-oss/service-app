@@ -27,7 +27,7 @@ export interface PickedAttachment {
   name: string;
   type: string;
   kind: "IMAGE" | "VIDEO" | "DOCUMENT";
-  /** รูปย่อไว้โชว์ในหน้าจอ — วิดีโอบนเว็บทำไม่ได้ จะเป็น null */
+  /** รูปย่อไว้โชว์ในหน้าจอ — วิดีโอบนเว็บใช้ภาพจากคลิป (ทำไม่ได้ = null แสดงไอคอนแทน) */
   thumbnailUri: string | null;
 }
 
@@ -227,13 +227,61 @@ export async function pickVideoAttachments(onStage?: (label: string) => void): P
   return out;
 }
 
+/**
+ * รูปปกวิดีโอบนเว็บ — วาดภาพที่วินาที 0.5 ของไฟล์ในเครื่องลง canvas (เคลมก้อน 5)
+ * expo-video-thumbnails ไม่ทำงานบนเว็บ เดิมวิดีโอทุกคลิปในฟอร์มปิดงานขึ้นเป็นไอคอนเหมือนกันหมด
+ * ช่างแยกไม่ออกว่าคลิปไหนคือวิดีโอ Error คลิปไหนคือวิดีโอการตรวจเช็ค แล้วแนบสลับช่อง
+ * ทำไม่ได้ (ไฟล์ที่เบราว์เซอร์เล่นไม่ได้ เช่น HEVC บนคอม) คืน null แสดงไอคอนแทนเหมือนเดิม — ไม่บล็อกการส่ง
+ */
+function webVideoFrame(uri: string): Promise<string | null> {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    let settled = false;
+    const done = (out: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      v.removeAttribute("src");
+      v.load();
+      resolve(out);
+    };
+    const timer = setTimeout(() => done(null), 6000);
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    v.onloadeddata = () => {
+      // คลิปสั้นกว่าครึ่งวินาทีใช้ภาพแรก
+      v.currentTime = Math.min(0.5, Number.isFinite(v.duration) ? v.duration / 2 : 0.5);
+    };
+    v.onseeked = () => {
+      try {
+        const w = v.videoWidth;
+        const h = v.videoHeight;
+        if (!w || !h) return done(null);
+        const c = document.createElement("canvas");
+        c.width = THUMB_WIDTH;
+        c.height = Math.round((h * THUMB_WIDTH) / w);
+        c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
+        done(c.toDataURL("image/jpeg", 0.6));
+      } catch {
+        done(null);
+      }
+    };
+    v.onerror = () => done(null);
+    v.src = uri;
+  });
+}
+
 async function prepareVideo(asset: { uri: string; fileName?: string | null; mimeType?: string | null }): Promise<PickedAttachment> {
   let thumbnailUri: string | null = null;
   try {
-    // เว็บทำรูปปกวิดีโอไม่ได้ (expo-video-thumbnails ไม่รองรับ) ปล่อยว่างไว้
-    // แล้วแสดงไอคอนแทน ดีกว่าบล็อกไม่ให้ส่งวิดีโอจากคอมพิวเตอร์
-    const shot = await VideoThumbnails.getThumbnailAsync(asset.uri, { time: 1000 });
-    thumbnailUri = await shrink(shot.uri, THUMB_WIDTH, 0.5);
+    if (Platform.OS === "web") {
+      thumbnailUri = await webVideoFrame(asset.uri);
+    } else {
+      const shot = await VideoThumbnails.getThumbnailAsync(asset.uri, { time: 1000 });
+      thumbnailUri = await shrink(shot.uri, THUMB_WIDTH, 0.5);
+    }
   } catch {
     thumbnailUri = null;
   }

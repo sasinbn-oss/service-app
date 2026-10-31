@@ -162,7 +162,7 @@ ST_MID=$(ST)
 redispatch
 [ "$(ST)" = "IN_PROGRESS" ] || fail "เตรียม: จ่ายงานใหม่ไม่ถึงขั้นเข้างาน ($(ST))"
 claim_files $PID2
-OTHER_PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL999X","source":"HAND"},{"key":"serial","label":"Serial","value":"9999999999","source":"HAND"}],"verified":true}'
+OTHER_PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL999X","source":"HAND","confirmed":true},{"key":"serial","label":"Serial","value":"9999999999","source":"HAND","confirmed":true}]}'
 OTHER_CHECK='{"errorCode":"Door Close","checked":[]}'
 R=$(CLOSE "[$(claim_json $PID),$(claim_json $PID2 "สายพานขาด ขึ้นเสียงดังตอนปั่น")]" "$OTHER_PLATE" "$OTHER_CHECK")
 CB2=$(DB "select max(id) from \"PartClaim\" where \"workOrderId\"=$ID and \"sparePartId\"=$PID2")

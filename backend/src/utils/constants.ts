@@ -685,6 +685,9 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",
   // ทุกชิ้นของรอบนั้นถูกปิดเคลม ไม่ส่งผู้ขาย (ก้อน 3) — ใบปิดแต่ไม่มีใบเคลมไปผู้ขาย ต้องไม่อ่านว่า "อนุมัติ"
   CLAIM_DECLINED: "ปิดงาน · ปิดเคลม ไม่ส่งผู้ขาย",
+  // สาขาในประกันแต่อะไหล่ที่ใช้ไม่ได้ส่งเคลม (ก้อน 5) — ช่างบอกเหตุผล / หัวหน้าภาค·ปิดย้อนหลังไม่มีฟอร์มเคลม
+  // ลงประวัติให้เห็นว่ามีชิ้นในประกันที่ไม่ได้เคลม ไม่ใช่หายไปเงียบ ๆ · ไม่เดินขั้น (ดู NON_STAGE_ACTIONS)
+  CLAIM_SKIPPED: "ไม่ส่งเคลมอะไหล่เก่า",
   // ส่งกลับให้แอดมินตรวจสอบ — ไม่เดินขั้น (ดู NON_STAGE_ACTIONS ใน routes/workOrders.ts)
   ADMIN_REVIEW_REQUESTED: "ส่งกลับให้แอดมินตรวจสอบ",
   ADMIN_REVIEW_CANCELLED: "ยกเลิกคำขอให้แอดมินตรวจสอบ",
@@ -1076,6 +1079,30 @@ export const CLAIM_TROUBLESHOOTING: { match: RegExp; brand: string; items: strin
 export function claimTroubleshootingFor(make: string | null | undefined) {
   return make ? CLAIM_TROUBLESHOOTING.find((t) => t.match.test(make)) ?? null : null;
 }
+
+/**
+ * Troubleshooting ข้อที่มีไฟล์ในใบเป็นหลักฐานอยู่แล้ว (ก้อน 5 · ตัวอย่าง hint) — ฟอร์มเขียนต่อท้ายข้อนั้น
+ * "(มี{วิดีโอ Error code} แล้ว)" / "(มีรูปหลังซ่อมแล้ว)" ให้ช่างรู้ว่าข้อนี้มีของยืนยัน
+ * แค่บอก ไม่ติ๊กให้ (เจ้าของงานเลือกข้อ 7ง: ระบบไม่ติ๊กแทนช่าง) · ERROR_VIDEO = วิดีโอ Error/อาการของเครื่อง · AFTER = รูปหลังซ่อม
+ * อยู่คู่กับ CLAIM_TROUBLESHOOTING — ได้รายการจริงของผู้ผลิตแล้วแก้สองที่นี้พร้อมกัน
+ */
+export const CLAIM_TROUBLESHOOTING_HINTS: Record<string, "ERROR_VIDEO" | "AFTER"> = {
+  "เช็ค Error code บนหน้าจอและบันทึกรหัส": "ERROR_VIDEO",
+  "เปลี่ยนแล้วทดสอบเดินเครื่องครบรอบ": "AFTER",
+};
+
+/**
+ * เหตุผลที่ช่างไม่ส่งเคลมอะไหล่ชิ้นที่อยู่ในประกัน (ก้อน 5 · เจ้าของงานเลือกข้อ 10) — เก็บในประวัติ CLAIM_SKIPPED (meta.skips)
+ *
+ * ทำไมต้องถาม: สาขาในประกัน อะไหล่ที่ไม่ได้เคลมคือของที่บริษัทจ่ายเองทั้งที่ผู้ขายควรรับ — ถอดติ๊กเงียบ ๆ แล้ว
+ * ไม่มีใครรู้ว่าตั้งใจหรือลืม · "อื่น ๆ" ต้องพิมพ์เหตุผลเอง · ผู้ตรวจเห็น "ช่างไม่ส่งเคลม: {ชิ้น} ({เหตุผล})"
+ */
+export const CLAIM_SKIP_REASONS = [
+  { value: "DAMAGED_LOST", label: "อะไหล่เก่าเสียหาย/หาย" },
+  { value: "NOT_WARRANTY", label: "ไม่ใช่ชิ้นในประกัน" },
+  { value: "OTHER", label: "อื่น ๆ" },
+] as const;
+export type ClaimSkipReason = (typeof CLAIM_SKIP_REASONS)[number]["value"];
 
 export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   BEFORE: "ก่อนซ่อม",

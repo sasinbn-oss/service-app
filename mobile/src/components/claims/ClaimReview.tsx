@@ -95,6 +95,8 @@ export interface ClaimReviewOrder {
   claimRepeats?: ClaimRepeat[];
   /** คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่องของการส่งครั้งล่าสุด (เคลมก้อน 4) — ไม่มี = เซิร์ฟเวอร์รุ่นก่อน อ่านจากข้อความประวัติแทน */
   claimKeep?: ClaimKeep[];
+  /** ชิ้นในประกันที่ช่างไม่ส่งเคลมตอนปิดงานครั้งล่าสุด พร้อมเหตุผล (เคลมก้อน 5) */
+  claimSkips?: { partLabel: string; reason: string }[];
 }
 
 /** ยี่ห้อที่คนเรียก — ทะเบียนบางเครื่องเขียน "HB - Huebsch" */
@@ -288,10 +290,11 @@ export default function ClaimReview({
             </TouchableOpacity>
           </View>
         ))}
-        {mismatch || order.isTest || fixChip ? (
+        {mismatch || order.isTest || fixChip || order.claimSkips?.length ? (
           <View style={styles.chips}>
             {fixChip ? <Text style={[styles.chip, styles.chipFix]}>{fixChip}</Text> : null}
             {mismatch ? <Text style={[styles.chip, styles.chipWarn]}>รหัสตัวเสียไม่ตรง {mismatch} ชิ้น</Text> : null}
+            {order.claimSkips?.length ? <Text style={[styles.chip, styles.chipWarn]}>ช่างไม่ส่งเคลม {order.claimSkips.length} ชิ้น</Text> : null}
             {/* ใบทดสอบเด่นไว้ — ผู้ตรวจต้องไม่ส่งของใบทดสอบให้ผู้ขาย */}
             {order.isTest ? <Text style={[styles.chip, styles.chipTest]}>ใบทดสอบ</Text> : null}
           </View>
@@ -426,6 +429,15 @@ export default function ClaimReview({
           </TouchableOpacity>
         );
       })}
+      {/*
+        ชิ้นที่ช่างไม่ส่งเคลมพร้อมเหตุผล (เคลมก้อน 5 · ตัวอย่าง skippedText) — อยู่ข้างแท็บชิ้น ผู้ตรวจเห็นว่าใบนี้เปลี่ยนกี่ชิ้นแต่ส่งมากี่ชิ้น
+        เดิมชิ้นที่ช่างถอดติ๊กหายไปเงียบ ๆ ผู้ตรวจไม่รู้ว่ามีชิ้นในประกันที่ไม่ได้เคลม และไม่รู้ว่าทำไม
+      */}
+      {order.claimSkips?.length ? (
+        <Text style={styles.skipped}>
+          ช่างไม่ส่งเคลม: {order.claimSkips.map((x) => `${x.partLabel} (${x.reason})`).join(" · ")}
+        </Text>
+      ) : null}
       <View style={{ flex: 1 }} />
       {locked === "DECLINED" ? null : (
         <TouchableOpacity
@@ -757,6 +769,7 @@ const styles = StyleSheet.create({
   blank: { alignItems: "center", justifyContent: "center" },
   bigPhoto: { width: "100%", height: 200, borderRadius: radius.sm, backgroundColor: colors.tile },
   tabs: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  skipped: { fontSize: 13, lineHeight: 19, color: colors.body, backgroundColor: colors.rowAlt, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   // หดได้และตัดบรรทัดได้ — ชื่ออะไหล่ยาว/ชื่อซ้ำที่ต่อรหัสไว้ท้าย ล้นจอโทรศัพท์แล้วถูกตัดเงียบ ๆ (ส่วนที่ถูกตัดคือรหัสที่แยกชิ้น)
   tab: {
     flexShrink: 1,

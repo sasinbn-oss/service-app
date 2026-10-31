@@ -40,7 +40,8 @@ REVIEW() { local IFS=,; PC "$PA" "work-orders/$ID/claim-review" "{\"decisions\":
 CJ() { echo "{\"sparePartId\":$1,\"brokenPartCode\":\"${2:-OLD-$1}\",\"symptom\":\"ประตูล็อกไม่ลง ขึ้น Error dL\",\"checkNote\":\"วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย\",\"troubleshooting\":$TS${3:+,\"keep\":$3}}"; }
 # ช่างปิดงาน — $1 claims · $2 ป้ายรุ่น (ไม่ส่ง = $PLATE) · $3 ส่วนต่อท้ายของ body (เช่น claimMachineKeep)
 CLOSEX() { PC "$T" "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนอะไหล่ ทดสอบแล้วปกติ\",\"workerIds\":[$TID],\"parts\":$PARTS,\"claims\":$1,\"claimNameplate\":${2:-$PLATE},\"claimCheck\":$CHECK${3:+,$3}}"; }
-plate() { echo "{\"fields\":[{\"key\":\"model\",\"label\":\"รุ่น\",\"value\":\"$1\",\"source\":\"HAND\"},{\"key\":\"serial\",\"label\":\"Serial\",\"value\":\"${2:-2402600330}\",\"source\":\"HAND\"}],\"verified\":true}"; }
+# ป้ายที่พิมพ์เอง — $1 รุ่น · $2 Serial · กดยืนยันทีละช่องแล้ว (เคลมก้อน 5 บังคับ แม้พิมพ์เอง)
+plate() { echo "{\"fields\":[{\"key\":\"model\",\"label\":\"รุ่น\",\"value\":\"$1\",\"source\":\"HAND\",\"confirmed\":true},{\"key\":\"serial\",\"label\":\"Serial\",\"value\":\"${2:-2402600330}\",\"source\":\"HAND\",\"confirmed\":true}]}"; }
 # ใบเคลมที่อาการ/เช็คอะไรบ้างต่างจากค่าตั้งต้น — $1 อะไหล่ · $2 อาการ · $3 เช็คอะไรบ้าง (ไม่ส่ง = ค่าตั้งต้นของ CJ)
 CJS() { echo "{\"sparePartId\":$1,\"brokenPartCode\":\"OLD-$1\",\"symptom\":\"$2\",\"checkNote\":\"${3:-วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย}\",\"troubleshooting\":$TS}"; }
 MYDAY() { GET $T work-orders/my-day | J "const r=d.rows.find(x=>x.id===$ID); if(!r) 'missing'; else { const c=r.claim; $1 }"; }

@@ -2,7 +2,7 @@
 # ทดสอบ: เคลมอะไหล่เก่าตามฟอร์มใบเคลม — ปิดงานต้องมีหลักฐานครบ (รูป/วิดีโอ/ช่องกรอก/Troubleshooting Huebsch) ·
 #        ไปรอ Admin Spare Part ตรวจ · แอดมินทั่วไปตรวจไม่ได้และไม่เห็นในกล่องงาน · ตีกลับต้องมีเหตุผล ·
 #        ตีกลับแล้วกลับไปที่ช่าง · ส่งซ้ำโดยไม่แก้อะไรไม่ได้ · แนบวิดีโอใหม่ตามเหตุผลแล้วปิดใหม่ได้ ·
-#        อนุมัติแล้วปิดงาน · ใบเคลม PDF · ย้อนขั้นจากรอตรวจไม่ได้
+#        อนุมัติแล้วปิดงาน · ใบเคลม PDF · ย้อนขั้นจากรอตรวจไม่ได้ · ป้ายรุ่นต้องกดยืนยันรุ่นกับ Serial ทีละช่อง (เคลมก้อน 5)
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/lib/fixture-parts.sh"
@@ -56,7 +56,8 @@ UP image/png -F "role=NAMEPLATE" >/dev/null
 UP image/png -F "role=REQUISITION" >/dev/null
 ME=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 # ข้อมูลป้ายรุ่น + เช็คตามคู่มือ (Huebsch = Alliance) — ค่าตั้งต้นครบ · ข้อทดสอบที่ต้องการขาดส่ง $2/$3 เอง
-PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA"},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND"}],"verified":true}'
+# รุ่นกับ Serial กดยืนยันทีละช่องแล้ว (confirmed) — Serial พิมพ์เองก็ต้องยืนยัน (เคลมก้อน 5)
+PLATE='{"fields":[{"key":"model","label":"รุ่น","value":"HL055L","source":"SCAN","crop":"data:image/jpeg;base64,/9j/AAAA","confirmed":true},{"key":"serial","label":"Serial","value":"2402600330","source":"HAND","confirmed":true}]}'
 CHECK='{"errorCode":"E dL / E dL1 / E dL2","checked":["Solenoid ไม่ฝืด","ข้อที่ไม่มีในคู่มือ"]}'
 CLOSE() {  # $1 = claims json · $2 = ข้อมูลป้าย · $3 = เช็คตามคู่มือ
   POST $A "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนบอร์ด ทดสอบแล้วปกติ\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK}}"
@@ -92,8 +93,10 @@ G=$(GET $A "work-orders/$ID")
 R=$(CLOSE "$FULL" '{"fields":[{"key":"serial","label":"Serial","value":"","source":"HAND"}]}')
 echo "$R" | grep -q "ข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" && [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] \
   && pass "ไม่มีข้อมูลป้ายรุ่น ปิดไม่ได้ ใบงานไม่เปลี่ยน" || fail "ไม่มีข้อมูลป้ายผ่าน: $(echo $R | head -c 150)"
-R=$(CLOSE "$FULL" "${PLATE/\"verified\":true/\"verified\":false}")
-echo "$R" | grep -q "ตรวจค่าที่ระบบอ่านกับรูปป้ายรุ่น" && pass "ค่าที่ระบบอ่านจากรูป ไม่ติ๊กตรวจกับรูป ปิดไม่ได้" || fail "ไม่ตรวจกับรูปผ่าน: $(echo $R | head -c 150)"
+# รุ่นที่ระบบอ่านจากรูปแต่ช่างยังไม่กดยืนยัน (Serial ยืนยันแล้ว) — OCR อ่านผิดซ้ำแบบเดิมได้ ต้องดูทีละช่อง
+R=$(CLOSE "$FULL" "${PLATE/\"confirmed\":true\},/\"confirmed\":false\},}")
+echo "$R" | grep -q "ต้องกดยืนยันรุ่นกับ Serial ทีละช่องว่าตรงกับรูปป้าย" && [ "$(DB "select status from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS" ] \
+  && pass "รุ่นที่ระบบอ่านจากรูป ยังไม่กดยืนยัน ปิดไม่ได้ (ใบงานไม่เปลี่ยน)" || fail "รุ่นไม่ยืนยันผ่าน: $(echo $R | head -c 150)"
 R=$(CLOSE "$FULL" "$PLATE" 'null')
 echo "$R" | grep -q "เลือก Error" && pass "เครื่อง Alliance ไม่เลือก Error ปิดไม่ได้" || fail "ไม่เลือก Error ผ่าน: $(echo $R | head -c 150)"
 R=$(CLOSE "$FULL" "$PLATE" '{"errorCode":"E XX"}')

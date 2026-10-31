@@ -34,18 +34,39 @@ export interface ClaimLogLite {
 }
 
 /**
- * หลักฐานที่เป็นของ "เครื่อง" ไม่ใช่ของอะไหล่ชิ้นใดชิ้นหนึ่ง — วิดีโอ Error กับรูปอาการ ถ่ายครั้งเดียวต่อเครื่อง
+ * หลักฐานที่เป็นของ "เครื่อง" ไม่ใช่ของอะไหล่ชิ้นใดชิ้นหนึ่ง — วิดีโอ Error กับรูปอาการ ถ่ายครั้งเดียวต่อเครื่อง (ก้อน 5 · ข้อ 2)
  *
- * ตอนนี้ฟอร์มปิดงานยังให้แนบแยกทีละชิ้น (ทุกไฟล์มี sparePartId) จึงนับเฉพาะไฟล์ของชิ้นนั้น
- * บวกไฟล์ที่ไม่ผูกชิ้น (sparePartId ว่าง) ซึ่งยังไม่มีใครแนบได้ — ไม่นับไฟล์ของชิ้นอื่น เพราะถ้านับ
- * วิดีโอ Error ที่ชิ้น ก. ส่งไปแล้วจะหลุดจากการกันลบ ทันทีที่ชิ้น ข. แนบวิดีโอของตัวเองทีหลัง
- * วันที่ฟอร์มเปลี่ยนเป็นถ่ายครั้งเดียวใช้ทุกชิ้น ให้ขยายเงื่อนไขที่ partMatches ที่เดียว
+ * ไฟล์สองชนิดนี้นับให้ทุกชิ้นของใบ ไม่ว่าแนบมาจากไหน: กล่อง "ถ่ายก่อนซ่อม" (sparePartId ว่าง) หรือข้อ ⑥ ของชิ้นใดชิ้นหนึ่ง
+ * ในฟอร์มปิดงาน (ผูกชิ้นที่กำลังกรอก) — เครื่องเดียวกันมีอาการชุดเดียว ถ่ายซ้ำทุกชิ้นคือภาระที่ไม่ได้อะไรเพิ่ม
+ * ไฟล์ล่าสุดของชนิดนั้นในรอบคือตัวที่ใช้ (ถ่ายใหม่ = แทนไฟล์เดิมของทุกชิ้น) ไฟล์ที่ถูกแทนจึงลบได้ ไม่ถูกกันลบไว้เกินจำเป็น
+ * ไฟล์ของชิ้นผูกชิ้นไว้ด้วยเหตุผลเดียว: บอกว่าไม่ได้ถ่ายก่อนซ่อม ไม่นับเป็นรูปก่อนซ่อม (ดู isPreRepairFile)
  */
-const MACHINE_LEVEL_ROLES: readonly string[] = ["CLAIM_ERROR_VIDEO", "CLAIM_SYMPTOM"];
+export const MACHINE_LEVEL_ROLES: readonly string[] = ["CLAIM_ERROR_VIDEO", "CLAIM_SYMPTOM"];
 
 function partMatches(row: ClaimRowLite, f: ClaimFileLite): boolean {
   if (f.sparePartId === row.sparePartId) return true;
+  return MACHINE_LEVEL_ROLES.includes(f.role ?? "");
+}
+
+/**
+ * ไฟล์นี้ถ่ายในกล่อง "ถ่ายก่อนซ่อม" ไหม = วิดีโอ Error/รูปอาการที่ไม่ผูกชิ้น — นับเป็นรูปก่อนซ่อมของปิดงานได้
+ *
+ * ไม่มีคอลัมน์บอกเวลาที่ถ่าย (ไม่เพิ่ม migration) และดูจากเวลาไม่ได้ เพราะไฟล์ในฟอร์มปิดงานก็ขึ้นตั้งแต่ตอนเลือก (ก่อนกดปิด)
+ * กล่องถ่ายก่อนซ่อมเป็นที่เดียวที่แนบโดยไม่บอกชิ้น — ไฟล์ข้อ ⑥ ที่แนบหลังซ่อมเสร็จบอกชิ้นเสมอ จึงไม่ถูกนับเป็นสภาพก่อนซ่อม
+ * (ตัวอย่าง preFromCard: อาการหลังซ่อมอาจไม่ขึ้นแล้ว รูปที่ถ่ายตอนนั้นไม่ใช่หลักฐานว่าก่อนซ่อมเป็นยังไง)
+ */
+export function isPreRepairFile(f: { role: string | null; sparePartId: number | null }): boolean {
   return MACHINE_LEVEL_ROLES.includes(f.role ?? "") && f.sparePartId === null;
+}
+
+/**
+ * ชื่อวิดีโอที่ถ่ายอาการของเครื่อง — ทุกที่ที่เอ่ยถึงไฟล์นี้ใช้ชื่อเดียวกัน (เจ้าของงานเลือกข้อ 4)
+ * Oasis ไม่มีจอ Error · เลือก "ไม่มี Error ขึ้น" = ไม่มีรหัสให้ถ่าย → "วิดีโออาการตอนเครื่องเดิน" (ยังบังคับ)
+ * ถ้าเรียกว่าวิดีโอ Error ช่างจะไปหาจอที่ขึ้นรหัสซึ่งไม่มีอยู่จริง · กติกาเดียวกับ errorVideoLabel ฝั่งแอป (utils/claimEvidence.ts)
+ */
+export function errorVideoLabel(errorCode: string | null | undefined, plateFamily: string | null | undefined): string {
+  if (plateFamily === "OASIS" || errorCode === NO_ERROR_CODE) return "วิดีโออาการตอนเครื่องเดิน";
+  return "วิดีโอ Error code";
 }
 
 function newer(a: { createdAt: Date; id: number }, b: { createdAt: Date; id: number }) {
@@ -734,5 +755,69 @@ export function rejectFieldsSummary<R extends { reviewFlags: string[] }>(
     fields: partFields + machine.size,
     needsSite: flagsNeedSite(all) ? true : legacy || !rejected.length ? null : false,
     whole: machine.size ? [...machine.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([, l]) => l) : null,
+  };
+}
+
+// ── ก้อน 5: ไม่ส่งเคลมชิ้นที่อยู่ในประกัน ─────────────────────────────
+
+/** ชิ้นที่ไม่ส่งเคลมหนึ่งชิ้นตามที่เก็บใน meta.skips ของประวัติ CLAIM_SKIPPED */
+export interface ClaimSkipMeta {
+  sparePartId: number | null;
+  partCode: string;
+  partName: string;
+  /** DAMAGED_LOST · NOT_WARRANTY · OTHER (ช่างเลือก) · null = ทางปิดงานที่ไม่มีฟอร์มเคลม (หัวหน้าภาค · ปิดย้อนหลัง) */
+  reason: string | null;
+  note: string | null;
+}
+
+/**
+ * เหตุผลแบบที่คนอ่าน — ตามตัวอย่างที่อนุมัติ: ชื่อเหตุผล · "อื่น ๆ: {ที่พิมพ์}" · ทางที่ไม่ได้ถามเหตุผลบอกว่าปิดทางไหน
+ * labels = CLAIM_SKIP_REASONS (ส่งมาเพราะไฟล์นี้ไม่ผูกกับรายการคำ — ที่เดียวที่เก็บคำคือ constants.ts)
+ */
+export function skipReasonText(
+  s: { reason: string | null; note: string | null },
+  labels: readonly { value: string; label: string }[],
+  by?: string | null
+): string {
+  if (!s.reason) {
+    return by === "SUPERVISOR_CLOSE" ? "หัวหน้าภาคปิดใบงาน" : by === "BACKFILL" ? "ปิดงานย้อนหลัง" : "ไม่ได้บอกเหตุผล";
+  }
+  const label = labels.find((l) => l.value === s.reason)?.label ?? s.reason;
+  return s.reason === "OTHER" && s.note ? `${label}: ${s.note}` : label;
+}
+
+/**
+ * ชิ้นที่ไม่ส่งเคลมของการปิดงานครั้งล่าสุด — จาก CLAIM_SKIPPED ที่เขียนคู่กับประวัติปิดงาน (CLOSED) ครั้งนั้น
+ *
+ * ทำไมไม่เอา CLAIM_SKIPPED ล่าสุดเฉย ๆ: ถูกตีกลับแล้วส่งใหม่โดยเปลี่ยนใจส่งเคลมชิ้นที่เคยไม่ส่ง การปิดครั้งใหม่ไม่มีชิ้นที่ไม่ส่ง
+ * จึงไม่มี CLAIM_SKIPPED ใหม่ — อันเก่ายังเป็นตัวล่าสุด ผู้ตรวจจะเห็น "ช่างไม่ส่งเคลม: …" ของชิ้นที่ส่งมาแล้ว
+ * ทุกทางปิดงานเขียน CLAIM_SKIPPED ก่อน CLOSED ใน transaction เดียวกัน → ต้องเป็นแถวที่อยู่ติดก่อน CLOSED ล่าสุดเท่านั้น
+ * logs = ประวัติของใบ (อย่างน้อย CLOSED กับ CLAIM_SKIPPED พร้อม meta) ลำดับใดก็ได้ · notBefore = เฉพาะการปิดตั้งแต่จุดนี้ (รอบหลักฐาน)
+ */
+export function latestCloseSkips(
+  logs: { id?: number; action: string; createdAt: Date; meta?: unknown }[],
+  notBefore?: Date | null
+): { skips: ClaimSkipMeta[]; by: string | null; at: Date | null } {
+  const rows = logs
+    .filter((l) => l.action === "CLOSED" || l.action === "CLAIM_SKIPPED")
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (b.id ?? 0) - (a.id ?? 0));
+  const i = rows.findIndex((l) => l.action === "CLOSED");
+  const skip = i >= 0 ? rows[i + 1] : undefined;
+  const none = { skips: [], by: null, at: null };
+  if (!skip || skip.action !== "CLAIM_SKIPPED" || (notBefore && rows[i].createdAt < notBefore)) return none;
+  const meta = (skip.meta ?? null) as { skips?: unknown; by?: unknown } | null;
+  const list = Array.isArray(meta?.skips) ? meta!.skips : [];
+  return {
+    skips: list
+      .map((s) => s as Record<string, unknown>)
+      .map((s) => ({
+        sparePartId: typeof s.sparePartId === "number" ? s.sparePartId : null,
+        partCode: typeof s.partCode === "string" ? s.partCode : "",
+        partName: typeof s.partName === "string" ? s.partName : "",
+        reason: typeof s.reason === "string" ? s.reason : null,
+        note: typeof s.note === "string" && s.note ? s.note : null,
+      })),
+    by: typeof meta?.by === "string" ? meta.by : null,
+    at: skip.createdAt,
   };
 }

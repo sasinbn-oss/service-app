@@ -34,11 +34,13 @@ ISO() { DB "select to_char(\"createdAt\",'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') fr
 JN() { node -pe 'JSON.stringify(JSON.parse(require("fs").readFileSync(0,"utf8")))'; }
 # แถวเคลม $2 ในคำตอบ $1 — $3 = นิพจน์ JS ที่อ่าน c
 ROW() { echo "$1" | J "const c=d.claims.find(x=>x.id===$2); c ? ($3) : 'missing'"; }
-# ไฟล์ที่ควรเป็นหลักฐานของแถว $1 ตามฐานข้อมูล: ไฟล์เคลมของชิ้นนั้นที่แนบในรอบ ถึงเวลาที่ส่ง ไฟล์ล่าสุดต่อชนิด + รูปป้ายที่ผูกไว้
+# ไฟล์ที่ควรเป็นหลักฐานของแถว $1 ตามฐานข้อมูล: ไฟล์เคลมที่แนบในรอบ ถึงเวลาที่ส่ง ไฟล์ล่าสุดต่อชนิด + รูปป้ายที่ผูกไว้
+# รูปอะไหล่เก่า/วิดีโอการตรวจเช็ค = ของชิ้นนั้น · วิดีโอ Error/รูปอาการ = ของเครื่อง ไฟล์ล่าสุดของชิ้นไหนก็ได้ (เคลมก้อน 5)
 EVDB() {
   DB "with c as (select * from \"PartClaim\" where id=$1),
       f as (select distinct on (a.role) a.id from \"WorkOrderAttachment\" a, c
-            where a.\"workOrderId\"=c.\"workOrderId\" and a.role like 'CLAIM_%' and a.\"sparePartId\"=c.\"sparePartId\"
+            where a.\"workOrderId\"=c.\"workOrderId\" and a.role like 'CLAIM_%'
+              and (a.\"sparePartId\"=c.\"sparePartId\" or a.role in ('CLAIM_ERROR_VIDEO','CLAIM_SYMPTOM'))
               and a.\"createdAt\"<=c.\"createdAt\"
             order by a.role, a.\"createdAt\" desc, a.id desc)
       select string_agg(id::text, ',' order by id) from
@@ -91,22 +93,31 @@ SENT=$(ISO PartClaim $CA)
   && pass "claims[]: createdByName/createdByCode = ช่างที่ส่ง ($TNAME · ZCST$SUF) · round 1 · firstSubmittedAt = เวลาส่งในฐานข้อมูล ทั้งสองชิ้น" \
   || fail "claims extras: $(echo "$G" | J 'JSON.stringify(d.claims.map(c=>[c.id,c.createdByName,c.createdByCode,c.round,c.firstSubmittedAt]))') · DB $SENT"
 EA=$(ROW "$G" $CA 'c.evidenceIds.slice().sort((a,b)=>a-b).join(",")'); EB=$(ROW "$G" $CB 'c.evidenceIds.slice().sort((a,b)=>a-b).join(",")')
+# ไฟล์ของเครื่องที่แนบล่าสุด (claim_files ของชิ้นที่ 2 แนบทีหลัง) — ใช้ร่วมทั้งสองชิ้น (เคลมก้อน 5)
+MSYM=$(DB "select max(id) from \"WorkOrderAttachment\" where \"workOrderId\"=$ID and role='CLAIM_SYMPTOM'")
+MVID=$(DB "select max(id) from \"WorkOrderAttachment\" where \"workOrderId\"=$ID and role='CLAIM_ERROR_VIDEO'")
 [ -n "$EA" ] && [ "$EA" = "$(EVDB $CA)" ] && [ "$EB" = "$(EVDB $CB)" ] && [ "$(echo "$EA" | tr ',' '\n' | wc -l)" = "5" ] \
-  && pass "evidenceIds ตรงฐานข้อมูลทั้งสองชิ้น: ไฟล์เคลม 4 ชนิดของชิ้นนั้น + รูปป้ายที่ผูกกับใบเคลม (ไม่ปนไฟล์ของอีกชิ้น)" \
-  || fail "evidenceIds: A=$EA (DB $(EVDB $CA)) · B=$EB (DB $(EVDB $CB))"
+  && [ "$(ROW "$G" $CA "c.evidenceIds.includes($MSYM)&&c.evidenceIds.includes($MVID)")|$(ROW "$G" $CB "c.evidenceIds.includes($MSYM)&&c.evidenceIds.includes($MVID)")" = "true|true" ] \
+  && [ "$(DB "select count(*) from \"WorkOrderAttachment\" where id in ($EA) and role in ('CLAIM_PART','CLAIM_CHECK_VIDEO') and \"sparePartId\"<>$PID")" = "0" ] \
+  && pass "evidenceIds ตรงฐานข้อมูลทั้งสองชิ้น: รูปอะไหล่เก่า/วิดีโอการตรวจเช็คของชิ้นนั้น (ไม่ปนอีกชิ้น) + วิดีโอ Error/รูปอาการล่าสุดของเครื่อง (ใช้ร่วม) + รูปป้าย" \
+  || fail "evidenceIds: A=$EA (DB $(EVDB $CA)) · B=$EB (DB $(EVDB $CB)) · เครื่อง $MSYM/$MVID"
 
 echo
 echo "═══ ไฟล์ที่ลงเวลาหลังส่งเคลม ไม่ใช่หลักฐานของแถวนั้น (หน้าตรวจ + ใบเคลม PDF)"
-LATE=$(DB "select id from \"WorkOrderAttachment\" where \"workOrderId\"=$ID and role='CLAIM_SYMPTOM' and \"sparePartId\"=$PID2")
-LATE_AT=$(DB "select \"createdAt\" from \"WorkOrderAttachment\" where id=$LATE")
-DB "update \"WorkOrderAttachment\" set \"createdAt\"=(select \"createdAt\" from \"PartClaim\" where id=$CB)+interval '1 minute' where id=$LATE" >/dev/null
+# รูปอาการเป็นของเครื่อง ใช้ร่วมทุกชิ้น (เคลมก้อน 5) — เลื่อนรูปอาการทุกไฟล์ของใบไปหลังเวลาส่ง แล้วทั้งสองแถวต้องไม่มีรูปอาการ
+# (เลื่อนไฟล์เดียว แถวจะใช้รูปอาการไฟล์ก่อนหน้าแทน ซึ่งถูกตามกติกา แต่พิสูจน์ขอบบนไม่ได้) · เก็บเวลาเดิมไว้คืนทีละไฟล์
+LATE=$(DB "select string_agg(id::text, ',') from \"WorkOrderAttachment\" where \"workOrderId\"=$ID and role='CLAIM_SYMPTOM'")
+LATE_AT=$(DB "select string_agg(id||'@'||\"createdAt\", '|') from \"WorkOrderAttachment\" where id in ($LATE)")
+DB "update \"WorkOrderAttachment\" set \"createdAt\"=(select \"createdAt\" from \"PartClaim\" where id=$CB)+interval '1 minute' where id in ($LATE)" >/dev/null
 G=$(GET $A "work-orders/$ID")
 TA=$(PDFTXT $CA); TB=$(PDFTXT $CB)
-[ "$(ROW "$G" $CB "c.evidenceIds.includes($LATE)")" = "false" ] && [ "$(ROW "$G" $CB 'c.evidenceIds.length')" = "4" ] \
-  && HAS "$TA" "รูปอาการเสีย" && ! HAS "$TB" "รูปอาการเสีย" && HAS "$TB" "รูปอะไหล่เก่า" \
-  && pass "รูปอาการของชิ้นที่ 2 ลงเวลาหลังส่ง (psql): ไม่อยู่ใน evidenceIds และใบเคลมของชิ้นนั้นไม่ลง \"รูปอาการเสีย\" (ชิ้นที่ 1 ยังลง)" \
-  || fail "ไฟล์หลังส่ง: in=$(ROW "$G" $CB "c.evidenceIds.includes($LATE)") n=$(ROW "$G" $CB 'c.evidenceIds.length') · PDF B: $(echo "$TB" | grep -o 'หลักฐาน.\{0,60\}' | head -1)"
-DB "update \"WorkOrderAttachment\" set \"createdAt\"='$LATE_AT' where id=$LATE" >/dev/null
+[ "$(ROW "$G" $CB "c.evidenceIds.some(x=>[$LATE].includes(x))")|$(ROW "$G" $CA "c.evidenceIds.some(x=>[$LATE].includes(x))")" = "false|false" ] \
+  && [ "$(ROW "$G" $CB 'c.evidenceIds.length')|$(ROW "$G" $CA 'c.evidenceIds.length')" = "4|4" ] \
+  && ! HAS "$TA" "รูปอาการเสีย" && ! HAS "$TB" "รูปอาการเสีย" && HAS "$TB" "รูปอะไหล่เก่า" && HAS "$TB" "วิดีโอ Error code" \
+  && pass "รูปอาการลงเวลาหลังส่ง (psql): ไม่อยู่ใน evidenceIds ของแถวไหน และใบเคลมทั้งสองไม่ลง \"รูปอาการเสีย\" (หลักฐานอื่นยังลง)" \
+  || fail "ไฟล์หลังส่ง: B=$(ROW "$G" $CB 'JSON.stringify(c.evidenceIds)') A=$(ROW "$G" $CA 'JSON.stringify(c.evidenceIds)') late=$LATE · PDF B: $(echo "$TB" | grep -o 'หลักฐาน.\{0,60\}' | head -1)"
+IFS='|' read -ra _back <<< "$LATE_AT"
+for x in "${_back[@]}"; do DB "update \"WorkOrderAttachment\" set \"createdAt\"='${x#*@}' where id=${x%%@*}" >/dev/null; done
 
 echo
 echo "═══ ใบเคลม PDF: ชิ้นที่ n จาก m · Error ที่เครื่องขึ้น · ภาพตัดป้าย · เลขหน้า"
@@ -254,8 +265,9 @@ REP_E=$(echo "$G" | J "(d.claimRepeats||[]).filter(r=>r.workOrderId===$ID).map(r
 
 echo
 echo "═══ รายการ Error ในคู่มือ: label ขึ้นต้นภาษาไทย"
-LBL=$(GET $T "work-orders/$ID" | J "const e=d.claimGuide.errors, f=c=>e.find(x=>x.code===c); [f(\"$ERRCODE\").label, f(\"$ERRCODE\").thai, f('ECoFAn').label, f('Door Close').label].join('¦')")
-[ "$LBL" = "$ERRCODE — ประตูล็อก/ปลดล็อก (Door Lock)¦ประตูล็อก/ปลดล็อก¦ECoFAn — Eco fan¦Door Close — ประตูปิดไม่ติด" ] \
+# เครื่องซัก (W1) — รายการเหลือเฉพาะ Error ของเครื่องซักตั้งแต่เคลมก้อน 5 จึงใช้ "E d Co" (ชื่ออังกฤษล้วน) แทน ECoFAn ของเครื่องอบ
+LBL=$(GET $T "work-orders/$ID" | J "const e=d.claimGuide.errors, f=c=>e.find(x=>x.code===c); [f(\"$ERRCODE\").label, f(\"$ERRCODE\").thai, f('E d Co').label, f('Door Close').label].join('¦')")
+[ "$LBL" = "$ERRCODE — ประตูล็อก/ปลดล็อก (Door Lock)¦ประตูล็อก/ปลดล็อก¦E d Co — Drive Board Communication¦Door Close — ประตูปิดไม่ติด" ] \
   && pass "claimGuide.errors[].label: \"{code} — {ไทย} ({อังกฤษ})\" · ชื่อที่ไม่มีส่วนไทยแสดงตามคู่มือ · thai = ส่วนไทย" \
   || fail "label: $LBL"
 

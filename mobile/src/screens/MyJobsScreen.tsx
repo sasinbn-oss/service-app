@@ -27,6 +27,7 @@ import { showAlert } from "../utils/alert";
 import { dayLabel } from "../utils/customerMessage";
 import { loadCloseDraft, missingItems, type CloseDraft } from "../utils/closeDraft";
 import ClaimTrail, { dayTime, type TrailEvent } from "../components/claims/ClaimTrail";
+import PreRepairBox from "../components/claims/PreRepairBox";
 import { PHONE_TEXT, SITE_TEXT, cardReasonLines, wholeLabels } from "../utils/claimFlags";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
@@ -56,6 +57,14 @@ interface Job {
   machineCapacityKg: number | null;
   parts: { name: string; quantity: number; unit: string | null }[];
   arrivedAt: string | null;
+  /**
+   * กล่อง "ถ่ายก่อนซ่อม" (เคลมก้อน 5) — warrantyUntil = วันหมดประกันเมื่อสาขายังอยู่ในประกัน (ว่าง = ไม่ขึ้นกล่อง)
+   * plateFamily OASIS = วิดีโออาการตอนเครื่องเดินแทนวิดีโอ Error · preRepair = ไฟล์ที่ถ่ายในกล่องแล้วของรอบนี้
+   * เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ไม่ขึ้นกล่อง
+   */
+  warrantyUntil?: string | null;
+  plateFamily?: string | null;
+  preRepair?: { video: number; photo: number } | null;
   /**
    * เคลมของใบนี้ (เคลมก้อน 1) — การ์ดรอตรวจ/ถูกตีกลับวาดจากตรงนี้ · null/ไม่มี = ไม่มีเคลม หรือเซิร์ฟเวอร์รุ่นเก่า
    * state: REVIEW รอ Admin Spare Part · REJECTED ถูกตีกลับรอช่างแก้ · APPROVED/DECLINED จบแล้ว
@@ -87,6 +96,8 @@ interface ClaimInfo {
   needsSite?: boolean | null;
   /** ตีกลับทั้งใบ — ชื่อช่องของเครื่องที่ต้องแก้ (ไม่ใช่ทั้งใบ = null) */
   whole?: string[] | boolean | string | null;
+  /** ชิ้นที่ไม่ส่งเคลมตอนปิดงานครั้งล่าสุด พร้อมเหตุผล (เคลมก้อน 5) — การ์ดที่ปิดแล้วขึ้น "ไม่ส่งเคลม: {ชิ้น} ({เหตุผล})" */
+  skipped?: { partLabel: string; reason: string }[];
 }
 
 type Tab = "today" | "tomorrow" | "late";
@@ -149,6 +160,11 @@ function TechJobs({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   /**
+   * กล่องถ่ายก่อนซ่อมที่กางอยู่ — กดถึงหน้างานแล้วกางให้เองถ้ายังไม่ได้ถ่าย (ตัวอย่าง arrive → preOpen)
+   * จังหวะที่เครื่องยังเสียอยู่ตรงหน้าคือตอนเดียวที่ถ่ายอาการได้ ซ่อมเสร็จแล้วอาการอาจไม่ขึ้นอีก
+   */
+  const [preOpen, setPreOpen] = useState<Record<number, boolean>>({});
+  /**
    * ร่างฟอร์มปิดงานที่กรอกค้างไว้ในเครื่องนี้ (utils/closeDraft) — การ์ดบอก "กรอกค้างไว้ — ยังขาด n อย่าง"
    * ช่างที่ออกจากฟอร์มกลางทาง (โทรศัพท์เข้า แอปหลุด) กลับมาแล้วรู้ว่าของที่กรอกยังอยู่ ไม่ต้องเริ่มใหม่
    */
@@ -203,6 +219,7 @@ function TechJobs({ navigation }: Props) {
       const res = await api.post<{ note: string; withinRadius: boolean | null }>(`/work-orders/${job.id}/arrive`, pos ?? {});
       // นอกรัศมีไม่บล็อก แต่บอกให้รู้ว่าระบบบันทึกไว้แบบนั้น
       if (res.data.withinRadius === false) showAlert("บันทึกแล้ว — อยู่นอกรัศมีสาขา", res.data.note);
+      if (showsPreRepair(job) && !(job.preRepair?.video || job.preRepair?.photo)) setPreOpen((o) => ({ ...o, [job.id]: true }));
       await load();
     } catch (e) {
       showAlert("บันทึกไม่ได้", apiErrorMessage(e));
@@ -287,10 +304,32 @@ function TechJobs({ navigation }: Props) {
             draft={drafts[j.id] ?? null}
             onArrive={() => arrive(j)}
             onOpen={(w) => open(j, w)}
+            preOpen={!!preOpen[j.id]}
+            onPreToggle={(v) => setPreOpen((o) => ({ ...o, [j.id]: v }))}
+            onReload={load}
+            readOnly={!!user?.viewAs}
           />
         ))
       )}
     </ScrollView>
+  );
+}
+
+/**
+ * ใบนี้ขึ้นกล่อง "ถ่ายก่อนซ่อม" ไหม (เคลมก้อน 5) — ใบซ่อมที่กำลังทำ สาขาในประกัน ยังไม่ได้ส่งเคลมในรอบนี้
+ * ใบที่ถูกตีกลับ/รอตรวจไม่ขึ้น — ฟอร์มแก้เคลมจัดการถ่ายใหม่เอง · ใบ PM ไม่มีเครื่องเสียให้ถ่าย
+ */
+function showsPreRepair(job: Job) {
+  // ต้องมีเครื่อง — งานอุปกรณ์ทั้งสาขา (ตู้แลกเหรียญ ปั๊ม เครื่องทำน้ำร้อน ฯลฯ) ไม่มีจอ Error ไม่มีเครื่องซัก/อบให้เคลม
+  // ประกันนับจากวันเปิดสาขาจึงมีวันหมดประกันให้ทุกใบ ถ้าไม่เช็คเครื่อง กล่องจะเด้งขอวิดีโอ Error กับงานเครื่องทำน้ำร้อน
+  return (
+    job.status === "IN_PROGRESS" &&
+    !job.done &&
+    !job.inspect &&
+    job.jobType !== "PM" &&
+    !!job.machineCode &&
+    !!job.warrantyUntil &&
+    !job.claim?.state
   );
 }
 
@@ -419,6 +458,10 @@ function JobCard({
   draft,
   onArrive,
   onOpen,
+  preOpen,
+  onPreToggle,
+  onReload,
+  readOnly,
 }: {
   job: Job;
   late: boolean;
@@ -428,6 +471,10 @@ function JobCard({
   draft: CloseDraft | null;
   onArrive: () => void;
   onOpen: (what?: "close" | "stage" | "problem") => void;
+  preOpen: boolean;
+  onPreToggle: (open: boolean) => void;
+  onReload: () => void;
+  readOnly: boolean;
 }) {
   const arrived = !!job.arrivedAt;
   const claim = job.claim ?? null;
@@ -511,7 +558,33 @@ function JobCard({
             ปิดเคลม ไม่ส่งผู้ขาย: {dropped.map((o) => `${o.partLabel}${o.reason ? ` (${o.reason})` : ""}`).join(" · ")}
           </Text>
         ) : null}
+        {claim.skipped?.length ? (
+          <Text style={styles.apprDrop}>ไม่ส่งเคลม: {claim.skipped.map((x) => `${x.partLabel} (${x.reason})`).join(" · ")}</Text>
+        ) : null}
         <ClaimTrail trail={claim.trail} />
+      </View>
+    );
+  }
+
+  /**
+   * ปิดงานแล้วโดยไม่ส่งเคลมชิ้นที่อยู่ในประกัน (เคลมก้อน 5 · ตัวอย่าง cardClosed) — บอกว่าชิ้นไหนไม่ได้ส่ง เพราะอะไร
+   * ช่างจำได้ว่าตัวเองเลือกไม่ส่ง ไม่ใช่ลืม · หัวหน้าภาคที่เปิดดูงานของทีมเห็นเหตุผลตรงการ์ด
+   */
+  if (job.done && job.status === "DONE" && !claim?.state && claim?.skipped?.length) {
+    return (
+      <View style={[styles.card, styles.cardDone]} accessibilityLabel={`งาน ${job.code}`}>
+        <View style={styles.cardTop}>
+          <Text style={styles.doneText}>✓ ปิดงานแล้ว · ไม่ส่งเคลม</Text>
+          <View style={{ flex: 1 }} />
+          {job.closedAt ? <Text style={styles.cornerTime}>{dayTime(job.closedAt)}</Text> : null}
+        </View>
+        <Text style={styles.branch}>
+          {job.branchCode} · {job.branchName}
+        </Text>
+        <Text style={styles.meta}>
+          {job.code}
+          {teamTag} · ไม่ส่งเคลม: {claim.skipped.map((x) => `${x.partLabel} (${x.reason})`).join(" · ")}
+        </Text>
       </View>
     );
   }
@@ -586,6 +659,20 @@ function JobCard({
         <Text style={styles.meta}>อะไหล่: {job.parts.map((p) => `${p.name} x${p.quantity}${p.unit ? ` ${p.unit}` : ""}`).join(", ")}</Text>
       ) : null}
       {review ? <Text style={styles.reviewNote}>ยังไม่นับว่าปิดงาน จนกว่าจะอนุมัติ — อาจถูกตีกลับมาให้แก้</Text> : null}
+
+      {/* ถ่ายก่อนซ่อม (เคลมก้อน 5) — ก่อนลงมือซ่อม เครื่องยังเสียอยู่ตรงหน้า ภาพอาการที่ผู้ขายต้องการถ่ายได้แค่ตอนนี้ */}
+      {showsPreRepair(job) ? (
+        <PreRepairBox
+          orderId={job.id}
+          warrantyUntil={job.warrantyUntil!}
+          plateFamily={job.plateFamily}
+          counts={job.preRepair ?? { video: 0, photo: 0 }}
+          open={preOpen}
+          onToggle={onPreToggle}
+          onChanged={onReload}
+          readOnly={readOnly}
+        />
+      ) : null}
 
       {job.done ? null : (
         <>

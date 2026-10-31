@@ -28,9 +28,10 @@
 //  14) กดปุ่มล่างตอนยังไม่ได้แก้ → แถบเหลือง "ยังส่งไม่ได้ — ช่องที่ถูกชี้ยังเหมือนเดิม 3 ช่อง: …" ไม่ส่งคำขอ (ฐานข้อมูลไม่เปลี่ยน)
 //  15) แก้รหัส · "ค่าเดิมถูกแล้ว" ช่องรุ่น + อธิบาย · แนบวิดีโอใหม่ → ทุกช่อง ✓ ปุ่ม "ส่งเคลมใหม่" → รอตรวจ · รหัสใหม่ในแถวใหม่ ·
 //      คำอธิบายช่องรุ่นอยู่ใน meta.keep (ไม่ผูกชิ้น) · วิดีโอใหม่แนบหลังเวลาตีกลับ (ฐานข้อมูล)
-//  16) ตีกลับทั้งใบด้วย "วิดีโอ Error" (ไฟล์ของเครื่อง) → ฟอร์มแก้เคลมเลือกไฟล์ครั้งเดียว → ทุกชิ้นที่ส่งเคลมได้วิดีโอ Error ใหม่
-//      หลังเวลาตีกลับ (ฐานข้อมูล ทีละชิ้น — เซิร์ฟเวอร์รับไฟล์ใหม่ของชิ้นไหนก็ได้ แนบให้ชิ้นเดียวก็ส่งผ่าน ต้องดูที่แถวไฟล์)
+//  16) ตีกลับทั้งใบด้วย "วิดีโอ Error" (ไฟล์ของเครื่อง) → ฟอร์มแก้เคลมเลือกไฟล์ครั้งเดียว → วิดีโอ Error ใหม่หนึ่งไฟล์ใช้ร่วมทุกชิ้น
+//      หลังเวลาตีกลับ (ฐานข้อมูล — เคลมก้อน 5 ไฟล์ของเครื่องไม่แนบซ้ำทุกชิ้น)
 //      → "ส่งเคลมใหม่" → รอตรวจ
+// ฟอร์มที่ถูกตีกลับแบบเก่า (ไม่ชี้ช่อง) เปิดเป็นทีละขั้น (เคลมก้อน 5) — เทสต์กดแถบขั้นไปขั้นที่ต้องใช้ ส่งจากขั้น "ส่ง"
 // วันนัด 12 วันข้างหน้าตอนปล่อยงาน (G10) แล้วย้ายเป็นวันนี้ด้วย SQL หลังปล่อยงาน ให้การ์ดอยู่แท็บ "วันนี้"
 // ยืนยันผลที่ฐานข้อมูลทุกข้อที่เปลี่ยนข้อมูล · ต้องมี DATABASE_URL · รีสตาร์ท Expo ก่อนรัน (เว็บไม่เฝ้าไฟล์)
 const { chromium } = require("playwright");
@@ -148,11 +149,11 @@ const waitFor = async (fn, ms = 10000) => {
       result: "FIXED", note: "เปลี่ยนบอร์ดกับสายพาน ทดสอบแล้วปกติ", workerIds: [tid], parts: both.map((s) => ({ sparePartId: s, quantity: s === sp2 ? 2 : 1 })),
       claims: both.map((s) => ({ sparePartId: s, brokenPartCode: `OLD-${s}`, symptom: "ประตูล็อกไม่ลง ขึ้น Error dL", checkNote: "วัดไฟเข้าบอร์ด 220V ปกติ", troubleshooting: ts })),
       claimNameplate: {
+        // ยืนยันทีละช่อง (เคลมก้อน 5) — ป้ายที่ไม่มี confirmed เซิร์ฟเวอร์ถือว่าเป็นแอปรุ่นเก่า ไม่รับ
         fields: [
-          { key: "model", label: "รุ่น", value: "HL055LWHPRXG6W0000", source: "SCAN", crop: CROP },
-          { key: "serial", label: "Serial", value: "2402600330", source: "HAND" },
+          { key: "model", label: "รุ่น", value: "HL055LWHPRXG6W0000", source: "SCAN", crop: CROP, confirmed: true, read: "HL055LWHPRXG6W0000" },
+          { key: "serial", label: "Serial", value: "2402600330", source: "HAND", confirmed: true },
         ],
-        verified: true,
       },
       claimCheck: { errorCode: "E dL / E dL1 / E dL2", checked: ["Solenoid ไม่ฝืด"] },
     });
@@ -174,6 +175,17 @@ const waitFor = async (fn, ms = 10000) => {
     const cardOf = (page) => page.locator(`[aria-label="งาน ${code}"]`).locator("visible=true").first();
     const cardText = async (page) => (await cardOf(page).innerText().catch(() => "ไม่พบการ์ด")).replace(/\s+/g, " ");
     const inView = (box) => !!box && box.y >= 0 && box.y + box.height <= H;
+    // ฟอร์มทีละขั้น: แถบขั้นบนสุด ("ขั้น n {ชื่อ} {ตัวนับ}") · แท็บชิ้นในขั้นเคลมทีละชิ้น ("ชิ้น {ชื่อ} {ตัวนับ}") · ส่งได้จากขั้น 4
+    const SEND = "ยืนยันปิดงาน · ส่งตรวจเคลม";
+    const stepTo = async (page, n) => {
+      // แถบขั้นของใบงานเอง ("ขั้น 1 ระบุอะไหล่ …") อยู่หลังฟอร์มและขึ้นต้นเหมือนกัน — จำกัดที่แถบของฟอร์มปิดงาน
+      await page.locator('[aria-label="ขั้นปิดงาน"]').locator(`[aria-label^="ขั้น ${n} "]`).locator("visible=true").first().click();
+      await page.waitForTimeout(700);
+    };
+    const partTo = async (page, name) => {
+      await page.locator(`[aria-label^="ชิ้น ${name} "]`).locator("visible=true").first().click();
+      await page.waitForTimeout(600);
+    };
     const attachments = (role, s) =>
       sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role='${role}' and "sparePartId"=${s}`);
 
@@ -228,13 +240,17 @@ const waitFor = async (fn, ms = 10000) => {
     await page.screenshot({ path: path.join(DIR, "claim-fix-2-form.png") });
 
     // ── 3) ส่งซ้ำโดยไม่แก้อะไร ──
-    const submit = vis(page, "ยืนยันปิดงาน").last();
-    (await submit.count()) > 0 ? pass("ข้อมูลรอบก่อน (สรุป · คนที่ไป · อะไหล่ · ข้อความเคลม · หลักฐาน) มาครบ ปุ่มล่างเป็น \"ยืนยันปิดงาน\"") : fail("ฟอร์มแก้เคลมไม่ครบตั้งแต่เปิด");
+    // ข้อมูลรอบก่อนมาครบ (ป้ายที่ยืนยันแล้วไม่ต้องยืนยันซ้ำ) — ขั้นส่งพร้อมส่งทันที
+    await stepTo(page, 4);
+    const submit = vis(page, SEND).last();
+    (await submit.count()) > 0 && (await vis(page, "พร้อมส่ง").count()) > 0
+      ? pass(`ข้อมูลรอบก่อน (สรุป · คนที่ไป · อะไหล่ · ข้อความเคลม · ป้ายที่ยืนยันแล้ว · หลักฐาน) มาครบ ขั้นส่ง "พร้อมส่ง" ปุ่มล่าง "${SEND}"`)
+      : fail("ฟอร์มแก้เคลมไม่ครบตั้งแต่เปิด");
     await submit.click();
     await vis(page, "ส่งไม่สำเร็จ").waitFor({ timeout: 20000 }).catch(() => {});
     const errBox = page.locator('[role="alert"]').filter({ hasText: "ส่งไม่สำเร็จ" }).locator("visible=true").first();
     const errText = (await errBox.innerText().catch(() => "")).replace(/\s+/g, " ");
-    errText.includes("ยังไม่ได้แก้อะไรจากรอบที่ถูกตีกลับ") && inView(await errBox.boundingBox()) && (await vis(page, "ยืนยันปิดงาน").count()) > 0
+    errText.includes("ยังไม่ได้แก้อะไรจากรอบที่ถูกตีกลับ") && inView(await errBox.boundingBox()) && (await vis(page, SEND).count()) > 0
       ? pass("ส่งซ้ำโดยไม่แก้: เซิร์ฟเวอร์ไม่รับ ข้อความขึ้นแถบแดงบนสุด ฟอร์มยังเปิดอยู่")
       : fail(`ส่งซ้ำโดยไม่แก้: ${errText.slice(0, 200)}`);
     sql(`select status||'|'||(select count(*) from "PartClaim" where "workOrderId"=${id}) from "WorkOrder" where id=${id}`) === "IN_PROGRESS|2"
@@ -249,7 +265,9 @@ const waitFor = async (fn, ms = 10000) => {
       ? pass("เปิดฟอร์มแก้เคลมแล้วยังไม่ได้แก้อะไร: ไม่มีร่างในเครื่อง (การ์ดไม่ขึ้น \"กรอกค้างไว้\")")
       : fail("เปิดฟอร์มเฉย ๆ แล้วมีร่างถูกเขียน");
 
-    // ── 4) ไฟล์เคลมส่งทันทีที่เลือก ──
+    // ── 4) ไฟล์เคลมส่งทันทีที่เลือก ── (ขั้นเคลมทีละชิ้น · ชิ้นแรก)
+    await stepTo(page, 3);
+    await partTo(page, name1);
     // รอ/ตรวจบนจอเฉพาะในช่องนี้ช่องเดียว — ขั้นป้ายรุ่นของฟอร์มขึ้น "✓ แนบแล้ว" ค้างตั้งแต่เปิด (แนบป้ายไว้ตอนเตรียม)
     // ถ้าหาทั้งหน้า การรอจบทันทีแล้วอ่านฐานข้อมูลแข่งกับการส่งไฟล์: พังทั้งที่แอปถูก หรือผ่านทั้งที่ช่องค้าง "กำลังส่ง"
     const slot1 = page.locator(`[aria-label="วางวิดีโอการตรวจเช็ค ${code1}"]`).locator("visible=true").last();
@@ -298,7 +316,8 @@ const waitFor = async (fn, ms = 10000) => {
       : fail(`เลือกใหม่แทน: ไฟล์เดิม ${firstNew} ยังอยู่=${sql(`select count(*) from "WorkOrderAttachment" where id=${firstNew}`)} · ใหม่ ${secondNew} · รวม ${attachments("CLAIM_CHECK_VIDEO", sp1)}`);
     await page.screenshot({ path: path.join(DIR, "claim-fix-4-uploaded.png") });
 
-    // ── 5) ค่าเดิมถูกแล้ว อธิบายไม่ครบ → พาไป ──
+    // ── 5) ค่าเดิมถูกแล้ว อธิบายไม่ครบ → พาไป ── (ชิ้นที่สอง)
+    await partTo(page, name2);
     await byLabel(page, `ค่าเดิมถูกแล้ว ${code2}`).last().click();
     await page.waitForTimeout(500);
     await byLabel(page, `ค่าเดิมถูกแล้ว — อธิบายให้ผู้ตรวจ ${code2}`).last().fill("ค่");
@@ -309,7 +328,8 @@ const waitFor = async (fn, ms = 10000) => {
     (await go.count()) > 0 && (await vis(page, `ยังขาด: เคลม ${name2}: คำอธิบาย “ค่าเดิมถูกแล้ว”`, false).count()) > 0
       ? pass(`อธิบาย "ค่าเดิมถูกแล้ว" ไม่ครบ 3 ตัว: ปุ่มล่าง "ยังขาด 1 อย่าง — พาไป" · กล่องยังขาดบอก "เคลม ${name2}: …"`)
       : fail("ปุ่มล่าง/กล่องยังขาดไม่บอกคำอธิบายที่ยังไม่ครบ");
-    await byLabel(page, "อะไหล่ไม่ครบ เปิดใบงานรออะไหล่ต่อ").last().scrollIntoViewIfNeeded();
+    // เลื่อนลงท้ายชิ้นก่อนกด — ปุ่มต้องพากลับขึ้นไปหาช่องอธิบาย ไม่ใช่บังเอิญอยู่ในจอ
+    await byLabel(page, `แนบวิดีโอการตรวจเช็ค ${code2}`).last().scrollIntoViewIfNeeded();
     await go.click();
     await page.waitForTimeout(400);
     const flashSeen = await page.locator('[aria-label="ช่องที่ยังขาด"]').count();
@@ -334,10 +354,13 @@ const waitFor = async (fn, ms = 10000) => {
       : fail(`ร่างหลังโหลดใหม่: ร่าง=${!!draftRaw} · การ์ด ${txt.slice(0, 300)}`);
     await cardOf(page).getByText("แก้เคลม", { exact: true }).click();
     await page.waitForTimeout(3000);
-    const keepAgain = byLabel(page, `ค่าเดิมถูกแล้ว — อธิบายให้ผู้ตรวจ ${code2}`).last();
     // ข้อความ "แนบไว้แล้ว" เหมือนกันทั้งไฟล์รอบที่ถูกตีกลับและไฟล์ที่เพิ่งส่ง — ยืนยันที่ฐานข้อมูลว่าไฟล์ล่าสุดของชิ้นนี้คือไฟล์ที่เลือกใหม่
-    (await keepAgain.inputValue().catch(() => "")) === "ค่" &&
-      (await slot1.getByText("วิดีโอการตรวจเช็ค — แนบไว้แล้ว", { exact: true }).count()) > 0 &&
+    await stepTo(page, 3);
+    await partTo(page, name1);
+    const slot1Kept = (await slot1.getByText("วิดีโอการตรวจเช็ค — แนบไว้แล้ว", { exact: true }).count()) > 0;
+    await partTo(page, name2);
+    const keepAgain = byLabel(page, `ค่าเดิมถูกแล้ว — อธิบายให้ผู้ตรวจ ${code2}`).last();
+    (await keepAgain.inputValue().catch(() => "")) === "ค่" && slot1Kept &&
       maxVideo1() === secondNew && Number(attachments("CLAIM_CHECK_VIDEO", sp1)) === before1 + 1
       ? pass("เปิดฟอร์มใหม่: คำอธิบายที่พิมพ์ค้างยังอยู่ · วิดีโอที่เลือกใหม่ยังเป็นไฟล์ล่าสุดของชิ้นนั้น (ฐานข้อมูล) ช่องขึ้น \"แนบไว้แล้ว\" ไม่ต้องแนบซ้ำ")
       : fail(`ฟอร์มหลังโหลดใหม่: คำอธิบาย="${await keepAgain.inputValue().catch(() => "")}" · ไฟล์ล่าสุด ${maxVideo1()} (ควรเป็น ${secondNew})`);
@@ -349,17 +372,18 @@ const waitFor = async (fn, ms = 10000) => {
       await route.fetch();
       return route.abort("internetdisconnected");
     });
-    await vis(page, "ยืนยันปิดงาน").last().click();
+    await stepTo(page, 4);
+    await vis(page, SEND).last().click();
     await waitFor(() => sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW", 15000);
     await vis(page, "ส่งไม่สำเร็จ — เน็ตหลุด").waitFor({ timeout: 20000 }).catch(() => {});
     sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW" && (await vis(page, "ส่งไม่สำเร็จ — เน็ตหลุด").count()) > 0
       ? pass("คำสั่งส่งถึงเซิร์ฟเวอร์ (ฐานข้อมูล: รอตรวจเคลม) แต่คำตอบหาย หน้าจอขึ้น \"ส่งไม่สำเร็จ — เน็ตหลุด\"")
       : fail(`ส่งแล้วคำตอบหาย: ${sql(`select status from "WorkOrder" where id=${id}`)}`);
     await page.unroute(`**/api/work-orders/${id}/close`);
-    await vis(page, "ยืนยันปิดงาน").last().click();
+    await vis(page, SEND).last().click();
     await page.waitForTimeout(5000);
     const leftDraft = await page.evaluate((k) => localStorage.getItem(k), `draft:close:${id}`);
-    (await vis(page, "ยืนยันปิดงาน").count()) === 0 && leftDraft === null &&
+    (await vis(page, SEND).count()) === 0 && leftDraft === null &&
       (await vis(page, "ส่งไม่สำเร็จ — เน็ตหลุด").count()) === 0
       ? pass("กดซ้ำแล้วเซิร์ฟเวอร์บอกว่าส่งไปแล้ว: นับเป็นส่งสำเร็จ ฟอร์มปิด ร่างถูกล้าง")
       : fail(`กดซ้ำหลังคำตอบหาย: ร่างยังอยู่=${leftDraft !== null}`);
@@ -415,29 +439,39 @@ const waitFor = async (fn, ms = 10000) => {
     banner2.includes(`${name2}: “${REASON2}”`) && !banner2.includes(`${name1}: “`)
       ? pass(`แถบเหตุผลในฟอร์มบอกเฉพาะชิ้นที่ถูกตีกลับ (${name2}) แม้แถวของชิ้นที่ผ่านจะเป็นแถวล่าสุดเหมือนกัน`)
       : fail(`แถบเหตุผลรอบ 3: ${banner2.slice(0, 300)}`);
-    const lockedLine = (await byLabel(page, `ล็อกไว้ ${code1}`).last().innerText().catch(() => "")).trim();
-    // ไอคอนกุญแจเป็นตัวอักษรของฟอนต์ไอคอนบนเว็บ (อยู่ใน innerText ด้วย) — ตรวจว่ามีข้อความ ไม่ใช่เท่ากันทั้งก้อน
-    lockedLine.includes(`✓ ${name1} ผ่านแล้ว ล็อกไว้`) && (await byLabel(page, `รหัสอะไหล่ตัวที่เสีย ${code1}`).count()) === 0 &&
-      (await byLabel(page, `รหัสอะไหล่ตัวที่เสีย ${code2}`).last().inputValue().catch(() => "")) === `OLD-${sp2}` &&
-      (await byLabel(page, `จำนวน ${code1}`).count()) > 0 &&
-      (await byLabel(page, `จำนวน ${code2}`).last().inputValue().catch(() => "")) === "2"
-      ? pass(`ฟอร์มเติมจากอะไหล่ที่ใช้จริง (ทั้งสองชิ้น · ${code2} จำนวน 2 ตามที่ใช้ ไม่ใช่ 1 ตามที่เบิก) · "${lockedLine}" ไม่มีช่องเคลมของชิ้นนั้น · ${name2} เติมค่ารอบที่ถูกตีกลับ`)
-      : fail(`ฟอร์มรอบ 3: ล็อก "${lockedLine}" · ช่องรหัส ${code1} ${await byLabel(page, `รหัสอะไหล่ตัวที่เสีย ${code1}`).count()} · อะไหล่ ${await byLabel(page, `จำนวน ${code1}`).count()} · จำนวน ${code2} "${await byLabel(page, `จำนวน ${code2}`).last().inputValue().catch(() => "")}"`);
-    const machineLock = (await byLabel(page, "ข้อมูลเครื่องล็อกไว้").last().innerText().catch(() => "")).replace(/\s+/g, " ");
-    machineLock.includes(`ข้อมูลเครื่อง — ล็อกไว้พร้อม ${name1} ที่ผ่านแล้ว`) && machineLock.includes("HL055LWHPRXG6W0000")
-      ? pass("ข้อมูลเครื่องอ่านอย่างเดียว \"ล็อกไว้พร้อม … ที่ผ่านแล้ว\" พร้อมค่าของใบที่อนุมัติ (รุ่น HL055LWHPRXG6W0000)")
-      : fail(`ข้อมูลเครื่องรอบ 3: "${machineLock.slice(0, 300)}"`);
+    // ขั้นงานที่ทำ: อะไหล่เติมจากที่ใช้จริง · ชิ้นที่ผ่านแล้วกดเอาออกไม่ได้
+    const qty1 = await byLabel(page, `จำนวน ${code1}`).count();
+    const qty2 = await byLabel(page, `จำนวน ${code2}`).last().inputValue().catch(() => "");
     await byLabel(page, `เอา ${code1} ออก`).last().click();
     await page.waitForTimeout(500);
     (await vis(page, `${name1} อนุมัติเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`).count()) > 0 && (await byLabel(page, `จำนวน ${code1}`).count()) > 0
       ? pass(`กดเอา ${code1} ออก: ไม่ถูกเอาออก ขึ้น "${name1} อนุมัติเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้"`)
       : fail("ชิ้นที่ผ่านแล้วถูกเอาออกจากอะไหล่ที่ใช้ได้");
+    // ขั้นเคลมทีละชิ้น: ชิ้นที่ผ่านแล้วพับเป็นบรรทัดเดียว ไม่มีแท็บ/ช่องของชิ้นนั้น
+    await stepTo(page, 3);
+    const lockedLine = (await byLabel(page, `ล็อกไว้ ${code1}`).last().innerText().catch(() => "")).trim();
+    // ไอคอนกุญแจเป็นตัวอักษรของฟอนต์ไอคอนบนเว็บ (อยู่ใน innerText ด้วย) — ตรวจว่ามีข้อความ ไม่ใช่เท่ากันทั้งก้อน
+    lockedLine.includes(`✓ ${name1} ผ่านแล้ว ล็อกไว้`) && (await byLabel(page, `รหัสอะไหล่ตัวที่เสีย ${code1}`).count()) === 0 &&
+      (await page.locator(`[aria-label^="ชิ้น ${name1} "]`).count()) === 0 &&
+      (await byLabel(page, `รหัสอะไหล่ตัวที่เสีย ${code2}`).last().inputValue().catch(() => "")) === `OLD-${sp2}` &&
+      qty1 > 0 && qty2 === "2"
+      ? pass(`ฟอร์มเติมจากอะไหล่ที่ใช้จริง (ทั้งสองชิ้น · ${code2} จำนวน 2 ตามที่ใช้ ไม่ใช่ 1 ตามที่เบิก) · "${lockedLine}" ไม่มีแท็บ/ช่องเคลมของชิ้นนั้น · ${name2} เติมค่ารอบที่ถูกตีกลับ`)
+      : fail(`ฟอร์มรอบ 3: ล็อก "${lockedLine}" · ช่องรหัส ${code1} ${await byLabel(page, `รหัสอะไหล่ตัวที่เสีย ${code1}`).count()} · อะไหล่ ${qty1} · จำนวน ${code2} "${qty2}"`);
     await page.screenshot({ path: path.join(DIR, "claim-fix-8-locked.png") });
+    // ขั้นเครื่อง: อ่านอย่างเดียว ล็อกไปกับชิ้นที่ผ่าน
+    await stepTo(page, 2);
+    const machineLock = (await byLabel(page, "ข้อมูลเครื่องล็อกไว้").last().innerText().catch(() => "")).replace(/\s+/g, " ");
+    machineLock.includes(`ล็อกไว้พร้อม ${name1} ที่ผ่านแล้ว`) && machineLock.includes("HL055LWHPRXG6W0000") &&
+      (await page.locator('[aria-label="ยืนยัน รุ่น ตรงกับรูป"]').count()) === 0
+      ? pass("ขั้นเครื่องอ่านอย่างเดียว \"ล็อกไว้พร้อม … ที่ผ่านแล้ว\" พร้อมค่าของใบที่อนุมัติ (รุ่น HL055LWHPRXG6W0000) ไม่มีอะไรให้ยืนยัน")
+      : fail(`ข้อมูลเครื่องรอบ 3: "${machineLock.slice(0, 300)}"`);
+    await stepTo(page, 3);
     await byLabel(page, `ค่าเดิมถูกแล้ว ${code2}`).last().click();
     await page.waitForTimeout(400);
     await byLabel(page, `ค่าเดิมถูกแล้ว — อธิบายให้ผู้ตรวจ ${code2}`).last().fill("รูปเดิมเห็นสติกเกอร์รหัสที่มุมขวา");
     await page.waitForTimeout(600);
-    await vis(page, "ยืนยันปิดงาน").last().click();
+    await stepTo(page, 4);
+    await vis(page, SEND).last().click();
     await waitFor(() => sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW", 15000);
     await page.waitForTimeout(1500);
     sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW" && claimsOf(sp1) === "REJECTED,APPROVED" &&
@@ -516,11 +550,11 @@ const waitFor = async (fn, ms = 10000) => {
       result: "FIXED", note: "เปลี่ยนบอร์ดกับสายพาน ทดสอบแล้วปกติ", workerIds: [tid], parts: q.map((s) => ({ sparePartId: s, quantity: 1 })),
       claims: q.map((s) => ({ sparePartId: s, brokenPartCode: `OLD-${s}`, symptom: "ประตูล็อกไม่ลง ขึ้น Error dL", checkNote: "วัดไฟเข้าบอร์ด 220V ปกติ", troubleshooting: ts })),
       claimNameplate: {
+        // ยืนยันทีละช่อง (เคลมก้อน 5) — ป้ายที่ไม่มี confirmed เซิร์ฟเวอร์ถือว่าเป็นแอปรุ่นเก่า ไม่รับ
         fields: [
-          { key: "model", label: "รุ่น", value: "HL055LWHPRXG6W0000", source: "SCAN", crop: CROP },
-          { key: "serial", label: "Serial", value: "2402600330", source: "HAND" },
+          { key: "model", label: "รุ่น", value: "HL055LWHPRXG6W0000", source: "SCAN", crop: CROP, confirmed: true, read: "HL055LWHPRXG6W0000" },
+          { key: "serial", label: "Serial", value: "2402600330", source: "HAND", confirmed: true },
         ],
-        verified: true,
       },
       claimCheck: { errorCode: "E dL / E dL1 / E dL2", checked: ["Solenoid ไม่ฝืด"] },
     });
@@ -635,9 +669,9 @@ const waitFor = async (fn, ms = 10000) => {
       : fail(`ส่งเคลมใหม่: ${sql(`select status from "WorkOrder" where id=${id2}`)} · ${rowsNow} · keep ${lastSub.slice(0, 200)} · วิดีโอใหม่ ${newVideo}`);
     await page.close();
 
-    // ── 16) ไฟล์ของเครื่อง (วิดีโอ Error) ถูกชี้ทั้งใบ — เลือกครั้งเดียว ต้องไปถึงทุกชิ้นที่ส่งเคลม ──
-    // ก่อนก้อน 5 ใบเคลมแต่ละชิ้นเก็บหลักฐานของเครื่องแยกกัน ถ้าไฟล์ใหม่ไปแค่ชิ้นแรก ใบเคลมของอีกชิ้นยังพาวิดีโอที่ถูกตีกลับไปหาผู้ขาย
-    // เซิร์ฟเวอร์นับไฟล์ใหม่ของชิ้นไหนก็ได้ว่าแก้แล้ว — ส่งผ่านไม่ได้พิสูจน์อะไร ต้องนับแถวไฟล์ทีละชิ้น
+    // ── 16) ไฟล์ของเครื่อง (วิดีโอ Error) ถูกชี้ทั้งใบ — เลือกครั้งเดียว ใช้ร่วมทุกชิ้น (เคลมก้อน 5 · เจ้าของงานตอบข้อ 2) ──
+    // ตั้งแต่ก้อน 5 ไฟล์ของเครื่องไฟล์เดียวเป็นหลักฐานของทุกชิ้น (ใบเคลมทุกชิ้นหยิบไฟล์ล่าสุดของเครื่องในรอบ) — แนบครั้งเดียว ไม่ต้องซ้ำทุกชิ้น
+    // นับแถวไฟล์ในฐานข้อมูล: ต้องมีไฟล์ใหม่หลังเวลาตีกลับหนึ่งไฟล์พอดี (ไม่ใช่ไฟล์ซ้ำต่อชิ้น) แล้วเซิร์ฟเวอร์รับส่งใหม่
     const pend3 = sql(`select string_agg(id::text,',' order by id) from "PartClaim" where "workOrderId"=${id2} and status='PENDING'`).split(",").map(Number);
     await call(PA, "POST", `/work-orders/${id2}/claim-review`, {
       decisions: pend3.map((cid) => ({ claimId: cid, verdict: "REJECT", flags: ["CLAIM_ERROR_VIDEO"] })),
@@ -665,14 +699,14 @@ const waitFor = async (fn, ms = 10000) => {
     ]);
     await chooser2.setFiles(CLIP);
     await vis(page, "✓ แนบใหม่แล้ว — แทนไฟล์เดิม").first().waitFor({ timeout: 30000 }).catch(() => {});
-    await waitFor(() => errVideoAfter(q[0]) >= 1 && errVideoAfter(q[1]) >= 1, 20000);
+    await waitFor(() => errVideoAfter(q[0]) + errVideoAfter(q[1]) >= 1, 20000);
     await page.waitForTimeout(800);
-    const perPart = `${errVideoAfter(q[0])}|${errVideoAfter(q[1])}`;
+    const perPart = `${errVideoAfter(q[0]) + errVideoAfter(q[1])}`;
     await vis(page, "ส่งเคลมใหม่").last().click();
     await waitFor(() => sql(`select status from "WorkOrder" where id=${id2}`) === "CLAIM_REVIEW", 20000);
-    listed && perPart === "1|1" && sql(`select status from "WorkOrder" where id=${id2}`) === "CLAIM_REVIEW" &&
+    listed && perPart === "1" && sql(`select status from "WorkOrder" where id=${id2}`) === "CLAIM_REVIEW" &&
       sql(`select count(*) from "PartClaim" where "workOrderId"=${id2} and status='PENDING'`) === "2"
-      ? pass(`วิดีโอ Error ถูกชี้ทั้งใบ: "✗ ข้อมูลเครื่อง · วิดีโอ Error" เลือกไฟล์ครั้งเดียว → วิดีโอ Error ใหม่ ${qn1} 1 · ${qn2} 1 ไฟล์ หลังเวลาตีกลับ · ส่งเคลมใหม่รอตรวจ 2 ชิ้น (ฐานข้อมูล)`)
+      ? pass(`วิดีโอ Error ถูกชี้ทั้งใบ: "✗ ข้อมูลเครื่อง · วิดีโอ Error" เลือกไฟล์ครั้งเดียว → วิดีโอ Error ใหม่ 1 ไฟล์ (ใช้ร่วมทุกชิ้น) หลังเวลาตีกลับ · ส่งเคลมใหม่รอตรวจ 2 ชิ้น (ฐานข้อมูล)`)
       : fail(`วิดีโอ Error ทั้งใบ: รายการ=${listed} "${ft.slice(0, 200)}" · ไฟล์ใหม่ต่อชิ้น ${perPart} · คำขอแนบไฟล์ ${upCalls.join(",")} · ใบ ${sql(`select status from "WorkOrder" where id=${id2}`)}`);
     await page.close();
   } catch (e) {
