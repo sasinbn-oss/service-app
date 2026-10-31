@@ -64,17 +64,21 @@ import {
   claimRoundOf,
   claimRoundPayload,
   claimSummary,
+  errorVideoLabel,
   firstSubmittedAt,
   flagContextOf,
   flagReasonText,
   flagSatisfied,
   isMachineFlag,
   isPartFlag,
+  isPreRepairFile,
   isSubmittedEvidence,
   lastRejected,
+  latestCloseSkips,
   latestPerPart,
   lockedParts,
   lockSince,
+  MACHINE_LEVEL_ROLES,
   machineLockRow,
   partLabel,
   plateFamilyOf,
@@ -82,6 +86,7 @@ import {
   repairStartFor,
   reviewFlagLabel,
   reviewFlagsFor,
+  skipReasonText,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
@@ -155,6 +160,8 @@ import {
   CLAIM_DECLINE_REASONS,
   CLAIM_QUICK_REASONS,
   CLAIM_REVIEW_FLAGS,
+  CLAIM_SKIP_REASONS,
+  CLAIM_TROUBLESHOOTING_HINTS,
   SEND_BACK_REASON_REQUIRED,
   machineTypeFromCode,
   normaliseMachineCode,
@@ -888,10 +895,21 @@ function shape(
     })(),
     // Troubleshooting (ข้อ 4 ของฟอร์มเคลม) ของยี่ห้อเครื่องใบนี้ — ว่าง = ยี่ห้อนี้ไม่ต้องทำ
     claimTroubleshooting: claimTroubleshootingFor(machineMake(w.machine))?.items ?? [],
+    // ข้อ Troubleshooting ที่มีไฟล์เป็นหลักฐานอยู่แล้ว (ERROR_VIDEO · AFTER) — ฟอร์มต่อท้ายข้อนั้น "(มี… แล้ว)" ไม่ติ๊กให้
+    claimTroubleshootingHints: CLAIM_TROUBLESHOOTING_HINTS,
     // แบบป้ายรุ่นของยี่ห้อนี้ (บรรทัดที่สแกน) + รายการเช็คตามคู่มือ — แอปไม่ได้เขียนรายการซ้ำ (utils/claimGuide.ts)
-    claimGuide: claimGuideFor(machineMake(w.machine)),
-    // รูปก่อน/หลังซ่อมของรอบนี้ — หน้าปิดงานบอกว่าแนบไว้แล้ว ไม่ต้องถ่ายซ้ำ
-    beforeCount: w.attachments.filter((a) => a.role === "BEFORE" && (!roundStart || a.createdAt >= roundStart)).length,
+    // รายการ Error เหลือเฉพาะที่ขึ้นกับชนิดเครื่องของใบ (ซัก/อบ · ก้อน 5) — ไม่รู้ชนิด = ทั้งหมด
+    claimGuide: claimGuideFor(machineMake(w.machine), w.machine?.type),
+    /**
+     * รูปก่อนซ่อมของรอบนี้ — หน้าปิดงานบอกว่าแนบไว้แล้ว ไม่ต้องถ่ายซ้ำ
+     * นับวิดีโอ Error/รูปอาการที่ถ่ายในกล่อง "ถ่ายก่อนซ่อม" ด้วย (ไม่ผูกชิ้น · ก้อน 5) — กติกาเดียวกับที่ปิดงานตรวจ
+     * ไฟล์ข้อ ⑥ ที่แนบตอนปิดงาน (ผูกชิ้น) ไม่นับ: ถ่ายหลังซ่อมแล้ว ไม่ใช่สภาพก่อนซ่อม (ดู isPreRepairFile)
+     */
+    beforeCount: w.attachments.filter(
+      (a) => (a.role === "BEFORE" || isPreRepairFile(a)) && (!roundStart || a.createdAt >= roundStart)
+    ).length,
+    // แยกนับไฟล์จากกล่องถ่ายก่อนซ่อม — ขั้นงานที่ทำขึ้น "✓ ใช้จากที่ถ่ายก่อนซ่อม ({n} ไฟล์)" เฉพาะเมื่อมีจริง
+    preRepairCount: w.attachments.filter((a) => isPreRepairFile(a) && (!roundStart || a.createdAt >= roundStart)).length,
     afterCount: w.attachments.filter((a) => a.role === "AFTER" && (!roundStart || a.createdAt >= roundStart)).length,
     // ไฟล์ตรวจหน้างานของรอบตรวจนี้ (นับตั้งแต่ส่งทีมไปตรวจครั้งล่าสุด) — ฟอร์มส่งผลตรวจบอกว่าแนบไว้แล้วกี่ไฟล์
     // ไม่รู้ว่ารอบตรวจเริ่มเมื่อไหร่ (คำตอบจากคำสั่งอื่นที่ไม่ใช่หน้ารายละเอียด) ก็ไม่ส่ง ดีกว่าส่งเลขที่นับปนรอบเก่า
@@ -1060,6 +1078,8 @@ const NON_STAGE_ACTIONS = [
   // แอดมินเลื่อนวันนัด ใบอยู่ขั้นเดิม (เจ้าของงานขอ ต.ค. 69) — "ค้างขั้นนี้มา N วัน" ไม่เริ่มนับใหม่
   // (ดึงงานคืนจากช่าง APPOINTMENT_RECALLED เป็นการเดินขั้นจริง ไม่อยู่ในรายการนี้)
   "APPOINTMENT_MOVED",
+  // ไม่ส่งเคลมชิ้นที่อยู่ในประกัน (เคลมก้อน 5) — บันทึกคู่กับการปิดงาน ตัวปิดงานคือการเดินขั้น ไม่ใช่แถวนี้
+  "CLAIM_SKIPPED",
 ];
 
 /**
@@ -1902,17 +1922,27 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
       scheduledAt: true,
       scheduledTime: true,
       closedAt: true,
+      createdAt: true,
       assignedTeam: true,
-      branch: { select: { code: true, name: true, latitude: true, longitude: true } },
-      machine: { select: { code: true, capacityKg: true } },
+      // วันเปิดร้าน/วันหมดประกันที่กรอกเอง + ยี่ห้อเครื่อง — การ์ดขึ้น "ในประกันถึง {วัน}" และกล่องถ่ายก่อนซ่อม (ก้อน 5)
+      branch: {
+        select: { code: true, name: true, latitude: true, longitude: true, openedAt: true, warrantyExpiresAt: true },
+      },
+      machine: { select: { code: true, capacityKg: true, brand: true, model: true } },
       parts: { where: { kind: "WAITING" }, select: { quantity: true, unit: true, sparePart: { select: { name: true } } } },
       // ปล่อยงานรอบล่าสุด + ถึงหน้างาน — ถึงแล้วคือมี ARRIVED หลังปล่อยงาน
       // + ส่งเคลม (แถบสถานะเคลมบนการ์ด: ใครส่ง เมื่อไหร่) — ไม่จำกัดจำนวนแถวแล้ว เพราะประวัติเคลมของงานซ่อมครั้งนี้ต้องมาครบ
+      // + ปิดงาน/ไม่ส่งเคลม (ก้อน 5) — การ์ดที่ปิดแล้วขึ้น "ไม่ส่งเคลม: {ชิ้น} ({เหตุผล})" จาก meta ของการปิดครั้งล่าสุด
       // จำนวนต่อใบยังน้อย (เฉพาะชนิดเหล่านี้) และใบในหน้านี้มีแค่งานของทีมวันนี้
       logs: {
-        where: { action: { in: [...MY_DAY_RELEASE_ACTIONS, "CLAIM_SUBMITTED"] } },
+        where: { action: { in: [...MY_DAY_RELEASE_ACTIONS, "CLAIM_SUBMITTED", "CLOSED", "CLAIM_SKIPPED"] } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: { action: true, createdAt: true, user: { select: { name: true } } },
+        select: { id: true, action: true, createdAt: true, meta: true, user: { select: { name: true } } },
+      },
+      // วิดีโอ Error/รูปอาการที่ถ่ายในกล่อง "ถ่ายก่อนซ่อม" (ไม่ผูกชิ้น) — การ์ดบอกว่าถ่ายไว้แล้วกี่ไฟล์ (ตัดรอบข้างล่าง)
+      attachments: {
+        where: { role: { in: ["CLAIM_ERROR_VIDEO", "CLAIM_SYMPTOM"] }, sparePartId: null },
+        select: { role: true, createdAt: true },
       },
       // ใบเคลมทุกรอบ ใหม่สุดก่อน — การ์ดคิดเฉพาะงานซ่อมครั้งนี้ (หลังเปิดใบใหม่ครั้งล่าสุด) ที่ claimSummary
       claims: {
@@ -1956,6 +1986,15 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
         const since = lockSince(w.logs);
         const claimRows = w.claims.filter((c) => !since || c.createdAt >= since);
         const claimParts = w.claims.map((c) => ({ partCode: c.partCode, partName: c.partName }));
+        // รอบหลักฐาน = ถูกจ่ายงาน/เปิดใบใหม่ครั้งล่าสุด (กติกาเดียวกับที่ปิดงานนับไฟล์) — ไฟล์ถ่ายก่อนซ่อมของรอบก่อนไม่นับ
+        const roundStart = w.logs.find((l) => l.action === "ASSIGNED" || l.action === "REOPENED")?.createdAt ?? w.createdAt;
+        const pre = w.attachments.filter((a) => a.createdAt >= roundStart);
+        const make = machineMake(w.machine);
+        const warrantyEnd = isCompanyBranch(w.branch.code)
+          ? null
+          : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, make);
+        const skipped = latestCloseSkips(w.logs, since);
+        const skipParts = [...claimParts, ...skipped.skips.map((s) => ({ partCode: s.partCode, partName: s.partName }))];
         return {
           id: w.id,
           code: w.code,
@@ -1979,16 +2018,34 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           machineCapacityKg: w.machine?.capacityKg ?? null,
           parts: w.parts.map((p) => ({ name: p.sparePart.name, quantity: p.quantity, unit: p.unit })),
           arrivedAt: arrived?.createdAt ?? null,
+          /**
+           * กล่อง "ถ่ายก่อนซ่อม" (ก้อน 5) — ขึ้นเฉพาะสาขาในประกัน: warrantyUntil = วันหมดประกันเมื่อยังไม่หมด (สาขาบริษัท/หมดแล้ว/ไม่รู้ = ว่าง)
+           * plateFamily = แบบป้ายของยี่ห้อ (OASIS ใช้ "วิดีโออาการตอนเครื่องเดิน" แทนวิดีโอ Error — ข้อ 4)
+           * preRepair = ไฟล์ที่ถ่ายในกล่องนั้นแล้วของรอบนี้ (ไม่ผูกชิ้นเท่านั้น — ไฟล์ข้อ ⑥ ของฟอร์มปิดงานไม่ใช่ของก่อนซ่อม)
+           */
+          warrantyUntil: warrantyEnd && isWarrantyExpired(warrantyEnd) === false ? warrantyEnd : null,
+          plateFamily: plateFamilyOf(make),
+          preRepair: {
+            video: pre.filter((a) => a.role === "CLAIM_ERROR_VIDEO").length,
+            photo: pre.filter((a) => a.role === "CLAIM_SYMPTOM").length,
+          },
           // มีเสมอ (state ว่าง = ไม่มีเคลม) — หน้าจออ่าน claim.state ได้โดยไม่ต้องเช็คว่ามีก้อนนี้ไหม
-          claim: claimSummary(
-            w.status,
-            claimRows,
-            w.logs
-              .filter((l) => l.action === "CLAIM_SUBMITTED" && (!since || l.createdAt >= since))
-              .map((l) => ({ action: l.action, createdAt: l.createdAt, userName: l.user?.name ?? null })),
-            (c) => partLabel(c, claimParts),
-            (uid) => (uid != null ? reviewers.get(uid) ?? null : null)
-          ),
+          claim: {
+            ...claimSummary(
+              w.status,
+              claimRows,
+              w.logs
+                .filter((l) => l.action === "CLAIM_SUBMITTED" && (!since || l.createdAt >= since))
+                .map((l) => ({ action: l.action, createdAt: l.createdAt, userName: l.user?.name ?? null })),
+              (c) => partLabel(c, claimParts),
+              (uid) => (uid != null ? reviewers.get(uid) ?? null : null)
+            ),
+            // ชิ้นที่ไม่ส่งเคลมตอนปิดงานครั้งล่าสุด (ก้อน 5) — การ์ดที่ปิดแล้วขึ้น "ไม่ส่งเคลม: {ชิ้น} ({เหตุผล})"
+            skipped: skipped.skips.map((s) => ({
+              partLabel: partLabel(s, skipParts),
+              reason: skipReasonText(s, CLAIM_SKIP_REASONS, skipped.by),
+            })),
+          },
         };
       })
       .sort((a, b) => `${a.scheduledAt ?? "9999"} ${a.scheduledTime ?? "99:99"}`.localeCompare(`${b.scheduledAt ?? "9999"} ${b.scheduledTime ?? "99:99"}`)),
@@ -2456,6 +2513,10 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
     // ช่องที่ใช้กับใบหนึ่ง ๆ พร้อมชื่อที่ใช้จริงอยู่ในรายละเอียดใบงาน (claimReviewFlags)
     claimReviewFlags: CLAIM_REVIEW_FLAGS,
     claimQuickReasons: CLAIM_QUICK_REASONS,
+    // เหตุผล "ไม่ส่งเคลมชิ้นนี้" ของช่าง (ก้อน 5 · สาขาในประกันบังคับ) — ค่าที่ส่งกลับใน claimSkips[].reason · "อื่น ๆ" ต้องพิมพ์ note
+    claimSkipReasons: CLAIM_SKIP_REASONS,
+    // Troubleshooting ข้อที่มีไฟล์ยืนยันอยู่แล้ว (ERROR_VIDEO · AFTER) — ฟอร์มบอก "(มี… แล้ว)" ไม่ติ๊กให้
+    claimTroubleshootingHints: CLAIM_TROUBLESHOOTING_HINTS,
     technicians,
   });
 });
@@ -2498,7 +2559,7 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
  * ตอนนี้ส่งก้อนที่ครบแล้วแอปใช้เลย (mobile/src/utils/freshOrder.ts) · ใบงานกับประวัติอ่านพร้อมกัน ไม่ต่อคิว
  */
 async function loadDetail(id: number) {
-  const [row, logs, , sups, claimUsers] = await Promise.all([
+  const [row, logs, , sups, claimUsers, approved] = await Promise.all([
     prisma.workOrder.findUnique({ where: { id }, include: detailInclude }),
     prisma.workOrderLog.findMany({
       where: { workOrderId: id },
@@ -2519,6 +2580,25 @@ async function loadDetail(id: number) {
       SELECT DISTINCT u.id, u.name, u."employeeCode" FROM "PartClaim" c
       JOIN "User" u ON u.id IN (c."reviewedById", c."createdById")
       WHERE c."workOrderId" = ${id}`,
+    /**
+     * รุ่นจากใบเคลมที่อนุมัติล่าสุดของเครื่องเดียวกัน (claimApprovedModel) — ถามพร้อมกับตัวใบ หาเครื่องจากใบเองในคำสั่งเดียว
+     * เครื่องเดียวกัน = กติกาเดียวกับเคลมซ้ำ (สาขา + รหัสเครื่องไม่สนตัวพิมพ์) · ใบทดสอบไม่เป็นตัวเทียบให้ใบจริง
+     * ข้ามใบเคลมที่ป้ายไม่มีช่องรุ่น (ป้ายเก่า/พิมพ์เฉพาะช่องอื่น) ไปหาใบก่อนหน้าที่มี
+     */
+    prisma.$queryRaw<{ model: string }[]>`
+      SELECT btrim(f->>'value') AS model
+      FROM "WorkOrder" me
+      JOIN "Branch" b ON b.id = me."branchId"
+      JOIN "Machine" m ON m.id = me."machineId"
+      JOIN "PartClaim" c ON c."branchCode" = b.code AND lower(c."machineCode") = lower(m.code)
+      JOIN "WorkOrder" w ON w.id = c."workOrderId"
+      CROSS JOIN LATERAL jsonb_array_elements(
+        CASE WHEN jsonb_typeof(c.nameplate->'fields') = 'array' THEN c.nameplate->'fields' ELSE '[]'::jsonb END
+      ) f
+      WHERE me.id = ${id} AND c.status = 'APPROVED' AND (me."isTest" OR NOT w."isTest")
+        AND f->>'key' = 'model' AND btrim(coalesce(f->>'value', '')) <> ''
+      ORDER BY c."createdAt" DESC, c.id DESC
+      LIMIT 1`,
   ]);
   if (!row) return null;
   /**
@@ -2544,6 +2624,7 @@ async function loadDetail(id: number) {
     supervisors,
     crossTeam,
     claimUsers: new Map(claimUsers.map((u) => [u.id, { name: u.name, code: u.employeeCode }])),
+    approvedModel: approved[0]?.model ?? null,
   };
 }
 
@@ -2622,7 +2703,7 @@ function flowOf(
   };
 }
 
-function detailBody({ row, logs, supervisors, crossTeam, claimUsers }: Detail) {
+function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedModel }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -2647,9 +2728,35 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers }: Detail) {
       flag: k.flag as string,
       note: k.note as string,
     }));
+  /**
+   * ชิ้นในประกันที่ช่างไม่ส่งเคลมตอนปิดงานครั้งล่าสุดของรอบนี้ (ก้อน 5) — หน้าตรวจขึ้น "ช่างไม่ส่งเคลม: {ชิ้น} ({เหตุผล})"
+   * ข้างแท็บชิ้น ผู้ตรวจเห็นว่าใบนี้เปลี่ยนกี่ชิ้นแต่ส่งมากี่ชิ้น และทำไม · ฟอร์มแก้เคลมพับไว้ "{ชิ้น} — ไม่ส่งเคลม ({เหตุผล})"
+   * reason = คำที่แสดง ("อื่น ๆ: …" ตามตัวอย่าง) · reasonCode = ค่าที่ช่างเลือก (null = ทางปิดที่ไม่ได้ถามเหตุผล)
+   */
+  const skipped = latestCloseSkips(logs, roundStart);
+  const skipParts = [
+    ...row.claims.map((c) => ({ partCode: c.partCode, partName: c.partName })),
+    ...skipped.skips.map((s) => ({ partCode: s.partCode, partName: s.partName })),
+  ];
+  const claimSkips = skipped.skips.map((s) => ({
+    sparePartId: s.sparePartId,
+    partCode: s.partCode,
+    partLabel: partLabel(s, skipParts),
+    reasonCode: s.reason,
+    reason: skipReasonText(s, CLAIM_SKIP_REASONS, skipped.by),
+    note: s.note,
+    by: skipped.by,
+  }));
   return {
     ...base,
     claimKeep,
+    claimSkips,
+    /**
+     * รุ่นจากใบเคลมที่อนุมัติล่าสุดของเครื่องนี้ (สาขาเดียวกัน · รหัสเครื่องตรงกันไม่สนตัวพิมพ์) — ตัวเทียบตอนอ่านป้าย (ก้อน 5 · ข้อ 9)
+     * ทะเบียนเครื่องส่วนใหญ่มีแค่ยี่ห้อ เทียบรหัสรุ่นจากรูปกับยี่ห้อไม่ได้ · ระบบไม่เขียนทับทะเบียนด้วยค่านี้ (ช่างยังต้องยืนยันเอง)
+     * ว่าง = เครื่องนี้ยังไม่เคยมีเคลมที่อนุมัติ → แอปใช้ machineModel (ถ้าเป็นแค่ยี่ห้อ = ไม่มีรุ่นให้เทียบ)
+     */
+    claimApprovedModel: approvedModel,
     appointmentBy:
       confirm && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")
         ? { name: confirm.user?.name ?? null, at: confirm.createdAt }
@@ -6502,6 +6609,11 @@ const closeSchema = z.object({
           .array(z.object({ flag: z.string().trim().max(40), note: z.string().max(2000) }))
           .max(12)
           .optional(),
+        /**
+         * ข้อเช็คตาม Error ที่ช่างติ๊กในข้อ ④ ของชิ้นนี้ (ก้อน 5 · ตัวอย่างติ๊กแยกต่อชิ้น) — "เช็คอะไรไปแล้ว จึงระบุว่าควรเปลี่ยนชิ้นนี้"
+         * เป็นของแต่ละชิ้น ไม่ใช่ของเครื่อง · ไม่ส่งมา (แอปเก่า) = ใช้ claimCheck.checked ชุดเดียวให้ทุกชิ้นเหมือนเดิม
+         */
+        errorChecked: z.array(z.string().max(200)).max(20).optional(),
       })
     )
     .max(20)
@@ -6520,10 +6632,22 @@ const closeSchema = z.object({
             value: z.string().trim().max(60),
             source: z.enum(["SCAN", "HAND"]),
             crop: z.string().max(60_000).startsWith("data:image/").nullable().optional(),
+            /**
+             * ยืนยันทีละช่อง (ก้อน 5 · เจ้าของงานเลือกข้อ 8) — ช่างกด "ตรงกับรูป" ที่ช่องนั้นแล้ว (รุ่น/Serial บังคับเสมอ แม้พิมพ์เอง)
+             * needsCheck = ระบบไม่มั่นใจค่าที่อ่าน (ช่องอื่นต้องยืนยันเฉพาะตอนนี้) · edited = ช่างแก้ค่าที่อ่านได้ ·
+             * read = ค่าที่ระบบอ่านได้ก่อนช่างแก้ (ผู้ตรวจเห็น "แก้จากที่ระบบอ่าน n ตัว")
+             */
+            confirmed: z.boolean().optional(),
+            needsCheck: z.boolean().optional(),
+            edited: z.boolean().optional(),
+            read: z.string().trim().max(60).optional(),
           })
         )
         .max(12),
-      /** ช่างติ๊กว่าดูค่าที่ระบบอ่านเทียบกับรูปป้ายแล้ว — OCR อ่านผิดซ้ำแบบเดิมได้ (01/2022 → 01/2029 ทุกรอบ) */
+      /**
+       * ติ๊กเดียว "ดูทุกช่องเทียบกับรูปแล้ว" ของแอปก่อนก้อน 5 — ไม่ใช้ตัดสินแล้ว (ยืนยันทีละช่องแทน · OCR อ่านผิดซ้ำแบบเดิมได้
+       * 01/2022 → 01/2029 ทุกรอบ ติ๊กเดียวทั้งป้ายจึงกดผ่านโดยไม่ได้ดูทีละช่อง) · รับไว้ให้แอปเก่าได้ข้อความบอกให้โหลดใหม่
+       */
       verified: z.boolean().optional(),
     })
     .nullable()
@@ -6542,6 +6666,20 @@ const closeSchema = z.object({
   claimMachineKeep: z
     .array(z.object({ flag: z.string().trim().max(40), note: z.string().max(2000) }))
     .max(12)
+    .optional(),
+  /**
+   * อะไหล่ที่ใช้แต่ไม่ส่งเคลม + เหตุผล (ก้อน 5 · เจ้าของงานเลือกข้อ 10) — บังคับเฉพาะสาขาในประกัน ดูข้างล่าง
+   * note บังคับเมื่อเลือก "อื่น ๆ" (ตรวจเองข้างล่างเพื่อตอบภาษาไทยพร้อมชื่อชิ้น)
+   */
+  claimSkips: z
+    .array(
+      z.object({
+        sparePartId: z.number().int(),
+        reason: z.enum(["DAMAGED_LOST", "NOT_WARRANTY", "OTHER"]),
+        note: z.string().trim().max(300).optional(),
+      })
+    )
+    .max(30)
     .optional(),
 });
 
@@ -6586,6 +6724,52 @@ async function claimLockRows(id: number) {
   return { rows, since: reopened?.createdAt ?? null };
 }
 
+/**
+ * ทางปิดงานที่ไม่มีฟอร์มเคลม (หัวหน้าภาคปิดใบงาน · ปิดงานย้อนหลัง) บนสาขาในประกัน — อะไหล่จากคลังที่บันทึกว่าใช้ไปแต่ไม่ได้เคลม (ก้อน 5)
+ *
+ * ไม่ถามเหตุผล (ฟอร์มพวกนี้ไม่มีส่วนเคลม และกรอกหลังงานจบ — ค่าตั้งต้นที่บอกเจ้าของงาน) แต่ต้องลงประวัติ CLAIM_SKIPPED
+ * ไม่งั้นชิ้นในประกันที่ไม่ได้เคลมหายไปเงียบ ๆ เหมือนเดิม · คืน null = ไม่มีอะไรต้องลง (นอกประกัน · สาขาบริษัท · ของนอกสโตร์ ·
+ * ชิ้นที่ผ่าน/ปิดเคลมไปแล้ว) · ยี่ห้อที่ใช้คิดประกัน = ยี่ห้อที่อ่านก่อนเขียนอะไร (แผนรวม S16)
+ * by = SUPERVISOR_CLOSE / BACKFILL · คำนำหน้าข้อความ = ชื่อทางปิดงานที่คนอ่านประวัติรู้จัก
+ */
+async function unclaimedSkipLog(
+  id: number,
+  partIds: number[],
+  by: "SUPERVISOR_CLOSE" | "BACKFILL",
+  lead: string
+): Promise<{ note: string; meta: Prisma.InputJsonValue } | null> {
+  if (!partIds.length) return null;
+  const [wo, spares, lock] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+        machine: { select: { brand: true, model: true } },
+      },
+    }),
+    prisma.sparePart.findMany({
+      where: { id: { in: [...new Set(partIds)] } },
+      select: { id: true, partCode: true, name: true, offCatalog: true },
+    }),
+    claimLockRows(id),
+  ]);
+  if (!wo || isCompanyBranch(wo.branch.code)) return null;
+  const end = warrantyEndFor(wo.branch.openedAt, wo.branch.warrantyExpiresAt, machineMake(wo.machine));
+  if (isWarrantyExpired(end) !== false) return null;
+  const locked = new Set(
+    lockedParts(lock.rows.filter((r) => !lock.since || r.createdAt >= lock.since)).map((r) => r.sparePartId)
+  );
+  const skips = spares
+    .filter((s) => !s.offCatalog && !locked.has(s.id))
+    .map((s) => ({ sparePartId: s.id, partCode: s.partCode, partName: s.name, reason: null, note: null }));
+  if (!skips.length) return null;
+  const all = [...skips, ...lock.rows].map((r) => ({ partCode: r.partCode, partName: r.partName }));
+  return {
+    note: `${lead} — ไม่ได้ส่งเคลม: ${skips.map((s) => partLabel(s, all)).join(", ")}`,
+    meta: { skips, by },
+  };
+}
+
 router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -6603,7 +6787,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       assignedToId: true,
       assignedTeam: true,
       // ทีม outsource — หัวหน้าภาคในพื้นที่ปิดแทนได้ (ดู blockedForTeam)
-      branch: { select: { region: true, zone: true, pmTeam: true } },
+      // + วันเปิดร้าน/วันหมดประกันที่กรอกเอง — สาขาในประกันต้องบอกเหตุผลชิ้นที่ไม่ส่งเคลม (ก้อน 5)
+      branch: { select: { region: true, zone: true, pmTeam: true, code: true, openedAt: true, warrantyExpiresAt: true } },
+      // ยี่ห้อตอนเปิดฟอร์ม — ทุกกติกาเคลม/ประกันใช้ยี่ห้อที่อ่านก่อนเขียนอะไร (แผนรวม S16)
+      machine: { select: { brand: true, model: true } },
     },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -6707,12 +6894,18 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       select: { createdAt: true },
     }),
   ]);
+  // + วิดีโอ Error/รูปอาการแยกตามชิ้น — ที่ไม่ผูกชิ้น (ถ่ายในกล่องถ่ายก่อนซ่อม) นับเป็นรูปก่อนซ่อมได้ (ก้อน 5 · ข้างล่าง)
   const roundFiles = await prisma.workOrderAttachment.groupBy({
-    by: ["role"],
-    where: { workOrderId: id, role: { in: ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"] }, createdAt: { gte: roundStart } },
+    by: ["role", "sparePartId"],
+    where: {
+      workOrderId: id,
+      role: { in: ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION", ...MACHINE_LEVEL_ROLES] },
+      createdAt: { gte: roundStart },
+    },
     _count: true,
   });
   const has = (role: string) => roundFiles.some((f) => f.role === role);
+  const preRepairShot = roundFiles.some((f) => isPreRepairFile(f));
   const subTeam = body.subTeam?.trim() || null;
   if (subTeam && !outsourceNow.has(subTeam)) {
     return res.status(400).json({ error: `ไม่รู้จักทีม SUB "${subTeam}" — เลือกจากรายชื่อทีม outsource` });
@@ -6738,8 +6931,11 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    *
    * ใบ PM บังคับแค่รูปหลังทำ (เจ้าของงานขอ ต.ค. 69) — งานตามรอบ เครื่องไม่ได้เสียมา
    * รูปก่อนทำไม่มีอาการอะไรให้เทียบ สิ่งที่ต้องพิสูจน์คือทำเสร็จจริง
+   *
+   * วิดีโอ Error/รูปอาการที่ถ่ายในกล่อง "ถ่ายก่อนซ่อม" (ก้อน 5) คือภาพก่อนซ่อมจริง นับแทนกันได้ ช่างไม่ต้องถ่ายซ้ำ
+   * ไฟล์แบบเดียวกันที่แนบจากข้อ ⑥ ตอนปิดงาน (ผูกชิ้น) ไม่นับ — ถ่ายหลังซ่อมแล้ว ไม่ได้บอกว่าก่อนซ่อมเป็นยังไง
    */
-  if (current.jobType !== "PM" && !has("BEFORE")) {
+  if (current.jobType !== "PM" && !has("BEFORE") && !preRepairShot) {
     return res.status(400).json({ error: "ต้องแนบรูปหรือวิดีโอก่อนซ่อมอย่างน้อยหนึ่งไฟล์" });
   }
   if (!has("AFTER")) {
@@ -6877,7 +7073,11 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
      */
     const machineLock = machineLockRow(priorRows);
     let nameplate: Prisma.PartClaimCreateManyInput["nameplate"];
-    let fieldCheck: Prisma.InputJsonValue | undefined;
+    /**
+     * Error ที่เครื่องขึ้น + ข้อเช็คที่หน้าจอให้ติ๊ก (offered) เป็นของเครื่อง ใช้ร่วมทุกชิ้น
+     * ข้อที่ติ๊ก (checked) เป็นของแต่ละชิ้น (ก้อน 5 · ตัวอย่างติ๊กในข้อ ④ ของแต่ละชิ้น) — คิดต่อชิ้นตอนสร้างแถวข้างล่าง (checkedFor)
+     */
+    let machineError: { errorCode: string; errorName: string; offered: string[] } | null = null;
     let machinePlate: { key: string; value: string }[];
     if (machineLock) {
       nameplate = machineLock.nameplate === null ? Prisma.DbNull : (machineLock.nameplate as Prisma.InputJsonValue);
@@ -6889,13 +7089,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       if (typeof was?.errorCode === "string" && was.errorCode) {
         const err = guide.errors.find((e) => e.code === was.errorCode);
         // คู่มือเปลี่ยนไปแล้ว (ไม่มีรหัสนี้) ใช้รายการข้อเช็คที่แถวที่ผ่านเคยให้ติ๊ก
-        const offered = err?.checks ?? (Array.isArray(was.offered) ? was.offered.map(String) : []);
-        const ticked = body.claimCheck?.checked ?? [];
-        fieldCheck = {
+        machineError = {
           errorCode: was.errorCode,
           errorName: typeof was.errorName === "string" ? was.errorName : err?.name ?? "",
-          checked: offered.filter((c) => ticked.includes(c)),
-          offered,
+          offered: err?.checks ?? (Array.isArray(was.offered) ? was.offered.map(String) : []),
         };
       }
     } else {
@@ -6903,21 +7100,29 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       if (plateFields.length === 0) {
         return res.status(400).json({ error: "เคลมอะไหล่ต้องสแกนหรือกรอกข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" });
       }
-      if (plateFields.some((f) => f.source === "SCAN") && !body.claimNameplate?.verified) {
-        return res.status(400).json({ error: "ต้องติ๊กว่าตรวจค่าที่ระบบอ่านกับรูปป้ายรุ่นแล้ว" });
+      /**
+       * ยืนยันป้ายทีละช่อง (ก้อน 5 · เจ้าของงานเลือกข้อ 8) — แทนติ๊กเดียว "ดูทุกช่องแล้ว" ที่กดผ่านได้โดยไม่ได้ดูทีละช่อง
+       * รุ่นกับ Serial ต้องกดยืนยันทุกครั้ง แม้พิมพ์เอง (ผู้ขายจับคู่ใบเคลมกับเครื่องด้วยสองค่านี้ ผิดตัวเดียวเคลมไม่ได้)
+       * ช่องอื่นยืนยันเฉพาะที่ระบบไม่มั่นใจ (needsCheck) · ป้ายที่ไม่มี confirmed เลยสักช่อง = แอปที่เปิดค้างไว้ก่อนอัปเดต
+       * ตอบให้โหลดหน้าใหม่ ไม่ใช่ปล่อยผ่านแบบเดิม (ไม่มีทางเก่าให้ใช้ต่อ — ป้ายที่ไม่ได้ยืนยันห้ามไปถึงผู้ขาย)
+       */
+      if (!plateFields.some((f) => f.confirmed !== undefined)) {
+        return res.status(400).json({ error: "แอปเวอร์ชันเก่า — โหลดหน้าใหม่แล้วกดยืนยันรุ่นกับ Serial ทีละช่อง" });
+      }
+      if (plateFields.some((f) => (f.key === "model" || f.key === "serial") && f.confirmed !== true)) {
+        return res.status(400).json({ error: "ต้องกดยืนยันรุ่นกับ Serial ทีละช่องว่าตรงกับรูปป้าย" });
+      }
+      const unsure = plateFields.find((f) => f.needsCheck && f.confirmed !== true);
+      if (unsure) {
+        return res.status(400).json({ error: `ต้องกดยืนยันช่อง ${unsure.label} ที่ระบบไม่มั่นใจ` });
       }
       if (guide.errors.length) {
         const chk = body.claimCheck;
         const err = guide.errors.find((e) => e.code === chk?.errorCode);
         if (!chk || !err) return res.status(400).json({ error: "เคลมเครื่องยี่ห้อนี้ต้องเลือก Error ที่เครื่องขึ้น (ตามคู่มือ)" });
-        fieldCheck = {
-          errorCode: err.code,
-          errorName: err.name,
-          checked: err.checks.filter((c) => chk.checked.includes(c)),
-          // ข้อเช็คที่หน้าจอให้ติ๊กตอนนั้น — ผู้ตรวจเห็นว่าข้อไหน "ไม่ได้ทำ" (offered − checked) จากรายการที่ช่างเห็นจริง
-          // ไม่ใช่รายการในคู่มือวันที่เปิดดู (แก้คู่มือทีหลังต้องไม่ทำให้ใบเก่าดูเหมือนช่างข้ามข้อที่ไม่เคยมี)
-          offered: err.checks,
-        };
+        // offered = ข้อเช็คที่หน้าจอให้ติ๊กตอนนั้น — ผู้ตรวจเห็นว่าข้อไหน "ไม่ได้ทำ" (offered − checked) จากรายการที่ช่างเห็นจริง
+        // ไม่ใช่รายการในคู่มือวันที่เปิดดู (แก้คู่มือทีหลังต้องไม่ทำให้ใบเก่าดูเหมือนช่างข้ามข้อที่ไม่เคยมี)
+        machineError = { errorCode: err.code, errorName: err.name, offered: err.checks };
       }
       // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
       // ให้ Admin Spare Part เห็นรูปที่ระบบอ่านค่ามา ไม่ต้องไล่หาในกองไฟล์ของใบงาน · รูปล่าสุดของรอบ (มาพร้อมไฟล์เคลมข้างบน)
@@ -6927,19 +7132,54 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       nameplate = {
         family: guide.plate.family,
         photoId: platePhoto?.id ?? null,
-        verified: !!body.claimNameplate?.verified,
-        fields: plateFields.map((f) => ({ key: f.key, label: f.label, value: f.value, source: f.source, crop: f.crop ?? null })),
+        // ผ่านด่านยืนยันทีละช่องข้างบนแล้ว = ช่างตรวจค่ากับรูปแล้ว (หน้าตรวจรุ่นเก่าที่ยังอ่านธงนี้เห็นถูกต้อง)
+        verified: true,
+        // แก้จากค่าที่อ่านได้ยังเป็น SCAN และเก็บภาพตัดไว้ — ผู้ตรวจต้องเทียบค่าที่แก้กับภาพเดิม (เดิมแก้แล้วภาพหาย)
+        fields: plateFields.map((f) => ({
+          key: f.key,
+          label: f.label,
+          value: f.value,
+          source: f.source,
+          crop: f.crop ?? null,
+          confirmed: f.confirmed === true,
+          ...(f.needsCheck !== undefined ? { needsCheck: f.needsCheck } : {}),
+          ...(f.edited !== undefined ? { edited: f.edited } : {}),
+          ...(f.read ? { read: f.read } : {}),
+        })),
       };
       machinePlate = plateFields.map((f) => ({ key: f.key, value: f.value }));
     }
+    /**
+     * ข้อเช็คตาม Error ของชิ้นนี้ = ข้อที่หน้าจอให้ติ๊ก ∩ ข้อที่ช่างติ๊กในข้อ ④ ของชิ้นนั้น
+     * แอปเก่าส่งชุดเดียว (claimCheck.checked) — ใช้ชุดนั้นกับทุกชิ้นเหมือนก่อนก้อน 5
+     */
+    const checkedFor = (c: (typeof claimInputs)[number]) => {
+      if (!machineError) return [];
+      const ticked = c.errorChecked ?? body.claimCheck?.checked ?? [];
+      return machineError.offered.filter((x) => ticked.includes(x));
+    };
+    const fieldCheckFor = (c: (typeof claimInputs)[number]): Prisma.InputJsonValue | undefined =>
+      machineError
+        ? {
+            errorCode: machineError.errorCode,
+            errorName: machineError.errorName,
+            checked: checkedFor(c),
+            offered: machineError.offered,
+          }
+        : undefined;
+    // ชื่อวิดีโอของเครื่องตามเครื่อง/Error ที่กำลังส่ง — ข้อความ "ยังขาด…" ตรงกับช่องที่ช่างเห็น (ข้อ 4)
+    const errVideoName = errorVideoLabel(machineError?.errorCode ?? null, guide.plate.family);
     for (const c of [...new Map(claimInputs.map((x) => [x.sparePartId, x])).values()]) {
       const sp = spares.find((x) => x.id === c.sparePartId);
       if (!sp || !used.has(c.sparePartId)) {
         return res.status(400).json({ error: "เคลมได้เฉพาะอะไหล่ที่ใส่ไว้ในรายการอะไหล่ที่ใช้" });
       }
+      // หลักฐานของชิ้น (รูปอะไหล่เก่า · วิดีโอการตรวจเช็ค) ต้องเป็นของชิ้นนี้ · ของเครื่อง (วิดีโอ Error · รูปอาการ)
+      // ไฟล์เดียวในรอบนี้ใช้ได้ทุกชิ้น ไม่ว่าถ่ายในกล่องถ่ายก่อนซ่อมหรือข้อ ⑥ ของชิ้นใด (ก้อน 5 · ข้อ 2)
       const missing = CLAIM_EVIDENCE_ROLES.filter(
-        (role) => !evidence.some((e) => e.sparePartId === c.sparePartId && e.role === role)
-      ).map((role) => ATTACHMENT_ROLE_LABELS[role].replace(" (เคลม)", ""));
+        (role) =>
+          !evidence.some((e) => e.role === role && (MACHINE_LEVEL_ROLES.includes(role) || e.sparePartId === c.sparePartId))
+      ).map((role) => (role === "CLAIM_ERROR_VIDEO" ? errVideoName : ATTACHMENT_ROLE_LABELS[role].replace(" (เคลม)", "")));
       if (missing.length) {
         return res.status(400).json({ error: `เคลม ${sp.partCode}: ยังขาด${missing.join(" · ")}` });
       }
@@ -6973,7 +7213,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         checkNote: c.checkNote,
         troubleshooting: done,
         nameplate,
-        fieldCheck,
+        fieldCheck: fieldCheckFor(c),
         createdById: req.auth!.userId,
       });
     }
@@ -7008,7 +7248,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     }
     const prior = latestPerPart(priorRows);
     // เทียบกับค่าที่จะเก็บจริง (ข้อมูลเครื่องที่ล็อกไว้ ไม่ใช่ค่าที่แอปส่งมา) — ล็อกแล้วค่าเครื่องไม่นับเป็น "แก้แล้ว"
-    const machineError = (fieldCheck as { errorCode?: string; checked?: string[] } | undefined) ?? null;
+    // ข้อเช็คตาม Error เป็นของแต่ละแถว (ก้อน 5) — เทียบกับที่ช่างติ๊กให้ชิ้นนั้น
     const resubmitOf = (row: (typeof claimRows)[number]) => ({
       brokenPartCode: row.brokenPartCode ?? "",
       symptom: row.symptom,
@@ -7016,7 +7256,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       troubleshooting: (row.troubleshooting as string[] | undefined) ?? [],
       plate: machinePlate,
       errorCode: machineError?.errorCode ?? null,
-      errorChecked: machineError?.checked ?? [],
+      errorChecked: ((row.fieldCheck ?? null) as { checked?: string[] } | null)?.checked ?? [],
     });
     // ชื่อช่องตามเครื่องนี้และ Error ที่กำลังส่ง — ตรงกับที่ช่างเห็นในฟอร์มแก้เคลม (วิดีโอ Error / วิดีโออาการตอนเครื่องเดิน)
     const flagCtx = { family: guide.plate.family, errorCode: machineError?.errorCode ?? null };
@@ -7075,6 +7315,47 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
     }
   }
 
+  /**
+   * ไม่ส่งเคลมชิ้นที่อยู่ในประกัน ต้องบอกเหตุผล (ก้อน 5 · เจ้าของงานเลือกข้อ 10)
+   *
+   * สาขาในประกัน อะไหล่จากคลังที่ใส่เครื่องไปแล้วแต่ไม่ได้เคลม = บริษัทจ่ายเองทั้งที่ผู้ขายควรรับ — เดิมถอดติ๊กได้เงียบ ๆ
+   * ไม่มีใครรู้ว่าตั้งใจ (อะไหล่เก่าหาย/ไม่ใช่ชิ้นในประกัน) หรือลืม · เหตุผลไปอยู่ในประวัติใบงาน (CLAIM_SKIPPED) และผู้ตรวจเห็น
+   * บังคับเฉพาะเมื่อรู้แน่ว่ายังไม่หมดประกัน (กติกาเดียวกับที่ฟอร์มเปิดเคลมไว้ให้) — ไม่รู้วันเปิดร้าน/สาขาบริษัท ไม่ถาม (ค่าตั้งต้นที่บอกเจ้าของงาน)
+   * ไม่นับของนอกสโตร์ (ไม่ได้ออกจากคลัง ไม่มีประกันผู้ขาย) และชิ้นที่ผ่าน/ปิดเคลมไปแล้ว (จบเรื่องเคลมแล้ว)
+   * แอปเก่าที่ไม่รู้จักเหตุผลได้ 400 ภาษาไทย — โหลดหน้าใหม่แล้วฟอร์มถามเหตุผลเอง
+   * ยี่ห้อที่ใช้คิดประกันคือยี่ห้อตอนเปิดฟอร์ม (อ่านก่อนเขียนอะไร) ไม่ใช่ที่เปลี่ยนในคำขอนี้ (แผนรวม S16)
+   */
+  const warrantyMake = machineMake(current.machine);
+  const inWarranty =
+    !isCompanyBranch(current.branch.code) &&
+    isWarrantyExpired(warrantyEndFor(current.branch.openedAt, current.branch.warrantyExpiresAt, warrantyMake)) === false;
+  const skipRows: { sparePartId: number; partCode: string; partName: string; reason: string; note: string | null }[] = [];
+  if (inWarranty && usedLines !== undefined) {
+    const claimedIds = new Set(claimInputs.map((c) => c.sparePartId));
+    const usedIds = [...new Set(usedLines.map((p) => p.sparePartId))];
+    const unclaimed = usedIds.filter((pid) => !offUsed.has(pid) && !lockedIds.has(pid) && !claimedIds.has(pid));
+    if (unclaimed.length) {
+      // ชื่อของทุกชิ้นที่ใช้ — ตั้งชื่อชิ้นให้ตรงกับที่อื่น (ต่อรหัสเมื่อชื่อซ้ำกับชิ้นอื่นในใบ · partLabel)
+      const names = await prisma.sparePart.findMany({ where: { id: { in: usedIds } }, select: { id: true, partCode: true, name: true } });
+      const allParts = [
+        ...names.map((n) => ({ partCode: n.partCode, partName: n.name })),
+        ...claimHistory.map((r) => ({ partCode: r.partCode, partName: r.partName })),
+      ];
+      for (const pid of unclaimed) {
+        const sp = names.find((n) => n.id === pid);
+        if (!sp) continue; // อะไหล่ที่ไม่มีในทะเบียน — replaceParts ปฏิเสธเองตอนเขียน
+        const lbl = partLabel({ partCode: sp.partCode, partName: sp.name }, allParts);
+        const skip = (body.claimSkips ?? []).find((s) => s.sparePartId === pid);
+        if (!skip) return res.status(400).json({ error: `ไม่ส่งเคลม ${lbl}: ต้องเลือกเหตุผล (สาขายังอยู่ในประกัน)` });
+        const note = skip.note?.trim() || null;
+        if (skip.reason === "OTHER" && !note) {
+          return res.status(400).json({ error: `ไม่ส่งเคลม ${lbl}: เลือก “อื่น ๆ” ต้องพิมพ์เหตุผล` });
+        }
+        skipRows.push({ sparePartId: pid, partCode: sp.partCode, partName: sp.name, reason: skip.reason, note });
+      }
+    }
+  }
+
   if (!body.note?.trim()) {
     return res.status(400).json({ error: "ต้องสรุปงานที่ทำ — เช่น เปลี่ยนอะไรไป ทดสอบแล้วเป็นยังไง" });
   }
@@ -7121,6 +7402,28 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 
       // ทุกแถวของการส่งครั้งนี้เวลาเดียวกันเป๊ะ — "รอบเดียวกัน" จึงเทียบเวลาได้ตรง ๆ (หลักฐานของแถว · แถบสถานะ · รอบที่เท่าไหร่)
       if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows.map((r) => ({ ...r, createdAt: now })) });
+
+      /**
+       * ชิ้นในประกันที่ไม่ส่งเคลม + เหตุผล (ก้อน 5) — เขียนก่อนประวัติปิดงานเสมอ (ทุกทางปิดงานทำแบบเดียวกัน):
+       * ปิดงานยังเป็นแถวล่าสุดของใบ (เทสต์และหน้าจอที่อ่านประวัติล่าสุดไม่เปลี่ยน) และ latestCloseSkips จับคู่กับการปิดครั้งนี้ได้ตรง
+       */
+      if (skipRows.length > 0) {
+        await writeLog(
+          tx,
+          id,
+          req.auth!.userId,
+          "CLAIM_SKIPPED",
+          nextStatus,
+          skipRows
+            .map((s) => {
+              const label = CLAIM_SKIP_REASONS.find((r) => r.value === s.reason)?.label ?? s.reason;
+              const allParts = [...skipRows, ...claimRows].map((r) => ({ partCode: r.partCode, partName: r.partName }));
+              return `${partLabel(s, allParts)}: ${label}${s.reason === "OTHER" && s.note ? ` — ${s.note}` : ""}`;
+            })
+            .join(" · "),
+          { skips: skipRows, by: "TECH" }
+        );
+      }
 
       await writeLog(
         tx,
@@ -7500,7 +7803,12 @@ async function claimPdf(req: AuthRequest, res: Response) {
     claim,
     repairedAt: firstSubmittedAt(claim, chain, since),
     requesterName: requester?.name ?? null,
-    evidence: evidence.map((r) => ATTACHMENT_ROLE_LABELS[r]?.replace(" (เคลม)", "") ?? r),
+    // วิดีโอของเครื่องเรียกตามเครื่อง/Error ของแถวนี้ (Oasis · ไม่มี Error ขึ้น = วิดีโออาการตอนเครื่องเดิน) — ชื่อเดียวกับที่ช่างแนบ
+    evidence: evidence.map((r) =>
+      r === "CLAIM_ERROR_VIDEO"
+        ? errorVideoLabel(flagContextOf(claim).errorCode, plateFamilyOf(claim.brand))
+        : ATTACHMENT_ROLE_LABELS[r]?.replace(" (เคลม)", "") ?? r
+    ),
     position: claimPosition(claim, chain, since),
     machineError: machineErrorText(claim.fieldCheck),
     isTest: !!order?.isTest,
@@ -7650,6 +7958,13 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
   const usedParts = b.parts ?? [];
   const actor = req.auth!.userId;
   const stamp = new Date();
+  // สาขาในประกัน: อะไหล่จากคลังที่ใช้ไปไม่มีใบเคลม (ฟอร์มนี้ไม่มีส่วนเคลม) — ลงประวัติให้เห็น ไม่ถามเหตุผล (ก้อน 5)
+  const skipLog = await unclaimedSkipLog(
+    id,
+    usedParts.map((p) => p.sparePartId),
+    "BACKFILL",
+    WORK_ORDER_ACTION_LABELS.BACKFILLED
+  );
 
   await prisma.$transaction(
     async (tx) => {
@@ -7703,6 +8018,21 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
       ]
         .filter(Boolean)
         .join(" — ");
+      // ไม่ได้ส่งเคลม — ก่อนแถวปิดงาน เวลาเดียวกับที่ปิด (ทุกทางปิดงานวางแบบนี้ ดู latestCloseSkips)
+      if (skipLog) {
+        await tx.workOrderLog.create({
+          data: {
+            workOrderId: id,
+            userId: actor,
+            action: "CLAIM_SKIPPED",
+            status: "DONE",
+            note: skipLog.note,
+            meta: skipLog.meta,
+            createdAt: closedAt,
+            backfilledAt: stamp,
+          },
+        });
+      }
       await log("CLOSED", "DONE", closedAt, closeNote || null);
       // แถวนี้ลงเวลาที่กดจริง — บอกว่าใครปิดย้อนหลัง เพราะอะไร
       await tx.workOrderLog.create({
@@ -7831,6 +8161,15 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
     const fixedText = `${SUPERVISOR_CLOSE_REASONS.TECH_FIXED} · เข้า ${visitText(d.visitDate, null)}${
       subTeam ? ` · ทีม SUB ${subTeam}` : ""
     } — ${note}`;
+    // สาขาในประกัน: อะไหล่จากคลังที่บันทึกว่าใช้ไม่มีใบเคลม (ฟอร์มนี้ไม่มีส่วนเคลม) — ลงประวัติให้เห็น ไม่ถามเหตุผล (ก้อน 5)
+    const skipLog = d.parts
+      ? await unclaimedSkipLog(
+          id,
+          d.parts.map((p) => p.sparePartId),
+          "SUPERVISOR_CLOSE",
+          WORK_ORDER_ACTION_LABELS.SUPERVISOR_CLOSED
+        )
+      : null;
     await prisma.$transaction(async (tx) => {
       await tx.workOrder.update({
         where: { id },
@@ -7850,6 +8189,8 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
         await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
       }
       if (d.parts) await replaceParts(tx, id, "USED", d.parts);
+      // ก่อนแถวปิดงาน — ปิดงานยังเป็นประวัติล่าสุดของใบ (supervisor-close-test อ่านแถวล่าสุด) · ดู latestCloseSkips
+      if (skipLog) await writeLog(tx, id, req.auth!.userId, "CLAIM_SKIPPED", "DONE", skipLog.note, skipLog.meta);
       await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", fixedText);
     }, STAGE_TX);
     const row = await prisma.workOrder.findUniqueOrThrow({ where: { id }, include: detailInclude });
@@ -8441,14 +8782,28 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       });
     }
   }
-  const sparePartId = Number(req.body?.sparePartId);
-  if (isClaimEvidence && !Number.isInteger(sparePartId)) {
+  /**
+   * หลักฐานของชิ้น (รูปอะไหล่เก่า · วิดีโอการตรวจเช็ค) ต้องบอกว่าเป็นของอะไหล่ชิ้นไหน — ไม่บอกก็นับให้ชิ้นไหนไม่ได้
+   * หลักฐานของเครื่อง (วิดีโอ Error · รูปอาการ · ก้อน 5) ไม่บอกชิ้นได้ = ถ่ายในกล่อง "ถ่ายก่อนซ่อม" (เก็บว่าง)
+   * ใช้ร่วมทุกชิ้น และนับเป็นรูปก่อนซ่อมด้วย · แนบจากข้อ ⑥ ของฟอร์มปิดงานส่งชิ้นมา = ถ่ายตอนปิดงาน ไม่ใช่ก่อนซ่อม (ดู isPreRepairFile)
+   * ค่าว่าง ("") นับว่าไม่ได้บอก — Number("") = 0 จะกลายเป็นชิ้นที่ไม่มีอยู่จริง
+   */
+  const rawPart = typeof req.body?.sparePartId === "string" ? req.body.sparePartId.trim() : req.body?.sparePartId;
+  const sparePartId = rawPart === undefined || rawPart === null || rawPart === "" ? null : Number(rawPart);
+  const machineLevel = !!role && MACHINE_LEVEL_ROLES.includes(role);
+  if (isClaimEvidence && (sparePartId === null ? !machineLevel : !Number.isInteger(sparePartId))) {
     return res.status(400).json({ error: "หลักฐานเคลมต้องระบุว่าเป็นของอะไหล่ชิ้นไหน" });
   }
   // วิดีโอ Error/การตรวจเช็คต้องเห็นการเคลื่อนไหว ส่วนรูปอะไหล่/อาการต้องซูมอ่านรหัสได้ — แนบผิดชนิดแล้วนับว่าครบ
   // ผู้ขายปฏิเสธทีหลัง ตอนนั้นอะไหล่เก่าอาจทิ้งไปแล้ว จึงกันตั้งแต่ตอนแนบ
   if (isClaimEvidence && kind !== CLAIM_EVIDENCE_KIND[role!]) {
-    const label = ATTACHMENT_ROLE_LABELS[role!].replace(" (เคลม)", "");
+    let label = ATTACHMENT_ROLE_LABELS[role!].replace(" (เคลม)", "");
+    // วิดีโอ Error ของเครื่องที่ไม่มีจอ Error (Oasis) เรียก "วิดีโออาการตอนเครื่องเดิน" ให้ตรงกับช่องที่ช่างเห็น (ข้อ 4)
+    // อ่านยี่ห้อเฉพาะตอนจะตอบข้อผิดพลาดนี้ — ทางปกติไม่เสียรอบไปกลับเพิ่ม
+    if (role === "CLAIM_ERROR_VIDEO") {
+      const m = await prisma.workOrder.findUnique({ where: { id }, select: { machine: { select: { brand: true, model: true } } } });
+      label = errorVideoLabel(null, plateFamilyOf(machineMake(m?.machine)));
+    }
     // ชื่อที่ลงท้ายด้วยคำอังกฤษ ("วิดีโอ Error code") เว้นวรรคก่อนข้อความไทย อ่านง่ายกว่าเขียนติดกัน
     const gap = /[A-Za-z0-9]$/.test(label) ? " " : "";
     return res.status(400).json({
@@ -8588,6 +8943,10 @@ router.get("/:id/attachments/:attachmentId/link", requireAuth, async (req: AuthR
  *
  * ตัวแสดง PDF ในแอปอ่านไฟล์ด้วย fetch ซึ่งต้องให้ที่เก็บไฟล์ตอบ CORS — ถ้าที่เก็บไม่ตอบ แอปมาขอที่นี่แทน
  * (ส่งผ่านเซิร์ฟเวอร์ช้ากว่าโหลดตรง จึงไม่ใช่ทางหลัก) · เฉพาะ PDF — รูป/วิดีโอแสดงด้วย <img>/<video> ไม่ติด CORS
+ *
+ * ยกเว้นรูปป้ายรุ่น (ก้อน 5): ขั้น "เครื่อง" ของฟอร์มปิดงานอ่านรุ่น/Serial จากรูปป้ายที่แนบไว้แล้ว (ถ่ายในแท็บงานที่ทำ
+ * หรือแนบก่อนหน้า) ตัวอ่านป้ายวาดรูปลง canvas ซึ่งต้องเป็นไฟล์ที่มาจากโดเมนเดียวกัน — ลิงก์ตรงของที่เก็บไฟล์ทำให้ canvas
+ * ถูกล็อกอ่านไม่ได้ จึงส่งตัวไฟล์ผ่านที่นี่ · เฉพาะป้ายรุ่น ไม่เปิดเป็นทางโหลดรูปทั่วไป (รูปในร้านลูกค้าใช้ลิงก์อายุ 2 ชั่วโมงเหมือนเดิม)
  */
 router.get("/:id/attachments/:attachmentId/file", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -8599,16 +8958,17 @@ router.get("/:id/attachments/:attachmentId/file", requireAuth, async (req: AuthR
     loadAttachableWorkOrder(req, res, id),
     prisma.workOrderAttachment.findFirst({
       where: { id: attachmentId, workOrderId: id },
-      select: { objectKey: true, kind: true, mimeType: true },
+      select: { objectKey: true, kind: true, mimeType: true, role: true },
     }),
   ]);
   if (!wo) return;
   if (!row) return res.status(404).json({ error: "ไม่พบไฟล์นี้" });
-  if (row.kind !== "DOCUMENT") return res.status(400).json({ error: "เปิดผ่านทางนี้ได้เฉพาะไฟล์ PDF" });
+  const plateImage = row.kind === "IMAGE" && row.role === "NAMEPLATE";
+  if (row.kind !== "DOCUMENT" && !plateImage) return res.status(400).json({ error: "เปิดผ่านทางนี้ได้เฉพาะไฟล์ PDF" });
   if (!row.objectKey) return res.status(409).json({ error: "ไฟล์นี้อัปขึ้นที่เก็บไม่สำเร็จ" });
   try {
     const bytes = await getObjectBytes(row.objectKey);
-    res.setHeader("Content-Type", row.mimeType || "application/pdf");
+    res.setHeader("Content-Type", row.mimeType || (plateImage ? "image/jpeg" : "application/pdf"));
     res.setHeader("Cache-Control", "private, max-age=3600");
     res.end(Buffer.from(bytes));
   } catch (error: any) {

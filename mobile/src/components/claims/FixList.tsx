@@ -18,6 +18,8 @@ import Dropdown from "../Dropdown";
 import ClaimCrop from "./ClaimCrop";
 import ClaimFileSlot, { slotKey, type SlotUpload, type useClaimUploads } from "./ClaimFileSlot";
 import { ErrorCheckList, type ClaimCheckDraft, type PlateDraft } from "../ClaimMachineBox";
+import { PlateFieldBlock } from "../close/PlateConfirm";
+import { NO_ERROR_CODE, errorChoiceLabel } from "../../utils/claimErrors";
 import type { Attachment } from "../WorkOrderAttachments";
 import type { ClaimPartDraft } from "../../utils/closeDraft";
 import { plateFields, type ClaimGuide } from "../../utils/nameplate";
@@ -142,13 +144,15 @@ export function buildFixItems(input: FixInput): FixItem[] {
         changed = !!d.symptom.trim() && d.symptom.trim() !== row.symptom.trim();
         change = `${clip(row.symptom, 32)} → ${clip(d.symptom, 32)}`;
       } else if (flag === "CHECKS") {
+        // ข้อเช็คตาม Error ติ๊กทีละชิ้น (เคลมก้อน 5) — เทียบกับข้อที่ติ๊กของชิ้นนี้ในรอบที่ถูกตีกลับ
         const errWas = row.fieldCheck?.checked ?? [];
+        const errNow = d.errorChecked ?? check.checked;
         changed =
           d.checkNote.trim() !== row.checkNote.trim() ||
           !sameSet(d.troubleshooting, row.troubleshooting) ||
-          !sameSet(check.checked, errWas);
+          !sameSet(errNow, errWas);
         const n = (ts: string[], err: string[]) => ts.length + err.length;
-        change = `ติ๊ก ${n(row.troubleshooting, errWas)} ข้อ · “${clip(row.checkNote, 22)}” → ติ๊ก ${n(d.troubleshooting, check.checked)} ข้อ · “${clip(d.checkNote, 22)}”`;
+        change = `ติ๊ก ${n(row.troubleshooting, errWas)} ข้อ · “${clip(row.checkNote, 22)}” → ติ๊ก ${n(d.troubleshooting, errNow)} ข้อ · “${clip(d.checkNote, 22)}”`;
         // เขียนเพิ่มต้องไม่ว่าง (เซิร์ฟเวอร์บังคับอยู่แล้ว) — ลบทิ้งหมดไม่นับว่าแก้แล้ว
         if (!d.checkNote.trim()) changed = false;
       }
@@ -180,6 +184,8 @@ export interface FixEnv {
   setPlate: (next: PlateDraft) => void;
   check: ClaimCheckDraft;
   setCheck: (next: ClaimCheckDraft) => void;
+  /** Error ที่ใช้จริง (ข้อมูลเครื่องล็อกแล้วเป็นของใบที่อนุมัติ) — ข้อเช็คตาม Error ของชิ้นอิงตัวนี้ */
+  errorCode?: string | null;
   uploads: ReturnType<typeof useClaimUploads>;
   readOnly: boolean;
   setKeep: (key: string, value: string | null) => void;
@@ -308,18 +314,12 @@ function Editor({ it, env }: { it: FixItem; env: FixEnv }) {
   if (it.file) {
     const video = it.flag.endsWith("VIDEO");
     const since = it.row.reviewedAt;
-    // ไฟล์ของเครื่อง: แนบไฟล์เดียวให้ทุกชิ้นที่ส่งเคลมรอบนี้ (ก่อนก้อน 5 ใบเคลมแต่ละชิ้นยังเก็บหลักฐานของเครื่องแยกกัน
-    // ถ้าแนบให้ชิ้นเดียว ใบเคลมของอีกชิ้นจะยังพาไฟล์เดิมที่ถูกตีกลับไปหาผู้ขาย)
-    const ids = it.sparePartId === null ? env.claimedIds : [it.sparePartId];
-    const slots = ids.map((id) => env.uploads.slots[slotKey(id, it.flag)]).filter((s): s is SlotUpload => !!s);
-    const upload: SlotUpload | undefined = slots.length
-      ? {
-          ...slots[0],
-          status: slots.some((s) => s.status === "failed") ? "failed" : slots.some((s) => s.status === "uploading") ? "uploading" : "done",
-          progress: slots.reduce((n, s) => n + s.progress, 0) / slots.length,
-          error: slots.find((s) => s.error)?.error ?? null,
-        }
-      : undefined;
+    // ไฟล์ของเครื่อง: ไฟล์เดียวใช้ร่วมทุกชิ้น (เคลมก้อน 5 · เจ้าของงานตอบข้อ 2) — ช่องเดียวกับข้อ ⑥ ของฟอร์ม (m:{ชนิด})
+    // แนบโดยผูกชิ้นแรกที่ส่งเคลม: ถ่ายหลังถูกตีกลับ ไม่ใช่ภาพก่อนซ่อม (ไฟล์ไม่ผูกชิ้นเซิร์ฟเวอร์นับเป็นรูปก่อนซ่อม)
+    const machine = it.sparePartId === null;
+    const key = machine ? `m:${it.flag}` : slotKey(it.sparePartId!, it.flag);
+    const owner = machine ? env.claimedIds[0] ?? null : it.sparePartId;
+    const upload: SlotUpload | undefined = env.uploads.slots[key];
     const fresh = env.evidence
       .filter(
         (e) =>
@@ -342,14 +342,12 @@ function Editor({ it, env }: { it: FixItem; env: FixEnv }) {
         readOnly={env.readOnly}
         onPick={(f) => {
           env.onTouch();
-          ids.forEach((id) => env.uploads.start(slotKey(id, it.flag), f, it.flag, id));
+          env.uploads.start(key, f, it.flag, owner);
         }}
-        onRetry={() =>
-          ids.forEach((id) => {
-            const s = env.uploads.slots[slotKey(id, it.flag)];
-            if (s?.status === "failed") env.uploads.start(slotKey(id, it.flag), s.file, it.flag, id);
-          })
-        }
+        onRetry={() => {
+          const s = env.uploads.slots[key];
+          if (s?.status === "failed") env.uploads.start(key, s.file, it.flag, owner);
+        }}
       />
     );
   }
@@ -398,19 +396,21 @@ function Editor({ it, env }: { it: FixItem; env: FixEnv }) {
       );
     }
     if (it.flag === "CHECKS") {
-      const ticked = [...d.troubleshooting, ...env.check.checked];
+      // ข้อเช็คตาม Error ของชิ้นนี้ (ทีละชิ้น · เคลมก้อน 5) — "ไม่มี Error ขึ้น" ไม่มีข้อเช็คตาม Error
+      const err = env.errorCode ?? env.check.errorCode;
+      const errorChecked = d.errorChecked ?? [];
+      const ticked = [...d.troubleshooting, ...errorChecked];
       return (
         <View style={{ gap: 4 }}>
-          {env.check.errorCode && env.guide ? (
+          {err && err !== NO_ERROR_CODE && env.guide ? (
             <>
-              <Text style={styles.group}>เช็คตาม Error {env.check.errorCode} (คู่มือ Error in Field) — ติ๊กข้อที่ทำ</Text>
+              <Text style={styles.group}>เช็คตาม Error {err} (คู่มือ Error in Field) — ติ๊กข้อที่ทำ</Text>
               <ErrorCheckList
                 guide={env.guide}
-                check={env.check}
-                onCheck={(next) => {
-                  env.onTouch();
-                  env.setCheck(next);
-                }}
+                errorCode={err}
+                checked={errorChecked}
+                onChange={(next) => touchDraft(id, { errorChecked: next })}
+                partCode={code}
               />
             </>
           ) : null}
@@ -472,7 +472,7 @@ function Editor({ it, env }: { it: FixItem; env: FixEnv }) {
         <Text style={styles.label}>Error ที่เครื่องขึ้น — เลือกใหม่</Text>
         <Dropdown
           value={env.check.errorCode}
-          options={env.guide.errors.map((e) => ({ value: e.code, label: `${e.code} · ${e.name}` }))}
+          options={env.guide.errors.map((e) => ({ value: e.code, label: errorChoiceLabel(e) }))}
           onChange={(v) => {
             env.onTouch();
             // Error เปลี่ยน ข้อเช็คของ Error เดิมไม่ใช่ของ Error ใหม่ — ล้างให้ติ๊กใหม่ (แบบเดียวกับกล่องข้อมูลเครื่อง)
@@ -485,37 +485,29 @@ function Editor({ it, env }: { it: FixItem; env: FixEnv }) {
     );
   }
   if (it.flag === "MODEL" || it.flag === "SERIAL" || it.flag === "PLATE_OTHER") {
+    /**
+     * แก้ค่าป้ายด้วยช่องเดียวกับขั้นเครื่อง (PlateConfirm) — แก้แล้วต้องกดยืนยันกับภาพตัดอีกครั้ง (เคลมก้อน 5)
+     * ภาพตัดของรอบที่ถูกตีกลับยังอยู่ ผู้ตรวจเทียบค่าที่แก้กับภาพเดิมได้ · ถ่ายป้ายใหม่ให้ระบบอ่านก็ได้ (ปุ่มล่าง)
+     */
     const fields = plateFields(env.guide?.plate).filter((f) =>
       it.flag === "MODEL" ? f.key === "model" : it.flag === "SERIAL" ? f.key === "serial" : !f.model
     );
     return (
       <View style={{ gap: 6 }}>
         {fields.map((f) => {
-          const crop = (it.row.nameplate?.fields ?? []).find((x) => x.key === f.key)?.crop ?? null;
-          const v = env.plate.values[f.key];
+          const was = (it.row.nameplate?.fields ?? []).find((x) => x.key === f.key);
+          const v = env.plate.values[f.key] ?? (was ? { value: was.value, source: was.source, crop: was.crop ?? null } : undefined);
           return (
-            <View key={f.key} style={{ gap: 4 }}>
-              <Text style={styles.label}>{f.label} — แก้ให้ตรงกับรูปป้าย</Text>
-              {crop ? <ClaimCrop uri={crop} label={f.label} /> : null}
-              {f.model && v?.value ? (
-                <Text style={styles.modelValue} accessibilityLabel={`รุ่นที่จะส่ง ${v.value}`}>
-                  {v.value}
-                </Text>
-              ) : null}
-              <TextInput
-                style={[styles.input, styles.mono, it.changed ? styles.inputOk : styles.inputMissing]}
-                value={v?.value ?? ""}
-                onChangeText={(t) => {
-                  env.onTouch();
-                  // พิมพ์เองแล้วไม่ใช่ค่าที่ระบบอ่าน — ภาพตัดเดิมไม่ตรงกับค่าแล้ว (กติกาเดียวกับกล่องข้อมูลเครื่อง)
-                  env.setPlate({ ...env.plate, values: { ...env.plate.values, [f.key]: { value: t.toUpperCase(), source: "HAND", crop: null } } });
-                }}
-                autoCapitalize="characters"
-                placeholder={`พิมพ์${f.label}จากป้าย`}
-                placeholderTextColor={colors.textFaint}
-                accessibilityLabel={`${f.label} — แก้ค่า`}
-              />
-            </View>
+            <PlateFieldBlock
+              key={f.key}
+              field={f}
+              value={v ? { ...v, crop: v.crop ?? was?.crop ?? null } : undefined}
+              readOnly={env.readOnly}
+              onChange={(next) => {
+                env.onTouch();
+                env.setPlate({ ...env.plate, values: { ...env.plate.values, [f.key]: next } });
+              }}
+            />
           );
         })}
         <TouchableOpacity style={styles.rescan} onPress={env.onRescan} accessibilityLabel="ถ่ายรูปป้ายรุ่นใหม่ ให้ระบบอ่าน">

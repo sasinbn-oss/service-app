@@ -1,4 +1,5 @@
 // ทดสอบ: เคลมอะไหล่เก่าผ่านหน้าจอจริง บนใบทดสอบที่คัดลอกจากใบจริง (ใบจริงต้องไม่ถูกแตะ) · Admin Spare Part ดูใบงานได้อย่างเดียว
+//        · ฟอร์มทีละขั้น (เคลมก้อน 5): งานที่ทำ → เครื่อง (ถ่ายป้ายใหม่ ระบบอ่าน แล้วยืนยันรุ่นกับ Serial ทีละช่อง) → เคลมทีละชิ้น → ส่ง
 //        · ยังไม่ครบ ปุ่มล่างบอก "ยังขาด n อย่าง — พาไป" กดแล้วไม่ส่ง · ไฟล์เคลมส่งทันทีที่เลือก (ช่องบอก "กำลังส่ง x%" → "✓ แนบแล้ว")
 //        · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
 //        · Admin Spare Part เปิดใบแล้วเจอหน้าตรวจเคลม (หลักฐานรอบนี้ · ข้อมูลเครื่อง · แถบตัดสินล่างจอ — ละเอียดใน claim-review-web-test.js)
@@ -146,17 +147,17 @@ const login = async (code) =>
     page = await open("A001");
     await vis(page, "ปิดงาน").first().click();
     await page.waitForTimeout(1500);
-    await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").fill("เปลี่ยนบอร์ด ทดสอบแล้วปกติ");
-    await label(page, "ผู้เข้าปฏิบัติงานคนที่ 1").click();
-    await page.waitForTimeout(500);
-    await vis(page, "ช่างสมชาย", false).last().click();
-    await page.waitForTimeout(500);
-    // อะไหล่ที่เบิกไว้ (spCode) ถูกเติมเป็นอะไหล่ที่ใช้ไปให้แล้ว — ช่างไม่ต้องเพิ่มเอง กล่องเคลมจึงขึ้นทันที
-    (await label(page, `ส่งอะไหล่เก่าเคลม ${spCode}`).count()) > 0 && (await vis(page, "ยังขาด:", false).count()) > 0
-      ? pass("อะไหล่ที่เบิกไว้เติมให้เอง · สาขาในประกัน: เปิดใบเคลมไว้ให้ และบอกว่ายังขาดอะไร")
-      : fail("ไม่มีส่วนเคลมหรือไม่ได้เปิดไว้ให้");
-    const saveBtn = vis(page, "ยืนยันปิดงาน").last();
-    // ปุ่มล่างไม่จางแล้ว (เคลมก้อน 1) — ยังไม่ครบบอกว่าขาดกี่อย่าง กดแล้วพาไปช่องแรกที่ขาด ไม่ส่งอะไรไปเซิร์ฟเวอร์
+    /**
+     * ฟอร์มทีละขั้น (เคลมก้อน 5): สาขาในประกัน + อะไหล่ที่เบิกไว้ (เติมให้เอง) = มีชิ้นที่ส่งเคลม → สี่ขั้น
+     * งานที่ทำ · เครื่อง · เคลมทีละชิ้น · ส่ง — ปุ่มล่างพาไปทีละขั้น ส่งได้จากขั้น "ส่ง" เท่านั้น
+     */
+    // แถบขั้นของใบงานเอง ("ขั้น 1 ระบุอะไหล่ …") ขึ้นต้นเหมือนกัน — นับเฉพาะแถบของฟอร์มปิดงาน ไม่งั้นข้อนี้ผ่านทั้งที่ฟอร์มไม่เป็นทีละขั้น
+    const stepTab = (n) => page.locator('[aria-label="ขั้นปิดงาน"]').locator(`[aria-label^="ขั้น ${n} "]`).locator("visible=true").first();
+    const SEND = "ยืนยันปิดงาน · ส่งตรวจเคลม";
+    (await stepTab(1).count()) > 0 && (await stepTab(4).count()) > 0 && (await label(page, `จำนวน ${spCode}`).count()) > 0
+      ? pass("อะไหล่ที่เบิกไว้เติมให้เอง · สาขาในประกันมีชิ้นที่ส่งเคลม: ฟอร์มเปิดเป็นทีละขั้น (งานที่ทำ · เครื่อง · เคลมทีละชิ้น · ส่ง)")
+      : fail("ฟอร์มปิดงานพร้อมเคลมไม่เปิดเป็นทีละขั้น");
+    // ปุ่มล่างไม่จาง (เคลมก้อน 1) — ขั้นนี้ยังขาดอะไรบอกจำนวน กดแล้วพาไปช่องแรกที่ขาด ไม่ส่งอะไรไปเซิร์ฟเวอร์
     const goBtn = page.getByText(/^ยังขาด \d+ อย่าง — พาไป$/).locator("visible=true").last();
     const closePosts = [];
     page.on("request", (r) => { if (r.method() === "POST" && /\/close$/.test(r.url())) closePosts.push(r.url()); });
@@ -164,11 +165,62 @@ const login = async (code) =>
       const goText = await goBtn.innerText();
       await goBtn.click();
       await page.waitForTimeout(1200);
-      closePosts.length === 0 && (await saveBtn.count()) === 0 && sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS"
-        ? pass(`หลักฐานไม่ครบ: ปุ่มล่าง "${goText}" กดแล้วไม่ส่งคำขอปิดงาน (ฐานข้อมูลยังรอช่าง)`)
-        : fail(`กดปุ่มพาไป: คำขอปิด ${closePosts.length} · ปุ่มยืนยัน ${await saveBtn.count()}`);
-    } else fail("หลักฐานไม่ครบแต่ปุ่มล่างไม่บอกว่ายังขาด");
+      closePosts.length === 0 && (await vis(page, SEND).count()) === 0 && sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS"
+        ? pass(`ขั้นงานที่ทำยังไม่ครบ: ปุ่มล่าง "${goText}" กดแล้วไม่ส่งคำขอปิดงาน (ฐานข้อมูลยังรอช่าง)`)
+        : fail(`กดปุ่มพาไป: คำขอปิด ${closePosts.length} · ปุ่มส่ง ${await vis(page, SEND).count()}`);
+    } else fail("ขั้นงานที่ทำยังไม่ครบแต่ปุ่มล่างไม่บอกว่ายังขาด");
+    await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last().fill("เปลี่ยนบอร์ด ทดสอบแล้วปกติ");
+    await label(page, "ผู้เข้าปฏิบัติงานคนที่ 1").click();
+    await page.waitForTimeout(500);
+    await vis(page, "ช่างสมชาย", false).last().click();
+    await page.waitForTimeout(500);
+    await vis(page, "ถัดไป: ข้อมูลเครื่อง").last().click();
+    await page.waitForTimeout(1500);
 
+    // ── ขั้นเครื่อง: รูปป้ายรูปเดียว ระบบอ่านแล้วยืนยันรุ่นกับ Serial ทีละช่อง (เคลมก้อน 5) ──
+    // รูปป้ายที่แนบไว้ก่อนเปิดฟอร์ม (รูปหน้างานทดสอบ ไม่ใช่ป้ายจริง) ระบบอ่านเองก่อน — รอให้จบ แล้ว "ถ่ายใหม่" ด้วยรูปป้ายจริง
+    await label(page, "สถานะอ่านป้าย").waitFor({ state: "detached", timeout: 180000 }).catch(() => {});
+    (await vis(page, "✓ ป้ายรุ่น: ใช้รูปจากแท็บงานที่ทำ ไม่ต้องถ่ายซ้ำ").count()) > 0
+      ? pass("ขั้นเครื่องใช้รูปป้ายจากขั้นงานที่ทำ ไม่ต้องถ่ายซ้ำ") : fail("ขั้นเครื่องไม่บอกว่าใช้รูปป้ายจากขั้นงานที่ทำ");
+    const claimFilesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`));
+    await attach(page, "ถ่ายรูปป้ายรุ่นใหม่", PLATE_PHOTO);
+    // อ่านทั้งป้ายในเบราว์เซอร์ (หาบรรทัด → อ่านซ้ำทีละบรรทัด) — เครื่องทดสอบช้ากว่ามือถือจริง ให้เวลานาน
+    await page.waitForTimeout(1500);
+    await label(page, "สถานะอ่านป้าย").waitFor({ state: "detached", timeout: 180000 });
+    const shown = async (prefix) =>
+      ((await page.locator(`[aria-label^="${prefix}"]`).locator("visible=true").first().getAttribute("aria-label").catch(() => null)) ?? "").slice(prefix.length);
+    // MODEL: รุ่นเต็มในกรอบข้าง ๆ (HL055LWHPRXG6W0000 · เจ้าของงานขอ ต.ค. 69) อ่านได้ HLOSSL… → ตัวต้นแก้ตามทะเบียน HL055L
+    // ส่วนท้ายอ่านเพี้ยนได้ (6 → E/S) ระบบติดธงให้ช่างตรวจ — เทสต์ดูตัวต้นที่แก้ตามทะเบียน + ความยาวเต็ม 18 ตัว
+    const model = await shown("รุ่นที่จะส่ง ");
+    /^HL055LWHPRXG/.test(model) && model.length === 18 && (await shown("Serialที่จะส่ง ")) === "2402600330" &&
+      (await vis(page, "ระบบอ่านป้ายแล้ว — กดยืนยันรุ่นกับ Serial ทีละช่อง").count()) > 0 &&
+      (await vis(page, "✓ ถ่ายป้ายใหม่แล้ว — แทนรูปเดิม").count()) > 0
+      ? pass(`ถ่ายป้ายใหม่ในขั้นเครื่อง: "✓ ถ่ายป้ายใหม่แล้ว — แทนรูปเดิม" · ระบบเลือกรุ่นเต็ม ${model} (ตัวต้นแก้ตามทะเบียน HL055L) + Serial 2402600330`)
+      : fail(`ค่าที่อ่านจากรูป: รุ่น=${model} Serial=${await shown("Serialที่จะส่ง ")}`);
+    // ตัวท้ายแต่ละรอบอ่านไม่ตรงกัน (6 อ่านเป็น E/S) — ต้องขึ้นเตือนบอกว่าส่วนท้ายไม่มั่นใจ ไม่ใช่ปล่อยผ่านเงียบ ๆ
+    (await vis(page, "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ", false).count()) > 0
+      ? pass("รุ่นเต็มที่ตัวท้ายอ่านไม่ตรงกันทุกรอบ ขึ้นเตือนให้ช่างดูกับรูป") : fail("รุ่นเต็มไม่ขึ้นเตือนทั้งที่ตัวท้ายไม่แน่นอน");
+    (await label(page, "รูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ยังขาด:", false).first().innerText().catch(() => "")).includes("ข้อมูลเครื่อง: ยืนยันรุ่น")
+      ? pass("โชว์รูปป้ายเต็มในฟอร์ม · ยังต้องกดยืนยันรุ่นกับรูป (กล่องยังขาด \"ข้อมูลเครื่อง: ยืนยันรุ่น\")") : fail("ไม่มีรูปป้ายเต็ม/ไม่บังคับยืนยันรุ่น");
+    await page.screenshot({ path: path.join(DIR, "claim-0a-scanner.png") });
+    await label(page, "ยืนยัน รุ่น ตรงกับรูป").click();
+    await label(page, "ยืนยัน Serial ตรงกับรูป").click();
+    await page.waitForTimeout(300);
+    (await vis(page, "✓ ยืนยันแล้ว: ตรงกับรูปทุกตัว").count()) > 0 && (await vis(page, "✓ ยืนยันแล้ว: ตรงกับรูป").count()) > 0
+      ? pass("กดยืนยันทีละช่อง: \"✓ ยืนยันแล้ว: ตรงกับรูปทุกตัว\" (รุ่น) · \"✓ ยืนยันแล้ว: ตรงกับรูป\" (Serial)")
+      : fail("ยืนยันรุ่น/Serial ไม่ขึ้นสถานะยืนยันแล้ว");
+    await page.screenshot({ path: path.join(DIR, "claim-0-scanned.png") });
+    await label(page, "Error ที่เครื่องขึ้น").click();
+    await page.waitForTimeout(400);
+    await vis(page, "E dL / E dL1 / E dL2 — ประตูล็อก/ปลดล็อก (Door Lock)").last().click();
+    await page.waitForTimeout(300);
+    (await vis(page, "การติดตั้งฐานเครื่อง", false).count()) === 0
+      ? pass("ไม่มีเช็คลิสต์การติดตั้งฐานเครื่องในฟอร์มแล้ว")
+      : fail("ยังมีเช็คลิสต์การติดตั้งฐานเครื่อง");
+    await page.getByText(/^ถัดไป: เคลม /).locator("visible=true").last().click();
+    await page.waitForTimeout(1200);
+
+    // ── ขั้นเคลมทีละชิ้น ──
     await label(page, `รหัสอะไหล่ตัวที่เสีย ${spCode}`).fill(spCode);
     await label(page, `อาการ/สาเหตุ ${spCode}`).fill("ประตูล็อกไม่ลง ขึ้น Error dL");
     await label(page, `สิ่งที่เข้าเช็ค ${spCode}`).fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
@@ -179,9 +231,7 @@ const login = async (code) =>
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Network.enable");
     await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 20, downloadThroughput: -1, uploadThroughput: 60 * 1024 });
-    const claimFilesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`));
-    // รอ/ตรวจบนจอเฉพาะในช่องรูปอะไหล่เก่า — ขั้นป้ายรุ่นของฟอร์มขึ้น "✓ แนบแล้ว" ค้างตั้งแต่เปิด (แนบป้ายไว้ตอนเตรียม)
-    // ถ้าหาทั้งหน้า การรอจบทันทีแล้วนับในฐานข้อมูลแข่งกับไฟล์ที่ยังส่งไม่จบ
+    // รอ/ตรวจบนจอเฉพาะในช่องรูปอะไหล่เก่า — ช่องอื่นอาจขึ้น "✓ แนบแล้ว" อยู่แล้ว ถ้าหาทั้งหน้า การรอจบทันทีแล้วนับแข่งกับไฟล์ที่ยังส่งไม่จบ
     const partSlot = page.locator(`[aria-label="วางรูปอะไหล่เก่า ${spCode}"]`).locator("visible=true").last();
     const partFiles = () =>
       Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role='CLAIM_PART' and "sparePartId"=${sp}`));
@@ -204,57 +254,31 @@ const login = async (code) =>
     (await partDone.count()) > 0 && partFiles() === 1
       ? pass("ส่งเสร็จช่องรูปอะไหล่เก่าขึ้น \"✓ แนบแล้ว\" · รูปอยู่ในฐานข้อมูลแล้วก่อนกดปิดงาน")
       : fail(`หลังเลือกรูปอะไหล่เก่า: ช่อง ✓=${await partDone.count()} · ไฟล์เคลมในฐานข้อมูล ${sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`)} (เดิม ${claimFilesBefore})`);
-    await attach(page, `แนบรูปอาการเสีย ${spCode}`, PHOTO);
-    await attach(page, `แนบวิดีโอ Error code ${spCode}`, CLIP);
+    // ข้อ ⑥ ของเครื่อง (ใช้ร่วมทุกชิ้น) — ไม่ได้ถ่ายก่อนซ่อม แนบตรงนี้ (ผูกชิ้นนี้ ไม่นับเป็นรูปก่อนซ่อม)
+    (await vis(page, "อาการหลังซ่อมอาจไม่ขึ้นแล้ว — ผู้ขายอาจไม่รับ").count()) > 0
+      ? pass("ไม่ได้ถ่ายก่อนซ่อม: ข้อ ⑥ เตือน \"อาการหลังซ่อมอาจไม่ขึ้นแล้ว — ผู้ขายอาจไม่รับ\"") : fail("ข้อ ⑥ ไม่เตือนว่าไม่มีภาพอาการ");
+    await attach(page, "แนบรูปอาการเสีย ใช้ร่วมทุกชิ้น", PHOTO);
+    await attach(page, "แนบวิดีโอ Error code ใช้ร่วมทุกชิ้น", CLIP);
     await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
     const items = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimTroubleshooting);
     for (const t of items) await label(page, `${t} ${spCode}`).click();
+    await label(page, `เช็คแล้ว Solenoid ไม่ฝืด ${spCode}`).click();
     await page.waitForTimeout(500);
-
-    // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
-    // กล่อง "ยังขาด" กล่องเดียวท้ายฟอร์ม บอกเป็น "ข้อมูลเครื่อง: …" (เคลมก้อน 1 — ไม่มีกล่องยังขาดแยกใต้กล่องเครื่องแล้ว)
-    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ข้อมูลเครื่อง: ข้อมูลป้ายรุ่น", false).count()) > 0
-      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง กล่องยังขาดบอก \"ข้อมูลเครื่อง: ข้อมูลป้ายรุ่น\"") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
-    await attach(page, "ถ่ายรูปป้ายรุ่น", PLATE_PHOTO);
-    // อ่านทั้งป้ายในเบราว์เซอร์ (หาบรรทัด → อ่านซ้ำทีละบรรทัด) — เครื่องทดสอบช้ากว่ามือถือจริง ให้เวลานาน
-    await page.waitForTimeout(1500);
-    await label(page, "สถานะอ่านป้าย").waitFor({ state: "detached", timeout: 180000 });
-    const val = (f) => label(page, `ป้ายรุ่น ${f}`).inputValue();
-    // MODEL: รุ่นเต็มในกรอบข้าง ๆ (HL055LWHPRXG6W0000 · เจ้าของงานขอ ต.ค. 69) อ่านได้ HLOSSL… → ตัวต้นแก้ตามทะเบียน HL055L
-    // ส่วนท้ายอ่านเพี้ยนได้ (6 → E/S) ระบบติดธงให้ช่างตรวจ — เทสต์ดูตัวต้นที่แก้ตามทะเบียน + ความยาวเต็ม 18 ตัว
-    const model = await val("รุ่น");
-    /^HL055LWHPRXG/.test(model) && model.length === 18 && (await val("Serial")) === "2402600330" && (await vis(page, "อ่านจากรูป").count()) >= 2
-      ? pass(`ถ่ายรูปทั้งป้ายรูปเดียว: ระบบเลือกรุ่นเต็ม ${model} (ตัวต้นแก้ตามทะเบียน HL055L) + Serial 2402600330 ติดป้าย "อ่านจากรูป"`)
-      : fail(`ค่าที่อ่านจากรูป: รุ่น=${await val("รุ่น")} Serial=${await val("Serial")}`);
-    // ตัวท้ายแต่ละรอบอ่านไม่ตรงกัน (6 อ่านเป็น E/S) — ต้องขึ้นกรอบเหลืองบอกว่าส่วนท้ายไม่มั่นใจ ไม่ใช่ปล่อยผ่านเงียบ ๆ
-    (await vis(page, "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ", false).count()) > 0
-      ? pass("รุ่นเต็มที่ตัวท้ายอ่านไม่ตรงกันทุกรอบ ขึ้นเตือนให้ช่างดูกับรูป") : fail("รุ่นเต็มไม่ขึ้นเตือนทั้งที่ตัวท้ายไม่แน่นอน");
-    (await label(page, "รูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ยังขาด:", false).first().innerText()).includes("ติ๊กตรวจค่ากับรูปป้าย")
-      ? pass("โชว์รูปป้ายเต็มในฟอร์ม · ยังต้องติ๊กตรวจค่ากับรูป") : fail("ไม่มีรูปป้ายเต็ม/ไม่บังคับตรวจกับรูป");
-    await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(DIR, "claim-0a-scanner.png") });
-    await label(page, "ตรวจค่ากับรูปป้ายแล้ว").click();
-    await page.waitForTimeout(300);
-    await label(page, "ข้อมูลเครื่องสำหรับเคลม").scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(DIR, "claim-0-scanned.png") });
-    await label(page, "Error ที่เครื่องขึ้น").click();
-    await page.waitForTimeout(400);
-    await vis(page, "E dL / E dL1 / E dL2 · Door Lock — ประตูล็อก/ปลดล็อก").last().click();
-    await page.waitForTimeout(300);
-    await label(page, "เช็คแล้ว Solenoid ไม่ฝืด").click();
-    (await vis(page, "การติดตั้งฐานเครื่อง", false).count()) === 0
-      ? pass("ไม่มีเช็คลิสต์การติดตั้งฐานเครื่องในฟอร์มแล้ว")
-      : fail("ยังมีเช็คลิสต์การติดตั้งฐานเครื่อง");
-    await page.waitForTimeout(500);
-    await label(page, "Error ที่เครื่องขึ้น").scrollIntoViewIfNeeded();
+    (await vis(page, "โซลินอยด์ (Solenoid) ไม่ฝืด").count()) > 0
+      ? pass("ข้อเช็คตาม Error ขึ้นคำอ่านไทยนำหน้า \"โซลินอยด์ (Solenoid) ไม่ฝืด\" (ค่าที่เก็บยังเป็นคำในคู่มือ)")
+      : fail("ข้อเช็คตาม Error ไม่ขึ้นคำอ่านไทย");
+    await label(page, `เช็คแล้ว Solenoid ไม่ฝืด ${spCode}`).scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-0b-check.png") });
-    (await vis(page, "ยังขาด:", false).count()) === 0 ? pass("ครบทุกข้อ ข้อความยังขาดหายไป") : fail(`ยังขึ้นว่าขาด: ${await vis(page, "ยังขาด:", false).first().innerText()}`);
+    await vis(page, "ถัดไป: ตรวจก่อนส่ง").last().click();
+    await page.waitForTimeout(800);
+    (await vis(page, "ยังขาด:", false).count()) === 0 && (await vis(page, SEND).count()) > 0
+      ? pass(`ครบทุกข้อ: ขั้นส่งไม่มีอะไรขาด ปุ่มล่าง "${SEND}"`) : fail(`ยังขึ้นว่าขาด: ${await vis(page, "ยังขาด:", false).first().innerText().catch(() => "")}`);
     await page.screenshot({ path: path.join(DIR, "claim-1-close.png") });
 
     /**
      * กดใหม่ไม่ส่งซ้ำ (WO-00133 — ไฟล์ซ้ำจนเต็มเพดานแล้วปิดงานไม่ได้)
-     * ไฟล์เคลมขึ้นไปแล้วตั้งแต่ตอนเลือก (นับรวมใน filesBefore) — ที่ยังส่งตอนกดปิดคือรูปป้ายรุ่นที่ถ่ายในกล่องข้อมูลเครื่อง
-     * คำสั่งปิดรอบแรกให้ล้มหลังไฟล์ขึ้นครบ แล้วกดใหม่ ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
+     * ฟอร์มทีละขั้นส่งทุกไฟล์ทันทีที่เลือก (ไฟล์เคลม · รูปป้ายที่ถ่ายใหม่) — ตอนกดปิดไม่มีไฟล์ต้องส่งเพิ่ม
+     * คำสั่งปิดรอบแรกให้ล้ม แล้วกดใหม่ ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
      */
     const filesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
     Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`)) === 4
@@ -266,11 +290,11 @@ const login = async (code) =>
       failOnce = false;
       return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "ทดสอบ: ปิดไม่ผ่านรอบแรก" }) });
     });
-    await saveBtn.click();
+    await vis(page, SEND).last().click();
     await vis(page, "ทดสอบ: ปิดไม่ผ่านรอบแรก").waitFor({ timeout: 120000 });
     const filesSent = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
-    filesSent > filesBefore ? pass(`รอบแรกไฟล์ขึ้น ${filesSent - filesBefore} ไฟล์ แล้วคำสั่งปิดล้ม`) : fail("รอบแรกไม่มีไฟล์ขึ้น");
-    await saveBtn.click();
+    filesSent === filesBefore ? pass("กดปิดรอบแรก: ไม่มีไฟล์ต้องส่งเพิ่ม (ขึ้นตั้งแต่ตอนเลือก) แล้วคำสั่งปิดล้ม") : fail(`รอบแรกมีไฟล์ขึ้นตอนกดปิด ${filesSent - filesBefore} ไฟล์`);
+    await vis(page, SEND).last().click();
     await page.waitForTimeout(6000);
     const filesAfter = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
     filesAfter === filesSent
@@ -283,17 +307,20 @@ const login = async (code) =>
     const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||("fieldCheck" ? 'install')::text from "PartClaim" where "workOrderId"=${id}`);
     const fields = JSON.parse(np.split("|")[0]);
     const f = (k) => fields.find((x) => x.key === k) ?? {};
-    f("model").value === model && f("model").source === "SCAN" && f("serial").value === "2402600330" && f("serial").source === "SCAN" &&
+    f("model").value === model && f("model").source === "SCAN" && f("model").confirmed === true && typeof f("model").read === "string" &&
+      f("serial").value === "2402600330" && f("serial").source === "SCAN" && f("serial").confirmed === true &&
       /^data:image\/jpeg/.test(f("serial").crop ?? "") && np.endsWith('|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|false')
-      ? pass(`ฐานข้อมูล: รุ่นเต็ม ${model} · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด) · Error E dL · ข้อที่เช็ค · ไม่มีคำตอบเรื่องติดตั้ง`)
-      : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}`).join(",")}`);
+      ? pass(`ฐานข้อมูล: รุ่นเต็ม ${model} · Serial 2402600330 (อ่านจากรูป + ภาพบรรทัด · ยืนยันทีละช่อง confirmed + ค่าที่ระบบอ่าน read) · Error E dL · ข้อที่เช็คของชิ้นนี้ · ไม่มีคำตอบเรื่องติดตั้ง`)
+      : fail(`ข้อมูลเครื่องในใบเคลม: ${np.slice(-200)} · ${fields.map((x) => `${x.key}=${x.value}/${x.source}/${x.confirmed}`).join(",")}`);
     sql(`select (c.nameplate->>'photoId')::int = (select max(a.id) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE')
            and (select count(*) from "WorkOrderAttachment" a where a."workOrderId"=${id} and a.role='NAMEPLATE') >= 1
-           and (c.nameplate->>'verified')::boolean from "PartClaim" c where c."workOrderId"=${id}`) === "t"
-      ? pass("รูปป้ายเต็มที่ถ่ายขึ้นเป็นไฟล์ป้ายรุ่นของงาน และผูกกับใบเคลม + บันทึกว่าตรวจกับรูปแล้ว (ฐานข้อมูล)")
-      : fail("รูปป้ายเต็มไม่ผูกกับใบเคลม");
+           and jsonb_path_exists(c.nameplate, '$.fields[*] ? (@.key == "model" && @.confirmed == true)')
+           and jsonb_path_exists(c.nameplate, '$.fields[*] ? (@.key == "serial" && @.confirmed == true)')
+         from "PartClaim" c where c."workOrderId"=${id}`) === "t"
+      ? pass("รูปป้ายที่ถ่ายใหม่ขึ้นเป็นไฟล์ป้ายรุ่นล่าสุดของงาน ผูกกับใบเคลม + รุ่นกับ Serial ยืนยันแล้วทีละช่อง (ฐานข้อมูล)")
+      : fail("รูปป้ายไม่ผูกกับใบเคลม หรือรุ่น/Serial ไม่ได้ยืนยัน");
     sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`) === "4"
-      ? pass("หลักฐาน 4 ไฟล์ขึ้นไปผูกกับอะไหล่ที่เคลม (ฐานข้อมูล)")
+      ? pass("หลักฐาน 4 ไฟล์ขึ้นไปผูกกับอะไหล่ที่เคลม (ข้อ ⑥ แนบในฟอร์มผูกชิ้นที่กรอก · ฐานข้อมูล)")
       : fail("หลักฐานในฐานข้อมูลไม่ครบ");
     (await vis(page, "เคลมอะไหล่เก่า").count()) > 0 && (await label(page, "ตีกลับให้ช่างแก้").count()) === 0 &&
       (await vis(page, "ปุ่มตีกลับให้ช่างแก้", false).count()) === 0 && (await vis(page, "ตีกลับให้ช่างแก้").count()) === 0
@@ -325,8 +352,10 @@ const login = async (code) =>
     (await vis(page, "หลักฐานรอบนี้:").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานรอบนี้ของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
     (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตาม Error E dL / E dL1 / E dL2 (ไม่บังคับ · ไม่พิมพ์ลงใบเคลม)").count()) > 0
       ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตาม Error ในหน้าตรวจเคลม") : fail("หน้าตรวจเคลมไม่มีข้อมูลเครื่อง/ข้อเช็คตาม Error");
-    (await label(page, "เปิดรูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว").count()) > 0
-      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว (ใบที่ส่งจากฟอร์มติ๊กครั้งเดียว)") : fail("หน้าตรวจเคลมไม่มีรูปป้ายเต็ม");
+    // ยืนยันทีละช่อง (เคลมก้อน 5): ป้ายที่มาบอกว่าช่างกดยืนยันแล้ว — ไม่ใช่คำของใบเก่า "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว"
+    (await label(page, "เปิดรูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, /ช่างยืนยันแล้ว|ช่างกดยืนยันรุ่นแล้ว/).count()) > 0 &&
+      (await vis(page, "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว").count()) === 0
+      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างยืนยันทีละช่องแล้ว") : fail("หน้าตรวจเคลมไม่มีรูปป้ายเต็ม/สถานะยืนยัน");
     await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });

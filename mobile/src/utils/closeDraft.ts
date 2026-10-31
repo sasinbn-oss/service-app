@@ -19,6 +19,37 @@ export interface ClaimPartDraft {
   troubleshooting: string[];
   /** คำอธิบาย "ค่าเดิมถูกแล้ว" ที่กำลังพิมพ์ — null = ยังไม่ได้เปิดช่อง (มีเฉพาะชิ้นที่ถูกตีกลับ) */
   keep: string | null;
+  /**
+   * ข้อเช็คตาม Error ที่ช่างติ๊กในชิ้นนี้ (เคลมก้อน 5) — ทีละชิ้นตามตัวอย่างที่เจ้าของงานเลือก
+   * "ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้" เป็นคำตอบของชิ้นนั้น บอร์ดกับสายพานเช็คคนละอย่าง
+   * ร่างรุ่นก่อนไม่มี = ยังไม่ได้ติ๊ก
+   */
+  errorChecked?: string[];
+  /**
+   * ไม่ส่งเคลมชิ้นนี้ทั้งที่สาขาอยู่ในประกัน — ต้องมีเหตุผล (เคลมก้อน 5 · เจ้าของงานตอบข้อ 10) ขึ้นในประวัติใบงาน
+   * null = ไม่ได้กดไม่ส่งเคลม (หรือสาขาหมดประกัน ปิดเคลมได้โดยไม่ต้องบอกเหตุผล)
+   */
+  skip?: ClaimSkip | null;
+}
+
+/** เหตุผลที่ช่างไม่ส่งเคลมชิ้นที่อยู่ในประกัน — คีย์ตรงกับที่เซิร์ฟเวอร์รับ (claimSkips[].reason) */
+export type SkipReason = "DAMAGED_LOST" | "NOT_WARRANTY" | "OTHER";
+export interface ClaimSkip {
+  reason: SkipReason;
+  /** "อื่น ๆ" ต้องพิมพ์เหตุผล */
+  note: string;
+}
+/** คำที่ช่างเห็น — ตามรายการในตัวอย่างที่เจ้าของงานอนุมัติ (SKIP) */
+export const SKIP_REASONS: { key: SkipReason; label: string }[] = [
+  { key: "DAMAGED_LOST", label: "อะไหล่เก่าเสียหาย/หาย" },
+  { key: "NOT_WARRANTY", label: "ไม่ใช่ชิ้นในประกัน" },
+  { key: "OTHER", label: "อื่น ๆ" },
+];
+/** เหตุผลแบบที่ขึ้นในฟอร์มและหน้าตรวจ — "อื่น ๆ: {ที่พิมพ์}" */
+export function skipText(s: ClaimSkip | null | undefined): string {
+  if (!s) return "";
+  const label = SKIP_REASONS.find((r) => r.key === s.reason)?.label ?? s.reason;
+  return s.reason === "OTHER" && s.note.trim() ? `${label}: ${s.note.trim()}` : label;
 }
 
 export interface CloseDraft {
@@ -26,6 +57,7 @@ export interface CloseDraft {
   otherWorkers?: string;
   /** คีย์ = sparePartId */
   claims?: Record<string, Partial<ClaimPartDraft>>;
+  /** ค่าป้ายรุ่น รวมสถานะยืนยันทีละช่อง (confirmed/edited/read · เคลมก้อน 5) — ร่างรุ่นก่อนไม่มี = ยังไม่ได้ยืนยัน */
   plate?: { values: Record<string, PlateValue> };
   check?: { errorCode: string | null; checked: string[] };
   /**

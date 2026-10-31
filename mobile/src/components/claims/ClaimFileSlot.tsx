@@ -91,7 +91,11 @@ export function useClaimUploads(
   );
 
   const start = useCallback(
-    (key: string, file: PickedAttachment, role: string, sparePartId: number) => {
+    /**
+     * sparePartId null = ไฟล์ไม่ผูกชิ้น — รูปหน้างาน/ป้ายรุ่น/ใบเหลืองในขั้น "งานที่ทำ" (ส่งทันทีที่เลือกตั้งแต่เคลมก้อน 5)
+     * และวิดีโอ Error/รูปอาการที่ถ่ายในกล่อง "ถ่ายก่อนซ่อม" (เซิร์ฟเวอร์นับไฟล์ไม่ผูกชิ้นเป็นรูปก่อนซ่อม)
+     */
+    (key: string, file: PickedAttachment, role: string, sparePartId: number | null) => {
       // ไฟล์ที่ขึ้นแล้วในฟอร์มรอบนี้ถูกแทน — ลบทิ้ง (ยังไม่เป็นหลักฐานของใบเคลมไหน)
       // ทำนอกตัวอัปเดต state: ตัวอัปเดตถูกเรียกซ้ำได้ (StrictMode) แล้วจะยิงลบสองครั้ง
       const old = slotsRef.current[key];
@@ -102,7 +106,7 @@ export function useClaimUploads(
       let shown = -1;
       const job = (async () => {
         try {
-          const row = await uploadAttachment(orderId, file, role, sparePartId, undefined, {
+          const row = await uploadAttachment(orderId, file, role, sparePartId ?? undefined, undefined, {
             quiet: true,
             // ไฟล์ของเครื่องแนบให้ทุกชิ้นพร้อมกัน (FixList) — แต่ละช่องคือคำขอของตัวเอง ไม่ใช่กดซ้ำ
             parallel: true,
@@ -155,6 +159,25 @@ export function useClaimUploads(
     [remove]
   );
 
+  /**
+   * เอาไฟล์ของช่องเดียวออก (กด × ที่รูปย่อในขั้นงานที่ทำ) — ไฟล์ที่ขึ้นในฟอร์มรอบนี้ลบจากใบงานด้วย
+   * ไม่ลบแล้วรูปที่ช่างเอาออกยังนับเป็นรูปก่อน/หลังซ่อมของใบ และค้างนับเพดานไฟล์
+   */
+  const discard = useCallback(
+    (key: string) => {
+      const slot = slotsRef.current[key];
+      current.current.delete(key);
+      if (slot?.attachmentId && sessionIds.current.has(slot.attachmentId)) void remove(slot.attachmentId, undefined, true);
+      setSlots((s) => {
+        if (!s[key]) return s;
+        const next = { ...s };
+        delete next[key];
+        return next;
+      });
+    },
+    [remove]
+  );
+
   /** รอไฟล์ที่ยังส่งไม่จบ — กดปิดงานระหว่างไฟล์กำลังขึ้น ต้องรอ ไม่ใช่ส่งซ้ำหรือปิดโดยไม่มีไฟล์ */
   const waitAll = useCallback(async () => {
     while (inflight.current.size) await Promise.allSettled([...inflight.current.values()]);
@@ -170,20 +193,24 @@ export function useClaimUploads(
 
   const uploading = Object.values(slots).filter((s) => s.status === "uploading");
   const progress = uploading.length ? uploading.reduce((n, s) => n + s.progress, 0) / uploading.length : 1;
-  return { slots, removed, start, discardPart, waitAll, reset, uploading: uploading.length, progress };
+  return { slots, removed, start, discard, discardPart, waitAll, reset, uploading: uploading.length, progress };
 }
 
 export default function ClaimFileSlot({
   label,
+  hint,
   video,
   partCode,
   upload,
   existing,
   readOnly,
+  actionLabel,
   onPick,
   onRetry,
 }: {
   label: string;
+  /** บอกว่าต้องถ่ายให้เห็นอะไร (เช่น "ให้เห็นสติกเกอร์รหัส") — ผู้ขายตีกลับเพราะรูปไม่เห็นจุดนี้บ่อยที่สุด */
+  hint?: string;
   video: boolean;
   /** ต่อท้ายชื่อปุ่มสำหรับโปรแกรมอ่านจอ/เทสต์ — ใบที่เคลมสองชิ้นมีช่องชื่อเดียวกันสองชุด */
   partCode: string;
@@ -192,6 +219,11 @@ export default function ClaimFileSlot({
   existing?: { thumb: string | null; kind: string } | null;
   /** ดูในฐานะคนอื่น — เซิร์ฟเวอร์ไม่รับอยู่แล้ว บอกตั้งแต่กดเลือก ไม่ให้รอส่งจนจบแล้วค่อยเจอ 403 */
   readOnly?: boolean;
+  /**
+   * ชื่อปุ่มหลักตอนยังไม่มีไฟล์ แทน "เลือกวิดีโอ"/"เลือกรูป" — ข้อ ⑥ ใช้ "ถ่ายวิดีโอ"/"ถ่ายรูปอาการ" ตามตัวอย่าง
+   * เพราะตอนนั้นช่างยืนหน้าเครื่อง สิ่งที่ต้องทำคือถ่ายตอนนี้ ไม่ใช่ไปหาไฟล์เก่า (มือถือ = ปุ่มกล้อง · เว็บ = ปุ่มเลือกที่เปิดกล้องได้)
+   */
+  actionLabel?: string;
   onPick: (file: PickedAttachment) => void;
   onRetry: () => void;
 }) {
@@ -245,6 +277,7 @@ export default function ClaimFileSlot({
             {label}
             {!upload && existing ? " — แนบไว้แล้ว" : ""}
           </Text>
+          {hint && !has && status !== "uploading" ? <Text style={styles.sub}>{hint}</Text> : null}
           {preparing ? <Text style={styles.sub}>{preparing}…</Text> : null}
           {status === "uploading" ? <Text style={styles.sub}>กำลังส่ง {Math.round((upload?.progress ?? 0) * 100)}%</Text> : null}
           {status === "done" ? <Text style={styles.ok}>✓ แนบแล้ว</Text> : null}
@@ -283,7 +316,7 @@ export default function ClaimFileSlot({
               onPress={() => pick((stage) => pickVideoAttachment(stage))}
               accessibilityLabel={`แนบ${label} ${partCode}`}
             >
-              <Text style={styles.btnText}>{again ? "แนบใหม่" : "เลือกวิดีโอ"}</Text>
+              <Text style={styles.btnText}>{again ? "แนบใหม่" : actionLabel ?? "เลือกวิดีโอ"}</Text>
             </TouchableOpacity>
           ) : (
             <>
@@ -293,7 +326,7 @@ export default function ClaimFileSlot({
                   onPress={() => pick((stage) => pickImageAttachment(true, stage))}
                   accessibilityLabel={`ถ่าย${label} ${partCode}`}
                 >
-                  <Text style={styles.btnText}>ถ่าย</Text>
+                  <Text style={styles.btnText}>{!again && actionLabel ? actionLabel : "ถ่าย"}</Text>
                 </TouchableOpacity>
               ) : null}
               <TouchableOpacity
@@ -301,7 +334,7 @@ export default function ClaimFileSlot({
                 onPress={() => pick((stage) => pickImageAttachment(false, stage))}
                 accessibilityLabel={`แนบ${label} ${partCode}`}
               >
-                <Text style={styles.btnText}>{again ? "แนบใหม่" : "เลือกรูป"}</Text>
+                <Text style={styles.btnText}>{again ? "แนบใหม่" : Platform.OS === "web" && actionLabel ? actionLabel : "เลือกรูป"}</Text>
               </TouchableOpacity>
             </>
           )}
