@@ -386,8 +386,9 @@ export async function uploadAttachment(
    * quiet = ไม่เปิดหน้าโหลดเต็มจอและหลอดกลาง — ช่องไฟล์เคลมส่งไฟล์ทันทีที่เลือก (ฟอร์มปิดงาน)
    * ถ้าบังทั้งจอทุกครั้งที่เลือกรูป ช่างกรอกช่องอื่นต่อระหว่างรอไม่ได้ ซึ่งเป็นเหตุผลที่ต้องส่งทันที
    * ความคืบหน้าส่งให้ช่องนั้นวาดเองผ่าน onProgress (0–1)
+   * parallel = ไม่ให้ตัวกันกดซ้ำของ api/client รวมคำขอนี้กับคำขอแนบอื่นที่ยังไม่เสร็จ (ดูด้านล่าง)
    */
-  opts: { quiet?: boolean; onProgress?: (p: number) => void } = {}
+  opts: { quiet?: boolean; onProgress?: (p: number) => void; parallel?: boolean } = {}
 ): Promise<UploadedAttachment> {
   const form = new FormData();
   await appendFile(form, "file", file.uri, file.name, file.type);
@@ -408,6 +409,9 @@ export async function uploadAttachment(
       opts.onProgress?.(current);
     },
     loadingText: opts.quiet ? false : "กำลังส่งไฟล์...",
+    // ตัวกันกดซ้ำของ api/client เทียบแค่ที่อยู่ (เทียบเนื้อไฟล์ไม่ได้) — ไฟล์เดียวกันที่แนบให้หลายชิ้นพร้อมกันจึงถูกนับเป็นกดซ้ำ
+    // คำขอที่สองไม่ถูกส่ง แต่ช่องของชิ้นนั้นขึ้น "แนบแล้ว" ด้วยแถวของชิ้นแรก · ช่องเคลมกันกดซ้ำของตัวเองอยู่แล้ว (ช่องละหนึ่งไฟล์)
+    dedupe: opts.parallel ? false : undefined,
   });
   // คืนแถวที่สร้าง — ช่องไฟล์เคลมต้องรู้ id ไว้ลบตอนเลือกไฟล์ใหม่แทน (ไฟล์เดิมยังไม่ได้ส่งกับใบเคลมไหน)
   return res.data;

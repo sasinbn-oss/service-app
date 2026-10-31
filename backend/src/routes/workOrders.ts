@@ -65,13 +65,23 @@ import {
   claimRoundPayload,
   claimSummary,
   firstSubmittedAt,
+  flagContextOf,
+  flagReasonText,
+  flagSatisfied,
+  isMachineFlag,
+  isPartFlag,
   isSubmittedEvidence,
+  lastRejected,
   latestPerPart,
   lockedParts,
   lockSince,
   machineLockRow,
   partLabel,
+  plateFamilyOf,
+  rejectFieldsSummary,
   repairStartFor,
+  reviewFlagLabel,
+  reviewFlagsFor,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
@@ -143,6 +153,8 @@ import {
   claimTroubleshootingFor,
   CLAIM_EVIDENCE_ROLES,
   CLAIM_DECLINE_REASONS,
+  CLAIM_QUICK_REASONS,
+  CLAIM_REVIEW_FLAGS,
   SEND_BACK_REASON_REQUIRED,
   machineTypeFromCode,
   normaliseMachineCode,
@@ -829,6 +841,8 @@ function shape(
       fieldCheck: c.fieldCheck,
       status: c.status,
       rejectReason: c.rejectReason,
+      // ช่องที่ผู้ตรวจชี้ให้แก้ (ก้อน 4 · คีย์ใน CLAIM_REVIEW_FLAGS) — ว่าง = ตีกลับแบบเดิม/ไม่ได้ตีกลับ
+      reviewFlags: c.reviewFlags,
       createdAt: c.createdAt,
       reviewedAt: c.reviewedAt,
       // ใครตีกลับ/อนุมัติ — แถบแดงในฟอร์มแก้เคลมบอก "{คนตรวจ} · {เวลา}" ช่างจะได้รู้ว่าถามใคร
@@ -858,6 +872,20 @@ function shape(
           a.role && (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(a.role) && (!roundStart || a.createdAt >= roundStart)
       )
       .map((a) => ({ id: a.id, sparePartId: a.sparePartId, role: a.role, createdAt: a.createdAt, createdById: a.createdById })),
+    /**
+     * ช่องที่ผู้ตรวจติ๊กให้แก้ได้กับเครื่องใบนี้ (ก้อน 4) พร้อมชื่อที่ใช้จริง — แผงตีกลับและฟอร์มแก้เคลมอ่านชุดนี้
+     * คิดที่เซิร์ฟเวอร์ที่เดียว (แบบป้ายจากยี่ห้อ · วิดีโอ Error ของเครื่องที่ไม่มี Error ใช้ชื่ออื่น ตาม Error ที่ส่งล่าสุด)
+     * ให้ชื่อบนหน้าจอตรงกับข้อความที่เซิร์ฟเวอร์ตอบ ("เคลม … ยังไม่ได้แก้ {ชื่อช่อง}") และไม่ให้ติ๊กช่องที่เครื่องนี้ไม่มี
+     */
+    claimReviewFlags: (() => {
+      const ctx = { family: plateFamilyOf(machineMake(w.machine)), errorCode: w.claims[0] ? flagContextOf(w.claims[0]).errorCode : null };
+      return reviewFlagsFor(ctx.family).map((f) => ({
+        key: f.key,
+        scope: f.scope,
+        label: reviewFlagLabel(f.key, ctx),
+        site: f.site,
+      }));
+    })(),
     // Troubleshooting (ข้อ 4 ของฟอร์มเคลม) ของยี่ห้อเครื่องใบนี้ — ว่าง = ยี่ห้อนี้ไม่ต้องทำ
     claimTroubleshooting: claimTroubleshootingFor(machineMake(w.machine))?.items ?? [],
     // แบบป้ายรุ่นของยี่ห้อนี้ (บรรทัดที่สแกน) + รายการเช็คตามคู่มือ — แอปไม่ได้เขียนรายการซ้ำ (utils/claimGuide.ts)
@@ -1899,6 +1927,11 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           createdAt: true,
           reviewedAt: true,
           reviewedById: true,
+          // ตีกลับแบบชี้ช่อง (ก้อน 4): การ์ดบอก "ต้องแก้ n ชิ้น · m ช่อง" และต้องกลับไปหน้าเครื่องไหม
+          // ยี่ห้อ + Error ใช้ตั้งชื่อช่องวิดีโอ Error ให้ตรงกับเครื่อง (Oasis/ไม่มี Error = วิดีโออาการตอนเครื่องเดิน)
+          reviewFlags: true,
+          brand: true,
+          fieldCheck: true,
         },
       },
     },
@@ -2419,6 +2452,10 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
     rescheduleStages: RESCHEDULE_STAGES,
     // เหตุผล "ปิดเคลม ไม่ส่งผู้ขาย" ทีละชิ้น (หน้าตรวจเคลม) — ตัวสุดท้าย "อื่น ๆ" ต้องพิมพ์เหตุผลเอง
     claimDeclineReasons: CLAIM_DECLINE_REASONS,
+    // ตีกลับแบบชี้ช่อง (ก้อน 4) — รายการช่องทั้งหมด (scope · site · families · altLabel) + เหตุผลด่วนที่ติ๊กช่องให้
+    // ช่องที่ใช้กับใบหนึ่ง ๆ พร้อมชื่อที่ใช้จริงอยู่ในรายละเอียดใบงาน (claimReviewFlags)
+    claimReviewFlags: CLAIM_REVIEW_FLAGS,
+    claimQuickReasons: CLAIM_QUICK_REASONS,
     technicians,
   });
 });
@@ -2595,8 +2632,24 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers }: Detail) {
 
   const confirm = logs.find((l) => APPOINTMENT_BY_ACTIONS.includes(l.action) && !l.backfilledAt);
   const base = shape(row, roundStart, inspectStart, claimUsers, logs);
+  /**
+   * คำอธิบาย "ค่าเดิมถูกแล้ว" ของการส่งเคลมครั้งล่าสุดในรอบนี้ (ก้อน 4) — จาก meta.keep ของประวัติ CLAIM_SUBMITTED
+   * หน้าตรวจขึ้น "ช่างตอบ “ค่าเดิมถูกแล้ว” · {คำอธิบาย}" ที่ช่องนั้น และนับ "อธิบาย {m} ช่อง" — เดิมแอปต้องแกะจากข้อความประวัติ
+   * sparePartId ว่าง = ช่องของเครื่อง · flag "ALL" = ยืนยันทั้งชิ้น (ตีกลับแบบเดิม) · ส่งก่อนจ่ายงานครั้งล่าสุด = ไม่ใช่ของรอบนี้
+   */
+  const lastSubmit = logs.find((l) => l.action === "CLAIM_SUBMITTED");
+  const keepRaw = lastSubmit && lastSubmit.createdAt >= roundStart ? (lastSubmit.meta as { keep?: unknown } | null)?.keep : null;
+  const claimKeep = (Array.isArray(keepRaw) ? keepRaw : [])
+    .map((k) => k as { sparePartId?: unknown; flag?: unknown; note?: unknown })
+    .filter((k) => typeof k.flag === "string" && typeof k.note === "string")
+    .map((k) => ({
+      sparePartId: typeof k.sparePartId === "number" ? k.sparePartId : null,
+      flag: k.flag as string,
+      note: k.note as string,
+    }));
   return {
     ...base,
+    claimKeep,
     appointmentBy:
       confirm && APPOINTMENT_DONE.includes(row.appointmentStatus ?? "")
         ? { name: confirm.user?.name ?? null, at: confirm.createdAt }
@@ -6442,7 +6495,8 @@ const closeSchema = z.object({
         troubleshooting: z.array(z.string().max(300)).max(50).default([]),
         /**
          * ชิ้นที่ถูกตีกลับ แต่ช่างยืนยันว่าค่าเดิมถูกแล้ว + คำอธิบายให้ผู้ตรวจ — แทนการแก้ (ดู "ส่งใหม่ต้องแก้อะไรสักอย่าง" ข้างล่าง)
-         * flag "ALL" = ทั้งชิ้น (ตีกลับแบบชี้ช่องยังไม่มี) · ความยาวคำอธิบายตรวจเองข้างล่างเพื่อตอบเป็นภาษาไทย
+         * flag = ช่องของชิ้นที่ถูกชี้ (CLAIM_REVIEW_FLAGS scope PART · ก้อน 4) หรือ "ALL" = ทั้งชิ้น (ตีกลับแบบเดิมไม่มีช่อง)
+         * ช่องของเครื่องตอบที่ claimMachineKeep · ความยาวคำอธิบายตรวจเองข้างล่างเพื่อตอบเป็นภาษาไทย
          */
         keep: z
           .array(z.object({ flag: z.string().trim().max(40), note: z.string().max(2000) }))
@@ -6480,6 +6534,14 @@ const closeSchema = z.object({
       checked: z.array(z.string().max(200)).max(20).default([]),
     })
     .nullable()
+    .optional(),
+  /**
+   * "ค่าเดิมถูกแล้ว" ของช่องเครื่องที่ถูกชี้ (ก้อน 4 · MODEL SERIAL PLATE_OTHER ERROR_CODE CLAIM_ERROR_VIDEO CLAIM_SYMPTOM)
+   * อยู่นอก claims[] เพราะข้อมูลเครื่องใช้ร่วมทุกชิ้น — ตอบครั้งเดียว ไม่ใช่ซ้ำทุกชิ้น · ชื่อช่องตรวจเองข้างล่าง (ตอบภาษาไทย)
+   */
+  claimMachineKeep: z
+    .array(z.object({ flag: z.string().trim().max(40), note: z.string().max(2000) }))
+    .max(12)
     .optional(),
 });
 
@@ -6633,6 +6695,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         troubleshooting: true,
         nameplate: true,
         fieldCheck: true,
+        // ตีกลับแบบชี้ช่อง (ก้อน 4) — ช่องที่ต้องแก้ · การตรวจครั้งล่าสุดคือแถวไหน (lastRejected ใช้เหตุผล/คนตรวจ/เวลา)
+        reviewFlags: true,
+        rejectReason: true,
+        reviewedById: true,
       },
     }),
     prisma.workOrderLog.findFirst({
@@ -6916,23 +6982,46 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
      * ส่งใหม่หลังถูกตีกลับต้องแก้อะไรสักอย่าง — หรือกด "ค่าเดิมถูกแล้ว" แล้วอธิบาย
      *
      * เดิมช่างกดส่งซ้ำได้ทั้งที่ยังไม่ได้แก้ ใบวนกลับไปหา Admin Spare Part พร้อมของเดิมที่เพิ่งถูกตีกลับ แล้วถูกตีกลับซ้ำ
-     * กันแค่การส่งซ้ำโดยไม่ตั้งใจ ไม่ใช่ตัวตรวจคุณภาพ (เติมจุดเดียวก็ผ่าน) — ดู changedSinceReject
+     * กันแค่การส่งซ้ำโดยไม่ตั้งใจ ไม่ใช่ตัวตรวจคุณภาพ (เติมจุดเดียวก็ผ่าน) — ดู changedSinceReject / flagSatisfied
+     * ตีกลับแบบชี้ช่อง (ก้อน 4): ทุกช่องที่ถูกชี้ต้องแก้ หรือตอบ "ค่าเดิมถูกแล้ว" ทีละช่อง · ตีกลับแบบเดิม (ไม่มีช่อง) แก้อย่างใดก็ได้
      * เทียบกับแถวล่าสุดของชิ้นนั้นในรอบนี้ · จ่ายงานใหม่แล้ว (แจ้งปัญหาหน้างาน/ย้อนขั้น) ไม่เทียบ เพราะต้องถ่ายใหม่ทั้งชุดอยู่แล้ว
      * แต่คำอธิบาย "ค่าเดิมถูกแล้ว" ของชิ้นที่ยังถูกตีกลับในงานซ่อมครั้งนี้เก็บเสมอ — ฟอร์มยังขึ้นแถบตีกลับและบังคับให้ช่างพิมพ์
      * ถ้าทิ้งเงียบ ๆ เพราะรอบหลักฐานขยับ ผู้ตรวจไม่เคยเห็นคำอธิบายที่ช่างถูกขอให้เขียน
      */
     const allParts = [...claimRows, ...priorRows].map((r) => ({ partCode: r.partCode, partName: r.partName }));
     const label = (r: { partCode: string; partName: string }) => partLabel(r, allParts);
+    const keepNoteOk = (note: string) => {
+      const n = note.trim().length;
+      return n >= 3 && n <= 300;
+    };
     for (const c of claimInputs) {
       for (const k of c.keep ?? []) {
-        if (k.flag !== "ALL") return res.status(400).json({ error: `ไม่รู้จักช่องที่ให้แก้ “${k.flag}”` });
-        const n = k.note.trim().length;
-        if (n < 3 || n > 300) return res.status(400).json({ error: "คำอธิบาย “ค่าเดิมถูกแล้ว” ต้องยาว 3–300 ตัวอักษร" });
+        if (k.flag !== "ALL" && !isPartFlag(k.flag)) {
+          return res.status(400).json({ error: `ไม่รู้จักช่องที่ให้แก้ “${k.flag}”` });
+        }
+        if (!keepNoteOk(k.note)) return res.status(400).json({ error: "คำอธิบาย “ค่าเดิมถูกแล้ว” ต้องยาว 3–300 ตัวอักษร" });
       }
+    }
+    for (const k of body.claimMachineKeep ?? []) {
+      if (!isMachineFlag(k.flag)) return res.status(400).json({ error: `ไม่รู้จักช่องที่ให้แก้ “${k.flag}”` });
+      if (!keepNoteOk(k.note)) return res.status(400).json({ error: "คำอธิบาย “ค่าเดิมถูกแล้ว” ต้องยาว 3–300 ตัวอักษร" });
     }
     const prior = latestPerPart(priorRows);
     // เทียบกับค่าที่จะเก็บจริง (ข้อมูลเครื่องที่ล็อกไว้ ไม่ใช่ค่าที่แอปส่งมา) — ล็อกแล้วค่าเครื่องไม่นับเป็น "แก้แล้ว"
     const machineError = (fieldCheck as { errorCode?: string; checked?: string[] } | undefined) ?? null;
+    const resubmitOf = (row: (typeof claimRows)[number]) => ({
+      brokenPartCode: row.brokenPartCode ?? "",
+      symptom: row.symptom,
+      checkNote: row.checkNote,
+      troubleshooting: (row.troubleshooting as string[] | undefined) ?? [],
+      plate: machinePlate,
+      errorCode: machineError?.errorCode ?? null,
+      errorChecked: machineError?.checked ?? [],
+    });
+    // ชื่อช่องตามเครื่องนี้และ Error ที่กำลังส่ง — ตรงกับที่ช่างเห็นในฟอร์มแก้เคลม (วิดีโอ Error / วิดีโออาการตอนเครื่องเดิน)
+    const flagCtx = { family: guide.plate.family, errorCode: machineError?.errorCode ?? null };
+    const flagName = (k: string) => reviewFlagLabel(k, flagCtx);
+    const keepLine = (flag: string) => (flag === "ALL" ? "" : ` (${flagName(flag)})`);
     for (const row of claimRows) {
       const before = prior.get(claimKey({ sparePartId: row.sparePartId ?? null, partCode: row.partCode }));
       if (!before || before.status !== "REJECTED") continue;
@@ -6940,28 +7029,48 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       const sameRound = before.createdAt >= roundStart;
       const input = claimInputs.find((c) => c.sparePartId === row.sparePartId);
       const keep = (input?.keep ?? []).map((k) => ({ flag: k.flag, note: k.note.trim() }));
-      if (keep.length) {
-        for (const k of keep) keepNotes.push({ sparePartId: row.sparePartId ?? null, ...k, label: label(row) });
-        continue;
+      for (const k of keep) {
+        keepNotes.push({ sparePartId: row.sparePartId ?? null, ...k, label: `${label(row)} ยืนยันค่าเดิม${keepLine(k.flag)}` });
       }
       if (!sameRound) continue;
-      const changed = changedSinceReject(
-        before,
-        {
-          brokenPartCode: row.brokenPartCode ?? "",
-          symptom: row.symptom,
-          checkNote: row.checkNote,
-          troubleshooting: (row.troubleshooting as string[] | undefined) ?? [],
-          plate: machinePlate,
-          errorCode: machineError?.errorCode ?? null,
-          errorChecked: machineError?.checked ?? [],
-        },
-        roundClaimFiles
+      if (!before.reviewFlags.length) {
+        // ตีกลับแบบเดิม (ข้อความอย่างเดียว · แถวก่อนก้อน 4) — แก้อะไรก็ได้หนึ่งอย่าง หรือยืนยันค่าเดิมทั้งชิ้น
+        if (keep.length) continue;
+        if (!changedSinceReject(before, resubmitOf(row), roundClaimFiles)) {
+          return res.status(400).json({
+            error: `เคลม ${label(row)}: ยังไม่ได้แก้อะไรจากรอบที่ถูกตีกลับ — แก้ตามเหตุผล หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย`,
+          });
+        }
+        continue;
+      }
+      // ช่องของชิ้นที่ถูกชี้ — ทุกช่องต้องแก้แล้ว หรือมีคำอธิบายของช่องนั้น ("ALL" = ยืนยันทั้งชิ้น)
+      const answered = new Set(keep.map((k) => k.flag));
+      const open = before.reviewFlags.filter(
+        (f) => isPartFlag(f) && !answered.has("ALL") && !answered.has(f) && !flagSatisfied(f, before, resubmitOf(row), roundClaimFiles)
       );
-      if (!changed) {
-        return res.status(400).json({
-          error: `เคลม ${label(row)}: ยังไม่ได้แก้อะไรจากรอบที่ถูกตีกลับ — แก้ตามเหตุผล หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย`,
-        });
+      if (open.length) {
+        return res.status(400).json({ error: `เคลม ${label(row)}: ยังไม่ได้แก้ ${open.map(flagName).join(" · ")}` });
+      }
+    }
+    /**
+     * ช่องของเครื่องที่ถูกชี้ในการตรวจครั้งล่าสุด (ตีกลับทั้งใบ) — แก้ครั้งเดียวใช้ทุกชิ้น หรือตอบที่ claimMachineKeep
+     * นับจากชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุดเท่านั้น (lastRejected) — ชิ้นที่ช่างเลิกส่งไปแล้วค้างตีกลับของรอบเก่า
+     * ถ้านับด้วย ช่องเครื่องที่แก้ไปแล้วตั้งแต่รอบก่อนจะถูกเรียกซ้ำ · ตรวจเมื่อมีชิ้นที่ส่งเคลมรอบนี้ (ข้อมูลเครื่องไปกับใบเคลม)
+     */
+    const lastRound = lastRejected([...prior.values()]);
+    const machineDue = new Map<string, (typeof lastRound)[number]>();
+    for (const r of lastRound) for (const f of r.reviewFlags) if (isMachineFlag(f) && !machineDue.has(f)) machineDue.set(f, r);
+    if (machineDue.size) {
+      for (const k of body.claimMachineKeep ?? []) {
+        keepNotes.push({ sparePartId: null, flag: k.flag, note: k.note.trim(), label: `ข้อมูลเครื่อง ยืนยันค่าเดิม${keepLine(k.flag)}` });
+      }
+      const answered = new Set((body.claimMachineKeep ?? []).map((k) => k.flag));
+      const open = [...machineDue.entries()]
+        .filter(([f, r]) => r.createdAt >= roundStart && !answered.has(f) && !flagSatisfied(f, r, resubmitOf(claimRows[0]), roundClaimFiles))
+        .map(([f]) => f)
+        .sort((a, b) => CLAIM_REVIEW_FLAGS.findIndex((x) => x.key === a) - CLAIM_REVIEW_FLAGS.findIndex((x) => x.key === b));
+      if (open.length) {
+        return res.status(400).json({ error: `ข้อมูลเครื่อง: ยังไม่ได้แก้ ${open.map(flagName).join(" · ")}` });
       }
     }
   }
@@ -7030,7 +7139,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
           nextStatus,
           [
             `ส่งเคลมอะไหล่เก่า: ${claimRows.map((c) => c.partCode).join(", ")}`,
-            ...keepNotes.map((k) => `${k.label} ยืนยันค่าเดิม: ${k.note}`),
+            ...keepNotes.map((k) => `${k.label}: ${k.note}`),
           ].join(" · "),
           keepNotes.length
             ? { keep: keepNotes.map((k) => ({ sparePartId: k.sparePartId, flag: k.flag, note: k.note })) }
@@ -7059,6 +7168,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
  * ตีกลับต้องบอกเหตุผลเสมอ ช่างเห็นข้อความนี้บนใบงาน — ตีกลับเฉย ๆ ช่างไม่รู้ว่าต้องถ่ายอะไรใหม่
  * ปิดเคลมต้องมีเหตุผล — ไม่มีใบเคลมไปผู้ขาย ประวัติต้องบอกได้ว่าทำไม
  *
+ * ตีกลับแบบชี้ช่อง (ก้อน 4 · flags = คีย์ใน CLAIM_REVIEW_FLAGS): ช่องที่ติ๊กแทนเหตุผลที่พิมพ์ได้ — ช่างเห็นเฉพาะช่องนั้น
+ * และรู้ว่าต้องกลับไปหน้าเครื่องไหม · ชี้ช่องของเครื่อง = ตีกลับทั้งใบ (ข้อมูลเครื่องใช้ร่วมทุกชิ้น) ยกเว้นชิ้นที่ปิดเคลม
+ * · ชิ้นใดผ่านแล้วในงานซ่อมครั้งนี้ ข้อมูลเครื่องล็อกไปกับชิ้นนั้น ชี้ช่องของเครื่องไม่ได้อีก
+ *
  * รูปแบบเดิม { approve, reason } ยังรับ (แอปที่เปิดค้างก่อนอัปเดต · เทสต์เดิม) = ตัดสินทุกชิ้นที่รอตรวจแบบเดียวกัน
  */
 const claimDecisionSchema = z.object({
@@ -7079,12 +7192,6 @@ const claimReviewSchema = z.union([
  */
 class StaleReview extends Error {}
 
-/**
- * ช่องที่ให้ช่างแก้ (ตีกลับแบบชี้ช่อง) — รายการช่องมาพร้อมคอลัมน์ที่เก็บ (ก้อน 4) ตอนนี้ยังไม่มีช่องไหนที่รู้จัก
- * ส่งมาก่อนจึงตอบว่าไม่รู้จัก แทนการทิ้งเงียบ ๆ (ผู้ตรวจคิดว่าชี้ช่องให้ช่างแล้ว แต่ช่างไม่เห็นอะไรเลย)
- */
-const KNOWN_REVIEW_FLAGS: ReadonlySet<string> = new Set<string>();
-
 router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -7099,7 +7206,17 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
     prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true } }),
     prisma.partClaim.findMany({
       where: { workOrderId: id },
-      select: { id: true, sparePartId: true, partCode: true, partName: true, status: true, createdAt: true },
+      // brand/fieldCheck: แบบป้าย + Error ของเครื่อง — ช่องที่ติ๊กได้ และชื่อช่องในประวัติ/เหตุผล (ก้อน 4)
+      select: {
+        id: true,
+        sparePartId: true,
+        partCode: true,
+        partName: true,
+        status: true,
+        createdAt: true,
+        brand: true,
+        fieldCheck: true,
+      },
     }),
     prisma.workOrderLog.findFirst({
       where: { workOrderId: id, action: "REOPENED" },
@@ -7164,8 +7281,13 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
   if (decided.size !== decisions.length || decided.size !== pending.length) {
     return res.status(400).json({ error: "ตัดสินให้ครบทุกชิ้นก่อน" });
   }
+  /**
+   * ช่องของเครื่องที่ถูกชี้ในคำขอนี้ (ก้อน 4) — ข้อมูลเครื่องใช้ร่วมทุกชิ้น ชิ้นที่ถูกตีกลับเพราะข้อมูลเครื่องอย่างเดียว
+   * (หน้าจอพลิกเป็น "✗ ตีกลับ (ทั้งใบ)") นับว่ามีเหตุผลแล้ว: ช่องของเครื่องติดไปกับทุกแถวที่ถูกตีกลับในคำขอนี้
+   */
+  const anyMachineFlag = decisions.some((d) => (d.flags ?? []).some(isMachineFlag));
   for (const d of decisions) {
-    if (d.verdict === "REJECT" && !d.reason && !d.flags?.length) {
+    if (d.verdict === "REJECT" && !d.reason && !d.flags?.length && !anyMachineFlag) {
       return res.status(400).json({ error: SEND_BACK_REASON_REQUIRED });
     }
   }
@@ -7176,42 +7298,107 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: "ปิดเคลม ไม่ส่งผู้ขาย ต้องเลือกเหตุผล" });
     }
   }
+  /**
+   * ช่องที่ให้ช่างแก้ — ตรวจกับเครื่องของใบนี้ (แบบป้ายจากยี่ห้อที่บันทึกไว้ในแถวเคลมตอนส่ง)
+   * ไม่รู้จัก หรือเครื่องนี้ไม่มีช่องนั้น (Serial ของ Oasis · Error ของเครื่องที่ไม่มีคู่มือ) ตอบว่าไม่รู้จัก ไม่ทิ้งเงียบ ๆ —
+   * ผู้ตรวจคิดว่าชี้ช่องให้ช่างแล้ว แต่ช่างไม่มีช่องนั้นให้แก้ ใบจะวนอยู่ระหว่างสองคน
+   */
+  const flagCtx = flagContextOf(pending[0]);
+  const allowed = new Set(reviewFlagsFor(flagCtx.family).map((f) => f.key));
   for (const d of decisions) {
-    const unknown = (d.flags ?? []).find((f) => !KNOWN_REVIEW_FLAGS.has(f));
+    const unknown = (d.flags ?? []).find((f) => !allowed.has(f));
     if (unknown !== undefined) return res.status(400).json({ error: `ไม่รู้จักช่องที่ให้แก้ “${unknown}”` });
   }
+
+  const since = reopened?.createdAt ?? null;
+  const label = (r: (typeof rows)[number]) => partLabel(r, rows);
+  const flagLabel = (k: string) => reviewFlagLabel(k, flagCtx);
+  const flagOrder = CLAIM_REVIEW_FLAGS.map((f) => f.key);
+  const sortFlags = (ks: string[]) => [...new Set(ks)].sort((a, b) => flagOrder.indexOf(a) - flagOrder.indexOf(b));
+  const machineFlags = sortFlags(decisions.flatMap((d) => (d.flags ?? []).filter(isMachineFlag)));
+  /**
+   * ข้อมูลเครื่องล็อกพร้อมชิ้นแรกที่ผ่าน (ตัวอย่าง mLocked) — ใบเคลมที่อนุมัติออกไปพร้อมรุ่น/Serial/Error ชุดนี้แล้ว
+   * ถ้ายอมให้ชี้ว่าข้อมูลเครื่องผิดตอนนี้ ใบเคลมที่ผ่านไปแล้วจะออกไปถึงผู้ขายพร้อมค่าที่ผู้ตรวจเองบอกว่าผิด
+   * (และแก้ไม่ได้ — ช่างส่งใหม่ระบบใช้ค่าของแถวที่ผ่าน) ทางเดียวคือเปิดใบใหม่ (ซ่อมคนละครั้ง)
+   */
+  const passed = [...latestPerPart(rows.filter((r) => !since || r.createdAt >= since)).values()]
+    .filter((r) => r.status === "APPROVED")
+    .sort((a, b) => a.id - b.id);
+  if (machineFlags.length && passed.length) {
+    return res.status(400).json({
+      error: `ข้อมูลเครื่องล็อกไว้พร้อม ${passed.map(label).join(" · ")} ที่ผ่านแล้ว — ตีกลับได้เฉพาะช่องของชิ้น`,
+    });
+  }
+  /**
+   * ชี้ข้อมูลเครื่อง = ตีกลับทั้งใบ — ทุกชิ้นใช้รุ่น/Serial/Error/วิดีโอ Error/รูปอาการชุดเดียวกัน ให้ชิ้นหนึ่งผ่านพร้อมค่าที่ผิด
+   * ใบเคลมของชิ้นนั้นออกไปผู้ขายพร้อมข้อมูลเครื่องผิด · ชิ้นที่ปิดเคลม ไม่ส่งผู้ขาย คงไว้ได้ (ไม่มีใบเคลมไปไหน)
+   */
+  if (machineFlags.length && decisions.some((d) => d.verdict === "APPROVE")) {
+    return res.status(400).json({
+      error: "ข้อมูลเครื่องใช้ร่วมทุกชิ้น — ตีกลับข้อมูลเครื่องแล้วต้องตีกลับทุกชิ้นที่ยังไม่ได้ปิดเคลม",
+    });
+  }
+
+  /**
+   * สิ่งที่จะเขียนต่อชิ้น — ตีกลับ: ช่องของชิ้นนั้นที่ผู้ตรวจติ๊กเอง ∪ ช่องของเครื่อง (ทุกแถวที่ตีกลับ)
+   * ชิ้นที่ถูกพลิกเป็นตีกลับเพราะข้อมูลเครื่องได้เฉพาะช่องของเครื่อง ไม่มีช่องค้างของชิ้น (ตัวอย่าง own(i)) —
+   * ติ๊กที่ซ่อนอยู่เคยเปลี่ยนงานที่แก้จากมือถือได้ให้กลายเป็นต้องกลับไปหน้าเครื่อง
+   * ไม่พิมพ์เหตุผล = เขียนชื่อช่องแทน (flagReasonText) — ประวัติเคลม/Excel อ่านแค่ rejectReason
+   */
+  const planOf = new Map(
+    decisions.map((d) => {
+      if (d.verdict !== "REJECT") {
+        return [d.claimId, { d, own: [] as string[], flags: [] as string[], reason: d.verdict === "APPROVE" ? null : d.reason ?? null }];
+      }
+      const own = sortFlags((d.flags ?? []).filter(isPartFlag));
+      return [
+        d.claimId,
+        {
+          d,
+          own,
+          flags: sortFlags([...own, ...machineFlags]),
+          reason: d.reason || flagReasonText(own.map(flagLabel), machineFlags.map(flagLabel)),
+        },
+      ];
+    })
+  );
 
   /**
    * ผลต่อใบงาน — มีชิ้นถูกตีกลับ: ใบกลับไปหาช่าง · ไม่มี: ใบปิด
    * ประวัติแยก "อนุมัติ" (มีชิ้นที่ผ่านในงานซ่อมครั้งนี้ รวมชิ้นที่ผ่านไปตั้งแต่รอบก่อน = มีใบเคลมไปผู้ขาย) กับ
    * "ปิดเคลม ไม่ส่งผู้ขาย" (ไม่มีชิ้นไหนผ่านเลย) — ใบที่ไม่มีใบเคลมไปผู้ขายต้องไม่อ่านว่า "อนุมัติ" ในประวัติ
    */
-  const since = reopened?.createdAt ?? null;
-  const verdictOf = new Map(decisions.map((d) => [d.claimId, d]));
   const anyReject = decisions.some((d) => d.verdict === "REJECT");
-  const approvedBefore = rows.some((r) => r.status === "APPROVED" && (!since || r.createdAt >= since));
-  const anyApproved = approvedBefore || decisions.some((d) => d.verdict === "APPROVE");
+  const anyApproved = passed.length > 0 || decisions.some((d) => d.verdict === "APPROVE");
   const action = anyReject ? "CLAIM_REJECTED" : anyApproved ? "CLAIM_APPROVED" : "CLAIM_DECLINED";
-  const label = (r: (typeof rows)[number]) => partLabel(r, rows);
   const okWord = anyReject ? "ผ่าน" : "อนุมัติ";
-  // ประวัติบอกผลทีละชิ้น เช่น "ผ่าน บอร์ดควบคุม · ตีกลับ สายพานถังซัก: วิดีโอไม่เห็นรหัส" — เรียงตามที่ส่ง
+  /**
+   * ประวัติบอกผลทีละชิ้น เช่น "ผ่าน บอร์ดควบคุม · ตีกลับ สายพานถังซัก: วิดีโอไม่เห็นรหัส (ต้องแก้: วิดีโอการตรวจเช็ค)"
+   * ตีกลับทั้งใบขึ้นต้นด้วย "ตีกลับทั้งใบ (ข้อมูลเครื่อง: รุ่น)" — เรียงตามที่ส่ง · เหตุผลที่เขียนแทนไม่ซ้ำลงประวัติ (ช่องอยู่ในวงเล็บแล้ว)
+   */
   const logNote =
-    [...pending]
-      .sort((a, b) => a.id - b.id)
-      .map((r) => {
-        const d = verdictOf.get(r.id)!;
-        if (d.verdict === "APPROVE") return `${okWord} ${label(r)}`;
-        if (d.verdict === "DECLINE") return `${label(r)} ปิดเคลม ไม่ส่งผู้ขาย (${d.reason})`;
-        return `ตีกลับ ${label(r)}${d.reason ? `: ${d.reason}` : ""}`;
-      })
+    [
+      machineFlags.length ? `ตีกลับทั้งใบ (ข้อมูลเครื่อง: ${machineFlags.map(flagLabel).join(" · ")})` : null,
+      ...[...pending]
+        .sort((a, b) => a.id - b.id)
+        .map((r) => {
+          const { d, own } = planOf.get(r.id)!;
+          if (d.verdict === "APPROVE") return `${okWord} ${label(r)}`;
+          if (d.verdict === "DECLINE") return `${label(r)} ปิดเคลม ไม่ส่งผู้ขาย (${d.reason})`;
+          return (
+            `ตีกลับ ${label(r)}${d.reason ? `: ${d.reason}` : ""}` +
+            (own.length ? ` (ต้องแก้: ${own.map(flagLabel).join(" · ")})` : "")
+          );
+        }),
+    ]
+      .filter(Boolean)
       .join(" · ") + (note ? ` — ${note}` : "");
 
-  // คำตัดสินเดียวกัน + เหตุผลเดียวกัน = คำสั่งเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ) — ยังตรวจจำนวนแถวที่เปลี่ยนทุกกลุ่ม
-  const groups = new Map<string, { verdict: string; reason: string | null; ids: number[] }>();
-  for (const d of decisions) {
-    const reason = d.verdict === "APPROVE" ? null : d.reason ?? null;
-    const key = `${d.verdict}\u0000${reason ?? ""}`;
-    const g = groups.get(key) ?? { verdict: d.verdict, reason, ids: [] };
+  // คำตัดสินเดียวกัน + เหตุผลเดียวกัน + ช่องเดียวกัน = คำสั่งเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ) — ยังตรวจจำนวนแถวที่เปลี่ยนทุกกลุ่ม
+  const groups = new Map<string, { verdict: string; reason: string | null; flags: string[]; ids: number[] }>();
+  for (const { d, reason, flags } of planOf.values()) {
+    const key = `${d.verdict}\u0000${reason ?? ""}\u0000${flags.join(",")}`;
+    const g = groups.get(key) ?? { verdict: d.verdict, reason, flags, ids: [] };
     g.ids.push(d.claimId);
     groups.set(key, g);
   }
@@ -7225,7 +7412,13 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
          */
         const done = await tx.partClaim.updateMany({
           where: { id: { in: g.ids }, workOrderId: id, status: "PENDING" },
-          data: { status: STATUS_OF[g.verdict], rejectReason: g.reason, reviewedById: req.auth!.userId, reviewedAt: now },
+          data: {
+            status: STATUS_OF[g.verdict],
+            rejectReason: g.reason,
+            reviewFlags: g.flags,
+            reviewedById: req.auth!.userId,
+            reviewedAt: now,
+          },
         });
         if (done.count !== g.ids.length) throw new StaleReview();
       }

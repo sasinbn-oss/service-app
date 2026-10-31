@@ -990,6 +990,59 @@ export const CLAIM_DECLINE_REASONS = ["หมดประกัน", "ไม่�
 export const SEND_BACK_REASON_REQUIRED = "ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร";
 
 /**
+ * ช่องที่ Admin Spare Part ติ๊กให้ช่างแก้ตอนตีกลับ (ก้อน 4 · ตัวอย่างที่เจ้าของงานอนุมัติ PF/MF) — เก็บใน PartClaim.reviewFlags
+ *
+ * ทำไมชี้เป็นช่อง ไม่ใช่ข้อความอย่างเดียว: ช่างอ่านเหตุผลแล้วต้องเดาเองว่าแก้ตรงไหน และไม่รู้ว่าต้องกลับไปหน้าเครื่องไหม
+ * ติ๊กเป็นช่องแล้วฟอร์มแก้เคลมแสดงเฉพาะช่องนั้น · เซิร์ฟเวอร์รู้ว่าช่องไหนต้องเปลี่ยน จึงกันส่งซ้ำของเดิมได้ทีละช่อง
+ *
+ * scope PART = ของอะไหล่ชิ้นนั้น · MACHINE = ข้อมูลเครื่อง (ใช้ร่วมทุกชิ้น — ติ๊กแล้วตีกลับทั้งใบ)
+ * site = ต้องกลับไปถ่ายที่หน้าเครื่อง (ไฟล์) · ไม่ใช่ = แก้จากมือถือได้ ไม่ต้องไปร้าน — การ์ดงานของช่างบอกตามนี้
+ * families = แบบป้ายที่ช่องนี้มี (ดู claimGuide.ts) — Oasis ไม่มี Serial บนป้าย ใช้ "ข้อมูลป้ายรุ่น" (ช่องอื่นของป้าย) แทน
+ *   (ค่าตั้งต้นที่บอกเจ้าของงาน) · Error ที่เครื่องขึ้นมีเฉพาะ Alliance (มีคู่มือ Error in Field)
+ * altLabel = ชื่อเมื่อเครื่องไม่มี Error ให้ถ่าย (Oasis หรือเลือก "ไม่มี Error ขึ้น") — คำตอบข้อ 4 ของเจ้าของงาน
+ * ชื่อที่เซิร์ฟเวอร์ใช้ในข้อความ/ประวัติมาจาก reviewFlagLabel (claimRules.ts) ที่เดียว
+ */
+export const CLAIM_REVIEW_FLAGS: readonly {
+  key: string;
+  scope: "PART" | "MACHINE";
+  label: string;
+  altLabel?: string;
+  site: boolean;
+  families: readonly ("ALLIANCE" | "OASIS" | "OTHER")[];
+}[] = [
+  { key: "CLAIM_PART", scope: "PART", label: "รูปอะไหล่เก่า", site: true, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "BROKEN_CODE", scope: "PART", label: "รหัสอะไหล่ตัวที่เสีย", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "SYMPTOM", scope: "PART", label: "อาการ/สาเหตุ", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "CHECKS", scope: "PART", label: "ช่างเข้าเช็คอะไรบ้าง", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "CLAIM_CHECK_VIDEO", scope: "PART", label: "วิดีโอการตรวจเช็ค", site: true, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "MODEL", scope: "MACHINE", label: "รุ่น", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "SERIAL", scope: "MACHINE", label: "Serial", site: false, families: ["ALLIANCE", "OTHER"] },
+  { key: "PLATE_OTHER", scope: "MACHINE", label: "ข้อมูลป้ายรุ่น", site: false, families: ["OASIS"] },
+  { key: "ERROR_CODE", scope: "MACHINE", label: "Error ที่เครื่องขึ้น", site: false, families: ["ALLIANCE"] },
+  {
+    key: "CLAIM_ERROR_VIDEO",
+    scope: "MACHINE",
+    label: "วิดีโอ Error",
+    altLabel: "วิดีโออาการตอนเครื่องเดิน",
+    site: true,
+    families: ["ALLIANCE", "OASIS", "OTHER"],
+  },
+  { key: "CLAIM_SYMPTOM", scope: "MACHINE", label: "รูปอาการ", site: true, families: ["ALLIANCE", "OASIS", "OTHER"] },
+];
+
+/**
+ * เหตุผลด่วนตอนตีกลับ (ตัวอย่าง QUICK) — แตะแล้วติ๊กช่องที่คู่กันให้ และเติมข้อความลงเหตุผล
+ * เหตุผลที่ชี้ช่องของเครื่อง (flag scope MACHINE) หน้าจอต่อท้าย " · ทั้งใบ" และซ่อนเมื่อข้อมูลเครื่องล็อกแล้ว
+ */
+export const CLAIM_QUICK_REASONS: readonly { text: string; flag: string }[] = [
+  { text: "รูปอะไหล่เก่าไม่เห็นสติกเกอร์รหัส", flag: "CLAIM_PART" },
+  { text: "วิดีโอไม่เห็นรหัส Error บนจอ", flag: "CLAIM_ERROR_VIDEO" },
+  { text: "รหัสตัวเสียไม่ตรงกับรูป", flag: "BROKEN_CODE" },
+  { text: "ภาพมืด/เบลอ", flag: "CLAIM_PART" },
+  { text: "ป้ายรุ่นไม่ตรงกับรูป", flag: "MODEL" },
+];
+
+/**
  * Troubleshooting ข้อ 4 ของฟอร์ม — บังคับเฉพาะเครื่อง Huebsch หรือ Primus
  *
  * ⚠ รายการนี้เป็นตัวอย่างไว้ก่อน (เจ้าของงานยังไม่ได้ส่งรายการจริงของผู้ผลิตมา)

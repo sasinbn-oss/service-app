@@ -42,6 +42,11 @@ declare module "axios" {
      * ไม่ใส่ = เลือกให้เองจากชนิดคำขอ (ดู savingText)
      */
     loadingText?: string | false;
+    /**
+     * false = คำขอนี้ไม่ถูกนับเป็น "กดซ้ำ" แม้ชนิดวิธี + ที่อยู่ + ข้อมูลเหมือนคำขอที่ยังไม่เสร็จ (ไม่ใส่ = กันซ้ำตามปกติ)
+     * ไว้ให้ที่ส่งหลายคำขอไปที่เดียวกันโดยตั้งใจ — ไฟล์ของเครื่องที่ถูกตีกลับต้องขึ้นให้ทุกชิ้นที่ส่งเคลม
+     */
+    dedupe?: boolean;
   }
 }
 
@@ -226,7 +231,9 @@ for (const method of WRITE_METHODS as ("post" | "put" | "patch" | "delete")[]) {
   const original = api[method].bind(api) as (...args: unknown[]) => Promise<unknown>;
   // delete ไม่มี body ตัวที่สองคือ config
   const wrapped = (url: string, ...rest: unknown[]) => {
-    const key = dedupeKey(method, url, method === "delete" ? null : rest[0]);
+    // delete: ตัวแรกหลัง url คือ config · post/put/patch: ตัวแรกคือ data ตัวที่สองคือ config
+    const config = (method === "delete" ? rest[0] : rest[1]) as { dedupe?: boolean } | undefined;
+    const key = config?.dedupe === false ? null : dedupeKey(method, url, method === "delete" ? null : rest[0]);
     if (key) {
       const running = inflight.get(key);
       if (running) return running;

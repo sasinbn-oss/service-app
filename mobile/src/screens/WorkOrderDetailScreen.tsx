@@ -51,6 +51,8 @@ import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
 import { clearCloseDraft, closeDraftSaver, loadCloseDraft, type ClaimPartDraft, type CloseDraft } from "../utils/closeDraft";
 import ClaimFileSlot, { slotKey, useClaimUploads } from "../components/claims/ClaimFileSlot";
 import RejectedBanner from "../components/claims/RejectedBanner";
+import FixList, { buildFixItems, unresolvedOf } from "../components/claims/FixList";
+import { PART_FLAGS, partFlagsOf, rejectLinesOf, WHOLE_ORDER_PART, type ServerFlag } from "../utils/claimFlags";
 import ClaimReview from "../components/claims/ClaimReview";
 import DecisionBar, { ReviewDone } from "../components/claims/DecisionBar";
 import { useClaimVerdicts, type ReviewOutcome } from "../components/claims/useClaimVerdicts";
@@ -71,6 +73,7 @@ import {
   isLockedStatus,
   rejectedRowsOf,
   roundPartsOf,
+  type ClaimKeep,
   type ClaimRepeat,
   type ClaimRound,
   type PartClaim,
@@ -79,7 +82,7 @@ import { takeFresh } from "../utils/freshOrder";
 import ClaimMachineBox, { ClaimCheckDraft, claimMachineGaps, ClaimMachineSummary, ErrorCheckList, PlateDraft } from "../components/ClaimMachineBox";
 import { ClaimHistoryLinks } from "../components/ClaimHistoryEntry";
 import { BranchPartsLinks } from "../components/BranchPartsEntry";
-import type { ClaimGuide } from "../utils/nameplate";
+import { plateFields, type ClaimGuide } from "../utils/nameplate";
 import {
   AcceptKinds,
   PickedAttachment,
@@ -294,6 +297,13 @@ interface WorkOrder {
   claimGuide?: ClaimGuide;
   /** ใบเคลมเก่าของเครื่องเดียวกัน (บรรทัดเคลมซ้ำในหน้าตรวจเคลม) — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน คนอื่นไม่มีค่านี้ */
   claimRepeats?: ClaimRepeat[];
+  /** คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่องของการส่งครั้งล่าสุด (เคลมก้อน 4 · meta.keep ของประวัติ CLAIM_SUBMITTED) */
+  claimKeep?: ClaimKeep[];
+  /**
+   * ช่องที่ Admin Spare Part ติ๊กให้แก้ได้กับเครื่องใบนี้ พร้อมชื่อที่ใช้จริง (เคลมก้อน 4 · เซิร์ฟเวอร์คิดจากแบบป้ายของยี่ห้อ)
+   * แผงตีกลับแสดงตามนี้ — Oasis ไม่มี Serial/Error ให้ติ๊ก · ชื่อวิดีโอ Error ตามเครื่อง
+   */
+  claimReviewFlags?: ServerFlag[];
 }
 
 /** หลักฐานของฟอร์มเคลม — ลำดับและชื่อตามหัวข้อในฟอร์มของผู้ขาย (รูป Nameplate ใช้ป้ายรุ่นที่ถ่ายตอนปิดงาน) */
@@ -1185,6 +1195,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
    */
   const rejectedRows = order.status === "IN_PROGRESS" ? rejectedRowsOf(order) : [];
   const rejected = rejectedRows[0] ?? null;
+  /**
+   * บรรทัดเหตุผล — ตีกลับทั้งใบขึ้น "ทั้งใบ (ข้อมูลเครื่อง)" ก่อน แล้วแต่ละชิ้นบอกช่อง/เหตุผลของตัวเอง (เคลมก้อน 4)
+   * ชิ้นที่ถูกตีกลับเพราะทั้งใบอย่างเดียวไม่ขึ้นซ้ำ · แถวที่ไม่มีช่อง (ตีกลับแบบข้อความ) ขึ้นเหตุผลตามเดิม
+   */
+  const rejectLines = rejectLinesOf(rejectedRows, (c) => c.partLabel ?? c.partName, { family: order.claimGuide?.plate.family ?? null });
+  /**
+   * ขึ้นชื่อหน้าเหตุผลเมื่อมีหลายบรรทัด หรือเป็นการตีกลับทั้งใบ — เดิมบรรทัดเดียว = ชิ้นเดียวที่ถูกตีกลับ ไม่ต้องบอกชื่อ
+   * แต่ตีกลับทั้งใบด้วยช่องของเครื่องอย่างเดียวก็เหลือบรรทัดเดียว ("รุ่น ต้องแก้") ถ้าไม่มีหัว "ทั้งใบ (ข้อมูลเครื่อง)"
+   * ช่างไม่รู้ว่าทุกชิ้นถูกตีกลับเพราะข้อมูลเครื่องชุดเดียวกัน (แถบในฟอร์มแก้เคลมขึ้นหัวเสมอ)
+   */
+  const rejectPrefix = rejectLines.length > 1 || rejectLines.some((l) => l.part === WHOLE_ORDER_PART);
   const closeFiles = order.closedAt || rejected
     ? files.filter((f) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt)
     : [];
@@ -1934,10 +1955,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             <Ionicons name="arrow-undo" size={16} color={colors.dangerInk} />
             <View style={{ flex: 1 }}>
               <Text style={styles.claimRejectedTitle}>Admin Spare Part ตีกลับใบเคลม — แก้แล้วปิดงานใหม่</Text>
-              {rejectedRows.map((c) => (
-                <Text key={c.id} style={styles.claimRejectedText}>
-                  {rejectedRows.length > 1 ? `${c.partLabel ?? c.partName}: ` : ""}
-                  {c.rejectReason ?? "—"}
+              {rejectLines.map((l, i) => (
+                <Text key={`${l.part}-${i}`} style={styles.claimRejectedText}>
+                  {rejectPrefix ? `${l.part}: ` : ""}
+                  {l.reason}
                 </Text>
               ))}
             </View>
@@ -2379,13 +2400,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       {order.closedAt || rejected ? (
         <View style={card}>
           <Text style={styles.sectionTitle}>{rejected ? "ผลการทำงานรอบที่ถูกตีกลับ" : "ผลการทำงาน"}</Text>
-          {rejectedRows.map((c) => (
-            <View key={c.id} style={styles.verdictBad}>
+          {rejectLines.map((l, i) => (
+            <View key={`${l.part}-${i}`} style={styles.verdictBad}>
               <Ionicons name="arrow-undo" size={16} color={colors.danger} />
               <Text style={styles.verdictBadText}>
-                Remark: ตีกลับเพราะ {rejectedRows.length > 1 ? `${c.partLabel ?? c.partName}: ` : ""}
-                {c.rejectReason ?? "—"}
-                {c.reviewedAt ? ` · ${formatDateTime(c.reviewedAt)}` : ""}
+                Remark: ตีกลับเพราะ {rejectPrefix ? `${l.part}: ` : ""}
+                {l.reason}
+                {rejected?.reviewedAt ? ` · ${formatDateTime(rejected.reviewedAt)}` : ""}
               </Text>
             </View>
           ))}
@@ -6130,8 +6151,11 @@ function ClaimsCard({ order, files, showMissed }: { order: WorkOrder; files: Att
 
 /** ปุ่มส่งของฟอร์มปิดงาน — แถบ "ส่งไม่สำเร็จ" บอกให้กดปุ่มนี้อีกครั้ง ชื่อต้องตรงกับที่ช่างเห็นบนปุ่มจริง */
 const SUBMIT_LABEL = "ยืนยันปิดงาน";
+/** ฟอร์มแก้เคลม (ถูกตีกลับแบบชี้ช่อง · เคลมก้อน 4) — ปุ่มส่งเรียกตามที่ช่างกำลังทำ: ส่งเคลมกลับไปให้ตรวจใหม่ */
+const FIX_SUBMIT_LABEL = "ส่งเคลมใหม่";
 /** บอกว่าส่งไม่สำเร็จแล้วต้องทำอะไรต่อ — ช่างกลัวว่าต้องกรอกใหม่หมดเลยปิดฟอร์มทิ้ง ทั้งที่ทุกอย่างยังอยู่ */
 const keptText = `ข้อมูลที่กรอกไว้ยังอยู่ — กด "${SUBMIT_LABEL}" อีกครั้ง`;
+const fixKeptText = `สิ่งที่แก้ไว้ยังอยู่ — กด "${FIX_SUBMIT_LABEL}" อีกครั้ง`;
 
 function CloseModal({
   visible,
@@ -6200,6 +6224,17 @@ function CloseModal({
     lockedRows.get(p.sparePartId)?.status === "DECLINED"
       ? `${p.name || p.partCode} ปิดเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`
       : `${p.name || p.partCode} อนุมัติเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`;
+  /**
+   * ฟอร์มแก้เคลม (เคลมก้อน 4): ผู้ตรวจชี้ช่องที่ต้องแก้ไว้ — ขึ้นเฉพาะช่องเหล่านั้นบนสุด ("ต้องแก้ (n)") ที่เหลือพับไว้
+   * แถวที่ถูกตีกลับก่อนมีการชี้ช่อง (ไม่มี reviewFlags) ใช้ฟอร์มแบบเดิมทั้งฟอร์ม + "ค่าเดิมถูกแล้ว" ทั้งชิ้น
+   * แถวก่อนจ่ายงานครั้งล่าสุด (แจ้งปัญหาหน้างาน/ย้อนขั้นแล้วจ่ายใหม่) ไม่ใช่ฟอร์มแก้ — ต้องถ่ายใหม่ทั้งชุดอยู่แล้ว
+   * และเซิร์ฟเวอร์ก็ไม่บังคับช่องของแถวนอกรอบหลักฐาน ถ้าฟอร์มยังบังคับ ช่างจะติดอยู่กับช่องที่ไม่มีใครตรวจ
+   */
+  const flaggedRows = [...stillRejected.values()].filter(
+    (r) => (r.reviewFlags ?? []).length > 0 && (!order.roundStartedAt || r.createdAt >= order.roundStartedAt)
+  );
+  const fixMode = flaggedRows.length > 0;
+  const flaggedIds = new Set(flaggedRows.map((r) => r.sparePartId));
   const [result, setResult] = useState((reclosing && order.closeResult) || "FIXED");
   const [note, setNote] = useState(reclosing ? order.closeNote ?? "" : "");
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
@@ -6305,6 +6340,12 @@ function CloseModal({
    * lost = คำตอบไม่กลับมาเลย (เน็ตหลุด) · ไม่ใช่ = เซิร์ฟเวอร์ตอบว่าไม่รับพร้อมเหตุผล — เรียกว่าเน็ตหลุดจะพาช่างไปแก้ผิดที่
    */
   const [sendError, setSendError] = useState<{ lost: boolean; message: string | null } | null>(null);
+  /** คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่องที่ถูกชี้ (คีย์ตาม FixItem.key) — อยู่ในร่างด้วย */
+  const [fixKeep, setFixKeep] = useState<Record<string, string | null>>({});
+  /** "▸ ส่วนที่ไม่ต้องแก้" — พับไว้ก่อน ช่างเห็นแค่ช่องที่ต้องแก้ · กางเองได้ หรือปุ่มพาไปกางให้เมื่อของที่ขาดอยู่ในนั้น */
+  const [foldOpen, setFoldOpen] = useState(false);
+  /** กดส่งตอนช่องที่ถูกชี้ยังเหมือนเดิม — ปักแถบเหลืองบอกว่าช่องไหน (ตัวอย่าง blockedText) จนกว่าจะแก้ครบ */
+  const [fixBlocked, setFixBlocked] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const { user: me } = useAuth();
   /** เวลาที่เปิดฟอร์มรอบนี้ — ใช้แยก "ปิดงานที่เพิ่งส่งไปเมื่อกี้" ออกจากการปิดงานครั้งเก่า (ดู closedByUs) */
@@ -6373,6 +6414,12 @@ function CloseModal({
         // ล็อกแล้วเอาเฉพาะข้อที่ติ๊กจากร่างที่เป็น Error เดียวกัน — Error เปลี่ยนไม่ได้ แต่ข้อเช็คเป็นของการปิดครั้งนี้
         if (d.check && Array.isArray(d.check.checked) && (!machineLocked || d.check.errorCode === lockedError))
           setCheck({ errorCode: d.check.errorCode ?? null, checked: d.check.checked });
+        if (d.fixKeep && typeof d.fixKeep === "object" && !Array.isArray(d.fixKeep)) {
+          const keeps = Object.fromEntries(
+            Object.entries(d.fixKeep).filter(([, v]) => v === null || typeof v === "string")
+          ) as Record<string, string | null>;
+          setFixKeep(keeps);
+        }
       }
       setRestored(true);
     });
@@ -6491,11 +6538,61 @@ function CloseModal({
       ...(d.checkNote.trim() ? [] : ["สิ่งที่เข้าเช็ค"]),
       ...(order.claimTroubleshooting.every((t) => d.troubleshooting.includes(t)) ? [] : ["Troubleshooting ให้ครบ"]),
       // เปิดช่อง "ค่าเดิมถูกแล้ว" แล้วต้องอธิบาย (เซิร์ฟเวอร์รับ 3–300 ตัวอักษร) — ไม่อธิบายก็กดยกเลิกช่องนั้น
-      ...(d.keep !== null && stillRejected.has(p.sparePartId) && d.keep.trim().length < 3 ? ["คำอธิบาย “ค่าเดิมถูกแล้ว”"] : []),
+      // ชิ้นที่ถูกชี้ช่อง (ก้อน 4) อธิบายทีละช่องในรายการ "ต้องแก้" แทน — ไม่นับช่องทั้งชิ้นแบบเดิมซ้ำ
+      ...(d.keep !== null && stillRejected.has(p.sparePartId) && !flaggedIds.has(p.sparePartId) && d.keep.trim().length < 3
+        ? ["คำอธิบาย “ค่าเดิมถูกแล้ว”"]
+        : []),
     ];
   }
   const anyClaim = parts.some((p) => !lockedRows.has(p.sparePartId) && draftFor(p.sparePartId).on);
   const machineGaps = anyClaim && !machineLocked ? claimMachineGaps(order.claimGuide, plate, check) : [];
+
+  /**
+   * รายการ "ต้องแก้" ของฟอร์มแก้เคลม (เคลมก้อน 4) — เฉพาะชิ้นที่ยังติ๊กส่งเคลมอยู่ (ชิ้นที่ช่างเลิกเคลม ช่องของชิ้นนั้นไม่ต้องแก้)
+   * ไฟล์ใหม่ = แนบหลังถูกตีกลับ (ในฟอร์มนี้ หรือขึ้นใบงานไปแล้วตอนเปิดฟอร์มครั้งก่อน) · ป้ายรุ่นใหม่นับรูปที่เลือกไว้รอส่งด้วย
+   * kept = นับแบบออกจากหน้านี้แล้วกลับมา (ตัวเลข "ยังขาด" ในร่าง) — ไฟล์ที่ยังส่งไม่เสร็จ/รูปป้ายที่ยังไม่ได้ส่งไม่นับ
+   */
+  const claimedIds = parts.filter((p) => !lockedRows.has(p.sparePartId) && draftFor(p.sparePartId).on).map((p) => p.sparePartId);
+  const fixRows = fixMode ? flaggedRows.filter((r) => claimedIds.includes(r.sparePartId)) : [];
+  const after = (iso: string | null | undefined, since: string | null) => !!iso && !!since && Date.parse(iso) > Date.parse(since);
+  const fixItemsOf = (kept: boolean) =>
+    buildFixItems({
+      rows: fixRows,
+      nameOf: (id) => {
+        const p = parts.find((x) => x.sparePartId === id);
+        return p ? partLabel(p) : String(id);
+      },
+      family: order.claimGuide?.plate.family ?? fixRows[0]?.nameplate?.family ?? null,
+      errorCode: check.errorCode,
+      guide: order.claimGuide,
+      draftFor,
+      plate,
+      check,
+      newFile: (ids, role, since, k) => {
+        const inForm = (ids ?? claimedIds).some((id) => {
+          const sl = uploads.slots[slotKey(id, role)];
+          return !!sl && (k ? sl.status === "done" : sl.status !== "failed");
+        });
+        return (
+          inForm ||
+          order.claimEvidence.some(
+            (e) =>
+              e.role === role &&
+              (ids === null || (e.sparePartId !== null && ids.includes(e.sparePartId))) &&
+              after(e.createdAt, since) &&
+              !(e.id && uploads.removed.has(e.id))
+          )
+        );
+      },
+      newPlate: (since) => (!kept && !!nameplate) || files.some((f) => f.role === "NAMEPLATE" && after(f.createdAt, since)),
+      keeps: fixKeep,
+      kept,
+    });
+  const fixItems = fixItemsOf(false);
+  const unresolved = unresolvedOf(fixItems);
+  // อ่านหลังรอไฟล์ขึ้นเสร็จ (submit) — ไฟล์ที่ส่งไม่ผ่านทำให้ช่องนั้นกลับเป็น "ยังไม่ได้แก้"
+  const fixRef = useRef({ items: fixItems, unresolved });
+  fixRef.current = { items: fixItems, unresolved };
 
   /** ไฟล์ที่ยังต้องขึ้นก่อนสั่งปิด (รูปหน้างาน ป้ายรุ่น ใบเหลือง) — ใช้ทั้งตอนส่งและตอนนับว่าจะเกินเพดานไหม */
   function uploadQueue() {
@@ -6566,10 +6663,14 @@ function CloseModal({
     ),
     plate: { values: plate.values },
     check,
+    ...(fixMode ? { fixKeep } : {}),
   };
   const draftJson = JSON.stringify(draftBody);
-  // ตัวเลขบนการ์ดนับแบบ kept (ดู buildMissing) ไม่ใช่รายการบนปุ่มล่าง
-  const missingJson = JSON.stringify(buildMissing(true).map((m) => m.text));
+  // ตัวเลขบนการ์ดนับแบบ kept (ดู buildMissing) ไม่ใช่รายการบนปุ่มล่าง · ฟอร์มแก้เคลมนับช่องที่ถูกชี้แต่ยังไม่ได้แก้ด้วย
+  const missingJson = JSON.stringify([
+    ...buildMissing(true).map((m) => m.text),
+    ...(fixMode ? unresolvedOf(fixItemsOf(true)).map((i) => `ต้องแก้: ${i.title}`) : []),
+  ]);
   useEffect(() => {
     if (!visible || !restored) return;
     if (baseline.current === null) {
@@ -6620,10 +6721,22 @@ function CloseModal({
     const t = setTimeout(() => setFlash((f) => (f === flash ? null : f)), 2200);
     return () => clearTimeout(t);
   }, [flash]);
-  function goTo(key: string) {
+  function scrollToSpot(key: string) {
     const y = spotY(key);
     if (y !== null) scrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true });
     setFlash({ key, n: Date.now() });
+  }
+  /**
+   * ฟอร์มแก้เคลม: ของที่ขาดอยู่ในส่วนที่พับ — กางให้ก่อนแล้วค่อยเลื่อน (ช่องที่พับอยู่ไม่มีบนจอให้เลื่อนไปหา)
+   * รอหน้าจอวาดส่วนที่กางเสร็จก่อนวัดตำแหน่ง
+   */
+  function goTo(key: string) {
+    if (fixMode && !foldOpen && !key.startsWith("fix:")) {
+      setFoldOpen(true);
+      setTimeout(() => scrollToSpot(key), 120);
+      return;
+    }
+    scrollToSpot(key);
   }
   const flashOn = (key: string) => (flash?.key === key ? <FlashFrame key={flash.n} /> : null);
 
@@ -6683,6 +6796,9 @@ function CloseModal({
     touched.current = false;
     setRestored(false);
     setSendError(null);
+    setFixKeep({});
+    setFoldOpen(false);
+    setFixBlocked(false);
     setNote("");
     setParts([]);
     setSlip(null);
@@ -6755,12 +6871,17 @@ function CloseModal({
     const message = lost ? null : apiErrorMessage(e);
     setSendError({ lost, message });
     scrollRef.current?.scrollTo({ y: 0, animated: true });
-    showAlert(lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ", [message, keptText].filter(Boolean).join(" · "));
+    showAlert(lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ", [message, fixMode ? fixKeptText : keptText].filter(Boolean).join(" · "));
   }
 
   /** ปุ่มล่าง: ยังขาด → พาไปช่องแรกที่ขาด (ไม่ส่ง) · ไฟล์เกินเพดาน → พาไปข้อความเตือน · ครบ → ส่ง */
   function press() {
     if (saving) return;
+    // ช่องที่ถูกชี้ยังเหมือนเดิม — ไม่ส่ง (เซิร์ฟเวอร์ก็ไม่รับ) ปักแถบบอกว่าช่องไหน แล้วพาไปช่องแรก (ตัวอย่าง sendFix)
+    if (unresolved.length) {
+      setFixBlocked(true);
+      return goTo(`fix:${unresolved[0].key}`);
+    }
     if (missingList.length) return goTo(missingList[0].key);
     if (overLimit) return goTo("limit");
     void submit();
@@ -6778,6 +6899,12 @@ function CloseModal({
         await uploads.waitAll();
         // ให้หน้าจอวาดสถานะช่องล่าสุดก่อน แล้วค่อยอ่านรายการที่ขาด
         await new Promise((r) => setTimeout(r, 0));
+        const un = fixRef.current.unresolved[0];
+        if (un) {
+          setFixBlocked(true);
+          goTo(`fix:${un.key}`);
+          return;
+        }
         const gap = missingRef.current[0];
         if (gap) {
           goTo(gap.key);
@@ -6832,7 +6959,12 @@ function CloseModal({
           : {}),
         claims: claimed.map((p) => {
           const d = draftFor(p.sparePartId);
-          const keep = stillRejected.has(p.sparePartId) && d.keep !== null ? d.keep.trim() : "";
+          const keep =
+            stillRejected.has(p.sparePartId) && !flaggedIds.has(p.sparePartId) && d.keep !== null ? d.keep.trim() : "";
+          // ชิ้นที่ถูกชี้ช่อง: ตอบทีละช่อง — ส่งเฉพาะช่องที่ไม่ได้แก้ (แก้แล้วคำอธิบายไม่จำเป็น ไม่ต้องให้ผู้ตรวจอ่านซ้ำ)
+          const flagKeep = fixRef.current.items
+            .filter((i) => i.sparePartId === p.sparePartId && i.explained && !i.changed)
+            .map((i) => ({ flag: i.flag, note: (i.keep ?? "").trim() }));
           return {
             sparePartId: p.sparePartId,
             brokenPartCode: d.brokenPartCode.trim(),
@@ -6840,10 +6972,17 @@ function CloseModal({
             checkNote: d.checkNote.trim(),
             troubleshooting: d.troubleshooting,
             // "ค่าเดิมถูกแล้ว" — ตอบผู้ตรวจแทนการแก้ (เซิร์ฟเวอร์ไม่รับการส่งซ้ำที่ไม่ได้แก้อะไรและไม่ได้อธิบาย)
-            // ก้อน 1 ยังไม่มีช่องที่ผู้ตรวจชี้ คำอธิบายจึงตอบทั้งชิ้น (flag "ALL")
-            ...(keep ? { keep: [{ flag: "ALL", note: keep }] } : {}),
+            // ตีกลับก่อนมีการชี้ช่อง คำอธิบายตอบทั้งชิ้น (flag "ALL")
+            ...(keep ? { keep: [{ flag: "ALL", note: keep }] } : flagKeep.length ? { keep: flagKeep } : {}),
           };
         }),
+        // ช่องของเครื่องที่ตอบ "ค่าเดิมถูกแล้ว" — ครั้งเดียวทั้งใบ (ใช้ร่วมทุกชิ้น)
+        ...(() => {
+          const machineKeep = fixRef.current.items
+            .filter((i) => i.sparePartId === null && i.explained && !i.changed)
+            .map((i) => ({ flag: i.flag, note: (i.keep ?? "").trim() }));
+          return machineKeep.length ? { claimMachineKeep: machineKeep } : {};
+        })(),
       });
       await finishClosed();
     } catch (e) {
@@ -6872,7 +7011,41 @@ function CloseModal({
   }
 
   // ปุ่มล่างไม่จางอีกแล้ว — บอกตรง ๆ ว่ากดแล้วจะเกิดอะไร (พาไปช่องที่ขาด · รอไฟล์ · ส่ง)
-  const goLabel = missingList.length ? `ยังขาด ${missingList.length} อย่าง — พาไป` : null;
+  /**
+   * สรุปส่วนที่ไม่ต้องแก้ (ตัวอย่าง foldLines) — ขึ้นตอนกางส่วนที่พับ เหนือฟอร์มเดิม ให้เห็นทั้งหมดในไม่กี่บรรทัดก่อนไล่แก้
+   */
+  const machineFlagged = fixItems.some((i) => i.sparePartId === null);
+  const machineSummary = [
+    ...plateFields(order.claimGuide?.plate).map((f) => plate.values[f.key]?.value?.trim() ?? ""),
+    check.errorCode ? (check.errorCode === "อื่น ๆ" ? "ไม่มี Error ขึ้น" : check.errorCode) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const foldLines = fixMode
+    ? [
+        `✓ งานที่ทำ — ${results.find((r) => r.value === result)?.label ?? result} · รูปก่อนซ่อม ${(order.beforeCount ?? 0) + beforeFiles.length} · หลังซ่อม ${
+          (order.afterCount ?? 0) + afterFiles.length
+        } · ป้ายรุ่น ${nameplate || order.hasNameplate ? 1 : 0}`,
+        ...(!machineFlagged && anyClaim && machineSummary
+          ? [`✓ ข้อมูลเครื่อง — ${machineSummary}${machineLocked ? " (ล็อกไว้)" : ""}`]
+          : []),
+        ...fixRows.flatMap((r) => {
+          const p = parts.find((x) => x.sparePartId === r.sparePartId);
+          const rest = PART_FLAGS.filter((f) => !partFlagsOf(r).includes(f.key)).map((f) => f.label);
+          return p && rest.length ? [`✓ ${partLabel(p)} ช่องอื่น — ${rest.join(" · ")}`] : [];
+        }),
+        ...parts
+          .filter((p) => !lockedRows.has(p.sparePartId) && !draftFor(p.sparePartId).on)
+          .map((p) => `${partLabel(p)} — ไม่ส่งเคลม`),
+      ]
+    : [];
+  // ฟอร์มแก้เคลม: ช่องที่ถูกชี้ยังไม่ได้แก้มาก่อน (ตัวอย่าง fixPrimLabel) — ของที่ขาดอย่างอื่นค่อยตามมา
+  const goLabel = unresolved.length
+    ? `ยังไม่ได้แก้: ${unresolved[0].label}${unresolved.length > 1 ? ` และอีก ${unresolved.length - 1} ช่อง` : ""} — พาไป`
+    : missingList.length
+      ? `ยังขาด ${missingList.length} อย่าง — พาไป`
+      : null;
+  const submitLabel = fixMode ? FIX_SUBMIT_LABEL : SUBMIT_LABEL;
   const waitLabel =
     saving && uploads.uploading ? `รอไฟล์ขึ้นอีก ${uploads.uploading} ไฟล์ (${Math.round(uploads.progress * 100)}%)` : null;
 
@@ -6881,10 +7054,18 @@ function CloseModal({
       visible={visible}
       onClose={onCancel}
       busy={saving}
-      title={order.assignedOutsource && !reclosing ? <>บันทึกผลงาน SUB {order.code}</> : <>ปิดงาน {order.code}</>}
+      title={
+        fixMode ? (
+          <>แก้เคลม {order.code}</>
+        ) : order.assignedOutsource && !reclosing ? (
+          <>บันทึกผลงาน SUB {order.code}</>
+        ) : (
+          <>ปิดงาน {order.code}</>
+        )
+      }
       scrollRef={scrollRef}
       banner={
-        sendError || rejectedRows.length ? (
+        sendError || rejectedRows.length || (fixBlocked && unresolved.length) ? (
           <>
             {sendError ? (
               <View style={styles.sendErr} accessibilityRole="alert">
@@ -6897,7 +7078,7 @@ function CloseModal({
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={styles.sendErrTitle}>{sendError.lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ"}</Text>
                   {sendError.message ? <Text style={styles.sendErrText}>{sendError.message}</Text> : null}
-                  <Text style={styles.sendErrText}>{keptText}</Text>
+                  <Text style={styles.sendErrText}>{fixMode ? fixKeptText : keptText}</Text>
                 </View>
               </View>
             ) : null}
@@ -6906,8 +7087,17 @@ function CloseModal({
               <RejectedBanner
                 reviewer={rejectedRows[0].reviewedByName ?? null}
                 at={rejectedRows[0].reviewedAt}
-                lines={rejectedRows.map((c) => ({ part: c.partLabel ?? c.partName, reason: c.rejectReason ?? "—" }))}
+                lines={rejectLinesOf(rejectedRows, (c) => c.partLabel ?? c.partName, { family: order.claimGuide?.plate.family ?? null })}
               />
+            ) : null}
+            {/* กดส่งตอนช่องที่ถูกชี้ยังเหมือนเดิม — บอกว่าช่องไหน และทางออกสองทาง (ตัวอย่าง blockedText) */}
+            {fixBlocked && unresolved.length ? (
+              <View style={styles.fixBlocked} accessibilityRole="alert">
+                <Text style={styles.fixBlockedText}>
+                  ยังส่งไม่ได้ — ช่องที่ถูกชี้ยังเหมือนเดิม {unresolved.length} ช่อง: {unresolved.map((i) => i.label).join(" · ")} (แก้
+                  หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย)
+                </Text>
+              </View>
             ) : null}
           </>
         ) : null
@@ -6926,7 +7116,7 @@ function CloseModal({
             onPress={press}
             disabled={saving}
             activeOpacity={0.8}
-            accessibilityLabel={saving ? waitLabel ?? busy ?? "กำลังส่ง" : goLabel ?? SUBMIT_LABEL}
+            accessibilityLabel={saving ? waitLabel ?? busy ?? "กำลังส่ง" : goLabel ?? submitLabel}
           >
             {saving ? (
               <>
@@ -6936,13 +7126,71 @@ function CloseModal({
             ) : goLabel ? (
               <Text style={styles.closeGoText}>{goLabel}</Text>
             ) : (
-              <Text style={styles.modalSaveText}>{SUBMIT_LABEL}</Text>
+              <Text style={styles.modalSaveText}>{submitLabel}</Text>
             )}
           </TouchableOpacity>
         </View>
       }
     >
 
+      {/*
+        แก้เคลมแบบชี้ช่อง (เคลมก้อน 4): ช่องที่ต้องแก้อยู่บนสุด ที่เหลือพับไว้ "ส่วนที่ไม่ต้องแก้" (ตัวอย่าง fix screen)
+        ชิ้นที่ล็อกแล้วขึ้นนอกส่วนที่พับเสมอ — ช่างต้องรู้ว่าชิ้นนั้นจบแล้ว ไม่ต้องหาว่าทำไมไม่มีในรายการ
+        ส่วนที่พับยังแก้ได้ (ฟอร์มเดิมทั้งฟอร์ม) — ช่างอาจเจอสิ่งที่ต้องแก้เพิ่มเอง
+      */}
+      {fixMode ? (
+        <View style={{ marginBottom: spacing.sm }}>
+          <FixList
+            items={fixItems}
+            spot={(k) => spot(k)}
+            flashOn={flashOn}
+            env={{
+              files,
+              evidence: order.claimEvidence,
+              removed: uploads.removed,
+              guide: order.claimGuide,
+              troubleshooting: order.claimTroubleshooting,
+              brand: order.branchWarrantyBrand ?? order.machineBrand ?? "",
+              partCodeOf: (pid) => parts.find((x) => x.sparePartId === pid)?.partCode ?? String(pid),
+              claimedIds,
+              draftFor,
+              patchDraft,
+              plate,
+              setPlate,
+              check,
+              setCheck,
+              uploads,
+              readOnly: !!me?.viewAs,
+              setKeep: (key, v) => setFixKeep((k) => ({ ...k, [key]: v })),
+              onRescan: () => goTo("machine"),
+              onTouch: () => {
+                touched.current = true;
+              },
+            }}
+          />
+          <TouchableOpacity style={styles.foldBtn} onPress={() => setFoldOpen((o) => !o)} accessibilityState={{ expanded: foldOpen }}>
+            <Text style={styles.foldText}>{foldOpen ? "▾" : "▸"} ส่วนที่ไม่ต้องแก้ (พับไว้ แก้ได้ถ้าจำเป็น)</Text>
+          </TouchableOpacity>
+          {parts
+            .filter((p) => lockedRows.has(p.sparePartId))
+            .map((p) => {
+              const ok = lockedRows.get(p.sparePartId)!.status === "APPROVED";
+              return (
+                <View key={p.sparePartId} style={styles.claimLocked} accessibilityLabel={`ล็อกไว้ ${p.partCode}`}>
+                  <Ionicons name="lock-closed-outline" size={16} color={ok ? colors.successInk : colors.textMuted} />
+                  <Text style={[styles.claimLockedText, { color: ok ? colors.successInk : colors.body }]}>
+                    {ok
+                      ? `✓ ${partLabel(p)} ผ่านแล้ว ล็อกไว้`
+                      : `${partLabel(p)} — ปิดเคลม ไม่ส่งผู้ขาย (${lockedRows.get(p.sparePartId)!.rejectReason ?? "—"})`}
+                  </Text>
+                </View>
+              );
+            })}
+          {foldOpen ? foldLines.map((t) => <Text key={t} style={styles.foldLine}>{t}</Text>) : null}
+        </View>
+      ) : null}
+      {!fixMode || foldOpen ? (
+        <>
       {/*
         ไฟล์ปิดงานทีละขั้น 1-2-3 อยู่บนสุด (เจ้าของงานขอ ต.ค. 69 — แบบเดียวกับไฟล์ตรวจหน้างาน)
         ช่างถ่ายตอนยืนหน้าเครื่องก่อน แล้วค่อยกรอกสรุป/คนที่ไปตอนนั่งพัก
@@ -7290,6 +7538,8 @@ function CloseModal({
             const sentBack = stillRejected.get(p.sparePartId);
             const lockedRow = lockedRows.get(p.sparePartId);
             // ชิ้นที่ตัดสินจบแล้ว — พับเหลือบรรทัดเดียว ไม่มีอะไรให้กรอก (ตัวอย่าง lockedLines)
+            // ฟอร์มแก้เคลมขึ้นบรรทัดนี้ไว้เหนือส่วนที่พับแล้ว ไม่ขึ้นซ้ำ
+            if (lockedRow && fixMode) return null;
             if (lockedRow) {
               const ok = lockedRow.status === "APPROVED";
               return (
@@ -7341,8 +7591,12 @@ function CloseModal({
                     {/*
                       ชิ้นที่ถูกตีกลับ: แก้ตามเหตุผล หรือยืนยันว่าค่าเดิมถูกแล้วพร้อมอธิบาย — เซิร์ฟเวอร์ไม่รับการส่งซ้ำที่ไม่ได้แก้อะไรเลย
                       (กันกดส่งซ้ำโดยไม่ได้ตั้งใจ ไม่ใช่ตรวจคุณภาพ) · ไม่บังคับให้ช่างแก้ค่าที่ถูกให้ผิดเพื่อให้ส่งผ่าน
+                      ชิ้นที่ถูกชี้ช่อง (เคลมก้อน 4) ตอบ "ค่าเดิมถูกแล้ว" ทีละช่องในรายการ "ต้องแก้" ด้านบนแทน — กล่องทั้งชิ้นตรงนี้
+                      ไม่ถูกส่ง (เซิร์ฟเวอร์ต้องการคำตอบรายช่อง) ถ้ายังขึ้น ช่างพิมพ์อธิบายไว้แล้วข้อความหายเงียบ ๆ แล้วติด "ยังส่งไม่ได้"
                     */}
-                    {sentBack ? (
+                    {sentBack && flaggedIds.has(p.sparePartId) ? (
+                      <Text style={styles.claimHeader}>ช่องที่ถูกชี้ของชิ้นนี้อยู่ในรายการ “ต้องแก้” ด้านบน</Text>
+                    ) : sentBack ? (
                       <View style={styles.claimKeepBox}>
                         <Text style={styles.claimKeepReason}>
                           ตีกลับ: “{sentBack.rejectReason ?? "—"}” — แก้ตามเหตุผล หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย
@@ -7580,6 +7834,9 @@ function CloseModal({
         ) : null}
         {flashOn("followUp")}
       </View>
+
+        </>
+      ) : null}
 
       {/* กล่องเดียวบอกครบทุกอย่างที่ขาด (เคลมบอกชิ้นและช่อง) — ปุ่มล่างพาไปช่องแรกในรายการนี้ */}
       <MissingBox items={missingList.map((m) => m.text)} why="ต้องครบก่อนถึงจะส่งได้ — กดปุ่ม “ยังขาด … — พาไป” ด้านล่าง ระบบเลื่อนไปช่องแรกที่ยังขาดให้" />
@@ -8382,6 +8639,18 @@ const styles = StyleSheet.create({
   },
   sendErrTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.dangerInk },
   sendErrText: { fontSize: 13, lineHeight: 19, color: colors.dangerInk },
+  // ยังส่งไม่ได้ (ช่องที่ถูกชี้ยังเหมือนเดิม) — เหลืองเข้มบนพื้นเหลืองอ่อน: เป็นคำเตือนให้ทำต่อ ไม่ใช่ระบบพัง
+  fixBlocked: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 8,
+    backgroundColor: colors.warningSoft,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.warning,
+  },
+  fixBlockedText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
+  foldBtn: { minHeight: 48, justifyContent: "center", marginTop: spacing.xs },
+  foldText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
+  foldLine: { fontSize: 13, lineHeight: 20, color: colors.body },
   modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
   modalCancel: {
     flex: 1,

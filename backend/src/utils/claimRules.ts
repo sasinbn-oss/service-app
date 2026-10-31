@@ -5,7 +5,8 @@
  * ใบเคลม PDF · ไฟล์ที่จะส่งผู้ขาย ถ้าแต่ละที่เขียนเงื่อนไขเอง วันหนึ่งจะตอบไม่ตรงกัน เช่น ระบบยอมให้ลบ
  * ไฟล์ที่ผู้ขายยังต้องได้รับ หรือ PDF ลงรายการไฟล์ที่แนบหลังส่งเคลมไปแล้ว — จึงมีคำตอบเดียวอยู่ที่นี่
  */
-import { CLAIM_EVIDENCE_ROLES } from "./constants";
+import { CLAIM_EVIDENCE_ROLES, CLAIM_REVIEW_FLAGS } from "./constants";
+import { NO_ERROR_CODE, plateTemplateFor } from "./claimGuide";
 
 /** แถว PartClaim เท่าที่กติกาในไฟล์นี้ใช้ */
 export interface ClaimRowLite {
@@ -254,6 +255,8 @@ export interface ClaimRejectedRow extends ClaimRowLite {
   troubleshooting: string[];
   fieldCheck?: unknown;
   reviewedAt: Date | null;
+  /** ช่องที่ผู้ตรวจชี้ให้แก้ (ก้อน 4) · ว่าง/ไม่มี = ตีกลับแบบเดิม (ข้อความอย่างเดียว) */
+  reviewFlags?: string[];
 }
 
 /** ค่าที่ช่างกำลังจะส่งใหม่ของชิ้นเดียวกัน — ค่าหลังตัดช่องว่าง/ตัดข้อที่ไม่มีในรายการแล้ว (แบบเดียวกับที่จะเก็บลงแถว) */
@@ -317,6 +320,11 @@ export interface ClaimVerdictRow extends ClaimRowLite {
   rejectReason: string | null;
   reviewedAt: Date | null;
   reviewedById: number | null;
+  /** ตีกลับแบบชี้ช่อง (ก้อน 4) — ไม่ส่งมา = ไม่มีช่อง (ตีกลับแบบเดิม) */
+  reviewFlags?: string[];
+  /** ยี่ห้อ + Error ตอนส่ง — ตั้งชื่อช่องวิดีโอ Error ให้ตรงกับเครื่อง (ไม่ส่งมา = ชื่อตั้งต้น) */
+  brand?: string | null;
+  fieldCheck?: unknown;
 }
 
 /** ประวัติเคลมเท่าที่แถบสถานะใช้ — ชื่อคนกดมากับประวัติ */
@@ -327,7 +335,7 @@ export interface ClaimTrailLog extends ClaimLogLite {
 /**
  * เหตุการณ์ของแถบสถานะเคลม (ส่งเคลม → ตีกลับ → ส่งใหม่ → อนุมัติ) ตามแบบที่เจ้าของงานอนุมัติ (strip)
  * k: send ส่งครั้งแรก · resend ส่งใหม่ · reject ตีกลับ · approve อนุมัติ · close ปิดงานโดยไม่มีชิ้นที่ส่งผู้ขาย
- * who = ช่างที่กดส่ง / Admin Spare Part ที่ตัดสิน · what = ชิ้นที่ถูกตีกลับ (ชื่ออะไหล่คั่นด้วย ", ") หรือเหตุที่ปิด
+ * who = ช่างที่กดส่ง / Admin Spare Part ที่ตัดสิน · what = ชิ้นที่ถูกตีกลับ (ชื่ออะไหล่คั่นด้วย ", " · ตีกลับทั้งใบ = "ทั้งใบ") หรือเหตุที่ปิด
  */
 export interface ClaimTrailEvent {
   k: "send" | "resend" | "reject" | "approve" | "close";
@@ -368,7 +376,10 @@ export function claimTrail(
     const who = nameOf(group[0].reviewedById);
     const rejected = group.filter((r) => r.status === "REJECTED").sort((a, b) => a.id - b.id);
     if (rejected.length) {
-      events.push({ k: "reject", at, who, what: rejected.map(labelOf).join(", ") });
+      // ตีกลับทั้งใบ (มีช่องของเครื่อง) เรียกว่า "ทั้งใบ" แบบตัวอย่าง strip — กติกาเดียวกับ claimTrailOf ฝั่งแอป
+      // การ์ดของช่างอ่านแถบนี้ ส่วนหน้าใบงานกับหน้าตรวจคิดเอง ถ้าไล่ชื่อทุกชิ้นที่ถูกพาไปด้วย เหตุการณ์เดียวจะเขียนสองแบบ
+      const whole = rejected.some((r) => (r.reviewFlags ?? []).some(isMachineFlag));
+      events.push({ k: "reject", at, who, what: whole ? "ทั้งใบ" : rejected.map(labelOf).join(", ") });
     } else if (rows.some((r) => r.status === "APPROVED" && r.reviewedAt && r.reviewedAt.getTime() <= t)) {
       events.push({ k: "approve", at, who });
     } else {
@@ -449,9 +460,24 @@ export function claimSummary(
     sentAt: max(set.map((r) => r.createdAt)),
     rejectedAt: max(rows.filter((r) => r.status === "REJECTED").map((r) => r.reviewedAt)),
     reviewerName: lastReviewed ? nameOf(lastReviewed.reviewedById) : null,
+    /**
+     * fields = ช่างต้องแก้ทั้งหมดกี่ช่อง ("ต้องแก้ {n} ชิ้น · {m} ช่อง") · needsSite = ต้องกลับไปถ่ายที่หน้าเครื่องไหม
+     * (null = ตีกลับแบบเดิมไม่มีช่อง ระบบไม่รู้) · whole = ชื่อช่องของเครื่องที่ถูกชี้ (ตีกลับทั้งใบ) — ดู rejectFieldsSummary
+     */
+    ...(state === "REJECTED"
+      ? rejectFieldsSummary(
+          set.map((r) => ({ ...r, reviewFlags: r.reviewFlags ?? [] })),
+          (r, k) => reviewFlagLabel(k, flagContextOf(r))
+        )
+      : { fields: 0, needsSite: null, whole: null }),
+    // fieldLabels ต่อชิ้น = ชื่อช่องของชิ้นนั้นที่ผู้ตรวจติ๊กเอง (ไม่รวมช่องของเครื่อง — อยู่ใน whole ครั้งเดียว)
     reasons:
       state === "REJECTED"
-        ? set.map((r) => ({ partLabel: labelOf(r), reason: r.rejectReason ?? "" }))
+        ? set.map((r) => ({
+            partLabel: labelOf(r),
+            reason: r.rejectReason ?? "",
+            fieldLabels: (r.reviewFlags ?? []).filter(isPartFlag).map((k) => reviewFlagLabel(k, flagContextOf(r))),
+          }))
         : [],
     trail: claimTrail(rows, logs, labelOf, nameOf),
     /**
@@ -555,5 +581,158 @@ export function claimRoundPayload(
     rejected: open && latest.some((r) => r.status === "REJECTED"),
     rejectedIds: open ? lastRejected(latest).map((r) => r.id) : [],
     lockedMachine: approved.length ? { byParts: approved.map(labelOf) } : null,
+  };
+}
+
+// ── ก้อน 4: ตีกลับแบบชี้ช่อง ─────────────────────────────
+
+type PlateFamily = "ALLIANCE" | "OASIS" | "OTHER";
+
+const FLAG_BY_KEY = new Map(CLAIM_REVIEW_FLAGS.map((f) => [f.key, f]));
+
+/** ช่องของเครื่อง (ใช้ร่วมทุกชิ้น) — ติ๊กแล้วตีกลับทั้งใบ */
+export function isMachineFlag(key: string): boolean {
+  return FLAG_BY_KEY.get(key)?.scope === "MACHINE";
+}
+
+/** ช่องของอะไหล่ชิ้นนั้น */
+export function isPartFlag(key: string): boolean {
+  return FLAG_BY_KEY.get(key)?.scope === "PART";
+}
+
+/** แบบป้ายของยี่ห้อ (กติกาเดียวกับป้ายที่ช่างสแกน) — บอกว่าเครื่องนี้มีช่องไหนให้ติ๊ก */
+export function plateFamilyOf(make: string | null | undefined): PlateFamily {
+  return plateTemplateFor(make).family;
+}
+
+/**
+ * ช่องที่ติ๊กได้กับเครื่องแบบนี้ — Oasis ไม่มี Serial บนป้าย (ใช้ "ข้อมูลป้ายรุ่น" แทน) และไม่มีคู่มือ Error
+ * ติ๊กช่องที่เครื่องไม่มี ช่างแก้ไม่ได้ (ไม่มีช่องนั้นในฟอร์ม) ใบจะวนอยู่ระหว่างช่างกับผู้ตรวจ จึงปฏิเสธตั้งแต่ตอนตีกลับ
+ */
+export function reviewFlagsFor(family: PlateFamily) {
+  return CLAIM_REVIEW_FLAGS.filter((f) => f.families.includes(family));
+}
+
+/**
+ * ชื่อช่องที่คนอ่าน — ใช้ทั้งข้อความปฏิเสธ · ประวัติ · เหตุผลที่เขียนแทน · การ์ดงานของช่าง ให้เรียกเหมือนกันทุกที่
+ * วิดีโอ Error ของเครื่องที่ไม่มี Error ให้ถ่าย (Oasis · เลือก "ไม่มี Error ขึ้น") เรียก "วิดีโออาการตอนเครื่องเดิน"
+ * (คำตอบข้อ 4 ของเจ้าของงาน) — ถ้าเขียนว่าวิดีโอ Error ช่างจะไปหาจอที่ขึ้นรหัสซึ่งไม่มีอยู่จริง
+ */
+export function reviewFlagLabel(key: string, ctx: { family?: string | null; errorCode?: string | null } = {}): string {
+  const f = FLAG_BY_KEY.get(key);
+  if (!f) return key;
+  if (f.altLabel && (ctx.family === "OASIS" || ctx.errorCode === NO_ERROR_CODE)) return f.altLabel;
+  return f.label;
+}
+
+/** ต้องกลับไปถ่ายที่หน้าเครื่องไหม — มีช่องที่เป็นไฟล์ (รูป/วิดีโอ) อย่างน้อยหนึ่งช่อง */
+export function flagsNeedSite(flags: string[]): boolean {
+  return flags.some((k) => FLAG_BY_KEY.get(k)?.site === true);
+}
+
+/** Error code + แบบป้ายของแถวเคลม — ใช้ตั้งชื่อช่องวิดีโอ Error ให้ตรงกับที่ช่างเห็นในฟอร์ม */
+export function flagContextOf(row: { brand?: string | null; fieldCheck?: unknown }) {
+  const fc = (row.fieldCheck ?? null) as { errorCode?: unknown } | null;
+  return { family: plateFamilyOf(row.brand), errorCode: typeof fc?.errorCode === "string" ? fc.errorCode : null };
+}
+
+/**
+ * เหตุผลที่เขียนแทนเมื่อผู้ตรวจติ๊กช่องแต่ไม่พิมพ์เหตุผล — rejectReason ยังมีข้อความเสมอ
+ * ประวัติเคลม · Excel · ใบงานเก่าในแอป อ่านแค่ rejectReason ถ้าว่าง คนที่เปิดดูจะเห็นแถวตีกลับที่ไม่มีเหตุผล
+ * รูปแบบตามตัวอย่าง: "{ช่อง} ต้องแก้" · ชิ้นที่ถูกตีกลับเพราะข้อมูลเครื่องอย่างเดียว "ทั้งใบ (ข้อมูลเครื่อง) — {ช่อง} ต้องแก้"
+ */
+export function flagReasonText(ownLabels: string[], machineLabels: string[]): string {
+  return [
+    ownLabels.length ? `${ownLabels.join(" · ")} ต้องแก้` : null,
+    machineLabels.length ? `ทั้งใบ (ข้อมูลเครื่อง) — ${machineLabels.join(" · ")} ต้องแก้` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * ช่องที่ถูกชี้นี้ ช่างแก้แล้วหรือยัง (ส่งใหม่หลังถูกตีกลับแบบชี้ช่อง) — prior = แถวที่ถูกตีกลับ · next = ค่าที่จะเก็บรอบนี้
+ *
+ * ไฟล์ = แนบใหม่หลังเวลาตีกลับ (ไฟล์ใหม่แทนไฟล์เดิม) · ของชิ้นนั้น หรือของเครื่อง (วิดีโอ Error/รูปอาการ ชิ้นไหนก็ได้)
+ * ค่า = ต่างจากที่ส่งรอบที่ถูกตีกลับ (ตัดช่องว่างแล้ว) · ป้ายรุ่น: ค่าต่าง หรือถ่ายป้ายใหม่ (อ่านค่าใหม่จากรูปใหม่)
+ * ช่างเข้าเช็คอะไรบ้าง = ข้อความ · Troubleshooting · ข้อเช็คตาม Error อย่างใดอย่างหนึ่งเปลี่ยน
+ * กันแค่ "ส่งของเดิมกลับไปโดยไม่ตั้งใจ" ไม่ใช่ตัวตรวจคุณภาพ — ค่าเดิมถูกจริงให้ตอบ "ค่าเดิมถูกแล้ว" (คนเรียกตรวจเอง)
+ */
+export function flagSatisfied(
+  flag: string,
+  prior: ClaimRejectedRow,
+  next: ClaimResubmit,
+  files: ClaimFileLite[]
+): boolean {
+  const rejectedAt = prior.reviewedAt ?? prior.createdAt;
+  const newFile = (role: string, anyPart: boolean) =>
+    files.some((f) => f.role === role && f.createdAt > rejectedAt && (anyPart || f.sparePartId === prior.sparePartId));
+  const was = new Map(plateOf(prior.nameplate).map((f) => [f.key, f.value]));
+  const now = new Map(next.plate.filter((f) => f.value.trim()).map((f) => [f.key, f.value.trim()]));
+  const newPlate = newFile("NAMEPLATE", true);
+  const fc = (prior.fieldCheck ?? null) as { errorCode?: unknown; checked?: unknown } | null;
+  switch (flag) {
+    case "CLAIM_PART":
+    case "CLAIM_CHECK_VIDEO":
+      return newFile(flag, false);
+    case "CLAIM_ERROR_VIDEO":
+    case "CLAIM_SYMPTOM":
+      return newFile(flag, true);
+    case "BROKEN_CODE":
+      return (prior.brokenPartCode ?? "").trim() !== next.brokenPartCode.trim();
+    case "SYMPTOM":
+      return prior.symptom.trim() !== next.symptom.trim();
+    case "CHECKS":
+      return (
+        prior.checkNote.trim() !== next.checkNote.trim() ||
+        !sameSet(prior.troubleshooting, next.troubleshooting) ||
+        !sameSet(Array.isArray(fc?.checked) ? fc.checked.map(String) : [], next.errorChecked)
+      );
+    case "MODEL":
+    case "SERIAL": {
+      const key = flag === "MODEL" ? "model" : "serial";
+      return newPlate || (was.get(key) ?? "") !== (now.get(key) ?? "");
+    }
+    case "PLATE_OTHER": {
+      if (newPlate) return true;
+      const keys = new Set([...was.keys(), ...now.keys()].filter((k) => k !== "model"));
+      return [...keys].some((k) => (was.get(k) ?? "") !== (now.get(k) ?? ""));
+    }
+    case "ERROR_CODE":
+      return String(fc?.errorCode ?? "") !== (next.errorCode ?? "");
+    default:
+      return false;
+  }
+}
+
+/**
+ * สรุปช่องที่ต้องแก้ของการตีกลับครั้งล่าสุด สำหรับการ์ดงานของช่าง (my-day · claim)
+ * rejected = ชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุด (lastRejected) · labelOf = ชื่อช่องตามเครื่องของแถวนั้น
+ *
+ * fields = จำนวนช่อง: ช่องของชิ้นนับทุกชิ้น · ช่องของเครื่องนับครั้งเดียว (ติดทุกแถวของการตีกลับทั้งใบ แต่แก้ครั้งเดียว)
+ * needsSite = มีช่องที่เป็นไฟล์ → ต้องกลับไปถ่ายที่หน้าเครื่อง · ตีกลับแบบเดิม (ไม่มีช่อง) ปนอยู่ = ไม่รู้ (null)
+ *   ช่างต้องรู้ก่อนออกจากบ้านว่าต้องไปร้านไหม — บอกว่า "แก้จากมือถือได้" ทั้งที่เหตุผลแบบข้อความอาจขอรูปใหม่ไม่ได้
+ * whole = ชื่อช่องของเครื่องที่ถูกชี้ (ตีกลับทั้งใบ) · ไม่มี = null
+ */
+export function rejectFieldsSummary<R extends { reviewFlags: string[] }>(
+  rejected: R[],
+  labelOf: (r: R, key: string) => string
+) {
+  const machine = new Map<string, string>();
+  let partFields = 0;
+  for (const r of rejected) {
+    for (const k of new Set(r.reviewFlags)) {
+      if (isMachineFlag(k)) {
+        if (!machine.has(k)) machine.set(k, labelOf(r, k));
+      } else if (isPartFlag(k)) partFields += 1;
+    }
+  }
+  const all = rejected.flatMap((r) => r.reviewFlags);
+  const legacy = rejected.some((r) => !r.reviewFlags.some((k) => FLAG_BY_KEY.has(k)));
+  const order = CLAIM_REVIEW_FLAGS.map((f) => f.key);
+  return {
+    fields: partFields + machine.size,
+    needsSite: flagsNeedSite(all) ? true : legacy || !rejected.length ? null : false,
+    whole: machine.size ? [...machine.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([, l]) => l) : null,
   };
 }

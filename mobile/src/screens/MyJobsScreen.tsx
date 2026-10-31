@@ -27,6 +27,7 @@ import { showAlert } from "../utils/alert";
 import { dayLabel } from "../utils/customerMessage";
 import { loadCloseDraft, missingItems, type CloseDraft } from "../utils/closeDraft";
 import ClaimTrail, { dayTime, type TrailEvent } from "../components/claims/ClaimTrail";
+import { PHONE_TEXT, SITE_TEXT, cardReasonLines, wholeLabels } from "../utils/claimFlags";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
@@ -71,11 +72,21 @@ interface ClaimInfo {
   sentAt: string | null;
   rejectedAt: string | null;
   reviewerName: string | null;
-  /** ทุกชิ้นที่ถูกตีกลับ พร้อมเหตุผล */
-  reasons: { partLabel: string; reason: string }[];
+  /**
+   * ทุกชิ้นที่ถูกตีกลับ พร้อมเหตุผล · fieldLabels = ชื่อช่องของชิ้นนั้นที่ผู้ตรวจติ๊กเอง (เคลมก้อน 4 · ไม่รวมช่องของเครื่อง)
+   * ผู้ตรวจไม่ได้พิมพ์เหตุผล เซิร์ฟเวอร์เขียนชื่อช่องแทนลง reason — การ์ดแยกออกแล้วขึ้นเป็นชื่อช่อง (cardReasonLines)
+   */
+  reasons: { partLabel: string; reason: string; fieldLabels?: string[] }[];
   trail: TrailEvent[];
   /** ผลสุดท้ายทีละชิ้นของใบที่จบแล้ว (เคลมก้อน 3) — ผ่าน / ปิดเคลม ไม่ส่งผู้ขาย พร้อมเหตุผล · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
   outcome?: { partLabel: string; status: "APPROVED" | "DECLINED"; reason?: string | null }[];
+  // ── ตีกลับแบบชี้ช่อง (เคลมก้อน 4) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง การ์ดขึ้นแบบเดิม ──
+  /** จำนวนช่องที่ต้องแก้ (ช่องของชิ้นนับทีละชิ้น · ช่องของเครื่องนับครั้งเดียว) */
+  fields?: number | null;
+  /** มีช่องไฟล์ = ต้องกลับไปถ่ายที่หน้าเครื่อง · ตีกลับแบบเก่าที่ไม่ได้ชี้ช่อง = null (ไม่รู้ ไม่บอก) */
+  needsSite?: boolean | null;
+  /** ตีกลับทั้งใบ — ชื่อช่องของเครื่องที่ต้องแก้ (ไม่ใช่ทั้งใบ = null) */
+  whole?: string[] | boolean | string | null;
 }
 
 type Tab = "today" | "tomorrow" | "late";
@@ -429,8 +440,15 @@ function JobCard({
    * บอกเหตุผลทุกชิ้นตรงการ์ด กดปุ่มเดียวไปฟอร์มแก้ (ตัวอย่างที่เจ้าของงานเลือก ต.ค. 69)
    */
   if (claim?.state === "REJECTED" && !job.done) {
-    const reasons = (claim.reasons ?? []).map((r) => `${r.partLabel} — ${r.reason}`).join(" / ");
+    /**
+     * ตีกลับทั้งใบ (เคลมก้อน 4): ขึ้น "ทั้งใบ (ข้อมูลเครื่อง) — {ช่อง} ต้องแก้" ก่อน (ตัวอย่าง rejReason)
+     * ชิ้นที่ถูกพาไปเพราะทั้งใบอย่างเดียว (เหตุผลเป็นแค่ชื่อช่องของเครื่อง) ไม่ขึ้นซ้ำ — ช่างจะนึกว่ามีอีกเรื่องต้องแก้
+     */
+    const reasons = cardReasonLines(claim.reasons ?? [], wholeLabels(claim.whole))
+      .map((l) => `${l.part} — ${l.reason}`)
+      .join(" / ");
     const n = (claim.reasons ?? []).length || claim.parts;
+    const fields = typeof claim.fields === "number" && claim.fields > 0 ? claim.fields : null;
     return (
       <SentBackCard
         label={`งาน ${job.code}`}
@@ -441,7 +459,20 @@ function JobCard({
         action={{ label: "แก้เคลม", onPress: () => onOpen("close") }}
         footer={<ClaimTrail trail={claim.trail} tail="รอช่างแก้" tailColor={colors.dangerInk} />}
       >
-        <Text style={styles.sentBackCount}>ต้องแก้ {n} ชิ้น</Text>
+        <Text style={styles.sentBackCount}>{fields ? `ต้องแก้ ${n} ชิ้น · ${fields} ช่อง` : `ต้องแก้ ${n} ชิ้น`}</Text>
+        {/* รู้ตั้งแต่เห็นการ์ดว่าต้องออกไปร้านไหม — ช่องไฟล์ = ถ่ายใหม่ที่หน้าเครื่อง (ตัวอย่าง visit) · ตีกลับแบบเก่าไม่รู้ ไม่บอก */}
+        {claim.needsSite === true || claim.needsSite === false ? (
+          <View style={[styles.visit, claim.needsSite ? styles.visitSite : styles.visitPhone]}>
+            <Ionicons
+              name={claim.needsSite ? "location-outline" : "phone-portrait-outline"}
+              size={16}
+              color={claim.needsSite ? colors.dangerInk : colors.successInk}
+            />
+            <Text style={[styles.visitText, { color: claim.needsSite ? colors.dangerInk : colors.successInk }]}>
+              {claim.needsSite ? SITE_TEXT : PHONE_TEXT}
+            </Text>
+          </View>
+        ) : null}
         <DraftLine draft={draft} button="แก้เคลม" />
         <SmallActions job={job} onOpen={() => onOpen()} callText="โทร" />
       </SentBackCard>
@@ -638,6 +669,19 @@ const styles = StyleSheet.create({
   sentBackChipText: { fontSize: 13, lineHeight: 22, fontWeight: "800", color: "#fff" },
   sentBackReason: { fontSize: 14, lineHeight: 21, color: colors.dangerInk },
   sentBackCount: { fontSize: 14, lineHeight: 21, color: colors.text },
+  // ต้องไปร้านไหม — แดงอ่อน = ต้องกลับไปถ่ายที่หน้าเครื่อง · เขียวอ่อน = แก้จากมือถือได้ (ตัวอย่าง visitFg/visitBg) ตัวเข้มบนพื้นอ่อน
+  visit: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    alignSelf: "flex-start",
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  visitSite: { backgroundColor: colors.dangerSoft },
+  visitPhone: { backgroundColor: colors.successSoft },
+  visitText: { fontSize: 14, lineHeight: 20, fontWeight: "700" },
   bigSentBack: { backgroundColor: colors.dangerFill },
   cornerTime: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   draftLine: {
