@@ -22,8 +22,11 @@ const { setup } = require("./fixture");
     // สาขาแฟรนไชส์ที่หมดประกันแน่ ๆ (เปิดเกิน 3 ปี) — เครื่อง Oasis ในใบทดสอบประกัน 2 ปี
     const branch = fx.sql(`select code from "Branch" where code like 'D%' and "cancelledAt" is null and region is not null and "openedAt" < now() - interval '3 years' order by "openedAt" limit 1`);
     if (!branch) throw new Error("ไม่มีสาขา D ที่หมดประกันในฐานข้อมูล");
-    const pid = fx.part("SP-BOARD");
-    const wo = await fx.workOrder(branch, [{ sparePartId: pid, quantity: 1 }]);
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+    // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+    const wo = await fx.workOrder(branch, null);
+    const pid = fx.fxPart(wo.id, "BOARD");
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: pid, quantity: 1 }] });
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
     db("status") === "PARTS_SOURCING" ? pass("ใบงานแฟรนไชส์หมดประกัน + ใช้อะไหล่ → รอแอดมินเช็คอะไหล่ (ฐานข้อมูล)") : fail(`สถานะ: ${db("status")}`);
 

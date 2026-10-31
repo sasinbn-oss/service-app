@@ -4,6 +4,7 @@
 #        จัดแผนให้ทีมรวมได้ · นำเข้ารายชื่อจับคู่ชื่อทีมรวมได้ และไม่ล้างทีมอื่นของหัวหน้าภาค · รายงานไม่นับว่าไม่มีทีม
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -62,7 +63,8 @@ POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 [ "$(DB "select \"assignedTeam\" from \"WorkOrder\" where id=$ID")" = "กระบี่" ] && pass "DB: ใบงานจ่ายให้ทีมกระบี่ (ทีมช่างจริง)" || fail "จ่ายงานไม่ได้"
 has() { curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $1)" | J "const r=d.rows||d; r.some(w=>w.id===$ID)?'yes':'no'"; }
 [ "$(has $T1)|$(has $T3)|$(has $T2)" = "yes|yes|no" ] && pass "ช่างทีมรวมกระบี่และทีมรวมทุกทีมเห็นใบงาน · ทีมรวมกรุงเทพไม่เห็น" || fail "เห็นใบงาน: $(has $T1) $(has $T3) $(has $T2)"
-P2=$(DB "select id from \"SparePart\" order by id limit 1")
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (W9 Haier) — ช่างทีมรวมกรุงเทพต้องถูกปฏิเสธเพราะทีมเท่านั้น ไม่ใช่เพราะยี่ห้อ
+P2=$(fx_part "$ID" BOARD)
 R=$(POST $T2 "work-orders/$ID/follow-up" "{\"parts\":[{\"sparePartId\":$P2,\"quantity\":1}]}")
 echo "$R" | grep -q "ไม่ใช่ทีมของคุณ" && pass "ช่างทีมรวมที่ไม่ครอบคลุมกระบี่ ทำงานในใบนี้ไม่ได้" || fail "ทีมอื่นทำได้: $(echo $R|head -c 120)"
 R=$(POST $T1 "work-orders/$ID/follow-up" "{\"parts\":[{\"sparePartId\":$P2,\"quantity\":1}]}")

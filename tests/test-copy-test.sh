@@ -3,6 +3,7 @@
 #        แอดมินเท่านั้น (หัวหน้าภาค/Admin Spare Part ไม่ได้) · ใบที่ปิดแล้วคัดลอกได้ เริ่มที่รอช่างเข้างาน · ลบใบทดสอบแล้วใบจริงยังอยู่
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -34,10 +35,11 @@ PA=$(login ZTCP$SUF)
 DB "insert into \"Branch\"(name,code,region,zone,ownership,\"openedAt\") values ('สาขาทดสอบคัดลอก','$BC','ใต้','กระบี่','FRANCHISE',now()-interval '12 months')" >/dev/null
 BID=$(DB "select id from \"Branch\" where code='$BC'")
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W1','WASHER','HB - Huebsch',now())" >/dev/null
-PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 
 ID=$(POST $A work-orders "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"URGENT\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W1\",\"model\":\"Huebsch\",\"symptom\":\"ประตูล็อกไม่ลง\"}]}" | J 'd.orders?d.orders[0].id:d.id')
 IDS="$ID"
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (W1 HB - Huebsch) — หยิบหลังเปิดใบ เพราะต้องรู้ก่อนว่าเครื่องเป็นยี่ห้ออะไร
+PID=$(fx_part "$ID" BOARD)
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":2}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 POST $S "work-orders/$ID/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null

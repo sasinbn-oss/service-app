@@ -12,6 +12,7 @@
 # (อยู่ใน claim-test.sh แล้ว) ที่นี่ต้องการเวลาส่งย้อนหลังหลายเดือนและหลายรอบที่คุมได้ ซึ่งทางจริงทำไม่ได้
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -50,8 +51,6 @@ PA=$(login ZCHP$SUF); SA=$(login ZCHX$SUF); AR=$(login ZCHR$SUF)
 PANAME=$(DB "select name from \"User\" where \"employeeCode\"='ZCHP$SUF'")
 PAID=$(DB "select id from \"User\" where \"employeeCode\"='ZCHP$SUF'")
 TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'"); TNAME=$(DB "select name from \"User\" where id=$TID")
-BOARD=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BOARD'")
-BELT=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BELT'")
 # สาขา 1 ในภาคของ S001 · สาขา 2 อยู่ภาคอื่น (นอกขอบเขตหัวหน้าภาค) — ทีมประจำชื่อเฉพาะ ไม่มีหัวหน้าภาคคนอื่นดูแล
 DB "insert into \"Branch\"(name,code,region,zone,ownership) values ('สาขาทดสอบประวัติเคลมหนึ่ง','$BC1','$R1','ทีมทดสอบประวัติเคลม$SUF','FRANCHISE'),
     ('สาขาทดสอบประวัติเคลมสอง','$BC2','$R2','ทีมทดสอบประวัติเคลมสอง$SUF','FRANCHISE')" >/dev/null
@@ -63,6 +62,12 @@ W1=$(newwo $BC1 W1); W2=$(newwo $BC1 W2); W3=$(newwo $BC2 W1); W4=$(newwo $BC1 W
 DB "update \"WorkOrder\" set \"isTest\"=true where id=$W4" >/dev/null
 C1=$(DB "select code from \"WorkOrder\" where id=$W1"); C2=$(DB "select code from \"WorkOrder\" where id=$W2")
 [ -n "$C1" ] && [ -n "$C2" ] && [ -n "$W3" ] && [ -n "$W4" ] || { echo "FAIL เปิดใบงานทดสอบไม่ได้"; exit 1; }
+# อะไหล่ในแถวเคลมเป็นตัวที่ตรงยี่ห้อเครื่องของใบนั้น (fx_part) เหมือนที่ทางปิดงานจริงจะยอมให้ใช้ —
+# แต่ละใบคนละเครื่อง จึงเลือกแยกใบ · ข้อที่ค้น/รวมตามรหัสอะไหล่เทียบกับรหัสของตัวที่ใช้จริง
+BOARD=$(fx_part $W1 BOARD); BELT=$(fx_part $W1 BELT); BOARD_CODE=$(fx_part_code $W1 BOARD); BELT_CODE=$(fx_part_code $W1 BELT)
+BOARD2=$(fx_part $W2 BOARD); BOARD2_CODE=$(fx_part_code $W2 BOARD)
+BOARD3=$(fx_part $W3 BOARD); BOARD3_CODE=$(fx_part_code $W3 BOARD)
+BOARD4=$(fx_part $W4 BOARD); BOARD4_CODE=$(fx_part_code $W4 BOARD)
 
 # แถวเคลม — เวลาเขียนเป็น UTC (ตารางเก็บ UTC) · วงเล็บคือเวลาไทย
 # $1 ใบ · $2 อะไหล่ · $3 รหัส · $4 ชื่อ · $5 รหัสตัวเสีย · $6 จำนวน · $7 สาขา · $8 ยี่ห้อ · $9 เครื่อง · $10 สถานะ · $11 ส่ง · $12 ตรวจ · $13 เหตุผล
@@ -76,15 +81,15 @@ ins() {
 }
 # ใบ 1 ส่งรอบแรกสองชิ้น (10 มี.ค. 68 10:00) ถูกตีกลับทั้งคู่ → รอบสองส่งแผงวงจรตัวเดียว (2 เม.ย. 09:00) อนุมัติ
 #   สายพานไม่ได้ส่งใหม่ — รอบล่าสุดของมันยังเป็นตีกลับ แต่ไม่ใช่ "รอช่างแก้"
-K1=$(ins $W1 $BOARD SP-BOARD แผงวงจรทดสอบ OLD-1$SUF 1 $BC1 "$BRA" W1 REJECTED "2025-03-10 03:00" "2025-03-11 03:00" "รูปป้ายรุ่นไม่ชัด")
-K3=$(ins $W1 $BELT SP-BELT สายพานทดสอบ BELT-OLD$SUF 2 $BC1 "$BRA" W1 REJECTED "2025-03-10 03:00" "2025-03-11 03:00" "รูปป้ายรุ่นไม่ชัด")
-K2=$(ins $W1 $BOARD SP-BOARD แผงวงจรทดสอบ OLD-2$SUF 1 $BC1 "$BRA" W1 APPROVED "2025-04-02 02:00" "2025-04-03 02:00" "")
+K1=$(ins $W1 $BOARD $BOARD_CODE แผงวงจรทดสอบ OLD-1$SUF 1 $BC1 "$BRA" W1 REJECTED "2025-03-10 03:00" "2025-03-11 03:00" "รูปป้ายรุ่นไม่ชัด")
+K3=$(ins $W1 $BELT $BELT_CODE สายพานทดสอบ BELT-OLD$SUF 2 $BC1 "$BRA" W1 REJECTED "2025-03-10 03:00" "2025-03-11 03:00" "รูปป้ายรุ่นไม่ชัด")
+K2=$(ins $W1 $BOARD $BOARD_CODE แผงวงจรทดสอบ OLD-2$SUF 1 $BC1 "$BRA" W1 APPROVED "2025-04-02 02:00" "2025-04-03 02:00" "")
 # ใบ 2 รอตรวจ ส่ง 15 เม.ย. 00:30 เวลาไทย = 14 เม.ย. ตาม UTC — ตัดวันตาม UTC จะหลุดไปวันก่อน
-K4=$(ins $W2 $BOARD SP-BOARD แผงวงจรทดสอบ OLD-4$SUF 3 $BC1 "$BRB" W2 PENDING "2025-04-14 17:30" "" "")
+K4=$(ins $W2 $BOARD2 $BOARD2_CODE แผงวงจรทดสอบ OLD-4$SUF 3 $BC1 "$BRB" W2 PENDING "2025-04-14 17:30" "" "")
 # ใบ 3 สาขานอกขอบเขตหัวหน้าภาค · ตีกลับ ใบยังเปิดอยู่ = รอช่างแก้
-K5=$(ins $W3 $BOARD SP-BOARD แผงวงจรทดสอบ OLD-5$SUF 1 $BC2 "$BRA" W1 REJECTED "2025-04-20 05:00" "2025-04-21 05:00" "อาการไม่ตรงกับชิ้นที่เปลี่ยน")
+K5=$(ins $W3 $BOARD3 $BOARD3_CODE แผงวงจรทดสอบ OLD-5$SUF 1 $BC2 "$BRA" W1 REJECTED "2025-04-20 05:00" "2025-04-21 05:00" "อาการไม่ตรงกับชิ้นที่เปลี่ยน")
 # ใบทดสอบ — ไม่นับ
-K6=$(ins $W4 $BOARD SP-BOARD แผงวงจรทดสอบ OLD-6$SUF 1 $BC1 "$BRA" W3 APPROVED "2025-04-05 03:00" "2025-04-05 04:00" "")
+K6=$(ins $W4 $BOARD4 $BOARD4_CODE แผงวงจรทดสอบ OLD-6$SUF 1 $BC1 "$BRA" W3 APPROVED "2025-04-05 03:00" "2025-04-05 04:00" "")
 [ "$(DB "select count(*) from \"PartClaim\" where id in ($K1,$K2,$K3,$K4,$K5,$K6)")" = "6" ] || { echo "FAIL เตรียมแถวเคลมไม่ได้"; exit 1; }
 
 # id ของแถวเคลมของเทสต์นี้ที่อยู่ในคำตอบ เรียงตามที่ส่งมา — ข้อมูลของเทสต์อื่นที่รันพร้อมกันไม่ปน
@@ -144,7 +149,7 @@ GET $A part-claims | J "d.brands.includes('$BRA')&&d.brands.includes('$BRB')?'ok
 [ "$(mine $A "q=$(echo $BC2 | tr A-Z a-z)")" = "$K5" ] && pass "ค้นรหัสสาขา (ตัวพิมพ์เล็ก)" || fail "ค้นสาขา: $(mine $A "q=$BC2")"
 [ "$(mine $A "q=$(node -pe 'encodeURIComponent("ประวัติเคลมสอง")')")" = "$K5" ] && pass "ค้นชื่อสาขา" || fail "ค้นชื่อสาขา"
 [ "$(mine $A "q=belt-old$SUF")" = "$K3" ] && pass "ค้นรหัสตัวเสียของอีกชิ้น" || fail "ค้นสายพาน"
-[ "$(mine $A "q=SP-BELT&branchCode=$BC1")" = "$K3" ] && pass "ค้นรหัสอะไหล่ที่เบิก" || fail "ค้นรหัสอะไหล่: $(mine $A "q=SP-BELT&branchCode=$BC1")"
+[ "$(mine $A "q=$BELT_CODE&branchCode=$BC1")" = "$K3" ] && pass "ค้นรหัสอะไหล่ที่เบิก" || fail "ค้นรหัสอะไหล่: $(mine $A "q=$BELT_CODE&branchCode=$BC1")"
 [ "$(mine $A "q=W2&branchCode=$BC1")" = "$K4" ] && pass "ค้นเลขเครื่อง" || fail "ค้นเครื่อง: $(mine $A "q=W2&branchCode=$BC1")"
 [ "$(mine $A "branchCode=$BC1&machineCode=w1")" = "$K2,$K3" ] && pass "ลิงก์เครื่องนี้: สาขา + เครื่องตรงตัว (W1 ของสาขาอื่นไม่ปน)" || fail "สาขา+เครื่อง: $(mine $A "branchCode=$BC1&machineCode=W1")"
 [ "$(mine $A "branchCode=$BC1")" = "$K4,$K2,$K3" ] && pass "ลิงก์สาขานี้" || fail "สาขา: $(mine $A "branchCode=$BC1")"
@@ -198,7 +203,7 @@ X=$(node -e '
   }).catch(e=>console.log("อ่านไม่ได้ "+e.message));
 ' "$SP/../backend/node_modules/exceljs" "$XLSX")
 [ "$(echo "$OUT" | J d.count)" = "4" ] && [ "$(head -c 2 "$XLSX")" = "PK" ] && pass "ส่งออก Excel ได้ไฟล์ xlsx · นับ 4 แถวตามตัวกรอง" || fail "export: $OUT"
-EXPX="ประวัติเคลม,รวมตามอะไหล่|4|$(node -pe 'process.argv.slice(1).sort().join(",")' "$C1/SP-BOARD/อนุมัติ" "$C1/SP-BOARD/ตีกลับ · ส่งใหม่แล้ว" "$C1/SP-BELT/ตีกลับ · ไม่ได้ส่งเคลมใหม่" "$C2/SP-BOARD/รอตรวจ")"
+EXPX="ประวัติเคลม,รวมตามอะไหล่|4|$(node -pe 'process.argv.slice(1).sort().join(",")' "$C1/$BOARD_CODE/อนุมัติ" "$C1/$BOARD_CODE/ตีกลับ · ส่งใหม่แล้ว" "$C1/$BELT_CODE/ตีกลับ · ไม่ได้ส่งเคลมใหม่" "$C2/$BOARD2_CODE/รอตรวจ")"
 [ "$X" = "$EXPX" ] && pass "ไฟล์มีชีตประวัติเคลม + รวมตามอะไหล่ · แถวตรงกับหน้าจอ (เลขใบงาน รหัสอะไหล่ ผลตรวจ)" || fail "ในไฟล์: $X"
 
 echo
@@ -247,7 +252,7 @@ P3=$(GET $A "part-claims?branchCode=$BC1&limit=5&before=$(echo "$P2" | cur)")
   || fail "แสดงเพิ่ม: P1 $(echo "$P1" | J '[d.rows[0].id,d.rest]') · P2 $(echo "$P2" | J '[d.rows[0].id,d.total,d.rest]') · P3 $(echo "$P3" | J '[d.rows.map(r=>r.id),d.rest]') (K2=$K2 K3=$K3 K4=$K4 K7=$K7)"
 # ช่างส่งสายพานใหม่ → แถวสายพานเดิม (K3) หลุดจากรอบล่าสุดระหว่างแบ่งหน้า — หน้าถัดจาก K2 ต้องว่าง
 # (นับลำดับ offset=2 จะได้ K2 ซ้ำ เพราะแถวใหม่อยู่บนสุดสองแถว)
-K8=$(ins $W1 $BELT SP-BELT สายพานทดสอบ BELT-NEW$SUF 1 $BC1 "$BRA" W1 PENDING "2025-05-02 03:00" "" "")
+K8=$(ins $W1 $BELT $BELT_CODE สายพานทดสอบ BELT-NEW$SUF 1 $BC1 "$BRA" W1 PENDING "2025-05-02 03:00" "" "")
 [ "$(GET $A "part-claims?branchCode=$BC1&limit=5&before=$(echo "$P2" | cur)" | J '[d.rows.length,d.rest,d.total].join("|")')" = "0|0|4" ] \
   && [ "$(DB "select count(*) from \"PartClaim\" where \"workOrderId\"=$W1 and \"sparePartId\"=$BELT")" = "2" ] \
   && pass "แถวที่หลุดรอบล่าสุดระหว่างแบ่งหน้า ไม่ทำให้หยิบแถวผิด (ฐานข้อมูลมีสายพานสองรอบ)" \

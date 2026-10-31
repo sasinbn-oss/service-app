@@ -4,7 +4,7 @@
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
-const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
+const { visitDay, fxPart } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง · fxPart = อะไหล่ตรงยี่ห้อเครื่อง
 const fs = require("fs");
 const path = require("path");
 const DIR = __dirname;
@@ -57,12 +57,15 @@ const login = async (code) =>
     sql(`insert into "Branch"(name,code,region,zone,ownership,"openedAt") values ('สาขาทดสอบเคลมจอ','${bc}','ใต้','กระบี่','FRANCHISE',now()-interval '12 months')`);
     const bid = sql(`select id from "Branch" where code='${bc}'`);
     sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'W1','WASHER','HB - Huebsch',now())`);
-    const sp = sql(`select id from "SparePart" where "partCode"='SP-BOARD'`);
     const wo = await call(A, "POST", "/work-orders", {
       branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
       machines: [{ code: "W1", model: "HL055L", symptom: "ประตูล็อกไม่ลง" }],
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่อง (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เครื่อง "HB - Huebsch" ได้ตัวแฝด -HB
+    // ป้ายในฟอร์มเคลมต่อท้ายด้วยรหัสอะไหล่ ข้อความที่หาบนจอจึงใช้รหัสตัวที่ส่งจริง (spCode) ไม่ใช่รหัสตายตัว
+    const sp = fxPart(id, "BOARD");
+    const spCode = sql(`select "partCode" from "SparePart" where id=${sp}`);
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: true, parts: [{ sparePartId: Number(sp), quantity: 1 }] });
     // เช็คอะไหล่ → นัด → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง)
     await call(A, "POST", `/work-orders/${id}/parts-sourcing`, {
@@ -144,23 +147,23 @@ const login = async (code) =>
     await page.waitForTimeout(500);
     await vis(page, "ช่างสมชาย", false).last().click();
     await page.waitForTimeout(500);
-    // อะไหล่ที่เบิกไว้ (SP-BOARD) ถูกเติมเป็นอะไหล่ที่ใช้ไปให้แล้ว — ช่างไม่ต้องเพิ่มเอง กล่องเคลมจึงขึ้นทันที
-    (await label(page, "ส่งอะไหล่เก่าเคลม SP-BOARD").count()) > 0 && (await vis(page, "ยังขาด:", false).count()) > 0
+    // อะไหล่ที่เบิกไว้ (spCode) ถูกเติมเป็นอะไหล่ที่ใช้ไปให้แล้ว — ช่างไม่ต้องเพิ่มเอง กล่องเคลมจึงขึ้นทันที
+    (await label(page, `ส่งอะไหล่เก่าเคลม ${spCode}`).count()) > 0 && (await vis(page, "ยังขาด:", false).count()) > 0
       ? pass("อะไหล่ที่เบิกไว้เติมให้เอง · สาขาในประกัน: เปิดใบเคลมไว้ให้ และบอกว่ายังขาดอะไร")
       : fail("ไม่มีส่วนเคลมหรือไม่ได้เปิดไว้ให้");
     const saveBtn = vis(page, "ยืนยันปิดงาน").last();
     const dim = async () => saveBtn.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
     (await dim()) !== "1" ? pass("หลักฐานไม่ครบ ปุ่มยืนยันปิดงานกดไม่ได้") : fail("ปุ่มกดได้ทั้งที่ยังไม่ครบ");
 
-    await label(page, "รหัสอะไหล่ตัวที่เสีย SP-BOARD").fill("SP-BOARD");
-    await label(page, "อาการ/สาเหตุ SP-BOARD").fill("ประตูล็อกไม่ลง ขึ้น Error dL");
-    await label(page, "สิ่งที่เข้าเช็ค SP-BOARD").fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
-    await attach(page, "แนบรูปอะไหล่เก่า SP-BOARD", PHOTO);
-    await attach(page, "แนบรูปอาการเสีย SP-BOARD", PHOTO);
-    await attach(page, "แนบวิดีโอ Error code SP-BOARD", CLIP);
-    await attach(page, "แนบวิดีโอการตรวจเช็ค SP-BOARD", CLIP);
+    await label(page, `รหัสอะไหล่ตัวที่เสีย ${spCode}`).fill(spCode);
+    await label(page, `อาการ/สาเหตุ ${spCode}`).fill("ประตูล็อกไม่ลง ขึ้น Error dL");
+    await label(page, `สิ่งที่เข้าเช็ค ${spCode}`).fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
+    await attach(page, `แนบรูปอะไหล่เก่า ${spCode}`, PHOTO);
+    await attach(page, `แนบรูปอาการเสีย ${spCode}`, PHOTO);
+    await attach(page, `แนบวิดีโอ Error code ${spCode}`, CLIP);
+    await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
     const items = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimTroubleshooting);
-    for (const t of items) await label(page, `${t} SP-BOARD`).click();
+    for (const t of items) await label(page, `${t} ${spCode}`).click();
     await page.waitForTimeout(500);
 
     // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
@@ -240,7 +243,7 @@ const login = async (code) =>
       ? pass("กดปิดใหม่ไม่ส่งไฟล์ซ้ำ (จำนวนไฟล์ในฐานข้อมูลเท่าเดิม)")
       : fail(`ไฟล์ซ้ำ: รอบแรก ${filesSent} · หลังกดใหม่ ${filesAfter}`);
 
-    sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === "CLAIM_REVIEW|SP-BOARD"
+    sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === `CLAIM_REVIEW|${spCode}`
       ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม พร้อมรหัสตัวที่เสียที่กรอก (ฐานข้อมูล)")
       : fail(`สถานะ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
     const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||("fieldCheck" ? 'install')::text from "PartClaim" where "workOrderId"=${id}`);
@@ -304,13 +307,13 @@ const login = async (code) =>
     const summary = page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last();
     (await summary.inputValue()) === "เปลี่ยนบอร์ด ทดสอบแล้วปกติ" &&
       (await vis(page, "ช่างสมชาย", false).count()) > 0 &&
-      (await label(page, "อาการ/สาเหตุ SP-BOARD").inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
-      (await label(page, "รหัสอะไหล่ตัวที่เสีย SP-BOARD").inputValue()) === "SP-BOARD" &&
+      (await label(page, `อาการ/สาเหตุ ${spCode}`).inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
+      (await label(page, `รหัสอะไหล่ตัวที่เสีย ${spCode}`).inputValue()) === spCode &&
       (await vis(page, "รูปอะไหล่เก่า — แนบไว้แล้ว").count()) > 0
       ? pass("ปิดใหม่: รหัสตัวที่เสีย สรุปงาน ผู้เข้าปฏิบัติงาน อะไหล่ ข้อความเคลม และหลักฐานเดิมมาให้ ไม่ต้องกรอกซ้ำ")
       : fail(`ปิดใหม่ต้องกรอกใหม่: สรุป="${await summary.inputValue()}"`);
     await summary.fill("ถ่ายวิดีโอใหม่ เห็นมิเตอร์");
-    await attach(page, "แนบวิดีโอการตรวจเช็ค SP-BOARD", CLIP);
+    await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
     await vis(page, "ยืนยันปิดงาน").last().click();
     await page.waitForTimeout(5000);
     sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW" ? pass("ปิดใหม่แล้วไปรอตรวจอีกรอบ") : fail("ปิดใหม่ไม่สำเร็จ");

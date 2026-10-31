@@ -1,12 +1,31 @@
 // เตรียมใบงานให้เทสต์ผ่านเบราว์เซอร์ผ่าน API — เทสต์รุ่นแรกผูกกับเลขใบงานของฐานข้อมูลเครื่องหนึ่ง
 // (WO-00656 ฯลฯ) ซึ่งไม่มีในเครื่องอื่น เทสต์จึง "พัง" ทั้งที่แอปไม่ได้ผิด
 // ต้องมี DATABASE_URL (โหลดจาก backend/.env) เพราะต้องหาสาขาตามวันเปิดร้าน และคืนค่าภาคของ S001
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
+const path = require("path");
 const API = "http://localhost:4000/api";
 
 // ส่งคำสั่งทาง stdin ไม่ใช่ -c — รหัสผ่านที่แฮชแล้วมี $ ซึ่ง shell จะกินไปเงียบ ๆ
 const sql = (q) =>
   execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
+
+/**
+ * id อะไหล่ทดสอบที่ตรงยี่ห้อเครื่องของใบ orderId — kind = "BOARD" | "BELT" (ข้อตกลงเต็มอยู่หัวไฟล์ tests/lib/fixture-parts.sh)
+ * Oasis และใบที่ไม่มีเครื่อง = SP-BOARD/SP-BELT · ยี่ห้ออื่นได้ตัวแฝด -HB/-HA/-MT/-OT
+ * เครื่องที่ยังไม่รู้ยี่ห้อเลยถูกตั้ง model='Haier' ถาวร (ผลเหมือนไม่รู้ยี่ห้อทุกกฎที่มีตอนนี้ — เหตุผลอยู่ในไฟล์นั้น)
+ *
+ * เรียก fx_part ตัวเดียวกับเทสต์ API ไม่ได้เขียน SQL ซ้ำที่นี่ — กฎจับคู่ยี่ห้อต้องตรงกับ brandFileOf ของแอป
+ * ถ้ามีสองชุด วันหนึ่งจะแก้ชุดเดียวแล้วเทสต์เบราว์เซอร์กับเทสต์ API ได้อะไหล่คนละตัวจากใบเดียวกัน
+ * ผิดพลาด (ไม่มีใบ · ยังไม่ได้รัน seed:test) โยน error พร้อมเหตุผล — ไม่คืนค่าว่างให้เทสต์ไปพังไกลจากต้นเหตุ
+ */
+const FIXTURE_PARTS_SH = path.join(__dirname, "..", "lib", "fixture-parts.sh");
+function fxPart(orderId, kind) {
+  const out = execFileSync("bash", ["-c", '. "$0" && fx_part "$1" "$2"', FIXTURE_PARTS_SH, String(orderId), String(kind)], {
+    stdio: ["ignore", "pipe", "inherit"],
+  }).toString().trim();
+  if (!/^\d+$/.test(out)) throw new Error(`fxPart(${orderId}, ${kind}): ได้ "${out}" ไม่ใช่ id อะไหล่`);
+  return Number(out);
+}
 
 async function login(code) {
   const res = await fetch(API + "/auth/login", {
@@ -99,7 +118,7 @@ async function setup() {
     for (const id of created) await call(A, "DELETE", `/work-orders/${id}`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
   }
-  return { A, sql, call, login, part, workOrder, source, schedule, issue, confirm, supervisor: () => S, cleanup };
+  return { A, sql, call, login, part, fxPart, workOrder, source, schedule, issue, confirm, supervisor: () => S, cleanup };
 }
 
-module.exports = { setup, visitDay };
+module.exports = { setup, visitDay, fxPart };

@@ -4,6 +4,7 @@
 #   · แก้ผู้ติดต่อ/เรื่อง/ความเร่งด่วนได้ · แก้รายการอะไหล่ไม่ล้างผลเช็คตัวที่ไม่เปลี่ยน
 #   · ใบเก่าที่ข้ามรอแอดมินเช็คอะไหล่ ย้อนกลับไปขั้นนั้นได้
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001)
@@ -16,9 +17,6 @@ fail() { echo "FAIL $1"; FAILED=1; }
 status() { DB "select status from \"WorkOrder\" where id=$1"; }
 parts() { DB "select string_agg(s.\"partCode\"||':'||coalesce(p.\"inStock\"::text,'-')||':'||coalesce(p.\"requisitionNo\",'-'),' ' order by s.\"partCode\") from \"WorkOrderPart\" p join \"SparePart\" s on s.id=p.\"sparePartId\" where p.\"workOrderId\"=$1 and p.kind='WAITING'"; }
 
-PP=$(GET "spare-parts?search=SP-")
-BOARD=$(echo "$PP" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BOARD").id')
-BELT=$(echo "$PP" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BELT").id')
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
 OLDR=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 BR=$(GET "branches?search=C0006")
@@ -43,6 +41,10 @@ toWork() {  # PARTS_CHECKED → IN_PROGRESS · ตัวที่ยังไม
 echo "═══ เตรียมใบงาน: บอร์ด + สายพาน เบิกแล้ว ช่างเข้างาน"
 WO=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactName":"คุณเดิม","contactPhone":"081-111-1111","machines":[{"code":"W81","symptom":"ทดสอบส่งกลับ"}]}')
 ID=$(echo "$WO" | J 'd.orders[0].id')
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ — หยิบหลังเปิดใบ เพราะต้องรู้ก่อนว่าเครื่องเป็นยี่ห้ออะไร
+# รหัส (CB/CL) ไว้เทียบผลที่ฐานข้อมูล — ตัวที่ได้อาจเป็นตัวแฝดยี่ห้อ (รหัสลงท้าย -HA -HB …) ไม่ใช่บอร์ด/สายพานตัวฐานเสมอไป
+BOARD=$(fx_part "$ID" BOARD); CB=$(fx_part_code "$ID" BOARD)
+BELT=$(fx_part "$ID" BELT); CL=$(fx_part_code "$ID" BELT)
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
 toWork $ID RQ-SB1
@@ -56,7 +58,7 @@ POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"SHOP","reason":"ไป�
 # ร้านปิด → แอดมินนัดใหม่ ทีมเดิม อะไหล่เดิม (เจ้าของงานเลือก ต.ค. 69 — เดิมกลับขั้นแรกทุกเหตุผล)
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$ID")" = "AWAITING_CONFIRM|PENDING|$TEAM" ] \
   && pass "ร้านปิด → แอดมินคอนเฟิร์มลูกค้าใหม่ ทีมเดิม (ไม่กลับขั้นแรก)" || fail "สถานะ: $(status $ID)"
-[ "$(parts $ID)" = "SP-BELT:true:RQ-SB1 SP-BOARD:true:RQ-SB1" ] && pass "อะไหล่ที่เบิกแล้วอยู่ครบ พร้อมเลขใบเบิก (ฐานข้อมูล)" || fail "อะไหล่: $(parts $ID)"
+[ "$(parts $ID)" = "$CL:true:RQ-SB1 $CB:true:RQ-SB1" ] && pass "อะไหล่ที่เบิกแล้วอยู่ครบ พร้อมเลขใบเบิก (ฐานข้อมูล)" || fail "อะไหล่: $(parts $ID)"
 [ "$(DB "select coalesce(\"assignedTeam\",'-') from \"WorkOrder\" where id=$ID")" = "$TEAM" ] && pass "ทีมเดิมยังอยู่" || fail "ทีมหาย"
 GET "work-orders/$ID" | J 'd.logs.filter(l=>l.action==="PARTS_ROLLBACK").map(l=>l.note).join("\n")' | grep -q "^\[ร้านปิด / ลูกค้าไม่สะดวก\] ไปถึงร้านปิด" \
   && pass "ประวัติขึ้นหมวดเหตุนำหน้า" || fail "ประวัติไม่มีหมวด"
@@ -69,7 +71,7 @@ POST $A "work-orders/$ID/confirm-appointment" "{\"scheduledAt\":\"$D2\"}" >/dev/
 POST $S "work-orders/$ID/dispatch" '{}' >/dev/null
 POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"RESOURCES","reason":"บันไดไม่พอ ต้องไปสองคน"}' >/dev/null
 [ "$(DB "select status||'|'||coalesce(\"assignedTeam\",'-')||'|'||coalesce(\"scheduledAt\"::text,'-') from \"WorkOrder\" where id=$ID")" = "PARTS_CHECKED|-|-" ] \
-  && [ "$(parts $ID)" = "SP-BELT:true:RQ-SB1 SP-BOARD:true:RQ-SB1" ] && pass "ไปรอหัวหน้าภาคนัดวันใหม่ (ล้างทีม/วัน) อะไหล่ที่เบิกแล้วอยู่ครบ" || fail "RESOURCES: $(status $ID)"
+  && [ "$(parts $ID)" = "$CL:true:RQ-SB1 $CB:true:RQ-SB1" ] && pass "ไปรอหัวหน้าภาคนัดวันใหม่ (ล้างทีม/วัน) อะไหล่ที่เบิกแล้วอยู่ครบ" || fail "RESOURCES: $(status $ID)"
 
 echo
 echo "═══ ต้องตรวจเพิ่ม → กลับไปหัวหน้าภาคระบุอะไหล่"
@@ -84,7 +86,7 @@ curl -s -X PATCH "localhost:4000/api/work-orders/$ID" -H "$(H $S)" -H 'Content-T
   -d "{\"title\":\"เครื่อง W81 ไม่ปั่น (นัดใหม่)\",\"priority\":\"URGENT\",\"contactName\":\"คุณใหม่\",\"contactPhone\":\"089-999-9999\"}" >/dev/null
 [ "$(DB "select title||'|'||priority||'|'||\"contactName\"||'|'||\"contactPhone\" from \"WorkOrder\" where id=$ID")" = "เครื่อง W81 ไม่ปั่น (นัดใหม่)|URGENT|คุณใหม่|089-999-9999" ] \
   && pass "แก้เรื่อง ความเร่งด่วน ผู้ติดต่อได้ (ฐานข้อมูล)" || fail "แก้ไม่ติด"
-[ "$(parts $ID)" = "SP-BELT:true:RQ-SB1 SP-BOARD:true:RQ-SB1" ] && pass "แก้ใบงานโดยรายการอะไหล่ไม่เปลี่ยน ผลเช็คไม่หาย" || fail "ผลเช็คหาย: $(parts $ID)"
+[ "$(parts $ID)" = "$CL:true:RQ-SB1 $CB:true:RQ-SB1" ] && pass "แก้ใบงานโดยรายการอะไหล่ไม่เปลี่ยน ผลเช็คไม่หาย" || fail "ผลเช็คหาย: $(parts $ID)"
 
 echo
 echo "═══ ยืนยันอะไหล่ชุดเดิม — เบิกแล้วทุกตัว ข้ามเช็คอะไหล่"
@@ -95,7 +97,7 @@ echo
 echo "═══ รอบสอง: สายพานที่ได้ไปใช้ไม่ได้ ขอเบิกใหม่"
 toWork $ID
 POST $A "work-orders/$ID/reassess-parts" "{\"reasonCode\":\"PARTS\",\"reason\":\"สายพานที่ได้ไปผิดรุ่น\",\"parts\":[{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
-[ "$(parts $ID)" = "SP-BELT:-:- SP-BOARD:true:RQ-SB1" ] && pass "ตัวที่ขอซ้ำต้องเบิกใหม่ ตัวอื่นยังเบิกแล้ว" || fail "อะไหล่: $(parts $ID)"
+[ "$(parts $ID)" = "$CL:-:- $CB:true:RQ-SB1" ] && pass "ตัวที่ขอซ้ำต้องเบิกใหม่ ตัวอื่นยังเบิกแล้ว" || fail "อะไหล่: $(parts $ID)"
 GET "work-orders/$ID" | J 'd.logs.find(l=>l.action==="PARTS_ROLLBACK").note' | grep -q "ใบเบิกเดิม RQ-SB1" && pass "เลขใบเบิกเดิมลงประวัติไว้" || fail "ประวัติไม่มีใบเบิกเดิม"
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
 [ "$(status $ID)" = "PARTS_SOURCING" ] && pass "มีตัวต้องเบิกใหม่ → ไปแอดมินเช็คอะไหล่" || fail "สถานะ: $(status $ID)"
@@ -104,7 +106,7 @@ R=$(POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$BE
 POST $S "work-orders/$ID/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D3\"}" >/dev/null
 [ "$(status $ID)" = "PARTS_REQUESTED" ] && pass "นัดแล้วไปเบิกตัวใหม่" || fail "หลังนัด: $(status $ID)"
 POST $A "work-orders/$ID/parts-check" "{\"results\":[{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-SB2\"}]}" >/dev/null
-[ "$(status $ID)" = "AWAITING_CONFIRM" ] && [ "$(parts $ID)" = "SP-BELT:true:RQ-SB2 SP-BOARD:true:RQ-SB1" ] \
+[ "$(status $ID)" = "AWAITING_CONFIRM" ] && [ "$(parts $ID)" = "$CL:true:RQ-SB2 $CB:true:RQ-SB1" ] \
   && pass "เบิกเฉพาะตัวใหม่ แล้วไปคอนเฟิร์มลูกค้า · บอร์ดยังเป็นใบเบิกเดิม" || fail "หลังเบิก: $(status $ID) $(parts $ID)"
 POST $A "work-orders/$ID/confirm-appointment" '{}' >/dev/null
 [ "$(status $ID)" = "ASSIGNED" ] && pass "คอนเฟิร์มลูกค้าแล้วไปปล่อยงาน" || fail "หลังคอนเฟิร์ม: $(status $ID)"
@@ -119,12 +121,14 @@ if [ -n "$DOLD" ]; then
   S=$(login S001)
   W2=$(POST $A work-orders "{\"branchCode\":\"$DOLD\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W82\",\"model\":\"Oasis\",\"symptom\":\"ทดสอบย้อน\"}]}")
   ID2=$(echo "$W2" | J 'd.orders[0].id')
-  POST $S "work-orders/$ID2/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
+  # คนละสาขาคนละเครื่องกับใบแรก — ยี่ห้ออาจต่างกัน หยิบบอร์ดของใบนี้เอง
+  BOARD2=$(fx_part "$ID2" BOARD)
+  POST $S "work-orders/$ID2/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD2,\"quantity\":1}]}" >/dev/null
   # จำลองใบเก่า: ไปเสนอราคาตรง ๆ ไม่มีประวัติรอแอดมินเช็คอะไหล่
   DB "update \"WorkOrder\" set status='AWAITING_QUOTE' where id=$ID2" >/dev/null
   POST $A "work-orders/$ID2/rollback" '{"toStage":"PARTS_SOURCING","reason":"เช็คหลังบ้านแล้วของหมด"}' >/dev/null
   [ "$(status $ID2)" = "PARTS_SOURCING" ] && pass "ย้อนจากรอเสนอราคา ไปรอแอดมินเช็คอะไหล่ได้" || fail "ย้อนไม่ได้: $(status $ID2)"
-  POST $A "work-orders/$ID2/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false}],\"expectedAt\":\"2026-11-25\"}" >/dev/null
+  POST $A "work-orders/$ID2/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD2,\"inStock\":false}],\"expectedAt\":\"2026-11-25\"}" >/dev/null
   [ "$(GET "work-orders?status=ALL&search=$(DB "select code from \"WorkOrder\" where id=$ID2")" | J "(d.rows||d).find(r=>r.id===$ID2).partsOut")" = "1" ] \
     && pass "ตอบว่าหมด → ขึ้นป้ายแดงอะไหล่หมด" || fail "ไม่ขึ้นอะไหล่หมด"
 else

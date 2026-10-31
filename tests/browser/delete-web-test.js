@@ -4,6 +4,7 @@ const path = require("path");
 const { execSync } = require("child_process");
 // ต้องมี DATABASE_URL (โหลดจาก backend/.env) — ใช้ตั้งทีมของใบงานตรง ๆ ดูข้างล่าง
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -Atc ${JSON.stringify(q)}`).toString().trim();
+const { fxPart } = require("./fixture"); // อะไหล่ตรงยี่ห้อเครื่องของใบ
 const DIR = __dirname;
 const API = "http://127.0.0.1:4000/api";
 const call = async (p, token, method = "GET", body) => {
@@ -52,13 +53,13 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
     const users = await call("/auth/users", admin);
     await call(`/auth/users/${users.find(u=>u.employeeCode==="S001").id}`, admin, "PATCH", { region: branch.region });
     await call(`/auth/users/${users.find(u=>u.employeeCode==="T001").id}`, admin, "PATCH", { team: branch.zone });
-    const parts = await call("/spare-parts?search=SP-BOARD", admin);
-    const pid = (Array.isArray(parts)?parts:parts.rows)[0].id;
-
     const wo = await call("/work-orders", admin, "POST", { branchCode: "C0001", jobType: "CM", priority: "NORMAL",
       machines: [{ code: "W97", model: "Oasis", symptom: "ทดสอบปุ่มลบ" }] });
     const o = wo.orders ? wo.orders[0] : wo;
     woId = o.id;
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) จึงเลือกหลังเปิดใบ — แถวแรกของผลค้นรหัสไม่รู้ว่าเครื่องยี่ห้ออะไร
+    // ข้อที่ทดสอบ ("อะไหล่ 1 รายการ" ในคำเตือน) ไม่ขึ้นกับว่าเป็นตัวไหน
+    const pid = fxPart(o.id, "BOARD");
     await call(`/work-orders/${o.id}/parts`, sup, "POST", { needsParts: true, parts: [{ sparePartId: pid, quantity: 2 }] });
     // ช่างเห็นเฉพาะใบงานของทีมตัวเอง — เดิมเทสต์นี้หาใบที่ยังไม่จ่ายเจอได้เพราะการค้นหาหลุดขอบเขต
     // (บั๊กที่แก้แล้ว) จึงใส่ทีมให้ตรง ๆ ข้อที่ทดสอบคือ "ช่างที่เปิดใบงานได้ ไม่เห็นปุ่มลบ"

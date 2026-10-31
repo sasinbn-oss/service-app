@@ -4,6 +4,7 @@
 #        ตีกลับแล้วกลับไปที่ช่าง · ปิดใหม่ได้ · อนุมัติแล้วปิดงาน · ใบเคลม PDF · ย้อนขั้นจากรอตรวจไม่ได้
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -37,10 +38,10 @@ PA=$(login ZCLP$SUF)
 DB "insert into \"Branch\"(name,code,region,zone,ownership,\"openedAt\") values ('สาขาทดสอบเคลม','$BC','ใต้','กระบี่','FRANCHISE',now()-interval '12 months')" >/dev/null
 BID=$(DB "select id from \"Branch\" where code='$BC'")
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W1','WASHER','HB - Huebsch',now())" >/dev/null
-PID=$(GET $A "spare-parts?search=SP-BOARD" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
-PID2=$(GET $A "spare-parts?search=SP-BELT" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 
 ID=$(POST $A work-orders "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W1\",\"model\":\"Huebsch\",\"symptom\":\"ประตูล็อกไม่ลง\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่อง (HB - Huebsch) จึงเลือกหลังเปิดใบ — ใบเคลมเก็บรหัสของตัวที่ใช้จริง
+PID=$(fx_part $ID BOARD); PID2=$(fx_part $ID BELT); PCODE=$(fx_part_code $ID BOARD)
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 POST $S "work-orders/$ID/assign" "{\"team\":\"กระบี่\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
@@ -99,7 +100,7 @@ echo "$R" | grep -q "เลือก Error" && pass "Error ที่ไม่ม
 R=$(CLOSE "$FULL")
 echo "$R" | J 'd.status' | grep -q "^CLAIM_REVIEW$" && pass "หลักฐานครบ → รอตรวจเคลม (ยังไม่ปิด)" || fail "ไม่ไปรอตรวจ: $(echo $R | head -c 200)"
 ROW=$(DB "select status||'|'||\"partCode\"||'|'||\"brokenPartCode\"||'|'||coalesce(brand,'')||'|'||array_length(troubleshooting,1)||'|'||\"branchCode\" from \"PartClaim\" where \"workOrderId\"=$ID")
-[ "$ROW" = "PENDING|SP-BOARD|SP-BOARD-OLD|HB - Huebsch|$(echo "$TS" | J 'd.length')|$BC" ] && pass "ฐานข้อมูลมีใบเคลมรอตรวจ พร้อมหัวใบเคลมจากระบบ และรหัสตัวที่เสียที่ช่างกรอก" || fail "แถวเคลม: $ROW"
+[ "$ROW" = "PENDING|$PCODE|SP-BOARD-OLD|HB - Huebsch|$(echo "$TS" | J 'd.length')|$BC" ] && pass "ฐานข้อมูลมีใบเคลมรอตรวจ พร้อมหัวใบเคลมจากระบบ และรหัสตัวที่เสียที่ช่างกรอก" || fail "แถวเคลม: $ROW"
 NP=$(DB "select nameplate->>'family'||'|'||(nameplate->'fields'->1->>'value')||'|'||(nameplate->'fields'->1->>'source')||'|'||(nameplate->'fields'->0->>'crop' like 'data:image/%')||'|'||(\"fieldCheck\"->>'errorCode')||'|'||(\"fieldCheck\"->'checked')::text||'|'||(\"fieldCheck\" ? 'install')::text from \"PartClaim\" where \"workOrderId\"=$ID")
 [ "$NP" = 'ALLIANCE|2402600330|HAND|true|E dL / E dL1 / E dL2|["Solenoid ไม่ฝืด"]|false' ] \
   && pass "ฐานข้อมูล: ป้ายรุ่น (Serial พิมพ์เอง · ภาพบรรทัด) + Error + ข้อที่ติ๊ก (ตัดข้อนอกคู่มือ) · ไม่มีคำตอบเรื่องติดตั้ง" || fail "ข้อมูลป้าย/เช็ค: $NP"

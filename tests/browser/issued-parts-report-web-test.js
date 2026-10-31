@@ -19,22 +19,29 @@ const { setup, visitDay } = require("./fixture");
   let fx = null;
   try {
     fx = await setup();
-    const board = fx.part("SP-BOARD");
     const L94 = "คลังลาดพร้าว 94";
+    // เปิดใบแล้วหัวหน้าภาคระบุบอร์ด — ทางเดียวกับ fx.workOrder(สาขา, อะไหล่) แต่เลือกอะไหล่หลังมีใบ
+    // เพราะอะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) · คืนใบพร้อม id บอร์ดที่ส่งไป (wo.board)
+    const withBoard = async (quantity) => {
+      const wo = await fx.workOrder("C0006", null);
+      wo.board = fx.fxPart(wo.id, "BOARD");
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: wo.board, quantity }] });
+      return wo;
+    };
     // a: เบิกแล้ว รอคอนเฟิร์มลูกค้า (ที่พักปกติของของที่เบิกแล้ว) · b: ช่างเข้างาน เลยวันนัด 2 วัน · c: เช็คแล้ว ยังไม่เบิก (ไม่ขึ้น)
     // นัดวัน → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (ต.ค. 69 รอบสอง)
-    const a = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const a = await withBoard(1);
     await fx.source(a.id);
     await fx.schedule(a.id, visitDay(30));
-    await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-check`, { results: [{ sparePartId: board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR1" }] });
-    const b = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 2 }]);
+    await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-check`, { results: [{ sparePartId: a.board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR1" }] });
+    const b = await withBoard(2);
     await fx.source(b.id);
     await fx.schedule(b.id, visitDay(31));
-    await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-check`, { results: [{ sparePartId: board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR2" }] });
+    await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-check`, { results: [{ sparePartId: b.board, inStock: true, warehouse: L94, requisitionNo: "RQ-WEB-IR2" }] });
     await fx.confirm(b.id);
     await fx.call(fx.supervisor(), "POST", `/work-orders/${b.id}/dispatch`, {});
     fx.sql(`update "WorkOrder" set "scheduledAt"=(now() at time zone 'Asia/Bangkok')::date - 2 where id=${b.id}`);
-    const c = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const c = await withBoard(1);
     await fx.source(c.id);
     const st = fx.sql(`select string_agg(status,',' order by id) from "WorkOrder" where id in (${a.id},${b.id},${c.id})`);
     st === "AWAITING_CONFIRM,IN_PROGRESS,PARTS_CHECKED" ? pass("เตรียมใบ: เบิกแล้วรอคอนเฟิร์มลูกค้า · ช่างเข้างาน · ยังไม่เบิก (ฐานข้อมูล)") : fail(`เตรียมใบ: ${st}`);
@@ -99,7 +106,9 @@ const { setup, visitDay } = require("./fixture");
       await page.waitForTimeout(800);
       const card = label(page, "การ์ดอะไหล่ ");
       const text = (await card.count()) ? await card.innerText() : "";
-      text.includes("SP-BOARD") && text.includes("3") && text.includes(a.code) && text.includes(b.code)
+      // a กับ b เป็นเครื่อง W77 สาขาเดียวกัน ได้บอร์ดตัวเดียวกัน การ์ดจึงรวม 1 + 2 = 3 ชิ้น · รหัสตามตัวที่ส่งจริง
+      const boardCode = fx.sql(`select "partCode" from "SparePart" where id=${a.board}`);
+      text.includes(boardCode) && text.includes("3") && text.includes(a.code) && text.includes(b.code)
         ? pass("แท็บตามอะไหล่: บอร์ดออกจากคลัง 3 ชิ้น อยู่ในสองใบ") : fail(`การ์ดอะไหล่: ${text.slice(0, 200)}`);
       await page.screenshot({ path: path.join(DIR, "issued-3-bypart.png") });
       await label(page, "แท็บตามใบงาน").click();

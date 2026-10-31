@@ -4,6 +4,7 @@
 #   · ส่งค่าเดิมกลับมา (แอปเก่า) ไม่นับว่าแก้ · ประวัติบอกจาก → ถึง และเหตุผล
 #   · เปลี่ยนขั้นแล้ว "รอลูกค้า" หมดอายุ · ขั้นเสนอราคา = รอแอดมินส่งใบเสนอราคา · ช่างส่งกลับ = ล้าง
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001)
@@ -19,7 +20,6 @@ nlog() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and 
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
 VISIT=$(day 12)
 
-PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
 OLDR=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 R=$(curl -s "localhost:4000/api/branches?search=C0006" -H "$(H $A)" | J 'd[0].region')
@@ -31,6 +31,8 @@ ID0=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORM
 [ "$(ws $ID0)" = "-" ] && pass "เปิดใบงานพร้อม \"รออะไหล่\" → ไม่ยกมา (ขั้นแรกระบบไม่ตั้ง)" || fail "สถานะตอนเปิด: $(ws $ID0)"
 ID=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","workStatus":"WAITING_CUSTOMER","machines":[{"code":"W92","symptom":"ทดสอบสถานะ"}]}' | J 'd.orders[0].id')
 [ "$(ws $ID)" = "WAITING_CUSTOMER" ] && pass "เปิดใบงานพร้อม \"รอลูกค้าแจ้งซ่อม\" → ยกมาได้" || fail "สถานะตอนเปิด: $(ws $ID)"
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ — หยิบหลังเปิดใบ เพราะต้องรู้ก่อนว่าเครื่องเป็นยี่ห้ออะไร
+PID=$(fx_part "$ID" BOARD)
 
 echo
 echo "═══ ถึงขั้นเช็คอะไหล่ — รอลูกค้าหมดอายุ ระบบตั้งตามขั้น"

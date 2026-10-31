@@ -3,6 +3,7 @@
 #        เสนอราคาและรับเงินมาก่อนนัด · เบิกอะไหล่หลังลูกค้าคอนเฟิร์มวัน (นัดลูกค้าก่อนเบิก ต.ค. 69)
 set -e
 SP="$(dirname "$0")"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001)
@@ -10,15 +11,16 @@ H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
 DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+# อะไหล่ของแต่ละใบ = บอร์ดที่ตรงยี่ห้อเครื่องของใบนั้น (fx_part) — ใบต่าง ๆ ในไฟล์นี้มีทั้ง Oasis Huebsch และเครื่องที่ยังไม่รู้ยี่ห้อ
+# ทุกฟังก์ชันที่ส่งอะไหล่จึงเลือกจากใบที่กำลังทำ ไม่ใช้บอร์ดตัวเดียวทั้งไฟล์
 # รอแอดมินเช็คอะไหล่ — ตอบว่ามีครบ (คลัง 94) แล้วไปเสนอราคา / นัดวัน
-source_ok() { curl -s -X POST "localhost:4000/api/work-orders/$1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}"; }
+source_ok() { local P; P=$(fx_part "$1" BOARD) || return 1; curl -s -X POST "localhost:4000/api/work-orders/$1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$P,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}"; }
 st() { curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.statusLabel+" / "+(d.workStatusLabel||"—")'; }
 # วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ ไม่ใช่วันตายตัวที่วันหนึ่งจะกลายเป็นอดีต
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
 # วันนัดหลังลูกค้าจ่ายเงิน (วันที่คาดว่าของเข้าไม่ใช่วันนัด ไม่ถูกกฎนี้ — ใช้วันตายตัวต่อได้)
 D1=$(day 7)
 
-PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
 
 # เปิดใบงานแล้วให้หัวหน้าภาคระบุอะไหล่ — หยุดตรงนั้น ที่เหลือแต่ละเทสต์เดินเอง
@@ -27,18 +29,20 @@ prep() {  # $1=branchCode  $2=needsParts(yes|no)
   curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$R\"}" >/dev/null
   local WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
     -d "{\"branchCode\":\"$1\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W71\",\"model\":\"Oasis\",\"capacityKg\":13,\"symptom\":\"ทดสอบเสนอราคา\"}]}")
-  local ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id')
+  local ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id') P
   if [ "$2" = "yes" ]; then
+    P=$(fx_part "$ID" BOARD) || return 1
     curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
-      -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
+      -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P,\"quantity\":1}]}" >/dev/null
   else
     curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d '{"needsParts":false}' >/dev/null
   fi
   echo "$ID"
 }
 checkparts() {  # เบิกอะไหล่
+  local P; P=$(fx_part "$1" BOARD) || return 1
   curl -s -X POST "localhost:4000/api/work-orders/$1/parts-check" -H "$(H $A)" -H 'Content-Type: application/json' \
-    -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-900\"}]}"
+    -d "{\"results\":[{\"sparePartId\":$P,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-900\"}]}"
 }
 
 # หาสาขาแฟรนไชส์คนละฝั่งของเส้น 3 ปี — ถามผ่าน Prisma ของโปรเจกต์
@@ -72,18 +76,19 @@ echo "$B2" | J 'd[0].warrantyExpiresAt?"ok":"bad"' | grep -q ok \
 echo
 echo "═══ สาขา D หมดประกัน + ใช้อะไหล่ → รอแอดมินเช็คอะไหล่ (เช็คของก่อน) แล้วค่อยเสนอราคา"
 ID1=$(prep "$DOLD" yes)
+P1=$(fx_part $ID1 BOARD)
 echo "  $(st $ID1)"
 [ "$(DB "select status||'|'||coalesce(\"workStatus\",'-') from \"WorkOrder\" where id=$ID1")" = "PARTS_SOURCING|CHECKING_PARTS" ] \
   && pass "ระบุอะไหล่เสร็จเข้าขั้นรอแอดมินเช็คอะไหล่ก่อนเสนอราคา · สถานะ \"รอแอดมินเช็คอะไหล่\" (ยังไม่มีใครบอกว่าหมด)" || fail "ไม่เข้าขั้นรอแอดมินเช็คอะไหล่: $(st $ID1)"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/quote" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')
 echo "$R" | grep -q "ยังไม่ถึงขั้นนี้" && pass "ยังไม่เช็คอะไหล่ เสนอราคาไม่ได้" || fail "เสนอราคาได้ก่อนเช็คอะไหล่: $R"
-R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}")
+R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}")
 [ "$(DB "select status from \"WorkOrder\" where id=$ID1")" = "PARTS_SOURCING" ] && echo "$R" | grep -q "error" \
   && pass "หัวหน้าภาคกดขั้นรอแอดมินเช็คอะไหล่ไม่ได้ (ขั้นของแอดมิน)" || fail "หัวหน้าภาคกดได้: $R"
 R=$(curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"results":[{"sparePartId":999999,"inStock":true}]}')
 echo "$R" | grep -q "ยังไม่ได้บอกว่ามีหรือหมด" && pass "ต้องตอบครบทุกตัว" || fail "ตอบไม่ครบผ่าน: $R"
 curl -s -X POST "localhost:4000/api/work-orders/$ID1/parts-sourcing" -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"sparePartId\":$PID,\"inStock\":false}],\"expectedAt\":\"2026-11-20\"}" >/dev/null
+  -d "{\"results\":[{\"sparePartId\":$P1,\"inStock\":false}],\"expectedAt\":\"2026-11-20\"}" >/dev/null
 [ "$(DB "select w.status||'|'||to_char(w.\"partsExpectedAt\",'YYYY-MM-DD')||'|'||p.\"inStock\" from \"WorkOrder\" w join \"WorkOrderPart\" p on p.\"workOrderId\"=w.id and p.kind='WAITING' where w.id=$ID1")" = "PARTS_SOURCING|2026-11-20|false" ] \
   && pass "อะไหล่หมด → ค้างที่รอแอดมินเช็คอะไหล่ พร้อมวันที่คาดว่าของเข้า (ฐานข้อมูล)" || fail "หมดแล้วไม่ค้าง: $(st $ID1)"
 [ "$(DB "select \"workStatus\" from \"WorkOrder\" where id=$ID1")" = "WAITING_PARTS" ] \
@@ -191,9 +196,10 @@ DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values (
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"region":"ใต้"}' >/dev/null
 brandWo() {  # $1=เครื่อง $2=รุ่นที่เลือกในฟอร์ม (ไม่ใส่ = X) → id ใบงานที่ระบุอะไหล่แล้ว
   local ID=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
-    -d "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"$1\",\"model\":\"${2:-X}\",\"symptom\":\"ทดสอบประกันยี่ห้อ\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+    -d "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"$1\",\"model\":\"${2:-X}\",\"symptom\":\"ทดสอบประกันยี่ห้อ\"}]}" | J 'd.orders?d.orders[0].id:d.id') P
+  P=$(fx_part "$ID" BOARD) || return 1
   curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
-    -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
+    -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P,\"quantity\":1}]}" >/dev/null
   echo "$ID"
 }
 IDO=$(brandWo W1); IDH=$(brandWo W2)

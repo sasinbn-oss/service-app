@@ -5,6 +5,7 @@
 #
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -76,7 +77,8 @@ curl -s "localhost:4000/api/work-orders/options" -H "$(H $T)" | grep -q "SUPERVI
 echo
 echo "═══ ขั้นอื่น"
 # รอช่างปิดงาน + เบิกอะไหล่ไปแล้ว — ยังปิดได้ (เตือนให้คืนคลังที่หน้าจอ)
-PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (W1 Electrolux) — ใบเปิดไว้แล้ว หยิบตามเครื่องของใบนี้
+PID=$(fx_part "$W3" BOARD)
 DB "update \"WorkOrder\" set status='IN_PROGRESS', \"assignedTeam\"='กระบี่' where id=$W3;
     insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",\"requisitionNo\") values ($W3,$PID,1,'WAITING',true,'RQ-SC$SUF')" >/dev/null
 [ "$(CODE $A work-orders/$W3/supervisor-close '{"reason":"OTHER_ORDER","note":"ซ่อมรวมไปกับใบงานอื่นของสาขาเดียวกัน"}')" = 200 ] \

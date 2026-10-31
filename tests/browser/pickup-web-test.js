@@ -24,8 +24,16 @@ const { setup, visitDay } = require("./fixture");
   try {
     fx = await setup();
     const branch = fx.sql(`select code from "Branch" where code like 'C%' and "cancelledAt" is null and region is not null and zone is not null order by code limit 1`);
-    const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
-    const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+    // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+    const wo = await fx.workOrder(branch, null);
+    const board = fx.fxPart(wo.id, "BOARD"), belt = fx.fxPart(wo.id, "BELT");
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, {
+      needsParts: true, parts: [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }],
+    });
+    // ป้ายในฟอร์มและประวัติใบงานพิมพ์รหัสอะไหล่ — ข้อความที่หาบนจอใช้รหัสตัวที่ส่งจริง ไม่ใช่รหัสตายตัว
+    const codeOf = (id) => fx.sql(`select "partCode" from "SparePart" where id=${id}`);
+    const BC = codeOf(board), LC = codeOf(belt);
     // ข้ามเสนอราคา (ถ้ามี) — ทดสอบเฉพาะขั้นเบิก · ขั้นเบิกอยู่หลังนัดวันแล้ว (ต.ค. 69 รอบสอง) ใบจริงมีทีม วัน และยังไม่คอนเฟิร์ม
     // ถ้าไม่ใส่วัน เบิกครบแล้วเซิร์ฟเวอร์ส่งไปนัดวัน (ทางของใบเก่า) แทนที่จะไปคอนเฟิร์มลูกค้า
     const visit = visitDay(10);
@@ -53,7 +61,7 @@ const { setup, visitDay } = require("./fixture");
     async function pickWarehouse(p, partCode, name, search) {
       await p.label(`คลังที่มี ${partCode}`).click();
       await p.page.waitForTimeout(600);
-      if (partCode === "SP-BOARD") {
+      if (partCode === BC) {
         // หัวข้อ "แอดมินเบิกเอง" ต้องอยู่บนสุด ตามด้วยคลัง 94 แล้วจึงเป็นหัวข้อ "หัวหน้าภาคเบิก"
         const order = await p.page.evaluate(() => {
           const t = document.body.innerText;
@@ -76,18 +84,18 @@ const { setup, visitDay } = require("./fixture");
     await a.page.waitForTimeout(1200);
     await a.vis("มีของ").first().click();
     await a.page.waitForTimeout(300);
-    await pickWarehouse(a, "SP-BOARD", "คลังลาดพร้าว 94", "ลาดพร้าว");
+    await pickWarehouse(a, BC, "คลังลาดพร้าว 94", "ลาดพร้าว");
     await a.vis("มีของ").last().click();
     await a.page.waitForTimeout(300);
-    await pickWarehouse(a, "SP-BELT", "คลังภูเก็ต", "ภูเก็ต");
+    await pickWarehouse(a, LC, "คลังภูเก็ต", "ภูเก็ต");
     await a.label("เลขใบเบิกอะไหล่").fill("RQ-WEB-94");
     await a.page.waitForTimeout(300);
-    (await a.label("หัวหน้าภาคเบิก SP-BELT").count()) && !(await a.label("หัวหน้าภาคเบิก SP-BOARD").count())
+    (await a.label(`หัวหน้าภาคเบิก ${LC}`).count()) && !(await a.label(`หัวหน้าภาคเบิก ${BC}`).count())
       ? pass("เลือกคลังภูเก็ต: ขึ้นป้าย หัวหน้าภาคเบิก (คลัง 94 ไม่ขึ้น)") : fail("ป้ายหัวหน้าภาคเบิกไม่ถูก");
     // ของคลังอื่นต้องเลือกว่าโอนไหมทีละชิ้น (ต.ค. 69) — ยังไม่เลือกกดส่งไม่ได้
-    (await a.label("ต้องโอนไหม SP-BELT").count()) && !(await a.label("ต้องโอนไหม SP-BOARD").count())
+    (await a.label(`ต้องโอนไหม ${LC}`).count()) && !(await a.label(`ต้องโอนไหม ${BC}`).count())
       ? pass("ของคลังอื่นถามว่าต้องโอนไหมทีละชิ้น (ชิ้นคลัง 94 ไม่ถาม)") : fail("คำถามต้องโอนไหมไม่ตรงชิ้น");
-    await a.label("ต้องโอน SP-BELT").click();
+    await a.label(`ต้องโอน ${LC}`).click();
     await a.page.waitForTimeout(300);
     const btn = a.vis("ส่งหัวหน้าภาคเบิก 1 รายการ").last();
     (await btn.count()) ? pass("ปุ่มบอกจำนวนที่ส่งให้หัวหน้าภาคเบิก") : fail("ปุ่มไม่บอกจำนวน");
@@ -112,19 +120,19 @@ const { setup, visitDay } = require("./fixture");
     (await s.label("วันนัดที่ของต้องถึง").count()) > 0
       ? pass("ฟอร์มเบิกและโอนบอกวันนัดที่ของต้องถึง") : fail("ฟอร์มโอนไม่บอกวันนัด");
     const box = s.label("หมายเหตุจากแอดมิน");
-    (await box.count()) && /แอดมินแจ้งว่ามีของที่/.test(await box.innerText()) && /SP-BELT[^\n]*× 2 — คลังภูเก็ต/.test(await box.innerText())
-      ? pass("หัวหน้าภาคเห็นว่าแอดมินแจ้ง SP-BELT × 2 มีที่คลังภูเก็ต (ไม่มีหมายเหตุก็เห็น)") : fail(`กล่องจากแอดมิน: ${(await box.count()) ? await box.innerText() : "ไม่มี"}`);
-    (await s.vis("SP-BOARD ×1 · คลังลาดพร้าว 94 · ใบเบิก RQ-WEB-94 — แอดมินเบิกแล้ว", false).count()) &&
-    (await s.vis("SP-BELT ×2 · คลังภูเก็ต — ส่งหัวหน้าภาคเบิกและโอน", false).count())
+    (await box.count()) && /แอดมินแจ้งว่ามีของที่/.test(await box.innerText()) && new RegExp(`${LC}[^\\n]*× 2 — คลังภูเก็ต`).test(await box.innerText())
+      ? pass(`หัวหน้าภาคเห็นว่าแอดมินแจ้ง ${LC} × 2 มีที่คลังภูเก็ต (ไม่มีหมายเหตุก็เห็น)`) : fail(`กล่องจากแอดมิน: ${(await box.count()) ? await box.innerText() : "ไม่มี"}`);
+    (await s.vis(`${BC} ×1 · คลังลาดพร้าว 94 · ใบเบิก RQ-WEB-94 — แอดมินเบิกแล้ว`, false).count()) &&
+    (await s.vis(`${LC} ×2 · คลังภูเก็ต — ส่งหัวหน้าภาคเบิกและโอน`, false).count())
       ? pass("ประวัติใบงานบอกรายตัว: คลัง 94 + เลขใบเบิก (แอดมินเบิก) · คลังภูเก็ต (ส่งหัวหน้าภาคเบิกและโอน)") : fail("ประวัติไม่บอกรายตัว");
-    (await s.label("โอนไปคลัง SP-BELT").innerText()).includes("คลังลาดพร้าว 94")
-      ? pass("คลังปลายทางตั้งต้นที่คลังลาดพร้าว 94") : fail(`ปลายทางตั้งต้น: ${await s.label("โอนไปคลัง SP-BELT").innerText()}`);
+    (await s.label(`โอนไปคลัง ${LC}`).innerText()).includes("คลังลาดพร้าว 94")
+      ? pass("คลังปลายทางตั้งต้นที่คลังลาดพร้าว 94") : fail(`ปลายทางตั้งต้น: ${await s.label(`โอนไปคลัง ${LC}`).innerText()}`);
     const save = s.vis("บันทึก · สั่งโอนแล้ว").last();
-    await s.label("เลขใบเบิกต้นทาง SP-BELT").fill("PK-WEB-1");
+    await s.label(`เลขใบเบิกต้นทาง ${LC}`).fill("PK-WEB-1");
     await save.click();
     await s.page.waitForTimeout(1500);
     st() === "PARTS_TRANSFER" ? pass("ยังไม่ใส่เลขที่ใบโอน: บันทึกไม่ผ่าน") : fail(`ไม่มีเลขใบโอนก็ผ่าน: ${st()}`);
-    await s.label("เลขที่ใบโอน SP-BELT").fill("TR-WEB-1");
+    await s.label(`เลขที่ใบโอน ${LC}`).fill("TR-WEB-1");
     // ใบขอโอนสินค้า PDF ของคู่คลังภูเก็ต → 94 — ออกแล้วมีลิงก์เปิด และเป็นไฟล์ PDF จริง
     const [docRes] = await Promise.all([
       s.page.waitForResponse((r) => r.url().includes("/documents/transfer-request") && r.request().method() === "POST", { timeout: 20000 }),
@@ -155,10 +163,10 @@ const { setup, visitDay } = require("./fixture");
     const a2 = await open(wo.code, "A001");
     await a2.vis("เบิกอะไหล่ (คลัง 94)").last().click();
     await a2.page.waitForTimeout(1200);
-    (await a2.label("โอนมาแล้ว SP-BELT").count()) ? pass("แอดมินเห็นว่า SP-BELT โอนจากคลังภูเก็ตมาถึงแล้ว") : fail("แอดมินไม่เห็นข้อมูลการโอน");
+    (await a2.label(`โอนมาแล้ว ${LC}`).count()) ? pass(`แอดมินเห็นว่า ${LC} โอนจากคลังภูเก็ตมาถึงแล้ว`) : fail("แอดมินไม่เห็นข้อมูลการโอน");
     await a2.vis("มีของ").last().click();
     await a2.page.waitForTimeout(300);
-    if (!(await a2.label("คลังที่มี SP-BELT").innerText()).includes("คลังลาดพร้าว 94")) await pickWarehouse(a2, "SP-BELT", "คลังลาดพร้าว 94", "ลาดพร้าว");
+    if (!(await a2.label(`คลังที่มี ${LC}`).innerText()).includes("คลังลาดพร้าว 94")) await pickWarehouse(a2, LC, "คลังลาดพร้าว 94", "ลาดพร้าว");
     await a2.label("เลขใบเบิกอะไหล่").fill("RQ-WEB-2");
     await a2.vis("ยืนยัน").last().click();
     await a2.page.waitForTimeout(3500);
