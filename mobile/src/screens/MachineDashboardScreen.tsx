@@ -1094,11 +1094,7 @@ export default function MachineDashboardScreen({ navigation }: Props) {
         </View>
       ) : null}
 
-      {loading && !data ? (
-        <View style={styles.loading}>
-          <Spinner color={colors.primary} />
-        </View>
-      ) : null}
+      {loading && !data ? <Spinner page color={colors.primary} /> : null}
 
       {data && visibleRows.length === 0 && !error ? (
         <View style={styles.emptyCard}>

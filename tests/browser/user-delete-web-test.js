@@ -1,5 +1,5 @@
 // ทดสอบ: ปุ่มลบผู้ใช้ — Super Admin เห็นและลบได้ แอดมินทั่วไปไม่เห็นปุ่ม · ยืนยันผลที่ฐานข้อมูล
-// สร้าง Super Admin กับผู้ใช้ทดสอบชั่วคราวผ่าน API แล้วลบทิ้งตอนจบ (ต้องมี DATABASE_URL)
+// สร้าง Super Admin (ยกสิทธิ์ในฐานข้อมูล) กับผู้ใช้ทดสอบชั่วคราวผ่าน API แล้วลบทิ้งตอนจบ (ต้องมี DATABASE_URL)
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
 const path = require("path");
@@ -27,7 +27,11 @@ const call = async (method, url, token, body) => {
   const admin = (await call("POST", "/auth/login", null, { employeeCode: "A001", password: "test1234" })).token;
   // บัญชีที่แอดมินสร้างต้องเปลี่ยนรหัสก่อน — ทำผ่าน API ให้เลย
   async function make(code, name, role) {
-    await call("POST", "/auth/users", admin, { employeeCode: code, name, role, password: "temp12345" });
+    // แอดมินทั่วไปตั้งสิทธิ์ระดับแอดมินไม่ได้ (เฉพาะ Super Admin — มีตั้งแต่ ต.ค. 69) เทสต์จึงสร้างไม่ขึ้นแล้วล้มตอนล็อกอิน
+    // สร้างเป็นช่างผ่าน API ก่อน แล้วยกเป็น Super Admin ในฐานข้อมูล
+    const sa = role === "SUPER_ADMIN";
+    await call("POST", "/auth/users", admin, { employeeCode: code, name, role: sa ? "EMPLOYEE" : role, password: "temp12345" });
+    if (sa) sql(`update "User" set role='SUPER_ADMIN' where "employeeCode"='${code}'`);
     const t = (await call("POST", "/auth/login", null, { employeeCode: code, password: "temp12345" })).token;
     await call("POST", "/auth/change-password", t, { currentPassword: "temp12345", newPassword: "test12345" });
   }

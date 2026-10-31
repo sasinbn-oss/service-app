@@ -138,7 +138,7 @@ export default function ManageConsumablesScreen() {
       </View>
 
       {loading ? (
-        <Spinner style={styles.loader} color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : (
         <FlatList
           scrollEnabled={false}
@@ -199,7 +199,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   cancelText: { color: colors.textMuted, fontWeight: "600" },
-  loader: { marginTop: 30 },
   listContent: { padding: 16 },
   card: {
     flexDirection: "row",

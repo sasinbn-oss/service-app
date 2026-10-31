@@ -225,9 +225,7 @@ function TechJobs({ navigation }: Props) {
           </TouchableOpacity>
         </View>
       ) : !jobs ? (
-        <View style={{ paddingVertical: spacing.xl }}>
-          <Spinner color={colors.primary} />
-        </View>
+        <Spinner page color={colors.primary} />
       ) : list.length === 0 ? (
         <EmptyState
           icon="sunny-outline"

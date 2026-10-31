@@ -134,7 +134,7 @@ export default function ConfirmedReportScreen() {
       {error ? (
         <Text style={styles.error}>{error}</Text>
       ) : loading && !rows ? (
-        <Spinner color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : shownRows.length === 0 ? (
         <Text style={styles.empty}>
           {by === "confirm" ? `ยังไม่มีเคสที่คอนเฟิร์ม${date === todayBkk() ? "วันนี้" : `วันที่ ${thaiDateLong(date)}`}` : "ไม่มีคิวนัดเข้างานวันนี้"}

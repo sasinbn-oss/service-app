@@ -1,5 +1,5 @@
 /**
- * แถบ "กำลังโหลดข้อมูล…" บนสุดของจอ — ทุกหน้า (เจ้าของงานขอ ต.ค. 69: "กดปุ่มแล้วไม่รู้ว่าระบบกำลังโหลดไหม")
+ * แถบกำลังโหลดบาง 3 px บนสุดของจอ — ทุกหน้า (เจ้าของงานขอ ต.ค. 69: "กดปุ่มแล้วไม่รู้ว่าระบบกำลังโหลดไหม")
  *
  * การบันทึกมีหน้าโหลดเต็มจออยู่แล้ว (feedback.loading) แต่การอ่านเดิมแค่ให้ปุ่มรีเฟรชหมุนจาง ๆ
  * หน้าที่มีข้อมูลเก่าค้างอยู่ (กลับมาหน้ารายการหลังอัปสถานะ · สลับแท็บกล่องงาน/ที่ยังค้าง) จึงดูเหมือนนิ่ง
@@ -7,9 +7,13 @@
  *
  * ขึ้นเมื่ออ่านนานเกิน 300 ms — เน็ตดีโหลดเสร็จก่อนนั้น ไม่ต้องกะพริบให้รำคาญ
  * ไม่บังจอ ไม่กันการกด (ดูของเก่าระหว่างรอได้) · การเช็คเบื้องหลังทุกนาทีไม่ขึ้น (ดู quietly ใน api/client)
+ *
+ * มีแค่แถบบนสุด ไม่มีป้ายข้อความ — เดิมมีป้าย "กำลังโหลดข้อมูล…" ลอยล่างกลางจอด้วย เจ้าของงานขอให้เอาออก (ต.ค. 69):
+ * หน้าที่ยังไม่มีข้อมูลขึ้นเครื่องซักผ้า "กำลังโหลด..." ของตัวเองอยู่แล้ว ป้ายจึงซ้ำเป็นสองที่ ดูรก
+ * แถบบนสุดอย่างเดียวบอกได้พอว่ายังโหลดอยู่ — อย่าเพิ่มป้ายกลับมา (loading-bar-web-test จับ)
  */
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Platform, StyleSheet, Text, View } from "react-native";
+import { Animated, Platform, StyleSheet, View } from "react-native";
 import { subscribeBackgroundReads } from "../api/client";
 import { colors } from "../theme";
 
@@ -111,33 +115,25 @@ export default function LoadingBar() {
   if (!shown) return null;
   const opacity = fading ? 0 : 1;
   return (
-    <>
-      {/* ป้ายอยู่ล่างกลางจอ — บนสุดมีปุ่มของแถบหัว (ดูในฐานะ · การใช้งาน) ป้ายจะไปบังปุ่ม · เหนือแถบแท็บล่างของมือถือ
-          จุดนิ่ง ไม่กะพริบ (ตามตัวอย่างที่ตกลง) — แถบด้านบนบอกอยู่แล้วว่ายังโหลด · ป้ายหายตอนแถบเติมเต็ม */}
-      {p < 100 ? (
-        <View style={styles.pillWrap} pointerEvents="none">
-          <View style={styles.pill}>
-            <View style={styles.dot} />
-            <Text style={styles.text}>กำลังโหลดข้อมูล…</Text>
-          </View>
-        </View>
-      ) : null}
-      <View style={styles.wrap} pointerEvents="none" accessibilityLabel="กำลังโหลดข้อมูล" accessibilityLiveRegion="polite">
-        {web ? (
-          <View
-            style={[
-              styles.bar,
-              { width: `${p}%`, opacity },
-              instant ? null : ({ transitionProperty: "width, opacity", transitionDuration: `${TICK_MS}ms, ${FADE_MS}ms`, transitionTimingFunction: "ease-out" } as object),
-            ]}
-          />
-        ) : (
-          <Animated.View
-            style={[styles.bar, { opacity, width: native.interpolate({ inputRange: [0, 100], outputRange: ["0%", "100%"] }) }]}
-          />
-        )}
-      </View>
-    </>
+    // ชื่อ "กำลังโหลดข้อมูล" ที่แถบมีไว้ให้เทสต์หาแถบ (loading-bar-web-test) — โปรแกรมอ่านจอไม่ได้ยินอันนี้:
+    // aria-live ประกาศเฉพาะข้อความที่เปลี่ยน แถบไม่มีข้อความ และ div ที่ไม่มี role ชื่อถูกข้าม (ป้ายเดิมก็อยู่นอก live region ไม่เคยถูกประกาศ)
+    // อย่าแก้ด้วย role="progressbar": หน้าโหลดของ Feedback วาดท้าย <body> แถบนี้มาก่อน
+    // claim-web-test หาหลอดส่งไฟล์ด้วย getByRole("progressbar").first() จะได้แถบนี้แทน
+    <View style={styles.wrap} pointerEvents="none" accessibilityLabel="กำลังโหลดข้อมูล" accessibilityLiveRegion="polite">
+      {web ? (
+        <View
+          style={[
+            styles.bar,
+            { width: `${p}%`, opacity },
+            instant ? null : ({ transitionProperty: "width, opacity", transitionDuration: `${TICK_MS}ms, ${FADE_MS}ms`, transitionTimingFunction: "ease-out" } as object),
+          ]}
+        />
+      ) : (
+        <Animated.View
+          style={[styles.bar, { opacity, width: native.interpolate({ inputRange: [0, 100], outputRange: ["0%", "100%"] }) }]}
+        />
+      )}
+    </View>
   );
 }
 
@@ -153,30 +149,4 @@ const styles = StyleSheet.create({
   },
   // ไม่มีรางพื้นหลัง — เห็นแค่ส่วนที่เติมแล้ว อ่านเป็น "ไปได้ถึงไหนแล้ว" ไม่ใช่ขีดลอยในราง
   bar: { height: 3, borderTopRightRadius: 2, borderBottomRightRadius: 2, backgroundColor: colors.primary },
-  pillWrap: {
-    position: (Platform.OS === "web" ? "fixed" : "absolute") as "absolute",
-    bottom: 84,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 80,
-  },
-  pill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    shadowColor: "#000",
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary },
-  text: { color: colors.primaryInk, fontWeight: "700", fontSize: 14, flexShrink: 0 },
 });
