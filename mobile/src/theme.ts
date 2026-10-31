@@ -16,6 +16,8 @@ export const colors = {
   /** ตัวอักษรสีฟ้าบนพื้นอ่อน — `primary` อ่อนเกินไปสำหรับตัวหนังสือเล็ก */
   primaryInk: "#006491",
   primarySoft: "#E1F0FA",
+  /** เส้นขอบกล่องแจ้งข้อมูลพื้นฟ้า (primarySoft) เช่น "ตีกลับ … ให้ช่างแก้แล้ว" — ไม่ใช่แดง เพราะเป็นผลที่สำเร็จ ไม่ใช่ข้อผิดพลาด */
+  primaryLine: "#9CC9E6",
   navy: "#0B3B60",
   /**
    * กรมท่าที่เป็น "พื้น" ปุ่ม/ชิปที่เลือก (ตัวหนังสือขาว) — โหมดสว่างเท่ากับ navy
@@ -41,6 +43,11 @@ export const colors = {
   success: "#10B981",
   successInk: "#065F46",
   successSoft: "#ECFDF5",
+  /**
+   * เขียวที่เป็น "พื้น" ปุ่ม/ชิป (ตัวหนังสือขาว) เช่น "✓ ผ่าน" ที่เลือกแล้ว · "✓ อนุมัติเคลมแล้ว" — เหตุผลเดียวกับ dangerFill
+   * successInk โหมดมืดกลายเป็นเขียวมิ้นต์อ่อน ตัวขาวบนนั้นอ่านไม่ออก (สีเดียวกับชิปอนุมัติในตัวอย่างเคลม)
+   */
+  successFill: "#047857",
   warning: "#F59E0B",
   warningInk: "#92400E",
   warningSoft: "#FFFBEB",
@@ -137,6 +144,8 @@ const DARK: Partial<typeof colors> = {
   dangerInk: "#FCA5A5",
   dangerSoft: "#2C1618",
   dangerFill: "#B91C1C",
+  successFill: "#047857",
+  primaryLine: "#24486A",
   neutralFill: "#475569",
   dangerLine: "#6B2A2E",
   successInk: "#6EE7B7",

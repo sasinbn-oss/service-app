@@ -8,6 +8,8 @@
 //   · การ์ดของ Admin Spare Part: ป้ายรอตรวจเลขเดียวกับเมนู (รวมที่ส่งเดือนก่อน) · บรรทัดล่างบอกว่านับจากที่ส่งเดือนนี้
 //   · ปุ่มช่วงที่ได้วันเดียวกัน (มีนาคม: 3 เดือน = ปีนี้) ติดปุ่มที่กดจริง ชิปบนมือถือขึ้นชื่อช่วงที่กด
 //   · แสดงเพิ่มขณะมีเคลมใหม่เข้ามาไม่ซ้ำแถว · เปิดใบงานแล้วกลับมา แถวที่แสดงเพิ่มไว้ยังอยู่
+//   · ปิดเคลม ไม่ส่งผู้ขาย (เคลมก้อน 3): ปุ่มสถานะของตัวเอง กรองแล้วแถวที่อนุมัติหายไป เหลือแถวนั้นพร้อมป้าย
+//     "ปิดเคลม ไม่ส่งผู้ขาย" · ไม่มีปุ่มใบเคลม PDF (ไม่มีใบเคลม)
 // ต้องมี DATABASE_URL — แถวเคลมใส่ด้วย SQL บนใบงานจริงที่เปิดผ่าน API (ทางปิดงานจริงอยู่ใน claim-test.sh)
 const { chromium } = require("playwright");
 const path = require("path");
@@ -72,6 +74,12 @@ const { setup } = require("./fixture");
       select ${c.id},'WEB-PG-'||lpad(i::text,3,'0'),'ชิ้นทดสอบแบ่งหน้า','WEB-PG-BROKEN',1,'C0006',(select name from "Branch" where code='C0006'),'ยี่ห้อทดสอบหน้าจอ','W79','อาการ','เช็ค','APPROVED',${tech},
         now()-make_interval(secs => i),${admin},now()-make_interval(secs => i) from generate_series(1,105) i`);
     insFree("WEB-PREV-1", "PENDING", "now()-interval '40 days'");
+    // ชิ้นที่ Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย (เคลมก้อน 3) — ใบ c เครื่อง W79 ไม่ไปปนตัวเลขของใบ a/b
+    fx.sql(`insert into "PartClaim"("workOrderId","partCode","partName","brokenPartCode",quantity,"branchCode","branchName",brand,"machineCode",symptom,"checkNote",status,"rejectReason","createdById","createdAt","reviewedById","reviewedAt")
+      values (${c.id},'WEB-DECL-1','ชิ้นทดสอบปิดเคลม','WEB-DECL-1-BROKEN',1,'C0006',(select name from "Branch" where code='C0006'),'ยี่ห้อทดสอบหน้าจอ','W79','อาการ','เช็ค','DECLINED','หมดประกัน',${tech},
+        now()-interval '5 minutes',${admin},now()-interval '4 minutes')`);
+    // แถวสถานะอื่นที่ค้นเจอด้วยคำเดียวกัน — ปุ่มกรองปิดเคลมต้องตัดแถวนี้ออก ไม่งั้นเทสต์ผ่านได้ทั้งที่ปุ่มไม่กรองอะไรเลย
+    insFree("WEB-DECL-2", "APPROVED", "now()-interval '6 minutes'");
     const pending = () => fx.sql(`select count(*) from "PartClaim" c join "WorkOrder" w on w.id=c."workOrderId" where c.status='PENDING' and not w."isTest"`);
 
     const open = async (code, width, at) => {
@@ -101,7 +109,11 @@ const { setup } = require("./fixture");
       (await label(page, `เคลมรอตรวจ ${n}`).count()) > 0 ? pass(`เมนูข้าง: ประวัติเคลม + ป้ายรอตรวจ ${n} (ตรงฐานข้อมูล)`) : fail(`ไม่มีป้ายรอตรวจ ${n} ข้างเมนู`);
       await vis("ประวัติเคลม").first().click();
       await page.waitForTimeout(3000);
-      (await vis("ส่งผู้ขาย", false).count()) === 0 ? pass("ไม่มีช่อง ส่งผู้ขาย (เจ้าของงานบอกไม่ต้อง)") : fail("ยังมีช่องส่งผู้ขาย");
+      // "ปิดเคลม ไม่ส่งผู้ขาย" (ปุ่มสถานะใหม่ของเคลมก้อน 3) มีคำว่า ส่งผู้ขาย อยู่ข้างใน — ตัดเฉพาะคำนี้ออก
+      // ที่เหลือที่มีคำว่า ส่งผู้ขาย ยังถือว่าเป็นช่องที่เจ้าของงานบอกไม่ต้องมี
+      (await page.getByText(/(?<!ไม่)ส่งผู้ขาย/).locator("visible=true").count()) === 0
+        ? pass("ไม่มีช่อง ส่งผู้ขาย (เจ้าของงานบอกไม่ต้อง)")
+        : fail("ยังมีช่องส่งผู้ขาย");
       await search(page, a.code);
       const rows = () => page.locator(`[aria-label^="แถวเคลม ${a.code}"]`).locator("visible=true");
       const text = async () => (await rows().allInnerTexts()).join(" | ");
@@ -141,6 +153,27 @@ const { setup } = require("./fixture");
       const head = req ? Buffer.from(await (await fetch(req.url())).arrayBuffer()).subarray(0, 2).toString() : "";
       head === "PK" ? pass("ปุ่ม Excel เปิดไฟล์ xlsx ตามตัวกรอง") : fail(`ปุ่ม Excel: ${req ? req.url() : "ไม่มีคำขอไฟล์"}`);
       for (const p of ctx.pages()) if (p !== page) await p.close().catch(() => {});
+      // ปิดเคลม ไม่ส่งผู้ขาย: มีปุ่มสถานะของตัวเอง · แถวขึ้นป้ายตามที่เซิร์ฟเวอร์ส่ง (ไม่ใช่ "ตีกลับ" หรือว่าง)
+      await search(page, "WEB-DECL-");
+      await label(page, "สถานะ ทั้งหมด").click();
+      await page.waitForTimeout(2000);
+      const declRows = () => page.locator('[aria-label^="แถวเคลม "]').locator("visible=true");
+      const before = await declRows().count();
+      const declReq = page
+        .waitForRequest((r) => /\/api\/part-claims\?/.test(r.url()) && /[?&]status=DECLINED(&|$)/.test(r.url()), { timeout: 15000 })
+        .catch(() => null);
+      await label(page, "สถานะ ปิดเคลม ไม่ส่งผู้ขาย").click();
+      const sentDeclined = !!(await declReq);
+      await page.waitForTimeout(2000);
+      const declined = await declRows().allInnerTexts();
+      before === 2 && sentDeclined && declined.length === 1 && declined[0].includes("WEB-DECL-1") && declined[0].includes("ปิดเคลม ไม่ส่งผู้ขาย") &&
+        fx.sql(`select status from "PartClaim" where "workOrderId"=${c.id} and "partCode"='WEB-DECL-1'`) === "DECLINED"
+        ? pass("ปุ่มสถานะ ปิดเคลม ไม่ส่งผู้ขาย: จาก 2 แถว (ปิดเคลม + อนุมัติ) เหลือแถวที่ปิดเคลมแถวเดียว · ขอ status=DECLINED · ป้าย \"ปิดเคลม ไม่ส่งผู้ขาย\" (ฐานข้อมูล DECLINED)")
+        : fail(`กรองปิดเคลม: ก่อนกด ${before} แถว · ขอ DECLINED ${sentDeclined} · ${declined.join(" | ").slice(0, 300)}`);
+      (await label(page, `ใบเคลม PDF ${c.code} WEB-DECL-1`).count()) === 0 && (await label(page, `เปิดใบงาน ${c.code}`).count()) > 0
+        ? pass("แถวที่ปิดเคลม ไม่มีปุ่มใบเคลม PDF (ไม่มีใบเคลม เซิร์ฟเวอร์ตอบ 409) · ปุ่มเปิดใบงานยังอยู่")
+        : fail("แถวที่ปิดเคลมยังมีปุ่มใบเคลม PDF");
+      await page.screenshot({ path: path.join(DIR, "claim-history-7-declined.png") });
       // ลิงก์ในใบงาน → หน้าประวัติกรองเครื่อง/สาขาให้ (ทุกช่วงเวลา)
       await label(page, "สถานะ ทั้งหมด").click();
       await search(page, a.code);

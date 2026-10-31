@@ -2,7 +2,8 @@
 //        · ยังไม่ครบ ปุ่มล่างบอก "ยังขาด n อย่าง — พาไป" กดแล้วไม่ส่ง · ไฟล์เคลมส่งทันทีที่เลือก (ช่องบอก "กำลังส่ง x%" → "✓ แนบแล้ว")
 //        · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
 //        · Admin Spare Part เปิดใบแล้วเจอหน้าตรวจเคลม (หลักฐานรอบนี้ · ข้อมูลเครื่อง · แถบตัดสินล่างจอ — ละเอียดใน claim-review-web-test.js)
-//        · Admin Spare Part ตีกลับ → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ → อนุมัติ → ปิดงาน
+//        · Admin Spare Part ตีกลับ (✗ ตีกลับ + เหตุผลของชิ้น) → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ
+//          → อนุมัติ (✓ ผ่าน → อนุมัติเคลม · ปิดงาน → ยืนยันอนุมัติ) → ปิดงาน (ตัดสินทีละชิ้น · เคลมก้อน 3)
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -315,7 +316,7 @@ const login = async (code) =>
     await vis(page, "ซ่อนรายละเอียดใบงาน ▾").first().click().catch(() => {});
     await page.waitForTimeout(500);
     // หน้าตรวจเคลม (เคลมก้อน 2): หลักฐานของแถวตามที่เซิร์ฟเวอร์ตัดสิน · ข้อเช็คตาม Error อยู่ในชิ้น (✓ ทำ / ✗ ไม่ได้ทำ)
-    await vis(page, "อนุมัติเคลม · ปิดงาน").first().scrollIntoViewIfNeeded();
+    await vis(page, "ตัดสินให้ครบทุกชิ้นก่อน").first().scrollIntoViewIfNeeded();
     (await vis(page, "หลักฐานรอบนี้:").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานรอบนี้ของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
     (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตาม Error E dL / E dL1 / E dL2 (ไม่บังคับ · ไม่พิมพ์ลงใบเคลม)").count()) > 0
       ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตาม Error ในหน้าตรวจเคลม") : fail("หน้าตรวจเคลมไม่มีข้อมูลเครื่อง/ข้อเช็คตาม Error");
@@ -324,13 +325,16 @@ const login = async (code) =>
     await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });
-    await vis(page, "ตีกลับให้ช่างแก้").first().click();
+    // ตัดสินทีละชิ้น: "✗ ตีกลับ" ของชิ้นนี้ → ช่องเหตุผลขึ้นเหนือแถบ · ยังไม่ใส่เหตุผล ปุ่มส่งยังเป็น "ตัดสินให้ครบทุกชิ้นก่อน"
+    await vis(page, "✗ ตีกลับ").first().click();
+    await page.waitForTimeout(500);
+    await vis(page, "ตัดสินให้ครบทุกชิ้นก่อน").first().click();
     await page.waitForTimeout(800);
     (await vis(page, "ตีกลับต้องบอกเหตุผล", false).count()) > 0 && sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW"
       ? pass("ตีกลับโดยไม่กรอกเหตุผล หน้าจอเตือนและไม่ส่ง")
       : fail("ตีกลับเปล่าได้");
     await label(page, "เหตุผลที่ตีกลับเคลม").fill("วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่");
-    await vis(page, "ตีกลับให้ช่างแก้").first().click();
+    await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").first().click();
     await page.waitForTimeout(3000);
     sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS" ? pass("ตีกลับแล้วใบงานกลับไปรอช่าง (ฐานข้อมูล)") : fail("ตีกลับไม่สำเร็จ");
     await page.close();
@@ -363,13 +367,22 @@ const login = async (code) =>
 
     // ── อนุมัติ ──
     page = await open(`ZCWP${suf}`);
+    // ✓ ผ่าน → ปุ่มส่งเปลี่ยนเป็น "อนุมัติเคลม · ปิดงาน" → ถามยืนยันก่อน (ใบงานจะปิด) → "ยืนยันอนุมัติ"
+    await vis(page, "✓ ผ่าน").first().click();
+    await page.waitForTimeout(500);
     await vis(page, "อนุมัติเคลม · ปิดงาน").first().click();
+    await vis(page, "อนุมัติ 1 ชิ้น ใบงานจะปิด").first().waitFor({ timeout: 10000 }).catch(() => {});
+    (await vis(page, "อนุมัติ 1 ชิ้น ใบงานจะปิด").count()) > 0 && sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW"
+      ? pass("กดอนุมัติแล้วถามยืนยัน \"อนุมัติ 1 ชิ้น ใบงานจะปิด\" ก่อนส่ง (ฐานข้อมูลยังรอตรวจ)")
+      : fail("อนุมัติไม่ถามยืนยัน หรือส่งไปก่อนยืนยัน");
+    await vis(page, "ยืนยันอนุมัติ").first().click();
     await page.waitForTimeout(3000);
     sql(`select w.status||'|'||string_agg(c.status,',' order by c.id) from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id} group by w.status`) === "DONE|REJECTED,APPROVED"
       ? pass("อนุมัติแล้วใบงานปิด ใบเคลมรอบแรกตีกลับ รอบสองอนุมัติ (ฐานข้อมูล)")
       : fail("หลังอนุมัติ");
-    (await vis(page, "ปิดงานแล้ว").count()) > 0 && (await vis(page, "อนุมัติแล้ว").count()) > 0
-      ? pass("หน้าจอขึ้นปิดงานแล้ว และใบเคลมอนุมัติแล้ว")
+    (await vis(page, "ปิดงานแล้ว").count()) > 0 && (await vis(page, "อนุมัติแล้ว").count()) > 0 &&
+      (await vis(page, "✓ อนุมัติเคลมแล้ว · ปิดงาน").count()) > 0
+      ? pass("หน้าจอขึ้นปิดงานแล้ว · สรุป \"✓ อนุมัติเคลมแล้ว · ปิดงาน\" · ใบเคลมอนุมัติแล้ว")
       : fail("หน้าจอไม่อัปเดตหลังอนุมัติ");
     await page.screenshot({ path: path.join(DIR, "claim-3-done.png"), fullPage: true });
   } catch (e) {

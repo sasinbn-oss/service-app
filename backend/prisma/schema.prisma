@@ -1156,8 +1156,10 @@ model PartClaim {
   // เช็คตามคู่มือ Error in Field (Alliance) { errorCode, errorName, checked[], install: [{ key, label, note, answer }] }
   // ช่างแค่ตอบตามรายการ ระบบไม่ตัดสินว่ารับประกันหรือไม่ · ยี่ห้ออื่นว่าง
   fieldCheck      Json?
-  // PENDING รอตรวจ · APPROVED อนุมัติ (ออกใบเคลมได้) · REJECTED ตีกลับ
+  // PENDING รอตรวจ · APPROVED อนุมัติ (ออกใบเคลมได้) · REJECTED ตีกลับ · DECLINED ปิดเคลม ไม่ส่งผู้ขาย (ก้อน 3 — ไม่ออกใบเคลม)
+  // ตัดสินทีละชิ้น: แถวที่ผ่าน/ปิดเคลมล็อกชิ้นนั้นไว้จนกว่าจะเปิดใบใหม่ (ส่งซ้ำไม่ได้ · ต้องอยู่ในอะไหล่ที่ใช้)
   status          String    @default("PENDING")
+  // เหตุผลตีกลับ — แถวที่ DECLINED เก็บเหตุผลที่ปิดเคลมไว้ช่องเดียวกัน ("หมดประกัน" · "ไม่ใช่ชิ้นในประกัน" · "อื่น ๆ: …")
   rejectReason    String?
   createdById     Int?
   createdAt       DateTime  @default(now())

@@ -114,8 +114,11 @@ export interface WorkOrderRow {
   closeResult?: string | null;
   closeResultLabel: string | null;
   attachmentCount: number;
-  /** ใบงานแจ้งเคลม — สถานะเคลมรอบล่าสุด PENDING / APPROVED / REJECTED · ว่าง = ไม่ได้แจ้งเคลม */
-  claimStatus?: "PENDING" | "APPROVED" | "REJECTED" | null;
+  /**
+   * ใบงานแจ้งเคลม — สถานะเคลมของใบ PENDING / APPROVED / REJECTED / DECLINED · ว่าง = ไม่ได้แจ้งเคลม
+   * เซิร์ฟเวอร์รวมจากผลล่าสุดทีละชิ้น (aggregateClaimStatus) เพราะชิ้นในใบเดียวกันได้ผลต่างกันได้ (เคลมก้อน 3)
+   */
+  claimStatus?: "PENDING" | "APPROVED" | "REJECTED" | "DECLINED" | null;
   /** ขั้นนี้เป็นของบทบาทไหน — ว่าง = ปิด/ยกเลิกแล้ว */
   stageActor: Role | null;
   /** รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินหัวข้อ "ไม่มีคนรับ" */
@@ -258,12 +261,17 @@ interface ListPrefs {
   /** ใบงาน SUB (จ่ายให้ทีม outsource) / ทีมปกติ — เจ้าของงานขอให้แยกไม่ปนกัน ต.ค. 69 */
   kind: "" | "normal" | "sub";
   /** ใบงานเคลม (เจ้าของงานขอ ต.ค. 69) — "any" = ทุกใบที่แจ้งเคลม หรือเจาะสถานะเคลม */
-  claim?: "" | "any" | "PENDING" | "APPROVED" | "REJECTED";
+  claim?: "" | "any" | "PENDING" | "APPROVED" | "REJECTED" | "DECLINED";
 }
 const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair", kind: "", claim: "" };
 
 /** ป้าย/ตัวกรองใบงานเคลม — สถานะเคลมเป็นคำที่ Admin Spare Part ใช้ */
-const CLAIM_LABEL: Record<string, string> = { PENDING: "รอตรวจเคลม", APPROVED: "เคลมอนุมัติแล้ว", REJECTED: "เคลมถูกตีกลับ" };
+const CLAIM_LABEL: Record<string, string> = {
+  PENDING: "รอตรวจเคลม",
+  APPROVED: "เคลมอนุมัติแล้ว",
+  REJECTED: "เคลมถูกตีกลับ",
+  DECLINED: "ปิดเคลม ไม่ส่งผู้ขาย",
+};
 const claimMatch = (r: WorkOrderRow, v: ListPrefs["claim"]) => !v || (v === "any" ? !!r.claimStatus : r.claimStatus === v);
 
 /**
@@ -1678,7 +1686,7 @@ function filterGroups({
       options: [
         { value: "", label: "ทั้งหมด", n: claimCount("") },
         { value: "any", label: "ใบงานแจ้งเคลม", hint: "ทุกสถานะเคลม", n: claimCount("any") },
-        ...(["PENDING", "APPROVED", "REJECTED"] as const).map((v) => ({ value: v, label: CLAIM_LABEL[v], n: claimCount(v) })),
+        ...(["PENDING", "APPROVED", "REJECTED", "DECLINED"] as const).map((v) => ({ value: v, label: CLAIM_LABEL[v], n: claimCount(v) })),
       ],
     });
   groups.push({
@@ -1698,19 +1706,34 @@ function filterGroups({
 /**
  * ป้าย "แจ้งเคลม" — ใบที่ตอนปิดงานส่งอะไหล่เก่าเคลม (เจ้าของงานขอ ต.ค. 69)
  * สีม่วงของ Admin Spare Part ซึ่งเป็นคนตรวจ · ตีกลับเป็นแดง เพราะช่างต้องแก้แล้วปิดใหม่
+ * ปิดเคลม ไม่ส่งผู้ขาย (ทุกชิ้น) เป็นเทา — จบแล้ว ไม่มีอะไรให้ใครทำ และไม่ใช่การอนุมัติ
+ * สถานะที่แอปรุ่นนี้ไม่รู้จักขึ้นแค่ "แจ้งเคลม" ไม่ให้แถวพัง
  */
 function ClaimBadge({ row }: { row: WorkOrderRow }) {
   if (!row.claimStatus) return null;
   const bad = row.claimStatus === "REJECTED";
   const ok = row.claimStatus === "APPROVED";
+  const drop = row.claimStatus === "DECLINED";
   return (
     <View
-      style={[styles.claimBadge, bad && styles.claimBadgeBad, ok && styles.claimBadgeOk]}
-      accessibilityLabel={`ใบงานแจ้งเคลม ${CLAIM_LABEL[row.claimStatus]}`}
+      style={[styles.claimBadge, bad && styles.claimBadgeBad, ok && styles.claimBadgeOk, drop && styles.claimBadgeDrop]}
+      accessibilityLabel={`ใบงานแจ้งเคลม ${CLAIM_LABEL[row.claimStatus] ?? ""}`.trim()}
     >
-      <Ionicons name="shield-checkmark-outline" size={11} color={bad ? colors.dangerInk : ok ? colors.successInk : colors.roleAdmin} />
-      <Text style={[styles.claimBadgeText, bad && { color: colors.dangerInk }, ok && { color: colors.successInk }]}>
-        แจ้งเคลม{bad ? " · ตีกลับ" : ok ? " · อนุมัติ" : ""}
+      <Ionicons
+        name="shield-checkmark-outline"
+        size={11}
+        color={bad ? colors.dangerInk : ok ? colors.successInk : drop ? colors.textMuted : colors.roleAdmin}
+      />
+      <Text
+        style={[
+          styles.claimBadgeText,
+          bad && { color: colors.dangerInk },
+          ok && { color: colors.successInk },
+          drop && { color: colors.textMuted },
+        ]}
+      >
+        {/* ป้ายสั้นเท่าป้ายอื่น — คำเต็ม "ปิดเคลม ไม่ส่งผู้ขาย" อยู่ในตัวกรองและ accessibilityLabel · ป้ายยาวดันสถานะใบงานหลุดการ์ดบนจอ 360 */}
+        แจ้งเคลม{bad ? " · ตีกลับ" : ok ? " · อนุมัติ" : drop ? " · ปิดเคลม" : ""}
       </Text>
     </View>
   );
@@ -2229,6 +2252,7 @@ const styles = StyleSheet.create({
   claimBadge: { flexDirection: "row", alignItems: "center", gap: 3, borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.roleAdminSoft, borderWidth: 1, borderColor: colors.roleAdminLine },
   claimBadgeBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
   claimBadgeOk: { backgroundColor: colors.successSoft, borderColor: colors.successLine },
+  claimBadgeDrop: { backgroundColor: colors.rowAlt, borderColor: colors.borderStrong },
   claimBadgeText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: colors.roleAdmin },
   attnHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   attnRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },

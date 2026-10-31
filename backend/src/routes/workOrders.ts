@@ -55,17 +55,21 @@ import {
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor, machineErrorText } from "../utils/claimGuide";
 import {
+  aggregateClaimStatus,
   changedSinceReject,
   claimEvidenceFor,
   claimKey,
   ClaimLogLite,
   claimPosition,
   claimRoundOf,
+  claimRoundPayload,
   claimSummary,
   firstSubmittedAt,
   isSubmittedEvidence,
   latestPerPart,
+  lockedParts,
   lockSince,
+  machineLockRow,
   partLabel,
   repairStartFor,
 } from "../utils/claimRules";
@@ -138,6 +142,8 @@ import {
   machineMake,
   claimTroubleshootingFor,
   CLAIM_EVIDENCE_ROLES,
+  CLAIM_DECLINE_REASONS,
+  SEND_BACK_REASON_REQUIRED,
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
@@ -836,6 +842,12 @@ function shape(
       ...claimRowExtras(c, w, logs),
     })),
     /**
+     * สถานะเคลมของงานซ่อมครั้งนี้ทีละชิ้น (ก้อน 3) — หน้าจออ่านค่านี้ค่าเดียวเพื่อตอบว่าใบอยู่ในรอบที่ถูกตีกลับไหม
+     * ชิ้นไหนล็อกแล้ว (ผ่าน/ปิดเคลม) และข้อมูลเครื่องล็อกหรือยัง — ไม่อ่าน claims[0] (ดู claimRoundPayload)
+     * คำตอบจากคำสั่งที่ไม่ส่งประวัติมา (logs ว่าง) นับทุกแถวของใบเป็นงานซ่อมครั้งเดียว
+     */
+    claimRound: claimRoundPayload(w.status, w.claims, logs, (c) => partLabel(c, claimParts)),
+    /**
      * หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ — ช่างที่ถูกตีกลับแนบเพิ่มเฉพาะที่ขาด
      * id/createdAt/createdById: ฟอร์มปิดงานแนบไฟล์ทันทีที่เลือก ต้องรู้ว่าไฟล์ไหนใหม่กว่าการตีกลับ และไฟล์ไหนตัวเองแนบ
      * (แนบใหม่แทนแล้วลบไฟล์เดิมที่ยังไม่ได้ส่ง) ไม่ต้องโหลดรายการไฟล์ทั้งใบมาไล่เอง
@@ -913,11 +925,17 @@ const listSelect = {
   assignedTo: { select: { name: true } },
   createdBy: { select: { name: true, role: true } },
   // ใบงานแจ้งเคลม (ตอนปิดงานส่งอะไหล่เก่าเคลม) — ป้าย + ตัวกรอง "ใบงานเคลม" ในรายการ (เจ้าของงานขอ ต.ค. 69)
-  // เอาแค่รอบล่าสุดตัวเดียว รายการอยากรู้สถานะเคลมตอนนี้ ไม่ใช่ทุกรอบ
-  // แถวของการส่งครั้งเดียวกันเวลาเท่ากัน — id ตัดสิน ไม่งั้นป้ายสลับไปมาระหว่างโหลด
+  // ทุกแถว ไม่ใช่แถวบนสุดแถวเดียว: ตั้งแต่ตัดสินทีละชิ้น (ก้อน 3) แถวของการส่งครั้งเดียวกันได้ผลต่างกัน ป้ายต้องรวมจากทุกชิ้น
+  // (ดู aggregateClaimStatus) · ต่อใบมีไม่กี่แถว และเลือกแค่ห้าช่องเล็ก ๆ
   claims: {
-    select: { status: true },
+    select: { id: true, status: true, sparePartId: true, partCode: true, createdAt: true },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }] as Prisma.PartClaimOrderByWithRelationInput[],
+  },
+  // เปิดใบใหม่ครั้งล่าสุด = จุดเริ่มงานซ่อมครั้งนี้ — เคลมของการซ่อมครั้งก่อนไม่ใช่สถานะของใบตอนนี้ (อ่านรวมในคำสั่งเดียวกัน)
+  logs: {
+    where: { action: "REOPENED" },
+    select: { action: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
     take: 1,
   },
   /**
@@ -1154,8 +1172,11 @@ function listShape(
       ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult
       : null,
     attachmentCount: w._count.attachments,
-    // สถานะเคลมรอบล่าสุด PENDING / APPROVED / REJECTED — ว่าง = ใบนี้ไม่ได้แจ้งเคลม
-    claimStatus: w.claims[0]?.status ?? null,
+    // สถานะเคลมของงานซ่อมครั้งนี้ PENDING / APPROVED / REJECTED / DECLINED — ว่าง = ไม่ได้แจ้งเคลม (ดู aggregateClaimStatus)
+    claimStatus: aggregateClaimStatus(
+      w.status,
+      w.claims.filter((c) => !w.logs[0] || c.createdAt >= w.logs[0].createdAt)
+    ),
   };
 }
 
@@ -1835,6 +1856,9 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
       OR: [
         { status: { in: ["IN_PROGRESS", "INSPECTING", "CLAIM_REVIEW"] } },
         { status: "DONE", closedAt: { gte: from } },
+        // ตรวจเคลมจบวันนี้ — ตรวจเคลมไม่แตะเวลาปิด (ยังเป็นเวลาที่ช่างส่ง ซึ่งมักเป็นเมื่อวานหรือก่อนนั้น)
+        // ถ้าดูแค่เวลาปิด การ์ด "รอตรวจเคลม" หายไปเฉย ๆ วันที่ตรวจ ช่างไม่เคยเห็นว่าชิ้นไหนผ่าน ชิ้นไหนปิดเคลมเพราะอะไร
+        { status: "DONE", claims: { some: { reviewedAt: { gte: from } } } },
       ],
     },
     select: {
@@ -2393,6 +2417,8 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
     })),
     // ขั้นที่แอดมินกด "เลื่อนวันนัด" ได้ — ตัดสินที่นี่ที่เดียว แอปเช็คบทบาท/วันนัดเองอีกชั้น (ดู RESCHEDULE_STAGES)
     rescheduleStages: RESCHEDULE_STAGES,
+    // เหตุผล "ปิดเคลม ไม่ส่งผู้ขาย" ทีละชิ้น (หน้าตรวจเคลม) — ตัวสุดท้าย "อื่น ๆ" ต้องพิมพ์เหตุผลเอง
+    claimDeclineReasons: CLAIM_DECLINE_REASONS,
     technicians,
   });
 });
@@ -6460,6 +6486,44 @@ const closeSchema = z.object({
 /** ด่านกันส่งปิดซ้อนใน /close เจอว่าใบถูกปิดไปก่อนแล้ว — โยนออกจาก transaction ให้ทุกอย่างที่เขียนไปถูกยกเลิก */
 class CloseAlreadySent extends Error {}
 
+/**
+ * ชิ้นที่ล็อกแล้ว (ผ่าน · ปิดเคลม ไม่ส่งผู้ขาย) ต้องอยู่ในอะไหล่ที่ใช้เสมอ — ตอบข้อความภาษาไทย หรือ null = ผ่าน
+ *
+ * ทำไม: อะไหล่ชิ้นนั้นใส่เครื่องไปแล้วจริง และใบเคลมที่อนุมัติอาจออกไปถึงผู้ขายแล้ว ถ้าเอาออกจากรายการได้
+ * รายงานอะไหล่ที่ไปแต่ละสาขาจะหายไปหนึ่งชิ้น ขณะที่ผู้ขายยังถือใบเคลมของชิ้นนั้นอยู่
+ * ใช้ทั้งช่างปิดงาน · ปิดงานย้อนหลัง · หัวหน้าภาคปิดใบงาน — ทุกทางที่เขียนทับอะไหล่ที่ใช้ (USED) ทั้งชุด
+ * rows = แถวเคลมทั้งใบ (ใช้ตั้งชื่อชิ้นให้ตรงกับที่อื่น) · since = เปิดใบใหม่ครั้งล่าสุด (ดู lockSince)
+ */
+function lockedPartDropped(
+  rows: { id: number; sparePartId: number | null; partCode: string; partName: string; status: string; createdAt: Date }[],
+  since: Date | null,
+  usedIds: Set<number>
+): string | null {
+  const locked = lockedParts(rows.filter((r) => !since || r.createdAt >= since));
+  const miss = locked.find((r) => r.sparePartId != null && !usedIds.has(r.sparePartId));
+  if (!miss) return null;
+  const label = partLabel(miss, rows);
+  return miss.status === "APPROVED"
+    ? `${label} อนุมัติเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`
+    : `${label} ปิดเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`;
+}
+
+/** แถวเคลมทั้งใบ + เปิดใบใหม่ครั้งล่าสุด (เท่าที่ lockedPartDropped ใช้) — สองคำสั่งพร้อมกัน */
+async function claimLockRows(id: number) {
+  const [rows, reopened] = await Promise.all([
+    prisma.partClaim.findMany({
+      where: { workOrderId: id },
+      select: { id: true, sparePartId: true, partCode: true, partName: true, status: true, createdAt: true },
+    }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: "REOPENED" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
+  ]);
+  return { rows, since: reopened?.createdAt ?? null };
+}
+
 router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -6543,10 +6607,39 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * เจ้าของงานถามว่าทำไมบันทึกช้า ต.ค. 69) · ยังตรวจและตอบข้อผิดพลาดตามลำดับเดิมทุกข้อ
    * ไฟล์ของรอบนี้นับทุกประเภทในคำสั่งเดียว (ก่อน/หลังซ่อม · ป้ายรุ่น · ใบเหลือง)
    */
-  const [outsourceNow, foundWorkers, roundStart] = await Promise.all([
+  const [outsourceNow, foundWorkers, roundStart, claimHistory, reopened] = await Promise.all([
     freshOutsource(),
     workerIds.length > 0 ? prisma.user.count({ where: { id: { in: workerIds }, deletedAt: null } }) : Promise.resolve(0),
     roundStartedAt(id),
+    /**
+     * ใบเคลมที่เคยส่งของใบนี้ + เปิดใบใหม่ครั้งล่าสุด — ชิ้นที่ล็อกแล้ว (ผ่าน/ปิดเคลม) ต้องอยู่ในอะไหล่ที่ใช้ และไม่ส่งซ้ำ ·
+     * ข้อมูลเครื่องล็อกพร้อมชิ้นที่ผ่าน · ชิ้นที่ถูกตีกลับ ส่งใหม่ต้องแก้อะไรสักอย่าง (ตัดรอบข้างล่าง)
+     * อ่านเสมอ ไม่ใช่เฉพาะตอนส่งเคลม: ส่งใหม่โดยเอาชิ้นที่ผ่านแล้วออกจากรายการอะไหล่ก็ต้องถูกกัน
+     * แถวต่อใบมีไม่กี่แถว อ่านทั้งหมดพร้อมกับคำสั่งอื่นแล้วตัดในนี้ ไม่เพิ่มรอบไปกลับ
+     */
+    prisma.partClaim.findMany({
+      where: { workOrderId: id },
+      select: {
+        id: true,
+        sparePartId: true,
+        partCode: true,
+        partName: true,
+        status: true,
+        createdAt: true,
+        reviewedAt: true,
+        brokenPartCode: true,
+        symptom: true,
+        checkNote: true,
+        troubleshooting: true,
+        nameplate: true,
+        fieldCheck: true,
+      },
+    }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: "REOPENED" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
   ]);
   const roundFiles = await prisma.workOrderAttachment.groupBy({
     by: ["role"],
@@ -6636,6 +6729,19 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
 
   /**
+   * ชิ้นที่ล็อกแล้วในงานซ่อมครั้งนี้ (ก้อน 3) — ผ่านแล้ว / ปิดเคลม ไม่ส่งผู้ขาย
+   * งานซ่อมครั้งนี้ = หลังเปิดใบใหม่ครั้งล่าสุด ไม่ใช่หลังจ่ายงาน: ถูกตีกลับแล้ว "แจ้งปัญหาหน้างาน"/ย้อนขั้นแล้วจ่ายงานใหม่
+   * ยังเป็นการซ่อมครั้งเดิม ชิ้นที่ผ่านต้องยังล็อก ไม่งั้นชิ้นเดียวมีใบเคลมที่อนุมัติสองใบในงานซ่อมครั้งเดียว
+   * ไม่ส่งรายการอะไหล่มา (แอปเก่า) = ไม่ได้แตะอะไหล่ที่ใช้ ไม่ต้องตรวจ
+   */
+  const priorRows = claimHistory.filter((r) => !reopened || r.createdAt >= reopened.createdAt);
+  const locked = lockedParts(priorRows);
+  if (usedLines !== undefined) {
+    const dropped = lockedPartDropped(claimHistory, reopened?.createdAt ?? null, new Set(usedLines.map((p) => p.sparePartId)));
+    if (dropped) return res.status(400).json({ error: dropped });
+  }
+
+  /**
    * ต้องสรุปว่าทำอะไรไป (เจ้าของงานกำหนด ต.ค. 69)
    *
    * "ซ่อมเสร็จ" อย่างเดียวไม่บอกว่าเปลี่ยนอะไร — ครั้งหน้าเครื่องเดิมเสียอีก คนที่เปิดดู
@@ -6649,13 +6755,18 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * และ Troubleshooting สำหรับ Huebsch/Primus) — ขาดข้อไหนก็ถูกปฏิเสธ แล้วต้องตามช่างกลับไปถ่ายใหม่
    * ซึ่งตอนนั้นอะไหล่เก่าอาจทิ้งไปแล้ว จึงกันตั้งแต่ตอนปิดงาน · รูป Nameplate ใช้ป้ายรุ่นที่ตรวจไว้ข้างบน
    */
-  const claimInputs = body.claims ?? [];
+  /**
+   * ชิ้นที่ล็อกแล้วไม่ส่งซ้ำ — ตัดทิ้งเงียบ ๆ ไม่ตอบ error: แอปที่เปิดค้างไว้ก่อนอัปเดต (หรือฟอร์มที่ยังไม่รู้ว่าชิ้นนั้นผ่านแล้ว)
+   * ยังส่งชิ้นนั้นมาพร้อมชิ้นที่ต้องแก้ ถ้าปฏิเสธทั้งคำขอ ช่างส่งชิ้นที่ถูกตีกลับใหม่ไม่ได้เลยจนกว่าจะโหลดหน้าใหม่
+   */
+  const lockedIds = new Set(locked.map((r) => r.sparePartId).filter((x): x is number => x != null));
+  const claimInputs = (body.claims ?? []).filter((c) => !lockedIds.has(c.sparePartId));
   const claimRows: Prisma.PartClaimCreateManyInput[] = [];
   // คำอธิบาย "ค่าเดิมถูกแล้ว" ของชิ้นที่ถูกตีกลับ — ไปอยู่ในประวัติ CLAIM_SUBMITTED (note ให้คนอ่าน · meta ให้โปรแกรมอ่าน)
   const keepNotes: { sparePartId: number | null; flag: string; note: string; label: string }[] = [];
   if (claimInputs.length > 0) {
-    // สี่อย่างไม่ขึ้นต่อกัน — อ่านพร้อมกัน
-    const [ctx, spares, roundClaimFiles, claimHistory, reopened] = await Promise.all([
+    // สามอย่างไม่ขึ้นต่อกัน — อ่านพร้อมกัน (ใบเคลมที่เคยส่งอ่านมาแล้วตอนต้น)
+    const [ctx, spares, roundClaimFiles] = await Promise.all([
       prisma.workOrder.findUniqueOrThrow({
         where: { id },
         select: {
@@ -6677,38 +6788,12 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         },
         select: { id: true, role: true, sparePartId: true, createdAt: true },
       }),
-      // ใบเคลมที่เคยส่งของใบนี้ — ชิ้นที่ถูกตีกลับ ส่งใหม่ต้องแก้อะไรสักอย่าง (ตัดรอบข้างล่าง)
-      // แถวต่อใบมีไม่กี่แถว อ่านทั้งหมดในคำสั่งเดียวแล้วตัดในนี้ ไม่ต้องรอผลคำสั่งเปิดใบใหม่ก่อน
-      prisma.partClaim.findMany({
-        where: { workOrderId: id },
-        select: {
-          id: true,
-          sparePartId: true,
-          partCode: true,
-          partName: true,
-          status: true,
-          createdAt: true,
-          reviewedAt: true,
-          brokenPartCode: true,
-          symptom: true,
-          checkNote: true,
-          troubleshooting: true,
-          nameplate: true,
-          fieldCheck: true,
-        },
-      }),
-      prisma.workOrderLog.findFirst({
-        where: { workOrderId: id, action: "REOPENED" },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      }),
     ]);
     /**
      * สองหน้าต่างของแถวเคลมที่เคยส่ง (ดู lockSince ใน claimRules)
-     * งานซ่อมครั้งนี้ (หลังเปิดใบใหม่) — ชิ้นนั้นยังถูกตีกลับอยู่ไหม ฟอร์มปิดงานเปิดปุ่ม "ค่าเดิมถูกแล้ว" ตามนี้
+     * งานซ่อมครั้งนี้ (หลังเปิดใบใหม่ · priorRows ข้างบน) — ชิ้นนั้นยังถูกตีกลับอยู่ไหม ฟอร์มปิดงานเปิดปุ่ม "ค่าเดิมถูกแล้ว" ตามนี้
      * รอบหลักฐาน (หลังจ่ายงานครั้งล่าสุด · กติกาเดียวกับไฟล์ที่นับ) — ต้องแก้อะไรสักอย่างไหม · จ่ายงานใหม่แล้วถ่ายใหม่ทั้งชุดอยู่แล้ว
      */
-    const priorRows = claimHistory.filter((r) => !reopened || r.createdAt >= reopened.createdAt);
     const evidence = roundClaimFiles.filter((f) => (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(f.role ?? ""));
     const used = new Map((usedLines ?? []).map((p) => [p.sparePartId, p.quantity]));
     const make = machineMake(ctx.machine);
@@ -6718,38 +6803,69 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
      * ต้องเลือก Error — ช่างแค่ตอบ ระบบไม่ตัดสินว่ารับประกันหรือไม่
      */
     const guide = claimGuideFor(make);
-    const plateFields = (body.claimNameplate?.fields ?? []).filter((f) => f.value);
-    if (plateFields.length === 0) {
-      return res.status(400).json({ error: "เคลมอะไหล่ต้องสแกนหรือกรอกข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" });
-    }
-    if (plateFields.some((f) => f.source === "SCAN") && !body.claimNameplate?.verified) {
-      return res.status(400).json({ error: "ต้องติ๊กว่าตรวจค่าที่ระบบอ่านกับรูปป้ายรุ่นแล้ว" });
-    }
+    /**
+     * ข้อมูลเครื่องล็อกพร้อมชิ้นแรกที่ผ่าน (ก้อน 3 · ตัวอย่าง mLocked) — ใบเคลมที่อนุมัติออกไปพร้อมค่าป้ายรุ่น/Error ชุดหนึ่งแล้ว
+     * ชิ้นที่ส่งใหม่ต้องใช้ชุดเดียวกัน ไม่งั้นผู้ขายได้ใบเคลมสองใบของเครื่องเดียวกันที่รุ่น/Serial ไม่ตรงกัน
+     * จึงคัดลอกป้ายรุ่น (รวมรูปป้ายที่ผูกไว้) และ Error จากแถวที่ผ่านล่าสุด — ค่าที่แอปส่งมาไม่ใช้ และไม่ตรวจซ้ำ
+     * (หน้าจอแสดงเป็นอ่านอย่างเดียว "ล็อกไว้พร้อม … ที่ผ่านแล้ว") · ข้อเช็คตาม Error ยังเป็นของการปิดครั้งนี้ (เช็คต่อชิ้น)
+     */
+    const machineLock = machineLockRow(priorRows);
+    let nameplate: Prisma.PartClaimCreateManyInput["nameplate"];
     let fieldCheck: Prisma.InputJsonValue | undefined;
-    if (guide.errors.length) {
-      const chk = body.claimCheck;
-      const err = guide.errors.find((e) => e.code === chk?.errorCode);
-      if (!chk || !err) return res.status(400).json({ error: "เคลมเครื่องยี่ห้อนี้ต้องเลือก Error ที่เครื่องขึ้น (ตามคู่มือ)" });
-      fieldCheck = {
-        errorCode: err.code,
-        errorName: err.name,
-        checked: err.checks.filter((c) => chk.checked.includes(c)),
-        // ข้อเช็คที่หน้าจอให้ติ๊กตอนนั้น — ผู้ตรวจเห็นว่าข้อไหน "ไม่ได้ทำ" (offered − checked) จากรายการที่ช่างเห็นจริง
-        // ไม่ใช่รายการในคู่มือวันที่เปิดดู (แก้คู่มือทีหลังต้องไม่ทำให้ใบเก่าดูเหมือนช่างข้ามข้อที่ไม่เคยมี)
-        offered: err.checks,
+    let machinePlate: { key: string; value: string }[];
+    if (machineLock) {
+      nameplate = machineLock.nameplate === null ? Prisma.DbNull : (machineLock.nameplate as Prisma.InputJsonValue);
+      const lockedFields = (machineLock.nameplate as { fields?: { key?: unknown; value?: unknown }[] } | null)?.fields;
+      machinePlate = (Array.isArray(lockedFields) ? lockedFields : [])
+        .map((f) => ({ key: String(f.key ?? ""), value: String(f.value ?? "").trim() }))
+        .filter((f) => f.value);
+      const was = machineLock.fieldCheck as { errorCode?: unknown; errorName?: unknown; offered?: unknown } | null;
+      if (typeof was?.errorCode === "string" && was.errorCode) {
+        const err = guide.errors.find((e) => e.code === was.errorCode);
+        // คู่มือเปลี่ยนไปแล้ว (ไม่มีรหัสนี้) ใช้รายการข้อเช็คที่แถวที่ผ่านเคยให้ติ๊ก
+        const offered = err?.checks ?? (Array.isArray(was.offered) ? was.offered.map(String) : []);
+        const ticked = body.claimCheck?.checked ?? [];
+        fieldCheck = {
+          errorCode: was.errorCode,
+          errorName: typeof was.errorName === "string" ? was.errorName : err?.name ?? "",
+          checked: offered.filter((c) => ticked.includes(c)),
+          offered,
+        };
+      }
+    } else {
+      const plateFields = (body.claimNameplate?.fields ?? []).filter((f) => f.value);
+      if (plateFields.length === 0) {
+        return res.status(400).json({ error: "เคลมอะไหล่ต้องสแกนหรือกรอกข้อมูลป้ายรุ่นอย่างน้อยหนึ่งช่อง" });
+      }
+      if (plateFields.some((f) => f.source === "SCAN") && !body.claimNameplate?.verified) {
+        return res.status(400).json({ error: "ต้องติ๊กว่าตรวจค่าที่ระบบอ่านกับรูปป้ายรุ่นแล้ว" });
+      }
+      if (guide.errors.length) {
+        const chk = body.claimCheck;
+        const err = guide.errors.find((e) => e.code === chk?.errorCode);
+        if (!chk || !err) return res.status(400).json({ error: "เคลมเครื่องยี่ห้อนี้ต้องเลือก Error ที่เครื่องขึ้น (ตามคู่มือ)" });
+        fieldCheck = {
+          errorCode: err.code,
+          errorName: err.name,
+          checked: err.checks.filter((c) => chk.checked.includes(c)),
+          // ข้อเช็คที่หน้าจอให้ติ๊กตอนนั้น — ผู้ตรวจเห็นว่าข้อไหน "ไม่ได้ทำ" (offered − checked) จากรายการที่ช่างเห็นจริง
+          // ไม่ใช่รายการในคู่มือวันที่เปิดดู (แก้คู่มือทีหลังต้องไม่ทำให้ใบเก่าดูเหมือนช่างข้ามข้อที่ไม่เคยมี)
+          offered: err.checks,
+        };
+      }
+      // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
+      // ให้ Admin Spare Part เห็นรูปที่ระบบอ่านค่ามา ไม่ต้องไล่หาในกองไฟล์ของใบงาน · รูปล่าสุดของรอบ (มาพร้อมไฟล์เคลมข้างบน)
+      const platePhoto = roundClaimFiles
+        .filter((f) => f.role === "NAMEPLATE")
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id)[0];
+      nameplate = {
+        family: guide.plate.family,
+        photoId: platePhoto?.id ?? null,
+        verified: !!body.claimNameplate?.verified,
+        fields: plateFields.map((f) => ({ key: f.key, label: f.label, value: f.value, source: f.source, crop: f.crop ?? null })),
       };
+      machinePlate = plateFields.map((f) => ({ key: f.key, value: f.value }));
     }
-    // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
-    // ให้ Admin Spare Part เห็นรูปที่ระบบอ่านค่ามา ไม่ต้องไล่หาในกองไฟล์ของใบงาน · รูปล่าสุดของรอบ (มาพร้อมไฟล์เคลมข้างบน)
-    const platePhoto = roundClaimFiles
-      .filter((f) => f.role === "NAMEPLATE")
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id)[0];
-    const nameplate: Prisma.InputJsonValue = {
-      family: guide.plate.family,
-      photoId: platePhoto?.id ?? null,
-      verified: !!body.claimNameplate?.verified,
-      fields: plateFields.map((f) => ({ key: f.key, label: f.label, value: f.value, source: f.source, crop: f.crop ?? null })),
-    };
     for (const c of [...new Map(claimInputs.map((x) => [x.sparePartId, x])).values()]) {
       const sp = spares.find((x) => x.id === c.sparePartId);
       if (!sp || !used.has(c.sparePartId)) {
@@ -6815,7 +6931,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       }
     }
     const prior = latestPerPart(priorRows);
-    const machinePlate = plateFields.map((f) => ({ key: f.key, value: f.value }));
+    // เทียบกับค่าที่จะเก็บจริง (ข้อมูลเครื่องที่ล็อกไว้ ไม่ใช่ค่าที่แอปส่งมา) — ล็อกแล้วค่าเครื่องไม่นับเป็น "แก้แล้ว"
     const machineError = (fieldCheck as { errorCode?: string; checked?: string[] } | undefined) ?? null;
     for (const row of claimRows) {
       const before = prior.get(claimKey({ sparePartId: row.sparePartId ?? null, partCode: row.partCode }));
@@ -6933,16 +7049,41 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
- * ตรวจเคลมอะไหล่ (Admin Spare Part) — อนุมัติแล้วปิดงาน · ตีกลับแล้วใบงานกลับไปที่ช่าง
+ * ตรวจเคลมอะไหล่ (Admin Spare Part · Super Admin) — ตัดสินทีละชิ้น (ก้อน 3): ✓ ผ่าน · ✗ ตีกลับ · ปิดเคลม ไม่ส่งผู้ขาย
+ *
+ * ทำไมทีละชิ้น: ใบเดียวเปลี่ยนหลายชิ้น ชิ้นหนึ่งหลักฐานครบ อีกชิ้นขาดวิดีโอ — เดิมต้องตีกลับทั้งใบ ช่างส่งชิ้นที่ครบแล้วซ้ำ
+ * แล้วผู้ตรวจต้องตรวจซ้ำ · ชิ้นที่ผ่านล็อกไว้ (ไม่ส่งซ้ำ) · ชิ้นที่ส่งผู้ขายไม่ได้แน่ ๆ ปิดไปเลย ไม่วนกลับหาช่าง
+ * ใบปิด (DONE) เมื่อทุกชิ้นของรอบนี้ผ่านหรือปิดเคลม · มีชิ้นใดถูกตีกลับ = ใบกลับไปหาช่าง (ล้างแค่เวลาปิด —
+ * ผล สรุปงาน ผู้เข้าปฏิบัติงาน ไฟล์ และใบเคลมรอบนั้นอยู่ครบ ฟอร์มปิดใหม่ดึงค่าเดิมมาให้แก้เฉพาะจุด)
  *
  * ตีกลับต้องบอกเหตุผลเสมอ ช่างเห็นข้อความนี้บนใบงาน — ตีกลับเฉย ๆ ช่างไม่รู้ว่าต้องถ่ายอะไรใหม่
- * ตีกลับแล้วล้างแค่เวลาปิด (ใบงานยังไม่จบ) — ผล สรุปงาน ผู้เข้าปฏิบัติงาน ไฟล์ และใบเคลมรอบนั้นอยู่ครบ
- * หน้าจอแสดงเป็น "ผลการทำงานรอบที่ถูกตีกลับ" พร้อมเหตุผล และฟอร์มปิดใหม่ดึงค่าเดิมมาให้แก้เฉพาะจุด
+ * ปิดเคลมต้องมีเหตุผล — ไม่มีใบเคลมไปผู้ขาย ประวัติต้องบอกได้ว่าทำไม
+ *
+ * รูปแบบเดิม { approve, reason } ยังรับ (แอปที่เปิดค้างก่อนอัปเดต · เทสต์เดิม) = ตัดสินทุกชิ้นที่รอตรวจแบบเดียวกัน
  */
-const claimReviewSchema = z.object({
-  approve: z.boolean(),
+const claimDecisionSchema = z.object({
+  claimId: z.number().int(),
+  verdict: z.enum(["APPROVE", "REJECT", "DECLINE"]),
   reason: z.string().trim().max(1000).optional(),
+  flags: z.array(z.string().trim().max(40)).max(12).optional(),
 });
+// decisions ก่อน — คำขอที่ส่งมาทั้งสองแบบ (ไม่ควรเกิด) ใช้แบบทีละชิ้น ไม่ใช่ตัดสินทั้งใบเงียบ ๆ
+const claimReviewSchema = z.union([
+  z.object({ decisions: z.array(claimDecisionSchema).min(1).max(20), note: z.string().trim().max(1000).optional() }),
+  z.object({ approve: z.boolean(), reason: z.string().trim().max(1000).optional() }),
+]);
+
+/**
+ * ตัดสินซ้อนกัน (Admin Spare Part กับ Super Admin กดใบเดียวกันพร้อมกัน) — แถวที่จะตัดสินไม่ได้รอตรวจแล้ว
+ * โยนออกจาก transaction ให้ทุกอย่างที่เขียนไปถูกยกเลิก แล้วตอบ 409 ให้คนที่สองโหลดใหม่ ไม่ใช่เขียนทับผลของคนแรก
+ */
+class StaleReview extends Error {}
+
+/**
+ * ช่องที่ให้ช่างแก้ (ตีกลับแบบชี้ช่อง) — รายการช่องมาพร้อมคอลัมน์ที่เก็บ (ก้อน 4) ตอนนี้ยังไม่มีช่องไหนที่รู้จัก
+ * ส่งมาก่อนจึงตอบว่าไม่รู้จัก แทนการทิ้งเงียบ ๆ (ผู้ตรวจคิดว่าชี้ช่องให้ช่างแล้ว แต่ช่างไม่เห็นอะไรเลย)
+ */
+const KNOWN_REVIEW_FLAGS: ReadonlySet<string> = new Set<string>();
 
 router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -6952,47 +7093,158 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
   }
   const parsed = claimReviewSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "ข้อมูลไม่ถูกต้อง" });
-  const { approve, reason } = parsed.data;
+  const body = parsed.data;
 
-  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true } });
+  const [wo, rows, reopened] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true } }),
+    prisma.partClaim.findMany({
+      where: { workOrderId: id },
+      select: { id: true, sparePartId: true, partCode: true, partName: true, status: true, createdAt: true },
+    }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: "REOPENED" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
+  ]);
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (wo.status !== "CLAIM_REVIEW") {
     return res.status(409).json({
       error: `${wo.code} ไม่ได้รอตรวจเคลม — ตอนนี้อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}"`,
     });
   }
-  if (!approve && !reason) {
-    return res.status(400).json({ error: "ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร" });
+  const stale = () => res.status(409).json({ error: "มีคนตรวจใบนี้ไปแล้ว — โหลดใหม่" });
+  const now = new Date();
+
+  // ── แบบเดิม: ทุกชิ้นที่รอตรวจได้ผลเดียวกัน ──
+  if ("approve" in body) {
+    const { approve, reason } = body;
+    if (!approve && !reason) return res.status(400).json({ error: SEND_BACK_REASON_REQUIRED });
+    try {
+      await prisma.$transaction(async (tx) => {
+        const done = await tx.partClaim.updateMany({
+          where: { workOrderId: id, status: "PENDING" },
+          data: {
+            status: approve ? "APPROVED" : "REJECTED",
+            rejectReason: approve ? null : reason,
+            reviewedById: req.auth!.userId,
+            reviewedAt: now,
+          },
+        });
+        // ไม่เหลือชิ้นที่รอตรวจ = อีกคนตัดสินไปก่อนหน้านี้เสี้ยววินาที — ไม่เขียนสถานะใบทับผลของเขา
+        if (done.count === 0) throw new StaleReview();
+        if (approve) {
+          await tx.workOrder.update({ where: { id }, data: { status: "DONE", workStatus: workStatusForStage("DONE") } });
+          await writeLog(tx, id, req.auth!.userId, "CLAIM_APPROVED", "DONE", reason || null);
+        } else {
+          await tx.workOrder.update({
+            where: { id },
+            // ล้างเฉพาะเวลาปิด (ใบงานยังไม่จบ) — ผล สรุปงาน คนที่ไป คนที่ปิด เก็บไว้ (เจ้าของงานขอ ต.ค. 69)
+            // ช่างกลับมาแก้แค่ที่ถูกตีกลับ ไม่ต้องกรอกใหม่หมด และคนอื่นยังเห็นว่ารอบที่ถูกตีกลับส่งอะไรมา
+            data: { status: "IN_PROGRESS", closedAt: null, workStatus: workStatusForStage("IN_PROGRESS") },
+          });
+          await writeLog(tx, id, req.auth!.userId, "CLAIM_REJECTED", "IN_PROGRESS", reason!);
+        }
+      }, STAGE_TX);
+    } catch (e) {
+      if (e instanceof StaleReview) return stale();
+      throw e;
+    }
+    return res.json(await detailFor(id));
   }
 
-  const now = new Date();
-  await prisma.$transaction(async (tx) => {
-    await tx.partClaim.updateMany({
-      where: { workOrderId: id, status: "PENDING" },
-      data: {
-        status: approve ? "APPROVED" : "REJECTED",
-        rejectReason: approve ? null : reason,
-        reviewedById: req.auth!.userId,
-        reviewedAt: now,
-      },
-    });
-    if (approve) {
-      await tx.workOrder.update({ where: { id }, data: { status: "DONE", workStatus: workStatusForStage("DONE") } });
-      await writeLog(tx, id, req.auth!.userId, "CLAIM_APPROVED", "DONE", reason || null);
-    } else {
-      await tx.workOrder.update({
-        where: { id },
-        // ล้างเฉพาะเวลาปิด (ใบงานยังไม่จบ) — ผล สรุปงาน คนที่ไป คนที่ปิด เก็บไว้ (เจ้าของงานขอ ต.ค. 69)
-        // ช่างกลับมาแก้แค่ที่ถูกตีกลับ ไม่ต้องกรอกใหม่หมด และคนอื่นยังเห็นว่ารอบที่ถูกตีกลับส่งอะไรมา
-        data: {
-          status: "IN_PROGRESS",
-          closedAt: null,
-          workStatus: workStatusForStage("IN_PROGRESS"),
-        },
-      });
-      await writeLog(tx, id, req.auth!.userId, "CLAIM_REJECTED", "IN_PROGRESS", reason!);
+  // ── ทีละชิ้น ──
+  const { decisions, note } = body;
+  const pending = rows.filter((r) => r.status === "PENDING");
+  const pendingIds = new Set(pending.map((r) => r.id));
+  // ชิ้นที่ส่งมาไม่ได้รอตรวจแล้ว = หน้าจอของคนนี้เก่า (อีกคนตัดสินไปแล้ว หรือช่างส่งรอบใหม่) — ให้โหลดใหม่ ไม่ใช่เดาต่อ
+  if (decisions.some((d) => !pendingIds.has(d.claimId))) return stale();
+  const decided = new Set(decisions.map((d) => d.claimId));
+  // ทุกชิ้นที่รอตรวจต้องได้คำตัดสินครั้งเดียว — ปล่อยชิ้นหนึ่งค้างไว้ ใบจะปิดหรือกลับไปหาช่างโดยที่ชิ้นนั้นยังรออยู่
+  if (decided.size !== decisions.length || decided.size !== pending.length) {
+    return res.status(400).json({ error: "ตัดสินให้ครบทุกชิ้นก่อน" });
+  }
+  for (const d of decisions) {
+    if (d.verdict === "REJECT" && !d.reason && !d.flags?.length) {
+      return res.status(400).json({ error: SEND_BACK_REASON_REQUIRED });
     }
-  }, STAGE_TX);
+  }
+  for (const d of decisions) {
+    // "อื่น ๆ" เฉย ๆ ไม่ใช่เหตุผล — แอปส่ง "อื่น ๆ: {ที่พิมพ์}" มา (รายการเหตุผลใน CLAIM_DECLINE_REASONS)
+    const other = CLAIM_DECLINE_REASONS[CLAIM_DECLINE_REASONS.length - 1];
+    if (d.verdict === "DECLINE" && (!d.reason || d.reason.replace(/[\s:：]+$/, "") === other)) {
+      return res.status(400).json({ error: "ปิดเคลม ไม่ส่งผู้ขาย ต้องเลือกเหตุผล" });
+    }
+  }
+  for (const d of decisions) {
+    const unknown = (d.flags ?? []).find((f) => !KNOWN_REVIEW_FLAGS.has(f));
+    if (unknown !== undefined) return res.status(400).json({ error: `ไม่รู้จักช่องที่ให้แก้ “${unknown}”` });
+  }
+
+  /**
+   * ผลต่อใบงาน — มีชิ้นถูกตีกลับ: ใบกลับไปหาช่าง · ไม่มี: ใบปิด
+   * ประวัติแยก "อนุมัติ" (มีชิ้นที่ผ่านในงานซ่อมครั้งนี้ รวมชิ้นที่ผ่านไปตั้งแต่รอบก่อน = มีใบเคลมไปผู้ขาย) กับ
+   * "ปิดเคลม ไม่ส่งผู้ขาย" (ไม่มีชิ้นไหนผ่านเลย) — ใบที่ไม่มีใบเคลมไปผู้ขายต้องไม่อ่านว่า "อนุมัติ" ในประวัติ
+   */
+  const since = reopened?.createdAt ?? null;
+  const verdictOf = new Map(decisions.map((d) => [d.claimId, d]));
+  const anyReject = decisions.some((d) => d.verdict === "REJECT");
+  const approvedBefore = rows.some((r) => r.status === "APPROVED" && (!since || r.createdAt >= since));
+  const anyApproved = approvedBefore || decisions.some((d) => d.verdict === "APPROVE");
+  const action = anyReject ? "CLAIM_REJECTED" : anyApproved ? "CLAIM_APPROVED" : "CLAIM_DECLINED";
+  const label = (r: (typeof rows)[number]) => partLabel(r, rows);
+  const okWord = anyReject ? "ผ่าน" : "อนุมัติ";
+  // ประวัติบอกผลทีละชิ้น เช่น "ผ่าน บอร์ดควบคุม · ตีกลับ สายพานถังซัก: วิดีโอไม่เห็นรหัส" — เรียงตามที่ส่ง
+  const logNote =
+    [...pending]
+      .sort((a, b) => a.id - b.id)
+      .map((r) => {
+        const d = verdictOf.get(r.id)!;
+        if (d.verdict === "APPROVE") return `${okWord} ${label(r)}`;
+        if (d.verdict === "DECLINE") return `${label(r)} ปิดเคลม ไม่ส่งผู้ขาย (${d.reason})`;
+        return `ตีกลับ ${label(r)}${d.reason ? `: ${d.reason}` : ""}`;
+      })
+      .join(" · ") + (note ? ` — ${note}` : "");
+
+  // คำตัดสินเดียวกัน + เหตุผลเดียวกัน = คำสั่งเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ) — ยังตรวจจำนวนแถวที่เปลี่ยนทุกกลุ่ม
+  const groups = new Map<string, { verdict: string; reason: string | null; ids: number[] }>();
+  for (const d of decisions) {
+    const reason = d.verdict === "APPROVE" ? null : d.reason ?? null;
+    const key = `${d.verdict}\u0000${reason ?? ""}`;
+    const g = groups.get(key) ?? { verdict: d.verdict, reason, ids: [] };
+    g.ids.push(d.claimId);
+    groups.set(key, g);
+  }
+  const STATUS_OF: Record<string, string> = { APPROVE: "APPROVED", REJECT: "REJECTED", DECLINE: "DECLINED" };
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (const g of groups.values()) {
+        /**
+         * เปลี่ยนเฉพาะแถวที่ยังรอตรวจ แล้วนับว่าเปลี่ยนครบไหม — สองคนกดพร้อมกัน Postgres ล็อกแถวไว้ให้คนแรก
+         * คนที่สองรอจนคนแรกจบ แล้วเห็นว่าแถวไม่ได้รอตรวจแล้ว → นับไม่ครบ → ยกเลิกทั้งชุด (ไม่มีครึ่ง ๆ กลาง ๆ)
+         */
+        const done = await tx.partClaim.updateMany({
+          where: { id: { in: g.ids }, workOrderId: id, status: "PENDING" },
+          data: { status: STATUS_OF[g.verdict], rejectReason: g.reason, reviewedById: req.auth!.userId, reviewedAt: now },
+        });
+        if (done.count !== g.ids.length) throw new StaleReview();
+      }
+      if (anyReject) {
+        await tx.workOrder.update({
+          where: { id },
+          // ล้างเฉพาะเวลาปิด (ดูหัวข้อข้างบน) — ใบกลับไปให้ช่างแก้เฉพาะชิ้นที่ถูกตีกลับ
+          data: { status: "IN_PROGRESS", closedAt: null, workStatus: workStatusForStage("IN_PROGRESS") },
+        });
+        await writeLog(tx, id, req.auth!.userId, action, "IN_PROGRESS", logNote);
+      } else {
+        await tx.workOrder.update({ where: { id }, data: { status: "DONE", workStatus: workStatusForStage("DONE") } });
+        await writeLog(tx, id, req.auth!.userId, action, "DONE", logNote);
+      }
+    }, STAGE_TX);
+  } catch (e) {
+    if (e instanceof StaleReview) return stale();
+    throw e;
+  }
 
   res.json(await detailFor(id));
 });
@@ -7013,6 +7265,11 @@ async function claimPdf(req: AuthRequest, res: Response) {
   const claim = await prisma.partClaim.findFirst({ where: { id: claimId, workOrderId: id } });
   if (!claim) {
     res.status(404).json({ error: "ไม่พบใบเคลมนี้" });
+    return null;
+  }
+  // ชิ้นที่ปิดเคลม ไม่ส่งผู้ขาย ไม่มีใบเคลม — ถ้ายังพิมพ์ได้ (แม้มีคำว่าร่าง) วันหนึ่งจะหลุดไปถึงผู้ขายพร้อมชิ้นอื่น
+  if (claim.status === "DECLINED") {
+    res.status(409).json({ error: "ชิ้นนี้ปิดเคลม ไม่ส่งผู้ขาย — ไม่มีใบเคลม" });
     return null;
   }
   /**
@@ -7140,6 +7397,12 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
   // ช่างปิดแล้ว รอตรวจเคลมอยู่ — ปิดย้อนหลังตรงนี้คือข้ามการตรวจเคลมไปเงียบ ๆ
   if (wo.status === "CLAIM_REVIEW") {
     return res.status(400).json({ error: `${wo.code} รอ Admin Spare Part ตรวจเคลม — ใช้ปุ่มอนุมัติหรือตีกลับในใบงาน` });
+  }
+  // ใบที่ถูกตีกลับแล้วมีชิ้นที่ผ่าน/ปิดเคลมไปแล้ว — ปิดย้อนหลังเขียนทับอะไหล่ที่ใช้ทั้งชุด ต้องไม่ทำให้ชิ้นนั้นหายจากรายการ
+  {
+    const lock = await claimLockRows(id);
+    const dropped = lockedPartDropped(lock.rows, lock.since, new Set((b.parts ?? []).map((p) => p.sparePartId)));
+    if (dropped) return res.status(400).json({ error: dropped });
   }
 
   const known = await prisma.branch.findFirst({ where: { zone: b.team, cancelledAt: null }, select: { id: true } });
@@ -7349,6 +7612,12 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
    */
   if (parsed.data.reason === "TECH_FIXED") {
     const d = parsed.data;
+    // ส่งรายการอะไหล่มา = เขียนทับอะไหล่ที่ใช้ทั้งชุด — ชิ้นที่ผ่าน/ปิดเคลมไปแล้ว (ใบที่ถูกตีกลับ) ต้องยังอยู่ (ดู lockedPartDropped)
+    if (d.parts) {
+      const lock = await claimLockRows(id);
+      const dropped = lockedPartDropped(lock.rows, lock.since, new Set(d.parts.map((p) => p.sparePartId)));
+      if (dropped) return res.status(400).json({ error: dropped });
+    }
     const outsourceNow = await freshOutsource();
     const subTeam = d.subTeam?.trim() || null;
     if (subTeam && !outsourceNow.has(subTeam)) {

@@ -326,8 +326,8 @@ export interface ClaimTrailLog extends ClaimLogLite {
 
 /**
  * เหตุการณ์ของแถบสถานะเคลม (ส่งเคลม → ตีกลับ → ส่งใหม่ → อนุมัติ) ตามแบบที่เจ้าของงานอนุมัติ (strip)
- * k: send ส่งครั้งแรก · resend ส่งใหม่ · reject ตีกลับ · approve อนุมัติ · close ปิดงาน (ก้อนถัดไป: ปิดเคลมไม่ส่งผู้ขาย / ไม่ส่งเคลม)
- * who = ช่างที่กดส่ง / Admin Spare Part ที่ตัดสิน · what = ชิ้นที่ถูกตีกลับ (ชื่ออะไหล่คั่นด้วย ", ")
+ * k: send ส่งครั้งแรก · resend ส่งใหม่ · reject ตีกลับ · approve อนุมัติ · close ปิดงานโดยไม่มีชิ้นที่ส่งผู้ขาย
+ * who = ช่างที่กดส่ง / Admin Spare Part ที่ตัดสิน · what = ชิ้นที่ถูกตีกลับ (ชื่ออะไหล่คั่นด้วย ", ") หรือเหตุที่ปิด
  */
 export interface ClaimTrailEvent {
   k: "send" | "resend" | "reject" | "approve" | "close";
@@ -339,8 +339,13 @@ export interface ClaimTrailEvent {
 /**
  * แถบสถานะเคลมของงานซ่อมครั้งนี้ — คิดที่เซิร์ฟเวอร์ที่เดียว การ์ดงานของช่าง หน้าตรวจ และการ์ดเคลมอ่านชุดเดียวกัน
  *
- * ส่ง/ส่งใหม่อ่านจากประวัติ CLAIM_SUBMITTED (คนกดคือช่างที่ส่งจริง) · ตีกลับ/อนุมัติอ่านจากแถวเคลม จับกลุ่มตามเวลาตัดสิน
+ * ส่ง/ส่งใหม่อ่านจากประวัติ CLAIM_SUBMITTED (คนกดคือช่างที่ส่งจริง) · การตัดสินอ่านจากแถวเคลม จับกลุ่มตามเวลาตัดสิน
  * (การตัดสินครั้งเดียวเขียนเวลาเดียวกันทุกแถว) จึงรู้ได้ตรง ๆ ว่าครั้งนั้นตีกลับชิ้นไหน ไม่ต้องเดาจากข้อความประวัติ
+ *
+ * ตั้งแต่ตัดสินทีละชิ้น (ก้อน 3) การตัดสินครั้งเดียวมีหลายผลปนกัน — นับเป็นเหตุการณ์เดียวตามผลต่อใบงาน:
+ * มีชิ้นถูกตีกลับ = "ตีกลับ" (ใบกลับไปหาช่าง ชิ้นที่ผ่านพร้อมกันยังไม่ทำให้ใบอนุมัติ) · ไม่มี = ใบปิด —
+ * "อนุมัติ" ถ้ามีชิ้นที่ผ่านแล้ว (รวมชิ้นที่ผ่านไปตั้งแต่รอบก่อน = มีใบเคลมไปผู้ขาย) ไม่งั้น "ปิดงาน (ปิดเคลม ไม่ส่งผู้ขาย)"
+ * เดิมจับกลุ่มแยกตามสถานะ ใบที่ "ชิ้น ก. ผ่าน ชิ้น ข. ตีกลับ" จะขึ้นทั้งตีกลับและอนุมัติเวลาเดียวกัน ทั้งที่ใบยังไม่จบ
  * rows/logs ที่ส่งมาต้องตัดเหลือเฉพาะงานซ่อมครั้งนี้แล้ว (lockSince)
  */
 export function claimTrail(
@@ -352,23 +357,47 @@ export function claimTrail(
   const events: ClaimTrailEvent[] = [];
   const sends = logs.filter((l) => l.action === "CLAIM_SUBMITTED").sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   sends.forEach((l, i) => events.push({ k: i === 0 ? "send" : "resend", at: l.createdAt, who: l.userName }));
-  for (const status of ["REJECTED", "APPROVED"] as const) {
-    const byTime = new Map<number, ClaimVerdictRow[]>();
-    for (const r of rows) {
-      if (r.status !== status || !r.reviewedAt) continue;
-      const t = r.reviewedAt.getTime();
-      byTime.set(t, [...(byTime.get(t) ?? []), r]);
-    }
-    for (const group of byTime.values()) {
-      const at = group[0].reviewedAt!;
-      const who = nameOf(group[0].reviewedById);
-      if (status === "REJECTED") events.push({ k: "reject", at, who, what: group.map(labelOf).join(", ") });
-      else events.push({ k: "approve", at, who });
+  const byTime = new Map<number, ClaimVerdictRow[]>();
+  for (const r of rows) {
+    if (!r.reviewedAt || !["REJECTED", "APPROVED", "DECLINED"].includes(r.status)) continue;
+    const t = r.reviewedAt.getTime();
+    byTime.set(t, [...(byTime.get(t) ?? []), r]);
+  }
+  for (const [t, group] of byTime) {
+    const at = group[0].reviewedAt!;
+    const who = nameOf(group[0].reviewedById);
+    const rejected = group.filter((r) => r.status === "REJECTED").sort((a, b) => a.id - b.id);
+    if (rejected.length) {
+      events.push({ k: "reject", at, who, what: rejected.map(labelOf).join(", ") });
+    } else if (rows.some((r) => r.status === "APPROVED" && r.reviewedAt && r.reviewedAt.getTime() <= t)) {
+      events.push({ k: "approve", at, who });
+    } else {
+      events.push({ k: "close", at, who, what: "ปิดเคลม ไม่ส่งผู้ขาย" });
     }
   }
   // เวลาเท่ากัน (ไม่ควรเกิด) เรียงตามลำดับขั้น: ส่ง → ตัดสิน
   const order = { send: 0, resend: 0, reject: 1, approve: 2, close: 3 } as const;
   return events.sort((a, b) => a.at.getTime() - b.at.getTime() || order[a.k] - order[b.k]);
+}
+
+/**
+ * ชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุด (เวลาตัดสินเดียวกัน) — ไม่ใช่ทุกชิ้นที่แถวล่าสุดยังเป็น "ตีกลับ"
+ * ชิ้นที่ช่างเลิกส่งเคลมไปแล้ว (ปิดสวิตช์ตอนส่งใหม่) แถวล่าสุดค้างเป็นตีกลับของรอบเก่าตลอด — ถ้านับด้วย
+ * การ์ด/แถบแดงจะบอก "ต้องแก้ 2 ชิ้น" พร้อมเหตุผลเก่า ขณะที่ฟอร์มปิดงานบอกชิ้นเดียว
+ * latest = แถวล่าสุดของแต่ละชิ้น (latestPerPart) ในงานซ่อมครั้งนี้
+ */
+export function lastRejected<R extends ClaimVerdictRow>(latest: R[]): R[] {
+  const rejected = latest.filter((r) => r.status === "REJECTED");
+  if (!rejected.length) return [];
+  const last = Math.max(...rejected.map((r) => r.reviewedAt?.getTime() ?? 0));
+  return rejected.filter((r) => (r.reviewedAt?.getTime() ?? 0) === last);
+}
+
+/** เรียงชิ้นตามที่ส่งครั้งแรก (id แรกของชิ้นนั้น) — ลำดับชิ้นบนจอไม่สลับเมื่อชิ้นหนึ่งถูกตีกลับแล้วส่งใหม่ */
+function byFirstSent<R extends ClaimRowLite>(latest: R[], rows: ClaimRowLite[]): R[] {
+  const first = new Map<string, number>();
+  for (const r of rows) first.set(claimKey(r), Math.min(first.get(claimKey(r)) ?? r.id, r.id));
+  return [...latest].sort((a, b) => (first.get(claimKey(a)) ?? a.id) - (first.get(claimKey(b)) ?? b.id));
 }
 
 /**
@@ -387,8 +416,10 @@ export function claimSummary(
   labelOf: (r: ClaimVerdictRow) => string,
   nameOf: (userId: number | null) => string | null
 ) {
-  const latest = [...latestPerPart(rows).values()];
+  const latest = byFirstSent([...latestPerPart(rows).values()], rows);
   const has = (s: string) => latest.some((r) => r.status === s);
+  // ใบที่ปิดแล้ว ชิ้นที่ยังค้างเป็นตีกลับคือชิ้นที่ช่างเลิกส่งเคลมไป — ไม่ใช่ผลของใบ (ปิดเคลมชิ้นเดียวที่เหลือ = ปิดเคลมทั้งใบ)
+  const live = latest.filter((r) => r.status !== "REJECTED");
   const state: "REVIEW" | "REJECTED" | "APPROVED" | "DECLINED" | null = !latest.length
     ? null
     : status === "CLAIM_REVIEW"
@@ -397,18 +428,13 @@ export function claimSummary(
         ? "REJECTED"
         : status === "DONE" && has("APPROVED")
           ? "APPROVED"
-          : status === "DONE" && latest.every((r) => r.status === "DECLINED")
+          : status === "DONE" && live.length > 0 && live.every((r) => r.status === "DECLINED")
             ? "DECLINED"
             : null;
   const rowStatus = { REVIEW: "PENDING", REJECTED: "REJECTED", APPROVED: "APPROVED", DECLINED: "DECLINED" } as const;
   const inState = state ? latest.filter((r) => r.status === rowStatus[state]) : [];
-  /**
-   * ตีกลับ = เฉพาะชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุด (เวลาตัดสินเดียวกัน) ไม่ใช่ทุกชิ้นที่แถวล่าสุดยังเป็น "ตีกลับ"
-   * ชิ้นที่ช่างเลิกส่งเคลมไปแล้ว (ปิดสวิตช์ตอนส่งใหม่) แถวล่าสุดค้างเป็นตีกลับของรอบเก่าตลอด — ถ้านับด้วย
-   * การ์ดจะบอก "ต้องแก้ 2 ชิ้น" พร้อมเหตุผลเก่า ขณะที่ฟอร์มปิดงาน/แถบสถานะบอกชิ้นเดียว (กติกาเดียวกับ rejectedRows ฝั่งแอป)
-   */
-  const lastReject = state === "REJECTED" ? Math.max(...inState.map((r) => r.reviewedAt?.getTime() ?? 0)) : 0;
-  const set = state === "REJECTED" ? inState.filter((r) => (r.reviewedAt?.getTime() ?? 0) === lastReject) : inState;
+  // ตีกลับ = เฉพาะชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุด (ดู lastRejected · กติกาเดียวกับ rejectedRows ฝั่งแอป)
+  const set = state === "REJECTED" ? lastRejected(latest) : inState;
   const sent = new Map<string, number>();
   for (const r of rows) sent.set(claimKey(r), (sent.get(claimKey(r)) ?? 0) + 1);
   const max = (ds: (Date | null)[]) =>
@@ -428,5 +454,106 @@ export function claimSummary(
         ? set.map((r) => ({ partLabel: labelOf(r), reason: r.rejectReason ?? "" }))
         : [],
     trail: claimTrail(rows, logs, labelOf, nameOf),
+    /**
+     * ชิ้นที่จบแล้วในงานซ่อมครั้งนี้ (ผ่าน · ปิดเคลม ไม่ส่งผู้ขาย) — การ์ดที่ปิดแล้วเขียน "อนุมัติ n ชิ้น: …" และ
+     * "ปิดเคลม ไม่ส่งผู้ขาย: {ชิ้น} ({เหตุผล})" · การ์ดที่ยังไม่จบเห็นชิ้นที่ล็อกไว้แล้ว ไม่ต้องเดาจากจำนวน
+     */
+    outcome: latest
+      .filter((r) => r.status === "APPROVED" || r.status === "DECLINED")
+      .map((r) => ({
+        partLabel: labelOf(r),
+        status: r.status as "APPROVED" | "DECLINED",
+        ...(r.status === "DECLINED" ? { reason: r.rejectReason ?? "" } : {}),
+      })),
+  };
+}
+
+// ── ก้อน 3: ตัดสินทีละชิ้น ─────────────────────────────
+
+/**
+ * ชิ้นที่ล็อกแล้วในงานซ่อมครั้งนี้ = แถวล่าสุดของชิ้นนั้น "ผ่าน" หรือ "ปิดเคลม ไม่ส่งผู้ขาย"
+ *
+ * ชิ้นที่ผ่านแล้วต้องไม่ถูกส่งซ้ำ (ใบเคลมที่อนุมัติอาจออกไปถึงผู้ขายแล้ว — ส่งซ้ำคือเคลมชิ้นเดียวสองครั้ง)
+ * ชิ้นที่ปิดเคลมแล้วคือ Admin Spare Part ตัดสินว่าส่งผู้ขายไม่ได้ — ไม่วนกลับมาหาช่างอีก
+ * rows ต้องตัดเหลือเฉพาะงานซ่อมครั้งนี้แล้ว (lockSince) — จ่ายงานใหม่หลัง "แจ้งปัญหาหน้างาน"/ย้อนขั้นยังเป็นการซ่อมครั้งเดิม
+ * ชิ้นจึงยังล็อกอยู่ · เปิดใบใหม่ (REOPENED) คือซ่อมครั้งใหม่ ชิ้นเดิมเคลมได้อีก
+ */
+export function lockedParts<R extends ClaimRowLite>(rows: R[]): R[] {
+  return [...latestPerPart(rows).values()].filter((r) => r.status === "APPROVED" || r.status === "DECLINED");
+}
+
+/**
+ * แถวที่ผ่านล่าสุดในงานซ่อมครั้งนี้ — ข้อมูลเครื่อง (ป้ายรุ่น · Error) ล็อกไปพร้อมชิ้นแรกที่ผ่าน (ตัวอย่าง mLocked)
+ * ใบเคลมที่อนุมัติออกไปพร้อมค่าป้าย/Error ชุดนี้แล้ว ถ้าชิ้นที่ส่งใหม่ใช้ค่าอีกชุด ผู้ขายจะได้ใบเคลมสองใบของเครื่องเดียวกัน
+ * ที่ข้อมูลเครื่องไม่ตรงกัน · ไม่มี = ยังไม่ล็อก
+ */
+export function machineLockRow<R extends ClaimRowLite>(rows: R[]): R | null {
+  let best: R | null = null;
+  for (const r of rows) if (r.status === "APPROVED" && (!best || newer(r, best))) best = r;
+  return best;
+}
+
+/**
+ * สถานะเคลมของใบสำหรับป้ายในรายการใบงาน (และตัวกรอง "ใบงานเคลม")
+ *
+ * ทำไมไม่อ่านแถวบนสุด: ตั้งแต่ตัดสินทีละชิ้น แถวของการส่งครั้งเดียวกันได้ผลต่างกัน และเวลาเท่ากัน —
+ * ใบที่ "ชิ้น ก. ผ่าน ชิ้น ข. ตีกลับ" ป้ายจะสลับเขียว/แดงตามลำดับที่ฐานข้อมูลคืนมา
+ * กติกา: รอตรวจ → PENDING · ใบยังไม่จบและมีชิ้นค้างตีกลับ → REJECTED (รอช่างแก้ เรื่องที่ต้องเห็นก่อน)
+ * · มีชิ้นผ่าน → APPROVED · ปิดเคลมทุกชิ้น → DECLINED · มีตีกลับ → REJECTED · อื่น ๆ = สถานะแถวล่าสุด
+ * ใบที่ปิดแล้ว ชิ้นที่ค้างตีกลับคือชิ้นที่ช่างเลิกส่ง (ไม่ใช่ผลของใบ) จึงไม่ทำให้ใบที่ปิดเคลมชิ้นที่เหลือกลายเป็นป้ายแดง
+ * "ยังไม่จบ" = ทุกขั้นที่ไม่ใช่ปิด/ยกเลิก — ถูกตีกลับแล้ว "แจ้งปัญหาหน้างาน" ใบกลับไปขั้นอะไหล่ เคลมก็ยังรอช่างแก้อยู่
+ * rows ต้องตัดเหลือเฉพาะงานซ่อมครั้งนี้แล้ว (lockSince) · ว่าง = ใบนี้ไม่ได้แจ้งเคลม (null)
+ */
+export function aggregateClaimStatus(orderStatus: string, rows: ClaimRowLite[]): string | null {
+  if (!rows.length) return null;
+  if (orderStatus === "CLAIM_REVIEW") return "PENDING";
+  const latest = [...latestPerPart(rows).values()];
+  const open = orderStatus !== "DONE" && orderStatus !== "CANCELLED";
+  const live = open ? latest : latest.filter((r) => r.status !== "REJECTED");
+  if (open && latest.some((r) => r.status === "REJECTED")) return "REJECTED";
+  if (live.some((r) => r.status === "APPROVED")) return "APPROVED";
+  if (live.length && live.every((r) => r.status === "DECLINED")) return "DECLINED";
+  if (latest.some((r) => r.status === "REJECTED")) return "REJECTED";
+  return rows.reduce((a, b) => (newer(b, a) ? b : a)).status;
+}
+
+/**
+ * สถานะเคลมของงานซ่อมครั้งนี้ทีละชิ้น (detail.claimRound) — สิ่งเดียวที่หน้าจออ่านเพื่อตอบว่า "ใบนี้อยู่ในรอบที่ถูกตีกลับไหม ·
+ * ชิ้นไหนล็อกแล้ว · ข้อมูลเครื่องล็อกหรือยัง" แทนการอ่าน claims[0] สี่ที่ (แถวบนสุดบอกได้แค่ชิ้นเดียว — ใบที่ ก. ผ่าน ข. ตีกลับ
+ * เรียง ก. ขึ้นก่อนได้ แล้วแถบแดง การ์ดผลงานรอบที่ถูกตีกลับ และค่าที่ฟอร์มปิดงานเติมให้ หายไปพร้อมกัน)
+ *
+ * parts = แถวล่าสุดของแต่ละชิ้น เรียงตามที่ส่งครั้งแรก · round = ส่งรอบที่เท่าไหร่ของชิ้นนั้น
+ * rejected = ใบยังไม่จบ (ไม่ใช่รอตรวจ/ปิด/ยกเลิก) และมีชิ้นค้างตีกลับ · rejectedIds = ชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุด
+ * (แถบแดงแสดงชุดนี้ — ชิ้นที่ช่างเลิกส่งไปแล้วค้างตีกลับของรอบเก่า ไม่ใช่เรื่องที่ต้องแก้ตอนนี้)
+ * lockedMachine = ข้อมูลเครื่องล็อกพร้อมชิ้นที่ผ่านแล้ว (ชื่อชิ้น) · ยังไม่มีชิ้นผ่าน = null
+ * logs = ประวัติของใบ (อย่างน้อย REOPENED) ใช้หาจุดเริ่มงานซ่อมครั้งนี้
+ */
+export function claimRoundPayload(
+  orderStatus: string,
+  rows: ClaimVerdictRow[],
+  logs: ClaimLogLite[],
+  labelOf: (r: ClaimVerdictRow) => string
+) {
+  const since = lockSince(logs);
+  const inRepair = rows.filter((r) => !since || r.createdAt >= since);
+  const latest = byFirstSent([...latestPerPart(inRepair).values()], inRepair);
+  const open = !["CLAIM_REVIEW", "DONE", "CANCELLED"].includes(orderStatus);
+  const approved = latest.filter((r) => r.status === "APPROVED");
+  return {
+    since,
+    parts: latest.map((r) => ({
+      sparePartId: r.sparePartId,
+      claimId: r.id,
+      status: r.status,
+      round: claimRoundOf(r, inRepair, since),
+      partCode: r.partCode,
+      partLabel: labelOf(r),
+      // เหตุผลตีกลับ/ปิดเคลม ของแถวนี้ — ชิ้นที่ล็อกขึ้น "ปิดเคลม ไม่ส่งผู้ขาย (รอบ r) — {เหตุผล}" ได้โดยไม่ต้องหาแถวเอง
+      reason: r.rejectReason,
+      reviewedAt: r.reviewedAt,
+    })),
+    rejected: open && latest.some((r) => r.status === "REJECTED"),
+    rejectedIds: open ? lastRejected(latest).map((r) => r.id) : [],
+    lockedMachine: approved.length ? { byParts: approved.map(labelOf) } : null,
   };
 }

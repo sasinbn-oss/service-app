@@ -7,9 +7,12 @@
  * แท็บทีละชิ้นด้วยชื่ออะไหล่ · หลักฐานของแถวนั้นตามที่เซิร์ฟเวอร์ตัดสิน (evidenceIds) พร้อมป้าย "ใหม่รอบนี้" ·
  * "แก้จากรอบก่อน" บอกสิ่งที่เปลี่ยน · รอบเก่าพับไว้ล่างสุด · รายละเอียดใบงานที่เหลือพับไว้ (กดดูได้)
  * แถบตัดสิน (DecisionBar) อยู่นอกส่วนที่เลื่อน คนเรียกวางไว้ต่อท้าย ScrollView ของใบงาน
+ *
+ * ตัดสินทีละชิ้น (เคลมก้อน 3): แท็บบอกผลที่เลือกของแต่ละชิ้น · ชิ้นที่ผ่าน/ปิดเคลมไปแล้วในรอบก่อนยังมีแท็บ (ล็อกไว้ ดูได้)
+ * กล่องเลือกเหตุผล "ปิดเคลม ไม่ส่งผู้ขาย" อยู่ใต้แท็บ (ไม่ใช่หน้าต่างซ้อน — Modal ซ้อนบนเว็บไม่น่าเชื่อถือ)
  */
-import React, { useEffect, useMemo, useState } from "react";
-import { Image, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Image, Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "../Tap";
 import Spinner from "../Spinner";
@@ -29,6 +32,7 @@ import type { Attachment } from "../WorkOrderAttachments";
 import {
   CLAIM_STATUS_TEXT,
   bkkDay,
+  claimRoundOf,
   brokenMatches,
   checkGroupsOf,
   claimTrailOf,
@@ -52,9 +56,11 @@ import {
   unmatchedKeepNotes,
   type ClaimLog,
   type ClaimRepeat,
+  type ClaimRound,
   type DiffLine,
   type PartClaim,
 } from "../../utils/claimEvidence";
+import { DECLINE_OTHER, DECLINE_REASONS, type ClaimVerdicts, type ReviewPart } from "./useClaimVerdicts";
 import { colors, radius, spacing, headingFont } from "../../theme";
 
 /** ฟิลด์ของใบงานเท่าที่หน้าตรวจใช้ — WorkOrder ของหน้ารายละเอียดเข้ากับรูปนี้ */
@@ -75,6 +81,8 @@ export interface ClaimReviewOrder {
   branchIsCompany: boolean;
   logs: ClaimLog[];
   claims: PartClaim[];
+  /** สถานะทีละชิ้นของงานซ่อมครั้งนี้ (เคลมก้อน 3) — ข้อมูลเครื่องล็อกไว้เมื่อมีชิ้นผ่านแล้ว */
+  claimRound?: ClaimRound | null;
   claimTroubleshooting: string[];
   claimGuide?: ClaimGuide;
   /** ใบเคลมเก่าของเครื่องเดียวกัน — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน · ไม่มีค่า = ไม่ต้องขึ้นบรรทัดเคลมซ้ำ */
@@ -86,6 +94,8 @@ const brandOf = (b: string | null) => (b ?? "").replace(/^\s*hb\s*-\s*/i, "").tr
 
 export default function ClaimReview({
   order,
+  v,
+  readOnly,
   files,
   filesState,
   onRetryFiles,
@@ -94,6 +104,10 @@ export default function ClaimReview({
   onOpenOrder,
 }: {
   order: ClaimReviewOrder;
+  /** คำตัดสินทีละชิ้น — หน้าใบงานถือไว้ แถบล่างจอใช้ชุดเดียวกัน */
+  v: ClaimVerdicts;
+  /** ดูในฐานะผู้ใช้อื่น — ไม่มีกล่องเลือกเหตุผล */
+  readOnly: boolean;
   files: Attachment[];
   /** รายการไฟล์ของใบ: กำลังโหลด · โหลดแล้ว · โหลดไม่สำเร็จ — หลักฐานที่หาไม่เจอจะขึ้นต่างกันตามนี้ */
   filesState: "loading" | "ready" | "failed";
@@ -109,18 +123,24 @@ export default function ClaimReview({
   const wide = width >= 860;
   const scope = useMemo(() => rowsSince(order.claims, order.logs), [order.claims, order.logs]);
   const pending = useMemo(() => scope.filter((c) => c.status === "PENDING").sort((a, b) => a.id - b.id), [scope]);
-  const [activeId, setActiveId] = useState<number | null>(pending[0]?.id ?? null);
   const [viewing, setViewing] = useState<{ items: Attachment[]; at: number } | null>(null);
   const [oldOpen, setOldOpen] = useState(false);
   const [opening, setOpening] = useState<number | null>(null);
-
-  // ใบโหลดใหม่ (ตีกลับ/ส่งใหม่) แถวเดิมหายไป — กลับไปชิ้นแรกของรอบที่รออยู่
+  // ชิ้นที่เปิดอยู่มาจากคำตัดสิน (แถบล่างจอเปลี่ยนชิ้นได้ด้วย เช่น กดส่งตอนยังไม่ครบ = พาไปชิ้นที่ขาด)
+  const active: ReviewPart | null = v.active;
+  const showDrop = !!active && !active.locked && !readOnly && v.effOf(active) === "DECLINE";
+  const dropRef = useRef<View>(null);
+  // กด "ปิดเคลม ไม่ส่งผู้ขาย" ที่แถบล่างจอ กล่องเลือกเหตุผลขึ้นใต้แท็บซึ่งอาจอยู่นอกจอ — เลื่อนมาให้เห็น (เว็บ)
   useEffect(() => {
-    if (!pending.some((c) => c.id === activeId)) setActiveId(pending[0]?.id ?? null);
-  }, [pending, activeId]);
+    if (!showDrop || Platform.OS !== "web") return;
+    const el = dropRef.current as unknown as { scrollIntoView?: (o: object) => void } | null;
+    el?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [showDrop, active?.key]);
 
-  const cur = pending.find((c) => c.id === activeId) ?? pending[0] ?? null;
-  if (!cur) return null;
+  const cur = active?.row ?? pending[0] ?? null;
+  if (!cur || !active || !pending.length) return null;
+  const locked = active.locked;
+  const lockedMachine = claimRoundOf(order).lockedMachine;
 
   const family = cur.nameplate?.family ?? order.claimGuide?.plate.family ?? null;
   const waitingSince = pending.reduce((m, c) => (Date.parse(c.createdAt) > Date.parse(m) ? c.createdAt : m), pending[0].createdAt);
@@ -287,6 +307,16 @@ export default function ClaimReview({
               แก้จากรอบก่อน: {n.text}
             </Text>
           ))}
+          {/*
+            มีชิ้นผ่านแล้ว = ใบเคลมของชิ้นนั้นออกไปพร้อมค่าชุดนี้ ข้อมูลเครื่องจึงล็อกไปด้วย (ตัวอย่าง mLocked)
+            ถ้ายังตีกลับข้อมูลเครื่องได้ ใบที่อนุมัติไปแล้วจะมีค่าที่ผู้ตรวจเองบอกว่าผิด
+          */}
+          {lockedMachine?.byParts.length ? (
+            <View style={styles.lockRow}>
+              <Ionicons name="lock-closed-outline" size={15} color={colors.successInk} />
+              <Text style={styles.lockText}>ล็อกไว้พร้อม {lockedMachine.byParts.join(" · ")} ที่ผ่านแล้ว</Text>
+            </View>
+          ) : null}
         </View>
         <View style={[styles.media, wide && { width: 300 }]}>
           {errVideo ? (
@@ -317,35 +347,85 @@ export default function ClaimReview({
   );
 
   const name = partNameOf(cur);
+  // ชิ้นที่ปิดเคลมไปแล้วไม่มีใบเคลม (เซิร์ฟเวอร์ตอบ 409) — ไม่มีปุ่มให้กดแล้วล้ม · ชิ้นที่ผ่านแล้วเป็นใบจริง ไม่ใช่ร่าง
+  const pdfLabel = locked === "APPROVED" ? `ใบเคลม PDF · ${name}` : `ใบเคลม PDF (ร่าง) · ${name}`;
   const tabs = (
     <View style={styles.tabs} accessibilityLabel="ชิ้นที่เคลม">
-      {pending.map((c) => {
-        const on = c.id === cur.id;
+      {v.parts.map((p) => {
+        const on = p.key === active.key;
+        const e = v.effOf(p);
+        const fg = e === "APPROVE" ? colors.successInk : e === "REJECT" ? colors.dangerInk : e === "DECLINE" ? colors.body : colors.navy;
         return (
           <TouchableOpacity
-            key={c.id}
-            onPress={() => setActiveId(c.id)}
+            key={p.key}
+            onPress={() => v.setActive(p.key)}
             style={[styles.tab, on && styles.tabOn]}
             accessibilityState={{ selected: on }}
           >
-            <Text style={styles.tabText}>
-              {partNameOf(c)} · ● รอตัดสิน
+            <Text style={[styles.tabText, { color: fg }]}>
+              {p.name} · {v.stateOf(p)}
             </Text>
           </TouchableOpacity>
         );
       })}
       <View style={{ flex: 1 }} />
-      <TouchableOpacity
-        onPress={() => openPdf(cur.id)}
-        disabled={opening !== null}
-        style={styles.draftBtn}
-        accessibilityLabel={`ใบเคลม PDF (ร่าง) · ${name}`}
-      >
-        {opening === cur.id ? <Spinner color={colors.navy} size="small" /> : <Ionicons name="document-text-outline" size={16} color={colors.navy} />}
-        <Text style={styles.draftText}>ใบเคลม PDF (ร่าง) · {name}</Text>
-      </TouchableOpacity>
+      {locked === "DECLINED" ? null : (
+        <TouchableOpacity
+          onPress={() => openPdf(cur.id)}
+          disabled={opening !== null}
+          style={styles.draftBtn}
+          accessibilityLabel={pdfLabel}
+        >
+          {opening === cur.id ? <Spinner color={colors.navy} size="small" /> : <Ionicons name="document-text-outline" size={16} color={colors.navy} />}
+          <Text style={styles.draftText}>{pdfLabel}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
+
+  /**
+   * ปิดเคลม ไม่ส่งผู้ขาย: เลือกเหตุผล (ตัวอย่างที่เจ้าของงานเลือก DROP) — ชิ้นนี้จบเลย ไม่วนกลับหาช่าง ไม่ออกใบเคลม
+   * บังคับเหตุผลเพราะเป็นการตัดสิทธิ์เคลมถาวร คนเปิดประวัติเคลมทีหลังต้องรู้ว่าทำไม
+   */
+  const drop = showDrop ? (
+    <View ref={dropRef} style={styles.dropBox} accessibilityLabel="ปิดเคลม ไม่ส่งผู้ขาย">
+      <Text style={styles.dropTitle}>
+        {name} — ปิดเคลม ไม่ส่งผู้ขาย: เลือกเหตุผล <Text style={{ color: colors.dangerInk }}>*</Text>
+      </Text>
+      <Text style={styles.small}>ชิ้นนี้ปิดไปเลย ไม่วนกลับหาช่าง และไม่ออกใบเคลมให้ผู้ขาย</Text>
+      <View style={styles.dropOpts}>
+        {DECLINE_REASONS.map((r) => {
+          const on = v.dropOf(active.key) === r;
+          return (
+            <TouchableOpacity
+              key={r}
+              style={[styles.dropOpt, on && styles.dropOptOn]}
+              onPress={() => v.setDrop(active.key, r)}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: on }}
+            >
+              <Ionicons name={on ? "radio-button-on" : "radio-button-off"} size={18} color={on ? colors.navy : colors.textFaint} />
+              <Text style={styles.dropOptText}>{r}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      {v.dropOf(active.key) === DECLINE_OTHER ? (
+        <View style={styles.dropOtherRow}>
+          <Text style={styles.dropOtherLabel}>เหตุผลอื่น (บังคับ)</Text>
+          <TextInput
+            style={styles.dropOther}
+            value={v.dropOtherOf(active.key)}
+            onChangeText={(t) => v.setDropOther(active.key, t)}
+            maxLength={300}
+            placeholder="เช่น ชิ้นนี้ช่างซื้อเองนอกระบบ"
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel={`เหตุผลอื่น ${name}`}
+          />
+        </View>
+      ) : null}
+    </View>
+  ) : null;
 
   const part = (
     <View style={[styles.section, styles.cols, !wide && styles.stack]} accessibilityLabel={name}>
@@ -388,7 +468,7 @@ export default function ClaimReview({
         </View>
       </View>
       <View style={[styles.media, wide && { width: 320 }]}>
-        <Text style={styles.mediaTitle}>หลักฐานรอบนี้:</Text>
+        <Text style={styles.mediaTitle}>{locked ? `หลักฐานที่ส่งรอบ ${active.round}:` : "หลักฐานรอบนี้:"}</Text>
         {partPhoto ? (
           <View style={{ gap: 2 }}>
             <MediaHead label="รูปอะไหล่เก่า" fresh={isNewThisRound(partPhoto, prev)} />
@@ -435,6 +515,7 @@ export default function ClaimReview({
       ) : null}
       {machine}
       {tabs}
+      {drop}
       {part}
       {/* รอบที่ถูกตีกลับไปแล้ว พับไว้ล่างสุด — ตัดสินจากรอบนี้ เปิดดูเมื่ออยากรู้ว่าเคยถูกตีกลับเรื่องอะไร */}
       {olds.length ? (
@@ -647,6 +728,47 @@ const styles = StyleSheet.create({
   code: { fontSize: 18, lineHeight: 26, fontWeight: "800", fontFamily: "monospace", color: colors.text },
   body: { fontSize: 14, lineHeight: 21, color: colors.text },
   oldBtn: { minHeight: 44, justifyContent: "center" },
+  lockRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  lockText: { flexShrink: 1, fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.successInk },
+  dropBox: {
+    backgroundColor: colors.card,
+    borderWidth: 2,
+    borderColor: colors.neutralFill,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  dropTitle: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.text },
+  dropOpts: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  dropOpt: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: 8,
+    backgroundColor: colors.card,
+  },
+  dropOptOn: { borderColor: colors.navy, borderWidth: 2, backgroundColor: colors.sky50 },
+  dropOptText: { fontSize: 14, color: colors.text },
+  dropOtherRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  dropOtherLabel: { fontSize: 13, fontWeight: "700", color: colors.body },
+  dropOther: {
+    flexGrow: 1,
+    flexBasis: 220,
+    minWidth: 0,
+    minHeight: 44,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: colors.text,
+    backgroundColor: colors.card,
+  },
   oldLabel: { fontSize: 14, fontWeight: "700", color: colors.body },
   oldLine: { fontSize: 13, lineHeight: 19 },
 });
