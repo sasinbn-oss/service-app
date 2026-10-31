@@ -50,12 +50,31 @@
 //  20) ใบที่สี่ (สองชิ้น): ชิ้น A ✗ ตีกลับ ติ๊ก "รูปอะไหล่เก่า" แล้วเปลี่ยนใจเป็น ✓ ผ่าน · ชิ้น B ✗ ตีกลับ ติ๊กรหัสตัวเสีย + "รุ่น" ของเครื่อง
 //      → A ถูกพาไป "✗ ตีกลับ (ทั้งใบ)" · คำขอที่ส่งจริง: A ได้แค่ MODEL ไม่มีเหตุผล (ติ๊กเก่าที่มองไม่เห็นแล้วไม่ติดไป) ·
 //      ฐานข้อมูล: A ตีกลับ MODEL "ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้" · B ตีกลับ BROKEN_CODE+MODEL
+//  ── กล่องงานตรวจเคลม + ดาวน์โหลดหลักฐาน (เคลมก้อน 6) — ใบ 6 (W5 ชิ้นเดียว ประวัติทั้งใบย้อน 2 วัน) · ใบ 7 (W6 สองชิ้น ส่งวันนี้) ──
+//  21) หน้าแรกของ Admin Spare Part: ป้าย "งานที่รอ Admin Spare Part" · ไม่มีตัวเลข ด่วน/อะไหล่หมด · การ์ด "ตรวจเคลม {x} ใบ · {y} ชิ้น" ·
+//      เมนู "ตรวจเคลม" ป้าย "{x} ใบ" (x ตรงฐานข้อมูล) · ไม่มีป้าย "รอตรวจ n" ทั้งในเมนูและการ์ดประวัติเคลม ·
+//      แอดมินทั่วไปไม่มีเมนูตรวจเคลมแต่ยังมีป้าย "รอตรวจ n" ข้างประวัติเคลม
+//  22) กล่องงาน: "{x} ใบ · {y} ชิ้น · เรียงจากที่รอนานที่สุด" · ลำดับแถว = ลำดับรอนานสุดจากฐานข้อมูล · แถวใบ 6 "รอ 2 วัน" +
+//      "1 ชิ้น: {ชื่อ} · ช่าง … (รหัส) · รอบ 1" + "รหัสตัวเสียไม่ตรง 1 ชิ้น" · เมนูข้างหดเป็นแถบไอคอนระหว่างอยู่หน้านี้ ออกแล้วกลับเหมือนเดิม (ไม่จำลงเครื่อง)
+//  23) กดใบ 6: หน้าตรวจขึ้นทางขวา แถบรายการเหลือ "เลขใบ + รอ n วัน" (ใบที่เปิดถูกเลือก) · แถบตัดสินอยู่ในจอ สูงไม่เกิน 56 ·
+//      "เปิดใบงานเต็มใบ ▸" (หน้าต่างลอยทับ) เมนูข้างยังเป็นแถบไอคอน ไม่กางออกใต้หน้าต่าง · Esc ปิดแล้วกลับมาที่ใบเดิม
+//  24) J = ใบถัดไป · K = ใบก่อน (ตามลำดับในกล่องงาน) · แป้นภาษาไทย (key "่" · code KeyJ) ก็ไปใบถัดไป
+//  25) อนุมัติใบ 6 → ฐานข้อมูลปิดงาน · สรุป + แผง "ดาวน์โหลดหลักฐาน (ส่งผู้ขาย)": zip ปุ่มเดียว · วิดีโอแยกไฟล์ละปุ่ม (2 ไฟล์) ·
+//      รายการชื่อไฟล์ · ป้ายเมนูลดทันทีโดยไม่เปลี่ยนหน้า · ลิงก์ zip ที่แอปเปิดดาวน์โหลดได้จริง: ชื่อ "{ใบ}_หลักฐาน.zip" ·
+//      ข้างในมีใบเคลม PDF + รูปอะไหล่เก่า + รูปอาการเสีย + ป้ายรุ่น ตามชื่อที่ตั้ง ไม่มีวิดีโอ · ปุ่มวิดีโอเปิดลิงก์แบบดาวน์โหลด
+//  26) ใบ 7: → ← เปลี่ยนแท็บชิ้น · ชิ้นแรกตีกลับ (ติ๊กรหัสตัวเสีย) ชิ้นสองผ่าน → ฐานข้อมูลตามนั้น · แถบแจ้ง "ตีกลับ {ใบ} ให้ช่างแก้แล้ว …" ·
+//      กล่องงานเปิดใบถัดไปให้เอง (ใบรอตรวจจริงในฐานข้อมูล) หรือไม่มีใบเหลือ = รายการว่าง ·
+//      "{ใบ 6} อนุมัติแล้ว" + "เปิดดูใบที่ปิดแล้ว" กลับไปหน้าสรุปใบ 6 พร้อมแผงดาวน์โหลดเดิม
+//  27) Super Admin ดูในฐานะ Admin Spare Part: กล่องงานขึ้นแถวครบตามฐานข้อมูล + "ดูได้อย่างเดียว แก้ไขไม่ได้" · เปิดใบได้ แต่แถบตัดสินไม่มีปุ่ม ·
+//      หน้าใบงานของใบ 6 (ปิดแล้ว) มีแผงดาวน์โหลดหลักฐานในการ์ดเคลม
+//  28) จอมือถือ 360×780: เมนู → ตรวจเคลม (ป้าย "{x} ใบ") · รายการไม่ล้นข้าง · กดแถวแล้วไปหน้าใบงานโหมดตรวจเคลม
 // วันนัด 12 วันข้างหน้าตอนปล่อยงาน (G10) · อะไหล่ตรงยี่ห้อเครื่องจาก fxPart (G0)
 // ยืนยันผลที่ฐานข้อมูลทุกข้อที่เปลี่ยนข้อมูล · ต้องมี DATABASE_URL · รีสตาร์ท Expo ก่อนรัน (เว็บไม่เฝ้าไฟล์)
 const { chromium } = require("playwright");
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
 const { visitDay, fxPart } = require("./fixture");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const DIR = __dirname;
 const PHOTO = path.join(DIR, "..", "site-photo.png");
@@ -225,7 +244,8 @@ const login = async (code) =>
       await page.waitForTimeout(3500);
       return page;
     }
-    async function openOrder(page, which = code) {
+    // tab = แท็บสถานะของรายการใบงาน — ใบที่ปิดแล้ว (DONE) ไม่ขึ้นในแท็บเริ่มต้น "ที่ยังค้าง" ต้องเปิดแท็บ "ปิดแล้ว" ก่อนค้น
+    async function openOrder(page, which = code, tab = "") {
       // จอกว้าง (≥ 1100) เมนูข้างกางค้าง ไม่มีแถบล่าง — ทางเข้าคือเมนู "ใบงานซ่อม" · มือถือใช้แท็บล่าง "ใบงาน"
       if (page.viewportSize().width >= 1100) {
         await page.locator('[aria-label="ใบงานซ่อม"]').locator("visible=true").last().click({ timeout: 10000 });
@@ -233,6 +253,10 @@ const login = async (code) =>
         await page.getByText("ใบงาน", { exact: true }).locator("visible=true").last().click({ timeout: 10000 });
       }
       await page.waitForTimeout(2500);
+      if (tab) {
+        await page.getByText(tab, { exact: true }).locator("visible=true").first().click();
+        await page.waitForTimeout(2000);
+      }
       await page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first().fill(which);
       await page.waitForTimeout(2500);
       await page.getByText(which, { exact: true }).locator("visible=true").first().click();
@@ -961,6 +985,393 @@ const login = async (code) =>
       rows5(p5[1]) === "REJECTED|รหัสอะไหล่ตัวที่เสีย ต้องแก้ · ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้|BROKEN_CODE+MODEL"
       ? pass(`ติ๊กรูปอะไหล่เก่าที่ ${nameC} แล้วเปลี่ยนเป็นผ่าน → ถูกพาไปตีกลับทั้งใบ: คำขอส่ง ${nameC} แค่ MODEL ไม่มีเหตุผล · ฐานข้อมูล ${nameC} = MODEL "ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้" · ${nameD} = BROKEN_CODE+MODEL`)
       : fail(`ชิ้นที่ถูกพาไป: ติ๊กเก่า=${staleTicked} · พลิก=${flipped} · คำขอ ${posts5.length} ${JSON.stringify(sent5).slice(0, 300)} · ${nameC} ${rows5(p5[0])} · ${nameD} ${rows5(p5[1])}`);
+    await page.close();
+
+    // ════ กล่องงานตรวจเคลม + ดาวน์โหลดหลักฐาน (เคลมก้อน 6) ════
+    // เตรียมสองใบผ่าน API แบบเดียวกับใบอื่น: ใบ 6 (W5 ชิ้นเดียว) · ใบ 7 (W6 สองชิ้น) — เครื่องใหม่ทั้งคู่ ไม่ให้เคลมของใบอื่นขึ้นเป็นเคลมซ้ำ
+    const prepClaim = async (machine, kinds, rq) => {
+      sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'${machine}','WASHER','HB - Huebsch',now())`);
+      const w = await call(A, "POST", "/work-orders", {
+        branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
+        machines: [{ code: machine, model: "Huebsch", symptom: "ประตูล็อกไม่ลง" }],
+      });
+      const oid = w.orders ? w.orders[0].id : w.id;
+      if (!oid) throw new Error(`เปิดใบ ${machine} ไม่สำเร็จ: ${JSON.stringify(w).slice(0, 200)}`);
+      ids.push(oid);
+      const ps = kinds.map((k) => fxPart(oid, k));
+      await call(S, "POST", `/work-orders/${oid}/parts`, { needsParts: true, parts: ps.map((s) => ({ sparePartId: s, quantity: 1 })) });
+      await call(A, "POST", `/work-orders/${oid}/parts-sourcing`, { results: ps.map((s) => ({ sparePartId: s, inStock: true, warehouse: "คลังลาดพร้าว 94" })) });
+      await call(S, "POST", `/work-orders/${oid}/assign`, { team, scheduledAt: visitDay(12) });
+      await call(A, "POST", `/work-orders/${oid}/parts-check`, {
+        results: ps.map((s) => ({ sparePartId: s, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-${rq}${suf}` })),
+      });
+      await call(A, "POST", `/work-orders/${oid}/confirm-appointment`, {});
+      await call(S, "POST", `/work-orders/${oid}/dispatch`, {});
+      if (sql(`select status from "WorkOrder" where id=${oid}`) !== "IN_PROGRESS") throw new Error(`เตรียมใบ ${machine} ไม่ถึงขั้นเข้างาน`);
+      const up = async (role, file, type, sparePartId) => {
+        const form = new FormData();
+        form.append("file", new Blob([fs.readFileSync(file)], { type }), path.basename(file));
+        form.append("role", role);
+        if (sparePartId) form.append("sparePartId", String(sparePartId));
+        return call(T, "POST", `/work-orders/${oid}/attachments`, form);
+      };
+      await call(T, "POST", `/work-orders/${oid}/arrive`, {});
+      for (const role of ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"]) await up(role, PHOTO, "image/png");
+      for (const s of ps) {
+        for (const role of ["CLAIM_PART", "CLAIM_SYMPTOM"]) await up(role, PHOTO, "image/png", s);
+        for (const role of ["CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"]) await up(role, CLIP, "video/webm", s);
+      }
+      const b = closeBody(() => SYMPTOM);
+      const c = await call(T, "POST", `/work-orders/${oid}/close`, {
+        ...b,
+        parts: ps.map((s) => ({ sparePartId: s, quantity: 1 })),
+        claims: ps.map((s) => ({ ...b.claims[0], sparePartId: s, brokenPartCode: `OLD-${s}` })),
+      });
+      if (sql(`select status from "WorkOrder" where id=${oid}`) !== "CLAIM_REVIEW") throw new Error(`ใบ ${machine} ปิดพร้อมเคลมไม่ผ่าน: ${JSON.stringify(c).slice(0, 200)}`);
+      return {
+        id: oid,
+        code: sql(`select code from "WorkOrder" where id=${oid}`),
+        parts: ps,
+        names: ps.map((s) => sql(`select name from "SparePart" where id=${s}`)),
+        codes: ps.map((s) => sql(`select "partCode" from "SparePart" where id=${s}`)),
+      };
+    };
+    const o6 = await prepClaim("W5", ["BOARD"], "CQ");
+    const o7 = await prepClaim("W6", ["BOARD", "BELT"], "CR");
+    // ใบ 6 รอนานกว่า — เลื่อนประวัติทั้งใบย้อน 2 วันพร้อมกัน (ใบงาน · ประวัติ · ไฟล์ · แถวเคลม) หลักฐานของแถวยังอยู่ในรอบเดิม
+    sql(`update "WorkOrder" set "createdAt"="createdAt"-interval '2 days', "closedAt"="closedAt"-interval '2 days' where id=${o6.id};
+         update "WorkOrderLog" set "createdAt"="createdAt"-interval '2 days' where "workOrderId"=${o6.id};
+         update "WorkOrderAttachment" set "createdAt"="createdAt"-interval '2 days' where "workOrderId"=${o6.id};
+         update "PartClaim" set "createdAt"="createdAt"-interval '2 days' where "workOrderId"=${o6.id}`);
+    // กล่องงานตามฐานข้อมูล: ใบที่รอตรวจเคลมซึ่งมีแถวรอตรวจ · เรียงตามแถวรอตรวจล่าสุดของใบ เก่าก่อน
+    const QUEUE_FROM = `from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.status='CLAIM_REVIEW' and c.status='PENDING'`;
+    const queueCodes = () =>
+      sql(`select coalesce(string_agg(code, ',' order by ws, id), '') from (select w.code, w.id, max(c."createdAt") ws ${QUEUE_FROM} group by w.id, w.code) q`)
+        .split(",")
+        .filter(Boolean);
+    const queueOrders = () => Number(sql(`select count(distinct w.id) ${QUEUE_FROM}`));
+    const queueParts = () => Number(sql(`select count(*) ${QUEUE_FROM}`));
+    const waitOf = (oid) =>
+      Number(sql(`select ((now() at time zone 'Asia/Bangkok')::date - max(("createdAt" at time zone 'UTC') at time zone 'Asia/Bangkok')::date)
+                  from "PartClaim" where "workOrderId"=${oid} and status='PENDING'`));
+    const paneHead = async (page) =>
+      (await page.locator('[aria-label="หน้าตรวจเคลม"]').locator("visible=true").first().innerText().catch(() => "")).trim();
+    const paneCode = async (page) => ((await paneHead(page)).match(/^(\S+) · /) || [])[1] ?? "";
+
+    // ── 21) หน้าแรกของ Admin Spare Part + เมนู ──
+    W = 1280;
+    H = 656;
+    page = await signIn(`ZCRP${suf}`);
+    await page.waitForTimeout(1500);
+    const x0 = queueOrders();
+    const y0 = queueParts();
+    const stats = (await byLabel(page, "ตัวเลขสรุปงานที่รอ").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    (await vis(page, "งานที่รอ Admin Spare Part").count()) === 1 && stats.includes("รอทำทั้งหมด") && !stats.includes("ด่วน") && !stats.includes("อะไหล่หมด") &&
+      (await byLabel(page, `ตรวจเคลม ${x0} ใบ · ${y0} ชิ้น`).count()) === 1
+      ? pass(`หน้าแรกของ Admin Spare Part: "งานที่รอ Admin Spare Part" · ไม่มีตัวเลข ด่วน/อะไหล่หมด · การ์ด "ตรวจเคลม ${x0} ใบ · ${y0} ชิ้น" (ตรงฐานข้อมูล)`)
+      : fail(`หน้าแรก Admin Spare Part: ป้าย ${await vis(page, "งานที่รอ Admin Spare Part").count()} · ตัวเลข "${stats}" · การ์ด ${await byLabel(page, `ตรวจเคลม ${x0} ใบ · ${y0} ชิ้น`).count()}`);
+    (await byLabel(page, "ตรวจเคลม").count()) === 1 && (await byLabel(page, `ตรวจเคลม รอ ${x0} ใบ`).count()) === 1 &&
+      (await vis(page, `${x0} ใบ`).count()) >= 1 &&
+      (await page.locator('[aria-label^="เคลมรอตรวจ"]').locator("visible=true").count()) === 0 &&
+      (await page.locator('[aria-label^="ประวัติเคลม รอตรวจ"]').locator("visible=true").count()) === 0 &&
+      (await vis(page, /^รอตรวจ \d+$/).count()) === 0
+      ? pass(`เมนู "ตรวจเคลม" ป้าย "${x0} ใบ" (ฐานข้อมูล ${x0} ใบรอตรวจ) · ไม่มีป้าย "รอตรวจ n" ข้างประวัติเคลมและบนการ์ดประวัติเคลม (นับคิวเดียวกันคนละหน่วย)`)
+      : fail(`เมนูผู้ตรวจ: เมนู ${await byLabel(page, "ตรวจเคลม").count()} · ป้าย ${await byLabel(page, `ตรวจเคลม รอ ${x0} ใบ`).count()} · รอตรวจ ${await vis(page, /^รอตรวจ \d+$/).count()}`);
+    await page.screenshot({ path: path.join(DIR, "claim-review-13-home-menu.png") });
+    // แอดมินทั่วไป: ไม่ใช่ผู้ตรวจ — ไม่มีเมนูตรวจเคลม แต่ยังเห็นป้าย "รอตรวจ n" ข้างประวัติเคลมเหมือนเดิม (ใบชุดนี้ไม่ใช่ใบทดสอบ = มีรอตรวจแน่)
+    const pageA = await signIn("A001");
+    await pageA.waitForTimeout(1500);
+    (await byLabel(pageA, "ตรวจเคลม").count()) === 0 && (await pageA.locator('[aria-label^="เคลมรอตรวจ"]').locator("visible=true").count()) >= 1
+      ? pass("แอดมินทั่วไป: ไม่มีเมนู \"ตรวจเคลม\" · ยังมีป้าย \"รอตรวจ n\" ข้างประวัติเคลม")
+      : fail(`แอดมินทั่วไป: เมนูตรวจเคลม ${await byLabel(pageA, "ตรวจเคลม").count()} · ป้ายรอตรวจ ${await pageA.locator('[aria-label^="เคลมรอตรวจ"]').locator("visible=true").count()}`);
+    await pageA.close();
+
+    // ── 22) กล่องงาน: ลำดับ ตัวเลข แถว และแถบไอคอน ──
+    await byLabel(page, "ตรวจเคลม").first().click();
+    await page.waitForTimeout(3000);
+    const expected = queueCodes();
+    const shownRows = await page.locator('[aria-label^="ใบรอตรวจเคลม "]').locator("visible=true")
+      .evaluateAll((els) => els.map((e) => (e.getAttribute("aria-label") || "").replace("ใบรอตรวจเคลม ", "")));
+    const i6 = shownRows.indexOf(o6.code);
+    const i7 = shownRows.indexOf(o7.code);
+    (await vis(page, `${queueOrders()} ใบ · ${queueParts()} ชิ้น · เรียงจากที่รอนานที่สุด`).count()) === 1 &&
+      shownRows.join(",") === expected.join(",") && i6 >= 0 && i7 > i6
+      ? pass(`กล่องงาน "${queueOrders()} ใบ · ${queueParts()} ชิ้น · เรียงจากที่รอนานที่สุด" · ลำดับ ${shownRows.length} แถวตรงกับฐานข้อมูล (รอนานสุดก่อน) · ใบ 6 (ย้อน 2 วัน) อยู่ก่อนใบ 7`)
+      : fail(`กล่องงาน: จอ ${shownRows.join(",")} · ฐานข้อมูล ${expected.join(",")}`);
+    const row6 = (await byLabel(page, `ใบรอตรวจเคลม ${o6.code}`).first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    const d6 = waitOf(o6.id);
+    row6.includes(`รอ ${d6} วัน`) && d6 >= 2 && row6.includes(`${o6.code} · ${bc} สาขาทดสอบตรวจเคลม · W5 Huebsch`) &&
+      row6.includes(`1 ชิ้น: ${o6.names[0]} · ช่าง ช่างสมชาย ทดสอบตรวจ (ZCRT${suf}) · รอบ 1`) && row6.includes("รหัสตัวเสียไม่ตรง 1 ชิ้น")
+      ? pass(`แถวใบ 6: "รอ ${d6} วัน" (ฐานข้อมูล) · "{ใบ} · {สาขา} · W5 Huebsch" · "1 ชิ้น: ${o6.names[0]} · ช่าง … (ZCRT${suf}) · รอบ 1" · ชิป "รหัสตัวเสียไม่ตรง 1 ชิ้น"`)
+      : fail(`แถวใบ 6: "${row6.slice(0, 300)}" (รอ ${d6} วัน)`);
+    const railOn = (await byLabel(page, "ขยายเมนู").count()) === 1;
+    await page.screenshot({ path: path.join(DIR, "claim-review-14-inbox.png") });
+    // ออกไปหน้าอื่นทางเมนู (แถบไอคอนยังกดได้) — เมนูกลับเป็นแบบกาง และไม่ได้จำการหดไว้ในเครื่อง
+    await byLabel(page, "ประวัติเคลม").first().click();
+    await page.waitForTimeout(2000);
+    const railOff = (await byLabel(page, "ย่อเมนู").count()) === 1;
+    const stored = await page.evaluate(() => localStorage.getItem("otteri-side-collapsed"));
+    railOn && railOff && stored !== "1"
+      ? pass("เมนูข้างหดเป็นแถบไอคอนระหว่างอยู่กล่องงานตรวจเคลม · ออกไปหน้าอื่นแล้วกางกลับเอง ไม่จำการหดไว้ในเครื่อง")
+      : fail(`แถบไอคอน: ในกล่องงาน ${railOn} · ออกแล้ว ${railOff} · ค่าที่จำ ${stored}`);
+    await byLabel(page, "ตรวจเคลม").first().click();
+    await page.waitForTimeout(2500);
+
+    // ── 23) เปิดใบ 6 ในหน้าตรวจทางขวา ──
+    await byLabel(page, `ใบรอตรวจเคลม ${o6.code}`).first().click();
+    await vis(page, `${o6.code} · ${bc} สาขาทดสอบตรวจเคลม · W5 Huebsch`).first().waitFor({ timeout: 15000 }).catch(() => {});
+    const strip6 = page.locator(`[aria-label="ใบรอตรวจเคลม ${o6.code}"]`).locator("visible=true").first();
+    const stripText = (await strip6.innerText().catch(() => "")).replace(/\s+/g, " ");
+    const bar6 = await byLabel(page, "แถบตัดสินเคลม").first().boundingBox();
+    (await paneCode(page)) === o6.code && (await strip6.getAttribute("aria-selected")) === "true" &&
+      stripText.startsWith(`${o6.code} รอ ${d6} วัน`) && (await byLabel(page, "รายการใบรอตรวจเคลม").count()) === 1 &&
+      inView(bar6) && bar6.height <= 57 && (await vis(page, `${o6.names[0]}:`).count()) === 1
+      ? pass(`กดใบ 6: หน้าตรวจขึ้นทางขวา · แถบรายการเหลือ "${o6.code} รอ ${d6} วัน" (ใบนี้ถูกเลือก) · แถบตัดสินอยู่ในจอ สูง ${Math.round(bar6.height)} px`)
+      : fail(`เปิดใบ 6: หัว "${(await paneHead(page)).slice(0, 100)}" · แถบรายการ "${stripText}" (${await strip6.getAttribute("aria-selected")}) · แถบตัดสิน ${JSON.stringify(bar6)}`);
+    await page.screenshot({ path: path.join(DIR, "claim-review-15-pane.png") });
+    // เปิดใบงานเต็มใบจากหน้าตรวจ (หน้าต่างลอยทับกล่องงาน) — เมนูข้างต้องค้างเป็นแถบไอคอน ไม่กางออกใต้หน้าต่างแล้วหุบกลับตอนปิด
+    // (เดิมใช้โฟกัสของหน้า หน้าต่างเปิดแล้วหน้านี้เสียโฟกัส เมนูกางออก ทั้งกล่องงานและหน้าต่างกระโดดไปข้าง)
+    const menuLeft = async () => (await byLabel(page, "ตรวจเคลม").first().boundingBox().catch(() => null))?.width ?? -1;
+    const railW = await menuLeft();
+    // ลิงก์อยู่ในกล่องรายละเอียดใบงานซึ่งพับไว้ — กางก่อนแล้วค่อยกด (ลิงก์ไม่โผล่ตอนพับ ไม่ใช่ปุ่มลอยบนหัวหน้า)
+    if ((await byLabel(page, `เปิดใบงาน ${o6.code} เต็มใบ`).count()) === 0) await vis(page, "ดูรายละเอียดใบงาน ▸").first().click();
+    await byLabel(page, `เปิดใบงาน ${o6.code} เต็มใบ`).first().click();
+    await byLabel(page, "ปิดหน้าต่าง").first().waitFor({ timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(800);
+    const popOpen = (await page.locator('[aria-label="ปิดหน้าต่าง"]').count()) >= 1;
+    const railUnder = (await byLabel(page, "ขยายเมนู").count()) === 1 && (await byLabel(page, "ย่อเมนู").count()) === 0;
+    const railWUnder = await menuLeft();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(1500);
+    // Esc ไม่ปิด (เช่นโฟกัสค้างในช่องพิมพ์) — กดฉากมืดมุมซ้ายบนแทน ข้อนี้ตรวจเมนู ไม่ได้ตรวจวิธีปิดหน้าต่าง
+    if ((await page.locator('[aria-label="ปิดหน้าต่าง"]').count()) > 0) {
+      await page.locator('[aria-label="ปิดหน้าต่าง"]').first().click({ position: { x: 4, y: 4 } }).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
+    const popClosed = (await page.locator('[aria-label="ปิดหน้าต่าง"]').count()) === 0;
+    const railAfter = (await byLabel(page, "ขยายเมนู").count()) === 1;
+    popOpen && railUnder && railWUnder === railW && popClosed && railAfter && (await paneCode(page)) === o6.code
+      ? pass(`เปิดใบงาน ${o6.code} เต็มใบจากหน้าตรวจ: เมนูข้างยังเป็นแถบไอคอน (กว้างเท่าเดิม ${Math.round(railW)} px) ระหว่างหน้าต่างเปิด · ปิดแล้วกลับมาที่ใบเดิม`)
+      : fail(`แถบไอคอนใต้หน้าต่าง: เปิด ${popOpen} · แถบไอคอน ${railUnder} (กว้าง ${railW} → ${railWUnder}) · ปิด ${popClosed} · หลังปิด ${railAfter} · ใบ ${await paneCode(page)}`);
+
+    // ── 24) J / K และแป้นภาษาไทย ──
+    const order24 = queueCodes();
+    const after6 = order24[order24.indexOf(o6.code) + 1];
+    // ปุ่มที่เพิ่งกดยังถือโฟกัสอยู่ — ปล่อยโฟกัสก่อน (ไม่คลิกพื้นหน้า: ซ้ายสุดคือแถบไอคอนเมนู กดโดนแล้วเปลี่ยนหน้า)
+    await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+    await page.keyboard.press("KeyJ");
+    await page.waitForTimeout(2500);
+    const afterJ = await paneCode(page);
+    await page.keyboard.press("KeyK");
+    await page.waitForTimeout(2500);
+    const afterK = await paneCode(page);
+    // แป้นภาษาไทย: ปุ่ม J พิมพ์ "่" — แอปต้องดูตำแหน่งปุ่ม (code) ไม่ใช่ตัวอักษร (key)
+    await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "่", code: "KeyJ", bubbles: true })));
+    await page.waitForTimeout(2500);
+    const afterThai = await paneCode(page);
+    await page.keyboard.press("KeyK");
+    await page.waitForTimeout(2500);
+    !!after6 && afterJ === after6 && afterK === o6.code && afterThai === after6 && (await paneCode(page)) === o6.code
+      ? pass(`J เปิดใบถัดไปในกล่องงาน (${after6}) · K กลับใบก่อน (${o6.code}) · แป้นภาษาไทย (key "่" · code KeyJ) ก็ไปใบถัดไป`)
+      : fail(`คีย์ลัด: ถัดไปควรเป็น ${after6} · J=${afterJ} · K=${afterK} · ไทย=${afterThai} · ตอนนี้ ${await paneCode(page)}`);
+
+    // ── 25) อนุมัติใบ 6 → สรุป + ดาวน์โหลดหลักฐาน ──
+    await vis(page, "✓ ผ่าน").first().click();
+    await page.waitForTimeout(300);
+    await vis(page, "อนุมัติเคลม · ปิดงาน").first().click();
+    await vis(page, "ยืนยันอนุมัติ").first().waitFor({ timeout: 10000 }).catch(() => {});
+    await vis(page, "ยืนยันอนุมัติ").first().click();
+    await page.waitForTimeout(4500);
+    const st6 = sql(`select w.status||'|'||string_agg(c.status, ',' order by c.id) from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${o6.id} group by w.status`);
+    const done6 = (await byLabel(page, "ผลการตรวจเคลม").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    const pc6 = o6.codes[0];
+    const dl = (await byLabel(page, "ดาวน์โหลดหลักฐาน").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    st6 === "DONE|APPROVED" && done6.includes("✓ อนุมัติเคลมแล้ว · ปิดงาน") && done6.includes("ใบถัดไป →") &&
+      dl.includes("ดาวน์โหลดหลักฐาน (ส่งผู้ขาย)") && dl.includes("zip: ใบเคลม PDF + รูป (1 ไฟล์)") &&
+      dl.includes("วิดีโอแยกไฟล์ละปุ่ม (2 ไฟล์ · ไม่รวมใน zip)") &&
+      (await vis(page, `${pc6} วิดีโอการตรวจเช็ค`).count()) === 1 && (await vis(page, "วิดีโอError").count()) === 1 &&
+      dl.includes(`zip › ${o6.code}_${pc6}_ใบเคลม.pdf`) && dl.includes(`zip › ${o6.code}_${pc6}_รูปอะไหล่เก่า.`) &&
+      dl.includes(`zip › ${o6.code}_รูปอาการเสีย.`) && dl.includes(`zip › ${o6.code}_ป้ายรุ่น.`) &&
+      dl.includes(`วิดีโอ › ${o6.code}_${pc6}_วิดีโอการตรวจเช็ค.`) && dl.includes(`วิดีโอ › ${o6.code}_วิดีโอError.`) &&
+      dl.includes("ทุกไฟล์ตั้งชื่อตามเลขใบงานและรหัสอะไหล่ ผู้ขายจับคู่กับใบเคลมได้เอง")
+      ? pass(`อนุมัติใบ 6 (ฐานข้อมูล: ปิดงาน · อนุมัติ) → สรุป + "ดาวน์โหลดหลักฐาน (ส่งผู้ขาย)": zip ปุ่มเดียว · วิดีโอ 2 ปุ่ม ("${pc6} วิดีโอการตรวจเช็ค" · "วิดีโอError") · ชื่อไฟล์ ${o6.code}_${pc6}_… · คำอธิบายการตั้งชื่อ`)
+      : fail(`หลังอนุมัติใบ 6: ฐานข้อมูล ${st6} · สรุป "${done6.slice(0, 160)}" · แผง "${dl.slice(0, 500)}"`);
+    // ป้ายเมนูลดทันที ทั้งที่ไม่ได้เปลี่ยนหน้า (แถบไอคอน: ตัวเลขอย่างเดียว)
+    const x1 = queueOrders();
+    const menuNum = (await byLabel(page, "ตรวจเคลม").first().innerText().catch(() => "")).replace(/[^\d]/g, "");
+    x1 === x0 - 1 && menuNum === String(x1)
+      ? pass(`ป้ายเมนูตรวจเคลมลดเป็น ${x1} ทันทีหลังอนุมัติ (ฐานข้อมูล ${x1} ใบ) โดยไม่ต้องเปลี่ยนหน้า`)
+      : fail(`ป้ายเมนูหลังอนุมัติ: เมนู "${menuNum}" · ฐานข้อมูล ${x1} (ก่อนหน้า ${x0})`);
+    await page.screenshot({ path: path.join(DIR, "claim-review-16-download.png") });
+    // ลิงก์ที่แอปเปิดจริง — ดักการเปิดแท็บใหม่ไว้ แล้วดาวน์โหลดลิงก์นั้นเอง (ไม่มี header login แบบเบราว์เซอร์)
+    await page.evaluate(() => {
+      window.__opened = [];
+      window.open = (u) => { window.__opened.push(String(u)); return null; };
+    });
+    // รอให้ลิงก์ถูกเปิดจริงก่อนกดปุ่มถัดไป ไม่ใช่รอเวลาตายตัว — ระหว่างขอตั๋ว zip ปุ่มวิดีโอถูกปิดไว้ (busy)
+    // เครื่องช้าแล้วกดวิดีโอตอนปุ่มยังปิด = ไม่มีอะไรเปิด ข้อนี้ตกทั้งที่แอปถูก
+    const openedCount = (n) =>
+      page.waitForFunction((k) => (window.__opened || []).length >= k, n, { timeout: 15000 }).catch(() => {});
+    await vis(page, "zip: ใบเคลม PDF + รูป (1 ไฟล์)").first().click();
+    await openedCount(1);
+    await vis(page, `${pc6} วิดีโอการตรวจเช็ค`).first().click();
+    await openedCount(2);
+    const opened = await page.evaluate(() => window.__opened || []);
+    // ชื่อไฟล์ไทยถูกเข้ารหัสใน header (filename*=UTF-8'') แล้วถูกเข้ารหัสอีกชั้นในลิงก์ที่ลงชื่อไว้ — ถอดได้ก็ถอด ถอดไม่ได้ใช้ของเดิม
+    const unq = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
+    // แยกลิงก์ตามรูปแบบ ไม่ใช่ตามลำดับที่เปิด — zip ผ่านเซิร์ฟเวอร์ (evidence-zip) · วิดีโอโหลดตรงจากที่เก็บไฟล์ (attachment)
+    const zipOpened = opened.find((u) => /\/claims\/evidence-zip\//.test(u)) || "";
+    const vidOpened = opened.find((u) => /response-content-disposition/i.test(unq(u))) || "";
+    const zipUrl = zipOpened ? (/^https?:/.test(zipOpened) ? zipOpened : `http://localhost:4000${zipOpened}`) : "";
+    let zipNames = [];
+    let zipCd = "";
+    let zipPk = false;
+    if (/\/claims\/evidence-zip\//.test(zipUrl)) {
+      const zr = await fetch(zipUrl);
+      zipCd = unq(zr.headers.get("content-disposition") || "");
+      const buf = Buffer.from(await zr.arrayBuffer());
+      zipPk = zr.status === 200 && buf.slice(0, 2).toString() === "PK";
+      // ไฟล์ชั่วคราวนอกโฟลเดอร์โปรเจกต์ — ลบทันทีที่อ่านรายชื่อเสร็จ
+      const zf = path.join(os.tmpdir(), `claim-zip-${suf}.zip`);
+      fs.writeFileSync(zf, buf);
+      try {
+        // unzip แปลงชื่อไฟล์ตาม locale — เครื่องที่ตั้งเป็น C/POSIX ได้ "#U0e23…" แทนอักษรไทย แล้วข้อนี้ตกทั้งที่ zip ถูก
+        // (กับดักเดียวกับ claim-queue-test.sh ที่เรียก unzip ด้วย LC_ALL=C.UTF-8)
+        zipNames = execFileSync("unzip", ["-Z1", zf], { env: { ...process.env, LC_ALL: "C.UTF-8" } })
+          .toString().split("\n").map((l) => l.trim()).filter(Boolean);
+      } catch {
+        zipNames = [];
+      } finally {
+        fs.rmSync(zf, { force: true });
+      }
+    }
+    const wantZip = [`${o6.code}_${pc6}_ใบเคลม.pdf`, `${o6.code}_${pc6}_รูปอะไหล่เก่า.png`, `${o6.code}_รูปอาการเสีย.png`, `${o6.code}_ป้ายรุ่น.png`].sort();
+    zipPk && zipCd.includes(`${o6.code}_หลักฐาน.zip`) && [...zipNames].sort().join("|") === wantZip.join("|") &&
+      !zipNames.some((n) => /\.(webm|mp4|mov)$/i.test(n))
+      ? pass(`ปุ่ม zip เปิดลิงก์ดาวน์โหลดจริง: ชื่อ "${o6.code}_หลักฐาน.zip" · ข้างใน ${zipNames.length} ไฟล์ = ใบเคลม PDF + รูปอะไหล่เก่า + รูปอาการเสีย + ป้ายรุ่น ตามชื่อที่ตั้ง · ไม่มีวิดีโอ`)
+      : fail(`zip: ลิงก์ "${zipUrl.slice(0, 160)}" · PK=${zipPk} · ชื่อ "${zipCd.slice(0, 160)}" · ข้างใน ${zipNames.join(", ")}`);
+    const vidUrl = unq(unq(vidOpened));
+    /response-content-disposition=attachment/i.test(vidUrl) && vidUrl.includes(`${o6.code}_${pc6}_วิดีโอการตรวจเช็ค`)
+      ? pass(`ปุ่มวิดีโอเปิดลิงก์แบบดาวน์โหลด (attachment) ชื่อ "${o6.code}_${pc6}_วิดีโอการตรวจเช็ค.…" — โหลดตรงจากที่เก็บไฟล์ ไม่ผ่านเซิร์ฟเวอร์`)
+      : fail(`ปุ่มวิดีโอ: "${vidUrl.slice(0, 240)}"`);
+
+    // ── 26) ใบ 7: ลูกศรเปลี่ยนชิ้น · ตีกลับหนึ่งชิ้น → เปิดใบถัดไปเอง ──
+    await byLabel(page, `ใบรอตรวจเคลม ${o7.code}`).first().click();
+    await vis(page, `${o7.code} · ${bc} สาขาทดสอบตรวจเคลม · W6 Huebsch`).first().waitFor({ timeout: 15000 }).catch(() => {});
+    const activeTab = async () =>
+      (await page.locator('[aria-label="ชิ้นที่เคลม"] [aria-selected="true"]').locator("visible=true").first().innerText().catch(() => "")).trim();
+    // ลำดับแท็บอ่านจากหน้าจอ (แท็บแรกคือชิ้นที่เปิดอยู่ตอนเข้าใบ) — ไม่เดาว่าบอร์ดหรือสายพานมาก่อน
+    const tabTexts = await page.locator('[aria-label="ชิ้นที่เคลม"] [aria-selected]').locator("visible=true")
+      .evaluateAll((els) => els.map((e) => (e.innerText || "").trim()));
+    const firstName = o7.names.find((n) => (tabTexts[0] || "").startsWith(`${n} · `)) ?? o7.names[0];
+    const secondName = o7.names.find((n) => n !== firstName);
+    const firstPart = o7.parts[o7.names.indexOf(firstName)];
+    await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+    const tab0 = await activeTab();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(700);
+    const tabR = await activeTab();
+    await page.keyboard.press("ArrowLeft");
+    await page.waitForTimeout(700);
+    const tabL = await activeTab();
+    tabTexts.length === 2 && tab0.startsWith(`${firstName} · `) && tabR.startsWith(`${secondName} · `) && tabL.startsWith(`${firstName} · `) &&
+      (await paneCode(page)) === o7.code
+      ? pass(`ใบ 7: → ไปแท็บ "${secondName}" · ← กลับ "${firstName}" (ไม่เปลี่ยนใบ)`)
+      : fail(`ลูกศร: แท็บ ${tabTexts.join(" | ")} · เริ่ม "${tab0}" · → "${tabR}" · ← "${tabL}" · ใบ ${await paneCode(page)}`);
+    await vis(page, "✗ ตีกลับ").first().click();
+    await page.waitForTimeout(700);
+    await byLabel(page, "ช่องที่ต้องแก้ รหัสอะไหล่ตัวที่เสีย").first().click();
+    await page.waitForTimeout(300);
+    await vis(page, `${secondName} · ● รอตัดสิน`).first().click();
+    await page.waitForTimeout(400);
+    await vis(page, "✓ ผ่าน").first().click();
+    await page.waitForTimeout(400);
+    await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").first().click();
+    await page.waitForTimeout(5000);
+    const rows7 = sql(`select string_agg(c.status||':'||array_to_string(c."reviewFlags",'+'), ',' order by c."sparePartId" = ${firstPart} desc, c.id) from "PartClaim" c where c."workOrderId"=${o7.id}`);
+    const left = queueCodes();
+    const note7 = (await byLabel(page, "ผลการตีกลับ").first().innerText().catch(() => "")).trim();
+    const now7 = await paneCode(page);
+    const nextOk = left.length
+      ? left.includes(now7) && now7 !== o7.code && sql(`select status from "WorkOrder" where code='${now7}'`) === "CLAIM_REVIEW"
+      : (await vis(page, "ใบงานแจ้งเคลมใหม่จะขึ้นที่นี่เมื่อช่างกดส่งเคลม").count()) === 1;
+    sql(`select status from "WorkOrder" where id=${o7.id}`) === "IN_PROGRESS" && rows7 === "REJECTED:BROKEN_CODE,APPROVED:" &&
+      note7 === `ตีกลับ ${o7.code} ให้ช่างแก้แล้ว (${firstName}) — ใบนี้จะกลับมาในกล่องงานเมื่อช่างส่งใหม่` && nextOk
+      ? pass(`ตีกลับใบ 7 (ฐานข้อมูล: ${firstName} ตีกลับ BROKEN_CODE · ${secondName} อนุมัติ · ใบกลับไปหาช่าง) · แถบแจ้ง "${note7.slice(0, 60)}…" · ${left.length ? `เปิดใบถัดไปให้เอง (${now7} — ฐานข้อมูลรอตรวจ)` : "ไม่มีใบเหลือ = รายการว่าง"}`)
+      : fail(`ตีกลับใบ 7: ใบ ${sql(`select status from "WorkOrder" where id=${o7.id}`)} · แถว ${rows7} · แจ้ง "${note7}" · ตอนนี้ "${now7}" · ใบที่เหลือ ${left.join(",")}`);
+    await page.screenshot({ path: path.join(DIR, "claim-review-17-after-reject.png") });
+    // ใบ 6 ออกจากกล่องงานไปแล้ว แต่ยังกลับไปเอาหลักฐานส่งผู้ขายได้ (ตัวอย่าง "เปิดดูใบที่ปิดแล้ว")
+    const reopenLine = (await byLabel(page, "ใบที่อนุมัติล่าสุด").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    await byLabel(page, `เปิดดูใบที่ปิดแล้ว ${o6.code}`).first().click({ timeout: 10000 }).catch(() => {});
+    await byLabel(page, "ดาวน์โหลดหลักฐาน").first().waitFor({ timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    const reDone = (await byLabel(page, "ผลการตรวจเคลม").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    const reDl = (await byLabel(page, "ดาวน์โหลดหลักฐาน").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    reopenLine.includes(`${o6.code} อนุมัติแล้ว`) && reopenLine.includes("เปิดดูใบที่ปิดแล้ว") && reDone.includes(`ปิดงาน ${o6.code}`) &&
+      reDone.includes("✓ อนุมัติเคลมแล้ว · ปิดงาน") && reDl.includes(`zip › ${o6.code}_${pc6}_ใบเคลม.pdf`) &&
+      reDl.includes(`วิดีโอ › ${o6.code}_วิดีโอError.`) && sql(`select status from "WorkOrder" where id=${o6.id}`) === "DONE"
+      ? pass(`หลังไปใบอื่นแล้ว: "${o6.code} อนุมัติแล้ว" + "เปิดดูใบที่ปิดแล้ว" → กลับไปหน้าสรุปใบ 6 (ฐานข้อมูลปิดงานแล้ว) พร้อมแผงดาวน์โหลดหลักฐานเดิม`)
+      : fail(`เปิดดูใบที่ปิดแล้ว: แถว "${reopenLine}" · สรุป "${reDone.slice(0, 120)}" · แผง "${reDl.slice(0, 300)}"`);
+    await page.close();
+
+    // ── 27) Super Admin ดูในฐานะ Admin Spare Part — กล่องงานดูได้อย่างเดียว ──
+    page = await signIn(`ZCRS${suf}`, paId);
+    await byLabel(page, "ตรวจเคลม").first().click({ timeout: 10000 }).catch(() => {});
+    // ป้าย "ดูได้อย่างเดียว" ขึ้นทุกสถานะของหน้า (รวมตอนโหลดไม่ได้และตอนหมุนรอ) — พิสูจน์อะไรเรื่องกล่องงานไม่ได้
+    // ฐานข้อมูลยังมีใบรอตรวจอยู่ (ใบที่สามจากข้อ 19 ไม่มีใครตัดสิน) จึงต้องเห็นแถวจริงและเปิดได้ ไม่ใช่ข้ามข้อนี้ไปเงียบ ๆ
+    const xv = queueOrders();
+    const firstRow = page.locator('[aria-label^="ใบรอตรวจเคลม "]').locator("visible=true").first();
+    await firstRow.waitFor({ timeout: 15000 }).catch(() => {});
+    const voList = (await vis(page, "ดูได้อย่างเดียว แก้ไขไม่ได้").count()) >= 1;
+    const voError = (await vis(page, "โหลดกล่องงานตรวจเคลมไม่ได้").count()) > 0;
+    const voRows = await page.locator('[aria-label^="ใบรอตรวจเคลม "]').locator("visible=true").count();
+    let voPane = false;
+    let voCode = "";
+    if (voRows > 0) {
+      await firstRow.click();
+      await byLabel(page, "แถบตัดสินเคลม").first().waitFor({ timeout: 15000 }).catch(() => {});
+      const voBar = (await byLabel(page, "แถบตัดสินเคลม").first().innerText().catch(() => "")).trim();
+      voCode = await paneCode(page);
+      voPane = !!voCode && voBar.includes("ดูได้อย่างเดียว แก้ไขไม่ได้") && (await vis(page, "✓ ผ่าน").count()) === 0;
+    }
+    xv > 0 && voList && !voError && voRows === xv && voPane &&
+      sql(`select status from "WorkOrder" where code='${voCode}'`) === "CLAIM_REVIEW"
+      ? pass(`ดูในฐานะ Admin Spare Part: กล่องงานขึ้น ${voRows} แถว (ฐานข้อมูล ${xv} ใบ) พร้อม "ดูได้อย่างเดียว แก้ไขไม่ได้" · เปิด ${voCode} ได้ แต่แถบตัดสินไม่มีปุ่ม (ฐานข้อมูลยังรอตรวจ)`)
+      : fail(`ดูในฐานะ: ฐานข้อมูล ${xv} ใบ · แถวบนจอ ${voRows} · ป้าย ${voList} · โหลดไม่ได้ ${voError} · หน้าตรวจ ${voPane} (${voCode})`);
+    // ดูในฐานะไม่มีปุ่มตัดสิน จึงไม่มีหน้าสรุปหลังอนุมัติ — แผงดาวน์โหลดของใบที่ผ่านแล้วต้องอยู่ในการ์ดเคลมของหน้าใบงาน
+    await openOrder(page, o6.code, "ปิดแล้ว");
+    await byLabel(page, "ดาวน์โหลดหลักฐาน").first().waitFor({ timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    const voDl = (await byLabel(page, "ดาวน์โหลดหลักฐาน").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    voDl.includes("ดาวน์โหลดหลักฐาน (ส่งผู้ขาย)") && voDl.includes(`zip › ${o6.code}_${pc6}_ใบเคลม.pdf`) &&
+      voDl.includes(`วิดีโอ › ${o6.code}_${pc6}_วิดีโอการตรวจเช็ค.`) && (await byLabel(page, "ดาวน์โหลดหลักฐาน").count()) === 1 &&
+      sql(`select count(*) from "PartClaim" where "workOrderId"=${o6.id} and status='APPROVED'`) === "1"
+      ? pass(`ดูในฐานะ: เปิดใบ 6 (ปิดงานแล้ว · ฐานข้อมูลอนุมัติ 1 ชิ้น) การ์ดเคลมมีแผง "ดาวน์โหลดหลักฐาน (ส่งผู้ขาย)" แผงเดียว ชื่อไฟล์ ${o6.code}_${pc6}_…`)
+      : fail(`ดูในฐานะ แผงดาวน์โหลดในหน้าใบงาน: "${voDl.slice(0, 300)}"`);
+    await page.close();
+
+    // ── 28) จอมือถือ: เมนู → กล่องงาน → หน้าใบงาน (โหมดตรวจเคลม) ──
+    W = 360;
+    H = 780;
+    page = await signIn(`ZCRP${suf}`);
+    await byLabel(page, "เปิดเมนู").first().click({ timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const xm = queueOrders();
+    const phonePill = (await byLabel(page, `ตรวจเคลม รอ ${xm} ใบ`).count()) === 1 || xm === 0;
+    await byLabel(page, "ตรวจเคลม").first().click({ timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+    const phoneSide = await page.evaluate(() => document.scrollingElement.scrollWidth - window.innerWidth);
+    const phoneRows = page.locator('[aria-label^="ใบรอตรวจเคลม "]').locator("visible=true");
+    let phoneOpen = xm === 0;
+    if ((await phoneRows.count()) > 0) {
+      await phoneRows.first().click();
+      await page.waitForTimeout(4000);
+      phoneOpen = (await page.locator('[aria-label="หน้าตรวจเคลม"]').locator("visible=true").count()) >= 1;
+    }
+    phonePill && phoneSide <= 1 && phoneOpen
+      ? pass(`จอมือถือ 360×780: เมนู "ตรวจเคลม" ป้าย "${xm} ใบ" · รายการไม่ล้นข้าง · กดแถวแล้วไปหน้าใบงานโหมดตรวจเคลม`)
+      : fail(`จอมือถือ: ป้าย ${phonePill} · เกินขวา ${phoneSide} · เปิดหน้าตรวจ ${phoneOpen}`);
+    await page.screenshot({ path: path.join(DIR, "claim-review-18-phone-inbox.png") });
     await page.close();
   } catch (e) {
     fail(String(e));

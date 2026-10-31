@@ -52,7 +52,10 @@ export interface PartClaimPdfData {
    */
   repairedAt?: Date | null;
   requesterName: string | null;
-  /** ชื่อหลักฐานที่แนบในระบบ (รูปอะไหล่เก่า · วิดีโอ Error code …) — เฉพาะไฟล์ที่ส่งไปพร้อมใบนี้ (claimEvidenceFor) */
+  /**
+   * ชื่อไฟล์หลักฐานที่ส่งไปพร้อมใบนี้ ตามที่ผู้ขายได้จริง (WO-01208_201384P_รูปอะไหล่เก่า.jpg …) — vendorFilePlan
+   * ตัวเดียวกับ zip/ปุ่มวิดีโอ (เคลมก้อน 6) ผู้ขายเทียบใบเคลมกับกองไฟล์ที่ได้รับทีละชื่อได้
+   */
   evidence: string[];
   /** ชิ้นที่ n จาก m ของงานซ่อมครั้งนี้ (claimPosition) — ไม่ส่งมา = ไม่พิมพ์ */
   position?: { n: number; m: number } | null;
@@ -92,8 +95,17 @@ function thaiDate(d: Date | null) {
  */
 const BODY = 11;
 const LABEL_W = 150;
-/** ระยะจากหัวช่องลายเซ็นถึงบรรทัดหลักฐาน — ช่องลายเซ็นทั้งก้อนต้องอยู่หน้าเดียวกัน (ดูท้ายฟังก์ชัน) */
-const SIG_TO_EVIDENCE = 84;
+/**
+ * ช่องลายเซ็นทั้งก้อน (หัว · ที่เซ็น ~1 ซม. · ชื่อ · วันที่) — ต้องอยู่หน้าเดียวกันทั้งก้อน (ดูท้ายฟังก์ชัน)
+ * ที่เซ็นเดิมสูงกว่านี้ ย่อลงตอนเพิ่มรายการชื่อไฟล์หลักฐาน (เคลมก้อน 6) ให้ใบร่างที่กรอกยาวปกติยังจบหน้าเดียว
+ */
+const SIG_LINE = 30;
+const SIG_H = SIG_LINE + 34;
+/**
+ * ชื่อไฟล์หลักฐาน — ตัวเล็กกว่าเนื้อหา (ตามตัวอย่าง) เป็นชื่อไฟล์ ไม่ใช่ข้อความที่ต้องอ่านยาว
+ * ไม่บีบระยะบรรทัด: สระบน/วรรณยุกต์ของบรรทัดล่างจะชนขีดล่าง "_" ของบรรทัดบน อ่านชื่อไฟล์ผิดตัว
+ */
+const EVIDENCE_PT = 9;
 /**
  * ภาพตัดป้ายข้างค่ารุ่น/Serial — ผู้ขายเทียบตัวอักษรกับป้ายจริงได้จากกระดาษแผ่นเดียว (เจ้าของงานเลือกข้อ 5 ก)
  * สูงเท่าบรรทัดเดียว ใบเคลมยาวปกติยังจบหน้าเดียว · กว้างสุดเท่านี้ ค่าที่อยู่ซ้ายยังมีที่พอ
@@ -227,27 +239,48 @@ export function buildPartClaimPdf(data: PartClaimPdfData): Promise<Buffer> {
       }
 
       /**
-       * ลายเซ็น + บรรทัดหลักฐาน — ผู้ขอเคลมคือช่างที่ปิดงาน · ผู้รับเคลมเว้นว่างให้เซ็นจริง
-       * วางเป็นก้อนเดียว: วัดความสูงทั้งก้อน (รวมบรรทัดหลักฐานที่อาจยาวสองบรรทัด) ไม่พอก็ขึ้นหน้าใหม่ทั้งก้อน
+       * หลักฐาน (ไฟล์ที่ส่งไปพร้อมใบนี้) — ชื่อไฟล์ที่ผู้ขายได้จริงทีละบรรทัด ตามตัวอย่างที่เจ้าของงานอนุมัติ (เคลมก้อน 6)
+       * อยู่ก่อนช่องลายเซ็น: ผู้รับเคลมเซ็นรับใบนี้พร้อมรายการไฟล์ที่ได้ ไม่ใช่เซ็นแล้วมีรายการห้อยท้าย
+       * เดิมเป็นบรรทัดเดียว "หลักฐานที่แนบในระบบ: Nameplate · รูปอะไหล่เก่า …" ที่บอกแค่ชนิดไฟล์ — ผู้ขายจับคู่กับไฟล์ที่ได้ไม่ได้
+       */
+      doc.moveDown(0.35);
+      doc.font(REGULAR).fontSize(BODY);
+      ensure(doc.currentLineHeight(true) * 2 + 2);
+      doc.font(BOLD).fontSize(BODY).fillColor("#000").text("หลักฐาน (ไฟล์ที่ส่งไปพร้อมใบนี้)", MARGIN, doc.y, { width: WIDTH, underline: true });
+      // สองคอลัมน์ อ่านซ้ายไปขวาทีละแถว — ห้าชื่อเรียงบรรทัดเดียวยาวเกินไป ใบเคลมยาวปกติ (อาการ ~300 · เช็ค ~600 ตัว)
+      // จะดันช่องลายเซ็นตกไปหน้าสอง ผู้ขายต้องเซ็นแผ่นเดียว (ชื่อไฟล์ยาวสุดราว 45 ตัว ยังพอในครึ่งหน้า ไม่พอก็ตัดบรรทัดในช่องตัวเอง)
+      const names = data.evidence.length ? data.evidence : ["—"];
+      const half = WIDTH / 2;
+      doc.font(REGULAR).fontSize(EVIDENCE_PT).fillColor("#333");
+      doc.y += 1;
+      for (let i = 0; i < names.length; i += 2) {
+        const pair = names.slice(i, i + 2);
+        const h = Math.max(...pair.map((n) => doc.heightOfString(n, { width: half - 8 })));
+        ensure(h);
+        const y = doc.y;
+        pair.forEach((n, k) => doc.text(n, MARGIN + k * half, y, { width: half - 8 }));
+        doc.x = MARGIN;
+        doc.y = y + h;
+      }
+      doc.fillColor("#000");
+
+      /**
+       * ลายเซ็น — ผู้ขอเคลมคือช่างที่ปิดงาน · ผู้รับเคลมเว้นว่างให้เซ็นจริง
+       * วางเป็นก้อนเดียว: วัดความสูงทั้งก้อน ไม่พอก็ขึ้นหน้าใหม่ทั้งก้อน
        * ลายเซ็นจึงไม่มีวันแยกจากชื่อ/วันที่ และอยู่หลังเนื้อหาสุดท้ายเสมอ
        */
-      const evidenceText = `หลักฐานที่แนบในระบบ: Nameplate · ${data.evidence.join(" · ") || "—"}`;
-      doc.font(REGULAR).fontSize(10);
-      const evidenceH = doc.heightOfString(evidenceText, { width: WIDTH });
-      doc.y += 18;
-      ensure(SIG_TO_EVIDENCE + evidenceH);
+      doc.y += 8;
+      ensure(SIG_H);
       const sigY = doc.y;
       const col = WIDTH / 2;
       const sig = (x: number, title: string, name: string, date: string) => {
         doc.font(BOLD).fontSize(BODY + 0.5).text(title, x, sigY, { width: col - 20, align: "center" });
-        doc.moveTo(x + 20, sigY + 42).lineTo(x + col - 40, sigY + 42).dash(1, { space: 2 }).strokeColor("#999").stroke().undash();
-        doc.font(REGULAR).fontSize(BODY).text(name, x, sigY + 45, { width: col - 20, align: "center" });
-        doc.text(`วันที่ ${date}`, x, sigY + 61, { width: col - 20, align: "center" });
+        doc.moveTo(x + 20, sigY + SIG_LINE).lineTo(x + col - 40, sigY + SIG_LINE).dash(1, { space: 2 }).strokeColor("#999").stroke().undash();
+        doc.font(REGULAR).fontSize(BODY).text(name, x, sigY + SIG_LINE + 3, { width: col - 20, align: "center" });
+        doc.text(`วันที่ ${date}`, x, sigY + SIG_LINE + 18, { width: col - 20, align: "center" });
       };
       sig(MARGIN, "ผู้ขอเคลม", data.requesterName ?? "", thaiDate(claim.createdAt));
       sig(MARGIN + col, "ผู้รับเคลม", "", "....................");
-
-      doc.font(REGULAR).fontSize(10).fillColor("#444").text(evidenceText, MARGIN, sigY + SIG_TO_EVIDENCE, { width: WIDTH });
 
       /**
        * เลขหน้า "หน้า i/n" ในขอบล่าง — ใบเคลมที่ยาวจนล้นหน้า ผู้ขายรู้ว่ามีแผ่นต่อ ไม่หยิบไปแค่แผ่นแรก

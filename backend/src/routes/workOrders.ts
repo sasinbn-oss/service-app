@@ -11,6 +11,8 @@
 import { AREA_BRANCH_SELECT, AREA_ONLY_MESSAGE, AREA_OUT_OF_SCOPE, areaBranchSelect, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router, Response } from "express";
 import multer from "multer";
+import JSZip from "jszip";
+import { Readable } from "stream";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { looseKey } from "../utils/names";
@@ -39,6 +41,7 @@ import { freshOutsource, isOutsourceTeam, outsourceList } from "../utils/outsour
 import { distanceMeters } from "../utils/geo";
 import { buildPartClaimPdf } from "../documents/partClaimPdf";
 import { documentPath, saveDocument } from "../documents/store";
+import { getZipTicket, saveZipTicket, zipTicketPath } from "../documents/claimZipTickets";
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
 import { areaTeamWorkbook } from "../reports/areaTeamReport";
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
@@ -54,6 +57,7 @@ import {
 } from "../reports/branchPartsReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor, machineErrorText } from "../utils/claimGuide";
+import { claimRepeatsOf } from "../utils/claimRepeats";
 import {
   aggregateClaimStatus,
   changedSinceReject,
@@ -87,6 +91,10 @@ import {
   reviewFlagLabel,
   reviewFlagsFor,
   skipReasonText,
+  vendorFileName,
+  vendorFilePlan,
+  VendorPlan,
+  vendorRows,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
@@ -94,6 +102,7 @@ import {
   deleteObject,
   getDownloadUrl,
   getObjectBytes,
+  getObjectStream,
   isFileStoreConfigured,
   uploadObject,
   SIGNED_URL_TTL_SECONDS,
@@ -2798,43 +2807,11 @@ async function detailFor(id: number) {
 
 /**
  * เครื่องนี้เคยเคลมมาก่อนไหม — หน้าตรวจเคลมขึ้น "⚠ {รหัส} เครื่องนี้เคยเคลมเมื่อ …" ให้ Admin Spare Part ดูก่อนอนุมัติ
- * (อะไหล่ชิ้นเดิมเคลมซ้ำในเวลาสั้น ๆ = ผู้ขายถามแน่ หรือของที่ส่งไปรอบก่อนยังไม่ได้แก้ต้นเหตุ)
- *
- * เครื่องเดียวกัน = สาขาเดียวกัน + รหัสเครื่องตรงกันไม่สนตัวพิมพ์ (กติกาเดียวกับลิงก์ประวัติเคลม) · แถวล่าสุดต่อ (ใบ, ชิ้น)
- * ตัดเฉพาะแถวของงานซ่อมครั้งนี้ของใบนี้ (หลังเปิดใบใหม่ครั้งล่าสุด) — ใบเดียวกันที่อนุมัติไปตอนซ่อมครั้งก่อนเปิดใหม่ต้องขึ้น
- * เพราะนั่นคือการเคลมซ้ำจริง · ใบทดสอบไม่นับให้ใบจริง (คัดลอกใบจริงไปลองปิดพร้อมเคลม ไม่ได้แปลว่าเครื่องเคลมซ้ำ)
- * "เคย" = ส่งก่อนแถวล่าสุดของใบนี้ — เปิดดูใบเก่าทีหลังต้องไม่ขึ้นเคลมของใบที่ใหม่กว่าว่า "เครื่องนี้เคยเคลม"
+ * กติกาอยู่ที่ utils/claimRepeats.ts ที่เดียว — กล่องงานตรวจเคลม (ป้าย "เคลมซ้ำ") ใช้คำสั่งเดียวกัน
  * คำสั่งเดียวหาสาขา/เครื่องจากใบเอง จึงถามพร้อมกับตัวใบได้ ไม่ต้องรอใบมาก่อน (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
  */
 async function claimRepeatsFor(id: number) {
-  const rows = await prisma.$queryRaw<
-    { workOrderId: number; code: string; partCode: string; partName: string; status: string; createdAt: Date }[]
-  >`
-    SELECT DISTINCT ON (c."workOrderId", COALESCE('id:' || c."sparePartId", 'code:' || c."partCode"))
-           c."workOrderId", w.code, c."partCode", c."partName", c.status, c."createdAt"
-    FROM "WorkOrder" me
-    JOIN "Branch" b ON b.id = me."branchId"
-    JOIN "Machine" m ON m.id = me."machineId"
-    JOIN "PartClaim" c ON c."branchCode" = b.code AND lower(c."machineCode") = lower(m.code)
-    JOIN "WorkOrder" w ON w.id = c."workOrderId"
-    WHERE me.id = ${id}
-      AND (me."isTest" OR NOT w."isTest")
-      AND NOT (c."workOrderId" = me.id AND c."createdAt" >= COALESCE(
-        (SELECT max(l."createdAt") FROM "WorkOrderLog" l WHERE l."workOrderId" = me.id AND l.action = 'REOPENED'),
-        '-infinity'::timestamp))
-      AND c."createdAt" <= COALESCE(
-        (SELECT max(x."createdAt") FROM "PartClaim" x WHERE x."workOrderId" = me.id), 'infinity'::timestamp)
-    ORDER BY c."workOrderId", COALESCE('id:' || c."sparePartId", 'code:' || c."partCode"), c."createdAt" DESC, c.id DESC`;
-  return rows
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-    .map((r) => ({
-      workOrderId: r.workOrderId,
-      code: r.code,
-      partCode: r.partCode,
-      partName: r.partName,
-      status: r.status,
-      createdAt: r.createdAt,
-    }));
+  return (await claimRepeatsOf([id])).get(id) ?? [];
 }
 
 router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
@@ -7746,6 +7723,73 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
+ * ทุกอย่างที่ใบเคลม PDF · zip หลักฐาน · รายการไฟล์ส่งผู้ขาย ของใบหนึ่งต้องใช้ — อ่านพร้อมกันรอบเดียว
+ *
+ * แถวเคลมทุกแถวของใบ (ไม่ใช่แค่แถวที่เปิด): หาวันที่ส่งครั้งแรกของห่วงโซ่ "ตีกลับ → ส่งใหม่" (วันที่เปลี่ยนอะไหล่จริง) ·
+ * ชิ้นที่ n จาก m · ชุดชิ้นที่อนุมัติแล้วที่ไฟล์ของเครื่องใช้ร่วมกัน (ชื่อไฟล์ในใบเคลมต้องตรงกับชื่อใน zip)
+ * ไฟล์หลักฐาน + ป้ายรุ่น · จ่ายงาน/เปิดใบใหม่ (จุดเริ่มรอบหลักฐาน และงานซ่อมครั้งใหม่) · ชื่อช่างที่ส่ง (ผู้ขอเคลม)
+ * ชื่อช่างถามจากแถวเคลมของใบนี้ในคำสั่งเดียวกัน — ไม่ต้องรอรู้ก่อนว่าใบเคลมไหนใครส่ง (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
+ */
+async function loadClaimDocs(id: number) {
+  const [order, rows, files, logs, users] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { code: true, isTest: true } }),
+    prisma.partClaim.findMany({ where: { workOrderId: id } }),
+    prisma.workOrderAttachment.findMany({
+      where: { workOrderId: id, role: { in: [...CLAIM_EVIDENCE_ROLES, "NAMEPLATE"] } },
+      select: {
+        id: true,
+        role: true,
+        sparePartId: true,
+        createdAt: true,
+        mimeType: true,
+        fileName: true,
+        sizeBytes: true,
+        objectKey: true,
+        uploadedAt: true,
+      },
+    }),
+    prisma.workOrderLog.findMany({
+      where: { workOrderId: id, action: { in: ["ASSIGNED", "REOPENED"] } },
+      select: { action: true, createdAt: true },
+    }),
+    prisma.$queryRaw<{ id: number; name: string }[]>`
+      SELECT u.id, u.name FROM "User" u
+      WHERE u.id IN (SELECT c."createdById" FROM "PartClaim" c WHERE c."workOrderId" = ${id})`,
+  ]);
+  if (!order) return null;
+  return {
+    id,
+    code: order.code,
+    isTest: order.isTest,
+    rows,
+    files: files.map((f) => ({ ...f, stored: !!(f.objectKey && f.uploadedAt) })),
+    logs,
+    nameOf: new Map(users.map((u) => [u.id, u.name])),
+  };
+}
+type ClaimDocs = NonNullable<Awaited<ReturnType<typeof loadClaimDocs>>>;
+
+/**
+ * ใบเคลม PDF ของแถวหนึ่งจากข้อมูลที่อ่านมาแล้ว — ใช้ทั้งเปิดทีละใบและตอนใส่ zip (zip สร้างทีละใบเมื่อถึงคิว)
+ * หลักฐานที่พิมพ์ = ชื่อไฟล์ที่ผู้ขายได้จริง (vendorFilePlan ตัวเดียวกับ zip) — ไม่ใช่แค่ชื่อชนิดไฟล์
+ * ผู้ขายเทียบใบเคลมกับกองไฟล์ที่ได้รับทีละชื่อได้ และไฟล์ที่แนบหลังส่งเคลมไม่มีทางโผล่ในใบ (claimEvidenceFor)
+ */
+function renderClaimPdf(docs: ClaimDocs, claim: ClaimDocs["rows"][number]): Promise<Buffer> {
+  const since = repairStartFor(claim.createdAt, docs.logs);
+  const plan = vendorFilePlan(docs.code, vendorRows(docs.rows, docs.logs, claim), docs.files, docs.logs);
+  return buildPartClaimPdf({
+    workOrderCode: docs.code,
+    claim,
+    repairedAt: firstSubmittedAt(claim, docs.rows, since),
+    requesterName: claim.createdById ? docs.nameOf.get(claim.createdById) ?? null : null,
+    evidence: (plan.byRow.get(claim.id) ?? []).map((f) => f.name),
+    position: claimPosition(claim, docs.rows, since),
+    machineError: machineErrorText(claim.fieldCheck),
+    isTest: docs.isTest,
+  });
+}
+
+/**
  * ใบเคลมเป็น PDF หน้าตาตามหน้า "ข้อมูลแจ้งเคลม" ของฟอร์ม — ส่งให้ผู้ขายพร้อมไฟล์หลักฐาน
  * ยังไม่อนุมัติก็เปิดได้ (Admin Spare Part ดูก่อนกดอนุมัติ) แต่มีคำว่า "ร่าง" กำกับ
  */
@@ -7756,10 +7800,11 @@ async function claimPdf(req: AuthRequest, res: Response) {
     res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
     return null;
   }
-  const wo = await loadAttachableWorkOrder(req, res, id);
+  // สิทธิ์เปิดใบกับข้อมูลใบเคลมอ่านพร้อมกัน — ไม่มีสิทธิ์ก็แค่ทิ้งข้อมูลที่อ่านมา
+  const [wo, docs] = await Promise.all([loadAttachableWorkOrder(req, res, id), loadClaimDocs(id)]);
   if (!wo) return null;
-  const claim = await prisma.partClaim.findFirst({ where: { id: claimId, workOrderId: id } });
-  if (!claim) {
+  const claim = docs?.rows.find((r) => r.id === claimId);
+  if (!docs || !claim) {
     res.status(404).json({ error: "ไม่พบใบเคลมนี้" });
     return null;
   }
@@ -7768,51 +7813,7 @@ async function claimPdf(req: AuthRequest, res: Response) {
     res.status(409).json({ error: "ชิ้นนี้ปิดเคลม ไม่ส่งผู้ขาย — ไม่มีใบเคลม" });
     return null;
   }
-  /**
-   * ไฟล์ · แถวเคลม · ประวัติ ถึงเวลาที่ส่งใบนี้ — อ่านพร้อมกันรอบเดียว
-   * หลักฐานที่พิมพ์ = claimEvidenceFor (กติกาเดียวกับหน้าตรวจและการกันลบ) — เดิมลงทุกไฟล์ของชิ้นนั้นไม่มีขอบบน
-   * ไฟล์ที่แนบหลังส่ง (เตรียมส่งใหม่หลังถูกตีกลับ) จึงไปโผล่ในใบเคลมของรอบที่ผู้ตรวจไม่เคยเห็นไฟล์นั้น
-   */
-  const [requester, files, chain, logs, order] = await Promise.all([
-    claim.createdById
-      ? prisma.user.findUnique({ where: { id: claim.createdById }, select: { name: true } })
-      : Promise.resolve(null),
-    prisma.workOrderAttachment.findMany({
-      where: { workOrderId: id, role: { in: [...CLAIM_EVIDENCE_ROLES, "NAMEPLATE"] } },
-      select: { id: true, role: true, sparePartId: true, createdAt: true },
-    }),
-    // แถวก่อนหน้า (ทุกชิ้น) — หาวันที่ส่งครั้งแรกของห่วงโซ่ "ตีกลับ → ส่งใหม่" (วันที่เปลี่ยนอะไหล่จริง) และชิ้นที่ n จาก m
-    prisma.partClaim.findMany({
-      where: { workOrderId: id, createdAt: { lte: claim.createdAt } },
-      select: { id: true, sparePartId: true, partCode: true, status: true, createdAt: true },
-    }),
-    // จ่ายงาน/เปิดใบใหม่ = จุดเริ่มรอบหลักฐาน · เปิดใบใหม่ = ซ่อมครั้งใหม่ แถวก่อนหน้านั้นไม่ใช่ห่วงโซ่เดียวกัน
-    prisma.workOrderLog.findMany({
-      where: { workOrderId: id, action: { in: ["ASSIGNED", "REOPENED"] }, createdAt: { lte: claim.createdAt } },
-      select: { action: true, createdAt: true },
-    }),
-    prisma.workOrder.findUnique({ where: { id }, select: { isTest: true } }),
-  ]);
-  const since = repairStartFor(claim.createdAt, logs);
-  const evidence = claimEvidenceFor(claim, files, logs)
-    .map((f) => f.role!)
-    .filter((r): r is (typeof CLAIM_EVIDENCE_ROLES)[number] => (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(r))
-    .sort((a, b) => CLAIM_EVIDENCE_ROLES.indexOf(a) - CLAIM_EVIDENCE_ROLES.indexOf(b));
-  const pdf = await buildPartClaimPdf({
-    workOrderCode: wo.code,
-    claim,
-    repairedAt: firstSubmittedAt(claim, chain, since),
-    requesterName: requester?.name ?? null,
-    // วิดีโอของเครื่องเรียกตามเครื่อง/Error ของแถวนี้ (Oasis · ไม่มี Error ขึ้น = วิดีโออาการตอนเครื่องเดิน) — ชื่อเดียวกับที่ช่างแนบ
-    evidence: evidence.map((r) =>
-      r === "CLAIM_ERROR_VIDEO"
-        ? errorVideoLabel(flagContextOf(claim).errorCode, plateFamilyOf(claim.brand))
-        : ATTACHMENT_ROLE_LABELS[r]?.replace(" (เคลม)", "") ?? r
-    ),
-    position: claimPosition(claim, chain, since),
-    machineError: machineErrorText(claim.fieldCheck),
-    isTest: !!order?.isTest,
-  });
+  const pdf = await renderClaimPdf(docs, claim);
   return { pdf, filename: `ใบเคลม-${wo.code}-${claim.partCode}.pdf`, ascii: `claim-${wo.code}-${claim.id}.pdf` };
 }
 
@@ -7839,6 +7840,200 @@ router.post("/:id/claims/:claimId/pdf-link", requireAuth, async (req: AuthReques
     ownerId: req.auth!.userId,
   });
   res.status(201).json({ path: documentPath(stored) });
+});
+
+// ── หลักฐานส่งผู้ขาย (เคลมก้อน 6) ─────────────────────────────
+
+const VENDOR_ONLY = "ดาวน์โหลดหลักฐานส่งผู้ขายได้เฉพาะ Admin Spare Part";
+const NO_APPROVED_CLAIM = "ยังไม่มีชิ้นที่อนุมัติ — ดาวน์โหลดหลักฐานได้หลังอนุมัติ";
+/**
+ * เพดานกันพลาด ไม่ใช่ขนาดปกติ — รูปหลักฐานใบหนึ่งปกติไม่กี่ MB (แอปย่อรูปก่อนอัป) zip ใหญ่เกินนี้แนบอีเมลถึงผู้ขายไม่ได้อยู่ดี
+ * และกันใบที่มีไฟล์ผิดปกติไม่ให้ดึงเซิร์ฟเวอร์ (Render free) ไปส่งไฟล์ก้อนใหญ่ค้างนาน ๆ
+ */
+const ZIP_PHOTO_CAP = 40 * 1024 * 1024;
+const ZIP_TOO_BIG = "รูปรวมใหญ่เกิน 40 MB — ดาวน์โหลดทีละไฟล์จากใบงาน";
+
+/** แถวที่ส่งผู้ขาย (อนุมัติแล้ว · งานซ่อมครั้งนี้) + ชุดไฟล์ — zip · ปุ่มวิดีโอ · รายการไฟล์ ใช้ชุดเดียวกัน */
+function vendorPlanOf(docs: ClaimDocs) {
+  const rows = vendorRows(docs.rows, docs.logs);
+  return { rows, plan: vendorFilePlan(docs.code, rows, docs.files, docs.logs) };
+}
+const zipFileName = (code: string) => vendorFileName(code, null, "หลักฐาน", "zip");
+const zipPhotoBytes = (plan: VendorPlan) => plan.zip.reduce((n, z) => n + (z.kind === "photo" ? z.sizeBytes : 0), 0);
+
+/**
+ * ผ่านด่านของปุ่มดาวน์โหลดหลักฐาน: คนกด · ใบงาน · มีชิ้นที่อนุมัติแล้ว — null = ตอบไปแล้ว
+ *
+ * เฉพาะ Admin Spare Part กับ Super Admin (canReviewClaims) — คนที่ส่งของให้ผู้ขายจริง และคนเดียวที่เห็นปุ่ม
+ * แอดมินทั่วไปเปิดใบเคลม PDF ทีละใบได้เหมือนเดิม แต่ไม่ได้ชุดส่งผู้ขาย (ไม่มีปุ่ม จึงไม่เปิดทางที่ไม่มีใครใช้ไว้)
+ * ก่อนอนุมัติไม่มีอะไรให้ดาวน์โหลด — ผู้ขายต้องไม่ได้ใบร่าง (เจ้าของงานเลือกข้อ 13 · ก่อนอนุมัติมีแค่ "ใบเคลม PDF (ร่าง)")
+ */
+async function vendorAccess(req: AuthRequest, res: Response) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+    return null;
+  }
+  if (!canReviewClaims(req.auth)) {
+    res.status(403).json({ error: VENDOR_ONLY });
+    return null;
+  }
+  const [wo, docs] = await Promise.all([loadAttachableWorkOrder(req, res, id), loadClaimDocs(id)]);
+  if (!wo) return null;
+  if (!docs) {
+    res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+  const v = vendorPlanOf(docs);
+  if (!v.rows.length) {
+    res.status(409).json({ error: NO_APPROVED_CLAIM });
+    return null;
+  }
+  return { docs, ...v };
+}
+
+/**
+ * ขอลิงก์ zip หลักฐาน (ใบเคลม PDF ทุกชิ้นที่อนุมัติ + รูป) — คืนแค่ตั๋ว ยังไม่สร้างไฟล์
+ * zip สร้างตอนเบราว์เซอร์เปิดลิงก์ (GET /claims/evidence-zip/:ticket) ไม่เก็บไว้ในที่พักเอกสาร — ดู documents/claimZipTickets.ts
+ * อยู่ใน READ_POSTS_WHILE_VIEWING: แค่ออกตั๋ว ไม่แตะข้อมูลงาน — Super Admin ที่ดูในฐานะ Admin Spare Part ดาวน์โหลดได้เหมือนที่เขาเห็น
+ */
+router.post("/:id/claims/evidence-link", requireAuth, async (req: AuthRequest, res) => {
+  const v = await vendorAccess(req, res);
+  if (!v) return;
+  if (zipPhotoBytes(v.plan) > ZIP_PHOTO_CAP) return res.status(413).json({ error: ZIP_TOO_BIG });
+  const t = saveZipTicket(v.docs.id, req.auth!.userId);
+  res.json({ path: zipTicketPath(t), filename: zipFileName(v.docs.code) });
+});
+
+/**
+ * สายข้อมูลที่ยังไม่เปิดจนกว่าจะถึงคิว — jszip หยุดทุกสายไว้ตั้งแต่ตอนใส่ (pause) แล้วปล่อยให้ไหลทีละไฟล์ตามลำดับใน zip
+ * read() ครั้งแรกจึงเกิดตอนถึงคิวของไฟล์นั้นจริง ๆ แล้วค่อยเปิดอ่านจากที่เก็บ/สร้าง PDF ตอนนั้น
+ * ถ้าเปิดทุกไฟล์ไว้ก่อน (ส่ง stream จาก getObjectStream ตรง ๆ) การเชื่อมต่อไปที่เก็บไฟล์ค้างพร้อมกันทั้งใบ
+ * และ PDF ทุกใบอยู่ในหน่วยความจำพร้อมกัน — แบบนี้มีไฟล์เดียวที่กำลังไหลอยู่ในหน่วยความจำเสมอ
+ */
+function lazyReadable(open: () => Promise<Readable | Buffer>): Readable {
+  let src: Readable | null = null;
+  let opening = false;
+  const out = new Readable({
+    read() {
+      if (src) {
+        src.resume();
+        return;
+      }
+      if (opening) return;
+      opening = true;
+      open().then(
+        (s) => {
+          if (out.destroyed) {
+            if (!Buffer.isBuffer(s)) s.destroy();
+            return;
+          }
+          if (Buffer.isBuffer(s)) {
+            out.push(s);
+            out.push(null);
+            return;
+          }
+          src = s;
+          s.on("data", (c: Buffer) => {
+            if (!out.push(c)) s.pause();
+          });
+          s.once("end", () => out.push(null));
+          s.once("error", (e) => out.destroy(e));
+        },
+        (e) => out.destroy(e instanceof Error ? e : new Error(String(e)))
+      );
+    },
+    destroy(err, cb) {
+      src?.destroy();
+      cb(err);
+    },
+  });
+  return out;
+}
+
+/**
+ * ดาวน์โหลด zip หลักฐาน — ไม่ต้องมี Authorization header (เบราว์เซอร์ที่แอปส่งลิงก์ไปเปิดแนบเองไม่ได้) กุญแจในลิงก์คือสิทธิ์
+ *
+ * รายการไฟล์คิดใหม่ตอนกด (vendorFilePlan ตัวเดียวกับปุ่ม/ใบเคลม) แล้วส่งออกเป็นสายทีละไฟล์ ไม่สร้างทั้งก้อนไว้ก่อน:
+ * ไม่บีบอัด (STORE — รูป JPEG/PDF บีบต่อไม่ลง เสียเวลาเครื่องเปล่า ๆ) · ไม่ใส่วิดีโอ (ไฟล์ละถึง 60 MB แนบอีเมลไม่ได้ · ดาวน์โหลดแยกปุ่ม)
+ * พังกลางทาง (ที่เก็บไฟล์ไม่ตอบ) = ตัดการเชื่อมต่อ ให้เบราว์เซอร์ขึ้นว่าดาวน์โหลดไม่สำเร็จ —
+ * ส่วนหัว 200 ออกไปแล้ว ถ้าจบไฟล์ตามปกติผู้ใช้จะได้ zip ที่ขาดรูปโดยไม่รู้ตัว แล้วส่งของไม่ครบให้ผู้ขาย
+ */
+router.get("/claims/evidence-zip/:ticket", async (req, res) => {
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  const t = token ? getZipTicket(req.params.ticket, token) : null;
+  if (!t) return res.status(404).json({ error: "ไม่พบไฟล์นี้ หรือลิงก์หมดอายุแล้ว (เก็บไว้ 2 ชั่วโมง)" });
+  const docs = await loadClaimDocs(t.workOrderId);
+  if (!docs) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  const { plan } = vendorPlanOf(docs);
+  // ระหว่างออกตั๋วกับกดดาวน์โหลด ใบอาจถูกเปิดใหม่ (งานซ่อมครั้งใหม่ยังไม่มีชิ้นที่อนุมัติ) หรือรูปถูกเปลี่ยน
+  if (!plan.pdfs.length) return res.status(409).json({ error: NO_APPROVED_CLAIM });
+  if (zipPhotoBytes(plan) > ZIP_PHOTO_CAP) return res.status(413).json({ error: ZIP_TOO_BIG });
+
+  const rowById = new Map(docs.rows.map((r) => [r.id, r]));
+  const keyById = new Map(docs.files.map((f) => [f.id, f.objectKey]));
+  const zip = new JSZip();
+  const sources: Readable[] = [];
+  for (const z of plan.zip) {
+    const src =
+      z.kind === "pdf"
+        ? lazyReadable(() => renderClaimPdf(docs, rowById.get(z.claimId)!))
+        : lazyReadable(() => getObjectStream(keyById.get(z.attachmentId)!));
+    sources.push(src);
+    zip.file(z.name, src);
+  }
+  const name = zipFileName(docs.code);
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="claim-evidence-${docs.code.replace(/[^A-Za-z0-9_-]/g, "-")}.zip"; filename*=UTF-8''${encodeURIComponent(name)}`
+  );
+  res.setHeader("Cache-Control", "private, no-store");
+  // ชนิดใน jszip เป็น NodeJS.ReadableStream แต่ตัวจริงคือ stream.Readable ของ Node (มี destroy)
+  const out = zip.generateNodeStream({ type: "nodebuffer", streamFiles: true, compression: "STORE" }) as Readable;
+  let stopped = false;
+  const stop = (err?: unknown) => {
+    if (stopped) return;
+    stopped = true;
+    out.unpipe(res);
+    out.destroy();
+    for (const s of sources) s.destroy();
+    if (err) {
+      console.error(`zip หลักฐานเคลม ${docs.code} ส่งไม่จบ:`, err);
+      res.destroy(err instanceof Error ? err : new Error(String(err)));
+    }
+  };
+  out.on("error", stop);
+  // jszip เก็บ error ของไฟล์ที่ถูกหยุดรอไว้เงียบ ๆ (ตอนผู้ใช้เน็ตช้า) — ฟังที่ต้นทางด้วย ไม่งั้นการดาวน์โหลดค้างไม่จบ
+  for (const s of sources) s.on("error", stop);
+  // ผู้ใช้ยกเลิกกลางทาง — ปิดสายที่เปิดค้างไว้กับที่เก็บไฟล์ ไม่ปล่อยให้อ่านต่อทั้งที่ไม่มีใครรับ
+  res.on("close", () => {
+    if (!res.writableFinished) stop();
+  });
+  out.pipe(res);
+});
+
+/**
+ * รายการไฟล์ส่งผู้ขายของใบนี้ — ชื่อใน zip (ใบเคลม PDF + รูป) และวิดีโอที่ดาวน์โหลดแยกไฟล์ละปุ่ม
+ * ลิงก์วิดีโอเป็นลิงก์ชั่วคราวตรงไปที่เก็บไฟล์ (attachment + ชื่อไฟล์ส่งผู้ขาย) — เบราว์เซอร์โหลดเอง ไม่ผ่านหน่วยความจำเซิร์ฟเวอร์
+ * (photos คือทุกชื่อใน zip ตามลำดับในไฟล์ รวมใบเคลม PDF — หน้าจอขึ้น "zip › {ชื่อ}" ทีละบรรทัดตามตัวอย่าง)
+ */
+router.get("/:id/claims/files", requireAuth, async (req: AuthRequest, res) => {
+  const v = await vendorAccess(req, res);
+  if (!v) return;
+  if (v.plan.videos.length && !isFileStoreConfigured()) {
+    return res.status(503).json({ error: "ยังไม่ได้ตั้งค่าที่เก็บไฟล์ ให้แจ้งผู้ดูแลระบบก่อนใช้งานส่วนนี้" });
+  }
+  const keyById = new Map(v.docs.files.map((f) => [f.id, f.objectKey]));
+  const videos = await Promise.all(
+    v.plan.videos.map(async (f) => ({
+      attachmentId: f.attachmentId,
+      name: f.name,
+      sizeBytes: f.sizeBytes,
+      url: await getDownloadUrl(keyById.get(f.attachmentId)!, { fileName: f.name, inline: false }),
+    }))
+  );
+  res.json({ zip: { filename: zipFileName(v.docs.code) }, photos: v.plan.zip.map((z) => z.name), videos });
 });
 
 /**

@@ -64,7 +64,10 @@ import FixList, { buildFixItems, unresolvedOf } from "../components/claims/FixLi
 import { PART_FLAGS, partFlagsOf, rejectLinesOf, WHOLE_ORDER_PART, type ServerFlag } from "../utils/claimFlags";
 import ClaimReview from "../components/claims/ClaimReview";
 import DecisionBar, { ReviewDone } from "../components/claims/DecisionBar";
+import DownloadPanel from "../components/claims/DownloadPanel";
 import { useClaimVerdicts, type ReviewOutcome } from "../components/claims/useClaimVerdicts";
+// ใครตรวจ/ตัดสินเคลมได้ — กติกาเดียวกับกล่องงานตรวจเคลมและเมนู (utils/claimQueue)
+import { canDecideClaims, canReviewClaims, refreshClaimQueueCount } from "../utils/claimQueue";
 import ClaimTrail from "../components/claims/ClaimTrail";
 import CheckGroups from "../components/claims/CheckGroups";
 import {
@@ -638,20 +641,6 @@ function ourTeamOrder(
   return inMyTeam(u, o.assignedTeam) || (!!o.crossTeam && inMyTeam(u, o.crossTeam.ownTeam));
 }
 
-/** ตรวจเคลมได้เฉพาะ Admin Spare Part (Super Admin ทำแทนได้) — ตรงกับ canReviewClaims ฝั่งเซิร์ฟเวอร์ */
-function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | null) {
-  return !!u && (!!u.partsAdmin || !!u.superAdmin);
-}
-
-/**
- * ตัดสินเคลมได้จริงไหม — ผู้ตรวจที่ไม่ได้กำลังดูในฐานะคนอื่น
- * Super Admin ดูในฐานะ Admin Spare Part ได้ (เห็นหน้าตรวจเหมือนเขา) แต่เซิร์ฟเวอร์ไม่รับคำสั่งตอนดูในฐานะ
- * จึงไม่ขึ้นปุ่มตัดสินให้กดแล้วล้ม — กติกาเดียวทั้งแถบตัดสินและข้อความในการ์ดขั้นปัจจุบัน
- */
-function canDecideClaims(u: { partsAdmin?: boolean; superAdmin?: boolean; viewAs?: unknown } | null) {
-  return canReviewClaims(u) && !u?.viewAs;
-}
-
 /**
  * ตัวเลือกทีมตอนจ่ายงาน — ทีม outsource ใช้ชื่อทีมเหมือนทีมอื่น แต่แยกไว้กลุ่มของตัวเองท้ายรายการ
  * (เจ้าของงานขอ ต.ค. 69: ไม่อยากเห็นป้าย "outsource" ต่อชื่อ แต่ต้องไม่ปนกับทีมช่างปกติ)
@@ -962,6 +951,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     !!order && order.status === "CLAIM_REVIEW" && canDecideClaims(me),
     async (outcome) => {
       setReviewOutcome(outcome);
+      // ป้าย "{x} ใบ" ของเมนูตรวจเคลมลดทันที — ตัดสินแล้วยังอยู่หน้าเดิม เมนูไม่รู้เองจนกว่าจะเปลี่ยนหน้า
+      refreshClaimQueueCount();
       await load();
       /**
        * สรุปผลอยู่บนสุดของใบ แต่ผู้ตรวจมักเลื่อนลงไปดูรูป/วิดีโอของชิ้นนั้นอยู่ — หน้าตรวจหายไปแล้วใบงานยาว ๆ ขึ้นแทน
@@ -973,19 +964,16 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     }
   );
   /**
-   * "ใบถัดไป →" — ใบรอตรวจเคลมที่รอนานสุด (ช่างส่งก่อน) ที่ไม่ใช่ใบนี้ · ไม่มีแล้วกลับไปหน้าก่อน
-   * ผู้ตรวจไม่ต้องย้อนไปหารายการเองทีละใบ (กล่องตรวจเคลมเต็มรูปแบบมาในก้อน 6)
+   * "ใบถัดไป →" — ใบแรกของกล่องงานตรวจเคลม (เรียงจากที่รอนานที่สุด) ที่ไม่ใช่ใบนี้ · ไม่มีแล้วกลับไปหน้าก่อน
+   * ผู้ตรวจไม่ต้องย้อนไปหารายการเองทีละใบ · ถามกล่องงานชุดเดียวกับหน้าตรวจเคลม (เคลมก้อน 6) — ลำดับ "ถัดไป"
+   * ของมือถือกับจอคอมจึงตรงกัน (เดิมเรียงตามเวลาปิดงาน ซึ่งไม่ใช่เวลาที่ส่งเคลมรอบล่าสุด)
    */
   const nextClaim = useCallback(async () => {
     setNexting(true);
     try {
-      const res = await api.get<{ rows: { id: number; status: string; closedAt: string | null }[] }>("/work-orders", {
-        params: { status: "CLAIM_REVIEW" },
-      });
-      const next = res.data.rows
-        .filter((r) => r.id !== id && r.status === "CLAIM_REVIEW")
-        .sort((a, b) => (a.closedAt ?? "").localeCompare(b.closedAt ?? "") || a.id - b.id)[0];
-      if (next) navigation.replace("WorkOrderDetail", { id: next.id });
+      const res = await api.get<{ rows: { workOrderId: number }[] }>("/part-claims/queue");
+      const next = res.data.rows.find((r) => r.workOrderId !== id);
+      if (next) navigation.replace("WorkOrderDetail", { id: next.workOrderId });
       else {
         showAlert("ไม่มีใบรอตรวจเคลมแล้ว");
         if (navigation.canGoBack()) navigation.goBack();
@@ -1498,6 +1486,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           trail={claimTrailOf(order.claims, order.logs)}
           onNext={() => void nextClaim()}
           busy={nexting}
+          // ดาวน์โหลดหลักฐานส่งผู้ขายหลังอนุมัติ (เคลมก้อน 6) — เฉพาะผู้ตรวจ (เซิร์ฟเวอร์ให้เฉพาะ Admin Spare Part / Super Admin)
+          downloads={canReviewClaims(me) ? { workOrderId: order.id, code: order.code } : null}
         />
       ) : null}
       {reviewMode ? (
@@ -2446,7 +2436,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       </View>
 
       {order.claims.length > 0 && !reviewMode ? (
-        <ClaimsCard order={order} files={files} showMissed={canReviewClaims(me)} />
+        <ClaimsCard
+          order={order}
+          files={files}
+          showMissed={canReviewClaims(me)}
+          // แผงดาวน์โหลดส่งผู้ขายของผู้ตรวจ — ตอนสรุปผลที่เพิ่งตัดสินขึ้นอยู่ด้านบน แผงอยู่ในสรุปนั้นแล้ว ไม่ซ้ำสองแผง
+          downloads={canReviewClaims(me) && !(reviewOutcome && !reviewMode)}
+        />
       ) : null}
 
       {order.closedAt || rejected ? (
@@ -5988,7 +5984,18 @@ function SubBox({ order }: { order: WorkOrder }) {
  * หลักฐานของแต่ละแถวตามที่เซิร์ฟเวอร์ตัดสิน (evidenceIds — ตัวเดียวกับที่ PDF และผู้ตรวจเห็น) ไม่กรองด้วยเวลาเองแล้ว
  * รอบที่ถูกตีกลับไปแล้วพับไว้ ("รอบ 1 · ตีกลับ ▸") — เดิมวางเรียงกันทุกรอบ คนอ่านแยกไม่ออกว่าแถวไหนคือสถานะตอนนี้
  */
-function ClaimsCard({ order, files, showMissed }: { order: WorkOrder; files: Attachment[]; showMissed: boolean }) {
+function ClaimsCard({
+  order,
+  files,
+  showMissed,
+  downloads = false,
+}: {
+  order: WorkOrder;
+  files: Attachment[];
+  showMissed: boolean;
+  /** ผู้ตรวจเคลม (Admin Spare Part / Super Admin รวมดูในฐานะ) — ขึ้นแผงดาวน์โหลดหลักฐานเมื่อมีชิ้นที่ผ่านแล้ว */
+  downloads?: boolean;
+}) {
   const [viewing, setViewing] = useState<{ items: Attachment[]; at: number } | null>(null);
   const [opening, setOpening] = useState<number | null>(null);
   const [oldOpen, setOldOpen] = useState(false);
@@ -6161,6 +6168,15 @@ function ClaimsCard({ order, files, showMissed }: { order: WorkOrder; files: Att
         />
       ) : null}
       {latest.map((c) => block(c, true))}
+      {/*
+       * ดาวน์โหลดหลักฐานส่งผู้ขาย (เคลมก้อน 6) — ไม่ได้มีแค่ตอนเพิ่งกดอนุมัติ: กด "ใบถัดไป →" ไปก่อน โหลดไม่ทัน
+       * เบราว์เซอร์กันหน้าต่างใหม่ หรือจะรวบส่งอีเมลทีหลัง ต้องกลับมาเอา zip/วิดีโอของใบนี้ได้เสมอ (ตัวอย่างมี "เปิดดูใบที่ปิดแล้ว")
+       * Super Admin ดูในฐานะ Admin Spare Part ไม่มีปุ่มตัดสิน ทางนี้จึงเป็นทางเดียวของเขา · ชิ้นที่ผ่าน = ผลล่าสุดของชิ้นในงานซ่อมครั้งนี้
+       * (claimRound — กติกาเดียวกับเซิร์ฟเวอร์) ไม่มีชิ้นผ่านก็ไม่มีแผง: ใบร่างห้ามหลุดไปผู้ขาย
+       */}
+      {downloads && claimRoundOf(order).parts.some((p) => p.status === "APPROVED") ? (
+        <DownloadPanel workOrderId={order.id} code={order.code} />
+      ) : null}
       {older.length ? (
         <View style={styles.claimOld} accessibilityLabel="รอบก่อน">
           <TouchableOpacity

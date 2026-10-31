@@ -35,6 +35,7 @@ import {
   cancelAdminReview,
 } from "../components/AdminReview";
 import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
+import { openClaimReview, useClaimQueueCount } from "../utils/claimQueue";
 import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 
 /** ค้างเกินนี้ขึ้นแดง — ตัวเลขเดียวกับชิป "ค้างขั้นเดิมเกิน 3 วัน" ในหน้ารายการ */
@@ -177,6 +178,11 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const stale = all.filter((r) => daysSince(r.stageSince) > STALE_DAYS).length;
   const out = all.filter((r) => (r.partsOut ?? 0) > 0).length;
   const roleLabel = user?.role === "ADMIN" ? "แอดมิน" : "หัวหน้าภาค";
+  /**
+   * Admin Spare Part (เคลมก้อน 6) — งานที่รอคือตรวจเคลม ไม่ใช่ขั้นของแอดมิน: ป้ายบอกชื่อตำแหน่งจริง ("งานที่รอแอดมินทำ" ทำให้คิดว่า
+   * ต้องทำงานแอดมินด้วย) · ไม่มีตัวเลข "ด่วน" / "อะไหล่หมด" — ใบรอตรวจเคลมไม่มีงานด่วนหรืออะไหล่ค้าง ตัวเลขนั้นจึงเป็น 0 ตลอดหรือหลอกตา
+   */
+  const partsAdmin = !!user?.partsAdmin;
 
   const searchBox = (
     <View style={[styles.search, docked && styles.searchDocked, !!q && styles.searchOn]}>
@@ -213,17 +219,17 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ */}
         {docked ? <Text style={[styles.title, headingFont]}>งานของฉันวันนี้</Text> : null}
         <View style={styles.rolePill}>
-          <Text style={styles.rolePillText}>งานที่รอ{roleLabel}ทำ</Text>
+          <Text style={styles.rolePillText}>{partsAdmin ? "งานที่รอ Admin Spare Part" : `งานที่รอ${roleLabel}ทำ`}</Text>
         </View>
         {docked && rows && all.length ? searchBox : null}
       </View>
 
       {rows ? (
-        <View style={styles.stats}>
+        <View style={styles.stats} accessibilityLabel="ตัวเลขสรุปงานที่รอ">
           <Stat n={all.length} label="รอทำทั้งหมด" />
-          <Stat n={urgent} label="ด่วน" tone={urgent ? "danger" : undefined} />
+          {partsAdmin ? null : <Stat n={urgent} label="ด่วน" tone={urgent ? "danger" : undefined} />}
           <Stat n={stale} label={`ค้างเกิน ${STALE_DAYS} วัน`} tone={stale ? "warning" : undefined} />
-          {user?.role === "ADMIN" ? <Stat n={out} label="อะไหล่หมด" tone={out ? "danger" : undefined} /> : null}
+          {user?.role === "ADMIN" && !partsAdmin ? <Stat n={out} label="อะไหล่หมด" tone={out ? "danger" : undefined} /> : null}
         </View>
       ) : null}
 
@@ -245,8 +251,14 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
       ) : null}
 
       {/* Admin Spare Part ดูย้อนหลังได้จากหน้าแรกของตัวเอง (เจ้าของงานขอ ต.ค. 69) — ใบที่รอตรวจอยู่ในรายการด้านล่างแล้ว
-          วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices) */}
-      {user?.partsAdmin ? <ClaimHistoryCard /> : null}
+          วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
+          การ์ดกล่องงานตรวจเคลม (เคลมก้อน 6) อยู่ในช่องเดียวกัน (ห่อเป็นลูกตัวเดียว ลำดับลูกตัวถัดไปไม่ขยับ) */}
+      {partsAdmin ? (
+        <View style={{ gap: spacing.md }}>
+          <ClaimQueueCard />
+          <ClaimHistoryCard hidePending />
+        </View>
+      ) : null}
       {error ? (
         <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={error} />
       ) : !rows ? (
@@ -506,6 +518,37 @@ function CardActions({
   );
 }
 
+/**
+ * การ์ดกล่องงานตรวจเคลมของ Admin Spare Part (เคลมก้อน 6) — ตัวเลขชุดเดียวกับป้ายเมนู "ตรวจเคลม" (GET /part-claims/queue-count)
+ * กดแล้วไปกล่องงานที่เรียงจากที่รอนานที่สุดพร้อมธงเคลมซ้ำ/หมดประกัน — รายการใบด้านล่างหน้านี้ไม่บอกสองเรื่องนั้น
+ */
+function ClaimQueueCard() {
+  const { user } = useAuth();
+  const [count, reload] = useClaimQueueCount(user);
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload])
+  );
+  const text = count ? `${count.orders} ใบ · ${count.parts} ชิ้น` : "";
+  return (
+    <TouchableOpacity
+      style={styles.queueCard}
+      onPress={openClaimReview}
+      activeOpacity={0.85}
+      // ชื่อไม่ซ้ำกับเมนู "ตรวจเคลม" ตอนตัวเลขยังไม่มา — โปรแกรมอ่านจอ/เทสต์แยกการ์ดกับเมนูออก
+      accessibilityLabel={text ? `ตรวจเคลม ${text}` : "เปิดกล่องงานตรวจเคลม"}
+    >
+      <Ionicons name="shield-half-outline" size={22} color={colors.primaryInk} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.queueTitle, headingFont]}>ตรวจเคลม</Text>
+        {text ? <Text style={styles.queueCount}>{text}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={colors.primaryInk} />
+    </TouchableOpacity>
+  );
+}
+
 function Stat({ n, label, tone }: { n: number; label: string; tone?: "danger" | "warning" }) {
   const fg = tone === "danger" ? colors.dangerInk : tone === "warning" ? colors.warningInk : colors.text;
   return (
@@ -545,6 +588,19 @@ const styles = StyleSheet.create({
   head: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
   title: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },
   rolePill: { backgroundColor: colors.primarySoft, borderRadius: 999, paddingHorizontal: 12 },
+  queueCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: 56,
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  queueTitle: { fontSize: 16, fontWeight: "700", color: colors.text },
+  queueCount: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
   rolePillText: { fontSize: 13, lineHeight: 24, fontWeight: "700", color: colors.primaryInk },
   search: {
     flexDirection: "row",

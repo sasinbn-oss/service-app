@@ -20,7 +20,7 @@ import { colors, headingFont, radius, spacing } from "../theme";
 
 type Counts = { ALL: number; PENDING: number; APPROVED: number; REJECTED: number };
 
-export function ClaimHistoryCard() {
+export function ClaimHistoryCard({ hidePending = false }: { hidePending?: boolean } = {}) {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [pending, setPending] = useState<number | null>(null);
   useEffect(() => {
@@ -34,17 +34,22 @@ export function ClaimHistoryCard() {
      * ป้ายรอตรวจ = ทุกแถวที่ยังรอตรวจ ไม่จำกัดเดือน ตัวเดียวกับป้ายข้างเมนู — เดิมนับจากชุดเดือนนี้
      * ส่งปลายเดือนก่อนแล้วยังไม่ได้ตรวจก็หายจากการ์ด ป้ายสองที่บนจอเดียวกันได้คนละเลข
      */
+    /**
+     * hidePending: การ์ด "ตรวจเคลม {x} ใบ · {y} ชิ้น" อยู่ติดกันแล้ว (เคลมก้อน 6) — ป้ายรอตรวจนับคิวเดียวกันเป็นชิ้นและไม่นับใบทดสอบ
+     * สองตัวเลขติดกันที่ไม่ตรงกัน ผู้ตรวจไม่รู้ว่าเชื่ออันไหน (เหตุผลเดียวกับที่ซ่อนป้ายนี้ในเมนูข้างของผู้ตรวจ)
+     */
+    if (hidePending) return;
     api
       .get<{ pending: number }>("/part-claims/pending-count", { loadingText: false })
       .then((r) => setPending(r.data.pending))
       .catch(() => undefined);
-  }, []);
+  }, [hidePending]);
   return (
     <View style={styles.card}>
       <View style={styles.cardHead}>
         <Ionicons name="shield-checkmark-outline" size={20} color={colors.primaryInk} />
         <Text style={[styles.title, headingFont]}>ประวัติเคลม</Text>
-        {pending ? (
+        {pending && !hidePending ? (
           <View style={styles.pending} accessibilityLabel={`ประวัติเคลม รอตรวจ ${pending}`}>
             <Text style={styles.pendingText}>รอตรวจ {pending}</Text>
           </View>

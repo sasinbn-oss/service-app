@@ -142,8 +142,10 @@ G=$(GET $PA "work-orders/$ID")
   && pass "evidenceIds ของทั้งสองชิ้นมีวิดีโอ Error + รูปอาการที่ถ่ายก่อนซ่อม (ใช้ร่วมทุกชิ้น)" \
   || fail "evidenceIds: A=$(ROW "$G" $CA 'JSON.stringify(c.evidenceIds)') B=$(ROW "$G" $CB 'JSON.stringify(c.evidenceIds)') เครื่อง $PREV/$PREP"
 TA=$(PDFTXT $CA); TB=$(PDFTXT $CB)
-HAS "$TA" "วิดีโอ Error code" && HAS "$TA" "รูปอาการเสีย" && HAS "$TB" "วิดีโอ Error code" && HAS "$TB" "รูปอาการเสีย" \
-  && pass "ใบเคลม PDF ทั้งสองชิ้นลงหลักฐาน \"วิดีโอ Error code\" และ \"รูปอาการเสีย\" จากไฟล์ถ่ายก่อนซ่อม" \
+# รายการหลักฐานในใบเคลมเป็นชื่อไฟล์ที่ผู้ขายได้จริง (เคลมก้อน 6) — ไฟล์ของเครื่องใช้ร่วมทุกชิ้น ชื่อจึงไม่มีรหัสอะไหล่
+WOC=$(DB "select code from \"WorkOrder\" where id=$ID")
+HAS "$TA" "${WOC}_วิดีโอError" && HAS "$TA" "${WOC}_รูปอาการเสีย" && HAS "$TB" "${WOC}_วิดีโอError" && HAS "$TB" "${WOC}_รูปอาการเสีย" \
+  && pass "ใบเคลม PDF ทั้งสองชิ้นลงหลักฐาน \"${WOC}_วิดีโอError\" และ \"${WOC}_รูปอาการเสีย\" จากไฟล์ถ่ายก่อนซ่อม (ชื่อเดียวกันทั้งสองใบ)" \
   || fail "PDF หลักฐาน: A $(echo "$TA" | grep -o 'หลักฐาน.\{0,80\}' | head -1) · B $(echo "$TB" | grep -o 'หลักฐาน.\{0,80\}' | head -1)"
 C=$(CODE $T DELETE "work-orders/$ID/attachments/$PREV")
 [ "$C" = "409" ] && [ "$(EXISTS $PREV)" = "1" ] \

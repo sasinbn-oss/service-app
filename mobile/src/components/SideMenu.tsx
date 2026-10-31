@@ -21,6 +21,7 @@ import { sessionRoleLabel } from "../utils/roles";
 import { BUILD_AT, BUILD_COMMIT } from "../buildInfo";
 import { navigationRef } from "../navigation/navigationRef";
 import { canSeeClaimHistory } from "../utils/claimHistory";
+import { canReviewClaims, useClaimQueueCount } from "../utils/claimQueue";
 import { MainTabParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import ThemeToggle from "./ThemeToggle";
@@ -70,15 +71,45 @@ function setCollapsed(c: boolean) {
   } catch {
     // ที่เก็บของเบราว์เซอร์ถูกปิด — ยุบได้แค่รอบนี้ ไม่เป็นไร
   }
-  collapseListeners.forEach((l) => l(c));
+  collapseListeners.forEach((l) => l(shownCollapsed()));
+}
+
+/**
+ * หน้าที่ขอแถบไอคอนชั่วคราว (หน้าตรวจเคลม · เคลมก้อน 6) — รายการใบทางซ้าย + หน้าตรวจทางขวา ต้องการความกว้างทั้งจอ
+ * เมนูกาง 280 ทำให้หน้าตรวจเหลือแคบจนหลักฐานกับข้อมูลเครื่องต้องซ้อนเป็นแถวเดียว (ตัวอย่างที่เจ้าของงานเลือกเป็นแถบไอคอน)
+ * ไม่จำลงเครื่อง — ออกจากหน้านั้นแล้วเมนูกลับเป็นแบบที่ผู้ใช้ตั้งไว้เอง · ระหว่างนั้นกดปุ่มสามขีดกางได้ (เฉพาะรอบนี้)
+ */
+let railHolds = 0;
+let railLetGo = false;
+function shownCollapsed() {
+  return railHolds > 0 ? !railLetGo : collapsed;
+}
+function notifyCollapse() {
+  collapseListeners.forEach((l) => l(shownCollapsed()));
+}
+
+/** ขอแถบไอคอนระหว่างที่หน้านี้เปิดอยู่ (active = หน้านี้อยู่บนสุด) — ปล่อยเองเมื่อออกจากหน้า */
+export function useRailWhileMounted(active = true) {
+  useEffect(() => {
+    if (!active) return;
+    railHolds += 1;
+    notifyCollapse();
+    return () => {
+      railHolds = Math.max(0, railHolds - 1);
+      if (railHolds === 0) railLetGo = false;
+      notifyCollapse();
+    };
+  }, [active]);
 }
 
 /** เมนูควรค้างไว้ด้านซ้ายตอนนี้หรือไม่ */
 export function useDocked() {
   const { width } = useWindowDimensions();
-  const [c, setC] = useState(collapsed);
+  const [c, setC] = useState(shownCollapsed());
   useEffect(() => {
     collapseListeners.add(setC);
+    // หน้าที่ขอแถบไอคอนอาจขอไปก่อนคอมโพเนนต์นี้ขึ้นจอ — อ่านค่าปัจจุบันอีกครั้ง
+    setC(shownCollapsed());
     return () => {
       collapseListeners.delete(setC);
     };
@@ -138,6 +169,10 @@ interface Item {
   badge?: boolean;
   /** ตัวเลขเคลมที่ยังรอตรวจ (ป้ายเหลือง "รอตรวจ n") — คนละตัวกับกล่องงาน */
   claims?: boolean;
+  /** ใบที่รอตรวจเคลม (ป้าย "{x} ใบ" ของเมนูตรวจเคลม · เคลมก้อน 6) */
+  queue?: boolean;
+  /** เห็นเฉพาะผู้ตรวจเคลม — Admin Spare Part และ Super Admin */
+  reviewer?: boolean;
   /** เห็นเฉพาะบทบาทเหล่านี้ — ไม่ใส่ = ทุกคน */
   roles?: string[];
   /** เห็นเฉพาะ Super Admin */
@@ -209,6 +244,20 @@ const GROUPS: Group[] = [
     title: "อะไหล่",
     items: [
       { key: "parts", label: "รายการอะไหล่", labelEn: "Spare Parts", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
+      /**
+       * กล่องงานตรวจเคลม (เคลมก้อน 6) — เดิม Admin Spare Part ต้องหาใบรอตรวจเองจากรายการใบงานทั้งหมด ไม่รู้ว่าใบไหนรอนานสุด
+       * เห็นเฉพาะคนที่ตัดสินเคลมได้ (กติกาเดียวกับ GET /part-claims/queue) · ป้าย "{x} ใบ" นับชุดเดียวกับหัวกล่องงาน
+       */
+      {
+        key: "claimReview",
+        label: "ตรวจเคลม",
+        labelEn: "Claim Review",
+        icon: "shield-half-outline",
+        tab: "HomeTab",
+        screen: "ClaimReview",
+        queue: true,
+        reviewer: true,
+      },
       {
         key: "claims",
         label: "ประวัติเคลม",
@@ -318,6 +367,18 @@ function ClaimPill({ n }: { n: number }) {
 }
 
 /**
+ * ป้าย "{x} ใบ" ข้างเมนูตรวจเคลม (เคลมก้อน 6) — นับเป็นใบ เพราะผู้ตรวจเปิดตรวจทีละใบ (ตัวเลขเดียวกับหัวกล่องงาน "x ใบ · y ชิ้น")
+ * ผู้ตรวจไม่เห็นป้าย "รอตรวจ n" ข้างประวัติเคลมแล้ว — ป้ายสองอันติดกันนับคิวเดียวกันคนละหน่วย (ใบกับชิ้น) อ่านแล้วงงว่าอันไหนถูก
+ */
+function QueuePill({ n }: { n: number }) {
+  return (
+    <View style={styles.claimPill} accessibilityLabel={`ตรวจเคลม รอ ${n} ใบ`}>
+      <Text style={styles.claimPillText}>{n} ใบ</Text>
+    </View>
+  );
+}
+
+/**
  * กลุ่มเดียวในเมนูข้าง — แยกเป็นคอมโพเนนต์เพราะแต่ละกลุ่มต้องจำจังหวะกาง/ย่อของตัวเอง (useGroupBusy)
  * ถ้าใช้ hook ในลูปของ MenuContent จำนวนกลุ่มเปลี่ยนตามตำแหน่ง (สลับดูในฐานะ) แล้วแอปพัง
  *
@@ -331,6 +392,7 @@ function MenuGroup({
   active,
   inbox,
   claims,
+  queue,
   onPick,
   rail,
 }: {
@@ -340,6 +402,8 @@ function MenuGroup({
   active: string | null;
   inbox: number;
   claims: number;
+  /** ใบที่รอตรวจเคลม — ป้ายข้างเมนูตรวจเคลม */
+  queue: number;
   onPick: (it: Item) => void;
   rail?: boolean;
 }) {
@@ -354,6 +418,7 @@ function MenuGroup({
   // นับจากรายการที่ซ่อนได้ ไม่ขึ้นกับว่าย่ออยู่ไหม — ตอนกางป้ายยังต้องมีของให้จางออก ไม่ใช่หายวับ
   const hiddenBadge = hidden.some((it) => it.badge) ? inbox : 0;
   const hiddenClaims = hidden.some((it) => it.claims) ? claims : 0;
+  const hiddenQueue = hidden.some((it) => it.queue) ? queue : 0;
   return (
     <View>
       {rail ? (
@@ -374,6 +439,7 @@ function MenuGroup({
                   <Text style={styles.badgeText}>{hiddenBadge}</Text>
                 </View>
               ) : null}
+              {hiddenQueue ? <QueuePill n={hiddenQueue} /> : null}
               {hiddenClaims ? <ClaimPill n={hiddenClaims} /> : null}
               <Text style={styles.groupCount}>{items.length}</Text>
             </FadeSlot>
@@ -387,6 +453,7 @@ function MenuGroup({
         const on = active === it.key;
         const n = it.badge ? inbox : 0;
         const waiting = it.claims ? claims : 0;
+        const queued = it.queue ? queue : 0;
         return (
           <RevealRow key={it.key} open={!shut} busy={busy && !on} order={on ? 0 : hidden.indexOf(it)}>
             <TouchableOpacity
@@ -402,9 +469,9 @@ function MenuGroup({
                   <View style={[styles.badge, styles.badgeRail, on && styles.badgeOn]}>
                     <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
                   </View>
-                ) : waiting ? (
+                ) : waiting || queued ? (
                   <View style={[styles.badge, styles.badgeRail, styles.claimBadge]}>
-                    <Text style={[styles.badgeText, styles.claimText]}>{waiting}</Text>
+                    <Text style={[styles.badgeText, styles.claimText]}>{waiting || queued}</Text>
                   </View>
                 ) : null
               ) : (
@@ -419,6 +486,7 @@ function MenuGroup({
                     </View>
                   ) : null}
                   {waiting ? <ClaimPill n={waiting} /> : null}
+                  {queued ? <QueuePill n={queued} /> : null}
                 </>
               )}
             </TouchableOpacity>
@@ -433,6 +501,7 @@ function MenuContent({
   active,
   inbox,
   claims = 0,
+  queue = 0,
   onPick,
   rail,
 }: {
@@ -440,6 +509,8 @@ function MenuContent({
   inbox: number;
   /** เคลมที่ยังรอตรวจ — ป้ายข้างเมนูประวัติเคลม */
   claims?: number;
+  /** ใบที่รอตรวจเคลม — ป้ายข้างเมนูตรวจเคลม (ผู้ตรวจเท่านั้น) */
+  queue?: number;
   onPick: (it: Item) => void;
   /** แถบไอคอนตอนเมนูหด — ไม่มีชื่อ ไม่มีหัวกลุ่ม */
   rail?: boolean;
@@ -455,7 +526,8 @@ function MenuContent({
               .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
               .filter((it) => !isAreaTeam(user) || AREA_TEAM_MENU.has(it.key))
               .filter((it) => canOpenScreen(user, it.screen))
-              .filter((it) => !it.superAdmin || user?.superAdmin);
+              .filter((it) => !it.superAdmin || user?.superAdmin)
+              .filter((it) => !it.reviewer || canReviewClaims(user));
             if (!items.length) return null;
             return (
               <MenuGroup
@@ -466,6 +538,7 @@ function MenuContent({
                 active={active}
                 inbox={inbox}
                 claims={claims}
+                queue={queue}
                 onPick={onPick}
                 rail={rail}
               />
@@ -497,7 +570,8 @@ function MenuContent({
  */
 function useClaimsWaiting(): [number, () => void] {
   const { user } = useAuth();
-  const allowed = canSeeClaimHistory(user);
+  // ผู้ตรวจเคลม (Admin Spare Part · Super Admin) ดูตัวเลขที่เมนู "ตรวจเคลม" แทน — ไม่ถาม ไม่ขึ้นป้ายนี้ (ดู QueuePill)
+  const allowed = canSeeClaimHistory(user) && !canReviewClaims(user);
   const allowedRef = useRef(allowed);
   allowedRef.current = allowed;
   const [n, setN] = useState(0);
@@ -526,6 +600,8 @@ export function DockedSideMenu() {
   const [active, setActive] = useState<string | null>(currentKey());
   const [inbox, setInbox] = useState(0);
   const [claims, reloadClaims] = useClaimsWaiting();
+  const { user } = useAuth();
+  const [queue, reloadQueue] = useClaimQueueCount(user);
   // ยืด/หดแบบค่อย ๆ ไม่ตัดฉับ ตามต้นแบบ — เห็นว่าเมนูไปไหน ไม่ใช่หายวับไป
   const width = useRef(new Animated.Value(rail ? RAIL_WIDTH : DOCK_WIDTH)).current;
   useEffect(() => {
@@ -540,17 +616,18 @@ export function DockedSideMenu() {
         .catch(() => undefined);
       // ตรวจเคลมเสร็จแล้วกลับมา ตัวเลขรอตรวจต้องลดทันทีแบบเดียวกับกล่องงาน
       reloadClaims();
+      reloadQueue();
     };
     refresh();
     return navigationRef.addListener("state", refresh);
-  }, [reloadClaims]);
+  }, [reloadClaims, reloadQueue]);
   return (
     <Animated.View style={[styles.docked, { width }]}>
       <View style={[styles.dockHead, rail && styles.dockHeadRail]}>
         <MenuButton />
         {rail ? null : <Text style={styles.dockHeadText}>ย่อเมนู</Text>}
       </View>
-      <MenuContent active={active} inbox={inbox} claims={claims} onPick={navigateTo} rail={rail} />
+      <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} onPick={navigateTo} rail={rail} />
     </Animated.View>
   );
 }
@@ -562,6 +639,8 @@ export default function SideMenu() {
   const [mounted, setMounted] = useState(false);
   const [inbox, setInbox] = useState(0);
   const [claims, reloadClaims] = useClaimsWaiting();
+  const { user } = useAuth();
+  const [queue, reloadQueue] = useClaimQueueCount(user);
   const [active, setActive] = useState<string | null>(null);
   const x = useRef(new Animated.Value(-WIDTH)).current;
 
@@ -603,12 +682,13 @@ export default function SideMenu() {
         .then((r) => setInbox(r.data.inbox))
         .catch(() => undefined);
       reloadClaims();
+      reloadQueue();
     }
     // เปิดแบบสปริงตามนิ้ว ปิดเร่งออกเร็ว ๆ — จังหวะเดียวกับหน้าต่างอื่นในแอป (utils/motion)
     (open ? spring(x, 0, "push") : timing(x, -WIDTH, 220, EXIT_EASE)).start(({ finished }) => {
       if (finished && !open) setMounted(false);
     });
-  }, [open, x, reloadClaims]);
+  }, [open, x, reloadClaims, reloadQueue]);
 
   // แถบขอบจออยู่ตลอด ตำแหน่งเดิมในต้นไม้เสมอ — ถ้าถูกถอดตอนแผงโผล่ นิ้วที่กำลังลากจะหลุดกลางทาง
   const edge = <EdgeCatcher x={x} onMount={() => setMounted(true)} onSettle={settleFromEdge} />;
@@ -638,7 +718,7 @@ export default function SideMenu() {
         style={[styles.panel, { paddingTop: spacing.sm, transform: [{ translateX: x }] }]}
       >
         <PanelHead />
-        <MenuContent active={active} inbox={inbox} claims={claims} onPick={go} />
+        <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} onPick={go} />
         <PanelTools onLeave={() => setOpen(false)} />
       </Animated.View>
     </View>
@@ -740,7 +820,16 @@ export function MenuButton() {
   return (
     <TouchableOpacity
       style={[styles.menuBtn, canDock && styles.menuBtnDock]}
-      onPress={() => (canDock ? setCollapsed(!c) : sideMenu.open())}
+      onPress={() => {
+        if (!canDock) return sideMenu.open();
+        // หน้าที่ขอแถบไอคอนอยู่ — กางให้เฉพาะรอบนี้ ไม่ทับค่าที่ผู้ใช้ตั้งไว้ (ออกจากหน้านั้นแล้วกลับเป็นแบบเดิม)
+        if (railHolds > 0) {
+          railLetGo = !railLetGo;
+          notifyCollapse();
+          return;
+        }
+        setCollapsed(!c);
+      }}
       accessibilityLabel={canDock ? (c ? "ขยายเมนู" : "ย่อเมนู") : "เปิดเมนู"}
     >
       <Ionicons name="menu" size={24} color={canDock ? "#fff" : colors.navy} />
