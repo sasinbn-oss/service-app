@@ -236,7 +236,7 @@ export default function ManageSparePartsScreen() {
       ) : null}
 
       {loading ? (
-        <Spinner style={styles.loader} color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : parts.length === 0 ? (
         <EmptyState icon="construct-outline" text="ยังไม่มีอะไหล่ในระบบ — กดเพิ่มอะไหล่ใหม่ที่มุมขวาบน" />
       ) : shown.length === 0 ? (
@@ -581,7 +581,6 @@ const styles = StyleSheet.create({
   chipTextOn: { color: colors.primaryInk, fontWeight: "700" },
   noMatch: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
   mark: { backgroundColor: colors.warningBorder },
-  loader: { marginTop: 30 },
   card: {
     flexDirection: "row",
     gap: 12,

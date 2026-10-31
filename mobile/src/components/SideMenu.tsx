@@ -25,6 +25,7 @@ import { MainTabParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import ThemeToggle from "./ThemeToggle";
 import { showAlert } from "../utils/alert";
+import { FadeSlot, RevealRow, Turn, useGroupBusy } from "./MenuReveal";
 
 /**
  * เมนูข้างแบบเลื่อนออกจากซ้าย (ปุ่มสามขีดบนแถบบน) ตามต้นแบบ OTTERI
@@ -316,6 +317,118 @@ function ClaimPill({ n }: { n: number }) {
   );
 }
 
+/**
+ * กลุ่มเดียวในเมนูข้าง — แยกเป็นคอมโพเนนต์เพราะแต่ละกลุ่มต้องจำจังหวะกาง/ย่อของตัวเอง (useGroupBusy)
+ * ถ้าใช้ hook ในลูปของ MenuContent จำนวนกลุ่มเปลี่ยนตามตำแหน่ง (สลับดูในฐานะ) แล้วแอปพัง
+ *
+ * หน้าตาตอนพักต้องเหมือนก่อนมีการเคลื่อนไหวทุกอย่าง (เจ้าของงานสั่งไว้: เปลี่ยนการเคลื่อนไหว ไม่ย้ายปุ่ม ไม่เปลี่ยนสี/ขนาด)
+ * ของที่เพิ่มมาทำงานเฉพาะระหว่างกาง/ย่อ — ดูหัวไฟล์ MenuReveal.tsx
+ */
+function MenuGroup({
+  title,
+  items,
+  closed,
+  active,
+  inbox,
+  claims,
+  onPick,
+  rail,
+}: {
+  title: string;
+  items: Item[];
+  closed: boolean;
+  active: string | null;
+  inbox: number;
+  claims: number;
+  onPick: (it: Item) => void;
+  rail?: boolean;
+}) {
+  // แถบไอคอน (เมนูหด) ไม่มีหัวกลุ่มให้กด จึงโชว์ทุกปุ่มเสมอ
+  const shut = !rail && closed;
+  // หน้าที่เปิดอยู่ไม่หุบไปกับกลุ่ม (แถบฟ้าต้องไม่หาย) จึงไม่นับเป็นรายการที่ขยับ
+  const hidden = items.filter((it) => it.key !== active);
+  const busy = useGroupBusy(closed, !!rail, hidden.length);
+  // ระหว่างกาง/ย่อ รายการที่กำลังโผล่/หุบต้องอยู่ในหน้าด้วย · พักแล้วกลุ่มที่ย่อเหลือแค่หน้าที่เปิดอยู่เหมือนเดิม
+  const rows = shut && !busy ? items.filter((it) => it.key === active) : items;
+  // ตัวเลขกล่องงานต้องไม่หายไปกับกลุ่มที่ย่อ — ย้ายไปติดที่หัวกลุ่มแทน
+  // นับจากรายการที่ซ่อนได้ ไม่ขึ้นกับว่าย่ออยู่ไหม — ตอนกางป้ายยังต้องมีของให้จางออก ไม่ใช่หายวับ
+  const hiddenBadge = hidden.some((it) => it.badge) ? inbox : 0;
+  const hiddenClaims = hidden.some((it) => it.claims) ? claims : 0;
+  return (
+    <View>
+      {rail ? (
+        <View style={styles.railSep} />
+      ) : (
+        <TouchableOpacity
+          style={styles.group}
+          activeOpacity={0.7}
+          onPress={() => toggleGroup(title)}
+          accessibilityLabel={`${shut ? "กาง" : "ย่อ"}กลุ่ม ${title}`}
+        >
+          <View style={styles.groupDot} />
+          <Text style={[styles.groupText, { flex: 1 }]}>{title}</Text>
+          {shut || busy ? (
+            <FadeSlot shown={shut} busy={busy} style={styles.groupTags}>
+              {hiddenBadge ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{hiddenBadge}</Text>
+                </View>
+              ) : null}
+              {hiddenClaims ? <ClaimPill n={hiddenClaims} /> : null}
+              <Text style={styles.groupCount}>{items.length}</Text>
+            </FadeSlot>
+          ) : null}
+          <Turn open={!shut} busy={busy}>
+            <Ionicons name="chevron-down" size={16} color={colors.sideDim} />
+          </Turn>
+        </TouchableOpacity>
+      )}
+      {rows.map((it) => {
+        const on = active === it.key;
+        const n = it.badge ? inbox : 0;
+        const waiting = it.claims ? claims : 0;
+        return (
+          <RevealRow key={it.key} open={!shut} busy={busy && !on} order={on ? 0 : hidden.indexOf(it)}>
+            <TouchableOpacity
+              style={[styles.item, rail && styles.itemRail, on && styles.itemOn]}
+              activeOpacity={0.75}
+              onPress={() => onPick(it)}
+              accessibilityLabel={it.label}
+              {...(rail && Platform.OS === "web" ? ({ title: it.label } as object) : null)}
+            >
+              <Ionicons name={it.icon} size={22} color={on ? "#fff" : colors.sideInk} />
+              {rail ? (
+                n ? (
+                  <View style={[styles.badge, styles.badgeRail, on && styles.badgeOn]}>
+                    <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
+                  </View>
+                ) : waiting ? (
+                  <View style={[styles.badge, styles.badgeRail, styles.claimBadge]}>
+                    <Text style={[styles.badgeText, styles.claimText]}>{waiting}</Text>
+                  </View>
+                ) : null
+              ) : (
+                <>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.label, on && styles.labelOn]}>{it.label}</Text>
+                    <Text style={[styles.labelEn, on && styles.labelEnOn]}>{it.labelEn}</Text>
+                  </View>
+                  {n ? (
+                    <View style={[styles.badge, on && styles.badgeOn]}>
+                      <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
+                    </View>
+                  ) : null}
+                  {waiting ? <ClaimPill n={waiting} /> : null}
+                </>
+              )}
+            </TouchableOpacity>
+          </RevealRow>
+        );
+      })}
+    </View>
+  );
+}
+
 function MenuContent({
   active,
   inbox,
@@ -332,7 +445,6 @@ function MenuContent({
   rail?: boolean;
 }) {
   const { user } = useAuth();
-  const go = onPick;
   const closed = useClosedGroups();
   return (
     // nativeID = id บนเว็บ — ลากรีเฟรช (PullToRefresh) ไม่จับนิ้วที่อยู่ในเมนู ไม่งั้นเมนูเลื่อนลงตามนิ้ว
@@ -345,77 +457,18 @@ function MenuContent({
               .filter((it) => canOpenScreen(user, it.screen))
               .filter((it) => !it.superAdmin || user?.superAdmin);
             if (!items.length) return null;
-            // แถบไอคอน (เมนูหด) ไม่มีหัวกลุ่มให้กด จึงโชว์ทุกปุ่มเสมอ
-            const shut = !rail && closed.has(g.title);
-            const shown = shut ? items.filter((it) => it.key === active) : items;
-            // ตัวเลขกล่องงานต้องไม่หายไปกับกลุ่มที่ย่อ — ย้ายไปติดที่หัวกลุ่มแทน
-            const hiddenBadge = shut && items.some((it) => it.badge && it.key !== active) ? inbox : 0;
-            const hiddenClaims = shut && items.some((it) => it.claims && it.key !== active) ? claims : 0;
             return (
-            <View key={g.title}>
-              {rail ? (
-                <View style={styles.railSep} />
-              ) : (
-                <TouchableOpacity
-                  style={styles.group}
-                  activeOpacity={0.7}
-                  onPress={() => toggleGroup(g.title)}
-                  accessibilityLabel={`${shut ? "กาง" : "ย่อ"}กลุ่ม ${g.title}`}
-                >
-                  <View style={styles.groupDot} />
-                  <Text style={[styles.groupText, { flex: 1 }]}>{g.title}</Text>
-                  {hiddenBadge ? (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>{hiddenBadge}</Text>
-                    </View>
-                  ) : null}
-                  {hiddenClaims ? <ClaimPill n={hiddenClaims} /> : null}
-                  {shut ? <Text style={styles.groupCount}>{items.length}</Text> : null}
-                  <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.sideDim} />
-                </TouchableOpacity>
-              )}
-              {shown.map((it) => {
-                const on = active === it.key;
-                const n = it.badge ? inbox : 0;
-                const waiting = it.claims ? claims : 0;
-                return (
-                  <TouchableOpacity
-                    key={it.key}
-                    style={[styles.item, rail && styles.itemRail, on && styles.itemOn]}
-                    activeOpacity={0.75}
-                    onPress={() => go(it)}
-                    accessibilityLabel={it.label}
-                    {...(rail && Platform.OS === "web" ? ({ title: it.label } as object) : null)}
-                  >
-                    <Ionicons name={it.icon} size={22} color={on ? "#fff" : colors.sideInk} />
-                    {rail ? (
-                      n ? (
-                        <View style={[styles.badge, styles.badgeRail, on && styles.badgeOn]}>
-                          <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
-                        </View>
-                      ) : waiting ? (
-                        <View style={[styles.badge, styles.badgeRail, styles.claimBadge]}>
-                          <Text style={[styles.badgeText, styles.claimText]}>{waiting}</Text>
-                        </View>
-                      ) : null
-                    ) : (
-                    <>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.label, on && styles.labelOn]}>{it.label}</Text>
-                      <Text style={[styles.labelEn, on && styles.labelEnOn]}>{it.labelEn}</Text>
-                    </View>
-                    {n ? (
-                      <View style={[styles.badge, on && styles.badgeOn]}>
-                        <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
-                      </View>
-                    ) : null}
-                    {waiting ? <ClaimPill n={waiting} /> : null}
-                    </>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+              <MenuGroup
+                key={g.title}
+                title={g.title}
+                items={items}
+                closed={closed.has(g.title)}
+                active={active}
+                inbox={inbox}
+                claims={claims}
+                onPick={onPick}
+                rail={rail}
+              />
             );
           })}
           {BUILD_AT && !rail ? (
@@ -747,6 +800,9 @@ const styles = StyleSheet.create({
   },
   groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
   groupCount: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.sideDim },
+  // ป้ายบนหัวกลุ่มที่ย่อ (ตัวเลขกล่องงาน · รอตรวจ · จำนวนรายการ) อยู่ในกล่องเดียวเพื่อจางเข้า/ออกพร้อมกัน
+  // ระยะห่างเท่า gap ของ styles.group — ตำแหน่งทุกชิ้นเท่าเดิมตอนที่ยังเป็นลูกของหัวกลุ่มโดยตรง
+  groupTags: { flexDirection: "row", alignItems: "center", gap: 6 },
   groupText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.sideDim, letterSpacing: 0.5 },
   item: {
     flexDirection: "row",

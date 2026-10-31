@@ -907,7 +907,7 @@ export default function BranchPartsReportScreen({ navigation, route }: Props) {
   const body = error ? (
     <EmptyState icon="cloud-offline-outline" title="โหลดรายงานไม่ได้" text={error} />
   ) : !page ? (
-    <Spinner color={colors.primary} style={{ marginTop: spacing.xl }} />
+    <Spinner page color={colors.primary} />
   ) : page.groups.length === 0 ? (
     <EmptyState
       icon="storefront-outline"

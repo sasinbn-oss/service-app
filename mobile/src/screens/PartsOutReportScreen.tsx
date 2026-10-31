@@ -311,7 +311,7 @@ export default function PartsOutReportScreen({ navigation }: Props) {
       {error ? (
         <Text style={styles.error}>{error}</Text>
       ) : !rows ? (
-        <Spinner color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : shown.length === 0 ? (
         <Text style={styles.empty}>{rows.length ? "ไม่มีรายการที่ตรงกับตัวกรอง" : "ตอนนี้ไม่มีสาขาไหนติดอะไหล่หมด"}</Text>
       ) : tab === "part" ? (

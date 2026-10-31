@@ -448,7 +448,7 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
   const body = error ? (
     <EmptyState icon="cloud-offline-outline" title="โหลดประวัติเคลมไม่ได้" text={error} />
   ) : !data ? (
-    <Spinner color={colors.primary} style={{ marginTop: spacing.xl }} />
+    <Spinner page color={colors.primary} />
   ) : rows.length === 0 ? (
     <EmptyState
       icon="shield-checkmark-outline"

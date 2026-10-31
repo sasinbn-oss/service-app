@@ -250,7 +250,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
       {error ? (
         <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={error} />
       ) : !rows ? (
-        <Spinner color={colors.primary} style={{ marginTop: spacing.xl }} />
+        <Spinner page color={colors.primary} />
       ) : all.length === 0 ? (
         <EmptyState icon="checkmark-done-outline" title="ไม่มีงานค้างรอคุณ" text="ใบงานที่ถึงขั้นของคุณจะขึ้นที่นี่ทันที" />
       ) : !focused ? null : q && !found ? (

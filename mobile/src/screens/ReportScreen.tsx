@@ -219,11 +219,7 @@ export default function ReportScreen({ route }: Props) {
         </View>
       ) : null}
 
-      {loading && !data ? (
-        <View style={styles.loading}>
-          <Spinner color={colors.primary} />
-        </View>
-      ) : null}
+      {loading && !data ? <Spinner page color={colors.primary} /> : null}
 
       {data?.kind === "monthly" && data.hasHistory === false ? (
         <View style={styles.warnCard}>
@@ -564,7 +560,6 @@ const styles = StyleSheet.create({
   },
   td: { fontSize: 13, lineHeight: 21, color: colors.text, paddingRight: spacing.sm },
 
-  loading: { paddingVertical: spacing.xxl, alignItems: "center" },
   errorCard: {
     flexDirection: "row",
     alignItems: "center",
