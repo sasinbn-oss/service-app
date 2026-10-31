@@ -7,15 +7,17 @@
  *
  * ตัดสินทีละชิ้น (เคลมก้อน 3): "{ชิ้น}:" ✓ ผ่าน · ✗ ตีกลับ · ปิดเคลม ไม่ส่งผู้ขาย ของชิ้นที่เปิดอยู่ + สรุปทั้งใบ + ปุ่มส่งปุ่มเดียว
  * เดิมตัดสินทั้งใบ ชิ้นที่ดีต้องถูกตีกลับไปพร้อมชิ้นที่มีปัญหา แล้วช่างต้องส่งชิ้นที่ดีซ้ำทุกรอบ
- * ช่องเหตุผลตีกลับลอยอยู่เหนือแถบ (ไม่อยู่ในแถบ) แถบจึงสูงเท่าเดิมทุกจังหวะ — ก้อน 4 เติมช่องที่ต้องแก้ลงในกล่องเดียวกันนี้
+ * กล่องตีกลับ (ติ๊กช่องที่ต้องแก้ · เคลมก้อน 4) ลอยอยู่เหนือแถบ (ไม่อยู่ในแถบ) แถบจึงสูงเท่าเดิมทุกจังหวะ
+ * ตีกลับทั้งใบอยู่ "✓ ผ่าน" กดไม่ได้ — ข้อมูลเครื่องที่ใช้ร่วมกันผิด ชิ้นไหนก็ผ่านไม่ได้ (เอาติ๊กข้อมูลเครื่องออกก่อน)
  * ดูในฐานะผู้ใช้อื่น: เซิร์ฟเวอร์ไม่รับคำสั่งอยู่แล้ว แถบจึงเหลือแค่บอกว่าดูได้อย่างเดียว ไม่มีปุ่มให้กดแล้วล้ม
  */
 import React, { useState } from "react";
-import { StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "../Tap";
 import Spinner from "../Spinner";
 import ClaimTrail, { type TrailEvent } from "./ClaimTrail";
+import RejectPanel from "./RejectPanel";
 import type { ClaimVerdicts, ReviewOutcome, Verdict } from "./useClaimVerdicts";
 import { colors, radius, spacing } from "../../theme";
 
@@ -53,20 +55,24 @@ export default function DecisionBar({
   const p = v.active;
   if (!p) return null;
   const eff = v.effOf(p);
-  const showReason = !p.locked && eff === "REJECT";
 
-  const verdictBtn = (verdict: Verdict, label: string, tone: { on: object; off: object; onText: object; offText: object }) => {
-    const on = eff === verdict;
+  const verdictBtn = (
+    verdict: Verdict,
+    label: string,
+    tone: { on: object; off: object; onText: object; offText: object },
+    blocked = false
+  ) => {
+    const on = eff === verdict && !blocked;
     return (
       <TouchableOpacity
         key={verdict}
-        style={[styles.vBtn, !oneRow && styles.vBtnStack, on ? tone.on : tone.off, v.saving && styles.off]}
+        style={[styles.vBtn, !oneRow && styles.vBtnStack, blocked ? styles.blocked : on ? tone.on : tone.off, v.saving && styles.off]}
         onPress={() => v.setVerdict(p.key, verdict)}
-        disabled={v.saving}
+        disabled={v.saving || blocked}
         activeOpacity={0.8}
-        accessibilityState={{ selected: on }}
+        accessibilityState={{ selected: on, disabled: blocked }}
       >
-        <Text style={[styles.vText, on ? tone.onText : tone.offText]}>{label}</Text>
+        <Text style={[styles.vText, blocked ? styles.blockedText : on ? tone.onText : tone.offText]}>{label}</Text>
       </TouchableOpacity>
     );
   };
@@ -79,23 +85,8 @@ export default function DecisionBar({
 
   return (
     <>
-      {/* เหตุผลตีกลับของชิ้นที่เปิดอยู่ — อยู่เหนือแถบ ติดกับปุ่มที่เพิ่งกด ไม่ต้องเลื่อนหา */}
-      {showReason ? (
-        <View style={[styles.dock, oneRow && styles.dockRow]} accessibilityLabel="ตีกลับ: เหตุผล">
-          <Text style={[styles.dockLabel, oneRow && { maxWidth: 260 }]}>
-            {p.name} — เหตุผลที่ตีกลับ <Text style={{ color: colors.dangerInk }}>*</Text>
-          </Text>
-          <TextInput
-            style={[styles.input, oneRow && { flex: 1 }, !v.reasonOf(p.key).trim() && v.error ? styles.inputMissing : null]}
-            value={v.reasonOf(p.key)}
-            onChangeText={(t) => v.setReason(p.key, t)}
-            placeholder="ช่างเห็นข้อความนี้ เช่น วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่"
-            placeholderTextColor={colors.textFaint}
-            maxLength={1000}
-            accessibilityLabel="เหตุผลที่ตีกลับเคลม"
-          />
-        </View>
-      ) : null}
+      {/* ช่องที่ต้องแก้ของชิ้นที่เปิดอยู่ — อยู่เหนือแถบ ติดกับปุ่มที่เพิ่งกด ไม่ต้องเลื่อนหา */}
+      <RejectPanel v={v} />
       <View style={styles.bar} accessibilityLabel="แถบตัดสินเคลม" onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
         {v.error ? (
           <Text style={styles.error} accessibilityRole="alert">
@@ -117,7 +108,12 @@ export default function DecisionBar({
             </Text>
           ) : (
             <View style={[styles.verdicts, !oneRow && styles.verdictsStack]}>
-              {verdictBtn("APPROVE", "✓ ผ่าน", { on: styles.okOn, off: styles.okOff, onText: styles.onText, offText: { color: colors.successInk } })}
+              {verdictBtn(
+                "APPROVE",
+                "✓ ผ่าน",
+                { on: styles.okOn, off: styles.okOff, onText: styles.onText, offText: { color: colors.successInk } },
+                v.whole
+              )}
               {verdictBtn("REJECT", "✗ ตีกลับ", { on: styles.noOn, off: styles.noOff, onText: styles.onText, offText: { color: colors.dangerInk } })}
               {verdictBtn("DECLINE", "ปิดเคลม ไม่ส่งผู้ขาย", {
                 on: styles.dropOn,
@@ -251,28 +247,9 @@ const styles = StyleSheet.create({
   submitText: { fontSize: 15, fontWeight: "700", color: "#fff" },
   off: { opacity: 0.6 },
   error: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.dangerInk },
-  dock: {
-    backgroundColor: colors.dangerSoft,
-    borderTopWidth: 2,
-    borderTopColor: colors.dangerLine,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 8,
-    gap: 6,
-  },
-  dockRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  dockLabel: { fontSize: 13.5, lineHeight: 19, fontWeight: "700", color: colors.dangerInk },
-  input: {
-    minWidth: 0,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: colors.dangerLine,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    fontSize: 14,
-    color: colors.text,
-    backgroundColor: colors.card,
-  },
-  inputMissing: { borderColor: colors.danger, borderWidth: 2 },
+  // ✓ ผ่าน ตอนตีกลับทั้งใบ — เทา กดไม่ได้ (ตัวอย่าง okOff)
+  blocked: { backgroundColor: colors.rowAlt, borderColor: colors.borderStrong },
+  blockedText: { color: colors.textMuted },
   done: { borderRadius: radius.md, borderWidth: 2, paddingHorizontal: 14, paddingVertical: 12, gap: 8 },
   // สีตามตัวอย่างที่เจ้าของงานเลือก: ปิดงานแล้ว = เขียวเสมอ (ปิดเคลมทุกชิ้นก็คือตรวจจบ ไม่ใช่ข้อผิดพลาด) ·
   // ตีกลับแล้ว = ฟ้าแจ้งข้อมูล — ตีกลับสำเร็จแล้ว ถ้าเป็นแดงผู้ตรวจจะอ่านว่ากดแล้วพัง

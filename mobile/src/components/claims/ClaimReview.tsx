@@ -10,6 +10,9 @@
  *
  * ตัดสินทีละชิ้น (เคลมก้อน 3): แท็บบอกผลที่เลือกของแต่ละชิ้น · ชิ้นที่ผ่าน/ปิดเคลมไปแล้วในรอบก่อนยังมีแท็บ (ล็อกไว้ ดูได้)
  * กล่องเลือกเหตุผล "ปิดเคลม ไม่ส่งผู้ขาย" อยู่ใต้แท็บ (ไม่ใช่หน้าต่างซ้อน — Modal ซ้อนบนเว็บไม่น่าเชื่อถือ)
+ *
+ * ตีกลับแบบชี้ช่อง (เคลมก้อน 4): กด ✗ ตีกลับ แล้วเลื่อนชิ้นนั้นขึ้นมาให้หลักฐานอยู่คู่กับกล่องติ๊กช่องที่ติดเหนือแถบล่าง ·
+ * ตีกลับทั้งใบขึ้นแถบแดงในกล่องข้อมูลเครื่องว่าชิ้นไหนถูกพาไปด้วย · รอบที่ช่างส่งแก้มาบอก "แก้แล้ว n ช่อง · อธิบาย m ช่อง"
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Image, Platform, StyleSheet, Text, TextInput, View } from "react-native";
@@ -39,6 +42,8 @@ import {
   daysSince,
   diffSincePrevious,
   errorLabelOf,
+  fixCountOf,
+  keepLinesOf,
   evidenceFile,
   evidenceOf,
   evidenceRoleLabel,
@@ -54,6 +59,7 @@ import {
   roundOf,
   rowsSince,
   unmatchedKeepNotes,
+  type ClaimKeep,
   type ClaimLog,
   type ClaimRepeat,
   type ClaimRound,
@@ -87,6 +93,8 @@ export interface ClaimReviewOrder {
   claimGuide?: ClaimGuide;
   /** ใบเคลมเก่าของเครื่องเดียวกัน — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน · ไม่มีค่า = ไม่ต้องขึ้นบรรทัดเคลมซ้ำ */
   claimRepeats?: ClaimRepeat[];
+  /** คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่องของการส่งครั้งล่าสุด (เคลมก้อน 4) — ไม่มี = เซิร์ฟเวอร์รุ่นก่อน อ่านจากข้อความประวัติแทน */
+  claimKeep?: ClaimKeep[];
 }
 
 /** ยี่ห้อที่คนเรียก — ทะเบียนบางเครื่องเขียน "HB - Huebsch" */
@@ -130,6 +138,24 @@ export default function ClaimReview({
   const active: ReviewPart | null = v.active;
   const showDrop = !!active && !active.locked && !readOnly && v.effOf(active) === "DECLINE";
   const dropRef = useRef<View>(null);
+  const partRef = useRef<View>(null);
+  /**
+   * กด ✗ ตีกลับ: กล่องติ๊กช่องขึ้นเหนือแถบล่างจอ — เลื่อนชิ้นนั้นขึ้นมาให้หลักฐานอยู่คู่กับช่องที่จะติ๊ก (ตัวอย่าง :1315)
+   * เลื่อนเฉพาะตอนเพิ่งกด (เปลี่ยนจากไม่ตีกลับเป็นตีกลับในชิ้นเดียวกัน) ไม่ใช่ทุกครั้งที่หน้าวาดใหม่ — ผู้ตรวจกำลังเลื่อนดูวิดีโออยู่
+   */
+  const rejecting = !!active && !readOnly && v.ownRejectOf(active);
+  const wasRejecting = useRef<{ key: number | null; on: boolean }>({ key: null, on: false });
+  useEffect(() => {
+    const prev = wasRejecting.current;
+    wasRejecting.current = { key: active?.key ?? null, on: rejecting };
+    if (!rejecting || (prev.key === active?.key && prev.on) || prev.key !== active?.key || Platform.OS !== "web") return;
+    // หลังกล่องติ๊กช่องวาดแล้ว (พื้นที่เลื่อนเตี้ยลง) ถึงเลื่อน — ไม่งั้นตำแหน่งที่คิดไว้เพี้ยน
+    const t = setTimeout(() => {
+      const el = partRef.current as unknown as { scrollIntoView?: (o: object) => void } | null;
+      el?.scrollIntoView?.({ block: "start" });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [rejecting, active?.key]);
   // กด "ปิดเคลม ไม่ส่งผู้ขาย" ที่แถบล่างจอ กล่องเลือกเหตุผลขึ้นใต้แท็บซึ่งอาจอยู่นอกจอ — เลื่อนมาให้เห็น (เว็บ)
   useEffect(() => {
     if (!showDrop || Platform.OS !== "web") return;
@@ -153,13 +179,33 @@ export default function ClaimReview({
   const mismatch = pending.filter((c) => brokenMatches(c) === false).length;
   const prev = previousOf(cur, scope);
   const diff = diffSincePrevious(cur, prev, files, family);
-  const keep = keepNoteOf(cur, order.logs);
+  const keepCtx = { family, errorCode: cur.fieldCheck?.errorCode ?? null };
+  /**
+   * คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่อง (เคลมก้อน 4 · claimKeep จาก meta.keep ของการส่งครั้งล่าสุด) — บอกว่าตอบช่องไหน
+   * เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง: อ่านจากข้อความประวัติแบบเดิม (ตอบทั้งชิ้น)
+   */
+  const structured = Array.isArray(order.claimKeep);
+  const keep = structured ? null : keepNoteOf(cur, order.logs);
   const partNotes: DiffLine[] = [
     ...diff.part,
+    ...(structured ? keepLinesOf(cur.sparePartId, order.claimKeep, keepCtx).map((text) => ({ kind: "keep" as const, text })) : []),
     ...(keep ? [{ kind: "keep" as const, text: `ช่างตอบ “ค่าเดิมถูกแล้ว” · ${keep}` }] : []),
     // ท่อนที่บอกไม่ได้ว่าเป็นของชิ้นไหน — ขึ้นตามข้อความในประวัติทุกแท็บ ดีกว่าให้คำอธิบายของช่างหายไป
-    ...unmatchedKeepNotes(pending, order.logs).map((text) => ({ kind: "keep" as const, text: `ช่างตอบ “ค่าเดิมถูกแล้ว” · ${text}` })),
+    ...(structured ? [] : unmatchedKeepNotes(pending, order.logs)).map((text) => ({ kind: "keep" as const, text: `ช่างตอบ “ค่าเดิมถูกแล้ว” · ${text}` })),
   ];
+  // ช่องของเครื่องที่ช่างตอบ "ค่าเดิมถูกแล้ว" — ขึ้นในกล่องข้อมูลเครื่องครั้งเดียว ไม่ซ้ำทุกแท็บชิ้น
+  const machineKeeps = structured ? keepLinesOf(null, order.claimKeep, keepCtx) : [];
+  // "รอบ {r} · แก้แล้ว {n} ช่อง · อธิบาย {m} ช่อง" — รอบก่อนชี้ช่องไว้ ผู้ตรวจเห็นทันทีว่าช่างตอบครบแค่ไหน (ตัวอย่าง woChips)
+  const fixCount = fixCountOf(pending, scope, files, order.claimKeep);
+  const fixChip =
+    fixCount && (fixCount.fixed || fixCount.explained)
+      ? `รอบ ${Math.max(...pending.map((c) => roundOf(c, scope)))} · ${[
+          fixCount.fixed ? `แก้แล้ว ${fixCount.fixed} ช่อง` : "",
+          fixCount.explained ? `อธิบาย ${fixCount.explained} ช่อง` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")}`
+      : null;
   const checks = checkGroupsOf(cur, order.claimTroubleshooting, order.claimGuide);
   const olds = oldRoundsOf(order.claims, order.logs, files, family);
   const trail = claimTrailOf(order.claims, order.logs);
@@ -242,8 +288,9 @@ export default function ClaimReview({
             </TouchableOpacity>
           </View>
         ))}
-        {mismatch || order.isTest ? (
+        {mismatch || order.isTest || fixChip ? (
           <View style={styles.chips}>
+            {fixChip ? <Text style={[styles.chip, styles.chipFix]}>{fixChip}</Text> : null}
             {mismatch ? <Text style={[styles.chip, styles.chipWarn]}>รหัสตัวเสียไม่ตรง {mismatch} ชิ้น</Text> : null}
             {/* ใบทดสอบเด่นไว้ — ผู้ตรวจต้องไม่ส่งของใบทดสอบให้ผู้ขาย */}
             {order.isTest ? <Text style={[styles.chip, styles.chipTest]}>ใบทดสอบ</Text> : null}
@@ -307,6 +354,11 @@ export default function ClaimReview({
               แก้จากรอบก่อน: {n.text}
             </Text>
           ))}
+          {machineKeeps.map((t) => (
+            <Text key={t} style={[styles.note, styles.noteKeep]}>
+              {t}
+            </Text>
+          ))}
           {/*
             มีชิ้นผ่านแล้ว = ใบเคลมของชิ้นนั้นออกไปพร้อมค่าชุดนี้ ข้อมูลเครื่องจึงล็อกไปด้วย (ตัวอย่าง mLocked)
             ถ้ายังตีกลับข้อมูลเครื่องได้ ใบที่อนุมัติไปแล้วจะมีค่าที่ผู้ตรวจเองบอกว่าผิด
@@ -316,6 +368,12 @@ export default function ClaimReview({
               <Ionicons name="lock-closed-outline" size={15} color={colors.successInk} />
               <Text style={styles.lockText}>ล็อกไว้พร้อม {lockedMachine.byParts.join(" · ")} ที่ผ่านแล้ว</Text>
             </View>
+          ) : null}
+          {/* ตีกลับทั้งใบ — บอกตรงข้อมูลเครื่องว่าชิ้นไหนถูกพาไปด้วยและเอาออกยังไง (ตัวอย่าง wholeText) */}
+          {v.whole && !readOnly ? (
+            <Text style={styles.wholeBox} accessibilityLiveRegion="polite" accessibilityLabel="ตีกลับทั้งใบ">
+              {v.wholeText}
+            </Text>
           ) : null}
         </View>
         <View style={[styles.media, wide && { width: 300 }]}>
@@ -403,6 +461,8 @@ export default function ClaimReview({
               onPress={() => v.setDrop(active.key, r)}
               accessibilityRole="radio"
               accessibilityState={{ checked: on }}
+              // เว็บไม่แปลง accessibilityState เป็น aria-checked — ใส่เอง (ดู Tick ใน RejectPanel)
+              aria-checked={on}
             >
               <Ionicons name={on ? "radio-button-on" : "radio-button-off"} size={18} color={on ? colors.navy : colors.textFaint} />
               <Text style={styles.dropOptText}>{r}</Text>
@@ -428,7 +488,7 @@ export default function ClaimReview({
   ) : null;
 
   const part = (
-    <View style={[styles.section, styles.cols, !wide && styles.stack]} accessibilityLabel={name}>
+    <View ref={partRef} style={[styles.section, styles.cols, !wide && styles.stack]} accessibilityLabel={name}>
       <View style={{ flex: 1, minWidth: 0, gap: 10 }}>
         <View style={[styles.codeBoxes, !wide && styles.stack]}>
           <View style={[styles.codeBox, styles.codeBoxPlain]}>
@@ -614,6 +674,19 @@ const styles = StyleSheet.create({
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   chip: { fontSize: 12.5, lineHeight: 18, fontWeight: "800", paddingHorizontal: 10, paddingVertical: 3, borderRadius: radius.pill, overflow: "hidden" },
   chipWarn: { color: colors.warningInk, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  chipFix: { color: colors.primaryInk, backgroundColor: colors.primarySoft },
+  // แดงเข้มทั้งสองโหมด ตัวขาว — เป็นสิ่งที่ผู้ตรวจต้องรู้ก่อนกดส่ง (ชิ้นที่ตั้งใจให้ผ่านจะถูกตีกลับไปด้วย)
+  wholeBox: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+    color: "#fff",
+    backgroundColor: colors.dangerFill,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    overflow: "hidden",
+  },
   // พื้นเทาเข้มทั้งสองโหมด — textMuted โหมดมืดเป็นเทาอ่อน ตัวขาวบนนั้นอ่านไม่ออก ชิปที่ต้องเด่นจะหายไป
   chipTest: { color: "#fff", backgroundColor: colors.neutralFill },
   headSide: { alignItems: "flex-end", gap: 2 },

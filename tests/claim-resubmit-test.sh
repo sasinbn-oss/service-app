@@ -85,7 +85,7 @@ echo "$R" | J 'd.error' | grep -qF "คำอธิบาย “ค่าเด�
   && pass "คำอธิบายค่าเดิมถูกแล้ว 2 ตัว = 400 · ฐานข้อมูลไม่เปลี่ยน" || fail "คำอธิบายสั้น: $(echo $R | head -c 200)"
 R=$(CLOSE "[$(KEEP "$(claim_json $PID)" "ค่าเดิมถูกแล้ว ตรงกับรูป" "SERIAL"),$(claim_json $PID2 "อาการเดิม แก้ข้อความ")]")
 echo "$R" | J 'd.error' | grep -qF "ไม่รู้จักช่องที่ให้แก้ “SERIAL”" && [ "$(ST)|$(NROWS)" = "IN_PROGRESS|$N0" ] \
-  && pass "ยืนยันค่าเดิมเป็นรายช่อง (ยังไม่มีตีกลับแบบชี้ช่อง) = 400 · ฐานข้อมูลไม่เปลี่ยน" || fail "flag ไม่รู้จัก: $(echo $R | head -c 200)"
+  && pass "ยืนยันค่าเดิมของชิ้นด้วยช่องของเครื่อง (Serial ตอบที่ claimMachineKeep ไม่ใช่ในชิ้น) = 400 ไม่รู้จัก · ฐานข้อมูลไม่เปลี่ยน" || fail "flag ไม่รู้จัก: $(echo $R | head -c 200)"
 R=$(CLOSE "[$(KEEP "$(claim_json $PID)" "ค่าเดิมถูกแล้ว ตรงกับรูป"),$(claim_json $PID2)]")
 echo "$R" | J 'd.error' | grep -qF "เคลม $PNAME2: ยังไม่ได้แก้อะไร" && ! echo "$R" | grep -qF "เคลม $PNAME:" && [ "$(ST)|$(NROWS)" = "IN_PROGRESS|$N0" ] \
   && pass "ตรวจทีละชิ้น: $PNAME ยืนยันค่าเดิมแล้ว แต่ $PNAME2 ยังไม่ได้แก้ = 400 บอกชื่อ $PNAME2" || fail "ทีละชิ้น: $(echo $R | head -c 200)"

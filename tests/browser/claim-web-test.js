@@ -2,7 +2,8 @@
 //        · ยังไม่ครบ ปุ่มล่างบอก "ยังขาด n อย่าง — พาไป" กดแล้วไม่ส่ง · ไฟล์เคลมส่งทันทีที่เลือก (ช่องบอก "กำลังส่ง x%" → "✓ แนบแล้ว")
 //        · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
 //        · Admin Spare Part เปิดใบแล้วเจอหน้าตรวจเคลม (หลักฐานรอบนี้ · ข้อมูลเครื่อง · แถบตัดสินล่างจอ — ละเอียดใน claim-review-web-test.js)
-//        · Admin Spare Part ตีกลับ (✗ ตีกลับ + เหตุผลของชิ้น) → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ
+//        · Admin Spare Part ตีกลับ (✗ ตีกลับ + ติ๊กช่องที่ต้องแก้ + เหตุผล · เคลมก้อน 4) → ช่างเห็นเหตุผล ฟอร์มแก้เคลมขึ้นเฉพาะช่องที่ถูกชี้
+//          (ที่เหลือพับไว้ กางแล้วข้อมูลเดิมมาครบ ไม่ต้องแนบซ้ำ) แนบวิดีโอใหม่ → "ส่งเคลมใหม่"
 //          → อนุมัติ (✓ ผ่าน → อนุมัติเคลม · ปิดงาน → ยืนยันอนุมัติ) → ปิดงาน (ตัดสินทีละชิ้น · เคลมก้อน 3)
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
@@ -302,6 +303,10 @@ const login = async (code) =>
 
     // ── Admin Spare Part ตีกลับ ──
     page = await open(`ZCWP${suf}`);
+    // คำขอตัดสินที่หน้านี้ส่งจริง — ข้อความเตือนขึ้นตั้งแต่กด ✗ ตีกลับ (ก่อนกดส่ง) และเซิร์ฟเวอร์ก็ไม่รับตีกลับเปล่า
+    // ดูแค่ข้อความ + สถานะใบจะผ่านแม้ปุ่มส่งยิงคำขอออกไป ต้องนับว่าไม่มีคำขอออกจากหน้าจอเลย
+    const reviewPosts = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /\/claim-review$/.test(r.url())) reviewPosts.push(r.postData() ?? ""); });
     // ดูได้อย่างเดียว — ปุ่มแก้ใบงานทุกอย่างหายไป เหลือแค่ปุ่มตรวจเคลม
     // หน้าตรวจเคลม (ก้อน 2) พับเนื้อใบงานไว้ด้วย display:none — นับปุ่มตอนพับอยู่ได้ 0 เสมอแม้สิทธิ์พัง
     // จึงกาง "ดูรายละเอียดใบงาน ▸" ก่อน (ยืนยันว่ากางจริงจากการ์ดขั้นตอนงาน) แล้วค่อยนับ แล้วพับกลับ
@@ -325,18 +330,31 @@ const login = async (code) =>
     await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });
-    // ตัดสินทีละชิ้น: "✗ ตีกลับ" ของชิ้นนี้ → ช่องเหตุผลขึ้นเหนือแถบ · ยังไม่ใส่เหตุผล ปุ่มส่งยังเป็น "ตัดสินให้ครบทุกชิ้นก่อน"
+    // ตัดสินทีละชิ้น: "✗ ตีกลับ" ของชิ้นนี้ → กล่องติ๊กช่องที่ต้องแก้ขึ้นเหนือแถบ (เคลมก้อน 4)
+    // พิมพ์เหตุผลอย่างเดียวไม่พอ — ต้องติ๊กช่อง ช่างจะได้รู้ว่าแก้ตรงไหน และรู้ว่าต้องกลับไปร้านไหม
     await vis(page, "✗ ตีกลับ").first().click();
     await page.waitForTimeout(500);
     await vis(page, "ตัดสินให้ครบทุกชิ้นก่อน").first().click();
     await page.waitForTimeout(800);
-    (await vis(page, "ตีกลับต้องบอกเหตุผล", false).count()) > 0 && sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW"
-      ? pass("ตีกลับโดยไม่กรอกเหตุผล หน้าจอเตือนและไม่ส่ง")
-      : fail("ตีกลับเปล่าได้");
+    (await vis(page, "ยังไม่ได้ติ๊กช่องที่ต้องแก้ — ช่างจะไม่รู้ว่าต้องแก้อะไร", false).count()) > 0 &&
+      reviewPosts.length === 0 && sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW"
+      ? pass("ตีกลับโดยไม่ติ๊กช่องที่ต้องแก้ หน้าจอเตือนและไม่ส่ง (ไม่มีคำขอตัดสินออกจากหน้าจอ · ฐานข้อมูลยังรอตรวจ)")
+      : fail(`ตีกลับเปล่าได้: คำขอ ${reviewPosts.length} · ใบ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
     await label(page, "เหตุผลที่ตีกลับเคลม").fill("วิดีโอการตรวจเช็คไม่เห็นมิเตอร์ ถ่ายใหม่");
+    await page.waitForTimeout(400);
+    (await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()) === 0 && (await vis(page, "ตัดสินให้ครบทุกชิ้นก่อน").count()) > 0 && reviewPosts.length === 0
+      ? pass("พิมพ์เหตุผลอย่างเดียวยังส่งไม่ได้ (ปุ่มยังเป็น \"ตัดสินให้ครบทุกชิ้นก่อน\")")
+      : fail("ตีกลับด้วยเหตุผลอย่างเดียว ไม่ติ๊กช่อง ส่งได้");
+    await label(page, "ช่องที่ต้องแก้ วิดีโอการตรวจเช็ค").click();
+    await page.waitForTimeout(400);
+    (await vis(page, "ช่างจะเห็นว่า: ต้องกลับไปถ่ายที่หน้าเครื่อง").count()) > 0
+      ? pass("ติ๊ก \"วิดีโอการตรวจเช็ค\" แล้วบอกล่วงหน้า \"ช่างจะเห็นว่า: ต้องกลับไปถ่ายที่หน้าเครื่อง\"")
+      : fail("ไม่บอกว่าช่างต้องกลับไปหน้าเครื่องไหม");
     await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").first().click();
     await page.waitForTimeout(3000);
-    sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS" ? pass("ตีกลับแล้วใบงานกลับไปรอช่าง (ฐานข้อมูล)") : fail("ตีกลับไม่สำเร็จ");
+    sql(`select status||'|'||(select array_to_string("reviewFlags",',') from "PartClaim" where "workOrderId"=${id} order by id desc limit 1) from "WorkOrder" where id=${id}`) === "IN_PROGRESS|CLAIM_CHECK_VIDEO"
+      ? pass("ตีกลับแล้วใบงานกลับไปรอช่าง พร้อมช่องที่ต้องแก้ CLAIM_CHECK_VIDEO (ฐานข้อมูล)")
+      : fail("ตีกลับไม่สำเร็จ");
     await page.close();
 
     // ── ช่างเห็นเหตุผล ปิดใหม่ (แนบใหม่เฉพาะวิดีโอที่โดนตีกลับ) ──
@@ -350,6 +368,15 @@ const login = async (code) =>
       : fail("ผลการทำงานรอบเดิมหายหลังตีกลับ");
     await vis(page, "ปิดงาน").first().click();
     await page.waitForTimeout(1500);
+    // ฟอร์มแก้เคลม (เคลมก้อน 4): ขึ้นเฉพาะช่องที่ถูกชี้ · ที่เหลือพับไว้ แก้ได้ถ้าจำเป็น
+    const fixList = (await page.getByLabel("ช่องที่ต้องแก้", { exact: true }).locator("visible=true").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    fixList.includes("ต้องแก้ (1)") && fixList.includes("· วิดีโอการตรวจเช็ค") && fixList.includes("ยังไม่ได้แก้ — ต้องแนบใหม่") &&
+      (await vis(page, "▸ ส่วนที่ไม่ต้องแก้ (พับไว้ แก้ได้ถ้าจำเป็น)").count()) === 1 &&
+      (await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").count()) === 0
+      ? pass("ฟอร์มแก้เคลม: \"ต้องแก้ (1)\" เฉพาะวิดีโอการตรวจเช็คที่ถูกชี้ · ส่วนที่ไม่ต้องแก้พับไว้")
+      : fail(`ฟอร์มแก้เคลม: "${fixList.slice(0, 300)}"`);
+    await vis(page, "▸ ส่วนที่ไม่ต้องแก้ (พับไว้ แก้ได้ถ้าจำเป็น)").first().click();
+    await page.waitForTimeout(1200);
     const summary = page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last();
     (await summary.inputValue()) === "เปลี่ยนบอร์ด ทดสอบแล้วปกติ" &&
       (await vis(page, "ช่างสมชาย", false).count()) > 0 &&
@@ -360,7 +387,11 @@ const login = async (code) =>
       : fail(`ปิดใหม่ต้องกรอกใหม่: สรุป="${await summary.inputValue()}"`);
     await summary.fill("ถ่ายวิดีโอใหม่ เห็นมิเตอร์");
     await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
-    await vis(page, "ยืนยันปิดงาน").last().click();
+    await vis(page, "✓ แนบใหม่แล้ว — แทนไฟล์เดิม").first().waitFor({ timeout: 30000 }).catch(() => {});
+    (await vis(page, "✓ แนบใหม่แล้ว — แทนไฟล์เดิม").count()) > 0 && (await vis(page, "ส่งเคลมใหม่").count()) > 0
+      ? pass("แนบวิดีโอใหม่: ช่องที่ถูกชี้ขึ้น \"✓ แนบใหม่แล้ว — แทนไฟล์เดิม\" · ปุ่มล่าง \"ส่งเคลมใหม่\"")
+      : fail("แนบวิดีโอใหม่แล้วช่องที่ถูกชี้ยังไม่ผ่าน");
+    await vis(page, "ส่งเคลมใหม่").last().click();
     await page.waitForTimeout(5000);
     sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW" ? pass("ปิดใหม่แล้วไปรอตรวจอีกรอบ") : fail("ปิดใหม่ไม่สำเร็จ");
     await page.close();

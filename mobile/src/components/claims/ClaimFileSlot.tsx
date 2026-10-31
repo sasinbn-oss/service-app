@@ -104,6 +104,8 @@ export function useClaimUploads(
         try {
           const row = await uploadAttachment(orderId, file, role, sparePartId, undefined, {
             quiet: true,
+            // ไฟล์ของเครื่องแนบให้ทุกชิ้นพร้อมกัน (FixList) — แต่ละช่องคือคำขอของตัวเอง ไม่ใช่กดซ้ำ
+            parallel: true,
             onProgress: (p) => {
               const pct = Math.round(p * 100);
               if (pct === shown) return;

@@ -8,6 +8,7 @@
  */
 import type { ClaimGuide } from "./nameplate";
 import { dayTime, type TrailEvent } from "../components/claims/ClaimTrail";
+import { flagLabel, isMachineFlag, machineFlagsOf, partFlagsOf, typedReasonOf } from "./claimFlags";
 
 /** ค่าหนึ่งช่องของป้ายรุ่นที่เก็บในใบเคลม — confirmed/read/edited มากับใบที่ส่งจากฟอร์มยืนยันทีละช่อง (ใบเก่าไม่มี) */
 export interface ClaimPlateField {
@@ -75,6 +76,22 @@ export interface PartClaim {
   firstSubmittedAt?: string;
   /** id ไฟล์หลักฐานของแถวนี้ — เซิร์ฟเวอร์คิดด้วย claimEvidenceFor (ชิ้นเดียวกัน/ของเครื่อง · ในรอบ · ก่อนกดส่ง · ไฟล์ล่าสุดต่อชนิด) */
   evidenceIds?: number[];
+  /**
+   * ช่องที่ผู้ตรวจชี้ให้แก้ตอนตีกลับ (เคลมก้อน 4 · กุญแจใน utils/claimFlags) — ช่องของเครื่องติดทุกแถวที่ถูกตีกลับทั้งใบ
+   * ว่าง = ตีกลับก่อนมีการชี้ช่อง (เหตุผลแบบข้อความอย่างเดียว) ใช้กติกาเดิม: แก้อะไรสักอย่าง หรือกด "ค่าเดิมถูกแล้ว"
+   */
+  reviewFlags?: string[];
+}
+
+/**
+ * คำอธิบาย "ค่าเดิมถูกแล้ว" ของการส่งครั้งล่าสุด (เคลมก้อน 4 · เซิร์ฟเวอร์อ่านจาก meta.keep ของประวัติ CLAIM_SUBMITTED)
+ * sparePartId null = ช่องของเครื่อง · flag "ALL" = ตอบทั้งชิ้น (ก่อนมีการชี้ช่อง)
+ * เก็บในประวัติ ไม่ใช่ในแถวเคลม — เป็นคำตอบของรอบที่ส่งใหม่ ไม่ใช่ของแถวที่ถูกตีกลับ
+ */
+export interface ClaimKeep {
+  sparePartId: number | null;
+  flag: string;
+  note: string;
 }
 
 /**
@@ -570,7 +587,9 @@ export function claimTrailOf(claims: PartClaim[], logs: ClaimLog[]): TrailEvent[
     // กติกาเดียวกับ claimTrail ฝั่งเซิร์ฟเวอร์ — ดูแค่กลุ่มเดียวกัน "ก. ผ่านรอบแรก ข. ปิดเคลมรอบสอง" จะขึ้น
     // "ปิดงาน (ปิดเคลม ไม่ส่งผู้ขาย)" ใต้หัว "✓ อนุมัติเคลมแล้ว" ขณะที่การ์ดของช่างขึ้น "อนุมัติ"
     const approved = rows.some((r) => r.status === "APPROVED" && !!r.reviewedAt && t(r.reviewedAt) <= t(at));
-    if (rejected.length) events.push({ k: "reject", at, who, what: rejected.map(partNameOf).join(", ") });
+    // ตีกลับทั้งใบ (มีช่องของเครื่อง) เรียกว่า "ทั้งใบ" แบบตัวอย่าง strip — ไม่ไล่ชื่อทุกชิ้นที่ถูกพาไปด้วย
+    const whole = rejected.some((r) => (r.reviewFlags ?? []).some(isMachineFlag));
+    if (rejected.length) events.push({ k: "reject", at, who, what: whole ? "ทั้งใบ" : rejected.map(partNameOf).join(", ") });
     else if (approved) events.push({ k: "approve", at, who });
     // ตัดสินแล้วไม่มีชิ้นไหนผ่านเลยและไม่มีตีกลับ = ปิดเคลมไม่ส่งผู้ขายทุกชิ้น (ก้อน 3)
     else events.push({ k: "close", at, who, what: "ปิดเคลม ไม่ส่งผู้ขาย" });
@@ -613,11 +632,22 @@ export function oldRoundsOf<F extends EvidenceFile>(
         tone: "head",
       },
     ];
+    // ตีกลับทั้งใบ (เคลมก้อน 4): ช่องของเครื่องบรรทัดเดียว แล้วแต่ละชิ้นบอกเฉพาะช่องของตัวเอง (ตัวอย่าง oldLines)
+    const ctx = { family: plateFamily ?? g[0].nameplate?.family ?? null, errorCode: g[0].fieldCheck?.errorCode ?? null };
+    const machine = machineFlagsOf(g.filter((r) => r.status === "REJECTED"));
+    if (machine.length) lines.push({ text: `ทั้งใบ (ข้อมูลเครื่อง): ${machine.map((k) => flagLabel(k, ctx)).join(" · ")}`, tone: "bad" });
     for (const r of [...g].sort((a, b) => a.id - b.id)) {
       const name = partNameOf(r);
       if (r.status === "APPROVED") lines.push({ text: `✓ ${name} ผ่าน`, tone: "ok" });
-      else if (r.status === "REJECTED") lines.push({ text: `✗ ${name} ตีกลับ${r.rejectReason ? ` — “${r.rejectReason}”` : ""}`, tone: "bad" });
-      else lines.push({ text: `${name} ปิดเคลม ไม่ส่งผู้ขาย${r.rejectReason ? ` (${r.rejectReason})` : ""}`, tone: "muted" });
+      else if (r.status === "REJECTED") {
+        const own = partFlagsOf(r);
+        // เหตุผลที่ระบบเขียนแทน (ชื่อช่องต่อกัน) ไม่ขึ้นซ้ำ — ช่องของชิ้นอยู่ใน "ช่องที่ต้องแก้" ช่องของเครื่องอยู่บรรทัดบนแล้ว
+        const reason = typedReasonOf(r, ctx);
+        lines.push({
+          text: `✗ ${name} ตีกลับ${own.length ? ` — ช่องที่ต้องแก้: ${own.map((k) => flagLabel(k, ctx)).join(" · ")}` : ""}${reason ? ` — “${reason}”` : ""}`,
+          tone: "bad",
+        });
+      } else lines.push({ text: `${name} ปิดเคลม ไม่ส่งผู้ขาย${r.rejectReason ? ` (${r.rejectReason})` : ""}`, tone: "muted" });
     }
     for (const r of g) {
       const next = nextOf(r, all);
@@ -650,3 +680,97 @@ export const CLAIM_STATUS_TEXT: Record<string, string> = {
   REJECTED: "ตีกลับ",
   DECLINED: "ปิดเคลม ไม่ส่งผู้ขาย",
 };
+
+const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+const plateValue = (np: PartClaim["nameplate"], key: string) => (np?.fields ?? []).find((f) => f.key === key)?.value.trim() ?? "";
+
+/**
+ * ช่องที่ถูกชี้ในรอบก่อน แถวรอบนี้แก้มาแล้วไหม — กติกาเดียวกับที่เซิร์ฟเวอร์บังคับตอนช่างส่งใหม่ (flagSatisfied)
+ * ใช้นับ "แก้แล้ว n ช่อง" บนหน้าตรวจ ไม่ได้ใช้ตัดสินอะไร (เซิร์ฟเวอร์กันไว้แล้วว่าไม่แก้และไม่อธิบายส่งไม่ได้)
+ * ไฟล์: หลักฐานชนิดนั้นของแถวรอบนี้เป็นคนละไฟล์กับรอบก่อน · ป้ายรุ่น: ค่าเปลี่ยน หรือถ่ายป้ายใหม่ (รูปคนละไฟล์)
+ */
+export function flagChanged<F extends EvidenceFile>(prev: PartClaim, cur: PartClaim, flag: string, files: F[]): boolean {
+  const fileChanged = (role: string) => {
+    const now = evidenceFile(cur, files, role);
+    return !!now && now.id !== evidenceFile(prev, files, role)?.id;
+  };
+  const photo = (prev.nameplate?.photoId ?? null) !== (cur.nameplate?.photoId ?? null) && cur.nameplate?.photoId != null;
+  switch (flag) {
+    case "CLAIM_PART":
+    case "CLAIM_CHECK_VIDEO":
+    case "CLAIM_ERROR_VIDEO":
+    case "CLAIM_SYMPTOM":
+      return fileChanged(flag);
+    case "BROKEN_CODE":
+      return (prev.brokenPartCode ?? "").trim() !== (cur.brokenPartCode ?? "").trim();
+    case "SYMPTOM":
+      return prev.symptom.trim() !== cur.symptom.trim();
+    case "CHECKS":
+      return (
+        prev.checkNote.trim() !== cur.checkNote.trim() ||
+        !sameSet(prev.troubleshooting, cur.troubleshooting) ||
+        !sameSet(prev.fieldCheck?.checked ?? [], cur.fieldCheck?.checked ?? [])
+      );
+    case "MODEL":
+      return photo || plateValue(prev.nameplate, "model") !== plateValue(cur.nameplate, "model");
+    case "SERIAL":
+      return photo || plateValue(prev.nameplate, "serial") !== plateValue(cur.nameplate, "serial");
+    case "PLATE_OTHER":
+      return (
+        photo ||
+        (cur.nameplate?.fields ?? []).some((f) => f.key !== "model" && plateValue(prev.nameplate, f.key) !== f.value.trim())
+      );
+    case "ERROR_CODE":
+      return (prev.fieldCheck?.errorCode ?? "") !== (cur.fieldCheck?.errorCode ?? "");
+    default:
+      return false;
+  }
+}
+
+/**
+ * ช่างตอบ "ค่าเดิมถูกแล้ว" ช่องไหนของชิ้นนี้ (ตัวอย่าง note → 'ช่างตอบ "ค่าเดิมถูกแล้ว" · {ช่อง}: "{คำอธิบาย}"')
+ * sparePartId = null → ช่องของเครื่อง · flag ALL = ตอบทั้งชิ้น (ก่อนมีการชี้ช่อง) ไม่มีชื่อช่องนำหน้า
+ */
+export function keepLinesOf(
+  sparePartId: number | null,
+  keeps: ClaimKeep[] | undefined,
+  ctx: { family?: string | null; errorCode?: string | null }
+): string[] {
+  return (keeps ?? [])
+    .filter((k) => k.sparePartId === sparePartId && k.note?.trim())
+    .map((k) =>
+      k.flag === "ALL"
+        ? `ช่างตอบ “ค่าเดิมถูกแล้ว” · ${k.note.trim()}`
+        : `ช่างตอบ “ค่าเดิมถูกแล้ว” · ${flagLabel(k.flag, ctx)}: “${k.note.trim()}”`
+    );
+}
+
+/**
+ * ป้ายหัวหน้าตรวจ "รอบ {r} · แก้แล้ว {n} ช่อง · อธิบาย {m} ช่อง" (ตัวอย่าง woChips) — นับจากช่องที่ถูกชี้ในรอบก่อนของแต่ละชิ้น
+ * ช่องของเครื่องนับครั้งเดียว (ใช้ร่วมทุกชิ้น) · รอบก่อนที่ไม่ได้ชี้ช่อง (ตีกลับแบบข้อความ) ไม่นับ — คืน null
+ */
+export function fixCountOf<F extends EvidenceFile>(
+  pending: PartClaim[],
+  scope: PartClaim[],
+  files: F[],
+  keeps: ClaimKeep[] | undefined
+): { fixed: number; explained: number } | null {
+  let fixed = 0;
+  let explained = 0;
+  let any = false;
+  const kept = (sparePartId: number | null, flag: string) => (keeps ?? []).some((k) => k.sparePartId === sparePartId && k.flag === flag);
+  const pairs = pending.map((cur) => ({ cur, prev: previousOf(cur, scope) })).filter((x): x is { cur: PartClaim; prev: PartClaim } => !!x.prev);
+  for (const { cur, prev } of pairs) {
+    for (const flag of partFlagsOf(prev)) {
+      any = true;
+      if (kept(cur.sparePartId, flag)) explained++;
+      else if (flagChanged(prev, cur, flag, files)) fixed++;
+    }
+  }
+  for (const flag of machineFlagsOf(pairs.map((p) => p.prev))) {
+    any = true;
+    if (kept(null, flag)) explained++;
+    else if (pairs.some((p) => (p.prev.reviewFlags ?? []).includes(flag) && flagChanged(p.prev, p.cur, flag, files))) fixed++;
+  }
+  return any ? { fixed, explained } : null;
+}

@@ -1,4 +1,4 @@
-// ทดสอบ: เคลมก้อน 2–3 — Admin Spare Part เห็นทุกอย่างที่ต้องใช้ตัดสินบนจอเดียว และตัดสินทีละชิ้น ผ่านหน้าจอจริง
+// ทดสอบ: เคลมก้อน 2–4 — Admin Spare Part เห็นทุกอย่างที่ต้องใช้ตัดสินบนจอเดียว ตัดสินทีละชิ้น และตีกลับแบบชี้ช่อง ผ่านหน้าจอจริง
 //   จอ 1280×656 (พื้นที่ใช้งานของจอ 1366×768 ตามตัวอย่างที่เจ้าของงานเลือก) · ใบเคลม 2 ชิ้น ถูกตีกลับมาแล้วหนึ่งรอบ ช่างส่งใหม่
 //   1) เปิดใบแล้วเจอหน้าตรวจเคลมก่อนอย่างอื่น: หัว "{ใบ} · {สาขา} · W1 Huebsch" · "รอบ 2 · รอ {d} วัน" · ช่างที่ส่ง (ชื่อ + รหัส) ·
 //      ในประกันถึง · เคลมซ้ำ (เครื่องใหม่ = ไม่พบ) · แถบสถานะ "… → รอ Admin Spare Part ตรวจ · {d} วัน" · เนื้อใบงานที่เหลือพับไว้
@@ -21,12 +21,19 @@
 //  11) ยังไม่ตัดสิน ปุ่มส่ง "ตัดสินให้ครบทุกชิ้นก่อน" กดแล้วบอกชิ้นที่ยังไม่ได้ตัดสิน ไม่ส่งอะไร (ฐานข้อมูล)
 //  12) ✓ ผ่านทั้งสองชิ้น → "อนุมัติเคลม · ปิดงาน" → กล่องยืนยัน "อนุมัติ 2 ชิ้น ใบงานจะปิด" + บรรทัดทีละชิ้น + ท้ายกล่อง
 //      → "กลับไปดูอีกครั้ง" ไม่ส่งอะไร (ฐานข้อมูลยังรอตรวจ 2 แถว)
-//  13) ชิ้นที่สอง ✗ ตีกลับ โดยไม่ใส่เหตุผล → "ตีกลับต้องบอกเหตุผล" ไม่ส่ง · ใส่เหตุผลแล้วร่างจำในเครื่อง (review:<id>)
-//      → "ตีกลับให้ช่างแก้ (1 ชิ้น)" ส่งเลยไม่ถาม → ชิ้นแรกอนุมัติ ชิ้นสองตีกลับพร้อมเหตุผลของชิ้นนั้น ใบกลับไปรอช่าง (ฐานข้อมูล)
+//  ── ตีกลับแบบชี้ช่อง (เคลมก้อน 4) ──
+//  13) ชิ้นที่สอง ✗ ตีกลับ → กล่องติ๊กช่องติดเหนือแถบตัดสิน (ช่องของชิ้น · ของเครื่อง · เหตุผลด่วน) และส่วนของชิ้นนั้นเลื่อนขึ้นมา ·
+//      ไม่ติ๊กช่องกดส่ง = "ยังไม่ได้ติ๊กช่องที่ต้องแก้ — …" ไม่ส่ง · เหตุผลด่วนติ๊กช่องให้ · "ช่างจะเห็นว่า: แก้จากมือถือได้…" →
+//      ติ๊กช่องไฟล์ = "ต้องกลับไปถ่ายที่หน้าเครื่อง" · ติ๊ก "รุ่น" ของเครื่อง = ชิ้นแรกกลายเป็น "✗ ตีกลับ (ทั้งใบ)" ✓ ผ่าน กดไม่ได้ ·
+//      ชิ้นแรกเลือกปิดเคลมระหว่างทั้งใบ = ยังปิดเคลม · เอาติ๊กเครื่องออกแล้วผ่านได้อีก · ร่างจำในเครื่อง (review:<id>)
+//      → "ตีกลับให้ช่างแก้ (1 ชิ้น)" ส่งเลยไม่ถาม → ชิ้นแรกอนุมัติ (ไม่มีช่องค้าง) ชิ้นสองตีกลับพร้อมช่องและเหตุผล (ฐานข้อมูล)
 //      แถบสรุป "ตีกลับ {ใบ} ให้ช่างแก้แล้ว ({ชิ้นสอง}) — …" · ร่างถูกล้าง
-//  14) ช่างส่งใหม่ (API) ส่งทั้งสองชิ้นมา — ชิ้นที่ผ่านแล้วไม่ได้แถวใหม่ และยังอยู่ในอะไหล่ที่ใช้ (ฐานข้อมูล)
+//  14) ช่างส่งใหม่ (API) ส่งทั้งสองชิ้นมา: แนบวิดีโอการตรวจเช็คใหม่ + "ค่าเดิมถูกแล้ว" ช่องรหัสตัวเสีย — ชิ้นที่ผ่านแล้วไม่ได้แถวใหม่
+//      และยังอยู่ในอะไหล่ที่ใช้ · คำอธิบายอยู่ใน meta.keep ของประวัติส่งเคลม (ฐานข้อมูล)
 //  15) เปิดอีกครั้ง: แท็บ "{ชิ้นแรก} · ✓ ผ่านแล้ว (รอบ 2)" + "{ชิ้นสอง} · ● รอตัดสิน" · "ล็อกไว้พร้อม {ชิ้นแรก} ที่ผ่านแล้ว" ·
+//      หัว "รอบ 3 · แก้แล้ว 1 ช่อง · อธิบาย 1 ช่อง" · คำอธิบายของช่อง · รอบเก่าบอกช่องที่ชี้ ·
 //      แถบของชิ้นแรก "ผ่านแล้ว (รอบ 2) — ล็อกไว้ ไม่ต้องตรวจซ้ำ" (ไม่มีปุ่ม) · รอบเก่า "รอบ 1 · ตีกลับ · รอบ 2 · ตีกลับ ▸"
+//  15b) ชิ้นสอง ✗ ตีกลับ ตอนข้อมูลเครื่องล็อกแล้ว: กล่องไม่มีช่องของเครื่องและเหตุผลด่วน " · ทั้งใบ"
 //  16) ชิ้นสอง "ปิดเคลม ไม่ส่งผู้ขาย" → กล่องเลือกเหตุผลใต้แท็บ · ยังไม่เลือก = "ปิดเคลม ไม่ส่งผู้ขาย ต้องเลือกเหตุผล" ·
 //      "อื่น ๆ" + พิมพ์เหตุผล → ยืนยัน "อนุมัติ 1 ชิ้น ใบงานจะปิด" (นับชิ้นที่ผ่านไปแล้ว) → ปิดงาน ชิ้นสองปิดเคลมพร้อมเหตุผล
 //      ประวัติ CLAIM_APPROVED "{ชิ้นสอง} ปิดเคลม ไม่ส่งผู้ขาย (อื่น ๆ: …)" (ฐานข้อมูล) · หน้าเลื่อนกลับขึ้นบน สรุปอยู่ในจอ
@@ -37,6 +44,12 @@
 //      → 409 โหลดใบใหม่พร้อมเหตุผลจากเซิร์ฟเวอร์ ไม่มีอะไรถูกเขียนทับ (ฐานข้อมูล) → ตัดสินรอบใหม่ "ปิดเคลม ไม่ส่งผู้ขาย"
 //      → ยืนยัน "ปิดเคลม 1 ชิ้น ไม่ส่งผู้ขาย ใบงานจะปิด" (ไม่มีคำว่าอนุมัติ) → ปิดงาน ประวัติ CLAIM_DECLINED (ฐานข้อมูล)
 //      สรุป "✓ ปิดงานแล้ว · ปิดเคลม ไม่ส่งผู้ขาย"
+//  19) ใบที่สาม (สองชิ้น): ชิ้น A ✗ ตีกลับ + ติ๊ก "รุ่น" ของเครื่อง · ชิ้น B ปิดเคลม (หมดประกัน) — B ยังปิดเคลม ไม่ถูกพลิกเป็นตีกลับ ·
+//      ฐานข้อมูล: A ตีกลับพร้อมช่อง MODEL (เหตุผลที่ระบบเขียนแทน) B ปิดเคลม · ประวัติ "ตีกลับทั้งใบ (ข้อมูลเครื่อง: รุ่น) …" ·
+//      ช่างส่งใหม่ (API) พร้อม claimMachineKeep → B ยังปิดเคลมแถวเดียว A รอตรวจ · คำอธิบายช่องรุ่นอยู่ใน meta.keep (ไม่ผูกชิ้น)
+//  20) ใบที่สี่ (สองชิ้น): ชิ้น A ✗ ตีกลับ ติ๊ก "รูปอะไหล่เก่า" แล้วเปลี่ยนใจเป็น ✓ ผ่าน · ชิ้น B ✗ ตีกลับ ติ๊กรหัสตัวเสีย + "รุ่น" ของเครื่อง
+//      → A ถูกพาไป "✗ ตีกลับ (ทั้งใบ)" · คำขอที่ส่งจริง: A ได้แค่ MODEL ไม่มีเหตุผล (ติ๊กเก่าที่มองไม่เห็นแล้วไม่ติดไป) ·
+//      ฐานข้อมูล: A ตีกลับ MODEL "ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้" · B ตีกลับ BROKEN_CODE+MODEL
 // วันนัด 12 วันข้างหน้าตอนปล่อยงาน (G10) · อะไหล่ตรงยี่ห้อเครื่องจาก fxPart (G0)
 // ยืนยันผลที่ฐานข้อมูลทุกข้อที่เปลี่ยนข้อมูล · ต้องมี DATABASE_URL · รีสตาร์ท Expo ก่อนรัน (เว็บไม่เฝ้าไฟล์)
 const { chromium } = require("playwright");
@@ -445,30 +458,99 @@ const login = async (code) =>
       ? pass("\"กลับไปดูอีกครั้ง\": กล่องปิด ไม่ส่งคำขอ (ฐานข้อมูลยังรอตรวจ 2 แถว)")
       : fail(`กลับไปดูอีกครั้ง: คำขอ ${posts.length} · รอตรวจ ${pendingN()}`);
 
-    // ── 13) ชิ้นสองตีกลับ ──
+    // ── 13) ชิ้นสองตีกลับแบบชี้ช่อง (เคลมก้อน 4) ──
     await vis(page, "✗ ตีกลับ").first().click();
-    await page.waitForTimeout(400);
-    const dock = (await byLabel(page, "ตีกลับ: เหตุผล").count()) === 1 && (await byLabel(page, "เหตุผลที่ตีกลับเคลม").count()) === 1;
+    await page.waitForTimeout(900);
+    // หากล่องจากหน้าปัจจุบันทุกครั้ง — ข้อ 15b ใช้ซ้ำหลังปิดหน้านี้และเข้าใหม่แล้ว
+    const dockEl = () => byLabel(page, "ตีกลับ: ช่องที่ต้องแก้").first();
+    const dockText = async () => (await dockEl().innerText().catch(() => "")).replace(/\s+/g, " ");
+    const dockBox = await dockEl().boundingBox().catch(() => null);
+    const barBox13 = await byLabel(page, "แถบตัดสินเคลม").first().boundingBox().catch(() => null);
+    // ส่วนของชิ้นนั้น (หลักฐาน) ถูกเลื่อนขึ้นมาอยู่เหนือกล่องติ๊ก — ผู้ตรวจเห็นสิ่งที่กำลังชี้คู่กับช่องที่ติ๊ก
+    const partBox = await byLabel(page, name2).first().boundingBox().catch(() => null);
+    let dt = await dockText();
+    dt.includes(`${name2} — ติ๊กช่องที่ต้องแก้:`) &&
+      ["รูปอะไหล่เก่า", "รหัสอะไหล่ตัวที่เสีย", "อาการ/สาเหตุ", "ช่างเข้าเช็คอะไรบ้าง", "วิดีโอการตรวจเช็ค"].every((t) => dt.includes(t)) &&
+      dt.includes("ต้องแนบใหม่") && dt.includes("ของเครื่อง (ติ๊กแล้วตีกลับทั้งใบ):") && dt.includes("เหตุผลด่วน:") &&
+      !!dockBox && !!barBox13 && Math.abs(dockBox.y + dockBox.height - barBox13.y) <= 2 && inView(barBox13) &&
+      !!partBox && partBox.y >= 0 && partBox.y < dockBox.y
+      ? pass(`ชิ้นสอง ✗ ตีกลับ: กล่องติ๊กช่องติดอยู่เหนือแถบตัดสิน (ช่องของชิ้น 5 ช่อง · ช่องไฟล์ "ต้องแนบใหม่" · ของเครื่อง · เหตุผลด่วน) · ส่วนของ ${name2} เลื่อนขึ้นมาอยู่เหนือกล่อง`)
+      : fail(`กล่องตีกลับ: กล่อง ${JSON.stringify(dockBox)} · แถบ ${JSON.stringify(barBox13)} · ชิ้น ${JSON.stringify(partBox)} · "${dt.slice(0, 300)}"`);
     await vis(page, "ตัดสินให้ครบทุกชิ้นก่อน").first().click();
     await page.waitForTimeout(500);
-    dock && (await vis(page, `${name2}: ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร`).count()) === 1 && posts.length === 0 && pendingN() === "2"
-      ? pass(`ชิ้นสอง ✗ ตีกลับ: ช่องเหตุผลขึ้นเหนือแถบ · ไม่ใส่เหตุผลกดส่ง = "${name2}: ตีกลับต้องบอกเหตุผล …" ไม่ส่งคำขอ`)
-      : fail(`ตีกลับไม่มีเหตุผล: ช่อง=${dock} · คำขอ ${posts.length} · รอตรวจ ${pendingN()}`);
+    const NEED = "ยังไม่ได้ติ๊กช่องที่ต้องแก้ — ช่างจะไม่รู้ว่าต้องแก้อะไร";
+    (await vis(page, `${name2}: ${NEED}`).count()) === 1 && (await dockText()).includes(NEED) &&
+      (await vis(page, `ทั้งใบ: ${name1} ✓ ผ่าน · ${name2} ✗ ยังไม่ได้ติ๊กช่อง`).count()) === 1 && posts.length === 0 && pendingN() === "2"
+      ? pass(`ตีกลับโดยไม่ติ๊กช่อง: กดส่ง = "${name2}: ${NEED}" · สรุป "✗ ยังไม่ได้ติ๊กช่อง" ไม่ส่งคำขอ (ฐานข้อมูลรอตรวจ 2 แถว)`)
+      : fail(`ตีกลับไม่ติ๊กช่อง: ข้อความ ${await vis(page, `${name2}: ${NEED}`).count()} · คำขอ ${posts.length} · รอตรวจ ${pendingN()}`);
+    // เหตุผลด่วนติ๊กช่องที่คู่กันให้ · ช่องข้อความอย่างเดียว = แก้จากมือถือได้ · เพิ่มช่องไฟล์ = ต้องกลับไปหน้าเครื่อง
+    const ticked = async (l) => (await byLabel(page, l).first().getAttribute("aria-checked").catch(() => null)) === "true";
+    await byLabel(page, "เหตุผลด่วน รหัสตัวเสียไม่ตรงกับรูป").first().click();
+    await page.waitForTimeout(400);
+    const quickTicks = await ticked("ช่องที่ต้องแก้ รหัสอะไหล่ตัวที่เสีย");
+    const phoneLine = (await dockText()).includes("ช่างจะเห็นว่า: แก้จากมือถือได้ ไม่ต้องไปร้าน");
+    await byLabel(page, "ช่องที่ต้องแก้ วิดีโอการตรวจเช็ค").first().click();
+    await page.waitForTimeout(400);
+    quickTicks && phoneLine && (await ticked("ช่องที่ต้องแก้ วิดีโอการตรวจเช็ค")) &&
+      (await dockText()).includes("ช่างจะเห็นว่า: ต้องกลับไปถ่ายที่หน้าเครื่อง") && (await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()) === 1
+      ? pass("เหตุผลด่วน \"รหัสตัวเสียไม่ตรงกับรูป\" ติ๊กช่องรหัสให้ → \"ช่างจะเห็นว่า: แก้จากมือถือได้ ไม่ต้องไปร้าน\" · ติ๊กวิดีโอการตรวจเช็คเพิ่ม → \"ต้องกลับไปถ่ายที่หน้าเครื่อง\"")
+      : fail(`ติ๊กช่อง: เหตุผลด่วนติ๊กให้=${quickTicks} · มือถือ=${phoneLine} · "${(await dockText()).slice(0, 300)}"`);
+
+    // ตีกลับทั้งใบ: ติ๊กช่องของเครื่อง → ชิ้นที่ผ่านกลายเป็น ✗ (ทั้งใบ) และ ✓ ผ่าน กดไม่ได้ · ชิ้นที่ปิดเคลมยังปิดเคลม
+    await byLabel(page, "ช่องของเครื่อง รุ่น").first().click();
+    await page.waitForTimeout(600);
+    const wholeText = async () => (await byLabel(page, "ตีกลับทั้งใบ").first().innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    const WHOLE_TAIL = "ถูกตีกลับด้วย เพราะใช้ข้อมูลเครื่องชุดเดียวกัน · ไม่ต้องการตีกลับทั้งใบ ให้เอาติ๊กข้อมูลเครื่องออก";
+    let wt = await wholeText();
+    (await vis(page, `${name1} · ✗ ตีกลับ (ทั้งใบ)`).count()) === 1 && wt.startsWith("ตีกลับทั้งใบ — ") && wt.includes(name1) &&
+      wt.endsWith(WHOLE_TAIL) && (await vis(page, "ตีกลับให้ช่างแก้ (2 ชิ้น)").count()) === 1
+      ? pass(`ติ๊ก "รุ่น" ของเครื่อง: แท็บ "${name1} · ✗ ตีกลับ (ทั้งใบ)" · แถบแดง "${wt.slice(0, 80)}…" · ปุ่มส่ง "ตีกลับให้ช่างแก้ (2 ชิ้น)"`)
+      : fail(`ตีกลับทั้งใบ: แท็บ ${await vis(page, `${name1} · ✗ ตีกลับ (ทั้งใบ)`).count()} · แถบ "${wt}"`);
+    await vis(page, `${name1} · ✗ ตีกลับ (ทั้งใบ)`).first().click();
+    await page.waitForTimeout(600);
+    const okDisabled = (await page.locator('[aria-disabled="true"]').filter({ hasText: "✓ ผ่าน" }).locator("visible=true").count()) > 0;
+    await vis(page, "✓ ผ่าน").first().click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(400);
+    dt = await dockText();
+    okDisabled && (await vis(page, `${name1} · ✗ ตีกลับ (ทั้งใบ)`).count()) === 1 &&
+      dt.includes("ของเครื่อง (ติ๊กแล้วตีกลับทั้งใบ):") && !dt.includes(`${name1} — ติ๊กช่องที่ต้องแก้:`)
+      ? pass(`แท็บ ${name1} ระหว่างตีกลับทั้งใบ: "✓ ผ่าน" กดไม่ได้ · กล่องยังโชว์ช่องของเครื่องให้เอาติ๊กออกได้ (ไม่มีช่องของชิ้นนี้ — ไม่ได้กดตีกลับเอง)`)
+      : fail(`แท็บชิ้นที่ถูกพาไป: ✓ ผ่านกดไม่ได้=${okDisabled} · แท็บ ${await vis(page, `${name1} · ✗ ตีกลับ (ทั้งใบ)`).count()} · "${dt.slice(0, 200)}"`);
+    await vis(page, "ปิดเคลม ไม่ส่งผู้ขาย").first().click();
+    await page.waitForTimeout(600);
+    wt = await wholeText();
+    (await vis(page, `${name1} · ปิดเคลม ไม่ส่งผู้ขาย`).count()) === 1 && wt === `ตีกลับทั้งใบ — ${name2} ${WHOLE_TAIL}`
+      ? pass(`${name1} เลือก "ปิดเคลม ไม่ส่งผู้ขาย" ระหว่างตีกลับทั้งใบ: ยังปิดเคลม (ไม่ถูกพลิกเป็นตีกลับ) · แถบแดงเหลือแค่ ${name2}`)
+      : fail(`ปิดเคลมระหว่างทั้งใบ: แท็บ ${await vis(page, `${name1} · ปิดเคลม ไม่ส่งผู้ขาย`).count()} · แถบ "${wt}"`);
+    // เอาติ๊กข้อมูลเครื่องออกจากแท็บนี้เลย แล้วกลับไปให้ชิ้นนี้ผ่าน (ข้อ 14–16 ใช้ชิ้นแรกที่ผ่าน)
+    await byLabel(page, "ช่องของเครื่อง รุ่น").first().click();
+    await page.waitForTimeout(500);
+    await vis(page, "✓ ผ่าน").first().click();
+    await page.waitForTimeout(400);
+    (await vis(page, `${name1} · ✓ ผ่าน`).count()) === 1 && (await byLabel(page, "ตีกลับทั้งใบ").count()) === 0
+      ? pass(`เอาติ๊กข้อมูลเครื่องออก: ไม่ตีกลับทั้งใบแล้ว ${name1} กด ✓ ผ่าน ได้อีก`)
+      : fail(`หลังเอาติ๊กเครื่องออก: แท็บ ${await vis(page, `${name1} · ✓ ผ่าน`).count()} · แถบทั้งใบ ${await byLabel(page, "ตีกลับทั้งใบ").count()}`);
+    await vis(page, `${name2} · ✗ ตีกลับ`).first().click();
+    await page.waitForTimeout(500);
     await byLabel(page, "เหตุผลที่ตีกลับเคลม").first().fill(REASON_B);
     await page.waitForTimeout(900);
     const draftRaw = await page.evaluate((k) => localStorage.getItem(k), `draft:review:${id}`);
-    (draftRaw ?? "").includes(REASON_B) && (await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()) === 1
-      ? pass("ใส่เหตุผลแล้ว: ร่างการตัดสินจำไว้ในเครื่อง (review:<id>) · ปุ่มส่ง \"ตีกลับให้ช่างแก้ (1 ชิ้น)\"")
+    (draftRaw ?? "").includes(REASON_B) && (draftRaw ?? "").includes("CLAIM_CHECK_VIDEO") && (await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()) === 1
+      ? pass("ใส่เหตุผลแล้ว: ร่างการตัดสินจำเหตุผลและช่องที่ติ๊กไว้ในเครื่อง (review:<id>) · ปุ่มส่ง \"ตีกลับให้ช่างแก้ (1 ชิ้น)\"")
       : fail(`ร่างการตัดสิน: ${String(draftRaw).slice(0, 200)} · ปุ่ม ${await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()}`);
     await page.screenshot({ path: path.join(DIR, "claim-review-6-reject-dock.png") });
     await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").first().click();
     await page.waitForTimeout(4000);
     const lastLog = () => sql(`select action from "WorkOrderLog" where "workOrderId"=${id} order by id desc limit 1`);
+    const REASON_B_SENT = `${REASON_B} · รหัสตัวเสียไม่ตรงกับรูป`;
+    const flagsOf = (s) =>
+      sql(`select array_to_string("reviewFlags",',') from "PartClaim" where "workOrderId"=${id} and "sparePartId"=${s} order by id desc limit 1`);
     sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS" &&
-      claimsOf(sp1) === "REJECTED:" + REASON + ",APPROVED:" && claimsOf(sp2) === `REJECTED:${REASON},REJECTED:${REASON_B}` &&
+      claimsOf(sp1) === "REJECTED:" + REASON + ",APPROVED:" && claimsOf(sp2) === `REJECTED:${REASON},REJECTED:${REASON_B_SENT}` &&
+      flagsOf(sp2) === "BROKEN_CODE,CLAIM_CHECK_VIDEO" && flagsOf(sp1) === "" &&
       lastLog() === "CLAIM_REJECTED" && posts.length === 1 && !posts[0].includes('"approve"')
-      ? pass(`ตีกลับให้ช่างแก้ (ไม่ถาม): ${name1} อนุมัติ · ${name2} ตีกลับพร้อมเหตุผลของชิ้นนั้น · ใบกลับไปรอช่าง · ประวัติ CLAIM_REJECTED (ฐานข้อมูล)`)
-      : fail(`หลังตีกลับ: ใบ ${sql(`select status from "WorkOrder" where id=${id}`)} · ${name1} ${claimsOf(sp1)} · ${name2} ${claimsOf(sp2)} · ประวัติ ${lastLog()} · คำขอ ${posts.length}`);
+      ? pass(`ตีกลับให้ช่างแก้ (ไม่ถาม): ${name1} อนุมัติ (ไม่มีช่องค้าง) · ${name2} ตีกลับพร้อมช่อง รหัสตัวเสีย + วิดีโอการตรวจเช็ค และเหตุผล "เขียนเพิ่ม · เหตุผลด่วน" · ใบกลับไปรอช่าง (ฐานข้อมูล)`)
+      : fail(`หลังตีกลับ: ใบ ${sql(`select status from "WorkOrder" where id=${id}`)} · ${name1} ${claimsOf(sp1)} [${flagsOf(sp1)}] · ${name2} ${claimsOf(sp2)} [${flagsOf(sp2)}] · ประวัติ ${lastLog()} · คำขอ ${posts.length}`);
     const notice = `ตีกลับ ${code} ให้ช่างแก้แล้ว (${name2}) — ใบนี้จะกลับมาในกล่องงานเมื่อช่างส่งใหม่`;
     (await vis(page, notice).count()) === 1 && (await byLabel(page, "แถบตัดสินเคลม").count()) === 0 &&
       (await page.evaluate((k) => localStorage.getItem(k), `draft:review:${id}`)) === null
@@ -478,9 +560,18 @@ const login = async (code) =>
     await page.close();
 
     // ── 14) ช่างส่งใหม่ (API) — ส่งทั้งสองชิ้น ชิ้นที่ผ่านแล้วต้องไม่ได้แถวใหม่ ──
+    // ตีกลับแบบชี้ช่อง (เคลมก้อน 4): วิดีโอการตรวจเช็คแนบใหม่ (แก้แล้ว) · รหัสตัวเสียยืนยันค่าเดิมทีละช่อง (อธิบาย)
+    const KEEP_B = "รหัสตรงกับสติกเกอร์ที่ขอบสายพาน";
+    await upload("CLAIM_CHECK_VIDEO", CLIP, "video/webm", sp2);
     const body3 = closeBody((s) => (s === sp2 ? SYMPTOM2 : SYMPTOM));
-    body3.claims = body3.claims.map((c) => (c.sparePartId === sp2 ? { ...c, keep: [{ flag: "ALL", note: "สายพานในรูปคือตัวที่ถอดออก ดูรหัสที่ขอบ" }] } : c));
+    body3.claims = body3.claims.map((c) => (c.sparePartId === sp2 ? { ...c, keep: [{ flag: "BROKEN_CODE", note: KEEP_B }] } : c));
     const r3 = await call(T, "POST", `/work-orders/${id}/close`, body3);
+    const keep3 = JSON.parse(
+      sql(`select coalesce(meta->'keep','[]'::jsonb)::text from "WorkOrderLog" where "workOrderId"=${id} and action='CLAIM_SUBMITTED' order by id desc limit 1`) || "[]"
+    );
+    keep3.length === 1 && keep3[0].sparePartId === sp2 && keep3[0].flag === "BROKEN_CODE" && keep3[0].note === KEEP_B
+      ? pass(`ช่างส่งใหม่: คำอธิบาย "ค่าเดิมถูกแล้ว" ของช่องรหัสตัวเสียเก็บใน meta.keep ของประวัติส่งเคลม (ฐานข้อมูล)`)
+      : fail(`meta.keep หลังส่งใหม่: ${JSON.stringify(keep3).slice(0, 200)}`);
     sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW" &&
       claimsOf(sp1) === "REJECTED:" + REASON + ",APPROVED:" && claimsOf(sp2).split(",").length === 3 && claimsOf(sp2).endsWith(",PENDING:") &&
       sql(`select count(*) from "WorkOrderPart" where "workOrderId"=${id} and kind='USED' and "sparePartId"=${sp1}`) === "1"
@@ -497,6 +588,21 @@ const login = async (code) =>
       (await vis(page, "รอบ 1 · ตีกลับ · รอบ 2 · ตีกลับ ▸").count()) === 1
       ? pass(`เปิดรอบ 3: แท็บ "${name1} · ✓ ผ่านแล้ว (รอบ 2)" + "${name2} · ● รอตัดสิน" · "ล็อกไว้พร้อม ${name1} ที่ผ่านแล้ว" · รอบเก่าพับไว้สองรอบ`)
       : fail(`รอบ 3: แท็บผ่านแล้ว ${await vis(page, `${name1} · ✓ ผ่านแล้ว (รอบ 2)`).count()} · รอบ 3 ${await vis(page, `รอบ 3 · รอ ${d15} วัน`).count()} · ล็อกเครื่อง ${await vis(page, `ล็อกไว้พร้อม ${name1} ที่ผ่านแล้ว`).count()} · รอบเก่า ${await vis(page, "รอบ 1 · ตีกลับ · รอบ 2 · ตีกลับ ▸").count()}`);
+    // รอบที่ช่างตอบช่องที่ถูกชี้ (เคลมก้อน 4): หัวบอก "แก้แล้ว n ช่อง · อธิบาย m ช่อง" · ช่องที่อธิบายขึ้นคำอธิบายของช่องนั้น
+    // รอบเก่าบอกช่องที่ชี้ของชิ้นนั้น + เหตุผลที่พิมพ์
+    const KEEP_LINE = `ช่างตอบ “ค่าเดิมถูกแล้ว” · รหัสอะไหล่ตัวที่เสีย: “${KEEP_B}”`;
+    // "แก้แล้ว" ของช่องไฟล์นับจากไฟล์หลักฐาน ซึ่งโหลดตามหลังหัวหน้าตรวจ — รอให้ขึ้นก่อนนับ
+    await vis(page, "รอบ 3 · แก้แล้ว 1 ช่อง · อธิบาย 1 ช่อง").first().waitFor({ timeout: 10000 }).catch(() => {});
+    const chipOk = (await vis(page, "รอบ 3 · แก้แล้ว 1 ช่อง · อธิบาย 1 ช่อง").count()) === 1;
+    const keepOk = (await vis(page, KEEP_LINE).count()) === 1;
+    await vis(page, "รอบ 1 · ตีกลับ · รอบ 2 · ตีกลับ ▸").first().click();
+    await page.waitForTimeout(500);
+    const OLD_LINE = `✗ ${name2} ตีกลับ — ช่องที่ต้องแก้: รหัสอะไหล่ตัวที่เสีย · วิดีโอการตรวจเช็ค — “${REASON_B_SENT}”`;
+    chipOk && keepOk && (await vis(page, OLD_LINE).count()) === 1
+      ? pass(`รอบ 3: หัว "รอบ 3 · แก้แล้ว 1 ช่อง · อธิบาย 1 ช่อง" · "${KEEP_LINE}" · รอบเก่า "${OLD_LINE.slice(0, 60)}…"`)
+      : fail(`รอบ 3 ช่องที่ชี้: ป้ายหัว=${chipOk} · คำอธิบาย=${keepOk} · รอบเก่า ${await vis(page, OLD_LINE).count()}`);
+    await vis(page, "รอบ 1 · ตีกลับ · รอบ 2 · ตีกลับ ▾").first().click().catch(() => {});
+    await page.waitForTimeout(300);
     await vis(page, `${name1} · ✓ ผ่านแล้ว (รอบ 2)`).first().click();
     await page.waitForTimeout(500);
     (await vis(page, "ผ่านแล้ว (รอบ 2) — ล็อกไว้ ไม่ต้องตรวจซ้ำ").count()) === 1 && (await vis(page, "✓ ผ่าน").count()) === 0 &&
@@ -505,9 +611,19 @@ const login = async (code) =>
       : fail(`แท็บชิ้นที่ผ่านแล้ว: ข้อความล็อก ${await vis(page, "ผ่านแล้ว (รอบ 2) — ล็อกไว้ ไม่ต้องตรวจซ้ำ").count()} · ปุ่มผ่าน ${await vis(page, "✓ ผ่าน").count()}`);
     await page.screenshot({ path: path.join(DIR, "claim-review-8-locked.png") });
 
-    // ── 16) ชิ้นสองปิดเคลม ไม่ส่งผู้ขาย ──
+    // ── 15b) ข้อมูลเครื่องล็อกพร้อมชิ้นที่ผ่าน (เคลมก้อน 4): กด ✗ ตีกลับ ไม่มีช่องของเครื่อง และไม่มีเหตุผลด่วน " · ทั้งใบ" ──
     await vis(page, `${name2} · ● รอตัดสิน`).first().click();
     await page.waitForTimeout(500);
+    await vis(page, "✗ ตีกลับ").first().click();
+    await page.waitForTimeout(700);
+    dt = await dockText();
+    dt.includes(`${name2} — ติ๊กช่องที่ต้องแก้:`) && !dt.includes("ของเครื่อง (ติ๊กแล้วตีกลับทั้งใบ):") &&
+      !dt.includes("วิดีโอไม่เห็นรหัส Error บนจอ") && !dt.includes("ป้ายรุ่นไม่ตรงกับรูป") && !dt.includes("· ทั้งใบ") &&
+      dt.includes("ภาพมืด/เบลอ") && (await vis(page, `ล็อกไว้พร้อม ${name1} ที่ผ่านแล้ว`).count()) === 1
+      ? pass(`มี ${name1} ผ่านแล้ว: กล่องตีกลับมีแค่ช่องของชิ้น ไม่มีช่องของเครื่อง/เหตุผลด่วนทั้งใบ · ข้อมูลเครื่อง "ล็อกไว้พร้อม ${name1} ที่ผ่านแล้ว"`)
+      : fail(`ล็อกข้อมูลเครื่อง: "${dt.slice(0, 300)}"`);
+
+    // ── 16) ชิ้นสองปิดเคลม ไม่ส่งผู้ขาย ──
     await vis(page, "ปิดเคลม ไม่ส่งผู้ขาย").first().click();
     await page.waitForTimeout(900);
     const dropPanel = byLabel(page, "ปิดเคลม ไม่ส่งผู้ขาย").first();
@@ -662,6 +778,189 @@ const login = async (code) =>
       ? pass("สรุป \"✓ ปิดงานแล้ว · ปิดเคลม ไม่ส่งผู้ขาย\" ไม่มีคำว่าอนุมัติ + ชิ้นที่ปิดพร้อมเหตุผล")
       : fail(`สรุปปิดเคลมทุกชิ้น: "${done2.slice(0, 300)}"`);
     await page.screenshot({ path: path.join(DIR, "claim-review-12-declined-done.png"), fullPage: true });
+    await page.close();
+
+    // ── 19) ตีกลับทั้งใบ + อีกชิ้นปิดเคลม (เคลมก้อน 4) — ชิ้นที่ปิดเคลมยังปิดเคลม ทั้งตอนตัดสินและหลังช่างส่งใหม่ (ฐานข้อมูล) ──
+    // ใบที่สาม เครื่อง W3 (ไม่ให้เคลมของใบอื่นขึ้นเป็นเคลมซ้ำ) เตรียมผ่าน API แบบเดียวกับใบแรก — ส่งเคลม 2 ชิ้นรอบแรก
+    sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'W3','WASHER','HB - Huebsch',now())`);
+    const wo3 = await call(A, "POST", "/work-orders", {
+      branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
+      machines: [{ code: "W3", model: "Huebsch", symptom: "ประตูล็อกไม่ลง" }],
+    });
+    const id3 = wo3.orders ? wo3.orders[0].id : wo3.id;
+    if (!id3) throw new Error(`เปิดใบที่สามไม่สำเร็จ: ${JSON.stringify(wo3).slice(0, 200)}`);
+    ids.push(id3);
+    const p3 = [fxPart(id3, "BOARD"), fxPart(id3, "BELT")];
+    const [nameA, nameB] = p3.map((s) => sql(`select name from "SparePart" where id=${s}`));
+    await call(S, "POST", `/work-orders/${id3}/parts`, { needsParts: true, parts: p3.map((s) => ({ sparePartId: s, quantity: 1 })) });
+    await call(A, "POST", `/work-orders/${id3}/parts-sourcing`, { results: p3.map((s) => ({ sparePartId: s, inStock: true, warehouse: "คลังลาดพร้าว 94" })) });
+    await call(S, "POST", `/work-orders/${id3}/assign`, { team, scheduledAt: visitDay(12) });
+    await call(A, "POST", `/work-orders/${id3}/parts-check`, {
+      results: p3.map((s) => ({ sparePartId: s, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-CT${suf}` })),
+    });
+    await call(A, "POST", `/work-orders/${id3}/confirm-appointment`, {});
+    await call(S, "POST", `/work-orders/${id3}/dispatch`, {});
+    if (sql(`select status from "WorkOrder" where id=${id3}`) !== "IN_PROGRESS") throw new Error("เตรียมใบที่สามไม่ถึงขั้นเข้างาน");
+    const code3 = sql(`select code from "WorkOrder" where id=${id3}`);
+    const up3 = async (role, file, type, sparePartId) => {
+      const form = new FormData();
+      form.append("file", new Blob([fs.readFileSync(file)], { type }), path.basename(file));
+      form.append("role", role);
+      if (sparePartId) form.append("sparePartId", String(sparePartId));
+      return call(T, "POST", `/work-orders/${id3}/attachments`, form);
+    };
+    await call(T, "POST", `/work-orders/${id3}/arrive`, {});
+    for (const role of ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"]) await up3(role, PHOTO, "image/png");
+    for (const s of p3) {
+      for (const role of ["CLAIM_PART", "CLAIM_SYMPTOM"]) await up3(role, PHOTO, "image/png", s);
+      for (const role of ["CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"]) await up3(role, CLIP, "video/webm", s);
+    }
+    const body4 = () => {
+      const b = closeBody(() => SYMPTOM);
+      return {
+        ...b,
+        parts: p3.map((s) => ({ sparePartId: s, quantity: 1 })),
+        claims: p3.map((s, i) => ({ ...b.claims[i], sparePartId: s, brokenPartCode: `OLD-${s}` })),
+      };
+    };
+    const c3 = await call(T, "POST", `/work-orders/${id3}/close`, body4());
+    if (sql(`select status from "WorkOrder" where id=${id3}`) !== "CLAIM_REVIEW") throw new Error(`ใบที่สามปิดพร้อมเคลมไม่ผ่าน: ${JSON.stringify(c3).slice(0, 200)}`);
+
+    page = await signIn(`ZCRP${suf}`);
+    await openOrder(page, code3);
+    await vis(page, `${code3} · ${bc} สาขาทดสอบตรวจเคลม · W3 Huebsch`).first().waitFor({ timeout: 15000 }).catch(() => {});
+    const posts3 = [];
+    page.on("request", (r) => { if (/\/claim-review$/.test(r.url()) && r.method() === "POST") posts3.push(r.postData() ?? ""); });
+    await vis(page, `${nameA} · ● รอตัดสิน`).first().click();
+    await page.waitForTimeout(400);
+    await vis(page, "✗ ตีกลับ").first().click();
+    await page.waitForTimeout(700);
+    await byLabel(page, "ช่องของเครื่อง รุ่น").first().click();
+    await page.waitForTimeout(500);
+    await vis(page, `${nameB} · ✗ ตีกลับ (ทั้งใบ)`).first().click();
+    await page.waitForTimeout(500);
+    await vis(page, "ปิดเคลม ไม่ส่งผู้ขาย").first().click();
+    await page.waitForTimeout(600);
+    await byLabel(page, "ปิดเคลม ไม่ส่งผู้ขาย").first().getByText("หมดประกัน", { exact: true }).click();
+    await page.waitForTimeout(400);
+    const wt3 = await wholeText();
+    (await vis(page, `${nameB} · ปิดเคลม ไม่ส่งผู้ขาย`).count()) === 1 && (await vis(page, `${nameA} · ✗ ตีกลับ`).count()) === 1 &&
+      wt3 === `ตีกลับทั้งใบ — ${nameA} ${WHOLE_TAIL}` && (await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()) === 1
+      ? pass(`ใบที่สาม: ${nameA} ✗ ตีกลับ + ติ๊ก "รุ่น" ของเครื่อง · ${nameB} ปิดเคลม (หมดประกัน) ยังปิดเคลม ไม่ถูกพลิก · ปุ่ม "ตีกลับให้ช่างแก้ (1 ชิ้น)"`)
+      : fail(`ใบที่สาม ก่อนส่ง: แท็บ ${nameB} ${await vis(page, `${nameB} · ปิดเคลม ไม่ส่งผู้ขาย`).count()} · แถบ "${wt3}" · ปุ่ม ${await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").count()}`);
+    await page.screenshot({ path: path.join(DIR, "claim-review-13-whole.png") });
+    await vis(page, "ตีกลับให้ช่างแก้ (1 ชิ้น)").first().click();
+    await page.waitForTimeout(4000);
+    // สถานะ|เหตุผล|ช่อง ของแถวทีละชิ้น — ชิ้นที่กดตีกลับเองแต่ไม่ได้พิมพ์ เซิร์ฟเวอร์เขียนชื่อช่องแทนเหตุผล
+    const rows3 = (s) =>
+      sql(`select string_agg(status||'|'||coalesce("rejectReason",'')||'|'||array_to_string("reviewFlags",'+'),',' order by id) from "PartClaim" where "workOrderId"=${id3} and "sparePartId"=${s}`);
+    const log3 = sql(`select coalesce(note,'') from "WorkOrderLog" where "workOrderId"=${id3} and action='CLAIM_REJECTED' order by id desc limit 1`);
+    sql(`select status from "WorkOrder" where id=${id3}`) === "IN_PROGRESS" &&
+      rows3(p3[0]) === "REJECTED|ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้|MODEL" && rows3(p3[1]) === "DECLINED|หมดประกัน|" &&
+      log3.startsWith("ตีกลับทั้งใบ (ข้อมูลเครื่อง: รุ่น)") && log3.includes(`${nameB} ปิดเคลม ไม่ส่งผู้ขาย (หมดประกัน)`) &&
+      posts3.length === 1 && (await vis(page, `ตีกลับ ${code3} ให้ช่างแก้แล้ว (ทั้งใบ) — ใบนี้จะกลับมาในกล่องงานเมื่อช่างส่งใหม่`).count()) === 1
+      ? pass(`ตีกลับทั้งใบ: ${nameA} ตีกลับพร้อมช่อง MODEL · ${nameB} ปิดเคลม (หมดประกัน) · ประวัติ "ตีกลับทั้งใบ (ข้อมูลเครื่อง: รุ่น) …" · แถบสรุป "(ทั้งใบ)" (ฐานข้อมูล)`)
+      : fail(`ตีกลับทั้งใบ: ใบ ${sql(`select status from "WorkOrder" where id=${id3}`)} · ${nameA} ${rows3(p3[0])} · ${nameB} ${rows3(p3[1])} · ประวัติ "${log3.slice(0, 200)}" · คำขอ ${posts3.length}`);
+    await page.close();
+    // ช่างส่งใหม่ทั้งสองชิ้น (แอปเก่าส่งชิ้นที่ปิดเคลมมาด้วย) + ตอบ "ค่าเดิมถูกแล้ว" ช่องรุ่นครั้งเดียวทั้งใบ
+    const MODEL_KEEP = "รุ่นตรงกับป้าย HL055LWHPRXG6W0000 ตัวอักษรชัด";
+    const r4 = await call(T, "POST", `/work-orders/${id3}/close`, { ...body4(), claimMachineKeep: [{ flag: "MODEL", note: MODEL_KEEP }] });
+    const keep4 = JSON.parse(
+      sql(`select coalesce(meta->'keep','[]'::jsonb)::text from "WorkOrderLog" where "workOrderId"=${id3} and action='CLAIM_SUBMITTED' order by id desc limit 1`) || "[]"
+    );
+    sql(`select status from "WorkOrder" where id=${id3}`) === "CLAIM_REVIEW" && rows3(p3[1]) === "DECLINED|หมดประกัน|" &&
+      rows3(p3[0]).endsWith(",PENDING||") && keep4.length === 1 && keep4[0].sparePartId === null && keep4[0].flag === "MODEL" && keep4[0].note === MODEL_KEEP
+      ? pass(`ช่างส่งใหม่: ${nameB} ยังปิดเคลมแถวเดียว (ไม่ได้แถวใหม่) · ${nameA} รอตรวจรอบ 2 · คำอธิบายช่องรุ่นอยู่ใน meta.keep ไม่ผูกชิ้น (ฐานข้อมูล)`)
+      : fail(`ส่งใหม่หลังตีกลับทั้งใบ: ${JSON.stringify(r4).slice(0, 200)} · ${nameA} ${rows3(p3[0])} · ${nameB} ${rows3(p3[1])} · keep ${JSON.stringify(keep4).slice(0, 200)}`);
+
+    // ── 20) ติ๊กช่องของชิ้นแล้วเปลี่ยนใจเป็นผ่าน แต่ถูกพาไปเพราะตีกลับทั้งใบ — ติ๊กเก่าต้องไม่ติดไปกับคำขอ (เคลมก้อน 4) ──
+    // แอปเป็นด่านเดียว: เซิร์ฟเวอร์แยกไม่ออกว่าชิ้นไหนผู้ตรวจกดตีกลับเอง ชิ้นไหนถูกพาไป เก็บทุกช่องที่ส่งมา
+    // ติ๊กไฟล์ที่ค้างไปเคยทำให้งานที่แก้จากมือถือได้ กลายเป็น "ต้องกลับไปถ่ายที่หน้าเครื่อง" (ดู post() ใน useClaimVerdicts)
+    // ใบที่สี่ เครื่อง W4 — ข้อ 19 ใช้ชิ้นหนึ่งปิดเคลมไปแล้ว ไม่มีชิ้นให้ถูกพาไป
+    sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'W4','WASHER','HB - Huebsch',now())`);
+    const wo5 = await call(A, "POST", "/work-orders", {
+      branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
+      machines: [{ code: "W4", model: "Huebsch", symptom: "ประตูล็อกไม่ลง" }],
+    });
+    const id5 = wo5.orders ? wo5.orders[0].id : wo5.id;
+    if (!id5) throw new Error(`เปิดใบที่สี่ไม่สำเร็จ: ${JSON.stringify(wo5).slice(0, 200)}`);
+    ids.push(id5);
+    const p5 = [fxPart(id5, "BOARD"), fxPart(id5, "BELT")];
+    const [nameC, nameD] = p5.map((s) => sql(`select name from "SparePart" where id=${s}`));
+    await call(S, "POST", `/work-orders/${id5}/parts`, { needsParts: true, parts: p5.map((s) => ({ sparePartId: s, quantity: 1 })) });
+    await call(A, "POST", `/work-orders/${id5}/parts-sourcing`, { results: p5.map((s) => ({ sparePartId: s, inStock: true, warehouse: "คลังลาดพร้าว 94" })) });
+    await call(S, "POST", `/work-orders/${id5}/assign`, { team, scheduledAt: visitDay(12) });
+    await call(A, "POST", `/work-orders/${id5}/parts-check`, {
+      results: p5.map((s) => ({ sparePartId: s, inStock: true, warehouse: "คลังลาดพร้าว 94", requisitionNo: `RQ-CU${suf}` })),
+    });
+    await call(A, "POST", `/work-orders/${id5}/confirm-appointment`, {});
+    await call(S, "POST", `/work-orders/${id5}/dispatch`, {});
+    if (sql(`select status from "WorkOrder" where id=${id5}`) !== "IN_PROGRESS") throw new Error("เตรียมใบที่สี่ไม่ถึงขั้นเข้างาน");
+    const code5 = sql(`select code from "WorkOrder" where id=${id5}`);
+    const up5 = async (role, file, type, sparePartId) => {
+      const form = new FormData();
+      form.append("file", new Blob([fs.readFileSync(file)], { type }), path.basename(file));
+      form.append("role", role);
+      if (sparePartId) form.append("sparePartId", String(sparePartId));
+      return call(T, "POST", `/work-orders/${id5}/attachments`, form);
+    };
+    await call(T, "POST", `/work-orders/${id5}/arrive`, {});
+    for (const role of ["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"]) await up5(role, PHOTO, "image/png");
+    for (const s of p5) {
+      for (const role of ["CLAIM_PART", "CLAIM_SYMPTOM"]) await up5(role, PHOTO, "image/png", s);
+      for (const role of ["CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"]) await up5(role, CLIP, "video/webm", s);
+    }
+    const b5 = closeBody(() => SYMPTOM);
+    const c5 = await call(T, "POST", `/work-orders/${id5}/close`, {
+      ...b5,
+      parts: p5.map((s) => ({ sparePartId: s, quantity: 1 })),
+      claims: p5.map((s, i) => ({ ...b5.claims[i], sparePartId: s, brokenPartCode: `OLD-${s}` })),
+    });
+    if (sql(`select status from "WorkOrder" where id=${id5}`) !== "CLAIM_REVIEW") throw new Error(`ใบที่สี่ปิดพร้อมเคลมไม่ผ่าน: ${JSON.stringify(c5).slice(0, 200)}`);
+    const claimIdOf5 = (s) => Number(sql(`select id from "PartClaim" where "workOrderId"=${id5} and "sparePartId"=${s} and status='PENDING'`));
+    const [cidC, cidD] = p5.map(claimIdOf5);
+
+    page = await signIn(`ZCRP${suf}`);
+    await openOrder(page, code5);
+    await vis(page, `${code5} · ${bc} สาขาทดสอบตรวจเคลม · W4 Huebsch`).first().waitFor({ timeout: 15000 }).catch(() => {});
+    const posts5 = [];
+    page.on("request", (r) => { if (/\/claim-review$/.test(r.url()) && r.method() === "POST") posts5.push(r.postData() ?? ""); });
+    // A: ✗ ตีกลับ ติ๊กรูปอะไหล่เก่า (ช่องไฟล์) → เปลี่ยนใจเป็น ✓ ผ่าน — ติ๊กยังอยู่ในร่าง แต่ไม่ใช่การตีกลับของผู้ตรวจแล้ว
+    await vis(page, `${nameC} · ● รอตัดสิน`).first().click();
+    await page.waitForTimeout(400);
+    await vis(page, "✗ ตีกลับ").first().click();
+    await page.waitForTimeout(700);
+    await byLabel(page, "ช่องที่ต้องแก้ รูปอะไหล่เก่า").first().click();
+    await page.waitForTimeout(400);
+    const staleTicked = await ticked("ช่องที่ต้องแก้ รูปอะไหล่เก่า");
+    await vis(page, "✓ ผ่าน").first().click();
+    await page.waitForTimeout(500);
+    // B: ✗ ตีกลับ ติ๊กรหัสตัวเสีย + รุ่นของเครื่อง → A ถูกพาไปตีกลับทั้งใบ
+    await vis(page, `${nameD} · ● รอตัดสิน`).first().click();
+    await page.waitForTimeout(400);
+    await vis(page, "✗ ตีกลับ").first().click();
+    await page.waitForTimeout(700);
+    await byLabel(page, "ช่องที่ต้องแก้ รหัสอะไหล่ตัวที่เสีย").first().click();
+    await page.waitForTimeout(300);
+    await byLabel(page, "ช่องของเครื่อง รุ่น").first().click();
+    await page.waitForTimeout(600);
+    const flipped = (await vis(page, `${nameC} · ✗ ตีกลับ (ทั้งใบ)`).count()) === 1 && (await vis(page, "ตีกลับให้ช่างแก้ (2 ชิ้น)").count()) === 1;
+    await vis(page, "ตีกลับให้ช่างแก้ (2 ชิ้น)").first().click();
+    await page.waitForTimeout(4000);
+    const rows5 = (s) =>
+      sql(`select status||'|'||coalesce("rejectReason",'')||'|'||array_to_string("reviewFlags",'+') from "PartClaim" where "workOrderId"=${id5} and "sparePartId"=${s} order by id desc limit 1`);
+    let sent5 = [];
+    try { sent5 = JSON.parse(posts5[0] ?? "{}").decisions ?? []; } catch { sent5 = []; }
+    const decC = sent5.find((x) => x.claimId === cidC);
+    const decD = sent5.find((x) => x.claimId === cidD);
+    staleTicked && flipped && posts5.length === 1 &&
+      !!decC && decC.verdict === "REJECT" && JSON.stringify(decC.flags) === '["MODEL"]' && !("reason" in decC) &&
+      !!decD && decD.verdict === "REJECT" && [...(decD.flags ?? [])].sort().join("+") === "BROKEN_CODE+MODEL" &&
+      sql(`select status from "WorkOrder" where id=${id5}`) === "IN_PROGRESS" &&
+      rows5(p5[0]) === "REJECTED|ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้|MODEL" &&
+      rows5(p5[1]) === "REJECTED|รหัสอะไหล่ตัวที่เสีย ต้องแก้ · ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้|BROKEN_CODE+MODEL"
+      ? pass(`ติ๊กรูปอะไหล่เก่าที่ ${nameC} แล้วเปลี่ยนเป็นผ่าน → ถูกพาไปตีกลับทั้งใบ: คำขอส่ง ${nameC} แค่ MODEL ไม่มีเหตุผล · ฐานข้อมูล ${nameC} = MODEL "ทั้งใบ (ข้อมูลเครื่อง) — รุ่น ต้องแก้" · ${nameD} = BROKEN_CODE+MODEL`)
+      : fail(`ชิ้นที่ถูกพาไป: ติ๊กเก่า=${staleTicked} · พลิก=${flipped} · คำขอ ${posts5.length} ${JSON.stringify(sent5).slice(0, 300)} · ${nameC} ${rows5(p5[0])} · ${nameD} ${rows5(p5[1])}`);
     await page.close();
   } catch (e) {
     fail(String(e));
