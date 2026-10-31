@@ -3,6 +3,7 @@
 #   · นับเป็นชิ้น (quantity 3 = 3) แยก "ใช้แล้ว" (USED ของใบที่ช่างปิดแล้ว) กับ "เบิกแล้ว · งานยังไม่จบ" (ออกจากคลังแล้ว ใบยังไม่ปิด)
 #     ใบหนึ่งอยู่แบบเดียว — ใบที่ปิดแล้วไม่นับตัวที่เบิกซ้ำ · ใบที่แอดมินเปิดงานใหม่ไม่นับ USED ที่ค้าง
 #     · ใบที่เคลมถูกตีกลับ (รอช่างปิดใหม่) ยังนับใช้แล้วตามรอบที่ปิด ไม่นับตัวที่เบิก
+#     · คำเรื่องเคลมเขียนตามผลของชิ้นนั้นเอง (ชิ้นที่ปิดเคลม ไม่ส่งผู้ขาย = "ปิดเคลม ไม่ส่งผู้ขาย")
 #   · ของนอกสโตร์อยู่ใน "ใช้แล้ว" พร้อมป้าย ไม่มีวันเป็น "เบิกแล้ว" · ยกเลิก/ใบทดสอบไม่นับ · ใบรออะไหล่ (ใบแยก) · ใบงาน SUB นับปกติ
 #   · ค่าเริ่มต้น = ทั้งหมด (ใบปี 2566 ยังขึ้น) · ปุ่มช่วงวันที่แต่ละแบบตัดตามวันไทยตรงขอบ · วันเบิกโอน = ประวัติโอน
 #   · กรองภาค/ทีม/ค้นหา (ไม่ตีความ % เป็น wildcard) · ตามอะไหล่รวมได้เท่าตามสาขา · หน้าถัดไป · แถวของกลุ่ม · สาขา/เครื่อง (ลิงก์ในใบงาน)
@@ -101,9 +102,12 @@ O6=$(wo 06 $BC DONE "now()-interval '1 day'" "" ',"isTest","testOfId"' ",true,$O
 part $O6 $P1 7 USED
 O6B=$(wo 06B $BC AWAITING_CONFIRM null "" ',"isTest","testOfId"' ",true,$O2")
 part $O6B $P1 7 WAITING "$ISS" "$(iss RQ-ZBP6 "now()-interval '1 day'")"
-# O7 สาขา C ใบรออะไหล่ (ใบแยกจาก O1) ทีม SUB ปิดแล้ว: ใช้ P3 ×2
+# O7 สาขา C ใบรออะไหล่ (ใบแยกจาก O1) ทีม SUB ปิดแล้ว: ใช้ P3 ×2 — Admin Spare Part ปิดเคลมชิ้นนี้ ไม่ส่งผู้ขาย
+#    (ยังนับใช้แล้วเท่าเดิม · บรรทัดรายละเอียดบอกผลเคลมของชิ้นนี้เอง)
 O7=$(wo 07 $BC DONE "now()-interval '1 day'" "" ',"parentId","closeSubTeam"' ",$O1,'ทีม SUB ทดสอบ $SUF'")
 part $O7 $P3 2 USED
+DB "insert into \"PartClaim\"(\"workOrderId\",\"sparePartId\",\"partCode\",\"partName\",\"branchCode\",\"branchName\",symptom,\"checkNote\",status,\"rejectReason\")
+    values ($O7,$P3,'ZBP-$SUF-P3','วาล์วทดสอบ $SUF','$BC','ร้านทดสอบ$SUF ซี','ทดสอบ','ทดสอบ','DECLINED','หมดประกัน')"
 # O8 สาขา A ปิดไปตั้งแต่ปี 2566 (เครื่อง W2): ใช้ P3 ×1 — ค่าเริ่มต้น "ทั้งหมด" ต้องเห็น
 O8=$(wo 08 $BA DONE "'2023-03-15 03:00:00'" $MA2)
 part $O8 $P3 1 USED
@@ -269,6 +273,9 @@ DP=$(DET $A "?view=part&key=$P1")
 C1CODE=$(DB "select code from \"WorkOrder\" where id=$O1")
 [ "$(DET $A "?view=part&key=$P3" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O7))" | J '[d.parentCode,d.subTeam,d.detail.includes("ทีม SUB")].join("|")')" = "$C1CODE|ทีม SUB ทดสอบ $SUF|true" ] \
   && pass "ใบรออะไหล่ (ใบแยก) นับปกติ บอกใบแม่และทีม SUB" || fail "แถว O7"
+[ "$(DET $A "?view=part&key=$P3&kind=used" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O7))" | J '[d.claimStatus,/ปิดเคลม ไม่ส่งผู้ขาย$/.test(d.detail),d.detail.includes("ส่งเคลมตัวเก่าแล้ว")].join("|")')" = "DECLINED|true|false" ] \
+  && pass "ชิ้นที่ Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย: บรรทัดรายละเอียดเขียน \"ปิดเคลม ไม่ส่งผู้ขาย\" (ไม่ใช่ \"ส่งเคลมตัวเก่าแล้ว\")" \
+  || fail "แถว O7 ปิดเคลม: $(DET $A "?view=part&key=$P3&kind=used" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O7))")"
 [ "$(DET $A "?view=part&key=$P2&kind=used" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O4))" | J '[d.kind,d.status,d.claimStatus,d.detail.includes("รอตรวจเคลม")].join("|")')" = "USED|CLAIM_REVIEW|PENDING|true" ] \
   && pass "ใบรอตรวจเคลม = ใช้แล้ว (ช่างปิดแล้ว) บอกว่าส่งเคลม รอตรวจ" || fail "แถว O4"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "localhost:4000/api/work-orders/reports/branch-parts/detail?view=branch" -H "$(H $A)")" = "400" ] \

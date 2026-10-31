@@ -65,7 +65,6 @@ export default function ClaimMachineBox({
   const [stage, setStage] = useState<string | null>(null);
   const [readErr, setReadErr] = useState<string | null>(null);
   const fields = plateFields(guide.plate);
-  const err = guide.errors.find((e) => e.code === check.errorCode);
   const scanned = fields.some((f) => plate.values[f.key]?.source === "SCAN" && plate.values[f.key]?.value);
   const missed = plate.photo ? fields.filter((f) => !plate.values[f.key]?.value) : [];
   const brandOnly = isBrandOnly(registryModel);
@@ -229,26 +228,7 @@ export default function ClaimMachineBox({
             placeholder="เลือก Error"
             accessibilityLabel="Error ที่เครื่องขึ้น"
           />
-          {err?.checks.length ? (
-            <>
-              <Text style={styles.hint}>คู่มือให้ดูข้อเหล่านี้ก่อนเปลี่ยนอะไหล่ — ติ๊กข้อที่เช็คแล้ว</Text>
-              {err.checks.map((c) => {
-                const on = check.checked.includes(c);
-                return (
-                  <TouchableOpacity
-                    key={c}
-                    style={styles.checkRow}
-                    onPress={() => onCheck({ ...check, checked: on ? check.checked.filter((x) => x !== c) : [...check.checked, c] })}
-                    activeOpacity={0.7}
-                    accessibilityLabel={`เช็คแล้ว ${c}`}
-                  >
-                    <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? colors.primary : colors.textFaint} />
-                    <Text style={styles.checkText}>{c}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </>
-          ) : null}
+          <ErrorCheckList guide={guide} check={check} onCheck={onCheck} />
         </>
       ) : (
         <Text style={[styles.hint, { marginTop: spacing.sm }]}>
@@ -355,6 +335,46 @@ const styles = StyleSheet.create({
 });
 
 /**
+ * ข้อเช็คตามคู่มือของ Error ที่เลือก — ติ๊กข้อที่เช็คแล้ว
+ *
+ * แยกออกมาให้ใช้ได้ตอนข้อมูลเครื่องล็อก (มีชิ้นผ่านแล้ว): ป้ายรุ่นกับ Error ห้ามเปลี่ยน แต่ข้อที่เช็คยังเป็นของการปิดครั้งนี้
+ * (เซิร์ฟเวอร์เก็บข้อเช็คต่อชิ้น) — ช่างที่ถูกตีกลับเพราะ "ไม่ได้เช็คตาม Error" ต้องติ๊กเพิ่มได้
+ * ถ้าอ่านอย่างเดียว แถวใหม่ได้ติ๊กเดิมของชิ้นที่ผ่าน ผู้ตรวจเห็น ✗ ข้อเดิม แล้วตีกลับซ้ำ
+ */
+export function ErrorCheckList({
+  guide,
+  check,
+  onCheck,
+}: {
+  guide: ClaimGuide;
+  check: ClaimCheckDraft;
+  onCheck: (next: ClaimCheckDraft) => void;
+}) {
+  const err = guide.errors.find((e) => e.code === check.errorCode);
+  if (!err?.checks.length) return null;
+  return (
+    <>
+      <Text style={styles.hint}>คู่มือให้ดูข้อเหล่านี้ก่อนเปลี่ยนอะไหล่ — ติ๊กข้อที่เช็คแล้ว</Text>
+      {err.checks.map((c) => {
+        const on = check.checked.includes(c);
+        return (
+          <TouchableOpacity
+            key={c}
+            style={styles.checkRow}
+            onPress={() => onCheck({ ...check, checked: on ? check.checked.filter((x) => x !== c) : [...check.checked, c] })}
+            activeOpacity={0.7}
+            accessibilityLabel={`เช็คแล้ว ${c}`}
+          >
+            <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? colors.primary : colors.textFaint} />
+            <Text style={styles.checkText}>{c}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * สรุปข้อมูลเครื่องในการ์ดเคลม (ทุกคนที่เปิดดูใบงาน · ผู้ตรวจใช้หน้าตรวจเคลมแทน) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
  * ป้ายที่มาบอกเท่าที่ช่างทำจริง (อ่านจากรูป/ยืนยัน/แก้กี่ตัว) และตัวที่หน้าตาคล้ายกันในรุ่นพื้นเหลือง ให้ดูกับภาพตัดเป็นพิเศษ
  * เช็คตาม Error ขึ้นข้อที่ทำ ✓ · คนตัดสินเคลมเห็นข้อที่ไม่ได้ทำ ✗ ด้วย (ระบบไม่ติ๊กให้ช่าง จึงต้องเห็นว่าข้อไหนข้ามไป)
@@ -366,6 +386,7 @@ export function ClaimMachineSummary({
   photo,
   guide,
   showMissed = true,
+  hideChecks = false,
 }: {
   nameplate?: PartClaim["nameplate"];
   /** รูปป้ายเต็มที่ระบบอ่านค่ามา — กดดูขนาดเต็ม */
@@ -375,6 +396,8 @@ export function ClaimMachineSummary({
   guide?: ClaimGuide | null;
   /** ขึ้นข้อที่ไม่ได้ทำ ✗ ด้วยไหม — เฉพาะคนตัดสินเคลม (ดู CheckGroups) */
   showMissed?: boolean;
+  /** ไม่ขึ้นข้อเช็คตาม Error — ฟอร์มปิดงานที่ข้อมูลเครื่องล็อกแสดงเป็นช่องติ๊กของรอบนี้แทน (ErrorCheckList) */
+  hideChecks?: boolean;
 }) {
   if (!nameplate?.fields?.length && !fieldCheck) return null;
   const legacy = isLegacyPlate(nameplate);
@@ -418,7 +441,7 @@ export function ClaimMachineSummary({
             <Text style={styles.sumLabel}>Error ที่เครื่องขึ้น</Text>
             <Text style={[styles.checkText, { fontWeight: "800" }]}>{errorLabelOf(fieldCheck)}</Text>
           </View>
-          {eif ? <CheckGroups groups={[eif]} showMissed={showMissed} /> : null}
+          {eif && !hideChecks ? <CheckGroups groups={[eif]} showMissed={showMissed} /> : null}
           {/* ใบเคลมก่อนเอาเช็คลิสต์ออกยังมีคำตอบ — แสดงไว้ให้ Admin Spare Part เห็นเหมือนเดิม */}
           {fieldCheck.install?.length ? <Text style={[styles.hint, { marginTop: 4 }]}>การติดตั้งฐานเครื่อง (ช่างตอบตามที่เห็น)</Text> : null}
           {(fieldCheck.install ?? []).map((c) => (

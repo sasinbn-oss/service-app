@@ -75,7 +75,7 @@ const ymd = (msg: string) =>
 const filterSchema = z.object({
   from: ymd("วันที่เริ่มไม่ถูกต้อง"),
   to: ymd("วันที่สิ้นสุดไม่ถูกต้อง"),
-  status: choice(["ALL", "PENDING", "APPROVED", "REJECTED"], "ALL", "สถานะที่เลือกไม่ถูกต้อง"),
+  status: choice(["ALL", "PENDING", "APPROVED", "REJECTED", "DECLINED"], "ALL", "สถานะที่เลือกไม่ถูกต้อง"),
   brand: text(100, "ยี่ห้อ"),
   q: text(100, "คำค้น"),
   rounds: choice(["latest", "all"], "latest", "ตัวเลือกรอบไม่ถูกต้อง"),
@@ -113,8 +113,11 @@ function parse<T extends z.ZodTypeAny>(schema: T, req: AuthRequest, res: Respons
   return parsed.data;
 }
 
-/** ป้ายตามที่เจ้าของงานตกลง — สีบนจอใช้ look (OLD = รอบเก่าที่ถูกแทนแล้ว สีเทา) */
-type Look = "PENDING" | "APPROVED" | "REJECTED" | "OLD";
+/**
+ * ป้ายตามที่เจ้าของงานตกลง — สีบนจอใช้ look (OLD = รอบเก่าที่ถูกแทนแล้ว สีเทา)
+ * DECLINED = Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย (ก้อน 3) — ชิ้นจบแล้วแต่ไม่มีใบเคลมไปผู้ขาย ต้องไม่ปนกับ "อนุมัติ"
+ */
+type Look = "PENDING" | "APPROVED" | "REJECTED" | "DECLINED" | "OLD";
 
 export interface ClaimHistoryRow {
   id: number;
@@ -153,9 +156,9 @@ interface Built {
   /** แถวที่จะแสดง = all หลังกรองสถานะและรอบ */
   shown: ClaimHistoryRow[];
   /** ตัวเลขบนการ์ด — นับชิ้น (จำนวน) จากรอบล่าสุดเสมอ ไม่ตามสถานะ/รอบที่เลือก (ตามตัวอย่าง) */
-  tiles: { pending: number; approved: number; rejected: number; total: number; orders: number };
+  tiles: { pending: number; approved: number; rejected: number; declined: number; total: number; orders: number };
   /** ตัวเลขบนปุ่มสถานะ = จำนวนแถวที่จะเห็นเมื่อกด (ตามรอบที่เลือกอยู่) — แบบตัวกรองหน้ารายการใบงาน */
-  counts: { ALL: number; PENDING: number; APPROVED: number; REJECTED: number };
+  counts: { ALL: number; PENDING: number; APPROVED: number; REJECTED: number; DECLINED: number };
 }
 
 /** อะไหล่ตัวเดียวกันในใบเดียวกัน — ของนอกสโตร์รุ่นเก่าอาจไม่มี sparePartId ใช้รหัสแทน */
@@ -249,8 +252,16 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
 
   const all = rows.map((r): ClaimHistoryRow => {
     const { round, latest } = roundOf.get(r.id) ?? { round: 1, latest: true };
-    let look: Look = r.status === "APPROVED" ? "APPROVED" : r.status === "REJECTED" ? "REJECTED" : "PENDING";
-    let label = r.status === "APPROVED" ? "อนุมัติ" : r.status === "REJECTED" ? "ตีกลับ · รอช่างแก้" : "รอตรวจ";
+    let look: Look =
+      r.status === "APPROVED" ? "APPROVED" : r.status === "REJECTED" ? "REJECTED" : r.status === "DECLINED" ? "DECLINED" : "PENDING";
+    let label =
+      r.status === "APPROVED"
+        ? "อนุมัติ"
+        : r.status === "REJECTED"
+          ? "ตีกลับ · รอช่างแก้"
+          : r.status === "DECLINED"
+            ? "ปิดเคลม ไม่ส่งผู้ขาย"
+            : "รอตรวจ";
     if (r.status === "REJECTED" && !latest) {
       look = "OLD";
       label = "ตีกลับ · ส่งใหม่แล้ว";
@@ -303,6 +314,8 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
       pending: pieces(latestRows.filter((r) => r.status === "PENDING")),
       approved: pieces(latestRows.filter((r) => r.status === "APPROVED")),
       rejected: pieces(latestRows.filter((r) => r.status === "REJECTED")),
+      // คีย์ใหม่ (ก้อน 3) — คีย์เดิมค่าเท่าเดิม แอปที่ยังไม่รู้จัก declined ไม่พัง
+      declined: pieces(latestRows.filter((r) => r.status === "DECLINED")),
       total: pieces(latestRows),
       orders: new Set(latestRows.map((r) => r.workOrderId)).size,
     },
@@ -311,6 +324,7 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
       PENDING: inRounds.filter((r) => r.status === "PENDING").length,
       APPROVED: inRounds.filter((r) => r.status === "APPROVED").length,
       REJECTED: inRounds.filter((r) => r.status === "REJECTED").length,
+      DECLINED: inRounds.filter((r) => r.status === "DECLINED").length,
     },
   };
 }
@@ -327,7 +341,7 @@ async function brandOptions(scope: Prisma.WorkOrderWhereInput) {
 
 /**
  * GET /api/part-claims — รายการเคลม + ตัวเลขสรุป
- * ?from&to (YYYY-MM-DD วันที่ส่งเคลม เวลาไทย · ไม่ส่ง = ไม่จำกัด) &status=ALL|PENDING|APPROVED|REJECTED &brand &q
+ * ?from&to (YYYY-MM-DD วันที่ส่งเคลม เวลาไทย · ไม่ส่ง = ไม่จำกัด) &status=ALL|PENDING|APPROVED|REJECTED|DECLINED &brand &q
  * &rounds=latest|all &branchCode &machineCode (ตรงตัว) &limit &offset|before
  * rest = แถวที่ยังเหลือหลังหน้านี้ (ปุ่ม "แสดงเพิ่ม" ดูจากตัวนี้ ไม่ใช่ total − ที่มี ซึ่งรวมเคลมใหม่ที่อยู่บนสุด)
  */
@@ -405,7 +419,13 @@ router.get("/related", requireAuth, async (req: AuthRequest, res) => {
 
 // ── Excel ─────────────────────────────────────────────
 
-const STATUS_TEXT: Record<string, string> = { ALL: "ทุกสถานะ", PENDING: "รอตรวจ", APPROVED: "อนุมัติ", REJECTED: "ตีกลับ" };
+const STATUS_TEXT: Record<string, string> = {
+  ALL: "ทุกสถานะ",
+  PENDING: "รอตรวจ",
+  APPROVED: "อนุมัติ",
+  REJECTED: "ตีกลับ",
+  DECLINED: "ปิดเคลม ไม่ส่งผู้ขาย",
+};
 const thaiYmd = (s: string) => thaiDateTime(bkkDayStart(s), false);
 
 /** บอกในไฟล์ว่ากรองอะไรไว้ — ไฟล์ถูกส่งต่อ คนที่เปิดต้องรู้ว่าทำไมไม่เห็นบางชิ้น */
@@ -452,14 +472,15 @@ async function historyWorkbook(b: Built, f: Filters, scopeLabel: string): Promis
    * นับสองรอบตัวเลขจะพอง) แม้ชีตแรกจะติ๊กรวมรอบเก่าไว้
    */
   const latest = b.shown.filter((r) => r.latest);
-  const byPart = new Map<string, { r: ClaimHistoryRow; pieces: number; pending: number; approved: number; rejected: number; orders: Set<number>; machines: Set<string> }>();
+  const byPart = new Map<string, { r: ClaimHistoryRow; pieces: number; pending: number; approved: number; rejected: number; declined: number; orders: Set<number>; machines: Set<string> }>();
   for (const r of latest) {
     const k = `${r.partCode}|${r.brand ?? ""}`;
-    const g = byPart.get(k) ?? { r, pieces: 0, pending: 0, approved: 0, rejected: 0, orders: new Set<number>(), machines: new Set<string>() };
+    const g = byPart.get(k) ?? { r, pieces: 0, pending: 0, approved: 0, rejected: 0, declined: 0, orders: new Set<number>(), machines: new Set<string>() };
     g.pieces += r.quantity;
     if (r.status === "PENDING") g.pending += r.quantity;
     if (r.status === "APPROVED") g.approved += r.quantity;
     if (r.status === "REJECTED") g.rejected += r.quantity;
+    if (r.status === "DECLINED") g.declined += r.quantity;
     g.orders.add(r.workOrderId);
     g.machines.add(`${r.branchCode} ${r.machineCode ?? "—"}`);
     byPart.set(k, g);
@@ -468,11 +489,12 @@ async function historyWorkbook(b: Built, f: Filters, scopeLabel: string): Promis
   title(s2, "รวมตามอะไหล่ (รอบล่าสุด)", sub);
   table(
     s2,
-    ["รหัสอะไหล่", "ชื่ออะไหล่", "ยี่ห้อ", "ชิ้นทั้งหมด", "รอตรวจ", "อนุมัติ", "ตีกลับ", "จำนวนใบงาน", "สาขา · เครื่อง"],
+    // "ปิดเคลม ไม่ส่งผู้ขาย" ต่อท้ายเป็นคอลัมน์สุดท้าย (ก้อน 3) — ไฟล์/สูตรที่อ่านคอลัมน์เดิมตามตำแหน่งยังตรง
+    ["รหัสอะไหล่", "ชื่ออะไหล่", "ยี่ห้อ", "ชิ้นทั้งหมด", "รอตรวจ", "อนุมัติ", "ตีกลับ", "จำนวนใบงาน", "สาขา · เครื่อง", "ปิดเคลม ไม่ส่งผู้ขาย"],
     [...byPart.values()]
       .sort((a, b) => b.pieces - a.pieces || a.r.partCode.localeCompare(b.r.partCode))
       .map((g) => [
-        g.r.partCode, g.r.partName, g.r.brand ?? "—", g.pieces, g.pending, g.approved, g.rejected, g.orders.size, [...g.machines].join(", "),
+        g.r.partCode, g.r.partName, g.r.brand ?? "—", g.pieces, g.pending, g.approved, g.rejected, g.orders.size, [...g.machines].join(", "), g.declined,
       ])
   );
   return Buffer.from(await wb.xlsx.writeBuffer());

@@ -74,6 +74,8 @@ interface ClaimInfo {
   /** ทุกชิ้นที่ถูกตีกลับ พร้อมเหตุผล */
   reasons: { partLabel: string; reason: string }[];
   trail: TrailEvent[];
+  /** ผลสุดท้ายทีละชิ้นของใบที่จบแล้ว (เคลมก้อน 3) — ผ่าน / ปิดเคลม ไม่ส่งผู้ขาย พร้อมเหตุผล · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  outcome?: { partLabel: string; status: "APPROVED" | "DECLINED"; reason?: string | null }[];
 }
 
 type Tab = "today" | "tomorrow" | "late";
@@ -447,6 +449,43 @@ function JobCard({
   }
 
   /**
+   * ตรวจเคลมจบแล้ววันนี้ (เคลมก้อน 3 · ตัวอย่าง cardApproved) — บอกผลทีละชิ้น ไม่ใช่แค่ "ปิดงานแล้ว"
+   * ช่างต้องรู้ว่าชิ้นไหนผ่าน (อะไหล่เก่าไปผู้ขาย) ชิ้นไหนถูกปิดเคลมเพราะอะไร — ไม่ต้องโทรถาม Admin Spare Part
+   * ไม่มีชิ้นไหนผ่าน = ไม่ใช้คำว่าอนุมัติ (ไม่มีใบเคลมออกไป) แต่การ์ดยังเขียวตามตัวอย่าง — ตรวจจบแล้ว ไม่ใช่เรื่องที่ต้องตามต่อ
+   */
+  if (job.done && job.status === "DONE" && claim && (claim.state === "APPROVED" || claim.state === "DECLINED")) {
+    const ok = (claim.outcome ?? []).filter((o) => o.status === "APPROVED");
+    const dropped = (claim.outcome ?? []).filter((o) => o.status === "DECLINED");
+    const approved = claim.state === "APPROVED" || ok.length > 0;
+    const decidedAt = [...(claim.trail ?? [])].reverse().find((e) => e.k === "approve" || e.k === "close")?.at ?? job.closedAt;
+    return (
+      <View style={[styles.card, styles.cardApproved]} accessibilityLabel={`งาน ${job.code}`}>
+        <View style={styles.cardTop}>
+          <View style={styles.apprChip}>
+            <Text style={styles.apprChipText}>{approved ? "✓ อนุมัติเคลมแล้ว · ปิดงาน" : "✓ ปิดงานแล้ว · ปิดเคลม ไม่ส่งผู้ขาย"}</Text>
+          </View>
+          <View style={{ flex: 1 }} />
+          {decidedAt ? <Text style={styles.cornerTime}>{dayTime(decidedAt)}</Text> : null}
+        </View>
+        <Text style={styles.branch}>
+          {job.branchCode} · {job.branchName}
+        </Text>
+        <Text style={styles.meta}>
+          {job.code}
+          {teamTag} ·{" "}
+          {ok.length ? `อนุมัติ ${ok.length} ชิ้น: ${ok.map((o) => o.partLabel).join(" · ")}` : approved ? "อนุมัติเคลมแล้ว" : "ไม่มีชิ้นที่ส่งผู้ขาย"}
+        </Text>
+        {dropped.length ? (
+          <Text style={styles.apprDrop}>
+            ปิดเคลม ไม่ส่งผู้ขาย: {dropped.map((o) => `${o.partLabel}${o.reason ? ` (${o.reason})` : ""}`).join(" · ")}
+          </Text>
+        ) : null}
+        <ClaimTrail trail={claim.trail} />
+      </View>
+    );
+  }
+
+  /**
    * ส่งเคลมแล้ว รอ Admin Spare Part ตรวจ — เซิร์ฟเวอร์นับว่าจบจากมือช่างแล้ว (done) แต่ยังไม่ใช่ปิดงาน
    * เดิมขึ้น "✓ ปิดงานแล้ว" ช่างเลยไม่รู้ว่าใบนี้ยังอาจถูกตีกลับมาให้แก้ (เจ้าของงานเลือกข้อความนี้จากตัวอย่าง ต.ค. 69)
    * การ์ดไม่จางแบบงานที่จบแล้ว — ยังเป็นเรื่องที่ช่างต้องติดตาม · บอกว่าส่งรอบไหน รอมากี่วัน
@@ -580,6 +619,20 @@ const styles = StyleSheet.create({
   cardNow: { borderWidth: 2, borderColor: colors.primary },
   cardDone: { opacity: 0.6 },
   cardReview: { borderWidth: 2, borderColor: colors.warning },
+  cardApproved: { borderWidth: 2, borderColor: colors.successFill },
+  // พื้นเขียวเข้มทั้งสองโหมด — successInk โหมดมืดเป็นมิ้นต์อ่อน ตัวขาวบนนั้นอ่านไม่ออก
+  apprChip: { backgroundColor: colors.successFill, borderRadius: 999, paddingHorizontal: 10 },
+  apprChipText: { fontSize: 13, lineHeight: 22, fontWeight: "700", color: "#fff" },
+  apprDrop: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.body,
+    backgroundColor: colors.rowAlt,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    overflow: "hidden",
+  },
   cardSentBack: { borderWidth: 2, borderColor: colors.danger },
   sentBackChip: { backgroundColor: colors.dangerFill, borderRadius: 999, paddingHorizontal: 10 },
   sentBackChipText: { fontSize: 13, lineHeight: 22, fontWeight: "800", color: "#fff" },

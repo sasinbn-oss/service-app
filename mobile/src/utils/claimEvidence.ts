@@ -55,7 +55,8 @@ export interface PartClaim {
     /** เช็คลิสต์การติดตั้งฐานเครื่อง — มีเฉพาะใบเคลมก่อน ต.ค. 69 ที่ยังถามอยู่ */
     install?: { key: string; label: string; note: string; answer: boolean }[];
   } | null;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  /** DECLINED = Admin Spare Part ปิดเคลมชิ้นนี้ ไม่ส่งผู้ขาย (เคลมก้อน 3) — เหตุผลอยู่ใน rejectReason · ไม่มีใบเคลม PDF */
+  status: "PENDING" | "APPROVED" | "REJECTED" | "DECLINED";
   rejectReason: string | null;
   createdAt: string;
   reviewedAt: string | null;
@@ -75,6 +76,86 @@ export interface PartClaim {
   /** id ไฟล์หลักฐานของแถวนี้ — เซิร์ฟเวอร์คิดด้วย claimEvidenceFor (ชิ้นเดียวกัน/ของเครื่อง · ในรอบ · ก่อนกดส่ง · ไฟล์ล่าสุดต่อชนิด) */
   evidenceIds?: number[];
 }
+
+/**
+ * สถานะเคลมของงานซ่อมครั้งนี้ทีละชิ้น (เคลมก้อน 3) — เซิร์ฟเวอร์คิดให้ (claimRules.latestPerPart ตั้งแต่ REOPENED ล่าสุด)
+ *
+ * ตัดสินทีละชิ้นแล้ว แถวของการตรวจครั้งเดียวกันได้ผลต่างกัน และรอบถัดไปส่งเฉพาะชิ้นที่ยังไม่ผ่าน
+ * เดิมหน้าจออ่าน "แถวบนสุด = ผลล่าสุดของทั้งใบ" สี่ที่ — "บอร์ดผ่าน สายพานถูกตีกลับ" แถวที่ผ่านอาจขึ้นก่อน
+ * แล้วแถบเหตุผล การ์ดผลงานรอบที่ถูกตีกลับ และค่าที่เติมให้ในฟอร์มหายไปพร้อมกัน — ทุกที่จึงอ่านจากตรงนี้ที่เดียว
+ * rejected = มีชิ้นที่ผลล่าสุดถูกตีกลับ · lockedMachine = มีชิ้นผ่านแล้ว ข้อมูลเครื่องล็อกไปกับชิ้นนั้น (byParts = ชื่อชิ้น)
+ */
+export interface ClaimRound {
+  since: string | null;
+  parts: { sparePartId: number | null; claimId: number; status: PartClaim["status"]; round: number }[];
+  rejected: boolean;
+  /**
+   * แถวที่ถูกตีกลับในการตรวจครั้งล่าสุด — แถบเหตุผลแสดงชุดนี้ (ชิ้นที่ช่างเลิกส่งไปแล้วแต่ผลล่าสุดค้างเป็นตีกลับของรอบเก่า
+   * ไม่ใช่เรื่องที่ต้องแก้ตอนนี้) · เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ทุกชิ้นที่ผลล่าสุดถูกตีกลับ
+   */
+  rejectedIds?: number[];
+  lockedMachine: { byParts: string[] } | null;
+}
+
+/** แถวล่าสุดของแต่ละชิ้นในงานซ่อมครั้งนี้ พร้อมสถานะจาก claimRound — เรียงตามที่ชิ้นนั้นส่งครั้งแรก (ลำดับเดียวกับเซิร์ฟเวอร์) */
+export interface RoundPart {
+  row: PartClaim;
+  status: PartClaim["status"];
+  round: number;
+}
+
+/**
+ * อ่าน claimRound ของใบ — เซิร์ฟเวอร์ก่อนก้อน 3 ไม่ส่ง: คิดแบบเดียวกัน (แถวล่าสุดต่อชิ้นตั้งแต่เปิดใบใหม่ครั้งล่าสุด)
+ * ดีกว่ากลับไปอ่านแถวบนสุดแบบเดิมซึ่งผิดเมื่อชิ้นในใบเดียวกันได้ผลต่างกัน
+ */
+export function claimRoundOf(o: { claims: PartClaim[]; logs: ClaimLog[]; claimRound?: ClaimRound | null }): ClaimRound {
+  if (o.claimRound) return o.claimRound;
+  const scope = rowsSince(o.claims, o.logs);
+  const latest = new Map<string, PartClaim>();
+  for (const c of scope) {
+    const k = claimKeyOf(c);
+    const cur = latest.get(k);
+    if (!cur || newer(c, cur)) latest.set(k, c);
+  }
+  // เรียงตามที่ชิ้นนั้นส่งครั้งแรก (id แรกของชิ้น) แบบเดียวกับ byFirstSent ฝั่งเซิร์ฟเวอร์ — ไม่ใช่ id ของแถวล่าสุด
+  // ไม่งั้นชิ้นที่ถูกตีกลับแล้วส่งใหม่ได้ id ใหม่ แล้วไปต่อท้าย แท็บ/บรรทัดของผู้ตรวจสลับที่กันทุกรอบ
+  const first = new Map<string, number>();
+  for (const c of scope) first.set(claimKeyOf(c), Math.min(first.get(claimKeyOf(c)) ?? c.id, c.id));
+  const rows = [...latest.values()].sort((a, b) => (first.get(claimKeyOf(a)) ?? a.id) - (first.get(claimKeyOf(b)) ?? b.id));
+  const passed = rows.filter((r) => r.status === "APPROVED").map(partNameOf);
+  return {
+    since: lockSinceOf(o.logs),
+    parts: rows.map((r) => ({ sparePartId: r.sparePartId, claimId: r.id, status: r.status, round: roundOf(r, scope) })),
+    rejected: rows.some((r) => r.status === "REJECTED"),
+    lockedMachine: passed.length ? { byParts: passed } : null,
+  };
+}
+
+/**
+ * ชิ้นของงานซ่อมครั้งนี้พร้อมแถวล่าสุด — แถวที่หาไม่เจอในใบ (ไม่ควรเกิด) ข้ามไป ไม่ให้หน้าใบงานพัง
+ * คงลำดับของ claimRound.parts ไว้ (ตามที่ส่งครั้งแรก) — ห้ามเรียงใหม่ด้วย id แถวล่าสุด ลำดับชิ้นจะสลับหลังส่งใหม่
+ */
+export function roundPartsOf(o: { claims: PartClaim[]; logs: ClaimLog[]; claimRound?: ClaimRound | null }): RoundPart[] {
+  const byId = new Map(o.claims.map((c) => [c.id, c] as const));
+  return claimRoundOf(o)
+    .parts.map((p) => {
+      const row = byId.get(p.claimId);
+      return row ? { row, status: p.status, round: p.round || roundOf(row, o.claims) } : null;
+    })
+    .filter((p): p is RoundPart => !!p);
+}
+
+/** แถวที่ช่างต้องแก้ตอนนี้ (ถูกตีกลับในการตรวจครั้งล่าสุด) — ว่างเมื่อใบไม่ได้อยู่ในรอบที่ถูกตีกลับ */
+export function rejectedRowsOf(o: { claims: PartClaim[]; logs: ClaimLog[]; claimRound?: ClaimRound | null }): PartClaim[] {
+  const round = claimRoundOf(o);
+  if (!round.rejected) return [];
+  const rows = roundPartsOf(o).filter((p) => p.status === "REJECTED").map((p) => p.row);
+  const ids = round.rejectedIds;
+  return ids?.length ? rows.filter((r) => ids.includes(r.id)) : rows;
+}
+
+/** ชิ้นที่ตัดสินจบแล้วในงานซ่อมครั้งนี้ (ผ่าน · ปิดเคลม ไม่ส่งผู้ขาย) — ล็อกไว้ ไม่ส่งซ้ำ และต้องอยู่ในอะไหล่ที่ใช้ */
+export const isLockedStatus = (s: PartClaim["status"]) => s === "APPROVED" || s === "DECLINED";
 
 /** ใบเคลมเก่าของเครื่องเดียวกัน (สาขา + รหัสเครื่อง) — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน (ผู้ตรวจ) */
 export interface ClaimRepeat {
@@ -485,10 +566,13 @@ export function claimTrailOf(claims: PartClaim[], logs: ClaimLog[]): TrailEvent[
     const at = g[0].reviewedAt!;
     const who = g[0].reviewedByName ?? null;
     const rejected = g.filter((r) => r.status === "REJECTED");
-    const approved = g.some((r) => r.status === "APPROVED");
+    // "อนุมัติ" = มีชิ้นที่ผ่านในงานซ่อมครั้งนี้ ณ การตรวจครั้งนั้น รวมชิ้นที่ผ่านไปตั้งแต่รอบก่อน (มีใบเคลมไปผู้ขาย)
+    // กติกาเดียวกับ claimTrail ฝั่งเซิร์ฟเวอร์ — ดูแค่กลุ่มเดียวกัน "ก. ผ่านรอบแรก ข. ปิดเคลมรอบสอง" จะขึ้น
+    // "ปิดงาน (ปิดเคลม ไม่ส่งผู้ขาย)" ใต้หัว "✓ อนุมัติเคลมแล้ว" ขณะที่การ์ดของช่างขึ้น "อนุมัติ"
+    const approved = rows.some((r) => r.status === "APPROVED" && !!r.reviewedAt && t(r.reviewedAt) <= t(at));
     if (rejected.length) events.push({ k: "reject", at, who, what: rejected.map(partNameOf).join(", ") });
     else if (approved) events.push({ k: "approve", at, who });
-    // ตัดสินแล้วไม่มีชิ้นไหนผ่านหรือถูกตีกลับ = ปิดเคลมไม่ส่งผู้ขายทุกชิ้น (ก้อน 3)
+    // ตัดสินแล้วไม่มีชิ้นไหนผ่านเลยและไม่มีตีกลับ = ปิดเคลมไม่ส่งผู้ขายทุกชิ้น (ก้อน 3)
     else events.push({ k: "close", at, who, what: "ปิดเคลม ไม่ส่งผู้ขาย" });
   }
   const order = { send: 0, resend: 0, reject: 1, approve: 2, close: 3 } as const;

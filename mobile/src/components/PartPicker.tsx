@@ -43,12 +43,19 @@ export default function PartPicker({
   parts,
   onChange,
   label = "อะไหล่ที่รอ",
+  locked,
 }: {
   parts: PickedPart[];
   onChange: (next: PickedPart[]) => void;
   label?: string;
+  /**
+   * ชิ้นที่เอาออกไม่ได้ (sparePartId → เหตุผล) — ฟอร์มปิดงาน: เคลมของชิ้นนั้นผ่าน/ปิดไปแล้ว (เคลมก้อน 3)
+   * กดเอาออกแล้วบอกเหตุผลใต้แถว แทนการลบเงียบ ๆ แล้วไปโดนเซิร์ฟเวอร์ปฏิเสธตอนส่ง
+   */
+  locked?: Record<number, string>;
 }) {
   const [term, setTerm] = useState("");
+  const [refused, setRefused] = useState<number | null>(null);
   const [results, setResults] = useState<SparePartOption[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -108,7 +115,8 @@ export default function PartPicker({
       {parts.length > 0 ? (
         <View style={styles.pickedList}>
           {parts.map((part) => (
-            <View key={part.sparePartId} style={styles.picked}>
+            <View key={part.sparePartId}>
+            <View style={styles.picked}>
               <View style={styles.pickedText}>
                 <Text style={styles.pickedCode}>{part.partCode}</Text>
                 <Text style={styles.pickedName}>{part.name}</Text>
@@ -120,12 +128,26 @@ export default function PartPicker({
               />
               <Text style={styles.qtyUnit}>ตัว</Text>
               <TouchableOpacity
-                onPress={() => onChange(parts.filter((p) => p.sparePartId !== part.sparePartId))}
+                onPress={() =>
+                  locked?.[part.sparePartId]
+                    ? setRefused(part.sparePartId)
+                    : onChange(parts.filter((p) => p.sparePartId !== part.sparePartId))
+                }
                 accessibilityLabel={`เอา ${part.partCode} ออก`}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+                <Ionicons
+                  name={locked?.[part.sparePartId] ? "lock-closed" : "close-circle"}
+                  size={locked?.[part.sparePartId] ? 17 : 20}
+                  color={colors.textFaint}
+                />
               </TouchableOpacity>
+            </View>
+            {refused === part.sparePartId && locked?.[part.sparePartId] ? (
+              <Text style={styles.refused} accessibilityRole="alert">
+                {locked[part.sparePartId]}
+              </Text>
+            ) : null}
             </View>
           ))}
         </View>
@@ -174,6 +196,7 @@ export default function PartPicker({
 }
 
 const styles = StyleSheet.create({
+  refused: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.dangerInk, paddingHorizontal: 4, paddingTop: 2 },
   picker: { gap: spacing.xs },
   label: {
     fontSize: 13,

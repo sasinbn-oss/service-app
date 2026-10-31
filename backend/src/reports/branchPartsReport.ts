@@ -531,9 +531,14 @@ async function rawRows(f: Filters, where: Prisma.Sql, tail: Prisma.Sql, cte: { b
     LEFT JOIN "User" cu ON cu.id = w."closedById"
     LEFT JOIN "WorkOrder" pw ON pw.id = w."parentId"
     LEFT JOIN LATERAL (
+      -- แถวล่าสุดของชิ้นนี้ในงานซ่อมครั้งนี้ (หลังเปิดใบใหม่ครั้งล่าสุด — กติกาเดียวกับใบงาน lockSince)
+      -- เวลาเท่ากัน (ส่งพร้อมกัน) ให้ id ตัดสิน ไม่งั้นป้ายสลับระหว่างโหลด
       SELECT c.status FROM "PartClaim" c
       WHERE c."workOrderId" = w.id AND c."sparePartId" = f."sparePartId"
-      ORDER BY c."createdAt" DESC LIMIT 1
+        AND c."createdAt" >= COALESCE(
+          (SELECT max(l."createdAt") FROM "WorkOrderLog" l WHERE l."workOrderId" = w.id AND l.action = 'REOPENED'),
+          '-infinity'::timestamp)
+      ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1
     ) cl ON f.kind = 'USED'
     WHERE ${kindCond(f.kind)} AND ${where}
     ${tail}`);
@@ -546,15 +551,25 @@ const shortDay = (d: Date | null) => (d ? thaiDateTime(d, false).replace(/(\d{2}
 /** บรรทัดใต้ป้ายสถานะ — ทำที่เซิร์ฟเวอร์ หน้าจอกับไฟล์ Excel จึงเขียนเหมือนกัน */
 function detailText(r: RawRow, statusLabel: string): string {
   if (r.kind === "USED") {
+    /**
+     * คำเรื่องเคลมของชิ้นนี้ — อ่านจากแถวเคลมของชิ้นนี้เอง ไม่ใช่จากขั้นของใบ (ก้อน 3 ตัดสินทีละชิ้น)
+     * เดิมใบที่รอตรวจเคลมเขียน "ส่งเคลมตัวเก่าแล้ว" ทุกชิ้น รวมชิ้นที่ช่างไม่ได้ส่งเคลม และใบที่ ก. ผ่าน ข. ตีกลับ
+     * เขียนว่าตีกลับทั้งสองชิ้น · ชิ้นที่ไม่มีแถวเคลม (ไม่ส่ง/นอกประกัน) ไม่มีคำเรื่องเคลม ยกเว้นใบที่ถูกตีกลับกลับไปหาช่าง
+     * (ใบยังไม่ปิด — ชิ้นนี้อาจเปลี่ยนตอนช่างปิดใหม่)
+     */
     const claim =
-      r.status === "CLAIM_REVIEW"
+      r.claimStatus === "PENDING"
         ? "ส่งเคลมตัวเก่าแล้ว · รอตรวจเคลม"
-        : r.status !== "DONE"
-        ? "เคลมถูกตีกลับ · รอช่างปิดงานใหม่"
         : r.claimStatus === "REJECTED"
-        ? "เคลมถูกตีกลับ"
-        : r.claimStatus
+        ? r.status !== "DONE"
+          ? "เคลมถูกตีกลับ · รอช่างปิดงานใหม่"
+          : "เคลมถูกตีกลับ"
+        : r.claimStatus === "APPROVED"
         ? "ส่งเคลมตัวเก่าแล้ว"
+        : r.claimStatus === "DECLINED"
+        ? "ปิดเคลม ไม่ส่งผู้ขาย"
+        : !r.claimStatus && r.status !== "DONE" && r.status !== "CLAIM_REVIEW"
+        ? "รอช่างปิดงานใหม่"
         : null;
     // วันที่จาก at (ไม่ใช่ closedAt) — ใบที่เคลมถูกตีกลับถูกล้างเวลาปิด at คือเวลาปิดรอบนั้นจากประวัติ
     // ไม่ใส่ "นอกสโตร์" — ทุกที่ที่โชว์บรรทัดนี้มีป้าย/คอลัมน์นอกสโตร์อยู่แล้ว ซ้ำสามรอบในแถวเดียว
