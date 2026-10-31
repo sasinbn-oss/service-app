@@ -25,6 +25,7 @@ import ConfirmedReportScreen from "../screens/ConfirmedReportScreen";
 import PartsOutReportScreen from "../screens/PartsOutReportScreen";
 import IssuedPartsReportScreen from "../screens/IssuedPartsReportScreen";
 import ClaimHistoryScreen from "../screens/ClaimHistoryScreen";
+import ClaimReviewScreen from "../screens/ClaimReviewScreen";
 import BranchPartsReportScreen from "../screens/BranchPartsReportScreen";
 import ReportScreen from "../screens/ReportScreen";
 import HistoryMenuScreen from "../screens/HistoryMenuScreen";
@@ -82,6 +83,8 @@ import {
  * (บนจอแคบยังมี เพราะแถบนั้นเป็นที่อยู่ของปุ่มสามขีด)
  */
 const OWN_TITLE = new Set([
+  // กล่องงานตรวจเคลม: หัวของตัวเองบอกจำนวนใบ/ชิ้นด้วย และจอ 1366×768 ต้องเหลือที่ให้หน้าตรวจกับแถบตัดสินให้มากที่สุด
+  "ClaimReview",
   "PlanBoard",
   "MyJobs",
   "HomeMenu",
@@ -432,6 +435,7 @@ function HomeStackNavigator() {
         options={{ title: "อะไหล่ที่ไปแต่ละสาขา" }}
       />
       <HomeStack.Screen name="ClaimHistory" component={ClaimHistoryScreen} options={{ title: "ประวัติเคลม" }} />
+      <HomeStack.Screen name="ClaimReview" component={ClaimReviewScreen} options={{ title: "ตรวจเคลม" }} />
       <HomeStack.Screen
         name="MachineImport"
         component={MachineImportScreen}

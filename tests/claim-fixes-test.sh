@@ -3,8 +3,8 @@
 #   · หลักฐานเคลมแนบผิดชนิดไม่ได้ (รูปเป็นวิดีโอ Error · วิดีโอเป็นรูปอะไหล่) · ทีม Area แนบหลักฐานเคลมไม่ได้ ·
 #     ใบที่ยังไม่ถึงขั้นปิดงาน / ส่งตรวจเคลมแล้ว / ปิดแล้ว แนบหลักฐานเคลมไม่ได้ (ไม่มีแถวเกิดในฐานข้อมูล) — สองกรณีหลัง
 #     ได้ code CLOSE_ALREADY_SENT เหมือนส่งปิดซ้ำ (ฟอร์มปิดงานแนบไฟล์ก่อนสั่งปิด)
-#   · ใบเคลม PDF: ข้อความยาวปกติ (อาการ 300 · เช็คอะไรบ้าง 600 ตัว) จบในหน้าเดียว · ยาวสุด (1000/2000) ช่องลายเซ็น
-#     และบรรทัดหลักฐานอยู่หน้าสุดท้ายต่อจากเนื้อหา ไม่ทับกัน · ส่งใหม่หลังถูกตีกลับ "วันที่เปลี่ยนอะไหล่" = วันที่ส่งครั้งแรก
+#   · ใบเคลม PDF: ข้อความยาวปกติ (อาการ 300 · เช็คอะไรบ้าง 600 ตัว) จบในหน้าเดียว · ยาวสุด (1000/2000) บล็อกหลักฐาน
+#     ต่อจากเนื้อหา ก่อนช่องลายเซ็น (เคลมก้อน 6) · ช่องลายเซ็นอยู่หน้าสุดท้าย ไม่ทับกัน · ส่งใหม่หลังถูกตีกลับ "วันที่เปลี่ยนอะไหล่" = วันที่ส่งครั้งแรก
 #     ส่วนวันที่ลายเซ็นผู้ขอเคลม = วันที่ส่งใบนั้น
 #   · ช่างลบไฟล์ที่ส่งเป็นหลักฐานเคลมแล้วไม่ได้ (409 code CLAIM_EVIDENCE_LOCKED · รวมรูปป้ายรุ่นที่ผูกกับใบเคลม) ·
 #     ไฟล์ที่ถูกแนบใหม่แทนก่อนส่ง / แนบหลังส่ง / ของชิ้นที่ไม่ได้เคลม ลบได้ · แอดมินยังลบได้
@@ -129,17 +129,18 @@ LASTITEM=$(echo "$TS" | J 'd[d.length-1]' | NORM)
 LAYOUT=$(node -e '
 const t = require("fs").readFileSync(process.argv[1], "utf8");
 const [item, sig, rcv, ev] = process.argv.slice(2);
+// บล็อก "หลักฐาน (ไฟล์ที่ส่งไปพร้อมใบนี้)" อยู่ต่อจากเนื้อหา ก่อนช่องลายเซ็น (เคลมก้อน 6 ตามตัวอย่าง) — ผู้รับเคลมเซ็นรับพร้อมรายการไฟล์
 const pages = t.split("\f"); if (pages[pages.length - 1] === "") pages.pop();
 const last = pages.length - 1, all = pages.join("\f");
 const pageOf = (i) => all.slice(0, i).split("\f").length - 1;
 const once = (s) => all.indexOf(s) >= 0 && all.indexOf(s) === all.lastIndexOf(s);
 const iItem = all.lastIndexOf(item), iSig = all.indexOf(sig), iRcv = all.indexOf(rcv), iEv = all.indexOf(ev);
-const ok = once(sig) && once(rcv) && once(ev) && iItem >= 0 && iItem < iSig && iSig < iEv && iRcv < iEv
-  && pageOf(iSig) === last && pageOf(iRcv) === last && pageOf(iEv) === last;
-console.log(ok ? "ok " + pages.length : "bad pages=" + pages.length + " item@" + pageOf(iItem) + " sig@" + pageOf(iSig) + " ev@" + pageOf(iEv) + " order=" + [iItem, iSig, iEv].join(","));
-' "$TMP/long.txt" "$LASTITEM" "$(echo "ผู้ขอเคลม" | NORM)" "$(echo "ผู้รับเคลม" | NORM)" "$(echo "หลักฐานที่แนบในระบบ" | NORM)")
+const ok = once(sig) && once(rcv) && once(ev) && iItem >= 0 && iItem < iEv && iEv < iSig && iEv < iRcv
+  && pageOf(iSig) === last && pageOf(iRcv) === last;
+console.log(ok ? "ok " + pages.length : "bad pages=" + pages.length + " item@" + pageOf(iItem) + " sig@" + pageOf(iSig) + " ev@" + pageOf(iEv) + " order=" + [iItem, iEv, iSig].join(","));
+' "$TMP/long.txt" "$LASTITEM" "$(echo "ผู้ขอเคลม" | NORM)" "$(echo "ผู้รับเคลม" | NORM)" "$(echo "หลักฐาน (ไฟล์ที่ส่งไปพร้อมใบนี้)" | NORM)")
 [ "${LAYOUT%% *}" = "ok" ] \
-  && pass "ข้อความยาวสุด: ช่องลายเซ็นทั้งสองฝั่งและบรรทัดหลักฐานอยู่หน้าสุดท้าย ต่อจากเนื้อหาสุดท้าย ไม่แตกข้ามหน้า (${LAYOUT#ok } หน้า)" \
+  && pass "ข้อความยาวสุด: บล็อกหลักฐานต่อจากเนื้อหาสุดท้าย ก่อนลายเซ็น · ช่องลายเซ็นทั้งสองฝั่งอยู่หน้าสุดท้าย ไม่แตกข้ามหน้า (${LAYOUT#ok } หน้า)" \
   || fail "จัดหน้าข้อความยาว: $LAYOUT"
 
 echo

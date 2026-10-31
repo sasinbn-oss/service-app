@@ -25,7 +25,16 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { supervisorScope, workOrderVisible } from "../utils/supervisorScope";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, sheetName, table, thaiDateTime, title } from "../reports/openerReport";
-import { WORK_ORDER_STATUS_LABELS } from "../utils/constants";
+import {
+  WORK_ORDER_STATUS_LABELS,
+  bangkokDay,
+  isCompanyBranch,
+  isWarrantyExpired,
+  machineMake,
+  warrantyEndFor,
+} from "../utils/constants";
+import { brokenMismatch, claimRoundOf, firstSubmittedAt, repairStartFor } from "../utils/claimRules";
+import { claimRepeatsOf } from "../utils/claimRepeats";
 
 const router = Router();
 const DAY_MS = 86_400_000;
@@ -387,6 +396,158 @@ router.get("/pending-count", requireAuth, async (req: AuthRequest, res) => {
     where: { status: "PENDING", workOrder: { AND: [scope, { isTest: false }] } },
   });
   res.json({ pending });
+});
+
+// ── กล่องงานตรวจเคลม (เคลมก้อน 6) ─────────────────────────────
+
+/**
+ * ใบที่รอตรวจเคลม = แถวรอตรวจของใบที่อยู่ขั้นตรวจเคลม — คำตอบเดียวของทั้งรายการและตัวเลขข้างเมนู "ตรวจเคลม"
+ * (ตัวเลขข้างเมนูกับหัวรายการ "x ใบ · y ชิ้น" ต้องเท่ากันเสมอ — สองที่นับคนละแบบเคยทำให้คนตรวจงงว่าหายไปไหนหนึ่งใบ)
+ * นับใบทดสอบด้วย ต่างจากประวัติเคลมกับ /pending-count: ใบทดสอบก็ต้องมีคนกดตรวจถึงจะจบ ถ้าซ่อนไว้มันค้างอยู่ในระบบเงียบ ๆ
+ * (รายการติดป้าย "ใบทดสอบ" ให้เห็น)
+ */
+const QUEUE_WHERE: Prisma.PartClaimWhereInput = { status: "PENDING", workOrder: { status: "CLAIM_REVIEW" } };
+const REVIEWERS_ONLY = "ตรวจเคลมได้เฉพาะ Admin Spare Part";
+
+/**
+ * Admin Spare Part กับ Super Admin เท่านั้น (คนตัดสินเคลม — กติกาเดียวกับ canReviewClaims ใน routes/workOrders.ts)
+ * Super Admin ที่ดูในฐานะ Admin Spare Part ผ่าน (โทเคนเป็นของคนที่ถูกดู) — อ่านได้ หน้าจอเป็นแบบดูอย่างเดียว
+ * ส่วนการตัดสินโดน middleware กันอยู่แล้ว (viewAsReadOnly)
+ */
+function reviewerOnly(req: AuthRequest, res: Response): boolean {
+  if (req.auth?.partsAdmin || req.auth?.superAdmin) return true;
+  res.status(403).json({ error: REVIEWERS_ONLY });
+  return false;
+}
+
+/** วันตามปฏิทินไทยระหว่างวันนั้นกับวันนี้ — ส่งเมื่อวาน 23:00 = 1 วัน (กติกาเดียวกับ daysSince ฝั่งแอป) */
+function daysAgo(at: Date): number {
+  return Math.max(0, Math.round((Date.parse(`${bangkokDay()}T00:00:00Z`) - Date.parse(`${bangkokDay(at)}T00:00:00Z`)) / DAY_MS));
+}
+
+/**
+ * GET /api/part-claims/queue — ใบที่รอตรวจเคลม เรียงจากที่รอนานที่สุด (ส่งรอบล่าสุดเก่าสุดก่อน)
+ *
+ * แต่ละใบบอกสิ่งที่คนตรวจอยากรู้ก่อนเปิด: ชิ้นอะไร · ใครส่ง · รอบที่เท่าไหร่ · รอมานานเท่าไหร่ และป้ายเตือนสามอย่าง
+ * (รหัสตัวเสียไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ · สาขาหมดประกัน · เครื่องนี้เคยเคลมมาก่อน) — ตัวเดียวกับที่หน้าตรวจเคลมขึ้นในใบ
+ * round = รอบสูงสุดของชิ้นที่รอตรวจ (นับต่อชิ้น — 2 ชิ้นถูกตีกลับครั้งเดียว = รอบ 2 ไม่ใช่ 3 · claimRoundOf)
+ * waitingSince = ส่งรอบนี้เมื่อไหร่ (แถวรอตรวจล่าสุด) · firstSubmittedAt = ส่งครั้งแรกของห่วงโซ่ตีกลับ → ส่งใหม่
+ * อ่านอย่างเดียว ไม่มี transaction · ถามฐานข้อมูลสองรอบ (แถวรอตรวจ แล้วทุกอย่างของใบเหล่านั้นพร้อมกัน)
+ */
+router.get("/queue", requireAuth, async (req: AuthRequest, res) => {
+  if (!reviewerOnly(req, res)) return;
+  const pending = await prisma.partClaim.findMany({
+    where: QUEUE_WHERE,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      workOrderId: true,
+      sparePartId: true,
+      partCode: true,
+      partName: true,
+      brokenPartCode: true,
+      quantity: true,
+      status: true,
+      createdById: true,
+      createdAt: true,
+      branchCode: true,
+      branchName: true,
+      machineCode: true,
+      brand: true,
+    },
+  });
+  const woIds = [...new Set(pending.map((p) => p.workOrderId))];
+  const userIds = [...new Set(pending.map((p) => p.createdById).filter((x): x is number => x !== null))];
+  const [orders, siblings, reopens, users, repeats] = await Promise.all([
+    prisma.workOrder.findMany({
+      where: { id: { in: woIds } },
+      select: {
+        id: true,
+        code: true,
+        isTest: true,
+        branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+        machine: { select: { type: true, brand: true, model: true } },
+      },
+    }),
+    // ทุกแถวของใบเหล่านั้น — รอบที่เท่าไหร่/ส่งครั้งแรกเมื่อไหร่ ต้องนับจากแถวก่อนหน้าที่ถูกตีกลับด้วย
+    prisma.partClaim.findMany({
+      where: { workOrderId: { in: woIds } },
+      select: { id: true, workOrderId: true, sparePartId: true, partCode: true, status: true, createdAt: true },
+    }),
+    // เปิดใบใหม่ = งานซ่อมครั้งใหม่ รอบเริ่มนับใหม่
+    prisma.workOrderLog.findMany({
+      where: { workOrderId: { in: woIds }, action: "REOPENED" },
+      select: { workOrderId: true, action: true, createdAt: true },
+    }),
+    prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, employeeCode: true } }),
+    claimRepeatsOf(woIds),
+  ]);
+  const orderById = new Map(orders.map((o) => [o.id, o]));
+  const userById = new Map(users.map((u) => [u.id, u]));
+  const group = <T extends { workOrderId: number }>(list: T[]) => {
+    const m = new Map<number, T[]>();
+    for (const x of list) m.set(x.workOrderId, [...(m.get(x.workOrderId) ?? []), x]);
+    return m;
+  };
+  const pendingBy = group(pending);
+  const siblingsBy = group(siblings);
+  const reopensBy = group(reopens);
+
+  const rows = woIds
+    .map((woId) => {
+      const o = orderById.get(woId);
+      const parts = pendingBy.get(woId) ?? [];
+      if (!o || !parts.length) return null;
+      const all = siblingsBy.get(woId) ?? [];
+      const logs = reopensBy.get(woId) ?? [];
+      const latest = parts.reduce((a, b) => (b.createdAt > a.createdAt || (+b.createdAt === +a.createdAt && b.id > a.id) ? b : a));
+      const tech = latest.createdById ? userById.get(latest.createdById) : undefined;
+      const make = machineMake(o.machine);
+      const expired = isWarrantyExpired(warrantyEndFor(o.branch.openedAt, o.branch.warrantyExpiresAt, make));
+      return {
+        workOrderId: woId,
+        code: o.code,
+        isTest: o.isTest,
+        branchCode: latest.branchCode,
+        branchName: latest.branchName,
+        machineCode: latest.machineCode,
+        machineType: o.machine?.type ?? null,
+        brand: latest.brand ?? make,
+        parts: parts.map((p) => ({
+          claimId: p.id,
+          sparePartId: p.sparePartId,
+          partCode: p.partCode,
+          partName: p.partName,
+          brokenPartCode: p.brokenPartCode,
+          quantity: p.quantity,
+        })),
+        techName: tech?.name ?? null,
+        techCode: tech?.employeeCode ?? null,
+        round: Math.max(...parts.map((p) => claimRoundOf(p, all, repairStartFor(p.createdAt, logs)))),
+        waitingSince: latest.createdAt,
+        firstSubmittedAt: new Date(Math.min(...parts.map((p) => firstSubmittedAt(p, all, repairStartFor(p.createdAt, logs)).getTime()))),
+        flags: {
+          brokenMismatch: parts.filter(brokenMismatch).length,
+          // สาขาบริษัทไม่มีประกันอยู่แล้ว — ไม่ขึ้นว่า "หมดประกัน" (แบบเดียวกับหน้าตรวจเคลม) · ไม่รู้วันเปิดร้าน = ไม่เตือน
+          outOfWarranty: !isCompanyBranch(o.branch.code) && expired === true,
+          repeat: (repeats.get(woId) ?? []).map((r) => ({ partCode: r.partCode, daysAgo: daysAgo(r.createdAt), workOrderCode: r.code })),
+        },
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => a.waitingSince.getTime() - b.waitingSince.getTime() || a.workOrderId - b.workOrderId);
+
+  res.json({ orders: rows.length, parts: rows.reduce((n, r) => n + r.parts.length, 0), rows });
+});
+
+/**
+ * GET /api/part-claims/queue-count — ตัวเลขข้างเมนู "ตรวจเคลม {x} ใบ" และการ์ดในงานของฉัน (เบา: นับอย่างเดียว)
+ * แถวชุดเดียวกับ /queue (QUEUE_WHERE) ตัวเลขจึงเท่าหัวรายการเสมอ
+ */
+router.get("/queue-count", requireAuth, async (req: AuthRequest, res) => {
+  if (!reviewerOnly(req, res)) return;
+  const rows = await prisma.partClaim.findMany({ where: QUEUE_WHERE, select: { workOrderId: true } });
+  res.json({ orders: new Set(rows.map((r) => r.workOrderId)).size, parts: rows.length });
 });
 
 /**

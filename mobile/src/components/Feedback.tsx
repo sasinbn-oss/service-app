@@ -54,6 +54,14 @@ function set(patch: Partial<State>) {
   listeners.forEach((l) => l(state));
 }
 
+/**
+ * กล่องยืนยันของแอปเปิดอยู่ไหม — คีย์ลัดของกล่องงานตรวจเคลมต้องหยุดระหว่างนั้น (เคลมก้อน 6)
+ * ไม่งั้นกด J ตอนกล่อง "อนุมัติ 2 ชิ้น ใบงานจะปิด" ค้างอยู่ หน้าข้างหลังเปลี่ยนเป็นใบอื่น แต่ปุ่มยืนยันยังส่งของใบเดิม
+ */
+export function feedbackDialogOpen(): boolean {
+  return !!state.dialog;
+}
+
 export const feedback = {
   /** สำเร็จหายเองใน 3.5 วิ ผิดพลาดค้าง 6 วิ ให้มีเวลาอ่านวิธีแก้ */
   toast(kind: ToastKind, text: string) {

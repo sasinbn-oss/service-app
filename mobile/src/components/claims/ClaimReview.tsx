@@ -112,6 +112,7 @@ export default function ClaimReview({
   detailOpen,
   onToggleDetail,
   onOpenOrder,
+  onOpenFull,
 }: {
   order: ClaimReviewOrder;
   /** คำตัดสินทีละชิ้น — หน้าใบงานถือไว้ แถบล่างจอใช้ชุดเดียวกัน */
@@ -128,6 +129,11 @@ export default function ClaimReview({
   onToggleDetail: () => void;
   /** เปิดใบงานอื่น (บรรทัดเคลมซ้ำ "▸ ดูใบนั้น") */
   onOpenOrder: (id: number) => void;
+  /**
+   * เปิดใบงานนี้เต็มใบ — เฉพาะกล่องงานตรวจเคลม (เคลมก้อน 6) ซึ่งไม่มีเนื้อใบงานให้กางใต้หน้าตรวจ
+   * ในหน้าใบงานไม่ส่งมา เพราะ "ดูรายละเอียดใบงาน ▸" กางเนื้อใบงานที่อยู่ข้างล่างให้แล้ว
+   */
+  onOpenFull?: () => void;
 }) {
   const [width, setWidth] = useState(0);
   const wide = width >= 860;
@@ -422,6 +428,8 @@ export default function ClaimReview({
             onPress={() => v.setActive(p.key)}
             style={[styles.tab, on && styles.tabOn]}
             accessibilityState={{ selected: on }}
+            // เว็บไม่แปลง accessibilityState เป็น aria-selected — ใส่เอง (คีย์ลัด ← → ของกล่องงานเปลี่ยนแท็บนี้ เทสต์ต้องเห็นว่าแท็บไหนเปิด)
+            aria-selected={on}
           >
             <Text style={[styles.tabText, { color: fg }]}>
               {p.name} · {v.stateOf(p)}
@@ -578,12 +586,19 @@ export default function ClaimReview({
         </View>
       ) : null}
       {detailOpen ? (
-        <Text style={styles.woBox}>
-          ใบแจ้ง: “{order.symptom ?? "—"}”{arrived ? ` · ถึงหน้างาน ${dayTime(arrived.createdAt)}` : ""} · ผลการทำงาน:{" "}
-          {order.closeResultLabel ?? "—"}
-          {typeof order.beforeCount === "number" ? ` · รูปก่อนซ่อม ${order.beforeCount}` : ""}
-          {typeof order.afterCount === "number" ? ` · รูปหลังซ่อม ${order.afterCount}` : ""}
-        </Text>
+        <View style={styles.woBox}>
+          <Text style={styles.woText}>
+            ใบแจ้ง: “{order.symptom ?? "—"}”{arrived ? ` · ถึงหน้างาน ${dayTime(arrived.createdAt)}` : ""} · ผลการทำงาน:{" "}
+            {order.closeResultLabel ?? "—"}
+            {typeof order.beforeCount === "number" ? ` · รูปก่อนซ่อม ${order.beforeCount}` : ""}
+            {typeof order.afterCount === "number" ? ` · รูปหลังซ่อม ${order.afterCount}` : ""}
+          </Text>
+          {onOpenFull ? (
+            <TouchableOpacity onPress={onOpenFull} style={styles.linkBtn} accessibilityLabel={`เปิดใบงาน ${order.code} เต็มใบ`}>
+              <Text style={styles.link}>เปิดใบงานเต็มใบ ▸</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       ) : null}
       {machine}
       {tabs}
@@ -716,10 +731,8 @@ const styles = StyleSheet.create({
   },
   linkBtn: { minHeight: 44, justifyContent: "center", paddingHorizontal: 4 },
   link: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
+  woText: { fontSize: 13, lineHeight: 20, color: colors.body },
   woBox: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: colors.body,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,

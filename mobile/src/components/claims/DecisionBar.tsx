@@ -18,6 +18,7 @@ import TouchableOpacity from "../Tap";
 import Spinner from "../Spinner";
 import ClaimTrail, { type TrailEvent } from "./ClaimTrail";
 import RejectPanel from "./RejectPanel";
+import DownloadPanel from "./DownloadPanel";
 import type { ClaimVerdicts, ReviewOutcome, Verdict } from "./useClaimVerdicts";
 import { colors, radius, spacing } from "../../theme";
 
@@ -150,42 +151,50 @@ export default function DecisionBar({
 /**
  * หลังตัดสินเสร็จ — สรุปให้เห็นตรงหน้าว่าเกิดอะไรกับใบนี้ (ตัวอย่างที่เจ้าของงานเลือก doneHead/doneLine/doneParts · notice)
  * เดิมกดแล้วหน้าตรวจหายไปเฉย ๆ เหลือใบงานยาว ๆ ผู้ตรวจต้องอ่านเองว่าผ่านกี่ชิ้น ปิดอะไรไป และต้องย้อนไปหาใบถัดไปเอง
+ * มีชิ้นอนุมัติ = แผงดาวน์โหลดหลักฐานส่งผู้ขายอยู่ใต้สรุป (เคลมก้อน 6) — งานถัดไปของผู้ตรวจคือส่งของให้ผู้ขาย ไม่ต้องไปหาที่อื่น
+ * ปิดเคลมทุกชิ้นไม่มีแผงนี้ (ไม่มีใบเคลมไปผู้ขาย)
  */
 export function ReviewDone({
   outcome,
   trail,
   onNext,
   busy,
+  downloads,
 }: {
   outcome: ReviewOutcome;
   trail: TrailEvent[];
   onNext: () => void;
   busy: boolean;
+  /** ใบที่เพิ่งอนุมัติ — ขึ้นแผงดาวน์โหลดหลักฐาน · ไม่ส่ง = ไม่มีแผง (คนที่ไม่ได้ส่งของให้ผู้ขาย) */
+  downloads?: { workOrderId: number; code: string } | null;
 }) {
   const closed = outcome.kind === "closed";
   return (
-    <View
-      style={[styles.done, closed ? styles.doneOk : styles.doneBack]}
-      accessibilityLabel="ผลการตรวจเคลม"
-    >
-      <View style={styles.doneTop}>
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-          <Text style={[styles.doneHead, { color: closed ? colors.successInk : colors.text }]}>
-            {outcome.head}
-          </Text>
-          {outcome.line ? <Text style={styles.doneLine}>{outcome.line}</Text> : null}
+    <View style={{ gap: spacing.md }}>
+      <View
+        style={[styles.done, closed ? styles.doneOk : styles.doneBack]}
+        accessibilityLabel="ผลการตรวจเคลม"
+      >
+        <View style={styles.doneTop}>
+          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+            <Text style={[styles.doneHead, { color: closed ? colors.successInk : colors.text }]}>
+              {outcome.head}
+            </Text>
+            {outcome.line ? <Text style={styles.doneLine}>{outcome.line}</Text> : null}
+          </View>
+          <TouchableOpacity style={[styles.nextBtn, busy && styles.off]} onPress={onNext} disabled={busy} activeOpacity={0.8}>
+            {busy ? <Spinner color={colors.navy} size="small" /> : null}
+            <Text style={styles.nextText}>ใบถัดไป →</Text>
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity style={[styles.nextBtn, busy && styles.off]} onPress={onNext} disabled={busy} activeOpacity={0.8}>
-          {busy ? <Spinner color={colors.navy} size="small" /> : null}
-          <Text style={styles.nextText}>ใบถัดไป →</Text>
-        </TouchableOpacity>
+        {closed ? <ClaimTrail trail={trail} /> : null}
+        {outcome.parts.map((l) => (
+          <Text key={l.text} style={[styles.donePart, l.tone === "ok" ? { color: colors.successInk } : { color: colors.body }]}>
+            {l.text}
+          </Text>
+        ))}
       </View>
-      {closed ? <ClaimTrail trail={trail} /> : null}
-      {outcome.parts.map((l) => (
-        <Text key={l.text} style={[styles.donePart, l.tone === "ok" ? { color: colors.successInk } : { color: colors.body }]}>
-          {l.text}
-        </Text>
-      ))}
+      {closed && outcome.approved && downloads ? <DownloadPanel workOrderId={downloads.workOrderId} code={downloads.code} /> : null}
     </View>
   );
 }

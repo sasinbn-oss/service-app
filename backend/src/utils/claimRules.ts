@@ -821,3 +821,202 @@ export function latestCloseSkips(
     at: skip.createdAt,
   };
 }
+
+// ── ก้อน 6: ไฟล์ที่ส่งผู้ขาย ─────────────────────────────
+
+/**
+ * ชื่อไฟล์ที่ผู้ขายได้ — WO-01208_201384P_รูปอะไหล่เก่า.jpg · ของเครื่อง (ไม่มีรหัสอะไหล่) WO-01208_รูปอาการเสีย.jpg
+ *
+ * ผู้ขายได้ไฟล์เป็นกอง (zip + วิดีโอแยกไฟล์) แล้วต้องจับคู่เองว่าไฟล์ไหนของใบเคลมไหน — ชื่อจึงบอกเลขใบงานและรหัสอะไหล่
+ * ที่เปลี่ยนใส่ (ตัวเดียวกับบรรทัด "อะไหล่ที่เปลี่ยนใส่" ในใบเคลม) ตามชื่อในตัวอย่างที่เจ้าของงานอนุมัติทุกตัว
+ * ตัวอักษรที่ Windows ห้ามใช้ในชื่อไฟล์ (/\:*?"<>|) กลายเป็น "-" — รหัสอะไหล่บางยี่ห้อมี "/" แตก zip แล้วกลายเป็นโฟลเดอร์
+ */
+export function vendorFileName(woCode: string, partCode: string | null, roleLabel: string, ext: string): string {
+  const safe = (s: string) => s.replace(/[/\\:*?"<>|]/g, "-").trim();
+  const stem = [safe(woCode), partCode ? safe(partCode) : null, roleLabel].filter(Boolean).join("_");
+  return ext ? `${stem}.${ext}` : stem;
+}
+
+/**
+ * ชื่อวิดีโอ Error ในชื่อไฟล์ — "วิดีโอError" / "วิดีโออาการตอนเครื่องเดิน" (ตามตัวอย่าง)
+ * มาจาก errorVideoLabel ตัวเดียวกับที่ช่างเห็นในฟอร์ม ไฟล์ของ Oasis จึงไม่มีวันถูกเรียกว่าวิดีโอ Error
+ */
+export function errorVideoFileLabel(errorCode: string | null | undefined, plateFamily: string | null | undefined): string {
+  return errorVideoLabel(errorCode, plateFamily).replace(" Error code", "Error");
+}
+
+/** ส่วนท้ายชื่อของแต่ละชนิดหลักฐาน (วิดีโอ Error ใช้ errorVideoFileLabel ตามเครื่อง) */
+const VENDOR_ROLE_LABEL: Record<string, string> = {
+  CLAIM_PART: "รูปอะไหล่เก่า",
+  CLAIM_CHECK_VIDEO: "วิดีโอการตรวจเช็ค",
+  CLAIM_SYMPTOM: "รูปอาการเสีย",
+  NAMEPLATE: "ป้ายรุ่น",
+};
+/** ลำดับในรายการหลักฐานของใบเคลม — ตามตัวอย่าง: ของชิ้นก่อน แล้วของเครื่อง ป้ายรุ่นท้ายสุด */
+const VENDOR_ROLE_ORDER = ["CLAIM_PART", "CLAIM_CHECK_VIDEO", "CLAIM_ERROR_VIDEO", "CLAIM_SYMPTOM", "NAMEPLATE"];
+const VIDEO_ROLES = ["CLAIM_CHECK_VIDEO", "CLAIM_ERROR_VIDEO"];
+
+const EXT_BY_MIME: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "image/heif": "heif",
+  "image/gif": "gif",
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
+  "video/3gpp": "3gp",
+  "video/x-matroska": "mkv",
+  "application/pdf": "pdf",
+};
+
+/**
+ * นามสกุลของไฟล์ที่ส่งผู้ขาย — ดูจากชนิดไฟล์ก่อน ชื่อไฟล์จากมือถือทีหลัง
+ * ชื่อไฟล์จากมือถือเชื่อไม่ได้ (บางเครื่องตั้ง "image.jpg" ให้วิดีโอ · บางทีไม่มีนามสกุล) ถ้าตั้งนามสกุลผิด
+ * เครื่องผู้ขายจะเปิดวิดีโอด้วยโปรแกรมดูรูปแล้วขึ้นว่าไฟล์เสีย
+ */
+export function vendorFileExt(f: { mimeType: string; fileName: string }): string {
+  const byMime = EXT_BY_MIME[f.mimeType.toLowerCase().split(";")[0].trim()];
+  if (byMime) return byMime;
+  const dot = f.fileName.lastIndexOf(".");
+  const ext = dot > 0 ? f.fileName.slice(dot + 1).replace(/[^A-Za-z0-9]/g, "").toLowerCase().slice(0, 8) : "";
+  return ext || "bin";
+}
+
+/** ไฟล์แนบเท่าที่การตั้งชื่อ/จัดชุดไฟล์ส่งผู้ขายใช้ */
+export interface VendorFileLite extends ClaimFileLite {
+  mimeType: string;
+  fileName: string;
+  sizeBytes: number;
+  /** อัปขึ้นที่เก็บไฟล์สำเร็จ (มี objectKey + uploadedAt) — ไฟล์ที่เหลือแต่รูปย่อส่งผู้ขายไม่ได้ */
+  stored: boolean;
+}
+
+/** แถวเคลมเท่าที่การจัดชุดไฟล์ส่งผู้ขายใช้ — brand/fieldCheck ใช้ตั้งชื่อวิดีโอ Error ตามเครื่อง */
+export interface VendorRowLite extends ClaimRowLite {
+  brand?: string | null;
+  fieldCheck?: unknown;
+}
+
+export interface VendorFile {
+  attachmentId: number;
+  role: string;
+  name: string;
+  video: boolean;
+  sizeBytes: number;
+}
+
+export interface VendorPlan {
+  /** ใบเคลม PDF หนึ่งใบต่อแถว ตามลำดับแถว */
+  pdfs: { claimId: number; name: string }[];
+  /** ชื่อใน zip ตามลำดับตัวอย่าง: ใบเคลม + รูปอะไหล่เก่าของแต่ละชิ้น แล้วรูปของเครื่อง (รูปอาการ · ป้ายรุ่น) */
+  zip: ({ kind: "pdf"; claimId: number; name: string } | ({ kind: "photo" } & VendorFile))[];
+  /** วิดีโอ (ไม่อยู่ใน zip) — วิดีโอการตรวจเช็คของแต่ละชิ้น แล้ววิดีโอ Error ของเครื่อง */
+  videos: VendorFile[];
+  /** หลักฐานของแต่ละแถว (ไม่รวม PDF ของตัวเอง) — บล็อก "หลักฐาน (ไฟล์ที่ส่งไปพร้อมใบนี้)" ในใบเคลม */
+  byRow: Map<number, VendorFile[]>;
+}
+
+/**
+ * ชุดไฟล์ที่ส่งผู้ขายของใบงานหนึ่ง — ใบเดียวที่ทั้ง zip · ปุ่มวิดีโอ · รายการหลักฐานในใบเคลม PDF อ่าน
+ * ชื่อในใบเคลมจึงตรงกับไฟล์ที่ผู้ขายได้ทุกตัว
+ *
+ * หลักฐานของแต่ละแถว = claimEvidenceFor (กติกาเดียวกับหน้าตรวจ · การกันลบ) ไฟล์ที่แนบหลังส่งเคลมจึงไม่มีทางหลุดไปถึงผู้ขาย
+ * ไฟล์ของเครื่อง (รูปอาการ · วิดีโอ Error · ป้ายรุ่น) ใช้ร่วมกันทุกชิ้น — ไฟล์เดียวกันได้ชื่อเดียว ส่งครั้งเดียว
+ * ถ้าชิ้นที่ผ่านทีหลังใช้ไฟล์ของเครื่องคนละไฟล์ (ช่างถ่ายรูปอาการใหม่ตอนส่งรอบสอง) ไฟล์นั้นต่อรหัสอะไหล่ในชื่อ
+ * ไม่งั้นสองไฟล์ชื่อเดียวกัน ตัวหลังทับตัวแรกตอนผู้ขายแตก zip · ไฟล์ที่ไม่ได้อัปขึ้นที่เก็บ (stored = false) ส่งไม่ได้ จึงไม่อยู่ในชุด
+ * rows = แถวที่จะส่งผู้ขาย เรียงตามที่ส่งครั้งแรก (vendorRows) · ลำดับนี้ตัดสินว่าไฟล์ของเครื่องตัวไหนได้ชื่อสั้น
+ */
+export function vendorFilePlan(
+  woCode: string,
+  rows: VendorRowLite[],
+  files: VendorFileLite[],
+  logs: ClaimLogLite[]
+): VendorPlan {
+  const used = new Map<string, number | string>();
+  const unique = (name: string, owner: number | string) => {
+    if (!used.has(name) || used.get(name) === owner) {
+      used.set(name, owner);
+      return name;
+    }
+    const dot = name.lastIndexOf(".");
+    const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+    for (let n = 2; ; n++) {
+      const next = `${stem}-${n}${ext}`;
+      if (!used.has(next)) {
+        used.set(next, owner);
+        return next;
+      }
+    }
+  };
+  const named = new Map<number, VendorFile>();
+  const plan: VendorPlan = { pdfs: [], zip: [], videos: [], byRow: new Map() };
+  const machinePhotos: VendorFile[] = [];
+  const machineVideos: VendorFile[] = [];
+  for (const row of rows) {
+    const pdf = { claimId: row.id, name: unique(vendorFileName(woCode, row.partCode, "ใบเคลม", "pdf"), `pdf:${row.id}`) };
+    plan.pdfs.push(pdf);
+    plan.zip.push({ kind: "pdf", ...pdf });
+    const ctx = flagContextOf(row);
+    const evidence = claimEvidenceFor(row, files, logs)
+      .filter((f) => f.stored && f.role && VENDOR_ROLE_ORDER.includes(f.role))
+      .sort((a, b) => VENDOR_ROLE_ORDER.indexOf(a.role!) - VENDOR_ROLE_ORDER.indexOf(b.role!));
+    const mine: VendorFile[] = [];
+    for (const f of evidence) {
+      const role = f.role!;
+      let vf = named.get(f.id);
+      if (!vf) {
+        const machine = role !== "CLAIM_PART" && role !== "CLAIM_CHECK_VIDEO";
+        const label = role === "CLAIM_ERROR_VIDEO" ? errorVideoFileLabel(ctx.errorCode, ctx.family) : VENDOR_ROLE_LABEL[role];
+        const ext = vendorFileExt(f);
+        let name = vendorFileName(woCode, machine ? null : row.partCode, label, ext);
+        if (machine && used.has(name)) name = vendorFileName(woCode, row.partCode, label, ext);
+        vf = { attachmentId: f.id, role, name: unique(name, f.id), video: VIDEO_ROLES.includes(role), sizeBytes: f.sizeBytes };
+        named.set(f.id, vf);
+        if (vf.video) (machine ? machineVideos : plan.videos).push(vf);
+        else if (machine) machinePhotos.push(vf);
+        else plan.zip.push({ kind: "photo", ...vf });
+      }
+      mine.push(vf);
+    }
+    plan.byRow.set(row.id, mine);
+  }
+  plan.zip.push(...machinePhotos.map((vf) => ({ kind: "photo" as const, ...vf })));
+  plan.videos.push(...machineVideos);
+  return plan;
+}
+
+/**
+ * แถวที่ส่งผู้ขาย = แถวล่าสุดของแต่ละชิ้นในงานซ่อมครั้งนี้ (หลังเปิดใบใหม่ครั้งล่าสุด) ที่อนุมัติแล้ว เรียงตามที่ส่งครั้งแรก
+ *
+ * ใบร่าง (ยังไม่อนุมัติ) ไม่เข้า zip — ผู้ขายต้องไม่ได้ใบที่ Admin Spare Part ยังไม่ได้ตรวจ (เจ้าของงานเลือกข้อ 13)
+ * ชิ้นที่อนุมัติไปตอนซ่อมครั้งก่อนเปิดใบใหม่ ส่งผู้ขายไปแล้วในครั้งนั้น ไม่ใช่ของชุดนี้
+ * include = แถวที่ต้องอยู่ในชุดด้วยแม้ยังไม่อนุมัติ (ใบเคลมร่างของแถวนั้น — รายการหลักฐานในร่างตรงกับที่จะส่งจริง)
+ */
+export function vendorRows<R extends ClaimRowLite>(rows: R[], logs: ClaimLogLite[], include?: R | null): R[] {
+  const since = include ? repairStartFor(include.createdAt, logs) : lockSince(logs);
+  // ร่างของงานซ่อมครั้งก่อน (เปิดดูย้อนหลัง) — ชุดของครั้งนั้นจบที่การเปิดใบใหม่ครั้งถัดไป
+  let until: Date | null = null;
+  if (include) {
+    for (const l of logs) {
+      if (l.action === "REOPENED" && l.createdAt > include.createdAt && (!until || l.createdAt < until)) until = l.createdAt;
+    }
+  }
+  const inRepair = rows.filter((r) => (!since || r.createdAt >= since) && (!until || r.createdAt < until));
+  const approved = [...latestPerPart(inRepair).values()].filter((r) => r.status === "APPROVED");
+  const out = include && !approved.some((r) => r.id === include.id) ? [...approved, include] : approved;
+  return byFirstSent(out, inRepair);
+}
+
+/** รหัสอะไหล่เทียบกันแบบไม่สนตัวพิมพ์ ช่องว่าง ขีด (กติกาเดียวกับ foldCode ฝั่งแอป · utils/claimEvidence.ts) */
+export function foldPartCode(s: string | null | undefined): string {
+  return (s ?? "").toUpperCase().replace(/[\s\-–]/g, "");
+}
+
+/** รหัสตัวเสียไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ไหม — ว่าง (ใบเก่าก่อนมีช่องนี้) ไม่นับว่าไม่ตรง */
+export function brokenMismatch(row: { brokenPartCode: string | null; partCode: string }): boolean {
+  if (!row.brokenPartCode?.trim()) return false;
+  return foldPartCode(row.brokenPartCode) !== foldPartCode(row.partCode);
+}

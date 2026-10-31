@@ -113,7 +113,7 @@ G=$(GET $A "work-orders/$ID")
 TA=$(PDFTXT $CA); TB=$(PDFTXT $CB)
 [ "$(ROW "$G" $CB "c.evidenceIds.some(x=>[$LATE].includes(x))")|$(ROW "$G" $CA "c.evidenceIds.some(x=>[$LATE].includes(x))")" = "false|false" ] \
   && [ "$(ROW "$G" $CB 'c.evidenceIds.length')|$(ROW "$G" $CA 'c.evidenceIds.length')" = "4|4" ] \
-  && ! HAS "$TA" "รูปอาการเสีย" && ! HAS "$TB" "รูปอาการเสีย" && HAS "$TB" "รูปอะไหล่เก่า" && HAS "$TB" "วิดีโอ Error code" \
+  && ! HAS "$TA" "รูปอาการเสีย" && ! HAS "$TB" "รูปอาการเสีย" && HAS "$TB" "_${PCODE2}_รูปอะไหล่เก่า" && HAS "$TB" "_วิดีโอError" \
   && pass "รูปอาการลงเวลาหลังส่ง (psql): ไม่อยู่ใน evidenceIds ของแถวไหน และใบเคลมทั้งสองไม่ลง \"รูปอาการเสีย\" (หลักฐานอื่นยังลง)" \
   || fail "ไฟล์หลังส่ง: B=$(ROW "$G" $CB 'JSON.stringify(c.evidenceIds)') A=$(ROW "$G" $CA 'JSON.stringify(c.evidenceIds)') late=$LATE · PDF B: $(echo "$TB" | grep -o 'หลักฐาน.\{0,60\}' | head -1)"
 IFS='|' read -ra _back <<< "$LATE_AT"
