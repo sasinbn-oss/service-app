@@ -24,7 +24,11 @@ export interface PlateTemplate {
 }
 export interface ClaimGuide {
   plate: PlateTemplate;
-  errors: { code: string; name: string; checks: string[] }[];
+  /**
+   * label = ชื่อในรายการเลือก "{รหัส} — {ไทย} ({อังกฤษ})" · thai = ส่วนไทยของชื่อ — เซิร์ฟเวอร์คิดให้ (claimGuide.ts) รุ่นเก่าไม่ส่ง
+   * หน้าตรวจ/การ์ดเคลมไม่ใช้สองค่านี้ — อ่านชื่อที่เก็บในแถวตอนส่ง (claimEvidence errorLabelOf) ให้ตรงกับใบเคลม PDF
+   */
+  errors: { code: string; name: string; checks: string[]; label?: string; thai?: string }[];
 }
 
 /** ค่าในช่องหนึ่งของป้าย — SCAN = ระบบอ่านจากรูป · HAND = พิมพ์/แก้เอง (Admin Spare Part เห็นป้ายต่างกัน) */
@@ -72,4 +76,28 @@ export function matchModel(read: string, registry: string | null | undefined): {
     if (r.includes(g)) return { value: reg.toUpperCase(), needsCheck: false };
   }
   return { value: read, needsCheck: true };
+}
+
+/**
+ * ชื่อยี่ห้อที่อาจอยู่ในช่องรุ่นของทะเบียนเครื่อง — ตัวเลือกรุ่นตอนเปิดใบงาน (MACHINE_MODELS ใน backend/src/utils/constants.ts)
+ * กับยี่ห้อตระกูล Alliance (ALLIANCE_BRANDS ใน backend/src/utils/claimGuide.ts) · เพิ่มยี่ห้อที่นั่นต้องเพิ่มที่นี่ด้วย
+ */
+const BRAND_NAMES = ["Oasis", "Oasis(TC)", "Huebsch", "Huebsch (TC)", "Haier", "Maytag", "Speed Queen", "Primus", "UniMac", "IPSO", "Alliance"];
+/** ตัด "HB - " ข้างหน้า กับ "(TC)" ออก แล้วเทียบแบบไม่สนตัวพิมพ์/ช่องว่าง — "HB - Huebsch" "huebsch (tc)" เป็นยี่ห้อเดียวกัน */
+const brandKey = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/^\s*hb\s*-\s*/, "")
+    .replace(/\(\s*tc\s*\)/g, "")
+    .replace(/[^a-z0-9]/g, "");
+const BRAND_KEYS = new Set(BRAND_NAMES.map(brandKey));
+
+/**
+ * ทะเบียนเครื่องมีแค่ชื่อยี่ห้อ ไม่ใช่รุ่นเต็ม — ทะเบียนหลายเครื่องเป็นแบบนี้ เพราะตัวเลือกตอนเปิดใบงานเป็นยี่ห้อ
+ * เทียบรุ่นที่อ่านจากป้ายกับยี่ห้อไม่มีความหมาย เดิมขึ้น "ไม่ตรงทะเบียน (Huebsch)" ทุกใบ ช่างจึงเลิกอ่านคำเตือน
+ * รวมถึงคำเตือนที่ไม่ตรงจริง ๆ ด้วย — แบบนี้บอกให้ดูกับรูปเองแทน
+ */
+export function isBrandOnly(model: string | null | undefined): boolean {
+  const k = brandKey(model ?? "");
+  return !!k && BRAND_KEYS.has(k);
 }

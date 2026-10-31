@@ -3,7 +3,7 @@
  *
  * แยกจาก prisma/seed.ts เพราะคนละเรื่องกัน — seed หลักคือข้อมูลตัวอย่างสำหรับ
  * คนที่เพิ่งตั้งระบบใหม่ ส่วนไฟล์นี้คือฉากที่เทสต์ต้องการ (ผู้ใช้สามตำแหน่ง
- * สาขาบริษัท สาขาแฟรนไชส์คนละฝั่งของเส้นประกัน และอะไหล่สองตัว)
+ * สาขาบริษัท สาขาแฟรนไชส์คนละฝั่งของเส้นประกัน และอะไหล่สองตัวกับตัวแฝดแยกยี่ห้อ)
  * ถ้าเอาไปปนกัน ระบบจริงจะมีบัญชีทดสอบรหัสผ่านง่าย ๆ ติดไปด้วย
  *
  * รันซ้ำได้ ใช้ upsert ทั้งหมด ไม่ลบอะไรที่มีอยู่แล้ว
@@ -116,21 +116,49 @@ async function main() {
     });
   }
 
-  const parts = [
+  /**
+   * อะไหล่ทดสอบแยกไฟล์ตามยี่ห้อ — เตรียมไว้ก่อนกฎ "เลือกอะไหล่ได้เฉพาะไฟล์ยี่ห้อเดียวกับเครื่อง" จะเปิด
+   *
+   * กฎนั้นปฏิเสธอะไหล่ไม่มียี่ห้อและอะไหล่ต่างยี่ห้อจากทุกเส้นทาง ถ้าเทสต์ยังส่ง SP-BOARD ตัวเดียว
+   * (เดิมไม่มียี่ห้อ) ให้ทุกเครื่อง จะพังทั้งชุดทั้งที่แอปไม่ได้ผิด
+   * SP-BOARD/SP-BELT เป็น Oasis เพราะ tests/browser/fixture.js เปิดใบงานเครื่อง W77 "Oasis" เสมอ
+   * ตัวแฝด -HB/-HA/-MT/-OT คือชิ้นเดียวกันในไฟล์อื่น ให้เครื่องยี่ห้ออื่นมีอะไหล่ตรงไฟล์
+   * ใบไหนได้ตัวไหน ตัดสินที่ fx_part (tests/lib/fixture-parts.sh) ที่เดียว — fxPart ฝั่งเบราว์เซอร์เรียกตัวเดียวกัน
+   *
+   * ชื่อตัวแฝด = ชื่อเดิมต่อท้ายยี่ห้อ: รายการอะไหล่เรียงตามชื่อ และหลายชุดหยิบแถวแรกของผลค้น "SP-BOARD"
+   * ชื่อที่ยาวกว่าเรียงหลังตัวเดิมเสมอ ถ้าชื่อซ้ำกันเป๊ะ ลำดับจะสุ่มแล้วเทสต์ได้คนละตัวในแต่ละรอบ
+   * update ทับยี่ห้อทุกครั้ง (ไม่ทับชื่อ) — ยี่ห้อคือสิ่งที่กฎดู ใครแก้ค้างไว้ รันซ้ำแล้วกลับมาถูก
+   */
+  const brandTwins = [
+    { suffix: "", brand: "Oasis" },
+    { suffix: "-HB", brand: "Huebsch" },
+    { suffix: "-HA", brand: "Haier" },
+    { suffix: "-MT", brand: "Maytag" },
+    { suffix: "-OT", brand: "Other" },
+  ];
+  const baseParts = [
     { partCode: "SP-BOARD", name: "บอร์ดควบคุม" },
     { partCode: "SP-BELT", name: "สายพาน" },
   ];
+  const parts = baseParts.flatMap((b) =>
+    brandTwins.map((t) => ({
+      partCode: b.partCode + t.suffix,
+      name: t.suffix ? `${b.name} (${t.brand})` : b.name,
+      brand: t.brand,
+    }))
+  );
   for (const p of parts) {
     await prisma.sparePart.upsert({
       where: { partCode: p.partCode },
-      update: {},
+      update: { brand: p.brand },
       create: p,
     });
   }
 
   console.log(
     `เตรียมข้อมูลเทสต์แล้ว — ผู้ใช้ ${users.map((u) => u.employeeCode).join("/")} ` +
-      `(รหัสผ่าน ${TEST_PASSWORD}) · สาขา C0001 C0006 D0011 D0012 · อะไหล่ SP-BOARD SP-BELT`
+      `(รหัสผ่าน ${TEST_PASSWORD}) · สาขา C0001 C0006 D0011 D0012 · อะไหล่ SP-BOARD SP-BELT (Oasis) ` +
+      `กับตัวแฝด ${brandTwins.filter((t) => t.suffix).map((t) => `${t.suffix} ${t.brand}`).join(" · ")}`
   );
 }
 

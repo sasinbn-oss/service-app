@@ -36,8 +36,11 @@ let WO = process.argv[2] || null;
   try {
     if (!WO) {
       fx = await setup();
-      const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
-      const wo = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+      // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+      // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+      const wo = await fx.workOrder("C0006", null);
+      const board = fx.fxPart(wo.id, "BOARD"), belt = fx.fxPart(wo.id, "BELT");
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: board, quantity: 1 }] });
       await fx.source(wo.id);
       await fx.schedule(wo.id);
       await fx.issue(wo.id, "RQ-2569-0042");

@@ -38,6 +38,15 @@ const MIN = 1;
 const MAX = 5;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * นับตัวดูรูปที่เปิดอยู่ — ของที่ฟังคีย์บอร์ดหรือเด้งขึ้นเองทั้งหน้าจอ (คีย์ลัดในหน้าตรวจเคลม · หน้าต่างสอนการใช้งาน)
+ * ต้องรู้ว่ามีรูปเปิดทับอยู่ ไม่งั้นกดลูกศรแล้วทั้งรูปและรายการข้างหลังเลื่อนพร้อมกัน หรือมีกล่องเด้งขึ้นทับรูปที่กำลังซูม
+ */
+let openViewers = 0;
+export function isImageViewerOpen(): boolean {
+  return openViewers > 0;
+}
+
 export default function ImageViewer({
   workOrderId,
   items,
@@ -108,7 +117,20 @@ export default function ImageViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, items, workOrderId]);
 
-  // คีย์บอร์ดบนจอคอม: ← → เลื่อนรูป · + − ซูม · 0 กลับขนาดเดิม · Esc ปิด
+  useEffect(() => {
+    openViewers++;
+    return () => {
+      openViewers--;
+    };
+  }, []);
+
+  /**
+   * คีย์บอร์ดบนจอคอม: ← → เลื่อนรูป · + − ซูม · 0 กลับขนาดเดิม · Esc ปิด
+   *
+   * ฟังตอนขาลง (capture) แล้วหยุดคีย์ที่ใช้ไว้ตรงนี้ — หน้าต่างใบงาน (PopupScreen) ก็ฟัง Esc ที่ window เหมือนกัน
+   * เดิมกด Esc ปิดรูปแล้วใบงานทั้งใบปิดตามไปด้วย ดูหลักฐานเคลมเสร็จทีไรต้องค้นใบเปิดใหม่ทุกครั้ง
+   * ตัวดูรูปเปิดทับทุกอย่าง คีย์ที่กดตอนนี้จึงเป็นของรูปเท่านั้น · คีย์ที่ไม่ได้ใช้ปล่อยผ่านตามปกติ
+   */
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const onKey = (e: KeyboardEvent) => {
@@ -120,9 +142,10 @@ export default function ImageViewer({
       else if (e.key === "0") zoomTo(1);
       else return;
       e.preventDefault();
+      e.stopImmediatePropagation();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [go, zoomTo, onClose]);
 
   // ล้อเมาส์ = ซูม (บนจอคอมคือท่าที่คนลองเป็นอย่างแรก)

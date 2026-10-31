@@ -102,46 +102,53 @@ const { setup, visitDay } = require("./fixture");
 
   try {
     fx = await setup();
-    const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
+    // เปิดใบแล้วหัวหน้าภาคระบุอะไหล่ 1 ชิ้น (kind = "BOARD" | "BELT") — ทางเดียวกับ fx.workOrder(สาขา, อะไหล่)
+    // แต่เลือกอะไหล่หลังมีใบ เพราะอะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) · คืนใบพร้อม id ที่ส่งไป (wo.pid)
+    const withPart = async (branch, kind) => {
+      const wo = await fx.workOrder(branch, null);
+      wo.pid = fx.fxPart(wo.id, kind);
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: wo.pid, quantity: 1 }] });
+      return wo;
+    };
     const st = (id) => fx.sql(`select status||'|'||coalesce("appointmentStatus",'-') from "WorkOrder" where id=${id}`);
     const team = fx.sql(`select zone from "Branch" where code='C0006'`);
     // ใบที่ต้องเสนอราคา = สาขาแฟรนไชส์ (D) ที่เปิดเกิน 3 ปี หมดประกัน
     const dOld = fx.sql(`select code from "Branch" where code like 'D%' and "cancelledAt" is null and "openedAt" < now() - interval '3 years' order by "openedAt" limit 1`);
-    const Q = await fx.workOrder(dOld, [{ sparePartId: board, quantity: 1 }]);
+    const Q = await withPart(dOld, "BOARD");
     // ใบทั่วไป: เช็คแล้วมีที่คลัง 94 → หัวหน้าภาคนัดวัน → ถึงขั้นเบิก (ลูกค้ายังไม่คอนเฟิร์ม)
-    const N = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const N = await withPart("C0006", "BOARD");
     await fx.source(N.id);
     await fx.schedule(N.id, visitDay(30));
     // ใบโอน: ของอยู่คลังภูเก็ต → นัดวัน → แอดมินส่งให้หัวหน้าภาคเบิก+โอน
-    const T = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    const T = await withPart("C0006", "BELT");
     await fx.source(T.id, "คลังภูเก็ต");
     await fx.schedule(T.id, visitDay(30));
-    await fx.call(fx.A, "POST", `/work-orders/${T.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }] });
+    await fx.call(fx.A, "POST", `/work-orders/${T.id}/parts-check`, { results: [{ sparePartId: T.pid, inStock: true, warehouse: "คลังภูเก็ต" }] });
     // ใบตรวจหน้างาน: หัวหน้าภาคส่งตรวจพร้อมวัน → รอแอดมินนัดร้าน
     const I = await fx.workOrder("C0006", null);
     await fx.call(fx.supervisor(), "POST", `/work-orders/${I.id}/inspect-request`, { team, scheduledAt: visitDay(20) });
     // ใบไม่ใช้อะไหล่ → ไปนัดวันเลย
     const P = await fx.workOrder("C0006", []);
     // ใบที่คอนเฟิร์มลูกค้าก่อนเบิก — ค้างอยู่ที่ขั้นคอนเฟิร์มตอนสลับลำดับ (ไม่ถูกย้ายโดย migration) แล้วแอดมินคอนเฟิร์ม
-    const O = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const O = await withPart("C0006", "BOARD");
     await fx.source(O.id);
     await fx.schedule(O.id, visitDay(30));
     fx.sql(`update "WorkOrder" set status='AWAITING_CONFIRM' where id=${O.id}`);
     await fx.confirm(O.id);
     // ใบเบิกคลังอื่นไม่โอน: แอดมินบอกว่าของอยู่คลังภูเก็ต ไม่ต้องโอน → หัวหน้าภาคเบิกจากคลังนั้นเลย
-    const K = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    const K = await withPart("C0006", "BELT");
     await fx.source(K.id, "คลังภูเก็ต");
     await fx.schedule(K.id, visitDay(30));
-    await fx.call(fx.A, "POST", `/work-orders/${K.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }], transfer: false });
+    await fx.call(fx.A, "POST", `/work-orders/${K.id}/parts-check`, { results: [{ sparePartId: K.pid, inStock: true, warehouse: "คลังภูเก็ต" }], transfer: false });
     // ใบที่ส่งให้โอนแล้วหัวหน้าภาคส่งกลับ (คลังนั้นไม่มีของ) → แอดมินเบิกคลัง 94 แทน → ถึงขั้นคอนเฟิร์ม
-    const B = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    const B = await withPart("C0006", "BELT");
     await fx.source(B.id, "คลังภูเก็ต");
     await fx.schedule(B.id, visitDay(30));
-    await fx.call(fx.A, "POST", `/work-orders/${B.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }] });
+    await fx.call(fx.A, "POST", `/work-orders/${B.id}/parts-check`, { results: [{ sparePartId: B.pid, inStock: true, warehouse: "คลังภูเก็ต" }] });
     await fx.call(fx.supervisor(), "POST", `/work-orders/${B.id}/parts-transfer/return`, { reason: "คลังภูเก็ตไม่มีของ (เทสต์)" });
     await fx.issue(B.id);
     // ใบที่เบิกแล้ว ย้อนกลับไประบุอะไหล่ → ระบุใหม่ว่าไม่ใช้อะไหล่ → นัดวัน → ถึงขั้นคอนเฟิร์ม
-    const R = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const R = await withPart("C0006", "BOARD");
     await fx.source(R.id);
     await fx.schedule(R.id, visitDay(30));
     await fx.issue(R.id);
@@ -149,7 +156,7 @@ const { setup, visitDay } = require("./fixture");
     await fx.call(fx.supervisor(), "POST", `/work-orders/${R.id}/parts`, { needsParts: false });
     await fx.schedule(R.id, visitDay(30));
     // ใบเก่าที่ค้างขั้นเบิกโดยยังไม่มีวัน (ย้ายมาจากสายงานเดิม) แล้วถูกยกเลิก
-    const X = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const X = await withPart("C0006", "BOARD");
     await fx.source(X.id);
     fx.sql(`update "WorkOrder" set status='PARTS_REQUESTED' where id=${X.id}`);
     await fx.call(fx.A, "POST", `/work-orders/${X.id}/cancel`, { reasonCode: "CUSTOMER", note: "ลูกค้ายกเลิก (เทสต์)" });
@@ -224,7 +231,7 @@ const { setup, visitDay } = require("./fixture");
       : fail(`ขั้นย่อย: ${t.sub && t.sub.join(" | ")}`);
     // โอนครบจริง (เบิก+สั่งโอน → ของถึงคลัง 94 → แอดมินเบิกส่งมอบ) — ติ๊กครบสามขั้นเพราะเกิดขึ้นจริงทุกขั้น
     await fx.call(fx.supervisor(), "POST", `/work-orders/${T.id}/parts-transfer`, {
-      results: [{ sparePartId: belt, fromWarehouse: "คลังภูเก็ต", transferReqNo: `TR-WEB-${T.id}`, toWarehouse: "คลังลาดพร้าว 94", transferNo: `TN-WEB-${T.id}` }],
+      results: [{ sparePartId: T.pid, fromWarehouse: "คลังภูเก็ต", transferReqNo: `TR-WEB-${T.id}`, toWarehouse: "คลังลาดพร้าว 94", transferNo: `TN-WEB-${T.id}` }],
     });
     await fx.call(fx.supervisor(), "POST", `/work-orders/${T.id}/parts-transfer/arrived`, {});
     await fx.issue(T.id);
@@ -250,7 +257,7 @@ const { setup, visitDay } = require("./fixture");
     kNow && kNow.text.includes("หัวหน้าภาค · เบิกคลังอื่น") && kNow.aria === "ขั้น 4 เบิกอะไหล่ · ทำอยู่"
       ? pass("ขั้นเบิกบอกคนทำ: หัวหน้าภาค · เบิกคลังอื่น · ชื่อขั้น \"ขั้น 4 เบิกอะไหล่ · ทำอยู่\"")
       : fail(`คนทำขั้นเบิก: ${kNow && kNow.text} · ${kNow && kNow.aria}`);
-    await fx.call(fx.supervisor(), "POST", `/work-orders/${K.id}/parts-pickup`, { results: [{ sparePartId: belt, warehouse: "คลังภูเก็ต", requisitionNo: `RQ-PK-${K.id}` }] });
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${K.id}/parts-pickup`, { results: [{ sparePartId: K.pid, warehouse: "คลังภูเก็ต", requisitionNo: `RQ-PK-${K.id}` }] });
     st(K.id) === "AWAITING_CONFIRM|PENDING" &&
     fx.sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${K.id} and action in ('TRANSFER_REQUESTED','TRANSFER_ARRIVED')`) === "0"
       ? pass("หัวหน้าภาคเบิกคลังอื่นแล้ว → คอนเฟิร์มลูกค้า · ไม่มีประวัติโอน (ฐานข้อมูล)")

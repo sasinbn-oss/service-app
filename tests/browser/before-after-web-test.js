@@ -1,6 +1,6 @@
 // ทดสอบ: รูปก่อนซ่อม · หลังซ่อม ตอนปิดงาน
 //        · แนบ "ก่อนซ่อม" ไว้ก่อนจากการ์ดไฟล์แนบ (ชิป "รูปนี้คือ") แล้วฟอร์มปิดงานขึ้นว่าแนบไว้แล้ว
-//        · ปุ่มยืนยันปิดงานกดไม่ได้จนมีหลังซ่อม · แนบหลังซ่อมในฟอร์ม → ปิดได้
+//        · ยังไม่มีหลังซ่อม ปุ่มล่าง "ยังขาด 1 อย่าง — พาไป" กดแล้วเลื่อนไปขั้นรูปหลังซ่อม ไม่ส่ง · แนบหลังซ่อมในฟอร์ม → "ยืนยันปิดงาน" ปิดได้
 //        · การ์ดผลการทำงานวางก่อน | หลัง คู่กัน — เช็คฐานข้อมูลทุกขั้น
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
@@ -109,13 +109,32 @@ const login = async (code) =>
     await vis("ช่างสมชาย", false).last().click();
     await page.waitForTimeout(500);
     const save = vis("ยืนยันปิดงาน").last();
-    const op = () => save.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
-    (await op()) !== "1" ? pass("ยังไม่มีรูปหลังซ่อม ปุ่มยืนยันปิดงานกดไม่ได้") : fail("กดปิดได้ทั้งที่ไม่มีรูปหลังซ่อม");
+    /**
+     * ปุ่มล่างไม่จางแล้ว (เคลมก้อน 1 · ใช้กับทุกการปิดงาน) — ยังขาดบอกจำนวน กดแล้วพาไปช่องแรกที่ขาด ไม่ส่ง
+     * เลื่อนฟอร์มลงล่างสุดก่อนกด เพื่อให้รู้ว่าปุ่มพาขึ้นไปหาขั้นรูปหลังซ่อมจริง ไม่ใช่บังเอิญอยู่ในจอ
+     */
+    const go = vis("ยังขาด 1 อย่าง — พาไป").last();
+    const closePosts = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /\/close$/.test(r.url())) closePosts.push(r.url()); });
+    (await go.count()) > 0 && (await save.count()) === 0
+      ? pass("ยังไม่มีรูปหลังซ่อม ปุ่มล่างขึ้น \"ยังขาด 1 อย่าง — พาไป\" (ไม่ใช่ปุ่มจาง)")
+      : fail("ปุ่มล่างไม่บอกว่ายังขาด 1 อย่าง");
+    await label("อะไหล่ไม่ครบ เปิดใบงานรออะไหล่ต่อ").scrollIntoViewIfNeeded();
+    const afterStep = vis("รูป / วิดีโอหลังซ่อม", false).first();
+    const inView = (b) => !!b && b.y >= 0 && b.y + b.height <= 860;
+    const awayBefore = !inView(await afterStep.boundingBox());
+    await go.click();
+    let arrived = false;
+    for (let i = 0; i < 30 && !(arrived = inView(await afterStep.boundingBox())); i++) await page.waitForTimeout(100);
+    await page.waitForTimeout(800);
+    awayBefore && arrived && closePosts.length === 0 && sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS"
+      ? pass("กด \"พาไป\": ฟอร์มเลื่อนไปขั้นรูปหลังซ่อม ไม่ส่งคำขอปิดงาน (ฐานข้อมูลยังเข้างาน)")
+      : fail(`กดพาไป: ห่างก่อนกด=${awayBefore} · ถึงขั้นหลังซ่อม=${arrived} · คำขอปิด=${closePosts.length}`);
     // เลือกสองรูปพร้อมกันจากอัลบั้ม (เจ้าของงานขอ ต.ค. 69 — เดิมทีละรูป)
     await choose("เลือกรูปหลังซ่อม", [PHOTO, PHOTO]);
-    !(await missing()).includes("รูปหลังซ่อม") && (await op()) === "1"
-      ? pass("แนบรูปหลังซ่อมในฟอร์มแล้ว ข้อความเตือนหาย ปุ่มกดได้")
-      : fail("แนบหลังซ่อมแล้วยังกดไม่ได้");
+    !(await missing()).includes("รูปหลังซ่อม") && (await save.count()) > 0 && (await vis("ยังขาด 1 อย่าง — พาไป").count()) === 0
+      ? pass("แนบรูปหลังซ่อมในฟอร์มแล้ว ข้อความเตือนหาย ปุ่มล่างเป็น \"ยืนยันปิดงาน\"")
+      : fail("แนบหลังซ่อมแล้วปุ่มล่างยังไม่เป็นยืนยันปิดงาน");
     await save.click();
     await page.waitForTimeout(6000);
     sql(`select w.status||'|'||(select string_agg(role,',' order by role) from "WorkOrderAttachment" a where a."workOrderId"=w.id and role in ('BEFORE','AFTER')) from "WorkOrder" w where w.id=${id}`) === "DONE|AFTER,AFTER,BEFORE"

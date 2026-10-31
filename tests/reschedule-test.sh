@@ -16,6 +16,7 @@
 #   · บันทึกส่งกลับ (ทีมไม่ว่าง) บอกเหตุตามจริง: แอดมินเลื่อน/ดึงคืน = "ไม่ว่างวันที่แอดมินเลื่อน" · ลูกค้าขอ = "ไม่ว่างวันที่ลูกค้าขอ"
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -73,14 +74,17 @@ DB "update \"User\" set team='$TEAM' where \"employeeCode\"='T001'" >/dev/null
 HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='T001'")
 DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values ('ZRSP$SUF','แอดมินอะไหล่ทดสอบเลื่อนนัด','PARTS_ADMIN','$HASH',false)" >/dev/null
 S=$(login S001); T=$(login T001); PA=$(login ZRSP$SUF)
-BOARD_ID=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BOARD'")
+# บอร์ดของแต่ละใบ (id ใบ → id อะไหล่): ใบในชุดนี้อยู่คนละเครื่อง (W61 W63 … ใบผูกเคสไม่มีเครื่อง)
+# อะไหล่ต้องตรงยี่ห้อเครื่องของใบนั้น จึงหยิบตอนระบุอะไหล่ทีละใบ แล้วใช้ตัวเดิมกับใบนั้นจนจบ
+declare -A BOARD_OF
 L94="คลังลาดพร้าว 94"
 mk() {  # $1 เครื่อง $2 ประเภทงาน → ใบใหม่
   POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"${2:-CM}\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"$1\",\"symptom\":\"$SYMPTOM\"}]}" | J 'd.orders[0].id'
 }
 spec() {  # $1 ใบ $2 คลังที่มีบอร์ด → เช็คอะไหล่แล้ว มีครบ (ขั้นนัดวัน)
-  POST $S "work-orders/$1/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD_ID,\"quantity\":1}]}" >/dev/null
-  POST $A "work-orders/$1/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$2\"}]}" >/dev/null
+  BOARD_OF[$1]=$(fx_part "$1" BOARD)
+  POST $S "work-orders/$1/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":${BOARD_OF[$1]},\"quantity\":1}]}" >/dev/null
+  POST $A "work-orders/$1/parts-sourcing" "{\"results\":[{\"sparePartId\":${BOARD_OF[$1]},\"inStock\":true,\"warehouse\":\"$2\"}]}" >/dev/null
 }
 assign() { POST $S "work-orders/$1/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$2\"$3}" >/dev/null; }
 
@@ -122,7 +126,7 @@ POST $A work-orders/$R1/reschedule "$(MOVE $D3)" >/dev/null
 
 echo
 echo "═══ เลื่อนระหว่างเบิก → เบิก → คอนเฟิร์มเฉย ๆ → หัวหน้าภาคต้องรับทราบวันใหม่"
-POST $A "work-orders/$R1/parts-check" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS1\"}]}" >/dev/null
+POST $A "work-orders/$R1/parts-check" "{\"results\":[{\"sparePartId\":${BOARD_OF[$R1]},\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS1\"}]}" >/dev/null
 [ "$(WO $R1)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D3|13:30" ] || fail "หลังเบิก R1: $(WO $R1)"
 POST $A "work-orders/$R1/confirm-appointment" '{}' >/dev/null
 [ "$(WO $R1)" = "ASSIGNED|CONFIRMED|$TEAM|$D3|13:30" ] && [ "$(RS $R1)" = "true" ] && [ "$(ROW $S INBOX $R1 'String(r.rescheduled)')" = "true" ] \
@@ -209,14 +213,14 @@ POST $A work-orders/$R3/reschedule "$(MOVE $D2)" >/dev/null
 echo
 echo "═══ ของอยู่คลังอื่น: เลื่อนระหว่างรอหัวหน้าภาคเบิก/โอน และระหว่างของกำลังมา"
 R4=$(mk W63); spec $R4 "คลังขอนแก่น"; assign $R4 "$D1"
-POST $A "work-orders/$R4/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $A "work-orders/$R4/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":${BOARD_OF[$R4]},\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
 XF() { DB "select coalesce(\"inStock\"::text,'-')||'|'||coalesce(warehouse,'-')||'|'||coalesce(\"transferFrom\",'-')||'|'||coalesce(\"transferReqNo\",'-')||'|'||coalesce(\"transferNo\",'-')||'|'||(\"transferredAt\" is not null) from \"WorkOrderPart\" where \"workOrderId\"=$R4 and kind='WAITING'"; }
 [ "$(WO $R4 | cut -d'|' -f1)" = "PARTS_TRANSFER" ] || fail "เตรียมใบ R4: $(WO $R4)"
 X0=$(XF)
 POST $A work-orders/$R4/reschedule "$(MOVE $D2 ของโอนมาไม่ทัน)" >/dev/null
 [ "$(WO $R4)" = "PARTS_TRANSFER|PENDING|$TEAM|$D2|-" ] && [ "$(XF)" = "$X0" ] && [ "$(LASTLOG $R4)" = "APPOINTMENT_MOVED|PARTS_TRANSFER|A001" ] \
   && pass "ขั้นหัวหน้าภาคเบิกและโอน: เลื่อนได้ ขั้น/ทีม/สถานะนัด/ผลเช็คอะไหล่ไม่เปลี่ยน (ฐานข้อมูล)" || fail "เลื่อนขั้นโอน: $(WO $R4) $(XF) $(LASTLOG $R4)"
-POST $S "work-orders/$R4/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-RS\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-RS\"}]}" >/dev/null
+POST $S "work-orders/$R4/parts-transfer" "{\"results\":[{\"sparePartId\":${BOARD_OF[$R4]},\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-RS\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-RS\"}]}" >/dev/null
 X1=$(XF)
 [ "$X1" = "true|$L94|คลังขอนแก่น|KK-RS|TR-RS|false" ] || fail "เตรียมของกำลังโอน: $X1"
 POST $A work-orders/$R4/reschedule "$(MOVE $D3 ร้านขอเลื่อน)" >/dev/null
@@ -246,9 +250,9 @@ POST $A work-orders/$R4/reschedule "$(MOVE $D3 ของโอนช้า)" >/d
 [ "$(WO $R4)" = "PARTS_IN_TRANSIT|PENDING|$TEAM|$D3|-" ] && [ "$(XF)" = "$X1" ] && [ "$(ROW $A INBOX $R4 'r.status')" = "missing" ] \
   && pass "แอดมินเลื่อนวันนัดจากกล่องงาน → ใบอยู่ขั้นเดิม ของโอนไม่แตะ แล้วหลุดจากกล่องแอดมิน (ฐานข้อมูล)" || fail "เลื่อนใบเลยนัดระหว่างโอน: $(WO $R4) A=$(ROW $A INBOX $R4 'r.status')"
 R8=$(mk W66); spec $R8 "คลังภูเก็ต"; assign $R8 "$D1"
-POST $A "work-orders/$R8/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+POST $A "work-orders/$R8/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":${BOARD_OF[$R8]},\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
 R9=$(mk W67); spec $R9 "คลังขอนแก่น"; assign $R9 "$D1"
-POST $A "work-orders/$R9/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $A "work-orders/$R9/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":${BOARD_OF[$R9]},\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
 [ "$(WO $R8 | cut -d'|' -f1)|$(WO $R9 | cut -d'|' -f1)" = "PARTS_PICKUP|PARTS_TRANSFER" ] || fail "เตรียม R8/R9: $(WO $R8) $(WO $R9)"
 [ "$(ROW $A INBOX $R8 'r.status')|$(ROW $A INBOX $R9 'r.status')" = "missing|missing" ] || fail "เบิกส่งมอบ/เบิกและโอนที่ยังไม่เลยนัดอยู่กล่องแอดมิน"
 DB "update \"WorkOrder\" set \"scheduledAt\"='$PAST' where id in ($R8,$R9)" >/dev/null
@@ -258,7 +262,7 @@ DB "update \"WorkOrder\" set \"scheduledAt\"='$PAST' where id in ($R8,$R9)" >/de
 echo
 echo "═══ คอนเฟิร์มลูกค้า / ปล่อยงาน ชนกับแอดมินอีกคนเลื่อนวัน (ขั้นไม่เปลี่ยน) — 409 ไม่เขียนทับวันใหม่"
 R7=$(mk W65); spec $R7 "$L94"; assign $R7 "$D1"
-POST $A "work-orders/$R7/parts-check" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS7\"}]}" >/dev/null
+POST $A "work-orders/$R7/parts-check" "{\"results\":[{\"sparePartId\":${BOARD_OF[$R7]},\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS7\"}]}" >/dev/null
 [ "$(WO $R7)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D1|-" ] || fail "เตรียม R7: $(WO $R7)"
 MOVED_SQL() { echo "update \"WorkOrder\" set \"scheduledAt\"='$2', \"updatedAt\"=now() where id=$1; insert into \"WorkOrderLog\"(\"workOrderId\",\"userId\",action,status,note,\"createdAt\") select $1,id,'APPOINTMENT_MOVED',(select status from \"WorkOrder\" where id=$1),'ทดสอบ — เลื่อนพร้อมกัน',now() from \"User\" where \"employeeCode\"='A001'"; }
 HOLD "$(MOVED_SQL $R7 $D2)"
@@ -287,7 +291,7 @@ POST $A work-orders/$R5/reschedule "$(MOVE $D2 ร้านขอ)" >/dev/null
 [ "$(DB "select \"scheduledVisitAt\"::date from \"Outage\" where id=$OUT")" = "$D2" ] && [ "$(WO $R5)" = "PARTS_REQUESTED|PENDING|$TEAM|$D2|-" ] \
   && pass "Outage.scheduledVisitAt ตามวันใหม่ ใบอยู่ขั้นเดิม (ฐานข้อมูล)" || fail "เคส: $(DB "select \"scheduledVisitAt\" from \"Outage\" where id=$OUT") $(WO $R5)"
 # ใบผูกเคสคอนเฟิร์มผ่านทรานแซกชัน (ซิงก์เคส) ไม่ใช่ moveStage — ต้องกันเขียนทับวันใหม่แบบเดียวกัน
-POST $A "work-orders/$R5/parts-check" "{\"results\":[{\"sparePartId\":$BOARD_ID,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS5\"}]}" >/dev/null
+POST $A "work-orders/$R5/parts-check" "{\"results\":[{\"sparePartId\":${BOARD_OF[$R5]},\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-RS5\"}]}" >/dev/null
 [ "$(WO $R5)" = "AWAITING_CONFIRM|PENDING|$TEAM|$D2|-" ] || fail "เตรียม R5 คอนเฟิร์ม: $(WO $R5)"
 HOLD "$(MOVED_SQL $R5 $D3)"
 C=$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$R5/confirm-appointment" -H "$(H $A)" -H 'Content-Type: application/json' -d '{}')

@@ -23,8 +23,11 @@ const { setup } = require("./fixture");
   try {
     fx = await setup();
     const branch = fx.sql(`select code from "Branch" where code like 'C%' and "cancelledAt" is null and region is not null order by code limit 1`);
-    const board = fx.part("SP-BOARD");
-    const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }]);
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+    // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+    const wo = await fx.workOrder(branch, null);
+    const board = fx.fxPart(wo.id, "BOARD");
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: board, quantity: 1 }] });
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
     const aName = fx.sql(`select name from "User" where "employeeCode"='A001'`);
 

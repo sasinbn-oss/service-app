@@ -1,10 +1,12 @@
 // ทดสอบ: เคลมอะไหล่เก่าผ่านหน้าจอจริง บนใบทดสอบที่คัดลอกจากใบจริง (ใบจริงต้องไม่ถูกแตะ) · Admin Spare Part ดูใบงานได้อย่างเดียว
-//        · ปุ่มปิดงานกดไม่ได้จนกว่าจะครบ · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
+//        · ยังไม่ครบ ปุ่มล่างบอก "ยังขาด n อย่าง — พาไป" กดแล้วไม่ส่ง · ไฟล์เคลมส่งทันทีที่เลือก (ช่องบอก "กำลังส่ง x%" → "✓ แนบแล้ว")
+//        · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
+//        · Admin Spare Part เปิดใบแล้วเจอหน้าตรวจเคลม (หลักฐานรอบนี้ · ข้อมูลเครื่อง · แถบตัดสินล่างจอ — ละเอียดใน claim-review-web-test.js)
 //        · Admin Spare Part ตีกลับ → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ → อนุมัติ → ปิดงาน
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
-const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
+const { visitDay, fxPart } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง · fxPart = อะไหล่ตรงยี่ห้อเครื่อง
 const fs = require("fs");
 const path = require("path");
 const DIR = __dirname;
@@ -57,12 +59,15 @@ const login = async (code) =>
     sql(`insert into "Branch"(name,code,region,zone,ownership,"openedAt") values ('สาขาทดสอบเคลมจอ','${bc}','ใต้','กระบี่','FRANCHISE',now()-interval '12 months')`);
     const bid = sql(`select id from "Branch" where code='${bc}'`);
     sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'W1','WASHER','HB - Huebsch',now())`);
-    const sp = sql(`select id from "SparePart" where "partCode"='SP-BOARD'`);
     const wo = await call(A, "POST", "/work-orders", {
       branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
       machines: [{ code: "W1", model: "HL055L", symptom: "ประตูล็อกไม่ลง" }],
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่อง (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เครื่อง "HB - Huebsch" ได้ตัวแฝด -HB
+    // ป้ายในฟอร์มเคลมต่อท้ายด้วยรหัสอะไหล่ ข้อความที่หาบนจอจึงใช้รหัสตัวที่ส่งจริง (spCode) ไม่ใช่รหัสตายตัว
+    const sp = fxPart(id, "BOARD");
+    const spCode = sql(`select "partCode" from "SparePart" where id=${sp}`);
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: true, parts: [{ sparePartId: Number(sp), quantity: 1 }] });
     // เช็คอะไหล่ → นัด → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง)
     await call(A, "POST", `/work-orders/${id}/parts-sourcing`, {
@@ -144,28 +149,70 @@ const login = async (code) =>
     await page.waitForTimeout(500);
     await vis(page, "ช่างสมชาย", false).last().click();
     await page.waitForTimeout(500);
-    // อะไหล่ที่เบิกไว้ (SP-BOARD) ถูกเติมเป็นอะไหล่ที่ใช้ไปให้แล้ว — ช่างไม่ต้องเพิ่มเอง กล่องเคลมจึงขึ้นทันที
-    (await label(page, "ส่งอะไหล่เก่าเคลม SP-BOARD").count()) > 0 && (await vis(page, "ยังขาด:", false).count()) > 0
+    // อะไหล่ที่เบิกไว้ (spCode) ถูกเติมเป็นอะไหล่ที่ใช้ไปให้แล้ว — ช่างไม่ต้องเพิ่มเอง กล่องเคลมจึงขึ้นทันที
+    (await label(page, `ส่งอะไหล่เก่าเคลม ${spCode}`).count()) > 0 && (await vis(page, "ยังขาด:", false).count()) > 0
       ? pass("อะไหล่ที่เบิกไว้เติมให้เอง · สาขาในประกัน: เปิดใบเคลมไว้ให้ และบอกว่ายังขาดอะไร")
       : fail("ไม่มีส่วนเคลมหรือไม่ได้เปิดไว้ให้");
     const saveBtn = vis(page, "ยืนยันปิดงาน").last();
-    const dim = async () => saveBtn.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
-    (await dim()) !== "1" ? pass("หลักฐานไม่ครบ ปุ่มยืนยันปิดงานกดไม่ได้") : fail("ปุ่มกดได้ทั้งที่ยังไม่ครบ");
+    // ปุ่มล่างไม่จางแล้ว (เคลมก้อน 1) — ยังไม่ครบบอกว่าขาดกี่อย่าง กดแล้วพาไปช่องแรกที่ขาด ไม่ส่งอะไรไปเซิร์ฟเวอร์
+    const goBtn = page.getByText(/^ยังขาด \d+ อย่าง — พาไป$/).locator("visible=true").last();
+    const closePosts = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /\/close$/.test(r.url())) closePosts.push(r.url()); });
+    if (await goBtn.count()) {
+      const goText = await goBtn.innerText();
+      await goBtn.click();
+      await page.waitForTimeout(1200);
+      closePosts.length === 0 && (await saveBtn.count()) === 0 && sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS"
+        ? pass(`หลักฐานไม่ครบ: ปุ่มล่าง "${goText}" กดแล้วไม่ส่งคำขอปิดงาน (ฐานข้อมูลยังรอช่าง)`)
+        : fail(`กดปุ่มพาไป: คำขอปิด ${closePosts.length} · ปุ่มยืนยัน ${await saveBtn.count()}`);
+    } else fail("หลักฐานไม่ครบแต่ปุ่มล่างไม่บอกว่ายังขาด");
 
-    await label(page, "รหัสอะไหล่ตัวที่เสีย SP-BOARD").fill("SP-BOARD");
-    await label(page, "อาการ/สาเหตุ SP-BOARD").fill("ประตูล็อกไม่ลง ขึ้น Error dL");
-    await label(page, "สิ่งที่เข้าเช็ค SP-BOARD").fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
-    await attach(page, "แนบรูปอะไหล่เก่า SP-BOARD", PHOTO);
-    await attach(page, "แนบรูปอาการเสีย SP-BOARD", PHOTO);
-    await attach(page, "แนบวิดีโอ Error code SP-BOARD", CLIP);
-    await attach(page, "แนบวิดีโอการตรวจเช็ค SP-BOARD", CLIP);
+    await label(page, `รหัสอะไหล่ตัวที่เสีย ${spCode}`).fill(spCode);
+    await label(page, `อาการ/สาเหตุ ${spCode}`).fill("ประตูล็อกไม่ลง ขึ้น Error dL");
+    await label(page, `สิ่งที่เข้าเช็ค ${spCode}`).fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
+    /**
+     * ไฟล์เคลมส่งทันทีที่เลือก (เคลมก้อน 1) — บีบเน็ตขาขึ้นให้ช้าพอจะเห็นช่องบอก "กำลังส่ง x%"
+     * ต้องไม่มีหน้าโหลดเต็มจอ (ช่างกรอกช่องอื่นต่อได้ระหว่างรอ) แล้วจบที่ "✓ แนบแล้ว"
+     */
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Network.enable");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 20, downloadThroughput: -1, uploadThroughput: 60 * 1024 });
+    const claimFilesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`));
+    // รอ/ตรวจบนจอเฉพาะในช่องรูปอะไหล่เก่า — ขั้นป้ายรุ่นของฟอร์มขึ้น "✓ แนบแล้ว" ค้างตั้งแต่เปิด (แนบป้ายไว้ตอนเตรียม)
+    // ถ้าหาทั้งหน้า การรอจบทันทีแล้วนับในฐานข้อมูลแข่งกับไฟล์ที่ยังส่งไม่จบ
+    const partSlot = page.locator(`[aria-label="วางรูปอะไหล่เก่า ${spCode}"]`).locator("visible=true").last();
+    const partFiles = () =>
+      Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role='CLAIM_PART' and "sparePartId"=${sp}`));
+    const [partChooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 15000 }), label(page, `แนบรูปอะไหล่เก่า ${spCode}`).click()]);
+    await partChooser.setFiles(PHOTO);
+    const sending = partSlot.getByText(/^กำลังส่ง \d+%$/);
+    await sending.first().waitFor({ timeout: 15000 }).catch(() => {});
+    if (await sending.count()) {
+      const slotText = await sending.first().innerText();
+      await page.screenshot({ path: path.join(DIR, "claim-1b-progress.png") });
+      (await page.getByRole("progressbar").locator("visible=true").count()) === 0
+        ? pass(`เลือกรูปอะไหล่เก่าแล้วส่งทันที: ช่องขึ้น "${slotText}" ไม่มีหน้าโหลดเต็มจอ`)
+        : fail("ส่งไฟล์เคลมแล้วยังขึ้นหน้าโหลดเต็มจอ");
+    } else fail("ไม่เห็น \"กำลังส่ง x%\" ที่ช่องรูปอะไหล่เก่า");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    const partDone = partSlot.getByText("✓ แนบแล้ว", { exact: true });
+    await partDone.waitFor({ timeout: 60000 }).catch(() => {});
+    // ช่องขึ้น ✓ หลังเซิร์ฟเวอร์ตอบแถวที่สร้างแล้ว — รอฐานข้อมูลอีกชั้นก่อนนับ (ไม่อ่านแข่งกับการบันทึก)
+    for (let t = 0; t < 40 && partFiles() !== 1; t++) await page.waitForTimeout(250);
+    (await partDone.count()) > 0 && partFiles() === 1
+      ? pass("ส่งเสร็จช่องรูปอะไหล่เก่าขึ้น \"✓ แนบแล้ว\" · รูปอยู่ในฐานข้อมูลแล้วก่อนกดปิดงาน")
+      : fail(`หลังเลือกรูปอะไหล่เก่า: ช่อง ✓=${await partDone.count()} · ไฟล์เคลมในฐานข้อมูล ${sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`)} (เดิม ${claimFilesBefore})`);
+    await attach(page, `แนบรูปอาการเสีย ${spCode}`, PHOTO);
+    await attach(page, `แนบวิดีโอ Error code ${spCode}`, CLIP);
+    await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
     const items = await call(A, "GET", `/work-orders/${id}`).then((d) => d.claimTroubleshooting);
-    for (const t of items) await label(page, `${t} SP-BOARD`).click();
+    for (const t of items) await label(page, `${t} ${spCode}`).click();
     await page.waitForTimeout(500);
 
     // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
-    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ยังขาด: ข้อมูลป้ายรุ่น", false).count()) > 0
-      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง บอกว่ายังขาดข้อมูลป้ายรุ่น") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
+    // กล่อง "ยังขาด" กล่องเดียวท้ายฟอร์ม บอกเป็น "ข้อมูลเครื่อง: …" (เคลมก้อน 1 — ไม่มีกล่องยังขาดแยกใต้กล่องเครื่องแล้ว)
+    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ข้อมูลเครื่อง: ข้อมูลป้ายรุ่น", false).count()) > 0
+      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง กล่องยังขาดบอก \"ข้อมูลเครื่อง: ข้อมูลป้ายรุ่น\"") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
     await attach(page, "ถ่ายรูปป้ายรุ่น", PLATE_PHOTO);
     // อ่านทั้งป้ายในเบราว์เซอร์ (หาบรรทัด → อ่านซ้ำทีละบรรทัด) — เครื่องทดสอบช้ากว่ามือถือจริง ให้เวลานาน
     await page.waitForTimeout(1500);
@@ -203,14 +250,14 @@ const login = async (code) =>
     await page.screenshot({ path: path.join(DIR, "claim-1-close.png") });
 
     /**
-     * หลอดสถานะตอนส่งไฟล์ + กดใหม่ไม่ส่งซ้ำ (WO-00133 — ไฟล์ซ้ำจนเต็มเพดานแล้วปิดงานไม่ได้)
-     * บีบเน็ตขาขึ้นให้ช้าพอจะเห็นหลอด · คำสั่งปิดรอบแรกให้ล้มหลังไฟล์ขึ้นครบ แล้วกดใหม่
-     * ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
+     * กดใหม่ไม่ส่งซ้ำ (WO-00133 — ไฟล์ซ้ำจนเต็มเพดานแล้วปิดงานไม่ได้)
+     * ไฟล์เคลมขึ้นไปแล้วตั้งแต่ตอนเลือก (นับรวมใน filesBefore) — ที่ยังส่งตอนกดปิดคือรูปป้ายรุ่นที่ถ่ายในกล่องข้อมูลเครื่อง
+     * คำสั่งปิดรอบแรกให้ล้มหลังไฟล์ขึ้นครบ แล้วกดใหม่ ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
      */
     const filesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send("Network.enable");
-    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 20, downloadThroughput: -1, uploadThroughput: 60 * 1024 });
+    Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`)) === 4
+      ? pass("ก่อนกดปิดงาน หลักฐานเคลมทั้ง 4 ไฟล์ขึ้นไปแล้ว (ส่งตั้งแต่ตอนเลือก · ฐานข้อมูล)")
+      : fail(`ก่อนกดปิดงาน หลักฐานเคลมในฐานข้อมูล ${sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`)} ไฟล์`);
     let failOnce = true;
     await page.route(`**/api/work-orders/${id}/close`, (route) => {
       if (!failOnce) return route.continue();
@@ -218,18 +265,6 @@ const login = async (code) =>
       return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "ทดสอบ: ปิดไม่ผ่านรอบแรก" }) });
     });
     await saveBtn.click();
-    const bar = page.getByRole("progressbar").locator("visible=true");
-    await bar.first().waitFor({ timeout: 15000 }).catch(() => {});
-    if (await bar.count()) {
-      await page.waitForTimeout(800);
-      await page.screenshot({ path: path.join(DIR, "claim-1b-progress.png") });
-      const now = Number(await bar.first().getAttribute("aria-valuenow"));
-      const text = await bar.first().innerText();
-      /ไฟล์ \d+\/\d+/.test(text) && now >= 0 && now <= 100
-        ? pass(`ส่งไฟล์ตอนปิดงานมีหลอดสถานะ (${text.replace(/\s+/g, " ")})`)
-        : fail(`หลอดสถานะ: ${text} · ${now}`);
-    } else fail("ไม่เห็นหลอดสถานะตอนส่งไฟล์");
-    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     await vis(page, "ทดสอบ: ปิดไม่ผ่านรอบแรก").waitFor({ timeout: 120000 });
     const filesSent = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
     filesSent > filesBefore ? pass(`รอบแรกไฟล์ขึ้น ${filesSent - filesBefore} ไฟล์ แล้วคำสั่งปิดล้ม`) : fail("รอบแรกไม่มีไฟล์ขึ้น");
@@ -240,7 +275,7 @@ const login = async (code) =>
       ? pass("กดปิดใหม่ไม่ส่งไฟล์ซ้ำ (จำนวนไฟล์ในฐานข้อมูลเท่าเดิม)")
       : fail(`ไฟล์ซ้ำ: รอบแรก ${filesSent} · หลังกดใหม่ ${filesAfter}`);
 
-    sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === "CLAIM_REVIEW|SP-BOARD"
+    sql(`select w.status||'|'||c."brokenPartCode" from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.id=${id}`) === `CLAIM_REVIEW|${spCode}`
       ? pass("ปิดงานแล้วใบงานไปรอตรวจเคลม พร้อมรหัสตัวที่เสียที่กรอก (ฐานข้อมูล)")
       : fail(`สถานะ ${sql(`select status from "WorkOrder" where id=${id}`)}`);
     const np = sql(`select (nameplate->'fields')::text||'|'||("fieldCheck"->>'errorCode')||'|'||("fieldCheck"->'checked')::text||'|'||("fieldCheck" ? 'install')::text from "PartClaim" where "workOrderId"=${id}`);
@@ -267,15 +302,25 @@ const login = async (code) =>
     // ── Admin Spare Part ตีกลับ ──
     page = await open(`ZCWP${suf}`);
     // ดูได้อย่างเดียว — ปุ่มแก้ใบงานทุกอย่างหายไป เหลือแค่ปุ่มตรวจเคลม
+    // หน้าตรวจเคลม (ก้อน 2) พับเนื้อใบงานไว้ด้วย display:none — นับปุ่มตอนพับอยู่ได้ 0 เสมอแม้สิทธิ์พัง
+    // จึงกาง "ดูรายละเอียดใบงาน ▸" ก่อน (ยืนยันว่ากางจริงจากการ์ดขั้นตอนงาน) แล้วค่อยนับ แล้วพับกลับ
+    await vis(page, "ดูรายละเอียดใบงาน ▸").first().click().catch(() => {});
+    await page.waitForTimeout(800);
+    const expanded = (await label(page, "ขั้นตอนงาน").count()) > 0;
     const gone = [];
     for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ลบใบงานถาวร", "แก้ไขอาการ/สถานะ", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
-    gone.length === 0 ? pass("Admin Spare Part: ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน") : fail(`Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}`);
+    expanded && gone.length === 0
+      ? pass("Admin Spare Part: กางรายละเอียดใบงานแล้วก็ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน")
+      : fail(expanded ? `Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}` : "กางรายละเอียดใบงานไม่ได้ — นับปุ่มแก้ใบงานไม่ได้");
+    await vis(page, "ซ่อนรายละเอียดใบงาน ▾").first().click().catch(() => {});
+    await page.waitForTimeout(500);
+    // หน้าตรวจเคลม (เคลมก้อน 2): หลักฐานของแถวตามที่เซิร์ฟเวอร์ตัดสิน · ข้อเช็คตาม Error อยู่ในชิ้น (✓ ทำ / ✗ ไม่ได้ทำ)
     await vis(page, "อนุมัติเคลม · ปิดงาน").first().scrollIntoViewIfNeeded();
-    (await vis(page, "หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
-    (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตามคู่มือ Error in Field").count()) > 0
-      ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตามคู่มือในการ์ดเคลม") : fail("การ์ดเคลมไม่มีข้อมูลเครื่อง");
+    (await vis(page, "หลักฐานรอบนี้:").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานรอบนี้ของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
+    (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตาม Error E dL / E dL1 / E dL2 (ไม่บังคับ · ไม่พิมพ์ลงใบเคลม)").count()) > 0
+      ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตาม Error ในหน้าตรวจเคลม") : fail("หน้าตรวจเคลมไม่มีข้อมูลเครื่อง/ข้อเช็คตาม Error");
     (await label(page, "เปิดรูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว").count()) > 0
-      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว") : fail("การ์ดเคลมไม่มีรูปป้ายเต็ม");
+      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว (ใบที่ส่งจากฟอร์มติ๊กครั้งเดียว)") : fail("หน้าตรวจเคลมไม่มีรูปป้ายเต็ม");
     await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });
@@ -304,13 +349,13 @@ const login = async (code) =>
     const summary = page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last();
     (await summary.inputValue()) === "เปลี่ยนบอร์ด ทดสอบแล้วปกติ" &&
       (await vis(page, "ช่างสมชาย", false).count()) > 0 &&
-      (await label(page, "อาการ/สาเหตุ SP-BOARD").inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
-      (await label(page, "รหัสอะไหล่ตัวที่เสีย SP-BOARD").inputValue()) === "SP-BOARD" &&
+      (await label(page, `อาการ/สาเหตุ ${spCode}`).inputValue()) === "ประตูล็อกไม่ลง ขึ้น Error dL" &&
+      (await label(page, `รหัสอะไหล่ตัวที่เสีย ${spCode}`).inputValue()) === spCode &&
       (await vis(page, "รูปอะไหล่เก่า — แนบไว้แล้ว").count()) > 0
       ? pass("ปิดใหม่: รหัสตัวที่เสีย สรุปงาน ผู้เข้าปฏิบัติงาน อะไหล่ ข้อความเคลม และหลักฐานเดิมมาให้ ไม่ต้องกรอกซ้ำ")
       : fail(`ปิดใหม่ต้องกรอกใหม่: สรุป="${await summary.inputValue()}"`);
     await summary.fill("ถ่ายวิดีโอใหม่ เห็นมิเตอร์");
-    await attach(page, "แนบวิดีโอการตรวจเช็ค SP-BOARD", CLIP);
+    await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
     await vis(page, "ยืนยันปิดงาน").last().click();
     await page.waitForTimeout(5000);
     sql(`select status from "WorkOrder" where id=${id}`) === "CLAIM_REVIEW" ? pass("ปิดใหม่แล้วไปรอตรวจอีกรอบ") : fail("ปิดใหม่ไม่สำเร็จ");

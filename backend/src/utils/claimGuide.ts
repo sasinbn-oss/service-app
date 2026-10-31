@@ -134,12 +134,61 @@ export const ALLIANCE_ERRORS: { code: string; name: string; checks: string[] }[]
   { code: "อื่น ๆ", name: "ไม่อยู่ในคู่มือ / ไม่มี Error", checks: [] },
 ];
 
+/** รหัสในรายการที่หมายถึง "ไม่มี Error ขึ้น" — เก็บรหัสเดิมไว้ (ใบเคลมเก่าใช้ค่านี้) เปลี่ยนแค่คำที่แสดง */
+export const NO_ERROR_CODE = "อื่น ๆ";
+
+const THAI = /[\u0E00-\u0E7F]/;
+
+/**
+ * ชื่อ Error แยกเป็นส่วนไทย/ส่วนอังกฤษ — ชื่อในคู่มือเขียนปนกัน ("Door Lock — ประตูล็อก/ปลดล็อก" · "Eco fan" · "ประตูปิดไม่ติด")
+ * แยกจากรูปแบบ "อังกฤษ — ไทย" เท่านั้น ไม่แปลเอง: ชื่อที่ไม่มีส่วนไทยก็แสดงตามคู่มือ ดีกว่าคำแปลที่ช่างไม่เคยเห็น
+ */
+export function errorNameParts(name: string): { th: string | null; en: string | null } {
+  const i = name.indexOf(" — ");
+  if (i > 0) {
+    const en = name.slice(0, i).trim(), th = name.slice(i + 3).trim();
+    if (THAI.test(th) && !THAI.test(en)) return { th, en };
+  }
+  return THAI.test(name) ? { th: name, en: null } : { th: null, en: name };
+}
+
+/**
+ * ชื่อที่แสดงในรายการเลือก Error — ขึ้นต้นด้วยภาษาไทย อังกฤษอยู่ในวงเล็บ ("{code} — {ไทย} ({อังกฤษ})")
+ * ช่างกับ Admin Spare Part อ่านไทยก่อน แต่ต้องเห็นคำอังกฤษให้ตรงกับคู่มือ Error in Field ที่ถือไปหน้างาน
+ */
+export function errorLabel(e: { code: string; name: string }): string {
+  const { th, en } = errorNameParts(e.name);
+  return th ? `${e.code} — ${th}${en ? ` (${en})` : ""}` : `${e.code} — ${en}`;
+}
+
+/**
+ * บรรทัด "Error ที่เครื่องขึ้น" ของใบเคลม/หน้าตรวจ จาก fieldCheck ที่เก็บตอนปิดงาน — "{code} — {ชื่อไทย}" หรือ "ไม่มี Error ขึ้น"
+ * null = ใบนี้ไม่มีข้อมูล Error (เครื่องที่ไม่ใช่ Alliance · ใบเก่าก่อนมีช่องนี้) → ไม่พิมพ์บรรทัดนี้ ไม่ใช่พิมพ์ว่า "ไม่มี"
+ * ชื่ออ่านจากที่เก็บไว้ในแถว (ชื่อ ณ วันที่ส่ง) ไม่ใช่รายการปัจจุบัน — แก้คู่มือทีหลังต้องไม่เปลี่ยนใบที่ส่งไปแล้ว
+ */
+export function machineErrorText(fieldCheck: unknown): string | null {
+  const fc = (fieldCheck ?? null) as { errorCode?: unknown; errorName?: unknown } | null;
+  if (typeof fc?.errorCode !== "string" || !fc.errorCode) return null;
+  if (fc.errorCode === NO_ERROR_CODE) return "ไม่มี Error ขึ้น";
+  const name = typeof fc.errorName === "string" ? fc.errorName : "";
+  const { th, en } = errorNameParts(name);
+  const shown = th ?? en;
+  return shown ? `${fc.errorCode} — ${shown}` : fc.errorCode;
+}
+
+/** รายการ Error ที่ส่งให้แอป — label (ไทยก่อน) กับ thai (ส่วนไทยของชื่อ หรือชื่อเต็มเมื่อไม่มีส่วนไทย) คิดที่นี่ที่เดียว */
+const ALLIANCE_ERROR_LIST = ALLIANCE_ERRORS.map((e) => ({
+  ...e,
+  label: errorLabel(e),
+  thai: errorNameParts(e.name).th ?? e.name,
+}));
+
 export function claimGuideFor(make: string | null | undefined) {
   const plate = plateTemplateFor(make);
   return {
     plate,
     // รายการเช็คมีเฉพาะยี่ห้อ Alliance — OASIS/อื่น ๆ ยังไม่มีคู่มือ
     // เคยมีเช็คลิสต์การติดตั้งฐานเครื่อง 5 ข้อ — เจ้าของงานให้เอาออก (ต.ค. 69) ใบเคลมเก่ายังเก็บคำตอบไว้ใน fieldCheck.install
-    errors: plate.family === "ALLIANCE" ? ALLIANCE_ERRORS : [],
+    errors: plate.family === "ALLIANCE" ? ALLIANCE_ERROR_LIST : [],
   };
 }

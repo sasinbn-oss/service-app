@@ -29,16 +29,18 @@ const { setup } = require("./fixture");
   let outId = null;
   try {
     fx = await setup();
-    const board = fx.part("SP-BOARD");
     const a = await fx.workOrder("C0006", null);
     const b = await fx.workOrder("C0006", null);
     const tech = fx.sql(`select id from "User" where "employeeCode"='T001'`);
     const admin = fx.sql(`select id from "User" where "employeeCode"='A001'`);
     // ใบ a: รอบแรกตีกลับ (2 ชม.ก่อน) → รอบสองอนุมัติ (1 ชม.ก่อน) · ใบ b: รอตรวจ — ส่งวันนี้ อยู่ในค่าตั้งต้น "เดือนนี้"
-    const ins = (wo, broken, status, ago, reason) =>
-      fx.sql(`insert into "PartClaim"("workOrderId","sparePartId","partCode","partName","brokenPartCode",quantity,"branchCode","branchName",brand,"machineCode",symptom,"checkNote",status,"rejectReason","createdById","createdAt","reviewedById","reviewedAt")
+    // อะไหล่ของแต่ละแถวตรงยี่ห้อเครื่องของใบนั้น (fxPart) — ใบนอกภาคเป็นเครื่องอีกตัวอีกสาขา ยี่ห้ออาจไม่ตรงกับ W77
+    const ins = (wo, broken, status, ago, reason) => {
+      const board = fx.fxPart(wo, "BOARD");
+      return fx.sql(`insert into "PartClaim"("workOrderId","sparePartId","partCode","partName","brokenPartCode",quantity,"branchCode","branchName",brand,"machineCode",symptom,"checkNote",status,"rejectReason","createdById","createdAt","reviewedById","reviewedAt")
         select ${wo},${board},"partCode",name,'${broken}',1,'C0006',(select name from "Branch" where code='C0006'),'ยี่ห้อทดสอบหน้าจอ','W77','อาการ','เช็ค','${status}',${reason ? `'${reason}'` : "null"},${tech},now()-interval '${ago} minutes',
           ${status === "PENDING" ? "null" : admin},${status === "PENDING" ? "null" : `now()-interval '${ago - 10} minutes'`} from "SparePart" where id=${board}`);
+    };
     ins(a.id, "WEB-OLD-1", "REJECTED", 120, "รูปป้ายรุ่นไม่ชัด");
     ins(a.id, "WEB-OLD-2", "APPROVED", 60);
     ins(b.id, "WEB-OLD-3", "PENDING", 30);

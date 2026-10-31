@@ -19,8 +19,15 @@ const { setup } = require("./fixture");
   try {
     fx = await setup();
     const branch = fx.sql(`select code from "Branch" where code like 'C%' and "cancelledAt" is null and region is not null order by code limit 1`);
-    const board = fx.part("SP-BOARD"), belt = fx.part("SP-BELT");
-    const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }]);
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+    // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+    const wo = await fx.workOrder(branch, null);
+    const board = fx.fxPart(wo.id, "BOARD"), belt = fx.fxPart(wo.id, "BELT");
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, {
+      needsParts: true, parts: [{ sparePartId: board, quantity: 1 }, { sparePartId: belt, quantity: 2 }],
+    });
+    // ป้ายปุ่มในฟอร์มต่อท้ายด้วยรหัสอะไหล่ — ใช้รหัสตัวที่ส่งจริง ไม่ใช่รหัสตายตัว
+    const beltCode = fx.sql(`select "partCode" from "SparePart" where id=${belt}`);
     const db = (f) => fx.sql(`select ${f} from "WorkOrder" where id=${wo.id}`);
     await fx.call(fx.A, "POST", `/work-orders/${wo.id}/parts-sourcing`, {
       expectedAt: "2026-11-20",
@@ -73,9 +80,9 @@ const { setup } = require("./fixture");
     await vis("อะไหล่มาแล้ว — อัปเดตสถานะ").first().click();
     await page.waitForTimeout(1200);
     // ผลรอบก่อนเติมไว้ (บอร์ดมี · คลัง 94) — เปลี่ยนเฉพาะสายพานเป็นมี แล้วเลือกคลัง
-    await label("มีของ SP-BELT").click();
+    await label(`มีของ ${beltCode}`).click();
     await page.waitForTimeout(300);
-    await label("คลังที่มี SP-BELT").click();
+    await label(`คลังที่มี ${beltCode}`).click();
     await page.waitForTimeout(400);
     await vis("คลังลาดพร้าว 94").last().click();
     await page.waitForTimeout(300);

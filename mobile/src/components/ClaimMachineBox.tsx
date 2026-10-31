@@ -10,10 +10,13 @@ import { Image, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Dropdown from "./Dropdown";
-import { ClaimGuide, PlateValue, plateFields } from "../utils/nameplate";
+import { ClaimGuide, PlateValue, isBrandOnly, plateFields } from "../utils/nameplate";
 import { readPlatePhoto } from "../utils/ocr";
 import { filesToAttachments, pickImageAttachment, type PickedAttachment } from "../utils/attachments";
 import FileDropZone from "./FileDropZone";
+import ClaimCrop, { LookalikeText } from "./claims/ClaimCrop";
+import CheckGroups from "./claims/CheckGroups";
+import { errorCheckGroup, errorLabelOf, hasLookalike, isLegacyPlate, plateSourceText, type PartClaim } from "../utils/claimEvidence";
 import { colors, radius, spacing } from "../theme";
 
 export interface ClaimCheckDraft {
@@ -65,6 +68,7 @@ export default function ClaimMachineBox({
   const err = guide.errors.find((e) => e.code === check.errorCode);
   const scanned = fields.some((f) => plate.values[f.key]?.source === "SCAN" && plate.values[f.key]?.value);
   const missed = plate.photo ? fields.filter((f) => !plate.values[f.key]?.value) : [];
+  const brandOnly = isBrandOnly(registryModel);
 
   async function shoot(pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>) {
     setReadErr(null);
@@ -151,8 +155,17 @@ export default function ClaimMachineBox({
                 )
               ) : null}
             </View>
+            {v?.crop ? <ClaimCrop uri={v.crop} label={f.label} /> : null}
+            {/*
+              รุ่นเต็มยาว 18 ตัว (HL055LWHPRXG6W0000) ล้นช่องกรอกบนมือถือ เห็นแค่ครึ่งเดียว ตัวท้ายที่อ่านพลาดบ่อยที่สุดจึงไม่มีใครเห็น
+              เขียนค่าตัวใหญ่ ตัวเว้นห่าง ตัดบรรทัดได้ ไว้เหนือช่อง ให้เทียบกับภาพตัดด้านบนได้ทีละตัว
+            */}
+            {f.model && v?.value ? (
+              <Text style={styles.modelValue} accessibilityLabel={`รุ่นที่จะส่ง ${v.value}`}>
+                {v.value}
+              </Text>
+            ) : null}
             <View style={styles.fieldRow}>
-              {v?.crop ? <Image source={{ uri: v.crop }} style={styles.crop} resizeMode="contain" /> : null}
               <TextInput
                 style={[styles.input, v?.needsCheck && v.source === "SCAN" && styles.inputDoubt]}
                 value={v?.value ?? ""}
@@ -172,12 +185,16 @@ export default function ClaimMachineBox({
             {v?.needsCheck && v.source === "SCAN" && v.value ? (
               <Text style={styles.doubt}>
                 {/* รุ่นเต็มที่ขึ้นต้นตรงทะเบียนแล้ว — ที่ไม่มั่นใจคือส่วนท้าย ไม่ใช่ "ไม่ตรงทะเบียน" */}
-                {f.model && registryModel
-                  ? v.value.startsWith(registryModel.toUpperCase())
-                    ? "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — "
-                    : `ไม่ตรงทะเบียน (${registryModel}) — `
-                  : ""}
-                ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)
+                {/* ทะเบียนมีแค่ยี่ห้อ — ไม่มีรุ่นให้เทียบ ไม่ใช่ "ไม่ตรง" (ดู isBrandOnly) */}
+                {f.model && brandOnly
+                  ? "ทะเบียนยังไม่มีรุ่นเต็ม — ดูกับรูปทีละตัว (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)"
+                  : `${
+                      f.model && registryModel
+                        ? v.value.startsWith(registryModel.toUpperCase())
+                          ? "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — "
+                          : `ไม่ตรงทะเบียน (${registryModel}) — `
+                        : ""
+                    }ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)`}
               </Text>
             ) : null}
           </View>
@@ -290,7 +307,7 @@ const styles = StyleSheet.create({
   tagScan: { color: colors.successInk, backgroundColor: colors.successSoft },
   tagHand: { color: colors.roleAdmin, backgroundColor: colors.roleAdminSoft },
   fieldRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  crop: { width: 120, height: 26, borderRadius: 4, backgroundColor: colors.tile },
+  modelValue: { fontSize: 20, lineHeight: 30, fontWeight: "800", letterSpacing: 2, fontFamily: "monospace", color: colors.text },
   input: {
     flex: 1,
     minWidth: 0,
@@ -328,32 +345,40 @@ const styles = StyleSheet.create({
   sumRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   sumLabel: { width: 110, fontSize: 12.5, color: colors.textMuted },
   sumValue: { fontSize: 13.5, fontWeight: "800", color: colors.text, fontFamily: "monospace" },
+  sumModel: { fontSize: 15, lineHeight: 24, letterSpacing: 1 },
   sumPhoto: { width: "100%", height: 200, borderRadius: radius.sm, backgroundColor: colors.card },
   link: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
-  sumCrop: { width: 140, height: 28, borderRadius: 4, backgroundColor: colors.card },
+  sumCrop: { backgroundColor: colors.card },
   ans: { fontSize: 12.5, fontWeight: "800", color: colors.textMuted },
   // "มี" เด่นขึ้นให้ผู้ตรวจไม่พลาด — แต่ไม่ใช้สีแดง เพราะระบบไม่ได้ตัดสินว่าไม่รับประกัน
   ansYes: { color: colors.warningInk },
 });
 
 /**
- * สรุปข้อมูลเครื่องในการ์ดเคลม (Admin Spare Part ตรวจ / ทุกคนที่เปิดดู) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
+ * สรุปข้อมูลเครื่องในการ์ดเคลม (ทุกคนที่เปิดดูใบงาน · ผู้ตรวจใช้หน้าตรวจเคลมแทน) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
+ * ป้ายที่มาบอกเท่าที่ช่างทำจริง (อ่านจากรูป/ยืนยัน/แก้กี่ตัว) และตัวที่หน้าตาคล้ายกันในรุ่นพื้นเหลือง ให้ดูกับภาพตัดเป็นพิเศษ
+ * เช็คตาม Error ขึ้นข้อที่ทำ ✓ · คนตัดสินเคลมเห็นข้อที่ไม่ได้ทำ ✗ ด้วย (ระบบไม่ติ๊กให้ช่าง จึงต้องเห็นว่าข้อไหนข้ามไป)
  * คำตอบเรื่องติดตั้งแสดงตามที่ช่างตอบพร้อมหมายเหตุจากคู่มือ ไม่ตัดสินผลเอง (ทีมที่คุยกับประกันตัดสิน)
  */
 export function ClaimMachineSummary({
   nameplate,
   fieldCheck,
   photo,
+  guide,
+  showMissed = true,
 }: {
-  nameplate?: {
-    verified?: boolean;
-    fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[];
-  } | null;
+  nameplate?: PartClaim["nameplate"];
   /** รูปป้ายเต็มที่ระบบอ่านค่ามา — กดดูขนาดเต็ม */
   photo?: { uri: string | null; open: () => void } | null;
-  fieldCheck?: { errorCode: string; errorName: string; checked: string[]; install?: { key: string; label: string; note: string; answer: boolean }[] } | null;
+  fieldCheck?: PartClaim["fieldCheck"];
+  /** รายการ Error ปัจจุบัน — ใบเก่าที่ไม่ได้เก็บข้อที่ให้ช่างเห็นไว้ ใช้รายการนี้นับข้อที่ไม่ได้ทำ */
+  guide?: ClaimGuide | null;
+  /** ขึ้นข้อที่ไม่ได้ทำ ✗ ด้วยไหม — เฉพาะคนตัดสินเคลม (ดู CheckGroups) */
+  showMissed?: boolean;
 }) {
   if (!nameplate?.fields?.length && !fieldCheck) return null;
+  const legacy = isLegacyPlate(nameplate);
+  const eif = errorCheckGroup(fieldCheck, guide);
   return (
     <View style={styles.sum} accessibilityLabel="ข้อมูลเครื่องในใบเคลม">
       {nameplate?.fields?.length ? (
@@ -368,33 +393,32 @@ export function ClaimMachineSummary({
               )}
             </TouchableOpacity>
           ) : null}
-          {nameplate.fields.some((f) => f.source === "SCAN") ? (
+          {/* ใบที่ส่งก่อนมีปุ่มยืนยันทีละช่อง — ช่างติ๊กครั้งเดียวทั้งชุด บอกตามนั้น */}
+          {legacy && nameplate.fields.some((f) => f.source === "SCAN") ? (
             <Text style={styles.hint}>{nameplate.verified ? "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว" : "ค่าที่ระบบอ่าน — ยังไม่ได้ตรวจกับรูป"}</Text>
           ) : null}
           {nameplate.fields.map((f) => (
             <View key={f.key} style={styles.sumRow}>
               <Text style={styles.sumLabel}>{f.label}</Text>
-              <Text style={styles.sumValue}>{f.value}</Text>
-              <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>
-                {f.source === "SCAN" ? "อ่านจากรูป" : "พิมพ์เอง"}
-              </Text>
-              {f.crop ? <Image source={{ uri: f.crop }} style={styles.sumCrop} resizeMode="contain" /> : null}
+              {f.key === "model" ? (
+                <LookalikeText value={f.value} label={f.label} style={styles.sumModel} />
+              ) : (
+                <Text style={styles.sumValue}>{f.value}</Text>
+              )}
+              <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>{plateSourceText(f, legacy)}</Text>
+              {f.key === "model" && hasLookalike(f.value) ? <Text style={styles.hint}>พื้นเหลือง = ตัวที่หน้าตาคล้ายกัน</Text> : null}
+              {f.crop ? <ClaimCrop uri={f.crop} label={f.label} style={styles.sumCrop} /> : null}
             </View>
           ))}
         </>
       ) : null}
       {fieldCheck ? (
         <>
-          <Text style={styles.sumHead}>เช็คตามคู่มือ Error in Field</Text>
-          <Text style={styles.checkText}>
-            Error: {fieldCheck.errorCode} · {fieldCheck.errorName}
-          </Text>
-          {fieldCheck.checked.map((c) => (
-            <View key={c} style={styles.checkRow}>
-              <Ionicons name="checkmark-circle" size={15} color={colors.success} />
-              <Text style={styles.checkText}>{c}</Text>
-            </View>
-          ))}
+          <View style={styles.sumRow}>
+            <Text style={styles.sumLabel}>Error ที่เครื่องขึ้น</Text>
+            <Text style={[styles.checkText, { fontWeight: "800" }]}>{errorLabelOf(fieldCheck)}</Text>
+          </View>
+          {eif ? <CheckGroups groups={[eif]} showMissed={showMissed} /> : null}
           {/* ใบเคลมก่อนเอาเช็คลิสต์ออกยังมีคำตอบ — แสดงไว้ให้ Admin Spare Part เห็นเหมือนเดิม */}
           {fieldCheck.install?.length ? <Text style={[styles.hint, { marginTop: 4 }]}>การติดตั้งฐานเครื่อง (ช่างตอบตามที่เห็น)</Text> : null}
           {(fieldCheck.install ?? []).map((c) => (

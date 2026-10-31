@@ -40,7 +40,14 @@ const dayLabel = (ymd) => {
   let fx = null;
   try {
     fx = await setup();
-    const board = fx.part("SP-BOARD");
+    // เปิดใบแล้วหัวหน้าภาคระบุอะไหล่ 1 ชิ้น (kind = "BOARD" | "BELT") — ทางเดียวกับ fx.workOrder(สาขา, อะไหล่)
+    // แต่เลือกอะไหล่หลังมีใบ เพราะอะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) · คืนใบพร้อม id ที่ส่งไป (wo.pid)
+    const withPart = async (branch, kind) => {
+      const wo = await fx.workOrder(branch, null);
+      wo.pid = fx.fxPart(wo.id, kind);
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: wo.pid, quantity: 1 }] });
+      return wo;
+    };
     const row = (id) =>
       fx.sql(`select status||'|'||coalesce("appointmentStatus",'-')||'|'||coalesce(to_char("scheduledAt",'YYYY-MM-DD'),'-')||'|'||coalesce("assignedTeam",'-') from "WorkOrder" where id=${id}`);
     const team = fx.sql(`select zone from "Branch" where code='C0006'`);
@@ -48,7 +55,7 @@ const dayLabel = (ymd) => {
 
     // P: ใช้อะไหล่ — นัดวันแล้ว รอแอดมินเบิก (ลูกค้ายังไม่คอนเฟิร์ม)
     const dP = visitDay(30), newP = visitDay(33);
-    const P = await fx.workOrder("C0006", [{ sparePartId: board, quantity: 1 }]);
+    const P = await withPart("C0006", "BOARD");
     await fx.source(P.id);
     await fx.schedule(P.id, dP);
     // R: ไม่ใช้อะไหล่ — คอนเฟิร์มลูกค้าแล้ว ปล่อยงานแล้ว ช่างยังไม่ถึงหน้างาน
@@ -182,11 +189,10 @@ const dayLabel = (ymd) => {
     const LI = await fx.workOrder("C0006", null);
     await fx.call(fx.supervisor(), "POST", `/work-orders/${LI.id}/inspect-request`, { team, scheduledAt: visitDay(20) });
     // ใบค้างโอนจากคลังอื่น (ขั้นของหัวหน้าภาค) ที่วันนัดผ่านไประหว่างโอน — แอดมินคนเดียวที่เลื่อนวันได้ต้องเห็นในงานของตัวเอง
-    const belt = fx.part("SP-BELT");
-    const LT = await fx.workOrder("C0006", [{ sparePartId: belt, quantity: 1 }]);
+    const LT = await withPart("C0006", "BELT");
     await fx.source(LT.id, "คลังภูเก็ต");
     await fx.schedule(LT.id, visitDay(20));
-    await fx.call(fx.A, "POST", `/work-orders/${LT.id}/parts-check`, { results: [{ sparePartId: belt, inStock: true, warehouse: "คลังภูเก็ต" }] });
+    await fx.call(fx.A, "POST", `/work-orders/${LT.id}/parts-check`, { results: [{ sparePartId: LT.pid, inStock: true, warehouse: "คลังภูเก็ต" }] });
     fx.sql(`update "WorkOrder" set "scheduledAt"='${visitDay(-2)}' where id in (${L.id},${LI.id},${LT.id})`);
     row(L.id) === `AWAITING_CONFIRM|PENDING|${visitDay(-2)}|${team}` && row(LI.id).startsWith(`INSPECT_CONFIRM|PENDING|${visitDay(-2)}|`) &&
     row(LT.id) === `PARTS_TRANSFER|PENDING|${visitDay(-2)}|${team}`

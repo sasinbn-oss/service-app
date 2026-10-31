@@ -20,8 +20,11 @@ const { setup, visitDay } = require("./fixture");
     fx = await setup();
     const branch = fx.sql(`select code from "Branch" where code like 'C%' and "cancelledAt" is null and region is not null and zone is not null order by code limit 1`);
     const team = fx.sql(`select zone from "Branch" where code='${branch}'`);
-    const board = fx.part("SP-BOARD");
-    const wo = await fx.workOrder(branch, [{ sparePartId: board, quantity: 1 }]);
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+    // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+    const wo = await fx.workOrder(branch, null);
+    const board = fx.fxPart(wo.id, "BOARD");
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: board, quantity: 1 }] });
     const S = await fx.login("S001");
     // เช็คอะไหล่ → นัด → เบิก → คอนเฟิร์มลูกค้า → ปล่อยงาน (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง)
     await fx.source(wo.id);
