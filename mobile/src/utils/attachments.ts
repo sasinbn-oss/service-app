@@ -381,8 +381,14 @@ export async function uploadAttachment(
    * ไฟล์นี้เป็นไฟล์ที่เท่าไรของชุด — หลอดในหน้าโหลดเต็มจอนับรวมทั้งชุด (ไฟล์ 3/12 · 40%)
    * ไม่ส่งมา = ไฟล์เดียว · วิดีโอหลายสิบ MB บนเน็ตมือถือใช้เวลาเป็นนาที เห็นแค่ตัวหมุนจะคิดว่าค้าง
    */
-  batch: { index: number; total: number } = { index: 0, total: 1 }
-) {
+  batch: { index: number; total: number } = { index: 0, total: 1 },
+  /**
+   * quiet = ไม่เปิดหน้าโหลดเต็มจอและหลอดกลาง — ช่องไฟล์เคลมส่งไฟล์ทันทีที่เลือก (ฟอร์มปิดงาน)
+   * ถ้าบังทั้งจอทุกครั้งที่เลือกรูป ช่างกรอกช่องอื่นต่อระหว่างรอไม่ได้ ซึ่งเป็นเหตุผลที่ต้องส่งทันที
+   * ความคืบหน้าส่งให้ช่องนั้นวาดเองผ่าน onProgress (0–1)
+   */
+  opts: { quiet?: boolean; onProgress?: (p: number) => void } = {}
+): Promise<UploadedAttachment> {
   const form = new FormData();
   await appendFile(form, "file", file.uri, file.name, file.type);
   if (file.thumbnailUri) {
@@ -391,16 +397,31 @@ export async function uploadAttachment(
   if (role) form.append("role", role);
   if (sparePartId !== undefined) form.append("sparePartId", String(sparePartId));
   // ขึ้นหลอดที่ 0% ทันที ไม่ต้องรอเหตุการณ์แรกจากเบราว์เซอร์ (ไฟล์เล็กบางทีไม่มีเลย)
-  feedback.progress({ done: batch.index, total: batch.total, current: 0 });
-  await api.post(`/work-orders/${workOrderId}/attachments`, form, {
+  if (!opts.quiet) feedback.progress({ done: batch.index, total: batch.total, current: 0 });
+  opts.onProgress?.(0);
+  const res = await api.post<UploadedAttachment>(`/work-orders/${workOrderId}/attachments`, form, {
     headers: { "Content-Type": "multipart/form-data" },
     // หน้าโหลดเปิดตอนคำขอเริ่ม (api/client) — ตั้งหลอดหลังจากนั้น ไม่งั้นโดนล้างทิ้งตอนหน้าโหลดปิดระหว่างไฟล์
     onUploadProgress: (e) => {
       const current = e.total ? Math.min(1, e.loaded / e.total) : 0;
-      feedback.progress({ done: batch.index, total: batch.total, current });
+      if (!opts.quiet) feedback.progress({ done: batch.index, total: batch.total, current });
+      opts.onProgress?.(current);
     },
-    loadingText: "กำลังส่งไฟล์...",
+    loadingText: opts.quiet ? false : "กำลังส่งไฟล์...",
   });
+  // คืนแถวที่สร้าง — ช่องไฟล์เคลมต้องรู้ id ไว้ลบตอนเลือกไฟล์ใหม่แทน (ไฟล์เดิมยังไม่ได้ส่งกับใบเคลมไหน)
+  return res.data;
+}
+
+/** แถวไฟล์ที่เซิร์ฟเวอร์สร้างให้ (attachmentShape) — เอาเฉพาะที่ฝั่งแอปใช้ */
+export interface UploadedAttachment {
+  id: number;
+  kind: string;
+  role: string | null;
+  sparePartId?: number | null;
+  fileName: string;
+  createdAt: string;
+  thumbnailDataUrl?: string | null;
 }
 
 /**

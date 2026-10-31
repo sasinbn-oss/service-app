@@ -25,6 +25,8 @@ import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { dayLabel } from "../utils/customerMessage";
+import { loadCloseDraft, missingItems, type CloseDraft } from "../utils/closeDraft";
+import ClaimTrail, { dayTime, type TrailEvent } from "../components/claims/ClaimTrail";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
@@ -53,6 +55,25 @@ interface Job {
   machineCapacityKg: number | null;
   parts: { name: string; quantity: number; unit: string | null }[];
   arrivedAt: string | null;
+  /**
+   * เคลมของใบนี้ (เคลมก้อน 1) — การ์ดรอตรวจ/ถูกตีกลับวาดจากตรงนี้ · null/ไม่มี = ไม่มีเคลม หรือเซิร์ฟเวอร์รุ่นเก่า
+   * state: REVIEW รอ Admin Spare Part · REJECTED ถูกตีกลับรอช่างแก้ · APPROVED/DECLINED จบแล้ว
+   */
+  claim?: ClaimInfo | null;
+}
+
+interface ClaimInfo {
+  state: "REVIEW" | "REJECTED" | "APPROVED" | "DECLINED" | null;
+  /** จำนวนชิ้นที่ส่งเคลมในรอบล่าสุด */
+  parts: number;
+  /** ส่งครั้งที่เท่าไร (1 = ส่งครั้งแรก) */
+  round: number;
+  sentAt: string | null;
+  rejectedAt: string | null;
+  reviewerName: string | null;
+  /** ทุกชิ้นที่ถูกตีกลับ พร้อมเหตุผล */
+  reasons: { partLabel: string; reason: string }[];
+  trail: TrailEvent[];
 }
 
 type Tab = "today" | "tomorrow" | "late";
@@ -114,6 +135,11 @@ function TechJobs({ navigation }: Props) {
   const [tab, setTab] = useState<Tab>("today");
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  /**
+   * ร่างฟอร์มปิดงานที่กรอกค้างไว้ในเครื่องนี้ (utils/closeDraft) — การ์ดบอก "กรอกค้างไว้ — ยังขาด n อย่าง"
+   * ช่างที่ออกจากฟอร์มกลางทาง (โทรศัพท์เข้า แอปหลุด) กลับมาแล้วรู้ว่าของที่กรอกยังอยู่ ไม่ต้องเริ่มใหม่
+   */
+  const [drafts, setDrafts] = useState<Record<number, CloseDraft | null>>({});
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -124,6 +150,10 @@ function TechJobs({ navigation }: Props) {
       if (n !== seq.current) return;
       setJobs(res.data.rows);
       setToday(res.data.today);
+      // ร่างอยู่ในเครื่อง อ่านเร็ว — อ่านทุกครั้งที่กลับมาหน้านี้ (เพิ่งออกจากฟอร์มปิดงาน)
+      const open = res.data.rows.filter((j) => !j.done && !j.inspect);
+      const got = await Promise.all(open.map(async (j) => [j.id, await loadCloseDraft(j.id)] as const));
+      if (n === seq.current) setDrafts(Object.fromEntries(got));
     } catch (e) {
       if (n === seq.current) setError(apiErrorMessage(e));
     }
@@ -240,6 +270,8 @@ function TechJobs({ navigation }: Props) {
             late={tab === "late"}
             showTeam={manyTeams}
             busy={busyId === j.id}
+            today={today}
+            draft={drafts[j.id] ?? null}
             onArrive={() => arrive(j)}
             onOpen={(w) => open(j, w)}
           />
@@ -249,11 +281,129 @@ function TechJobs({ navigation }: Props) {
   );
 }
 
+/** วันตามเวลาไทยของเวลาหนึ่ง (YYYY-MM-DD) — นับ "รอมากี่วัน" แบบปฏิทิน ส่งเมื่อวาน 23:00 = 1 วัน ไม่ใช่ 0 */
+function bkkDay(iso: string) {
+  return new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(0, 10);
+}
+function daysSince(iso: string | null, today: string | null) {
+  if (!iso || !today || Number.isNaN(Date.parse(iso))) return 0;
+  return Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${bkkDay(iso)}T00:00:00Z`)) / 86_400_000));
+}
+
+/**
+ * บรรทัด "กรอกค้างไว้" จากร่างในเครื่อง — ฟอร์มนับไว้ตอนบันทึกร่างว่ายังขาดกี่อย่าง (ไม่ต้องโหลดใบงานมานับซ้ำ)
+ * ร่างรุ่นเก่าที่ไม่ได้นับไว้ไม่ขึ้นบรรทัดนี้ — บอกตัวเลขผิดแย่กว่าไม่บอก
+ */
+function DraftLine({ draft, button }: { draft: CloseDraft | null; button: string }) {
+  const miss = missingItems(draft);
+  if (!miss) return null;
+  const text = miss.length
+    ? `กรอกค้างไว้ — ยังขาด ${miss.length} อย่าง ข้อมูลยังอยู่ครบ`
+    : draft?.claiming
+      ? `กรอกครบแล้ว — กด “${button}” แล้วส่งเคลม`
+      : `กรอกครบแล้ว — กด “${button}” ได้เลย`;
+  return (
+    <Text style={styles.draftLine}>{text}</Text>
+  );
+}
+
+/** ปุ่มเล็กใต้การ์ด — นำทาง · โทร · รายละเอียด (callText = ข้อความบนปุ่มโทร · การ์ดปกติโชว์เบอร์) */
+function SmallActions({ job, onOpen, callText }: { job: Job; onOpen: () => void; callText?: string }) {
+  const map =
+    job.latitude != null && job.longitude != null ? `https://maps.google.com/?q=${job.latitude},${job.longitude}` : null;
+  return (
+    <View style={styles.small}>
+      {job.contactPhone && callText ? (
+        <TouchableOpacity
+          style={styles.smallBtn}
+          onPress={() => Linking.openURL(`tel:${job.contactPhone!.replace(/[^\d+]/g, "")}`)}
+          accessibilityLabel={`โทรร้าน ${job.contactPhone}`}
+        >
+          <Ionicons name="call-outline" size={15} color={colors.primaryInk} />
+          <Text style={styles.smallText}>{callText}</Text>
+        </TouchableOpacity>
+      ) : null}
+      {map ? (
+        <TouchableOpacity style={styles.smallBtn} onPress={() => Linking.openURL(map)} accessibilityLabel={`นำทางไป ${job.branchName}`}>
+          <Ionicons name="navigate-outline" size={15} color={colors.primaryInk} />
+          <Text style={styles.smallText}>นำทาง</Text>
+        </TouchableOpacity>
+      ) : null}
+      {job.contactPhone && !callText ? (
+        <TouchableOpacity
+          style={styles.smallBtn}
+          onPress={() => Linking.openURL(`tel:${job.contactPhone!.replace(/[^\d+]/g, "")}`)}
+          accessibilityLabel={`โทรร้าน ${job.contactPhone}`}
+        >
+          <Ionicons name="call-outline" size={15} color={colors.primaryInk} />
+          <Text style={styles.smallText}>{job.contactPhone}</Text>
+        </TouchableOpacity>
+      ) : null}
+      <TouchableOpacity style={styles.smallBtn} onPress={onOpen} accessibilityLabel={`รายละเอียด ${job.code}`}>
+        <Ionicons name="document-text-outline" size={15} color={colors.primaryInk} />
+        <Text style={styles.smallText}>รายละเอียด</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+/**
+ * การ์ดแดง "ถูกตีกลับมาให้ช่างแก้" — หน้าตาเดียวทุกเรื่องที่ถูกส่งกลับ (กรอบแดง 2 px · ชิปแดง · เหตุผล · ปุ่มใหญ่ปุ่มเดียว)
+ * ทำเป็นตัวกลางเพราะมีมากกว่าหนึ่งเรื่องที่ตีกลับมาหาช่าง (เคลมถูกตีกลับ · อะไหล่ถูกตีกลับที่จะตามมา)
+ * ช่างควรจำได้จากหน้าตาว่า "การ์ดแดง = มีของต้องแก้" ไม่ต้องอ่านว่าเป็นเรื่องอะไรก่อน
+ */
+export function SentBackCard({
+  label,
+  chip,
+  at,
+  title,
+  reason,
+  children,
+  action,
+  footer,
+}: {
+  /** ชื่อการ์ดสำหรับโปรแกรมอ่านจอ/เทสต์ เช่น "งาน WO-01208" */
+  label: string;
+  chip: string;
+  /** มุมขวาบน เช่น เวลาที่ถูกตีกลับ */
+  at?: string | null;
+  title: string;
+  /** บรรทัดเหตุผล (แดงเข้ม) */
+  reason: string;
+  /** บรรทัดเพิ่ม + ปุ่มเล็ก (อยู่ระหว่างเหตุผลกับปุ่มใหญ่) */
+  children?: React.ReactNode;
+  action: { label: string; onPress: () => void };
+  /** ท้ายการ์ด เช่น แถบสถานะ */
+  footer?: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.card, styles.cardSentBack]} accessibilityLabel={label}>
+      <View style={styles.cardTop}>
+        <View style={styles.sentBackChip}>
+          <Text style={styles.sentBackChipText}>{chip}</Text>
+        </View>
+        <View style={{ flex: 1 }} />
+        {at ? <Text style={styles.cornerTime}>{at}</Text> : null}
+      </View>
+      <Text style={styles.branch}>{title}</Text>
+      <Text style={styles.sentBackReason}>{reason}</Text>
+      {children}
+      <TouchableOpacity style={[styles.big, styles.bigSentBack]} onPress={action.onPress} accessibilityLabel={action.label}>
+        <Ionicons name="create-outline" size={20} color="#fff" />
+        <Text style={styles.bigText}>{action.label}</Text>
+      </TouchableOpacity>
+      {footer}
+    </View>
+  );
+}
+
 function JobCard({
   job,
   late,
   showTeam,
   busy,
+  today,
+  draft,
   onArrive,
   onOpen,
 }: {
@@ -261,18 +411,72 @@ function JobCard({
   late: boolean;
   showTeam: boolean;
   busy: boolean;
+  today: string | null;
+  draft: CloseDraft | null;
   onArrive: () => void;
   onOpen: (what?: "close" | "stage" | "problem") => void;
 }) {
   const arrived = !!job.arrivedAt;
+  const claim = job.claim ?? null;
+  // Senior ช่าง/ทีมรวมเห็นงานหลายทีมปนกัน — การ์ดเคลมต้องบอกทีมเหมือนการ์ดปกติ ไม่งั้นไม่รู้ว่าใบแดงนี้ทีมไหนต้องแก้
+  const teamTag = showTeam && job.team ? ` · ทีม${job.team}` : "";
+
+  /**
+   * เคลมถูกตีกลับ — ใบกลับมาอยู่ในมือช่าง (เข้างานแล้ว) แต่สิ่งที่ต้องทำคือแก้เคลม ไม่ใช่ "ปิดงาน" ใบใหม่
+   * เดิมการ์ดหน้าตาเหมือนงานปกติ ช่างไม่รู้ว่าโดนตีกลับจนกว่าจะเปิดใบ (บางคนคิดว่าระบบค้าง) — แดงทั้งการ์ด
+   * บอกเหตุผลทุกชิ้นตรงการ์ด กดปุ่มเดียวไปฟอร์มแก้ (ตัวอย่างที่เจ้าของงานเลือก ต.ค. 69)
+   */
+  if (claim?.state === "REJECTED" && !job.done) {
+    const reasons = (claim.reasons ?? []).map((r) => `${r.partLabel} — ${r.reason}`).join(" / ");
+    const n = (claim.reasons ?? []).length || claim.parts;
+    return (
+      <SentBackCard
+        label={`งาน ${job.code}`}
+        chip="เคลมถูกตีกลับ"
+        at={dayTime(claim.rejectedAt)}
+        title={`${job.branchCode} · ${job.branchName} · ${job.code}${teamTag}`}
+        reason={`Admin Spare Part: “${reasons || "—"}”`}
+        action={{ label: "แก้เคลม", onPress: () => onOpen("close") }}
+        footer={<ClaimTrail trail={claim.trail} tail="รอช่างแก้" tailColor={colors.dangerInk} />}
+      >
+        <Text style={styles.sentBackCount}>ต้องแก้ {n} ชิ้น</Text>
+        <DraftLine draft={draft} button="แก้เคลม" />
+        <SmallActions job={job} onOpen={() => onOpen()} callText="โทร" />
+      </SentBackCard>
+    );
+  }
+
   /**
    * ส่งเคลมแล้ว รอ Admin Spare Part ตรวจ — เซิร์ฟเวอร์นับว่าจบจากมือช่างแล้ว (done) แต่ยังไม่ใช่ปิดงาน
    * เดิมขึ้น "✓ ปิดงานแล้ว" ช่างเลยไม่รู้ว่าใบนี้ยังอาจถูกตีกลับมาให้แก้ (เจ้าของงานเลือกข้อความนี้จากตัวอย่าง ต.ค. 69)
-   * การ์ดไม่จางแบบงานที่จบแล้ว — ยังเป็นเรื่องที่ช่างต้องติดตาม
+   * การ์ดไม่จางแบบงานที่จบแล้ว — ยังเป็นเรื่องที่ช่างต้องติดตาม · บอกว่าส่งรอบไหน รอมากี่วัน
    */
   const review = job.status === "CLAIM_REVIEW";
-  const map =
-    job.latitude != null && job.longitude != null ? `https://maps.google.com/?q=${job.latitude},${job.longitude}` : null;
+  if (review && claim) {
+    const resent = claim.round > 1;
+    return (
+      <View style={[styles.card, styles.cardReview]} accessibilityLabel={`งาน ${job.code}`}>
+        <View style={styles.cardTop}>
+          <View style={styles.reviewChip}>
+            <Text style={styles.reviewChipText}>รอตรวจเคลม</Text>
+          </View>
+          <View style={{ flex: 1 }} />
+          {claim.sentAt ? <Text style={styles.cornerTime}>{`${resent ? "ส่งใหม่" : "ส่งเคลม"} ${dayTime(claim.sentAt)}`}</Text> : null}
+        </View>
+        <Text style={styles.branch}>
+          {job.branchCode} · {job.branchName}
+        </Text>
+        <Text style={styles.meta}>
+          {job.code}
+          {teamTag} ·{" "}
+          {resent ? `ส่งเคลมใหม่ (รอบ ${claim.round}) · รอ Admin Spare Part ตรวจ` : `ส่งเคลม ${claim.parts} ชิ้น · รอ Admin Spare Part ตรวจ`}
+        </Text>
+        <ClaimTrail trail={claim.trail} tail={`รอ Admin Spare Part ตรวจ · ${daysSince(claim.sentAt, today)} วัน`} />
+        <Text style={styles.reviewNote}>ยังไม่นับว่าปิดงาน จนกว่าจะอนุมัติ — อาจถูกตีกลับมาให้แก้</Text>
+      </View>
+    );
+  }
+
   return (
     <View
       style={[styles.card, arrived && !job.done && styles.cardNow, job.done && !review && styles.cardDone, review && styles.cardReview]}
@@ -304,7 +508,7 @@ function JobCard({
       </Text>
       <Text style={styles.meta}>
         {job.code}
-        {showTeam && job.team ? ` · ทีม${job.team}` : ""} · {job.inspect ? "ตรวจหน้างาน" : job.jobType === "PM" ? "งาน PM" : "งานซ่อม"}
+        {teamTag} · {job.inspect ? "ตรวจหน้างาน" : job.jobType === "PM" ? "งาน PM" : "งานซ่อม"}
         {job.machineCode ? ` · เครื่อง ${machineTag(job.machineCode, job.machineCapacityKg)}` : " · ทั้งสาขา"}
         {job.symptom ? ` · ${job.symptom}` : ""}
       </Text>
@@ -315,28 +519,8 @@ function JobCard({
 
       {job.done ? null : (
         <>
-          <View style={styles.small}>
-            {map ? (
-              <TouchableOpacity style={styles.smallBtn} onPress={() => Linking.openURL(map)} accessibilityLabel={`นำทางไป ${job.branchName}`}>
-                <Ionicons name="navigate-outline" size={15} color={colors.primaryInk} />
-                <Text style={styles.smallText}>นำทาง</Text>
-              </TouchableOpacity>
-            ) : null}
-            {job.contactPhone ? (
-              <TouchableOpacity
-                style={styles.smallBtn}
-                onPress={() => Linking.openURL(`tel:${job.contactPhone!.replace(/[^\d+]/g, "")}`)}
-                accessibilityLabel={`โทรร้าน ${job.contactPhone}`}
-              >
-                <Ionicons name="call-outline" size={15} color={colors.primaryInk} />
-                <Text style={styles.smallText}>{job.contactPhone}</Text>
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity style={styles.smallBtn} onPress={() => onOpen()} accessibilityLabel={`รายละเอียด ${job.code}`}>
-              <Ionicons name="document-text-outline" size={15} color={colors.primaryInk} />
-              <Text style={styles.smallText}>รายละเอียด</Text>
-            </TouchableOpacity>
-          </View>
+          {arrived && !job.inspect ? <DraftLine draft={draft} button="ปิดงาน" /> : null}
+          <SmallActions job={job} onOpen={() => onOpen()} />
           {/* ปุ่มใหญ่ปุ่มเดียวตามจังหวะ — ยังไม่ถึง: ถึงหน้างาน · ถึงแล้ว: ปิดงาน (ตรวจหน้างาน: บันทึกผลตรวจ) */}
           {arrived ? (
             <TouchableOpacity
@@ -396,6 +580,23 @@ const styles = StyleSheet.create({
   cardNow: { borderWidth: 2, borderColor: colors.primary },
   cardDone: { opacity: 0.6 },
   cardReview: { borderWidth: 2, borderColor: colors.warning },
+  cardSentBack: { borderWidth: 2, borderColor: colors.danger },
+  sentBackChip: { backgroundColor: colors.dangerFill, borderRadius: 999, paddingHorizontal: 10 },
+  sentBackChipText: { fontSize: 13, lineHeight: 22, fontWeight: "800", color: "#fff" },
+  sentBackReason: { fontSize: 14, lineHeight: 21, color: colors.dangerInk },
+  sentBackCount: { fontSize: 14, lineHeight: 21, color: colors.text },
+  bigSentBack: { backgroundColor: colors.dangerFill },
+  cornerTime: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  draftLine: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "600",
+    color: colors.successInk,
+    backgroundColor: colors.successSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
   reviewChip: {
     backgroundColor: colors.warningSoft,
     borderWidth: 1,
@@ -416,6 +617,7 @@ const styles = StyleSheet.create({
   branch: { fontSize: 15.5, lineHeight: 23, fontWeight: "700", color: colors.text },
   meta: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   small: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap", marginTop: 2 },
+  // สูง 48 — ช่างกดด้วยนิ้วโป้งตอนยืนหน้าร้าน (ตัวอย่างที่เจ้าของงานเลือก ต.ค. 69 ใช้ 48 ทุกปุ่ม)
   smallBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -423,8 +625,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    minHeight: 48,
   },
   smallText: { fontSize: 13, color: colors.primaryInk, fontWeight: "600" },
   big: {

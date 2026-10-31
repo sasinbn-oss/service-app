@@ -1,5 +1,6 @@
 // ทดสอบ: เคลมอะไหล่เก่าผ่านหน้าจอจริง บนใบทดสอบที่คัดลอกจากใบจริง (ใบจริงต้องไม่ถูกแตะ) · Admin Spare Part ดูใบงานได้อย่างเดียว
-//        · ปุ่มปิดงานกดไม่ได้จนกว่าจะครบ · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
+//        · ยังไม่ครบ ปุ่มล่างบอก "ยังขาด n อย่าง — พาไป" กดแล้วไม่ส่ง · ไฟล์เคลมส่งทันทีที่เลือก (ช่องบอก "กำลังส่ง x%" → "✓ แนบแล้ว")
+//        · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
 //        · Admin Spare Part ตีกลับ → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ → อนุมัติ → ปิดงาน
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
@@ -152,13 +153,54 @@ const login = async (code) =>
       ? pass("อะไหล่ที่เบิกไว้เติมให้เอง · สาขาในประกัน: เปิดใบเคลมไว้ให้ และบอกว่ายังขาดอะไร")
       : fail("ไม่มีส่วนเคลมหรือไม่ได้เปิดไว้ให้");
     const saveBtn = vis(page, "ยืนยันปิดงาน").last();
-    const dim = async () => saveBtn.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
-    (await dim()) !== "1" ? pass("หลักฐานไม่ครบ ปุ่มยืนยันปิดงานกดไม่ได้") : fail("ปุ่มกดได้ทั้งที่ยังไม่ครบ");
+    // ปุ่มล่างไม่จางแล้ว (เคลมก้อน 1) — ยังไม่ครบบอกว่าขาดกี่อย่าง กดแล้วพาไปช่องแรกที่ขาด ไม่ส่งอะไรไปเซิร์ฟเวอร์
+    const goBtn = page.getByText(/^ยังขาด \d+ อย่าง — พาไป$/).locator("visible=true").last();
+    const closePosts = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /\/close$/.test(r.url())) closePosts.push(r.url()); });
+    if (await goBtn.count()) {
+      const goText = await goBtn.innerText();
+      await goBtn.click();
+      await page.waitForTimeout(1200);
+      closePosts.length === 0 && (await saveBtn.count()) === 0 && sql(`select status from "WorkOrder" where id=${id}`) === "IN_PROGRESS"
+        ? pass(`หลักฐานไม่ครบ: ปุ่มล่าง "${goText}" กดแล้วไม่ส่งคำขอปิดงาน (ฐานข้อมูลยังรอช่าง)`)
+        : fail(`กดปุ่มพาไป: คำขอปิด ${closePosts.length} · ปุ่มยืนยัน ${await saveBtn.count()}`);
+    } else fail("หลักฐานไม่ครบแต่ปุ่มล่างไม่บอกว่ายังขาด");
 
     await label(page, `รหัสอะไหล่ตัวที่เสีย ${spCode}`).fill(spCode);
     await label(page, `อาการ/สาเหตุ ${spCode}`).fill("ประตูล็อกไม่ลง ขึ้น Error dL");
     await label(page, `สิ่งที่เข้าเช็ค ${spCode}`).fill("วัดไฟเข้าบอร์ด 220V ปกติ สลับบอร์ดแล้วหาย");
-    await attach(page, `แนบรูปอะไหล่เก่า ${spCode}`, PHOTO);
+    /**
+     * ไฟล์เคลมส่งทันทีที่เลือก (เคลมก้อน 1) — บีบเน็ตขาขึ้นให้ช้าพอจะเห็นช่องบอก "กำลังส่ง x%"
+     * ต้องไม่มีหน้าโหลดเต็มจอ (ช่างกรอกช่องอื่นต่อได้ระหว่างรอ) แล้วจบที่ "✓ แนบแล้ว"
+     */
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Network.enable");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 20, downloadThroughput: -1, uploadThroughput: 60 * 1024 });
+    const claimFilesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`));
+    // รอ/ตรวจบนจอเฉพาะในช่องรูปอะไหล่เก่า — ขั้นป้ายรุ่นของฟอร์มขึ้น "✓ แนบแล้ว" ค้างตั้งแต่เปิด (แนบป้ายไว้ตอนเตรียม)
+    // ถ้าหาทั้งหน้า การรอจบทันทีแล้วนับในฐานข้อมูลแข่งกับไฟล์ที่ยังส่งไม่จบ
+    const partSlot = page.locator(`[aria-label="วางรูปอะไหล่เก่า ${spCode}"]`).locator("visible=true").last();
+    const partFiles = () =>
+      Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role='CLAIM_PART' and "sparePartId"=${sp}`));
+    const [partChooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 15000 }), label(page, `แนบรูปอะไหล่เก่า ${spCode}`).click()]);
+    await partChooser.setFiles(PHOTO);
+    const sending = partSlot.getByText(/^กำลังส่ง \d+%$/);
+    await sending.first().waitFor({ timeout: 15000 }).catch(() => {});
+    if (await sending.count()) {
+      const slotText = await sending.first().innerText();
+      await page.screenshot({ path: path.join(DIR, "claim-1b-progress.png") });
+      (await page.getByRole("progressbar").locator("visible=true").count()) === 0
+        ? pass(`เลือกรูปอะไหล่เก่าแล้วส่งทันที: ช่องขึ้น "${slotText}" ไม่มีหน้าโหลดเต็มจอ`)
+        : fail("ส่งไฟล์เคลมแล้วยังขึ้นหน้าโหลดเต็มจอ");
+    } else fail("ไม่เห็น \"กำลังส่ง x%\" ที่ช่องรูปอะไหล่เก่า");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    const partDone = partSlot.getByText("✓ แนบแล้ว", { exact: true });
+    await partDone.waitFor({ timeout: 60000 }).catch(() => {});
+    // ช่องขึ้น ✓ หลังเซิร์ฟเวอร์ตอบแถวที่สร้างแล้ว — รอฐานข้อมูลอีกชั้นก่อนนับ (ไม่อ่านแข่งกับการบันทึก)
+    for (let t = 0; t < 40 && partFiles() !== 1; t++) await page.waitForTimeout(250);
+    (await partDone.count()) > 0 && partFiles() === 1
+      ? pass("ส่งเสร็จช่องรูปอะไหล่เก่าขึ้น \"✓ แนบแล้ว\" · รูปอยู่ในฐานข้อมูลแล้วก่อนกดปิดงาน")
+      : fail(`หลังเลือกรูปอะไหล่เก่า: ช่อง ✓=${await partDone.count()} · ไฟล์เคลมในฐานข้อมูล ${sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and role like 'CLAIM_%'`)} (เดิม ${claimFilesBefore})`);
     await attach(page, `แนบรูปอาการเสีย ${spCode}`, PHOTO);
     await attach(page, `แนบวิดีโอ Error code ${spCode}`, CLIP);
     await attach(page, `แนบวิดีโอการตรวจเช็ค ${spCode}`, CLIP);
@@ -167,8 +209,9 @@ const login = async (code) =>
     await page.waitForTimeout(500);
 
     // ── ข้อมูลเครื่องสำหรับเคลม: สแกนป้ายด้วยกล้อง (ทีละบรรทัด) + เช็คตามคู่มือ Error in Field ──
-    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ยังขาด: ข้อมูลป้ายรุ่น", false).count()) > 0
-      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง บอกว่ายังขาดข้อมูลป้ายรุ่น") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
+    // กล่อง "ยังขาด" กล่องเดียวท้ายฟอร์ม บอกเป็น "ข้อมูลเครื่อง: …" (เคลมก้อน 1 — ไม่มีกล่องยังขาดแยกใต้กล่องเครื่องแล้ว)
+    (await label(page, "ข้อมูลเครื่องสำหรับเคลม").count()) > 0 && (await vis(page, "ข้อมูลเครื่อง: ข้อมูลป้ายรุ่น", false).count()) > 0
+      ? pass("เคลมแล้วขึ้นกล่องข้อมูลเครื่อง กล่องยังขาดบอก \"ข้อมูลเครื่อง: ข้อมูลป้ายรุ่น\"") : fail("ไม่มีกล่องข้อมูลเครื่องสำหรับเคลม");
     await attach(page, "ถ่ายรูปป้ายรุ่น", PLATE_PHOTO);
     // อ่านทั้งป้ายในเบราว์เซอร์ (หาบรรทัด → อ่านซ้ำทีละบรรทัด) — เครื่องทดสอบช้ากว่ามือถือจริง ให้เวลานาน
     await page.waitForTimeout(1500);
@@ -206,14 +249,14 @@ const login = async (code) =>
     await page.screenshot({ path: path.join(DIR, "claim-1-close.png") });
 
     /**
-     * หลอดสถานะตอนส่งไฟล์ + กดใหม่ไม่ส่งซ้ำ (WO-00133 — ไฟล์ซ้ำจนเต็มเพดานแล้วปิดงานไม่ได้)
-     * บีบเน็ตขาขึ้นให้ช้าพอจะเห็นหลอด · คำสั่งปิดรอบแรกให้ล้มหลังไฟล์ขึ้นครบ แล้วกดใหม่
-     * ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
+     * กดใหม่ไม่ส่งซ้ำ (WO-00133 — ไฟล์ซ้ำจนเต็มเพดานแล้วปิดงานไม่ได้)
+     * ไฟล์เคลมขึ้นไปแล้วตั้งแต่ตอนเลือก (นับรวมใน filesBefore) — ที่ยังส่งตอนกดปิดคือรูปป้ายรุ่นที่ถ่ายในกล่องข้อมูลเครื่อง
+     * คำสั่งปิดรอบแรกให้ล้มหลังไฟล์ขึ้นครบ แล้วกดใหม่ ต้องไม่มีไฟล์เพิ่ม — นับที่ฐานข้อมูล ไม่ใช่ดูจากหน้าจอ
      */
     const filesBefore = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send("Network.enable");
-    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 20, downloadThroughput: -1, uploadThroughput: 60 * 1024 });
+    Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`)) === 4
+      ? pass("ก่อนกดปิดงาน หลักฐานเคลมทั้ง 4 ไฟล์ขึ้นไปแล้ว (ส่งตั้งแต่ตอนเลือก · ฐานข้อมูล)")
+      : fail(`ก่อนกดปิดงาน หลักฐานเคลมในฐานข้อมูล ${sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id} and "sparePartId"=${sp} and role like 'CLAIM_%'`)} ไฟล์`);
     let failOnce = true;
     await page.route(`**/api/work-orders/${id}/close`, (route) => {
       if (!failOnce) return route.continue();
@@ -221,18 +264,6 @@ const login = async (code) =>
       return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "ทดสอบ: ปิดไม่ผ่านรอบแรก" }) });
     });
     await saveBtn.click();
-    const bar = page.getByRole("progressbar").locator("visible=true");
-    await bar.first().waitFor({ timeout: 15000 }).catch(() => {});
-    if (await bar.count()) {
-      await page.waitForTimeout(800);
-      await page.screenshot({ path: path.join(DIR, "claim-1b-progress.png") });
-      const now = Number(await bar.first().getAttribute("aria-valuenow"));
-      const text = await bar.first().innerText();
-      /ไฟล์ \d+\/\d+/.test(text) && now >= 0 && now <= 100
-        ? pass(`ส่งไฟล์ตอนปิดงานมีหลอดสถานะ (${text.replace(/\s+/g, " ")})`)
-        : fail(`หลอดสถานะ: ${text} · ${now}`);
-    } else fail("ไม่เห็นหลอดสถานะตอนส่งไฟล์");
-    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     await vis(page, "ทดสอบ: ปิดไม่ผ่านรอบแรก").waitFor({ timeout: 120000 });
     const filesSent = Number(sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${id}`));
     filesSent > filesBefore ? pass(`รอบแรกไฟล์ขึ้น ${filesSent - filesBefore} ไฟล์ แล้วคำสั่งปิดล้ม`) : fail("รอบแรกไม่มีไฟล์ขึ้น");

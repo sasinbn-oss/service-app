@@ -134,6 +134,10 @@ const login = async (code) =>
     m.includes("รูปหลังซ่อม") && !m.includes("รูปก่อนซ่อม")
       ? pass("กล่องยังขาดเตือนแค่รูปหลังซ่อม")
       : fail(`กล่องยังขาด: ${m}`);
+    // ปุ่มล่างไม่จางแล้ว (เคลมก้อน 1) — ยังไม่ครบบอกว่าขาดกี่อย่าง กดแล้วพาไปช่องที่ขาด
+    (await page.getByText(/^ยังขาด \d+ อย่าง — พาไป$/).locator("visible=true").count()) > 0 && (await seen("ยืนยันปิดงาน", true)) === 0
+      ? pass("ยังไม่ครบ ปุ่มล่างขึ้น \"ยังขาด … อย่าง — พาไป\"")
+      : fail("ปุ่มล่างไม่บอกว่ายังขาด");
     await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last().fill("ล้างกรอง ตรวจสายพาน ทดสอบแล้วปกติ");
     await label("ผู้เข้าปฏิบัติงานคนที่ 1").click();
     await page.waitForTimeout(500);

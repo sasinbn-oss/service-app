@@ -28,6 +28,11 @@ export const colors = {
   danger: "#EF4444",
   dangerInk: "#B91C1C",
   dangerSoft: "#FEF2F2",
+  /**
+   * แดงที่เป็น "พื้น" ปุ่ม/ชิป (ตัวหนังสือขาว) เช่น "แก้เคลม" บนการ์ดที่ถูกตีกลับ — เหตุผลเดียวกับ navyFill
+   * danger สดเกินให้ตัวขาวขนาดปุ่มอ่านชัด · dangerInk โหมดมืดกลายเป็นชมพูอ่อน ตัวขาวบนนั้นอ่านไม่ออก
+   */
+  dangerFill: "#B91C1C",
   success: "#10B981",
   successInk: "#065F46",
   successSoft: "#ECFDF5",
@@ -126,6 +131,7 @@ const DARK: Partial<typeof colors> = {
   tile: "#15283B",
   dangerInk: "#FCA5A5",
   dangerSoft: "#2C1618",
+  dangerFill: "#B91C1C",
   dangerLine: "#6B2A2E",
   successInk: "#6EE7B7",
   successSoft: "#0F2A22",

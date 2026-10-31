@@ -1,7 +1,8 @@
 #!/bin/bash
 # ทดสอบ: เคลมอะไหล่เก่าตามฟอร์มใบเคลม — ปิดงานต้องมีหลักฐานครบ (รูป/วิดีโอ/ช่องกรอก/Troubleshooting Huebsch) ·
 #        ไปรอ Admin Spare Part ตรวจ · แอดมินทั่วไปตรวจไม่ได้และไม่เห็นในกล่องงาน · ตีกลับต้องมีเหตุผล ·
-#        ตีกลับแล้วกลับไปที่ช่าง · ปิดใหม่ได้ · อนุมัติแล้วปิดงาน · ใบเคลม PDF · ย้อนขั้นจากรอตรวจไม่ได้
+#        ตีกลับแล้วกลับไปที่ช่าง · ส่งซ้ำโดยไม่แก้อะไรไม่ได้ · แนบวิดีโอใหม่ตามเหตุผลแล้วปิดใหม่ได้ ·
+#        อนุมัติแล้วปิดงาน · ใบเคลม PDF · ย้อนขั้นจากรอตรวจไม่ได้
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/lib/fixture-parts.sh"
@@ -131,8 +132,14 @@ echo "$R" | J 'd.claims[0].rejectReason' | grep -q "ถ่ายใหม่" &&
 
 echo
 echo "═══ ช่างปิดใหม่ → อนุมัติ"
+# ส่งของเดิมกลับไปทั้งที่เพิ่งถูกตีกลับ = ใบวนกลับไปหา Admin Spare Part เปล่า ๆ — ต้องแก้ตามเหตุผลก่อน (ก้อน 1)
 R=$(CLOSE "$FULL")
-echo "$R" | J 'd.status' | grep -q "^CLAIM_REVIEW$" && pass "ปิดใหม่ได้ (หลักฐานเดิมยังนับ)" || fail "ปิดใหม่ไม่ได้: $(echo $R | head -c 200)"
+echo "$R" | grep -q "ยังไม่ได้แก้อะไรจากรอบที่ถูกตีกลับ" && [ "$(DB "select status||'|'||(select count(*) from \"PartClaim\" where \"workOrderId\"=$ID) from \"WorkOrder\" where id=$ID")" = "IN_PROGRESS|1" ] \
+  && pass "ส่งซ้ำโดยไม่แก้อะไร = 400 · ใบยังอยู่ที่ช่าง ไม่มีใบเคลมใหม่" || fail "ส่งซ้ำไม่แก้ผ่าน: $(echo $R | head -c 200)"
+# เหตุผลตีกลับคือวิดีโอการตรวจเช็ค — แนบใหม่แล้วส่ง (ข้อความและหลักฐานอื่นใช้ของเดิม)
+UP video/mp4 -F "role=CLAIM_CHECK_VIDEO" -F "sparePartId=$PID" >/dev/null
+R=$(CLOSE "$FULL")
+echo "$R" | J 'd.status' | grep -q "^CLAIM_REVIEW$" && pass "ปิดใหม่ได้หลังแนบวิดีโอใหม่ (หลักฐานอื่นยังนับ)" || fail "ปิดใหม่ไม่ได้: $(echo $R | head -c 200)"
 [ "$(DB "select string_agg(status,',' order by id) from \"PartClaim\" where \"workOrderId\"=$ID")" = "REJECTED,PENDING" ] \
   && pass "ใบเคลมรอบที่ถูกตีกลับเก็บไว้เป็นประวัติ" || fail "ประวัติเคลม: $(DB "select string_agg(status,',') from \"PartClaim\" where \"workOrderId\"=$ID")"
 CID=$(DB "select id from \"PartClaim\" where \"workOrderId\"=$ID and status='PENDING'")

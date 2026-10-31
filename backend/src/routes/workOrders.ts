@@ -54,7 +54,16 @@ import {
 } from "../reports/branchPartsReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
 import { claimGuideFor } from "../utils/claimGuide";
-import { firstSubmittedAt, isSubmittedEvidence } from "../utils/claimRules";
+import {
+  changedSinceReject,
+  claimKey,
+  claimSummary,
+  firstSubmittedAt,
+  isSubmittedEvidence,
+  latestPerPart,
+  lockSince,
+  partLabel,
+} from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
   buildObjectKey,
@@ -225,10 +234,12 @@ const detailInclude = {
   // ไม่ได้จะเอารายการมาแสดง — รายการอยู่ที่ /attachments อยู่แล้ว
   attachments: {
     where: { role: { not: null } },
-    select: { id: true, role: true, createdAt: true, sparePartId: true },
+    // createdById — ฟอร์มปิดงานรู้ว่าไฟล์หลักฐานเคลมไฟล์ไหนตัวเองแนบ (แนบใหม่แทนแล้วลบไฟล์เดิมของตัวเองได้)
+    select: { id: true, role: true, createdAt: true, sparePartId: true, createdById: true },
   },
   // ใบเคลมทุกรอบ ใหม่สุดก่อน — รอบที่ถูกตีกลับเก็บไว้ให้ช่างเห็นว่าโดนตีกลับเพราะอะไร
-  claims: { orderBy: { createdAt: "desc" as const } },
+  // แถวของการส่งครั้งเดียวกันมีเวลาเท่ากันทุกแถว (ปิดงานตั้ง createdAt เอง) จึงต้องมี id ตัดสินลำดับ ไม่งั้นลำดับสลับไปมาทุกครั้งที่โหลด
+  claims: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] as Prisma.PartClaimOrderByWithRelationInput[] },
   workers: { include: { user: { select: { id: true, name: true, employeeCode: true } } } },
   // ใบงานที่ลิงก์กัน (แยกใบรออะไหล่) — ต้องเห็นจากทั้งสองฝั่ง
   parent: { select: { id: true, code: true, status: true } },
@@ -600,7 +611,12 @@ function actorLabelFor(stage: string): string | null {
   return actor ? ROLE_LABELS[actor] ?? null : null;
 }
 
-function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
+/**
+ * names = ชื่อผู้ใช้ที่แถวเคลมอ้างถึง (คนตัดสินเคลม) — ตาราง PartClaim ไม่มี relation ไปหาผู้ใช้ (เพิ่มต้องมี migration)
+ * หน้ารายละเอียดอ่านมาพร้อมกันในรอบเดียว (loadDetail) · คำตอบจากคำสั่งอื่นไม่ส่งมา ชื่อจึงว่าง
+ */
+function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date, names?: Map<number, string>) {
+  const claimParts = w.claims.map((c) => ({ partCode: c.partCode, partName: c.partName }));
   return {
     id: w.id,
     code: w.code,
@@ -779,14 +795,22 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date) {
       rejectReason: c.rejectReason,
       createdAt: c.createdAt,
       reviewedAt: c.reviewedAt,
+      // ใครตีกลับ/อนุมัติ — แถบแดงในฟอร์มแก้เคลมบอก "{คนตรวจ} · {เวลา}" ช่างจะได้รู้ว่าถามใคร
+      reviewedByName: c.reviewedById != null ? names?.get(c.reviewedById) ?? null : null,
+      // ชื่อที่ทุกหน้าจอใช้เรียกชิ้นนี้ (ชื่อไทย · ต่อรหัสเมื่อในใบมีชื่อซ้ำ) — คิดที่เดียวกับข้อความของเซิร์ฟเวอร์
+      partLabel: partLabel(c, claimParts),
     })),
-    // หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ (อะไหล่ชิ้นไหน · ชนิดไหน) — ช่างที่ถูกตีกลับแนบเพิ่มเฉพาะที่ขาด
+    /**
+     * หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ — ช่างที่ถูกตีกลับแนบเพิ่มเฉพาะที่ขาด
+     * id/createdAt/createdById: ฟอร์มปิดงานแนบไฟล์ทันทีที่เลือก ต้องรู้ว่าไฟล์ไหนใหม่กว่าการตีกลับ และไฟล์ไหนตัวเองแนบ
+     * (แนบใหม่แทนแล้วลบไฟล์เดิมที่ยังไม่ได้ส่ง) ไม่ต้องโหลดรายการไฟล์ทั้งใบมาไล่เอง
+     */
     claimEvidence: w.attachments
       .filter(
         (a) =>
           a.role && (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(a.role) && (!roundStart || a.createdAt >= roundStart)
       )
-      .map((a) => ({ sparePartId: a.sparePartId, role: a.role })),
+      .map((a) => ({ id: a.id, sparePartId: a.sparePartId, role: a.role, createdAt: a.createdAt, createdById: a.createdById })),
     // Troubleshooting (ข้อ 4 ของฟอร์มเคลม) ของยี่ห้อเครื่องใบนี้ — ว่าง = ยี่ห้อนี้ไม่ต้องทำ
     claimTroubleshooting: claimTroubleshootingFor(machineMake(w.machine))?.items ?? [],
     // แบบป้ายรุ่นของยี่ห้อนี้ (บรรทัดที่สแกน) + รายการเช็คตามคู่มือ — แอปไม่ได้เขียนรายการซ้ำ (utils/claimGuide.ts)
@@ -855,7 +879,12 @@ const listSelect = {
   createdBy: { select: { name: true, role: true } },
   // ใบงานแจ้งเคลม (ตอนปิดงานส่งอะไหล่เก่าเคลม) — ป้าย + ตัวกรอง "ใบงานเคลม" ในรายการ (เจ้าของงานขอ ต.ค. 69)
   // เอาแค่รอบล่าสุดตัวเดียว รายการอยากรู้สถานะเคลมตอนนี้ ไม่ใช่ทุกรอบ
-  claims: { select: { status: true }, orderBy: { createdAt: "desc" as const }, take: 1 },
+  // แถวของการส่งครั้งเดียวกันเวลาเท่ากัน — id ตัดสิน ไม่งั้นป้ายสลับไปมาระหว่างโหลด
+  claims: {
+    select: { status: true },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }] as Prisma.PartClaimOrderByWithRelationInput[],
+    take: 1,
+  },
   /**
    * ป้ายอะไหล่บนการ์ด (นัดลูกค้าก่อนเบิก ต.ค. 69) — สี่ช่องพอตัดสิน ส่งออกไปแค่ผล (partsState) ไม่ใช่รายการ
    * ช่างที่เปิดรายการผ่าน 4G ไม่ต้องโหลดอะไหล่ทุกใบ (ดูเหตุผลข้างบน)
@@ -1311,17 +1340,30 @@ async function roundStartedAt(workOrderId: number): Promise<Date> {
  */
 const STAGE_TX = { timeout: 30_000, maxWait: 15_000 } as const;
 
-/** เขียนประวัติทุกครั้งที่ใบงานขยับ ใช้ tx เดียวกับการเปลี่ยนสถานะเสมอ */
+/**
+ * เขียนประวัติทุกครั้งที่ใบงานขยับ ใช้ tx เดียวกับการเปลี่ยนสถานะเสมอ
+ *
+ * meta = ข้อมูลที่โปรแกรมต้องอ่านกลับ (เช่น คำอธิบาย "ค่าเดิมถูกแล้ว" ของแต่ละชิ้นตอนส่งเคลมใหม่) — note เป็นข้อความให้คนอ่าน
+ * ซึ่งแยกกลับเป็นชิ้น ๆ ไม่ได้ · เขียนเฉพาะเมื่อส่งมา ไม่เขียน JSON null (แถวที่ไม่มี meta ต้องว่างจริงแบบประวัติเดิมทุกแถว)
+ */
 async function writeLog(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   workOrderId: number,
   userId: number | undefined,
   action: string,
   status: string,
-  note?: string | null
+  note?: string | null,
+  meta?: Prisma.InputJsonValue
 ) {
   await tx.workOrderLog.create({
-    data: { workOrderId, userId: userId ?? null, action, status, note: note ?? null },
+    data: {
+      workOrderId,
+      userId: userId ?? null,
+      action,
+      status,
+      note: note ?? null,
+      ...(meta !== undefined ? { meta } : {}),
+    },
   });
   // ใบขยับขั้น = ชุด "ไม่มีคนรับ" อาจเปลี่ยน — ทิ้งผลที่จำไว้ ให้กล่องงานแอดมินไม่ค้างของเก่า
   orphanCache = null;
@@ -1738,9 +1780,13 @@ router.get("/locate", requireAuth, async (req: AuthRequest, res) => {
  * หน้า "งานของฉันวันนี้" ของช่าง (เจ้าของงานเลือกแบบ Salesforce ต.ค. 69)
  *
  * ช่างเห็นแค่งานที่ปล่อยให้ทีมตัวเองแล้ว เรียงตามเวลานัด — ไม่ต้องหาในกล่องงาน ไม่เห็นขั้นของแอดมิน/หัวหน้าภาค
- * ใบที่ปิดวันนี้ติดมาด้วย (ขึ้น ✓) ให้ช่างเห็นว่าวันนี้ทำไปกี่งานแล้ว
+ * ใบที่ปิดวันนี้ติดมาด้วย (ขึ้น ✓) ให้ช่างเห็นว่าวันนี้ทำไปกี่งานแล้ว · ใบรอตรวจเคลมติดมาทุกใบจนกว่าจะตรวจ
  * ถึงหน้างานแล้วหรือยังอ่านจากประวัติ ARRIVED หลังถูกปล่อยงานรอบล่าสุด — ไม่เก็บซ้ำในใบงาน
+ *
+ * claim = สถานะเคลมของงานซ่อมครั้งนี้ (ดู claimSummary) — ช่างที่ถูกตีกลับต้องเห็นจากหน้าแรกเลยว่าใบไหนถูกตีกลับ
+ * เพราะอะไร ทุกชิ้น ไม่ใช่ต้องเปิดไล่ทีละใบ (ใบที่ถูกตีกลับกลับมาอยู่ขั้นกำลังซ่อมหน้าตาเหมือนงานธรรมดา)
  */
+const MY_DAY_RELEASE_ACTIONS = ["DISPATCHED", "ARRIVED", "ASSIGNED", "REOPENED", "INSPECT_REQUESTED"];
 router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
   // งานที่ทีมตัวเองต้องไป — ไม่รวมใบของสาขาประจำที่จ่ายข้ามให้ทีมอื่นเข้าไป
   const scope = await scopeFor(req, true);
@@ -1749,7 +1795,12 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
   const rows = await prisma.workOrder.findMany({
     where: {
       AND: [scope],
-      OR: [{ status: { in: ["IN_PROGRESS", "INSPECTING"] } }, { status: { in: ["DONE", "CLAIM_REVIEW"] }, closedAt: { gte: from } }],
+      // รอตรวจเคลมติดมาทุกใบไม่ว่าส่งวันไหน — ยังไม่จบจากมือช่าง (อาจถูกตีกลับมาให้แก้) ช่างต้องเห็นว่ารอมากี่วันแล้ว
+      // ถ้านับเฉพาะที่ส่งวันนี้ การ์ดหายไปตั้งแต่วันรุ่งขึ้นทั้งที่ Admin Spare Part ยังไม่ได้ตรวจ
+      OR: [
+        { status: { in: ["IN_PROGRESS", "INSPECTING", "CLAIM_REVIEW"] } },
+        { status: "DONE", closedAt: { gte: from } },
+      ],
     },
     select: {
       id: true,
@@ -1769,21 +1820,50 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
       machine: { select: { code: true, capacityKg: true } },
       parts: { where: { kind: "WAITING" }, select: { quantity: true, unit: true, sparePart: { select: { name: true } } } },
       // ปล่อยงานรอบล่าสุด + ถึงหน้างาน — ถึงแล้วคือมี ARRIVED หลังปล่อยงาน
+      // + ส่งเคลม (แถบสถานะเคลมบนการ์ด: ใครส่ง เมื่อไหร่) — ไม่จำกัดจำนวนแถวแล้ว เพราะประวัติเคลมของงานซ่อมครั้งนี้ต้องมาครบ
+      // จำนวนต่อใบยังน้อย (เฉพาะชนิดเหล่านี้) และใบในหน้านี้มีแค่งานของทีมวันนี้
       logs: {
-        where: { action: { in: ["DISPATCHED", "ARRIVED", "ASSIGNED", "REOPENED", "INSPECT_REQUESTED"] } },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-        select: { action: true, createdAt: true },
+        where: { action: { in: [...MY_DAY_RELEASE_ACTIONS, "CLAIM_SUBMITTED"] } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: { action: true, createdAt: true, user: { select: { name: true } } },
+      },
+      // ใบเคลมทุกรอบ ใหม่สุดก่อน — การ์ดคิดเฉพาะงานซ่อมครั้งนี้ (หลังเปิดใบใหม่ครั้งล่าสุด) ที่ claimSummary
+      claims: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: {
+          id: true,
+          sparePartId: true,
+          partCode: true,
+          partName: true,
+          status: true,
+          rejectReason: true,
+          createdAt: true,
+          reviewedAt: true,
+          reviewedById: true,
+        },
       },
     },
   });
   const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+  // ชื่อ Admin Spare Part ที่ตัดสิน — ถามครั้งเดียวทุกใบ และถามเฉพาะเมื่อมีใบที่ถูกตัดสินแล้ว (ส่วนใหญ่ไม่มี ไม่เสียรอบไปกลับ)
+  const reviewerIds = [...new Set(rows.flatMap((w) => w.claims.map((c) => c.reviewedById)).filter((x): x is number => x != null))];
+  const reviewers = new Map(
+    reviewerIds.length
+      ? (await prisma.user.findMany({ where: { id: { in: reviewerIds } }, select: { id: true, name: true } })).map((u) => [u.id, u.name])
+      : []
+  );
   res.json({
     today,
     rows: rows
       .map((w) => {
-        const sinceRelease = w.logs.findIndex((l) => l.action !== "ARRIVED");
-        const arrived = w.logs.slice(0, sinceRelease < 0 ? w.logs.length : sinceRelease).find((l) => l.action === "ARRIVED");
+        // ห้าแถวล่าสุดของชนิดปล่อยงาน/ถึงหน้างาน — กติกาเดิมก่อนมีประวัติเคลมปนมาในชุดเดียวกัน
+        const release = w.logs.filter((l) => MY_DAY_RELEASE_ACTIONS.includes(l.action)).slice(0, 5);
+        const sinceRelease = release.findIndex((l) => l.action !== "ARRIVED");
+        const arrived = release.slice(0, sinceRelease < 0 ? release.length : sinceRelease).find((l) => l.action === "ARRIVED");
+        // งานซ่อมครั้งนี้ = หลังเปิดใบใหม่ครั้งล่าสุด — ใบเคลมที่อนุมัติไปตอนซ่อมครั้งก่อนไม่ใช่สถานะของงานที่ถืออยู่ตอนนี้
+        const since = lockSince(w.logs);
+        const claimRows = w.claims.filter((c) => !since || c.createdAt >= since);
+        const claimParts = w.claims.map((c) => ({ partCode: c.partCode, partName: c.partName }));
         return {
           id: w.id,
           code: w.code,
@@ -1807,6 +1887,16 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           machineCapacityKg: w.machine?.capacityKg ?? null,
           parts: w.parts.map((p) => ({ name: p.sparePart.name, quantity: p.quantity, unit: p.unit })),
           arrivedAt: arrived?.createdAt ?? null,
+          // มีเสมอ (state ว่าง = ไม่มีเคลม) — หน้าจออ่าน claim.state ได้โดยไม่ต้องเช็คว่ามีก้อนนี้ไหม
+          claim: claimSummary(
+            w.status,
+            claimRows,
+            w.logs
+              .filter((l) => l.action === "CLAIM_SUBMITTED" && (!since || l.createdAt >= since))
+              .map((l) => ({ action: l.action, createdAt: l.createdAt, userName: l.user?.name ?? null })),
+            (c) => partLabel(c, claimParts),
+            (uid) => (uid != null ? reviewers.get(uid) ?? null : null)
+          ),
         };
       })
       .sort((a, b) => `${a.scheduledAt ?? "9999"} ${a.scheduledTime ?? "99:99"}`.localeCompare(`${b.scheduledAt ?? "9999"} ${b.scheduledTime ?? "99:99"}`)),
@@ -2310,7 +2400,7 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
  * ตอนนี้ส่งก้อนที่ครบแล้วแอปใช้เลย (mobile/src/utils/freshOrder.ts) · ใบงานกับประวัติอ่านพร้อมกัน ไม่ต่อคิว
  */
 async function loadDetail(id: number) {
-  const [row, logs, , sups] = await Promise.all([
+  const [row, logs, , sups, claimUsers] = await Promise.all([
     prisma.workOrder.findUnique({ where: { id }, include: detailInclude }),
     prisma.workOrderLog.findMany({
       where: { workOrderId: id },
@@ -2325,6 +2415,11 @@ async function loadDetail(id: number) {
       select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
+    // ชื่อคนตัดสินเคลมของใบนี้ — PartClaim ไม่มี relation ไปหาผู้ใช้ จึง join เองในคำสั่งเดียว ถามพร้อมกับข้างบน
+    // (ถ้ารอแถวเคลมมาก่อนแล้วค่อยถามชื่อ = เดินทางไปกลับเพิ่มอีกรอบทุกครั้งที่เปิดใบงาน)
+    prisma.$queryRaw<{ id: number; name: string }[]>`
+      SELECT DISTINCT u.id, u.name FROM "PartClaim" c JOIN "User" u ON u.id = c."reviewedById"
+      WHERE c."workOrderId" = ${id}`,
   ]);
   if (!row) return null;
   /**
@@ -2344,7 +2439,7 @@ async function loadDetail(id: number) {
     for (const u of scoped) if (!coversWorkOrder(u.scope, row) && (await teamsForSupervisor(u.scope)).has(sent)) watchers.push(u.name);
     crossTeam = { ownTeam: ownTeamOf(row) ?? "", assignedTeam: row.assignedTeam ?? "", watchers };
   }
-  return { row, logs, supervisors, crossTeam };
+  return { row, logs, supervisors, crossTeam, claimUsers: new Map(claimUsers.map((u) => [u.id, u.name])) };
 }
 
 type Detail = NonNullable<Awaited<ReturnType<typeof loadDetail>>>;
@@ -2422,7 +2517,7 @@ function flowOf(
   };
 }
 
-function detailBody({ row, logs, supervisors, crossTeam }: Detail) {
+function detailBody({ row, logs, supervisors, crossTeam, claimUsers }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -2431,7 +2526,7 @@ function detailBody({ row, logs, supervisors, crossTeam }: Detail) {
   const inspectStart = logs.find((l) => l.action === "INSPECT_REQUESTED")?.createdAt ?? row.createdAt;
 
   const confirm = logs.find((l) => APPOINTMENT_BY_ACTIONS.includes(l.action) && !l.backfilledAt);
-  const base = shape(row, roundStart, inspectStart);
+  const base = shape(row, roundStart, inspectStart, claimUsers);
   return {
     ...base,
     appointmentBy:
@@ -6226,6 +6321,14 @@ const closeSchema = z.object({
         symptom: z.string().trim().max(1000).default(""),
         checkNote: z.string().trim().max(2000).default(""),
         troubleshooting: z.array(z.string().max(300)).max(50).default([]),
+        /**
+         * ชิ้นที่ถูกตีกลับ แต่ช่างยืนยันว่าค่าเดิมถูกแล้ว + คำอธิบายให้ผู้ตรวจ — แทนการแก้ (ดู "ส่งใหม่ต้องแก้อะไรสักอย่าง" ข้างล่าง)
+         * flag "ALL" = ทั้งชิ้น (ตีกลับแบบชี้ช่องยังไม่มี) · ความยาวคำอธิบายตรวจเองข้างล่างเพื่อตอบเป็นภาษาไทย
+         */
+        keep: z
+          .array(z.object({ flag: z.string().trim().max(40), note: z.string().max(2000) }))
+          .max(12)
+          .optional(),
       })
     )
     .max(20)
@@ -6260,6 +6363,9 @@ const closeSchema = z.object({
     .nullable()
     .optional(),
 });
+
+/** ด่านกันส่งปิดซ้อนใน /close เจอว่าใบถูกปิดไปก่อนแล้ว — โยนออกจาก transaction ให้ทุกอย่างที่เขียนไปถูกยกเลิก */
+class CloseAlreadySent extends Error {}
 
 router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -6452,9 +6558,11 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    */
   const claimInputs = body.claims ?? [];
   const claimRows: Prisma.PartClaimCreateManyInput[] = [];
+  // คำอธิบาย "ค่าเดิมถูกแล้ว" ของชิ้นที่ถูกตีกลับ — ไปอยู่ในประวัติ CLAIM_SUBMITTED (note ให้คนอ่าน · meta ให้โปรแกรมอ่าน)
+  const keepNotes: { sparePartId: number | null; flag: string; note: string; label: string }[] = [];
   if (claimInputs.length > 0) {
-    // สามอย่างไม่ขึ้นต่อกัน — อ่านพร้อมกัน
-    const [ctx, spares, evidence] = await Promise.all([
+    // สี่อย่างไม่ขึ้นต่อกัน — อ่านพร้อมกัน
+    const [ctx, spares, roundClaimFiles, claimHistory, reopened] = await Promise.all([
       prisma.workOrder.findUniqueOrThrow({
         where: { id },
         select: {
@@ -6466,16 +6574,49 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         where: { id: { in: claimInputs.map((c) => c.sparePartId) } },
         select: { id: true, partCode: true, name: true },
       }),
-      prisma.workOrderAttachment.groupBy({
-        by: ["sparePartId", "role"],
+      // หลักฐานเคลม + รูปป้ายรุ่นของรอบนี้ทั้งชุด (ไม่เกินเพดาน 60 ไฟล์ต่อใบ) — ใช้ทั้งเช็คว่าครบ ผูกรูปป้ายกับใบเคลม
+      // และดูว่าแนบใหม่หลังถูกตีกลับหรือยัง ในคำสั่งเดียว
+      prisma.workOrderAttachment.findMany({
         where: {
           workOrderId: id,
-          role: { in: [...CLAIM_EVIDENCE_ROLES] },
+          role: { in: [...CLAIM_EVIDENCE_ROLES, "NAMEPLATE"] },
           createdAt: { gte: roundStart },
         },
-        _count: true,
+        select: { id: true, role: true, sparePartId: true, createdAt: true },
+      }),
+      // ใบเคลมที่เคยส่งของใบนี้ — ชิ้นที่ถูกตีกลับ ส่งใหม่ต้องแก้อะไรสักอย่าง (ตัดรอบข้างล่าง)
+      // แถวต่อใบมีไม่กี่แถว อ่านทั้งหมดในคำสั่งเดียวแล้วตัดในนี้ ไม่ต้องรอผลคำสั่งเปิดใบใหม่ก่อน
+      prisma.partClaim.findMany({
+        where: { workOrderId: id },
+        select: {
+          id: true,
+          sparePartId: true,
+          partCode: true,
+          partName: true,
+          status: true,
+          createdAt: true,
+          reviewedAt: true,
+          brokenPartCode: true,
+          symptom: true,
+          checkNote: true,
+          troubleshooting: true,
+          nameplate: true,
+          fieldCheck: true,
+        },
+      }),
+      prisma.workOrderLog.findFirst({
+        where: { workOrderId: id, action: "REOPENED" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
       }),
     ]);
+    /**
+     * สองหน้าต่างของแถวเคลมที่เคยส่ง (ดู lockSince ใน claimRules)
+     * งานซ่อมครั้งนี้ (หลังเปิดใบใหม่) — ชิ้นนั้นยังถูกตีกลับอยู่ไหม ฟอร์มปิดงานเปิดปุ่ม "ค่าเดิมถูกแล้ว" ตามนี้
+     * รอบหลักฐาน (หลังจ่ายงานครั้งล่าสุด · กติกาเดียวกับไฟล์ที่นับ) — ต้องแก้อะไรสักอย่างไหม · จ่ายงานใหม่แล้วถ่ายใหม่ทั้งชุดอยู่แล้ว
+     */
+    const priorRows = claimHistory.filter((r) => !reopened || r.createdAt >= reopened.createdAt);
+    const evidence = roundClaimFiles.filter((f) => (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(f.role ?? ""));
     const used = new Map((usedLines ?? []).map((p) => [p.sparePartId, p.quantity]));
     const make = machineMake(ctx.machine);
     const ts = claimTroubleshootingFor(make);
@@ -6503,12 +6644,10 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       };
     }
     // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
-    // ให้ Admin Spare Part เห็นรูปที่ระบบอ่านค่ามา ไม่ต้องไล่หาในกองไฟล์ของใบงาน
-    const platePhoto = await prisma.workOrderAttachment.findFirst({
-      where: { workOrderId: id, role: "NAMEPLATE", createdAt: { gte: roundStart } },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
-    });
+    // ให้ Admin Spare Part เห็นรูปที่ระบบอ่านค่ามา ไม่ต้องไล่หาในกองไฟล์ของใบงาน · รูปล่าสุดของรอบ (มาพร้อมไฟล์เคลมข้างบน)
+    const platePhoto = roundClaimFiles
+      .filter((f) => f.role === "NAMEPLATE")
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id)[0];
     const nameplate: Prisma.InputJsonValue = {
       family: guide.plate.family,
       photoId: platePhoto?.id ?? null,
@@ -6560,6 +6699,59 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         createdById: req.auth!.userId,
       });
     }
+
+    /**
+     * ส่งใหม่หลังถูกตีกลับต้องแก้อะไรสักอย่าง — หรือกด "ค่าเดิมถูกแล้ว" แล้วอธิบาย
+     *
+     * เดิมช่างกดส่งซ้ำได้ทั้งที่ยังไม่ได้แก้ ใบวนกลับไปหา Admin Spare Part พร้อมของเดิมที่เพิ่งถูกตีกลับ แล้วถูกตีกลับซ้ำ
+     * กันแค่การส่งซ้ำโดยไม่ตั้งใจ ไม่ใช่ตัวตรวจคุณภาพ (เติมจุดเดียวก็ผ่าน) — ดู changedSinceReject
+     * เทียบกับแถวล่าสุดของชิ้นนั้นในรอบนี้ · จ่ายงานใหม่แล้ว (แจ้งปัญหาหน้างาน/ย้อนขั้น) ไม่เทียบ เพราะต้องถ่ายใหม่ทั้งชุดอยู่แล้ว
+     * แต่คำอธิบาย "ค่าเดิมถูกแล้ว" ของชิ้นที่ยังถูกตีกลับในงานซ่อมครั้งนี้เก็บเสมอ — ฟอร์มยังขึ้นแถบตีกลับและบังคับให้ช่างพิมพ์
+     * ถ้าทิ้งเงียบ ๆ เพราะรอบหลักฐานขยับ ผู้ตรวจไม่เคยเห็นคำอธิบายที่ช่างถูกขอให้เขียน
+     */
+    const allParts = [...claimRows, ...priorRows].map((r) => ({ partCode: r.partCode, partName: r.partName }));
+    const label = (r: { partCode: string; partName: string }) => partLabel(r, allParts);
+    for (const c of claimInputs) {
+      for (const k of c.keep ?? []) {
+        if (k.flag !== "ALL") return res.status(400).json({ error: `ไม่รู้จักช่องที่ให้แก้ “${k.flag}”` });
+        const n = k.note.trim().length;
+        if (n < 3 || n > 300) return res.status(400).json({ error: "คำอธิบาย “ค่าเดิมถูกแล้ว” ต้องยาว 3–300 ตัวอักษร" });
+      }
+    }
+    const prior = latestPerPart(priorRows);
+    const machinePlate = plateFields.map((f) => ({ key: f.key, value: f.value }));
+    const machineError = (fieldCheck as { errorCode?: string; checked?: string[] } | undefined) ?? null;
+    for (const row of claimRows) {
+      const before = prior.get(claimKey({ sparePartId: row.sparePartId ?? null, partCode: row.partCode }));
+      if (!before || before.status !== "REJECTED") continue;
+      // แถวที่ถูกตีกลับอยู่ก่อนจ่ายงานครั้งล่าสุด = รอบหลักฐานขยับแล้ว ไม่เทียบว่าแก้หรือยัง (เก็บแค่คำอธิบาย)
+      const sameRound = before.createdAt >= roundStart;
+      const input = claimInputs.find((c) => c.sparePartId === row.sparePartId);
+      const keep = (input?.keep ?? []).map((k) => ({ flag: k.flag, note: k.note.trim() }));
+      if (keep.length) {
+        for (const k of keep) keepNotes.push({ sparePartId: row.sparePartId ?? null, ...k, label: label(row) });
+        continue;
+      }
+      if (!sameRound) continue;
+      const changed = changedSinceReject(
+        before,
+        {
+          brokenPartCode: row.brokenPartCode ?? "",
+          symptom: row.symptom,
+          checkNote: row.checkNote,
+          troubleshooting: (row.troubleshooting as string[] | undefined) ?? [],
+          plate: machinePlate,
+          errorCode: machineError?.errorCode ?? null,
+          errorChecked: machineError?.checked ?? [],
+        },
+        roundClaimFiles
+      );
+      if (!changed) {
+        return res.status(400).json({
+          error: `เคลม ${label(row)}: ยังไม่ได้แก้อะไรจากรอบที่ถูกตีกลับ — แก้ตามเหตุผล หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย`,
+        });
+      }
+    }
   }
 
   if (!body.note?.trim()) {
@@ -6569,55 +6761,77 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   // มีเคลม = ยังไม่ปิดจริง รอ Admin Spare Part ตรวจหลักฐานก่อน (ข้อมูลปิดงานบันทึกไว้แล้ว อนุมัติแล้วไม่ต้องกรอกซ้ำ)
   const nextStatus = claimRows.length > 0 ? "CLAIM_REVIEW" : "DONE";
   const now = new Date();
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        status: nextStatus,
-        closedAt: now,
-        closedById: req.auth!.userId,
-        closeResult: body.result,
-        closeNote: body.note?.trim() || null,
-        closeOtherWorkers: otherWorkers,
-        closeSubTeam: subTeam,
-        // ปิดแล้วไม่ได้รออะไรอยู่ ค้างไว้จะไปโผล่บนกระดานว่ายังรอช่าง
-        workStatus: workStatusForStage("DONE"),
-      },
-    });
-
-    // เขียนทับทั้งชุด ไม่ใช่ต่อท้าย เผื่อแอดมินมาแก้ทีหลังว่าใครไปจริง
-    await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
-    if (workerIds.length > 0) {
-      await tx.workOrderWorker.createMany({
-        data: workerIds.map((userId) => ({ workOrderId: id, userId })),
-        skipDuplicates: true,
+  try {
+    await prisma.$transaction(async (tx) => {
+      /**
+       * ด่านกันส่งปิดซ้อน — คำสั่งแรกใน transaction เปลี่ยนสถานะเฉพาะเมื่อใบยังอยู่ขั้นที่ปิดได้
+       *
+       * ด่านข้างบนอ่านนอก transaction: กดส่งสองครั้งติด (หรือกดซ้ำหลังเน็ตหลุดขณะคำสั่งแรกยังไม่จบ) ผ่านด่านนั้นได้ทั้งคู่
+       * แล้วเขียนใบเคลมซ้ำสองชุด + ประวัติปิดงานสองแถว · ที่นี่ Postgres ล็อกแถวใบงาน คำสั่งที่สองรอจนคำสั่งแรกจบ
+       * แล้วตรวจเงื่อนไขกับสถานะใหม่ (รอตรวจเคลม/ปิดแล้ว) → ไม่ตรง → ตอบ 409 ให้ฟอร์มโหลดใบใหม่ (นับเป็นส่งสำเร็จได้)
+       */
+      const guard = await tx.workOrder.updateMany({
+        where: { id, status: { in: ["ASSIGNED", "AWAITING_CONFIRM", "IN_PROGRESS"] } },
+        data: {
+          status: nextStatus,
+          closedAt: now,
+          closedById: req.auth!.userId,
+          closeResult: body.result,
+          closeNote: body.note?.trim() || null,
+          closeOtherWorkers: otherWorkers,
+          closeSubTeam: subTeam,
+          // ปิดแล้วไม่ได้รออะไรอยู่ ค้างไว้จะไปโผล่บนกระดานว่ายังรอช่าง
+          workStatus: workStatusForStage("DONE"),
+        },
       });
-    }
+      if (guard.count === 0) throw new CloseAlreadySent();
 
-    // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
-    if (usedLines !== undefined) await replaceParts(tx, id, "USED", usedLines);
+      // เขียนทับทั้งชุด ไม่ใช่ต่อท้าย เผื่อแอดมินมาแก้ทีหลังว่าใครไปจริง
+      await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
+      if (workerIds.length > 0) {
+        await tx.workOrderWorker.createMany({
+          data: workerIds.map((userId) => ({ workOrderId: id, userId })),
+          skipDuplicates: true,
+        });
+      }
 
-    if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows });
+      // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
+      if (usedLines !== undefined) await replaceParts(tx, id, "USED", usedLines);
 
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "CLOSED",
-      nextStatus,
-      [subTeam ? `บันทึกผลงาน SUB · ทีม ${subTeam}` : null, body.note?.trim() || null].filter(Boolean).join(" — ") || null
-    );
-    if (claimRows.length > 0) {
+      // ทุกแถวของการส่งครั้งนี้เวลาเดียวกันเป๊ะ — "รอบเดียวกัน" จึงเทียบเวลาได้ตรง ๆ (หลักฐานของแถว · แถบสถานะ · รอบที่เท่าไหร่)
+      if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows.map((r) => ({ ...r, createdAt: now })) });
+
       await writeLog(
         tx,
         id,
         req.auth!.userId,
-        "CLAIM_SUBMITTED",
+        "CLOSED",
         nextStatus,
-        `ส่งเคลมอะไหล่เก่า: ${claimRows.map((c) => c.partCode).join(", ")}`
+        [subTeam ? `บันทึกผลงาน SUB · ทีม ${subTeam}` : null, body.note?.trim() || null].filter(Boolean).join(" — ") || null
       );
+      if (claimRows.length > 0) {
+        await writeLog(
+          tx,
+          id,
+          req.auth!.userId,
+          "CLAIM_SUBMITTED",
+          nextStatus,
+          [
+            `ส่งเคลมอะไหล่เก่า: ${claimRows.map((c) => c.partCode).join(", ")}`,
+            ...keepNotes.map((k) => `${k.label} ยืนยันค่าเดิม: ${k.note}`),
+          ].join(" · "),
+          keepNotes.length
+            ? { keep: keepNotes.map((k) => ({ sparePartId: k.sparePartId, flag: k.flag, note: k.note })) }
+            : undefined
+        );
+      }
+    }, STAGE_TX);
+  } catch (e) {
+    if (e instanceof CloseAlreadySent) {
+      return res.status(409).json({ error: `${current.code} ส่งปิดงานไปแล้ว — โหลดใหม่`, code: "CLOSE_ALREADY_SENT" });
     }
-  }, STAGE_TX);
+    throw e;
+  }
 
   res.json(await detailFor(id));
 });
