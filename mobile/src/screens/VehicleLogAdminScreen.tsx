@@ -220,7 +220,7 @@ export default function VehicleLogAdminScreen() {
 
   const empty =
     rows === null ? (
-      error ? <Text style={fs.error}>{error}</Text> : <Spinner color={colors.primary} />
+      error ? <Text style={fs.error}>{error}</Text> : <Spinner page color={colors.primary} />
     ) : (
       <EmptyState icon="car-outline" text={rows.length ? "ไม่มีรายการตรงกับที่ค้นหา" : "ไม่มีรายการในเดือนนี้"} />
     );

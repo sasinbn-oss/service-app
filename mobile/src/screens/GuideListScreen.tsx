@@ -98,7 +98,7 @@ export default function GuideListScreen({ navigation }: Props) {
       )}
 
       {loading ? (
-        <Spinner style={styles.loader} color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : error ? (
         <Text style={styles.error}>{error}</Text>
       ) : (
@@ -148,7 +148,6 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipText: { fontSize: 13, color: colors.textMuted },
   chipTextActive: { color: "#fff", fontWeight: "600" },
-  loader: { marginTop: 40 },
   listContent: { padding: 16, paddingTop: 8 },
   card: {
     backgroundColor: colors.card,

@@ -1303,9 +1303,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   );
 
   const status = loading ? (
-    <View style={styles.centered}>
-      <Spinner color={colors.primary} />
-    </View>
+    // ไม่ใช้กล่อง centered แบบข้อความผิดพลาด — กล่องนั้นเว้นขอบ 32 px ดันตัวโหลดต่ำกว่ากลางที่ว่าง
+    <Spinner page color={colors.primary} />
   ) : error ? (
     <View style={styles.centered}>
       <Text style={styles.errorText}>{error}</Text>

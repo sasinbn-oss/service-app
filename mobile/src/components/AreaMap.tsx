@@ -974,9 +974,14 @@ export default function AreaMap({
       <ScrollView contentContainerStyle={styles.page}>
         <View style={styles.sheet}>
           {head}
-          <View style={styles.center}>
-            {error ? <EmptyState icon="cloud-offline-outline" title="โหลดผังฝั่ง Area ไม่ได้" text={error} /> : <Spinner color={colors.primary} />}
-          </View>
+          {/* ตัวโหลดไม่อยู่ในกล่อง center — ขอบ 40 px ของกล่องนั้นดันเครื่องซักผ้าต่ำกว่ากลางที่ว่าง */}
+          {error ? (
+            <View style={styles.center}>
+              <EmptyState icon="cloud-offline-outline" title="โหลดผังฝั่ง Area ไม่ได้" text={error} />
+            </View>
+          ) : (
+            <Spinner page color={colors.primary} />
+          )}
         </View>
       </ScrollView>
     );

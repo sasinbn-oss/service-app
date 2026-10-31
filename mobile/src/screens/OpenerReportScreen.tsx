@@ -175,7 +175,7 @@ export default function OpenerReportScreen() {
       {error ? (
         <Text style={styles.error}>{error}</Text>
       ) : loading && !data ? (
-        <Spinner color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : data && data.summary.length === 0 ? (
         <Text style={styles.empty}>ไม่มีใบงานที่เปิดในช่วงวันที่นี้</Text>
       ) : data ? (

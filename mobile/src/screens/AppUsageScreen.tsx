@@ -249,7 +249,7 @@ export default function AppUsageScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!data ? (
-        <Spinner />
+        <Spinner page />
       ) : (
         <>
           <View style={styles.tiles}>

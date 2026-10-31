@@ -167,7 +167,7 @@ export default function ManageBranchesScreen() {
       {error ? (
         <Text style={styles.error}>{error}</Text>
       ) : loading && rows.length === 0 ? (
-        <Spinner color={colors.primary} style={{ marginTop: 30 }} />
+        <Spinner page color={colors.primary} />
       ) : rows.length === 0 ? (
         <Text style={styles.empty}>ไม่พบสาขาตามที่กรอง</Text>
       ) : wide ? (

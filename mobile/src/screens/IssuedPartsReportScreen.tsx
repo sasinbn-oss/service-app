@@ -379,7 +379,7 @@ export default function IssuedPartsReportScreen({ navigation }: Props) {
       {error ? (
         <Text style={styles.error}>{error}</Text>
       ) : !rows ? (
-        <Spinner color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : shown.length === 0 ? (
         <Text style={styles.empty}>{orders.length ? "ไม่มีใบงานที่ตรงกับตัวกรอง" : "ตอนนี้ไม่มีใบงานที่เบิกอะไหล่แล้วแต่ยังไม่ปิด"}</Text>
       ) : tab === "part" ? (

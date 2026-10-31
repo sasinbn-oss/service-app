@@ -106,7 +106,7 @@ export default function ReviewRequestsScreen() {
       </View>
 
       {loading ? (
-        <Spinner style={styles.loader} color={colors.primary} />
+        <Spinner page color={colors.primary} />
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}
@@ -196,7 +196,6 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipText: { fontSize: 13, color: colors.textMuted },
   chipTextActive: { color: "#fff", fontWeight: "600" },
-  loader: { marginTop: 40 },
   listContent: { padding: 16, paddingTop: 8 },
   card: {
     backgroundColor: colors.card,
