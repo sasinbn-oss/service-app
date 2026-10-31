@@ -53,16 +53,21 @@ import {
   parseQuery as parseBranchPartsQuery,
 } from "../reports/branchPartsReport";
 import { activeRollback, RollbackSnapshot, rollbackPrefill } from "../utils/rollback";
-import { claimGuideFor } from "../utils/claimGuide";
+import { claimGuideFor, machineErrorText } from "../utils/claimGuide";
 import {
   changedSinceReject,
+  claimEvidenceFor,
   claimKey,
+  ClaimLogLite,
+  claimPosition,
+  claimRoundOf,
   claimSummary,
   firstSubmittedAt,
   isSubmittedEvidence,
   latestPerPart,
   lockSince,
   partLabel,
+  repairStartFor,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 import {
@@ -612,10 +617,35 @@ function actorLabelFor(stage: string): string | null {
 }
 
 /**
- * names = ชื่อผู้ใช้ที่แถวเคลมอ้างถึง (คนตัดสินเคลม) — ตาราง PartClaim ไม่มี relation ไปหาผู้ใช้ (เพิ่มต้องมี migration)
- * หน้ารายละเอียดอ่านมาพร้อมกันในรอบเดียว (loadDetail) · คำตอบจากคำสั่งอื่นไม่ส่งมา ชื่อจึงว่าง
+ * ข้อมูลของแถวเคลมที่หน้าตรวจต้องใช้แต่คิดเองไม่ได้ (ก้อน 2) — คิดที่เซิร์ฟเวอร์ที่เดียว แอปไม่ไล่กติกาซ้ำ
+ *
+ * round = ส่งรอบที่เท่าไหร่ของชิ้นนี้ (นับต่อชิ้นในงานซ่อมครั้งนั้น) · firstSubmittedAt = วันที่ส่งชิ้นนี้ครั้งแรก
+ * ของห่วงโซ่ "ตีกลับ → ส่งใหม่" (วันที่เปลี่ยนอะไหล่จริง กติกาเดียวกับใบเคลม PDF)
+ * evidenceIds = ไฟล์ที่เป็นหลักฐานของแถวนี้ตาม claimEvidenceFor — ทำไมไม่ให้แอปกรองเอง: เดิมการ์ดเคลมกรอง
+ * "ไฟล์ที่แนบก่อนเวลาส่ง" เองโดยไม่มีขอบล่าง ไฟล์ของรอบที่ถูกตีกลับไปปนกับรอบนี้ — หน้าตรวจ ใบเคลม PDF
+ * และการกันลบต้องเห็นชุดเดียวกันทุกครั้ง จึงส่งรายการ id ที่ตัดสินแล้วไปให้เลย
  */
-function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date, names?: Map<number, string>) {
+function claimRowExtras(c: WorkOrderRow["claims"][number], w: WorkOrderRow, logs: ClaimLogLite[]) {
+  const since = repairStartFor(c.createdAt, logs);
+  return {
+    round: claimRoundOf(c, w.claims, since),
+    firstSubmittedAt: firstSubmittedAt(c, w.claims, since),
+    evidenceIds: claimEvidenceFor(c, w.attachments, logs).map((f) => f.id),
+  };
+}
+
+/**
+ * names = ชื่อ/รหัสพนักงานของผู้ใช้ที่แถวเคลมอ้างถึง (ช่างที่ส่ง · คนตัดสินเคลม) — ตาราง PartClaim ไม่มี relation ไปหาผู้ใช้
+ * (เพิ่มต้องมี migration) หน้ารายละเอียดอ่านมาพร้อมกันในรอบเดียว (loadDetail) · คำตอบจากคำสั่งอื่นไม่ส่งมา ชื่อจึงว่าง
+ * logs = ประวัติของใบ (เฉพาะหน้ารายละเอียด) — ใช้หารอบหลักฐาน/งานซ่อมครั้งไหนของแต่ละแถวเคลม ไม่ส่งมา = ไม่มีขอบล่าง
+ */
+function shape(
+  w: WorkOrderRow,
+  roundStart?: Date,
+  inspectStart?: Date,
+  names?: Map<number, { name: string; code: string }>,
+  logs: ClaimLogLite[] = []
+) {
   const claimParts = w.claims.map((c) => ({ partCode: c.partCode, partName: c.partName }));
   return {
     id: w.id,
@@ -796,9 +826,14 @@ function shape(w: WorkOrderRow, roundStart?: Date, inspectStart?: Date, names?: 
       createdAt: c.createdAt,
       reviewedAt: c.reviewedAt,
       // ใครตีกลับ/อนุมัติ — แถบแดงในฟอร์มแก้เคลมบอก "{คนตรวจ} · {เวลา}" ช่างจะได้รู้ว่าถามใคร
-      reviewedByName: c.reviewedById != null ? names?.get(c.reviewedById) ?? null : null,
+      reviewedByName: c.reviewedById != null ? names?.get(c.reviewedById)?.name ?? null : null,
       // ชื่อที่ทุกหน้าจอใช้เรียกชิ้นนี้ (ชื่อไทย · ต่อรหัสเมื่อในใบมีชื่อซ้ำ) — คิดที่เดียวกับข้อความของเซิร์ฟเวอร์
       partLabel: partLabel(c, claimParts),
+      // ช่างที่กดส่งแถวนี้ — หน้าตรวจขึ้น "ช่าง {ชื่อ} ({รหัส}) · ส่ง {เวลา}" (คนปิดงานรอบหลังอาจเป็นคนละคนกับรอบแรก)
+      // ต้องมีรหัสพนักงานด้วย เพราะชื่อเล่นช่างซ้ำกันได้ ผู้ตรวจต้องรู้ว่าตามใคร
+      createdByName: c.createdById != null ? names?.get(c.createdById)?.name ?? null : null,
+      createdByCode: c.createdById != null ? names?.get(c.createdById)?.code ?? null : null,
+      ...claimRowExtras(c, w, logs),
     })),
     /**
      * หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ — ช่างที่ถูกตีกลับแนบเพิ่มเฉพาะที่ขาด
@@ -2415,10 +2450,11 @@ async function loadDetail(id: number) {
       select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
-    // ชื่อคนตัดสินเคลมของใบนี้ — PartClaim ไม่มี relation ไปหาผู้ใช้ จึง join เองในคำสั่งเดียว ถามพร้อมกับข้างบน
+    // ชื่อช่างที่ส่ง/คนตัดสินเคลมของใบนี้ — PartClaim ไม่มี relation ไปหาผู้ใช้ จึง join เองในคำสั่งเดียว ถามพร้อมกับข้างบน
     // (ถ้ารอแถวเคลมมาก่อนแล้วค่อยถามชื่อ = เดินทางไปกลับเพิ่มอีกรอบทุกครั้งที่เปิดใบงาน)
-    prisma.$queryRaw<{ id: number; name: string }[]>`
-      SELECT DISTINCT u.id, u.name FROM "PartClaim" c JOIN "User" u ON u.id = c."reviewedById"
+    prisma.$queryRaw<{ id: number; name: string; employeeCode: string }[]>`
+      SELECT DISTINCT u.id, u.name, u."employeeCode" FROM "PartClaim" c
+      JOIN "User" u ON u.id IN (c."reviewedById", c."createdById")
       WHERE c."workOrderId" = ${id}`,
   ]);
   if (!row) return null;
@@ -2439,7 +2475,13 @@ async function loadDetail(id: number) {
     for (const u of scoped) if (!coversWorkOrder(u.scope, row) && (await teamsForSupervisor(u.scope)).has(sent)) watchers.push(u.name);
     crossTeam = { ownTeam: ownTeamOf(row) ?? "", assignedTeam: row.assignedTeam ?? "", watchers };
   }
-  return { row, logs, supervisors, crossTeam, claimUsers: new Map(claimUsers.map((u) => [u.id, u.name])) };
+  return {
+    row,
+    logs,
+    supervisors,
+    crossTeam,
+    claimUsers: new Map(claimUsers.map((u) => [u.id, { name: u.name, code: u.employeeCode }])),
+  };
 }
 
 type Detail = NonNullable<Awaited<ReturnType<typeof loadDetail>>>;
@@ -2526,7 +2568,7 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers }: Detail) {
   const inspectStart = logs.find((l) => l.action === "INSPECT_REQUESTED")?.createdAt ?? row.createdAt;
 
   const confirm = logs.find((l) => APPOINTMENT_BY_ACTIONS.includes(l.action) && !l.backfilledAt);
-  const base = shape(row, roundStart, inspectStart, claimUsers);
+  const base = shape(row, roundStart, inspectStart, claimUsers, logs);
   return {
     ...base,
     appointmentBy:
@@ -2568,14 +2610,65 @@ async function detailFor(id: number) {
   return detailBody(d);
 }
 
+/**
+ * เครื่องนี้เคยเคลมมาก่อนไหม — หน้าตรวจเคลมขึ้น "⚠ {รหัส} เครื่องนี้เคยเคลมเมื่อ …" ให้ Admin Spare Part ดูก่อนอนุมัติ
+ * (อะไหล่ชิ้นเดิมเคลมซ้ำในเวลาสั้น ๆ = ผู้ขายถามแน่ หรือของที่ส่งไปรอบก่อนยังไม่ได้แก้ต้นเหตุ)
+ *
+ * เครื่องเดียวกัน = สาขาเดียวกัน + รหัสเครื่องตรงกันไม่สนตัวพิมพ์ (กติกาเดียวกับลิงก์ประวัติเคลม) · แถวล่าสุดต่อ (ใบ, ชิ้น)
+ * ตัดเฉพาะแถวของงานซ่อมครั้งนี้ของใบนี้ (หลังเปิดใบใหม่ครั้งล่าสุด) — ใบเดียวกันที่อนุมัติไปตอนซ่อมครั้งก่อนเปิดใหม่ต้องขึ้น
+ * เพราะนั่นคือการเคลมซ้ำจริง · ใบทดสอบไม่นับให้ใบจริง (คัดลอกใบจริงไปลองปิดพร้อมเคลม ไม่ได้แปลว่าเครื่องเคลมซ้ำ)
+ * "เคย" = ส่งก่อนแถวล่าสุดของใบนี้ — เปิดดูใบเก่าทีหลังต้องไม่ขึ้นเคลมของใบที่ใหม่กว่าว่า "เครื่องนี้เคยเคลม"
+ * คำสั่งเดียวหาสาขา/เครื่องจากใบเอง จึงถามพร้อมกับตัวใบได้ ไม่ต้องรอใบมาก่อน (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
+ */
+async function claimRepeatsFor(id: number) {
+  const rows = await prisma.$queryRaw<
+    { workOrderId: number; code: string; partCode: string; partName: string; status: string; createdAt: Date }[]
+  >`
+    SELECT DISTINCT ON (c."workOrderId", COALESCE('id:' || c."sparePartId", 'code:' || c."partCode"))
+           c."workOrderId", w.code, c."partCode", c."partName", c.status, c."createdAt"
+    FROM "WorkOrder" me
+    JOIN "Branch" b ON b.id = me."branchId"
+    JOIN "Machine" m ON m.id = me."machineId"
+    JOIN "PartClaim" c ON c."branchCode" = b.code AND lower(c."machineCode") = lower(m.code)
+    JOIN "WorkOrder" w ON w.id = c."workOrderId"
+    WHERE me.id = ${id}
+      AND (me."isTest" OR NOT w."isTest")
+      AND NOT (c."workOrderId" = me.id AND c."createdAt" >= COALESCE(
+        (SELECT max(l."createdAt") FROM "WorkOrderLog" l WHERE l."workOrderId" = me.id AND l.action = 'REOPENED'),
+        '-infinity'::timestamp))
+      AND c."createdAt" <= COALESCE(
+        (SELECT max(x."createdAt") FROM "PartClaim" x WHERE x."workOrderId" = me.id), 'infinity'::timestamp)
+    ORDER BY c."workOrderId", COALESCE('id:' || c."sparePartId", 'code:' || c."partCode"), c."createdAt" DESC, c.id DESC`;
+  return rows
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .map((r) => ({
+      workOrderId: r.workOrderId,
+      code: r.code,
+      partCode: r.partCode,
+      partName: r.partName,
+      status: r.status,
+      createdAt: r.createdAt,
+    }));
+}
+
 router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const [d, viewer] = await Promise.all([loadDetail(id), viewerOf(req)]);
+  /**
+   * เคลมซ้ำส่งเฉพาะแอดมินทุกแบบ (Admin Spare Part · Super Admin · แอดมิน) — คนตัดสินเคลมคือฝั่งแอดมิน
+   * ช่าง/หัวหน้าภาคไม่ได้รับ ไม่ใช่เรื่องที่เขาต้องตัดสิน และไม่ให้ดูเหมือนถูกสงสัย (เจ้าของงานเลือกค่าตั้งต้นนี้)
+   * อยู่ที่ GET นี้ที่เดียว ไม่ใส่ใน detailFor — ปุ่มเปลี่ยนขั้นอื่นไม่ต้องใช้ ไม่ต้องถามฐานข้อมูลเพิ่มทุกครั้งที่กด
+   */
+  const repeatsFor = req.auth!.role === "ADMIN" ? claimRepeatsFor(id) : Promise.resolve(null);
+  const [d, viewer, repeats] = await Promise.all([loadDetail(id), viewerOf(req), repeatsFor]);
   if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (await blockedForViewer(req, res, d.row, viewer)) return;
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
-  res.json({ ...detailBody(d), ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}) });
+  res.json({
+    ...detailBody(d),
+    ...(repeats ? { claimRepeats: repeats } : {}),
+    ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}),
+  });
 });
 
 // ── เปิดใบงาน ──────────────────────────────────────────
@@ -6641,6 +6734,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         errorCode: err.code,
         errorName: err.name,
         checked: err.checks.filter((c) => chk.checked.includes(c)),
+        // ข้อเช็คที่หน้าจอให้ติ๊กตอนนั้น — ผู้ตรวจเห็นว่าข้อไหน "ไม่ได้ทำ" (offered − checked) จากรายการที่ช่างเห็นจริง
+        // ไม่ใช่รายการในคู่มือวันที่เปิดดู (แก้คู่มือทีหลังต้องไม่ทำให้ใบเก่าดูเหมือนช่างข้ามข้อที่ไม่เคยมี)
+        offered: err.checks,
       };
     }
     // รูปป้ายเต็มที่ช่างถ่าย (ขึ้นเป็นไฟล์ป้ายรุ่นของรอบนี้ก่อนสั่งปิด) — ผูกไว้กับใบเคลม
@@ -6919,32 +7015,45 @@ async function claimPdf(req: AuthRequest, res: Response) {
     res.status(404).json({ error: "ไม่พบใบเคลมนี้" });
     return null;
   }
-  const [requester, files, chain, reopened] = await Promise.all([
+  /**
+   * ไฟล์ · แถวเคลม · ประวัติ ถึงเวลาที่ส่งใบนี้ — อ่านพร้อมกันรอบเดียว
+   * หลักฐานที่พิมพ์ = claimEvidenceFor (กติกาเดียวกับหน้าตรวจและการกันลบ) — เดิมลงทุกไฟล์ของชิ้นนั้นไม่มีขอบบน
+   * ไฟล์ที่แนบหลังส่ง (เตรียมส่งใหม่หลังถูกตีกลับ) จึงไปโผล่ในใบเคลมของรอบที่ผู้ตรวจไม่เคยเห็นไฟล์นั้น
+   */
+  const [requester, files, chain, logs, order] = await Promise.all([
     claim.createdById
       ? prisma.user.findUnique({ where: { id: claim.createdById }, select: { name: true } })
       : Promise.resolve(null),
     prisma.workOrderAttachment.findMany({
-      where: { workOrderId: id, sparePartId: claim.sparePartId, role: { in: [...CLAIM_EVIDENCE_ROLES] } },
-      select: { role: true },
+      where: { workOrderId: id, role: { in: [...CLAIM_EVIDENCE_ROLES, "NAMEPLATE"] } },
+      select: { id: true, role: true, sparePartId: true, createdAt: true },
     }),
-    // แถวก่อนหน้าของชิ้นเดียวกัน — หาวันที่ส่งครั้งแรกของห่วงโซ่ "ตีกลับ → ส่งใหม่" (วันที่เปลี่ยนอะไหล่จริง)
+    // แถวก่อนหน้า (ทุกชิ้น) — หาวันที่ส่งครั้งแรกของห่วงโซ่ "ตีกลับ → ส่งใหม่" (วันที่เปลี่ยนอะไหล่จริง) และชิ้นที่ n จาก m
     prisma.partClaim.findMany({
       where: { workOrderId: id, createdAt: { lte: claim.createdAt } },
       select: { id: true, sparePartId: true, partCode: true, status: true, createdAt: true },
     }),
-    // เปิดใบใหม่ = ซ่อมครั้งใหม่ แถวก่อนหน้านั้นไม่ใช่ห่วงโซ่เดียวกัน
-    prisma.workOrderLog.findFirst({
-      where: { workOrderId: id, action: "REOPENED", createdAt: { lte: claim.createdAt } },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
+    // จ่ายงาน/เปิดใบใหม่ = จุดเริ่มรอบหลักฐาน · เปิดใบใหม่ = ซ่อมครั้งใหม่ แถวก่อนหน้านั้นไม่ใช่ห่วงโซ่เดียวกัน
+    prisma.workOrderLog.findMany({
+      where: { workOrderId: id, action: { in: ["ASSIGNED", "REOPENED"] }, createdAt: { lte: claim.createdAt } },
+      select: { action: true, createdAt: true },
     }),
+    prisma.workOrder.findUnique({ where: { id }, select: { isTest: true } }),
   ]);
+  const since = repairStartFor(claim.createdAt, logs);
+  const evidence = claimEvidenceFor(claim, files, logs)
+    .map((f) => f.role!)
+    .filter((r): r is (typeof CLAIM_EVIDENCE_ROLES)[number] => (CLAIM_EVIDENCE_ROLES as readonly string[]).includes(r))
+    .sort((a, b) => CLAIM_EVIDENCE_ROLES.indexOf(a) - CLAIM_EVIDENCE_ROLES.indexOf(b));
   const pdf = await buildPartClaimPdf({
     workOrderCode: wo.code,
     claim,
-    repairedAt: firstSubmittedAt(claim, chain, reopened?.createdAt),
+    repairedAt: firstSubmittedAt(claim, chain, since),
     requesterName: requester?.name ?? null,
-    evidence: [...new Set(files.map((f) => ATTACHMENT_ROLE_LABELS[f.role!]?.replace(" (เคลม)", "") ?? f.role!))],
+    evidence: evidence.map((r) => ATTACHMENT_ROLE_LABELS[r]?.replace(" (เคลม)", "") ?? r),
+    position: claimPosition(claim, chain, since),
+    machineError: machineErrorText(claim.fieldCheck),
+    isTest: !!order?.isTest,
   });
   return { pdf, filename: `ใบเคลม-${wo.code}-${claim.partCode}.pdf`, ascii: `claim-${wo.code}-${claim.id}.pdf` };
 }

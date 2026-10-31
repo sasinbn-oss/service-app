@@ -186,6 +186,66 @@ export function lockSince(logs: ClaimLogLite[]): Date | null {
   return since;
 }
 
+// ── ก้อน 2: ผู้ตรวจเห็นครบในหน้าเดียว ─────────────────────────────
+
+/**
+ * งานซ่อมครั้งที่แถวนี้อยู่ เริ่มเมื่อไหร่ = เปิดใบใหม่ (REOPENED) ครั้งล่าสุดก่อนส่งแถวนี้ · ไม่เคยเปิดใหม่ = ทั้งใบ (null)
+ *
+ * ต่างจาก lockSince ตรงที่ดู "ณ เวลาที่ส่งแถวนั้น" — แถวของการซ่อมครั้งก่อนเปิดใบใหม่ต้องนับรอบ/วันที่ส่งครั้งแรก
+ * ในการซ่อมครั้งของมันเอง ไม่ใช่ถูกตัดทิ้งเพราะมีการเปิดใบใหม่ทีหลัง (หน้าตรวจยังแสดงรอบเก่าเป็นประวัติ)
+ */
+export function repairStartFor(at: Date, logs: ClaimLogLite[]): Date | null {
+  let since: Date | null = null;
+  for (const l of logs) {
+    if (l.action === "REOPENED" && l.createdAt <= at && (!since || l.createdAt > since)) since = l.createdAt;
+  }
+  return since;
+}
+
+/**
+ * ส่งรอบที่เท่าไหร่ของชิ้นนี้ = จำนวนครั้งที่ส่งชิ้นเดียวกันในงานซ่อมครั้งนั้น นับถึงแถวนี้ (รวมตัวเอง)
+ *
+ * นับต่อชิ้น ไม่ใช่ต่อการกดส่ง — ใบ 2 ชิ้นที่ถูกตีกลับครั้งเดียวคือรอบ 2 ของทั้งสองชิ้น ไม่ใช่รอบ 3
+ * (กติกาเดียวกับ round ของการ์ดงานช่างใน claimSummary) ผู้ตรวจกับช่างจึงเห็นเลขรอบเดียวกัน
+ */
+export function claimRoundOf(target: ClaimRowLite, rows: ClaimRowLite[], notBefore?: Date | null): number {
+  return rows.filter(
+    (r) => claimKey(r) === claimKey(target) && !newer(r, target) && (!notBefore || r.createdAt >= notBefore)
+  ).length;
+}
+
+/**
+ * ใบเคลมนี้เป็นชิ้นที่เท่าไหร่จากกี่ชิ้น ("ชิ้นที่ n จาก m" บนหัวใบเคลม) — ผู้ขายได้ใบเคลมใบละชิ้น ต้องรู้ว่าครบชุดหรือยัง
+ *
+ * นับชิ้นของงานซ่อมครั้งนั้น ณ เวลาที่ส่งแถวนี้ (แถวล่าสุดของแต่ละชิ้น) ไม่ใช่แค่แถวที่ส่งพร้อมกัน —
+ * ชิ้นที่ผ่านไปแล้วรอบก่อนยังเป็นของชุดเดียวกัน · ไม่นับชิ้นที่ปิดเคลมไม่ส่งผู้ขาย (ไม่มีใบเคลมให้ผู้ขาย)
+ * ไม่นับชิ้นที่ค้างเป็นตีกลับจากการส่งครั้งก่อน — ช่างเลิกส่งเคลมชิ้นนั้นตอนส่งใหม่ (ถอดติ๊ก/เอาออกจากอะไหล่ที่ใช้)
+ * ชิ้นนั้นจะไม่มีใบเคลมไปถึงผู้ขายอีก ถ้านับไว้ ใบที่อนุมัติจะเขียน "1 จาก 2" ผู้ขายรอใบที่สองที่ไม่มีวันมา
+ * (ตีกลับที่ส่งพร้อมแถวนี้ยังนับ — เปิดใบของรอบที่ถูกตีกลับดูย้อนหลัง ต้องเห็นชุดตามที่ส่งตอนนั้น)
+ * เรียงตามที่ส่งครั้งแรก (id แรกของชิ้นนั้น) เลขของชิ้นจึงไม่สลับเมื่อชิ้นหนึ่งถูกตีกลับแล้วส่งใหม่
+ */
+export function claimPosition(
+  target: ClaimRowLite,
+  rows: ClaimRowLite[],
+  notBefore?: Date | null
+): { n: number; m: number } {
+  const inRepair = rows.filter(
+    (r) => r.createdAt.getTime() <= target.createdAt.getTime() && (!notBefore || r.createdAt >= notBefore)
+  );
+  const firstId = new Map<string, number>();
+  for (const r of inRepair) firstId.set(claimKey(r), Math.min(firstId.get(claimKey(r)) ?? r.id, r.id));
+  const parts = [...latestPerPart(inRepair).values()]
+    .filter(
+      (r) =>
+        claimKey(r) === claimKey(target) ||
+        (r.status !== "DECLINED" && !(r.status === "REJECTED" && r.createdAt.getTime() !== target.createdAt.getTime()))
+    )
+    .map((r) => claimKey(r))
+    .sort((a, b) => (firstId.get(a) ?? 0) - (firstId.get(b) ?? 0));
+  const n = parts.indexOf(claimKey(target)) + 1;
+  return n > 0 ? { n, m: parts.length } : { n: 1, m: 1 };
+}
+
 /** แถวเคลมที่ถูกตีกลับ (ค่าที่ส่งรอบนั้น) — ใช้เทียบว่ารอบนี้ช่างแก้อะไรแล้วหรือยัง */
 export interface ClaimRejectedRow extends ClaimRowLite {
   brokenPartCode: string | null;

@@ -24,7 +24,11 @@ export interface PlateTemplate {
 }
 export interface ClaimGuide {
   plate: PlateTemplate;
-  errors: { code: string; name: string; checks: string[] }[];
+  /**
+   * label = ชื่อในรายการเลือก "{รหัส} — {ไทย} ({อังกฤษ})" · thai = ส่วนไทยของชื่อ — เซิร์ฟเวอร์คิดให้ (claimGuide.ts) รุ่นเก่าไม่ส่ง
+   * หน้าตรวจ/การ์ดเคลมไม่ใช้สองค่านี้ — อ่านชื่อที่เก็บในแถวตอนส่ง (claimEvidence errorLabelOf) ให้ตรงกับใบเคลม PDF
+   */
+  errors: { code: string; name: string; checks: string[]; label?: string; thai?: string }[];
 }
 
 /** ค่าในช่องหนึ่งของป้าย — SCAN = ระบบอ่านจากรูป · HAND = พิมพ์/แก้เอง (Admin Spare Part เห็นป้ายต่างกัน) */

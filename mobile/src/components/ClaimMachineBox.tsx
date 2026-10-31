@@ -6,7 +6,7 @@
  * รายการทั้งหมดมาจากเซิร์ฟเวอร์ (claimGuide) — ยี่ห้อที่ไม่มีคู่มือ (OASIS ฯลฯ) มีแค่ข้อมูลป้าย
  */
 import React, { useState } from "react";
-import { Image, ImageStyle, StyleProp, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Dropdown from "./Dropdown";
@@ -14,6 +14,9 @@ import { ClaimGuide, PlateValue, isBrandOnly, plateFields } from "../utils/namep
 import { readPlatePhoto } from "../utils/ocr";
 import { filesToAttachments, pickImageAttachment, type PickedAttachment } from "../utils/attachments";
 import FileDropZone from "./FileDropZone";
+import ClaimCrop, { LookalikeText } from "./claims/ClaimCrop";
+import CheckGroups from "./claims/CheckGroups";
+import { errorCheckGroup, errorLabelOf, hasLookalike, isLegacyPlate, plateSourceText, type PartClaim } from "../utils/claimEvidence";
 import { colors, radius, spacing } from "../theme";
 
 export interface ClaimCheckDraft {
@@ -152,7 +155,7 @@ export default function ClaimMachineBox({
                 )
               ) : null}
             </View>
-            {v?.crop ? <PlateCrop uri={v.crop} label={f.label} /> : null}
+            {v?.crop ? <ClaimCrop uri={v.crop} label={f.label} /> : null}
             {/*
               รุ่นเต็มยาว 18 ตัว (HL055LWHPRXG6W0000) ล้นช่องกรอกบนมือถือ เห็นแค่ครึ่งเดียว ตัวท้ายที่อ่านพลาดบ่อยที่สุดจึงไม่มีใครเห็น
               เขียนค่าตัวใหญ่ ตัวเว้นห่าง ตัดบรรทัดได้ ไว้เหนือช่อง ให้เทียบกับภาพตัดด้านบนได้ทีละตัว
@@ -304,8 +307,6 @@ const styles = StyleSheet.create({
   tagScan: { color: colors.successInk, backgroundColor: colors.successSoft },
   tagHand: { color: colors.roleAdmin, backgroundColor: colors.roleAdminSoft },
   fieldRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  crop: { width: "100%", height: 64, borderRadius: 4, backgroundColor: colors.tile },
-  cropBig: { height: 160 },
   modelValue: { fontSize: 20, lineHeight: 30, fontWeight: "800", letterSpacing: 2, fontFamily: "monospace", color: colors.text },
   input: {
     flex: 1,
@@ -344,6 +345,7 @@ const styles = StyleSheet.create({
   sumRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   sumLabel: { width: 110, fontSize: 12.5, color: colors.textMuted },
   sumValue: { fontSize: 13.5, fontWeight: "800", color: colors.text, fontFamily: "monospace" },
+  sumModel: { fontSize: 15, lineHeight: 24, letterSpacing: 1 },
   sumPhoto: { width: "100%", height: 200, borderRadius: radius.sm, backgroundColor: colors.card },
   link: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   sumCrop: { backgroundColor: colors.card },
@@ -353,44 +355,30 @@ const styles = StyleSheet.create({
 });
 
 /**
- * ภาพตัดบรรทัดจากรูปป้าย (ค่าที่ระบบอ่านมาจากตรงนี้) — เต็มความกว้างช่อง สูง 64 แตะแล้วขยายเป็น 160
- *
- * เดิม 120×26 ตัวหนังสือในภาพเล็กกว่าตัวในช่องกรอก เทียบทีละตัวไม่ได้ ทั้งช่างที่ยืนยันและผู้ตรวจเคลม
- * ไม่เปิดตัวดูรูป เพราะภาพตัดเป็นข้อมูลในตัว (data URL) ไม่ใช่ไฟล์ของใบงาน — ขยายในที่ก็พอ
- */
-function PlateCrop({ uri, label, style }: { uri: string; label: string; style?: StyleProp<ImageStyle> }) {
-  const [big, setBig] = useState(false);
-  return (
-    <TouchableOpacity
-      onPress={() => setBig((b) => !b)}
-      activeOpacity={0.85}
-      accessibilityLabel={`ภาพตัดจากรูปป้าย ${label}`}
-      accessibilityHint={big ? "แตะเพื่อย่อ" : "แตะเพื่อขยาย"}
-      style={{ width: "100%" }}
-    >
-      <Image source={{ uri }} style={[styles.crop, style, big && styles.cropBig]} resizeMode="contain" />
-    </TouchableOpacity>
-  );
-}
-
-/**
- * สรุปข้อมูลเครื่องในการ์ดเคลม (Admin Spare Part ตรวจ / ทุกคนที่เปิดดู) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
+ * สรุปข้อมูลเครื่องในการ์ดเคลม (ทุกคนที่เปิดดูใบงาน · ผู้ตรวจใช้หน้าตรวจเคลมแทน) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
+ * ป้ายที่มาบอกเท่าที่ช่างทำจริง (อ่านจากรูป/ยืนยัน/แก้กี่ตัว) และตัวที่หน้าตาคล้ายกันในรุ่นพื้นเหลือง ให้ดูกับภาพตัดเป็นพิเศษ
+ * เช็คตาม Error ขึ้นข้อที่ทำ ✓ · คนตัดสินเคลมเห็นข้อที่ไม่ได้ทำ ✗ ด้วย (ระบบไม่ติ๊กให้ช่าง จึงต้องเห็นว่าข้อไหนข้ามไป)
  * คำตอบเรื่องติดตั้งแสดงตามที่ช่างตอบพร้อมหมายเหตุจากคู่มือ ไม่ตัดสินผลเอง (ทีมที่คุยกับประกันตัดสิน)
  */
 export function ClaimMachineSummary({
   nameplate,
   fieldCheck,
   photo,
+  guide,
+  showMissed = true,
 }: {
-  nameplate?: {
-    verified?: boolean;
-    fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[];
-  } | null;
+  nameplate?: PartClaim["nameplate"];
   /** รูปป้ายเต็มที่ระบบอ่านค่ามา — กดดูขนาดเต็ม */
   photo?: { uri: string | null; open: () => void } | null;
-  fieldCheck?: { errorCode: string; errorName: string; checked: string[]; install?: { key: string; label: string; note: string; answer: boolean }[] } | null;
+  fieldCheck?: PartClaim["fieldCheck"];
+  /** รายการ Error ปัจจุบัน — ใบเก่าที่ไม่ได้เก็บข้อที่ให้ช่างเห็นไว้ ใช้รายการนี้นับข้อที่ไม่ได้ทำ */
+  guide?: ClaimGuide | null;
+  /** ขึ้นข้อที่ไม่ได้ทำ ✗ ด้วยไหม — เฉพาะคนตัดสินเคลม (ดู CheckGroups) */
+  showMissed?: boolean;
 }) {
   if (!nameplate?.fields?.length && !fieldCheck) return null;
+  const legacy = isLegacyPlate(nameplate);
+  const eif = errorCheckGroup(fieldCheck, guide);
   return (
     <View style={styles.sum} accessibilityLabel="ข้อมูลเครื่องในใบเคลม">
       {nameplate?.fields?.length ? (
@@ -405,33 +393,32 @@ export function ClaimMachineSummary({
               )}
             </TouchableOpacity>
           ) : null}
-          {nameplate.fields.some((f) => f.source === "SCAN") ? (
+          {/* ใบที่ส่งก่อนมีปุ่มยืนยันทีละช่อง — ช่างติ๊กครั้งเดียวทั้งชุด บอกตามนั้น */}
+          {legacy && nameplate.fields.some((f) => f.source === "SCAN") ? (
             <Text style={styles.hint}>{nameplate.verified ? "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว" : "ค่าที่ระบบอ่าน — ยังไม่ได้ตรวจกับรูป"}</Text>
           ) : null}
           {nameplate.fields.map((f) => (
             <View key={f.key} style={styles.sumRow}>
               <Text style={styles.sumLabel}>{f.label}</Text>
-              <Text style={styles.sumValue}>{f.value}</Text>
-              <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>
-                {f.source === "SCAN" ? "อ่านจากรูป" : "พิมพ์เอง"}
-              </Text>
-              {f.crop ? <PlateCrop uri={f.crop} label={f.label} style={styles.sumCrop} /> : null}
+              {f.key === "model" ? (
+                <LookalikeText value={f.value} label={f.label} style={styles.sumModel} />
+              ) : (
+                <Text style={styles.sumValue}>{f.value}</Text>
+              )}
+              <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>{plateSourceText(f, legacy)}</Text>
+              {f.key === "model" && hasLookalike(f.value) ? <Text style={styles.hint}>พื้นเหลือง = ตัวที่หน้าตาคล้ายกัน</Text> : null}
+              {f.crop ? <ClaimCrop uri={f.crop} label={f.label} style={styles.sumCrop} /> : null}
             </View>
           ))}
         </>
       ) : null}
       {fieldCheck ? (
         <>
-          <Text style={styles.sumHead}>เช็คตามคู่มือ Error in Field</Text>
-          <Text style={styles.checkText}>
-            Error: {fieldCheck.errorCode} · {fieldCheck.errorName}
-          </Text>
-          {fieldCheck.checked.map((c) => (
-            <View key={c} style={styles.checkRow}>
-              <Ionicons name="checkmark-circle" size={15} color={colors.success} />
-              <Text style={styles.checkText}>{c}</Text>
-            </View>
-          ))}
+          <View style={styles.sumRow}>
+            <Text style={styles.sumLabel}>Error ที่เครื่องขึ้น</Text>
+            <Text style={[styles.checkText, { fontWeight: "800" }]}>{errorLabelOf(fieldCheck)}</Text>
+          </View>
+          {eif ? <CheckGroups groups={[eif]} showMissed={showMissed} /> : null}
           {/* ใบเคลมก่อนเอาเช็คลิสต์ออกยังมีคำตอบ — แสดงไว้ให้ Admin Spare Part เห็นเหมือนเดิม */}
           {fieldCheck.install?.length ? <Text style={[styles.hint, { marginTop: 4 }]}>การติดตั้งฐานเครื่อง (ช่างตอบตามที่เห็น)</Text> : null}
           {(fieldCheck.install ?? []).map((c) => (

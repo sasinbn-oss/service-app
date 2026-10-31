@@ -1,6 +1,7 @@
 // ทดสอบ: เคลมอะไหล่เก่าผ่านหน้าจอจริง บนใบทดสอบที่คัดลอกจากใบจริง (ใบจริงต้องไม่ถูกแตะ) · Admin Spare Part ดูใบงานได้อย่างเดียว
 //        · ยังไม่ครบ ปุ่มล่างบอก "ยังขาด n อย่าง — พาไป" กดแล้วไม่ส่ง · ไฟล์เคลมส่งทันทีที่เลือก (ช่องบอก "กำลังส่ง x%" → "✓ แนบแล้ว")
 //        · ใบงานไปรอตรวจเคลม · แอดมินทั่วไปไม่มีปุ่มตรวจ
+//        · Admin Spare Part เปิดใบแล้วเจอหน้าตรวจเคลม (หลักฐานรอบนี้ · ข้อมูลเครื่อง · แถบตัดสินล่างจอ — ละเอียดใน claim-review-web-test.js)
 //        · Admin Spare Part ตีกลับ → ช่างเห็นเหตุผล ปิดใหม่ได้โดยไม่ต้องแนบซ้ำ → อนุมัติ → ปิดงาน
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
@@ -301,15 +302,25 @@ const login = async (code) =>
     // ── Admin Spare Part ตีกลับ ──
     page = await open(`ZCWP${suf}`);
     // ดูได้อย่างเดียว — ปุ่มแก้ใบงานทุกอย่างหายไป เหลือแค่ปุ่มตรวจเคลม
+    // หน้าตรวจเคลม (ก้อน 2) พับเนื้อใบงานไว้ด้วย display:none — นับปุ่มตอนพับอยู่ได้ 0 เสมอแม้สิทธิ์พัง
+    // จึงกาง "ดูรายละเอียดใบงาน ▸" ก่อน (ยืนยันว่ากางจริงจากการ์ดขั้นตอนงาน) แล้วค่อยนับ แล้วพับกลับ
+    await vis(page, "ดูรายละเอียดใบงาน ▸").first().click().catch(() => {});
+    await page.waitForTimeout(800);
+    const expanded = (await label(page, "ขั้นตอนงาน").count()) > 0;
     const gone = [];
     for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ลบใบงานถาวร", "แก้ไขอาการ/สถานะ", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
-    gone.length === 0 ? pass("Admin Spare Part: ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน") : fail(`Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}`);
+    expanded && gone.length === 0
+      ? pass("Admin Spare Part: กางรายละเอียดใบงานแล้วก็ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน")
+      : fail(expanded ? `Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}` : "กางรายละเอียดใบงานไม่ได้ — นับปุ่มแก้ใบงานไม่ได้");
+    await vis(page, "ซ่อนรายละเอียดใบงาน ▾").first().click().catch(() => {});
+    await page.waitForTimeout(500);
+    // หน้าตรวจเคลม (เคลมก้อน 2): หลักฐานของแถวตามที่เซิร์ฟเวอร์ตัดสิน · ข้อเช็คตาม Error อยู่ในชิ้น (✓ ทำ / ✗ ไม่ได้ทำ)
     await vis(page, "อนุมัติเคลม · ปิดงาน").first().scrollIntoViewIfNeeded();
-    (await vis(page, "หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
-    (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตามคู่มือ Error in Field").count()) > 0
-      ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตามคู่มือในการ์ดเคลม") : fail("การ์ดเคลมไม่มีข้อมูลเครื่อง");
+    (await vis(page, "หลักฐานรอบนี้:").count()) > 0 ? pass("Admin Spare Part เห็นหลักฐานรอบนี้ของชิ้นนั้น") : fail("ไม่เห็นหลักฐาน");
+    (await vis(page, "2402600330").count()) > 0 && (await vis(page, "เช็คตาม Error E dL / E dL1 / E dL2 (ไม่บังคับ · ไม่พิมพ์ลงใบเคลม)").count()) > 0
+      ? pass("Admin Spare Part เห็นข้อมูลป้ายรุ่น (Serial) และผลเช็คตาม Error ในหน้าตรวจเคลม") : fail("หน้าตรวจเคลมไม่มีข้อมูลเครื่อง/ข้อเช็คตาม Error");
     (await label(page, "เปิดรูปป้ายรุ่นเต็ม").count()) > 0 && (await vis(page, "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว").count()) > 0
-      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว") : fail("การ์ดเคลมไม่มีรูปป้ายเต็ม");
+      ? pass("Admin Spare Part เห็นรูปป้ายเต็มที่ระบบอ่านค่ามา + ช่างตรวจกับรูปแล้ว (ใบที่ส่งจากฟอร์มติ๊กครั้งเดียว)") : fail("หน้าตรวจเคลมไม่มีรูปป้ายเต็ม");
     await page.getByLabel("ข้อมูลเครื่องในใบเคลม").first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(DIR, "claim-1b-review-machine.png") });
     await page.screenshot({ path: path.join(DIR, "claim-2-review.png"), fullPage: true });
