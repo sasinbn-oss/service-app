@@ -97,6 +97,8 @@ import {
   vendorRows,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
+// ขั้นปล่อยงานย้ายไปอยู่กับกฎเวลาปิดรับ — ป้าย "คอนเฟิร์มวันใหม่" กับการล็อกต้องนับขั้นชุดเดียวกันเสมอ
+import { RELEASE_STAGES } from "../utils/dispatchCutoff";
 import {
   buildObjectKey,
   deleteObject,
@@ -1101,7 +1103,6 @@ const NON_STAGE_ACTIONS = [
  */
 const DATE_MOVE_ACTIONS = ["RESCHEDULED", "APPOINTMENT_MOVED", "APPOINTMENT_RECALLED"];
 const DATE_SETTLE_ACTIONS = ["ASSIGNED", "INSPECT_REQUESTED", "DISPATCHED", ...DATE_MOVE_ACTIONS];
-const RELEASE_STAGES = ["ASSIGNED", "INSPECT_DISPATCH"];
 /** latestAction = ประวัติล่าสุดในชุด DATE_SETTLE_ACTIONS ของใบนี้ */
 function isRescheduled(status: string, latestAction: string | null | undefined) {
   return RELEASE_STAGES.includes(status) && DATE_MOVE_ACTIONS.includes(latestAction ?? "");

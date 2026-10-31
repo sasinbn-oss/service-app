@@ -20,7 +20,9 @@ const FORMAT = "otteri-backup";
 // (ยอมเฉพาะเมื่อตารางอื่นว่างทั้งหมด ซึ่งแปลว่าเป็นฐานข้อมูลใหม่แน่ ๆ)
 // OutsourceTeam ตามมาทีหลัง (20261108 ใส่ทีม outsource ตั้งต้น) — ลืมใส่ตรงนี้แล้วกู้คืนลงฐานใหม่ไม่ได้เลย
 // เจอ ต.ค. 69 ตอนลองกู้ลงฐานใหม่ · migration ใหม่ที่ INSERT ลงตารางเปล่าต้องเพิ่มชื่อที่นี่ด้วย
-const SEEDED_BY_MIGRATION = new Set(["TeamGroup", "OutsourceTeam"]);
+// AppSetting ใส่แถวตั้งต้นโดย 20261210090000_dispatch_cutoff — แถวในไฟล์ต้องมาแทน ไม่ใช่แถวที่ migrate เพิ่งใส่
+// เพราะ createdAt ของแถวแรกคือวันที่เริ่มใช้เวลาปิดรับปล่อยงาน ใช้แถวใหม่แล้วใบที่ล็อกอยู่จะกลายเป็นไม่ล็อก
+const SEEDED_BY_MIGRATION = new Set(["TeamGroup", "OutsourceTeam", "AppSetting"]);
 
 async function main() {
   const [file, flag] = process.argv.slice(2);

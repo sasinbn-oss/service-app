@@ -105,6 +105,8 @@ model User {
   vehicleLogPhotos     VehicleLogPhoto[]
   vehicleDocs          VehicleDoc[]
   vehicleMaintenance   VehicleMaintenance[]
+  // แถวตั้งค่าที่คนนี้เปลี่ยน (เวลาปิดรับปล่อยงาน) — นับเป็นประวัติตอนลบผู้ใช้ ไม่งั้นถูกลบจริงแล้ว "ใครเปลี่ยน" หายไปเงียบ ๆ
+  appSettingsChanged   AppSetting[]          @relation("AppSettingsChanged")
 }
 
 model Vehicle {
@@ -749,6 +751,10 @@ model WorkOrder {
   // ลูกค้ารับนัดหรือยัง — PENDING รอคอนเฟิร์ม · CONFIRMED ลูกค้าคอนเฟิร์ม
   // ADMIN_PICKED ลูกค้าสะดวกทุกวัน แอดมินเลือกวันให้ (ดู APPOINTMENT_STATUSES)
   appointmentStatus String?
+  // แอดมินแก้เป็นงานด่วน (เจ้าของงานขอ ต.ค. 69) — วันนัดที่ปลดล็อกเวลาปิดรับให้ เก็บเป็นวันแบบเดียวกับ scheduledAt
+  // ใช้ได้เมื่อตรงกับ scheduledAt และวันนัดยังไม่ผ่าน · ล้างทุกครั้งที่วันนัดเปลี่ยน · แยกจาก priority (ด่วนตอนเปิดใบไม่ปลดล็อก)
+  // เก็บเป็นวัน ไม่ใช่ true/false — ทางที่เปลี่ยนวันนัดแล้วลืมล้าง วันจะไม่ตรงกันและหมดผลเอง
+  urgentReleaseFor  DateTime?
 
   // ── ตรวจหน้างาน ──
   // หัวหน้าภาคระบุอะไหล่ไม่ได้จนกว่าจะมีคนไปดู — ผลตรวจเก็บไว้ที่ใบงาน
@@ -1244,4 +1250,19 @@ model SparePartImport {
 
   @@index([batchId])
   @@index([createdAt])
+}
+
+// ค่าตั้งค่าที่แอดมินเปลี่ยนได้ (ตอนนี้มี "dispatchCutoff" = เวลาปิดรับปล่อยงาน "HH:MM" · เจ้าของงานขอ ต.ค. 69)
+// เปลี่ยนแต่ละครั้งเป็นแถวใหม่ ไม่แก้แถวเดิม: แถวล่าสุดของ key = ค่าตอนนี้ · แถวก่อนหน้า = เปลี่ยนจากอะไร ใครเปลี่ยน
+// แถวแรกของ key ใส่โดย migration — createdAt ของมันคือเวลาที่เริ่มใช้กฎ (ไม่ล็อกใบที่เส้นตายอยู่ก่อนหน้านั้น)
+// แถวแรกต้องตามไปกับไฟล์สำรอง: อ่านเวลาเริ่มจาก _prisma_migrations ไม่ได้ เพราะกู้ลงฐานใหม่แล้วกลายเป็นเวลาที่กู้
+model AppSetting {
+  id          Int      @id @default(autoincrement())
+  key         String
+  value       String
+  createdById Int?
+  createdBy   User?    @relation("AppSettingsChanged", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([key, id])
 }
