@@ -40,6 +40,7 @@ import TimelineModal, { TimelineButton, TimelineTarget } from "../components/Tim
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { teamsOf, teamsText } from "../utils/teams";
+import { daysBetween, hhmmOf, serverDay, useServerClock } from "../utils/dispatchCutoff";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "PlanBoard">;
 
@@ -62,6 +63,11 @@ interface Stop {
   appointmentStatus: string | null;
   appointmentLabel: string | null;
   isFollowUp: boolean;
+  /**
+   * เวลาปิดรับปล่อยงาน (ต.ค. 69) ของจุดที่ยังไม่ปล่อย (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) — null = ไม่อยู่ใต้กฎ
+   * locked ถูกตอนโหลด · ป้ายคิดใหม่จาก deadline กับนาฬิกาเซิร์ฟเวอร์ (stopTag) บอร์ดที่เปิดค้างข้าม 16:00 จึงพลิกเอง
+   */
+  release?: { locked: boolean; urgent: boolean; deadline: string; enforced: boolean; past: boolean } | null;
 }
 
 interface Member {
@@ -95,6 +101,9 @@ interface Lane {
 
 interface Day {
   date: string;
+  /** นาฬิกาเซิร์ฟเวอร์ตอนตอบ + เวลาปิดรับ — ป้ายเวลาปิดรับของจุดเดินจากค่านี้ ไม่ใช่นาฬิกามือถือ (ข้อ 12) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  serverNow?: string;
+  cutoff?: { time: string; since: string };
   stats: { teams: number; people: number; stops: number; awaitingConfirm: number };
   lanes: Lane[];
   /** ทีมที่คนนี้จัดแผนได้ · null = ทุกทีม (แอดมิน) */
@@ -291,6 +300,11 @@ export default function PlanBoardScreen({ navigation }: Props) {
     }
   });
   const scrollRef = useRef<ScrollView>(null);
+  /**
+   * นาฬิกาเซิร์ฟเวอร์ของบอร์ด (เวลาปิดรับ ต.ค. 69) — ป้าย "ปิดรับ 16:00" พลิกเป็น "เลยเวลาปล่อยงาน" เองตอนถึงเวลา
+   * บอร์ดไม่โหลดใหม่ตอน 16:00 (ตัวเช็คเบื้องหลังโชว์ปุ่มมีอัปเดต ไม่สลับกระดานให้เอง) ป้ายจึงต้องเดินเอง
+   */
+  const now = useServerClock(day?.serverNow, day?.cutoff?.time);
 
   /**
    * แผนที่โชว์อยู่ยังเป็นของวันอื่น = กำลังเปลี่ยนวัน
@@ -379,6 +393,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
             onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
             date={day?.date ?? date}
             onTimeline={showTimeline}
+            now={now}
           />
         ))
       )}
@@ -390,6 +405,7 @@ export default function PlanBoardScreen({ navigation }: Props) {
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
             date={day?.date ?? date}
             onTimeline={showTimeline}
+            now={now}
         />
       ))}
     </View>
@@ -606,8 +622,34 @@ function Stat({
   );
 }
 
+/**
+ * ป้ายเวลาปิดรับของจุดที่ยังไม่ปล่อย (W-40 · Impact "แผนงาน (บอร์ด)") — คนจัดแผนรู้ว่าจุดไหนอาจไม่ได้ไปเพราะเลยเวลาปล่อยงาน
+ * ต่อท้ายป้ายเดิมของขั้น (ส่งช่างตรวจขึ้นต้นด้วย "ตรวจหน้างาน · รอส่งช่าง") · null = ใช้ป้ายเดิม (มะรืนขึ้นไป · ใบค้างมาก่อนเปิดกฎ)
+ * คิดจากเส้นตายกับนาฬิกาเซิร์ฟเวอร์ ไม่ใช้ locked ที่ส่งมาตรง ๆ — บอร์ดโหลดใหม่ผ่านตัวเช็คของตัวเอง ไม่ใช่ตอนถึงเวลา
+ * ทีม Area เห็นด้วย (ดูอย่างเดียว) — ที่เดียวที่ทีม Area เห็นเวลาปิดรับ
+ */
+function releaseTag(s: Stop, now: number, date: string): { text: string; tone: "ok" | "warn" | "bad" } | null {
+  const r = s.release;
+  if (!r || (s.status !== "ASSIGNED" && s.status !== "INSPECT_DISPATCH")) return null;
+  const deadline = Date.parse(r.deadline);
+  const rel = daysBetween(serverDay(now), date);
+  // งานด่วนผูกกับวันนัด — บอร์ดเปิดค้างข้ามเที่ยงคืนแล้ววันนัดผ่านไป = หมดอายุ กลับเป็นล็อก (ข้อ 7)
+  const urgent = r.urgent && rel >= 0;
+  const locked = r.enforced && !urgent && now >= deadline;
+  const prefix = s.status === "INSPECT_DISPATCH" ? "ตรวจหน้างาน · รอส่งช่าง · " : "";
+  if (urgent) return { text: `${prefix}แอดมินแก้เป็นงานด่วน · ปล่อยได้เลย`, tone: "ok" };
+  if (locked) return { text: `${prefix}เลยเวลาปล่อยงาน`, tone: "bad" };
+  if (rel === 1 && now < deadline) {
+    const base = s.status === "INSPECT_DISPATCH" ? "ตรวจหน้างาน · รอส่งช่าง" : "ยังไม่ปล่อยงาน";
+    return { text: `${base} · ปิดรับ ${hhmmOf(deadline)} น.`, tone: "warn" };
+  }
+  return null;
+}
+
 /** ป้ายสถานะของจุด — สิ่งที่คนจัดแผนต้องรู้คือ "ไปได้แน่หรือยัง" */
-function stopTag(s: Stop) {
+function stopTag(s: Stop, now: number, date: string): { text: string; tone: "ok" | "warn" | "violet" | "bad" } {
+  const cut = releaseTag(s, now, date);
+  if (cut) return cut;
   if (s.status === "DONE") return { text: "ปิดงานแล้ว", tone: "ok" as const };
   // นัดตรวจที่ร้านยังไม่ตอบ — ทีมถูกจองวันนั้นไว้แล้ว แต่ยังไม่แน่ว่าไปได้
   if (s.status === "INSPECT_CONFIRM") return { text: "ตรวจหน้างาน · รอแอดมินนัด", tone: "warn" as const };
@@ -636,6 +678,7 @@ function LaneCard({
   onOpen,
   date,
   onTimeline,
+  now,
 }: {
   lane: Lane;
   dim?: boolean;
@@ -644,6 +687,8 @@ function LaneCard({
   onOpen: (id: number) => void;
   date: string;
   onTimeline?: (t: TimelineTarget) => void;
+  /** นาฬิกาเซิร์ฟเวอร์ (ป้ายเวลาปิดรับของจุด) */
+  now: number;
 }) {
   const members = lane.plan?.members ?? [];
   const [lead, ...rest] = members;
@@ -712,7 +757,7 @@ function LaneCard({
         <Text style={[styles.muted, { padding: spacing.lg }]}>ทีมนี้ยังไม่มีงานวันนี้</Text>
       ) : (
         lane.stops.map((s, i) => {
-          const tag = stopTag(s);
+          const tag = stopTag(s, now, date);
           return (
             // ปุ่มไทม์ไลน์อยู่ข้างการ์ด ไม่ซ้อนในการ์ด — ปุ่มซ้อนปุ่มบนเว็บกดแล้วเปิดใบงานไปด้วย
             <View key={s.id} style={[styles.stopRow, i > 0 && styles.stopBorder]}>
@@ -769,11 +814,14 @@ const TAG_BG = {
   ok: { backgroundColor: colors.successSoft },
   warn: { backgroundColor: colors.warningSoft },
   violet: { backgroundColor: colors.roleAdminSoft },
+  // เลยเวลาปล่อยงาน — แดงแบบป้ายล็อกในงานของฉันวันนี้ จุดนี้อาจไม่ได้ไปถ้าแอดมินไม่แก้เป็นงานด่วน
+  bad: { backgroundColor: colors.dangerSoft },
 };
 const TAG_FG = {
   ok: { color: colors.successInk },
   warn: { color: colors.warningInk },
   violet: { color: colors.roleAdmin },
+  bad: { color: colors.dangerInk },
 };
 
 function MonthCalendar({

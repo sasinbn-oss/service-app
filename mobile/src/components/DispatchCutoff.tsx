@@ -181,6 +181,32 @@ export function FormWarningLine({ warning }: { warning: FormWarning }) {
   );
 }
 
+/** ข้อความช่องติ๊ก W-27 — ฟอร์มคอนเฟิร์มลูกค้า ฟอร์มเลื่อนวันนัด/ดึงงานคืน และเทสต์ใช้คำเดียวกัน */
+export const URGENT_WITH_LABEL = "แก้เป็นงานด่วนไปพร้อมกัน (หัวหน้าภาคปล่อยได้เลย)";
+
+/**
+ * ช่องติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" ใต้บรรทัดเตือนแดงของฟอร์มวันที่ของแอดมิน (ข้อ 2 · ข้อ 4)
+ * ร้านต้องการวันนี้/พรุ่งนี้จริงหลังเวลาปิดรับ — แอดมินปลดล็อกในการบันทึกเดียว ไม่ต้องบันทึกแล้วไปกด "แก้เป็นงานด่วน" อีกรอบ
+ * ไม่ติ๊กให้เอง: ใบที่ทีมไม่ต้องไปจริงจะกลายเป็นงานที่หัวหน้าภาคกดปล่อยได้ทั้งที่ควรเลื่อน
+ * สูง 44 กดง่ายบนมือถือ · aria-checked ใส่เอง (เว็บไม่แปลง accessibilityState — ดู Tick ใน RejectPanel)
+ */
+export function UrgentWithCheckbox({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <TouchableOpacity
+      style={styles.urgentWith}
+      onPress={() => onChange(!checked)}
+      disabled={disabled}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked, disabled: !!disabled }}
+      aria-checked={checked}
+      accessibilityLabel={URGENT_WITH_LABEL}
+    >
+      <Ionicons name={checked ? "checkbox" : "square-outline"} size={22} color={checked ? colors.navy : colors.textMuted} />
+      <Text style={styles.urgentWithText}>{URGENT_WITH_LABEL}</Text>
+    </TouchableOpacity>
+  );
+}
+
 /**
  * แถบหัวข้อบนสุด (งานของฉันวันนี้ · กล่องงาน) — groups มาจาก supervisorBanners / adminGroups ตัวเดียวกันทั้งสองหน้า
  * withRows = แสดงใบในแต่ละหัวข้อ (กล่องงาน) · งานของฉันวันนี้ไม่ต้อง เพราะการ์ดของใบอยู่ข้างล่างอยู่แล้ว
@@ -695,6 +721,8 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   formWarnText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19, fontWeight: "600" },
+  urgentWith: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 44, alignSelf: "flex-start", maxWidth: "100%" },
+  urgentWithText: { flexShrink: 1, fontSize: 13.5, lineHeight: 20, fontWeight: "600", color: colors.text },
 
   lock: {
     flexDirection: "row",

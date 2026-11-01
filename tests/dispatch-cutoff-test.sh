@@ -847,6 +847,16 @@ echo "$LA" | J "const r=d.rows.find(x=>x.id===$G_TM); r.waitingOnSupervisors.som
   && [ "$(RW "$LS" $G_TM "$NOPHONE")" = true ] && [ "$(RW "$LT" $G_TM "$NOPHONE")" = true ] \
   && pass "เบอร์หัวหน้าภาค (waitingOnSupervisors[].phone) ออกเฉพาะคำตอบของแอดมิน — รายการของหัวหน้าภาคและช่างไม่มีช่อง phone เลย" \
   || fail "เบอร์ในรายการ: $GOT"
+# หน้าใบงานกติกาเดียวกัน (supervisors[].phone) — แอดมินกด "แก้เป็นงานด่วน" จากหน้าใบงาน กล่องต้องขึ้น "ยังไม่ได้บอกว่าจะไปไหม —
+# โทรถาม <ชื่อ> <เบอร์>" เหมือนเปิดจากงานของฉันวันนี้ ไม่งั้นแอดมินต้องย้อนกลับไปหาเบอร์ที่รายการ · ดูในฐานะหัวหน้าภาคต้องไม่ได้เบอร์
+# (เห็นเท่าที่หัวหน้าภาคเห็น) · เทียบเบอร์กับฐานข้อมูลตรง ๆ ไม่ใช่กับตัวแปรที่ตั้งไว้
+DPHONE='d.supervisors.length > 0 && !d.supervisors.some(s=>"phone" in s)'
+DBPHONE=$(DB "select phone from \"User\" where \"employeeCode\"='S001'")
+GOT="$(DET $A $G_TM 'JSON.stringify(d.supervisors)') / $(DET $S $G_TM 'JSON.stringify(d.supervisors)') / ช่าง $(DET $T $G_TM 'JSON.stringify(d.supervisors)') / ดูในฐานะ $(DET $VA $G_TM 'JSON.stringify(d.supervisors)')"
+[ -n "$DBPHONE" ] && [ "$(DET $A $G_TM "d.supervisors.some(s=>s.name==='$S_NAME' && s.phone==='$DBPHONE')")" = true ] \
+  && [ "$(DET $S $G_TM "$DPHONE")" = true ] && [ "$(DET $T $G_TM "$DPHONE")" = true ] && [ "$(DET $VA $G_TM "$DPHONE")" = true ] \
+  && pass "หน้าใบงาน: เบอร์หัวหน้าภาค (supervisors[].phone = ฐานข้อมูล) ออกเฉพาะแอดมิน — หัวหน้าภาค · ช่าง · ดูในฐานะหัวหน้าภาค ไม่มีช่อง phone เลย" \
+  || fail "เบอร์ในหน้าใบงาน (ฐานข้อมูล $DBPHONE): $GOT"
 # ชิป/กล่องล็อกของหัวหน้าภาคอ่านก้อน release จากรายการของหัวหน้าภาคเอง — ต้องเหมือนแถวของแอดมิน (ตรวจกับประวัติแล้วข้างบน) ทุกตัวอักษร
 # ไม่ใช่แค่ "ไม่ใช่ null" (ช่องหายไปทั้งช่องก็ผ่าน) · releaseDeclined ของหัวหน้าภาคต้องเป็น null จริง ไม่ใช่ไม่มีช่อง
 GOT="$(RW "$LS" $G_TM 'JSON.stringify(r.release)') · $(RW "$LS" $G_TD 'JSON.stringify(r.release)')"

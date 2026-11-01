@@ -60,7 +60,17 @@ import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
 import { thaiDate } from "../components/DateField";
 import { HomeStackParamList } from "../navigation/types";
-import { serverDay, supervisorBanners, useServerClock, type Cutoff, type DispatchWatch, type Release, type ReleaseDeclined } from "../utils/dispatchCutoff";
+import {
+  PAST_GROUP_HINT,
+  adminGroups,
+  serverDay,
+  supervisorBanners,
+  useServerClock,
+  type Cutoff,
+  type DispatchWatch,
+  type Release,
+  type ReleaseDeclined,
+} from "../utils/dispatchCutoff";
 import { CutoffBanners, LiveReleaseChip } from "../components/DispatchCutoff";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -656,7 +666,9 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * ถามเฉพาะกล่องงานของหัวหน้าภาค ถามใหม่ทุกครั้งที่รายการบนจอเปลี่ยน (โหลด · มีอัปเดต) ไม่ตั้งรอบถามเอง
    * ถามไม่ได้ = ไม่มีหัวข้อพวกนั้น แถบที่คิดจากใบในกล่องยังขึ้นครบ (แอดมินมากับก้อนหน้าจอแอดมิน)
    */
-  const watchOn = supTabs;
+  // แอดมิน (ไม่ใช่ Admin Spare Part): หัวข้อ "งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย / ยังไม่คอนเฟิร์มลูกค้า" มาจากรายการเดียวกัน
+  const adminCut = filter === "INBOX" && user?.role === "ADMIN" && !user?.partsAdmin;
+  const watchOn = supTabs || adminCut;
   /**
    * ค้นหา/"มอบหมายให้ฉัน" กรองที่เซิร์ฟเวอร์ — รายการในมือเหลือแค่ใบที่ตรง ไม่ใช่ทั้งกล่อง
    * แถบเวลาปิดรับนับจากรายการนี้ ถ้ายังวาดอยู่จะขึ้น "เลยเวลาปล่อยงาน 1 ใบ" ทั้งที่งานของฉันวันนี้บอก 3
@@ -1378,6 +1390,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           serverNow={clock.serverNow}
           cutoff={clock.cutoff}
           role={user?.role ?? null}
+          adminCut={adminCut}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
         />
       ) : null}
@@ -2242,20 +2255,29 @@ function InboxAttention({
   serverNow,
   cutoff,
   role,
+  adminCut,
   onOpen,
 }: {
   /** ใบที่เห็นอยู่ในแท็บ/ตัวกรองนี้ — หัวข้อของแอดมิน (ไม่มีคนรับ · เลยนัด) */
   rows: WorkOrderRow[];
-  /** ทุกใบในกล่อง ไม่ตามแท็บ — แถบเวลาปิดรับของหัวหน้าภาค (ใบงาน SUB ก็ต้องนับ) · null = รายการถูกค้น/กรองที่เซิร์ฟเวอร์ ไม่วาดแถบ */
+  /** ทุกใบในกล่อง ไม่ตามแท็บ — แถบเวลาปิดรับ (ใบงาน SUB ก็ต้องนับ) · null = รายการถูกค้น/กรองที่เซิร์ฟเวอร์ ไม่วาดแถบ */
   allRows: WorkOrderRow[] | null;
   watch: DispatchWatch | null;
   serverNow?: string;
   cutoff?: Cutoff;
   role: string | null;
+  /** แอดมินที่ไม่ใช่ Admin Spare Part ในกล่องงาน — หัวข้อเวลาปิดรับของแอดมิน */
+  adminCut: boolean;
   onOpen: (id: number) => void;
 }) {
   // นาฬิกาเซิร์ฟเวอร์ของแถบนี้เอง — แถบพลิกเป็น "เลยเวลาปล่อยงาน" ตอนถึงเวลาโดยไม่ต้องวาดรายการทั้งหน้าใหม่
-  const now = useServerClock(serverNow, cutoff?.time, role === "SUPERVISOR" && !!allRows);
+  const now = useServerClock(serverNow, cutoff?.time, (role === "SUPERVISOR" || adminCut) && !!allRows);
+  /**
+   * แอดมิน: เลยเวลาปล่อยงาน (ขึ้นเสมอ แม้ 0 ใบ) · งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย · ยังไม่คอนเฟิร์มลูกค้า — ตัวสร้างเดียวกับงานของฉันวันนี้
+   * นับจากทุกใบในกล่อง ไม่ตามตัวกรองบนจอ (ตัวเลขต้องตรงกับงานของฉันวันนี้และตัวเลขกล่องงาน)
+   * รายการถูกค้นที่เซิร์ฟเวอร์ (allRows ว่าง) ไม่วาด — "เลยเวลาปล่อยงาน 0" ระหว่างค้นหาคือนับผิด แย่กว่าไม่ขึ้น
+   */
+  const adm = adminCut && allRows ? adminGroups(allRows, watch, now, cutoff) : null;
   const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
   /**
    * หัวหน้าภาค: แถบเวลาปิดรับ (ล็อก · เลยวันนัด · นับถอยหลัง · งานด่วน · ยังไม่ถึงขั้น · ออกงานวันนี้) — ตัวสร้างเดียวกับงานของฉันวันนี้
@@ -2280,15 +2302,27 @@ function InboxAttention({
         key: "overdue",
         title: `เลยนัด ${overdue.length}`,
         // ใบที่ค้างขั้นโอน/เบิกคลังอื่นก็มาอยู่ที่นี่ (ขั้นของหัวหน้าภาค) — แอดมินเลื่อนวันได้ แต่ของต้องตามจากหัวหน้าภาค
-        hint: "วันนัดผ่านไปแล้ว ใบยังไม่ถึงช่าง — เลื่อนวันนัด/โทรนัดใหม่ · ท้ายแถวบอกว่าค้างที่ใคร (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค)",
+        // ตอนนี้รวมใบรอปล่อยงาน/ส่งช่างตรวจที่วันนัดผ่านแล้วด้วย (เวลาปิดรับ ต.ค. 69) — ประโยคเดียวกับงานของฉันวันนี้ (W-34)
+        hint: PAST_GROUP_HINT,
         tone: "bad",
         items: overdue,
       });
   }
-  if (!groups.length && !sup.length) return null;
+  if (!groups.length && !sup.length && !adm) return null;
   return (
     <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
       {sup.length ? <CutoffBanners groups={sup} withRows onOpen={onOpen} /> : null}
+      {/*
+        แอดมิน: หัวข้อเวลาปิดรับขึ้นก่อนหัวข้อเดิม (ไม่มีคนรับ · เลยนัด) · "ยังไม่ปล่อย" ดูอย่างเดียว (งานของหัวหน้าภาค) แถวจึงกดไม่ได้
+        "ยังไม่คอนเฟิร์มลูกค้า" กดเปิดใบไปคอนเฟิร์มได้ · ใบที่ล็อกกดเปิดใบไปแก้เป็นงานด่วน/เลื่อนวันนัด
+      */}
+      {adm ? (
+        <>
+          <CutoffBanners groups={[adm.locked]} withRows onOpen={onOpen} />
+          {adm.unreleased ? <CutoffBanners groups={[adm.unreleased]} withRows /> : null}
+          {adm.unconfirmed ? <CutoffBanners groups={[adm.unconfirmed]} withRows onOpen={onOpen} /> : null}
+        </>
+      ) : null}
       {groups.map((g) => (
         <View
           key={g.key}

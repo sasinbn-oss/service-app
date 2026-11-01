@@ -3013,7 +3013,7 @@ async function loadDetail(id: number) {
     freshOutsource(),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
+      select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
     // ชื่อช่างที่ส่ง/คนตัดสินเคลมของใบนี้ — PartClaim ไม่มี relation ไปหาผู้ใช้ จึง join เองในคำสั่งเดียว ถามพร้อมกับข้างบน
@@ -3050,7 +3050,10 @@ async function loadDetail(id: number) {
    * เดิมขึ้นแค่บทบาท คนอ่านใบไม่รู้ว่าต้องตามใคร (เจ้าของงานขอ ต.ค. 69)
    */
   const scoped = withScopes(sups);
-  const supervisors = scoped.filter((u) => coversWorkOrder(u.scope, row)).map((u) => ({ id: u.id, name: u.name }));
+  // เบอร์ติดมาด้วยแต่ detailBody ส่งออกเฉพาะเมื่อผู้เรียกเป็นแอดมิน (ดู opts.phones)
+  const supervisors = scoped
+    .filter((u) => coversWorkOrder(u.scope, row))
+    .map((u) => ({ id: u.id, name: u.name, phone: u.phone ?? null }));
   /**
    * จ่ายข้ามทีม — หน้าใบงานขึ้นแถบบอกว่าทีมไหนเข้าแทนทีมประจำสาขา และหัวหน้าภาคของทีมที่รับ (เห็นใบ ดูอย่างเดียว)
    * คนเปิดใบจะได้ไม่งงว่าทำไมทีมอื่นมาอยู่ในใบ หรือทำไมหัวหน้าภาคอีกคนเห็นแต่กดไม่ได้
@@ -3148,7 +3151,12 @@ function flowOf(
   };
 }
 
-function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedModel, cfg }: Detail) {
+/**
+ * opts.phones = ใส่เบอร์หัวหน้าภาคใน supervisors — เฉพาะ GET /:id ของแอดมิน (กติกาเดียวกับ waitingOnSupervisors[].phone ในรายการ)
+ * แอดมินเปิด "แก้เป็นงานด่วน" จากหน้าใบงานต้องเห็น "ยังไม่ได้บอกว่าจะไปไหม — โทรถาม <ชื่อ> <เบอร์>" เหมือนเปิดจากงานของฉันวันนี้
+ * ปุ่มเปลี่ยนขั้นที่คืนรายละเอียด (detailFor) ไม่รู้ว่าใครเรียก จึงไม่ส่งเบอร์เลย — หัวหน้าภาค/ช่าง/ทีม Area ไม่ได้เบอร์ของกันและกัน
+ */
+function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedModel, cfg }: Detail, opts?: { phones?: boolean }) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -3244,7 +3252,7 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedMod
       logs.find((l) => ISSUE_ROUND_ACTIONS.includes(l.action))?.action
     ),
     // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
-    supervisors,
+    supervisors: supervisors.map(({ id, name, phone }) => (opts?.phones ? { id, name, phone } : { id, name })),
     crossTeam,
     rolledBack: activeRollback(row.status, logs),
     rollbackPrefill: rollbackPrefill(row.status, logs),
@@ -3292,7 +3300,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (await blockedForViewer(req, res, d.row, viewer)) return;
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
   res.json({
-    ...detailBody(d),
+    ...detailBody(d, { phones: req.auth!.role === "ADMIN" }),
     ...(repeats ? { claimRepeats: repeats } : {}),
     ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}),
   });

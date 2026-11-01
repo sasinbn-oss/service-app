@@ -18,7 +18,23 @@
 //   · จอมือถือ 420: การ์ดไม่ล้นจอ ชิปห้าตัวอยู่ในแถวเดียว
 //   ส่วน 6 (แท็บกล่องงานหัวหน้าภาค)
 //   · "ส่งช่างตรวจ" (INSPECT_DISPATCH) อยู่แท็บ จ่ายงาน/ปล่อยงาน ไม่อยู่แท็บงานแจ้งซ่อม (เจ้าของงานตอบข้อ ก)
-//   ส่วน 4 (จอแอดมิน) มากับหน้าจอก้อน 5
+//   ส่วน 4 (จอแอดมิน · ก้อน 5):
+//     · ไม่มีใบล็อก (เวลาปิดรับ 23:59 — เช็คทาง API ก่อน ถ้ามีใบล็อกอื่นค้างในฐานข้อมูลบอกเหตุผลแล้วข้ามข้อเดียวนี้) → กล่องเทา "เลยเวลาปล่อยงาน 0"
+//     · S001 ได้เบอร์ทดสอบชั่วคราว (จดเบอร์เดิมเป็นแถว key อื่น คืนตอนจบ · ค้างจากรอบก่อน = คืนแล้ว FAIL) — ข้อ "โทรถาม <ชื่อ> <เบอร์>" เช็คเบอร์จริง
+//     · ฟอร์มเลื่อนวันนัดตอนเหลือ 45 นาที (ทำทันทีหลังเตรียมใบ — ดู "คุมเวลา"): ส้ม "ใกล้ปิดรับ (เหลือ …)" ไม่มีช่องติ๊ก
+//     · แถบของแอดมินใต้แถวค้นหา (งานของฉันวันนี้ + กล่องงาน): "งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย N · ปิดรับ …" (แถวบอกชื่อ + เบอร์หัวหน้าภาค)
+//       · "งานพรุ่งนี้ที่ยังไม่คอนเฟิร์มลูกค้า N" — N เทียบกับ dispatch-watch ของเซิร์ฟเวอร์
+//     · หัวข้อปัก "เลยเวลาปล่อยงาน": การ์ดบอกทีม/หัวหน้าภาค · นัด · ล็อกตั้งแต่ · สาเหตุ · กล่องม่วง "หัวหน้าภาคขอแก้เป็นงานด่วน" (ใบที่ขอ)
+//       · กล่องเทา "ยังไม่ได้บอก — โทรถาม <ชื่อ> <เบอร์>" (ใบที่ไม่ได้ขอ) · ใบไม่มีคนรับ: "ทีม… · ไม่มีคนรับ" สาเหตุกลาง ๆ ไม่มีกล่องถาม
+//       (ข้ามข้อใบไม่มีคนรับได้เฉพาะเมื่อฐานข้อมูลมีหัวหน้าภาคดูแล C0001 — สร้างใบไม่ได้/เซิร์ฟเวอร์ไม่บอกว่าไม่มีคนรับ = FAIL)
+//     · หัวข้อ "เลยนัด" ของงานของฉันวันนี้ = รหัสชุดเดียวกับหัวข้อ "เลยนัด" ในกล่องงาน · กล่องงานมีกล่อง "เลยเวลาปล่อยงาน" ด้วย
+//     · ใบเลยนัดที่มีคำขอตรวจสอบค้างอยู่หัวข้อ "เลยนัด" ไม่ใช่หัวข้อคำขอ และปุ่มตอบกลับอยู่บนการ์ดนั้น (มือถือ 420: แถวของตัวเอง)
+//     · "แก้เป็นงานด่วน" จากการ์ด → หน้าต่าง → toast → ฐานข้อมูล urgentReleaseFor + ประวัติ meta.via = direct → หัวหน้าภาคเห็นกล่องเขียว
+//     · ฟอร์มคอนเฟิร์มลูกค้า: งานพรุ่งนี้หลังปิดรับ = แดง "ถึง HH:MM น. แล้ว …" + ช่องติ๊ก → บันทึก → ฐานข้อมูลงานด่วน (via confirm)
+//       งานวันนี้ = "วันนี้เลยเวลาปิดรับแล้ว (…)" ไม่ใช่ "ถึง HH:MM น. แล้ว" (ตอนเช้าประโยคนั้นไม่จริง)
+//     · หน้าใบงานของใบที่ล็อก: ปุ่มหลัก "แก้เป็นงานด่วน" · เลื่อนวันนัดเปิดที่วันแรกที่ยังปล่อยได้ → เลือกพรุ่งนี้ = แดง + ช่องติ๊ก → toast
+//       "…แก้เป็นงานด่วนไปพร้อมกันแล้ว หัวหน้าภาคปล่อยได้เลย" → ฐานข้อมูลวันใหม่ + งานด่วน + ประวัติ "ตอนเลื่อนวันนัด · "
+//     · มือถือ 420: ปุ่มแก้เป็นงานด่วนแถวของตัวเอง ไม่ล้นจอ
 //
 // คุมเวลาไม่ให้ขึ้นกับว่ารันกี่โมง (tests/README "เทสต์ที่ขึ้นกับเวลาปิดรับ"):
 //   · เวลาปิดรับจริงตั้งทาง SQL (แถวใหม่ใน AppSetting) แล้วเรียก GET /api/settings/dispatch-cutoff ให้เซิร์ฟเวอร์อ่านสด
@@ -30,6 +46,7 @@
 //     ถอยไป 30 วันระหว่างรัน ใบวันนัดเมื่อวานจึงล็อกจริงแม้ migration เพิ่งรันวันนี้ · คืนค่าเดิมตอนจบ (จดค่าเดิมไว้เป็นแถว key อื่น)
 //   · ตัวกันคร่อมเที่ยงคืน: 23:10–00:06 รอให้พ้นก่อน — เวลาปิดรับทดสอบ (+45 นาที · 23:59) จะข้ามวัน และ "พรุ่งนี้" เปลี่ยนกลางทาง
 //     เช็คซ้ำก่อนก้อน 4 (23:00–00:06) — ส่วนก้อน 3 ใช้เวลาหลายนาที เช็คครั้งเดียวตอนเริ่ม +45 นาทีของก้อน 4 ยังข้ามเที่ยงคืนได้
+//     ก้อน 5 เช็คอีกรอบ (23:10–00:06) แล้วคิด +45 นาทีทันทีหลังเตรียมใบ ไม่ใช่ท้ายก้อน (ท้ายก้อนห่างตัวกันหลายนาที เริ่ม 23:09 ก็ข้ามวันได้)
 //   · แถวที่เพิ่มลบทั้งหมดตอนจบ · จดเลขแถวสุดท้ายไว้เป็นแถว key อื่น (readCutoff อ่านเฉพาะ key='dispatchCutoff' ไม่มีผลกับแอป)
 //     ถูกฆ่ากลางทาง รอบหน้าเจอแถวจดนี้ → FAIL แล้วลบแถวที่ค้างให้ ไม่ปล่อยให้แอปใช้เวลาผิดเงียบ ๆ
 // ยืนยันที่ฐานข้อมูลทุกข้อ ไม่เชื่อหน้าจออย่างเดียว (CLAUDE.md) · ต้องมี DATABASE_URL
@@ -85,7 +102,18 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
   const ZR = `ภาคทดสอบเวลาปิดรับ${suf}`;
   const SINCE_MARK = "dispatchCutoffWebTestSince";
   let sinceSaved = null;
+  /**
+   * ก้อน 5: เบอร์ของ S001 ตั้งชั่วคราว — ฐานข้อมูลเครื่องทดสอบ S001 ไม่มีเบอร์ (area-map-test ต้องการแบบนั้น) ถ้าไม่ตั้ง
+   * ข้อ "โทรถาม <ชื่อ> <เบอร์>" เช็คได้แค่ชื่อ ลบเบอร์ทิ้งทั้งทางก็ยังผ่าน · จดเบอร์เดิมเป็นแถว key อื่นในคำสั่งเดียวกับที่ตั้ง
+   * (readCutoff อ่านเฉพาะ key='dispatchCutoff') ถูกฆ่ากลางทาง รอบหน้าคืนให้แล้วโผล่เป็น FAIL · คืนแบบมีเงื่อนไข: ไม่มีแถวจด = ไม่แตะเบอร์
+   */
+  const PHONE_MARK = "dispatchCutoffWebTestS001Phone";
+  const RESTORE_PHONE = `update "User" set phone=nullif((select value from "AppSetting" where key='${PHONE_MARK}' order by id limit 1),'')
+      where "employeeCode"='S001' and exists (select 1 from "AppSetting" where key='${PHONE_MARK}');
+    delete from "AppSetting" where key='${PHONE_MARK}'`;
   let zOrder = null;
+  // ก้อน 5: ใบที่สร้างตรงผ่าน API (ไม่ผ่าน fixture — fixture ย้ายภาคของ S001 ไปภาคของสาขานั้น ใบจะมีคนรับ) — ลบตอนจบ
+  const extraOrders = [];
   let MAXSET = null;
   const latest = () =>
     sql(`select value||'|'||coalesce("createdById"::text,'-') from "AppSetting" where key='dispatchCutoff' order by id desc limit 1`);
@@ -110,6 +138,11 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
       const [sid, sat] = leftSince.split("|");
       sql(`update "AppSetting" set "createdAt"='${sat}'::timestamp where id=${Number(sid)}; delete from "AppSetting" where key='${SINCE_MARK}'`);
       fail(`เวลาเริ่มใช้กฎที่เทสต์นี้รอบก่อนถอยไว้ยังไม่ได้คืน (แถว ${sid}) — คืนค่าเดิม ${sat} แล้ว`);
+    }
+    const leftPhone = sql(`select coalesce(nullif(value,''),'(ว่าง)') from "AppSetting" where key='${PHONE_MARK}' order by id limit 1`);
+    if (leftPhone) {
+      sql(RESTORE_PHONE);
+      fail(`เบอร์ของ S001 ค้างเป็นเบอร์ทดสอบจากรอบก่อน — คืนเป็น ${leftPhone} แล้ว รอบหน้าจะผ่าน แต่ระหว่างนี้ชุดที่ดูเบอร์ S001 (area-map) พัง`);
     }
     MAXSET = Number(sql(`select coalesce(max(id),0) from "AppSetting"`));
     sql(`insert into "AppSetting"(key,value) values ('${MARK}','${MAXSET}')`);
@@ -654,6 +687,474 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
     await z.page.screenshot({ path: shot("14-empty-inbox") });
     await z.ctx.close();
 
+    // ════════════════ ก้อน 5: จอแอดมิน ════════════════
+    // เช็คเที่ยงคืนอีกรอบ — ส่วนนี้ตั้งเวลาปิดรับ +45 นาที (ฟอร์มเลื่อนวันนัดตอนส้ม) และ "วันนี้/พรุ่งนี้" ห้ามเปลี่ยนกลางทาง
+    // วันของก้อน 4 (today/tomorrow) อาจเก่าแล้วถ้าต้องรอข้ามเที่ยงคืน — คิดใหม่หลังรอ และสร้างใบของก้อนนี้ใหม่ทั้งหมด
+    await waitPastMidnight(23 * 60 + 10, "เวลาปิดรับทดสอบ (+45 นาที) จะข้ามวัน และ \"พรุ่งนี้\" เปลี่ยนระหว่างก้อน 5");
+    const d0 = visitDay(0);
+    const d1 = visitDay(1);
+    const d2 = visitDay(2);
+    const d5 = visitDay(5);
+    const dm1 = visitDay(-1);
+    const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+    const MON = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+    const ymdParts = (s) => s.split("-").map(Number);
+    /** "ส. 31 ต.ค." · "ส. 31 ต.ค. 69" · "ส. 31 ต.ค. 2569" — แบบเดียวกับ dayShort / dayFull / thaiDateLong ของแอป */
+    const dShort = (s) => {
+      const [y, m, d] = ymdParts(s);
+      return `${DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${MON[m - 1]}`;
+    };
+    const dFull = (s) => `${dShort(s)} ${String((Number(s.slice(0, 4)) + 543) % 100).padStart(2, "0")}`;
+    const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
+    const months = (s) => Number(s.slice(0, 4)) * 12 + Number(s.slice(5, 7));
+    const URGENT_WITH = "แก้เป็นงานด่วนไปพร้อมกัน (หัวหน้าภาคปล่อยได้เลย)";
+    const sName = sql(`select name from "User" where "employeeCode"='S001'`);
+    // เบอร์ทดสอบของ S001 (ดู PHONE_MARK) — จดเบอร์เดิมกับตั้งเบอร์ใหม่ในทรานแซกชันเดียว ไม่มีช่วงที่เบอร์เปลี่ยนแล้วแต่ยังไม่ได้จด
+    const sPhone = `089-${String(suf).padStart(5, "0")}-02`;
+    sql(`begin;
+      insert into "AppSetting"(key,value) select '${PHONE_MARK}', coalesce(phone,'') from "User" where "employeeCode"='S001';
+      update "User" set phone='${sPhone}' where "employeeCode"='S001';
+      commit;`);
+    sql(`select phone from "User" where "employeeCode"='S001'`) === sPhone
+      ? pass(`ตั้งเบอร์ทดสอบของ S001 = ${sPhone} (ฐานข้อมูล · คืนค่าเดิมตอนจบ)`)
+      : fail(`ตั้งเบอร์ทดสอบของ S001 ไม่สำเร็จ: ${sql(`select coalesce(phone,'-') from "User" where "employeeCode"='S001'`)}`);
+    // ชื่อกับเบอร์ติดกันแบบที่แอดมินเห็น — ขาดเบอร์ = แอดมินต้องไปเปิดหาเบอร์เองอีกที่
+    const callWho = `${sName} ${sPhone}`;
+    const rowOf = (id) => sql(`select status||'|'||to_char("scheduledAt",'YYYY-MM-DD') from "WorkOrder" where id=${id}`);
+    const urfOf = (id) => sql(`select coalesce(to_char("urgentReleaseFor",'YYYY-MM-DD'),'-') from "WorkOrder" where id=${id}`);
+    /** ประวัติ URGENT_RELEASE ล่าสุด: note|meta.via|meta.reason */
+    const urgentLog = (id) =>
+      sql(`select coalesce(note,'')||'|'||coalesce(meta->>'via','-')||'|'||coalesce(meta->>'reason','-') from "WorkOrderLog" where "workOrderId"=${id} and action='URGENT_RELEASE' order by id desc limit 1`);
+    /** เปิดใบงานจากหน้ารายการ (ค้นรหัส) — ใบที่ไม่อยู่ในกล่องงานแอดมิน (ยังไม่ล็อก) เปิดจากงานของฉันวันนี้ไม่ได้ */
+    const openOrder = async (sess, code) => {
+      await sess.page.goto(APP, { waitUntil: "networkidle", timeout: 180000 });
+      await sess.page.waitForTimeout(2500);
+      await sess.page.getByLabel("ใบงานซ่อม").first().click();
+      await sess.page.waitForTimeout(2500);
+      await sess.vis("ทั้งหมด").first().click().catch(() => {});
+      await sess.page.waitForTimeout(1200);
+      await sess.page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first().fill(code);
+      await sess.page.waitForTimeout(2500);
+      await sess.vis(code).last().click();
+      await sess.page.waitForTimeout(3500);
+    };
+    /** เลือกวันในปฏิทินของช่อง "วันนัดใหม่" — ปฏิทินเปิดที่เดือนของวันที่อยู่ในช่อง เลื่อนเดือนไปหน้า/ถอยหลังเท่าที่ต้อง */
+    const pickDay = async (page, from, to) => {
+      await lbl(page, "วันนัดใหม่").last().click();
+      await page.waitForTimeout(500);
+      for (let k = months(from); k > months(to); k--) {
+        await lbl(page, "เดือนก่อน").last().click();
+        await page.waitForTimeout(200);
+      }
+      for (let k = months(from); k < months(to); k++) {
+        await lbl(page, "เดือนถัดไป").last().click();
+        await page.waitForTimeout(200);
+      }
+      await page.getByLabel(dLong(to), { exact: true }).locator("visible=true").first().click();
+      await page.waitForTimeout(600);
+    };
+
+    // ── 4) ไม่มีใบล็อก → กล่องเทา "เลยเวลาปล่อยงาน 0" ──
+    // เวลาปิดรับ 23:59 = ใบพรุ่งนี้ยังไม่ล็อก (ใบวันนี้ล็อกเสมอ — เส้นตายคือเมื่อวาน) · ฐานข้อมูลเครื่องทดสอบอาจมีใบล็อกค้างจากที่อื่น
+    // เช็คทาง API ก่อน มีก็บอกเหตุผลแล้วข้ามข้อนี้ข้อเดียว (กล่องว่างไม่ควรขึ้นจริง ๆ ในกรณีนั้น)
+    await setCut("23:59");
+    const inbox0 = await call(A, "GET", "/work-orders?status=INBOX");
+    const lockedNow = (inbox0.rows || []).filter(
+      (r) => (r.release && r.release.locked && !r.release.past) || (r.releaseDeclined && !r.releaseDeclined.past)
+    );
+    const a5 = await openAs("A001", 1280);
+    await toQueue(a5);
+    if (lockedNow.length) {
+      console.log(`    ข้ามข้อกล่องว่าง "เลยเวลาปล่อยงาน 0" — ฐานข้อมูลมีใบล็อกอื่นอยู่แล้ว ${lockedNow.length} ใบ (${lockedNow.map((r) => r.code).join(" ")})`);
+    } else {
+      const empty = lbl(a5.page, "หัวข้อ เลยเวลาปล่อยงาน 0").first();
+      const emptyText = (await empty.count()) ? await empty.innerText() : "";
+      emptyText.includes("ยังไม่มี — งานที่ยังไม่ได้ปล่อยก่อน 23:59 น. ของวันก่อนเข้างานจะขึ้นที่นี่เอง และนับในตัวเลขกล่องงาน ไม่ต้องรอใครกด") &&
+      (await lbl(a5.page, "กลุ่ม เลยเวลาปล่อยงาน").count()) === 0
+        ? pass("แอดมิน ไม่มีใบล็อก (API ยืนยัน): กล่องเทา \"เลยเวลาปล่อยงาน 0\" + \"ยังไม่มี — …ขึ้นที่นี่เอง…\" ขึ้นเสมอ")
+        : fail(`กล่องว่างเลยเวลาปล่อยงาน: "${emptyText}"`);
+      await a5.page.screenshot({ path: shot("15-admin-empty"), fullPage: true });
+    }
+
+    // ── 4) เตรียมใบ (เวลาปิดรับยัง 23:59 — สร้างเสร็จแล้วค่อยย้ายเวลาปิดรับไปเมื่อสองนาทีก่อน) ──
+    const AL = await releaseOrder(d1); // หัวหน้าภาคขอแอดมิน → แอดมินแก้เป็นงานด่วนจากงานของฉันวันนี้
+    const AN = await releaseOrder(d1); // หัวหน้าภาคยังไม่ได้บอก (กล่องเทา + เบอร์) · มือถือ
+    const AP = await releaseOrder(d1); // ย้ายวันนัดไปเมื่อวาน → เลยนัด
+    const AR = await releaseOrder(d0); // งานวันนี้ (ล็อก) → เลื่อนเป็นพรุ่งนี้พร้อมติ๊กงานด่วน
+    const AM = await releaseOrder(d5); // ฟอร์มเลื่อนวันนัดตอนส้ม (ไม่บันทึก)
+    const AC = await fx.workOrder("C0006", []); // คอนเฟิร์มลูกค้า งานพรุ่งนี้ + ติ๊กงานด่วน
+    await fx.schedule(AC.id, d1);
+    const AT = await fx.workOrder("C0006", []); // คอนเฟิร์มลูกค้า งานวันนี้ (ดูข้อความเท่านั้น)
+    await fx.schedule(AT.id, d0);
+    // เลยนัดที่ขั้นคอนเฟิร์มลูกค้า + คำขอตรวจสอบค้าง → อยู่หัวข้อ "เลยนัด" ไม่ใช่หัวข้อคำขอ · มือถือ: ปุ่มตอบกลับขึ้นแถวของตัวเอง
+    const AV = await fx.workOrder("C0006", []);
+    await fx.schedule(AV.id, d1);
+    // ใบไม่มีคนรับ: C0001 อยู่ภาคที่ไม่มีหัวหน้าภาค (แบบเดียวกับเทสต์ API) — สร้างตรงผ่าน API ไม่ผ่าน fixture (fixture ย้ายภาค S001 ไปที่นั่น)
+    const oTeam = sql(`select coalesce(zone,'') from "Branch" where code='C0001'`);
+    const ow = await call(A, "POST", "/work-orders", {
+      branchCode: "C0001", jobType: "CM", priority: "NORMAL", contactName: "คุณทดสอบ", contactPhone: "081-234-5678",
+      machines: [{ code: "W78", model: "Oasis", symptom: "ทดสอบใบไม่มีคนรับ (สร้างโดยเทสต์)" }],
+    });
+    const AO = { id: ow.orders ? ow.orders[0].id : ow.id, code: "" };
+    if (AO.id) {
+      extraOrders.push(AO.id);
+      AO.code = sql(`select code from "WorkOrder" where id=${AO.id}`);
+      await call(A, "POST", `/work-orders/${AO.id}/parts`, { needsParts: false, assign: { team: oTeam, scheduledAt: d1 } });
+      await fx.confirm(AO.id);
+    }
+    const prep5 = [AL, AN, AP].map((o) => rowOf(o.id));
+    prep5.every((r) => r === `ASSIGNED|${d1}`) && rowOf(AR.id) === `ASSIGNED|${d0}` && rowOf(AM.id) === `ASSIGNED|${d5}` &&
+    rowOf(AC.id) === `AWAITING_CONFIRM|${d1}` && rowOf(AT.id) === `AWAITING_CONFIRM|${d0}` && rowOf(AV.id) === `AWAITING_CONFIRM|${d1}`
+      ? pass(`เตรียมใบก้อน 5: รอปล่อยพรุ่งนี้ ${AL.code} ${AN.code} ${AP.code} · วันนี้ ${AR.code} · D+5 ${AM.code} · รอคอนเฟิร์ม ${AC.code} ${AV.code} (พรุ่งนี้) ${AT.code} (วันนี้) (ฐานข้อมูล)`)
+      : fail(`เตรียมใบก้อน 5: ${prep5.join(" ")} · ${rowOf(AR.id)} · ${rowOf(AM.id)} · ${rowOf(AC.id)} · ${rowOf(AT.id)} · ${rowOf(AV.id)}`);
+    /**
+     * ใบไม่มีคนรับ: ข้ามได้ด้วยเหตุผลเดียว — ฐานข้อมูลเครื่องนี้มีหัวหน้าภาคดูแลภาค/ทีมของ C0001 (ใบที่นั่นจึงมีคนรับ)
+     * ตัดสินจากเงื่อนไขก่อนเริ่ม ไม่ใช่จากผลที่ได้ — สร้างใบไม่สำเร็จ / ใบไม่ถึงขั้นปล่อยงาน / เซิร์ฟเวอร์ไม่บอกว่าไม่มีคนรับ = FAIL
+     * (เดิมข้ามเมื่อผลไม่ออกมาเป็นไม่มีคนรับ ข้อนี้เลยผ่านเงียบ ๆ ได้ทั้งที่แอปพัง) · เช็คหลัง fixture ย้ายภาคของ S001 ไปภาคของ C0006 แล้ว
+     */
+    const c0001 = `(select region from "Branch" where code='C0001')`;
+    const oCover = Number(
+      sql(`select count(*) from "User" where role='SUPERVISOR' and "deletedAt" is null and (region=${c0001} or ${c0001}=any("extraRegions") or '${oTeam}'=any("supervisedTeams"))`)
+    );
+    const orphanSkip = oCover > 0;
+    if (orphanSkip) console.log(`    ข้ามข้อใบไม่มีคนรับ — ฐานข้อมูลเครื่องนี้มีหัวหน้าภาคดูแลภาค/ทีมของ C0001 ${oCover} คน ใบที่นั่นจึงมีคนรับ`);
+    else
+      AO.id && rowOf(AO.id) === `ASSIGNED|${d1}`
+        ? pass(`เตรียมใบไม่มีคนรับ ${AO.code} (C0001 ไม่มีหัวหน้าภาคดูแล): รอปล่อยพรุ่งนี้ (ฐานข้อมูล)`)
+        : fail(`เตรียมใบไม่มีคนรับที่ C0001: ${AO.id ? rowOf(AO.id) : `สร้างใบไม่สำเร็จ ${JSON.stringify(ow).slice(0, 160)}`}`);
+    // ใบมาถึงขั้นปล่อยงานก่อนเส้นตาย (ถอยประวัติไป 90 นาที) — สาเหตุต้องเป็น "ยังไม่ได้ปล่อยก่อน …" ไม่ใช่ "ถึงหลังเวลาปิดรับ"
+    // ไม่ถอย = ใบที่เพิ่งสร้างเมื่อวินาทีก่อนมาถึงหลังเส้นตายที่ตั้งเป็นสองนาทีก่อน ข้อความสาเหตุจะขึ้นกับว่าสร้างเร็วแค่ไหน
+    sql(`update "WorkOrderLog" set "createdAt"="createdAt"-interval '90 minutes' where "workOrderId" in (${[AL.id, AN.id, AO.id].filter(Boolean).join(",")})`);
+    sql(`update "WorkOrder" set "scheduledAt"='${dm1}'::timestamp where id in (${AP.id},${AV.id})`);
+    const avNote = "เบอร์ร้านในใบไม่ตรงกับที่ร้านแจ้ง (เทสต์ก้อน 5)";
+    await call(fx.supervisor(), "POST", `/work-orders/${AV.id}/admin-review`, { reason: "CONTACT", note: avNote });
+    rowOf(AV.id) === `AWAITING_CONFIRM|${dm1}` &&
+    sql(`select count(*) from "AdminReview" where "workOrderId"=${AV.id} and "cancelledAt" is null and "repliedAt" is null`) === "1"
+      ? pass(`${AV.code}: เลยนัด (วันนัดเมื่อวาน) ขั้นคอนเฟิร์มลูกค้า + คำขอตรวจสอบจากหัวหน้าภาคที่ยังไม่ตอบ (ฐานข้อมูล)`)
+      : fail(`เตรียม ${AV.code}: ${rowOf(AV.id)} · คำขอค้าง ${sql(`select count(*) from "AdminReview" where "workOrderId"=${AV.id} and "repliedAt" is null`)}`);
+
+    // ── 4) ฟอร์มเลื่อนวันนัดตอนเหลือ 45 นาที: ส้ม ไม่มีช่องติ๊ก (ไม่บันทึก) ──
+    // ทำทันทีหลังเตรียมใบ (ไม่ใช่ท้ายก้อน): ตัวกันเที่ยงคืนของก้อนนี้คือ 23:10 — +45 นาทีต้องคิดก่อน 23:15
+    // ไว้ท้ายก้อนหลังขั้นตอนหลายนาทีแล้ว เริ่ม 23:09 ไปถึงตอน 23:16 = เวลาปิดรับ 00:01 เส้นตายของพรุ่งนี้ผ่านไปแล้ว ฟอร์มแดงแทนส้ม
+    // ยังคร่อมได้ (เครื่องช้ามากจนเกินห้านาที) บอกเหตุผลแล้วข้ามข้อนี้ — ห้ามรอข้ามเที่ยงคืนตรงนี้: d0/d1 คิดไปแล้ว ใบทั้งชุดจะผิดวัน
+    const C6 = bkk(45);
+    if (C6 <= bkk(0)) {
+      console.log(`    ข้ามข้อฟอร์มเลื่อนวันนัดตอนส้ม — เวลาปิดรับ +45 นาที (${C6}) ข้ามเที่ยงคืนแล้ว (เตรียมใบนานเกินคาด)`);
+    } else {
+      await setCut(C6);
+      const dl6 = Date.parse(`${d0}T${C6}:00.000+07:00`);
+      await openOrder(a5, AM.code);
+      await lbl(a5.page, "เลื่อนวันนัด").last().click();
+      await a5.page.waitForTimeout(1500);
+      const fieldM = (await lbl(a5.page, "วันนัดใหม่").count()) ? await lbl(a5.page, "วันนัดใหม่").last().innerText() : "";
+      fieldM.includes(dLong(d5))
+        ? pass(`ใบที่ไม่ล็อก: ฟอร์มเลื่อนวันนัดเริ่มที่วันเดิม (${dLong(d5)})`)
+        : fail(`วันตั้งต้นของใบที่ไม่ล็อก: "${fieldM}"`);
+      await pickDay(a5.page, d5, d1);
+      const nLeft = Math.floor((dl6 - Date.now()) / 60000);
+      const amberRe = new RegExp(`^ใกล้ปิดรับ \\(เหลือ (${nLeft - 1}|${nLeft}|${nLeft + 1}) นาที\\) — บอกหัวหน้าภาคให้ปล่อยงานก่อน ${C6} น\\.$`);
+      (await a5.page.getByText(amberRe).locator("visible=true").count()) > 0 && (await lbl(a5.page, URGENT_WITH).count()) === 0
+        ? pass(`เลือกพรุ่งนี้ตอนเหลือ ~${nLeft} นาที: ส้ม "ใกล้ปิดรับ (เหลือ … นาที) — บอกหัวหน้าภาคให้ปล่อยงานก่อน ${C6} น." ไม่มีช่องติ๊ก`)
+        : fail(`ฟอร์มเลื่อนวันนัดตอนส้ม: คาด ${amberRe}`);
+      await a5.page.screenshot({ path: shot("23-reschedule-amber") });
+      await a5.vis("ยกเลิก").last().click();
+      await a5.page.waitForTimeout(800);
+      rowOf(AM.id) === `ASSIGNED|${d5}` && urfOf(AM.id) === "-"
+        ? pass(`ยกเลิกฟอร์ม — ${AM.code} วันนัดเดิม ไม่มีงานด่วน (ฐานข้อมูล)`)
+        : fail(`${AM.code} หลังยกเลิก: ${rowOf(AM.id)} · ${urfOf(AM.id)}`);
+
+      // ── 4) แถบของแอดมิน (ช่อง 2 ใต้แถวค้นหา): งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย · ยังไม่คอนเฟิร์มลูกค้า ──
+      // เวลาปิดรับยังอีก ~45 นาที ใบพรุ่งนี้จึงยังไม่ล็อก · จำนวนเทียบกับ dispatch-watch ของเซิร์ฟเวอร์ (ฐานข้อมูลเครื่องทดสอบอาจมีใบอื่นด้วย)
+      const watch6 = await call(A, "GET", "/work-orders/dispatch-watch");
+      const nU = (watch6.unreleasedTomorrow || []).length;
+      const nC = (watch6.unconfirmedTomorrow || []).length;
+      const unrelTitle = `งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย ${nU} · ปิดรับ ${C6} น.`;
+      const unconfTitle = `งานพรุ่งนี้ที่ยังไม่คอนเฟิร์มลูกค้า ${nC}`;
+      (watch6.unreleasedTomorrow || []).some((w) => w.id === AN.id) && (watch6.unconfirmedTomorrow || []).some((w) => w.id === AC.id)
+        ? pass(`dispatch-watch: ${AN.code} อยู่ในงานพรุ่งนี้ที่ยังไม่ปล่อย (${nU}) · ${AC.code} อยู่ในยังไม่คอนเฟิร์มลูกค้า (${nC})`)
+        : fail(`dispatch-watch ของแอดมิน: ${JSON.stringify(watch6).slice(0, 300)}`);
+      const bannerCheck = async (where) => {
+        const anRow = lbl(a5.page, `${unrelTitle} ${AN.code}`).first();
+        const anRowText = (await anRow.count()) ? await anRow.innerText() : "";
+        const acRow = lbl(a5.page, `${unconfTitle} ${AC.code}`).first();
+        const hintOk = (await a5.vis(`คอนเฟิร์มก่อน ${C6} น. หัวหน้าภาคจะได้ปล่อยงานทัน`).count()) > 0;
+        // ภาคเดียวกันอาจมีหัวหน้าภาคหลายคน (คั่นด้วย " / ") — ดูว่ามี S001 พร้อมเบอร์ ไม่บังคับว่าต้องเป็นคนแรก
+        anRowText.includes("หัวหน้าภาค ") && anRowText.includes(callWho) && (await acRow.count()) > 0 && hintOk
+          ? pass(`${where}: "${unrelTitle}" แถว ${AN.code} บอกหัวหน้าภาค "${callWho}" · "${unconfTitle}" แถว ${AC.code} · "คอนเฟิร์มก่อน ${C6} น. …"`)
+          : fail(`${where} แถบของแอดมิน: แถว ${AN.code} "${anRowText.replace(/\n/g, " | ")}" · แถว ${AC.code} ${await acRow.count()} · คำอธิบาย ${hintOk}`);
+      };
+      await toQueue(a5);
+      await bannerCheck("งานของฉันวันนี้");
+      await a5.page.screenshot({ path: shot("15b-admin-watch"), fullPage: true });
+      await a5.vis("กล่องงานของฉัน").first().click();
+      await a5.page.waitForTimeout(3500);
+      await bannerCheck("กล่องงาน");
+    }
+
+    const C5 = bkk(-2);
+    await setCut(C5);
+    const askNote5 = "ร้านรอพรุ่งนี้เช้า (เทสต์ก้อน 5)";
+    await call(fx.supervisor(), "POST", `/work-orders/${AL.id}/urgent-request`, { note: askNote5 });
+    lastLog(AL.id) === `URGENT_REQUESTED|${askNote5}`
+      ? pass(`หัวหน้าภาคขอแอดมินแก้เป็นงานด่วน ${AL.code} (ฐานข้อมูล URGENT_REQUESTED)`)
+      : fail(`ขอแอดมินแก้เป็นงานด่วน ${AL.code}: ${lastLog(AL.id)}`);
+    const inbox5 = await call(A, "GET", "/work-orders?status=INBOX");
+    const r5 = (id) => (inbox5.rows || []).find((r) => r.id === id);
+    [AL, AN].every((o) => r5(o.id)?.release?.locked) && r5(AP.id)?.overdue && r5(AV.id)?.overdue
+      ? pass(`เซิร์ฟเวอร์: ${AL.code} ${AN.code} ล็อก · ${AP.code} ${AV.code} เลยนัด (กล่องงานแอดมิน)`)
+      : fail(`กล่องงานแอดมินก่อนเปิดจอ: ${JSON.stringify([AL, AN, AP].map((o) => r5(o.id)?.release ?? null)).slice(0, 300)} · ${AV.code} overdue=${r5(AV.id)?.overdue}`);
+    if (!orphanSkip)
+      AO.id && r5(AO.id)?.orphan && r5(AO.id)?.release?.locked
+        ? pass(`เซิร์ฟเวอร์: ${AO.code} ไม่มีคนรับ + ล็อก (กล่องงานแอดมิน)`)
+        : fail(`ใบไม่มีคนรับ ${AO.code || "(ไม่มีใบ)"} ในกล่องงานแอดมิน: ${JSON.stringify(AO.id ? r5(AO.id) ?? "ไม่อยู่ในกล่อง" : null).slice(0, 200)}`);
+
+    // ── 4) งานของฉันวันนี้ของแอดมิน: หัวข้อปัก "เลยเวลาปล่อยงาน" ──
+    await toQueue(a5);
+    const grpL = lbl(a5.page, "กลุ่ม เลยเวลาปล่อยงาน").first();
+    const grpText = (await grpL.count()) ? await grpL.innerText() : "";
+    grpText.includes(`ยังไม่ได้ปล่อยงานก่อน ${C5} น. ของวันก่อนเข้างาน (สาเหตุอยู่ในแต่ละแถว)`) && (await lbl(a5.page, "หัวข้อ เลยเวลาปล่อยงาน 0").count()) === 0
+      ? pass("หัวข้อปัก \"เลยเวลาปล่อยงาน\" พร้อมคำอธิบาย · ไม่มีกล่องว่าง 0 ซ้อน")
+      : fail(`หัวข้อเลยเวลาปล่อยงาน: "${grpText.slice(0, 200)}"`);
+    const team5 = teamOf(AL.id);
+    const since5 = `นัด ${dFull(d1)} · ทั้งวัน · ล็อกตั้งแต่ ${dShort(d0)} ${C5} น.`;
+    const alCard = await queueCard(a5.page, AL.code);
+    alCard &&
+    alCard.text.includes(`ทีม${team5} · หัวหน้าภาค `) && alCard.text.includes(sName) &&
+    alCard.text.includes(since5) &&
+    alCard.text.includes(`สาเหตุ: หัวหน้าภาคยังไม่ได้ปล่อยก่อน ${C5} น.`) &&
+    alCard.labels.some((l) => l.startsWith("หัวหน้าภาคขอแก้เป็นงานด่วน · ") && l.endsWith(`— “${askNote5}”`)) &&
+    alCard.labels.includes(`แก้เป็นงานด่วน ${AL.code}`) && alCard.labels.includes(`เลื่อนวันนัด ${AL.code}`)
+      ? pass(`การ์ด ${AL.code}: ทีม/หัวหน้าภาค · "${since5}" · สาเหตุ · กล่องม่วง หัวหน้าภาคขอแก้เป็นงานด่วน “…” · ปุ่มเลื่อนวันนัด/แก้เป็นงานด่วน`)
+      : fail(`การ์ด ${AL.code}: ${alCard ? `${alCard.text.replace(/\n/g, " | ").slice(0, 400)} · ${alCard.labels.join(" | ")}` : "ไม่เจอ"}`);
+    const anCard = await queueCard(a5.page, AN.code);
+    anCard && anCard.labels.some((l) => l.startsWith("หัวหน้าภาคยังไม่ได้บอกว่าจะไปไหม — โทรถาม ") && l.includes(callWho))
+      ? pass(`การ์ด ${AN.code}: กล่องเทา "หัวหน้าภาคยังไม่ได้บอกว่าจะไปไหม — โทรถาม ${callWho}" (ชื่อ + เบอร์จากฐานข้อมูล)`)
+      : fail(`การ์ด ${AN.code} กล่องถาม (คาดชื่อ + เบอร์ "${callWho}"): ${anCard ? anCard.labels.join(" | ") : "ไม่เจอ"}`);
+    if (!orphanSkip && AO.id) {
+      const aoCard = await queueCard(a5.page, AO.code);
+      aoCard &&
+      aoCard.text.includes(`ทีม${oTeam} · ไม่มีคนรับ`) &&
+      aoCard.text.includes(`สาเหตุ: ยังไม่ได้ปล่อยก่อน ${C5} น.`) &&
+      !aoCard.text.includes("หัวหน้าภาคยังไม่ได้ปล่อย") &&
+      !aoCard.labels.some((l) => l.startsWith("หัวหน้าภาค"))
+        ? pass(`ใบไม่มีคนรับ ${AO.code}: "ทีม${oTeam} · ไม่มีคนรับ" · สาเหตุกลาง ๆ "ยังไม่ได้ปล่อยก่อน ${C5} น." · ไม่มีกล่องถามหัวหน้าภาค`)
+        : fail(`การ์ดใบไม่มีคนรับ ${AO.code}: ${aoCard ? `${aoCard.text.replace(/\n/g, " | ").slice(0, 300)} · ${aoCard.labels.join(" | ")}` : "ไม่เจอ"}`);
+    }
+    await a5.page.screenshot({ path: shot("16-admin-locked"), fullPage: true });
+
+    // ── 4) "เลยนัด" ในงานของฉันวันนี้ = แถวชุดเดียวกับกล่องงาน ──
+    const queuePast = await a5.page.evaluate(() => {
+      const g = [...document.querySelectorAll('[aria-label="กลุ่ม เลยนัด"]')].find((n) => n.getClientRects().length);
+      return g ? [...g.querySelectorAll('[aria-label^="รายละเอียด "]')].map((n) => n.getAttribute("aria-label").slice("รายละเอียด ".length)).sort() : null;
+    });
+    const apCard = await queueCard(a5.page, AP.code);
+    apCard && apCard.text.includes("สาเหตุ: วันนัดผ่านไปแล้ว ยังไม่ได้ปล่อยงาน") && (queuePast || []).includes(AP.code)
+      ? pass(`หัวข้อปัก "เลยนัด": ${AP.code} (ใบรอปล่อยงานที่วันนัดผ่านแล้ว) สาเหตุ "วันนัดผ่านไปแล้ว ยังไม่ได้ปล่อยงาน"`)
+      : fail(`เลยนัดในงานของฉัน: ${apCard ? apCard.text.replace(/\n/g, " | ").slice(0, 300) : "ไม่เจอการ์ด"} · ${JSON.stringify(queuePast)}`);
+    // หัวข้อปักมาก่อนหัวข้อคำขอตรวจสอบ: ใบเลยนัดที่มีคำขอค้างอยู่หัวข้อ "เลยนัด" ที่เดียว และปุ่มตอบกลับตามไปอยู่บนการ์ดนั้น
+    const avCard = await queueCard(a5.page, AV.code);
+    const avInReview = await a5.page.evaluate((code) => {
+      const g = [...document.querySelectorAll('[aria-label="กลุ่ม หัวหน้าภาคส่งให้ตรวจสอบ"]')].find((n) => n.getClientRects().length);
+      return !!g && !!g.querySelector(`[aria-label="รายละเอียด ${code}"]`);
+    }, AV.code);
+    (queuePast || []).includes(AV.code) && !avInReview && avCard &&
+    avCard.labels.includes(`ตรวจแล้ว ตอบกลับ ${AV.code}`) && avCard.labels.includes(`เลื่อนวันนัด ${AV.code}`)
+      ? pass(`${AV.code} (เลยนัด + คำขอตรวจสอบค้าง): อยู่หัวข้อ "เลยนัด" ไม่ซ้ำในหัวข้อคำขอ · การ์ดมีปุ่ม "ตรวจแล้ว · ตอบกลับ" กับ "เลื่อนวันนัด"`)
+      : fail(`${AV.code} หัวข้อปักก่อนคำขอ: เลยนัด=${(queuePast || []).includes(AV.code)} · ในหัวข้อคำขอ=${avInReview} · ${avCard ? avCard.labels.join(" | ") : "ไม่เจอการ์ด"}`);
+    await a5.vis("กล่องงานของฉัน").first().click();
+    await a5.page.waitForTimeout(3500);
+    const inboxCut = await a5.page.evaluate(() => {
+      const labels = [...document.querySelectorAll("[aria-label]")].filter((n) => n.getClientRects().length).map((n) => n.getAttribute("aria-label"));
+      return {
+        past: labels.map((l) => /^เลยนัด \d+ (\S+-\S+)$/.exec(l)).filter(Boolean).map((m) => m[1]).sort(),
+        locked: labels.map((l) => /^เลยเวลาปล่อยงาน \d+ (\S+-\S+)$/.exec(l)).filter(Boolean).map((m) => m[1]),
+      };
+    });
+    JSON.stringify(queuePast) === JSON.stringify(inboxCut.past) && inboxCut.past.length > 0
+      ? pass(`"เลยนัด" ของงานของฉันวันนี้กับกล่องงานเป็นรหัสชุดเดียวกัน (${inboxCut.past.length} ใบ)`)
+      : fail(`เลยนัด งานของฉัน ${JSON.stringify(queuePast)} · กล่องงาน ${JSON.stringify(inboxCut.past)}`);
+    inboxCut.locked.includes(AL.code) && inboxCut.locked.includes(AN.code)
+      ? pass(`กล่องงานแอดมิน: หัวข้อ "เลยเวลาปล่อยงาน" มีแถว ${AL.code} ${AN.code}`)
+      : fail(`กล่องงาน หัวข้อเลยเวลาปล่อยงาน: ${JSON.stringify(inboxCut.locked)}`);
+    await a5.page.screenshot({ path: shot("17-admin-inbox") });
+
+    // ── 4) แก้เป็นงานด่วนจากการ์ดในงานของฉันวันนี้ ──
+    await toQueue(a5);
+    await lbl(a5.page, `แก้เป็นงานด่วน ${AL.code}`).first().click();
+    const urgentModal = await a5.vis(`แก้เป็นงานด่วน · ${AL.code}`).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    urgentModal &&
+    (await a5.vis("หัวหน้าภาคกดปล่อยงานใบนี้ได้ทันทีแม้เลยเวลาปิดรับ", false).count()) > 0 &&
+    (await lbl(a5.page, "เหตุผล (ไม่บังคับ — ลงประวัติใบงาน)").count()) > 0
+      ? pass(`หน้าต่าง "แก้เป็นงานด่วน · ${AL.code}" + คำอธิบาย + ช่องเหตุผล (ไม่บังคับ)`)
+      : fail("หน้าต่างแก้เป็นงานด่วนไม่ครบ");
+    await a5.page.screenshot({ path: shot("18-urgent-modal") });
+    const reason5 = "ร้านปิดเครื่องรอ ต้องเข้าพรุ่งนี้ (เทสต์)";
+    await lbl(a5.page, "เหตุผล (ไม่บังคับ — ลงประวัติใบงาน)").last().fill(reason5);
+    await lbl(a5.page, "บันทึก แก้เป็นงานด่วน").last().click();
+    const toast24 = `แก้ ${AL.code} เป็นงานด่วนแล้ว — หัวหน้าภาคกดปล่อยงานได้ทันที (ลงประวัติใบงานแล้ว)`;
+    const t24 = await a5.vis(toast24).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    await a5.page.waitForTimeout(2500);
+    t24 ? pass(`toast: ${toast24}`) : fail(`ไม่เห็น toast หลังแก้เป็นงานด่วน (คาด "${toast24}")`);
+    const ul = urgentLog(AL.id).split("|");
+    urfOf(AL.id) === d1 && ul[0].startsWith(`ปล่อยหลังเวลาปิดรับได้ · ${reason5} · นัด `) && ul[1] === "direct" && ul[2] === reason5 && st(AL.id) === "ASSIGNED"
+      ? pass(`ฐานข้อมูล: ${AL.code} urgentReleaseFor = ${d1} · ประวัติ URGENT_RELEASE meta.via=direct พร้อมเหตุผล · ขั้นไม่เปลี่ยน`)
+      : fail(`หลังแก้เป็นงานด่วน: ${urfOf(AL.id)} · ${ul.join(" | ")} · ${st(AL.id)}`);
+    (await lbl(a5.page, `รายละเอียด ${AL.code}`).count()) === 0
+      ? pass(`${AL.code} ออกจากหัวข้อ "เลยเวลาปล่อยงาน" (งานของฉันโหลดใหม่หลังบันทึก)`)
+      : fail(`${AL.code} ยังค้างอยู่ในงานของฉันวันนี้ของแอดมินหลังแก้เป็นงานด่วน`);
+
+    // หัวหน้าภาคเห็นงานด่วน: ป้ายเขียวบนการ์ด + กล่องเขียวในฟอร์มปล่อยงาน (ใคร เมื่อไร นัดวันไหน)
+    const s5 = await openAs("S001", 1280);
+    await toQueue(s5);
+    const alSup = await queueCard(s5.page, AL.code);
+    alSup && alSup.labels.includes("แอดมินแก้เป็นงานด่วน · ปล่อยได้เลย")
+      ? pass(`หัวหน้าภาค: การ์ด ${AL.code} ป้ายเขียว "แอดมินแก้เป็นงานด่วน · ปล่อยได้เลย"`)
+      : fail(`หัวหน้าภาค การ์ด ${AL.code}: ${alSup ? alSup.labels.join(" | ") : "ไม่เจอ"}`);
+    await openRelease(s5, AL.code);
+    const green = lbl(s5.page, `แอดมินแก้เป็นงานด่วน — ${reason5}`).first();
+    const greenText = (await green.count()) ? await green.innerText() : "";
+    greenText.includes(`${aName} · `) && greenText.includes(` น. · นัด ${dFull(d1)} · ทั้งวัน`)
+      ? pass(`ฟอร์มปล่อยงานของหัวหน้าภาค: กล่องเขียว "แอดมินแก้เป็นงานด่วน — ${reason5}" + "${aName} · … น. · นัด ${dFull(d1)} · ทั้งวัน"`)
+      : fail(`กล่องเขียวในฟอร์มปล่อยงาน: "${greenText}"`);
+    await s5.page.screenshot({ path: shot("19-sup-urgent-note") });
+    await s5.ctx.close();
+
+    // ── 4) ฟอร์มคอนเฟิร์มลูกค้า งานพรุ่งนี้หลังเวลาปิดรับ: แดง + ช่องติ๊ก → งานด่วนไปพร้อมกัน ──
+    await toQueue(a5);
+    await lbl(a5.page, `รายละเอียด ${AC.code}`).first().click();
+    await a5.page.waitForTimeout(3500);
+    // ปุ่มขั้นในการ์ดขั้นปัจจุบัน (aria-label = ข้อความปุ่ม) — ชื่อขั้นบนแถบขั้นตอนเป็นข้อความเดียวกันแต่ไม่ใช่ปุ่มนี้
+    await lbl(a5.page, "คอนเฟิร์มลูกค้า").last().click();
+    await a5.page.waitForTimeout(1500);
+    await lbl(a5.page, "ลูกค้าคอนเฟิร์มวันนี้").last().click();
+    await a5.page.waitForTimeout(600);
+    const w28 = `ถึง ${C5} น. แล้ว — คอนเฟิร์มตอนนี้ ใบจะถึงหัวหน้าภาคแบบล็อก · ต้องไปพรุ่งนี้จริง ติ๊กช่องข้างล่าง`;
+    const tickC = lbl(a5.page, URGENT_WITH).last();
+    (await a5.vis(w28).count()) > 0 && (await tickC.count()) > 0 && (await tickC.getAttribute("aria-checked")) === "false"
+      ? pass(`ฟอร์มคอนเฟิร์มลูกค้า (พรุ่งนี้ หลังปิดรับ): แดง "${w28}" + ช่องติ๊ก ${URGENT_WITH} (ยังไม่ติ๊ก)`)
+      : fail("ฟอร์มคอนเฟิร์มลูกค้าไม่มีบรรทัดแดง/ช่องติ๊ก");
+    await tickC.click();
+    await a5.page.waitForTimeout(300);
+    (await tickC.getAttribute("aria-checked")) === "true" ? pass("ติ๊กช่องงานด่วนแล้ว (aria-checked)") : fail("ติ๊กช่องงานด่วนไม่ติด");
+    await a5.page.screenshot({ path: shot("20-confirm-red") });
+    await a5.vis("ยืนยัน").last().click();
+    await a5.page.waitForTimeout(3500);
+    const ulC = urgentLog(AC.id).split("|");
+    st(AC.id) === "ASSIGNED" && urfOf(AC.id) === d1 && ulC[1] === "confirm" && ulC[0].startsWith("ตอนคอนเฟิร์มลูกค้า · ") && logCount(AC.id, "CONFIRMED") === 1
+      ? pass(`คอนเฟิร์ม + ติ๊ก → ${AC.code} ASSIGNED · urgentReleaseFor ${d1} · ประวัติ CONFIRMED + URGENT_RELEASE (via=confirm) (ฐานข้อมูล)`)
+      : fail(`หลังคอนเฟิร์ม ${AC.code}: ${st(AC.id)} · ${urfOf(AC.id)} · ${ulC.join(" | ")} · CONFIRMED ${logCount(AC.id, "CONFIRMED")}`);
+
+    // ── 4) ฟอร์มคอนเฟิร์มลูกค้า งานวันนี้: "วันนี้เลยเวลาปิดรับแล้ว (…)" ไม่ใช่ "ถึง HH:MM น. แล้ว" ──
+    await toQueue(a5);
+    await lbl(a5.page, `รายละเอียด ${AT.code}`).first().click();
+    await a5.page.waitForTimeout(3500);
+    // ปุ่มขั้นในการ์ดขั้นปัจจุบัน (aria-label = ข้อความปุ่ม) — ชื่อขั้นบนแถบขั้นตอนเป็นข้อความเดียวกันแต่ไม่ใช่ปุ่มนี้
+    await lbl(a5.page, "คอนเฟิร์มลูกค้า").last().click();
+    await a5.page.waitForTimeout(1500);
+    await lbl(a5.page, "ลูกค้าคอนเฟิร์มวันนี้").last().click();
+    await a5.page.waitForTimeout(600);
+    const w28t = `วันนี้เลยเวลาปิดรับแล้ว (${dShort(dm1)} ${C5} น.) — คอนเฟิร์มตอนนี้ ใบจะถึงหัวหน้าภาคแบบล็อก · ต้องไปวันนี้จริง ติ๊กช่องข้างล่าง`;
+    (await a5.vis(w28t).count()) > 0 && (await a5.vis(`ถึง ${C5} น. แล้ว`, false).count()) === 0 && (await lbl(a5.page, URGENT_WITH).count()) > 0
+      ? pass(`ฟอร์มคอนเฟิร์มลูกค้า (งานวันนี้): "${w28t}" — ไม่ขึ้น "ถึง ${C5} น. แล้ว"`)
+      : fail("ฟอร์มคอนเฟิร์มงานวันนี้ใช้ข้อความผิด");
+    await a5.vis("ยกเลิก").last().click();
+    await a5.page.waitForTimeout(800);
+    st(AT.id) === "AWAITING_CONFIRM" && urfOf(AT.id) === "-"
+      ? pass(`ปิดฟอร์มโดยไม่บันทึก — ${AT.code} ยังรอคอนเฟิร์ม ไม่มีงานด่วน (ฐานข้อมูล)`)
+      : fail(`${AT.code} หลังปิดฟอร์ม: ${st(AT.id)} · ${urfOf(AT.id)}`);
+
+    // ── 4) หน้าใบงานของใบที่ล็อก (งานวันนี้): ปุ่มหลักแก้เป็นงานด่วน · เลื่อนวันนัดเปิดที่วันแรกที่ปล่อยได้ → พรุ่งนี้ + ติ๊ก ──
+    await toQueue(a5);
+    await lbl(a5.page, `รายละเอียด ${AR.code}`).first().click();
+    await a5.page.waitForTimeout(3500);
+    (await lbl(a5.page, "แก้เป็นงานด่วน").count()) > 0 && (await lbl(a5.page, "เลื่อนวันนัด").count()) > 0
+      ? pass(`หน้าใบงาน ${AR.code} (แอดมิน · ล็อก): ปุ่มหลัก "แก้เป็นงานด่วน" คู่กับ "เลื่อนวันนัด"`)
+      : fail("หน้าใบงานของใบที่ล็อกไม่มีปุ่มแก้เป็นงานด่วน/เลื่อนวันนัด");
+    await lbl(a5.page, "เลื่อนวันนัด").last().click();
+    await a5.page.waitForTimeout(1500);
+    const fieldText = (await lbl(a5.page, "วันนัดใหม่").count()) ? await lbl(a5.page, "วันนัดใหม่").last().innerText() : "";
+    fieldText.includes(dLong(d2)) && (await a5.vis(`วันใหม่ปิดรับปล่อยงาน ${dFull(d1)} ${C5} น.`).count()) > 0
+      ? pass(`ฟอร์มเลื่อนวันนัดของใบที่ล็อก: เปิดที่วันแรกที่ยังปล่อยได้ (${dLong(d2)}) + บรรทัดเทา "วันใหม่ปิดรับปล่อยงาน ${dFull(d1)} ${C5} น."`)
+      : fail(`วันตั้งต้นของฟอร์มเลื่อนวันนัด: "${fieldText}"`);
+    await pickDay(a5.page, d2, d1);
+    const w31 = `พรุ่งนี้เลยเวลาปิดรับแล้ว (${dShort(d0)} ${C5} น.) — ไม่ติ๊ก ใบจะถึงหัวหน้าภาคแบบล็อก`;
+    const tickR = lbl(a5.page, URGENT_WITH).last();
+    (await a5.vis(w31).count()) > 0 && (await tickR.count()) > 0
+      ? pass(`เลือกพรุ่งนี้: แดง "${w31}" + ช่องติ๊กงานด่วน`)
+      : fail("ฟอร์มเลื่อนวันนัด (พรุ่งนี้ หลังปิดรับ) ไม่มีบรรทัดแดง/ช่องติ๊ก");
+    await tickR.click();
+    await lbl(a5.page, "เหตุผลที่เลื่อนวันนัด").last().fill("ร้านขอพรุ่งนี้แทน (เทสต์)");
+    await a5.page.waitForTimeout(300);
+    await a5.page.screenshot({ path: shot("21-reschedule-red") });
+    await lbl(a5.page, "บันทึกวันนัดใหม่").last().click();
+    const toast37 = `เลื่อนวันนัด ${AR.code} เป็น ${dFull(d1)} แล้ว — ใบกลับไปที่หัวหน้าภาคให้คอนเฟิร์มวันใหม่ · แก้เป็นงานด่วนไปพร้อมกันแล้ว หัวหน้าภาคปล่อยได้เลย`;
+    const t37 = await a5.vis(toast37).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    await a5.page.waitForTimeout(1500);
+    t37 ? pass(`toast: ${toast37}`) : fail(`ไม่เห็น toast หลังเลื่อนวันนัด (คาด "${toast37}")`);
+    (await a5.vis(`${AR.code} เลื่อนวันนัดแล้ว`, false).count()) === 0
+      ? pass("ไม่มีกล่อง \"เลื่อนวันนัดแล้ว\" แบบเดิมซ้อน")
+      : fail("ขึ้นทั้ง toast และกล่องเลื่อนวันนัดแล้ว");
+    const ulR = urgentLog(AR.id).split("|");
+    rowOf(AR.id) === `ASSIGNED|${d1}` && urfOf(AR.id) === d1 && ulR[0].startsWith("ตอนเลื่อนวันนัด · ") && ulR[1] === "reschedule"
+      ? pass(`ฐานข้อมูล: ${AR.code} วันนัด ${d1} · urgentReleaseFor ${d1} · ประวัติ URGENT_RELEASE "ตอนเลื่อนวันนัด · …" (via=reschedule)`)
+      : fail(`หลังเลื่อนวันนัด ${AR.code}: ${rowOf(AR.id)} · ${urfOf(AR.id)} · ${ulR.join(" | ")}`);
+
+    // ── 4) หน้าต่างแก้เป็นงานด่วนจากหน้าใบงาน: กล่อง "ยังไม่ได้บอก — โทรถาม <ชื่อ> <เบอร์>" แบบเดียวกับการ์ด · ยกเลิกไม่บันทึก ──
+    await toQueue(a5);
+    await lbl(a5.page, `รายละเอียด ${AN.code}`).first().click();
+    await a5.page.waitForTimeout(3500);
+    await lbl(a5.page, "แก้เป็นงานด่วน").last().click();
+    const anModal = await a5.vis(`แก้เป็นงานด่วน · ${AN.code}`).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    anModal && (await a5.vis(`หัวหน้าภาคยังไม่ได้บอกว่าจะไปไหม — โทรถาม ${callWho}`, false).count()) > 0
+      ? pass(`หน้าใบงาน ${AN.code}: หน้าต่างแก้เป็นงานด่วนบอก "ยังไม่ได้บอก — โทรถาม ${callWho}" (เบอร์จาก GET ใบงานของแอดมิน)`)
+      : fail(`หน้าต่างแก้เป็นงานด่วนจากหน้าใบงาน ${AN.code}: เปิด=${anModal} · ไม่เห็นกล่องโทรถาม ${callWho}`);
+    await a5.vis("ยกเลิก").last().click();
+    await a5.page.waitForTimeout(800);
+    urfOf(AN.id) === "-" && logCount(AN.id, "URGENT_RELEASE") === 0
+      ? pass(`ยกเลิกหน้าต่าง — ${AN.code} ไม่มีงานด่วน ไม่มีประวัติ (ฐานข้อมูล)`)
+      : fail(`${AN.code} หลังยกเลิกหน้าต่าง: ${urfOf(AN.id)} · URGENT_RELEASE ${logCount(AN.id, "URGENT_RELEASE")}`);
+
+    // ── 4) มือถือ 420: การ์ดในหัวข้อเลยเวลาปล่อยงาน ปุ่มแก้เป็นงานด่วนขึ้นแถวของตัวเองเต็มกว้าง ไม่ล้นจอ ──
+    const ap = await openAs("A001", 420, 900);
+    await toQueue(ap);
+    const lay5 = await ap.page.evaluate((code) => {
+      const vis1 = (sel) => [...document.querySelectorAll(sel)].find((n) => n.getClientRects().length);
+      const b = vis1(`[aria-label="แก้เป็นงานด่วน ${code}"]`);
+      const d = vis1(`[aria-label="รายละเอียด ${code}"]`);
+      const r = b ? b.getBoundingClientRect() : null;
+      return {
+        btn: r ? { top: r.top, right: r.right, width: r.width } : null,
+        detailTop: d ? d.getBoundingClientRect().top : null,
+        scroll: document.scrollingElement.scrollWidth,
+      };
+    }, AN.code);
+    lay5.btn && lay5.detailTop !== null && lay5.btn.top > lay5.detailTop && lay5.btn.width >= 250 && lay5.btn.right <= 420 && lay5.scroll <= 420
+      ? pass(`มือถือ 420: ปุ่ม "แก้เป็นงานด่วน ${AN.code}" อยู่แถวใต้ปุ่มรายละเอียด กว้างเต็มการ์ด ไม่ล้นจอ`)
+      : fail(`มือถือ 420 การ์ดแอดมิน: ${JSON.stringify(lay5)}`);
+    // ใบเลยนัดขั้นอื่นที่มีคำขอตรวจสอบค้าง (ปุ่มแอดมินชุดเดิม + ตอบกลับ): ปุ่มตอบกลับลงแถวของตัวเองเต็มกว้าง ตัวหนังสือบรรทัดเดียว
+    // สี่ปุ่มในแถวเดียวบีบปุ่มตอบกลับเหลือแค่ขอบ ตัวหนังสือตกบรรทัดทีละตัวล้นออกนอกปุ่ม — ความสูงของตัวหนังสือจับได้แม้แถวไม่ล้นจอ
+    const layV = await ap.page.evaluate((code) => {
+      const vis1 = (sel) => [...document.querySelectorAll(sel)].find((n) => n.getClientRects().length);
+      const b = vis1(`[aria-label="ตรวจแล้ว ตอบกลับ ${code}"]`);
+      const d = vis1(`[aria-label="รายละเอียด ${code}"]`);
+      const r = b ? b.getBoundingClientRect() : null;
+      const t = b ? [...b.querySelectorAll("div")].find((n) => n.textContent.trim() === "ตรวจแล้ว · ตอบกลับ") : null;
+      return {
+        btn: r ? { top: r.top, right: r.right, width: r.width } : null,
+        detailTop: d ? d.getBoundingClientRect().top : null,
+        textH: t ? t.getBoundingClientRect().height : null,
+        scroll: document.scrollingElement.scrollWidth,
+      };
+    }, AV.code);
+    layV.btn && layV.detailTop !== null && layV.btn.top > layV.detailTop && layV.btn.width >= 250 && layV.btn.right <= 420 &&
+    layV.textH !== null && layV.textH <= 30 && layV.scroll <= 420
+      ? pass(`มือถือ 420: ${AV.code} (เลยนัด + คำขอค้าง) ปุ่ม "ตรวจแล้ว · ตอบกลับ" แถวของตัวเองเต็มกว้าง ตัวหนังสือบรรทัดเดียว ไม่ล้นจอ`)
+      : fail(`มือถือ 420 ปุ่มตอบกลับบนการ์ดเลยนัด ${AV.code}: ${JSON.stringify(layV)}`);
+    await ap.page.screenshot({ path: shot("22-admin-phone"), fullPage: true });
+    await ap.ctx.close();
+
+    await a5.ctx.close();
+
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {
     fail(e.stack || String(e));
@@ -667,11 +1168,18 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
         fail(`คืนเวลาเริ่มใช้กฎไม่สำเร็จ: ${e}`);
       }
     }
+    // เบอร์ S001 ที่ก้อน 5 ตั้งชั่วคราว — คืนจากแถวจดและลบแถวจด (คืนไม่สำเร็จ แถวจดยังอยู่ให้รอบหน้าคืน)
+    try {
+      sql(RESTORE_PHONE);
+    } catch (e) {
+      fail(`คืนเบอร์ของ S001 ไม่สำเร็จ: ${e}`);
+    }
     if (MAXSET !== null) {
       sql(`delete from "AppSetting" where key='dispatchCutoff' and id > ${MAXSET}; delete from "AppSetting" where key='${MARK}'`);
       await refresh().catch(() => {});
     }
     await fx.cleanup().catch((e) => fail(`ลบข้อมูลทดสอบไม่สำเร็จ: ${e}`));
+    for (const id of extraOrders) await call(A, "DELETE", `/work-orders/${id}`).catch((e) => fail(`ลบใบ ${id} ไม่สำเร็จ: ${e}`));
     // ใบ/สาขา/หัวหน้าภาคชั่วคราวของกล่องว่าง — ใบลบผ่าน API (ประวัติไปด้วย) แล้วค่อยลบเครื่อง สาขา และบัญชี
     try {
       if (zOrder) await call(A, "DELETE", `/work-orders/${zOrder}`);
