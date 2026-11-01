@@ -22,11 +22,11 @@ import {
 } from "../machines/cancellationImport";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
-  WORK_ORDER_STATUS_LABELS,
   machineMake,
   warrantyEndFor,
   warrantyYearsFor,
 } from "../utils/constants";
+import { brandFileOf, openPickOf, statusLabelOf } from "../utils/brandFile";
 
 const router = Router();
 
@@ -455,6 +455,8 @@ router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res)
       createdAt: true,
       machine: { select: { code: true } },
       createdBy: { select: { name: true } },
+      // ป้าย "หัวหน้าภาค · คอนเฟิร์มอะไหล่" ในป๊อปอัปใบที่เปิดซ้ำ — ป้ายเดียวกับหน้าใบงาน (utils/brandFile.ts statusLabelOf)
+      partsPicks: { orderBy: { id: "desc" }, take: 1, select: { status: true, voidedAt: true, reviewedAt: true } },
     },
   });
   res.json(
@@ -464,7 +466,7 @@ router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res)
             id: null,
             code: w.code,
             status: w.status,
-            statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+            statusLabel: statusLabelOf(w.status, openPickOf(w.status, w.partsPicks)),
             machineCode: w.machine?.code ?? null,
             symptom: null,
             team: null,
@@ -476,7 +478,7 @@ router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res)
             id: w.id,
             code: w.code,
             status: w.status,
-            statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+            statusLabel: statusLabelOf(w.status, openPickOf(w.status, w.partsPicks)),
             machineCode: w.machine?.code ?? null,
             // บรรทัดแรกพอให้จำได้ว่าเรื่องไหน — บรรทัดหลังเป็นสาเหตุที่ช่างเติม
             symptom: (w.symptom ?? "").split("\n")[0].trim() || w.title,
@@ -511,10 +513,12 @@ router.get("/:code/machines", requireAuth, async (req: AuthRequest, res) => {
 
   const machines = await prisma.machine.findMany({
     where: { branchId: branch.id, removedAt: null },
-    select: { code: true, type: true, model: true, capacityKg: true },
+    select: { code: true, type: true, brand: true, model: true, capacityKg: true },
     orderBy: { code: "asc" },
   });
-  res.json(machines);
+  // make = ยี่ห้อที่ใช้จริง (ยี่ห้อจากไฟล์รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) · brandFile = ไฟล์อะไหล่ของเครื่องนั้น
+  // ฟอร์มเปิดใบงานล็อกปุ่มยี่ห้อเมื่อรู้ยี่ห้อแล้ว — รวมเครื่องที่รู้แค่จากรายงาน (model ว่าง) ไม่งั้นถามซ้ำทั้งที่ระบบรู้
+  res.json(machines.map((m) => ({ ...m, make: machineMake(m), brandFile: brandFileOf(machineMake(m)) })));
 });
 
 const branchSchema = z.object({

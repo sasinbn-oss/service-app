@@ -1,8 +1,11 @@
 /**
  * อัปเดตข้อมูลอะไหล่จากไฟล์ Excel ในแอป (เจ้าของงานขอ ต.ค. 69 — เดิมต้องให้คนทำระบบรัน scripts/import-spare-parts.ts)
  *
- * ไฟล์ที่ใช้จริงแยกตามยี่ห้อ (Haier · Huebsch · Maytag · Oasis · Other) หัวตารางแบบเดียวกัน:
+ * ไฟล์ที่ใช้จริงแยกตามยี่ห้อ (Haier · Huebsch · Maytag · Oasis · Spinz · Other) หัวตารางแบบเดียวกัน:
  * ลำดับ · รูปภาพประกอบ (รูปวางในเซลล์) · รหัสสินค้า · ชื่อรวม (ไทย) · Part No. (บางไฟล์ · Huebsch สะกด "Pant No.") · Category · ยี่ห้อสินค้า
+ *
+ * ไฟล์ยี่ห้อของอะไหล่ = ชื่อไฟล์ที่อัปโหลด (เจ้าของงานตอบ 31 ต.ค. 69 · utils/brandFile.ts) — ทุกรหัสในไฟล์เข้าไฟล์ยี่ห้อนั้น
+ * และไม่ถูกเอาออกเมื่อรอบหน้าไม่มี (เพิ่มอย่างเดียว เหมือนอะไหล่ที่ไม่อยู่ในไฟล์) · ช่อง "ยี่ห้อสินค้า" ยังนำเข้าแต่ใช้แสดง/ค้นหาเท่านั้น
  *
  * กติกา (ตกลงตามตัวอย่าง):
  * - เทียบด้วยรหัสสินค้า — มีแล้วแก้ให้ตรงไฟล์ · ใหม่เพิ่ม · **ไม่ลบ** อะไหล่ที่ไม่อยู่ในไฟล์ (ใบงานเก่ายังอ้างถึง)
@@ -15,6 +18,7 @@ import crypto from "crypto";
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
 import { FormImage, cellImages } from "./repairFormImport";
+import type { BrandFile } from "./brandFile";
 
 type Field = "partCode" | "name" | "brand" | "category" | "partNo" | "image";
 
@@ -267,9 +271,28 @@ export interface PlanItem {
 }
 export interface Plan {
   items: PlanItem[];
-  notInFile: { partCode: string; name: string; brand: string | null; usedIn: number }[];
-  /** changed = อะไหล่ที่เปลี่ยนจริง (นับตัวละครั้ง — แก้ชื่อ+เปลี่ยนรูปตัวเดียวกันไม่นับสอง) */
-  summary: { rows: number; changed: number; created: number; updated: number; images: number; same: number; skipped: number; notInFile: number };
+  /** file = ไฟล์ยี่ห้อที่อะไหล่ตัวนี้อยู่แต่ไม่อยู่ในไฟล์ Excel ที่อัปโหลด (แถวประวัติก่อนมีไฟล์ยี่ห้อไม่มีช่องนี้) */
+  notInFile: { partCode: string; name: string; brand: string | null; usedIn: number; file: string | null }[];
+  /**
+   * changed = อะไหล่ที่เปลี่ยนจริง (นับตัวละครั้ง — แก้ชื่อ+เปลี่ยนรูปตัวเดียวกันไม่นับสอง)
+   * joined = รหัสในไฟล์ที่ยังไม่อยู่ในไฟล์ยี่ห้อนี้ (อัปเดตแล้วช่างเลือกได้กับเครื่องยี่ห้อนั้น) — ยังไม่รู้ไฟล์ยี่ห้อ = 0
+   * confirmed = รหัสในไฟล์ที่อยู่ในไฟล์ยี่ห้อนี้แล้ว แต่มาจากการเดาตอนขึ้นระบบ (SEED) หรือแอดมินติ๊กเอง (MANUAL)
+   *   อัปเดตแล้วกลายเป็น IMPORT = ไฟล์จริงยืนยัน — นับเป็นงานด้วย ไม่งั้นอัปไฟล์เดิมที่ไม่มีอะไรเปลี่ยนซ้ำหลังเปิดใช้
+   *   (เจ้าของงาน: อัปโหลดครบ 6 ไฟล์อีกรอบ) หน้าตรวจขึ้น "ไม่มีอะไรต้องอัปเดต" แถว SEED ค้าง แล้วตอนเช็ค source='SEED'
+   *   ดูเหมือนเป็นรหัสที่ไม่มีไฟล์ไหนยืนยันทั้งที่อยู่ในไฟล์จริง — แอดมินอาจเอาออกจากไฟล์ผิดตัว
+   */
+  summary: {
+    rows: number;
+    changed: number;
+    created: number;
+    updated: number;
+    images: number;
+    same: number;
+    skipped: number;
+    notInFile: number;
+    joined: number;
+    confirmed: number;
+  };
 }
 
 /**
@@ -290,10 +313,9 @@ function imageAction(cur: { id: number; imageUrl: string | null; hash: string | 
  * รูปเดิมเทียบด้วย hash ที่ฐานข้อมูลคิดให้ ไม่ดึงรูปทั้งก้อนมาเทียบ (หลายร้อยรูป = หลายสิบ MB)
  * รูปที่มาจากไฟล์ที่ถูกย่อ ใช้ค่ารูปต้นฉบับที่เก็บไว้ (sourceHash) ไม่ใช่ไบต์ที่ย่อแล้ว
  */
-export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean): Promise<Plan> {
+export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean, brandFile: BrandFile | null): Promise<Plan> {
   const codes = parsed.rows.map((r) => r.partCode);
-  const brands = [...new Set(parsed.rows.map((r) => r.brand).filter(Boolean))];
-  const [existing, others] = await Promise.all([
+  const [existing, inBrandFile] = await Promise.all([
     codes.length
       ? prisma.$queryRaw<
           { id: number; partCode: string; name: string; brand: string | null; category: string | null; partNo: string | null; imageUrl: string | null; hash: string | null }[]
@@ -303,11 +325,19 @@ export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean
           FROM "SparePart" p LEFT JOIN "SparePartImage" i ON i."sparePartId" = p.id
           WHERE upper(p."partCode") = ANY(${codes}::text[])`
       : Promise.resolve([]),
-    // ยี่ห้อเดียวกับในไฟล์แต่ไม่อยู่ในไฟล์ — บอกให้รู้ ไม่ลบ
-    brands.length
+    // อะไหล่ทุกตัวที่อยู่ในไฟล์ยี่ห้อนี้ — ตัวที่ไม่อยู่ใน Excel รอบนี้บอกให้รู้ (ไม่ลบ ไม่เอาออกจากไฟล์)
+    // และตัวที่อยู่แล้วไม่นับว่า "เข้าไฟล์ใหม่" · เดิมเทียบด้วยข้อความยี่ห้อ ซึ่งไม่ได้บอกว่าอะไหล่อยู่ไฟล์ไหนแล้ว
+    // (รหัสเดียวอยู่ได้หลายไฟล์ ช่องยี่ห้อเก็บได้ค่าเดียว = ยี่ห้อของไฟล์ที่อัปทีหลังสุด)
+    brandFile
       ? prisma.sparePart.findMany({
-          where: { brand: { in: brands }, offCatalog: false },
-          select: { partCode: true, name: true, brand: true, _count: { select: { workOrderParts: true } } },
+          where: { offCatalog: false, brandFiles: { some: { file: brandFile } } },
+          select: {
+            partCode: true,
+            name: true,
+            brand: true,
+            _count: { select: { workOrderParts: true } },
+            brandFiles: { where: { file: brandFile }, select: { source: true } },
+          },
           orderBy: { partCode: "asc" },
         })
       : Promise.resolve([]),
@@ -332,9 +362,11 @@ export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean
     const action = diffs.length ? "UPDATE" : "SAME";
     return { ...base, id: cur.id, action, diffs, image };
   });
-  const notInFile = others
+  const notInFile = inBrandFile
     .filter((p) => !inFile.has(p.partCode.toUpperCase()))
-    .map((p) => ({ partCode: p.partCode, name: p.name, brand: p.brand, usedIn: p._count.workOrderParts }));
+    .map((p) => ({ partCode: p.partCode, name: p.name, brand: p.brand, usedIn: p._count.workOrderParts, file: brandFile }));
+  const already = new Set(inBrandFile.map((p) => p.partCode.toUpperCase()));
+  const unconfirmed = new Set(inBrandFile.filter((p) => p.brandFiles.some((b) => b.source !== "IMPORT")).map((p) => p.partCode.toUpperCase()));
   const writesImage = (i: PlanItem) => i.image === "NEW" || i.image === "CHANGED";
   return {
     items,
@@ -348,6 +380,8 @@ export async function planPartsImport(parsed: ParsedFile, replaceImages: boolean
       same: items.filter((i) => i.action === "SAME" && !writesImage(i)).length,
       skipped: parsed.problems.filter((p) => p.note.includes("ข้าม")).length,
       notInFile: notInFile.length,
+      joined: brandFile ? codes.filter((c) => !already.has(c)).length : 0,
+      confirmed: codes.filter((c) => unconfirmed.has(c)).length,
     },
   };
 }
@@ -360,11 +394,14 @@ export interface ApplyProgress {
   created: number;
   updated: number;
   images: number;
+  /** รหัสที่เข้าไฟล์ยี่ห้อใหม่แล้ว / ยืนยันแล้ว (= plan.summary เมื่อผ่านขั้นใส่ไฟล์ยี่ห้อ · ยังไม่ถึง = 0) */
+  joined: number;
+  confirmed: number;
   codes: Set<string>;
 }
-export const newProgress = (): ApplyProgress => ({ created: 0, updated: 0, images: 0, codes: new Set() });
+export const newProgress = (): ApplyProgress => ({ created: 0, updated: 0, images: 0, joined: 0, confirmed: 0, codes: new Set() });
 
-export async function applyPartsImport(parsed: ParsedFile, plan: Plan, progress: ApplyProgress = newProgress()) {
+export async function applyPartsImport(parsed: ParsedFile, plan: Plan, brandFile: BrandFile, progress: ApplyProgress = newProgress()) {
   const row = new Map(parsed.rows.map((r) => [r.partCode, r]));
   const creates = plan.items.filter((i) => i.action === "CREATE");
   const updates = plan.items.filter((i) => i.action === "UPDATE");
@@ -397,6 +434,22 @@ export async function applyPartsImport(parsed: ParsedFile, plan: Plan, progress:
       WHERE p.id = v.id`;
     progress.updated = updates.length;
     for (const i of updates) progress.codes.add(i.partCode);
+  }
+
+  // ไฟล์ยี่ห้อ: ทุกรหัสที่ใช้ได้ในไฟล์ รวมแถวที่เหมือนเดิม — "อยู่ในไฟล์" คือสิ่งที่นับ ไม่ใช่ "ค่าเปลี่ยน"
+  // ทำก่อนรูป: รูปพังกลางทาง อะไหล่ยังเลือกได้ตามไฟล์ · คำสั่งเดียว ON CONFLICT กดอัปเดตซ้ำหลังพังได้ (ทำซ้ำไม่เพิ่มแถว)
+  // ไม่ลบแถวของไฟล์อื่น/รหัสที่หายจาก Excel — เพิ่มอย่างเดียว (เจ้าของงาน: รหัสเดียวอยู่ได้หลายไฟล์ บันทึกทุกไฟล์)
+  // แถวที่เดาจากช่องยี่ห้อตอนขึ้นระบบ (SEED) หรือแอดมินติ๊กเอง (MANUAL) กลายเป็น IMPORT = ไฟล์จริงยืนยันแล้ว
+  // ไม่แตะ SparePart.updatedAt — มันคือตัวกันแคชรูปอะไหล่ ขยับทุกรหัสแล้วรูปโหลดใหม่ทั้งระบบ
+  const codes = parsed.rows.map((r) => r.partCode);
+  if (codes.length) {
+    await prisma.$executeRaw`
+      INSERT INTO "SparePartBrandFile" ("sparePartId", "file", "source", "createdAt", "updatedAt")
+      SELECT p.id, ${brandFile}, 'IMPORT', now(), now() FROM "SparePart" p
+      WHERE upper(p."partCode") = ANY(${codes}::text[]) AND NOT p."offCatalog"
+      ON CONFLICT ("sparePartId", "file") DO UPDATE SET "source" = 'IMPORT', "updatedAt" = now()`;
+    progress.joined = plan.summary.joined;
+    progress.confirmed = plan.summary.confirmed;
   }
 
   // รูป: ต้องรู้ id ของแถวที่เพิ่งสร้างก่อน
@@ -453,19 +506,35 @@ export type ReportDetails = ReturnType<typeof reportDetails>;
 type Gone = Plan["notInFile"][number];
 
 /**
- * "ไม่อยู่ในไฟล์" ของทั้งรอบ — แต่ละไฟล์คิดเฉพาะรหัสของตัวเอง ไฟล์ยี่ห้อเดียวกันสองไฟล์ (แยกเพราะไฟล์ใหญ่)
- * จะฟ้องว่าอีกครึ่งไม่อยู่ในไฟล์ทั้งหมด — หักรหัสที่อยู่ในไฟล์ใดก็ได้ของรอบ และนับตัวละครั้ง
+ * "ไม่อยู่ในไฟล์" ของทั้งรอบ — แต่ละไฟล์คิดเฉพาะรหัสของตัวเอง ไฟล์ยี่ห้อเดียวกันสองไฟล์ (แยกเพราะไฟล์ใหญ่
+ * "Huebsch 1.xlsx" + "Huebsch 2.xlsx") จะฟ้องว่าอีกครึ่งไม่อยู่ในไฟล์ทั้งหมด — หักรหัสที่อยู่ในไฟล์ยี่ห้อเดียวกันของรอบ
+ * หักเฉพาะไฟล์ยี่ห้อเดียวกัน ไม่ใช่ทุกไฟล์ในรอบ: รหัสที่อยู่ในไฟล์ Other ไม่ได้แปลว่ายังอยู่ในไฟล์ Haier
+ * (อัปโหลดครบ 6 ไฟล์ในรอบเดียว ถ้าหักทุกไฟล์ ตัวที่หายจาก Haier แต่ยังอยู่ใน Other จะเงียบหาย ทั้งที่ยังเลือกได้กับเครื่อง Haier)
+ * นับตัวละครั้งต่อไฟล์ยี่ห้อ — ตัวที่หายจากสองไฟล์ขึ้นสองแถว เพราะต้องเอาออกทีละไฟล์ในฟอร์มอะไหล่
+ * แถวประวัติก่อนมีไฟล์ยี่ห้อ (brandFile ว่าง) หักรหัสของทุกไฟล์ในรอบเหมือนเดิม
  * แถวประวัติก่อนมี codes ใช้รหัสจากรายการที่เปลี่ยน/ปัญหาแทน (ขาดแถวที่เหมือนเดิมไป — ดีกว่าไม่หักเลย)
  */
-export function notInBatch(files: { details: Pick<ReportDetails, "notInFile" | "items" | "problems"> & { codes?: string[] } }[]) {
-  const inBatch = new Set<string>();
-  for (const { details: d } of files) {
-    for (const c of d.codes ?? []) inBatch.add(c.toUpperCase());
-    for (const i of d.items) inBatch.add(i.partCode.toUpperCase());
-    for (const p of d.problems) if (p.partCode) inBatch.add(p.partCode.toUpperCase());
+export function notInBatch(
+  files: { brandFile?: string | null; details: Pick<ReportDetails, "notInFile" | "items" | "problems"> & { codes?: string[] } }[]
+) {
+  const all = new Set<string>();
+  const byFile = new Map<string, Set<string>>();
+  for (const { brandFile, details: d } of files) {
+    const own = [...(d.codes ?? []), ...d.items.map((i) => i.partCode), ...d.problems.flatMap((p) => (p.partCode ? [p.partCode] : []))];
+    if (brandFile && !byFile.has(brandFile)) byFile.set(brandFile, new Set());
+    for (const c of own) {
+      all.add(c.toUpperCase());
+      if (brandFile) byFile.get(brandFile)!.add(c.toUpperCase());
+    }
   }
   const gone = new Map<string, Gone>();
-  for (const { details: d } of files)
-    for (const g of d.notInFile) if (!inBatch.has(g.partCode.toUpperCase())) gone.set(g.partCode.toUpperCase(), g);
-  return [...gone.values()].sort((a, b) => a.partCode.localeCompare(b.partCode));
+  for (const { brandFile, details: d } of files) {
+    const seen = brandFile ? byFile.get(brandFile)! : all;
+    for (const g of d.notInFile) {
+      const code = g.partCode.toUpperCase();
+      const file = g.file ?? brandFile ?? null;
+      if (!seen.has(code)) gone.set(`${code}|${file ?? ""}`, { ...g, file });
+    }
+  }
+  return [...gone.values()].sort((a, b) => a.partCode.localeCompare(b.partCode) || (a.file ?? "").localeCompare(b.file ?? ""));
 }

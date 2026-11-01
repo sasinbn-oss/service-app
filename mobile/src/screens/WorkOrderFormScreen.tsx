@@ -77,8 +77,10 @@ interface KnownMachine {
  * ที่เขียนไว้ตรงนี้เป็นแค่ค่าสำรองเผื่อโหลดตัวเลือกไม่ทัน จะได้ไม่เจอช่องรุ่นว่างเปล่า
  * เป็นตัวเลือกตายตัวเพราะต้องนับแยกได้ว่ารุ่นไหนเสียบ่อย และเวลาสั่งอะไหล่
  * ต้องรู้ว่ารุ่นอะไร ปล่อยให้พิมพ์เองจะได้ "Huebsch" "huebsch" ปนกัน
+ * ต้องตรงกับ MACHINE_MODELS ใน backend/src/utils/constants.ts — Spinz เพิ่ม 31 ต.ค. 69 (มีไฟล์อะไหล่ Spinz
+ * พิมพ์เองผิดตัวเดียวเครื่องตกไปไฟล์ Other ช่างเลือกอะไหล่ Spinz ไม่ได้)
  */
-const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Huebsch (TC)", "Haier", "Maytag"];
+const FALLBACK_MODELS = ["Oasis", "Oasis(TC)", "Huebsch", "Huebsch (TC)", "Haier", "Maytag", "Spinz"];
 const MODEL_OTHER = "อื่นๆ";
 
 /**
