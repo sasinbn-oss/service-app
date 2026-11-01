@@ -910,7 +910,7 @@ R=$(curl -s localhost:4000/api/work-orders/dispatch-watch -H "$(H $T)")
 [ "$(echo "$R" | J 'd.error')" = "ดูได้เฉพาะแอดมินกับหัวหน้าภาค" ] && [ "$(CODE localhost:4000/api/work-orders/dispatch-watch -H "$(H $T)")" = 403 ] \
   && [ "$(CODE localhost:4000/api/work-orders/dispatch-watch -H "$(H $AR)")" = 403 ] \
   && pass "dispatch-watch: ช่าง 403 \"ดูได้เฉพาะแอดมินกับหัวหน้าภาค\" · ทีม Area 403 (ไม่อยู่ในรายการอนุญาต)" || fail "watch ช่าง/Area: $R"
-# ส่งกลับ "คอนเฟิร์มวันใหม่" ตามปกติก่อนเส้นตาย — ไม่ใช่ใบที่ล็อก แอดมินเห็นในกล่องส่งกลับเดิม ไม่ใช่หัวข้อเลยเวลาปล่อยงาน (W-36)
+# ส่งกลับ "คอนเฟิร์มวันใหม่" ตามปกติก่อนเส้นตาย — ไม่ใช่ใบที่ล็อก แอดมินเห็นในกล่องส่งกลับเดิม ไม่ใช่หัวข้อเลยเวลาปล่อยงาน
 POST $A work-orders/$G_DN/reschedule "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอเลื่อน\"}" >/dev/null
 R=$(CALL $S work-orders/$G_DN/decline-new-date '{"reason":"ทีมเต็มวันนั้น"}')
 [ "$(code_of "$R")" = 200 ] && [ "$(ST $G_DN)" = AWAITING_CONFIRM ] \
