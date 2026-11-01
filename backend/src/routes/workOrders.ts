@@ -98,7 +98,17 @@ import {
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 // ขั้นปล่อยงานย้ายไปอยู่กับกฎเวลาปิดรับ — ป้าย "คอนเฟิร์มวันใหม่" กับการล็อกต้องนับขั้นชุดเดียวกันเสมอ
-import { RELEASE_STAGES, addDays, dayOf, deadlineOf, readCutoff, releaseState } from "../utils/dispatchCutoff";
+import {
+  type CutoffConfig,
+  RELEASE_STAGES,
+  addDays,
+  dayOf,
+  deadlineOf,
+  firstEnforcedDay,
+  lockedDates,
+  readCutoff,
+  releaseState,
+} from "../utils/dispatchCutoff";
 import {
   buildObjectKey,
   deleteObject,
@@ -178,6 +188,7 @@ import {
   normaliseMachineCode,
   workOrderCode,
   needsCustomerQuote,
+  releaseArrivalLabel,
   workStatusForStage,
   RESCHEDULE_STAGES,
   RESCHEDULE_STAY_STAGES,
@@ -969,6 +980,9 @@ const listSelect = {
   partsExpectedAt: true,
   scheduledTime: true,
   appointmentStatus: true,
+  // เวลาปิดรับปล่อยงาน (ต.ค. 69) — ใบทดสอบไม่ติดกฎ · วันที่แอดมินแก้เป็นงานด่วนให้ (ดู releaseInfo)
+  isTest: true,
+  urgentReleaseFor: true,
   parentId: true,
   createdAt: true,
   closedAt: true,
@@ -1062,7 +1076,16 @@ async function autoWorkStatus(id: number, stage: string): Promise<string | null>
 }
 
 /** หัวหน้าภาคพร้อมขอบเขต — ใช้ตอบว่าใบที่รอหัวหน้าภาครอ "ใคร" */
-type SupervisorRef = { id: number; name: string; region: string | null; extraRegions: string[]; supervisedTeams: string[]; scope: SupervisorScope };
+type SupervisorRef = {
+  id: number;
+  name: string;
+  // เบอร์โทร — ส่งออกเฉพาะคำตอบของแอดมิน ("ยังไม่ได้บอก — โทรถาม …" ในหัวข้อเลยเวลาปล่อยงาน) ดู listShape
+  phone?: string | null;
+  region: string | null;
+  extraRegions: string[];
+  supervisedTeams: string[];
+  scope: SupervisorScope;
+};
 
 /** เติมขอบเขต (รวมทีมที่คนอื่นดูแล — ทีมมาก่อนภาค) ให้รายชื่อหัวหน้าภาคที่ดึงมาครั้งเดียว */
 function withScopes<T extends { id: number; region: string | null; extraRegions: string[]; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
@@ -1142,6 +1165,86 @@ function isRescheduled(status: string, latestAction: string | null | undefined) 
   return RELEASE_STAGES.includes(status) && DATE_MOVE_ACTIONS.includes(latestAction ?? "");
 }
 
+/**
+ * ประวัติแถวที่ใช้คิดสถานะเวลาปิดรับ — รายการถามเฉพาะแถวล่าสุดต่อใบมาให้ หน้ารายละเอียดหาจากประวัติที่โหลดอยู่แล้ว
+ * สองหน้ารับรูปเดียวกันจาก releaseInfo — ชิป/กล่องล็อกในรายการกับหน้าใบงานต้องบอกเหมือนกันทุกตัวอักษร
+ */
+type ReleaseLog = {
+  action: string;
+  createdAt: Date;
+  note: string | null;
+  user: { name: string; role: string } | null;
+};
+/** ประวัติที่พาใบมาถึงขั้นปล่อยงาน — ใช้แค่ทาง · เวลา · บทบาทคนกด (รายการถามเฉพาะสามช่องนี้ ไม่ลากข้อความประวัติมาด้วย) */
+type ArrivalLog = { action: string; createdAt: Date; user: { role: string } | null };
+/** บทบาทในฐานข้อมูลที่เป็นฝั่งแอดมิน — "แอดมินคอนเฟิร์มลูกค้า …" ในกล่องล็อก (Super Admin/Admin Spare Part ก็คือแอดมินสำหรับหัวหน้าภาค) */
+const ADMIN_DB_ROLES = ["ADMIN", "SUPER_ADMIN", "PARTS_ADMIN"];
+
+/**
+ * สถานะเวลาปิดรับของใบขั้นปล่อยงานที่ส่งให้หน้าจอ — null = ไม่อยู่ใต้กฎ (ขั้นอื่น · ใบทดสอบ · ยังไม่มีวันนัด)
+ *
+ * ส่งเส้นตายไปด้วย ไม่ใช่แค่ locked: หน้าจอนับถอยหลังและพลิกเป็นล็อกเองตอนถึงเวลาด้วยนาฬิกาเซิร์ฟเวอร์ (serverNow)
+ * ไม่ต้องโหลดรายการใหม่ทุกจอพร้อมกันตอน 16:00 (pool ฐานข้อมูลมีแค่ 5 connection)
+ * arrival = ประวัติล่าสุดที่ "พาใบมาถึง" ขั้นนี้ (RELEASE_ARRIVAL_SKIP) — ใบที่มาถึงหลังเส้นตายต้องบอกหัวหน้าภาคว่า
+ * "ไม่ใช่เพราะคุณปล่อยช้า" และ "ล็อกตั้งแต่" ของแอดมินต้องเป็นเวลาที่ใบมาถึง ไม่ใช่เส้นตายที่ผ่านไปก่อนใบมา
+ * settle = ประวัติล่าสุดในชุด URGENT_ASK_SETTLE — เป็น "ขอแอดมินแก้เป็นงานด่วน" = คำขอยังรออยู่
+ */
+function releaseInfo(
+  o: { status: string; isTest: boolean; scheduledAt: Date | null; urgentReleaseFor: Date | null },
+  cfg: CutoffConfig,
+  now: Date,
+  arrival: ArrivalLog | undefined,
+  settle: ReleaseLog | undefined
+) {
+  const st = releaseState(o, cfg, now);
+  if (!st) return null;
+  const arrivedAt = arrival?.createdAt ?? null;
+  // งานด่วนหมดอายุ = ล็อกตั้งแต่เที่ยงคืนหลังวันนัด (ก่อนนั้นยังปล่อยได้ด้วยงานด่วน) ไม่ใช่เส้นตายเดิมที่แอดมินปลดไปแล้ว
+  const lockedSince = !st.locked
+    ? null
+    : st.urgentExpired
+      ? new Date(`${addDays(dayOf(o.scheduledAt!), 1)}T00:00:00.000+07:00`)
+      : new Date(Math.max(st.deadline.getTime(), arrivedAt?.getTime() ?? 0));
+  return {
+    deadline: st.deadline,
+    enforced: st.enforced,
+    past: st.past,
+    urgent: st.urgent,
+    urgentExpired: st.urgentExpired,
+    locked: st.locked,
+    lockedSince,
+    arrivedAt,
+    arrivedVia: arrival ? releaseArrivalLabel(arrival.action) : null,
+    arrivedByAdmin: !!arrival?.user && ADMIN_DB_ROLES.includes(arrival.user.role),
+    ask:
+      settle?.action === "URGENT_REQUESTED"
+        ? { at: settle.createdAt, note: settle.note, byName: settle.user?.name ?? null }
+        : null,
+  };
+}
+
+/**
+ * หัวหน้าภาคส่งใบที่ล็อกกลับมาแล้ว (ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่) — แถวรอคอนเฟิร์มลูกค้าของแอดมินที่ต้องเลื่อนวันนัด
+ * ไม่ใช่ใบที่ร้านยังไม่ได้คอนเฟิร์ม: แอดมินต้องเห็นในหัวข้อ "เลยเวลาปล่อยงาน" (วันยังไม่ผ่าน) หรือ "เลยนัด" (ผ่านแล้ว)
+ *
+ * นับเฉพาะส่งกลับที่เขียนตั้งแต่เส้นตายของวันนัดนั้น และเส้นตายอยู่ใต้กฎ (หลังเวลาเริ่มใช้กฎ — ข้อ 14)
+ * ส่งกลับก่อนเส้นตาย = ส่งกลับ "คอนเฟิร์มวันใหม่" ตามปกติ อยู่กล่องส่งกลับเดิม (W-36) · ประวัติลำดับถัดมา (แอดมินเลื่อน ·
+ * คอนเฟิร์มใหม่) ปิดเรื่องเอง เพราะดูแถวล่าสุดของชุด URGENT_ASK_SETTLE · ใบทดสอบไม่ติดกฎ (ข้อ 15)
+ */
+const CONFIRM_STAGES = ["AWAITING_CONFIRM", "INSPECT_CONFIRM"];
+function releaseDeclinedOf(
+  o: { status: string; isTest: boolean; scheduledAt: Date | null },
+  cfg: CutoffConfig,
+  now: Date,
+  settle: ReleaseLog | undefined
+) {
+  if (!CONFIRM_STAGES.includes(o.status) || o.isTest || !o.scheduledAt || settle?.action !== "NEW_DATE_DECLINED") return null;
+  const day = dayOf(o.scheduledAt);
+  const deadline = deadlineOf(day, cfg.time);
+  if (deadline.getTime() < cfg.since.getTime() || settle.createdAt.getTime() < deadline.getTime()) return null;
+  return { at: settle.createdAt, note: settle.note, byName: settle.user?.name ?? null, past: day < bangkokDay(now) };
+}
+
 /** ขั้นที่วันนัดยังเป็นแผน (ยังไม่ปล่อยให้ช่าง) — เลยวันแล้วติดป้าย "เลยนัด" */
 const OVERDUE_STAGES = new Set([
   "INSPECT_CONFIRM",
@@ -1156,11 +1259,25 @@ type WorkOrderListRow = Awaited<
   ReturnType<typeof prisma.workOrder.findFirstOrThrow<{ select: typeof listSelect }>>
 >;
 
+/**
+ * ข้อมูลเวลาปิดรับของทั้งรายการ — คิดครั้งเดียวต่อคำขอ ทุกแถวใช้เวลา now เดียวกัน (แถวหนึ่งล็อก อีกแถวไม่ล็อกเพราะคิดคนละเสี้ยววินาทีไม่ได้)
+ * arrivals/settles = ประวัติล่าสุดต่อใบ (ดู releaseInfo) · admin = คำขอของแอดมิน (เบอร์หัวหน้าภาค + แถวส่งกลับ)
+ */
+type ListReleaseCtx = {
+  cfg: CutoffConfig;
+  now: Date;
+  admin: boolean;
+  arrivals: Map<number, ArrivalLog>;
+  settles: Map<number, ReleaseLog>;
+};
+
 function listShape(
   w: WorkOrderListRow,
-  ctx: { supervisors: SupervisorRef[]; stageSince: Map<number, Date> }
+  ctx: { supervisors: SupervisorRef[]; stageSince: Map<number, Date>; release: ListReleaseCtx }
 ) {
   const actor = WORK_ORDER_STAGE_ACTOR[w.status] ?? null;
+  const rc = ctx.release;
+  const release = releaseInfo(w, rc.cfg, rc.now, rc.arrivals.get(w.id), rc.settles.get(w.id));
   /**
    * ขั้นนี้รอ "ใคร" — ไม่ใช่แค่บทบาท
    *
@@ -1173,7 +1290,14 @@ function listShape(
       ? ctx.supervisors
           .filter((s) => coversWorkOrder(s.scope, w))
           // region (ภาคแรก) คงไว้ให้แอปรุ่นเก่าที่ยังเปิดค้าง · regions = ทุกภาคที่คนนั้นดูแล
-          .map((s) => ({ id: s.id, name: s.name, region: s.region, regions: s.scope.regions }))
+          // เบอร์โทรเฉพาะแอดมิน — แอดมินต้องโทรตามใบที่ยังไม่ปล่อย · หัวหน้าภาคกับทีม Area ไม่ต้องได้เบอร์ของกันและกันทั้งบริษัท
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            region: s.region,
+            regions: s.scope.regions,
+            ...(rc.admin ? { phone: s.phone ?? null } : {}),
+          }))
       : [];
   return {
     stageActor: actor,
@@ -1208,8 +1332,11 @@ function listShape(
         : null,
     // วันนัดผ่านไปแล้วยังไม่ได้คอนเฟิร์มลูกค้า — กล่องงานแอดมินแยกหัวข้อ "เลยนัด"
     // เบิกก่อนคอนเฟิร์ม (ต.ค. 69 รอบสอง): วันที่หัวหน้าภาคนัดเลยไปได้ระหว่างเบิก/โอนด้วย — ต้องเลื่อนวันนัด
+    // เวลาปิดรับปล่อยงาน: ใบรอปล่อยงาน/ส่งช่างตรวจที่วันนัดผ่านแล้วด้วย — ปล่อยไม่ได้แล้ว มีแต่แอดมินเลื่อนวันนัดได้
+    // (ใบที่ค้างมาก่อนเริ่มใช้กฎยังปล่อยได้ ไม่นับ — ไม่ท่วมกล่องแอดมินเช้าวัน deploy · ข้อ 14)
     overdue:
-      OVERDUE_STAGES.has(w.status) && !!w.scheduledAt && w.scheduledAt.toISOString().slice(0, 10) < bangkokDay(new Date()),
+      (OVERDUE_STAGES.has(w.status) && !!w.scheduledAt && dayOf(w.scheduledAt) < bangkokDay(rc.now)) ||
+      (!!release && release.past && release.enforced),
     waitingOnTeam: actor === "EMPLOYEE" ? w.assignedTeam : null,
     // ใบที่จ่ายให้ทีม outsource — กล่องงานหัวหน้าภาคแยกไว้แท็บของตัวเอง ไม่ปนกับงานทีมช่างปกติ
     outsource: isOutsourceTeam(w.assignedTeam),
@@ -1253,6 +1380,11 @@ function listShape(
     partsState: partsState(w),
     // ใบรออะไหล่ที่แยกมาจากใบอื่น — รายการขึ้นป้ายให้รู้ว่าเป็นงานต่อเนื่อง
     isFollowUp: w.parentId !== null,
+    // เวลาปิดรับปล่อยงาน (ต.ค. 69) — ป้าย/กล่องล็อก/หัวข้อของแอดมินคิดจากก้อนนี้ (ดู releaseInfo · releaseDeclinedOf)
+    isTest: w.isTest,
+    urgentReleaseFor: w.urgentReleaseFor ? dayOf(w.urgentReleaseFor) : null,
+    release,
+    releaseDeclined: rc.admin ? releaseDeclinedOf(w, rc.cfg, rc.now, rc.settles.get(w.id)) : null,
     // ใบที่ไม่มีผู้เปิด (ระบบสร้างเอง หรือบัญชีผู้เปิดถูกลบ) ส่ง null ให้แอปขึ้นว่า "ระบบ"
     createdByName: w.createdBy?.name ?? null,
     createdByRole: w.createdBy?.role ?? null,
@@ -1595,6 +1727,41 @@ function inboxTakesOrphans(auth: AuthRequest["auth"]) {
   return auth?.role === "ADMIN" && !auth.partsAdmin;
 }
 
+/**
+ * ใบรอปล่อยงานที่ล็อกอยู่ตอนนี้และวันนัดยังไม่ผ่าน (วันนี้ · พรุ่งนี้หลังเวลาปิดรับ) — เข้ากล่องงานแอดมินทั่วไป
+ * หัวข้อ "เลยเวลาปล่อยงาน" (เจ้าของงานตอบข้อ 5: ตัวเลขกล่องงานแอดมินเพิ่มตามใบที่ล็อก ไม่ต้องรอใครกด)
+ *
+ * ทำเป็นรายการเลขใบ ไม่ใช่เงื่อนไข Prisma ตรง ๆ: งานด่วนใช้ได้เมื่อ urgentReleaseFor "วันเดียวกับ" scheduledAt —
+ * เทียบคอลัมน์กับคอลัมน์ Prisma 5.22 ใส่ใน not ไม่ได้ และ NOT (a = b) ของ SQL ทิ้งแถวที่ a เป็น NULL เงียบ ๆ
+ * (คือทิ้งใบที่ล็อกทุกใบ) · กรองด้วย releaseState ตัวเดียวกับปุ่มปล่อยงาน ตัวเลขกล่องจึงไม่มีทางต่างจากที่ปุ่มตัดสิน
+ * ช่วงวันเป็นแบบครึ่งเปิด [วันแรก, วันสุดท้าย+1) ตรงกับการอ่านวันด้วย toISOString — ใบที่ scheduledAt ไม่ตรงเที่ยงคืนยังนับ
+ * ไม่จำผลไว้ (ต่างจาก orphanSupervisorIds) — ใบต้องย้ายเข้ากล่องทันทีที่ถึงเวลาปิดรับ และถามแค่ใบสองวัน คำถามเล็ก
+ */
+async function lockedReleaseIds(cfg: CutoffConfig, now: Date): Promise<number[]> {
+  const range = lockedDates(cfg, now);
+  if (!range) return [];
+  const rows = await prisma.workOrder.findMany({
+    where: {
+      status: { in: RELEASE_STAGES },
+      isTest: false,
+      scheduledAt: { gte: dayStart(range.from), lt: dayStart(addDays(range.to, 1)) },
+    },
+    select: { id: true, status: true, isTest: true, scheduledAt: true, urgentReleaseFor: true },
+  });
+  return rows.filter((w) => releaseState(w, cfg, now)?.locked).map((w) => w.id);
+}
+
+/**
+ * ส่วนของกล่องงานแอดมินที่มาจากเวลาปิดรับ — lockedIds (ดู lockedReleaseIds) และใบรอปล่อยงานที่วันนัดผ่านไปแล้ว
+ * ตั้งแต่วันแรกที่กฎมีผล (หัวข้อ "เลยนัด" — ล็อกเสมอ แก้เป็นงานด่วนไม่ได้แล้ว ต้องเลื่อนวันนัด)
+ */
+type ReleaseInbox = { lockedIds: number[]; firstEnforced: string; today: string };
+async function releaseInboxFor(auth: AuthRequest["auth"], cfgP: Promise<CutoffConfig>, now: Date): Promise<ReleaseInbox | null> {
+  if (!inboxTakesOrphans(auth)) return null;
+  const cfg = await cfgP;
+  return { lockedIds: await lockedReleaseIds(cfg, now), firstEnforced: firstEnforcedDay(cfg), today: bangkokDay(now) };
+}
+
 function stagesWaitingOn(auth: AuthRequest["auth"]): string[] {
   // Area Team ไม่ได้ทำขั้นไหนเลย — "กล่องงานของฉัน" คือใบที่ยังไม่ปิดของสาขาที่ตัวเองเห็น (ตามตัวอย่างที่ตกลง)
   if (isAreaTeam(auth)) return [...ACTIVE_WORK_ORDER_STATUSES];
@@ -1653,14 +1820,20 @@ async function scopeFor(req: AuthRequest, inbox = false): Promise<Prisma.WorkOrd
 async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
   const keyword = q.search?.trim();
   const inboxStages = stagesWaitingOn(req.auth);
-  const [orphans, outsourceNow, scope, inboxScope] = await Promise.all([
+  // เวลาเดียวทั้งคำขอ — ใบที่เข้ากล่อง (ล็อก) กับป้ายบนแถว (release ใน GET /) ต้องคิดจากเวลาเดียวกัน
+  const now = new Date();
+  // ค่าที่จำไว้ 30 วิพอสำหรับการอ่าน — ปุ่มที่ตัดสินจริงอ่านสดเอง (ดู readCutoff)
+  const cfgP = readCutoff();
+  const [orphans, outsourceNow, scope, inboxScope, cfg, releaseInbox] = await Promise.all([
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     // รีเฟรชก่อนเสมอ — แถวในรายการติดธง outsource จากรายชื่อนี้ (แท็บ "ใบงาน SUB" ของกล่องงานหัวหน้าภาค)
     freshOutsource(),
     scopeFor(req),
     scopeFor(req, true),
+    cfgP,
+    releaseInboxFor(req.auth, cfgP, now),
   ]);
-  const inbox = inboxFilter(req.auth, inboxStages, orphans, outsourceNow);
+  const inbox = inboxFilter(req.auth, inboxStages, orphans, outsourceNow, releaseInbox);
   const statusFilter =
     q.status === "ALL"
       ? {}
@@ -1710,7 +1883,7 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
     ...(q.assignedTo === "me" ? { assignedToId: req.auth!.userId } : {}),
     ...(q.branchCode ? { branch: { code: q.branchCode } } : {}),
   };
-  return { where, scope, inboxScope, inbox };
+  return { where, scope, inboxScope, inbox, cfg, now };
 }
 
 /** คำขอที่รอแอดมินตอบ — ไม่ขึ้นกับขั้นของใบ (ขั้นตอนไม่เปลี่ยนตอนส่ง) · ใบที่ปิด/ยกเลิกไปแล้วไม่ค้างในกล่อง */
@@ -1732,7 +1905,8 @@ function inboxFilter(
   auth: AuthRequest["auth"],
   inboxStages: string[],
   orphans: number[],
-  outsourceNow: Set<string>
+  outsourceNow: Set<string>,
+  release: ReleaseInbox | null = null
 ): Prisma.WorkOrderWhereInput {
   const or: Prisma.WorkOrderWhereInput[] = [{ status: { in: inboxStages } }];
   if (orphans.length) or.push({ id: { in: orphans } });
@@ -1747,6 +1921,21 @@ function inboxFilter(
       // ตรงกับ overdue ในแถวรายการ — วันนัดเก็บเป็นเที่ยงคืน UTC ของวันนั้น
       scheduledAt: { lt: dayStart(bangkokDay()) },
     });
+    /**
+     * เวลาปิดรับปล่อยงาน (เจ้าของงานตอบข้อ 5 · 10) — ใบรอหัวหน้าภาคที่ล็อกแล้วมีแต่แอดมินแก้ได้ (แก้เป็นงานด่วน/เลื่อนวันนัด)
+     * จึงเข้ากล่องแอดมิน: ล็อกและวันยังไม่ผ่าน = "เลยเวลาปล่อยงาน" · วันผ่านแล้ว = "เลยนัด" (ตรงกับ overdue ในแถว)
+     * กล่องของหัวหน้าภาค/Admin Spare Part ไม่เปลี่ยน — ใบยังรอหัวหน้าภาคอยู่เหมือนเดิม ตัวเลขไม่กระโดดตอน 16:00
+     */
+    if (release) {
+      if (release.lockedIds.length) or.push({ id: { in: release.lockedIds } });
+      if (release.firstEnforced < release.today) {
+        or.push({
+          status: { in: RELEASE_STAGES },
+          isTest: false,
+          scheduledAt: { gte: dayStart(release.firstEnforced), lt: dayStart(release.today) },
+        });
+      }
+    }
   }
   return { OR: or };
 }
@@ -1762,7 +1951,8 @@ const OVERDUE_SUPERVISOR_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { where, scope, inboxScope, inbox } = await listWhere(req, parsed.data);
+  const { where, scope, inboxScope, inbox, cfg, now } = await listWhere(req, parsed.data);
+  const admin = req.auth!.role === "ADMIN";
 
   /**
    * ตัวเลขบนชิปต้องนับเฉพาะที่คนคนนี้เห็น
@@ -1787,7 +1977,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     prisma.workOrder.count({ where: { AND: [inboxScope, inbox] } }),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true },
+      // phone ออกไปเฉพาะคำตอบของแอดมิน (listShape)
+      select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
   ]);
@@ -1796,7 +1987,15 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — คำถามรวดพร้อมกัน ไม่ใช่ทีละแถว
   const ids = rows.map((r) => r.id);
   const releaseIds = rows.filter((r) => RELEASE_STAGES.includes(r.status)).map((r) => r.id);
-  const [lastMoves, confirms, rollbacks, settles] = await Promise.all([
+  /**
+   * เวลาปิดรับ: ใบที่อยู่ใต้กฎ (ขั้นปล่อยงาน · มีวันนัด · ไม่ใช่ใบทดสอบ) ถามว่ามาถึงขั้นนี้เมื่อไร/ทางไหน และคำขอที่ค้าง
+   * แอดมินถามใบรอคอนเฟิร์มลูกค้าด้วย — หัวหน้าภาคส่งกลับหลังเวลาปิดรับ (releaseDeclined) อยู่หัวข้อ "เลยเวลาปล่อยงาน"
+   */
+  const cutoffIds = rows.filter((r) => RELEASE_STAGES.includes(r.status) && !r.isTest && r.scheduledAt).map((r) => r.id);
+  const askIds = admin
+    ? [...cutoffIds, ...rows.filter((r) => CONFIRM_STAGES.includes(r.status) && !r.isTest && r.scheduledAt).map((r) => r.id)]
+    : cutoffIds;
+  const [lastMoves, confirms, rollbacks, settles, arrivals, asks] = await Promise.all([
     ids.length
       ? prisma.workOrderLog.groupBy({
           by: ["workOrderId"],
@@ -1835,6 +2034,28 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
           select: { workOrderId: true, action: true },
         })
       : Promise.resolve([]),
+    /**
+     * มาถึงขั้นปล่อยงานด้วยประวัติไหน (ดู RELEASE_ARRIVAL_SKIP) — "ใบนี้มาถึงคุณหลังเวลาปิดรับแล้ว (…)" · "ล็อกตั้งแต่"
+     * ตัดเหลือใบละแถวในฐานข้อมูล (DISTINCT ON) ไม่ใช้ distinct ของ Prisma: ชุดนี้คือ "ทุกประวัติที่เดินขั้น" และ Prisma 5
+     * (ไม่ได้เปิด nativeDistinct) ดึงทุกแถวมาตัดในเครื่อง — ใบละ 5–20 แถว × ใบรอปล่อยงานทั้งระบบ ข้าม region ทุกครั้งที่เปิดกล่องงาน
+     */
+    cutoffIds.length
+      ? prisma.$queryRaw<{ workOrderId: number; action: string; createdAt: Date; role: string | null }[]>`
+          SELECT DISTINCT ON (l."workOrderId") l."workOrderId", l.action, l."createdAt", u.role
+          FROM "WorkOrderLog" l
+          LEFT JOIN "User" u ON u.id = l."userId"
+          WHERE l."workOrderId" = ANY(${cutoffIds}::int[]) AND NOT (l.action = ANY(${RELEASE_ARRIVAL_SKIP}::text[]))
+          ORDER BY l."workOrderId", l."createdAt" DESC, l.id DESC`
+      : Promise.resolve([]),
+    // คำขอแก้เป็นงานด่วนที่ค้าง / ส่งกลับหลังเวลาปิดรับ — แถวล่าสุดของชุดที่ปิดเรื่อง (ดู URGENT_ASK_SETTLE)
+    askIds.length
+      ? prisma.workOrderLog.findMany({
+          where: { workOrderId: { in: askIds }, action: { in: URGENT_ASK_SETTLE } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          distinct: ["workOrderId"],
+          select: { workOrderId: true, action: true, createdAt: true, note: true, user: { select: { name: true, role: true } } },
+        })
+      : Promise.resolve([]),
   ]);
   const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
   const lastSettle = new Map(settles.map((c) => [c.workOrderId, c.action]));
@@ -1862,9 +2083,22 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   >;
 
   const supScopes = withScopes(supervisors);
+  const release: ListReleaseCtx = {
+    cfg,
+    now,
+    admin,
+    arrivals: new Map(
+      arrivals.map((l) => [l.workOrderId, { action: l.action, createdAt: l.createdAt, user: l.role ? { role: l.role } : null }])
+    ),
+    settles: new Map(asks.map((l) => [l.workOrderId, l])),
+  };
   res.json({
+    // นาฬิกาเซิร์ฟเวอร์ + เวลาปิดรับ — หน้าจอนับถอยหลังด้วยเวลานี้ ไม่ใช่นาฬิกามือถือ (ข้อ 12)
+    // เวลาตอนตอบ ไม่ใช่ตอนเริ่มคิด: แอปเทียบกับนาฬิกาเครื่องตอนได้รับ ฐานข้อมูลไกล ~0.23 วิ/รอบ ส่งเวลาเริ่มจะทำให้นาฬิกาแอปช้าไปเกือบวินาที
+    serverNow: new Date().toISOString(),
+    cutoff: { time: cfg.time, since: cfg.since },
     rows: rows.map((w) => ({
-      ...listShape(w, { supervisors: supScopes, stageSince }),
+      ...listShape(w, { supervisors: supScopes, stageSince, release }),
       appointmentByName: confirmedBy.get(w.id) ?? null,
       // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — กล่องงานติดป้าย "คอนเฟิร์มวันใหม่"
       rescheduled: isRescheduled(w.status, lastSettle.get(w.id)),
@@ -1893,7 +2127,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
 router.get("/version", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { where, scope } = await listWhere(req, parsed.data);
+  const { where, scope, cfg, now } = await listWhere(req, parsed.data);
   const [agg, lastLog, counts] = await Promise.all([
     prisma.workOrder.aggregate({ where, _count: true, _max: { updatedAt: true } }),
     prisma.workOrderLog.aggregate({ where: { workOrder: where }, _max: { id: true } }),
@@ -1903,8 +2137,21 @@ router.get("/version", requireAuth, async (req: AuthRequest, res) => {
     .map((c) => `${c.status}:${c._count}`)
     .sort()
     .join(",");
+  /**
+   * เวลาปิดรับปล่อยงาน — ตอนถึงเวลาปิดรับไม่มีใครเขียนอะไรลงฐานข้อมูล (ไม่มีงานตั้งเวลา) ลายนิ้วมือข้างบนจึงไม่ขยับ
+   * ทั้งที่ใบพรุ่งนี้ล็อกแล้วย้ายเข้ากล่องแอดมิน → ต่อท้าย "เวลาปิดรับ:เลยแล้วหรือยัง" ให้ตัวเช็คทุกนาทีเห็นใบที่เพิ่งเข้ากล่อง
+   * (เวลาปิดรับอยู่ด้วยเพราะแอดมินเปลี่ยนเวลา = ใบที่ล็อกชุดใหม่ แต่แถวในตาราง AppSetting ไม่ใช่ใบงาน)
+   *
+   * ใส่เฉพาะกล่องงานแอดมินทั่วไป (inboxTakesOrphans) — เป็นรายการเดียวที่ "มีใบเข้า" ตอนถึงเวลา
+   * ลายนิ้วมือที่เปลี่ยน = แอปโหลดรายการแล้วขึ้นปุ่ม "มีอัปเดต n ใบงาน" ไม่ใช่โหลดเงียบ ๆ: ใส่ให้ทุกคน หัวหน้าภาค/ทีม Area/ช่าง
+   * จะได้ปุ่มอัปเดตปลอมทุกวันตอนถึงเวลาปิดรับ ทั้งที่ใบในมือไม่ได้เปลี่ยน (กล่องหัวหน้าภาคไม่ขยับตอนถึงเวลา — ข้อ 5)
+   * จอของคนอื่นพลิกป้ายเองจาก release.deadline กับนาฬิกาเซิร์ฟเวอร์ที่ถืออยู่ ไม่ต้องโหลดใหม่พร้อมกันทุกจอ (pool มี 5)
+   */
+  const cutoffMark = inboxTakesOrphans(req.auth)
+    ? [`${cfg.time}:${Number(now.getTime() >= deadlineOf(addDays(bangkokDay(now), 1), cfg.time).getTime())}`]
+    : [];
   res.json({
-    version: [agg._count, agg._max.updatedAt?.getTime() ?? 0, lastLog._max.id ?? 0, chip].join("|"),
+    version: [agg._count, agg._max.updatedAt?.getTime() ?? 0, lastLog._max.id ?? 0, chip, ...cutoffMark].join("|"),
   });
 });
 
@@ -2132,16 +2379,138 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
  * ดึงทั้งรายการมาเพื่อนับคือการโหลดข้อมูลเป็นร้อยใบทิ้งทุกครั้งที่เปิดแอป
  */
 router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
-  // ขอบเขต · ใบไม่มีคนรับ · รายชื่อ outsource ไม่ขึ้นต่อกัน — ถามพร้อมกัน แล้วนับสองอย่างพร้อมกัน
-  const [scope, orphans, outsource] = await Promise.all([
+  // ขอบเขต · ใบไม่มีคนรับ · รายชื่อ outsource · ใบที่ล็อกเวลาปิดรับ (แอดมิน) ไม่ขึ้นต่อกัน — ถามพร้อมกัน แล้วนับทีเดียว
+  // เงื่อนไขเดียวกับแท็บกล่องงาน (inboxFilter) ตัวเลขบนเมนูกับจำนวนแถวในกล่องจึงตรงกันเสมอ รวมใบที่เพิ่งล็อกตอน 16:00
+  const [scope, orphans, outsource, releaseInbox] = await Promise.all([
     scopeFor(req, true),
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     req.auth!.role === "SUPERVISOR" ? freshOutsource() : Promise.resolve(new Set<string>()),
+    // ถามเวลาปิดรับเฉพาะเมื่อใช้ — releaseInboxFor ของคนอื่นคืน null โดยไม่รอ ถ้าถามไว้แล้วพังจะเป็น rejection ที่ไม่มีใครจับ
+    inboxTakesOrphans(req.auth) ? releaseInboxFor(req.auth, readCutoff(), new Date()) : Promise.resolve(null),
   ]);
   const inbox = await prisma.workOrder.count({
-    where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource)] },
+    where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource, releaseInbox)] },
   });
   res.json({ inbox });
+});
+
+/**
+ * งานพรุ่งนี้ที่ต้องตามก่อนเวลาปิดรับ (เจ้าของงานตอบข้อ 5 · 11) — แถบเตือนบน "งานของฉันวันนี้" และกล่องงาน
+ *
+ * แยกจากรายการใบงานเพราะสิ่งที่ต้องเตือนไม่ได้อยู่ในกล่องของคนดูเสมอ: ใบพรุ่งนี้ที่ยังรอแอดมินคอนเฟิร์ม/ของยังโอนไม่ถึง
+ * ไม่ใช่งานของหัวหน้าภาคตอนนี้ แต่ถ้าถึงขั้นปล่อยงานหลังเวลาปิดรับจะติดล็อก หัวหน้าภาคต้องรู้ก่อน (notReady)
+ * แอดมินดูใบพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อยพร้อมเบอร์โทรเตือน (ดูอย่างเดียว ไม่นับในกล่อง) และใบที่ยังไม่ได้คอนเฟิร์มร้าน
+ * ขอบเขตหัวหน้าภาค = กล่องงาน (ไม่รวมทีมที่ได้รับงานข้ามทีมมา — คนกดคือหัวหน้าภาคเจ้าของใบ) · ใบทดสอบ/ยกเลิกไม่นับ (ข้อ 15)
+ * วางก่อน "/:id" ไม่งั้น Express จับ "dispatch-watch" เป็นรหัสใบงาน
+ */
+const WATCH_NOT_READY = ["PARTS_REQUESTED", "PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP", ...CONFIRM_STAGES];
+const WATCH_RELEASED = ["IN_PROGRESS", "INSPECTING"];
+router.get("/dispatch-watch", requireAuth, async (req: AuthRequest, res) => {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") return res.status(403).json({ error: "ดูได้เฉพาะแอดมินกับหัวหน้าภาค" });
+  const admin = role === "ADMIN";
+  const now = new Date();
+  const today = bangkokDay(now);
+  const tomorrow = addDays(today, 1);
+  const [cfg, scope, sups] = await Promise.all([
+    readCutoff(),
+    scopeFor(req, true),
+    admin
+      ? prisma.user.findMany({
+          where: { role: "SUPERVISOR", deletedAt: null },
+          select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true },
+          orderBy: { name: "asc" },
+        })
+      : Promise.resolve([]),
+  ]);
+  // ครึ่งเปิดแบบเดียวกับ lockedReleaseIds — วันนัดอ่านจาก UTC (ดู dayOf)
+  const tomorrowRange = { gte: dayStart(tomorrow), lt: dayStart(addDays(tomorrow, 1)) };
+  const [found, declines] = await Promise.all([
+    prisma.workOrder.findMany({
+      where: {
+        AND: [scope],
+        isTest: false,
+        status: { in: [...WATCH_NOT_READY, ...RELEASE_STAGES, ...WATCH_RELEASED] },
+        scheduledAt: tomorrowRange,
+      },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        isTest: true,
+        jobType: true,
+        scheduledAt: true,
+        scheduledTime: true,
+        urgentReleaseFor: true,
+        assignedTeam: true,
+        branch: { select: { code: true, name: true, region: true, zone: true, pmTeam: true } },
+      },
+    }),
+    /**
+     * ใบที่หัวหน้าภาคส่งกลับหลังเวลาปิดรับ (ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่) ยังอยู่ขั้นรอคอนเฟิร์มลูกค้า วันนัดยังเป็นพรุ่งนี้
+     * แต่ไม่ใช่ "ยังไม่ถึงขั้นปล่อยงาน" หรือ "ร้านยังไม่ได้คอนเฟิร์ม" — ทีมบอกแล้วว่าไปไม่ได้ แอดมินต้องเลื่อนวัน (หัวข้อ
+     * "เลยเวลาปล่อยงาน" · releaseDeclinedOf) ปล่อยไว้ หัวหน้าภาคเห็นแถบ "ถึงขั้นปล่อยงานหลังปิดรับจะติดล็อก" ของใบที่ตัวเอง
+     * เพิ่งได้ยินว่าออกจากรายการ · แอดมินเห็นใบเดียวสองหัวข้อ หัวข้อนี้แนะนำ "ติ๊กแก้เป็นงานด่วน" ทั้งที่ทีมไม่ว่าง
+     * ตัดที่เซิร์ฟเวอร์ เพราะหัวหน้าภาคกรองเองไม่ได้ (releaseDeclined ออกเฉพาะคำตอบแอดมิน) · ถามพร้อมรายการ ไม่เพิ่มรอบไปกลับ
+     */
+    prisma.workOrderLog.findMany({
+      where: {
+        action: { in: URGENT_ASK_SETTLE },
+        workOrder: { AND: [scope], isTest: false, status: { in: CONFIRM_STAGES }, scheduledAt: tomorrowRange },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      distinct: ["workOrderId"],
+      select: { workOrderId: true, action: true, createdAt: true, note: true, user: { select: { name: true, role: true } } },
+    }),
+  ]);
+  const settleOf = new Map(declines.map((l) => [l.workOrderId, l]));
+  const rows = found.filter((w) => !releaseDeclinedOf(w, cfg, now, settleOf.get(w.id)));
+  // นัดทั้งวัน (ไม่มีเวลา) ขึ้นก่อน แล้วตามเวลา — ลำดับเดียวกับบอร์ดแผนงาน
+  rows.sort((a, b) => (a.scheduledTime ?? "").localeCompare(b.scheduledTime ?? "") || a.code.localeCompare(b.code));
+  const base = (w: (typeof rows)[number]) => ({
+    id: w.id,
+    code: w.code,
+    branchCode: w.branch.code,
+    branchName: w.branch.name,
+    status: w.status,
+    assignedTeam: w.assignedTeam,
+    scheduledTime: w.scheduledTime,
+  });
+  const scoped = withScopes(sups);
+  res.json({
+    serverNow: new Date().toISOString(),
+    today,
+    tomorrow,
+    cutoff: { time: cfg.time, since: cfg.since },
+    notReady: rows
+      .filter((w) => WATCH_NOT_READY.includes(w.status))
+      .map((w) => ({
+        ...base(w),
+        statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+        stageActor: WORK_ORDER_STAGE_ACTOR[w.status] ?? null,
+      })),
+    releasedTomorrow: rows.filter((w) => WATCH_RELEASED.includes(w.status)).length,
+    ...(admin
+      ? {
+          /**
+           * ยังปล่อยได้และยังไม่ได้ปล่อย — ใบที่ล็อกแล้วย้ายไปกล่อง "เลยเวลาปล่อยงาน" · งานด่วนไม่ต้องเตือน (ปล่อยได้ตลอด)
+           * ใบที่ไม่มีหัวหน้าภาคดูแล supervisors ว่าง (หน้าจอขึ้น "ไม่มีคนรับ")
+           */
+          unreleasedTomorrow: rows.flatMap((w) => {
+            const st = releaseState(w, cfg, now);
+            if (!st || st.locked || st.urgent) return [];
+            return [
+              {
+                ...base(w),
+                deadline: st.deadline,
+                supervisors: scoped.filter((u) => coversWorkOrder(u.scope, w)).map((u) => ({ name: u.name, phone: u.phone ?? null })),
+              },
+            ];
+          }),
+          unconfirmedTomorrow: rows.filter((w) => CONFIRM_STAGES.includes(w.status)).map(base),
+        }
+      : {}),
+  });
 });
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */
@@ -2632,7 +3001,7 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
  * ตอนนี้ส่งก้อนที่ครบแล้วแอปใช้เลย (mobile/src/utils/freshOrder.ts) · ใบงานกับประวัติอ่านพร้อมกัน ไม่ต่อคิว
  */
 async function loadDetail(id: number) {
-  const [row, logs, , sups, claimUsers, approved] = await Promise.all([
+  const [row, logs, , sups, claimUsers, approved, cfg] = await Promise.all([
     prisma.workOrder.findUnique({ where: { id }, include: detailInclude }),
     prisma.workOrderLog.findMany({
       where: { workOrderId: id },
@@ -2672,6 +3041,8 @@ async function loadDetail(id: number) {
         AND f->>'key' = 'model' AND btrim(coalesce(f->>'value', '')) <> ''
       ORDER BY c."createdAt" DESC, c.id DESC
       LIMIT 1`,
+    // เวลาปิดรับ (ค่าที่จำไว้ 30 วิ) — กล่องล็อก/นับถอยหลังบนหน้าใบงาน ปุ่มที่ตัดสินจริงอ่านสดเอง
+    readCutoff(),
   ]);
   if (!row) return null;
   /**
@@ -2698,6 +3069,7 @@ async function loadDetail(id: number) {
     crossTeam,
     claimUsers: new Map(claimUsers.map((u) => [u.id, { name: u.name, code: u.employeeCode }])),
     approvedModel: approved[0]?.model ?? null,
+    cfg,
   };
 }
 
@@ -2776,7 +3148,7 @@ function flowOf(
   };
 }
 
-function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedModel }: Detail) {
+function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedModel, cfg }: Detail) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -2820,8 +3192,36 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedMod
     note: s.note,
     by: skipped.by,
   }));
+  /**
+   * เวลาปิดรับปล่อยงาน — รูปเดียวกับแถวในรายการ (releaseInfo) หาประวัติจากที่โหลดมาแล้ว ไม่ถามฐานข้อมูลเพิ่ม
+   * urgentInfo = งานด่วนที่ใช้อยู่ (หรือเพิ่งหมดอายุ): ใคร เมื่อไร ทางไหน เหตุผลอะไร — กล่องเขียวในฟอร์มปล่อยงานสร้างจากช่อง
+   * ใน meta ไม่ต้องแกะข้อความประวัติ · งานด่วนที่ถูกล้างไปแล้ว (เลื่อนวัน) ไม่ส่ง ประวัติเก่าไม่ใช่สถานะของใบตอนนี้
+   */
+  const now = new Date();
+  const release = releaseInfo(
+    row,
+    cfg,
+    now,
+    logs.find((l) => !RELEASE_ARRIVAL_SKIP.includes(l.action)),
+    logs.find((l) => URGENT_ASK_SETTLE.includes(l.action))
+  );
+  const urgentLog = release && (release.urgent || release.urgentExpired) ? logs.find((l) => l.action === "URGENT_RELEASE") : undefined;
+  const urgentMeta = (urgentLog?.meta ?? null) as { via?: unknown; reason?: unknown } | null;
   return {
     ...base,
+    // นาฬิกาเซิร์ฟเวอร์ — หน้าใบงานนับถอยหลังและพลิกเป็นล็อกด้วยเวลานี้ ไม่ใช่นาฬิกามือถือ (ข้อ 12)
+    serverNow: now.toISOString(),
+    cutoff: { time: cfg.time, since: cfg.since },
+    urgentReleaseFor: row.urgentReleaseFor ? dayOf(row.urgentReleaseFor) : null,
+    release,
+    urgentInfo: urgentLog
+      ? {
+          at: urgentLog.createdAt,
+          byName: urgentLog.user?.name ?? null,
+          via: typeof urgentMeta?.via === "string" ? urgentMeta.via : null,
+          reason: typeof urgentMeta?.reason === "string" ? urgentMeta.reason : null,
+        }
+      : null,
     claimKeep,
     claimSkips,
     /**
