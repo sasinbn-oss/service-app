@@ -37,6 +37,8 @@ import {
 import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
 import { openClaimReview, useClaimQueueCount } from "../utils/claimQueue";
 import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
+import { CutoffBanners, ReleaseChip } from "../components/DispatchCutoff";
+import { RELEASE_STAGES, releaseView, supervisorBanners, useServerClock, type Cutoff, type DispatchWatch } from "../utils/dispatchCutoff";
 
 /** ค้างเกินนี้ขึ้นแดง — ตัวเลขเดียวกับชิป "ค้างขั้นเดิมเกิน 3 วัน" ในหน้ารายการ */
 const STALE_DAYS = 3;
@@ -81,6 +83,12 @@ function Hi({ text, q, style, numberOfLines }: { text: string; q: string; style?
   );
 }
 
+/** เรียงตามวันนัดแล้วเวลา (ไม่ระบุเวลาไปท้ายวัน) — กลุ่มขั้นปล่อยงานของหัวหน้าภาคใช้ลำดับนี้ */
+const byAppt = (a: WorkOrderRow, b: WorkOrderRow) =>
+  (a.scheduledAt ?? "9999").slice(0, 10).localeCompare((b.scheduledAt ?? "9999").slice(0, 10)) ||
+  (a.scheduledTime ?? "99:99").localeCompare(b.scheduledTime ?? "99:99") ||
+  a.code.localeCompare(b.code);
+
 /**
  * กลุ่มที่ไม่ใช่ขั้นของใบ — ส่งกลับให้แอดมินตรวจสอบ (ต.ค. 69) ปักไว้บนสุด เพราะอีกฝ่ายรอคำตอบอยู่
  * แอดมิน: คำขอที่รอตอบ (ใบอยู่ขั้นไหนก็ได้) · หัวหน้าภาค: แอดมินตอบแล้วแต่ใบเดินไปขั้นที่ไม่ใช่ของตัวเองแล้ว
@@ -94,6 +102,12 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const { user } = useAuth();
   const { docked } = useDocked();
   const [rows, setRows] = useState<WorkOrderRow[] | null>(null);
+  /**
+   * เวลาปิดรับปล่อยงาน (ต.ค. 69): นาฬิกาเซิร์ฟเวอร์ + เวลาปิดรับจากคำตอบรายการ · dispatch-watch = งานพรุ่งนี้ที่ยังไม่อยู่ในกล่อง
+   * (ยังไม่ถึงขั้นปล่อยงาน · ปล่อยครบแล้ว) — แถบบนสุดต้องเตือนใบพวกนี้ด้วย ทั้งที่การ์ดของมันไม่อยู่ในหน้านี้
+   */
+  const [clock, setClock] = useState<{ serverNow?: string; cutoff?: Cutoff }>({});
+  const [watch, setWatch] = useState<DispatchWatch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sendFor, setSendFor] = useState<WorkOrderRow | null>(null);
   const [replyFor, setReplyFor] = useState<WorkOrderRow | null>(null);
@@ -104,16 +118,29 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   // ไปปนกับหน้ารายการใบงาน (เทสต์ appointment-list นับรหัสเกิน) วาดรายการเฉพาะตอนแท็บนี้เปิดอยู่
   const focused = useIsFocused();
 
+  /**
+   * แถบเวลาปิดรับของหัวหน้าภาคต้องรู้งานพรุ่งนี้ที่ยังไม่อยู่ในกล่อง (dispatch-watch) — ถามพร้อมรายการ ไม่ต่อคิว
+   * แอดมิน Admin Spare Part และทีม Area ไม่ถาม: ไม่มีแถบนี้ (หัวข้อของแอดมินมากับก้อนหน้าจอแอดมิน)
+   * ถามไม่ได้ก็ไม่เป็นไร — การ์ดและแถบที่คิดจากใบในกล่องยังขึ้นครบ ขาดแค่หัวข้อ "ยังไม่ถึงขั้นปล่อยงาน"
+   */
+  const wantWatch = user?.role === "SUPERVISOR";
   const load = useCallback(async () => {
     const n = ++seq.current;
     setError(null);
     try {
-      const res = await api.get<{ rows: WorkOrderRow[] }>("/work-orders", { params: { status: "INBOX" } });
-      if (n === seq.current) setRows(res.data.rows);
+      const [res, w] = await Promise.all([
+        api.get<{ rows: WorkOrderRow[]; serverNow?: string; cutoff?: Cutoff }>("/work-orders", { params: { status: "INBOX" } }),
+        wantWatch ? api.get<DispatchWatch>("/work-orders/dispatch-watch").then((r) => r.data, () => null) : Promise.resolve(null),
+      ]);
+      if (n === seq.current) {
+        setRows(res.data.rows);
+        setClock({ serverNow: res.data.serverNow, cutoff: res.data.cutoff });
+        setWatch(w);
+      }
     } catch (e) {
       if (n === seq.current) setError(apiErrorMessage(e));
     }
-  }, []);
+  }, [wantWatch]);
   useFocusEffect(
     useCallback(() => {
       load();
@@ -123,6 +150,11 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     await load();
   });
 
+  /**
+   * นาฬิกาเซิร์ฟเวอร์ของหน้านี้ — การ์ดกับแถบบนสุดใช้ "ตอนนี้" ตัวเดียวกัน จึงพลิกเป็นล็อกพร้อมกันตอนถึงเวลาปิดรับ
+   * หน้าของหัวหน้าภาคไม่โหลดใหม่ตอนถึงเวลา (ข้อ 5: ตัวเลขกล่องงานหัวหน้าภาคไม่เปลี่ยน) — ป้ายคิดใหม่จากเส้นตายที่ถืออยู่แล้ว
+   */
+  const now = useServerClock(clock.serverNow, clock.cutoff?.time);
   // กลุ่มตามขั้น — กลุ่มที่มีใบด่วนขึ้นก่อน แล้วกลุ่มที่ค้างนานสุด · ในกลุ่มเรียงด่วน → ค้างนาน
   const isAdmin = user?.role === "ADMIN";
   const groups = useMemo(() => {
@@ -141,13 +173,31 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     const score = (r: WorkOrderRow) => (r.priority === "URGENT" ? 1e6 : 0) + daysSince(r.stageSince);
     // คำขอตรวจสอบเรียงส่งก่อนขึ้นก่อน — ไม่ใช่ตามวันค้างขั้น (ขั้นตอนไม่ได้เปลี่ยนตอนส่ง)
     const sent = (r: WorkOrderRow) => new Date(r.adminReview?.at ?? r.stageSince).getTime();
+    /**
+     * กลุ่มขั้นปล่อยงานของหัวหน้าภาค (รับทราบ ปล่อยงาน · ส่งช่างตรวจ · คอนเฟิร์มวันใหม่) เรียงตามวันนัด ไม่ใช่ด่วน/ค้างนาน
+     * งานพรุ่งนี้ปิดรับก่อนงานมะรืน — ใบที่เส้นตายใกล้สุดต้องอยู่บนสุด ป้าย "ด่วน" ตอนเปิดใบไม่ได้ทำให้เส้นตายเลื่อน (ข้อ 3)
+     * (DEFAULT ด้านหน้าตา — ไม่เปลี่ยนว่าใบไหนอยู่กลุ่มไหน)
+     */
+    const releaseGroup = (list: WorkOrderRow[]) => !isAdmin && list.every((r) => RELEASE_STAGES.includes(r.status));
     return [
       ...[...pinned.entries()].map(([label, g]) => ({ label, kind: g.kind, list: g.list.sort((a, b) => sent(a) - sent(b)) })),
       ...[...by.entries()]
-        .map(([label, list]) => ({ label, kind: "stage" as GroupKind, list: list.sort((a, b) => score(b) - score(a)) }))
+        .map(([label, list]) => ({
+          label,
+          kind: "stage" as GroupKind,
+          list: releaseGroup(list) ? list.sort(byAppt) : list.sort((a, b) => score(b) - score(a)),
+        }))
         .sort((a, b) => Math.max(...b.list.map(score)) - Math.max(...a.list.map(score))),
     ];
   }, [rows, isAdmin]);
+  /**
+   * แถบบนสุดของหัวหน้าภาค (ตัวอย่าง supGroups) — ตัวสร้างเดียวกับกล่องงาน สองหน้าจึงนับตรงกันทุกตัวอักษร
+   * นับทุกใบในกล่อง ไม่ตามคำค้น: ค้นหาใบหนึ่งอยู่ไม่ได้แปลว่าใบที่ล็อกอื่นหายไป
+   */
+  const banners = useMemo(
+    () => (user?.role === "SUPERVISOR" && rows ? supervisorBanners(rows, watch, now, clock.cutoff) : []),
+    [user?.role, rows, watch, now, clock.cutoff]
+  );
 
   // ค้นในใบที่โหลดมาแล้ว — กลุ่มที่ไม่มีใบตรงซ่อน · total = จำนวนในกลุ่มก่อนค้น (บอก "2 จาก 75")
   const q = query.trim().toLowerCase();
@@ -250,6 +300,13 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         </View>
       ) : null}
 
+      {/*
+        ลำดับใต้แถวค้นหา (integration G5 — ฟีเจอร์ที่ตามมาต้องคงลำดับนี้): 1) แถบแจ้งผลของ parts-pick (ช่องว่างไว้ ยังไม่มี)
+        · 2) แถบเวลาปิดรับ · 3) การ์ด Admin Spare Part · 4) หัวข้อปักของแอดมิน · 5) กลุ่มตามขั้น
+        แถบเวลาปิดรับอยู่นอกเงื่อนไข "มีใบในกล่อง": หัวหน้าภาคที่กล่องว่างแต่มีงานพรุ่งนี้ยังไม่ถึงขั้น ต้องเห็นคำเตือนเหนือ "ไม่มีงานค้าง"
+        ห้ามวางก่อนแถวค้นหา — ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
+      */}
+      {rows && !error && banners.length ? <CutoffBanners groups={banners} /> : null}
       {/* Admin Spare Part ดูย้อนหลังได้จากหน้าแรกของตัวเอง (เจ้าของงานขอ ต.ค. 69) — ใบที่รอตรวจอยู่ในรายการด้านล่างแล้ว
           วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
           การ์ดกล่องงานตรวจเคลม (เคลมก้อน 6) อยู่ในช่องเดียวกัน (ห่อเป็นลูกตัวเดียว ลำดับลูกตัวถัดไปไม่ขยับ) */}
@@ -295,8 +352,10 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
             {g.list.map((r) => {
               const d = daysSince(r.stageSince);
               const hot = r.priority === "URGENT";
+              // ใบที่ล็อกแล้วขอบแดงหนา — มองผ่าน ๆ ก็รู้ว่าใบไหนกดปล่อยไม่ได้ ต้องขอแอดมินหรือส่งกลับ
+              const rv = releaseView(r, now, clock.cutoff);
               return (
-                <View key={r.id} style={[styles.card, hot && styles.cardHot]}>
+                <View key={r.id} style={[styles.card, hot && styles.cardHot, rv?.locked && styles.cardLocked]}>
                   <View style={styles.cardTop}>
                     <Hi text={r.code} q={q} style={[styles.code, headingFont]} />
                     {hot ? (
@@ -315,13 +374,19 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                       <PartsTag state={r.partsState} />
                     )}
                     {r.orphan ? <Tag text="ไม่มีคนรับ" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
-                    {r.overdue ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
+                    {/* ใบรอปล่อยงานที่เลยนัด — ป้ายเวลาปิดรับบอก "เลยนัดมา N วัน" อยู่แล้ว ไม่ขึ้นซ้ำสองป้าย */}
+                    {r.overdue && !(rv?.locked && rv.past) ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
                     {/* วันถูกเลื่อน (ลูกค้าขอตอนคอนเฟิร์ม หรือแอดมินเลื่อนวันนัด ต.ค. 69) — หัวหน้าภาคต้องเช็คทีมวันใหม่ก่อนปล่อย */}
                     {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     <AdminReviewTag review={r.adminReview} />
                     <View style={{ flex: 1 }} />
                     <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>{d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}</Text>
                   </View>
+                  {/*
+                    ป้ายเวลาปิดรับ (นับถอยหลัง · ล็อก · รอแอดมิน · งานด่วน) บรรทัดของตัวเอง — ข้อความยาว วางในแถวป้ายแล้วดันกันหักบรรทัด
+                    หัวหน้าภาคได้ป้าย "งานพรุ่งนี้ — ต้องถึงขั้นปล่อยงานก่อน …" บนใบที่ยังไม่ถึงขั้นด้วย: รู้ตอนที่ยังตามของ/ตามแอดมินทัน
+                  */}
+                  <ReleaseChip row={r} now={now} cutoff={clock.cutoff} preRelease={!isAdmin} style={styles.releaseChip} />
                   <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={styles.branch} numberOfLines={1} />
                   {/* อาการก่อนชื่อใบ — ใบจากฟอร์มชื่อ "งาน CM" ทุกใบ บอกอะไรไม่ได้ (ชื่อเรื่องยังใช้กับใบไฟดับ/PM ที่ไม่มีอาการ) */}
                   <Hi
@@ -697,6 +762,8 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   cardHot: { borderColor: colors.dangerLine },
+  cardLocked: { borderColor: colors.dangerInk, borderWidth: 2 },
+  releaseChip: { marginTop: 2 },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   code: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.primaryInk },
   tagHot: { backgroundColor: colors.danger, borderRadius: 6, paddingHorizontal: 7 },

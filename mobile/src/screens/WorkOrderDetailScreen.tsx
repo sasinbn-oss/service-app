@@ -121,6 +121,32 @@ import { anyModalOpen, notifyWorkOrderStale, onPageShown, pageVisible, subscribe
 import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo, type StepState } from "../utils/stepPath";
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 import { techPickHint } from "../utils/teams";
+import { navigationRef } from "../navigation/navigationRef";
+import {
+  AskPendingBox,
+  declineLabel,
+  FormWarningLine,
+  LiveReleaseChip,
+  LOCK_BUTTONS,
+  LOCK_NOTE_LABEL,
+  LOCK_NOTE_REQUIRED,
+  LockActions,
+  LockBox,
+  ReleaseDeadlineBox,
+  UrgentNoteBox,
+} from "../components/DispatchCutoff";
+import {
+  dateFormWarning,
+  declinedText,
+  releasedText,
+  releaseView,
+  serverDay,
+  useServerClock,
+  useServerNowFn,
+  type Cutoff,
+  type Release,
+  type UrgentInfo,
+} from "../utils/dispatchCutoff";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -327,6 +353,18 @@ interface WorkOrder {
   }[];
   /** รุ่นจากใบเคลมที่อนุมัติล่าสุดของเครื่องนี้ — ตัวเทียบตอนอ่านป้าย (ทะเบียนส่วนใหญ่มีแค่ยี่ห้อ) */
   claimApprovedModel?: string | null;
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — นาฬิกาเซิร์ฟเวอร์ตอนตอบ + เวลาปิดรับที่ใช้คิด
+   * ฟอร์มปล่อยงานนับถอยหลังและพลิกเป็นล็อกเองจากค่านี้ ไม่ใช้นาฬิกามือถือ (ข้อ 12) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง
+   */
+  serverNow?: string;
+  cutoff?: Cutoff;
+  /** วันนัดที่แอดมินแก้เป็นงานด่วนให้ "YYYY-MM-DD" — ใช้ได้เฉพาะวันนัดนี้ (เลื่อนวันแล้วหมดผลเอง) */
+  urgentReleaseFor?: string | null;
+  /** สถานะเวลาปิดรับของใบขั้นปล่อยงาน (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) — ขั้นอื่น/ใบทดสอบ/ไม่มีวันนัด = null */
+  release?: Release | null;
+  /** งานด่วนที่ใช้อยู่ (หรือเพิ่งหมดอายุ): ใคร เมื่อไร ทางไหน เหตุผลอะไร — กล่องเขียวในฟอร์มปล่อยงาน */
+  urgentInfo?: UrgentInfo | null;
   /** แบบป้ายรุ่น + รายการเช็คตามคู่มือของยี่ห้อนี้ (backend/src/utils/claimGuide.ts) */
   claimGuide?: ClaimGuide;
   /** ใบเคลมเก่าของเครื่องเดียวกัน (บรรทัดเคลมซ้ำในหน้าตรวจเคลม) — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน คนอื่นไม่มีค่านี้ */
@@ -945,6 +983,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   useRefreshHandler(load);
 
   /**
+   * "ตอนนี้" ตามนาฬิกาเซิร์ฟเวอร์ ณ วินาทีที่เรียก — ใช้ตัดสินข้อความหลังกดบันทึก (ใบที่ส่งกลับล็อกอยู่ไหม)
+   * หน้าใบงานไม่ได้วาดตามเวลาเอง: ป้าย/ฟอร์มที่นับถอยหลังเดินนาฬิกาของตัวเอง (LiveReleaseChip · StageModal)
+   * หน้านี้ยาวหลายพันบรรทัด วาดใหม่ทั้งหน้าทุก 30 วิเพื่อป้ายเดียวหนักเกินไปบนมือถือรุ่นเก่า
+   */
+  const serverNowAt = useServerNowFn(order?.serverNow);
+
+  /**
+   * ปิดฟอร์มแล้วพากลับงานของฉันวันนี้ (ปุ่มในฟอร์มปล่อยงานตอนล็อก) — หน้าใบงานเปิดได้จากหลายแท็บ จึงสั่งผ่านตัวนำทางกลาง
+   * ต้องมี pop: true — React Navigation 7 ไม่ย้อนกลับไปหน้าที่มีอยู่แล้วในกองถ้าไม่ใช่หน้าปัจจุบัน แต่ซ้อน "งานของฉัน"
+   * ใบใหม่ทับหน้าใบงาน ได้ปุ่ม "ใบงาน ›" ที่พากลับไปใบเดิม และกดไปกลับแต่ละรอบกองก็โตขึ้นอีกสองหน้า
+   */
+  const backToQueue = useCallback(() => {
+    setStageOpen(false);
+    if (navigationRef.isReady()) (navigationRef.navigate as (tab: string, p: object) => void)("HomeTab", { screen: "MyJobs", pop: true });
+  }, []);
+
+  /**
    * ตัดสินเคลมทีละชิ้น (เคลมก้อน 3) — แท็บในหน้าตรวจกับปุ่มในแถบล่างจอใช้ชุดเดียวกัน จึงถือไว้ที่หน้าใบงาน
    * ส่งสำเร็จแล้วเก็บสรุปผลไว้ขึ้นบนสุดของใบ (ผ่านกี่ชิ้น ปิดอะไรไป · ตีกลับชิ้นไหน) พร้อมปุ่มไปใบถัดไป
    */
@@ -999,8 +1054,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [staleNote, setStaleNote] = useState<string | null>(null);
   // ฟอร์มที่ถือวันนัดอยู่ — ฟอร์มขั้นอื่น (เบิก · โอน) ไม่ได้ใช้วันนัด เปิดค้างไว้ได้ตามเดิม
   const dateForm = rescheduleOpen || (stageOpen && !!order && DATE_FORM_STAGES.includes(order.status));
-  const live = useRef({ order, load, dateForm });
-  live.current = { order, load, dateForm };
+  const live = useRef({ order, load, dateForm, stageOpen });
+  live.current = { order, load, dateForm, stageOpen };
   // รุ่นข้อมูลที่ดูประวัติไปแล้วระหว่างฟอร์มเปิด — ไม่โหลดใบทั้งก้อนซ้ำทุก 20 วินาทีระหว่างที่ฟอร์มยังเปิดอยู่
   const peeked = useRef(0);
   // เลขประวัติล่าสุดที่โหลดมาแล้ว — live.current.order เปลี่ยนตอนวาดจอใหม่ ซึ่งช้ากว่าโหลดเสร็จ
@@ -1043,6 +1098,18 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         setStaleNote(null);
         await reload();
         feedback.toast("warn", "แอดมินเพิ่งเลื่อนวันนัด — โหลดใหม่แล้ว");
+        return;
+      }
+      /**
+       * แอดมินแก้เป็นงานด่วนระหว่างที่หัวหน้าภาคเปิดฟอร์มปล่อยงานค้างไว้ (หน้าล็อก/รอคำขอ) — โหลดใบใหม่ในที่เดิม ฟอร์มไม่ปิด
+       * ปุ่มปล่อยงานกลับมาเองพร้อมกล่องเขียว ไม่ต้องให้ปิดแล้วเปิดใหม่ถึงจะรู้ · ต่างจากการเลื่อนวันข้างบน: วันในฟอร์มยังเป็นวันเดิม
+       * ไม่มีอะไรที่กรอกไว้ผิด (แก้เป็นงานด่วนพร้อมเลื่อนวัน = มีแถวเลื่อนวันด้วย เข้าเงื่อนไขข้างบนก่อน)
+       */
+      if (fresh && live.current.stageOpen && fresh.logs.some((l) => l.id > since && l.action === "URGENT_RELEASE")) {
+        setOrder(fresh);
+        known.current = Math.max(known.current, latestLogId(fresh));
+        setStaleNote(null);
+        feedback.toast("success", "แอดมินแก้เป็นงานด่วน · ปล่อยได้เลย");
         return;
       }
     }
@@ -2312,6 +2379,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               {lastLog.byName ? ` · ${lastLog.byName}` : ""}
             </Text>
           ) : null}
+          {/*
+            ป้ายเวลาปิดรับข้างปุ่มขั้น (ปล่อยงาน · ส่งช่างตรวจ) — เห็นก่อนกดว่าเหลือเท่าไร/ล็อกแล้ว ไม่ต้องเปิดฟอร์มถึงจะรู้
+            ป้ายเดินนาฬิกาเอง (หน้านี้ไม่วาดใหม่ทั้งหน้าตามเวลา) · ช่างกับทีม Area ไม่เห็น (ReleaseChip ตัดเอง)
+          */}
+          {order.release ? (
+            <LiveReleaseChip row={order} serverNow={order.serverNow} cutoff={order.cutoff} style={wide ? { alignSelf: "center" } : undefined} />
+          ) : null}
           <View style={wide ? styles.nowFootActions : undefined}>
         {order.status === "CLAIM_REVIEW" ? (
           <View style={[styles.waitingCard, styles.waitingInline]}>
@@ -2886,13 +2960,41 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         }
         onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
+        onReload={load}
+        onBackToQueue={backToQueue}
         onDone={async (kind) => {
+          const before = order;
           setStageOpen(false);
           // ขั้นเสนอราคาแนบใบเสนอราคา/บิลไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
-          await reloadWithNotice();
-          // เพิ่งคอนเฟิร์มกับลูกค้า — จังหวะที่ต้องส่งข้อความแจ้งคิวช่างพอดี
-          if (kind === "confirmed") setMessageOpen(true);
+          /**
+           * ข้อความหลังบันทึก — ทุกขั้นใช้ "จากไหน → ไปไหน" (reloadWithNotice) ยกเว้นขั้นที่ตัวอย่างที่อนุมัติมีคำของมันเอง
+           * ปล่อยงาน/ส่งกลับบอกสิ่งที่หัวหน้าภาคต้องรู้ต่อ (ทีมเห็นที่แท็บไหน · ใบไปอยู่หัวข้อไหนของแอดมิน)
+           * ขึ้นแทน ไม่ใช่ขึ้นเพิ่ม — สองข้อความซ้อนกันคนอ่านไม่ทันทั้งคู่ (G4: ขั้นใหม่ของฟีเจอร์อื่นเติม case ในสวิตช์นี้)
+           */
+          switch (kind) {
+            case "released": {
+              const next = await load();
+              if (!next) break;
+              const now = next.serverNow ? Date.parse(next.serverNow) : serverNowAt();
+              feedback.toast("success", releasedText(next, next.status === "INSPECTING", now));
+              break;
+            }
+            case "declined": {
+              // ล็อกอยู่ไหมดูจากใบตอนกด (ก่อนโหลดใหม่ ใบย้ายไปขั้นคอนเฟิร์มลูกค้าแล้วไม่มี release)
+              const wasLocked = !!releaseView(before, serverNowAt(), before.cutoff)?.locked;
+              await load();
+              feedback.toast("info", declinedText(before.code, wasLocked));
+              break;
+            }
+            case "confirmed":
+              await reloadWithNotice();
+              // เพิ่งคอนเฟิร์มกับลูกค้า — จังหวะที่ต้องส่งข้อความแจ้งคิวช่างพอดี
+              setMessageOpen(true);
+              break;
+            default:
+              await reloadWithNotice();
+          }
         }}
       />
       {messageOpen && hasCustomerMessage(order) ? (
@@ -3700,6 +3802,13 @@ function StageBackModal({
   );
 }
 
+/**
+ * ชนิดของการบันทึกที่ฟอร์มขั้นตอนบอกหน้าใบงาน — หน้าใบงานเลือกข้อความหลังบันทึกตามนี้ในสวิตช์เดียว (ไม่ส่ง = ข้อความทั่วไป)
+ * confirmed = เพิ่งคอนเฟิร์มนัดกับลูกค้า (เปิดข้อความแจ้งลูกค้าต่อ) · released = ปล่อยงาน/ส่งช่างตรวจแล้ว · declined = ส่งกลับแอดมินนัดใหม่
+ * เปิดปลายไว้ (string) ให้ฟีเจอร์ที่ตามมาเติมชนิดของตัวเองในสวิตช์เดิม ไม่สร้างทางที่สองคู่กัน (integration G4)
+ */
+type StageDoneKind = "confirmed" | "released" | "declined" | (string & {});
+
 function StageModal({
   visible,
   order,
@@ -3710,6 +3819,8 @@ function StageModal({
   onReschedule,
   onFilesChanged,
   onCancel,
+  onReload,
+  onBackToQueue,
   onDone,
 }: {
   visible: boolean;
@@ -3724,8 +3835,14 @@ function StageModal({
   /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
   onFilesChanged: () => void;
   onCancel: () => void;
-  /** confirmed = เพิ่งคอนเฟิร์มนัดกับลูกค้า (หน้าใบงานเปิดข้อความแจ้งลูกค้าให้) */
-  onDone: (kind?: "confirmed") => void;
+  /**
+   * โหลดใบใหม่โดยไม่ปิดฟอร์ม (load ของหน้าใบงาน) — ฟอร์มปล่อยงานตอนล็อกค้างอยู่หลังส่งคำขอ/ยกเลิกคำขอ/ถูกปฏิเสธ
+   * แล้ววาดสถานะใหม่จากใบที่โหลดมา (ตัวอย่าง sendReq ไม่ปิดฟอร์ม) · รุ่นข้อมูลของหน้าใบงานขยับตาม ตัวเช็ค 20 วิไม่ถือว่าเป็นของคนอื่น
+   */
+  onReload: () => Promise<unknown>;
+  /** "กลับไปงานของฉัน" — ปิดฟอร์มแล้วไปหน้างานของฉันวันนี้ */
+  onBackToQueue: () => void;
+  onDone: (kind?: StageDoneKind) => void;
 }) {
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
@@ -3790,12 +3907,43 @@ function StageModal({
   // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) แต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
   // นัดตรวจหน้างานด้วย: แอดมินเลื่อนวันตรวจได้แล้ว (ต.ค. 69) ทีมวันใหม่อาจไม่ว่างเหมือนกัน → กลับไปนัดร้าน (ตรวจหน้างาน)
   const newDate = rescheduledPending(order);
-  const canDecline = newDate && (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH");
+  const releaseStage = order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH";
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — นาฬิกาเซิร์ฟเวอร์ของฟอร์มเอง เดินเฉพาะตอนฟอร์มเปิด
+   * ฟอร์มที่เปิดค้างข้าม 16:00 พลิกเป็นหน้าล็อกเองตรงเวลา ไม่ต้องรอให้กดแล้วโดนปฏิเสธ (ด่านจริงยังอยู่ที่เซิร์ฟเวอร์)
+   */
+  const now = useServerClock(order.serverNow, order.cutoff?.time, visible);
+  const rv = releaseStage ? releaseView(order, now, order.cutoff) : null;
+  const lockedNow = !!rv?.locked;
+  // วันนัดผ่านไปแล้ว (รวมงานด่วนที่หมดอายุ) — ขอแก้เป็นงานด่วนไม่ได้ ส่งกลับก็ไม่ได้ แอดมินต้องเลื่อนวันนัดเอง (ตัวอย่าง lockPast)
+  const pastNow = lockedNow && !!rv?.past;
+  const { user } = useAuth();
+  /**
+   * หน้าล็อกของฟอร์ม (ตัวอย่าง lockNoReq / lockReq / lockPast) — null = ฟอร์มปล่อยงานตามปกติ
+   * ขอแก้เป็นงานด่วน/ส่งกลับเป็นปุ่มของหัวหน้าภาค · แอดมินที่เปิดฟอร์มนี้เห็นกล่องล็อกกับปุ่มกลับอย่างเดียว
+   * (แอดมินปลดล็อกเองด้วย "แก้เป็นงานด่วน" ไม่ต้องขอใคร — เซิร์ฟเวอร์ตอบ 403 ถ้าแอดมินกดขอ)
+   */
+  const lockMode: "noReq" | "req" | "past" | "other" | null = !lockedNow
+    ? null
+    : pastNow
+      ? "past"
+      : user?.role !== "SUPERVISOR"
+        ? "other"
+        : rv?.ask
+          ? "req"
+          : "noReq";
+  // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) แต่ทีมไม่ว่าง — ตัวเลือกคู่ "ทีมว่าง/ทีมไม่ว่าง" ในฟอร์มปล่อยงานปกติ
+  // ใบที่ล็อกแล้วส่งกลับด้วยปุ่มตรง ๆ ในหน้าล็อก (ไม่มีทางให้เลือก "ทีมว่าง — ปล่อยงาน" ที่กดไม่ได้อยู่ดี)
+  // วันใหม่ผ่านไปแล้วไม่มีให้ส่งกลับ (ตัวอย่าง lockPast) — วันที่ไม่มีใครไปได้แล้ว แอดมินต้องเลื่อนวันนัดเอง
+  const canDecline = newDate && releaseStage && !lockedNow && !rv?.past;
   const inspectRelease = order.status === "INSPECT_DISPATCH";
   const [declineDate, setDeclineDate] = useState(false);
+  /** เวลาที่เซิร์ฟเวอร์ได้รับคำสั่งปล่อยงานที่ถูกปฏิเสธเพราะเลยเวลาปิดรับ (409 DISPATCH_LOCKED) — กล่องล็อกบอกว่ากดเมื่อไร */
+  const [refusedAt, setRefusedAt] = useState<string | null>(null);
+  /** ข้อความใต้ช่องบอกแอดมินในหน้าล็อก (ส่งกลับไม่ใส่เหตุผล) */
+  const [lockErr, setLockErr] = useState<string | null>(null);
   // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
   const [prevUsed, setPrevUsed] = useState<string[]>([]);
-  const { user } = useAuth();
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3909,7 +4057,15 @@ function StageModal({
     setPickupFail(false);
     setNote("");
     setError(null);
+    setLockErr(null);
   }, [visible, order]);
+  /**
+   * บรรทัด "คุณกดเมื่อ … ระบบได้รับหลังปิดรับ" ล้างเฉพาะตอนเปิด/ปิดฟอร์ม ไม่ใช่ตอนใบโหลดใหม่
+   * — ถูกปฏิเสธแล้วฟอร์มโหลดใบใหม่ทันที ถ้าล้างตามใบ บรรทัดนี้จะหายก่อนที่หัวหน้าภาคได้อ่าน
+   */
+  useEffect(() => {
+    setRefusedAt(null);
+  }, [visible]);
 
   async function pickDoc(
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
@@ -4056,12 +4212,16 @@ function StageModal({
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
       } else if (canDecline && declineDate) {
         await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim(), ...seenAppointment(order) });
+        onDone("declined");
+        return;
       } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
           team,
           note: note.trim() || undefined,
           ...seenAppointment(order),
         });
+        onDone("released");
+        return;
       } else {
         await api.post(`/work-orders/${order.id}/assign`, {
           team,
@@ -4072,10 +4232,62 @@ function StageModal({
       }
       onDone();
     } catch (e) {
+      /**
+       * เลยเวลาปิดรับตอนคำสั่งไปถึงเซิร์ฟเวอร์ (จอยังโชว์ "เหลือ 1 นาที" อยู่ หรือแอดมินเพิ่งเลื่อนเวลาปิดรับให้เร็วขึ้น)
+       * ฟอร์มไม่ปิด ไม่ขึ้นข้อความแดงดิบของเซิร์ฟเวอร์ — โหลดใบใหม่แล้วฟอร์มกลายเป็นหน้าล็อก พร้อมบอกว่ากดเมื่อไร
+       * และว่าไม่มีอะไรถูกบันทึก · ทางไปต่อ (ขอแอดมิน / ส่งกลับ) อยู่ในหน้าเดียวกัน ไม่ต้องหาปุ่มใหม่
+       */
+      const res = (e as { response?: { status?: number; data?: { code?: unknown; receivedAt?: unknown } } }).response;
+      if (res?.status === 409 && res.data?.code === "DISPATCH_LOCKED") {
+        setRefusedAt(typeof res.data.receivedAt === "string" ? res.data.receivedAt : new Date(now).toISOString());
+        await onReload();
+        return;
+      }
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
       setBusy(null);
+    }
+  }
+
+  /**
+   * หน้าล็อก: ขอแอดมินแก้เป็นงานด่วน / ยกเลิกคำขอ — ฟอร์มไม่ปิด (ตัวอย่าง sendReq · cancelReq)
+   * หัวหน้าภาคต้องเห็นกับตาว่าคำขอไปแล้ว (กล่องม่วง "ส่งคำขอแล้ว") และยกเลิกได้ถ้าเปลี่ยนใจก่อนแอดมินทำ
+   * โหลดใบใหม่จากคำตอบ (ใบงานทั้งก้อน) — สถานะคำขอมาจากประวัติในเซิร์ฟเวอร์ ไม่ได้จำในเครื่อง
+   */
+  async function askUrgent(cancel: boolean) {
+    setSaving(true);
+    setError(null);
+    setLockErr(null);
+    try {
+      await api.post(`/work-orders/${order.id}/urgent-request${cancel ? "/cancel" : ""}`, cancel ? {} : { note: note.trim() || undefined });
+      setNote("");
+      await onReload();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * หน้าล็อก: ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่ (ปุ่มเดิม decline-new-date เปิดให้ใบที่ล็อกด้วย ไม่ต้องเป็นใบที่ถูกเลื่อนวัน)
+   * ต้องมีเหตุผล — แอดมินโทรร้านนัดใหม่ต้องรู้ว่าทีมไม่ว่างเพราะอะไร จะได้ไม่นัดวันที่ไม่ว่างซ้ำ
+   */
+  async function declineLocked() {
+    if (!note.trim()) {
+      setLockErr(LOCK_NOTE_REQUIRED);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim(), ...seenAppointment(order) });
+      onDone("declined");
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -4248,6 +4460,12 @@ function StageModal({
       (order.status === "NEW" && (inspectFirst || noPartsAssign)) ||
       ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") && confirmChoice === "MOVE"));
   const pastWarn = visitPast ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null;
+  /**
+   * นัดวันเข้า/ส่งตรวจของหัวหน้าภาค — วันนี้หรือพรุ่งนี้หลังเวลาปิดรับ ใบจะถึงขั้นปล่อยงานแบบล็อก (Impact "ฟอร์มของหัวหน้าภาค")
+   * เตือนตอนเลือกวัน ไม่ใช่ตอนใบมาถึงแล้วกดไม่ได้ · เตือนอย่างเดียว ไม่กันบันทึก (ข้อ 4) — นัดวันนี้ยังทำได้ ต้องให้แอดมินแก้เป็นงานด่วน
+   * วันที่ย้อนหลังมีบรรทัดของมันเอง (pastWarn) ไม่ขึ้นซ้อนกัน
+   */
+  const supDateWarn = visitPast ? null : <FormWarningLine warning={dateFormWarning(validDate ? visit : null, now, order.cutoff, "supervisor", "supervisor")} />;
 
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
   const inspectMissing = order.status === "INSPECTING" ? missingInspection(files, order.inspectionStartedAt) : [];
@@ -4298,6 +4516,56 @@ function StageModal({
               · {order.code}
             </>}
       footer={
+        lockMode ? (
+          /*
+            ท้ายฟอร์มตอนล็อก (ตัวอย่าง lockNoReq / lockReq / lockPast) — ช่องบอกแอดมินอยู่ติดปุ่ม ไม่ได้อยู่ในส่วนที่เลื่อน
+            มือถือเลื่อนอ่านกล่องแดงแล้วกดปุ่มได้เลย ไม่ต้องเลื่อนกลับขึ้นไปหาช่องพิมพ์ · ข้อความผิดพลาดขึ้นตรงนี้ด้วยเหตุผลเดียวกัน
+          */
+          <View style={styles.lockFoot}>
+            {lockMode === "noReq" ? (
+              <>
+                <Text style={styles.modalLabel}>{LOCK_NOTE_LABEL}</Text>
+                <TextInput
+                  style={styles.lockInput}
+                  value={note}
+                  onChangeText={(v) => {
+                    setNote(v);
+                    setLockErr(null);
+                  }}
+                  maxLength={300}
+                  placeholder="เช่น ลูกค้ารอพรุ่งนี้เช้า · ทีมไม่ว่างวันนั้น"
+                  placeholderTextColor={colors.textFaint}
+                  accessibilityLabel={LOCK_NOTE_LABEL}
+                />
+                {lockErr ? (
+                  <Text style={styles.modalError} accessibilityRole="alert">
+                    {lockErr}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+            {lockMode === "req" && rv?.ask ? <AskPendingBox ask={rv.ask} /> : null}
+            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+            <LockActions
+              actions={
+                lockMode === "noReq"
+                  ? [
+                      { label: LOCK_BUTTONS.request, kind: "purple", grow: true, disabled: saving, onPress: () => void askUrgent(false) },
+                      { label: declineLabel(order.status), kind: "outline", grow: true, disabled: saving, onPress: () => void declineLocked() },
+                      { label: LOCK_BUTTONS.back, kind: "ghost", disabled: saving, onPress: onCancel },
+                    ]
+                  : lockMode === "req"
+                    ? [
+                        { label: LOCK_BUTTONS.cancelRequest, kind: "purpleOutline", grow: true, disabled: saving, onPress: () => void askUrgent(true) },
+                        { label: LOCK_BUTTONS.backToQueue, kind: "ghost", grow: true, disabled: saving, onPress: onBackToQueue },
+                      ]
+                    : lockMode === "past"
+                      ? [{ label: LOCK_BUTTONS.backToQueue, kind: "ghost", grow: true, onPress: onBackToQueue }]
+                      : [{ label: LOCK_BUTTONS.back, kind: "ghost", grow: true, onPress: onCancel }]
+              }
+            />
+          </View>
+        ) : (
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
@@ -4355,8 +4623,11 @@ function StageModal({
             )}
           </TouchableOpacity>
         </View>
+        )
       }
     >
+            {/* ล็อกแล้ว: กล่องแดงขึ้นบนสุด (ตัวอย่าง) — ทำไมกดไม่ได้ และทำอะไรได้ อยู่ในกล่องเดียว */}
+            {releaseStage ? <LockBox order={order} now={now} cutoff={order.cutoff} refusedAt={refusedAt} /> : null}
             {prevUsed.length ? (
               <View style={styles.prevBox} accessibilityLabel="ค่าเดิมก่อนย้อน">
                 <Text style={styles.prevBoxTitle}>↩ ใบนี้ย้อนขั้นมา — เติมค่าเดิมไว้ให้: {prevUsed.join(" · ")}</Text>
@@ -4432,6 +4703,7 @@ function StageModal({
                       min={minVisit}
                     />
                     {pastWarn}
+                    {supDateWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : needsParts === true ? (
@@ -4448,6 +4720,7 @@ function StageModal({
                     </Text>
                     <DateField value={visit} onChange={setVisit} label="วันเข้างาน" emptyHint="ต้องระบุวันก่อนจึงจะจ่ายงานได้" min={minVisit} />
                     {pastWarn}
+                    {supDateWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
@@ -5213,7 +5486,7 @@ function StageModal({
 
             {canDecline ? (
               <>
-                {declineDate ? <DispatchNote order={order} /> : null}
+                {declineDate ? <DispatchNote order={order} now={now} /> : null}
                 <View style={styles.options} accessibilityLabel="วันนัดเปลี่ยน ทีมว่างไหม">
                   <TouchableOpacity
                     style={[styles.option, !declineDate && styles.optionOn]}
@@ -5244,7 +5517,13 @@ function StageModal({
             order.status === "PARTS_CHECKED" ||
             (order.status === "NEW" && (inspectFirst || noPartsAssign)) ? (
               <>
-                {order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH" ? <DispatchNote order={order} /> : null}
+                {releaseStage ? (
+                  <>
+                    <DispatchNote order={order} now={now} />
+                    {/* เส้นตายใต้กล่องคอนเฟิร์ม (ตำแหน่งตามตัวอย่าง) — ล็อกแล้วไม่มีกล่องนี้ กล่องแดงข้างบนบอกแทน */}
+                    <ReleaseDeadlineBox order={order} now={now} cutoff={order.cutoff} />
+                  </>
+                ) : null}
                 {order.status === "PARTS_CHECKED" ? (
                   <>
                     {/* นัดวัน → เบิก → คอนเฟิร์มลูกค้าตอนของพร้อม (ต.ค. 69 รอบสอง) · ไม่ใช้อะไหล่/เบิกครบแล้วไม่มีขั้นเบิกคั่น */}
@@ -5269,12 +5548,14 @@ function StageModal({
                   dropdown มีช่องค้นหาในตัว พิมพ์ชื่อทีมสามตัวก็เจอ
                   ทีมของสาขายังอยู่บนสุดเหมือนเดิม เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
                 */}
+                {/* ล็อกแล้วเปลี่ยนทีมไม่มีความหมาย (กดปล่อยไม่ได้) — ยังเห็นว่าทีมไหน แต่เลือกไม่ได้ (ตัวอย่าง select disabled) */}
                 <Dropdown
                   value={team}
                   onChange={setTeam}
                   placeholder="เลือกทีม"
                   accessibilityLabel="ทีมที่จะรับงาน"
                   options={teamOptions(teams, order.suggestedTeam, order.jobType)}
+                  disabled={lockedNow}
                 />
                 {teams.length === 0 ? (
                   <Text style={styles.warn}>
@@ -5370,6 +5651,7 @@ function StageModal({
                   min={minVisit}
                 />
                 {pastWarn}
+                {supDateWarn}
                 <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
               </>
             ) : null}
@@ -5438,8 +5720,9 @@ function StageModal({
               </>
             ) : null}
 
-            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน */}
-            {order.status !== "INSPECTING" ? (
+            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน
+                หน้าล็อกมีช่อง "บอกแอดมินสั้น ๆ" ติดกับปุ่มข้างล่างแทน — สองช่องคนไม่รู้ว่าข้อความไหนไปถึงแอดมิน */}
+            {order.status !== "INSPECTING" && !lockMode ? (
               <>
                 <Text style={styles.modalLabel}>
                   {["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
@@ -5467,7 +5750,7 @@ function StageModal({
               </>
             ) : null}
 
-            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+            {error && !lockMode ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );
 }
@@ -5892,6 +6175,19 @@ function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: W
   );
 }
 
+/** "ออกงานวันนี้" ตัวใหญ่บนสุดของฟอร์มปล่อยงาน — กดแล้วทีมต้องออกวันนี้ */
+function TodayHero({ order }: { order: WorkOrder }) {
+  return (
+    <View style={styles.todayHero} accessibilityLabel="ออกงานวันนี้">
+      <Text style={styles.todayHeroBig}>ออกงานวันนี้{order.scheduledTime ? ` · ${order.scheduledTime} น.` : " · ทั้งวัน"}</Text>
+      <Text style={styles.todayHeroText}>
+        {order.assignedTeam ? `ทีม${order.assignedTeam} · ` : ""}
+        {order.branchCode} {order.branchName}
+      </Text>
+    </View>
+  );
+}
+
 /**
  * หัวฟอร์มปล่อยงาน — วันที่จะเข้าเป็นวันที่หัวหน้าภาคนัด/ปล่อยไว้เอง หรือถูกเลื่อนมา
  *
@@ -5900,7 +6196,7 @@ function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: W
  * ไม่ถูกเลื่อน = กล่องเขียว ลูกค้าคอนเฟิร์มแล้ว
  * อ่านจากประวัติ ไม่เก็บซ้ำในใบงาน — ประวัติคือของจริงอยู่แล้ว
  */
-function DispatchNote({ order }: { order: WorkOrder }) {
+function DispatchNote({ order, now }: { order: WorkOrder; now: number }) {
   const move = rescheduledPending(order) ? pendingMove(order) : null;
   const confirm = order.logs
     .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
@@ -5909,19 +6205,27 @@ function DispatchNote({ order }: { order: WorkOrder }) {
   // แอดมินเลื่อนแล้วลูกค้าตกลงวันนั้นทีหลัง — ร้านรู้วันใหม่แล้ว เหลือแค่เช็คทีม
   const agreedAfter = !!move && move.action !== "RESCHEDULED" && confirm?.action === "CONFIRMED" && confirm.createdAt > move.createdAt;
   const shown = move ?? confirm;
-  // ออกงานวันนี้ — ตัวใหญ่บนสุด ย้ำให้หัวหน้าภาครู้ว่ากดแล้วทีมต้องออกวันนี้ (เจ้าของงานขอ ต.ค. 69)
-  const today = order.status === "ASSIGNED" && order.scheduledAt?.slice(0, 10) === todayBkk();
+  const rv = releaseView(order, now, order.cutoff);
+  /**
+   * ออกงานวันนี้ — ตัวใหญ่บนสุด ย้ำให้หัวหน้าภาครู้ว่ากดแล้วทีมต้องออกวันนี้ (เจ้าของงานขอ ต.ค. 69)
+   * "วันนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มือถือตั้งวันผิดต้องไม่บอกว่าออกงานวันนี้) · ใบที่ล็อกไม่ขึ้น — กดปล่อยไม่ได้ ตัวใหญ่ชวนให้กดคือหลอก
+   */
+  const today = order.status === "ASSIGNED" && !rv?.locked && order.scheduledAt?.slice(0, 10) === serverDay(now);
+  /**
+   * งานด่วนที่ใช้ได้อยู่ — กล่องเขียวแทนกล่องคอนเฟิร์ม/เลื่อนวัน (ตัวอย่างเช็คงานด่วนก่อนเสมอ)
+   * สิ่งที่หัวหน้าภาคต้องรู้ตอนนี้คือใครปลดล็อกให้และทำไม ไม่ใช่ว่าใครคอนเฟิร์มลูกค้า (ประวัติยังมีครบ)
+   */
+  if (rv?.urgent && order.urgentInfo && order.scheduledAt) {
+    return (
+      <>
+        {today ? <TodayHero order={order} /> : null}
+        <UrgentNoteBox info={order.urgentInfo} day={order.scheduledAt.slice(0, 10)} time={order.scheduledTime} />
+      </>
+    );
+  }
   return (
     <>
-    {today ? (
-      <View style={styles.todayHero} accessibilityLabel="ออกงานวันนี้">
-        <Text style={styles.todayHeroBig}>ออกงานวันนี้{order.scheduledTime ? ` · ${order.scheduledTime} น.` : " · ทั้งวัน"}</Text>
-        <Text style={styles.todayHeroText}>
-          {order.assignedTeam ? `ทีม${order.assignedTeam} · ` : ""}
-          {order.branchCode} {order.branchName}
-        </Text>
-      </View>
-    ) : null}
+    {today ? <TodayHero order={order} /> : null}
     <View style={[styles.dispatchNote, moved && styles.dispatchNoteMoved]}>
       <Ionicons
         name={moved ? "swap-horizontal" : "checkmark-circle"}
@@ -9355,6 +9659,18 @@ const styles = StyleSheet.create({
   foldText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
   foldLine: { fontSize: 13, lineHeight: 20, color: colors.body },
   modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
+  // ท้ายฟอร์มปล่อยงานตอนล็อก — ช่องพิมพ์ + ปุ่มเรียงลงล่าง (แถวท้ายของ AppModal เป็นแนวนอน จึงต้องยืดเต็มก่อน)
+  lockFoot: { flex: 1, minWidth: 0, gap: spacing.sm },
+  lockInput: {
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    minHeight: 48,
+    fontSize: 14,
+    color: colors.text,
+    backgroundColor: colors.card,
+  },
   modalCancel: {
     flex: 1,
     minHeight: 46,

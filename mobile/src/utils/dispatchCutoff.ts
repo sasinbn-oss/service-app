@@ -232,10 +232,13 @@ function nextBoundary(now: number, time: string | null | undefined): number {
  * ตัวนับเป็นนาที 30 วิพอ · จุดเปลี่ยนต้องตรงเวลา ป้ายจะได้กลายเป็นล็อกตอน 16:00:00 ไม่ใช่ 16:00:29
  * serverNow ว่าง (เซิร์ฟเวอร์รุ่นเก่า) = ใช้นาฬิกาเครื่องไปก่อน ดีกว่าไม่ขึ้นอะไรเลย
  */
-export function useServerClock(serverNow?: string | null, cutoffTime?: string | null): number {
+export function useServerClock(serverNow?: string | null, cutoffTime?: string | null, active = true): number {
   const offset = useMemo(() => offsetFor(serverNow), [serverNow]);
   const [, setTick] = useState(0);
   useEffect(() => {
+    // ฟอร์มที่วาดค้างไว้แต่ซ่อนอยู่ (ฟอร์มขั้นตอนในหน้าใบงาน) ไม่ต้องเดิน — วาดใหม่ทุก 30 วิโดยไม่มีใครเห็นคือกินแบตมือถือเปล่า ๆ
+    // เปิดขึ้นมาเมื่อไรเดินต่อเอง และค่าที่คืนคิดจากนาฬิกาตอนวาดเสมอ ไม่ใช่ค่าที่ค้างจากตอนหยุด
+    if (!active) return;
     const bump = () => setTick((n) => n + 1);
     const every = setInterval(bump, 30_000);
     let edge: ReturnType<typeof setTimeout> | undefined;
@@ -252,7 +255,7 @@ export function useServerClock(serverNow?: string | null, cutoffTime?: string | 
       clearInterval(every);
       if (edge) clearTimeout(edge);
     };
-  }, [offset, cutoffTime]);
+  }, [offset, cutoffTime, active]);
   return Date.now() + offset;
 }
 
@@ -399,6 +402,71 @@ export function dateFormWarning(
     };
   if (amber) return { tone: "amber", text: `ใกล้ปิดรับ (เหลือ ${left}) — ต้องถึงขั้นปล่อยงานก่อน ${C} น. ไม่งั้นติดล็อก`, checkbox: false };
   return null;
+}
+
+/**
+ * กล่องเส้นตายในฟอร์มปล่อยงานตอนยังไม่ล็อก (W-11a · W-11b · W-11c ตัวอย่าง dlBox)
+ * null = ไม่มีกล่อง (ล็อกแล้ว — กล่องแดงบอกแทน · ใบที่ค้างมาก่อนเปิดกฎ ไม่มีเส้นตายให้บอก)
+ */
+export function deadlineBox(v: ReleaseView | null, now: number): { tone: ReleaseTone; title: string; big: string | null; small: string } | null {
+  if (!v || !v.tone || v.locked) return null;
+  const C = v.cutTime;
+  if (v.tone === "urgent")
+    return { tone: "urgent", title: "แอดมินแก้เป็นงานด่วนแล้ว — ปล่อยได้แม้เลยเวลาปิดรับ", big: null, small: "เฉพาะใบนี้ วันนัดนี้ · ลงประวัติใบงานแล้ว" };
+  if (v.tone === "later") {
+    const prev = addDays(v.day, -1);
+    // วันจันทร์บอกตรง ๆ ว่าปิดรับวันอาทิตย์ — คนส่วนใหญ่เดาว่าเส้นตายคือวันทำการก่อนหน้า (วันศุกร์) หรือไม่มีเส้นตายวันหยุด (ข้อ ค)
+    const monday = new Date(`${v.day}T00:00:00.000Z`).getUTCDay() === 1;
+    return {
+      tone: "later",
+      title: `ปล่อยได้ก่อน ${dayFull(prev)} ${C} น.`,
+      big: null,
+      small: `${monday ? "งานวันจันทร์ ปิดรับวันอาทิตย์ (วันก่อนวันนัด — ทุกวันนับเหมือนกัน) · " : "ปิดรับ = วันก่อนวันนัด · "}ปล่อยก่อนได้เลย — ทีมจะเห็นในแท็บ “พรุ่งนี้” ตั้งแต่ ${dayShort(prev)}`,
+    };
+  }
+  if (v.tone === "calm" || v.tone === "amber" || v.tone === "red")
+    return {
+      tone: v.tone,
+      title: `ปล่อยงานของพรุ่งนี้ได้ก่อน ${C} น. วันนี้`,
+      big: `เหลือ ${leftText(v.remainMs)}`,
+      small: `ตามเวลาระบบ · ตอนนี้ ${hhmmOf(now)} น. · ถึง ${C} น. แล้วกดไม่ได้`,
+    };
+  return null;
+}
+
+/**
+ * กล่องเขียวงานด่วน (ตัวอย่าง note เมื่อ urgent) — หัว = แก้ทางไหน + เหตุผล · บรรทัดล่าง = ใคร เมื่อไร วันนัดไหน
+ * สร้างจากช่องที่เซิร์ฟเวอร์ส่ง (urgentInfo จาก meta ของประวัติ) ไม่แกะข้อความประวัติ — ข้อความประวัติแก้คำได้ ช่องไม่เปลี่ยน
+ */
+export function urgentNoteLines(info: UrgentInfo, day: string, time: string | null | undefined): { title: string; by: string } {
+  const via = info.via === "confirm" ? " (ตอนคอนเฟิร์มลูกค้า)" : info.via === "reschedule" ? " (ตอนเลื่อนวันนัด)" : "";
+  return {
+    title: `แอดมินแก้เป็นงานด่วน${via} — ${info.reason || "ไม่ได้ใส่เหตุผล"}`,
+    by: `${info.byName ?? "แอดมิน"} · ${whenText(info.at)} น. · นัด ${dayFull(day)} · ${timeText(time)}`,
+  };
+}
+
+/**
+ * ข้อความหลังปล่อยงาน (W-25 / W-26 ตัวอย่าง press) — บอกว่าทีมจะเห็นงานที่แท็บไหนของหน้างานของฉัน
+ * หัวหน้าภาคมักโทรบอกทีมต่อ ต้องรู้ว่าทีมเปิดแท็บไหนแล้วจะเจอ · งานที่ปล่อยล่วงหน้าหลายวันทีมยังไม่เห็นจนถึงวันก่อนนัด
+ * now = นาฬิกาเซิร์ฟเวอร์ (วันนี้/พรุ่งนี้ตามเซิร์ฟเวอร์ ไม่ใช่มือถือ)
+ */
+export function releasedText(o: { code: string; scheduledAt: string | null; assignedTeam: string | null }, inspect: boolean, now: number): string {
+  const head = `${inspect ? "ส่งช่างตรวจ" : "ปล่อยงาน"} ${o.code} แล้ว`;
+  if (!o.scheduledAt) return head;
+  const day = o.scheduledAt.slice(0, 10);
+  const rel = daysBetween(serverDay(now), day);
+  const team = `ทีม${o.assignedTeam ?? ""}`;
+  const tab = rel <= -1 ? "แท็บ “ค้าง”" : rel === 0 ? "แท็บ “วันนี้”" : rel === 1 ? "แท็บ “พรุ่งนี้”" : null;
+  return tab ? `${head} — ${team} เห็นใน${tab} แล้ว` : `${head} — ${team} จะเห็นในแท็บ “พรุ่งนี้” ตั้งแต่ ${dayShort(addDays(day, -1))}`;
+}
+
+/**
+ * ข้อความหลังส่งกลับแอดมินนัดใหม่ (W-36) — ใบที่ล็อกขึ้นที่แอดมินในหัวข้อ "เลยเวลาปล่อยงาน"
+ * ใบที่ไม่ได้ล็อก (คอนเฟิร์มวันใหม่ปกติก่อนปิดรับ) ไปกล่องส่งกลับเดิมของแอดมิน — ไม่บอกหัวข้อที่ใบไม่ได้ไป
+ */
+export function declinedText(code: string, wasLocked: boolean): string {
+  return `ส่ง ${code} กลับให้แอดมินนัดใหม่แล้ว — ใบออกจากรายการของคุณ${wasLocked ? " แอดมินเห็นในหัวข้อ “เลยเวลาปล่อยงาน”" : ""}`;
 }
 
 /** วันแรกที่ยังปล่อยได้โดยไม่ต้องแก้เป็นงานด่วน (ตัวอย่าง firstOpen) — พรุ่งนี้ถ้ายังไม่ถึงเวลาปิดรับของวันนี้ ไม่งั้นมะรืน */

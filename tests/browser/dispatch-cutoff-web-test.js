@@ -1,4 +1,15 @@
-// ทดสอบผ่านเบราว์เซอร์: เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ก้อน 3 การ์ดตั้งค่า + แท็บกล่องงาน
+// ทดสอบผ่านเบราว์เซอร์: เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ก้อน 3 การ์ดตั้งค่า + แท็บกล่องงาน · ก้อน 4 จอหัวหน้าภาค
+//   ส่วน 1 (นับถอยหลัง — เวลาปิดรับ = อีก 45 นาที): แถบส้มบนงานของฉันวันนี้ "ปล่อยงานพรุ่งนี้ก่อน …" + "เหลือ N นาที" (N คิดจากนาฬิกาจริง)
+//     · ป้ายบนการ์ด · ป้ายข้างปุ่มขั้นในหน้าใบงาน · กล่องเส้นตายในฟอร์ม · กดปล่อย → toast "ปล่อยงาน … เห็นในแท็บ “พรุ่งนี้” แล้ว"
+//     ไม่มีกล่อง "อัปเดตสถานะแล้ว" ซ้อน · ฐานข้อมูล IN_PROGRESS + DISPATCHED
+//   ส่วน 3 (กดตอนเวลาเพิ่งผ่าน): เปิดฟอร์มตอนยังกดได้ → เวลาปิดรับย้ายไปเมื่อนาทีก่อน (SQL) → กดปล่อย → ฟอร์มไม่ปิด กลายเป็นหน้าล็อก
+//     พร้อม "คุณกดเมื่อ … ระบบได้รับหลังปิดรับจึงไม่รับ" · ฐานข้อมูลยัง ASSIGNED ไม่มี DISPATCHED
+//   ส่วน 2 (ล็อกแล้ว): แถบ "เลยเวลาปล่อยงาน N ใบ" (N ตรงกับใบที่เซิร์ฟเวอร์บอกว่าล็อก) · ป้ายแดงบนการ์ด + ขอบแดง · ฟอร์ม: กล่องแดง
+//     ทีมเลือกไม่ได้ ช่องบอกแอดมิน · ขอแอดมิน → ฟอร์มค้างเป็นกล่องม่วง "ส่งคำขอแล้ว" · กลับไปงานของฉัน → ป้ายม่วง · ยกเลิกคำขอ
+//     · ส่งกลับไม่ใส่เหตุผล → บอกในฟอร์ม · ใส่แล้ว → toast + AWAITING_CONFIRM · ใบวันนัดผ่านแล้ว: กล่องแดงกับ "กลับไปงานของฉัน" เท่านั้น
+//     · มือถือ 420: ปุ่มเรียงลงล่าง ไม่ล้นจอ
+//   ส่วน 6 (กล่องงาน): แถบนับข้ามแท็บ (ใบล็อกอยู่แท็บจ่ายงาน แต่แถบขึ้นตอนเปิดแท็บงานแจ้งซ่อม)
+//     · หัวหน้าภาคที่กล่องว่าง (ภาค/สาขาชั่วคราว) แต่มีงานพรุ่งนี้รอแอดมินคอนเฟิร์ม เห็น "งานพรุ่งนี้ยังไม่ถึงขั้นปล่อยงาน 1 ใบ" เหนือ "ไม่มีงานค้างรอคุณ"
 //   ส่วน 5 (การ์ดตั้งค่า "เวลาปิดรับปล่อยงาน" ท้ายหน้าระบบหลังบ้าน)
 //   · แอดมินแตะ 16:30 → บันทึกทันที (ไม่ถาม) · toast · ชิปที่เลือก · บรรทัด "เปลี่ยนล่าสุด: <ชื่อ> · 15:00 → 16:30 น." · ฐานข้อมูลมีแถวใหม่ของ A001
 //   · เลื่อนให้เร็วขึ้นหลังเวลาใหม่ผ่านไปแล้ว (ใบพรุ่งนี้ที่ยังไม่ปล่อยจะล็อกทันที) → กล่องยืนยันบอกจำนวนใบ · "ยกเลิก" ไม่เขียนอะไร
@@ -7,7 +18,7 @@
 //   · จอมือถือ 420: การ์ดไม่ล้นจอ ชิปห้าตัวอยู่ในแถวเดียว
 //   ส่วน 6 (แท็บกล่องงานหัวหน้าภาค)
 //   · "ส่งช่างตรวจ" (INSPECT_DISPATCH) อยู่แท็บ จ่ายงาน/ปล่อยงาน ไม่อยู่แท็บงานแจ้งซ่อม (เจ้าของงานตอบข้อ ก)
-//   ส่วนที่เหลือของแผน (หัวหน้าภาค/แอดมิน/นับถอยหลัง/แถบหัวข้อ) มากับหน้าจอก้อน 4–5
+//   ส่วน 4 (จอแอดมิน) มากับหน้าจอก้อน 5
 //
 // คุมเวลาไม่ให้ขึ้นกับว่ารันกี่โมง (tests/README "เทสต์ที่ขึ้นกับเวลาปิดรับ"):
 //   · เวลาปิดรับจริงตั้งทาง SQL (แถวใหม่ใน AppSetting) แล้วเรียก GET /api/settings/dispatch-cutoff ให้เซิร์ฟเวอร์อ่านสด
@@ -15,7 +26,10 @@
 //     เทสต์จึงแก้ serverNow ในคำตอบ GET ของหน้านั้นเป็น 15:30 ของวันนี้ แทนการรอให้ถึงบ่ายสาม (แผนเดิมข้ามข้อนี้ถ้ารันก่อน 15:00)
 //     ถ้าการ์ดหันไปใช้นาฬิกาเครื่อง ข้อนี้จะล้มทุกครั้งที่รันนอก 15:00–23:59 — จับบั๊กแบบนั้นได้ด้วย
 //     เวลาปิดรับจริงตั้งเป็น 23:59 ระหว่างข้อนี้ ใบพรุ่งนี้จึงยังไม่ล็อกจริง (ไม่งั้น dispatch-watch ไม่นับมัน)
-//   · ตัวกันคร่อมเที่ยงคืน: 23:50–00:02 รอให้พ้นก่อน — 23:59 จะผ่านไปและ "พรุ่งนี้" เปลี่ยนกลางทาง
+//   · ก้อน 4 ตั้งเวลาปิดรับเป็น "ตอนนี้ ±นาที" (ทาง SQL) — ล็อก/ไม่ล็อกจึงไม่ขึ้นกับว่ารันกี่โมง · เวลาเริ่มใช้กฎ (createdAt แถวแรก)
+//     ถอยไป 30 วันระหว่างรัน ใบวันนัดเมื่อวานจึงล็อกจริงแม้ migration เพิ่งรันวันนี้ · คืนค่าเดิมตอนจบ (จดค่าเดิมไว้เป็นแถว key อื่น)
+//   · ตัวกันคร่อมเที่ยงคืน: 23:10–00:06 รอให้พ้นก่อน — เวลาปิดรับทดสอบ (+45 นาที · 23:59) จะข้ามวัน และ "พรุ่งนี้" เปลี่ยนกลางทาง
+//     เช็คซ้ำก่อนก้อน 4 (23:00–00:06) — ส่วนก้อน 3 ใช้เวลาหลายนาที เช็คครั้งเดียวตอนเริ่ม +45 นาทีของก้อน 4 ยังข้ามเที่ยงคืนได้
 //   · แถวที่เพิ่มลบทั้งหมดตอนจบ · จดเลขแถวสุดท้ายไว้เป็นแถว key อื่น (readCutoff อ่านเฉพาะ key='dispatchCutoff' ไม่มีผลกับแอป)
 //     ถูกฆ่ากลางทาง รอบหน้าเจอแถวจดนี้ → FAIL แล้วลบแถวที่ค้างให้ ไม่ปล่อยให้แอปใช้เวลาผิดเงียบ ๆ
 // ยืนยันที่ฐานข้อมูลทุกข้อ ไม่เชื่อหน้าจออย่างเดียว (CLAUDE.md) · ต้องมี DATABASE_URL
@@ -35,20 +49,27 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
   const pass = (m) => console.log("PASS", m);
   const errors = [];
 
-  // กันคร่อมเที่ยงคืน — ก่อนแตะฐานข้อมูลสักบรรทัด (ถูกฆ่าระหว่างรอจะไม่มีอะไรค้าง)
-  {
+  /**
+   * กันคร่อมเที่ยงคืน: ถ้าเวลาไทยอยู่ระหว่าง fromMin (นาทีของวัน) ถึง 00:06 รอให้พ้น 00:06 ก่อน
+   * เรียกสองที่ เพราะเช็คครั้งเดียวตอนเริ่มไม่พอ — ก่อนถึงก้อน 4 มีส่วนก้อน 3 เปิดเบราว์เซอร์หลายรอบ
+   * (รอบแรกหลัง expo-wt.sh รอ bundle ได้ถึง 3 นาที) เริ่ม 23:09 ไปถึงก้อน 4 ตอน 23:15 แล้ว +45 นาที = 00:00
+   * เส้นตายของใบพรุ่งนี้กลายเป็นเที่ยงคืนที่ผ่านไปแล้ว ใบล็อกตั้งแต่ต้น ส่วน 1 ล้มทั้งที่แอปถูก
+   */
+  const waitPastMidnight = async (fromMin, why) => {
     const now = Date.now() + 7 * 3600e3;
     const d = new Date(now);
     const m = d.getUTCHours() * 60 + d.getUTCMinutes();
-    if (m >= 23 * 60 + 50 || m < 2) {
+    if (m >= fromMin || m < 6) {
       const t = new Date(now);
-      t.setUTCHours(0, 2, 0, 0);
+      t.setUTCHours(0, 6, 0, 0);
       if (t.getTime() <= now) t.setUTCDate(t.getUTCDate() + 1);
       const wait = t.getTime() - now;
-      console.log(`    รอข้ามเที่ยงคืน ${Math.ceil(wait / 1000)} วินาที — เวลาปิดรับทดสอบ 23:59 จะข้ามวัน`);
+      console.log(`    รอข้ามเที่ยงคืน — ${why} (${Math.ceil(wait / 1000)} วินาที)`);
       await new Promise((r) => setTimeout(r, wait));
     }
-  }
+  };
+  // ก่อนแตะฐานข้อมูลสักบรรทัด (ถูกฆ่าระหว่างรอจะไม่มีอะไรค้าง)
+  await waitPastMidnight(23 * 60 + 10, "เวลาปิดรับทดสอบ 23:59 ของการ์ดตั้งค่าจะข้ามวัน");
 
   const fx = await setup();
   const { sql, call, A } = fx;
@@ -58,6 +79,13 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
   });
   const suf = Date.now() % 100000;
   const PA = `ZDCW${suf}`;
+  // ก้อน 4: หัวหน้าภาคชั่วคราวที่กล่องว่าง (ภาค + สาขาของตัวเอง) — ลบตอนจบ
+  const ZS = `ZDCS${suf}`;
+  const ZB = `ZDC${suf}`;
+  const ZR = `ภาคทดสอบเวลาปิดรับ${suf}`;
+  const SINCE_MARK = "dispatchCutoffWebTestSince";
+  let sinceSaved = null;
+  let zOrder = null;
   let MAXSET = null;
   const latest = () =>
     sql(`select value||'|'||coalesce("createdById"::text,'-') from "AppSetting" where key='dispatchCutoff' order by id desc limit 1`);
@@ -75,6 +103,13 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
       const ids = sql(`select string_agg(id||'='||value, ' ' order by id) from "AppSetting" where key='dispatchCutoff' and id > ${Number(left)}`);
       fail(`มีแถวเวลาปิดรับที่เทสต์นี้รอบก่อนทิ้งไว้ (${ids || "ไม่มีแถวค้าง เหลือแค่แถวจด"}) — ลบออกแล้ว รอบหน้าจะผ่าน`);
       sql(`delete from "AppSetting" where key='dispatchCutoff' and id > ${Number(left)}; delete from "AppSetting" where key='${MARK}'`);
+    }
+    // เวลาเริ่มใช้กฎที่รอบก่อนถอยไว้แล้วไม่ได้คืน (ถูกฆ่ากลางทาง) — คืนให้ก่อน แล้วโผล่เป็น FAIL
+    const leftSince = sql(`select value from "AppSetting" where key='${SINCE_MARK}' order by id limit 1`);
+    if (leftSince) {
+      const [sid, sat] = leftSince.split("|");
+      sql(`update "AppSetting" set "createdAt"='${sat}'::timestamp where id=${Number(sid)}; delete from "AppSetting" where key='${SINCE_MARK}'`);
+      fail(`เวลาเริ่มใช้กฎที่เทสต์นี้รอบก่อนถอยไว้ยังไม่ได้คืน (แถว ${sid}) — คืนค่าเดิม ${sat} แล้ว`);
     }
     MAXSET = Number(sql(`select coalesce(max(id),0) from "AppSetting"`));
     sql(`insert into "AppSetting"(key,value) values ('${MARK}','${MAXSET}')`);
@@ -308,16 +343,342 @@ const shot = (name) => path.join(__dirname, `dispatch-cutoff-${name}.png`);
     await search.fill("");
     await s.ctx.close();
 
+    // ════════════════ ก้อน 4: จอหัวหน้าภาค ════════════════
+    // เช็คเที่ยงคืนอีกรอบก่อนสร้างใบและคิดวันนี้/พรุ่งนี้ — ตั้งแต่ 23:00 เผื่อเวลาสร้างใบห้าใบก่อนตั้ง +45 นาที
+    // และให้ทั้งก้อน 4 จบก่อนเที่ยงคืน ("พรุ่งนี้" ห้ามเปลี่ยนกลางทาง ใบพรุ่งนี้จะกลายเป็นใบวันนี้)
+    await waitPastMidnight(23 * 60, "เวลาปิดรับทดสอบ (+45 นาที) จะข้ามวัน และ \"พรุ่งนี้\" เปลี่ยนระหว่างก้อน 4");
+    // เวลาเริ่มใช้กฎถอยไป 30 วัน — ใบวันนัดเมื่อวาน (ส่วน 2) ต้องล็อกจริง ไม่ใช่ "ค้างมาก่อนเปิดกฎ" เพราะ migration เพิ่งรันวันนี้
+    const seedId = sql(`select id from "AppSetting" where key='dispatchCutoff' order by id asc limit 1`);
+    if (seedId) {
+      const seedAt = sql(`select to_char("createdAt",'YYYY-MM-DD"T"HH24:MI:SS.MS') from "AppSetting" where id=${seedId}`);
+      sql(`insert into "AppSetting"(key,value) values ('${SINCE_MARK}','${seedId}|${seedAt}')`);
+      sql(`update "AppSetting" set "createdAt"=now()-interval '30 days' where id=${seedId}`);
+      sinceSaved = { id: seedId, at: seedAt };
+    }
+    const pad2 = (n) => String(n).padStart(2, "0");
+    /** "HH:MM" ตามเวลาไทยอีก off นาทีจากตอนนี้ (ตัดวินาทีทิ้ง) — เวลาปิดรับทดสอบ */
+    const bkk = (off) => {
+      const d = new Date(Date.now() + 7 * 3600e3 + off * 60e3);
+      return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+    };
+    const S = fx.supervisor();
+    const today = visitDay(0);
+    const tomorrow = visitDay(1);
+    const st = (id) => sql(`select status from "WorkOrder" where id=${id}`);
+    const lastLog = (id) => sql(`select action||'|'||coalesce(note,'') from "WorkOrderLog" where "workOrderId"=${id} order by id desc limit 1`);
+    const logCount = (id, action) => Number(sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${id} and action='${action}'`));
+    /** ใบพรุ่งนี้ (หรือวันอื่น) ที่ถึงขั้นรับทราบ ปล่อยงานแล้ว — ไม่ใช้อะไหล่ → นัด → แอดมินคอนเฟิร์มวันเดิม */
+    const releaseOrder = async (day = tomorrow) => {
+      const o = await fx.workOrder("C0006", []);
+      await fx.schedule(o.id, day);
+      await fx.confirm(o.id);
+      return o;
+    };
+    const T1 = await releaseOrder(); // ส่วน 1 นับถอยหลังแล้วปล่อย
+    const R1 = await releaseOrder(); // ส่วน 3 กดตอนเวลาเพิ่งผ่าน
+    const L1 = await releaseOrder(); // ส่วน 2 ขอแอดมิน / ยกเลิก / ส่งกลับ
+    const L2 = await releaseOrder(); // ส่วน 2 มือถือ · ส่วน 6 แถบนับข้ามแท็บ
+    const P1 = await releaseOrder(); // ส่วน 2 วันนัดผ่านแล้ว (ย้ายวันทาง SQL ข้างล่าง)
+    sql(`update "WorkOrder" set "scheduledAt"='${visitDay(-1)}'::timestamp where id=${P1.id}`);
+    const prep = [T1, R1, L1, L2].map((o) => sql(`select status||'|'||to_char("scheduledAt",'YYYY-MM-DD') from "WorkOrder" where id=${o.id}`));
+    prep.every((r) => r === `ASSIGNED|${tomorrow}`) && sql(`select status||'|'||to_char("scheduledAt",'YYYY-MM-DD') from "WorkOrder" where id=${P1.id}`) === `ASSIGNED|${visitDay(-1)}`
+      ? pass(`เตรียมใบรอปล่อยงาน: พรุ่งนี้ 4 ใบ (${T1.code} ${R1.code} ${L1.code} ${L2.code}) · เมื่อวาน 1 ใบ (${P1.code}) (ฐานข้อมูล)`)
+      : fail(`เตรียมใบรอปล่อยงาน: ${prep.join(" ")}`);
+    const teamOf = (id) => sql(`select coalesce("assignedTeam",'') from "WorkOrder" where id=${id}`);
+
+    /** การ์ดของใบในงานของฉันวันนี้ — ขึ้นจากปุ่ม "รายละเอียด <code>" ไปจนถึงกล่องที่ข้อความขึ้นต้นด้วยรหัสใบ */
+    const queueCard = (page, code) =>
+      page.evaluate((code) => {
+        const btn = [...document.querySelectorAll(`[aria-label="รายละเอียด ${code}"]`)].find((n) => n.getClientRects().length);
+        let el = btn;
+        while (el && !(el.innerText || "").trim().startsWith(code)) el = el.parentElement;
+        if (!el) return null;
+        return {
+          text: el.innerText,
+          labels: [...el.querySelectorAll("[aria-label]")].map((n) => n.getAttribute("aria-label")),
+          border: getComputedStyle(el).borderTopWidth,
+        };
+      }, code);
+    const toQueue = async (sess) => {
+      await sess.page.goto(APP, { waitUntil: "networkidle", timeout: 180000 });
+      await sess.page.locator('[aria-label="ตัวเลขสรุปงานที่รอ"]').locator("visible=true").first().waitFor({ timeout: 30000 });
+      await sess.page.waitForTimeout(1500);
+    };
+    /** จากงานของฉันวันนี้ → หน้าใบงาน → ปุ่มขั้น "รับทราบ ปล่อยงาน" (ปุ่มสุดท้ายในหน้า — ชื่อขั้นบนแถบขั้นตอนอยู่ก่อน) */
+    const openRelease = async (sess, code) => {
+      await sess.page.locator(`[aria-label="รายละเอียด ${code}"]`).locator("visible=true").first().click();
+      await sess.page.waitForTimeout(3500);
+      await sess.vis("รับทราบ ปล่อยงาน").last().click();
+      await sess.page.waitForTimeout(1500);
+    };
+    const lbl = (page, l) => page.locator(`[aria-label="${l}"]`).locator("visible=true");
+
+    // ── 1) นับถอยหลัง: เวลาปิดรับอีก 45 นาที ──
+    const C1 = bkk(45);
+    await setCut(C1);
+    const dl1 = Date.parse(`${today}T${C1}:00.000+07:00`);
+    /** "เหลือ N นาที" ที่ยอมรับได้ ณ ตอนนี้ — จอปัดเศษลงแบบตัวอย่าง คิดจากนาฬิกาจริง (คลาดได้หนึ่งนาทีตอนข้ามนาที) */
+    const leftRe = () => {
+      const n = Math.floor((dl1 - Date.now()) / 60000);
+      return new RegExp(`เหลือ (${n - 1}|${n}|${n + 1}) นาที`);
+    };
+    const s1 = await openAs("S001", 1280);
+    await toQueue(s1);
+    const amberTitle = `ปล่อยงานพรุ่งนี้ก่อน ${C1} น. · ยังไม่ปล่อย `;
+    const amber = s1.page.locator(`[aria-label^="หัวข้อ ${amberTitle}"]`).locator("visible=true").first();
+    const amberText = (await amber.count()) ? await amber.innerText() : "";
+    amberText && leftRe().test(amberText) && amberText.includes(`ถึง ${C1} น. แล้วกดไม่ได้ — ต้องให้แอดมินแก้เป็นงานด่วนทีละใบ`)
+      ? pass(`งานของฉันวันนี้: แถบส้ม "${amberText.split("\n")[0]}" + เหลือ N นาที (ตรงนาฬิกาจริง)`)
+      : fail(`แถบนับถอยหลังส้ม: "${amberText}" · คาด ${leftRe()}`);
+    const t1Card = await queueCard(s1.page, T1.code);
+    t1Card && t1Card.labels.some((l) => l.startsWith(`ต้องปล่อยก่อน ${C1} น. · เหลือ `))
+      ? pass(`การ์ด ${T1.code} มีป้ายส้ม "ต้องปล่อยก่อน ${C1} น. · เหลือ …"`)
+      : fail(`ป้ายบนการ์ด ${T1.code}: ${t1Card ? t1Card.labels.join(" | ") : "ไม่เจอการ์ด"}`);
+    await s1.page.screenshot({ path: shot("6-sup-countdown"), fullPage: true });
+    // เปิดหน้าใบงานแล้วการ์ดในงานของฉันวันนี้ถูกถอดออก (MyQueue ไม่วาดรายการตอนหน้าไม่ได้โฟกัส) — ป้ายที่เหลือบนจอ
+    // จึงเป็นของหน้าใบงานเท่านั้น เช็คว่าการ์ดหายจริงก่อน ไม่งั้นป้ายบนการ์ดจะถูกนับเป็นป้ายของหน้าใบงาน (ผ่านหลอก)
+    const chipSel = `[aria-label^="ต้องปล่อยก่อน ${C1} น. · เหลือ "]`;
+    await s1.page.locator(`[aria-label="รายละเอียด ${T1.code}"]`).locator("visible=true").first().click();
+    await s1.page.waitForTimeout(3500);
+    const cardGone = (await s1.page.locator(`[aria-label="รายละเอียด ${T1.code}"]`).locator("visible=true").count()) === 0;
+    const pageChips = await s1.page.locator(chipSel).locator("visible=true").allInnerTexts();
+    const onStage = (await s1.vis("รับทราบ ปล่อยงาน").count()) > 0;
+    cardGone && onStage && pageChips.length === 1 && leftRe().test(pageChips[0])
+      ? pass(`หน้าใบงาน: ป้ายเวลาปิดรับข้างปุ่มขั้น "${pageChips[0]}"`)
+      : fail(`หน้าใบงาน ป้ายข้างปุ่มขั้น: การ์ดหาย=${cardGone} ปุ่มขั้น=${onStage} ป้าย=${JSON.stringify(pageChips)} · คาด ${leftRe()}`);
+    await s1.vis("รับทราบ ปล่อยงาน").last().click();
+    await s1.page.waitForTimeout(1500);
+    const box1 = s1.page.locator(`[aria-label="กล่องเส้นตาย ปล่อยงานของพรุ่งนี้ได้ก่อน ${C1} น. วันนี้"]`).locator("visible=true").first();
+    const box1Text = (await box1.count()) ? await box1.innerText() : "";
+    box1Text && leftRe().test(box1Text) && box1Text.includes(`ตามเวลาระบบ · ตอนนี้ `) && box1Text.includes(`ถึง ${C1} น. แล้วกดไม่ได้`)
+      ? pass("ฟอร์มปล่อยงาน: กล่องเส้นตาย \"ปล่อยงานของพรุ่งนี้ได้ก่อน … วันนี้\" + เหลือ N นาที + ตามเวลาระบบ")
+      : fail(`กล่องเส้นตายในฟอร์ม: "${box1Text}"`);
+    await s1.page.screenshot({ path: shot("7-release-form") });
+    await s1.vis("รับทราบ ปล่อยงานให้ช่าง").last().click();
+    const toast1 = `ปล่อยงาน ${T1.code} แล้ว — ทีม${teamOf(T1.id)} เห็นในแท็บ “พรุ่งนี้” แล้ว`;
+    const toast1Seen = await s1.vis(toast1).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    await s1.page.waitForTimeout(800);
+    toast1Seen ? pass(`toast: ${toast1}`) : fail(`ไม่เห็น toast หลังปล่อยงาน (คาด "${toast1}")`);
+    (await s1.vis(`${T1.code} อัปเดตสถานะแล้ว`, false).count()) === 0
+      ? pass("ไม่มีกล่อง \"อัปเดตสถานะแล้ว\" ซ้อนกับ toast")
+      : fail("ขึ้นทั้ง toast และกล่อง อัปเดตสถานะแล้ว");
+    st(T1.id) === "IN_PROGRESS" && logCount(T1.id, "DISPATCHED") === 1
+      ? pass(`ปล่อยงาน ${T1.code} ก่อนเวลาปิดรับ → IN_PROGRESS + ประวัติ DISPATCHED (ฐานข้อมูล)`)
+      : fail(`หลังปล่อย ${T1.code}: ${st(T1.id)} · DISPATCHED ${logCount(T1.id, "DISPATCHED")}`);
+
+    // ── 3) กดตอนเวลาเพิ่งผ่าน: ฟอร์มเปิดค้างตอนยังกดได้ แล้วเวลาปิดรับย้ายไปเมื่อนาทีก่อน ──
+    await toQueue(s1);
+    await openRelease(s1, R1.code);
+    const openOk = (await s1.page.locator('[aria-label^="กล่องเส้นตาย ปล่อยงานของพรุ่งนี้ได้ก่อน "]').locator("visible=true").count()) > 0;
+    openOk ? pass(`เปิดฟอร์มปล่อยงาน ${R1.code} ตอนยังกดได้ (มีกล่องเส้นตาย)`) : fail("ฟอร์มที่เปิดตอนยังกดได้ไม่มีกล่องเส้นตาย");
+    await setCut(bkk(-1));
+    const r1Logs = logCount(R1.id, "DISPATCHED");
+    await s1.vis("รับทราบ ปล่อยงานให้ช่าง").last().click();
+    const refused = await s1.page.getByText(/คุณกดเมื่อ \d\d:\d\d น\. — ระบบได้รับหลังปิดรับจึงไม่รับ · โหลดใบใหม่ให้แล้ว ไม่มีอะไรถูกบันทึก/).locator("visible=true").first()
+      .waitFor({ timeout: 10000 }).then(() => true, () => false);
+    refused ? pass("ถูกปฏิเสธ: ฟอร์มบอก \"คุณกดเมื่อ … ระบบได้รับหลังปิดรับจึงไม่รับ · … ไม่มีอะไรถูกบันทึก\"") : fail("ไม่เห็นบรรทัด คุณกดเมื่อ … ในฟอร์ม");
+    (await s1.vis("ปล่อยงานไม่ได้ — เลยเวลาปิดรับแล้ว").count()) > 0 && (await lbl(s1.page, "ขอแอดมินแก้เป็นงานด่วน").count()) > 0
+      ? pass("ฟอร์มไม่ปิด — กลายเป็นหน้าล็อก (กล่องแดง + ปุ่มขอแอดมินแก้เป็นงานด่วน)")
+      : fail("ถูกปฏิเสธแล้วฟอร์มปิด หรือไม่กลายเป็นหน้าล็อก");
+    st(R1.id) === "ASSIGNED" && logCount(R1.id, "DISPATCHED") === r1Logs
+      ? pass(`${R1.code} ยัง ASSIGNED ไม่มีประวัติ DISPATCHED เพิ่ม (ฐานข้อมูล)`)
+      : fail(`หลังถูกปฏิเสธ ${R1.code}: ${st(R1.id)} · DISPATCHED ${logCount(R1.id, "DISPATCHED")}`);
+    await s1.page.screenshot({ path: shot("8-refused") });
+    await lbl(s1.page, "กลับ").last().click();
+    await s1.page.waitForTimeout(800);
+
+    // ── 2) ล็อกแล้ว (เวลาปิดรับเมื่อนาทีก่อน) ──
+    await toQueue(s1);
+    const inbox = await call(S, "GET", "/work-orders?status=INBOX");
+    const lockedN = (inbox.rows || []).filter((r) => r.release && r.release.locked && !r.release.past).length;
+    const pastN = (inbox.rows || []).filter((r) => r.release && r.release.locked && r.release.past).length;
+    (await lbl(s1.page, `หัวข้อ เลยเวลาปล่อยงาน ${lockedN} ใบ`).count()) > 0 && lockedN >= 3
+      ? pass(`แถบ "เลยเวลาปล่อยงาน ${lockedN} ใบ" — ตรงกับจำนวนใบที่เซิร์ฟเวอร์บอกว่าล็อก`)
+      : fail(`แถบเลยเวลาปล่อยงาน: คาด ${lockedN} ใบ · เห็น ${await s1.page.locator('[aria-label^="หัวข้อ เลยเวลาปล่อยงาน"]').allInnerTexts()}`);
+    (await lbl(s1.page, `หัวข้อ เลยวันนัดแล้ว ${pastN} ใบ`).count()) > 0 && pastN >= 1
+      ? pass(`แถบ "เลยวันนัดแล้ว ${pastN} ใบ" (รวม ${P1.code})`)
+      : fail(`แถบเลยวันนัดแล้ว: คาด ${pastN} ใบ`);
+    const l1Card = await queueCard(s1.page, L1.code);
+    l1Card && l1Card.labels.includes("เลยเวลาปล่อยงาน · ขอแอดมินแก้เป็นงานด่วน หรือส่งกลับ") && l1Card.border === "2px"
+      ? pass(`การ์ด ${L1.code}: ป้ายแดง "เลยเวลาปล่อยงาน · ขอแอดมินแก้เป็นงานด่วน หรือส่งกลับ" + ขอบแดงหนา`)
+      : fail(`การ์ด ${L1.code}: ${l1Card ? `${l1Card.labels.join(" | ")} · ขอบ ${l1Card.border}` : "ไม่เจอ"}`);
+    await s1.page.screenshot({ path: shot("9-sup-locked"), fullPage: true });
+
+    await openRelease(s1, L1.code);
+    const teamDis = await lbl(s1.page, "ทีมที่จะรับงาน").last().getAttribute("aria-disabled").catch(() => null);
+    (await s1.vis("ปล่อยงานไม่ได้ — เลยเวลาปิดรับแล้ว").count()) > 0 &&
+    teamDis === "true" &&
+    (await s1.vis("บอกแอดมินสั้น ๆ (ขอแก้เป็นงานด่วน: ไม่บังคับ · ส่งกลับ: ต้องใส่เหตุผล)").count()) > 0 &&
+    (await lbl(s1.page, "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่").count()) > 0 &&
+    (await lbl(s1.page, "รับทราบ ปล่อยงานให้ช่าง").count()) === 0 &&
+    (await s1.vis("รับทราบ ปล่อยงานให้ช่าง").count()) === 0
+      ? pass("ฟอร์มตอนล็อก: กล่องแดง · ทีมเลือกไม่ได้ · ช่องบอกแอดมิน · ปุ่มขอแอดมิน/ส่งกลับ · ไม่มีปุ่มปล่อยงาน")
+      : fail(`ฟอร์มตอนล็อกไม่ครบ (ทีม aria-disabled=${teamDis})`);
+    const askNote = "ลูกค้ารอพรุ่งนี้เช้า (เทสต์)";
+    await lbl(s1.page, "บอกแอดมินสั้น ๆ (ขอแก้เป็นงานด่วน: ไม่บังคับ · ส่งกลับ: ต้องใส่เหตุผล)").last().fill(askNote);
+    await lbl(s1.page, "ขอแอดมินแก้เป็นงานด่วน").last().click();
+    const pending = await s1.vis("ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน").first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    await s1.page.waitForTimeout(600);
+    pending &&
+    (await s1.vis(`“${askNote}” · ขึ้นที่แอดมินในหัวข้อ “เลยเวลาปล่อยงาน” แล้ว`, false).count()) > 0 &&
+    (await lbl(s1.page, "ยกเลิกคำขอ").count()) > 0 &&
+    (await lbl(s1.page, "กลับไปงานของฉัน").count()) > 0 &&
+    (await lbl(s1.page, "บอกแอดมินสั้น ๆ (ขอแก้เป็นงานด่วน: ไม่บังคับ · ส่งกลับ: ต้องใส่เหตุผล)").count()) === 0
+      ? pass("ขอแอดมินแล้วฟอร์มไม่ปิด: กล่องม่วง ส่งคำขอแล้ว + ส่งเมื่อ … “ข้อความ” · ปุ่มยกเลิกคำขอ/กลับไปงานของฉัน · ช่องพิมพ์หายไป")
+      : fail("หลังขอแอดมิน ฟอร์มไม่เป็นกล่องม่วงตามตัวอย่าง");
+    lastLog(L1.id) === `URGENT_REQUESTED|${askNote}` && st(L1.id) === "ASSIGNED"
+      ? pass(`ประวัติ URGENT_REQUESTED พร้อมข้อความ · ${L1.code} ยัง ASSIGNED (ฐานข้อมูล)`)
+      : fail(`ประวัติหลังขอแอดมิน: ${lastLog(L1.id)} · ${st(L1.id)}`);
+    await s1.page.screenshot({ path: shot("10-ask-pending") });
+    // แถบขั้นตอนมีแต่ในหน้าใบงาน — นับรวมตัวที่ซ่อนอยู่ (ไม่ใช่แค่ที่มองเห็น): ถ้าปุ่มซ้อน "งานของฉัน" หน้าใหม่ทับแทนการย้อนกลับ
+    // หน้าใบงานยังค้างอยู่ใต้กอง (ซ่อน) การ์ดก็ขึ้นครบ ข้อข้างล่างผ่านทั้งที่กองหน้าโตขึ้นทุกรอบ — จอกว้างไม่มีปุ่ม "ใบงาน ›" ให้เห็นด้วย
+    const stepsBefore = await s1.page.locator('[aria-label="ขั้นตอนงาน"]').count();
+    await lbl(s1.page, "กลับไปงานของฉัน").last().click();
+    await s1.page.waitForTimeout(3500);
+    const l1Pending = await queueCard(s1.page, L1.code);
+    l1Pending && l1Pending.labels.includes("เลยเวลาปล่อยงาน · ขอแอดมินแล้ว รอแก้เป็นงานด่วน")
+      ? pass(`กลับไปงานของฉัน → การ์ด ${L1.code} ป้ายม่วง "เลยเวลาปล่อยงาน · ขอแอดมินแล้ว รอแก้เป็นงานด่วน"`)
+      : fail(`หลังกลับไปงานของฉัน การ์ด ${L1.code}: ${l1Pending ? l1Pending.labels.join(" | ") : "ไม่เจอ (ไม่ได้กลับมาหน้างานของฉัน?)"}`);
+    const stepsAfter = await s1.page.locator('[aria-label="ขั้นตอนงาน"]').count();
+    stepsBefore > 0 && stepsAfter === 0
+      ? pass("กลับไปงานของฉัน = ย้อนกลับหน้าเดิม หน้าใบงานไม่ค้างอยู่ใต้กอง (ไม่ซ้อนงานของฉันหน้าใหม่)")
+      : fail(`กลับไปงานของฉันแล้วหน้าใบงานยังค้างในกอง: แถบขั้นตอนก่อนกด ${stepsBefore} · หลังกด ${stepsAfter}`);
+
+    await openRelease(s1, L1.code);
+    (await s1.vis("ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน").count()) > 0
+      ? pass("เปิดฟอร์มอีกครั้ง: ยังเป็นสถานะรอแอดมิน (มาจากประวัติในเซิร์ฟเวอร์)")
+      : fail("เปิดฟอร์มอีกครั้งแล้วไม่เห็นสถานะรอแอดมิน");
+    await lbl(s1.page, "ยกเลิกคำขอ").last().click();
+    const backToAsk = await lbl(s1.page, "ขอแอดมินแก้เป็นงานด่วน").last().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    lastLog(L1.id) === "URGENT_REQUEST_CANCELLED|" && backToAsk
+      ? pass("ยกเลิกคำขอ → ประวัติ URGENT_REQUEST_CANCELLED · ฟอร์มกลับมามีปุ่มขอแอดมิน (ฐานข้อมูล)")
+      : fail(`ยกเลิกคำขอ: ${lastLog(L1.id)} · ปุ่มขอแอดมินกลับมา=${backToAsk}`);
+    await lbl(s1.page, "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่").last().click();
+    await s1.page.waitForTimeout(800);
+    (await s1.vis("ส่งกลับต้องบอกเหตุผล เช่น ทีมไม่ว่างวันนั้น · ร้านขอเลื่อน").count()) > 0 && st(L1.id) === "ASSIGNED"
+      ? pass("ส่งกลับไม่ใส่เหตุผล → ฟอร์มบอก \"ส่งกลับต้องบอกเหตุผล …\" ไม่ส่งอะไร (ฐานข้อมูลยัง ASSIGNED)")
+      : fail(`ส่งกลับไม่ใส่เหตุผล: ${st(L1.id)}`);
+    const why = "ทีมไม่ว่างวันนั้น (เทสต์)";
+    await lbl(s1.page, "บอกแอดมินสั้น ๆ (ขอแก้เป็นงานด่วน: ไม่บังคับ · ส่งกลับ: ต้องใส่เหตุผล)").last().fill(why);
+    await lbl(s1.page, "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่").last().click();
+    const toast36 = `ส่ง ${L1.code} กลับให้แอดมินนัดใหม่แล้ว — ใบออกจากรายการของคุณ แอดมินเห็นในหัวข้อ “เลยเวลาปล่อยงาน”`;
+    const t36 = await s1.vis(toast36).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    await s1.page.waitForTimeout(800);
+    t36 ? pass(`toast: ${toast36}`) : fail(`ไม่เห็น toast หลังส่งกลับ (คาด "${toast36}")`);
+    st(L1.id) === "AWAITING_CONFIRM" && lastLog(L1.id).startsWith("NEW_DATE_DECLINED|") && lastLog(L1.id).includes(why)
+      ? pass(`ส่งกลับ → ${L1.code} AWAITING_CONFIRM + ประวัติ NEW_DATE_DECLINED พร้อมเหตุผล (ฐานข้อมูล)`)
+      : fail(`หลังส่งกลับ: ${st(L1.id)} · ${lastLog(L1.id)}`);
+
+    // ใบวันนัดผ่านแล้ว — กล่องแดงกับปุ่มกลับไปงานของฉันเท่านั้น (แอดมินต้องเลื่อนวันนัด)
+    await toQueue(s1);
+    await openRelease(s1, P1.code);
+    (await s1.vis("ปล่อยงานไม่ได้ — วันนัดผ่านไปแล้ว").count()) > 0 &&
+    (await lbl(s1.page, "กลับไปงานของฉัน").count()) > 0 &&
+    (await lbl(s1.page, "ขอแอดมินแก้เป็นงานด่วน").count()) === 0 &&
+    (await lbl(s1.page, "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่").count()) === 0 &&
+    (await lbl(s1.page, "บอกแอดมินสั้น ๆ (ขอแก้เป็นงานด่วน: ไม่บังคับ · ส่งกลับ: ต้องใส่เหตุผล)").count()) === 0
+      ? pass(`ใบวันนัดผ่านแล้ว (${P1.code}): กล่องแดง "วันนัดผ่านไปแล้ว" + "กลับไปงานของฉัน" อย่างเดียว ไม่มีขอแอดมิน/ส่งกลับ/ช่องพิมพ์`)
+      : fail("ฟอร์มใบวันนัดผ่านแล้วมีปุ่มเกิน หรือไม่มีกล่องแดง");
+    await s1.page.screenshot({ path: shot("11-past") });
+    await s1.ctx.close();
+
+    // มือถือ 420: หน้าล็อกปุ่มเรียงลงล่างเต็มกว้าง ไม่ล้นจอ
+    const sp = await openAs("S001", 420, 900);
+    await toQueue(sp);
+    await openRelease(sp, L2.code);
+    const lay = await sp.page.evaluate(() => {
+      // ปุ่มทั้งสามอยู่ในแถวเดียวกัน (LockActions) — หา "กลับ" ในแถวนั้น ไม่ใช่ปุ่มกลับของหัวหน้าจอ
+      const dec = [...document.querySelectorAll('[aria-label="ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่"]')].find((x) => x.getClientRects().length);
+      const row = dec ? dec.parentElement : null;
+      const box = (l) => {
+        const n = row ? row.querySelector(`[aria-label="${l}"]`) : null;
+        return n ? n.getBoundingClientRect() : null;
+      };
+      return {
+        ask: box("ขอแอดมินแก้เป็นงานด่วน"),
+        decline: box("ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่"),
+        back: box("กลับ"),
+        scroll: document.scrollingElement.scrollWidth,
+      };
+    });
+    lay.ask && lay.decline && lay.back &&
+    lay.ask.top < lay.decline.top && lay.decline.top < lay.back.top &&
+    Math.abs(lay.ask.left - lay.decline.left) < 2 && lay.ask.right <= 420 && lay.scroll <= 420
+      ? pass("มือถือ 420: ปุ่มขอแอดมิน · ส่งกลับ · กลับ เรียงลงล่างแนวเดียวกัน ไม่ล้นจอ")
+      : fail(`มือถือ 420 หน้าล็อก: ${JSON.stringify(lay)}`);
+    await sp.page.screenshot({ path: shot("12-phone-locked") });
+    await sp.ctx.close();
+
+    // ── 6) กล่องงาน: แถบนับข้ามแท็บ ──
+    const s6 = await openAs("S001", 1300, 1100);
+    await s6.vis("กล่องงานของฉัน").first().click();
+    await s6.page.waitForTimeout(3500);
+    await s6.page.locator('[aria-label^="แท็บ งานแจ้งซ่อม"]').locator("visible=true").first().click();
+    await s6.page.waitForTimeout(1500);
+    const inbox6 = await call(S, "GET", "/work-orders?status=INBOX");
+    const locked6 = (inbox6.rows || []).filter((r) => r.release && r.release.locked && !r.release.past).length;
+    const rowL2 = s6.page.locator(`[aria-label="เลยเวลาปล่อยงาน ${locked6} ใบ ${L2.code}"]`).locator("visible=true");
+    (await rowL2.count()) > 0
+      ? pass(`กล่องงาน แท็บงานแจ้งซ่อม: แถบ "เลยเวลาปล่อยงาน ${locked6} ใบ" มีแถว ${L2.code} (ใบอยู่แท็บจ่ายงาน — แถบนับทุกแท็บ)`)
+      : fail(`แถบในกล่องงาน: ${await s6.page.locator('[aria-label^="หัวข้อ เลยเวลาปล่อยงาน"]').allInnerTexts()}`);
+    await s6.page.screenshot({ path: shot("13-inbox-banner") });
+    await s6.ctx.close();
+
+    // หัวหน้าภาคที่กล่องว่าง แต่มีงานพรุ่งนี้รอแอดมินคอนเฟิร์มลูกค้า — แถบยังต้องขึ้นเหนือ "ไม่มีงานค้างรอคุณ"
+    const zone = sql(`select coalesce(zone,'') from "Branch" where code='C0006'`);
+    sql(`insert into "Branch"(name,code,region,zone) values ('สาขาทดสอบเวลาปิดรับ','${ZB}','${ZR}',nullif('${zone}',''))`);
+    sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword",region) values ('${ZS}','หัวหน้าภาคทดสอบกล่องว่าง','SUPERVISOR','${hash}',false,'${ZR}')`);
+    const zTok = await fx.login(ZS);
+    const zw = await call(A, "POST", "/work-orders", {
+      branchCode: ZB, jobType: "CM", priority: "NORMAL", contactName: "คุณทดสอบ", contactPhone: "081-234-5678",
+      machines: [{ code: "W77", model: "Oasis", symptom: "ทดสอบกล่องว่าง (สร้างโดยเทสต์)" }],
+    });
+    zOrder = zw.orders ? zw.orders[0].id : zw.id;
+    await call(zTok, "POST", `/work-orders/${zOrder}/parts`, { needsParts: false });
+    const zd = await call(A, "GET", `/work-orders/${zOrder}`);
+    await call(zTok, "POST", `/work-orders/${zOrder}/assign`, { team: zd.suggestedTeam, scheduledAt: tomorrow });
+    const zRow = sql(`select status||'|'||to_char("scheduledAt",'YYYY-MM-DD') from "WorkOrder" where id=${zOrder}`);
+    zRow === `AWAITING_CONFIRM|${tomorrow}` ? pass(`เตรียมใบพรุ่งนี้รอแอดมินคอนเฟิร์มในภาคชั่วคราว (ฐานข้อมูล)`) : fail(`เตรียมใบกล่องว่าง: ${zRow}`);
+    const z = await openAs(ZS, 1280);
+    await z.page.waitForTimeout(2000);
+    const nr = z.page.locator('[aria-label="หัวข้อ งานพรุ่งนี้ยังไม่ถึงขั้นปล่อยงาน 1 ใบ"]').locator("visible=true").first();
+    const nrText = (await nr.count()) ? await nr.innerText() : "";
+    const ys = await z.page.evaluate(() => {
+      const top = (sel, text) =>
+        [...document.querySelectorAll(sel)].filter((n) => n.getClientRects().length && (!text || n.innerText.trim() === text)).map((n) => n.getBoundingClientRect().top)[0] ?? null;
+      return { banner: top('[aria-label="หัวข้อ งานพรุ่งนี้ยังไม่ถึงขั้นปล่อยงาน 1 ใบ"]'), empty: top("div", "ไม่มีงานค้างรอคุณ") };
+    });
+    nrText.includes("รอแอดมินคอนเฟิร์มลูกค้า 1 · ของยังโอนไม่ถึง 0") && ys.banner !== null && ys.empty !== null && ys.banner < ys.empty
+      ? pass("กล่องว่าง: แถบ \"งานพรุ่งนี้ยังไม่ถึงขั้นปล่อยงาน 1 ใบ\" (รอแอดมินคอนเฟิร์มลูกค้า 1 · ของยังโอนไม่ถึง 0) อยู่เหนือ \"ไม่มีงานค้างรอคุณ\"")
+      : fail(`กล่องว่าง: "${nrText}" · ตำแหน่ง ${JSON.stringify(ys)}`);
+    await z.page.screenshot({ path: shot("14-empty-inbox") });
+    await z.ctx.close();
+
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
     // ลบแถวเวลาปิดรับที่เพิ่ม (ทั้งทาง SQL และที่แอดมินกดในจอ) แล้วให้เซิร์ฟเวอร์อ่านสด — ค่าที่จำไว้ 30 วิจะได้ไม่ค้างค่าทดสอบ
+    // คืนเวลาเริ่มใช้กฎก่อน แล้วค่อยให้เซิร์ฟเวอร์อ่านสด (readCutoff อ่าน since จากแถวแรก)
+    if (sinceSaved) {
+      try {
+        sql(`update "AppSetting" set "createdAt"='${sinceSaved.at}'::timestamp where id=${sinceSaved.id}; delete from "AppSetting" where key='${SINCE_MARK}'`);
+      } catch (e) {
+        fail(`คืนเวลาเริ่มใช้กฎไม่สำเร็จ: ${e}`);
+      }
+    }
     if (MAXSET !== null) {
       sql(`delete from "AppSetting" where key='dispatchCutoff' and id > ${MAXSET}; delete from "AppSetting" where key='${MARK}'`);
       await refresh().catch(() => {});
     }
     await fx.cleanup().catch((e) => fail(`ลบข้อมูลทดสอบไม่สำเร็จ: ${e}`));
+    // ใบ/สาขา/หัวหน้าภาคชั่วคราวของกล่องว่าง — ใบลบผ่าน API (ประวัติไปด้วย) แล้วค่อยลบเครื่อง สาขา และบัญชี
+    try {
+      if (zOrder) await call(A, "DELETE", `/work-orders/${zOrder}`);
+      sql(`delete from "Machine" where "branchId" in (select id from "Branch" where code='${ZB}'); delete from "Branch" where code='${ZB}'; delete from "User" where "employeeCode"='${ZS}'`);
+    } catch (e) {
+      fail(`ลบสาขา/หัวหน้าภาคชั่วคราวไม่สำเร็จ: ${e}`);
+    }
     sql(`delete from "User" where "employeeCode"='${PA}'`);
     await browser.close();
   }

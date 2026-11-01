@@ -123,7 +123,11 @@ export default function Dropdown({
           onPress={() => !disabled && setOpen((v) => !v)}
           activeOpacity={0.7}
           accessibilityLabel={accessibilityLabel}
-          accessibilityState={{ expanded: open }}
+          accessibilityState={{ expanded: open, disabled: !!disabled }}
+          // บอกโปรแกรมอ่านจอ (และเทสต์) ว่ากดไม่ได้ — สีจางอย่างเดียวคนตาไม่ดีแยกไม่ออก
+          // ต้องส่ง aria-disabled ตรง ๆ ด้วย: react-native-web 0.21 ทิ้ง accessibilityState บนเว็บเงียบ ๆ
+          // (ใส่ disabled ให้ TouchableOpacity ก็ได้ แต่จะเปลี่ยนเป็น pointerEvents box-none ทุกจอที่ใช้ Dropdown)
+          aria-disabled={disabled ? true : undefined}
         >
           <Text style={[styles.value, !selected && styles.placeholder]} numberOfLines={1}>
             {selected ? selected.label : placeholder}

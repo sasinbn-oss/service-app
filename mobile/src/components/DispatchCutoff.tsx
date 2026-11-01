@@ -29,7 +29,9 @@ import {
   CutoffBanner,
   cutoffChangeLocksNow,
   dayFull,
+  deadlineBox,
   DispatchWatch,
+  FormWarning,
   hhmmOf,
   NO_ASK_NOTE,
   preReleaseView,
@@ -37,6 +39,9 @@ import {
   ReleaseRow,
   releaseView,
   timeText,
+  UrgentInfo,
+  urgentNoteLines,
+  useServerClock,
   useServerNowFn,
   whenText,
 } from "../utils/dispatchCutoff";
@@ -97,6 +102,81 @@ export function ReleaseChip({
     <View style={[styles.chip, { backgroundColor: t.bg, borderColor: t.line }, style]} accessibilityLabel={view.text}>
       <Ionicons name={t.icon} size={13} color={t.fg} />
       <Text style={[styles.chipText, { color: t.fg }]}>{view.text}</Text>
+    </View>
+  );
+}
+
+/**
+ * ป้ายที่เดินนาฬิกาเอง — สำหรับที่ที่หน้าจอทั้งหน้าไม่ควรวาดใหม่ทุก 30 วิเพื่อป้ายเดียว
+ * (หน้าใบงานยาวหลายพันบรรทัด · แถวรายการเป็นร้อยแถว) ป้ายทุกตัวใช้ offset เดียวกันจาก serverNow ชุดเดียวกัน
+ * จึงพลิกเป็นล็อกพร้อมกันตอนถึงเวลา · วาดเฉพาะใบที่มี release (หรือขอป้ายก่อนถึงขั้น) ไม่ตั้งนาฬิกาให้แถวที่ไม่มีป้าย
+ */
+type LiveChipProps = {
+  row: ChipRow;
+  serverNow?: string | null;
+  cutoff?: Cutoff | null;
+  preRelease?: boolean;
+  style?: StyleProp<ViewStyle>;
+};
+export function LiveReleaseChip(props: LiveChipProps) {
+  const { user } = useAuth();
+  // ตัดคนที่ไม่เห็นป้ายก่อนตั้งนาฬิกา — รายการของช่างมีใบขั้นปล่อยงานได้ ไม่ต้องมีตัวจับเวลาต่อแถวที่ไม่วาดอะไร
+  if (user?.role !== "ADMIN" && user?.role !== "SUPERVISOR") return null;
+  return <LiveChipInner {...props} />;
+}
+function LiveChipInner({ row, serverNow, cutoff, preRelease, style }: LiveChipProps) {
+  const now = useServerClock(serverNow, cutoff?.time);
+  return <ReleaseChip row={row} now={now} cutoff={cutoff} preRelease={preRelease} style={style} />;
+}
+
+/**
+ * กล่องเส้นตายในฟอร์มปล่อยงานตอนยังไม่ล็อก (W-11a/b/c) — ตัวเลขใหญ่ "เหลือ …" ให้เห็นจากระยะแขน
+ * บอก "ตามเวลาระบบ · ตอนนี้ …" ด้วย: นาฬิกามือถือช้าไม่กี่นาทีคนจะเถียงว่ายังไม่ถึง 16:00 ระบบใช้เวลาของเซิร์ฟเวอร์ (ข้อ 6 · 12)
+ */
+export function ReleaseDeadlineBox({ order, now, cutoff }: { order: ReleaseRow; now: number; cutoff?: Cutoff | null }) {
+  const box = deadlineBox(releaseView(order, now, cutoff), now);
+  if (!box) return null;
+  const t = CHIP_TONE[box.tone];
+  return (
+    <View style={[styles.deadline, { backgroundColor: t.bg, borderColor: t.line }]} accessibilityLabel={`กล่องเส้นตาย ${box.title}`}>
+      <Ionicons name={t.icon} size={22} color={t.fg} style={{ marginTop: 2 }} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.deadlineTitle, { color: t.fg }]}>{box.title}</Text>
+        {box.big ? <Text style={[styles.deadlineBig, { color: t.fg }]}>{box.big}</Text> : null}
+        <Text style={styles.deadlineSmall}>{box.small}</Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * กล่องเขียว "แอดมินแก้เป็นงานด่วน" ในฟอร์มปล่อยงาน (แทนกล่องลูกค้าคอนเฟิร์มแล้ว — ตัวอย่างขึ้นกล่องนี้ก่อนเสมอ)
+ * หัวหน้าภาคต้องเห็นว่าใครปลดให้ ทำไม และปลดให้วันนัดไหน ก่อนกดปล่อยงานที่เลยเวลาปิดรับไปแล้ว
+ */
+export function UrgentNoteBox({ info, day, time }: { info: UrgentInfo; day: string; time?: string | null }) {
+  const l = urgentNoteLines(info, day, time);
+  return (
+    <View style={styles.urgentNote} accessibilityLabel={l.title}>
+      <Ionicons name="lock-open-outline" size={16} color={colors.successInk} style={{ marginTop: 3 }} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.urgentNoteTitle}>{l.title}</Text>
+        <Text style={styles.urgentNoteBy}>{l.by}</Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * บรรทัดเตือนใต้ช่องวันที่ (dateFormWarning) — เตือนอย่างเดียว ไม่กันบันทึก (ข้อ 4)
+ * เทา = แค่บอกเส้นตาย · ส้ม = เหลือไม่ถึงชั่วโมง · แดง = เลยแล้ว ใบจะถึงขั้นปล่อยงานแบบล็อก
+ */
+export function FormWarningLine({ warning }: { warning: FormWarning }) {
+  if (!warning) return null;
+  const t = warning.tone === "red" ? CHIP_TONE.red : warning.tone === "amber" ? CHIP_TONE.amber : CHIP_TONE.later;
+  return (
+    <View style={[styles.formWarn, { backgroundColor: t.bg, borderColor: t.line }]} accessibilityLabel={warning.text}>
+      <Ionicons name={t.icon} size={15} color={t.fg} style={{ marginTop: 2 }} />
+      <Text style={[styles.formWarnText, { color: warning.tone === "grey" ? colors.body : t.fg }]}>{warning.text}</Text>
     </View>
   );
 }
@@ -577,6 +657,44 @@ const styles = StyleSheet.create({
   bannerCode: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.text },
   bannerLine: { flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 18, color: colors.textMuted },
   bannerRight: { fontSize: 12, lineHeight: 18, fontWeight: "700", fontVariant: ["tabular-nums"] },
+
+  deadline: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    borderWidth: 1.5,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  deadlineTitle: { fontSize: 13.5, lineHeight: 20, fontWeight: "700" },
+  deadlineBig: { fontSize: 24, lineHeight: 32, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  deadlineSmall: { fontSize: 12, lineHeight: 17, color: colors.body },
+
+  urgentNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: colors.successSoft,
+    borderColor: colors.successLine,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  urgentNoteTitle: { fontSize: 13.5, lineHeight: 20, fontWeight: "700", color: colors.successInk },
+  urgentNoteBy: { fontSize: 12, lineHeight: 17, color: colors.body },
+
+  formWarn: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  formWarnText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19, fontWeight: "600" },
 
   lock: {
     flexDirection: "row",
