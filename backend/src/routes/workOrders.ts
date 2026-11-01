@@ -98,7 +98,7 @@ import {
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
 // ขั้นปล่อยงานย้ายไปอยู่กับกฎเวลาปิดรับ — ป้าย "คอนเฟิร์มวันใหม่" กับการล็อกต้องนับขั้นชุดเดียวกันเสมอ
-import { RELEASE_STAGES } from "../utils/dispatchCutoff";
+import { RELEASE_STAGES, addDays, dayOf, deadlineOf, readCutoff, releaseState } from "../utils/dispatchCutoff";
 import {
   buildObjectKey,
   deleteObject,
@@ -1091,6 +1091,40 @@ const NON_STAGE_ACTIONS = [
   "APPOINTMENT_MOVED",
   // ไม่ส่งเคลมชิ้นที่อยู่ในประกัน (เคลมก้อน 5) — บันทึกคู่กับการปิดงาน ตัวปิดงานคือการเดินขั้น ไม่ใช่แถวนี้
   "CLAIM_SKIPPED",
+  // เวลาปิดรับปล่อยงาน (ต.ค. 69) — แอดมินแก้เป็นงานด่วน / หัวหน้าภาคขอ·ยกเลิกคำขอ ใบอยู่ขั้นเดิม "ค้างขั้นนี้มา N วัน" ไม่เริ่มใหม่
+  // (ไม่อยู่ใน DATE_SETTLE_ACTIONS ด้วย — แก้เป็นงานด่วนไม่ได้แปลว่าหัวหน้าภาครับทราบวันใหม่แล้ว ป้าย "คอนเฟิร์มวันใหม่" ต้องอยู่)
+  "URGENT_RELEASE",
+  "URGENT_REQUESTED",
+  "URGENT_REQUEST_CANCELLED",
+];
+
+/**
+ * ประวัติที่บอกว่าใบ "มาถึง" ขั้นปล่อยงานเมื่อไร ด้วยทางไหน (ข้อความ "ใบนี้มาถึงคุณหลังเวลาปิดรับแล้ว (…)")
+ * = ทุกประวัติที่เดินขั้น บวกแอดมินเลื่อนวันนัด (ใบอยู่ขั้นเดิมแต่วันใหม่ = เส้นตายใหม่ มาถึงใหม่ในความหมายนี้)
+ * สร้างจาก NON_STAGE_ACTIONS ตัวจริงเสมอ ไม่คัดลอกรายการ — ใครเพิ่มประวัติที่ไม่เดินขั้นทีหลัง (เช่น แก้ยี่ห้อเครื่อง)
+ * จะไม่กลายเป็น "ทางที่ใบมาถึง" แล้วเลื่อนเวลา "ล็อกตั้งแต่" ไปผิด ๆ
+ */
+const RELEASE_ARRIVAL_SKIP = NON_STAGE_ACTIONS.filter((a) => a !== "APPOINTMENT_MOVED");
+
+/**
+ * คำขอ "ขอแอดมินแก้เป็นงานด่วน" ยังรออยู่ไหม — ดูประวัติล่าสุดในชุดนี้ของใบ: เป็น URGENT_REQUESTED = ยังรอ
+ * ไม่เก็บเป็นสถานะแยก (เจ้าของงานตอบข้อ 9 ให้คำขอจบเองได้): แอดมินแก้เป็นงานด่วน · เลื่อนวัน · คอนเฟิร์มใหม่ ·
+ * หัวหน้าภาคปล่อยงาน/ส่งกลับ · ย้อนขั้น · ยกเลิก · เปิดใหม่ ทุกอย่างที่ทำให้คำขอไม่มีความหมายแล้วเขียนประวัติอยู่แล้ว
+ * แถวเหล่านั้นจึงปิดคำขอเองโดยไม่ต้องมีใครกดตอบ (ถ้าเก็บเป็นธง ทุกทางข้างบนต้องจำล้างธง — ลืมทางเดียวคำขอค้างตลอดไป)
+ */
+const URGENT_ASK_SETTLE = [
+  "URGENT_RELEASE",
+  "URGENT_REQUESTED",
+  "URGENT_REQUEST_CANCELLED",
+  "DISPATCHED",
+  "NEW_DATE_DECLINED",
+  "APPOINTMENT_MOVED",
+  "APPOINTMENT_RECALLED",
+  "RESCHEDULED",
+  "CONFIRMED",
+  "ROLLED_BACK",
+  "CANCELLED",
+  "REOPENED",
 ];
 
 /**
@@ -1480,6 +1514,35 @@ async function writeLog(
     },
   });
   // ใบขยับขั้น = ชุด "ไม่มีคนรับ" อาจเปลี่ยน — ทิ้งผลที่จำไว้ ให้กล่องงานแอดมินไม่ค้างของเก่า
+  orphanCache = null;
+}
+
+/**
+ * ประวัติสองแถวของการกดครั้งเดียว — แถวหลัก (คอนเฟิร์ม/เลื่อนวัน) แล้ว "แอดมินแก้เป็นงานด่วน" ที่ติ๊กมาในฟอร์มเดียวกัน
+ * ใส่เวลาเองให้ห่างกัน 1 ms: สองแถวที่เขียนติดกันในทรานแซกชันเดียวได้เวลาเดียวกันได้ แล้วทามไลน์/"ประวัติล่าสุด"
+ * เรียงสลับเป็นงานด่วนก่อนคอนเฟิร์ม (แบบเดียวกับ /parts ที่จ่ายงานพร้อมระบุอะไหล่)
+ */
+async function writeLogPair(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  workOrderId: number,
+  main: { userId: number | undefined; action: string; status: string; note?: string | null },
+  urgent: { action: string; note: string; meta: Prisma.InputJsonValue }
+) {
+  const at = Date.now();
+  await tx.workOrderLog.createMany({
+    data: [
+      { workOrderId, userId: main.userId ?? null, action: main.action, status: main.status, note: main.note ?? null, createdAt: new Date(at) },
+      {
+        workOrderId,
+        userId: main.userId ?? null,
+        action: urgent.action,
+        status: main.status,
+        note: urgent.note,
+        meta: urgent.meta,
+        createdAt: new Date(at + 1),
+      },
+    ],
+  });
   orphanCache = null;
 }
 
@@ -3764,6 +3827,7 @@ async function guardStage(
   expected: string | readonly string[]
 ): Promise<{
   id: number;
+  code: string;
   status: string;
   assignedToId: number | null;
   assignedTeam: string | null;
@@ -3771,6 +3835,8 @@ async function guardStage(
   scheduledTime: string | null;
   appointmentStatus: string | null;
   outageId: number | null;
+  isTest: boolean;
+  urgentReleaseFor: Date | null;
 } | null> {
   const role = req.auth!.role;
   // ขอบเขตหัวหน้าภาคอ่านพร้อมใบงาน ไม่ต่อคิวกัน — ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ (ต.ค. 69)
@@ -3787,6 +3853,9 @@ async function guardStage(
         scheduledTime: true,
         appointmentStatus: true,
         outageId: true,
+        // เวลาปิดรับปล่อยงาน: ใบทดสอบไม่ติดกฎ (ข้อ 15) · วันที่แอดมินแก้เป็นงานด่วนให้ — ปุ่มปล่อยงานตัดสินจากสองช่องนี้
+        isTest: true,
+        urgentReleaseFor: true,
         jobType: true,
         branch: { select: { region: true, zone: true, pmTeam: true } },
       },
@@ -3823,6 +3892,7 @@ async function guardStage(
 
   return {
     id: wo.id,
+    code: wo.code,
     status: wo.status,
     assignedToId: wo.assignedToId,
     assignedTeam: wo.assignedTeam,
@@ -3832,6 +3902,8 @@ async function guardStage(
     // เบิกเสร็จแล้วไปไหน — ยังไม่คอนเฟิร์มไปคอนเฟิร์มลูกค้า · คอนเฟิร์มแล้วไปปล่อยงาน · ยังไม่ได้นัดไปนัดวัน (afterIssue)
     appointmentStatus: wo.appointmentStatus,
     outageId: wo.outageId,
+    isTest: wo.isTest,
+    urgentReleaseFor: wo.urgentReleaseFor,
   };
 }
 
@@ -3849,13 +3921,15 @@ async function guardStage(
 type StageValue = string | number | Date | null;
 const STAGE_COLUMNS = new Set([
   "status", "workStatus", "assignedTeam", "assignedToId", "scheduledAt", "scheduledTime", "appointmentStatus",
+  "urgentReleaseFor",
 ]);
 async function moveStage(
   id: number,
   from: string,
   /** undefined = ไม่แตะช่องนั้น (เหมือน Prisma update) */
   data: Record<string, StageValue | undefined>,
-  log: { userId: number | undefined; action: string; status: string; note?: string | null },
+  /** meta = ข้อมูลที่โปรแกรมต้องอ่านกลับ (เหมือน writeLog) — ไม่ส่ง = ช่องว่างจริง (SQL NULL) ไม่ใช่ JSON null */
+  log: { userId: number | undefined; action: string; status: string; note?: string | null; meta?: Prisma.InputJsonValue },
   /**
    * ค่าที่อ่านไว้ตอนตัดสินใจต้องยังเหมือนเดิม (นอกจากขั้น) — ไม่งั้นคืน false (409) เหมือนมีคนเดินขั้นไปก่อน
    * ทำไม: แอดมินเลื่อนวันนัดไม่เปลี่ยนขั้น เช็คแค่ status จึงไม่พอ — หัวหน้าภาคปล่อยงาน/แอดมินอีกคนคอนเฟิร์ม
@@ -3882,9 +3956,10 @@ async function moveStage(
       WHERE "id" = ${id} AND "status" = ${from}${same.length ? Prisma.join(same, "") : Prisma.empty}
       RETURNING "id"
     )
-    INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
+    INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "meta", "createdAt")
     SELECT "id", CAST(${log.userId ?? null} AS integer), CAST(${log.action} AS text), CAST(${log.status} AS text),
-           CAST(${log.note ?? null} AS text), CAST(${now} AS timestamp(3))
+           CAST(${log.note ?? null} AS text), CAST(${log.meta === undefined ? null : JSON.stringify(log.meta)} AS jsonb),
+           CAST(${now} AS timestamp(3))
     FROM moved
     RETURNING "id"`;
   // ใบขยับขั้น = ชุด "ไม่มีคนรับ" อาจเปลี่ยน — เหมือน writeLog
@@ -4087,6 +4162,8 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
           assignedToId: null,
           scheduledAt: dayStart(assign.scheduledAt),
           scheduledTime: assign.scheduledTime ?? null,
+          // วันนัดใหม่ = งานด่วนที่แอดมินเคยแก้ให้วันเดิมหมดผล (เวลาปิดรับปล่อยงาน ข้อ 7) — ดู urgentReleaseFor ใน schema
+          urgentReleaseFor: null,
           appointmentStatus: "PENDING",
           workStatus: workStatusForStage("AWAITING_CONFIRM"),
         },
@@ -4290,6 +4367,7 @@ router.post("/:id/parts-short", requireAuth, async (req: AuthRequest, res) => {
         partsExpectedAt: expected,
         scheduledAt: null,
         scheduledTime: null,
+        urgentReleaseFor: null,
         appointmentStatus: null,
         assignedTeam: null,
         assignedToId: null,
@@ -5119,6 +5197,27 @@ function visitText(date: string, time: string | null | undefined) {
   const day = `${TH_DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${TH_MONTH[m - 1]} ${String((y + 543) % 100).padStart(2, "0")}`;
   return time ? `${day} เวลา ${time} น.` : day;
 }
+/** "ส. 31 ต.ค." — วันไม่มีปี ใช้กับเส้นตายปล่อยงานที่อยู่แค่วันก่อนวันนัด (ปีไม่ช่วยให้อ่านเร็วขึ้น — แบบเดียวกับตัวอย่างที่เจ้าของงานอนุมัติ) */
+function shortDayText(date: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  return `${TH_DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${TH_MONTH[m - 1]}`;
+}
+
+/**
+ * ข้อความตอนกดปล่อยงานไม่ผ่านเวลาปิดรับ — ครบในตัวเองเสมอ (บอกทั้งเหตุผลและทางไปต่อ)
+ * แอปรุ่นเก่าที่ยังค้างในเบราว์เซอร์ไม่รู้จัก code DISPATCH_LOCKED จะขึ้นข้อความนี้ตรง ๆ อย่างเดียว
+ * ถ้าบอกแค่ "เลยเวลาแล้ว" หัวหน้าภาคจะไม่รู้ว่าต้องขอแอดมินหรือส่งกลับ แล้วโทรถามทั้งระบบ
+ */
+function dispatchLockedText(day: string, time: string, st: { past: boolean; urgentExpired: boolean }) {
+  if (st.urgentExpired) {
+    return "ปล่อยงานไม่ได้ — วันนัดผ่านไปแล้ว (งานด่วนหมดอายุ — วันนัดผ่านแล้ว) · แอดมินต้องโทรร้านเลื่อนวันนัด";
+  }
+  if (st.past) return "ปล่อยงานไม่ได้ — วันนัดผ่านไปแล้ว · แอดมินต้องโทรร้านเลื่อนวันนัด";
+  return (
+    `ปล่อยงานไม่ได้ — เลยเวลาปิดรับแล้ว (ต้องปล่อยก่อน ${visitText(addDays(day, -1), null)} ${time} น. ตามเวลาระบบ)` +
+    " · ต้องไปตามนัดจริง — กด “ขอแอดมินแก้เป็นงานด่วน” (หรือโทรหาแอดมิน) · ทีมไม่ว่าง — “ส่งกลับแอดมินนัดใหม่”"
+  );
+}
 
 /**
  * ทีมของสาขานี้สำหรับงานประเภทนี้ — ใช้บอกในประวัติว่าจ่ายข้ามทีม
@@ -5205,6 +5304,8 @@ router.post("/:id/assign", requireAuth, async (req: AuthRequest, res) => {
     assignedToId: null,
     scheduledAt: dayStart(scheduledAt),
     scheduledTime: scheduledTime ?? null,
+    // นัดใหม่ทุกครั้ง = งานด่วนของวันก่อนหน้าหมดผล (ข้อ 7)
+    urgentReleaseFor: null,
     appointmentStatus: "PENDING",
     workStatus: workStatusForStage(next),
   };
@@ -5241,17 +5342,28 @@ const confirmSchema = z.object({
   scheduledAt: dateField.optional(),
   scheduledTime: timeField,
   note: z.string().trim().max(500).optional(),
+  /**
+   * "แก้เป็นงานด่วนไปพร้อมกัน" (เวลาปิดรับปล่อยงาน ข้อ 2 · 4) — งานวันนี้/พรุ่งนี้ที่คอนเฟิร์มหลังเวลาปิดรับ
+   * จะถึงหัวหน้าภาคแบบล็อก ร้านต้องการวันนั้นจริง แอดมินติ๊กในฟอร์มเดียวกัน ไม่ต้องกดอีกปุ่มหลังบันทึก
+   */
+  urgent: z.boolean().optional(),
   ...seenDateFields,
 });
 
 router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, res) => {
+  // เวลาที่คำขอถึง — ติ๊กงานด่วนมีผลไหมตัดสินด้วยเส้นตายเทียบเวลานี้ (เหมือนปุ่มปล่อยงาน ข้อ 6)
+  const receivedAt = new Date();
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = confirmSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   // ใช้ทั้งนัดเข้าซ่อม และนัดไปตรวจหน้างาน — คุยกับร้านแบบเดียวกัน
   // ทั้งสองแบบกลับไปให้หัวหน้าภาคปล่อยงานให้ช่าง (ดู WORK_ORDER_STAGE_ORDER)
-  const before = await guardStage(req, res, id, ["AWAITING_CONFIRM", "INSPECT_CONFIRM"]);
+  // เวลาปิดรับอ่านเฉพาะตอนติ๊กงานด่วนมา — คอนเฟิร์มปกติไม่ต้องรอฐานข้อมูลเพิ่ม
+  const [before, cfg] = await Promise.all([
+    guardStage(req, res, id, ["AWAITING_CONFIRM", "INSPECT_CONFIRM"]),
+    parsed.data.urgent ? readCutoff({ fresh: true }) : null,
+  ]);
   if (!before) return;
   // วันที่ฟอร์มโชว์ไม่ใช่วันในใบแล้ว (แอดมินอีกคนเลื่อนระหว่างโทร) — ไม่บันทึกว่าลูกค้าคอนเฟิร์มวันที่ไม่ได้คุยกัน
   if (!seenMatches(before, parsed.data)) return stageMoved(res);
@@ -5272,12 +5384,24 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
   // เคยเช็คแค่ตอนเปลี่ยนวัน — ร้านปิด/ช่างส่งกลับ ใบกลับมาพร้อมวันเดิมที่ผ่านไปแล้ว แก้แค่เวลาก็นัดเมื่อวานได้
   const pastMove = moved ? pastVisitText(newDate) : null;
   if (pastMove) return res.status(400).json({ error: pastMove });
+  /**
+   * ติ๊กงานด่วนมีผลเฉพาะเมื่อเส้นตายของวันนัดนี้ผ่านไปแล้วตอนคำขอถึง — ช่องติ๊กขึ้นเฉพาะตอนฟอร์มแดงอยู่แล้ว
+   * ส่งมาทั้งที่ยังไม่เลยเส้นตาย = แอดมินอีกคนเลื่อนเวลาปิดรับให้ช้าลงระหว่างที่ฟอร์มเปิดอยู่ → ไม่สนใจ (ไม่ตั้ง ไม่ลงประวัติ)
+   * ไม่ตอบ 400: แอดมินเพิ่งตกลงกับร้านเสร็จ ปฏิเสธทั้งก้อนเพราะช่องที่ไม่จำเป็นแล้ว = การคอนเฟิร์มหาย ต้องโทรซ้ำ
+   * ใบเก่าที่ยังต้องเบิก (next = เบิก) ก็ตั้งได้ — ขั้นเบิกไม่แตะวันนัด/ช่องนี้ ใบจึงถึงหัวหน้าภาคแบบปลดล็อกสำหรับวันนี้
+   */
+  const urgent = !!cfg && receivedAt.getTime() >= deadlineOf(newDate, cfg.time).getTime();
+  if (urgent && newDate < bangkokDay(receivedAt)) {
+    return res.status(400).json({ error: "วันนัดผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้ ต้องเลื่อนวันนัด" });
+  }
 
   const data = {
     status: next,
     appointmentStatus: "CONFIRMED",
     scheduledAt: dayStart(newDate),
     scheduledTime: newTime ?? null,
+    // นัดใหม่ = งานด่วนของวันเดิมหมดผล (ข้อ 7) · คอนเฟิร์มวันเดิมเฉย ๆ ไม่แตะ
+    urgentReleaseFor: urgent ? dayStart(newDate) : moved ? null : undefined,
     workStatus: workStatusForStage(next),
   };
   const log = {
@@ -5298,15 +5422,24 @@ router.post("/:id/confirm-appointment", requireAuth, async (req: AuthRequest, re
    * แล้วปุ่มนี้เขียนวันเดิมกลับ = การเลื่อนหายเงียบ ๆ ทั้งที่ประวัติบอกวันใหม่ · 409 แล้วแอปโหลดใบใหม่ให้เห็นวันล่าสุดก่อนคอนเฟิร์ม
    */
   const readDate = { scheduledAt: before.scheduledAt, scheduledTime: before.scheduledTime };
-  if (!before.outageId) {
+  if (!before.outageId && !urgent) {
     if (!(await moveStage(id, before.status, data, log, readDate))) return stageMoved(res);
   } else {
     // ผูกกับเคสเครื่องเสีย — ต้องซิงก์สถานะเคสในทรานแซกชันเดียวกัน · กันเขียนทับแบบเดียวกับ moveStage
+    // งานด่วนไปพร้อมกัน — ประวัติสองแถว (คอนเฟิร์ม · แก้เป็นงานด่วน) ต้องเข้าพร้อมกับใบ คำสั่งเดียวของ moveStage เขียนได้แถวเดียว
     const done = await prisma.$transaction(async (tx) => {
       const { count } = await tx.workOrder.updateMany({ where: { id, status: before.status, ...readDate }, data });
       if (count === 0) return false;
-      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
-      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+      if (urgent) {
+        await writeLogPair(tx, id, log, {
+          action: "URGENT_RELEASE",
+          note: `ตอนคอนเฟิร์มลูกค้า · ${parsed.data.note || "ไม่ได้ใส่เหตุผล"} · นัด ${visitText(newDate, newTime)}`,
+          meta: { via: "confirm", reason: parsed.data.note || null, day: newDate },
+        });
+      } else {
+        await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+      }
+      if (before.outageId) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
       return true;
     }, STAGE_TX);
     if (!done) return stageMoved(res);
@@ -5338,9 +5471,12 @@ const rescheduleSchema = z.object({
     .trim()
     .min(1, "ต้องบอกเหตุผลที่เลื่อน เช่น ลูกค้าขอเลื่อน · อะไหล่มาไม่ทัน")
     .max(500),
+  // "แก้เป็นงานด่วนไปพร้อมกัน" (เวลาปิดรับปล่อยงาน ข้อ 2 · 4) — เหมือนฟอร์มคอนเฟิร์มลูกค้า ใช้กับดึงงานคืนด้วย
+  urgent: z.boolean().optional(),
 });
 
 router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
+  const receivedAt = new Date();
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   // Admin Spare Part กับ "ดูในฐานะผู้ใช้อื่น" ถูกกันที่ middleware แล้ว (เขียนไม่ได้)
@@ -5352,13 +5488,16 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
   const parsed = rescheduleSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
 
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: {
-      code: true, status: true, scheduledAt: true, scheduledTime: true, appointmentStatus: true, assignedTeam: true, outageId: true,
-      updatedAt: true,
-    },
-  });
+  const [wo, cfg] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        code: true, status: true, scheduledAt: true, scheduledTime: true, appointmentStatus: true, assignedTeam: true, outageId: true,
+        updatedAt: true,
+      },
+    }),
+    parsed.data.urgent ? readCutoff({ fresh: true }) : null,
+  ]);
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   const recallTo = RESCHEDULE_RECALL_STAGES[wo.status] as string | undefined;
   if (!RESCHEDULE_STAY_STAGES.includes(wo.status) && !recallTo) {
@@ -5414,9 +5553,13 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
 
   const next = recallTo ?? wo.status;
   const confirmed = APPOINTMENT_DONE.includes(wo.appointmentStatus ?? "");
+  // ติ๊กงานด่วนมีผลเฉพาะเมื่อเส้นตายของวันใหม่ผ่านแล้ว — ไม่งั้นไม่สนใจ (เหตุผลเดียวกับคอนเฟิร์มลูกค้า)
+  const urgent = !!cfg && receivedAt.getTime() >= deadlineOf(scheduledAt, cfg.time).getTime();
   const data = {
     scheduledAt: dayStart(scheduledAt),
     scheduledTime: newTime ?? null,
+    // เลื่อนวันนัดทุกครั้งล้างงานด่วน รวมเลื่อนแค่เวลาในวันเดิม (ข้อ 7 "เลื่อนวันนัดแล้วต้องแก้ใหม่") — เว้นแต่ติ๊กมาในฟอร์มนี้
+    urgentReleaseFor: urgent ? dayStart(scheduledAt) : null,
     ...(recallTo ? { status: recallTo, workStatus: workStatusForStage(recallTo) ?? null } : {}),
   };
   const log = {
@@ -5444,15 +5587,24 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
     scheduledTime: wo.scheduledTime,
     ...(recallTo ? { updatedAt: wo.updatedAt } : {}),
   };
-  if (!wo.outageId) {
+  if (!wo.outageId && !urgent) {
     if (!(await moveStage(id, wo.status, data, log, expect))) return stageMoved(res);
   } else {
     // ผูกเคสเครื่องเสีย — วันเข้าบนกระดานต้องตามไปด้วยในทรานแซกชันเดียวกัน · กันเขียนทับแบบเดียวกับ moveStage
+    // งานด่วนไปพร้อมกัน — ประวัติสองแถวต้องเข้าพร้อมกับวันใหม่ (เหมือนคอนเฟิร์มลูกค้า)
     const done = await prisma.$transaction(async (tx) => {
       const { count } = await tx.workOrder.updateMany({ where: { id, status: wo.status, ...expect }, data });
       if (count === 0) return false;
-      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
-      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
+      if (urgent) {
+        await writeLogPair(tx, id, log, {
+          action: "URGENT_RELEASE",
+          note: `ตอนเลื่อนวันนัด · ${reason} · นัด ${visitText(scheduledAt, newTime)}`,
+          meta: { via: "reschedule", reason, day: scheduledAt },
+        });
+      } else {
+        await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+      }
+      if (wo.outageId) await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
       return true;
     }, STAGE_TX);
     if (!done) return stageMoved(res);
@@ -5474,16 +5626,39 @@ const dispatchSchema = z.object({
 });
 
 router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
+  /**
+   * เวลาที่คำขอถึงเซิร์ฟเวอร์ — ตัดสินเวลาปิดรับด้วยเวลานี้ (เจ้าของงานตอบข้อ 6) ไม่ใช่เวลาบนมือถือ และไม่ใช่เวลาหลังอ่านฐานข้อมูลเสร็จ
+   * กด 15:59:59 แล้วฐานข้อมูลตอบช้าไปถึง 16:00:01 ต้องยังผ่าน — คนกดทันเวลาแล้ว ความช้าเป็นของระบบ
+   */
+  const receivedAt = new Date();
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = dispatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   // ปุ่มเดียวกันใช้ส่งช่างเข้าตรวจหน้างาน (INSPECT_DISPATCH) — หัวหน้าภาคทำสิ่งเดียวกันทุกอย่าง
   // ต่างกันแค่ปลายทาง: ซ่อม → รอช่างเข้างาน · ตรวจ → รอทีมตรวจหน้างาน
-  const cur = await guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]);
+  // เวลาปิดรับอ่านสด (ไม่ใช้ค่าที่จำไว้ 30 วิ) — แอดมินเพิ่งเปลี่ยนเวลา ต้องมีผลกับการกดครั้งถัดไปทันที (ข้อ 13) · อ่านพร้อมใบงาน ไม่ต่อคิว
+  const [cur, cfg] = await Promise.all([guardStage(req, res, id, ["ASSIGNED", "INSPECT_DISPATCH"]), readCutoff({ fresh: true })]);
   if (!cur) return;
   // ฟอร์มที่เปิดไว้ก่อนแอดมินเลื่อนวัน — หัวหน้าภาคยังไม่เห็นวันใหม่ (ไม่ได้ผ่านป้าย "คอนเฟิร์มวันใหม่") ห้ามปล่อย
   if (!seenMatches(cur, parsed.data)) return stageMoved(res);
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ใช้กับทุกคนที่กด รวมแอดมินกดแทน/ใบไม่มีคนรับ (ข้อ 10)
+   * ทางเลี่ยงทางเดียวคือแอดมินแก้เป็นงานด่วนก่อน · ใบทดสอบไม่ติด (ข้อ 15 — releaseState คืน null)
+   * 409 พร้อม code ให้แอปรู้ว่าไม่ใช่ "ใบถูกคนอื่นเปลี่ยน" — ฟอร์มปล่อยงานต้องค้างไว้แล้วขึ้นกล่องล็อก ไม่ใช่ปิดแล้วเตือน
+   * (ดู HANDLED_409_CODES ใน mobile/src/api/client.ts) · ไม่เขียนอะไรเลย ไม่มีประวัติ "พยายามปล่อย"
+   */
+  const st = releaseState(cur, cfg, receivedAt);
+  if (st?.locked) {
+    return res.status(409).json({
+      error: dispatchLockedText(dayOf(cur.scheduledAt!), cfg.time, st),
+      code: "DISPATCH_LOCKED",
+      receivedAt: receivedAt.toISOString(),
+      deadline: st.deadline.toISOString(),
+      past: st.past,
+      urgentExpired: st.urgentExpired,
+    });
+  }
   const inspect = cur.status === "INSPECT_DISPATCH";
   const next = inspect ? "INSPECTING" : "IN_PROGRESS";
 
@@ -5506,10 +5681,229 @@ router.post("/:id/dispatch", requireAuth, async (req: AuthRequest, res) => {
     { userId: req.auth!.userId, action: "DISPATCHED", status: next, note: [text, parsed.data.note].filter(Boolean).join(" — ") },
     // แอดมินเลื่อนวันนัดได้ที่ขั้นนี้โดยใบไม่ขยับขั้น — วันเปลี่ยนระหว่างอ่านกับเขียน = 409 ให้หัวหน้าภาคเห็นวันใหม่
     // (ป้าย "คอนเฟิร์มวันใหม่") ก่อนปล่อย ไม่ใช่ส่งช่างไปวันที่ไม่เคยเห็น โดยประวัติยังเขียนวันเดิม
+    // urgentReleaseFor ไม่อยู่ในนี้: เปลี่ยนได้แค่พร้อมวันนัด (ซึ่งเช็คอยู่แล้ว) หรือตอนแอดมินแก้เป็นงานด่วน ซึ่งมีแต่ปลดล็อก
+    // ใส่ไว้ด้วยจะได้แค่ 409 "ใบงานนี้เพิ่งถูกเปลี่ยน" ปลอม ๆ ตอนแอดมินกดงานด่วนให้พอดีกับที่หัวหน้าภาคกดปล่อย
     { scheduledAt: cur.scheduledAt, scheduledTime: cur.scheduledTime }
   );
   if (!moved) return stageMoved(res);
 
+  res.json(await detailFor(id));
+});
+
+/**
+ * แอดมิน "แก้เป็นงานด่วน" (เจ้าของงานตอบข้อ ง · ข้อ 1–3 · 7–8) — ปลดล็อกเวลาปิดรับให้ใบเดียว วันนัดเดียว
+ *
+ * เก็บเป็น "วันที่ปลดล็อกให้" (urgentReleaseFor) ไม่ใช่ true/false — เลื่อนวันนัดทีหลังวันไม่ตรงกัน งานด่วนหมดผลเอง
+ * (ข้อ 7 "เลื่อนวันนัดแล้วต้องแก้ใหม่") แม้ทางเลื่อนวันทางไหนลืมล้างช่องนี้ · ไม่แตะ priority (ข้อ 3 — ป้าย "ด่วน" ตอนเปิดใบ
+ * เป็นคนละเรื่อง ไม่ปลดล็อก) · ใบอยู่ขั้นเดิม หัวหน้าภาคยังเป็นคนกดปล่อย — แอดมินแค่เปิดทาง ไม่ได้ปล่อยแทน
+ *
+ * กดได้เฉพาะใบที่เลยเส้นตายแล้ว (ขอบเขตข้อ 1 — ปุ่มขึ้นเฉพาะแถวที่ล็อก) · เทียบกับเส้นตายตรง ๆ ไม่ใช่ "ล็อกอยู่ไหม":
+ * ใบที่ค้างมาก่อนเริ่มใช้กฎ (ข้อ 14) เลยเส้นตายแล้วก็กดได้ ไม่มีผลเสีย และเทสต์ที่ปลดล็อกงานวันนี้ไม่ขึ้นกับว่า migration รันวันไหน
+ * เหตุผลไม่บังคับ (ข้อ 8) · ประวัติบันทึกใคร/เมื่อไร/วันนัดไหนเสมอ · ช่องทาง (via) กับเหตุผลอยู่ใน meta ให้แอปขึ้นหัวข้อจากช่อง
+ * ไม่ต้องแกะจากข้อความ · คำขอของหัวหน้าภาคที่รออยู่จบเองจากประวัติแถวนี้ (URGENT_ASK_SETTLE)
+ */
+const urgentReleaseSchema = z.object({
+  reason: z.string().trim().max(300, "เหตุผลยาวได้ไม่เกิน 300 ตัวอักษร").optional(),
+  ...seenDateFields,
+});
+
+/** ข้อความ "แก้ไว้แล้ว" — ใช้ทั้งตอนเห็นก่อนเขียน และตอนแอดมินอีกคนกดพร้อมกันแล้วเราเขียนไม่ทัน */
+function urgentAlreadyText(code: string, scheduledAt: Date, scheduledTime: string | null) {
+  return `${code} แก้เป็นงานด่วนไว้แล้ว (นัด ${visitText(dayOf(scheduledAt), scheduledTime)}) — หัวหน้าภาคปล่อยงานได้เลย`;
+}
+
+router.post("/:id/urgent-release", requireAuth, async (req: AuthRequest, res) => {
+  // เวลาที่คำขอถึง — "ยังปล่อยงานได้ไหม" ต้องตัดสินด้วยเวลาเดียวกับที่ปุ่มปล่อยงานใช้ (ข้อ 6)
+  const receivedAt = new Date();
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  // Admin Spare Part / ดูในฐานะ / ทีม Area ถูกกันที่ middleware แล้ว — เหลือหัวหน้าภาคกับช่าง ซึ่งต้องบอกทางที่ใช้ได้จริง
+  if (req.auth!.role !== "ADMIN") {
+    return res.status(403).json({ error: "แก้เป็นงานด่วนได้เฉพาะแอดมิน — หัวหน้าภาคกด “ขอแอดมินแก้เป็นงานด่วน” ในหน้าปล่อยงาน" });
+  }
+  const parsed = urgentReleaseSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const [wo, cfg] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: { code: true, status: true, isTest: true, scheduledAt: true, scheduledTime: true, urgentReleaseFor: true },
+    }),
+    readCutoff({ fresh: true }),
+  ]);
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (!RELEASE_STAGES.includes(wo.status)) {
+    return res.status(409).json({
+      error: `${wo.code} อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}" — แก้เป็นงานด่วนได้เฉพาะใบที่รอหัวหน้าภาครับทราบ ปล่อยงาน / ส่งช่างตรวจ`,
+      status: wo.status,
+    });
+  }
+  if (wo.isTest) return res.status(400).json({ error: "ใบทดสอบไม่ติดเวลาปิดรับ — ปล่อยงานได้เลย" });
+  if (!wo.scheduledAt) return res.status(409).json({ error: `${wo.code} ยังไม่มีวันนัด` });
+  // หน้าจอเห็นวันอื่นอยู่ (แอดมินอีกคนเพิ่งเลื่อน) — ไม่ปลดล็อกวันที่คนกดไม่ได้ตั้งใจ
+  if (!seenMatches(wo, parsed.data)) return stageMoved(res);
+  const day = dayOf(wo.scheduledAt);
+  const visit = visitText(day, wo.scheduledTime);
+  // วันนัดผ่านแล้ว = ไปตามนัดไม่ได้แล้ว งานด่วนไม่มีความหมาย ต้องโทรร้านนัดวันใหม่ (ข้อ 7)
+  if (day < bangkokDay(receivedAt)) {
+    return res.status(409).json({ error: `${wo.code} วันนัด ${visit} ผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้ ต้องเลื่อนวันนัด` });
+  }
+  if (wo.urgentReleaseFor && dayOf(wo.urgentReleaseFor) === day) {
+    return res.status(409).json({ error: urgentAlreadyText(wo.code, wo.scheduledAt, wo.scheduledTime) });
+  }
+  if (receivedAt.getTime() < deadlineOf(day, cfg.time).getTime()) {
+    return res.status(409).json({
+      error: `${wo.code} ยังปล่อยงานได้ (ก่อน ${shortDayText(addDays(day, -1))} ${cfg.time} น.) — ไม่ต้องแก้เป็นงานด่วน`,
+    });
+  }
+
+  const reason = parsed.data.reason || null;
+  const ok = await moveStage(
+    id,
+    wo.status,
+    // วันเดียวกับวันนัดตอนนี้ (ค่าเดียวกันเป๊ะ) — releaseState เทียบวันของสองช่องนี้
+    { urgentReleaseFor: wo.scheduledAt },
+    {
+      userId: req.auth!.userId,
+      action: "URGENT_RELEASE",
+      status: wo.status,
+      // ท้ายข้อความบอกวันนัดที่ปลดล็อก — เลื่อนวันทีหลังแล้วคนอ่านประวัติต้องรู้ว่างานด่วนนี้เป็นของวันไหน
+      note: `ปล่อยหลังเวลาปิดรับได้ · ${reason ?? "ไม่ได้ใส่เหตุผล"} · นัด ${visit}`,
+      meta: { via: "direct", reason, day },
+    },
+    // urgentReleaseFor เดิม (ยังว่าง) ต้องยังว่าง — แอดมินสองคนกดพร้อมกัน เขียนได้คนเดียว ประวัติไม่ซ้ำสองแถว
+    { scheduledAt: wo.scheduledAt, scheduledTime: wo.scheduledTime, urgentReleaseFor: wo.urgentReleaseFor }
+  );
+  if (!ok) {
+    // แพ้แอดมินอีกคน = ผลที่ต้องการเกิดแล้ว บอกตามจริง ไม่ใช่ "ใบถูกเปลี่ยน" ให้งงว่าต้องกดซ้ำไหม
+    const now = await prisma.workOrder.findUnique({
+      where: { id },
+      select: { scheduledAt: true, scheduledTime: true, urgentReleaseFor: true },
+    });
+    if (now?.scheduledAt && now.urgentReleaseFor && dayOf(now.urgentReleaseFor) === dayOf(now.scheduledAt)) {
+      return res.status(409).json({ error: urgentAlreadyText(wo.code, now.scheduledAt, now.scheduledTime) });
+    }
+    return stageMoved(res);
+  }
+  res.json(await detailFor(id));
+});
+
+/**
+ * หัวหน้าภาค "ขอแอดมินแก้เป็นงานด่วน" / ยกเลิกคำขอ (เจ้าของงานตอบข้อ 9) — จากฟอร์มปล่อยงานที่ติดล็อก
+ *
+ * เก็บเป็นประวัติ (URGENT_REQUESTED / URGENT_REQUEST_CANCELLED) ไม่ใช่ AdminReview: กติกาของ "ส่งกลับให้แอดมินตรวจสอบ"
+ * (ข้อความขั้นต่ำ ขอได้ทีละเรื่อง ต้องรอแอดมินตอบปิด) ไม่เหมาะกับคำขอที่จบเองเมื่อแอดมินแก้เป็นงานด่วนหรือเลื่อนวัน —
+ * ประวัติลำดับถัดมาปิดคำขอให้เอง (URGENT_ASK_SETTLE) และไม่ไปขวางหรือถูกขวางโดยการส่งตรวจสอบตามปกติ
+ */
+const urgentRequestSchema = z.object({
+  note: z.string().trim().max(300, "ข้อความยาวได้ไม่เกิน 300 ตัวอักษร").optional(),
+});
+
+/**
+ * อ่านใบสำหรับปุ่มขอ/ยกเลิกคำขอ — หัวหน้าภาคเจ้าของใบเท่านั้น (ทีมที่ได้รับงานข้ามทีมดูได้อย่างเดียว)
+ * ประวัติคำขอล่าสุดอ่านในคำสั่งเดียวกับใบ (relationJoins) — ใบกับประวัติเห็นจังหวะเดียวกัน ไม่ใช่สองภาพคนละเสี้ยววินาที
+ */
+async function urgentAskTarget(req: AuthRequest, res: Response, id: number) {
+  if (req.auth!.role !== "SUPERVISOR") {
+    res.status(403).json({ error: "ขอแก้เป็นงานด่วนได้เฉพาะหัวหน้าภาค — แอดมินกด “แก้เป็นงานด่วน” ได้เลย" });
+    return null;
+  }
+  const [wo, scope, cfg] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        code: true,
+        status: true,
+        isTest: true,
+        scheduledAt: true,
+        scheduledTime: true,
+        urgentReleaseFor: true,
+        updatedAt: true,
+        jobType: true,
+        assignedTeam: true,
+        branch: { select: { region: true, zone: true, pmTeam: true } },
+        logs: {
+          where: { action: { in: URGENT_ASK_SETTLE } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: 1,
+          select: { action: true },
+        },
+      },
+    }),
+    supervisorScope(req.auth!.userId),
+    readCutoff({ fresh: true }),
+  ]);
+  if (!wo) {
+    res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+  if (await blockedForSupervisor(req, res, wo, scope)) return null;
+  const pending = RELEASE_STAGES.includes(wo.status) && wo.logs[0]?.action === "URGENT_REQUESTED";
+  return { wo, cfg, pending };
+}
+
+/**
+ * เขียนประวัติคำขอ — ใบไม่เปลี่ยนอะไร (ตั้ง status เป็นค่าเดิม) แต่ updatedAt ขยับ และต้องเหมือนที่อ่านไว้
+ * ทำไม: กดซ้ำเร็ว ๆ สองครั้ง/สองเครื่องต้องได้คำขอเดียว · แอดมินแก้เป็นงานด่วนหรือเลื่อนวันระหว่างนี้ (ทุกทางที่ปิดคำขอ
+ * แก้ใบด้วย updatedAt ขยับ) = ไม่เขียนคำขอที่ไม่มีความหมายแล้ว ตอบ 409 ให้แอปโหลดใบใหม่
+ */
+async function writeUrgentAsk(
+  id: number,
+  wo: { status: string; updatedAt: Date },
+  userId: number,
+  action: "URGENT_REQUESTED" | "URGENT_REQUEST_CANCELLED",
+  note: string | null
+) {
+  return moveStage(id, wo.status, { status: wo.status }, { userId, action, status: wo.status, note }, { updatedAt: wo.updatedAt });
+}
+
+router.post("/:id/urgent-request", requireAuth, async (req: AuthRequest, res) => {
+  const receivedAt = new Date();
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const t = await urgentAskTarget(req, res, id);
+  if (!t) return;
+  const parsed = urgentRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const { wo, cfg } = t;
+  if (!RELEASE_STAGES.includes(wo.status)) {
+    return res.status(409).json({
+      error: `${wo.code} อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}" — ขอแก้เป็นงานด่วนได้เฉพาะใบที่รอหัวหน้าภาครับทราบ ปล่อยงาน / ส่งช่างตรวจ`,
+      status: wo.status,
+    });
+  }
+  if (wo.isTest) return res.status(400).json({ error: "ใบทดสอบไม่ติดเวลาปิดรับ — ปล่อยงานได้เลย" });
+  if (!wo.scheduledAt) return res.status(409).json({ error: `${wo.code} ยังไม่มีวันนัด` });
+  const day = dayOf(wo.scheduledAt);
+  const st = releaseState(wo, cfg, receivedAt)!;
+  // วันผ่านแล้วก่อนเรื่องอื่น — ใบที่ค้างมาก่อนเริ่มใช้กฎก็ขอไม่ได้ ขอไปแอดมินก็แก้เป็นงานด่วนให้ไม่ได้อยู่ดี
+  if (st.past) {
+    return res.status(409).json({ error: `${wo.code} วันนัดผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้แล้ว แอดมินต้องโทรร้านเลื่อนวันนัด` });
+  }
+  if (!st.locked) {
+    const error = st.urgent
+      ? `${wo.code} แอดมินแก้เป็นงานด่วนแล้ว · ปล่อยได้เลย`
+      : receivedAt.getTime() < st.deadline.getTime()
+        ? `${wo.code} ยังปล่อยงานได้ (ก่อน ${shortDayText(addDays(day, -1))} ${cfg.time} น.) — ไม่ต้องขอแอดมิน`
+        : `${wo.code} ยังปล่อยงานได้ — ไม่ต้องขอแอดมิน`;
+    return res.status(409).json({ error });
+  }
+  if (t.pending) return res.status(409).json({ error: "ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน" });
+  if (!(await writeUrgentAsk(id, wo, req.auth!.userId, "URGENT_REQUESTED", parsed.data.note || "ไม่ได้เขียนอะไรเพิ่ม"))) {
+    return stageMoved(res);
+  }
+  res.json(await detailFor(id));
+});
+
+router.post("/:id/urgent-request/cancel", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const t = await urgentAskTarget(req, res, id);
+  if (!t) return;
+  // ไม่มีคำขอค้าง = แอดมินจัดการไปแล้ว (แก้เป็นงานด่วน/เลื่อนวัน) หรือยกเลิกไปแล้วจากอีกเครื่อง — บอกให้รีเฟรชดูผล
+  if (!t.pending) {
+    return res.status(409).json({ error: "ไม่มีคำขอที่รอแอดมิน — แอดมินอาจแก้เป็นงานด่วนไปแล้ว ลองรีเฟรช" });
+  }
+  if (!(await writeUrgentAsk(id, t.wo, req.auth!.userId, "URGENT_REQUEST_CANCELLED", null))) return stageMoved(res);
   res.json(await detailFor(id));
 });
 
@@ -5698,6 +6092,7 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
     assignedToId: null,
     scheduledAt: dayStart(scheduledAt),
     scheduledTime: scheduledTime ?? null,
+    urgentReleaseFor: null,
     appointmentStatus: "PENDING",
     workStatus: workStatusForStage("INSPECT_CONFIRM"),
   };
@@ -5792,6 +6187,7 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
         needsParts: null,
         scheduledAt: null,
         scheduledTime: null,
+        urgentReleaseFor: null,
         // "รอช่าง" ที่ตั้งไว้ตอนส่งไปตรวจไม่จริงแล้ว · ค่าที่คนตั้งเองก็หมดอายุเมื่อเปลี่ยนขั้น
         workStatus: workStatusForStage("NEW"),
       },
@@ -6286,6 +6682,8 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
   if (to <= at("PARTS_CHECKED") && toStage !== "INSPECT_DISPATCH") {
     data.scheduledAt = null;
     data.scheduledTime = null;
+    // งานด่วนผูกกับวันนัด — ไม่มีวันแล้วก็ไม่มีงานด่วน (ย้อนไปตรวจหน้างานจึงพาใบถึงช่างโดยไม่ติดเวลาปิดรับ ข้อ 15)
+    data.urgentReleaseFor = null;
     data.appointmentStatus = null;
   } else if (toStage === "AWAITING_CONFIRM") {
     data.appointmentStatus = "PENDING";
@@ -6477,6 +6875,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
               // ช่างคนเดิมยังติดอยู่กับใบงาน หัวหน้าภาคเปลี่ยนได้ตอนจ่ายงานรอบใหม่
               scheduledAt: null,
               scheduledTime: null,
+              urgentReleaseFor: null,
               appointmentStatus: null,
             }
           : target === "AWAITING_CONFIRM"
@@ -6489,6 +6888,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
                 assignedToId: null,
                 scheduledAt: null,
                 scheduledTime: null,
+                urgentReleaseFor: null,
                 appointmentStatus: null,
                 workStatus: workStatusForStage(target),
               },
@@ -8249,6 +8649,7 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
           assignedTeam: b.team,
           scheduledAt: new Date(`${b.visitDate}T00:00:00.000Z`),
           scheduledTime: b.visitTime ?? null,
+          urgentReleaseFor: null,
           appointmentStatus: "CONFIRMED",
           closedAt,
           closedById: actor,
@@ -8681,6 +9082,7 @@ router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, r
          */
         scheduledAt: null,
         scheduledTime: null,
+        urgentReleaseFor: null,
         appointmentStatus: null,
         // ทุกขั้นตั้งสถานะใหม่ — สถานะว่างของใบที่ปิดไปแล้วไม่ใช่ของรอบนี้
         workStatus: workStatusForStage("PARTS_CHECKED"),

@@ -661,7 +661,8 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
    */
   APPOINTMENT_MOVED: "แอดมินเลื่อนวันนัด",
   APPOINTMENT_RECALLED: "แอดมินเลื่อนวันนัด — ดึงงานคืนจากช่าง",
-  NEW_DATE_DECLINED: "ทีมไม่ว่างวันใหม่ — ส่งกลับแอดมินนัดใหม่",
+  // ไม่มี "วันใหม่" แล้ว (เวลาปิดรับปล่อยงาน ต.ค. 69 · คำถามข้อ 16) — ใบที่ติดล็อกส่งกลับได้โดยวันไม่ได้เปลี่ยน
+  NEW_DATE_DECLINED: "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่",
   ARRIVED: "ช่างถึงหน้างาน",
   DISPATCHED: "ยืนยันออกงาน",
   INSPECT_REQUESTED: "ส่งทีมตรวจหน้างาน",
@@ -692,7 +693,34 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   ADMIN_REVIEW_REQUESTED: "ส่งกลับให้แอดมินตรวจสอบ",
   ADMIN_REVIEW_CANCELLED: "ยกเลิกคำขอให้แอดมินตรวจสอบ",
   ADMIN_REVIEW_ANSWERED: "แอดมินตรวจแล้ว",
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ไม่เดินขั้นทั้งสามตัว (ดู NON_STAGE_ACTIONS ใน routes/workOrders.ts)
+   * คำขอของหัวหน้าภาคเก็บเป็นประวัติ ไม่ใช่ AdminReview: ไม่ต้องมีขั้นต่ำ 5 ตัวอักษร ไม่ต้องรอแอดมินตอบปิด —
+   * แอดมินแก้เป็นงานด่วน/เลื่อนวัน/หัวหน้าภาคส่งกลับหรือปล่อยงาน = คำขอจบเองจากลำดับประวัติ (URGENT_ASK_SETTLE)
+   */
+  URGENT_RELEASE: "แอดมินแก้เป็นงานด่วน",
+  URGENT_REQUESTED: "ขอแอดมินแก้เป็นงานด่วน",
+  URGENT_REQUEST_CANCELLED: "ยกเลิกคำขอแก้เป็นงานด่วน",
 };
+
+/**
+ * ใบมาถึงขั้นปล่อยงานด้วยทางไหน — ใช้ในข้อความ "ถึงหัวหน้าภาคหลังเวลาปิดรับ (<ทาง> <เวลา> น.)"
+ * ข้อความต้องบอกตามจริงว่าใบมาถึงช้าเพราะอะไร (คอนเฟิร์มลูกค้าช้า · เลื่อนวัน · ย้อนขั้น) ไม่ใช่โทษหัวหน้าภาคว่าปล่อยช้า
+ * ชื่อประวัติเต็ม ๆ ยาวเกินกล่องสาเหตุ ("ลูกค้าขอเลื่อนวัน" ต้องอ่านว่าแอดมินคอนเฟิร์มลูกค้าแล้ว) — ตัวที่ไม่อยู่ในนี้ใช้ชื่อประวัติ
+ */
+export const RELEASE_ARRIVAL_LABELS: Record<string, string> = {
+  CONFIRMED: "คอนเฟิร์มลูกค้า",
+  RESCHEDULED: "คอนเฟิร์มลูกค้า",
+  APPOINTMENT_MOVED: "เลื่อนวันนัด",
+  APPOINTMENT_RECALLED: "ดึงงานคืนจากช่าง",
+  ROLLED_BACK: "ย้อนขั้น",
+  TRANSFER_ARRIVED: "โอนเสร็จแล้ว",
+  PICKED_UP: "คอนเฟิร์ม เบิกแล้ว",
+  PARTS_CHECKED: "เบิกอะไหล่",
+};
+export function releaseArrivalLabel(action: string): string {
+  return RELEASE_ARRIVAL_LABELS[action] ?? WORK_ORDER_ACTION_LABELS[action] ?? action;
+}
 
 /**
  * แอดมินทำแทนขั้นของคนอื่นได้ไหม

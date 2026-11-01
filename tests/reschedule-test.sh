@@ -317,7 +317,7 @@ POST $A work-orders/$R6/reschedule "$(MOVE $D2 ร้านขอ)" >/dev/null
 [ "$(WO $R6)" = "INSPECT_DISPATCH|CONFIRMED|$TEAM|$D2|-" ] && [ "$(LASTLOG $R6)" = "APPOINTMENT_MOVED|INSPECT_DISPATCH|A001" ] && [ "$(RS $R6)" = "true" ] \
   && pass "รอส่งช่างตรวจ: เลื่อนได้ อยู่ขั้นเดิม หัวหน้าภาคเห็นคอนเฟิร์มวันใหม่" || fail "เลื่อนตรวจ: $(WO $R6) $(LASTLOG $R6) rs=$(RS $R6)"
 POST $S "work-orders/$R6/decline-new-date" '{"reason":"ทีมเต็มวันนั้น"}' >/dev/null
-[ "$(WO $R6)" = "INSPECT_CONFIRM|PENDING|$TEAM|$D2|-" ] && pass "ทีมไม่ว่างวันใหม่ → กลับไปแอดมินนัดตรวจใหม่" || fail "ส่งกลับตรวจ: $(WO $R6)"
+[ "$(WO $R6)" = "INSPECT_CONFIRM|PENDING|$TEAM|$D2|-" ] && pass "ทีมไม่ว่าง → กลับไปแอดมินนัดตรวจใหม่" || fail "ส่งกลับตรวจ: $(WO $R6)"
 N=$(LASTNOTE $R6)
 echo "$N" | grep -q "^ทีม$TEAM ไม่ว่างวันที่แอดมินเลื่อน (.*) — ทีมเต็มวันนั้น$" && ! echo "$N" | grep -q "ลูกค้าขอ" \
   && pass "บันทึกส่งกลับนัดตรวจที่แอดมินเลื่อน: \"ไม่ว่างวันที่แอดมินเลื่อน\" (ร้านไม่ได้ขอ)" || fail "บันทึกส่งกลับตรวจ: $N"

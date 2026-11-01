@@ -42,7 +42,8 @@ CLOSE_OK='{"result":"FIXED","note":"เปลี่ยนบอร์ดแล�
 echo "═══ ปิดงานใบงาน SUB"
 W=$(mk 1); IDS="$W"
 POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$OS\",\"scheduledAt\":\"$TODAY\"}}" >/dev/null
-POST $A work-orders/$W/confirm-appointment '{}' >/dev/null
+# งานวันนี้ติดเวลาปิดรับเสมอ (เส้นตายคือเมื่อวาน) — แอดมินติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" ตอนคอนเฟิร์ม หัวหน้าภาคจึงปล่อยได้ทุกเวลา
+POST $A work-orders/$W/confirm-appointment '{"urgent":true}' >/dev/null
 POST $S work-orders/$W/dispatch '{}' >/dev/null
 for r in NAMEPLATE BEFORE AFTER; do ATT $S $W $r; done
 [ "$(PC $S work-orders/$W/close "$CLOSE_OK,\"otherWorkers\":\"ทีม $OS\"}")" = "400" ] && [ "$(DB "select status from \"WorkOrder\" where id=$W")" = "IN_PROGRESS" ] \
@@ -56,7 +57,7 @@ POST $S work-orders/$W/close "$CLOSE_OK,\"subTeam\":\"$OS\",\"otherWorkers\":\"�
 
 W2=$(mk 2); IDS="$IDS $W2"
 POST $S work-orders/$W2/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$TODAY\"}}" >/dev/null
-POST $A work-orders/$W2/confirm-appointment '{}' >/dev/null
+POST $A work-orders/$W2/confirm-appointment '{"urgent":true}' >/dev/null
 POST $S work-orders/$W2/dispatch '{}' >/dev/null
 for r in NAMEPLATE BEFORE AFTER; do ATT $T $W2 $r; done
 [ "$(PC $T work-orders/$W2/close "$CLOSE_OK}")" = "400" ] && [ "$(DB "select status from \"WorkOrder\" where id=$W2")" = "IN_PROGRESS" ] \

@@ -59,6 +59,10 @@ POST $A work-orders/$W/confirm-appointment '{}' >/dev/null
 
 echo "═══ งานของฉันวันนี้ + ถึงหน้างาน"
 DB "update \"WorkOrder\" set \"scheduledAt\"='$TODAY' where id=$W" >/dev/null
+# งานวันนี้ติดเวลาปิดรับเสมอ (เส้นตายคือเมื่อวาน) — แอดมินแก้เป็นงานด่วนก่อน หัวหน้าภาคจึงปล่อยได้ไม่ว่ารันเทสต์กี่โมง
+[ "$(PC $A work-orders/$W/urgent-release '{"reason":"ทดสอบงานของฉันวันนี้"}')" = "200" ] \
+  && [ "$(DB "select \"urgentReleaseFor\"::date from \"WorkOrder\" where id=$W")" = "$TODAY" ] \
+  || fail "แก้เป็นงานด่วนก่อนปล่อยงานวันนี้ไม่ผ่าน: $(DB "select coalesce(\"urgentReleaseFor\"::text,'-') from \"WorkOrder\" where id=$W")"
 [ "$(CODE -X POST localhost:4000/api/work-orders/$W/arrive -H "$(H $T)" -H 'Content-Type: application/json' -d '{}')" = "409" ] \
   && pass "ยังไม่ปล่อยงาน กดถึงหน้างานไม่ได้ (409)" || fail "ถึงหน้างานก่อนปล่อยงานได้"
 [ "$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)" | J "d.rows.some(r=>r.id===$W)")" = "false" ] \

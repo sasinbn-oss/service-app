@@ -485,6 +485,11 @@ const NOT_A_MOVE = [
   "ADMIN_REVIEW_ANSWERED",
   // ไม่ส่งเคลมชิ้นที่อยู่ในประกัน (เคลมก้อน 5) — บันทึกคู่กับการปิดงาน ตัวปิดงานคือการเดินขั้น ไม่ใช่แถวนี้
   "CLAIM_SKIPPED",
+  // เวลาปิดรับปล่อยงาน: แอดมินแก้เป็นงานด่วน / หัวหน้าภาคขอ / ยกเลิกคำขอ — ใบอยู่ขั้นเดิม (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  // ไม่งั้นแอดมินปลดล็อกใบที่ช่างเพิ่งส่งกลับ แล้วกล่อง "ช่างแจ้งปัญหา" หายทั้งที่ยังไม่มีใครแก้
+  "URGENT_RELEASE",
+  "URGENT_REQUESTED",
+  "URGENT_REQUEST_CANCELLED",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
