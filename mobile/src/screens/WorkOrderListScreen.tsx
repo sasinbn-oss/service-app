@@ -60,6 +60,7 @@ import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
 import { thaiDate, todayBkk } from "../components/DateField";
 import { HomeStackParamList } from "../navigation/types";
+import type { Cutoff, Release, ReleaseDeclined } from "../utils/dispatchCutoff";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
@@ -133,7 +134,8 @@ export interface WorkOrderRow {
   rescheduled?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
   /** regions = ทุกภาคที่คนนั้นดูแล (หลายภาคได้) — เซิร์ฟเวอร์รุ่นเก่าส่งแค่ region */
-  waitingOnSupervisors: { id: number; name: string; region: string | null; regions?: string[] }[];
+  /** phone = เบอร์หัวหน้าภาค มีเฉพาะในคำตอบของแอดมิน — แอดมินโทรตามใบที่ยังไม่ปล่อย (หัวข้อเลยเวลาปล่อยงาน) */
+  waitingOnSupervisors: { id: number; name: string; region: string | null; regions?: string[]; phone?: string | null }[];
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
   waitingOnTeam: string | null;
   branchType: "DODO" | "COCO";
@@ -142,6 +144,14 @@ export interface WorkOrderRow {
   warrantyEndsAt: string | null;
   /** เข้าขั้นปัจจุบันเมื่อไร — ใช้บอกว่าค้างมากี่วัน */
   stageSince: string;
+  /** ใบทดสอบ — ไม่ติดเวลาปิดรับปล่อยงาน ไม่ขึ้นป้าย/หัวข้อ (ข้อ 15) */
+  isTest?: boolean;
+  /** วันนัดที่แอดมินแก้เป็นงานด่วนให้ "YYYY-MM-DD" — ใช้ได้เมื่อตรงกับวันนัดตอนนี้เท่านั้น (เลื่อนวันแล้วหมดผลเอง) */
+  urgentReleaseFor?: string | null;
+  /** สถานะเวลาปิดรับของใบขั้นปล่อยงาน (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) — ขั้นอื่น/ใบทดสอบ/ไม่มีวันนัด = null */
+  release?: Release | null;
+  /** หัวหน้าภาคส่งใบที่ล็อกกลับมาให้แอดมินนัดใหม่ — มีเฉพาะในคำตอบของแอดมิน */
+  releaseDeclined?: ReleaseDeclined | null;
 }
 
 type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
@@ -149,7 +159,11 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 /** ใบด่วนที่ยังค้าง — ดึงขึ้นบนสุดและมีออร่า (ใบที่ปิดแล้วไม่มี stageActor) */
 const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
 type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
-type ListData = { rows: WorkOrderRow[]; counts: Record<string, number> };
+/**
+ * serverNow + cutoff = นาฬิกาเซิร์ฟเวอร์และเวลาปิดรับตอนตอบ (ต.ค. 69) — ป้าย "วันนี้/พรุ่งนี้" และนับถอยหลังเดินจากค่านี้
+ * ไม่ใช่นาฬิกามือถือ (ข้อ 12) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ว่าง
+ */
+type ListData = { rows: WorkOrderRow[]; counts: Record<string, number>; serverNow?: string; cutoff?: Cutoff };
 type Sort = "urgent" | "new" | "old" | "az" | "za" | "appt";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
@@ -280,6 +294,8 @@ const claimMatch = (r: WorkOrderRow, v: ListPrefs["claim"]) => !v || (v === "any
  * แยกตามสิ่งที่ต้องทำ ไม่ใช่ตามชื่อขั้น: ใบแจ้งซ่อมใหม่ต้องนั่งดูอะไหล่ · ใบรอจ่าย/ปล่อยงานต้องดูคิวทีม
  * · ใบทีม outsource ต้องตามให้ทีมนอกส่งรูปมาแล้วปิดแทน — สามอย่างนี้ทำคนละจังหวะ ปนกันแล้วหาไม่เจอ
  * ทีม outsource แยกทั้งก้อน (รอปล่อยงาน + รอปิดงาน) แท็บจ่ายงานจึงเหลือแต่ทีมช่างปกติ
+ * "ส่งช่างตรวจ" (INSPECT_DISPATCH) อยู่แท็บจ่ายงาน/ปล่อยงาน (เจ้าของงานตอบข้อ ก ต.ค. 69) — ติดเวลาปิดรับเหมือนรับทราบปล่อยงาน
+ * ถ้าค้างอยู่แท็บงานแจ้งซ่อม หัวหน้าภาคที่เปิดแท็บจ่ายงานตอนบ่ายสามจะไม่เห็นใบที่กำลังจะล็อก
  */
 type SupTab = "repair" | "dispatch" | "outsource";
 const SUP_TABS: { value: SupTab; label: string }[] = [
@@ -288,7 +304,7 @@ const SUP_TABS: { value: SupTab; label: string }[] = [
   // "ใบงาน SUB" — คำที่เจ้าของงานใช้เรียกใบที่จ่ายให้ทีม outsource
   { value: "outsource", label: "ใบงาน SUB" },
 ];
-const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"];
+const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "INSPECT_DISPATCH", "PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"];
 function supTabOf(r: { outsource?: boolean; status: string }): SupTab {
   if (r.outsource) return "outsource";
   return DISPATCH_STAGES.includes(r.status) ? "dispatch" : "repair";
