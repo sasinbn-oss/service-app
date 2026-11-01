@@ -13,7 +13,18 @@
 #   B  หน้าใบงาน — partsBrand (รู้ยี่ห้อ / ไม่รู้ / ไม่มีเครื่อง / ยี่ห้อจากรายงานชนะ / "HB") · อะไหล่ในใบมี brandFiles + issued
 #      · เครื่องของสาขา (ฟอร์มเปิดใบงาน) มี make + brandFile · กระดานเครื่องดับมี machineMake + brandFiles ของอะไหล่ที่รอ
 #      · ตัวเลือกยี่ห้อมี Spinz · CASE ใน tests/lib/fixture-parts.sh ให้ไฟล์เดียวกับ brandFileOf ของเซิร์ฟเวอร์ทุกคำทดสอบ
-#   (กลุ่ม C เป็นต้นไป — ช่างเลือก/หัวหน้าภาคคอนเฟิร์ม/ตีกลับ/ล็อกยี่ห้อทุกเส้นทาง — มากับก้อนถัดไป)
+#   C  ช่างเลือกอะไหล่ตอนตรวจหน้างาน → รอหัวหน้าภาคคอนเฟิร์ม (รายการยังไม่ลงใบ/กระดาน) · ล็อกไฟล์ยี่ห้อ (Maytag · ไม่อยู่ในไฟล์ไหน ·
+#      นอกสโตร์ · ไม่มีเครื่อง) · เครื่องไม่รู้ยี่ห้อต้องส่งยี่ห้อ (จำไว้ที่ Machine.model) · ยี่ห้อที่รู้แล้วเปลี่ยนไม่ได้ · ของใช้ร่วม/หลายไฟล์
+#      · ป้าย "หัวหน้าภาค · คอนเฟิร์มอะไหล่" ในหน้าใบงาน กล่องงาน version · หัวหน้าภาคระบุอะไหล่ทับไม่ได้ (409)
+#   C2 ไม่เลือกอะไหล่ — แถวเดิมที่เอาออกหายจากใบจริง ยกเว้นของที่เบิกแล้ว · แอปรุ่นเก่า (ไม่ส่ง parts) ไม่แตะรายการ
+#   D  ตีกลับ — สิทธิ์ · เหตุผลบังคับ · pickId · ใบกลับตรวจหน้างานทีมเดิม · การ์ดแดงใน my-day · ทีม Area ไม่เห็นเหตุผล ·
+#      ไม่ขึ้น "รอจัดแผน" · ด่านส่งใหม่สามแบบ · ส่งรอบ 2 (previous · เพิ่มใหม่) · แก้ผลตรวจ/เพิ่มรูปอย่างเดียวก็ส่งได้
+#   E  คอนเฟิร์ม — สิทธิ์ (ช่าง · แอดมินอะไหล่ · ดูในฐานะ) · ตัวไม่ตรงคอนเฟิร์มไม่ได้ · ลงใบแทนของในสโตร์ทั้งชุด + อะไหล่นอก/ค่าบริการ ·
+#      ประวัติ (ของที่เอาออก + เลขใบเบิก) · กล่องเขียว · ถึงกระดานตอนนี้ · แอดมินคอนเฟิร์มแทน · ยี่ห้อเครื่องเปลี่ยนหลังส่ง
+#   F  หัวหน้าภาคบันทึกแทน — ลงใบเลย ไม่ต้องคอนเฟิร์มตัวเอง · ล็อกยี่ห้อเหมือนช่าง · ปิดรอบที่ถูกตีกลับ
+#   G  ทุกทางออกปิดรอบ — ส่งตรวจใหม่ · ยกเลิก · ย้อนขั้น · ย้อนกลับไปตรวจแล้วการ์ดแดงเก่าไม่กลับมา · ส่งว่างหลังตีกลับ
+#   J  คัดลอกเป็นใบทดสอบพารอบที่รอคอนเฟิร์มไปด้วย · ลบใบแล้วรอบหายตาม
+#   (H/H2/I — ล็อกยี่ห้อเส้นทางเดิมทุกเส้น · แก้ยี่ห้อเครื่องจากหน้าใบงาน — มากับก้อนถัดไป)
 #
 # อะไหล่ทดสอบสร้างทาง SQL และใส่ไฟล์เอง (source MANUAL) · ช่องยี่ห้อตั้งเป็นข้อความที่ไม่เกี่ยวโดยตั้งใจ —
 # พิสูจน์ว่าการค้นดูไฟล์ ไม่ได้ดูข้อความยี่ห้อ (NB1 มีข้อความ "HB - Huebsch" แต่ไม่อยู่ในไฟล์ไหน ต้องไม่ขึ้นที่ไหนเลย)
@@ -58,7 +69,11 @@ cleanup() {
   DB "delete from \"Machine\" where \"branchId\"=$BID and code in (${codes}'-')" >/dev/null 2>&1 || :
   DB "delete from \"SparePartImport\" where \"fileName\" like '%zpk-$SUF%'" >/dev/null 2>&1 || :
   DB "delete from \"SparePart\" where \"partCode\" like '$K-%' or \"partCode\" = '[นอกสโตร์] $K ของนอก'" >/dev/null 2>&1 || :
-  DB "delete from \"User\" where \"employeeCode\" in ('ZPP$SUF','ZPR$SUF')" >/dev/null 2>&1 || :
+  DB "delete from \"User\" where \"employeeCode\" in ('ZPP$SUF','ZPR$SUF','ZPT$SUF')" >/dev/null 2>&1 || :
+  # ทีมของ T001 / ภาคของ S001 ที่กลุ่ม C ตั้งให้ตรงกับสาขา C0006 — คืนค่าเดิม (CLAUDE.md)
+  if [ -n "${TID:-}" ]; then DB "update \"User\" set team=nullif('$OLD_TEAM','') where id=$TID" >/dev/null 2>&1 || :; fi
+  if [ -n "${SID:-}" ]; then DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID" >/dev/null 2>&1 || :; fi
+  if [ -n "${VSTART:-}" ]; then DB "delete from \"ViewAsLog\" where id>$VSTART and \"byUserId\"=(select id from \"User\" where \"employeeCode\"='A001') and \"targetUserId\"=${SID:-0}" >/dev/null 2>&1 || :; fi
   rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -334,6 +349,466 @@ DB "update \"Machine\" set brand='HB' where \"branchId\"=$BID and code='$MH'" >/
 [ -z "$SYNC" ] \
   && pass "fixture-parts.sh กับ brandFileOf ให้ไฟล์เดียวกันทั้ง 18 คำ (HB แบบเป็นคำ · THB · Haier/Maytag · ยี่ห้ออื่น = Other …)" \
   || fail "fixture-parts.sh ไม่ตรงกับ brandFileOf:$SYNC"
+
+echo
+echo "═══ C ช่างเลือกอะไหล่ตอนตรวจหน้างาน → รอหัวหน้าภาคคอนเฟิร์ม (POST /work-orders/:id/inspection)"
+# ทีมของ T001 = ทีมของสาขา C0006 (คืนค่าเดิมตอนจบใน cleanup) · S001 ดูแลภาคของ C0006
+TEAM=$(DB "select zone from \"Branch\" where code='C0006'"); BREGION=$(DB "select region from \"Branch\" where code='C0006'")
+SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'"); TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'")
+AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
+OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID"); OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where id=$TID")
+PATCHU() { curl -s -o /dev/null -X PATCH "localhost:4000/api/auth/users/$1" -H "$(H $A)" -H 'Content-Type: application/json' -d "$2"; }
+PATCHU $SID "{\"region\":\"$BREGION\"}"; PATCHU $TID "{\"team\":\"$TEAM\"}"
+TNAME=$(DB "select name from \"User\" where id=$TID"); SNAME=$(DB "select name from \"User\" where id=$SID")
+# ช่างทีมอื่น — แก้ใบของทีมนี้ไม่ได้
+DB "insert into \"User\"(\"employeeCode\",name,role,team,\"passwordHash\",\"mustChangePassword\") values
+  ('ZPT$SUF','ช่างทีมอื่นทดสอบเลือกอะไหล่','EMPLOYEE','ทีมทดสอบอื่น$SUF','$HASH',false)" >/dev/null
+TX=$(login ZPT$SUF)
+# A3 เอา MT1 ออกจากทุกไฟล์ไปแล้ว — กลุ่มนี้ต้องการ MT1 ในไฟล์ Maytag
+DB "insert into \"SparePartBrandFile\"(\"sparePartId\",file,source) select id,'Maytag','MANUAL' from \"SparePart\" where \"partCode\"='$K-MT1' on conflict do nothing" >/dev/null
+HB1=$(PID $K-HB1); HB2=$(PID $K-HB2); HB3=$(PID $K-HB3); MT1=$(PID $K-MT1); OT1=$(PID $K-OT1)
+HM1=$(PID $K-HM1); MO1=$(PID $K-MO1); NB1=$(PID $K-NB1)
+L_HB1="$K-HB1 c สายพานทดสอบไฟล์"; L_HB2="$K-HB2 z บอร์ดหลักทดสอบไฟล์"; L_HB3="$K-HB3 b ใช้แทน $K-HB2"
+L_OT1="$K-OT1 k น้ำยาของใช้ร่วมทดสอบ"; L_MO1="$K-MO1 d สวิตช์ประตูใช้ร่วมทดสอบ"
+STAGE_LABEL="หัวหน้าภาค · คอนเฟิร์มอะไหล่"; BACK_LABEL="ช่าง · ตรวจหน้างาน — แก้รายการอะไหล่"
+# วันนัดตรวจ D+5 — ไม่ติดเวลาปิดรับปล่อยงานไม่ว่ารันตอนไหน (tests/README "เวลาปิดรับปล่อยงาน")
+D5=$(node -e "console.log(new Date(Date.now()+7*3600e3+5*86400e3).toISOString().slice(0,10))")
+
+st() { DB "select status from \"WorkOrder\" where id=$1"; }
+NC=""
+newcode() {
+  local c
+  while :; do
+    c="W$((9000 + RANDOM % 999))"
+    case " $MCODES " in *" $c "*) continue ;; esac
+    [ "$(DB "select count(*) from \"Machine\" where \"branchId\"=$BID and code='$c'")" = "0" ] && break
+  done
+  MCODES="$MCODES $c"; NC=$c
+}
+UP() { curl -s -o /dev/null -X POST "localhost:4000/api/work-orders/$1/attachments" -H "$(H $T)" -F "file=@tests/$2" -F "role=$3"; }
+# ส่งตรวจ (D+5) → แอดมินนัด → หัวหน้าภาคส่งช่าง → แนบไฟล์ครบสามอย่าง = ใบรอ "ช่าง · ตรวจหน้างาน"
+INSP() {
+  POST $S work-orders/$1/inspect-request "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D5\",\"scheduledTime\":\"09:30\"}" >/dev/null
+  POST $A work-orders/$1/confirm-appointment '{}' >/dev/null
+  POST $S work-orders/$1/dispatch '{}' >/dev/null
+  UP $1 "site-photo.png;type=image/png" INSPECT_SITE
+  UP $1 "site-photo.png;type=image/png" INSPECT_PART
+  UP $1 "site-clip.mp4;type=video/mp4" INSPECT_VIDEO
+  [ "$(st $1)" = "INSPECTING" ] || fail "พาใบ $1 ไปถึงตรวจหน้างานไม่ได้ ($(st $1))"
+}
+# ใบใหม่บนเครื่องรหัสใหม่ ยี่ห้อ $1 (ว่าง = ไม่รู้ยี่ห้อ) ที่ไปถึงตรวจหน้างานแล้ว → $WO (ใบ) · $NC (รหัสเครื่อง)
+WO=""
+newinsp() {
+  newcode
+  local model=""; [ -n "$1" ] && model=",\"model\":\"$1\""
+  WO=$(OPENWO CM "{\"code\":\"$NC\"$model,\"symptom\":\"ทดสอบเลือกอะไหล่ $2\"}"); ADDWO "$WO"
+  INSP "$WO"
+}
+# อะไหล่ในรูป JSON: PL <id>:<จำนวน> ...
+PL() { local out="" a; for a in "$@"; do out="$out{\"sparePartId\":${a%%:*},\"quantity\":${a##*:}},"; done; echo "[${out%,}]"; }
+INS() { POST ${3:-$T} work-orders/$1/inspection "$2"; }
+RET() { POST ${3:-$S} work-orders/$1/parts-pick/return "$2"; }
+CONF() { POST ${3:-$S} work-orders/$1/parts-pick/confirm "$2"; }
+DET() { curl -s localhost:4000/api/work-orders/$1 -H "$(H ${2:-$A})"; }
+EMSG() { J 'd.error===undefined?"(ไม่มี error) "+JSON.stringify(d).slice(0,160):typeof d.error==="string"?d.error:JSON.stringify(d.error)'; }
+# รอบเลือกอะไหล่ทุกรอบของใบ: สถานะ:รอบ:ยังไม่ถูกยกเลิก · รายการของรอบล่าสุด: รหัสxจำนวน:ป้ายตรง/ไม่ตรง
+PICKS() { DB "select coalesce(string_agg(status||':'||round||':'||(\"voidedAt\" is null), ',' order by id),'') from \"PartsPick\" where \"workOrderId\"=$1"; }
+ITEMS() { DB "select coalesce(string_agg(x, ',' order by x collate \"C\"),'') from (select replace(p.\"partCode\",'$K-','')||'x'||i.quantity||':'||coalesce(i.mark,'-') x from \"PartsPickItem\" i join \"SparePart\" p on p.id=i.\"sparePartId\" where i.\"pickId\"=(select max(id) from \"PartsPick\" where \"workOrderId\"=$1)) s"; }
+PICKID() { DB "select max(id) from \"PartsPick\" where \"workOrderId\"=$1"; }
+PITEMS() { DB "select coalesce(string_agg(x, ',' order by x collate \"C\"),'') from (select replace(p.\"partCode\",'$K-','')||'x'||i.quantity||':'||coalesce(i.mark,'-') x from \"PartsPickItem\" i join \"SparePart\" p on p.id=i.\"sparePartId\" where i.\"pickId\"=$1) s"; }
+# อะไหล่ที่รอในใบ (ของนอกสโตร์ = OFF) · อะไหล่ที่รอบนกระดานเครื่องดับ
+WAIT() { DB "select coalesce(string_agg(x, ',' order by x collate \"C\"),'') from (select case when p.\"offCatalog\" then 'OFF' else replace(p.\"partCode\",'$K-','') end||'x'||w.quantity x from \"WorkOrderPart\" w join \"SparePart\" p on p.id=w.\"sparePartId\" where w.\"workOrderId\"=$1 and w.kind='WAITING') s"; }
+OPARTS() { DB "select coalesce(string_agg(x, ',' order by x collate \"C\"),'') from (select replace(p.\"partCode\",'$K-','')||'x'||o.quantity x from \"OutagePart\" o join \"SparePart\" p on p.id=o.\"sparePartId\" where o.\"outageId\"=$1) s"; }
+LASTNOTE() { DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='$2' order by id desc limit 1"; }
+LASTACTS() { DB "select string_agg(action, ',' order by \"createdAt\", id) from (select action, \"createdAt\", id from \"WorkOrderLog\" where \"workOrderId\"=$1 order by \"createdAt\" desc, id desc limit ${2:-2}) s"; }
+WAITROW() { DB "insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",\"requisitionNo\") values ($1,$2,${3:-1},'WAITING',${4:-null},${5:-null})" >/dev/null; }
+# เคสเครื่องดับ (ทาง SQL) บนเครื่องรหัสใหม่ยี่ห้อ Huebsch + อะไหล่ที่รอบนกระดาน แล้ว "+ สร้างใบงาน" → $OUTG (เคส) · $WO (ใบ)
+OUTG=""
+outagewo() {
+  newcode
+  local mk; mk=$(OPENWO CM "{\"code\":\"$NC\",\"model\":\"Huebsch\",\"symptom\":\"สร้างเครื่องให้เคสทดสอบเลือกอะไหล่\"}"); ADDWO "$mk"
+  local mid; mid=$(DB "select id from \"Machine\" where \"branchId\"=$BID and code='$NC'")
+  OUTG=$(DB "insert into \"Outage\"(kind,\"branchId\",\"machineId\",\"startedAt\",\"lastSeenAt\") values ('MACHINE_OFF',$BID,$mid,now()-interval '2 hours',now()) returning id")
+  OUTAGES="$OUTAGES $OUTG"
+  local p; for p in "$@"; do DB "insert into \"OutagePart\"(\"outageId\",\"sparePartId\",quantity) values ($OUTG,${p%%:*},${p##*:})" >/dev/null; done
+  WO=$(POST $A work-orders/from-outage/$OUTG '{}' | J 'd.id??"ERR "+JSON.stringify(d.error)'); ADDWO "$WO"
+}
+
+newinsp Huebsch "P"; P=$WO
+NOTE_P="บอร์ดไหม้ สายพานขาด"
+R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $MT1:1)}")
+[ "$(echo "$R" | EMSG)" = "$K-MT1 m มอเตอร์เมย์แท็กทดสอบ$SUF (แก้) อยู่ในไฟล์ Maytag — เครื่อง $NC (Huebsch) เลือกได้เฉพาะอะไหล่ไฟล์ Huebsch และของใช้ร่วม (ไฟล์ Other)" ] \
+  && [ "$(st $P)" = "INSPECTING" ] && [ "$(PICKS $P)" = "" ] \
+  && pass "ช่างเลือก MT1 (ไฟล์ Maytag) บนเครื่อง Huebsch → 400 บอกว่าอยู่ในไฟล์ Maytag · ใบยังรอตรวจหน้างาน · ไม่มีรอบเลือกอะไหล่" \
+  || fail "MT1 บน Huebsch: $(echo "$R" | EMSG) · $(st $P)"
+R1=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $NB1:1)}"); R2=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $OC:1)}")
+[ "$(echo "$R1" | EMSG)" = "$K-NB1 ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เลือกไม่ได้ (แอดมินอัปโหลดไฟล์ที่มีรหัสนี้ หรือติ๊กไฟล์ที่หน้าจัดการข้อมูลอะไหล่)" ] \
+  && [ "$(echo "$R2" | EMSG)" = "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" ] && [ "$(st $P)" = "INSPECTING" ] \
+  && pass "อะไหล่ที่ไม่อยู่ในไฟล์ไหน (NB1 แม้ข้อความยี่ห้อเป็น HB) → 400 · ของนอกสโตร์ → 400 (หัวหน้าภาคใส่ให้)" \
+  || fail "NB1/นอกสโตร์: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
+R1=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":[{\"sparePartId\":$HB1,\"quantity\":100}]}")
+R2=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:60 $HB1:50)}")
+[ "$(echo "$R1" | EMSG)" = "ใส่จำนวนให้ครบทุกรายการ (1–99)" ] && [ "$(echo "$R2" | EMSG)" = "ใส่จำนวนให้ครบทุกรายการ (1–99)" ] && [ "$(PICKS $P)" = "" ] \
+  && pass "จำนวนเกิน 99 → 400 ภาษาไทย · ตัวเดิมส่งซ้ำรวมจำนวนก่อนตรวจ (60+50)" || fail "จำนวน: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
+INSCODE() { CODE -X POST localhost:4000/api/work-orders/$1/inspection -H "$(H $2)" -H 'Content-Type: application/json' -d "{\"note\":\"x\",\"parts\":$(PL $HB1:1)}"; }
+R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:1)}" $TX)
+[ "$(echo "$R" | EMSG)" = "ใบงานนี้จ่ายให้ $TEAM ไม่ใช่ทีมของคุณ" ] && [ "$(INSCODE $P $PA)|$(INSCODE $P $AR)" = "403|403" ] && [ "$(st $P)" = "INSPECTING" ] \
+  && pass "ช่างทีมอื่น 403 · แอดมินอะไหล่ 403 · Area 403 · ใบไม่ขยับ" || fail "สิทธิ์ส่งผลตรวจ: $(echo "$R" | EMSG) PA=$(INSCODE $P $PA) AR=$(INSCODE $P $AR)"
+# อะไหล่ที่อยู่ในใบก่อนตรวจ (OT1) — รายการของช่างยังไม่เขียนลงใบจนกว่าจะคอนเฟิร์ม (ข้อ 12)
+WAITROW $P $OT1
+R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:2 $HB2:1)}")
+[ "$(st $P)" = "NEW" ] && [ "$(PICKS $P)" = "PENDING:1:true" ] && [ "$(ITEMS $P)" = "HB1x2:-,HB2x1:-" ] \
+  && [ "$(DB "select \"brandFile\"||'|'||team||'|'||note||'|'||\"createdById\" from \"PartsPick\" where \"workOrderId\"=$P")" = "Huebsch|$TEAM|$NOTE_P|$TID" ] \
+  && [ "$(DB "select (\"inspectedAt\" is not null)||'|'||(\"scheduledAt\" is null)||'|'||coalesce(\"needsParts\"::text,'-')||'|'||\"inspectionNote\" from \"WorkOrder\" where id=$P")" = "true|true|-|$NOTE_P" ] \
+  && pass "ช่างเลือก HB1×2 + HB2 → ใบไป NEW · รอบที่ 1 รอคอนเฟิร์ม (ไฟล์ Huebsch · ทีมที่ไปตรวจ · ผลตรวจ · คนส่ง) · ล้างวันนัด" \
+  || fail "ส่งรายการ: $(echo "$R" | EMSG) · $(st $P) · $(PICKS $P) · $(ITEMS $P)"
+[ "$(WAIT $P)" = "OT1x1" ] && pass "อะไหล่ที่รอในใบไม่เปลี่ยน (OT1 เดิมอยู่ · HB1/HB2 ยังไม่ลงใบจนกว่าจะคอนเฟิร์ม)" || fail "WorkOrderPart เปลี่ยน: $(WAIT $P)"
+[ "$(LASTACTS $P)" = "INSPECTED,PARTS_PICKED" ] \
+  && [ "$(LASTNOTE $P PARTS_PICKED)" = "เลือกอะไหล่ 2 รายการ ส่งให้หัวหน้าภาคคอนเฟิร์ม: $L_HB1 × 2 · $L_HB2 × 1" ] \
+  && [ "$(DB "select (select \"createdAt\" from \"WorkOrderLog\" where \"workOrderId\"=$P and action='INSPECTED') < (select \"createdAt\" from \"WorkOrderLog\" where \"workOrderId\"=$P and action='PARTS_PICKED')")" = "t" ] \
+  && [ "$(DB "select (select \"createdAt\" from \"PartsPick\" where \"workOrderId\"=$P) = (select \"createdAt\" from \"WorkOrderLog\" where \"workOrderId\"=$P and action='INSPECTED')")" = "t" ] \
+  && pass "ประวัติ: บันทึกผลตรวจ แล้ว \"ช่างเลือกอะไหล่ ส่งให้หัวหน้าภาคคอนเฟิร์ม\" พร้อมรายการ · เวลาเรียงกัน (รอบใช้เวลาเดียวกับผลตรวจ)" \
+  || fail "ประวัติ: $(LASTACTS $P) · $(LASTNOTE $P PARTS_PICKED)"
+R=$(DET $P)
+[ "$(echo "$R" | J 'const p=d.partsPick; [d.statusLabel,p.status,p.round,p.items.length,p.sentBy.name,p.brandFile,p.team,p.reason,p.previous].join("|")')" = "$STAGE_LABEL|PENDING|1|2|$TNAME|Huebsch|$TEAM||" ] \
+  && [ "$(echo "$R" | J 'd.logs.slice(0,2).map(l=>l.actionLabel).join("|")')" = "ช่างเลือกอะไหล่ ส่งให้หัวหน้าภาคคอนเฟิร์ม|บันทึกผลตรวจหน้างาน" ] \
+  && pass "หน้าใบงาน: \"$STAGE_LABEL\" · partsPick (รอบ 1 · 2 รายการ · ช่างที่ส่ง · ไฟล์ Huebsch) · ชื่อประวัติภาษาไทย" \
+  || fail "detail: $(echo "$R" | J 'JSON.stringify([d.statusLabel,d.partsPick])' 2>&1 | head -c 300)"
+R=$(curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $S)")
+[ "$(echo "$R" | J 'const r=d.rows.find(x=>x.id==='$P'); r?[r.statusLabel,r.partsPick.round,r.partsPick.count,r.partsPick.sentByName,r.partsPick.line,r.machineMake].join("|"):"ไม่มีในกล่อง"')" = "$STAGE_LABEL|1|2|$TNAME|$L_HB1 × 2 · $L_HB2 × 1|Huebsch" ] \
+  && [ "$(curl -s localhost:4000/api/work-orders/$P/version -H "$(H $S)" | J 'd.statusLabel')" = "$STAGE_LABEL" ] \
+  && pass "กล่องงานหัวหน้าภาค: ป้ายคอนเฟิร์มอะไหล่ + partsPick (รอบ · จำนวน · ช่าง · บรรทัดรายการ) + ยี่ห้อเครื่อง · /:id/version ป้ายเดียวกัน" \
+  || fail "กล่องงาน: $(echo "$R" | J 'JSON.stringify(d.rows.find(x=>x.id==='$P'))' 2>&1 | head -c 300)"
+[ "$(curl -s localhost:4000/api/branches/C0006/open-work-orders -H "$(H $S)" | J 'const r=d.find(x=>x.id==='$P'); r?r.statusLabel:"ไม่มี"')" = "$STAGE_LABEL" ] \
+  && pass "ป๊อปอัปใบที่เปิดค้าง (branches/:code/open-work-orders) ใช้ป้ายเดียวกัน" || fail "open-work-orders: $(curl -s localhost:4000/api/branches/C0006/open-work-orders -H "$(H $S)" | head -c 200)"
+R=$(POST $S work-orders/$P/parts "{\"needsParts\":true,\"parts\":$(PL $HB3:1)}")
+[ "$(echo "$R" | EMSG)" = "ใบนี้รอคอนเฟิร์มอะไหล่ที่ช่างเลือก — กด “คอนเฟิร์มอะไหล่” หรือ “ตีกลับให้ช่างแก้” (แก้รายการของช่างเองไม่ได้)" ] \
+  && [ "$(st $P)|$(WAIT $P)" = "NEW|OT1x1" ] \
+  && pass "หัวหน้าภาคระบุอะไหล่ทับรายการของช่างไม่ได้ (409) — ใบและรายการไม่เปลี่ยน" || fail "/parts ระหว่างรอคอนเฟิร์ม: $(echo "$R" | EMSG) · $(WAIT $P)"
+
+# ใบที่ผูกเคสเครื่องดับ — รายการของช่างยังไม่ขึ้นกระดาน (อะไหล่ที่รอบนกระดานยังเป็นของเดิม)
+outagewo $HB1:1; O=$WO; OUT2=$OUTG
+INSP $O
+R=$(INS $O "{\"note\":\"เคสเครื่องดับ บอร์ดเสีย\",\"parts\":$(PL $HB2:1)}")
+[ "$(st $O)|$(PICKS $O)|$(WAIT $O)|$(OPARTS $OUT2)" = "NEW|PENDING:1:true|HB1x1|HB1x1" ] \
+  && pass "ใบจากเคสเครื่องดับ: ช่างเลือก HB2 → รอคอนเฟิร์ม · อะไหล่ในใบ (HB1) และอะไหล่ที่รอบนกระดานไม่เปลี่ยน" \
+  || fail "ใบเคสเครื่องดับ: $(echo "$R" | EMSG) · $(st $O) · ใบ=$(WAIT $O) · กระดาน=$(OPARTS $OUT2)"
+
+# เครื่องไม่รู้ยี่ห้อ — ต้องเลือกยี่ห้อก่อน · ยี่ห้อที่เลือกจำไว้กับเครื่อง (Machine.model) ทั้งตอนเลือกและไม่เลือกอะไหล่
+newinsp "" "ไม่รู้ยี่ห้อ"; U1W=$WO; U1M=$NC
+R=$(INS $U1W "{\"note\":\"ไม่รู้ยี่ห้อ\",\"parts\":$(PL $HB1:1)}")
+[ "$(echo "$R" | EMSG)" = "เครื่อง $U1M ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่" ] && [ "$(st $U1W)" = "INSPECTING" ] \
+  && pass "เครื่องไม่รู้ยี่ห้อ + เลือกอะไหล่ ไม่ส่งยี่ห้อ → 400 \"เลือกยี่ห้อเครื่องก่อน\"" || fail "ไม่รู้ยี่ห้อ: $(echo "$R" | EMSG)"
+R=$(INS $U1W "{\"note\":\"ไม่รู้ยี่ห้อ\",\"parts\":$(PL $HB1:1),\"machineBrand\":\"Huebsch\"}")
+[ "$(st $U1W)|$(PICKS $U1W)" = "NEW|PENDING:1:true" ] \
+  && [ "$(DB "select coalesce(brand,'-')||'|'||model from \"Machine\" where \"branchId\"=$BID and code='$U1M'")" = "-|Huebsch" ] \
+  && [ "$(LASTNOTE $U1W MACHINE_BRAND_SET)" = "บันทึกยี่ห้อเครื่อง $U1M: Huebsch (ช่างเลือกตอนตรวจหน้างาน)" ] \
+  && [ "$(LASTACTS $U1W 3)" = "MACHINE_BRAND_SET,INSPECTED,PARTS_PICKED" ] \
+  && [ "$(DB "select \"brandFile\" from \"PartsPick\" where \"workOrderId\"=$U1W")" = "Huebsch" ] \
+  && pass "ส่งยี่ห้อ Huebsch มาด้วย → บันทึกที่ Machine.model + ประวัติ \"บันทึกยี่ห้อเครื่อง\" (ก่อนแถวผลตรวจ) · รอบเลือกอะไหล่ใช้ไฟล์ Huebsch" \
+  || fail "บันทึกยี่ห้อพร้อมอะไหล่: $(echo "$R" | EMSG) · $(PICKS $U1W) · $(LASTACTS $U1W 3)"
+newinsp "" "ไม่รู้ยี่ห้อ ไม่เลือกอะไหล่"; U2W=$WO; U2M=$NC
+R=$(INS $U2W "{\"note\":\"ไม่รู้ยี่ห้อ ไม่เลือกอะไหล่\",\"parts\":[],\"machineBrand\":\"Spinz\"}")
+[ "$(st $U2W)|$(PICKS $U2W)" = "NEW|" ] \
+  && [ "$(DB "select model from \"Machine\" where \"branchId\"=$BID and code='$U2M'")" = "Spinz" ] \
+  && [ "$(LASTNOTE $U2W MACHINE_BRAND_SET)" = "บันทึกยี่ห้อเครื่อง $U2M: Spinz (ช่างเลือกตอนตรวจหน้างาน)" ] \
+  && pass "ไม่เลือกอะไหล่แต่เลือกยี่ห้อ (Spinz) → ยังจำยี่ห้อไว้กับเครื่อง + ประวัติ · ไม่มีรอบเลือกอะไหล่" \
+  || fail "ยี่ห้อไม่มีอะไหล่: $(echo "$R" | EMSG) · $(st $U2W)"
+
+# เครื่องที่รู้ยี่ห้อแล้ว — ฟอร์มเปลี่ยนยี่ห้อไม่ได้ · ของใช้ร่วม (Other) และรหัสที่อยู่หลายไฟล์เลือกได้
+newinsp Huebsch "ของใช้ร่วม"; KW=$WO; KM=$NC
+R=$(INS $KW "{\"note\":\"เปลี่ยนยี่ห้อ\",\"parts\":$(PL $HB1:1),\"machineBrand\":\"Maytag\"}")
+[ "$(echo "$R" | EMSG)" = "เครื่อง $KM มียี่ห้อในระบบแล้ว (Huebsch) — แก้ยี่ห้อได้ที่หัวหน้าภาคหรือแอดมิน" ] \
+  && [ "$(st $KW)|$(DB "select model from \"Machine\" where \"branchId\"=$BID and code='$KM'")" = "INSPECTING|Huebsch" ] \
+  && pass "เครื่องรู้ยี่ห้อแล้ว (Huebsch) ส่งยี่ห้ออื่นมา → 400 · ยี่ห้อเดิมไม่เปลี่ยน" || fail "เปลี่ยนยี่ห้อ: $(echo "$R" | EMSG)"
+# งานด่วนของวันนัดเดิม (เวลาปิดรับปล่อยงาน) ต้องหมดผลเมื่อวันนัดถูกล้างตอนส่งผลตรวจ — ทุกทางของปุ่มนี้
+DB "update \"WorkOrder\" set \"urgentReleaseFor\"=\"scheduledAt\" where id=$KW" >/dev/null
+R=$(INS $KW "{\"note\":\"ใช้ของใช้ร่วม\",\"parts\":$(PL $OT1:1 $HM1:1),\"machineBrand\":\"huebsch\"}")
+[ "$(st $KW)|$(PICKS $KW)|$(ITEMS $KW)" = "NEW|PENDING:1:true|HM1x1:-,OT1x1:-" ] \
+  && [ "$(DB "select (\"urgentReleaseFor\" is null)||'|'||(\"scheduledAt\" is null) from \"WorkOrder\" where id=$KW")" = "true|true" ] \
+  && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$KW and action='MACHINE_BRAND_SET'")" = "0" ] \
+  && pass "เครื่อง Huebsch เลือก OT1 (ไฟล์ Other = ของใช้ร่วม) + HM1 (Huebsch+Maytag) ได้ · ส่งยี่ห้อเดิม (ตัวพิมพ์ต่าง) ไม่ลงประวัติซ้ำ · ล้างวันนัด+งานด่วน" \
+  || fail "ของใช้ร่วม/หลายไฟล์: $(echo "$R" | EMSG) · $(ITEMS $KW)"
+newinsp Electrolux "ไม่มีไฟล์ยี่ห้อ"; EW=$WO; EM=$NC
+R1=$(INS $EW "{\"note\":\"ยี่ห้อไม่มีไฟล์\",\"parts\":$(PL $HB1:1)}")
+R=$(INS $EW "{\"note\":\"ยี่ห้อไม่มีไฟล์\",\"parts\":$(PL $MO1:1)}")
+[ "$(echo "$R1" | EMSG)" = "$L_HB1 อยู่ในไฟล์ Huebsch — เครื่อง $EM (Electrolux) ไม่มีไฟล์ยี่ห้อของตัวเอง เลือกได้เฉพาะของใช้ร่วม (ไฟล์ Other)" ] \
+  && [ "$(st $EW)|$(ITEMS $EW)|$(DB "select \"brandFile\" from \"PartsPick\" where \"workOrderId\"=$EW")" = "NEW|MO1x1:-|Other" ] \
+  && pass "เครื่อง Electrolux (ไม่มีไฟล์ของตัวเอง): HB1 → 400 \"เลือกได้เฉพาะของใช้ร่วม\" · MO1 (Maytag+Other) เลือกได้ · รอบใช้ไฟล์ Other" \
+  || fail "Electrolux: $(echo "$R1" | EMSG) / $(echo "$R" | EMSG) · $(ITEMS $EW)"
+
+# ใบที่ไม่มีเครื่อง — ช่องอะไหล่ของช่างล็อก (D15) · ไม่เลือกอะไหล่ส่งได้ตามเดิม
+NM=$(OPENWO COIN_CHANGER "{\"model\":null,\"symptom\":\"ทดสอบเลือกอะไหล่ ไม่มีเครื่อง\"}"); ADDWO "$NM"; INSP "$NM"
+R1=$(INS $NM "{\"note\":\"ไม่มีเครื่อง\",\"parts\":$(PL $HB1:1)}")
+[ "$(echo "$R1" | EMSG)" = "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน" ] && [ "$(st $NM)" = "INSPECTING" ] \
+  && pass "ใบไม่มีเครื่อง + เลือกอะไหล่ → 400 ข้อความ D15" || fail "ไม่มีเครื่อง: $(echo "$R1" | EMSG)"
+R=$(INS $NM "{\"note\":\"ไม่มีเครื่อง\",\"parts\":[]}")
+[ "$(st $NM)|$(PICKS $NM)|$(DET $NM | J 'd.statusLabel+"|"+d.partsPick')" = "NEW||หัวหน้าภาค · ระบุอะไหล่|null" ] \
+  && pass "ใบไม่มีเครื่อง ไม่เลือกอะไหล่ → ทางเดิม \"หัวหน้าภาค · ระบุอะไหล่\" ไม่มีรอบเลือกอะไหล่" || fail "ไม่มีเครื่อง ไม่เลือก: $(echo "$R" | EMSG)"
+
+echo
+echo "═══ C2 ไม่เลือกอะไหล่ — แถวเดิมที่ช่างเอาออกหายจากใบจริง ยกเว้นของที่เบิกแล้ว (D1)"
+outagewo $HB1:1 $HB2:1; C2W=$WO; OUT3=$OUTG
+DB "update \"WorkOrderPart\" set \"inStock\"=true, \"requisitionNo\"='RQC$SUF' where \"workOrderId\"=$C2W and \"sparePartId\"=$HB2" >/dev/null
+INSP $C2W
+R=$(INS $C2W "{\"note\":\"ไม่ต้องใช้อะไหล่แล้ว\",\"parts\":[],\"removed\":[$HB1,$HB2]}")
+[ "$(st $C2W)|$(PICKS $C2W)|$(WAIT $C2W)" = "NEW||HB2x1" ] \
+  && pass "ส่งรายการว่าง เอา HB1 กับ HB2 ออก → ใบไประบุอะไหล่ · HB1 หายจากใบ · HB2 (เบิกแล้ว) ยังอยู่" || fail "เอาออก: $(echo "$R" | EMSG) · $(WAIT $C2W)"
+[ "$(LASTNOTE $C2W INSPECTED)" = "ไม่ต้องใช้อะไหล่แล้ว · เอาอะไหล่เดิมออกจากใบ: $L_HB1 · ของที่เบิกแล้วยังอยู่ในใบ: $K-HB2 (ใบเบิก RQC$SUF) — หัวหน้าภาคตัดสิน" ] \
+  && [ "$(DB "select \"inspectionNote\" from \"WorkOrder\" where id=$C2W")" = "ไม่ต้องใช้อะไหล่แล้ว" ] \
+  && pass "ประวัติผลตรวจบอกทั้งตัวที่เอาออกและของที่เบิกแล้วที่ยังอยู่ (เลขใบเบิก) · ผลตรวจในใบเป็นข้อความที่ช่างเขียน" \
+  || fail "ประวัติเอาออก: $(LASTNOTE $C2W INSPECTED)"
+[ "$(OPARTS $OUT3)" = "HB2x1" ] && pass "กระดานเครื่องดับตัด HB1 ตามใบทันที (การเอาออกไม่ใช่การเพิ่ม — ไม่ต้องรอคอนเฟิร์ม)" || fail "กระดาน: $(OPARTS $OUT3)"
+newinsp Huebsch "แอปรุ่นเก่า"; OLDW=$WO
+WAITROW $OLDW $HB1
+R=$(INS $OLDW '{"note":"แอปรุ่นเก่าส่งแค่ผลตรวจ"}')
+[ "$(st $OLDW)|$(PICKS $OLDW)|$(WAIT $OLDW)" = "NEW||HB1x1" ] \
+  && pass "แอปรุ่นเก่าไม่ส่ง parts → ทางเดิม รายการในใบไม่แตะ" || fail "แอปเก่า: $(echo "$R" | EMSG) · $(WAIT $OLDW)"
+
+echo
+echo "═══ D หัวหน้าภาคตีกลับรายการอะไหล่ (POST /work-orders/:id/parts-pick/return)"
+PK=$(PICKID $P)
+R=$(RET $P "{\"pickId\":$PK,\"reason\":\"ช่างตีกลับเอง\"}" $T)
+[ "$(echo "$R" | EMSG)" = "ขั้นนี้เป็นของหัวหน้าภาค ไม่ใช่ของคุณ" ] && [ "$(st $P)|$(PICKS $P)" = "NEW|PENDING:1:true" ] \
+  && pass "ช่างตีกลับเองไม่ได้ (403)" || fail "ช่างตีกลับ: $(echo "$R" | EMSG)"
+R1=$(RET $P "{\"pickId\":$PK,\"reason\":\"   \"}"); R2=$(RET $P "{\"pickId\":$PK}")
+[ "$(echo "$R1" | EMSG)" = "ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร" ] && [ "$(echo "$R2" | EMSG)" = "ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร" ] \
+  && [ "$(PICKS $P)" = "PENDING:1:true" ] && pass "ตีกลับไม่มีเหตุผล → 400 ข้อความเดียวกับตีกลับเคลม" || fail "ไม่มีเหตุผล: $(echo "$R1" | EMSG)"
+R1=$(RET $P "{\"pickId\":$((PK + 100000)),\"reason\":\"รอบเก่า\"}"); R2=$(RET $P "{\"pickId\":$PK,\"reason\":\"ชี้ผิดตัว\",\"flags\":[$OT1]}")
+[ "$(echo "$R1" | EMSG)" = "รายการอะไหล่เปลี่ยนไปแล้ว — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด" ] \
+  && [ "$(echo "$R2" | EMSG)" = "รายการที่ชี้ว่าไม่ตรงไม่อยู่ในรายการที่ช่างเลือก" ] && [ "$(PICKS $P)" = "PENDING:1:true" ] \
+  && pass "pickId ไม่ใช่รอบที่รออยู่ → 409 · ชี้ตัวที่ไม่อยู่ในรายการ → 400" || fail "pickId/flags: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
+REASON="รหัสไม่ตรงกับรูปอะไหล่ที่เสีย"
+R=$(RET $P "{\"pickId\":$PK,\"reason\":\"$REASON\",\"flags\":[$HB2],\"marks\":[{\"sparePartId\":$HB1,\"mark\":\"OK\"}]}")
+[ "$(st $P)|$(PICKS $P)|$(ITEMS $P)" = "INSPECTING|RETURNED:1:true|HB1x2:OK,HB2x1:NO" ] \
+  && [ "$(DB "select \"assignedTeam\"||'|'||(\"inspectedAt\" is not null)||'|'||(\"scheduledAt\" is null) from \"WorkOrder\" where id=$P")" = "$TEAM|true|true" ] \
+  && [ "$(DB "select \"reviewedById\"||'|'||reason||'|'||(\"reviewedAt\" is not null) from \"PartsPick\" where id=$PK")" = "$SID|$REASON|true" ] \
+  && pass "ตีกลับชี้ HB2 → ใบกลับ \"ตรวจหน้างาน\" ทีมเดิม (ไม่ต้องนัดใหม่ · ไม่มีวันนัด) · รอบ RETURNED + เหตุผล + คนตีกลับ · HB2 ไม่ตรง HB1 ตรง" \
+  || fail "ตีกลับ: $(echo "$R" | EMSG) · $(st $P) · $(PICKS $P) · $(ITEMS $P)"
+[ "$(LASTACTS $P 1)" = "PARTS_PICK_RETURNED" ] \
+  && [ "$(DB "select status||'|'||note from \"WorkOrderLog\" where \"workOrderId\"=$P and action='PARTS_PICK_RETURNED'")" = "INSPECTING|$REASON (ไม่ตรง: $L_HB2)" ] \
+  && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$P and action='INSPECT_REQUESTED'")" = "1" ] \
+  && pass "ประวัติ \"ตีกลับอะไหล่ให้ช่างแก้\" = เหตุผล + ตัวที่ไม่ตรง · ไม่มีส่งตรวจใหม่ (ไฟล์รอบนี้ยังนับ)" || fail "ประวัติตีกลับ: $(LASTNOTE $P PARTS_PICK_RETURNED)"
+R=$(DET $P $T)
+[ "$(echo "$R" | J 'const p=d.partsPick; [d.statusLabel,p.status,p.reason,p.reviewedBy.name,p.reviewedBy.roleLabel,p.flags.map(f=>f.partCode).join("+")].join("|")')" = "$BACK_LABEL|RETURNED|$REASON|$SNAME|หัวหน้าภาค|$K-HB2" ] \
+  && [ "$(curl -s localhost:4000/api/work-orders/$P/version -H "$(H $T)" | J 'd.statusLabel')" = "$BACK_LABEL" ] \
+  && pass "หน้าใบงาน (ช่าง): \"$BACK_LABEL\" · เหตุผล · ใคร (หัวหน้าภาค) · ตัวที่ชี้ · version ป้ายเดียวกัน" \
+  || fail "detail ตีกลับ: $(echo "$R" | J 'JSON.stringify([d.statusLabel,d.partsPick])' 2>&1 | head -c 300)"
+R=$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)")
+[ "$(echo "$R" | J 'const r=d.rows.find(x=>x.id==='$P'); r&&r.partsReturned?[r.statusLabel,r.machineMake,r.partsReturned.byName,r.partsReturned.roleLabel,r.partsReturned.reason,r.partsReturned.flags.map(f=>f.partCode+" "+f.name).join("+"),!!r.partsReturned.at].join("|"):"ไม่มี "+JSON.stringify(r)')" = "$BACK_LABEL|Huebsch|$SNAME|หัวหน้าภาค|$REASON|$L_HB2|true" ] \
+  && pass "งานของฉันวันนี้ (ช่าง): การ์ดแดง partsReturned (ใคร · บทบาท · เหตุผล · ตัวที่ชี้ · เวลา) + ยี่ห้อเครื่อง — ใบไม่มีวันนัดก็ขึ้น" \
+  || fail "my-day: $(echo "$R" | J 'JSON.stringify(d.rows.find(x=>x.id==='$P'))' 2>&1 | head -c 300)"
+R=$(DET $P $AR)
+[ "$(echo "$R" | J 'const p=d.partsPick, l=d.logs.find(x=>x.action==="PARTS_PICK_RETURNED"); [d.statusLabel,p.status,p.reason,p.flags,p.items.every(i=>i.mark===null),l.note].join("|")')" = "$BACK_LABEL|RETURNED|||true|" ] \
+  && [ "$(DET $P $A | J 'd.logs.find(x=>x.action==="PARTS_PICK_RETURNED").note')" = "$REASON (ไม่ตรง: $L_HB2)" ] \
+  && pass "ทีม Area เห็นแค่ป้าย — ไม่มีเหตุผล ตัวที่ชี้ ป้ายตรง/ไม่ตรง หรือข้อความประวัติตีกลับ (แอดมินยังเห็น)" \
+  || fail "Area: $(echo "$R" | J 'JSON.stringify([d.partsPick,d.logs.find(x=>x.action==="PARTS_PICK_RETURNED")])' 2>&1 | head -c 300)"
+[ "$(curl -s localhost:4000/api/plans/pending -H "$(H $S)" | J 'Array.isArray(d)?String(d.some(r=>r.id==='$P')):"bad "+JSON.stringify(d).slice(0,100)')" = "false" ] \
+  && [ "$(DB "select status||'|'||(\"scheduledAt\" is null) from \"WorkOrder\" where id=$P")" = "INSPECTING|true" ] \
+  && pass "บอร์ดแผน \"รอจัดแผน\" ไม่มีใบที่ถูกตีกลับ (ไม่ต้องหาวันใหม่ — D9) ทั้งที่ใบอยู่ตรวจหน้างานและไม่มีวัน" || fail "plans/pending มีใบที่ถูกตีกลับ"
+R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:2 $HB2:1)}")
+[ "$(echo "$R" | EMSG)" = "ยังไม่ได้แก้อะไร — แก้ตัวที่หัวหน้าภาคชี้ว่าไม่ตรง ($L_HB2) หรือเขียนในข้อ 4 ว่าทำไมยืนยันรายการเดิม แล้วค่อยส่งใหม่" ] \
+  && [ "$(st $P)|$(PICKS $P)" = "INSPECTING|RETURNED:1:true" ] \
+  && pass "ส่งใหม่โดยไม่แก้อะไรเลย → 400 บอกตัวที่ถูกชี้ · ไม่มีรอบใหม่" || fail "ส่งซ้ำเหมือนเดิม: $(echo "$R" | EMSG)"
+R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:3 $HB2:1)}")
+[ "$(echo "$R" | EMSG)" = "ยังไม่ได้แก้ตัวที่หัวหน้าภาคชี้ว่าไม่ตรง ($L_HB2) — เอาออก เปลี่ยนจำนวน หรือเขียนในข้อ 4 ว่าทำไมยืนยันตัวนี้ แล้วค่อยส่งใหม่" ] \
+  && [ "$(PICKS $P)" = "RETURNED:1:true" ] \
+  && pass "แก้แต่ตัวที่ไม่ได้ถูกชี้ (HB1 2→3) → 400 \"ยังไม่ได้แก้ตัวที่หัวหน้าภาคชี้\"" || fail "แก้ผิดตัว: $(echo "$R" | EMSG)"
+R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:2 $HB3:1)}")
+[ "$(st $P)|$(PICKS $P)|$(ITEMS $P)" = "NEW|RETURNED:1:true,PENDING:2:true|HB1x2:-,HB3x1:-" ] \
+  && [ "$(LASTNOTE $P PARTS_PICKED)" = "แก้รายการอะไหล่ ส่งให้หัวหน้าภาคคอนเฟิร์มอีกครั้ง — เอา $L_HB2 ออก · เพิ่ม $L_HB3 × 1" ] \
+  && [ "$(PITEMS $PK)" = "HB1x2:OK,HB2x1:NO" ] \
+  && pass "เอา HB2 ออก เพิ่ม HB3 → รอบที่ 2 รอคอนเฟิร์ม (รอบ 1 เก็บไว้พร้อมป้ายเดิม) · ประวัติบอกว่าแก้อะไร" \
+  || fail "ส่งรอบ 2: $(echo "$R" | EMSG | head -c 120) · $(st $P) · $(PICKS $P) · ล่าสุด $(ITEMS $P) · รอบ 1 $(PITEMS $PK) · $(LASTNOTE $P PARTS_PICKED)"
+R=$(DET $P $S)
+[ "$(echo "$R" | J 'const p=d.partsPick, h=(c)=>p.items.find(i=>i.partCode==="'$K'-"+c); [d.statusLabel,p.round,p.previous.round,p.previous.reason,h("HB3").isNew,h("HB1").isNew,h("HB1").prevQty,p.noteChanged,p.addedPartPhotos,p.previous.items.map(i=>i.partCode.replace("'$K'-","")+":"+i.mark).join("+")].join("|")')" = "$STAGE_LABEL|2|1|$REASON|true|false||false|0|HB1:OK+HB2:NO" ] \
+  && [ "$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)" | J 'String(d.rows.some(r=>r.id==='$P'))')" = "false" ] \
+  && pass "หน้าคอนเฟิร์มรอบ 2: previous (รอบ 1 · เหตุผล · ป้ายเดิม) · HB3 เพิ่มใหม่ · HB1 จำนวนเดิม · ใบออกจากงานของฉันของช่าง" \
+  || fail "previous: $(echo "$R" | J 'JSON.stringify(d.partsPick)' 2>&1 | head -c 400)"
+# รอบ 2 คือครั้งแรกที่มี previous — ทีม Area ต้องไม่เห็นเหตุผลตีกลับ/ป้ายตรง-ไม่ตรงของรอบ 1 ผ่านช่องนี้ (ข้อ 10)
+# เช็คตอนรอบ 1 อย่างเดียวไม่พอ: previous ยังเป็น null ลบการซ่อนของ previous ทิ้งเทสต์ก็ยังผ่าน
+R=$(DET $P $AR)
+[ "$(echo "$R" | J 'const p=d.partsPick, v=p&&p.previous; v?[p.round,v.round,v.reason,v.items.length>0&&v.items.every(i=>i.mark===null)].join("|"):"ไม่มี previous"')" = "2|1||true" ] \
+  && pass "ทีม Area เปิดรอบ 2: รอบก่อน (previous) ไม่มีเหตุผลตีกลับและป้ายตรง/ไม่ตรง" \
+  || fail "Area previous: $(echo "$R" | J 'JSON.stringify(d.partsPick&&d.partsPick.previous)' 2>&1 | head -c 300)"
+# ใบ Q — ตีกลับไม่ชี้ตัว: ส่งซ้ำเหมือนเดิม → ข้อความแบบที่ 3 · แก้ "ตรวจแล้วเจออะไร" อย่างเดียว → ส่งได้
+newinsp Huebsch "Q"; Q=$WO; QM=$NC
+INS $Q "{\"note\":\"q1 สายพานขาด\",\"parts\":$(PL $HB1:1)}" >/dev/null
+RET $Q "{\"pickId\":$(PICKID $Q),\"reason\":\"ดูรูปแล้วไม่แน่ใจ\"}" >/dev/null
+R=$(INS $Q "{\"note\":\"q1 สายพานขาด\",\"parts\":$(PL $HB1:1)}")
+R2=$(INS $Q "{\"note\":\"q1 สายพานขาด — ยืนยันตัวเดิม รูปเห็นรอยขาดชัด\",\"parts\":$(PL $HB1:1)}")
+[ "$(echo "$R" | EMSG)" = "ยังไม่ได้แก้อะไร — อ่านเหตุผลของหัวหน้าภาคแล้วแก้รายการ หรือเขียนในข้อ 4 ว่าทำไมยืนยันรายการเดิม แล้วค่อยส่งใหม่" ] \
+  && [ "$(PICKS $Q)" = "RETURNED:1:true,PENDING:2:true" ] \
+  && [ "$(LASTNOTE $Q PARTS_PICKED)" = "ยืนยันรายการเดิม ส่งให้หัวหน้าภาคคอนเฟิร์มอีกครั้ง — แก้ “ตรวจแล้วเจออะไร”" ] \
+  && [ "$(DET $Q $S | J 'd.partsPick.noteChanged+"|"+d.partsPick.items[0].isNew')" = "true|false" ] \
+  && pass "ตีกลับไม่ชี้ตัว + ส่งซ้ำ → 400 \"อ่านเหตุผล…\" · รายการเดิมแต่แก้ผลตรวจ → ส่งได้ (รอบ 2 · noteChanged)" \
+  || fail "แก้ผลตรวจอย่างเดียว: $(echo "$R" | EMSG) / $(echo "$R2" | EMSG) · $(PICKS $Q)"
+# ใบ RW — รายการเดิม ผลตรวจเดิม แต่เพิ่มรูปอะไหล่ที่เสียหลังตีกลับ → ส่งได้
+newinsp Huebsch "รูปเพิ่ม"; RW=$WO
+INS $RW "{\"note\":\"r1 บอร์ด\",\"parts\":$(PL $HB1:1)}" >/dev/null
+RET $RW "{\"pickId\":$(PICKID $RW),\"reason\":\"จำนวนไม่ตรง\",\"flags\":[$HB1]}" >/dev/null
+UP $RW "site-photo.png;type=image/png" INSPECT_PART
+R=$(INS $RW "{\"note\":\"r1 บอร์ด\",\"parts\":$(PL $HB1:1)}")
+[ "$(PICKS $RW)" = "RETURNED:1:true,PENDING:2:true" ] \
+  && [ "$(LASTNOTE $RW PARTS_PICKED)" = "ยืนยันรายการเดิม ส่งให้หัวหน้าภาคคอนเฟิร์มอีกครั้ง — เพิ่มรูปอะไหล่ที่เสีย 1 รูป" ] \
+  && [ "$(DET $RW $S | J 'd.partsPick.addedPartPhotos')" = "1" ] \
+  && pass "รายการและผลตรวจเดิม + รูปอะไหล่ที่เสียรูปใหม่หลังตีกลับ → ส่งได้ (addedPartPhotos 1)" \
+  || fail "รูปเพิ่ม: $(echo "$R" | EMSG) · $(PICKS $RW)"
+DB "update \"WorkOrder\" set \"assignedTeam\"=null where id=$RW" >/dev/null
+R=$(RET $RW "{\"pickId\":$(PICKID $RW),\"reason\":\"ทดสอบไม่มีทีม\"}")
+DB "update \"WorkOrder\" set \"assignedTeam\"='$TEAM' where id=$RW" >/dev/null
+[ "$(echo "$R" | EMSG)" = "ใบนี้ไม่มีทีมที่ไปตรวจ — ใช้ “ต้องเข้าตรวจสอบหน้างานก่อน” แทน" ] && [ "$(PICKS $RW)" = "RETURNED:1:true,PENDING:2:true" ] \
+  && pass "ใบไม่มีทีมที่ไปตรวจ → ตีกลับไม่ได้ (409) ให้ใช้ \"ต้องเข้าตรวจสอบหน้างานก่อน\"" || fail "ไม่มีทีม: $(echo "$R" | EMSG)"
+
+echo
+echo "═══ E หัวหน้าภาค/แอดมินคอนเฟิร์มรายการของช่าง (POST /work-orders/:id/parts-pick/confirm)"
+PK2=$(PICKID $P)
+# ของเดิมในใบ: OT1 (ใส่ไว้ก่อนตรวจ) + MO1 ที่เบิกแล้ว + ของนอกสโตร์ — ช่างไม่ได้เลือก OT1/MO1 = เอาออกตอนคอนเฟิร์ม
+WAITROW $P $MO1 1 true "'RQE$SUF'"
+WAITROW $P $OC 1
+CCODE() { CODE -X POST localhost:4000/api/work-orders/$1/parts-pick/confirm -H "$(H $2)" -H 'Content-Type: application/json' -d "{\"pickId\":$3}"; }
+# ViewAsLog ไม่ผูกกับ User — จำ id สูงสุดไว้ก่อน แล้ว cleanup ลบแถวที่ชุดนี้สร้าง (ไม่งั้นค้างในประวัติ "ดูในฐานะ" ทุกรอบที่รัน)
+VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
+AVS=$(POST $A auth/view-as "{\"userId\":$SID}" | J 'd.token||""')
+R=$(CONF $P "{\"pickId\":$PK2}" $T)
+[ "$(echo "$R" | EMSG)" = "ขั้นนี้เป็นของหัวหน้าภาค ไม่ใช่ของคุณ" ] && [ "$(CCODE $P $PA $PK2)|$(CCODE $P "$AVS" $PK2)" = "403|403" ] \
+  && [ "$(st $P)|$(PICKS $P)" = "NEW|RETURNED:1:true,PENDING:2:true" ] \
+  && pass "ช่าง 403 (ขั้นของหัวหน้าภาค) · แอดมินอะไหล่ 403 · แอดมินดูในฐานะหัวหน้าภาค 403 · ใบไม่ขยับ" \
+  || fail "สิทธิ์คอนเฟิร์ม: $(echo "$R" | EMSG) PA=$(CCODE $P $PA $PK2) VA=$(CCODE $P "$AVS" $PK2)"
+[ -n "$AVS" ] && POST $AVS auth/view-as/stop '{}' >/dev/null
+R1=$(CONF $P "{\"pickId\":$PK}"); R2=$(CONF $P "{\"pickId\":$PK2,\"marks\":[{\"sparePartId\":$HB1,\"mark\":\"OK\"},{\"sparePartId\":$HB3,\"mark\":\"NO\"}]}")
+[ "$(echo "$R1" | EMSG)" = "รายการอะไหล่เปลี่ยนไปแล้ว — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด" ] \
+  && [ "$(echo "$R2" | EMSG)" = "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม" ] && [ "$(st $P)" = "NEW" ] \
+  && pass "pickId ของรอบเก่า → 409 · มีตัวที่กด \"ไม่ตรง\" → 400 (ต้องตีกลับ)" || fail "คอนเฟิร์มผิด: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
+R=$(CONF $P "{\"pickId\":$PK2,\"offParts\":[{\"name\":\"$K ของนอก\",\"quantity\":2}],\"services\":[{\"name\":\"ค่าแรงทดสอบเลือกอะไหล่\",\"quantity\":1}],\"marks\":[{\"sparePartId\":$HB1,\"mark\":\"OK\"},{\"sparePartId\":$HB3,\"mark\":\"OK\"}]}")
+[ "$(DB "select status||'|'||\"needsParts\" from \"WorkOrder\" where id=$P")" = "PARTS_SOURCING|true" ] && [ "$(WAIT $P)" = "HB1x2,HB3x1,OFFx2" ] \
+  && pass "คอนเฟิร์ม + อะไหล่นอก + ค่าบริการ → แอดมินเช็คอะไหล่ (มี/หมด) · อะไหล่ที่รอ = รายการของช่าง + ของนอกสโตร์ (OT1 กับ MO1 ที่ช่างไม่เลือกออกจากใบ)" \
+  || fail "คอนเฟิร์ม: $(echo "$R" | EMSG) · $(st $P) · $(WAIT $P)"
+[ "$(DB "select string_agg(name||'x'||quantity, ',') from \"WorkOrderService\" where \"workOrderId\"=$P")" = "ค่าแรงทดสอบเลือกอะไหล่x1" ] \
+  && [ "$(PICKS $P)|$(ITEMS $P)" = "RETURNED:1:true,CONFIRMED:2:true|HB1x2:OK,HB3x1:OK" ] \
+  && [ "$(DB "select \"reviewedById\"||'|'||(\"reviewedAt\" is not null) from \"PartsPick\" where id=$PK2")" = "$SID|true" ] \
+  && pass "ค่าบริการลงใบ · รอบที่ 2 CONFIRMED ทุกรายการ \"ตรง\" · คนคอนเฟิร์ม = หัวหน้าภาค" || fail "หลังคอนเฟิร์ม: $(PICKS $P) · $(ITEMS $P)"
+[ "$(LASTNOTE $P PARTS_PICK_CONFIRMED)" = "คอนเฟิร์มอะไหล่ที่ช่างเลือก 2 รายการ + ใส่อะไหล่นอก 1 รายการ และค่าบริการ 1 รายการ → แอดมิน · เช็คอะไหล่ (มี/หมด) · ต้องเสนอราคาลูกค้าก่อนนัด · เอาออกจากใบ: $L_OT1, $L_MO1 (ใบเบิกเดิม RQE$SUF)" ] \
+  && [ "$(DB "select status||'|'||(meta->>'count')||'|'||(meta->>'quote') from \"WorkOrderLog\" where \"workOrderId\"=$P and action='PARTS_PICK_CONFIRMED'")" = "PARTS_SOURCING|2|true" ] \
+  && pass "ประวัติ \"คอนเฟิร์มอะไหล่ที่ช่างเลือก\": จำนวน · อะไหล่นอก/ค่าบริการ · ขั้นถัดไป · ต้องเสนอราคา · ของที่เอาออก + เลขใบเบิกเดิม" \
+  || fail "ประวัติคอนเฟิร์ม: $(LASTNOTE $P PARTS_PICK_CONFIRMED)"
+R=$(DET $P $T)
+[ "$(echo "$R" | J 'const c=d.partsPickConfirmed; c?[d.statusLabel,d.partsPick,c.byName,c.roleLabel,c.count,c.quote,!!c.at].join("|"):"ไม่มี"')" = "แอดมิน · เช็คอะไหล่ (มี/หมด)||$SNAME|หัวหน้าภาค|2|true|true" ] \
+  && pass "หน้าใบงาน (ช่าง): กล่องเขียว partsPickConfirmed (ใคร · หัวหน้าภาค · 2 รายการ · ต้องเสนอราคา) · ไม่มีรอบที่เปิดแล้ว" \
+  || fail "partsPickConfirmed: $(echo "$R" | J 'JSON.stringify([d.statusLabel,d.partsPickConfirmed])' 2>&1 | head -c 300)"
+# ใส่ค่าบริการอย่างเดียว — ประวัติต้องเป็น "+ ใส่ค่าบริการ" (หัวหน้าภาคใส่) ไม่ใช่ "… และค่าบริการ" ที่อ่านเหมือนช่างเลือกมา
+R=$(CONF $O "{\"pickId\":$(PICKID $O),\"services\":[{\"name\":\"ค่าแรงทดสอบเคสเครื่องดับ\",\"quantity\":1}]}")
+[ "$(st $O)|$(WAIT $O)|$(OPARTS $OUT2)" = "PARTS_SOURCING|HB2x1|HB2x1" ] \
+  && [ "$(LASTNOTE $O PARTS_PICK_CONFIRMED)" = "คอนเฟิร์มอะไหล่ที่ช่างเลือก 1 รายการ + ใส่ค่าบริการ 1 รายการ → แอดมิน · เช็คอะไหล่ (มี/หมด) · ต้องเสนอราคาลูกค้าก่อนนัด · เอาออกจากใบ: $L_HB1" ] \
+  && pass "คอนเฟิร์มใบเคสเครื่องดับ → รายการของช่างถึงกระดานตอนนี้ (HB2 แทน HB1 ทั้งในใบและบนกระดาน) · ค่าบริการอย่างเดียวขึ้น \"+ ใส่ค่าบริการ\"" \
+  || fail "คอนเฟิร์มใบเคส: $(echo "$R" | EMSG) · ใบ=$(WAIT $O) · กระดาน=$(OPARTS $OUT2) · $(LASTNOTE $O PARTS_PICK_CONFIRMED)"
+R=$(CONF $RW "{\"pickId\":$(PICKID $RW)}" $A)
+[ "$(st $RW)" = "PARTS_SOURCING" ] \
+  && [ "$(DB "select \"userId\" from \"WorkOrderLog\" where \"workOrderId\"=$RW and action='PARTS_PICK_CONFIRMED'")|$(DB "select \"reviewedById\" from \"PartsPick\" where \"workOrderId\"=$RW and status='CONFIRMED'")" = "$AID|$AID" ] \
+  && [ "$(DET $RW $T | J 'd.partsPickConfirmed.roleLabel+"|"+d.partsPickConfirmed.quote')" = "แอดมิน|false" ] \
+  && pass "แอดมินคอนเฟิร์มแทนได้ — ประวัติ/คนคอนเฟิร์ม = แอดมิน · กล่องเขียวบอก \"แอดมิน\" (ไม่มีของต้องเสนอราคา)" \
+  || fail "แอดมินคอนเฟิร์ม: $(echo "$R" | EMSG) · $(st $RW)"
+# ยี่ห้อเครื่องถูกแก้หลังช่างส่ง — รายการที่ไม่อยู่ในไฟล์ใหม่คอนเฟิร์มเข้าใบไม่ได้
+DB "update \"Machine\" set model='Maytag' where \"branchId\"=$BID and code='$QM'" >/dev/null
+R=$(CONF $Q "{\"pickId\":$(PICKID $Q)}")
+DB "update \"Machine\" set model='Huebsch' where \"branchId\"=$BID and code='$QM'" >/dev/null
+[ "$(echo "$R" | EMSG)" = "ยี่ห้อเครื่องเปลี่ยนหลังช่างส่ง — $K-HB1 ไม่อยู่ในไฟล์ Maytag หรือของใช้ร่วม ตีกลับให้ช่างเลือกใหม่" ] \
+  && [ "$(st $Q)|$(PICKS $Q)|$(WAIT $Q)" = "NEW|RETURNED:1:true,PENDING:2:true|" ] \
+  && pass "ยี่ห้อเครื่องเปลี่ยนเป็น Maytag หลังช่างส่ง → คอนเฟิร์มไม่ได้ (400) · ใบ/รอบ/อะไหล่ไม่เปลี่ยน" || fail "ยี่ห้อเปลี่ยน: $(echo "$R" | EMSG)"
+R=$(CONF $NM "{\"pickId\":1}")
+[ "$(echo "$R" | EMSG)" = "ใบนี้ไม่มีรายการอะไหล่ที่รอคอนเฟิร์ม" ] && pass "ใบที่ไม่มีรายการรอคอนเฟิร์ม → 409" || fail "ไม่มีรอบ: $(echo "$R" | EMSG)"
+
+echo
+echo "═══ F หัวหน้าภาค/แอดมินบันทึกผลตรวจแทนช่าง — ไม่ต้องคอนเฟิร์มตัวเอง (ข้อ 11)"
+newinsp Huebsch "บันทึกแทน"; F1=$WO
+WAITROW $F1 $OC 1
+WAITROW $F1 $HB2 1 true "'RQF$SUF'"
+R=$(INS $F1 "{\"note\":\"ช่างโทรมาเล่า บอร์ดเสีย\",\"parts\":$(PL $HB1:1)}" $S)
+[ "$(st $F1)|$(PICKS $F1)|$(WAIT $F1)" = "NEW||HB1x1,OFFx1" ] \
+  && pass "หัวหน้าภาคบันทึกแทนพร้อม HB1 → ไม่มีรอบให้คอนเฟิร์ม · ลงใบเลย (ของนอกสโตร์เดิมอยู่ต่อ · HB2 ที่ไม่ได้เลือกออกจากใบ)" \
+  || fail "บันทึกแทน: $(echo "$R" | EMSG) · $(PICKS $F1) · $(WAIT $F1)"
+[ "$(LASTACTS $F1)" = "INSPECTED,PARTS_PICKED_ON_BEHALF" ] \
+  && [ "$(LASTNOTE $F1 PARTS_PICKED_ON_BEHALF)" = "เลือกอะไหล่ 1 รายการ — ใบไปฟอร์มระบุอะไหล่ เติมรายการที่เลือกไว้ให้ · เอาออกจากใบ: $L_HB2 (ใบเบิกเดิม RQF$SUF)" ] \
+  && [ "$(DET $F1 $S | J 'd.statusLabel+"|"+d.partsPick+"|"+d.waitingParts.length')" = "หัวหน้าภาค · ระบุอะไหล่|null|2" ] \
+  && pass "ประวัติ \"บันทึกผลตรวจแทนช่าง · เลือกอะไหล่ (ไม่ต้องคอนเฟิร์ม)\" + เลขใบเบิกของที่เอาออก · ป้าย \"หัวหน้าภาค · ระบุอะไหล่\" (ฟอร์มเดิมเติมรายการไว้)" \
+  || fail "ประวัติบันทึกแทน: $(LASTACTS $F1) · $(LASTNOTE $F1 PARTS_PICKED_ON_BEHALF)"
+newinsp Huebsch "บันทึกแทนหลังตีกลับ"; F2=$WO
+R=$(INS $F2 "{\"note\":\"หัวหน้าภาคเลือกผิดยี่ห้อ\",\"parts\":$(PL $MT1:1)}" $S)
+echo "$R" | EMSG | grep -qF "อยู่ในไฟล์ Maytag" && [ "$(st $F2)" = "INSPECTING" ] \
+  && pass "หัวหน้าภาคบันทึกแทนก็ล็อกยี่ห้อ — MT1 บนเครื่อง Huebsch → 400" || fail "บันทึกแทน MT1: $(echo "$R" | EMSG)"
+INS $F2 "{\"note\":\"f2 บอร์ด\",\"parts\":$(PL $HB1:1)}" >/dev/null
+RET $F2 "{\"pickId\":$(PICKID $F2),\"reason\":\"รหัสไม่ตรง\",\"flags\":[$HB1]}" >/dev/null
+R=$(INS $F2 "{\"note\":\"f2 บอร์ด\",\"parts\":$(PL $HB1:1)}" $S)
+[ "$(st $F2)|$(PICKS $F2)|$(WAIT $F2)" = "NEW|RETURNED:1:false|HB1x1" ] \
+  && [ "$(DB "select \"voidNote\" from \"PartsPick\" where \"workOrderId\"=$F2")" = "หัวหน้าภาคบันทึกผลตรวจแทนช่าง" ] \
+  && [ "$(DET $F2 $S | J 'd.statusLabel+"|"+d.partsPick')" = "หัวหน้าภาค · ระบุอะไหล่|null" ] \
+  && pass "ถูกตีกลับแล้วหัวหน้าภาคบันทึกแทน → รอบที่ตีกลับถูกปิด (voidedAt) · ไม่ติดด่านส่งใหม่ · ใบไประบุอะไหล่" \
+  || fail "บันทึกแทนหลังตีกลับ: $(echo "$R" | EMSG) · $(PICKS $F2)"
+
+echo
+echo "═══ G ทุกทางออกจากรอบปิดรอบที่ค้าง (voidOpenPick)"
+R=$(POST $S work-orders/$KW/inspect-request "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D5\",\"scheduledTime\":\"10:00\"}")
+[ "$(st $KW)|$(PICKS $KW)" = "INSPECT_CONFIRM|PENDING:1:false" ] \
+  && [ "$(DB "select \"voidNote\" from \"PartsPick\" where \"workOrderId\"=$KW")" = "หัวหน้าภาคส่งตรวจหน้างานใหม่" ] \
+  && [ "$(LASTACTS $KW 1)|$(DET $KW $S | J 'd.statusLabel+"|"+d.partsPick')" = "INSPECT_REQUESTED|แอดมิน · นัดร้าน (ตรวจหน้างาน)|null" ] \
+  && pass "\"ต้องเข้าตรวจสอบหน้างานก่อน\" ระหว่างรอคอนเฟิร์ม → ส่งตรวจใหม่ + ปิดรอบในทรานแซกชันเดียว" \
+  || fail "ส่งตรวจใหม่: $(echo "$R" | EMSG) · $(st $KW) · $(PICKS $KW)"
+R=$(POST $A work-orders/$EW/cancel '{"reasonCode":"OTHER","note":"ทดสอบยกเลิกระหว่างรอคอนเฟิร์ม"}')
+[ "$(st $EW)|$(PICKS $EW)|$(DB "select \"voidNote\" from \"PartsPick\" where \"workOrderId\"=$EW")" = "CANCELLED|PENDING:1:false|ยกเลิกใบงาน" ] \
+  && pass "ยกเลิกใบระหว่างรอคอนเฟิร์ม → รอบถูกปิด" || fail "ยกเลิก: $(echo "$R" | EMSG) · $(PICKS $EW)"
+newinsp Huebsch "ย้อนขั้น"; G3=$WO
+INS $G3 "{\"note\":\"g3\",\"parts\":$(PL $HB1:1)}" >/dev/null
+RET $G3 "{\"pickId\":$(PICKID $G3),\"reason\":\"ตัวนี้ยังไม่ต้องเปลี่ยน\"}" >/dev/null
+R=$(POST $S work-orders/$G3/rollback '{"toStage":"NEW","reason":"ทดสอบย้อนขั้นใบที่ถูกตีกลับ"}')
+[ "$(st $G3)|$(PICKS $G3)|$(DB "select \"voidNote\" from \"PartsPick\" where \"workOrderId\"=$G3")" = "NEW|RETURNED:1:false|ย้อนขั้น" ] \
+  && [ "$(DET $G3 $S | J 'd.statusLabel+"|"+d.partsPick')" = "หัวหน้าภาค · ระบุอะไหล่|null" ] \
+  && pass "ย้อนขั้นใบที่ถูกตีกลับไป NEW → รอบถูกปิด · ป้ายเป็น \"ระบุอะไหล่\" (ไม่ใช่คอนเฟิร์ม)" || fail "ย้อนขั้น: $(echo "$R" | EMSG) · $(PICKS $G3)"
+# F2 = ตีกลับ → หัวหน้าภาคบันทึกแทน (ปิดรอบ) → ระบุอะไหล่ → ย้อนกลับไปตรวจหน้างาน: การ์ดแดงรอบเก่าต้องไม่กลับมา
+POST $S work-orders/$F2/parts "{\"needsParts\":true,\"parts\":$(PL $HB1:1)}" >/dev/null
+R=$(POST $S work-orders/$F2/rollback '{"toStage":"INSPECTING","reason":"ทดสอบย้อนกลับไปตรวจ"}')
+[ "$(st $F2)" = "INSPECTING" ] \
+  && [ "$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)" | J 'const r=d.rows.find(x=>x.id==='$F2'); r?String(r.partsReturned)+"|"+r.statusLabel:"ไม่มีใบ"')" = "null|ช่าง · ตรวจหน้างาน" ] \
+  && [ "$(PICKS $F2)" = "RETURNED:1:false" ] && [ "$(DET $F2 $T | J 'd.statusLabel+"|"+d.partsPick')" = "ช่าง · ตรวจหน้างาน|null" ] \
+  && [ "$(curl -s localhost:4000/api/plans/pending -H "$(H $S)" | J 'String(d.some(r=>r.id==='$F2'))')" = "true" ] \
+  && pass "ตีกลับ → บันทึกแทน → ระบุอะไหล่ → ย้อนไปตรวจหน้างาน: ไม่มีการ์ดแดงรอบเก่า · ป้ายตรวจหน้างานปกติ · ขึ้น \"รอจัดแผน\" (ต้องหาวัน)" \
+  || fail "ย้อนกลับไปตรวจ: $(echo "$R" | EMSG) · $(st $F2) · $(PICKS $F2)"
+newinsp Huebsch "ย้อนสองครั้ง"; G5=$WO
+INS $G5 "{\"note\":\"g5\",\"parts\":$(PL $HB1:1)}" >/dev/null
+RET $G5 "{\"pickId\":$(PICKID $G5),\"reason\":\"ขาดอะไหล่ที่ต้องใช้\"}" >/dev/null
+POST $S work-orders/$G5/rollback '{"toStage":"INSPECT_DISPATCH","reason":"ทดสอบย้อนไปส่งช่าง"}' >/dev/null
+POST $S work-orders/$G5/rollback '{"toStage":"NEW","reason":"ทดสอบย้อนไประบุอะไหล่"}' >/dev/null
+INSP $G5
+R=$(DET $G5 $T)
+[ "$(PICKS $G5)" = "RETURNED:1:false" ] && [ "$(echo "$R" | J 'd.statusLabel+"|"+d.partsPick')" = "ช่าง · ตรวจหน้างาน|null" ] \
+  && R2=$(INS $G5 "{\"note\":\"g5\",\"parts\":$(PL $HB1:1)}") && [ "$(PICKS $G5)" = "RETURNED:1:false,PENDING:1:true" ] \
+  && pass "ตีกลับ → ย้อนไปส่งช่าง → ย้อนไป NEW → ส่งตรวจใหม่ถึงช่าง: ไม่มีรอบเปิด · ส่งรายการเดิมได้เลย (เริ่มรอบ 1 ใหม่ ไม่ติดด่านส่งใหม่)" \
+  || fail "ย้อนสองครั้ง: $(PICKS $G5) · $(echo "$R" | J 'd.statusLabel')"
+newinsp Huebsch "ส่งว่างหลังตีกลับ"; G6=$WO
+INS $G6 "{\"note\":\"g6\",\"parts\":$(PL $HB1:1)}" >/dev/null
+RET $G6 "{\"pickId\":$(PICKID $G6),\"reason\":\"ยังไม่ต้องเปลี่ยน\",\"flags\":[$HB1]}" >/dev/null
+R=$(INS $G6 '{"note":"g6","parts":[]}')
+[ "$(st $G6)|$(PICKS $G6)|$(DB "select \"voidNote\" from \"PartsPick\" where \"workOrderId\"=$G6")" = "NEW|RETURNED:1:false|ช่างส่งผลตรวจโดยไม่เลือกอะไหล่" ] \
+  && [ "$(curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $S)" | J 'const r=d.rows.find(x=>x.id==='$G6'); r?r.statusLabel+"|"+r.partsPick:"ไม่มี"')" = "หัวหน้าภาค · ระบุอะไหล่|null" ] \
+  && pass "ถูกตีกลับแล้วช่างส่งแบบไม่เลือกอะไหล่ → รอบถูกปิด · กล่องงานหัวหน้าภาคขึ้น \"ระบุอะไหล่\" (partsPick ว่าง)" \
+  || fail "ส่งว่างหลังตีกลับ: $(echo "$R" | EMSG) · $(PICKS $G6)"
+
+newinsp Huebsch "หัวหน้าภาคปิดใบ"; G7=$WO
+INS $G7 "{\"note\":\"g7\",\"parts\":$(PL $HB1:1)}" >/dev/null
+R=$(POST $S work-orders/$G7/supervisor-close '{"reason":"SELF","note":"เครื่องกลับมาใช้งานได้เองระหว่างรอคอนเฟิร์ม"}')
+[ "$(st $G7)|$(PICKS $G7)|$(DB "select \"voidNote\" from \"PartsPick\" where \"workOrderId\"=$G7")" = "DONE|PENDING:1:false|หัวหน้าภาคปิดใบงาน" ] \
+  && [ "$(LASTACTS $G7 1)" = "SUPERVISOR_CLOSED" ] \
+  && pass "หัวหน้าภาคปิดใบระหว่างรอคอนเฟิร์ม → รอบถูกปิด (ไม่ลงประวัติเพิ่ม — แถวปิดงานยังเป็นแถวล่าสุด)" || fail "หัวหน้าภาคปิดใบ: $(echo "$R" | EMSG) · $(PICKS $G7)"
+
+echo
+echo "═══ J คัดลอกเป็นใบทดสอบ — รายการที่รอคอนเฟิร์มติดไปด้วย (D14)"
+R=$(POST $A work-orders/$Q/test-copy '{}')
+COPY=$(echo "$R" | J 'd.id??"ERR"'); ADDWO "$COPY"
+[ "$(PICKS $COPY)|$(ITEMS $COPY)|$(st $COPY)" = "PENDING:2:true|HB1x1:-|NEW" ] \
+  && [ "$(DET $COPY $S | J 'd.statusLabel+"|"+d.partsPick.round')" = "$STAGE_LABEL|2" ] \
+  && pass "ใบทดสอบของใบที่รอคอนเฟิร์ม: รอบที่ 2 PENDING รายการเดียวกัน · ป้าย \"$STAGE_LABEL\"" || fail "test-copy: $(echo "$R" | head -c 200) · $(PICKS $COPY)"
+curl -s -o /dev/null -X DELETE localhost:4000/api/work-orders/$COPY -H "$(H $A)"
+[ "$(DB "select count(*) from \"PartsPick\" where \"workOrderId\"=$COPY")|$(DB "select count(*) from \"WorkOrder\" where id=$COPY")" = "0|0" ] \
+  && pass "ลบใบทดสอบ → รอบเลือกอะไหล่ของใบนั้นหายตาม (cascade)" || fail "ลบใบทดสอบแล้วรอบค้าง"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

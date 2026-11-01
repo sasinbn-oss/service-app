@@ -305,7 +305,10 @@ router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res
     where: {
       OR: [
         { status: { in: ["PARTS_CHECKED", "WAITING_PARTS"] } },
-        { status: "INSPECTING", scheduledAt: null },
+        // ใบที่หัวหน้าภาคตีกลับรายการอะไหล่ไม่ต้องหาวันใหม่ — ทีมเดิมแก้จากไฟล์รอบเดิม ไม่ต้องเข้าหน้างานอีก (ค่าตั้งต้น D9)
+        // ขึ้นเป็นการ์ดแดงในงานของฉันของทีมแทน · ไม่ต้องดูแค่แถวล่าสุด: ทุกทางออกจากรอบปิดรอบที่ค้าง (voidOpenPick)
+        // ระหว่างที่ใบอยู่ตรวจหน้างานจึงมีรอบที่ถูกตีกลับและยังไม่ปิดได้อย่างมากแถวเดียว
+        { status: "INSPECTING", scheduledAt: null, NOT: { partsPicks: { some: { status: "RETURNED", voidedAt: null } } } },
       ],
       ...(scope.where ? { AND: [scope.where] } : {}),
     },

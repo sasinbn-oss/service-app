@@ -616,6 +616,10 @@ const NOT_A_MOVE = [
   "URGENT_RELEASE",
   "URGENT_REQUESTED",
   "URGENT_REQUEST_CANCELLED",
+  // บันทึก/แก้ยี่ห้อเครื่อง (เลือกอะไหล่ตามไฟล์ยี่ห้อ) — แก้ข้อมูลเครื่อง ใบอยู่ขั้นเดิม (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  // หัวหน้าภาคแก้ยี่ห้อจากหน้าใบงานได้ทุกขั้น ถ้านับเป็นการเดินขั้น กล่อง "ช่างแจ้งปัญหา" / เหตุผลที่หัวหน้าภาคส่งกลับ
+  // จะหายทั้งที่ยังไม่มีใครแก้
+  "MACHINE_BRAND_SET",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]

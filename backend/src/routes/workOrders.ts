@@ -97,7 +97,22 @@ import {
   vendorRows,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
-import { fileList, machineBrandOf } from "../utils/brandFile";
+import {
+  MACHINE_BRAND_INVALID,
+  Refusal,
+  brandIssue,
+  brandFileOf,
+  brandProblem,
+  fileList,
+  machineBrandOf,
+  machineBrandRefusal,
+  LATEST_PICK,
+  openPickOf,
+  pickRoleLabel,
+  rememberMachineBrand,
+  statusLabelOf,
+  voidOpenPick,
+} from "../utils/brandFile";
 // ขั้นปล่อยงานย้ายไปอยู่กับกฎเวลาปิดรับ — ป้าย "คอนเฟิร์มวันใหม่" กับการล็อกต้องนับขั้นชุดเดียวกันเสมอ
 import {
   type CutoffConfig,
@@ -185,6 +200,7 @@ import {
   CLAIM_SKIP_REASONS,
   CLAIM_TROUBLESHOOTING_HINTS,
   SEND_BACK_REASON_REQUIRED,
+  SPEC_ACTIONS,
   machineTypeFromCode,
   normaliseMachineCode,
   workOrderCode,
@@ -300,8 +316,25 @@ const detailInclude = {
   claims: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] as Prisma.PartClaimOrderByWithRelationInput[] },
   workers: { include: { user: { select: { id: true, name: true, employeeCode: true } } } },
   // ใบงานที่ลิงก์กัน (แยกใบรออะไหล่) — ต้องเห็นจากทั้งสองฝั่ง
-  parent: { select: { id: true, code: true, status: true } },
-  children: { select: { id: true, code: true, status: true }, orderBy: { id: "asc" } },
+  // partsPicks แถวล่าสุด — ป้ายของใบที่ลิงก์ต้องตรงกับหน้าใบนั้น (statusLabelOf) ไม่งั้นใบที่รอคอนเฟิร์มอะไหล่ขึ้นว่า "ระบุอะไหล่"
+  parent: { select: { id: true, code: true, status: true, partsPicks: LATEST_PICK } },
+  children: { select: { id: true, code: true, status: true, partsPicks: LATEST_PICK }, orderBy: { id: "asc" } },
+  /**
+   * รายการอะไหล่ที่ช่างเลือกสองรอบล่าสุด (เจ้าของงานขอ ต.ค. 69) — รอบล่าสุดคือรอบที่อาจยังเปิด (openPickOf)
+   * รอบก่อนหน้าให้หัวหน้าภาคเห็นว่าช่างแก้อะไรจากรอบที่ตีกลับ · relationJoins ดึงมาในคำสั่งเดียวกับตัวใบ
+   */
+  partsPicks: {
+    orderBy: { id: "desc" },
+    take: 2,
+    include: {
+      items: {
+        orderBy: { id: "asc" },
+        include: { sparePart: { select: { partCode: true, name: true, partNo: true, brandFiles: { select: { file: true } } } } },
+      },
+      createdBy: { select: { name: true, employeeCode: true } },
+      reviewedBy: { select: { name: true, role: true } },
+    },
+  },
 } as const;
 
 /**
@@ -414,11 +447,24 @@ function mergeLines(parts: PartLine[]) {
  * ชื่อเดียวกันคือแถวเดียวกัน (partCode = OFF_CATALOG_PREFIX + ชื่อ) จึงนับได้ว่าของนอกสโตร์ตัวไหนใช้บ่อยจนควรเปิด SKU
  * partCode ขึ้นต้นด้วยป้ายไว้ให้ทุกที่ที่โชว์ partCode (สรุปบนกระดาน ประวัติ รายงาน) อ่านออกโดยไม่ต้องแก้
  */
+/**
+ * ข้อความไทยของช่องตัวเลข/ข้อความ — เส้นทางที่ตอบ issues[0].message ส่งข้อความของ zod ถึงหน้าจอตรง ๆ
+ * ข้อจำกัดที่ไม่มีข้อความของตัวเองได้ภาษาอังกฤษ ("String must contain at most 1000 character(s)") ซึ่งช่างอ่านไม่ออก
+ */
+const idInput = (msg: string) => z.number({ required_error: msg, invalid_type_error: msg }).int(msg).positive(msg);
+const qtyInput = (msg: string) =>
+  z.number({ invalid_type_error: msg }).int(msg).min(1, msg).max(999, msg).default(1);
+const textInput = (what: string, max: number) =>
+  z.string({ invalid_type_error: `${what}ต้องเป็นข้อความ` }).trim().max(max, `${what}ยาวเกิน ${max.toLocaleString("en-US")} ตัวอักษร`);
+const listInput = <T extends z.ZodTypeAny>(item: T, what: string, max: number) =>
+  z.array(item, { invalid_type_error: "ข้อมูลรายการไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง" }).max(max, `${what}ได้ไม่เกิน ${max} รายการ`);
+const PART_ID_TEXT = "รายการอะไหล่ไม่ถูกต้อง — โหลดหน้าใหม่แล้วเลือกอีกครั้ง";
+
 const offPartInput = z.object({
-  name: z.string().trim().min(1, "อะไหล่นอกสโตร์ต้องมีชื่อ").max(120),
-  quantity: z.number().int().min(1).max(999).default(1),
-  unit: z.string().trim().max(20).nullable().optional(),
-  note: z.string().trim().max(300).nullable().optional(),
+  name: z.string({ required_error: "อะไหล่นอกสโตร์ต้องมีชื่อ", invalid_type_error: "อะไหล่นอกสโตร์ต้องมีชื่อ" }).trim().min(1, "อะไหล่นอกสโตร์ต้องมีชื่อ").max(120, "ชื่ออะไหล่นอกสโตร์ยาวเกิน 120 ตัวอักษร"),
+  quantity: qtyInput("จำนวนอะไหล่นอกสโตร์ต้องเป็น 1–999"),
+  unit: textInput("หน่วยของอะไหล่นอกสโตร์", 20).nullable().optional(),
+  note: textInput("หมายเหตุของอะไหล่นอกสโตร์", 300).nullable().optional(),
 });
 async function resolveOffParts(items: z.infer<typeof offPartInput>[] | undefined): Promise<PartLine[]> {
   const out: PartLine[] = [];
@@ -505,8 +551,11 @@ const isIssued = (p: { inStock: boolean | null; requisitionNo: string | null }) 
  * จึงตัดสินจากสิ่งที่เกิดขึ้นแล้วจริงในใบ ไม่ใช่จากว่ามาจากปุ่มไหน
  */
 
-/** ประวัติที่เริ่มรอบอะไหล่ใหม่ — หลังจากนี้ผลเบิกรอบก่อนไม่นับ (ระบุอะไหล่ใหม่ · เช็คใหม่ · ของไม่พอตอนเบิก) */
-const PARTS_ROUND_ACTIONS = ["PARTS_REQUESTED", "NO_PARTS", "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
+/**
+ * ประวัติที่เริ่มรอบอะไหล่ใหม่ — หลังจากนี้ผลเบิกรอบก่อนไม่นับ (ระบุอะไหล่ใหม่ · คอนเฟิร์มอะไหล่ที่ช่างเลือก · เช็คใหม่ · ของไม่พอตอนเบิก)
+ * ส่วนระบุอะไหล่มาจาก SPEC_ACTIONS ชุดเดียว — ใครเพิ่มทางระบุอะไหล่ใหม่ ทุกกติกาของรอบนับตามเอง
+ */
+const PARTS_ROUND_ACTIONS = [...SPEC_ACTIONS, "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
 
 /**
  * ใครคอนเฟิร์มนัดกับลูกค้า (เจ้าของงานขอ ต.ค. 69) — คนกดคอนเฟิร์ม/เลื่อนนัดครั้งล่าสุด อ่านจากประวัติ ไม่เก็บซ้ำ
@@ -595,7 +644,7 @@ async function afterSourcing(id: number, movedOut: number[] = []): Promise<"AWAI
     }),
     prisma.workOrderLog.findFirst({ where: { workOrderId: id, action: "PREPAID" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
     prisma.workOrderLog.findFirst({
-      where: { workOrderId: id, action: { in: ["PARTS_REQUESTED", "NO_PARTS"] } },
+      where: { workOrderId: id, action: { in: SPEC_ACTIONS } },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
@@ -711,7 +760,8 @@ function shape(
     title: w.title,
     detail: w.detail,
     status: w.status,
-    statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+    // หัวหน้าภาค · คอนเฟิร์มอะไหล่ / ช่าง · ตรวจหน้างาน — แก้รายการอะไหล่ เมื่อมีรายการของช่างค้าง (หน้ารายละเอียดคิดซ้ำพร้อมประวัติ)
+    statusLabel: statusLabelOf(w.status, openPickOf(w.status, w.partsPicks)),
     priority: w.priority,
     priorityLabel: WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority,
     branchCode: w.branch.code,
@@ -781,11 +831,18 @@ function shape(
     inspectedAt: w.inspectedAt,
     inspectionNote: w.inspectionNote,
     parent: w.parent
-      ? { ...w.parent, statusLabel: WORK_ORDER_STATUS_LABELS[w.parent.status] ?? w.parent.status }
+      ? {
+          id: w.parent.id,
+          code: w.parent.code,
+          status: w.parent.status,
+          statusLabel: statusLabelOf(w.parent.status, openPickOf(w.parent.status, w.parent.partsPicks)),
+        }
       : null,
     children: w.children.map((c) => ({
-      ...c,
-      statusLabel: WORK_ORDER_STATUS_LABELS[c.status] ?? c.status,
+      id: c.id,
+      code: c.code,
+      status: c.status,
+      statusLabel: statusLabelOf(c.status, openPickOf(c.status, c.partsPicks)),
     })),
     createdByName: w.createdBy?.name ?? null,
     createdAt: w.createdAt,
@@ -1024,6 +1081,24 @@ const listSelect = {
    */
   needsParts: true,
   parts: { where: { kind: "WAITING" }, select: { inStock: true, warehouse: true, requisitionNo: true, transferredAt: true } },
+  /**
+   * รอบเลือกอะไหล่ล่าสุดของช่าง — ป้าย "หัวหน้าภาค · คอนเฟิร์มอะไหล่" (หัวข้อในกล่องงานมาจากป้ายนี้) และบรรทัดบนการ์ด
+   * "ช่างเลือก {n} รายการ · ส่งรอบที่ {n}" · แถวเดียว + จำนวน + สามรายการแรก ไม่ดึงทั้งรายการทุกใบ (ดูเหตุผลข้างบน)
+   */
+  partsPicks: {
+    orderBy: { id: "desc" },
+    take: 1,
+    select: {
+      status: true,
+      voidedAt: true,
+      reviewedAt: true,
+      round: true,
+      createdAt: true,
+      createdBy: { select: { name: true } },
+      _count: { select: { items: true } },
+      items: { orderBy: { id: "asc" }, take: 3, select: { quantity: true, sparePart: { select: { partCode: true, name: true } } } },
+    },
+  },
   _count: {
     select: {
       attachments: true,
@@ -1128,6 +1203,8 @@ const NON_STAGE_ACTIONS = [
   "URGENT_RELEASE",
   "URGENT_REQUESTED",
   "URGENT_REQUEST_CANCELLED",
+  // บันทึก/แก้ยี่ห้อเครื่อง (ช่องเลือกอะไหล่ · หน้าใบงาน) — ใบอยู่ขั้นเดิม · ไม่ใช่ "ทางที่ใบมาถึง" ขั้นปล่อยงานด้วย (RELEASE_ARRIVAL_SKIP)
+  "MACHINE_BRAND_SET",
 ];
 
 /**
@@ -1291,6 +1368,7 @@ function listShape(
   const actor = WORK_ORDER_STAGE_ACTOR[w.status] ?? null;
   const rc = ctx.release;
   const release = releaseInfo(w, rc.cfg, rc.now, rc.arrivals.get(w.id), rc.settles.get(w.id));
+  const pick = openPickOf(w.status, w.partsPicks);
   /**
    * ขั้นนี้รอ "ใคร" — ไม่ใช่แค่บทบาท
    *
@@ -1373,12 +1451,32 @@ function listShape(
     // บรรทัดแรกพอ — รายการโหลดทีละหลายร้อยใบผ่าน 4G อาการเต็มอยู่ในหน้ารายละเอียด
     symptom: (w.symptom ?? "").split("\n")[0].trim().slice(0, 160) || null,
     status: w.status,
-    statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+    statusLabel: statusLabelOf(w.status, pick),
+    /**
+     * รายการที่ช่างเลือกรอหัวหน้าภาคคอนเฟิร์ม (เฉพาะรอบที่รออยู่ — ถูกตีกลับแล้วเป็นงานของช่าง ไม่ใช่ของกล่องนี้)
+     * การ์ดในกล่องงาน: "ส่งมา {เวลา}" · "ช่าง{ชื่อ}" · "ช่างเลือก {n} รายการ" · ป้าย "ส่งรอบที่ {n}" · บรรทัดรายการ
+     * ชื่อช่องนี้ห้ามเปลี่ยน — คู่มือในแอป (tour) หาการ์ดใบที่ "ยังไม่มีรายการของช่าง" จากช่องนี้
+     */
+    partsPick:
+      pick?.status === "PENDING"
+        ? {
+            round: pick.round,
+            count: pick._count.items,
+            line: [
+              ...pick.items.map((i) => `${i.sparePart.partCode} ${i.sparePart.name} × ${i.quantity}`),
+              ...(pick._count.items > pick.items.length ? [`อีก ${pick._count.items - pick.items.length} รายการ`] : []),
+            ].join(" · "),
+            sentAt: pick.createdAt,
+            sentByName: pick.createdBy?.name ?? null,
+          }
+        : null,
     priority: w.priority,
     priorityLabel: WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority,
     branchCode: w.branch.code,
     branchName: w.branch.name,
     machineCode: w.machine?.code ?? null,
+    // ยี่ห้อที่ใช้จริง (รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) — การ์ดคอนเฟิร์มอะไหล่ "เครื่อง {code} · {ยี่ห้อ}"
+    machineMake: machineMake(w.machine),
     machineCapacityKg: w.machine?.capacityKg ?? null,
     assignedTeam: w.assignedTeam,
     // ใบเก่าที่จ่ายรายคนก่อนเปลี่ยนมาจ่ายเป็นทีม ยังต้องบอกได้ว่าอยู่ในมือใคร
@@ -2272,8 +2370,9 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
       // + ส่งเคลม (แถบสถานะเคลมบนการ์ด: ใครส่ง เมื่อไหร่) — ไม่จำกัดจำนวนแถวแล้ว เพราะประวัติเคลมของงานซ่อมครั้งนี้ต้องมาครบ
       // + ปิดงาน/ไม่ส่งเคลม (ก้อน 5) — การ์ดที่ปิดแล้วขึ้น "ไม่ส่งเคลม: {ชิ้น} ({เหตุผล})" จาก meta ของการปิดครั้งล่าสุด
       // จำนวนต่อใบยังน้อย (เฉพาะชนิดเหล่านี้) และใบในหน้านี้มีแค่งานของทีมวันนี้
+      // + ส่งผลตรวจ (INSPECTED) — ด่านที่สองของกติการอบเลือกอะไหล่ที่ยังเปิด (openPickOf) คู่กับ INSPECT_REQUESTED
       logs: {
-        where: { action: { in: [...MY_DAY_RELEASE_ACTIONS, "CLAIM_SUBMITTED", "CLOSED", "CLAIM_SKIPPED"] } },
+        where: { action: { in: [...MY_DAY_RELEASE_ACTIONS, "INSPECTED", "CLAIM_SUBMITTED", "CLOSED", "CLAIM_SKIPPED"] } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { id: true, action: true, createdAt: true, meta: true, user: { select: { name: true } } },
       },
@@ -2300,6 +2399,22 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           reviewFlags: true,
           brand: true,
           fieldCheck: true,
+        },
+      },
+      /**
+       * หัวหน้าภาคตีกลับรายการอะไหล่ที่ช่างเลือก → การ์ดแดง "อะไหล่ถูกตีกลับ" บนหน้าแรกของทีมที่ไปตรวจ (ข้อ 10 · ข้อ 13)
+       * แถวล่าสุดแถวเดียว + ตัวที่ชี้ว่าไม่ตรง — ใบที่ถูกตีกลับไม่มีวันนัด ถ้าไม่ขึ้นตรงนี้ช่างไม่มีทางรู้ว่ามีงานกลับมา
+       */
+      partsPicks: {
+        orderBy: { id: "desc" },
+        take: 1,
+        select: {
+          status: true,
+          voidedAt: true,
+          reviewedAt: true,
+          reason: true,
+          reviewedBy: { select: { name: true, role: true } },
+          items: { where: { mark: "NO" }, orderBy: { id: "asc" }, select: { sparePart: { select: { partCode: true, name: true } } } },
         },
       },
     },
@@ -2333,11 +2448,29 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           : warrantyEndFor(w.branch.openedAt, w.branch.warrantyExpiresAt, make);
         const skipped = latestCloseSkips(w.logs, since);
         const skipParts = [...claimParts, ...skipped.skips.map((s) => ({ partCode: s.partCode, partName: s.partName }))];
+        const pick = openPickOf(w.status, w.partsPicks, w.logs);
         return {
           id: w.id,
           code: w.code,
           status: w.status,
+          statusLabel: statusLabelOf(w.status, pick),
           inspect: w.status === "INSPECTING",
+          // การ์ดแดง: "{WO} · ตรวจหน้างาน · เครื่อง {code} · {ยี่ห้อ}"
+          machineMake: make,
+          /**
+           * ถูกตีกลับรายการอะไหล่ (รอบที่ยังเปิด) — การ์ดแดงด้านบนของงานของฉัน: ใคร · เมื่อไร · เหตุผล · ตัวที่ชี้ว่าไม่ตรง
+           * หน้านี้เป็นของช่าง (ทีมที่ไปตรวจ) จึงส่งเหตุผลได้ — ทีม Area ไม่มีหน้านี้ และหน้าใบงานตัดเหตุผลออกให้ (ข้อ 10)
+           */
+          partsReturned:
+            pick?.status === "RETURNED"
+              ? {
+                  at: pick.reviewedAt,
+                  byName: pick.reviewedBy?.name ?? null,
+                  roleLabel: pickRoleLabel(pick.reviewedBy?.role),
+                  reason: pick.reason,
+                  flags: pick.items.map((i) => ({ partCode: i.sparePart.partCode, name: i.sparePart.name })),
+                }
+              : null,
           done: w.status === "DONE" || w.status === "CLAIM_REVIEW",
           urgent: w.priority === "URGENT",
           jobType: w.jobType,
@@ -2991,7 +3124,15 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const [wo, last] = await Promise.all([
-    prisma.workOrder.findUnique({ where: { id }, select: { status: true, ...VIEW_SELECT } }),
+    // รอบเลือกอะไหล่ล่าสุด — ข้อความ "{ใคร} อัปเดตใบงานนี้ — {ป้าย}" ต้องใช้ป้ายเดียวกับหน้าใบงาน (คอนเฟิร์มอะไหล่ / แก้รายการอะไหล่)
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        status: true,
+        ...VIEW_SELECT,
+        partsPicks: { orderBy: { id: "desc" }, take: 1, select: { status: true, voidedAt: true, reviewedAt: true } },
+      },
+    }),
     prisma.workOrderLog.findFirst({
       where: { workOrderId: id },
       orderBy: { id: "desc" },
@@ -3007,7 +3148,7 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
     actionLabel: last ? WORK_ORDER_ACTION_LABELS[last.action] ?? last.action : null,
     at: last?.createdAt ?? null,
     status: wo.status,
-    statusLabel: WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status,
+    statusLabel: statusLabelOf(wo.status, openPickOf(wo.status, wo.partsPicks)),
   });
 });
 
@@ -3131,7 +3272,7 @@ function flowOf(
   };
   const scheduleRound = since(["ASSIGNED"]);
   const partsRound = since(PARTS_ROUND_ACTIONS);
-  const specRound = since(["PARTS_REQUESTED", "NO_PARTS"]);
+  const specRound = since(SPEC_ACTIONS);
   // หัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) → แอดมินตอบคลังใหม่ทั้งรอบ · การโอน/เบิกคลังอื่นของรอบที่ถูกส่งกลับไม่นับ
   const issueRound = since([...PARTS_ROUND_ACTIONS, "TRANSFER_RETURNED", "PICKUP_RETURNED"]);
 
@@ -3167,6 +3308,125 @@ function flowOf(
     inspect: inspectRounds > 0 || inInspect,
     inspectRounds: Math.max(inspectRounds, inInspect ? 1 : 0),
   };
+}
+
+type PickRow = WorkOrderRow["partsPicks"][number];
+
+/** รายการของรอบหนึ่งในรูปที่หน้าจอใช้ — prev = รอบก่อนหน้า (ป้าย "เพิ่มใหม่รอบนี้" / "แก้จำนวนรอบนี้ (เดิม {q})") */
+function pickItemsShape(p: PickRow, prev: PickRow | null) {
+  const before = new Map((prev?.items ?? []).map((i) => [i.sparePartId, i.quantity]));
+  return p.items.map((i) => {
+    const was = before.get(i.sparePartId);
+    return {
+      sparePartId: i.sparePartId,
+      partCode: i.sparePart.partCode,
+      name: i.sparePart.name,
+      partNo: i.sparePart.partNo,
+      brandFiles: fileList(i.sparePart.brandFiles),
+      quantity: i.quantity,
+      // OK = หัวหน้าภาคกดตรง · NO = ชี้ว่าไม่ตรง (ช่างเห็นป้ายแดงที่ตัวนั้น) · ว่าง = ยังไม่ได้ตัดสิน
+      mark: i.mark,
+      prevQty: prev && was !== undefined && was !== i.quantity ? was : null,
+      isNew: !!prev && was === undefined,
+    };
+  });
+}
+
+/**
+ * รายการที่ช่างเลือกของรอบที่ยังเปิด (รอคอนเฟิร์ม / ถูกตีกลับ) — กล่องบนหน้าใบงาน ฟอร์มส่งผลตรวจ และหน้าคอนเฟิร์มอ่านก้อนนี้
+ * previous = รอบที่ถูกตีกลับก่อนหน้า (รอบนี้ − 1) ให้หัวหน้าภาคเทียบว่าช่างแก้อะไร · ไม่ใช่รอบต่อกัน (ย้อนขั้นแล้วเริ่มรอบ 1 ใหม่) = ไม่มี
+ * addedPartPhotos = รูปอะไหล่ที่เสียที่เพิ่มหลังตีกลับ — ช่างยืนยันรายการเดิมด้วยรูปที่ชัดขึ้นได้ (ข้อ 9)
+ */
+function partsPickShape(
+  row: WorkOrderRow,
+  logs: { action: string; createdAt: Date }[]
+) {
+  const open = openPickOf(row.status, row.partsPicks, logs);
+  if (!open) return null;
+  const second = row.partsPicks[1] ?? null;
+  const previous = second && second.status === "RETURNED" && second.round === open.round - 1 ? second : null;
+  const flags = open.items.filter((i) => i.mark === "NO").map((i) => ({ partCode: i.sparePart.partCode, name: i.sparePart.name }));
+  return {
+    id: open.id,
+    round: open.round,
+    status: open.status,
+    sentAt: open.createdAt,
+    sentBy: open.createdBy ? { name: open.createdBy.name, employeeCode: open.createdBy.employeeCode } : null,
+    team: open.team,
+    // ไฟล์ยี่ห้อของ "เครื่อง" ตอนช่างส่ง — ยี่ห้อถูกแก้ทีหลังยังรู้ว่าช่างเลือกจากไฟล์ไหน
+    brandFile: open.brandFile,
+    note: open.note,
+    items: pickItemsShape(open, previous),
+    reason: open.reason,
+    reviewedAt: open.reviewedAt,
+    reviewedBy: open.reviewedBy ? { name: open.reviewedBy.name, roleLabel: pickRoleLabel(open.reviewedBy.role) } : null,
+    flags,
+    previous: previous
+      ? {
+          round: previous.round,
+          reason: previous.reason,
+          reviewedAt: previous.reviewedAt,
+          note: previous.note,
+          items: pickItemsShape(previous, null),
+        }
+      : null,
+    noteChanged: !!previous && (previous.note ?? "") !== (open.note ?? ""),
+    addedPartPhotos: previous?.reviewedAt
+      ? row.attachments.filter((a) => a.role === "INSPECT_PART" && a.createdAt > previous.reviewedAt!).length
+      : 0,
+  };
+}
+
+/**
+ * กล่องเขียว "{หัวหน้าภาค|แอดมิน}คอนเฟิร์มอะไหล่แล้ว" (ตัวอย่าง Main) — รอบล่าสุดคอนเฟิร์มแล้ว และการระบุอะไหล่ครั้งล่าสุดคือการคอนเฟิร์มนั้น
+ * (หัวหน้าภาคระบุใหม่ทีหลัง = รายการไม่ใช่ของช่างแล้ว ไม่ขึ้น) · ขึ้นจนถึงก่อนปล่อยงาน — หลังจากนั้นงานกลับมาที่ช่างแล้ว
+ */
+const PICK_CONFIRMED_UNTIL = WORK_ORDER_STAGE_ORDER.indexOf("ASSIGNED");
+function partsPickConfirmedShape(
+  row: WorkOrderRow,
+  logs: { action: string; createdAt: Date; meta: Prisma.JsonValue; user: { name: string; role: string } | null }[]
+) {
+  const latest = row.partsPicks[0];
+  if (!latest || latest.status !== "CONFIRMED") return null;
+  const at = (WORK_ORDER_STAGE_ORDER as readonly string[]).indexOf(row.status);
+  if (at < 0 || at >= PICK_CONFIRMED_UNTIL || row.status === "NEW" || INSPECT_STAGES.includes(row.status)) return null;
+  const spec = logs.find((l) => SPEC_ACTIONS.includes(l.action));
+  if (spec?.action !== "PARTS_PICK_CONFIRMED") return null;
+  const meta = (spec.meta ?? null) as { quote?: unknown; count?: unknown } | null;
+  return {
+    at: latest.reviewedAt ?? spec.createdAt,
+    byName: latest.reviewedBy?.name ?? spec.user?.name ?? null,
+    roleLabel: pickRoleLabel(latest.reviewedBy?.role ?? spec.user?.role),
+    count: typeof meta?.count === "number" ? meta.count : latest.items.length,
+    // ใส่อะไหล่นอก/ค่าบริการ หรือกฎแฟรนไชส์ → ต้องเสนอราคาลูกค้าก่อนนัด (ข้อความในกล่องเขียว)
+    quote: meta?.quote === true,
+  };
+}
+
+/**
+ * ทีม Area / Supervisor (COCO) / Maid (COCO) เห็นแค่ป้ายสถานะ — เหตุผลที่ตีกลับ ตัวที่ชี้ และข้อความในประวัติไม่ไปถึงร้าน (ข้อ 10)
+ * ตัดที่เซิร์ฟเวอร์ ไม่ใช่ซ่อนที่หน้าจอ: ข้อมูลที่ส่งไปแล้วคนเปิดดูได้เสมอ
+ */
+function stripPickForArea<
+  T extends {
+    partsPick: ReturnType<typeof partsPickShape>;
+    logs: { action: string; note: string | null }[];
+  },
+>(body: T): T {
+  const p = body.partsPick;
+  return {
+    ...body,
+    partsPick: p
+      ? {
+          ...p,
+          reason: null,
+          flags: null,
+          items: p.items.map((i) => ({ ...i, mark: null })),
+          previous: p.previous ? { ...p.previous, reason: null, items: p.previous.items.map((i) => ({ ...i, mark: null })) } : null,
+        }
+      : null,
+    logs: body.logs.map((l) => (l.action === "PARTS_PICK_RETURNED" ? { ...l, note: null } : l)),
+  } as T;
 }
 
 /**
@@ -3233,8 +3493,13 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedMod
   );
   const urgentLog = release && (release.urgent || release.urgentExpired) ? logs.find((l) => l.action === "URGENT_RELEASE") : undefined;
   const urgentMeta = (urgentLog?.meta ?? null) as { via?: unknown; reason?: unknown } | null;
+  const partsPick = partsPickShape(row, logs);
   return {
     ...base,
+    // ป้ายคิดซ้ำพร้อมประวัติ (ด่านที่สองของรอบที่เปิด) — shape() คิดจากแถวรอบอย่างเดียว
+    statusLabel: statusLabelOf(row.status, partsPick),
+    partsPick,
+    partsPickConfirmed: partsPickConfirmedShape(row, logs),
     // นาฬิกาเซิร์ฟเวอร์ — หน้าใบงานนับถอยหลังและพลิกเป็นล็อกด้วยเวลานี้ ไม่ใช่นาฬิกามือถือ (ข้อ 12)
     serverNow: now.toISOString(),
     cutoff: { time: cfg.time, since: cfg.since },
@@ -3317,8 +3582,9 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (await blockedForViewer(req, res, d.row, viewer)) return;
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
+  const body = detailBody(d, { phones: req.auth!.role === "ADMIN" });
   res.json({
-    ...detailBody(d, { phones: req.auth!.role === "ADMIN" }),
+    ...(isAreaTeam(req.auth) ? stripPickForArea(body) : body),
     ...(repeats ? { claimRepeats: repeats } : {}),
     ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}),
   });
@@ -3771,6 +4037,8 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
       createdAt: true,
       branch: { select: { code: true } },
       machine: { select: { code: true } },
+      // ป้ายในรายการ "ใบค้างที่สาขานี้" ต้องตรงกับหน้าใบงาน (statusLabelOf) — ใบที่รอคอนเฟิร์มอะไหล่ไม่ใช่ "ระบุอะไหล่"
+      partsPicks: LATEST_PICK,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -3788,7 +4056,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
       code: w.code,
       title: w.title,
       machineCode: w.machine?.code ?? null,
-      statusLabel: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+      statusLabel: statusLabelOf(w.status, openPickOf(w.status, w.partsPicks)),
       createdAt: w.createdAt,
     });
     branchOpen.set(w.branch.code, list);
@@ -4397,8 +4665,82 @@ async function moveStage(
  * มีคนกดขั้นนี้ไปก่อน หรือวันนัดเพิ่งถูกเลื่อน (moveStage expect) — แอปโหลดใบงานใหม่เองเมื่อได้ 409 (api/client.ts)
  * บอกทั้งสองอย่าง: คนที่เจอเพราะวันถูกเลื่อนจะได้ดูวันนัดใหม่ก่อนกดซ้ำ ไม่ใช่หาว่าขั้นไหนเปลี่ยน
  */
+const STAGE_MOVED_TEXT = "ใบงานนี้เพิ่งถูกเปลี่ยน (ขั้นหรือวันนัด) — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด";
 function stageMoved(res: Response) {
-  res.status(409).json({ error: "ใบงานนี้เพิ่งถูกเปลี่ยน (ขั้นหรือวันนัด) — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด" });
+  res.status(409).json({ error: STAGE_MOVED_TEXT });
+}
+
+const serviceInput = z.object({
+  name: z.string({ required_error: "ค่าบริการต้องมีชื่อรายการ", invalid_type_error: "ค่าบริการต้องมีชื่อรายการ" }).trim().min(1, "ค่าบริการต้องมีชื่อรายการ").max(120, "ชื่อค่าบริการยาวเกิน 120 ตัวอักษร"),
+  quantity: qtyInput("จำนวนค่าบริการต้องเป็น 1–999"),
+  unit: textInput("หน่วยของค่าบริการ", 20).nullable().optional(),
+  note: textInput("หมายเหตุของค่าบริการ", 300).nullable().optional(),
+});
+type ServiceLine = z.infer<typeof serviceInput>;
+
+/**
+ * ใบไปไหนต่อหลังระบุอะไหล่ — กติกาเดียวของ "ระบุอะไหล่" (/parts) และ "คอนเฟิร์มอะไหล่ที่ช่างเลือก" (/parts-pick/confirm)
+ * แยกออกมาให้สองทางตัดสินเหมือนกันทุกข้อ (อะไหล่นอก/ค่าบริการ = เสนอราคา · แฟรนไชส์หมดประกัน · เบิกครบแล้ว = ข้ามขั้นเช็ค)
+ * วันหนึ่งแก้กฎที่หนึ่งแล้วอีกทางไม่ตาม ใบที่ช่างเลือกอะไหล่จะเดินคนละทางกับใบที่หัวหน้าภาคระบุเอง
+ */
+function partsRoute(i: {
+  wo: { branch: { code: string; openedAt: Date | null; warrantyExpiresAt: Date | null }; machine: { brand: string | null; model: string | null } | null };
+  before: { sparePartId: number; quantity: number; inStock: boolean | null; requisitionNo: string | null }[];
+  needsParts: boolean;
+  parts: PartLine[];
+  offCount: number;
+  serviceCount: number;
+}) {
+  /**
+   * อะไหล่นอกหรือค่าบริการ = ของที่ลูกค้าต้องจ่าย หัวหน้าช่างเป็นคนรู้ — เสนอราคาเสมอ (เจ้าของงานเลือก ต.ค. 69)
+   * ไม่รอกฎแฟรนไชส์/ประกัน ซึ่งเขียนไว้สำหรับของในสโตร์ที่บริษัทออกให้ได้ระหว่างประกัน
+   * (ตัดสินตั้งแต่ตอนระบุ เพราะขั้นเสนอราคาอยู่ก่อนเบิก — ไม่รอผลเช็คสต็อก)
+   */
+  const asked = i.serviceCount > 0 || (i.needsParts && i.offCount > 0);
+  const quoteFirst =
+    asked ||
+    (i.needsParts &&
+      needsCustomerQuote({
+        branchCode: i.wo.branch.code,
+        needsParts: true,
+        openedAt: i.wo.branch.openedAt,
+        warrantyExpiresAt: i.wo.branch.warrantyExpiresAt,
+        machineBrand: machineMake(i.wo.machine),
+      }));
+  /**
+   * ทุกตัวเบิกไปแล้วตั้งแต่รอบก่อน (ช่างส่งกลับด้วยเหตุอื่นที่ไม่ใช่อะไหล่) — ไม่มีอะไรให้เช็ค
+   * หรือเสนอราคาเพิ่ม ไปจ่ายงานรอบใหม่เลย ไม่งั้นแอดมินต้องกดผ่านขั้นที่ไม่มีงานให้ทำ
+   */
+  const allIssued =
+    i.needsParts &&
+    i.parts.every((p) => {
+      const was = i.before.find((b) => b.sparePartId === p.sparePartId);
+      return !!was && was.quantity === p.quantity && isIssued(was);
+    });
+  /**
+   * ใช้อะไหล่ → แอดมินเช็คอะไหล่ (มี/หมด) ก่อนทุกใบ (นัดลูกค้าก่อนเบิก — เจ้าของงานกำหนด ต.ค. 69)
+   * เสนอราคาหรือไม่ตัดสินอีกทีตอนเช็คครบ (ดู afterSourcing) · ไม่ใช้อะไหล่แต่มีค่าบริการ → ตรงไปเสนอราคา
+   * (ไม่มีอะไหล่ให้เช็ค) · จ่ายเงินแล้วไปนัดวันเข้า (ดู afterPayment)
+   */
+  const nextStatus = !i.needsParts || allIssued ? (i.serviceCount > 0 ? "AWAITING_QUOTE" : "PARTS_CHECKED") : "PARTS_SOURCING";
+  return { nextStatus, quoteFirst, asked, allIssued };
+}
+
+/** เขียนรายการอะไหล่ที่รอ + ค่าบริการทั้งชุด (ระบุอะไหล่ / คอนเฟิร์มอะไหล่ที่ช่างเลือก) — ค่าบริการส่งมาทั้งชุดแทนของเดิม */
+async function saveParts(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  id: number,
+  parts: PartLine[],
+  services: ServiceLine[]
+) {
+  // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
+  await mergeWaitingParts(tx, id, parts);
+  await tx.workOrderService.deleteMany({ where: { workOrderId: id } });
+  if (services.length) {
+    await tx.workOrderService.createMany({
+      data: services.map((v) => ({ workOrderId: id, name: v.name, quantity: v.quantity, unit: v.unit || null, note: v.note || null })),
+    });
+  }
 }
 
 /**
@@ -4422,17 +4764,7 @@ const partsSchema = z.object({
   // อะไหล่นอกสโตร์ที่พิมพ์ชื่อเอง — ไม่มี SKU (ดู resolveOffParts) · มีแต่ของนอกสโตร์อย่างเดียวก็ได้
   offParts: z.array(offPartInput).max(20).optional(),
   // ค่าบริการที่ต้องเสนอราคาลูกค้า (ค่าแรง ค่าเดินทาง) — ใส่ได้ทั้งตอนใช้และไม่ใช้อะไหล่ · ส่งมาทั้งชุดแทนของเดิม
-  services: z
-    .array(
-      z.object({
-        name: z.string().trim().min(1, "ค่าบริการต้องมีชื่อรายการ").max(120),
-        quantity: z.number().int().min(1).max(999).default(1),
-        unit: z.string().trim().max(20).nullable().optional(),
-        note: z.string().trim().max(300).nullable().optional(),
-      })
-    )
-    .max(20)
-    .optional(),
+  services: z.array(serviceInput).max(20).optional(),
   note: z.string().trim().max(500).optional(),
   /**
    * ไม่ใช้อะไหล่ → จ่ายงานในฟอร์มเดียวกันเลย (เจ้าของงานเลือก ต.ค. 69 — เดิมหัวหน้าภาคกดสองครั้งติดกัน)
@@ -4452,8 +4784,21 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = partsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const cur = await guardStage(req, res, id, "NEW");
+  // รอบเลือกอะไหล่ของช่างล่าสุด — อ่านพร้อมกับตรวจขั้น (ฐานข้อมูลอยู่ไกล)
+  const [cur, latestPick] = await Promise.all([
+    guardStage(req, res, id, "NEW"),
+    prisma.partsPick.findFirst({ where: { workOrderId: id }, orderBy: { id: "desc" }, select: { status: true, voidedAt: true } }),
+  ]);
   if (!cur) return;
+  /**
+   * มีรายการที่ช่างเลือกรอคอนเฟิร์ม — หัวหน้าภาคแก้รายการของช่างเองไม่ได้ (ข้อ 8) มีแค่คอนเฟิร์มหรือตีกลับ
+   * แอปรุ่นเก่าที่ยังเปิดฟอร์มระบุอะไหล่เดิมได้ 409 แล้วโหลดใบใหม่ (เห็นหน้าคอนเฟิร์มแทน)
+   */
+  if (openPickOf(cur.status, latestPick ? [latestPick] : [])?.status === "PENDING") {
+    return res.status(409).json({
+      error: "ใบนี้รอคอนเฟิร์มอะไหล่ที่ช่างเลือก — กด “คอนเฟิร์มอะไหล่” หรือ “ตีกลับให้ช่างแก้” (แก้รายการของช่างเองไม่ได้)",
+    });
+  }
 
   const { needsParts, note } = parsed.data;
   if (needsParts && !parsed.data.parts?.length && !parsed.data.offParts?.length) {
@@ -4484,53 +4829,15 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   ]);
   // รวมเป็นรายการเดียวกันตั้งแต่ตรงนี้ — ข้างล่างไม่ต้องรู้ว่าตัวไหนมี SKU
   const parts: PartLine[] = needsParts ? [...(parsed.data.parts ?? []), ...offLines] : [];
-
-  /**
-   * ตัดสินตั้งแต่ตรงนี้ว่าต้องเสนอราคาก่อนไหม
-   *
-   * เงื่อนไขทั้งสามข้อ (สาขาแฟรนไชส์ · ใช้อะไหล่ · หมดประกัน) รู้ครบแล้วตั้งแต่
-   * หัวหน้าภาคระบุอะไหล่ ไม่ต้องรอผลเช็คสต็อก — และต้องตัดสินตรงนี้ เพราะ
-   * ขั้นเสนอราคาอยู่ก่อนเบิกอะไหล่แล้ว ไม่ใช่หลัง (ใบงานอ่านไว้แล้วข้างบน)
-   */
-  /**
-   * อะไหล่นอกหรือค่าบริการ = ของที่ลูกค้าต้องจ่าย หัวหน้าช่างเป็นคนรู้ — เสนอราคาเสมอ (เจ้าของงานเลือก ต.ค. 69)
-   * ไม่รอกฎแฟรนไชส์/ประกัน ซึ่งเขียนไว้สำหรับของในสโตร์ที่บริษัทออกให้ได้ระหว่างประกัน
-   */
   const services = parsed.data.services ?? [];
-  const asked = services.length > 0 || (needsParts && (parsed.data.offParts?.length ?? 0) > 0);
-  const quoteFirst =
-    asked ||
-    (needsParts &&
-    needsCustomerQuote({
-      branchCode: wo.branch.code,
-      needsParts: true,
-      openedAt: wo.branch.openedAt,
-      warrantyExpiresAt: wo.branch.warrantyExpiresAt,
-      machineBrand: machineMake(wo.machine),
-    }));
-
-  /**
-   * ทุกตัวเบิกไปแล้วตั้งแต่รอบก่อน (ช่างส่งกลับด้วยเหตุอื่นที่ไม่ใช่อะไหล่) — ไม่มีอะไรให้เช็ค
-   * หรือเสนอราคาเพิ่ม ไปจ่ายงานรอบใหม่เลย ไม่งั้นแอดมินต้องกดผ่านขั้นที่ไม่มีงานให้ทำ
-   */
-  const allIssued =
-    !!needsParts &&
-    parts.every((p) => {
-      const was = before.find((b) => b.sparePartId === p.sparePartId);
-      return !!was && was.quantity === p.quantity && isIssued(was);
-    });
-
-  /**
-   * ใช้อะไหล่ → แอดมินเช็คอะไหล่ (มี/หมด) ก่อนทุกใบ (นัดลูกค้าก่อนเบิก — เจ้าของงานกำหนด ต.ค. 69)
-   * เสนอราคาหรือไม่ตัดสินอีกทีตอนเช็คครบ (ดู afterSourcing) · ไม่ใช้อะไหล่แต่มีค่าบริการ → ตรงไปเสนอราคา
-   * (ไม่มีอะไหล่ให้เช็ค) · จ่ายเงินแล้วไปนัดวันเข้า (ดู afterPayment)
-   */
-  const nextStatus =
-    !needsParts || allIssued
-      ? services.length > 0
-        ? "AWAITING_QUOTE"
-        : "PARTS_CHECKED"
-      : "PARTS_SOURCING";
+  const { nextStatus, quoteFirst, asked, allIssued } = partsRoute({
+    wo,
+    before,
+    needsParts,
+    parts,
+    offCount: parsed.data.offParts?.length ?? 0,
+    serviceCount: services.length,
+  });
   if (assign) {
     if (nextStatus !== "PARTS_CHECKED") {
       return res.status(400).json({ error: "ใบนี้ยังจ่ายงานไม่ได้ — ต้องผ่านขั้นอะไหล่/เสนอราคาก่อน" });
@@ -4539,14 +4846,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   }
 
   await prisma.$transaction(async (tx) => {
-    // ไม่ใช้อะไหล่ ให้ล้างรายการที่อาจค้างจากรอบก่อนออกด้วย ไม่งั้นแอดมินจะเห็นของเก่า
-    await mergeWaitingParts(tx, id, parts);
-    await tx.workOrderService.deleteMany({ where: { workOrderId: id } });
-    if (services.length) {
-      await tx.workOrderService.createMany({
-        data: services.map((v) => ({ workOrderId: id, name: v.name, quantity: v.quantity, unit: v.unit || null, note: v.note || null })),
-      });
-    }
+    await saveParts(tx, id, parts, services);
     const partsNote =
       note ||
         (nextStatus === "AWAITING_QUOTE"
@@ -4613,6 +4913,243 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
     // ใบที่ไม่ได้ผูกกับเคสเครื่องเสีย ไม่ต้องอ่านเพื่อไปพบว่าไม่มีอะไรให้ซิงก์
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId, !!cur.outageId);
   }, STAGE_TX);
+
+  res.json(await detailFor(id));
+});
+
+// ── คอนเฟิร์ม / ตีกลับ รายการอะไหล่ที่ช่างเลือก (เจ้าของงานขอ ต.ค. 69) ─────────────
+
+/** หัวหน้าภาคกดตรง/ไม่ตรงทีละรายการ (ข้อ 6) — ตัวที่ไม่ตรงขึ้นป้ายแดงให้ช่างรู้ว่าต้องแก้ตัวไหน */
+const pickMarkInput = z.object({
+  sparePartId: idInput(PART_ID_TEXT),
+  mark: z.enum(["OK", "NO"], { errorMap: () => ({ message: "ป้ายตรง/ไม่ตรงไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง" }) }),
+});
+/** ไม่มี pickId = แอปไม่รู้ว่ากำลังตอบรอบไหน — ให้โหลดใหม่ ไม่เดาเป็นรอบล่าสุด (อาจไม่ใช่รอบที่คนกดเห็น) */
+const PICK_ID_TEXT = "ไม่รู้ว่ากำลังตอบรายการอะไหล่รอบไหน — โหลดหน้าใหม่แล้วลองอีกครั้ง";
+
+const NO_PENDING_PICK = "ใบนี้ไม่มีรายการอะไหล่ที่รอคอนเฟิร์ม";
+const PICK_CHANGED = "รายการอะไหล่เปลี่ยนไปแล้ว — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด";
+
+/** รอบล่าสุดของใบพร้อมรายการ — อ่านพร้อมกับตรวจขั้น (guardStage) ไม่ต่อคิว */
+function latestPickOf(id: number) {
+  return prisma.partsPick.findMany({
+    where: { workOrderId: id },
+    orderBy: { id: "desc" },
+    take: 1,
+    include: { items: { orderBy: { id: "asc" }, include: { sparePart: { select: { partCode: true, name: true } } } } },
+  });
+}
+
+/**
+ * รอบที่รอคอนเฟิร์มของใบ + ตรวจว่าเป็นรอบเดียวกับที่หน้าจอเห็น (pickId) — คืน null เมื่อตอบไปแล้ว
+ * pickId กันกดทับกัน: ช่างส่งรอบใหม่ (หรือหัวหน้าภาคอีกคนตีกลับ) ระหว่างที่หน้าคอนเฟิร์มยังเปิดค้าง ต้องไม่คอนเฟิร์มรายการที่ไม่ได้เห็น
+ * 409 ทั้งสองข้อ — แอปโหลดใบใหม่ให้เอง (api/client.ts)
+ */
+function pendingPickFor(res: Response, status: string, picks: Awaited<ReturnType<typeof latestPickOf>>, pickId: number) {
+  const open = openPickOf(status, picks);
+  if (open?.status !== "PENDING") {
+    res.status(409).json({ error: NO_PENDING_PICK });
+    return null;
+  }
+  if (open.id !== pickId) {
+    res.status(409).json({ error: PICK_CHANGED });
+    return null;
+  }
+  return open;
+}
+
+/**
+ * คอนเฟิร์มรายการที่ช่างเลือก → เขียนลงใบเป็นอะไหล่ที่รอ แล้วเดินต่อเหมือนหัวหน้าภาคระบุอะไหล่เอง (ข้อ 7)
+ *
+ * แก้รายการของช่างไม่ได้ (ข้อ 8) — เติมได้แค่อะไหล่นอกสโตร์กับค่าบริการ (ใส่อย่างใดอย่างหนึ่ง = เสนอราคาก่อนนัด เหมือนฟอร์มเดิม)
+ * รายการของช่าง "แทนที่" ของในสโตร์ทั้งชุด (ข้อ 5): แถวเดิมที่ช่างเอาออกหายจากใบตอนนี้ (รวมของที่เบิกแล้ว — เลขใบเบิกลงประวัติ · D2)
+ * ของนอกสโตร์/ค่าบริการเดิมมากับฟอร์ม (เติมไว้ให้) และถูกแทนด้วยที่ส่งมา
+ * ตรวจไฟล์ยี่ห้อซ้ำกับยี่ห้อเครื่องและไฟล์ของอะไหล่ "ตอนนี้" — แก้ยี่ห้อเครื่อง/เอาไฟล์ออกหลังช่างส่ง จะไม่คอนเฟิร์มของผิดยี่ห้อเข้าใบ
+ */
+const pickConfirmSchema = z.object({
+  pickId: idInput(PICK_ID_TEXT),
+  offParts: listInput(offPartInput, "อะไหล่นอกสโตร์ใส่", 20).optional(),
+  services: listInput(serviceInput, "ค่าบริการใส่", 20).optional(),
+  note: textInput("หมายเหตุ", 500).optional(),
+  marks: listInput(pickMarkInput, "ป้ายตรง/ไม่ตรงส่ง", 40).optional(),
+});
+
+router.post("/:id/parts-pick/confirm", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = pickConfirmSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  // ทุกอย่างที่ต้องอ่านก่อนตัดสิน อ่านพร้อมกันรอบเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
+  const [cur, picks, wo, before] = await Promise.all([
+    guardStage(req, res, id, "NEW"),
+    latestPickOf(id),
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+        machine: { select: { code: true, brand: true, model: true } },
+      },
+    }),
+    prisma.workOrderPart.findMany({
+      where: { workOrderId: id, kind: "WAITING" },
+      orderBy: { id: "asc" },
+      select: {
+        sparePartId: true,
+        quantity: true,
+        inStock: true,
+        requisitionNo: true,
+        sparePart: { select: { partCode: true, name: true, offCatalog: true } },
+      },
+    }),
+  ]);
+  if (!cur || !wo) return;
+  const open = pendingPickFor(res, cur.status, picks, parsed.data.pickId);
+  if (!open) return;
+  if ((parsed.data.marks ?? []).some((m) => m.mark === "NO")) {
+    return res.status(400).json({ error: "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม" });
+  }
+  // ของนอกสโตร์สร้างแถวอะไหล่ (upsert) — ทำหลังผ่านด่านแล้วเท่านั้น
+  const [issue, offLines] = await Promise.all([
+    brandIssue({ machine: wo.machine, parts: open.items, mode: "other" }),
+    resolveOffParts(parsed.data.offParts),
+  ]);
+  if (issue) {
+    return res.status(400).json({
+      error:
+        (issue.kind === "noFile" || issue.kind === "otherFile") && issue.partCode && issue.machineFile
+          ? `ยี่ห้อเครื่องเปลี่ยนหลังช่างส่ง — ${issue.partCode} ไม่อยู่ในไฟล์ ${issue.machineFile} หรือของใช้ร่วม ตีกลับให้ช่างเลือกใหม่`
+          : issue.text,
+    });
+  }
+
+  const picked: PartLine[] = open.items.map((i) => ({ sparePartId: i.sparePartId, quantity: i.quantity }));
+  const parts: PartLine[] = [...picked, ...offLines];
+  const services = parsed.data.services ?? [];
+  const route = partsRoute({ wo, before, needsParts: true, parts, offCount: offLines.length, serviceCount: services.length });
+  // แถวในสโตร์เดิมที่ไม่อยู่ในรายการของช่าง = ช่างเอาออก — หายจากใบเมื่อคอนเฟิร์ม (เลขใบเบิกเดิมลงประวัติ ไม่หายเงียบ ๆ)
+  const removing = before.filter((b) => !b.sparePart.offCatalog && !picked.some((p) => p.sparePartId === b.sparePartId));
+  const reqNos = [...new Set(removing.filter(isIssued).map((b) => b.requisitionNo!))];
+  const nextLabel = WORK_ORDER_STATUS_LABELS[route.nextStatus] ?? route.nextStatus;
+  // ของที่หัวหน้าภาคเติมเองอยู่หลัง "+ ใส่" เสมอ (ตัวอย่างที่เจ้าของงานอนุมัติ) — มีแต่ค่าบริการก็ต้องอ่านว่าหัวหน้าภาคใส่
+  // ไม่ใช่ "… 2 รายการ และค่าบริการ 1 รายการ" ที่อ่านเหมือนช่างเลือกค่าบริการมาด้วย
+  const extras = [
+    offLines.length ? `อะไหล่นอก ${offLines.length} รายการ` : null,
+    services.length ? `ค่าบริการ ${services.length} รายการ` : null,
+  ].filter(Boolean);
+  const text =
+    `คอนเฟิร์มอะไหล่ที่ช่างเลือก ${picked.length} รายการ` +
+    (extras.length ? ` + ใส่${extras.join(" และ")}` : "") +
+    ` → ${nextLabel}` +
+    (route.quoteFirst ? " · ต้องเสนอราคาลูกค้าก่อนนัด" : "") +
+    (removing.length ? ` · เอาออกจากใบ: ${removing.map((b) => pickLabel(b.sparePart)).join(", ")}` : "") +
+    (reqNos.length ? ` (ใบเบิกเดิม ${reqNos.join(", ")})` : "") +
+    (parsed.data.note ? ` — ${parsed.data.note}` : "");
+  const at = new Date();
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // ขั้นเดิม + รอบเดิมในคำสั่งเดียว — คนกดคอนเฟิร์ม/ตีกลับพร้อมกัน คนหลังได้ 409 ไม่ใช่เขียนทับกัน
+      const moved = await tx.workOrder.updateMany({
+        where: { id, status: "NEW" },
+        data: { status: route.nextStatus, needsParts: true, workStatus: workStatusForStage(route.nextStatus) },
+      });
+      if (moved.count === 0) throw new Refusal(409, STAGE_MOVED_TEXT);
+      const done = await tx.partsPick.updateMany({
+        where: { id: open.id, status: "PENDING", voidedAt: null },
+        data: { status: "CONFIRMED", reviewedById: req.auth!.userId, reviewedAt: at },
+      });
+      if (done.count === 0) throw new Refusal(409, PICK_CHANGED);
+      await tx.partsPickItem.updateMany({ where: { pickId: open.id }, data: { mark: "OK" } });
+      await saveParts(tx, id, parts, services);
+      // อยู่ใน SPEC_ACTIONS — ทุกกติกาของ "รอบระบุอะไหล่" (ผลเช็ครอบก่อน · จ่ายแล้วในใบเดิม · แถบขั้นตอน) นับการคอนเฟิร์มนี้ด้วย
+      // meta: กล่องเขียวบนหน้าใบงานอ่านจำนวนและ "ต้องเสนอราคา" จากตรงนี้ ไม่ต้องแกะข้อความ
+      await tx.workOrderLog.create({
+        data: {
+          workOrderId: id,
+          userId: req.auth!.userId,
+          action: "PARTS_PICK_CONFIRMED",
+          status: route.nextStatus,
+          note: text,
+          meta: { pickId: open.id, count: picked.length, quote: route.quoteFirst },
+          createdAt: at,
+        },
+      });
+      orphanCache = null;
+      // รายการถึงกระดานเครื่องดับ/รายงานอะไหล่ที่ต้องสั่งตอนนี้ — ไม่ใช่ตอนช่างเลือก (ข้อ 12)
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId, !!cur.outageId);
+    }, STAGE_TX);
+  } catch (e) {
+    if (e instanceof Refusal) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
+
+  res.json(await detailFor(id));
+});
+
+/**
+ * ตีกลับรายการที่ช่างเลือก → ใบกลับไป "ช่าง · ตรวจหน้างาน" ของทีมเดิม (ข้อ 9)
+ *
+ * ไม่ผ่านการนัด/ปล่อยงานใหม่ ทีมแก้จากไฟล์รอบเดิม — ไฟล์ 3 อย่างของรอบนี้ยังนับ (ไม่มีส่งตรวจใหม่) วันนัดไม่มี (ถูกล้างตอนส่งผลตรวจ)
+ * จึงไม่ติดเวลาปิดรับปล่อยงานด้วย · ต้องเข้าดูเครื่องอีกรอบใช้ "ต้องเข้าตรวจสอบหน้างานก่อน" (ผ่านการนัดตามปกติ)
+ * เหตุผลบังคับ ข้อความเดียวกับตีกลับเคลม · ทีมเห็นบนการ์ดแดง/กล่องแดง ทีม Area ไม่เห็น (ข้อ 10)
+ */
+const pickReturnSchema = z.object({
+  pickId: idInput(PICK_ID_TEXT),
+  reason: z.string({ invalid_type_error: SEND_BACK_REASON_REQUIRED }).max(500, "เหตุผลยาวเกิน 500 ตัวอักษร").optional(),
+  flags: listInput(idInput(PART_ID_TEXT), "รายการที่ชี้ว่าไม่ตรงส่ง", 40).optional(),
+  marks: listInput(pickMarkInput, "ป้ายตรง/ไม่ตรงส่ง", 40).optional(),
+});
+
+router.post("/:id/parts-pick/return", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = pickReturnSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const [cur, picks] = await Promise.all([guardStage(req, res, id, "NEW"), latestPickOf(id)]);
+  if (!cur) return;
+  const open = pendingPickFor(res, cur.status, picks, parsed.data.pickId);
+  if (!open) return;
+  const reason = parsed.data.reason?.trim() ?? "";
+  if (!reason) return res.status(400).json({ error: SEND_BACK_REASON_REQUIRED });
+  const inPick = new Set(open.items.map((i) => i.sparePartId));
+  // ตัวที่ชี้ว่าไม่ตรง = flags + ตัวที่กด "ไม่ตรง" · ตัวที่กด "ตรง" เก็บไว้ (ช่างรู้ว่าตัวไหนผ่านแล้ว)
+  const no = new Set([...(parsed.data.flags ?? []), ...(parsed.data.marks ?? []).filter((m) => m.mark === "NO").map((m) => m.sparePartId)]);
+  if ([...no].some((x) => !inPick.has(x)) || (parsed.data.marks ?? []).some((m) => !inPick.has(m.sparePartId))) {
+    return res.status(400).json({ error: "รายการที่ชี้ว่าไม่ตรงไม่อยู่ในรายการที่ช่างเลือก" });
+  }
+  if (!cur.assignedTeam) {
+    return res.status(409).json({ error: "ใบนี้ไม่มีทีมที่ไปตรวจ — ใช้ “ต้องเข้าตรวจสอบหน้างานก่อน” แทน" });
+  }
+  const ok = new Set((parsed.data.marks ?? []).filter((m) => m.mark === "OK" && !no.has(m.sparePartId)).map((m) => m.sparePartId));
+  const flagged = open.items.filter((i) => no.has(i.sparePartId));
+  const text = reason + (flagged.length ? ` (ไม่ตรง: ${flagged.map((i) => pickLabel(i.sparePart)).join(", ")})` : "");
+  const at = new Date();
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const done = await tx.partsPick.updateMany({
+        where: { id: open.id, status: "PENDING", voidedAt: null },
+        data: { status: "RETURNED", reason, reviewedById: req.auth!.userId, reviewedAt: at },
+      });
+      if (done.count === 0) throw new Refusal(409, PICK_CHANGED);
+      if (no.size) await tx.partsPickItem.updateMany({ where: { pickId: open.id, sparePartId: { in: [...no] } }, data: { mark: "NO" } });
+      if (ok.size) await tx.partsPickItem.updateMany({ where: { pickId: open.id, sparePartId: { in: [...ok] } }, data: { mark: "OK" } });
+      // ทีม ไฟล์ และเวลาตรวจคงเดิม · วันนัดว่างอยู่แล้ว — ล้างงานด่วนไว้ด้วยกันไว้ก่อน (urgentReleaseFor ต้องไม่ค้างกับใบที่ไม่มีวัน)
+      const moved = await tx.workOrder.updateMany({
+        where: { id, status: "NEW" },
+        data: { status: "INSPECTING", workStatus: workStatusForStage("INSPECTING"), urgentReleaseFor: null },
+      });
+      if (moved.count === 0) throw new Refusal(409, STAGE_MOVED_TEXT);
+      await tx.workOrderLog.create({
+        data: { workOrderId: id, userId: req.auth!.userId, action: "PARTS_PICK_RETURNED", status: "INSPECTING", note: text, createdAt: at },
+      });
+      orphanCache = null;
+      await syncOutageFromWorkOrder(tx, id, req.auth!.userId, !!cur.outageId);
+    }, STAGE_TX);
+  } catch (e) {
+    if (e instanceof Refusal) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
 
   res.json(await detailFor(id));
 });
@@ -6505,7 +7042,11 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = inspectRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const cur = await guardStage(req, res, id, "NEW");
+  // รายการของช่างที่ค้างอยู่ (หัวหน้าภาคกด "ต้องเข้าตรวจสอบหน้างานก่อน" จากหน้าคอนเฟิร์ม) — อ่านพร้อมกับตรวจขั้น ไม่ต่อคิว
+  const [cur, pending] = await Promise.all([
+    guardStage(req, res, id, "NEW"),
+    prisma.partsPick.count({ where: { workOrderId: id, voidedAt: null, status: { in: ["PENDING", "RETURNED"] } } }),
+  ]);
   if (!cur) return;
 
   const { team, scheduledAt, scheduledTime } = parsed.data;
@@ -6532,14 +7073,27 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
       .filter(Boolean)
       .join(" — "),
   };
-  if (!cur.outageId) {
+  if (!cur.outageId && pending === 0) {
     if (!(await moveStage(id, "NEW", data, log))) return stageMoved(res);
   } else {
-    await prisma.$transaction(async (tx) => {
-      await tx.workOrder.update({ where: { id }, data });
-      await writeLog(tx, id, log.userId, log.action, log.status, log.note);
-      await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-    }, STAGE_TX);
+    /**
+     * ใบผูกเคสเครื่องดับ (ต้องซิงก์เคส) หรือมีรายการของช่างค้าง — ทรานแซกชันเดียว: เปลี่ยนขั้นกับปิดรอบต้องไปด้วยกัน
+     * ไม่งั้นใบไปนัดตรวจใหม่แล้ว แต่รอบเก่ายัง "รอคอนเฟิร์ม" อยู่ · updateMany เงื่อนไขขั้นเดิม = มีคนกดก่อนได้ 409 เหมือน moveStage
+     */
+    const moved = await prisma
+      .$transaction(async (tx) => {
+        const done = await tx.workOrder.updateMany({ where: { id, status: "NEW" }, data });
+        if (done.count === 0) throw new Refusal(409, "moved");
+        await voidOpenPick(tx, id, "หัวหน้าภาคส่งตรวจหน้างานใหม่");
+        await writeLog(tx, id, log.userId, log.action, log.status, log.note);
+        await syncOutageFromWorkOrder(tx, id, req.auth!.userId, !!cur.outageId);
+        return true;
+      }, STAGE_TX)
+      .catch((e) => {
+        if (e instanceof Refusal) return false;
+        throw e;
+      });
+    if (!moved) return stageMoved(res);
   }
 
   res.json(await detailFor(id));
@@ -6550,28 +7104,103 @@ router.post("/:id/inspect-request", requireAuth, async (req: AuthRequest, res) =
  *
  * ทีมที่ไปเป็นคนบันทึก เพราะเป็นคนที่เห็นเครื่องจริง หัวหน้าภาคและแอดมิน
  * บันทึกแทนได้ เผื่อช่างโทรมาเล่าแทนการกรอกเอง
+ *
+ * ช่างเลือกอะไหล่ที่ต้องใช้ได้ด้วย (ข้อ 5 ของฟอร์ม — เจ้าของงานขอ ต.ค. 69 "ทำตามแนะนำทุกอย่าง"):
+ * - ช่าง/Senior ช่างเลือก → รายการไปรอหัวหน้าภาคคอนเฟิร์ม (PartsPick) ยังไม่เขียนลงใบ — ของที่ยังไม่คอนเฟิร์ม
+ *   ต้องไม่ขึ้นกระดานเครื่องดับ/รายงานอะไหล่ที่ต้องสั่ง (ข้อ 12) · ถูกตีกลับแล้วส่งใหม่ต้องแก้อะไรสักอย่าง (ข้อ 9)
+ * - หัวหน้าภาค/แอดมินบันทึกแทน → ไม่คอนเฟิร์มตัวเอง (ข้อ 11) รายการลงใบเลยแล้วไปฟอร์มระบุอะไหล่ตามปกติ
+ * - ไม่เลือก (parts: []) → ทางเดิม · แถวเดิมที่เอาออก (removed) ออกจากใบจริง ยกเว้นของที่เบิกแล้ว (ค่าตั้งต้น D1)
+ * - แอปรุ่นเก่าส่งแค่ note → รายการในใบไม่แตะเลย
+ * เลือกได้เฉพาะอะไหล่ในไฟล์ยี่ห้อของเครื่อง + ของใช้ร่วม (Other) · เครื่องที่ยังไม่รู้ยี่ห้อต้องส่ง machineBrand (ข้อ 17)
  */
-const inspectionSchema = z.object({
-  note: z.string().trim().min(1, "ต้องบอกว่าตรวจแล้วเจออะไร").max(1000),
+const PICK_QTY_TEXT = "ใส่จำนวนให้ครบทุกรายการ (1–99)";
+const pickLineInput = z.object({
+  sparePartId: idInput(PART_ID_TEXT),
+  quantity: z
+    .number({ invalid_type_error: PICK_QTY_TEXT })
+    .int(PICK_QTY_TEXT)
+    .min(1, PICK_QTY_TEXT)
+    .max(99, PICK_QTY_TEXT)
+    .default(1),
 });
+/** ยี่ห้อเครื่องที่คนกดชิปมา — ส่ง null/ไม่ส่ง = ไม่ได้เลือก */
+const machineBrandInput = z.string().trim().min(1, MACHINE_BRAND_INVALID).max(100, MACHINE_BRAND_INVALID).nullish();
+const inspectionSchema = z.object({
+  note: z
+    .string({ required_error: "ต้องบอกว่าตรวจแล้วเจออะไร", invalid_type_error: "ต้องบอกว่าตรวจแล้วเจออะไร" })
+    .trim()
+    .min(1, "ต้องบอกว่าตรวจแล้วเจออะไร")
+    .max(1000, "ตรวจแล้วเจออะไร ยาวเกิน 1,000 ตัวอักษร — ย่อให้สั้นลง"),
+  parts: listInput(pickLineInput, "เลือกอะไหล่", 20).optional(),
+  removed: listInput(idInput(PART_ID_TEXT), "เอาอะไหล่เดิมออก", 20).optional(),
+  machineBrand: machineBrandInput,
+});
+
+/** "{code} {name}" — ชื่อเรียกอะไหล่ในข้อความประวัติ/ข้อความปฏิเสธของรอบเลือกอะไหล่ (แบบเดียวกับตัวอย่างที่อนุมัติ) */
+const pickLabel = (p: { partCode: string; name: string }) => `${p.partCode} ${p.name}`;
 
 router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = inspectionSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const note = parsed.data.note;
+  const machineBrand = parsed.data.machineBrand?.trim() || null;
+  const userId = req.auth!.userId;
 
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: {
-      code: true,
-      status: true,
-      workStatus: true,
-      jobType: true, assignedTeam: true,
-      assignedToId: true,
-      branch: { select: { region: true, zone: true, pmTeam: true } },
-    },
-  });
+  // ใบงาน + ประวัติสองแถวที่ตัดสินรอบตรวจ/รอบที่ถูกตีกลับ อ่านพร้อมกัน (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
+  const [wo, lastRequest, lastInspected] = await Promise.all([
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        code: true,
+        status: true,
+        workStatus: true,
+        jobType: true,
+        assignedTeam: true,
+        assignedToId: true,
+        outageId: true,
+        branch: { select: { region: true, zone: true, pmTeam: true } },
+        machine: { select: { id: true, code: true, brand: true, model: true } },
+        partsPicks: {
+          orderBy: { id: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            voidedAt: true,
+            reviewedAt: true,
+            round: true,
+            note: true,
+            items: { select: { sparePartId: true, quantity: true, mark: true, sparePart: { select: { partCode: true, name: true } } } },
+          },
+        },
+        parts: {
+          where: { kind: "WAITING" },
+          orderBy: { id: "asc" },
+          select: {
+            sparePartId: true,
+            quantity: true,
+            unit: true,
+            note: true,
+            inStock: true,
+            requisitionNo: true,
+            sparePart: { select: { partCode: true, name: true, offCatalog: true } },
+          },
+        },
+      },
+    }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: "INSPECT_REQUESTED" },
+      orderBy: { createdAt: "desc" },
+      select: { action: true, createdAt: true },
+    }),
+    prisma.workOrderLog.findFirst({
+      where: { workOrderId: id, action: "INSPECTED" },
+      orderBy: { createdAt: "desc" },
+      select: { action: true, createdAt: true },
+    }),
+  ]);
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   if (wo.status !== "INSPECTING") {
     return res.status(409).json({
@@ -6584,19 +7213,24 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
 
   // ครบสามอย่างของรอบตรวจนี้ — หัวหน้าภาคบันทึกแทนช่างก็ต้องครบ เพราะคนที่ใช้ไฟล์คือคนระบุอะไหล่
   // ไม่ใช่คนกด ไฟล์จากรอบตรวจก่อนไม่นับ เพราะเครื่องอาจเปลี่ยนอาการไปแล้ว
-  const inspectStart =
-    (
-      await prisma.workOrderLog.findFirst({
-        where: { workOrderId: id, action: "INSPECT_REQUESTED" },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      })
-    )?.createdAt ?? new Date(0);
-  const got = await prisma.workOrderAttachment.groupBy({
-    by: ["role"],
-    where: { workOrderId: id, role: { in: [...INSPECTION_ROLES] }, createdAt: { gte: inspectStart } },
-    _count: true,
-  });
+  // ถูกตีกลับแล้วไฟล์รอบนี้ยังใช้ได้ (ไม่มีส่งตรวจใหม่ — ข้อ 9) · รูปอะไหล่ที่เสียที่เพิ่มหลังตีกลับนับเป็น "แก้แล้ว" ได้
+  const inspectStart = lastRequest?.createdAt ?? new Date(0);
+  const open = openPickOf(
+    wo.status,
+    wo.partsPicks,
+    [lastRequest, lastInspected].filter((l): l is { action: string; createdAt: Date } => !!l)
+  );
+  const returned = open?.status === "RETURNED" ? open : null;
+  const [got, newPartPhotos] = await Promise.all([
+    prisma.workOrderAttachment.groupBy({
+      by: ["role"],
+      where: { workOrderId: id, role: { in: [...INSPECTION_ROLES] }, createdAt: { gte: inspectStart } },
+      _count: true,
+    }),
+    returned?.reviewedAt
+      ? prisma.workOrderAttachment.count({ where: { workOrderId: id, role: "INSPECT_PART", createdAt: { gt: returned.reviewedAt } } })
+      : Promise.resolve(0),
+  ]);
   const missing = INSPECTION_ROLES.filter((r) => !got.some((g) => g.role === r)).map((r) =>
     ATTACHMENT_ROLE_LABELS[r].replace(" (ตรวจ)", "")
   );
@@ -6604,25 +7238,185 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: `ยังขาด: ${missing.join(" · ")} — แนบให้ครบสามอย่างก่อนส่งผลตรวจ` });
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({
-      where: { id },
-      data: {
-        status: "NEW",
-        inspectedAt: new Date(),
-        inspectionNote: parsed.data.note,
-        // หัวหน้าภาคต้องตัดสินใหม่จากผลตรวจ ไม่ใช่ค่าที่ค้างจากก่อนไปดู
-        needsParts: null,
-        scheduledAt: null,
-        scheduledTime: null,
-        urgentReleaseFor: null,
-        // "รอช่าง" ที่ตั้งไว้ตอนส่งไปตรวจไม่จริงแล้ว · ค่าที่คนตั้งเองก็หมดอายุเมื่อเปลี่ยนขั้น
-        workStatus: workStatusForStage("NEW"),
-      },
-    });
-    await writeLog(tx, id, req.auth!.userId, "INSPECTED", "NEW", parsed.data.note);
-    await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
-  }, STAGE_TX);
+  // หัวหน้าภาค/แอดมินบันทึกแทน (ทีม SUB ไม่มีบัญชี · ช่างโทรมาเล่า) — คอนเฟิร์มรายการที่ตัวเองเลือกเองไม่ได้ (ข้อ 11 · D3)
+  const onBehalf = req.auth!.role === "SUPERVISOR" || req.auth!.role === "ADMIN";
+  if (machineBrand && wo.machine) {
+    const refused = machineBrandRefusal(wo.machine, machineBrand);
+    if (refused) return res.status(400).json({ error: refused });
+  }
+  // ตัวเดิมส่งซ้ำให้รวมจำนวน (แบบ mergeLines) — รวมแล้วยังต้องไม่เกิน 99
+  let lines: { sparePartId: number; quantity: number }[] | undefined;
+  if (parsed.data.parts) {
+    const sum = new Map<number, number>();
+    for (const p of parsed.data.parts) sum.set(p.sparePartId, (sum.get(p.sparePartId) ?? 0) + p.quantity);
+    if ([...sum.values()].some((q) => q > 99)) return res.status(400).json({ error: PICK_QTY_TEXT });
+    lines = [...sum].map(([sparePartId, quantity]) => ({ sparePartId, quantity }));
+  }
+  const [problem, names] = lines?.length
+    ? await Promise.all([
+        // ช่องของช่าง (tech) ทุกคนที่กด — หัวหน้าภาคบันทึกแทนก็ต้องตามไฟล์ยี่ห้อเหมือนช่าง
+        brandProblem({ machine: wo.machine, machineBrand, parts: lines, mode: "tech" }),
+        prisma.sparePart.findMany({ where: { id: { in: lines.map((l) => l.sparePartId) } }, select: { id: true, partCode: true, name: true } }),
+      ])
+    : [null, []];
+  if (problem) return res.status(400).json({ error: problem });
+  const nameOf = new Map(names.map((n) => [n.id, n]));
+  const lineLabel = (l: { sparePartId: number }) => {
+    const n = nameOf.get(l.sparePartId);
+    return n ? pickLabel(n) : String(l.sparePartId);
+  };
+
+  /**
+   * ด่านส่งใหม่หลังถูกตีกลับ (ตัวอย่าง resendGate) — ต้องแก้อะไรสักอย่าง: รายการ (และตัวที่ชี้ว่าไม่ตรงต้องเอาออกหรือเปลี่ยนจำนวน)
+   * หรือ "ตรวจแล้วเจออะไร" (อธิบายว่าทำไมยืนยันของเดิม) หรือรูปอะไหล่ที่เสียที่ชัดขึ้น
+   * ไม่งั้นหัวหน้าภาคได้รายการเดิมกลับมาให้ตีกลับซ้ำ วนไม่จบ · ใช้กับทุกครั้งที่แอปส่ง parts มา (รวมส่งว่าง)
+   */
+  let resend: { listChanged: boolean; noteChanged: boolean; diff: string } | null = null;
+  if (returned && !onBehalf && lines) {
+    const before = new Map(returned.items.map((i) => [i.sparePartId, i.quantity]));
+    const now = new Map(lines.map((l) => [l.sparePartId, l.quantity]));
+    const listChanged = before.size !== now.size || [...before].some(([k, q]) => now.get(k) !== q);
+    const noteChanged = note.trim() !== (returned.note ?? "").trim();
+    const flagged = returned.items.filter((i) => i.mark === "NO");
+    const unfixed = flagged.filter((i) => now.get(i.sparePartId) === i.quantity);
+    const ok = noteChanged || newPartPhotos > 0 || (listChanged && unfixed.length === 0);
+    if (!ok) {
+      const list = (l: typeof flagged) => l.map((i) => pickLabel(i.sparePart)).join(", ");
+      return res.status(400).json({
+        error: listChanged
+          ? `ยังไม่ได้แก้ตัวที่หัวหน้าภาคชี้ว่าไม่ตรง (${list(unfixed)}) — เอาออก เปลี่ยนจำนวน หรือเขียนในข้อ 4 ว่าทำไมยืนยันตัวนี้ แล้วค่อยส่งใหม่`
+          : flagged.length
+            ? `ยังไม่ได้แก้อะไร — แก้ตัวที่หัวหน้าภาคชี้ว่าไม่ตรง (${list(flagged)}) หรือเขียนในข้อ 4 ว่าทำไมยืนยันรายการเดิม แล้วค่อยส่งใหม่`
+            : "ยังไม่ได้แก้อะไร — อ่านเหตุผลของหัวหน้าภาคแล้วแก้รายการ หรือเขียนในข้อ 4 ว่าทำไมยืนยันรายการเดิม แล้วค่อยส่งใหม่",
+      });
+    }
+    const diff: string[] = [];
+    for (const i of returned.items) {
+      const q = now.get(i.sparePartId);
+      if (q === undefined) diff.push(`เอา ${pickLabel(i.sparePart)} ออก`);
+      else if (q !== i.quantity) diff.push(`${i.sparePart.partCode} จำนวน ${i.quantity} → ${q}`);
+    }
+    for (const l of lines) if (!before.has(l.sparePartId)) diff.push(`เพิ่ม ${lineLabel(l)} × ${l.quantity}`);
+    resend = { listChanged, noteChanged, diff: diff.join(" · ") };
+  }
+
+  /**
+   * เวลาเดียวจากแอปให้ทุกแถวในการกดครั้งนี้ — บันทึกยี่ห้อ (at − 1) · ส่งผลตรวจ (at) · เลือกอะไหล่ (at + 1)
+   * กติการอบที่เปิด (openPickOf) เทียบเวลาส่งผลตรวจกับเวลาที่ตีกลับ — ใช้นาฬิกาเดียวกัน ไม่ปนนาฬิกาฐานข้อมูล
+   */
+  const at = Date.now();
+  const moved = {
+    status: "NEW",
+    inspectedAt: new Date(at),
+    inspectionNote: note,
+    // หัวหน้าภาคต้องตัดสินใหม่จากผลตรวจ ไม่ใช่ค่าที่ค้างจากก่อนไปดู
+    needsParts: null,
+    scheduledAt: null,
+    scheduledTime: null,
+    // วันนัดหายไป = งานด่วนของวันเดิมหมดผล (เวลาปิดรับปล่อยงาน) — ทุกทางของปุ่มนี้
+    urgentReleaseFor: null,
+    // "รอช่าง" ที่ตั้งไว้ตอนส่งไปตรวจไม่จริงแล้ว · ค่าที่คนตั้งเองก็หมดอายุเมื่อเปลี่ยนขั้น
+    workStatus: workStatusForStage("NEW"),
+  };
+  const brandCtx = {
+    how: onBehalf ? "บันทึกแทนช่างตอนตรวจหน้างาน" : "ช่างเลือกตอนตรวจหน้างาน",
+    workOrderId: id,
+    userId,
+    status: "INSPECTING",
+    at: new Date(at - 1),
+  };
+  const machineFile = brandFileOf(machineMake(wo.machine) ?? machineBrand);
+  const hasOpenRow = !!wo.partsPicks[0] && !wo.partsPicks[0].voidedAt && ["PENDING", "RETURNED"].includes(wo.partsPicks[0].status);
+  const log = (action: string, text: string | null, offset = 0) => ({
+    workOrderId: id,
+    userId,
+    action,
+    status: "NEW",
+    note: text,
+    createdAt: new Date(at + offset),
+  });
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // เงื่อนไขขั้นเดิมในคำสั่งเดียว — สองคนกดส่งพร้อมกัน คนหลังได้ 409 ไม่ใช่รอบซ้อนสองรอบ
+      const done = await tx.workOrder.updateMany({ where: { id, status: "INSPECTING" }, data: moved });
+      if (done.count === 0) throw new Refusal(409, STAGE_MOVED_TEXT);
+      if (machineBrand && wo.machine) await rememberMachineBrand(tx, wo.machine, machineBrand, brandCtx);
+
+      if (lines?.length && !onBehalf) {
+        // ── ช่างเลือก → รอหัวหน้าภาคคอนเฟิร์ม · WorkOrderPart ไม่แตะ (ของที่ช่างเอาออกหายจากใบตอนคอนเฟิร์ม) ──
+        await tx.partsPick.create({
+          data: {
+            workOrderId: id,
+            round: returned ? returned.round + 1 : 1,
+            status: "PENDING",
+            brandFile: machineFile,
+            team: wo.assignedTeam,
+            note,
+            createdById: userId,
+            createdAt: new Date(at),
+            items: { createMany: { data: lines.map((l) => ({ sparePartId: l.sparePartId, quantity: l.quantity })) } },
+          },
+        });
+        const pickNote = resend
+          ? (resend.listChanged
+              ? "แก้รายการอะไหล่ ส่งให้หัวหน้าภาคคอนเฟิร์มอีกครั้ง — "
+              : "ยืนยันรายการเดิม ส่งให้หัวหน้าภาคคอนเฟิร์มอีกครั้ง — ") +
+            [
+              resend.diff,
+              resend.noteChanged ? "แก้ “ตรวจแล้วเจออะไร”" : "",
+              newPartPhotos > 0 ? `เพิ่มรูปอะไหล่ที่เสีย ${newPartPhotos} รูป` : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : `เลือกอะไหล่ ${lines.length} รายการ ส่งให้หัวหน้าภาคคอนเฟิร์ม: ${lines.map((l) => `${lineLabel(l)} × ${l.quantity}`).join(" · ")}`;
+        await tx.workOrderLog.createMany({ data: [log("INSPECTED", note), log("PARTS_PICKED", pickNote, 1)] });
+      } else if (lines?.length) {
+        // ── หัวหน้าภาค/แอดมินบันทึกแทน → ลงใบเลย ไปฟอร์มระบุอะไหล่ (เติมรายการไว้ให้) ──
+        // ของนอกสโตร์ในใบเดิมอยู่ต่อ (ช่องนี้ใส่ของนอกสโตร์ไม่ได้ จึงไม่ได้ตั้งใจเอาออก — D2)
+        const offStore = wo.parts
+          .filter((p) => p.sparePart.offCatalog)
+          .map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity, unit: p.unit, note: p.note }));
+        const dropped = wo.parts.filter((p) => !p.sparePart.offCatalog && !lines!.some((l) => l.sparePartId === p.sparePartId));
+        const reqNos = [...new Set(dropped.filter(isIssued).map((p) => p.requisitionNo!))];
+        if (hasOpenRow) await voidOpenPick(tx, id, "หัวหน้าภาคบันทึกผลตรวจแทนช่าง");
+        await mergeWaitingParts(tx, id, [...lines, ...offStore]);
+        const behalfNote =
+          `เลือกอะไหล่ ${lines.length} รายการ — ใบไปฟอร์มระบุอะไหล่ เติมรายการที่เลือกไว้ให้` +
+          (dropped.length ? ` · เอาออกจากใบ: ${dropped.map((p) => pickLabel(p.sparePart)).join(", ")}` : "") +
+          (reqNos.length ? ` (ใบเบิกเดิม ${reqNos.join(", ")})` : "");
+        await tx.workOrderLog.createMany({ data: [log("INSPECTED", note), log("PARTS_PICKED_ON_BEHALF", behalfNote, 1)] });
+      } else {
+        // ── ไม่เลือกอะไหล่ → ทางเดิม (หัวหน้าภาคระบุอะไหล่) · แถวเดิมที่เอาออกหายจากใบจริง ยกเว้นของที่เบิกแล้ว (D1) ──
+        // ของที่เบิกแล้วอยู่กับช่างจริง ลบทิ้งคือเลขใบเบิกหายไปจากใบ (กติกาเดียวกับช่างแจ้งปัญหาหน้างาน) — หัวหน้าภาคตัดสินในฟอร์มระบุอะไหล่
+        const removed = new Set(lines ? parsed.data.removed ?? [] : []);
+        const picked = wo.parts.filter((p) => removed.has(p.sparePartId) && !p.sparePart.offCatalog);
+        const drop = picked.filter((p) => !isIssued(p));
+        const keep = picked.filter(isIssued);
+        if (drop.length) {
+          await tx.workOrderPart.deleteMany({
+            where: { workOrderId: id, kind: "WAITING", sparePartId: { in: drop.map((p) => p.sparePartId) } },
+          });
+        }
+        if (hasOpenRow) {
+          await voidOpenPick(tx, id, onBehalf ? "หัวหน้าภาคบันทึกผลตรวจแทนช่าง" : "ช่างส่งผลตรวจโดยไม่เลือกอะไหล่");
+        }
+        const inspectedNote =
+          note +
+          (drop.length ? ` · เอาอะไหล่เดิมออกจากใบ: ${drop.map((p) => pickLabel(p.sparePart)).join(", ")}` : "") +
+          (keep.length
+            ? ` · ของที่เบิกแล้วยังอยู่ในใบ: ${keep.map((p) => `${p.sparePart.partCode} (ใบเบิก ${p.requisitionNo})`).join(", ")} — หัวหน้าภาคตัดสิน`
+            : "");
+        await tx.workOrderLog.create({ data: log("INSPECTED", inspectedNote) });
+      }
+      orphanCache = null;
+      // ใบที่ไม่ได้ผูกกับเคสเครื่องดับ ไม่ต้องอ่านเพื่อไปพบว่าไม่มีอะไรให้ซิงก์ · ผูกอยู่ = กระดานได้อาการ/สถานะ (และแถวที่เอาออก) ตามใบ
+      await syncOutageFromWorkOrder(tx, id, userId, !!wo.outageId);
+    }, STAGE_TX);
+  } catch (e) {
+    if (e instanceof Refusal) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
 
   res.json(await detailFor(id));
 });
@@ -6802,10 +7596,16 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const src = await prisma.workOrder.findUnique({
     where: { id },
-    include: { parts: { where: { kind: "WAITING" } }, services: true },
+    include: {
+      parts: { where: { kind: "WAITING" } },
+      services: true,
+      partsPicks: { orderBy: { id: "desc" }, take: 1, include: { items: true } },
+    },
   });
   if (!src) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
   const ended = ["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(src.status);
+  // รายการของช่างที่รอคอนเฟิร์ม/ถูกตีกลับติดไปด้วย (ค่าตั้งต้น D14) — ใบทดสอบเดินทางเดียวกับใบจริง (หน้าคอนเฟิร์ม · การ์ดแดง)
+  const openPick = ended ? null : openPickOf(src.status, src.partsPicks);
   const status = ended ? (src.assignedTeam || src.assignedToId ? "IN_PROGRESS" : "NEW") : src.status;
   // ของนอกสโตร์ไม่มีเลขใบเบิก — "เบิกแล้วหรือยัง" อ่านจากประวัติรอบเช็ค/เบิก (issueLeftOf) แต่ใบทดสอบไม่คัดลอกประวัติ
   // ใบทดสอบของใบที่เบิกครบแล้วจึงถูกนับว่ายังไม่เบิก คอนเฟิร์มแล้วไปขั้นเบิก ทั้งที่ใบจริงไปปล่อยงาน = ทดสอบคนละเส้นทาง
@@ -6877,6 +7677,26 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
     if (src.services.length > 0) {
       await tx.workOrderService.createMany({
         data: src.services.map((v) => ({ workOrderId: copy.id, name: v.name, quantity: v.quantity, unit: v.unit, note: v.note })),
+      });
+    }
+    if (openPick) {
+      await tx.partsPick.create({
+        data: {
+          workOrderId: copy.id,
+          round: openPick.round,
+          status: openPick.status,
+          brandFile: openPick.brandFile,
+          team: openPick.team,
+          note: openPick.note,
+          createdById: openPick.createdById,
+          createdAt: openPick.createdAt,
+          reviewedById: openPick.reviewedById,
+          reviewedAt: openPick.reviewedAt,
+          reason: openPick.reason,
+          items: {
+            createMany: { data: openPick.items.map((i) => ({ sparePartId: i.sparePartId, quantity: i.quantity, mark: i.mark })) },
+          },
+        },
       });
     }
     await writeLog(tx, copy.id, req.auth!.userId, "TEST_COPY", status, `ใบทดสอบ คัดลอกจาก ${src.code} — ทดสอบเสร็จให้ลบทิ้ง`);
@@ -7163,6 +7983,9 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       });
     }
     await tx.workOrder.update({ where: { id }, data });
+    // ย้อนขั้นปิดรอบเลือกอะไหล่ที่ค้าง (ค่าตั้งต้น D17) — กลับมาตรวจหน้างานอีกครั้งต้องไม่เห็นการ์ดแดงของรอบก่อน
+    // ส่งครั้งถัดไปเริ่มรอบ 1 ใหม่จากรายการในใบ (เหตุผลที่ตีกลับยังอยู่ในประวัติ)
+    await voidOpenPick(tx, id, "ย้อนขั้น");
     const snapshot: RollbackSnapshot = {
       from: wo.status,
       needsParts: wo.needsParts,
@@ -7364,6 +8187,8 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
     const note =
       (requestedCodes.length > 0 ? `${head} — ขอเบิกเพิ่ม: ${requestedCodes.join(", ")}` : head) +
       (again.length ? ` (ใบเบิกเดิม ${[...new Set(again)].join(", ")})` : "");
+    // กันไว้ก่อน — ขั้นที่ส่งกลับได้ไม่มีรอบเลือกอะไหล่ค้าง แต่ใบกลับไป NEW แล้วรอบเก่าห้ามกลายเป็น "รอคอนเฟิร์ม"
+    await voidOpenPick(tx, id, "ช่างแจ้งปัญหาหน้างาน");
     await writeLog(tx, id, req.auth!.userId, "PARTS_ROLLBACK", target, note);
     await syncOutageFromWorkOrder(tx, id, req.auth!.userId);
   }, STAGE_TX);
@@ -8193,6 +9018,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
         },
       });
       if (guard.count === 0) throw new CloseAlreadySent();
+      // หลังด่านกันส่งซ้อนของเคลม (ปิดซ้อนต้องไม่แตะอะไรเลย) · ไม่ลงประวัติ — ลำดับ "ไม่ส่งเคลมก่อนปิดงาน" ของเคลมไม่เปลี่ยน
+      // ขั้นที่ปิดได้ไม่มีรอบเลือกอะไหล่ค้างอยู่แล้ว กันไว้ไม่ให้รอบเก่าที่หลุดค้างไปนับเป็นงานรอใคร
+      await voidOpenPick(tx, id, "ปิดใบงาน");
 
       // เขียนทับทั้งชุด ไม่ใช่ต่อท้าย เผื่อแอดมินมาแก้ทีหลังว่าใครไปจริง
       await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
@@ -9087,6 +9915,8 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
           workStatus: workStatusForStage("DONE"),
         },
       });
+      // ปิดย้อนหลังได้ทุกขั้น รวมใบที่รายการของช่างรอคอนเฟิร์ม/ถูกตีกลับ — รอบนั้นจบไปกับใบ (อะไหล่ที่ใช้จริงอยู่ใน USED แล้ว)
+      await voidOpenPick(tx, id, "ปิดงานย้อนหลัง");
       await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
       if (workerIds.length) {
         await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
@@ -9209,6 +10039,8 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
           workStatus: workStatusForStage("DONE"),
         },
       });
+      // หัวหน้าภาคปิดได้ทุกขั้น — รายการของช่างที่ค้างรอคอนเฟิร์ม/ถูกตีกลับจบไปกับใบ (ไม่ลงประวัติ ลำดับประวัติปิดงานคงเดิม)
+      await voidOpenPick(tx, id, "หัวหน้าภาคปิดใบงาน");
       await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
       if (workerIds.length) {
         await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
@@ -9234,6 +10066,7 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
         workStatus: workStatusForStage("DONE"),
       },
     });
+    await voidOpenPick(tx, id, "หัวหน้าภาคปิดใบงาน");
     await writeLog(tx, id, req.auth!.userId, "SUPERVISOR_CLOSED", "DONE", text);
   }, STAGE_TX);
 
@@ -9420,6 +10253,8 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
 
   await prisma.$transaction(async (tx) => {
     await tx.workOrder.update({ where: { id }, data: { status: "CANCELLED" } });
+    // รายการอะไหล่ของช่างที่ค้างรอคอนเฟิร์ม/ถูกตีกลับจบไปกับใบ — ไม่ถือว่ารอใครอีก
+    await voidOpenPick(tx, id, "ยกเลิกใบงาน");
     await writeLog(
       tx,
       id,
