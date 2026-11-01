@@ -13,6 +13,7 @@
  * ไม่งั้นเทสต์ส่งอะไหล่ที่เซิร์ฟเวอร์ถือว่าคนละไฟล์
  */
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../prisma";
 import { PARTS_PICK_RETURNED_LABEL, PARTS_PICK_STAGE_LABEL, WORK_ORDER_STATUS_LABELS, machineMake } from "./constants";
 
@@ -124,6 +125,26 @@ export class Refusal extends Error {
 
 /** ยี่ห้อเครื่องที่คนกดชิปมา (machineBrand) — ข้อความเดียวกันทุกเส้นทางที่รับ */
 export const MACHINE_BRAND_INVALID = "ยี่ห้อเครื่องต้องมี 1–100 ตัวอักษร";
+/**
+ * ช่อง machineBrand ของทุกเส้นทางที่มีช่องอะไหล่ (ใบงาน + กระดานเครื่องดับ) — ส่ง null/ไม่ส่ง = ไม่ได้เลือก
+ * ที่เดียวกันทุกเส้นทาง ไม่งั้นเพดานความยาวต่างกัน แล้วชิปเดียวกันผ่านฟอร์มหนึ่งแต่ตกอีกฟอร์ม
+ */
+export const machineBrandInput = z
+  .string({ invalid_type_error: MACHINE_BRAND_INVALID })
+  .trim()
+  .min(1, MACHINE_BRAND_INVALID)
+  .max(100, MACHINE_BRAND_INVALID)
+  .nullish();
+
+/**
+ * คำตอบตอน schema เดิม (ที่ตอบ flatten()) ไม่ผ่าน — ช่องที่ผิดคือ machineBrand ตอบข้อความไทยของช่องนั้นตรง ๆ
+ * แอปแสดง error ที่ไม่ใช่ข้อความเป็น JSON ดิบ ({"formErrors":[],"fieldErrors":…}) ช่างอ่านไม่ออก
+ * ช่องอื่นของ schema เดิมคงรูปแบบเดิมไว้ ไม่เปลี่ยนพฤติกรรมเส้นทางเดิมเกินช่องที่ก้อนนี้เพิ่ม
+ */
+export function parseErrorBody(err: z.ZodError): string | z.typeToFlattenedError<unknown> {
+  const brand = err.issues.find((i) => i.path[0] === "machineBrand");
+  return brand ? brand.message : err.flatten();
+}
 
 // ── ปัญหาไฟล์ยี่ห้อของรายการอะไหล่ (brandProblem) ─────────────────────────
 
@@ -135,7 +156,11 @@ export type BrandIssue = {
   kind: "noMachine" | "offCatalog" | "missing" | "noMake" | "noFile" | "otherFile";
   text: string;
   partCode?: string;
+  /** ชื่ออะไหล่ (noFile/otherFile) — กระดานเครื่องดับต้องบอกรายการที่ไม่ตรงครบทุกตัวเป็น "{รหัส} {ชื่อ}" */
+  partName?: string;
   machineFile?: BrandFile;
+  /** ยี่ห้อที่ใช้ตัดสิน (ที่รู้แล้ว หรือชิปที่เพิ่งกด) — ข้อความรวมของกระดานเครื่องดับใส่ในวงเล็บ */
+  make?: string;
 };
 
 export type BrandCheck = {
@@ -160,15 +185,29 @@ export type BrandCheck = {
  * อ่านอะไหล่ทุกตัวในคำสั่งเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ) · ส่งรายการว่างมา = ไม่มีอะไรให้ตรวจ
  */
 export async function brandIssue(opts: BrandCheck, db: Db = prisma): Promise<BrandIssue | null> {
+  return (await issuesOf(opts, db, true))[0] ?? null;
+}
+
+/**
+ * ทุกตัวที่ไม่ผ่าน (ไม่ใช่แค่ตัวแรก) — ใช้ที่ "+ สร้างใบงาน" จากกระดานเครื่องดับ ซึ่งต้องบอกครบทุกตัวที่ต้องแก้บนกระดาน
+ * ไม่งั้นคนแก้ทีละตัวแล้วกดใหม่ทีละรอบ · ไม่รู้ยี่ห้อ/ไม่มีเครื่อง/ช่างใส่ของนอกสโตร์ = ปัญหาเดียวของทั้งรายการ ได้แถวเดียว
+ */
+export async function brandIssues(opts: BrandCheck, db: Db = prisma): Promise<BrandIssue[]> {
+  return issuesOf(opts, db, false);
+}
+
+async function issuesOf(opts: BrandCheck, db: Db, firstOnly: boolean): Promise<BrandIssue[]> {
   const ids = [...new Set(opts.parts.map((p) => p.sparePartId))];
-  if (ids.length === 0) return null;
+  if (ids.length === 0) return [];
   if (!opts.machine) {
     return opts.mode === "tech"
-      ? {
-          kind: "noMachine",
-          text: opts.noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน",
-        }
-      : null;
+      ? [
+          {
+            kind: "noMachine",
+            text: opts.noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน",
+          },
+        ]
+      : [];
   }
   const rows = await db.sparePart.findMany({
     where: { id: { in: ids } },
@@ -179,43 +218,55 @@ export async function brandIssue(opts: BrandCheck, db: Db = prisma): Promise<Bra
   // ยี่ห้อที่รู้แล้วชนะชิปเสมอ — ชิปมีไว้สำหรับเครื่องที่ยังไม่รู้ยี่ห้อเท่านั้น (ข้อ 17)
   const make = machineMake(opts.machine) ?? (opts.machineBrand?.trim() || null);
   const machineFile = brandFileOf(make);
+  const out: BrandIssue[] = [];
   for (const id of ids) {
     const p = byId.get(id);
-    if (!p) return { kind: "missing", text: "ไม่พบอะไหล่ที่เลือก — โหลดใหม่แล้วเลือกอีกครั้ง" };
+    if (!p) {
+      out.push({ kind: "missing", text: "ไม่พบอะไหล่ที่เลือก — โหลดใหม่แล้วเลือกอีกครั้ง" });
+      if (firstOnly) break;
+      continue;
+    }
     if (p.offCatalog) {
       // ของนอกสโตร์ไม่มีไฟล์ยี่ห้อ ไม่ล็อก (ข้อ 21) — แต่ช่างใส่ตอนตรวจหน้างานไม่ได้ หัวหน้าภาคเป็นคนใส่
       if (opts.mode === "tech")
-        return { kind: "offCatalog", text: "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" };
+        return [{ kind: "offCatalog", text: "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" }];
       continue;
     }
     if (legacy.has(id)) continue;
     if (!make || !machineFile) {
-      return { kind: "noMake", text: `เครื่อง ${opts.machine.code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่` };
+      return [{ kind: "noMake", text: `เครื่อง ${opts.machine.code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่` }];
     }
     const files = fileList(p.brandFiles);
     if (files.length === 0) {
-      return {
+      out.push({
         kind: "noFile",
         partCode: p.partCode,
+        partName: p.name,
         machineFile,
+        make,
         text: `${p.partCode} ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เลือกไม่ได้ (แอดมินอัปโหลดไฟล์ที่มีรหัสนี้ หรือติ๊กไฟล์ที่หน้าจัดการข้อมูลอะไหล่)`,
-      };
+      });
+      if (firstOnly) break;
+      continue;
     }
     const allowed = allowedFiles(machineFile) as string[];
     if (!files.some((f) => allowed.includes(f))) {
       const head = `${p.partCode} ${p.name} อยู่ในไฟล์ ${files.join(", ")} — เครื่อง ${opts.machine.code} (${make})`;
-      return {
+      out.push({
         kind: "otherFile",
         partCode: p.partCode,
+        partName: p.name,
         machineFile,
+        make,
         text:
           machineFile === SHARED_FILE
             ? `${head} ไม่มีไฟล์ยี่ห้อของตัวเอง เลือกได้เฉพาะของใช้ร่วม (ไฟล์ Other)`
             : `${head} เลือกได้เฉพาะอะไหล่ไฟล์ ${machineFile} และของใช้ร่วม (ไฟล์ Other)`,
-      };
+      });
+      if (firstOnly) break;
     }
   }
-  return null;
+  return out;
 }
 
 /** brandIssue แบบข้อความอย่างเดียว — null = ผ่าน */
@@ -225,8 +276,18 @@ export async function brandProblem(opts: BrandCheck, db: Db = prisma): Promise<s
 
 // ── ยี่ห้อเครื่องที่คนเลือกในช่องอะไหล่ (rememberMachineBrand) ─────────────────
 
-const sameMake = (a: string | null | undefined, b: string | null | undefined) =>
+/** ยี่ห้อเดียวกันไหม — ไม่สนตัวพิมพ์/ช่องว่างหัวท้าย ("huebsch" ที่พิมพ์เอง = "Huebsch" ที่กดชิป ไม่นับว่าเปลี่ยนยี่ห้อ) */
+export const sameMake = (a: string | null | undefined, b: string | null | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+/**
+ * ชิปที่ส่งมาตกไฟล์ยี่ห้อเดียวกับยี่ห้อที่รู้แล้วไหม ("HB - Huebsch" จากไฟล์รายงาน กับชิป "Huebsch") — ใช้ตัดสินว่า
+ * "ส่งยี่ห้ออื่นมา" หรือไม่ ไม่ใช้ sameMake ตรง ๆ เพราะเครื่องที่ยังไม่รู้ยี่ห้อตอนเปิดฟอร์ม แล้วคืนนั้นนำเข้ารายงาน
+ * ได้ "HB - Huebsch" จะถูกบอกให้ไปหาหัวหน้าภาคแก้ยี่ห้อ ทั้งที่ยี่ห้อไม่ได้ผิดและอะไหล่ที่เลือกก็ผ่าน
+ * ล็อกตัดสินด้วยไฟล์อย่างเดียว ข้อความยี่ห้อต่างกันในไฟล์เดียวกันจึงไม่ใช่การเปลี่ยนยี่ห้อ (ยี่ห้อที่รู้แล้วชนะ ไม่เขียนทับ)
+ * แก้ข้อความยี่ห้อจริง ๆ ทำที่ "แก้ยี่ห้อเครื่อง" ซึ่งยังเทียบด้วย sameMake
+ */
+const sameBrandFile = (make: string, brand: string) => sameMake(make, brand) || brandFileOf(make) === brandFileOf(brand);
 
 /**
  * เครื่องที่รู้ยี่ห้อแล้วแต่ส่งชิปยี่ห้ออื่นมา → ข้อความ 400 · null = รับได้ (ยังไม่รู้ยี่ห้อ หรือยี่ห้อเดียวกัน)
@@ -239,7 +300,7 @@ export function machineBrandRefusal(
 ): string | null {
   if (!machine || !brand?.trim()) return null;
   const make = machineMake(machine);
-  if (!make || sameMake(make, brand)) return null;
+  if (!make || sameBrandFile(make, brand)) return null;
   return `เครื่อง ${machine.code} มียี่ห้อในระบบแล้ว (${make}) — แก้ยี่ห้อได้ที่หัวหน้าภาคหรือแอดมิน`;
 }
 
@@ -251,6 +312,9 @@ export function machineBrandRefusal(
  * แต่ได้ 409 ให้โหลดใหม่ (อะไหล่ที่เลือกไว้อาจเป็นคนละไฟล์กับยี่ห้อที่บันทึกไปแล้ว)
  * คืน true เมื่อบันทึกจริง · ลงประวัติ MACHINE_BRAND_SET เมื่อมีใบงาน (กระดานเครื่องดับไม่มีใบ และประวัติเคสไม่มีช่องข้อความ)
  * at = เวลาของประวัติ — ผู้เรียกที่เขียนประวัติเดินขั้นในทรานแซกชันเดียวกันส่งเวลาก่อนแถวนั้น ให้แถวเดินขั้นเป็นแถวล่าสุด
+ * how = ชื่อฟอร์ม ไม่ใส่ตำแหน่งคนกด ("เลือกตอนปิดงาน" ไม่ใช่ "ช่างเลือก…") — ฟอร์มเดียวหลายตำแหน่งกดได้ (แอดมินระบุอะไหล่
+ * หัวหน้าภาคปิดงานแทนทีม SUB) ประวัติมีชื่อคนกดอยู่แล้ว ใส่ตำแหน่งตายตัวแล้วประวัติบอกตำแหน่งผิดคน
+ * ยกเว้นตรวจหน้างานที่เลือกข้อความตามคนกดจริง เพราะ "บันทึกแทนช่าง" เป็นคนละความหมายกับช่างเลือกเอง
  */
 export async function rememberMachineBrand(
   tx: Prisma.TransactionClient,
@@ -274,7 +338,7 @@ export async function rememberMachineBrand(
   if (done.count === 0) {
     const now = await tx.machine.findUnique({ where: { id: machine.id }, select: { brand: true, model: true } });
     const make = machineMake(now);
-    if (make && !sameMake(make, value)) {
+    if (make && !sameBrandFile(make, value)) {
       throw new Refusal(409, `เครื่อง ${machine.code} เพิ่งถูกบันทึกยี่ห้อเป็น ${make} — โหลดใหม่แล้วเลือกอะไหล่อีกครั้ง`);
     }
     return false;

@@ -8,6 +8,18 @@ A=$(login A001); S=$(login S001)
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
+DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -qAtc "$1"; }
+# เก็บกวาด — ลบใบที่เทสต์สร้าง + เคสเครื่องดับ/เครื่องที่สร้างเอง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
+# trap ไม่ใช่บรรทัดท้ายไฟล์ — set -e หยุดกลางทางแล้วเคสที่สร้างเองจะค้างบนกระดานของชุดอื่น
+cleanup() {
+  for i in ${ID:-} ${ID1B:-} ${ID2:-} ${IDOUT:-}; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+  if [ -n "${OID:-}" ]; then
+    DB "delete from \"WorkOrder\" where \"outageId\"=$OID" >/dev/null 2>&1 || :
+    DB "delete from \"Outage\" where id=$OID" >/dev/null 2>&1 || :
+  fi
+  if [ -n "${OMID:-}" ]; then DB "delete from \"Machine\" where id=$OMID" >/dev/null 2>&1 || :; fi
+}
+trap cleanup EXIT
 
 echo "═══ ตัวเลือกขนาดมาจากเซิร์ฟเวอร์"
 OPT=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)")
@@ -64,22 +76,26 @@ echo "$R" | grep -q "error" && pass "500 kg ถูกปฏิเสธ" || fail
 
 echo
 echo "═══ เปิดจากกระดาน — ผู้ติดต่อต้องไม่หาย (ของเดิมหายเงียบ)"
-OUT=$(curl -s "localhost:4000/api/machines/outages?limit=40" -H "$(H $A)")
-OID=$(echo "$OUT" | J 'const r=d.rows||d; const f=r.find(x=>!x.workOrder&&x.machineCode); f?f.id:""')
-if [ -z "$OID" ]; then echo "  (ข้าม — ไม่มีเคสว่างบนกระดาน)"; else
-  MC=$(echo "$OUT" | J 'const r=d.rows||d; r.find(x=>x.id==='"$OID"').machineCode')
-  echo "  เคส $OID เครื่อง $MC"
-  R=$(curl -s -X POST "localhost:4000/api/work-orders/from-outage/$OID" -H "$(H $A)" -H 'Content-Type: application/json' \
-    -d '{"jobType":"CM","priority":"NORMAL","contactName":"คุณมานพ","contactPhone":"0899999999","model":"Oasis","capacityKg":18,"symptom":"ดับทั้งเครื่อง"}')
-  echo "$R" | J '"  "+d.code+" · ผู้ติดต่อ "+(d.contactName||"(ว่าง)")+" "+(d.contactPhone||"")+" · ขนาด "+(d.machineCapacityLabel||"(ว่าง)")'
-  echo "$R" | J 'd.contactName==="คุณมานพ"&&d.contactPhone==="0899999999"?"ok":"bad"' | grep -q ok \
-    && pass "ผู้ติดต่อถูกบันทึกตอนเปิดจากกระดาน" || fail "ผู้ติดต่อยังหาย"
-  echo "$R" | J 'd.machineCapacityLabel==="18 kg"&&d.machineModel==="Oasis"?"ok":"bad"' | grep -q ok \
-    && pass "รุ่นกับขนาดถูกบันทึกตอนเปิดจากกระดาน" || fail "รุ่น/ขนาดไม่ถูกบันทึก"
-  echo "IDOUT=$(echo "$R" | J 'd.id')"
-fi
+# เคสของเทสต์เอง บนเครื่องรหัสใหม่ที่ยังไม่รู้ยี่ห้อและไม่มีอะไหล่ที่รอ — ไม่หยิบเคสที่ค้างอยู่ในฐาน
+# เคสจริงจากรายงานเครื่องมักรู้ยี่ห้อแล้ว (ยี่ห้อที่รู้แล้วไม่ถูกทับ — รุ่นที่ส่งมาไม่ถูกเขียน) หรือมีอะไหล่ที่รอที่ต้องผ่านล็อกยี่ห้อ
+# ผลจึงขึ้นกับว่าวันนั้นฐานมีเคสอะไร (เดิมข้ามเงียบ ๆ เมื่อไม่มีเคส และพังเมื่อเคสแรกเป็นเครื่องที่รู้ยี่ห้อ)
+BID=$(DB "select id from \"Branch\" where code='C0006'")
+while :; do OMC="W$((9000 + RANDOM % 999))"; [ "$(DB "select count(*) from \"Machine\" where \"branchId\"=$BID and code='$OMC'")" = "0" ] && break; done
+# สร้างไม่ได้ = FAIL ไม่ใช่จบเงียบ ๆ (set -e ตัดสคริปต์แล้ว run-all นับเฉพาะบรรทัดที่ผ่านไปแล้ว)
+OMID=$(DB "insert into \"Machine\"(\"branchId\",code,type,\"updatedAt\") values ($BID,'$OMC','WASHER',now()) returning id") || OMID=""
+[ -n "$OMID" ] && OID=$(DB "insert into \"Outage\"(kind,\"branchId\",\"machineId\",\"startedAt\",\"lastSeenAt\") values ('MACHINE_OFF',$BID,$OMID,now()-interval '2 hours',now()) returning id") || OID=""
+[ -n "$OID" ] || { fail "สร้างเคสเครื่องดับทดสอบไม่ได้ (ต่อฐานข้อมูลในเครื่องไม่ได้?)"; exit 1; }
+echo "  เคส $OID เครื่อง $OMC (ยังไม่รู้ยี่ห้อ ไม่มีอะไหล่ที่รอ)"
+R=$(curl -s -X POST "localhost:4000/api/work-orders/from-outage/$OID" -H "$(H $A)" -H 'Content-Type: application/json' \
+  -d '{"jobType":"CM","priority":"NORMAL","contactName":"คุณมานพ","contactPhone":"0899999999","model":"Oasis","capacityKg":18,"symptom":"ดับทั้งเครื่อง"}')
+IDOUT=$(echo "$R" | J 'd.id??""')
+echo "$R" | J '"  "+d.code+" · ผู้ติดต่อ "+(d.contactName||"(ว่าง)")+" "+(d.contactPhone||"")+" · ขนาด "+(d.machineCapacityLabel||"(ว่าง)")'
+echo "$R" | J 'd.contactName==="คุณมานพ"&&d.contactPhone==="0899999999"?"ok":"bad"' | grep -q ok \
+  && [ "$(DB "select \"contactName\" from \"WorkOrder\" where id=${IDOUT:-0}")" = "คุณมานพ" ] \
+  && pass "ผู้ติดต่อถูกบันทึกตอนเปิดจากกระดาน (ฐานข้อมูล)" || fail "ผู้ติดต่อยังหาย: $(echo "$R" | head -c 200)"
+echo "$R" | J 'd.machineCapacityLabel==="18 kg"&&d.machineModel==="Oasis"?"ok":"bad"' | grep -q ok \
+  && [ "$(DB "select coalesce(model,'-')||'|'||coalesce(\"capacityKg\"::text,'-') from \"Machine\" where id=$OMID")" = "Oasis|18" ] \
+  && pass "รุ่นกับขนาดถูกบันทึกที่เครื่องตอนเปิดจากกระดาน (เครื่องที่ยังไม่รู้ยี่ห้อ · ฐานข้อมูล)" || fail "รุ่น/ขนาดไม่ถูกบันทึก: $(DB "select model, \"capacityKg\" from \"Machine\" where id=$OMID")"
 
 echo
-# เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
-for i in $ID $ID1B $ID2; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"
