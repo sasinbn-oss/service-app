@@ -97,6 +97,7 @@ import {
   vendorRows,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
+import { fileList, machineBrandOf } from "../utils/brandFile";
 // ขั้นปล่อยงานย้ายไปอยู่กับกฎเวลาปิดรับ — ป้าย "คอนเฟิร์มวันใหม่" กับการล็อกต้องนับขั้นชุดเดียวกันเสมอ
 import {
   type CutoffConfig,
@@ -274,7 +275,12 @@ const detailInclude = {
   closedBy: { select: { id: true, name: true } },
   outage: { select: { id: true, kind: true, startedAt: true, endedAt: true } },
   parts: {
-    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true, offCatalog: true } } },
+    // brandFiles = ไฟล์ยี่ห้อของอะไหล่ (ช่องเลือกอะไหล่ติดป้าย "ไม่อยู่ในไฟล์ …" ให้แถวที่ค้างอยู่ในใบ) — relationJoins ดึงมาในคำสั่งเดียว
+    include: {
+      sparePart: {
+        select: { id: true, partCode: true, name: true, brand: true, offCatalog: true, brandFiles: { select: { file: true } } },
+      },
+    },
     orderBy: { id: "asc" },
   },
   services: { orderBy: { id: "asc" } },
@@ -746,6 +752,9 @@ function shape(
     // และยังเอาตัวเลขไปเติมในฟอร์มรอบหน้าได้โดยไม่ต้องแกะหน่วยออกจากข้อความ
     machineCapacityKg: w.machine?.capacityKg ?? null,
     machineCapacityLabel: formatCapacity(w.machine?.capacityKg),
+    // ยี่ห้อเครื่อง → ไฟล์อะไหล่ที่เลือกได้ (utils/brandFile.ts) — ช่องเลือกอะไหล่ทุกช่องของใบนี้ใช้ค่าเดียวกัน
+    // file ว่างทั้งที่มีเครื่อง = ยังไม่รู้ยี่ห้อ คนเลือกอะไหล่ต้องกดยี่ห้อเครื่องก่อน · ไม่มีเครื่อง = ไม่ล็อก
+    partsBrand: { ...machineBrandOf(w.machine), machineCode: w.machine?.code ?? null },
     // ทีมที่ควรรับงานใบนี้ตามไฟล์ทะเบียนสาขา
     //
     // งาน PM ไปทีมที่ดูแล PM ส่วนงานอื่นไปทีมที่ดูแล CM — คิดที่เซิร์ฟเวอร์
@@ -1419,13 +1428,18 @@ function partShape(p: {
   transferredAt?: Date | null;
   unit?: string | null;
   note?: string | null;
-  sparePart: { id: number; partCode: string; name: string; brand: string | null; offCatalog?: boolean };
+  sparePart: { id: number; partCode: string; name: string; brand: string | null; offCatalog?: boolean; brandFiles?: { file: string }[] };
 }) {
   return {
     sparePartId: p.sparePart.id,
     partCode: p.sparePart.partCode,
     name: p.sparePart.name,
     brand: p.sparePart.brand,
+    // ไฟล์ยี่ห้อที่อะไหล่ตัวนี้อยู่ ([] = ไม่อยู่ในไฟล์ไหน) — แอปตัดสิน "เลือกได้กับเครื่องนี้" ด้วยกติกาเดียวกับเซิร์ฟเวอร์:
+    // มีไฟล์ของเครื่อง (partsBrand.file) หรือ Other อยู่ในรายการ
+    brandFiles: fileList(p.sparePart.brandFiles),
+    // เบิกแล้ว (มีของ + มีเลขใบเบิก = ของอยู่กับช่างแล้ว) — แถวแบบนี้ไม่ถูกตัดออกตอนส่งรายการใหม่ และติดป้าย "เบิกแล้ว · ใบเบิก …"
+    issued: p.inStock === true && !!p.requisitionNo,
     // ของนอกสโตร์ — หน้าจอโชว์ชื่อ + ป้าย แทนรหัส และไม่ถามคลัง/เลขใบเบิก
     offCatalog: p.sparePart.offCatalog ?? false,
     unit: p.unit ?? null,

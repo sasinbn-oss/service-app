@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from "express";
 import ExcelJS from "exceljs";
 import multer from "multer";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { documentPath, saveDocument } from "../documents/store";
@@ -15,8 +16,13 @@ import {
   planPartsImport,
   reportDetails,
 } from "../utils/sparePartImport";
+import { BRAND_FILES, BRAND_FILE_INVALID, BrandFile, SHARED_FILE, asBrandFile, brandFileOf, fileList, fileOfUploadName } from "../utils/brandFile";
 
 const router = Router();
+
+/** หน้าจัดการ/ช่องเลือกอะไหล่ได้ไฟล์ยี่ห้อเป็นชื่อล้วน ["Haier","Other"] ไม่ใช่แถวของตาราง */
+const withFiles = <T extends { brandFiles: { file: string }[] }>(p: T) => ({ ...p, brandFiles: fileList(p.brandFiles) });
+const brandFilesInclude = { brandFiles: { select: { file: true } } } as const;
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -49,8 +55,71 @@ router.get("/", requireAuth, async (req, res) => {
         : {}),
     },
     orderBy: { name: "asc" },
+    // ไฟล์ยี่ห้อของแต่ละตัว — หน้าจัดการกรอง "ไม่มียี่ห้อ" (= ไม่อยู่ในไฟล์ไหน ช่างเลือกไม่ได้) และแก้ไฟล์ในฟอร์ม
+    include: brandFilesInclude,
   });
-  res.json(parts);
+  res.json(parts.map(withFiles));
+});
+
+/**
+ * ค้นอะไหล่สำหรับเครื่องยี่ห้อหนึ่ง (ช่องเลือกอะไหล่ในใบงานที่มีเครื่อง — เจ้าของงาน: "เครื่อง Huebsch ก็เลือกอะไหล่ของเครื่อง Huebsch ได้เท่านั้น")
+ *
+ * brand = ยี่ห้อเครื่องตามที่ใบงานรู้ (machineMake) หรือปุ่มที่คนเพิ่งกด → ไฟล์ด้วย brandFileOf (ข้อความที่ไม่ตรงคำไหน = Other)
+ * rows = อะไหล่ในไฟล์ของเครื่อง · shared = ของใช้ร่วม (ไฟล์ Other) ที่ไม่อยู่ในไฟล์ของเครื่อง — สองกลุ่มบนหน้าจอ
+ *   ตัวที่อยู่ทั้งสองไฟล์ขึ้นครั้งเดียวใน rows · เครื่องที่ตกไป Other ได้กลุ่มเดียว
+ * ค้นในรหัสสินค้า ชื่อ และ Part No. — ไม่ค้นข้อความยี่ห้อ/หมวด เพราะข้อความยี่ห้อไม่ได้ตัดสินอะไรแล้ว
+ *   (พิมพ์ "Huebsch" แล้วได้ทุกตัวที่ช่องยี่ห้อเขียน Huebsch ทั้งที่ไม่อยู่ในไฟล์ Huebsch = ทำให้เข้าใจผิด)
+ * เรียงรหัสที่ตรงทั้งคำก่อน แล้วรหัสที่ขึ้นต้นด้วยคำค้น แล้วตามชื่อ — ช่างค้น/เบิก/เคลมด้วยรหัสสินค้า (เจ้าของงาน 31 ต.ค. 69)
+ *   ถ้าเรียงตามชื่ออย่างเดียว รหัสที่พิมพ์ครบแล้วอาจตกไปท้ายรายการเพราะชื่อเรียงทีหลัง
+ * elsewhere = ไม่เจอเลยทั้งสองกลุ่ม → บอกว่าคำค้นนี้อยู่ไฟล์ไหน (ช่างรู้ว่าไม่ใช่พิมพ์ผิด แต่เป็นอะไหล่ยี่ห้ออื่น)
+ * อะไหล่ที่ไม่อยู่ในไฟล์ไหนและของนอกสโตร์ไม่ขึ้นที่ไหนเลย — ยังไม่รู้ว่าเป็นของยี่ห้อไหน ให้เลือกคือเดา
+ * updatedAt = วันอัปโหลดไฟล์นี้ครั้งล่าสุด (หัวช่อง "อัปเดต {วันที่}") คิดเฉพาะตอนไม่มีคำค้น — หัวช่องโหลดครั้งเดียว
+ *   ไม่เคยอัปโหลดไฟล์นี้เลย = null (หัวช่องไม่มีวันที่ ไม่เดาจากวันอื่น)
+ * ทุกตำแหน่งที่เลือกอะไหล่ได้อ่านได้ (รวม Admin Spare Part / ดูในฐานะ) · ทีม Area ถูกกันที่ requireAuth ทั้ง /api/spare-parts
+ */
+const FOR_BRAND_LIMIT = 8;
+type BrandRow = { id: number; partCode: string; name: string; brand: string | null; partNo: string | null; brandFiles: string[] };
+router.get("/for-brand", requireAuth, async (req, res) => {
+  const brand = typeof req.query.brand === "string" ? req.query.brand.trim() : "";
+  const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
+  const file = brandFileOf(brand);
+  if (!file) return res.status(400).json({ error: "ต้องระบุยี่ห้อเครื่อง" });
+  if (!search) {
+    const last = await prisma.sparePartImport.findFirst({
+      where: { brandFile: file },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    return res.json({ file, updatedAt: last?.createdAt ?? null, rows: [], shared: [], elsewhere: [] });
+  }
+  // ILIKE ต้องหนี % _ \ ในคำค้นเอง (Prisma contains ทำให้ แต่ที่นี่ต้องเรียงด้วยนิพจน์ที่ Prisma เรียงให้ไม่ได้)
+  const like = `%${search.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
+  const matches = Prisma.sql`(p."partCode" ILIKE ${like} OR p.name ILIKE ${like} OR p."partNo" ILIKE ${like})`;
+  const inFile = (f: string) => Prisma.sql`EXISTS (SELECT 1 FROM "SparePartBrandFile" b WHERE b."sparePartId" = p.id AND b.file = ${f})`;
+  const group = (where: Prisma.Sql) => prisma.$queryRaw<BrandRow[]>`
+    SELECT p.id, p."partCode", p.name, p.brand, p."partNo",
+      ARRAY(SELECT b.file FROM "SparePartBrandFile" b WHERE b."sparePartId" = p.id) AS "brandFiles"
+    FROM "SparePart" p
+    WHERE NOT p."offCatalog" AND ${where} AND ${matches}
+    ORDER BY upper(p."partCode") = upper(${search}) DESC,
+      upper(p."partCode") LIKE upper(${like.slice(1)}) DESC,
+      p.name ASC, p."partCode" ASC
+    LIMIT ${FOR_BRAND_LIMIT}`;
+  const [rows, shared] = await Promise.all([
+    group(inFile(file)),
+    file === SHARED_FILE ? Promise.resolve([] as BrandRow[]) : group(Prisma.sql`${inFile(SHARED_FILE)} AND NOT ${inFile(file)}`),
+  ]);
+  const shape = (r: BrandRow) => ({ ...r, brandFiles: fileList(r.brandFiles.map((f) => ({ file: f }))) });
+  let elsewhere: { file: string; exact: boolean }[] = [];
+  if (!rows.length && !shared.length) {
+    const hits = await prisma.$queryRaw<{ file: string; exact: boolean }[]>`
+      SELECT b.file, bool_or(upper(p."partCode") = upper(${search})) AS exact
+      FROM "SparePart" p JOIN "SparePartBrandFile" b ON b."sparePartId" = p.id
+      WHERE NOT p."offCatalog" AND b.file <> ${file} AND b.file <> ${SHARED_FILE} AND ${matches}
+      GROUP BY b.file`;
+    elsewhere = hits.sort((a, b) => BRAND_FILES.indexOf(a.file as BrandFile) - BRAND_FILES.indexOf(b.file as BrandFile));
+  }
+  res.json({ file, updatedAt: null, rows: rows.map(shape), shared: shared.map(shape), elsewhere });
 });
 
 /**
@@ -84,6 +153,23 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
   const batchId = String(req.body?.batchId ?? "").slice(0, 64);
   if (apply && !/^[A-Za-z0-9_-]{6,64}$/.test(batchId)) return res.status(400).json({ error: "ไม่มีรหัสรอบอัปเดต — ลองเลือกไฟล์ใหม่" });
 
+  // ไฟล์ยี่ห้อ = ชื่อไฟล์ (เจ้าของงานตอบ 31 ต.ค. 69) · ชื่อไม่บอก/บอกหลายยี่ห้อ หน้าตรวจให้แอดมินเลือกแล้วส่งมาเป็น brandFile
+  // เช็คก่อนอ่านไฟล์ (ไฟล์ใหญ่หลายสิบ MB อ่านนาน) และก่อนเขียนประวัติ — อัปเดตโดยไม่รู้ไฟล์ยี่ห้อ = อะไหล่ทั้งไฟล์ช่างเลือกไม่ได้
+  const named = fileOfUploadName(fileName);
+  const sent = String(req.body?.brandFile ?? "").trim();
+  const chosen = sent ? asBrandFile(sent) : null;
+  if (sent && !chosen) return res.status(400).json({ error: BRAND_FILE_INVALID, fileName });
+  // ชื่อที่ตรงยี่ห้อเดียวเปลี่ยนเป็นยี่ห้ออื่นไม่ได้ — อัปโหลดไฟล์เดิมซ้ำต้องลงที่เดิมทุกครั้ง ไม่ขึ้นกับว่าใครกดปุ่มอะไร
+  if (named.file && chosen && chosen !== named.file) {
+    return res.status(400).json({ error: `ชื่อไฟล์ ${fileName} เป็นไฟล์ ${named.file} — ถ้าไม่ใช่ เปลี่ยนชื่อไฟล์ก่อนอัปโหลด`, fileName });
+  }
+  const brandFile: BrandFile | null = named.file ?? chosen;
+  const brandFileFrom = named.file ? "name" : chosen ? "chosen" : null;
+  if (apply && !brandFile) {
+    return res.status(400).json({ error: `ไฟล์ ${fileName} ยังไม่ได้เลือกยี่ห้อ — เลือกที่หน้าตรวจก่อนกดอัปเดต`, fileName });
+  }
+  const brandInfo = { brandFile, brandFileFrom, brandFileMatches: named.matches };
+
   // ค่ารูปต้นฉบับของรูปที่เบราว์เซอร์ย่อก่อนส่ง (mobile/src/utils/shrinkXlsx.ts) — ค่าผิดรูปแบบทิ้ง ใช้ไบต์ที่ส่งมาแทน
   const sourceHashes: Record<string, string> = {};
   try {
@@ -102,7 +188,7 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
     return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้", fileName });
   }
   if (!parsed.rows.length && !parsed.problems.length) return res.status(400).json({ error: "ไฟล์ไม่มีรายการอะไหล่", fileName });
-  const plan = await planPartsImport(parsed, replaceImages);
+  const plan = await planPartsImport(parsed, replaceImages, brandFile);
   const details = reportDetails(fileName, parsed, plan);
 
   if (!apply) {
@@ -119,19 +205,27 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
     const rowValues = Object.fromEntries(
       parsed.rows.map((r) => [r.partCode, { line: r.line, name: r.name, brand: r.brand, category: r.category, partNo: r.partNo, hasImage: !!r.image }])
     );
-    return res.json({ applied: false, imageCount: parsed.imageCount, summary: plan.summary, ...details, thumbs, rowValues });
+    return res.json({ applied: false, imageCount: parsed.imageCount, summary: plan.summary, ...details, ...brandInfo, thumbs, rowValues });
   }
 
   // เขียนประวัติก่อนลงมือ — พังกลางทาง (ฐานข้อมูลหลุด/เซิร์ฟเวอร์รีสตาร์ท) ส่วนที่บันทึกไปแล้วต้องยังมีในรายงาน
   // ไม่งั้นกดอัปเดตซ้ำรอบหน้าเห็นเป็น "เหมือนเดิม" และไม่มีรายงานไหนบอกว่าอะไหล่พวกนั้นถูกเพิ่ม/แก้ไปแล้ว
   const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
   const log = await prisma.sparePartImport.create({
-    data: { batchId, byUserId: req.auth!.userId, byName: me?.name ?? null, fileName, summary: { ...plan.summary, incomplete: true }, details: details as object },
+    data: {
+      batchId,
+      byUserId: req.auth!.userId,
+      byName: me?.name ?? null,
+      fileName,
+      brandFile,
+      summary: { ...plan.summary, incomplete: true },
+      details: details as object,
+    },
   });
   let done: Awaited<ReturnType<typeof applyPartsImport>>;
   const progress = newProgress();
   try {
-    done = await applyPartsImport(parsed, plan, progress);
+    done = await applyPartsImport(parsed, plan, brandFile!, progress);
   } catch (e) {
     console.error(`[spare-part-import] ${fileName} หยุดกลางทาง`, e);
     // ยอดในประวัติ = ที่บันทึกจริง — เดิมเป็นยอดที่ตั้งใจ (แถบล่าสุด/รายงานบอก "เพิ่ม 300" ทั้งที่ไม่ได้เพิ่มสักตัว)
@@ -145,6 +239,8 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
             created: progress.created,
             updated: progress.updated,
             images: progress.images,
+            joined: progress.joined,
+            confirmed: progress.confirmed,
             changed: progress.codes.size,
             incomplete: true,
           },
@@ -157,20 +253,30 @@ router.post("/import", requireAuth, requireAdmin, oneSheet, async (req: AuthRequ
   }
   const summary = { ...plan.summary, images: done.images };
   await prisma.sparePartImport.update({ where: { id: log.id }, data: { summary } });
-  console.log(`[spare-part-import] ${fileName} โดย userId=${req.auth!.userId} — เพิ่ม ${done.created} · แก้ ${done.updated} · รูป ${done.images}`);
-  res.json({ applied: true, id: log.id, imageCount: parsed.imageCount, summary, ...details });
+  console.log(
+    `[spare-part-import] ${fileName} (ไฟล์ ${brandFile}) โดย userId=${req.auth!.userId} — เพิ่ม ${done.created} · แก้ ${done.updated} · รูป ${done.images} · เข้าไฟล์ใหม่ ${plan.summary.joined} · ยืนยันในไฟล์ ${plan.summary.confirmed}`
+  );
+  res.json({ applied: true, id: log.id, imageCount: parsed.imageCount, summary, ...details, ...brandInfo });
 });
 
 type ImportRow = Awaited<ReturnType<typeof prisma.sparePartImport.findMany>>[number];
 const batchShape = (rows: ImportRow[]) => {
-  const totals = { changed: 0, created: 0, updated: 0, images: 0, same: 0, skipped: 0, notInFile: 0, incomplete: 0 };
+  const totals = { changed: 0, created: 0, updated: 0, images: 0, same: 0, skipped: 0, joined: 0, notInFile: 0, incomplete: 0 };
   for (const r of rows) {
     const s = r.summary as Record<string, number | boolean>;
-    for (const k of ["changed", "created", "updated", "images", "same", "skipped"] as const) totals[k] += Number(s[k] ?? 0);
+    for (const k of ["changed", "created", "updated", "images", "same", "skipped", "joined"] as const) totals[k] += Number(s[k] ?? 0);
     if (s.incomplete) totals.incomplete++;
   }
-  const files = rows.map((r) => ({ id: r.id, fileName: r.fileName, createdAt: r.createdAt, summary: r.summary, details: r.details as unknown as ReportDetails }));
-  // ไม่อยู่ในไฟล์ = ไม่อยู่ในไฟล์ไหนเลยของรอบนี้ (ไฟล์ยี่ห้อเดียวกันแยกสองไฟล์ ต่างคนต่างฟ้องว่าอีกครึ่งหาย) · นับตัวละครั้ง
+  // brandFile ของแต่ละไฟล์ — รายงานบอก "เข้าไฟล์ {ยี่ห้อ} ใหม่ n รายการ" รายไฟล์ · ว่าง = อัปโหลดก่อนมีไฟล์ยี่ห้อและชื่อไฟล์ไม่บอก
+  const files = rows.map((r) => ({
+    id: r.id,
+    fileName: r.fileName,
+    brandFile: r.brandFile,
+    createdAt: r.createdAt,
+    summary: r.summary,
+    details: r.details as unknown as ReportDetails,
+  }));
+  // ไม่อยู่ในไฟล์ = ไม่อยู่ในไฟล์ยี่ห้อเดียวกันไฟล์ไหนเลยของรอบนี้ (ไฟล์ยี่ห้อเดียวแยกสองไฟล์ ต่างคนต่างฟ้องว่าอีกครึ่งหาย) · นับตัวละครั้งต่อไฟล์ยี่ห้อ
   const notInFile = notInBatch(files);
   totals.notInFile = notInFile.length;
   return { batchId: rows[0].batchId, createdAt: rows[rows.length - 1].createdAt, byName: rows[0].byName, totals, notInFile, files };
@@ -200,6 +306,8 @@ router.get("/imports/batch/:batchId/excel", requireAuth, requireAdmin, async (re
   const ws = wb.addWorksheet("อัปเดตอะไหล่");
   ws.columns = [
     { header: "ไฟล์", width: 22 },
+    // ไฟล์ยี่ห้อที่ไฟล์นี้ลง (จากชื่อไฟล์หรือที่แอดมินเลือก) — คนตรวจรายงานเห็นว่ารหัสเข้าไฟล์ไหน
+    { header: "ไฟล์ยี่ห้อ", width: 11 },
     { header: "แถว", width: 7 },
     { header: "รหัสสินค้า", width: 14 },
     { header: "ชื่อ", width: 48 },
@@ -218,15 +326,39 @@ router.get("/imports/batch/:batchId/excel", requireAuth, requireAdmin, async (re
       ]
         .filter(Boolean)
         .join(" · ");
-      ws.addRow([f.fileName, i.line, i.partCode, i.name, result, detail]);
+      ws.addRow([f.fileName, f.brandFile ?? "", i.line, i.partCode, i.name, result, detail]);
     }
-    for (const p of f.details.problems) ws.addRow([f.fileName, p.line, p.partCode ?? "", p.name ?? "", "ข้าม / มีปัญหา", p.note]);
+    for (const p of f.details.problems) ws.addRow([f.fileName, f.brandFile ?? "", p.line, p.partCode ?? "", p.name ?? "", "ข้าม / มีปัญหา", p.note]);
+    const joined = Number((f.summary as { joined?: number }).joined ?? 0);
+    if (f.brandFile && joined > 0) {
+      ws.addRow([f.fileName, f.brandFile, "", "", "", "เข้าไฟล์ยี่ห้อ", `เข้าไฟล์ ${f.brandFile} ใหม่ ${joined.toLocaleString("en-US")} รายการ`]);
+    }
+    const confirmed = Number((f.summary as { confirmed?: number }).confirmed ?? 0);
+    if (f.brandFile && confirmed > 0) {
+      ws.addRow([
+        f.fileName,
+        f.brandFile,
+        "",
+        "",
+        "",
+        "ยืนยันไฟล์ยี่ห้อ",
+        `ยืนยันรหัสในไฟล์ ${f.brandFile} ${confirmed.toLocaleString("en-US")} รายการ (เดิมตั้งจากช่องยี่ห้อหรือติ๊กเอง)`,
+      ]);
+    }
     if ((f.summary as { incomplete?: boolean }).incomplete) {
-      ws.addRow([f.fileName, "", "", "", "อัปเดตไม่ครบ", "หยุดกลางทาง — รายการของไฟล์นี้บางส่วนอาจยังไม่ถูกบันทึก กดอัปเดตไฟล์นี้ซ้ำได้"]);
+      ws.addRow([f.fileName, f.brandFile ?? "", "", "", "", "อัปเดตไม่ครบ", "หยุดกลางทาง — รายการของไฟล์นี้บางส่วนอาจยังไม่ถูกบันทึก กดอัปเดตไฟล์นี้ซ้ำได้"]);
     }
   }
   for (const p of b.notInFile) {
-    ws.addRow(["(ทุกไฟล์ในรอบ)", "", p.partCode, p.name, "ไม่อยู่ในไฟล์ (ไม่ลบ)", p.usedIn ? `ใบงานอ้างถึง ${p.usedIn} ใบ` : "ยังไม่เคยใช้ในใบงาน"]);
+    ws.addRow([
+      "(ทุกไฟล์ในรอบ)",
+      p.file ?? "",
+      "",
+      p.partCode,
+      p.name,
+      "ไม่อยู่ในไฟล์ (ไม่ลบ)",
+      p.usedIn ? `ใบงานอ้างถึง ${p.usedIn} ใบ` : "ยังไม่เคยใช้ในใบงาน",
+    ]);
   }
   const stamp = new Date(b.createdAt).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
   const stored = saveDocument({
@@ -253,9 +385,9 @@ router.get("/:id/image", async (req, res) => {
 
 router.get("/:id", requireAuth, async (req, res) => {
   const id = Number(req.params.id);
-  const part = await prisma.sparePart.findUnique({ where: { id } });
+  const part = await prisma.sparePart.findUnique({ where: { id }, include: brandFilesInclude });
   if (!part) return res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
-  res.json(part);
+  res.json(withFiles(part));
 });
 
 const sparePartSchema = z.object({
@@ -294,25 +426,66 @@ const formError = (e: z.ZodError) =>
     })
     .join(" · ");
 
+/**
+ * ไฟล์ยี่ห้อที่แอดมินติ๊กในฟอร์มอะไหล่ (หน้าจัดการข้อมูลอะไหล่) — ไม่ส่งมา = ไม่แตะ (แอปรุ่นเก่ายังแก้ชื่อ/รูปได้โดยไฟล์ไม่หาย)
+ * ส่งมา = ไฟล์ของอะไหล่ตัวนี้เป็นตามรายการนี้พอดี · ส่ง [] = ไม่อยู่ในไฟล์ไหน (ช่างเลือกไม่ได้ ยกเว้นใบที่ไม่ระบุเครื่อง)
+ * ไม่ผ่าน zod ของฟอร์ม: ข้อความต้องบอกว่าเลือกอะไรได้บ้าง ไม่ใช่แค่ "ไม่ถูกต้อง"
+ */
+function brandFilesInput(v: unknown): { ok: true; files: BrandFile[] | undefined } | { ok: false } {
+  if (v === undefined) return { ok: true, files: undefined };
+  if (!Array.isArray(v) || v.length > BRAND_FILES.length) return { ok: false };
+  const files = v.map(asBrandFile);
+  if (files.some((f) => !f) || new Set(files).size !== files.length) return { ok: false };
+  return { ok: true, files: files as BrandFile[] };
+}
+
 router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const parsed = sparePartSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: formError(parsed.error) });
+  const bf = brandFilesInput(req.body?.brandFiles);
+  if (!bf.ok) return res.status(400).json({ error: BRAND_FILE_INVALID });
 
   const existing = await prisma.sparePart.findUnique({ where: { partCode: parsed.data.partCode } });
   if (existing) return res.status(409).json({ error: "รหัสสินค้านี้มีอยู่แล้ว" });
 
-  const part = await prisma.sparePart.create({ data: parsed.data });
-  res.status(201).json(part);
+  // แถวไฟล์สร้างในคำสั่งเดียวกับอะไหล่ — อะไหล่ที่สร้างแล้วไฟล์หายไปครึ่งทางคือช่างเลือกไม่ได้โดยไม่มีใครรู้
+  const part = await prisma.sparePart.create({
+    data: {
+      ...parsed.data,
+      ...(bf.files?.length ? { brandFiles: { create: bf.files.map((file) => ({ file, source: "MANUAL" })) } } : {}),
+    },
+    include: brandFilesInclude,
+  });
+  res.status(201).json(withFiles(part));
 });
 
 router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const parsed = sparePartSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: formError(parsed.error) });
+  const bf = brandFilesInput(req.body?.brandFiles);
+  if (!bf.ok) return res.status(400).json({ error: BRAND_FILE_INVALID });
 
   try {
-    const part = await prisma.sparePart.update({ where: { id }, data: parsed.data });
-    res.json(part);
+    if (bf.files === undefined) {
+      const part = await prisma.sparePart.update({ where: { id }, data: parsed.data, include: brandFilesInclude });
+      return res.json(withFiles(part));
+    }
+    const cur = await prisma.sparePart.findUnique({ where: { id }, select: { offCatalog: true } });
+    if (!cur) return res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
+    // ของนอกสโตร์คือชื่อที่คนพิมพ์เองในใบงาน ไม่ได้มาจากไฟล์ยี่ห้อไหน — ใส่ไฟล์แล้วจะไปโผล่ในช่องเลือกอะไหล่ของช่าง
+    if (cur.offCatalog && bf.files.length) return res.status(400).json({ error: "อะไหล่นอกสโตร์ไม่อยู่ในไฟล์ยี่ห้อ" });
+    const files = bf.files;
+    // คำสั่งชุด (ไม่ใช่ interactive) จึงไม่ติดเพดาน 5 วินาที · ไฟล์ที่ยังติ๊กอยู่เก็บ source เดิม (IMPORT = ไฟล์จริงยืนยันแล้ว)
+    // แก้แค่ไฟล์ไม่แตะ SparePart (updatedAt คือตัวกันแคชรูป — ขยับแล้วรูปโหลดใหม่เปล่า ๆ) · อ่านแถวท้ายสุดให้ได้ไฟล์ชุดใหม่
+    const [, , part] = await prisma.$transaction([
+      prisma.sparePartBrandFile.deleteMany({ where: { sparePartId: id, file: { notIn: files } } }),
+      prisma.sparePartBrandFile.createMany({ data: files.map((file) => ({ sparePartId: id, file, source: "MANUAL" })), skipDuplicates: true }),
+      Object.values(parsed.data).some((v) => v !== undefined)
+        ? prisma.sparePart.update({ where: { id }, data: parsed.data, include: brandFilesInclude })
+        : prisma.sparePart.findUniqueOrThrow({ where: { id }, include: brandFilesInclude }),
+    ]);
+    res.json(withFiles(part));
   } catch (e) {
     // แก้รหัสให้ซ้ำกับอะไหล่อื่น — เดิมตกไปเป็น "ไม่พบอะไหล่" ทำให้แอดมินงงว่าหายไปไหน
     if ((e as { code?: string }).code === "P2002") {

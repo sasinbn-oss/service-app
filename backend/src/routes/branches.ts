@@ -27,6 +27,7 @@ import {
   warrantyEndFor,
   warrantyYearsFor,
 } from "../utils/constants";
+import { brandFileOf } from "../utils/brandFile";
 
 const router = Router();
 
@@ -511,10 +512,12 @@ router.get("/:code/machines", requireAuth, async (req: AuthRequest, res) => {
 
   const machines = await prisma.machine.findMany({
     where: { branchId: branch.id, removedAt: null },
-    select: { code: true, type: true, model: true, capacityKg: true },
+    select: { code: true, type: true, brand: true, model: true, capacityKg: true },
     orderBy: { code: "asc" },
   });
-  res.json(machines);
+  // make = ยี่ห้อที่ใช้จริง (ยี่ห้อจากไฟล์รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) · brandFile = ไฟล์อะไหล่ของเครื่องนั้น
+  // ฟอร์มเปิดใบงานล็อกปุ่มยี่ห้อเมื่อรู้ยี่ห้อแล้ว — รวมเครื่องที่รู้แค่จากรายงาน (model ว่าง) ไม่งั้นถามซ้ำทั้งที่ระบบรู้
+  res.json(machines.map((m) => ({ ...m, make: machineMake(m), brandFile: brandFileOf(machineMake(m)) })));
 });
 
 const branchSchema = z.object({

@@ -33,6 +33,7 @@ import {
   outageScore,
   warrantyStatus,
 } from "../utils/constants";
+import { fileList } from "../utils/brandFile";
 
 const router = Router();
 
@@ -64,7 +65,8 @@ function workStatusFilter(value?: string) {
 const noteInclude = {
   noteUpdatedBy: { select: { name: true } },
   parts: {
-    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true } } },
+    // brandFiles — ช่องเลือกอะไหล่ของกระดานติดป้าย "ไม่อยู่ในไฟล์ …" ให้แถวที่รออยู่ ด้วยกติกาเดียวกับใบงาน
+    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true, brandFiles: { select: { file: true } } } } },
     orderBy: { id: "asc" },
   },
 } as const;
@@ -85,7 +87,7 @@ interface NoteShape {
   noteUpdatedBy: { name: string } | null;
   parts: {
     quantity: number;
-    sparePart: { id: number; partCode: string; name: string; brand: string | null };
+    sparePart: { id: number; partCode: string; name: string; brand: string | null; brandFiles: { file: string }[] };
   }[];
 }
 
@@ -145,6 +147,7 @@ function noteFields(o: NoteShape) {
       partCode: p.sparePart.partCode,
       name: p.sparePart.name,
       brand: p.sparePart.brand,
+      brandFiles: fileList(p.sparePart.brandFiles),
       quantity: p.quantity,
     })),
   };
@@ -261,6 +264,8 @@ async function listMachineOff(query: z.infer<typeof listSchema>, area?: Prisma.B
     machineCode: o.machine?.code ?? "",
     machineType: o.machine?.type ?? "",
     machineBrand: o.machine?.brand ?? null,
+    // ยี่ห้อที่ใช้จริง (รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) — ช่องอะไหล่ที่รอบนกระดานล็อกตามไฟล์ของยี่ห้อนี้
+    machineMake: machineMake(o.machine),
     // ประกันคิดรายเครื่อง — สาขาเดียวกัน Oasis (2 ปี) หมดก่อน Huebsch (3 ปี) ได้
     ...(({ state, endsAt }) => ({ warranty: state, warrantyEndsAt: endsAt }))(
       warrantyStatus({

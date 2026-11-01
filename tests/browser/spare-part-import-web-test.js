@@ -8,6 +8,10 @@
 //   ไฟล์ 200 MB (รูปถ่ายก๊อปวางเป็น PNG — เจ้าของงานเจอกับ Huebsch/Oasis): เบราว์เซอร์ย่อรูป + แปลงเป็น JPEG ก่อนส่ง →
 //   อัปเดตได้ · รูปในฐานข้อมูลเป็น JPEG เล็กลง เก็บค่ารูปต้นฉบับ · เลือกไฟล์เดิมอีกรอบ รูปไม่ขึ้นว่าเปลี่ยน ·
 //   รูปเยอะจนย่อรอบแรกยังเกินเป้า → ย่อเพิ่มอีกรอบจนต่ำกว่า 45 MB
+//   ไฟล์ยี่ห้อจากชื่อไฟล์ (เจ้าของงาน 31 ต.ค. 69): ชื่อไฟล์ทดสอบ zztw-… ไม่มีคำยี่ห้อ → หน้าตรวจถามยี่ห้อ (ชิป 6 ไฟล์) ·
+//   กดอัปเดตก่อนเลือก = แถบเตือน ไม่บันทึกอะไร · เลือกแล้ว "ไม่อยู่ในไฟล์" คิดตามไฟล์ยี่ห้อ · ฐานข้อมูลมี SparePartBrandFile ของไฟล์ที่เลือก ·
+//   รหัสเดียวกันในสองไฟล์คนละยี่ห้อ = อยู่ทั้งสองไฟล์ · ตรวจไฟล์ที่เหลือหลังหยุดกลางทางไม่ต้องเลือกยี่ห้อซ้ำ ·
+//   อัปไฟล์เดิมที่ไม่มีช่องไหนเปลี่ยน แต่รหัสอยู่ในไฟล์ยี่ห้อจากการเดาตอนขึ้นระบบ (SEED) → ปุ่ม "ยืนยัน" กดได้ → แถวเป็น IMPORT
 const { chromium } = require("playwright");
 const os = require("os");
 const path = require("path");
@@ -45,9 +49,13 @@ const cleanup = () => {
   const pass = (m) => console.log("PASS", m);
   const errors = [];
   cleanup();
-  // ของเดิมยี่ห้อเดียวกัน 1 ชิ้น มีรูปอยู่แล้ว — ไฟล์ส่งรูปต่างมา (แทน/เก็บ) และอีกชิ้นไม่อยู่ในไฟล์
+  // ของเดิม 1 ชิ้น มีรูปอยู่แล้ว (ยังไม่อยู่ในไฟล์ยี่ห้อไหน) — ไฟล์ส่งรูปต่างมา (แทน/เก็บ)
+  // อีกชิ้นอยู่ในไฟล์ Spinz แต่ไม่อยู่ใน Excel — "ไม่อยู่ในไฟล์" คิดตามไฟล์ยี่ห้อที่เลือก ไม่ใช่ข้อความยี่ห้อ
+  // Spinz: ไฟล์ที่ข้อมูลทดสอบอื่นแตะน้อยที่สุด (มีแค่อะไหล่คู่แฝด -SZ ของ seed:test)
+  const BF1 = "Spinz";
   sql(`insert into "SparePart"("partCode",name,brand,"updatedAt") values ('${P}A','ฝาปิดทดสอบเว็บ','${BRAND}',now()),('${P}Z','ไม่อยู่ในไฟล์ทดสอบเว็บ','${BRAND}',now());
-       insert into "SparePartImage"("sparePartId","mimeType",data,"updatedAt") select id,'image/jpeg','\\xffd8ffd9'::bytea,now() from "SparePart" where "partCode"='${P}A';`);
+       insert into "SparePartImage"("sparePartId","mimeType",data,"updatedAt") select id,'image/jpeg','\\xffd8ffd9'::bytea,now() from "SparePart" where "partCode"='${P}A';
+       insert into "SparePartBrandFile"("sparePartId",file,source,"createdAt","updatedAt") select id,'${BF1}','MANUAL',now(),now() from "SparePart" where "partCode"='${P}Z';`);
   const md5 = JSON.parse(
     fixture(F1, {
       headers: ["ลำดับ", "รูปภาพประกอบ", "รหัสสินค้า", "ชื่อรวม (ไทย)", "ยี่ห้อสินค้า", "Pant No."],
@@ -77,6 +85,19 @@ const cleanup = () => {
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (t) => page.getByLabel(t, { exact: true }).locator("visible=true");
+    // เลือกยี่ห้อให้ไฟล์ที่ชื่อไม่บอก แล้วรอหน้าตรวจถามเซิร์ฟเวอร์ใหม่จนเสร็จ (ชิปติด) — อ่านจาก aria-selected ไม่อ่านสี
+    const chooseBrand = async (file, brand, timeout = 60000) => {
+      const l = `ไฟล์ยี่ห้อ ${brand} ของ ${path.basename(file)}`;
+      await label(l).click();
+      await page.waitForFunction(
+        (l) => [...document.querySelectorAll(`[aria-label="${l}"]`)].some((e) => e.getAttribute("aria-selected") === "true"),
+        l,
+        { timeout }
+      );
+      await page.waitForTimeout(500);
+    };
+    const brandRows = (like) =>
+      sql(`select coalesce(string_agg(p."partCode"||'='||b.file||'='||b.source, ',' order by p."partCode", b.file),'') from "SparePartBrandFile" b join "SparePart" p on p.id=b."sparePartId" where p."partCode" like '${like}'`);
     await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
     await page.getByPlaceholder("รหัสพนักงาน").fill("A001");
     await page.getByPlaceholder("รหัสผ่าน").fill("test1234");
@@ -106,9 +127,39 @@ const cleanup = () => {
       ? pass("ตรวจก่อนอัปเดตไม่บันทึกอะไรลงฐานข้อมูล")
       : fail("ตรวจแล้วมีอะไหล่เพิ่ม");
     (await vis(/หาคอลัมน์ “รหัสสินค้า” ไม่เจอ/, false).count()) ? pass("ไฟล์ที่หาคอลัมน์รหัสสินค้าไม่เจอ บอกแยกเป็นรายไฟล์") : fail("ไม่บอกไฟล์ที่อ่านไม่ได้");
-    (await label("เพิ่มใหม่ 1 รายการ").count()) && (await label("รูปใหม่ / เปลี่ยนรูป 2 รายการ").count()) && (await label("ไม่อยู่ในไฟล์ 1 รายการ").count())
-      ? pass("กล่องตัวเลข: เพิ่มใหม่ 1 · รูป 2 · ไม่อยู่ในไฟล์ 1")
-      : fail("ตัวเลขในกล่องไม่ตรง");
+
+    // ── ไฟล์ยี่ห้อจากชื่อไฟล์: ชื่อไม่บอกยี่ห้อ → ถามที่หน้าตรวจ ──
+    const F1N = path.basename(F1);
+    const chipsF1 = await page.getByLabel(new RegExp(`^ไฟล์ยี่ห้อ \\S+ ของ ${F1N.replace(/\./g, "\\.")}$`)).locator("visible=true").count();
+    (await vis("ชื่อไฟล์ไม่บอกยี่ห้อ — เลือกยี่ห้อของไฟล์นี้").count()) === 1 && chipsF1 === 6
+      ? pass("ชื่อไฟล์ไม่บอกยี่ห้อ: หน้าตรวจถามยี่ห้อ มีชิป 6 ไฟล์ (เฉพาะไฟล์ที่อ่านได้)")
+      : fail(`ไม่ถามยี่ห้อ / ชิป ${chipsF1}`);
+    (await label("ไม่อยู่ในไฟล์ 0 รายการ").count())
+      ? pass("ยังไม่รู้ยี่ห้อ: ไม่อยู่ในไฟล์ 0 (ยังไม่รู้ว่าเทียบกับไฟล์ไหน)")
+      : fail("ยังไม่เลือกยี่ห้อแต่มีรายการไม่อยู่ในไฟล์");
+    await page.screenshot({ path: path.join(__dirname, "spare-import-2a-brand-ask.png") });
+    // กดอัปเดตก่อนเลือก — ปุ่มยังกดได้ แต่ไม่ส่งอะไร บอกให้เลือกก่อน
+    await label("อัปเดตอะไหล่").click();
+    await page.waitForTimeout(1000);
+    (await vis(`เลือกยี่ห้อของไฟล์ ${F1N} ก่อนกดอัปเดต`).count()) &&
+    sql(`select count(*) from "SparePartImport" where "fileName" like 'zztw-%${SUF}.xlsx'`) === "0" &&
+    sql(`select count(*) from "SparePart" where "partCode" like '${P}%'`) === "2"
+      ? pass("กดอัปเดตก่อนเลือกยี่ห้อ: แถบเตือน “เลือกยี่ห้อของไฟล์ … ก่อนกดอัปเดต” · ฐานข้อมูลไม่มีประวัติ/อะไหล่เพิ่ม")
+      : fail("กดอัปเดตก่อนเลือกยี่ห้อแล้วไม่เตือน หรือบันทึกไปแล้ว");
+    await chooseBrand(F1, BF1);
+    // ไฟล์ยี่ห้อที่เลือก: รายการที่อยู่ในไฟล์ Spinz ในระบบ แต่ไม่อยู่ใน Excel (Z + ของที่อยู่ในไฟล์นี้อยู่แล้ว เช่นคู่แฝด -SZ)
+    const goneN = sql(`select count(*) from "SparePart" p where not p."offCatalog"
+      and exists (select 1 from "SparePartBrandFile" b where b."sparePartId"=p.id and b.file='${BF1}')
+      and upper(p."partCode") not in ('${P}A','${P}N')`);
+    (await vis(`ไฟล์ยี่ห้อ ${BF1} (เลือกเอง)`).count()) && !(await vis(/^เลือกยี่ห้อของไฟล์ .* ก่อนกดอัปเดต$/, false).count())
+      ? pass(`เลือกยี่ห้อ ${BF1} แล้ว: แถวไฟล์บอก “ไฟล์ยี่ห้อ ${BF1} (เลือกเอง)” · แถบเตือนหาย`)
+      : fail("เลือกยี่ห้อแล้วหน้าตรวจไม่เปลี่ยน");
+    (await vis(new RegExp(`^รหัสที่ยังไม่อยู่ในไฟล์ ${BF1}: 2 รายการ — อัปเดตแล้วช่างเลือกได้กับเครื่อง ${BF1}$`), false).count())
+      ? pass("บอกจำนวนรหัสที่จะเข้าไฟล์ยี่ห้อ (A ที่มีอยู่แล้ว + N ที่จะเพิ่ม = 2)")
+      : fail("ไม่บอกจำนวนรหัสที่จะเข้าไฟล์ยี่ห้อ");
+    (await label("เพิ่มใหม่ 1 รายการ").count()) && (await label("รูปใหม่ / เปลี่ยนรูป 2 รายการ").count()) && (await label(`ไม่อยู่ในไฟล์ ${goneN} รายการ`).count()) && Number(goneN) >= 1
+      ? pass(`กล่องตัวเลข: เพิ่มใหม่ 1 · รูป 2 · ไม่อยู่ในไฟล์ ${goneN} (= อะไหล่ในไฟล์ ${BF1} ที่ไม่อยู่ใน Excel ตามฐานข้อมูล)`)
+      : fail(`ตัวเลขในกล่องไม่ตรง (ไม่อยู่ในไฟล์ควรเป็น ${goneN})`);
     (await vis(`${P}N`, false).count()) && (await page.getByLabel(/^รูปจากไฟล์/).locator("visible=true").count())
       ? pass("แท็บเพิ่มใหม่: เห็นรหัสและรูปย่อจากไฟล์")
       : fail("ไม่เห็นแถวเพิ่มใหม่/รูปย่อ");
@@ -117,9 +168,11 @@ const cleanup = () => {
     await label("มีปัญหา 1 รายการ").click();
     await page.waitForTimeout(500);
     (await vis(/ไม่มีรหัสสินค้า/, false).count()) ? pass("แท็บมีปัญหา: บอกแถวที่ไม่มีรหัสสินค้า") : fail("แท็บมีปัญหาว่าง");
-    await label("ไม่อยู่ในไฟล์ 1 รายการ").click();
+    await label(`ไม่อยู่ในไฟล์ ${goneN} รายการ`).click();
     await page.waitForTimeout(500);
-    (await vis(`${P}Z`, false).count()) ? pass("แท็บไม่อยู่ในไฟล์: บอกอะไหล่ยี่ห้อเดียวกันที่ไม่ได้อยู่ในไฟล์") : fail("แท็บไม่อยู่ในไฟล์ว่าง");
+    (await vis(new RegExp(`^${P}Z · ${BRAND} · อยู่ในไฟล์ ${BF1} ในระบบ ไม่อยู่ในไฟล์ที่เลือก$`), false).count())
+      ? pass(`แท็บไม่อยู่ในไฟล์: บอกอะไหล่ในไฟล์ ${BF1} ที่ไม่อยู่ใน Excel พร้อมชื่อไฟล์ยี่ห้อ`)
+      : fail("แท็บไม่อยู่ในไฟล์ไม่บอก Z / ไม่บอกไฟล์ยี่ห้อ");
 
     const applyText = async () => (await label("อัปเดตอะไหล่").innerText()).trim();
     const before = await applyText();
@@ -146,6 +199,16 @@ const cleanup = () => {
     sql(`select count(*) from "SparePartImport" where "fileName"='${path.basename(F1)}'`) === "1" && sql(`select count(*) from "SparePartImport" where "fileName"='${path.basename(F2)}'`) === "0"
       ? pass("ฐานข้อมูล: บันทึกประวัติเฉพาะไฟล์ที่อัปเดตได้")
       : fail("ประวัติรอบอัปเดตไม่ตรง");
+    // ไฟล์ยี่ห้อ: ทุกรหัสในไฟล์เข้าไฟล์ที่เลือก (รวม A ที่ชื่อไม่เปลี่ยน) · Z ที่หายจาก Excel ยังอยู่ในไฟล์เดิม (เพิ่มอย่างเดียว)
+    const bf1 = brandRows(`${P}%`);
+    bf1 === `${P}A=${BF1}=IMPORT,${P}N=${BF1}=IMPORT,${P}Z=${BF1}=MANUAL`
+      ? pass(`ฐานข้อมูล: A และ N เข้าไฟล์ ${BF1} (IMPORT) · Z ที่ไม่อยู่ใน Excel ไม่ถูกเอาออกจากไฟล์`)
+      : fail(`ไฟล์ยี่ห้อในฐานข้อมูล: ${bf1}`);
+    const imp1 = sql(`select coalesce("brandFile",'-')||'|'||coalesce(summary->>'joined','-') from "SparePartImport" where "fileName"='${path.basename(F1)}'`);
+    imp1 === `${BF1}|2` ? pass(`ฐานข้อมูล: ประวัติอัปเดตจำไฟล์ยี่ห้อ ${BF1} และเข้าไฟล์ใหม่ 2`) : fail(`ประวัติอัปเดต brandFile|joined: ${imp1}`);
+    (await vis(new RegExp(`^เข้าไฟล์ ${BF1} ใหม่ 2 รายการ$`), false).count())
+      ? pass(`รายงานบอก “เข้าไฟล์ ${BF1} ใหม่ 2 รายการ”`)
+      : fail("รายงานไม่บอกจำนวนที่เข้าไฟล์ยี่ห้อ");
 
     const docReq = page.waitForRequest((r) => /\/api\/documents\/[^/?]+\?token=/.test(r.url()), { timeout: 20000 }).catch(() => null);
     const popup = page.waitForEvent("popup", { timeout: 20000 }).catch(() => null);
@@ -189,6 +252,24 @@ const cleanup = () => {
     (await label("เพิ่มใหม่ 3 รายการ").count()) && /อัปเดต 3 รายการ/.test(await applyText())
       ? pass("รหัสใหม่ตัวเดียวอยู่สองไฟล์ นับครั้งเดียว (เพิ่มใหม่ 3 ไม่ใช่ 4)")
       : fail(`นับซ้ำข้ามไฟล์: ${await applyText()}`);
+    // Q1 อยู่ทั้ง FA (Haier) และ FB (Other) — รหัสเดียวอยู่ได้หลายไฟล์ยี่ห้อ จำไว้ทุกไฟล์
+    await chooseBrand(FA, "Haier");
+    await chooseBrand(FB, "Other");
+    await chooseBrand(FC, "Haier");
+    (await vis("ชื่อไฟล์ไม่บอกยี่ห้อ — เลือกยี่ห้อของไฟล์นี้").count()) === 0 && (await vis("ไฟล์ยี่ห้อ Haier (เลือกเอง)").count()) === 2 && (await vis("ไฟล์ยี่ห้อ Other (เลือกเอง)").count()) === 1
+      ? pass("เลือกยี่ห้อครบ 3 ไฟล์ (Haier · Other · Haier)")
+      : fail("เลือกยี่ห้อหลายไฟล์ไม่ครบ");
+    (await vis(/^รหัสที่ยังไม่อยู่ในไฟล์ Other: 2 รายการ — อัปเดตแล้วทุกเครื่องเลือกได้ \(ของใช้ร่วม\)$/, false).count())
+      ? pass("ไฟล์ Other บอกว่าเป็นของใช้ร่วม ทุกเครื่องเลือกได้")
+      : fail("ไฟล์ Other ไม่บอกว่าเป็นของใช้ร่วม");
+    await label("มีปัญหา 1 รายการ").click();
+    await page.waitForTimeout(500);
+    const dupRe = new RegExp(
+      `^อยู่ในหลายไฟล์ \\(zztw-a-${SUF}\\.xlsx \\(Haier\\), zztw-b-${SUF}\\.xlsx \\(Other\\)\\) — จำไว้ทุกไฟล์ ช่างเลือกได้จากทุกไฟล์ที่มีรหัสนี้ · ชื่อ/Part No\\. ใช้ค่าจากไฟล์หลัง \\(ช่องว่างใช้ค่าจากไฟล์ก่อน\\)$`
+    );
+    (await vis(dupRe, false).count()) && (await vis("หลายไฟล์").count())
+      ? pass("รหัสซ้ำข้ามไฟล์: บอกว่าจำไว้ทุกไฟล์ยี่ห้อ ชื่อ/Part No. ใช้ไฟล์หลัง (ป้าย “หลายไฟล์” ไม่ใช่ปัญหา)")
+      : fail("ข้อความรหัสซ้ำข้ามไฟล์ไม่ตรง");
     // ไฟล์ที่สองพังตอนอัปเดต — ดักคำขอที่มีชื่อไฟล์นั้นพร้อม apply
     await page.route("**/api/spare-parts/import", (route) => {
       const body = route.request().postDataBuffer()?.toString("latin1") ?? "";
@@ -204,9 +285,10 @@ const cleanup = () => {
     (await vis(`${path.basename(FC)} — ไม่ได้อัปเดต: หยุดก่อนถึงไฟล์นี้`, false).count())
       ? pass("หยุดกลางทาง: รายงานบอกไฟล์ที่พัง และไฟล์ที่ยังไม่ถึง")
       : fail("รายงานไม่บอกไฟล์ที่ยังไม่ได้อัปเดต");
-    sql(`select string_agg("partCode", ',' order by "partCode") from "SparePart" where "partCode" like '${P}Q%'`) === `${P}Q1`
-      ? pass("ฐานข้อมูล: อัปเดตแค่ไฟล์แรก ไฟล์ที่พัง/ยังไม่ถึงไม่ได้บันทึก")
-      : fail(`ฐานข้อมูลหลังหยุดกลางทาง: ${sql(`select string_agg("partCode", ',') from "SparePart" where "partCode" like '${P}Q%'`)}`);
+    sql(`select string_agg("partCode", ',' order by "partCode") from "SparePart" where "partCode" like '${P}Q%'`) === `${P}Q1` &&
+    brandRows(`${P}Q%`) === `${P}Q1=Haier=IMPORT`
+      ? pass("ฐานข้อมูล: อัปเดตแค่ไฟล์แรก (Q1 เข้าไฟล์ Haier) ไฟล์ที่พัง/ยังไม่ถึงไม่ได้บันทึก")
+      : fail(`ฐานข้อมูลหลังหยุดกลางทาง: ${sql(`select string_agg("partCode", ',') from "SparePart" where "partCode" like '${P}Q%'`)} / ${brandRows(`${P}Q%`)}`);
     await page.screenshot({ path: path.join(__dirname, "spare-import-6-partial.png") });
     await page.unroute("**/api/spare-parts/import");
     await label("ตรวจไฟล์ที่ยังไม่ได้อัปเดต").click();
@@ -215,12 +297,19 @@ const cleanup = () => {
     (await vis(/^2 ไฟล์ ·/, false).count()) && (await label("เพิ่มใหม่ 2 รายการ").count()) && (await label("แก้ไข 1 รายการ").count())
       ? pass("ตรวจไฟล์ที่เหลือ: เหลือ 2 ไฟล์ (Q1 มีแล้ว = แก้ไข · Q2 Q3 = เพิ่ม)")
       : fail("ตรวจไฟล์ที่เหลือไม่ตรง");
+    (await vis("ไฟล์ยี่ห้อ Other (เลือกเอง)").count()) === 1 && (await vis("ไฟล์ยี่ห้อ Haier (เลือกเอง)").count()) === 1 && !(await vis("ชื่อไฟล์ไม่บอกยี่ห้อ — เลือกยี่ห้อของไฟล์นี้").count())
+      ? pass("ตรวจไฟล์ที่เหลือ: จำยี่ห้อที่เลือกไว้ ไม่ต้องเลือกซ้ำ")
+      : fail("ตรวจไฟล์ที่เหลือแล้วยี่ห้อที่เลือกไว้หาย");
     await label("อัปเดตอะไหล่").click();
     await vis(/^อัปเดตข้อมูลอะไหล่แล้ว \d+ รายการ$/, false).waitFor({ timeout: 60000 });
     sql(`select string_agg("partCode"||'='||name, ',' order by "partCode") from "SparePart" where "partCode" like '${P}Q%'`) ===
     `${P}Q1=ใหม่หนึ่งทดสอบเว็บ (ไฟล์หลัง),${P}Q2=ใหม่สองทดสอบเว็บ,${P}Q3=ใหม่สามทดสอบเว็บ`
       ? pass("ฐานข้อมูล: อัปเดตไฟล์ที่เหลือครบ (รหัสซ้ำได้ค่าจากไฟล์หลัง)")
       : fail("อัปเดตไฟล์ที่เหลือไม่ครบ");
+    const bfQ = brandRows(`${P}Q%`);
+    bfQ === `${P}Q1=Haier=IMPORT,${P}Q1=Other=IMPORT,${P}Q2=Other=IMPORT,${P}Q3=Haier=IMPORT`
+      ? pass("ฐานข้อมูล: Q1 อยู่ทั้งไฟล์ Haier และ Other (ไฟล์หลังไม่ทับไฟล์แรก) · Q2 = Other · Q3 = Haier")
+      : fail(`ไฟล์ยี่ห้อหลายไฟล์: ${bfQ}`);
     await label("กลับไปหน้าข้อมูลอะไหล่").click();
     await page.waitForTimeout(1000);
 
@@ -288,6 +377,8 @@ const cleanup = () => {
       ? pass(`ไฟล์ 200 MB ตรวจได้ — เบราว์เซอร์ย่อรูป + แปลง PNG เป็น JPEG ก่อนส่ง (${(shrinkNote.match(/ย่อรูปใหญ่[^)]*\)/) || [""])[0]})`)
       : fail(`ไฟล์ใหญ่: ${(await page.locator("body").innerText()).slice(0, 300)}`);
     await page.screenshot({ path: path.join(__dirname, "spare-import-7-big.png") });
+    // เลือกยี่ห้อ = ส่งไฟล์ที่ย่อแล้วไปตรวจใหม่ (ไม่ย่อซ้ำ) — ไฟล์ใหญ่ใช้เวลาเท่ารอบตรวจ
+    await chooseBrand(FBIG, "Maytag", 300000);
     await label("อัปเดตอะไหล่").click();
     await vis(/^อัปเดตข้อมูลอะไหล่แล้ว \d+ รายการ$/, false).waitFor({ timeout: 300000 });
     const g0 = sql(`select length(i.data)||'|'||i."mimeType"||'|'||coalesce(i."sourceHash",'') from "SparePartImage" i join "SparePart" p on p.id=i."sparePartId" where p."partCode"='${P}G0'`).split("|");
@@ -295,6 +386,8 @@ const cleanup = () => {
     Number(g0[0]) < shot0 / 5 && g0[1] === "image/jpeg" && g0[2] === bigMd5._sha.A2
       ? pass(`ฐานข้อมูล: รูปครบ ${BIG_N} รูป PNG ${(shot0 / 1048576).toFixed(1)} MB → JPEG ${(Number(g0[0]) / 1048576).toFixed(1)} MB · เก็บค่ารูปต้นฉบับ`)
       : fail(`รูปจากไฟล์ใหญ่: ${g0.join(" | ")} ต้นฉบับ ${shot0}`);
+    const bigFiles = sql(`select count(*) from "SparePartBrandFile" b join "SparePart" p on p.id=b."sparePartId" where p."partCode" like '${P}G%' and b.file='Maytag'`);
+    bigFiles === String(BIG_N) ? pass(`ฐานข้อมูล: ไฟล์ใหญ่ ${BIG_N} รหัสเข้าไฟล์ Maytag ที่เลือก`) : fail(`ไฟล์ใหญ่เข้าไฟล์ยี่ห้อ ${bigFiles}/${BIG_N}`);
     await label("กลับไปหน้าข้อมูลอะไหล่").click();
     await page.waitForTimeout(1000);
     // เลือกไฟล์เดิมอีกรอบ — ย่อใหม่ได้ไบต์ไม่ตรงเดิมก็ได้ แต่ต้นฉบับเดิม = ไม่มีอะไรเปลี่ยน
@@ -326,6 +419,25 @@ const cleanup = () => {
       : fail(`ย่อหลายรอบ: ${manyNote || (await page.locator("body").innerText()).slice(0, 300)}`);
     await closeImport();
     require("fs").rmSync(FMANY, { force: true });
+
+    // ── อัปไฟล์เดิมซ้ำ ไม่มีช่องไหนเปลี่ยน แต่รหัสอยู่ในไฟล์ยี่ห้อจากการเดาตอนขึ้นระบบ (SEED) ──
+    // หลังเปิดใช้แอดมินอัปครบ 6 ไฟล์อีกรอบ — ปุ่มต้องกดได้ (ยืนยัน) ไม่ใช่ "ไม่มีอะไรต้องอัปเดต" ไม่งั้นแถว SEED ค้าง
+    sql(`update "SparePartBrandFile" set source='SEED' where file='Haier' and "sparePartId"=(select id from "SparePart" where "partCode"='${P}Q3')`);
+    await pickFile(FC);
+    await chooseBrand(FC, "Haier");
+    const confirmText = await applyText();
+    confirmText === "อัปเดต — ยืนยันรหัสในไฟล์ยี่ห้อ 1 รายการ" &&
+    (await vis(/^รหัสที่ไฟล์นี้ยืนยันว่าอยู่ในไฟล์ Haier: 1 รายการ/, false).count()) &&
+    brandRows(`${P}Q3`) === `${P}Q3=Haier=SEED`
+      ? pass("ไฟล์ที่ตรงฐานข้อมูลทุกช่องแต่รหัสเป็น SEED: ปุ่ม “อัปเดต — ยืนยันรหัสในไฟล์ยี่ห้อ 1 รายการ” · แถวไฟล์บอกจำนวนที่ยืนยัน · ตรวจยังไม่เปลี่ยนฐานข้อมูล")
+      : fail(`ปุ่มตอนมีแค่รหัสที่ต้องยืนยัน: ${confirmText} · ${brandRows(`${P}Q3`)}`);
+    await label("อัปเดตอะไหล่").click();
+    await vis(/^อัปเดตข้อมูลอะไหล่แล้ว \d+ รายการ$/, false).waitFor({ timeout: 60000 });
+    brandRows(`${P}Q3`) === `${P}Q3=Haier=IMPORT` && (await vis(/^ยืนยันรหัสในไฟล์ Haier 1 รายการ/, false).count())
+      ? pass("ฐานข้อมูล: กดยืนยันแล้ว Q3 ไฟล์ Haier เป็น IMPORT · รายงานบอก “ยืนยันรหัสในไฟล์ Haier 1 รายการ”")
+      : fail(`ยืนยัน SEED: ${brandRows(`${P}Q3`)}`);
+    await label("กลับไปหน้าข้อมูลอะไหล่").click();
+    await page.waitForTimeout(1000);
 
     // หน้ารายการอะไหล่ (ช่างใช้) — รูปต้องมีตัวกันแคช รูปถูกแทนจากไฟล์แล้วเห็นรูปใหม่ทันที
     await vis("รายการอะไหล่").first().click();
