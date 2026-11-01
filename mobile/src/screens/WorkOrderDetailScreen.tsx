@@ -5,10 +5,11 @@
  * หน้านี้จึงเตือนตรงๆ ตอนปิดว่าเครื่องยังไม่กลับมา ไม่ใช่ปล่อยให้เข้าใจผิด
  * ว่ากดปิดแล้วจบ
  */
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { machineTag } from "../utils/machine";
 import { splitFormDetail } from "../utils/formLinks";
 import {
+  Animated,
   Image,
   Platform,
   ScrollView,
@@ -28,7 +29,7 @@ import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
+import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, { PickedPart } from "../components/PartPicker";
@@ -47,11 +48,54 @@ import { AdminReplyModal, AdminReviewBox, ackAdminReview, cancelAdminReview, typ
 import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
 import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
+import { clearCloseDraft, closeDraftSaver, loadCloseDraft, SKIP_REASONS, skipText, type ClaimPartDraft, type ClaimSkip, type CloseDraft, type SkipReason } from "../utils/closeDraft";
+import ClaimFileSlot, { slotKey, useClaimUploads } from "../components/claims/ClaimFileSlot";
+import PreRepairBox from "../components/claims/PreRepairBox";
+import CloseStepper, { PartTabs, type StepInfo } from "../components/close/CloseStepper";
+import MachineStep from "../components/close/MachineStep";
+import PartClaimStep, { type TroubleshootingHint } from "../components/close/PartClaimStep";
+import SendStep, { type SendRow } from "../components/close/SendStep";
+import WorkFiles from "../components/close/WorkFiles";
+import { plateGaps, plateItemCount } from "../components/close/PlateConfirm";
+import { NO_ERROR_CODE } from "../utils/claimErrors";
+import { readPlatePhoto } from "../utils/ocr";
+import RejectedBanner from "../components/claims/RejectedBanner";
+import FixList, { buildFixItems, unresolvedOf } from "../components/claims/FixList";
+import { PART_FLAGS, partFlagsOf, rejectLinesOf, WHOLE_ORDER_PART, type ServerFlag } from "../utils/claimFlags";
+import ClaimReview from "../components/claims/ClaimReview";
+import DecisionBar, { ReviewDone } from "../components/claims/DecisionBar";
+import DownloadPanel from "../components/claims/DownloadPanel";
+import { useClaimVerdicts, type ReviewOutcome } from "../components/claims/useClaimVerdicts";
+// ใครตรวจ/ตัดสินเคลมได้ — กติกาเดียวกับกล่องงานตรวจเคลมและเมนู (utils/claimQueue)
+import { canDecideClaims, canReviewClaims, refreshClaimQueueCount } from "../utils/claimQueue";
+import ClaimTrail from "../components/claims/ClaimTrail";
+import CheckGroups from "../components/claims/CheckGroups";
+import {
+  brokenMatches,
+  errorVideoLabel,
+  checkGroupsOf,
+  claimRoundOf,
+  claimTrailOf,
+  daysSince,
+  evidenceOf,
+  isNewThisRound,
+  oldRoundsLabel,
+  oldRoundsOf,
+  previousOf,
+  roundOf,
+  isLockedStatus,
+  rejectedRowsOf,
+  roundPartsOf,
+  type ClaimKeep,
+  type ClaimRepeat,
+  type ClaimRound,
+  type PartClaim,
+} from "../utils/claimEvidence";
 import { takeFresh } from "../utils/freshOrder";
-import ClaimMachineBox, { ClaimCheckDraft, claimMachineGaps, ClaimMachineSummary, PlateDraft } from "../components/ClaimMachineBox";
+import { ClaimCheckDraft, ClaimMachineSummary, PlateDraft } from "../components/ClaimMachineBox";
 import { ClaimHistoryLinks } from "../components/ClaimHistoryEntry";
 import { BranchPartsLinks } from "../components/BranchPartsEntry";
-import type { ClaimGuide } from "../utils/nameplate";
+import { isBrandOnly, plateFields, type ClaimGuide, type PlateValue } from "../utils/nameplate";
 import {
   AcceptKinds,
   PickedAttachment,
@@ -73,10 +117,42 @@ import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { formatDate, formatDateTime, statusTone } from "./WorkOrderListScreen";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { feedback } from "../components/Feedback";
-import { anyModalOpen, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
+import { anyModalOpen, notifyWorkOrderStale, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
 import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo, type StepState } from "../utils/stepPath";
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 import { techPickHint } from "../utils/teams";
+import { navigationRef } from "../navigation/navigationRef";
+import {
+  AskPendingBox,
+  declineLabel,
+  FormWarningLine,
+  LiveReleaseChip,
+  LOCK_BUTTONS,
+  LOCK_NOTE_LABEL,
+  LOCK_NOTE_REQUIRED,
+  LockActions,
+  LockBox,
+  ReleaseDeadlineBox,
+  UrgentNoteBox,
+  UrgentReleaseModal,
+  UrgentWithCheckbox,
+} from "../components/DispatchCutoff";
+import {
+  dateFormWarning,
+  declinedText,
+  firstOpenDay,
+  releasedText,
+  releaseView,
+  rescheduledText,
+  RELEASE_STAGES,
+  serverDay,
+  useServerClock,
+  useServerNowFn,
+  type BannerRow,
+  type Cutoff,
+  type Release,
+  type UrgentInfo,
+} from "../utils/dispatchCutoff";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderDetail">;
 
@@ -179,6 +255,8 @@ interface WorkOrder {
   createdAt: string;
   closedAt: string | null;
   closedByName: string | null;
+  /** คนที่กดปิดงาน — ฟอร์มปิดงานใช้ดูว่าคำสั่งปิดที่คำตอบหายไปกลางทางผ่านไปแล้วหรือยัง (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+  closedById?: number | null;
   closeResult?: string | null;
   closeResultLabel: string | null;
   closeNote: string | null;
@@ -193,8 +271,11 @@ interface WorkOrder {
   jobTypeLabel: string;
   needsParts: boolean | null;
   stageActor: string | null;
-  /** หัวหน้าภาคที่รับผิดชอบใบนี้ (ทีมมาก่อนภาค) — ว่าง = ไม่มีคนรับ */
-  supervisors?: { id: number; name: string }[];
+  /**
+   * หัวหน้าภาคที่รับผิดชอบใบนี้ (ทีมมาก่อนภาค) — ว่าง = ไม่มีคนรับ
+   * phone มีเฉพาะ GET ใบงานของแอดมิน (หน้าต่างแก้เป็นงานด่วน: "ยังไม่ได้บอก — โทรถาม <ชื่อ> <เบอร์>") · ก้อนที่ปุ่มบันทึกคืนมาไม่มี
+   */
+  supervisors?: { id: number; name: string; phone?: string | null }[];
   /**
    * จ่ายข้ามทีม (เจ้าของงานขอ ต.ค. 69) — ทีมที่รับไม่ใช่ทีมประจำสาขา · ช่างปิดงานได้ทั้งสองทีม
    * watchers = หัวหน้าภาคของทีมที่รับ เห็นใบแต่ดูได้อย่างเดียว
@@ -248,62 +329,70 @@ interface WorkOrder {
   logs: LogEntry[];
   /** ใบเคลมอะไหล่เก่าทุกรอบ ใหม่สุดก่อน */
   claims: PartClaim[];
-  /** หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ — ถูกตีกลับแล้วปิดใหม่ ไม่ต้องแนบซ้ำ */
-  claimEvidence: { sparePartId: number | null; role: string }[];
+  /**
+   * สถานะเคลมทีละชิ้นของงานซ่อมครั้งนี้ (เคลมก้อน 3) — ที่เดียวที่บอกว่า "ใบนี้อยู่ในรอบที่ถูกตีกลับไหม · ชิ้นไหนล็อกแล้ว"
+   * ห้ามอ่าน claims[0] แทน: ตัดสินทีละชิ้นแล้วแถวบนสุดอาจเป็นชิ้นที่ผ่าน ทั้งที่อีกชิ้นถูกตีกลับ (อ่านผ่าน claimRoundOf)
+   */
+  claimRound?: ClaimRound | null;
+  /**
+   * หลักฐานเคลมที่แนบไว้แล้วในรอบนี้ — ถูกตีกลับแล้วปิดใหม่ ไม่ต้องแนบซ้ำ
+   * id/createdAt (เคลมก้อน 1): ช่องไฟล์ในฟอร์มปิดงานหารูปย่อของไฟล์นั้นได้ตรงตัว · เซิร์ฟเวอร์รุ่นเก่าส่งแค่ชิ้น+ชนิด
+   */
+  claimEvidence: { id?: number; sparePartId: number | null; role: string; createdAt?: string; createdById?: number | null }[];
   /** Troubleshooting ที่ยี่ห้อเครื่องใบนี้ต้องทำก่อนเคลม — ว่าง = ไม่บังคับ */
   claimTroubleshooting: string[];
+  /** ข้อ Troubleshooting ที่หลักฐานในใบตอบได้แล้ว (เคลมก้อน 5) — ฟอร์มต่อท้าย "(มี… แล้ว)" ไม่ติ๊กให้ */
+  claimTroubleshootingHints?: Record<string, TroubleshootingHint>;
+  /** ชนิดเครื่อง (WASHER/DRYER) — ฟอร์มบอกว่ารายการ Error กรองตามชนิดเครื่อง */
+  machineType?: string | null;
+  /** วิดีโอ Error/รูปอาการที่ถ่ายในกล่อง "ถ่ายก่อนซ่อม" ของรอบนี้ (ไม่ผูกชิ้น · นับเป็นรูปก่อนซ่อมด้วย — รวมอยู่ใน beforeCount) */
+  preRepairCount?: number;
+  /**
+   * ชิ้นในประกันที่ช่างไม่ส่งเคลมตอนปิดงานครั้งล่าสุดของรอบนี้ (เคลมก้อน 5 · ประวัติ CLAIM_SKIPPED)
+   * หน้าตรวจขึ้น "ช่างไม่ส่งเคลม: {ชิ้น} ({เหตุผล})" · reasonCode null = ทางปิดที่ไม่ได้ถามเหตุผล
+   */
+  claimSkips?: {
+    sparePartId: number | null;
+    partCode: string;
+    partLabel: string;
+    reasonCode: string | null;
+    reason: string;
+    note: string | null;
+    by: string | null;
+  }[];
+  /** รุ่นจากใบเคลมที่อนุมัติล่าสุดของเครื่องนี้ — ตัวเทียบตอนอ่านป้าย (ทะเบียนส่วนใหญ่มีแค่ยี่ห้อ) */
+  claimApprovedModel?: string | null;
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — นาฬิกาเซิร์ฟเวอร์ตอนตอบ + เวลาปิดรับที่ใช้คิด
+   * ฟอร์มปล่อยงานนับถอยหลังและพลิกเป็นล็อกเองจากค่านี้ ไม่ใช้นาฬิกามือถือ (ข้อ 12) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง
+   */
+  serverNow?: string;
+  cutoff?: Cutoff;
+  /** วันนัดที่แอดมินแก้เป็นงานด่วนให้ "YYYY-MM-DD" — ใช้ได้เฉพาะวันนัดนี้ (เลื่อนวันแล้วหมดผลเอง) */
+  urgentReleaseFor?: string | null;
+  /** สถานะเวลาปิดรับของใบขั้นปล่อยงาน (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) — ขั้นอื่น/ใบทดสอบ/ไม่มีวันนัด = null */
+  release?: Release | null;
+  /** งานด่วนที่ใช้อยู่ (หรือเพิ่งหมดอายุ): ใคร เมื่อไร ทางไหน เหตุผลอะไร — กล่องเขียวในฟอร์มปล่อยงาน */
+  urgentInfo?: UrgentInfo | null;
   /** แบบป้ายรุ่น + รายการเช็คตามคู่มือของยี่ห้อนี้ (backend/src/utils/claimGuide.ts) */
   claimGuide?: ClaimGuide;
+  /** ใบเคลมเก่าของเครื่องเดียวกัน (บรรทัดเคลมซ้ำในหน้าตรวจเคลม) — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน คนอื่นไม่มีค่านี้ */
+  claimRepeats?: ClaimRepeat[];
+  /** คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่องของการส่งครั้งล่าสุด (เคลมก้อน 4 · meta.keep ของประวัติ CLAIM_SUBMITTED) */
+  claimKeep?: ClaimKeep[];
+  /**
+   * ช่องที่ Admin Spare Part ติ๊กให้แก้ได้กับเครื่องใบนี้ พร้อมชื่อที่ใช้จริง (เคลมก้อน 4 · เซิร์ฟเวอร์คิดจากแบบป้ายของยี่ห้อ)
+   * แผงตีกลับแสดงตามนี้ — Oasis ไม่มี Serial/Error ให้ติ๊ก · ชื่อวิดีโอ Error ตามเครื่อง
+   */
+  claimReviewFlags?: ServerFlag[];
 }
-
-interface PartClaim {
-  id: number;
-  sparePartId: number;
-  partCode: string;
-  partName: string;
-  /** รหัสตัวที่เสียที่ส่งเคลม (ช่างกรอก) — ว่างเฉพาะใบเก่า */
-  brokenPartCode: string | null;
-  quantity: number;
-  brand: string | null;
-  model: string | null;
-  machineCode: string | null;
-  symptom: string;
-  checkNote: string;
-  troubleshooting: string[];
-  /** ข้อมูลป้ายรุ่นที่สแกน/พิมพ์ — ใบเก่าก่อน ต.ค. 69 ว่าง */
-  nameplate?: {
-    family: string;
-    /** ไฟล์ป้ายรุ่น (รูปเต็ม) ของรอบที่ส่งเคลมนี้ */
-    photoId?: number | null;
-    verified?: boolean;
-    fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[];
-  } | null;
-  /** เช็คตามคู่มือ Error in Field — ยี่ห้อที่ไม่มีคู่มือว่าง */
-  fieldCheck?: {
-    errorCode: string;
-    errorName: string;
-    checked: string[];
-    /** เช็คลิสต์การติดตั้งฐานเครื่อง — มีเฉพาะใบเคลมก่อน ต.ค. 69 ที่ยังถามอยู่ */
-    install?: { key: string; label: string; note: string; answer: boolean }[];
-  } | null;
-  status: "PENDING" | "APPROVED" | "REJECTED";
-  rejectReason: string | null;
-  createdAt: string;
-  reviewedAt: string | null;
-}
-
-/** หลักฐานของฟอร์มเคลม — ลำดับและชื่อตามหัวข้อในฟอร์มของผู้ขาย (รูป Nameplate ใช้ป้ายรุ่นที่ถ่ายตอนปิดงาน) */
-const CLAIM_EVIDENCE: { role: string; label: string; video: boolean }[] = [
-  { role: "CLAIM_PART", label: "รูปอะไหล่เก่า", video: false },
-  { role: "CLAIM_SYMPTOM", label: "รูปอาการเสีย", video: false },
-  { role: "CLAIM_ERROR_VIDEO", label: "วิดีโอ Error code", video: true },
-  { role: "CLAIM_CHECK_VIDEO", label: "วิดีโอการตรวจเช็ค", video: true },
-];
 
 const CLAIM_STATUS: Record<PartClaim["status"], { label: string; fg: string; bg: string }> = {
   PENDING: { label: "รอตรวจ", fg: colors.warningInk, bg: colors.warningSoft },
   APPROVED: { label: "อนุมัติแล้ว", fg: colors.success, bg: colors.successSoft },
   REJECTED: { label: "ตีกลับ", fg: colors.dangerInk, bg: colors.dangerSoft },
+  // ผู้ตรวจปิดชิ้นนี้ไม่ส่งผู้ขาย (เคลมก้อน 3) — เทา ไม่ใช่แดง: ไม่มีอะไรให้ช่างแก้ และไม่ใช่การอนุมัติ
+  DECLINED: { label: "ปิดเคลม ไม่ส่งผู้ขาย", fg: colors.textMuted, bg: colors.rowAlt },
 };
 
 interface Team {
@@ -418,6 +507,85 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   ASSIGNED: { label: "รับทราบ ปล่อยงาน", icon: "checkmark-circle-outline" },
 };
 
+/**
+ * ปุ่มของแอดมินบนใบขั้นปล่อยงาน (เวลาปิดรับ ต.ค. 69) — "stage" = ปุ่มขั้นปกติ · "urgent" = แก้เป็นงานด่วน · "none" = ไม่มีปุ่มหลัก
+ * ใบที่ล็อกแล้ว ปุ่มปล่อยงานกดไปก็ได้แค่กล่องแดง (กฎใช้กับแอดมินด้วย — ข้อ 10) สิ่งที่แอดมินทำได้จริงคือปลดล็อกให้ใบนี้
+ * วันนัดผ่านไปแล้ว (รวมงานด่วนที่หมดอายุ) แก้เป็นงานด่วนไม่ได้ — เหลือแค่ปุ่มเลื่อนวันนัดที่อยู่ข้างกันอยู่แล้ว
+ * now = นาฬิกาเซิร์ฟเวอร์ (ปุ่มพลิกตอนถึงเวลาปิดรับเอง ไม่ต้องรอโหลดใบใหม่)
+ */
+function adminReleaseMode(o: WorkOrder, now: number): "stage" | "urgent" | "none" {
+  const v = RELEASE_STAGES.includes(o.status) ? releaseView(o, now, o.cutoff) : null;
+  if (!v?.locked) return "stage";
+  return v.past ? "none" : "urgent";
+}
+
+/**
+ * ข้อความปุ่มหลักของขั้นปัจจุบัน — ที่เดียว ฟีเจอร์ที่ตามมาเติมกิ่งของตัวเองที่นี่ (integration S12)
+ * release = "urgent" คือแอดมินกับใบที่ล็อก (adminReleaseMode) — ปุ่มเปิดหน้าต่างแก้เป็นงานด่วน ไม่ใช่ฟอร์มปล่อยงาน
+ */
+function stageButtonLabel(o: WorkOrder, opts: { partsOut: number; release?: "stage" | "urgent" | "none" }): string {
+  if (opts.release === "urgent") return "แก้เป็นงานด่วน";
+  // ของหมดอยู่ = สิ่งที่แอดมินรอทำคือบอกว่าของมาแล้ว ไม่ใช่ "เช็คคลัง" เหมือนรอบแรก
+  if (opts.partsOut && o.status !== "WAITING_PARTS") return "อะไหล่มาแล้ว — อัปเดตสถานะ";
+  if (rescheduledPending(o)) return "คอนเฟิร์มวันใหม่";
+  return STAGE_BUTTON[o.status]?.label ?? "ทำขั้นนี้";
+}
+
+/**
+ * ปุ่มหลักของขั้นปัจจุบันในการ์ดขั้น — แยกเป็นชิ้นที่เดินนาฬิกาเอง เฉพาะแอดมินกับใบขั้นปล่อยงาน
+ * หน้าใบงานไม่วาดใหม่ทั้งหน้าตามเวลา ถ้าคิดปุ่มที่ระดับหน้า ปุ่ม "รับทราบ ปล่อยงาน" จะค้างอยู่หลัง 16:00 จนกว่ามีอะไรให้หน้าวาดใหม่
+ */
+function StagePrimaryButton({
+  order,
+  partsOut,
+  adminRelease,
+  busy,
+  onStage,
+  onUrgent,
+}: {
+  order: WorkOrder;
+  partsOut: number;
+  /**
+   * แอดมิน (ไม่ใช่ดูในฐานะ/ดูอย่างเดียว) กับใบขั้นปล่อยงานที่อยู่ใต้กฎ — เปิดนาฬิกาของปุ่ม
+   * เช็คด้วย canMoveDates ชุดเดียวกับปุ่มเลื่อนวันนัดและการ์ดงานของฉันวันนี้ — ดูในฐานะแอดมินแล้วเห็นปุ่มด่วนที่กดไปเจอ 403 ดูเหมือนปุ่มเสีย
+   */
+  adminRelease: boolean;
+  busy: boolean;
+  onStage: () => void;
+  onUrgent: () => void;
+}) {
+  const now = useServerClock(order.serverNow, order.cutoff?.time, adminRelease);
+  const mode = adminRelease ? adminReleaseMode(order, now) : "stage";
+  if (mode === "none") return null;
+  const urgent = mode === "urgent";
+  const label = stageButtonLabel(order, { partsOut, release: mode });
+  return (
+    <TouchableOpacity
+      style={[styles.action, styles.actionPrimary]}
+      onPress={urgent ? onUrgent : onStage}
+      disabled={busy}
+      activeOpacity={0.8}
+      accessibilityLabel={label}
+    >
+      <Ionicons name={urgent ? "lock-open-outline" : STAGE_BUTTON[order.status]?.icon ?? "arrow-forward-circle"} size={18} color="#fff" />
+      <Text style={styles.actionPrimaryText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * ใบงานในรูปแถวที่หน้าต่าง "แก้เป็นงานด่วน" อ่าน (ชิ้นเดียวกับที่งานของฉันวันนี้ใช้)
+ * เบอร์หัวหน้าภาคมากับ GET ใบงานของแอดมินเท่านั้น — ใบที่เพิ่งโหลดจากก้อนของปุ่มบันทึกไม่มีเบอร์ กล่อง "ยังไม่ได้บอก" ขึ้นชื่ออย่างเดียว
+ * ไม่มีหัวหน้าภาคเลย = ไม่มีคนรับ ไม่มีกล่องถาม (ไม่มีใครให้ถาม)
+ */
+function urgentRowOf(o: WorkOrder): BannerRow {
+  return {
+    ...o,
+    orphan: o.supervisors ? o.supervisors.length === 0 : false,
+    waitingOnSupervisors: (o.supervisors ?? []).map((s) => ({ name: s.name, phone: s.phone ?? null })),
+  };
+}
+
 /** "9 ต.ค. 69 · 10:00 น." — วันนัดเก็บเป็นเที่ยงคืน UTC จึงตัดเอาแค่วันตรง ๆ */
 function visitLabel(o: { scheduledAt: string | null; scheduledTime: string | null }) {
   if (!o.scheduledAt) return "—";
@@ -441,6 +609,13 @@ const NOT_A_MOVE = [
   "ADMIN_REVIEW_REQUESTED",
   "ADMIN_REVIEW_CANCELLED",
   "ADMIN_REVIEW_ANSWERED",
+  // ไม่ส่งเคลมชิ้นที่อยู่ในประกัน (เคลมก้อน 5) — บันทึกคู่กับการปิดงาน ตัวปิดงานคือการเดินขั้น ไม่ใช่แถวนี้
+  "CLAIM_SKIPPED",
+  // เวลาปิดรับปล่อยงาน: แอดมินแก้เป็นงานด่วน / หัวหน้าภาคขอ / ยกเลิกคำขอ — ใบอยู่ขั้นเดิม (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  // ไม่งั้นแอดมินปลดล็อกใบที่ช่างเพิ่งส่งกลับ แล้วกล่อง "ช่างแจ้งปัญหา" หายทั้งที่ยังไม่มีใครแก้
+  "URGENT_RELEASE",
+  "URGENT_REQUESTED",
+  "URGENT_REQUEST_CANCELLED",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
@@ -483,7 +658,10 @@ function rescheduledPending(o: WorkOrder) {
   return pendingMove(o) !== null;
 }
 
-/** หัวหน้าภาคส่งกลับเพราะทีมไม่ว่างวันใหม่ — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่ (งานซ่อม · นัดตรวจหน้างาน) */
+/**
+ * หัวหน้าภาคส่งกลับเพราะทีมไม่ว่าง (วันที่ถูกเลื่อน หรือใบที่ล็อกเพราะเลยเวลาปิดรับ) — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่
+ * (งานซ่อม · นัดตรวจหน้างาน)
+ */
 function declinedNewDate(o: WorkOrder): LogEntry | null {
   if (o.status !== "AWAITING_CONFIRM" && o.status !== "INSPECT_CONFIRM") return null;
   const last = [...o.logs]
@@ -597,11 +775,6 @@ function ourTeamOrder(
   return inMyTeam(u, o.assignedTeam) || (!!o.crossTeam && inMyTeam(u, o.crossTeam.ownTeam));
 }
 
-/** ตรวจเคลมได้เฉพาะ Admin Spare Part (Super Admin ทำแทนได้) — ตรงกับ canReviewClaims ฝั่งเซิร์ฟเวอร์ */
-function canReviewClaims(u: { partsAdmin?: boolean; superAdmin?: boolean } | null) {
-  return !!u && (!!u.partsAdmin || !!u.superAdmin);
-}
-
 /**
  * ตัวเลือกทีมตอนจ่ายงาน — ทีม outsource ใช้ชื่อทีมเหมือนทีมอื่น แต่แยกไว้กลุ่มของตัวเองท้ายรายการ
  * (เจ้าของงานขอ ต.ค. 69: ไม่อยากเห็นป้าย "outsource" ต่อชื่อ แต่ต้องไม่ปนกับทีมช่างปกติ)
@@ -696,12 +869,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [etaOpen, setEtaOpen] = useState(false);
   // แอดมินเลื่อนวันนัด (ต.ค. 69) — ทุกขั้นที่เลื่อนได้ รวมขั้นคอนเฟิร์มลูกค้า (ใบอยู่ขั้นเดิม ไม่ใช่การคอนเฟิร์ม)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  // แอดมินแก้เป็นงานด่วน (เวลาปิดรับ ต.ค. 69) — หน้าต่างของตัวเอง ไม่เปิดจากในฟอร์มขั้น (Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ)
+  const [urgentOpen, setUrgentOpen] = useState(false);
   const [rescheduleStages, setRescheduleStages] = useState<string[]>(RESCHEDULE_STAGES);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  /**
+   * หน้าตรวจเคลม: รายละเอียดใบงานที่เหลือ (ขั้นตอน ผลการทำงาน ไฟล์ ประวัติ) พับไว้ใต้หน้าตรวจ
+   * ผู้ตรวจมาเพื่อตัดสินเคลม ไม่ใช่อ่านใบงานทั้งใบ — เปิดดูได้เมื่ออยากรู้ (ตัวอย่างที่เจ้าของงานเลือก)
+   */
+  const [claimDetailOpen, setClaimDetailOpen] = useState(false);
   /**
    * เปิดมาจากหน้า "งานของฉันวันนี้" ของช่าง — ปุ่มใหญ่ที่นั่นพามาเปิดฟอร์มให้เลย (ปิดงาน / ผลตรวจ / แจ้งปัญหา)
    * ช่างกดครั้งเดียวถึงฟอร์ม ไม่ต้องเปิดใบงานแล้วหาปุ่มอีกรอบ · เปิดครั้งเดียวต่อการเข้าหน้า
@@ -737,6 +917,44 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   // รายการไฟล์ที่การ์ดไฟล์แนบโหลดมาแล้ว — ยืมมาใช้ต่อในการ์ดผลการทำงาน
   // จะได้ไม่ต้องยิงขอรายการเดิมซ้ำอีกรอบ (รูปย่อเป็น data URL ก้อนใหญ่)
   const [files, setFiles] = useState<Attachment[]>([]);
+  /**
+   * สถานะรายการไฟล์ — หน้าตรวจเคลมต้องแยก "กำลังโหลด" / "โหลดไม่สำเร็จ" / "ไม่มีไฟล์จริง ๆ" ออกจากกัน
+   * เดิมใช้ "รายการว่าง = กำลังโหลด" ถ้าคำขอพัง (เน็ตสะดุด) จะขึ้น "กำลังโหลดไฟล์…" ค้างตลอด ไม่มีทางลองใหม่
+   * (การ์ดไฟล์แนบที่บอกว่าพังถูกพับซ่อนอยู่ใต้หน้าตรวจ ผู้ตรวจไม่เห็นอะไรเลย)
+   */
+  const [filesState, setFilesState] = useState<"loading" | "ready" | "failed">("loading");
+  const filesLoaded = useCallback((rows: Attachment[]) => {
+    setFiles(rows);
+    setFilesState("ready");
+  }, []);
+  const filesFailed = useCallback(() => setFilesState("failed"), []);
+  const reloadFiles = useCallback(() => {
+    setFilesState("loading");
+    setFilesKey((k) => k + 1);
+  }, []);
+  /**
+   * หลักฐานที่เซิร์ฟเวอร์อ้างถึงแต่ยังไม่อยู่ในรายการไฟล์ที่โหลดไว้ — โหลดใบใหม่เอง (ซิงก์ทุก 20 วิ / กลับมาที่แท็บ)
+   * ไม่ได้โหลดรายการไฟล์ตาม ช่างส่งเคลมใหม่พร้อมวิดีโอใหม่ หน้าตรวจจะบอกว่า "ไม่มีวิดีโอการตรวจเช็ค" ทั้งที่แนบมาแล้ว
+   * ผู้ตรวจอาจตีกลับซ้ำเพราะไฟล์ที่มีอยู่จริง · ขอใหม่ครั้งเดียวต่อชุดไฟล์ที่หาไม่เจอ (ไฟล์ที่ถูกลบไปแล้วจะไม่วนขอไม่จบ)
+   */
+  const unknownEvidence = useMemo(() => {
+    if (!order) return "";
+    const known = new Set(files.map((f) => f.id));
+    const ids = new Set<number>();
+    for (const c of order.claims) {
+      for (const i of c.evidenceIds ?? []) if (!known.has(i)) ids.add(i);
+      if (c.nameplate?.photoId && !known.has(c.nameplate.photoId)) ids.add(c.nameplate.photoId);
+    }
+    return [...ids].sort((a, b) => a - b).join(",");
+  }, [order, files]);
+  const [filesAskedFor, setFilesAskedFor] = useState("");
+  useEffect(() => {
+    if (filesState !== "ready" || !unknownEvidence || unknownEvidence === filesAskedFor) return;
+    setFilesAskedFor(unknownEvidence);
+    reloadFiles();
+  }, [filesState, unknownEvidence, filesAskedFor, reloadFiles]);
+  // ระหว่างรอรอบขอใหม่ข้างบน นับเป็นกำลังโหลด — ไม่ขึ้น "ไม่มี…" แวบหนึ่งก่อนไฟล์มา
+  const filesStatus = filesState === "ready" && unknownEvidence && unknownEvidence !== filesAskedFor ? "loading" : filesState;
   const [deleting, setDeleting] = useState(false);
   // ขั้นที่ทำแล้วที่กดดูอยู่ (null = ไม่ได้ดู)
   const [stepInfo, setStepInfo] = useState<string | null>(null);
@@ -752,7 +970,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     // ตัวเลือกในฟอร์ม (ทีม ช่าง คลัง) ไม่ได้เปลี่ยนตามขั้น ใช้ชุดที่โหลดไว้ตอนเปิดหน้า
     const fresh = takeFresh<WorkOrder>(id);
     if (fresh && optionsLoaded.current) {
-      setOrder(fresh);
+      // ก้อนที่ปุ่มบันทึกส่งกลับมาคือ detailFor ซึ่งไม่มีเคลมซ้ำ (เซิร์ฟเวอร์ส่งเฉพาะ GET ใบงาน) — ใช้ของเดิมต่อ
+      // ไม่งั้นแก้อาการจากหน้าตรวจเคลมแล้วคำเตือน "⚠ เครื่องนี้เคยเคลม" หายไปทั้งที่ใบยังรอตัดสินอยู่
+      setOrder((prev) =>
+        prev?.id === fresh.id && fresh.claimRepeats === undefined && prev.claimRepeats
+          ? { ...fresh, claimRepeats: prev.claimRepeats }
+          : fresh
+      );
       return fresh;
     }
     try {
@@ -801,6 +1025,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     }, [load])
   );
 
+  /**
+   * โหลดตัวใบ + การ์ดไฟล์แนบใหม่แบบเงียบ (ไม่มีหน้าโหลด ไม่เด้งบอกสถานะ) — ฟอร์มปิดงานเรียกหลังไฟล์เคลมแต่ละไฟล์ขึ้นเสร็จ
+   * หลักฐานในใบ (claimEvidence) กับรูปย่อต้องตามทันไฟล์ที่เพิ่งส่ง ไม่งั้นปิดฟอร์มแล้วเปิดใหม่ช่องนั้นว่างเหมือนไม่เคยแนบ
+   * ผิดพลาดเงียบไว้ — ไฟล์ขึ้นแล้วจริง ครั้งหน้าที่โหลดใบก็เห็นเอง
+   */
+  const refreshQuiet = useCallback(async () => {
+    try {
+      const res = await api.get<WorkOrder>(`/work-orders/${id}`, { loadingText: false });
+      setOrder(res.data);
+    } catch {
+      // ไม่ขัดจังหวะช่างที่กำลังกรอกฟอร์ม
+    }
+    setFilesKey((k) => k + 1);
+  }, [id]);
+
   // รายการไฟล์แนบเริ่มโหลดพร้อมตัวใบงาน — การ์ดไฟล์แนบขึ้นจอหลังใบงานมาถึงแล้วรับผลไปใช้เลย (utils/attachmentCache)
   useEffect(() => {
     prefetchAttachments(id);
@@ -837,6 +1076,69 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   useRefreshHandler(load);
 
   /**
+   * "ตอนนี้" ตามนาฬิกาเซิร์ฟเวอร์ ณ วินาทีที่เรียก — ใช้ตัดสินข้อความหลังกดบันทึก (ใบที่ส่งกลับล็อกอยู่ไหม)
+   * หน้าใบงานไม่ได้วาดตามเวลาเอง: ป้าย/ฟอร์มที่นับถอยหลังเดินนาฬิกาของตัวเอง (LiveReleaseChip · StageModal)
+   * หน้านี้ยาวหลายพันบรรทัด วาดใหม่ทั้งหน้าทุก 30 วิเพื่อป้ายเดียวหนักเกินไปบนมือถือรุ่นเก่า
+   */
+  const serverNowAt = useServerNowFn(order?.serverNow);
+
+  /**
+   * ปิดฟอร์มแล้วพากลับงานของฉันวันนี้ (ปุ่มในฟอร์มปล่อยงานตอนล็อก) — หน้าใบงานเปิดได้จากหลายแท็บ จึงสั่งผ่านตัวนำทางกลาง
+   * ต้องมี pop: true — React Navigation 7 ไม่ย้อนกลับไปหน้าที่มีอยู่แล้วในกองถ้าไม่ใช่หน้าปัจจุบัน แต่ซ้อน "งานของฉัน"
+   * ใบใหม่ทับหน้าใบงาน ได้ปุ่ม "ใบงาน ›" ที่พากลับไปใบเดิม และกดไปกลับแต่ละรอบกองก็โตขึ้นอีกสองหน้า
+   */
+  const backToQueue = useCallback(() => {
+    setStageOpen(false);
+    if (navigationRef.isReady()) (navigationRef.navigate as (tab: string, p: object) => void)("HomeTab", { screen: "MyJobs", pop: true });
+  }, []);
+
+  /**
+   * ตัดสินเคลมทีละชิ้น (เคลมก้อน 3) — แท็บในหน้าตรวจกับปุ่มในแถบล่างจอใช้ชุดเดียวกัน จึงถือไว้ที่หน้าใบงาน
+   * ส่งสำเร็จแล้วเก็บสรุปผลไว้ขึ้นบนสุดของใบ (ผ่านกี่ชิ้น ปิดอะไรไป · ตีกลับชิ้นไหน) พร้อมปุ่มไปใบถัดไป
+   */
+  const [reviewOutcome, setReviewOutcome] = useState<ReviewOutcome | null>(null);
+  const [nexting, setNexting] = useState(false);
+  const pageScroll = useRef<ScrollView>(null);
+  const verdicts = useClaimVerdicts(
+    order,
+    !!order && order.status === "CLAIM_REVIEW" && canDecideClaims(me),
+    async (outcome) => {
+      setReviewOutcome(outcome);
+      // ป้าย "{x} ใบ" ของเมนูตรวจเคลมลดทันที — ตัดสินแล้วยังอยู่หน้าเดิม เมนูไม่รู้เองจนกว่าจะเปลี่ยนหน้า
+      refreshClaimQueueCount();
+      await load();
+      /**
+       * สรุปผลอยู่บนสุดของใบ แต่ผู้ตรวจมักเลื่อนลงไปดูรูป/วิดีโอของชิ้นนั้นอยู่ — หน้าตรวจหายไปแล้วใบงานยาว ๆ ขึ้นแทน
+       * ที่ตำแหน่งเลื่อนเดิม ถ้าไม่พากลับขึ้นบน ผู้ตรวจเห็นกลางใบงาน ไม่เห็นสรุป ไม่เห็น "ใบถัดไป →" และไม่รู้ว่าส่งไปแล้วหรือยัง
+       * + เด้งบอกสั้น ๆ แบบที่ทุกปุ่มเปลี่ยนสถานะทำ (เจ้าของงานขอ ต.ค. 69 — หน้าจอเปลี่ยนเงียบ ๆ แล้วคนกดซ้ำ)
+       */
+      pageScroll.current?.scrollTo({ y: 0, animated: true });
+      feedback.toast("success", outcome.kind === "closed" ? `${order?.code ?? ""} ตรวจเคลมเสร็จ · ปิดงานแล้ว` : `${order?.code ?? ""} ตีกลับให้ช่างแก้แล้ว`);
+    }
+  );
+  /**
+   * "ใบถัดไป →" — ใบแรกของกล่องงานตรวจเคลม (เรียงจากที่รอนานที่สุด) ที่ไม่ใช่ใบนี้ · ไม่มีแล้วกลับไปหน้าก่อน
+   * ผู้ตรวจไม่ต้องย้อนไปหารายการเองทีละใบ · ถามกล่องงานชุดเดียวกับหน้าตรวจเคลม (เคลมก้อน 6) — ลำดับ "ถัดไป"
+   * ของมือถือกับจอคอมจึงตรงกัน (เดิมเรียงตามเวลาปิดงาน ซึ่งไม่ใช่เวลาที่ส่งเคลมรอบล่าสุด)
+   */
+  const nextClaim = useCallback(async () => {
+    setNexting(true);
+    try {
+      const res = await api.get<{ rows: { workOrderId: number }[] }>("/part-claims/queue");
+      const next = res.data.rows.find((r) => r.workOrderId !== id);
+      if (next) navigation.replace("WorkOrderDetail", { id: next.workOrderId });
+      else {
+        showAlert("ไม่มีใบรอตรวจเคลมแล้ว");
+        if (navigation.canGoBack()) navigation.goBack();
+      }
+    } catch (e) {
+      showAlert("เปิดใบถัดไปไม่ได้", apiErrorMessage(e));
+    } finally {
+      setNexting(false);
+    }
+  }, [id, navigation]);
+
+  /**
    * มีคนอื่นเปลี่ยนใบงานนี้ระหว่างที่เปิดอยู่ — ถามรุ่นข้อมูลทุก 20 วินาทีและตอนกลับมาที่แท็บ (ต.ค. 69)
    *
    * ไม่มีฟอร์มเปิด → โหลดใหม่ให้เองพร้อมบอกว่าใครเปลี่ยน · มีฟอร์มเปิด → แถบเหลือง ไม่โหลดทับที่กำลังกรอก
@@ -845,8 +1147,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [staleNote, setStaleNote] = useState<string | null>(null);
   // ฟอร์มที่ถือวันนัดอยู่ — ฟอร์มขั้นอื่น (เบิก · โอน) ไม่ได้ใช้วันนัด เปิดค้างไว้ได้ตามเดิม
   const dateForm = rescheduleOpen || (stageOpen && !!order && DATE_FORM_STAGES.includes(order.status));
-  const live = useRef({ order, load, dateForm });
-  live.current = { order, load, dateForm };
+  const live = useRef({ order, load, dateForm, stageOpen });
+  live.current = { order, load, dateForm, stageOpen };
   // รุ่นข้อมูลที่ดูประวัติไปแล้วระหว่างฟอร์มเปิด — ไม่โหลดใบทั้งก้อนซ้ำทุก 20 วินาทีระหว่างที่ฟอร์มยังเปิดอยู่
   const peeked = useRef(0);
   // เลขประวัติล่าสุดที่โหลดมาแล้ว — live.current.order เปลี่ยนตอนวาดจอใหม่ ซึ่งช้ากว่าโหลดเสร็จ
@@ -889,6 +1191,18 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         setStaleNote(null);
         await reload();
         feedback.toast("warn", "แอดมินเพิ่งเลื่อนวันนัด — โหลดใหม่แล้ว");
+        return;
+      }
+      /**
+       * แอดมินแก้เป็นงานด่วนระหว่างที่หัวหน้าภาคเปิดฟอร์มปล่อยงานค้างไว้ (หน้าล็อก/รอคำขอ) — โหลดใบใหม่ในที่เดิม ฟอร์มไม่ปิด
+       * ปุ่มปล่อยงานกลับมาเองพร้อมกล่องเขียว ไม่ต้องให้ปิดแล้วเปิดใหม่ถึงจะรู้ · ต่างจากการเลื่อนวันข้างบน: วันในฟอร์มยังเป็นวันเดิม
+       * ไม่มีอะไรที่กรอกไว้ผิด (แก้เป็นงานด่วนพร้อมเลื่อนวัน = มีแถวเลื่อนวันด้วย เข้าเงื่อนไขข้างบนก่อน)
+       */
+      if (fresh && live.current.stageOpen && fresh.logs.some((l) => l.id > since && l.action === "URGENT_RELEASE")) {
+        setOrder(fresh);
+        known.current = Math.max(known.current, latestLogId(fresh));
+        setStaleNote(null);
+        feedback.toast("success", "แอดมินแก้เป็นงานด่วน · ปล่อยได้เลย");
         return;
       }
     }
@@ -958,6 +1272,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         setStageBackOpen(false);
         setEtaOpen(false);
         setRescheduleOpen(false);
+        // แก้เป็นงานด่วนไม่ผ่านเพราะใบเปลี่ยน (แอดมินอีกคนแก้ไปก่อน · วันนัดถูกเลื่อน) — หน้าต่างถือวันนัดเก่า ปิดแล้วให้เห็นใบล่าสุด
+        setUrgentOpen(false);
         feedback.toast("warn", `${message ?? "ข้อมูลใบงานนี้เปลี่ยนไปแล้ว"} — โหลดข้อมูลล่าสุดให้แล้ว`);
       }),
     [id]
@@ -1055,8 +1371,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   /**
    * รอบที่ถูกตีกลับเคลม — ใบงานกลับไปที่ช่าง (ไม่มีเวลาปิด) แต่ผลปิดงานรอบนั้นยังอยู่
    * ต้องเห็นว่ารอบนั้นส่งอะไรมาและถูกตีกลับเพราะอะไร ไม่ใช่หายไปทั้งการ์ด (เจ้าของงานขอ ต.ค. 69)
+   * ทุกชิ้นที่ผลล่าสุดถูกตีกลับ (claimRound) — ตัดสินทีละชิ้นแล้ว แถวบนสุดอาจเป็นชิ้นที่ผ่าน (เคลมก้อน 3)
    */
-  const rejected = order.status === "IN_PROGRESS" && order.claims[0]?.status === "REJECTED" ? order.claims[0] : null;
+  const rejectedRows = order.status === "IN_PROGRESS" ? rejectedRowsOf(order) : [];
+  const rejected = rejectedRows[0] ?? null;
+  /**
+   * บรรทัดเหตุผล — ตีกลับทั้งใบขึ้น "ทั้งใบ (ข้อมูลเครื่อง)" ก่อน แล้วแต่ละชิ้นบอกช่อง/เหตุผลของตัวเอง (เคลมก้อน 4)
+   * ชิ้นที่ถูกตีกลับเพราะทั้งใบอย่างเดียวไม่ขึ้นซ้ำ · แถวที่ไม่มีช่อง (ตีกลับแบบข้อความ) ขึ้นเหตุผลตามเดิม
+   */
+  const rejectLines = rejectLinesOf(rejectedRows, (c) => c.partLabel ?? c.partName, { family: order.claimGuide?.plate.family ?? null });
+  /**
+   * ขึ้นชื่อหน้าเหตุผลเมื่อมีหลายบรรทัด หรือเป็นการตีกลับทั้งใบ — เดิมบรรทัดเดียว = ชิ้นเดียวที่ถูกตีกลับ ไม่ต้องบอกชื่อ
+   * แต่ตีกลับทั้งใบด้วยช่องของเครื่องอย่างเดียวก็เหลือบรรทัดเดียว ("รุ่น ต้องแก้") ถ้าไม่มีหัว "ทั้งใบ (ข้อมูลเครื่อง)"
+   * ช่างไม่รู้ว่าทุกชิ้นถูกตีกลับเพราะข้อมูลเครื่องชุดเดียวกัน (แถบในฟอร์มแก้เคลมขึ้นหัวเสมอ)
+   */
+  const rejectPrefix = rejectLines.length > 1 || rejectLines.some((l) => l.part === WHOLE_ORDER_PART);
   const closeFiles = order.closedAt || rejected
     ? files.filter((f) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt)
     : [];
@@ -1189,8 +1518,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     backTargets.length > 0;
 
   // เปิดใบรออะไหล่ต่อได้ตั้งแต่ทีมรับงานแล้ว — ก่อนนั้นยังแก้รายการอะไหล่ในใบนี้ได้เอง
+  // รอตรวจเคลมนับด้วย (ปิดงานแล้ว เหลือแค่เอกสารเคลม) — ชุดเดียวกับที่เซิร์ฟเวอร์รับใน POST /:id/follow-up
+  // ไม่งั้นปิดพร้อมเคลมแล้วเปิดใบรออะไหล่ไม่สำเร็จ ข้อความบอกให้กดปุ่มนี้ แต่ปุ่มไม่ขึ้นจนกว่าจะตรวจเคลมเสร็จ
   const canFollowUp =
-    ["IN_PROGRESS", "DONE"].includes(order.status) &&
+    ["IN_PROGRESS", "CLAIM_REVIEW", "DONE"].includes(order.status) &&
     (user?.role === "ADMIN" ||
       user?.role === "SUPERVISOR" ||
       ourTeamOrder(user, order));
@@ -1248,6 +1579,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   // เครื่องหายจากไฟล์รายงานแล้ว แต่ใบยังไม่ปิด — ขึ้นทางลัดปิดใบงานตามแบบ
   const formDetail = splitFormDetail(order.detail);
   const recovered = order.outageId !== null && !order.closedAt && !order.outageStillOpen;
+  /**
+   * ใบรอตรวจเคลมที่ผู้ตรวจ (Admin Spare Part / Super Admin) เปิด — หน้าตรวจเคลมขึ้นก่อนทุกอย่าง แถบตัดสินติดล่างจอ
+   * คนอื่น (รวมแอดมินทั่วไป) ยังเห็นการ์ดเคลมในใบงานแบบเดิม ไม่มีปุ่มตรวจ
+   */
+  // ต้องมีชิ้นที่รอตัดสินจริงในงานซ่อมครั้งนี้ — ข้อมูลไม่ตรงกัน (ไม่ควรเกิด) กลับไปการ์ดเคลมแบบเดิม ดีกว่าหน้าว่าง
+  const reviewMode = order.status === "CLAIM_REVIEW" && canReviewClaims(me) && verdicts.parts.some((p) => !p.locked);
+  const bodyHidden = reviewMode && !claimDetailOpen;
 
   return (
     <PopupScreen
@@ -1303,10 +1641,40 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       />
     ) : null}
     <ScrollView
+      ref={pageScroll}
       style={styles.container}
       contentContainerStyle={styles.content}
       onLayout={(e) => setBodyWidth(e.nativeEvent.layout.width)}
     >
+      {/* ผลการตรวจที่เพิ่งส่ง — ขึ้นบนสุดจนกว่าจะออกจากใบ (ใบกลับมารอตรวจอีกครั้งก็หายเอง) */}
+      {reviewOutcome && !reviewMode ? (
+        <ReviewDone
+          outcome={reviewOutcome}
+          trail={claimTrailOf(order.claims, order.logs)}
+          onNext={() => void nextClaim()}
+          busy={nexting}
+          // ดาวน์โหลดหลักฐานส่งผู้ขายหลังอนุมัติ (เคลมก้อน 6) — เฉพาะผู้ตรวจ (เซิร์ฟเวอร์ให้เฉพาะ Admin Spare Part / Super Admin)
+          downloads={canReviewClaims(me) ? { workOrderId: order.id, code: order.code } : null}
+        />
+      ) : null}
+      {reviewMode ? (
+        <ClaimReview
+          order={order}
+          v={verdicts}
+          readOnly={!canDecideClaims(me)}
+          files={files}
+          filesState={filesStatus}
+          onRetryFiles={reloadFiles}
+          detailOpen={claimDetailOpen}
+          onToggleDetail={() => setClaimDetailOpen((o) => !o)}
+          onOpenOrder={(oid) => navigation.push("WorkOrderDetail", { id: oid })}
+        />
+      ) : null}
+      {/*
+        หน้าตรวจเคลม: เนื้อใบงานที่เหลือพับไว้ด้วยการซ่อน (ไม่ถอดออก) — การ์ดไฟล์แนบข้างในเป็นคนโหลดรายการไฟล์
+        ที่หน้าตรวจใช้แสดงหลักฐาน ถอดออกแล้วหน้าตรวจจะไม่มีรูป/วิดีโอสักไฟล์
+      */}
+      <View style={[styles.bodyWrap, bodyHidden && styles.bodyHidden]}>
       {/* ยกเลิกแล้ว — บอกว่าทำไม ใคร เมื่อไร (เหตุผลอยู่ในประวัติ CANCELLED ล่าสุด) */}
       {order.status === "CANCELLED" && cancelLog ? (
         <View style={[styles.sentBack, styles.cancelledBox]} accessibilityLabel="กล่องยกเลิกใบงาน">
@@ -1760,13 +2128,21 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           ) : null}
         </View>
-        {/* ตีกลับเคลม — ช่างต้องเห็นเหตุผลก่อนกดปิดงานอีกรอบ ไม่งั้นแนบของเดิมกลับไปแล้วโดนตีกลับซ้ำ */}
-        {order.status === "IN_PROGRESS" && order.claims[0]?.status === "REJECTED" ? (
+        {/*
+          ตีกลับเคลม — ช่างต้องเห็นเหตุผลก่อนกดปิดงานอีกรอบ ไม่งั้นแนบของเดิมกลับไปแล้วโดนตีกลับซ้ำ
+          ทุกชิ้นที่ถูกตีกลับ (ใบเดียวสองชิ้นอาจถูกตีกลับคนละเหตุผล) · ใบชิ้นเดียวขึ้นแค่เหตุผลเหมือนเดิม
+        */}
+        {rejectedRows.length ? (
           <View style={styles.claimRejected}>
             <Ionicons name="arrow-undo" size={16} color={colors.dangerInk} />
             <View style={{ flex: 1 }}>
               <Text style={styles.claimRejectedTitle}>Admin Spare Part ตีกลับใบเคลม — แก้แล้วปิดงานใหม่</Text>
-              <Text style={styles.claimRejectedText}>{order.claims[0].rejectReason ?? "—"}</Text>
+              {rejectLines.map((l, i) => (
+                <Text key={`${l.part}-${i}`} style={styles.claimRejectedText}>
+                  {rejectPrefix ? `${l.part}: ` : ""}
+                  {l.reason}
+                </Text>
+              ))}
             </View>
           </View>
         ) : null}
@@ -1907,12 +2283,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             </View>
           </View>
         ) : null}
-        {/* หัวข้อไม่บอกว่าใครขอวันนั้น — วันใหม่มาได้ทั้งจากลูกค้าขอเลื่อนและแอดมินเลื่อนเอง (ต.ค. 69) สาเหตุอยู่ในบันทึกข้างล่าง */}
+        {/*
+          หัวข้อไม่บอกว่าใครขอวันนั้น — วันใหม่มาได้ทั้งจากลูกค้าขอเลื่อนและแอดมินเลื่อนเอง (ต.ค. 69) สาเหตุอยู่ในบันทึกข้างล่าง
+          ไม่มีคำว่า "วันใหม่" แล้ว (เวลาปิดรับ ต.ค. 69 — DEFAULT บอกเจ้าของงาน): ใบที่ล็อกส่งกลับได้โดยไม่ได้ถูกเลื่อนวันเลย
+        */}
         {declinedNewDate(order) ? (
           <View style={styles.sentBack} accessibilityLabel="กล่องหัวหน้าภาคส่งกลับนัดใหม่">
             <Ionicons name="calendar-outline" size={18} color={colors.warningInk} />
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.sentBackTitle}>หัวหน้าภาคส่งกลับ — ทีมไม่ว่างวันใหม่ โทรนัดร้านใหม่</Text>
+              <Text style={styles.sentBackTitle}>หัวหน้าภาคส่งกลับ — ทีมไม่ว่าง โทรนัดร้านใหม่</Text>
               <Text style={styles.sentBackText}>{declinedNewDate(order)!.note ?? "—"}</Text>
               <Text style={styles.sentBackMeta}>
                 {declinedNewDate(order)!.byName ?? "—"} · {formatDateTime(declinedNewDate(order)!.createdAt)}
@@ -2098,13 +2477,20 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
               {lastLog.byName ? ` · ${lastLog.byName}` : ""}
             </Text>
           ) : null}
+          {/*
+            ป้ายเวลาปิดรับข้างปุ่มขั้น (ปล่อยงาน · ส่งช่างตรวจ) — เห็นก่อนกดว่าเหลือเท่าไร/ล็อกแล้ว ไม่ต้องเปิดฟอร์มถึงจะรู้
+            ป้ายเดินนาฬิกาเอง (หน้านี้ไม่วาดใหม่ทั้งหน้าตามเวลา) · ช่างกับทีม Area ไม่เห็น (ReleaseChip ตัดเอง)
+          */}
+          {order.release ? (
+            <LiveReleaseChip row={order} serverNow={order.serverNow} cutoff={order.cutoff} style={wide ? { alignSelf: "center" } : undefined} />
+          ) : null}
           <View style={wide ? styles.nowFootActions : undefined}>
         {order.status === "CLAIM_REVIEW" ? (
           <View style={[styles.waitingCard, styles.waitingInline]}>
             <Ionicons name="shield-checkmark-outline" size={16} color={colors.textMuted} />
             <Text style={styles.waitingText}>
-              {canReviewClaims(me)
-                ? "ช่างปิดงานพร้อมส่งอะไหล่เก่าเคลม — ตรวจใบเคลมด้านล่าง แล้วอนุมัติหรือตีกลับ"
+              {canDecideClaims(me)
+                ? "ช่างปิดงานพร้อมส่งอะไหล่เก่าเคลม — ตรวจใบเคลมด้านบน แล้วตัดสินทีละชิ้นที่แถบล่างจอ"
                 : "ช่างปิดงานแล้ว รอ Admin Spare Part ตรวจเคลมอะไหล่เก่า"}
             </Text>
           </View>
@@ -2148,29 +2534,48 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                     <Text style={styles.actionPrimaryText}>{order.assignedOutsource ? "บันทึกผลงาน SUB" : "ปิดงาน"}</Text>
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity
-                    style={[styles.action, styles.actionPrimary]}
-                    onPress={() => setStageOpen(true)}
-                    disabled={busy}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons
-                      name={STAGE_BUTTON[order.status]?.icon ?? "arrow-forward-circle"}
-                      size={18}
-                      color="#fff"
-                    />
-                    <Text style={styles.actionPrimaryText}>
-                      {/* ของหมดอยู่ = สิ่งที่แอดมินรอทำคือบอกว่าของมาแล้ว ไม่ใช่ "เช็คคลัง" เหมือนรอบแรก */}
-                      {partsOut.length && order.status !== "WAITING_PARTS"
-                        ? "อะไหล่มาแล้ว — อัปเดตสถานะ"
-                        : rescheduledPending(order)
-                          ? "คอนเฟิร์มวันใหม่"
-                          : STAGE_BUTTON[order.status]?.label ?? "ทำขั้นนี้"}
-                    </Text>
-                  </TouchableOpacity>
+                  /*
+                    แอดมินกับใบขั้นปล่อยงานที่ล็อก: ปุ่มหลักกลายเป็น "แก้เป็นงานด่วน" (ข้าง "เลื่อนวันนัด") · วันนัดผ่านแล้วเหลือแค่เลื่อนวันนัด
+                    หัวหน้าภาคปุ่มเดิม — ฟอร์มปล่อยงานบอกล็อกและทางไปต่อเอง (ขอแอดมิน/ส่งกลับ)
+                  */
+                  <StagePrimaryButton
+                    order={order}
+                    partsOut={partsOut.length}
+                    adminRelease={canMoveDates(user) && !!order.release}
+                    busy={busy}
+                    onStage={() => setStageOpen(true)}
+                    onUrgent={() => setUrgentOpen(true)}
+                  />
                 )}
                 {wide ? null : rescheduleBtn}
               </View>
+
+              {/*
+                ถ่ายก่อนซ่อม (เคลมก้อน 5) — ช่างที่เปิดใบจากหน้านี้ (ไม่ได้มาจากการ์ดงานของฉัน) ต้องเห็นกล่องเดียวกัน
+                ขึ้นเฉพาะใบซ่อมที่กำลังทำ สาขาในประกัน และยังไม่ได้ส่งเคลมในรอบนี้ (ถูกตีกลับแล้วแก้ในฟอร์มแก้เคลม)
+                ต้องมีเครื่องด้วย — กติกาเดียวกับการ์ดงานของฉัน (showsPreRepair) งานอุปกรณ์ทั้งสาขาไม่มีจอ Error ให้ถ่าย
+              */}
+              {order.status === "IN_PROGRESS" &&
+              me?.role === "EMPLOYEE" &&
+              order.jobType !== "PM" &&
+              !!order.machineCode &&
+              order.branchWarrantyExpired === false &&
+              order.branchWarrantyExpiresAt &&
+              !order.claims.some((c) => !order.roundStartedAt || c.createdAt >= order.roundStartedAt) ? (
+                <View style={{ marginTop: spacing.sm }}>
+                  <PreRepairBox
+                    orderId={order.id}
+                    warrantyUntil={order.branchWarrantyExpiresAt}
+                    plateFamily={order.claimGuide?.plate.family}
+                    counts={{
+                      video: order.claimEvidence.filter((e) => e.sparePartId === null && e.role === "CLAIM_ERROR_VIDEO").length,
+                      photo: order.claimEvidence.filter((e) => e.sparePartId === null && e.role === "CLAIM_SYMPTOM").length,
+                    }}
+                    onChanged={() => void refreshQuiet()}
+                    readOnly={!!me?.viewAs}
+                  />
+                </View>
+              ) : null}
 
               {/*
                 ไปถึงหน้างานแล้วจบเคสไม่ได้เพราะต้องเปลี่ยนอะไหล่เพิ่ม — ปุ่ม "แจ้งปัญหาหน้างาน" อยู่ข้างปุ่มปิดงานด้านบน
@@ -2199,27 +2604,29 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {order.claims.length > 0 ? (
+      {order.claims.length > 0 && !reviewMode ? (
         <ClaimsCard
           order={order}
           files={files}
-          canReview={order.status === "CLAIM_REVIEW" && canReviewClaims(me)}
-          onReviewed={() => reloadWithNotice()}
+          showMissed={canReviewClaims(me)}
+          // แผงดาวน์โหลดส่งผู้ขายของผู้ตรวจ — ตอนสรุปผลที่เพิ่งตัดสินขึ้นอยู่ด้านบน แผงอยู่ในสรุปนั้นแล้ว ไม่ซ้ำสองแผง
+          downloads={canReviewClaims(me) && !(reviewOutcome && !reviewMode)}
         />
       ) : null}
 
       {order.closedAt || rejected ? (
         <View style={card}>
           <Text style={styles.sectionTitle}>{rejected ? "ผลการทำงานรอบที่ถูกตีกลับ" : "ผลการทำงาน"}</Text>
-          {rejected ? (
-            <View style={styles.verdictBad}>
+          {rejectLines.map((l, i) => (
+            <View key={`${l.part}-${i}`} style={styles.verdictBad}>
               <Ionicons name="arrow-undo" size={16} color={colors.danger} />
               <Text style={styles.verdictBadText}>
-                Remark: ตีกลับเพราะ {rejected.rejectReason ?? "—"}
-                {rejected.reviewedAt ? ` · ${formatDateTime(rejected.reviewedAt)}` : ""}
+                Remark: ตีกลับเพราะ {rejectPrefix ? `${l.part}: ` : ""}
+                {l.reason}
+                {rejected?.reviewedAt ? ` · ${formatDateTime(rejected.reviewedAt)}` : ""}
               </Text>
             </View>
-          ) : null}
+          ))}
           <Row label="ผล" value={order.closeResultLabel ?? "—"} />
           {/* สรุปงานคือสิ่งที่คนเปิดใบปิดแล้วมาหา (เจ้าของงานให้ตัวหนา) — เดิมเป็นตัวเทาเล็กไม่มีหัวข้อ */}
           {order.closeNote ? (
@@ -2352,7 +2759,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
         reloadKey={filesKey}
         formLinks={formDetail.links}
-        onLoaded={setFiles}
+        onLoaded={filesLoaded}
+        onLoadFailed={filesFailed}
         onAdded={load}
         inspection={
           order.status === "INSPECTING" || order.inspectedAt
@@ -2559,6 +2967,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       ) : null}
       </View>
       </View>
+      </View>
 
       <RollbackModal
         visible={rollbackOpen}
@@ -2600,13 +3009,42 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           order={order}
           adminWarehouse={adminWarehouse}
           onCancel={() => setRescheduleOpen(false)}
-          onDone={async () => {
+          onDone={async (r) => {
             setRescheduleOpen(false);
             // ลูกค้าตกลงวันไปแล้ว (คอนเฟิร์มก่อนสลับลำดับ · ปล่อยงานแล้ว) — ต้องส่งข้อความวันใหม่ให้ร้าน
             // ยังไม่คอนเฟิร์ม = ร้านยังไม่รู้วันเลย ไม่มีอะไรต้องแจ้ง (โทรตอนคอนเฟิร์มลูกค้า)
             const confirmed = APPOINTMENT_DONE.includes(order.appointmentStatus ?? "");
-            await reloadWithNotice("เลื่อนวันนัดแล้ว");
+            /**
+             * ข้อความตามตัวอย่าง ("เลื่อนวันนัด <ใบ> เป็น … แล้ว — …") แทน "เลื่อนวันนัดแล้ว" แบบเดิม — ขึ้นแทน ไม่ใช่ขึ้นเพิ่ม (สองข้อความซ้อนกันคนอ่านไม่ทันทั้งคู่)
+             * บอกว่าหัวหน้าภาคจะเจอใบแบบไหน: ปล่อยได้เลย (ติ๊กงานด่วนแล้วเซิร์ฟเวอร์ตั้งให้จริง) · แบบล็อก · หรือปิดรับวันไหน
+             * สถานะหลังบันทึกมาจากใบที่โหลดใหม่ ไม่เดาจากขั้นก่อนกด (ดึงคืนจากช่าง = ขั้นเปลี่ยน)
+             */
+            const next = await load();
+            const after = next ?? r.detail;
+            const cutTime = after?.cutoff?.time ?? order.cutoff?.time ?? "16:00";
+            feedback.toast(
+              "success",
+              rescheduledText(order.code, r.day, {
+                releaseStage: !!after && RELEASE_STAGES.includes(after.status),
+                urgentTaken: after?.urgentReleaseFor === r.day,
+                red: r.red,
+                cutTime,
+              })
+            );
             if (confirmed) setMessageOpen(true);
+          }}
+        />
+      ) : null}
+
+      {/* แก้เป็นงานด่วน (แอดมิน · ใบขั้นปล่อยงานที่ล็อก) — โหลดใบใหม่จากก้อนที่เซิร์ฟเวอร์ตอบ ปุ่มกลับเป็นปุ่มปล่อยงานของหัวหน้าภาค */}
+      {urgentOpen && order.release ? (
+        <UrgentReleaseModal
+          order={urgentRowOf(order)}
+          now={serverNowAt()}
+          onCancel={() => setUrgentOpen(false)}
+          onDone={async () => {
+            setUrgentOpen(false);
+            await load();
           }}
         />
       ) : null}
@@ -2641,13 +3079,41 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         }
         onFilesChanged={() => setFilesKey((k) => k + 1)}
         onCancel={() => setStageOpen(false)}
+        onReload={load}
+        onBackToQueue={backToQueue}
         onDone={async (kind) => {
+          const before = order;
           setStageOpen(false);
           // ขั้นเสนอราคาแนบใบเสนอราคา/บิลไปด้วย การ์ดไฟล์แนบต้องโหลดใหม่ถึงจะเห็น
           setFilesKey((k) => k + 1);
-          await reloadWithNotice();
-          // เพิ่งคอนเฟิร์มกับลูกค้า — จังหวะที่ต้องส่งข้อความแจ้งคิวช่างพอดี
-          if (kind === "confirmed") setMessageOpen(true);
+          /**
+           * ข้อความหลังบันทึก — ทุกขั้นใช้ "จากไหน → ไปไหน" (reloadWithNotice) ยกเว้นขั้นที่ตัวอย่างที่อนุมัติมีคำของมันเอง
+           * ปล่อยงาน/ส่งกลับบอกสิ่งที่หัวหน้าภาคต้องรู้ต่อ (ทีมเห็นที่แท็บไหน · ใบไปอยู่หัวข้อไหนของแอดมิน)
+           * ขึ้นแทน ไม่ใช่ขึ้นเพิ่ม — สองข้อความซ้อนกันคนอ่านไม่ทันทั้งคู่ (ขั้นใหม่ของฟีเจอร์อื่นเติม case ในสวิตช์นี้ ไม่สร้างทางที่สอง)
+           */
+          switch (kind) {
+            case "released": {
+              const next = await load();
+              if (!next) break;
+              const now = next.serverNow ? Date.parse(next.serverNow) : serverNowAt();
+              feedback.toast("success", releasedText(next, next.status === "INSPECTING", now));
+              break;
+            }
+            case "declined": {
+              // ล็อกอยู่ไหมดูจากใบตอนกด (ก่อนโหลดใหม่ ใบย้ายไปขั้นคอนเฟิร์มลูกค้าแล้วไม่มี release)
+              const wasLocked = !!releaseView(before, serverNowAt(), before.cutoff)?.locked;
+              await load();
+              feedback.toast("info", declinedText(before.code, wasLocked));
+              break;
+            }
+            case "confirmed":
+              await reloadWithNotice();
+              // เพิ่งคอนเฟิร์มกับลูกค้า — จังหวะที่ต้องส่งข้อความแจ้งคิวช่างพอดี
+              setMessageOpen(true);
+              break;
+            default:
+              await reloadWithNotice();
+          }
         }}
       />
       {messageOpen && hasCustomerMessage(order) ? (
@@ -2669,6 +3135,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       <CloseModal
         visible={closing}
         order={order}
+        files={files}
+        refresh={refreshQuiet}
         results={results}
         technicians={technicians}
         subTeams={teams.filter((t) => t.outsource).map((t) => t.name)}
@@ -2688,6 +3156,13 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         onClose={() => setStepInfo(null)}
       />
     </ScrollView>
+    {/*
+      แถบตัดสินเคลมอยู่นอกส่วนที่เลื่อน (ต่อท้าย ScrollView ในกรอบใบงาน) — เลื่อนไปดูหลักฐานไหนก็ยังเห็นปุ่ม
+      ไม่ใช่ position: fixed เพราะกรอบใบงานย่อ/ขยายได้ แถบต้องติดกรอบ ไม่ใช่ติดหน้าจอ
+    */}
+    {reviewMode ? (
+      <DecisionBar v={verdicts} readOnly={!canDecideClaims(me)} />
+    ) : null}
     </PopupScreen>
   );
 }
@@ -3182,6 +3657,9 @@ function PartsEtaModal({
  * ปล่อยให้ช่างแล้วแต่ช่างยังไม่ถึงหน้างาน = ดึงใบคืนให้หัวหน้าภาครับทราบวันใหม่แล้วปล่อยใหม่ (ทีมวันใหม่อาจไม่ว่าง)
  * บังคับเหตุผล — หัวหน้าภาคต้องรู้ว่าทำไมวันเปลี่ยน ตอนคอนเฟิร์มวันใหม่ก่อนปล่อยงาน
  */
+/** ผลของฟอร์มเลื่อนวันนัด — หน้าใบงานประกอบข้อความ "เลื่อนวันนัด <ใบ> เป็น … แล้ว" จากนี้ (red = วันใหม่เลยเส้นตายแล้วตอนกดบันทึก) */
+type RescheduleDone = { day: string; red: boolean; detail: WorkOrder | null };
+
 function RescheduleModal({
   order,
   adminWarehouse,
@@ -3191,12 +3669,29 @@ function RescheduleModal({
   order: WorkOrder;
   adminWarehouse: string;
   onCancel: () => void;
-  onDone: () => void;
+  onDone: (r: RescheduleDone) => void;
 }) {
   const oldDay = order.scheduledAt ? order.scheduledAt.slice(0, 10) : "";
-  const [day, setDay] = useState(oldDay);
+  /**
+   * เวลาปิดรับปล่อยงาน (ต.ค. 69) — นาฬิกาเซิร์ฟเวอร์ของฟอร์มนี้ บรรทัดเตือนเปลี่ยนสีเองตอนถึงเวลา (ไม่ใช้นาฬิกามือถือ — ข้อ 12)
+   * ฟอร์มวาดเฉพาะตอนเปิด (หน้าใบงานถอดออกตอนปิด) นาฬิกาจึงเดินเฉพาะตอนที่มีคนดูอยู่
+   */
+  const now = useServerClock(order.serverNow, order.cutoff?.time);
+  const nowAt = useServerNowFn(order.serverNow);
+  /**
+   * วันตั้งต้น: ใบที่ล็อกแล้ว/วันนัดผ่านแล้ว เริ่มที่วันแรกที่ยังปล่อยได้โดยไม่ต้องแก้เป็นงานด่วน (ตัวอย่าง newDay: firstOpen)
+   * — แอดมินเปิดฟอร์มนี้เพื่อย้ายงานออกจากวันที่ปล่อยไม่ได้แล้ว วันเดิมคือวันที่ใช้ไม่ได้แน่ ๆ
+   * ใบอื่นเริ่มที่วันเดิมเหมือนเดิม — เลื่อนปกติ (ของมาไม่ทัน · ร้านขอ) มักขยับจากนัดเดิมไม่กี่วัน
+   */
+  const [day, setDay] = useState(() => {
+    const n = nowAt();
+    return releaseView(order, n, order.cutoff)?.locked && order.cutoff ? firstOpenDay(n, order.cutoff) : oldDay;
+  });
   const [time, setTime] = useState(order.scheduledTime ?? "");
   const [reason, setReason] = useState("");
+  // แก้เป็นงานด่วนไปพร้อมกัน — ล้างทุกครั้งที่เปลี่ยนวัน: ติ๊กไว้สำหรับวันหนึ่ง ไม่ได้แปลว่าตั้งใจปลดล็อกอีกวัน
+  const [urgentWith, setUrgentWith] = useState(false);
+  useEffect(() => setUrgentWith(false), [day]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const validDay = /^\d{4}-\d{2}-\d{2}$/.test(day);
@@ -3209,13 +3704,27 @@ function RescheduleModal({
   // ของยังโอนไม่ถึง แล้วเลื่อนให้เร็วขึ้น — ของอาจไปไม่ทันวันใหม่ (แค่เตือน ไม่กัน: แอดมินอาจรู้ว่าของจะถึงทัน)
   const moving = order.waitingParts.filter((p) => inTransit(p) || isTransfer(p, adminWarehouse));
   const earlier = validDay && !!oldDay && day < oldDay;
+  /**
+   * บรรทัดเตือนใต้วันที่ (เทา/ส้ม/แดง) — ฟังก์ชันเดียวกับฟอร์มคอนเฟิร์มลูกค้า (ข้อ 4 "เตือนแบบเดียวกัน") ใช้กับดึงงานคืนด้วย (ฟอร์มเดียวกัน)
+   * เตือนอย่างเดียว ไม่กันบันทึก · แดง = ไม่ติ๊ก ใบจะถึงหัวหน้าภาคแบบล็อก
+   */
+  const warn = dateFormWarning(validDay && !past ? day : null, now, order.cutoff, "admin", "reschedule");
+  const offerUrgent = !!warn?.checkbox;
 
   async function submit() {
     setSaving(true);
     setError(null);
+    // แดงตอนกด — ตัดสินจากนาฬิกา ณ วินาทีที่กด ไม่ใช่รอบวาดล่าสุด (เก่าได้ 30 วิ ข้าม 16:00 พอดีจะบอกผิด)
+    const red = dateFormWarning(day, nowAt(), order.cutoff, "admin", "reschedule")?.tone === "red";
     try {
-      await api.post(`/work-orders/${order.id}/reschedule`, { scheduledAt: day, scheduledTime: time || null, reason: reason.trim() });
-      onDone();
+      const res = await api.post<WorkOrder>(`/work-orders/${order.id}/reschedule`, {
+        scheduledAt: day,
+        scheduledTime: time || null,
+        reason: reason.trim(),
+        // ส่งเฉพาะตอนช่องติ๊กขึ้นอยู่และติ๊กไว้ — เซิร์ฟเวอร์ตัดสินซ้ำจากเวลาที่คำขอไปถึง (เส้นตายยังไม่ผ่าน = ไม่ตั้ง)
+        ...(offerUrgent && urgentWith ? { urgent: true } : {}),
+      });
+      onDone({ day, red, detail: res.data && typeof res.data === "object" && "status" in res.data ? res.data : null });
     } catch (e) {
       // 409 (ขั้นเปลี่ยน · ช่างถึงหน้างานแล้ว) หน้าใบงานปิดฟอร์มและโหลดใหม่ให้เอง (subscribeWorkOrderStale)
       setError(apiErrorMessage(e));
@@ -3259,6 +3768,8 @@ function RescheduleModal({
       </View>
       <DateField value={day} onChange={setDay} label="วันนัดใหม่" required min={todayBkk()} />
       {past ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null}
+      <FormWarningLine warning={warn} />
+      {offerUrgent ? <UrgentWithCheckbox checked={urgentWith} onChange={setUrgentWith} disabled={saving} /> : null}
       <TimeField value={time} onChange={setTime} label="เวลา (ไม่ใส่ก็ได้)" />
       {unchanged && validDay ? <Text style={styles.linkedText}>ยังเป็นวันและเวลาเดิม — เลือกวันหรือเวลาใหม่</Text> : null}
       {moving.length && earlier ? (
@@ -3446,6 +3957,13 @@ function StageBackModal({
   );
 }
 
+/**
+ * ชนิดของการบันทึกที่ฟอร์มขั้นตอนบอกหน้าใบงาน — หน้าใบงานเลือกข้อความหลังบันทึกตามนี้ในสวิตช์เดียว (ไม่ส่ง = ข้อความทั่วไป)
+ * confirmed = เพิ่งคอนเฟิร์มนัดกับลูกค้า (เปิดข้อความแจ้งลูกค้าต่อ) · released = ปล่อยงาน/ส่งช่างตรวจแล้ว · declined = ส่งกลับแอดมินนัดใหม่
+ * เปิดปลายไว้ (string) ให้ฟีเจอร์ที่ตามมาเติมชนิดของตัวเองในสวิตช์เดิม ไม่สร้างทางที่สองคู่กัน (integration G4)
+ */
+type StageDoneKind = "confirmed" | "released" | "declined" | (string & {});
+
 function StageModal({
   visible,
   order,
@@ -3456,6 +3974,8 @@ function StageModal({
   onReschedule,
   onFilesChanged,
   onCancel,
+  onReload,
+  onBackToQueue,
   onDone,
 }: {
   visible: boolean;
@@ -3470,8 +3990,14 @@ function StageModal({
   /** แนบ/ลบไฟล์จากฟอร์มแล้ว — ให้การ์ดไฟล์แนบโหลดรายการใหม่ */
   onFilesChanged: () => void;
   onCancel: () => void;
-  /** confirmed = เพิ่งคอนเฟิร์มนัดกับลูกค้า (หน้าใบงานเปิดข้อความแจ้งลูกค้าให้) */
-  onDone: (kind?: "confirmed") => void;
+  /**
+   * โหลดใบใหม่โดยไม่ปิดฟอร์ม (load ของหน้าใบงาน) — ฟอร์มปล่อยงานตอนล็อกค้างอยู่หลังส่งคำขอ/ยกเลิกคำขอ/ถูกปฏิเสธ
+   * แล้ววาดสถานะใหม่จากใบที่โหลดมา (ตัวอย่าง sendReq ไม่ปิดฟอร์ม) · รุ่นข้อมูลของหน้าใบงานขยับตาม ตัวเช็ค 20 วิไม่ถือว่าเป็นของคนอื่น
+   */
+  onReload: () => Promise<unknown>;
+  /** "กลับไปงานของฉัน" — ปิดฟอร์มแล้วไปหน้างานของฉันวันนี้ */
+  onBackToQueue: () => void;
+  onDone: (kind?: StageDoneKind) => void;
 }) {
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
@@ -3507,6 +4033,11 @@ function StageModal({
   // ขั้นนัดลูกค้า
   // ขั้นคอนเฟิร์มลูกค้า: ลูกค้าตกลงวันเดิม หรือขอเลื่อน (เลื่อนแล้วถึงจะขึ้นช่องวันให้แก้)
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
+  /**
+   * คอนเฟิร์มลูกค้า: "แก้เป็นงานด่วนไปพร้อมกัน" (เวลาปิดรับ ข้อ 2) — ขึ้นเฉพาะตอนบรรทัดเตือนเป็นแดง
+   * ล้างเมื่อเปลี่ยนวัน/เปลี่ยนคำตอบ — ติ๊กไว้กับวันหนึ่ง ไม่ได้แปลว่าตั้งใจปลดล็อกอีกวัน
+   */
+  const [urgentWith, setUrgentWith] = useState(false);
   // ขั้นเช็คอะไหล่/เบิก: มีบางตัวหมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ แต่ตั้งต้นเป็นไม่แยก
   // (เจ้าของงานตกลง ต.ค. 69: ของต้องครบก่อนส่งไปนัด · ของไม่พอตอนเบิก = แจ้งเลื่อนนัด) — แยกต้องเลือกเอง
   const [splitOut, setSplitOut] = useState(false);
@@ -3536,12 +4067,43 @@ function StageModal({
   // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) แต่ทีมไม่ว่าง — ส่งกลับให้แอดมินนัดใหม่แทนการปล่อยงาน
   // นัดตรวจหน้างานด้วย: แอดมินเลื่อนวันตรวจได้แล้ว (ต.ค. 69) ทีมวันใหม่อาจไม่ว่างเหมือนกัน → กลับไปนัดร้าน (ตรวจหน้างาน)
   const newDate = rescheduledPending(order);
-  const canDecline = newDate && (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH");
+  const releaseStage = order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH";
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — นาฬิกาเซิร์ฟเวอร์ของฟอร์มเอง เดินเฉพาะตอนฟอร์มเปิด
+   * ฟอร์มที่เปิดค้างข้าม 16:00 พลิกเป็นหน้าล็อกเองตรงเวลา ไม่ต้องรอให้กดแล้วโดนปฏิเสธ (ด่านจริงยังอยู่ที่เซิร์ฟเวอร์)
+   */
+  const now = useServerClock(order.serverNow, order.cutoff?.time, visible);
+  const rv = releaseStage ? releaseView(order, now, order.cutoff) : null;
+  const lockedNow = !!rv?.locked;
+  // วันนัดผ่านไปแล้ว (รวมงานด่วนที่หมดอายุ) — ขอแก้เป็นงานด่วนไม่ได้ ส่งกลับก็ไม่ได้ แอดมินต้องเลื่อนวันนัดเอง (ตัวอย่าง lockPast)
+  const pastNow = lockedNow && !!rv?.past;
+  const { user } = useAuth();
+  /**
+   * หน้าล็อกของฟอร์ม (ตัวอย่าง lockNoReq / lockReq / lockPast) — null = ฟอร์มปล่อยงานตามปกติ
+   * ขอแก้เป็นงานด่วน/ส่งกลับเป็นปุ่มของหัวหน้าภาค · แอดมินที่เปิดฟอร์มนี้เห็นกล่องล็อกกับปุ่มกลับอย่างเดียว
+   * (แอดมินปลดล็อกเองด้วย "แก้เป็นงานด่วน" ไม่ต้องขอใคร — เซิร์ฟเวอร์ตอบ 403 ถ้าแอดมินกดขอ)
+   */
+  const lockMode: "noReq" | "req" | "past" | "other" | null = !lockedNow
+    ? null
+    : pastNow
+      ? "past"
+      : user?.role !== "SUPERVISOR"
+        ? "other"
+        : rv?.ask
+          ? "req"
+          : "noReq";
+  // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) แต่ทีมไม่ว่าง — ตัวเลือกคู่ "ทีมว่าง/ทีมไม่ว่าง" ในฟอร์มปล่อยงานปกติ
+  // ใบที่ล็อกแล้วส่งกลับด้วยปุ่มตรง ๆ ในหน้าล็อก (ไม่มีทางให้เลือก "ทีมว่าง — ปล่อยงาน" ที่กดไม่ได้อยู่ดี)
+  // วันใหม่ผ่านไปแล้วไม่มีให้ส่งกลับ (ตัวอย่าง lockPast) — วันที่ไม่มีใครไปได้แล้ว แอดมินต้องเลื่อนวันนัดเอง
+  const canDecline = newDate && releaseStage && !lockedNow && !rv?.past;
   const inspectRelease = order.status === "INSPECT_DISPATCH";
   const [declineDate, setDeclineDate] = useState(false);
+  /** เวลาที่เซิร์ฟเวอร์ได้รับคำสั่งปล่อยงานที่ถูกปฏิเสธเพราะเลยเวลาปิดรับ (409 DISPATCH_LOCKED) — กล่องล็อกบอกว่ากดเมื่อไร */
+  const [refusedAt, setRefusedAt] = useState<string | null>(null);
+  /** ข้อความใต้ช่องบอกแอดมินในหน้าล็อก (ส่งกลับไม่ใส่เหตุผล) */
+  const [lockErr, setLockErr] = useState<string | null>(null);
   // ช่องที่เติมจากค่าเดิมก่อนย้อนขั้น — ติดป้ายเหลืองให้รู้ว่าไม่ใช่ค่าที่เพิ่งกรอก (ดู rollbackPrefill)
   const [prevUsed, setPrevUsed] = useState<string[]>([]);
-  const { user } = useAuth();
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3655,7 +4217,18 @@ function StageModal({
     setPickupFail(false);
     setNote("");
     setError(null);
+    setLockErr(null);
   }, [visible, order]);
+  /**
+   * บรรทัด "คุณกดเมื่อ … ระบบได้รับหลังปิดรับ" ล้างเฉพาะตอนเปิด/ปิดฟอร์ม ไม่ใช่ตอนใบโหลดใหม่
+   * — ถูกปฏิเสธแล้วฟอร์มโหลดใบใหม่ทันที ถ้าล้างตามใบ บรรทัดนี้จะหายก่อนที่หัวหน้าภาคได้อ่าน
+   */
+  useEffect(() => {
+    setRefusedAt(null);
+  }, [visible]);
+  useEffect(() => {
+    setUrgentWith(false);
+  }, [visible, visit, confirmChoice]);
 
   async function pickDoc(
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
@@ -3704,11 +4277,13 @@ function StageModal({
         await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
       } else if (order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") {
         // ตกลงวันเดิมไม่ส่งวันไป — เซิร์ฟเวอร์ใช้วันที่หัวหน้าภาคใส่ไว้ จะได้ไม่บันทึกว่าเลื่อนเพราะเผลอแตะช่องวัน
+        // งานด่วนส่งเฉพาะตอนช่องติ๊กขึ้นอยู่และติ๊กไว้ — เซิร์ฟเวอร์ตัดสินซ้ำจากเวลาที่คำขอไปถึง (เส้นตายยังไม่ผ่าน = ไม่ตั้ง ไม่ปฏิเสธ)
+        const urgent = confirmUrgentOffer && urgentWith ? { urgent: true } : {};
         await api.post(
           `/work-orders/${order.id}/confirm-appointment`,
           confirmChoice === "MOVE"
-            ? { scheduledAt: visit, scheduledTime: visitTime || null, note: note.trim() || undefined, ...seenAppointment(order) }
-            : { note: note.trim() || undefined, ...seenAppointment(order) }
+            ? { scheduledAt: visit, scheduledTime: visitTime || null, note: note.trim() || undefined, ...seenAppointment(order), ...urgent }
+            : { note: note.trim() || undefined, ...seenAppointment(order), ...urgent }
         );
         onDone("confirmed");
         return;
@@ -3802,12 +4377,16 @@ function StageModal({
         await api.post(`/work-orders/${order.id}/payment`, { note: note.trim() || undefined });
       } else if (canDecline && declineDate) {
         await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim(), ...seenAppointment(order) });
+        onDone("declined");
+        return;
       } else if (order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") {
         await api.post(`/work-orders/${order.id}/dispatch`, {
           team,
           note: note.trim() || undefined,
           ...seenAppointment(order),
         });
+        onDone("released");
+        return;
       } else {
         await api.post(`/work-orders/${order.id}/assign`, {
           team,
@@ -3818,10 +4397,62 @@ function StageModal({
       }
       onDone();
     } catch (e) {
+      /**
+       * เลยเวลาปิดรับตอนคำสั่งไปถึงเซิร์ฟเวอร์ (จอยังโชว์ "เหลือ 1 นาที" อยู่ หรือแอดมินเพิ่งเลื่อนเวลาปิดรับให้เร็วขึ้น)
+       * ฟอร์มไม่ปิด ไม่ขึ้นข้อความแดงดิบของเซิร์ฟเวอร์ — โหลดใบใหม่แล้วฟอร์มกลายเป็นหน้าล็อก พร้อมบอกว่ากดเมื่อไร
+       * และว่าไม่มีอะไรถูกบันทึก · ทางไปต่อ (ขอแอดมิน / ส่งกลับ) อยู่ในหน้าเดียวกัน ไม่ต้องหาปุ่มใหม่
+       */
+      const res = (e as { response?: { status?: number; data?: { code?: unknown; receivedAt?: unknown } } }).response;
+      if (res?.status === 409 && res.data?.code === "DISPATCH_LOCKED") {
+        setRefusedAt(typeof res.data.receivedAt === "string" ? res.data.receivedAt : new Date(now).toISOString());
+        await onReload();
+        return;
+      }
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
       setBusy(null);
+    }
+  }
+
+  /**
+   * หน้าล็อก: ขอแอดมินแก้เป็นงานด่วน / ยกเลิกคำขอ — ฟอร์มไม่ปิด (ตัวอย่าง sendReq · cancelReq)
+   * หัวหน้าภาคต้องเห็นกับตาว่าคำขอไปแล้ว (กล่องม่วง "ส่งคำขอแล้ว") และยกเลิกได้ถ้าเปลี่ยนใจก่อนแอดมินทำ
+   * โหลดใบใหม่จากคำตอบ (ใบงานทั้งก้อน) — สถานะคำขอมาจากประวัติในเซิร์ฟเวอร์ ไม่ได้จำในเครื่อง
+   */
+  async function askUrgent(cancel: boolean) {
+    setSaving(true);
+    setError(null);
+    setLockErr(null);
+    try {
+      await api.post(`/work-orders/${order.id}/urgent-request${cancel ? "/cancel" : ""}`, cancel ? {} : { note: note.trim() || undefined });
+      setNote("");
+      await onReload();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * หน้าล็อก: ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่ (ปุ่มเดิม decline-new-date เปิดให้ใบที่ล็อกด้วย ไม่ต้องเป็นใบที่ถูกเลื่อนวัน)
+   * ต้องมีเหตุผล — แอดมินโทรร้านนัดใหม่ต้องรู้ว่าทีมไม่ว่างเพราะอะไร จะได้ไม่นัดวันที่ไม่ว่างซ้ำ
+   */
+  async function declineLocked() {
+    if (!note.trim()) {
+      setLockErr(LOCK_NOTE_REQUIRED);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/decline-new-date`, { reason: note.trim(), ...seenAppointment(order) });
+      onDone("declined");
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -3994,6 +4625,34 @@ function StageModal({
       (order.status === "NEW" && (inspectFirst || noPartsAssign)) ||
       ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") && confirmChoice === "MOVE"));
   const pastWarn = visitPast ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null;
+  /**
+   * นัดวันเข้า/ส่งตรวจของหัวหน้าภาค — วันนี้หรือพรุ่งนี้หลังเวลาปิดรับ ใบจะถึงขั้นปล่อยงานแบบล็อก
+   * เตือนตอนเลือกวัน ไม่ใช่ตอนใบมาถึงแล้วกดไม่ได้ · เตือนอย่างเดียว ไม่กันบันทึก (ข้อ 4) — นัดวันนี้ยังทำได้ ต้องให้แอดมินแก้เป็นงานด่วน
+   * วันที่ย้อนหลังมีบรรทัดของมันเอง (pastWarn) ไม่ขึ้นซ้อนกัน
+   */
+  const supDateWarn = visitPast ? null : <FormWarningLine warning={dateFormWarning(validDate ? visit : null, now, order.cutoff, "supervisor", "supervisor")} />;
+  /**
+   * คอนเฟิร์มลูกค้า (แอดมิน) — บรรทัดเตือนเทา/ส้ม/แดง ของวันที่จะส่งไปให้หัวหน้าภาคปล่อยงาน (ข้อ 4)
+   * "ลูกค้าคอนเฟิร์มวันนี้" = วันเดิมในใบ · "ลูกค้าขอเลื่อน" = วันที่เลือก · ยังไม่เลือกคำตอบ = ยังไม่รู้ว่าวันไหน ไม่เตือน
+   * แดง = ใบจะถึงหัวหน้าภาคแบบล็อก → ช่องติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" ในการบันทึกเดียว (ข้อ 2)
+   * เตือนอย่างเดียว ไม่กันปุ่ม — แอดมินเพิ่งตกลงวันกับร้าน การกันคือทิ้งสิ่งที่ตกลงไป
+   */
+  const confirmStage = order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM";
+  const confirmDay = !confirmStage || visitPast
+    ? null
+    : confirmChoice === "MOVE"
+      ? validDate ? visit : null
+      : confirmChoice === "OK"
+        ? order.scheduledAt?.slice(0, 10) ?? null
+        : null;
+  const confirmWarn = confirmDay ? dateFormWarning(confirmDay, now, order.cutoff, "admin", "confirm") : null;
+  const confirmUrgentOffer = !!confirmWarn?.checkbox;
+  const confirmWarnBlock = confirmWarn ? (
+    <>
+      <FormWarningLine warning={confirmWarn} />
+      {confirmUrgentOffer ? <UrgentWithCheckbox checked={urgentWith} onChange={setUrgentWith} disabled={saving} /> : null}
+    </>
+  ) : null;
 
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
   const inspectMissing = order.status === "INSPECTING" ? missingInspection(files, order.inspectionStartedAt) : [];
@@ -4044,6 +4703,56 @@ function StageModal({
               · {order.code}
             </>}
       footer={
+        lockMode ? (
+          /*
+            ท้ายฟอร์มตอนล็อก (ตัวอย่าง lockNoReq / lockReq / lockPast) — ช่องบอกแอดมินอยู่ติดปุ่ม ไม่ได้อยู่ในส่วนที่เลื่อน
+            มือถือเลื่อนอ่านกล่องแดงแล้วกดปุ่มได้เลย ไม่ต้องเลื่อนกลับขึ้นไปหาช่องพิมพ์ · ข้อความผิดพลาดขึ้นตรงนี้ด้วยเหตุผลเดียวกัน
+          */
+          <View style={styles.lockFoot}>
+            {lockMode === "noReq" ? (
+              <>
+                <Text style={styles.modalLabel}>{LOCK_NOTE_LABEL}</Text>
+                <TextInput
+                  style={styles.lockInput}
+                  value={note}
+                  onChangeText={(v) => {
+                    setNote(v);
+                    setLockErr(null);
+                  }}
+                  maxLength={300}
+                  placeholder="เช่น ลูกค้ารอพรุ่งนี้เช้า · ทีมไม่ว่างวันนั้น"
+                  placeholderTextColor={colors.textFaint}
+                  accessibilityLabel={LOCK_NOTE_LABEL}
+                />
+                {lockErr ? (
+                  <Text style={styles.modalError} accessibilityRole="alert">
+                    {lockErr}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+            {lockMode === "req" && rv?.ask ? <AskPendingBox ask={rv.ask} /> : null}
+            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+            <LockActions
+              actions={
+                lockMode === "noReq"
+                  ? [
+                      { label: LOCK_BUTTONS.request, kind: "purple", grow: true, disabled: saving, onPress: () => void askUrgent(false) },
+                      { label: declineLabel(order.status), kind: "outline", grow: true, disabled: saving, onPress: () => void declineLocked() },
+                      { label: LOCK_BUTTONS.back, kind: "ghost", disabled: saving, onPress: onCancel },
+                    ]
+                  : lockMode === "req"
+                    ? [
+                        { label: LOCK_BUTTONS.cancelRequest, kind: "purpleOutline", grow: true, disabled: saving, onPress: () => void askUrgent(true) },
+                        { label: LOCK_BUTTONS.backToQueue, kind: "ghost", grow: true, disabled: saving, onPress: onBackToQueue },
+                      ]
+                    : lockMode === "past"
+                      ? [{ label: LOCK_BUTTONS.backToQueue, kind: "ghost", grow: true, onPress: onBackToQueue }]
+                      : [{ label: LOCK_BUTTONS.back, kind: "ghost", grow: true, onPress: onCancel }]
+              }
+            />
+          </View>
+        ) : (
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
@@ -4101,8 +4810,11 @@ function StageModal({
             )}
           </TouchableOpacity>
         </View>
+        )
       }
     >
+            {/* ล็อกแล้ว: กล่องแดงขึ้นบนสุด (ตัวอย่าง) — ทำไมกดไม่ได้ และทำอะไรได้ อยู่ในกล่องเดียว */}
+            {releaseStage ? <LockBox order={order} now={now} cutoff={order.cutoff} refusedAt={refusedAt} /> : null}
             {prevUsed.length ? (
               <View style={styles.prevBox} accessibilityLabel="ค่าเดิมก่อนย้อน">
                 <Text style={styles.prevBoxTitle}>↩ ใบนี้ย้อนขั้นมา — เติมค่าเดิมไว้ให้: {prevUsed.join(" · ")}</Text>
@@ -4178,6 +4890,7 @@ function StageModal({
                       min={minVisit}
                     />
                     {pastWarn}
+                    {supDateWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : needsParts === true ? (
@@ -4194,6 +4907,7 @@ function StageModal({
                     </Text>
                     <DateField value={visit} onChange={setVisit} label="วันเข้างาน" emptyHint="ต้องระบุวันก่อนจึงจะจ่ายงานได้" min={minVisit} />
                     {pastWarn}
+                    {supDateWarn}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
@@ -4959,7 +5673,7 @@ function StageModal({
 
             {canDecline ? (
               <>
-                {declineDate ? <DispatchNote order={order} /> : null}
+                {declineDate ? <DispatchNote order={order} now={now} /> : null}
                 <View style={styles.options} accessibilityLabel="วันนัดเปลี่ยน ทีมว่างไหม">
                   <TouchableOpacity
                     style={[styles.option, !declineDate && styles.optionOn]}
@@ -4990,7 +5704,13 @@ function StageModal({
             order.status === "PARTS_CHECKED" ||
             (order.status === "NEW" && (inspectFirst || noPartsAssign)) ? (
               <>
-                {order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH" ? <DispatchNote order={order} /> : null}
+                {releaseStage ? (
+                  <>
+                    <DispatchNote order={order} now={now} />
+                    {/* เส้นตายใต้กล่องคอนเฟิร์ม (ตำแหน่งตามตัวอย่าง) — ล็อกแล้วไม่มีกล่องนี้ กล่องแดงข้างบนบอกแทน */}
+                    <ReleaseDeadlineBox order={order} now={now} cutoff={order.cutoff} />
+                  </>
+                ) : null}
                 {order.status === "PARTS_CHECKED" ? (
                   <>
                     {/* นัดวัน → เบิก → คอนเฟิร์มลูกค้าตอนของพร้อม (ต.ค. 69 รอบสอง) · ไม่ใช้อะไหล่/เบิกครบแล้วไม่มีขั้นเบิกคั่น */}
@@ -5015,12 +5735,14 @@ function StageModal({
                   dropdown มีช่องค้นหาในตัว พิมพ์ชื่อทีมสามตัวก็เจอ
                   ทีมของสาขายังอยู่บนสุดเหมือนเดิม เพราะเป็นคำตอบที่ถูกเกือบทุกครั้ง
                 */}
+                {/* ล็อกแล้วเปลี่ยนทีมไม่มีความหมาย (กดปล่อยไม่ได้) — ยังเห็นว่าทีมไหน แต่เลือกไม่ได้ (ตัวอย่าง select disabled) */}
                 <Dropdown
                   value={team}
                   onChange={setTeam}
                   placeholder="เลือกทีม"
                   accessibilityLabel="ทีมที่จะรับงาน"
                   options={teamOptions(teams, order.suggestedTeam, order.jobType)}
+                  disabled={lockedNow}
                 />
                 {teams.length === 0 ? (
                   <Text style={styles.warn}>
@@ -5116,6 +5838,7 @@ function StageModal({
                   min={minVisit}
                 />
                 {pastWarn}
+                {supDateWarn}
                 <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
               </>
             ) : null}
@@ -5168,6 +5891,8 @@ function StageModal({
                     </TouchableOpacity>
                   ))}
                 </View>
+                {/* ตกลงวันเดิม: บรรทัดเตือนอยู่ใต้คำตอบ · ขอเลื่อน: อยู่ใต้ช่องวัน (ตัวอย่าง confirmEx — บรรทัดเตือนเหนือปุ่ม) */}
+                {confirmChoice === "OK" ? confirmWarnBlock : null}
                 {confirmChoice === "MOVE" ? (
                   <>
                     <DateField
@@ -5178,14 +5903,16 @@ function StageModal({
                       min={minVisit}
                     />
                     {pastWarn}
+                    {confirmWarnBlock}
                     <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
                   </>
                 ) : null}
               </>
             ) : null}
 
-            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน */}
-            {order.status !== "INSPECTING" ? (
+            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน
+                หน้าล็อกมีช่อง "บอกแอดมินสั้น ๆ" ติดกับปุ่มข้างล่างแทน — สองช่องคนไม่รู้ว่าข้อความไหนไปถึงแอดมิน */}
+            {order.status !== "INSPECTING" && !lockMode ? (
               <>
                 <Text style={styles.modalLabel}>
                   {["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
@@ -5213,7 +5940,7 @@ function StageModal({
               </>
             ) : null}
 
-            {error ? <Text style={styles.modalError}>{error}</Text> : null}
+            {error && !lockMode ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
   );
 }
@@ -5638,6 +6365,19 @@ function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: W
   );
 }
 
+/** "ออกงานวันนี้" ตัวใหญ่บนสุดของฟอร์มปล่อยงาน — กดแล้วทีมต้องออกวันนี้ */
+function TodayHero({ order }: { order: WorkOrder }) {
+  return (
+    <View style={styles.todayHero} accessibilityLabel="ออกงานวันนี้">
+      <Text style={styles.todayHeroBig}>ออกงานวันนี้{order.scheduledTime ? ` · ${order.scheduledTime} น.` : " · ทั้งวัน"}</Text>
+      <Text style={styles.todayHeroText}>
+        {order.assignedTeam ? `ทีม${order.assignedTeam} · ` : ""}
+        {order.branchCode} {order.branchName}
+      </Text>
+    </View>
+  );
+}
+
 /**
  * หัวฟอร์มปล่อยงาน — วันที่จะเข้าเป็นวันที่หัวหน้าภาคนัด/ปล่อยไว้เอง หรือถูกเลื่อนมา
  *
@@ -5646,7 +6386,7 @@ function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: W
  * ไม่ถูกเลื่อน = กล่องเขียว ลูกค้าคอนเฟิร์มแล้ว
  * อ่านจากประวัติ ไม่เก็บซ้ำในใบงาน — ประวัติคือของจริงอยู่แล้ว
  */
-function DispatchNote({ order }: { order: WorkOrder }) {
+function DispatchNote({ order, now }: { order: WorkOrder; now: number }) {
   const move = rescheduledPending(order) ? pendingMove(order) : null;
   const confirm = order.logs
     .filter((l) => l.action === "RESCHEDULED" || l.action === "CONFIRMED")
@@ -5655,19 +6395,27 @@ function DispatchNote({ order }: { order: WorkOrder }) {
   // แอดมินเลื่อนแล้วลูกค้าตกลงวันนั้นทีหลัง — ร้านรู้วันใหม่แล้ว เหลือแค่เช็คทีม
   const agreedAfter = !!move && move.action !== "RESCHEDULED" && confirm?.action === "CONFIRMED" && confirm.createdAt > move.createdAt;
   const shown = move ?? confirm;
-  // ออกงานวันนี้ — ตัวใหญ่บนสุด ย้ำให้หัวหน้าภาครู้ว่ากดแล้วทีมต้องออกวันนี้ (เจ้าของงานขอ ต.ค. 69)
-  const today = order.status === "ASSIGNED" && order.scheduledAt?.slice(0, 10) === todayBkk();
+  const rv = releaseView(order, now, order.cutoff);
+  /**
+   * ออกงานวันนี้ — ตัวใหญ่บนสุด ย้ำให้หัวหน้าภาครู้ว่ากดแล้วทีมต้องออกวันนี้ (เจ้าของงานขอ ต.ค. 69)
+   * "วันนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มือถือตั้งวันผิดต้องไม่บอกว่าออกงานวันนี้) · ใบที่ล็อกไม่ขึ้น — กดปล่อยไม่ได้ ตัวใหญ่ชวนให้กดคือหลอก
+   */
+  const today = order.status === "ASSIGNED" && !rv?.locked && order.scheduledAt?.slice(0, 10) === serverDay(now);
+  /**
+   * งานด่วนที่ใช้ได้อยู่ — กล่องเขียวแทนกล่องคอนเฟิร์ม/เลื่อนวัน (ตัวอย่างเช็คงานด่วนก่อนเสมอ)
+   * สิ่งที่หัวหน้าภาคต้องรู้ตอนนี้คือใครปลดล็อกให้และทำไม ไม่ใช่ว่าใครคอนเฟิร์มลูกค้า (ประวัติยังมีครบ)
+   */
+  if (rv?.urgent && order.urgentInfo && order.scheduledAt) {
+    return (
+      <>
+        {today ? <TodayHero order={order} /> : null}
+        <UrgentNoteBox info={order.urgentInfo} day={order.scheduledAt.slice(0, 10)} time={order.scheduledTime} />
+      </>
+    );
+  }
   return (
     <>
-    {today ? (
-      <View style={styles.todayHero} accessibilityLabel="ออกงานวันนี้">
-        <Text style={styles.todayHeroBig}>ออกงานวันนี้{order.scheduledTime ? ` · ${order.scheduledTime} น.` : " · ทั้งวัน"}</Text>
-        <Text style={styles.todayHeroText}>
-          {order.assignedTeam ? `ทีม${order.assignedTeam} · ` : ""}
-          {order.branchCode} {order.branchName}
-        </Text>
-      </View>
-    ) : null}
+    {today ? <TodayHero order={order} /> : null}
     <View style={[styles.dispatchNote, moved && styles.dispatchNoteMoved]}>
       <Ionicons
         name={moved ? "swap-horizontal" : "checkmark-circle"}
@@ -5695,15 +6443,11 @@ function DispatchNote({ order }: { order: WorkOrder }) {
   );
 }
 
-/** ใบเคลมที่ช่างกำลังกรอกในหน้าปิดงาน — ไฟล์ยังอยู่ในเครื่อง ส่งขึ้นตอนกดปิดงาน */
-interface ClaimDraft {
-  on: boolean;
-  brokenPartCode: string;
-  symptom: string;
-  checkNote: string;
-  troubleshooting: string[];
-  files: Record<string, PickedAttachment | undefined>;
-}
+/**
+ * ใบเคลมที่ช่างกำลังกรอกในหน้าปิดงาน — ข้อความเท่านั้น (จำในเครื่องผ่าน utils/closeDraft)
+ * ไฟล์หลักฐานไม่อยู่ที่นี่แล้ว: ส่งขึ้นเซิร์ฟเวอร์ทันทีที่เลือก (ClaimFileSlot · เคลมก้อน 1)
+ */
+type ClaimDraft = ClaimPartDraft;
 
 /** ใบงาน SUB = ใบที่จ่ายให้ทีม outsource แล้ว (รอปล่อยงาน / ทีมกำลังทำ) */
 function subStage(o: WorkOrder) {
@@ -5732,45 +6476,28 @@ function SubBox({ order }: { order: WorkOrder }) {
 }
 
 /**
- * ใบเคลมอะไหล่เก่าของใบงานนี้ — ทุกคนเห็น Admin Spare Part ตรวจและตัดสินที่นี่
+ * ใบเคลมอะไหล่เก่าของใบงานนี้ — ทุกคนที่เปิดใบงานเห็น (ผู้ตรวจเคลมใช้หน้าตรวจเคลมแทน · components/claims/ClaimReview)
  *
- * วางข้อมูลเรียงตามฟอร์มเคลมของผู้ขาย คนตรวจไล่ทีละหัวข้อได้เหมือนถือฟอร์มกระดาษ
+ * วางข้อมูลเรียงตามฟอร์มเคลมของผู้ขาย คนอ่านไล่ทีละหัวข้อได้เหมือนถือฟอร์มกระดาษ
  * แล้วหลักฐานของอะไหล่ชิ้นนั้นอยู่ติดกัน — ใบที่เปลี่ยนสองชิ้นไม่ต้องเดาว่ารูปไหนของชิ้นไหน
+ * หลักฐานของแต่ละแถวตามที่เซิร์ฟเวอร์ตัดสิน (evidenceIds — ตัวเดียวกับที่ PDF และผู้ตรวจเห็น) ไม่กรองด้วยเวลาเองแล้ว
+ * รอบที่ถูกตีกลับไปแล้วพับไว้ ("รอบ 1 · ตีกลับ ▸") — เดิมวางเรียงกันทุกรอบ คนอ่านแยกไม่ออกว่าแถวไหนคือสถานะตอนนี้
  */
 function ClaimsCard({
   order,
   files,
-  canReview,
-  onReviewed,
+  showMissed,
+  downloads = false,
 }: {
   order: WorkOrder;
   files: Attachment[];
-  canReview: boolean;
-  onReviewed: () => Promise<void> | void;
+  showMissed: boolean;
+  /** ผู้ตรวจเคลม (Admin Spare Part / Super Admin รวมดูในฐานะ) — ขึ้นแผงดาวน์โหลดหลักฐานเมื่อมีชิ้นที่ผ่านแล้ว */
+  downloads?: boolean;
 }) {
   const [viewing, setViewing] = useState<{ items: Attachment[]; at: number } | null>(null);
-  const [reason, setReason] = useState("");
-  const [saving, setSaving] = useState<"approve" | "reject" | null>(null);
   const [opening, setOpening] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function review(approve: boolean) {
-    if (!approve && !reason.trim()) {
-      setError("ตีกลับต้องบอกเหตุผล — ช่างเห็นข้อความนี้บนใบงาน และต้องรู้ว่าต้องแก้อะไร");
-      return;
-    }
-    setSaving(approve ? "approve" : "reject");
-    setError(null);
-    try {
-      await api.post(`/work-orders/${order.id}/claim-review`, { approve, reason: reason.trim() || undefined });
-      setReason("");
-      await onReviewed();
-    } catch (e) {
-      setError(apiErrorMessage(e));
-    } finally {
-      setSaving(null);
-    }
-  }
+  const [oldOpen, setOldOpen] = useState(false);
 
   // ลิงก์มี token ของตัวเอง — มือถือส่งต่อให้เบราว์เซอร์เปิดได้โดยไม่ต้องแนบ header
   async function openPdf(claimId: number) {
@@ -5785,14 +6512,152 @@ function ClaimsCard({
     }
   }
 
+  /**
+   * ใบเคลมที่เป็นผลปัจจุบัน = แถวล่าสุดของแต่ละชิ้นในงานซ่อมครั้งนี้ (claimRound) — ที่เหลือพับไว้เป็นรอบเก่า
+   * เดิมจางทุกแถวยกเว้นแถวแรก ใบที่เคลมสองชิ้นรอบเดียวกันชิ้นที่สองจึงดูเหมือนรอบเก่าที่ไม่ต้องตรวจ
+   * และไม่ใช้ "แถวที่ส่งพร้อมกันครั้งล่าสุด" แล้ว (เคลมก้อน 3): รอบสองส่งเฉพาะชิ้นที่ยังไม่ผ่าน
+   * ชิ้นที่ผ่านในรอบแรก (ใบเคลมที่ออกไปผู้ขายจริง) จะถูกพับหายไปเป็น "รอบเก่า"
+   */
+  const parts = roundPartsOf(order);
+  const currentIds = new Set(parts.map((p) => p.row.id));
+  const latest = parts.map((p) => p.row);
+  const older = order.claims.filter((c) => !currentIds.has(c.id));
+  const family = order.claimGuide?.plate.family ?? null;
+  const olds = oldRoundsOf(order.claims, order.logs, files, family);
+  const trail = claimTrailOf(order.claims, order.logs);
+  const waitingSince = latest
+    .filter((c) => c.status === "PENDING")
+    .reduce<string | null>((m, c) => (!m || Date.parse(c.createdAt) > Date.parse(m) ? c.createdAt : m), null);
+  // ตอนนี้รอใคร — ท้ายแถบสถานะ (ใบที่จบแล้วไม่มี)
+  const tail =
+    order.status === "CLAIM_REVIEW"
+      ? `รอ Admin Spare Part ตรวจ · ${daysSince(waitingSince)} วัน`
+      : order.status === "IN_PROGRESS" && claimRoundOf(order).rejected
+        ? "รอช่างแก้"
+        : null;
+
+  function block(c: PartClaim, current: boolean) {
+    // สถานะที่แอปรุ่นนี้ยังไม่รู้จัก (เซิร์ฟเวอร์ใหม่กว่าแอป) ขึ้นแบบ "รอตรวจ" แทน — อ่านค่าว่างแล้วทั้งหน้าใบงานพัง
+    const tone = (CLAIM_STATUS as Record<string, (typeof CLAIM_STATUS)[PartClaim["status"]] | undefined>)[c.status] ?? CLAIM_STATUS.PENDING;
+    const round = roundOf(c, order.claims);
+    const prev = previousOf(c, order.claims);
+    // หลักฐานของแถวนี้ตามที่เซิร์ฟเวอร์ตัดสิน — รูปป้ายรุ่นขึ้นในกล่องข้อมูลเครื่องแล้ว ไม่ซ้ำตรงนี้
+    const evidence = evidenceOf(c, files).filter((f) => f.role?.startsWith("CLAIM_"));
+    const ts = checkGroupsOf(c, order.claimTroubleshooting, order.claimGuide).groups.filter((g) => g.key === "ts");
+    return (
+      <View key={c.id} style={[styles.claimBlock, !current && styles.claimBlockOld]}>
+        <View style={styles.headRow}>
+          <Text style={[styles.partCode, { flexShrink: 1 }]}>
+            {c.partCode} · {c.partName}
+            {c.quantity > 1 ? ` × ${c.quantity}` : ""}
+          </Text>
+          <View style={{ flex: 1 }} />
+          <View style={[styles.claimChip, { backgroundColor: tone.bg }]}>
+            <Text style={[styles.claimChipText, { color: tone.fg }]}>{tone.label}</Text>
+          </View>
+        </View>
+        <Text style={styles.linkedText}>
+          รอบ {round} · ส่งเมื่อ {formatDateTime(c.createdAt)}
+          {c.reviewedAt ? ` · ตรวจเมื่อ ${formatDateTime(c.reviewedAt)}` : ""}
+        </Text>
+        <Row label="รหัสตัวที่เสีย" value={c.brokenPartCode ?? "—"} />
+        {brokenMatches(c) === false ? (
+          <Text style={styles.claimMismatch}>ไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ ({c.partCode}) — ตรวจรหัสก่อนส่งผู้ขาย</Text>
+        ) : null}
+        <Row label="ยี่ห้อ / รุ่น" value={[c.brand, c.model].filter(Boolean).join(" · ") || "—"} />
+        <Row label="หมายเลขเครื่อง" value={c.machineCode ?? "—"} />
+        <ClaimMachineSummary
+          nameplate={c.nameplate}
+          fieldCheck={c.fieldCheck}
+          guide={order.claimGuide}
+          showMissed={showMissed}
+          photo={(() => {
+            const at = files.findIndex((f) => f.id === c.nameplate?.photoId);
+            return at < 0 ? null : { uri: files[at].thumbnailDataUrl, open: () => setViewing({ items: files, at }) };
+          })()}
+        />
+        <Text style={styles.partsHead}>อาการ/สาเหตุ</Text>
+        <Text style={styles.claimText}>{c.symptom}</Text>
+        <Text style={styles.partsHead}>ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้</Text>
+        <Text style={styles.claimText}>{c.checkNote}</Text>
+        <CheckGroups groups={ts} showMissed={showMissed} />
+        {evidence.length > 0 ? (
+          <>
+            <Text style={styles.partsHead}>{current ? "หลักฐานรอบนี้:" : `หลักฐานที่ส่งรอบ ${round}:`}</Text>
+            <View style={styles.closeFiles}>
+              {evidence.map((f, at) => (
+                <TouchableOpacity
+                  key={f.id}
+                  style={styles.closeFile}
+                  activeOpacity={0.8}
+                  onPress={() => setViewing({ items: evidence, at })}
+                  accessibilityLabel={`เปิด ${f.roleLabel ?? f.fileName}`}
+                >
+                  {f.thumbnailDataUrl ? (
+                    <Image source={{ uri: f.thumbnailDataUrl }} style={styles.closeThumb} />
+                  ) : (
+                    <View style={[styles.closeThumb, styles.slipBlank]}>
+                      <Ionicons name={attachmentIcon(f.kind)} size={20} color={colors.textFaint} />
+                    </View>
+                  )}
+                  {f.roleLabel ? (
+                    <View style={styles.closeBadge}>
+                      <Text style={styles.closeBadgeText}>{f.roleLabel.replace(" (เคลม)", "")}</Text>
+                    </View>
+                  ) : null}
+                  {/* แนบหลังรอบก่อนถูกตีกลับ = ไฟล์ที่ช่างแนบใหม่รอบนี้ */}
+                  {current && isNewThisRound(f, prev) ? <Text style={styles.freshBadge}>ใหม่รอบนี้</Text> : null}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        ) : null}
+        {c.status === "REJECTED" && c.rejectReason ? (
+          <View style={styles.verdictBad}>
+            <Ionicons name="arrow-undo" size={16} color={colors.danger} />
+            <Text style={styles.verdictBadText}>ตีกลับ: {c.rejectReason}</Text>
+          </View>
+        ) : null}
+        {/* ปิดเคลม ไม่ส่งผู้ขาย — ไม่มีใบเคลมให้เปิด (เซิร์ฟเวอร์ไม่ออก PDF) บอกเหตุผลแทนปุ่ม */}
+        {c.status === "DECLINED" ? (
+          <View style={styles.claimDeclined}>
+            <Ionicons name="remove-circle-outline" size={16} color={colors.textMuted} />
+            <Text style={styles.claimDeclinedText}>
+              ปิดเคลม ไม่ส่งผู้ขาย{c.rejectReason ? `: ${c.rejectReason}` : ""}
+              {c.reviewedByName ? ` · ${c.reviewedByName}` : ""}
+            </Text>
+          </View>
+        ) : (
+        <TouchableOpacity
+          style={styles.claimPdf}
+          onPress={() => openPdf(c.id)}
+          disabled={opening !== null}
+          activeOpacity={0.7}
+          accessibilityLabel={`เปิดใบเคลม ${c.partCode}`}
+        >
+          {opening === c.id ? (
+            <Spinner color={colors.primaryInk} size="small" />
+          ) : (
+            <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
+          )}
+          <Text style={styles.claimPdfText}>
+            เปิดใบเคลม (PDF){c.status === "APPROVED" ? "" : " — ร่าง"}
+          </Text>
+        </TouchableOpacity>
+        )}
+      </View>
+    );
+  }
+
   return (
-    <View style={[styles.card, canReview && styles.claimCardReview]}>
+    <View style={styles.card}>
       <View style={styles.infoHead}>
         <Ionicons name="shield-checkmark-outline" size={20} color={colors.primaryInk} />
         <Text style={[styles.infoTitle, headingFont]}>เคลมอะไหล่เก่า</Text>
       </View>
       {/* เครื่องเดิมเคลมชิ้นเดิมซ้ำไหม — เปิดหน้าประวัติเคลมกรองให้เลย (แอดมิน/หัวหน้าภาคเท่านั้น · ช่างไม่เห็น) */}
       <ClaimHistoryLinks branchCode={order.branchCode} machineCode={order.machineCode} />
+      <ClaimTrail trail={trail} tail={tail} />
       {viewing ? (
         <ImageViewer
           workOrderId={order.id}
@@ -5801,154 +6666,84 @@ function ClaimsCard({
           onClose={() => setViewing(null)}
         />
       ) : null}
-      {order.claims.map((c, i) => {
-        const tone = CLAIM_STATUS[c.status];
-        // หลักฐานที่แนบก่อนส่งใบเคลมใบนี้ — ไฟล์ที่แนบหลังจากนั้นเป็นของรอบถัดไป
-        const evidence = files.filter(
-          (f) => f.sparePartId === c.sparePartId && f.role?.startsWith("CLAIM_") && f.createdAt <= c.createdAt
-        );
-        return (
-          <View key={c.id} style={[styles.claimBlock, i > 0 && styles.claimBlockOld]}>
-            <View style={styles.headRow}>
-              <Text style={[styles.partCode, { flexShrink: 1 }]}>
-                {c.partCode} · {c.partName}
-                {c.quantity > 1 ? ` × ${c.quantity}` : ""}
-              </Text>
-              <View style={{ flex: 1 }} />
-              <View style={[styles.claimChip, { backgroundColor: tone.bg }]}>
-                <Text style={[styles.claimChipText, { color: tone.fg }]}>{tone.label}</Text>
-              </View>
-            </View>
-            <Text style={styles.linkedText}>
-              ส่งเมื่อ {formatDateTime(c.createdAt)}
-              {c.reviewedAt ? ` · ตรวจเมื่อ ${formatDateTime(c.reviewedAt)}` : ""}
+      {latest.map((c) => block(c, true))}
+      {/*
+       * ดาวน์โหลดหลักฐานส่งผู้ขาย (เคลมก้อน 6) — ไม่ได้มีแค่ตอนเพิ่งกดอนุมัติ: กด "ใบถัดไป →" ไปก่อน โหลดไม่ทัน
+       * เบราว์เซอร์กันหน้าต่างใหม่ หรือจะรวบส่งอีเมลทีหลัง ต้องกลับมาเอา zip/วิดีโอของใบนี้ได้เสมอ (ตัวอย่างมี "เปิดดูใบที่ปิดแล้ว")
+       * Super Admin ดูในฐานะ Admin Spare Part ไม่มีปุ่มตัดสิน ทางนี้จึงเป็นทางเดียวของเขา · ชิ้นที่ผ่าน = ผลล่าสุดของชิ้นในงานซ่อมครั้งนี้
+       * (claimRound — กติกาเดียวกับเซิร์ฟเวอร์) ไม่มีชิ้นผ่านก็ไม่มีแผง: ใบร่างห้ามหลุดไปผู้ขาย
+       */}
+      {downloads && claimRoundOf(order).parts.some((p) => p.status === "APPROVED") ? (
+        <DownloadPanel workOrderId={order.id} code={order.code} />
+      ) : null}
+      {older.length ? (
+        <View style={styles.claimOld} accessibilityLabel="รอบก่อน">
+          <TouchableOpacity
+            onPress={() => setOldOpen((o) => !o)}
+            style={styles.claimOldBtn}
+            activeOpacity={0.7}
+            accessibilityState={{ expanded: oldOpen }}
+          >
+            <Text style={styles.claimOldLabel}>
+              {olds.length ? oldRoundsLabel(olds, oldOpen) : `รอบก่อน ${oldOpen ? "▾" : "▸"}`}
             </Text>
-            <Row label="รหัสตัวที่เสีย" value={c.brokenPartCode ?? "—"} />
-            {c.brokenPartCode && c.brokenPartCode.toUpperCase() !== c.partCode.toUpperCase() ? (
-              <Text style={styles.claimMismatch}>ไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ ({c.partCode}) — ตรวจรหัสก่อนส่งผู้ขาย</Text>
-            ) : null}
-            <Row label="ยี่ห้อ / รุ่น" value={[c.brand, c.model].filter(Boolean).join(" · ") || "—"} />
-            <Row label="หมายเลขเครื่อง" value={c.machineCode ?? "—"} />
-            <ClaimMachineSummary
-              nameplate={c.nameplate}
-              fieldCheck={c.fieldCheck}
-              photo={(() => {
-                const at = files.findIndex((f) => f.id === c.nameplate?.photoId);
-                return at < 0 ? null : { uri: files[at].thumbnailDataUrl, open: () => setViewing({ items: files, at }) };
-              })()}
-            />
-            <Text style={styles.partsHead}>อาการ/สาเหตุ</Text>
-            <Text style={styles.claimText}>{c.symptom}</Text>
-            <Text style={styles.partsHead}>ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้</Text>
-            <Text style={styles.claimText}>{c.checkNote}</Text>
-            {c.troubleshooting.length > 0 ? (
-              <>
-                <Text style={styles.partsHead}>Troubleshooting ที่ทำแล้ว</Text>
-                {c.troubleshooting.map((t) => (
-                  <View key={t} style={styles.partRow}>
-                    <Ionicons name="checkmark-circle" size={15} color={colors.success} />
-                    <Text style={styles.claimText}>{t}</Text>
-                  </View>
-                ))}
-              </>
-            ) : null}
-            {evidence.length > 0 ? (
-              <>
-                <Text style={styles.partsHead}>หลักฐาน (+ รูปป้ายรุ่นในผลการทำงาน)</Text>
-                <View style={styles.closeFiles}>
-                  {evidence.map((f, at) => (
-                    <TouchableOpacity
-                      key={f.id}
-                      style={styles.closeFile}
-                      activeOpacity={0.8}
-                      onPress={() => setViewing({ items: evidence, at })}
-                      accessibilityLabel={`เปิด ${f.roleLabel ?? f.fileName}`}
+          </TouchableOpacity>
+          {oldOpen ? (
+            <>
+              {olds.map((r) => (
+                <View key={`${r.round}-${r.at}`} style={{ gap: 2 }}>
+                  {r.lines.map((l, i) => (
+                    <Text
+                      key={i}
+                      style={[
+                        styles.claimOldLine,
+                        l.tone === "head" && { color: colors.navy, fontWeight: "700" },
+                        l.tone === "ok" && { color: colors.successInk },
+                        l.tone === "bad" && { color: colors.dangerInk },
+                      ]}
                     >
-                      {f.thumbnailDataUrl ? (
-                        <Image source={{ uri: f.thumbnailDataUrl }} style={styles.closeThumb} />
-                      ) : (
-                        <View style={[styles.closeThumb, styles.slipBlank]}>
-                          <Ionicons name={attachmentIcon(f.kind)} size={20} color={colors.textFaint} />
-                        </View>
-                      )}
-                      {f.roleLabel ? (
-                        <View style={styles.closeBadge}>
-                          <Text style={styles.closeBadgeText}>{f.roleLabel.replace(" (เคลม)", "")}</Text>
-                        </View>
-                      ) : null}
-                    </TouchableOpacity>
+                      {l.text}
+                    </Text>
                   ))}
                 </View>
-              </>
-            ) : null}
-            {c.status === "REJECTED" && c.rejectReason ? (
-              <View style={styles.verdictBad}>
-                <Ionicons name="arrow-undo" size={16} color={colors.danger} />
-                <Text style={styles.verdictBadText}>ตีกลับ: {c.rejectReason}</Text>
-              </View>
-            ) : null}
-            <TouchableOpacity
-              style={styles.claimPdf}
-              onPress={() => openPdf(c.id)}
-              disabled={opening !== null}
-              activeOpacity={0.7}
-              accessibilityLabel={`เปิดใบเคลม ${c.partCode}`}
-            >
-              {opening === c.id ? (
-                <Spinner color={colors.primaryInk} size="small" />
-              ) : (
-                <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
-              )}
-              <Text style={styles.claimPdfText}>
-                เปิดใบเคลม (PDF){c.status === "APPROVED" ? "" : " — ร่าง"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        );
-      })}
-
-      {canReview ? (
-        <View style={styles.claimReview}>
-          <Text style={styles.modalLabel}>ผลตรวจของ Admin Spare Part</Text>
-          <TextInput
-            style={[styles.modalInput, styles.claimReason]}
-            value={reason}
-            onChangeText={setReason}
-            placeholder="เหตุผลที่ตีกลับ (ต้องกรอกเมื่อตีกลับ) เช่น วิดีโอ Error code ไม่เห็นรหัสบนหน้าจอ"
-            placeholderTextColor={colors.textFaint}
-            multiline
-            accessibilityLabel="เหตุผลที่ตีกลับเคลม"
-          />
-          {error ? <Text style={styles.modalError}>{error}</Text> : null}
-          <View style={styles.modalActions}>
-            <TouchableOpacity
-              style={[styles.claimReject, saving !== null && styles.modalSaveOff]}
-              onPress={() => review(false)}
-              disabled={saving !== null}
-              activeOpacity={0.8}
-            >
-              {saving === "reject" ? <Spinner color={colors.dangerInk} size="small" /> : null}
-              <Text style={styles.claimRejectText}>ตีกลับให้ช่างแก้</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSave, saving !== null && styles.modalSaveOff]}
-              onPress={() => review(true)}
-              disabled={saving !== null}
-              activeOpacity={0.8}
-            >
-              {saving === "approve" ? <Spinner color="#fff" size="small" /> : null}
-              <Text style={styles.modalSaveText}>อนุมัติเคลม · ปิดงาน</Text>
-            </TouchableOpacity>
-          </View>
+              ))}
+              {older.map((c) => block(c, false))}
+            </>
+          ) : null}
         </View>
       ) : null}
     </View>
   );
 }
 
+/** ไฟล์ของขั้นงานที่ทำ (รูปก่อน/หลังซ่อม · ป้ายรุ่น · ใบเหลือง) */
+type WorkRole = "BEFORE" | "AFTER" | "NAMEPLATE" | "REQUISITION";
+/** ไฟล์ของเครื่อง ใช้ร่วมทุกชิ้น (ข้อ ⑥ · ถ่ายก่อนซ่อม) — เคลมก้อน 5 */
+const MACHINE_ROLES = ["CLAIM_ERROR_VIDEO", "CLAIM_SYMPTOM"] as const;
+/**
+ * สิ่งที่ยังขาดหนึ่งอย่างของฟอร์มปิดงาน — key = จุดที่ปุ่ม "พาไป" เลื่อนไปหา · step = ขั้นที่อยู่ (ฟอร์มทีละขั้น)
+ * part = ชิ้นในขั้นเคลมทีละชิ้น · shared = ของเครื่อง (ข้อ ⑥) ใช้ร่วมทุกชิ้น นับครั้งเดียว
+ */
+interface MItem {
+  text: string;
+  key: string;
+  step: 0 | 1 | 2 | 3;
+  part?: number;
+  shared?: boolean;
+}
+
+/** ปุ่มส่งของฟอร์มปิดงาน — แถบ "ส่งไม่สำเร็จ" บอกให้กดปุ่มนี้อีกครั้ง ชื่อต้องตรงกับที่ช่างเห็นบนปุ่มจริง */
+const SUBMIT_LABEL = "ยืนยันปิดงาน";
+/** ฟอร์มแก้เคลม (ถูกตีกลับแบบชี้ช่อง · เคลมก้อน 4) — ปุ่มส่งเรียกตามที่ช่างกำลังทำ: ส่งเคลมกลับไปให้ตรวจใหม่ */
+const FIX_SUBMIT_LABEL = "ส่งเคลมใหม่";
+/** บอกว่าส่งไม่สำเร็จแล้วต้องทำอะไรต่อ — ช่างกลัวว่าต้องกรอกใหม่หมดเลยปิดฟอร์มทิ้ง ทั้งที่ทุกอย่างยังอยู่ */
+const keptText = `ข้อมูลที่กรอกไว้ยังอยู่ — กด "${SUBMIT_LABEL}" อีกครั้ง`;
+
 function CloseModal({
   visible,
   order,
+  files,
+  refresh,
   results,
   technicians,
   subTeams,
@@ -5957,6 +6752,10 @@ function CloseModal({
 }: {
   visible: boolean;
   order: WorkOrder;
+  /** ไฟล์ของใบที่การ์ดไฟล์แนบโหลดไว้แล้ว — ช่องไฟล์เคลมโชว์รูปย่อของไฟล์ที่แนบไว้ก่อน */
+  files: Attachment[];
+  /** โหลดใบงาน + ไฟล์ใหม่เงียบ ๆ — ไฟล์เคลมขึ้นเซิร์ฟเวอร์ทันทีที่เลือก หลักฐานในใบต้องตามทัน */
+  refresh: () => Promise<void> | void;
   results: Option[];
   technicians: Technician[];
   /** ทีม outsource ทั้งหมด — ใบงาน SUB เลือกทีมที่เข้าทำจริง */
@@ -5964,9 +6763,60 @@ function CloseModal({
   onCancel: () => void;
   onDone: () => void;
 }) {
-  // ถูกตีกลับเคลมแล้วมาปิดใหม่ — ค่าที่ปิดรอบก่อน (ผล สรุป คนที่ไป อะไหล่) ยังอยู่ในใบ ดึงมาให้แก้เฉพาะจุด
-  // ไม่ใช่ให้กรอกใหม่หมด (เจ้าของงานขอ ต.ค. 69)
-  const reclosing = order.claims[0]?.status === "REJECTED";
+  /**
+   * ถูกตีกลับเคลมแล้วมาปิดใหม่ — ค่าที่ปิดรอบก่อน (ผล สรุป คนที่ไป อะไหล่) ยังอยู่ในใบ ดึงมาให้แก้เฉพาะจุด
+   * ไม่ใช่ให้กรอกใหม่หมด (เจ้าของงานขอ ต.ค. 69)
+   *
+   * อ่านจาก claimRound (ผลล่าสุดทีละชิ้นของงานซ่อมครั้งนี้) ไม่ใช่แถวบนสุด (เคลมก้อน 3): "บอร์ดผ่าน สายพานถูกตีกลับ"
+   * แถวของบอร์ดอาจขึ้นก่อน แล้วฟอร์มจะคิดว่าไม่ได้ถูกตีกลับ — แถบเหตุผลหาย และอะไหล่ถูกเติมจากรายการเบิกแทนของที่ใช้จริง
+   */
+  const claimRound = claimRoundOf(order);
+  const roundParts = roundPartsOf(order);
+  const reclosing = claimRound.rejected;
+  /** ทุกชิ้นที่ถูกตีกลับในการตรวจครั้งล่าสุด — ใบที่เคลมสองชิ้นต้องเห็นเหตุผลครบทุกชิ้น */
+  const rejectedRows = reclosing ? rejectedRowsOf(order) : [];
+  /**
+   * ทุกชิ้นที่ผลล่าสุดในงานซ่อมครั้งนี้ยังเป็น "ตีกลับ" — รวมชิ้นที่ช่างเลิกส่งไปรอบก่อนแล้วกลับมาติ๊กส่งใหม่
+   * แถบแดงบอกเฉพาะชุดที่ตีกลับครั้งล่าสุด (rejectedRows) แต่เซิร์ฟเวอร์บังคับ "แก้ หรือกดค่าเดิมถูกแล้ว" กับทุกชิ้นที่ผลล่าสุด
+   * ยังตีกลับ — ถ้าเหตุผลกับปุ่มขึ้นเฉพาะชุดล่าสุด ชิ้นเก่าโดน 400 ที่บอกให้กดปุ่มซึ่งไม่มีบนจอ
+   */
+  const stillRejected = new Map(
+    reclosing ? roundParts.filter((p) => p.status === "REJECTED").map((p) => [p.row.sparePartId, p.row] as const) : []
+  );
+  /**
+   * ชิ้นที่ผ่าน / ปิดเคลมไปแล้วในงานซ่อมครั้งนี้ — ล็อกไว้ (ตัวอย่างที่เจ้าของงานเลือก lockedLines)
+   * ไม่ต้องส่งซ้ำ (เซิร์ฟเวอร์ทิ้งให้อยู่แล้ว) และเอาออกจากอะไหล่ที่ใช้ไม่ได้ — ใบเคลมที่ออกไปผู้ขายแล้วต้องตรงกับของที่ใช้จริง
+   */
+  const lockedRows = new Map(
+    roundParts.filter((p) => isLockedStatus(p.status)).map((p) => [p.row.sparePartId, p.row] as const)
+  );
+  /**
+   * มีชิ้นผ่านแล้ว = ข้อมูลเครื่อง (ป้ายรุ่น · Error) ล็อกไปกับชิ้นนั้น — เซิร์ฟเวอร์ใช้ค่าของแถวที่อนุมัติแทนค่าที่ส่งมา
+   * ฟอร์มจึงแสดงแบบอ่านอย่างเดียว ไม่ให้ช่างแก้ค่าที่ไม่ถูกบันทึก (ถ้าค่าผิดจริง ต้องเปิดใบใหม่ ซึ่งเป็นงานซ่อมครั้งใหม่)
+   */
+  const approvedRow =
+    roundParts
+      .filter((p) => p.status === "APPROVED")
+      .map((p) => p.row)
+      .sort((a, b) => b.id - a.id)[0] ?? null;
+  const machineLocked = !!claimRound.lockedMachine && !!approvedRow;
+  /** Error ของแถวที่อนุมัติ — ล็อกแล้วเปลี่ยนไม่ได้ (ข้อเช็คตาม Error ยังติ๊กของรอบนี้ได้) · ไม่ล็อก/ยี่ห้อไม่มีคู่มือ = null */
+  const lockedError = machineLocked ? approvedRow?.fieldCheck?.errorCode ?? null : null;
+  const lockedMsg = (p: { sparePartId: number; name: string; partCode: string }) =>
+    lockedRows.get(p.sparePartId)?.status === "DECLINED"
+      ? `${p.name || p.partCode} ปิดเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`
+      : `${p.name || p.partCode} อนุมัติเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้`;
+  /**
+   * ฟอร์มแก้เคลม (เคลมก้อน 4): ผู้ตรวจชี้ช่องที่ต้องแก้ไว้ — ขึ้นเฉพาะช่องเหล่านั้นบนสุด ("ต้องแก้ (n)") ที่เหลือพับไว้
+   * แถวที่ถูกตีกลับก่อนมีการชี้ช่อง (ไม่มี reviewFlags) ใช้ฟอร์มแบบเดิมทั้งฟอร์ม + "ค่าเดิมถูกแล้ว" ทั้งชิ้น
+   * แถวก่อนจ่ายงานครั้งล่าสุด (แจ้งปัญหาหน้างาน/ย้อนขั้นแล้วจ่ายใหม่) ไม่ใช่ฟอร์มแก้ — ต้องถ่ายใหม่ทั้งชุดอยู่แล้ว
+   * และเซิร์ฟเวอร์ก็ไม่บังคับช่องของแถวนอกรอบหลักฐาน ถ้าฟอร์มยังบังคับ ช่างจะติดอยู่กับช่องที่ไม่มีใครตรวจ
+   */
+  const flaggedRows = [...stillRejected.values()].filter(
+    (r) => (r.reviewFlags ?? []).length > 0 && (!order.roundStartedAt || r.createdAt >= order.roundStartedAt)
+  );
+  const fixMode = flaggedRows.length > 0;
+  const flaggedIds = new Set(flaggedRows.map((r) => r.sparePartId));
   const [result, setResult] = useState((reclosing && order.closeResult) || "FIXED");
   const [note, setNote] = useState(reclosing ? order.closeNote ?? "" : "");
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
@@ -5982,57 +6832,85 @@ function CloseModal({
         sparePartId, partCode, name, brand, quantity, offCatalog, unit, note,
       }));
   // ของนอกสโตร์ที่แอดมินจัดหาให้ (หรือที่ช่างซื้อหน้างานเอง) อยู่ช่องของตัวเอง — ไม่ต้องมีใบเหลือง
-  const initial = splitParts(reclosing ? order.parts : requisitioned());
+  // มีชิ้นที่ล็อกแล้ว = ปิดงานรอบก่อนไปแล้ว อะไหล่ที่ใช้จริงอยู่ในใบ (ไม่ใช่รายการเบิก)
+  const keepUsed = reclosing || lockedRows.size > 0;
+  const initial = splitParts(keepUsed ? order.parts : requisitioned());
   const [parts, setParts] = useState<PickedPart[]>(initial.store);
   const [offParts, setOffParts] = useState<OffPart[]>(initial.off);
   // ฟอร์มนี้ค้างอยู่ตลอด (ไม่ได้สร้างใหม่ทุกครั้งที่เปิด) — เปิดขึ้นมาแล้วยังว่างให้เติมอีกรอบ
-  // เผื่อเบิกของหลังจากเปิดหน้าใบงานไว้แล้ว
+  // เผื่อเบิกของหลังจากเปิดหน้าใบงานไว้แล้ว · ผูกกับรายการที่เบิก ไม่ใช่ตัวใบทั้งก้อน: ใบถูกโหลดใหม่ทุกครั้งที่ไฟล์เคลมขึ้นเสร็จ
+  // ถ้าเติมทุกครั้งที่โหลด ช่างที่ลบอะไหล่ออกหมด (ไม่ได้ใช้) จะเห็นรายการเดิมโผล่กลับมาเอง
+  const requisitionKey = requisitioned()
+    .map((p) => `${p.sparePartId}:${p.quantity}:${p.offCatalog ? 1 : 0}`)
+    .join(",");
   useEffect(() => {
-    if (!visible || reclosing) return;
+    if (!visible || keepUsed) return;
     const next = splitParts(requisitioned());
     setParts((cur) => (cur.length ? cur : next.store));
     setOffParts((cur) => (cur.length ? cur : next.off));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, order]);
-  /**
-   * สรุปงานกับชื่อคนที่ไปที่พิมพ์ค้างไว้ — ปิดฟอร์มหรือแอปหลุดแล้วเปิดใหม่ยังอยู่ (เจ้าของงานขอ ต.ค. 69)
-   * ไม่ต้องมีปุ่มบันทึกร่าง · รูปไม่ต้องจำ ส่วนที่แนบไว้จากการ์ดไฟล์แนบนับให้อยู่แล้ว
-   */
-  const draftKey = `close:${order.id}`;
-  useEffect(() => {
-    if (!visible) return;
-    loadDraft(draftKey).then((raw) => {
-      if (!raw) return;
-      try {
-        const d = JSON.parse(raw) as { note?: string; otherWorkers?: string };
-        if (d.note) setNote(d.note);
-        if (d.otherWorkers) setOtherWorkers(d.otherWorkers);
-      } catch {
-        // ร่างเสีย — ไม่จำก็ได้ ไม่ให้ฟอร์มพัง
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, draftKey]);
-  function remember(patch: { note?: string; otherWorkers?: string }) {
-    const d = { note, otherWorkers, ...patch };
-    saveDraft(draftKey, d.note.trim() || d.otherWorkers.trim() ? JSON.stringify(d) : "");
-  }
+  }, [visible, requisitionKey]);
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
   /**
    * ข้อมูลป้ายรุ่น + เช็คตามคู่มือ ของเคลมในใบนี้ (เครื่องเดียว ใช้ร่วมทุกชิ้น)
    * ถูกตีกลับแล้วปิดใหม่ — ดึงของรอบก่อนมาให้แก้เฉพาะจุด (สแกนใหม่ได้)
    */
-  const priorClaim = order.claims[0];
+  // ข้อมูลเครื่องที่เติมให้: ล็อกแล้วใช้ของแถวที่อนุมัติ · ไม่งั้นของรอบที่ถูกตีกลับ · ใบเก่าใช้แถวล่าสุด
+  const priorClaim = (machineLocked ? approvedRow : null) ?? rejectedRows[0] ?? order.claims[0];
+  /**
+   * ค่าป้ายของรอบก่อนพร้อมสถานะยืนยันทีละช่อง (เคลมก้อน 5) — ช่างยืนยันค่าเหล่านี้กับรูปไปแล้วตอนส่งรอบนั้น
+   * ถูกตีกลับเรื่องอื่นแล้วต้องกดยืนยันรุ่น/Serial ซ้ำทุกรอบ ช่างจะกดผ่านโดยไม่ดู — แก้ค่าเมื่อไหร่ค่อยต้องยืนยันใหม่
+   * ใบที่ส่งจากฟอร์มติ๊กครั้งเดียว (ไม่มี confirmed) ไม่นับว่ายืนยัน ต้องกดใหม่
+   */
   const [plate, setPlate] = useState<PlateDraft>(() => ({
     values: Object.fromEntries(
-      (priorClaim?.nameplate?.fields ?? []).map((f) => [f.key, { value: f.value, source: f.source, crop: f.crop ?? null }])
+      (priorClaim?.nameplate?.fields ?? []).map((f) => [
+        f.key,
+        {
+          value: f.value,
+          source: f.source,
+          crop: f.crop ?? null,
+          ...(f.confirmed !== undefined ? { confirmed: f.confirmed } : {}),
+          ...(f.needsCheck !== undefined ? { needsCheck: f.needsCheck } : {}),
+          ...(f.edited !== undefined ? { edited: f.edited } : {}),
+          ...(f.read !== undefined ? { read: f.read } : {}),
+        } as PlateValue,
+      ])
     ),
-    verified: !!priorClaim?.nameplate?.verified,
   }));
   const [check, setCheck] = useState<ClaimCheckDraft>(() => ({
     errorCode: priorClaim?.fieldCheck?.errorCode ?? null,
     checked: priorClaim?.fieldCheck?.checked ?? [],
   }));
+  /**
+   * ฟอร์มนี้อยู่ตลอดอายุหน้า และค่าเติมให้ด้านบนทำงานครั้งเดียวตอนสร้าง — ปิดงานสำเร็จแล้วล้างอะไหล่/สรุป/คนที่ไป (finishClosed)
+   * ช่างที่เปิดหน้าค้างไว้จนผู้ตรวจตัดสิน (ผ่าน ก. ตีกลับ ข.) จึงเปิดฟอร์มมาว่าง: ไม่มีอะไหล่ ไม่มีช่องเคลมของ ข. ไม่มีบรรทัดล็อกของ ก.
+   * แล้วกดส่งได้ 400 "ก. อนุมัติเคลมไปแล้ว — เอาออกจากอะไหล่ที่ใช้ไม่ได้" ทั้งที่ไม่ได้เอาออก
+   * เปิดฟอร์มแล้วยังว่าง = เติมจากของที่ใช้จริงในใบ (+ สรุป คนที่ไป) · ชิ้นที่ล็อกต้องอยู่เสมอ (เอาออกไม่ได้อยู่แล้ว) ขาดก็เติม ·
+   * Error ล็อกตามแถวที่อนุมัติ — ค่าในฟอร์มเป็นของรอบก่อน (คนละ Error) ให้ตั้งตามแถวนั้น
+   */
+  const usedKey = order.parts.map((p) => `${p.sparePartId ?? "x"}:${p.quantity}`).join(",");
+  const lockedKey = [...lockedRows.keys()].join(",");
+  useEffect(() => {
+    if (!visible || !keepUsed) return;
+    const used = splitParts(order.parts);
+    if (!parts.length && !offParts.length) {
+      setParts(used.store);
+      setOffParts(used.off);
+    } else {
+      const lost = used.store.filter((p) => lockedRows.has(p.sparePartId) && !parts.some((c) => c.sparePartId === p.sparePartId));
+      if (lost.length) setParts((cur) => [...cur, ...lost]);
+    }
+    if (!note.trim() && order.closeNote) setNote(order.closeNote);
+    if (!workerIds.length && !otherWorkers.trim()) {
+      setWorkerIds(order.workers.map((w) => w.id).slice(0, 3));
+      if (order.otherWorkers) setOtherWorkers(order.otherWorkers);
+    }
+    if (lockedError && check.errorCode !== lockedError) {
+      setCheck({ errorCode: lockedError, checked: approvedRow?.fieldCheck?.checked ?? [] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, usedKey, lockedKey, lockedError]);
   const [slip, setSlip] = useState<PickedAttachment | null>(null);
   const [beforeFiles, setBeforeFiles] = useState<PickedAttachment[]>([]);
   const [afterFiles, setAfterFiles] = useState<PickedAttachment[]>([]);
@@ -6050,20 +6928,176 @@ function CloseModal({
   /**
    * ไฟล์ที่ขึ้นเซิร์ฟเวอร์แล้วในรอบนี้ — ปิดไม่ผ่าน (เช่น ข้อมูลเคลมไม่ครบ) แล้วกดใหม่ต้องไม่ส่งซ้ำ
    * เดิมส่งใหม่ทั้งชุดทุกครั้ง กดซ้ำหลายรอบไฟล์ซ้ำจนเต็มเพดาน แล้วปิดงานไม่ได้อีกเลย (WO-00133)
+   * (รูปหน้างาน/ป้ายรุ่น/ใบเหลือง — ไฟล์เคลมส่งทันทีที่เลือกผ่าน useClaimUploads ไม่ผ่านตรงนี้)
    */
   const sentRef = useRef(new Set<PickedAttachment>());
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * ส่งไม่สำเร็จ — ปักไว้ใต้หัวฟอร์ม (AppModal banner) จนกว่าจะกดส่งครั้งต่อไป ไม่หายเอง
+   * เดิมข้อความอยู่ท้ายฟอร์มยาว ช่างที่กดปุ่มตอนอยู่กลางฟอร์มไม่เห็นว่าส่งไม่ผ่าน และไม่รู้ว่าที่กรอกไว้ยังอยู่ไหม
+   * lost = คำตอบไม่กลับมาเลย (เน็ตหลุด) · ไม่ใช่ = เซิร์ฟเวอร์ตอบว่าไม่รับพร้อมเหตุผล — เรียกว่าเน็ตหลุดจะพาช่างไปแก้ผิดที่
+   */
+  const [sendError, setSendError] = useState<{ lost: boolean; message: string | null } | null>(null);
+  /** คำอธิบาย "ค่าเดิมถูกแล้ว" ทีละช่องที่ถูกชี้ (คีย์ตาม FixItem.key) — อยู่ในร่างด้วย */
+  const [fixKeep, setFixKeep] = useState<Record<string, string | null>>({});
+  /** "▸ ส่วนที่ไม่ต้องแก้" — พับไว้ก่อน ช่างเห็นแค่ช่องที่ต้องแก้ · กางเองได้ หรือปุ่มพาไปกางให้เมื่อของที่ขาดอยู่ในนั้น */
+  const [foldOpen, setFoldOpen] = useState(false);
+  /** กดส่งตอนช่องที่ถูกชี้ยังเหมือนเดิม — ปักแถบเหลืองบอกว่าช่องไหน (ตัวอย่าง blockedText) จนกว่าจะแก้ครบ */
+  const [fixBlocked, setFixBlocked] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const { user: me } = useAuth();
+  /** เวลาที่เปิดฟอร์มรอบนี้ — ใช้แยก "ปิดงานที่เพิ่งส่งไปเมื่อกี้" ออกจากการปิดงานครั้งเก่า (ดู closedByUs) */
+  const openedAt = useRef(0);
+  useEffect(() => {
+    if (visible) openedAt.current = Date.now();
+  }, [visible]);
+
+  /** ไฟล์เคลมส่งทันทีที่เลือก — หลักฐานในใบงาน (และจำนวนไฟล์ที่นับเพดาน) ต้องตามทัน ขึ้นเสร็จหรือลบแล้วเลยโหลดใบใหม่ */
+  const uploads = useClaimUploads(
+    order.id,
+    () => void refresh(),
+    (e) => void uploadRefused(e)
+  );
+  // เอาอะไหล่ออกจากรายการที่ใช้ = ไม่เคลมชิ้นนั้นแล้ว — ไฟล์ที่เพิ่งส่งในฟอร์มนี้ของชิ้นนั้นลบทิ้ง (เหมือนปิดเคลม)
+  useEffect(() => {
+    const ids = new Set(parts.map((p) => p.sparePartId));
+    // คีย์ของชิ้นขึ้นต้นด้วยรหัสชิ้น — ไฟล์ของเครื่อง (m:) และไฟล์ขั้นงานที่ทำ (w:) ไม่ผูกชิ้น ไม่เกี่ยว
+    const gone = new Set(
+      Object.keys(uploads.slots)
+        .filter((k) => /^\d+:/.test(k))
+        .map((k) => Number(k.split(":")[0]))
+        .filter((id) => !ids.has(id))
+    );
+    gone.forEach((id) => uploads.discardPart(id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parts]);
+
+  /**
+   * ร่างฟอร์ม (utils/closeDraft) — สรุปงาน คนที่ไป ข้อความเคลมทีละชิ้น ค่าป้าย Error และ "ค่าเดิมถูกแล้ว" ที่พิมพ์ค้าง
+   * แอปหลุด/ปิดฟอร์มแล้วเปิดใหม่ยังอยู่ (เจ้าของงานขอ ต.ค. 69) · ไม่ต้องมีปุ่มบันทึกร่าง
+   *
+   * เขียนเฉพาะหลังผู้ใช้แก้อะไรจริง ไม่เขียนตอนเปิดฟอร์ม: เปิดดูเฉย ๆ (หรือคู่มือสอนใช้งานเปิดฟอร์มให้ดู)
+   * แล้วการ์ดในงานของฉันขึ้น "กรอกค้างไว้" ทั้งที่ไม่ได้กรอกอะไร ช่างจะไม่เชื่อป้ายนี้อีก
+   * วิธีรู้ว่าแก้แล้ว: เทียบกับค่าตอนเปิด (หลังเติมจากร่างเดิม/รอบที่ถูกตีกลับ) — ค่าเติมให้อัตโนมัติไม่นับเป็นการแก้
+   */
+  const draftKey = `close:${order.id}`;
+  const saver = useRef(closeDraftSaver(order.id));
+  const [restored, setRestored] = useState(false);
+  const baseline = useRef<string | null>(null);
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!visible) {
+      saver.current.flush();
+      setRestored(false);
+      return;
+    }
+    baseline.current = null;
+    touched.current = false;
+    let gone = false;
+    loadCloseDraft(order.id).then((d) => {
+      if (gone) return;
+      if (d) {
+        if (d.note) setNote(d.note);
+        if (d.otherWorkers) setOtherWorkers(d.otherWorkers);
+        if (d.claims) {
+          setDrafts((all) => {
+            const next = { ...all };
+            for (const [k, v] of Object.entries(d.claims ?? {})) {
+              const id = Number(k);
+              if (!Number.isInteger(id) || !v || typeof v !== "object") continue;
+              const base = draftFor(id);
+              next[id] = {
+                ...base,
+                ...v,
+                troubleshooting: Array.isArray(v.troubleshooting) ? v.troubleshooting : base.troubleshooting,
+                errorChecked: Array.isArray(v.errorChecked) ? v.errorChecked : base.errorChecked,
+                // เหตุผลไม่ส่งเคลมที่อ่านไม่ออก (ร่างเสีย) = ไม่มี — ฟอร์มถามใหม่ ดีกว่าส่งค่าที่เซิร์ฟเวอร์ไม่รับ
+                // ร่างรุ่นก่อนก้อน 5 ไม่มีคีย์นี้เลย = ใช้เหตุผลจากการปิดครั้งก่อน (ถ้ามี) ไม่ใช่ถือว่าไม่มีเหตุผล
+                skip:
+                  v.skip && typeof v.skip === "object" && typeof (v.skip as ClaimSkip).reason === "string"
+                    ? { reason: (v.skip as ClaimSkip).reason, note: String((v.skip as ClaimSkip).note ?? "") }
+                    : "skip" in v
+                      ? null
+                      : base.skip,
+              };
+            }
+            return next;
+          });
+        }
+        // ค่าป้ายในร่างต่างจากที่เติมไว้ (สแกน/แก้ไปแล้วรอบก่อน) — ต้องติ๊กตรวจกับรูปใหม่ · เหมือนเดิมเป๊ะก็คงสถานะเดิม
+        // ข้อมูลเครื่องล็อกแล้วไม่เอาค่าจากร่าง — ค่าที่ใช้คือของแถวที่อนุมัติเสมอ
+        // สถานะยืนยันทีละช่องอยู่ในค่าของร่างเอง (เคลมก้อน 5) — ร่างรุ่นก่อนไม่มี = ยังไม่ได้ยืนยัน ต้องกดใหม่
+        const vals = d.plate?.values;
+        if (!machineLocked && vals && typeof vals === "object")
+          setPlate((p) => (JSON.stringify(vals) === JSON.stringify(p.values) ? p : { ...p, values: vals }));
+        // ล็อกแล้วเอาเฉพาะข้อที่ติ๊กจากร่างที่เป็น Error เดียวกัน — Error เปลี่ยนไม่ได้ แต่ข้อเช็คเป็นของการปิดครั้งนี้
+        if (d.check && Array.isArray(d.check.checked) && (!machineLocked || d.check.errorCode === lockedError))
+          setCheck({ errorCode: d.check.errorCode ?? null, checked: d.check.checked });
+        if (d.fixKeep && typeof d.fixKeep === "object" && !Array.isArray(d.fixKeep)) {
+          const keeps = Object.fromEntries(
+            Object.entries(d.fixKeep).filter(([, v]) => v === null || typeof v === "string")
+          ) as Record<string, string | null>;
+          setFixKeep(keeps);
+        }
+      }
+      setRestored(true);
+    });
+    return () => {
+      gone = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, draftKey]);
+  useEffect(() => () => saver.current.flush(), []);
+
+  /**
+   * ฟอร์มทีละขั้น (เคลมก้อน 5): งานที่ทำ · เครื่อง · เคลมทีละชิ้น · ส่ง — เปิดเมื่อมีชิ้นที่ส่งเคลม (หรือสาขาในประกันที่ต้องบอกเหตุผล)
+   * เปิดแล้วไม่ปิดกลับระหว่างกรอก (ทางเดียว): ช่างเลิกเคลมทุกชิ้นแล้วฟอร์มกลับเป็นหน้ายาว ช่างจะงงว่าแท็บหายไปไหน
+   * ใบที่ไม่มีเคลมยังเป็นหน้ายาวหน้าเดียวเหมือนเดิม · ฟอร์มแก้เคลม (ถูกชี้ช่อง) ใช้รายการ "ต้องแก้" แทนขั้น
+   */
+  const [stepMode, setStepMode] = useState(false);
+  const [step, setStep] = useState(0);
+  const [partTab, setPartTab] = useState<number | null>(null);
+  /** ถ่ายป้ายรุ่นใหม่ในขั้นเครื่อง (แทนรูปจากขั้นงานที่ทำ) — บอกให้รู้ ไม่ทับเงียบ ๆ */
+  const [plateRetaken, setPlateRetaken] = useState(false);
+  const workSeq = useRef(0);
 
   // ใช้อะไหล่แล้วต้องมีใบเหลือง — เซิร์ฟเวอร์ก็กันไว้อีกชั้น แต่บอกตั้งแต่ตรงนี้
   // ดีกว่าให้กดบันทึกแล้วค่อยเด้งกลับมาว่าขาดรูป
-  const slipMissing = parts.length > 0 && !slip && !order.hasRequisitionSlip;
   // รูปหน้างานคือหลักฐานว่าไปถึงจริงและเจออะไร ต้องมีอย่างน้อยหนึ่ง
   // ก่อน/หลังซ่อมของรอบนี้ อย่างละอย่างน้อยหนึ่ง (เจ้าของงานขอ ต.ค. 69) — เซิร์ฟเวอร์เช็คซ้ำ
   // ใบ PM ใส่แค่รูปหลังทำ (เจ้าของงานขอ ต.ค. 69) — งานตามรอบ เครื่องไม่ได้เสียมา ไม่มีสภาพก่อนทำให้เทียบ
   const isPm = order.jobType === "PM";
-  const beforeMissing = !isPm && beforeFiles.length === 0 && !order.beforeCount;
-  const afterMissing = afterFiles.length === 0 && !order.afterCount;
-  const shotsMissing = beforeMissing || afterMissing;
+  /**
+   * ไฟล์ขั้นงานที่ทำของรอบนี้ที่อยู่ในใบงานแล้วก่อนฟอร์มนี้ส่ง (แนบไว้ก่อน · ฟอร์มรอบก่อน) — ไม่นับไฟล์ที่ฟอร์มนี้ส่งเอง (นับจากช่องแทน)
+   * ใช้รายการไฟล์ของใบเพราะรู้ทั้ง id และรอบ · ยังไม่ได้โหลดรายการไฟล์ ใช้ตัวนับจากใบงาน
+   */
+  const sessionIds = new Set(Object.values(uploads.slots).map((sl) => sl.attachmentId).filter((x): x is number => !!x));
+  const inRound = (f: { createdAt: string }) => !order.roundStartedAt || f.createdAt >= order.roundStartedAt;
+  /** ถ่ายในกล่อง "ถ่ายก่อนซ่อม" (วิดีโอ Error/รูปอาการไม่ผูกชิ้น) — นับเป็นรูปก่อนซ่อมด้วย ไม่ต้องถ่ายซ้ำ */
+  const preRepair = order.claimEvidence.filter(
+    (e) => e.sparePartId === null && (e.role === "CLAIM_ERROR_VIDEO" || e.role === "CLAIM_SYMPTOM") && !(e.id && uploads.removed.has(e.id))
+  );
+  const preCount = preRepair.length || order.preRepairCount || 0;
+  function serverWork(role: WorkRole) {
+    if (files.length) {
+      return files.filter((f) => f.role === role && inRound(f) && !uploads.removed.has(f.id) && !sessionIds.has(f.id)).length;
+    }
+    if (role === "BEFORE") return Math.max(0, (order.beforeCount ?? 0) - (order.preRepairCount ?? 0));
+    if (role === "AFTER") return order.afterCount ?? 0;
+    if (role === "NAMEPLATE") return order.hasNameplate ? 1 : 0;
+    return order.hasRequisitionSlip ? 1 : 0;
+  }
+  /** ช่องไฟล์ของขั้นงานที่ทำที่ส่งทันทีที่เลือก (ฟอร์มทีละขั้น) — คีย์ w:{ชนิด} */
+  const workSlots = (role: WorkRole) =>
+    Object.entries(uploads.slots).filter(([k]) => k === `w:${role}` || k.startsWith(`w:${role}:`));
+  /** ไฟล์ชนิดนี้ของรอบนี้ทั้งหมด — ในใบแล้ว + ส่งจากฟอร์มนี้ (ไม่นับที่ส่งไม่สำเร็จ) + เลือกไว้รอส่งตอนกดปิด (หน้ายาว) · kept = เฉพาะที่ขึ้นแล้ว */
+  function workCount(role: WorkRole, kept = false) {
+    const local = role === "BEFORE" ? beforeFiles.length : role === "AFTER" ? afterFiles.length : role === "NAMEPLATE" ? (nameplate ? 1 : 0) : slip ? 1 : 0;
+    const sl = workSlots(role).filter(([, x]) => (kept ? x.status === "done" : x.status !== "failed")).length;
+    return serverWork(role) + sl + (kept ? 0 : local);
+  }
+  const slipMissing = parts.length > 0 && workCount("REQUISITION") === 0;
+  const beforeMissing = !isPm && workCount("BEFORE") === 0 && preCount === 0;
+  const afterMissing = workCount("AFTER") === 0;
   // งานถูกจ่ายให้ทีม ชื่อคนที่ไปจริงจึงมีอยู่ที่เดียวคือตรงนี้
   /**
    * ใบงาน SUB: เลือกทีม SUB ที่เข้าทำแทนช่องช่างบริษัท (เจ้าของงานขอ ต.ค. 69) — เลือกทีมที่จ่ายงานไว้ให้ เปลี่ยนได้
@@ -6078,7 +7112,7 @@ function CloseModal({
   const summaryMissing = !note.trim();
   // ป้ายรุ่นต้องถ่ายรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง — รูปเก่าใช้แทนไม่ได้
   // ใบ PM เข้าทำทั้งร้าน ไม่ได้ผูกเครื่องไหน (เจ้าของงานกำหนด ต.ค. 69) — ไม่มีป้ายรุ่นให้ถ่าย · ใบ PM เก่าที่เคยใส่เครื่องก็เหมือนกัน
-  const nameplateMissing = !isPm && !nameplate && !order.hasNameplate;
+  const nameplateMissing = !isPm && workCount("NAMEPLATE") === 0;
   // ติ๊กว่าอะไหล่ไม่ครบแต่ไม่ได้บอกว่าขาดตัวไหน — ใบรออะไหล่เปล่า ๆ ไม่มีใครตามของได้
   const followUpMissing = followUp && missing.length === 0;
 
@@ -6087,53 +7121,210 @@ function CloseModal({
    *
    * สาขายังอยู่ในประกันเปิดเคลมไว้ให้เลย (ส่วนใหญ่ต้องเคลม ลืมติ๊กแล้วอะไหล่เก่าถูกทิ้ง
    * คือเสียสิทธิ์ถาวร) ช่างปิดเองได้ถ้าชิ้นนั้นเคลมไม่ได้ · เคยถูกตีกลับ = ดึงข้อความเดิมมาให้แก้
+   *
+   * ชิ้นที่ปิดงานครั้งก่อนบอกไว้แล้วว่าไม่ส่งเคลม (claimSkips) เริ่มเป็น "ไม่ส่งเคลม" พร้อมเหตุผลเดิม —
+   * ชิ้นแบบนี้ไม่มีแถวเคลม ถ้าใช้ค่าเริ่มต้นปกติ ถูกตีกลับชิ้นอื่นแล้วชิ้นนี้กลับมาเปิดเคลมเปล่า ๆ
+   * ช่างต้องเลือกเหตุผลซ้ำ ไม่งั้นส่งไม่ได้ ทั้งที่อะไหล่เก่า (เช่น หายไปแล้ว) ไม่มีทางหาหลักฐานมาได้
+   * ยังกดกลับมาส่งเคลมได้ถ้าเปลี่ยนใจ · ทางปิดที่ไม่ได้ถามเหตุผล (หัวหน้าภาคปิด/ย้อนหลัง) ไม่มีเหตุผลให้ใช้ต่อ
    */
   function draftFor(id: number): ClaimDraft {
     if (drafts[id]) return drafts[id];
     const prior = order.claims.find((c) => c.sparePartId === id);
+    const skipped = prior ? null : priorSkip(id);
     return {
-      on: prior ? true : order.branchWarrantyExpired === false,
+      on: prior ? true : skipped ? false : order.branchWarrantyExpired === false,
       brokenPartCode: prior?.brokenPartCode ?? "",
       symptom: prior?.symptom ?? "",
       checkNote: prior?.checkNote ?? "",
       troubleshooting: prior?.troubleshooting ?? [],
-      files: {},
+      keep: null,
+      // ข้อเช็คตาม Error ของชิ้นนี้ในรอบก่อน (ตีกลับแล้วส่งใหม่ไม่ต้องติ๊กซ้ำ) — แถวก่อนก้อน 5 ใช้ชุดเดียวกันทุกชิ้น
+      errorChecked: prior?.fieldCheck?.checked ?? [],
+      skip: skipped,
     };
+  }
+  function priorSkip(id: number): ClaimSkip | null {
+    const s = (order.claimSkips ?? []).find((k) => k.sparePartId === id);
+    if (!s || !SKIP_REASONS.some((r) => r.key === s.reasonCode)) return null;
+    return { reason: s.reasonCode as SkipReason, note: s.note ?? "" };
   }
   function patchDraft(id: number, patch: Partial<ClaimDraft>) {
     setDrafts((all) => ({ ...all, [id]: { ...draftFor(id), ...all[id], ...patch } }));
   }
-  const hasEvidence = (id: number, role: string) =>
-    !!draftFor(id).files[role] || order.claimEvidence.some((e) => e.sparePartId === id && e.role === role);
-  /** สิ่งที่ยังขาดของแต่ละชิ้น — ตรงกับที่เซิร์ฟเวอร์เช็ค บอกตรงนี้ก่อนจะได้ไม่ต้องรอโดนปฏิเสธ */
-  function claimGaps(p: PickedPart) {
+  /**
+   * เปิด/ปิดเคลมชิ้นนี้ — ปิดแล้วไฟล์ของชิ้นนั้นที่ส่งขึ้นในฟอร์มรอบนี้ถูกลบ (ไม่เป็นหลักฐานของใบไหน · ไม่ค้างนับเพดาน)
+   * ไฟล์ของเครื่อง (ข้อ ⑥) ไม่ถูกลบ — ใช้ร่วมทุกชิ้น ชิ้นอื่นยังต้องใช้ (คีย์ m: ไม่ผูกชิ้น)
+   * skip = เหตุผลที่ไม่ส่งเคลมเมื่อสาขาอยู่ในประกัน (เคลมก้อน 5) ขึ้นในประวัติใบงาน
+   */
+  function setClaimOn(id: number, on: boolean, skip: ClaimSkip | null = null) {
+    touched.current = true;
+    patchDraft(id, { on, skip: on ? null : skip });
+    if (!on) uploads.discardPart(id);
+  }
+  /**
+   * ชื่อที่ใช้เรียกอะไหล่ในข้อความ (เช่น "เคลม บอร์ดควบคุม: รูปอะไหล่เก่า") — ชื่อไทย ต่อรหัสเฉพาะเมื่อชื่อซ้ำในใบนี้
+   * กติกาเดียวกับ partLabel ฝั่งเซิร์ฟเวอร์ ข้อความในฟอร์มกับข้อความที่เซิร์ฟเวอร์ตอบกลับจะเรียกชิ้นเดียวกันด้วยชื่อเดียวกัน
+   */
+  const partLabel = (p: PickedPart) =>
+    parts.filter((x) => x.name === p.name).length > 1 ? `${p.name} (${p.partCode})` : p.name || p.partCode;
+  /** หลักฐานชนิดนี้ของชิ้นนี้ที่อยู่ในใบงานแล้ว (ล่าสุด) — แนบไว้ก่อนเปิดฟอร์ม หรือรอบที่ถูกตีกลับ · id null = ของเครื่อง ชิ้นไหนก็ได้ */
+  function serverEvidence(id: number | null, role: string) {
+    // ไฟล์ที่ฟอร์มนี้เพิ่งลบ (ปิดเคลม/เอาอะไหล่ออก) ไม่นับ แม้ใบงานที่โหลดไว้ยังมี — ไม่งั้นเปิดเคลมกลับแล้วขึ้น "แนบไว้แล้ว"
+    const rows = order.claimEvidence.filter(
+      (e) => (id === null || e.sparePartId === id) && e.role === role && !(e.id && uploads.removed.has(e.id))
+    );
+    if (!rows.length) return null;
+    const last = rows.reduce((a, b) => ((b.id ?? 0) > (a.id ?? 0) ? b : a));
+    // เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง id — หารูปย่อจากไฟล์ล่าสุดชนิดเดียวกันของรอบนี้แทน
+    const file =
+      (last.id ? files.find((f) => f.id === last.id) : undefined) ??
+      [...files]
+        .filter(
+          (f) =>
+            (id === null || f.sparePartId === id) &&
+            f.role === role &&
+            !uploads.removed.has(f.id) &&
+            (!order.roundStartedAt || f.createdAt >= order.roundStartedAt)
+        )
+        .sort((a, b) => b.id - a.id)[0];
+    return { thumb: file?.thumbnailDataUrl ?? null, kind: file?.kind ?? (role.endsWith("VIDEO") ? "VIDEO" : "IMAGE"), count: rows.length, pre: rows.some((r) => r.sparePartId === null) };
+  }
+  /**
+   * ช่องนี้มีหลักฐานแล้ว — กำลังส่งก็นับ (กดปิดงานแล้วระบบรอให้ขึ้นเสร็จก่อน) ส่งไม่สำเร็จไม่นับ
+   * kept = นับเฉพาะที่ขึ้นใบงานแล้ว (ตัวเลขบนการ์ดงานของฉัน — ออกจากหน้านี้ระหว่างส่ง ไฟล์ที่ยังไม่ขึ้นเสร็จหาย)
+   */
+  function hasEvidence(id: number, role: string, kept = false) {
+    const slot = uploads.slots[slotKey(id, role)];
+    if (slot) return kept ? slot.status === "done" : slot.status !== "failed";
+    return !!serverEvidence(id, role);
+  }
+  /**
+   * ไฟล์ของเครื่อง (วิดีโอ Error · รูปอาการ) ใช้ร่วมทุกชิ้น (เคลมก้อน 5 · เจ้าของงานตอบข้อ 2) — ช่องเดียว (m:{ชนิด}) ไม่ผูกชิ้น
+   * มีแล้ว = ไฟล์ชนิดนั้นของรอบนี้ ชิ้นไหนก็ได้หรือถ่ายก่อนซ่อม (กติกาเดียวกับเซิร์ฟเวอร์) · เลือกใหม่ในข้อ ⑥ = แทนไฟล์เดิมของทุกชิ้น
+   */
+  function machineHas(role: string, kept = false) {
+    const slot = uploads.slots[`m:${role}`];
+    if (slot && (kept ? slot.status === "done" : slot.status !== "failed")) return true;
+    return !!serverEvidence(null, role);
+  }
+  /** Error ที่ใช้จริง — ข้อมูลเครื่องล็อกแล้วเป็นของใบที่อนุมัติ (ช่างเปลี่ยนไม่ได้) */
+  const effError = lockedError ?? check.errorCode;
+  /** ชื่อวิดีโอของเครื่องตาม Error ที่เลือก / ยี่ห้อ (Oasis · ไม่มี Error ขึ้น = วิดีโออาการตอนเครื่องเดิน) */
+  const videoLabel = errorVideoLabel(effError, order.claimGuide?.plate.family ?? null);
+  /** สาขาในประกัน — ไม่ส่งเคลมชิ้นไหนต้องบอกเหตุผล (เจ้าของงานตอบข้อ 10) · ไม่รู้/หมด/สาขาบริษัท ไม่ต้อง */
+  const needsSkipReason = order.branchWarrantyExpired === false;
+  /** สิ่งที่ยังขาดของแต่ละชิ้น — ตรงกับที่เซิร์ฟเวอร์เช็ค บอกตรงนี้ก่อนจะได้ไม่ต้องรอโดนปฏิเสธ (key = ข้อในขั้นเคลมทีละชิ้น) */
+  function claimGaps(p: PickedPart, kept = false): { text: string; key: string }[] {
     const d = draftFor(p.sparePartId);
-    if (!d.on) return [];
+    if (!d.on || lockedRows.has(p.sparePartId)) return [];
+    const k = (x: string) => `p:${p.sparePartId}:${x}`;
+    const file = (role: string, label: string, key: string) =>
+      !kept && uploads.slots[slotKey(p.sparePartId, role)]?.status === "failed"
+        ? [{ text: `${label} ส่งไม่สำเร็จ — กดลองใหม่`, key }]
+        : hasEvidence(p.sparePartId, role, kept)
+          ? []
+          : [{ text: label, key }];
     return [
-      ...(d.brokenPartCode.trim() ? [] : ["รหัสอะไหล่ตัวที่เสีย"]),
-      ...CLAIM_EVIDENCE.filter((e) => !hasEvidence(p.sparePartId, e.role)).map((e) => e.label),
-      ...(d.symptom.trim() ? [] : ["อาการ/สาเหตุ"]),
-      ...(d.checkNote.trim() ? [] : ["สิ่งที่เข้าเช็ค"]),
-      ...(order.claimTroubleshooting.every((t) => d.troubleshooting.includes(t)) ? [] : ["Troubleshooting ให้ครบ"]),
+      ...file("CLAIM_PART", "รูปอะไหล่เก่า", k("photo")),
+      ...(d.brokenPartCode.trim() ? [] : [{ text: "รหัสอะไหล่ตัวที่เสีย", key: k("broken") }]),
+      ...(d.symptom.trim() ? [] : [{ text: "อาการ/สาเหตุ", key: k("symptom") }]),
+      ...(order.claimTroubleshooting.every((t) => d.troubleshooting.includes(t)) ? [] : [{ text: "Troubleshooting ให้ครบ", key: k("checks") }]),
+      ...(d.checkNote.trim() ? [] : [{ text: "สิ่งที่เข้าเช็ค", key: k("note") }]),
+      ...file("CLAIM_CHECK_VIDEO", "วิดีโอการตรวจเช็ค", k("video")),
+      // เปิดช่อง "ค่าเดิมถูกแล้ว" แล้วต้องอธิบาย (เซิร์ฟเวอร์รับ 3–300 ตัวอักษร) — ไม่อธิบายก็กดยกเลิกช่องนั้น
+      // ชิ้นที่ถูกชี้ช่อง (ก้อน 4) อธิบายทีละช่องในรายการ "ต้องแก้" แทน — ไม่นับช่องทั้งชิ้นแบบเดิมซ้ำ
+      ...(d.keep !== null && stillRejected.has(p.sparePartId) && !flaggedIds.has(p.sparePartId) && d.keep.trim().length < 3
+        ? [{ text: "คำอธิบาย “ค่าเดิมถูกแล้ว”", key: k("keep") }]
+        : []),
     ];
   }
-  const anyClaim = parts.some((p) => draftFor(p.sparePartId).on);
-  const machineGaps = anyClaim ? claimMachineGaps(order.claimGuide, plate, check) : [];
-  const claimsMissing = parts.some((p) => claimGaps(p).length > 0) || machineGaps.length > 0;
+  /** จำนวนข้อของชิ้น (ตัวหารบนแท็บชิ้น) — ①–⑤ ตามยี่ห้อ (Troubleshooting มีเฉพาะยี่ห้อที่บังคับ) + ⑥ ของเครื่อง */
+  const partTotal = 5 + (order.claimTroubleshooting.length ? 1 : 0) + 1;
+  /** ชิ้นที่ล็อกแล้วไม่อยู่ในขั้นเคลม — ที่เหลือคือแท็บชิ้น (รวมชิ้นที่ไม่ส่งเคลม) */
+  const tabParts = parts.filter((p) => !lockedRows.has(p.sparePartId));
+  const claimedParts = tabParts.filter((p) => draftFor(p.sparePartId).on);
+  const anyClaim = claimedParts.length > 0;
+  /** ของเครื่อง (ข้อ ⑥) ที่ยังขาด — ครั้งเดียวทั้งใบ ผูกกับชิ้นแรกที่ส่งเคลม (ตัวอย่าง: นับในชิ้นแรก) */
+  function machineEvidenceGap(kept = false): MItem[] {
+    if (!anyClaim) return [];
+    const missingRoles = MACHINE_ROLES.filter((r) => !machineHas(r, kept));
+    if (!missingRoles.length) return [];
+    const failed = !kept && MACHINE_ROLES.some((r) => uploads.slots[`m:${r}`]?.status === "failed");
+    const labels = missingRoles.map((r) => (r === "CLAIM_ERROR_VIDEO" ? videoLabel : "รูปอาการเสีย")).join(" · ");
+    return [
+      {
+        text: `เคลม ${partLabel(claimedParts[0])}: ${labels}${failed ? " ส่งไม่สำเร็จ — กดลองใหม่" : ""} (ใช้ร่วมทุกชิ้น)`,
+        key: "evid",
+        step: 2,
+        part: claimedParts[0].sparePartId,
+        shared: true,
+      },
+    ];
+  }
+  /** ข้อมูลเครื่อง (ขั้นเครื่อง) ที่ยังขาด — ป้ายรุ่นยืนยันทีละช่อง + Error · ล็อกไปกับชิ้นที่ผ่านแล้ว = ไม่มีอะไรให้กรอก */
+  const machineGaps: { text: string; key: string }[] =
+    anyClaim && !machineLocked && order.claimGuide
+      ? [
+          ...plateGaps(order.claimGuide, plate),
+          ...(order.claimGuide.errors.length && !check.errorCode ? [{ text: "Error ที่เครื่องขึ้น", key: "m:error" }] : []),
+        ]
+      : [];
+  const machineTotal = anyClaim && !machineLocked && order.claimGuide ? plateItemCount(order.claimGuide, plate) + (order.claimGuide.errors.length ? 1 : 0) : 0;
 
-  /** ไฟล์ที่ยังต้องขึ้นก่อนสั่งปิด — ใช้ทั้งตอนส่งและตอนนับว่าจะเกินเพดานไหม */
+  /**
+   * รายการ "ต้องแก้" ของฟอร์มแก้เคลม (เคลมก้อน 4) — เฉพาะชิ้นที่ยังติ๊กส่งเคลมอยู่ (ชิ้นที่ช่างเลิกเคลม ช่องของชิ้นนั้นไม่ต้องแก้)
+   * ไฟล์ใหม่ = แนบหลังถูกตีกลับ (ในฟอร์มนี้ หรือขึ้นใบงานไปแล้วตอนเปิดฟอร์มครั้งก่อน) · ป้ายรุ่นใหม่นับรูปที่เลือกไว้รอส่งด้วย
+   * kept = นับแบบออกจากหน้านี้แล้วกลับมา (ตัวเลข "ยังขาด" ในร่าง) — ไฟล์ที่ยังส่งไม่เสร็จ/รูปป้ายที่ยังไม่ได้ส่งไม่นับ
+   */
+  const claimedIds = parts.filter((p) => !lockedRows.has(p.sparePartId) && draftFor(p.sparePartId).on).map((p) => p.sparePartId);
+  const fixRows = fixMode ? flaggedRows.filter((r) => claimedIds.includes(r.sparePartId)) : [];
+  const after = (iso: string | null | undefined, since: string | null) => !!iso && !!since && Date.parse(iso) > Date.parse(since);
+  const fixItemsOf = (kept: boolean) =>
+    buildFixItems({
+      rows: fixRows,
+      nameOf: (id) => {
+        const p = parts.find((x) => x.sparePartId === id);
+        return p ? partLabel(p) : String(id);
+      },
+      family: order.claimGuide?.plate.family ?? fixRows[0]?.nameplate?.family ?? null,
+      errorCode: check.errorCode,
+      guide: order.claimGuide,
+      draftFor,
+      plate,
+      check,
+      newFile: (ids, role, since, k) => {
+        const ok = (sl: { status: string } | undefined) => !!sl && (k ? sl.status === "done" : sl.status !== "failed");
+        // ของเครื่อง (ids null) แนบช่องเดียวไม่ผูกชิ้น (m:) — ชิ้นไหนก็ได้ตามกติกาเครื่องเดียวอาการชุดเดียว (เคลมก้อน 5)
+        const inForm =
+          (ids === null && ok(uploads.slots[`m:${role}`])) || (ids ?? claimedIds).some((id) => ok(uploads.slots[slotKey(id, role)]));
+        return (
+          inForm ||
+          order.claimEvidence.some(
+            (e) =>
+              e.role === role &&
+              (ids === null || (e.sparePartId !== null && ids.includes(e.sparePartId))) &&
+              after(e.createdAt, since) &&
+              !(e.id && uploads.removed.has(e.id))
+          )
+        );
+      },
+      newPlate: (since) => (!kept && !!nameplate) || files.some((f) => f.role === "NAMEPLATE" && after(f.createdAt, since)),
+      keeps: fixKeep,
+      kept,
+    });
+  const fixItems = fixItemsOf(false);
+  const unresolved = unresolvedOf(fixItems);
+  // อ่านหลังรอไฟล์ขึ้นเสร็จ (submit) — ไฟล์ที่ส่งไม่ผ่านทำให้ช่องนั้นกลับเป็น "ยังไม่ได้แก้"
+  const fixRef = useRef({ items: fixItems, unresolved });
+  fixRef.current = { items: fixItems, unresolved };
+
+  /** ไฟล์ที่ยังต้องขึ้นก่อนสั่งปิด (รูปหน้างาน ป้ายรุ่น ใบเหลือง) — ใช้ทั้งตอนส่งและตอนนับว่าจะเกินเพดานไหม */
   function uploadQueue() {
-    const claimed = parts.filter((p) => draftFor(p.sparePartId).on);
     const queue: { file: PickedAttachment; role?: string; sparePartId?: number }[] = [
       ...beforeFiles.map((file) => ({ file, role: "BEFORE" })),
       ...afterFiles.map((file) => ({ file, role: "AFTER" })),
       ...(nameplate ? [{ file: nameplate, role: "NAMEPLATE" }] : []),
       ...(slip ? [{ file: slip, role: "REQUISITION" }] : []),
-      ...claimed.flatMap((p) =>
-        Object.entries(draftFor(p.sparePartId).files).flatMap(([role, file]) =>
-          file ? [{ file, role, sparePartId: p.sparePartId }] : []
-        )
-      ),
     ];
     return queue.filter((q) => !sentRef.current.has(q.file));
   }
@@ -6145,7 +7336,239 @@ function CloseModal({
   const overLimit =
     order.attachmentLimit !== undefined && (order.attachmentCount ?? 0) + pendingUploads > order.attachmentLimit;
 
-  /** เลือกไฟล์หนึ่งรอบแล้วส่งให้คนเรียกไปเก็บเอง — ทุกช่องใช้ตัวนี้ร่วมกัน */
+  /**
+   * สิ่งที่ยังขาดทั้งฟอร์มในรายการเดียว เรียงตามตำแหน่งในฟอร์ม (บนลงล่าง) — key = ช่องที่ปุ่ม "พาไป" เลื่อนไปหา
+   * เดิมมีกล่อง "ยังขาด" สามกล่อง กล่องท้ายฟอร์มบอกแค่ "ข้อมูลเคลมอะไหล่เก่า" ช่างไม่รู้ว่าขาดช่องไหนของชิ้นไหน
+   *
+   * kept = นับแบบ "ถ้าออกจากหน้านี้แล้วกลับมาเปิดฟอร์มใหม่" สำหรับตัวเลขในร่าง (การ์ดงานของฉัน "ยังขาด n อย่าง ข้อมูลยังอยู่ครบ")
+   * รูปที่เลือกไว้แต่ยังไม่ได้กดส่ง · ไฟล์เคลมที่ยังขึ้นไม่เสร็จ · คนที่ติ๊กไว้ อยู่ในหน่วยความจำของหน้านี้เท่านั้น ไม่อยู่ในร่าง
+   * ถ้านับว่ามี การ์ดจะบอกว่าข้อมูลอยู่ครบทั้งที่รูปก่อนซ่อมหายไปแล้ว (ถ่ายใหม่หลังซ่อมไม่ได้) — บอกผิดในเรื่องที่แก้ไม่ได้
+   */
+  function buildMissing(kept: boolean): MItem[] {
+    const before = kept ? !isPm && workCount("BEFORE", true) === 0 && preCount === 0 : beforeMissing;
+    const after = kept ? workCount("AFTER", true) === 0 : afterMissing;
+    const plateShot = kept ? !isPm && workCount("NAMEPLATE", true) === 0 : nameplateMissing;
+    const slipShot = kept ? parts.length > 0 && workCount("REQUISITION", true) === 0 : slipMissing;
+    // เปิดฟอร์มใหม่ได้คนตามค่าตั้งต้น (ทีม SUB ที่จ่ายไว้ / คนของรอบที่ถูกตีกลับ) + ชื่อที่พิมพ์ไว้ในร่าง
+    const workers = !kept
+      ? workersMissing
+      : isSub
+        ? !(reclosing ? order.subTeam : order.assignedTeam)
+        : !(reclosing && order.workers.length > 0) && !otherWorkers.trim();
+    const w = (text: string, key: string): MItem => ({ text, key, step: 0 });
+    return [
+      ...(before ? [w("รูปก่อนซ่อม", "BEFORE")] : []),
+      ...(after ? [w("รูปหลังซ่อม", "AFTER")] : []),
+      ...(plateShot ? [w("รูปป้ายรุ่น", "NAMEPLATE")] : []),
+      ...(summaryMissing ? [w("สรุปงานที่ทำ", "summary")] : []),
+      ...(workers ? [w(isSub ? "ทีม SUB ที่เข้าทำ" : "ผู้เข้าปฏิบัติงาน", "workers")] : []),
+      ...(offPartsIncomplete(offParts) ? [w("ชื่ออะไหล่นอกสโตร์", "offParts")] : []),
+      ...(slipShot ? [w("รูปใบเหลือง", "slip")] : []),
+      ...machineGaps.map((g): MItem => ({ text: `ข้อมูลเครื่อง: ${g.text}`, key: g.key, step: 1 })),
+      ...tabParts.flatMap((p): MItem[] => {
+        const d = draftFor(p.sparePartId);
+        // สาขาในประกัน ไม่ส่งเคลมต้องมีเหตุผล (ร่างเก่าที่ปิดเคลมไว้โดยไม่มีเหตุผล) — กติกาเดียวกับเซิร์ฟเวอร์
+        if (!d.on && needsSkipReason && !d.skip) {
+          return [{ text: `ไม่ส่งเคลม ${partLabel(p)}: ต้องเลือกเหตุผล`, key: `p:${p.sparePartId}:skip`, step: 2, part: p.sparePartId }];
+        }
+        return claimGaps(p, kept).map((g) => ({ text: `เคลม ${partLabel(p)}: ${g.text}`, key: g.key, step: 2, part: p.sparePartId }));
+      }),
+      ...machineEvidenceGap(kept),
+      // ใบรออะไหล่อยู่ท้ายฟอร์ม (หน้ายาว) — อยู่ท้ายรายการ ปุ่มพาไปจึงไล่จากบนลงล่างตามที่ช่างเห็น
+      ...(!kept && followUpMissing ? [w("อะไหล่ที่ยังขาด", "followUp")] : []),
+    ];
+  }
+  const missingList = buildMissing(false);
+  // อ่านหลังรอไฟล์เคลมขึ้นเสร็จ (submit) — ค่าในตัวฟังก์ชันเป็นของตอนกด ไม่รู้ว่าไฟล์ที่เพิ่งส่งไม่ผ่าน
+  const missingRef = useRef(missingList);
+  missingRef.current = missingList;
+
+  /** บันทึกร่างทุกครั้งที่ผู้ใช้แก้ (หน่วง 400 มิลลิวินาที) — ดูเหตุผลที่ draftKey ด้านบน */
+  const draftBody: CloseDraft = {
+    note,
+    otherWorkers,
+    claims: Object.fromEntries(
+      parts.filter((p) => !lockedRows.has(p.sparePartId)).map((p) => {
+        const { on, brokenPartCode, symptom, checkNote, troubleshooting, keep, errorChecked, skip } = draftFor(p.sparePartId);
+        return [String(p.sparePartId), { on, brokenPartCode, symptom, checkNote, troubleshooting, keep, errorChecked, skip }];
+      })
+    ),
+    plate: { values: plate.values },
+    check,
+    ...(fixMode ? { fixKeep } : {}),
+  };
+  const draftJson = JSON.stringify(draftBody);
+  // ตัวเลขบนการ์ดนับแบบ kept (ดู buildMissing) ไม่ใช่รายการบนปุ่มล่าง · ฟอร์มแก้เคลมนับช่องที่ถูกชี้แต่ยังไม่ได้แก้ด้วย
+  const missingJson = JSON.stringify([
+    ...buildMissing(true).map((m) => m.text),
+    ...(fixMode ? unresolvedOf(fixItemsOf(true)).map((i) => `ต้องแก้: ${i.title}`) : []),
+  ]);
+  useEffect(() => {
+    if (!visible || !restored) return;
+    if (baseline.current === null) {
+      baseline.current = draftJson;
+      return;
+    }
+    if (draftJson !== baseline.current) touched.current = true;
+    if (!touched.current) return;
+    saver.current.save({ ...draftBody, missing: JSON.parse(missingJson) as string[], claiming: anyClaim });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, restored, draftJson, missingJson]);
+
+  // ── ฟอร์มทีละขั้น (เคลมก้อน 5) ──
+  const claimForm = !fixMode && (anyClaim || (needsSkipReason && tabParts.length > 0));
+  useEffect(() => {
+    if (!visible) {
+      setStepMode(false);
+      setStep(0);
+      setPartTab(null);
+      setPlateRetaken(false);
+      return;
+    }
+    if (claimForm) setStepMode(true);
+  }, [visible, claimForm]);
+  /** คนที่ไป: เติมช่างที่เข้าระบบอยู่ไว้ให้ (เอาออกได้) — ฟอร์มทีละขั้นของช่างที่ไปเอง ไม่ต้องหาชื่อตัวเองในรายชื่อทั้งบริษัท */
+  useEffect(() => {
+    if (!visible || !stepMode || isSub || reclosing || workerIds.length || otherWorkers.trim()) return;
+    if (me && technicians.some((t) => t.id === me.id)) setWorkerIds([me.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, stepMode, technicians]);
+  const curPart = tabParts.some((p) => p.sparePartId === partTab) ? partTab : tabParts[0]?.sparePartId ?? null;
+  const SEND_LABEL = anyClaim ? "ยืนยันปิดงาน · ส่งตรวจเคลม" : "ปิดงาน · ไม่ส่งเคลม";
+  /**
+   * ปุ่มล่างของฟอร์มทีละขั้น (ตัวอย่าง nav): ขั้นนี้ยังขาด → "ยังขาด n อย่าง — พาไป" · ครบ → "ถัดไป: …" · ส่งได้จากขั้น "ส่ง" เท่านั้น
+   * ช่างจะได้ผ่านหน้าตรวจก่อนส่งและเปิดดูทุกชิ้น (คำเตือนรหัสตัวเสียไม่ตรงอยู่ในชิ้นนั้น) ไม่ใช่กดส่งจากกลางฟอร์ม
+   */
+  type Nav =
+    | { kind: "go"; item: MItem; label: string }
+    | { kind: "next"; step: number; part?: number; label: string }
+    | { kind: "send"; label: string };
+  function nav(): Nav {
+    const go = (list: MItem[]): Nav => ({ kind: "go", item: list[0], label: `ยังขาด ${list.length} อย่าง — พาไป` });
+    if (step === 3) return missingList.length ? go(missingList) : { kind: "send", label: SEND_LABEL };
+    const curOn = curPart !== null && draftFor(curPart).on;
+    const here =
+      step === 2
+        ? missingList.filter((m) => m.step === 2 && (m.shared ? curOn : m.part === curPart))
+        : missingList.filter((m) => m.step === step);
+    if (here.length) return go(here);
+    if (step === 0) return { kind: "next", step: 1, label: "ถัดไป: ข้อมูลเครื่อง" };
+    if (step === 1) {
+      const p0 = claimedParts[0];
+      return { kind: "next", step: 2, part: p0?.sparePartId, label: p0 ? `ถัดไป: เคลม ${partLabel(p0)}` : "ถัดไป: เคลมทีละชิ้น" };
+    }
+    const at = tabParts.findIndex((p) => p.sparePartId === curPart);
+    const nextPart = tabParts.slice(at + 1).find((p) => draftFor(p.sparePartId).on);
+    if (nextPart) return { kind: "next", step: 2, part: nextPart.sparePartId, label: `ถัดไป: เคลม ${partLabel(nextPart)}` };
+    const rest = missingList.filter((m) => m.step === 2);
+    if (rest.length) return go(rest);
+    return { kind: "next", step: 3, label: "ถัดไป: ตรวจก่อนส่ง" };
+  }
+  const stepNav = stepMode && !fixMode ? nav() : null;
+  /** สลับขั้น/ชิ้นแล้วกลับขึ้นบนสุดของขั้นนั้น — ขั้นใหม่ต้องเริ่มอ่านจากหัว ไม่ใช่ค้างตำแหน่งเลื่อนของขั้นเดิม */
+  function openStep(i: number, part?: number) {
+    setStep(i);
+    if (part !== undefined) setPartTab(part);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }
+  /** ตัวนับใต้ชื่อขั้น (ตัวอย่าง tabs) */
+  const stepInfos: StepInfo[] = [0, 1, 2, 3].map((i) => {
+    const miss = missingList.filter((m) => m.step === i).length;
+    if (i === 3) return { count: missingList.length ? `ยังขาด ${missingList.length}` : "พร้อมส่ง", done: missingList.length === 0 };
+    if (i === 1) {
+      if (!anyClaim) return { count: "ไม่ส่งเคลม", done: true };
+      if (machineLocked) return { count: "ล็อกไว้", done: true };
+      return { count: `${Math.max(0, machineTotal - miss)}/${machineTotal}`, done: miss === 0 };
+    }
+    if (i === 2) {
+      if (!anyClaim && !miss) return { count: "ไม่ส่งเคลม", done: true };
+      const extra = missingList.filter((m) => m.step === 2 && /:(keep|skip)$/.test(m.key)).length;
+      const total = claimedParts.length * (partTotal - 1) + (anyClaim ? 1 : 0) + extra;
+      return { count: `${Math.max(0, total - miss)}/${total}`, done: miss === 0 };
+    }
+    const total =
+      (isPm ? 0 : 2) + 3 + (offParts.length ? 1 : 0) + (parts.length ? 1 : 0) + (followUp ? 1 : 0);
+    return { count: `${Math.max(0, total - miss)}/${total}`, done: miss === 0 };
+  });
+  /** แท็บชิ้น — "{ชิ้น} {ครบ}/{ทั้งหมด}" (+ ✓) · ไม่ส่งเคลม (ตัวอย่าง partTabs) */
+  const sharedMissing = missingList.some((m) => m.shared);
+  const partTabInfos = tabParts.map((p) => {
+    const d = draftFor(p.sparePartId);
+    if (!d.on) return { id: p.sparePartId, name: partLabel(p), count: "ไม่ส่งเคลม", done: !needsSkipReason || !!d.skip, skipped: true };
+    const own = missingList.filter((m) => m.part === p.sparePartId && !m.shared);
+    const extra = own.filter((m) => /:keep$/.test(m.key)).length;
+    const pm = own.length + (sharedMissing ? 1 : 0);
+    const total = partTotal + extra;
+    return { id: p.sparePartId, name: partLabel(p), count: `${total - pm}/${total}${pm ? "" : " ✓"}`, done: pm === 0, skipped: false };
+  });
+
+  /**
+   * ปุ่มล่าง "ยังขาด n อย่าง — พาไป" — เลื่อนไปช่องแรกที่ยังขาดแล้วกระพริบกรอบแดง ไม่ส่งอะไรไปเซิร์ฟเวอร์
+   * เดิมปุ่มจางกดไม่ได้ ช่างกดแล้วไม่มีอะไรเกิดขึ้น ต้องเลื่อนหาเองว่าขาดตรงไหนในฟอร์มยาวห้าหกจอ
+   * ตำแหน่งแต่ละช่องจดจาก onLayout (ช่องที่ซ้อนในกรอบอื่นบวกตำแหน่งกรอบแม่ตอนกด — onLayout ลูกมาก่อนแม่ได้)
+   *
+   * บนเว็บวัดใหม่ตอนกด ไม่ใช้ค่าที่จดไว้: react-native-web ยิง onLayout เฉพาะตอนกล่องนั้นเปลี่ยนขนาด (ResizeObserver)
+   * ไม่ยิงตอนแค่ถูกดันลง — แนบรูป/พิมพ์สรุปยาว/เปิดเคลมอีกชิ้นด้านบนแล้ว ตำแหน่งที่จดของช่องล่าง ๆ เก่าหมด
+   * ปุ่มพาไปเลื่อนไปกลางกล่องอื่น กรอบแดงกระพริบอยู่นอกจอ ช่างเห็นว่ากดแล้วไม่มีอะไรเกิดขึ้น (มือถือ onLayout ยิงตอนย้ายด้วย)
+   */
+  const spots = useRef<Record<string, { y: number; parent?: string }>>({});
+  const spotNodes = useRef<Record<string, View | null>>({});
+  const spot = (key: string, parent?: string) => ({
+    onLayout: (e: { nativeEvent: { layout: { y: number } } }) => {
+      spots.current[key] = { y: e.nativeEvent.layout.y, parent };
+    },
+    ref: (node: View | null) => {
+      spotNodes.current[key] = node;
+    },
+  });
+  const spotY = (key: string): number | null => {
+    if (Platform.OS === "web") {
+      // บนเว็บ ref ของ View คือกล่อง DOM และ getScrollableNode คือกล่องที่เลื่อนจริงของ ScrollView
+      const el = spotNodes.current[key] as unknown as HTMLElement | null;
+      const box = (scrollRef.current as unknown as { getScrollableNode?: () => HTMLElement | null } | null)?.getScrollableNode?.();
+      if (el && box && typeof el.getBoundingClientRect === "function") {
+        return el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+      }
+    }
+    const s = spots.current[key];
+    if (!s) return null;
+    return s.y + (s.parent ? spotY(s.parent) ?? 0 : 0);
+  };
+  const [flash, setFlash] = useState<{ key: string; n: number } | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash((f) => (f === flash ? null : f)), 2200);
+    return () => clearTimeout(t);
+  }, [flash]);
+  function scrollToSpot(key: string) {
+    const y = spotY(key);
+    if (y !== null) scrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true });
+    setFlash({ key, n: Date.now() });
+  }
+  /**
+   * ฟอร์มแก้เคลม: ของที่ขาดอยู่ในส่วนที่พับ — กางให้ก่อนแล้วค่อยเลื่อน (ช่องที่พับอยู่ไม่มีบนจอให้เลื่อนไปหา)
+   * รอหน้าจอวาดส่วนที่กางเสร็จก่อนวัดตำแหน่ง
+   */
+  function goTo(key: string) {
+    // ฟอร์มทีละขั้น: ของที่ขาดอยู่ขั้น/ชิ้นอื่น — สลับไปก่อนแล้วค่อยเลื่อน (รอหน้าจอวาดขั้นนั้นเสร็จก่อนวัดตำแหน่ง)
+    if (stepMode && !fixMode) {
+      const item = missingRef.current.find((m) => m.key === key);
+      if (item && (item.step !== step || (item.step === 2 && item.part !== undefined && item.part !== curPart))) {
+        setStep(item.step);
+        if (item.part !== undefined) setPartTab(item.part);
+        setTimeout(() => scrollToSpot(key), 150);
+        return;
+      }
+    }
+    if (fixMode && !foldOpen && !key.startsWith("fix:")) {
+      setFoldOpen(true);
+      setTimeout(() => scrollToSpot(key), 120);
+      return;
+    }
+    scrollToSpot(key);
+  }
+  const flashOn = (key: string) => (flash?.key === key ? <FlashFrame key={flash.n} /> : null);
+
   /** ไฟล์ปิดงานแต่ละขั้น — หมุนเฉพาะขั้นที่กำลังเตรียมไฟล์ ขั้นอื่นยังเห็นปุ่มตามปกติ */
   const [picking, setPicking] = useState<string | null>(null);
   async function pickFor(
@@ -6181,21 +7604,304 @@ function CloseModal({
       setBusy(null);
     }
   }
-  /** ช่องที่เก็บไฟล์เดียว (ใบเหลือง · หลักฐานเคลมแต่ละอย่าง) — ลากมาหลายไฟล์เก็บไฟล์แรก */
+  /** ช่องที่เก็บไฟล์เดียว (ใบเหลือง) — ลากมาหลายไฟล์เก็บไฟล์แรก */
   const dropOne = (files: File[], accept: AcceptKinds, keep: (file: PickedAttachment) => void) =>
     pickOne(async (stage) => (await filesToAttachments(files.slice(0, 1), accept, stage))[0] ?? null, keep);
 
+  /**
+   * ไฟล์ขั้นงานที่ทำ — ฟอร์มทีละขั้น (มีเคลม) ส่งขึ้นใบงานทันทีที่เลือก (เคลมก้อน 5) · หน้ายาว (ไม่มีเคลม) เก็บไว้ส่งตอนกดปิดเหมือนเดิม
+   * ทำไมต่างกัน: ใบที่มีเคลมถ่ายไฟล์เยอะและกรอกนาน แอปหลุดกลางทางแล้วรูปก่อนซ่อมหาย ถ่ายใหม่ไม่ได้ (ซ่อมไปแล้ว)
+   * ใบไม่มีเคลมกรอกจบในจอเดียว คงพฤติกรรมเดิมไว้ ไม่เปลี่ยนสิ่งที่ช่างคุ้น · ดูในฐานะคนอื่นไม่ส่ง (เซิร์ฟเวอร์ไม่รับอยู่แล้ว)
+   * รูปป้ายรุ่นใหม่ = ให้ระบบอ่านค่าใหม่ (ขั้นเครื่องใช้รูปนี้ ไม่ต้องถ่ายซ้ำ)
+   */
+  function addWork(role: WorkRole, picked: PickedAttachment[]) {
+    if (!picked.length) return;
+    if (stepMode && !fixMode && !me?.viewAs) {
+      for (const f of role === "NAMEPLATE" || role === "REQUISITION" ? picked.slice(0, 1) : picked) {
+        const key = role === "NAMEPLATE" || role === "REQUISITION" ? `w:${role}` : `w:${role}:${++workSeq.current}`;
+        uploads.start(key, f, role, null);
+      }
+    } else if (role === "BEFORE") setBeforeFiles((v) => [...v, ...picked]);
+    else if (role === "AFTER") setAfterFiles((v) => [...v, ...picked]);
+    else if (role === "NAMEPLATE") setNameplate(picked[0]);
+    else setSlip(picked[0]);
+    if (role === "NAMEPLATE" && (anyClaim || fixMode)) void readPlate(picked[0].uri, `local:${picked[0].uri}`);
+  }
+
+  /**
+   * อ่านป้ายรุ่นจากรูป (OCR บนเว็บ) — ทำเบื้องหลังตั้งแต่ถ่ายรูปป้ายในขั้นงานที่ทำ ถึงขั้นเครื่องค่าก็พร้อมให้ยืนยัน
+   * ตัวเทียบรุ่น: รุ่นในใบเคลมที่อนุมัติล่าสุดของเครื่องนี้ ก่อนทะเบียน (ทะเบียนส่วนใหญ่มีแค่ยี่ห้อ · เจ้าของงานตอบข้อ 9)
+   * ทะเบียนที่เป็นแค่ยี่ห้อ = ไม่มีรุ่นให้เทียบ — ห้ามเทียบรหัสรุ่นจากรูปกับชื่อยี่ห้อ (แผนรวม S15)
+   * read = ค่าที่อ่านได้ตอนนี้ (นับ "แก้แล้ว n ตัว") · ทุกช่องที่อ่านใหม่ต้องยืนยันใหม่ · ช่องที่อ่านไม่ได้คงค่าเดิม (อาจพิมพ์ไว้แล้ว)
+   */
+  const [ocrStage, setOcrStage] = useState<string | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const ocrTag = useRef<string | null>(null);
+  const comparator = order.claimApprovedModel ?? (isBrandOnly(order.machineModel) ? null : order.machineModel ?? null);
+  async function readPlate(uri: string, tag: string) {
+    if (!order.claimGuide || machineLocked) return;
+    ocrTag.current = tag;
+    setOcrError(null);
+    setOcrStage("กำลังโหลดตัวอ่านป้าย");
+    try {
+      const read = await readPlatePhoto(uri, order.claimGuide.plate, comparator, (st) => ocrTag.current === tag && setOcrStage(st));
+      if (ocrTag.current !== tag) return;
+      const fresh = Object.fromEntries(
+        Object.entries(read).map(([k, v]) => [k, { ...v, read: v.value, confirmed: false, edited: false } as PlateValue])
+      );
+      setPlate((p) => ({ ...p, values: { ...p.values, ...fresh } }));
+    } catch (e) {
+      if (ocrTag.current === tag) setOcrError(e instanceof Error ? e.message : "อ่านป้ายไม่สำเร็จ — พิมพ์เองจากรูปได้");
+    } finally {
+      if (ocrTag.current === tag) setOcrStage(null);
+    }
+  }
+  /** รูปป้ายของรอบนี้: ที่เลือกในฟอร์มนี้ก่อน · ไม่มีใช้รูปล่าสุดในใบงาน (แนบไว้ก่อนเปิดฟอร์ม) */
+  const localPlate = uploads.slots["w:NAMEPLATE"]?.file ?? nameplate;
+  const serverPlate =
+    [...files].filter((f) => f.role === "NAMEPLATE" && inRound(f) && !uploads.removed.has(f.id)).sort((a, b) => b.id - a.id)[0] ?? null;
+  /**
+   * รูปป้ายที่ขึ้นใบงานไปก่อนเปิดฟอร์ม — อ่านจากไฟล์จริงในใบ (คำขอ /file ที่อยู่เว็บเดียวกัน ตัวอ่านเปิดรูปได้)
+   * อ่านเองครั้งเดียวตอนเปิดขั้นเครื่องโดยยังไม่มีค่า · มีค่าแล้ว (ร่าง/รอบก่อน) ไม่อ่านทับ ช่างกด "ถ่ายใหม่" ถ้าต้องการอ่านใหม่
+   */
+  useEffect(() => {
+    if (!visible || !stepMode || fixMode || step !== 1 || !anyClaim || machineLocked || !order.claimGuide || ocrStage) return;
+    if (Object.values(plate.values).some((v) => v?.value)) return;
+    if (localPlate) {
+      const tag = `local:${localPlate.uri}`;
+      if (ocrTag.current !== tag) void readPlate(localPlate.uri, tag);
+      return;
+    }
+    if (!serverPlate || Platform.OS !== "web") return;
+    const tag = `aid:${serverPlate.id}`;
+    if (ocrTag.current === tag) return;
+    ocrTag.current = tag;
+    setOcrError(null);
+    setOcrStage("กำลังโหลดตัวอ่านป้าย");
+    void (async () => {
+      try {
+        const res = await api.get<Blob>(`/work-orders/${order.id}/attachments/${serverPlate.id}/file`, {
+          responseType: "blob",
+          loadingText: false,
+        });
+        // ระหว่างโหลดรูป ช่างถ่ายป้ายใหม่ไปแล้ว — รูปใหม่ชนะ ไม่อ่านรูปเก่าทับค่าที่กำลังอ่านจากรูปใหม่
+        if (ocrTag.current !== tag) return;
+        await readPlate(URL.createObjectURL(res.data), tag);
+      } catch {
+        if (ocrTag.current === tag) {
+          setOcrError("อ่านป้ายไม่สำเร็จ — พิมพ์เองจากรูปได้");
+          setOcrStage(null);
+        }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, stepMode, step, anyClaim, localPlate?.uri, serverPlate?.id]);
+  /** ระบบไม่มั่นใจรุ่น — บอกว่าเทียบกับอะไรแล้วไม่ตรง (หรือไม่มีอะไรให้เทียบ) */
+  const plateDoubt = (value: string) => {
+    const tail = "ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)";
+    if (!comparator) return "ทะเบียนยังไม่มีรุ่นเต็ม — ดูกับรูปทีละตัว (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)";
+    const fromApproved = !!order.claimApprovedModel;
+    if (value.startsWith(comparator.toUpperCase())) return `ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — ${tail}`;
+    return fromApproved ? `ไม่ตรงรุ่นในใบเคลมที่อนุมัติของเครื่องนี้ (${comparator}) — ${tail}` : `ไม่ตรงทะเบียน (${comparator}) — ${tail}`;
+  };
+  /**
+   * ถ่ายป้ายใหม่จากขั้นเครื่อง — แทนรูปเดิม (บอกให้รู้) แล้วอ่านค่าใหม่
+   * รูปแรกของใบที่ถ่ายจากขั้นนี้ไม่ได้แทนอะไร — ไม่ขึ้น "แทนรูปเดิม" ให้ช่างงงว่ารูปไหนหายไป
+   */
+  const retakePlate = () => {
+    const hadPlate = !!(localPlate || serverPlate || order.hasNameplate);
+    pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage), (f) => {
+      if (hadPlate) setPlateRetaken(true);
+      addWork("NAMEPLATE", f);
+    });
+  };
+
+  /**
+   * ปิดงานสำเร็จแล้ว — ล้างฟอร์ม เปิดใบรออะไหล่ (ถ้าติ๊กไว้) แล้วบอกหน้าใบงาน
+   * ใช้ทั้งตอนคำตอบกลับมาปกติ และตอนพบว่าคำสั่งปิดรอบก่อนผ่านไปแล้วแต่คำตอบหาย (closedByUs)
+   * สองทางต้องเหมือนกันทุกอย่าง ไม่งั้นทางหลังจะลืมเปิดใบรออะไหล่ หรือร่างเก่ากลับมาโผล่ในฟอร์ม
+   */
+  async function finishClosed() {
+    // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
+    setDrafts({});
+    sentRef.current.clear();
+    uploads.reset();
+    // ร่างที่ค้างในคิวหน่วงต้องทิ้งก่อนล้าง ไม่งั้นถูกเขียนกลับมาหลังปิดงานแล้ว · restored=false หยุดตัวบันทึกร่าง
+    // (ล้างช่องด้านล่างทำให้ค่าเปลี่ยน ถ้าตัวบันทึกยังทำงาน ร่างว่างจะถูกเขียนกลับไปแล้วการ์ดขึ้น "กรอกค้างไว้")
+    saver.current.cancel();
+    clearCloseDraft(order.id);
+    touched.current = false;
+    setRestored(false);
+    setSendError(null);
+    setFixKeep({});
+    setFoldOpen(false);
+    setFixBlocked(false);
+    setStep(0);
+    setPartTab(null);
+    setPlateRetaken(false);
+    setOcrError(null);
+    setNote("");
+    setParts([]);
+    setSlip(null);
+    setBeforeFiles([]);
+    setAfterFiles([]);
+    setNameplate(null);
+    setWorkerIds([]);
+    setOtherWorkers("");
+    /**
+     * ใบรออะไหล่เปิดหลังปิดงานสำเร็จแล้วเท่านั้น — ปิดไม่ผ่านแต่เปิดใบต่อไปแล้ว
+     * จะได้ใบรออะไหล่ลอย ๆ ของงานที่ยังไม่จบ ซึ่งพอกดปิดอีกรอบก็เปิดซ้ำอีกใบ
+     */
+    if (followUp && missing.length > 0) {
+      try {
+        setBusy("กำลังเปิดใบงานรออะไหล่");
+        await api.post(`/work-orders/${order.id}/follow-up`, {
+          parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        });
+      } catch (e) {
+        showAlert(
+          "ปิดงานแล้ว แต่เปิดใบรออะไหล่ไม่สำเร็จ",
+          `${apiErrorMessage(e)}\n\nเปิดใหม่ได้จากปุ่ม “เปิดใบงานรออะไหล่ต่อ” ในใบงานนี้`
+        );
+      }
+    }
+    setFollowUp(false);
+    setMissing([]);
+    onDone();
+  }
+
+  /**
+   * กดส่งซ้ำแล้วเซิร์ฟเวอร์ตอบว่าใบนี้ส่งปิดงานไปแล้ว (409 CLOSE_ALREADY_SENT) — คำสั่งปิดรอบก่อนของเราผ่านไปแล้วไหม
+   *
+   * เน็ตหลุดตอนรอคำตอบ: เซิร์ฟเวอร์ปิดงานไปแล้วแต่ช่างเห็นว่าส่งไม่สำเร็จ แล้วกดใหม่ ถ้านับเป็นความผิดพลาดรอบที่สอง
+   * ช่างจะลองซ้ำไม่จบหรือโทรตามแอดมิน — โหลดใบมาดู ถ้าปิดโดยเราหลังเปิดฟอร์มรอบนี้ = ปิดสำเร็จจริง
+   * เผื่อนาฬิกามือถือกับเซิร์ฟเวอร์ไม่ตรงกัน 10 นาที (เวลาปิดงานเป็นเวลาเซิร์ฟเวอร์ เวลาเปิดฟอร์มเป็นเวลามือถือ)
+   * คืน "other" = คนอื่นปิดไปแล้ว · null = ไม่ใช่กรณีนี้ หรือโหลดใบมาดูไม่ได้ (ขึ้นว่าส่งไม่สำเร็จตามปกติ)
+   */
+  async function closedByUs(e: unknown): Promise<"us" | "other" | null> {
+    const res = (e as { response?: { status?: number; data?: { code?: string } } }).response;
+    if (res?.status !== 409 || res.data?.code !== "CLOSE_ALREADY_SENT") return null;
+    try {
+      const now = (await api.get<WorkOrder>(`/work-orders/${order.id}`)).data;
+      if (now.status !== "CLAIM_REVIEW" && now.status !== "DONE") return null;
+      // เซิร์ฟเวอร์รุ่นที่ยังไม่ส่ง closedById — เทียบชื่อคนปิดแทน
+      const mine = typeof now.closedById === "number" ? now.closedById === me?.id : !!me && now.closedByName === me.name;
+      const fresh = !!now.closedAt && Date.parse(now.closedAt) >= openedAt.current - 10 * 60_000;
+      return mine && fresh ? "us" : "other";
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ไฟล์เคลมที่เลือกส่งไม่ผ่านเพราะใบถูกส่งปิดไปแล้ว (409 CLOSE_ALREADY_SENT) — เน็ตหลุดตอนรอคำตอบปิดงาน
+   * แล้วช่างเลือกไฟล์ใหม่ก่อนกดซ้ำ: ถ้าคนปิดคือเราเอง = ปิดสำเร็จไปแล้ว ปิดฟอร์มแบบเดียวกับกดส่งซ้ำ
+   * ไม่งั้นช่องนั้นค้าง "ส่งไม่สำเร็จ" นับเป็นของที่ยังขาด แล้วปุ่มส่งพาไปช่องนั้นไม่จบ
+   */
+  async function uploadRefused(e: unknown) {
+    const who = await closedByUs(e);
+    if (who === "us") {
+      await finishClosed();
+      showAlert("ปิดงานไปแล้วตั้งแต่ครั้งก่อน", `ไฟล์ที่เลือกใหม่ไม่ได้ส่ง · ${apiErrorMessage(e)}`);
+    } else if (who === "other") notifyWorkOrderStale(order.id, apiErrorMessage(e));
+  }
+
+  /** ส่งไม่สำเร็จ — ปักแถบไว้บนสุดของฟอร์ม เลื่อนกลับขึ้นไปให้เห็น แล้วบอกซ้ำแบบแจ้งเตือน (มือถือที่ฟอร์มยาว) */
+  function failed(e: unknown) {
+    const lost = noResponse(e);
+    const message = lost ? null : apiErrorMessage(e);
+    setSendError({ lost, message });
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    showAlert(lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ", [message, keptLine()].filter(Boolean).join(" · "));
+  }
+  /**
+   * บรรทัดใต้ "ส่งไม่สำเร็จ" (ตัวอย่าง sendErrText): บอกว่าของที่กรอกไม่หาย นับให้เห็นจริง แล้วบอกขั้นถัดไปตามปุ่มที่อยู่บนจอตอนนี้
+   * ช่างที่ส่งไม่ผ่านกลัวว่าต้องกรอกใหม่หมดเลยปิดฟอร์มทิ้ง — ทั้งที่ไฟล์ขึ้นใบงานไปแล้วและข้อความอยู่ในร่าง
+   * ปุ่มเปลี่ยนเป็น "ยังขาด…" ได้ถ้าช่างลบช่องไประหว่างนั้น จึงไม่ใช้ชื่อปุ่มส่งตายตัว
+   */
+  function keptLine(): string {
+    if (fixMode) {
+      return `สิ่งที่แก้ไว้ยังอยู่ — ${
+        unresolved.length ? `ยังไม่ได้แก้ ${unresolved.length} ช่อง — แก้ให้ครบแล้วส่งอีกครั้ง` : `กด “${FIX_SUBMIT_LABEL}” อีกครั้ง`
+      }`;
+    }
+    if (!stepMode) return keptText;
+    const workFiles = (["BEFORE", "AFTER", "NAMEPLATE", "REQUISITION"] as WorkRole[]).reduce((n, r) => n + workCount(r), 0);
+    const claimIds = new Set([
+      ...order.claimEvidence.filter((x) => !(x.id && uploads.removed.has(x.id))).map((x) => x.id ?? -1),
+      ...Object.entries(uploads.slots)
+        .filter(([k, x]) => !k.startsWith("w:") && x.status === "done" && x.attachmentId)
+        .map(([, x]) => x.attachmentId!),
+    ]);
+    const claimUploading = Object.entries(uploads.slots).filter(([k, x]) => !k.startsWith("w:") && x.status === "uploading").length;
+    const fileN = workFiles + claimIds.size + claimUploading;
+    const texts =
+      (note.trim() ? 1 : 0) +
+      claimedParts.reduce((n, p) => {
+        const d = draftFor(p.sparePartId);
+        return n + (d.brokenPartCode.trim() ? 1 : 0) + (d.symptom.trim() ? 1 : 0) + (d.checkNote.trim() ? 1 : 0);
+      }, 0);
+    const again = missingList.length
+      ? `ตอนนี้ยังขาด ${missingList.length} อย่าง — กรอกให้ครบแล้วส่งอีกครั้ง`
+      : step === 3
+        ? `กด “${SEND_LABEL}” อีกครั้ง`
+        : "กดแท็บ “ส่ง” แล้วส่งอีกครั้ง";
+    return `ข้อมูลที่กรอกไว้ยังอยู่: ไฟล์ ${fileN} ไฟล์ · ข้อความ ${texts} ช่อง · ค่าป้าย · ข้อเช็ค — ${again}`;
+  }
+
+  /** ปุ่มล่าง: ยังขาด → พาไปช่องแรกที่ขาด (ไม่ส่ง) · ไฟล์เกินเพดาน → พาไปข้อความเตือน · ครบ → ส่ง */
+  function press() {
+    if (saving) return;
+    // ฟอร์มทีละขั้น: ปุ่มเดียวทำตามที่เขียนบนปุ่ม (พาไป · ถัดไป · ส่ง) — ดู nav
+    if (stepNav) {
+      if (stepNav.kind === "go") return goTo(stepNav.item.key);
+      if (stepNav.kind === "next") return openStep(stepNav.step, stepNav.part);
+      if (overLimit) return goTo("limit");
+      void submit();
+      return;
+    }
+    // ช่องที่ถูกชี้ยังเหมือนเดิม — ไม่ส่ง (เซิร์ฟเวอร์ก็ไม่รับ) ปักแถบบอกว่าช่องไหน แล้วพาไปช่องแรก (ตัวอย่าง sendFix)
+    if (unresolved.length) {
+      setFixBlocked(true);
+      return goTo(`fix:${unresolved[0].key}`);
+    }
+    if (missingList.length) return goTo(missingList[0].key);
+    if (overLimit) return goTo("limit");
+    void submit();
+  }
+
   async function submit() {
     setSaving(true);
-    setError(null);
+    setSendError(null);
     try {
+      /**
+       * ไฟล์เคลมที่ยังส่งไม่จบต้องขึ้นก่อนสั่งปิด — รอ ไม่ส่งซ้ำ (ส่งไปแล้วตั้งแต่ตอนเลือก)
+       * ระหว่างรอปุ่มบอก "รอไฟล์ขึ้นอีก n ไฟล์" · ขึ้นไม่สำเร็จ = ยังขาด พาไปช่องนั้นแทนการส่ง
+       */
+      if (uploads.uploading) {
+        await uploads.waitAll();
+        // ให้หน้าจอวาดสถานะช่องล่าสุดก่อน แล้วค่อยอ่านรายการที่ขาด
+        await new Promise((r) => setTimeout(r, 0));
+        const un = fixRef.current.unresolved[0];
+        if (un) {
+          setFixBlocked(true);
+          goTo(`fix:${un.key}`);
+          return;
+        }
+        const gap = missingRef.current[0];
+        if (gap) {
+          goTo(gap.key);
+          return;
+        }
+      }
       /**
        * ไฟล์ทั้งหมดต้องขึ้นก่อนสั่งปิด
        *
        * เซิร์ฟเวอร์เช็คตอนรับคำสั่งปิดว่ามีรูปหน้างานและใบเหลืองแล้วหรือยัง
        * ส่งไฟล์ทีหลังจะถูกปฏิเสธทั้งที่ไฟล์อยู่ในมือแล้ว
        */
-      const claimed = parts.filter((p) => draftFor(p.sparePartId).on);
+      // ชิ้นที่ล็อกแล้วไม่ส่งซ้ำ (เซิร์ฟเวอร์ทิ้งให้อยู่แล้ว แต่ส่งไปก็เปลืองและทำให้อ่านคำขอสับสน) · ยังอยู่ใน parts
+      const claimed = parts.filter((p) => !lockedRows.has(p.sparePartId) && draftFor(p.sparePartId).on);
       const queue = uploadQueue();
       for (const [i, item] of queue.entries()) {
         setBusy(`กำลังส่งไฟล์ ${i + 1}/${queue.length}`);
@@ -6214,6 +7920,10 @@ function CloseModal({
         ...(claimed.length && order.claimGuide
           ? {
               claimNameplate: {
+                /**
+                 * ยืนยันทีละช่อง (เคลมก้อน 5) — confirmed ส่งทุกช่องเสมอ (true/false) เซิร์ฟเวอร์ใช้ดูว่าเป็นแอปรุ่นใหม่
+                 * read/edited ให้ผู้ตรวจเห็นว่าช่างแก้จากที่ระบบอ่านกี่ตัว · ล็อกแล้วเซิร์ฟเวอร์ใช้ป้ายของใบที่อนุมัติแทนอยู่ดี
+                 */
                 fields: Object.entries(plate.values)
                   .filter(([, v]) => v.value.trim())
                   .map(([key, v]) => ({
@@ -6222,93 +7932,1011 @@ function CloseModal({
                     value: v.value.trim(),
                     source: v.source,
                     crop: v.crop ?? null,
+                    confirmed: machineLocked || !!v.confirmed,
+                    ...(v.needsCheck !== undefined ? { needsCheck: v.needsCheck } : {}),
+                    ...(v.edited !== undefined ? { edited: v.edited } : {}),
+                    ...(v.read ? { read: v.read } : {}),
                   })),
-                verified: plate.verified,
               },
-              claimCheck: order.claimGuide.errors.length ? check : null,
+              // Error ของเครื่อง (ล็อกแล้วเป็นของแถวที่อนุมัติ) · ข้อที่ติ๊กส่งทีละชิ้น (claims[].errorChecked) — ชุดรวมไว้ให้เซิร์ฟเวอร์รุ่นก่อน
+              claimCheck: order.claimGuide.errors.length && effError
+                ? {
+                    errorCode: effError,
+                    checked: [...new Set(claimed.flatMap((p) => draftFor(p.sparePartId).errorChecked ?? []))],
+                  }
+                : null,
             }
           : {}),
+        // ชิ้นในประกันที่ไม่ส่งเคลม + เหตุผล (เคลมก้อน 5) — ลงประวัติใบงาน ผู้ตรวจเห็น "ช่างไม่ส่งเคลม: …"
+        ...(() => {
+          const skips = parts
+            .filter((p) => !lockedRows.has(p.sparePartId))
+            .map((p) => ({ p, d: draftFor(p.sparePartId) }))
+            .filter(({ d }) => !d.on && d.skip)
+            .map(({ p, d }) => ({
+              sparePartId: p.sparePartId,
+              reason: d.skip!.reason,
+              ...(d.skip!.reason === "OTHER" ? { note: d.skip!.note.trim() } : {}),
+            }));
+          return skips.length ? { claimSkips: skips } : {};
+        })(),
         claims: claimed.map((p) => {
           const d = draftFor(p.sparePartId);
+          // ข้อเช็คตาม Error ที่ติ๊กในข้อ ④ ของชิ้นนี้ — เฉพาะข้อของ Error ที่เลือกอยู่ (เปลี่ยน Error แล้วข้อเก่าไม่ติดไป)
+          const offered = order.claimGuide?.errors.find((e) => e.code === effError)?.checks ?? [];
+          const errorChecked = (d.errorChecked ?? []).filter((c) => offered.includes(c));
+          const keep =
+            stillRejected.has(p.sparePartId) && !flaggedIds.has(p.sparePartId) && d.keep !== null ? d.keep.trim() : "";
+          // ชิ้นที่ถูกชี้ช่อง: ตอบทีละช่อง — ส่งเฉพาะช่องที่ไม่ได้แก้ (แก้แล้วคำอธิบายไม่จำเป็น ไม่ต้องให้ผู้ตรวจอ่านซ้ำ)
+          const flagKeep = fixRef.current.items
+            .filter((i) => i.sparePartId === p.sparePartId && i.explained && !i.changed)
+            .map((i) => ({ flag: i.flag, note: (i.keep ?? "").trim() }));
           return {
             sparePartId: p.sparePartId,
             brokenPartCode: d.brokenPartCode.trim(),
             symptom: d.symptom.trim(),
             checkNote: d.checkNote.trim(),
             troubleshooting: d.troubleshooting,
+            errorChecked,
+            // "ค่าเดิมถูกแล้ว" — ตอบผู้ตรวจแทนการแก้ (เซิร์ฟเวอร์ไม่รับการส่งซ้ำที่ไม่ได้แก้อะไรและไม่ได้อธิบาย)
+            // ตีกลับก่อนมีการชี้ช่อง คำอธิบายตอบทั้งชิ้น (flag "ALL")
+            ...(keep ? { keep: [{ flag: "ALL", note: keep }] } : flagKeep.length ? { keep: flagKeep } : {}),
           };
         }),
+        // ช่องของเครื่องที่ตอบ "ค่าเดิมถูกแล้ว" — ครั้งเดียวทั้งใบ (ใช้ร่วมทุกชิ้น)
+        ...(() => {
+          const machineKeep = fixRef.current.items
+            .filter((i) => i.sparePartId === null && i.explained && !i.changed)
+            .map((i) => ({ flag: i.flag, note: (i.keep ?? "").trim() }));
+          return machineKeep.length ? { claimMachineKeep: machineKeep } : {};
+        })(),
       });
-      // ส่งไฟล์ขึ้นแล้ว — ปิดไม่ผ่านแล้วกดใหม่ต้องไม่ส่งซ้ำ ที่แนบแล้วนับจาก claimEvidence แทน
-      setDrafts({});
-      sentRef.current.clear();
-      clearDraft(draftKey);
-      setNote("");
-      setParts([]);
-      setSlip(null);
-      setBeforeFiles([]);
-      setAfterFiles([]);
-      setNameplate(null);
-      setWorkerIds([]);
-      setOtherWorkers("");
-      /**
-       * ใบรออะไหล่เปิดหลังปิดงานสำเร็จแล้วเท่านั้น — ปิดไม่ผ่านแต่เปิดใบต่อไปแล้ว
-       * จะได้ใบรออะไหล่ลอย ๆ ของงานที่ยังไม่จบ ซึ่งพอกดปิดอีกรอบก็เปิดซ้ำอีกใบ
-       */
-      if (followUp && missing.length > 0) {
-        try {
-          setBusy("กำลังเปิดใบงานรออะไหล่");
-          await api.post(`/work-orders/${order.id}/follow-up`, {
-            parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
-          });
-        } catch (e) {
-          showAlert(
-            "ปิดงานแล้ว แต่เปิดใบรออะไหล่ไม่สำเร็จ",
-            `${apiErrorMessage(e)}\n\nเปิดใหม่ได้จากปุ่ม “เปิดใบงานรออะไหล่ต่อ” ในใบงานนี้`
-          );
+      await finishClosed();
+    } catch (e) {
+      const who = await closedByUs(e);
+      if (who === "us") {
+        await finishClosed();
+        // ที่ถูกปฏิเสธคือไฟล์ที่เลือกใหม่ก่อนกดซ้ำ ไม่ใช่การปิด — ปิดสำเร็จแล้ว แต่ไฟล์นั้นไม่ได้ขึ้นไป
+        // บอกตรง ๆ ไม่งั้นช่างเข้าใจว่าผู้ตรวจเห็นรูปใหม่ที่เพิ่งถ่าย
+        if (/\/attachments/.test(String((e as { config?: { url?: string } }).config?.url ?? ""))) {
+          showAlert("ปิดงานไปแล้วตั้งแต่ครั้งก่อน", `ไฟล์ที่เลือกใหม่ไม่ได้ส่ง · ${apiErrorMessage(e)}`);
         }
       }
-      setFollowUp(false);
-      setMissing([]);
-      onDone();
-    } catch (e) {
-      setError(apiErrorMessage(e));
+      // คนอื่นปิดไปแล้ว — ให้หน้าใบงานจัดการแบบ 409 ทั่วไป (โหลดใบใหม่ · ปิดฟอร์ม · บอกเหตุผลจากเซิร์ฟเวอร์)
+      else if (who === "other") notifyWorkOrderStale(order.id, apiErrorMessage(e));
+      /**
+       * 409 ที่หน้าใบงานรับไปแล้ว (ถูกย้อนขั้น · เพื่อนร่วมทีมแจ้งปัญหาหน้างาน ฯลฯ) — ฟอร์มถูกปิดพร้อมคำเตือนสีเหลือง
+       * และเหตุผลไปแล้ว ถ้าบอก "ส่งไม่สำเร็จ · กด ยืนยันปิดงาน อีกครั้ง" ซ้ำ ช่างได้สองข้อความที่ขัดกัน
+       * และถูกสั่งให้กดปุ่มที่หายไปแล้ว · แถบแดงก็ต้องไม่ค้างไว้รอโผล่ตอนเปิดฟอร์มครั้งหน้า
+       */
+      else if (staleWorkOrderId(e) !== null) setSendError(null);
+      else failed(e);
     } finally {
       setSaving(false);
       setBusy(null);
     }
   }
 
+  // ปุ่มล่างไม่จางอีกแล้ว — บอกตรง ๆ ว่ากดแล้วจะเกิดอะไร (พาไปช่องที่ขาด · รอไฟล์ · ส่ง)
+  /**
+   * สรุปส่วนที่ไม่ต้องแก้ (ตัวอย่าง foldLines) — ขึ้นตอนกางส่วนที่พับ เหนือฟอร์มเดิม ให้เห็นทั้งหมดในไม่กี่บรรทัดก่อนไล่แก้
+   */
+  const machineFlagged = fixItems.some((i) => i.sparePartId === null);
+  const machineSummary = [
+    ...plateFields(order.claimGuide?.plate).map((f) => plate.values[f.key]?.value?.trim() ?? ""),
+    check.errorCode ? (check.errorCode === "อื่น ๆ" ? "ไม่มี Error ขึ้น" : check.errorCode) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const foldLines = fixMode
+    ? [
+        `✓ งานที่ทำ — ${results.find((r) => r.value === result)?.label ?? result} · รูปก่อนซ่อม ${workCount("BEFORE") + preCount} · หลังซ่อม ${workCount(
+          "AFTER"
+        )} · ป้ายรุ่น ${workCount("NAMEPLATE") ? 1 : 0}`,
+        ...(!machineFlagged && anyClaim && machineSummary
+          ? [`✓ ข้อมูลเครื่อง — ${machineSummary}${machineLocked ? " (ล็อกไว้)" : ""}`]
+          : []),
+        ...fixRows.flatMap((r) => {
+          const p = parts.find((x) => x.sparePartId === r.sparePartId);
+          const rest = PART_FLAGS.filter((f) => !partFlagsOf(r).includes(f.key)).map((f) => f.label);
+          return p && rest.length ? [`✓ ${partLabel(p)} ช่องอื่น — ${rest.join(" · ")}`] : [];
+        }),
+        ...parts
+          .filter((p) => !lockedRows.has(p.sparePartId) && !draftFor(p.sparePartId).on)
+          .map((p) => {
+            const sk = draftFor(p.sparePartId).skip;
+            return `${partLabel(p)} — ไม่ส่งเคลม${sk ? ` (${skipText(sk)})` : ""}`;
+          }),
+      ]
+    : [];
+  // ฟอร์มแก้เคลม: ช่องที่ถูกชี้ยังไม่ได้แก้มาก่อน (ตัวอย่าง fixPrimLabel) — ของที่ขาดอย่างอื่นค่อยตามมา
+  // ฟอร์มทีละขั้น: ปุ่มบอกตามขั้น (ยังขาดในขั้นนี้ → พาไป · ครบ → ถัดไป: … · ขั้นส่ง → ส่ง) — ดู nav
+  const goLabel = stepNav
+    ? stepNav.kind === "go"
+      ? stepNav.label
+      : null
+    : unresolved.length
+      ? `ยังไม่ได้แก้: ${unresolved[0].label}${unresolved.length > 1 ? ` และอีก ${unresolved.length - 1} ช่อง` : ""} — พาไป`
+      : missingList.length
+        ? `ยังขาด ${missingList.length} อย่าง — พาไป`
+        : null;
+  const submitLabel = stepNav ? stepNav.label : fixMode ? FIX_SUBMIT_LABEL : SUBMIT_LABEL;
+  const waitLabel =
+    saving && uploads.uploading ? `รอไฟล์ขึ้นอีก ${uploads.uploading} ไฟล์ (${Math.round(uploads.progress * 100)}%)` : null;
+
+  /** ขั้นงานที่ทำ (หน้ายาวใช้ทั้งก้อนนี้) — รูปหน้างาน · ผล · สรุป · คนที่ไป · อะไหล่ · ใบเหลือง · ใบรออะไหล่ */
+  /** ชิ้นที่ตัดสินจบแล้วในงานซ่อมครั้งนี้ — พับเหลือบรรทัดเดียว ไม่มีอะไรให้กรอก (ตัวอย่าง lockedLines) */
+  const lockedLines = parts
+    .filter((p) => lockedRows.has(p.sparePartId))
+    .map((p) => {
+      const ok = lockedRows.get(p.sparePartId)!.status === "APPROVED";
+      return (
+        <View key={p.sparePartId} style={styles.claimLocked} accessibilityLabel={`ล็อกไว้ ${p.partCode}`}>
+          <Ionicons name="lock-closed-outline" size={16} color={ok ? colors.successInk : colors.textMuted} />
+          <Text style={[styles.claimLockedText, { color: ok ? colors.successInk : colors.body }]}>
+            {ok
+              ? `✓ ${partLabel(p)} ผ่านแล้ว ล็อกไว้`
+              : `${partLabel(p)} — ปิดเคลม ไม่ส่งผู้ขาย (${lockedRows.get(p.sparePartId)!.rejectReason ?? "—"})`}
+          </Text>
+        </View>
+      );
+    });
+
+  /**
+   * หน้ายาว (ใบที่ยังไม่มีชิ้นส่งเคลม): ช่องติ๊กส่งเคลมทีละชิ้นต่อจากใบเหลือง ก่อนใบรออะไหล่ — ติ๊กแล้วฟอร์มเปลี่ยนเป็นทีละขั้น
+   * สาขาหมดประกัน/สาขาบริษัทปิดไว้ก่อน (ค่าตั้งต้นที่เจ้าของงานเลือก) ติ๊กได้ถ้าชิ้นนั้นยังเคลมได้
+   */
+  const claimToggles =
+    parts.length > 0 && !stepMode && !fixMode ? (
+      <View style={{ gap: spacing.xs }}>
+        <Text style={styles.modalLabel}>เคลมอะไหล่เก่า</Text>
+        {lockedLines}
+        {tabParts.map((p) => (
+          <View key={p.sparePartId} style={styles.claimPart} {...spot(`part:${p.sparePartId}`)}>
+            <TouchableOpacity
+              style={styles.partRow}
+              onPress={() => setClaimOn(p.sparePartId, true)}
+              activeOpacity={0.7}
+              accessibilityLabel={`ส่งอะไหล่เก่าเคลม ${p.partCode}`}
+            >
+              <Ionicons name="square-outline" size={20} color={colors.textFaint} />
+              <Text style={[styles.partCode, { flex: 1, minWidth: 0 }]}>
+                ส่งอะไหล่เก่าเคลม · {p.partCode} {p.name}
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.claimHeader}>ไม่เคลม (สาขาหมดประกันหรือเป็นสาขาบริษัท) — ติ๊กได้ถ้าชิ้นนี้ยังเคลมได้</Text>
+          </View>
+        ))}
+      </View>
+    ) : null;
+
+  const workSection = (
+    <>
+        {/*
+          ไฟล์ปิดงานทีละขั้น 1-2-3 อยู่บนสุด (เจ้าของงานขอ ต.ค. 69 — แบบเดียวกับไฟล์ตรวจหน้างาน)
+          ช่างถ่ายตอนยืนหน้าเครื่องก่อน แล้วค่อยกรอกสรุป/คนที่ไปตอนนั่งพัก
+
+          ก่อนซ่อม · หลังซ่อม แยกขั้น — ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง
+          คนตรวจย้อนเทียบสองภาพนี้ สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบที่ปิดโดยไม่มีรูปตรวจย้อนไม่ได้
+        */}
+        <View style={{ gap: spacing.sm, marginBottom: spacing.sm }} {...spot("shots")}>
+          {/*
+            วิดีโอ Error/รูปอาการที่ถ่ายในกล่อง "ถ่ายก่อนซ่อม" คือภาพก่อนซ่อมจริง — นับเป็นรูปก่อนซ่อม ไม่ต้องถ่ายซ้ำ (เจ้าของงานตอบข้อ 2)
+            เฉพาะไฟล์จากกล่องนั้น (ไม่ผูกชิ้น) — รูปอาการที่แนบในข้อ ⑥ ตอนปิดงานถ่ายหลังซ่อมแล้ว ไม่ใช่สภาพก่อนซ่อม
+          */}
+          {!isPm && preCount > 0 ? (
+            <View style={styles.preUsed} {...(workCount("BEFORE") === 0 ? spot("BEFORE", "shots") : {})} accessibilityLabel="รูปก่อนซ่อมจากที่ถ่ายก่อนซ่อม">
+              <Text style={styles.preUsedTitle}>✓ ใช้จากที่ถ่ายก่อนซ่อม ({preCount} ไฟล์)</Text>
+              <Text style={styles.linkedText}>ไม่ต้องถ่ายซ้ำ — ไฟล์ชุดเดียวกันใช้เป็นหลักฐานเคลมด้วย</Text>
+            </View>
+          ) : null}
+          {([
+            ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles],
+            ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วเครื่องกลับมาใช้ได้", afterFiles, setAfterFiles],
+          ] as const)
+            .filter(([role]) => !(isPm && role === "BEFORE"))
+            // ถ่ายก่อนซ่อมไว้แล้วและยังไม่มีรูปก่อนซ่อมของตัวเอง — ไม่ต้องมีช่องให้ถ่ายซ้ำ (ตัวอย่าง beforeFromPre)
+            .filter(([role]) => !(role === "BEFORE" && preCount > 0 && workCount("BEFORE") === 0))
+            .map(([role, label, hint, list, setList], i) => {
+            const add = (files: PickedAttachment[]) => addWork(role, files);
+            const already = serverWork(role);
+            const count = workCount(role);
+            const here = workSlots(role);
+            return (
+              <View key={role} {...spot(role, "shots")}>
+                <EvidenceStep
+                  n={i + 1}
+                  title={`รูป / วิดีโอ${label}`}
+                  hint={role === "BEFORE" && stepMode && needsSkipReason ? "ไม่ได้ถ่ายตอนก่อนซ่อม — แนบรูปที่มีได้" : hint}
+                  done={count > 0}
+                  doneText={`✓ ${count} ไฟล์`}
+                  busy={picking === role ? busy : null}
+                  primary={{
+                    label: count ? "ถ่ายเพิ่ม" : "ถ่ายรูปทันที",
+                    icon: "camera",
+                    onPress: () => pickFor(role, (stage) => pickImageAttachment(true, stage), add),
+                    accessibilityLabel: `ถ่ายรูป${label}`,
+                  }}
+                  secondary={{
+                    label: count ? "เลือกเพิ่ม" : "เลือกจากอัลบั้ม",
+                    icon: "images-outline",
+                    // เลือกได้หลายรูปพร้อมกัน (เจ้าของงานขอ ต.ค. 69) — เดิมทีละรูป ช่างเลยแนบแค่รูปเดียว
+                    onPress: () => pickFor(role, pickImageAttachments, add),
+                    accessibilityLabel: `เลือกรูป${label}`,
+                  }}
+                  more={[
+                    {
+                      label: "วิดีโอ",
+                      icon: "videocam-outline",
+                      onPress: () => pickFor(role, pickVideoAttachments, add),
+                      accessibilityLabel: `เลือกวิดีโอ${label}`,
+                    },
+                  ]}
+                  footLeft="เลือกได้หลายรูป/หลายคลิปพร้อมกัน · วิดีโอไม่เกิน 60 วินาที"
+                  dropHint="รูป · วิดีโอ"
+                  onDropFiles={(files) => pickFor(role, (stage) => filesToAttachments(files, { image: true, video: true }, stage), add)}
+                >
+                  {already > 0 ? <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text> : null}
+                  <WorkFiles
+                    slots={here}
+                    label={label}
+                    onRemove={(k) => uploads.discard(k)}
+                    onRetry={(k) => {
+                      const sl = uploads.slots[k];
+                      if (sl) uploads.start(k, sl.file, role, null);
+                    }}
+                  />
+                  <FileStrip files={[...list]} onChange={(next) => setList(next)} />
+                </EvidenceStep>
+                {flashOn(role)}
+              </View>
+            );
+          })}
+
+          {/*
+            ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
+
+            รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
+            ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
+            ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
+            บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
+            ใบ PM ไม่มีขั้นนี้ — เข้าทำทั้งร้าน ไม่ได้อยู่หน้าเครื่องตัวเดียว
+            ฟอร์มที่มีเคลม: รูปเดียวนี้คือรูปที่ระบบอ่านรุ่นกับ Serial (ขั้นเครื่องใช้รูปนี้) — ความละเอียดแบบรูปถ่าย ไม่ใช่แบบเอกสาร
+            ตัวอ่านป้ายตั้งค่าไว้กับรูปกว้าง 1600 ลองรูปกว้าง 2400 แล้วอ่านรหัสรุ่นผิด (เทสต์ claim-web ต.ค. 69)
+          */}
+          {!isPm ? (
+            <View {...spot("NAMEPLATE", "shots")}>
+              <EvidenceStep
+                n={3}
+                title="ป้ายรุ่นของเครื่อง"
+                hint={
+                  stepMode && anyClaim
+                    ? "รูปเดียว ระบบอ่านรุ่นกับ Serial จากรูปนี้"
+                    : order.machineCode
+                      ? `ในระบบบันทึกไว้ว่า ${order.machineCode}${order.machineModel ? ` · ${order.machineModel}` : ""}${
+                          order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""
+                        } — ถ่ายป้ายรุ่นมาเทียบ`
+                      : "ถ่ายป้ายรุ่นของรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง"
+                }
+                done={!nameplateMissing}
+                doneText="✓ แนบแล้ว"
+                // ป้ายรุ่นใช้รูปเดียว — แนบแล้วเปลี่ยนได้ด้วยการลบรูปในแถบรูปย่อ (หรือ "ถ่ายใหม่" ในขั้นเครื่อง) ไม่ต้องมีปุ่มเพิ่ม
+                canEdit={nameplateMissing}
+                busy={picking === "NAMEPLATE" ? busy : null}
+                primary={{
+                  label: "ถ่ายป้ายรุ่น",
+                  icon: "camera",
+                  onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage, anyClaim ? {} : { doc: true }), (f) => addWork("NAMEPLATE", f)),
+                  accessibilityLabel: "ถ่ายป้ายรุ่น",
+                }}
+                secondary={{
+                  label: "เลือกจากอัลบั้ม",
+                  icon: "images-outline",
+                  onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage, anyClaim ? {} : { doc: true }), (f) => addWork("NAMEPLATE", f)),
+                  accessibilityLabel: "เลือกรูปป้ายรุ่น",
+                }}
+                // ป้ายรุ่นใช้รูปเดียว — ลากมาหลายรูปเก็บรูปแรก
+                dropHint="รูปป้ายรุ่น 1 รูป"
+                onDropFiles={(files) =>
+                  pickFor(
+                    "NAMEPLATE",
+                    (stage) => filesToAttachments(files.slice(0, 1), anyClaim ? { image: true } : { image: true, doc: true }, stage),
+                    (f) => addWork("NAMEPLATE", f)
+                  )
+                }
+              >
+                {nameplate ? (
+                  <FileStrip files={[nameplate]} onChange={(next) => setNameplate(next[0] ?? null)} />
+                ) : workSlots("NAMEPLATE").length ? (
+                  <WorkFiles
+                    slots={workSlots("NAMEPLATE")}
+                    label="ป้ายรุ่น"
+                    onRemove={(k) => uploads.discard(k)}
+                    onRetry={(k) => {
+                      const sl = uploads.slots[k];
+                      if (sl) uploads.start(k, sl.file, "NAMEPLATE", null);
+                    }}
+                  />
+                ) : serverWork("NAMEPLATE") ? (
+                  <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
+                ) : null}
+              </EvidenceStep>
+              {flashOn("NAMEPLATE")}
+            </View>
+          ) : null}
+        </View>
+
+        <Text style={styles.modalLabel}>ผลการทำงาน</Text>
+        <View style={styles.options}>
+          {results.map((r) => (
+            <TouchableOpacity
+              key={r.value}
+              style={[styles.option, result === r.value && styles.optionOn]}
+              onPress={() => setResult(r.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.optionText, result === r.value && styles.optionTextOn]}>
+                {r.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* บังคับ (เจ้าของงานกำหนด) — "ซ่อมเสร็จ" อย่างเดียวไม่บอกว่ารอบนี้เปลี่ยนอะไรไป */}
+        <View {...spot("summary")}>
+          <Text style={styles.modalLabel}>
+            สรุปงานที่ทำ <Text style={{ color: colors.danger }}>*</Text>
+          </Text>
+          <TextInput
+            style={[styles.modalInput, summaryMissing && styles.inputMissing]}
+            value={note}
+            onChangeText={setNote}
+            placeholder="เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ"
+            placeholderTextColor={colors.textFaint}
+            multiline
+            numberOfLines={3}
+            accessibilityLabel="สรุปงานที่ทำ"
+          />
+          {summaryMissing ? (
+            <Text style={styles.warn}>ต้องสรุปว่าทำอะไรไป — หัวหน้าภาคกับแอดมินอ่านจากตรงนี้</Text>
+          ) : null}
+          {flashOn("summary")}
+        </View>
+
+        {/*
+          ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
+          ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
+        */}
+        <View {...spot("workers")}>
+          {isSub ? (
+            <>
+              <Text style={styles.modalLabel}>
+                ทีม SUB ที่เข้าทำ <Text style={{ color: colors.danger }}>*</Text>
+              </Text>
+              <Dropdown
+                value={subTeam}
+                onChange={setSubTeam}
+                placeholder="เลือกทีม SUB"
+                accessibilityLabel="ทีม SUB ที่เข้าทำ"
+                options={[...new Set([...(order.assignedTeam ? [order.assignedTeam] : []), ...subTeams])].map((t) => ({
+                  value: t,
+                  label: t,
+                  hint: t === order.assignedTeam ? "ทีมที่จ่ายงาน" : undefined,
+                }))}
+              />
+              <Text style={styles.modalLabel}>ชื่อช่างของทีม SUB (ไม่บังคับ)</Text>
+              <TextInput
+                style={[styles.modalInput, styles.modalInputLine]}
+                value={otherWorkers}
+                onChangeText={setOtherWorkers}
+                placeholder="เช่น นายสมชาย, นายสมศักดิ์"
+                placeholderTextColor={colors.textFaint}
+                accessibilityLabel="ชื่อช่างของทีม SUB"
+              />
+              <TouchableOpacity
+                style={styles.skipRow}
+                onPress={() => setWithStaff((v) => !v)}
+                accessibilityLabel="มีช่างบริษัทไปด้วย"
+              >
+                <Ionicons name={withStaff ? "checkbox" : "square-outline"} size={18} color={withStaff ? colors.primary : colors.textFaint} />
+                <Text style={styles.skipText}>มีช่างบริษัทไปด้วย</Text>
+              </TouchableOpacity>
+              {workersMissing ? <Text style={styles.warn}>ต้องเลือกทีม SUB ที่เข้าทำ</Text> : null}
+            </>
+          ) : null}
+          {!isSub || withStaff ? <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน{isSub ? " (ช่างบริษัท)" : ""}</Text> : null}
+          {/*
+            สามช่อง คนที่ 1–3 แทนการกดเลือกจากรายชื่อทั้งหมด
+
+            ทีมหนึ่งไปกันไม่เกินสามคน การให้กดเลือกจากรายชื่อช่างทั้งบริษัท
+            แปลว่าต้องกวาดตาหาชื่อตัวเองในกองที่ไม่เกี่ยวข้อง และกดเกินไปหนึ่งคน
+            ก็ไม่มีอะไรบอกว่าเกิน — สามช่องบอกจำนวนสูงสุดด้วยตัวมันเอง
+
+            คนเดียวกันเลือกซ้ำสองช่องไม่ได้ เพราะคนที่เลือกไปแล้วถูกตัดออก
+            จากตัวเลือกของช่องที่เหลือ
+          */}
+          {(!isSub || withStaff ? [0, 1, 2] : []).map((slot) => (
+            <View key={slot} style={styles.workerSlot}>
+              <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
+              <Dropdown
+                value={workerIds[slot] != null ? String(workerIds[slot]) : null}
+                clearable={slot > 0 || workerIds.length > 1}
+                placeholder={slot === 0 ? "เลือกช่าง" : "ไม่มี"}
+                accessibilityLabel={`ผู้เข้าปฏิบัติงานคนที่ ${slot + 1}`}
+                onChange={(next) =>
+                  setWorkerIds((current) => {
+                    const copy = [...current];
+                    if (next === null) copy.splice(slot, 1);
+                    else copy[slot] = Number(next);
+                    // ช่องว่างตรงกลางทำให้ "คนที่ 2" กลายเป็นช่องที่ไม่มีใคร
+                    // ทั้งที่มีคนที่ 3 อยู่ — บีบให้ชิดกันเสมอ
+                    return copy.filter((x) => x != null);
+                  })
+                }
+                options={technicians
+                  .filter((t) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
+                  .map((t) => ({
+                    value: String(t.id),
+                    label: t.name,
+                    hint: techPickHint(t),
+                  }))}
+              />
+            </View>
+          ))}
+          {isSub ? null : (
+            <TextInput
+              style={[styles.modalInput, styles.modalInputLine]}
+              value={otherWorkers}
+              onChangeText={setOtherWorkers}
+              placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
+              placeholderTextColor={colors.textFaint}
+              accessibilityLabel="คนอื่นที่ไปด้วย"
+            />
+          )}
+          {workersMissing && !isSub ? (
+            <Text style={styles.warn}>ต้องระบุอย่างน้อยหนึ่งคนว่าใครเข้าไปทำ</Text>
+          ) : null}
+          {flashOn("workers")}
+        </View>
+
+        {/*
+          อะไหล่ · ใบเหลือง · เคลม อยู่ต่อจากรูปหน้างาน สรุปงาน และคนที่ไป (รูปอยู่บนสุดเพราะถ่ายตอนยืนหน้าเครื่อง)
+          แต่อยู่ก่อนใบรออะไหล่ — เคลมขึ้นทีละชิ้นตามรายการอะไหล่ที่ใช้ จึงต้องอยู่ติดรายการนั้น
+          เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
+        */}
+        <PartPicker
+          parts={parts}
+          onChange={setParts}
+          label="อะไหล่ที่ใช้ไป"
+          locked={Object.fromEntries(parts.filter((p) => lockedRows.has(p.sparePartId)).map((p) => [p.sparePartId, lockedMsg(p)]))}
+        />
+        <View {...spot("offParts")}>
+          <OffPartEditor
+            rows={offParts}
+            onChange={setOffParts}
+            title="อะไหล่นอกสโตร์ที่ใช้"
+            hint="ของที่หารหัสในสโตร์ไม่เจอ หรือซื้อหน้างานเอง · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง"
+          />
+          {flashOn("offParts")}
+        </View>
+
+        {/*
+          ใบเหลืองคือหลักฐานว่าของที่หายไปจากคลังไปอยู่ที่เครื่องตัวไหน
+          ถามเฉพาะตอนที่มีอะไหล่จริง งานที่ไม่ได้เปลี่ยนอะไรไม่มีใบเบิกให้ถ่าย
+        */}
+        {parts.length > 0 ? (
+          <View {...spot("slip")}>
+            <FileDropZone
+              hint="รูปใบเหลือง 1 รูป"
+              disabled={!!busy}
+              label="วางรูปใบเหลือง"
+              onFiles={(files) => dropOne(files, { image: true, doc: true }, (f) => addWork("REQUISITION", [f]))}
+            >
+              <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
+              {serverWork("REQUISITION") > 0 && !slip && !workSlots("REQUISITION").length ? (
+                <Text style={styles.linkedText}>
+                  แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
+                </Text>
+              ) : null}
+              <WorkFiles
+                slots={workSlots("REQUISITION")}
+                label="ใบเหลือง"
+                onRemove={(k) => uploads.discard(k)}
+                onRetry={(k) => {
+                  const sl = uploads.slots[k];
+                  if (sl) uploads.start(k, sl.file, "REQUISITION", null);
+                }}
+              />
+              {slip ? (
+                <View style={styles.slipRow}>
+                  {slip.thumbnailUri ? (
+                    <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
+                  ) : (
+                    <View style={[styles.slipThumb, styles.slipBlank]}>
+                      <Ionicons name="document-outline" size={22} color={colors.textFaint} />
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => setSlip(null)}
+                    accessibilityLabel="เอารูปใบเหลืองออก"
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+                  </TouchableOpacity>
+                </View>
+              ) : busy && picking === null ? (
+                <View style={styles.slipRow}>
+                  <Spinner color={colors.primary} size="small" />
+                  <Text style={styles.linkedText}>{busy}…</Text>
+                </View>
+              ) : workSlots("REQUISITION").length ? null : (
+                <View style={styles.options}>
+                  {Platform.OS !== "web" ? (
+                    <TouchableOpacity
+                      style={styles.option}
+                      onPress={() => pickOne((stage) => pickImageAttachment(true, stage, { doc: true }), (f) => addWork("REQUISITION", [f]))}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    style={styles.option}
+                    onPress={() => pickOne((stage) => pickImageAttachment(false, stage, { doc: true }), (f) => addWork("REQUISITION", [f]))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {!slip && !busy && !workSlots("REQUISITION").length ? <DropHint text="หรือลากรูปใบเหลืองมาวางตรงนี้" /> : null}
+            </FileDropZone>
+            {slipMissing ? (
+              <Text style={styles.warn}>
+                ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
+              </Text>
+            ) : null}
+            {flashOn("slip")}
+          </View>
+        ) : null}
+
+        {claimToggles}
+
+        {order.outageStillOpen ? (
+          <Text style={styles.warn}>
+            เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานล่าสุด ปิดใบงานได้ แต่เคสบนกระดานจะยังอยู่
+            จนกว่าเครื่องจะหายไปจากไฟล์รอบถัดไป
+          </Text>
+        ) : null}
+
+        {/*
+          ไปเปลี่ยนแล้วอะไหล่ไม่ครบ — ใบนี้ปิดได้ตามที่ทำจริง ส่วนที่ขาดไปเป็นใบใหม่
+          ลิงก์กับใบนี้ ไม่ใช่ค้างทั้งใบไว้เพราะของตัวเดียว
+        */}
+        <View {...spot("followUp")}>
+          <TouchableOpacity
+            style={styles.skipRow}
+            onPress={() => setFollowUp((v) => !v)}
+            activeOpacity={0.7}
+            accessibilityLabel="อะไหล่ไม่ครบ เปิดใบงานรออะไหล่ต่อ"
+          >
+            <Ionicons
+              name={followUp ? "checkbox" : "square-outline"}
+              size={18}
+              color={followUp ? colors.primary : colors.textFaint}
+            />
+            <Text style={styles.skipText}>อะไหล่ไม่ครบ — เปิดใบงานรออะไหล่ต่อจากใบนี้</Text>
+          </TouchableOpacity>
+          {followUp ? (
+            <>
+              <PartPicker parts={missing} onChange={setMissing} label="อะไหล่ที่ยังขาด" />
+              <Text style={styles.linkedText}>
+                ใบใหม่ไปอยู่ที่แอดมิน สถานะ “แอดมิน · เบิกอะไหล่” และลิงก์กับใบนี้
+              </Text>
+            </>
+          ) : null}
+          {flashOn("followUp")}
+        </View>
+
+
+    </>
+  );
+
+  /** ขั้นเครื่อง — ข้อมูลเครื่องสำหรับเคลม ใช้ร่วมทุกชิ้น */
+  const machineSection =
+    anyClaim && order.claimGuide ? (
+      <MachineStep
+        guide={order.claimGuide}
+        plate={plate}
+        onPlate={setPlate}
+        errorCode={check.errorCode}
+        onError={(code) => setCheck({ errorCode: code, checked: [] })}
+        machineType={order.machineType}
+        symptom={order.symptom}
+        doubt={plateDoubt}
+        photo={
+          localPlate
+            ? { uri: localPlate.thumbnailUri ?? localPlate.uri, retaken: plateRetaken }
+            : serverPlate || order.hasNameplate
+              ? { uri: serverPlate?.thumbnailDataUrl ?? null, retaken: plateRetaken }
+              : null
+        }
+        onRetake={retakePlate}
+        ocrStage={ocrStage}
+        ocrError={ocrError}
+        locked={machineLocked && approvedRow ? { row: approvedRow, byParts: claimRound.lockedMachine!.byParts } : null}
+        readOnly={!!me?.viewAs}
+        spot={(k) => spot(k)}
+        flashOn={flashOn}
+      />
+    ) : (
+      <Text style={styles.linkedText}>ไม่ส่งเคลม</Text>
+    );
+
+  /** ข้อ ⑥ ของเครื่อง (ใช้ร่วมทุกชิ้น) — ถ่ายไว้ตอนก่อนซ่อม / แนบแล้ว / เปลี่ยนแล้ว (ตัวอย่าง evidFrom) */
+  const [machineChanging, setMachineChanging] = useState(false);
+  // ไฟล์ใหม่ขึ้นเสร็จ = เปลี่ยนแล้ว พับช่องกลับเป็นบรรทัดสรุป "✓ เปลี่ยนแล้ว …" (ตัวอย่าง evidFrom)
+  const machineDone = MACHINE_ROLES.map((r) => (uploads.slots[`m:${r}`]?.status === "done" ? uploads.slots[`m:${r}`]?.attachmentId : "")).join(",");
+  useEffect(() => {
+    if (machineDone.replace(/,/g, "")) setMachineChanging(false);
+  }, [machineDone]);
+  useEffect(() => {
+    if (!visible) setMachineChanging(false);
+  }, [visible]);
+  function machineBlock(forPart: number) {
+    const has = MACHINE_ROLES.map((r) => machineHas(r));
+    const present = has.filter(Boolean).length;
+    const slots = MACHINE_ROLES.map((r) => uploads.slots[`m:${r}`]);
+    const changed = slots.some((sl) => sl && sl.status !== "failed");
+    const fromPre = MACHINE_ROLES.every((r) => serverEvidence(null, r)?.pre);
+    const slotFor = (role: (typeof MACHINE_ROLES)[number]) => {
+      const key = `m:${role}`;
+      const video = role === "CLAIM_ERROR_VIDEO";
+      return (
+        <ClaimFileSlot
+          key={role}
+          label={video ? videoLabel : "รูปอาการเสีย"}
+          hint={video ? undefined : "ให้เห็นจุดที่เสีย เช่น ประตู กลอน"}
+          video={video}
+          partCode="ใช้ร่วมทุกชิ้น"
+          upload={uploads.slots[key]}
+          existing={serverEvidence(null, role)}
+          readOnly={!!me?.viewAs}
+          actionLabel={video ? "ถ่ายวิดีโอ" : "ถ่ายรูปอาการ"}
+          onPick={(f) => {
+            touched.current = true;
+            // แนบในข้อ ⑥ ผูกชิ้นที่กำลังกรอก — ยังใช้ร่วมทุกชิ้น แต่ไม่นับเป็นรูปก่อนซ่อม (ถ่ายหลังซ่อม)
+            uploads.start(key, f, role, forPart);
+          }}
+          onRetry={() => {
+            const sl = uploads.slots[key];
+            if (sl) uploads.start(key, sl.file, role, forPart);
+          }}
+        />
+      );
+    };
+    if (present === MACHINE_ROLES.length && !machineChanging) {
+      return (
+        <View style={styles.machineRow}>
+          <Text style={[styles.machineText, { flex: 1 }]}>
+            {changed
+              ? `✓ เปลี่ยนแล้ว (${present} ไฟล์) — แทนไฟล์เดิม ใช้ร่วมทุกชิ้น`
+              : fromPre
+                ? `✓ ถ่ายไว้ตอนก่อนซ่อม (${present} ไฟล์) — ไม่ต้องแนบซ้ำทุกชิ้น`
+                : `✓ แนบแล้ว (${present} ไฟล์) — ใช้ร่วมทุกชิ้น`}
+          </Text>
+          {!me?.viewAs ? (
+            <TouchableOpacity style={styles.machineBtn} onPress={() => setMachineChanging(true)} accessibilityLabel="เปลี่ยนไฟล์ของเครื่อง">
+              <Text style={styles.machineBtnText}>เปลี่ยน</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      );
+    }
+    return (
+      <View style={{ gap: 4 }}>
+        {present < MACHINE_ROLES.length ? <Text style={styles.warn}>อาการหลังซ่อมอาจไม่ขึ้นแล้ว — ผู้ขายอาจไม่รับ</Text> : null}
+        {MACHINE_ROLES.filter((r, i) => machineChanging || !has[i] || slots[i]).map(slotFor)}
+      </View>
+    );
+  }
+
+  /** ข้อ ① / ⑤ ของชิ้น (ไฟล์ของชิ้นนั้น) */
+  const partSlot = (p: PickedPart) => (role: "CLAIM_PART" | "CLAIM_CHECK_VIDEO", label: string, hint: string, video: boolean) => {
+    const key = slotKey(p.sparePartId, role);
+    return (
+      <ClaimFileSlot
+        label={label}
+        hint={hint}
+        video={video}
+        partCode={p.partCode}
+        upload={uploads.slots[key]}
+        existing={serverEvidence(p.sparePartId, role)}
+        readOnly={!!me?.viewAs}
+        onPick={(f) => {
+          touched.current = true;
+          uploads.start(key, f, role, p.sparePartId);
+        }}
+        onRetry={() => {
+          const sl = uploads.slots[key];
+          if (sl) uploads.start(key, sl.file, role, p.sparePartId);
+        }}
+      />
+    );
+  };
+  /** ถูกตีกลับแบบเก่า (ไม่ชี้ช่อง): เหตุผล + "ค่าเดิมถูกแล้ว" ทั้งชิ้น — เซิร์ฟเวอร์ไม่รับการส่งซ้ำที่ไม่ได้แก้อะไรและไม่ได้อธิบาย */
+  const keepBoxFor = (p: PickedPart) => {
+    const d = draftFor(p.sparePartId);
+    const sentBack = stillRejected.get(p.sparePartId);
+    if (!sentBack) return null;
+    if (flaggedIds.has(p.sparePartId)) return <Text style={styles.claimHeader}>ช่องที่ถูกชี้ของชิ้นนี้อยู่ในรายการ “ต้องแก้” ด้านบน</Text>;
+    return (
+      <View style={styles.claimKeepBox} {...spot(`p:${p.sparePartId}:keep`)}>
+        {flashOn(`p:${p.sparePartId}:keep`)}
+        <Text style={styles.claimKeepReason}>
+          ตีกลับ: “{sentBack.rejectReason ?? "—"}” — แก้ตามเหตุผล หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย
+        </Text>
+        {d.keep === null ? (
+          <TouchableOpacity
+            style={styles.claimKeepBtn}
+            onPress={() => patchDraft(p.sparePartId, { keep: "" })}
+            accessibilityLabel={`ค่าเดิมถูกแล้ว ${p.partCode}`}
+          >
+            <Text style={styles.claimKeepBtnText}>ค่าเดิมถูกแล้ว</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
+            <Text style={styles.modalLabel}>ค่าเดิมถูกแล้ว — อธิบายให้ผู้ตรวจ (บังคับ)</Text>
+            <TextInput
+              style={[styles.modalInput, styles.claimReason, d.keep.trim().length < 3 && styles.inputMissing]}
+              value={d.keep}
+              onChangeText={(v) => patchDraft(p.sparePartId, { keep: v })}
+              placeholder="เช่น วิดีโอเห็นร่องพูเลย์ที่วินาที 0:12"
+              placeholderTextColor={colors.textFaint}
+              maxLength={300}
+              multiline
+              accessibilityLabel={`ค่าเดิมถูกแล้ว — อธิบายให้ผู้ตรวจ ${p.partCode}`}
+            />
+            <TouchableOpacity
+              style={styles.claimKeepUndo}
+              onPress={() => patchDraft(p.sparePartId, { keep: null })}
+              accessibilityLabel={`ไม่ใช้ค่าเดิม ${p.partCode}`}
+            >
+              <Text style={styles.claimKeepUndoText}>ไม่ใช้ — จะแก้ตามเหตุผลแทน</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+    );
+  };
+  const warrantyText = needsSkipReason && order.branchWarrantyExpiresAt ? formatDate(order.branchWarrantyExpiresAt) : null;
+  /** ชิ้นที่ช่างกำลังมี "ยังขาด" อะไรบ้าง — สีเลขข้อของชิ้นนั้น */
+  const missKeys = new Set(missingList.map((m) => m.key));
+  const partStep = (p: PickedPart) => (
+    <PartClaimStep
+      key={p.sparePartId}
+      part={{ sparePartId: p.sparePartId, partCode: p.partCode, label: partLabel(p) }}
+      draft={draftFor(p.sparePartId)}
+      patch={(x) => {
+        touched.current = true;
+        patchDraft(p.sparePartId, x);
+      }}
+      setOn={(on, skip) => setClaimOn(p.sparePartId, on, skip)}
+      needsReason={needsSkipReason}
+      warrantyUntil={warrantyText}
+      notice={order.symptom}
+      guide={order.claimGuide}
+      errorCode={effError}
+      troubleshooting={order.claimTroubleshooting}
+      tsHints={order.claimTroubleshootingHints ?? {}}
+      brand={order.branchWarrantyBrand ?? order.machineBrand ?? ""}
+      videoLabel={videoLabel}
+      hasMachineVideo={machineHas("CLAIM_ERROR_VIDEO")}
+      hasAfter={workCount("AFTER") > 0}
+      missing={missKeys}
+      slot={partSlot(p)}
+      machineBlock={machineBlock(p.sparePartId)}
+      keepBox={keepBoxFor(p)}
+      readOnly={!!me?.viewAs}
+      spot={(k) => spot(k)}
+      flashOn={flashOn}
+    />
+  );
+  /** ขั้นเคลมทีละชิ้น — แท็บชิ้น + ชิ้นที่เลือก · ชิ้นที่ล็อกแล้วพับไว้บนสุด */
+  const partsSection = (
+    <View style={{ gap: spacing.md }}>
+      {lockedLines}
+      {tabParts.length ? (
+        <PartTabs parts={partTabInfos} current={curPart} onPick={(id) => openStep(2, id)} />
+      ) : (
+        <Text style={styles.linkedText}>ไม่ส่งเคลม</Text>
+      )}
+      {curPart !== null ? partStep(tabParts.find((p) => p.sparePartId === curPart)!) : null}
+    </View>
+  );
+
+  /** ขั้นส่ง — สรุปทีละขั้นบรรทัดเดียว (ตัวอย่าง review) */
+  const plateSummary = machineLocked && approvedRow
+    ? [...(approvedRow.nameplate?.fields ?? []).filter((f) => f.key === "model" || f.key === "serial").map((f) => f.value)]
+    : plateFields(order.claimGuide?.plate)
+        .filter((f) => f.key === "model" || f.key === "serial")
+        .map((f) => plate.values[f.key]?.value?.trim() ?? "")
+        .filter(Boolean);
+  const errText = effError ? (effError === NO_ERROR_CODE ? "ไม่มี Error ขึ้น" : effError) : null;
+  const goStep = (items: MItem[]) => () => goTo(items[0].key);
+  const sendRows: SendRow[] = [
+    (() => {
+      const miss = missingList.filter((m) => m.step === 0);
+      const before = Math.max(workCount("BEFORE"), 0) + preCount;
+      return miss.length
+        ? { key: "work", text: `✗ งานที่ทำ — ยังขาด: ${miss.map((m) => m.text).join(" · ")}`, state: "missing" as const, onGo: goStep(miss) }
+        : {
+            key: "work",
+            text: `✓ งานที่ทำ — ${results.find((r) => r.value === result)?.label ?? result} · รูปก่อนซ่อม ${before} · หลังซ่อม ${workCount("AFTER")} · ป้ายรุ่น ${workCount("NAMEPLATE") ? 1 : 0}`,
+            state: "ok" as const,
+          };
+    })(),
+    ...(anyClaim
+      ? [
+          (() => {
+            const miss = missingList.filter((m) => m.step === 1);
+            return miss.length
+              ? { key: "machine", text: `✗ ข้อมูลเครื่อง — ยังขาด: ${miss.map((m) => m.text.replace(/^ข้อมูลเครื่อง: /, "")).join(" · ")}`, state: "missing" as const, onGo: goStep(miss) }
+              : {
+                  key: "machine",
+                  text: `✓ ข้อมูลเครื่อง — ${[...plateSummary, ...(order.claimGuide?.errors.length ? [errText ?? "—"] : [])].join(" · ")}${machineLocked ? " (ล็อกไว้)" : ""}`,
+                  state: "ok" as const,
+                };
+          })(),
+        ]
+      : []),
+    ...tabParts.map((p): SendRow => {
+      const d = draftFor(p.sparePartId);
+      const label = partLabel(p);
+      if (!d.on) {
+        const miss = missingList.filter((m) => m.part === p.sparePartId);
+        return miss.length
+          ? { key: `p${p.sparePartId}`, text: `✗ เคลม ${label} — ยังขาด: ${miss.map((m) => m.text.replace(/^ไม่ส่งเคลม [^:]+: /, "")).join(" · ")}`, state: "missing", onGo: goStep(miss) }
+          : { key: `p${p.sparePartId}`, text: `เคลม ${label} — ไม่ส่งเคลม${d.skip ? ` (${skipText(d.skip)})` : ""}`, state: "skip" };
+      }
+      const miss = missingList.filter((m) => m.part === p.sparePartId);
+      if (miss.length) {
+        return {
+          key: `p${p.sparePartId}`,
+          text: `✗ เคลม ${label} — ยังขาด: ${miss.map((m) => m.text.replace(`เคลม ${label}: `, "")).join(" · ")}`,
+          state: "missing",
+          onGo: goStep(miss),
+        };
+      }
+      const broken = d.brokenPartCode.trim();
+      const mismatch = broken && brokenMatches({ brokenPartCode: broken, partCode: p.partCode }) === false;
+      return {
+        key: `p${p.sparePartId}`,
+        text: `✓ เคลม ${label} — หลักฐานครบ ${partTotal}/${partTotal} · รหัสตัวเสีย ${broken}`,
+        state: "ok",
+        // รหัสตัวเสียไม่ตรงกับที่เปลี่ยนใส่ — ไม่บล็อก แต่ต้องเห็นอีกครั้งก่อนส่ง (ผู้ตรวจเห็นเป็นธง)
+        ...(mismatch
+          ? {
+              warn: `· ไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ (${p.partCode})`,
+              onLook: () => {
+                setStep(2);
+                setPartTab(p.sparePartId);
+                setTimeout(() => scrollToSpot(`p:${p.sparePartId}:broken`), 150);
+              },
+            }
+          : {}),
+      };
+    }),
+  ];
+  const sendSection = (
+    <>
+      <SendStep rows={sendRows} claiming={anyClaim} />
+      {lockedLines}
+    </>
+  );
+
+  /** ของที่ขาดในขั้นนี้ (กล่อง "ยังขาด:" ท้ายขั้น) — ขั้นส่งสรุปทุกขั้นในแถวแล้ว ไม่ต้องมีกล่องซ้ำ */
+  const missingHere = !stepMode || fixMode
+    ? missingList
+    : step === 3
+      ? []
+      : step === 2
+        ? missingList.filter((m) => m.step === 2 && (m.shared ? curPart !== null && draftFor(curPart).on : m.part === curPart))
+        : missingList.filter((m) => m.step === step);
+
   return (
     <AppModal
       visible={visible}
       onClose={onCancel}
       busy={saving}
-      title={order.assignedOutsource && !reclosing ? <>บันทึกผลงาน SUB {order.code}</> : <>ปิดงาน {order.code}</>}
+      title={
+        fixMode ? (
+          <>แก้เคลม {order.code}</>
+        ) : order.assignedOutsource && !reclosing ? (
+          <>บันทึกผลงาน SUB {order.code}</>
+        ) : (
+          <>ปิดงาน {order.code}</>
+        )
+      }
+      scrollRef={scrollRef}
+      banner={
+        (stepMode && !fixMode) || sendError || rejectedRows.length || (fixBlocked && unresolved.length) ? (
+          <>
+            {/* แถบขั้นปักใต้หัวฟอร์ม — เลื่อนฟอร์มไปไหนก็ยังเห็นว่าอยู่ขั้นไหน และขั้นไหนยังขาด (ตัวอย่าง tabs) */}
+            {stepMode && !fixMode ? (
+              <CloseStepper
+                step={step}
+                steps={stepInfos}
+                // บรรทัดสรุปนับทั้งขั้น (ทุกชิ้นในขั้นเคลม) ให้ตรงกับวงกลมด้านบน — กล่องใต้ชิ้นเท่านั้นที่บอกเฉพาะชิ้นที่เปิดอยู่
+                missingHere={step === 3 ? missingList.length : missingList.filter((m) => m.step === step).length}
+                onPick={(i) => openStep(i)}
+              />
+            ) : null}
+            {sendError ? (
+              <View style={styles.sendErr} accessibilityRole="alert">
+                <Ionicons
+                  name={sendError.lost ? "cloud-offline-outline" : "alert-circle-outline"}
+                  size={22}
+                  color={colors.dangerInk}
+                  style={{ marginTop: 1 }}
+                />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.sendErrTitle}>{sendError.lost ? "ส่งไม่สำเร็จ — เน็ตหลุด" : "ส่งไม่สำเร็จ"}</Text>
+                  {sendError.message ? <Text style={styles.sendErrText}>{sendError.message}</Text> : null}
+                  <Text style={styles.sendErrText}>{keptLine()}</Text>
+                </View>
+              </View>
+            ) : null}
+            {/* แก้เคลม: เหตุผลที่ถูกตีกลับปักใต้หัวฟอร์ม — เลื่อนไปช่องไหนก็ยังเห็นว่าต้องแก้อะไร */}
+            {rejectedRows.length ? (
+              <RejectedBanner
+                reviewer={rejectedRows[0].reviewedByName ?? null}
+                at={rejectedRows[0].reviewedAt}
+                lines={rejectLinesOf(rejectedRows, (c) => c.partLabel ?? c.partName, { family: order.claimGuide?.plate.family ?? null })}
+              />
+            ) : null}
+            {/* กดส่งตอนช่องที่ถูกชี้ยังเหมือนเดิม — บอกว่าช่องไหน และทางออกสองทาง (ตัวอย่าง blockedText) */}
+            {fixBlocked && unresolved.length ? (
+              <View style={styles.fixBlocked} accessibilityRole="alert">
+                <Text style={styles.fixBlockedText}>
+                  ยังส่งไม่ได้ — ช่องที่ถูกชี้ยังเหมือนเดิม {unresolved.length} ช่อง: {unresolved.map((i) => i.label).join(" · ")} (แก้
+                  หรือกด “ค่าเดิมถูกแล้ว” แล้วอธิบาย)
+                </Text>
+              </View>
+            ) : null}
+          </>
+        ) : null
+      }
       footer={
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
           </TouchableOpacity>
+          {/*
+            ไม่จางอีกแล้ว: ยังขาด → "ยังขาด n อย่าง — พาไป" สีส้ม กดแล้วเลื่อนไปช่องแรกที่ขาด (ไม่ส่งอะไร)
+            เดิมปุ่มจางกดไม่ได้ ช่างกดแล้วเงียบ ไม่รู้ว่าขาดอะไรตรงไหน (ตัวอย่างที่เจ้าของงานเลือก ต.ค. 69)
+          */}
           <TouchableOpacity
             style={[
               styles.modalSave,
-              (saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || overLimit || offPartsIncomplete(offParts)) &&
-                styles.modalSaveOff,
+              !saving && goLabel ? styles.closeGo : null,
+              !saving && stepNav?.kind === "send" ? styles.closeSend : null,
+              saving && styles.modalSaveOff,
             ]}
-            onPress={submit}
-            disabled={
-              saving || slipMissing || shotsMissing || workersMissing || nameplateMissing || followUpMissing || summaryMissing || claimsMissing || overLimit || offPartsIncomplete(offParts)
-            }
+            onPress={press}
+            disabled={saving}
             activeOpacity={0.8}
+            accessibilityLabel={saving ? waitLabel ?? busy ?? "กำลังส่ง" : goLabel ?? submitLabel}
           >
             {saving ? (
               <>
                 <Spinner color="#fff" size="small" />
-                {busy ? <Text style={styles.modalSaveText}>{busy}</Text> : null}
+                {waitLabel ?? busy ? <Text style={styles.modalSaveText}>{waitLabel ?? busy}</Text> : null}
               </>
+            ) : goLabel ? (
+              <Text style={styles.closeGoText}>{goLabel}</Text>
             ) : (
-              <Text style={styles.modalSaveText}>ยืนยันปิดงาน</Text>
+              <Text style={styles.modalSaveText}>{submitLabel}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -6316,608 +8944,130 @@ function CloseModal({
     >
 
       {/*
-        ไฟล์ปิดงานทีละขั้น 1-2-3 อยู่บนสุด (เจ้าของงานขอ ต.ค. 69 — แบบเดียวกับไฟล์ตรวจหน้างาน)
-        ช่างถ่ายตอนยืนหน้าเครื่องก่อน แล้วค่อยกรอกสรุป/คนที่ไปตอนนั่งพัก
-
-        ก่อนซ่อม · หลังซ่อม แยกขั้น — ก่อน = เจออะไรตอนไปถึง · หลัง = ซ่อมแล้วเครื่องกลับมาจริง
-        คนตรวจย้อนเทียบสองภาพนี้ สรุปงานที่พิมพ์มาเป็นคำบอกเล่า ใบที่ปิดโดยไม่มีรูปตรวจย้อนไม่ได้
+        แก้เคลมแบบชี้ช่อง (เคลมก้อน 4): ช่องที่ต้องแก้อยู่บนสุด ที่เหลือพับไว้ "ส่วนที่ไม่ต้องแก้" (ตัวอย่าง fix screen)
+        ชิ้นที่ล็อกแล้วขึ้นนอกส่วนที่พับเสมอ — ช่างต้องรู้ว่าชิ้นนั้นจบแล้ว ไม่ต้องหาว่าทำไมไม่มีในรายการ
+        ส่วนที่พับยังแก้ได้ (ฟอร์มเดิมทั้งฟอร์ม) — ช่างอาจเจอสิ่งที่ต้องแก้เพิ่มเอง
       */}
-      <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
-        {([
-          ["BEFORE", "ก่อนซ่อม", "สภาพที่เจอตอนไปถึง · อาการ · Error", beforeFiles, setBeforeFiles, order.beforeCount ?? 0],
-          ["AFTER", "หลังซ่อม", "ซ่อมเสร็จ · ทดสอบแล้วเครื่องกลับมาใช้ได้", afterFiles, setAfterFiles, order.afterCount ?? 0],
-        ] as const).filter(([role]) => !(isPm && role === "BEFORE")).map(([role, label, hint, list, setList, already], i) => {
-          const add = (files: PickedAttachment[]) => setList((v) => [...v, ...files]);
-          const count = list.length + already;
-          return (
-            <EvidenceStep
-              key={role}
-              n={i + 1}
-              title={`รูป / วิดีโอ${label}`}
-              hint={hint}
-              done={count > 0}
-              doneText={`✓ ${count} ไฟล์`}
-              busy={picking === role ? busy : null}
-              primary={{
-                label: count ? "ถ่ายเพิ่ม" : "ถ่ายรูปทันที",
-                icon: "camera",
-                onPress: () => pickFor(role, (stage) => pickImageAttachment(true, stage), add),
-                accessibilityLabel: `ถ่ายรูป${label}`,
-              }}
-              secondary={{
-                label: count ? "เลือกเพิ่ม" : "เลือกจากอัลบั้ม",
-                icon: "images-outline",
-                // เลือกได้หลายรูปพร้อมกัน (เจ้าของงานขอ ต.ค. 69) — เดิมทีละรูป ช่างเลยแนบแค่รูปเดียว
-                onPress: () => pickFor(role, pickImageAttachments, add),
-                accessibilityLabel: `เลือกรูป${label}`,
-              }}
-              more={[
-                {
-                  label: "วิดีโอ",
-                  icon: "videocam-outline",
-                  onPress: () => pickFor(role, pickVideoAttachments, add),
-                  accessibilityLabel: `เลือกวิดีโอ${label}`,
-                },
-              ]}
-              footLeft="เลือกได้หลายรูป/หลายคลิปพร้อมกัน · วิดีโอไม่เกิน 60 วินาที"
-              dropHint="รูป · วิดีโอ"
-              onDropFiles={(files) => pickFor(role, (stage) => filesToAttachments(files, { image: true, video: true }, stage), add)}
-            >
-              {already > 0 ? <Text style={styles.linkedText}>แนบไว้แล้ว {already} ไฟล์ — เพิ่มได้อีก</Text> : null}
-              <FileStrip files={[...list]} onChange={(next) => setList(next)} />
-            </EvidenceStep>
-          );
-        })}
-
-        {/*
-          ป้ายรุ่นต้องถ่ายใหม่ทุกรอบที่ปิดงาน ไว้ไล่เทียบว่าไปถูกเครื่อง
-
-          รุ่นที่กรอกไว้ตอนเปิดใบงานมาจากคนที่อาจไม่ได้ยืนอยู่หน้าเครื่อง
-          ส่วนรูปนี้ถ่ายตอนทำงานเสร็จ — รูปเก่าตอบได้แค่ว่าเครื่องรุ่นอะไร
-          ไม่ได้ตอบว่าคนที่ไปวันนั้นอยู่หน้าเครื่องตัวไหน
-          บอกว่าในระบบบันทึกไว้ว่าอะไร คนถ่ายจะได้เทียบได้ตรงนั้นเลย
-          ใบ PM ไม่มีขั้นนี้ — เข้าทำทั้งร้าน ไม่ได้อยู่หน้าเครื่องตัวเดียว
-        */}
-        {!isPm ? (
-          <EvidenceStep
-            n={3}
-            title="ป้ายรุ่นของเครื่อง"
-            hint={
-              order.machineCode
-                ? `ในระบบบันทึกไว้ว่า ${order.machineCode}${order.machineModel ? ` · ${order.machineModel}` : ""}${
-                    order.machineCapacityLabel ? ` · ${order.machineCapacityLabel}` : ""
-                  } — ถ่ายป้ายรุ่นมาเทียบ`
-                : "ถ่ายป้ายรุ่นของรอบนี้ ไว้ไล่เทียบว่าไปถูกเครื่อง"
-            }
-            done={!nameplateMissing}
-            doneText="✓ แนบแล้ว"
-            // ป้ายรุ่นใช้รูปเดียว — แนบแล้วเปลี่ยนได้ด้วยการลบรูปในแถบรูปย่อ ไม่ต้องมีปุ่มเพิ่ม
-            canEdit={nameplateMissing}
-            busy={picking === "NAMEPLATE" ? busy : null}
-            primary={{
-              label: "ถ่ายป้ายรุ่น",
-              icon: "camera",
-              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(true, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
-              accessibilityLabel: "ถ่ายป้ายรุ่น",
+      {fixMode ? (
+        <View style={{ marginBottom: spacing.sm }}>
+          <FixList
+            items={fixItems}
+            spot={(k) => spot(k)}
+            flashOn={flashOn}
+            env={{
+              files,
+              evidence: order.claimEvidence,
+              removed: uploads.removed,
+              guide: order.claimGuide,
+              troubleshooting: order.claimTroubleshooting,
+              brand: order.branchWarrantyBrand ?? order.machineBrand ?? "",
+              partCodeOf: (pid) => parts.find((x) => x.sparePartId === pid)?.partCode ?? String(pid),
+              claimedIds,
+              draftFor,
+              patchDraft,
+              plate,
+              setPlate,
+              check,
+              setCheck,
+              errorCode: effError,
+              uploads,
+              readOnly: !!me?.viewAs,
+              setKeep: (key, v) => setFixKeep((k) => ({ ...k, [key]: v })),
+              onRescan: () => goTo("m:plate"),
+              onTouch: () => {
+                touched.current = true;
+              },
             }}
-            secondary={{
-              label: "เลือกจากอัลบั้ม",
-              icon: "images-outline",
-              onPress: () => pickFor("NAMEPLATE", (stage) => pickImageAttachment(false, stage, { doc: true }), (f) => setNameplate(f[0] ?? null)),
-              accessibilityLabel: "เลือกรูปป้ายรุ่น",
-            }}
-            // ป้ายรุ่นใช้รูปเดียว — ลากมาหลายรูปเก็บรูปแรก
-            dropHint="รูปป้ายรุ่น 1 รูป"
-            onDropFiles={(files) =>
-              pickFor("NAMEPLATE", (stage) => filesToAttachments(files.slice(0, 1), { image: true, doc: true }, stage), (f) => setNameplate(f[0] ?? null))
-            }
-          >
-            {nameplate ? (
-              <FileStrip files={[nameplate]} onChange={(next) => setNameplate(next[0] ?? null)} />
-            ) : order.hasNameplate ? (
-              <Text style={styles.linkedText}>แนบรูปของรอบนี้ไว้แล้ว</Text>
-            ) : null}
-          </EvidenceStep>
-        ) : null}
-      </View>
-
-      <Text style={styles.modalLabel}>ผลการทำงาน</Text>
-      <View style={styles.options}>
-        {results.map((r) => (
-          <TouchableOpacity
-            key={r.value}
-            style={[styles.option, result === r.value && styles.optionOn]}
-            onPress={() => setResult(r.value)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.optionText, result === r.value && styles.optionTextOn]}>
-              {r.label}
-            </Text>
+          />
+          <TouchableOpacity style={styles.foldBtn} onPress={() => setFoldOpen((o) => !o)} accessibilityState={{ expanded: foldOpen }}>
+            <Text style={styles.foldText}>{foldOpen ? "▾" : "▸"} ส่วนที่ไม่ต้องแก้ (พับไว้ แก้ได้ถ้าจำเป็น)</Text>
           </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* บังคับ (เจ้าของงานกำหนด) — "ซ่อมเสร็จ" อย่างเดียวไม่บอกว่ารอบนี้เปลี่ยนอะไรไป */}
-      <Text style={styles.modalLabel}>
-        สรุปงานที่ทำ <Text style={{ color: colors.danger }}>*</Text>
-      </Text>
-      <TextInput
-        style={[styles.modalInput, summaryMissing && styles.inputMissing]}
-        value={note}
-        onChangeText={(v) => {
-          setNote(v);
-          remember({ note: v });
-        }}
-        placeholder="เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ"
-        placeholderTextColor={colors.textFaint}
-        multiline
-        numberOfLines={3}
-        accessibilityLabel="สรุปงานที่ทำ"
-      />
-      {summaryMissing ? (
-        <Text style={styles.warn}>ต้องสรุปว่าทำอะไรไป — หัวหน้าภาคกับแอดมินอ่านจากตรงนี้</Text>
-      ) : null}
-
-      {/*
-        ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
-        ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
-      */}
-      {isSub ? (
-        <>
-          <Text style={styles.modalLabel}>
-            ทีม SUB ที่เข้าทำ <Text style={{ color: colors.danger }}>*</Text>
-          </Text>
-          <Dropdown
-            value={subTeam}
-            onChange={setSubTeam}
-            placeholder="เลือกทีม SUB"
-            accessibilityLabel="ทีม SUB ที่เข้าทำ"
-            options={[...new Set([...(order.assignedTeam ? [order.assignedTeam] : []), ...subTeams])].map((t) => ({
-              value: t,
-              label: t,
-              hint: t === order.assignedTeam ? "ทีมที่จ่ายงาน" : undefined,
-            }))}
-          />
-          <Text style={styles.modalLabel}>ชื่อช่างของทีม SUB (ไม่บังคับ)</Text>
-          <TextInput
-            style={[styles.modalInput, styles.modalInputLine]}
-            value={otherWorkers}
-            onChangeText={(v) => {
-              setOtherWorkers(v);
-              remember({ otherWorkers: v });
-            }}
-            placeholder="เช่น นายสมชาย, นายสมศักดิ์"
-            placeholderTextColor={colors.textFaint}
-            accessibilityLabel="ชื่อช่างของทีม SUB"
-          />
-          <TouchableOpacity
-            style={styles.skipRow}
-            onPress={() => setWithStaff((v) => !v)}
-            accessibilityLabel="มีช่างบริษัทไปด้วย"
-          >
-            <Ionicons name={withStaff ? "checkbox" : "square-outline"} size={18} color={withStaff ? colors.primary : colors.textFaint} />
-            <Text style={styles.skipText}>มีช่างบริษัทไปด้วย</Text>
-          </TouchableOpacity>
-          {workersMissing ? <Text style={styles.warn}>ต้องเลือกทีม SUB ที่เข้าทำ</Text> : null}
-        </>
-      ) : null}
-      {!isSub || withStaff ? <Text style={styles.modalLabel}>ผู้เข้าปฏิบัติงาน{isSub ? " (ช่างบริษัท)" : ""}</Text> : null}
-      {/*
-        สามช่อง คนที่ 1–3 แทนการกดเลือกจากรายชื่อทั้งหมด
-
-        ทีมหนึ่งไปกันไม่เกินสามคน การให้กดเลือกจากรายชื่อช่างทั้งบริษัท
-        แปลว่าต้องกวาดตาหาชื่อตัวเองในกองที่ไม่เกี่ยวข้อง และกดเกินไปหนึ่งคน
-        ก็ไม่มีอะไรบอกว่าเกิน — สามช่องบอกจำนวนสูงสุดด้วยตัวมันเอง
-
-        คนเดียวกันเลือกซ้ำสองช่องไม่ได้ เพราะคนที่เลือกไปแล้วถูกตัดออก
-        จากตัวเลือกของช่องที่เหลือ
-      */}
-      {(!isSub || withStaff ? [0, 1, 2] : []).map((slot) => (
-        <View key={slot} style={styles.workerSlot}>
-          <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
-          <Dropdown
-            value={workerIds[slot] != null ? String(workerIds[slot]) : null}
-            clearable={slot > 0 || workerIds.length > 1}
-            placeholder={slot === 0 ? "เลือกช่าง" : "ไม่มี"}
-            accessibilityLabel={`ผู้เข้าปฏิบัติงานคนที่ ${slot + 1}`}
-            onChange={(next) =>
-              setWorkerIds((current) => {
-                const copy = [...current];
-                if (next === null) copy.splice(slot, 1);
-                else copy[slot] = Number(next);
-                // ช่องว่างตรงกลางทำให้ "คนที่ 2" กลายเป็นช่องที่ไม่มีใคร
-                // ทั้งที่มีคนที่ 3 อยู่ — บีบให้ชิดกันเสมอ
-                return copy.filter((x) => x != null);
-              })
-            }
-            options={technicians
-              .filter((t) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
-              .map((t) => ({
-                value: String(t.id),
-                label: t.name,
-                hint: techPickHint(t),
-              }))}
-          />
+          {lockedLines}
+          {foldOpen ? foldLines.map((t) => <Text key={t} style={styles.foldLine}>{t}</Text>) : null}
         </View>
-      ))}
-      {isSub ? null : (
-        <TextInput
-          style={[styles.modalInput, styles.modalInputLine]}
-          value={otherWorkers}
-          onChangeText={(v) => {
-            setOtherWorkers(v);
-            remember({ otherWorkers: v });
-          }}
-          placeholder="คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"
-          placeholderTextColor={colors.textFaint}
-          accessibilityLabel="คนอื่นที่ไปด้วย"
-        />
+      ) : null}
+
+      {/*
+        สามแบบของฟอร์มเดียวกัน (เคลมก้อน 5):
+        แก้เคลม (ถูกชี้ช่อง) — รายการต้องแก้ด้านบน + ส่วนที่ไม่ต้องแก้พับไว้ (ทุกส่วนเรียงต่อกัน แก้ได้ถ้าจำเป็น)
+        ทีละขั้น (มีเคลม) — ขั้นเดียวต่อหน้า สลับด้วยแถบขั้นบนสุด · หน้ายาว (ไม่มีเคลม) — แบบเดิมหน้าเดียว
+      */}
+      {fixMode ? (
+        foldOpen ? (
+          <>
+            {workSection}
+            {anyClaim ? <View {...spot("machine")}>{machineSection}</View> : null}
+            {tabParts.map((p) => (
+              <View key={p.sparePartId} style={{ marginTop: spacing.md }}>
+                {partStep(p)}
+              </View>
+            ))}
+          </>
+        ) : null
+      ) : stepMode ? (
+        step === 0 ? (
+          workSection
+        ) : step === 1 ? (
+          machineSection
+        ) : step === 2 ? (
+          partsSection
+        ) : (
+          sendSection
+        )
+      ) : (
+        workSection
       )}
-      {workersMissing && !isSub ? (
-        <Text style={styles.warn}>ต้องระบุอย่างน้อยหนึ่งคนว่าใครเข้าไปทำ</Text>
-      ) : null}
 
-      {/*
-        อะไหล่ · ใบเหลือง · เคลม อยู่ก่อนรูปก่อน/หลังซ่อม — เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอ
-        ว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
-      */}
-      <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ไป" />
-      <OffPartEditor
-        rows={offParts}
-        onChange={setOffParts}
-        title="อะไหล่นอกสโตร์ที่ใช้"
-        hint="ของที่หารหัสในสโตร์ไม่เจอ หรือซื้อหน้างานเอง · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง"
-      />
-
-      {/*
-        ใบเหลืองคือหลักฐานว่าของที่หายไปจากคลังไปอยู่ที่เครื่องตัวไหน
-        ถามเฉพาะตอนที่มีอะไหล่จริง งานที่ไม่ได้เปลี่ยนอะไรไม่มีใบเบิกให้ถ่าย
-      */}
-      {parts.length > 0 ? (
-        <>
-          <FileDropZone
-            hint="รูปใบเหลือง 1 รูป"
-            disabled={!!busy}
-            label="วางรูปใบเหลือง"
-            onFiles={(files) => dropOne(files, { image: true, doc: true }, setSlip)}
-          >
-            <Text style={styles.modalLabel}>รูปใบเบิกอะไหล่ (ใบเหลือง)</Text>
-            {order.hasRequisitionSlip && !slip ? (
-              <Text style={styles.linkedText}>
-                แนบไว้แล้วในใบงานนี้ — ถ่ายใหม่ได้ถ้าเบิกเพิ่มรอบนี้
-              </Text>
-            ) : null}
-            {slip ? (
-              <View style={styles.slipRow}>
-                {slip.thumbnailUri ? (
-                  <Image source={{ uri: slip.thumbnailUri }} style={styles.slipThumb} />
-                ) : (
-                  <View style={[styles.slipThumb, styles.slipBlank]}>
-                    <Ionicons name="document-outline" size={22} color={colors.textFaint} />
-                  </View>
-                )}
-                <TouchableOpacity
-                  onPress={() => setSlip(null)}
-                  accessibilityLabel="เอารูปใบเหลืองออก"
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close-circle" size={20} color={colors.textFaint} />
-                </TouchableOpacity>
-              </View>
-            ) : busy ? (
-              <View style={styles.slipRow}>
-                <Spinner color={colors.primary} size="small" />
-                <Text style={styles.linkedText}>{busy}…</Text>
-              </View>
-            ) : (
-              <View style={styles.options}>
-                {Platform.OS !== "web" ? (
-                  <TouchableOpacity
-                    style={styles.option}
-                    onPress={() => pickOne((stage) => pickImageAttachment(true, stage, { doc: true }), setSlip)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.optionText}>ถ่ายใบเหลือง</Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.option}
-                  onPress={() => pickOne((stage) => pickImageAttachment(false, stage, { doc: true }), setSlip)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.optionText}>เลือกรูปใบเหลือง</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            {!slip && !busy ? <DropHint text="หรือลากรูปใบเหลืองมาวางตรงนี้" /> : null}
-          </FileDropZone>
-          {slipMissing ? (
-            <Text style={styles.warn}>
-              ใช้อะไหล่แล้วต้องแนบรูปใบเบิก (ใบเหลือง) ก่อนถึงจะปิดงานได้
-            </Text>
-          ) : null}
-
-          {/*
-            เคลมอะไหล่เก่า — ตามฟอร์ม "เอกสารใบเคลมอะไหล่" ของผู้ขาย
-            ถามตอนปิดงานเพราะเป็นจังหวะเดียวที่อะไหล่เก่ายังอยู่ในมือช่าง และเครื่องยังเปิดดูได้
-            หัวฟอร์ม (สาขา วันเปิด ยี่ห้อ รุ่น หมายเลขเครื่อง) ระบบใส่ให้จากใบงาน ช่างไม่ต้องพิมพ์
-          */}
-          <Text style={styles.modalLabel}>เคลมอะไหล่เก่า</Text>
-          {parts.map((p) => {
-            const d = draftFor(p.sparePartId);
-            const gaps = claimGaps(p);
-            return (
-              <View key={p.sparePartId} style={[styles.claimPart, d.on && styles.claimPartOn]}>
-                <TouchableOpacity
-                  style={styles.partRow}
-                  onPress={() => patchDraft(p.sparePartId, { on: !d.on })}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`ส่งอะไหล่เก่าเคลม ${p.partCode}`}
-                >
-                  <Ionicons
-                    name={d.on ? "checkbox" : "square-outline"}
-                    size={20}
-                    color={d.on ? colors.primary : colors.textFaint}
-                  />
-                  <Text style={[styles.partCode, { flex: 1, minWidth: 0 }]}>
-                    ส่งอะไหล่เก่าเคลม · {p.partCode} {p.name}
-                  </Text>
-                </TouchableOpacity>
-                {!d.on ? (
-                  <Text style={styles.claimHeader}>
-                    {order.branchWarrantyExpired === false
-                      ? "สาขายังอยู่ในประกัน — ปิดไว้เฉพาะชิ้นที่เคลมไม่ได้"
-                      : "ไม่เคลม (สาขาหมดประกันหรือเป็นสาขาบริษัท) — ติ๊กได้ถ้าชิ้นนี้ยังเคลมได้"}
-                  </Text>
-                ) : (
-                  <>
-                    <Text style={styles.claimHeader}>
-                      ระบบใส่ให้ในใบเคลม: {order.branchCode} {order.branchName}
-                      {order.branchOpenedAt ? ` · เปิด ${formatDate(order.branchOpenedAt)}` : ""}
-                      {" · "}
-                      {[order.branchWarrantyBrand ?? order.machineBrand, order.machineModel, order.machineCode]
-                        .filter(Boolean)
-                        .join(" · ") || "ไม่มีข้อมูลเครื่อง"}
-                    </Text>
-
-                    {/*
-                      รหัสตัวที่เสีย อ่านจากอะไหล่ที่ถอดออกจริง ไม่ใช่เติมจากตัวที่เบิกมาใส่ — ผู้ขายรับเคลมตามตัวที่ส่งคืน
-                      ถ้าเติมให้ ช่างจะกดผ่านโดยไม่ได้ดูของ แล้วรุ่นที่ต่างกันจะไปรู้เอาตอนผู้ขายตีกลับ
-                    */}
-                    <Text style={styles.modalLabel}>
-                      รหัสอะไหล่ตัวที่เสีย (ตัวที่ส่งเคลม) <Text style={{ color: colors.danger }}>*</Text>
-                    </Text>
-                    <TextInput
-                      style={[styles.modalInput, styles.modalInputLine]}
-                      value={d.brokenPartCode}
-                      onChangeText={(v) => patchDraft(p.sparePartId, { brokenPartCode: v })}
-                      placeholder={`ดูจากป้าย/สติกเกอร์บนตัวที่ถอดออก เช่น ${p.partCode}`}
-                      placeholderTextColor={colors.textFaint}
-                      autoCapitalize="characters"
-                      accessibilityLabel={`รหัสอะไหล่ตัวที่เสีย ${p.partCode}`}
-                    />
-                    {d.brokenPartCode.trim() && d.brokenPartCode.trim().toUpperCase() !== p.partCode.toUpperCase() ? (
-                      <Text style={styles.claimHeader}>
-                        ไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ ({p.partCode}) — ส่งได้ แต่ตรวจรหัสอีกครั้ง
-                      </Text>
-                    ) : null}
-
-                    <Text style={styles.modalLabel}>
-                      อาการ/สาเหตุ <Text style={{ color: colors.danger }}>*</Text>
-                    </Text>
-                    <TextInput
-                      style={[styles.modalInput, styles.claimReason]}
-                      value={d.symptom}
-                      onChangeText={(v) => patchDraft(p.sparePartId, { symptom: v })}
-                      placeholder="เช่น เครื่องไม่ปั่นหมาด ขึ้น Error E-21"
-                      placeholderTextColor={colors.textFaint}
-                      multiline
-                      accessibilityLabel={`อาการ/สาเหตุ ${p.partCode}`}
-                    />
-                    <Text style={styles.modalLabel}>
-                      ช่างเข้าเช็คอะไรบ้าง จึงระบุว่าควรเปลี่ยนชิ้นนี้ <Text style={{ color: colors.danger }}>*</Text>
-                    </Text>
-                    <TextInput
-                      style={[styles.modalInput, styles.claimReason]}
-                      value={d.checkNote}
-                      onChangeText={(v) => patchDraft(p.sparePartId, { checkNote: v })}
-                      placeholder="เช่น วัดไฟเข้ามอเตอร์ปกติ เปลี่ยนแล้วเครื่องปั่นได้"
-                      placeholderTextColor={colors.textFaint}
-                      multiline
-                      accessibilityLabel={`สิ่งที่เข้าเช็ค ${p.partCode}`}
-                    />
-
-                    <Text style={styles.modalLabel}>หลักฐานตามฟอร์มเคลม</Text>
-                    {CLAIM_EVIDENCE.map((e) => {
-                      const picked = d.files[e.role];
-                      const already = !picked && hasEvidence(p.sparePartId, e.role);
-                      // เลือกไฟล์ใช้เวลา (ย่อรูป) — อ่านร่างล่าสุดตอนไฟล์เสร็จ ไม่ใช่ตอนกดปุ่ม
-                      const keep = (f: PickedAttachment) =>
-                        setDrafts((all) => {
-                          const cur = all[p.sparePartId] ?? draftFor(p.sparePartId);
-                          return { ...all, [p.sparePartId]: { ...cur, files: { ...cur.files, [e.role]: f } } };
-                        });
-                      return (
-                        <FileDropZone
-                          key={e.role}
-                          style={styles.claimSlot}
-                          hint={e.video ? "วิดีโอ 1 คลิป" : "รูป 1 รูป"}
-                          disabled={!!busy || !!picked}
-                          label={`วาง${e.label} ${p.partCode}`}
-                          onFiles={(files) => dropOne(files, e.video ? { video: true } : { image: true }, keep)}
-                        >
-                          <Ionicons
-                            name={picked || already ? "checkmark-circle" : "ellipse-outline"}
-                            size={18}
-                            color={picked || already ? colors.success : colors.textFaint}
-                          />
-                          <Text style={styles.claimSlotLabel}>
-                            {e.label}
-                            {already ? " — แนบไว้แล้ว" : ""}
-                          </Text>
-                          {picked ? (
-                            <TouchableOpacity
-                              onPress={() =>
-                                patchDraft(p.sparePartId, { files: { ...d.files, [e.role]: undefined } })
-                              }
-                              accessibilityLabel={`เอา${e.label}ออก ${p.partCode}`}
-                              style={styles.partRow}
-                            >
-                              <Text style={styles.linkedText}>{picked.name}</Text>
-                              <Ionicons name="close-circle" size={18} color={colors.textFaint} />
-                            </TouchableOpacity>
-                          ) : busy ? null : e.video ? (
-                            <TouchableOpacity
-                              style={styles.option}
-                              onPress={() => pickOne(pickVideoAttachment, keep)}
-                              activeOpacity={0.7}
-                              accessibilityLabel={`แนบ${e.label} ${p.partCode}`}
-                            >
-                              <Text style={styles.optionText}>{already ? "แนบใหม่" : "เลือกวิดีโอ"}</Text>
-                            </TouchableOpacity>
-                          ) : (
-                            <View style={styles.options}>
-                              {Platform.OS !== "web" ? (
-                                <TouchableOpacity
-                                  style={styles.option}
-                                  onPress={() => pickOne((stage) => pickImageAttachment(true, stage), keep)}
-                                  activeOpacity={0.7}
-                                >
-                                  <Text style={styles.optionText}>ถ่าย</Text>
-                                </TouchableOpacity>
-                              ) : null}
-                              <TouchableOpacity
-                                style={styles.option}
-                                onPress={() => pickOne((stage) => pickImageAttachment(false, stage), keep)}
-                                activeOpacity={0.7}
-                                accessibilityLabel={`แนบ${e.label} ${p.partCode}`}
-                              >
-                                <Text style={styles.optionText}>{already ? "แนบใหม่" : "เลือกรูป"}</Text>
-                              </TouchableOpacity>
-                            </View>
-                          )}
-                        </FileDropZone>
-                      );
-                    })}
-                    <Text style={styles.claimHeader}>รูป Nameplate ใช้รูปป้ายรุ่นด้านบน</Text>
-
-                    {order.claimTroubleshooting.length > 0 ? (
-                      <>
-                        <Text style={styles.modalLabel}>
-                          Troubleshooting {order.branchWarrantyBrand ?? order.machineBrand ?? ""} (ต้องทำครบ)
-                        </Text>
-                        {order.claimTroubleshooting.map((t) => {
-                          const on = d.troubleshooting.includes(t);
-                          return (
-                            <TouchableOpacity
-                              key={t}
-                              style={styles.skipRow}
-                              onPress={() =>
-                                patchDraft(p.sparePartId, {
-                                  troubleshooting: on
-                                    ? d.troubleshooting.filter((x) => x !== t)
-                                    : [...d.troubleshooting, t],
-                                })
-                              }
-                              activeOpacity={0.7}
-                              accessibilityLabel={`${t} ${p.partCode}`}
-                            >
-                              <Ionicons
-                                name={on ? "checkbox" : "square-outline"}
-                                size={18}
-                                color={on ? colors.primary : colors.textFaint}
-                              />
-                              <Text style={[styles.skipText, { color: colors.text }]}>{t}</Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </>
-                    ) : null}
-
-                    {gaps.length > 0 ? (
-                      <Text style={styles.warn}>ยังขาด: {gaps.join(" · ")}</Text>
-                    ) : null}
-                  </>
-                )}
-              </View>
-            );
-          })}
-          {anyClaim && order.claimGuide ? (
-            <>
-              <ClaimMachineBox
-                guide={order.claimGuide}
-                registryModel={order.machineModel}
-                plate={plate}
-                onPlate={setPlate}
-                check={check}
-                onCheck={setCheck}
-                onPhoto={setNameplate}
-              />
-              {machineGaps.length > 0 ? <Text style={styles.warn}>ยังขาด: {machineGaps.join(" · ")}</Text> : null}
-            </>
-          ) : null}
-          {anyClaim ? (
-            <Text style={styles.linkedText}>
-              ปิดงานแล้วใบงานไปรอ Admin Spare Part ตรวจเคลมก่อน ถึงจะนับว่าปิดงาน
-            </Text>
-          ) : null}
-        </>
-      ) : null}
-
-      {order.outageStillOpen ? (
-        <Text style={styles.warn}>
-          เครื่องยังขึ้นว่าดับอยู่ในไฟล์รายงานล่าสุด ปิดใบงานได้ แต่เคสบนกระดานจะยังอยู่
-          จนกว่าเครื่องจะหายไปจากไฟล์รอบถัดไป
-        </Text>
-      ) : null}
-
-      {/*
-        ไปเปลี่ยนแล้วอะไหล่ไม่ครบ — ใบนี้ปิดได้ตามที่ทำจริง ส่วนที่ขาดไปเป็นใบใหม่
-        ลิงก์กับใบนี้ ไม่ใช่ค้างทั้งใบไว้เพราะของตัวเดียว
-      */}
-      <TouchableOpacity
-        style={styles.skipRow}
-        onPress={() => setFollowUp((v) => !v)}
-        activeOpacity={0.7}
-        accessibilityLabel="อะไหล่ไม่ครบ เปิดใบงานรออะไหล่ต่อ"
-      >
-        <Ionicons
-          name={followUp ? "checkbox" : "square-outline"}
-          size={18}
-          color={followUp ? colors.primary : colors.textFaint}
-        />
-        <Text style={styles.skipText}>อะไหล่ไม่ครบ — เปิดใบงานรออะไหล่ต่อจากใบนี้</Text>
-      </TouchableOpacity>
-      {followUp ? (
-        <>
-          <PartPicker parts={missing} onChange={setMissing} label="อะไหล่ที่ยังขาด" />
-          <Text style={styles.linkedText}>
-            ใบใหม่ไปอยู่ที่แอดมิน สถานะ “แอดมิน · เบิกอะไหล่” และลิงก์กับใบนี้
-          </Text>
-        </>
-      ) : null}
-
-      <MissingBox
-        items={[
-          beforeMissing && "รูปก่อนซ่อม",
-          afterMissing && "รูปหลังซ่อม",
-          nameplateMissing && "รูปป้ายรุ่น",
-          summaryMissing && "สรุปงานที่ทำ",
-          workersMissing && (isSub ? "ทีม SUB ที่เข้าทำ" : "ผู้เข้าปฏิบัติงาน"),
-          slipMissing && "รูปใบเหลือง",
-          claimsMissing && "ข้อมูลเคลมอะไหล่เก่า",
-          followUpMissing && "อะไหล่ที่ยังขาด",
-        ].filter((x): x is string => !!x)}
-        why="ต้องครบก่อนถึงจะกดยืนยันปิดงานได้"
-      />
+      {/* กล่องเดียวบอกของที่ขาด (เคลมบอกชิ้นและช่อง) — ฟอร์มทีละขั้นบอกเฉพาะของขั้นนี้ ปุ่มล่างพาไปช่องแรกในรายการนี้ */}
+      <MissingBox items={missingHere.map((m) => m.text)} why="ต้องครบก่อนถึงจะส่งได้ — กดปุ่ม “ยังขาด … — พาไป” ด้านล่าง ระบบเลื่อนไปช่องแรกที่ยังขาดให้" />
       {overLimit ? (
-        <Text style={styles.modalError}>
-          ไฟล์เกินเพดาน — ใบนี้มีไฟล์แล้ว {order.attachmentCount} ไฟล์ จะส่งเพิ่มอีก {pendingUploads} ไฟล์ แต่ใบงานหนึ่งแนบได้ไม่เกิน{" "}
-          {order.attachmentLimit} ไฟล์ · ลบไฟล์ที่ไม่ใช้ (เช่น รูปซ้ำ) ในการ์ดไฟล์แนบ หรือเอารูปออกจากฟอร์มนี้บางรูป
-        </Text>
+        <View {...spot("limit")}>
+          {flashOn("limit")}
+          <Text style={styles.modalError}>
+            ไฟล์เกินเพดาน — ใบนี้มีไฟล์แล้ว {order.attachmentCount} ไฟล์ จะส่งเพิ่มอีก {pendingUploads} ไฟล์ แต่ใบงานหนึ่งแนบได้ไม่เกิน{" "}
+            {order.attachmentLimit} ไฟล์ · ลบไฟล์ที่ไม่ใช้ (เช่น รูปซ้ำ) ในการ์ดไฟล์แนบ หรือเอารูปออกจากฟอร์มนี้บางรูป
+          </Text>
+        </View>
       ) : null}
-      {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
+  );
+}
+
+/**
+ * กรอบแดงกระพริบ 3 ครั้งรอบช่องที่ปุ่ม "ยังขาด n อย่าง — พาไป" พามา — เลื่อนมาถึงแล้วตาต้องเจอช่องนั้นทันที
+ * ไม่ใช่แค่เลื่อนจอแล้วให้ช่างเดาว่าช่องไหน · ถอดออกเองหลังเล่นจบ (คีย์ใหม่ทุกครั้งที่กด = เล่นจากต้น)
+ * เว็บใช้ CSS animation ผ่าน StyleSheet.create (react-native-web ทิ้ง animationKeyframes ที่ส่งเป็น style ตรง ๆ — ดู Blink)
+ */
+const WEB_FLASH = StyleSheet.create({
+  flash: {
+    animationKeyframes: [{ "0%": { opacity: 0 }, "50%": { opacity: 1 }, "100%": { opacity: 0 } }],
+    animationDuration: "0.6s",
+    animationTimingFunction: "ease-in-out",
+    animationIterationCount: "3",
+    animationFillMode: "forwards",
+  },
+} as Record<string, object>).flash;
+function FlashFrame() {
+  const web = Platform.OS === "web";
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (web) return;
+    const run = Animated.loop(
+      Animated.sequence([
+        Animated.timing(v, { toValue: 1, duration: 300, useNativeDriver: true }),
+        Animated.timing(v, { toValue: 0, duration: 300, useNativeDriver: true }),
+      ]),
+      { iterations: 3 }
+    );
+    run.start();
+    return () => run.stop();
+  }, [v, web]);
+  return (
+    <Animated.View
+      pointerEvents="none"
+      accessibilityLabel="ช่องที่ยังขาด"
+      style={[styles.flashFrame, web ? [{ opacity: 0 }, WEB_FLASH] : { opacity: v }]}
+    />
   );
 }
 
@@ -6958,6 +9108,23 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 const styles = StyleSheet.create({
+  // รูปก่อนซ่อมมาจากกล่องถ่ายก่อนซ่อม — เขียวอ่อน บอกว่าครบแล้ว ไม่ต้องถ่ายซ้ำ (ตัวอย่าง beforeFromPre)
+  preUsed: { gap: 2, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.successSoft },
+  preUsedTitle: { fontSize: 14.5, lineHeight: 21, fontWeight: "800", color: colors.successInk },
+  // ปุ่มส่งของฟอร์มทีละขั้น — เขียว แยกจาก "ถัดไป" (กรมท่า) ช่างรู้ว่ากดนี้แล้วส่งจริง (ตัวอย่าง primBg)
+  closeSend: { backgroundColor: colors.successFill },
+  machineRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
+  machineText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.successInk, minWidth: 180 },
+  machineBtn: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    justifyContent: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.navyFill,
+    backgroundColor: colors.card,
+  },
+  machineBtnText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
   dangerTitle: { fontSize: 13.5, fontWeight: "800", color: colors.dangerInk },
   dangerHint: { fontSize: 12, lineHeight: 18, color: colors.body },
   dangerBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.danger, backgroundColor: colors.card },
@@ -7379,6 +9546,9 @@ const styles = StyleSheet.create({
   waitingText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 21, color: colors.textMuted },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md },
+  // ห่อเนื้อใบงานไว้ให้หน้าตรวจเคลมพับได้ — ระยะห่างเท่าเดิมกับตอนที่เป็นลูกของ ScrollView ตรง ๆ
+  bodyWrap: { gap: spacing.md },
+  bodyHidden: { display: "none" },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontSize: 13, lineHeight: 21, color: colors.danger, textAlign: "center" },
   lockIcon: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", backgroundColor: colors.background, marginBottom: spacing.sm },
@@ -7653,7 +9823,44 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   modalError: { fontSize: 13, lineHeight: 21, color: colors.danger, marginTop: spacing.md },
+  // แถบส่งไม่สำเร็จใต้หัวฟอร์ม — ตัวหนังสือเข้มบนพื้นแดงอ่อน อ่านออกกลางแดด (ตามตัวอย่างที่เจ้าของงานเลือก)
+  sendErr: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+    backgroundColor: colors.dangerSoft,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.danger,
+  },
+  sendErrTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.dangerInk },
+  sendErrText: { fontSize: 13, lineHeight: 19, color: colors.dangerInk },
+  // ยังส่งไม่ได้ (ช่องที่ถูกชี้ยังเหมือนเดิม) — เหลืองเข้มบนพื้นเหลืองอ่อน: เป็นคำเตือนให้ทำต่อ ไม่ใช่ระบบพัง
+  fixBlocked: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 8,
+    backgroundColor: colors.warningSoft,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.warning,
+  },
+  fixBlockedText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
+  foldBtn: { minHeight: 48, justifyContent: "center", marginTop: spacing.xs },
+  foldText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
+  foldLine: { fontSize: 13, lineHeight: 20, color: colors.body },
   modalActions: { flex: 1, flexDirection: "row", gap: spacing.sm },
+  // ท้ายฟอร์มปล่อยงานตอนล็อก — ช่องพิมพ์ + ปุ่มเรียงลงล่าง (แถวท้ายของ AppModal เป็นแนวนอน จึงต้องยืดเต็มก่อน)
+  lockFoot: { flex: 1, minWidth: 0, gap: spacing.sm },
+  lockInput: {
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    minHeight: 48,
+    fontSize: 14,
+    color: colors.text,
+    backgroundColor: colors.card,
+  },
   modalCancel: {
     flex: 1,
     minHeight: 46,
@@ -7674,6 +9881,43 @@ const styles = StyleSheet.create({
     backgroundColor: colors.navyFill,
   },
   modalSaveOff: { opacity: 0.6 },
+  // ปุ่มล่างตอนยังขาด — ส้มอ่อนตัวหนังสือเข้ม (ตัวอย่างที่เจ้าของงานเลือก) ไม่ใช่ปุ่มจาง: กดได้ กดแล้วพาไปช่องที่ขาด
+  closeGo: { backgroundColor: colors.warningSoft, borderWidth: 2, borderColor: colors.warning },
+  closeGoText: { color: colors.warningInk, fontSize: 14, lineHeight: 22, fontWeight: "800", textAlign: "center" },
+  flashFrame: {
+    position: "absolute",
+    top: -4,
+    left: -4,
+    right: -4,
+    bottom: -4,
+    borderWidth: 3,
+    borderColor: colors.danger,
+    borderRadius: radius.md,
+    zIndex: 2,
+  },
+  claimKeepBox: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.dangerSoft,
+    borderWidth: 1,
+    borderColor: colors.dangerLine,
+    gap: spacing.xs,
+  },
+  claimKeepReason: { fontSize: 13, lineHeight: 20, color: colors.dangerInk },
+  claimKeepBtn: {
+    alignSelf: "flex-start",
+    minHeight: 48,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  claimKeepBtnText: { fontSize: 14, fontWeight: "700", color: colors.primaryInk },
+  claimKeepUndo: { alignSelf: "flex-start", minHeight: 48, justifyContent: "center", paddingHorizontal: 12 },
+  claimKeepUndoText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   closeFiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },
   closeFile: { width: 76 },
   closeThumb: { width: 76, height: 76, borderRadius: radius.sm, backgroundColor: colors.background },
@@ -7719,7 +9963,23 @@ const styles = StyleSheet.create({
   shotAfter: { borderColor: colors.success, backgroundColor: colors.successSoft },
   shotHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   // ── เคลมอะไหล่ ──
-  claimCardReview: { borderColor: colors.primary, borderWidth: 2 },
+  claimOld: { marginTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, gap: 4 },
+  claimOldBtn: { minHeight: 44, justifyContent: "center" },
+  claimOldLabel: { fontSize: 14, fontWeight: "700", color: colors.body },
+  claimOldLine: { fontSize: 13, lineHeight: 19, color: colors.body },
+  freshBadge: {
+    position: "absolute",
+    top: 3,
+    left: 3,
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#fff",
+    // navyFill ไม่ใช่ primaryInk — primaryInk โหมดมืดเป็นฟ้าอ่อน ตัวขาวบนนั้นอ่านไม่ออก ป้ายที่บอกว่าอะไรเปลี่ยนจะหายไป
+    backgroundColor: colors.navyFill,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    overflow: "hidden",
+  },
   claimBlock: { paddingTop: spacing.sm },
   claimBlockOld: { marginTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, opacity: 0.75 },
   claimChip: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 },
@@ -7737,19 +9997,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primarySoft,
   },
   claimPdfText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
-  claimReview: { marginTop: spacing.md, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, gap: spacing.sm },
   claimReason: { minHeight: 64 },
-  claimReject: {
-    flex: 1,
-    minHeight: 46,
-    flexDirection: "row",
-    gap: spacing.sm,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 12,
-    backgroundColor: colors.dangerSoft,
-  },
-  claimRejectText: { fontSize: 15, lineHeight: 22, color: colors.dangerInk, fontWeight: "700" },
   claimRejected: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -7784,6 +10032,35 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   verdictOkText: { flex: 1, fontSize: 12, lineHeight: 20, color: colors.success, fontWeight: "700" },
+  claimLocked: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.rowAlt,
+  },
+  claimLockedRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  claimLockedText: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 20, fontWeight: "600" },
+  claimMachineLocked: {
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.successLine,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  claimDeclined: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    backgroundColor: colors.rowAlt,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  claimDeclinedText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19, color: colors.body },
   verdictBad: {
     flexDirection: "row",
     alignItems: "center",

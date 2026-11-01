@@ -10,6 +10,7 @@
 #   · ค่าบริการล้วน (ไม่ใช้อะไหล่): ตรงไปเสนอราคา → จ่ายเงิน → นัดวัน ไม่ค้างที่ขั้นเบิก — เช็คฐานข้อมูลทุกข้อ
 set -e
 SP="$(dirname "$0")"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -24,7 +25,6 @@ VISIT=$(day 22)
 A=$(login A001)
 ME=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
-PID=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BOARD'")
 NAME1="สายพานมอเตอร์ทดสอบ 5PJ-1200"
 NAME2="ค่าแรงเชื่อมท่อทดสอบ"
 IDS=""
@@ -48,9 +48,11 @@ OFFROWS() { DB "select sp.name||'|'||p.quantity||'|'||coalesce(p.unit,'-')||'|'|
 echo "═══ หัวหน้าภาคระบุ: ของในสโตร์ + นอกสโตร์ (แฟรนไชส์หมดประกัน $DOLD)"
 as_region_of $DOLD
 W1=$(newwo $DOLD); IDS="$IDS $W1"
+# ของในสโตร์ของแต่ละใบ = ตัวที่ตรงยี่ห้อเครื่องของใบนั้น (fx_part) — สองสาขาคนละเครื่อง จึงเลือกแยกใบ (P1 · P3 · P4)
+P1=$(fx_part $W1 BOARD)
 R=$(POST $S "work-orders/$W1/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"  \",\"quantity\":1}]}")
 echo "$R" | grep -q "อะไหล่นอกสโตร์ต้องมีชื่อ" && [ "$(st $W1)" = "NEW" ] && pass "ชื่ออะไหล่นอกสโตร์ว่างไม่ได้" || fail "ชื่อว่างผ่าน: $(echo $R|head -c 120)"
-POST $S "work-orders/$W1/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":2,\"unit\":\"เส้น\",\"note\":\"ซื้อร้านในพื้นที่\"}]}" >/dev/null
+POST $S "work-orders/$W1/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":2,\"unit\":\"เส้น\",\"note\":\"ซื้อร้านในพื้นที่\"}]}" >/dev/null
 [ "$(st $W1)" = "PARTS_SOURCING" ] && pass "มีของนอกสโตร์ปน ยังไปขั้นเช็คอะไหล่ก่อนเสนอราคา" || fail "สถานะ: $(st $W1)"
 [ "$(OFFROWS $W1 WAITING)" = "$NAME1|2|เส้น|ซื้อร้านในพื้นที่" ] && pass "เก็บชื่อ จำนวน หน่วย หมายเหตุ (ฐานข้อมูล)" || fail "แถว: $(OFFROWS $W1 WAITING)"
 [ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\"=$W1 and kind='WAITING'")" = "2" ] && pass "ของในสโตร์ยังอยู่คู่กัน (2 รายการ)" || fail "จำนวนแถวไม่ถูก"
@@ -77,9 +79,10 @@ R=$(POST $A "work-orders/$W2/parts-sourcing" "{\"results\":[{\"sparePartId\":$(D
 # ต้องเห็นของในสโตร์ (พิสูจน์ว่ารายงานอ่านเคสนี้จริง) และไม่เห็นของนอกสโตร์
 OUT=$(DB "insert into \"Outage\"(kind,\"branchId\",\"startedAt\",\"lastSeenAt\") select 'MACHINE_OFF',id,now(),now() from \"Branch\" where code='$DOLD' returning id" | head -1)
 OUTS="$OUT"
-DB "insert into \"OutagePart\"(\"outageId\",\"sparePartId\",quantity) values ($OUT,$PID,1),($OUT,$OFF2,1)" >/dev/null
+# เคสนี้อยู่สาขาเดียวกับ W1 ไม่ผูกเครื่อง — ใช้ของในสโตร์ตัวเดียวกับ W1 ข้อนี้ดูแค่ว่ารายงานนับของในสโตร์
+DB "insert into \"OutagePart\"(\"outageId\",\"sparePartId\",quantity) values ($OUT,$P1,1),($OUT,$OFF2,1)" >/dev/null
 RP=$(GET $A machines/reports/parts)
-[ "$(echo "$RP" | J 'String(d.parts.some(p=>p.sparePartId==='$PID'))+"|"+String(d.parts.some(p=>p.sparePartId==='$OFF2'))')" = "true|false" ] \
+[ "$(echo "$RP" | J 'String(d.parts.some(p=>p.sparePartId==='$P1'))+"|"+String(d.parts.some(p=>p.sparePartId==='$OFF2'))')" = "true|false" ] \
   && pass "รายงานอะไหล่ที่ต้องสั่งนับของในสโตร์ แต่ไม่นับของนอกสโตร์" || fail "รายงาน: $(echo "$RP" | head -c 200)"
 
 echo
@@ -87,21 +90,22 @@ echo "═══ เบิก + ปิดงาน (สาขาบริษั�
 as_region_of $COMP
 TEAM=$(DB "select zone from \"Branch\" where code='$COMP'")
 W3=$(newwo $COMP); IDS="$IDS $W3"
-POST $S "work-orders/$W3/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":1,\"note\":\"ร้านเดิม\"}]}" >/dev/null
+P3=$(fx_part $W3 BOARD)
+POST $S "work-orders/$W3/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P3,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":1,\"note\":\"ร้านเดิม\"}]}" >/dev/null
 OFF1=$(DB "select id from \"SparePart\" where name='$NAME1'")
 [ "$(st $W3)" = "PARTS_SOURCING" ] && [ "$(GET $A "work-orders/$W3" | J 'String(d.needsQuote)')" = "true" ] \
   && pass "สาขาบริษัทแต่มีของนอกสโตร์ → ต้องเสนอราคา (ไปเช็คอะไหล่ก่อนเสนอราคา)" || fail "สถานะ: $(st $W3)"
-R=$(POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
+R=$(POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$P3,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
 echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PARTS_SOURCING" ] && pass "เช็คอะไหล่: ของในสโตร์ต้องบอกคลัง ของนอกสโตร์ไม่ต้อง" || fail "ของในสโตร์ผ่านโดยไม่มีคลัง: $(echo $R|head -c 120)"
-POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
+POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$P3,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
 POST $A "work-orders/$W3/quote" '{"skip":true,"note":"ทดสอบ — ข้ามเสนอราคา"}' >/dev/null
 [ "$(st $W3)" = "PARTS_CHECKED" ] && pass "มีอะไหล่ → หลังเสนอราคา/รับเงินไปหัวหน้าภาคนัดวัน (ยังไม่เบิก)" || fail "หลังเสนอราคา: $(st $W3)"
 POST $S "work-orders/$W3/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 [ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "นัดวันแล้วไปขั้นเบิก (มีของนอกสโตร์)" || fail "หลังนัด: $(st $W3)"
-R=$(POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
+R=$(POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$P3,\"inStock\":true},{\"sparePartId\":$OFF1,\"inStock\":true}]}")
 echo "$R" | grep -q "อยู่คลังไหน" && [ "$(st $W3)" = "PARTS_REQUESTED" ] && pass "เบิก: ของในสโตร์ยังต้องระบุคลัง/เลขใบเบิก" || fail "ของในสโตร์เบิกโดยไม่มีคลัง: $(echo $R|head -c 120)"
 # แก้หมายเหตุอย่างเดียวก่อนเบิก — ไม่ใช่ของคนละชิ้น ผลเช็คเดิม (ยังไม่มี) ไม่เกี่ยว แค่ต้องไม่สร้างแถวใหม่
-POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$PID,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-OFF1\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
+POST $A "work-orders/$W3/parts-check" "{\"results\":[{\"sparePartId\":$P3,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\",\"requisitionNo\":\"RQ-OFF1\"},{\"sparePartId\":$OFF1,\"inStock\":true}]}" >/dev/null
 [ "$(st $W3)" = "AWAITING_CONFIRM" ] && [ "$(DB "select \"inStock\"||'|'||coalesce(warehouse,'-')||'|'||coalesce(\"requisitionNo\",'-') from \"WorkOrderPart\" where \"workOrderId\"=$W3 and \"sparePartId\"=$OFF1")" = "true|-|-" ] \
   && pass "ของนอกสโตร์ \"มี\" ผ่านได้โดยไม่มีคลังและเลขใบเบิก → คอนเฟิร์มลูกค้า (ฐานข้อมูล)" || fail "เบิก: $(st $W3)"
 # ของนอกสโตร์ผ่านขั้นเบิกรอบนี้แล้ว — คอนเฟิร์มต้องไปปล่อยงาน ไม่วนกลับไปเบิกซ้ำ
@@ -116,12 +120,13 @@ R=$(POST $A "work-orders/$W3/close" "{\"result\":\"FIXED\",\"note\":\"ใช้�
   && pass "อะไหล่ที่ใช้จริงมีทั้งของที่ระบุไว้และของที่ช่างเพิ่มตอนปิดงาน (ฐานข้อมูล)" || fail "USED: $(OFFROWS $W3 USED | tr '\n' ';')"
 
 W4=$(newwo $COMP); IDS="$IDS $W4"
+P4=$(fx_part $W4 BOARD)
 POST $S "work-orders/$W4/parts" '{"needsParts":false}' >/dev/null
 POST $S "work-orders/$W4/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 for r in NAMEPLATE BEFORE AFTER; do
   curl -s -X POST "localhost:4000/api/work-orders/$W4/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
 done
-R=$(POST $A "work-orders/$W4/close" "{\"result\":\"FIXED\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME2\",\"quantity\":1}]}")
+R=$(POST $A "work-orders/$W4/close" "{\"result\":\"FIXED\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$P4,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME2\",\"quantity\":1}]}")
 echo "$R" | grep -q "ใบเหลือง" && [ "$(st $W4)" != "DONE" ] && pass "ใช้ของในสโตร์ด้วย ยังต้องแนบใบเหลือง" || fail "ปิดได้โดยไม่มีใบเหลือง: $(echo $R|head -c 120)"
 
 echo

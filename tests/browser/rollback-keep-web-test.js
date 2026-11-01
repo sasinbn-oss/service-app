@@ -19,8 +19,11 @@ const { setup } = require("./fixture");
   let fx = null;
   try {
     fx = await setup();
-    const BOARD = fx.part("SP-BOARD");
-    const wo = await fx.workOrder("C0006", [{ sparePartId: BOARD, quantity: 1 }]);
+    // อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) ซึ่งรู้ได้เมื่อมีใบแล้ว — เปิดใบก่อนแล้วหัวหน้าภาคค่อยระบุ
+    // (ทางเดียวกับที่ fx.workOrder ทำให้เมื่อส่งรายการอะไหล่มาด้วย)
+    const wo = await fx.workOrder("C0006", null);
+    const BOARD = fx.fxPart(wo.id, "BOARD");
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, { needsParts: true, parts: [{ sparePartId: BOARD, quantity: 1 }] });
     const team = fx.sql(`select zone from "Branch" where code='C0006'`);
     const visit = new Date(Date.now() + 7 * 3600_000 + 10 * 86_400_000).toISOString().slice(0, 10);
     fx.sql(`update "WorkOrderPart" set "inStock"=true, warehouse='คลังกระบี่', "requisitionNo"='RQ-WEB1', "checkedAt"=now() where "workOrderId"=${wo.id};

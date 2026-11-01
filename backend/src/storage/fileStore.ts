@@ -31,6 +31,7 @@ import {
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Readable } from "stream";
 
 /** อายุลิงก์ชั่วคราว — เท่ากับลิงก์โหลดเอกสารในระบบ ให้คนใช้จำง่ายว่า "2 ชั่วโมง" */
 export const SIGNED_URL_TTL_SECONDS = 2 * 60 * 60;
@@ -181,6 +182,17 @@ export async function getObjectBytes(key: string): Promise<Uint8Array> {
   const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   if (!out.Body) throw new Error("ไฟล์ว่าง");
   return out.Body.transformToByteArray();
+}
+
+/**
+ * อ่านตัวไฟล์เป็นสายข้อมูล — ใช้กับ zip หลักฐานเคลม (ส่งออกทีละไฟล์ ไม่ต้องอ่านทั้งไฟล์เข้าหน่วยความจำก่อน)
+ * Render free มีหน่วยความจำ 512 MB ทั้งเครื่อง รูปหลายสิบ MB ที่อ่านเข้าหน่วยความจำพร้อมกันหลายคนพอให้เซิร์ฟเวอร์ถูกฆ่า
+ */
+export async function getObjectStream(key: string): Promise<Readable> {
+  const { client, bucket } = getClient();
+  const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!out.Body) throw new Error("ไฟล์ว่าง");
+  return out.Body as Readable;
 }
 
 export async function deleteObject(key: string): Promise<void> {

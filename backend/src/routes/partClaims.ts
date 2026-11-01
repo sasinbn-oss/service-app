@@ -25,7 +25,16 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { supervisorScope, workOrderVisible } from "../utils/supervisorScope";
 import { documentPath, saveDocument } from "../documents/store";
 import { bkkDayStart, sheetName, table, thaiDateTime, title } from "../reports/openerReport";
-import { WORK_ORDER_STATUS_LABELS } from "../utils/constants";
+import {
+  WORK_ORDER_STATUS_LABELS,
+  bangkokDay,
+  isCompanyBranch,
+  isWarrantyExpired,
+  machineMake,
+  warrantyEndFor,
+} from "../utils/constants";
+import { brokenMismatch, claimRoundOf, firstSubmittedAt, repairStartFor } from "../utils/claimRules";
+import { claimRepeatsOf } from "../utils/claimRepeats";
 
 const router = Router();
 const DAY_MS = 86_400_000;
@@ -75,7 +84,7 @@ const ymd = (msg: string) =>
 const filterSchema = z.object({
   from: ymd("วันที่เริ่มไม่ถูกต้อง"),
   to: ymd("วันที่สิ้นสุดไม่ถูกต้อง"),
-  status: choice(["ALL", "PENDING", "APPROVED", "REJECTED"], "ALL", "สถานะที่เลือกไม่ถูกต้อง"),
+  status: choice(["ALL", "PENDING", "APPROVED", "REJECTED", "DECLINED"], "ALL", "สถานะที่เลือกไม่ถูกต้อง"),
   brand: text(100, "ยี่ห้อ"),
   q: text(100, "คำค้น"),
   rounds: choice(["latest", "all"], "latest", "ตัวเลือกรอบไม่ถูกต้อง"),
@@ -113,8 +122,11 @@ function parse<T extends z.ZodTypeAny>(schema: T, req: AuthRequest, res: Respons
   return parsed.data;
 }
 
-/** ป้ายตามที่เจ้าของงานตกลง — สีบนจอใช้ look (OLD = รอบเก่าที่ถูกแทนแล้ว สีเทา) */
-type Look = "PENDING" | "APPROVED" | "REJECTED" | "OLD";
+/**
+ * ป้ายตามที่เจ้าของงานตกลง — สีบนจอใช้ look (OLD = รอบเก่าที่ถูกแทนแล้ว สีเทา)
+ * DECLINED = Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย (ก้อน 3) — ชิ้นจบแล้วแต่ไม่มีใบเคลมไปผู้ขาย ต้องไม่ปนกับ "อนุมัติ"
+ */
+type Look = "PENDING" | "APPROVED" | "REJECTED" | "DECLINED" | "OLD";
 
 export interface ClaimHistoryRow {
   id: number;
@@ -153,9 +165,9 @@ interface Built {
   /** แถวที่จะแสดง = all หลังกรองสถานะและรอบ */
   shown: ClaimHistoryRow[];
   /** ตัวเลขบนการ์ด — นับชิ้น (จำนวน) จากรอบล่าสุดเสมอ ไม่ตามสถานะ/รอบที่เลือก (ตามตัวอย่าง) */
-  tiles: { pending: number; approved: number; rejected: number; total: number; orders: number };
+  tiles: { pending: number; approved: number; rejected: number; declined: number; total: number; orders: number };
   /** ตัวเลขบนปุ่มสถานะ = จำนวนแถวที่จะเห็นเมื่อกด (ตามรอบที่เลือกอยู่) — แบบตัวกรองหน้ารายการใบงาน */
-  counts: { ALL: number; PENDING: number; APPROVED: number; REJECTED: number };
+  counts: { ALL: number; PENDING: number; APPROVED: number; REJECTED: number; DECLINED: number };
 }
 
 /** อะไหล่ตัวเดียวกันในใบเดียวกัน — ของนอกสโตร์รุ่นเก่าอาจไม่มี sparePartId ใช้รหัสแทน */
@@ -249,8 +261,16 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
 
   const all = rows.map((r): ClaimHistoryRow => {
     const { round, latest } = roundOf.get(r.id) ?? { round: 1, latest: true };
-    let look: Look = r.status === "APPROVED" ? "APPROVED" : r.status === "REJECTED" ? "REJECTED" : "PENDING";
-    let label = r.status === "APPROVED" ? "อนุมัติ" : r.status === "REJECTED" ? "ตีกลับ · รอช่างแก้" : "รอตรวจ";
+    let look: Look =
+      r.status === "APPROVED" ? "APPROVED" : r.status === "REJECTED" ? "REJECTED" : r.status === "DECLINED" ? "DECLINED" : "PENDING";
+    let label =
+      r.status === "APPROVED"
+        ? "อนุมัติ"
+        : r.status === "REJECTED"
+          ? "ตีกลับ · รอช่างแก้"
+          : r.status === "DECLINED"
+            ? "ปิดเคลม ไม่ส่งผู้ขาย"
+            : "รอตรวจ";
     if (r.status === "REJECTED" && !latest) {
       look = "OLD";
       label = "ตีกลับ · ส่งใหม่แล้ว";
@@ -303,6 +323,8 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
       pending: pieces(latestRows.filter((r) => r.status === "PENDING")),
       approved: pieces(latestRows.filter((r) => r.status === "APPROVED")),
       rejected: pieces(latestRows.filter((r) => r.status === "REJECTED")),
+      // คีย์ใหม่ (ก้อน 3) — คีย์เดิมค่าเท่าเดิม แอปที่ยังไม่รู้จัก declined ไม่พัง
+      declined: pieces(latestRows.filter((r) => r.status === "DECLINED")),
       total: pieces(latestRows),
       orders: new Set(latestRows.map((r) => r.workOrderId)).size,
     },
@@ -311,6 +333,7 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
       PENDING: inRounds.filter((r) => r.status === "PENDING").length,
       APPROVED: inRounds.filter((r) => r.status === "APPROVED").length,
       REJECTED: inRounds.filter((r) => r.status === "REJECTED").length,
+      DECLINED: inRounds.filter((r) => r.status === "DECLINED").length,
     },
   };
 }
@@ -327,7 +350,7 @@ async function brandOptions(scope: Prisma.WorkOrderWhereInput) {
 
 /**
  * GET /api/part-claims — รายการเคลม + ตัวเลขสรุป
- * ?from&to (YYYY-MM-DD วันที่ส่งเคลม เวลาไทย · ไม่ส่ง = ไม่จำกัด) &status=ALL|PENDING|APPROVED|REJECTED &brand &q
+ * ?from&to (YYYY-MM-DD วันที่ส่งเคลม เวลาไทย · ไม่ส่ง = ไม่จำกัด) &status=ALL|PENDING|APPROVED|REJECTED|DECLINED &brand &q
  * &rounds=latest|all &branchCode &machineCode (ตรงตัว) &limit &offset|before
  * rest = แถวที่ยังเหลือหลังหน้านี้ (ปุ่ม "แสดงเพิ่ม" ดูจากตัวนี้ ไม่ใช่ total − ที่มี ซึ่งรวมเคลมใหม่ที่อยู่บนสุด)
  */
@@ -375,6 +398,158 @@ router.get("/pending-count", requireAuth, async (req: AuthRequest, res) => {
   res.json({ pending });
 });
 
+// ── กล่องงานตรวจเคลม (เคลมก้อน 6) ─────────────────────────────
+
+/**
+ * ใบที่รอตรวจเคลม = แถวรอตรวจของใบที่อยู่ขั้นตรวจเคลม — คำตอบเดียวของทั้งรายการและตัวเลขข้างเมนู "ตรวจเคลม"
+ * (ตัวเลขข้างเมนูกับหัวรายการ "x ใบ · y ชิ้น" ต้องเท่ากันเสมอ — สองที่นับคนละแบบเคยทำให้คนตรวจงงว่าหายไปไหนหนึ่งใบ)
+ * นับใบทดสอบด้วย ต่างจากประวัติเคลมกับ /pending-count: ใบทดสอบก็ต้องมีคนกดตรวจถึงจะจบ ถ้าซ่อนไว้มันค้างอยู่ในระบบเงียบ ๆ
+ * (รายการติดป้าย "ใบทดสอบ" ให้เห็น)
+ */
+const QUEUE_WHERE: Prisma.PartClaimWhereInput = { status: "PENDING", workOrder: { status: "CLAIM_REVIEW" } };
+const REVIEWERS_ONLY = "ตรวจเคลมได้เฉพาะ Admin Spare Part";
+
+/**
+ * Admin Spare Part กับ Super Admin เท่านั้น (คนตัดสินเคลม — กติกาเดียวกับ canReviewClaims ใน routes/workOrders.ts)
+ * Super Admin ที่ดูในฐานะ Admin Spare Part ผ่าน (โทเคนเป็นของคนที่ถูกดู) — อ่านได้ หน้าจอเป็นแบบดูอย่างเดียว
+ * ส่วนการตัดสินโดน middleware กันอยู่แล้ว (viewAsReadOnly)
+ */
+function reviewerOnly(req: AuthRequest, res: Response): boolean {
+  if (req.auth?.partsAdmin || req.auth?.superAdmin) return true;
+  res.status(403).json({ error: REVIEWERS_ONLY });
+  return false;
+}
+
+/** วันตามปฏิทินไทยระหว่างวันนั้นกับวันนี้ — ส่งเมื่อวาน 23:00 = 1 วัน (กติกาเดียวกับ daysSince ฝั่งแอป) */
+function daysAgo(at: Date): number {
+  return Math.max(0, Math.round((Date.parse(`${bangkokDay()}T00:00:00Z`) - Date.parse(`${bangkokDay(at)}T00:00:00Z`)) / DAY_MS));
+}
+
+/**
+ * GET /api/part-claims/queue — ใบที่รอตรวจเคลม เรียงจากที่รอนานที่สุด (ส่งรอบล่าสุดเก่าสุดก่อน)
+ *
+ * แต่ละใบบอกสิ่งที่คนตรวจอยากรู้ก่อนเปิด: ชิ้นอะไร · ใครส่ง · รอบที่เท่าไหร่ · รอมานานเท่าไหร่ และป้ายเตือนสามอย่าง
+ * (รหัสตัวเสียไม่ตรงกับอะไหล่ที่เปลี่ยนใส่ · สาขาหมดประกัน · เครื่องนี้เคยเคลมมาก่อน) — ตัวเดียวกับที่หน้าตรวจเคลมขึ้นในใบ
+ * round = รอบสูงสุดของชิ้นที่รอตรวจ (นับต่อชิ้น — 2 ชิ้นถูกตีกลับครั้งเดียว = รอบ 2 ไม่ใช่ 3 · claimRoundOf)
+ * waitingSince = ส่งรอบนี้เมื่อไหร่ (แถวรอตรวจล่าสุด) · firstSubmittedAt = ส่งครั้งแรกของห่วงโซ่ตีกลับ → ส่งใหม่
+ * อ่านอย่างเดียว ไม่มี transaction · ถามฐานข้อมูลสองรอบ (แถวรอตรวจ แล้วทุกอย่างของใบเหล่านั้นพร้อมกัน)
+ */
+router.get("/queue", requireAuth, async (req: AuthRequest, res) => {
+  if (!reviewerOnly(req, res)) return;
+  const pending = await prisma.partClaim.findMany({
+    where: QUEUE_WHERE,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      workOrderId: true,
+      sparePartId: true,
+      partCode: true,
+      partName: true,
+      brokenPartCode: true,
+      quantity: true,
+      status: true,
+      createdById: true,
+      createdAt: true,
+      branchCode: true,
+      branchName: true,
+      machineCode: true,
+      brand: true,
+    },
+  });
+  const woIds = [...new Set(pending.map((p) => p.workOrderId))];
+  const userIds = [...new Set(pending.map((p) => p.createdById).filter((x): x is number => x !== null))];
+  const [orders, siblings, reopens, users, repeats] = await Promise.all([
+    prisma.workOrder.findMany({
+      where: { id: { in: woIds } },
+      select: {
+        id: true,
+        code: true,
+        isTest: true,
+        branch: { select: { code: true, openedAt: true, warrantyExpiresAt: true } },
+        machine: { select: { type: true, brand: true, model: true } },
+      },
+    }),
+    // ทุกแถวของใบเหล่านั้น — รอบที่เท่าไหร่/ส่งครั้งแรกเมื่อไหร่ ต้องนับจากแถวก่อนหน้าที่ถูกตีกลับด้วย
+    prisma.partClaim.findMany({
+      where: { workOrderId: { in: woIds } },
+      select: { id: true, workOrderId: true, sparePartId: true, partCode: true, status: true, createdAt: true },
+    }),
+    // เปิดใบใหม่ = งานซ่อมครั้งใหม่ รอบเริ่มนับใหม่
+    prisma.workOrderLog.findMany({
+      where: { workOrderId: { in: woIds }, action: "REOPENED" },
+      select: { workOrderId: true, action: true, createdAt: true },
+    }),
+    prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, employeeCode: true } }),
+    claimRepeatsOf(woIds),
+  ]);
+  const orderById = new Map(orders.map((o) => [o.id, o]));
+  const userById = new Map(users.map((u) => [u.id, u]));
+  const group = <T extends { workOrderId: number }>(list: T[]) => {
+    const m = new Map<number, T[]>();
+    for (const x of list) m.set(x.workOrderId, [...(m.get(x.workOrderId) ?? []), x]);
+    return m;
+  };
+  const pendingBy = group(pending);
+  const siblingsBy = group(siblings);
+  const reopensBy = group(reopens);
+
+  const rows = woIds
+    .map((woId) => {
+      const o = orderById.get(woId);
+      const parts = pendingBy.get(woId) ?? [];
+      if (!o || !parts.length) return null;
+      const all = siblingsBy.get(woId) ?? [];
+      const logs = reopensBy.get(woId) ?? [];
+      const latest = parts.reduce((a, b) => (b.createdAt > a.createdAt || (+b.createdAt === +a.createdAt && b.id > a.id) ? b : a));
+      const tech = latest.createdById ? userById.get(latest.createdById) : undefined;
+      const make = machineMake(o.machine);
+      const expired = isWarrantyExpired(warrantyEndFor(o.branch.openedAt, o.branch.warrantyExpiresAt, make));
+      return {
+        workOrderId: woId,
+        code: o.code,
+        isTest: o.isTest,
+        branchCode: latest.branchCode,
+        branchName: latest.branchName,
+        machineCode: latest.machineCode,
+        machineType: o.machine?.type ?? null,
+        brand: latest.brand ?? make,
+        parts: parts.map((p) => ({
+          claimId: p.id,
+          sparePartId: p.sparePartId,
+          partCode: p.partCode,
+          partName: p.partName,
+          brokenPartCode: p.brokenPartCode,
+          quantity: p.quantity,
+        })),
+        techName: tech?.name ?? null,
+        techCode: tech?.employeeCode ?? null,
+        round: Math.max(...parts.map((p) => claimRoundOf(p, all, repairStartFor(p.createdAt, logs)))),
+        waitingSince: latest.createdAt,
+        firstSubmittedAt: new Date(Math.min(...parts.map((p) => firstSubmittedAt(p, all, repairStartFor(p.createdAt, logs)).getTime()))),
+        flags: {
+          brokenMismatch: parts.filter(brokenMismatch).length,
+          // สาขาบริษัทไม่มีประกันอยู่แล้ว — ไม่ขึ้นว่า "หมดประกัน" (แบบเดียวกับหน้าตรวจเคลม) · ไม่รู้วันเปิดร้าน = ไม่เตือน
+          outOfWarranty: !isCompanyBranch(o.branch.code) && expired === true,
+          repeat: (repeats.get(woId) ?? []).map((r) => ({ partCode: r.partCode, daysAgo: daysAgo(r.createdAt), workOrderCode: r.code })),
+        },
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => a.waitingSince.getTime() - b.waitingSince.getTime() || a.workOrderId - b.workOrderId);
+
+  res.json({ orders: rows.length, parts: rows.reduce((n, r) => n + r.parts.length, 0), rows });
+});
+
+/**
+ * GET /api/part-claims/queue-count — ตัวเลขข้างเมนู "ตรวจเคลม {x} ใบ" และการ์ดในงานของฉัน (เบา: นับอย่างเดียว)
+ * แถวชุดเดียวกับ /queue (QUEUE_WHERE) ตัวเลขจึงเท่าหัวรายการเสมอ
+ */
+router.get("/queue-count", requireAuth, async (req: AuthRequest, res) => {
+  if (!reviewerOnly(req, res)) return;
+  const rows = await prisma.partClaim.findMany({ where: QUEUE_WHERE, select: { workOrderId: true } });
+  res.json({ orders: new Set(rows.map((r) => r.workOrderId)).size, parts: rows.length });
+});
+
 /**
  * จำนวนเคลมของสาขา/เครื่องนี้ทั้งหมด (รอบล่าสุด ทุกช่วงเวลา) — ตัวเลขบนลิงก์ในหน้าใบงาน
  * ไว้ดูว่าเครื่องเดิมเคลมชิ้นเดิมซ้ำไหม · เลขเครื่องซ้ำกันข้ามสาขา (W1 มีทุกร้าน) จึงนับเครื่องภายในสาขาเสมอ
@@ -405,7 +580,13 @@ router.get("/related", requireAuth, async (req: AuthRequest, res) => {
 
 // ── Excel ─────────────────────────────────────────────
 
-const STATUS_TEXT: Record<string, string> = { ALL: "ทุกสถานะ", PENDING: "รอตรวจ", APPROVED: "อนุมัติ", REJECTED: "ตีกลับ" };
+const STATUS_TEXT: Record<string, string> = {
+  ALL: "ทุกสถานะ",
+  PENDING: "รอตรวจ",
+  APPROVED: "อนุมัติ",
+  REJECTED: "ตีกลับ",
+  DECLINED: "ปิดเคลม ไม่ส่งผู้ขาย",
+};
 const thaiYmd = (s: string) => thaiDateTime(bkkDayStart(s), false);
 
 /** บอกในไฟล์ว่ากรองอะไรไว้ — ไฟล์ถูกส่งต่อ คนที่เปิดต้องรู้ว่าทำไมไม่เห็นบางชิ้น */
@@ -452,14 +633,15 @@ async function historyWorkbook(b: Built, f: Filters, scopeLabel: string): Promis
    * นับสองรอบตัวเลขจะพอง) แม้ชีตแรกจะติ๊กรวมรอบเก่าไว้
    */
   const latest = b.shown.filter((r) => r.latest);
-  const byPart = new Map<string, { r: ClaimHistoryRow; pieces: number; pending: number; approved: number; rejected: number; orders: Set<number>; machines: Set<string> }>();
+  const byPart = new Map<string, { r: ClaimHistoryRow; pieces: number; pending: number; approved: number; rejected: number; declined: number; orders: Set<number>; machines: Set<string> }>();
   for (const r of latest) {
     const k = `${r.partCode}|${r.brand ?? ""}`;
-    const g = byPart.get(k) ?? { r, pieces: 0, pending: 0, approved: 0, rejected: 0, orders: new Set<number>(), machines: new Set<string>() };
+    const g = byPart.get(k) ?? { r, pieces: 0, pending: 0, approved: 0, rejected: 0, declined: 0, orders: new Set<number>(), machines: new Set<string>() };
     g.pieces += r.quantity;
     if (r.status === "PENDING") g.pending += r.quantity;
     if (r.status === "APPROVED") g.approved += r.quantity;
     if (r.status === "REJECTED") g.rejected += r.quantity;
+    if (r.status === "DECLINED") g.declined += r.quantity;
     g.orders.add(r.workOrderId);
     g.machines.add(`${r.branchCode} ${r.machineCode ?? "—"}`);
     byPart.set(k, g);
@@ -468,11 +650,12 @@ async function historyWorkbook(b: Built, f: Filters, scopeLabel: string): Promis
   title(s2, "รวมตามอะไหล่ (รอบล่าสุด)", sub);
   table(
     s2,
-    ["รหัสอะไหล่", "ชื่ออะไหล่", "ยี่ห้อ", "ชิ้นทั้งหมด", "รอตรวจ", "อนุมัติ", "ตีกลับ", "จำนวนใบงาน", "สาขา · เครื่อง"],
+    // "ปิดเคลม ไม่ส่งผู้ขาย" ต่อท้ายเป็นคอลัมน์สุดท้าย (ก้อน 3) — ไฟล์/สูตรที่อ่านคอลัมน์เดิมตามตำแหน่งยังตรง
+    ["รหัสอะไหล่", "ชื่ออะไหล่", "ยี่ห้อ", "ชิ้นทั้งหมด", "รอตรวจ", "อนุมัติ", "ตีกลับ", "จำนวนใบงาน", "สาขา · เครื่อง", "ปิดเคลม ไม่ส่งผู้ขาย"],
     [...byPart.values()]
       .sort((a, b) => b.pieces - a.pieces || a.r.partCode.localeCompare(b.r.partCode))
       .map((g) => [
-        g.r.partCode, g.r.partName, g.r.brand ?? "—", g.pieces, g.pending, g.approved, g.rejected, g.orders.size, [...g.machines].join(", "),
+        g.r.partCode, g.r.partName, g.r.brand ?? "—", g.pieces, g.pending, g.approved, g.rejected, g.orders.size, [...g.machines].join(", "), g.declined,
       ])
   );
   return Buffer.from(await wb.xlsx.writeBuffer());

@@ -3,6 +3,7 @@
 #   · GET /work-orders/:id/version = เลขประวัติล่าสุด + ใครทำ · เปลี่ยนอะไรก็ขยับ
 #   · PATCH พร้อม expectedVersion: คนอื่นแก้ไปก่อน → 409 บอกชื่อ ไม่บันทึกทับ · ของตัวเองไม่นับ · ไม่ส่งมา = ไม่เช็ค
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001)
@@ -50,7 +51,8 @@ PATCH $S $ID '{"contactName":"ไม่ส่งรุ่น"}' >/dev/null
 
 echo
 echo "═══ กดขั้นตอนที่คนอื่นทำไปแล้ว → 409"
-PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fx_part) — ไม่งั้นการระบุอะไหล่ถูกปฏิเสธ ใบไม่เดินขั้น แล้วข้อ 409 พังทั้งที่เรื่องที่ทดสอบไม่ได้ผิด
+PID=$(fx_part $ID BOARD)
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$PID,\"quantity\":1}]}" >/dev/null
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"needsParts":false}')" = 409 ] \
   && pass "ขั้นเดินไปแล้ว กดขั้นเดิมซ้ำ → 409 (แอปจับแล้วโหลดใหม่)" || fail "ไม่ได้ 409"

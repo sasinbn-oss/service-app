@@ -64,6 +64,7 @@ const SHEET_TITLE: Record<string, string> = {
   ConsumableRequest: "คำขอเบิกของ",
   BranchCheckIn: "รายงานตัวเข้าสาขา",
   WorkLog: "บันทึกการทำงาน",
+  AppSetting: "ตั้งค่าระบบ",
 };
 
 const models = () => Prisma.dmmf.datamodel.models.filter((m) => !SKIP_MODELS.has(m.name));

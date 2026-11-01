@@ -1,246 +1,32 @@
 /**
- * ข้อมูลเครื่องสำหรับเคลม — ป้ายรุ่น (ถ่ายรูปทั้งป้ายให้ระบบอ่าน/พิมพ์เอง) + เช็คตามคู่มือ Error in Field (เจ้าของงานขอ ต.ค. 69)
+ * ข้อมูลเครื่องในใบเคลม — ชนิดข้อมูลที่ฟอร์มปิดงานถือ (ป้ายรุ่น · Error) + สรุปที่การ์ดเคลมแสดง + ข้อเช็คตาม Error
  *
- * ขึ้นในฟอร์มปิดงานเมื่อมีอะไหล่ที่ส่งเคลม ใช้ร่วมทุกชิ้น (เครื่องเดียวกัน) · ส่งต่อให้ Admin Spare Part
- * ช่าง "แค่เก็บข้อมูลและเช็คตามรายการ" — ไม่มีการตัดสินว่ารับประกันหรือไม่ ทีมถัดไปคุยกับประกันเอง
- * รายการทั้งหมดมาจากเซิร์ฟเวอร์ (claimGuide) — ยี่ห้อที่ไม่มีคู่มือ (OASIS ฯลฯ) มีแค่ข้อมูลป้าย
+ * ฟอร์มกรอกข้อมูลเครื่องย้ายไปเป็นขั้น "เครื่อง" ของฟอร์มปิดงานทีละขั้น (components/close/MachineStep · เคลมก้อน 5)
+ * เดิมกล่องนี้อยู่ท้ายฟอร์มยาว ติ๊กครั้งเดียว "ดูทุกช่องเทียบกับรูปแล้ว" — ตอนนี้ยืนยันทีละช่อง (PlateConfirm)
+ * ไฟล์นี้เหลือของที่หลายที่ใช้ร่วมกัน: ชนิดข้อมูล · ข้อเช็คตาม Error (ฟอร์ม/ฟอร์มแก้เคลม) · สรุปบนการ์ดเคลม
  */
-import React, { useState } from "react";
-import { Image, StyleSheet, Text, TextInput, View } from "react-native";
+import React from "react";
+import { Image, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
-import Dropdown from "./Dropdown";
-import { ClaimGuide, PlateValue, plateFields } from "../utils/nameplate";
-import { readPlatePhoto } from "../utils/ocr";
-import { filesToAttachments, pickImageAttachment, type PickedAttachment } from "../utils/attachments";
-import FileDropZone from "./FileDropZone";
+import { ClaimGuide, PlateValue } from "../utils/nameplate";
+import ClaimCrop, { LookalikeText } from "./claims/ClaimCrop";
+import CheckGroups from "./claims/CheckGroups";
+import { errorCheckGroup, errorLabelOf, hasLookalike, isLegacyPlate, plateSourceText, type PartClaim } from "../utils/claimEvidence";
+import { checkLabel } from "../utils/claimErrors";
 import { colors, radius, spacing } from "../theme";
 
+/**
+ * Error ที่เครื่องขึ้น (ของเครื่อง ใช้ร่วมทุกชิ้น) · checked = ข้อเช็คของใบเก่าที่ติ๊กรวมทั้งใบ
+ * ตั้งแต่เคลมก้อน 5 ข้อเช็คติ๊กทีละชิ้น (ClaimPartDraft.errorChecked) — checked ใช้แค่กับร่าง/ใบรุ่นก่อน
+ */
 export interface ClaimCheckDraft {
   errorCode: string | null;
   checked: string[];
 }
+/** ค่าป้ายรุ่นทีละช่อง พร้อมสถานะยืนยัน (PlateValue.confirmed) — ไม่มีติ๊กรวมทั้งชุดแล้ว */
 export interface PlateDraft {
   values: Record<string, PlateValue>;
-  /** ช่างติ๊กว่าดูค่าที่ระบบอ่านเทียบกับรูปแล้ว — ติ๊กครั้งเดียวทั้งชุด อ่านรูปใหม่แล้วต้องติ๊กใหม่ */
-  verified: boolean;
-  /** รูปป้ายเต็มที่ถ่ายรอบนี้ (ขึ้นเป็นไฟล์ "ป้ายรุ่น" ตอนปิดงาน) */
-  photo?: PickedAttachment | null;
-}
-
-/** สิ่งที่ยังขาด — ตรงกับที่เซิร์ฟเวอร์เช็ค บอกก่อนกดปิดงาน */
-export function claimMachineGaps(guide: ClaimGuide | undefined, plate: PlateDraft, check: ClaimCheckDraft): string[] {
-  if (!guide) return [];
-  const fields = plateFields(guide.plate);
-  const filled = fields.filter((f) => plate.values[f.key]?.value?.trim());
-  const scanned = filled.some((f) => plate.values[f.key].source === "SCAN");
-  return [
-    ...(filled.length ? [] : ["ข้อมูลป้ายรุ่น"]),
-    ...(scanned && !plate.verified ? ["ติ๊กตรวจค่ากับรูปป้าย"] : []),
-    ...(guide.errors.length && !check.errorCode ? ["Error ที่เครื่องขึ้น"] : []),
-  ];
-}
-
-export default function ClaimMachineBox({
-  guide,
-  registryModel,
-  plate,
-  onPlate,
-  check,
-  onCheck,
-  onPhoto,
-}: {
-  guide: ClaimGuide;
-  registryModel?: string | null;
-  plate: PlateDraft;
-  onPlate: (next: PlateDraft) => void;
-  check: ClaimCheckDraft;
-  onCheck: (next: ClaimCheckDraft) => void;
-  /** รูปป้ายที่ถ่ายใช้เป็นรูป "ป้ายรุ่น" ของการปิดงานด้วย — ไม่ต้องถ่ายสองรอบ */
-  onPhoto: (photo: PickedAttachment) => void;
-}) {
-  const [stage, setStage] = useState<string | null>(null);
-  const [readErr, setReadErr] = useState<string | null>(null);
-  const fields = plateFields(guide.plate);
-  const err = guide.errors.find((e) => e.code === check.errorCode);
-  const scanned = fields.some((f) => plate.values[f.key]?.source === "SCAN" && plate.values[f.key]?.value);
-  const missed = plate.photo ? fields.filter((f) => !plate.values[f.key]?.value) : [];
-
-  async function shoot(pick: (onStage: (label: string) => void) => Promise<PickedAttachment | null>) {
-    setReadErr(null);
-    const photo = await pick(setStage);
-    if (!photo) return setStage(null);
-    onPhoto(photo);
-    try {
-      const read = await readPlatePhoto(photo.uri, guide.plate, registryModel, setStage);
-      // ค่าที่อ่านได้ทับเฉพาะช่องนั้น ช่องที่อ่านไม่ได้ยังเป็นค่าเดิม (อาจพิมพ์ไว้แล้ว) · อ่านใหม่ต้องตรวจใหม่
-      onPlate({ values: { ...plate.values, ...read }, verified: false, photo });
-    } catch (e) {
-      onPlate({ ...plate, photo });
-      setReadErr(e instanceof Error ? e.message : "อ่านป้ายไม่สำเร็จ — พิมพ์เองจากรูปได้");
-    } finally {
-      setStage(null);
-    }
-  }
-
-  // ความละเอียดแบบรูปถ่าย ไม่ใช่แบบเอกสาร (ไม่ส่ง doc) — ตัวอ่านป้ายตั้งค่าไว้กับรูปกว้าง 1600
-  // ลองให้รูปกว้าง 2400 แล้วอ่านรหัสรุ่นผิด (เทสต์ claim-web ต.ค. 69) · ลากมาหลายรูปใช้รูปแรก (ป้ายมีป้ายเดียว)
-  const dropped = (files: File[]) =>
-    shoot(async (s) => (await filesToAttachments(files.slice(0, 1), { image: true }, s))[0] ?? null);
-
-  return (
-    <FileDropZone style={styles.box} label="ข้อมูลเครื่องสำหรับเคลม" hint="รูปป้ายรุ่น 1 รูป" disabled={!!stage} onFiles={dropped}>
-      <Text style={styles.title}>ข้อมูลเครื่องสำหรับเคลม</Text>
-      <Text style={styles.hint}>ใช้ร่วมทุกชิ้นที่ส่งเคลม · ส่งให้ Admin Spare Part</Text>
-
-      {/* ── ป้ายรุ่น ── */}
-      <Text style={[styles.label, { marginTop: spacing.sm }]}>
-        ข้อมูลป้ายรุ่น <Text style={{ color: colors.danger }}>*</Text>
-      </Text>
-      <Text style={styles.hint}>ถ่ายรูปให้เห็นทั้งป้าย ตรง ๆ ไม่เอียง ไม่มีแสงสะท้อน — ระบบอ่านเลขให้เอง อ่านไม่ได้ก็พิมพ์เองได้</Text>
-      <View style={styles.btnRow}>
-        <TouchableOpacity
-          style={[styles.scanBtn, stage && styles.scanBusy]}
-          onPress={() => shoot((s) => pickImageAttachment(true, s))}
-          disabled={!!stage}
-          activeOpacity={0.8}
-          accessibilityLabel="ถ่ายรูปป้ายรุ่น"
-        >
-          <Ionicons name="camera" size={16} color="#fff" />
-          <Text style={styles.scanText}>{plate.photo ? "ถ่ายใหม่" : "ถ่ายรูปป้ายรุ่น"}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.pickBtn}
-          onPress={() => shoot((s) => pickImageAttachment(false, s))}
-          disabled={!!stage}
-          activeOpacity={0.8}
-          accessibilityLabel="เลือกรูปป้ายรุ่น"
-        >
-          <Ionicons name="images-outline" size={16} color={colors.primaryInk} />
-          <Text style={styles.pickText}>เลือกรูป</Text>
-        </TouchableOpacity>
-      </View>
-      {stage ? (
-        <Text style={styles.stage} accessibilityLabel="สถานะอ่านป้าย">
-          {stage}…
-        </Text>
-      ) : null}
-      {readErr ? <Text style={styles.readErr}>{readErr}</Text> : null}
-      {plate.photo ? (
-        <Image
-          source={{ uri: plate.photo.thumbnailUri ?? plate.photo.uri }}
-          style={styles.photo}
-          resizeMode="contain"
-          accessibilityLabel="รูปป้ายรุ่นเต็ม"
-        />
-      ) : null}
-      {plate.photo && !stage && missed.length ? (
-        <Text style={styles.hint}>อ่านไม่ได้: {missed.map((f) => f.label).join(" · ")} — พิมพ์เองจากรูปด้านบนได้</Text>
-      ) : null}
-      {fields.map((f) => {
-        const v = plate.values[f.key];
-        return (
-          <View key={f.key} style={styles.field}>
-            <View style={styles.fieldHead}>
-              <Text style={styles.fieldLabel}>{f.label}</Text>
-              {v?.value ? (
-                v.source === "SCAN" ? (
-                  <Text style={[styles.tag, styles.tagScan]}>อ่านจากรูป</Text>
-                ) : (
-                  <Text style={[styles.tag, styles.tagHand]}>พิมพ์เอง</Text>
-                )
-              ) : null}
-            </View>
-            <View style={styles.fieldRow}>
-              {v?.crop ? <Image source={{ uri: v.crop }} style={styles.crop} resizeMode="contain" /> : null}
-              <TextInput
-                style={[styles.input, v?.needsCheck && v.source === "SCAN" && styles.inputDoubt]}
-                value={v?.value ?? ""}
-                onChangeText={(t) =>
-                  onPlate({
-                    // แก้เองแล้วไม่ใช่ค่าที่ระบบอ่าน — ภาพตัดเดิมไม่ตรงกับค่าแล้ว ทิ้งไป
-                    ...plate,
-                    values: { ...plate.values, [f.key]: { value: t.toUpperCase(), source: "HAND", crop: null } },
-                  })
-                }
-                autoCapitalize="characters"
-                placeholder={`พิมพ์${f.label}จากป้าย`}
-                placeholderTextColor={colors.textFaint}
-                accessibilityLabel={`ป้ายรุ่น ${f.label}`}
-              />
-            </View>
-            {v?.needsCheck && v.source === "SCAN" && v.value ? (
-              <Text style={styles.doubt}>
-                {/* รุ่นเต็มที่ขึ้นต้นตรงทะเบียนแล้ว — ที่ไม่มั่นใจคือส่วนท้าย ไม่ใช่ "ไม่ตรงทะเบียน" */}
-                {f.model && registryModel
-                  ? v.value.startsWith(registryModel.toUpperCase())
-                    ? "ส่วนท้ายรุ่นเต็มอ่านได้ไม่ตรงกันทุกรอบ — "
-                    : `ไม่ตรงทะเบียน (${registryModel}) — `
-                  : ""}
-                ระบบไม่มั่นใจ ดูกับรูปให้ดี (ระวัง O/0 · S/5 · I/1 · 2/9 · 6/E)
-              </Text>
-            ) : null}
-          </View>
-        );
-      })}
-      {scanned ? (
-        <TouchableOpacity
-          style={[styles.verify, plate.verified && styles.verifyOn]}
-          onPress={() => onPlate({ ...plate, verified: !plate.verified })}
-          activeOpacity={0.7}
-          accessibilityLabel="ตรวจค่ากับรูปป้ายแล้ว"
-        >
-          <Ionicons
-            name={plate.verified ? "checkbox" : "square-outline"}
-            size={20}
-            color={plate.verified ? colors.primary : colors.warningInk}
-          />
-          <Text style={styles.verifyText}>ดูทุกช่องเทียบกับรูปแล้ว ถูกต้อง</Text>
-        </TouchableOpacity>
-      ) : null}
-
-      {/* ── เช็คตามคู่มือ (เฉพาะยี่ห้อที่มีคู่มือ) ── */}
-      {guide.errors.length ? (
-        <>
-          <Text style={[styles.label, { marginTop: spacing.md }]}>
-            Error ที่เครื่องขึ้น (คู่มือ Error in Field) <Text style={{ color: colors.danger }}>*</Text>
-          </Text>
-          <Dropdown
-            value={check.errorCode}
-            options={guide.errors.map((e) => ({ value: e.code, label: `${e.code} · ${e.name}` }))}
-            onChange={(v) => onCheck({ ...check, errorCode: v, checked: [] })}
-            placeholder="เลือก Error"
-            accessibilityLabel="Error ที่เครื่องขึ้น"
-          />
-          {err?.checks.length ? (
-            <>
-              <Text style={styles.hint}>คู่มือให้ดูข้อเหล่านี้ก่อนเปลี่ยนอะไหล่ — ติ๊กข้อที่เช็คแล้ว</Text>
-              {err.checks.map((c) => {
-                const on = check.checked.includes(c);
-                return (
-                  <TouchableOpacity
-                    key={c}
-                    style={styles.checkRow}
-                    onPress={() => onCheck({ ...check, checked: on ? check.checked.filter((x) => x !== c) : [...check.checked, c] })}
-                    activeOpacity={0.7}
-                    accessibilityLabel={`เช็คแล้ว ${c}`}
-                  >
-                    <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? colors.primary : colors.textFaint} />
-                    <Text style={styles.checkText}>{c}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </>
-          ) : null}
-        </>
-      ) : (
-        <Text style={[styles.hint, { marginTop: spacing.sm }]}>
-          ยี่ห้อนี้ไม่มีคู่มือเกณฑ์เคลม — ข้อมูลป้ายรุ่น + รูปอะไหล่ที่เสียด้านบนส่งให้ Admin Spare Part
-        </Text>
-      )}
-
-    </FileDropZone>
-  );
 }
 
 const styles = StyleSheet.create({
@@ -290,7 +76,7 @@ const styles = StyleSheet.create({
   tagScan: { color: colors.successInk, backgroundColor: colors.successSoft },
   tagHand: { color: colors.roleAdmin, backgroundColor: colors.roleAdminSoft },
   fieldRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  crop: { width: 120, height: 26, borderRadius: 4, backgroundColor: colors.tile },
+  modelValue: { fontSize: 20, lineHeight: 30, fontWeight: "800", letterSpacing: 2, fontFamily: "monospace", color: colors.text },
   input: {
     flex: 1,
     minWidth: 0,
@@ -319,7 +105,8 @@ const styles = StyleSheet.create({
   },
   verifyOn: { borderColor: colors.sky200, backgroundColor: colors.primarySoft },
   verifyText: { flex: 1, fontSize: 13, fontWeight: "700", color: colors.text },
-  checkRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
+  // สูง 48 — ช่างติ๊กด้วยนิ้วโป้งตอนยืนหน้าเครื่อง (ตัวอย่างที่เจ้าของงานเลือกใช้ 48 ทุกปุ่ม)
+  checkRow: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48 },
   checkText: { flex: 1, fontSize: 13, color: colors.text },
   install: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 4 },
   installText: { flex: 1, minWidth: 0, fontSize: 13, color: colors.text },
@@ -328,32 +115,91 @@ const styles = StyleSheet.create({
   sumRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   sumLabel: { width: 110, fontSize: 12.5, color: colors.textMuted },
   sumValue: { fontSize: 13.5, fontWeight: "800", color: colors.text, fontFamily: "monospace" },
+  sumModel: { fontSize: 15, lineHeight: 24, letterSpacing: 1 },
   sumPhoto: { width: "100%", height: 200, borderRadius: radius.sm, backgroundColor: colors.card },
   link: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
-  sumCrop: { width: 140, height: 28, borderRadius: 4, backgroundColor: colors.card },
+  sumCrop: { backgroundColor: colors.card },
   ans: { fontSize: 12.5, fontWeight: "800", color: colors.textMuted },
   // "มี" เด่นขึ้นให้ผู้ตรวจไม่พลาด — แต่ไม่ใช้สีแดง เพราะระบบไม่ได้ตัดสินว่าไม่รับประกัน
   ansYes: { color: colors.warningInk },
 });
 
 /**
- * สรุปข้อมูลเครื่องในการ์ดเคลม (Admin Spare Part ตรวจ / ทุกคนที่เปิดดู) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
+ * ข้อเช็คตามคู่มือของ Error ที่เลือก — ติ๊กข้อที่ทำ (ระบบไม่ติ๊กให้ · เจ้าของงานตอบข้อ 7)
+ *
+ * ทีละชิ้น (เคลมก้อน 5): ใช้ในข้อ ④ ของแต่ละชิ้น และในฟอร์มแก้เคลมช่อง "ช่างเข้าเช็คอะไรบ้าง" ของชิ้นนั้น
+ * ใช้ได้ตอนข้อมูลเครื่องล็อกด้วย (มีชิ้นผ่านแล้ว) — Error ห้ามเปลี่ยน แต่ข้อที่เช็คเป็นของการปิดครั้งนี้
+ * ชื่อที่แสดงทับศัพท์คำอังกฤษ (checkLabel) แต่ค่าที่เก็บคือข้อความเดิมในคู่มือ
+ */
+export function ErrorCheckList({
+  guide,
+  errorCode,
+  checked,
+  onChange,
+  partCode,
+}: {
+  guide: ClaimGuide;
+  errorCode: string | null;
+  checked: string[];
+  onChange: (next: string[]) => void;
+  /** ต่อท้ายชื่อช่องติ๊กสำหรับโปรแกรมอ่านจอ/เทสต์ — ใบที่เคลมสองชิ้นมีข้อเช็คชื่อเดียวกันสองชุด */
+  partCode?: string;
+}) {
+  const err = guide.errors.find((e) => e.code === errorCode);
+  if (!err?.checks.length) return null;
+  return (
+    <>
+      {err.checks.map((c) => {
+        const on = checked.includes(c);
+        return (
+          <TouchableOpacity
+            key={c}
+            style={styles.checkRow}
+            onPress={() => onChange(on ? checked.filter((x) => x !== c) : [...checked, c])}
+            activeOpacity={0.7}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: on }}
+            // เว็บไม่แปลง accessibilityState เป็น aria-checked — ใส่เอง (ดู Tick ใน RejectPanel)
+            aria-checked={on}
+            accessibilityLabel={`เช็คแล้ว ${c}${partCode ? ` ${partCode}` : ""}`}
+          >
+            <Ionicons name={on ? "checkbox" : "square-outline"} size={20} color={on ? colors.primary : colors.textFaint} />
+            <Text style={styles.checkText}>{checkLabel(err, c)}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * สรุปข้อมูลเครื่องในการ์ดเคลม (ทุกคนที่เปิดดูใบงาน · ผู้ตรวจใช้หน้าตรวจเคลมแทน) — ค่าที่สแกนวางคู่ภาพบรรทัดจริง
+ * ป้ายที่มาบอกเท่าที่ช่างทำจริง (อ่านจากรูป/ยืนยัน/แก้กี่ตัว) และตัวที่หน้าตาคล้ายกันในรุ่นพื้นเหลือง ให้ดูกับภาพตัดเป็นพิเศษ
+ * เช็คตาม Error ขึ้นข้อที่ทำ ✓ · คนตัดสินเคลมเห็นข้อที่ไม่ได้ทำ ✗ ด้วย (ระบบไม่ติ๊กให้ช่าง จึงต้องเห็นว่าข้อไหนข้ามไป)
  * คำตอบเรื่องติดตั้งแสดงตามที่ช่างตอบพร้อมหมายเหตุจากคู่มือ ไม่ตัดสินผลเอง (ทีมที่คุยกับประกันตัดสิน)
  */
 export function ClaimMachineSummary({
   nameplate,
   fieldCheck,
   photo,
+  guide,
+  showMissed = true,
+  hideChecks = false,
 }: {
-  nameplate?: {
-    verified?: boolean;
-    fields: { key: string; label: string; value: string; source: "SCAN" | "HAND"; crop?: string | null }[];
-  } | null;
+  nameplate?: PartClaim["nameplate"];
   /** รูปป้ายเต็มที่ระบบอ่านค่ามา — กดดูขนาดเต็ม */
   photo?: { uri: string | null; open: () => void } | null;
-  fieldCheck?: { errorCode: string; errorName: string; checked: string[]; install?: { key: string; label: string; note: string; answer: boolean }[] } | null;
+  fieldCheck?: PartClaim["fieldCheck"];
+  /** รายการ Error ปัจจุบัน — ใบเก่าที่ไม่ได้เก็บข้อที่ให้ช่างเห็นไว้ ใช้รายการนี้นับข้อที่ไม่ได้ทำ */
+  guide?: ClaimGuide | null;
+  /** ขึ้นข้อที่ไม่ได้ทำ ✗ ด้วยไหม — เฉพาะคนตัดสินเคลม (ดู CheckGroups) */
+  showMissed?: boolean;
+  /** ไม่ขึ้นข้อเช็คตาม Error — ฟอร์มปิดงานที่ข้อมูลเครื่องล็อกแสดงเป็นช่องติ๊กของรอบนี้แทน (ErrorCheckList) */
+  hideChecks?: boolean;
 }) {
   if (!nameplate?.fields?.length && !fieldCheck) return null;
+  const legacy = isLegacyPlate(nameplate);
+  const eif = errorCheckGroup(fieldCheck, guide);
   return (
     <View style={styles.sum} accessibilityLabel="ข้อมูลเครื่องในใบเคลม">
       {nameplate?.fields?.length ? (
@@ -368,33 +214,32 @@ export function ClaimMachineSummary({
               )}
             </TouchableOpacity>
           ) : null}
-          {nameplate.fields.some((f) => f.source === "SCAN") ? (
+          {/* ใบที่ส่งก่อนมีปุ่มยืนยันทีละช่อง — ช่างติ๊กครั้งเดียวทั้งชุด บอกตามนั้น */}
+          {legacy && nameplate.fields.some((f) => f.source === "SCAN") ? (
             <Text style={styles.hint}>{nameplate.verified ? "ช่างติ๊กว่าตรวจค่ากับรูปแล้ว" : "ค่าที่ระบบอ่าน — ยังไม่ได้ตรวจกับรูป"}</Text>
           ) : null}
           {nameplate.fields.map((f) => (
             <View key={f.key} style={styles.sumRow}>
               <Text style={styles.sumLabel}>{f.label}</Text>
-              <Text style={styles.sumValue}>{f.value}</Text>
-              <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>
-                {f.source === "SCAN" ? "อ่านจากรูป" : "พิมพ์เอง"}
-              </Text>
-              {f.crop ? <Image source={{ uri: f.crop }} style={styles.sumCrop} resizeMode="contain" /> : null}
+              {f.key === "model" ? (
+                <LookalikeText value={f.value} label={f.label} style={styles.sumModel} />
+              ) : (
+                <Text style={styles.sumValue}>{f.value}</Text>
+              )}
+              <Text style={[styles.tag, f.source === "SCAN" ? styles.tagScan : styles.tagHand]}>{plateSourceText(f, legacy)}</Text>
+              {f.key === "model" && hasLookalike(f.value) ? <Text style={styles.hint}>พื้นเหลือง = ตัวที่หน้าตาคล้ายกัน</Text> : null}
+              {f.crop ? <ClaimCrop uri={f.crop} label={f.label} style={styles.sumCrop} /> : null}
             </View>
           ))}
         </>
       ) : null}
       {fieldCheck ? (
         <>
-          <Text style={styles.sumHead}>เช็คตามคู่มือ Error in Field</Text>
-          <Text style={styles.checkText}>
-            Error: {fieldCheck.errorCode} · {fieldCheck.errorName}
-          </Text>
-          {fieldCheck.checked.map((c) => (
-            <View key={c} style={styles.checkRow}>
-              <Ionicons name="checkmark-circle" size={15} color={colors.success} />
-              <Text style={styles.checkText}>{c}</Text>
-            </View>
-          ))}
+          <View style={styles.sumRow}>
+            <Text style={styles.sumLabel}>Error ที่เครื่องขึ้น</Text>
+            <Text style={[styles.checkText, { fontWeight: "800" }]}>{errorLabelOf(fieldCheck)}</Text>
+          </View>
+          {eif && !hideChecks ? <CheckGroups groups={[eif]} showMissed={showMissed} /> : null}
           {/* ใบเคลมก่อนเอาเช็คลิสต์ออกยังมีคำตอบ — แสดงไว้ให้ Admin Spare Part เห็นเหมือนเดิม */}
           {fieldCheck.install?.length ? <Text style={[styles.hint, { marginTop: 4 }]}>การติดตั้งฐานเครื่อง (ช่างตอบตามที่เห็น)</Text> : null}
           {(fieldCheck.install ?? []).map((c) => (

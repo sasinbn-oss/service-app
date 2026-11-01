@@ -19,16 +19,27 @@ const { setup } = require("./fixture");
   let fx = null;
   try {
     fx = await setup();
-    const BOARD = fx.part("SP-BOARD"), BELT = fx.part("SP-BELT");
-    const beltName = fx.sql(`select name from "SparePart" where id=${BELT}`);
-    const boardName = fx.sql(`select name from "SparePart" where id=${BOARD}`);
-    const parts = [{ sparePartId: BOARD, quantity: 1 }, { sparePartId: BELT, quantity: 2 }];
-    const a = await fx.workOrder("C0006", parts);
-    const b = await fx.workOrder("C0006", parts);
+    // เปิดใบแล้วหัวหน้าภาคระบุบอร์ด 1 + สายพาน 2 — ทางเดียวกับ fx.workOrder(สาขา, อะไหล่) แต่เลือกอะไหล่หลังมีใบ
+    // เพราะอะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fxPart) · คืนใบพร้อม id ที่ส่งไป (wo.BOARD / wo.BELT)
+    const withParts = async () => {
+      const wo = await fx.workOrder("C0006", null);
+      wo.BOARD = fx.fxPart(wo.id, "BOARD");
+      wo.BELT = fx.fxPart(wo.id, "BELT");
+      await fx.call(fx.supervisor(), "POST", `/work-orders/${wo.id}/parts`, {
+        needsParts: true, parts: [{ sparePartId: wo.BOARD, quantity: 1 }, { sparePartId: wo.BELT, quantity: 2 }],
+      });
+      return wo;
+    };
+    const a = await withParts();
+    const b = await withParts();
+    // ชื่อ/รหัสที่หาบนจอตามตัวที่ส่งจริง — สายพานหมดที่ใบ a · บอร์ดหมดที่ใบ b
+    const info = (id, col) => fx.sql(`select "${col}" from "SparePart" where id=${id}`);
+    const beltName = info(a.BELT, "name"), beltCode = info(a.BELT, "partCode");
+    const boardName = info(b.BOARD, "name"), boardCodeA = info(a.BOARD, "partCode");
     // ของหมดรู้ตั้งแต่ขั้นเช็คอะไหล่ (นัดลูกค้าก่อนเบิก ต.ค. 69)
     const ok = (id) => ({ sparePartId: id, inStock: true, warehouse: "คลังลาดพร้าว 94" });
-    await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-sourcing`, { expectedAt: "2026-01-05", results: [ok(BOARD), { sparePartId: BELT, inStock: false }] });
-    await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-sourcing`, { results: [{ sparePartId: BOARD, inStock: false }, ok(BELT)] });
+    await fx.call(fx.A, "POST", `/work-orders/${a.id}/parts-sourcing`, { expectedAt: "2026-01-05", results: [ok(a.BOARD), { sparePartId: a.BELT, inStock: false }] });
+    await fx.call(fx.A, "POST", `/work-orders/${b.id}/parts-sourcing`, { results: [{ sparePartId: b.BOARD, inStock: false }, ok(b.BELT)] });
     const outRows = Number(fx.sql(`select count(*) from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId"
       where p.kind='WAITING' and p."inStock"=false and not w."isTest" and w.status in ('PARTS_SOURCING','PARTS_REQUESTED','WAITING_PARTS')`));
     const outOrders = Number(fx.sql(`select count(distinct w.id) from "WorkOrderPart" p join "WorkOrder" w on w.id=p."workOrderId"
@@ -71,7 +82,7 @@ const { setup } = require("./fixture");
 
       const belt = page.locator(`[aria-label="การ์ดอะไหล่ ${beltName}"]`).locator("visible=true");
       const beltText = (await belt.count()) ? await belt.first().innerText() : "";
-      beltText.includes("● หมด") && beltText.includes("รหัส: SP-BELT") && beltText.includes(a.code) && beltText.includes("C0006") &&
+      beltText.includes("● หมด") && beltText.includes(`รหัส: ${beltCode}`) && beltText.includes(a.code) && beltText.includes("C0006") &&
       beltText.includes("ของเข้าเลยมา") && !beltText.includes(b.code)
         ? pass("การ์ดสายพาน: ชื่อ รหัส ป้ายหมด · สาขาที่รอ + เลขใบงาน · ของเข้าเลยมา (ใบที่มีของไม่อยู่ในการ์ดนี้)")
         : fail(`การ์ดสายพาน: ${beltText.replace(/\n/g, " | ").slice(0, 300)}`);
@@ -81,8 +92,8 @@ const { setup } = require("./fixture");
       await page.screenshot({ path: path.join(DIR, "parts-out-cards.png") });
 
       // ── หมายเหตุ — ผูกกับแถวสาขา+อะไหล่ (สายพานของใบ a)
-      const beltRow = Number(fx.sql(`select id from "WorkOrderPart" where "workOrderId"=${a.id} and "sparePartId"=${BELT} and kind='WAITING'`));
-      const nl = (verb) => page.locator(`[aria-label="${verb} ${a.code} C0006 SP-BELT"]`).locator("visible=true").first();
+      const beltRow = Number(fx.sql(`select id from "WorkOrderPart" where "workOrderId"=${a.id} and "sparePartId"=${a.BELT} and kind='WAITING'`));
+      const nl = (verb) => page.locator(`[aria-label="${verb} ${a.code} C0006 ${beltCode}"]`).locator("visible=true").first();
       await nl("เพิ่มหมายเหตุ").click();
       await page.waitForTimeout(400);
       await nl("ช่องหมายเหตุ").fill("สั่งผู้ขายแล้ว รอ 2 สัปดาห์");
@@ -92,7 +103,7 @@ const { setup } = require("./fixture");
         ? pass("เพิ่มหมายเหตุในการ์ดอะไหล่ → ลงฐานข้อมูลที่แถวสาขา+อะไหล่นั้น") : fail("หมายเหตุไม่ลงฐานข้อมูล");
       ((await belt.first().innerText()).includes("สั่งผู้ขายแล้ว รอ 2 สัปดาห์")) && (await nl("แก้หมายเหตุ").count()) === 1
         ? pass("หมายเหตุขึ้นใต้แถวสาขาในการ์ด พร้อมแตะเพื่อแก้") : fail("หมายเหตุไม่ขึ้นบนการ์ด");
-      (await page.locator(`[aria-label="แก้หมายเหตุ ${a.code} C0006 SP-BOARD"]`).count()) === 0
+      (await page.locator(`[aria-label="แก้หมายเหตุ ${a.code} C0006 ${boardCodeA}"]`).count()) === 0
         ? pass("หมายเหตุไม่ไปติดแถวอื่น (ตัวอื่นของสาขาเดียวกันไม่มี)") : fail("หมายเหตุไปโผล่แถวอื่น");
       await page.screenshot({ path: path.join(DIR, "parts-out-note.png") });
       await page.locator('[aria-label="แท็บตามสาขา"]').locator("visible=true").first().click();

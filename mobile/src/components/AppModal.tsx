@@ -43,6 +43,8 @@ export default function AppModal({
   width = 560,
   busy,
   bodyStyle,
+  banner,
+  scrollRef,
 }: {
   visible: boolean;
   title: React.ReactNode;
@@ -53,6 +55,13 @@ export default function AppModal({
   width?: number;
   busy?: boolean;
   bodyStyle?: StyleProp<ViewStyle>;
+  /**
+   * แถบที่ปักไว้ใต้หัวหน้าต่าง ไม่เลื่อนหายไปกับเนื้อหา — เช่น "ส่งไม่สำเร็จ" ของฟอร์มปิดงาน
+   * เดิมข้อความผิดพลาดอยู่ท้ายฟอร์มยาว ช่างที่กดปุ่มตอนอยู่กลางฟอร์มไม่เห็นว่าส่งไม่ผ่าน
+   */
+  banner?: React.ReactNode;
+  /** ให้ฟอร์มเลื่อนเนื้อหากลับขึ้นบนเองได้ (เช่น ส่งไม่สำเร็จแล้วพากลับไปดูแถบด้านบน) */
+  scrollRef?: React.RefObject<ScrollView | null>;
 }) {
   /*
     อยู่ในหน้าที่เป็นหน้าต่างลอยอยู่แล้ว (ใบงาน) → ไม่เปิดหน้าต่างซ้อน
@@ -82,7 +91,8 @@ export default function AppModal({
             <Ionicons name="close" size={24} color={colors.primaryInk} />
           </TouchableOpacity>
         </View>
-        <ScrollView style={styles.paneScroll} contentContainerStyle={[styles.body, bodyStyle]}>
+        {banner ?? null}
+        <ScrollView ref={scrollRef} style={styles.paneScroll} contentContainerStyle={[styles.body, bodyStyle]}>
           {children}
         </ScrollView>
         {footer ? <View style={styles.foot}>{footer}</View> : null}
@@ -104,8 +114,8 @@ export default function AppModal({
     แต่ตอนนั้นหน้าที่เปิดมักล้างข้อมูลไปแล้ว (เช่น visible={!!editing} แล้ว editing = null)
     ถ้าวาด children ใหม่จะพังเพราะอ่านค่า null — จึงวาดเนื้อหาชุดสุดท้ายที่เปิดอยู่แทน
   */
-  const last = useRef({ title, subtitle, children, footer });
-  if (visible) last.current = { title, subtitle, children, footer };
+  const last = useRef({ title, subtitle, children, footer, banner });
+  if (visible) last.current = { title, subtitle, children, footer, banner };
   const shown = last.current;
 
   const [mounted, setMounted] = useState(visible);
@@ -256,7 +266,8 @@ export default function AppModal({
               </TouchableOpacity>
             </View>
           </View>
-          <ScrollView style={[styles.scroll, big && { flexGrow: 1 }]} contentContainerStyle={[styles.body, bodyStyle]}>
+          {shown.banner ?? null}
+          <ScrollView ref={scrollRef} style={[styles.scroll, big && { flexGrow: 1 }]} contentContainerStyle={[styles.body, bodyStyle]}>
             {shown.children}
           </ScrollView>
           {shown.footer ? <View style={styles.foot}>{shown.footer}</View> : null}

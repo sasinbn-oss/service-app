@@ -8,6 +8,7 @@ const { chromium } = require("playwright");
 const path = require("path");
 const { execSync } = require("child_process");
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
+const { fxPart } = require("./fixture"); // อะไหล่ตรงยี่ห้อเครื่องของใบ
 const PHOTO = path.join(__dirname, "..", "site-photo.png");
 const API = "http://localhost:4000/api";
 const call = async (token, method, p, body) => {
@@ -51,13 +52,17 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     const P = await mk(1); // ระบุอะไหล่ + ขนาดเครื่อง
     const B = await mk(2); // ใบงาน SUB เข้างานอยู่
     await call(S, "POST", `work-orders/${B.id}/parts`, { needsParts: false, assign: { team: os, scheduledAt: today } });
-    await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, {});
+    // งานวันนี้เลยเวลาปิดรับตั้งแต่เมื่อวาน (16:00 ของวันก่อนวันนัด) — แอดมินติ๊กแก้เป็นงานด่วนไปพร้อมกันตอนคอนเฟิร์ม หัวหน้าภาคจึงปล่อยได้ทุกเวลา
+    await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, { urgent: true });
     await call(S, "POST", `work-orders/${B.id}/dispatch`, {});
     const F = await mk(3); // ช่างแก้ไขเรียบร้อย
     mach = sql(`select "machineId" from "WorkOrder" where id=${P.id}`);
     oldCap = sql(`select coalesce("capacityKg"::text,'null') from "Machine" where id=${mach}`);
     sql(`update "Machine" set "capacityKg"=25 where id=${mach}`);
-    const part = sql(`select "partCode"||'|'||id from "SparePart" where "offCatalog"=false order by id limit 1`).split("|");
+    // อะไหล่ที่ค้นในฟอร์มต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ P (fxPart) — "ตัวแรกตาม id" ไม่รู้ว่าเครื่องยี่ห้ออะไร
+    // part = [รหัส, id] · ข้อที่ทดสอบ (ช่องจำนวน) ไม่ขึ้นกับว่าเป็นตัวไหน
+    const pid = fxPart(P.id, "BOARD");
+    const part = [sql(`select "partCode" from "SparePart" where id=${pid}`), String(pid)];
 
     const page = await (await browser.newContext({ viewport: { width: 1300, height: 1000 } })).newPage();
     page.on("pageerror", (e) => errors.push(String(e)));

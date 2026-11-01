@@ -5,9 +5,12 @@
 //   · Admin Spare Part มีการ์ด "ดูประวัติเคลม" ในงานของฉัน · จอมือถือเป็นการ์ดไม่ล้นจอ
 //   · ใครเห็นหน้านี้ (เจ้าของงานยืนยัน): Admin Spare Part · แอดมิน · Super Admin · หัวหน้าภาค — หัวหน้าภาคเห็นเฉพาะใบในภาคตัวเอง
 //   · ไม่มีช่อง "ส่งผู้ขาย" (เจ้าของงานบอกไม่ต้อง) · ปุ่มช่วง "เดือนก่อน" ไม่เอาเคลมของเดือนนี้
-//   · การ์ดของ Admin Spare Part: ป้ายรอตรวจเลขเดียวกับเมนู (รวมที่ส่งเดือนก่อน) · บรรทัดล่างบอกว่านับจากที่ส่งเดือนนี้
+//   · การ์ดของ Admin Spare Part: บรรทัดล่างบอกว่านับจากที่ส่งเดือนนี้ · ไม่มีป้าย "รอตรวจ n" ทั้งบนการ์ดและข้างเมนูประวัติเคลม
+//     (เคลมก้อน 6: ผู้ตรวจดูตัวเลขที่เมนู "ตรวจเคลม {x} ใบ" กับการ์ด "ตรวจเคลม {x} ใบ · {y} ชิ้น" — ป้ายสองอันติดกันนับคิวเดียวกันคนละหน่วย)
 //   · ปุ่มช่วงที่ได้วันเดียวกัน (มีนาคม: 3 เดือน = ปีนี้) ติดปุ่มที่กดจริง ชิปบนมือถือขึ้นชื่อช่วงที่กด
 //   · แสดงเพิ่มขณะมีเคลมใหม่เข้ามาไม่ซ้ำแถว · เปิดใบงานแล้วกลับมา แถวที่แสดงเพิ่มไว้ยังอยู่
+//   · ปิดเคลม ไม่ส่งผู้ขาย (เคลมก้อน 3): ปุ่มสถานะของตัวเอง กรองแล้วแถวที่อนุมัติหายไป เหลือแถวนั้นพร้อมป้าย
+//     "ปิดเคลม ไม่ส่งผู้ขาย" · ไม่มีปุ่มใบเคลม PDF (ไม่มีใบเคลม)
 // ต้องมี DATABASE_URL — แถวเคลมใส่ด้วย SQL บนใบงานจริงที่เปิดผ่าน API (ทางปิดงานจริงอยู่ใน claim-test.sh)
 const { chromium } = require("playwright");
 const path = require("path");
@@ -29,16 +32,18 @@ const { setup } = require("./fixture");
   let outId = null;
   try {
     fx = await setup();
-    const board = fx.part("SP-BOARD");
     const a = await fx.workOrder("C0006", null);
     const b = await fx.workOrder("C0006", null);
     const tech = fx.sql(`select id from "User" where "employeeCode"='T001'`);
     const admin = fx.sql(`select id from "User" where "employeeCode"='A001'`);
     // ใบ a: รอบแรกตีกลับ (2 ชม.ก่อน) → รอบสองอนุมัติ (1 ชม.ก่อน) · ใบ b: รอตรวจ — ส่งวันนี้ อยู่ในค่าตั้งต้น "เดือนนี้"
-    const ins = (wo, broken, status, ago, reason) =>
-      fx.sql(`insert into "PartClaim"("workOrderId","sparePartId","partCode","partName","brokenPartCode",quantity,"branchCode","branchName",brand,"machineCode",symptom,"checkNote",status,"rejectReason","createdById","createdAt","reviewedById","reviewedAt")
+    // อะไหล่ของแต่ละแถวตรงยี่ห้อเครื่องของใบนั้น (fxPart) — ใบนอกภาคเป็นเครื่องอีกตัวอีกสาขา ยี่ห้ออาจไม่ตรงกับ W77
+    const ins = (wo, broken, status, ago, reason) => {
+      const board = fx.fxPart(wo, "BOARD");
+      return fx.sql(`insert into "PartClaim"("workOrderId","sparePartId","partCode","partName","brokenPartCode",quantity,"branchCode","branchName",brand,"machineCode",symptom,"checkNote",status,"rejectReason","createdById","createdAt","reviewedById","reviewedAt")
         select ${wo},${board},"partCode",name,'${broken}',1,'C0006',(select name from "Branch" where code='C0006'),'ยี่ห้อทดสอบหน้าจอ','W77','อาการ','เช็ค','${status}',${reason ? `'${reason}'` : "null"},${tech},now()-interval '${ago} minutes',
           ${status === "PENDING" ? "null" : admin},${status === "PENDING" ? "null" : `now()-interval '${ago - 10} minutes'`} from "SparePart" where id=${board}`);
+    };
     ins(a.id, "WEB-OLD-1", "REJECTED", 120, "รูปป้ายรุ่นไม่ชัด");
     ins(a.id, "WEB-OLD-2", "APPROVED", 60);
     ins(b.id, "WEB-OLD-3", "PENDING", 30);
@@ -70,6 +75,12 @@ const { setup } = require("./fixture");
       select ${c.id},'WEB-PG-'||lpad(i::text,3,'0'),'ชิ้นทดสอบแบ่งหน้า','WEB-PG-BROKEN',1,'C0006',(select name from "Branch" where code='C0006'),'ยี่ห้อทดสอบหน้าจอ','W79','อาการ','เช็ค','APPROVED',${tech},
         now()-make_interval(secs => i),${admin},now()-make_interval(secs => i) from generate_series(1,105) i`);
     insFree("WEB-PREV-1", "PENDING", "now()-interval '40 days'");
+    // ชิ้นที่ Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย (เคลมก้อน 3) — ใบ c เครื่อง W79 ไม่ไปปนตัวเลขของใบ a/b
+    fx.sql(`insert into "PartClaim"("workOrderId","partCode","partName","brokenPartCode",quantity,"branchCode","branchName",brand,"machineCode",symptom,"checkNote",status,"rejectReason","createdById","createdAt","reviewedById","reviewedAt")
+      values (${c.id},'WEB-DECL-1','ชิ้นทดสอบปิดเคลม','WEB-DECL-1-BROKEN',1,'C0006',(select name from "Branch" where code='C0006'),'ยี่ห้อทดสอบหน้าจอ','W79','อาการ','เช็ค','DECLINED','หมดประกัน',${tech},
+        now()-interval '5 minutes',${admin},now()-interval '4 minutes')`);
+    // แถวสถานะอื่นที่ค้นเจอด้วยคำเดียวกัน — ปุ่มกรองปิดเคลมต้องตัดแถวนี้ออก ไม่งั้นเทสต์ผ่านได้ทั้งที่ปุ่มไม่กรองอะไรเลย
+    insFree("WEB-DECL-2", "APPROVED", "now()-interval '6 minutes'");
     const pending = () => fx.sql(`select count(*) from "PartClaim" c join "WorkOrder" w on w.id=c."workOrderId" where c.status='PENDING' and not w."isTest"`);
 
     const open = async (code, width, at) => {
@@ -99,7 +110,11 @@ const { setup } = require("./fixture");
       (await label(page, `เคลมรอตรวจ ${n}`).count()) > 0 ? pass(`เมนูข้าง: ประวัติเคลม + ป้ายรอตรวจ ${n} (ตรงฐานข้อมูล)`) : fail(`ไม่มีป้ายรอตรวจ ${n} ข้างเมนู`);
       await vis("ประวัติเคลม").first().click();
       await page.waitForTimeout(3000);
-      (await vis("ส่งผู้ขาย", false).count()) === 0 ? pass("ไม่มีช่อง ส่งผู้ขาย (เจ้าของงานบอกไม่ต้อง)") : fail("ยังมีช่องส่งผู้ขาย");
+      // "ปิดเคลม ไม่ส่งผู้ขาย" (ปุ่มสถานะใหม่ของเคลมก้อน 3) มีคำว่า ส่งผู้ขาย อยู่ข้างใน — ตัดเฉพาะคำนี้ออก
+      // ที่เหลือที่มีคำว่า ส่งผู้ขาย ยังถือว่าเป็นช่องที่เจ้าของงานบอกไม่ต้องมี
+      (await page.getByText(/(?<!ไม่)ส่งผู้ขาย/).locator("visible=true").count()) === 0
+        ? pass("ไม่มีช่อง ส่งผู้ขาย (เจ้าของงานบอกไม่ต้อง)")
+        : fail("ยังมีช่องส่งผู้ขาย");
       await search(page, a.code);
       const rows = () => page.locator(`[aria-label^="แถวเคลม ${a.code}"]`).locator("visible=true");
       const text = async () => (await rows().allInnerTexts()).join(" | ");
@@ -139,6 +154,27 @@ const { setup } = require("./fixture");
       const head = req ? Buffer.from(await (await fetch(req.url())).arrayBuffer()).subarray(0, 2).toString() : "";
       head === "PK" ? pass("ปุ่ม Excel เปิดไฟล์ xlsx ตามตัวกรอง") : fail(`ปุ่ม Excel: ${req ? req.url() : "ไม่มีคำขอไฟล์"}`);
       for (const p of ctx.pages()) if (p !== page) await p.close().catch(() => {});
+      // ปิดเคลม ไม่ส่งผู้ขาย: มีปุ่มสถานะของตัวเอง · แถวขึ้นป้ายตามที่เซิร์ฟเวอร์ส่ง (ไม่ใช่ "ตีกลับ" หรือว่าง)
+      await search(page, "WEB-DECL-");
+      await label(page, "สถานะ ทั้งหมด").click();
+      await page.waitForTimeout(2000);
+      const declRows = () => page.locator('[aria-label^="แถวเคลม "]').locator("visible=true");
+      const before = await declRows().count();
+      const declReq = page
+        .waitForRequest((r) => /\/api\/part-claims\?/.test(r.url()) && /[?&]status=DECLINED(&|$)/.test(r.url()), { timeout: 15000 })
+        .catch(() => null);
+      await label(page, "สถานะ ปิดเคลม ไม่ส่งผู้ขาย").click();
+      const sentDeclined = !!(await declReq);
+      await page.waitForTimeout(2000);
+      const declined = await declRows().allInnerTexts();
+      before === 2 && sentDeclined && declined.length === 1 && declined[0].includes("WEB-DECL-1") && declined[0].includes("ปิดเคลม ไม่ส่งผู้ขาย") &&
+        fx.sql(`select status from "PartClaim" where "workOrderId"=${c.id} and "partCode"='WEB-DECL-1'`) === "DECLINED"
+        ? pass("ปุ่มสถานะ ปิดเคลม ไม่ส่งผู้ขาย: จาก 2 แถว (ปิดเคลม + อนุมัติ) เหลือแถวที่ปิดเคลมแถวเดียว · ขอ status=DECLINED · ป้าย \"ปิดเคลม ไม่ส่งผู้ขาย\" (ฐานข้อมูล DECLINED)")
+        : fail(`กรองปิดเคลม: ก่อนกด ${before} แถว · ขอ DECLINED ${sentDeclined} · ${declined.join(" | ").slice(0, 300)}`);
+      (await label(page, `ใบเคลม PDF ${c.code} WEB-DECL-1`).count()) === 0 && (await label(page, `เปิดใบงาน ${c.code}`).count()) > 0
+        ? pass("แถวที่ปิดเคลม ไม่มีปุ่มใบเคลม PDF (ไม่มีใบเคลม เซิร์ฟเวอร์ตอบ 409) · ปุ่มเปิดใบงานยังอยู่")
+        : fail("แถวที่ปิดเคลมยังมีปุ่มใบเคลม PDF");
+      await page.screenshot({ path: path.join(DIR, "claim-history-7-declined.png") });
       // ลิงก์ในใบงาน → หน้าประวัติกรองเครื่อง/สาขาให้ (ทุกช่วงเวลา)
       await label(page, "สถานะ ทั้งหมด").click();
       await search(page, a.code);
@@ -192,12 +228,19 @@ const { setup } = require("./fixture");
       const { ctx, page, vis } = await open(pa, 1400);
       const card = label(page, "ดูประวัติเคลม");
       (await card.count()) > 0 ? pass("Admin Spare Part: การ์ดดูประวัติเคลมในงานของฉัน") : fail("ไม่มีการ์ดดูประวัติเคลม");
-      // ป้ายรอตรวจบนการ์ด = เลขเดียวกับเมนู (ทุกเดือน รวมชิ้นที่ส่ง 40 วันก่อน) · บรรทัดล่างบอกว่านับจากที่ส่งเดือนนี้
-      const n = pending();
+      /**
+       * ผู้ตรวจเคลม (เคลมก้อน 6): ไม่มีป้าย "รอตรวจ n" บนการ์ดประวัติเคลมและข้างเมนู — ตัวเลขคิวอยู่ที่เมนู "ตรวจเคลม {x} ใบ"
+       * และการ์ด "ตรวจเคลม {x} ใบ · {y} ชิ้น" ชุดเดียวกัน (x = ใบรอตรวจเคลมที่มีแถวรอตรวจ ตามฐานข้อมูล รวมใบทดสอบเพราะกล่องงานโชว์ด้วย)
+       */
+      const QUEUE = `from "WorkOrder" w join "PartClaim" c on c."workOrderId"=w.id where w.status='CLAIM_REVIEW' and c.status='PENDING'`;
+      const qx = fx.sql(`select count(distinct w.id) ${QUEUE}`);
+      const qy = fx.sql(`select count(*) ${QUEUE}`);
       const exact = (l) => page.locator(`[aria-label="${l}"]`).locator("visible=true");
-      (await exact(`ประวัติเคลม รอตรวจ ${n}`).count()) > 0 && (await exact(`เคลมรอตรวจ ${n}`).count()) > 0
-        ? pass(`การ์ด: ป้ายรอตรวจ ${n} ตรงฐานข้อมูลและตรงกับเมนู (นับชิ้นที่ส่งเดือนก่อนด้วย)`)
-        : fail(`ป้ายรอตรวจบนการ์ดไม่ใช่ ${n}: ${await page.locator('[aria-label^="ประวัติเคลม รอตรวจ"]').getAttribute("aria-label").catch(() => "ไม่มีป้าย")}`);
+      (await page.locator('[aria-label^="ประวัติเคลม รอตรวจ"]').locator("visible=true").count()) === 0 &&
+        (await page.locator('[aria-label^="เคลมรอตรวจ"]').locator("visible=true").count()) === 0 &&
+        (await exact(`ตรวจเคลม รอ ${qx} ใบ`).count()) > 0 && (await exact(`ตรวจเคลม ${qx} ใบ · ${qy} ชิ้น`).count()) > 0
+        ? pass(`ผู้ตรวจ: ไม่มีป้าย "รอตรวจ n" (การ์ด · เมนู) · เมนู "ตรวจเคลม" ป้าย ${qx} ใบ · การ์ด "ตรวจเคลม ${qx} ใบ · ${qy} ชิ้น" (ตรงฐานข้อมูล)`)
+        : fail(`ป้ายของผู้ตรวจ: รอตรวจบนการ์ด ${await page.locator('[aria-label^="ประวัติเคลม รอตรวจ"]').locator("visible=true").count()} · ข้างเมนู ${await page.locator('[aria-label^="เคลมรอตรวจ"]').locator("visible=true").count()} · เมนูตรวจเคลม ${await exact(`ตรวจเคลม รอ ${qx} ใบ`).count()} · การ์ดตรวจเคลม ${await exact(`ตรวจเคลม ${qx} ใบ · ${qy} ชิ้น`).count()}`);
       (await page.getByText(/^ส่งเคลมเดือนนี้ \d+ · อนุมัติ \d+ · ตีกลับ \d+$/).locator("visible=true").count()) > 0
         ? pass("การ์ด: บรรทัดล่างบอกว่านับจากที่ส่งเคลมเดือนนี้") : fail("การ์ดยังไม่บอกว่านับจากที่ส่งเดือนนี้");
       await page.screenshot({ path: path.join(DIR, "claim-history-4-parts-admin.png") });

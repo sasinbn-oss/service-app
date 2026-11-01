@@ -3,6 +3,7 @@
 #        ไม่มีรูปต้องใส่เหตุผล (ไม่บังคับรูป) · วันเวลาต้องเรียงและไม่เกินวันนี้ · หัวหน้าภาค/ช่างทำไม่ได้
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -73,7 +74,8 @@ R=$(POST $A "work-orders/$ID3/backfill-close" "$(body "\"visitTime\":null,\"clos
 echo
 echo "═══ ปิดย้อนหลังจากขั้นเบิกอะไหล่ (ใช้อะไหล่)"
 ID2=$(newwo); IDS="$IDS $ID2"
-P1=$(DB "select id from \"SparePart\" order by id limit 1")
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ — เดิมหยิบแถวแรกของตาราง ซึ่งอาจเป็นยี่ห้ออื่นหรือไม่มียี่ห้อ
+P1=$(fx_part $ID2 BOARD)
 POST $S "work-orders/$ID2/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}]}" >/dev/null
 ST=$(DB "select status from \"WorkOrder\" where id=$ID2")
 R=$(POST $A "work-orders/$ID2/backfill-close" "$(body "\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}],\"requisitionAt\":\"$D2\",\"requisitionRef\":\"RQ-TEST-$SUF\",\"noPhotoReason\":\"ไม่มีรูป\"")")

@@ -42,6 +42,11 @@ declare module "axios" {
      * ไม่ใส่ = เลือกให้เองจากชนิดคำขอ (ดู savingText)
      */
     loadingText?: string | false;
+    /**
+     * false = คำขอนี้ไม่ถูกนับเป็น "กดซ้ำ" แม้ชนิดวิธี + ที่อยู่ + ข้อมูลเหมือนคำขอที่ยังไม่เสร็จ (ไม่ใส่ = กันซ้ำตามปกติ)
+     * ไว้ให้ที่ส่งหลายคำขอไปที่เดียวกันโดยตั้งใจ — ไฟล์ของเครื่องที่ถูกตีกลับต้องขึ้นให้ทุกชิ้นที่ส่งเคลม
+     */
+    dedupe?: boolean;
   }
 }
 
@@ -149,6 +154,41 @@ export function onAccountDeleted(handler: ((notice?: string) => void) | null) {
   accountDeletedHandler = handler;
 }
 
+/**
+ * 409 ที่หน้าจอนั้นจัดการเองโดยรู้ความหมาย — ไม่ส่งต่อให้ตัวจัดการกลาง (ปิดฟอร์ม · โหลดใบใหม่ · เตือนสีเหลือง)
+ *
+ * CLOSE_ALREADY_SENT = ใบงานนี้ส่งปิดงานไปแล้ว ซึ่งบ่อยครั้งคือคำสั่งปิดรอบก่อนของคนเดียวกันที่ผ่านไปแล้ว
+ * แต่คำตอบหายกลางทาง (เน็ตหลุดตอนรอ) แล้วกดซ้ำ — ฟอร์มปิดงานต้องโหลดใบมาดูแล้วนับเป็นปิดสำเร็จ
+ * ถ้าตัวจัดการกลางทำงานก่อน ฟอร์มถูกปิดพร้อมคำเตือนทั้งที่งานของช่างสำเร็จแล้ว
+ * (ตอบจากทั้ง POST /close และการแนบหลักฐานเคลมที่ฟอร์มปิดงานส่งก่อนสั่งปิด)
+ *
+ * CLAIM_EVIDENCE_LOCKED = ลบไฟล์ที่ส่งเป็นหลักฐานเคลมไปแล้วไม่ได้ — เป็นการปฏิเสธที่ตอบเหมือนเดิมทุกครั้ง
+ * ไม่ใช่ใบงานข้อมูลเก่า ถ้าตัวจัดการกลางรับไป ช่างได้คำเตือน "โหลดข้อมูลล่าสุดให้แล้ว" ซ้อนกับ "ลบไม่สำเร็จ"
+ * และฟอร์มที่เปิดอยู่ถูกปิดทิ้ง ทั้งที่ไม่มีอะไรเปลี่ยน — การ์ดไฟล์แนบบอกเหตุผลเองอยู่แล้ว
+ *
+ * DISPATCH_LOCKED = กดปล่อยงานหลังเวลาปิดรับ (เซิร์ฟเวอร์ตัดสินจากเวลาที่คำขอไปถึง) — ไม่ใช่ใบงานข้อมูลเก่า
+ * ทางออกอยู่ในฟอร์มปล่อยงานเอง (ขอแอดมินแก้เป็นงานด่วน · ทีมไม่ว่าง ส่งกลับแอดมินนัดใหม่) ถ้าตัวจัดการกลางรับไป
+ * ฟอร์มถูกปิดทิ้งพร้อมคำเตือนสีเหลือง หัวหน้าภาคต้องเปิดใหม่เพื่อหาปุ่มที่ใช้ได้ — ฟอร์มจึงต้องอยู่และบอกเอง
+ */
+export const HANDLED_409_CODES = new Set<string>(["CLOSE_ALREADY_SENT", "CLAIM_EVIDENCE_LOCKED", "DISPATCH_LOCKED"]);
+
+/**
+ * 409 ของใบงานที่ตัวจัดการกลางรับไปแล้ว (โหลดใบใหม่ · ปิดฟอร์มขั้นตอน · เตือนสีเหลืองพร้อมเหตุผล)
+ * ใช้ทั้งในตัวดักคำตอบด้านล่างและในฟอร์มที่ต้องรู้ว่าไม่ต้องบอกซ้ำ — เงื่อนไขต้องเป็นชุดเดียวกัน
+ * ไม่งั้นฟอร์มจะเงียบทั้งที่ไม่มีใครบอกช่าง หรือบอกซ้ำสองข้อความบนฟอร์มที่ถูกปิดไปแล้ว
+ */
+export function staleWorkOrderId(error: unknown): number | null {
+  const e = error as { response?: { status?: number; data?: { code?: unknown } }; config?: { url?: string } } | null;
+  if (e?.response?.status !== 409 || HANDLED_409_CODES.has(String(e.response.data?.code ?? ""))) return null;
+  const m = /\/work-orders\/(\d+)/.exec(String(e.config?.url ?? ""));
+  return m ? Number(m[1]) : null;
+}
+
+/** คำขอไปไม่ถึงเซิร์ฟเวอร์หรือคำตอบไม่กลับมา (เน็ตหลุด · หมดเวลา) — ต่างจากเซิร์ฟเวอร์ตอบกลับมาว่าไม่รับ */
+export function noResponse(error: unknown): boolean {
+  return axios.isAxiosError(error) && !error.response;
+}
+
 /** หมดเวลาดูในฐานะ (1 ชม.) หรือถูกถอดสิทธิ์ Super Admin — กลับเป็นตัวเอง ไม่ใช่ออกจากระบบ */
 let viewAsEndedHandler: (() => void) | null = null;
 export function onViewAsEnded(handler: (() => void) | null) {
@@ -170,10 +210,10 @@ api.interceptors.response.use(
     }
     if (error?.response?.status === 401 && error.response.data?.viewAsEnded) viewAsEndedHandler?.();
     // ใบงานข้อมูลเก่า — กดขั้นตอนที่คนอื่นทำไปแล้ว หรือบันทึกทับของคนอื่น หน้าใบงานโหลดใหม่ให้ทันที
-    if (error?.response?.status === 409) {
-      const m = /\/work-orders\/(\d+)/.exec(String(error.config?.url ?? ""));
+    const staleId = staleWorkOrderId(error);
+    if (staleId !== null) {
       const msg = error.response.data?.error;
-      if (m) notifyWorkOrderStale(Number(m[1]), typeof msg === "string" ? msg : null);
+      notifyWorkOrderStale(staleId, typeof msg === "string" ? msg : null);
     }
     return Promise.reject(error);
   }
@@ -195,7 +235,9 @@ for (const method of WRITE_METHODS as ("post" | "put" | "patch" | "delete")[]) {
   const original = api[method].bind(api) as (...args: unknown[]) => Promise<unknown>;
   // delete ไม่มี body ตัวที่สองคือ config
   const wrapped = (url: string, ...rest: unknown[]) => {
-    const key = dedupeKey(method, url, method === "delete" ? null : rest[0]);
+    // delete: ตัวแรกหลัง url คือ config · post/put/patch: ตัวแรกคือ data ตัวที่สองคือ config
+    const config = (method === "delete" ? rest[0] : rest[1]) as { dedupe?: boolean } | undefined;
+    const key = config?.dedupe === false ? null : dedupeKey(method, url, method === "delete" ? null : rest[0]);
     if (key) {
       const running = inflight.get(key);
       if (running) return running;

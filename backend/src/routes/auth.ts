@@ -854,6 +854,9 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
           returnedVehicleLogs: true,
           vehicleDocs: true,
           vehicleMaintenance: true,
+          // แอดมินที่เคยเปลี่ยนเวลาปิดรับปล่อยงานอย่างเดียว ก็ถือว่ามีประวัติ — ลบจริงแล้ว "เปลี่ยนล่าสุด: …" กลายเป็นไม่มีชื่อ
+          // และไม่มีใครบอกได้ว่าใครเปลี่ยนจากอะไรเป็นอะไร (เจ้าของงานขอให้บันทึกไว้ คำถามข้อ 13)
+          appSettingsChanged: true,
         },
       },
     },

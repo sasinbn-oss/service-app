@@ -126,12 +126,19 @@ const ALLOWED_WHILE_VIEWING = new Set(["/api/machines/export", "/api/auth/view-a
  * ลิงก์ใบเคลม PDF แค่สร้างไฟล์ชั่วคราวให้เบราว์เซอร์เปิด ไม่แตะข้อมูลงาน — ดูในฐานะหัวหน้าภาคต้องเปิดใบเคลม
  * จากหน้าประวัติเคลม/หน้าใบงานได้เหมือนที่หัวหน้าภาคเห็นจริง (ขอบเขตใบงานยังตรวจใน route ตามคนที่ถูกดู)
  */
-const READ_POSTS_WHILE_VIEWING = [/^\/api\/work-orders\/\d+\/claims\/\d+\/pdf-link$/];
+const READ_POSTS_WHILE_VIEWING = [
+  /^\/api\/work-orders\/\d+\/claims\/\d+\/pdf-link$/,
+  // ลิงก์ zip หลักฐานส่งผู้ขาย (เคลมก้อน 6) แค่ออกตั๋วดาวน์โหลด ไม่แตะข้อมูลงาน — Super Admin ที่ดูในฐานะ Admin Spare Part
+  // ดาวน์โหลดได้เหมือนที่คนนั้นเห็น (ตัดสินเคลมยังโดนกันเหมือนเดิม)
+  /^\/api\/work-orders\/\d+\/claims\/evidence-link$/,
+];
 
 /** สิ่งที่ Admin Spare Part แก้ได้ — นอกจากนี้ดูได้อย่างเดียว (ดู requireAuth) */
 const PARTS_ADMIN_WRITES = [
   /^POST \/api\/work-orders\/\d+\/claim-review$/,
   /^POST \/api\/work-orders\/\d+\/claims\/\d+\/pdf-link$/,
+  // zip หลักฐานส่งผู้ขายหลังอนุมัติ (เคลมก้อน 6) — งานของ Admin Spare Part เอง: ส่งของให้ผู้ขาย
+  /^POST \/api\/work-orders\/\d+\/claims\/evidence-link$/,
   /^\w+ \/api\/spare-parts(\/|$)/,
   /^POST \/api\/auth\/(change-password|view-as\/stop)$/,
   // POST ที่ไม่ได้แก้ข้อมูล

@@ -69,6 +69,7 @@ export default function WorkOrderAttachments({
   canEdit,
   reloadKey = 0,
   onLoaded,
+  onLoadFailed,
   onAdded,
   inspection,
   formLinks = [],
@@ -85,6 +86,8 @@ export default function WorkOrderAttachments({
   reloadKey?: number;
   /** ส่งรายการที่โหลดมาให้หน้าจอแม่ใช้ต่อ จะได้ไม่ต้องยิงขอรายการเดิมซ้ำ */
   onLoaded?: (rows: Attachment[]) => void;
+  /** โหลดรายการไม่สำเร็จ — หน้าที่ยืมรายการไปใช้ (หน้าตรวจเคลม) จะได้บอกผู้ใช้และให้ลองใหม่ ไม่ขึ้นว่ากำลังโหลดค้าง */
+  onLoadFailed?: () => void;
   /** แนบไฟล์สำเร็จ — หน้าจอแม่โหลดใบงานใหม่ ให้หน้าปิดงานรู้ว่ามีรูปก่อนซ่อมแล้ว */
   onAdded?: () => void;
   /**
@@ -120,7 +123,8 @@ export default function WorkOrderAttachments({
       if (!seedLinks(workOrderId, raw) && next.some((r) => r.available)) void prefetchLinks(workOrderId).catch(() => undefined);
     } catch {
       // เงียบไว้ ไฟล์แนบไม่ใช่เนื้อหาหลักของหน้า ถ้าโหลดไม่ได้ก็ไม่ควรบังหน้าจอ
-      // ส่วนที่เหลือทั้งใบ ซึ่งเป็นข้อมูลที่คนเปิดมาดูจริง ๆ
+      // ส่วนที่เหลือทั้งใบ ซึ่งเป็นข้อมูลที่คนเปิดมาดูจริง ๆ — แต่บอกหน้าแม่ไว้ หน้าที่ใช้ไฟล์เป็นเนื้อหาหลักจะได้บอกเอง
+      onLoadFailed?.();
     } finally {
       setLoading(false);
     }

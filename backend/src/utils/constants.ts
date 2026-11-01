@@ -661,7 +661,8 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
    */
   APPOINTMENT_MOVED: "แอดมินเลื่อนวันนัด",
   APPOINTMENT_RECALLED: "แอดมินเลื่อนวันนัด — ดึงงานคืนจากช่าง",
-  NEW_DATE_DECLINED: "ทีมไม่ว่างวันใหม่ — ส่งกลับแอดมินนัดใหม่",
+  // ไม่มี "วันใหม่" แล้ว (เวลาปิดรับปล่อยงาน ต.ค. 69 · คำถามข้อ 16) — ใบที่ติดล็อกส่งกลับได้โดยวันไม่ได้เปลี่ยน
+  NEW_DATE_DECLINED: "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่",
   ARRIVED: "ช่างถึงหน้างาน",
   DISPATCHED: "ยืนยันออกงาน",
   INSPECT_REQUESTED: "ส่งทีมตรวจหน้างาน",
@@ -683,11 +684,43 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   CLAIM_SUBMITTED: "ส่งเคลมอะไหล่เก่า",
   CLAIM_APPROVED: "อนุมัติเคลม · ปิดงาน",
   CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",
+  // ทุกชิ้นของรอบนั้นถูกปิดเคลม ไม่ส่งผู้ขาย (ก้อน 3) — ใบปิดแต่ไม่มีใบเคลมไปผู้ขาย ต้องไม่อ่านว่า "อนุมัติ"
+  CLAIM_DECLINED: "ปิดงาน · ปิดเคลม ไม่ส่งผู้ขาย",
+  // สาขาในประกันแต่อะไหล่ที่ใช้ไม่ได้ส่งเคลม (ก้อน 5) — ช่างบอกเหตุผล / หัวหน้าภาค·ปิดย้อนหลังไม่มีฟอร์มเคลม
+  // ลงประวัติให้เห็นว่ามีชิ้นในประกันที่ไม่ได้เคลม ไม่ใช่หายไปเงียบ ๆ · ไม่เดินขั้น (ดู NON_STAGE_ACTIONS)
+  CLAIM_SKIPPED: "ไม่ส่งเคลมอะไหล่เก่า",
   // ส่งกลับให้แอดมินตรวจสอบ — ไม่เดินขั้น (ดู NON_STAGE_ACTIONS ใน routes/workOrders.ts)
   ADMIN_REVIEW_REQUESTED: "ส่งกลับให้แอดมินตรวจสอบ",
   ADMIN_REVIEW_CANCELLED: "ยกเลิกคำขอให้แอดมินตรวจสอบ",
   ADMIN_REVIEW_ANSWERED: "แอดมินตรวจแล้ว",
+  /**
+   * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ไม่เดินขั้นทั้งสามตัว (ดู NON_STAGE_ACTIONS ใน routes/workOrders.ts)
+   * คำขอของหัวหน้าภาคเก็บเป็นประวัติ ไม่ใช่ AdminReview: ไม่ต้องมีขั้นต่ำ 5 ตัวอักษร ไม่ต้องรอแอดมินตอบปิด —
+   * แอดมินแก้เป็นงานด่วน/เลื่อนวัน/หัวหน้าภาคส่งกลับหรือปล่อยงาน = คำขอจบเองจากลำดับประวัติ (URGENT_ASK_SETTLE)
+   */
+  URGENT_RELEASE: "แอดมินแก้เป็นงานด่วน",
+  URGENT_REQUESTED: "ขอแอดมินแก้เป็นงานด่วน",
+  URGENT_REQUEST_CANCELLED: "ยกเลิกคำขอแก้เป็นงานด่วน",
 };
+
+/**
+ * ใบมาถึงขั้นปล่อยงานด้วยทางไหน — ใช้ในข้อความ "ถึงหัวหน้าภาคหลังเวลาปิดรับ (<ทาง> <เวลา> น.)"
+ * ข้อความต้องบอกตามจริงว่าใบมาถึงช้าเพราะอะไร (คอนเฟิร์มลูกค้าช้า · เลื่อนวัน · ย้อนขั้น) ไม่ใช่โทษหัวหน้าภาคว่าปล่อยช้า
+ * ชื่อประวัติเต็ม ๆ ยาวเกินกล่องสาเหตุ ("ลูกค้าขอเลื่อนวัน" ต้องอ่านว่าแอดมินคอนเฟิร์มลูกค้าแล้ว) — ตัวที่ไม่อยู่ในนี้ใช้ชื่อประวัติ
+ */
+export const RELEASE_ARRIVAL_LABELS: Record<string, string> = {
+  CONFIRMED: "คอนเฟิร์มลูกค้า",
+  RESCHEDULED: "คอนเฟิร์มลูกค้า",
+  APPOINTMENT_MOVED: "เลื่อนวันนัด",
+  APPOINTMENT_RECALLED: "ดึงงานคืนจากช่าง",
+  ROLLED_BACK: "ย้อนขั้น",
+  TRANSFER_ARRIVED: "โอนเสร็จแล้ว",
+  PICKED_UP: "คอนเฟิร์ม เบิกแล้ว",
+  PARTS_CHECKED: "เบิกอะไหล่",
+};
+export function releaseArrivalLabel(action: string): string {
+  return RELEASE_ARRIVAL_LABELS[action] ?? WORK_ORDER_ACTION_LABELS[action] ?? action;
+}
 
 /**
  * แอดมินทำแทนขั้นของคนอื่นได้ไหม
@@ -973,6 +1006,74 @@ export const ATTACHMENT_ROLES = [
 export const CLAIM_EVIDENCE_ROLES = ["CLAIM_PART", "CLAIM_SYMPTOM", "CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"] as const;
 
 /**
+ * เหตุผลที่ Admin Spare Part กด "ปิดเคลม ไม่ส่งผู้ขาย" ทีละชิ้น (ก้อน 3 · รายการ DROP ในตัวอย่างที่เจ้าของงานอนุมัติ)
+ *
+ * ชิ้นที่ส่งผู้ขายไม่ได้แน่ ๆ ไม่ควรวนกลับไปหาช่าง — เดิมมีแค่อนุมัติ/ตีกลับ ผู้ตรวจต้องตีกลับทั้งที่ช่างแก้อะไรไม่ได้
+ * "อื่น ๆ" ต้องพิมพ์เหตุผลเอง (แอปส่งมาเป็น "อื่น ๆ: …") · เหตุผลเก็บใน PartClaim.rejectReason ช่องเดียวกับเหตุผลตีกลับ
+ */
+export const CLAIM_DECLINE_REASONS = ["หมดประกัน", "ไม่ใช่ชิ้นในประกัน", "อื่น ๆ"] as const;
+
+/**
+ * ตีกลับต้องบอกเหตุผล — ข้อความเดียวที่ทุกเส้นทาง "ตีกลับให้ช่างแก้" ใช้ (ตอนนี้: ตรวจเคลม)
+ * อยู่ที่เดียวเพราะคำเดียวกันต้องหมายถึงกติกาเดียวกัน — เส้นทางตีกลับใหม่ให้ import ตัวนี้ ไม่พิมพ์ข้อความซ้ำ
+ * วันหนึ่งแก้ถ้อยคำที่หนึ่งแล้วอีกที่ไม่ตาม ผู้ใช้จะเห็นสองแบบสำหรับเรื่องเดียวกัน
+ */
+export const SEND_BACK_REASON_REQUIRED = "ตีกลับต้องบอกเหตุผล — ช่างจะได้รู้ว่าต้องแก้อะไร";
+
+/**
+ * ช่องที่ Admin Spare Part ติ๊กให้ช่างแก้ตอนตีกลับ (ก้อน 4 · ตัวอย่างที่เจ้าของงานอนุมัติ PF/MF) — เก็บใน PartClaim.reviewFlags
+ *
+ * ทำไมชี้เป็นช่อง ไม่ใช่ข้อความอย่างเดียว: ช่างอ่านเหตุผลแล้วต้องเดาเองว่าแก้ตรงไหน และไม่รู้ว่าต้องกลับไปหน้าเครื่องไหม
+ * ติ๊กเป็นช่องแล้วฟอร์มแก้เคลมแสดงเฉพาะช่องนั้น · เซิร์ฟเวอร์รู้ว่าช่องไหนต้องเปลี่ยน จึงกันส่งซ้ำของเดิมได้ทีละช่อง
+ *
+ * scope PART = ของอะไหล่ชิ้นนั้น · MACHINE = ข้อมูลเครื่อง (ใช้ร่วมทุกชิ้น — ติ๊กแล้วตีกลับทั้งใบ)
+ * site = ต้องกลับไปถ่ายที่หน้าเครื่อง (ไฟล์) · ไม่ใช่ = แก้จากมือถือได้ ไม่ต้องไปร้าน — การ์ดงานของช่างบอกตามนี้
+ * families = แบบป้ายที่ช่องนี้มี (ดู claimGuide.ts) — Oasis ไม่มี Serial บนป้าย ใช้ "ข้อมูลป้ายรุ่น" (ช่องอื่นของป้าย) แทน
+ *   (ค่าตั้งต้นที่บอกเจ้าของงาน) · Error ที่เครื่องขึ้นมีเฉพาะ Alliance (มีคู่มือ Error in Field)
+ * altLabel = ชื่อเมื่อเครื่องไม่มี Error ให้ถ่าย (Oasis หรือเลือก "ไม่มี Error ขึ้น") — คำตอบข้อ 4 ของเจ้าของงาน
+ * ชื่อที่เซิร์ฟเวอร์ใช้ในข้อความ/ประวัติมาจาก reviewFlagLabel (claimRules.ts) ที่เดียว
+ */
+export const CLAIM_REVIEW_FLAGS: readonly {
+  key: string;
+  scope: "PART" | "MACHINE";
+  label: string;
+  altLabel?: string;
+  site: boolean;
+  families: readonly ("ALLIANCE" | "OASIS" | "OTHER")[];
+}[] = [
+  { key: "CLAIM_PART", scope: "PART", label: "รูปอะไหล่เก่า", site: true, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "BROKEN_CODE", scope: "PART", label: "รหัสอะไหล่ตัวที่เสีย", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "SYMPTOM", scope: "PART", label: "อาการ/สาเหตุ", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "CHECKS", scope: "PART", label: "ช่างเข้าเช็คอะไรบ้าง", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "CLAIM_CHECK_VIDEO", scope: "PART", label: "วิดีโอการตรวจเช็ค", site: true, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "MODEL", scope: "MACHINE", label: "รุ่น", site: false, families: ["ALLIANCE", "OASIS", "OTHER"] },
+  { key: "SERIAL", scope: "MACHINE", label: "Serial", site: false, families: ["ALLIANCE", "OTHER"] },
+  { key: "PLATE_OTHER", scope: "MACHINE", label: "ข้อมูลป้ายรุ่น", site: false, families: ["OASIS"] },
+  { key: "ERROR_CODE", scope: "MACHINE", label: "Error ที่เครื่องขึ้น", site: false, families: ["ALLIANCE"] },
+  {
+    key: "CLAIM_ERROR_VIDEO",
+    scope: "MACHINE",
+    label: "วิดีโอ Error",
+    altLabel: "วิดีโออาการตอนเครื่องเดิน",
+    site: true,
+    families: ["ALLIANCE", "OASIS", "OTHER"],
+  },
+  { key: "CLAIM_SYMPTOM", scope: "MACHINE", label: "รูปอาการ", site: true, families: ["ALLIANCE", "OASIS", "OTHER"] },
+];
+
+/**
+ * เหตุผลด่วนตอนตีกลับ (ตัวอย่าง QUICK) — แตะแล้วติ๊กช่องที่คู่กันให้ และเติมข้อความลงเหตุผล
+ * เหตุผลที่ชี้ช่องของเครื่อง (flag scope MACHINE) หน้าจอต่อท้าย " · ทั้งใบ" และซ่อนเมื่อข้อมูลเครื่องล็อกแล้ว
+ */
+export const CLAIM_QUICK_REASONS: readonly { text: string; flag: string }[] = [
+  { text: "รูปอะไหล่เก่าไม่เห็นสติกเกอร์รหัส", flag: "CLAIM_PART" },
+  { text: "วิดีโอไม่เห็นรหัส Error บนจอ", flag: "CLAIM_ERROR_VIDEO" },
+  { text: "รหัสตัวเสียไม่ตรงกับรูป", flag: "BROKEN_CODE" },
+  { text: "ภาพมืด/เบลอ", flag: "CLAIM_PART" },
+  { text: "ป้ายรุ่นไม่ตรงกับรูป", flag: "MODEL" },
+];
+
+/**
  * Troubleshooting ข้อ 4 ของฟอร์ม — บังคับเฉพาะเครื่อง Huebsch หรือ Primus
  *
  * ⚠ รายการนี้เป็นตัวอย่างไว้ก่อน (เจ้าของงานยังไม่ได้ส่งรายการจริงของผู้ผลิตมา)
@@ -1006,6 +1107,30 @@ export const CLAIM_TROUBLESHOOTING: { match: RegExp; brand: string; items: strin
 export function claimTroubleshootingFor(make: string | null | undefined) {
   return make ? CLAIM_TROUBLESHOOTING.find((t) => t.match.test(make)) ?? null : null;
 }
+
+/**
+ * Troubleshooting ข้อที่มีไฟล์ในใบเป็นหลักฐานอยู่แล้ว (ก้อน 5 · ตัวอย่าง hint) — ฟอร์มเขียนต่อท้ายข้อนั้น
+ * "(มี{วิดีโอ Error code} แล้ว)" / "(มีรูปหลังซ่อมแล้ว)" ให้ช่างรู้ว่าข้อนี้มีของยืนยัน
+ * แค่บอก ไม่ติ๊กให้ (เจ้าของงานเลือกข้อ 7ง: ระบบไม่ติ๊กแทนช่าง) · ERROR_VIDEO = วิดีโอ Error/อาการของเครื่อง · AFTER = รูปหลังซ่อม
+ * อยู่คู่กับ CLAIM_TROUBLESHOOTING — ได้รายการจริงของผู้ผลิตแล้วแก้สองที่นี้พร้อมกัน
+ */
+export const CLAIM_TROUBLESHOOTING_HINTS: Record<string, "ERROR_VIDEO" | "AFTER"> = {
+  "เช็ค Error code บนหน้าจอและบันทึกรหัส": "ERROR_VIDEO",
+  "เปลี่ยนแล้วทดสอบเดินเครื่องครบรอบ": "AFTER",
+};
+
+/**
+ * เหตุผลที่ช่างไม่ส่งเคลมอะไหล่ชิ้นที่อยู่ในประกัน (ก้อน 5 · เจ้าของงานเลือกข้อ 10) — เก็บในประวัติ CLAIM_SKIPPED (meta.skips)
+ *
+ * ทำไมต้องถาม: สาขาในประกัน อะไหล่ที่ไม่ได้เคลมคือของที่บริษัทจ่ายเองทั้งที่ผู้ขายควรรับ — ถอดติ๊กเงียบ ๆ แล้ว
+ * ไม่มีใครรู้ว่าตั้งใจหรือลืม · "อื่น ๆ" ต้องพิมพ์เหตุผลเอง · ผู้ตรวจเห็น "ช่างไม่ส่งเคลม: {ชิ้น} ({เหตุผล})"
+ */
+export const CLAIM_SKIP_REASONS = [
+  { value: "DAMAGED_LOST", label: "อะไหล่เก่าเสียหาย/หาย" },
+  { value: "NOT_WARRANTY", label: "ไม่ใช่ชิ้นในประกัน" },
+  { value: "OTHER", label: "อื่น ๆ" },
+] as const;
+export type ClaimSkipReason = (typeof CLAIM_SKIP_REASONS)[number]["value"];
 
 export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   BEFORE: "ก่อนซ่อม",

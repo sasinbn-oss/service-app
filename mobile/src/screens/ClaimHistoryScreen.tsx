@@ -28,8 +28,9 @@ import { colors, headingFont, radius, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "ClaimHistory">;
 
-type Status = "ALL" | "PENDING" | "APPROVED" | "REJECTED";
-type Look = "PENDING" | "APPROVED" | "REJECTED" | "OLD";
+// DECLINED = Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย (เคลมก้อน 3)
+type Status = "ALL" | "PENDING" | "APPROVED" | "REJECTED" | "DECLINED";
+type Look = "PENDING" | "APPROVED" | "REJECTED" | "DECLINED" | "OLD";
 
 interface Row {
   id: number;
@@ -62,7 +63,8 @@ interface Data {
   total: number;
   /** แถวที่ยังเหลือต่อจากแถวสุดท้ายที่มี — ปุ่มแสดงเพิ่มดูจากตัวนี้ (total รวมเคลมใหม่ที่อยู่บนสุดซึ่งหน้าถัดไปไม่มีวันได้) */
   rest: number;
-  tiles: { pending: number; approved: number; rejected: number; total: number; orders: number };
+  /** declined = ปิดเคลม ไม่ส่งผู้ขาย (เซิร์ฟเวอร์ก่อนเคลมก้อน 3 ไม่ส่ง) — ไม่มีช่องสรุปของตัวเอง ขึ้นในบรรทัดรวม */
+  tiles: { pending: number; approved: number; rejected: number; declined?: number; total: number; orders: number };
   counts: Record<Status, number>;
   brands: string[];
 }
@@ -77,6 +79,8 @@ const LOOK: Record<Look, { fg: string; bg: string; bd: string }> = {
   PENDING: { fg: colors.warningInk, bg: colors.warningSoft, bd: colors.warningBorder },
   APPROVED: { fg: colors.successInk, bg: colors.successSoft, bd: colors.successLine },
   REJECTED: { fg: colors.dangerInk, bg: colors.dangerSoft, bd: colors.dangerLine },
+  // เทาแต่ตัวเข้มกว่ารอบเก่า — จบแล้วเหมือนกัน แต่เป็นผลจริงของชิ้นนั้น ไม่ใช่รอบที่ถูกส่งใหม่ทับไปแล้ว
+  DECLINED: { fg: colors.text, bg: colors.rowAlt, bd: colors.borderStrong },
   OLD: { fg: colors.textMuted, bg: colors.rowAlt, bd: colors.borderStrong },
 };
 
@@ -85,6 +89,7 @@ const STATUS_CHIPS: { k: Status; label: string; fg: string }[] = [
   { k: "PENDING", label: "รอตรวจ", fg: colors.warningInk },
   { k: "APPROVED", label: "อนุมัติ", fg: colors.successInk },
   { k: "REJECTED", label: "ตีกลับ", fg: colors.dangerInk },
+  { k: "DECLINED", label: "ปิดเคลม ไม่ส่งผู้ขาย", fg: colors.textMuted },
 ];
 
 type Preset = "month" | "prev" | "3m" | "year";
@@ -121,7 +126,8 @@ function rangeLabel(from: string, to: string, preset: Preset | null) {
 }
 
 function StatusPill({ r }: { r: Row }) {
-  const t = LOOK[r.look];
+  // ป้ายที่แอปรุ่นนี้ยังไม่รู้จัก (เซิร์ฟเวอร์ใหม่กว่า) ขึ้นแบบรอบเก่า — อ่านค่าว่างแล้วทั้งรายการพัง
+  const t = LOOK[r.look] ?? LOOK.OLD;
   return (
     <View style={[styles.pill, { backgroundColor: t.bg, borderColor: t.bd }]}>
       <Text style={[styles.pillText, { color: t.fg }]}>{r.statusLabel}</Text>
@@ -433,12 +439,21 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
     </View>
   ) : null;
 
-  const actions = (r: Row) => (
-    <>
+  /**
+   * ชิ้นที่ปิดเคลม ไม่ส่งผู้ขาย ไม่มีใบเคลม (เซิร์ฟเวอร์ตอบ 409) — ไม่ขึ้นปุ่มที่กดแล้วพังทุกครั้ง
+   * อ่านจาก status ของแถว ไม่ใช่ look — แถวปิดเคลมไม่มีวันกลายเป็นรอบเก่า แต่กติกา look อาจเปลี่ยนได้
+   */
+  const pdfButton = (r: Row) =>
+    r.status === "DECLINED" ? null : (
       <TouchableOpacity style={styles.pdf} onPress={() => openPdf(r)} disabled={opening !== null} accessibilityLabel={`ใบเคลม PDF ${r.code} ${r.partCode}`}>
         {opening === r.id ? <Spinner size="small" color={colors.primaryInk} /> : null}
         <Text style={styles.pdfText}>ใบเคลม PDF</Text>
       </TouchableOpacity>
+    );
+
+  const actions = (r: Row) => (
+    <>
+      {pdfButton(r)}
       <TouchableOpacity style={styles.open} onPress={() => openOrder(r)} accessibilityLabel={`เปิดใบงาน ${r.code}`}>
         <Text style={styles.openText}>เปิดใบงาน</Text>
       </TouchableOpacity>
@@ -532,10 +547,7 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
               <Text style={[styles.sub, { flex: 1 }]} numberOfLines={1}>
                 {reviewedText(r) ?? (r.techName ? `ช่าง ${r.techName}` : "")}
               </Text>
-              <TouchableOpacity style={styles.pdf} onPress={() => openPdf(r)} disabled={opening !== null} accessibilityLabel={`ใบเคลม PDF ${r.code} ${r.partCode}`}>
-                {opening === r.id ? <Spinner size="small" color={colors.primaryInk} /> : null}
-                <Text style={styles.pdfText}>ใบเคลม PDF</Text>
-              </TouchableOpacity>
+              {pdfButton(r)}
             </View>
           </TouchableOpacity>
         ))}
@@ -603,6 +615,7 @@ export default function ClaimHistoryScreen({ navigation, route }: Props) {
             <Text style={styles.sub}>
               รวม {data.tiles.total} ชิ้น จาก {data.tiles.orders} ใบงาน · รอตรวจ {data.tiles.pending} · อนุมัติ {data.tiles.approved} · ตีกลับ{" "}
               {data.tiles.rejected}
+              {data.tiles.declined ? ` · ปิดเคลม ไม่ส่งผู้ขาย ${data.tiles.declined}` : ""}
             </Text>
           ) : null}
         </View>

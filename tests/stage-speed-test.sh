@@ -54,6 +54,13 @@ L=$(DB "select l.action||'|'||l.status||'|'||u.\"employeeCode\"||'|'||l.note fro
   && [ "$(AGE '"updatedAt"' "\"WorkOrder\" where id=$W")" -lt 60 ] \
   && pass "เวลาในประวัติและใบงานเป็น UTC ตรงกับตอนนี้ (ไม่เลื่อนตามเขตเวลา)" || fail "เวลาเพี้ยน: ประวัติห่าง $(AGE '"createdAt"' "\"WorkOrderLog\" where \"workOrderId\"=$W order by id desc limit 1") วิ"
 
+echo "═══ แอดมินแก้เป็นงานด่วน (งานวันนี้ติดเวลาปิดรับเสมอ — เส้นตายคือเมื่อวาน)"
+# คอนเฟิร์มข้างบนไม่ติ๊กงานด่วน (ทดสอบทางคำสั่งเดียว) — ปลดล็อกด้วยปุ่มแยก ไม่งั้นปล่อยงานข้างล่างได้ 409 เฉพาะตอนเทสต์รันหลังวันเริ่มกฎ
+[ "$(PC $A work-orders/$W/urgent-release '{}')" = "200" ] \
+  && [ "$(DB "select to_char(\"urgentReleaseFor\",'YYYY-MM-DD HH24:MI')||'|'||status||'|'||(select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W and action='URGENT_RELEASE') from \"WorkOrder\" where id=$W")" = "$TODAY 00:00|ASSIGNED|1" ] \
+  && pass "แก้เป็นงานด่วน: วันที่ปลดล็อก = วันนัด (เที่ยงคืน UTC) ใบอยู่ขั้นเดิม ประวัติหนึ่งแถว (ฐานข้อมูล)" \
+  || fail "แก้เป็นงานด่วน: $(DB "select coalesce(\"urgentReleaseFor\"::text,'-')||'|'||status from \"WorkOrder\" where id=$W")"
+
 echo "═══ ปล่อยงานพร้อมกันสองครั้ง"
 [ "$(PC $T work-orders/$W/dispatch '{}')" = "403" ] && pass "ช่างกดปล่อยงานไม่ได้ (403)" || fail "ช่างกดปล่อยงานได้"
 PC $S work-orders/$W/dispatch '{}' > /tmp/ss1 & PC $S work-orders/$W/dispatch '{"note":"ครั้งที่สอง"}' > /tmp/ss2 & wait

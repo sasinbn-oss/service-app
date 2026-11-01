@@ -3,6 +3,7 @@
 #        ปิดงานได้เฉพาะงานที่จบ · เทียบผลกับกระดานติดตาม
 set -e
 SP="$(dirname "$0")"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001); T=$(login T001)
@@ -31,11 +32,12 @@ cleanup() {
 trap cleanup EXIT
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$REGION\"}" >/dev/null
 curl -s -X PATCH "localhost:4000/api/auth/users/$TID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
-PID=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
 
 WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0001","jobType":"CM","priority":"NORMAL","machines":[{"code":"W31","model":"Oasis","symptom":"ทดสอบสายงาน"}]}')
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id'); CODE=$(echo "$WO" | J 'd.orders?d.orders[0].code:d.code')
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ จึงเลือกหลังเปิดใบ (fx_part)
+PID=$(fx_part $ID BOARD)
 echo "═══ $CODE"
 echo "  เปิดใบงาน → $(ws $ID)"
 

@@ -5,6 +5,7 @@
 # ทุกข้อยืนยันผลที่ฐานข้อมูลด้วย ไม่ใช่เชื่อแค่คำตอบของ API (CLAUDE.md)
 set -e
 SP="$(dirname "$0")"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001); T=$(login T001)
@@ -27,8 +28,6 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
 OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where id=$TID")
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$REGION\"}" >/dev/null
 curl -s -X PATCH "localhost:4000/api/auth/users/$TID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"team\":\"$TEAM\"}" >/dev/null
-P1=$(curl -s "localhost:4000/api/spare-parts?search=SP-BOARD" -H "$(H $A)" | J 'const a=Array.isArray(d)?d:d.rows;a[0].id')
-P2=$(DB "select id from \"SparePart\" where id<>$P1 order by id limit 1")
 
 newwo() {
   POST $A work-orders "{\"branchCode\":\"C0001\",\"jobType\":\"$1\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W32\",\"symptom\":\"ทดสอบแผนงาน\"}]}" \
@@ -118,6 +117,8 @@ echo "$R" | grep -q "ยังขาด: รูปหน้างาน · ร�
 
 echo
 echo "═══ หัวหน้าภาคนัดวัน → แอดมินเบิก → แอดมินคอนเฟิร์มลูกค้า (เลื่อนวันได้) → หัวหน้าภาคยืนยันออกงาน"
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ (fx_part) — เลือกตอนจะระบุอะไหล่ หลังผ่านขั้นตรวจหน้างานแล้ว
+P1=$(fx_part $ID BOARD)
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}]}" >/dev/null
 POST $A "work-orders/$ID/parts-sourcing" "{\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 [ "$(st $ID)" = "PARTS_CHECKED" ] && pass "ของครบแล้วไปหัวหน้าภาค · นัดวันเข้า" || fail "ไม่ได้ไปรอนัดวัน: $(st $ID)"
@@ -229,6 +230,9 @@ echo "$R" | grep -q "ขั้นที่ผ่านมาแล้ว" && pas
 echo
 echo "═══ แยกใบงานรออะไหล่ตอนเช็คอะไหล่"
 ID2=$(newwo CM); CREATED="$CREATED $ID2"
+# ใบใหม่ — เลือกอะไหล่ของใบนี้เอง: P1 บอร์ด · P2 สายพาน (เดิม P2 คือแถวแรกของตารางที่ไม่ใช่ P1 ซึ่งอาจเป็นยี่ห้ออื่น)
+# ใบแยก (CH) และใบต่อ (follow-up) เครื่องเดียวกับใบนี้ จึงใช้ชุดเดียวกัน
+P1=$(fx_part $ID2 BOARD); P2=$(fx_part $ID2 BELT)
 POST $S "work-orders/$ID2/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1},{\"sparePartId\":$P2,\"quantity\":2}]}" >/dev/null
 POST $A "work-orders/$ID2/parts-sourcing" "{\"splitOut\":true,\"results\":[{\"sparePartId\":$P1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$P2,\"inStock\":false}]}" >/dev/null
 CH=$(DB "select id from \"WorkOrder\" where \"parentId\"=$ID2")

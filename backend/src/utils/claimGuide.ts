@@ -134,12 +134,136 @@ export const ALLIANCE_ERRORS: { code: string; name: string; checks: string[] }[]
   { code: "อื่น ๆ", name: "ไม่อยู่ในคู่มือ / ไม่มี Error", checks: [] },
 ];
 
-export function claimGuideFor(make: string | null | undefined) {
+/** รหัสในรายการที่หมายถึง "ไม่มี Error ขึ้น" — เก็บรหัสเดิมไว้ (ใบเคลมเก่าใช้ค่านี้) เปลี่ยนแค่คำที่แสดง */
+export const NO_ERROR_CODE = "อื่น ๆ";
+
+const THAI = /[\u0E00-\u0E7F]/;
+
+/**
+ * ชื่อ Error แยกเป็นส่วนไทย/ส่วนอังกฤษ — ชื่อในคู่มือเขียนปนกัน ("Door Lock — ประตูล็อก/ปลดล็อก" · "Eco fan" · "ประตูปิดไม่ติด")
+ * แยกจากรูปแบบ "อังกฤษ — ไทย" เท่านั้น ไม่แปลเอง: ชื่อที่ไม่มีส่วนไทยก็แสดงตามคู่มือ ดีกว่าคำแปลที่ช่างไม่เคยเห็น
+ */
+export function errorNameParts(name: string): { th: string | null; en: string | null } {
+  const i = name.indexOf(" — ");
+  if (i > 0) {
+    const en = name.slice(0, i).trim(), th = name.slice(i + 3).trim();
+    if (THAI.test(th) && !THAI.test(en)) return { th, en };
+  }
+  return THAI.test(name) ? { th: name, en: null } : { th: null, en: name };
+}
+
+/**
+ * ชื่อที่แสดงในรายการเลือก Error — ขึ้นต้นด้วยภาษาไทย อังกฤษอยู่ในวงเล็บ ("{code} — {ไทย} ({อังกฤษ})")
+ * ช่างกับ Admin Spare Part อ่านไทยก่อน แต่ต้องเห็นคำอังกฤษให้ตรงกับคู่มือ Error in Field ที่ถือไปหน้างาน
+ */
+export function errorLabel(e: { code: string; name: string }): string {
+  const { th, en } = errorNameParts(e.name);
+  return th ? `${e.code} — ${th}${en ? ` (${en})` : ""}` : `${e.code} — ${en}`;
+}
+
+/**
+ * บรรทัด "Error ที่เครื่องขึ้น" ของใบเคลม/หน้าตรวจ จาก fieldCheck ที่เก็บตอนปิดงาน — "{code} — {ชื่อไทย}" หรือ "ไม่มี Error ขึ้น"
+ * null = ใบนี้ไม่มีข้อมูล Error (เครื่องที่ไม่ใช่ Alliance · ใบเก่าก่อนมีช่องนี้) → ไม่พิมพ์บรรทัดนี้ ไม่ใช่พิมพ์ว่า "ไม่มี"
+ * ชื่ออ่านจากที่เก็บไว้ในแถว (ชื่อ ณ วันที่ส่ง) ไม่ใช่รายการปัจจุบัน — แก้คู่มือทีหลังต้องไม่เปลี่ยนใบที่ส่งไปแล้ว
+ */
+export function machineErrorText(fieldCheck: unknown): string | null {
+  const fc = (fieldCheck ?? null) as { errorCode?: unknown; errorName?: unknown } | null;
+  if (typeof fc?.errorCode !== "string" || !fc.errorCode) return null;
+  if (fc.errorCode === NO_ERROR_CODE) return "ไม่มี Error ขึ้น";
+  const name = typeof fc.errorName === "string" ? fc.errorName : "";
+  const { th, en } = errorNameParts(name);
+  const shown = th ?? en;
+  return shown ? `${fc.errorCode} — ${shown}` : fc.errorCode;
+}
+
+type MachineKind = "WASHER" | "DRYER";
+
+/**
+ * Error นี้ขึ้นกับเครื่องซักหรือเครื่องอบ (ก้อน 5) — รายการเลือกแสดงเฉพาะของชนิดเครื่องในใบ ช่างไม่ต้องไล่ผ่าน Error ของเครื่องอบ
+ * ตอนซ่อมเครื่องซัก (เดิมรายการยาว 20 ข้อปนกัน เลือกผิดได้ง่าย)
+ *
+ * ⚠ ค่าตั้งต้นที่บอกเจ้าของงาน: แบ่งจากชื่อ Error ในรายการ ยังไม่ได้เทียบกับคู่มือ Error in Field ตัวจริงทีละข้อ
+ * ไม่อยู่ในตารางนี้ = ใช้ได้ทั้งสองชนิด (Push Start · Door Close · CYCLES · ไม่มี Error ขึ้น) · เครื่องที่ไม่รู้ชนิด = แสดงทั้งหมด
+ * กรองแค่รายการที่แสดง — ตอนปิดงานยังรับรหัสทุกตัวในคู่มือ (ชนิดเครื่องเดาจากตัวอักษรหน้ารหัสเครื่อง อาจผิดได้)
+ */
+const ERROR_KIND: Record<string, MachineKind> = {
+  "E FL": "WASHER",
+  "E nFLo": "WASHER",
+  "E bELt": "WASHER",
+  "E dL / E dL1 / E dL2": "WASHER",
+  "E d 24": "WASHER",
+  "E d Co": "WASHER",
+  "เสียงดัง/สั่น": "WASHER",
+  "อบไม่ร้อน": "DRYER",
+  ECoFAn: "DRYER",
+  ECodrv: "DRYER",
+  "EFLT 6": "DRYER",
+  "E io 06": "DRYER",
+  EnrL: "DRYER",
+  "ร้อนเกิน": "DRYER",
+  "EAF1 / EAF2": "DRYER",
+  "E co": "DRYER",
+};
+
+/**
+ * คำอังกฤษในข้อเช็คที่ช่างอ่านไม่คล่อง — แสดงคำอ่านไทยนำหน้า คำอังกฤษในวงเล็บ (ตรงกับคู่มือที่ถือไปหน้างาน)
+ * ⚠ ค่าตั้งต้นที่บอกเจ้าของงาน · เปลี่ยนแค่คำที่แสดง — ค่าที่เก็บ (fieldCheck.checked/offered) ยังเป็นข้อความเดิมของคู่มือ
+ * ใบเคลมเก่าจึงยังจับคู่ข้อเช็คได้ และแก้คำอ่านทีหลังไม่กระทบข้อมูลที่ส่งไปแล้ว
+ */
+const CHECK_WORDS: [RegExp, string][] = [
+  [/\bSolenoid\b/g, "โซลินอยด์ (Solenoid)"],
+  [/\bLimit switch\b/g, "ลิมิตสวิตช์ (Limit switch)"],
+  [/\bReed switch\b/g, "รีดสวิตช์ (Reed switch)"],
+  [/\bContactor\b/g, "คอนแทคเตอร์ (Contactor)"],
+];
+
+/** ข้อเช็คแบบที่แสดง — คำอังกฤษที่รู้จักได้คำอ่านไทยนำหน้า ที่เหลือคงเดิม */
+export function checkLabel(check: string): string {
+  return CHECK_WORDS.reduce((s, [re, th]) => s.replace(re, th), check);
+}
+
+/**
+ * รายการ Error ที่ส่งให้แอป — label (ไทยก่อน) กับ thai (ส่วนไทยของชื่อ หรือชื่อเต็มเมื่อไม่มีส่วนไทย) คิดที่นี่ที่เดียว
+ * types = ชนิดเครื่องที่ Error นี้ขึ้นได้ · checkLabels = ข้อเช็คแบบที่แสดง (ลำดับเดียวกับ checks — ค่าที่ส่งกลับมายังเป็น checks)
+ * "อื่น ๆ" ขึ้นชื่อ "ไม่มี Error ขึ้น" (เจ้าของงานเลือกข้อ 4 · รหัสที่เก็บไม่เปลี่ยน ใบเก่ายังอ่านได้) และอยู่บนสุด —
+ * ตัวเลือกที่ใช้บ่อยรองจาก Error ที่ระบบแนะนำจากใบแจ้ง (แอปวางตัวแนะนำไว้เหนืออีกที)
+ */
+const ALLIANCE_ERROR_LIST = [
+  ...ALLIANCE_ERRORS.filter((e) => e.code === NO_ERROR_CODE),
+  ...ALLIANCE_ERRORS.filter((e) => e.code !== NO_ERROR_CODE),
+].map((e) => ({
+  ...e,
+  label: e.code === NO_ERROR_CODE ? "ไม่มี Error ขึ้น" : errorLabel(e),
+  thai: e.code === NO_ERROR_CODE ? "ไม่มี Error ขึ้น" : errorNameParts(e.name).th ?? e.name,
+  types: (ERROR_KIND[e.code] ? [ERROR_KIND[e.code]] : ["WASHER", "DRYER"]) as MachineKind[],
+  checkLabels: e.checks.map(checkLabel),
+}));
+
+/** ข้อเช็คทุกข้อในคู่มือ → คำที่แสดง — หน้าตรวจใช้กับใบเก่า (offered ของแถวอาจไม่ตรงกับ Error ใดในรายการปัจจุบันแล้ว) */
+const CHECK_LABELS: Record<string, string> = Object.fromEntries(
+  ALLIANCE_ERRORS.flatMap((e) => e.checks).map((c) => [c, checkLabel(c)])
+);
+
+/**
+ * machineType = ชนิดเครื่องของใบ (WASHER/DRYER) — ส่งมาแล้วรายการ Error เหลือเฉพาะที่ขึ้นกับเครื่องชนิดนั้น
+ * ไม่ส่ง/ไม่รู้ชนิด = ทุกข้อ (ตอนปิดงานตรวจรหัสกับรายการเต็มเสมอ — ดู ERROR_KIND)
+ */
+export function claimGuideFor(make: string | null | undefined, machineType?: string | null) {
   const plate = plateTemplateFor(make);
+  const kind = machineType === "WASHER" || machineType === "DRYER" ? machineType : null;
   return {
     plate,
     // รายการเช็คมีเฉพาะยี่ห้อ Alliance — OASIS/อื่น ๆ ยังไม่มีคู่มือ
     // เคยมีเช็คลิสต์การติดตั้งฐานเครื่อง 5 ข้อ — เจ้าของงานให้เอาออก (ต.ค. 69) ใบเคลมเก่ายังเก็บคำตอบไว้ใน fieldCheck.install
-    errors: plate.family === "ALLIANCE" ? ALLIANCE_ERRORS : [],
+    errors:
+      plate.family === "ALLIANCE"
+        ? kind
+          ? ALLIANCE_ERROR_LIST.filter((e) => e.types.includes(kind))
+          : ALLIANCE_ERROR_LIST
+        : [],
+    // ชนิดเครื่องที่ใช้กรองรายการ — แอปขึ้น "แสดงเฉพาะ Error ของเครื่องซัก/เครื่องอบ" · ว่าง = แสดงทั้งหมด
+    machineType: plate.family === "ALLIANCE" ? kind : null,
+    noErrorCode: NO_ERROR_CODE,
+    checkLabels: plate.family === "ALLIANCE" ? CHECK_LABELS : {},
   };
 }

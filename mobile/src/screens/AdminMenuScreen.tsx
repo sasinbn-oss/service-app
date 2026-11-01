@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { colors } from "../theme";
 import MenuList, { MenuEntry } from "../components/MenuList";
+import { DispatchCutoffCard } from "../components/DispatchCutoff";
 import { AdminStackParamList } from "../navigation/types";
 
 type Props = NativeStackScreenProps<AdminStackParamList, "AdminMenu">;
@@ -156,8 +157,11 @@ export default function AdminMenuScreen({ navigation }: Props) {
       title="ระบบหลังบ้าน"
       subtitle="จัดการข้อมูลของทั้งระบบ"
       note="การแก้ไขในหน้านี้มีผลกับผู้ใช้ทุกคน"
-      // Admin Spare Part เหลือแค่ข้อมูลอะไหล่ (เจ้าของงานกำหนด ต.ค. 69) — หน้าอื่นเซิร์ฟเวอร์ไม่ให้แก้อยู่แล้ว
+      // เมนูของ Admin Spare Part เหลือแค่ข้อมูลอะไหล่ (เจ้าของงานกำหนด ต.ค. 69) — หน้าอื่นเซิร์ฟเวอร์ไม่ให้แก้อยู่แล้ว · การ์ดเวลาปิดรับข้างล่างไม่ใช่เมนู
       entries={user?.partsAdmin ? entries.filter((e) => e.key === "ManageSpareParts") : entries}
+      // เวลาปิดรับปล่อยงาน (ต.ค. 69 · ข้อ 13): Admin Spare Part ก็เห็นการ์ดนี้แต่กดไม่ได้ — เจ้าของงานตอบว่า "ดูอย่างเดียว"
+      // ไม่ใช่ซ่อน ต้องรู้ว่าปิดรับกี่โมงเวลาตอบหัวหน้าภาคที่โทรมาถาม (ด่านแก้ไขจริงอยู่ที่เซิร์ฟเวอร์)
+      footer={<DispatchCutoffCard />}
     />
   );
 }

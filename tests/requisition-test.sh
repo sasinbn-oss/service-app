@@ -2,6 +2,7 @@
 # ทดสอบ: เลขใบเบิกอะไหล่ตอนแอดมินเบิก (หลังนัดวัน ก่อนคอนเฟิร์มลูกค้า — ต.ค. 69 รอบสอง) + รูปใบเหลืองตอนปิดงาน
 set -e
 SP="$(dirname "$0")"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001); T=$(login T001)
@@ -12,10 +13,6 @@ fail() { echo "FAIL $1"; FAILED=1; }
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
 # วันนัดของทั้งสองใบ (ใบเบิกอะไหล่ · ใบไม่ใช้อะไหล่)
 D1=$(day 7)
-
-PARTS=$(curl -s "localhost:4000/api/spare-parts?search=SP-" -H "$(H $A)")
-BOARD_ID=$(echo "$PARTS" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BOARD").id')
-BELT_ID=$(echo "$PARTS" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BELT").id')
 
 # ตั้งภาคให้หัวหน้าภาคตรงกับสาขาที่ทดสอบ ไม่งั้นลำดับการรันเทสต์มีผลต่อผลลัพธ์
 SUPID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
@@ -38,6 +35,9 @@ WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Typ
 ID=$(echo "$WO" | J 'd.orders?d.orders[0].id:d.id')
 CODE=$(echo "$WO" | J 'd.orders?d.orders[0].code:d.code')
 echo "  $CODE (id=$ID)"
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ — หยิบหลังเปิดใบ เพราะต้องรู้ก่อนว่าเครื่องเป็นยี่ห้ออะไร
+BOARD_ID=$(fx_part "$ID" BOARD)
+BELT_ID=$(fx_part "$ID" BELT)
 curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Content-Type: application/json' \
   -d "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD_ID,\"quantity\":1},{\"sparePartId\":$BELT_ID,\"quantity\":2}]}" >/dev/null
 

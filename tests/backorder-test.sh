@@ -4,6 +4,7 @@
 #        · วันนัดตั้งแต่วันนี้ (ของคลังอื่นไม่ต้องล่วงหน้า 7 วันแล้ว)
 set -e
 SP="$(dirname "$0")"
+. "$SP/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 A=$(login A001); S=$(login S001)
@@ -16,9 +17,6 @@ parts() { curl -s "localhost:4000/api/work-orders/$1" -H "$(H $A)" | J 'd.waitin
 post() { curl -s -X POST "localhost:4000/api/work-orders/$1/$2" -H "$(H ${4:-$A})" -H 'Content-Type: application/json' -d "$3"; }
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
 
-PP=$(curl -s "localhost:4000/api/spare-parts?search=SP-" -H "$(H $A)")
-BOARD=$(echo "$PP" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BOARD").id')
-BELT=$(echo "$PP" | J 'const a=Array.isArray(d)?d:d.rows; a.find(x=>x.partCode==="SP-BELT").id')
 SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employeeCode==="S001").id')
 # เก็บกวาดตอนจบ (ผ่านหรือไม่ก็ตาม) — ลบใบที่สร้าง คืนภาคของหัวหน้าภาคทดสอบ (CLAUDE.md)
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
@@ -37,6 +35,9 @@ WO=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Typ
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W61","symptom":"ทดสอบของหมด"}]}')
 ID=$(echo "$WO" | J 'd.orders[0].id')
 echo "  $(echo "$WO" | J 'd.orders[0].code') (id=$ID)"
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ จึงเลือกหลังเปิดใบ (fx_part) · ข้อความที่พิมพ์รหัสอะไหล่เทียบกับตัวที่ใช้จริง
+BOARD=$(fx_part $ID BOARD); BELT=$(fx_part $ID BELT)
+BOARD_CODE=$(fx_part_code $ID BOARD); BELT_CODE=$(fx_part_code $ID BELT)
 post $ID parts "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" $S >/dev/null
 TEAM=$(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.suggestedTeam')
 st $ID | grep -q "^แอดมิน · เช็คอะไหล่" && pass "ระบุอะไหล่แล้วไปแอดมินเช็คอะไหล่ (ยังไม่เบิก)" || fail "หลังระบุอะไหล่: $(st $ID)"
@@ -90,7 +91,7 @@ st $ID | grep -q "รออะไหล่" && pass "สถานะกลับ
 [ "$(DB "select \"inStock\"::text||'|'||coalesce(warehouse,'-') from \"WorkOrderPart\" where \"workOrderId\"=$ID and \"sparePartId\"=$BOARD")" = "true|$L94" ] \
   && pass "ตัวที่ยังมีของ ผลเช็คเดิมไม่หาย" || fail "ผลเช็คบอร์ดหาย"
 [ "$(DB "select \"partsExpectedAt\"::date from \"WorkOrder\" where id=$ID")" = "2026-11-25" ] && pass "จำวันคาดว่าของเข้ารอบใหม่" || fail "ไม่จำวันคาดว่าของเข้า"
-curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.logs[0].action+"|"+d.logs[0].note.replace(/\n/g," ")' | grep -q "^PARTS_SHORT|.*SP-BELT.*งานด่วนอีกใบใช้ไป" \
+curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.logs[0].action+"|"+d.logs[0].note.replace(/\n/g," ")' | grep -q "^PARTS_SHORT|.*$BELT_CODE.*งานด่วนอีกใบใช้ไป" \
   && pass "ประวัติบันทึกว่าของไม่พอ ตัวไหน และเหตุผล" || fail "ประวัติ: $(curl -s "localhost:4000/api/work-orders/$ID" -H "$(H $A)" | J 'd.logs[0].action+"|"+d.logs[0].note')"
 # ร้านยังไม่รู้วัน (เบิกก่อนคอนเฟิร์ม) — ประวัติต้องไม่สั่งให้แจ้งร้านว่าเลื่อน
 SHORT=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$ID and action='PARTS_SHORT' order by id desc limit 1")
@@ -108,7 +109,7 @@ st $ID | grep -q "^แอดมิน · คอนเฟิร์มลูกค
 post $ID confirm-appointment '{}' >/dev/null
 st $ID | grep -q "ปล่อยงาน" && [ "$(DB "select status||'|'||\"appointmentStatus\" from \"WorkOrder\" where id=$ID")" = "ASSIGNED|CONFIRMED" ] \
   && pass "ลูกค้าคอนเฟิร์มแล้ว → หัวหน้าภาคปล่อยงาน (ฐานข้อมูล)" || fail "หลังคอนเฟิร์ม: $(st $ID)"
-echo "$RES" | J 'd.waitingParts.map(p=>p.partCode+"="+p.requisitionNo).sort().join(",")' | grep -q "^SP-BELT=RQ-ROUND-2,SP-BOARD=RQ-ROUND-1$" \
+echo "$RES" | J 'd.waitingParts.map(p=>p.partCode+"="+p.requisitionNo).sort().join(",")' | grep -q "^$BELT_CODE=RQ-ROUND-2,$BOARD_CODE=RQ-ROUND-1$" \
   && pass "แต่ละตัวได้เลขใบเบิกของตัวเอง" || fail "เลขใบเบิก: $(echo "$RES" | J 'd.waitingParts.map(p=>p.partCode+"="+p.requisitionNo).join(",")')"
 curl -s "localhost:4000/api/work-orders?search=W61" -H "$(H $A)" | J 'const r=(d.rows||d).find(x=>x.id==='$ID'); r.partsState' | grep -q "^ISSUED$" \
   && pass "การ์ดขึ้นป้าย เบิกแล้ว" || fail "ป้ายอะไหล่บนการ์ดไม่ใช่ ISSUED"
@@ -118,8 +119,10 @@ echo "═══ วันนัด: ตั้งแต่วันนี้ · �
 WO3=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W63","symptom":"ของคลังอื่น"}]}')
 ID3=$(echo "$WO3" | J 'd.orders[0].id')
-post $ID3 parts "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" $S >/dev/null
-post $ID3 parts-sourcing "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+# คนละเครื่องกับใบแรก ยี่ห้ออาจไม่เหมือนกัน — เลือกอะไหล่ของใบนี้เอง
+BOARD3=$(fx_part $ID3 BOARD)
+post $ID3 parts "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD3,\"quantity\":1}]}" $S >/dev/null
+post $ID3 parts-sourcing "{\"results\":[{\"sparePartId\":$BOARD3,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
 st $ID3 | grep -q "^หัวหน้าภาค · นัดวันเข้า" && pass "ของครบรอบเดียว ส่งหัวหน้าภาคนัดทันที" || fail "ของครบแล้วไม่เดินต่อ: $(st $ID3)"
 curl -s "localhost:4000/api/work-orders?search=W63" -H "$(H $A)" | J 'const r=(d.rows||d).find(x=>x.id==='$ID3'); r.partsState' | grep -q "^TRANSFER$" \
   && pass "การ์ดขึ้นป้าย อะไหล่ครบ · ต้องโอน" || fail "ป้ายอะไหล่บนการ์ดไม่ใช่ TRANSFER"
@@ -130,8 +133,8 @@ post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 0)\"}" $S >/dev/nu
 [ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "PARTS_REQUESTED|$(day 0)" ] \
   && pass "ของอยู่คลังอื่นก็นัดวันนี้ได้ (ไม่ต้องล่วงหน้า 7 วันแล้ว — ฐานข้อมูล)" || fail "นัดวันนี้ไม่ผ่าน: $(st $ID3)"
 # คลังภูเก็ตอยู่ในพื้นที่ (ไม่ต้องโอน) → หัวหน้าภาคเบิกส่งมอบ → ของครบ ไปขั้นคอนเฟิร์มลูกค้า
-post $ID3 parts-check "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
-post $ID3 parts-pickup "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-BO3\"}]}" $S >/dev/null
+post $ID3 parts-check "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD3,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+post $ID3 parts-pickup "{\"results\":[{\"sparePartId\":$BOARD3,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-BO3\"}]}" $S >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM" ] \
   && pass "หัวหน้าภาคเบิกจากคลังภูเก็ตแล้ว → แอดมินคอนเฟิร์มลูกค้า" || fail "เบิกคลังอื่น: $(st $ID3)"
 RR=$(post $ID3 confirm-appointment "{\"scheduledAt\":\"$(day -1)\"}")
@@ -145,7 +148,7 @@ echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได�
 # โทรคอนเฟิร์มช้า — ตกลงนัดเดิมเฉย ๆ (ไม่เปลี่ยนอะไร) ไม่ใช่การนัดใหม่ ต้องผ่าน
 post $ID3 confirm-appointment '{}' >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "ASSIGNED|CONFIRMED|$(day -1)" ] \
-  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปปล่อยงาน (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
+  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปขั้นปล่อยงาน (วันนัดผ่านแล้ว — ติดล็อก ต้องเลื่อนวันนัด) (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
 # ไม่ใช้อะไหล่จ่ายพร้อมระบุ · ส่งตรวจหน้างาน — เลือกวันนัดเหมือนกัน กฎเดียวกัน
 WO4=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W64","symptom":"วันนัดย้อนหลัง"}]}')

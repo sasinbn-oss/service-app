@@ -69,7 +69,15 @@ export interface ConfirmedRow {
   longitude?: number | null;
   confirmedBy: string | null;
   confirmedAt: string | null;
+  /**
+   * ขั้นตอนของใบตอนนี้ — เซิร์ฟเวอร์ส่งมาตั้งแต่ก่อน (GET /work-orders/reports/confirmed) แต่ชนิดข้อมูลไม่มี จึงอ่านไม่ได้
+   * ใช้บอกในข้อความว่าใบยังไม่ปล่อยงาน (เวลาปิดรับ ต.ค. 69) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ไม่มีบรรทัดนั้น
+   */
+  status?: string;
 }
+
+/** ขั้นที่หัวหน้าภาคยังไม่ได้กดปล่อยงาน (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) */
+const UNRELEASED = ["ASSIGNED", "INSPECT_DISPATCH"];
 
 const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
 /** "อ. 20 ต.ค. 69" — ช่างอ่านวันในสัปดาห์ก่อนวันที่ */
@@ -115,6 +123,11 @@ export function teamDispatch(team: string, rows: ConfirmedRow[]) {
         `เลขที่ใบงาน: ${r.code}`,
         `รหัสสาขา: ${r.branchCode}`,
         `สาขา: ${r.branchName}`,
+        /**
+         * คอนเฟิร์มลูกค้าแล้วแต่หัวหน้าภาคยังไม่ปล่อยงาน (DEFAULT — บอกเจ้าของงาน): ใบไม่อยู่ในแอปของช่าง ช่างไปถึงแล้วกด "ถึงหน้างาน" ไม่ได้
+         * และหลังเวลาปิดรับใบอาจถูกล็อกจนไม่ได้ไป — บอกในข้อความ ช่างจะได้ถามหัวหน้าภาคก่อนออกเดินทาง ไม่ตัดแถวทิ้ง (ร้านตกลงวันแล้วจริง)
+         */
+        ...(r.status && UNRELEASED.includes(r.status) ? ["สถานะ: ยังไม่ปล่อยงาน"] : []),
         ...(r.machineCode ? [`เครื่อง: ${machineTag(r.machineCode, r.machineCapacityKg)}`] : []),
         `ผู้ติดต่อ: ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
         ...(r.latitude != null && r.longitude != null ? [`แผนที่: https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])

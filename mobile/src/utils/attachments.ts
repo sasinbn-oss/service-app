@@ -27,7 +27,7 @@ export interface PickedAttachment {
   name: string;
   type: string;
   kind: "IMAGE" | "VIDEO" | "DOCUMENT";
-  /** รูปย่อไว้โชว์ในหน้าจอ — วิดีโอบนเว็บทำไม่ได้ จะเป็น null */
+  /** รูปย่อไว้โชว์ในหน้าจอ — วิดีโอบนเว็บใช้ภาพจากคลิป (ทำไม่ได้ = null แสดงไอคอนแทน) */
   thumbnailUri: string | null;
 }
 
@@ -227,13 +227,61 @@ export async function pickVideoAttachments(onStage?: (label: string) => void): P
   return out;
 }
 
+/**
+ * รูปปกวิดีโอบนเว็บ — วาดภาพที่วินาที 0.5 ของไฟล์ในเครื่องลง canvas (เคลมก้อน 5)
+ * expo-video-thumbnails ไม่ทำงานบนเว็บ เดิมวิดีโอทุกคลิปในฟอร์มปิดงานขึ้นเป็นไอคอนเหมือนกันหมด
+ * ช่างแยกไม่ออกว่าคลิปไหนคือวิดีโอ Error คลิปไหนคือวิดีโอการตรวจเช็ค แล้วแนบสลับช่อง
+ * ทำไม่ได้ (ไฟล์ที่เบราว์เซอร์เล่นไม่ได้ เช่น HEVC บนคอม) คืน null แสดงไอคอนแทนเหมือนเดิม — ไม่บล็อกการส่ง
+ */
+function webVideoFrame(uri: string): Promise<string | null> {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    let settled = false;
+    const done = (out: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      v.removeAttribute("src");
+      v.load();
+      resolve(out);
+    };
+    const timer = setTimeout(() => done(null), 6000);
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    v.onloadeddata = () => {
+      // คลิปสั้นกว่าครึ่งวินาทีใช้ภาพแรก
+      v.currentTime = Math.min(0.5, Number.isFinite(v.duration) ? v.duration / 2 : 0.5);
+    };
+    v.onseeked = () => {
+      try {
+        const w = v.videoWidth;
+        const h = v.videoHeight;
+        if (!w || !h) return done(null);
+        const c = document.createElement("canvas");
+        c.width = THUMB_WIDTH;
+        c.height = Math.round((h * THUMB_WIDTH) / w);
+        c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
+        done(c.toDataURL("image/jpeg", 0.6));
+      } catch {
+        done(null);
+      }
+    };
+    v.onerror = () => done(null);
+    v.src = uri;
+  });
+}
+
 async function prepareVideo(asset: { uri: string; fileName?: string | null; mimeType?: string | null }): Promise<PickedAttachment> {
   let thumbnailUri: string | null = null;
   try {
-    // เว็บทำรูปปกวิดีโอไม่ได้ (expo-video-thumbnails ไม่รองรับ) ปล่อยว่างไว้
-    // แล้วแสดงไอคอนแทน ดีกว่าบล็อกไม่ให้ส่งวิดีโอจากคอมพิวเตอร์
-    const shot = await VideoThumbnails.getThumbnailAsync(asset.uri, { time: 1000 });
-    thumbnailUri = await shrink(shot.uri, THUMB_WIDTH, 0.5);
+    if (Platform.OS === "web") {
+      thumbnailUri = await webVideoFrame(asset.uri);
+    } else {
+      const shot = await VideoThumbnails.getThumbnailAsync(asset.uri, { time: 1000 });
+      thumbnailUri = await shrink(shot.uri, THUMB_WIDTH, 0.5);
+    }
   } catch {
     thumbnailUri = null;
   }
@@ -381,8 +429,15 @@ export async function uploadAttachment(
    * ไฟล์นี้เป็นไฟล์ที่เท่าไรของชุด — หลอดในหน้าโหลดเต็มจอนับรวมทั้งชุด (ไฟล์ 3/12 · 40%)
    * ไม่ส่งมา = ไฟล์เดียว · วิดีโอหลายสิบ MB บนเน็ตมือถือใช้เวลาเป็นนาที เห็นแค่ตัวหมุนจะคิดว่าค้าง
    */
-  batch: { index: number; total: number } = { index: 0, total: 1 }
-) {
+  batch: { index: number; total: number } = { index: 0, total: 1 },
+  /**
+   * quiet = ไม่เปิดหน้าโหลดเต็มจอและหลอดกลาง — ช่องไฟล์เคลมส่งไฟล์ทันทีที่เลือก (ฟอร์มปิดงาน)
+   * ถ้าบังทั้งจอทุกครั้งที่เลือกรูป ช่างกรอกช่องอื่นต่อระหว่างรอไม่ได้ ซึ่งเป็นเหตุผลที่ต้องส่งทันที
+   * ความคืบหน้าส่งให้ช่องนั้นวาดเองผ่าน onProgress (0–1)
+   * parallel = ไม่ให้ตัวกันกดซ้ำของ api/client รวมคำขอนี้กับคำขอแนบอื่นที่ยังไม่เสร็จ (ดูด้านล่าง)
+   */
+  opts: { quiet?: boolean; onProgress?: (p: number) => void; parallel?: boolean } = {}
+): Promise<UploadedAttachment> {
   const form = new FormData();
   await appendFile(form, "file", file.uri, file.name, file.type);
   if (file.thumbnailUri) {
@@ -391,16 +446,34 @@ export async function uploadAttachment(
   if (role) form.append("role", role);
   if (sparePartId !== undefined) form.append("sparePartId", String(sparePartId));
   // ขึ้นหลอดที่ 0% ทันที ไม่ต้องรอเหตุการณ์แรกจากเบราว์เซอร์ (ไฟล์เล็กบางทีไม่มีเลย)
-  feedback.progress({ done: batch.index, total: batch.total, current: 0 });
-  await api.post(`/work-orders/${workOrderId}/attachments`, form, {
+  if (!opts.quiet) feedback.progress({ done: batch.index, total: batch.total, current: 0 });
+  opts.onProgress?.(0);
+  const res = await api.post<UploadedAttachment>(`/work-orders/${workOrderId}/attachments`, form, {
     headers: { "Content-Type": "multipart/form-data" },
     // หน้าโหลดเปิดตอนคำขอเริ่ม (api/client) — ตั้งหลอดหลังจากนั้น ไม่งั้นโดนล้างทิ้งตอนหน้าโหลดปิดระหว่างไฟล์
     onUploadProgress: (e) => {
       const current = e.total ? Math.min(1, e.loaded / e.total) : 0;
-      feedback.progress({ done: batch.index, total: batch.total, current });
+      if (!opts.quiet) feedback.progress({ done: batch.index, total: batch.total, current });
+      opts.onProgress?.(current);
     },
-    loadingText: "กำลังส่งไฟล์...",
+    loadingText: opts.quiet ? false : "กำลังส่งไฟล์...",
+    // ตัวกันกดซ้ำของ api/client เทียบแค่ที่อยู่ (เทียบเนื้อไฟล์ไม่ได้) — ไฟล์เดียวกันที่แนบให้หลายชิ้นพร้อมกันจึงถูกนับเป็นกดซ้ำ
+    // คำขอที่สองไม่ถูกส่ง แต่ช่องของชิ้นนั้นขึ้น "แนบแล้ว" ด้วยแถวของชิ้นแรก · ช่องเคลมกันกดซ้ำของตัวเองอยู่แล้ว (ช่องละหนึ่งไฟล์)
+    dedupe: opts.parallel ? false : undefined,
   });
+  // คืนแถวที่สร้าง — ช่องไฟล์เคลมต้องรู้ id ไว้ลบตอนเลือกไฟล์ใหม่แทน (ไฟล์เดิมยังไม่ได้ส่งกับใบเคลมไหน)
+  return res.data;
+}
+
+/** แถวไฟล์ที่เซิร์ฟเวอร์สร้างให้ (attachmentShape) — เอาเฉพาะที่ฝั่งแอปใช้ */
+export interface UploadedAttachment {
+  id: number;
+  kind: string;
+  role: string | null;
+  sparePartId?: number | null;
+  fileName: string;
+  createdAt: string;
+  thumbnailDataUrl?: string | null;
 }
 
 /**

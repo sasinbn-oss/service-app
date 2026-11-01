@@ -6,6 +6,7 @@
 #   · หมายเหตุทีละแถวสาขา+อะไหล่: บันทึก/ล้างได้ · ไม่อยู่ใน Excel · แถวที่ไม่อยู่ในรายงาน/นอกพื้นที่แก้ไม่ได้
 #     · เช็คว่าหมดซ้ำรอบใหม่ หมายเหตุรอบก่อนไม่ขึ้น
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -25,27 +26,30 @@ cleanup() {
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT
-BOARD=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BOARD'")
-BELT=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BELT'")
 ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
+# แผงวงจร/สายพานของแต่ละใบ = ตัวที่ตรงยี่ห้อเครื่องของใบนั้น (fx_part) — สามใบคนละเครื่อง จึงเลือกหลังเปิดใบทีละใบ
+# (Bn/Ln ของใบ Wn) · รายการในรายงานเทียบกับรหัสของตัวที่ใช้จริง
 newwo() { # $1 เครื่อง → ใบที่หัวหน้าภาคระบุแผงวงจร 1 + สายพาน 2 แล้ว
-  local I=$(POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"$1\",\"symptom\":\"ทดสอบรายงานอะไหล่หมด\"}]}" | J 'd.orders?d.orders[0].id:d.id')
-  POST $S "work-orders/$I/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
+  local I=$(POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"$1\",\"symptom\":\"ทดสอบรายงานอะไหล่หมด\"}]}" | J 'd.orders?d.orders[0].id:d.id') B L
+  B=$(fx_part "$I" BOARD) && L=$(fx_part "$I" BELT) || return 1
+  POST $S "work-orders/$I/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$B,\"quantity\":1},{\"sparePartId\":$L,\"quantity\":2}]}" >/dev/null
   echo $I
 }
 mine() { REP $1 | J "d.rows.filter(r=>[$W1,$W2,$W3].includes(r.workOrderId)).map(r=>r.code+'/'+r.partCode).sort().join(',')"; }
 
 W1=$(newwo W71); W2=$(newwo W72); W3=$(newwo W73); IDS="$W1 $W2 $W3"
+B1=$(fx_part $W1 BOARD); L1=$(fx_part $W1 BELT); B2=$(fx_part $W2 BOARD); L2=$(fx_part $W2 BELT); B3=$(fx_part $W3 BOARD); L3=$(fx_part $W3 BELT)
+L1_CODE=$(fx_part_code $W1 BELT); B2_CODE=$(fx_part_code $W2 BOARD)
 C1=$(DB "select code from \"WorkOrder\" where id=$W1"); C2=$(DB "select code from \"WorkOrder\" where id=$W2"); C3=$(DB "select code from \"WorkOrder\" where id=$W3")
 # W1: สายพานหมด ของเข้าเลยมาแล้ว · W2: แผงวงจรหมด ไม่ใส่วัน · W3: สายพานหมดแต่เป็นใบทดสอบ
 # ของหมดรู้ตั้งแต่ขั้นเช็คอะไหล่ (ก่อนนัด — นัดลูกค้าก่อนเบิก ต.ค. 69)
-POST $A "work-orders/$W1/parts-sourcing" "{\"expectedAt\":\"2026-01-05\",\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
-POST $A "work-orders/$W2/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
-POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$BELT,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$W1/parts-sourcing" "{\"expectedAt\":\"2026-01-05\",\"results\":[{\"sparePartId\":$B1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$L1,\"inStock\":false}]}" >/dev/null
+POST $A "work-orders/$W2/parts-sourcing" "{\"results\":[{\"sparePartId\":$B2,\"inStock\":false},{\"sparePartId\":$L2,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
+POST $A "work-orders/$W3/parts-sourcing" "{\"results\":[{\"sparePartId\":$B3,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$L3,\"inStock\":false}]}" >/dev/null
 DB "update \"WorkOrder\" set \"isTest\"=true where id=$W3" >/dev/null
 [ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\" in ($W1,$W2) and \"inStock\"=false")" = "2" ] || fail "เตรียมข้อมูลไม่ได้ (ฐานข้อมูลไม่มีตัวที่หมด)"
 
-[ "$(mine $A)" = "$(printf '%s\n' "$C1/SP-BELT" "$C2/SP-BOARD" | sort | paste -sd,)" ] \
+[ "$(mine $A)" = "$(printf '%s\n' "$C1/$L1_CODE" "$C2/$B2_CODE" | sort | paste -sd,)" ] \
   && pass "ขึ้นเฉพาะตัวที่หมด (ตัวที่มีของไม่ขึ้น) · ใบทดสอบไม่ขึ้น" || fail "รายการ: $(mine $A)"
 R1=$(REP $A | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$W1))")
 [ "$(echo "$R1" | J '[d.branchCode,d.machineCode,d.quantity,d.checkedBy,d.outDays,d.expectedAt,d.etaDays<0,d.partName.length>0].join("|")')" = "$BR|W71|2|$ANAME|0|2026-01-05|true|true" ] \
@@ -67,8 +71,8 @@ rm -f /tmp/parts-out-test.xlsx
 # ── หมายเหตุ (เจ้าของงานขอ ต.ค. 69) — ทีละแถวสาขา+อะไหล่ ขึ้นเฉพาะหน้ารายงาน
 NOTE() { curl -s -X PUT localhost:4000/api/work-orders/reports/parts-out/note -H "$(H $1)" -H 'Content-Type: application/json' -d "$2"; }
 NCODE() { curl -s -o /dev/null -w '%{http_code}' -X PUT localhost:4000/api/work-orders/reports/parts-out/note -H "$(H $1)" -H 'Content-Type: application/json' -d "$2"; }
-PR2=$(DB "select id from \"WorkOrderPart\" where \"workOrderId\"=$W2 and \"sparePartId\"=$BOARD and kind='WAITING'")
-PR1OK=$(DB "select id from \"WorkOrderPart\" where \"workOrderId\"=$W1 and \"sparePartId\"=$BOARD and kind='WAITING'")
+PR2=$(DB "select id from \"WorkOrderPart\" where \"workOrderId\"=$W2 and \"sparePartId\"=$B2 and kind='WAITING'")
+PR1OK=$(DB "select id from \"WorkOrderPart\" where \"workOrderId\"=$W1 and \"sparePartId\"=$B1 and kind='WAITING'")
 NOTE $A "{\"partRowId\":$PR2,\"note\":\"  สั่งผู้ขาย ABC แล้ว รอ 2 สัปดาห์  \"}" >/dev/null
 [ "$(DB "select \"outNote\"||'|'||(\"outNoteById\"=(select id from \"User\" where \"employeeCode\"='A001'))::text from \"WorkOrderPart\" where id=$PR2")" = "สั่งผู้ขาย ABC แล้ว รอ 2 สัปดาห์|true" ] \
   && pass "บันทึกหมายเหตุลงแถวสาขา+อะไหล่ (ตัดช่องว่างหัวท้าย · เก็บคนเขียน)" || fail "ฐานข้อมูลหลังบันทึก: $(DB "select \"outNote\" from \"WorkOrderPart\" where id=$PR2")"
@@ -85,7 +89,7 @@ LONG=$(node -e 'process.stdout.write("ก".repeat(501))')
 [ "$(NCODE $A "{\"partRowId\":$PR2,\"note\":\"$LONG\"}")" = "400" ] && pass "ยาวเกิน 500 ตัวอักษร 400" || fail "ยาวเกินแต่รับ"
 # เช็คว่าหมดซ้ำ (รอบใหม่) — หมายเหตุรอบก่อนไม่ขึ้น
 sleep 1
-POST $A "work-orders/$W2/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
+POST $A "work-orders/$W2/parts-sourcing" "{\"results\":[{\"sparePartId\":$B2,\"inStock\":false},{\"sparePartId\":$L2,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
 [ "$(REP $A | J "d.rows.find(r=>r.partRowId==$PR2).note")" = "null" ] && pass "เช็คว่าหมดรอบใหม่ หมายเหตุรอบก่อนไม่ขึ้น" || fail "หมายเหตุเก่ายังขึ้นหลังเช็คใหม่"
 NOTE $A "{\"partRowId\":$PR2,\"note\":\"รอบใหม่\"}" >/dev/null
 NOTE $A "{\"partRowId\":$PR2,\"note\":\"   \"}" >/dev/null
@@ -93,7 +97,7 @@ NOTE $A "{\"partRowId\":$PR2,\"note\":\"   \"}" >/dev/null
   && pass "ส่งข้อความว่าง = ลบหมายเหตุ" || fail "ลบหมายเหตุไม่ได้"
 
 # ของมาแล้ว — แอดมินเช็คใหม่ว่ามี ใบหายจากรายงาน
-POST $A "work-orders/$W1/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$BELT,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
-[ "$(mine $A)" = "$C2/SP-BOARD" ] && pass "ของมาแล้วเช็คใหม่ว่ามี = หายจากรายงานเอง" || fail "หลังของมา: $(mine $A)"
+POST $A "work-orders/$W1/parts-sourcing" "{\"results\":[{\"sparePartId\":$B1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"},{\"sparePartId\":$L1,\"inStock\":true,\"warehouse\":\"คลังลาดพร้าว 94\"}]}" >/dev/null
+[ "$(mine $A)" = "$C2/$B2_CODE" ] && pass "ของมาแล้วเช็คใหม่ว่ามี = หายจากรายงานเอง" || fail "หลังของมา: $(mine $A)"
 
 [ -z "$FAILED" ]

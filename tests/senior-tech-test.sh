@@ -17,6 +17,7 @@
 #     โทเคนเดิมหมดสิทธิ์ทันที — ขอบเขตอ่านจากฐานข้อมูลทุกคำขอ ไม่อยู่ในโทเคน
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md) · สร้างสาขา/ทีม/ทีมรวม/ผู้ใช้ ZS… เองแล้วลบทั้งหมด · ไม่แตะ T001/S001
 cd "$(dirname "$0")/.."
+. tests/lib/fixture-parts.sh
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1" 2>/dev/null; }
 H() { echo "Authorization: Bearer $1"; }
 DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
@@ -168,12 +169,14 @@ C=$(UP $S $OIW site-photo.png\;type=image/png INSPECT_SITE)
 R=$(SEND POST $S work-orders/$OIW/inspection '{"note":"ลอง"}')
 [ "$C" = "403" ] && echo "$R" | grep -q "ไม่ใช่ทีมของคุณ" && [ "$(DB "select status from \"WorkOrder\" where id=$OIW")|$(DB "select count(*) from \"WorkOrderAttachment\" where \"workOrderId\"=$OIW")" = "INSPECTING|0" ] \
   && pass "ทีม W: แนบไฟล์ 403 · ส่งผลตรวจ 403 ฐานข้อมูลไม่เปลี่ยน" || fail "ผลตรวจ W: $C $R"
-PART=$(DB "select id from \"SparePart\" order by id limit 1")
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ — Z กับ W เป็นคนละเครื่องคนละสาขา หยิบของแต่ละใบเอง
+# ใบ W ต้องถูกปฏิเสธเพราะ "ไม่ใช่ทีมของคุณ" เท่านั้น ไม่ใช่เพราะส่งอะไหล่ผิดยี่ห้อ
+PART=$(fx_part "$OZ" BOARD); PARTW=$(fx_part "$OW" BOARD)
 R=$(SEND POST $S work-orders/$OZ/follow-up "{\"parts\":[{\"sparePartId\":$PART,\"quantity\":1}],\"note\":\"Senior แจ้งของขาด\"}")
 CH=$(echo "$R" | J 'd.createdChild?d.createdChild.id:""')
 [ -n "$CH" ] && [ "$(DB "select \"parentId\" from \"WorkOrder\" where id=$CH")|$(DB "select \"userId\"||'|'||action from \"WorkOrderLog\" where \"workOrderId\"=$OZ order by id desc limit 1")" = "$OZ|$SID|SPLIT" ] \
   && pass "แจ้งปัญหาทีม Z (ผ่านทีมรวม): เปิดใบรออะไหล่ต่อ ผูกกับใบเดิม ประวัติเป็นชื่อ Senior" || fail "แจ้งปัญหา Z: $(echo "$R" | head -c 200)"
-R=$(SEND POST $S work-orders/$OW/follow-up "{\"parts\":[{\"sparePartId\":$PART,\"quantity\":1}]}")
+R=$(SEND POST $S work-orders/$OW/follow-up "{\"parts\":[{\"sparePartId\":$PARTW,\"quantity\":1}]}")
 echo "$R" | grep -q "ไม่ใช่ทีมของคุณ" && [ "$(DB "select count(*) from \"WorkOrder\" where \"parentId\"=$OW")" = "0" ] && pass "แจ้งปัญหาทีม W → 403 ไม่มีใบลูก" || fail "แจ้งปัญหา W: $R"
 for role in BEFORE AFTER NAMEPLATE; do UP $S $OY site-photo.png\;type=image/png $role >/dev/null; done
 R=$(SEND POST $S work-orders/$OY/close "{\"result\":\"FIXED\",\"note\":\"Senior ปิดงานทีม Y ผ่านทีมรวม\",\"workerIds\":[$SID]}")

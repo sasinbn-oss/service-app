@@ -3,6 +3,7 @@
 #   · นับเป็นชิ้น (quantity 3 = 3) แยก "ใช้แล้ว" (USED ของใบที่ช่างปิดแล้ว) กับ "เบิกแล้ว · งานยังไม่จบ" (ออกจากคลังแล้ว ใบยังไม่ปิด)
 #     ใบหนึ่งอยู่แบบเดียว — ใบที่ปิดแล้วไม่นับตัวที่เบิกซ้ำ · ใบที่แอดมินเปิดงานใหม่ไม่นับ USED ที่ค้าง
 #     · ใบที่เคลมถูกตีกลับ (รอช่างปิดใหม่) ยังนับใช้แล้วตามรอบที่ปิด ไม่นับตัวที่เบิก
+#     · คำเรื่องเคลมเขียนตามผลของชิ้นนั้นเอง (ชิ้นที่ปิดเคลม ไม่ส่งผู้ขาย = "ปิดเคลม ไม่ส่งผู้ขาย")
 #   · ของนอกสโตร์อยู่ใน "ใช้แล้ว" พร้อมป้าย ไม่มีวันเป็น "เบิกแล้ว" · ยกเลิก/ใบทดสอบไม่นับ · ใบรออะไหล่ (ใบแยก) · ใบงาน SUB นับปกติ
 #   · ค่าเริ่มต้น = ทั้งหมด (ใบปี 2566 ยังขึ้น) · ปุ่มช่วงวันที่แต่ละแบบตัดตามวันไทยตรงขอบ · วันเบิกโอน = ประวัติโอน
 #   · กรองภาค/ทีม/ค้นหา (ไม่ตีความ % เป็น wildcard) · ตามอะไหล่รวมได้เท่าตามสาขา · หน้าถัดไป · แถวของกลุ่ม · สาขา/เครื่อง (ลิงก์ในใบงาน)
@@ -46,10 +47,14 @@ TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'"); TNAME=$(DB "s
 DB "insert into \"Branch\"(code,name,region,zone) values
   ('$BA','ร้านทดสอบ$SUF เอ','$R1','$T1'),('$BB','ร้านทดสอบ$SUF บี','$R1','$T2'),
   ('$BC','ร้านทดสอบ$SUF ซี','$R2','$T2'),('$BD','ร้านทดสอบช่วงวันที่ $SUF','$R3','$T3'),('$BE','ร้านทดสอบเคลมตีกลับ $SUF','$R3','$T3')"
-DB "insert into \"SparePart\"(\"partCode\",name,\"offCatalog\",\"updatedAt\") values
-  ('ZBP-$SUF-P1','ตลับลูกปืนทดสอบ $SUF',false,now()),('ZBP-$SUF-P2','บอร์ดทดสอบ $SUF',false,now()),
-  ('ZBP-$SUF-P3','วาล์วทดสอบ $SUF',false,now()),('ZBP-$SUF-DT','อะไหล่ทดสอบช่วงวันที่ $SUF',false,now()),
-  ('[นอกสโตร์] สายพานร้านข้างนอก $SUF','สายพานร้านข้างนอก $SUF',true,now())"
+# อะไหล่ในสโตร์มียี่ห้อ Haier และเครื่อง W9 ของ O9 (ใบเดียวที่ส่งอะไหล่ผ่าน API) เปิดด้วยรุ่น Haier — กฎ "เลือกอะไหล่ได้เฉพาะ
+# ไฟล์ยี่ห้อเดียวกับเครื่อง" ปฏิเสธอะไหล่ไม่มียี่ห้อและเครื่องไม่รู้ยี่ห้อ ใบ O9 จะเตรียมไม่ขึ้นแล้วยอดของ O9 พังตามทั้งชุด
+# ใช้ fx_part ไม่ได้เพราะรายงานนับอะไหล่ ZBP ของชุดนี้เอง · Haier เพราะได้ผลเหมือนไม่รู้ยี่ห้อทุกกฎที่มีตอนนี้ (tests/lib/fixture-parts.sh)
+# รายงานไม่ค้นและไม่ตรวจจากยี่ห้อ ตัวเลขทุกข้อจึงเท่าเดิม · ของนอกสโตร์ไม่ต้องมียี่ห้อ (กฎยอมให้ทุกเครื่อง)
+DB "insert into \"SparePart\"(\"partCode\",name,brand,\"offCatalog\",\"updatedAt\") values
+  ('ZBP-$SUF-P1','ตลับลูกปืนทดสอบ $SUF','Haier',false,now()),('ZBP-$SUF-P2','บอร์ดทดสอบ $SUF','Haier',false,now()),
+  ('ZBP-$SUF-P3','วาล์วทดสอบ $SUF','Haier',false,now()),('ZBP-$SUF-DT','อะไหล่ทดสอบช่วงวันที่ $SUF','Haier',false,now()),
+  ('[นอกสโตร์] สายพานร้านข้างนอก $SUF','สายพานร้านข้างนอก $SUF',null,true,now())"
 pid() { DB "select id from \"SparePart\" where \"partCode\"='$1'"; }
 P1=$(pid ZBP-$SUF-P1); P2=$(pid ZBP-$SUF-P2); P3=$(pid ZBP-$SUF-P3); DT=$(pid ZBP-$SUF-DT); OFF=$(pid "[นอกสโตร์] สายพานร้านข้างนอก $SUF")
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values
@@ -97,9 +102,12 @@ O6=$(wo 06 $BC DONE "now()-interval '1 day'" "" ',"isTest","testOfId"' ",true,$O
 part $O6 $P1 7 USED
 O6B=$(wo 06B $BC AWAITING_CONFIRM null "" ',"isTest","testOfId"' ",true,$O2")
 part $O6B $P1 7 WAITING "$ISS" "$(iss RQ-ZBP6 "now()-interval '1 day'")"
-# O7 สาขา C ใบรออะไหล่ (ใบแยกจาก O1) ทีม SUB ปิดแล้ว: ใช้ P3 ×2
+# O7 สาขา C ใบรออะไหล่ (ใบแยกจาก O1) ทีม SUB ปิดแล้ว: ใช้ P3 ×2 — Admin Spare Part ปิดเคลมชิ้นนี้ ไม่ส่งผู้ขาย
+#    (ยังนับใช้แล้วเท่าเดิม · บรรทัดรายละเอียดบอกผลเคลมของชิ้นนี้เอง)
 O7=$(wo 07 $BC DONE "now()-interval '1 day'" "" ',"parentId","closeSubTeam"' ",$O1,'ทีม SUB ทดสอบ $SUF'")
 part $O7 $P3 2 USED
+DB "insert into \"PartClaim\"(\"workOrderId\",\"sparePartId\",\"partCode\",\"partName\",\"branchCode\",\"branchName\",symptom,\"checkNote\",status,\"rejectReason\")
+    values ($O7,$P3,'ZBP-$SUF-P3','วาล์วทดสอบ $SUF','$BC','ร้านทดสอบ$SUF ซี','ทดสอบ','ทดสอบ','DECLINED','หมดประกัน')"
 # O8 สาขา A ปิดไปตั้งแต่ปี 2566 (เครื่อง W2): ใช้ P3 ×1 — ค่าเริ่มต้น "ทั้งหมด" ต้องเห็น
 O8=$(wo 08 $BA DONE "'2023-03-15 03:00:00'" $MA2)
 part $O8 $P3 1 USED
@@ -114,7 +122,7 @@ DB "insert into \"PartClaim\"(\"workOrderId\",\"sparePartId\",\"partCode\",\"par
     values ($O10,$P1,'ZBP-$SUF-P1','ตลับลูกปืนทดสอบ $SUF','$BE','ร้านทดสอบเคลมตีกลับ $SUF','ทดสอบ','ทดสอบ','REJECTED')"
 
 # O9 สาขา A เดินผ่าน API จริง: ระบุอะไหล่ → เช็คคลัง → นัดวัน → แอดมินเบิก (ใบเบิก RQ-ZBP9) → รอคอนเฟิร์มลูกค้า
-O9=$(POST $A work-orders "{\"branchCode\":\"$BA\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W9\",\"symptom\":\"ทดสอบรายงานอะไหล่ที่ไปแต่ละสาขา\"}]}" | J 'd.orders[0].id')
+O9=$(POST $A work-orders "{\"branchCode\":\"$BA\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W9\",\"model\":\"Haier\",\"symptom\":\"ทดสอบรายงานอะไหล่ที่ไปแต่ละสาขา\"}]}" | J 'd.orders[0].id')
 POST $A "work-orders/$O9/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P2,\"quantity\":2}]}" >/dev/null
 POST $A "work-orders/$O9/parts-sourcing" "{\"results\":[{\"sparePartId\":$P2,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
 VISIT=$(node -e "console.log(new Date(Date.now()+7*3600e3+3*86400e3).toISOString().slice(0,10))")
@@ -265,6 +273,9 @@ DP=$(DET $A "?view=part&key=$P1")
 C1CODE=$(DB "select code from \"WorkOrder\" where id=$O1")
 [ "$(DET $A "?view=part&key=$P3" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O7))" | J '[d.parentCode,d.subTeam,d.detail.includes("ทีม SUB")].join("|")')" = "$C1CODE|ทีม SUB ทดสอบ $SUF|true" ] \
   && pass "ใบรออะไหล่ (ใบแยก) นับปกติ บอกใบแม่และทีม SUB" || fail "แถว O7"
+[ "$(DET $A "?view=part&key=$P3&kind=used" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O7))" | J '[d.claimStatus,/ปิดเคลม ไม่ส่งผู้ขาย$/.test(d.detail),d.detail.includes("ส่งเคลมตัวเก่าแล้ว")].join("|")')" = "DECLINED|true|false" ] \
+  && pass "ชิ้นที่ Admin Spare Part ปิดเคลม ไม่ส่งผู้ขาย: บรรทัดรายละเอียดเขียน \"ปิดเคลม ไม่ส่งผู้ขาย\" (ไม่ใช่ \"ส่งเคลมตัวเก่าแล้ว\")" \
+  || fail "แถว O7 ปิดเคลม: $(DET $A "?view=part&key=$P3&kind=used" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O7))")"
 [ "$(DET $A "?view=part&key=$P2&kind=used" | J "JSON.stringify(d.rows.find(r=>r.workOrderId==$O4))" | J '[d.kind,d.status,d.claimStatus,d.detail.includes("รอตรวจเคลม")].join("|")')" = "USED|CLAIM_REVIEW|PENDING|true" ] \
   && pass "ใบรอตรวจเคลม = ใช้แล้ว (ช่างปิดแล้ว) บอกว่าส่งเคลม รอตรวจ" || fail "แถว O4"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "localhost:4000/api/work-orders/reports/branch-parts/detail?view=branch" -H "$(H $A)")" = "400" ] \

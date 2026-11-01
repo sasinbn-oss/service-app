@@ -14,6 +14,7 @@
 #     ของนอกสโตร์ที่เพิ่มหลังเบิกของในสโตร์แล้ว · ย้อนมานัดใหม่หลังเบิก) — เทียบกับขั้นที่ใบไปจริงในฐานข้อมูล
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -50,20 +51,21 @@ trap cleanup EXIT
 DB "update \"User\" set region=(select region from \"Branch\" where code='$BR') where \"employeeCode\"='S001'" >/dev/null
 S=$(login S001)
 TEAM=$(DB "select zone from \"Branch\" where code='$BR'")
-BOARD=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BOARD'")
-BELT=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BELT'")
+# บอร์ดของแต่ละใบ = ตัวที่ตรงยี่ห้อเครื่องของใบนั้น (fx_part) — ทุกใบคนละเครื่อง ยี่ห้ออาจไม่เหมือนกัน
+# จึงเลือกต่อใบหลังเปิดใบ (Bn ของใบ Wn) ไม่ใช้บอร์ดตัวเดียวทั้งไฟล์ ที่กฎล็อกยี่ห้อจะปฏิเสธ
 L94="คลังลาดพร้าว 94"
 mk() {  # $1 เครื่อง → ใบใหม่ (ยังไม่ระบุอะไหล่)
   POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"$1\",\"symptom\":\"$SYMPTOM\"}]}" | J 'd.orders[0].id'
 }
 sourced() {  # $1 เครื่อง $2 คลังที่มีบอร์ด → ใบที่เช็คอะไหล่แล้ว มีครบ (ขั้นนัดวัน)
-  local I=$(mk $1)
-  POST $S "work-orders/$I/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
-  POST $A "work-orders/$I/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$2\"}]}" >/dev/null
+  local I=$(mk $1) B
+  B=$(fx_part "$I" BOARD) || return 1
+  POST $S "work-orders/$I/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$B,\"quantity\":1}]}" >/dev/null
+  POST $A "work-orders/$I/parts-sourcing" "{\"results\":[{\"sparePartId\":$B,\"inStock\":true,\"warehouse\":\"$2\"}]}" >/dev/null
   echo $I
 }
 assign() { POST $S "work-orders/$1/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"${2:-$D1}\"}" >/dev/null; }
-issue94() { POST $A "work-orders/$1/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"$2\"}]}" >/dev/null; }
+issue94() { local B; B=$(fx_part "$1" BOARD) || return 1; POST $A "work-orders/$1/parts-check" "{\"results\":[{\"sparePartId\":$B,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"$2\"}]}" >/dev/null; }
 
 echo "═══ คลัง 94: นัดวัน → แอดมินเบิก → แอดมินคอนเฟิร์มลูกค้า → หัวหน้าภาคปล่อยงาน"
 W1=$(sourced W71 "$L94")
@@ -98,10 +100,11 @@ POST $S "work-orders/$W1/dispatch" '{}' >/dev/null
 echo
 echo "═══ คลังอื่น (ต้องโอน): นัด → หัวหน้าภาคเบิก+โอน → ของถึง 94 → แอดมินเบิกส่งมอบ → คอนเฟิร์มลูกค้า"
 W2=$(sourced W72 "คลังขอนแก่น")
+B2=$(fx_part $W2 BOARD)
 assign $W2
-POST $A "work-orders/$W2/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $A "work-orders/$W2/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$B2,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
 [ "$(ST $W2)" = "PARTS_TRANSFER|PENDING" ] && pass "ของคลังอื่น → หัวหน้าภาคเบิกและโอน (ยังไม่คอนเฟิร์ม)" || fail "หลังเช็คคลังอื่น: $(ST $W2)"
-POST $S "work-orders/$W2/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-CAI\"}]}" >/dev/null
+POST $S "work-orders/$W2/parts-transfer" "{\"results\":[{\"sparePartId\":$B2,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-CAI\"}]}" >/dev/null
 [ "$(ST $W2)" = "PARTS_IN_TRANSIT|PENDING" ] && pass "สั่งโอนแล้ว → รอของถึง" || fail "หลังสั่งโอน: $(ST $W2)"
 POST $S "work-orders/$W2/parts-transfer/arrived" '{}' >/dev/null
 [ "$(ST $W2)" = "PARTS_REQUESTED|PENDING" ] && pass "ของถึงคลัง 94 → แอดมินเบิกส่งมอบ" || fail "หลังของถึง: $(ST $W2)"
@@ -118,11 +121,12 @@ POST $A "work-orders/$W2/confirm-appointment" '{}' >/dev/null
 echo
 echo "═══ คลังอื่นในพื้นที่ (ไม่ต้องโอน): หัวหน้าภาคเบิกส่งมอบ → คอนเฟิร์มลูกค้า"
 W3=$(sourced W73 "คลังภูเก็ต")
+B3=$(fx_part $W3 BOARD)
 assign $W3
-POST $A "work-orders/$W3/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+POST $A "work-orders/$W3/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$B3,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
 [ "$(ST $W3)" = "PARTS_PICKUP|PENDING" ] && pass "ไม่ต้องโอน → หัวหน้าภาคเบิกคลังอื่น" || fail "หลังเช็ค (ไม่โอน): $(ST $W3)"
 [ "$(FLOW $W3 | cut -d'|' -f2,5)" = "false|true" ] && pass "detail.flow: ไม่ได้โอน (transfer=false) · เบิกคลังอื่น (pickup=true) — แถบไม่ติ๊ก \"สั่งโอน\"" || fail "flow เบิกคลังอื่น: $(FLOW $W3)"
-POST $S "work-orders/$W3/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"PK-CAI3\"}]}" >/dev/null
+POST $S "work-orders/$W3/parts-pickup" "{\"results\":[{\"sparePartId\":$B3,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"PK-CAI3\"}]}" >/dev/null
 [ "$(ST $W3)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(DB "select \"requisitionNo\" from \"WorkOrderPart\" where \"workOrderId\"=$W3 and kind='WAITING'")" = "PK-CAI3" ] \
   && pass "หัวหน้าภาคเบิกแล้ว → แอดมินคอนเฟิร์มลูกค้า (เลขใบเบิกบันทึก)" || fail "หลังเบิกคลังอื่น: $(ST $W3)"
 [ "$(FLOW $W3 | cut -d'|' -f2,5)" = "false|true" ] && pass "เบิกเสร็จแล้ว flow ยังบอกว่าเบิกคลังอื่น ไม่ได้โอน" || fail "flow หลังเบิกคลังอื่น: $(FLOW $W3)"
@@ -130,23 +134,25 @@ POST $S "work-orders/$W3/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"
 echo
 echo "═══ โอนเข้าคลังอื่น (ไม่ใช่ 94) แล้วหัวหน้าภาคเบิกส่งมอบ — transfer + pickup"
 W9=$(sourced W89 "คลังขอนแก่น")
+B9=$(fx_part $W9 BOARD)
 assign $W9
-POST $A "work-orders/$W9/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $A "work-orders/$W9/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$B9,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
 [ "$(FLOW $W9 | cut -d'|' -f2,5)" = "true|false" ] && pass "รอหัวหน้าภาคเบิก+โอน: transfer=true · ยังไม่รู้ปลายทาง pickup=false" || fail "flow W9 ก่อนโอน: $(FLOW $W9)"
-POST $S "work-orders/$W9/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI9\",\"toWarehouse\":\"คลังภูเก็ต\",\"transferNo\":\"TR-CAI9\"}]}" >/dev/null
+POST $S "work-orders/$W9/parts-transfer" "{\"results\":[{\"sparePartId\":$B9,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI9\",\"toWarehouse\":\"คลังภูเก็ต\",\"transferNo\":\"TR-CAI9\"}]}" >/dev/null
 POST $S "work-orders/$W9/parts-transfer/arrived" '{}' >/dev/null
 [ "$(ST $W9)" = "PARTS_PICKUP|PENDING" ] && [ "$(FLOW $W9 | cut -d'|' -f2,5)" = "true|true" ] \
   && pass "ของถึงคลังภูเก็ต → หัวหน้าภาคเบิกส่งมอบ: transfer=true · pickup=true" || fail "flow W9 ของถึง: $(ST $W9) $(FLOW $W9)"
-POST $S "work-orders/$W9/parts-pickup" "{\"results\":[{\"sparePartId\":$BOARD,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"PK-CAI9\"}]}" >/dev/null
+POST $S "work-orders/$W9/parts-pickup" "{\"results\":[{\"sparePartId\":$B9,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"PK-CAI9\"}]}" >/dev/null
 [ "$(ST $W9)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $W9 | cut -d'|' -f2,5)" = "true|true" ] \
   && pass "เบิกส่งมอบแล้ว → คอนเฟิร์มลูกค้า · flow ยังบอกทั้งโอนและเบิกคลังอื่น" || fail "flow W9 หลังเบิก: $(ST $W9) $(FLOW $W9)"
 
 echo
 echo "═══ หัวหน้าภาคส่งกลับ (โอน/เบิกไม่ได้) แล้วแอดมินเบิกคลัง 94 — รอบที่ถูกส่งกลับไม่นับ"
 W10=$(sourced W90 "คลังขอนแก่น")
+B10=$(fx_part $W10 BOARD)
 assign $W10
-POST $A "work-orders/$W10/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
-POST $S "work-orders/$W10/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI10\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-CAI10\"}]}" >/dev/null
+POST $A "work-orders/$W10/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$B10,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $S "work-orders/$W10/parts-transfer" "{\"results\":[{\"sparePartId\":$B10,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-CAI10\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-CAI10\"}]}" >/dev/null
 POST $S "work-orders/$W10/parts-transfer/return" '{"reason":"ทดสอบ — ขอนแก่นไม่มีของจริง"}' >/dev/null
 [ "$(ST $W10)" = "PARTS_REQUESTED|PENDING" ] || fail "เตรียม W10 ส่งกลับ: $(ST $W10)"
 issue94 $W10 RQ-CAI10
@@ -154,8 +160,9 @@ issue94 $W10 RQ-CAI10
   && pass "สั่งโอนแล้วถูกส่งกลับ → แอดมินเบิก 94: transfer=false pickup=false (ฐานข้อมูลมี TRANSFER_REQUESTED ก่อนส่งกลับ)" || fail "flow W10: $(ST $W10) $(FLOW $W10)"
 [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W10 and action in ('TRANSFER_REQUESTED','TRANSFER_RETURNED')")" = "2" ] || fail "W10 ประวัติโอน/ส่งกลับไม่ครบ"
 W11=$(sourced W91 "คลังภูเก็ต")
+B11=$(fx_part $W11 BOARD)
 assign $W11
-POST $A "work-orders/$W11/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
+POST $A "work-orders/$W11/parts-check" "{\"transfer\":false,\"results\":[{\"sparePartId\":$B11,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
 POST $S "work-orders/$W11/parts-pickup/return" '{"reason":"ทดสอบ — ภูเก็ตไม่มีของจริง"}' >/dev/null
 issue94 $W11 RQ-CAI11
 [ "$(ST $W11)" = "AWAITING_CONFIRM|PENDING" ] && [ "$(FLOW $W11 | cut -d'|' -f2,5)" = "false|false" ] \
@@ -212,10 +219,11 @@ issue94 $X4 RQ-CAIX4
   && pass "เบิกแล้วไปคอนเฟิร์มลูกค้าตามที่แถบวาด" || fail "X4 หลังเบิก: $(ST $X4) $(FLOW $X4)"
 # X2: คอนเฟิร์มแล้ว ของกำลังโอน (สายงานเดิม) → ของถึง → เบิกส่งมอบ → ปล่อยงาน
 X2=$(sourced W77 "คลังขอนแก่น")
+BX2=$(fx_part $X2 BOARD)
 assign $X2
 DB "update \"WorkOrder\" set \"appointmentStatus\"='CONFIRMED' where id=$X2" >/dev/null
-POST $A "work-orders/$X2/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
-POST $S "work-orders/$X2/parts-transfer" "{\"results\":[{\"sparePartId\":$BOARD,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-X2\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-X2\"}]}" >/dev/null
+POST $A "work-orders/$X2/parts-check" "{\"transfer\":true,\"results\":[{\"sparePartId\":$BX2,\"inStock\":true,\"warehouse\":\"คลังขอนแก่น\"}]}" >/dev/null
+POST $S "work-orders/$X2/parts-transfer" "{\"results\":[{\"sparePartId\":$BX2,\"fromWarehouse\":\"คลังขอนแก่น\",\"transferReqNo\":\"KK-X2\",\"toWarehouse\":\"$L94\",\"transferNo\":\"TR-X2\"}]}" >/dev/null
 [ "$(ST $X2)" = "PARTS_IN_TRANSIT|CONFIRMED" ] && [ "$(FLOW $X2 | cut -d'|' -f1-2)" = "confirmFirst|true" ] \
   && pass "ใบคอนเฟิร์มแล้วระหว่างโอน: flow = confirmFirst + โอน" || fail "X2 ระหว่างโอน: $(ST $X2) $(FLOW $X2)"
 POST $S "work-orders/$X2/parts-transfer/arrived" '{}' >/dev/null
@@ -242,21 +250,23 @@ DB "update \"WorkOrder\" set \"scheduledAt\"='$(day -2)' where id=$W6" >/dev/nul
 echo
 echo "═══ ของไม่พอตอนเบิก — ข้อความตามสถานะนัด"
 W7=$(sourced W80 "$L94")
+B7=$(fx_part $W7 BOARD)
 assign $W7
-R=$(POST $A "work-orders/$W7/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false}]}")
+R=$(POST $A "work-orders/$W7/parts-check" "{\"results\":[{\"sparePartId\":$B7,\"inStock\":false}]}")
 echo "$R" | grep -q "ของไม่พอ — ยกเลิกนัด รอของเข้า" && ! echo "$R" | grep -q "แจ้งเลื่อนนัด" && [ "$(ST $W7)" = "PARTS_REQUESTED|PENDING" ] \
   && pass "ยังไม่คอนเฟิร์มลูกค้า: บอกปุ่ม “ยกเลิกนัด รอของเข้า” (ใบไม่ขยับ)" || fail "ข้อความ PENDING: $(echo $R | head -c 200)"
-POST $A "work-orders/$W7/parts-short" "{\"sparePartIds\":[$BOARD]}" >/dev/null
+POST $A "work-orders/$W7/parts-short" "{\"sparePartIds\":[$B7]}" >/dev/null
 N=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W7 and action='PARTS_SHORT'")
 [ "$(ST $W7)|$(APPT $W7)" = "PARTS_SOURCING|-|-|-" ] && echo "$N" | grep -q "ไม่ต้องแจ้งร้าน" && ! echo "$N" | grep -q "แจ้งร้านว่าเลื่อน" \
   && pass "ยังไม่คอนเฟิร์ม: ล้างนัด กลับเช็คอะไหล่ ประวัติบอกไม่ต้องแจ้งร้าน (ฐานข้อมูล)" || fail "PARTS_SHORT PENDING: $(ST $W7) $(APPT $W7) · $N"
 W8=$(sourced W81 "$L94")
+B8=$(fx_part $W8 BOARD)
 assign $W8
 DB "update \"WorkOrder\" set \"appointmentStatus\"='CONFIRMED' where id=$W8" >/dev/null
-R=$(POST $A "work-orders/$W8/parts-check" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":false}]}")
+R=$(POST $A "work-orders/$W8/parts-check" "{\"results\":[{\"sparePartId\":$B8,\"inStock\":false}]}")
 echo "$R" | grep -q "ของไม่พอ — แจ้งเลื่อนนัด" && [ "$(ST $W8)" = "PARTS_REQUESTED|CONFIRMED" ] \
   && pass "คอนเฟิร์มลูกค้าแล้ว (สายงานเดิม): บอกปุ่ม “แจ้งเลื่อนนัด”" || fail "ข้อความ CONFIRMED: $(echo $R | head -c 200)"
-POST $A "work-orders/$W8/parts-short" "{\"sparePartIds\":[$BOARD]}" >/dev/null
+POST $A "work-orders/$W8/parts-short" "{\"sparePartIds\":[$B8]}" >/dev/null
 N=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W8 and action='PARTS_SHORT'")
 [ "$(ST $W8)|$(APPT $W8)" = "PARTS_SOURCING|-|-|-" ] && echo "$N" | grep -q "แจ้งร้านว่าเลื่อน" \
   && pass "คอนเฟิร์มแล้ว: ล้างนัด ประวัติบอกให้แอดมินแจ้งร้านว่าเลื่อน (ฐานข้อมูล)" || fail "PARTS_SHORT CONFIRMED: $(ST $W8) · $N"
@@ -325,8 +335,9 @@ M7=$(sourced W88 "$L94"); assign $M7
 # M8: ผูกเคสเครื่องเสีย รอคอนเฟิร์ม ยังไม่เบิก → ย้าย และสถานะบนเคสต้องตาม (กระดาน/ตัวกรองอ่านจากเคส)
 OUT=$(DB "insert into \"Outage\"(kind,\"branchId\",\"startedAt\",\"lastSeenAt\") select 'MACHINE_OFF',id,now(),now() from \"Branch\" where code='$BR' returning id" | head -1)
 M8=$(POST $A "work-orders/from-outage/$OUT" "{\"jobType\":\"CM\",\"symptom\":\"$SYMPTOM\"}" | J 'd.id')
-POST $S "work-orders/$M8/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1}]}" >/dev/null
-POST $A "work-orders/$M8/parts-sourcing" "{\"results\":[{\"sparePartId\":$BOARD,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
+BM8=$(fx_part $M8 BOARD)
+POST $S "work-orders/$M8/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BM8,\"quantity\":1}]}" >/dev/null
+POST $A "work-orders/$M8/parts-sourcing" "{\"results\":[{\"sparePartId\":$BM8,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
 toConfirm $M8
 DB "update \"Outage\" set \"workStatus\"='WAITING_TECH' where id=$OUT" >/dev/null
 GOT=$(PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -At -v ON_ERROR_STOP=1 <<SQL

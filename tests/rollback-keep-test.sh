@@ -5,6 +5,7 @@
 #   · แนบไฟล์/แก้รายละเอียดหลังย้อน ป้ายยังอยู่ · กดผ่านขั้นที่ย้อนไป ป้ายหาย แต่ค่าเดิมยังเติมให้ขั้นถัดไป
 #   · ผ่านขั้นเดิมไปแล้ว ค่าเดิมเลิกเติม · ประวัติเก่าที่ไม่มี meta ยังอ่านชื่อขั้นเดิมได้
 set -e
+. "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
 pass() { echo "PASS $1"; }
@@ -24,14 +25,15 @@ cleanup() {
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT
-BOARD=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BOARD'")
-BELT=$(DB "select id from \"SparePart\" where \"partCode\"='SP-BELT'")
 TEAM=$(DB "select zone from \"Branch\" where code='$BR'")
 SNAME=$(DB "select name from \"User\" where \"employeeCode\"='S001'")
 VISIT=$(TZ=Asia/Bangkok date -d '+10 days' +%F)
 
 ID=$(POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"W71\",\"symptom\":\"ทดสอบย้อนขั้นไม่หาย\"}]}" | J 'd.orders?d.orders[0].id:d.id'); IDS="$ID"
 CODE=$(DB "select code from \"WorkOrder\" where id=$ID")
+# อะไหล่ต้องอยู่ไฟล์ยี่ห้อเดียวกับเครื่องของใบ — หยิบหลังเปิดใบ เพราะต้องรู้ก่อนว่าเครื่องเป็นยี่ห้ออะไร
+BOARD=$(fx_part "$ID" BOARD)
+BELT=$(fx_part "$ID" BELT)
 POST $S "work-orders/$ID/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BOARD,\"quantity\":1},{\"sparePartId\":$BELT,\"quantity\":2}]}" >/dev/null
 # ใบที่เดินไปถึงรอช่างเข้างาน: เช็คคลังแล้ว (มี · คลัง · เลขใบเบิก) จ่ายทีม นัดลูกค้าคอนเฟิร์มแล้ว
 DB "update \"WorkOrderPart\" set \"inStock\"=true, warehouse='คลังกระบี่', \"requisitionNo\"='RQ-KEEP1', \"checkedAt\"=now() where \"workOrderId\"=$ID and kind='WAITING'" >/dev/null
