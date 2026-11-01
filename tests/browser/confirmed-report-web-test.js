@@ -1,6 +1,6 @@
 // ทดสอบ: หน้าสรุปคอนเฟิร์มลูกค้า (จ่ายงานผ่านกลุ่มไลน์ช่าง) ด้วยบทบาทจริง — อ่านคลิปบอร์ดจริง
 //   รูปแบบข้อความ (ต.ค. 69): ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่นงาน · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด
-//   · ไม่มีอาการ · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่
+//   · ไม่มีอาการ · ไม่มีเบอร์ = "ไม่มีในใบงาน" · ลิงก์แผนที่ · ใบที่ยังไม่ปล่อยงานมีบรรทัด "สถานะ: ยังไม่ปล่อยงาน" (เวลาปิดรับ ต.ค. 69)
 //   · การ์ดในเมนูรายงาน: แอดมินเห็น · ช่างไม่เห็น
 //   · เคสที่คอนเฟิร์มวันนี้แยกตามทีม · คัดลอกทั้งหมดได้ทุกเคส + เบอร์ร้าน + ไม่มีชื่อแอดมิน
 //   · คัดลอกทีมนี้ได้เฉพาะทีมนั้น · สลับ "นัดเข้างานวันที่" ไปวันที่ไม่มีนัด = ว่าง
@@ -31,8 +31,10 @@ const { setup } = require("./fixture");
     const oldLat = fx.sql(`select coalesce(latitude::text,'null')||','||coalesce(longitude::text,'null') from "Branch" where code='C0006'`);
     fx.sql(`update "Branch" set latitude=13.7563, longitude=100.5018 where code='C0006'`);
     restoreBranch = () => fx.sql(`update "Branch" set latitude=${oldLat.split(",")[0]}, longitude=${oldLat.split(",")[1]} where code='C0006'`);
-    for (const [wo, team, t] of [[a, teamA, "09:00"], [b, teamB, "14:00"]]) {
-      fx.sql(`update "WorkOrder" set status='ASSIGNED', "scheduledAt"='2026-12-10', "scheduledTime"='${t}', "appointmentStatus"='CONFIRMED', "assignedTeam"='${team}', "contactPhone"='081-111-222${wo.id % 10}' where id=${wo.id}`);
+    // a ยังรอหัวหน้าภาคปล่อยงาน (ASSIGNED) · b ปล่อยให้ช่างแล้ว (IN_PROGRESS) — บรรทัด "สถานะ: ยังไม่ปล่อยงาน" ต้องขึ้นเฉพาะ a
+    // (สองใบขั้นเดียวกัน = ขึ้นทุกใบก็ผ่าน เทสต์จับไม่ได้ว่าบอกช่างว่างานที่ปล่อยแล้วยังไม่ปล่อย)
+    for (const [wo, team, t, st] of [[a, teamA, "09:00", "ASSIGNED"], [b, teamB, "14:00", "IN_PROGRESS"]]) {
+      fx.sql(`update "WorkOrder" set status='${st}', "scheduledAt"='2026-12-10', "scheduledTime"='${t}', "appointmentStatus"='CONFIRMED', "assignedTeam"='${team}', "contactPhone"='081-111-222${wo.id % 10}' where id=${wo.id}`);
       fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note) values (${wo.id},${aid},'CONFIRMED','ASSIGNED','ทดสอบ')`);
     }
     // a: มีอาการ (ต้องไม่ติดไปในไลน์) · b: ไม่มีเบอร์ผู้ติดต่อ
@@ -79,6 +81,24 @@ const { setup } = require("./fixture");
       !/\p{Extended_Pictographic}/u.test(all) && lines.every((l) => !l.startsWith(" ")) && !all.includes(aname)
         ? pass("คัดลอกทุกทีม: ไม่มีอิโมจิ · หัวคิวงาน+ทีม · เส้นคั่น · เลขที่ใบงาน/รหัสสาขาแยกบรรทัด · ไม่มีอาการ · ไม่มีเบอร์บอกตรง ๆ · แผนที่ · ไม่ย่อหน้า · ไม่มีชื่อแอดมิน")
         : fail(`คลิปบอร์ด: ${all.replace(/\n/g, " | ").slice(0, 400)}`);
+      /**
+       * บรรทัด "สถานะ: ยังไม่ปล่อยงาน" (เวลาปิดรับ ต.ค. 69) ดูทีละใบ — ตัดข้อความเป็นก้อนของแต่ละใบจากบรรทัด "เลขที่ใบงาน:" ถึงเส้นคั่นถัดไป
+       * a (ASSIGNED) ต้องมีต่อจากบรรทัด "สาขา:" · b (IN_PROGRESS) ต้องไม่มี — ไม่นับทั้งข้อความ: ใบอื่นที่คอนเฟิร์มวันนี้ในฐานข้อมูลเครื่องทดสอบ
+       * ไม่ทำให้ผล "กี่บรรทัด" เพี้ยน · ฐานข้อมูลยืนยันขั้นของทั้งสองใบ ไม่เชื่อแค่ที่ตั้งไว้ตอนเตรียม
+       */
+      const blockOf = (code) => {
+        const i = lines.indexOf(`เลขที่ใบงาน: ${code}`);
+        if (i < 0) return null;
+        const end = lines.findIndex((l, k) => k > i && l === "------------------------");
+        return lines.slice(i, end < 0 ? lines.length : end);
+      };
+      const ba = blockOf(a.code) || [];
+      const bb = blockOf(b.code) || [];
+      const at = ba.indexOf("สถานะ: ยังไม่ปล่อยงาน");
+      const stAB = fx.sql(`select string_agg(status, ',' order by id) from "WorkOrder" where id in (${a.id},${b.id})`);
+      stAB === "ASSIGNED,IN_PROGRESS" && at > 0 && ba[at - 1].startsWith("สาขา: ") && bb.length > 0 && !bb.includes("สถานะ: ยังไม่ปล่อยงาน")
+        ? pass("บรรทัด \"สถานะ: ยังไม่ปล่อยงาน\" ต่อจากบรรทัดสาขาเฉพาะใบที่ยังไม่ปล่อย (ฐานข้อมูล ASSIGNED) · ใบที่ปล่อยแล้ว (IN_PROGRESS) ไม่มี")
+        : fail(`บรรทัดสถานะ: ใบรอปล่อย ${ba.join(" / ")} · ใบปล่อยแล้ว ${bb.join(" / ")} · ฐานข้อมูล ${stAB}`);
       // ปุ่มที่สอง = คัดลอกทีมแรก
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").nth(1).click();
       await page.waitForTimeout(500);

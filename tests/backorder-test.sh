@@ -148,7 +148,7 @@ echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได�
 # โทรคอนเฟิร์มช้า — ตกลงนัดเดิมเฉย ๆ (ไม่เปลี่ยนอะไร) ไม่ใช่การนัดใหม่ ต้องผ่าน
 post $ID3 confirm-appointment '{}' >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "ASSIGNED|CONFIRMED|$(day -1)" ] \
-  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปปล่อยงาน (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
+  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปขั้นปล่อยงาน (วันนัดผ่านแล้ว — ติดล็อก ต้องเลื่อนวันนัด) (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
 # ไม่ใช้อะไหล่จ่ายพร้อมระบุ · ส่งตรวจหน้างาน — เลือกวันนัดเหมือนกัน กฎเดียวกัน
 WO4=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W64","symptom":"วันนัดย้อนหลัง"}]}')

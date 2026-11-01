@@ -52,7 +52,8 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     const P = await mk(1); // ระบุอะไหล่ + ขนาดเครื่อง
     const B = await mk(2); // ใบงาน SUB เข้างานอยู่
     await call(S, "POST", `work-orders/${B.id}/parts`, { needsParts: false, assign: { team: os, scheduledAt: today } });
-    await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, {});
+    // งานวันนี้เลยเวลาปิดรับตั้งแต่เมื่อวาน (16:00 ของวันก่อนวันนัด) — แอดมินติ๊กแก้เป็นงานด่วนไปพร้อมกันตอนคอนเฟิร์ม หัวหน้าภาคจึงปล่อยได้ทุกเวลา
+    await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, { urgent: true });
     await call(S, "POST", `work-orders/${B.id}/dispatch`, {});
     const F = await mk(3); // ช่างแก้ไขเรียบร้อย
     mach = sql(`select "machineId" from "WorkOrder" where id=${P.id}`);

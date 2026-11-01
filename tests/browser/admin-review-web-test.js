@@ -104,11 +104,15 @@ const login = async (code) =>
       const { ctx, page, lbl, vis, click } = await session("A001", { width: 1280, height: 900 });
       await lbl(`ตรวจแล้ว ตอบกลับ ${code}`).first().waitFor({ timeout: 20000 }).catch(() => {});
       const head = vis("หัวหน้าภาคส่งให้ตรวจสอบ");
-      const groups = await page.evaluate(() =>
-        [...document.querySelectorAll('[aria-label^="กลุ่ม "]')].filter((g) => g.offsetParent).map((g) => g.getAttribute("aria-label"))
-      );
+      // หัวข้อปักของเวลาปิดรับ ("เลยเวลาปล่อยงาน" · "เลยนัด") อยู่เหนือคำขอตรวจสอบโดยตั้งใจ (dispatch-cutoff §5.3 — วันนัดรอไม่ได้)
+      // ฐานข้อมูลเครื่องทดสอบมีใบเลยนัดค้างได้ — ข้ามสองหัวข้อนั้นก่อนดูว่าคำขอตรวจสอบอยู่บนสุดของที่เหลือ
+      const groups = (
+        await page.evaluate(() =>
+          [...document.querySelectorAll('[aria-label^="กลุ่ม "]')].filter((g) => g.offsetParent).map((g) => g.getAttribute("aria-label"))
+        )
+      ).filter((g) => g !== "กลุ่ม เลยเวลาปล่อยงาน" && g !== "กลุ่ม เลยนัด");
       (await head.count()) && groups[0] === "กลุ่ม หัวหน้าภาคส่งให้ตรวจสอบ" && (await lbl(`ตรวจแล้ว ตอบกลับ ${code}`).count())
-        ? pass("แอดมิน: หัวข้อ \"หัวหน้าภาคส่งให้ตรวจสอบ\" อยู่บนสุด มีปุ่มตรวจแล้ว · ตอบกลับ")
+        ? pass("แอดมิน: หัวข้อ \"หัวหน้าภาคส่งให้ตรวจสอบ\" อยู่บนสุด (ถัดจากหัวข้อเวลาปิดรับ) มีปุ่มตรวจแล้ว · ตอบกลับ")
         : fail(`กลุ่มของแอดมิน: ${groups.slice(0, 3).join(" / ")}`);
       await page.screenshot({ path: path.join(DIR, "admin-review-4-admin.png") });
       await click(lbl(`ตรวจแล้ว ตอบกลับ ${code}`));

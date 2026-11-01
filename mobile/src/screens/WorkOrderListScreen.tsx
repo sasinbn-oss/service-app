@@ -58,8 +58,20 @@ import { canOpenScreen, isAreaTeam } from "../utils/areaTeam";
 import { regionsOf, regionsText } from "../utils/regions";
 import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import WarrantyBadge, { WarrantyState } from "../components/WarrantyBadge";
-import { thaiDate, todayBkk } from "../components/DateField";
+import { thaiDate } from "../components/DateField";
 import { HomeStackParamList } from "../navigation/types";
+import {
+  PAST_GROUP_HINT,
+  adminGroups,
+  serverDay,
+  supervisorBanners,
+  useServerClock,
+  type Cutoff,
+  type DispatchWatch,
+  type Release,
+  type ReleaseDeclined,
+} from "../utils/dispatchCutoff";
+import { CutoffBanners, LiveReleaseChip } from "../components/DispatchCutoff";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
@@ -133,7 +145,8 @@ export interface WorkOrderRow {
   rescheduled?: boolean;
   /** หัวหน้าภาคที่ดูแลใบนี้ (เฉพาะขั้นของหัวหน้าภาค) — ภาคที่มีสองคนได้ทั้งสองชื่อ */
   /** regions = ทุกภาคที่คนนั้นดูแล (หลายภาคได้) — เซิร์ฟเวอร์รุ่นเก่าส่งแค่ region */
-  waitingOnSupervisors: { id: number; name: string; region: string | null; regions?: string[] }[];
+  /** phone = เบอร์หัวหน้าภาค มีเฉพาะในคำตอบของแอดมิน — แอดมินโทรตามใบที่ยังไม่ปล่อย (หัวข้อเลยเวลาปล่อยงาน) */
+  waitingOnSupervisors: { id: number; name: string; region: string | null; regions?: string[]; phone?: string | null }[];
   /** ทีมที่รับงาน (เฉพาะขั้นของช่าง) */
   waitingOnTeam: string | null;
   branchType: "DODO" | "COCO";
@@ -142,6 +155,14 @@ export interface WorkOrderRow {
   warrantyEndsAt: string | null;
   /** เข้าขั้นปัจจุบันเมื่อไร — ใช้บอกว่าค้างมากี่วัน */
   stageSince: string;
+  /** ใบทดสอบ — ไม่ติดเวลาปิดรับปล่อยงาน ไม่ขึ้นป้าย/หัวข้อ (ข้อ 15) */
+  isTest?: boolean;
+  /** วันนัดที่แอดมินแก้เป็นงานด่วนให้ "YYYY-MM-DD" — ใช้ได้เมื่อตรงกับวันนัดตอนนี้เท่านั้น (เลื่อนวันแล้วหมดผลเอง) */
+  urgentReleaseFor?: string | null;
+  /** สถานะเวลาปิดรับของใบขั้นปล่อยงาน (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) — ขั้นอื่น/ใบทดสอบ/ไม่มีวันนัด = null */
+  release?: Release | null;
+  /** หัวหน้าภาคส่งใบที่ล็อกกลับมาให้แอดมินนัดใหม่ — มีเฉพาะในคำตอบของแอดมิน */
+  releaseDeclined?: ReleaseDeclined | null;
 }
 
 type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
@@ -149,7 +170,11 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 /** ใบด่วนที่ยังค้าง — ดึงขึ้นบนสุดและมีออร่า (ใบที่ปิดแล้วไม่มี stageActor) */
 const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
 type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
-type ListData = { rows: WorkOrderRow[]; counts: Record<string, number> };
+/**
+ * serverNow + cutoff = นาฬิกาเซิร์ฟเวอร์และเวลาปิดรับตอนตอบ (ต.ค. 69) — ป้าย "วันนี้/พรุ่งนี้" และนับถอยหลังเดินจากค่านี้
+ * ไม่ใช่นาฬิกามือถือ (ข้อ 12) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ว่าง
+ */
+type ListData = { rows: WorkOrderRow[]; counts: Record<string, number>; serverNow?: string; cutoff?: Cutoff };
 type Sort = "urgent" | "new" | "old" | "az" | "za" | "appt";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
@@ -194,13 +219,26 @@ const SORTS: { value: Sort; label: string }[] = [
 ];
 
 /**
+ * "วันนี้" ของรายการตามนาฬิกาเซิร์ฟเวอร์ (คำตอบรายการล่าสุด) ไม่ใช่นาฬิกามือถือ (เวลาปิดรับ ต.ค. 69 · ข้อ 12)
+ * ป้าย "วันนี้ / พรุ่งนี้ / เลยนัดมา N วัน" อยู่ข้างป้ายเวลาปิดรับของใบเดียวกัน — มือถือตั้งวันผิดแล้วสองป้ายบอกคนละวัน
+ * คนจะไม่เชื่อทั้งคู่ · จำ offset ตอนคำตอบมาถึง (ก่อนจอวาด) ฟังก์ชันระดับไฟล์ (คอลัมน์ ชิปกรอง ข้อความเปลี่ยน) ใช้ได้โดยไม่ต้องส่งต่อ
+ * เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง serverNow = offset 0 = นาฬิกาเครื่อง (แบบเดิม)
+ */
+let listClockOffset = 0;
+function rememberListClock(serverNow?: string) {
+  const t = serverNow ? Date.parse(serverNow) : NaN;
+  if (Number.isFinite(t)) listClockOffset = t - Date.now();
+}
+const listToday = () => serverDay(Date.now() + listClockOffset);
+
+/**
  * วันนัดในรายการ (เจ้าของงานขอ ต.ค. 69) — วัน+เวลาแบบเดียวกับหน้าใบงาน · สถานะนัด · ห่างจากวันนี้กี่วัน
  * "เลยนัด" นับเฉพาะใบที่ยังไม่ปิด: นัดผ่านไปแล้วแต่ใบยังค้าง = นัดแล้วไม่ได้ไป หรือไปแล้วไม่ได้กดในแอป
  */
-function apptOf(r: WorkOrderRow) {
+function apptOf(r: WorkOrderRow, today = listToday()) {
   if (!r.scheduledAt) return null;
   const ymd = r.scheduledAt.slice(0, 10);
-  const days = Math.round((Date.parse(ymd) - Date.parse(todayBkk())) / 86_400_000);
+  const days = Math.round((Date.parse(ymd) - Date.parse(today)) / 86_400_000);
   const open = r.stageActor !== null;
   const rel = !open
     ? null
@@ -280,6 +318,8 @@ const claimMatch = (r: WorkOrderRow, v: ListPrefs["claim"]) => !v || (v === "any
  * แยกตามสิ่งที่ต้องทำ ไม่ใช่ตามชื่อขั้น: ใบแจ้งซ่อมใหม่ต้องนั่งดูอะไหล่ · ใบรอจ่าย/ปล่อยงานต้องดูคิวทีม
  * · ใบทีม outsource ต้องตามให้ทีมนอกส่งรูปมาแล้วปิดแทน — สามอย่างนี้ทำคนละจังหวะ ปนกันแล้วหาไม่เจอ
  * ทีม outsource แยกทั้งก้อน (รอปล่อยงาน + รอปิดงาน) แท็บจ่ายงานจึงเหลือแต่ทีมช่างปกติ
+ * "ส่งช่างตรวจ" (INSPECT_DISPATCH) อยู่แท็บจ่ายงาน/ปล่อยงาน (เจ้าของงานตอบข้อ ก ต.ค. 69) — ติดเวลาปิดรับเหมือนรับทราบปล่อยงาน
+ * ถ้าค้างอยู่แท็บงานแจ้งซ่อม หัวหน้าภาคที่เปิดแท็บจ่ายงานตอนบ่ายสามจะไม่เห็นใบที่กำลังจะล็อก
  */
 type SupTab = "repair" | "dispatch" | "outsource";
 const SUP_TABS: { value: SupTab; label: string }[] = [
@@ -288,7 +328,7 @@ const SUP_TABS: { value: SupTab; label: string }[] = [
   // "ใบงาน SUB" — คำที่เจ้าของงานใช้เรียกใบที่จ่ายให้ทีม outsource
   { value: "outsource", label: "ใบงาน SUB" },
 ];
-const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"];
+const DISPATCH_STAGES = ["PARTS_CHECKED", "ASSIGNED", "INSPECT_DISPATCH", "PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"];
 function supTabOf(r: { outsource?: boolean; status: string }): SupTab {
   if (r.outsource) return "outsource";
   return DISPATCH_STAGES.includes(r.status) ? "dispatch" : "repair";
@@ -562,6 +602,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const table = width >= 1024;
   const [rows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  // นาฬิกาเซิร์ฟเวอร์ + เวลาปิดรับของคำตอบที่อยู่บนจอ — ป้ายเวลาปิดรับในแถวและแถบบนสุดของกล่องงานเดินต่อจากค่านี้
+  const [clock, setClock] = useState<{ serverNow?: string; cutoff?: Cutoff }>({});
   // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที
   const [filter, setFilter] = useState<Filter>(route.params?.inbox ? "INBOX" : "ACTIVE");
   // หน้ารายการถูกใช้ซ้ำเมื่อกดเมนูกล่องงาน/ใบงานซ่อมสลับกัน (ไม่ได้ขึ้นหน้าใหม่)
@@ -619,6 +661,38 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * (เลือก DODO แล้วตัวเลขของ "หัวหน้าภาค" คือใบ DODO ที่รอหัวหน้าภาค)
    */
   const supTabs = filter === "INBOX" && user?.role === "SUPERVISOR";
+  /**
+   * งานพรุ่งนี้ที่ยังไม่อยู่ในกล่อง (ยังไม่ถึงขั้นปล่อยงาน · ปล่อยครบแล้ว) — แถบบนสุดของกล่องงานหัวหน้าภาคต้องเตือนด้วย
+   * ถามเฉพาะกล่องงานของหัวหน้าภาค ถามใหม่ทุกครั้งที่รายการบนจอเปลี่ยน (โหลด · มีอัปเดต) ไม่ตั้งรอบถามเอง
+   * ถามไม่ได้ = ไม่มีหัวข้อพวกนั้น แถบที่คิดจากใบในกล่องยังขึ้นครบ (แอดมินมากับก้อนหน้าจอแอดมิน)
+   */
+  // แอดมิน (ไม่ใช่ Admin Spare Part): หัวข้อ "งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย / ยังไม่คอนเฟิร์มลูกค้า" มาจากรายการเดียวกัน
+  const adminCut = filter === "INBOX" && user?.role === "ADMIN" && !user?.partsAdmin;
+  const watchOn = supTabs || adminCut;
+  /**
+   * ค้นหา/"มอบหมายให้ฉัน" กรองที่เซิร์ฟเวอร์ — รายการในมือเหลือแค่ใบที่ตรง ไม่ใช่ทั้งกล่อง
+   * แถบเวลาปิดรับนับจากรายการนี้ ถ้ายังวาดอยู่จะขึ้น "เลยเวลาปล่อยงาน 1 ใบ" ทั้งที่งานของฉันวันนี้บอก 3
+   * หัวหน้าภาคเข้าใจว่าใบอื่นจัดการไปแล้ว จึงซ่อนแถบไว้จนกว่าจะล้างตัวกรอง (นับผิดแย่กว่าไม่ขึ้น)
+   */
+  const narrowed = !!settledSearch.trim() || mineOnly;
+  const [watch, setWatch] = useState<DispatchWatch | null>(null);
+  useEffect(() => {
+    if (!watchOn) {
+      setWatch(null);
+      return;
+    }
+    // ระหว่างรายการกำลังโหลดยังไม่ถาม — รอบที่รายการมาถึงถามทีเดียว ไม่ยิงซ้ำสองครั้งตอนเปิดหน้า
+    // ระหว่างค้นหาแถบไม่ขึ้นอยู่แล้ว — ไม่ต้องถามใหม่ทุกครั้งที่พิมพ์คำค้นเสร็จ ล้างคำค้นแล้วรายการโหลดใหม่ค่อยถาม
+    if (loading || narrowed) return;
+    let alive = true;
+    api.get<DispatchWatch>("/work-orders/dispatch-watch").then(
+      (r) => alive && setWatch(r.data),
+      () => undefined
+    );
+    return () => {
+      alive = false;
+    };
+  }, [watchOn, narrowed, rows, loading]);
   // กล่องงานหัวหน้าภาคซ่อนแถว "รอใคร" (ทุกใบในกล่องเป็นงานของเขาอยู่แล้ว ใบที่ "รอช่าง" คือทีม outsource ซึ่งมีแท็บแยก)
   // ตัวกรองที่จำไว้จากหน้าอื่นจึงต้องไม่มีผลที่นี่ ไม่งั้นใบหายไปโดยไม่มีปุ่มให้เอาตัวกรองออก
   const byOwner = useCallback(
@@ -756,6 +830,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       fetchVersion().catch(() => null),
     ]);
     seenVersion.current = version;
+    rememberListClock(list.data.serverNow);
     return list.data;
   }, [listParams, fetchVersion]);
 
@@ -789,6 +864,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     const { changed, keys } = countChanges(rowsRef.current, data.rows, (r) => r.id);
     setRows(data.rows);
     setCounts(data.counts);
+    setClock({ serverNow: data.serverNow, cutoff: data.cutoff });
     clearPending();
     if (keys.size) blink(keys);
     return changed;
@@ -824,6 +900,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       if (seq !== loadSeq.current) return;
       setRows(data.rows);
       setCounts(data.counts);
+      setClock({ serverNow: data.serverNow, cutoff: data.cutoff });
       clearPending();
     } catch (e) {
       if (seq !== loadSeq.current) return;
@@ -953,6 +1030,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     beforeRows.current = new Map(rowsRef.current.map((r) => [r.id, r]));
     setRows(data.rows);
     setCounts(data.counts);
+    setClock({ serverNow: data.serverNow, cutoff: data.cutoff });
     clearPending();
     setMarked(new Map());
     if (gone.length) feedback.toast("info", `${gone.join(", ")} ไม่อยู่ในรายการที่คุณเห็นแล้ว`);
@@ -1305,7 +1383,16 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
       ) : null}
       {filter === "INBOX" && !loading ? (
-        <InboxAttention rows={shown} role={user?.role ?? null} onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })} />
+        <InboxAttention
+          rows={shown}
+          allRows={narrowed ? null : rows}
+          watch={watch}
+          serverNow={clock.serverNow}
+          cutoff={clock.cutoff}
+          role={user?.role ?? null}
+          adminCut={adminCut}
+          onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
+        />
       ) : null}
     </View>
   );
@@ -1425,6 +1512,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                     flash={flash.has(item.id)}
                     mark={marked.get(item.id)}
                     last={index === items.length - 1}
+                    serverNow={item.release ? clock.serverNow : undefined}
+                    cutoff={item.release ? clock.cutoff : undefined}
                     onPress={() => {
                       unmark(item.id);
                       navigation.navigate("WorkOrderDetail", { id: item.id });
@@ -1446,6 +1535,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 flash={flash.has(item.id)}
                 mark={marked.get(item.id)}
                 last={index === items.length - 1}
+                serverNow={item.release ? clock.serverNow : undefined}
+                cutoff={item.release ? clock.cutoff : undefined}
                 onPress={() => {
                   unmark(item.id);
                   navigation.navigate("WorkOrderDetail", { id: item.id });
@@ -1456,6 +1547,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 row={item}
                 flash={flash.has(item.id)}
                 mark={marked.get(item.id)}
+                serverNow={item.release ? clock.serverNow : undefined}
+                cutoff={item.release ? clock.cutoff : undefined}
                 onPress={() => {
                   unmark(item.id);
                   navigation.navigate("WorkOrderDetail", { id: item.id });
@@ -1908,9 +2001,14 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   stripe,
   flash,
   mark,
+  serverNow,
+  cutoff,
   onPress,
 }: {
   row: WorkOrderRow;
+  /** นาฬิกาเซิร์ฟเวอร์ + เวลาปิดรับ — ส่งมาเฉพาะใบขั้นปล่อยงาน (แถวอื่นไม่วาดใหม่ทุกครั้งที่รายการโหลด) */
+  serverNow?: string;
+  cutoff?: Cutoff;
   last: boolean;
   /** แถวคู่ — พื้นเทาจาง ๆ สลับแถว */
   stripe?: boolean;
@@ -1982,6 +2080,8 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg, alignSelf: "flex-start" }, closed && styles.badgeDone]}>
           <Text style={[styles.badgeText, { color: tone.fg }]}>{statusText(row)}</Text>
         </View>
+        {/* เวลาปิดรับใต้สถานะ — คนไล่ตารางเห็นว่าใบไหนใกล้ล็อก/ล็อกแล้วโดยไม่ต้องเปิดใบ (หัวหน้าภาคกับแอดมินเท่านั้น) */}
+        {row.release ? <LiveReleaseChip row={row} serverNow={serverNow} cutoff={cutoff} /> : null}
         <PartsOutBadge row={row} />
         <RolledBackBadge row={row} />
         <AdminReviewTag review={row.adminReview} />
@@ -2018,9 +2118,14 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
   row,
   flash,
   mark,
+  serverNow,
+  cutoff,
   onPress,
 }: {
   row: WorkOrderRow;
+  /** นาฬิกาเซิร์ฟเวอร์ + เวลาปิดรับ — ส่งมาเฉพาะใบขั้นปล่อยงาน */
+  serverNow?: string;
+  cutoff?: Cutoff;
   /** เพิ่งเปลี่ยน (รีเฟรช / ปุ่มมีอัปเดต) — กระพริบ 3 ครั้ง */
   flash?: boolean;
   /** ปุ่มมีอัปเดตพามาดู — เปลี่ยนอะไร · ขอบเหลืองค้างไว้จนกดเข้าไปดู */
@@ -2060,6 +2165,8 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         </View>
       </View>
 
+      {/* ป้ายเวลาปิดรับบรรทัดของตัวเอง — ข้อความยาว วางในแถวป้ายบนแล้วดันป้ายสถานะตกบรรทัด */}
+      {row.release ? <LiveReleaseChip row={row} serverNow={serverNow} cutoff={cutoff} style={{ marginBottom: 4 }} /> : null}
       <Text style={styles.title} numberOfLines={2}>
         {row.title}
         {flash || mark ? <Text style={styles.flashTag}> อัปเดต</Text> : null}
@@ -2141,14 +2248,43 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
  *   เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง ใบค้างขั้นเบิก/โอนได้หลายวัน วันที่หัวหน้าภาคนัดไว้จึงเลยได้ก่อนถึงขั้นคอนเฟิร์ม)
  * ใบพวกนี้ยังอยู่ในรายการข้างล่างตามปกติ — หัวข้อนี้แค่ดึงขึ้นมาให้เห็นก่อน
  */
-function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: string | null; onOpen: (id: number) => void }) {
-  const today = todayBkk();
+function InboxAttention({
+  rows,
+  allRows,
+  watch,
+  serverNow,
+  cutoff,
+  role,
+  adminCut,
+  onOpen,
+}: {
+  /** ใบที่เห็นอยู่ในแท็บ/ตัวกรองนี้ — หัวข้อของแอดมิน (ไม่มีคนรับ · เลยนัด) */
+  rows: WorkOrderRow[];
+  /** ทุกใบในกล่อง ไม่ตามแท็บ — แถบเวลาปิดรับ (ใบงาน SUB ก็ต้องนับ) · null = รายการถูกค้น/กรองที่เซิร์ฟเวอร์ ไม่วาดแถบ */
+  allRows: WorkOrderRow[] | null;
+  watch: DispatchWatch | null;
+  serverNow?: string;
+  cutoff?: Cutoff;
+  role: string | null;
+  /** แอดมินที่ไม่ใช่ Admin Spare Part ในกล่องงาน — หัวข้อเวลาปิดรับของแอดมิน */
+  adminCut: boolean;
+  onOpen: (id: number) => void;
+}) {
+  // นาฬิกาเซิร์ฟเวอร์ของแถบนี้เอง — แถบพลิกเป็น "เลยเวลาปล่อยงาน" ตอนถึงเวลาโดยไม่ต้องวาดรายการทั้งหน้าใหม่
+  const now = useServerClock(serverNow, cutoff?.time, (role === "SUPERVISOR" || adminCut) && !!allRows);
+  /**
+   * แอดมิน: เลยเวลาปล่อยงาน (ขึ้นเสมอ แม้ 0 ใบ) · งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย · ยังไม่คอนเฟิร์มลูกค้า — ตัวสร้างเดียวกับงานของฉันวันนี้
+   * นับจากทุกใบในกล่อง ไม่ตามตัวกรองบนจอ (ตัวเลขต้องตรงกับงานของฉันวันนี้และตัวเลขกล่องงาน)
+   * รายการถูกค้นที่เซิร์ฟเวอร์ (allRows ว่าง) ไม่วาด — "เลยเวลาปล่อยงาน 0" ระหว่างค้นหาคือนับผิด แย่กว่าไม่ขึ้น
+   */
+  const adm = adminCut && allRows ? adminGroups(allRows, watch, now, cutoff) : null;
   const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
-  if (role === "SUPERVISOR") {
-    const due = rows.filter((r) => r.status === "ASSIGNED" && r.scheduledAt?.slice(0, 10) === today);
-    if (due.length)
-      groups.push({ key: "today", title: `ออกงานวันนี้ ${due.length} ใบ`, hint: "ลูกค้าคอนเฟิร์มแล้ว — กดรับทราบเพื่อปล่อยงานให้ช่าง", tone: "sup", items: due });
-  }
+  /**
+   * หัวหน้าภาค: แถบเวลาปิดรับ (ล็อก · เลยวันนัด · นับถอยหลัง · งานด่วน · ยังไม่ถึงขั้น · ออกงานวันนี้) — ตัวสร้างเดียวกับงานของฉันวันนี้
+   * "ออกงานวันนี้" ย้ายเข้าไปอยู่ในตัวสร้าง: นับเฉพาะใบที่ยังกดปล่อยได้ และ "วันนี้" ตามนาฬิกาเซิร์ฟเวอร์
+   * (เดิมนับใบรับทราบปล่อยงานวันนี้ทุกใบด้วยวันของมือถือ — ใบวันนี้ล็อกแล้วเกือบทั้งหมด ตัวใหญ่ชวนให้กดคือหลอก)
+   */
+  const sup = role === "SUPERVISOR" && allRows ? supervisorBanners(allRows, watch, now, cutoff) : [];
   if (role === "ADMIN") {
     const orphan = rows.filter((r) => r.orphan);
     const overdue = rows.filter((r) => r.overdue);
@@ -2166,14 +2302,27 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
         key: "overdue",
         title: `เลยนัด ${overdue.length}`,
         // ใบที่ค้างขั้นโอน/เบิกคลังอื่นก็มาอยู่ที่นี่ (ขั้นของหัวหน้าภาค) — แอดมินเลื่อนวันได้ แต่ของต้องตามจากหัวหน้าภาค
-        hint: "วันนัดผ่านไปแล้ว ใบยังไม่ถึงช่าง — เลื่อนวันนัด/โทรนัดใหม่ · ท้ายแถวบอกว่าค้างที่ใคร (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค)",
+        // ตอนนี้รวมใบรอปล่อยงาน/ส่งช่างตรวจที่วันนัดผ่านแล้วด้วย (เวลาปิดรับ ต.ค. 69) — ประโยคเดียวกับงานของฉันวันนี้
+        hint: PAST_GROUP_HINT,
         tone: "bad",
         items: overdue,
       });
   }
-  if (!groups.length) return null;
+  if (!groups.length && !sup.length && !adm) return null;
   return (
     <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
+      {sup.length ? <CutoffBanners groups={sup} withRows onOpen={onOpen} /> : null}
+      {/*
+        แอดมิน: หัวข้อเวลาปิดรับขึ้นก่อนหัวข้อเดิม (ไม่มีคนรับ · เลยนัด) · "ยังไม่ปล่อย" ดูอย่างเดียว (งานของหัวหน้าภาค) แถวจึงกดไม่ได้
+        "ยังไม่คอนเฟิร์มลูกค้า" กดเปิดใบไปคอนเฟิร์มได้ · ใบที่ล็อกกดเปิดใบไปแก้เป็นงานด่วน/เลื่อนวันนัด
+      */}
+      {adm ? (
+        <>
+          <CutoffBanners groups={[adm.locked]} withRows onOpen={onOpen} />
+          {adm.unreleased ? <CutoffBanners groups={[adm.unreleased]} withRows /> : null}
+          {adm.unconfirmed ? <CutoffBanners groups={[adm.unconfirmed]} withRows onOpen={onOpen} /> : null}
+        </>
+      ) : null}
       {groups.map((g) => (
         <View
           key={g.key}
@@ -2190,13 +2339,7 @@ function InboxAttention({ rows, role, onOpen }: { rows: WorkOrderRow[]; role: st
                 {[
                   r.branchCode,
                   g.key === "orphan" ? r.orphanReason ?? r.statusLabel : r.assignedTeam && `ทีม${r.assignedTeam}`,
-                  g.key === "today"
-                    ? r.scheduledTime
-                      ? `${r.scheduledTime} น.`
-                      : "ทั้งวัน"
-                    : g.key === "overdue" && r.scheduledAt
-                      ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}`
-                      : null,
+                  g.key === "overdue" && r.scheduledAt ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}` : null,
                   // เลยนัดได้หลายขั้นแล้ว (เบิก · โอน · คอนเฟิร์ม) — บอกว่าค้างที่ไหน จะได้รู้ว่าต้องตามใคร
                   g.key === "overdue" ? r.statusLabel : null,
                 ]
