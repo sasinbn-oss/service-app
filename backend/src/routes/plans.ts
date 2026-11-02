@@ -21,7 +21,7 @@ import {
   JOB_TYPE_LABELS,
   WORK_ORDER_STATUS_LABELS,
 } from "../utils/constants";
-import { readCutoff, releaseState } from "../utils/dispatchCutoff";
+import { dayOf } from "../utils/dispatchCutoff";
 
 const router = Router();
 
@@ -95,7 +95,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
   const day = dayStart(date.data);
   const scope = await scopeFor(req);
 
-  const [orders, plans, cfg] = await Promise.all([
+  const [orders, plans] = await Promise.all([
     prisma.workOrder.findMany({
       where: {
         scheduledAt: day,
@@ -112,8 +112,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
         scheduledAt: true,
         scheduledTime: true,
         appointmentStatus: true,
-        // เวลาปิดรับปล่อยงาน — ป้าย "ปิดรับ 16:00" / "เลยเวลาปล่อยงาน" / "แอดมินแก้เป็นงานด่วน" บนจุดที่ยังไม่ปล่อย
-        isTest: true,
+        // ป้ายเขียว "แอดมินแก้เป็นงานด่วน" บนจุดที่ยังไม่ปล่อย (เวลาปิดนัดงานพรุ่งนี้) — ขั้นปล่อยงานไม่มีป้ายเวลาปิดแล้ว
         urgentReleaseFor: true,
         assignedTeam: true,
         parentId: true,
@@ -138,10 +137,7 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
         },
       },
     }),
-    // ค่าที่จำไว้ 30 วิ — บอร์ดดูอย่างเดียว ไม่มีปุ่มปล่อยงาน
-    readCutoff(),
   ]);
-  const now = new Date();
 
   type Lane = {
     team: string;
@@ -192,14 +188,11 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
         : null,
       isFollowUp: o.parentId !== null,
       /**
-       * เวลาปิดรับของจุดที่ยังไม่ปล่อย (ขั้นปล่อยงาน) — null = ไม่อยู่ใต้กฎ (ขั้นอื่น · ใบทดสอบ)
-       * ส่งเส้นตายไปด้วย บอร์ดพลิกป้ายเองด้วยนาฬิกาเซิร์ฟเวอร์ (serverNow) ตอนถึงเวลา — บอร์ดโหลดใหม่ผ่านตัวเช็คของตัวเอง
-       * ไม่ใช่ /work-orders/version ถ้าใช้แค่ locked ที่ส่งมา ป้าย "ปิดรับ 16:00" จะค้างหลัง 16:00 จนกว่าจะมีคนแก้ใบ
+       * วันที่แอดมินแก้เป็นงานด่วนให้ (วันเดียวกับ scheduledAt ของใบ = นัดวันที่ปิดแล้วด้วยงานด่วน) — บอร์ดติดป้ายเขียว
+       * "แอดมินแก้เป็นงานด่วน" ให้คนจัดแผนรู้ว่าจุดนี้มาหลังเวลาปิดนัด · ส่งเป็นวัน ไม่ใช่ true/false ให้แอปเทียบกับวันของจุดเอง
+       * (เลื่อนวันทีหลังแล้ววันไม่ตรง = ไม่ใช่งานด่วนของวันนี้) · ป้าย "ปิดรับ 16:00" / "เลยเวลาปล่อยงาน" ไม่มีแล้ว (ปล่อยงานไม่มีกฎเวลา)
        */
-      release: (() => {
-        const st = releaseState(o, cfg, now);
-        return st ? { locked: st.locked, urgent: st.urgent, deadline: st.deadline, enforced: st.enforced, past: st.past } : null;
-      })(),
+      urgentReleaseFor: o.urgentReleaseFor ? dayOf(o.urgentReleaseFor) : null,
     };
   }
 
@@ -248,7 +241,6 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
   res.json({
     date: date.data,
     serverNow: new Date().toISOString(),
-    cutoff: { time: cfg.time, since: cfg.since },
     stats: {
       teams: working.length,
       people: working.reduce((n, l) => n + (l.plan?.members.length ?? 0), 0),

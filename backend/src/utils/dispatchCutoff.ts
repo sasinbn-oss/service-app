@@ -1,11 +1,14 @@
 /**
- * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ใบที่รอหัวหน้าภาคปล่อยงาน/ส่งช่างตรวจ ปล่อยได้ถึง
- * "วันก่อนวันนัด เวลาที่แอดมินตั้ง" (ตั้งต้น 16:00) ตามเวลาไทยของเซิร์ฟเวอร์ ไม่ใช่นาฬิกามือถือ
+ * เวลาปิดนัดงานพรุ่งนี้ (เจ้าของงานขอ ต.ค. 69 · ย้ายจากขั้นปล่อยงานมาที่การนัดวัน 2 พ.ย. 69) — หัวหน้าภาคนัดวันเข้า
+ * (นัดวันเข้า · ไม่ใช้อะไหล่จ่ายงาน · ส่งตรวจ) ได้ถึง "วันก่อนวันนัด เวลาที่แอดมินตั้ง" (ตั้งต้น 16:00) ตามเวลาไทยของเซิร์ฟเวอร์
+ * ไม่ใช่นาฬิกามือถือ — วันนี้ปิดตลอด · พรุ่งนี้ปิดตั้งแต่เวลานั้นของวันนี้ · มะรืนเป็นต้นไปเปิด
+ * เดิม (PR #165) ล็อกที่ขั้นปล่อยงาน ซึ่งเป็นขั้นผิด: เจ้าของงานหมายถึง "การนัดวันลูกค้า" ไม่ใช่วันที่หัวหน้าภาคกดปล่อย (WO-01192)
  *
- * ทุกอย่างที่ตัดสินว่าใบไหนล็อกอยู่ที่ไฟล์นี้ที่เดียว — ปุ่มปล่อยงาน กล่องงานแอดมิน แผนงาน และหน้าจอ
- * ต้องเห็นตรงกันทุกตัวอักษร ถ้าแต่ละที่คิดเอง วันหนึ่งจะมีใบที่แอปบอก "ยังปล่อยได้" แต่เซิร์ฟเวอร์ไม่รับ
+ * ทุกอย่างที่ตัดสินว่าวันไหนปิดนัดอยู่ที่ไฟล์นี้ที่เดียว — ปุ่มนัดวัน คอนเฟิร์ม/เลื่อนวันนัดของแอดมิน แก้เป็นงานด่วน
+ * และหน้าจอ (mobile/src/utils/dispatchCutoff.ts คิดตามสูตรเดียวกัน) ต้องเห็นตรงกันทุกตัวอักษร
+ * ถ้าแต่ละที่คิดเอง วันหนึ่งจะมีวันที่ปฏิทินบอก "ยังนัดได้" แต่เซิร์ฟเวอร์ไม่รับ
  *
- * ไม่มีอะไรเกิดขึ้นตอน 16:00 เอง (ไม่มีงานตั้งเวลา) — สถานะล็อกคิดใหม่ทุกครั้งที่อ่าน/เขียนใบ
+ * ไม่มีอะไรเกิดขึ้นตอน 16:00 เอง (ไม่มีงานตั้งเวลา) — วันไหนปิดคิดใหม่ทุกครั้งที่อ่าน/เขียนใบ
  * เซิร์ฟเวอร์บน Render หลับได้ งานตั้งเวลาที่พลาดรอบเดียวจะทำให้ใบค้างผิดสถานะทั้งวัน
  */
 import { prisma } from "../prisma";
@@ -15,13 +18,21 @@ export const CUTOFF_KEY = "dispatchCutoff";
 export const CUTOFF_DEFAULT = "16:00";
 /** ค่าที่แอดมินเลือกได้ (คำถามข้อ 13) — ช่วงที่เจ้าของงานยอม ไม่ให้ตั้งเที่ยงคืนแล้วกฎหายไปทั้งระบบ */
 export const CUTOFF_CHOICES = ["15:00", "15:30", "16:00", "16:30", "17:00"] as const;
-/** ขั้นที่กดปล่อยงาน — รับทราบ ปล่อยงาน (ซ่อม) และส่งช่างตรวจ (เจ้าของงานตอบข้อ ก ให้ใช้กฎเดียวกัน) */
+/**
+ * ขั้นที่หัวหน้าภาครับทราบ ปล่อยงาน (ซ่อม) / ส่งช่างตรวจ — ไม่มีกฎเวลาแล้ว (เจ้าของงานตอบข้อ 1, 2 พ.ย. 69)
+ * ยังต้องใช้ชุดนี้: ป้าย "คอนเฟิร์มวันใหม่" (isRescheduled) และหัวข้อ "เลยนัด" ของแอดมิน (pastRelease)
+ */
 export const RELEASE_STAGES: string[] = ["ASSIGNED", "INSPECT_DISPATCH"];
+/**
+ * ขั้นที่หัวหน้าภาคเลือกวันเข้า — NEW (ไม่ใช้อะไหล่จ่ายงาน · ส่งตรวจ) และ PARTS_CHECKED (นัดวันเข้า) (เจ้าของงานตอบข้อ 5)
+ * คำขอ "ขอแอดมินแก้เป็นงานด่วน" และปุ่มแก้เป็นงานด่วนทางตรงของแอดมินใช้ได้เฉพาะสองขั้นนี้
+ */
+export const SCHEDULE_STAGES: string[] = ["NEW", "PARTS_CHECKED"];
 
 export type CutoffConfig = {
   /** "HH:MM" ที่ใช้ตัดสินตอนนี้ */
   time: string;
-  /** เวลาที่เริ่มใช้กฎ = createdAt ของแถวแรก (ใส่โดย migration) — ใบที่เส้นตายอยู่ก่อนหน้านี้ไม่ล็อกย้อนหลัง (ข้อ 14) */
+  /** เวลาที่เริ่มใช้กฎ = createdAt ของแถวแรก (ใส่โดย migration) — วันที่เส้นตายอยู่ก่อนหน้านี้ไม่ปิดย้อนหลัง (ข้อ 14) */
   since: Date;
   /** เปลี่ยนล่าสุดเมื่อไร ใคร จากค่าอะไร — ว่างทั้งสามถ้ายังไม่เคยมีใครเปลี่ยนจากค่าตั้งต้น */
   changedAt: Date | null;
@@ -29,25 +40,12 @@ export type CutoffConfig = {
   previous: string | null;
 };
 
-export type ReleaseState = {
-  /** กดได้ถึงก่อนเวลานี้ (เวลานี้พอดีกดไม่ได้แล้ว — ข้อ 6 "ก่อน 16:00 น.") */
-  deadline: Date;
-  /** เส้นตายอยู่หลังเวลาเริ่มใช้กฎ — false = ใบที่ค้างมาตั้งแต่ก่อนเปิดกฎ ไม่ล็อก */
-  enforced: boolean;
-  /** วันนัดผ่านไปแล้ว (ตามวันของเซิร์ฟเวอร์) — แก้เป็นงานด่วนไม่ได้ ต้องเลื่อนวันนัด */
-  past: boolean;
-  /** แอดมินแก้เป็นงานด่วนให้วันนัดนี้ และวันนัดยังไม่ผ่าน */
-  urgent: boolean;
-  /** เคยแก้เป็นงานด่วนให้วันนี้ แต่วันนัดผ่านไปแล้ว — ข้อความต้องบอกว่าหมดอายุ ไม่ใช่ "ยังไม่ได้แก้" */
-  urgentExpired: boolean;
-  locked: boolean;
-};
-
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_MS = 86_400_000;
 /**
  * หน้าจอ/รายการอ่านค่าจากหน่วยความจำได้ 30 วิ — รายการใบงานถูกเรียกหลายสิบครั้งต่อนาที ไม่คุ้มไปถามฐานข้อมูลทุกครั้ง
- * ส่วนที่ตัดสินจริง (กดปล่อยงาน ขอแก้เป็นงานด่วน หน้าตั้งค่า) ต้องส่ง fresh — ข้อ 13 "มีผลกับการกดครั้งต่อไปทันที"
+ * ส่วนที่ตัดสินจริง (นัดวัน · คอนเฟิร์ม/เลื่อนวันนัด · แก้เป็นงานด่วน · ขอแก้เป็นงานด่วน · หน้าตั้งค่า) ต้องส่ง fresh
+ * — ข้อ 13 "มีผลกับการกดครั้งต่อไปทันที"
  */
 const CACHE_MS = 30_000;
 
@@ -71,7 +69,7 @@ export function dayOf(d: Date): string {
 
 function validTime(v: string | null | undefined): string {
   if (v && HHMM.test(v)) return v;
-  // ค่าที่ไม่ใช่ HH:MM มาได้ทางเดียวคือมีคนแก้ในฐานข้อมูลตรง ๆ — ใช้ 16:00 แทนการล่มทั้งปุ่มปล่อยงาน แต่ต้องมีร่องรอยใน log
+  // ค่าที่ไม่ใช่ HH:MM มาได้ทางเดียวคือมีคนแก้ในฐานข้อมูลตรง ๆ — ใช้ 16:00 แทนการล่มทุกปุ่มนัดวัน แต่ต้องมีร่องรอยใน log
   if (v != null && !warnedValues.has(v)) {
     warnedValues.add(v);
     console.warn(`[dispatchCutoff] ค่า "${v}" ไม่ใช่ HH:MM — ใช้ ${CUTOFF_DEFAULT} แทน`);
@@ -124,39 +122,15 @@ export function forgetCutoff() {
 
 /**
  * เส้นตายของวันนัด = วันก่อนวันนัด เวลา time (เวลาไทย) — ทุกวันนับเหมือนกัน รวมเสาร์–อาทิตย์และวันหยุด (ข้อ ค · จ)
- * งานวันจันทร์ปิดรับวันอาทิตย์ เพราะ "วันอาทิตย์ช่างก็ยังทำงาน"
+ * งานวันจันทร์ปิดนัดวันอาทิตย์ เพราะ "วันอาทิตย์ช่างก็ยังทำงาน"
  */
 export function deadlineOf(day: string, time: string): Date {
   return new Date(`${addDays(day, -1)}T${time}:00.000+07:00`);
 }
 
 /**
- * สถานะเวลาปิดรับของใบหนึ่ง ณ เวลา now — null = ใบนี้ไม่อยู่ใต้กฎ
- * (ไม่ได้อยู่ขั้นปล่อยงาน · ใบทดสอบไม่ติดกฎ (ข้อ 15) · ยังไม่มีวันนัด)
- *
- * งานด่วนใช้ได้เมื่อวันที่แอดมินปลดล็อกตรงกับวันนัดตอนนี้เท่านั้น — ทางที่เปลี่ยนวันนัดแล้วลืมล้าง
- * urgentReleaseFor วันจะไม่ตรงกันและกลับมาล็อกเอง แทนที่จะปลดล็อกวันใหม่ที่แอดมินไม่ได้ตั้งใจ
- */
-export function releaseState(
-  o: { status: string; isTest: boolean; scheduledAt: Date | null; urgentReleaseFor: Date | null },
-  cfg: CutoffConfig,
-  now: Date
-): ReleaseState | null {
-  if (!RELEASE_STAGES.includes(o.status) || o.isTest || !o.scheduledAt) return null;
-  const day = dayOf(o.scheduledAt);
-  const deadline = deadlineOf(day, cfg.time);
-  const enforced = deadline.getTime() >= cfg.since.getTime();
-  const past = day < bangkokDay(now);
-  const sameDay = !!o.urgentReleaseFor && dayOf(o.urgentReleaseFor) === day;
-  const urgent = sameDay && !past;
-  const urgentExpired = sameDay && past;
-  const locked = enforced && !urgent && now.getTime() >= deadline.getTime();
-  return { deadline, enforced, past, urgent, urgentExpired, locked };
-}
-
-/**
- * วันนัดแรกที่กฎมีผล — วันที่เส้นตายไม่ก่อนเวลาเริ่มใช้กฎ
- * เปิดกฎตอนเช้า: งานวันนี้ (เส้นตายเมื่อวาน) ยังปล่อยได้ งานพรุ่งนี้ติดกฎของวันนี้ (ข้อ 14)
+ * วันนัดแรกที่กฎมีผล — วันที่เส้นตายไม่ก่อนเวลาเริ่มใช้กฎ (ขอบล่างของหัวข้อ "เลยนัด" ในกล่องงานแอดมิน)
+ * เปิดกฎตอนเช้า: วันนี้ (เส้นตายเมื่อวาน) ยังไม่อยู่ใต้กฎ พรุ่งนี้ติดกฎของวันนี้ (ข้อ 14)
  */
 export function firstEnforcedDay(cfg: CutoffConfig): string {
   const next = addDays(bangkokDay(cfg.since), 1);
@@ -164,15 +138,77 @@ export function firstEnforcedDay(cfg: CutoffConfig): string {
 }
 
 /**
- * ช่วงวันนัดที่ "ล็อกและยังไม่ผ่าน" ณ เวลา now — ใช้กรองกล่องงานแอดมินด้วยคำสั่งเดียว ไม่ต้องไล่ทุกใบ
- * วันนี้ล็อกเสมอ (เส้นตายคือเมื่อวาน) · พรุ่งนี้ล็อกเมื่อเลยเวลาปิดรับของวันนี้ · null = ยังไม่มีวันไหนอยู่ใต้กฎ
- * วันที่ผ่านไปแล้วไม่อยู่ในช่วงนี้ — เป็นหัวข้อ "เลยนัด" ของแอดมิน แยกกัน
+ * วันนัด day ปิดแล้วหรือยัง ณ เวลา now — เลยเส้นตายของวันนั้น และเส้นตายอยู่หลังเวลาเริ่มใช้กฎ
+ * วันนี้ปิดตลอด (เส้นตายคือเมื่อวาน) · พรุ่งนี้ปิดตั้งแต่เวลาปิดของวันนี้ (เวลานั้นพอดีก็ปิดแล้ว — ข้อ 6 ไม่มีเวลาผ่อน)
+ * วันที่เส้นตายอยู่ก่อนเริ่มใช้กฎไม่ปิดย้อนหลัง — เช้าวัน deploy งานวันนี้ยังนัดได้ (ข้อ 14)
  */
-export function lockedDates(cfg: CutoffConfig, now: Date): { from: string; to: string } | null {
-  const today = bangkokDay(now);
-  const tomorrow = addDays(today, 1);
-  const last = now.getTime() >= deadlineOf(tomorrow, cfg.time).getTime() ? tomorrow : today;
-  const enforcedFrom = firstEnforcedDay(cfg);
-  const from = enforcedFrom > today ? enforcedFrom : today;
-  return from <= last ? { from, to: last } : null;
+export function closedFor(day: string, cfg: CutoffConfig, now: Date): boolean {
+  const deadline = deadlineOf(day, cfg.time).getTime();
+  return deadline >= cfg.since.getTime() && now.getTime() >= deadline;
+}
+
+/**
+ * แอดมินแก้เป็นงานด่วนให้วันนี้ของใบนี้ไว้ไหม (urgentReleaseFor = วันที่แอดมินยอมให้นัดได้แม้ปิดนัดแล้ว)
+ * เก็บเป็นวัน ไม่ใช่ true/false — หัวหน้าภาคนัดวันอื่น/แอดมินเลื่อนไปวันอื่นแล้ว วันไม่ตรงกัน หมดผลเองแม้ทางไหนลืมล้าง
+ */
+export function grantedFor(day: string, o: { urgentReleaseFor: Date | null }): boolean {
+  return !!o.urgentReleaseFor && dayOf(o.urgentReleaseFor) === day;
+}
+
+/**
+ * วันแรกที่ยังนัดได้ ณ เวลา now (ไม่นับงานด่วน) — ข้อความ "วันแรกที่นัดได้คือ …" และ firstOpen ในคำตอบ 400
+ * วนอย่างมากสามรอบ: วันนี้ปิด พรุ่งนี้ปิดได้ มะรืนเปิดเสมอ (เส้นตายคือพรุ่งนี้ ยังไม่ถึง)
+ */
+export function firstOpenDay(cfg: CutoffConfig, now: Date): string {
+  let d = bangkokDay(now);
+  for (let i = 0; i < 3 && closedFor(d, cfg, now); i++) d = addDays(d, 1);
+  return d;
+}
+
+export type ClosedRefusal = { error: string; code: "DATE_CLOSED"; day: string; firstOpen: string };
+
+/**
+ * คำตอบ 400 ตอนนัด/เลื่อนไปวันที่ปิดแล้ว — null = นัดวันนี้ได้ (ใบทดสอบ · แอดมินแก้เป็นงานด่วนให้วันนี้แล้ว · ยังไม่ปิด ·
+ * แอดมินติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" มาในคำขอเดียวกัน)
+ *
+ * หัวหน้าภาคติ๊กมาก็ไม่มีผล — ปลดได้แต่แอดมิน (ข้อ 2 · 4) · ข้อความบอกทางไปต่อตามบทบาท: หัวหน้าภาคต้องเลือกวันใหม่หรือขอแอดมิน
+ * แอดมินต้องติ๊ก · วันที่ปิดที่ไม่ใช่วันนี้มีแค่พรุ่งนี้ (เส้นตายของมะรืนยังไม่ถึง) สองข้อความต่อบทบาทจึงครบทุกกรณี
+ * วันย้อนหลังไม่มาถึงที่นี่ — ปุ่มทุกปุ่มเช็ค "วันนัดย้อนหลังไม่ได้" ก่อน (ข้อความนั้นบอกวันแรกที่นัดได้ตรงกว่า)
+ */
+export function closedRefusal(
+  day: string,
+  o: { isTest: boolean; urgentReleaseFor: Date | null },
+  cfg: CutoffConfig,
+  receivedAt: Date,
+  who: "supervisor" | "admin",
+  ticked: boolean
+): ClosedRefusal | null {
+  if (o.isTest || grantedFor(day, o) || !closedFor(day, cfg, receivedAt)) return null;
+  if (who === "admin" && ticked) return null;
+  const today = day <= bangkokDay(receivedAt);
+  const error =
+    who === "supervisor"
+      ? today
+        ? "วันนี้นัดไม่ได้ — ต้องให้แอดมินแก้เป็นงานด่วน"
+        : `เลย ${cfg.time} น. แล้ว — นัดพรุ่งนี้ไม่ได้ เลือกวันใหม่`
+      : today
+        ? "วันนี้ต้องเป็นงานด่วน — ต้องไปวันนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก"
+        : `พรุ่งนี้ปิดนัดแล้ว (เลย ${cfg.time} น.) — ต้องไปพรุ่งนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก`;
+  return { error, code: "DATE_CLOSED", day, firstOpen: firstOpenDay(cfg, receivedAt) };
+}
+
+/**
+ * ใบรอปล่อยงาน/ส่งช่างตรวจที่วันนัดผ่านไปแล้ว — หัวข้อ "เลยนัด" ของแอดมิน (overdue) ไม่เปลี่ยนจากเดิม
+ * ปล่อยได้แล้ว (ไม่มีล็อก) แต่ช่างไปตามวันที่ผ่านไปแล้วไม่ได้ แอดมินต้องโทรร้านเลื่อนวันนัด
+ * นับเฉพาะวันที่อยู่ใต้กฎ (เส้นตายหลังเวลาเริ่มใช้กฎ) — ใบที่ค้างมาก่อนเปิดกฎไม่ท่วมกล่องแอดมินเช้าวัน deploy (ข้อ 14)
+ * ใบทดสอบไม่นับ (ข้อ 15)
+ */
+export function pastRelease(
+  o: { status: string; isTest: boolean; scheduledAt: Date | null },
+  cfg: CutoffConfig,
+  now: Date
+): boolean {
+  if (!RELEASE_STAGES.includes(o.status) || o.isTest || !o.scheduledAt) return false;
+  const day = dayOf(o.scheduledAt);
+  return day < bangkokDay(now) && deadlineOf(day, cfg.time).getTime() >= cfg.since.getTime();
 }

@@ -129,16 +129,17 @@ curl -s "localhost:4000/api/work-orders?search=W63" -H "$(H $A)" | J 'const r=(d
 RR=$(post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day -1)\"}" $S)
 echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status from \"WorkOrder\" where id=$ID3")" = "PARTS_CHECKED" ] \
   && pass "นัดเมื่อวานถูกปฏิเสธ (ใบยังรอนัด)" || fail "นัดย้อนหลังได้: $RR"
-post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 0)\"}" $S >/dev/null
-[ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "PARTS_REQUESTED|$(day 0)" ] \
-  && pass "ของอยู่คลังอื่นก็นัดวันนี้ได้ (ไม่ต้องล่วงหน้า 7 วันแล้ว — ฐานข้อมูล)" || fail "นัดวันนี้ไม่ผ่าน: $(st $ID3)"
+# มะรืน ไม่ใช่วันนี้ — วันนี้ปิดนัดตลอด (เวลาปิดนัดงานพรุ่งนี้) · มะรืนเปิดเสมอไม่ว่ารันกี่โมง
+post $ID3 assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$(day 2)\"}" $S >/dev/null
+[ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "PARTS_REQUESTED|$(day 2)" ] \
+  && pass "ของอยู่คลังอื่นนัดมะรืนได้ (ไม่ต้องล่วงหน้า 7 วันแล้ว — ฐานข้อมูล)" || fail "นัดมะรืนไม่ผ่าน: $(st $ID3)"
 # คลังภูเก็ตอยู่ในพื้นที่ (ไม่ต้องโอน) → หัวหน้าภาคเบิกส่งมอบ → ของครบ ไปขั้นคอนเฟิร์มลูกค้า
 post $ID3 parts-check "{\"transfer\":false,\"results\":[{\"sparePartId\":$BOARD3,\"inStock\":true,\"warehouse\":\"คลังภูเก็ต\"}]}" >/dev/null
 post $ID3 parts-pickup "{\"results\":[{\"sparePartId\":$BOARD3,\"warehouse\":\"คลังภูเก็ต\",\"requisitionNo\":\"RQ-BO3\"}]}" $S >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM" ] \
   && pass "หัวหน้าภาคเบิกจากคลังภูเก็ตแล้ว → แอดมินคอนเฟิร์มลูกค้า" || fail "เบิกคลังอื่น: $(st $ID3)"
 RR=$(post $ID3 confirm-appointment "{\"scheduledAt\":\"$(day -1)\"}")
-echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM|$(day 0)" ] \
+echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได้" && [ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "AWAITING_CONFIRM|$(day 2)" ] \
   && pass "ลูกค้าขอเลื่อนเป็นเมื่อวาน ถูกปฏิเสธเหมือนกัน (ใบไม่ขยับ)" || fail "เลื่อนย้อนหลังได้: $RR"
 # ร้านปิด/ช่างส่งกลับ ใบกลับมาพร้อมวันเดิมที่ผ่านไปแล้ว — แก้แค่เวลาก็คือนัดใหม่บนวันที่ผ่านไปแล้ว ต้องไม่ผ่าน
 DB "update \"WorkOrder\" set \"scheduledAt\"='$(day -1)' where id=$ID3" >/dev/null
@@ -148,7 +149,7 @@ echo "$RR" | grep -q "วันนัดย้อนหลังไม่ได�
 # โทรคอนเฟิร์มช้า — ตกลงนัดเดิมเฉย ๆ (ไม่เปลี่ยนอะไร) ไม่ใช่การนัดใหม่ ต้องผ่าน
 post $ID3 confirm-appointment '{}' >/dev/null
 [ "$(DB "select status||'|'||\"appointmentStatus\"||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$ID3")" = "ASSIGNED|CONFIRMED|$(day -1)" ] \
-  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปขั้นปล่อยงาน (วันนัดผ่านแล้ว — ติดล็อก ต้องเลื่อนวันนัด) (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
+  && pass "คอนเฟิร์มนัดเดิมที่เลยมาแล้ว (ไม่เปลี่ยนอะไร) ได้ แล้วไปขั้นปล่อยงาน (วันนัดผ่านแล้ว — แอดมินเห็นในหัวข้อเลยนัด ต้องเลื่อนวันนัด) (ฐานข้อมูล)" || fail "คอนเฟิร์มวันเดิมไม่ผ่าน: $(st $ID3)"
 # ไม่ใช้อะไหล่จ่ายพร้อมระบุ · ส่งตรวจหน้างาน — เลือกวันนัดเหมือนกัน กฎเดียวกัน
 WO4=$(curl -s -X POST localhost:4000/api/work-orders -H "$(H $A)" -H 'Content-Type: application/json' \
   -d '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","machines":[{"code":"W64","symptom":"วันนัดย้อนหลัง"}]}')
