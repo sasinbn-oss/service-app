@@ -8,7 +8,7 @@
  * ที่ถือหลายเครื่อง เพราะแต่ละเครื่องมีอะไหล่ของตัวเอง ปิดคนละเวลา และอาจถูก
  * จ่ายให้ช่างคนละคน ใบเดียวที่ถือสามเครื่องจะปิดไม่ได้จนกว่าจะเสร็จครบทั้งสาม
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   Platform,
@@ -43,6 +43,9 @@ import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
 import OpenOrdersWarning, { DuplicateConfirmModal, MachineOpenWarning, OpenOrder } from "../components/OpenOrdersWarning";
+import PartPicker, { type PickedPart, type PartsBrand, brandBlockText, brandBlockers } from "../components/PartPicker";
+import BrandChips from "../components/BrandChips";
+import { brandFileOf } from "../utils/brandFile";
 import { colors, radius, shadow, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderForm">;
@@ -64,12 +67,31 @@ interface BranchOption {
   warranties?: Warranty[];
 }
 type Warranty = { brand: string; years: number | null; expiresAt: string | null };
-/** เครื่องที่ระบบรู้จักแล้วในสาขานี้ พร้อมรุ่นกับขนาดที่เคยกรอกไว้ */
+/** เครื่องที่ระบบรู้จักแล้วในสาขานี้ พร้อมยี่ห้อกับขนาดที่เคยกรอกไว้ */
 interface KnownMachine {
   code: string;
   type: string;
+  /** ยี่ห้อจากไฟล์รายงานเครื่อง */
+  brand?: string | null;
+  /** ยี่ห้อที่เคยเลือกในแอป */
   model: string | null;
   capacityKg: number | null;
+  /** ยี่ห้อที่ใช้จริง (brand ก่อน แล้ว model) — เซิร์ฟเวอร์คิดให้ เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง */
+  make?: string | null;
+  /** ไฟล์อะไหล่ของเครื่อง (Haier · Huebsch · … · Other) */
+  brandFile?: string | null;
+}
+
+/**
+ * ยี่ห้อที่ระบบรู้แล้วของเครื่องนี้ → ล็อกปุ่มยี่ห้อ (เจ้าของงานตอบข้อ 17 · ค่าตั้งต้น D7)
+ * นับยี่ห้อจากไฟล์รายงาน (brand) ด้วย ไม่ใช่แค่ที่เคยเลือกในแอป — เครื่องที่รายงานบอกยี่ห้อแล้วแต่ไม่เคยเปิดจากแอป
+ * ถ้าถามซ้ำ ช่างจะกดยี่ห้ออื่นได้ทั้งที่เซิร์ฟเวอร์ไม่เขียนทับ (ยี่ห้อที่รู้แล้วชนะ) แล้วอะไหล่ที่เลือกจะถูกตัดสินด้วยไฟล์ที่ไม่ได้กด
+ */
+function lockedMakeOf(known: KnownMachine | undefined): { make: string; file: string } | null {
+  if (!known) return null;
+  const make = known.make?.trim() || known.brand?.trim() || known.model?.trim() || null;
+  if (!make) return null;
+  return { make, file: known.brandFile ?? brandFileOf(make) ?? "Other" };
 }
 /**
  * รุ่นเครื่อง — ของจริงมาจาก /work-orders/options ตอนเปิดฟอร์ม
@@ -145,6 +167,8 @@ interface MachineRow {
   files: PickedAttachment[];
   /** รูปป้ายรุ่นบนตัวเครื่อง ไม่บังคับ */
   nameplate: PickedAttachment | null;
+  /** อะไหล่ที่ช่างคิดว่าต้องใช้ (ช่าง/Senior ช่าง เท่านั้น) — เป็นข้อเสนอ หัวหน้าภาคแก้ต่อในฟอร์มระบุอะไหล่ */
+  parts: PickedPart[];
 }
 
 /** W = เครื่องซัก · D = เครื่องอบ ตัวอักษรหน้าบอกชนิดเครื่องในตัว */
@@ -163,6 +187,7 @@ function blankRow(): MachineRow {
     symptom: "",
     files: [],
     nameplate: null,
+    parts: [],
   };
 }
 
@@ -205,8 +230,14 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
   const [capacities, setCapacities] = useState<number[]>(FALLBACK_CAPACITIES);
-  /** เครื่องของสาขานี้ที่ระบบรู้รุ่นกับขนาดไว้แล้ว ใช้เติมให้ตอนพิมพ์รหัสตรงกัน */
+  /** เครื่องของสาขานี้ที่ระบบรู้ยี่ห้อกับขนาดไว้แล้ว ใช้ล็อกยี่ห้อ/เติมขนาดให้ตอนพิมพ์รหัสตรงกัน */
   const [knownMachines, setKnownMachines] = useState<KnownMachine[]>([]);
+  /**
+   * โหลดรายการเครื่องของสาขาที่เลือกสำเร็จแล้ว — ข้อความ "ในระบบยังไม่รู้ยี่ห้อ" ขึ้นเฉพาะตอนนี้
+   * ยังโหลดไม่เสร็จหรือโหลดไม่ได้ (ทีม Area ดูรายการเครื่องไม่ได้) ไม่ได้แปลว่าเครื่องไม่มียี่ห้อ อย่าบอกแบบนั้น
+   */
+  const [machinesLoaded, setMachinesLoaded] = useState(false);
+  const knownByCode = useMemo(() => new Map(knownMachines.map((m) => [m.code, m])), [knownMachines]);
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [branchRegion, setBranchRegion] = useState<string | null>(null);
@@ -251,6 +282,28 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   // วงเล็บไว้ ไม่งั้นต่อกับคำว่า "หัวหน้าภาค" แล้วกลายเป็น "หัวหน้าภาคภาคใต้"
   const regionHint = branchRegion ? ` (ภาค${branchRegion})` : "";
 
+  /**
+   * ช่อง "อะไหล่ที่ต้องใช้" ต่อเครื่อง — เฉพาะช่าง/Senior ช่าง (เจ้าของงานตอบข้อ 1 ต.ค. 69 · Senior เป็น EMPLOYEE ในแอป)
+   * คนที่ยืนหน้าเครื่องตอนเปิดใบคือช่าง รู้อะไหล่ก่อนใคร · ทีม COCO/Area ไม่รู้ว่าต้องใช้ตัวไหน แอดมิน/หัวหน้าภาค
+   * ระบุอะไหล่ในขั้นของตัวเองอยู่แล้ว · งานทั้งร้าน (อุปกรณ์ร้าน/PM) และทางกระดานไม่มี (ค่าตั้งต้น D8)
+   */
+  const showParts = user?.role === "EMPLOYEE" && !fromBoard && !noMachine;
+  /** รหัสเครื่องของแถว — ทางกระดานใช้รหัสที่ติดมากับเคส */
+  const codeOf = (row: MachineRow) => (fromBoard ? route.params?.machineCode ?? "" : row.code).trim().toUpperCase();
+  const lockOf = (row: MachineRow) => {
+    const code = codeOf(row);
+    return code ? lockedMakeOf(knownByCode.get(code)) : null;
+  };
+  /**
+   * ยี่ห้อเครื่องของแถวในรูปที่ช่องเลือกอะไหล่ใช้ — ยี่ห้อที่รู้แล้ว หรือปุ่มยี่ห้อที่เพิ่งกดในฟอร์มนี้
+   * ส่งเป็น "รู้ไฟล์แล้ว" ทั้งสองแบบ: ปุ่มยี่ห้อของฟอร์มอยู่ที่ช่อง "ยี่ห้อเครื่อง" ด้านบนแล้ว ช่องอะไหล่จึงไม่ต้องขึ้นปุ่มชุดที่สอง
+   */
+  const partsBrandOf = (row: MachineRow): PartsBrand => {
+    const lock = lockOf(row);
+    const make = lock ? lock.make : resolvedModel(row) || null;
+    return { machine: true, make, file: lock ? lock.file : brandFileOf(make), machineCode: codeOf(row) };
+  };
+
   useEffect(() => {
     api
       .get<{
@@ -276,6 +329,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
    */
   useEffect(() => {
     const code = branchCode.trim();
+    setMachinesLoaded(false);
     if (!code) {
       setKnownMachines([]);
       return;
@@ -284,39 +338,35 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     api
       .get<KnownMachine[]>(`/branches/${encodeURIComponent(code)}/machines`)
       .then((res) => {
-        if (alive) setKnownMachines(res.data);
+        if (!alive) return;
+        setKnownMachines(res.data);
+        setMachinesLoaded(true);
       })
-      .catch(() => setKnownMachines([]));
+      .catch(() => alive && setKnownMachines([]));
     return () => {
       alive = false;
     };
   }, [branchCode]);
 
   /**
-   * เติมรุ่นกับขนาดของเครื่องที่ระบบรู้จักแล้ว
+   * เติมขนาดของเครื่องที่ระบบรู้จักแล้ว
    *
    * ไม่ทับค่าที่คนกรอกไปแล้ว ด้วยเหตุผลเดียวกับผู้ติดต่อ — คนที่ตั้งใจเลือกเอง
    * รู้ดีกว่าใบงานเมื่อเดือนก่อน และคนที่ยืนอยู่หน้าเครื่องเห็นป้ายจริงอยู่
+   *
+   * ยี่ห้อไม่เติมแล้ว (เลือกอะไหล่ตามไฟล์ยี่ห้อ) — เครื่องที่รู้ยี่ห้อแล้วขึ้นเป็นปุ่มล็อกแทน (lockedMakeOf)
+   * เพราะยี่ห้อตัดสินไฟล์อะไหล่ เติมให้แล้วยังกดเปลี่ยนได้ = เปลี่ยนไฟล์อะไหล่ของเครื่องจากฟอร์มเปิดใบงาน
    *
    * ทางกระดานไม่มีช่องรหัสเครื่อง ใช้รหัสที่ติดมากับเคสแทน
    */
   useEffect(() => {
     if (knownMachines.length === 0) return;
-    const byCode = new Map(knownMachines.map((m) => [m.code, m]));
     let changed = false;
     const next = rows.map((r) => {
       const code = (fromBoard ? route.params?.machineCode ?? "" : r.code).trim().toUpperCase();
-      const known = code ? byCode.get(code) : undefined;
+      const known = code ? knownByCode.get(code) : undefined;
       if (!known) return r;
       const patch: Partial<MachineRow> = {};
-      if (!r.model && known.model) {
-        // รุ่นที่เคยกรอกอาจไม่อยู่ในรายการตัวเลือก (เคยพิมพ์เอง) ให้ไปอยู่ช่องพิมพ์เอง
-        if (models.includes(known.model)) patch.model = known.model;
-        else {
-          patch.model = MODEL_OTHER;
-          patch.modelOther = known.model;
-        }
-      }
       if (!r.capacity && typeof known.capacityKg === "number") {
         const asText = String(known.capacityKg);
         if (capacities.includes(known.capacityKg)) patch.capacity = asText;
@@ -331,7 +381,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     });
     // เขียนกลับเฉพาะตอนมีอะไรเปลี่ยนจริง — rows อยู่ใน deps ถ้าเขียนทุกรอบจะวนไม่จบ
     if (changed) setRows(next);
-  }, [knownMachines, models, capacities, fromBoard, route.params?.machineCode, rows]);
+  }, [knownMachines, knownByCode, capacities, fromBoard, route.params?.machineCode, rows]);
 
   /**
    * เปิดจากกระดาน — รหัสสาขาติดมาแต่ชื่อไม่ได้ติดมาด้วย
@@ -492,11 +542,23 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
     for (const [i, row] of rows.entries()) {
       const code = codes[i];
-      if (!code) continue;
+      const picked = showParts ? row.parts : [];
+      if (!code) {
+        // อะไหล่ที่เลือกไว้ก่อนลบรหัสเครื่อง — ไม่ทิ้งเงียบ ๆ ให้คนเลือกเองว่าจะใส่เครื่องหรือเอาออก (ข้อ 22)
+        if (picked.length) return `เครื่องที่ ${i + 1}: ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้ — หรือเอาอะไหล่ที่เลือกไว้ออก`;
+        continue;
+      }
       if (!MACHINE_CODE_PATTERN.test(code)) {
         return `เครื่องที่ ${i + 1} ต้องเป็น W หรือ D ตามด้วยตัวเลข เช่น W1 หรือ D12`;
       }
-      if (!resolvedModel(row)) return `เครื่องที่ ${i + 1} (${code}) ยังไม่ได้ใส่รุ่น`;
+      // เครื่องที่ระบบรู้ยี่ห้อแล้วไม่ต้องเลือก (ปุ่มล็อก) — รวมเครื่องที่รู้จากไฟล์รายงานอย่างเดียว ไม่งั้นเปิดใบไม่ได้ทั้งที่ระบบรู้ยี่ห้อ
+      if (!lockOf(row) && !resolvedModel(row)) return `เครื่องที่ ${i + 1} (${code}) ยังไม่ได้เลือกยี่ห้อเครื่อง`;
+      if (picked.length) {
+        // กติกาเดียวกับป้ายแดงในช่องอะไหล่ (และ brandProblem ที่เซิร์ฟเวอร์) — บอกก่อนกด ไม่ใช่ไปโดนปฏิเสธทั้งชุด
+        const brand = partsBrandOf(row);
+        const block = brandBlockText(brandBlockers(picked, brand, null, { strict: true }), brand, "เปิดใบงาน");
+        if (block) return `เครื่องที่ ${i + 1} (${code}): ${block}`;
+      }
     }
     return null;
   }
@@ -548,8 +610,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             ...shared,
             ...contact,
             symptom: rows[0].symptom.trim() || null,
-            // รุ่นกับขนาดของเครื่องในเคส — เคสรู้แต่ว่าเครื่องไหน
-            model: resolvedModel(rows[0]) || null,
+            // ยี่ห้อกับขนาดของเครื่องในเคส — เคสรู้แต่ว่าเครื่องไหน · ยี่ห้อที่รู้แล้ว (ปุ่มล็อก) ไม่ส่ง เซิร์ฟเวอร์ไม่เขียนทับอยู่แล้ว
+            model: lockOf(rows[0]) ? null : resolvedModel(rows[0]) || null,
             capacityKg: resolvedCapacity(rows[0]),
           })
         : await api.post("/work-orders", {
@@ -561,9 +623,14 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                 ? { model: null, capacityKg: null, symptom: r.symptom.trim() || null }
                 : {
                     code: r.code.trim().toUpperCase() || undefined,
-                    model: resolvedModel(r) || null,
+                    // ยี่ห้อที่รู้แล้วไม่ส่ง — ปุ่มล็อกไว้ เซิร์ฟเวอร์ก็ไม่เขียนทับยี่ห้อที่รู้แล้ว (ค่าตั้งต้น D7)
+                    model: lockOf(r) ? null : resolvedModel(r) || null,
                     capacityKg: resolvedCapacity(r),
                     symptom: r.symptom.trim() || null,
+                    // อะไหล่ของช่างแยกต่อเครื่อง (แต่ละเครื่องคนละไฟล์ยี่ห้อ) · ลงเป็นอะไหล่ที่รอ หัวหน้าภาคแก้ต่อได้
+                    ...(showParts && r.parts.length && r.code.trim()
+                      ? { parts: r.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })) }
+                      : {}),
                   }
             ),
           });
@@ -796,6 +863,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             capacities={capacities}
             photoRequired={photoRequired}
             adminPhotoOptional={adminPhotoOptional}
+            lock={lockOf(row)}
+            machinesLoaded={machinesLoaded}
+            showParts={showParts}
+            partsBrand={partsBrandOf(row)}
+            canFixBrand={user?.role === "ADMIN" || user?.role === "SUPERVISOR"}
             onChange={(patch) => patchRow(row.key, patch)}
             onRemove={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             onAddFile={(pick) => addFile(row, pick)}
@@ -882,6 +954,10 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           <Text style={styles.nextText}>
             {rows.length > 1 ? `จะได้ใบงาน ${rows.length} ใบ เครื่องละใบ — ` : ""}
             เปิดแล้วใบงานจะไปอยู่ที่หัวหน้าภาค{regionHint} เพื่อระบุอะไหล่ที่ต้องใช้
+            {/* อะไหล่ที่ช่างเลือกตอนเปิดใบไม่ผ่านการคอนเฟิร์ม/ตีกลับ (ข้อ 1) — บอกให้รู้ว่าเป็นแค่ข้อเสนอ ไม่ใช่รายการสุดท้าย */}
+            {showParts && shownRows.some((r) => r.parts.length > 0)
+              ? " — อะไหล่ที่เลือกเป็นข้อเสนอ ขึ้นในฟอร์มให้หัวหน้าภาคแก้ต่อได้ · "
+              : " "}
             จากนั้นแอดมินเช็คคลัง หัวหน้าภาคจ่ายงานพร้อมวัน แอดมินโทรคอนเฟิร์มลูกค้า หัวหน้าภาคยืนยันออกงาน แล้วทีมช่างเข้างาน
           </Text>
         </View>
@@ -1102,6 +1178,11 @@ function MachineCard({
   capacities,
   photoRequired = false,
   adminPhotoOptional = false,
+  lock,
+  machinesLoaded,
+  showParts,
+  partsBrand,
+  canFixBrand,
   onChange,
   onRemove,
   onAddFile,
@@ -1120,6 +1201,15 @@ function MachineCard({
   photoRequired?: boolean;
   /** แอดมินเปิดใบได้โดยไม่มีรูป — ป้ายบอกว่าไม่บังคับเฉพาะแอดมิน และชวนให้แนบถ้ามีรูปจากสาขา */
   adminPhotoOptional?: boolean;
+  /** ยี่ห้อที่ระบบรู้แล้วของเครื่องนี้ — มี = ปุ่มยี่ห้อล็อก (แก้ได้ที่หน้าใบงานเท่านั้น) */
+  lock: { make: string; file: string } | null;
+  /** รายการเครื่องของสาขาโหลดเสร็จแล้ว — "ในระบบยังไม่รู้ยี่ห้อ" พูดได้เฉพาะตอนรู้จริง */
+  machinesLoaded: boolean;
+  /** ช่อง "อะไหล่ที่ต้องใช้" (ช่าง/Senior ช่าง) */
+  showParts: boolean;
+  partsBrand: PartsBrand;
+  /** หัวหน้าภาค/แอดมินแก้ยี่ห้อเองได้ที่หน้าใบงาน — บรรทัดใต้ปุ่มล็อกบอกทางที่คนนั้นทำได้จริง */
+  canFixBrand: boolean;
   onChange: (patch: Partial<MachineRow>) => void;
   onRemove: () => void;
   onAddFile: (
@@ -1132,6 +1222,62 @@ function MachineCard({
   const code = row.code.trim().toUpperCase();
   // W = เครื่องซัก · D = เครื่องอบ ตัวอักษรหน้าบอกชนิดเครื่องในตัว
   const badCode = code.length > 0 && !/^[WD]\d{1,4}$/.test(code);
+  const validCode = MACHINE_CODE_PATTERN.test(code);
+  // รหัสเครื่องที่ใช้ในข้อความ — ทางกระดานไม่มีช่องรหัส ใช้รหัสที่ติดมากับเคส
+  const machineCode = partsBrand.machineCode ?? code;
+  // เครื่องที่ระบบรู้จักแล้วแต่ไม่รู้ยี่ห้อ หรือเครื่องรหัสใหม่ (ระบบสร้างให้ตอนเปิดใบ) — ยังไม่ได้กดยี่ห้อ
+  const askBrand = !fromBoard && machinesLoaded && validCode && !lock && !resolvedModel(row);
+
+  /**
+   * ช่องยี่ห้อเครื่อง — รู้ยี่ห้อแล้ว = ปุ่มเดียวแบบล็อก (จอ ก) · ยังไม่รู้ = ปุ่มยี่ห้อ + "อื่นๆ" แล้วพิมพ์ (จอ ข)
+   * ล็อกเพราะยี่ห้อตัดสินไฟล์อะไหล่ อายุประกัน และการเสนอราคา — กดผิดปุ่มเดียวจากฟอร์มเปิดใบ เครื่องเปลี่ยนไฟล์เงียบ ๆ
+   * แก้ยี่ห้อที่รู้แล้วได้ทางเดียวคือ "แก้ยี่ห้อเครื่อง" ที่หน้าใบงาน (หัวหน้าภาค/แอดมิน · ลงประวัติ)
+   * ปุ่มของฟอร์มนี้ไม่ใช้ BrandChips ตรง ๆ เพราะค่าที่เลือกอยู่ในแถว (model/modelOther) ร่วมกับร่างฟอร์ม
+   */
+  const brandField = (otherLabel: string) =>
+    lock ? (
+      <>
+        <BrandChips value={null} onChange={() => {}} label={null} machineCode={machineCode} locked={{ make: lock.make }} />
+        <Text style={styles.brandNote}>
+          {canFixBrand
+            ? "ไม่ตรงกับเครื่องจริง? เปิดใบงานแล้วกด “แก้ยี่ห้อเครื่อง” ที่หน้าใบงาน"
+            : "ไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วเขียนในอาการที่พบ — หัวหน้าภาคแก้ยี่ห้อเครื่องให้"}
+        </Text>
+      </>
+    ) : (
+      <>
+        <View style={styles.options}>
+          {[...models, MODEL_OTHER].map((m) => {
+            const on = row.model === m;
+            return (
+              <TouchableOpacity
+                key={m}
+                style={[styles.option, on && styles.optionOn]}
+                onPress={() => onChange({ model: m })}
+                activeOpacity={0.7}
+                accessibilityState={{ selected: on }}
+                // เว็บไม่แปลง accessibilityState เป็น aria-selected (CLAUDE.md) — ใส่เอง เทสต์เบราว์เซอร์จะอ่านได้ว่ากดยี่ห้อไหนอยู่
+                aria-selected={on}
+              >
+                <Text style={[styles.optionText, on && styles.optionTextOn]}>{m}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {row.model === MODEL_OTHER ? (
+          <TextInput
+            style={[styles.input, { marginTop: spacing.xs }]}
+            value={row.modelOther}
+            onChangeText={(v) => onChange({ modelOther: v })}
+            placeholder="พิมพ์ชื่อยี่ห้อ"
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel={otherLabel}
+          />
+        ) : null}
+      </>
+    );
+
+  const partsMake = partsBrand.make;
 
   return (
     <View style={[styles.machineCard, (fromBoard || noMachine) && styles.machineCardFlat]}>
@@ -1173,29 +1319,14 @@ function MachineCard({
             hint="W = เครื่องซัก · D = เครื่องอบ"
           />
 
-          <Text style={styles.subLabel}>รุ่นของเครื่อง</Text>
-          <View style={styles.options}>
-            {[...models, MODEL_OTHER].map((m) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.option, row.model === m && styles.optionOn]}
-                onPress={() => onChange({ model: m })}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.optionText, row.model === m && styles.optionTextOn]}>{m}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          {row.model === MODEL_OTHER ? (
-            <TextInput
-              style={[styles.input, { marginTop: spacing.xs }]}
-              value={row.modelOther}
-              onChangeText={(v) => onChange({ modelOther: v })}
-              placeholder="พิมพ์ชื่อรุ่น"
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel={`ชื่อรุ่นของเครื่องที่ ${index + 1}`}
-            />
+          {askBrand ? (
+            <Text style={styles.unknownBrand}>
+              เครื่อง {code} ในระบบยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องด้านล่าง (ดูที่ป้ายเครื่อง)
+            </Text>
           ) : null}
+
+          <Text style={styles.subLabel}>ยี่ห้อเครื่อง</Text>
+          {brandField(`ชื่อยี่ห้อของเครื่องที่ ${index + 1}`)}
 
           <CapacityPicker row={row} index={index} capacities={capacities} onChange={onChange} />
 
@@ -1269,29 +1400,9 @@ function MachineCard({
       */}
       {fromBoard ? (
         <>
-          <Text style={styles.label}>รุ่นของเครื่อง (ไม่บังคับ)</Text>
-          <View style={styles.options}>
-            {[...models, MODEL_OTHER].map((m) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.option, row.model === m && styles.optionOn]}
-                onPress={() => onChange({ model: m })}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.optionText, row.model === m && styles.optionTextOn]}>{m}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          {row.model === MODEL_OTHER ? (
-            <TextInput
-              style={[styles.input, { marginTop: spacing.xs }]}
-              value={row.modelOther}
-              onChangeText={(v) => onChange({ modelOther: v })}
-              placeholder="พิมพ์ชื่อรุ่น"
-              placeholderTextColor={colors.textFaint}
-              accessibilityLabel="ชื่อรุ่นของเครื่อง"
-            />
-          ) : null}
+          {/* ล็อกแบบเดียวกับฟอร์มปกติ — อะไหล่ที่รอบนกระดานต้องเทียบกับยี่ห้อ ถ้ายังไม่รู้ยี่ห้อเซิร์ฟเวอร์บอกเองตอนกดเปิด (D8) */}
+          <Text style={styles.label}>{lock ? "ยี่ห้อเครื่อง" : "ยี่ห้อเครื่อง (ไม่บังคับ)"}</Text>
+          {brandField("ชื่อยี่ห้อเครื่อง")}
 
           <CapacityPicker row={row} index={index} capacities={capacities} onChange={onChange} big />
         </>
@@ -1408,6 +1519,80 @@ function MachineCard({
           </View>
         ) : null}
       </FileDropZone>
+
+      {/*
+        อะไหล่ที่ต้องใช้ (ช่าง/Senior ช่าง · ไม่บังคับ — เจ้าของงานตอบข้อ 1/4 ต.ค. 69) — ข้อเสนอ ลงเป็นอะไหล่ที่รอ
+        หัวหน้าภาคแก้ต่อในฟอร์มระบุอะไหล่เดิม ไม่มีคอนเฟิร์ม/ตีกลับ (ตอนเปิดใบยังไม่มีทีมช่าง ตีกลับไปหาใครไม่ได้)
+        ล็อกตามไฟล์ยี่ห้อเหมือนข้อ 5 ของฟอร์มตรวจหน้างาน: ไม่มีรหัสเครื่อง = เลือกไม่ได้ (จอ ค · ข้อ 22) ·
+        ยังไม่รู้ยี่ห้อ = กดยี่ห้อด้านบนก่อน (จอ ข) · ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" (ข้อ 17)
+        อยู่ท้ายการ์ดหลังรูป — อาการกับรูปคือสิ่งที่หัวหน้าภาคใช้ตัดสินอะไหล่ ไม่แทรกกลางระหว่างสองอย่างนั้น
+      */}
+      {showParts ? (
+        <View>
+          <Text style={styles.subLabel}>อะไหล่ที่ต้องใช้ (ไม่บังคับ)</Text>
+          {!validCode ? (
+            row.parts.length ? (
+              // ลบรหัสเครื่องทั้งที่เลือกอะไหล่ไว้แล้ว — โชว์รายการให้เอาออกเองได้ ไม่ทิ้งเงียบ ๆ (validate กันปุ่มเปิดใบไว้)
+              <PartPicker
+                label={null}
+                parts={row.parts}
+                onChange={(parts) => onChange({ parts })}
+                brand={{ machine: false, make: null, file: null, machineCode: null }}
+                strict
+                noMachineText="ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้ — หรือเอาอะไหล่ที่เลือกไว้ออก"
+              />
+            ) : (
+              <View style={styles.partsLock}>
+                <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.partsLockTitle}>ใส่หมายเลขเครื่องก่อน</Text>
+                  <Text style={styles.partsLockText}>อะไหล่ที่เลือกได้ขึ้นกับยี่ห้อของเครื่อง</Text>
+                  <Text style={styles.partsLockText}>
+                    งานทั้งสาขา (ไม่ใส่เครื่อง): หัวหน้าภาคระบุอะไหล่ที่ขั้นถัดไปเหมือนเดิม
+                  </Text>
+                </View>
+              </View>
+            )
+          ) : !partsBrand.file || !partsMake ? (
+            <View style={styles.partsLock}>
+              <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.partsLockTitle}>เลือกยี่ห้อเครื่องก่อน</Text>
+                <Text style={styles.partsLockText}>
+                  ระบบใช้ยี่ห้อนี้หาไฟล์อะไหล่ และจำไว้กับเครื่อง {machineCode} — ครั้งหน้าไม่ต้องเลือกอีก
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <>
+              <Text style={styles.partsHint}>ยังบอกไม่ได้ว่าต้องใช้ตัวไหน เว้นว่างได้ — หัวหน้าภาคจะเป็นคนระบุแทน</Text>
+              <PartPicker
+                label={null}
+                parts={row.parts}
+                onChange={(parts) => onChange({ parts })}
+                brand={partsBrand}
+                strict
+                verb="เปิดใบงาน"
+                saveWhen="ตอนเปิดใบงาน"
+                noResultHints={[
+                  "ตัวที่ต้องใช้ไม่มีในไฟล์นี้: เขียนชื่อไว้ในอาการที่พบ หัวหน้าภาคจะตัดสินใจต่อ",
+                  lock
+                    ? "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วเขียนในอาการที่พบ — หัวหน้าภาคแก้ยี่ห้อเครื่องให้"
+                    : "กดยี่ห้อผิด? เปลี่ยนที่ปุ่มยี่ห้อเครื่องด้านบน (ดูที่ป้ายเครื่อง)",
+                ]}
+              />
+              {/* ยี่ห้อที่เพิ่งกดถูกจำไว้กับเครื่องตอนเปิดใบ (rememberMachineSpec) — บอกก่อน ครั้งหน้าจะเป็นปุ่มล็อก */}
+              {!lock ? (
+                <Text style={styles.willSave}>
+                  {models.includes(partsMake)
+                    ? `จะบันทึกยี่ห้อ ${partsMake} ให้เครื่อง ${machineCode} ตอนเปิดใบงาน`
+                    : `จะบันทึกยี่ห้อที่พิมพ์ให้เครื่อง ${machineCode} ตอนเปิดใบงาน`}
+                </Text>
+              ) : null}
+            </>
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1689,5 +1874,36 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   adminNoteText: { flex: 1, fontSize: 12.5, lineHeight: 20, color: colors.primaryInk },
+  // ป้ายเหลือง "เครื่อง … ในระบบยังไม่รู้ยี่ห้อ" ใต้ช่องรหัส (จอ ข ของตัวอย่าง)
+  unknownBrand: {
+    alignSelf: "flex-start",
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    backgroundColor: colors.warningSoft,
+    color: colors.warningInk,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+  brandNote: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: spacing.xs },
+  partsHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginBottom: spacing.sm },
+  partsLock: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  partsLockTitle: { fontSize: 14, lineHeight: 21, fontWeight: "700", color: colors.text },
+  partsLockText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  willSave: { fontSize: 12, lineHeight: 18, fontWeight: "600", color: colors.successInk, marginTop: spacing.xs },
   submitText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
 });

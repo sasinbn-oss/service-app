@@ -1,11 +1,19 @@
-// ทดสอบ: ขนาดเครื่องในฟอร์ม · เติมของเดิมให้ · เปิดจากกระดานแล้วผู้ติดต่อไม่หาย
+// ทดสอบ: ขนาดเครื่องในฟอร์ม · เติมของเดิมให้ · เปิดจากกระดานแล้วผู้ติดต่อไม่หาย · ทางกระดานล็อกยี่ห้อที่รู้แล้ว
+// ต้องมี DATABASE_URL — ทางกระดานสร้างเคสเครื่องดับของ W55 เองแล้วลบตอนจบ
 const { chromium } = require("playwright");
+const { setup } = require("./fixture");
 const { confirmDuplicate } = require("./dup");
 const { attachPhoto } = require("./photo");
 const path = require("path");
 const DIR = __dirname;
 
 (async () => {
+  if (!process.env.DATABASE_URL) {
+    console.log("FAIL ต้องมี DATABASE_URL (set -a && . backend/.env && set +a) — ทางกระดานสร้างเคสเครื่องดับเอง");
+    process.exit(1);
+  }
+  const fx = await setup();
+  let outageId = null;
   // ใช้ chromium ที่ติดตั้งไว้แล้วถ้ามี ไม่งั้นให้ playwright หาเอง
   // PLAYWRIGHT_CHROMIUM ตั้งเองได้ถ้าเครื่องเก็บไว้ที่อื่น
   const browser = await chromium.launch({
@@ -114,8 +122,15 @@ const DIR = __dirname;
 
     const codeBox = page.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").first();
     await codeBox.fill("W55");
-    await tap("Huebsch");
+    await page.waitForTimeout(1500);
+    // W55 ได้ยี่ห้อ Huebsch ตั้งแต่รอบแรกที่รัน (ระบบจำยี่ห้อไว้กับเครื่อง) — รอบต่อ ๆ ไปขึ้นเป็นปุ่มล็อก ไม่มีปุ่มให้กด
+    const lockedAlready = (await seen("ยี่ห้อในระบบของเครื่อง W55", false)) > 0;
+    if (!lockedAlready) await tap("Huebsch");
     await page.waitForTimeout(500);
+    // แอดมินไม่มีช่องอะไหล่ในฟอร์มเปิดใบงาน (เฉพาะช่าง/Senior ช่าง — เลือกอะไหล่ตามไฟล์ยี่ห้อ ก้อน 8)
+    (await seen("อะไหล่ที่ต้องใช้ (ไม่บังคับ)", true)) === 0
+      ? pass("แอดมิน: ไม่มีช่องอะไหล่ที่ต้องใช้ในฟอร์มเปิดใบงาน")
+      : fail("แอดมินเห็นช่องอะไหล่ที่ต้องใช้ ทั้งที่เป็นช่องของช่าง");
     const symptom = page.getByLabel("อาการที่พบของเครื่องที่ 1").locator("visible=true").first();
     await symptom.fill("น้ำไม่เข้า ทดสอบขนาด");
     await page.waitForTimeout(400);
@@ -154,6 +169,10 @@ const DIR = __dirname;
     await codeBox2.fill("W55");
     await page.waitForTimeout(2500);
     await page.screenshot({ path: path.join(DIR, "cap-4-prefill.png") });
+    // ยี่ห้อที่รู้แล้วไม่เติมเป็นปุ่มที่กดเปลี่ยนได้ — ขึ้นเป็นปุ่มล็อกพร้อมบรรทัดอธิบาย และไม่มีปุ่มยี่ห้อชุดเลือก
+    (await seen("ยี่ห้อในระบบของเครื่อง W55", false)) > 0 && (await seen("Oasis(TC)", true)) === 0
+      ? pass("พิมพ์รหัสเดิมแล้วยี่ห้อขึ้นเป็นปุ่มล็อก (Huebsch) ไม่มีปุ่มให้เปลี่ยน")
+      : fail("ยี่ห้อของเครื่องที่รู้แล้วไม่ล็อก หรือยังมีปุ่มยี่ห้อให้กด");
     const picked = await page.evaluate(() => {
       const hit = [...document.querySelectorAll("*")].filter(
         (n) => n.children.length === 0 && /^(13 kg|Huebsch)$/.test((n.textContent || "").trim())
@@ -171,10 +190,23 @@ const DIR = __dirname;
     });
     const highlighted = picked.filter((p) => p.bg && !/255, 255, 255/.test(p.bg));
     highlighted.length >= 2
-      ? pass("พิมพ์รหัสเดิมแล้วรุ่นกับขนาดขึ้นให้เอง")
+      ? pass("พิมพ์รหัสเดิมแล้วยี่ห้อกับขนาดขึ้นให้เอง")
       : fail(`ไม่ได้เติมให้: ${JSON.stringify(picked)}`);
 
     // ════ เปิดจากกระดาน ════
+    // สร้างเคสเครื่องดับของ W55 เอง — เดิมกดเคสแรกที่มีบนกระดาน วันที่กระดานว่างเทสต์พิมพ์ SKIP แล้วจบเขียว
+    // ทั้งที่ทางกระดานไม่ถูกเช็คเลย (ล็อกยี่ห้อของทางกระดานพังได้โดยไม่มีใครรู้)
+    // อาการใส่คำเฉพาะของรอบนี้ไว้ค้นบนกระดาน — C0006 อาจมีเคสค้างจากเทสต์อื่น กดแถวแรกอาจได้เคสคนอื่น
+    const boardTag = `capweb${Date.now()}`;
+    const [w55Id, w55Brand] = fx
+      .sql(`select m.id, coalesce(m.brand,'')||'/'||coalesce(m.model,'') from "Machine" m join "Branch" b on b.id=m."branchId" where b.code='C0006' and m.code='W55'`)
+      .split("|");
+    if (!w55Id) throw new Error("ไม่มีเครื่อง W55 ของ C0006 (ช่วงเปิดเองด้านบนต้องสร้างให้แล้ว)");
+    fx.sql(
+      `insert into "Outage"(kind,"branchId","machineId","startedAt","lastSeenAt",symptom) select 'MACHINE_OFF',"branchId",id,now()-interval '2 hours',now(),'${boardTag}' from "Machine" where id=${w55Id}`
+    );
+    outageId = Number(fx.sql(`select id from "Outage" where symptom='${boardTag}'`)) || null;
+    if (!outageId) throw new Error("สร้างเคสเครื่องดับทดสอบไม่ได้");
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
     await page.waitForTimeout(3000);
     // แอดมินเปิดมาเจอบอร์ดแผนงาน — ไปกระดานผ่านเมนูสามขีดแทนการ์ดในหน้าหลัก
@@ -182,10 +214,13 @@ const DIR = __dirname;
     await page.waitForTimeout(800);
     await tap("ติดตามเครื่องเสีย", false);
     await page.waitForTimeout(4000);
+    const boardSearch = page.getByLabel("ค้นหาในกระดาน").locator("visible=true").first();
+    await boardSearch.fill(boardTag);
+    await page.waitForTimeout(1500);
     await page.screenshot({ path: path.join(DIR, "cap-5a-board-list.png") });
     const woBtn = page.getByText("สร้างใบงาน", { exact: true }).locator("visible=true");
     if ((await woBtn.count()) === 0) {
-      console.log("SKIP ไม่มีปุ่มสร้างใบงานบนกระดาน");
+      fail("ไม่เจอเคสเครื่องดับที่สร้างไว้ (หรือปุ่มสร้างใบงาน) บนกระดาน");
     } else {
       const btn = woBtn.first();
       await btn.scrollIntoViewIfNeeded().catch(() => {});
@@ -200,9 +235,13 @@ const DIR = __dirname;
       (await seen("ขนาดเครื่อง", false)) > 0
         ? pass("เปิดจากกระดานมีช่องขนาดเครื่อง")
         : fail("เปิดจากกระดานไม่มีช่องขนาด");
-      (await seen("รุ่นของเครื่อง", false)) > 0
-        ? pass("เปิดจากกระดานมีช่องรุ่น")
-        : fail("เปิดจากกระดานไม่มีช่องรุ่น");
+      // W55 รู้ยี่ห้อแล้ว (ช่วงเปิดเองด้านบน) — ทางกระดานต้องขึ้นปุ่มล็อกแบบเดียวกับฟอร์มปกติ ไม่ใช่ปุ่มยี่ห้อให้กด
+      // ป้าย "(ไม่บังคับ)" กับปุ่มยี่ห้อมาคู่กันเสมอ (ตัดสินจาก lock ตัวเดียวกัน) — ไม่มีป้ายนี้ = ไม่มีปุ่มให้เปลี่ยน
+      (await seen("ยี่ห้อในระบบของเครื่อง W55", false)) > 0 &&
+      (await seen("ยี่ห้อเครื่อง (ไม่บังคับ)", true)) === 0 &&
+      (await seen("ไม่ตรงกับเครื่องจริง? เปิดใบงานแล้วกด", false)) > 0
+        ? pass("เปิดจากกระดาน: ยี่ห้อเครื่องที่รู้แล้วขึ้นเป็นปุ่มล็อก + บอกทางแก้ที่หน้าใบงาน")
+        : fail("เปิดจากกระดาน: ยี่ห้อของ W55 ไม่ล็อก (ยังมีปุ่มยี่ห้อให้กด) หรือไม่มีบรรทัดบอกทางแก้");
       const cName = page.getByLabel("ชื่อผู้ติดต่อที่สาขา").locator("visible=true").first();
       const cPhone = page.getByLabel("เบอร์ติดต่อสาขา").locator("visible=true").first();
       (await cName.count()) > 0 ? pass("เปิดจากกระดานมีช่องผู้ติดต่อ") : fail("ไม่มีช่องผู้ติดต่อ");
@@ -229,6 +268,14 @@ const DIR = __dirname;
       (await seen("ขนาดเครื่อง (ไม่บังคับ)", true)) === 0 && (await seen("18 kg", false)) > 0
         ? pass("ขนาดที่กรอกจากกระดานถูกบันทึก")
         : fail("ขนาดที่กรอกจากกระดานหายไป");
+      // ยืนยันที่ฐานข้อมูล — ข้อความบนจออาจมาจากใบอื่นของสาขาเดียวกัน
+      fx.sql(`select count(*) from "WorkOrder" where "outageId"=${outageId}`) === "1"
+        ? pass("ฐานข้อมูล: ใบงานผูกกับเคสเครื่องดับที่สร้างไว้")
+        : fail("ฐานข้อมูล: ไม่มีใบงานผูกกับเคสที่สร้างไว้ (กดเคสผิดแถว หรือไม่ได้บันทึก)");
+      const w55After = fx.sql(`select coalesce(brand,'')||'/'||coalesce(model,'') from "Machine" where id=${w55Id}`);
+      w55After === w55Brand
+        ? pass("ฐานข้อมูล: เปิดจากกระดานแล้วยี่ห้อของ W55 ไม่ถูกเขียนทับ")
+        : fail(`ฐานข้อมูล: ยี่ห้อของ W55 เปลี่ยนจาก ${w55Brand} เป็น ${w55After}`);
     }
 
     errors.length === 0 ? pass("ไม่มี error ในหน้า") : fail(`error: ${errors.slice(0, 2).join(" | ")}`);
@@ -236,6 +283,17 @@ const DIR = __dirname;
     await page.screenshot({ path: path.join(DIR, "cap-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${e.message}`);
   } finally {
+    // ใบงานที่เปิดจากกระดานลบผ่าน API (ลบรูป/ประวัติให้ครบ) ก่อนลบเคส — ลบเคสก่อน ใบงานหลุดจากเคสแล้วหาไม่เจอ
+    if (outageId) {
+      try {
+        const ids = fx.sql(`select id from "WorkOrder" where "outageId"=${outageId}`).split("\n").filter(Boolean);
+        for (const id of ids) await fx.call(fx.A, "DELETE", `/work-orders/${id}`);
+        fx.sql(`delete from "Outage" where id=${outageId}`);
+      } catch (e) {
+        fail(`ลบเคสทดสอบไม่ได้ (Outage id ${outageId}): ${e.message}`);
+      }
+    }
+    await fx.cleanup();
     await browser.close();
   }
 })();
