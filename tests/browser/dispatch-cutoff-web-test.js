@@ -22,14 +22,20 @@
 //   ส่วน 7 ปล่อยงานไม่มีล็อก: ใบวันนี้/พรุ่งนี้หลังเวลาปิด (ไม่มีงานด่วน) ไม่มีกล่องแดง/กล่องเส้นตาย ปล่อยได้ → IN_PROGRESS
 //     · ใบเลื่อนวันยังมี "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่" → toast ใหม่ (ไม่บอกหัวข้อที่ไม่มีแล้ว) + AWAITING_CONFIRM
 //   ส่วน 9 แอดมิน "ขอนัดด่วน": หัวข้อปักในงานของฉันวันนี้ (คำอธิบาย · แถวใครขอ+เบอร์+เวลา · วันที่ขอ · ข้อความ · ปุ่ม) · กล่องงาน
-//     "ขอนัดด่วน n" (n ตามเซิร์ฟเวอร์) ไม่มีหัวข้อรุ่นเดิม · แก้เป็นงานด่วนจากการ์ด → toast + ฐานข้อมูล via direct + การ์ดออก
+//     "ขอนัดด่วน n" (n ตามเซิร์ฟเวอร์) ไม่มีหัวข้อรุ่นเดิม · การ์ดเรียงวันที่ขอ (วันนี้ก่อน) แล้วเวลาที่ขอ ไม่ใช่ลำดับของรายการ
+//     · แก้เป็นงานด่วนจากการ์ด → toast + ฐานข้อมูล via direct + การ์ดออก
 //     · แข่งกัน: แอดมินอีกคนแก้ก่อน → 409 URGENT_ASK_STATE ขึ้นในหน้าต่าง ปุ่มปิด ไม่ปิดเอง → ยกเลิกแล้วโหลดใหม่ การ์ดออก
+//     · การ์ดเก่า: แอดมินอีกคนตอบคำขอไปก่อน → กดแก้เป็นงานด่วน → 409 URGENT_ASK_STATE ในหน้าต่าง ไม่แก้ทับคำตอบ (fromAsk)
+//     · เบอร์ของ S001 ตั้งชั่วคราว (ฐานทดสอบไม่มีเบอร์) ให้แถว "หัวหน้าภาค <ชื่อ> <เบอร์>" เช็คเบอร์ได้จริง คืนค่าเดิมตอนจบ
 //     · หน้าใบงาน: กล่องม่วง "หัวหน้าภาค … ขอนัดด่วน …" + ปุ่ม
 //   ส่วน 10 ตอบคำขอ: ยังไม่พิมพ์ส่งไม่ได้ · ส่ง → toast + URGENT_REQUEST_ANSWERED · แข่งกับหัวหน้าภาคยกเลิก → ข้อความในหน้าต่าง
 //     · หัวหน้าภาคเห็นคำตอบในฟอร์มนัดวัน
 //   ส่วน 11 คอนเฟิร์มลูกค้า: "ลูกค้าคอนเฟิร์มวันเดิม" (ไม่มีคำเดิม "วันนี้") ใบพรุ่งนี้หลังเวลาปิดไม่มีบรรทัด/ช่องติ๊ก → ASSIGNED ไม่มีงานด่วน
 //     · "ลูกค้าขอเลื่อน" ไปวันที่เปิด = บรรทัดเทา · ไปพรุ่งนี้ = แดง + ช่องติ๊ก ปุ่มปิดจนติ๊ก → ฐานข้อมูลงานด่วน via confirm
+//     · ใบทดสอบขอเลื่อนไปพรุ่งนี้: ไม่มีป้าย/บรรทัด/ช่องติ๊ก บันทึกได้เลย (ฐานข้อมูลไม่มีงานด่วน)
+//     · กดตอนเวลาเพิ่งผ่าน: เปิดตอนพรุ่งนี้ยังเปิด → เวลาปิดย้าย (SQL) → กด → ฟอร์มไม่ปิด แดง + ช่องติ๊กขึ้นเอง ข้อความไม่ซ้ำ ฐานข้อมูลไม่เปลี่ยน
 //   ส่วน 12 เลื่อนวันนัดไปวันนี้ · ดึงงานคืนไปพรุ่งนี้: แดง + ติ๊ก → toast "… — ใบกลับไปที่หัวหน้าภาคให้คอนเฟิร์มวันใหม่ · แก้เป็นงานด่วนไปพร้อมกันแล้ว"
+//     · ฟอร์มเปิดที่วันเดิม · กดตอนเวลาเพิ่งผ่าน: ฟอร์มไม่ปิด เหตุผลอยู่ แดง + ช่องติ๊กขึ้นเอง ข้อความไม่ซ้ำ ฐานข้อมูลไม่เปลี่ยน → ติ๊กแล้วบันทึกได้
 //   ส่วน 13 บอร์ดแผนงาน: ไม่มี "ปิดรับ …"/"เลยเวลาปล่อยงาน" · จุดที่แอดมินแก้เป็นงานด่วนมีป้ายเขียว "แอดมินแก้เป็นงานด่วน"
 //
 // คุมเวลาไม่ให้ขึ้นกับว่ารันกี่โมง (tests/README "เทสต์ที่ขึ้นกับเวลาปิด"):
@@ -104,6 +110,16 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
   const suf = Date.now() % 100000;
   const PA = `ZDCW${suf}`;
   let sinceSaved = null;
+  /**
+   * ส่วน 9: เบอร์ของ S001 ตั้งชั่วคราว — ฐานข้อมูลเครื่องทดสอบ S001 ไม่มีเบอร์ (area-map-test ต้องการแบบนั้น) ถ้าไม่ตั้ง
+   * แถว "หัวหน้าภาค <ชื่อ> <เบอร์> · ขอเมื่อ …" บนการ์ด "ขอนัดด่วน" เช็คได้แค่ชื่อ ลบเบอร์ทิ้งทั้งทาง (askRowLines) ก็ยังผ่าน
+   * ทั้งที่เบอร์คือเหตุผลที่การ์ดมีบรรทัดนี้ (แอดมินโทรถามจากการ์ด) · จดเบอร์เดิมเป็นแถว key อื่นในคำสั่งเดียวกับที่ตั้ง
+   * (readCutoff อ่านเฉพาะ key='dispatchCutoff') ถูกฆ่ากลางทาง รอบหน้าคืนให้แล้วโผล่เป็น FAIL · คืนแบบมีเงื่อนไข: ไม่มีแถวจด = ไม่แตะเบอร์
+   */
+  const PHONE_MARK = "dispatchCutoffWebTestS001Phone";
+  const RESTORE_PHONE = `update "User" set phone=nullif((select value from "AppSetting" where key='${PHONE_MARK}' order by id limit 1),'')
+      where "employeeCode"='S001' and exists (select 1 from "AppSetting" where key='${PHONE_MARK}');
+    delete from "AppSetting" where key='${PHONE_MARK}'`;
   // ใบทดสอบที่คัดลอกผ่าน API (ไม่ผ่าน fixture) — ลบตอนจบ
   const extraOrders = [];
   let MAXSET = null;
@@ -131,7 +147,12 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       sql(`update "AppSetting" set "createdAt"='${sat}'::timestamp where id=${Number(sid)}; delete from "AppSetting" where key='${SINCE_MARK}'`);
       fail(`เวลาเริ่มใช้กฎที่เทสต์นี้รอบก่อนถอยไว้ยังไม่ได้คืน (แถว ${sid}) — คืนค่าเดิม ${sat} แล้ว`);
     }
-    MAXSET = Number(sql(`select coalesce(max(id),0) from "AppSetting"`));
+    const leftPhone = sql(`select coalesce(nullif(value,''),'(ว่าง)') from "AppSetting" where key='${PHONE_MARK}' order by id limit 1`);
+    if (leftPhone) {
+      sql(RESTORE_PHONE);
+      fail(`เบอร์ของ S001 ค้างเป็นเบอร์ทดสอบจากรอบก่อน — คืนเป็น ${leftPhone} แล้ว รอบหน้าจะผ่าน แต่ระหว่างนี้ชุดที่ดูเบอร์ S001 (area-map) พัง`);
+    }
+    MAXSET =Number(sql(`select coalesce(max(id),0) from "AppSetting"`));
     sql(`insert into "AppSetting"(key,value) values ('${MARK}','${MAXSET}')`);
 
     const aId = sql(`select id from "User" where "employeeCode"='A001'`);
@@ -905,7 +926,15 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     const C9 = cutIn(-2);
     await setCut(C9);
     const sName = sql(`select name from "User" where "employeeCode"='S001'`);
-    const sPhone = sql(`select coalesce(phone,'') from "User" where "employeeCode"='S001'`);
+    // เบอร์ทดสอบของ S001 (ดู PHONE_MARK) — จดเบอร์เดิมกับตั้งเบอร์ใหม่ในทรานแซกชันเดียว ไม่มีช่วงที่เบอร์เปลี่ยนแล้วแต่ยังไม่ได้จด
+    const sPhone = `089-${String(suf).padStart(5, "0")}-02`;
+    sql(`begin;
+      insert into "AppSetting"(key,value) select '${PHONE_MARK}', coalesce(phone,'') from "User" where "employeeCode"='S001';
+      update "User" set phone='${sPhone}' where "employeeCode"='S001';
+      commit;`);
+    sql(`select phone from "User" where "employeeCode"='S001'`) === sPhone
+      ? pass(`ตั้งเบอร์ทดสอบของ S001 = ${sPhone} (ฐานข้อมูล · คืนค่าเดิมตอนจบ)`)
+      : fail(`ตั้งเบอร์ทดสอบของ S001 ไม่สำเร็จ: ${sql(`select coalesce(phone,'-') from "User" where "employeeCode"='S001'`)}`);
     /** "HH:MM" เวลาไทยของคำขอล่าสุดของใบ (ประวัติเก็บ UTC) */
     const askAt = (id, action = "URGENT_REQUESTED") =>
       sql(`select to_char(("createdAt" at time zone 'UTC') at time zone 'Asia/Bangkok','HH24:MI') from "WorkOrderLog" where "workOrderId"=${id} and action='${action}' order by id desc limit 1`);
@@ -916,14 +945,16 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     const P10 = await partsChecked();
     const P11 = await partsChecked();
     const P12 = await partsChecked();
+    const P13 = await partsChecked();
     await call(S(), "POST", `/work-orders/${P9.id}/urgent-request`, { day: tomorrow, note: note9 });
     await call(S(), "POST", `/work-orders/${P10.id}/urgent-request`, { day: today });
     await call(S(), "POST", `/work-orders/${P11.id}/urgent-request`, { day: tomorrow });
     await call(S(), "POST", `/work-orders/${P12.id}/urgent-request`, { day: today });
-    [P9, P10, P11, P12].every((o) => lastAction(o.id) === "URGENT_REQUESTED") &&
-    askDayOf(P9.id) === tomorrow && askDayOf(P10.id) === today
-      ? pass(`เตรียมคำขอนัดด่วน 4 ใบ (หัวหน้าภาคขอทาง API · ${P9.code}/${P11.code} พรุ่งนี้ · ${P10.code}/${P12.code} วันนี้ — ฐานข้อมูล URGENT_REQUESTED)`)
-      : fail(`เตรียมคำขอนัดด่วน: ${[P9, P10, P11, P12].map((o) => `${o.code} ${lastAction(o.id)} ${askDayOf(o.id)}`).join(" · ")}`);
+    await call(S(), "POST", `/work-orders/${P13.id}/urgent-request`, { day: today });
+    [P9, P10, P11, P12, P13].every((o) => lastAction(o.id) === "URGENT_REQUESTED") &&
+    askDayOf(P9.id) === tomorrow && askDayOf(P10.id) === today && askDayOf(P13.id) === today
+      ? pass(`เตรียมคำขอนัดด่วน 5 ใบ (หัวหน้าภาคขอทาง API · ${P9.code}/${P11.code} พรุ่งนี้ · ${P10.code}/${P12.code}/${P13.code} วันนี้ — ฐานข้อมูล URGENT_REQUESTED)`)
+      : fail(`เตรียมคำขอนัดด่วน: ${[P9, P10, P11, P12, P13].map((o) => `${o.code} ${lastAction(o.id)} ${askDayOf(o.id)}`).join(" · ")}`);
     /** n ของหัวข้อ "ขอนัดด่วน" ตามกติกาเดียวกับแอป — นับจากกล่องงานแอดมินที่เซิร์ฟเวอร์ส่ง (ฐานข้อมูลเครื่องทดสอบอาจมีคำขออื่น) */
     const askCount = async () => {
       const inbox = await call(A, "GET", "/work-orders?status=INBOX");
@@ -935,9 +966,25 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     await toQueue(a9);
     const n9 = await askCount();
     const groupText = (await lbl(a9.page, "กลุ่ม ขอนัดด่วน").count()) ? await lbl(a9.page, "กลุ่ม ขอนัดด่วน").first().innerText() : "";
-    groupText.includes(askHint) && [P9, P10, P11, P12].every((o) => groupText.includes(o.code))
-      ? pass(`งานของฉันวันนี้ (แอดมิน): หัวข้อปัก "ขอนัดด่วน" มีทั้ง 4 ใบ + คำอธิบายตามตัวอย่าง`)
+    groupText.includes(askHint) && [P9, P10, P11, P12, P13].every((o) => groupText.includes(o.code))
+      ? pass(`งานของฉันวันนี้ (แอดมิน): หัวข้อปัก "ขอนัดด่วน" มีทั้ง 5 ใบ + คำอธิบายตามตัวอย่าง`)
       : fail(`หัวข้อขอนัดด่วน: "${groupText.slice(0, 300)}"`);
+    /**
+     * ลำดับการ์ดในหัวข้อ = วันที่ขอ (วันนี้ก่อน) แล้วเวลาที่ขอ — แบบเดียวกับแถบ "ขอนัดด่วน n" ในกล่องงาน
+     * ใบสร้างเรียง P9→P13 (ลำดับที่รายการส่งมา = ด่วน → เปิดก่อน) แต่ P9/P11 ขอพรุ่งนี้ จึงต้องไปอยู่หลังใบที่ขอวันนี้ —
+     * ถ้าหน้านี้ใช้ลำดับของรายการ ข้อนี้ล้ม
+     */
+    const order9 = await a9.page.evaluate((codes) => {
+      const g = [...document.querySelectorAll('[aria-label="กลุ่ม ขอนัดด่วน"]')].find((n) => n.getClientRects().length);
+      if (!g) return [];
+      return [...g.querySelectorAll('[aria-label^="รายละเอียด "]')]
+        .map((n) => n.getAttribute("aria-label").slice("รายละเอียด ".length))
+        .filter((c, i, all) => codes.includes(c) && all.indexOf(c) === i);
+    }, [P9, P10, P11, P12, P13].map((o) => o.code));
+    const want9 = [P10, P12, P13, P9, P11].map((o) => o.code);
+    order9.join(",") === want9.join(",")
+      ? pass(`หัวข้อ "ขอนัดด่วน" เรียงวันที่ขอ (วันนี้ก่อน) แล้วเวลาที่ขอ: ${want9.join(" → ")} (ไม่ใช่ลำดับที่รายการส่งมา)`)
+      : fail(`ลำดับการ์ดขอนัดด่วน: ${order9.join(" → ")} · คาด ${want9.join(" → ")}`);
     const who9 = `หัวหน้าภาค ${sName}${sPhone ? ` ${sPhone}` : ""} · ขอเมื่อ ${dShort(today)} ${askAt(P9.id)} น.`;
     const appt9 = `ขอนัด ${dFull(tomorrow)} (พรุ่งนี้)`;
     const c9 = await queueCard(a9.page, P9.code);
@@ -1002,6 +1049,26 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     (await lbl(a9.page, `รายละเอียด ${P11.code}`).count()) === 0
       ? pass(`ปิดหน้าต่างแล้วงานของฉันวันนี้โหลดใหม่ — การ์ด ${P11.code} ออกจากหัวข้อ (คำขอจบแล้ว)`)
       : fail(`ปิดหน้าต่างแล้วการ์ด ${P11.code} ยังค้าง`);
+
+    // แข่งกัน (การ์ดเก่า): เปิดหน้าต่างค้างไว้ แอดมินอีกคนตอบคำขอไปก่อน (API) → กดบันทึก → 409 URGENT_ASK_STATE ในหน้าต่าง
+    // ต้องไม่แก้ทับคำตอบ (แอปส่ง fromAsk ให้เซิร์ฟเวอร์เช็คว่าคำขอยังรออยู่) — ไม่เช็ค = 200 + toast สำเร็จ + คำตอบหายจากฟอร์มหัวหน้าภาค
+    await lbl(a9.page, `แก้เป็นงานด่วน ${P13.code}`).first().click();
+    await a9.page.waitForTimeout(800);
+    await call(A, "POST", `/work-orders/${P13.id}/urgent-request/answer`, { note: "ทีมวันนี้เต็ม (เทสต์เวลาปิดนัด)" });
+    await lbl(a9.page, "บันทึก แก้เป็นงานด่วน").last().click();
+    const race9b = `${P13.code} ไม่มีคำขอนัดด่วน ${dShort(today)} ที่รออยู่แล้ว — แอดมินอีกคนอาจตอบไปแล้วหรือหัวหน้าภาคยกเลิกคำขอ`;
+    const r9b = await a9.vis(race9b).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    const winOpen9b = (await a9.vis(`แก้เป็นงานด่วน · ${P13.code}`).count()) > 0;
+    const saveOff9b = (await lbl(a9.page, "บันทึก แก้เป็นงานด่วน").last().getAttribute("aria-disabled")) === "true";
+    r9b && winOpen9b && saveOff9b && logCount(P13.id, "URGENT_RELEASE") === 0 && urfOf(P13.id) === "-" &&
+    lastAction(P13.id) === "URGENT_REQUEST_ANSWERED"
+      ? pass(`แข่งกัน (การ์ดเก่าหลังแอดมินอีกคนตอบ): หน้าต่างไม่ปิด ขึ้น "${race9b}" · ปุ่มบันทึกปิด · ฐานข้อมูลไม่มี URGENT_RELEASE คำตอบยังเป็นแถวล่าสุด`)
+      : fail(`แข่งกัน (การ์ดเก่า): ข้อความ=${r9b} · หน้าต่างเปิด=${winOpen9b} · ปุ่มปิด=${saveOff9b} · URGENT_RELEASE ${logCount(P13.id, "URGENT_RELEASE")} · ${urfOf(P13.id)} · ${lastAction(P13.id)}`);
+    await a9.vis("ยกเลิก").last().click();
+    await a9.page.waitForTimeout(2500);
+    (await lbl(a9.page, `รายละเอียด ${P13.code}`).count()) === 0
+      ? pass(`ปิดหน้าต่างแล้วโหลดใหม่ — การ์ด ${P13.code} ออกจากหัวข้อ (คำขอตอบไปแล้ว)`)
+      : fail(`ปิดหน้าต่างแล้วการ์ด ${P13.code} ยังค้าง`);
 
     // หน้าใบงาน: กล่องม่วงคำขอในการ์ดขั้น (แอดมิน)
     await lbl(a9.page, `รายละเอียด ${P10.code}`).first().click();
@@ -1120,6 +1187,65 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     on11 && r11 === `ASSIGNED|${tomorrow}` && urfOf(K2.id) === tomorrow && viaOf(K2.id).startsWith("confirm|")
       ? pass(`ติ๊กแล้วบันทึก → ${K2.code} ${r11} · urgentReleaseFor = ${tomorrow} · URGENT_RELEASE via confirm (ฐานข้อมูล)`)
       : fail(`ขอเลื่อน+ติ๊ก ${K2.code}: ปุ่มเปิด=${on11} · ${r11} · ${urfOf(K2.id)} · ${viaOf(K2.id)}`);
+
+    // ใบทดสอบ (TC จากส่วน 6 — รอคอนเฟิร์มลูกค้า วันนี้) "ลูกค้าขอเลื่อน" ไปพรุ่งนี้หลังเวลาปิด: เซิร์ฟเวอร์ยกเว้นใบทดสอบทุกทาง
+    // ฟอร์มแอดมินต้องไม่มีป้าย/บรรทัด/ช่องติ๊กเลย (rule = isTest ? null : cutoff) ปุ่มยืนยันกดได้ทันที — ใบจริงแบบเดียวกัน (K2) ปุ่มปิดจนติ๊ก
+    await openOrder(a11, TC.code);
+    await lbl(a11.page, "คอนเฟิร์มลูกค้า").last().click();
+    await a11.page.waitForTimeout(1500);
+    await lbl(a11.page, "ลูกค้าขอเลื่อน / เปลี่ยนวัน").last().click();
+    await a11.page.waitForTimeout(500);
+    await openCal(a11.page, "วันใหม่");
+    const tcTags11 = await tagsOf(a11.page);
+    await closeCal(a11.page);
+    await pickDay(a11.page, "วันใหม่", tomorrow);
+    const tcRule11 =
+      (await a11.page.getByText(/ปิดนัดแล้ว|ต้องเป็นงานด่วน|บันทึกได้เลย|ติ๊กแก้เป็นงานด่วนก่อน/).locator("visible=true").count()) +
+      (await lbl(a11.page, URGENT_WITH).count());
+    const tcOn11 = !(await saveOff(a11.page));
+    await a11.vis("ยืนยัน").last().click();
+    await a11.page.waitForTimeout(4000);
+    const tcRow11 = rowOf(TC.id);
+    tcTags11.length === 0 && tcRule11 === 0 && tcOn11 && tcRow11 === `ASSIGNED|${tomorrow}` && logCount(TC.id, "URGENT_RELEASE") === 0 && urfOf(TC.id) === "-"
+      ? pass(`ใบทดสอบ ${TC.code} ลูกค้าขอเลื่อนไปพรุ่งนี้ (หลังเวลาปิด): ไม่มีป้าย "ต้องติ๊กงานด่วน" ไม่มีบรรทัด ไม่มีช่องติ๊ก ปุ่มยืนยันกดได้ → ASSIGNED พรุ่งนี้ · ไม่มี URGENT_RELEASE · urgentReleaseFor ว่าง (ฐานข้อมูล)`)
+      : fail(`ใบทดสอบขอเลื่อน ${TC.code}: ป้าย ${JSON.stringify(tcTags11)} · สิ่งของกฎ ${tcRule11} · ปุ่มเปิด=${tcOn11} · ${tcRow11} · URGENT_RELEASE ${logCount(TC.id, "URGENT_RELEASE")} · ${urfOf(TC.id)}`);
+
+    /**
+     * กดตอนเวลาเพิ่งผ่าน (คอนเฟิร์ม "ลูกค้าขอเลื่อน"): เปิดฟอร์มตอนพรุ่งนี้ยังเปิด (บรรทัดเทา ไม่มีช่องติ๊ก) → เวลาปิดย้ายไปเมื่อนาทีก่อน (SQL)
+     * → กดยืนยัน → 400 DATE_CLOSED: ฟอร์มไม่ปิด คิดนาฬิกาใหม่จากคำตอบในที่เดิม บรรทัดแดง + ช่องติ๊ก ปุ่มปิด
+     * ข้อความเซิร์ฟเวอร์ (คำเดียวกับบรรทัดแดง) ไม่ขึ้นซ้ำเป็นสองข้อความ · ฐานข้อมูลไม่เปลี่ยน → ติ๊กแล้วบันทึกได้
+     * จบแล้วคืนเวลาปิดเป็น C9 — ส่วน 12 เทียบข้อความ "เลย C9 น."
+     */
+    const K3 = await confirmOrderAt(d2);
+    await setCut(cutIn(45));
+    await toQueue(a11);
+    await openFromQueue(a11, K3.code, "คอนเฟิร์มลูกค้า");
+    await lbl(a11.page, "ลูกค้าขอเลื่อน / เปลี่ยนวัน").last().click();
+    await a11.page.waitForTimeout(500);
+    await pickDay(a11.page, "วันใหม่", tomorrow);
+    const grey11b = `วันใหม่ ${dShort(tomorrow)} — บันทึกได้เลย`;
+    const open11b = (await a11.vis(grey11b).count()) > 0 && (await lbl(a11.page, URGENT_WITH).count()) === 0 && !(await saveOff(a11.page));
+    const C11 = cutIn(-1);
+    await setCut(C11);
+    await a11.vis("ยืนยัน").last().click();
+    const red11b = `พรุ่งนี้ปิดนัดแล้ว (เลย ${C11} น.) — ต้องไปพรุ่งนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก`;
+    const redSeen11b = await a11.vis(red11b).first().waitFor({ timeout: 10000 }).then(() => true, () => false);
+    await a11.page.waitForTimeout(500);
+    const once11b = (await a11.vis(red11b).count()) === 1;
+    const tick11b = lbl(a11.page, URGENT_WITH).last();
+    const off11b = await saveOff(a11.page);
+    open11b && redSeen11b && once11b && (await tick11b.count()) > 0 && off11b &&
+    rowOf(K3.id) === `AWAITING_CONFIRM|${d2}` && logCount(K3.id, "RESCHEDULED") + logCount(K3.id, "CONFIRMED") === 0
+      ? pass(`คอนเฟิร์ม ${K3.code} กดตอนเวลาเพิ่งผ่าน: ก่อนหน้าเทา "${grey11b}" → ฟอร์มไม่ปิด แดง "${red11b}" ขึ้นครั้งเดียว + ช่องติ๊ก ปุ่มปิด · ฐานข้อมูลยัง AWAITING_CONFIRM มะรืน`)
+      : fail(`คอนเฟิร์มกดตอนเวลาเพิ่งผ่าน ${K3.code}: เทาก่อน=${open11b} · แดง=${redSeen11b} · ครั้งเดียว=${once11b} · ติ๊ก ${await tick11b.count()} · ปุ่มปิด=${off11b} · ${rowOf(K3.id)}`);
+    await tick11b.click();
+    await a11.page.waitForTimeout(400);
+    await a11.vis("ยืนยัน").last().click();
+    await a11.page.waitForTimeout(4000);
+    rowOf(K3.id) === `ASSIGNED|${tomorrow}` && urfOf(K3.id) === tomorrow && viaOf(K3.id).startsWith("confirm|")
+      ? pass(`ติ๊กแล้วบันทึกในฟอร์มเดิม → ${K3.code} ASSIGNED พรุ่งนี้ · งานด่วน via confirm (ฐานข้อมูล)`)
+      : fail(`หลังติ๊ก ${K3.code}: ${rowOf(K3.id)} · ${urfOf(K3.id)} · ${viaOf(K3.id)}`);
+    await setCut(C9);
     await a11.ctx.close();
 
     // ════════════════ 12) เลื่อนวันนัด · ดึงงานคืน ไปวันที่ปิด ════════════════
@@ -1164,6 +1290,53 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       ? pass(`ดึงงานคืนไปพรุ่งนี้: แดง "${red12b}" → toast "${toast12b}" · ฐานข้อมูล ดึงคืน ASSIGNED พรุ่งนี้ + งานด่วน via reschedule`)
       : fail(`ดึงงานคืน ${M2.code}: ก่อนติ๊ก=${mv2.before} · หลังติ๊ก=${mv2.after} · toast=${t12b} · ${rowOf(M2.id)} · ${urfOf(M2.id)} · ${viaOf(M2.id)} · RECALLED ${logCount(M2.id, "APPOINTMENT_RECALLED")}`);
 
+    /**
+     * เลื่อนวันนัด: ฟอร์มเปิดที่วันเดิม (ไม่ใช่วันแรกที่นัดได้ — ตอนนี้พรุ่งนี้ยังเปิด วันแรกที่นัดได้จึงเป็นพรุ่งนี้ ต่างจากวันเดิม)
+     * แล้วกดตอนเวลาเพิ่งผ่าน: เลือกพรุ่งนี้ (บรรทัดเทา ไม่มีช่องติ๊ก) + เหตุผล → เวลาปิดย้ายไปเมื่อนาทีก่อน (SQL) → กดบันทึก
+     * → 400 DATE_CLOSED: ฟอร์มไม่ปิด เหตุผลยังอยู่ บรรทัดแดง + ช่องติ๊กขึ้นเอง ปุ่มปิด ข้อความเซิร์ฟเวอร์ไม่ซ้ำกับบรรทัดแดง ·
+     * ฐานข้อมูลไม่เปลี่ยน → ติ๊กแล้วบันทึกได้ในฟอร์มเดิม
+     */
+    const M3 = await releaseOrderAt(d2);
+    await setCut(cutIn(45));
+    await openOrder(a12, M3.code);
+    await lbl(a12.page, "เลื่อนวันนัด").last().click();
+    await a12.page.waitForTimeout(1000);
+    const default12 = await fieldText(a12.page, "วันนัดใหม่");
+    await pickDay(a12.page, "วันนัดใหม่", tomorrow);
+    const why12 = "ร้านขอเลื่อน (เทสต์กดตอนเวลาเพิ่งผ่าน)";
+    await lbl(a12.page, "เหตุผลที่เลื่อนวันนัด").last().fill(why12);
+    await a12.page.waitForTimeout(300);
+    const save12 = lbl(a12.page, "บันทึกวันนัดใหม่").last();
+    const grey12 = `วันใหม่ ${dShort(tomorrow)} — บันทึกได้เลย`;
+    const open12 =
+      (await a12.vis(grey12).count()) > 0 && (await lbl(a12.page, URGENT_WITH).count()) === 0 && (await save12.getAttribute("aria-disabled")) !== "true";
+    default12.includes(dLong(d2)) && open12
+      ? pass(`เลื่อนวันนัด ${M3.code}: ฟอร์มเปิดที่วันเดิม (${dLong(d2)}) · เลือกพรุ่งนี้ตอนยังเปิด = บรรทัดเทา "${grey12}" ไม่มีช่องติ๊ก ปุ่มบันทึกกดได้`)
+      : fail(`เลื่อนวันนัด ${M3.code} ตอนยังเปิด: วันตั้งต้น "${default12}" · เทา/ไม่มีติ๊ก/ปุ่มกดได้=${open12}`);
+    const C12 = cutIn(-1);
+    await setCut(C12);
+    await save12.click();
+    const red12c = `พรุ่งนี้ปิดนัดแล้ว (เลย ${C12} น.) — ต้องไปพรุ่งนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก`;
+    const redSeen12 = await a12.vis(red12c).first().waitFor({ timeout: 10000 }).then(() => true, () => false);
+    await a12.page.waitForTimeout(500);
+    const tick12 = lbl(a12.page, URGENT_WITH).last();
+    const once12 = (await a12.vis(red12c).count()) === 1;
+    const kept12 = (await lbl(a12.page, "เหตุผลที่เลื่อนวันนัด").last().inputValue().catch(() => "")) === why12;
+    const off12 = (await save12.getAttribute("aria-disabled")) === "true";
+    redSeen12 && once12 && (await tick12.count()) > 0 && off12 && kept12 &&
+    rowOf(M3.id) === `ASSIGNED|${d2}` && logCount(M3.id, "APPOINTMENT_MOVED") === 0 && urfOf(M3.id) === "-"
+      ? pass(`กดตอนเวลาเพิ่งผ่าน: ฟอร์มไม่ปิด เหตุผลยังอยู่ · แดง "${red12c}" ขึ้นครั้งเดียว + ช่องติ๊ก ปุ่มปิด · ฐานข้อมูลยัง ASSIGNED มะรืน ไม่มี APPOINTMENT_MOVED`)
+      : fail(`เลื่อนวันกดตอนเวลาเพิ่งผ่าน ${M3.code}: แดง=${redSeen12} · ครั้งเดียว=${once12} · ติ๊ก ${await tick12.count()} · ปุ่มปิด=${off12} · เหตุผลอยู่=${kept12} · ${rowOf(M3.id)} · MOVED ${logCount(M3.id, "APPOINTMENT_MOVED")}`);
+    await tick12.click();
+    await a12.page.waitForTimeout(300);
+    await save12.click();
+    const toast12c = `เลื่อนวันนัด ${M3.code} เป็น ${dFull(tomorrow)} แล้ว — ใบกลับไปที่หัวหน้าภาคให้คอนเฟิร์มวันใหม่ · แก้เป็นงานด่วนไปพร้อมกันแล้ว`;
+    const t12c = await a12.vis(toast12c).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
+    await a12.page.waitForTimeout(1500);
+    t12c && rowOf(M3.id) === `ASSIGNED|${tomorrow}` && urfOf(M3.id) === tomorrow && viaOf(M3.id).startsWith("reschedule|")
+      ? pass(`ติ๊กแล้วบันทึกในฟอร์มเดิม → toast "${toast12c}" · ฐานข้อมูล ASSIGNED พรุ่งนี้ + งานด่วน via reschedule`)
+      : fail(`หลังติ๊ก ${M3.code}: toast=${t12c} · ${rowOf(M3.id)} · ${urfOf(M3.id)} · ${viaOf(M3.id)}`);
+
     // ════════════════ 13) บอร์ดแผนงาน: ไม่มีป้ายเวลาปิดรับ · ป้ายเขียวบนจุดที่แอดมินแก้เป็นงานด่วน ════════════════
     await a12.page.goto(APP, { waitUntil: "networkidle", timeout: 180000 });
     await a12.page.waitForTimeout(2500);
@@ -1189,6 +1362,12 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       } catch (e) {
         fail(`คืนเวลาเริ่มใช้กฎไม่สำเร็จ: ${e}`);
       }
+    }
+    // เบอร์ S001 ที่ส่วน 9 ตั้งชั่วคราว — คืนจากแถวจดและลบแถวจด (คืนไม่สำเร็จ แถวจดยังอยู่ให้รอบหน้าคืน) · ไม่มีแถวจด = ไม่แตะ
+    try {
+      sql(RESTORE_PHONE);
+    } catch (e) {
+      fail(`คืนเบอร์ของ S001 ไม่สำเร็จ: ${e}`);
     }
     if (MAXSET !== null) {
       sql(`delete from "AppSetting" where key='dispatchCutoff' and id > ${MAXSET}; delete from "AppSetting" where key='${MARK}'`);

@@ -17,7 +17,7 @@ import TouchableOpacity from "./Tap";
 import AppModal from "./AppModal";
 import { feedback } from "./Feedback";
 import { useDocked } from "./SideMenu";
-import { api, apiErrorMessage } from "../api/client";
+import { api, apiErrorMessage, staleWorkOrderId } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing, headingFont } from "../theme";
@@ -404,11 +404,13 @@ export function AskAdminBox({ ask, canAct, onAnswer, onGrant }: { ask: UrgentAsk
 
 /**
  * สถานะหน้าต่างคำขอนัดด่วน (แก้เป็นงานด่วน · ตอบกลับ) ที่ใช้ร่วมกัน
- * 409 URGENT_ASK_STATE = คำขอเปลี่ยนไปก่อนกด (แอดมินอีกคนแก้/ตอบแล้ว · หัวหน้าภาคยกเลิก/นัดวันอื่น · วันนั้นยังเปิด) —
- * บอกข้อความเซิร์ฟเวอร์ในหน้าต่างแล้วปิดปุ่มบันทึก (กดซ้ำก็ได้คำตอบเดิม) แอดมินอ่านแล้วกดยกเลิกเอง ·
- * ปิดหน้าต่างแล้วผู้เรียกโหลดใหม่ (onCancel(true)) แถวจะได้หายหรือเปลี่ยนตามจริง
+ * คำขอหมดความหมายก่อนกด — บอกข้อความเซิร์ฟเวอร์ในหน้าต่างแล้วปิดปุ่มบันทึก (กดซ้ำก็ได้คำตอบเดิม) แอดมินอ่านแล้วกดยกเลิกเอง ·
+ * ปิดหน้าต่างแล้วผู้เรียกโหลดใหม่ (onCancel(true)) แถวจะได้หายหรือเปลี่ยนตามจริง มีสองแบบ:
+ * - 409 URGENT_ASK_STATE = ใบยังรอนัดวันแต่คำขอเปลี่ยน (แอดมินอีกคนแก้/ตอบแล้ว · หัวหน้าภาคยกเลิก · วันนั้นยังเปิด)
+ * - 409 ที่ไม่มี code (staleWorkOrderId) = ขั้นของใบเปลี่ยนแล้ว เช่น หัวหน้าภาคนัดวันอื่นไประหว่างรอ — งานของฉันวันนี้ไม่ได้ตั้งเวลาถาม
+ *   ซ้ำ การ์ดที่โหลดไว้นานเจอแบบนี้ได้ และหน้านี้ไม่ได้ฟังตัวจัดการ 409 กลาง ไม่ตั้ง stale การ์ดตายจะค้างอยู่หลังปิดหน้าต่าง
+ *   (บนหน้าใบงาน ตัวจัดการกลางปิดหน้าต่างและโหลดใบใหม่ให้เองก่อนถึงตรงนี้)
  * error อื่นขึ้นในหน้าต่างเช่นกัน — เปิดจากงานของฉันวันนี้ไม่มีหน้าใบงานคอยรับข้อความ 409 กลาง ผู้ใช้จะไม่รู้ว่าทำไมไม่ผ่าน
- * (บนหน้าใบงาน 409 ที่ขั้นเปลี่ยนจริง ตัวจัดการกลางปิดหน้าต่างและโหลดใบใหม่ให้เอง)
  */
 function useAskWindow() {
   const [busy, setBusy] = useState(false);
@@ -421,7 +423,7 @@ function useAskWindow() {
       await go();
     } catch (e) {
       const msg = askStateError(e);
-      if (msg) setStale(true);
+      if (msg || staleWorkOrderId(e) !== null) setStale(true);
       setError(msg ?? apiErrorMessage(e));
     } finally {
       setBusy(false);
@@ -460,7 +462,7 @@ export function UrgentReleaseModal({
 }: {
   order: AskOrder;
   onDone: (detail: unknown) => void | Promise<void>;
-  /** stale = เจอ 409 URGENT_ASK_STATE ระหว่างเปิด — ผู้เรียกโหลดใหม่ */
+  /** stale = เจอ 409 ระหว่างเปิด (URGENT_ASK_STATE หรือขั้นของใบเปลี่ยน — ดู useAskWindow) — ผู้เรียกโหลดใหม่ */
   onCancel: (stale: boolean) => void;
 }) {
   const [reason, setReason] = useState("");
@@ -471,7 +473,9 @@ export function UrgentReleaseModal({
   const save = () =>
     w.run(async () => {
       if (!day) return;
-      const { data } = await api.post(`/work-orders/${order.id}/urgent-release`, { day, reason: reason.trim() || undefined });
+      // fromAsk: เซิร์ฟเวอร์เช็คว่าคำขอของวันนี้ยังรออยู่ — การ์ดที่โหลดไว้นานอาจเป็นคำขอที่แอดมินอีกคนตอบไปแล้ว/หัวหน้าภาคยกเลิกแล้ว
+      // (ไม่เช็ค = แก้ทับคำตอบเงียบ ๆ) ได้ 409 URGENT_ASK_STATE ขึ้นในหน้าต่างแทน
+      const { data } = await api.post(`/work-orders/${order.id}/urgent-release`, { day, reason: reason.trim() || undefined, fromAsk: true });
       feedback.toast("success", `แก้ ${order.code} เป็นงานด่วนแล้ว — หัวหน้าภาคนัด ${dayShort(day)} ได้ทันที (ลงประวัติใบงานแล้ว)`);
       await onDone(data);
     });

@@ -41,12 +41,15 @@ import { CutoffBanners, ScheduleChip, UrgentAnswerModal, UrgentReleaseModal } fr
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
+  addDays,
   adminGroups,
   askRowLines,
   dayFull,
+  serverDay,
   supervisorBanners,
   timeText,
   useServerClock,
+  useServerNowFn,
   type Cutoff,
 } from "../utils/dispatchCutoff";
 
@@ -169,10 +172,25 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
    * หน้าของหัวหน้าภาคไม่โหลดใหม่ตอนถึงเวลา (ใบในกล่องไม่เปลี่ยนตอน 16:00) — ป้ายคิดใหม่จากเวลาปิดที่ถืออยู่แล้ว
    */
   const now = useServerClock(clock.serverNow, clock.cutoff?.time);
+  const serverNowAt = useServerNowFn(clock.serverNow);
+  /**
+   * แอดมิน: โหลดกล่องใหม่เองหลังเที่ยงคืน (เวลาไทย) + สุ่ม 2–30 วิ — กล่องแอดมินเปลี่ยนตอนข้ามวันโดยไม่มีใครกด:
+   * คำขอนัดด่วนของเมื่อวานหมดอายุ (เซิร์ฟเวอร์เอาออกจากกล่อง) และใบรอปล่อยงานที่วันนัดเพิ่งผ่านเข้า "เลยนัด" (overdue ของเซิร์ฟเวอร์)
+   * ไม่โหลด = คำขอที่หมดอายุหล่นไปอยู่กลุ่มขั้นของหัวหน้าภาค และ "เลยนัด" ขาดใบจนกว่าจะสลับแท็บ — หน้านี้ไม่ได้ถาม /version
+   * แบบหน้ารายการ (เลขรุ่นต่อท้ายวันไทยของกล่องงาน) จึงต้องตั้งเวลาเอง
+   * สุ่มเวลา: จอแอดมินทุกจอที่เปิดค้างจะได้ไม่ถามเซิร์ฟเวอร์ในวินาทีเดียวกัน — pool ฐานข้อมูลมีแค่ 5 connection (src/prisma.ts)
+   * ตั้งเฉพาะตอนหน้านี้เปิดอยู่ — กลับมาหน้านี้ทีหลังก็โหลดใหม่อยู่แล้ว (useFocusEffect)
+   * ไม่ตั้งตอนถึงเวลาปิดนัดแล้ว: ไม่มีใบไหนเข้ากล่องแอดมินตอน 16:00 (คำขอมาจากหัวหน้าภาคกด)
+   */
+  useEffect(() => {
+    if (!adminCut || !focused) return;
+    const n = serverNowAt();
+    const midnight = Date.parse(`${addDays(serverDay(n), 1)}T00:00:00.000+07:00`);
+    const timer = setTimeout(() => void load(), midnight - n + 2000 + Math.random() * 28000);
+    return () => clearTimeout(timer);
+  }, [adminCut, focused, clock.serverNow, serverNowAt, load]);
   /**
    * หัวข้อของแอดมิน (ขอนัดด่วน · เลยนัด) — ตัวสร้างเดียวกับกล่องงาน สองหน้าจึงนับตรงกันเสมอ · นับทุกใบในกล่อง ไม่ตามคำค้น
-   * ไม่ตั้งเวลาโหลดใหม่ตอนถึงเวลาปิดแล้ว: ไม่มีใบไหนเข้ากล่องแอดมินตอน 16:00 (คำขอมาจากหัวหน้าภาคกด)
-   * กลับมาหน้านี้ก็โหลดใหม่อยู่แล้ว (useFocusEffect)
    */
   const cut = useMemo(() => (adminCut && rows ? adminGroups(rows, now, clock.cutoff) : null), [adminCut, rows, now, clock.cutoff]);
   // กลุ่มตามขั้น — กลุ่มที่มีใบด่วนขึ้นก่อน แล้วกลุ่มที่ค้างนานสุด · ในกลุ่มเรียงด่วน → ค้างนาน
@@ -182,7 +200,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     const pinned = new Map<string, { kind: GroupKind; list: WorkOrderRow[] }>();
     const pin = (label: string, kind: GroupKind, r: WorkOrderRow) =>
       pinned.set(label, { kind, list: [...(pinned.get(label)?.list ?? []), r] });
-    const askIds = new Set((cut?.asks?.rows ?? []).map((r) => r.id));
+    // ลำดับของตัวสร้างหัวข้อ (วันที่ขอ → เวลาที่ขอ) — แถบ "ขอนัดด่วน n" ในกล่องงานเรียงแบบนี้ สองหน้าต้องขึ้นใบเดียวกันก่อน
+    const askRank = new Map((cut?.asks?.rows ?? []).map((r, i) => [r.id, i]));
+    const askIds = new Set(askRank.keys());
     const pastIds = new Set((cut?.past?.rows ?? []).map((r) => r.id));
     for (const r of rows ?? []) {
       // คำขอนัดด่วนก่อนคำขอตรวจสอบ (ดู ASK_GROUP) — ใบหนึ่งอยู่หัวข้อเดียว
@@ -213,9 +233,15 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           label,
           kind: g.kind,
           hint: hintOf(g.kind),
-          // คำขอนัดด่วนเรียงตามที่ตัวสร้างหัวข้อเรียงไว้ (วันที่ขอ → เวลาที่ขอ) · เลยนัดเรียงตามวันนัด (เลยมานานสุดก่อน)
+          // คำขอนัดด่วนเรียงตามตัวสร้างหัวข้อ (วันที่ขอ → เวลาที่ขอ: ร้านที่รอวันนี้อยู่บนสุด) ไม่ใช่ลำดับที่รายการส่งมา
+          // (เซิร์ฟเวอร์เรียงด่วน → เปิดก่อน ใบเก่าที่ขอพรุ่งนี้จะทับใบที่ขอวันนี้) · เลยนัดเรียงตามวันนัด (เลยมานานสุดก่อน)
           // · คำขอตรวจสอบเรียงตามเวลาส่ง
-          list: g.kind === "ask" ? g.list : g.kind === "past" ? g.list.sort(byAppt) : g.list.sort((a, b) => sent(a) - sent(b)),
+          list:
+            g.kind === "ask"
+              ? g.list.sort((a, b) => (askRank.get(a.id) ?? 0) - (askRank.get(b.id) ?? 0))
+              : g.kind === "past"
+                ? g.list.sort(byAppt)
+                : g.list.sort((a, b) => sent(a) - sent(b)),
         })),
       ...[...by.entries()]
         .map(([label, list]) => ({

@@ -5,7 +5,8 @@
 #   · คณิตของกฎ utils/dispatchCutoff.ts (closedFor · grantedFor · firstOpenDay · closedRefusal · pastRelease) ด้วยเวลาที่ส่งเข้าไปเอง
 #   · หัวหน้าภาคนัดวัน (/parts ไม่ใช้อะไหล่จ่ายงาน · /inspect-request ส่งตรวจ · /assign นัดวันเข้า) → 400 DATE_CLOSED วันที่ปิด
 #     · แอดมินกดแทนที่ขั้นนัดวัน ติ๊ก urgent = แก้เป็นงานด่วนไปพร้อมกัน (ประวัติ via=schedule) · ติ๊กของหัวหน้าภาคไม่มีผล
-#   · คำขอนัดด่วน (/urgent-request · /cancel · /answer) · แอดมินแก้เป็นงานด่วน (/urgent-release ใช้วันที่ขอ · ไม่ดูเวลาเริ่มใช้กฎ)
+#   · คำขอนัดด่วน (/urgent-request · /cancel · /answer) · แอดมินแก้เป็นงานด่วน (/urgent-release ใช้วันที่ขอ · ไม่ดูเวลาเริ่มใช้กฎ
+#     · แอปกดจากคำขอส่ง fromAsk = คำขอต้องยังรออยู่ ไม่แก้ทับคำตอบของแอดมินอีกคน)
 #     · 409 เรื่องสถานะคำขอมี code URGENT_ASK_STATE (ฟอร์มนัดวันไม่ถูกปิด) · 409 เรื่องขั้นไม่มี code
 #   · คอนเฟิร์มลูกค้า/เลื่อนวันนัด/ดึงงานคืนไปวันที่ปิดต้องติ๊ก · คอนเฟิร์มวันเดิมไม่มีกฎ · เลื่อนแค่เวลาไม่ล้างงานด่วน
 #   · ปล่อยงานไม่ล็อกแล้ว · ฝั่งอ่าน (urgentAsk/urgentAnswer · กล่อง "ขอนัดด่วน" · /version · บอร์ด) · ทางที่ไม่ได้นัดวันไม่ติดกฎ
@@ -606,6 +607,14 @@ ANSJ="{\"day\":\"$TOMORROW\",\"at\":\"$(LOGISO $Q1 URGENT_REQUEST_ANSWERED)\",\"
   && [ "$(code_of "$R3")|$(BCODE "$R3")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R3")" = "ไม่มีคำขอนัดด่วนที่รออยู่แล้ว — หัวหน้าภาคอาจยกเลิกหรือนัดวันอื่นไปแล้ว" ] \
   && pass "แอดมินตอบคำขอ: หัวหน้าภาคตอบเองไม่ได้ (403) · ข้อความว่าง 400 · ตอบแล้วคำขอปิด (กล่องกลับ $IC0) หัวหน้าภาคเห็น urgentAnswer · ตอบซ้ำ 409 URGENT_ASK_STATE (ฐานข้อมูล)" \
   || fail "ตอบคำขอ: $(code_of "$R1") $(err_of "$R1") · $(code_of "$R2") $(err_of "$R2") · $(code_of "$R") $(err_of "$R") · $(DET $S $Q1 'JSON.stringify(d.urgentAnswer)') · $(code_of "$R3") $(body_of "$R3")"
+# แอดมินอีกคนกด "แก้เป็นงานด่วน" จากการ์ดที่โหลดไว้ก่อนคำตอบ (แอปส่ง fromAsk + วันที่ขอ) — คำขอจบแล้ว ต้องไม่แก้ทับคำตอบเงียบ ๆ
+# (CLOSE อยู่: ถ้าเซิร์ฟเวอร์ไม่ดู fromAsk พรุ่งนี้เลยเส้นตายแล้ว จะได้ 200 + urgentReleaseFor)
+R=$(CALL $A work-orders/$Q1/urgent-release "{\"day\":\"$TOMORROW\",\"fromAsk\":true}")
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|URGENT_ASK_STATE" ] \
+  && [ "$(err_of "$R")" = "$Q1C ไม่มีคำขอนัดด่วน $(SHORT $TOMORROW) ที่รออยู่แล้ว — แอดมินอีกคนอาจตอบไปแล้วหรือหัวหน้าภาคยกเลิกคำขอ" ] \
+  && [ "$(URF $Q1)|$(NLOG $Q1 URGENT_RELEASE)" = "-|0" ] && [ "$(DET $S $Q1 'd.urgentAnswer && d.urgentAnswer.note')" = "ร้านรอได้ถึงมะรืน" ] \
+  && pass "แก้เป็นงานด่วนจากการ์ดเก่า (fromAsk) หลังแอดมินอีกคนตอบแล้ว → 409 URGENT_ASK_STATE \"ไม่มีคำขอนัดด่วน … ที่รออยู่แล้ว\" · ไม่ตั้งงานด่วน คำตอบยังอยู่ (ฐานข้อมูล)" \
+  || fail "แก้ทับคำตอบ: $(code_of "$R") $(body_of "$R") · $(URF $Q1) · URGENT_RELEASE $(NLOG $Q1 URGENT_RELEASE)"
 [ "$(RW "$(LIST $S INBOX)" $Q1 '"urgentAnswer" in r')" = false ] \
   && pass "urgentAnswer อยู่เฉพาะหน้าใบงาน — แถวในรายการไม่มีช่องนี้" || fail "urgentAnswer หลุดเข้ารายการ"
 # วันที่ขอผ่านไปแล้ว = คำขอตาย: ไม่อยู่ในกล่อง และขอใหม่ได้ · คำตอบของวันที่ผ่านไปแล้วไม่ค้างในฟอร์ม
