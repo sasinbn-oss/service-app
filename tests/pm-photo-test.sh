@@ -38,9 +38,10 @@ mk() {
   local W M
   [ -n "$2" ] && M="\"code\":\"W8$2\"," || M=""
   W=$(POST $A work-orders "{\"branchCode\":\"C0006\",\"jobType\":\"$1\",\"priority\":\"NORMAL\",\"contactPhone\":\"089-111-2222\",\"machines\":[{$M\"symptom\":\"ทดสอบรูป PM\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+  # วันนี้ปิดนัดตลอด — แอดมินแก้เป็นงานด่วนให้วันนี้ก่อน หัวหน้าภาคจึงนัดวันนี้ได้ไม่ว่ารันเทสต์กี่โมง (ปล่อยงานไม่มีเวลาปิดแล้ว)
+  POST $A work-orders/$W/urgent-release "{\"day\":\"$TODAY\"}" >/dev/null
   POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$TODAY\"}}" >/dev/null
-  # งานวันนี้ติดเวลาปิดรับเสมอ — คอนเฟิร์มพร้อมแก้เป็นงานด่วน ให้ปล่อยได้ไม่ว่ารันเทสต์กี่โมง
-  POST $A work-orders/$W/confirm-appointment '{"urgent":true}' >/dev/null
+  POST $A work-orders/$W/confirm-appointment '{}' >/dev/null
   POST $S work-orders/$W/dispatch '{}' >/dev/null
   echo "$W"
 }

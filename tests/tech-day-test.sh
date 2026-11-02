@@ -38,8 +38,14 @@ RESCHED() { curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $S)" |
 
 echo "═══ ลูกค้าขอเปลี่ยนวัน → หัวหน้าภาคคอนเฟิร์มวันใหม่ / ส่งกลับแอดมิน"
 W=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactPhone":"089-111-2222","machines":[{"code":"W95","symptom":"ทดสอบงานของฉัน"}]}' | J 'd.orders?d.orders[0].id:d.id'); IDS="$W"
+# วันนี้ปิดนัดตลอด (เวลาปิดนัดงานพรุ่งนี้) — แอดมินแก้เป็นงานด่วนให้วันนี้ก่อน หัวหน้าภาคจึงนัดวันนี้ได้ไม่ว่ารันเทสต์กี่โมง
+# (แก้เป็นงานด่วนเทียบเส้นตายตรง ๆ ไม่ดูเวลาเริ่มใช้กฎ — ฐานที่เพิ่ง migrate ก็ผ่าน)
+[ "$(PC $A work-orders/$W/urgent-release "{\"day\":\"$TODAY\"}")" = "200" ] \
+  && [ "$(DB "select \"urgentReleaseFor\"::date from \"WorkOrder\" where id=$W")" = "$TODAY" ] \
+  || fail "แก้เป็นงานด่วนวันนี้ก่อนนัดไม่ผ่าน: $(DB "select coalesce(\"urgentReleaseFor\"::text,'-') from \"WorkOrder\" where id=$W")"
 POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$TODAY\",\"scheduledTime\":\"10:00\"}}" >/dev/null
-POST $A work-orders/$W/confirm-appointment "{\"scheduledAt\":\"$TOMORROW\",\"note\":\"ร้านปิดวันนี้\"}" >/dev/null
+# ลูกค้าขอเลื่อนเป็นพรุ่งนี้ — หลังเวลาปิดพรุ่งนี้ปิดนัดแล้ว ต้องติ๊กแก้เป็นงานด่วนไปพร้อมกัน (ก่อนเวลาปิดติ๊กมาก็ไม่มีผล) · ผ่านทุกเวลา
+POST $A work-orders/$W/confirm-appointment "{\"scheduledAt\":\"$TOMORROW\",\"note\":\"ร้านปิดวันนี้\",\"urgent\":true}" >/dev/null
 [ "$(ST $W)" = "ASSIGNED|$TEAM|$TOMORROW|CONFIRMED" ] && [ "$(RESCHED $W)" = "true" ] \
   && pass "ลูกค้าเปลี่ยนวัน: ไปหาหัวหน้าภาค ติด rescheduled (ป้ายคอนเฟิร์มวันใหม่)" || fail "หลังเปลี่ยนวัน: $(ST $W) rescheduled=$(RESCHED $W)"
 [ "$(PC $S work-orders/$W/decline-new-date '{"reason":""}')" = "400" ] && [ "$(ST $W)" = "ASSIGNED|$TEAM|$TOMORROW|CONFIRMED" ] \
@@ -58,11 +64,8 @@ POST $A work-orders/$W/confirm-appointment '{}' >/dev/null
   && pass "ลูกค้ายืนยันวันที่หัวหน้าภาคส่งกลับ: ไปหัวหน้าภาค ยังติด rescheduled (ต้องรับทราบวันนั้นอีกรอบ)" || fail "ตกลงวันเดิม: $(ST $W) rescheduled=$(RESCHED $W)"
 
 echo "═══ งานของฉันวันนี้ + ถึงหน้างาน"
+# ย้ายวันทาง SQL ให้เป็นงานวันนี้ในงานของฉัน — ปล่อยงานไม่มีเวลาปิดแล้ว (ด่านอยู่ที่การนัดวัน) ปล่อยได้ทุกเวลา
 DB "update \"WorkOrder\" set \"scheduledAt\"='$TODAY' where id=$W" >/dev/null
-# งานวันนี้ติดเวลาปิดรับเสมอ (เส้นตายคือเมื่อวาน) — แอดมินแก้เป็นงานด่วนก่อน หัวหน้าภาคจึงปล่อยได้ไม่ว่ารันเทสต์กี่โมง
-[ "$(PC $A work-orders/$W/urgent-release '{"reason":"ทดสอบงานของฉันวันนี้"}')" = "200" ] \
-  && [ "$(DB "select \"urgentReleaseFor\"::date from \"WorkOrder\" where id=$W")" = "$TODAY" ] \
-  || fail "แก้เป็นงานด่วนก่อนปล่อยงานวันนี้ไม่ผ่าน: $(DB "select coalesce(\"urgentReleaseFor\"::text,'-') from \"WorkOrder\" where id=$W")"
 [ "$(CODE -X POST localhost:4000/api/work-orders/$W/arrive -H "$(H $T)" -H 'Content-Type: application/json' -d '{}')" = "409" ] \
   && pass "ยังไม่ปล่อยงาน กดถึงหน้างานไม่ได้ (409)" || fail "ถึงหน้างานก่อนปล่อยงานได้"
 [ "$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)" | J "d.rows.some(r=>r.id===$W)")" = "false" ] \
