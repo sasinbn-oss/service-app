@@ -26,7 +26,8 @@ import { openUrl } from "../utils/share";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
 import { HomeStackParamList } from "../navigation/types";
-import PartPicker from "../components/PartPicker";
+import PartPicker, { brandBlockers, brandBlockText, machineBrandToSend } from "../components/PartPicker";
+import { brandFileOf, type PartsBrand } from "../utils/brandFile";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import WarrantyBadge, { WARRANTY_LABEL, WarrantyState } from "../components/WarrantyBadge";
@@ -43,6 +44,8 @@ interface OutageRow {
   machineCode?: string;
   machineType?: string;
   machineBrand?: string | null;
+  /** ยี่ห้อที่ใช้จริง (รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) — ช่อง "อะไหล่ที่รอ" ล็อกตามไฟล์ของยี่ห้อนี้ */
+  machineMake?: string | null;
   /** ประกันของเครื่องนี้ (เฉพาะแท็บเครื่องดับ) — ว่าง = สาขาบริษัท */
   warranty?: WarrantyState | null;
   warrantyEndsAt?: string | null;
@@ -77,6 +80,8 @@ interface NotePart {
   name: string;
   brand: string | null;
   quantity: number;
+  /** ไฟล์ยี่ห้อที่อะไหล่อยู่ ([] = ไม่อยู่ในไฟล์ไหน) — ช่องเลือกติดป้ายแดงตัวที่อยู่นอกไฟล์ของเครื่อง */
+  brandFiles?: string[];
 }
 
 interface WorkStatusOption {
@@ -1244,6 +1249,8 @@ function NoteModal({
   const [symptom, setSymptom] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [parts, setParts] = useState<NotePart[]>([]);
+  // ยี่ห้อที่กดในช่องอะไหล่ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) — ส่งไปจำไว้กับเครื่องตอนบันทึก
+  const [pickedBrand, setPickedBrand] = useState<string | null>(null);
   const [visitDate, setVisitDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1254,6 +1261,7 @@ function NoteModal({
     setSymptom(row?.symptom ?? "");
     setStatus(row?.workStatus ?? null);
     setParts(row?.parts ?? []);
+    setPickedBrand(null);
     setVisitDate(row?.scheduledVisitAt ?? "");
     setError(null);
     setLogs([]);
@@ -1266,10 +1274,23 @@ function NoteModal({
 
   if (!row) return null;
 
+  /**
+   * ล็อกยี่ห้อ (ข้อ 23) — "อะไหล่ที่รอ" ถูกยกไปลงใบงานตอน "+ สร้างใบงาน" และเป็นรายการสั่งของ
+   * เคสสัญญาณหายทั้งสาขาไม่มีเครื่อง (รหัสเครื่องว่าง) = ไม่ล็อก (ข้อ 22) · ไม่มีแถวเดิมที่ปล่อยผ่าน (กติกาเดียวกับเซิร์ฟเวอร์)
+   */
+  const brand: PartsBrand = {
+    machine: !!row.machineCode,
+    make: row.machineMake ?? null,
+    file: brandFileOf(row.machineMake),
+    machineCode: row.machineCode || null,
+  };
+  const brandBlock = brandBlockText(brandBlockers(parts, brand, pickedBrand), brand, "บันทึก");
+
   async function save() {
     if (!row) return;
     setSaving(true);
     setError(null);
+    const machineBrand = machineBrandToSend(brand, pickedBrand);
     try {
       const res = await api.patch<{
         symptom: string | null;
@@ -1284,8 +1305,10 @@ function NoteModal({
         workStatus: status,
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         scheduledVisitAt: visitDate.trim() || null,
+        ...(machineBrand ? { machineBrand } : {}),
       });
-      onSaved({ ...row, ...res.data });
+      // ยี่ห้อที่เพิ่งกดถูกจำไว้กับเครื่องแล้ว — แถวบนกระดานรู้ยี่ห้อตั้งแต่ตอนนี้ เปิดเคสนี้อีกครั้งไม่ต้องกดซ้ำ
+      onSaved({ ...row, ...res.data, ...(machineBrand ? { machineMake: machineBrand } : {}) });
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
@@ -1314,9 +1337,9 @@ function NoteModal({
           </TouchableOpacity>
           {row.workOrder ? null : (
           <TouchableOpacity
-            style={[styles.modalSave, saving && styles.modalSaveDisabled]}
+            style={[styles.modalSave, (saving || !!brandBlock) && styles.modalSaveDisabled]}
             onPress={save}
-            disabled={saving}
+            disabled={saving || !!brandBlock}
             activeOpacity={0.7}
           >
             {saving ? (
@@ -1396,7 +1419,19 @@ function NoteModal({
       {/* ช่องอะไหล่โผล่เมื่อเลือก "รออะไหล่" และยังโผล่อยู่ถ้าเคยใส่ไว้แล้ว
           เปลี่ยนสถานะแล้วของที่กรอกไว้จะได้ไม่หายไปเงียบๆ */}
       {status === WAITING_PARTS || parts.length > 0 ? (
-        <PartPicker parts={parts} onChange={setParts} />
+        <>
+          <PartPicker
+            parts={parts}
+            onChange={setParts}
+            brand={brand}
+            chosenBrand={pickedBrand}
+            onBrandChosen={setPickedBrand}
+            verb="บันทึก"
+            saveWhen="ตอนบันทึก"
+            noResultHints={["ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? เปิดใบงานแล้วให้หัวหน้าภาคหรือแอดมินแก้ยี่ห้อเครื่องที่หน้าใบงาน"]}
+          />
+          {brandBlock ? <Text style={styles.modalError}>{brandBlock}</Text> : null}
+        </>
       ) : null}
 
       {status === WAITING_TECH || visitDate ? (

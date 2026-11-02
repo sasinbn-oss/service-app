@@ -32,7 +32,9 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
-import PartPicker, { PickedPart } from "../components/PartPicker";
+import PartPicker, { brandBlockers, brandBlockText, machineBrandToSend, PickedPart, type PartsBrand } from "../components/PartPicker";
+import BrandChips, { rememberMachineModels } from "../components/BrandChips";
+import { brandFileOf } from "../utils/brandFile";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
@@ -213,6 +215,11 @@ interface WorkOrder {
   machineCode: string | null;
   machineBrand: string | null;
   machineModel: string | null;
+  /**
+   * ยี่ห้อเครื่อง → ไฟล์อะไหล่ที่เลือกได้ (เซิร์ฟเวอร์คิดด้วย brandFileOf) — ช่องเลือกอะไหล่ทุกช่องของใบนี้ใช้ค่าเดียวกัน
+   * file ว่างทั้งที่มีเครื่อง = ยังไม่รู้ยี่ห้อ ต้องกดยี่ห้อก่อน · เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ช่องเลือกแบบเดิม (ไม่ล็อก)
+   */
+  partsBrand?: PartsBrand | null;
   /** ขนาดเครื่องพร้อมหน่วย เช่น "13 kg" — เซิร์ฟเวอร์ประกอบหน่วยมาให้แล้ว */
   machineCapacityLabel: string | null;
   machineCapacityKg?: number | null;
@@ -758,6 +765,34 @@ interface Technician {
 }
 
 /**
+ * แถวที่อยู่ในใบแล้ว (รออะไหล่ + ใช้แล้ว) — ทางที่บันทึกของที่ใช้/เบิกไปจริง (ปิดงาน · ใบรออะไหล่ต่อ) ปล่อยผ่าน
+ * แม้อยู่นอกไฟล์ของเครื่อง (ค่าตั้งต้น D6): ของชิ้นนั้นถูกใช้/เบิกไปแล้ว ไม่ให้ผ่าน = ต้องลบประวัติของจริงทิ้ง
+ * ชุดเดียวกับ legacyIds ของ /close · /supervisor-close · /follow-up ฝั่งเซิร์ฟเวอร์
+ */
+function onOrderIds(o: { waitingParts: { sparePartId: number }[]; parts: { sparePartId: number }[] }): Set<number> {
+  return new Set([...o.waitingParts, ...o.parts].map((p) => p.sparePartId));
+}
+
+/**
+ * แถวรอที่เบิกแล้ว (มีของ + เลขใบเบิก) ที่ยังส่งกลับจำนวนเดิม — ฟอร์มระบุอะไหล่ปล่อยผ่านแม้อยู่นอกไฟล์ เพราะของอยู่กับช่างแล้ว
+ * ไม่ให้ผ่าน = บังคับลบบันทึกใบเบิก (กติกาเจ้าของงานเรื่องประเมินอะไหล่ใหม่) · ชุดเดียวกับ legacyIds ของ /parts
+ * ต้องดูจำนวนที่เลือกอยู่ด้วย: จำนวนเปลี่ยน เซิร์ฟเวอร์ล้างเลขใบเบิกแล้วส่งเบิกใหม่ทั้งแถว (คือขอของยี่ห้ออื่นเพิ่ม)
+ * จึงไม่ปล่อยผ่าน — ถ้าที่นี่ยังนับเป็นแถวเดิม ป้ายเทาบอก "อยู่ได้" แต่กดยืนยันแล้วโดน 400 · รวมแถวซ้ำก่อนเทียบแบบ mergeLines
+ */
+function issuedSameQtyIds(
+  o: { waitingParts: { sparePartId: number; quantity: number; inStock: boolean | null; requisitionNo: string | null }[] },
+  picked: { sparePartId: number; quantity: number }[]
+): Set<number> {
+  const sent = new Map<number, number>();
+  for (const p of picked) sent.set(p.sparePartId, (sent.get(p.sparePartId) ?? 0) + p.quantity);
+  return new Set(
+    o.waitingParts
+      .filter((p) => p.inStock === true && !!p.requisitionNo && sent.get(p.sparePartId) === p.quantity)
+      .map((p) => p.sparePartId)
+  );
+}
+
+/**
  * ใบงานที่จ่ายให้ทีมนี้เป็นงานของช่างคนนี้ไหม — ทีมรวมครอบคลุมหลายทีม (เซิร์ฟเวอร์ใช้กฎเดียวกัน
  * utils/teamGroups.ts) ถ้าเทียบชื่อทีมตรง ๆ ช่างในทีมรวมจะเปิดใบงานได้แต่ไม่มีปุ่มให้กด
  */
@@ -844,6 +879,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [supClosing, setSupClosing] = useState(false);
+  // ชีตแก้ยี่ห้อเครื่อง (ข้อ 23) — เปิดจากหน้าใบงาน ไม่ใช่จากในฟอร์มขั้นตอน (Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ)
+  const [brandFixOpen, setBrandFixOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [replying, setReplying] = useState(false);
   const [results, setResults] = useState<Option[]>([]);
@@ -997,6 +1034,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           technicians: Technician[];
           teams: Team[];
           rescheduleStages?: string[];
+          machineModels?: string[];
         }>("/work-orders/options"),
       ]);
       setOrder(detail.data);
@@ -1010,6 +1048,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
       if (options.data.rescheduleStages) setRescheduleStages(options.data.rescheduleStages);
+      // ปุ่มยี่ห้อเครื่องในช่องเลือกอะไหล่/ชีตแก้ยี่ห้อใช้รายการเดียวกับฟอร์มเปิดใบงาน (เซิร์ฟเวอร์เพิ่มยี่ห้อแล้วตามทัน)
+      rememberMachineModels(options.data.machineModels);
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
@@ -1629,6 +1669,22 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         onDone={async () => {
           setCancelling(false);
           await reloadWithNotice();
+        }}
+      />
+    ) : null}
+    {brandFixOpen ? (
+      <MachineBrandModal
+        order={order}
+        onClose={() => setBrandFixOpen(false)}
+        onDone={async (brand, fromReport) => {
+          setBrandFixOpen(false);
+          await load();
+          showAlert(
+            "บันทึกยี่ห้อเครื่องแล้ว",
+            fromReport
+              ? `เครื่อง ${order.machineCode}: ${brand} · ยี่ห้อนี้มาจากรายงานเครื่อง — แก้ในไฟล์รายงานด้วย ไม่งั้นนำเข้าครั้งหน้าทับกลับ`
+              : `เครื่อง ${order.machineCode}: ${brand}`
+          );
         }}
       />
     ) : null}
@@ -2832,6 +2888,28 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                 : "ทั้งสาขา"
             }
           />
+          {/*
+            แก้ยี่ห้อเครื่อง (ข้อ 23) — ที่เดียวที่เปลี่ยนยี่ห้อที่รู้แล้วได้ ฟอร์มอื่นทุกฟอร์มล็อกไว้ (ข้อ 17)
+            หัวหน้าภาค/แอดมินเท่านั้น: ยี่ห้อเปลี่ยนไฟล์อะไหล่ อายุประกัน และการเสนอราคาของทุกใบของเครื่องนี้
+            ช่างเห็นยี่ห้อผิดให้ถ่ายป้ายเครื่องแล้วบอก (ข้อความในช่องเลือกอะไหล่บอกไว้)
+          */}
+          {order.machineCode && order.partsBrand && (user?.role === "SUPERVISOR" || user?.role === "ADMIN") && !user?.viewAs ? (
+            <TouchableOpacity
+              style={styles.brandFixLink}
+              onPress={() => setBrandFixOpen(true)}
+              activeOpacity={0.7}
+              accessibilityLabel={`แก้ยี่ห้อเครื่อง ${order.machineCode}`}
+            >
+              <Ionicons name="create-outline" size={15} color={colors.primary} />
+              <Text style={styles.brandFixText}>
+                แก้ยี่ห้อเครื่อง
+                <Text style={styles.brandFixNow}>
+                  {" "}· ตอนนี้ {order.partsBrand.make ?? "ยังไม่รู้ยี่ห้อ"}
+                  {order.partsBrand.file ? ` (ไฟล์อะไหล่ ${order.partsBrand.file})` : ""}
+                </Text>
+              </Text>
+            </TouchableOpacity>
+          ) : null}
           {order.contactName || order.contactPhone ? (
             <Row
               label="ผู้ติดต่อที่สาขา"
@@ -3296,6 +3374,8 @@ function RollbackModal({
   const [reasonCode, setReasonCode] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [parts, setParts] = useState<PickedPart[]>([]);
+  // ยี่ห้อที่กดในช่องอะไหล่ (เครื่องที่ยังไม่รู้ยี่ห้อ) — ส่งไปจำไว้กับเครื่องพร้อมคำขอ
+  const [pickedBrand, setPickedBrand] = useState<string | null>(null);
   const [files, setFiles] = useState<PickedAttachment[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -3306,9 +3386,12 @@ function RollbackModal({
     setReasonCode(null);
     setReason("");
     setParts([]);
+    setPickedBrand(null);
     setFiles([]);
     setError(null);
   }, [visible]);
+  // ขอเบิกเพิ่ม = ของที่ต้องใช้ใหม่ทุกตัว ไม่มีแถวเดิมที่ปล่อยผ่าน (ข้อ 3 · เซิร์ฟเวอร์ legacy ว่าง)
+  const brandBlock = brandBlockText(brandBlockers(parts, order.partsBrand, pickedBrand), order.partsBrand);
 
   async function addFile(
     pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>
@@ -3339,10 +3422,12 @@ function RollbackModal({
         await uploadAttachment(order.id, file, undefined, undefined, { index: i, total: files.length });
       }
       setBusy("กำลังส่งกลับ");
+      const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
       await api.post(`/work-orders/${order.id}/reassess-parts`, {
         reasonCode,
         reason: reason.trim(),
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        ...(machineBrand ? { machineBrand } : {}),
       });
       onDone();
     } catch (e) {
@@ -3365,9 +3450,9 @@ function RollbackModal({
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.modalSave, (saving || !reason.trim() || !reasonCode) && styles.modalSaveOff]}
+            style={[styles.modalSave, (saving || !reason.trim() || !reasonCode || !!brandBlock) && styles.modalSaveOff]}
             onPress={submit}
-            disabled={saving || !reason.trim() || !reasonCode}
+            disabled={saving || !reason.trim() || !reasonCode || !!brandBlock}
             activeOpacity={0.8}
           >
             {saving ? (
@@ -3474,10 +3559,23 @@ function RollbackModal({
       </FileDropZone>
 
       {/* ช่างเห็นของจริงว่าเสียตรงไหน จึงเลือกเองได้เลย ไม่ต้องรอให้ใครเดาแทน */}
-      <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ขอเบิกเพิ่ม" />
+      <PartPicker
+        parts={parts}
+        onChange={setParts}
+        label="อะไหล่ที่ขอเบิกเพิ่ม"
+        brand={order.partsBrand}
+        chosenBrand={pickedBrand}
+        onBrandChosen={setPickedBrand}
+        saveWhen="ตอนส่งกลับ"
+        noResultHints={[
+          "ตัวที่ต้องใช้ไม่มีในไฟล์นี้: เขียนชื่อไว้ใน “เจออะไรที่หน้างาน” หัวหน้าภาคจะตัดสินใจต่อ",
+          "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วเขียนใน “เจออะไรที่หน้างาน” — หัวหน้าภาคแก้ยี่ห้อเครื่องให้",
+        ]}
+      />
       <Text style={styles.linkedText}>
         ยังบอกไม่ได้ว่าต้องใช้ตัวไหน เว้นว่างได้ — หัวหน้าภาคจะเป็นคนระบุแทน
       </Text>
+      {brandBlock ? <Text style={styles.warn}>{brandBlock}</Text> : null}
 
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
@@ -3490,6 +3588,91 @@ function RollbackModal({
  * บอกก่อนกดว่าอะไรถูกเอาออกจากใบ (วันนัด ทีม ผลเช็คคลัง) — และตั้งแต่ ต.ค. 69 บอกว่าไม่หาย:
  * ค่าเดิมเก็บไว้ในประวัติ ขั้นที่ย้อนไปเติมให้ (เจ้าของงานขอ — เดิมย้อนแล้วต้องกรอกใหม่ทั้งหมด)
  */
+/**
+ * แก้ยี่ห้อเครื่อง (หัวหน้าภาค/แอดมิน · ข้อ 23) — ยี่ห้อในระบบไม่ตรงกับเครื่องจริง ช่างถ่ายป้ายเครื่องมาบอก
+ * ยี่ห้อตัดสินไฟล์อะไหล่ที่เลือกได้ อายุประกัน และการเสนอราคา ของทุกใบของเครื่องนี้ — บอกก่อนกด ไม่ใช่หลังกด
+ * ยี่ห้อที่มาจากไฟล์รายงานเครื่อง: เซิร์ฟเวอร์แก้ให้ทั้งสองช่อง แต่นำเข้ารายงานครั้งหน้าจะทับกลับ — เตือนให้แก้ที่ต้นทางด้วย
+ */
+function MachineBrandModal({
+  order,
+  onClose,
+  onDone,
+}: {
+  order: WorkOrder;
+  onClose: () => void;
+  onDone: (brand: string, fromReport: boolean) => void | Promise<void>;
+}) {
+  const current = order.partsBrand?.make ?? null;
+  const [value, setValue] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const chosen = value?.trim() || null;
+  const same = !!chosen && !!current && chosen.toLowerCase() === current.trim().toLowerCase();
+  const nextFile = brandFileOf(chosen);
+  const ready = !!chosen && !same && !saving;
+
+  async function save() {
+    if (!ready || !chosen) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await api.put<{ fromReport?: boolean }>(`/work-orders/${order.id}/machine-brand`, { brand: chosen });
+      await onDone(chosen, !!res.data.fromReport);
+    } catch (e) {
+      // 409 (มีคนแก้ยี่ห้อระหว่างนี้) ตัวจัดการกลางโหลดใบใหม่และเตือนให้แล้ว — ปิดชีต ไม่บอกซ้ำสองที่
+      if (staleWorkOrderId(e) !== null) onClose();
+      else setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onClose}
+      busy={saving}
+      title={`แก้ยี่ห้อเครื่อง ${order.machineCode ?? ""}`}
+      subtitle="ยี่ห้อนี้ใช้หาไฟล์อะไหล่ คิดอายุประกัน และการเสนอราคา"
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onClose} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, !ready && styles.modalSaveOff]}
+            onPress={save}
+            disabled={!ready}
+            activeOpacity={0.8}
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>บันทึกยี่ห้อเครื่อง</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.linkedText}>
+        ยี่ห้อในระบบตอนนี้: {current ?? "ยังไม่รู้ยี่ห้อ"}
+        {order.partsBrand?.file ? ` (ไฟล์อะไหล่ ${order.partsBrand.file})` : ""}
+      </Text>
+      {order.partsBrand?.fromReport ? (
+        <Text style={styles.warn}>ยี่ห้อนี้มาจากรายงานเครื่อง — แก้ในไฟล์รายงานด้วย ไม่งั้นนำเข้าครั้งหน้าทับกลับ</Text>
+      ) : null}
+      <View style={{ marginTop: spacing.lg }}>
+        <BrandChips value={value} onChange={setValue} machineCode={order.machineCode} label="ยี่ห้อที่ถูกต้อง" disabled={saving} />
+      </View>
+      {same ? <Text style={styles.linkedText}>ยี่ห้อเดิม — ไม่ได้เปลี่ยน</Text> : null}
+      {chosen && !same && nextFile ? (
+        <Text style={styles.linkedText}>
+          บันทึกแล้วช่องเลือกอะไหล่ของเครื่องนี้ใช้ไฟล์ {nextFile}
+          {nextFile === "Other" ? " (ไม่มีไฟล์ยี่ห้อของตัวเอง เลือกได้เฉพาะของใช้ร่วม)" : " และของใช้ร่วม (ไฟล์ Other)"}
+          {" "}· อายุประกันและการเสนอราคาของทุกใบของเครื่องนี้คิดตามยี่ห้อใหม่
+        </Text>
+      ) : null}
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
 /** อะไหล่ไม่ครบ — เปิดใบรออะไหล่ที่ลิงก์กับใบนี้ ใช้ได้ทั้งก่อนและหลังปิดงาน */
 function FollowUpModal({
   visible,
@@ -3502,27 +3685,46 @@ function FollowUpModal({
   onCancel: () => void;
   onDone: (code: string) => void;
 }) {
+  const { user: me } = useAuth();
   const [parts, setParts] = useState<PickedPart[]>([]);
+  const [pickedBrand, setPickedBrand] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * ทางออกตอนค้นไม่เจอ — ช่างไม่มีลิงก์ "แก้ยี่ห้อเครื่อง" (เฉพาะหัวหน้าภาค/แอดมิน) จึงต้องบอกทางของช่างเอง (ข้อ 20 · 23)
+   * ไม่งั้นช่างเห็นแต่ "หัวหน้าภาคแก้ได้ที่หน้าใบงาน" แล้วไม่รู้ว่าตัวเองต้องทำอะไรต่อ
+   */
+  const techHints =
+    me?.role === "SUPERVISOR" || me?.role === "ADMIN"
+      ? undefined
+      : [
+          "ตัวที่ต้องใช้ไม่มีในไฟล์นี้: บอกหัวหน้าภาค — หัวหน้าภาคจะตัดสินใจต่อ",
+          "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วบอกหัวหน้าภาค — หัวหน้าภาคแก้ยี่ห้อเครื่องให้",
+        ];
 
   useEffect(() => {
     if (!visible) return;
     setParts([]);
+    setPickedBrand(null);
     setNote("");
     setError(null);
   }, [visible]);
+  // ของที่อยู่ในใบเดิมแล้ว (รอ + ใช้) ปล่อยผ่าน — กติกาเดียวกับเซิร์ฟเวอร์ (legacy = รอ ∪ ใช้แล้วของใบเดิม)
+  const legacy = useMemo(() => onOrderIds(order), [order]);
+  const brandBlock = brandBlockText(brandBlockers(parts, order.partsBrand, pickedBrand, { legacyIds: legacy }), order.partsBrand);
 
   async function submit() {
     setSaving(true);
     setError(null);
     try {
+      const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
       const res = await api.post<{ createdChild: { code: string } }>(
         `/work-orders/${order.id}/follow-up`,
         {
           parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
           note: note.trim() || undefined,
+          ...(machineBrand ? { machineBrand } : {}),
         }
       );
       onDone(res.data.createdChild.code);
@@ -3545,9 +3747,9 @@ function FollowUpModal({
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.modalSave, (saving || parts.length === 0) && styles.modalSaveOff]}
+            style={[styles.modalSave, (saving || parts.length === 0 || !!brandBlock) && styles.modalSaveOff]}
             onPress={submit}
-            disabled={saving || parts.length === 0}
+            disabled={saving || parts.length === 0 || !!brandBlock}
             activeOpacity={0.8}
           >
             {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>เปิดใบงาน</Text>}
@@ -3559,7 +3761,18 @@ function FollowUpModal({
         ใบใหม่ลิงก์กับ {order.code} สถานะ “แอดมิน · เบิกอะไหล่” — แอดมินเช็คคลังและเบิกเมื่อของเข้า
         ของมาแล้วส่งต่อให้แอดมินเบิก แล้วเดินขั้นตอนเหมือนใบปกติ
       </Text>
-      <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ยังขาด" />
+      <PartPicker
+        parts={parts}
+        onChange={setParts}
+        label="อะไหล่ที่ยังขาด"
+        brand={order.partsBrand}
+        chosenBrand={pickedBrand}
+        onBrandChosen={setPickedBrand}
+        legacyIds={legacy}
+        saveWhen="ตอนเปิดใบงาน"
+        noResultHints={techHints}
+      />
+      {brandBlock ? <Text style={styles.warn}>{brandBlock}</Text> : null}
       <Text style={styles.modalLabel}>บันทึกเพิ่มเติม</Text>
       <TextInput
         style={styles.modalInput}
@@ -4005,6 +4218,8 @@ function StageModal({
 }) {
   const [needsParts, setNeedsParts] = useState<boolean | null>(null);
   const [parts, setParts] = useState<PickedPart[]>([]);
+  // ยี่ห้อที่หัวหน้าภาคกดในช่องอะไหล่ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) — ส่งไปจำไว้กับเครื่องพร้อมรายการอะไหล่
+  const [pickedBrand, setPickedBrand] = useState<string | null>(null);
   // ของนอกสโตร์แยกช่อง — ส่งกลับด้วยชื่อ เซิร์ฟเวอร์จับคู่กับแถวเดิม ผลเช็คจึงไม่หาย
   const [offParts, setOffParts] = useState<OffPart[]>([]);
   // ค่าบริการ (ค่าแรง ค่าเดินทาง) — มีรายการ = ส่งแอดมินทำใบเสนอราคา ใช้หรือไม่ใช้อะไหล่ก็ได้
@@ -4154,6 +4369,7 @@ function StageModal({
     setVisitTime(order.scheduledTime ?? (oldVisit && visitDay === oldVisit ? pf?.scheduledTime ?? "" : ""));
     const split = splitParts(order.waitingParts);
     setParts(split.store);
+    setPickedBrand(null);
     setOffParts(split.off);
     setServices(order.services.map((v) => ({ name: v.name, quantity: v.quantity, unit: v.unit ?? "", note: v.note ?? "" })));
     const oldCheck = new Map((pf?.parts ?? []).map((p) => [p.sparePartId, p]));
@@ -4292,7 +4508,9 @@ function StageModal({
         onDone("confirmed");
         return;
       } else if (order.status === "NEW") {
+        const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
         await api.post(`/work-orders/${order.id}/parts`, {
+          ...(machineBrand ? { machineBrand } : {}),
           services: offPartsPayload(services),
           needsParts,
           parts: needsParts
@@ -4658,6 +4876,16 @@ function StageModal({
     </>
   ) : null;
 
+  /**
+   * ล็อกยี่ห้อในฟอร์มระบุอะไหล่ (ข้อ 23) — แถวนอกไฟล์ของเครื่องต้องเอาออกก่อนส่ง ยกเว้นแถวที่เบิกไปแล้วและยังจำนวนเดิม (ของอยู่กับช่าง · D6)
+   * กันปุ่มด้วยกติกาเดียวกับป้ายแดงในช่อง และเซิร์ฟเวอร์ (/parts) ตรวจซ้ำ
+   */
+  const partsLegacy = useMemo(() => issuedSameQtyIds(order, parts), [order, parts]);
+  const partsBrandBlock =
+    order.status === "NEW" && !inspectFirst && needsParts === true
+      ? brandBlockText(brandBlockers(parts, order.partsBrand, pickedBrand, { legacyIds: partsLegacy }), order.partsBrand)
+      : null;
+
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
   const inspectMissing = order.status === "INSPECTING" ? missingInspection(files, order.inspectionStartedAt) : [];
 
@@ -4676,6 +4904,7 @@ function StageModal({
           (noPartsAssign && (!team || !validDate || !timeOk)) ||
           (needsParts && parts.length === 0 && offPartsPayload(offParts).length === 0) ||
           (needsParts && offPartsIncomplete(offParts)) ||
+          !!partsBrandBlock ||
           offPartsIncomplete(services))) ||
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0)) ||
     ((order.status === "ASSIGNED" || order.status === "INSPECT_DISPATCH") && !team) ||
@@ -4899,7 +5128,20 @@ function StageModal({
                   </>
                 ) : needsParts === true ? (
                   <>
-                    <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ต้องใช้" />
+                    <PartPicker
+                      parts={parts}
+                      onChange={setParts}
+                      label="อะไหล่ที่ต้องใช้"
+                      brand={order.partsBrand}
+                      chosenBrand={pickedBrand}
+                      onBrandChosen={setPickedBrand}
+                      legacyIds={partsLegacy}
+                      noResultHints={[
+                        "ตัวที่ต้องใช้ไม่มีในไฟล์นี้: ใส่ในกล่องอะไหล่นอกสโตร์ด้านล่าง หรือให้แอดมินเพิ่มรหัสเข้าไฟล์",
+                        "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? กด “แก้ยี่ห้อเครื่อง” ที่การ์ดสาขาบนหน้าใบงาน",
+                      ]}
+                    />
+                    {partsBrandBlock ? <Text style={styles.warn}>{partsBrandBlock}</Text> : null}
                     <OffPartEditor rows={offParts} onChange={setOffParts} />
                   </>
                 ) : noPartsAssign ? (
@@ -6927,6 +7169,14 @@ function CloseModal({
   // อะไหล่ที่ยังขาด — เปิดใบงานรออะไหล่ต่อจากใบนี้หลังปิดงาน
   const [followUp, setFollowUp] = useState(false);
   const [missing, setMissing] = useState<PickedPart[]>([]);
+  /**
+   * ยี่ห้อที่ช่างกดในช่องอะไหล่ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) — ช่องอะไหล่ที่ใช้ไปกับอะไหล่ที่ยังขาดใช้ค่าเดียวกัน (เครื่องเดียวกัน)
+   * อยู่ในร่างฟอร์มด้วย (§14): แอปหลุดแล้วเปิดใหม่ไม่ต้องกดยี่ห้อซ้ำ · ส่งไปจำไว้กับเครื่องตอนปิดงาน
+   * ประกัน/ป้ายรุ่น/รายการ Error ในฟอร์มนี้ยังคิดจากยี่ห้อเดิมในใบ ยี่ห้อที่กดนับตั้งแต่ใบถัดไป (I1)
+   */
+  const [pickedBrand, setPickedBrand] = useState<string | null>(null);
+  /** แถวที่อยู่ในใบแล้ว (รอ + ใช้) ปล่อยผ่านแม้อยู่นอกไฟล์ — ของที่ใช้/เบิกไปจริง (D6 · legacy ของ /close และ /follow-up) */
+  const onOrder = useMemo(() => onOrderIds(order), [order]);
   const [busy, setBusy] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   /**
@@ -7002,6 +7252,8 @@ function CloseModal({
       if (d) {
         if (d.note) setNote(d.note);
         if (d.otherWorkers) setOtherWorkers(d.otherWorkers);
+        // ยี่ห้อที่กดไว้ — ใช้เฉพาะตอนเครื่องยังไม่รู้ยี่ห้อ (ระหว่างนั้นมีคนบันทึกยี่ห้อแล้ว ช่องอะไหล่ใช้ยี่ห้อในระบบเอง)
+        if (typeof d.machineBrand === "string" && d.machineBrand.trim()) setPickedBrand(d.machineBrand);
         if (d.claims) {
           setDrafts((all) => {
             const next = { ...all };
@@ -7366,6 +7618,9 @@ function CloseModal({
       ...(plateShot ? [w("รูปป้ายรุ่น", "NAMEPLATE")] : []),
       ...(summaryMissing ? [w("สรุปงานที่ทำ", "summary")] : []),
       ...(workers ? [w(isSub ? "ทีม SUB ที่เข้าทำ" : "ผู้เข้าปฏิบัติงาน", "workers")] : []),
+      // ล็อกยี่ห้อ (ข้อ 23 · §14): ปุ่มล่างไม่จาง แถวป้ายแดงจึงเป็นของที่ยังขาด ปุ่ม "พาไป" เลื่อนไปที่ช่องอะไหล่
+      // นับเฉพาะตอนอยู่ในหน้านี้ — อะไหล่ที่เพิ่มเองไม่อยู่ในร่าง เปิดใหม่ก็หายไปพร้อมป้าย
+      ...(!kept ? brandItems(parts, "parts", "") : []),
       ...(offPartsIncomplete(offParts) ? [w("ชื่ออะไหล่นอกสโตร์", "offParts")] : []),
       ...(slipShot ? [w("รูปใบเหลือง", "slip")] : []),
       ...machineGaps.map((g): MItem => ({ text: `ข้อมูลเครื่อง: ${g.text}`, key: g.key, step: 1 })),
@@ -7380,6 +7635,17 @@ function CloseModal({
       ...machineEvidenceGap(kept),
       // ใบรออะไหล่อยู่ท้ายฟอร์ม (หน้ายาว) — อยู่ท้ายรายการ ปุ่มพาไปจึงไล่จากบนลงล่างตามที่ช่างเห็น
       ...(!kept && followUpMissing ? [w("อะไหล่ที่ยังขาด", "followUp")] : []),
+      ...(!kept && followUp ? brandItems(missing, "followUp", "อะไหล่ที่ยังขาด: ") : []),
+    ];
+  }
+  /** แถวที่ต้องเอาออก / ยี่ห้อที่ยังไม่ได้กด ของช่องอะไหล่หนึ่งช่อง → รายการ "ยังขาด" (ขั้นงานที่ทำ) */
+  function brandItems(list: PickedPart[], key: string, prefix: string): MItem[] {
+    const b = brandBlockers(list, order.partsBrand, pickedBrand, { legacyIds: onOrder });
+    return [
+      ...b.remove.map((p): MItem => ({ text: `${prefix}เอา ${p.partCode} ออกก่อนส่ง`, key, step: 0 })),
+      ...(b.needsBrand
+        ? [{ text: `${prefix}เลือกยี่ห้อเครื่อง${order.partsBrand?.machineCode ? ` ${order.partsBrand.machineCode}` : ""}`, key, step: 0 } as MItem]
+        : []),
     ];
   }
   const missingList = buildMissing(false);
@@ -7391,6 +7657,7 @@ function CloseModal({
   const draftBody: CloseDraft = {
     note,
     otherWorkers,
+    ...(pickedBrand ? { machineBrand: pickedBrand } : {}),
     claims: Object.fromEntries(
       parts.filter((p) => !lockedRows.has(p.sparePartId)).map((p) => {
         const { on, brokenPartCode, symptom, checkNote, troubleshooting, keep, errorChecked, skip } = draftFor(p.sparePartId);
@@ -7759,8 +8026,12 @@ function CloseModal({
     if (followUp && missing.length > 0) {
       try {
         setBusy("กำลังเปิดใบงานรออะไหล่");
+        // ยี่ห้อที่กดไว้ถูกบันทึกกับเครื่องไปแล้วตอนปิดงาน — ส่งซ้ำได้ (ยี่ห้อเดียวกันเซิร์ฟเวอร์ไม่ถือว่าเปลี่ยน)
+        // เผื่อปิดงานด้วยแอปที่ไม่ได้ส่ง แล้วใบรออะไหล่โดนถามยี่ห้อ
+        const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
         await api.post(`/work-orders/${order.id}/follow-up`, {
           parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+          ...(machineBrand ? { machineBrand } : {}),
         });
       } catch (e) {
         showAlert(
@@ -7771,6 +8042,7 @@ function CloseModal({
     }
     setFollowUp(false);
     setMissing([]);
+    setPickedBrand(null);
     onDone();
   }
 
@@ -7913,9 +8185,11 @@ function CloseModal({
         sentRef.current.add(item.file);
       }
       setBusy("กำลังปิดงาน");
+      const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
       await api.post(`/work-orders/${order.id}/close`, {
         result,
         note: note.trim() || undefined,
+        ...(machineBrand ? { machineBrand } : {}),
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         offParts: offPartsPayload(offParts),
         workerIds: isSub && !withStaff ? [] : workerIds,
@@ -8408,12 +8682,24 @@ function CloseModal({
           แต่อยู่ก่อนใบรออะไหล่ — เคลมขึ้นทีละชิ้นตามรายการอะไหล่ที่ใช้ จึงต้องอยู่ติดรายการนั้น
           เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
         */}
-        <PartPicker
-          parts={parts}
-          onChange={setParts}
-          label="อะไหล่ที่ใช้ไป"
-          locked={Object.fromEntries(parts.filter((p) => lockedRows.has(p.sparePartId)).map((p) => [p.sparePartId, lockedMsg(p)]))}
-        />
+        <View {...spot("parts")}>
+          <PartPicker
+            parts={parts}
+            onChange={setParts}
+            label="อะไหล่ที่ใช้ไป"
+            locked={Object.fromEntries(parts.filter((p) => lockedRows.has(p.sparePartId)).map((p) => [p.sparePartId, lockedMsg(p)]))}
+            brand={order.partsBrand}
+            chosenBrand={pickedBrand}
+            onBrandChosen={setPickedBrand}
+            legacyIds={onOrder}
+            saveWhen="ตอนปิดงาน"
+            noResultHints={[
+              "ตัวที่ใช้จริงไม่มีในไฟล์นี้: ใส่ที่ “อะไหล่นอกสโตร์ที่ใช้” ด้านล่าง",
+              "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วบอกหัวหน้าภาค — หัวหน้าภาคแก้ยี่ห้อเครื่องให้",
+            ]}
+          />
+          {flashOn("parts")}
+        </View>
         <View {...spot("offParts")}>
           <OffPartEditor
             rows={offParts}
@@ -8533,7 +8819,21 @@ function CloseModal({
           </TouchableOpacity>
           {followUp ? (
             <>
-              <PartPicker parts={missing} onChange={setMissing} label="อะไหล่ที่ยังขาด" />
+              <PartPicker
+                parts={missing}
+                onChange={setMissing}
+                label="อะไหล่ที่ยังขาด"
+                brand={order.partsBrand}
+                chosenBrand={pickedBrand}
+                onBrandChosen={setPickedBrand}
+                legacyIds={onOrder}
+                saveWhen="ตอนปิดงาน"
+                // ฟอร์มนี้ช่างเป็นคนกรอก — ทางออกแบบช่าง ให้ตรงกับช่อง "อะไหล่ที่ใช้ไป" ข้างบน (ค่าตั้งต้นของช่องพูดกับหัวหน้าภาค)
+                noResultHints={[
+                  "ตัวที่ต้องใช้ไม่มีในไฟล์นี้: เขียนชื่อไว้ใน “สรุปงานที่ทำ” แล้วบอกหัวหน้าภาค — หัวหน้าภาคจะตัดสินใจต่อ",
+                  "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วบอกหัวหน้าภาค — หัวหน้าภาคแก้ยี่ห้อเครื่องให้",
+                ]}
+              />
               <Text style={styles.linkedText}>
                 ใบใหม่ไปอยู่ที่แอดมิน สถานะ “แอดมิน · เบิกอะไหล่” และลิงก์กับใบนี้
               </Text>
@@ -9755,6 +10055,9 @@ const styles = StyleSheet.create({
   linked: { borderLeftWidth: 3, borderLeftColor: colors.primary },
   linkedTitle: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.text },
   linkedText: { fontSize: 12, lineHeight: 20, color: colors.textMuted, marginTop: spacing.xs },
+  brandFixLink: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", paddingVertical: 6 },
+  brandFixText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primary },
+  brandFixNow: { fontWeight: "400", color: colors.textMuted },
   // ตอนช่างเข้างานแอดมินมีสามปุ่ม (เลื่อนวันนัด · แจ้งปัญหา · ปิดงาน) — จอมือถือไม่พอแถวเดียว ขึ้นบรรทัดใหม่แทนการบีบ
   actions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
   waitingRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", gap: spacing.sm },
