@@ -29,6 +29,7 @@ import { loadCloseDraft, missingItems, type CloseDraft } from "../utils/closeDra
 import ClaimTrail, { dayTime, type TrailEvent } from "../components/claims/ClaimTrail";
 import PreRepairBox from "../components/claims/PreRepairBox";
 import { PHONE_TEXT, SITE_TEXT, cardReasonLines, wholeLabels } from "../utils/claimFlags";
+import { takeFlash, type JobsFlash } from "../utils/flash";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
@@ -70,6 +71,22 @@ interface Job {
    * state: REVIEW รอ Admin Spare Part · REJECTED ถูกตีกลับรอช่างแก้ · APPROVED/DECLINED จบแล้ว
    */
   claim?: ClaimInfo | null;
+  /** ยี่ห้อเครื่องที่ใช้จริง (รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) — การ์ดแดง "เครื่อง {code} · {ยี่ห้อ}" */
+  machineMake?: string | null;
+  /**
+   * หัวหน้าภาค/แอดมินตีกลับรายการอะไหล่ที่ทีมเลือกตอนตรวจหน้างาน (รอบที่ยังเปิด) — การ์ดแดงบนสุดของหน้า
+   * flags = ตัวที่ชี้ว่าไม่ตรง · null/ไม่มี = ไม่ได้ถูกตีกลับ หรือเซิร์ฟเวอร์รุ่นก่อน
+   */
+  partsReturned?: PartsReturned | null;
+}
+
+interface PartsReturned {
+  at: string | null;
+  byName: string | null;
+  /** "หัวหน้าภาค" หรือ "แอดมิน" — ช่างต้องรู้ว่าถามใคร */
+  roleLabel: string;
+  reason: string | null;
+  flags: { partCode: string; name: string }[];
 }
 
 interface ClaimInfo {
@@ -169,6 +186,11 @@ function TechJobs({ navigation }: Props) {
    * ช่างที่ออกจากฟอร์มกลางทาง (โทรศัพท์เข้า แอปหลุด) กลับมาแล้วรู้ว่าของที่กรอกยังอยู่ ไม่ต้องเริ่มใหม่
    */
   const [drafts, setDrafts] = useState<Record<number, CloseDraft | null>>({});
+  /**
+   * กล่อง "ส่งผลตรวจแล้ว" (ข้อ 13) — หน้าใบงานตั้งไว้ตอนช่างส่งผลตรวจแล้วพากลับมา (utils/flash)
+   * ใบหายจากรายการทันทีที่ส่ง กล่องนี้บอกว่าใบไปรอที่ไหน และมีปุ่มเปิดดูใบ · หายเมื่อกด รีเฟรช หรือทำอย่างอื่นต่อ
+   */
+  const [sent, setSent] = useState<JobsFlash | null>(null);
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -187,15 +209,20 @@ function TechJobs({ navigation }: Props) {
       if (n === seq.current) setError(apiErrorMessage(e));
     }
   }, []);
-  // กลับมาจากหน้าใบงาน (เพิ่งปิดงาน) ต้องเห็นสถานะใหม่ทันที
+  // กลับมาจากหน้าใบงาน (เพิ่งปิดงาน) ต้องเห็นสถานะใหม่ทันที · หยิบกล่อง "ส่งผลตรวจแล้ว" ถ้าเพิ่งส่งมา (ไม่มี = กล่องเก่าหาย)
   useFocusEffect(
     useCallback(() => {
+      setSent(takeFlash("MyJobs"));
       load();
     }, [load])
   );
-  useRefreshHandler(async () => {
+  // รีเฟรชเอง (ปุ่ม/ดึงลงบนเว็บ · ดึงลงบนมือถือ) = กล่อง "ส่งผลตรวจแล้ว" หาย (5.7) — สองทางใช้ตัวเดียวกัน
+  // เดิม RefreshControl เรียก load ตรง ๆ ช่างที่ดึงลงบนมือถือจึงยังเห็นกล่องของใบที่ส่งไปแล้ว
+  const refresh = async () => {
+    setSent(null);
     await load();
-  });
+  };
+  useRefreshHandler(refresh);
 
   const groups = useMemo(() => {
     const out: Record<Tab, Job[]> = { today: [], tomorrow: [], late: [] };
@@ -213,6 +240,7 @@ function TechJobs({ navigation }: Props) {
   }, [jobs, today]);
 
   async function arrive(job: Job) {
+    setSent(null);
     setBusyId(job.id);
     try {
       const pos = await currentPosition();
@@ -234,7 +262,12 @@ function TechJobs({ navigation }: Props) {
   const open = (job: Job, what?: "close" | "stage" | "problem") =>
     navigation.navigate("WorkOrderDetail", { id: job.id, ...(what ? { open: what } : {}) });
 
-  const list = groups[tab];
+  /**
+   * ถูกตีกลับรายการอะไหล่ — การ์ดแดงอยู่เหนือแท็บ ไม่ปนในรายการงานตามวัน (ใบไม่มีวันนัดแล้ว และเป็นเรื่องที่ต้องแก้ก่อน)
+   * ยังนับในตัวเลข "วันนี้" (groups เดิม) — งานที่ค้างมือทีมวันนี้จริง
+   */
+  const returnedJobs = (jobs ?? []).filter((j) => !!j.partsReturned && !j.done);
+  const list = groups[tab].filter((j) => !(j.partsReturned && !j.done));
   const TABS: { value: Tab; label: string }[] = [
     { value: "today", label: "วันนี้" },
     { value: "tomorrow", label: "พรุ่งนี้" },
@@ -245,7 +278,7 @@ function TechJobs({ navigation }: Props) {
     <ScrollView
       style={styles.page}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
     >
       <View style={styles.head}>
         {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ (เจ้าของงานขอ ต.ค. 69) */}
@@ -256,6 +289,18 @@ function TechJobs({ navigation }: Props) {
           </View>
         ) : null}
       </View>
+
+      {returnedJobs.map((j) => (
+        <PartsReturnedCard
+          key={`back-${j.id}`}
+          job={j}
+          showTeam={manyTeams}
+          onFix={() => {
+            setSent(null);
+            open(j, "stage");
+          }}
+        />
+      ))}
 
       <View style={styles.seg}>
         {TABS.map((t) => {
@@ -277,6 +322,26 @@ function TechJobs({ navigation }: Props) {
         })}
       </View>
 
+      {sent ? (
+        <View style={styles.sentBox} role="status" accessibilityLiveRegion="polite" accessibilityLabel="กล่องส่งผลตรวจแล้ว">
+          <Text style={styles.sentText}>
+            ส่งผลตรวจแล้ว — {sent.code} ออกจากงานวันนี้ ไปรอ{" "}
+            {sent.pick ? "หัวหน้าภาค · คอนเฟิร์มอะไหล่ · ถ้าไม่ตรง จะกลับมาเป็นการ์ดแดงที่นี่" : "หัวหน้าภาค · ระบุอะไหล่"}
+          </Text>
+          <TouchableOpacity
+            style={styles.sentBtn}
+            onPress={() => {
+              const id = sent.id;
+              setSent(null);
+              navigation.navigate("WorkOrderDetail", { id });
+            }}
+            accessibilityLabel={`ดูใบงาน ${sent.code}`}
+          >
+            <Text style={styles.sentBtnText}>ดูใบงาน {sent.code}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
@@ -286,7 +351,7 @@ function TechJobs({ navigation }: Props) {
         </View>
       ) : !jobs ? (
         <Spinner page color={colors.primary} />
-      ) : list.length === 0 ? (
+      ) : list.length === 0 && tab === "today" && returnedJobs.length ? null : list.length === 0 ? (
         <EmptyState
           icon="sunny-outline"
           title={tab === "today" ? "วันนี้ยังไม่มีงานที่ปล่อยให้ทีม" : tab === "tomorrow" ? "พรุ่งนี้ยังไม่มีงานที่ปล่อยแล้ว" : "ไม่มีงานค้าง"}
@@ -409,6 +474,7 @@ export function SentBackCard({
   chip,
   at,
   title,
+  meta,
   reason,
   children,
   action,
@@ -420,6 +486,8 @@ export function SentBackCard({
   /** มุมขวาบน เช่น เวลาที่ถูกตีกลับ */
   at?: string | null;
   title: string;
+  /** บรรทัดเทาใต้ชื่อ (ก่อนเหตุผล) เช่น "{WO} · ตรวจหน้างาน · เครื่อง …" */
+  meta?: string;
   /** บรรทัดเหตุผล (แดงเข้ม) */
   reason: string;
   /** บรรทัดเพิ่ม + ปุ่มเล็ก (อยู่ระหว่างเหตุผลกับปุ่มใหญ่) */
@@ -438,6 +506,7 @@ export function SentBackCard({
         {at ? <Text style={styles.cornerTime}>{at}</Text> : null}
       </View>
       <Text style={styles.branch}>{title}</Text>
+      {meta ? <Text style={styles.meta}>{meta}</Text> : null}
       <Text style={styles.sentBackReason}>{reason}</Text>
       {children}
       <TouchableOpacity style={[styles.big, styles.bigSentBack]} onPress={action.onPress} accessibilityLabel={action.label}>
@@ -446,6 +515,41 @@ export function SentBackCard({
       </TouchableOpacity>
       {footer}
     </View>
+  );
+}
+
+/**
+ * การ์ดแดง "อะไหล่ถูกตีกลับ" (ตัวอย่างที่เจ้าของงานอนุมัติ ต.ค. 69) — ใช้การ์ดแดงตัวเดียวกับเคลมถูกตีกลับ (integration G3)
+ * ช่างจำได้จากหน้าตาว่า "การ์ดแดง = มีของต้องแก้" · บอกตรงการ์ดว่าใครตีกลับ เพราะอะไร ตัวไหน และไม่ต้องกลับไปร้าน
+ * (ไฟล์สามอย่างของรอบนี้ยังใช้ได้ — ข้อ 9) ปุ่มเดียวพาไปฟอร์มแก้รายการ
+ */
+function PartsReturnedCard({ job, showTeam, onFix }: { job: Job; showTeam: boolean; onFix: () => void }) {
+  const back = job.partsReturned!;
+  const flags = back.flags ?? [];
+  return (
+    <SentBackCard
+      label={`งาน ${job.code}`}
+      chip="อะไหล่ถูกตีกลับ"
+      at={dayTime(back.at)}
+      title={`${job.branchCode} ${job.branchName}`}
+      meta={[
+        `${job.code}${showTeam && job.team ? ` · ทีม${job.team}` : ""}`,
+        "ตรวจหน้างาน",
+        job.machineCode ? `เครื่อง ${machineTag(job.machineCode, job.machineCapacityKg)}` : null,
+        job.machineMake ?? null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      reason={`${back.roleLabel} ${back.byName ?? "—"}: “${back.reason ?? "—"}”`}
+      action={{ label: "แก้รายการอะไหล่", onPress: onFix }}
+    >
+      <Text style={styles.sentBackCount}>
+        {flags.length
+          ? `ต้องแก้ ${flags.length} รายการ: ${flags.map((f) => `${f.partCode} ${f.name}`).join(", ")}`
+          : "หัวหน้าภาคไม่ได้ชี้รายการ — อ่านเหตุผลแล้วแก้"}
+        {" · ไม่ต้องเข้าหน้างานใหม่ ไฟล์ 3 อย่างเดิมยังใช้ได้"}
+      </Text>
+    </SentBackCard>
   );
 }
 
@@ -771,6 +875,27 @@ const styles = StyleSheet.create({
   visitText: { fontSize: 14, lineHeight: 20, fontWeight: "700" },
   bigSentBack: { backgroundColor: colors.dangerFill },
   cornerTime: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  // กล่อง "ส่งผลตรวจแล้ว" — ฟ้า (แจ้งให้รู้ ไม่ใช่เตือน) ตามตัวอย่าง th.sentNote
+  sentBox: {
+    gap: spacing.sm,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primaryLine,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  sentText: { fontSize: 14, lineHeight: 21, fontWeight: "600", color: colors.primaryInk },
+  sentBtn: {
+    alignSelf: "flex-start",
+    minHeight: 48,
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.card,
+  },
+  sentBtnText: { fontSize: 15, fontWeight: "700", color: colors.primaryInk },
   draftLine: {
     fontSize: 13,
     lineHeight: 19,

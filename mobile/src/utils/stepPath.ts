@@ -84,6 +84,11 @@ export interface PathOrder {
   flow?: Partial<FlowInfo> | null;
   /** ยังมีของต้องเบิก — ค่าเดียวกับที่ /assign และ /confirm-appointment ใช้ตัดสิน · เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา (ดู issueLeftOf) */
   issueLeft?: boolean | null;
+  /**
+   * รอบเลือกอะไหล่ของช่างที่ยังเปิด (PENDING รอหัวหน้าภาคคอนเฟิร์ม · RETURNED ถูกตีกลับให้ช่างแก้) — ไม่มี = ไม่มีรอบที่เปิด
+   * สถานะของใบไม่ได้เพิ่ม (ข้อ 2: ใช้ขั้นระบุอะไหล่/ตรวจหน้างานเดิม) แถบจึงต้องอ่านจากตรงนี้ว่าขั้นนั้นกำลังรออะไรจริง
+   */
+  partsPick?: { status: string } | null;
 }
 export interface PathStage {
   value: string;
@@ -101,6 +106,8 @@ export interface StepSub {
   a11y: string;
   actorLabel: string | null;
   state: SubState;
+  /** ป้ายเล็กใต้ชื่อ — ขั้นตรวจหน้างานของใบที่หัวหน้าภาคตีกลับรายการอะไหล่ */
+  note?: string;
 }
 export interface StepRow {
   key: StepKey;
@@ -148,8 +155,11 @@ const KEYS: StepKey[] = [
 /** ประวัติที่บอกว่าเคยผ่านขั้นเช็คอะไหล่ / ขั้นเบิก — ใช้ตัดสินว่าใบนี้เดินทางที่ใช้อะไหล่ */
 const SOURCING_LOGS = ["PARTS_SOURCED", "PARTS_BACKORDERED"];
 export const ISSUE_LOGS = ["PARTS_CHECKED", "PICKUP_REQUESTED", "TRANSFER_REQUESTED", "TRANSFER_ARRIVED", "PICKED_UP"];
-/** หัวหน้าภาคระบุอะไหล่ใหม่ — เริ่มรอบใหม่ทั้งหมด (specRound ฝั่งเซิร์ฟเวอร์) */
-const SPEC_LOGS = ["PARTS_REQUESTED", "NO_PARTS"];
+/**
+ * หัวหน้าภาคระบุอะไหล่ใหม่ — เริ่มรอบใหม่ทั้งหมด (specRound ฝั่งเซิร์ฟเวอร์ · ต้องเท่ากับ SPEC_ACTIONS ใน constants.ts)
+ * คอนเฟิร์มรายการที่ช่างเลือก = การระบุอะไหล่รอบหนึ่ง (ใบไปเช็คอะไหล่ต่อเหมือนกัน) ไม่นับ = แถบเห็นรอบเช็ค/เบิกเก่าค้าง
+ */
+const SPEC_LOGS = ["PARTS_REQUESTED", "NO_PARTS", "PARTS_PICK_CONFIRMED"];
 /** เริ่มรอบอะไหล่ใหม่ — ตรงกับ PARTS_ROUND_ACTIONS ฝั่งเซิร์ฟเวอร์ */
 const PARTS_ROUND_LOGS = [...SPEC_LOGS, "PARTS_SOURCED", "PARTS_BACKORDERED", "PARTS_SHORT"];
 /**
@@ -194,6 +204,11 @@ const FALLBACK: Record<StepKey, [string, string]> = {
 /** ใหม่ก่อนเก่า — ประวัติย้อนหลัง (ปิดงานย้อนหลัง) เลขแถวใหม่แต่วันเก่า จึงเรียงด้วยวันก่อน */
 const newest = (a: PathLog, b: PathLog) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id;
 const after = (l: PathLog, mark: PathLog) => newest(l, mark) < 0;
+/** การระบุอะไหล่ครั้งล่าสุด (ระบุเอง · ไม่ใช้อะไหล่ · คอนเฟิร์มรายการของช่าง) — ไม่เคยมี = undefined */
+function lastSpec(logs: PathLog[]): PathLog | undefined {
+  return [...logs].sort(newest).find((l) => SPEC_LOGS.includes(l.action));
+}
+
 /** ประวัติหลังรายการล่าสุดที่อยู่ใน actions (ไม่รวมตัวมันเอง) ใหม่ก่อนเก่า — ไม่เคยมี = ทั้งหมด */
 function since(logs: PathLog[], actions: string[]): PathLog[] {
   const sorted = [...logs].sort(newest);
@@ -404,8 +419,21 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     const action = SHORT[k]?.[0] ?? server?.action ?? server?.label ?? FALLBACK[k][0];
     const done = SHORT[k]?.[1] ?? server?.doneLabel ?? FALLBACK[k][1];
     let label = state === "done" ? done : action;
+    let rowAction = action;
+    let note: string | undefined = state === "loop" ? "รอผลตรวจหน้างาน" : undefined;
     // ตอบว่าไม่ใช้อะไหล่ — ขั้น 1 บอกคำตอบเลย ไม่ใช่ "ระบุอะไหล่แล้ว" ทั้งที่ไม่มีอะไหล่ (ตามแบบที่เลือก)
     if (k === "NEW" && state === "done" && o.needsParts === false) label = "ระบุ: ไม่ใช้อะไหล่";
+    /**
+     * ช่างเลือกอะไหล่ตอนตรวจหน้างาน (ค่าตั้งต้น D16) — ขั้น 1 ใช้สถานะเดิม (NEW) แต่สิ่งที่หัวหน้าภาคทำคือคอนเฟิร์มรายการของช่าง
+     * ไม่ใช่ระบุเอง · ผ่านแล้วด้วยการคอนเฟิร์มบอกว่า "คอนเฟิร์มอะไหล่แล้ว" ให้รู้ว่ารายการมาจากช่าง (รอบที่หัวหน้าภาคระบุเองทีหลังไม่นับ)
+     */
+    if (k === "NEW" && state === "now" && o.status === "NEW" && o.partsPick?.status === "PENDING") {
+      label = rowAction = "คอนเฟิร์มอะไหล่";
+      note = "รอคอนเฟิร์มอะไหล่ที่ช่างเลือก";
+    }
+    if (k === "NEW" && state === "done" && lastSpec(o.logs)?.action === "PARTS_PICK_CONFIRMED") {
+      label = "คอนเฟิร์มอะไหล่แล้ว";
+    }
     let actorLabel = server?.actorLabel ?? null;
     const sub = k === "ISSUE" && flow.transfer ? transferSubs(o, state, st) : undefined;
     if (k === "ISSUE") {
@@ -426,10 +454,10 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     return {
       key: k,
       label,
-      action,
-      a11y: state === "skipped" ? `${action} · ${STATE_WORD.skipped}` : `ขั้น ${number} ${action} · ${STATE_WORD[state]}`,
+      action: rowAction,
+      a11y: state === "skipped" ? `${rowAction} · ${STATE_WORD.skipped}` : `ขั้น ${number} ${rowAction} · ${STATE_WORD[state]}`,
       actorLabel,
-      note: state === "loop" ? "รอผลตรวจหน้างาน" : undefined,
+      note,
       state,
       number,
       why,
@@ -439,6 +467,12 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
   });
 
   const track = flow.inspect ? { items: inspectItems(o, st), rounds: Math.max(1, flow.inspectRounds) } : null;
+  // หัวหน้าภาคตีกลับรายการอะไหล่ (ค่าตั้งต้น D16) — ใบกลับมาที่ขั้นตรวจหน้างานโดยไม่ได้ส่งตรวจใหม่ ไฟล์รอบนี้ยังใช้ได้
+  // บอกที่ขั้นนั้นว่ากลับมาเพราะอะไร ไม่งั้นแถบเหมือนช่างยังไม่ได้ตรวจเลย
+  if (track && o.status === "INSPECTING" && o.partsPick?.status === "RETURNED") {
+    const at = track.items.find((t) => t.key === "INSPECTING");
+    if (at) at.note = "ถูกตีกลับ — แก้รายการอะไหล่";
+  }
   const live = rows.filter((r) => r.state !== "skipped");
   const at = rows.find((r) => r.state === "now" || r.state === "loop");
   const trackAt = track && inspecting ? track.items.findIndex((t) => t.state === "now") : -1;

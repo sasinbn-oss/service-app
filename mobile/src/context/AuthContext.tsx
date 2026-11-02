@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { clearPageCache } from "../utils/pageCache";
+import { clearFlash } from "../utils/flash";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { showAlert } from "../utils/alert";
 import { api, apiErrorMessage, onAccountDeleted, onViewAsEnded, SELF_TOKEN_KEY, TOKEN_KEY } from "../api/client";
@@ -83,6 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post("/auth/login", { employeeCode, password });
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       clearPageCache();
+      clearFlash();
       setUser(asSession(data.user));
     } catch (error) {
       throw new Error(apiErrorMessage(error));
@@ -94,6 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post("/auth/register", { employeeCode, name, password, phone });
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       clearPageCache();
+      clearFlash();
       setUser(asSession(data.user));
     } catch (error) {
       throw new Error(apiErrorMessage(error));
@@ -115,6 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       // ข้อมูลที่จำไว้ของ Super Admin (ตัวเลข รายการ) ต้องไม่โผล่ในหน้าจอของคนที่ถูกดู
       clearPageCache();
+      clearFlash();
       setUser(asSession(data.user));
     } catch (error) {
       throw new Error(apiErrorMessage(error));
@@ -129,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(TOKEN_KEY, self);
     await AsyncStorage.removeItem(SELF_TOKEN_KEY);
     clearPageCache();
+    clearFlash();
     try {
       const { data } = await api.get<User>("/auth/me");
       setUser(asSession(data));
@@ -142,6 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.removeItem(TOKEN_KEY);
     // ข้อมูลที่จำไว้ของคนนี้ต้องไม่ค้างให้คนถัดไปที่เข้าเครื่องเดียวกันเห็น
     clearPageCache();
+    clearFlash();
     setUser(null);
   }
 

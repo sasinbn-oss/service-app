@@ -125,6 +125,10 @@ const login = async (code) =>
     sql(`select status||'|'||("inspectedAt" is not null)||'|'||"inspectionNote" from "WorkOrder" where id=${id}`) === "NEW|true|บอร์ดควบคุมไหม้ ต้องเปลี่ยนบอร์ด"
       ? pass("ส่งผลตรวจแล้ว ใบงานกลับไปให้หัวหน้าภาคระบุอะไหล่ (ฐานข้อมูล)")
       : fail(`หลังส่ง: ${sql(`select status from "WorkOrder" where id=${id}`)}`);
+    // แอดมินบันทึกแทนช่าง ไม่เลือกอะไหล่ (ข้อ 5 ว่าง) — ไม่มีรอบเลือกอะไหล่ให้ใครคอนเฟิร์ม (ข้อ 11: บันทึกแทนไม่คอนเฟิร์มตัวเอง)
+    sql(`select count(*) from "PartsPick" where "workOrderId"=${id}`) === "0"
+      ? pass("บันทึกแทนช่างโดยไม่เลือกอะไหล่ ไม่สร้างรอบเลือกอะไหล่ (ฐานข้อมูล PartsPick = 0)")
+      : fail(`PartsPick ของใบนี้ = ${sql(`select count(*) from "PartsPick" where "workOrderId"=${id}`)}`);
 
     // ── ตรวจแล้ว: กรอบยังอยู่ให้หัวหน้าภาคดู แต่ไม่มีปุ่มแนบ ──
     (await vis("ไฟล์ตรวจหน้างาน").count()) > 0 && (await vis("✓ 1 คลิป").count()) > 0 && (await label("เพิ่มรูปหน้างาน").count()) === 0

@@ -38,6 +38,8 @@ import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
 import { openClaimReview, useClaimQueueCount } from "../utils/claimQueue";
 import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 import { CutoffBanners, ReleaseChip, UrgentReleaseModal } from "../components/DispatchCutoff";
+import { dayTime } from "../components/claims/ClaimTrail";
+import { takeFlash, type QueueFlash } from "../utils/flash";
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
@@ -137,6 +139,11 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   // แอดมินกด "แก้เป็นงานด่วน" บนการ์ดในหัวข้อ "เลยเวลาปล่อยงาน" — ทำได้จากหน้านี้เลย ไม่ต้องเปิดใบงานก่อน
   const [urgentFor, setUrgentFor] = useState<WorkOrderRow | null>(null);
   const [query, setQuery] = useState("");
+  /**
+   * แถบแจ้งผลหลังตีกลับ/คอนเฟิร์มรายการอะไหล่ของช่าง (utils/flash) — การ์ดหายจากกลุ่ม "คอนเฟิร์มอะไหล่" ทันที ต้องบอกว่าใบไปไหน
+   * วาดเองที่นี่ ไม่ใช่ showAlert: หัวข้อที่ลงท้าย "แล้ว" กลายเป็นสีเขียว ทั้งที่การตีกลับต้องเป็นแดง
+   */
+  const [pickFlash, setPickFlash] = useState<QueueFlash | null>(null);
   const searchRef = useRef<TextInput>(null);
   const seq = useRef(0);
   // แท็บที่ไม่ได้เปิดอยู่บนเว็บยังวาดค้างไว้แบบโปร่งใส (ท่าจางเข้าเวลาสลับแท็บ) — รายการรหัสใบงานที่นี่
@@ -168,14 +175,19 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
       if (n === seq.current) setError(apiErrorMessage(e));
     }
   }, [wantWatch]);
+  // กลับมาหน้านี้ = หยิบแถบแจ้งผลครั้งเดียว (ไม่มีเรื่องใหม่ = แถบเก่าหาย)
   useFocusEffect(
     useCallback(() => {
+      setPickFlash(takeFlash("MyQueue"));
       load();
     }, [load])
   );
-  useRefreshHandler(async () => {
+  // รีเฟรชเอง (ปุ่ม/ดึงลงบนเว็บ · ดึงลงบนมือถือ) = แถบแจ้งผลหาย — สองทางใช้ตัวเดียวกัน (เดิมดึงลงบนมือถือแถบค้าง)
+  const refresh = async () => {
+    setPickFlash(null);
     await load();
-  });
+  };
+  useRefreshHandler(refresh);
 
   /**
    * นาฬิกาเซิร์ฟเวอร์ของหน้านี้ — การ์ดกับแถบบนสุดใช้ "ตอนนี้" ตัวเดียวกัน จึงพลิกเป็นล็อกพร้อมกันตอนถึงเวลาปิดรับ
@@ -328,7 +340,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     <ScrollView
       style={styles.page}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
       // มือถือ: ช่องค้นหาติดอยู่ใต้แถบหัว เลื่อนลงไปไกลแค่ไหนก็พิมพ์ได้ (ลูกตัวที่ 3 = แถวค้นหา)
       stickyHeaderIndices={!docked && rows && all.length ? [2] : undefined}
     >
@@ -368,11 +380,37 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
       ) : null}
 
       {/*
-        ลำดับใต้แถวค้นหา (integration G5 — ฟีเจอร์ที่ตามมาต้องคงลำดับนี้): 1) แถบแจ้งผลของ parts-pick (ช่องว่างไว้ ยังไม่มี)
+        ลำดับใต้แถวค้นหา (integration G5 — ฟีเจอร์ที่ตามมาต้องคงลำดับนี้): 1) แถบแจ้งผลของ parts-pick
         · 2) แถบเวลาปิดรับ · 3) การ์ด Admin Spare Part · 4) หัวข้อปักของแอดมิน · 5) กลุ่มตามขั้น
         แถบเวลาปิดรับอยู่นอกเงื่อนไข "มีใบในกล่อง": หัวหน้าภาคที่กล่องว่างแต่มีงานพรุ่งนี้ยังไม่ถึงขั้น ต้องเห็นคำเตือนเหนือ "ไม่มีงานค้าง"
         ห้ามวางก่อนแถวค้นหา — ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
       */}
+      {/*
+        1) แถบแจ้งผลของรอบเลือกอะไหล่ — นอกเงื่อนไข "มีใบในกล่อง" เหมือนกัน: คอนเฟิร์มใบสุดท้ายแล้วกล่องว่าง ยังต้องเห็นว่าใบไปไหน
+        แดง = ตีกลับ (ใบกลับไปหาทีมช่าง) · เขียว = คอนเฟิร์ม (ใบไปขั้นถัดไป) · แตะเพื่อปิด
+      */}
+      {pickFlash ? (
+        <TouchableOpacity
+          style={[styles.pickFlash, pickFlash.kind === "returned" ? styles.pickFlashRed : styles.pickFlashGreen]}
+          onPress={() => setPickFlash(null)}
+          activeOpacity={0.8}
+          accessibilityLabel="แถบแจ้งผลรายการอะไหล่"
+        >
+          <View role="status" accessibilityLiveRegion="polite" style={styles.pickFlashRow}>
+            <Ionicons
+              name={pickFlash.kind === "returned" ? "arrow-undo" : "checkmark-circle"}
+              size={18}
+              color={pickFlash.kind === "returned" ? colors.dangerInk : colors.successInk}
+            />
+            <Text style={[styles.pickFlashText, { color: pickFlash.kind === "returned" ? colors.dangerInk : colors.successInk }]}>
+              {pickFlash.kind === "returned"
+                ? `ตีกลับ ${pickFlash.code} ให้ทีม${pickFlash.team ?? "ที่ไปตรวจ"}แก้แล้ว — ใบงานกลับมาที่กล่องนี้เมื่อช่างส่งใหม่`
+                : `คอนเฟิร์ม ${pickFlash.code} แล้ว — ใบงานไปที่ ${pickFlash.label}`}
+            </Text>
+            <Ionicons name="close" size={16} color={colors.textMuted} />
+          </View>
+        </TouchableOpacity>
+      ) : null}
       {rows && !error && banners.length ? <CutoffBanners groups={banners} /> : null}
       {/*
         แอดมิน (ช่องเดียวกับแถบของหัวหน้าภาค): งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย (ดูอย่างเดียว — ไม่ใช่งานของแอดมิน แถวจึงกดไม่ได้)
@@ -479,7 +517,11 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     <AdminReviewTag review={r.adminReview} />
                     <View style={{ flex: 1 }} />
-                    <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>{d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}</Text>
+                    <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>
+                      {d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}
+                      {/* รายการของช่างรอคอนเฟิร์ม — ส่งมาเมื่อไร (ตัวอย่าง si.sentAt) หัวหน้าภาคเรียงงานเองได้ */}
+                      {r.partsPick ? ` · ส่งมา ${dayTime(r.partsPick.sentAt)}` : ""}
+                    </Text>
                   </View>
                   {/*
                     ป้ายเวลาปิดรับ (นับถอยหลัง · ล็อก · รอแอดมิน · งานด่วน) บรรทัดของตัวเอง — ข้อความยาว วางในแถวป้ายแล้วดันกันหักบรรทัด
@@ -508,15 +550,48 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     // เลยนัดขั้นอื่น — นัดเมื่อไร ค้างที่ขั้นไหน (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค) แบบแถวกล่องงาน
                     <Text style={styles.cutWhen}>{[cutLines.appt, r.statusLabel].filter(Boolean).join(" · ")}</Text>
                   ) : null}
-                  {/* อาการก่อนชื่อใบ — ใบจากฟอร์มชื่อ "งาน CM" ทุกใบ บอกอะไรไม่ได้ (ชื่อเรื่องยังใช้กับใบไฟดับ/PM ที่ไม่มีอาการ) */}
-                  <Hi
-                    text={[r.symptom || r.title, r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : null, r.assignedTeam ? `ทีม ${r.assignedTeam}` : null]
-                      .filter(Boolean)
-                      .join(" · ")}
-                    q={q}
-                    style={styles.meta}
-                    numberOfLines={2}
-                  />
+                  {r.partsPick ? (
+                    /*
+                      การ์ดคอนเฟิร์มอะไหล่ (ตัวอย่าง si) — มาจากการตรวจหน้างาน เครื่องอะไร ยี่ห้ออะไร ช่างคนไหนเลือก กี่รายการ อะไรบ้าง
+                      หัวหน้าภาคเห็นว่าต้องเปิดดูละเอียดแค่ไหนก่อนกด · ยี่ห้อบอกว่ารายการมาจากไฟล์ไหน
+                    */
+                    <>
+                      <Hi
+                        text={[
+                          "ตรวจหน้างาน",
+                          r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : null,
+                          r.machineMake ?? null,
+                          r.partsPick.sentByName ? `ช่าง${r.partsPick.sentByName}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        q={q}
+                        style={styles.meta}
+                        numberOfLines={2}
+                      />
+                      <View style={styles.pickTags}>
+                        <Tag text={`ช่างเลือก ${r.partsPick.count} รายการ`} fg={colors.primaryInk} bg={colors.primarySoft} />
+                        {r.partsPick.round > 1 ? (
+                          <Tag text={`ส่งรอบที่ ${r.partsPick.round}`} fg={colors.warningInk} bg={colors.warningSoft} />
+                        ) : null}
+                      </View>
+                      {r.partsPick.line ? (
+                        <Text style={styles.pickLine} numberOfLines={3}>
+                          {r.partsPick.line}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : (
+                    /* อาการก่อนชื่อใบ — ใบจากฟอร์มชื่อ "งาน CM" ทุกใบ บอกอะไรไม่ได้ (ชื่อเรื่องยังใช้กับใบไฟดับ/PM ที่ไม่มีอาการ) */
+                    <Hi
+                      text={[r.symptom || r.title, r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : null, r.assignedTeam ? `ทีม ${r.assignedTeam}` : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      q={q}
+                      style={styles.meta}
+                      numberOfLines={2}
+                    />
+                  )}
                   {r.orphan && r.orphanReason ? <Text style={styles.note}>{r.orphanReason}</Text> : null}
                   {r.adminReview ? <AdminReviewBox review={r.adminReview} viewer={isAdmin ? "admin" : "supervisor"} /> : null}
                   <CardActions
@@ -1013,6 +1088,15 @@ const styles = StyleSheet.create({
   branch: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
   meta: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   note: { fontSize: 12, lineHeight: 18, color: colors.warningInk },
+  // การ์ดคอนเฟิร์มอะไหล่ — ป้าย "ช่างเลือก n รายการ" / "ส่งรอบที่ n" + บรรทัดรายการ
+  pickTags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 2 },
+  pickLine: { fontSize: 13, lineHeight: 19, color: colors.text },
+  // แถบแจ้งผลรอบเลือกอะไหล่ (ช่องที่ 1 ใต้แถวค้นหา)
+  pickFlash: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10 },
+  pickFlashRed: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
+  pickFlashGreen: { backgroundColor: colors.successSoft, borderColor: colors.successLine },
+  pickFlashRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  pickFlashText: { flex: 1, fontSize: 13.5, lineHeight: 20, fontWeight: "600" },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   detailBtn: {
     flexDirection: "row",
