@@ -4,21 +4,27 @@
 //      เปิดใหม่ยังอยู่ (ร่าง) · ปุ่ม "ส่งให้หัวหน้าภาคคอนเฟิร์ม" → กลับงานของฉันพร้อมกล่อง "ส่งผลตรวจแล้ว" + "ดูใบงาน {WO}" ·
 //      ฐานข้อมูล: ใบไป NEW + รอบเลือกอะไหล่ PENDING รอบ 1 · หน้าใบงาน: กล่องฟ้า "อะไหล่ที่ช่างเลือก (รอคอนเฟิร์ม)" + แถบขั้น "คอนเฟิร์มอะไหล่"
 //   2) หัวหน้าภาค (จอคอม): งานของฉัน กลุ่ม "คอนเฟิร์มอะไหล่" การ์ด "ช่างเลือก 2 รายการ" · "ส่งมา …" · รายการอะไหล่ ·
-//      ตีกลับผ่าน API (หน้าคอนเฟิร์มเป็นก้อน 7 — ข้อนี้ทดสอบสิ่งที่ช่างเห็นหลังถูกตีกลับ)
+//      ปุ่มการ์ด → จอคอนเฟิร์ม (ก้อน 7): หัว (เครื่อง · ชนิด · ยี่ห้อ · ชิปไฟล์ · ช่างคนไหนส่งเมื่อไร) · กด ตรง แล้วเปิดรูปอะไหล่ที่เสีย
+//      ขยายในที่ (รูปโหลดจริง "{i} / {n}") → "ย่อ" ป้ายตรงยังอยู่ · กดคอนเฟิร์มก่อนครบ → แถบเหลือง "เหลือ 1 รายการ" ปักใต้หัวฟอร์ม
+//      (ฐานข้อมูลไม่เปลี่ยน) · กด ไม่ตรง → กล่องตีกลับ "ชี้ว่าไม่ตรง: …" + คอนเฟิร์มไม่ได้ · ตีกลับไม่มีเหตุผล → แถบแดง ·
+//      ชิปเหตุผลด่วน → ตีกลับ → กลับกล่องงานพร้อมแถบแดง "ตีกลับ … ให้ทีม…แก้แล้ว" · ฐานข้อมูล: RETURNED + ป้าย OK/NO รายตัว
 //   3) ช่าง: การ์ดแดง "อะไหล่ถูกตีกลับ" เหนือแท็บ (เหตุผล · ตัวที่ชี้) → "แก้รายการอะไหล่" → กล่องแดงบนสุดของฟอร์ม (อยู่ในจอ
 //      ไม่ถูกบัง — หน้าใบงานข้างหลังก็มีกล่องเดียวกัน) · ไฟล์รอบนี้ยังใช้ได้ · ป้าย "ไม่ตรง — หัวหน้าภาคชี้" · ปิดฟอร์ม → หน้าใบงาน
 //      กล่องแดง + แถบตรวจหน้างาน "ถูกตีกลับ — แก้รายการอะไหล่" · เปิดฟอร์มใหม่ กดส่งโดยไม่แก้ → แถบเหลือง "ยังไม่ได้แก้อะไร …"
 //      ปักใต้หัวฟอร์ม (อยู่ในจอโดยไม่ต้องเลื่อน) ไม่มีคำขอไปเซิร์ฟเวอร์ · เอาตัวที่ถูกชี้ออก + เพิ่มตัวใหม่ ("เพิ่มใหม่") →
 //      "ส่งให้หัวหน้าภาคคอนเฟิร์มอีกครั้ง" → ฐานข้อมูลรอบ 2 · หัวหน้าภาคโหลดใหม่เห็นป้าย "ส่งรอบที่ 2"
-//   4) คอนเฟิร์มผ่าน API → หน้าใบงานของช่างขึ้นกล่องเขียว "หัวหน้าภาคคอนเฟิร์มอะไหล่แล้ว" + บรรทัดขั้นถัดไปของช่าง ·
-//      หัวหน้าภาคเห็นแถบขั้น "คอนเฟิร์มอะไหล่แล้ว" · ฐานข้อมูล: เช็คอะไหล่ (มี/หมด) + อะไหล่ที่รอ = รายการรอบ 2
+//   4) หัวหน้าภาคเปิดจอคอนเฟิร์มรอบ 2: กล่อง "ช่างส่งรอบที่ 2 — แก้จากรอบก่อน" (เอาออก/เพิ่ม · เหตุผลรอบก่อน) · ป้าย "เพิ่มใหม่รอบนี้" ·
+//      "ตรงทุกรายการ" → "คอนเฟิร์มอะไหล่" → ข้อความ "คอนเฟิร์ม … แล้ว" · ฐานข้อมูล: เช็คอะไหล่ (มี/หมด) + อะไหล่ที่รอ = รายการรอบ 2 ·
+//      กลับกล่องงาน (Esc) แถบเขียว "คอนเฟิร์ม … แล้ว — ใบงานไปที่ …" · หน้าใบงานของช่างขึ้นกล่องเขียว "หัวหน้าภาคคอนเฟิร์มอะไหล่แล้ว"
+//      + บรรทัดขั้นถัดไปของช่าง · หัวหน้าภาคเห็นแถบขั้น "คอนเฟิร์มอะไหล่แล้ว"
 //   5) ใบที่สอง เครื่องยังไม่รู้ยี่ห้อ + อะไหล่ในสโตร์รออยู่ในใบ: ข้อ 5 เติมแถวเดิม + "เลือกยี่ห้อเครื่องก่อน" → กดชิป Huebsch
 //      ("จะบันทึกยี่ห้อ …") → เอาแถวเดิมออก → "บันทึกและส่งผลตรวจ" → ฐานข้อมูล: Machine.model = Huebsch · แถวที่เอาออกหายจากใบ
 //      (removed · D1) · ไม่มีรอบเลือกอะไหล่
+//   6) ใบที่สาม (ก้อน 7 ต่อ): ช่างเลือก HB1 ตัวเดียว ของเดิม HB2 รออยู่ในใบ → จอคอนเฟิร์มขึ้นกล่อง "ของเดิมในใบที่ช่างเอาออก" ·
+//      ลิงก์ "ต้องเข้าตรวจสอบหน้างานก่อน" ↔ "กลับไปคอนเฟิร์มอะไหล่" (ฐานข้อมูลไม่เปลี่ยน) · ส่งตรวจจริง → รอบเลือกอะไหล่ถูกทิ้ง
 // ผู้ใช้ของชุดนี้เอง (ช่าง ZPPT… ทีมของ C0006 · หัวหน้าภาค ZPPS… ภาคของ C0006) — ไม่ย้ายทีม T001 / ภาค S001:
 // รอบที่ถูกฆ่ากลางทางเคยทิ้ง T001 ไว้ทีมอื่น รอบถัดไปจำค่าผิดเป็น "ค่าเดิม" แล้วชุดอื่นที่ต้องการ T001 ทีมเดิมพังตาม
 // ของค้างจากรอบที่ถูกฆ่า (ใบ เครื่อง อะไหล่ ZPP… ผู้ใช้ ZPP[TS]…) ลบตามคำนำหน้าทั้งตอนเริ่มและตอนจบ ไม่ใช่เฉพาะเลข pid ของรอบนี้
-// หน้าคอนเฟิร์มของหัวหน้าภาค (ซูมรูป · ตรง/ไม่ตรง · แถบแจ้งผลในกล่องงาน) มากับก้อน 7 — เติมข้อในไฟล์นี้
 // ต้องมี DATABASE_URL · ไม่ขึ้นกับเวลาไทยของวันที่รัน: ส่งช่างตรวจด้วยวันนัด 12 วันข้างหน้า (G10 · ไม่ติดเวลาปิดนัดงานพรุ่งนี้)
 // แล้วค่อยย้ายวันนัดเป็นวันนี้ด้วย SQL หลังใบอยู่ในมือช่าง (SQL ไม่ผ่านกติกาเวลาปิดนัด · ใบอยู่ในมือช่างแล้ว) — การ์ดจึงขึ้นแท็บ "วันนี้"
 const { chromium } = require("playwright");
@@ -316,14 +322,93 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     await s.screenshot({ path: path.join(__dirname, "parts-pick-4-queue.png") });
     const pick1 = Number(sql(`select max(id) from "PartsPick" where "workOrderId"=${id}`));
     const reason = "รหัสไม่ตรงกับรูปอะไหล่ที่เสีย";
-    const ret = await call(S, "POST", `work-orders/${id}/parts-pick/return`, {
-      pickId: pick1,
-      reason,
-      flags: [PID(`${K}-HB2`)],
-      marks: [{ sparePartId: PID(`${K}-HB1`), mark: "OK" }],
-    });
-    ret.status === 200 && st() === "INSPECTING" && picks() === "RETURNED:1:true"
-      ? pass("ตีกลับ (API): ใบกลับไป INSPECTING · รอบ 1 RETURNED (ฐานข้อมูล)") : fail(`ตีกลับ: ${ret.status} ${JSON.stringify(ret.data).slice(0, 160)} · ${st()} ${picks()}`);
+    // ป้ายตรง/ไม่ตรงที่บันทึกจริงต่อรายการ — หน้าจอบอกว่ากดแล้วไม่พอ (CLAUDE.md: ยืนยันที่ฐานข้อมูล)
+    const marksOf = (pid) =>
+      sql(`select coalesce(string_agg(p."partCode"||':'||coalesce(i.mark::text,'-'), ',' order by p."partCode"),'') from "PartsPickItem" i
+           join "SparePart" p on p.id=i."sparePartId" where i."pickId"=${pid}`);
+    const pressed = async (l) => (await label(s, l).first().getAttribute("aria-pressed")) === "true";
+
+    // ── 2b) จอคอนเฟิร์มอะไหล่ (ก้อน 7) ──
+    await label(s, `ทำขั้น คอนเฟิร์มอะไหล่ ${code}`).first().click();
+    const formUp = await vis(s, "อะไหล่ที่ช่างเลือก · 2 รายการ").first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+    // แยกทีละข้อ — ตกข้อไหนบอกชื่อข้อนั้น ไม่ต้องเดา
+    const head = {
+      form: formUp,
+      title: (await vis(s, `คอนเฟิร์มอะไหล่ · ${code}`, false).count()) > 0,
+      machine: (await vis(s, `เครื่อง ${MW} · เครื่องซัก · ยี่ห้อ Huebsch`).count()) > 0,
+      chip: (await vis(s, "อะไหล่จากไฟล์ Huebsch เท่านั้น").count()) > 0,
+      sent: (await s.getByText(new RegExp(`^ช่าง${tName} \\(${TC}\\) · ส่ง \\d`)).locator("visible=true").count()) > 0,
+      count: (await vis(s, "ตรวจแล้ว 0 / 2").count()) > 0,
+      noQuestion: (await vis(s, "งานนี้ต้องใช้อะไหล่ไหม", false).count()) === 0,
+    };
+    Object.values(head).every(Boolean)
+      ? pass("จอคอนเฟิร์ม: หัว \"คอนเฟิร์มอะไหล่ · WO\" · เครื่อง/ชนิด/ยี่ห้อ · ชิป \"อะไหล่จากไฟล์ Huebsch เท่านั้น\" · ช่างคนไหนส่งเมื่อไร · ตรวจแล้ว 0 / 2 (ไม่มีคำถามใช้อะไหล่ไหม)")
+      : fail(`จอคอนเฟิร์มไม่ขึ้น / หัวจอไม่ครบ: ${JSON.stringify(head)}`);
+    if (!formUp) await s.screenshot({ path: path.join(__dirname, "parts-pick-8-zoom.png") });
+    await label(s, `ตรง ${K}-HB1`).first().click();
+    await s.waitForTimeout(300);
+    // รูปอะไหล่ที่เสียขยายในฟอร์มเดิม (ไม่ใช่หน้าต่างซ้อน) — รูปต้องโหลดได้จริง ไม่ใช่แค่กรอบว่าง
+    // หน้าใบงานข้างหลังก็มีกรอบชื่อเดียวกัน (การ์ดไฟล์แนบ) — กดรูปย่อตัวที่อยู่บนสุด (ในฟอร์ม) ไม่ใช่ตัวแรกใน DOM
+    await clickTop(label(s, "กรอบรูปอะไหล่ที่เสีย").locator('[aria-label^="ดูไฟล์ "]'));
+    const zoomBox = label(s, "รูปขยาย รูปอะไหล่ที่เสีย");
+    const zoomUp = await zoomBox.first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
+    let loaded = false;
+    for (let i = 0; i < 20 && zoomUp && !loaded; i++) {
+      loaded = await zoomBox
+        .first()
+        .locator("img")
+        .first()
+        .evaluate((im) => im.complete && im.naturalWidth > 0)
+        .catch(() => false);
+      if (!loaded) await s.waitForTimeout(500);
+    }
+    zoomUp && loaded && (await vis(s, "รูปอะไหล่ที่เสีย · 1 / 1").count()) > 0 && (await onTop(zoomBox))
+      ? pass("กดรูปอะไหล่ที่เสีย: ขยายในที่ (รูปโหลดจริง อยู่บนสุดในจอ) \"รูปอะไหล่ที่เสีย · 1 / 1\" แทนกรอบไฟล์ — ไม่เปิดหน้าต่างซ้อน")
+      : fail(`รูปขยายไม่ขึ้น/ไม่โหลด: up=${zoomUp} loaded=${loaded}`);
+    await s.screenshot({ path: path.join(__dirname, "parts-pick-8-zoom.png") });
+    await clickTop(label(s, "ย่อ"));
+    await s.waitForTimeout(400);
+    (await zoomBox.count()) === 0 && (await pressed(`ตรง ${K}-HB1`)) && (await vis(s, "ตรวจแล้ว 1 / 2").count()) > 0
+      ? pass("\"ย่อ\" กลับกรอบไฟล์ · ป้ายตรงที่กดไว้ยังอยู่ (ตรวจแล้ว 1 / 2)")
+      : fail("ย่อรูปแล้วกรอบไม่กลับ / ป้ายตรงหาย");
+    // คอนเฟิร์มก่อนกดครบ — ปุ่มกดได้ บอกว่าเหลือกี่ตัว (แถบปักใต้หัวฟอร์ม อยู่ในจอ) ไม่มีคำขอไปเซิร์ฟเวอร์
+    await clickTop(label(s, "คอนเฟิร์มอะไหล่"));
+    const left = vis(s, "กด ตรง หรือ ไม่ตรง ให้ครบทุกรายการก่อนคอนเฟิร์ม (เหลือ 1 รายการ) — หรือกด “ตรงทุกรายการ”");
+    (await left.first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false)) && (await onTop(left)) && picks() === "PENDING:1:true"
+      ? pass("กดคอนเฟิร์มก่อนครบ: แถบเหลือง \"… (เหลือ 1 รายการ) …\" อยู่ในจอ · ฐานข้อมูลยัง PENDING")
+      : fail(`คอนเฟิร์มก่อนครบไม่เตือน / ไม่อยู่ในจอ · picks=${picks()}`);
+    await label(s, `ไม่ตรง ${K}-HB2`).first().click();
+    await s.waitForTimeout(400);
+    (await label(s, "กล่องตีกลับ").count()) > 0 &&
+    (await vis(s, `ชี้ว่าไม่ตรง: ${tagOf(`${K}-HB2`)}`).count()) > 0 &&
+    (await label(s, "บันทึกเพิ่มเติม").count()) === 0
+      ? pass("กด ไม่ตรง: กล่องตีกลับขึ้นเอง \"ชี้ว่าไม่ตรง: …\" (ช่องบันทึกเพิ่มเติมซ่อน — ช่างอ่านแค่เหตุผล)")
+      : fail("กด ไม่ตรง แล้วกล่องตีกลับไม่ขึ้น");
+    await clickTop(label(s, "คอนเฟิร์มอะไหล่"));
+    (await vis(s, "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม").first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false))
+      ? pass("มีตัวที่ไม่ตรง: คอนเฟิร์มไม่ได้ — บอกให้ตีกลับหรือเปลี่ยนเป็นตรง")
+      : fail("มีตัวไม่ตรงแต่ไม่เตือนตอนกดคอนเฟิร์ม");
+    await clickTop(label(s, "ตีกลับให้ช่างแก้"));
+    (await vis(s, "ตีกลับต้องบอกเหตุผล — ช่างเห็นข้อความนี้บนใบงาน และต้องรู้ว่าต้องแก้อะไร").first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false)) &&
+    picks() === "PENDING:1:true"
+      ? pass("ตีกลับโดยไม่ใส่เหตุผล: แถบแดง \"ตีกลับต้องบอกเหตุผล …\" · ฐานข้อมูลยัง PENDING")
+      : fail(`ตีกลับไม่มีเหตุผลไม่เตือน · picks=${picks()}`);
+    await clickTop(label(s, reason));
+    await s.waitForTimeout(300);
+    (await label(s, "เหตุผลที่ตีกลับ").first().inputValue()) === reason
+      ? pass("ชิปเหตุผลด่วนเติมช่องเหตุผล") : fail("ชิปเหตุผลด่วนไม่เติมช่อง");
+    await s.screenshot({ path: path.join(__dirname, "parts-pick-9-return.png") });
+    await clickTop(label(s, "ตีกลับให้ช่างแก้"));
+    const redFlash = vis(s, `ตีกลับ ${code} ให้ทีม${team}แก้แล้ว — ใบงานกลับมาที่กล่องนี้เมื่อช่างส่งใหม่`);
+    (await redFlash.first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false))
+      ? pass("ตีกลับแล้วกลับกล่องงาน: แถบแดง \"ตีกลับ … ให้ทีม…แก้แล้ว — ใบงานกลับมาที่กล่องนี้เมื่อช่างส่งใหม่\"")
+      : fail("ตีกลับแล้วไม่กลับกล่องงาน / ไม่มีแถบแดง");
+    st() === "INSPECTING" &&
+    picks() === "RETURNED:1:true" &&
+    marksOf(pick1) === `${K}-HB1:OK,${K}-HB2:NO` &&
+    sql(`select reason from "PartsPick" where id=${pick1}`) === reason
+      ? pass("ฐานข้อมูล: ใบกลับไป INSPECTING · รอบ 1 RETURNED · HB1 OK / HB2 NO · เหตุผลตรงที่พิมพ์")
+      : fail(`ตีกลับ: ${st()} ${picks()} marks=${marksOf(pick1)}`);
 
     // ── 3) ช่าง: การ์ดแดง → แก้รายการ → ด่านส่งใหม่ → ส่งรอบ 2 ──
     const t2 = await signIn(TC, { width: 390, height: 844 });
@@ -402,17 +487,35 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
       ? pass("งานของฉัน (หัวหน้าภาค) หลังช่างส่งรอบ 2: ป้าย \"ส่งรอบที่ 2\" · \"ช่างเลือก 2 รายการ\" · บรรทัดเครื่อง/ยี่ห้อ/ช่าง")
       : fail("การ์ดคอนเฟิร์มอะไหล่รอบ 2 ไม่มีป้ายส่งรอบที่ 2 / บรรทัดเครื่อง");
 
-    // ── 4) คอนเฟิร์ม (API) → กล่องเขียวบนหน้าใบงาน ──
+    // ── 4) คอนเฟิร์มรอบ 2 ผ่านจอคอนเฟิร์ม → กล่องเขียวบนหน้าใบงาน ──
     await label(t2, `ดูใบงาน ${code}`).first().click();
     await t2.waitForTimeout(3500);
     const pick2 = Number(sql(`select max(id) from "PartsPick" where "workOrderId"=${id}`));
-    const conf = await call(S, "POST", `work-orders/${id}/parts-pick/confirm`, {
-      pickId: pick2,
-      marks: [`${K}-HB1`, `${K}-HB3`].map((c) => ({ sparePartId: PID(c), mark: "OK" })),
-    });
-    conf.status === 200 && st() === "PARTS_SOURCING" && waiting() === `${K}-HB1x1,${K}-HB3x1`
-      ? pass("คอนเฟิร์ม (API): ใบไปเช็คอะไหล่ (มี/หมด) · อะไหล่ที่รอ = รายการรอบ 2 (ฐานข้อมูล)")
-      : fail(`คอนเฟิร์ม: ${conf.status} ${JSON.stringify(conf.data).slice(0, 160)} · ${st()} ${waiting()}`);
+    await label(s, `ทำขั้น คอนเฟิร์มอะไหล่ ${code}`).first().click();
+    const resend = await vis(s, "ช่างส่งรอบที่ 2 — แก้จากรอบก่อน").first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+    resend &&
+    (await vis(s, `เอา ${tagOf(`${K}-HB2`)} ออก · เพิ่ม ${tagOf(`${K}-HB3`)} × 1`, false).count()) > 0 &&
+    (await vis(s, `รอบก่อนตีกลับเพราะ: ${reason}`).count()) > 0 &&
+    (await vis(s, "เพิ่มใหม่รอบนี้").count()) === 1 &&
+    (await label(s, "ของเดิมในใบที่ช่างเอาออก").count()) === 0
+      ? pass("จอคอนเฟิร์มรอบ 2: \"ช่างส่งรอบที่ 2 — แก้จากรอบก่อน\" · เอาออก/เพิ่ม · เหตุผลรอบก่อน · ป้าย \"เพิ่มใหม่รอบนี้\" (ใบไม่มีของเดิม = ไม่มีกล่องของที่เอาออก)")
+      : fail("จอคอนเฟิร์มรอบ 2 ไม่บอกว่าช่างแก้อะไร");
+    await clickTop(label(s, "ตรงทุกรายการ"));
+    await s.waitForTimeout(300);
+    (await pressed(`ตรง ${K}-HB1`)) && (await pressed(`ตรง ${K}-HB3`)) && (await vis(s, "ตรวจแล้ว 2 / 2").count()) > 0
+      ? pass("\"ตรงทุกรายการ\" ติดป้ายตรงทุกตัว (ตรวจแล้ว 2 / 2)") : fail("ตรงทุกรายการไม่ติดป้ายครบ");
+    await clickTop(label(s, "คอนเฟิร์มอะไหล่"));
+    const toast = await vis(s, `คอนเฟิร์ม ${code} แล้ว`, false).first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+    toast && st() === "PARTS_SOURCING" && waiting() === `${K}-HB1x1,${K}-HB3x1` && picks().endsWith("CONFIRMED:2:true") && marksOf(pick2) === `${K}-HB1:OK,${K}-HB3:OK`
+      ? pass("คอนเฟิร์ม (หน้าจอ): ข้อความ \"คอนเฟิร์ม … แล้ว\" · ฐานข้อมูล: ใบไปเช็คอะไหล่ (มี/หมด) · อะไหล่ที่รอ = รายการรอบ 2 · รอบ 2 CONFIRMED")
+      : fail(`คอนเฟิร์ม: toast=${toast} ${st()} ${waiting()} ${picks()} ${marksOf(pick2)}`);
+    // กลับกล่องงานในแอป (Esc ปิดหน้าใบงาน) — แถบเขียวบอกว่าใบที่หายจากกลุ่มไปไหน (โหลดหน้าใหม่ = แถบหาย ตั้งใจ)
+    await s.waitForTimeout(1500);
+    await s.keyboard.press("Escape");
+    const greenFlash = s.getByText(new RegExp(`^คอนเฟิร์ม ${code} แล้ว — ใบงานไปที่ .+`)).locator("visible=true");
+    (await greenFlash.first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false))
+      ? pass("กลับกล่องงาน: แถบเขียว \"คอนเฟิร์ม … แล้ว — ใบงานไปที่ …\"")
+      : fail("กลับกล่องงานแล้วไม่มีแถบเขียว");
     // หน้าใบงานเช็คการเปลี่ยนของคนอื่นทุก 20 วินาที (และตอนกดรีเฟรช) — รอกล่องเขียวแทนการโหลดหน้าใหม่ (เว็บไม่มีลิงก์ตรงไปใบงาน)
     if ((await label(t2, "รีเฟรชข้อมูล").count()) > 0) await label(t2, "รีเฟรชข้อมูล").first().click().catch(() => {});
     const green = await vis(t2, "หัวหน้าภาคคอนเฟิร์มอะไหล่แล้ว", false).first().waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
@@ -470,6 +573,90 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     back3 && left3 && st2 === "NEW" && picks2 === "0" && waiting2 === "0" && make2 === "Huebsch" && logs2 === "1:1"
       ? pass("ส่งผลตรวจแบบไม่เลือกอะไหล่: กลับงานของฉัน · ฐานข้อมูล: ใบไป NEW ไม่มีรอบเลือกอะไหล่ · แถวที่เอาออกหายจากใบ (removed) · Machine.model = Huebsch + ประวัติบันทึกยี่ห้อ")
       : fail(`ใบสอง: กลับ=${back3}/${left3} status=${st2} picks=${picks2} waiting=${waiting2} model=${make2} logs=${logs2}`);
+
+    // ── 6) จอคอนเฟิร์ม (ก้อน 7 ต่อ): กล่อง "ของเดิมในใบที่ช่างเอาออก" + ลิงก์ "ต้องเข้าตรวจสอบหน้างานก่อน" ──
+    // ใบสาม: อะไหล่ในสโตร์ (HB2) รออยู่ในใบ ช่างเลือกรอบนี้แค่ HB1 → HB2 คือ "ของเดิมที่ช่างเอาออก" (D1)
+    // ช่างส่งผ่าน API (ฝั่งช่างทดสอบไปแล้วในข้อ 1 และ 3) — ข้อนี้ดูฝั่งหัวหน้าภาคล้วน ๆ
+    const MW3 = freeCode(MW2);
+    const o3 = await prep(MW3, "Huebsch", `${SYM}ของเดิมออก ${SUF}`);
+    const { id: id3, code: code3 } = o3;
+    sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind) values (${id3}, ${PID(`${K}-HB2`)}, 1, 'WAITING')`);
+    const sent3 = await call(T, "POST", `work-orders/${id3}/inspection`, {
+      note: "บอร์ดเสีย ชุดล็อกเดิมในใบไม่ต้องใช้แล้ว",
+      parts: [{ sparePartId: PID(`${K}-HB1`), quantity: 1 }],
+    });
+    const pk3 = () =>
+      sql(`select coalesce(string_agg(status||':'||round||':'||("voidedAt" is null), ',' order by id),'') from "PartsPick" where "workOrderId"=${id3}`);
+    const waiting3 = () =>
+      sql(`select coalesce(string_agg(p."partCode"||'x'||w.quantity, ',' order by p."partCode"),'') from "WorkOrderPart" w
+           join "SparePart" p on p.id=w."sparePartId" where w."workOrderId"=${id3} and w.kind='WAITING'`);
+    const st3 = () => sql(`select status from "WorkOrder" where id=${id3}`);
+    // ช่างเลือกแล้วรายการในใบยังไม่ถูกแตะจนกว่าหัวหน้าภาคคอนเฟิร์ม — ยืนยันที่ฐานข้อมูลก่อนดูหน้าจอ
+    sent3.status === 200 && st3() === "NEW" && pk3() === "PENDING:1:true" && waiting3() === `${K}-HB2x1`
+      ? pass(`เตรียม ${code3}: ช่างเลือก ${K}-HB1 ตัวเดียว · ${K}-HB2 ยังรออยู่ในใบ (ฐานข้อมูล: PENDING รอบ 1)`)
+      : fail(`เตรียม ${code3}: ${sent3.status} ${st3()} ${pk3()} ${waiting3()} ${JSON.stringify(sent3.data).slice(0, 150)}`);
+
+    await s.goto(APP, { waitUntil: "networkidle" });
+    await s.waitForTimeout(4000);
+    await label(s, `ทำขั้น คอนเฟิร์มอะไหล่ ${code3}`).first().click();
+    const form3 = await vis(s, "อะไหล่ที่ช่างเลือก · 1 รายการ").first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+    const box = label(s, "ของเดิมในใบที่ช่างเอาออก");
+    form3 &&
+    (await box.count()) > 0 &&
+    (await vis(s, "ของเดิมในใบที่ช่างเอาออก — คอนเฟิร์มแล้วหายจากใบ").count()) > 0 &&
+    (await box.getByText(new RegExp(`^${K}-HB2 .+ × 1$`)).count()) > 0 &&
+    (await box.getByText(`${K}-HB1`, { exact: false }).count()) === 0
+      ? pass(`จอคอนเฟิร์ม: กล่อง "ของเดิมในใบที่ช่างเอาออก — คอนเฟิร์มแล้วหายจากใบ" มี ${K}-HB2 × 1 (ไม่มี ${K}-HB1 ที่ช่างเลือกรอบนี้)`)
+      : fail(`กล่องของเดิมที่ช่างเอาออก: form=${form3} box=${await box.count()} HB2=${await box.getByText(new RegExp(`${K}-HB2`)).count()}`);
+    await s.screenshot({ path: path.join(__dirname, "parts-pick-7-removed.png") });
+
+    // กดลิงก์ "ต้องเข้าตรวจสอบหน้างานก่อน" → ฟอร์มส่งตรวจเดิม (ช่องวัน/เวลา/ทีม) · กลับไปจอคอนเฟิร์มได้ ยังไม่ส่งอะไรไปเซิร์ฟเวอร์
+    await clickTop(label(s, "ต้องเข้าตรวจสอบหน้างานก่อน"));
+    await s.waitForTimeout(600);
+    // แยกทีละข้อ — ตกข้อไหนบอกชื่อข้อนั้น · ปุ่ม "คอนเฟิร์มอะไหล่" ชื่อเดียวกันมีอยู่บนหน้าใบงานข้างหลังด้วย
+    // จึงดูว่าอยู่บนสุดจริงไหม (onTop) ไม่ใช่นับจำนวน
+    const flip = {
+      back: (await label(s, "กลับไปคอนเฟิร์มอะไหล่").count()) > 0,
+      note: (await s.getByText(/^ส่งตรวจใหม่แล้วรายการที่ช่างเลือกรอบนี้ไม่ถูกใช้/).locator("visible=true").count()) > 0,
+      date: (await s.getByLabel("วันเข้าตรวจหน้างาน", { exact: true }).locator("visible=true").count()) > 0,
+      team: (await vis(s, "ทีมที่จะไปตรวจ", false).count()) > 0,
+      noAllOk: (await label(s, "ตรงทุกรายการ").count()) === 0,
+      noConfirmBtn: !(await onTop(label(s, "คอนเฟิร์มอะไหล่"))),
+    };
+    const flipped = Object.values(flip).every(Boolean);
+    // ปุ่มยืนยันกดไม่ได้จนกว่าจะใส่วัน (ฟอร์มส่งตรวจบังคับวัน)
+    const saveBtn = vis(s, "ยืนยัน").last();
+    const opOf = () => saveBtn.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
+    (await opOf()) !== "1" ? pass("ฟอร์มส่งตรวจ (จากจอคอนเฟิร์ม): ยังไม่ใส่วัน ปุ่มยืนยันกดไม่ได้") : fail("ยังไม่ใส่วัน ปุ่มยืนยันกดได้");
+    await label(s, "กลับไปคอนเฟิร์มอะไหล่").first().click();
+    await s.waitForTimeout(600);
+    (await vis(s, "อะไหล่ที่ช่างเลือก · 1 รายการ").count()) > 0 && (await label(s, "ตรงทุกรายการ").count()) > 0 && pk3() === "PENDING:1:true" && st3() === "NEW"
+      ? pass("\"กลับไปคอนเฟิร์มอะไหล่\": กลับจอคอนเฟิร์มเดิม · ฐานข้อมูลไม่เปลี่ยน (ยัง PENDING รอบ 1 · ใบยัง NEW)")
+      : fail(`กลับไปคอนเฟิร์ม: ${await vis(s, "อะไหล่ที่ช่างเลือก · 1 รายการ").count()} ${pk3()} ${st3()}`);
+
+    // ส่งตรวจจริง: วันที่ 15 เดือนหน้า (ไม่ติดเวลาปิดนัดงานพรุ่งนี้ไม่ว่าวันไหนของเดือน) → เซิร์ฟเวอร์ทิ้งรอบเลือกอะไหล่ · ของเดิมในใบอยู่ครบ
+    const target = sql(`select to_char(date_trunc('month', (now() at time zone 'Asia/Bangkok')) + interval '1 month' + interval '14 day','YYYY-MM-DD')`);
+    const [ty, tm] = target.split("-").map(Number);
+    const MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+    const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+    const dayLabel = `${DOW[new Date(Date.UTC(ty, tm - 1, 15)).getUTCDay()]} 15 ${MONTHS[tm - 1]} ${ty + 543}`;
+    await clickTop(label(s, "ต้องเข้าตรวจสอบหน้างานก่อน"));
+    await s.waitForTimeout(600);
+    await s.getByLabel("วันเข้าตรวจหน้างาน", { exact: true }).locator("visible=true").last().click();
+    await s.waitForTimeout(400);
+    await s.getByLabel("เดือนถัดไป").last().click();
+    await s.waitForTimeout(200);
+    await s.getByLabel(dayLabel, { exact: true }).click();
+    await s.waitForTimeout(400);
+    (await opOf()) === "1" ? pass(`ใส่วัน ${dayLabel} แล้วปุ่มยืนยันกดได้`) : fail("ใส่วันแล้วปุ่มยืนยันยังกดไม่ได้");
+    await saveBtn.click();
+    await s.waitForTimeout(4000);
+    const after3 = sql(`select status||'|'||coalesce("appointmentStatus",'-')||'|'||coalesce(to_char("scheduledAt",'YYYY-MM-DD'),'-')||'|'||coalesce("assignedTeam",'-') from "WorkOrder" where id=${id3}`);
+    const voided3 = sql(`select count(*) from "PartsPick" where "workOrderId"=${id3} and "voidedAt" is not null`);
+    // รอบที่ถูกทิ้งต้องไม่ถูกเปิดเป็น "รอคอนเฟิร์ม" อีก และของเดิมในใบ (HB2) ไม่หายเพราะไม่ได้คอนเฟิร์ม
+    after3 === `INSPECT_CONFIRM|PENDING|${target}|${team}` && voided3 === "1" && waiting3() === `${K}-HB2x1`
+      ? pass("ส่งตรวจจากจอคอนเฟิร์ม (ฐานข้อมูล): ใบไปรอแอดมินนัดร้านวันที่เลือก · รอบเลือกอะไหล่ถูกทิ้ง (voidedAt) · ของเดิมในใบไม่หาย")
+      : fail(`ส่งตรวจจากจอคอนเฟิร์ม: ${after3} voided=${voided3} waiting=${waiting3()}`);
   } catch (e) {
     fail(String(e).split("\n").slice(0, 2).join(" "));
     await page?.screenshot({ path: path.join(__dirname, "parts-pick-fail.png") }).catch(() => {});
