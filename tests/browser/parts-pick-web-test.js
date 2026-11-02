@@ -22,9 +22,15 @@
 //      (removed · D1) · ไม่มีรอบเลือกอะไหล่
 //   6) ใบที่สาม (ก้อน 7 ต่อ): ช่างเลือก HB1 ตัวเดียว ของเดิม HB2 รออยู่ในใบ → จอคอนเฟิร์มขึ้นกล่อง "ของเดิมในใบที่ช่างเอาออก" ·
 //      ลิงก์ "ต้องเข้าตรวจสอบหน้างานก่อน" ↔ "กลับไปคอนเฟิร์มอะไหล่" (ฐานข้อมูลไม่เปลี่ยน) · ส่งตรวจจริง → รอบเลือกอะไหล่ถูกทิ้ง
+//   7) ฟอร์มเปิดใบงาน (ก้อน 8 · ช่าง มือถือ): ช่องอะไหล่ล็อก "ใส่หมายเลขเครื่องก่อน" → เครื่องรหัสใหม่ "ในระบบยังไม่รู้ยี่ห้อ" +
+//      "เลือกยี่ห้อเครื่องก่อน" (ไม่มีช่องค้น) → ชิป Huebsch (aria-selected) เปิดช่องค้น + คำอธิบาย · เครื่องที่สองรู้ยี่ห้อจาก
+//      รายงานอย่างเดียว (brand "HB - Huebsch" · model ว่าง) → ปุ่มล็อก ไม่ถามยี่ห้อ · เปิดใบได้ทั้งสองเครื่อง → ฐานข้อมูล:
+//      model ของเครื่องใหม่ = Huebsch · เครื่องที่สอง model ยังว่าง · อะไหล่ที่เสนอลงเป็นอะไหล่ที่รอของแต่ละใบ
+// หัวหน้าภาคระบุอะไหล่บนเครื่องที่ยังไม่รู้ยี่ห้อ (แผน §8 ข้อ 5) อยู่ใน parts-brand-web-test.js ข้อ 2 แล้ว — ไม่ทำซ้ำที่นี่
 // ผู้ใช้ของชุดนี้เอง (ช่าง ZPPT… ทีมของ C0006 · หัวหน้าภาค ZPPS… ภาคของ C0006) — ไม่ย้ายทีม T001 / ภาค S001:
 // รอบที่ถูกฆ่ากลางทางเคยทิ้ง T001 ไว้ทีมอื่น รอบถัดไปจำค่าผิดเป็น "ค่าเดิม" แล้วชุดอื่นที่ต้องการ T001 ทีมเดิมพังตาม
-// ของค้างจากรอบที่ถูกฆ่า (ใบ เครื่อง อะไหล่ ZPP… ผู้ใช้ ZPP[TS]…) ลบตามคำนำหน้าทั้งตอนเริ่มและตอนจบ ไม่ใช่เฉพาะเลข pid ของรอบนี้
+// ของค้างจากรอบที่ถูกฆ่า (ใบ อะไหล่ ZPP… ผู้ใช้ ZPP[TS]… เครื่องของใบพวกนั้น และเครื่องที่ข้อ 7 ใส่ทาง SQL) ลบทั้งตอนเริ่มและตอนจบ
+// ตามคำนำหน้า/เครื่องหมาย ไม่ใช่เฉพาะเลข pid หรือรายการในหน่วยความจำของรอบนี้ — รอบที่ถูกฆ่าไม่มีโอกาสส่งรายการต่อให้รอบถัดไป
 // ต้องมี DATABASE_URL · ไม่ขึ้นกับเวลาไทยของวันที่รัน: ส่งช่างตรวจด้วยวันนัด 12 วันข้างหน้า (G10 · ไม่ติดเวลาปิดนัดงานพรุ่งนี้)
 // แล้วค่อยย้ายวันนัดเป็นวันนี้ด้วย SQL หลังใบอยู่ในมือช่าง (SQL ไม่ผ่านกติกาเวลาปิดนัด · ใบอยู่ในมือช่างแล้ว) — การ์ดจึงขึ้นแท็บ "วันนี้"
 const { chromium } = require("playwright");
@@ -32,6 +38,8 @@ const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture");
+const { confirmDuplicate } = require("./dup");
+const { attachPhoto } = require("./photo");
 const PHOTO = path.join(__dirname, "..", "site-photo.png");
 const CLIP = path.join(__dirname, "..", "site-clip.mp4");
 const APP = "http://localhost:8081";
@@ -87,6 +95,13 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
            and m.id in (select "machineId" from "WorkOrder" where "branchId"=${BID} and symptom like '${SYM}%' and "machineId" is not null)
            and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id and coalesce(w.symptom,'') not like '${SYM}%')`);
   const dropMachines = (list) => (list ? sql(`delete from "Machine" where id in (${list}) and "branchId"=${BID}`) : null);
+  // เครื่องที่ข้อ 7 ใส่ทาง SQL ยังไม่มีใบ myMachines() จึงมองไม่เห็น ถ้ารอบถูกฆ่าก่อนเปิดใบ เครื่องนั้นค้างถาวร
+  // (รหัส W9### สุ่ม ยี่ห้อ HB) — ติดเครื่องหมายไว้ที่ stateCode ซึ่งแอปไม่อ่านเลย (มีแต่ไฟล์นำเข้าเครื่องที่เขียนทับ)
+  // หน้าจอจึงเห็นเครื่องนี้เหมือนเครื่องปกติ และรอบถัดไปกวาดได้โดยไม่ไปโดนเครื่องของชุดอื่นที่สุ่ม W9### เหมือนกัน
+  const MARK = "ZPP-TEST";
+  const dropMarked = () =>
+    sql(`delete from "Machine" m where m."branchId"=${BID} and m."stateCode"='${MARK}'
+           and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
   const sweep = () =>
     sql(`delete from "WorkOrder" where "branchId"=${BID} and symptom like '${SYM}%';
          delete from "SparePart" where "partCode" ~ '^ZPP[0-9]+-';
@@ -100,18 +115,28 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     }
   };
   const ids = [];
+  // รหัสเครื่องที่ข้อ 7 สร้างเอง (ทาง SQL และฟอร์ม) — ใบเปิดไม่สำเร็จ myMachines() ไม่เห็นเครื่องพวกนี้ ต้องลบตามรหัส
+  const fresh = [];
   const A = await login("A001");
   const cleanup = async () => {
     const mine = myMachines();
     for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
     sweep();
     dropMachines(mine);
+    if (fresh.length)
+      sql(`delete from "Machine" m where m."branchId"=${BID} and m.code in (${fresh.map((c) => `'${c}'`).join(",")})
+             and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
+    dropMarked();
   };
 
   let page;
   const sessions = [];
   try {
+    // ของรอบที่ถูกฆ่า: อ่านเครื่องจากใบก่อนกวาดใบเหมือน cleanup() — กวาดใบก่อนแล้วเครื่องของใบพวกนั้นหาไม่เจออีกเลย
+    const stale = myMachines();
     sweep();
+    dropMachines(stale);
+    dropMarked();
     const MW = freeCode();
     const MW2 = freeCode(MW);
     sql(`insert into "SparePart"("partCode",name,brand,"offCatalog","updatedAt") values
@@ -657,6 +682,99 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     after3 === `INSPECT_CONFIRM|PENDING|${target}|${team}` && voided3 === "1" && waiting3() === `${K}-HB2x1`
       ? pass("ส่งตรวจจากจอคอนเฟิร์ม (ฐานข้อมูล): ใบไปรอแอดมินนัดร้านวันที่เลือก · รอบเลือกอะไหล่ถูกทิ้ง (voidedAt) · ของเดิมในใบไม่หาย")
       : fail(`ส่งตรวจจากจอคอนเฟิร์ม: ${after3} voided=${voided3} waiting=${waiting3()}`);
+
+    // ── 7) ฟอร์มเปิดใบงาน (ก้อน 8 · มือถือ 390): ช่างเสนออะไหล่รายเครื่อง ──
+    // เครื่องหนึ่ง: รหัสใหม่ ยังไม่รู้ยี่ห้อ → ช่องอะไหล่ล็อกจนกว่าจะกดชิป (ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" · ข้อ 17)
+    // เครื่องสอง: รู้ยี่ห้อจากรายงานอย่างเดียว (Machine.brand ตั้งทาง SQL · model ว่าง) → ปุ่มล็อก และต้องเปิดใบได้
+    // แบบนี้เคยติด "ยังไม่ได้เลือกยี่ห้อเครื่อง" เพราะ validate() ดูแค่ model (D7) · Machine.model ต้องว่างเหมือนเดิมหลังเปิดใบ
+    const MW4 = freeCode(MW3);
+    const MW5 = freeCode(MW4);
+    fresh.push(MW4, MW5);
+    sql(`insert into "Machine"("branchId",code,type,brand,"stateCode","updatedAt") values (${BID},'${MW5}','WASHER','HB - Huebsch','${MARK}',now())`);
+    const SYM7 = `${SYM}ฟอร์มเปิดใบ ${SUF}`;
+    await t2.goto(APP, { waitUntil: "networkidle" });
+    await t2.waitForTimeout(4000);
+    await vis(t2, "ใบงาน").last().click();
+    await t2.waitForTimeout(2500);
+    await vis(t2, "เพิ่มใบงาน").first().click();
+    await t2.waitForTimeout(2500);
+    const branchBox = t2.getByPlaceholder("ค้นรหัสหรือชื่อสาขา").locator("visible=true").first();
+    await branchBox.click();
+    await branchBox.type("C0006", { delay: 70 });
+    await t2.waitForTimeout(2400);
+    await vis(t2, sql(`select name from "Branch" where code='C0006'`), false).last().click();
+    await t2.waitForTimeout(2500);
+    const searchBoxes = () => t2.getByPlaceholder("ค้นหาในไฟล์ Huebsch").locator("visible=true").count();
+    (await vis(t2, "อะไหล่ที่ต้องใช้ (ไม่บังคับ)").count()) > 0 && (await vis(t2, "ใส่หมายเลขเครื่องก่อน").count()) > 0
+      ? pass("ฟอร์มเปิดใบงาน (ช่าง): ช่อง \"อะไหล่ที่ต้องใช้ (ไม่บังคับ)\" ล็อก \"ใส่หมายเลขเครื่องก่อน\" จนกว่าจะใส่รหัสเครื่อง")
+      : fail("ฟอร์มเปิดใบงาน: ไม่มีช่องอะไหล่ของช่าง หรือไม่ล็อกตอนยังไม่มีรหัสเครื่อง");
+
+    await t2.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").first().fill(MW4);
+    await t2.waitForTimeout(2500);
+    (await vis(t2, `เครื่อง ${MW4} ในระบบยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องด้านล่าง (ดูที่ป้ายเครื่อง)`).count()) > 0 &&
+    (await vis(t2, "เลือกยี่ห้อเครื่องก่อน").count()) > 0 &&
+    (await t2.getByPlaceholder(/^ค้นหาในไฟล์/).locator("visible=true").count()) === 0
+      ? pass(`เครื่องใหม่ ${MW4}: บรรทัดเหลือง "ในระบบยังไม่รู้ยี่ห้อ" + อะไหล่ล็อก "เลือกยี่ห้อเครื่องก่อน" (ไม่มีช่องค้น)`)
+      : fail(`เครื่องใหม่ ${MW4}: ไม่ถามยี่ห้อ หรือเปิดช่องค้นอะไหล่ก่อนกดชิป`);
+    await vis(t2, "Huebsch").first().click();
+    await t2.waitForTimeout(1500);
+    // ชิปต้องใส่ aria-selected เอง (เว็บไม่แปลง accessibilityState — CLAUDE.md) ไม่งั้นอ่านไม่ได้ว่ากดตัวไหนอยู่
+    (await t2.locator('[aria-selected="true"]').filter({ hasText: /^Huebsch$/ }).locator("visible=true").count()) > 0 &&
+    (await vis(t2, "ยังบอกไม่ได้ว่าต้องใช้ตัวไหน เว้นว่างได้ — หัวหน้าภาคจะเป็นคนระบุแทน").count()) > 0 &&
+    (await vis(t2, `จะบันทึกยี่ห้อ Huebsch ให้เครื่อง ${MW4} ตอนเปิดใบงาน`).count()) > 0 &&
+    (await searchBoxes()) === 1
+      ? pass("กดชิป Huebsch: ชิปติด (aria-selected) · คำอธิบาย \"ยังบอกไม่ได้ว่าต้องใช้ตัวไหน …\" · \"จะบันทึกยี่ห้อ Huebsch …\" · ช่องค้นในไฟล์ Huebsch")
+      : fail(`กดชิปแล้วช่องอะไหล่ไม่เปิด/ไม่มีคำอธิบาย (ช่องค้น ${await searchBoxes()})`);
+    await addPart(t2, `${K}-HB1`);
+    await t2.getByLabel("อาการที่พบของเครื่องที่ 1").locator("visible=true").first().fill(`${SYM7} ประตูล็อกไม่ลง`);
+    await attachPhoto(t2);
+
+    await vis(t2, "เพิ่มเครื่องในสาขาเดียวกัน").first().click();
+    await t2.waitForTimeout(800);
+    await t2.getByLabel("หมายเลขเครื่องที่ 2").locator("visible=true").first().fill(MW5);
+    await t2.waitForTimeout(2500);
+    (await vis(t2, `ยี่ห้อในระบบของเครื่อง ${MW5} — ใช้หาไฟล์อะไหล่ คิดอายุประกัน และการเสนอราคา`).count()) > 0 &&
+    (await vis(t2, "HB - Huebsch").count()) > 0 &&
+    (await vis(t2, "ไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วเขียนในอาการที่พบ — หัวหน้าภาคแก้ยี่ห้อเครื่องให้").count()) > 0 &&
+    (await vis(t2, `เครื่อง ${MW5} ในระบบยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องด้านล่าง (ดูที่ป้ายเครื่อง)`).count()) === 0 &&
+    (await searchBoxes()) === 2
+      ? pass(`เครื่อง ${MW5} (ยี่ห้อจากรายงาน "HB - Huebsch"): ปุ่มล็อก + บอกทางแก้ของช่าง · ไม่ถามยี่ห้อ · ช่องอะไหล่เปิดในไฟล์ Huebsch เลย`)
+      : fail(`เครื่อง ${MW5}: ยี่ห้อไม่ล็อก หรือยังถามยี่ห้อ (ช่องค้น ${await searchBoxes()})`);
+    await addPart(t2, `${K}-HB2`);
+    await t2.getByLabel("อาการที่พบของเครื่องที่ 2").locator("visible=true").first().fill(`${SYM7} น้ำไม่เข้า`);
+    await attachPhoto(t2);
+    // ผู้ติดต่อเติมจากใบล่าสุดของสาขา — สาขาที่ยังไม่เคยมีใบ ช่องว่าง ต้องกรอกเองก่อนเปิดใบได้
+    const cName = t2.getByLabel("ชื่อผู้ติดต่อที่สาขา").locator("visible=true").first();
+    if (!(await cName.inputValue())) await cName.fill("คุณทดสอบ");
+    const cPhone = t2.getByLabel("เบอร์ติดต่อสาขา").locator("visible=true").first();
+    if ((await cPhone.inputValue()).replace(/\D/g, "").length < 9) await cPhone.fill("0891112222");
+    (await vis(t2, "อะไหล่ที่เลือกเป็นข้อเสนอ ขึ้นในฟอร์มให้หัวหน้าภาคแก้ต่อได้", false).count()) > 0
+      ? pass("บรรทัดท้ายฟอร์มบอกว่าอะไหล่ที่เลือกเป็นข้อเสนอ หัวหน้าภาคแก้ต่อได้") : fail("ไม่มีบรรทัดบอกว่าอะไหล่เป็นข้อเสนอ");
+    await t2.screenshot({ path: path.join(__dirname, "parts-pick-8-open-form.png"), fullPage: true });
+    // สองเครื่อง = สองใบ ปุ่มบอกจำนวนใบ ("เปิดใบงาน 2 ใบ")
+    const openBtn = vis(t2, "เปิดใบงาน 2 ใบ").last();
+    await openBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await openBtn.click();
+    await confirmDuplicate(t2);
+    await t2.waitForTimeout(6000);
+    const blocked = await vis(t2, `เครื่องที่ 2 (${MW5}) ยังไม่ได้เลือกยี่ห้อเครื่อง`).count();
+    const opened7 = sql(`select coalesce(string_agg(w.id::text||':'||m.code, ',' order by w.id),'') from "WorkOrder" w
+                         join "Machine" m on m.id=w."machineId" where w."branchId"=${BID} and w.symptom like '${SYM7}%'`);
+    for (const pair of opened7 ? opened7.split(",") : []) ids.push(Number(pair.split(":")[0]));
+    const machine7 = (c) => sql(`select coalesce(brand,'-')||'|'||coalesce(model,'-') from "Machine" where "branchId"=${BID} and code='${c}'`);
+    const waiting7 = (c) =>
+      sql(`select coalesce(string_agg(p."partCode"||'x'||w.quantity, ','),'') from "WorkOrderPart" w join "SparePart" p on p.id=w."sparePartId"
+           join "WorkOrder" o on o.id=w."workOrderId" join "Machine" m on m.id=o."machineId"
+           where o.symptom like '${SYM7}%' and m.code='${c}' and w.kind='WAITING'`);
+    // ยืนยันที่ฐานข้อมูล: ใบละเครื่อง · ยี่ห้อที่กดชิปจำไว้ที่ model · ยี่ห้อจากรายงานไม่ถูกเขียนทับ · อะไหล่ที่เสนอลงเป็นอะไหล่ที่รอ
+    blocked === 0 &&
+    opened7.split(",").length === 2 &&
+    machine7(MW4) === "-|Huebsch" &&
+    machine7(MW5) === "HB - Huebsch|-" &&
+    waiting7(MW4) === `${K}-HB1x1` &&
+    waiting7(MW5) === `${K}-HB2x1`
+      ? pass(`เปิดใบงาน (ฐานข้อมูล): 2 ใบ · ${MW4} Machine.model = Huebsch · ${MW5} model ยังว่าง (brand เดิม) · อะไหล่ที่รอ ${K}-HB1 / ${K}-HB2 ตามเครื่อง`)
+      : fail(`เปิดใบงาน: blocked=${blocked} ใบ=${opened7} ${MW4}=${machine7(MW4)} ${MW5}=${machine7(MW5)} รอ=${waiting7(MW4)}/${waiting7(MW5)}`);
   } catch (e) {
     fail(String(e).split("\n").slice(0, 2).join(" "));
     await page?.screenshot({ path: path.join(__dirname, "parts-pick-fail.png") }).catch(() => {});
