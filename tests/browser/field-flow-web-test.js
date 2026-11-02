@@ -33,8 +33,8 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
   const checkin0 = Number(sql(`select coalesce(max(id),0) from "BranchCheckIn"`));
   const os = `ZZOS${Date.now() % 100000}`;
   const today = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
-  // ใบ R (คอนเฟิร์มวันใหม่ → ทีมไม่ว่าง) นัดมะรืน ไม่ใช่พรุ่งนี้ — งานพรุ่งนี้ล็อกเมื่อเลยเวลาปิดรับ (16:00) ของวันนี้ ถ้ารันหลังบ่ายสี่
-  // หัวหน้าภาคจะเจอฟอร์มแบบล็อกแทนฟอร์มคอนเฟิร์มวันใหม่ที่ข้อนี้ทดสอบ · งานมะรืนปิดรับพรุ่งนี้ จึงไม่ล็อกไม่ว่ารันกี่โมง
+  // ใบ R (คอนเฟิร์มวันใหม่ → ทีมไม่ว่าง) แอดมินเลื่อนไปมะรืน ไม่ใช่พรุ่งนี้ — พรุ่งนี้ปิดนัดตั้งแต่เวลาปิด (16:00) ของวันนี้
+  // ถ้ารันหลังบ่ายสี่ แอดมินต้องติ๊กแก้เป็นงานด่วนก่อนเลื่อน (ผลขึ้นกับเวลาที่รัน) · มะรืนเปิดเสมอ ไม่ว่ารันกี่โมง
   const dayAfter = visitDay(2);
   const ids = [];
   const A = await login("A001");
@@ -78,18 +78,23 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
       return { id, code: sql(`select code from "WorkOrder" where id=${id}`) };
     };
     // ใบ 1: ปล่อยงานให้ทีม T001 วันนี้ · ใบ 2: ลูกค้าขอเปลี่ยนวัน · ใบ 3: ใบงาน SUB ทีมเข้างานอยู่
+    // วันนี้ปิดนัดเสมอ (เส้นตายคือ 16:00 เมื่อวาน) — หัวหน้าภาคนัดวันนี้ได้เมื่อแอดมินแก้เป็นงานด่วนให้วันนี้ก่อน
+    // (ทางเดียวที่เจ้าของงานเลือกให้งานวันนี้) · ข้อนี้ทดสอบหน้าจอช่าง ต้องเป็นงาน "วันนี้" จริง เลื่อนวันไม่ได้
+    // คอนเฟิร์มวันเดิมกับปล่อยงานไม่มีเวลาปิดแล้ว ไม่ต้องติ๊กอะไรตอนคอนเฟิร์ม
+    const grantToday = (id) => call(A, "POST", `work-orders/${id}/urgent-release`, { day: today });
     const J = await mk(1);
-    // งานวันนี้เลยเวลาปิดรับตั้งแต่เมื่อวาน (ปิดรับ = 16:00 ของวันก่อนวันนัด) — แอดมินติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" ตอนคอนเฟิร์ม
-    // (ทางที่เจ้าของงานเลือกให้งานวันนี้) หัวหน้าภาคจึงปล่อยได้ทุกเวลา · ข้อนี้ทดสอบหน้าจอช่าง ต้องเป็นงาน "วันนี้" จริง เลื่อนวันไม่ได้
+    await grantToday(J.id);
     await call(S, "POST", `work-orders/${J.id}/parts`, { needsParts: false, assign: { team, scheduledAt: today, scheduledTime: "09:30" } });
-    await call(A, "POST", `work-orders/${J.id}/confirm-appointment`, { urgent: true });
+    await call(A, "POST", `work-orders/${J.id}/confirm-appointment`, {});
     await call(S, "POST", `work-orders/${J.id}/dispatch`, {});
     const R = await mk(2);
+    await grantToday(R.id);
     await call(S, "POST", `work-orders/${R.id}/parts`, { needsParts: false, assign: { team, scheduledAt: today } });
     await call(A, "POST", `work-orders/${R.id}/confirm-appointment`, { scheduledAt: dayAfter, note: "ร้านปิดวันนี้" });
     const B = await mk(3);
+    await grantToday(B.id);
     await call(S, "POST", `work-orders/${B.id}/parts`, { needsParts: false, assign: { team: os, scheduledAt: today } });
-    await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, { urgent: true }); // งานวันนี้ — เหตุผลเดียวกับใบ J
+    await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, {}); // งานวันนี้ — เหตุผลเดียวกับใบ J
     await call(S, "POST", `work-orders/${B.id}/dispatch`, {});
     const ready = [J, R, B].map((x) => st(x.id)).join(",");
     ready === "IN_PROGRESS,ASSIGNED,IN_PROGRESS" ? pass("เตรียมใบ (ฐานข้อมูล): ช่างเข้างาน · รอคอนเฟิร์มวันใหม่ · SUB เข้างาน") : fail(`เตรียม: ${ready}`);

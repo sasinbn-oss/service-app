@@ -1,109 +1,59 @@
 /**
- * เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — ฝั่งแอป
+ * เวลาปิดนัดงานพรุ่งนี้ (เจ้าของงานขอ ต.ค. 69 · ย้ายจากขั้นปล่อยงานมาที่การนัดวัน 2 พ.ย. 69) — ฝั่งแอป
  *
  * กฎตัดสินที่เซิร์ฟเวอร์เท่านั้น (backend/src/utils/dispatchCutoff.ts · เวลาที่คำขอไปถึง) ไฟล์นี้แค่ "คิดตาม" ค่าที่เซิร์ฟเวอร์ส่งมา
- * (release.deadline · cutoff · serverNow) ด้วยนาฬิกาที่เดินต่อเอง ป้าย/นับถอยหลังจึงพลิกเป็นล็อกตอน 16:00 ได้เอง
+ * (cutoff · serverNow · urgentReleaseFor · urgentAsk) ด้วยนาฬิกาที่เดินต่อเอง ปฏิทินจึงปิดวันพรุ่งนี้ตอน 16:00 ได้เอง
  * โดยไม่ต้องให้ทุกจอโหลดรายการใหม่พร้อมกัน — pool ฐานข้อมูลมีแค่ 5 connection (src/prisma.ts)
  *
- * นาฬิกาที่ใช้คือนาฬิกาเซิร์ฟเวอร์เสมอ ไม่ใช่นาฬิกามือถือ (คำถามข้อ 12) — มือถือช่างตั้งเวลาผิดเป็นเรื่องปกติ
- * ถ้าป้ายบอก "ยังปล่อยได้" แต่เซิร์ฟเวอร์ปฏิเสธ หัวหน้าภาคจะไม่เชื่อป้ายอีกเลย
+ * ย้ายเพราะ "การบล็อกวันคือการนัดวันลูกค้า" (เจ้าของงาน 2 พ.ย. 69 ดู WO-01192) — รุ่นแรกล็อกตอนปล่อยงาน
+ * ซึ่งใบที่หัวหน้าภาคนัดไว้ทันเวลาก็ยังไปติดล็อกได้ถ้าแอดมินคอนเฟิร์มช้า กฎจึงตัดสินตอนเลือกวันแทน ขั้นปล่อยงานไม่มีเวลาอีกแล้ว
  *
- * ข้อความทุกคำมาจากตัวอย่างที่เจ้าของงานอนุมัติ (ต.ค. 69) — แก้คำต้องแก้ทั้งชุดให้ตรงกัน
+ * นาฬิกาที่ใช้คือนาฬิกาเซิร์ฟเวอร์เสมอ ไม่ใช่นาฬิกามือถือ — มือถือตั้งเวลาผิดเป็นเรื่องปกติ
+ * ถ้าปฏิทินบอก "ยังนัดพรุ่งนี้ได้" แต่เซิร์ฟเวอร์ปฏิเสธ หัวหน้าภาคจะไม่เชื่อปฏิทินอีกเลย
+ *
+ * ข้อความทุกคำมาจากตัวอย่างที่เจ้าของงานอนุมัติ (appt-cutoff 2 พ.ย. 69) — แก้คำต้องแก้ทั้งชุดให้ตรงกัน
  * ตัวสร้างหัวข้อ (supervisorBanners · adminGroups) อยู่ที่นี่ที่เดียว งานของฉันวันนี้กับกล่องงานจะได้บอกเหมือนกันทุกตัวอักษร
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-/** เวลาปิดรับ "HH:MM" + เวลาเริ่มใช้กฎ (ใบที่เส้นตายอยู่ก่อนหน้านี้ไม่ล็อกย้อนหลัง — ข้อ 14) */
+/** เวลาปิดนัด "HH:MM" + เวลาเริ่มใช้กฎ (วันที่เส้นตายอยู่ก่อนหน้านี้ไม่ปิดย้อนหลัง — ข้อ 14) */
 export type Cutoff = { time: string; since: string };
 
-export type ReleaseAsk = { at: string; note: string | null; byName: string | null };
+/**
+ * ขั้นปล่อยงาน (รับทราบ ปล่อยงาน · ส่งช่างตรวจ) — ไม่มีกฎเวลาแล้ว (2 พ.ย. 69) ยังใช้เรียงกลุ่มตามวันนัดในงานของฉันวันนี้
+ * และหัวข้อ "ออกงานวันนี้" · ตรงกับ RELEASE_STAGES ฝั่งเซิร์ฟเวอร์
+ */
+export const RELEASE_STAGES = ["ASSIGNED", "INSPECT_DISPATCH"];
+/**
+ * ขั้นที่หัวหน้าภาคเลือกวันนัด (นัดวันเข้า · ไม่ใช้อะไหล่จ่ายงาน · ส่งตรวจ) — ที่เดียวที่กฎ 16:00 ตัดสิน · ตรงกับ SCHEDULE_STAGES ฝั่งเซิร์ฟเวอร์
+ * ขั้นระบุอะไหล่ (NEW) นับด้วยแม้หัวหน้าภาคอาจเลือก "ใช้อะไหล่" ที่ยังไม่ต้องนัด — การ์ดต้องเตือนก่อนเปิดฟอร์ม ไม่ใช่หลังเลือกทางแล้ว
+ */
+export const SCHEDULE_STAGES = ["NEW", "PARTS_CHECKED"];
 
-/** สถานะเวลาปิดรับของใบขั้นปล่อยงาน ณ ตอนที่เซิร์ฟเวอร์ตอบ — รูปเดียวกันทั้งรายการและหน้าใบงาน (releaseInfo ฝั่งเซิร์ฟเวอร์) */
-export interface Release {
-  /** กดได้ถึงก่อนเวลานี้ (ISO) — เวลานี้พอดีกดไม่ได้แล้ว (ข้อ 6) */
-  deadline: string;
-  /** false = ใบที่ค้างมาก่อนเปิดกฎ ไม่ล็อก */
-  enforced: boolean;
-  past: boolean;
-  urgent: boolean;
-  urgentExpired: boolean;
-  locked: boolean;
-  lockedSince: string | null;
-  /** ใบมาถึงขั้นปล่อยงานเมื่อไร ทางไหน ("คอนเฟิร์มลูกค้า" · "เลื่อนวันนัด" …) ใครกด — ใบที่มาถึงหลังเส้นตายต้องบอกว่าไม่ใช่เพราะหัวหน้าภาคช้า */
-  arrivedAt: string | null;
-  arrivedVia: string | null;
-  arrivedByAdmin: boolean;
-  /** หัวหน้าภาคขอแอดมินแก้เป็นงานด่วนไว้และยังรออยู่ */
-  ask: ReleaseAsk | null;
-}
+/** คำขอนัดด่วนของหัวหน้าภาคที่ยังรอแอดมิน — day = วันที่ร้านต้องการ ("YYYY-MM-DD") */
+export type UrgentAsk = { day: string; at: string; note: string | null; byName: string | null };
+/** แอดมินตอบคำขอ (ไม่แก้เป็นงานด่วน) — รูปเดียวกับคำขอ หัวหน้าภาคเห็นในฟอร์มนัดวันแล้วนัดวันอื่น */
+export type UrgentAnswer = UrgentAsk;
 
-/** หัวหน้าภาคส่งใบที่ล็อกกลับมาที่แอดมิน (ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่) — มีเฉพาะคำตอบของแอดมิน */
-export interface ReleaseDeclined {
-  at: string;
-  note: string | null;
-  byName: string | null;
-  past: boolean;
-}
-
-/** งานด่วนที่ใช้อยู่ (หน้าใบงาน) — กล่องเขียวสร้างจากช่อง ไม่แกะข้อความประวัติ */
-export interface UrgentInfo {
-  at: string;
-  byName: string | null;
-  via: "direct" | "confirm" | "reschedule" | null;
-  reason: string | null;
-}
-
-export interface WatchRow {
-  id: number;
-  code: string;
-  branchCode: string;
-  branchName: string;
-  status: string;
-  assignedTeam: string | null;
-  scheduledTime: string | null;
-}
-
-/** GET /work-orders/dispatch-watch — งานพรุ่งนี้ที่ไม่ได้อยู่ในกล่องของคนดูเสมอ แต่ต้องเตือน */
-export interface DispatchWatch {
-  serverNow: string;
-  today: string;
-  tomorrow: string;
-  cutoff: Cutoff;
-  notReady: (WatchRow & { statusLabel: string; stageActor: string | null })[];
-  releasedTomorrow: number;
-  /** แอดมินเท่านั้น — ยังปล่อยได้และยังไม่ได้ปล่อย (supervisors ว่าง = ไม่มีคนรับ) */
-  unreleasedTomorrow?: (WatchRow & { deadline: string; supervisors: { name: string; phone: string | null }[] })[];
-  /** แอดมินเท่านั้น — ยังไม่คอนเฟิร์มลูกค้า */
-  unconfirmedTomorrow?: WatchRow[];
-}
-
-/** ช่องของแถวรายการ/หน้าใบงานที่ไฟล์นี้อ่าน — WorkOrderRow และ WorkOrder ของหน้าใบงานเข้ารูปนี้ได้ทั้งคู่ */
-export interface ReleaseRow {
+/** ช่องที่กฎนัดวันอ่าน — แถวรายการกับใบงานของหน้าใบงานเข้ารูปนี้ได้ทั้งคู่ */
+export interface CutoffRow {
   id: number;
   code: string;
   status: string;
   scheduledAt: string | null;
   scheduledTime?: string | null;
+  isTest?: boolean;
+  /** วันที่แอดมินให้นัดได้แม้ปิดนัดแล้ว (แก้เป็นงานด่วน) — เฉพาะใบนี้ วันนั้น */
   urgentReleaseFor?: string | null;
-  release?: Release | null;
-  priority?: string;
-  branchCode?: string;
-  branchName?: string;
-  assignedTeam?: string | null;
+  urgentAsk?: UrgentAsk | null;
 }
 
-/** ขั้นที่กดปล่อยงาน — ตรงกับ RELEASE_STAGES ฝั่งเซิร์ฟเวอร์ (ส่งช่างตรวจใช้กฎเดียวกัน — ข้อ ก) */
-export const RELEASE_STAGES = ["ASSIGNED", "INSPECT_DISPATCH"];
-/** ขั้นก่อนปล่อยงานที่มีวันนัดแล้ว — ถึงขั้นปล่อยงานหลังเวลาปิดรับจะติดล็อก (ตรงกับ WATCH_NOT_READY ฝั่งเซิร์ฟเวอร์) */
-export const PRE_RELEASE_STAGES = ["PARTS_REQUESTED", "PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP", "AWAITING_CONFIRM", "INSPECT_CONFIRM"];
-
-/** ช่วงเตือนเลื่อนตามเวลาที่แอดมินตั้ง (ข้อ 11): ส้ม 3 ชม. ก่อน · แดง 30 นาทีสุดท้าย · ฟอร์มวันที่เตือนส้ม 1 ชม. ก่อน (ข้อ 4) */
+/**
+ * ช่วงเตือนเลื่อนตามเวลาที่แอดมินตั้ง: ส้ม 3 ชม. ก่อนปิด (13:00 ถ้าปิด 16:00 — เจ้าของงานข้อ 7) · แดง 30 นาทีสุดท้าย
+ * ฟอร์มของแอดมินไม่มีช่วงเตือน — แอดมินไม่ได้แข่งกับเวลาปิด (ปลดวันที่ปิดได้เองด้วยการติ๊ก) บรรทัดขึ้นเฉพาะวันที่ปิดแล้ว
+ */
 export const AMBER_MIN = 180;
 export const RED_MIN = 30;
-export const FORM_WARN_MIN = 60;
-
-/** ข้อความที่เซิร์ฟเวอร์ใส่แทนเมื่อหัวหน้าภาคไม่ได้เขียนอะไร — ไม่ยกมาใส่เครื่องหมายคำพูด (ตัวอย่างไม่ขึ้นอะไรเลยถ้าไม่ได้เขียน) */
-export const NO_ASK_NOTE = "ไม่ได้เขียนอะไรเพิ่ม";
 
 const MIN_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -157,7 +107,7 @@ export function dayFull(ymd: string): string {
   return `${dayShort(ymd)} ${pad((Number(ymd.slice(0, 4)) + 543) % 100)}`;
 }
 
-/** "ส. 31 ต.ค. 15:42" — เวลาที่เกิดเรื่อง (ล็อกตั้งแต่ · ส่งกลับเมื่อ · มาถึงเมื่อ) */
+/** "ส. 31 ต.ค. 15:42" — เวลาที่เกิดเรื่อง (หัวหน้าภาคขอนัดด่วนเมื่อ …) */
 export function whenText(t: number | string): string {
   const ms = typeof t === "string" ? Date.parse(t) : t;
   return `${dayShort(serverDay(ms))} ${hhmmOf(ms)}`;
@@ -187,7 +137,7 @@ export function deadlineOf(day: string, time: string): number {
 
 export type CutoffPhase = "calm" | "amber" | "red" | "closed";
 
-/** ช่วงของวันนี้เทียบกับเวลาปิดรับ (ตัวอย่าง timePhase) — ใช้กับงานพรุ่งนี้ที่ยังไม่ได้ปล่อย */
+/** ช่วงของวันนี้เทียบกับเวลาปิดนัด (ตัวอย่าง timePhase) — สีตามช่วงเดียวกับป้ายนับถอยหลัง */
 export function phaseOf(now: number, time: string): CutoffPhase {
   const tod = bkkMinutes(now);
   const c = minutesOf(time);
@@ -200,7 +150,7 @@ export function phaseOf(now: number, time: string): CutoffPhase {
 /**
  * offset นาฬิกาเซิร์ฟเวอร์จำตาม serverNow แต่ละค่า ตั้งแต่ครั้งแรกที่เห็น (= ตอนคำตอบมาถึง)
  * ถ้าคิดใหม่ทุกครั้งที่จอขึ้น จอที่กลับมาเปิดด้วยข้อมูลเดิมเมื่อ 5 นาทีก่อนจะได้นาฬิกาช้าไป 5 นาที
- * — ใกล้ 16:00 ป้ายจะบอก "ยังปล่อยได้" ทั้งที่เลยแล้ว
+ * — ใกล้ 16:00 ปฏิทินจะบอก "ยังนัดพรุ่งนี้ได้" ทั้งที่เลยแล้ว
  */
 const offsets = new Map<string, number>();
 function offsetFor(serverNow: string | null | undefined): number {
@@ -215,7 +165,7 @@ function offsetFor(serverNow: string | null | undefined): number {
   return off;
 }
 
-/** จุดถัดไปที่ป้ายเปลี่ยนสี/เปลี่ยนวัน: ปิดรับ−3 ชม. · ปิดรับ−30 นาที · ปิดรับ · เที่ยงคืน (เวลาไทย) */
+/** จุดถัดไปที่ป้ายเปลี่ยนสี/เปลี่ยนวัน: ปิดนัด−3 ชม. · ปิดนัด−30 นาที · ปิดนัด · เที่ยงคืน (เวลาไทย) */
 function nextBoundary(now: number, time: string | null | undefined): number {
   const today = serverDay(now);
   const at = (mins: number) => Date.parse(`${today}T00:00:00.000+07:00`) + mins * MIN_MS;
@@ -228,8 +178,8 @@ function nextBoundary(now: number, time: string | null | undefined): number {
 }
 
 /**
- * "ตอนนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มิลลิวินาที) — วาดใหม่ทุก 30 วิ และตรงจุดเปลี่ยน (ปิดรับ−3 ชม. · −30 นาที · ปิดรับ · เที่ยงคืน)
- * ตัวนับเป็นนาที 30 วิพอ · จุดเปลี่ยนต้องตรงเวลา ป้ายจะได้กลายเป็นล็อกตอน 16:00:00 ไม่ใช่ 16:00:29
+ * "ตอนนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มิลลิวินาที) — วาดใหม่ทุก 30 วิ และตรงจุดเปลี่ยน (ปิดนัด−3 ชม. · −30 นาที · ปิดนัด · เที่ยงคืน)
+ * ตัวนับเป็นนาที 30 วิพอ · จุดเปลี่ยนต้องตรงเวลา ปฏิทินจะได้ปิดวันพรุ่งนี้ตอน 16:00:00 ไม่ใช่ 16:00:29
  * serverNow ว่าง (เซิร์ฟเวอร์รุ่นเก่า) = ใช้นาฬิกาเครื่องไปก่อน ดีกว่าไม่ขึ้นอะไรเลย
  */
 export function useServerClock(serverNow?: string | null, cutoffTime?: string | null, active = true): number {
@@ -262,188 +212,12 @@ export function useServerClock(serverNow?: string | null, cutoffTime?: string | 
 /**
  * ตัวอ่าน "ตอนนี้" ตามนาฬิกาเซิร์ฟเวอร์ ณ วินาทีที่เรียก — สำหรับตัดสินใจตอนแตะ ไม่ใช่สำหรับวาด
  * ค่าจาก useServerClock คือเวลาตอนวาดรอบล่าสุด เก่าได้ถึง 30 วิ: แตะ 15:00 ตอน 15:00:10 จะเห็นเป็น 14:59:50
- * แล้วข้ามกล่องยืนยันไปล็อกใบพรุ่งนี้ทั้งบริษัทเงียบ ๆ (จุดเปลี่ยนของ useServerClock คิดจากค่าปัจจุบัน ไม่ใช่จากชิปที่กำลังแตะ)
+ * แล้วข้ามกล่องยืนยันไปปิดวันพรุ่งนี้ของทั้งบริษัทเงียบ ๆ (จุดเปลี่ยนของ useServerClock คิดจากค่าปัจจุบัน ไม่ใช่จากชิปที่กำลังแตะ)
  * offset จำไว้ในจอเอง (useMemo) ไม่ไปอ่านตารางจำซ้ำตอนแตะ — ตารางทิ้งคำตอบเก่าได้ คิดใหม่ทีหลังจะได้นาฬิกาช้าเท่าเวลาที่จอเปิดค้าง
  */
 export function useServerNowFn(serverNow?: string | null): () => number {
   const offset = useMemo(() => offsetFor(serverNow), [serverNow]);
   return useCallback(() => Date.now() + offset, [offset]);
-}
-
-export type ReleaseTone = "urgent" | "lock" | "req" | "later" | "calm" | "amber" | "red";
-
-export interface ReleaseView {
-  /** null = ไม่มีป้าย (ใบที่ค้างมาก่อนเปิดกฎ เลยเส้นตายแล้วแต่ไม่ล็อก) */
-  tone: ReleaseTone | null;
-  text: string;
-  locked: boolean;
-  past: boolean;
-  urgent: boolean;
-  urgentExpired: boolean;
-  enforced: boolean;
-  /** วันนัด "YYYY-MM-DD" · ห่างจากวันนี้กี่วัน (ตามวันเซิร์ฟเวอร์) */
-  day: string;
-  rel: number;
-  deadline: number;
-  remainMs: number;
-  /** "HH:MM" ของเส้นตายใบนี้ — ข้อความทุกบรรทัดของใบใช้เวลานี้ ไม่ใช่ค่าตั้งปัจจุบันที่อาจเปลี่ยนหลังโหลด */
-  cutTime: string;
-  /** คำขอแก้เป็นงานด่วนที่ยังรอ (เฉพาะใบที่ล็อกและวันนัดยังไม่ผ่าน) */
-  ask: ReleaseAsk | null;
-}
-
-/**
- * ป้ายของใบขั้นปล่อยงาน ณ เวลา now (ตัวอย่าง phase()) — คิดใหม่จาก release.deadline กับนาฬิกาที่เดินต่อ
- * ไม่ใช้ locked ที่เซิร์ฟเวอร์ส่งมาตรง ๆ เพราะค่านั้นถูกตอนโหลด จอที่เปิดค้างข้าม 16:00 จะยังบอก "ปล่อยได้"
- * null = ใบนี้ไม่อยู่ใต้กฎ (ขั้นอื่น · ใบทดสอบ · ไม่มีวันนัด — เซิร์ฟเวอร์ส่ง release: null มา)
- */
-export function releaseView(row: ReleaseRow, now: number, _cutoff?: Cutoff | null): ReleaseView | null {
-  const r = row.release;
-  if (!r || !row.scheduledAt || !RELEASE_STAGES.includes(row.status)) return null;
-  const day = row.scheduledAt.slice(0, 10);
-  const deadline = Date.parse(r.deadline);
-  const today = serverDay(now);
-  const rel = daysBetween(today, day);
-  const past = day < today;
-  // งานด่วนผูกกับวันนัด (ข้อ 7) — เซิร์ฟเวอร์รุ่นที่ไม่ส่ง urgentReleaseFor ใช้ธงที่ส่งมาแทน
-  const sameDay = row.urgentReleaseFor !== undefined ? row.urgentReleaseFor === day : r.urgent || r.urgentExpired;
-  const urgent = sameDay && !past;
-  const urgentExpired = sameDay && past;
-  const locked = r.enforced && !urgent && now >= deadline;
-  const remainMs = deadline - now;
-  const C = hhmmOf(deadline);
-  const base = { locked, past, urgent, urgentExpired, enforced: r.enforced, day, rel, deadline, remainMs, cutTime: C, ask: locked && !past ? r.ask : null };
-  if (urgent) return { ...base, tone: "urgent", text: "แอดมินแก้เป็นงานด่วน · ปล่อยได้เลย" };
-  if (locked) {
-    if (past) return { ...base, tone: "lock", text: `เลยนัดมา ${-rel} วัน · รอแอดมินเลื่อนวันนัด` };
-    return base.ask
-      ? { ...base, tone: "req", text: "เลยเวลาปล่อยงาน · ขอแอดมินแล้ว รอแก้เป็นงานด่วน" }
-      : { ...base, tone: "lock", text: "เลยเวลาปล่อยงาน · ขอแอดมินแก้เป็นงานด่วน หรือส่งกลับ" };
-  }
-  // เลยเส้นตายแล้วแต่ไม่ล็อก = ใบที่ค้างมาก่อนเปิดกฎ (ข้อ 14) — ไม่มีเส้นตายให้บอก ไม่ขึ้นป้ายดีกว่าบอกเวลาผิด
-  if (remainMs <= 0) return { ...base, tone: null, text: "" };
-  if (rel >= 2) return { ...base, tone: "later", text: `ปล่อยได้ก่อน ${dayShort(addDays(day, -1))} ${C} น.` };
-  if (remainMs <= RED_MIN * MIN_MS) return { ...base, tone: "red", text: `เหลือ ${leftText(remainMs)} · ปิดรับ ${C} น.` };
-  if (remainMs <= AMBER_MIN * MIN_MS) return { ...base, tone: "amber", text: `ต้องปล่อยก่อน ${C} น. · เหลือ ${leftText(remainMs)}` };
-  return { ...base, tone: "calm", text: `ต้องปล่อยก่อน ${C} น. วันนี้` };
-}
-
-/**
- * ป้ายของใบที่ยังไม่ถึงขั้นปล่อยงานแต่นัดพรุ่งนี้/วันนี้ — ถึงขั้นปล่อยงานหลังเวลาปิดรับจะติดล็อก
- * หัวหน้าภาคต้องรู้ตั้งแต่ตอนที่ยังตามของ/ตามแอดมินทัน ไม่ใช่รู้ตอนใบมาถึงแล้วกดไม่ได้
- */
-export function preReleaseView(
-  row: ReleaseRow & { isTest?: boolean },
-  now: number,
-  cutoff: Cutoff | null | undefined
-): { tone: "calm" | "amber" | "red"; text: string } | null {
-  if (!cutoff || !row.scheduledAt || row.isTest || !PRE_RELEASE_STAGES.includes(row.status)) return null;
-  const day = row.scheduledAt.slice(0, 10);
-  const rel = daysBetween(serverDay(now), day);
-  if (rel < 0 || rel > 1) return null;
-  const deadline = deadlineOf(day, cutoff.time);
-  if (deadline < Date.parse(cutoff.since)) return null;
-  const remain = deadline - now;
-  const C = cutoff.time;
-  if (remain <= 0) return { tone: "red", text: "ถึงขั้นปล่อยงานแล้วจะติดล็อก · ต้องให้แอดมินแก้เป็นงานด่วน" };
-  const tone = remain <= RED_MIN * MIN_MS ? "red" : remain <= AMBER_MIN * MIN_MS ? "amber" : "calm";
-  return { tone, text: `งานพรุ่งนี้ — ต้องถึงขั้นปล่อยงานก่อน ${C} น.${tone === "calm" ? "" : ` · เหลือ ${leftText(remain)}`}` };
-}
-
-export type FormWarning = { tone: "grey" | "amber" | "red"; text: string; checkbox: boolean } | null;
-
-/**
- * บรรทัดเตือนใต้ช่องวันที่ — ฟังก์ชันเดียวสำหรับทุกฟอร์มที่ส่งใบเข้าขั้นปล่อยงาน (ข้อ 4 "เตือนแบบเดียวกัน")
- * form: "confirm" (แอดมินคอนเฟิร์มลูกค้า) · "reschedule" (แอดมินเลื่อนวันนัด/ดึงงานคืน — โมดัลเดียวกัน) · "supervisor" (นัดวันเข้า/ส่งตรวจ)
- * เทา = ยังไม่ใกล้ · ส้ม = เหลือไม่ถึง 1 ชม. · แดง = เลยแล้ว (ฟอร์มแอดมินมีช่อง "แก้เป็นงานด่วนไปพร้อมกัน")
- * เตือนอย่างเดียว ไม่กันบันทึก — แอดมินตกลงวันกับร้านแล้ว การกันบันทึกคือทิ้งสิ่งที่ตกลงไป (ข้อ 4)
- */
-export function dateFormWarning(
-  day: string | null | undefined,
-  now: number,
-  cutoff: Cutoff | null | undefined,
-  who: "admin" | "supervisor",
-  form: "confirm" | "reschedule" | "supervisor"
-): FormWarning {
-  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !cutoff) return null;
-  const C = cutoff.time;
-  const deadline = deadlineOf(day, C);
-  const rel = daysBetween(serverDay(now), day);
-  // วันที่ผ่านแล้วมีด่านของมันเอง (เซิร์ฟเวอร์ไม่รับวันย้อนหลัง) · วันที่เส้นตายอยู่ก่อนเปิดกฎไม่ล็อก ไม่ต้องเตือน
-  if (rel < 0 || deadline < Date.parse(cutoff.since)) return null;
-  const red = now >= deadline;
-  const amber = !red && now >= deadline - FORM_WARN_MIN * MIN_MS;
-  const left = leftText(deadline - now);
-  const dShort = dayShort(addDays(day, -1));
-  const checkbox = red && who === "admin" && form !== "supervisor";
-  if (form === "confirm") {
-    if (red) {
-      // งานวันนี้ เส้นตายคือเมื่อวาน — "ถึง 16:00 น. แล้ว" ตอนแปดโมงเช้าจะไม่จริง
-      const text =
-        rel === 0
-          ? `วันนี้เลยเวลาปิดรับแล้ว (${dShort} ${C} น.) — คอนเฟิร์มตอนนี้ ใบจะถึงหัวหน้าภาคแบบล็อก · ต้องไปวันนี้จริง ติ๊กช่องข้างล่าง`
-          : `ถึง ${C} น. แล้ว — คอนเฟิร์มตอนนี้ ใบจะถึงหัวหน้าภาคแบบล็อก · ต้องไปพรุ่งนี้จริง ติ๊กช่องข้างล่าง`;
-      return { tone: "red", text, checkbox };
-    }
-    if (amber) return { tone: "amber", text: `ใกล้ปิดรับ (เหลือ ${left}) — คอนเฟิร์มแล้วบอกหัวหน้าภาคให้ปล่อยงานก่อน ${C} น.`, checkbox: false };
-    // งานตั้งแต่มะรืนไม่ต้องมีบรรทัด — การ์ดของหัวหน้าภาคบอก "ปล่อยได้ก่อน …" อยู่แล้ว
-    return rel === 1 ? { tone: "grey", text: `งานพรุ่งนี้ — หัวหน้าภาคต้องปล่อยงานก่อน ${C} น. วันนี้`, checkbox: false } : null;
-  }
-  if (form === "reschedule") {
-    if (red) return { tone: "red", text: `${rel === 0 ? "วันนี้" : "พรุ่งนี้"}เลยเวลาปิดรับแล้ว (${dShort} ${C} น.) — ไม่ติ๊ก ใบจะถึงหัวหน้าภาคแบบล็อก`, checkbox };
-    if (amber) return { tone: "amber", text: `ใกล้ปิดรับ (เหลือ ${left}) — บอกหัวหน้าภาคให้ปล่อยงานก่อน ${C} น.`, checkbox: false };
-    return { tone: "grey", text: `วันใหม่ปิดรับปล่อยงาน ${dayFull(addDays(day, -1))} ${C} น.`, checkbox: false };
-  }
-  if (red)
-    return {
-      tone: "red",
-      text: `${rel === 0 ? "วันนี้" : `พรุ่งนี้หลัง ${C} น.`} จะต้องให้แอดมินแก้เป็นงานด่วน — ถึงขั้นปล่อยงานแล้วจะติดล็อก`,
-      checkbox: false,
-    };
-  if (amber) return { tone: "amber", text: `ใกล้ปิดรับ (เหลือ ${left}) — ต้องถึงขั้นปล่อยงานก่อน ${C} น. ไม่งั้นติดล็อก`, checkbox: false };
-  return null;
-}
-
-/**
- * กล่องเส้นตายในฟอร์มปล่อยงานตอนยังไม่ล็อก (งานพรุ่งนี้ · งานมะรืนขึ้นไป · งานด่วน — ตัวอย่าง dlBox)
- * null = ไม่มีกล่อง (ล็อกแล้ว — กล่องแดงบอกแทน · ใบที่ค้างมาก่อนเปิดกฎ ไม่มีเส้นตายให้บอก)
- */
-export function deadlineBox(v: ReleaseView | null, now: number): { tone: ReleaseTone; title: string; big: string | null; small: string } | null {
-  if (!v || !v.tone || v.locked) return null;
-  const C = v.cutTime;
-  if (v.tone === "urgent")
-    return { tone: "urgent", title: "แอดมินแก้เป็นงานด่วนแล้ว — ปล่อยได้แม้เลยเวลาปิดรับ", big: null, small: "เฉพาะใบนี้ วันนัดนี้ · ลงประวัติใบงานแล้ว" };
-  if (v.tone === "later") {
-    const prev = addDays(v.day, -1);
-    // วันจันทร์บอกตรง ๆ ว่าปิดรับวันอาทิตย์ — คนส่วนใหญ่เดาว่าเส้นตายคือวันทำการก่อนหน้า (วันศุกร์) หรือไม่มีเส้นตายวันหยุด (ข้อ ค)
-    const monday = new Date(`${v.day}T00:00:00.000Z`).getUTCDay() === 1;
-    return {
-      tone: "later",
-      title: `ปล่อยได้ก่อน ${dayFull(prev)} ${C} น.`,
-      big: null,
-      small: `${monday ? "งานวันจันทร์ ปิดรับวันอาทิตย์ (วันก่อนวันนัด — ทุกวันนับเหมือนกัน) · " : "ปิดรับ = วันก่อนวันนัด · "}ปล่อยก่อนได้เลย — ทีมจะเห็นในแท็บ “พรุ่งนี้” ตั้งแต่ ${dayShort(prev)}`,
-    };
-  }
-  if (v.tone === "calm" || v.tone === "amber" || v.tone === "red")
-    return {
-      tone: v.tone,
-      title: `ปล่อยงานของพรุ่งนี้ได้ก่อน ${C} น. วันนี้`,
-      big: `เหลือ ${leftText(v.remainMs)}`,
-      small: `ตามเวลาระบบ · ตอนนี้ ${hhmmOf(now)} น. · ถึง ${C} น. แล้วกดไม่ได้`,
-    };
-  return null;
-}
-
-/**
- * กล่องเขียวงานด่วน (ตัวอย่าง note เมื่อ urgent) — หัว = แก้ทางไหน + เหตุผล · บรรทัดล่าง = ใคร เมื่อไร วันนัดไหน
- * สร้างจากช่องที่เซิร์ฟเวอร์ส่ง (urgentInfo จาก meta ของประวัติ) ไม่แกะข้อความประวัติ — ข้อความประวัติแก้คำได้ ช่องไม่เปลี่ยน
- */
-export function urgentNoteLines(info: UrgentInfo, day: string, time: string | null | undefined): { title: string; by: string } {
-  const via = info.via === "confirm" ? " (ตอนคอนเฟิร์มลูกค้า)" : info.via === "reschedule" ? " (ตอนเลื่อนวันนัด)" : "";
-  return {
-    title: `แอดมินแก้เป็นงานด่วน${via} — ${info.reason || "ไม่ได้ใส่เหตุผล"}`,
-    by: `${info.byName ?? "แอดมิน"} · ${whenText(info.at)} น. · นัด ${dayFull(day)} · ${timeText(time)}`,
-  };
 }
 
 /**
@@ -462,43 +236,240 @@ export function releasedText(o: { code: string; scheduledAt: string | null; assi
 }
 
 /**
- * ข้อความหลังส่งกลับแอดมินนัดใหม่ — ใบที่ล็อกขึ้นที่แอดมินในหัวข้อ "เลยเวลาปล่อยงาน"
- * ใบที่ไม่ได้ล็อก (คอนเฟิร์มวันใหม่ปกติก่อนปิดรับ) ไปกล่องส่งกลับเดิมของแอดมิน — ไม่บอกหัวข้อที่ใบไม่ได้ไป
+ * ข้อความหลังส่งกลับแอดมินนัดใหม่ (ทีมไม่ว่างวันใหม่) — ขั้นปล่อยงานไม่มีล็อกแล้ว ใบจึงไปกล่องส่งกลับเดิมของแอดมินเสมอ
+ * ไม่บอกชื่อหัวข้อ: ใบไปกล่องส่งกลับตามขั้น ไม่ใช่หัวข้อ "ขอนัดด่วน" — บอกหัวข้อผิดแย่กว่าไม่บอก
  */
-export function declinedText(code: string, wasLocked: boolean): string {
-  return `ส่ง ${code} กลับให้แอดมินนัดใหม่แล้ว — ใบออกจากรายการของคุณ${wasLocked ? " แอดมินเห็นในหัวข้อ “เลยเวลาปล่อยงาน”" : ""}`;
+export function declinedText(code: string): string {
+  return `ส่ง ${code} กลับให้แอดมินนัดใหม่แล้ว — ใบออกจากรายการของคุณ`;
 }
 
 /**
- * ข้อความหลังแอดมินเลื่อนวันนัด/ดึงงานคืน (ตัวอย่าง saveMove) — บอกต่อว่าหัวหน้าภาคจะเจอใบแบบไหน
- * แอดมินมักโทรบอกหัวหน้าภาคต่อ ต้องรู้ว่าใบถึงแบบปล่อยได้เลย · แบบล็อก · หรือมีเส้นตายวันไหน
+ * ข้อความหลังแอดมินเลื่อนวันนัด/ดึงงานคืน (ตัวอย่าง saveMove) — แอดมินมักโทรบอกหัวหน้าภาคต่อ ต้องรู้ว่าใบไปอยู่ที่ไหน
  * releaseStage = หลังบันทึกใบอยู่ขั้นปล่อยงาน (เลื่อนใบขั้นปล่อยงาน/ดึงคืนจากช่าง) — ใบขั้นเบิก/โอน/คอนเฟิร์มยังไม่ไปถึงหัวหน้าภาค
  * ประโยค "ใบกลับไปที่หัวหน้าภาค…" จะไม่จริง จึงตัดออก
- * urgentTaken = เซิร์ฟเวอร์ตั้งงานด่วนให้จริง (ติ๊กมาแต่เส้นตายยังไม่ถึงตอนคำขอไปถึง เซิร์ฟเวอร์ไม่ตั้ง — บอกตามที่เกิดจริง)
- * red = ตอนกดบันทึก วันใหม่เลยเส้นตายแล้ว
+ * urgentTaken = ติ๊กแก้เป็นงานด่วนไปพร้อมกันและเซิร์ฟเวอร์ตั้งให้จริง — บอกตามที่เกิด ไม่ใช่ตามที่ติ๊ก
+ * ไม่มีเส้นตายต่อท้ายแล้ว: ขั้นปล่อยงานกดได้ทุกเวลา กฎ 16:00 อยู่ที่การนัดวัน ซึ่งการเลื่อนครั้งนี้ผ่านมาแล้ว
  */
-export function rescheduledText(
-  code: string,
-  day: string,
-  o: { releaseStage: boolean; urgentTaken: boolean; red: boolean; cutTime: string }
-): string {
-  const tail = o.urgentTaken
-    ? "แก้เป็นงานด่วนไปพร้อมกันแล้ว หัวหน้าภาคปล่อยได้เลย"
-    : o.red
-      ? "วันใหม่เลยเวลาปิดรับแล้ว ใบจะถึงหัวหน้าภาคแบบล็อก"
-      : `ปิดรับ ${dayShort(addDays(day, -1))} ${o.cutTime} น.`;
-  return `เลื่อนวันนัด ${code} เป็น ${dayFull(day)} แล้ว — ${o.releaseStage ? "ใบกลับไปที่หัวหน้าภาคให้คอนเฟิร์มวันใหม่ · " : ""}${tail}`;
+export function rescheduledText(code: string, day: string, o: { releaseStage: boolean; urgentTaken: boolean }): string {
+  return `เลื่อนวันนัด ${code} เป็น ${dayFull(day)} แล้ว${o.releaseStage ? " — ใบกลับไปที่หัวหน้าภาคให้คอนเฟิร์มวันใหม่" : ""}${
+    o.urgentTaken ? " · แก้เป็นงานด่วนไปพร้อมกันแล้ว" : ""
+  }`;
 }
 
-/** วันแรกที่ยังปล่อยได้โดยไม่ต้องแก้เป็นงานด่วน (ตัวอย่าง firstOpen) — พรุ่งนี้ถ้ายังไม่ถึงเวลาปิดรับของวันนี้ ไม่งั้นมะรืน */
-export function firstOpenDay(now: number, cutoff: Cutoff | { time: string }): string {
-  const tomorrow = addDays(serverDay(now), 1);
-  return now < deadlineOf(tomorrow, cutoff.time) ? tomorrow : addDays(tomorrow, 1);
+/* ------------------------------------------------------------------------------------------------
+ * กฎนัดวัน — ตรงกับ closedFor / grantedFor / firstOpenDay ฝั่งเซิร์ฟเวอร์ ผลต้องเหมือนกันทุกวินาที
+ * ไม่งั้นปฏิทินบอกว่านัดได้แล้วเซิร์ฟเวอร์ปฏิเสธ (หรือขีดฆ่าวันที่เซิร์ฟเวอร์รับ — หัวหน้าภาคเสียงานเปล่า ๆ)
+ * cutoff = null คือ "ไม่มีกฎ" — ใบทดสอบ (เซิร์ฟเวอร์ยกเว้นทุกทาง) และเซิร์ฟเวอร์รุ่นเก่าที่ไม่ส่ง cutoff:
+ * ไม่ขีดฆ่า ไม่มีป้าย ไม่มีบรรทัด ไม่มีช่องติ๊ก ไม่มีปุ่มขอ — แอปต้องไม่โชว์กฎที่เซิร์ฟเวอร์ไม่บังคับ
+ * ---------------------------------------------------------------------------------------------- */
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+/** วันของค่า urgentReleaseFor — เซิร์ฟเวอร์ส่ง "YYYY-MM-DD" แต่ตัดเผื่อรุ่นที่ส่งเวลาเต็มมา */
+const dayOfIso = (v: string | null | undefined): string | null => (v ? v.slice(0, 10) : null);
+/**
+ * วันนี้อยู่ใต้กฎไหม — เส้นตายก่อนเวลาเริ่มใช้กฎ (createdAt แถวแรกของค่าตั้ง) ไม่ปิด
+ * วันที่เปิดกฎ ใบที่นัดวันนี้/พรุ่งนี้ไว้แล้วตามกติกาเดิมต้องไม่ถูกปิดย้อนหลัง
+ */
+function enforced(day: string, cutoff: Cutoff): boolean {
+  return deadlineOf(day, cutoff.time) >= Date.parse(cutoff.since);
 }
 
 /**
- * เปลี่ยนเวลาปิดรับจาก from เป็น to แล้วใบพรุ่งนี้ที่ยังไม่ปล่อยจะล็อก "ทันที" ไหม (ข้อ 13 "ข้อควรรู้")
- * = เลื่อนให้เร็วขึ้น และตอนนี้เลยเวลาใหม่ไปแล้วแต่ยังไม่ถึงเวลาเดิม
+ * วันนี้ปิดนัดแล้วหรือยัง ณ เวลา now (นาฬิกาเซิร์ฟเวอร์) — เส้นตาย = วันก่อนวันนัด เวลาที่แอดมินตั้ง
+ * วันนี้: ปิดเสมอ (เส้นตายคือเมื่อวาน) · พรุ่งนี้: ปิดตั้งแต่เวลาปิดของวันนี้ · มะรืนขึ้นไป: เปิด
+ * เท่ากับเส้นตายพอดีคือปิด (16:00:00.000 นัดพรุ่งนี้ไม่ได้ — เหมือนเซิร์ฟเวอร์)
+ */
+export function closedDay(day: string, now: number, cutoff: Cutoff | null | undefined): boolean {
+  if (!cutoff || !YMD.test(day)) return false;
+  return enforced(day, cutoff) && now >= deadlineOf(day, cutoff.time);
+}
+
+/** วันนี้นัดได้ไหม — เปิดอยู่ หรือแอดมินแก้เป็นงานด่วนให้วันนี้ (เฉพาะใบนี้ วันนั้น) */
+export function dayAllowed(day: string, now: number, cutoff: Cutoff | null | undefined, urgentFor?: string | null): boolean {
+  return !closedDay(day, now, cutoff) || dayOfIso(urgentFor) === day;
+}
+
+/**
+ * วันแรกที่นัดได้โดยไม่ต้องให้แอดมินแก้เป็นงานด่วน — เริ่มที่วันนี้ (ใบที่กฎยังไม่ครอบวันนี้ได้วันนี้)
+ * วนไม่เกินสามรอบ: มะรืนเปิดเสมอ (เส้นตายคือพรุ่งนี้ ยังไม่มาถึง)
+ */
+export function firstOpenDay(now: number, cutoff: Cutoff | null | undefined): string {
+  let day = serverDay(now);
+  for (let i = 0; i < 3 && closedDay(day, now, cutoff); i++) day = addDays(day, 1);
+  return day;
+}
+
+/** ป้ายใต้ปฏิทิน (และสีของช่องวันนั้น) — วันนี้กับพรุ่งนี้เท่านั้น วันอื่นนัดได้ตามปกติ ไม่ต้องมีป้าย */
+export type DayTag = { day: string; text: string; tone: "closed" | "amber" | "green" | "grey" };
+
+/**
+ * ป้ายของวันนี้/พรุ่งนี้ในปฏิทินนัดวัน (ตัวอย่าง supDays · admDays)
+ * หัวหน้าภาค: วันที่ปิดขีดฆ่ากดไม่ได้ ป้ายบอกว่าทำไม · นับถอยหลังบนช่องพรุ่งนี้ตั้งแต่ 3 ชม. ก่อนปิด (เห็นก่อนเลือก ไม่ใช่หลังกดแล้วโดนปฏิเสธ)
+ * แอดมิน: วันที่ปิดยังกดได้ (แอดมินปลดได้เองด้วยการติ๊ก) ป้ายจึงบอก "ต้องติ๊กงานด่วน" แทนการขีดฆ่า
+ */
+export function scheduleDayTags(
+  now: number,
+  cutoff: Cutoff | null | undefined,
+  urgentFor: string | null | undefined,
+  who: "supervisor" | "admin"
+): DayTag[] {
+  if (!cutoff) return [];
+  const C = cutoff.time;
+  const today = serverDay(now);
+  const tomorrow = addDays(today, 1);
+  const granted = dayOfIso(urgentFor);
+  const out: DayTag[] = [];
+  for (const day of [today, tomorrow]) {
+    if (granted === day) {
+      out.push({ day, text: "แอดมินแก้เป็นงานด่วน", tone: "green" });
+    } else if (closedDay(day, now, cutoff)) {
+      out.push(
+        who === "admin"
+          ? { day, text: "ต้องติ๊กงานด่วน", tone: "amber" }
+          : { day, text: day === today ? "งานด่วนเท่านั้น" : `ปิด ${C} แล้ว`, tone: "closed" }
+      );
+    } else if (who === "supervisor" && day === tomorrow && enforced(day, cutoff)) {
+      const remain = deadlineOf(day, C) - now;
+      out.push(remain <= AMBER_MIN * MIN_MS ? { day, text: `เหลือ ${leftText(remain)}`, tone: "amber" } : { day, text: `นัดได้ถึง ${C}`, tone: "grey" });
+    }
+  }
+  return out;
+}
+
+export type ScheduleTone = "grey" | "amber" | "blue" | "red" | "green";
+
+/**
+ * บรรทัดใต้ปฏิทินของหัวหน้าภาค (ตัวอย่าง s1Line) — ข้อแรกที่ตรงชนะ
+ * แดง: วันที่เลือกไว้ปิดไปแล้วระหว่างเปิดฟอร์ม (ปุ่มบันทึกปิด) · เขียว: แอดมินแก้เป็นงานด่วนให้แล้ว · ฟ้า: เลยเวลาปิด บอกวันแรกที่นัดได้
+ * ส้ม: 3 ชม. สุดท้าย · เทา: บอกกติกาไว้ก่อน หัวหน้าภาคจะได้รู้ว่าพรุ่งนี้นัดได้ถึงกี่โมง
+ * null = ไม่มีบรรทัด (ไม่มีกฎ · พรุ่งนี้ยังไม่อยู่ใต้กฎ)
+ */
+export function scheduleLine(
+  sel: string | null | undefined,
+  now: number,
+  cutoff: Cutoff | null | undefined,
+  urgentFor: string | null | undefined
+): { tone: ScheduleTone; text: string } | null {
+  if (!cutoff) return null;
+  const C = cutoff.time;
+  const today = serverDay(now);
+  const tomorrow = addDays(today, 1);
+  const granted = dayOfIso(urgentFor);
+  // วันย้อนหลังมีบรรทัดของมันเอง (วันนัดย้อนหลังไม่ได้) — ไม่ขึ้นแดงซ้อน
+  if (sel && YMD.test(sel) && sel >= today && closedDay(sel, now, cutoff) && granted !== sel)
+    return { tone: "red", text: `วันที่เลือกไว้ (${dayShort(sel)}) ปิดนัดแล้ว — เลย ${C} น. ตามเวลาระบบ · เลือกวันใหม่` };
+  if (granted && granted >= today)
+    return { tone: "green", text: `แอดมินแก้เป็นงานด่วนให้แล้ว — นัด ${dayShort(granted)} ได้ (เฉพาะใบนี้ · ลงประวัติแล้ว)` };
+  if (!enforced(tomorrow, cutoff)) return null;
+  if (closedDay(tomorrow, now, cutoff))
+    return {
+      tone: "blue",
+      text: `เลย ${C} น. แล้ว — นัดพรุ่งนี้ (${dayShort(tomorrow)}) ไม่ได้ · วันแรกที่นัดได้คือ ${dayShort(firstOpenDay(now, cutoff))}`,
+    };
+  const remain = deadlineOf(tomorrow, C) - now;
+  if (remain <= AMBER_MIN * MIN_MS) return { tone: "amber", text: `นัดพรุ่งนี้ได้อีก ${leftText(remain)} — ถึง ${C} น. ปฏิทินจะปิดวันพรุ่งนี้` };
+  return { tone: "grey", text: `นัดพรุ่งนี้ได้ถึง ${C} น. วันนี้ — หลังจากนั้นวันแรกที่นัดได้คือมะรืน` };
+}
+
+/**
+ * บรรทัดใต้ช่องวันของแอดมิน (ตัวอย่าง s2Line) — แอดมินเป็นคนเดียวที่ปลดวันที่ปิดได้ แต่ต้องตั้งใจ: ติ๊กในฟอร์มเดียวกัน
+ * แดง + needTick = วันที่ปิดและยังไม่ได้แก้เป็นงานด่วน (บันทึกไม่ได้จนกว่าจะติ๊ก — เซิร์ฟเวอร์ก็ตอบ 400 ถ้าไม่ติ๊ก)
+ * changed = ฟอร์มนี้เปลี่ยนวัน (คอนเฟิร์มลูกค้าขอเลื่อน · เลื่อนวันนัด) — บรรทัดเทายืนยันว่าวันใหม่บันทึกได้เลย
+ * ฟอร์มนัดวันของหัวหน้าภาคที่แอดมินทำแทนไม่มีบรรทัดเทา (ไม่ใช่การเปลี่ยนวัน)
+ */
+export function adminDayLine(
+  day: string | null | undefined,
+  now: number,
+  cutoff: Cutoff | null | undefined,
+  urgentFor: string | null | undefined,
+  changed: boolean
+): { tone: "red" | "grey"; text: string; needTick: boolean } | null {
+  if (!cutoff || !day || !YMD.test(day) || day < serverDay(now)) return null;
+  if (closedDay(day, now, cutoff) && dayOfIso(urgentFor) !== day)
+    return {
+      tone: "red",
+      needTick: true,
+      text:
+        day === serverDay(now)
+          ? "วันนี้ต้องเป็นงานด่วน — ต้องไปวันนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก"
+          : `พรุ่งนี้ปิดนัดแล้ว (เลย ${cutoff.time} น.) — ต้องไปพรุ่งนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก`,
+    };
+  return changed ? { tone: "grey", needTick: false, text: `วันใหม่ ${dayShort(day)} — บันทึกได้เลย` } : null;
+}
+
+/**
+ * วันที่หัวหน้าภาคกดขอแอดมินแก้เป็นงานด่วนได้ — เรียงตามปุ่ม [พรุ่งนี้, วันนี้] แต่ละวันขึ้นเมื่อปิดแล้วและยังไม่ได้แก้ให้
+ * วันนี้ขอได้แบบเดียวกับพรุ่งนี้หลังเวลาปิด (เจ้าของงานข้อ 3) · ขอค้างได้ทีละคำขอต่อใบ (เซิร์ฟเวอร์กันซ้ำ) — มีคำขอรออยู่ = ไม่มีปุ่ม
+ * คำขอที่วันผ่านไปแล้วตายเอง (เซิร์ฟเวอร์ไม่นับ) ฟอร์มที่เปิดค้างข้ามเที่ยงคืนจึงขอใหม่ได้
+ */
+export function askDays(
+  now: number,
+  cutoff: Cutoff | null | undefined,
+  urgentFor: string | null | undefined,
+  ask: UrgentAsk | null | undefined
+): string[] {
+  if (!cutoff) return [];
+  const today = serverDay(now);
+  if (ask && ask.day >= today) return [];
+  const granted = dayOfIso(urgentFor);
+  return [addDays(today, 1), today].filter((d) => closedDay(d, now, cutoff) && granted !== d);
+}
+
+/**
+ * ป้ายบนการ์ด/แถวของใบรอนัดวัน (ขั้นระบุอะไหล่ · นัดวันเข้า) — ใบขั้นอื่นไม่มีป้ายเวลาปิดแล้ว (ปล่อยงานกดได้ทุกเวลา)
+ * ม่วง = มีคำขอนัดด่วนรอแอดมิน · เขียว = แอดมินแก้เป็นงานด่วนให้ · ส้ม/แดง (หัวหน้าภาค) = 3 ชม. สุดท้ายก่อนปฏิทินปิดวันพรุ่งนี้
+ * แอดมินไม่เห็นนับถอยหลัง: ไม่ใช่งานที่แอดมินต้องรีบ เห็นแค่ใบที่หัวหน้าภาคขอมา
+ */
+export function scheduleChip(
+  row: CutoffRow,
+  now: number,
+  cutoff: Cutoff | null | undefined,
+  viewer: "supervisor" | "admin"
+): { tone: BannerTone; text: string } | null {
+  if (!cutoff || row.isTest || !SCHEDULE_STAGES.includes(row.status)) return null;
+  const today = serverDay(now);
+  const ask = row.urgentAsk && row.urgentAsk.day >= today ? row.urgentAsk : null;
+  if (ask)
+    return { tone: "req", text: viewer === "admin" ? `หัวหน้าภาคขอนัดด่วน ${dayShort(ask.day)}` : `ขอนัดด่วน ${dayShort(ask.day)} แล้ว · รอแอดมิน` };
+  const granted = dayOfIso(row.urgentReleaseFor);
+  if (granted && granted >= today) return { tone: "urgent", text: `แอดมินแก้เป็นงานด่วน · นัด ${dayShort(granted)} ได้` };
+  if (viewer !== "supervisor") return null;
+  const tomorrow = addDays(today, 1);
+  if (!enforced(tomorrow, cutoff)) return null;
+  const remain = deadlineOf(tomorrow, cutoff.time) - now;
+  if (remain <= 0 || remain > AMBER_MIN * MIN_MS) return null;
+  return { tone: remain <= RED_MIN * MIN_MS ? "red" : "amber", text: `นัดพรุ่งนี้ได้ถึง ${cutoff.time} · เหลือ ${leftText(remain)}` };
+}
+
+type ErrBody = { response?: { status?: number; data?: { code?: unknown; error?: unknown; serverNow?: unknown; cutoff?: unknown } } };
+
+/**
+ * 400 DATE_CLOSED (นัดวันที่ปิดแล้ว) — คืนนาฬิกากับเวลาปิดตอนที่เซิร์ฟเวอร์ตอบ ให้ฟอร์มคิดใหม่ในที่เดิม
+ * ฟอร์มที่เปิดก่อน 16:00 แล้วกดหลัง 16:00 จะได้เห็นวันพรุ่งนี้ขีดฆ่าทันทีโดยไม่ต้องโหลดใบใหม่ (โหลดใหม่ = ทีม/เวลา/อะไหล่ที่กรอกหาย)
+ */
+export function closedFromError(e: unknown): { serverNow: string; cutoff: Cutoff } | null {
+  const res = (e as ErrBody | null)?.response;
+  const d = res?.data;
+  if (res?.status !== 400 || d?.code !== "DATE_CLOSED") return null;
+  const c = d.cutoff as { time?: unknown; since?: unknown } | undefined;
+  if (typeof d.serverNow !== "string" || typeof c?.time !== "string" || typeof c?.since !== "string") return null;
+  return { serverNow: d.serverNow, cutoff: { time: c.time, since: c.since } };
+}
+
+/**
+ * 409 URGENT_ASK_STATE (สถานะคำขอนัดด่วนเปลี่ยนไปแล้ว: แอดมินเพิ่งแก้/ตอบ · ไม่มีคำขอรออยู่ · วันนั้นยังเปิด) → ข้อความไทยของเซิร์ฟเวอร์
+ * ฟอร์ม/หน้าต่างจัดการเอง (ดึงสถานะล่าสุดมาวาดทับ) — ไม่ใช่ใบงานข้อมูลเก่า ตัวจัดการ 409 กลางต้องไม่ปิดฟอร์ม (api/client.ts)
+ */
+export function askStateError(e: unknown): string | null {
+  const res = (e as ErrBody | null)?.response;
+  const d = res?.data;
+  if (res?.status !== 409 || d?.code !== "URGENT_ASK_STATE") return null;
+  return typeof d.error === "string" ? d.error : "คำขอนัดด่วนเปลี่ยนไปแล้ว — ดูสถานะล่าสุดในฟอร์ม";
+}
+
+/**
+ * เปลี่ยนเวลาปิดจาก from เป็น to แล้วปฏิทินของหัวหน้าภาคจะ "ปิดวันพรุ่งนี้ทันที" ไหม
+ * = เลื่อนให้เร็วขึ้น และตอนนี้เลยเวลาใหม่ไปแล้วแต่ยังไม่ถึงเวลาเดิม — การ์ดตั้งค่าต้องถามก่อน (แตะพลาดครั้งเดียวปิดทั้งบริษัท)
  */
 export function cutoffChangeLocksNow(now: number, from: string, to: string): boolean {
   const t = bkkMinutes(now);
@@ -509,7 +480,11 @@ export function cutoffChangeLocksNow(now: number, from: string, to: string): boo
  * หัวข้อบนสุดของงานของฉันวันนี้และกล่องงาน — ตัวสร้างเดียว สองหน้าจะได้นับและบอกตรงกันเสมอ
  * ---------------------------------------------------------------------------------------------- */
 
-export type BannerTone = ReleaseTone | "done" | "today" | "grey";
+/**
+ * สีของป้าย/หัวข้อ — req ม่วง (คำขอนัดด่วน) · urgent เขียว (แอดมินแก้ให้แล้ว) · amber/red นับถอยหลัง · today ออกงานวันนี้
+ * · lock แดง ("เลยนัด") · grey ไม่มีอะไรต้องรีบ
+ */
+export type BannerTone = "lock" | "req" | "urgent" | "amber" | "red" | "today" | "grey";
 
 export interface BannerItem {
   id: number;
@@ -527,21 +502,19 @@ export interface CutoffBanner {
   /** ป้ายขวาของหัวข้อ เช่น "เหลือ 45 นาที" */
   right?: string;
   tone: BannerTone;
-  /** ขอบหนา 2 px — เรื่องที่ต้องทำตอนนี้ (ล็อก · 30 นาทีสุดท้าย) */
+  /** ขอบหนา 2 px — เรื่องที่ต้องทำตอนนี้ (คำขอนัดด่วนที่ร้านรอ · 30 นาทีสุดท้าย) */
   strong?: boolean;
   items: BannerItem[];
 }
 
 /** แถวที่ตัวสร้างหัวข้ออ่าน — WorkOrderRow เข้ารูปนี้ได้ */
-export interface BannerRow extends ReleaseRow {
+export interface BannerRow extends CutoffRow {
   branchCode: string;
   branchName: string;
   assignedTeam: string | null;
-  isTest?: boolean;
   overdue?: boolean;
-  orphan?: boolean;
   statusLabel?: string;
-  releaseDeclined?: ReleaseDeclined | null;
+  /** หัวหน้าภาคที่ใบรออยู่ (เบอร์มาเฉพาะในคำตอบของแอดมิน) — แถว "ขอนัดด่วน" บอกเบอร์ของคนที่ขอ แอดมินโทรถามได้เลย */
   waitingOnSupervisors?: { name: string; phone?: string | null }[];
 }
 
@@ -562,279 +535,142 @@ const byAppt = (a: { scheduledAt: string | null; scheduledTime?: string | null; 
   a.code.localeCompare(b.code);
 
 /**
- * หัวข้อของหัวหน้าภาค ตามลำดับในตัวอย่าง (supGroups): ล็อก · เลยวันนัด · นับถอยหลัง/ปล่อยครบ · งานด่วนพรุ่งนี้ · ยังไม่ถึงขั้น · ออกงานวันนี้
- * rows = ทุกใบในกล่อง (ไม่ใช่เฉพาะแท็บที่เปิด — ใบงาน SUB ก็ต้องนับ) · watch = dispatch-watch (ใบที่ยังไม่อยู่ในกล่อง)
+ * หัวข้อของหัวหน้าภาค (งานของฉันวันนี้ · กล่องงาน — ช่องเดียวกับแถบปล่อยงานเดิม)
+ * 1) "รอนัดวัน n ใบ — นัดพรุ่งนี้ได้ถึง …" เฉพาะ 3 ชม. สุดท้ายก่อนปฏิทินปิดวันพรุ่งนี้ (เจ้าของงานข้อ 7) — ขึ้นตลอดวันคือหัวข้อที่คนเลิกอ่าน
+ *    นับใบรอนัดวันที่ยังนัดพรุ่งนี้เองได้: ไม่ใช่ใบทดสอบ · ยังไม่ได้แก้เป็นงานด่วนพรุ่งนี้ · ยังไม่ได้ขอพรุ่งนี้ไว้ (รอแอดมินอยู่แล้ว)
+ *    30 นาทีสุดท้ายเป็นแดงขอบหนา
+ * 2) "ออกงานวันนี้" — ใบรอปล่อยงานที่นัดวันนี้ (ตามวันของเซิร์ฟเวอร์) ปล่อยได้ทุกเวลาแล้ว จึงไม่มีเงื่อนไขล็อก
+ * rows = ทุกใบในกล่อง (ไม่ใช่เฉพาะแท็บที่เปิด) · ไม่ถามเซิร์ฟเวอร์เพิ่ม — ทุกอย่างคิดจากใบในกล่องกับนาฬิกาเซิร์ฟเวอร์
  */
-export function supervisorBanners(
-  rows: BannerRow[],
-  watch: DispatchWatch | null | undefined,
-  now: number,
-  cutoff: Cutoff | null | undefined
-): CutoffBanner[] {
-  const C = cutoff?.time ?? watch?.cutoff.time ?? "16:00";
-  const views = rows
-    .map((r) => ({ r, v: releaseView(r, now, cutoff) }))
-    .filter((x): x is { r: BannerRow; v: ReleaseView } => !!x.v)
-    .sort((a, b) => byAppt(a.r, b.r));
-  const lockedF = views.filter((x) => x.v.locked && !x.v.past);
-  const lockedP = views.filter((x) => x.v.locked && x.v.past);
-  const tmrAll = views.filter((x) => x.v.rel === 1);
-  const tmr = tmrAll.filter((x) => !x.v.locked && !x.v.urgent && x.v.remainMs > 0);
-  const tmrUrg = tmrAll.filter((x) => x.v.urgent);
-  const todayL = views.filter((x) => !x.v.locked && x.v.rel === 0);
+export function supervisorBanners(rows: BannerRow[], now: number, cutoff: Cutoff | null | undefined): CutoffBanner[] {
   const out: CutoffBanner[] = [];
-  if (lockedF.length) {
-    const allReq = lockedF.every((x) => x.v.ask);
-    out.push({
-      key: "locked",
-      title: `เลยเวลาปล่อยงาน ${lockedF.length} ใบ`,
-      hint: allReq
-        ? "ส่งคำขอครบแล้ว — รอแอดมินแก้เป็นงานด่วนหรือเลื่อนวันนัด ใบจะกลับมากดได้เอง"
-        : "แตะที่ใบ: ต้องไปตามนัด → “ขอแอดมินแก้เป็นงานด่วน” · ทีมไม่ว่าง → “ส่งกลับแอดมินนัดใหม่”",
-      tone: "lock",
-      strong: true,
-      items: lockedF.map((x) => itemOf(x.r)),
-    });
-  }
-  if (lockedP.length)
-    out.push({
-      key: "past",
-      title: `เลยวันนัดแล้ว ${lockedP.length} ใบ`,
-      hint: "รอแอดมินโทรร้านเลื่อนวันนัด — ใบจะกลับมาพร้อมป้าย “เลื่อนวันนัด — คอนเฟิร์มวันใหม่”",
-      tone: "lock",
-      strong: true,
-      items: lockedP.map((x) => itemOf(x.r)),
-    });
-  if (tmr.length) {
-    const tomorrow = tmr[0].v.day;
-    const remain = Math.min(...tmr.map((x) => x.v.remainMs));
-    const ph = remain <= RED_MIN * MIN_MS ? "red" : remain <= AMBER_MIN * MIN_MS ? "amber" : "calm";
-    const n = tmr.length;
-    const G = {
-      calm: { title: `งานพรุ่งนี้ ${dayShort(tomorrow)} รอปล่อย ${n} ใบ`, hint: `ปิดรับ ${C} น. วันนี้ · ปล่อยแล้วทีมเห็นงานพรุ่งนี้ในแอปทันที` },
-      amber: { title: `ปล่อยงานพรุ่งนี้ก่อน ${C} น. · ยังไม่ปล่อย ${n} ใบ`, hint: `ถึง ${C} น. แล้วกดไม่ได้ — ต้องให้แอดมินแก้เป็นงานด่วนทีละใบ` },
-      red: { title: `ใกล้ปิดรับ — งานพรุ่งนี้ยังไม่ปล่อย ${n} ใบ`, hint: `แตะที่ใบ แล้วกดปล่อยงาน / ส่งช่างตรวจ ก่อน ${C} น.` },
-    }[ph];
-    out.push({ key: "tomorrow", ...G, right: `เหลือ ${leftText(remain)}`, tone: ph, strong: ph === "red", items: tmr.map((x) => itemOf(x.r, `เหลือ ${leftText(x.v.remainMs)}`)) });
-  } else if (!tmrAll.length && (watch?.releasedTomorrow ?? 0) > 0) {
-    out.push({
-      key: "done",
-      title: `ปล่อยงานพรุ่งนี้ที่ถึงขั้นแล้วครบ ${watch!.releasedTomorrow} ใบ`,
-      hint: "ทีมเห็นงานในแท็บ “พรุ่งนี้” แล้ว · ใบที่ยังไม่ถึงขั้นปล่อยงานดูหัวข้อข้างล่าง",
-      tone: "done",
-      items: [],
-    });
-  }
-  if (tmrUrg.length)
-    out.push({
-      key: "urgentTmr",
-      title: `งานด่วนพรุ่งนี้รอปล่อย ${tmrUrg.length} ใบ`,
-      hint: "แอดมินแก้เป็นงานด่วนแล้ว — ปล่อยได้แม้เลยเวลาปิดรับ",
-      tone: "urgent",
-      items: tmrUrg.map((x) => itemOf(x.r)),
-    });
-  const notReady = watch?.notReady ?? [];
-  // ซ่อนเมื่อเป็น 0 (DEFAULT — บอกเจ้าของงาน): ตัวอย่างวาดตลอดเพราะข้อมูลตัวอย่างไม่เคยถึง 0 · หัวข้อว่างทุกวันคือหัวข้อที่คนเลิกอ่าน
-  if (notReady.length) {
-    const count = (st: string[]) => notReady.filter((w) => st.includes(w.status)).length;
-    // สองคำแรกขึ้นเสมอตามตัวอย่าง · ขั้นเบิกของแอดมินกับเบิกคลังอื่นของหัวหน้าภาคไม่เข้าสองคำนั้น ต่อท้ายด้วยชื่อขั้นจริงเมื่อมี
-    let parts = `รอแอดมินคอนเฟิร์มลูกค้า ${count(["AWAITING_CONFIRM", "INSPECT_CONFIRM"])} · ของยังโอนไม่ถึง ${count(["PARTS_TRANSFER", "PARTS_IN_TRANSIT"])}`;
-    for (const st of ["PARTS_REQUESTED", "PARTS_PICKUP"]) {
-      const these = notReady.filter((w) => w.status === st);
-      if (these.length) parts += ` · ${these[0].statusLabel} ${these.length}`;
+  const today = serverDay(now);
+  const tomorrow = addDays(today, 1);
+  if (cutoff && enforced(tomorrow, cutoff)) {
+    const C = cutoff.time;
+    const remain = deadlineOf(tomorrow, C) - now;
+    if (remain > 0 && remain <= AMBER_MIN * MIN_MS) {
+      const wait = rows
+        .filter(
+          (r) =>
+            SCHEDULE_STAGES.includes(r.status) &&
+            !r.isTest &&
+            dayOfIso(r.urgentReleaseFor) !== tomorrow &&
+            r.urgentAsk?.day !== tomorrow
+        )
+        .sort((a, b) => a.code.localeCompare(b.code));
+      if (wait.length) {
+        const red = remain <= RED_MIN * MIN_MS;
+        out.push({
+          key: "schedule",
+          title: `รอนัดวัน ${wait.length} ใบ — นัดพรุ่งนี้ได้ถึง ${C} (เหลือ ${leftText(remain)})`,
+          hint: `ถึง ${C} น. ปฏิทินจะปิดวันพรุ่งนี้ — แตะที่ใบเพื่อนัดวัน`,
+          tone: red ? "red" : "amber",
+          strong: red,
+          // ใบรอนัดยังไม่มีวันนัด — บอกขั้นแทนเวลา ("ทั้งวัน" ของ itemOf จะอ่านเป็นนัดทั้งวัน)
+          items: wait.map((r) => ({
+            id: r.id,
+            code: r.code,
+            line: [`${r.branchCode}${r.branchName ? ` ${r.branchName}` : ""}`, r.statusLabel].filter(Boolean).join(" · "),
+          })),
+        });
+      }
     }
-    const tomorrow = watch?.tomorrow ?? addDays(serverDay(now), 1);
-    const after = now >= deadlineOf(tomorrow, C);
-    out.push({
-      key: "notReady",
-      title: `งานพรุ่งนี้ยังไม่ถึงขั้นปล่อยงาน ${notReady.length} ใบ`,
-      hint: after
-        ? `${parts} — ถึงขั้นปล่อยงานหลัง ${C} น. จะติดล็อก ต้องให้แอดมินแก้เป็นงานด่วน`
-        : `${parts} — ต้องถึงขั้นปล่อยงานก่อน ${C} น. ไม่งั้นติดล็อก`,
-      tone: "later",
-      items: notReady.map((w) => itemOf(w)),
-    });
   }
+  const todayL = rows
+    .filter((r) => RELEASE_STAGES.includes(r.status) && !r.isTest && (r.scheduledAt ?? "").slice(0, 10) === today)
+    .sort(byAppt);
   if (todayL.length)
     out.push({
       key: "today",
       title: `ออกงานวันนี้ ${todayL.length} ใบ`,
       hint: "ลูกค้าคอนเฟิร์มแล้ว — กดรับทราบเพื่อปล่อยงานให้ช่าง",
       tone: "today",
-      items: todayL.map((x) => itemOf(x.r)),
+      items: todayL.map((r) => itemOf(r)),
     });
   return out;
-}
-
-export interface AdminRowLines {
-  /** บรรทัดแรก: ทีม · หัวหน้าภาค/ไม่มีคนรับ · ส่งช่างตรวจ · ตั้งด่วนไว้ตั้งแต่เปิดใบ */
-  who: string;
-  /** บรรทัดนัด: นัด … · เวลา */
-  appt: string;
-  /** บรรทัดเวลา: ล็อกตั้งแต่ … / ส่งกลับเมื่อ … */
-  since: string | null;
-  /** "สาเหตุ: …" — ใบเลยนัดขั้นอื่นไม่มี (ใช้ชื่อขั้นแทน แบบแถวกล่องงานเดิม) */
-  cause: string | null;
-  /** กล่องบอกว่าหัวหน้าภาคเลือกอะไร — ใบไม่มีคนรับไม่มี (ไม่มีใครให้ถาม) */
-  ask: { text: string; tone: "purple" | "grey" } | null;
-}
-
-const INSPECT_STAGES = ["INSPECT_DISPATCH", "INSPECT_CONFIRM"];
-
-/** เหตุผลที่หัวหน้าภาคพิมพ์ตอนส่งกลับ — ประวัติเก็บเป็น "ทีมX ไม่ว่างวันนัด (วัน) — เหตุผล" */
-function declineReason(note: string | null): string {
-  if (!note) return "";
-  const i = note.indexOf(" — ");
-  return i >= 0 ? note.slice(i + 3) : note;
-}
-
-/**
- * บรรทัดของแถวแอดมินในหัวข้อ "เลยเวลาปล่อยงาน" / "เลยนัด" (ตัวอย่าง adminLocked / adminPast)
- * group = หัวข้อที่แถวนี้อยู่ — "เลยนัด" ไม่มีเวลาล็อกและกล่องหัวหน้าภาค (ตัวอย่างไม่มี) เหลือแค่สาเหตุ
- * ใบไม่มีคนรับ (DEFAULT — บอกเจ้าของงาน): ไม่มีหัวหน้าภาคให้โทษหรือถาม ข้อความเป็นกลาง และไม่มีกล่องถาม
- */
-export function adminRowLines(row: BannerRow, now: number, cutoff: Cutoff | null | undefined, group: "locked" | "past"): AdminRowLines {
-  const v = releaseView(row, now, cutoff);
-  const d = row.releaseDeclined ?? null;
-  const day = row.scheduledAt?.slice(0, 10) ?? "";
-  const C = v?.cutTime ?? cutoff?.time ?? "16:00";
-  const sups = row.waitingOnSupervisors ?? [];
-  const orphan = !!row.orphan;
-  const supName = d?.byName ?? (sups.length ? sups.map((s) => s.name).join(" / ") : null);
-  const who =
-    `ทีม${row.assignedTeam ?? " —"} · ${orphan || !supName ? "ไม่มีคนรับ" : `หัวหน้าภาค ${supName}`}` +
-    (INSPECT_STAGES.includes(row.status) ? " · ส่งช่างตรวจ" : "") +
-    (group === "locked" && row.priority === "URGENT" ? " · ตั้ง ด่วน ไว้ตั้งแต่เปิดใบ" : "");
-  const appt = day ? `นัด ${dayFull(day)} · ${timeText(row.scheduledTime)}` : "";
-  let since: string | null = null;
-  if (group === "locked") {
-    if (d) since = `ส่งกลับเมื่อ ${whenText(d.at)} น.`;
-    else if (v?.locked) {
-      // ล็อกตั้งแต่ = ช้าสุดของเส้นตายกับเวลาที่ใบมาถึง (ใบที่มาถึงหลังเส้นตายไม่ได้ล็อกตั้งแต่ก่อนที่จะมา) — ใบที่เพิ่งล็อก
-      // ระหว่างจอเปิดค้างเซิร์ฟเวอร์ยังไม่ได้ส่ง lockedSince มา คิดเองด้วยกติกาเดียวกัน
-      const r = row.release!;
-      const at = r.lockedSince ? Date.parse(r.lockedSince) : Math.max(v.deadline, r.arrivedAt ? Date.parse(r.arrivedAt) : 0);
-      since = `ล็อกตั้งแต่ ${whenText(at)} น.`;
-    }
-  }
-  let cause: string | null = null;
-  if (d) cause = d.past || group === "past" ? "หัวหน้าภาคส่งกลับแล้ว" : "หัวหน้าภาคส่งกลับมาที่แอดมินแล้ว (ขั้นคอนเฟิร์มลูกค้า) — ต้องเลื่อนวันนัด";
-  else if (v) {
-    const r = row.release!;
-    const arrived = r.arrivedAt ? Date.parse(r.arrivedAt) : 0;
-    if (v.urgentExpired) cause = "งานด่วนหมดอายุ — วันนัดผ่านแล้ว";
-    else if (v.past) cause = "วันนัดผ่านไปแล้ว ยังไม่ได้ปล่อยงาน";
-    else if (r.arrivedAt && arrived >= v.deadline)
-      cause = `${orphan ? "ถึงขั้นปล่อยงานหลังเวลาปิดรับ" : "ถึงหัวหน้าภาคหลังเวลาปิดรับ"} (${r.arrivedVia ?? "มาถึง"} ${whenText(arrived)} น.)`;
-    else cause = `${orphan ? "" : "หัวหน้าภาค"}ยังไม่ได้ปล่อยก่อน ${C} น.`;
-  }
-  let ask: AdminRowLines["ask"] = null;
-  if (group === "locked" && !orphan) {
-    if (d) ask = { tone: "purple", text: `หัวหน้าภาคส่งกลับ: ทีมไม่ว่าง — “${declineReason(d.note)}” · ${hhmmOf(d.at)} น. → เลื่อนวันนัด` };
-    else if (v?.ask) {
-      const note = v.ask.note && v.ask.note !== NO_ASK_NOTE ? ` — “${v.ask.note}”` : "";
-      ask = { tone: "purple", text: `หัวหน้าภาคขอแก้เป็นงานด่วน · ${hhmmOf(v.ask.at)} น.${note}` };
-    } else if (v?.locked && sups.length) {
-      const call = sups.map((s) => [s.name, s.phone].filter(Boolean).join(" ")).join(" / ");
-      ask = { tone: "grey", text: `หัวหน้าภาคยังไม่ได้บอกว่าจะไปไหม — โทรถาม ${call}` };
-    }
-  }
-  return { who, appt, since, cause: cause ? `สาเหตุ: ${cause}` : null, ask };
-}
-
-export interface AdminCutoffGroups {
-  /** "เลยเวลาปล่อยงาน" — วาดเสมอ แม้ไม่มีใบ (ตัวอย่างมีหน้าตอน 0 ใบ) */
-  locked: CutoffBanner & { rows: BannerRow[] };
-  /** "เลยนัด" — ใบ overdue ทุกขั้น (รวมใบรอปล่อยงานที่วันนัดผ่านแล้ว) แถวเดียวกับกล่องงาน · null = ไม่มี */
-  past: (CutoffBanner & { rows: BannerRow[] }) | null;
-  /** "งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย" — ดูอย่างเดียว ไม่นับในกล่อง */
-  unreleased: CutoffBanner | null;
-  /** "งานพรุ่งนี้ที่ยังไม่คอนเฟิร์มลูกค้า" */
-  unconfirmed: CutoffBanner | null;
 }
 
 /** คำอธิบายหัวข้อ "เลยนัด" — กล่องงานกับงานของฉันวันนี้ใช้ประโยคเดียวกัน */
 export const PAST_GROUP_HINT =
   "วันนัดผ่านไปแล้ว ใบยังไม่ถึงช่าง (รวมใบรอปล่อยงาน/ส่งช่างตรวจ) — เลื่อนวันนัด/โทรนัดใหม่ · ท้ายแถวบอกว่าค้างที่ใคร (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค)";
 
+/** คำอธิบายหัวข้อ "ขอนัดด่วน" (ตัวอย่าง appt-cutoff) — บอกทั้งสองทางที่แอดมินเลือกได้ ไม่ให้คิดว่าต้องแก้ให้ทุกใบ */
+export function askGroupHint(cutoff: Cutoff | null | undefined): string {
+  return `หัวหน้าภาคขอนัดวันที่ปิดนัดแล้ว (วันนี้ / พรุ่งนี้หลัง ${cutoff?.time ?? "16:00"} น.) — ร้านต้องการวันนั้นจริง: “แก้เป็นงานด่วน” (เฉพาะใบนี้ วันนั้น) · ไม่ได้: “ตอบกลับ” ให้หัวหน้าภาคนัดวันอื่น`;
+}
+
+/** คำขอนัดด่วนที่ยังมีความหมาย ณ now — วันที่ขอผ่านไปแล้ว (จอเปิดค้างข้ามเที่ยงคืน) เซิร์ฟเวอร์ก็ไม่นับแล้ว */
+function liveAsk(row: CutoffRow, now: number): UrgentAsk | null {
+  const a = row.urgentAsk;
+  return a && !row.isTest && SCHEDULE_STAGES.includes(row.status) && a.day >= serverDay(now) ? a : null;
+}
+
+export interface AskRowLines {
+  /** หัวหน้าภาคที่ขอ + เบอร์ · ขอเมื่อ */
+  who: string;
+  /** วันที่ร้านต้องการ (วันนี้/พรุ่งนี้) */
+  appt: string;
+  /** ข้อความที่หัวหน้าภาคพิมพ์มา (แอปไม่มีช่องให้พิมพ์ — มีเฉพาะคำขอที่ส่งทาง API) */
+  note: string | null;
+}
+
 /**
- * หัวข้อของแอดมิน (ตัวอย่าง lockGrp / pastGrp / soon / confirmEx) — rows = ทุกใบในกล่องงานแอดมิน
- * ใบที่เพิ่งล็อกระหว่างจอเปิดค้างย้ายจาก "ยังไม่ปล่อย" ขึ้น "เลยเวลาปล่อยงาน" เองด้วยนาฬิกาเซิร์ฟเวอร์
- * (แต่ใบที่อยู่ในรายการ watch ยังไม่อยู่ใน rows จนกว่าจอโหลดใหม่ตอนถึงเวลา — งานของฉันวันนี้ของแอดมินโหลดเองหลังปิดรับ)
+ * บรรทัดของแถวในหัวข้อ "ขอนัดด่วน" — แอดมินตัดสินใจได้จากการ์ด (ใครขอ เบอร์ วันไหน) ไม่ต้องเปิดใบก่อน
+ * เบอร์จับจากชื่อคนขอในรายชื่อหัวหน้าภาคที่ใบรออยู่ — ไม่เจอ (หัวหน้าภาคถูกย้ายภาคไปแล้ว) บอกแค่ชื่อ ดีกว่าบอกเบอร์คนอื่น
  */
-export function adminGroups(
-  rows: BannerRow[],
-  watch: DispatchWatch | null | undefined,
-  now: number,
-  cutoff: Cutoff | null | undefined
-): AdminCutoffGroups {
-  const C = cutoff?.time ?? watch?.cutoff.time ?? "16:00";
-  const lockedRows = rows
-    .filter((r) => {
-      const v = releaseView(r, now, cutoff);
-      return (v?.locked && !v.past) || (!!r.releaseDeclined && !r.releaseDeclined.past);
-    })
-    .sort(byAppt);
-  // overdue มาจากเซิร์ฟเวอร์ (แถวเดียวกับหัวข้อ "เลยนัด" ของกล่องงาน) + ใบรอปล่อยงานที่ข้ามเที่ยงคืนระหว่างจอเปิดค้าง
-  const pastRows = rows.filter((r) => r.overdue || (!!r.release?.enforced && !!releaseView(r, now, cutoff)?.past)).sort(byAppt);
-  const locked: AdminCutoffGroups["locked"] = lockedRows.length
+export function askRowLines(row: BannerRow, now: number): AskRowLines | null {
+  const a = liveAsk(row, now);
+  if (!a) return null;
+  const phone = (row.waitingOnSupervisors ?? []).find((s) => s.name === a.byName)?.phone;
+  const rel = daysBetween(serverDay(now), a.day);
+  return {
+    who: `หัวหน้าภาค ${a.byName ?? "—"}${phone ? ` ${phone}` : ""} · ขอเมื่อ ${whenText(a.at)} น.`,
+    appt: `ขอนัด ${dayFull(a.day)} (${rel === 0 ? "วันนี้" : "พรุ่งนี้"})`,
+    note: a.note ? `“${a.note}”` : null,
+  };
+}
+
+export interface AdminCutoffGroups {
+  /** "ขอนัดด่วน" — ใบรอนัดวันที่หัวหน้าภาคขอแอดมินแก้เป็นงานด่วนไว้และยังรออยู่ · null = ไม่มี (ไม่วาดกล่องเปล่า) */
+  asks: (CutoffBanner & { rows: BannerRow[] }) | null;
+  /** "เลยนัด" — ใบ overdue ทุกขั้น (รวมใบรอปล่อยงานที่วันนัดผ่านแล้ว) แถวเดียวกับกล่องงาน · null = ไม่มี */
+  past: (CutoffBanner & { rows: BannerRow[] }) | null;
+}
+
+/**
+ * หัวข้อของแอดมิน (งานของฉันวันนี้ · กล่องงาน) — rows = ทุกใบในกล่องงานแอดมิน ตัวสร้างเดียว สองหน้าจะได้นับตรงกัน
+ * "ขอนัดด่วน" มาก่อน: ร้านรอคำตอบวันนี้/พรุ่งนี้ · เรียงตามวันที่ขอ (วันนี้ก่อน) แล้วตามเวลาที่ขอ
+ * "เลยนัด" ใช้ overdue ของเซิร์ฟเวอร์อย่างเดียว (pastRelease รวมใบรอปล่อยงานที่วันนัดผ่านแล้ว) — ไม่คิดซ้ำในแอป
+ * จอที่เปิดค้างข้ามเที่ยงคืน (คำขอเมื่อวานหมดอายุ · ใบรอปล่อยงานเข้า "เลยนัด"): กล่องงานรู้จากเลขรุ่น /version ที่ต่อท้ายวันไทย
+ * (ปุ่ม "มีอัปเดต") · งานของฉันวันนี้ไม่ถาม /version จึงตั้งเวลาโหลดใหม่เองหลังเที่ยงคืน (MyQueue)
+ * ไม่มีกล่องเปล่า "0" แล้ว: เดิมใบล็อกขึ้นเองตอนถึงเวลา กล่องเปล่าบอกให้รู้ว่ารอดูที่นี่ — คำขอมาจากหัวหน้าภาคกด ไม่มีอะไรต้องรอดู
+ */
+export function adminGroups(rows: BannerRow[], now: number, cutoff: Cutoff | null | undefined): AdminCutoffGroups {
+  const askRows = rows
+    .filter((r) => liveAsk(r, now))
+    .sort((a, b) => a.urgentAsk!.day.localeCompare(b.urgentAsk!.day) || a.urgentAsk!.at.localeCompare(b.urgentAsk!.at));
+  const pastRows = rows.filter((r) => r.overdue && !askRows.includes(r)).sort(byAppt);
+  const asks: AdminCutoffGroups["asks"] = askRows.length
     ? {
-        key: "adminLocked",
-        title: `เลยเวลาปล่อยงาน ${lockedRows.length}`,
-        hint: `ยังไม่ได้ปล่อยงานก่อน ${C} น. ของวันก่อนเข้างาน (สาเหตุอยู่ในแต่ละแถว) — ต้องไปตามนัด: “แก้เป็นงานด่วน” · ไม่ไปวันนั้น: โทรร้านแล้ว “เลื่อนวันนัด”`,
-        tone: "lock",
+        key: "adminAsks",
+        title: `ขอนัดด่วน ${askRows.length}`,
+        hint: askGroupHint(cutoff),
+        tone: "req",
         strong: true,
-        items: lockedRows.map((r) => itemOf(r)),
-        rows: lockedRows,
+        // ใบรอนัดวันยังไม่มีวันนัด — แถวบอกวันที่ขอกับคนขอแทนเวลานัด ("ทั้งวัน" ของ itemOf จะอ่านเป็นนัดทั้งวัน)
+        items: askRows.map((r) => ({
+          id: r.id,
+          code: r.code,
+          line: [`${r.branchCode}${r.branchName ? ` ${r.branchName}` : ""}`, `ขอนัด ${dayShort(r.urgentAsk!.day)}`, r.urgentAsk!.byName ? `หัวหน้าภาค ${r.urgentAsk!.byName}` : null]
+            .filter(Boolean)
+            .join(" · "),
+        })),
+        rows: askRows,
       }
-    : {
-        key: "adminLocked",
-        title: "เลยเวลาปล่อยงาน 0",
-        hint: `ยังไม่มี — งานที่ยังไม่ได้ปล่อยก่อน ${C} น. ของวันก่อนเข้างานจะขึ้นที่นี่เอง และนับในตัวเลขกล่องงาน ไม่ต้องรอใครกด`,
-        tone: "grey",
-        items: [],
-        rows: [],
-      };
+    : null;
   const past: AdminCutoffGroups["past"] = pastRows.length
     ? { key: "adminPast", title: `เลยนัด ${pastRows.length}`, hint: PAST_GROUP_HINT, tone: "lock", items: pastRows.map((r) => itemOf(r)), rows: pastRows }
     : null;
-  // ใบที่ถึงเส้นตายระหว่างจอเปิดค้างล็อกแล้ว — ไม่นับว่า "ยังปล่อยได้" แม้รายการ watch ยังเป็นของก่อนเวลา
-  const soon = (watch?.unreleasedTomorrow ?? []).filter((w) => Date.parse(w.deadline) > now);
-  let unreleased: CutoffBanner | null = null;
-  if (soon.length) {
-    const remain = Math.min(...soon.map((w) => Date.parse(w.deadline) - now));
-    const ph = remain <= RED_MIN * MIN_MS ? "red" : remain <= AMBER_MIN * MIN_MS ? "amber" : "calm";
-    unreleased = {
-      key: "unreleased",
-      title: `งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย ${soon.length} · ปิดรับ ${C} น.`,
-      hint: "ดูอย่างเดียว ไม่นับในตัวเลขกล่องงาน — ใกล้เวลาแล้วยังไม่ปล่อย โทรเตือนหัวหน้าภาคได้ · ถึงเวลาปิดรับแล้วใบย้ายขึ้นไปหัวข้อข้างบนเอง",
-      tone: ph,
-      items: soon.map((w) => ({
-        id: w.id,
-        code: w.code,
-        line:
-          `${w.branchCode} ${w.branchName} · ทีม${w.assignedTeam ?? " —"} · ` +
-          (w.supervisors.length
-            ? `หัวหน้าภาค ${w.supervisors.map((s) => [s.name, s.phone].filter(Boolean).join(" ")).join(" / ")}`
-            : "ไม่มีคนรับ") +
-          ` · ${timeText(w.scheduledTime)}${INSPECT_STAGES.includes(w.status) ? " · ส่งช่างตรวจ" : ""}`,
-        right: `เหลือ ${leftText(Date.parse(w.deadline) - now)}`,
-      })),
-    };
-  }
-  const unconf = watch?.unconfirmedTomorrow ?? [];
-  let unconfirmed: CutoffBanner | null = null;
-  if (unconf.length) {
-    const after = now >= deadlineOf(watch?.tomorrow ?? addDays(serverDay(now), 1), C);
-    unconfirmed = {
-      key: "unconfirmed",
-      title: `งานพรุ่งนี้ที่ยังไม่คอนเฟิร์มลูกค้า ${unconf.length}`,
-      hint: after
-        ? "ถึงเวลาปิดรับแล้ว — คอนเฟิร์มตอนนี้ใบจะถึงหัวหน้าภาคแบบล็อก ถ้าร้านต้องการพรุ่งนี้จริง ติ๊กแก้เป็นงานด่วนไปพร้อมกัน"
-        : `คอนเฟิร์มก่อน ${C} น. หัวหน้าภาคจะได้ปล่อยงานทัน`,
-      tone: after ? "red" : "later",
-      items: unconf.map((w) => itemOf(w)),
-    };
-  }
-  return { locked, past, unreleased, unconfirmed };
+  return { asks, past };
 }
