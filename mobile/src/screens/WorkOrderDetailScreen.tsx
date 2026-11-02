@@ -17,6 +17,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
@@ -45,9 +46,9 @@ import TimelineModal, { TimelineButton } from "../components/TimelineModal";
 import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
-import { prefetchAttachments } from "../utils/attachmentCache";
+import { linkFor, prefetchAttachments } from "../utils/attachmentCache";
 import { AdminReplyModal, AdminReviewBox, ackAdminReview, cancelAdminReview, type AdminReviewInfo } from "../components/AdminReview";
-import InspectionSlots, { missingInspection } from "../components/InspectionSlots";
+import InspectionSlots, { INSPECTION_SLOTS, inspectionFilesOf, missingInspection } from "../components/InspectionSlots";
 import EvidenceStep, { MissingBox, NextBox, TextStep } from "../components/EvidenceStep";
 import { clearDraft, loadDraft, saveDraft } from "../utils/draft";
 import { setFlash } from "../utils/flash";
@@ -1026,6 +1027,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     openOnLoad.current = null;
     if (want === "close" && order.status === "IN_PROGRESS") setClosing(true);
     else if (want === "stage" && order.status === "INSPECTING") setStageOpen(true);
+    // ปุ่ม "คอนเฟิร์มอะไหล่" บนการ์ดกล่องงาน = เปิดจอคอนเฟิร์มเลย (ตัวอย่าง supOpenReview) ไม่ใช่พาไปหน้าใบงานแล้วต้องกดซ้ำ
+    // ต้องเป็นตาคนเปิดด้วย — ช่างคนอื่นในทีมกดการ์ด "บันทึกผลตรวจ" ที่ค้างอยู่ใน งานของฉัน ก็ส่ง open:"stage" มาเหมือนกัน
+    // ถ้าไม่กันจะเห็นจอของหัวหน้าภาคที่กดอะไรก็ได้ 403 แทนกล่องรายการรอคอนเฟิร์มบนหน้าใบงาน
+    else if (want === "stage" && pickPending(order) && myTurn(order)) setStageOpen(true);
     else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
     else if (want === "reschedule" && reschedulable(order)) openReschedule();
   }, [order]);
@@ -4564,6 +4569,384 @@ function parseInspectDraft(raw: string | null, key: string): { parts: PickedPart
   }
 }
 
+/** "เครื่องซัก" / "เครื่องอบ" จากตัวอักษรแรกของรหัสเครื่อง (W/D — กติกาเดียวกับฟอร์มเปิดใบงาน) · รหัสแบบอื่นไม่เดาชนิด */
+function machineKindOf(code: string | null | undefined): string | null {
+  const c = (code ?? "").trim().toUpperCase();
+  return c.startsWith("W") ? "เครื่องซัก" : c.startsWith("D") ? "เครื่องอบ" : null;
+}
+
+/**
+ * ช่างแก้อะไรจากรอบที่ถูกตีกลับ (ตัวอย่าง diffText) — "" = รายการเหมือนรอบก่อนทุกตัว (ยืนยันรายการเดิม)
+ * หัวหน้าภาคไม่ต้องจำว่ารอบก่อนชี้ตัวไหนไว้ — เห็นเลยว่าตัวที่ชี้ถูกเอาออก/เปลี่ยนจำนวนหรือยัง
+ */
+function pickDiff(prev: PickItem[], next: PickItem[]): string {
+  const out: string[] = [];
+  for (const p of prev) {
+    const n = next.find((x) => x.sparePartId === p.sparePartId);
+    if (!n) out.push(`เอา ${pickName(p)} ออก`);
+    else if (n.quantity !== p.quantity) out.push(`${p.partCode} จำนวน ${p.quantity} → ${n.quantity}`);
+  }
+  for (const n of next) if (!prev.some((p) => p.sparePartId === n.sparePartId)) out.push(`เพิ่ม ${pickName(n)} × ${n.quantity}`);
+  return out.join(" · ");
+}
+
+/** เหตุผลที่ตีกลับบ่อย (ตัวอย่างที่อนุมัติ) — กดแล้วต่อท้ายช่องเหตุผล ไม่แทนที่ หัวหน้าภาคพิมพ์ต่อได้ว่าตัวไหน */
+const QUICK_REASONS = ["รหัสไม่ตรงกับรูปอะไหล่ที่เสีย", "จำนวนไม่ตรง", "ขาดอะไหล่ที่ต้องใช้", "ตัวนี้ยังไม่ต้องเปลี่ยน"];
+
+/**
+ * รูปขยายในจอคอนเฟิร์มอะไหล่ — วาดแทนที่กรอบไฟล์ตรวจในฟอร์มเดิม ไม่ใช่หน้าต่างซ้อน
+ * Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (CLAUDE.md) และหน้าต่างใหม่ทำให้ป้ายตรง/ไม่ตรงที่กดไว้หลุดจากสายตา
+ * เลื่อนได้เฉพาะรูปในกรอบเดียวกัน — หัวหน้าภาคกำลังเทียบรหัสกับ "รูปอะไหล่ที่เสีย" ไม่ใช่ไล่ดูทุกรูป
+ */
+function PhotoZoom({
+  workOrderId,
+  row,
+  rows,
+  onShow,
+  onClose,
+}: {
+  workOrderId: number;
+  row: Attachment;
+  /** ไฟล์ตรวจของรอบนี้ — หารูปก่อนหน้า/ถัดไปในกรอบเดียวกัน */
+  rows: Attachment[];
+  onShow: (row: Attachment) => void;
+  onClose: () => void;
+}) {
+  const same = rows.filter((r) => r.role === row.role && r.kind === "IMAGE");
+  const i = Math.max(0, same.findIndex((r) => r.id === row.id));
+  const label = INSPECTION_SLOTS.find((s) => s.role === row.role)?.label ?? "รูป";
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  // ลิงก์ผ่านที่เก็บลิงก์ของใบ (อายุ 2 ชม.) — ลิงก์ที่มากับรายการไฟล์อาจหมดอายุแล้วถ้าฟอร์มเปิดค้างไว้นาน
+  useEffect(() => {
+    let alive = true;
+    setUrl(null);
+    setErr(null);
+    linkFor(workOrderId, row.id)
+      .then((u) => alive && setUrl(u))
+      .catch((e) => alive && setErr(apiErrorMessage(e)));
+    return () => {
+      alive = false;
+    };
+  }, [workOrderId, row.id]);
+  const go = (d: number) => {
+    const next = same[i + d];
+    if (next) onShow(next);
+  };
+  return (
+    <View style={styles.cfZoom} accessibilityLabel={`รูปขยาย ${label}`}>
+      <View style={styles.cfZoomHead}>
+        <Text style={styles.cfZoomTitle}>
+          {label} · {i + 1} / {same.length}
+        </Text>
+        <TouchableOpacity style={styles.cfZoomBtn} onPress={onClose} activeOpacity={0.7} accessibilityLabel="ย่อ">
+          <Ionicons name="contract-outline" size={16} color={colors.primaryInk} />
+          <Text style={styles.cfZoomBtnText}>ย่อ</Text>
+        </TouchableOpacity>
+      </View>
+      {url ? (
+        <Image source={{ uri: url }} style={styles.cfZoomImg} resizeMode="contain" accessibilityLabel={row.fileName} />
+      ) : (
+        <View style={[styles.cfZoomImg, styles.cfZoomWait]}>
+          {err ? <Text style={styles.warn}>{err}</Text> : <Spinner color={colors.primary} />}
+        </View>
+      )}
+      {same.length > 1 ? (
+        <View style={styles.cfZoomNav}>
+          <TouchableOpacity
+            style={[styles.cfZoomBtn, { flex: 1 }, i === 0 && styles.modalSaveOff]}
+            onPress={() => go(-1)}
+            disabled={i === 0}
+            activeOpacity={0.7}
+            accessibilityLabel="รูปก่อนหน้า"
+          >
+            <Ionicons name="chevron-back" size={16} color={colors.primaryInk} />
+            <Text style={styles.cfZoomBtnText}>รูปก่อนหน้า</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.cfZoomBtn, { flex: 1 }, i >= same.length - 1 && styles.modalSaveOff]}
+            onPress={() => go(1)}
+            disabled={i >= same.length - 1}
+            activeOpacity={0.7}
+            accessibilityLabel="รูปถัดไป"
+          >
+            <Text style={styles.cfZoomBtnText}>รูปถัดไป</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.primaryInk} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * จอคอนเฟิร์มอะไหล่ของหัวหน้าภาค/แอดมิน (ฟอร์มขั้น NEW ที่มีรอบเลือกอะไหล่รอคอนเฟิร์ม — ตัวอย่าง supView review)
+ * แทนคำถาม "งานนี้ต้องใช้อะไหล่ไหม" — ช่างตอบมาแล้วพร้อมรายการ งานของหัวหน้าภาคคือเทียบรายการกับรูปอะไหล่ที่เสีย
+ * แก้รายการของช่างไม่ได้ (ข้อ 8) ตรงก็คอนเฟิร์ม ไม่ตรงก็ตีกลับพร้อมชี้ตัว · เติมได้แค่อะไหล่นอก/ค่าบริการ (ข้อ 7)
+ * ค่าที่กด (ตรง/ไม่ตรง เหตุผล ของที่เติม) อยู่ที่ฟอร์มขั้นตอน — ปุ่มท้ายฟอร์มเป็นคนส่ง และเปิดรูปขยายแล้วค่าไม่หาย
+ */
+function PickConfirmForm({
+  order,
+  pick,
+  files,
+  marks,
+  onMark,
+  onAllOk,
+  showReject,
+  reason,
+  onReason,
+  zoom,
+  onZoom,
+  offParts,
+  onOffParts,
+  services,
+  onServices,
+  onInspectFirst,
+}: {
+  order: WorkOrder;
+  pick: PartsPickInfo;
+  files: Attachment[];
+  marks: Record<number, "OK" | "NO">;
+  onMark: (sparePartId: number, mark: "OK" | "NO") => void;
+  onAllOk: () => void;
+  showReject: boolean;
+  reason: string;
+  onReason: (text: string) => void;
+  zoom: Attachment | null;
+  onZoom: (row: Attachment | null) => void;
+  offParts: OffPart[];
+  onOffParts: (rows: OffPart[]) => void;
+  services: OffPart[];
+  onServices: (rows: OffPart[]) => void;
+  onInspectFirst: () => void;
+}) {
+  const items = pick.items;
+  const marked = items.filter((i) => marks[i.sparePartId]).length;
+  const flagged = items.filter((i) => marks[i.sparePartId] === "NO");
+  const prev = pick.previous;
+  const diff = prev ? pickDiff(prev.items, items) : "";
+  const changes = prev
+    ? [
+        diff,
+        pick.noteChanged ? "แก้ “ตรวจแล้วเจออะไร” — อ่านในผลตรวจด้านล่าง" : "",
+        pick.addedPartPhotos ? `เพิ่มรูปอะไหล่ที่เสีย ${pick.addedPartPhotos} รูป` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ") || "ไม่มีรายการเปลี่ยน"
+    : "";
+  /**
+   * รายการของช่างแทนที่ของในสโตร์ทั้งชุด (ข้อ 5) — แถวเดิมที่ไม่อยู่ในรายการหายจากใบตอนคอนเฟิร์ม รวมตัวที่เบิกไปแล้ว (D2)
+   * บอกก่อนกด ไม่งั้นหัวหน้าภาคเห็นแค่รายการใหม่ แล้วของที่เบิกออกไปแล้วหายจากใบโดยไม่มีใครรู้ว่าต้องตามคืน
+   */
+  const removed = order.waitingParts.filter((p) => !p.offCatalog && !items.some((i) => i.sparePartId === p.sparePartId));
+  const machineCode = order.partsBrand?.machineCode ?? order.machineCode;
+  const make = order.partsBrand?.make ?? order.machineBrand;
+  // ไฟล์ "ตอนนี้" ของเครื่อง — เซิร์ฟเวอร์ตรวจรายการกับไฟล์นี้ตอนคอนเฟิร์ม (แก้ยี่ห้อหลังช่างส่ง = ไฟล์ใหม่) · ไม่รู้ค่อยใช้ไฟล์ตอนส่ง
+  const file = order.partsBrand?.file ?? pick.brandFile;
+  const kind = machineKindOf(machineCode);
+  const roundFiles = inspectionFilesOf(files, order.inspectionStartedAt);
+  const hasVideo = roundFiles.some((f) => f.role === "INSPECT_VIDEO");
+  const extras = offPartsPayload(offParts).length + offPartsPayload(services).length;
+  const note = order.inspectionNote ?? pick.note;
+
+  return (
+    <View style={{ gap: spacing.sm }}>
+      <View style={styles.cfCard}>
+        <Text style={styles.cfBranch}>
+          {order.branchCode} {order.branchName}
+        </Text>
+        {machineCode ? (
+          <Text style={styles.cfMachine}>
+            {["เครื่อง " + machineCode, kind, make ? "ยี่ห้อ " + make : null].filter(Boolean).join(" · ")}
+          </Text>
+        ) : null}
+        {file ? (
+          <View style={styles.cfFileChip}>
+            <Ionicons name="lock-closed" size={12} color={colors.primaryInk} />
+            <Text style={styles.cfFileChipText}>อะไหล่จากไฟล์ {file} เท่านั้น</Text>
+          </View>
+        ) : null}
+        <Text style={styles.cfMuted}>
+          {pick.sentBy ? `ช่าง${pick.sentBy.name} (${pick.sentBy.employeeCode}) · ` : ""}ส่ง {dayTime(pick.sentAt)}
+        </Text>
+      </View>
+
+      {prev ? (
+        <View style={styles.cfResend} accessibilityLabel="สิ่งที่ช่างแก้จากรอบก่อน">
+          <Text style={styles.cfResendTitle}>
+            ช่างส่งรอบที่ {pick.round} — {diff ? "แก้จากรอบก่อน" : "ยืนยันรายการเดิม"}
+          </Text>
+          <Text style={styles.cfResendLine}>{changes}</Text>
+          {prev.reason ? <Text style={styles.cfMutedDark}>รอบก่อนตีกลับเพราะ: {prev.reason}</Text> : null}
+        </View>
+      ) : null}
+
+      <View style={styles.cfCard}>
+        <Text style={styles.cfTitle}>ผลตรวจหน้างาน</Text>
+        <Text style={styles.cfNote}>{note?.trim() ? note : "-"}</Text>
+        {zoom ? (
+          <PhotoZoom workOrderId={order.id} row={zoom} rows={roundFiles} onShow={onZoom} onClose={() => onZoom(null)} />
+        ) : (
+          <InspectionSlots
+            workOrderId={order.id}
+            rows={files}
+            since={order.inspectionStartedAt}
+            canEdit={false}
+            compact
+            titleCount
+            canRemove={() => false}
+            // วิดีโอยังเป็นรูปย่อ (D13) — เล่นวิดีโอในฟอร์มต้องใช้ตัวเล่นเต็มจอซึ่งซ้อน Modal บนเว็บไม่ได้
+            onOpen={(row) => (row.kind === "IMAGE" ? onZoom(row) : undefined)}
+            onRemove={() => undefined}
+            onChanged={() => undefined}
+          />
+        )}
+        {hasVideo && !zoom ? <Text style={styles.cfMuted}>ดูวิดีโอได้ที่การ์ดไฟล์แนบบนหน้าใบงาน</Text> : null}
+      </View>
+
+      <View style={styles.cfCard}>
+        <View style={styles.cfHeadRow}>
+          <Text style={styles.cfTitle}>อะไหล่ที่ช่างเลือก · {items.length} รายการ</Text>
+          <Text style={styles.cfMuted}>
+            ตรวจแล้ว {marked} / {items.length}
+          </Text>
+        </View>
+        <View style={styles.cfHeadRow}>
+          <Text style={[styles.cfMuted, { flex: 1, minWidth: 0 }]}>กด ตรง หรือ ไม่ตรง ทีละรายการ — เทียบกับรูปอะไหล่ที่เสีย</Text>
+          <TouchableOpacity style={styles.cfAllOk} onPress={onAllOk} activeOpacity={0.7} accessibilityLabel="ตรงทุกรายการ">
+            <Text style={styles.cfAllOkText}>ตรงทุกรายการ</Text>
+          </TouchableOpacity>
+        </View>
+        {items.map((it) => {
+          const m = marks[it.sparePartId];
+          // ป้ายเทียบรอบก่อน (เซิร์ฟเวอร์คิดให้) — รอบแรกไม่มีอะไรให้เทียบ ไม่ติดป้าย
+          const tag = prev
+            ? it.isNew
+              ? "เพิ่มใหม่รอบนี้"
+              : it.prevQty !== null && it.prevQty !== it.quantity
+                ? `แก้จำนวนรอบนี้ (เดิม ${it.prevQty})`
+                : null
+            : null;
+          return (
+            <View key={it.sparePartId} style={[styles.cfRow, m === "OK" && styles.cfRowOk, m === "NO" && styles.cfRowNo]}>
+              <View style={styles.cfRowTop}>
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text style={styles.cfRowName}>
+                    <Text style={{ fontWeight: "800" }}>{it.partCode}</Text> {it.name}
+                  </Text>
+                  {it.partNo ? <Text style={styles.cfMuted}>Part No. {it.partNo}</Text> : null}
+                  {tag ? <Text style={styles.cfTag}>{tag}</Text> : null}
+                </View>
+                <Text style={styles.cfQty}>× {it.quantity} ตัว</Text>
+              </View>
+              {/* กลุ่มปุ่มบอกชื่ออะไหล่ — โปรแกรมอ่านจอ/เทสต์แยกได้ว่าปุ่ม "ตรง" นี้ของแถวไหน · เว็บไม่แปลงสถานะปุ่มเป็น aria-pressed ใส่เอง */}
+              <View style={styles.cfMarks} role="group" aria-label={`ตรวจ ${it.partCode} ${it.name}`}>
+                <TouchableOpacity
+                  style={[styles.cfMarkBtn, styles.cfOkBtn, m === "OK" && styles.cfOkOn]}
+                  onPress={() => onMark(it.sparePartId, "OK")}
+                  activeOpacity={0.8}
+                  aria-pressed={m === "OK"}
+                  accessibilityLabel={`ตรง ${it.partCode}`}
+                >
+                  <Ionicons name="checkmark" size={16} color={m === "OK" ? "#fff" : colors.successInk} />
+                  <Text style={[styles.cfMarkText, { color: m === "OK" ? "#fff" : colors.successInk }]}>ตรง</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.cfMarkBtn, styles.cfNoBtn, m === "NO" && styles.cfNoOn]}
+                  onPress={() => onMark(it.sparePartId, "NO")}
+                  activeOpacity={0.8}
+                  aria-pressed={m === "NO"}
+                  accessibilityLabel={`ไม่ตรง ${it.partCode}`}
+                >
+                  <Ionicons name="close" size={16} color={m === "NO" ? "#fff" : colors.dangerInk} />
+                  <Text style={[styles.cfMarkText, { color: m === "NO" ? "#fff" : colors.dangerInk }]}>ไม่ตรง</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      {removed.length ? (
+        <View style={styles.cfRemoved} accessibilityLabel="ของเดิมในใบที่ช่างเอาออก">
+          <Text style={styles.cfRemovedTitle}>ของเดิมในใบที่ช่างเอาออก — คอนเฟิร์มแล้วหายจากใบ</Text>
+          {removed.map((p, k) => (
+            <Text key={`${p.sparePartId}-${k}`} style={styles.cfRemovedLine}>
+              {p.partCode} {p.name} × {p.quantity}
+              {p.inStock === true && p.requisitionNo ? ` · เบิกแล้ว ใบเบิก ${p.requisitionNo}` : ""}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.cfCard}>
+        <Text style={styles.cfTitle}>ใส่เพิ่มก่อนคอนเฟิร์ม (ถ้ามี)</Text>
+        <Text style={styles.cfMuted}>
+          {extras
+            ? "ใส่แล้ว — คอนเฟิร์มแล้วต้องเสนอราคาลูกค้าก่อนนัด (เหมือนฟอร์มระบุอะไหล่เดิม)"
+            : "ใส่อย่างใดอย่างหนึ่ง = ต้องเสนอราคาลูกค้าก่อนนัด (เหมือนฟอร์มระบุอะไหล่เดิม)"}
+        </Text>
+        <OffPartEditor rows={offParts} onChange={onOffParts} />
+        <OffPartEditor
+          rows={services}
+          onChange={onServices}
+          variant="service"
+          hint="ค่าแรง ค่าเดินทาง ฯลฯ ที่ลูกค้าต้องจ่าย · ไม่ใส่ราคา แอดมินใส่ในใบเสนอราคา"
+        />
+        <QuoteRoute needsParts off={offPartsPayload(offParts).length} services={offPartsPayload(services).length} />
+        {/* ต้องเห็นเครื่องเองอีกรอบ = ส่งตรวจใหม่ (แอดมินนัดร้าน ไฟล์ชุดใหม่) ไม่ใช่ตีกลับ — ตีกลับแก้ได้แค่จากไฟล์รอบนี้ (ข้อ 7) */}
+        <Text style={styles.cfMutedDark}>
+          ต้องเข้าดูเครื่องอีกรอบ: ใช้ “ต้องเข้าตรวจสอบหน้างานก่อน” เดิม (แอดมินนัดร้านใหม่ ถ่ายไฟล์ใหม่) — ตีกลับใช้เมื่อแก้จากไฟล์รอบนี้ได้
+        </Text>
+        <TouchableOpacity style={styles.cfLink} onPress={onInspectFirst} activeOpacity={0.7} accessibilityLabel="ต้องเข้าตรวจสอบหน้างานก่อน">
+          <Text style={styles.cfLinkText}>ต้องเข้าตรวจสอบหน้างานก่อน</Text>
+        </TouchableOpacity>
+      </View>
+
+      {showReject ? (
+        <View style={styles.cfReject} accessibilityLabel="กล่องตีกลับ">
+          <Text style={styles.cfRejectLabel}>
+            เหตุผลที่ตีกลับ <Text style={{ color: colors.danger }}>*</Text>
+          </Text>
+          <Text style={styles.cfRejectFlags}>
+            {flagged.length
+              ? `ชี้ว่าไม่ตรง: ${flagged.map(pickName).join(", ")}`
+              : "ยังไม่ได้ชี้รายการ — ตีกลับได้ แต่บอกในเหตุผลว่าต้องแก้ตัวไหน"}
+          </Text>
+          <View style={styles.cfQuick}>
+            {QUICK_REASONS.map((t) => (
+              <TouchableOpacity
+                key={t}
+                style={styles.cfQuickChip}
+                activeOpacity={0.7}
+                accessibilityLabel={t}
+                // ต่อท้ายด้วย " · " ไม่ทับที่พิมพ์ไว้ · กดซ้ำไม่เติมซ้ำ (ตัวอย่าง addReason)
+                onPress={() => {
+                  const cur = reason.trim();
+                  onReason(cur.includes(t) ? cur : cur ? `${cur} · ${t}` : t);
+                }}
+              >
+                <Text style={styles.cfQuickText}>{t}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TextInput
+            style={[styles.modalInput, styles.cfReason]}
+            value={reason}
+            onChangeText={onReason}
+            placeholder="เช่น รูปอะไหล่ที่เสียเห็นแค่สวิตช์ล็อกหัก ไม่ต้องเปลี่ยนทั้งชุด"
+            placeholderTextColor={colors.textFaint}
+            multiline
+            numberOfLines={3}
+            maxLength={500}
+            accessibilityLabel="เหตุผลที่ตีกลับ"
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function StageModal({
   visible,
   order,
@@ -4636,6 +5019,19 @@ function StageModal({
    * (ตัวอย่าง techSend) ช่างเพิ่งเปิดมาอ่านกล่องแดง ยังไม่ได้ทำอะไรผิด · แก้ครบแล้วกล่องหายเอง
    */
   const [gateTried, setGateTried] = useState(false);
+  /**
+   * จอคอนเฟิร์มอะไหล่ (ขั้น NEW ที่ช่างเลือกอะไหล่มารอคอนเฟิร์ม) — ป้ายตรง/ไม่ตรงทีละตัว · เหตุผลตีกลับ · รูปที่ขยายอยู่
+   * ถือไว้ที่ฟอร์มขั้นตอน ไม่ใช่ในตัวจอ: ปุ่มท้ายฟอร์มเป็นคนส่ง และสลับไป "ต้องเข้าตรวจสอบหน้างานก่อน" แล้วกลับมา ค่าที่กดไว้ยังอยู่
+   * pickMsg = แถบเหลือง/แดงใต้หัวฟอร์มหลังกดปุ่มท้ายฟอร์มตอนยังไม่พร้อม (ตัวอย่าง supMsg) — ขึ้นหลังกด ไม่ใช่ตั้งแต่เปิด
+   */
+  const [marks, setMarks] = useState<Record<number, "OK" | "NO">>({});
+  const [reason, setReason] = useState("");
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [pickMsg, setPickMsg] = useState<{ kind: "warn" | "err"; text: string } | null>(null);
+  const [zoom, setZoom] = useState<Attachment | null>(null);
+  // มือถือ: ปุ่มท้ายจอคอนเฟิร์มสามปุ่มแถวเดียวอ่านไม่ออก — ซ้อนเป็นสองแถว (ยกเลิก+ตีกลับ / คอนเฟิร์ม)
+  const { width: winW } = useWindowDimensions();
+  const stackFoot = winW < 600;
   // ขั้นนัดลูกค้า
   // ขั้นคอนเฟิร์มลูกค้า: ลูกค้าตกลงวันเดิม หรือขอเลื่อน (เลื่อนแล้วถึงจะขึ้นช่องวันให้แก้)
   const [confirmChoice, setConfirmChoice] = useState<"OK" | "MOVE" | null>(null);
@@ -4725,8 +5121,11 @@ function StageModal({
     setNeedsParts(order.status === "NEW" ? prev(order.needsParts, pf?.needsParts, "ใช้อะไหล่ไหม") : order.needsParts);
     // ใบที่เปิดมาเป็นงานตรวจสอบหน้างานและยังไม่เคยตรวจ — ตัวเลือกที่ถูกเกือบทุกครั้ง
     // ช่างส่งกลับ — ตัวเลือกแรกคือส่งช่างเข้าตรวจ (เจ้าของงานขอ ต.ค. 69) ทีมเดิมเป็นค่าตั้งต้นอยู่แล้ว (ข้างล่าง)
+    // รายการของช่างรอคอนเฟิร์ม — เปิดที่จอคอนเฟิร์มเสมอ ส่งตรวจใหม่เป็นทางที่ต้องตั้งใจกด (ลิงก์ในจอ) ไม่ใช่ค่าตั้งต้น
     setInspectFirst(
-      order.status === "NEW" && ((order.jobType === "INSPECT" && !order.inspectedAt) || sentBackLog(order) !== null)
+      order.status === "NEW" &&
+        !pickPending(order) &&
+        ((order.jobType === "INSPECT" && !order.inspectedAt) || sentBackLog(order) !== null)
     );
     /**
      * ถูกตีกลับรายการอะไหล่ — "ตรวจแล้วเจออะไร" เริ่มจากข้อความที่ส่งไปรอบนั้น (ตัวอย่างคงข้อความเดิมไว้)
@@ -4823,6 +5222,11 @@ function StageModal({
     setNote("");
     setError(null);
     setGateTried(false);
+    setMarks({});
+    setReason("");
+    setRejectOpen(false);
+    setPickMsg(null);
+    setZoom(null);
     /**
      * ข้อ 5 ของฟอร์มตรวจหน้างาน — รายการตั้งต้น (ของในใบ / รายการที่ถูกตีกลับ) แล้วทับด้วยร่างของรอบนี้ถ้ามี
      * ร่างอยู่ในเครื่องเหมือนข้อความผลตรวจ: ช่างเลือกอะไหล่ค้างไว้แล้วแอปหลุด กลับมาไม่ต้องค้นใหม่
@@ -5094,6 +5498,76 @@ function StageModal({
     }
   }
 
+  /** ป้ายตรง/ไม่ตรงที่ส่งไปกับคำขอ — เฉพาะตัวในรอบนี้ (เซิร์ฟเวอร์ปฏิเสธตัวที่ไม่อยู่ในรายการ) */
+  const marksPayload = () =>
+    (pending?.items ?? []).filter((i) => marks[i.sparePartId]).map((i) => ({ sparePartId: i.sparePartId, mark: marks[i.sparePartId] }));
+
+  /**
+   * ส่งคำตอบของจอคอนเฟิร์ม — 400 ขึ้นแถบแดงใต้หัวฟอร์ม (ปุ่มอยู่ท้ายฟอร์ม ข้อความท้ายเนื้อหาอาจอยู่นอกจอ)
+   * 409 (ช่างส่งใหม่/ใบเปลี่ยนขั้นระหว่างดู) ตัวจัดการกลางปิดฟอร์มแล้วโหลดใบใหม่ให้ (api/client) — ไม่ต้องทำอะไรเพิ่ม
+   */
+  async function sendPick(kind: "pickConfirmed" | "pickReturned", path: string, body: object) {
+    setSaving(true);
+    setBusy(kind);
+    setError(null);
+    setPickMsg(null);
+    try {
+      await api.post(`/work-orders/${order.id}/parts-pick/${path}`, body);
+      onDone(kind);
+    } catch (e) {
+      setPickMsg({ kind: "err", text: apiErrorMessage(e) });
+    } finally {
+      setSaving(false);
+      setBusy(null);
+    }
+  }
+
+  /**
+   * คอนเฟิร์มอะไหล่ — ปุ่มกดได้เสมอ (ตัวอย่าง supConfirm) ยังไม่ครบบอกว่าขาดอะไรแทนปุ่มเทาที่กดแล้วเงียบ
+   * ตัวที่กด "ไม่ตรง" คอนเฟิร์มไม่ได้ (ทั้งชุดเดียว ข้อ 8) — ต้องตีกลับ หรือเปลี่ยนใจเป็น "ตรง"
+   */
+  function confirmPick() {
+    if (!pending) return;
+    if (pending.items.some((i) => marks[i.sparePartId] === "NO")) {
+      setPickMsg({ kind: "warn", text: "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม" });
+      return;
+    }
+    const left = pending.items.filter((i) => !marks[i.sparePartId]).length;
+    if (left) {
+      setPickMsg({
+        kind: "warn",
+        text: `กด ตรง หรือ ไม่ตรง ให้ครบทุกรายการก่อนคอนเฟิร์ม (เหลือ ${left} รายการ) — หรือกด “ตรงทุกรายการ”`,
+      });
+      return;
+    }
+    void sendPick("pickConfirmed", "confirm", {
+      pickId: pending.id,
+      offParts: offPartsPayload(offParts),
+      services: offPartsPayload(services),
+      note: note.trim() || undefined,
+      marks: marksPayload(),
+    });
+  }
+
+  /**
+   * ตีกลับให้ช่างแก้ — กดครั้งแรกโดยไม่มีเหตุผลเปิดกล่องเหตุผล (ตัวอย่าง supReject) ไม่ส่ง
+   * เหตุผลบังคับเพราะช่างต้องรู้ว่าแก้อะไร (บทเรียนจากเคลม) · ตัวที่กด "ไม่ตรง" ไปเป็นตัวที่ชี้ บนการ์ดแดงของช่าง
+   */
+  function returnPick() {
+    if (!pending) return;
+    if (!reason.trim()) {
+      setRejectOpen(true);
+      setPickMsg({ kind: "err", text: "ตีกลับต้องบอกเหตุผล — ช่างเห็นข้อความนี้บนใบงาน และต้องรู้ว่าต้องแก้อะไร" });
+      return;
+    }
+    void sendPick("pickReturned", "return", {
+      pickId: pending.id,
+      reason: reason.trim(),
+      flags: pending.items.filter((i) => marks[i.sparePartId] === "NO").map((i) => i.sparePartId),
+      marks: marksPayload(),
+    });
+  }
+
   /**
    * ขอแอดมินแก้เป็นงานด่วน (day) / ยกเลิกคำขอ (null) — ฟอร์มไม่ปิด (ตัวอย่าง ask) หัวหน้าภาคเห็นกล่องม่วงทันที
    * และนัดวันอื่นต่อได้ระหว่างรอ · วาดทับสถานะคำขอจากคำตอบ (ใบงานทั้งก้อน) ผ่าน onOverlay — ห้าม setOrder/โหลดใบใหม่
@@ -5277,8 +5751,18 @@ function StageModal({
    * ยังมีของต้องเบิก = ใบเก่าที่นัดก่อนเปลี่ยนลำดับและหลุดการย้ายขั้นมา — เซิร์ฟเวอร์ส่งไปเบิกต่อ (issueLeft ใน /confirm-appointment) จึงบอกให้ตรง
    */
   const confirmToIssue = order.status === "AWAITING_CONFIRM" && partsToIssue(order);
+  /**
+   * ช่างเลือกอะไหล่มารอคอนเฟิร์ม — ฟอร์มขั้น NEW เป็นจอคอนเฟิร์มแทนคำถาม "ใช้อะไหล่ไหม" (ช่างตอบมาแล้ว)
+   * กด "ต้องเข้าตรวจสอบหน้างานก่อน" ในจอ = inspectFirst → ฟอร์มส่งตรวจเดิมทั้งชุด (รวมกฎปิดนัด/วันย้อนหลัง) และเซิร์ฟเวอร์ทิ้งรอบนี้
+   */
+  const pending = order.status === "NEW" ? pickPending(order) : null;
+  const confirming = !!pending && !inspectFirst;
+  const anyNo = confirming && pending!.items.some((i) => marks[i.sparePartId] === "NO");
+  const showReject = confirming && (rejectOpen || anyNo);
   // ไม่ใช้อะไหล่ และไม่มีค่าบริการให้เสนอราคา = ขั้นถัดไปคือจ่ายงาน → จ่ายในฟอร์มนี้เลย
-  const noPartsAssign = order.status === "NEW" && !inspectFirst && needsParts === false && offPartsPayload(services).length === 0;
+  // (จอคอนเฟิร์มไม่มีคำถามนี้ — needsParts เดิมของใบอาจเป็น false จากรอบก่อน ห้ามพาไปฟอร์มจ่ายงาน)
+  const noPartsAssign =
+    order.status === "NEW" && !inspectFirst && !pending && needsParts === false && offPartsPayload(services).length === 0;
   const timeOk = visitTime === "" || isTime(visitTime);
   /**
    * วันนัดเลือกได้ตั้งแต่วันนี้ (เจ้าของงานกำหนด ต.ค. 69 — แทนกฎ "ของคลังอื่นนัดล่วงหน้า 7 วัน" ที่ยกเลิก) · เซิร์ฟเวอร์กันซ้ำ
@@ -5442,11 +5926,38 @@ function StageModal({
     transferBlocked ||
     (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
 
+  /** ช่องวัน/เวลาของ "ต้องเข้าตรวจสอบหน้างานก่อน" — ใช้ทั้งฟอร์มระบุอะไหล่และตอนกดลิงก์จากจอคอนเฟิร์ม (ชุดเดียว รวมกฎปิดนัด/วันย้อนหลัง) */
+  const inspectFields = (
+    <>
+      <Text style={styles.linkedText}>
+        เลือกทีมและวันเข้าตรวจ → แอดมินโทรคอนเฟิร์มวันกับร้าน (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) →
+        กลับมาให้คุณส่งช่างเข้าตรวจ · ทีมบันทึกผลตรวจแล้วใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
+      </Text>
+      <DateField
+        value={visit}
+        onChange={setVisit}
+        label="วันเข้าตรวจหน้างาน"
+        emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
+        min={minVisit}
+        {...schedField}
+      />
+      {pastWarn}
+      {scheduleHelp}
+      <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
+    </>
+  );
+  // ทุกตัว "ตรง" แล้ว — ปุ่มคอนเฟิร์มเป็นสีหลัก ก่อนหน้านั้นสีจาง แต่ยังกดได้ (กดแล้วบอกว่าขาดอะไร)
+  const allOk = !!pending && pending.items.length > 0 && pending.items.every((i) => marks[i.sparePartId] === "OK");
+  // อะไหล่นอก/ค่าบริการที่กรอกค้างครึ่งแถว — กล่องนั้นขึ้นบรรทัดแดงบอกเอง ปุ่มคอนเฟิร์มรอจนแก้ (เหมือนฟอร์มระบุอะไหล่เดิม)
+  const extrasBad = offPartsIncomplete(offParts) || offPartsIncomplete(services);
+
   return (
     <AppModal
       visible={visible}
       onClose={onCancel}
       busy={saving}
+      // จอคอนเฟิร์มมีรูปขยายกับแถวตรง/ไม่ตรง — กว้างขึ้นบนจอคอม (มือถือเต็มจออยู่แล้ว)
+      width={confirming ? 720 : undefined}
       title={<>
               {newDate
                 ? "คอนเฟิร์มวันใหม่"
@@ -5468,9 +5979,59 @@ function StageModal({
             <Ionicons name="warning-outline" size={18} color={colors.warningInk} />
             <Text style={styles.gateText}>{gateText}</Text>
           </View>
+        ) : confirming && pickMsg ? (
+          // จอคอนเฟิร์ม: กดปุ่มท้ายฟอร์มตอนยังไม่พร้อม/เซิร์ฟเวอร์ปฏิเสธ — ปักใต้หัวฟอร์มเหมือนด่านส่งใหม่ของช่าง เห็นทุกตำแหน่งที่เลื่อนอยู่
+          <View style={[styles.gateBox, pickMsg.kind === "err" && styles.cfMsgErr]} role="alert">
+            <Ionicons
+              name={pickMsg.kind === "err" ? "alert-circle-outline" : "warning-outline"}
+              size={18}
+              color={pickMsg.kind === "err" ? colors.dangerInk : colors.warningInk}
+            />
+            <Text style={[styles.gateText, pickMsg.kind === "err" && { color: colors.dangerInk }]}>{pickMsg.text}</Text>
+          </View>
         ) : undefined
       }
       footer={
+        confirming ? (
+          <View style={stackFoot ? styles.cfFootCol : styles.modalActions}>
+            <View style={[styles.cfFootPair, !stackFoot && { flex: 2 }]}>
+              <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+                <Text style={styles.modalCancelText}>ยกเลิก</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cfBackBtn, saving && styles.modalSaveOff]}
+                onPress={returnPick}
+                disabled={saving}
+                activeOpacity={0.8}
+                accessibilityLabel="ตีกลับให้ช่างแก้"
+              >
+                {saving && busy === "pickReturned" ? (
+                  <Spinner color={colors.dangerInk} size="small" />
+                ) : (
+                  <Text style={styles.cfBackText}>ตีกลับให้ช่างแก้</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.modalSave,
+                stackFoot && { flex: 0 },
+                !allOk && styles.cfSaveMuted,
+                (saving || extrasBad) && styles.modalSaveOff,
+              ]}
+              onPress={confirmPick}
+              disabled={saving || extrasBad}
+              activeOpacity={0.8}
+              accessibilityLabel="คอนเฟิร์มอะไหล่"
+            >
+              {saving && busy === "pickConfirmed" ? (
+                <Spinner color={allOk ? "#fff" : colors.body} size="small" />
+              ) : (
+                <Text style={[styles.modalSaveText, !allOk && { color: colors.body }]}>คอนเฟิร์มอะไหล่</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : (
         <View style={styles.modalActions}>
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
@@ -5533,6 +6094,7 @@ function StageModal({
             )}
           </TouchableOpacity>
         </View>
+        )
       }
     >
             {prevUsed.length ? (
@@ -5542,7 +6104,52 @@ function StageModal({
               </View>
             ) : null}
 
-            {order.status === "NEW" ? (
+            {confirming ? (
+              <PickConfirmForm
+                order={order}
+                pick={pending!}
+                files={files}
+                marks={marks}
+                onMark={(id, m) => {
+                  setMarks((cur) => ({ ...cur, [id]: m }));
+                  setPickMsg(null);
+                }}
+                onAllOk={() => {
+                  setMarks(Object.fromEntries(pending!.items.map((i) => [i.sparePartId, "OK" as const])));
+                  setPickMsg(null);
+                }}
+                showReject={showReject}
+                reason={reason}
+                onReason={(t) => {
+                  setReason(t);
+                  setPickMsg(null);
+                }}
+                zoom={zoom}
+                onZoom={setZoom}
+                offParts={offParts}
+                onOffParts={setOffParts}
+                services={services}
+                onServices={setServices}
+                onInspectFirst={() => {
+                  setInspectFirst(true);
+                  setPickMsg(null);
+                  setZoom(null);
+                }}
+              />
+            ) : pending ? (
+              // กดลิงก์ "ต้องเข้าตรวจสอบหน้างานก่อน" จากจอคอนเฟิร์ม — ฟอร์มเดียวกัน (ทีม/วันอยู่ส่วนจ่ายงานด้านล่าง) กลับไปได้ ค่าที่กดไว้ยังอยู่
+              <>
+                <TouchableOpacity style={styles.cfLink} onPress={() => setInspectFirst(false)} activeOpacity={0.7} accessibilityLabel="กลับไปคอนเฟิร์มอะไหล่">
+                  <Ionicons name="arrow-back" size={16} color={colors.primaryInk} />
+                  <Text style={styles.cfLinkText}>กลับไปคอนเฟิร์มอะไหล่</Text>
+                </TouchableOpacity>
+                {/* ส่งตรวจใหม่ทิ้งรอบนี้ (เซิร์ฟเวอร์ voidOpenPick) — บอกก่อนกด ไม่งั้นนึกว่ารายการของช่างตามไปรอบหน้า */}
+                <Text style={styles.cfMutedDark}>
+                  ส่งตรวจใหม่แล้วรายการที่ช่างเลือกรอบนี้ไม่ถูกใช้ — ช่างเลือกอะไหล่ใหม่ตอนส่งผลตรวจรอบหน้า
+                </Text>
+                {inspectFields}
+              </>
+            ) : order.status === "NEW" ? (
               <>
                 <Text style={styles.modalLabel}>
                   งานนี้ต้องใช้อะไหล่ไหม{prevUsed.includes("ใช้อะไหล่ไหม") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
@@ -5597,23 +6204,7 @@ function StageModal({
                   </View>
                 ) : null}
                 {inspectFirst ? (
-                  <>
-                    <Text style={styles.linkedText}>
-                      เลือกทีมและวันเข้าตรวจ → แอดมินโทรคอนเฟิร์มวันกับร้าน (ร้านขอเลื่อน แอดมินเปลี่ยนวันให้) →
-                      กลับมาให้คุณส่งช่างเข้าตรวจ · ทีมบันทึกผลตรวจแล้วใบงานจะกลับมาให้ระบุอะไหล่จากผลนั้น
-                    </Text>
-                    <DateField
-                      value={visit}
-                      onChange={setVisit}
-                      label="วันเข้าตรวจหน้างาน"
-                      emptyHint="ต้องระบุวันก่อนจึงจะส่งต่อได้"
-                      min={minVisit}
-                      {...schedField}
-                    />
-                    {pastWarn}
-                    {scheduleHelp}
-                    <TimeField value={visitTime} onChange={setVisitTime} label="เวลา (ไม่ใส่ก็ได้)" />
-                  </>
+                  inspectFields
                 ) : needsParts === true ? (
                   <>
                     <PartPicker
@@ -6677,8 +7268,10 @@ function StageModal({
               </>
             ) : null}
 
-            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน */}
-            {order.status !== "INSPECTING" ? (
+            {/* ขั้นตรวจหน้างานมีช่องผลตรวจอยู่แล้ว ช่องบันทึกอีกช่องทำให้ไม่รู้ว่าต้องพิมพ์ที่ไหน
+                จอคอนเฟิร์มตอนมีแถว "ไม่ตรง": ช่างอ่านแค่เหตุผล — ช่องบันทึกอีกช่อง (ไปกับการคอนเฟิร์มเท่านั้น) ทำให้พิมพ์ผิดช่อง
+                ซ่อนตาม "ไม่ตรง" ไม่ใช่ตามกล่องตีกลับที่เปิดค้าง — กดตีกลับพลาดแล้วกลับมาคอนเฟิร์ม ข้อความบันทึกต้องยังเห็น/แก้ได้ เพราะมันถูกส่งไปกับการคอนเฟิร์ม */}
+            {order.status !== "INSPECTING" && !anyNo ? (
               <>
                 <Text style={styles.modalLabel}>
                   {["PARTS_PICKUP", "PARTS_TRANSFER", "PARTS_IN_TRANSIT"].includes(order.status) && pickupFail
@@ -10910,6 +11503,163 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.warning,
   },
   gateText: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
+  // จอคอนเฟิร์มอะไหล่ (ตัวอย่าง supView review) — สีของตัวอย่างที่อนุมัติ ผ่านโทเคนธีมให้โหมดมืดอ่านออก
+  cfMsgErr: { backgroundColor: colors.dangerSoft, borderBottomColor: colors.danger },
+  cfCard: {
+    gap: 6,
+    padding: spacing.md,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  cfBranch: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
+  cfMachine: { fontSize: 13, lineHeight: 19, color: colors.body },
+  cfFileChip: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft,
+  },
+  cfFileChipText: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.primaryInk },
+  cfMuted: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  cfMutedDark: { fontSize: 12.5, lineHeight: 19, color: colors.body },
+  cfResend: {
+    gap: 2,
+    padding: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.primaryLine,
+    backgroundColor: colors.primarySoft,
+  },
+  cfResendTitle: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.primaryInk },
+  cfResendLine: { fontSize: 13, lineHeight: 19, color: colors.primaryInk },
+  cfTitle: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.text },
+  cfNote: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.text,
+    backgroundColor: colors.rowAlt,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    overflow: "hidden",
+  },
+  cfHeadRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, flexWrap: "wrap" },
+  cfAllOk: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    justifyContent: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.successInk,
+    backgroundColor: colors.card,
+  },
+  cfAllOkText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.successInk },
+  cfRow: { gap: 8, padding: spacing.md, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  cfRowOk: { borderWidth: 2, borderColor: colors.successInk, backgroundColor: colors.successSoft },
+  cfRowNo: { borderWidth: 2, borderColor: colors.dangerInk, backgroundColor: colors.dangerSoft },
+  cfRowTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: spacing.sm },
+  cfRowName: { fontSize: 14, lineHeight: 20, color: colors.text },
+  cfTag: {
+    alignSelf: "flex-start",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: colors.primaryInk,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    overflow: "hidden",
+  },
+  cfQty: { fontSize: 15, lineHeight: 20, fontWeight: "700", color: colors.text },
+  // ปุ่มตรง/ไม่ตรงอยู่ใต้ชื่อเสมอ — ชื่ออะไหล่ยาว บนมือถือวางข้างชื่อแล้วชื่อถูกบีบเหลือคำเดียว
+  cfMarks: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  cfMarkBtn: {
+    flex: 1,
+    minWidth: 120,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: colors.card,
+  },
+  cfOkBtn: { borderColor: colors.successInk },
+  cfOkOn: { backgroundColor: colors.successInk },
+  cfNoBtn: { borderColor: colors.dangerInk },
+  cfNoOn: { backgroundColor: colors.dangerInk },
+  cfMarkText: { fontSize: 15, lineHeight: 20, fontWeight: "700" },
+  cfRemoved: {
+    gap: 4,
+    padding: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    backgroundColor: colors.warningSoft,
+  },
+  cfRemovedTitle: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.warningInk },
+  cfRemovedLine: { fontSize: 13, lineHeight: 19, color: colors.text },
+  cfLink: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44, paddingVertical: 6 },
+  cfLinkText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.primaryInk, textDecorationLine: "underline" },
+  cfReject: {
+    gap: 8,
+    padding: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.dangerLine,
+    backgroundColor: colors.dangerSoft,
+  },
+  cfRejectLabel: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.dangerInk },
+  cfRejectFlags: { fontSize: 12.5, lineHeight: 19, color: colors.dangerInk },
+  cfQuick: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  cfQuickChip: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.dangerLine,
+    backgroundColor: colors.card,
+  },
+  cfQuickText: { fontSize: 13, lineHeight: 19, fontWeight: "600", color: colors.dangerInk },
+  cfReason: { minHeight: 80, backgroundColor: colors.card },
+  cfZoom: { gap: spacing.sm },
+  cfZoomHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+  cfZoomTitle: { flex: 1, minWidth: 0, fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.text },
+  cfZoomBtn: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderRadius: 10,
+    backgroundColor: colors.sky50,
+  },
+  cfZoomBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  cfZoomImg: { width: "100%", height: 360, borderRadius: 10, backgroundColor: colors.tile },
+  cfZoomWait: { alignItems: "center", justifyContent: "center", padding: spacing.md },
+  cfZoomNav: { flexDirection: "row", gap: spacing.sm },
+  cfFootCol: { flex: 1, gap: spacing.sm },
+  cfFootPair: { flexDirection: "row", gap: spacing.sm },
+  cfBackBtn: {
+    flex: 1,
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.dangerSoft,
+  },
+  cfBackText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.dangerInk },
+  // ยังตรวจไม่ครบ — ปุ่มคอนเฟิร์มสีจาง (ตัวอย่าง okBg) แต่ไม่ใช่ปุ่มปิด: กดได้และบอกว่าขาดอะไร
+  cfSaveMuted: { backgroundColor: colors.border },
   claimRejectedText: { fontSize: 13, lineHeight: 21, color: colors.dangerInk },
   claimPart: {
     marginTop: spacing.md,
