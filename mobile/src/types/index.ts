@@ -135,6 +135,11 @@ export interface SparePart {
   imageUrl?: string | null;
   /** Part No. ของผู้ผลิต (จากไฟล์อะไหล่ Huebsch/Maytag) — หลายเลขคั่นด้วย ", " */
   partNo?: string | null;
+  /**
+   * ไฟล์ยี่ห้อที่อะไหล่อยู่ (Haier · Huebsch · Maytag · Oasis · Spinz · Other) — มาจากชื่อไฟล์ Excel ที่อัปโหลด
+   * [] = ไม่อยู่ในไฟล์ไหน ช่างเลือกไม่ได้บนใบที่มีเครื่อง · ไม่มีค่า = เซิร์ฟเวอร์รุ่นก่อน (ไม่รู้)
+   */
+  brandFiles?: string[];
   createdAt: string;
   updatedAt: string;
 }

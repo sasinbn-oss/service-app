@@ -14,7 +14,7 @@ import TouchableOpacity from "./Tap";
 import AppModal from "./AppModal";
 import Dropdown from "./Dropdown";
 import DateField, { todayBkk } from "./DateField";
-import PartPicker, { PickedPart } from "./PartPicker";
+import PartPicker, { brandBlockers, brandBlockText, machineBrandToSend, PickedPart, type PartsBrand } from "./PartPicker";
 import {
   PickedAttachment,
   asList,
@@ -51,7 +51,11 @@ export interface SupervisorCloseOrder {
   /** ใบงาน SUB — "ช่างเข้าแก้ไขเรียบร้อย" เลือกทีม SUB แทนช่างบริษัท */
   assignedOutsource?: boolean;
   afterCount?: number;
-  waitingParts: { partCode?: string | null; name?: string | null; inStock?: boolean | null; requisitionNo: string | null }[];
+  waitingParts: { sparePartId?: number; partCode?: string | null; name?: string | null; inStock?: boolean | null; requisitionNo: string | null }[];
+  /** อะไหล่ที่บันทึกว่าใช้แล้วในใบ — รวมกับรายการรอเป็นแถวที่ปล่อยผ่านแม้อยู่นอกไฟล์ยี่ห้อ (D6) */
+  parts?: { sparePartId: number }[];
+  /** ยี่ห้อเครื่อง → ไฟล์อะไหล่ (order.partsBrand) — ช่อง "อะไหล่ที่ใช้" ล็อกตามไฟล์นี้ (ข้อ 23) */
+  partsBrand?: PartsBrand | null;
 }
 
 export function SupervisorCloseButton({ onPress }: { onPress: () => void }) {
@@ -91,6 +95,8 @@ export default function SupervisorCloseModal({
   const [subTeam, setSubTeam] = useState<string | null>(isSub ? order.assignedTeam : null);
   const [visitDate, setVisitDate] = useState(todayBkk());
   const [parts, setParts] = useState<PickedPart[]>([]);
+  // ยี่ห้อที่กดในช่องอะไหล่ (เครื่องที่ยังไม่รู้ยี่ห้อ) — ส่งไปจำไว้กับเครื่องพร้อมการปิดใบ
+  const [pickedBrand, setPickedBrand] = useState<string | null>(null);
   const [after, setAfter] = useState<PickedAttachment[]>([]);
   const [stage, setStage] = useState<string | null>(null);
   // เบิกแล้ว = เช็คว่ามีของและมีเลขใบเบิก (เกณฑ์เดียวกับหน้าใบงาน)
@@ -99,7 +105,16 @@ export default function SupervisorCloseModal({
   const len = note.trim().length;
   const whoMissing = fixed && (isSub ? !subTeam : !workerId && !others.trim());
   const afterMissing = fixed && after.length === 0 && !order.afterCount;
-  const ready = !!reason && len >= MIN_NOTE && !whoMissing && !afterMissing && (!fixed || !!visitDate);
+  /**
+   * ของที่อยู่ในใบแล้ว (รอ + ใช้) ปล่อยผ่านแม้อยู่นอกไฟล์ยี่ห้อ — ช่างใช้ไปจริงแล้ว (D6 · legacy ของ /supervisor-close)
+   * ตัวที่เพิ่มใหม่ต้องอยู่ในไฟล์ของเครื่อง หรือของใช้ร่วม (Other)
+   */
+  const legacy = new Set<number>([
+    ...order.waitingParts.map((p) => p.sparePartId).filter((x): x is number => typeof x === "number"),
+    ...(order.parts ?? []).map((p) => p.sparePartId),
+  ]);
+  const brandBlock = fixed ? brandBlockText(brandBlockers(parts, order.partsBrand, pickedBrand, { legacyIds: legacy }), order.partsBrand) : null;
+  const ready = !!reason && len >= MIN_NOTE && !whoMissing && !afterMissing && (!fixed || !!visitDate) && !brandBlock;
 
   async function pickAfter(pick: (onStage: (label: string) => void) => Promise<PickedAttachment | PickedAttachment[] | null>) {
     try {
@@ -124,6 +139,7 @@ export default function SupervisorCloseModal({
           await uploadAttachment(order.id, f, "AFTER", undefined, { index: i, total: after.length });
         }
         setStage(null);
+        const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
         await api.post(`/work-orders/${order.id}/supervisor-close`, {
           reason,
           note: note.trim(),
@@ -132,6 +148,7 @@ export default function SupervisorCloseModal({
           otherWorkers: others.trim() || null,
           subTeam: isSub ? subTeam : null,
           parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+          ...(machineBrand ? { machineBrand } : {}),
         });
       } else {
         await api.post(`/work-orders/${order.id}/supervisor-close`, { reason, note: note.trim() });
@@ -150,6 +167,7 @@ export default function SupervisorCloseModal({
     whoMissing && (isSub ? "เลือกทีม SUB ที่เข้าทำ" : "บอกว่าใครเข้าซ่อม"),
     afterMissing && "แนบรูปหลังซ่อม",
     len < MIN_NOTE && `พิมพ์รายละเอียดอย่างน้อย ${MIN_NOTE} ตัวอักษร`,
+    brandBlock,
   ].filter(Boolean);
   return (
     <AppModal
@@ -239,7 +257,16 @@ export default function SupervisorCloseModal({
               accessibilityLabel="ชื่อคนอื่นที่เข้าซ่อม"
             />
             <DateField value={visitDate} onChange={setVisitDate} label="วันที่ช่างเข้าซ่อม *" required labelStyle={styles.label} />
-            <PartPicker parts={parts} onChange={setParts} label="อะไหล่ที่ใช้ (ถ้ามี)" />
+            <PartPicker
+              parts={parts}
+              onChange={setParts}
+              label="อะไหล่ที่ใช้ (ถ้ามี)"
+              brand={order.partsBrand}
+              chosenBrand={pickedBrand}
+              onBrandChosen={setPickedBrand}
+              legacyIds={legacy}
+              saveWhen="ตอนปิดใบงาน"
+            />
             <FileDropZone
               hint="รูป"
               disabled={busy}

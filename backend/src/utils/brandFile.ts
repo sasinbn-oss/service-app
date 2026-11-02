@@ -9,8 +9,9 @@
  * ไฟล์ยี่ห้อด้วยกันไม่ข้ามกัน (Huebsch ↔ Maytag …)
  *
  * กติกาจับคำอยู่ที่ไฟล์นี้ที่เดียว (+ SQL ตั้งต้นใน migration 20261211090000_parts_pick ที่รันครั้งเดียว)
- * tests/lib/fixture-parts.sh ทำ CASE แบบเดียวกับ brandFileOf ทุกบรรทัด — แก้ที่นี่ต้องแก้ที่นั่น
- * ไม่งั้นเทสต์ส่งอะไหล่ที่เซิร์ฟเวอร์ถือว่าคนละไฟล์
+ * tests/lib/fixture-parts.sh ทำ CASE แบบเดียวกับ brandFileOf ทุกบรรทัด และ mobile/src/utils/brandFile.ts มีสำเนาของ brandFileOf
+ * — แก้ที่นี่ต้องแก้ทั้งสองที่ ไม่งั้นเทสต์ส่งอะไหล่ที่เซิร์ฟเวอร์ถือว่าคนละไฟล์ และแอปติดป้ายแดงกันปุ่มทั้งที่เซิร์ฟเวอร์รับ
+ * (parts-pick-test.sh กลุ่ม B เทียบทั้งสามที่ทีละคำ)
  */
 import { Prisma } from "@prisma/client";
 import { z } from "zod";

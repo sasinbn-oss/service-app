@@ -342,21 +342,28 @@ OG=$(curl -s -G localhost:4000/api/machines/outages -H "$(H $A)" --data-urlencod
 # CASE ใน tests/lib/fixture-parts.sh (ที่ทุกชุดใช้เลือกตัวแฝด) ต้องให้ไฟล์เดียวกับ brandFileOf ของเซิร์ฟเวอร์ทุกคำ
 # ไม่งั้นพอกฎล็อกยี่ห้อมา เทสต์หลายสิบชุดส่งตัวแฝดที่เซิร์ฟเวอร์ถือว่าคนละไฟล์ แล้วพังไกลจากต้นเหตุ
 # ตั้งยี่ห้อเครื่องของ W4 ทีละคำ เทียบไฟล์ของตัวแฝดที่ fx_part_code เลือก กับ partsBrand.file จาก API (brand มีค่าตลอด fx จึงไม่ตั้ง model)
+# สำเนาที่สามในแอป (mobile/src/utils/brandFile.ts) เทียบด้วย — แอปใช้ตัดสินป้ายแดง/กันปุ่มของชิปที่เพิ่งกด และไฟล์ของแถวกระดานเครื่องดับ
+# ถ้าแอปตกยุค เซิร์ฟเวอร์รับแต่จอติดป้ายแดงกันปุ่มบันทึก — ไฟล์นั้นไม่มี import จึงโหลดด้วย ts-node ของ backend ได้ตรง ๆ
 . tests/lib/fixture-parts.sh
 SYNC=""
-for b in "Huebsch (TC)" "HB" "HB - Huebsch" "hb_2026" "THB" "อะไหล่HB" "(HB)" "HBHB" "HB2" "Haier/Maytag" "Maytag Spinz" \
-  "OASIS" "Oasis(TC)" "haier" "MAYTAG" "Spinz" "Electrolux" "Speed Queen"; do
+WORDS=("Huebsch (TC)" "HB" "HB - Huebsch" "hb_2026" "THB" "อะไหล่HB" "(HB)" "HBHB" "HB2" "Haier/Maytag" "Maytag Spinz" \
+  "OASIS" "Oasis(TC)" "haier" "MAYTAG" "Spinz" "Electrolux" "Speed Queen")
+MOB=$(cd backend && node_modules/.bin/ts-node -T -O '{"module":"commonjs"}' -e \
+  'const f=require("../mobile/src/utils/brandFile").brandFileOf; console.log(process.argv.slice(1).map(b=>b+"\t"+f(b)).join("\n"))' \
+  "${WORDS[@]}" 2>&1)
+for b in "${WORDS[@]}"; do
   DB "update \"Machine\" set brand='$b' where \"branchId\"=$BID and code='$MH'" >/dev/null
   case "$(fx_part_code "$W4" BOARD)" in
     *-HB) fx=Huebsch ;; *-HA) fx=Haier ;; *-MT) fx=Maytag ;; *-SZ) fx=Spinz ;; *-OT) fx=Other ;; SP-BOARD) fx=Oasis ;; *) fx="?" ;;
   esac
   api=$(PB $W4 $A | J 'd.file')
-  [ "$fx" = "$api" ] || SYNC="$SYNC [$b] fixture=$fx api=$api"
+  mob=$(printf '%s\n' "$MOB" | awk -F'\t' -v k="$b" '$1==k{print $2}')
+  [ "$fx" = "$api" ] && [ "$mob" = "$api" ] || SYNC="$SYNC [$b] fixture=$fx api=$api app=${mob:-?}"
 done
 DB "update \"Machine\" set brand='HB' where \"branchId\"=$BID and code='$MH'" >/dev/null
 [ -z "$SYNC" ] \
-  && pass "fixture-parts.sh กับ brandFileOf ให้ไฟล์เดียวกันทั้ง 18 คำ (HB แบบเป็นคำ · THB · Haier/Maytag · ยี่ห้ออื่น = Other …)" \
-  || fail "fixture-parts.sh ไม่ตรงกับ brandFileOf:$SYNC"
+  && pass "fixture-parts.sh และ brandFileOf ของแอป ให้ไฟล์เดียวกับ brandFileOf ของเซิร์ฟเวอร์ทั้ง 18 คำ (HB แบบเป็นคำ · THB · Haier/Maytag · ยี่ห้ออื่น = Other …)" \
+  || fail "fixture-parts.sh / แอป ไม่ตรงกับ brandFileOf:$SYNC $(printf '%s' "$MOB" | grep -iv $'\t' | head -c 300)"
 
 echo
 echo "═══ C ช่างเลือกอะไหล่ตอนตรวจหน้างาน → รอหัวหน้าภาคคอนเฟิร์ม (POST /work-orders/:id/inspection)"

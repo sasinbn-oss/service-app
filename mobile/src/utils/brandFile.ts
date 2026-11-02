@@ -9,3 +9,57 @@ export const BRAND_FILES = ["Haier", "Huebsch", "Maytag", "Oasis", "Spinz", "Oth
 export type BrandFile = (typeof BRAND_FILES)[number];
 /** Other = อะไหล่ใช้แทนกันได้/ของใช้ในสาขา — ทุกเครื่องเลือกได้ นอกจากไฟล์ยี่ห้อของเครื่องเอง (R4) */
 export const SHARED_FILE: BrandFile = "Other";
+
+/**
+ * ยี่ห้อเครื่องของใบงานในรูปที่ช่องเลือกอะไหล่ใช้ — ตรงกับ partsBrand ที่เซิร์ฟเวอร์ส่งมากับใบงาน
+ * machine = ใบมีเครื่อง (ไม่มี = งานทั้งสาขา ไม่ล็อกยี่ห้อ ข้อ 22) · file ว่างทั้งที่มีเครื่อง = ยังไม่รู้ยี่ห้อ ต้องกดชิปก่อน
+ */
+export interface PartsBrand {
+  machine: boolean;
+  make: string | null;
+  file: string | null;
+  machineCode: string | null;
+  /** ยี่ห้อมาจากไฟล์รายงานเครื่อง — แก้ในแอปแล้วนำเข้ารายงานครั้งหน้าทับกลับ (ชีตแก้ยี่ห้อเตือน) */
+  fromReport?: boolean;
+}
+
+/** "HB" แบบเป็นคำ = Huebsch (เจ้าของงานยืนยัน) — "THB" ไม่ใช่ · ธง i ทำให้ [^a-z] ไม่รับ A–Z ด้วย เหมือนเซิร์ฟเวอร์ */
+const HB_WORD = /(^|[^a-z])hb([^a-z]|$)/i;
+
+/**
+ * ยี่ห้อเครื่อง → ไฟล์อะไหล่ — สำเนาของ brandFileOf ใน backend/src/utils/brandFile.ts (ลำดับเดียวกันทุกบรรทัด
+ * และเท่ากับ CASE ใน tests/lib/fixture-parts.sh) แก้ที่หนึ่งต้องแก้ทั้งสามที่
+ *
+ * ทำไมแอปคิดเองแทนที่จะรอเซิร์ฟเวอร์: ชิปที่เพิ่งกด (ยังไม่บันทึกกับเครื่อง) ต้องรู้ไฟล์ทันทีเพื่อติดป้ายแดงแถวที่อยู่คนละไฟล์
+ * และกันปุ่มส่ง — รอคำตอบจาก /spare-parts/for-brand ก่อน ปุ่มจะกดผ่านได้ช่วงสั้น ๆ แล้วไปโดนเซิร์ฟเวอร์ปฏิเสธ
+ * ชื่อไฟล์บนหัวช่องค้นยังใช้ค่าที่เซิร์ฟเวอร์ตอบ (คำตอบจริง) — ตรงนี้ใช้ตัดสินป้ายและปุ่มเท่านั้น
+ * ว่าง = ไม่รู้ยี่ห้อ (null) · ข้อความที่ไม่ตรงคำไหน = Other (เลือกได้แค่ของใช้ร่วม)
+ */
+export function brandFileOf(make: string | null | undefined): BrandFile | null {
+  const s = make?.trim();
+  if (!s) return null;
+  if (/huebsch/i.test(s) || HB_WORD.test(s)) return "Huebsch";
+  if (/oasis/i.test(s)) return "Oasis";
+  if (/haier/i.test(s)) return "Haier";
+  if (/maytag/i.test(s)) return "Maytag";
+  if (/spinz/i.test(s)) return "Spinz";
+  return SHARED_FILE;
+}
+
+/** ไฟล์ที่เครื่องหนึ่งเลือกได้ = ไฟล์ของตัวเอง + ของใช้ร่วม (เครื่องที่ตกไป Other ได้ไฟล์เดียว) */
+export function allowedFiles(machineFile: string): string[] {
+  return machineFile === SHARED_FILE ? [SHARED_FILE] : [machineFile, SHARED_FILE];
+}
+
+/** อะไหล่ตัวนี้เลือกได้กับเครื่องไฟล์นี้ไหม — กติกาเดียวกับ brandProblem ขั้น 6 ฝั่งเซิร์ฟเวอร์ */
+export function fileAllows(machineFile: string, brandFiles: readonly string[]): boolean {
+  const ok = allowedFiles(machineFile);
+  return brandFiles.some((f) => ok.includes(f));
+}
+
+/** "อัปเดต 28 ต.ค. 69" — วันที่แบบเดียวกับตัวอย่างที่เจ้าของงานอนุมัติ (ปี พ.ศ. สองหลัก) */
+export function shortThaiDate(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return at.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "2-digit" });
+}
