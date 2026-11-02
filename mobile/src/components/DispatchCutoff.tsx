@@ -23,9 +23,8 @@ import { showAlert } from "../utils/alert";
 import { colors, radius, spacing, headingFont } from "../theme";
 import {
   adminDayLine,
-  adminRowLines,
   askDays,
-  BannerRow,
+  askStateError,
   BannerTone,
   Cutoff,
   CutoffBanner,
@@ -33,14 +32,12 @@ import {
   CutoffRow,
   dayFull,
   dayShort,
-  FormWarning,
   hhmmOf,
   SCHEDULE_STAGES,
   scheduleChip,
   scheduleLine,
   ScheduleTone,
   serverDay,
-  timeText,
   UrgentAnswer,
   UrgentAsk,
   useServerClock,
@@ -51,18 +48,15 @@ type IconName = keyof typeof Ionicons.glyphMap;
 type ToneStyle = { bg: string; fg: string; line: string; icon: IconName };
 
 /**
- * สีป้ายบนการ์ด (ตัวอย่าง tone()) — ล็อกเป็นพื้นแดงทึบตัวขาว ให้เห็นจากระยะไกลว่าใบนี้กดไม่ได้แล้ว
- * ใช้คีย์สีของธีม (dangerFill ฯลฯ) ไม่ใช่รหัสสีตรง ๆ โหมดมืดจะได้อ่านออก
+ * สีป้ายบนการ์ด (ตัวอย่าง tone()) — ใช้คีย์สีของธีม (dangerFill ฯลฯ) ไม่ใช่รหัสสีตรง ๆ โหมดมืดจะได้อ่านออก
+ * lock (แดงทึบ) เหลือไว้ให้หัวข้อ "เลยนัด" เท่านั้น — ป้ายบนการ์ดใบรอนัดวันไม่มีสีนี้แล้ว
  */
 const CHIP_TONE: Record<BannerTone, ToneStyle> = {
-  lock: { bg: colors.dangerFill, fg: "#FFFFFF", line: colors.dangerFill, icon: "lock-closed" },
+  lock: { bg: colors.dangerFill, fg: "#FFFFFF", line: colors.dangerFill, icon: "calendar-outline" },
   req: { bg: colors.roleAdminSoft, fg: colors.roleAdmin, line: colors.roleAdminLine, icon: "hourglass-outline" },
   urgent: { bg: colors.successSoft, fg: colors.successInk, line: colors.successLine, icon: "lock-open-outline" },
-  later: { bg: colors.background, fg: colors.textMuted, line: colors.border, icon: "calendar-outline" },
-  calm: { bg: colors.sky50, fg: colors.navy, line: colors.primaryLine, icon: "time-outline" },
   amber: { bg: colors.warningSoft, fg: colors.warningInk, line: colors.warning, icon: "time-outline" },
   red: { bg: colors.dangerSoft, fg: colors.dangerInk, line: colors.dangerInk, icon: "warning-outline" },
-  done: { bg: colors.successSoft, fg: colors.successInk, line: colors.successFill, icon: "checkmark-circle-outline" },
   today: { bg: colors.primarySoft, fg: colors.primaryInk, line: colors.primary, icon: "calendar-outline" },
   grey: { bg: colors.card, fg: colors.textMuted, line: colors.border, icon: "time-outline" },
 };
@@ -70,7 +64,7 @@ const CHIP_TONE: Record<BannerTone, ToneStyle> = {
 /** หัวข้อบนสุดใช้พื้นอ่อนทุกสี (ตัวอย่าง redG) — แถบแดงทึบกว้างเต็มจอแย่งสายตาจากการ์ดที่ต้องกดจริง */
 const BANNER_TONE: Record<BannerTone, ToneStyle> = {
   ...CHIP_TONE,
-  lock: { bg: colors.dangerSoft, fg: colors.dangerInk, line: colors.dangerInk, icon: "lock-closed" },
+  lock: { bg: colors.dangerSoft, fg: colors.dangerInk, line: colors.dangerInk, icon: "calendar-outline" },
 };
 
 /**
@@ -122,21 +116,6 @@ export function LiveScheduleChip(props: LiveChipProps) {
 function LiveChipInner({ row, serverNow, cutoff, style }: LiveChipProps) {
   const now = useServerClock(serverNow, cutoff?.time);
   return <ScheduleChip row={row} now={now} cutoff={cutoff} style={style} />;
-}
-
-/**
- * บรรทัดเตือนใต้ช่องวันที่ (dateFormWarning) — เตือนอย่างเดียว ไม่กันบันทึก (ข้อ 4)
- * เทา = แค่บอกเส้นตาย · ส้ม = เหลือไม่ถึงชั่วโมง · แดง = เลยแล้ว ใบจะถึงขั้นปล่อยงานแบบล็อก
- */
-export function FormWarningLine({ warning }: { warning: FormWarning }) {
-  if (!warning) return null;
-  const t = warning.tone === "red" ? CHIP_TONE.red : warning.tone === "amber" ? CHIP_TONE.amber : CHIP_TONE.later;
-  return (
-    <View style={[styles.formWarn, { backgroundColor: t.bg, borderColor: t.line }]} accessibilityLabel={warning.text}>
-      <Ionicons name={t.icon} size={15} color={t.fg} style={{ marginTop: 2 }} />
-      <Text style={[styles.formWarnText, { color: warning.tone === "grey" ? colors.body : t.fg }]}>{warning.text}</Text>
-    </View>
-  );
 }
 
 /** ข้อความช่องติ๊กงานด่วน (ตัวอย่าง appt-cutoff) — ทุกฟอร์มวันที่ของแอดมินและเทสต์ใช้คำเดียวกัน */
@@ -253,8 +232,8 @@ export const ASK_TODAY = "ร้านต้องการวันนี้จ
 export const ASK_CANCEL = "ยกเลิกคำขอ";
 
 /**
- * บรรทัดใต้ช่องวันของแอดมิน + ช่องติ๊ก (ตัวอย่าง s2Line · showTick · s2Hint)
- * ฟอร์มนัดวันที่แอดมินทำแทนหัวหน้าภาคใช้ตัวนี้ (changed = false) · ฟอร์มคอนเฟิร์มลูกค้าขอเลื่อน/เลื่อนวันนัดใช้ตัวเดียวกันได้ (changed = true)
+ * บรรทัดใต้ช่องวันของแอดมิน + ช่องติ๊ก (ตัวอย่าง s2Line · showTick · s2Hint) — ทุกฟอร์มที่แอดมินเลือกวันใช้ตัวเดียวกัน คำจึงตรงกันทุกที่
+ * ฟอร์มนัดวันที่แอดมินทำแทนหัวหน้าภาค (changed = false) · คอนเฟิร์มลูกค้าขอเลื่อน · เลื่อนวันนัด/ดึงงานคืน (changed = true — วันเดิมไม่ส่งมา)
  * ปุ่มบันทึกปิดอยู่จนกว่าจะติ๊ก (ผู้เรียกกันเอง) — บรรทัด "ติ๊กแก้เป็นงานด่วนก่อน" บอกว่าทำไมกดไม่ได้ ไม่ให้แอดมินงงว่าปุ่มเสีย
  */
 export function AdminDayLine({
@@ -383,91 +362,145 @@ export function ScheduleDayHelp({
   );
 }
 
+/** ใบที่หน้าต่างคำขอนัดด่วนอ่าน — แถวรายการ (งานของฉันวันนี้ · กล่องงาน) กับใบงานของหน้าใบงานเข้ารูปนี้ได้ทั้งคู่ */
+export type AskOrder = {
+  id: number;
+  code: string;
+  branchCode: string;
+  branchName: string;
+  assignedTeam: string | null;
+  urgentAsk?: UrgentAsk | null;
+};
+
+/** "หัวหน้าภาคขอนัดด่วน · 16:42 น. — “ร้านเปิดพรุ่งนี้”" — กล่องบนหน้าใบงานกับหน้าต่างแก้เป็นงานด่วนใช้ท่อนเวลา/ข้อความเดียวกัน */
+const askTail = (a: UrgentAsk) => `${hhmmOf(a.at)} น.${a.note ? ` — “${a.note}”` : ""}`;
+
 /**
- * แอดมินกด "แก้เป็นงานด่วน" ทีละใบ (ข้อ ง · ข้อ 1) — หัวหน้าภาคกดปล่อยงานใบนี้ได้ทันทีแม้เลยเวลาปิดรับ
- * เป็นหน้าต่างของตัวเองชั้นบนสุดเสมอ ห้ามเปิดจากในฟอร์มขั้นตอน — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (CLAUDE.md)
- * ส่งวันนัดที่เห็นไปด้วย: แอดมินอีกคนเพิ่งเลื่อนวันระหว่างนั้น เซิร์ฟเวอร์ปฏิเสธ ไม่ปลดล็อกวันที่คนกดไม่ได้เห็น
- * เหตุผลไม่บังคับ (ข้อ 8) ประวัติบันทึกว่าใครกดเมื่อไรเสมอ
+ * กล่องม่วง "หัวหน้าภาคขอนัดด่วน" ในการ์ดขั้นของหน้าใบงาน (แอดมิน) — เห็นคำขอตรงที่เปิดใบมา ไม่ต้องกลับไปงานของฉันวันนี้
+ * ปุ่มเปิดหน้าต่างของหน้าใบงานเอง (ไม่ใช่จากในฟอร์มขั้น — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ CLAUDE.md)
+ * canAct = แอดมินที่กดได้จริง (ไม่ใช่ดูในฐานะ/Admin Spare Part) — คนอื่นเห็นกล่องแต่ไม่มีปุ่ม กดแล้วเจอ 403 ดูเหมือนแอปเสีย
  */
-export function UrgentReleaseModal({
-  order,
-  now,
-  onDone,
-  onCancel,
-}: {
-  order: BannerRow;
-  // บังคับส่ง — ห้ามถอยไปใช้นาฬิกามือถือ (ข้อ 12): เครื่องแอดมินช้า 10 นาที ใบที่เพิ่งล็อกจะดูเหมือนยังไม่ล็อก กล่อง "โทรถามหัวหน้าภาค" หาย
-  now: number;
-  onDone: (detail: unknown) => void | Promise<void>;
-  onCancel: () => void;
-}) {
-  const [reason, setReason] = useState("");
+export function AskAdminBox({ ask, canAct, onAnswer, onGrant }: { ask: UrgentAsk; canAct: boolean; onAnswer: () => void; onGrant: () => void }) {
+  const text = `หัวหน้าภาค${ask.byName ? ` ${ask.byName}` : ""}ขอนัดด่วน ${dayFull(ask.day)} · ${askTail(ask)}`;
+  return (
+    <View style={styles.askAdmin} accessibilityLabel={text}>
+      <View style={styles.askAdminHead}>
+        <Ionicons name="hourglass-outline" size={16} color={colors.roleAdmin} style={{ marginTop: 2 }} />
+        <Text style={styles.askAdminText}>{text}</Text>
+      </View>
+      {canAct ? (
+        <View style={styles.askAdminActions}>
+          <TouchableOpacity style={[styles.modalBtn, styles.modalGhost]} onPress={onAnswer} accessibilityLabel="ตอบกลับ">
+            <Text style={styles.modalGhostText}>ตอบกลับ</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.modalBtn, styles.modalPrimary]} onPress={onGrant} accessibilityLabel="แก้เป็นงานด่วน">
+            <Text style={styles.modalPrimaryText}>แก้เป็นงานด่วน</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * สถานะหน้าต่างคำขอนัดด่วน (แก้เป็นงานด่วน · ตอบกลับ) ที่ใช้ร่วมกัน
+ * 409 URGENT_ASK_STATE = คำขอเปลี่ยนไปก่อนกด (แอดมินอีกคนแก้/ตอบแล้ว · หัวหน้าภาคยกเลิก/นัดวันอื่น · วันนั้นยังเปิด) —
+ * บอกข้อความเซิร์ฟเวอร์ในหน้าต่างแล้วปิดปุ่มบันทึก (กดซ้ำก็ได้คำตอบเดิม) แอดมินอ่านแล้วกดยกเลิกเอง ·
+ * ปิดหน้าต่างแล้วผู้เรียกโหลดใหม่ (onCancel(true)) แถวจะได้หายหรือเปลี่ยนตามจริง
+ * error อื่นขึ้นในหน้าต่างเช่นกัน — เปิดจากงานของฉันวันนี้ไม่มีหน้าใบงานคอยรับข้อความ 409 กลาง ผู้ใช้จะไม่รู้ว่าทำไมไม่ผ่าน
+ * (บนหน้าใบงาน 409 ที่ขั้นเปลี่ยนจริง ตัวจัดการกลางปิดหน้าต่างและโหลดใบใหม่ให้เอง)
+ */
+function useAskWindow() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const day = order.scheduledAt?.slice(0, 10) ?? null;
-  const lines = adminRowLines(order, now, null, "locked");
-  const inspect = order.status === "INSPECT_DISPATCH";
-
-  async function save() {
+  const [stale, setStale] = useState(false);
+  async function run(go: () => Promise<void>) {
     setBusy(true);
     setError(null);
     try {
-      const { data } = await api.post(`/work-orders/${order.id}/urgent-release`, {
-        reason: reason.trim() || undefined,
-        seenScheduledAt: day,
-        seenScheduledTime: order.scheduledTime ?? null,
-      });
-      feedback.toast("success", `แก้ ${order.code} เป็นงานด่วนแล้ว — หัวหน้าภาคกดปล่อยงานได้ทันที (ลงประวัติใบงานแล้ว)`);
-      await onDone(data);
+      await go();
     } catch (e) {
-      // บอกในหน้าต่างเอง — เปิดจากงานของฉันวันนี้ไม่มีหน้าใบงานคอยรับข้อความ 409 กลาง ผู้ใช้จะไม่รู้ว่าทำไมไม่ผ่าน
-      setError(apiErrorMessage(e));
+      const msg = askStateError(e);
+      if (msg) setStale(true);
+      setError(msg ?? apiErrorMessage(e));
     } finally {
       setBusy(false);
     }
   }
+  return { busy, error, stale, run };
+}
+
+function AskFooter({ busy, off, label, onCancel, onSave }: { busy: boolean; off: boolean; label: string; onCancel: () => void; onSave: () => void }) {
+  return (
+    <View style={styles.modalFooter}>
+      <TouchableOpacity style={[styles.modalBtn, styles.modalGhost]} onPress={onCancel} disabled={busy} accessibilityLabel="ยกเลิก">
+        <Text style={styles.modalGhostText}>ยกเลิก</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.modalBtn, styles.modalPrimary, (busy || off) && { opacity: 0.5 }]}
+        onPress={onSave}
+        disabled={busy || off}
+        accessibilityLabel={label}
+      >
+        <Text style={styles.modalPrimaryText}>{label}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+/**
+ * แอดมินกด "แก้เป็นงานด่วน" ตามคำขอของหัวหน้าภาค (เจ้าของงานข้อ 2 · 3) — ทีละใบ ทีละวัน: หัวหน้าภาคนัดวันที่ขอได้ทันที
+ * เปิดได้จากคำขอเท่านั้น (วันมาจากคำขอ ไม่มีช่องเลือกวัน) — แอดมินไม่ต้องเดาว่าร้านต้องการวันไหน
+ * เหตุผลไม่บังคับ (ข้อ 8) ประวัติบันทึกว่าใครกดเมื่อไรวันไหนเสมอ
+ */
+export function UrgentReleaseModal({
+  order,
+  onDone,
+  onCancel,
+}: {
+  order: AskOrder;
+  onDone: (detail: unknown) => void | Promise<void>;
+  /** stale = เจอ 409 URGENT_ASK_STATE ระหว่างเปิด — ผู้เรียกโหลดใหม่ */
+  onCancel: (stale: boolean) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const w = useAskWindow();
+  const ask = order.urgentAsk ?? null;
+  const day = ask?.day ?? null;
+
+  const save = () =>
+    w.run(async () => {
+      if (!day) return;
+      const { data } = await api.post(`/work-orders/${order.id}/urgent-release`, { day, reason: reason.trim() || undefined });
+      feedback.toast("success", `แก้ ${order.code} เป็นงานด่วนแล้ว — หัวหน้าภาคนัด ${dayShort(day)} ได้ทันที (ลงประวัติใบงานแล้ว)`);
+      await onDone(data);
+    });
 
   return (
     <AppModal
       visible
-      onClose={onCancel}
-      busy={busy}
+      onClose={() => onCancel(w.stale)}
+      busy={w.busy}
       title={`แก้เป็นงานด่วน · ${order.code}`}
       subtitle={`${order.branchCode} ${order.branchName}`.trim()}
-      banner={error ? <Text style={styles.modalErr}>{error}</Text> : undefined}
-      footer={
-        <View style={styles.modalFooter}>
-          <TouchableOpacity style={[styles.modalBtn, styles.modalGhost]} onPress={onCancel} disabled={busy} accessibilityLabel="ยกเลิก">
-            <Text style={styles.modalGhostText}>ยกเลิก</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modalBtn, styles.modalPrimary, busy && { opacity: 0.6 }]}
-            onPress={save}
-            disabled={busy}
-            accessibilityLabel="บันทึก แก้เป็นงานด่วน"
-          >
-            <Text style={styles.modalPrimaryText}>บันทึก แก้เป็นงานด่วน</Text>
-          </TouchableOpacity>
-        </View>
-      }
+      banner={w.error ? <Text style={styles.modalErr}>{w.error}</Text> : undefined}
+      footer={<AskFooter busy={w.busy} off={!day || w.stale} label="บันทึก แก้เป็นงานด่วน" onCancel={() => onCancel(w.stale)} onSave={save} />}
     >
       <View style={{ gap: spacing.md }}>
         <View style={styles.modalAppt}>
           <Text style={styles.modalApptText}>
-            <Text style={styles.bold}>นัด</Text> {day ? dayFull(day) : "—"} · {timeText(order.scheduledTime)} · ทีม{order.assignedTeam ?? " —"}
-            {inspect ? " · ส่งช่างตรวจ" : ""}
+            <Text style={styles.bold}>ขอนัด</Text> {day ? dayFull(day) : "—"} · ทีม{order.assignedTeam ?? " —"}
           </Text>
         </View>
-        {/* ใบไม่มีคนรับไม่มีกล่องนี้ — ไม่มีหัวหน้าภาคให้ถาม (DEFAULT — บอกเจ้าของงาน) */}
-        {lines.ask ? (
-          <View style={[styles.modalAsk, lines.ask.tone === "purple" ? styles.askPurple : styles.askGrey]}>
-            <Text style={[styles.modalAskText, { color: lines.ask.tone === "purple" ? colors.roleAdmin : colors.textMuted }]}>{lines.ask.text}</Text>
+        {ask ? (
+          <View style={[styles.modalAsk, styles.askPurple]}>
+            <Text style={[styles.modalAskText, { color: colors.roleAdmin }]}>หัวหน้าภาคขอนัดด่วน · {askTail(ask)}</Text>
           </View>
         ) : null}
         <View style={styles.modalInfo}>
           <Text style={styles.modalInfoText}>
-            หัวหน้าภาคกดปล่อยงานใบนี้ได้ทันทีแม้เลยเวลาปิดรับ — เฉพาะใบนี้ วันนัดนี้ · การ์ดขึ้นป้าย “แอดมินแก้เป็นงานด่วน” · ไม่เปลี่ยนความเร่งด่วน
-            (ด่วน/ปกติ) ของใบ · เลื่อนวันนัดภายหลังต้องแก้ใหม่
+            หัวหน้าภาคนัด {day ? dayShort(day) : "วันนั้น"} ได้ทันที — เฉพาะใบนี้ วันนั้น · การ์ดขึ้นป้าย “แอดมินแก้เป็นงานด่วน” · ไม่เปลี่ยนความเร่งด่วน
+            (ด่วน/ปกติ) ของใบ · นัดวันอื่นแล้วต้องแก้ใหม่
           </Text>
         </View>
         <View style={{ gap: 6 }}>
@@ -477,9 +510,66 @@ export function UrgentReleaseModal({
             value={reason}
             onChangeText={setReason}
             maxLength={300}
-            placeholder="เช่น ร้านปิดเครื่องอยู่ ต้องเข้าพรุ่งนี้"
+            placeholder="เช่น เครื่องเสียหนัก ร้านต้องเปิดพรุ่งนี้"
             placeholderTextColor={colors.textFaint}
             accessibilityLabel="เหตุผล (ไม่บังคับ — ลงประวัติใบงาน)"
+          />
+        </View>
+      </View>
+    </AppModal>
+  );
+}
+
+/**
+ * แอดมินตอบคำขอนัดด่วนโดยไม่แก้เป็นงานด่วน (เจ้าของงานตอบ "ทำตามที่แนะนำ") — ข้อความบังคับ: หัวหน้าภาคต้องรู้ว่าทำไม
+ * แล้วนัดวันอื่น คำตอบขึ้นในฟอร์มนัดวันของหัวหน้าภาค และคำขอออกจากกล่อง "ขอนัดด่วน"
+ */
+export function UrgentAnswerModal({
+  order,
+  onDone,
+  onCancel,
+}: {
+  order: AskOrder;
+  onDone: (detail: unknown) => void | Promise<void>;
+  onCancel: (stale: boolean) => void;
+}) {
+  const [note, setNote] = useState("");
+  const w = useAskWindow();
+  const day = order.urgentAsk?.day ?? null;
+
+  const save = () =>
+    w.run(async () => {
+      const { data } = await api.post(`/work-orders/${order.id}/urgent-request/answer`, { note: note.trim() });
+      feedback.toast("success", `ตอบคำขอนัดด่วน ${order.code} แล้ว — หัวหน้าภาคเห็นในฟอร์มนัดวัน`);
+      await onDone(data);
+    });
+
+  return (
+    <AppModal
+      visible
+      onClose={() => onCancel(w.stale)}
+      busy={w.busy}
+      title={`ตอบคำขอนัดด่วน · ${order.code}`}
+      subtitle={`${order.branchCode} ${order.branchName}`.trim()}
+      banner={w.error ? <Text style={styles.modalErr}>{w.error}</Text> : undefined}
+      footer={<AskFooter busy={w.busy} off={!note.trim() || w.stale} label="ส่งคำตอบ" onCancel={() => onCancel(w.stale)} onSave={save} />}
+    >
+      <View style={{ gap: spacing.md }}>
+        <View style={styles.modalInfo}>
+          <Text style={styles.modalInfoText}>
+            หัวหน้าภาคขอนัด {day ? dayFull(day) : "—"} — บอกเหตุผลที่ไม่แก้เป็นงานด่วน หัวหน้าภาคจะเห็นในฟอร์มนัดวันแล้วนัดวันอื่น
+          </Text>
+        </View>
+        <View style={{ gap: 6 }}>
+          <Text style={styles.label}>ข้อความถึงหัวหน้าภาค (ต้องใส่)</Text>
+          <TextInput
+            style={styles.input}
+            value={note}
+            onChangeText={setNote}
+            maxLength={300}
+            placeholder="เช่น ร้านรอได้ถึงมะรืน · ทีมพรุ่งนี้เต็ม"
+            placeholderTextColor={colors.textFaint}
+            accessibilityLabel="ข้อความถึงหัวหน้าภาค (ต้องใส่)"
           />
         </View>
       </View>
@@ -505,7 +595,7 @@ const CARD_DESC =
   "คอนเฟิร์มลูกค้าและปล่อยงานกดได้ทุกเวลา · ทุกวันรวมเสาร์–อาทิตย์และวันหยุด · ใช้ทุกภาค · แอดมินเปลี่ยนได้ (Admin Spare Part ดูอย่างเดียว)";
 
 /**
- * การ์ด "เวลาปิดนัดงานพรุ่งนี้" ท้ายหน้าระบบหลังบ้าน — คีย์/ค่า/ค่าตั้งต้นเดิมของ "เวลาปิดรับปล่อยงาน" แค่ตอนนี้ใช้ตอนนัดวัน
+ * การ์ด "เวลาปิดนัดงานพรุ่งนี้" ท้ายหน้าระบบหลังบ้าน — คีย์/ค่า/ค่าตั้งต้นเดิมของการ์ดรุ่นแรก ("เวลาปิดรับปล่อยงาน") แค่ตอนนี้ใช้ตอนนัดวัน
  * แอดมินทุกคนเปลี่ยนได้ · Admin Spare Part เห็นแต่กดไม่ได้ (เซิร์ฟเวอร์บอกผ่าน canEdit — ด่านจริงอยู่ที่เซิร์ฟเวอร์)
  * แตะแล้วบันทึกเลยเหมือนในตัวอย่าง ยกเว้นตัวเลือกที่ทำให้ปฏิทินของหัวหน้าภาคปิดวันพรุ่งนี้ "ทันที" (เลื่อนให้เร็วขึ้นหลังเวลาใหม่ผ่านไปแล้ว)
  * — ถามก่อนเสมอ: แตะพลาดบนมือถือครั้งเดียวปิดนัดพรุ่งนี้ทั้งบริษัท ร้านที่ต้องการพรุ่งนี้ต้องรอแอดมินแก้ทีละใบ
@@ -717,6 +807,20 @@ const styles = StyleSheet.create({
   },
   answerText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19, color: colors.text },
 
+  askAdmin: {
+    gap: spacing.sm,
+    backgroundColor: colors.roleAdminSoft,
+    borderColor: colors.roleAdminLine,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: spacing.sm,
+  },
+  askAdminHead: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  askAdminText: { flex: 1, minWidth: 0, fontSize: 13.5, lineHeight: 20, fontWeight: "700", color: colors.roleAdmin },
+  askAdminActions: { flexDirection: "row", justifyContent: "flex-end", flexWrap: "wrap", gap: 8 },
+
   modalErr: { fontSize: 13, lineHeight: 19, fontWeight: "600", color: colors.dangerInk, padding: spacing.sm },
   modalFooter: { flex: 1, flexDirection: "row", justifyContent: "flex-end", flexWrap: "wrap", gap: 8 },
   modalBtn: { minHeight: 44, borderRadius: radius.md, paddingHorizontal: 16, alignItems: "center", justifyContent: "center" },
@@ -728,7 +832,6 @@ const styles = StyleSheet.create({
   modalApptText: { fontSize: 13, lineHeight: 19, color: colors.body },
   modalAsk: { borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 7 },
   askPurple: { backgroundColor: colors.roleAdminSoft, borderColor: colors.roleAdminLine },
-  askGrey: { backgroundColor: colors.background, borderColor: colors.border },
   modalAskText: { fontSize: 12.5, lineHeight: 18, fontWeight: "600" },
   modalInfo: { backgroundColor: colors.primarySoft, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 8 },
   modalInfoText: { fontSize: 12.5, lineHeight: 18, color: colors.text },

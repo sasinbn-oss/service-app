@@ -37,18 +37,16 @@ import {
 import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
 import { openClaimReview, useClaimQueueCount } from "../utils/claimQueue";
 import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
-import { CutoffBanners, ScheduleChip, UrgentReleaseModal } from "../components/DispatchCutoff";
+import { CutoffBanners, ScheduleChip, UrgentAnswerModal, UrgentReleaseModal } from "../components/DispatchCutoff";
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
-  addDays,
   adminGroups,
-  adminRowLines,
-  deadlineOf,
-  serverDay,
+  askRowLines,
+  dayFull,
   supervisorBanners,
+  timeText,
   useServerClock,
-  useServerNowFn,
   type Cutoff,
 } from "../utils/dispatchCutoff";
 
@@ -109,15 +107,16 @@ const byAppt = (a: WorkOrderRow, b: WorkOrderRow) =>
 const REVIEW_GROUP = "หัวหน้าภาคส่งให้ตรวจสอบ";
 const ANSWER_GROUP = "แอดมินตอบแล้ว";
 /**
- * หัวข้อปักของแอดมินจากเวลาปิดรับปล่อยงาน (ต.ค. 69 · ตัวอย่าง lockGrp / pastGrp) — ใบที่ผูกกับวันที่วันนี้/พรุ่งนี้/ผ่านไปแล้ว
- * "เลยเวลาปล่อยงาน" = ใบที่ล็อก (วันนัดยังไม่ผ่าน) + ใบที่หัวหน้าภาคส่งกลับเพราะล็อก · "เลยนัด" = แถวเดียวกับหัวข้อ "เลยนัด" ของกล่องงาน
- * ขึ้นก่อน "หัวหน้าภาคส่งให้ตรวจสอบ": คำขอตรวจสอบรอได้ วันนัดรอไม่ได้ — ใบที่มีคำขอค้างด้วยยังมีปุ่มตอบกลับบนการ์ด
+ * หัวข้อปักของแอดมินจากเวลาปิดนัดงานพรุ่งนี้ (ตัวอย่าง appt-cutoff) — ใบที่ผูกกับวันที่วันนี้/พรุ่งนี้/ผ่านไปแล้ว
+ * "ขอนัดด่วน" = ใบรอนัดวันที่หัวหน้าภาคขอวันที่ปิดแล้วไว้ (แทน "เลยเวลาปล่อยงาน" — ขั้นปล่อยงานไม่ล็อกแล้ว)
+ * · "เลยนัด" = แถวเดียวกับหัวข้อ "เลยนัด" ของกล่องงาน
+ * ขึ้นก่อน "หัวหน้าภาคส่งให้ตรวจสอบ": คำขอตรวจสอบรอได้ ร้านที่รอวันนี้/พรุ่งนี้รอไม่ได้ — ใบที่มีคำขอตรวจสอบค้างด้วยยังมีปุ่มตอบกลับบนการ์ด
  */
-const LOCKED_GROUP = "เลยเวลาปล่อยงาน";
+const ASK_GROUP = "ขอนัดด่วน";
 const PAST_GROUP = "เลยนัด";
-type GroupKind = "stage" | "review" | "answer" | "locked" | "past";
-/** ลำดับหัวข้อปัก — เลยเวลาปล่อยงาน → เลยนัด → คำขอตรวจสอบ → คำตอบแอดมิน */
-const PIN_RANK: Record<GroupKind, number> = { locked: 0, past: 1, review: 2, answer: 3, stage: 9 };
+type GroupKind = "stage" | "review" | "answer" | "ask" | "past";
+/** ลำดับหัวข้อปัก — ขอนัดด่วน → เลยนัด → คำขอตรวจสอบ → คำตอบแอดมิน */
+const PIN_RANK: Record<GroupKind, number> = { ask: 0, past: 1, review: 2, answer: 3, stage: 9 };
 
 export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const { user } = useAuth();
@@ -131,8 +130,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [sendFor, setSendFor] = useState<WorkOrderRow | null>(null);
   const [replyFor, setReplyFor] = useState<WorkOrderRow | null>(null);
-  // แอดมินกด "แก้เป็นงานด่วน" บนการ์ดในหัวข้อ "เลยเวลาปล่อยงาน" — ทำได้จากหน้านี้เลย ไม่ต้องเปิดใบงานก่อน
+  // แอดมินกด "แก้เป็นงานด่วน" / "ตอบกลับ" บนการ์ดในหัวข้อ "ขอนัดด่วน" — ทำได้จากหน้านี้เลย ไม่ต้องเปิดใบงานก่อน
   const [urgentFor, setUrgentFor] = useState<WorkOrderRow | null>(null);
+  const [answerFor, setAnswerFor] = useState<WorkOrderRow | null>(null);
   const [query, setQuery] = useState("");
   const searchRef = useRef<TextInput>(null);
   const seq = useRef(0);
@@ -169,30 +169,12 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
    * หน้าของหัวหน้าภาคไม่โหลดใหม่ตอนถึงเวลา (ใบในกล่องไม่เปลี่ยนตอน 16:00) — ป้ายคิดใหม่จากเวลาปิดที่ถืออยู่แล้ว
    */
   const now = useServerClock(clock.serverNow, clock.cutoff?.time);
-  const serverNowAt = useServerNowFn(clock.serverNow);
   /**
-   * แอดมิน: โหลดกล่องใหม่เองตอนถึงเวลาปิดรับ + สุ่ม 2–30 วิ — ใบที่เพิ่งล็อกต้องย้ายขึ้น "เลยเวลาปล่อยงาน" โดยไม่ต้องมีใครกด
-   * (ตัวเลขกล่องงานแอดมินนับใบล็อกด้วย ใบพวกนี้ยังไม่อยู่ในรายการที่โหลดไว้ก่อนเวลา)
-   * สุ่มเวลา: จอแอดมินทุกจอที่เปิดค้างจะได้ไม่ถามเซิร์ฟเวอร์ในวินาทีเดียวกัน — pool ฐานข้อมูลมีแค่ 5 connection (src/prisma.ts)
-   * หัวหน้าภาคไม่โหลดใหม่: ป้ายพลิกเองจากเส้นตายที่ถืออยู่ และตัวเลขกล่องงานหัวหน้าภาคไม่เปลี่ยนตอนถึงเวลา (ข้อ 5)
-   * ตั้งเฉพาะตอนหน้านี้เปิดอยู่ — กลับมาหน้านี้ทีหลังก็โหลดใหม่อยู่แล้ว (useFocusEffect)
+   * หัวข้อของแอดมิน (ขอนัดด่วน · เลยนัด) — ตัวสร้างเดียวกับกล่องงาน สองหน้าจึงนับตรงกันเสมอ · นับทุกใบในกล่อง ไม่ตามคำค้น
+   * ไม่ตั้งเวลาโหลดใหม่ตอนถึงเวลาปิดแล้ว: ไม่มีใบไหนเข้ากล่องแอดมินตอน 16:00 (คำขอมาจากหัวหน้าภาคกด)
+   * กลับมาหน้านี้ก็โหลดใหม่อยู่แล้ว (useFocusEffect)
    */
-  useEffect(() => {
-    const time = clock.cutoff?.time;
-    if (!adminCut || !focused || !time) return;
-    const n = serverNowAt();
-    const today = serverDay(n);
-    // เส้นตายของงานพรุ่งนี้ = วันนี้ ณ เวลาปิดรับ · เลยแล้ว = รอบของพรุ่งนี้
-    const todayCut = deadlineOf(addDays(today, 1), time);
-    const next = n < todayCut ? todayCut : deadlineOf(addDays(today, 2), time);
-    const timer = setTimeout(() => void load(), next - n + 2000 + Math.random() * 28000);
-    return () => clearTimeout(timer);
-  }, [adminCut, focused, clock.serverNow, clock.cutoff?.time, serverNowAt, load]);
-  /**
-   * หัวข้อของแอดมิน (เลยเวลาปล่อยงาน · เลยนัด · งานพรุ่งนี้ที่ยังไม่ปล่อย · ยังไม่คอนเฟิร์มลูกค้า) — ตัวสร้างเดียวกับกล่องงาน
-   * สองหน้าจึงนับตรงกันเสมอ · นับทุกใบในกล่อง ไม่ตามคำค้น
-   */
-  const cut = useMemo(() => (adminCut && rows ? adminGroups(rows, null, now, clock.cutoff) : null), [adminCut, rows, now, clock.cutoff]);
+  const cut = useMemo(() => (adminCut && rows ? adminGroups(rows, now, clock.cutoff) : null), [adminCut, rows, now, clock.cutoff]);
   // กลุ่มตามขั้น — กลุ่มที่มีใบด่วนขึ้นก่อน แล้วกลุ่มที่ค้างนานสุด · ในกลุ่มเรียงด่วน → ค้างนาน
   const isAdmin = user?.role === "ADMIN";
   const groups = useMemo(() => {
@@ -200,11 +182,11 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     const pinned = new Map<string, { kind: GroupKind; list: WorkOrderRow[] }>();
     const pin = (label: string, kind: GroupKind, r: WorkOrderRow) =>
       pinned.set(label, { kind, list: [...(pinned.get(label)?.list ?? []), r] });
-    const lockedIds = new Set((cut?.locked.rows ?? []).map((r) => r.id));
+    const askIds = new Set((cut?.asks?.rows ?? []).map((r) => r.id));
     const pastIds = new Set((cut?.past?.rows ?? []).map((r) => r.id));
     for (const r of rows ?? []) {
-      // เวลาปิดรับก่อนคำขอตรวจสอบ (ดู LOCKED_GROUP) — ใบหนึ่งอยู่หัวข้อเดียว
-      if (lockedIds.has(r.id)) pin(LOCKED_GROUP, "locked", r);
+      // คำขอนัดด่วนก่อนคำขอตรวจสอบ (ดู ASK_GROUP) — ใบหนึ่งอยู่หัวข้อเดียว
+      if (askIds.has(r.id)) pin(ASK_GROUP, "ask", r);
       else if (pastIds.has(r.id)) pin(PAST_GROUP, "past", r);
       else if (isAdmin && r.adminReview && !r.adminReview.answered) pin(REVIEW_GROUP, "review", r);
       else if (!isAdmin && r.adminReview?.answered && r.stageActor !== "SUPERVISOR") pin(ANSWER_GROUP, "answer", r);
@@ -222,8 +204,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
      * (หน้าตาอย่างเดียว — ไม่เปลี่ยนว่าใบไหนอยู่กลุ่มไหน)
      */
     const releaseGroup = (list: WorkOrderRow[]) => !isAdmin && list.every((r) => RELEASE_STAGES.includes(r.status));
-    // คำอธิบายใต้หัวข้อปักของเวลาปิดรับ — ประโยคเดียวกับหัวข้อในกล่องงาน (ตัวสร้างเดียวกัน)
-    const hintOf = (kind: GroupKind) => (kind === "locked" ? cut?.locked.hint : kind === "past" ? PAST_GROUP_HINT : undefined);
+    // คำอธิบายใต้หัวข้อปักของเวลาปิดนัด — ประโยคเดียวกับหัวข้อในกล่องงาน (ตัวสร้างเดียวกัน)
+    const hintOf = (kind: GroupKind) => (kind === "ask" ? cut?.asks?.hint : kind === "past" ? PAST_GROUP_HINT : undefined);
     return [
       ...[...pinned.entries()]
         .sort((a, b) => PIN_RANK[a[1].kind] - PIN_RANK[b[1].kind])
@@ -231,8 +213,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           label,
           kind: g.kind,
           hint: hintOf(g.kind),
-          // ใบที่ผูกกับวันนัดเรียงตามวันนัด (ใกล้สุด/เลยมานานสุดก่อน) · คำขอตรวจสอบเรียงตามเวลาส่ง
-          list: g.kind === "locked" || g.kind === "past" ? g.list.sort(byAppt) : g.list.sort((a, b) => sent(a) - sent(b)),
+          // คำขอนัดด่วนเรียงตามที่ตัวสร้างหัวข้อเรียงไว้ (วันที่ขอ → เวลาที่ขอ) · เลยนัดเรียงตามวันนัด (เลยมานานสุดก่อน)
+          // · คำขอตรวจสอบเรียงตามเวลาส่ง
+          list: g.kind === "ask" ? g.list : g.kind === "past" ? g.list.sort(byAppt) : g.list.sort((a, b) => sent(a) - sent(b)),
         })),
       ...[...by.entries()]
         .map(([label, list]) => ({
@@ -359,19 +342,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         · 2) แถบเวลาปิดนัด (หัวหน้าภาค: "รอนัดวัน" 3 ชม. ก่อนปิด · "ออกงานวันนี้") · 3) การ์ด Admin Spare Part · 4) หัวข้อปักของแอดมิน
         · 5) กลุ่มตามขั้น — แถบอยู่ช่องเดียวกับแถบปล่อยงานรุ่นเดิม (เจ้าของงานข้อ 7) หัวหน้าภาคมองที่เดิมแล้วเจอ
         ห้ามวางก่อนแถวค้นหา — ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
+        แอดมินไม่มีแถบในช่อง 2 แล้ว ("งานพรุ่งนี้ที่ยังไม่ปล่อย/ยังไม่คอนเฟิร์ม" ถอดไป — ปล่อยงานและคอนเฟิร์มกดได้ทุกเวลา ไม่มีอะไรใกล้ล็อก)
       */}
       {rows && !error && banners.length ? <CutoffBanners groups={banners} /> : null}
-      {/*
-        แอดมิน (ช่องเดียวกับแถบของหัวหน้าภาค): งานพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย (ดูอย่างเดียว — ไม่ใช่งานของแอดมิน แถวจึงกดไม่ได้)
-        · งานพรุ่งนี้ที่ยังไม่คอนเฟิร์มลูกค้า (แถวกดเปิดใบไปคอนเฟิร์มได้) — ใบพวกนี้ไม่อยู่ในกล่องแอดมินทั้งหมด ไม่งั้นแอดมินไม่รู้ว่าใกล้ล็อก
-      */}
-      {/* มีรหัสใบงานในแถว — วาดเฉพาะตอนแท็บนี้เปิดอยู่ เหตุผลเดียวกับรายการการ์ด (focused ข้างบน) */}
-      {rows && !error && focused && cut && (cut.unreleased || cut.unconfirmed) ? (
-        <View style={{ gap: spacing.sm }}>
-          {cut.unreleased ? <CutoffBanners groups={[cut.unreleased]} withRows /> : null}
-          {cut.unconfirmed ? <CutoffBanners groups={[cut.unconfirmed]} withRows onOpen={(id) => onOpen(id)} /> : null}
-        </View>
-      ) : null}
       {/* Admin Spare Part ดูย้อนหลังได้จากหน้าแรกของตัวเอง (เจ้าของงานขอ ต.ค. 69) — ใบที่รอตรวจอยู่ในรายการด้านล่างแล้ว
           วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
           การ์ดกล่องงานตรวจเคลม (เคลมก้อน 6) อยู่ในช่องเดียวกัน (ห่อเป็นลูกตัวเดียว ลำดับลูกตัวถัดไปไม่ขยับ) */}
@@ -381,11 +354,6 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           <ClaimHistoryCard hidePending />
         </View>
       ) : null}
-      {/*
-        หัวข้อปัก "เลยเวลาปล่อยงาน" ของแอดมินขึ้นเสมอ แม้ไม่มีใบ (ตัวอย่างมีหน้าตอน 0 ใบ) — แอดมินรู้ว่าใบที่ไม่ได้ปล่อยก่อนเวลาจะมาขึ้นที่นี่เอง
-        ไม่ต้องรอใครโทรบอก · มีใบเมื่อไรเป็นหัวข้อปักพร้อมการ์ดในรายการข้างล่างแทน · ระหว่างค้นหาไม่ขึ้น (กำลังดูใบอื่นอยู่)
-      */}
-      {rows && !error && cut && !cut.locked.rows.length && !q ? <CutoffBanners groups={[cut.locked]} /> : null}
       {error ? (
         <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={error} />
       ) : !rows ? (
@@ -413,15 +381,29 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         shown.map((g) => (
           <View
             key={g.label}
-            style={[styles.group, (g.kind === "locked" || g.kind === "past") && styles.groupCut]}
+            style={[styles.group, g.kind === "ask" && styles.groupAsk, g.kind === "past" && styles.groupCut]}
             accessibilityLabel={`กลุ่ม ${g.label}`}
           >
             <View style={styles.groupHead}>
-              {g.kind === "locked" || g.kind === "past" ? (
-                <Ionicons name={g.kind === "locked" ? "lock-closed" : "calendar-outline"} size={18} color={colors.dangerInk} />
-              ) : null}
-              <Text style={[styles.groupTitle, headingFont, (g.kind === "locked" || g.kind === "past") && { color: colors.dangerInk }]}>{g.label}</Text>
-              <View style={[styles.groupCount, (g.kind === "locked" || g.kind === "past") && { backgroundColor: colors.dangerFill }]}>
+              {g.kind === "ask" ? <Ionicons name="hourglass-outline" size={18} color={colors.roleAdmin} /> : null}
+              {g.kind === "past" ? <Ionicons name="calendar-outline" size={18} color={colors.dangerInk} /> : null}
+              <Text
+                style={[
+                  styles.groupTitle,
+                  headingFont,
+                  g.kind === "ask" && { color: colors.roleAdmin },
+                  g.kind === "past" && { color: colors.dangerInk },
+                ]}
+              >
+                {g.label}
+              </Text>
+              <View
+                style={[
+                  styles.groupCount,
+                  g.kind === "ask" && { backgroundColor: colors.roleAdmin },
+                  g.kind === "past" && { backgroundColor: colors.dangerFill },
+                ]}
+              >
                 <Text style={styles.groupCountText}>{g.list.length}</Text>
               </View>
               {q ? <Text style={styles.groupOf}>จาก {g.total}</Text> : null}
@@ -431,13 +413,12 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
               const d = daysSince(r.stageSince);
               const hot = r.priority === "URGENT";
               /**
-               * การ์ดในหัวข้อปักเวลาปิดรับของแอดมิน (ตัวอย่าง adminLocked / adminPast): ทีม/หัวหน้าภาค · นัด · ล็อกตั้งแต่ · สาเหตุ
-               * · หัวหน้าภาคเลือกอะไร (ขอแก้เป็นงานด่วน / ส่งกลับ / ยังไม่ได้บอก + เบอร์) — แอดมินตัดสินใจได้จากการ์ดโดยไม่ต้องโทรถามก่อน
-               * ใบเลยนัดขั้นอื่น (เบิก/โอน/คอนเฟิร์ม) ไม่มีสาเหตุ บอกนัดกับขั้นที่ค้างแทน แบบแถวในกล่องงาน
+               * การ์ดในหัวข้อปักของแอดมิน: "ขอนัดด่วน" บอกใครขอ (+ เบอร์) เมื่อไร · วันที่ร้านต้องการ · ข้อความ — แอดมินตัดสินใจได้จากการ์ด
+               * "เลยนัด" บอกนัดกับขั้นที่ค้าง (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค) แบบแถวในกล่องงาน
                */
-              const cutKind = g.kind === "locked" || g.kind === "past" ? g.kind : null;
-              const cutLines = cutKind ? adminRowLines(r, now, clock.cutoff, cutKind) : null;
-              const releaseish = !!r.release || !!r.releaseDeclined;
+              const cutKind = g.kind === "ask" || g.kind === "past" ? g.kind : null;
+              const askLines = cutKind === "ask" ? askRowLines(r, now) : null;
+              const day = r.scheduledAt?.slice(0, 10);
               return (
                 <View key={r.id} style={[styles.card, hot && styles.cardHot]}>
                   <View style={styles.cardTop}>
@@ -472,25 +453,21 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                   */}
                   {cutKind ? null : <ScheduleChip row={r} now={now} cutoff={clock.cutoff} style={styles.releaseChip} />}
                   <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={styles.branch} numberOfLines={1} />
-                  {cutLines && releaseish ? (
+                  {askLines ? (
                     <View style={styles.cutLines}>
-                      <Text style={styles.cutWho}>{cutLines.who}</Text>
-                      <Text style={styles.cutWhen}>{[cutLines.appt, cutLines.since].filter(Boolean).join(" · ")}</Text>
-                      {cutLines.cause ? <Text style={styles.cutCause}>{cutLines.cause}</Text> : null}
-                      {cutLines.ask ? (
-                        <View
-                          style={[styles.cutAsk, cutLines.ask.tone === "purple" ? styles.cutAskPurple : styles.cutAskGrey]}
-                          accessibilityLabel={cutLines.ask.text}
-                        >
-                          <Text style={[styles.cutAskText, { color: cutLines.ask.tone === "purple" ? colors.roleAdmin : colors.textMuted }]}>
-                            {cutLines.ask.text}
-                          </Text>
-                        </View>
-                      ) : null}
+                      <Text style={styles.cutWho} accessibilityLabel={askLines.who}>
+                        {askLines.who}
+                      </Text>
+                      <Text style={styles.askAppt} accessibilityLabel={askLines.appt}>
+                        {askLines.appt}
+                      </Text>
+                      {askLines.note ? <Text style={styles.cutCause}>{askLines.note}</Text> : null}
                     </View>
-                  ) : cutLines ? (
-                    // เลยนัดขั้นอื่น — นัดเมื่อไร ค้างที่ขั้นไหน (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค) แบบแถวกล่องงาน
-                    <Text style={styles.cutWhen}>{[cutLines.appt, r.statusLabel].filter(Boolean).join(" · ")}</Text>
+                  ) : cutKind === "past" ? (
+                    // นัดเมื่อไร ค้างที่ขั้นไหน (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค) แบบแถวกล่องงาน
+                    <Text style={styles.cutWhen}>
+                      {[day ? `นัด ${dayFull(day)} · ${timeText(r.scheduledTime)}` : null, r.statusLabel].filter(Boolean).join(" · ")}
+                    </Text>
                   ) : null}
                   {/* อาการก่อนชื่อใบ — ใบจากฟอร์มชื่อ "งาน CM" ทุกใบ บอกอะไรไม่ได้ (ชื่อเรื่องยังใช้กับใบไฟดับ/PM ที่ไม่มีอาการ) */}
                   <Hi
@@ -506,7 +483,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                   <CardActions
                     row={r}
                     kind={g.kind}
-                    // หัวข้อปัก (เลยนัด · เลยเวลาปล่อยงาน) ไม่ใช่ชื่อขั้น — ปุ่ม/ป้ายบนการ์ดต้องบอกขั้นจริงของใบ
+                    // หัวข้อปัก (ขอนัดด่วน · เลยนัด) ไม่ใช่ชื่อขั้น — ปุ่ม/ป้ายบนการ์ดต้องบอกขั้นจริงของใบ
                     stageLabel={g.kind === "stage" ? g.label : stageName(r.statusLabel)}
                     isAdmin={isAdmin}
                     wide={docked}
@@ -514,6 +491,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     onSend={() => setSendFor(r)}
                     onReply={() => setReplyFor(r)}
                     onUrgent={() => setUrgentFor(r)}
+                    onAnswerAsk={() => setAnswerFor(r)}
                     onChanged={load}
                   />
                 </View>
@@ -522,14 +500,32 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           </View>
         ))
       )}
+      {/*
+        หน้าต่างคำขอนัดด่วน — ทำเสร็จแล้วใบออกจากหัวข้อ "ขอนัดด่วน" (และกล่องงานแอดมิน) โหลดใหม่ให้เห็นว่าเสร็จจริง
+        ปิดหลังเจอ "คำขอเปลี่ยนไปแล้ว" (stale) ก็โหลดใหม่ — แถวที่ค้างอยู่คือคำขอที่ไม่มีแล้ว
+      */}
       {urgentFor ? (
         <UrgentReleaseModal
           order={urgentFor}
-          now={now}
-          onCancel={() => setUrgentFor(null)}
+          onCancel={(stale) => {
+            setUrgentFor(null);
+            if (stale) void load();
+          }}
           onDone={async () => {
             setUrgentFor(null);
-            // ใบออกจากหัวข้อ "เลยเวลาปล่อยงาน" (และกล่องงานแอดมิน) — โหลดใหม่ให้เห็นว่าทำเสร็จแล้วจริง
+            await load();
+          }}
+        />
+      ) : null}
+      {answerFor ? (
+        <UrgentAnswerModal
+          order={answerFor}
+          onCancel={(stale) => {
+            setAnswerFor(null);
+            if (stale) void load();
+          }}
+          onDone={async () => {
+            setAnswerFor(null);
             await load();
           }}
         />
@@ -573,6 +569,7 @@ function CardActions({
   onSend,
   onReply,
   onUrgent,
+  onAnswerAsk,
   onChanged,
 }: {
   row: WorkOrderRow;
@@ -583,8 +580,9 @@ function CardActions({
   onOpen: Props["onOpen"];
   onSend: () => void;
   onReply: () => void;
-  /** แอดมินแก้เป็นงานด่วน (การ์ดในหัวข้อ "เลยเวลาปล่อยงาน") */
+  /** แอดมินแก้เป็นงานด่วน / ตอบคำขอนัดด่วน (การ์ดในหัวข้อ "ขอนัดด่วน") */
   onUrgent: () => void;
+  onAnswerAsk: () => void;
   onChanged: () => Promise<void>;
 }) {
   const { user } = useAuth();
@@ -595,8 +593,8 @@ function CardActions({
     </TouchableOpacity>
   );
   /**
-   * คำขอตรวจสอบที่ยังไม่ตอบของใบที่ไปอยู่หัวข้อเวลาปิดรับ — ปุ่มตอบกลับตามไปด้วย คำขอไม่ค้างเพราะใบย้ายหัวข้อ
-   * (ใบอยู่หัวข้อเดียว เวลาปิดรับมาก่อน — ดู LOCKED_GROUP)
+   * คำขอตรวจสอบที่ยังไม่ตอบของใบที่ไปอยู่หัวข้อปักของเวลาปิดนัด — ปุ่มตอบกลับตามไปด้วย คำขอไม่ค้างเพราะใบย้ายหัวข้อ
+   * (ใบอยู่หัวข้อเดียว คำขอนัดด่วน/เลยนัดมาก่อน — ดู ASK_GROUP)
    */
   const pendingReview = isAdmin && !!r.adminReview && !r.adminReview.answered;
   const reply = (full: boolean) => (
@@ -611,37 +609,27 @@ function CardActions({
   );
 
   /**
-   * หัวข้อปักเวลาปิดรับของแอดมิน (ตัวอย่าง adminLocked / adminPast):
-   * ล็อก → [รายละเอียด] [เลื่อนวันนัด] [แก้เป็นงานด่วน] · ใบที่หัวหน้าภาคส่งกลับ/วันนัดผ่านแล้ว → ไม่มีแก้เป็นงานด่วน (ต้องเลื่อนวันนัด)
-   * ใบเลยนัดขั้นอื่น (เบิก/โอน/คอนเฟิร์ม) ใช้ปุ่มแอดมินเดิมข้างล่าง — ทางไปต่อของขั้นนั้นไม่เปลี่ยน
+   * หัวข้อ "ขอนัดด่วน" (ตัวอย่าง appt-cutoff): [รายละเอียด] [ตอบกลับ] [แก้เป็นงานด่วน] — สองทางที่แอดมินเลือกได้อยู่บนการ์ดเลย
+   * ดูในฐานะ/Admin Spare Part (canMoveDates ชุดเดียวกับหน้าใบงาน) ไม่มีสองปุ่มนี้ — กดแล้วเจอ 403 ดูเหมือนแอปเสีย
    * มือถือ: ปุ่มหลักขึ้นแถวของตัวเองเต็มความกว้าง (แบบ goFull) — สามปุ่มแถวเดียวไม่พอที่
+   * "เลยนัด" ใช้ปุ่มแอดมินเดิมข้างล่าง (เลื่อนวันนัด + ขั้นของใบ) — ทางไปต่อของขั้นนั้นไม่เปลี่ยน
    */
-  if ((kind === "locked" || kind === "past") && (r.release || r.releaseDeclined)) {
+  if (kind === "ask") {
     const canAct = canMoveDates(user);
-    // ใบนัดตรวจที่ถูกส่งกลับ (INSPECT_CONFIRM) เลื่อนด้วยฟอร์มนี้ไม่ได้ — เปิดใบไปนัดร้านใหม่ในฟอร์มนัดร้านแทน (ปุ่มขั้นปกติ)
-    const movable = canAct && !!r.scheduledAt && RESCHEDULE_STAGES.includes(r.status);
-    const move = movable ? (
-      <TouchableOpacity style={[styles.sideBtn, styles.moveBtn]} onPress={() => onOpen(r.id, "reschedule")} accessibilityLabel={`เลื่อนวันนัด ${r.code}`}>
-        <Ionicons name="calendar-outline" size={16} color={colors.navy} />
-        <Text style={[styles.sideText, { color: colors.navy }]} numberOfLines={1}>
-          เลื่อนวันนัด
+    const answer = canAct ? (
+      <TouchableOpacity style={[styles.sideBtn, styles.adminBtn]} onPress={onAnswerAsk} accessibilityLabel={`ตอบกลับคำขอนัดด่วน ${r.code}`}>
+        <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.roleAdmin} />
+        <Text style={[styles.sideText, { color: colors.roleAdmin }]} numberOfLines={1}>
+          ตอบกลับ
         </Text>
       </TouchableOpacity>
     ) : null;
-    const urgentOk = kind === "locked" && canAct && !!r.release && !r.releaseDeclined;
-    const primary = (full: boolean) =>
-      urgentOk ? (
+    const grant = (full: boolean) =>
+      canAct ? (
         <TouchableOpacity style={full ? styles.goFull : styles.goBtn} onPress={onUrgent} accessibilityLabel={`แก้เป็นงานด่วน ${r.code}`}>
           <Ionicons name="lock-open-outline" size={18} color="#fff" />
           <Text style={styles.goText} numberOfLines={1}>
             แก้เป็นงานด่วน
-          </Text>
-        </TouchableOpacity>
-      ) : !movable && canAct ? (
-        <TouchableOpacity style={full ? styles.goFull : styles.goBtn} onPress={() => onOpen(r.id, "stage")} accessibilityLabel={`ทำขั้น ${stageLabel} ${r.code}`}>
-          <Ionicons name="arrow-forward-circle" size={18} color="#fff" />
-          <Text style={styles.goText} numberOfLines={1}>
-            {stageName(r.statusLabel)}
           </Text>
         </TouchableOpacity>
       ) : null;
@@ -649,8 +637,8 @@ function CardActions({
       return (
         <View style={styles.actions}>
           {detail}
-          {move}
-          {primary(false)}
+          {answer}
+          {grant(false)}
           {pendingReview ? reply(false) : null}
         </View>
       );
@@ -659,9 +647,9 @@ function CardActions({
       <View>
         <View style={styles.actions}>
           {detail}
-          {move ? <View style={{ flex: 1 }}>{move}</View> : null}
+          {answer ? <View style={{ flex: 1 }}>{answer}</View> : null}
         </View>
-        {primary(true)}
+        {grant(true)}
         {pendingReview ? reply(true) : null}
       </View>
     );
@@ -743,7 +731,7 @@ function CardActions({
       </View>
     );
     // มือถือ: สี่ปุ่มแถวเดียวไม่พอที่ — ปุ่มตอบกลับถูกบีบจนตัวหนังสือตกบรรทัดทีละตัวและกดแทบไม่ได้ จึงลงแถวของตัวเองเต็มความกว้าง
-    // (แบบเดียวกับการ์ดใบล็อกข้างบน)
+    // (แบบเดียวกับการ์ดขอนัดด่วนข้างบน)
     if (!replyHere || wide) return row;
     return (
       <View>
@@ -957,7 +945,14 @@ const styles = StyleSheet.create({
   groupTitle: { fontSize: 17, lineHeight: 26, fontWeight: "700", color: colors.navy },
   groupCount: { backgroundColor: colors.navyFill, borderRadius: 999, minWidth: 24, paddingHorizontal: 8, alignItems: "center" },
   groupCountText: { color: "#fff", fontSize: 12, lineHeight: 20, fontWeight: "700" },
-  // หัวข้อปักเวลาปิดรับของแอดมิน — กรอบแดงอ่อนรอบทั้งกลุ่ม (ตัวอย่าง lockGrp) แยกจากกลุ่มตามขั้นได้ทันทีที่เปิดหน้า
+  // หัวข้อปักของแอดมิน — กรอบรอบทั้งกลุ่ม แยกจากกลุ่มตามขั้นได้ทันทีที่เปิดหน้า: ขอนัดด่วนสีม่วง (สีแอดมิน · ป้ายคำขอ) · เลยนัดแดงอ่อน
+  groupAsk: {
+    backgroundColor: colors.roleAdminSoft,
+    borderWidth: 1.5,
+    borderColor: colors.roleAdminLine,
+    borderRadius: radius.lg,
+    padding: spacing.sm,
+  },
   groupCut: {
     backgroundColor: colors.dangerSoft,
     borderWidth: 1.5,
@@ -970,10 +965,7 @@ const styles = StyleSheet.create({
   cutWho: { fontSize: 12.5, lineHeight: 18, color: colors.body },
   cutWhen: { fontSize: 12.5, lineHeight: 18, fontWeight: "600", color: colors.dangerInk },
   cutCause: { fontSize: 12.5, lineHeight: 18, color: colors.text },
-  cutAsk: { borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: 9, paddingVertical: 5, marginTop: 4 },
-  cutAskPurple: { backgroundColor: colors.roleAdminSoft, borderColor: colors.roleAdminLine },
-  cutAskGrey: { backgroundColor: colors.background, borderColor: colors.border },
-  cutAskText: { fontSize: 12.5, lineHeight: 18, fontWeight: "600" },
+  askAppt: { fontSize: 12.5, lineHeight: 18, fontWeight: "700", color: colors.roleAdmin },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.xl,

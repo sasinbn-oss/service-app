@@ -89,7 +89,7 @@ const DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
       (await vis("ส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ").count()) > 0
         ? pass("ฟอร์มนัดบอกว่าคอนเฟิร์มแล้วกลับไปให้หัวหน้าภาคส่งช่าง")
         : fail("ฟอร์มนัดไม่บอกขั้นถัดไป");
-      await vis("ลูกค้าคอนเฟิร์มวันนี้").click();
+      await vis("ลูกค้าคอนเฟิร์มวันเดิม").click();
       await page.waitForTimeout(400);
       await save.click();
       await page.waitForTimeout(3500);

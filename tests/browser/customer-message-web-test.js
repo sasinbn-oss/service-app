@@ -51,7 +51,7 @@ const { setup } = require("./fixture");
       (await vis("💬 ข้อความแจ้งลูกค้า").count()) === 0 ? pass("ยังรอลูกค้าคอนเฟิร์ม = ยังไม่มีข้อความให้คัดลอก") : fail("มีข้อความก่อนคอนเฟิร์ม");
       await vis("คอนเฟิร์มลูกค้า").first().click();
       await page.waitForTimeout(1200);
-      await vis("ลูกค้าคอนเฟิร์มวันนี้").click();
+      await vis("ลูกค้าคอนเฟิร์มวันเดิม").click();
       await page.waitForTimeout(300);
       await vis("ยืนยัน").last().click();
       await page.waitForTimeout(4000);

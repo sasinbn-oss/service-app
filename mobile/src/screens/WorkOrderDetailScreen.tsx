@@ -122,22 +122,21 @@ import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 import { techPickHint } from "../utils/teams";
 import {
-  FormWarningLine,
+  AdminDayLine,
+  AskAdminBox,
   LiveScheduleChip,
   ScheduleDayHelp,
+  UrgentAnswerModal,
   UrgentReleaseModal,
-  UrgentWithCheckbox,
 } from "../components/DispatchCutoff";
 import {
+  adminDayLine,
   askStateError,
   closedFromError,
-  dateFormWarning,
   dayAllowed,
   dayShort,
   declinedText,
-  firstOpenDay,
   releasedText,
-  releaseView,
   rescheduledText,
   RELEASE_STAGES,
   SCHEDULE_STAGES,
@@ -145,9 +144,7 @@ import {
   serverDay,
   useServerClock,
   useServerNowFn,
-  type BannerRow,
   type Cutoff,
-  type Release,
   type UrgentAnswer,
   type UrgentAsk,
 } from "../utils/dispatchCutoff";
@@ -372,8 +369,6 @@ interface WorkOrder {
   urgentAsk?: UrgentAsk | null;
   /** แอดมินตอบคำขอนัดด่วน (ไม่แก้เป็นงานด่วน) — หัวหน้าภาคเห็นในฟอร์มนัดวัน · เฉพาะใบรอนัดวัน วันที่ขอยังไม่ผ่าน */
   urgentAnswer?: UrgentAnswer | null;
-  /** สถานะเวลาปิดรับปล่อยงานแบบเดิม — เซิร์ฟเวอร์ไม่ส่งแล้ว (ปุ่มแอดมินรุ่นเดิมยังอ่าน: ไม่มี = ปุ่มขั้นปกติ) */
-  release?: Release | null;
   /** แบบป้ายรุ่น + รายการเช็คตามคู่มือของยี่ห้อนี้ (backend/src/utils/claimGuide.ts) */
   claimGuide?: ClaimGuide;
   /** ใบเคลมเก่าของเครื่องเดียวกัน (บรรทัดเคลมซ้ำในหน้าตรวจเคลม) — เซิร์ฟเวอร์ส่งเฉพาะแอดมิน คนอื่นไม่มีค่านี้ */
@@ -507,24 +502,8 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   ASSIGNED: { label: "รับทราบ ปล่อยงาน", icon: "checkmark-circle-outline" },
 };
 
-/**
- * ปุ่มของแอดมินบนใบขั้นปล่อยงาน (เวลาปิดรับ ต.ค. 69) — "stage" = ปุ่มขั้นปกติ · "urgent" = แก้เป็นงานด่วน · "none" = ไม่มีปุ่มหลัก
- * ใบที่ล็อกแล้ว ปุ่มปล่อยงานกดไปก็ได้แค่กล่องแดง (กฎใช้กับแอดมินด้วย — ข้อ 10) สิ่งที่แอดมินทำได้จริงคือปลดล็อกให้ใบนี้
- * วันนัดผ่านไปแล้ว (รวมงานด่วนที่หมดอายุ) แก้เป็นงานด่วนไม่ได้ — เหลือแค่ปุ่มเลื่อนวันนัดที่อยู่ข้างกันอยู่แล้ว
- * now = นาฬิกาเซิร์ฟเวอร์ (ปุ่มพลิกตอนถึงเวลาปิดรับเอง ไม่ต้องรอโหลดใบใหม่)
- */
-function adminReleaseMode(o: WorkOrder, now: number): "stage" | "urgent" | "none" {
-  const v = RELEASE_STAGES.includes(o.status) ? releaseView(o, now, o.cutoff) : null;
-  if (!v?.locked) return "stage";
-  return v.past ? "none" : "urgent";
-}
-
-/**
- * ข้อความปุ่มหลักของขั้นปัจจุบัน — ที่เดียว ฟีเจอร์ที่ตามมาเติมกิ่งของตัวเองที่นี่ (integration S12)
- * release = "urgent" คือแอดมินกับใบที่ล็อก (adminReleaseMode) — ปุ่มเปิดหน้าต่างแก้เป็นงานด่วน ไม่ใช่ฟอร์มปล่อยงาน
- */
-function stageButtonLabel(o: WorkOrder, opts: { partsOut: number; release?: "stage" | "urgent" | "none" }): string {
-  if (opts.release === "urgent") return "แก้เป็นงานด่วน";
+/** ข้อความปุ่มหลักของขั้นปัจจุบัน — ที่เดียว ฟีเจอร์ที่ตามมาเติมกิ่งของตัวเองที่นี่ (integration S12) */
+function stageButtonLabel(o: WorkOrder, opts: { partsOut: number }): string {
   // ของหมดอยู่ = สิ่งที่แอดมินรอทำคือบอกว่าของมาแล้ว ไม่ใช่ "เช็คคลัง" เหมือนรอบแรก
   if (opts.partsOut && o.status !== "WAITING_PARTS") return "อะไหล่มาแล้ว — อัปเดตสถานะ";
   if (rescheduledPending(o)) return "คอนเฟิร์มวันใหม่";
@@ -532,58 +511,17 @@ function stageButtonLabel(o: WorkOrder, opts: { partsOut: number; release?: "sta
 }
 
 /**
- * ปุ่มหลักของขั้นปัจจุบันในการ์ดขั้น — แยกเป็นชิ้นที่เดินนาฬิกาเอง เฉพาะแอดมินกับใบขั้นปล่อยงาน
- * หน้าใบงานไม่วาดใหม่ทั้งหน้าตามเวลา ถ้าคิดปุ่มที่ระดับหน้า ปุ่ม "รับทราบ ปล่อยงาน" จะค้างอยู่หลัง 16:00 จนกว่ามีอะไรให้หน้าวาดใหม่
+ * ปุ่มหลักของขั้นปัจจุบันในการ์ดขั้น — ปุ่มเดียวกันทุกคนทุกเวลา (ขั้นปล่อยงานไม่มีล็อกแล้ว ไม่มีปุ่มที่ต้องพลิกตามนาฬิกา)
+ * คำขอนัดด่วนของหัวหน้าภาคมีกล่อง/ปุ่มของมันเองในการ์ดขั้น (AskAdminBox) ไม่แย่งปุ่มขั้น — แอดมินยังกดนัดวันแทนได้ตามเดิม
  */
-function StagePrimaryButton({
-  order,
-  partsOut,
-  adminRelease,
-  busy,
-  onStage,
-  onUrgent,
-}: {
-  order: WorkOrder;
-  partsOut: number;
-  /**
-   * แอดมิน (ไม่ใช่ดูในฐานะ/ดูอย่างเดียว) กับใบขั้นปล่อยงานที่อยู่ใต้กฎ — เปิดนาฬิกาของปุ่ม
-   * เช็คด้วย canMoveDates ชุดเดียวกับปุ่มเลื่อนวันนัดและการ์ดงานของฉันวันนี้ — ดูในฐานะแอดมินแล้วเห็นปุ่มด่วนที่กดไปเจอ 403 ดูเหมือนปุ่มเสีย
-   */
-  adminRelease: boolean;
-  busy: boolean;
-  onStage: () => void;
-  onUrgent: () => void;
-}) {
-  const now = useServerClock(order.serverNow, order.cutoff?.time, adminRelease);
-  const mode = adminRelease ? adminReleaseMode(order, now) : "stage";
-  if (mode === "none") return null;
-  const urgent = mode === "urgent";
-  const label = stageButtonLabel(order, { partsOut, release: mode });
+function StagePrimaryButton({ order, partsOut, busy, onStage }: { order: WorkOrder; partsOut: number; busy: boolean; onStage: () => void }) {
+  const label = stageButtonLabel(order, { partsOut });
   return (
-    <TouchableOpacity
-      style={[styles.action, styles.actionPrimary]}
-      onPress={urgent ? onUrgent : onStage}
-      disabled={busy}
-      activeOpacity={0.8}
-      accessibilityLabel={label}
-    >
-      <Ionicons name={urgent ? "lock-open-outline" : STAGE_BUTTON[order.status]?.icon ?? "arrow-forward-circle"} size={18} color="#fff" />
+    <TouchableOpacity style={[styles.action, styles.actionPrimary]} onPress={onStage} disabled={busy} activeOpacity={0.8} accessibilityLabel={label}>
+      <Ionicons name={STAGE_BUTTON[order.status]?.icon ?? "arrow-forward-circle"} size={18} color="#fff" />
       <Text style={styles.actionPrimaryText}>{label}</Text>
     </TouchableOpacity>
   );
-}
-
-/**
- * ใบงานในรูปแถวที่หน้าต่าง "แก้เป็นงานด่วน" อ่าน (ชิ้นเดียวกับที่งานของฉันวันนี้ใช้)
- * เบอร์หัวหน้าภาคมากับ GET ใบงานของแอดมินเท่านั้น — ใบที่เพิ่งโหลดจากก้อนของปุ่มบันทึกไม่มีเบอร์ กล่อง "ยังไม่ได้บอก" ขึ้นชื่ออย่างเดียว
- * ไม่มีหัวหน้าภาคเลย = ไม่มีคนรับ ไม่มีกล่องถาม (ไม่มีใครให้ถาม)
- */
-function urgentRowOf(o: WorkOrder): BannerRow {
-  return {
-    ...o,
-    orphan: o.supervisors ? o.supervisors.length === 0 : false,
-    waitingOnSupervisors: (o.supervisors ?? []).map((s) => ({ name: s.name, phone: s.phone ?? null })),
-  };
 }
 
 /**
@@ -672,7 +610,7 @@ function rescheduledPending(o: WorkOrder) {
 }
 
 /**
- * หัวหน้าภาคส่งกลับเพราะทีมไม่ว่าง (วันที่ถูกเลื่อน หรือใบที่ล็อกเพราะเลยเวลาปิดรับ) — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่
+ * หัวหน้าภาคส่งกลับเพราะทีมไม่ว่างวันที่ถูกเลื่อน (ใบที่ส่งกลับตอนยังมีล็อกขั้นปล่อยงาน ก่อน 2 พ.ย. 69 ก็มาทางนี้) — แอดมินเห็นเหตุผลตอนโทรนัดร้านใหม่
  * (งานซ่อม · นัดตรวจหน้างาน)
  */
 function declinedNewDate(o: WorkOrder): LogEntry | null {
@@ -887,8 +825,9 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const [etaOpen, setEtaOpen] = useState(false);
   // แอดมินเลื่อนวันนัด (ต.ค. 69) — ทุกขั้นที่เลื่อนได้ รวมขั้นคอนเฟิร์มลูกค้า (ใบอยู่ขั้นเดิม ไม่ใช่การคอนเฟิร์ม)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  // แอดมินแก้เป็นงานด่วน (เวลาปิดรับ ต.ค. 69) — หน้าต่างของตัวเอง ไม่เปิดจากในฟอร์มขั้น (Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ)
+  // แอดมินแก้เป็นงานด่วน / ตอบคำขอนัดด่วนของหัวหน้าภาค — หน้าต่างของตัวเอง ไม่เปิดจากในฟอร์มขั้น (Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ)
   const [urgentOpen, setUrgentOpen] = useState(false);
+  const [answerOpen, setAnswerOpen] = useState(false);
   const [rescheduleStages, setRescheduleStages] = useState<string[]>(RESCHEDULE_STAGES);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1307,8 +1246,10 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         setStageBackOpen(false);
         setEtaOpen(false);
         setRescheduleOpen(false);
-        // แก้เป็นงานด่วนไม่ผ่านเพราะใบเปลี่ยน (แอดมินอีกคนแก้ไปก่อน · วันนัดถูกเลื่อน) — หน้าต่างถือวันนัดเก่า ปิดแล้วให้เห็นใบล่าสุด
+        // แก้เป็นงานด่วน/ตอบคำขอไม่ผ่านเพราะใบเปลี่ยนขั้นแล้ว (หัวหน้าภาคนัดวันไปแล้ว · ย้อนขั้น) — ปิดหน้าต่างให้เห็นใบล่าสุด
+        // (คำขอเปลี่ยนแต่ขั้นเดิม = 409 URGENT_ASK_STATE ไม่มาทางนี้ หน้าต่างบอกเหตุผลเอง)
         setUrgentOpen(false);
+        setAnswerOpen(false);
         feedback.toast("warn", `${message ?? "ข้อมูลใบงานนี้เปลี่ยนไปแล้ว"} — โหลดข้อมูลล่าสุดให้แล้ว`);
       }),
     [id]
@@ -2320,7 +2261,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ) : null}
         {/*
           หัวข้อไม่บอกว่าใครขอวันนั้น — วันใหม่มาได้ทั้งจากลูกค้าขอเลื่อนและแอดมินเลื่อนเอง (ต.ค. 69) สาเหตุอยู่ในบันทึกข้างล่าง
-          ไม่มีคำว่า "วันใหม่" แล้ว (เวลาปิดรับ ต.ค. 69 — DEFAULT บอกเจ้าของงาน): ใบที่ล็อกส่งกลับได้โดยไม่ได้ถูกเลื่อนวันเลย
+          ไม่มีคำว่า "วันใหม่" (ต.ค. 69 — DEFAULT บอกเจ้าของงาน): ใบที่ส่งกลับตอนขั้นปล่อยงานยังล็อก (ก่อน 2 พ.ย. 69) ไม่ได้ถูกเลื่อนวัน
+          ประวัติเก่าพวกนั้นยังแสดงด้วยกล่องนี้
         */}
         {declinedNewDate(order) ? (
           <View style={styles.sentBack} accessibilityLabel="กล่องหัวหน้าภาคส่งกลับนัดใหม่">
@@ -2504,6 +2446,19 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           <Text style={styles.linkedText}>อาการและอะไหล่ที่กรอกที่นี่จะขึ้นบนกระดานติดตามเครื่องเสียของเคสนี้ให้เอง</Text>
         ) : null}
 
+        {/*
+          คำขอนัดด่วนของหัวหน้าภาค (แอดมิน · ใบรอนัดวัน) — อยู่ในการ์ดขั้น เห็นทันทีที่เปิดใบจากกล่องงาน/ป้ายม่วง
+          เซิร์ฟเวอร์ส่ง urgentAsk เฉพาะคำขอที่ยังรอ (วันที่ขอยังไม่ผ่าน) — หัวหน้าภาคเห็นกล่องของตัวเองในฟอร์มนัดวันแทน
+        */}
+        {user?.role === "ADMIN" && order.urgentAsk ? (
+          <AskAdminBox
+            ask={order.urgentAsk}
+            canAct={canMoveDates(user)}
+            onAnswer={() => setAnswerOpen(true)}
+            onGrant={() => setUrgentOpen(true)}
+          />
+        ) : null}
+
         {/* ท้ายการ์ด: ใครทำอะไรล่าสุด + ปุ่มของขั้นนี้ (ปุ่มเดียว) — ตามแบบ ปุ่มอยู่มุมขวาล่างของการ์ด */}
         <View style={[styles.nowFoot, wide && styles.nowFootWide]}>
           {lastLog ? (
@@ -2567,18 +2522,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                     <Text style={styles.actionPrimaryText}>{order.assignedOutsource ? "บันทึกผลงาน SUB" : "ปิดงาน"}</Text>
                   </TouchableOpacity>
                 ) : (
-                  /*
-                    แอดมินกับใบขั้นปล่อยงานที่ล็อก: ปุ่มหลักกลายเป็น "แก้เป็นงานด่วน" (ข้าง "เลื่อนวันนัด") · วันนัดผ่านแล้วเหลือแค่เลื่อนวันนัด
-                    หัวหน้าภาคปุ่มเดิม — ฟอร์มปล่อยงานบอกล็อกและทางไปต่อเอง (ขอแอดมิน/ส่งกลับ)
-                  */
-                  <StagePrimaryButton
-                    order={order}
-                    partsOut={partsOut.length}
-                    adminRelease={canMoveDates(user) && !!order.release}
-                    busy={busy}
-                    onStage={() => setStageOpen(true)}
-                    onUrgent={() => setUrgentOpen(true)}
-                  />
+                  <StagePrimaryButton order={order} partsOut={partsOut.length} busy={busy} onStage={() => setStageOpen(true)} />
                 )}
                 {wide ? null : rescheduleBtn}
               </View>
@@ -3049,19 +2993,17 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             const confirmed = APPOINTMENT_DONE.includes(order.appointmentStatus ?? "");
             /**
              * ข้อความตามตัวอย่าง ("เลื่อนวันนัด <ใบ> เป็น … แล้ว — …") แทน "เลื่อนวันนัดแล้ว" แบบเดิม — ขึ้นแทน ไม่ใช่ขึ้นเพิ่ม (สองข้อความซ้อนกันคนอ่านไม่ทันทั้งคู่)
-             * บอกว่าหัวหน้าภาคจะเจอใบแบบไหน: ปล่อยได้เลย (ติ๊กงานด่วนแล้วเซิร์ฟเวอร์ตั้งให้จริง) · แบบล็อก · หรือปิดรับวันไหน
+             * บอกว่าใบกลับไปที่หัวหน้าภาคไหม และงานด่วนที่ติ๊กไปพร้อมกันตั้งให้จริงไหม
              * สถานะหลังบันทึกมาจากใบที่โหลดใหม่ ไม่เดาจากขั้นก่อนกด (ดึงคืนจากช่าง = ขั้นเปลี่ยน)
+             * งานด่วน = ติ๊กไปจริงและใบได้วันนั้น — ใบที่แอดมินแก้ให้วันนั้นไว้ก่อนแล้วก็มี urgentReleaseFor ตรงกัน แต่ครั้งนี้ไม่ได้ติ๊ก
              */
             const next = await load();
             const after = next ?? r.detail;
-            const cutTime = after?.cutoff?.time ?? order.cutoff?.time ?? "16:00";
             feedback.toast(
               "success",
               rescheduledText(order.code, r.day, {
                 releaseStage: !!after && RELEASE_STAGES.includes(after.status),
-                urgentTaken: after?.urgentReleaseFor === r.day,
-                red: r.red,
-                cutTime,
+                urgentTaken: r.ticked && after?.urgentReleaseFor === r.day,
               })
             );
             if (confirmed) setMessageOpen(true);
@@ -3069,15 +3011,33 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         />
       ) : null}
 
-      {/* แก้เป็นงานด่วน (แอดมิน · ใบขั้นปล่อยงานที่ล็อก) — โหลดใบใหม่จากก้อนที่เซิร์ฟเวอร์ตอบ ปุ่มกลับเป็นปุ่มปล่อยงานของหัวหน้าภาค */}
-      {urgentOpen && order.release ? (
+      {/*
+        แก้เป็นงานด่วน / ตอบคำขอนัดด่วน (แอดมิน · จากกล่องม่วงในการ์ดขั้น) — เสร็จแล้วโหลดใบใหม่ กล่องคำขอหายไป
+        ปิดหลังเจอ "คำขอเปลี่ยนไปแล้ว" (stale) ก็โหลดใหม่ — กล่องที่ค้างอยู่คือคำขอที่ไม่มีแล้ว
+      */}
+      {urgentOpen && order.urgentAsk ? (
         <UrgentReleaseModal
-          order={urgentRowOf(order)}
-          now={serverNowAt()}
-          onCancel={() => setUrgentOpen(false)}
+          order={order}
+          onCancel={(stale) => {
+            setUrgentOpen(false);
+            if (stale) void reload();
+          }}
           onDone={async () => {
             setUrgentOpen(false);
-            await load();
+            await reload();
+          }}
+        />
+      ) : null}
+      {answerOpen && order.urgentAsk ? (
+        <UrgentAnswerModal
+          order={order}
+          onCancel={(stale) => {
+            setAnswerOpen(false);
+            if (stale) void reload();
+          }}
+          onDone={async () => {
+            setAnswerOpen(false);
+            await reload();
           }}
         />
       ) : null}
@@ -3688,8 +3648,8 @@ function PartsEtaModal({
  * ปล่อยให้ช่างแล้วแต่ช่างยังไม่ถึงหน้างาน = ดึงใบคืนให้หัวหน้าภาครับทราบวันใหม่แล้วปล่อยใหม่ (ทีมวันใหม่อาจไม่ว่าง)
  * บังคับเหตุผล — หัวหน้าภาคต้องรู้ว่าทำไมวันเปลี่ยน ตอนคอนเฟิร์มวันใหม่ก่อนปล่อยงาน
  */
-/** ผลของฟอร์มเลื่อนวันนัด — หน้าใบงานประกอบข้อความ "เลื่อนวันนัด <ใบ> เป็น … แล้ว" จากนี้ (red = วันใหม่เลยเส้นตายแล้วตอนกดบันทึก) */
-type RescheduleDone = { day: string; red: boolean; detail: WorkOrder | null };
+/** ผลของฟอร์มเลื่อนวันนัด — หน้าใบงานประกอบข้อความ "เลื่อนวันนัด <ใบ> เป็น … แล้ว" จากนี้ (ticked = ส่ง urgent:true ไปจริง) */
+type RescheduleDone = { day: string; ticked: boolean; detail: WorkOrder | null };
 
 function RescheduleModal({
   order,
@@ -3704,20 +3664,20 @@ function RescheduleModal({
 }) {
   const oldDay = order.scheduledAt ? order.scheduledAt.slice(0, 10) : "";
   /**
-   * เวลาปิดรับปล่อยงาน (ต.ค. 69) — นาฬิกาเซิร์ฟเวอร์ของฟอร์มนี้ บรรทัดเตือนเปลี่ยนสีเองตอนถึงเวลา (ไม่ใช้นาฬิกามือถือ — ข้อ 12)
+   * เวลาปิดนัดงานพรุ่งนี้ — นาฬิกาเซิร์ฟเวอร์ของฟอร์มนี้ (ไม่ใช้นาฬิกามือถือ — ข้อ 12) บรรทัดใต้วันพลิกเองตอนถึงเวลาปิด
    * ฟอร์มวาดเฉพาะตอนเปิด (หน้าใบงานถอดออกตอนปิด) นาฬิกาจึงเดินเฉพาะตอนที่มีคนดูอยู่
+   * clock = นาฬิกา/เวลาปิดจากคำตอบ 400 DATE_CLOSED (กดแล้วเพิ่งเลยเวลาปิด) — คิดใหม่ในที่เดิม เหตุผล/เวลาที่กรอกไม่หาย
+   * rule = ใบทดสอบไม่มีกฎ (เซิร์ฟเวอร์ยกเว้นทุกทาง) — ไม่มีบรรทัด ไม่มีช่องติ๊ก ไม่ส่ง urgent
    */
-  const now = useServerClock(order.serverNow, order.cutoff?.time);
-  const nowAt = useServerNowFn(order.serverNow);
+  const [clock, setClock] = useState<{ serverNow: string; cutoff: Cutoff } | null>(null);
+  const cutoff = clock?.cutoff ?? order.cutoff;
+  const now = useServerClock(clock?.serverNow ?? order.serverNow, cutoff?.time);
+  const rule = order.isTest ? null : cutoff ?? null;
   /**
-   * วันตั้งต้น: ใบที่ล็อกแล้ว/วันนัดผ่านแล้ว เริ่มที่วันแรกที่ยังปล่อยได้โดยไม่ต้องแก้เป็นงานด่วน (ตัวอย่าง newDay: firstOpen)
-   * — แอดมินเปิดฟอร์มนี้เพื่อย้ายงานออกจากวันที่ปล่อยไม่ได้แล้ว วันเดิมคือวันที่ใช้ไม่ได้แน่ ๆ
-   * ใบอื่นเริ่มที่วันเดิมเหมือนเดิม — เลื่อนปกติ (ของมาไม่ทัน · ร้านขอ) มักขยับจากนัดเดิมไม่กี่วัน
+   * วันตั้งต้น = วันเดิม — เลื่อนปกติ (ของมาไม่ทัน · ร้านขอ) มักขยับจากนัดเดิมไม่กี่วัน
+   * (รุ่นก่อนเริ่มที่วันแรกที่ปล่อยได้สำหรับใบที่ล็อก — ขั้นปล่อยงานไม่ล็อกแล้ว ไม่มีวันไหนที่ "ใช้ไม่ได้แน่ ๆ")
    */
-  const [day, setDay] = useState(() => {
-    const n = nowAt();
-    return releaseView(order, n, order.cutoff)?.locked && order.cutoff ? firstOpenDay(n, order.cutoff) : oldDay;
-  });
+  const [day, setDay] = useState(oldDay);
   const [time, setTime] = useState(order.scheduledTime ?? "");
   const [reason, setReason] = useState("");
   // แก้เป็นงานด่วนไปพร้อมกัน — ล้างทุกครั้งที่เปลี่ยนวัน: ติ๊กไว้สำหรับวันหนึ่ง ไม่ได้แปลว่าตั้งใจปลดล็อกอีกวัน
@@ -3736,35 +3696,47 @@ function RescheduleModal({
   const moving = order.waitingParts.filter((p) => inTransit(p) || isTransfer(p, adminWarehouse));
   const earlier = validDay && !!oldDay && day < oldDay;
   /**
-   * บรรทัดเตือนใต้วันที่ (เทา/ส้ม/แดง) — ฟังก์ชันเดียวกับฟอร์มคอนเฟิร์มลูกค้า (ข้อ 4 "เตือนแบบเดียวกัน") ใช้กับดึงงานคืนด้วย (ฟอร์มเดียวกัน)
-   * เตือนอย่างเดียว ไม่กันบันทึก · แดง = ไม่ติ๊ก ใบจะถึงหัวหน้าภาคแบบล็อก
+   * วันใหม่ที่ปิดนัดแล้ว (วันนี้ · พรุ่งนี้หลังเวลาปิด) ต้องติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" (เจ้าของงานข้อ 4) — ใช้กับดึงงานคืนด้วย (ฟอร์มเดียวกัน)
+   * เปลี่ยนแค่เวลาในวันเดิมไม่มีกฎ (เซิร์ฟเวอร์ก็ไม่ดู) — ส่งวันเข้าบรรทัดเฉพาะตอนวันเปลี่ยน ไม่งั้นใบพรุ่งนี้เลื่อนเวลาหลัง 16:00 ต้องติ๊กเปล่า ๆ
+   * วันย้อนหลังมีบรรทัดของมันเอง ไม่ขึ้นซ้อน
    */
-  const warn = dateFormWarning(validDay && !past ? day : null, now, order.cutoff, "admin", "reschedule");
-  const offerUrgent = !!warn?.checkbox;
+  const dayChanged = validDay && !past && day !== oldDay;
+  const line = adminDayLine(dayChanged ? day : null, now, rule, order.urgentReleaseFor, true);
+  const needTick = !!line?.needTick;
 
   async function submit() {
     setSaving(true);
     setError(null);
-    // แดงตอนกด — ตัดสินจากนาฬิกา ณ วินาทีที่กด ไม่ใช่รอบวาดล่าสุด (เก่าได้ 30 วิ ข้าม 16:00 พอดีจะบอกผิด)
-    const red = dateFormWarning(day, nowAt(), order.cutoff, "admin", "reschedule")?.tone === "red";
+    const ticked = needTick && urgentWith;
     try {
       const res = await api.post<WorkOrder>(`/work-orders/${order.id}/reschedule`, {
         scheduledAt: day,
         scheduledTime: time || null,
         reason: reason.trim(),
-        // ส่งเฉพาะตอนช่องติ๊กขึ้นอยู่และติ๊กไว้ — เซิร์ฟเวอร์ตัดสินซ้ำจากเวลาที่คำขอไปถึง (เส้นตายยังไม่ผ่าน = ไม่ตั้ง)
-        ...(offerUrgent && urgentWith ? { urgent: true } : {}),
+        // ส่งเฉพาะตอนบรรทัดขอให้ติ๊กและติ๊กไว้ — วันที่ยังเปิดเซิร์ฟเวอร์ไม่สนอยู่แล้ว แต่ไม่ส่งสิ่งที่ผู้ใช้ไม่ได้ตั้งใจ
+        ...(ticked ? { urgent: true } : {}),
       });
-      onDone({ day, red, detail: res.data && typeof res.data === "object" && "status" in res.data ? res.data : null });
+      onDone({ day, ticked, detail: res.data && typeof res.data === "object" && "status" in res.data ? res.data : null });
     } catch (e) {
-      // 409 (ขั้นเปลี่ยน · ช่างถึงหน้างานแล้ว) หน้าใบงานปิดฟอร์มและโหลดใหม่ให้เอง (subscribeWorkOrderStale)
+      /**
+       * วันใหม่เพิ่งปิดนัดตอนคำขอไปถึง (เปิดฟอร์มก่อนเวลาปิด · มือถือช้า) — คิดใหม่จากนาฬิกาในคำตอบ บรรทัดแดง + ช่องติ๊กขึ้นในที่เดิม
+       * ข้อความเซิร์ฟเวอร์ขึ้นด้วยเฉพาะตอนฟอร์มยังไม่เห็นว่าต้องติ๊ก (บรรทัดแดงบอกเรื่องเดียวกันอยู่แล้ว สองข้อความซ้อนกันคนอ่านไม่ทันทั้งคู่)
+       * 409 อื่น (ขั้นเปลี่ยน · ช่างถึงหน้างานแล้ว) หน้าใบงานปิดฟอร์มและโหลดใหม่ให้เอง (subscribeWorkOrderStale)
+       */
+      const closed = closedFromError(e);
+      if (closed) {
+        setClock(closed);
+        const again = adminDayLine(day, Date.parse(closed.serverNow), order.isTest ? null : closed.cutoff, order.urgentReleaseFor, true);
+        if (!again?.needTick) setError(apiErrorMessage(e));
+        return;
+      }
       setError(apiErrorMessage(e));
     } finally {
       setSaving(false);
     }
   }
 
-  const off = saving || !validDay || past || !timeOk || unchanged || !reason.trim();
+  const off = saving || !validDay || past || !timeOk || unchanged || !reason.trim() || (needTick && !urgentWith);
   const stage = order.statusLabel.split(" · ").slice(1).join(" · ") || order.statusLabel;
   return (
     <AppModal
@@ -3797,10 +3769,26 @@ function RescheduleModal({
           {order.appointmentStatusLabel ? ` · ${order.appointmentStatusLabel}` : ""}
         </Text>
       </View>
-      <DateField value={day} onChange={setDay} label="วันนัดใหม่" required min={todayBkk()} />
+      <DateField
+        value={day}
+        onChange={setDay}
+        label="วันนัดใหม่"
+        required
+        min={todayBkk()}
+        dayTags={scheduleDayTags(now, rule, order.urgentReleaseFor, "admin")}
+        invalid={needTick && !urgentWith}
+      />
       {past ? <Text style={styles.warn}>วันนัดย้อนหลังไม่ได้ — เลือกตั้งแต่วันนี้เป็นต้นไป</Text> : null}
-      <FormWarningLine warning={warn} />
-      {offerUrgent ? <UrgentWithCheckbox checked={urgentWith} onChange={setUrgentWith} disabled={saving} /> : null}
+      <AdminDayLine
+        day={dayChanged ? day : null}
+        now={now}
+        cutoff={rule}
+        urgentFor={order.urgentReleaseFor}
+        changed
+        tick={urgentWith}
+        onTick={setUrgentWith}
+        busy={saving}
+      />
       <TimeField value={time} onChange={setTime} label="เวลา (ไม่ใส่ก็ได้)" />
       {unchanged && validDay ? <Text style={styles.linkedText}>ยังเป็นวันและเวลาเดิม — เลือกวันหรือเวลาใหม่</Text> : null}
       {moving.length && earlier ? (
@@ -4312,8 +4300,8 @@ function StageModal({
         await api.post(`/work-orders/${order.id}/parts-arrived`, { note: note.trim() || undefined });
       } else if (order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") {
         // ตกลงวันเดิมไม่ส่งวันไป — เซิร์ฟเวอร์ใช้วันที่หัวหน้าภาคใส่ไว้ จะได้ไม่บันทึกว่าเลื่อนเพราะเผลอแตะช่องวัน
-        // งานด่วนส่งเฉพาะตอนช่องติ๊กขึ้นอยู่และติ๊กไว้ — เซิร์ฟเวอร์ตัดสินซ้ำจากเวลาที่คำขอไปถึง (เส้นตายยังไม่ผ่าน = ไม่ตั้ง ไม่ปฏิเสธ)
-        const urgent = confirmUrgentOffer && urgentWith ? { urgent: true } : {};
+        // งานด่วนส่งเฉพาะ "ลูกค้าขอเลื่อน" ที่บรรทัดขอให้ติ๊กและติ๊กไว้ — เซิร์ฟเวอร์ตัดสินซ้ำจากเวลาที่คำขอไปถึง
+        const urgent = confirmNeedTick && urgentWith ? { urgent: true } : {};
         await api.post(
           `/work-orders/${order.id}/confirm-appointment`,
           confirmChoice === "MOVE"
@@ -4438,14 +4426,15 @@ function StageModal({
        * — เจ้าของงานข้อ 6 "แอปโหลดสถานะฟอร์มใหม่": ใช้นาฬิกา/เวลาปิดจากคำตอบแทน ไม่โหลดใบใหม่ (ทีม/เวลา/อะไหล่ที่กรอกต้องอยู่)
        * วันนั้นจึงขีดฆ่าทันที บรรทัดแดง "วันที่เลือกไว้ … ปิดนัดแล้ว" ขึ้น ปุ่มบันทึกปิด — ข้อความดิบของเซิร์ฟเวอร์ขึ้นเฉพาะตอนที่
        * ฟอร์มยังคิดว่าวันนั้นใช้ได้ (บรรทัดแดงบอกเรื่องเดียวกันอยู่แล้ว สองข้อความซ้อนกันคนอ่านไม่ทันทั้งคู่)
-       * ฟอร์มที่ไม่ใช่การนัดวัน (คอนเฟิร์มลูกค้า "ลูกค้าขอเลื่อน") ไม่มีบรรทัดแดงนี้และไม่ปิดปุ่ม — ถ้าไม่ขึ้นข้อความ
-       * ปุ่มยืนยันจะกดแล้วเงียบทุกครั้ง แอดมินไม่รู้ว่าต้องติ๊กแก้เป็นงานด่วน จึงขึ้นข้อความเซิร์ฟเวอร์เสมอ
+       * คอนเฟิร์มลูกค้า "ลูกค้าขอเลื่อน" ของแอดมินใช้กติกาเดียวกัน: นาฬิกาใหม่ทำให้บรรทัดแดง + ช่องติ๊กขึ้นเอง ปุ่มปิดจนกว่าจะติ๊ก
        */
       const closed = closedFromError(e);
       if (closed) {
         setClock(closed);
         const n = Date.parse(closed.serverNow);
-        if (!schedForm || dayAllowed(visit, n, order.isTest ? null : closed.cutoff, urgentFor)) setError(apiErrorMessage(e));
+        const r2 = order.isTest ? null : closed.cutoff;
+        const formSeesIt = schedForm ? !dayAllowed(visit, n, r2, urgentFor) : !!adminDayLine(confirmMoveDay, n, r2, urgentFor, true)?.needTick;
+        if (!formSeesIt) setError(apiErrorMessage(e));
         return;
       }
       setError(apiErrorMessage(e));
@@ -4644,7 +4633,7 @@ function StageModal({
   /**
    * วันนัดเลือกได้ตั้งแต่วันนี้ (เจ้าของงานกำหนด ต.ค. 69 — แทนกฎ "ของคลังอื่นนัดล่วงหน้า 7 วัน" ที่ยกเลิก) · เซิร์ฟเวอร์กันซ้ำ
    * ปฏิทินขีดฆ่าวันที่ผ่านมาแล้ว แต่วันที่กรอกค้างมาก่อน (เปิดฟอร์มทิ้งไว้ข้ามวัน) ยังเป็นอดีตได้ — กันปุ่มไว้ด้วย
-   * ลูกค้าขอเลื่อน = นัดใหม่ เช็คเสมอ (ร้านปิด/ช่างส่งกลับ ฟอร์มเปิดมาพร้อมวันเดิมที่ผ่านไปแล้ว) · "ลูกค้าคอนเฟิร์มวันนี้" ไม่เช็ค
+   * ลูกค้าขอเลื่อน = นัดใหม่ เช็คเสมอ (ร้านปิด/ช่างส่งกลับ ฟอร์มเปิดมาพร้อมวันเดิมที่ผ่านไปแล้ว) · "ลูกค้าคอนเฟิร์มวันเดิม" ไม่เช็ค
    */
   const minVisit = todayBkk();
   const visitPast =
@@ -4687,26 +4676,19 @@ function StageModal({
     />
   );
   /**
-   * คอนเฟิร์มลูกค้า (แอดมิน) — บรรทัดเตือนเทา/ส้ม/แดง ของวันที่จะส่งไปให้หัวหน้าภาคปล่อยงาน (ข้อ 4)
-   * "ลูกค้าคอนเฟิร์มวันนี้" = วันเดิมในใบ · "ลูกค้าขอเลื่อน" = วันที่เลือก · ยังไม่เลือกคำตอบ = ยังไม่รู้ว่าวันไหน ไม่เตือน
-   * แดง = ใบจะถึงหัวหน้าภาคแบบล็อก → ช่องติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน" ในการบันทึกเดียว (ข้อ 2)
-   * เตือนอย่างเดียว ไม่กันปุ่ม — แอดมินเพิ่งตกลงวันกับร้าน การกันคือทิ้งสิ่งที่ตกลงไป
+   * คอนเฟิร์มลูกค้า (แอดมิน · เจ้าของงานข้อ 4)
+   * "ลูกค้าคอนเฟิร์มวันเดิม" ไม่มีบรรทัด ไม่มีช่องติ๊ก ทุกเวลา — วันนั้นหัวหน้าภาคนัดไว้แล้วตามกฎ การคอนเฟิร์มไม่ใช่การนัด
+   * "ลูกค้าขอเลื่อน" ไปวันที่ปิดนัดแล้ว (วันนี้ · พรุ่งนี้หลังเวลาปิด) = นัดใหม่ → บรรทัดแดง + ช่องติ๊ก "แก้เป็นงานด่วนไปพร้อมกัน"
+   * บันทึกไม่ได้จนกว่าจะติ๊ก (เซิร์ฟเวอร์ตอบ 400 ถ้าไม่ติ๊ก) · วันที่ยังเปิด = บรรทัดเทา "วันใหม่ … — บันทึกได้เลย"
+   * เปลี่ยนแค่เวลาในวันเดิมไม่มีกฎ (เซิร์ฟเวอร์ก็ไม่ดู) — ส่งวันเข้าบรรทัดเฉพาะตอนวันเปลี่ยน
    */
   const confirmStage = order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM";
-  const confirmDay = !confirmStage || visitPast
-    ? null
-    : confirmChoice === "MOVE"
-      ? validDate ? visit : null
-      : confirmChoice === "OK"
-        ? order.scheduledAt?.slice(0, 10) ?? null
-        : null;
-  const confirmWarn = confirmDay ? dateFormWarning(confirmDay, now, order.cutoff, "admin", "confirm") : null;
-  const confirmUrgentOffer = !!confirmWarn?.checkbox;
-  const confirmWarnBlock = confirmWarn ? (
-    <>
-      <FormWarningLine warning={confirmWarn} />
-      {confirmUrgentOffer ? <UrgentWithCheckbox checked={urgentWith} onChange={setUrgentWith} disabled={saving} /> : null}
-    </>
+  const confirmMoveDay =
+    confirmStage && confirmChoice === "MOVE" && validDate && !visitPast && visit !== (order.scheduledAt ?? "").slice(0, 10) ? visit : null;
+  const confirmLine = adminDayLine(confirmMoveDay, now, rule, urgentFor, true);
+  const confirmNeedTick = !!confirmLine?.needTick;
+  const confirmWarnBlock = confirmMoveDay ? (
+    <AdminDayLine day={confirmMoveDay} now={now} cutoff={rule} urgentFor={urgentFor} changed tick={urgentWith} onTick={setUrgentWith} busy={saving} />
   ) : null;
 
   // ไฟล์ตรวจครบไหม — อ่านจากรายการไฟล์ชุดเดียวกับการ์ด แนบจากการ์ดไว้ก่อนก็นับ
@@ -4735,6 +4717,8 @@ function StageModal({
     // วันที่ปิดนัดแล้ว: หัวหน้าภาคบันทึกไม่ได้ (เลือกวันใหม่/ขอแอดมิน) · แอดมินบันทึกได้เมื่อติ๊กแก้เป็นงานด่วนแล้ว
     (schedClosed && (who === "supervisor" || !urgentWith)) ||
     (canDecline && declineDate && !note.trim()) ||
+    // ลูกค้าขอเลื่อนไปวันที่ปิดนัดแล้ว — ต้องติ๊กแก้เป็นงานด่วนก่อน (เจ้าของงานข้อ 4)
+    (confirmNeedTick && !urgentWith) ||
     ((order.status === "AWAITING_CONFIRM" || order.status === "INSPECT_CONFIRM") &&
       (confirmChoice === null ||
         (confirmChoice === "MOVE" &&
@@ -5861,7 +5845,7 @@ function StageModal({
                   {(order.status === "INSPECT_CONFIRM"
                     ? order.scheduledAt
                       ? ([
-                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"],
+                          ["OK", "ลูกค้าคอนเฟิร์มวันเดิม", "ส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"],
                           ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันที่ลูกค้าสะดวก แล้วส่งให้หัวหน้าภาคส่งช่างเข้าตรวจ"],
                         ] as const)
                       : // ใบที่ส่งตรวจก่อนบังคับวัน (ก่อน ต.ค. 69 รอบสอง) — ไม่มีวันให้ลูกค้า "ตกลง"
@@ -5869,11 +5853,11 @@ function StageModal({
                     : confirmToIssue
                       ? // กันใบเก่า: นัดก่อนเปลี่ยนลำดับแล้วยังไม่เบิก (ปกติย้ายไปขั้นเบิกตอนเปลี่ยนสายงานแล้ว) — คอนเฟิร์มแล้วเบิกต่อ
                         ([
-                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ใบนี้นัดก่อนเปลี่ยนลำดับ — คอนเฟิร์มแล้วไปเบิกอะไหล่ แล้วหัวหน้าภาคปล่อยงาน"],
+                          ["OK", "ลูกค้าคอนเฟิร์มวันเดิม", "ใบนี้นัดก่อนเปลี่ยนลำดับ — คอนเฟิร์มแล้วไปเบิกอะไหล่ แล้วหัวหน้าภาคปล่อยงาน"],
                           ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "ใบนี้นัดก่อนเปลี่ยนลำดับ — เลือกวันใหม่แล้วไปเบิกอะไหล่ต่อ"],
                         ] as const)
                       : ([
-                          ["OK", "ลูกค้าคอนเฟิร์มวันนี้", "ส่งให้หัวหน้าภาคปล่อยงาน"],
+                          ["OK", "ลูกค้าคอนเฟิร์มวันเดิม", "ส่งให้หัวหน้าภาคปล่อยงาน"],
                           ["MOVE", "ลูกค้าขอเลื่อน / เปลี่ยนวัน", "เลือกวันใหม่ แล้วส่งให้หัวหน้าภาคคอนเฟิร์มวันใหม่"],
                         ] as const)
                   ).map(([v, label, hint]) => (
@@ -5889,8 +5873,7 @@ function StageModal({
                     </TouchableOpacity>
                   ))}
                 </View>
-                {/* ตกลงวันเดิม: บรรทัดเตือนอยู่ใต้คำตอบ · ขอเลื่อน: อยู่ใต้ช่องวัน (ตัวอย่าง confirmEx — บรรทัดเตือนเหนือปุ่ม) */}
-                {confirmChoice === "OK" ? confirmWarnBlock : null}
+                {/* ตกลงวันเดิมไม่มีบรรทัด (คอนเฟิร์มไม่มีเวลาปิด) · ขอเลื่อน: บรรทัดอยู่ใต้ช่องวัน (ตัวอย่าง confirmEx — เหนือปุ่ม) */}
                 {confirmChoice === "MOVE" ? (
                   <>
                     <DateField
@@ -5899,6 +5882,8 @@ function StageModal({
                       label={order.status === "INSPECT_CONFIRM" && !order.scheduledAt ? "วันเข้าตรวจ" : "วันใหม่"}
                       emptyHint="เลือกวันที่ลูกค้าสะดวก"
                       min={minVisit}
+                      dayTags={scheduleDayTags(now, rule, urgentFor, "admin")}
+                      invalid={confirmNeedTick && !urgentWith}
                     />
                     {pastWarn}
                     {confirmWarnBlock}
