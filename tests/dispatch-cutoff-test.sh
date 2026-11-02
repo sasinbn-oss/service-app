@@ -1,18 +1,23 @@
 #!/bin/bash
-# ทดสอบ: เวลาปิดรับปล่อยงาน (เจ้าของงานขอ ต.ค. 69) — งานพรุ่งนี้ต้องปล่อยให้ช่างก่อนเวลาที่แอดมินตั้งของวันก่อนวันนัด
-#   · ตั้งค่า GET/PUT /api/settings/dispatch-cutoff: ใครอ่าน/เปลี่ยนได้ · เลือกได้ 15:00–17:00 ทีละครึ่งชั่วโมง
-#     · เปลี่ยนแต่ละครั้งเป็นแถวใหม่ (ใครเปลี่ยนจากอะไรเป็นอะไร) · แอดมินที่เคยเปลี่ยนแล้วถูกลบ = ปิดบัญชี ชื่อยังอยู่
-#   · คณิตเส้นตาย utils/dispatchCutoff.ts (วันก่อนวันนัด · ข้ามสิ้นเดือน/ปี · 15:59:59.999 ได้ 16:00:00.000 ไม่ได้
-#     · ไม่ล็อกย้อนหลังก่อนเวลาเริ่มใช้กฎ · งานด่วนผูกกับวันนัด) — คิดด้วยเวลาที่ส่งเข้าไปเอง ไม่ขึ้นกับเวลาที่รันเทสต์
-#   · กฎจริงที่เซิร์ฟเวอร์ (ก้อน 2a): ปุ่มปล่อยงาน 409 DISPATCH_LOCKED · แอดมินแก้เป็นงานด่วน (ทีละใบ · กดพร้อมกันผ่านคนเดียว)
-#     · ติ๊กงานด่วนในฟอร์มคอนเฟิร์มลูกค้า/เลื่อนวันนัด · หัวหน้าภาคขอ/ยกเลิกคำขอ · ทางที่ไม่ผ่านปุ่มปล่อยงานไม่ติดกฎ
-#     · ทุกทางที่เปลี่ยน/ล้างวันนัดล้างงานด่วน — ผลต้องเหมือนกันไม่ว่ารันกี่โมง (เวลาปิดรับทดสอบห่างจากตอนนี้ไม่เกิน ±5 นาที)
-#   · ฝั่งอ่าน (ก้อน 2b): release/releaseDeclined/serverNow/cutoff ในรายการ · หน้าใบงาน (urgentInfo) · กล่องงานแอดมินรับใบที่ล็อก
-#     และใบที่วันนัดผ่าน (ตัวเลขกล่องงานขยับตอนถึงเวลาปิดรับ ของหัวหน้าภาคไม่ขยับ) · /version · dispatch-watch · บอร์ดแผนงาน
-#     · เบอร์หัวหน้าภาคออกเฉพาะคำตอบของแอดมิน
+# ทดสอบ: เวลาปิดนัดงานพรุ่งนี้ (เจ้าของงานขอ ต.ค. 69 · ย้ายจากขั้นปล่อยงานมาที่การนัดวัน 2 พ.ย. 69)
+#   งานพรุ่งนี้ต้องนัดก่อนเวลาที่แอดมินตั้ง (ตั้งต้น 16:00) ของวันนี้ · วันนี้นัดไม่ได้ · มะรืนเป็นต้นไปนัดได้
+#   · ตั้งค่า GET/PUT /api/settings/dispatch-cutoff (key/ค่า/ค่าตั้งต้นเดิม · ชื่อใหม่ "เวลาปิดนัดงานพรุ่งนี้")
+#   · คณิตของกฎ utils/dispatchCutoff.ts (closedFor · grantedFor · firstOpenDay · closedRefusal · pastRelease) ด้วยเวลาที่ส่งเข้าไปเอง
+#   · หัวหน้าภาคนัดวัน (/parts ไม่ใช้อะไหล่จ่ายงาน · /inspect-request ส่งตรวจ · /assign นัดวันเข้า) → 400 DATE_CLOSED วันที่ปิด
+#     · แอดมินกดแทนที่ขั้นนัดวัน ติ๊ก urgent = แก้เป็นงานด่วนไปพร้อมกัน (ประวัติ via=schedule) · ติ๊กของหัวหน้าภาคไม่มีผล
+#   · คำขอนัดด่วน (/urgent-request · /cancel · /answer) · แอดมินแก้เป็นงานด่วน (/urgent-release ใช้วันที่ขอ · ไม่ดูเวลาเริ่มใช้กฎ)
+#     · 409 เรื่องสถานะคำขอมี code URGENT_ASK_STATE (ฟอร์มนัดวันไม่ถูกปิด) · 409 เรื่องขั้นไม่มี code
+#   · คอนเฟิร์มลูกค้า/เลื่อนวันนัด/ดึงงานคืนไปวันที่ปิดต้องติ๊ก · คอนเฟิร์มวันเดิมไม่มีกฎ · เลื่อนแค่เวลาไม่ล้างงานด่วน
+#   · ปล่อยงานไม่ล็อกแล้ว · ฝั่งอ่าน (urgentAsk/urgentAnswer · กล่อง "ขอนัดด่วน" · /version · บอร์ด) · ทางที่ไม่ได้นัดวันไม่ติดกฎ
 #
-# คุมเวลาด้วยแถวในตาราง AppSetting เท่านั้น (แถวล่าสุด = เวลาปิดรับที่ใช้) แล้วลบแถวที่เพิ่มทุกแถวตอนจบ (trap)
+# ทุกข้อที่ทดสอบกฎต้อง FAIL ถ้าโค้ดถอยกลับไปเป็นแบบ PR #165 (ล็อกที่ขั้นปล่อยงาน) — แต่ละบรรทัด PASS มีข้อเท็จจริงของกฎใหม่
+# อย่างน้อยหนึ่งข้อ (ปฏิเสธที่เดิมไม่มี · รับที่เดิมปฏิเสธ · ช่องใหม่ · ผลข้างเคียงที่หายไป) คู่กับสภาพในฐานข้อมูล
+# ใบวันนี้/พรุ่งนี้ที่ใช้ทดสอบ "ปล่อยงานไม่ล็อก" สร้างด้วยการนัดมะรืนแล้วย้ายวันทาง SQL (urgentReleaseFor ว่าง) ไม่ใช่ด้วยงานด่วน —
+# ใบที่แอดมินแก้เป็นงานด่วนให้ โค้ดเก่าก็ปล่อยผ่าน ข้อนั้นจะผ่านทั้งที่กฎถอยกลับไปแล้ว
+#
+# คุมเวลาด้วยแถวในตาราง AppSetting เท่านั้น (แถวล่าสุด = เวลาปิดที่ใช้) แล้วลบแถวที่เพิ่มทุกแถวตอนจบ (trap)
 # — แถวที่ค้างไว้จะเปลี่ยนผลของทุกชุดที่รันต่อจากนี้ · ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+# ผลต้องเหมือนกันไม่ว่ารันกี่โมง: วันนี้ปิดเสมอ (เวลาเริ่มใช้กฎถอยไว้ 30 วัน) · พรุ่งนี้ตัดสินด้วย OPEN/CLOSE เท่านั้น · มะรืนเปิดเสมอ
 #
 # หยุดกลางทาง = FAIL เสมอ (แบบเดียวกับ claim-setup.sh): run-all.sh นับแค่บรรทัด PASS/FAIL ไม่ดู exit code
 # ถ้า set -e จบสคริปต์เงียบ ๆ (curl ต่อไม่ติดตอน ts-node-dev รีสตาร์ต · ไม่มีตาราง AppSetting เพราะลืม migrate ·
@@ -37,12 +42,12 @@ PUTCUT() { curl -s -X PUT localhost:4000/api/settings/dispatch-cutoff -H "$(H $1
 PUTCODE() { CODE -X PUT localhost:4000/api/settings/dispatch-cutoff -H "$(H $1)" -H 'Content-Type: application/json' -d "$2"; }
 MAXSET() { DB "select coalesce(max(id),0) from \"AppSetting\""; }
 LATEST() { DB "select value||'|'||coalesce(\"createdById\"::text,'-') from \"AppSetting\" where key='dispatchCutoff' order by id desc limit 1"; }
-# ตั้งเวลาปิดรับทาง SQL (เทสต์ใช้เวลาใด ๆ ได้ ไม่จำกัดแค่ 5 ตัวเลือก) แล้วเรียก GET ให้เซิร์ฟเวอร์อ่านสด ไม่ใช้ค่าที่จำไว้ 30 วิ
+# ตั้งเวลาปิดทาง SQL (เทสต์ใช้เวลาใด ๆ ได้ ไม่จำกัดแค่ 5 ตัวเลือก) แล้วเรียก GET ให้เซิร์ฟเวอร์อ่านสด ไม่ใช้ค่าที่จำไว้ 30 วิ
 SETCUT() { DB "insert into \"AppSetting\" (key,value) values ('dispatchCutoff','$1')" >/dev/null; GETCUT $A >/dev/null; }
 
 SUF=$RANDOM
 
-# กันข้ามเที่ยงคืน: เวลาปิดรับทดสอบห่างจากตอนนี้ไม่เกิน 5 นาที ทั้งชุดใช้ราว 2 นาที — ภายใน 10 นาทีก่อน/หลังเที่ยงคืน
+# กันข้ามเที่ยงคืน: เวลาปิดทดสอบห่างจากตอนนี้ไม่เกิน 5 นาที ทั้งชุดใช้ราว 3 นาที — ภายใน 10 นาทีก่อน/หลังเที่ยงคืน
 # "วันนี้/พรุ่งนี้" จะเปลี่ยนกลางทาง (หรือ 23:58+5 นาทีกลายเป็น 00:03 ของวันเดียวกัน) รอให้พ้น 00:11 ก่อน · ขยับ offset ต้องขยับตรงนี้ด้วย
 # รอก่อนแตะฐานข้อมูลสักบรรทัด: ถูกฆ่าระหว่าง sleep (ตัวคุมรอบหมดเวลา) bash ยังไม่ได้เรียก trap — ถ้าถอยเวลาเริ่มใช้กฎ/แก้ S001
 # ไว้ก่อนแล้ว ของพวกนั้นจะค้างในฐานโดยไม่มีใครคืน
@@ -51,7 +56,7 @@ WAIT=$(node -e '
   if (m < 24 * 60 - 10 && m >= 11) { console.log(0); process.exit(0); }
   const t = new Date(now); t.setUTCHours(0, 11, 0, 0); if (t.getTime() <= now) t.setUTCDate(t.getUTCDate() + 1);
   console.log(Math.ceil((t.getTime() - now) / 1000));')
-if [ "$WAIT" -gt 0 ]; then echo "    รอข้ามเที่ยงคืน $WAIT วินาที — เวลาปิดรับทดสอบจะข้ามวัน"; sleep "$WAIT"; fi
+if [ "$WAIT" -gt 0 ]; then echo "    รอข้ามเที่ยงคืน $WAIT วินาที — เวลาปิดทดสอบจะข้ามวัน"; sleep "$WAIT"; fi
 
 # แถวที่รอบก่อนทิ้งไว้ (ถูกฆ่ากลางทางก่อน trap ทำงาน · หมดเวลาจากตัวคุมรอบ) ต้องโผล่เป็น FAIL ไม่ใช่ถูกกลบ —
 # เดิม "ตั้ง 16:00 ทับแล้วลบแถวของตัวเองตอนจบ" ทำให้ฐานกลับไปค้างเวลาเสีย (23:59 · abc) ทุกครั้ง แอปกับทุกชุดที่รัน
@@ -62,18 +67,18 @@ LEAK_WHERE="s.key='dispatchCutoff'
   and (s.\"createdById\" is null or s.\"createdById\" in (select id from \"User\" where \"employeeCode\" like 'ZDC%'))"
 LEAK=$(DB "select string_agg(s.id||'='||s.value, ' ' order by s.id) from \"AppSetting\" s where $LEAK_WHERE")
 if [ -n "$LEAK" ]; then
-  fail "มีแถวเวลาปิดรับที่เทสต์รอบก่อนทิ้งค้างไว้ (id=ค่า: $LEAK) — ลบออกแล้ว รอบหน้าจะผ่าน แต่ระหว่างนี้แอปใช้เวลาผิด"
+  fail "มีแถวเวลาปิดนัดที่เทสต์รอบก่อนทิ้งค้างไว้ (id=ค่า: $LEAK) — ลบออกแล้ว รอบหน้าจะผ่าน แต่ระหว่างนี้แอปใช้เวลาผิด"
   DB "delete from \"AppSetting\" s where $LEAK_WHERE" >/dev/null
 fi
-# เวลาเริ่มใช้กฎที่รอบก่อนถอยไว้ 30 วันแล้วไม่ได้คืน (ดู SEED_MARK ในส่วนก้อน 2a) — คืนจากค่าที่จดไว้ ไม่เดา
+# เวลาเริ่มใช้กฎที่รอบก่อนถอยไว้ 30 วันแล้วไม่ได้คืน (ดู SEED_MARK ในส่วนเตรียมข้อมูล) — คืนจากค่าที่จดไว้ ไม่เดา
 SEED_MARK=dispatchCutoffTestSeedAt
 SEED_LEFT=$(DB "select value from \"AppSetting\" where key='$SEED_MARK' order by id limit 1")
 if [ -n "$SEED_LEFT" ]; then
-  fail "เวลาเริ่มใช้กฎค้างถอยหลัง 30 วันจากเทสต์รอบก่อน — คืนเป็น $SEED_LEFT แล้ว รอบหน้าจะผ่าน แต่ระหว่างนี้งานวันนี้ของทุกใบล็อกทั้งที่ไม่ควร"
+  fail "เวลาเริ่มใช้กฎค้างถอยหลัง 30 วันจากเทสต์รอบก่อน — คืนเป็น $SEED_LEFT แล้ว รอบหน้าจะผ่าน แต่ระหว่างนี้วันนี้ของทุกใบปิดนัดทั้งที่ฐานนี้เพิ่งเปิดกฎ"
   DB "update \"AppSetting\" set \"createdAt\"='$SEED_LEFT' where id=(select min(id) from \"AppSetting\" where key='dispatchCutoff');
       delete from \"AppSetting\" where key='$SEED_MARK'" >/dev/null
 fi
-# เบอร์ของ S001 ที่ส่วนก้อน 2b ตั้งชั่วคราว — เก็บค่าเดิมเป็นแถว key อื่นแบบเดียวกับ SEED_MARK (readCutoff อ่านเฉพาะ key='dispatchCutoff')
+# เบอร์ของ S001 ที่ส่วนคำขอนัดด่วนตั้งชั่วคราว — เก็บค่าเดิมเป็นแถว key อื่นแบบเดียวกับ SEED_MARK (readCutoff อ่านเฉพาะ key='dispatchCutoff')
 # ถูกฆ่ากลางทางแล้วไม่มีแถวนี้ รอบถัดไปจะจำเบอร์ทดสอบเป็น "ค่าเดิม" แล้วคืนเบอร์ผิดทุกรอบ — area-map-test.sh (เบอร์ S001 ต้องว่าง)
 # พังทุกรอบโดยไม่มีอะไรชี้กลับมาที่ชุดนี้ · คืนแบบมีเงื่อนไข: ไม่มีแถวจด = ไม่แตะเบอร์ (ไม่ใช่ล้างเป็นว่าง)
 PHONE_MARK=dispatchCutoffTestS001Phone
@@ -94,11 +99,11 @@ cleanup() {
   # ใบงานของรอบนี้ (รวมใบทดสอบที่คัดลอก) หาจากอาการที่มีเลขสุ่ม — สร้างใน $(...) ตัวแปรในเชลล์ลูกไม่กลับมา
   # ลบก่อนผู้ใช้ชั่วคราว: ประวัติที่ผู้ใช้เหล่านั้นเขียนหายไปกับใบ
   if [ -n "$A" ]; then
-    for i in $(DB "select id from \"WorkOrder\" where symptom='ทดสอบเวลาปิดรับ $SUF'"); do
+    for i in $(DB "select id from \"WorkOrder\" where symptom='ทดสอบเวลาปิดนัด $SUF'"); do
       curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null
     done
   fi
-  # เวลาเริ่มใช้กฎที่ถอยไป 30 วันระหว่างรัน — ค้างไว้ = งานวันนี้ของทุกชุดที่รันต่อล็อกทั้งที่ฐานนี้เพิ่งเปิดกฎ
+  # เวลาเริ่มใช้กฎที่ถอยไป 30 วันระหว่างรัน — ค้างไว้ = วันนี้ของทุกชุดที่รันต่อปิดนัดทั้งที่ฐานนี้เพิ่งเปิดกฎ
   # ลบแถวจดค่าเดิมในคำสั่งเดียวกับที่คืน — คืนไม่สำเร็จ แถวจดยังอยู่ให้รอบหน้าคืนให้
   [ -n "$SEED_AT" ] && DB "update \"AppSetting\" set \"createdAt\"='$SEED_AT' where id=$SEED_ID;
       delete from \"AppSetting\" where key='$SEED_MARK'" >/dev/null
@@ -106,7 +111,7 @@ cleanup() {
     DB "update \"User\" set region=nullif('$OLD_REGION',''), \"supervisedTeams\"=coalesce(string_to_array(nullif('$OLD_TEAMS',''),','),'{}') where \"employeeCode\"='S001'" >/dev/null
     DB "update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null
   fi
-  # เบอร์ของ S001 ที่ตั้งชั่วคราวในส่วนก้อน 2b — คืนจากแถวจดและลบแถวจดในคำสั่งเดียว (คืนไม่สำเร็จ แถวจดยังอยู่ให้รอบหน้าคืน)
+  # เบอร์ของ S001 ที่ตั้งชั่วคราวในส่วนคำขอนัดด่วน — คืนจากแถวจดและลบแถวจดในคำสั่งเดียว (คืนไม่สำเร็จ แถวจดยังอยู่ให้รอบหน้าคืน)
   DB "$RESTORE_PHONE" >/dev/null
   DB "delete from \"OutsourceTeam\" where name='ZDCOS$SUF'" >/dev/null
   DB "delete from \"AppSetting\" where id>$MAXSET0 and key not in ('$SEED_MARK','$PHONE_MARK')" >/dev/null
@@ -125,10 +130,10 @@ A_NAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
 HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='T001'")
 # ผู้ใช้ชั่วคราว: Super Admin (ลบผู้ใช้ · ดูในฐานะ) · Admin Spare Part · ทีม Area · แอดมินคนที่สองที่ไม่มีประวัติอื่นเลย
 DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values
-  ('ZDCS$SUF','ซุปเปอร์ทดสอบเวลาปิดรับ','SUPER_ADMIN','$HASH',false),
-  ('ZDCP$SUF','แอดมินอะไหล่ทดสอบเวลาปิดรับ','PARTS_ADMIN','$HASH',false),
-  ('ZDCR$SUF','Area ทดสอบเวลาปิดรับ','AREA','$HASH',false),
-  ('ZDCA$SUF','แอดมินสองทดสอบเวลาปิดรับ','ADMIN','$HASH',false)" >/dev/null
+  ('ZDCS$SUF','ซุปเปอร์ทดสอบเวลาปิดนัด','SUPER_ADMIN','$HASH',false),
+  ('ZDCP$SUF','แอดมินอะไหล่ทดสอบเวลาปิดนัด','PARTS_ADMIN','$HASH',false),
+  ('ZDCR$SUF','Area ทดสอบเวลาปิดนัด','AREA','$HASH',false),
+  ('ZDCA$SUF','แอดมินสองทดสอบเวลาปิดนัด','ADMIN','$HASH',false)" >/dev/null
 SA=$(login ZDCS$SUF); PA=$(login ZDCP$SUF); AR=$(login ZDCR$SUF); A2=$(login ZDCA$SUF)
 A2_ID=$(DB "select id from \"User\" where \"employeeCode\"='ZDCA$SUF'")
 S_ID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
@@ -200,7 +205,7 @@ R=$(PUTCUT $A '{"time":"15:30"}')
 echo
 echo "═══ ใครเปลี่ยนไม่ได้"
 R=$(PUTCUT $S '{"time":"17:00"}')
-[ "$(echo "$R" | J 'd.error')" = "ตั้งเวลาปิดรับปล่อยงานได้เฉพาะแอดมิน" ] && [ "$(PUTCODE $T '{"time":"17:00"}')" = "403" ] && [ "$(MAXSET)" = "$M1" ] \
+[ "$(echo "$R" | J 'd.error')" = "ตั้งเวลาปิดนัดงานพรุ่งนี้ได้เฉพาะแอดมิน" ] && [ "$(PUTCODE $T '{"time":"17:00"}')" = "403" ] && [ "$(MAXSET)" = "$M1" ] \
   && pass "หัวหน้าภาค/ช่างเปลี่ยนไม่ได้ (403) ฐานข้อมูลไม่เปลี่ยน" || fail "หัวหน้าภาค/ช่าง PUT: $R"
 R=$(PUTCUT $PA '{"time":"17:00"}')
 echo "$R" | grep -q "Admin Spare Part ดูได้อย่างเดียว" && [ "$(MAXSET)" = "$M1" ] \
@@ -221,7 +226,7 @@ R=$(curl -s -X DELETE "localhost:4000/api/auth/users/$A2_ID" -H "$(H $SA)")
   && [ "$(LATEST)" = "16:30|$A2_ID" ] \
   && pass "ลบแล้วเป็นปิดบัญชี (deletedAt) แถวผู้ใช้ยังอยู่ · แถวตั้งค่ายังชี้คนนี้ (ฐานข้อมูล)" || fail "ลบแอดมินสอง: $R"
 R=$(GETCUT $A)
-[ "$(echo "$R" | J '[d.time, d.previous, d.changedByName].join("|")')" = "16:30|15:30|แอดมินสองทดสอบเวลาปิดรับ" ] \
+[ "$(echo "$R" | J '[d.time, d.previous, d.changedByName].join("|")')" = "16:30|15:30|แอดมินสองทดสอบเวลาปิดนัด" ] \
   && pass "\"เปลี่ยนล่าสุด\" ยังขึ้นชื่อแอดมินที่ถูกลบ: 15:30 → 16:30" || fail "ชื่อหายหลังลบ: $R"
 
 echo
@@ -229,7 +234,7 @@ echo "═══ Super Admin เปลี่ยนได้ (เจ้าขอ�
 R=$(GETCUT $SA)
 R2=$(PUTCUT $SA '{"time":"17:00"}')
 [ "$(echo "$R" | J 'd.canEdit')" = "true" ] \
-  && [ "$(echo "$R2" | J '[d.time, d.previous, d.changedByName].join("|")')" = "17:00|16:30|ซุปเปอร์ทดสอบเวลาปิดรับ" ] \
+  && [ "$(echo "$R2" | J '[d.time, d.previous, d.changedByName].join("|")')" = "17:00|16:30|ซุปเปอร์ทดสอบเวลาปิดนัด" ] \
   && [ "$(LATEST)" = "17:00|$SA_ID" ] \
   && pass "Super Admin: canEdit=true · ตั้ง 17:00 → แถวใหม่โดยคนนี้ (ฐานข้อมูล)" || fail "Super Admin: $R · $R2 · $(LATEST)"
 
@@ -246,93 +251,77 @@ R=$(PUTCUT $A '{"time":"16:00"}')
   && pass "แอดมินกด 16:00 ทับค่าเสียได้ (แถวใหม่ในฐานข้อมูล)" || fail "ทับค่าเสีย: $R"
 
 echo
-echo "═══ คณิตเส้นตาย (utils/dispatchCutoff.ts — เวลาที่ส่งเข้าไปเอง ไม่ขึ้นกับเวลาที่รัน)"
+echo "═══ คณิตของกฎ (utils/dispatchCutoff.ts — เวลาที่ส่งเข้าไปเอง ไม่ขึ้นกับเวลาที่รัน · 2 พ.ย. 69 เป็นวันจันทร์)"
 OUT=$(node_modules/.bin/ts-node --transpile-only -e '
-  import { addDays, deadlineOf, firstEnforcedDay, lockedDates, releaseState } from "./src/utils/dispatchCutoff";
+  import { addDays, closedFor, closedRefusal, deadlineOf, firstEnforcedDay, firstOpenDay, grantedFor, pastRelease } from "./src/utils/dispatchCutoff";
   const ok = (c: boolean, m: string, extra = "") => console.log(c ? `PASS ${m}` : `FAIL ${m} ${extra}`);
   const iso = (d: Date) => d.toISOString();
   const at = (s: string) => new Date(s);
   const day = (s: string) => new Date(`${s}T00:00:00.000Z`);
   const cfg = (time: string, since = "2026-01-01T00:00:00.000Z") =>
     ({ time, since: at(since), changedAt: null, changedByName: null, previous: null });
-  const wo = (status: string, d: string | null, extra: object = {}) =>
-    ({ status, isTest: false, scheduledAt: d ? (d.includes("T") ? at(d) : day(d)) : null, urgentReleaseFor: null, ...extra });
-
-  // 2026-11-02 เป็นวันจันทร์ — เส้นตายคืออาทิตย์ 1 พ.ย. 16:00 เวลาไทย (= 09:00Z)
-  const mon = deadlineOf("2026-11-02", "16:00");
-  ok(iso(mon) === "2026-11-01T09:00:00.000Z" && new Date(mon.getTime() + 7 * 3600e3).getUTCDay() === 0,
-     "งานวันจันทร์ปิดรับวันอาทิตย์ 16:00 (ทุกวันนับเหมือนกัน)", iso(mon));
-  ok(iso(deadlineOf("2027-01-01", "16:00")) === "2026-12-31T09:00:00.000Z"
-     && iso(deadlineOf("2028-03-01", "15:30")) === "2028-02-29T08:30:00.000Z"
-     && addDays("2026-12-31", 1) === "2027-01-01",
-     "ข้ามปี/สิ้นเดือน: 1 ม.ค. 2027 → 31 ธ.ค. 16:00 · 1 มี.ค. 2028 → 29 ก.พ. (ปีอธิกสุรทิน)");
-
   const c16 = cfg("16:00");
-  const a = wo("ASSIGNED", "2026-11-02");
-  const before = releaseState(a, c16, at("2026-11-01T08:59:59.999Z"));
-  const sharp = releaseState(a, c16, at("2026-11-01T09:00:00.000Z"));
-  ok(before?.locked === false && sharp?.locked === true && sharp?.past === false && sharp?.enforced === true,
-     "15:59:59.999 ยังปล่อยได้ · 16:00:00.000 ล็อก (ไม่มีเวลาผ่อน)", JSON.stringify({ before, sharp }));
-  const insp = releaseState(wo("INSPECT_DISPATCH", "2026-11-02"), c16, at("2026-11-01T09:00:00.000Z"));
-  ok(insp?.locked === true, "ส่งช่างตรวจ (INSPECT_DISPATCH) ใช้กฎเดียวกัน (ข้อ ก)");
-  ok(releaseState(wo("AWAITING_CONFIRM", "2026-11-02"), c16, at("2026-11-02T03:00:00Z")) === null
-     && releaseState(wo("ASSIGNED", "2026-11-02", { isTest: true }), c16, at("2026-11-02T03:00:00Z")) === null
-     && releaseState(wo("ASSIGNED", null), c16, at("2026-11-02T03:00:00Z")) === null,
-     "ไม่อยู่ใต้กฎ: ขั้นอื่น · ใบทดสอบ (ข้อ 15) · ยังไม่มีวันนัด");
+  const o = (u: Date | null, isTest = false) => ({ isTest, urgentReleaseFor: u });
+  const T3 = at("2026-11-02T03:00:00.000Z");   // จันทร์ 10:00 เวลาไทย
+  const T9 = at("2026-11-02T09:00:00.000Z");   // จันทร์ 16:00:00.000 เวลาไทย
 
-  // scheduledAt ที่ไม่ได้เก็บตรงเที่ยงคืน UTC ใช้วันตาม UTC (แบบ seenMatches) ไม่ใช่วันไทย
-  const odd = releaseState(wo("ASSIGNED", "2026-11-02T07:00:00.000Z"), c16, at("2026-11-01T08:00:00Z"));
-  const odd2 = releaseState(wo("ASSIGNED", "2026-11-01T17:00:00.000Z"), c16, at("2026-10-31T08:00:00Z"));
-  ok(iso(odd!.deadline) === "2026-11-01T09:00:00.000Z" && iso(odd2!.deadline) === "2026-10-31T09:00:00.000Z",
-     "scheduledAt ที่ไม่ตรงเที่ยงคืน ใช้วันตาม UTC", `${iso(odd!.deadline)} ${iso(odd2!.deadline)}`);
-
-  // เริ่มใช้กฎหลังเส้นตายของใบนี้ → ไม่ล็อกย้อนหลัง (ข้อ 14)
-  const late = releaseState(a, cfg("16:00", "2026-11-01T10:00:00.000Z"), at("2026-11-01T12:00:00Z"));
-  ok(late?.enforced === false && late?.locked === false, "เส้นตายก่อนเวลาเริ่มใช้กฎ → enforced=false ไม่ล็อก", JSON.stringify(late));
-
-  // งานด่วนผูกกับวันนัด: ตรงวัน = ปลดล็อก · คนละวัน = ยังล็อก · วันนัดผ่านแล้ว = หมดอายุ (ข้อ 7)
-  const now = at("2026-11-01T10:00:00Z");
-  const u = releaseState(wo("ASSIGNED", "2026-11-02", { urgentReleaseFor: day("2026-11-02") }), c16, now);
-  const uOther = releaseState(wo("ASSIGNED", "2026-11-02", { urgentReleaseFor: day("2026-11-03") }), c16, now);
-  const uPast = releaseState(wo("ASSIGNED", "2026-10-30", { urgentReleaseFor: day("2026-10-30") }), c16, now);
-  ok(u?.urgent === true && u?.locked === false && uOther?.urgent === false && uOther?.locked === true
-     && uPast?.past === true && uPast?.urgentExpired === true && uPast?.urgent === false && uPast?.locked === true,
-     "งานด่วนใช้ได้เฉพาะวันนัดที่ตรงกันและยังไม่ผ่าน · วันผ่านแล้ว = หมดอายุและล็อก", JSON.stringify({ u, uOther, uPast }));
-
-  // วันนัดแรกที่กฎมีผล: เปิดกฎ 04:38 → งานวันนี้ไม่ติด งานพรุ่งนี้ติด · เปิดหลังเวลาปิดรับ → เริ่มที่มะรืน
-  ok(firstEnforcedDay(cfg("16:00", "2026-10-31T21:38:00.000Z")) === "2026-11-02"
-     && firstEnforcedDay(cfg("16:00", "2026-11-01T09:00:00.000Z")) === "2026-11-02"
-     && firstEnforcedDay(cfg("16:00", "2026-11-01T09:00:00.001Z")) === "2026-11-03",
-     "วันแรกที่กฎมีผล: เปิดกฎเช้า → พรุ่งนี้ · 16:00 พอดี → พรุ่งนี้ · เลย 16:00 → มะรืน");
-
-  // ช่วงวันที่ล็อกและยังไม่ผ่าน (กรองกล่องงานแอดมิน): วันนี้เสมอ · พรุ่งนี้เมื่อเลยเวลาปิดรับ
-  const far = cfg("16:00");
-  const r1 = lockedDates(far, at("2026-11-02T03:00:00Z"));
-  const r2 = lockedDates(far, at("2026-11-02T09:00:00Z"));
-  const fresh = cfg("16:00", "2026-11-02T02:00:00.000Z");
-  ok(JSON.stringify(r1) === `{"from":"2026-11-02","to":"2026-11-02"}`
-     && JSON.stringify(r2) === `{"from":"2026-11-02","to":"2026-11-03"}`
-     && lockedDates(fresh, at("2026-11-02T03:00:00Z")) === null
-     && JSON.stringify(lockedDates(fresh, at("2026-11-02T09:00:00Z"))) === `{"from":"2026-11-03","to":"2026-11-03"}`,
-     "ช่วงวันที่ล็อก: ก่อน 16:00 = วันนี้ · ตั้งแต่ 16:00 = วันนี้ถึงพรุ่งนี้ · วันที่ยังไม่อยู่ใต้กฎไม่นับ",
-     JSON.stringify({ r1, r2 }));
+  // เส้นตาย (ไม่เปลี่ยนจากเดิม): วันก่อนวันนัด เวลาปิด · ข้ามสิ้นเดือน/ปี
+  const mon = deadlineOf("2026-11-02", "16:00");
+  ok(iso(mon) === "2026-11-01T09:00:00.000Z" && iso(deadlineOf("2027-01-01", "16:00")) === "2026-12-31T09:00:00.000Z"
+     && iso(deadlineOf("2028-03-01", "15:30")) === "2028-02-29T08:30:00.000Z" && addDays("2026-12-31", 1) === "2027-01-01",
+     "เส้นตาย: งานวันจันทร์ปิดนัดวันอาทิตย์ 16:00 · ข้ามปี · 29 ก.พ. ปีอธิกสุรทิน", iso(mon));
+  ok(closedFor("2026-11-02", c16, T3) && !closedFor("2026-11-03", c16, at("2026-11-02T08:59:59.999Z"))
+     && closedFor("2026-11-03", c16, T9) && !closedFor("2026-11-04", c16, T9) && !closedFor("2026-11-04", c16, at("2026-11-02T16:59:00.000Z")),
+     "closedFor: วันนี้ปิดตลอด (10:00) · พรุ่งนี้ 15:59:59.999 ยังเปิด 16:00:00.000 ปิด (ไม่มีเวลาผ่อน) · มะรืนเปิด (ถึง 23:59)");
+  const late = cfg("16:00", "2026-11-02T10:00:00.000Z");
+  ok(!closedFor("2026-11-02", late, at("2026-11-02T12:00:00.000Z")) && !closedFor("2026-11-03", late, at("2026-11-02T12:00:00.000Z"))
+     && closedFor("2026-11-04", late, at("2026-11-03T09:00:00.000Z")),
+     "เส้นตายก่อนเวลาเริ่มใช้กฎไม่ปิดย้อนหลัง (เปิดกฎ 17:00 → วันนี้/พรุ่งนี้ยังนัดได้) · วันที่เส้นตายหลังเริ่มกฎปิดตามปกติ");
+  ok(!closedFor("2026-11-03", cfg("15:30"), at("2026-11-02T08:29:59.999Z")) && closedFor("2026-11-03", cfg("15:30"), at("2026-11-02T08:30:00.000Z")),
+     "เวลาปิดตามที่ตั้ง (15:30): 15:29:59.999 เปิด · 15:30 ปิด");
+  ok(grantedFor("2026-11-03", o(day("2026-11-03"))) && !grantedFor("2026-11-03", o(day("2026-11-04"))) && !grantedFor("2026-11-03", o(null))
+     && grantedFor("2026-11-02", o(at("2026-11-02T17:00:00.000Z"))) && !grantedFor("2026-11-03", o(at("2026-11-02T17:00:00.000Z"))),
+     "grantedFor: วันเดียวกันเท่านั้น · urgentReleaseFor ที่ไม่ตรงเที่ยงคืนอ่านวันแบบ UTC (17:00Z ของ 2 พ.ย. = 2 พ.ย. ไม่ใช่ 3 พ.ย. ไทย)");
+  const sup0 = closedRefusal("2026-11-02", o(null), c16, T9, "supervisor", false);
+  const sup1 = closedRefusal("2026-11-03", o(null), c16, T9, "supervisor", false);
+  const adm0 = closedRefusal("2026-11-02", o(null), c16, T9, "admin", false);
+  const adm1 = closedRefusal("2026-11-03", o(null), c16, T9, "admin", false);
+  ok(JSON.stringify(sup0) === JSON.stringify({ error: "วันนี้นัดไม่ได้ — ต้องให้แอดมินแก้เป็นงานด่วน", code: "DATE_CLOSED", day: "2026-11-02", firstOpen: "2026-11-04" })
+     && JSON.stringify(sup1) === JSON.stringify({ error: "เลย 16:00 น. แล้ว — นัดพรุ่งนี้ไม่ได้ เลือกวันใหม่", code: "DATE_CLOSED", day: "2026-11-03", firstOpen: "2026-11-04" })
+     && adm0?.error === "วันนี้ต้องเป็นงานด่วน — ต้องไปวันนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก"
+     && adm1?.error === "พรุ่งนี้ปิดนัดแล้ว (เลย 16:00 น.) — ต้องไปพรุ่งนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก"
+     && closedRefusal("2026-11-03", o(null), cfg("15:30"), T9, "supervisor", false)?.error === "เลย 15:30 น. แล้ว — นัดพรุ่งนี้ไม่ได้ เลือกวันใหม่",
+     "closedRefusal: ข้อความไทยสี่แบบตรงทุกตัวอักษร (หัวหน้าภาค/แอดมิน × วันนี้/พรุ่งนี้) · เวลาตามที่ตั้ง · code/day/firstOpen", JSON.stringify({ sup0, sup1, adm0, adm1 }));
+  ok(closedRefusal("2026-11-03", o(day("2026-11-03")), c16, T9, "supervisor", false) === null
+     && closedRefusal("2026-11-03", o(day("2026-11-04")), c16, T9, "supervisor", false)?.code === "DATE_CLOSED"
+     && closedRefusal("2026-11-02", o(day("2026-11-03")), c16, T9, "supervisor", false)?.code === "DATE_CLOSED",
+     "แอดมินแก้เป็นงานด่วนให้วันไหน = นัดวันนั้นได้ · วันอื่นยังปิด (แก้พรุ่งนี้ไม่ได้เปิดวันนี้)");
+  ok(closedRefusal("2026-11-02", o(null, true), c16, T9, "supervisor", false) === null
+     && closedRefusal("2026-11-03", o(null), c16, T9, "admin", true) === null
+     && closedRefusal("2026-11-03", o(null), c16, T9, "supervisor", true)?.code === "DATE_CLOSED"
+     && closedRefusal("2026-11-04", o(null), c16, T9, "supervisor", false) === null,
+     "ใบทดสอบไม่ติดกฎ · แอดมินติ๊กแล้วผ่าน · หัวหน้าภาคติ๊กมาไม่มีผล · วันที่เปิดไม่ปฏิเสธ");
+  ok(firstOpenDay(c16, T3) === "2026-11-03" && firstOpenDay(c16, T9) === "2026-11-04"
+     && firstOpenDay(cfg("16:00", "2026-11-02T02:00:00.000Z"), T3) === "2026-11-02" && firstOpenDay(c16, at("2026-12-31T10:00:00.000Z")) === "2027-01-02",
+     "firstOpenDay: ก่อนเวลาปิด = พรุ่งนี้ · หลังเวลาปิด = มะรืน · วันนี้ยังไม่อยู่ใต้กฎ = วันนี้ · 31 ธ.ค. หลังปิด → 2 ม.ค.");
+  const pr = (status: string, d: string, isTest = false, c = c16) => pastRelease({ status, isTest, scheduledAt: day(d) }, c, T9);
+  ok(pr("ASSIGNED", "2026-11-01") && pr("INSPECT_DISPATCH", "2026-10-31") && !pr("ASSIGNED", "2026-11-02") && !pr("AWAITING_CONFIRM", "2026-11-01")
+     && !pr("ASSIGNED", "2026-11-01", true) && !pr("ASSIGNED", "2026-11-01", false, cfg("16:00", "2026-11-01T00:00:00.000Z")),
+     "pastRelease (เลยนัด): ขั้นปล่อยงาน/ส่งช่างตรวจที่วันผ่านแล้ว · ไม่ใช่วันนี้ · ไม่ใช่ขั้นอื่น · ไม่ใช่ใบทดสอบ · ไม่ใช่วันก่อนเริ่มใช้กฎ");
+  ok(firstEnforcedDay(cfg("16:00", "2026-10-31T21:38:00.000Z")) === "2026-11-02" && firstEnforcedDay(cfg("16:00", "2026-11-01T09:00:00.001Z")) === "2026-11-03",
+     "firstEnforcedDay (ขอบล่างของ \"เลยนัด\") ไม่เปลี่ยน: เปิดกฎเช้า → พรุ่งนี้ · เปิดหลังเวลาปิด → มะรืน");
   process.exit(0);
 ' 2>&1) || true
 echo "$OUT"
 echo "$OUT" | grep -q '^FAIL' && FAILED=1
-[ "$(echo "$OUT" | grep -c '^PASS')" = "10" ] || fail "คณิตเส้นตายรันไม่ครบ 10 ข้อ: $(echo "$OUT" | grep -v '^PASS' | head -3 | tr '\n' ' ')"
+[ "$(echo "$OUT" | grep -c '^PASS')" = "11" ] || fail "คณิตของกฎรันไม่ครบ 11 ข้อ: $(echo "$OUT" | grep -v '^PASS' | head -3 | tr '\n' ' ')"
 
 # ════════════════════════════════════════════════════════════════════════════════
-# ก้อน 2a — กฎจริงที่เซิร์ฟเวอร์: ปุ่มปล่อยงาน · แอดมินแก้เป็นงานด่วน · หัวหน้าภาคขอแก้เป็นงานด่วน · ทางที่ไม่ติดกฎ ·
-# ทุกทางที่เปลี่ยนวันนัดล้างงานด่วน — ยืนยันที่ฐานข้อมูลทุกข้อ ไม่เชื่อแค่รหัสตอบกลับ
-#
-# คุมเวลาด้วยสองอย่างเท่านั้น: เวลาปิดรับ (แถว AppSetting ห่างจากตอนนี้ไม่เกิน ±5 นาที) และเวลาเริ่มใช้กฎ (createdAt ของแถวแรก
-# ถอยไป 30 วันระหว่างรัน — ไม่งั้นวันที่ migration รัน งานวันนี้ยังไม่อยู่ใต้กฎ ข้อ 14) · คืนทั้งสองอย่างตอนจบ (cleanup)
-# ผลต้องเหมือนกันไม่ว่ารันกี่โมง — ไม่มีข้อไหนพึ่ง "ตอนนี้ยังไม่ถึง 16:00"
+# กฎจริงที่เซิร์ฟเวอร์ — คุมเวลาด้วยสองอย่างเท่านั้น: เวลาปิด (แถว AppSetting ห่างจากตอนนี้ไม่เกิน ±5 นาที) และเวลาเริ่มใช้กฎ
+# (createdAt ของแถวแรก ถอยไป 30 วันระหว่างรัน — ไม่งั้นวันที่ migration รัน วันนี้ยังไม่อยู่ใต้กฎ ข้อ 14) · คืนทั้งสองอย่างตอนจบ
 echo
-echo "═══ เตรียมใบงานทดสอบปล่อยงาน (ก้อน 2a)"
-. ../tests/lib/fixture-parts.sh
-SYM="ทดสอบเวลาปิดรับ $SUF"
+echo "═══ เตรียมผู้ใช้/ข้อมูลทดสอบ"
+SYM="ทดสอบเวลาปิดนัด $SUF"
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 OLD_TEAMS=$(DB "select array_to_string(\"supervisedTeams\",',') from \"User\" where \"employeeCode\"='S001'")
 OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where \"employeeCode\"='T001'")
@@ -343,11 +332,12 @@ REGION=$(DB "select region from \"Branch\" where code='C0006'"); TEAM=$(DB "sele
 OTEAM=$(DB "select zone from \"Branch\" where code='C0001'")
 DB "update \"User\" set region='$REGION', \"supervisedTeams\"='{}' where \"employeeCode\"='S001'" >/dev/null
 DB "update \"User\" set team='$TEAM' where \"employeeCode\"='T001'" >/dev/null
-# หัวหน้าภาคอีกคน ภาคที่ไม่มีสาขาจริง — ใบในภาคใต้อยู่นอกขอบเขตของคนนี้ (403)
+# หัวหน้าภาคอีกคน ภาคที่ไม่มีสาขาจริง — ใบในภาคนี้อยู่นอกขอบเขตของคนนี้ (403)
 DB "insert into \"User\"(\"employeeCode\",name,role,region,\"passwordHash\",\"mustChangePassword\") values
-  ('ZDCO$SUF','หัวหน้าภาคอื่นทดสอบเวลาปิดรับ','SUPERVISOR','ภาคทดสอบ$SUF','$HASH',false)" >/dev/null
+  ('ZDCO$SUF','หัวหน้าภาคอื่นทดสอบเวลาปิดนัด','SUPERVISOR','ภาคทดสอบ$SUF','$HASH',false)" >/dev/null
 S=$(login S001); T=$(login T001); SO=$(login ZDCO$SUF)
 S_ID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
+S_NAME=$(DB "select name from \"User\" where \"employeeCode\"='S001'")
 OS=ZDCOS$SUF
 POST $A teams/outsource "{\"name\":\"$OS\"}" >/dev/null
 # C0001 อยู่ภาคที่ไม่มีหัวหน้าภาคดูแล = ใบ "ไม่มีคนรับ" (แบบเดียวกับ flow-simplify-test.sh)
@@ -355,713 +345,513 @@ POST $A teams/outsource "{\"name\":\"$OS\"}" >/dev/null
   || fail "เตรียมข้อมูล: มีหัวหน้าภาคดูแลภาคของ C0001 — ใบไม่มีคนรับทดสอบไม่ได้"
 # ค่าเดิมเก็บเป็นแถว key อื่น (readCutoff อ่านเฉพาะ key='dispatchCutoff' — แถวนี้ไม่มีผลกับแอป) ในคำสั่งเดียวกับที่ถอยเวลา
 # ถูกฆ่ากลางทาง (SIGKILL ไม่เรียก trap) รอบถัดไปเจอแถวนี้ → FAIL แล้วคืนค่าจริงให้ · ไม่มีแถวนี้ รอบถัดไปจะจำค่าที่ถอยไว้
-# เป็น "ค่าเดิม" แล้วคืนค่าผิดให้ทุกรอบ — งานวันนี้ของทุกชุดล็อกตลอดไปโดยไม่มีชุดไหนบอก
+# เป็น "ค่าเดิม" แล้วคืนค่าผิดให้ทุกรอบ — วันนี้ของทุกชุดปิดนัดตลอดไปโดยไม่มีชุดไหนบอก
 DB "insert into \"AppSetting\" (key,value) values ('$SEED_MARK','$SEED_AT');
     update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') - interval '30 days' where id=$SEED_ID" >/dev/null
 GETCUT $A >/dev/null
+SINCEISO() { DB "select to_char(\"createdAt\",'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') from \"AppSetting\" where id=$SEED_ID"; }
+SINCE_PIN=$(SINCEISO)
+# เบอร์ทดสอบของ S001 — แถวในกล่อง "ขอนัดด่วน" ของแอดมินขึ้น "หัวหน้าภาค <ชื่อ> <เบอร์>" · จดเบอร์เดิมในคำสั่งเดียวกับที่ตั้ง (ดู PHONE_MARK)
+SPHONE="089-$SUF-01"
+DB "insert into \"AppSetting\" (key,value) select '$PHONE_MARK', coalesce(phone,'') from \"User\" where \"employeeCode\"='S001';
+    update \"User\" set phone='$SPHONE' where \"employeeCode\"='S001'" >/dev/null
 
 day() { node -e "console.log(new Date(Date.now()+7*3600e3+($1)*86400e3).toISOString().slice(0,10))"; }
-TODAY=$(day 0); TOMORROW=$(day 1); YESTERDAY=$(day -1); D2=$(day 2); D3=$(day 3); D5=$(day 5); D6=$(day 6)
-# เวลาไทย HH:MM ห่างจากตอนนี้ $1 นาที — เปิด = เส้นตายของพรุ่งนี้ยังไม่ถึง · ปิด = เลยมาแล้ว (งานวันนี้ล็อกเสมอทั้งสองแบบ)
+TODAY=$(day 0); TOMORROW=$(day 1); YESTERDAY=$(day -1); D2=$(day 2); D3=$(day 3)
+# เวลาไทย HH:MM ห่างจากตอนนี้ $1 นาที — OPEN = เส้นตายของพรุ่งนี้ยังไม่ถึง · CLOSE = เลยมาแล้ว (วันนี้ปิดเสมอทั้งสองแบบ)
 BKK() { node -e "console.log(new Date(Date.now()+7*3600e3+($1)*60e3).toISOString().slice(11,16))"; }
 OPEN() { SETCUT "$(BKK 5)"; CUT=$(LATEST | cut -d'|' -f1); }
 CLOSE() { SETCUT "$(BKK -2)"; CUT=$(LATEST | cut -d'|' -f1); }
-# เส้นตาย ISO ของวันนัด $1 ที่เวลาปิดรับ $2 = วันก่อนวันนัด เวลานั้น เวลาไทย
-DL() { node -e "const p=new Date(Date.parse('$1T00:00:00Z')-864e5).toISOString().slice(0,10); console.log(new Date(p+'T$2:00.000+07:00').toISOString())"; }
-# "ส. 31 ต.ค." ของวันก่อนวันนัด — ข้อความ "ยังปล่อยงานได้ (ก่อน …)"
-SHORTPREV() { node -e "const d=new Date(Date.parse('$1T00:00:00Z')-864e5); console.log(['อา.','จ.','อ.','พ.','พฤ.','ศ.','ส.'][d.getUTCDay()]+' '+d.getUTCDate()+' '+['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][d.getUTCMonth()])"; }
+TH_DOW="['อา.','จ.','อ.','พ.','พฤ.','ศ.','ส.']"
+TH_MON="['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']"
+# "อ. 3 พ.ย." (SHORT) · "อ. 3 พ.ย. 69" (VT = visitText ไม่มีเวลา) — ข้อความที่เซิร์ฟเวอร์สร้าง
+SHORT() { node -e "const [y,m,d]='$1'.split('-').map(Number); console.log($TH_DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()]+' '+d+' '+$TH_MON[m-1])"; }
+VT() { node -e "const [y,m,d]='$1'.split('-').map(Number); console.log($TH_DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()]+' '+d+' '+$TH_MON[m-1]+' '+String((y+543)%100).padStart(2,'0'))"; }
 # รหัสตอบกลับบรรทัดสุดท้าย เนื้อหาข้างบน — ต้องได้ทั้งสองอย่างจากคำขอเดียว (กดซ้ำ = คนละสถานการณ์)
 CALL() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3" -w '\n%{http_code}'; }
 code_of() { echo "${1##*$'\n'}"; }
 body_of() { echo "${1%$'\n'*}"; }
 err_of() { body_of "$1" | J 'd.error||""'; }
+# code ในคำตอบ (none = ไม่มีช่อง) — 409 เรื่องสถานะคำขอต้องมี URGENT_ASK_STATE · 409 เรื่องขั้นต้องไม่มี
+BCODE() { body_of "$1" | J 'd.code === undefined ? "none" : d.code'; }
 PC() { CODE -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
+LIST() { curl -s "localhost:4000/api/work-orders?status=$2" -H "$(H $1)"; }
+# แถวของใบ $2 ในรายการที่โหลดไว้ $1 → ค่าของนิพจน์ $3 (r = แถว) · ไม่อยู่ในรายการ = missing
+RW() { echo "$1" | J "const r=d.rows.find(w=>w.id===$2); r ? ($3) : 'missing'"; }
+DET() { curl -s "localhost:4000/api/work-orders/$2" -H "$(H $1)" | J "$3"; }
+ICOUNT() { curl -s localhost:4000/api/work-orders/inbox-count -H "$(H $1)" | J 'd.inbox'; }
+VER() { curl -s "localhost:4000/api/work-orders/version?status=INBOX" -H "$(H $1)" | J 'd.version'; }
 
-mk() {  # $1 เครื่อง [$2 สาขา] [$3 ความเร่งด่วน] → ใบใหม่ (ขั้นระบุอะไหล่)
-  POST $A work-orders "{\"branchCode\":\"${2:-C0006}\",\"jobType\":\"CM\",\"priority\":\"${3:-NORMAL}\",\"contactPhone\":\"089-111-2222\",\"machines\":[{\"code\":\"$1\",\"symptom\":\"$SYM\"}]}" | J 'd.orders?d.orders[0].id:d.id'
+mk() {  # $1 เครื่อง [$2 สาขา] → ใบใหม่ (ขั้นระบุอะไหล่ NEW)
+  POST $A work-orders "{\"branchCode\":\"${2:-C0006}\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactPhone\":\"089-111-2222\",\"machines\":[{\"code\":\"$1\",\"symptom\":\"$SYM\"}]}" | J 'd.orders?d.orders[0].id:d.id'
 }
-toConfirm() {  # $1 ใบ $2 วัน [$3 ทีม] [$4 คนกด] → รอแอดมินคอนเฟิร์มลูกค้า (ไม่ใช้อะไหล่ + จ่ายงานในฟอร์มเดียว)
-  POST "${4:-$S}" work-orders/$1/parts "{\"needsParts\":false,\"assign\":{\"team\":\"${3:-$TEAM}\",\"scheduledAt\":\"$2\"}}" >/dev/null
+toChecked() { POST "${2:-$S}" work-orders/$1/parts '{"needsParts":false}' >/dev/null; }   # → รอนัดวันเข้า (PARTS_CHECKED)
+# นัดวันทางใดทางหนึ่ง — $1 คนกด $2 ทาง (parts|inspect|assign) $3 ใบ $4 วัน [$5 ช่องเพิ่ม เช่น ,"urgent":true] [$6 ทีม]
+SCHEDCALL() {
+  local team="${6:-$TEAM}"
+  case "$2" in
+    parts) CALL "$1" "work-orders/$3/parts" "{\"needsParts\":false,\"assign\":{\"team\":\"$team\",\"scheduledAt\":\"$4\"$5}}" ;;
+    inspect) CALL "$1" "work-orders/$3/inspect-request" "{\"team\":\"$team\",\"scheduledAt\":\"$4\"$5}" ;;
+    assign) CALL "$1" "work-orders/$3/assign" "{\"team\":\"$team\",\"scheduledAt\":\"$4\"$5}" ;;
+  esac
 }
-rel() { toConfirm "$@"; POST $A work-orders/$1/confirm-appointment '{}' >/dev/null; }   # → รอหัวหน้าภาคปล่อยงาน
+MOVEDAY() { DB "update \"WorkOrder\" set \"scheduledAt\"='$2' where id=$1" >/dev/null; }
+# ใบรอคอนเฟิร์มลูกค้าวัน $2 — นัดมะรืน (เปิดเสมอ) แล้วย้ายวันทาง SQL: urgentReleaseFor ว่างจริง ไม่ผ่านงานด่วน
+toConfirm() {  # $1 ใบ $2 วัน [$3 ทีม] [$4 คนกด]
+  SCHEDCALL "${4:-$S}" parts $1 $D2 "" "${3:-$TEAM}" >/dev/null
+  if [ "$2" != "$D2" ]; then MOVEDAY $1 $2; fi
+}
+rel() { toConfirm "$@"; POST $A work-orders/$1/confirm-appointment '{}' >/dev/null; }   # → รอหัวหน้าภาคปล่อยงาน (ASSIGNED)
+insp() {  # $1 ใบ $2 วัน → รอส่งช่างตรวจ (INSPECT_DISPATCH) แบบเดียวกัน: ส่งตรวจมะรืนแล้วย้ายวัน
+  SCHEDCALL $S inspect $1 $D2 >/dev/null
+  if [ "$2" != "$D2" ]; then MOVEDAY $1 $2; fi
+  POST $A work-orders/$1/confirm-appointment '{}' >/dev/null
+}
 ST() { DB "select status from \"WorkOrder\" where id=$1"; }
+SCH() { DB "select coalesce(\"scheduledAt\"::date::text,'-') from \"WorkOrder\" where id=$1"; }
 URF() { DB "select coalesce(\"urgentReleaseFor\"::date::text,'-') from \"WorkOrder\" where id=$1"; }
 SETURF() { DB "update \"WorkOrder\" set \"urgentReleaseFor\"='$2' where id=$1" >/dev/null; }
 NLOG() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='$2'"; }
-UPD() { DB "select \"updatedAt\" from \"WorkOrder\" where id=$1"; }
+NLOGS() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action in ($2)"; }
 # ประวัติแถวล่าสุดของ action นี้: note|meta.via|meta.reason|meta.day|ผู้กด|ขั้น
 LOGROW() { DB "select coalesce(l.note,'-')||'|'||coalesce(l.meta->>'via','-')||'|'||coalesce(l.meta->>'reason','-')||'|'||coalesce(l.meta->>'day','-')||'|'||coalesce(u.\"employeeCode\",'-')||'|'||l.status from \"WorkOrderLog\" l left join \"User\" u on u.id=l.\"userId\" where l.\"workOrderId\"=$1 and l.action='$2' order by l.id desc limit 1"; }
-# ลำดับประวัติชุดนี้ของใบ ตามเวลา (เวลาเท่ากันจะเรียงผิดในทามไลน์ — นับเวลาไม่ซ้ำด้วย)
-SEQ() { DB "select string_agg(action, ',' order by \"createdAt\", id)||'|'||count(distinct \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$1 and action in ($2)"; }
-L94="คลังลาดพร้าว 94"
-
-OPEN
-TD=$(mk W81 C0006 URGENT); rel $TD $TODAY         # งานวันนี้ ตั้ง "ด่วน" ไว้ตั้งแต่เปิดใบ
-TD2=$(mk W82); rel $TD2 $TODAY
-TM=$(mk W83); rel $TM $TOMORROW
-TM2=$(mk W84); rel $TM2 $TOMORROW
-OR=$(mk W85 C0001); toConfirm $OR $TODAY "$OTEAM" $A; POST $A work-orders/$OR/confirm-appointment '{}' >/dev/null
-IN=$(mk W86); POST $S work-orders/$IN/inspect-request "{\"team\":\"$TEAM\",\"scheduledAt\":\"$TOMORROW\"}" >/dev/null
-POST $A work-orders/$IN/confirm-appointment '{}' >/dev/null
-SB=$(mk W87); rel $SB $TOMORROW "$OS"
-DD=$(mk W88); rel $DD $D2
-ALLST="$(ST $TD) $(ST $TD2) $(ST $TM) $(ST $TM2) $(ST $OR) $(ST $IN) $(ST $SB) $(ST $DD)"
-[ "$ALLST" = "ASSIGNED ASSIGNED ASSIGNED ASSIGNED ASSIGNED INSPECT_DISPATCH ASSIGNED ASSIGNED" ] \
-  && pass "เตรียมใบรอปล่อยงาน: วันนี้ (ตั้งด่วน) · วันนี้ · พรุ่งนี้ ×2 · ไม่มีคนรับ · ส่งช่างตรวจ · SUB · มะรืน (ฐานข้อมูล)" \
-  || fail "เตรียมใบ: $ALLST"
-
-echo
-echo "═══ ปุ่มปล่อยงานติดเวลาปิดรับ (POST /dispatch) — เวลาปิดรับ $CUT (อีกไม่กี่นาที)"
-N0=$(NLOG $TD DISPATCHED); U0=$(UPD $TD)
-R=$(CALL $S work-orders/$TD/dispatch '{}')
-B=$(body_of "$R")
-[ "$(code_of "$R")" = 409 ] \
-  && [ "$(echo "$B" | J '[d.code, d.past, d.urgentExpired, d.deadline].join("|")')" = "DISPATCH_LOCKED|false|false|$(DL $TODAY $CUT)" ] \
-  && [ "$(echo "$B" | J 'Math.abs(Date.parse(d.receivedAt) - Date.now()) < 60000')" = true ] \
-  && echo "$B" | J 'd.error' | grep -q "^ปล่อยงานไม่ได้ — เลยเวลาปิดรับแล้ว (ต้องปล่อยก่อน .* $CUT น. ตามเวลาระบบ) · ต้องไปตามนัดจริง — กด “ขอแอดมินแก้เป็นงานด่วน” (หรือโทรหาแอดมิน) · ทีมไม่ว่าง — “ส่งกลับแอดมินนัดใหม่”$" \
-  && [ "$(ST $TD)" = ASSIGNED ] && [ "$(NLOG $TD DISPATCHED)" = "$N0" ] && [ "$(UPD $TD)" = "$U0" ] \
-  && pass "งานวันนี้ (เส้นตาย = เมื่อวาน $CUT) หัวหน้าภาคกด → 409 DISPATCH_LOCKED บอกเส้นตาย/เวลาที่ได้รับ/ทางไปต่อ · ป้ายด่วนตอนเปิดใบไม่ปลดล็อก · ใบไม่ขยับ ไม่มีประวัติ (ฐานข้อมูล)" \
-  || fail "ปล่อยงานวันนี้: $(code_of "$R") $B · $(ST $TD)"
-R=$(CALL $A work-orders/$TD/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J 'd.code')" = DISPATCH_LOCKED ] && [ "$(ST $TD)" = ASSIGNED ] \
-  && pass "แอดมินกดแทนก็ติดกฎเดียวกัน (ข้อ 10) — 409 ใบอยู่ขั้นเดิม" || fail "แอดมินปล่อยงานวันนี้: $(code_of "$R") · $(ST $TD)"
-R=$(CALL $A work-orders/$OR/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J 'd.code')" = DISPATCH_LOCKED ] && [ "$(ST $OR)" = ASSIGNED ] && [ "$(NLOG $OR DISPATCHED)" = 0 ] \
-  && pass "ใบไม่มีคนรับ (ภาคไม่มีหัวหน้าภาค) แอดมินปล่อยแทน → 409 เหมือนกัน (ฐานข้อมูล)" || fail "ไม่มีคนรับ: $(code_of "$R") · $(ST $OR)"
-# ใบที่ล็อกอยู่ (งานวันนี้) — ถ้าเช็คล็อกก่อนเช็คเจ้าของขั้น ช่างจะได้ 409 พร้อมคำแนะนำของหัวหน้าภาค ("ขอแอดมินแก้เป็นงานด่วน")
-# ซึ่งช่างทำไม่ได้ · ลองกับใบที่ยังไม่ล็อกจะผ่านทั้งสองลำดับ ไม่ได้ทดสอบอะไร
-R=$(CALL $T work-orders/$TD/dispatch '{}')
-[ "$(code_of "$R")" = 403 ] && [ "$(body_of "$R" | J 'd.code === undefined')" = true ] && err_of "$R" | grep -q "^ขั้นนี้เป็นของ" \
-  && [ "$(ST $TD)" = ASSIGNED ] && [ "$(NLOG $TD DISPATCHED)" = "$N0" ] \
-  && pass "ช่างกดปล่อยงานใบที่ล็อก → 403 \"ขั้นนี้เป็นของ…\" ไม่ใช่ 409 ล็อก (เจ้าของขั้นตัดสินก่อนเวลาปิดรับ) ใบไม่ขยับ (ฐานข้อมูล)" \
-  || fail "ช่างปล่อยงานใบที่ล็อก: $(code_of "$R") $(body_of "$R") · $(ST $TD)"
-OPEN
-R=$(CALL $S work-orders/$TM/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $TM)" = IN_PROGRESS ] && [ "$(NLOG $TM DISPATCHED)" = 1 ] \
-  && pass "งานพรุ่งนี้ ก่อนเวลาปิดรับ ($CUT) → ปล่อยได้ ใบถึงช่าง (ฐานข้อมูล)" || fail "ปล่อยงานพรุ่งนี้ก่อนปิดรับ: $(code_of "$R") $(err_of "$R") · $(ST $TM)"
-
-CLOSE
-R=$(CALL $S work-orders/$TM2/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J '[d.code, d.past, d.deadline].join("|")')" = "DISPATCH_LOCKED|false|$(DL $TOMORROW $CUT)" ] \
-  && err_of "$R" | grep -q "เลยเวลาปิดรับ" && [ "$(ST $TM2)" = ASSIGNED ] && [ "$(NLOG $TM2 DISPATCHED)" = 0 ] \
-  && pass "งานพรุ่งนี้ หลังเวลาปิดรับ ($CUT เพิ่งผ่าน) → 409 เส้นตาย = วันนี้ $CUT (ฐานข้อมูล)" || fail "ปล่อยงานพรุ่งนี้หลังปิดรับ: $(code_of "$R") $(body_of "$R")"
-R=$(CALL $S work-orders/$IN/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J 'd.code')" = DISPATCH_LOCKED ] && [ "$(ST $IN)" = INSPECT_DISPATCH ] \
-  && pass "ส่งช่างตรวจ (INSPECT_DISPATCH) พรุ่งนี้หลังปิดรับ → 409 กฎเดียวกัน (ข้อ ก)" || fail "ส่งช่างตรวจ: $(code_of "$R") · $(ST $IN)"
-R=$(CALL $S work-orders/$SB/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J 'd.code')" = DISPATCH_LOCKED ] && [ "$(ST $SB)" = ASSIGNED ] \
-  && pass "ใบงาน SUB (ทีม outsource) พรุ่งนี้หลังปิดรับ → 409 กฎเดียวกัน (ข้อ 15)" || fail "SUB: $(code_of "$R") · $(ST $SB)"
-R=$(CALL $S work-orders/$DD/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $DD)" = IN_PROGRESS ] \
-  && pass "งานมะรืน (เส้นตาย = พรุ่งนี้ $CUT) ปล่อยล่วงหน้าได้เสมอ (ฐานข้อมูล)" || fail "ปล่อยงานมะรืน: $(code_of "$R") $(err_of "$R")"
-TC=$(POST $A work-orders/$TM2/test-copy '{}' | J 'd.id')
-R=$(CALL $S work-orders/$TC/dispatch '{}')
-[ "$(DB "select \"isTest\"::text||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$TC")" = "true|$TOMORROW" ] \
-  && [ "$(code_of "$R")" = 200 ] && [ "$(ST $TC)" = IN_PROGRESS ] \
-  && pass "ใบทดสอบที่คัดลอกจากใบที่ล็อก (วันเดียวกัน) ปล่อยได้ — ใบทดสอบไม่ติดเวลาปิดรับ (ข้อ 15)" || fail "ใบทดสอบ: $(code_of "$R") $(err_of "$R") · $(ST $TC)"
-OPEN
-R=$(CALL $S work-orders/$TM2/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $TM2)" = IN_PROGRESS ] \
-  && pass "แอดมินเลื่อนเวลาปิดรับให้ช้าลง ($CUT) → ใบที่เพิ่งล็อกกดได้ทันทีในครั้งถัดไป (ข้อ 13)" || fail "เลื่อนเวลาแล้ว: $(code_of "$R") $(err_of "$R")"
-# เวลาเริ่มใช้กฎ = ตอนนี้ → เส้นตายของงานวันนี้ (เมื่อวาน) อยู่ก่อนเริ่มกฎ ไม่ล็อกย้อนหลัง (ข้อ 14)
-DB "update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') where id=$SEED_ID" >/dev/null; GETCUT $A >/dev/null
-R=$(CALL $S work-orders/$TD2/dispatch '{}')
-DB "update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') - interval '30 days' where id=$SEED_ID" >/dev/null; GETCUT $A >/dev/null
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $TD2)" = IN_PROGRESS ] \
-  && pass "เริ่มใช้กฎหลังเส้นตายของใบ (งานวันนี้ตอนเปิดกฎ) → ไม่ล็อกย้อนหลัง ปล่อยได้ (ข้อ 14)" || fail "ไม่ล็อกย้อนหลัง: $(code_of "$R") $(err_of "$R")"
-
-echo
-echo "═══ แอดมินแก้เป็นงานด่วน (POST /urgent-release)"
-UT=$(mk W89); rel $UT $TOMORROW
-UR2=$(mk W90); rel $UR2 $TODAY
-UP=$(mk W91); rel $UP $TODAY
-UM=$(mk W92); rel $UM $TODAY
-R=$(CALL $S work-orders/$TD/urgent-release '{}')
-[ "$(code_of "$R")" = 403 ] && [ "$(err_of "$R")" = "แก้เป็นงานด่วนได้เฉพาะแอดมิน — หัวหน้าภาคกด “ขอแอดมินแก้เป็นงานด่วน” ในหน้าปล่อยงาน" ] \
-  && [ "$(PC $T work-orders/$TD/urgent-release '{}')" = 403 ] && [ "$(URF $TD)" = - ] && [ "$(NLOG $TD URGENT_RELEASE)" = 0 ] \
-  && pass "หัวหน้าภาค/ช่างแก้เป็นงานด่วนไม่ได้ (403 บอกให้ใช้ปุ่มขอ) ฐานข้อมูลไม่เปลี่ยน" || fail "หัวหน้าภาค/ช่าง urgent: $(code_of "$R") $(err_of "$R")"
-R=$(POST $PA work-orders/$TD/urgent-release '{}'); R2=$(POST $VA work-orders/$TD/urgent-release '{}')
-echo "$R" | grep -q "Admin Spare Part ดูได้อย่างเดียว" && echo "$R2" | grep -q "ดูในฐานะผู้ใช้อื่น" \
-  && [ "$(PC $AR work-orders/$TD/urgent-release '{}')" = 403 ] && [ "$(URF $TD)" = - ] \
-  && pass "Admin Spare Part · ดูในฐานะ · ทีม Area แก้ไม่ได้ (403 จาก middleware) ฐานข้อมูลไม่เปลี่ยน" || fail "PA/VA/Area urgent: $R · $R2"
-OPEN
-R=$(CALL $A work-orders/$UT/urgent-release '{"reason":"ทดสอบ"}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q " ยังปล่อยงานได้ (ก่อน $(SHORTPREV $TOMORROW) $CUT น.) — ไม่ต้องแก้เป็นงานด่วน$" \
-  && [ "$(URF $UT)" = - ] && [ "$(NLOG $UT URGENT_RELEASE)" = 0 ] \
-  && pass "งานพรุ่งนี้ที่ยังไม่ถึงเวลาปิดรับ → 409 \"ยังปล่อยงานได้ (ก่อน …)\" ไม่ตั้ง ไม่ลงประวัติ (ขอบเขตข้อ 1)" || fail "urgent ก่อนปิดรับ: $(code_of "$R") $(err_of "$R") · $(URF $UT)"
-# แถวของใบในกล่องงานหัวหน้าภาค: "ค้างขั้นนี้ตั้งแต่"|ป้าย "คอนเฟิร์มวันใหม่"
-INB() { curl -s "localhost:4000/api/work-orders?status=INBOX" -H "$(H $S)" | J "const r=d.rows.find(x=>x.id===$1); r ? [r.stageSince, r.rescheduled].join('|') : 'missing'"; }
-BEFORE=$(INB $TD)
-R=$(CALL $A work-orders/$TD/urgent-release '{"reason":"ร้านต้องการวันนี้จริง"}')
-L=$(LOGROW $TD URGENT_RELEASE)
-[ "$(code_of "$R")" = 200 ] && [ "$(body_of "$R" | J 'd.id')" = "$TD" ] \
-  && [ "$(DB "select \"urgentReleaseFor\" = \"scheduledAt\" from \"WorkOrder\" where id=$TD")" = t ] \
-  && [ "$(DB "select status||'|'||priority from \"WorkOrder\" where id=$TD")" = "ASSIGNED|URGENT" ] \
-  && [[ "$L" == "ปล่อยหลังเวลาปิดรับได้ · ร้านต้องการวันนี้จริง · นัด "*"|direct|ร้านต้องการวันนี้จริง|$TODAY|A001|ASSIGNED" ]] \
-  && [ "$(INB $TD)" = "$BEFORE" ] && [ "$BEFORE" != missing ] \
-  && pass "แอดมินแก้เป็นงานด่วน (มีเหตุผล): วันที่ปลดล็อก = วันนัด · ขั้น/ความเร่งด่วนไม่เปลี่ยน (ข้อ 3) · ประวัติ via=direct · ค้างขั้นนี้ไม่เริ่มนับใหม่ (ฐานข้อมูล)" \
-  || fail "urgent: $(code_of "$R") $(err_of "$R") · $L · $(INB $TD) vs $BEFORE"
-# ป้าย "คอนเฟิร์มวันใหม่" ต้องรอดการแก้เป็นงานด่วน — ใบที่ถูกเลื่อนวันจริงเท่านั้นที่ทดสอบได้ (ใบที่ไม่เคยเลื่อน ป้ายเป็นเท็จทั้งก่อน/หลัง
-# ใส่ URGENT_RELEASE ใน DATE_SETTLE_ACTIONS ก็ยังผ่าน) · แอดมินเลื่อนวันนัดเป็นวันนี้ = ล็อกเสมอไม่ว่ารันกี่โมง แก้เป็นงานด่วนได้
-UMV=$(mk W81); rel $UMV $D2   # เครื่องเดียวกับ TD — ไม่สร้างเครื่องใหม่ค้างในสาขา
-POST $A work-orders/$UMV/reschedule "{\"scheduledAt\":\"$TODAY\",\"reason\":\"ร้านขอเร็วขึ้นเป็นวันนี้\"}" >/dev/null
-BEFORE=$(INB $UMV)
-R=$(CALL $A work-orders/$UMV/urgent-release '{}')
-AFTER=$(INB $UMV)
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $UMV)|$(URF $UMV)" = "ASSIGNED|$TODAY" ] \
-  && [[ "$BEFORE" == *"|true" ]] && [ "$AFTER" = "$BEFORE" ] \
-  && pass "แก้เป็นงานด่วนใบที่แอดมินเพิ่งเลื่อนวัน: ป้าย \"คอนเฟิร์มวันใหม่\" ยังอยู่ · ค้างขั้นนี้ไม่เริ่มนับใหม่ (กล่องงานหัวหน้าภาค · ฐานข้อมูล)" \
-  || fail "ป้ายคอนเฟิร์มวันใหม่หลังแก้เป็นงานด่วน: $(code_of "$R") $(err_of "$R") · $(ST $UMV) $(URF $UMV) · ก่อน=$BEFORE หลัง=$AFTER"
-TMPD=$(mktemp -d)
-PC $A work-orders/$UR2/urgent-release '{}' > $TMPD/1 & PC $SA work-orders/$UR2/urgent-release '{}' > $TMPD/2 & wait
-CODES=$(sort $TMPD/1 $TMPD/2 | tr '\n' ' '); rm -rf $TMPD
-[ "$CODES" = "200 409 " ] && [ "$(NLOG $UR2 URGENT_RELEASE)" = 1 ] && [ "$(URF $UR2)" = "$TODAY" ] \
-  && pass "แอดมินสองคนกดพร้อมกัน: ผ่านคนเดียว อีกคน 409 ประวัติแถวเดียว (ฐานข้อมูล)" || fail "กดพร้อมกัน: $CODES ประวัติ $(NLOG $UR2 URGENT_RELEASE)"
-R=$(CALL $A work-orders/$UR2/urgent-release '{}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q " แก้เป็นงานด่วนไว้แล้ว (นัด .*) — หัวหน้าภาคปล่อยงานได้เลย$" && [ "$(NLOG $UR2 URGENT_RELEASE)" = 1 ] \
-  && pass "กดซ้ำ → 409 \"แก้เป็นงานด่วนไว้แล้ว\" ไม่มีประวัติซ้ำ" || fail "กดซ้ำ: $(code_of "$R") $(err_of "$R")"
-R=$(CALL $S work-orders/$TD/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $TD)" = IN_PROGRESS ] \
-  && pass "หลังแก้เป็นงานด่วน หัวหน้าภาคปล่อยงานวันนี้ได้ทันที (ฐานข้อมูล)" || fail "ปล่อยหลังงานด่วน: $(code_of "$R") $(err_of "$R")"
-R=$(CALL $A work-orders/$TD/urgent-release '{}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q "แก้เป็นงานด่วนได้เฉพาะใบที่รอหัวหน้าภาครับทราบ ปล่อยงาน / ส่งช่างตรวจ$" \
-  && pass "ใบที่ปล่อยไปแล้ว (ขั้นช่าง) → 409 บอกว่าแก้ได้เฉพาะขั้นปล่อยงาน" || fail "urgent หลังปล่อย: $(code_of "$R") $(err_of "$R")"
-TC2=$(POST $A work-orders/$UP/test-copy '{}' | J 'd.id')
-R=$(CALL $A work-orders/$TC2/urgent-release '{}')
-[ "$(code_of "$R")" = 400 ] && [ "$(err_of "$R")" = "ใบทดสอบไม่ติดเวลาปิดรับ — ปล่อยงานได้เลย" ] && [ "$(URF $TC2)" = - ] \
-  && pass "ใบทดสอบ → 400 \"ใบทดสอบไม่ติดเวลาปิดรับ\"" || fail "urgent ใบทดสอบ: $(code_of "$R") $(err_of "$R")"
-R=$(CALL $A work-orders/$UP/urgent-release '{"reason":"x","seenScheduledAt":"'$D5'"}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q "ใบงานนี้เพิ่งถูกเปลี่ยน" && [ "$(URF $UP)" = - ] \
-  && pass "หน้าจอเห็นวันนัดอื่น (แอดมินอีกคนเพิ่งเลื่อน) → 409 ไม่ปลดล็อกวันที่ไม่ได้ตั้งใจ" || fail "seen ไม่ตรง: $(code_of "$R") $(err_of "$R")"
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY' where id=$UP" >/dev/null
-R=$(CALL $A work-orders/$UP/urgent-release '{}')
-R2=$(CALL $S work-orders/$UP/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q " วันนัด .* ผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้ ต้องเลื่อนวันนัด$" && [ "$(URF $UP)" = - ] \
-  && [ "$(code_of "$R2")" = 409 ] && [ "$(body_of "$R2" | J '[d.code, d.past, d.urgentExpired].join("|")')" = "DISPATCH_LOCKED|true|false" ] \
-  && [ "$(err_of "$R2")" = "ปล่อยงานไม่ได้ — วันนัดผ่านไปแล้ว · แอดมินต้องโทรร้านเลื่อนวันนัด" ] && [ "$(ST $UP)" = ASSIGNED ] \
-  && pass "วันนัดผ่านไปแล้ว: แก้เป็นงานด่วนไม่ได้ (409 ต้องเลื่อนวันนัด) · ปล่อยงาน 409 past=true (ฐานข้อมูล)" || fail "วันผ่าน: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") $(body_of "$R2")"
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY', \"urgentReleaseFor\"='$YESTERDAY' where id=$UR2" >/dev/null
-R=$(CALL $S work-orders/$UR2/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J '[d.code, d.past, d.urgentExpired].join("|")')" = "DISPATCH_LOCKED|true|true" ] \
-  && err_of "$R" | grep -q "งานด่วนหมดอายุ — วันนัดผ่านแล้ว" && [ "$(ST $UR2)" = ASSIGNED ] \
-  && pass "งานด่วนหมดอายุเมื่อวันนัดผ่าน → 409 urgentExpired=true (ข้อ 7)" || fail "งานด่วนหมดอายุ: $(code_of "$R") $(body_of "$R")"
-SETURF $UM $D2
-R=$(CALL $S work-orders/$UM/dispatch '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(body_of "$R" | J 'd.code')" = DISPATCH_LOCKED ] && [ "$(ST $UM)" = ASSIGNED ] \
-  && pass "วันที่ปลดล็อกไม่ตรงวันนัด (ทางเลื่อนวันที่ลืมล้าง) → ยังล็อก ไม่ปลดล็อกวันที่แอดมินไม่ได้ตั้งใจ" || fail "urgent คนละวัน: $(code_of "$R")"
-
-echo
-echo "═══ ติ๊ก \"แก้เป็นงานด่วนไปพร้อมกัน\" ในฟอร์มคอนเฟิร์มลูกค้า / เลื่อนวันนัด"
-CLOSE
-UC=$(mk W93); toConfirm $UC $TOMORROW
-R=$(CALL $A work-orders/$UC/confirm-appointment '{"urgent":true,"note":"ร้านต้องการพรุ่งนี้"}')
-L=$(LOGROW $UC URGENT_RELEASE)
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $UC)|$(URF $UC)" = "ASSIGNED|$TOMORROW" ] \
-  && [ "$(SEQ $UC "'CONFIRMED','URGENT_RELEASE'")" = "CONFIRMED,URGENT_RELEASE|2" ] \
-  && [[ "$L" == "ตอนคอนเฟิร์มลูกค้า · ร้านต้องการพรุ่งนี้ · นัด "*"|confirm|ร้านต้องการพรุ่งนี้|$TOMORROW|A001|ASSIGNED" ]] \
-  && pass "คอนเฟิร์มพรุ่งนี้หลังปิดรับ + ติ๊กงานด่วน: ประวัติคอนเฟิร์ม → แก้เป็นงานด่วน (เวลาไม่ชนกัน) via=confirm (ฐานข้อมูล)" || fail "คอนเฟิร์ม+urgent: $(code_of "$R") $(err_of "$R") · $(ST $UC) $(URF $UC) · $(SEQ $UC "'CONFIRMED','URGENT_RELEASE'") · $L"
-R=$(CALL $S work-orders/$UC/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $UC)" = IN_PROGRESS ] && pass "แล้วหัวหน้าภาคปล่อยได้เลย (ฐานข้อมูล)" || fail "ปล่อยหลังคอนเฟิร์ม+urgent: $(code_of "$R") $(err_of "$R")"
-UI=$(mk W94); toConfirm $UI $D2
-R=$(CALL $A work-orders/$UI/confirm-appointment '{"urgent":true}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $UI)|$(URF $UI)|$(NLOG $UI URGENT_RELEASE)|$(NLOG $UI CONFIRMED)" = "ASSIGNED|-|0|1" ] \
-  && pass "ติ๊กงานด่วนมากับวันมะรืน (เส้นตายยังไม่ถึง) → ไม่สนใจ: ไม่ตั้ง ไม่ลงประวัติ คอนเฟิร์มผ่านปกติ (ฐานข้อมูล)" || fail "urgent ที่ไม่ต้องใช้: $(code_of "$R") · $(ST $UI) $(URF $UI)"
-ULP=$(mk W95); toConfirm $ULP $D2
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY' where id=$ULP" >/dev/null
-R=$(CALL $A work-orders/$ULP/confirm-appointment '{"urgent":true}')
-[ "$(code_of "$R")" = 400 ] && [ "$(err_of "$R")" = "วันนัดผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้ ต้องเลื่อนวันนัด" ] && [ "$(ST $ULP)|$(URF $ULP)" = "AWAITING_CONFIRM|-" ] \
-  && pass "คอนเฟิร์มวันเดิมที่ผ่านไปแล้ว + ติ๊กงานด่วน → 400 ใบไม่ขยับ" || fail "urgent วันผ่าน: $(code_of "$R") $(err_of "$R") · $(ST $ULP)"
-UN=$(mk W96); toConfirm $UN $D2
-R=$(CALL $A work-orders/$UN/confirm-appointment "{\"scheduledAt\":\"$TOMORROW\"}")
-R2=$(CALL $S work-orders/$UN/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $UN)|$(URF $UN)|$(NLOG $UN RESCHEDULED)" = "ASSIGNED|-|1" ] \
-  && [ "$(code_of "$R2")" = 409 ] && [ "$(body_of "$R2" | J 'd.code')" = DISPATCH_LOCKED ] \
-  && pass "ลูกค้าขอเลื่อนเป็นพรุ่งนี้หลังปิดรับ ไม่ติ๊ก → ใบถึงหัวหน้าภาคแบบล็อก (409)" || fail "คอนเฟิร์มเลื่อนไม่ติ๊ก: $(code_of "$R") · $(ST $UN) · $(code_of "$R2")"
-# ใบเก่าที่ยังต้องเบิก: คอนเฟิร์ม+งานด่วน → ไปเบิกก่อน แล้วถึงหัวหน้าภาคแบบปลดล็อกสำหรับวันนั้น (งานด่วนติดไปกับใบ)
-LG=$(mk W97); BLG=$(fx_part $LG BOARD)
-POST $S work-orders/$LG/parts "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$BLG,\"quantity\":1}]}" >/dev/null
-POST $A work-orders/$LG/parts-sourcing "{\"results\":[{\"sparePartId\":$BLG,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
-POST $S work-orders/$LG/assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$TOMORROW\"}" >/dev/null
-[ "$(ST $LG)" = PARTS_REQUESTED ] || fail "เตรียมใบเก่าที่ยังต้องเบิก: $(ST $LG)"
-DB "update \"WorkOrder\" set status='AWAITING_CONFIRM', \"appointmentStatus\"='PENDING' where id=$LG" >/dev/null
-CLOSE
-R=$(CALL $A work-orders/$LG/confirm-appointment '{"urgent":true}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $LG)|$(URF $LG)|$(NLOG $LG URGENT_RELEASE)" = "PARTS_REQUESTED|$TOMORROW|1" ] \
-  && pass "ใบเก่าที่ยังต้องเบิก: คอนเฟิร์ม+งานด่วน → ไปขั้นเบิก งานด่วนติดไปกับใบ (ฐานข้อมูล)" || fail "ใบเก่า+urgent: $(code_of "$R") $(err_of "$R") · $(ST $LG) $(URF $LG)"
-POST $A work-orders/$LG/parts-check "{\"results\":[{\"sparePartId\":$BLG,\"inStock\":true,\"warehouse\":\"$L94\",\"requisitionNo\":\"RQ-DC$SUF\"}]}" >/dev/null
-R=$(CALL $S work-orders/$LG/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $LG)" = IN_PROGRESS ] \
-  && pass "เบิกเสร็จใบถึงหัวหน้าภาคเอง (คอนเฟิร์มแล้ว) ปล่อยได้ทั้งที่เลยเวลาปิดรับ — ขั้นเบิกไม่ล้างงานด่วน (ฐานข้อมูล)" || fail "ใบเก่าหลังเบิก: $(code_of "$R") $(err_of "$R") · $(ST $LG) $(URF $LG)"
-URS=$(mk W98); rel $URS $D2
-R=$(CALL $A work-orders/$URS/reschedule "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอพรุ่งนี้\",\"urgent\":true}")
-L=$(LOGROW $URS URGENT_RELEASE)
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $URS)|$(URF $URS)" = "ASSIGNED|$TOMORROW" ] \
-  && [ "$(SEQ $URS "'APPOINTMENT_MOVED','URGENT_RELEASE'")" = "APPOINTMENT_MOVED,URGENT_RELEASE|2" ] \
-  && [[ "$L" == "ตอนเลื่อนวันนัด · ร้านขอพรุ่งนี้ · นัด "*"|reschedule|ร้านขอพรุ่งนี้|$TOMORROW|A001|ASSIGNED" ]] \
-  && [ "$(code_of "$(CALL $S work-orders/$URS/dispatch '{}')")" = 200 ] && [ "$(ST $URS)" = IN_PROGRESS ] \
-  && pass "เลื่อนวันนัดเป็นพรุ่งนี้หลังปิดรับ + ติ๊กงานด่วน → via=reschedule แล้วหัวหน้าภาคปล่อยได้ (ฐานข้อมูล)" || fail "เลื่อน+urgent: $(code_of "$R") $(err_of "$R") · $(ST $URS) $(URF $URS) · $L"
-R=$(CALL $A work-orders/$DD/reschedule "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอเร็วขึ้น\",\"urgent\":true}")
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $DD)|$(URF $DD)" = "ASSIGNED|$TOMORROW" ] \
-  && [ "$(SEQ $DD "'APPOINTMENT_RECALLED','URGENT_RELEASE'")" = "APPOINTMENT_RECALLED,URGENT_RELEASE|2" ] \
-  && pass "ดึงงานคืนจากช่าง (ยังไม่ถึงหน้างาน) เป็นพรุ่งนี้ + ติ๊กงานด่วน → กลับขั้นปล่อยงานแบบปลดล็อก (ฐานข้อมูล)" || fail "ดึงคืน+urgent: $(code_of "$R") $(err_of "$R") · $(ST $DD) $(URF $DD)"
-UIR=$(mk W99); rel $UIR $D2
-R=$(CALL $A work-orders/$UIR/reschedule "{\"scheduledAt\":\"$D3\",\"reason\":\"ร้านขอเลื่อน\",\"urgent\":true}")
-[ "$(code_of "$R")" = 200 ] && [ "$(URF $UIR)|$(NLOG $UIR URGENT_RELEASE)|$(NLOG $UIR APPOINTMENT_MOVED)" = "-|0|1" ] \
-  && pass "เลื่อนไปวันที่เส้นตายยังไม่ถึง + ติ๊กงานด่วน → ไม่สนใจ เลื่อนผ่านปกติ (ฐานข้อมูล)" || fail "เลื่อน urgent ไม่ต้องใช้: $(code_of "$R") · $(URF $UIR)"
-
-echo
-echo "═══ หัวหน้าภาคขอแอดมินแก้เป็นงานด่วน (POST /urgent-request · /urgent-request/cancel)"
-CLOSE
-RQ=$(mk W100); rel $RQ $TOMORROW
-RU=$(mk W101); rel $RU $D2
-RV=$(mk W102); rel $RV $TOMORROW
-RD=$(mk W103); rel $RD $TOMORROW
-RP=$(mk W104); rel $RP $TODAY
-R=$(CALL $S work-orders/$RU/urgent-request '{"note":"ขอไว้ก่อน"}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q " ยังปล่อยงานได้ (ก่อน $(SHORTPREV $D2) $CUT น.) — ไม่ต้องขอแอดมิน$" && [ "$(NLOG $RU URGENT_REQUESTED)" = 0 ] \
-  && pass "ใบที่ยังปล่อยได้ → 409 \"ยังปล่อยงานได้ (ก่อน …) — ไม่ต้องขอแอดมิน\" ไม่ลงประวัติ" || fail "ขอทั้งที่ยังปล่อยได้: $(code_of "$R") $(err_of "$R")"
-U0=$(UPD $RQ)
-# คำขอ/ยกเลิกคำขอไม่ใช่การเดินขั้น (NON_STAGE_ACTIONS) — ขอทีไร "ค้างขั้นนี้มา N วัน" เริ่มนับใหม่ = ใบที่ค้างนานดูเหมือนเพิ่งมาถึง
-SS0=$(INB $RQ)
-R=$(CALL $S work-orders/$RQ/urgent-request '{"note":"ทีมว่างพรุ่งนี้ ต้องไปจริง"}')
-[ "$(code_of "$R")" = 200 ] && [ "$(LOGROW $RQ URGENT_REQUESTED)" = "ทีมว่างพรุ่งนี้ ต้องไปจริง|-|-|-|S001|ASSIGNED" ] \
-  && [ "$(ST $RQ)|$(URF $RQ)" = "ASSIGNED|-" ] && [ "$(UPD $RQ)" != "$U0" ] && [ "$SS0" != missing ] && [ "$(INB $RQ)" = "$SS0" ] \
-  && pass "ใบที่ล็อก → ขอได้: ประวัติ \"ขอแอดมินแก้เป็นงานด่วน\" พร้อมข้อความ ใบอยู่ขั้นเดิม ค้างขั้นนี้ไม่เริ่มนับใหม่ (ฐานข้อมูล)" || fail "ขอแก้เป็นงานด่วน: $(code_of "$R") $(err_of "$R") · $(LOGROW $RQ URGENT_REQUESTED) · ก่อน=$SS0 หลัง=$(INB $RQ)"
-R=$(CALL $S work-orders/$RQ/urgent-request '{}')
-[ "$(code_of "$R")" = 409 ] && [ "$(err_of "$R")" = "ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน" ] && [ "$(NLOG $RQ URGENT_REQUESTED)" = 1 ] \
-  && pass "ขอซ้ำระหว่างรอ → 409 \"ส่งคำขอแล้ว\" ประวัติแถวเดียว" || fail "ขอซ้ำ: $(code_of "$R") $(err_of "$R")"
-R=$(CALL $S work-orders/$RQ/urgent-request/cancel '{}')
-R2=$(CALL $S work-orders/$RQ/urgent-request/cancel '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(LOGROW $RQ URGENT_REQUEST_CANCELLED | cut -d'|' -f5,6)" = "S001|ASSIGNED" ] \
-  && [ "$(code_of "$R2")" = 409 ] && [ "$(err_of "$R2")" = "ไม่มีคำขอที่รอแอดมิน — แอดมินอาจแก้เป็นงานด่วนไปแล้ว ลองรีเฟรช" ] \
-  && [ "$(INB $RQ)" = "$SS0" ] \
-  && pass "ยกเลิกคำขอ → ประวัติ \"ยกเลิกคำขอ\" ค้างขั้นนี้ไม่เริ่มนับใหม่ · ยกเลิกซ้ำ → 409 ไม่มีคำขอที่รอ (ฐานข้อมูล)" || fail "ยกเลิก: $(code_of "$R") · $(code_of "$R2") $(err_of "$R2") · ก่อน=$SS0 หลัง=$(INB $RQ)"
-R=$(CALL $S work-orders/$RQ/urgent-request '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(LOGROW $RQ URGENT_REQUESTED | cut -d'|' -f1)" = "ไม่ได้เขียนอะไรเพิ่ม" ] && [ "$(NLOG $RQ URGENT_REQUESTED)" = 2 ] \
-  && pass "ขอใหม่โดยไม่เขียนอะไร → ได้ (ข้อความ \"ไม่ได้เขียนอะไรเพิ่ม\")" || fail "ขอไม่มีข้อความ: $(code_of "$R") $(err_of "$R")"
-[ "$(code_of "$(CALL $A work-orders/$RQ/urgent-release '{}')")" = 200 ] \
-  && [ "$(err_of "$(CALL $S work-orders/$RQ/urgent-request/cancel '{}')")" = "ไม่มีคำขอที่รอแอดมิน — แอดมินอาจแก้เป็นงานด่วนไปแล้ว ลองรีเฟรช" ] \
-  && err_of "$(CALL $S work-orders/$RQ/urgent-request '{}')" | grep -q " แอดมินแก้เป็นงานด่วนแล้ว · ปล่อยได้เลย$" && [ "$(NLOG $RQ URGENT_REQUESTED)" = 2 ] \
-  && pass "แอดมินแก้เป็นงานด่วน = คำขอจบเอง (ยกเลิกไม่ได้แล้ว · ขอใหม่ 409 \"แอดมินแก้เป็นงานด่วนแล้ว\")" || fail "คำขอไม่จบหลังแอดมินแก้: $(URF $RQ)"
-REV0=$(DB "select count(*) from \"AdminReview\" where \"workOrderId\"=$RV")
-POST $S work-orders/$RV/admin-review '{"reason":"CONTACT","note":"เบอร์ร้านโทรไม่ติด"}' >/dev/null
-R=$(CALL $S work-orders/$RV/urgent-request '{"note":"ต้องไปพรุ่งนี้"}')
-[ "$(code_of "$R")" = 200 ] && [ "$REV0" = 0 ] \
-  && [ "$(DB "select count(*)||'|'||max(reason)||'|'||bool_and(\"cancelledAt\" is null and \"repliedAt\" is null) from \"AdminReview\" where \"workOrderId\"=$RV")" = "1|CONTACT|true" ] \
-  && pass "ส่งให้แอดมินตรวจสอบค้างอยู่ก็ขอแก้เป็นงานด่วนได้ — สองเรื่องไม่ขวางกัน การส่งตรวจสอบเดิมไม่ถูกแตะ (ข้อ 9 · ฐานข้อมูล)" || fail "ขอ+ส่งตรวจสอบ: $(code_of "$R") $(err_of "$R") · ก่อน=$REV0 หลัง=$(DB "select count(*)||'|'||max(reason)||'|'||bool_and(\"cancelledAt\" is null and \"repliedAt\" is null) from \"AdminReview\" where \"workOrderId\"=$RV")"
-# แอดมินเลื่อนวันนัด (ใบอยู่ขั้นปล่อยงานเหมือนเดิม — APPOINTMENT_MOVED) = คำขอจบเอง: วันใหม่ เส้นตายใหม่ คำขอเดิมไม่มีความหมายแล้ว
-# ค้างไว้ หัวหน้าภาคยังเห็น "ส่งคำขอแล้ว — รอแอดมิน" ทั้งที่แอดมินจัดการไปแล้ว
-R=$(CALL $A work-orders/$RV/reschedule "{\"scheduledAt\":\"$D3\",\"reason\":\"ร้านขอเลื่อน\"}")
-R2=$(CALL $S work-orders/$RV/urgent-request/cancel '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$RV")" = "ASSIGNED|$D3" ] \
-  && [ "$(code_of "$R2")" = 409 ] && [ "$(err_of "$R2")" = "ไม่มีคำขอที่รอแอดมิน — แอดมินอาจแก้เป็นงานด่วนไปแล้ว ลองรีเฟรช" ] \
-  && [ "$(NLOG $RV URGENT_REQUEST_CANCELLED)" = 0 ] \
-  && pass "แอดมินเลื่อนวันนัด (ใบอยู่ขั้นเดิม) = คำขอที่ค้างจบเอง — ยกเลิกไม่ได้แล้ว 409 ไม่มีประวัติยกเลิก (ฐานข้อมูล)" \
-  || fail "คำขอไม่จบหลังแอดมินเลื่อนวัน: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") $(err_of "$R2")"
-R=$(CALL $A work-orders/$RU/urgent-request '{}')
-[ "$(code_of "$R")" = 403 ] && [ "$(err_of "$R")" = "ขอแก้เป็นงานด่วนได้เฉพาะหัวหน้าภาค — แอดมินกด “แก้เป็นงานด่วน” ได้เลย" ] \
-  && [ "$(PC $T work-orders/$RD/urgent-request '{}')" = 403 ] && [ "$(PC $SO work-orders/$RD/urgent-request '{}')" = 403 ] \
-  && [ "$(PC $SO work-orders/$RQ/urgent-request/cancel '{}')" = 403 ] && [ "$(NLOG $RD URGENT_REQUESTED)" = 0 ] \
-  && pass "แอดมิน/ช่าง/หัวหน้าภาคภาคอื่น ขอ/ยกเลิกไม่ได้ (403) ไม่มีประวัติ" || fail "ใครขอได้: $(code_of "$R") $(err_of "$R")"
-LONG=$(node -e 'console.log("ก".repeat(301))')
-R=$(CALL $S work-orders/$RD/urgent-request "{\"note\":\"$LONG\"}")
-[ "$(code_of "$R")" = 400 ] && [ "$(err_of "$R")" = "ข้อความยาวได้ไม่เกิน 300 ตัวอักษร" ] && [ "$(NLOG $RD URGENT_REQUESTED)" = 0 ] \
-  && pass "ข้อความยาวเกิน 300 ตัวอักษร → 400" || fail "ข้อความยาว: $(code_of "$R") $(err_of "$R")"
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY' where id=$RP" >/dev/null
-R=$(CALL $S work-orders/$RP/urgent-request '{}')
-[ "$(code_of "$R")" = 409 ] && err_of "$R" | grep -q " วันนัดผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้แล้ว แอดมินต้องโทรร้านเลื่อนวันนัด$" && [ "$(NLOG $RP URGENT_REQUESTED)" = 0 ] \
-  && pass "วันนัดผ่านไปแล้ว → 409 ขอไม่ได้ (ต้องให้แอดมินเลื่อนวันนัด)" || fail "ขอวันผ่าน: $(code_of "$R") $(err_of "$R")"
-R=$(CALL $S work-orders/$TC2/urgent-request '{}')
-[ "$(code_of "$R")" = 400 ] && [ "$(err_of "$R")" = "ใบทดสอบไม่ติดเวลาปิดรับ — ปล่อยงานได้เลย" ] \
-  && pass "ใบทดสอบ → 400" || fail "ขอใบทดสอบ: $(code_of "$R") $(err_of "$R")"
-POST $S work-orders/$RD/urgent-request '{"note":"ลองขอก่อน"}' >/dev/null
-R=$(CALL $S work-orders/$RD/decline-new-date '{"reason":"ทีมไม่ว่างพรุ่งนี้"}')
-N=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$RD and action='NEW_DATE_DECLINED' order by id desc limit 1")
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $RD)" = AWAITING_CONFIRM ] && [[ "$N" == "ทีม$TEAM ไม่ว่างวันนัด ("*") — ทีมไม่ว่างพรุ่งนี้" ]] \
-  && [ "$(code_of "$(CALL $S work-orders/$RD/urgent-request/cancel '{}')")" = 409 ] \
-  && pass "ใบที่ล็อก (ไม่ได้ถูกเลื่อนวัน) ส่งกลับแอดมินได้ → รอคอนเฟิร์มลูกค้า \"ไม่ว่างวันนัด\" · คำขอที่ค้างจบเอง (ฐานข้อมูล)" || fail "ส่งกลับใบล็อก: $(code_of "$R") $(err_of "$R") · $(ST $RD) · $N"
-[ "$(curl -s localhost:4000/api/work-orders/$RD -H "$(H $A)" | J "d.logs.find(l=>l.action==='NEW_DATE_DECLINED').actionLabel")" = "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่" ] \
-  && pass "ชื่อประวัติส่งกลับ = \"ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่\" (ไม่มี \"วันใหม่\" แล้ว — ข้อ 16)" || fail "ชื่อประวัติส่งกลับ: $(curl -s localhost:4000/api/work-orders/$RD -H "$(H $A)" | J "JSON.stringify(d.logs.find(l=>l.action==='NEW_DATE_DECLINED'))")"
-
-echo
-echo "═══ ทางที่ไม่ผ่านปุ่มปล่อยงาน ไม่ติดเวลาปิดรับ (ข้อ 15)"
-CLOSE
-NS=$(mk W105); rel $NS $TOMORROW
-R=$(CALL $S work-orders/$NS/supervisor-close '{"reason":"SELF","note":"เครื่องกลับมาใช้ได้เองแล้ว ร้านยืนยันทางโทรศัพท์"}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $NS)" = DONE ] \
-  && pass "หัวหน้าภาคปิดใบแทนจากขั้นปล่อยงานที่ล็อก → ปิดได้ (ฐานข้อมูล)" || fail "ปิดแทน: $(code_of "$R") $(err_of "$R") · $(ST $NS)"
-NB=$(mk W106); rel $NB $TODAY; SETURF $NB $D2
-NOWISO=$(node -e 'console.log(new Date().toISOString())')
-# วันเข้างานเมื่อวาน — ปิดย้อนหลังไม่รับเวลาเข้างานที่ยังไม่ถึง (วันนี้ 10:00 ตอนรันเช้ามืดคืออนาคต)
-R=$(CALL $A work-orders/$NB/backfill-close "{\"reason\":\"ทดสอบ\",\"team\":\"$TEAM\",\"visitDate\":\"$YESTERDAY\",\"visitTime\":\"10:00\",\"result\":\"FIXED\",\"closedAt\":\"$NOWISO\",\"otherWorkers\":\"ช่างทดสอบ\",\"noPhotoReason\":\"ทดสอบ\"}")
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $NB)|$(URF $NB)" = "DONE|-" ] \
-  && pass "แอดมินปิดย้อนหลังใบที่ล็อก → ปิดได้ · ล้างงานด่วนพร้อมวันนัดที่เขียนใหม่ (ฐานข้อมูล)" || fail "ปิดย้อนหลัง: $(code_of "$R") $(err_of "$R") · $(ST $NB) $(URF $NB)"
-NI=$(mk W107); POST $S work-orders/$NI/inspect-request "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D2\"}" >/dev/null
-POST $A work-orders/$NI/confirm-appointment '{}' >/dev/null; POST $S work-orders/$NI/dispatch '{}' >/dev/null
-[ "$(ST $NI)" = INSPECTING ] || fail "เตรียมใบตรวจหน้างาน: $(ST $NI)"
-DB "update \"WorkOrder\" set \"scheduledAt\"='$TOMORROW' where id=$NI" >/dev/null   # ปล่อยแล้วค่อยย้ายวัน (ขั้นช่างไม่ติดกฎ)
-R=$(CALL $A work-orders/$NI/rollback '{"toStage":"INSPECT_DISPATCH","reason":"ส่งทีมใหม่"}')
-R2=$(CALL $S work-orders/$NI/dispatch '{}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $NI)" = INSPECT_DISPATCH ] && [ "$(code_of "$R2")" = 409 ] && [ "$(body_of "$R2" | J 'd.code')" = DISPATCH_LOCKED ] \
-  && pass "ย้อนจากตรวจหน้างานกลับขั้นส่งช่างตรวจหลังปิดรับ → ย้อนได้ แต่ปล่อยใหม่ติดกฎ (ฐานข้อมูล)" || fail "ย้อนกลับขั้นปล่อย: $(code_of "$R") $(err_of "$R") · $(ST $NI) · $(code_of "$R2")"
-NU=$(mk W108); rel $NU $TODAY; POST $A work-orders/$NU/urgent-release '{}' >/dev/null
-[ "$(URF $NU)" = "$TODAY" ] || fail "เตรียมใบงานด่วน: $(URF $NU)"
-R=$(CALL $A work-orders/$NU/rollback '{"toStage":"INSPECTING","reason":"ให้ทีมเข้าตรวจหน้างานก่อน"}')
-[ "$(code_of "$R")" = 200 ] \
-  && [ "$(DB "select status||'|'||coalesce(\"scheduledAt\"::text,'-')||'|'||coalesce(\"scheduledTime\",'-')||'|'||coalesce(\"appointmentStatus\",'-')||'|'||coalesce(\"urgentReleaseFor\"::text,'-') from \"WorkOrder\" where id=$NU")" = "INSPECTING|-|-|-|-" ] \
-  && pass "ย้อนใบงานด่วนไปตรวจหน้างาน → ถึงช่างโดยไม่ผ่านปุ่มปล่อยงาน วันนัด/เวลา/สถานะนัด/งานด่วน ว่างหมด (ฐานข้อมูล)" || fail "ย้อนไปตรวจ: $(code_of "$R") $(err_of "$R")"
-
-echo
-echo "═══ ทุกทางที่เปลี่ยน/ล้างวันนัด ล้างงานด่วนด้วย (urgentReleaseFor)"
-CLR() {  # $1 ชื่อทาง $2 ใบ $3 ขั้นที่ควรไป $4 ผลตอบกลับ
-  if [ "$(code_of "$4")" = 200 ] && [ "$(ST $2)|$(URF $2)" = "$3|-" ]; then pass "ล้างงานด่วน: $1 → $3 (ฐานข้อมูล)"
-  else fail "ล้างงานด่วน: $1 — $(code_of "$4") $(err_of "$4") · $(ST $2) urgentReleaseFor=$(URF $2)"; fi
-}
-C1=$(mk W109); POST $S work-orders/$C1/parts '{"needsParts":false}' >/dev/null; SETURF $C1 $D5
-CLR "นัดวันเข้า (/assign)" $C1 AWAITING_CONFIRM "$(CALL $S work-orders/$C1/assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D5\"}")"
-C2=$(mk W110); SETURF $C2 $D5
-CLR "ไม่ใช้อะไหล่ + จ่ายงาน (/parts assign)" $C2 AWAITING_CONFIRM "$(CALL $S work-orders/$C2/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$D5\"}}")"
-C3=$(mk W111); SETURF $C3 $D5
-CLR "ส่งตรวจหน้างาน (/inspect-request)" $C3 INSPECT_CONFIRM "$(CALL $S work-orders/$C3/inspect-request "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D5\"}")"
-POST $A work-orders/$C3/confirm-appointment '{}' >/dev/null; POST $S work-orders/$C3/dispatch '{}' >/dev/null; SETURF $C3 $D5
-# ไฟล์ผลตรวจสามอย่าง (ใส่ตรงในฐานข้อมูล ไม่มีไฟล์จริงในถัง) — ข้อนี้ทดสอบการล้างวัน ไม่ใช่การอัปโหลด
-DB "insert into \"WorkOrderAttachment\"(\"workOrderId\",kind,\"fileName\",\"mimeType\",\"sizeBytes\",role,\"createdAt\")
-  select $C3,'IMAGE','dc.jpg','image/jpeg',1,r,(now() at time zone 'UTC') + interval '1 second' from unnest(array['INSPECT_SITE','INSPECT_PART','INSPECT_VIDEO']) r" >/dev/null
-CLR "บันทึกผลตรวจ (/inspection)" $C3 NEW "$(CALL $T work-orders/$C3/inspection '{"note":"วาล์วน้ำทิ้งค้าง"}')"
-C5=$(mk W112); B5=$(fx_part $C5 BOARD)
-POST $S work-orders/$C5/parts "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$B5,\"quantity\":1}]}" >/dev/null
-POST $A work-orders/$C5/parts-sourcing "{\"results\":[{\"sparePartId\":$B5,\"inStock\":true,\"warehouse\":\"$L94\"}]}" >/dev/null
-POST $S work-orders/$C5/assign "{\"team\":\"$TEAM\",\"scheduledAt\":\"$D5\"}" >/dev/null; SETURF $C5 $D5
-CLR "ของไม่พอตอนเบิก (/parts-short)" $C5 PARTS_SOURCING "$(CALL $A work-orders/$C5/parts-short "{\"sparePartIds\":[$B5]}")"
-C6=$(mk W113); rel $C6 $D5; SETURF $C6 $D5
-CLR "ช่างแจ้งปัญหาหน้างาน (/reassess-parts)" $C6 NEW "$(CALL $T work-orders/$C6/reassess-parts '{"reasonCode":"PARTS","reason":"บอร์ดไหม้ ต้องเปลี่ยน"}')"
-# อีกทางของปุ่มเดียวกัน (คน/เครื่องมือไม่พอ → หัวหน้าภาคจ่ายงานใหม่) ล้างวันในอีกก้อนข้อมูล — ลืมล้างที่นี่ ไม่มีข้อไหนเห็น
-C6B=$(mk W113); rel $C6B $D5; SETURF $C6B $D5
-CLR "ช่างแจ้งคนไม่พอ (/reassess-parts → จ่ายงานใหม่)" $C6B PARTS_CHECKED "$(CALL $T work-orders/$C6B/reassess-parts '{"reasonCode":"RESOURCES","reason":"ต้องใช้ช่างสองคน"}')"
-SETURF $NS $D5
-CLR "เปิดงานใหม่ (/reopen)" $NS PARTS_CHECKED "$(CALL $A work-orders/$NS/reopen '{}')"
-C8=$(mk W114); toConfirm $C8 $D5; SETURF $C8 $D5
-CLR "คอนเฟิร์มลูกค้าแบบเลื่อนวัน (/confirm-appointment)" $C8 ASSIGNED "$(CALL $A work-orders/$C8/confirm-appointment "{\"scheduledAt\":\"$D6\"}")"
-C9=$(mk W115); rel $C9 $D5; SETURF $C9 $D5
-CLR "แอดมินเลื่อนวันนัด ไม่ติ๊ก (/reschedule)" $C9 ASSIGNED "$(CALL $A work-orders/$C9/reschedule "{\"scheduledAt\":\"$D6\",\"reason\":\"ร้านขอเลื่อน\"}")"
-C10=$(mk W116); rel $C10 $D5; SETURF $C10 $D5
-CLR "ย้อนไปนัดวันเข้า (/rollback)" $C10 PARTS_CHECKED "$(CALL $A work-orders/$C10/rollback '{"toStage":"PARTS_CHECKED","reason":"นัดใหม่"}')"
-
-# ════════════════════════════════════════════════════════════════════════════════
-# ก้อน 2b — ฝั่งอ่าน: สิ่งที่หน้าจอได้ไปวาดชิป/กล่องล็อก/หัวข้อของแอดมิน ต้องตรงกับที่ปุ่มปล่อยงานตัดสิน
-# คุมเวลาแบบเดียวกับก้อน 2a (เวลาปิดรับ ±5 นาที · เวลาเริ่มใช้กฎถอยไว้ 30 วัน) — ไม่มีข้อไหนพึ่ง "ตอนนี้ยังไม่ถึง 16:00"
-# เทียบเวลาที่ส่งมากับ createdAt ในฐานข้อมูลตรง ๆ ไม่เชื่อแค่ว่ามีช่อง
-echo
-echo "═══ ฝั่งอ่าน (ก้อน 2b): เตรียมใบ"
-SPHONE="089-$SUF-01"
-# จดเบอร์เดิมในคำสั่งเดียวกับที่ตั้ง (ดู PHONE_MARK ข้างบน) — ไม่มีช่วงที่เบอร์เปลี่ยนแล้วแต่ยังไม่ได้จด
-DB "insert into \"AppSetting\" (key,value) select '$PHONE_MARK', coalesce(phone,'') from \"User\" where \"employeeCode\"='S001';
-    update \"User\" set phone='$SPHONE' where \"employeeCode\"='S001'" >/dev/null
-S_NAME=$(DB "select name from \"User\" where \"employeeCode\"='S001'")
-LIST() { curl -s "localhost:4000/api/work-orders?status=$2" -H "$(H $1)"; }
-# แถวของใบ $2 ในรายการที่โหลดไว้ $1 → ค่าของนิพจน์ $3 (r = แถว · x = r.release) · ไม่อยู่ในรายการ = missing
-RW() { echo "$1" | J "const r=d.rows.find(w=>w.id===$2), x=r && r.release; r ? ($3) : 'missing'"; }
-DET() { curl -s "localhost:4000/api/work-orders/$2" -H "$(H $1)" | J "$3"; }
-ICOUNT() { curl -s localhost:4000/api/work-orders/inbox-count -H "$(H $1)" | J 'd.inbox'; }
-WATCH() { curl -s localhost:4000/api/work-orders/dispatch-watch -H "$(H $1)"; }
-VER() { curl -s "localhost:4000/api/work-orders/version?status=INBOX" -H "$(H $1)" | J 'd.version'; }
-# createdAt ของประวัติล่าสุดชนิดนี้ (ISO) — เทียบกับ arrivedAt / ask.at / urgentInfo.at
+# meta ของประวัติล่าสุดชนิดนี้: day|note
+LOGMETA() { DB "select coalesce(meta->>'day','-')||'|'||coalesce(meta->>'note','-') from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='$2' order by id desc limit 1"; }
 LOGISO() { DB "select to_char(\"createdAt\",'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='$2' order by id desc limit 1"; }
-# เที่ยงคืนเวลาไทยของวัน $1 (ISO) — งานด่วนหมดอายุ "ล็อกตั้งแต่" วันถัดจากวันนัด
-BKKMID() { node -e "console.log(new Date('$1T00:00:00.000+07:00').toISOString())"; }
-
-OPEN
-G_TM=$(mk W81); rel $G_TM $TOMORROW            # พรุ่งนี้ — มาถึงก่อนเส้นตาย (ประวัติถอยไป 1 ชม. ข้างล่าง)
-# ใบมาถึงก่อนเส้นตายจริง ๆ: เวลาปิดรับ "ปิด" ตั้งไว้ 2 นาทีก่อนตอนนี้ ใบที่เพิ่งคอนเฟิร์มเมื่อครู่จะกลายเป็น "มาถึงหลังเส้นตาย"
-DB "update \"WorkOrderLog\" set \"createdAt\"=\"createdAt\" - interval '1 hour' where \"workOrderId\"=$G_TM" >/dev/null
-G_TD=$(mk W82); rel $G_TD $TODAY               # วันนี้ — ล็อกเสมอ
-G_D2=$(mk W83); rel $G_D2 $D2                  # มะรืน
-G_OD=$(mk W84); rel $G_OD $TOMORROW            # พรุ่งนี้ วันนัดไม่ตรงเที่ยงคืน UTC (ข้างล่าง)
-DB "update \"WorkOrder\" set \"scheduledAt\"='$TOMORROW'::timestamp + interval '7 hours' where id=$G_OD" >/dev/null
-G_PS=$(mk W86); rel $G_PS $D2; DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY' where id=$G_PS" >/dev/null     # วันผ่าน (อยู่ใต้กฎ)
-G_GF=$(mk W87); rel $G_GF $D2; DB "update \"WorkOrder\" set \"scheduledAt\"='$TODAY'::date - 40 where id=$G_GF" >/dev/null  # วันผ่านก่อนเริ่มใช้กฎ
-G_OR=$(mk W85 C0001); toConfirm $G_OR $TODAY "$OTEAM" $A; POST $A work-orders/$G_OR/confirm-appointment '{}' >/dev/null
-G_UR=$(mk W88); rel $G_UR $TODAY
-POST $A work-orders/$G_UR/urgent-release '{"reason":"ร้านปิดพรุ่งนี้ ต้องเข้าวันนี้"}' >/dev/null
-G_TC=$(POST $A work-orders/$G_TD/test-copy '{}' | J 'd.id')
-G_NR=$(mk W89); toConfirm $G_NR $TOMORROW      # พรุ่งนี้ ยังรอแอดมินคอนเฟิร์ม (ยังไม่ถึงขั้นปล่อยงาน)
-G_NRT=$(POST $A work-orders/$G_NR/test-copy '{}' | J 'd.id')
-G_RL=$(mk W90); rel $G_RL $TOMORROW            # พรุ่งนี้ — ปล่อยตอนเปิด (releasedTomorrow)
-G_UT=$(mk W91); rel $G_UT $TOMORROW            # พรุ่งนี้ — แก้เป็นงานด่วนตอนปิด (ไม่อยู่ในรายการเตือนแอดมิน)
-G_DC=$(mk W92); rel $G_DC $TOMORROW            # พรุ่งนี้ — หัวหน้าภาคส่งกลับหลังปิดรับ
-G_DN=$(mk W93); rel $G_DN $D2                  # มะรืน → แอดมินเลื่อนเป็นพรุ่งนี้ แล้วส่งกลับ "คอนเฟิร์มวันใหม่" ก่อนเส้นตาย
-G_CF=$(mk W94); toConfirm $G_CF $D2            # มะรืน — ตอนปิดแอดมินคอนเฟิร์มเลื่อนเป็นพรุ่งนี้
-G_MV=$(mk W95); rel $G_MV $D2                  # มะรืน — ตอนปิดแอดมินเลื่อนเป็นพรุ่งนี้
-G_UC=$(mk W96); toConfirm $G_UC $TOMORROW      # พรุ่งนี้ — คอนเฟิร์ม + ติ๊กงานด่วนตอนปิด
-G_UR2=$(mk W97); rel $G_UR2 $D2                # มะรืน — เลื่อนเป็นพรุ่งนี้ + ติ๊กงานด่วนตอนปิด
-GST=""; for i in $G_TM $G_TD $G_D2 $G_OD $G_PS $G_GF $G_OR $G_UR $G_TC $G_NR $G_NRT $G_RL $G_UT $G_DC $G_DN $G_CF $G_MV $G_UC $G_UR2; do GST="$GST $(ST $i)"; done
-[ "$GST" = " ASSIGNED ASSIGNED ASSIGNED ASSIGNED ASSIGNED ASSIGNED ASSIGNED ASSIGNED ASSIGNED AWAITING_CONFIRM AWAITING_CONFIRM ASSIGNED ASSIGNED ASSIGNED ASSIGNED AWAITING_CONFIRM ASSIGNED AWAITING_CONFIRM ASSIGNED" ] \
-  && [ "$(DB "select count(*) from \"WorkOrder\" where id in ($G_TC,$G_NRT) and \"isTest\"")" = 2 ] \
-  && [ "$(URF $G_UR)" = "$TODAY" ] \
-  && pass "เตรียมใบฝั่งอ่าน 19 ใบ (วันนี้ · พรุ่งนี้ · มะรืน · วันผ่าน · ก่อนเริ่มกฎ · ไม่มีคนรับ · งานด่วน · ใบทดสอบ ×2 · รอคอนเฟิร์ม) ตรงฐานข้อมูล" \
-  || fail "เตรียมใบฝั่งอ่าน:$GST · urgent=$(URF $G_UR)"
+# ลำดับประวัติชุดนี้ของใบ ตามเวลา|จำนวนเวลาไม่ซ้ำ (เวลาเท่ากันจะเรียงผิดในทามไลน์)
+SEQ() { DB "select string_agg(action, ',' order by \"createdAt\", id)||'|'||count(distinct \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$1 and action in ($2)"; }
+# 400 DATE_CLOSED ครบรูป: $1 คำตอบ $2 ข้อความ $3 วัน $4 วันแรกที่นัดได้ — เวลาปิด/เวลาเริ่มใช้กฎในคำตอบตรงกับฐานข้อมูล
+CLOSED_OK() {
+  [ "$(code_of "$1")" = 400 ] && [ "$(body_of "$1" | J '[d.code, d.error, d.day, d.firstOpen, d.cutoff.time, d.cutoff.since, Math.abs(Date.parse(d.serverNow) - Date.now()) < 60000].join("|")')" = "DATE_CLOSED|$2|$3|$4|$CUT|$SINCE_PIN|true" ]
+}
+PAST_TEXT="วันนัดย้อนหลังไม่ได้ — นัดได้ตั้งแต่วันนี้ ($(VT $TODAY)) เป็นต้นไป"
+SUP_TODAY="วันนี้นัดไม่ได้ — ต้องให้แอดมินแก้เป็นงานด่วน"
+ADM_TODAY="วันนี้ต้องเป็นงานด่วน — ต้องไปวันนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก"
+SUP_TMR() { echo "เลย $CUT น. แล้ว — นัดพรุ่งนี้ไม่ได้ เลือกวันใหม่"; }
+ADM_TMR() { echo "พรุ่งนี้ปิดนัดแล้ว (เลย $CUT น.) — ต้องไปพรุ่งนี้จริง ติ๊ก “แก้เป็นงานด่วน” ก่อนบันทึก"; }
+CODEOF() { DB "select code from \"WorkOrder\" where id=$1"; }
+LABEL() { DET $A $1 'd.statusLabel'; }
 
 echo
-echo "═══ รายการใบงาน: ก้อน release ของแต่ละแถว — เวลาปิดรับ $CUT (ยังไม่ถึง)"
-OPEN
-SINCE_PIN=$(DB "select to_char(\"createdAt\",'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') from \"AppSetting\" where id=$SEED_ID")
-LA=$(LIST $A ACTIVE)
-[ "$(echo "$LA" | J '[d.cutoff.time, d.cutoff.since, Math.abs(Date.parse(d.serverNow) - Date.now()) < 60000].join("|")')" = "$CUT|$SINCE_PIN|true" ] \
-  && pass "รายการส่ง serverNow (นาฬิกาเซิร์ฟเวอร์) และ cutoff {time, since} = เวลาปิดรับตอนนี้ · เวลาเริ่มใช้กฎ (ฐานข้อมูล)" \
-  || fail "serverNow/cutoff ในรายการ: $(echo "$LA" | J 'JSON.stringify([d.serverNow, d.cutoff])')"
-EXP="false|true|false|false|false|null|$(DL $TOMORROW $CUT)|$(LOGISO $G_TM CONFIRMED)|คอนเฟิร์มลูกค้า|true|null|false|null"
-GOT=$(RW "$LA" $G_TM '[x.locked, x.enforced, x.past, x.urgent, x.urgentExpired, x.lockedSince, x.deadline, x.arrivedAt, x.arrivedVia, x.arrivedByAdmin, x.ask, r.isTest, r.urgentReleaseFor].map(String).join("|")')
-[ "$GOT" = "$EXP" ] \
-  && pass "งานพรุ่งนี้ก่อนเวลาปิดรับ: ยังไม่ล็อก · เส้นตาย = วันนี้ $CUT · มาถึงทาง \"คอนเฟิร์มลูกค้า\" โดยแอดมิน เวลาตรงประวัติ (ฐานข้อมูล)" \
-  || fail "release พรุ่งนี้: $GOT ≠ $EXP"
-EXP="true|false|$(DL $TODAY $CUT)|$(LOGISO $G_TD CONFIRMED)"
-GOT=$(RW "$LA" $G_TD '[x.locked, x.past, x.deadline, x.lockedSince].join("|")')
-[ "$GOT" = "$EXP" ] \
-  && pass "งานวันนี้: ล็อก · เส้นตาย = เมื่อวาน $CUT · ล็อกตั้งแต่ = ตอนใบมาถึง (มาหลังเส้นตาย ไม่ใช่เส้นตายเมื่อวาน)" \
-  || fail "release วันนี้: $GOT ≠ $EXP"
-GOT=$(RW "$LA" $G_D2 '[x.locked, x.deadline].join("|")')
-[ "$GOT" = "false|$(DL $D2 $CUT)" ] && pass "งานมะรืน: ยังไม่ล็อก · เส้นตาย = พรุ่งนี้ $CUT" || fail "release มะรืน: $GOT"
-GOT=$(RW "$LA" $G_UR '[x.urgent, x.locked, x.urgentExpired, r.urgentReleaseFor].join("|")')
-UI=$(DET $A $G_UR 'JSON.stringify(d.urgentInfo)')
-[ "$GOT" = "true|false|false|$TODAY" ] \
-  && [ "$UI" = "{\"at\":\"$(LOGISO $G_UR URGENT_RELEASE)\",\"byName\":\"$A_NAME\",\"via\":\"direct\",\"reason\":\"ร้านปิดพรุ่งนี้ ต้องเข้าวันนี้\"}" ] \
-  && pass "งานด่วน (ปุ่มแก้เป็นงานด่วน): release.urgent ไม่ล็อก · urgentReleaseFor = วันนัด · หน้าใบงาน urgentInfo ใคร/เมื่อไร/via=direct/เหตุผล ตรงประวัติ" \
-  || fail "งานด่วนในรายการ/หน้าใบงาน: $GOT · $UI"
-LAI=$(LIST $A INBOX)
-[ "$(RW "$LA" $G_TC 'r.isTest === true && r.release === null')" = true ] && [ "$(RW "$LAI" $G_TC 'true')" = missing ] \
-  && [ "$(RW "$LAI" $G_UR 'true')" = missing ] \
-  && pass "ใบทดสอบ (คัดลอกจากใบที่ล็อก): isTest · release = null · ไม่เข้ากล่องงานแอดมิน · งานด่วนก็ไม่เข้า (ข้อ 15)" \
-  || fail "ใบทดสอบ/งานด่วนในกล่องแอดมิน: $(RW "$LA" $G_TC 'JSON.stringify([r.isTest, r.release])') · inbox TC=$(RW "$LAI" $G_TC 'true') UR=$(RW "$LAI" $G_UR 'true')"
-GOT="$(RW "$LAI" $G_PS '[r.overdue, r.release.past, r.release.enforced, r.release.locked].join("|")') / $(RW "$LA" $G_GF '[r.overdue, r.release.past, r.release.enforced, r.release.locked].join("|")') / $(RW "$LAI" $G_GF 'true')"
-[ "$GOT" = "true|true|true|true / false|true|false|false / missing" ] \
-  && pass "วันนัดผ่านแล้ว (ใต้กฎ) → ในกล่องแอดมิน overdue=true (หัวข้อเลยนัด) · ผ่านก่อนเริ่มใช้กฎ → ไม่ล็อก ไม่ overdue ไม่เข้ากล่อง (ข้อ 14)" \
-  || fail "วันผ่าน/ก่อนเริ่มกฎ: $GOT"
-GOT=$(RW "$LAI" $G_OR '[r.orphan, r.release.locked, r.release.ask, r.waitingOnSupervisors.length].join("|")')
-[ "$GOT" = "true|true||0" ] \
-  && pass "ใบไม่มีคนรับที่ล็อก → กล่องแอดมิน orphan=true · release.locked · ask ว่าง · ไม่มีชื่อ/เบอร์หัวหน้าภาค (ข้อ 10)" \
-  || fail "ใบไม่มีคนรับ: $GOT"
-LS=$(LIST $S ACTIVE); LT=$(LIST $T ACTIVE)
-GOT="$(RW "$LA" $G_TM 'JSON.stringify(r.waitingOnSupervisors)') / $(RW "$LS" $G_TM 'JSON.stringify(r.waitingOnSupervisors)') / ช่าง $(RW "$LT" $G_TM 'JSON.stringify(r.waitingOnSupervisors)')"
-NOPHONE='r.waitingOnSupervisors.length > 0 && !r.waitingOnSupervisors.some(s=>"phone" in s)'
-echo "$LA" | J "const r=d.rows.find(x=>x.id===$G_TM); r.waitingOnSupervisors.some(s=>s.name==='$S_NAME' && s.phone==='$SPHONE')" | grep -qx true \
-  && [ "$(RW "$LS" $G_TM "$NOPHONE")" = true ] && [ "$(RW "$LT" $G_TM "$NOPHONE")" = true ] \
-  && pass "เบอร์หัวหน้าภาค (waitingOnSupervisors[].phone) ออกเฉพาะคำตอบของแอดมิน — รายการของหัวหน้าภาคและช่างไม่มีช่อง phone เลย" \
-  || fail "เบอร์ในรายการ: $GOT"
-# หน้าใบงานกติกาเดียวกัน (supervisors[].phone) — แอดมินกด "แก้เป็นงานด่วน" จากหน้าใบงาน กล่องต้องขึ้น "ยังไม่ได้บอกว่าจะไปไหม —
-# โทรถาม <ชื่อ> <เบอร์>" เหมือนเปิดจากงานของฉันวันนี้ ไม่งั้นแอดมินต้องย้อนกลับไปหาเบอร์ที่รายการ · ดูในฐานะหัวหน้าภาคต้องไม่ได้เบอร์
-# (เห็นเท่าที่หัวหน้าภาคเห็น) · เทียบเบอร์กับฐานข้อมูลตรง ๆ ไม่ใช่กับตัวแปรที่ตั้งไว้
-DPHONE='d.supervisors.length > 0 && !d.supervisors.some(s=>"phone" in s)'
-DBPHONE=$(DB "select phone from \"User\" where \"employeeCode\"='S001'")
-GOT="$(DET $A $G_TM 'JSON.stringify(d.supervisors)') / $(DET $S $G_TM 'JSON.stringify(d.supervisors)') / ช่าง $(DET $T $G_TM 'JSON.stringify(d.supervisors)') / ดูในฐานะ $(DET $VA $G_TM 'JSON.stringify(d.supervisors)')"
-[ -n "$DBPHONE" ] && [ "$(DET $A $G_TM "d.supervisors.some(s=>s.name==='$S_NAME' && s.phone==='$DBPHONE')")" = true ] \
-  && [ "$(DET $S $G_TM "$DPHONE")" = true ] && [ "$(DET $T $G_TM "$DPHONE")" = true ] && [ "$(DET $VA $G_TM "$DPHONE")" = true ] \
-  && pass "หน้าใบงาน: เบอร์หัวหน้าภาค (supervisors[].phone = ฐานข้อมูล) ออกเฉพาะแอดมิน — หัวหน้าภาค · ช่าง · ดูในฐานะหัวหน้าภาค ไม่มีช่อง phone เลย" \
-  || fail "เบอร์ในหน้าใบงาน (ฐานข้อมูล $DBPHONE): $GOT"
-# ชิป/กล่องล็อกของหัวหน้าภาคอ่านก้อน release จากรายการของหัวหน้าภาคเอง — ต้องเหมือนแถวของแอดมิน (ตรวจกับประวัติแล้วข้างบน) ทุกตัวอักษร
-# ไม่ใช่แค่ "ไม่ใช่ null" (ช่องหายไปทั้งช่องก็ผ่าน) · releaseDeclined ของหัวหน้าภาคต้องเป็น null จริง ไม่ใช่ไม่มีช่อง
-GOT="$(RW "$LS" $G_TM 'JSON.stringify(r.release)') · $(RW "$LS" $G_TD 'JSON.stringify(r.release)')"
-[ "$GOT" = "$(RW "$LA" $G_TM 'JSON.stringify(r.release)') · $(RW "$LA" $G_TD 'JSON.stringify(r.release)')" ] \
-  && [ "$(RW "$LS" $G_TM 'typeof r.release === "object" && r.release !== null && r.releaseDeclined === null')" = true ] \
-  && pass "รายการของหัวหน้าภาคได้ก้อน release เดียวกับแถวของแอดมินทุกตัวอักษร (พรุ่งนี้ยังไม่ล็อก · วันนี้ล็อก + ล็อกตั้งแต่) · releaseDeclined = null" \
-  || fail "release ในรายการหัวหน้าภาค: $GOT ≠ แอดมิน $(RW "$LA" $G_TM 'JSON.stringify(r.release)') · $(RW "$LA" $G_TD 'JSON.stringify(r.release)')"
+echo "═══ หัวหน้าภาคนัดวัน: วันนี้ปิดตลอด · พรุ่งนี้ปิดตั้งแต่เวลาปิด · มะรืนเปิด (ทุกฟอร์มที่เลือกวันเข้า — ข้อ 5)"
+EP_NAME() { case $1 in parts) echo "ไม่ใช้อะไหล่ — จ่ายงาน (/parts)" ;; inspect) echo "ส่งตรวจ (/inspect-request)" ;; assign) echo "นัดวันเข้า (/assign)" ;; esac; }
+EP_FROM() { case $1 in assign) echo PARTS_CHECKED ;; *) echo NEW ;; esac; }
+EP_TO() { case $1 in inspect) echo INSPECT_CONFIRM ;; *) echo AWAITING_CONFIRM ;; esac; }
+EP_LOGS() { case $1 in parts) echo "'NO_PARTS','ASSIGNED'" ;; inspect) echo "'INSPECT_REQUESTED'" ;; assign) echo "'ASSIGNED'" ;; esac; }
+EP_NLOG() { case $1 in parts) echo 2 ;; *) echo 1 ;; esac; }
+NEWFOR() { local W; W=$(mk $2); if [ "$1" = assign ]; then toChecked $W; fi; echo $W; }
+M=81
+for E in parts inspect assign; do
+  N=$(EP_NAME $E); F=$(EP_FROM $E); TO=$(EP_TO $E); LG=$(EP_LOGS $E)
+  X1=$(NEWFOR $E W$M); X2=$(NEWFOR $E W$((M+1))); X3=$(NEWFOR $E W$((M+2))); M=$((M+3))
+  OPEN
+  R=$(SCHEDCALL $S $E $X1 $TODAY); MID="$(ST $X1)|$(SCH $X1)|$(NLOGS $X1 "$LG")"
+  R2=$(SCHEDCALL $S $E $X1 $TOMORROW)
+  if CLOSED_OK "$R" "$SUP_TODAY" $TODAY $TOMORROW && [ "$MID" = "$F|-|0" ] \
+    && [ "$(code_of "$R2")" = 200 ] && [ "$(ST $X1)|$(SCH $X1)|$(URF $X1)|$(NLOGS $X1 "$LG")" = "$TO|$TOMORROW|-|$(EP_NLOG $E)" ]; then
+    pass "$N วันนี้ → 400 DATE_CLOSED \"$SUP_TODAY\" (firstOpen=พรุ่งนี้ · serverNow/cutoff ในคำตอบ) ใบยัง $F ไม่มีวันนัด ไม่มีประวัติ · ก่อนเวลาปิด ($CUT) นัดพรุ่งนี้ได้ → $TO (ฐานข้อมูล)"
+  else fail "$N วันนี้/พรุ่งนี้ก่อนปิด: $(code_of "$R") $(body_of "$R") · กลาง $MID · $(code_of "$R2") $(err_of "$R2") · $(ST $X1) $(SCH $X1)"; fi
+  CLOSE
+  R=$(SCHEDCALL $S $E $X2 $TOMORROW); MID="$(ST $X2)|$(SCH $X2)|$(NLOGS $X2 "$LG")"
+  R2=$(SCHEDCALL $S $E $X2 $D2)
+  if CLOSED_OK "$R" "$(SUP_TMR)" $TOMORROW $D2 && [ "$MID" = "$F|-|0" ] \
+    && [ "$(code_of "$R2")" = 200 ] && [ "$(ST $X2)|$(SCH $X2)" = "$TO|$D2" ]; then
+    pass "$N หลังเวลาปิด ($CUT) พรุ่งนี้ → 400 \"$(SUP_TMR)\" firstOpen=มะรืน · ใบไม่ขยับ · เลือกมะรืนแทนได้ทันที → $TO (ฐานข้อมูล)"
+  else fail "$N พรุ่งนี้หลังปิด: $(code_of "$R") $(body_of "$R") · กลาง $MID · $(code_of "$R2") $(err_of "$R2") · $(ST $X2) $(SCH $X2)"; fi
+  R=$(SCHEDCALL $S $E $X3 $TOMORROW ',"urgent":true')
+  R2=$(SCHEDCALL $S $E $X3 $YESTERDAY ',"urgent":true')
+  if CLOSED_OK "$R" "$(SUP_TMR)" $TOMORROW $D2 && [ "$(err_of "$R2")|$(BCODE "$R2")|$(code_of "$R2")" = "$PAST_TEXT|none|400" ] \
+    && [ "$(ST $X3)|$(SCH $X3)|$(URF $X3)|$(NLOG $X3 URGENT_RELEASE)" = "$F|-|-|0" ]; then
+    pass "$N หัวหน้าภาคส่ง urgent:true มาเองไม่มีผล (ยัง 400 · ไม่มีงานด่วน ไม่มีประวัติ) · เมื่อวาน → \"วันนัดย้อนหลังไม่ได้…\" (เช็คก่อนเวลาปิด ไม่มี code) (ฐานข้อมูล)"
+  else fail "$N urgent ของหัวหน้าภาค/ย้อนหลัง: $(code_of "$R") $(body_of "$R") · $(code_of "$R2") $(body_of "$R2") · $(ST $X3) $(URF $X3)"; fi
+done
 
-echo
-echo "═══ หน้าใบงาน · ดูในฐานะ · บอร์ดแผนงาน · dispatch-watch (ยังไม่ถึงเวลาปิดรับ)"
-RA=$(DET $A $G_TD 'JSON.stringify(d.release)'); RS=$(DET $S $G_TD 'JSON.stringify(d.release)'); RV=$(DET $VA $G_TD 'JSON.stringify(d.release)')
-GOT=$(DET $S $G_TD '[d.release.locked, d.release.deadline, d.cutoff.time, d.isTest, d.urgentReleaseFor, Math.abs(Date.parse(d.serverNow) - Date.now()) < 60000].join("|")')
-[ "$GOT" = "true|$(DL $TODAY $CUT)|$CUT|false||true" ] && [ "$RA" = "$RS" ] && [ "$RS" = "$RV" ] \
-  && [ "$(RW "$LA" $G_TD 'JSON.stringify(r.release)')" = "$RA" ] \
-  && pass "GET /:id ส่ง release/serverNow/cutoff/isTest — แอดมิน · หัวหน้าภาค · ดูในฐานะหัวหน้าภาค · แถวในรายการ ได้ release เดียวกันทุกตัวอักษร" \
-  || fail "หน้าใบงาน: $GOT · A=$RA · S=$RS · VA=$RV"
-PT=$(curl -s "localhost:4000/api/plans/day?date=$TODAY" -H "$(H $A)")
-STOP() { echo "$1" | J "const s=d.lanes.flatMap(l=>l.stops).find(x=>x.id===$2); s ? ($3) : 'missing'"; }
-GOT="$(STOP "$PT" $G_TD 'JSON.stringify(s.release)') / $(STOP "$PT" $G_UR '[s.release.urgent, s.release.locked].join("|")') / $(STOP "$PT" $G_TC 'String(s.release)')"
-[ "$GOT" = "{\"locked\":true,\"urgent\":false,\"deadline\":\"$(DL $TODAY $CUT)\",\"enforced\":true,\"past\":false} / true|false / null" ] \
-  && [ "$(echo "$PT" | J '[d.cutoff.time, Math.abs(Date.parse(d.serverNow) - Date.now()) < 60000].join("|")')" = "$CUT|true" ] \
-  && pass "บอร์ดแผนงาน (/plans/day วันนี้): จุดที่ล็อก release.locked + เส้นตาย · งานด่วนไม่ล็อก · ใบทดสอบ null · ส่ง serverNow/cutoff" \
-  || fail "บอร์ดวันนี้: $GOT"
-PM=$(curl -s "localhost:4000/api/plans/day?date=$TOMORROW" -H "$(H $A)")
-[ "$(STOP "$PM" $G_TM '[s.release.locked, s.release.deadline].join("|")')" = "false|$(DL $TOMORROW $CUT)" ] \
-  && pass "บอร์ดแผนงาน (พรุ่งนี้): ยังไม่ล็อก เส้นตาย = วันนี้ $CUT — บอร์ดพลิกป้ายเองตอนถึงเวลาด้วย serverNow" \
-  || fail "บอร์ดพรุ่งนี้: $(STOP "$PM" $G_TM 'JSON.stringify(s.release)')"
-WS=$(WATCH $S)
-R0=$(echo "$WS" | J 'd.releasedTomorrow')
-NR_LABEL=$(DET $S $G_NR 'd.statusLabel')
-GOT=$(echo "$WS" | J "const n=d.notReady.find(x=>x.id===$G_NR); [d.today, d.tomorrow, d.cutoff.time, n ? [n.status, n.statusLabel, n.stageActor, n.branchCode].join(',') : 'missing', d.notReady.some(x=>x.id===$G_NRT), 'unreleasedTomorrow' in d, 'unconfirmedTomorrow' in d].join('|')")
-[ "$GOT" = "$TODAY|$TOMORROW|$CUT|AWAITING_CONFIRM,$NR_LABEL,ADMIN,C0006|false|false|false" ] \
-  && pass "dispatch-watch (หัวหน้าภาค): notReady มีใบพรุ่งนี้ที่ยังรอแอดมินคอนเฟิร์ม (ขั้น/ป้าย/เจ้าของขั้น) · ใบทดสอบไม่นับ · ไม่มีรายการของแอดมิน" \
-  || fail "watch หัวหน้าภาค: $GOT"
-R=$(CALL $S work-orders/$G_RL/dispatch '{}')
-R1=$(WATCH $S | J 'd.releasedTomorrow')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $G_RL)" = IN_PROGRESS ] && [ "$R1" = "$((R0 + 1))" ] \
-  && pass "ปล่อยงานพรุ่งนี้หนึ่งใบ → releasedTomorrow เพิ่ม 1 ($R0 → $R1 · ฐานข้อมูล IN_PROGRESS)" \
-  || fail "releasedTomorrow: $(code_of "$R") $(err_of "$R") · $R0 → $R1"
-# หัวหน้าภาคอีกคน (ภาคที่ไม่มีสาขา) — แถบเตือนต้องนับเฉพาะใบในขอบเขตตัวเอง ไม่ใช่งานพรุ่งนี้ทั้งบริษัท
-GOT=$(WATCH $SO | J '[d.notReady.length, d.releasedTomorrow, "unreleasedTomorrow" in d].join("|")')
-[ "$GOT" = "0|0|false" ] \
-  && pass "dispatch-watch หัวหน้าภาคภาคอื่น: notReady ว่าง · releasedTomorrow 0 — ใบพรุ่งนี้ของภาคนี้ (รอคอนเฟิร์ม/ปล่อยแล้ว) ไม่รั่วไปอีกภาค" \
-  || fail "watch หัวหน้าภาคภาคอื่น: $GOT"
-WA=$(WATCH $A)
-GOT=$(echo "$WA" | J "const u=d.unreleasedTomorrow.find(x=>x.id===$G_TM); [u ? u.deadline : 'missing', u ? u.supervisors.some(s=>s.name==='$S_NAME' && s.phone==='$SPHONE') : false, d.unconfirmedTomorrow.some(x=>x.id===$G_NR), d.unconfirmedTomorrow.some(x=>x.id===$G_NRT), d.unreleasedTomorrow.some(x=>x.id===$G_RL)].join('|')")
-[ "$GOT" = "$(DL $TOMORROW $CUT)|true|true|false|false" ] \
-  && pass "dispatch-watch (แอดมิน): unreleasedTomorrow มีใบพรุ่งนี้ที่ยังไม่ปล่อย + เส้นตาย + ชื่อ/เบอร์หัวหน้าภาค · unconfirmedTomorrow มีใบรอคอนเฟิร์ม · ใบทดสอบ/ใบที่ปล่อยแล้วไม่นับ" \
-  || fail "watch แอดมิน: $GOT"
-R=$(curl -s localhost:4000/api/work-orders/dispatch-watch -H "$(H $T)")
-[ "$(echo "$R" | J 'd.error')" = "ดูได้เฉพาะแอดมินกับหัวหน้าภาค" ] && [ "$(CODE localhost:4000/api/work-orders/dispatch-watch -H "$(H $T)")" = 403 ] \
-  && [ "$(CODE localhost:4000/api/work-orders/dispatch-watch -H "$(H $AR)")" = 403 ] \
-  && pass "dispatch-watch: ช่าง 403 \"ดูได้เฉพาะแอดมินกับหัวหน้าภาค\" · ทีม Area 403 (ไม่อยู่ในรายการอนุญาต)" || fail "watch ช่าง/Area: $R"
-# ส่งกลับ "คอนเฟิร์มวันใหม่" ตามปกติก่อนเส้นตาย — ไม่ใช่ใบที่ล็อก แอดมินเห็นในกล่องส่งกลับเดิม ไม่ใช่หัวข้อเลยเวลาปล่อยงาน
-POST $A work-orders/$G_DN/reschedule "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอเลื่อน\"}" >/dev/null
-R=$(CALL $S work-orders/$G_DN/decline-new-date '{"reason":"ทีมเต็มวันนั้น"}')
-[ "$(code_of "$R")" = 200 ] && [ "$(ST $G_DN)" = AWAITING_CONFIRM ] \
-  && [ "$(RW "$(LIST $A INBOX)" $G_DN 'String(r.releaseDeclined)')" = null ] \
-  && [ "$(DB "select \"scheduledAt\"::date from \"WorkOrder\" where id=$G_DN")" = "$TOMORROW" ] \
-  && pass "ส่งกลับก่อนเส้นตาย (ใบที่แอดมินเลื่อนเป็นพรุ่งนี้) → releaseDeclined = null — ไม่ใช่ใบที่ล็อก อยู่กล่องส่งกลับเดิม (ฐานข้อมูล AWAITING_CONFIRM วันนัดพรุ่งนี้)" \
-  || fail "ส่งกลับก่อนเส้นตาย: $(code_of "$R") $(err_of "$R") · $(ST $G_DN)"
-# ให้ "ก่อนเส้นตาย" ยังจริงหลัง CLOSE (เวลาปิดรับ "ปิด" = 2 นาทีก่อนตอนนั้น ส่งกลับเมื่อครู่จะกลายเป็นหลังเส้นตาย) — ถอยทั้งใบให้ลำดับเดิม
-DB "update \"WorkOrderLog\" set \"createdAt\"=\"createdAt\" - interval '1 hour' where \"workOrderId\"=$G_DN" >/dev/null
-
-echo
-echo "═══ ถึงเวลาปิดรับ: กล่องงานแอดมินรับใบที่เพิ่งล็อก · ของหัวหน้าภาคไม่ขยับ · /version ขยับเอง"
-CUT0=$CUT
-A_IC0=$(ICOUNT $A); S_IC0=$(ICOUNT $S); S_IDS0=$(LIST $S INBOX | J 'd.rows.map(r=>r.id).sort((a,b)=>a-b).join(",")')
-A_IDS0=$(LIST $A INBOX | J 'd.rows.map(r=>r.id).join(",")')
-AV0=$(VER $A); SV0=$(VER $S)
 CLOSE
+XR=$(mk W90); XTC=$(POST $A work-orders/$XR/test-copy '{}' | J 'd.id')
+R=$(SCHEDCALL $S parts $XTC $TODAY); R2=$(SCHEDCALL $S parts $XR $TODAY)
+[ "$(code_of "$R")" = 200 ] && [ "$(DB "select \"isTest\"::text||'|'||status||'|'||\"scheduledAt\"::date||'|'||coalesce(\"urgentReleaseFor\"::text,'-') from \"WorkOrder\" where id=$XTC")" = "true|AWAITING_CONFIRM|$TODAY|-" ] \
+  && CLOSED_OK "$R2" "$SUP_TODAY" $TODAY $D2 && [ "$(ST $XR)" = NEW ] \
+  && pass "ใบทดสอบ (คัดลอกที่ขั้น NEW) หัวหน้าภาคนัดวันนี้ได้ ไม่มีงานด่วน · ใบจริงต้นฉบับวันเดียวกัน 400 (ข้อ 15 · ฐานข้อมูล)" \
+  || fail "ใบทดสอบนัดวันนี้: $(code_of "$R") $(err_of "$R") · ต้นฉบับ $(code_of "$R2") $(err_of "$R2")"
+# อ่านเวลาปิดสด: GET ตั้งค่าตอนเปิด (ค่าที่จำไว้ 30 วิ = เปิด) แล้วใส่แถว "ปิด" ทาง SQL โดยไม่เรียก GET — ปุ่มนัดวันต้องเห็นทันที
+OPEN
+XF=$(mk W91); toChecked $XF
+DB "insert into \"AppSetting\" (key,value) values ('dispatchCutoff','$(BKK -2)')" >/dev/null; CUT=$(LATEST | cut -d'|' -f1)
+R=$(SCHEDCALL $S assign $XF $TOMORROW)
+CLOSED_OK "$R" "$(SUP_TMR)" $TOMORROW $D2 && [ "$(ST $XF)" = PARTS_CHECKED ] \
+  && pass "ปุ่มนัดวันอ่านเวลาปิดสด (ไม่ใช้ค่าที่จำไว้ 30 วิ): เปลี่ยนเป็น $CUT ทาง SQL โดยไม่มี GET → นัดพรุ่งนี้ 400 ทันที (ฐานข้อมูล)" \
+  || fail "อ่านเวลาปิดสด: $(code_of "$R") $(err_of "$R")"
+GETCUT $A >/dev/null
+# เวลาเริ่มใช้กฎ = ตอนนี้ → เส้นตายของวันนี้/พรุ่งนี้อยู่ก่อนเริ่มกฎ ต้องนัดได้ (ข้อ 14 — ข้อนี้ FAIL ถ้าเซิร์ฟเวอร์ไม่ดู since)
+# XS3 นัดพรุ่งนี้อีกใบหลังคืน since เป็น 30 วันก่อน ต้อง 400 ในบรรทัดเดียวกัน — "นัดได้ 200" อย่างเดียวผ่านบนโค้ด PR #165
+# ด้วย (ตอนนั้นการนัดวันไม่มีกฎ) จึงพิสูจน์อะไรไม่ได้ ต้องเห็นทั้ง since ใหม่เปิดวัน และ since ปกติปิดวันเดียวกัน
+XS1=$(mk W92); XS2=$(mk W93); toChecked $XS2; XS3=$(mk W117); toChecked $XS3
+DB "update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') where id=$SEED_ID" >/dev/null
+CLOSE
+R=$(SCHEDCALL $S parts $XS1 $TODAY); R2=$(SCHEDCALL $S assign $XS2 $TOMORROW)
+DB "update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') - interval '30 days' where id=$SEED_ID" >/dev/null
+GETCUT $A >/dev/null; SINCE_PIN=$(SINCEISO)
+R3=$(SCHEDCALL $S assign $XS3 $TOMORROW)
+[ "$(code_of "$R")|$(code_of "$R2")" = "200|200" ] && [ "$(ST $XS1)|$(SCH $XS1)|$(ST $XS2)|$(SCH $XS2)" = "AWAITING_CONFIRM|$TODAY|AWAITING_CONFIRM|$TOMORROW" ] \
+  && CLOSED_OK "$R3" "$(SUP_TMR)" $TOMORROW $D2 && [ "$(ST $XS3)|$(SCH $XS3)" = "PARTS_CHECKED|-" ] \
+  && pass "เวลาเริ่มใช้กฎเพิ่งเริ่ม (ฐานใหม่/วัน deploy): วันนี้และพรุ่งนี้หลังเวลาปิดยังนัดได้ — ไม่ปิดย้อนหลัง · คืน since เป็น 30 วันก่อน พรุ่งนี้ 400 ทันที (ข้อ 14 · ฐานข้อมูล)" \
+  || fail "since: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") $(err_of "$R2") · since ปกติ $(code_of "$R3") $(err_of "$R3") $(ST $XS3) $(SCH $XS3)"
+
+echo
+echo "═══ แอดมินกดแทนที่ขั้นนัดวัน: วันที่ปิดต้องติ๊ก \"แก้เป็นงานด่วนไปพร้อมกัน\" (ข้อ 2 · 4)"
+CLOSE
+AP=$(mk W94)
+R=$(SCHEDCALL $A parts $AP $TODAY); MID="$(ST $AP)|$(SCH $AP)"
+R2=$(SCHEDCALL $A parts $AP $TODAY ',"urgent":true')
+CLOSED_OK "$R" "$ADM_TODAY" $TODAY $D2 && [ "$MID" = "NEW|-" ] && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $AP)|$(SCH $AP)|$(URF $AP)" = "AWAITING_CONFIRM|$TODAY|$TODAY" ] \
+  && [ "$(SEQ $AP "'NO_PARTS','ASSIGNED','URGENT_RELEASE'")" = "NO_PARTS,ASSIGNED,URGENT_RELEASE|3" ] \
+  && [ "$(LOGROW $AP URGENT_RELEASE)" = "ตอนนัดวันแทนหัวหน้าภาค · ไม่ได้ใส่เหตุผล · นัด $(VT $TODAY)|schedule|-|$TODAY|A001|AWAITING_CONFIRM" ] \
+  && pass "แอดมิน /parts จ่ายงานวันนี้: ไม่ติ๊ก → 400 \"$ADM_TODAY\" · ติ๊ก → 200 urgentReleaseFor=วันนี้ ประวัติ ไม่ใช้อะไหล่→จ่ายงาน→แก้เป็นงานด่วน เวลาไม่ซ้ำ via=schedule (ฐานข้อมูล)" \
+  || fail "แอดมิน /parts วันนี้: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") $(err_of "$R2") · $(SEQ $AP "'NO_PARTS','ASSIGNED','URGENT_RELEASE'") · $(LOGROW $AP URGENT_RELEASE)"
+AI=$(mk W95)
+R=$(SCHEDCALL $A inspect $AI $TOMORROW)
+R2=$(SCHEDCALL $A inspect $AI $TOMORROW ',"urgent":true,"note":"ร้านต้องการพรุ่งนี้"')
+CLOSED_OK "$R" "$(ADM_TMR)" $TOMORROW $D2 && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $AI)|$(SCH $AI)|$(URF $AI)" = "INSPECT_CONFIRM|$TOMORROW|$TOMORROW" ] \
+  && [ "$(SEQ $AI "'INSPECT_REQUESTED','URGENT_RELEASE'")" = "INSPECT_REQUESTED,URGENT_RELEASE|2" ] \
+  && [ "$(LOGROW $AI URGENT_RELEASE)" = "ตอนนัดวันแทนหัวหน้าภาค · ร้านต้องการพรุ่งนี้ · นัด $(VT $TOMORROW)|schedule|ร้านต้องการพรุ่งนี้|$TOMORROW|A001|INSPECT_CONFIRM" ] \
+  && pass "แอดมินส่งตรวจพรุ่งนี้หลังเวลาปิด: ไม่ติ๊ก → 400 \"$(ADM_TMR)\" · ติ๊ก → ส่งตรวจ + แก้เป็นงานด่วน (เหตุผล = หมายเหตุในฟอร์ม · ฐานข้อมูล)" \
+  || fail "แอดมิน /inspect-request: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") $(err_of "$R2") · $(LOGROW $AI URGENT_RELEASE)"
+AA=$(mk W96); toChecked $AA
+R=$(SCHEDCALL $A assign $AA $TODAY ',"urgent":true')
+[ "$(code_of "$R")" = 200 ] && [ "$(ST $AA)|$(SCH $AA)|$(URF $AA)" = "AWAITING_CONFIRM|$TODAY|$TODAY" ] \
+  && [ "$(SEQ $AA "'ASSIGNED','URGENT_RELEASE'")" = "ASSIGNED,URGENT_RELEASE|2" ] && [ "$(LOGROW $AA URGENT_RELEASE | cut -d'|' -f2,4)" = "schedule|$TODAY" ] \
+  && pass "แอดมิน /assign นัดวันนี้ + ติ๊ก → นัดได้ urgentReleaseFor=วันนี้ ประวัติ จ่ายงาน→แก้เป็นงานด่วน (ฐานข้อมูล)" \
+  || fail "แอดมิน /assign วันนี้: $(code_of "$R") $(err_of "$R") · $(SEQ $AA "'ASSIGNED','URGENT_RELEASE'")"
+AO=$(mk W97); toChecked $AO
+R=$(SCHEDCALL $A assign $AO $TODAY); R2=$(SCHEDCALL $A assign $AO $D2 ',"urgent":true')
+CLOSED_OK "$R" "$ADM_TODAY" $TODAY $D2 && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $AO)|$(SCH $AO)|$(URF $AO)|$(NLOG $AO URGENT_RELEASE)" = "AWAITING_CONFIRM|$D2|-|0" ] \
+  && pass "แอดมินนัดวันนี้ไม่ติ๊ก → 400 · ติ๊กบนวันที่ยังเปิด (มะรืน) → ไม่สนใจ: ไม่ตั้งงานด่วน ไม่ลงประวัติ (ฐานข้อมูล)" \
+  || fail "แอดมินติ๊กวันเปิด: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") · $(URF $AO) $(NLOG $AO URGENT_RELEASE)"
+
+echo
+echo "═══ คำขอนัดด่วน: หัวหน้าภาคขอ · ยกเลิก · แอดมินตอบ (ข้อ 2 · 3)"
+Q1=$(mk W98); toChecked $Q1
+Q2=$(mk W99); toChecked $Q2
+QA=$(mk W100); rel $QA $D2
+QT=$(POST $A work-orders/$(mk W101)/test-copy '{}' | J 'd.id')
+[ "$(ST $Q1) $(ST $Q2) $(ST $QA) $(ST $QT) $(DB "select \"isTest\" from \"WorkOrder\" where id=$QT")" = "PARTS_CHECKED PARTS_CHECKED ASSIGNED NEW t" ] \
+  || fail "เตรียมใบคำขอ: $(ST $Q1) $(ST $Q2) $(ST $QA) $(ST $QT)"
+Q1C=$(CODEOF $Q1); QAC=$(CODEOF $QA)
+REQ() { CALL $1 work-orders/$2/urgent-request "$3"; }
+R=$(REQ $S $QA "{\"day\":\"$TOMORROW\"}")
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|none" ] \
+  && [ "$(err_of "$R")" = "$QAC อยู่ขั้น \"$(LABEL $QA)\" — ขอแก้เป็นงานด่วนได้เฉพาะตอนนัดวัน (นัดวันเข้า / ไม่ใช้อะไหล่จ่ายงาน / ส่งตรวจ)" ] \
+  && [ "$(NLOG $QA URGENT_REQUESTED)" = 0 ] \
+  && pass "ขอนัดด่วนที่ขั้นรอปล่อยงาน → 409 ข้อความขั้น (ไม่มี code — ขั้นเปลี่ยนจริง แอปปิดฟอร์มตามเดิม) ไม่มีประวัติ (ฐานข้อมูล)" \
+  || fail "ขอที่ขั้นปล่อยงาน: $(code_of "$R") $(body_of "$R")"
+OPEN
+R=$(REQ $S $Q1 "{\"day\":\"$TOMORROW\"}")
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R")" = "$Q1C ยังนัด $(SHORT $TOMORROW) ได้ — ไม่ต้องขอแอดมิน" ] \
+  && [ "$(NLOG $Q1 URGENT_REQUESTED)" = 0 ] \
+  && pass "ก่อนเวลาปิด ($CUT) ขอพรุ่งนี้ → 409 URGENT_ASK_STATE \"ยังนัด … ได้ — ไม่ต้องขอแอดมิน\" ไม่มีประวัติ (ฐานข้อมูล)" \
+  || fail "ขอตอนยังเปิด: $(code_of "$R") $(body_of "$R")"
+CLOSE
+SINCE0=$(RW "$(LIST $S ACTIVE)" $Q1 'r.stageSince'); IC0=$(ICOUNT $A)
+R=$(REQ $S $Q1 "{\"day\":\"$TOMORROW\",\"note\":\"ร้านปิดมะรืน\"}")
+[ "$(code_of "$R")" = 200 ] && [ "$(ST $Q1)" = PARTS_CHECKED ] && [ "$(NLOG $Q1 URGENT_REQUESTED)" = 1 ] \
+  && [ "$(LOGROW $Q1 URGENT_REQUESTED | cut -d'|' -f1,4,5,6)" = "ร้านต้องการ $(VT $TOMORROW) — ร้านปิดมะรืน|$TOMORROW|S001|PARTS_CHECKED" ] \
+  && [ "$(LOGMETA $Q1 URGENT_REQUESTED)" = "$TOMORROW|ร้านปิดมะรืน" ] \
+  && [ "$(RW "$(LIST $S ACTIVE)" $Q1 'r.stageSince')" = "$SINCE0" ] \
+  && pass "หลังเวลาปิด ($CUT) ขอพรุ่งนี้ → 200 ประวัติ \"ร้านต้องการ <วัน> — <ข้อความ>\" meta.day/note · ใบอยู่ขั้นเดิม \"ค้างขั้นนี้มา\" ไม่เริ่มนับใหม่ (ฐานข้อมูล)" \
+  || fail "ขอนัดด่วน: $(code_of "$R") $(err_of "$R") · $(ST $Q1) · $(LOGROW $Q1 URGENT_REQUESTED) · $(LOGMETA $Q1 URGENT_REQUESTED)"
+R=$(REQ $S $Q1 "{\"day\":\"$TOMORROW\"}")
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R")" = "ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน" ] && [ "$(NLOG $Q1 URGENT_REQUESTED)" = 1 ] \
+  && pass "ขอซ้ำระหว่างรอ → 409 URGENT_ASK_STATE \"ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน\" ประวัติไม่ซ้ำ (ฐานข้อมูล)" || fail "ขอซ้ำ: $(code_of "$R") $(body_of "$R")"
+R1=$(REQ $S $Q2 '{}'); R2=$(REQ $S $Q2 "{\"day\":\"$YESTERDAY\"}")
+LONG=$(node -e 'console.log("ก".repeat(301))')
+R3=$(REQ $S $Q2 "{\"day\":\"$TOMORROW\",\"note\":\"$LONG\"}"); R4=$(REQ $S $QT "{\"day\":\"$TODAY\"}")
+GOT="$(code_of "$R1") $(err_of "$R1") · $(code_of "$R2") $(err_of "$R2") · $(code_of "$R3") $(err_of "$R3") · $(code_of "$R4") $(err_of "$R4")"
+[ "$GOT" = "400 ต้องระบุวันที่ร้านต้องการ · 400 $PAST_TEXT · 400 ข้อความยาวได้ไม่เกิน 300 ตัวอักษร · 400 ใบทดสอบไม่ติดเวลาปิดนัด — นัดวันไหนก็ได้" ] \
+  && [ "$(NLOG $Q2 URGENT_REQUESTED)|$(NLOG $QT URGENT_REQUESTED)" = "0|0" ] \
+  && pass "ไม่ระบุวัน · วันย้อนหลัง · ข้อความเกิน 300 · ใบทดสอบ → 400 ข้อความไทยตรงทุกตัว ไม่มีประวัติ (ฐานข้อมูล)" || fail "ขอไม่ถูกต้อง: $GOT"
+GOT=""; for who in T AR PA VA SO; do GOT="$GOT $(PC ${!who} work-orders/$Q2/urgent-request "{\"day\":\"$TOMORROW\"}")"; done
+R=$(REQ $T $Q2 "{\"day\":\"$TOMORROW\"}")
+[ "$GOT" = " 403 403 403 403 403" ] && [ "$(err_of "$R")" = "ขอแก้เป็นงานด่วนได้เฉพาะหัวหน้าภาค — แอดมินกด “แก้เป็นงานด่วน” ได้เลย" ] && [ "$(NLOG $Q2 URGENT_REQUESTED)" = 0 ] \
+  && pass "ช่าง · ทีม Area · Admin Spare Part · ดูในฐานะหัวหน้าภาค · หัวหน้าภาคต่างภาค ขอไม่ได้ (403) ไม่มีประวัติ (ฐานข้อมูล)" || fail "สิทธิ์ขอ:$GOT · $(err_of "$R")"
+ASKJ="{\"day\":\"$TOMORROW\",\"at\":\"$(LOGISO $Q1 URGENT_REQUESTED)\",\"note\":\"ร้านปิดมะรืน\",\"byName\":\"$S_NAME\"}"
 LAI=$(LIST $A INBOX)
-A_IC1=$(ICOUNT $A); S_IC1=$(ICOUNT $S); S_IDS1=$(LIST $S INBOX | J 'd.rows.map(r=>r.id).sort((a,b)=>a-b).join(",")')
-AV1=$(VER $A); SV1=$(VER $S)
-# ใบพรุ่งนี้ที่ควรล็อกตอนนี้ (ฐานข้อมูล): ขั้นปล่อยงาน · ไม่ใช่ใบทดสอบ · ไม่ได้แก้เป็นงานด่วนให้วันนั้น — นับเฉพาะที่ยังไม่อยู่ในกล่องก่อนหน้า
-TOM_IDS=$(DB "select coalesce(string_agg(id::text, ',' order by id),'') from \"WorkOrder\" where status in ('ASSIGNED','INSPECT_DISPATCH') and not \"isTest\"
-  and \"scheduledAt\" >= '$TOMORROW' and \"scheduledAt\" < '$D2' and (\"urgentReleaseFor\" is null or \"urgentReleaseFor\"::date <> \"scheduledAt\"::date)")
-CHK=$(echo "$LAI" | J "
-  const before = new Set('$A_IDS0'.split(',').filter(Boolean).map(Number)), now = d.rows.map(r => r.id);
-  const added = now.filter(i => !before.has(i)).sort((a, b) => a - b), gone = [...before].filter(i => !now.includes(i));
-  const expect = '$TOM_IDS'.split(',').filter(Boolean).map(Number).filter(i => !before.has(i)).sort((a, b) => a - b);
-  [added.join(','), expect.join(','), gone.length, now.length, d.counts.INBOX, expect.includes($G_TM) && expect.includes($G_OD)].join('|')")
-IFS='|' read -r ADDED EXPECTED GONE NROWS NCOUNT HASBOTH <<< "$CHK"
-[ "$ADDED" = "$EXPECTED" ] && [ "$GONE" = 0 ] && [ "$HASBOTH" = true ] && [ "$((A_IC1 - A_IC0))" = "$(echo "$EXPECTED" | tr ',' '\n' | grep -c .)" ] \
-  && [ "$A_IC1" = "$NROWS" ] && [ "$NCOUNT" = "$NROWS" ] \
-  && pass "เลยเวลาปิดรับ ($CUT0 → $CUT): ตัวเลขกล่องงานแอดมิน $A_IC0 → $A_IC1 = ใบพรุ่งนี้ที่ยังไม่ปล่อยพอดี (ฐานข้อมูล · รวมใบที่วันนัดไม่ตรงเที่ยงคืน UTC) · ตัวเลขเมนู = จำนวนแถวในกล่อง" \
-  || fail "กล่องแอดมินตอนถึงเวลาปิดรับ: เพิ่ม=[$ADDED] ควรเป็น=[$EXPECTED] หาย=$GONE · นับ $A_IC0→$A_IC1 แถว=$NROWS counts=$NCOUNT"
-[ "$S_IC1" = "$S_IC0" ] && [ "$S_IDS1" = "$S_IDS0" ] \
-  && pass "ตัวเลขกล่องงานหัวหน้าภาคไม่ขยับตอนถึงเวลาปิดรับ ($S_IC0 · ใบชุดเดิมทุกใบ — ข้อ 5)" || fail "กล่องหัวหน้าภาคเปลี่ยน: $S_IC0 → $S_IC1"
-# แอดมินต่อท้าย "เวลาปิดรับ:เลยแล้วหรือยัง" (กล่องมีใบเข้าตอนถึงเวลา แม้ไม่มีใครเขียนฐานข้อมูล) · คนอื่นลายนิ้วมือเดิมทุกตัวอักษร —
-# ลายนิ้วมือที่เปลี่ยนขึ้นปุ่ม "มีอัปเดต" ใส่ให้หัวหน้าภาคด้วย = ปุ่มอัปเดตปลอมทุกวันตอนถึงเวลา ทั้งที่กล่องไม่ขยับ (ข้อข้างบน)
-[ "${AV0##*|}" = "$CUT0:0" ] && [ "${AV1##*|}" = "$CUT:1" ] && [ "$(echo "$AV0" | tr -cd '|' | wc -c)" = 4 ] \
-  && [ "$SV0" = "$SV1" ] && [ "$(echo "$SV0" | tr -cd '|' | wc -c)" = 3 ] \
-  && pass "/version: แอดมินต่อท้าย \"เวลาปิดรับ:เลยแล้วหรือยัง\" ($CUT0:0 → $CUT:1) · หัวหน้าภาคไม่ต่อท้าย ลายนิ้วมือเดิมทุกตัวอักษรตอนถึงเวลา (ไม่มีปุ่มอัปเดตปลอม)" \
-  || fail "/version: แอดมิน $AV0 → $AV1 · หัวหน้าภาค $SV0 → $SV1"
-GOT=$(RW "$LAI" $G_TM '[x.locked, x.lockedSince, x.past].join("|")')
-[ "$GOT" = "true|$(DL $TOMORROW $CUT)|false" ] \
-  && pass "ใบที่มาถึงก่อนเส้นตาย: ล็อกตั้งแต่ = เส้นตาย (วันนี้ $CUT)" || fail "lockedSince ใบที่มาก่อนเส้นตาย: $GOT"
-[ "$(RW "$(LIST $PA INBOX)" $G_TD 'true')" = missing ] && [ "$(RW "$(LIST $PA INBOX)" $G_TM 'true')" = missing ] \
-  && pass "กล่องงาน Admin Spare Part ไม่รับใบที่ล็อก (มีแต่งานตรวจเคลม)" || fail "Admin Spare Part เห็นใบที่ล็อกในกล่อง"
-POST $A work-orders/$G_UT/urgent-release '{}' >/dev/null
-WA=$(WATCH $A)
-GOT=$(echo "$WA" | J "[d.unreleasedTomorrow.some(x=>x.id===$G_TM), d.unreleasedTomorrow.some(x=>x.id===$G_UT), d.unconfirmedTomorrow.some(x=>x.id===$G_NR)].join('|')")
-UI=$(DET $A $G_UT '[d.urgentInfo.via, d.urgentInfo.reason === null, d.release.urgent].join("|")')
-[ "$(URF $G_UT)" = "$TOMORROW" ] && [ "$GOT" = "false|false|true" ] && [ "$UI" = "direct|true|true" ] \
-  && pass "dispatch-watch หลังปิดรับ: ใบที่ล็อกย้ายออกจาก unreleasedTomorrow · งานด่วนไม่ต้องเตือน · urgentInfo ไม่ใส่เหตุผล = reason null" \
-  || fail "watch หลังปิดรับ: $GOT · $UI · urgent=$(URF $G_UT)"
+[ "$(ICOUNT $A)" = "$((IC0 + 1))" ] && [ "$(RW "$LAI" $Q1 'JSON.stringify(r.urgentAsk)')" = "$ASKJ" ] \
+  && [ "$(echo "$LAI" | J "d.rows.find(w=>w.id===$Q1).waitingOnSupervisors.some(s=>s.name==='$S_NAME' && s.phone==='$SPHONE')")" = true ] \
+  && [ "$(DET $A $Q1 'JSON.stringify(d.urgentAsk)')" = "$ASKJ" ] \
+  && pass "กล่องงานแอดมิน: ตัวเลข +1 ($IC0 → $((IC0 + 1))) · แถวมี urgentAsk {วัน · เวลา = ประวัติ · ข้อความ · ชื่อหัวหน้าภาค} + เบอร์หัวหน้าภาค · หน้าใบงานเหมือนกัน (ฐานข้อมูล)" \
+  || fail "กล่องแอดมิน: $(ICOUNT $A) (เดิม $IC0) · $(RW "$LAI" $Q1 'JSON.stringify(r.urgentAsk)') ≠ $ASKJ"
+LS=$(LIST $S INBOX)
+[ "$(RW "$LS" $Q1 'JSON.stringify(r.urgentAsk)')" = "$ASKJ" ] && [ "$(DET $S $Q1 'JSON.stringify(d.urgentAsk)')" = "$ASKJ" ] \
+  && [ "$(RW "$LS" $Q1 '!r.waitingOnSupervisors.some(s=>"phone" in s)')" = true ] && [ "$(RW "$LS" $Q2 'String(r.urgentAsk)')" = null ] \
+  && pass "หัวหน้าภาค: แถวในกล่องและหน้าใบงานมี urgentAsk เดียวกัน (ชิป \"ขอนัดด่วน … แล้ว · รอแอดมิน\") · ไม่มีเบอร์ · ใบที่ไม่ได้ขอ = null" \
+  || fail "urgentAsk หัวหน้าภาค: $(RW "$LS" $Q1 'JSON.stringify(r.urgentAsk)')"
+R=$(CALL $S work-orders/$Q1/urgent-request/cancel '{}'); R2=$(CALL $S work-orders/$Q1/urgent-request/cancel '{}')
+[ "$(code_of "$R")" = 200 ] && [ "$(LOGMETA $Q1 URGENT_REQUEST_CANCELLED)" = "$TOMORROW|-" ] && [ "$(ICOUNT $A)" = "$IC0" ] \
+  && [ "$(RW "$(LIST $A INBOX)" $Q1 'true')" = missing ] && [ "$(DET $S $Q1 'String(d.urgentAsk)')" = null ] \
+  && [ "$(code_of "$R2")|$(BCODE "$R2")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R2")" = "ไม่มีคำขอที่รอแอดมินแล้ว — แอดมินอาจแก้เป็นงานด่วนหรือตอบไปแล้ว" ] \
+  && [ "$(NLOG $Q1 URGENT_REQUEST_CANCELLED)" = 1 ] \
+  && pass "ยกเลิกคำขอ → ประวัติ meta.day · ออกจากกล่องแอดมิน (ตัวเลขกลับ $IC0) · ยกเลิกซ้ำ → 409 URGENT_ASK_STATE ข้อความใหม่ (ไม่มี \"ลองรีเฟรช\") (ฐานข้อมูล)" \
+  || fail "ยกเลิก: $(code_of "$R") $(err_of "$R") · $(ICOUNT $A) · $(code_of "$R2") $(body_of "$R2")"
+REQ $S $Q1 "{\"day\":\"$TOMORROW\"}" >/dev/null
+R1=$(CALL $S work-orders/$Q1/urgent-request/answer '{"note":"ร้านรอได้"}'); R2=$(CALL $A work-orders/$Q1/urgent-request/answer '{"note":"  "}')
+R=$(CALL $A work-orders/$Q1/urgent-request/answer '{"note":"ร้านรอได้ถึงมะรืน"}'); R3=$(CALL $A work-orders/$Q1/urgent-request/answer '{"note":"ซ้ำ"}')
+ANSJ="{\"day\":\"$TOMORROW\",\"at\":\"$(LOGISO $Q1 URGENT_REQUEST_ANSWERED)\",\"note\":\"ร้านรอได้ถึงมะรืน\",\"byName\":\"$A_NAME\"}"
+[ "$(code_of "$R1") $(err_of "$R1")" = "403 ตอบคำขอนัดด่วนได้เฉพาะแอดมิน" ] && [ "$(code_of "$R2") $(err_of "$R2")" = "400 ต้องบอกหัวหน้าภาคว่าทำไม เช่น ร้านรอได้ถึงมะรืน" ] \
+  && [ "$(code_of "$R")" = 200 ] && [ "$(NLOG $Q1 URGENT_REQUEST_ANSWERED)" = 1 ] && [ "$(ST $Q1)" = PARTS_CHECKED ] \
+  && [ "$(LOGROW $Q1 URGENT_REQUEST_ANSWERED | cut -d'|' -f1,5)" = "ร้านรอได้ถึงมะรืน · คำขอนัด $(VT $TOMORROW)|A001" ] && [ "$(LOGMETA $Q1 URGENT_REQUEST_ANSWERED)" = "$TOMORROW|ร้านรอได้ถึงมะรืน" ] \
+  && [ "$(ICOUNT $A)" = "$IC0" ] && [ "$(DET $S $Q1 'JSON.stringify(d.urgentAnswer)')" = "$ANSJ" ] && [ "$(DET $S $Q1 'String(d.urgentAsk)')" = null ] \
+  && [ "$(code_of "$R3")|$(BCODE "$R3")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R3")" = "ไม่มีคำขอนัดด่วนที่รออยู่แล้ว — หัวหน้าภาคอาจยกเลิกหรือนัดวันอื่นไปแล้ว" ] \
+  && pass "แอดมินตอบคำขอ: หัวหน้าภาคตอบเองไม่ได้ (403) · ข้อความว่าง 400 · ตอบแล้วคำขอปิด (กล่องกลับ $IC0) หัวหน้าภาคเห็น urgentAnswer · ตอบซ้ำ 409 URGENT_ASK_STATE (ฐานข้อมูล)" \
+  || fail "ตอบคำขอ: $(code_of "$R1") $(err_of "$R1") · $(code_of "$R2") $(err_of "$R2") · $(code_of "$R") $(err_of "$R") · $(DET $S $Q1 'JSON.stringify(d.urgentAnswer)') · $(code_of "$R3") $(body_of "$R3")"
+[ "$(RW "$(LIST $S INBOX)" $Q1 '"urgentAnswer" in r')" = false ] \
+  && pass "urgentAnswer อยู่เฉพาะหน้าใบงาน — แถวในรายการไม่มีช่องนี้" || fail "urgentAnswer หลุดเข้ารายการ"
+# วันที่ขอผ่านไปแล้ว = คำขอตาย: ไม่อยู่ในกล่อง และขอใหม่ได้ · คำตอบของวันที่ผ่านไปแล้วไม่ค้างในฟอร์ม
+R=$(REQ $S $Q1 "{\"day\":\"$TOMORROW\"}")
+DB "update \"WorkOrderLog\" set meta=jsonb_set(meta,'{day}','\"$YESTERDAY\"') where id=(select max(id) from \"WorkOrderLog\" where \"workOrderId\"=$Q1 and action='URGENT_REQUESTED')" >/dev/null
+GOT="$(code_of "$R") · $(DET $S $Q1 'String(d.urgentAnswer)') · กล่อง $(RW "$(LIST $A INBOX)" $Q1 'true') · $(ICOUNT $A) · $(DET $A $Q1 'String(d.urgentAsk)')"
+R2=$(REQ $S $Q1 "{\"day\":\"$TOMORROW\"}")
+[ "$GOT" = "200 · null · กล่อง missing · $IC0 · null" ] && [ "$(code_of "$R2")" = 200 ] && [ "$(ICOUNT $A)" = "$((IC0 + 1))" ] \
+  && pass "ขอใหม่หลังแอดมินตอบได้ (คำตอบเก่าหายจากฟอร์ม) · คำขอที่วันผ่านไปแล้ว (meta.day = เมื่อวานทาง SQL) ไม่อยู่ในกล่อง/ไม่นับ และขอใหม่ได้ (ฐานข้อมูล)" \
+  || fail "คำขอวันผ่าน: $GOT · ขอใหม่ $(code_of "$R2") $(err_of "$R2")"
+CALL $A work-orders/$Q1/urgent-request/answer '{"note":"ทีมพรุ่งนี้เต็ม"}' >/dev/null
+A1=$(DET $S $Q1 'd.urgentAnswer && d.urgentAnswer.note')
+DB "update \"WorkOrderLog\" set meta=jsonb_set(meta,'{day}','\"$YESTERDAY\"') where id=(select max(id) from \"WorkOrderLog\" where \"workOrderId\"=$Q1 and action='URGENT_REQUEST_ANSWERED')" >/dev/null
+[ "$A1" = "ทีมพรุ่งนี้เต็ม" ] && [ "$(DET $S $Q1 'String(d.urgentAnswer)')" = null ] \
+  && pass "คำตอบของแอดมินที่วันที่ขอผ่านไปแล้ว (meta.day = เมื่อวาน) → หน้าใบงานไม่ส่ง urgentAnswer (ไม่ค้างในฟอร์มนัดวัน)" || fail "คำตอบวันผ่าน: $A1 · $(DET $S $Q1 'JSON.stringify(d.urgentAnswer)')"
+# วันนี้ขอได้ทุกเวลา (ข้อ 3 — วันนี้ปิดตลอด) · คำขอทีละหนึ่งต่อใบ
+OPEN
+R=$(REQ $S $Q2 "{\"day\":\"$TODAY\"}")
+CLOSE
+R2=$(REQ $S $Q2 "{\"day\":\"$TOMORROW\"}")
+GOT="$(code_of "$R") · $(LOGMETA $Q2 URGENT_REQUESTED) · $(RW "$(LIST $A INBOX)" $Q2 'r.urgentAsk && r.urgentAsk.day') · $(code_of "$R2") $(BCODE "$R2") $(err_of "$R2")"
+R3=$(CALL $S work-orders/$Q2/urgent-request/cancel '{}')
+[ "$GOT" = "200 · $TODAY|- · $TODAY · 409 URGENT_ASK_STATE ส่งคำขอแล้ว — รอแอดมินแก้เป็นงานด่วน" ] && [ "$(code_of "$R3")" = 200 ] && [ "$(NLOG $Q2 URGENT_REQUESTED)" = 1 ] \
+  && pass "ขอวันนี้ได้แม้ยังไม่ถึงเวลาปิด (วันนี้ปิดตลอด) → meta.day=วันนี้ ขึ้นกล่องแอดมิน · ขอพรุ่งนี้ซ้อนระหว่างรอ → 409 ส่งคำขอแล้ว · ยกเลิกได้ (ฐานข้อมูล)" \
+  || fail "ขอวันนี้: $GOT · ยกเลิก $(code_of "$R3")"
 
 echo
-echo "═══ มาถึงขั้นปล่อยงานทางไหน เมื่อไร (ข้อความ \"ไม่ใช่เพราะคุณปล่อยช้า\" · \"ล็อกตั้งแต่\")"
-R=$(CALL $A work-orders/$G_CF/confirm-appointment "{\"scheduledAt\":\"$TOMORROW\"}")
-AT=$(LOGISO $G_CF RESCHEDULED)
-GOT=$(RW "$(LIST $A INBOX)" $G_CF '[x.locked, x.arrivedVia, x.arrivedByAdmin, x.arrivedAt, x.lockedSince].join("|")')
-[ "$(code_of "$R")" = 200 ] && [ -n "$AT" ] && [ "$GOT" = "true|คอนเฟิร์มลูกค้า|true|$AT|$AT" ] \
-  && pass "แอดมินคอนเฟิร์มเลื่อนเป็นพรุ่งนี้หลังปิดรับ → ล็อก · มาถึงทาง \"คอนเฟิร์มลูกค้า\" โดยแอดมิน · ล็อกตั้งแต่ = ตอนมาถึง (หลังเส้นตาย)" \
-  || fail "มาถึงหลังปิดรับ: $(code_of "$R") $(err_of "$R") · $GOT (ประวัติ $AT)"
-R=$(CALL $A work-orders/$G_MV/reschedule "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอเร็วขึ้น\"}")
-AT=$(LOGISO $G_MV APPOINTMENT_MOVED)
-GOT=$(RW "$(LIST $A INBOX)" $G_MV '[x.locked, x.arrivedVia, x.arrivedAt, x.lockedSince].join("|")')
-[ "$(code_of "$R")" = 200 ] && [ "$GOT" = "true|เลื่อนวันนัด|$AT|$AT" ] \
-  && pass "แอดมินเลื่อนวันนัด (ใบอยู่ขั้นเดิม) = มาถึงใหม่ทาง \"เลื่อนวันนัด\" — วันใหม่ เส้นตายใหม่" \
-  || fail "มาถึงทางเลื่อนวัน: $(code_of "$R") $(err_of "$R") · $GOT (ประวัติ $AT)"
-# ใบที่หัวหน้าภาคพามาถึงขั้นเอง (ของถึง · เบิกส่งมอบ) — กล่องล็อกต้องไม่ขึ้น "แอดมิน…" · ทุกข้อข้างบนเป็นแอดมิน ถ้าคิดแค่ "มีประวัติ"
-# ไม่ดูบทบาทคนกดก็ผ่านหมด จึงชี้ประวัติที่พา G_D2 มาถึงไปที่ S001 ทาง SQL (ขั้น/ทางเดิม เปลี่ยนแค่คนกด)
-DB "update \"WorkOrderLog\" set \"userId\"=$S_ID where id=(select id from \"WorkOrderLog\" where \"workOrderId\"=$G_D2 and action='CONFIRMED' order by id desc limit 1)" >/dev/null
-GOT="$(RW "$(LIST $A ACTIVE)" $G_D2 '[x.arrivedVia, x.arrivedAt, x.arrivedByAdmin].join("|")') · $(DET $S $G_D2 'String(d.release.arrivedByAdmin)')"
-[ "$GOT" = "คอนเฟิร์มลูกค้า|$(LOGISO $G_D2 CONFIRMED)|false · false" ] \
-  && pass "ประวัติที่พาใบมาถึงเป็นของหัวหน้าภาค → arrivedByAdmin = false (รายการและหน้าใบงาน) · ทาง/เวลาเดิม" \
-  || fail "arrivedByAdmin ของหัวหน้าภาค: $GOT"
-GOT=$(DET $S $NI '[d.status, d.release.locked, d.release.arrivedVia, d.release.arrivedByAdmin].join("|")')
-[ "$GOT" = "INSPECT_DISPATCH|true|ย้อนขั้น|true" ] \
-  && pass "ใบที่แอดมินย้อนกลับขั้นส่งช่างตรวจหลังปิดรับ (ก้อน 2a) → หน้าใบงาน release.locked · มาถึงทาง \"ย้อนขั้น\" โดยแอดมิน" \
-  || fail "ย้อนขั้นเข้าขั้นปล่อยงาน: $GOT"
+echo "═══ แอดมินแก้เป็นงานด่วน (POST /urgent-release) — ให้นัดวันที่ปิดแล้วได้ เฉพาะใบนี้ วันนั้น"
+CLOSE
+G1=$(mk W102); toChecked $G1; REQ $S $G1 "{\"day\":\"$TOMORROW\"}" >/dev/null
+G2=$(mk W103); toChecked $G2
+G3=$(mk W104); toChecked $G3
+GA=$(mk W105); rel $GA $D2
+GT=$(POST $A work-orders/$(mk W106)/test-copy '{}' | J 'd.id')
+G1C=$(CODEOF $G1); G2C=$(CODEOF $G2); G3C=$(CODEOF $G3); GAC=$(CODEOF $GA)
+IC1=$(ICOUNT $A)
+R=$(CALL $S work-orders/$G1/urgent-release '{}'); R2=$(CALL $T work-orders/$G1/urgent-release '{}')
+[ "$(code_of "$R") $(err_of "$R")" = "403 แก้เป็นงานด่วนได้เฉพาะแอดมิน — หัวหน้าภาคกด “ร้านต้องการพรุ่งนี้จริง — ขอแอดมินแก้เป็นงานด่วน” ใต้ปฏิทินในฟอร์มนัดวัน" ] \
+  && [ "$(code_of "$R2")" = 403 ] && [ "$(URF $G1)|$(NLOG $G1 URGENT_RELEASE)" = "-|0" ] \
+  && pass "หัวหน้าภาค/ช่างกดแก้เป็นงานด่วนไม่ได้ (403 บอกทางใต้ปฏิทิน) ฐานข้อมูลไม่เปลี่ยน" || fail "สิทธิ์แก้เป็นงานด่วน: $(code_of "$R") $(err_of "$R") · $(code_of "$R2")"
+R=$(CALL $A work-orders/$G1/urgent-release '{}')
+[ "$(code_of "$R")" = 200 ] && [ "$(ST $G1)|$(URF $G1)" = "PARTS_CHECKED|$TOMORROW" ] \
+  && [ "$(LOGROW $G1 URGENT_RELEASE)" = "ให้นัดหลังเวลาปิดได้ · ไม่ได้ใส่เหตุผล · นัด $(VT $TOMORROW)|direct|-|$TOMORROW|A001|PARTS_CHECKED" ] \
+  && [ "$(ICOUNT $A)" = "$((IC1 - 1))" ] && [ "$(RW "$(LIST $A INBOX)" $G1 'true')" = missing ] && [ "$(DET $S $G1 '[String(d.urgentAsk), d.urgentReleaseFor].join("|")')" = "null|$TOMORROW" ] \
+  && pass "แก้เป็นงานด่วนไม่ส่งวัน = ใช้วันที่ขอ → urgentReleaseFor=พรุ่งนี้ ใบอยู่ขั้นเดิม ประวัติ via=direct · คำขอปิด ออกจากกล่อง (ฐานข้อมูล)" \
+  || fail "แก้เป็นงานด่วนตามคำขอ: $(code_of "$R") $(err_of "$R") · $(URF $G1) · $(LOGROW $G1 URGENT_RELEASE) · $(ICOUNT $A)/$IC1"
+R=$(CALL $A work-orders/$G1/urgent-release "{\"day\":\"$TOMORROW\"}"); R2=$(CALL $A work-orders/$G2/urgent-release '{}')
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R")" = "$G1C แก้เป็นงานด่วนให้ $(SHORT $TOMORROW) ไว้แล้ว — หัวหน้าภาคนัดได้เลย" ] \
+  && [ "$(code_of "$R2") $(err_of "$R2")" = "400 ต้องระบุวันที่จะให้นัด" ] && [ "$(NLOG $G1 URGENT_RELEASE)" = 1 ] \
+  && pass "กดซ้ำวันเดิม → 409 URGENT_ASK_STATE \"แก้… ไว้แล้ว\" ประวัติไม่ซ้ำ · ใบที่ไม่มีคำขอและไม่ส่งวัน → 400 ต้องระบุวัน (ฐานข้อมูล)" \
+  || fail "ซ้ำ/ไม่มีวัน: $(code_of "$R") $(body_of "$R") · $(code_of "$R2") $(err_of "$R2")"
+R=$(CALL $A work-orders/$GA/urgent-release "{\"day\":\"$TOMORROW\"}"); R2=$(CALL $A work-orders/$GT/urgent-release "{\"day\":\"$TODAY\"}")
+R3=$(CALL $A work-orders/$G2/urgent-release "{\"day\":\"$YESTERDAY\"}")
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|none" ] \
+  && [ "$(err_of "$R")" = "$GAC อยู่ขั้น \"$(LABEL $GA)\" — แก้เป็นงานด่วนได้เฉพาะใบที่รอหัวหน้าภาคนัดวัน (ขั้นอื่นติ๊ก “แก้เป็นงานด่วนไปพร้อมกัน” ในฟอร์มคอนเฟิร์มลูกค้า / เลื่อนวันนัด)" ] \
+  && [ "$(code_of "$R2") $(err_of "$R2")" = "400 ใบทดสอบไม่ติดเวลาปิดนัด — นัดวันไหนก็ได้" ] \
+  && [ "$(code_of "$R3") $(err_of "$R3")" = "409 $G2C วัน $(VT $YESTERDAY) ผ่านไปแล้ว — แก้เป็นงานด่วนไม่ได้ ให้หัวหน้าภาคนัดวันอื่น" ] \
+  && [ "$(URF $GA)|$(URF $GT)|$(URF $G2)" = "-|-|-" ] \
+  && pass "ขั้นรอปล่อยงาน → 409 บอกให้ติ๊กในฟอร์มคอนเฟิร์ม/เลื่อนวัน (ไม่มี code) · ใบทดสอบ 400 · วันผ่านแล้ว 409 (ฐานข้อมูลไม่เปลี่ยน)" \
+  || fail "แก้เป็นงานด่วนที่ไม่ได้: $(code_of "$R") $(body_of "$R") · $(code_of "$R2") $(err_of "$R2") · $(code_of "$R3") $(err_of "$R3")"
+OPEN
+R=$(CALL $A work-orders/$G2/urgent-release "{\"day\":\"$TOMORROW\"}")
+[ "$(code_of "$R")|$(BCODE "$R")" = "409|URGENT_ASK_STATE" ] \
+  && [ "$(err_of "$R")" = "$G2C ยังนัด $(SHORT $TOMORROW) ได้ (ปิดนัด $(SHORT $TODAY) $CUT น.) — ไม่ต้องแก้เป็นงานด่วน" ] && [ "$(URF $G2)" = - ] \
+  && pass "ก่อนเวลาปิด ($CUT) แก้พรุ่งนี้ → 409 URGENT_ASK_STATE \"ยังนัด … ได้ (ปิดนัด … น.)\" ไม่ตั้ง (ฐานข้อมูล)" || fail "แก้ตอนยังเปิด: $(code_of "$R") $(body_of "$R")"
+CLOSE
+TF1=$(mktemp); TF2=$(mktemp)
+CALL $A work-orders/$G3/urgent-release "{\"day\":\"$TOMORROW\"}" > "$TF1" &
+CALL $SA work-orders/$G3/urgent-release "{\"day\":\"$TOMORROW\",\"reason\":\"คนที่สอง\"}" > "$TF2" & wait
+C1=$(code_of "$(cat "$TF1")"); C2=$(code_of "$(cat "$TF2")")
+LOSER=$([ "$C1" = 409 ] && cat "$TF1" || cat "$TF2"); rm -f "$TF1" "$TF2"
+[ "$(echo "$C1 $C2" | tr ' ' '\n' | sort | tr '\n' ' ')" = "200 409 " ] && [ "$(BCODE "$LOSER")" = URGENT_ASK_STATE ] \
+  && [ "$(NLOG $G3 URGENT_RELEASE)|$(URF $G3)" = "1|$TOMORROW" ] \
+  && pass "แอดมินสองคนกดพร้อมกัน → ผ่านคนเดียว อีกคน 409 URGENT_ASK_STATE \"ไว้แล้ว\" · ประวัติแถวเดียว (ฐานข้อมูล)" \
+  || fail "กดพร้อมกัน: $C1 $C2 · $(body_of "$LOSER") · $(NLOG $G3 URGENT_RELEASE) $(URF $G3)"
+R=$(SCHEDCALL $S assign $G1 $TODAY); R2=$(SCHEDCALL $S assign $G2 $TOMORROW); R3=$(SCHEDCALL $S assign $G1 $TOMORROW)
+CLOSED_OK "$R" "$SUP_TODAY" $TODAY $D2 && CLOSED_OK "$R2" "$(SUP_TMR)" $TOMORROW $D2 && [ "$(code_of "$R3")" = 200 ] \
+  && [ "$(ST $G1)|$(SCH $G1)|$(URF $G1)" = "AWAITING_CONFIRM|$TOMORROW|$TOMORROW" ] && [ "$(ST $G2)" = PARTS_CHECKED ] \
+  && pass "แก้ให้พรุ่งนี้ไม่ได้เปิดวันนี้ (400) และไม่เปิดใบอื่น (400) · หัวหน้าภาคนัดพรุ่งนี้หลังเวลาปิดได้ urgentReleaseFor ยังอยู่ (ฐานข้อมูล)" \
+  || fail "ใช้งานด่วน: $(code_of "$R") $(err_of "$R") · $(code_of "$R2") $(err_of "$R2") · $(code_of "$R3") $(err_of "$R3") · $(URF $G1)"
+# อ่านค่าก่อนกดในบรรทัดเดียวกัน — ถ้างานด่วนไม่ได้ตั้งตั้งแต่แรก (แก้พร้อมกันพัง/โค้ดเก่า 409 ที่ขั้นนี้) ช่องว่างอยู่แล้ว "ล้าง" ก็ผ่านเปล่า ๆ
+PRE="$(URF $G3)"
+R=$(SCHEDCALL $S assign $G3 $D2)
+[ "$PRE" = "$TOMORROW" ] && [ "$(code_of "$R")" = 200 ] && [ "$(ST $G3)|$(SCH $G3)|$(URF $G3)" = "AWAITING_CONFIRM|$D2|-" ] \
+  && pass "ได้งานด่วนพรุ่งนี้แต่หัวหน้าภาคนัดมะรืนแทน → urgentReleaseFor ล้าง (นัดวันอื่นแล้วหมดผล · ฐานข้อมูล)" || fail "นัดวันอื่น: ก่อนกด $PRE · $(code_of "$R") $(err_of "$R") · $(URF $G3)"
+G4=$(mk W107); G5=$(mk W108); toChecked $G5
+DB "update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') where id=$SEED_ID" >/dev/null
+GETCUT $A >/dev/null
+R=$(CALL $A work-orders/$G4/urgent-release "{\"day\":\"$TODAY\"}"); R2=$(REQ $S $G5 "{\"day\":\"$TODAY\"}")
+DB "update \"AppSetting\" set \"createdAt\"=(now() at time zone 'UTC') - interval '30 days' where id=$SEED_ID" >/dev/null
+GETCUT $A >/dev/null; SINCE_PIN=$(SINCEISO)
+[ "$(code_of "$R")" = 200 ] && [ "$(ST $G4)|$(URF $G4)" = "NEW|$TODAY" ] \
+  && [ "$(code_of "$R2")|$(BCODE "$R2")" = "409|URGENT_ASK_STATE" ] && [ "$(err_of "$R2")" = "$(CODEOF $G5) ยังนัด $(SHORT $TODAY) ได้ — ไม่ต้องขอแอดมิน" ] \
+  && pass "เวลาเริ่มใช้กฎเพิ่งเริ่ม: แอดมินแก้วันนี้ได้ (เทียบเส้นตายตรง ๆ ไม่ดู since) แต่หัวหน้าภาคขอวันนี้ → 409 \"ยังนัด … ได้\" (คำขอดู since) (ฐานข้อมูล)" \
+  || fail "แก้เป็นงานด่วนไม่ดู since: $(code_of "$R") $(err_of "$R") · $(URF $G4) · $(code_of "$R2") $(body_of "$R2")"
 
 echo
-echo "═══ คำขอแก้เป็นงานด่วน / ส่งกลับ ในกล่องงานแอดมิน"
-POST $S work-orders/$G_TM/urgent-request '{"note":"ทีมว่าง ไปได้จริง"}' >/dev/null
-AT=$(LOGISO $G_TM URGENT_REQUESTED)
-GOT=$(RW "$(LIST $A INBOX)" $G_TM '[JSON.stringify(x.ask), x.arrivedVia, x.locked].join("|")')
-[ -n "$AT" ] && [ "$GOT" = "{\"at\":\"$AT\",\"note\":\"ทีมว่าง ไปได้จริง\",\"byName\":\"$S_NAME\"}|คอนเฟิร์มลูกค้า|true" ] \
-  && pass "หัวหน้าภาคขอแก้เป็นงานด่วน → แถวในกล่องแอดมิน release.ask {เวลา · ข้อความ · ชื่อ} ตรงประวัติ · คำขอไม่ใช่ \"ทางที่ใบมาถึง\"" \
-  || fail "ask ในกล่องแอดมิน: $GOT (ประวัติ $AT)"
-POST $S work-orders/$G_TM/urgent-request/cancel '{}' >/dev/null
-[ "$(RW "$(LIST $A INBOX)" $G_TM 'String(r.release.ask)')" = null ] && [ "$(NLOG $G_TM URGENT_REQUEST_CANCELLED)" = 1 ] \
-  && pass "ยกเลิกคำขอ → release.ask = null (ฐานข้อมูลมีประวัติยกเลิก)" || fail "ask หลังยกเลิก: $(RW "$(LIST $A INBOX)" $G_TM 'JSON.stringify(r.release.ask)')"
-POST $S work-orders/$G_TM/urgent-request '{}' >/dev/null
-POST $A work-orders/$G_TM/urgent-release '{"reason":"หัวหน้าภาคขอมา"}' >/dev/null
-LAI=$(LIST $A INBOX)
-GOT="$(RW "$(LIST $A ACTIVE)" $G_TM '[String(r.release.ask), r.release.urgent, r.release.locked].join("|")') · inbox=$(RW "$LAI" $G_TM 'true')"
-[ "$(NLOG $G_TM URGENT_REQUESTED)" = 2 ] && [ "$GOT" = "null|true|false · inbox=missing" ] \
-  && [ "$(DET $S $G_TM '[d.urgentInfo.via, d.urgentInfo.reason, d.urgentInfo.byName].join("|")')" = "direct|หัวหน้าภาคขอมา|$A_NAME" ] \
-  && pass "แอดมินแก้เป็นงานด่วน = คำขอจบเอง (ask null) · ไม่ล็อก · ออกจากกล่องแอดมิน · หัวหน้าภาคเห็น urgentInfo" \
-  || fail "หลังแอดมินแก้เป็นงานด่วน: $GOT"
-R=$(CALL $S work-orders/$G_DC/decline-new-date '{"reason":"ทีมไม่ว่างพรุ่งนี้"}')
-AT=$(LOGISO $G_DC NEW_DATE_DECLINED)
-NOTE=$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$G_DC and action='NEW_DATE_DECLINED' order by id desc limit 1")
-GOT=$(RW "$(LIST $A INBOX)" $G_DC 'JSON.stringify([r.status, r.releaseDeclined, r.overdue, r.release])')
-[ "$(code_of "$R")" = 200 ] && [ "$GOT" = "[\"AWAITING_CONFIRM\",{\"at\":\"$AT\",\"note\":$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$NOTE"),\"byName\":\"$S_NAME\",\"past\":false},false,null]" ] \
-  && [ "$(RW "$(LIST $S ACTIVE)" $G_DC 'String(r.releaseDeclined)')" = null ] \
-  && pass "หัวหน้าภาคส่งใบที่ล็อกกลับ → แถวแอดมิน releaseDeclined {เวลา · ข้อความ · ชื่อ · past=false} (หัวข้อเลยเวลาปล่อยงาน) · รายการหัวหน้าภาคไม่มีช่องนี้" \
-  || fail "releaseDeclined: $(code_of "$R") $(err_of "$R") · $GOT"
-# ใบที่ส่งกลับหลังปิดรับยังเป็น "รอคอนเฟิร์มลูกค้า วันนัดพรุ่งนี้" ในฐานข้อมูล แต่ทีมบอกแล้วว่าไปไม่ได้ — ต้องไม่โผล่ในแถบ "ยังไม่ถึงขั้นปล่อยงาน"
-# ของหัวหน้าภาคที่เพิ่งส่งกลับ และไม่ซ้ำในหัวข้อ "ยังไม่คอนเฟิร์มลูกค้า" ของแอดมิน (ซึ่งแนะนำให้ติ๊กงานด่วน) · เทียบกับ G_DN (ส่งกลับก่อนเส้นตาย
-# ขั้นเดียวกัน วันเดียวกัน — ยังอยู่) และ G_NR (ยังไม่เคยส่งกลับ) ให้รู้ว่าที่หายเพราะส่งกลับหลังปิดรับ ไม่ใช่เพราะขอบเขต/วันที่
-WS=$(WATCH $S); WA=$(WATCH $A)
-GOT="$(echo "$WS" | J "[$G_DC, $G_DN, $G_NR].map(i => d.notReady.some(x => x.id === i)).join('|')") / $(echo "$WA" | J "[$G_DC, $G_DN, $G_NR].map(i => d.unconfirmedTomorrow.some(x => x.id === i)).concat(d.notReady.some(x => x.id === $G_DC)).join('|')")"
-[ "$(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$G_DC")" = "AWAITING_CONFIRM|$TOMORROW" ] \
-  && [ "$GOT" = "false|true|true / false|true|true|false" ] \
-  && pass "dispatch-watch: ใบที่ส่งกลับหลังปิดรับ (ฐานข้อมูลยังรอคอนเฟิร์ม วันนัดพรุ่งนี้) ไม่อยู่ใน notReady ของหัวหน้าภาค/แอดมิน และ unconfirmedTomorrow · ส่งกลับก่อนเส้นตายยังอยู่" \
-  || fail "watch หลังส่งกลับใบที่ล็อก (DC|DN|NR): $GOT · ฐานข้อมูล $(DB "select status||'|'||\"scheduledAt\"::date from \"WorkOrder\" where id=$G_DC")"
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY' where id=$G_DC" >/dev/null
-GOT=$(RW "$(LIST $A INBOX)" $G_DC '[r.overdue, r.releaseDeclined && r.releaseDeclined.past].join("|")')
-[ "$GOT" = "true|true" ] \
-  && pass "วันนัดของใบที่ส่งกลับผ่านไปแล้ว → overdue=true · releaseDeclined.past=true (หัวข้อเลยนัด \"หัวหน้าภาคส่งกลับแล้ว\")" || fail "ส่งกลับที่วันผ่าน: $GOT"
+echo "═══ แอดมินคอนเฟิร์มลูกค้า / เลื่อนวันนัด / ดึงงานคืน — วันที่ปิดต้องติ๊ก · วันเดิมไม่มีกฎ (ข้อ 4)"
+CLOSE
+K1=$(mk W109); toConfirm $K1 $TODAY
+K2=$(mk W110); toConfirm $K2 $D2
+K3=$(mk W111); toConfirm $K3 $D3; SETURF $K3 $D3
+K5=$(mk W112); toConfirm $K5 $TODAY; SETURF $K5 $TODAY
+[ "$(ST $K1)|$(SCH $K1)|$(URF $K1)" = "AWAITING_CONFIRM|$TODAY|-" ] || fail "เตรียม K1: $(ST $K1) $(SCH $K1) $(URF $K1)"
+R=$(CALL $A work-orders/$K1/confirm-appointment '{"urgent":true}')
+[ "$(code_of "$R")" = 200 ] && [ "$(ST $K1)|$(SCH $K1)|$(URF $K1)|$(NLOG $K1 URGENT_RELEASE)|$(NLOG $K1 CONFIRMED)" = "ASSIGNED|$TODAY|-|0|1" ] \
+  && pass "คอนเฟิร์มวันเดิม (วันนี้ · ไม่มีงานด่วน) → ผ่าน ไม่มีกฎเวลา · urgent:true ไม่มีผล (ไม่ตั้ง ไม่ลงประวัติ — ฐานข้อมูล)" \
+  || fail "คอนเฟิร์มวันเดิม: $(code_of "$R") $(err_of "$R") · $(ST $K1) $(URF $K1) $(NLOG $K1 URGENT_RELEASE)"
+R=$(CALL $A work-orders/$K2/confirm-appointment "{\"scheduledAt\":\"$TOMORROW\"}"); MID="$(ST $K2)|$(SCH $K2)"
+R2=$(CALL $A work-orders/$K2/confirm-appointment "{\"scheduledAt\":\"$TOMORROW\",\"urgent\":true,\"note\":\"ร้านขอพรุ่งนี้\"}")
+CLOSED_OK "$R" "$(ADM_TMR)" $TOMORROW $D2 && [ "$MID" = "AWAITING_CONFIRM|$D2" ] && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $K2)|$(SCH $K2)|$(URF $K2)" = "ASSIGNED|$TOMORROW|$TOMORROW" ] \
+  && [ "$(SEQ $K2 "'RESCHEDULED','URGENT_RELEASE'")" = "RESCHEDULED,URGENT_RELEASE|2" ] && [ "$(LOGROW $K2 URGENT_RELEASE | cut -d'|' -f2-4)" = "confirm|ร้านขอพรุ่งนี้|$TOMORROW" ] \
+  && pass "ลูกค้าขอเลื่อนเป็นพรุ่งนี้หลังเวลาปิด: ไม่ติ๊ก → 400 \"$(ADM_TMR)\" ใบไม่ขยับ · ติ๊ก → เลื่อน + แก้เป็นงานด่วน via=confirm (ฐานข้อมูล)" \
+  || fail "คอนเฟิร์มเลื่อนพรุ่งนี้: $(code_of "$R") $(body_of "$R") · $MID · $(code_of "$R2") $(err_of "$R2") · $(SEQ $K2 "'RESCHEDULED','URGENT_RELEASE'")"
+R=$(CALL $A work-orders/$K3/confirm-appointment "{\"scheduledAt\":\"$TODAY\"}"); MID="$(ST $K3)|$(SCH $K3)|$(URF $K3)"
+R2=$(CALL $A work-orders/$K3/confirm-appointment "{\"scheduledAt\":\"$D2\"}")
+CLOSED_OK "$R" "$ADM_TODAY" $TODAY $D2 && [ "$MID" = "AWAITING_CONFIRM|$D3|$D3" ] && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $K3)|$(SCH $K3)|$(URF $K3)|$(NLOG $K3 URGENT_RELEASE)" = "ASSIGNED|$D2|-|0" ] \
+  && pass "ลูกค้าขอเลื่อนเป็นวันนี้ไม่ติ๊ก → 400 \"$ADM_TODAY\" · เลื่อนเป็นมะรืนได้ งานด่วนของวันเดิมล้าง (ฐานข้อมูล)" \
+  || fail "คอนเฟิร์มเลื่อนวันนี้/มะรืน: $(code_of "$R") $(body_of "$R") · $MID · $(code_of "$R2") $(err_of "$R2") · $(URF $K3)"
+R=$(CALL $A work-orders/$K5/confirm-appointment '{"scheduledTime":"13:00"}')
+[ "$(code_of "$R")" = 200 ] \
+  && [ "$(DB "select status||'|'||\"scheduledAt\"::date||'|'||\"scheduledTime\"||'|'||\"urgentReleaseFor\"::date from \"WorkOrder\" where id=$K5")" = "ASSIGNED|$TODAY|13:00|$TODAY" ] \
+  && [ "$(NLOG $K5 URGENT_RELEASE)|$(NLOG $K5 RESCHEDULED)" = "0|1" ] \
+  && pass "คอนเฟิร์มเปลี่ยนแค่เวลาในวันเดิม (วันนี้ที่แก้เป็นงานด่วนไว้) → ไม่ต้องติ๊ก urgentReleaseFor ยังอยู่ (สิทธิ์ผูกกับวัน — ฐานข้อมูล)" \
+  || fail "เปลี่ยนแค่เวลา: $(code_of "$R") $(err_of "$R") · $(DB "select \"scheduledTime\"||'|'||coalesce(\"urgentReleaseFor\"::text,'-') from \"WorkOrder\" where id=$K5")"
+M1=$(mk W113); rel $M1 $D2
+M2=$(mk W114); rel $M2 $D2; SETURF $M2 $D2
+M3=$(mk W115); rel $M3 $TODAY; SETURF $M3 $TODAY
+N1=$(mk W116); rel $N1 $D2; POST $S work-orders/$N1/dispatch '{}' >/dev/null
+[ "$(ST $M1) $(ST $M2) $(ST $M3) $(ST $N1)" = "ASSIGNED ASSIGNED ASSIGNED IN_PROGRESS" ] || fail "เตรียมใบเลื่อนวัน: $(ST $M1) $(ST $M2) $(ST $M3) $(ST $N1)"
+RS() { CALL $A work-orders/$1/reschedule "$2"; }
+R=$(RS $M1 "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอพรุ่งนี้\"}"); MID="$(ST $M1)|$(SCH $M1)"
+R2=$(RS $M1 "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอพรุ่งนี้\",\"urgent\":true}")
+CLOSED_OK "$R" "$(ADM_TMR)" $TOMORROW $D2 && [ "$MID" = "ASSIGNED|$D2" ] && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $M1)|$(SCH $M1)|$(URF $M1)" = "ASSIGNED|$TOMORROW|$TOMORROW" ] \
+  && [ "$(SEQ $M1 "'APPOINTMENT_MOVED','URGENT_RELEASE'")" = "APPOINTMENT_MOVED,URGENT_RELEASE|2" ] && [ "$(LOGROW $M1 URGENT_RELEASE | cut -d'|' -f2-4)" = "reschedule|ร้านขอพรุ่งนี้|$TOMORROW" ] \
+  && pass "เลื่อนวันนัดเป็นพรุ่งนี้หลังเวลาปิด: ไม่ติ๊ก → 400 ใบไม่ขยับ · ติ๊ก → เลื่อน + แก้เป็นงานด่วน via=reschedule (ฐานข้อมูล)" \
+  || fail "เลื่อนพรุ่งนี้: $(code_of "$R") $(body_of "$R") · $MID · $(code_of "$R2") $(err_of "$R2") · $(SEQ $M1 "'APPOINTMENT_MOVED','URGENT_RELEASE'")"
+R=$(RS $M2 "{\"scheduledAt\":\"$TODAY\",\"reason\":\"ร้านขอวันนี้\"}"); MID="$(SCH $M2)|$(URF $M2)"
+R2=$(RS $M2 "{\"scheduledAt\":\"$D3\",\"reason\":\"ร้านขอเลื่อน\"}")
+CLOSED_OK "$R" "$ADM_TODAY" $TODAY $D2 && [ "$MID" = "$D2|$D2" ] && [ "$(code_of "$R2")" = 200 ] && [ "$(SCH $M2)|$(URF $M2)" = "$D3|-" ] \
+  && pass "เลื่อนวันนัดเป็นวันนี้ไม่ติ๊ก → 400 \"$ADM_TODAY\" · เลื่อนไปวันที่เปิด งานด่วนของวันเดิมล้าง (ฐานข้อมูล)" \
+  || fail "เลื่อนวันนี้/วันเปิด: $(code_of "$R") $(body_of "$R") · $MID · $(code_of "$R2") $(err_of "$R2") · $(URF $M2)"
+R=$(RS $M3 "{\"scheduledAt\":\"$TODAY\",\"scheduledTime\":\"14:00\",\"reason\":\"ร้านขอบ่าย\"}")
+[ "$(code_of "$R")" = 200 ] && [ "$(DB "select \"scheduledTime\"||'|'||coalesce(\"urgentReleaseFor\"::date::text,'-') from \"WorkOrder\" where id=$M3")" = "14:00|$TODAY" ] \
+  && [ "$(NLOG $M3 URGENT_RELEASE)" = 0 ] \
+  && pass "เลื่อนแค่เวลาในวันเดิม (วันนี้ที่แก้เป็นงานด่วนไว้) → ไม่ต้องติ๊ก urgentReleaseFor ยังอยู่ (เดิมล้างทิ้ง — ฐานข้อมูล)" \
+  || fail "เลื่อนแค่เวลา: $(code_of "$R") $(err_of "$R") · $(URF $M3)"
+R=$(RS $N1 "{\"scheduledAt\":\"$TODAY\",\"reason\":\"ร้านขอวันนี้\"}"); MID="$(ST $N1)|$(SCH $N1)"
+R2=$(RS $N1 "{\"scheduledAt\":\"$TODAY\",\"reason\":\"ร้านขอวันนี้\",\"urgent\":true}")
+CLOSED_OK "$R" "$ADM_TODAY" $TODAY $D2 && [ "$MID" = "IN_PROGRESS|$D2" ] && [ "$(code_of "$R2")" = 200 ] \
+  && [ "$(ST $N1)|$(SCH $N1)|$(URF $N1)" = "ASSIGNED|$TODAY|$TODAY" ] \
+  && [ "$(SEQ $N1 "'APPOINTMENT_RECALLED','URGENT_RELEASE'")" = "APPOINTMENT_RECALLED,URGENT_RELEASE|2" ] \
+  && pass "ดึงงานคืนจากช่างไปวันนี้: ไม่ติ๊ก → 400 ใบยังอยู่กับช่าง · ติ๊ก → ดึงคืน + แก้เป็นงานด่วน (ฐานข้อมูล)" \
+  || fail "ดึงงานคืน: $(code_of "$R") $(body_of "$R") · $MID · $(code_of "$R2") $(err_of "$R2") · $(SEQ $N1 "'APPOINTMENT_RECALLED','URGENT_RELEASE'")"
 
 echo
-echo "═══ urgentInfo ตามทางที่แก้เป็นงานด่วน · หมดอายุ · ล้าง"
-R=$(CALL $A work-orders/$G_UC/confirm-appointment '{"urgent":true,"note":"ร้านยืนยันพรุ่งนี้"}')
-GOT=$(DET $S $G_UC 'JSON.stringify(d.urgentInfo)')
-[ "$(code_of "$R")" = 200 ] && [ "$GOT" = "{\"at\":\"$(LOGISO $G_UC URGENT_RELEASE)\",\"byName\":\"$A_NAME\",\"via\":\"confirm\",\"reason\":\"ร้านยืนยันพรุ่งนี้\"}" ] \
-  && pass "ติ๊กงานด่วนตอนคอนเฟิร์มลูกค้า → urgentInfo via=confirm เหตุผล = ข้อความตอนคอนเฟิร์ม" || fail "urgentInfo confirm: $(code_of "$R") $(err_of "$R") · $GOT"
-R=$(CALL $A work-orders/$G_UR2/reschedule "{\"scheduledAt\":\"$TOMORROW\",\"reason\":\"ร้านขอพรุ่งนี้\",\"urgent\":true}")
-GOT=$(DET $S $G_UR2 '[d.urgentInfo.via, d.urgentInfo.reason, d.urgentReleaseFor, d.release.urgent].join("|")')
-[ "$(code_of "$R")" = 200 ] && [ "$GOT" = "reschedule|ร้านขอพรุ่งนี้|$TOMORROW|true" ] \
-  && pass "ติ๊กงานด่วนตอนเลื่อนวันนัด → urgentInfo via=reschedule · urgentReleaseFor = วันใหม่" || fail "urgentInfo reschedule: $(code_of "$R") $(err_of "$R") · $GOT"
-R=$(CALL $A work-orders/$G_UR2/reschedule "{\"scheduledAt\":\"$D3\",\"reason\":\"ร้านขอเลื่อนอีก\"}")
-GOT=$(DET $S $G_UR2 '[String(d.urgentInfo), String(d.urgentReleaseFor), d.release.urgent, d.release.locked].join("|")')
-[ "$(code_of "$R")" = 200 ] && [ "$GOT" = "null|null|false|false" ] && [ "$(URF $G_UR2)" = - ] \
-  && pass "เลื่อนวันอีกครั้งไม่ติ๊ก → urgentInfo/urgentReleaseFor ว่าง (ฐานข้อมูลล้างแล้ว) — ประวัติงานด่วนเก่าไม่ใช่สถานะตอนนี้" || fail "หลังล้างงานด่วน: $GOT"
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY', \"urgentReleaseFor\"='$YESTERDAY' where id=$G_UR" >/dev/null
-GOT=$(RW "$(LIST $A INBOX)" $G_UR '[x.urgentExpired, x.urgent, x.locked, x.past, x.lockedSince, r.overdue].join("|")')
-[ "$GOT" = "true|false|true|true|$(BKKMID $TODAY)|true" ] && [ "$(DET $S $G_UR 'd.urgentInfo && d.urgentInfo.via')" = direct ] \
-  && pass "งานด่วนหมดอายุ (วันนัดผ่าน) → urgentExpired · ล็อกตั้งแต่เที่ยงคืนหลังวันนัด · เลยนัดในกล่องแอดมิน · urgentInfo ยังบอกว่าใครแก้ไว้" \
-  || fail "งานด่วนหมดอายุ: $GOT"
-SETURF $G_TD $D2
-GOT=$(RW "$(LIST $A INBOX)" $G_TD '[r.release.urgent, r.release.locked, r.urgentReleaseFor].join("|")')
-[ "$GOT" = "false|true|$D2" ] && [ "$(DET $A $G_TD 'String(d.urgentInfo)')" = null ] \
-  && pass "วันที่ปลดล็อกไม่ตรงวันนัด → ยังล็อก ยังอยู่กล่องแอดมิน · urgentInfo ว่าง" || fail "urgentReleaseFor คนละวัน: $GOT"
-# ใบรอปล่อยงานที่วันนัดผ่านเข้ากล่องแอดมินด้วยเงื่อนไขช่วงวันตรง ๆ (ไม่ผ่าน releaseState) — ใบทดสอบต้องถูกกันที่เงื่อนไขนั้นเอง
-# ข้างบนเช็คใบทดสอบแค่วันนี้ (ทางรายการเลขใบที่ล็อก) · ใบทดสอบที่วันผ่านแล้วต้องไม่ท่วมกล่องแอดมิน (ข้อ 15)
-DB "update \"WorkOrder\" set \"scheduledAt\"='$YESTERDAY' where id=$G_TC" >/dev/null
-GOT="$(ST $G_TC) · $(RW "$(LIST $A INBOX)" $G_TC 'true') · ใบจริงวันเดียวกัน $(RW "$(LIST $A INBOX)" $G_PS 'r.overdue')"
-[ "$GOT" = "ASSIGNED · missing · ใบจริงวันเดียวกัน true" ] \
-  && pass "ใบทดสอบที่วันนัดผ่านแล้ว (ฐานข้อมูล ASSIGNED เมื่อวาน) ไม่เข้ากล่องแอดมิน · ใบจริงวันเดียวกันยังอยู่ (เลยนัด)" \
-  || fail "ใบทดสอบวันผ่านในกล่องแอดมิน: $GOT"
+echo "═══ ปล่อยงานไม่มีเวลาปิดแล้ว (ข้อ 1) — ใบวันนี้/พรุ่งนี้หลังเวลาปิด (นัดมะรืนแล้วย้ายวันทาง SQL · ไม่มีงานด่วน) ปล่อยได้"
+CLOSE
+L1=$(mk W81); rel $L1 $TODAY
+L2=$(mk W82); rel $L2 $TOMORROW
+L3=$(mk W83); insp $L3 $TOMORROW
+L4=$(mk W84); rel $L4 $TODAY "$OS"
+L5=$(mk W85 C0001); rel $L5 $TODAY "$OTEAM" $A
+L6=$(mk W86); rel $L6 $TOMORROW
+REL() {  # $1 ชื่อ $2 คนกด $3 ใบ $4 ขั้นที่ควรไป
+  local u r; u="$(URF $3)|$(SCH $3)"
+  r=$(CALL $2 work-orders/$3/dispatch '{}')
+  if [ "$(code_of "$r")" = 200 ] && [ "${u%%|*}" = - ] && [ "$(ST $3)|$(NLOG $3 DISPATCHED)" = "$4|1" ]; then
+    pass "ปล่อยงาน $1 (วันนัด ${u#*|} · urgentReleaseFor ว่าง) → 200 $4 + ประวัติ DISPATCHED (ฐานข้อมูล)"
+  else fail "ปล่อยงาน $1: $(code_of "$r") $(body_of "$r") · ก่อนกด $u · $(ST $3)"; fi
+}
+REL "วันนี้ — หัวหน้าภาค" $S $L1 IN_PROGRESS
+REL "พรุ่งนี้หลังเวลาปิด — แอดมินกดแทน" $A $L2 IN_PROGRESS
+REL "ส่งช่างตรวจพรุ่งนี้ (INSPECT_DISPATCH)" $S $L3 INSPECTING
+REL "ใบ SUB วันนี้" $S $L4 IN_PROGRESS
+REL "ใบไม่มีคนรับวันนี้ — แอดมิน" $A $L5 IN_PROGRESS
+R=$(CALL $S work-orders/$L6/decline-new-date '{"reason":"ทีมเต็มพรุ่งนี้"}'); MID="$(ST $L6)"
+POST $A work-orders/$L6/confirm-appointment '{}' >/dev/null
+R2=$(CALL $S work-orders/$L6/dispatch '{}')
+[ "$(code_of "$R")" = 200 ] && [ "$MID" = AWAITING_CONFIRM ] && [ "$(code_of "$R2")" = 200 ] && [ "$(ST $L6)|$(URF $L6)" = "IN_PROGRESS|-" ] \
+  && pass "ทีมไม่ว่าง — ส่งกลับแอดมินยังใช้ได้ · แอดมินคอนเฟิร์มวันเดิม (พรุ่งนี้หลังเวลาปิด) แล้วหัวหน้าภาคปล่อยได้ ไม่ต้องมีงานด่วน (ฐานข้อมูล)" \
+  || fail "ส่งกลับ/ปล่อยใหม่: $(code_of "$R") $(err_of "$R") · $MID · $(code_of "$R2") $(body_of "$R2")"
+
+echo
+echo "═══ ฝั่งอ่าน: ช่องที่เลิกใช้ · กล่องงาน/ลายนิ้วมือไม่ขยับตอนถึงเวลาปิด · เลยนัด · บอร์ด"
+OPEN
+V1=$(mk W87); rel $V1 $TOMORROW
+LA=$(LIST $A ACTIVE)
+DJ=$(DET $S $V1 '[!("release" in d), !("urgentInfo" in d), "urgentAsk" in d, "urgentAnswer" in d, d.cutoff.time, d.cutoff.since, Math.abs(Date.parse(d.serverNow) - Date.now()) < 60000, "urgentReleaseFor" in d].join("|")')
+[ "$(echo "$LA" | J 'd.rows.length > 0 && d.rows.every(r => !("release" in r) && !("releaseDeclined" in r) && "urgentAsk" in r && "urgentReleaseFor" in r && "isTest" in r)')" = true ] \
+  && [ "$(echo "$LA" | J '[d.cutoff.time, d.cutoff.since].join("|")')" = "$CUT|$SINCE_PIN" ] \
+  && [ "$DJ" = "true|true|true|true|$CUT|$SINCE_PIN|true|true" ] \
+  && pass "รายการ: ไม่มี release/releaseDeclined มี urgentAsk · หน้าใบงาน: ไม่มี release/urgentInfo มี urgentAsk/urgentAnswer · serverNow/cutoff/urgentReleaseFor ยังอยู่" \
+  || fail "ช่องอ่าน: $DJ · $(echo "$LA" | J 'JSON.stringify(Object.keys(d.rows[0]||{}).filter(k=>/release|urgent/i.test(k)))')"
+I1=$(ICOUNT $A); VV1=$(VER $A); VS=$(VER $S)
+CLOSE
+I2=$(ICOUNT $A); VV2=$(VER $A)
+[ "$I1" = "$I2" ] && [ "$VV1" = "$VV2" ] && [ "$(DB "select count(*) from \"WorkOrder\" where status='ASSIGNED' and \"scheduledAt\"='$TOMORROW' and not \"isTest\" and \"urgentReleaseFor\" is null")" -ge 1 ] \
+  && pass "ถึงเวลาปิด (เปิด→ปิด) ทั้งที่มีใบพรุ่งนี้รอปล่อยงาน: ตัวเลขกล่องแอดมิน ($I1) และ /version เหมือนเดิมทุกตัวอักษร — ไม่มีใบเข้ากล่องตอน 16:00 แล้ว" \
+  || fail "กล่อง/ลายนิ้วมือขยับตอนถึงเวลาปิด: $I1 → $I2 · $VV1 → $VV2"
+[ "${VV1##*|}" = "$TODAY" ] && ! echo "${VS##*|}" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' \
+  && pass "/version ของแอดมินทั่วไปลงท้ายด้วยวันไทยวันนี้ ($TODAY — กล่องเปลี่ยนตอนเที่ยงคืน) · ของหัวหน้าภาคไม่มีวัน (ไม่ขึ้นปุ่มอัปเดตปลอมทุกเที่ยงคืน)" \
+  || fail "/version: แอดมิน $VV1 · หัวหน้าภาค $VS"
+V2=$(mk W88); rel $V2 $D2; MOVEDAY $V2 $YESTERDAY
+GOT="$(RW "$(LIST $A INBOX)" $V2 'r.overdue')"
+R=$(CALL $S work-orders/$V2/dispatch '{}')
+[ "$GOT" = true ] && [ "$(code_of "$R")" = 200 ] && [ "$(ST $V2)" = IN_PROGRESS ] \
+  && pass "ใบรอปล่อยงานที่วันนัดผ่านแล้ว (เมื่อวาน) ยังอยู่หัวข้อ \"เลยนัด\" ในกล่องแอดมิน (overdue) · แต่ปล่อยงานได้แล้ว ไม่ล็อก (ฐานข้อมูล IN_PROGRESS)" \
+  || fail "เลยนัด: overdue=$GOT · ปล่อย $(code_of "$R") $(body_of "$R")"
+[ "$(CODE localhost:4000/api/work-orders/dispatch-watch -H "$(H $A)")|$(CODE localhost:4000/api/work-orders/dispatch-watch -H "$(H $S)")" = "400|400" ] \
+  && pass "GET /dispatch-watch ไม่มีแล้ว (ตกไปที่ /:id → 400 รหัสใบงานไม่ถูกต้อง — แอปรุ่นเก่าจับ error เงียบ ๆ)" || fail "dispatch-watch ยังตอบ"
+V3=$(mk W89); toChecked $V3
+POST $A work-orders/$V3/urgent-release "{\"day\":\"$TOMORROW\"}" >/dev/null
+SCHEDCALL $S assign $V3 $TOMORROW >/dev/null
+PB=$(curl -s "localhost:4000/api/plans/day?date=$TOMORROW" -H "$(H $A)")
+GOT=$(echo "$PB" | J "const s=d.lanes.flatMap(l=>l.stops).find(x=>x.id===$V3); s ? [s.urgentReleaseFor, 'release' in s].join('|') : 'missing'")
+[ "$GOT" = "$TOMORROW|false" ] && [ "$(echo "$PB" | J '["cutoff" in d, Math.abs(Date.parse(d.serverNow) - Date.now()) < 60000].join("|")')" = "false|true" ] \
+  && [ "$(URF $V3)|$(SCH $V3)" = "$TOMORROW|$TOMORROW" ] \
+  && pass "บอร์ดแผนงาน: จุดที่นัดด้วยงานด่วนมี urgentReleaseFor = วันนัด (ป้ายเขียว) · ไม่มี release · ไม่มี cutoff มีแต่ serverNow (ฐานข้อมูล)" \
+  || fail "บอร์ด: $GOT · $(echo "$PB" | J 'Object.keys(d).join(",")')"
+
+echo
+echo "═══ ทางที่ไม่ได้นัดวันไม่ติดกฎ (ปิดย้อนหลัง · หัวหน้าภาคปิดแทน · ใบทดสอบ — ข้อ 15)"
+CLOSE
+E1=$(mk W90)
+R0=$(SCHEDCALL $S parts $E1 $TODAY)
+NOWISO=$(node -e 'console.log(new Date().toISOString())')
+R=$(CALL $A work-orders/$E1/backfill-close "{\"reason\":\"ทดสอบ\",\"team\":\"$TEAM\",\"visitDate\":\"$TODAY\",\"result\":\"FIXED\",\"closedAt\":\"$NOWISO\",\"otherWorkers\":\"ช่างทดสอบ\",\"noPhotoReason\":\"ทดสอบ\"}")
+CLOSED_OK "$R0" "$SUP_TODAY" $TODAY $D2 && [ "$(code_of "$R")" = 200 ] && [ "$(ST $E1)|$(SCH $E1)" = "DONE|$TODAY" ] \
+  && pass "หัวหน้าภาคนัดวันนี้ไม่ได้ (400) แต่แอดมินปิดย้อนหลังด้วยวันเข้างาน = วันนี้ได้ (ฐานข้อมูล DONE)" \
+  || fail "ปิดย้อนหลังวันนี้: $(code_of "$R0") · $(code_of "$R") $(err_of "$R") · $(ST $E1)"
+E2=$(mk W91)
+R0=$(SCHEDCALL $S inspect $E2 $TODAY)
+DB "insert into \"WorkOrderAttachment\"(\"workOrderId\",kind,\"fileName\",\"mimeType\",\"sizeBytes\",role,\"createdAt\")
+  values ($E2,'IMAGE','dc.jpg','image/jpeg',1,'AFTER',now() at time zone 'UTC')" >/dev/null
+R=$(CALL $S work-orders/$E2/supervisor-close "{\"reason\":\"TECH_FIXED\",\"note\":\"เปลี่ยนบอร์ดแล้ว ทดสอบปกติครบรอบ\",\"otherWorkers\":\"ช่างทดสอบ\",\"visitDate\":\"$TODAY\"}")
+CLOSED_OK "$R0" "$SUP_TODAY" $TODAY $D2 && [ "$(code_of "$R")" = 200 ] && [ "$(ST $E2)" = DONE ] \
+  && pass "หัวหน้าภาคส่งตรวจวันนี้ไม่ได้ (400) แต่ปิดแทน \"ช่างเข้าซ่อมเสร็จแล้ว\" วันที่เข้า = วันนี้ได้ (ฐานข้อมูล DONE)" \
+  || fail "ปิดแทนวันนี้: $(code_of "$R0") · $(code_of "$R") $(err_of "$R") · $(ST $E2)"
+E3=$(mk W92); toChecked $E3; E3T=$(POST $A work-orders/$E3/test-copy '{}' | J 'd.id')
+R=$(SCHEDCALL $S assign $E3T $TODAY); R2=$(SCHEDCALL $S assign $E3 $TODAY)
+[ "$(code_of "$R")" = 200 ] && [ "$(ST $E3T)|$(SCH $E3T)|$(URF $E3T)" = "AWAITING_CONFIRM|$TODAY|-" ] && CLOSED_OK "$R2" "$SUP_TODAY" $TODAY $D2 && [ "$(ST $E3)" = PARTS_CHECKED ] \
+  && pass "ใบทดสอบ (คัดลอกที่ขั้นนัดวันเข้า) นัดวันนี้ได้ ใบจริงต้นฉบับ 400 (ฐานข้อมูล)" || fail "ใบทดสอบ /assign: $(code_of "$R") $(err_of "$R") · $(code_of "$R2")"
 
 # exit แทน [ ] เปล่า — คำสั่งสุดท้ายที่ล้มจะไปเรียก trap ERR ให้ขึ้น "หยุดกลางทาง" ซ้ำกับ FAIL ที่พิมพ์ไปแล้ว
 [ -z "$FAILED" ] || exit 1

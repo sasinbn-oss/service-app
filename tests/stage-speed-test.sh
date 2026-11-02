@@ -33,9 +33,16 @@ AGE() { DB "select abs(round(extract(epoch from (now() at time zone 'UTC' - $1))
 
 W=$(POST $A work-orders '{"branchCode":"C0006","jobType":"CM","priority":"NORMAL","contactPhone":"089-111-2222","machines":[{"code":"W96","symptom":"ทดสอบความเร็ว"}]}' | J 'd.orders?d.orders[0].id:d.id'); IDS="$W"
 
+echo "═══ แอดมินแก้เป็นงานด่วน (วันนี้ปิดนัดตลอด — เวลาปิดนัดงานพรุ่งนี้)"
+# หัวหน้าภาคนัดวันนี้เองไม่ได้ทุกเวลา — แอดมินแก้ให้วันนี้ที่ขั้นระบุอะไหล่ก่อน (เทียบเส้นตายตรง ๆ ฐานที่เพิ่ง migrate ก็ผ่าน)
+[ "$(PC $A work-orders/$W/urgent-release "{\"day\":\"$TODAY\"}")" = "200" ] \
+  && [ "$(DB "select to_char(\"urgentReleaseFor\",'YYYY-MM-DD HH24:MI')||'|'||status||'|'||(select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W and action='URGENT_RELEASE') from \"WorkOrder\" where id=$W")" = "$TODAY 00:00|NEW|1" ] \
+  && pass "แก้เป็นงานด่วน: วันที่ให้นัด = วันนี้ (เที่ยงคืน UTC) ใบอยู่ขั้นเดิม (ระบุอะไหล่) ประวัติหนึ่งแถว (ฐานข้อมูล)" \
+  || fail "แก้เป็นงานด่วน: $(DB "select coalesce(\"urgentReleaseFor\"::text,'-')||'|'||status from \"WorkOrder\" where id=$W")"
+
 echo "═══ ไม่ใช้อะไหล่ + จ่ายงาน"
 POST $S work-orders/$W/parts "{\"needsParts\":false,\"assign\":{\"team\":\"$TEAM\",\"scheduledAt\":\"$TODAY\",\"scheduledTime\":\"10:00\"}}" >/dev/null
-[ "$(DB "select string_agg(action||'>'||status, ',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$W and action<>'CREATED'")" = "NO_PARTS>PARTS_CHECKED,ASSIGNED>AWAITING_CONFIRM" ] \
+[ "$(DB "select string_agg(action||'>'||status, ',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$W and action not in ('CREATED','URGENT_RELEASE')")" = "NO_PARTS>PARTS_CHECKED,ASSIGNED>AWAITING_CONFIRM" ] \
   && [ "$(DB "select count(distinct \"createdAt\") from \"WorkOrderLog\" where \"workOrderId\"=$W and action in ('NO_PARTS','ASSIGNED')")" = "2" ] \
   && pass "ประวัติสองแถว เรียง ไม่ใช้อะไหล่ → จ่ายงาน (เวลาไม่ชนกัน)" || fail "ประวัติจ่ายงาน: $(DB "select string_agg(action, ',' order by \"createdAt\", id) from \"WorkOrderLog\" where \"workOrderId\"=$W")"
 [ "$(DB "select status||'|'||\"assignedTeam\"||'|'||to_char(\"scheduledAt\",'YYYY-MM-DD HH24:MI')||'|'||\"scheduledTime\"||'|'||\"appointmentStatus\"||'|'||\"needsParts\" from \"WorkOrder\" where id=$W")" = "AWAITING_CONFIRM|$TEAM|$TODAY 00:00|10:00|PENDING|false" ] \
@@ -53,13 +60,6 @@ L=$(DB "select l.action||'|'||l.status||'|'||u.\"employeeCode\"||'|'||l.note fro
 [ "$(AGE '"createdAt"' "\"WorkOrderLog\" where \"workOrderId\"=$W order by id desc limit 1")" -lt 60 ] \
   && [ "$(AGE '"updatedAt"' "\"WorkOrder\" where id=$W")" -lt 60 ] \
   && pass "เวลาในประวัติและใบงานเป็น UTC ตรงกับตอนนี้ (ไม่เลื่อนตามเขตเวลา)" || fail "เวลาเพี้ยน: ประวัติห่าง $(AGE '"createdAt"' "\"WorkOrderLog\" where \"workOrderId\"=$W order by id desc limit 1") วิ"
-
-echo "═══ แอดมินแก้เป็นงานด่วน (งานวันนี้ติดเวลาปิดรับเสมอ — เส้นตายคือเมื่อวาน)"
-# คอนเฟิร์มข้างบนไม่ติ๊กงานด่วน (ทดสอบทางคำสั่งเดียว) — ปลดล็อกด้วยปุ่มแยก ไม่งั้นปล่อยงานข้างล่างได้ 409 เฉพาะตอนเทสต์รันหลังวันเริ่มกฎ
-[ "$(PC $A work-orders/$W/urgent-release '{}')" = "200" ] \
-  && [ "$(DB "select to_char(\"urgentReleaseFor\",'YYYY-MM-DD HH24:MI')||'|'||status||'|'||(select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W and action='URGENT_RELEASE') from \"WorkOrder\" where id=$W")" = "$TODAY 00:00|ASSIGNED|1" ] \
-  && pass "แก้เป็นงานด่วน: วันที่ปลดล็อก = วันนัด (เที่ยงคืน UTC) ใบอยู่ขั้นเดิม ประวัติหนึ่งแถว (ฐานข้อมูล)" \
-  || fail "แก้เป็นงานด่วน: $(DB "select coalesce(\"urgentReleaseFor\"::text,'-')||'|'||status from \"WorkOrder\" where id=$W")"
 
 echo "═══ ปล่อยงานพร้อมกันสองครั้ง"
 [ "$(PC $T work-orders/$W/dispatch '{}')" = "403" ] && pass "ช่างกดปล่อยงานไม่ได้ (403)" || fail "ช่างกดปล่อยงานได้"

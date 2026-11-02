@@ -37,7 +37,7 @@ import {
 import { ClaimHistoryCard } from "../components/ClaimHistoryEntry";
 import { openClaimReview, useClaimQueueCount } from "../utils/claimQueue";
 import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
-import { CutoffBanners, ReleaseChip, UrgentReleaseModal } from "../components/DispatchCutoff";
+import { CutoffBanners, ScheduleChip, UrgentReleaseModal } from "../components/DispatchCutoff";
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
@@ -45,13 +45,11 @@ import {
   adminGroups,
   adminRowLines,
   deadlineOf,
-  releaseView,
   serverDay,
   supervisorBanners,
   useServerClock,
   useServerNowFn,
   type Cutoff,
-  type DispatchWatch,
 } from "../utils/dispatchCutoff";
 
 /** ค้างเกินนี้ขึ้นแดง — ตัวเลขเดียวกับชิป "ค้างขั้นเดิมเกิน 3 วัน" ในหน้ารายการ */
@@ -126,11 +124,10 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const { docked } = useDocked();
   const [rows, setRows] = useState<WorkOrderRow[] | null>(null);
   /**
-   * เวลาปิดรับปล่อยงาน (ต.ค. 69): นาฬิกาเซิร์ฟเวอร์ + เวลาปิดรับจากคำตอบรายการ · dispatch-watch = งานพรุ่งนี้ที่ยังไม่อยู่ในกล่อง
-   * (ยังไม่ถึงขั้นปล่อยงาน · ปล่อยครบแล้ว) — แถบบนสุดต้องเตือนใบพวกนี้ด้วย ทั้งที่การ์ดของมันไม่อยู่ในหน้านี้
+   * เวลาปิดนัดงานพรุ่งนี้: นาฬิกาเซิร์ฟเวอร์ + เวลาปิดจากคำตอบรายการ — ป้ายบนการ์ดรอนัดวันกับหัวข้อ "รอนัดวัน" คิดจากค่านี้
+   * ไม่ต้องถามรายการอื่นเพิ่ม: กฎอยู่ที่การนัดวัน ใบที่โดนคือใบรอนัดวันซึ่งอยู่ในกล่องนี้อยู่แล้ว
    */
   const [clock, setClock] = useState<{ serverNow?: string; cutoff?: Cutoff }>({});
-  const [watch, setWatch] = useState<DispatchWatch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sendFor, setSendFor] = useState<WorkOrderRow | null>(null);
   const [replyFor, setReplyFor] = useState<WorkOrderRow | null>(null);
@@ -143,31 +140,21 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   // ไปปนกับหน้ารายการใบงาน (เทสต์ appointment-list นับรหัสเกิน) วาดรายการเฉพาะตอนแท็บนี้เปิดอยู่
   const focused = useIsFocused();
 
-  /**
-   * แถบเวลาปิดรับต้องรู้งานพรุ่งนี้ที่ยังไม่อยู่ในกล่อง (dispatch-watch) — ถามพร้อมรายการ ไม่ต่อคิว
-   * หัวหน้าภาค: ใบที่ยังไม่ถึงขั้นปล่อยงาน/ปล่อยครบแล้ว · แอดมิน: ใบพรุ่งนี้ที่หัวหน้าภาคยังไม่ปล่อย/ยังไม่คอนเฟิร์มลูกค้า
-   * Admin Spare Part กับทีม Area ไม่ถาม: ไม่มีแถบนี้ (กล่องของ Admin Spare Part คืองานตรวจเคลม)
-   * ถามไม่ได้ก็ไม่เป็นไร — การ์ดและหัวข้อที่คิดจากใบในกล่องยังขึ้นครบ ขาดแค่หัวข้อที่มาจากรายการนี้
-   */
+  // แอดมินที่ไม่ใช่ Admin Spare Part — หัวข้อปักของแอดมิน (กล่องของ Admin Spare Part คืองานตรวจเคลม)
   const adminCut = user?.role === "ADMIN" && !user?.partsAdmin;
-  const wantWatch = user?.role === "SUPERVISOR" || adminCut;
   const load = useCallback(async () => {
     const n = ++seq.current;
     setError(null);
     try {
-      const [res, w] = await Promise.all([
-        api.get<{ rows: WorkOrderRow[]; serverNow?: string; cutoff?: Cutoff }>("/work-orders", { params: { status: "INBOX" } }),
-        wantWatch ? api.get<DispatchWatch>("/work-orders/dispatch-watch").then((r) => r.data, () => null) : Promise.resolve(null),
-      ]);
+      const res = await api.get<{ rows: WorkOrderRow[]; serverNow?: string; cutoff?: Cutoff }>("/work-orders", { params: { status: "INBOX" } });
       if (n === seq.current) {
         setRows(res.data.rows);
         setClock({ serverNow: res.data.serverNow, cutoff: res.data.cutoff });
-        setWatch(w);
       }
     } catch (e) {
       if (n === seq.current) setError(apiErrorMessage(e));
     }
-  }, [wantWatch]);
+  }, []);
   useFocusEffect(
     useCallback(() => {
       load();
@@ -178,8 +165,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   });
 
   /**
-   * นาฬิกาเซิร์ฟเวอร์ของหน้านี้ — การ์ดกับแถบบนสุดใช้ "ตอนนี้" ตัวเดียวกัน จึงพลิกเป็นล็อกพร้อมกันตอนถึงเวลาปิดรับ
-   * หน้าของหัวหน้าภาคไม่โหลดใหม่ตอนถึงเวลา (ข้อ 5: ตัวเลขกล่องงานหัวหน้าภาคไม่เปลี่ยน) — ป้ายคิดใหม่จากเส้นตายที่ถืออยู่แล้ว
+   * นาฬิกาเซิร์ฟเวอร์ของหน้านี้ — การ์ดกับแถบบนสุดใช้ "ตอนนี้" ตัวเดียวกัน จึงพลิกพร้อมกันตอนถึงเวลาปิดนัด
+   * หน้าของหัวหน้าภาคไม่โหลดใหม่ตอนถึงเวลา (ใบในกล่องไม่เปลี่ยนตอน 16:00) — ป้ายคิดใหม่จากเวลาปิดที่ถืออยู่แล้ว
    */
   const now = useServerClock(clock.serverNow, clock.cutoff?.time);
   const serverNowAt = useServerNowFn(clock.serverNow);
@@ -205,7 +192,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
    * หัวข้อของแอดมิน (เลยเวลาปล่อยงาน · เลยนัด · งานพรุ่งนี้ที่ยังไม่ปล่อย · ยังไม่คอนเฟิร์มลูกค้า) — ตัวสร้างเดียวกับกล่องงาน
    * สองหน้าจึงนับตรงกันเสมอ · นับทุกใบในกล่อง ไม่ตามคำค้น
    */
-  const cut = useMemo(() => (adminCut && rows ? adminGroups(rows, watch, now, clock.cutoff) : null), [adminCut, rows, watch, now, clock.cutoff]);
+  const cut = useMemo(() => (adminCut && rows ? adminGroups(rows, null, now, clock.cutoff) : null), [adminCut, rows, now, clock.cutoff]);
   // กลุ่มตามขั้น — กลุ่มที่มีใบด่วนขึ้นก่อน แล้วกลุ่มที่ค้างนานสุด · ในกลุ่มเรียงด่วน → ค้างนาน
   const isAdmin = user?.role === "ADMIN";
   const groups = useMemo(() => {
@@ -231,8 +218,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     const sent = (r: WorkOrderRow) => new Date(r.adminReview?.at ?? r.stageSince).getTime();
     /**
      * กลุ่มขั้นปล่อยงานของหัวหน้าภาค (รับทราบ ปล่อยงาน · ส่งช่างตรวจ · คอนเฟิร์มวันใหม่) เรียงตามวันนัด ไม่ใช่ด่วน/ค้างนาน
-     * งานพรุ่งนี้ปิดรับก่อนงานมะรืน — ใบที่เส้นตายใกล้สุดต้องอยู่บนสุด ป้าย "ด่วน" ตอนเปิดใบไม่ได้ทำให้เส้นตายเลื่อน (ข้อ 3)
-     * (DEFAULT ด้านหน้าตา — ไม่เปลี่ยนว่าใบไหนอยู่กลุ่มไหน)
+     * ปล่อยงานไม่มีเวลาปิดแล้ว แต่ทีมออกตามวันนัด — งานวันนี้/พรุ่งนี้ต้องอยู่บนสุดให้ปล่อยก่อน ทีมจะได้เห็นงานในแท็บทันวัน
+     * (หน้าตาอย่างเดียว — ไม่เปลี่ยนว่าใบไหนอยู่กลุ่มไหน)
      */
     const releaseGroup = (list: WorkOrderRow[]) => !isAdmin && list.every((r) => RELEASE_STAGES.includes(r.status));
     // คำอธิบายใต้หัวข้อปักของเวลาปิดรับ — ประโยคเดียวกับหัวข้อในกล่องงาน (ตัวสร้างเดียวกัน)
@@ -258,12 +245,12 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     ];
   }, [rows, isAdmin, cut]);
   /**
-   * แถบบนสุดของหัวหน้าภาค (ตัวอย่าง supGroups) — ตัวสร้างเดียวกับกล่องงาน สองหน้าจึงนับตรงกันทุกตัวอักษร
-   * นับทุกใบในกล่อง ไม่ตามคำค้น: ค้นหาใบหนึ่งอยู่ไม่ได้แปลว่าใบที่ล็อกอื่นหายไป
+   * แถบบนสุดของหัวหน้าภาค ("รอนัดวัน" ช่วง 3 ชม. ก่อนปิด · "ออกงานวันนี้") — ตัวสร้างเดียวกับกล่องงาน สองหน้าจึงนับตรงกันทุกตัวอักษร
+   * นับทุกใบในกล่อง ไม่ตามคำค้น: ค้นหาใบหนึ่งอยู่ไม่ได้แปลว่าใบรอนัดอื่นหายไป
    */
   const banners = useMemo(
-    () => (user?.role === "SUPERVISOR" && rows ? supervisorBanners(rows, watch, now, clock.cutoff) : []),
-    [user?.role, rows, watch, now, clock.cutoff]
+    () => (user?.role === "SUPERVISOR" && rows ? supervisorBanners(rows, now, clock.cutoff) : []),
+    [user?.role, rows, now, clock.cutoff]
   );
 
   // ค้นในใบที่โหลดมาแล้ว — กลุ่มที่ไม่มีใบตรงซ่อน · total = จำนวนในกลุ่มก่อนค้น (บอก "2 จาก 75")
@@ -369,8 +356,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
 
       {/*
         ลำดับใต้แถวค้นหา (integration G5 — ฟีเจอร์ที่ตามมาต้องคงลำดับนี้): 1) แถบแจ้งผลของ parts-pick (ช่องว่างไว้ ยังไม่มี)
-        · 2) แถบเวลาปิดรับ · 3) การ์ด Admin Spare Part · 4) หัวข้อปักของแอดมิน · 5) กลุ่มตามขั้น
-        แถบเวลาปิดรับอยู่นอกเงื่อนไข "มีใบในกล่อง": หัวหน้าภาคที่กล่องว่างแต่มีงานพรุ่งนี้ยังไม่ถึงขั้น ต้องเห็นคำเตือนเหนือ "ไม่มีงานค้าง"
+        · 2) แถบเวลาปิดนัด (หัวหน้าภาค: "รอนัดวัน" 3 ชม. ก่อนปิด · "ออกงานวันนี้") · 3) การ์ด Admin Spare Part · 4) หัวข้อปักของแอดมิน
+        · 5) กลุ่มตามขั้น — แถบอยู่ช่องเดียวกับแถบปล่อยงานรุ่นเดิม (เจ้าของงานข้อ 7) หัวหน้าภาคมองที่เดิมแล้วเจอ
         ห้ามวางก่อนแถวค้นหา — ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
       */}
       {rows && !error && banners.length ? <CutoffBanners groups={banners} /> : null}
@@ -443,8 +430,6 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
             {g.list.map((r) => {
               const d = daysSince(r.stageSince);
               const hot = r.priority === "URGENT";
-              // ใบที่ล็อกแล้วขอบแดงหนา — มองผ่าน ๆ ก็รู้ว่าใบไหนกดปล่อยไม่ได้ ต้องขอแอดมินหรือส่งกลับ
-              const rv = releaseView(r, now, clock.cutoff);
               /**
                * การ์ดในหัวข้อปักเวลาปิดรับของแอดมิน (ตัวอย่าง adminLocked / adminPast): ทีม/หัวหน้าภาค · นัด · ล็อกตั้งแต่ · สาเหตุ
                * · หัวหน้าภาคเลือกอะไร (ขอแก้เป็นงานด่วน / ส่งกลับ / ยังไม่ได้บอก + เบอร์) — แอดมินตัดสินใจได้จากการ์ดโดยไม่ต้องโทรถามก่อน
@@ -454,7 +439,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
               const cutLines = cutKind ? adminRowLines(r, now, clock.cutoff, cutKind) : null;
               const releaseish = !!r.release || !!r.releaseDeclined;
               return (
-                <View key={r.id} style={[styles.card, hot && styles.cardHot, rv?.locked && styles.cardLocked]}>
+                <View key={r.id} style={[styles.card, hot && styles.cardHot]}>
                   <View style={styles.cardTop}>
                     <Hi text={r.code} q={q} style={[styles.code, headingFont]} />
                     {hot ? (
@@ -473,8 +458,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                       <PartsTag state={r.partsState} />
                     )}
                     {r.orphan ? <Tag text="ไม่มีคนรับ" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
-                    {/* ใบรอปล่อยงานที่เลยนัด — ป้ายเวลาปิดรับบอก "เลยนัดมา N วัน" อยู่แล้ว ไม่ขึ้นซ้ำสองป้าย · ในหัวข้อ "เลยนัด" ชื่อหัวข้อบอกแล้ว */}
-                    {r.overdue && !(rv?.locked && rv.past) && cutKind !== "past" ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
+                    {/* ในหัวข้อ "เลยนัด" ชื่อหัวข้อบอกแล้ว ไม่ขึ้นซ้ำ */}
+                    {r.overdue && cutKind !== "past" ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
                     {/* วันถูกเลื่อน (ลูกค้าขอตอนคอนเฟิร์ม หรือแอดมินเลื่อนวันนัด ต.ค. 69) — หัวหน้าภาคต้องเช็คทีมวันใหม่ก่อนปล่อย */}
                     {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     <AdminReviewTag review={r.adminReview} />
@@ -482,11 +467,10 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>{d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}</Text>
                   </View>
                   {/*
-                    ป้ายเวลาปิดรับ (นับถอยหลัง · ล็อก · รอแอดมิน · งานด่วน) บรรทัดของตัวเอง — ข้อความยาว วางในแถวป้ายแล้วดันกันหักบรรทัด
-                    หัวหน้าภาคได้ป้าย "งานพรุ่งนี้ — ต้องถึงขั้นปล่อยงานก่อน …" บนใบที่ยังไม่ถึงขั้นด้วย: รู้ตอนที่ยังตามของ/ตามแอดมินทัน
+                    ป้ายเวลาปิดนัดของใบรอนัดวัน (นัดพรุ่งนี้ได้ถึง … · ขอนัดด่วนแล้ว · แอดมินแก้เป็นงานด่วน) บรรทัดของตัวเอง
+                    — ข้อความยาว วางในแถวป้ายแล้วดันกันหักบรรทัด · หัวข้อปักของแอดมินบอกเรื่องของมันเองในบรรทัดของหัวข้อแล้ว
                   */}
-                  {/* หัวข้อปักของแอดมินบอกสาเหตุครบในบรรทัดของมันเอง — ป้ายของหัวหน้าภาค ("…ขอแอดมินแก้เป็นงานด่วน") อ่านแล้วงงว่าใครต้องทำ */}
-                  {cutKind ? null : <ReleaseChip row={r} now={now} cutoff={clock.cutoff} preRelease={!isAdmin} style={styles.releaseChip} />}
+                  {cutKind ? null : <ScheduleChip row={r} now={now} cutoff={clock.cutoff} style={styles.releaseChip} />}
                   <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={styles.branch} numberOfLines={1} />
                   {cutLines && releaseish ? (
                     <View style={styles.cutLines}>
@@ -1000,7 +984,6 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   cardHot: { borderColor: colors.dangerLine },
-  cardLocked: { borderColor: colors.dangerInk, borderWidth: 2 },
   releaseChip: { marginTop: 2 },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   code: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.primaryInk },
