@@ -177,7 +177,8 @@ export default function PartPicker({
 }: {
   parts: PickedPart[];
   onChange: (next: PickedPart[]) => void;
-  label?: string;
+  /** null = ไม่มีหัวช่อง (ฟอร์มที่มีหัวข้อของตัวเองอยู่แล้ว เช่น ข้อ 5 ของฟอร์มตรวจหน้างาน) */
+  label?: string | null;
   /**
    * ชิ้นที่เอาออกไม่ได้ (sparePartId → เหตุผล) — ฟอร์มปิดงาน: เคลมของชิ้นนั้นผ่าน/ปิดไปแล้ว (เคลมก้อน 3)
    * กดเอาออกแล้วบอกเหตุผลใต้แถว แทนการลบเงียบ ๆ แล้วไปโดนเซิร์ฟเวอร์ปฏิเสธตอนส่ง
@@ -398,7 +399,7 @@ export default function PartPicker({
     if (strict && brand && !brand.machine) {
       return (
         <View style={styles.picker}>
-          <Text style={styles.label}>{label}</Text>
+          {label ? <Text style={styles.label}>{label}</Text> : null}
           {pickedList}
           <View style={styles.lockBox}>
             <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
@@ -411,7 +412,7 @@ export default function PartPicker({
     }
     return (
       <View style={styles.picker}>
-        <Text style={styles.label}>{label}</Text>
+        {label ? <Text style={styles.label}>{label}</Text> : null}
         {pickedList}
         <View style={styles.pickerSearch}>
           <Ionicons name="search" size={15} color={colors.textFaint} />
@@ -477,7 +478,7 @@ export default function PartPicker({
   if (!file || !make) {
     return (
       <View style={styles.picker}>
-        <Text style={styles.label}>{label}</Text>
+        {label ? <Text style={styles.label}>{label}</Text> : null}
         {chipsBlock}
         {pickedList}
       </View>
@@ -527,7 +528,7 @@ export default function PartPicker({
 
   return (
     <View style={styles.picker}>
-      <Text style={styles.label}>{label}</Text>
+      {label ? <Text style={styles.label}>{label}</Text> : null}
       {chipsBlock}
       <View style={styles.fileHead}>
         <Ionicons name="document-text-outline" size={20} color={colors.primaryInk} />

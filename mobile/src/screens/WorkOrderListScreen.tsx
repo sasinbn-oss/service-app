@@ -163,6 +163,13 @@ export interface WorkOrderRow {
   release?: Release | null;
   /** หัวหน้าภาคส่งใบที่ล็อกกลับมาให้แอดมินนัดใหม่ — มีเฉพาะในคำตอบของแอดมิน */
   releaseDeclined?: ReleaseDeclined | null;
+  /** ยี่ห้อเครื่องที่ใช้จริง (รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) — การ์ดคอนเฟิร์มอะไหล่ "เครื่อง {code} · {ยี่ห้อ}" */
+  machineMake?: string | null;
+  /**
+   * รายการที่ช่างเลือกตอนตรวจหน้างาน รอหัวหน้าภาคคอนเฟิร์ม (เฉพาะรอบที่รออยู่ — ถูกตีกลับแล้วไม่ใช่งานของกล่องนี้) · ไม่มี = null
+   * ห้ามเปลี่ยนชื่อช่อง — คู่มือในแอป (tour) หาการ์ดใบที่ "ยังไม่มีรายการของช่าง" จากช่องนี้ (integration S12)
+   */
+  partsPick?: { round: number; count: number; line: string; sentAt: string; sentByName: string | null } | null;
 }
 
 type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";

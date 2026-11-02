@@ -66,6 +66,7 @@ export default function InspectionSlots({
   onRemove,
   onChanged,
   compact = false,
+  partAddLabel,
 }: {
   workOrderId: number;
   /** ไฟล์แนบทั้งใบ — กรองเฉพาะไฟล์ตรวจของรอบนี้เอง */
@@ -79,6 +80,11 @@ export default function InspectionSlots({
   onChanged: () => void | Promise<void>;
   /** ในฟอร์มไม่ต้องมีคำอธิบายใต้ชื่อกรอบ พื้นที่น้อยกว่า */
   compact?: boolean;
+  /**
+   * ชื่อปุ่มถ่ายเพิ่มของกรอบรูปอะไหล่ที่เสีย (เมื่อมีรูปแล้ว) — ใบที่หัวหน้าภาคตีกลับรายการอะไหล่ใช้ "เพิ่มรูปอะไหล่ที่เสีย"
+   * รูปที่ชัดขึ้นคือทางยืนยันรายการเดิมทางหนึ่ง (ด่านส่งใหม่นับรูปที่เพิ่มหลังตีกลับ) — "ถ่ายเพิ่ม" เฉย ๆ ช่างไม่รู้ว่าทำแล้วได้อะไร
+   */
+  partAddLabel?: string;
 }) {
   const [busy, setBusy] = useState<{ role: string; label: string } | null>(null);
   const mine = inspectionFilesOf(rows, since);
@@ -121,7 +127,11 @@ export default function InspectionSlots({
             accessibilityLabel={`กรอบ${slot.label}`}
             busy={busy?.role === slot.role ? busy.label : null}
             primary={{
-              label: got.length ? `${slot.video ? "อัด" : "ถ่าย"}เพิ่ม` : slot.camera,
+              label: got.length
+                ? slot.role === "INSPECT_PART" && partAddLabel
+                  ? partAddLabel
+                  : `${slot.video ? "อัด" : "ถ่าย"}เพิ่ม`
+                : slot.camera,
               icon: slot.video ? "videocam" : slot.role === "INSPECT_PART" ? "scan" : "camera",
               onPress: () =>
                 add(slot.role, (stage) => (slot.video ? pickVideoAttachment(stage, true) : pickImageAttachment(true, stage))),

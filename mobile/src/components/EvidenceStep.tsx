@@ -168,8 +168,24 @@ function SmallBtn({ b }: { b: StepButton }) {
   );
 }
 
-/** ขั้นที่เป็นช่องพิมพ์ (เช่น "ตรวจแล้วเจออะไร") — หน้าตาเดียวกับขั้นแนบไฟล์ เลขต่อกัน */
-export function TextStep({ n, title, done, children }: { n: number; title: string; done: boolean; children: React.ReactNode }) {
+/**
+ * ขั้นที่เป็นช่องพิมพ์ (เช่น "ตรวจแล้วเจออะไร") — หน้าตาเดียวกับขั้นแนบไฟล์ เลขต่อกัน
+ * optional = ขั้นที่เว้นว่างได้ (ข้อ 5 "อะไหล่ที่ต้องใช้" — ข้อ 4 ของเจ้าของงาน) ป้ายเทา "ไม่บังคับ" แทนดอกจันแดง
+ * ดอกจันแดงในฟอร์มนี้แปลว่า "ไม่ใส่ส่งไม่ได้" — ขั้นที่ส่งได้ทั้งที่ว่างต้องบอกให้ต่างกัน ไม่งั้นช่างเลือกอะไหล่มั่ว ๆ ให้ครบ
+ */
+export function TextStep({
+  n,
+  title,
+  done,
+  optional,
+  children,
+}: {
+  n: number;
+  title: string;
+  done: boolean;
+  optional?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <View style={[styles.card, done && styles.cardDone]}>
       <View style={styles.head}>
@@ -178,8 +194,9 @@ export function TextStep({ n, title, done, children }: { n: number; title: strin
         </View>
         <Text style={[styles.title, { flex: 1 }]}>
           {title}
-          {done ? null : <Text style={{ color: colors.danger }}> *</Text>}
+          {optional || done ? null : <Text style={{ color: colors.danger }}> *</Text>}
         </Text>
+        {optional ? <Text style={styles.optionalTag}>ไม่บังคับ</Text> : null}
       </View>
       {children}
     </View>
@@ -236,6 +253,17 @@ const styles = StyleSheet.create({
   numDone: { backgroundColor: colors.successSoft },
   numText: { fontSize: 14, fontWeight: "800", color: colors.roleSupervisor },
   title: { fontSize: 15, fontWeight: "800", color: colors.text },
+  optionalTag: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "600",
+    color: colors.body,
+    backgroundColor: colors.background,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    overflow: "hidden",
+  },
   hint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted, marginTop: 1 },
   badge: { fontSize: 11.5, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill, overflow: "hidden" },
   badgeMiss: { color: colors.warningInk, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
