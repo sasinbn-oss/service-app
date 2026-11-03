@@ -6,7 +6,7 @@
  */
 import { thaiDate } from "../components/DateField";
 import { machineTag } from "./machine";
-import { dispatchPartLines, type DispatchPart } from "./dispatchParts";
+import { repairPartLines, type DispatchPart } from "./dispatchParts";
 
 /** ขั้นของงานตรวจหน้างาน — ข้อความใช้ "เข้าตรวจสอบ / ผลการตรวจสอบ" แทน "เข้าซ่อม / ผลการซ่อม" */
 const INSPECT_STAGES = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING"];
@@ -110,7 +110,7 @@ const LINE = "------------------------";
  * · ไม่มีเบอร์บอกตรง ๆ ว่าไม่มี ไม่ใช่หายไปเฉย ๆ · ไม่ใส่ชื่อแอดมิน (ช่างไม่ต้องใช้)
  * · ไม่ใส่อาการ (เจ้าของงานขอเอาออก) — ช่างเปิดดูในใบงานของตัวเองได้ ข้อความไลน์สั้นลงเหลือแค่ไปที่ไหน เมื่อไหร่
  * · อะไหล่ที่ต้องเปลี่ยนของงานซ่อม (เจ้าของงานขอ 3 พ.ย. 69) — ช่างรู้ว่าต้องไปรับของที่ไหนก่อนออกเดินทาง ไม่ต้องเปิดแอป
- *   งานตรวจหน้างานไม่มีช่วงนี้ (ยังไม่รู้ว่าเสียตรงไหน) · รูปแบบอยู่ที่ dispatchPartLines
+ *   งานซ่อมที่ไม่มีอะไหล่บอก "อะไหล่: ไม่ใช้อะไหล่" · งานตรวจหน้างานไม่มีช่วงนี้ (ยังไม่รู้ว่าเสียตรงไหน) · รูปแบบอยู่ที่ repairPartLines
  */
 export function teamDispatch(team: string, rows: ConfirmedRow[]) {
   const days = [...new Set(rows.map((r) => r.scheduledAt))];
@@ -134,7 +134,7 @@ export function teamDispatch(team: string, rows: ConfirmedRow[]) {
          */
         ...(r.status && UNRELEASED.includes(r.status) ? ["สถานะ: ยังไม่ปล่อยงาน"] : []),
         ...(r.machineCode ? [`เครื่อง: ${machineTag(r.machineCode, r.machineCapacityKg)}`] : []),
-        ...(r.kind === "INSPECT" ? [] : dispatchPartLines(r.parts ?? [])),
+        ...(r.kind === "INSPECT" ? [] : repairPartLines(r.parts ?? [])),
         `ผู้ติดต่อ: ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
         ...(r.latitude != null && r.longitude != null ? [`แผนที่: https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
       );
@@ -201,9 +201,10 @@ export function subDispatch(o: SubOrder) {
     `สาขา: ${o.branchName}`,
     ...(o.machineCode ? [`เครื่อง: ${machineTag(o.machineCode, o.machineCapacityKg)}`] : []),
     ...(symptom ? [`อาการ: ${symptom}`] : []),
-    ...dispatchPartLines(
-      o.waitingParts.map((p) => ({ ...p, code: p.offCatalog ? null : p.partCode }))
-    ),
+    // งานตรวจของทีม SUB ยังไม่มีอะไหล่ให้บอก — งานซ่อมบอกเสมอ ไม่มีก็บอกว่าไม่ใช้ (เหมือนข้อความทีมช่าง)
+    ...(INSPECT_STAGES.includes(o.status)
+      ? []
+      : repairPartLines(o.waitingParts.map((p) => ({ ...p, code: p.offCatalog ? null : p.partCode })))),
     `ผู้ติดต่อ: ${[o.contactName, o.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
     ...(o.branchLatitude != null && o.branchLongitude != null
       ? [`แผนที่: https://maps.google.com/?q=${o.branchLatitude},${o.branchLongitude}`]
