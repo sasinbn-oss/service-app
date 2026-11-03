@@ -66,6 +66,8 @@ const users = `select id from "User" where "employeeCode" in ('${TECH}','${NEW}'
   async function open(who = "A001", pw = "test1234", width = 1400, height = 1100) {
     const ctx = await browser.newContext({ viewport: { width, height }, geolocation: { latitude: LAT, longitude: LNG }, permissions: ["geolocation"] });
     const page = await ctx.newPage();
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ตั้งแต่แรก — สิทธิ์ผู้ใช้อยู่กลุ่มอื่น จึงกางทุกกลุ่มไว้ก่อน
     await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));

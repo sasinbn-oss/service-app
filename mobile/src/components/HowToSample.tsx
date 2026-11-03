@@ -43,7 +43,38 @@ export default function HowToSample() {
   );
 }
 
+/**
+ * ภาพเล็กบนกล่องต้อนรับ (ตามตัวอย่างที่ตกลงไว้: มือถือ + กล่องข้อความชี้) — วาดจาก View กับไอคอนเส้น
+ * แอปไม่มี react-native-svg และเจ้าของงานเลือกภาพเส้นเล็ก ๆ ในแอป ไม่ใช่วิดีโอ/GIF · เป็นภาพประกอบ โปรแกรมอ่านจอข้าม
+ */
+export function HowToWelcomePicture() {
+  return (
+    <View style={styles.pic} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden>
+      <Ionicons name="phone-portrait-outline" size={64} color={colors.navy} />
+      <View style={styles.picSide}>
+        <Ionicons name="chatbubble-ellipses-outline" size={34} color={colors.primary} />
+        <View style={[styles.picLine, { width: 40 }]} />
+        <View style={[styles.picLine, { width: 30 }]} />
+        <View style={[styles.picLine, { width: 36 }]} />
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  pic: {
+    width: 156,
+    height: 108,
+    borderRadius: 18,
+    backgroundColor: colors.primarySoft,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    alignSelf: "center",
+  },
+  picSide: { gap: 5, alignItems: "flex-start" },
+  picLine: { height: 3, borderRadius: 2, backgroundColor: colors.navy, opacity: 0.55 },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,

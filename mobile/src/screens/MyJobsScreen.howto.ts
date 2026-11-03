@@ -12,6 +12,7 @@ import type { HowToTour } from "../utils/howtoTypes";
 export const TECH_MYDAY: HowToTour = {
   id: "tech.myday",
   title: "งานของฉันวันนี้",
+  page: "งานของฉัน",
   roles: ["tech", "senior"],
   route: "MyJobs",
   start: { route: "MyJobs" },

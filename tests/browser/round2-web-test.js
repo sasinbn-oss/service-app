@@ -82,6 +82,8 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     const file = sql(`select string_agg(file, ',') from "SparePartBrandFile" where "sparePartId"=${pid}`);
 
     const page = await (await browser.newContext({ viewport: { width: 1300, height: 1000 } })).newPage();
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (l) => page.locator(`[aria-label="${l}"]`).locator("visible=true");

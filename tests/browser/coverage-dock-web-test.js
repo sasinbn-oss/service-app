@@ -26,6 +26,8 @@ const TECH_NAME = `ช่างแถบล่าง${SUF}`;
        select '${TECH}','${TECH_NAME}','EMPLOYEE',"passwordHash",false from "User" where "employeeCode"='A001'`);
   try {
     const page = await browser.newPage({ viewport: { width: 1366, height: 800 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (l) => page.locator(`[aria-label="${l}"]`).locator("visible=true").last();

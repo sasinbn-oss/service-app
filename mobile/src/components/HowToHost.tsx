@@ -10,6 +10,10 @@
  * ปุ่มที่ถูกชี้ก็กดไม่ได้ (มีแผ่นใสทับ) — ขั้นลองกดใช้ปุ่มแทนขนาดเท่ารู ไม่ได้เปิดรูลงไปที่หน้าจริง หน้าจึงนิ่งสนิททุกขั้น
  * แอปติดตั้ง (APK): กล่องกลางจอใน Modal ไม่ชี้ปุ่ม (ไม่มี DOM ให้หา — แผนงาน D9)
  *
+ * กล่องที่ขึ้นเองตอนเปิดแอป (กล่องต้อนรับ · ข้อความแนะนำ — utils/howto.ts ตัดสินว่าใครได้อะไร) ใช้ชั้นเดียวกัน
+ * กติกาเดียวกันทุกข้อ (inert · Esc · Tab วน · หลบกล่องยืนยัน) และมีกรอบล้อมปุ่ม ? ให้เห็นว่าดูซ้ำได้ที่ไหน
+ * กด "เริ่มเลย" แล้วขั้นแรกต่อจากกล่องต้อนรับในชั้นเดิม — หน้าข้างหลังไม่หลุดจาก inert ระหว่างนั้น
+ *
  * ห้ามใช้ animationKeyframes ที่นี่ (CLAUDE.md) — กล่องจางเข้าด้วย Animated 150 ms เท่านั้น ข้ามเมื่อตั้งลดการเคลื่อนไหว
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -18,24 +22,31 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import Overlay from "./Overlay";
-import HowToSample from "./HowToSample";
+import HowToSample, { HowToWelcomePicture } from "./HowToSample";
 import { feedbackBusy, subscribeFeedback } from "./Feedback";
 import { sideMenu, sideMenuOpen } from "./SideMenu";
 import { useAuth } from "../context/AuthContext";
 import { modalOpened } from "../utils/liveSync";
 import { reduceMotion } from "../utils/motion";
-import { bodyText } from "../utils/howtoTours";
+import { bodyText, rolesOf, stepsFor, tourById } from "../utils/howtoTours";
 import {
+  answerNotice,
+  answerWelcome,
   bindHowToSession,
+  dismissHowTo,
   howtoCtx,
+  howtoLayout,
   nextStep,
   prevShown,
   prevStep,
   resetHowTo,
+  scheduleHowtoPrompt,
   skipMissing,
   stopHowTo,
   takeReturnFocus,
   useHowToStore,
+  whereIsHelp,
+  type HowToPrompt,
   type HowToRun,
 } from "../utils/howto";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
@@ -57,16 +68,19 @@ export default function HowToHost() {
   useEffect(() => {
     bindHowToSession({ user, patchUser });
   }, [user, patchUser]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // กล่องต้อนรับ/ข้อความแนะนำ — ตัดสินครั้งเดียวต่อการขึ้นจอ (ตัวนี้ขึ้นใหม่ทุกครั้งที่สลับคน จึงได้ของคนที่เข้ามาจริง)
+    const cancel = scheduleHowtoPrompt();
+    return () => {
+      cancel();
       resetHowTo();
       bindHowToSession(null);
-    },
-    [],
-  );
-  const { run } = useHowToStore();
-  if (!run) return null;
-  return Platform.OS === "web" ? <WebLayer run={run} /> : <NativeLayer run={run} />;
+    };
+  }, []);
+  const { run, prompt } = useHowToStore();
+  if (!run && !prompt) return null;
+  if (Platform.OS !== "web") return run ? <NativeLayer run={run} /> : prompt ? <NativePrompt prompt={prompt} /> : null;
+  return <WebLayer run={run} prompt={prompt} />;
 }
 
 // ── เว็บ: หา/วัดปุ่มจริงใน DOM ──
@@ -224,17 +238,15 @@ function place(hole: Rect | null, o: { vw: number; vh: number; bw: number; bh: n
   return centered;
 }
 
-function WebLayer({ run }: { run: HowToRun }) {
-  const { width: vw, height: vh } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const step = run.steps[run.i];
-  const ids = useMemo(() => (step.target ? ([] as string[]).concat(step.target) : []), [step]);
-  const [found, setFound] = useState<{ seq: number; rect: Rect | null } | null>(null);
+/**
+ * ชั้นบนเว็บ — ของที่ทุกกล่องใช้ร่วมกัน (กล่องสอนทีละขั้น · กล่องต้อนรับ · ข้อความแนะนำ):
+ * ถือ modalOpened · ตั้ง inert ทั้งหน้า · Esc / Tab · หลบกล่องยืนยันของแอป
+ * อยู่ต่อเนื่องตอนกล่องต้อนรับส่งต่อให้ขั้นแรก ("เริ่มเลย") — inert ไม่ถูกปลดแล้วตั้งใหม่ระหว่างนั้น
+ */
+function WebLayer({ run, prompt }: { run: HowToRun | null; prompt: HowToPrompt | null }) {
   const [paused, setPaused] = useState(feedbackBusy());
-  const [boxH, setBoxH] = useState(0);
-  const boxRef = useRef<View>(null);
-  const live = useRef({ paused, slow: run.slow });
-  live.current = { paused, slow: run.slow };
+  const live = useRef({ paused });
+  live.current = { paused };
 
   // ถือ "มีหน้าต่างเปิดอยู่" ตลอดที่เล่น — ลากรีเฟรช/โหลดรุ่นใหม่/เช็คของใหม่เบื้องหลังหยุดไว้ก่อน · หน้าข้างหลังกดไม่ได้
   useEffect(() => {
@@ -253,7 +265,7 @@ function WebLayer({ run }: { run: HowToRun }) {
 
   /**
    * คีย์บอร์ด: ฟังที่ window ช่วงจับ (capture) ก่อนใครทั้งหมด
-   * Esc = ข้าม (D10) และต้องไม่ถึงหน้าต่างใบงาน (PopupScreen ปิดตอน keydown) / Modal (ปิดตอน keyup) ข้างหลังเด็ดขาด
+   * Esc = ข้าม / ไว้ทีหลัง / เข้าใจแล้ว (D10) และต้องไม่ถึงหน้าต่างใบงาน (PopupScreen ปิดตอน keydown) / Modal (ปิดตอน keyup) ข้างหลังเด็ดขาด
    * ระหว่างหลบให้กล่องยืนยัน Esc ถูกกินเฉย ๆ — กล่องยืนยันไม่มี Esc ของตัวเอง ปล่อยผ่านแล้วหน้าต่างใบงานใต้กล่องปิด
    * Tab วนอยู่ในกล่องเสมอ: ทุกอย่างอื่น inert แล้ว Tab ตัวสุดท้ายจะหลุดออกนอกหน้า (และเบราว์เซอร์ที่ไม่มี inert ต้องพึ่งตัวนี้)
    */
@@ -265,7 +277,7 @@ function WebLayer({ run }: { run: HowToRun }) {
         e.stopImmediatePropagation();
         if (e.type === "keydown" && !live.current.paused) {
           swallowNextEscapeUp();
-          stopHowTo("skip");
+          dismissHowTo();
         }
         return;
       }
@@ -293,15 +305,32 @@ function WebLayer({ run }: { run: HowToRun }) {
     };
   }, []);
 
-  /**
-   * หาปุ่มของขั้นนี้: ทุก 100 ms ถึง 1.5 วิ (6 วิหลังเปิดเมนู/หน้าใหม่) · เจอแล้ววัดซ้ำทุก 400 ms และตอนเลื่อน/ย่อขยายจอ
-   * (แถบหัวของรายการบนมือถือหลบขึ้นลง ปุ่มขยับ) · หาไม่เจอ = ข้ามขั้น หรือกล่องกลางจอตามที่ขั้นระบุ
-   * เจอแล้วหายทีหลัง (เมนูเลื่อนมาทับปุ่มสามขีด) ใช้ตำแหน่งล่าสุดต่อ ไม่สลับไปกลางจอกลางขั้น
-   */
-  const seq = run.seq;
-  const waiting = run.waiting;
+  return (
+    <Overlay z={LAYER_Z} attr={LAYER_ATTR}>
+      {run ? <StepLayer run={run} paused={paused} /> : prompt ? <PromptLayer prompt={prompt} paused={paused} /> : null}
+    </Overlay>
+  );
+}
+
+type Found = { seq: number; rect: Rect | null };
+
+/**
+ * หาปุ่มที่ต้องล้อม: ทุก 100 ms ถึง 1.5 วิ (6 วิหลังเปิดเมนู/หน้าใหม่) · เจอแล้ววัดซ้ำทุก 400 ms และตอนเลื่อน/ย่อขยายจอ
+ * (แถบหัวของรายการบนมือถือหลบขึ้นลง ปุ่มขยับ) · หาไม่เจอ = ข้ามขั้น หรือกล่องกลางจอ (onMissing)
+ * เจอแล้วหายทีหลัง (เมนูเลื่อนมาทับปุ่มสามขีด) ใช้ตำแหน่งล่าสุดต่อ ไม่สลับไปกลางจอกลางขั้น
+ * seq = เลขรอบของสิ่งที่กำลังชี้ — ผลของรอบเก่าไม่ถูกใช้กับรอบใหม่ · off = ยังไม่ต้องหา (รอหน้าจอเปิดใบงานให้)
+ */
+function useTarget(
+  ids: string[],
+  seq: number,
+  o: { off?: boolean; slow?: boolean; onMissing: "center" | ((seq: number) => void) },
+): Found | null {
+  const [found, setFound] = useState<Found | null>(null);
+  const opts = useRef(o);
+  opts.current = o;
+  const off = !!o.off;
   useEffect(() => {
-    if (waiting) return;
+    if (off) return;
     if (!ids.length) {
       setFound({ seq, rect: null });
       return;
@@ -309,7 +338,7 @@ function WebLayer({ run }: { run: HowToRun }) {
     let stopped = false;
     let got = false;
     let t: ReturnType<typeof setTimeout> | undefined;
-    const deadline = Date.now() + (live.current.slow ? 6000 : 1500);
+    const deadline = Date.now() + (opts.current.slow ? 6000 : 1500);
     const apply = (r: Rect) =>
       setFound((f) =>
         f && f.seq === seq && f.rect && Math.abs(f.rect.x - r.x) < 1 && Math.abs(f.rect.y - r.y) < 1 && Math.abs(f.rect.w - r.w) < 1 && Math.abs(f.rect.h - r.h) < 1
@@ -323,8 +352,9 @@ function WebLayer({ run }: { run: HowToRun }) {
         got = true;
         apply(r);
       } else if (!got && Date.now() > deadline) {
-        if (step.whenMissing === "center") setFound({ seq, rect: null });
-        else skipMissing(seq);
+        const miss = opts.current.onMissing;
+        if (miss === "center") setFound({ seq, rect: null });
+        else miss(seq);
         return;
       }
       t = setTimeout(tick, got ? 400 : 100);
@@ -348,12 +378,12 @@ function WebLayer({ run }: { run: HowToRun }) {
       window.removeEventListener("resize", again);
       window.removeEventListener("scroll", again, true);
     };
-  }, [seq, waiting, ids, step]);
+  }, [seq, off, ids]);
+  return found && found.seq === seq ? found : null;
+}
 
-  const cur = !waiting && found && found.seq === seq ? found : null;
-  const shownKey = cur ? `${seq}:${cur.rect ? "t" : "c"}` : "";
-
-  // จางเข้าทีละขั้น + โฟกัสที่กล่อง (โปรแกรมอ่านจออ่านชื่อขั้นให้)
+/** จางเข้าทุกครั้งที่กล่องใหม่ขึ้น + โฟกัสที่กล่อง (โปรแกรมอ่านจออ่านชื่อกล่องให้) · ระหว่างหลบไม่ทำ */
+function useFadeIn(shownKey: string, paused: boolean, boxRef: React.RefObject<View | null>) {
   const op = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (!shownKey || paused) return;
@@ -366,7 +396,71 @@ function WebLayer({ run }: { run: HowToRun }) {
       clearTimeout(f);
       anim.stop();
     };
-  }, [shownKey, paused, op]);
+  }, [shownKey, paused, op, boxRef]);
+  return op;
+}
+
+/** รูที่เจาะรอบปุ่ม (เผื่อขอบ PAD) ตัดให้อยู่ในจอ */
+function holeOf(rect: Rect | null | undefined, vw: number, vh: number): Rect | null {
+  if (!rect) return null;
+  const x = clamp(rect.x - PAD, 0, vw);
+  const y = clamp(rect.y - PAD, 0, vh);
+  return { x, y, w: clamp(rect.x + rect.w + PAD, 0, vw) - x, h: clamp(rect.y + rect.h + PAD, 0, vh) - y };
+}
+
+/**
+ * พื้นมืดทั้งจอ + แผ่นใสกันกด · มีรู = มืดสี่ชิ้นรอบรู และกรอบสีรอบรู (รูเองก็มีแผ่นใสทับ ปุ่มที่ถูกชี้กดไม่ได้)
+ * round = กรอบโค้งเต็มตามปุ่ม (ปุ่ม ? กลม / ปุ่มยาวมีชื่อ) แบบตัวอย่างกล่องต้อนรับ
+ */
+function Dim({ hole, vw, vh, ring, round }: { hole: Rect | null; vw: number; vh: number; ring: string; round?: boolean }) {
+  return (
+    <>
+      {/* แผ่นใสทับทั้งจอ รวมรูที่เจาะ — กด/ลากบนพื้นมืดไม่ถึงหน้าข้างหลัง (ลากแล้วไม่รีเฟรช ไม่เลื่อนหน้า) */}
+      <View
+        style={[StyleSheet.absoluteFill, styles.blocker]}
+        pointerEvents="auto"
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+      />
+      {hole ? (
+        <>
+          <View pointerEvents="none" style={[styles.dim, { left: 0, top: 0, width: vw, height: hole.y }]} />
+          <View pointerEvents="none" style={[styles.dim, { left: 0, top: hole.y + hole.h, width: vw, height: Math.max(0, vh - hole.y - hole.h) }]} />
+          <View pointerEvents="none" style={[styles.dim, { left: 0, top: hole.y, width: hole.x, height: hole.h }]} />
+          <View pointerEvents="none" style={[styles.dim, { left: hole.x + hole.w, top: hole.y, width: Math.max(0, vw - hole.x - hole.w), height: hole.h }]} />
+          <View
+            pointerEvents="none"
+            style={[
+              styles.ring,
+              { left: hole.x, top: hole.y, width: hole.w, height: hole.h, borderColor: ring },
+              round ? { borderRadius: Math.min(hole.w, hole.h) / 2 } : null,
+            ]}
+            // เทสต์เทียบกรอบนี้กับปุ่มจริง — "หาเจอ" อย่างเดียวไม่พอ ต้องล้อมปุ่มที่ขั้นนั้นพูดถึง
+            {...({ dataSet: { howtoRing: "1" } } as object)}
+          />
+        </>
+      ) : (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.dimAll]} />
+      )}
+    </>
+  );
+}
+
+/** กล่องสอนทีละขั้น — ชี้ปุ่มจริงของขั้นนี้ */
+function StepLayer({ run, paused }: { run: HowToRun; paused: boolean }) {
+  const { width: vw, height: vh } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const step = run.steps[run.i];
+  const ids = useMemo(() => (step.target ? ([] as string[]).concat(step.target) : []), [step]);
+  const [boxH, setBoxH] = useState(0);
+  const boxRef = useRef<View>(null);
+
+  const seq = run.seq;
+  const waiting = run.waiting;
+  const found = useTarget(ids, seq, { off: waiting, slow: run.slow, onMissing: step.whenMissing === "center" ? "center" : skipMissing });
+  const cur = !waiting ? found : null;
+  const shownKey = cur ? `${seq}:${cur.rect ? "t" : "c"}` : "";
+  const op = useFadeIn(shownKey, paused, boxRef);
 
   const hooks = {
     dataSet: {
@@ -378,96 +472,121 @@ function WebLayer({ run }: { run: HowToRun }) {
     },
   } as object;
 
-  if (paused) {
-    return (
-      <Overlay z={LAYER_Z} attr={LAYER_ATTR}>
-        <View style={StyleSheet.absoluteFill} pointerEvents="none" {...hooks} />
-      </Overlay>
-    );
-  }
+  if (paused) return <View style={StyleSheet.absoluteFill} pointerEvents="none" {...hooks} />;
 
   const phone = vw < 640;
   const bw = phone ? vw - 2 * MARGIN : 420;
-  const hole = cur?.rect
-    ? (() => {
-        const x = clamp(cur.rect.x - PAD, 0, vw);
-        const y = clamp(cur.rect.y - PAD, 0, vh);
-        return { x, y, w: clamp(cur.rect.x + cur.rect.w + PAD, 0, vw) - x, h: clamp(cur.rect.y + cur.rect.h + PAD, 0, vh) - y };
-      })()
-    : null;
+  const hole = holeOf(cur?.rect, vw, vh);
   const tryStep = step.try?.action === "openMenu" ? step.try : null;
   const tryDone = !!tryStep && sideMenuOpen();
   const pos = cur ? place(hole, { vw, vh, bw, bh: boxH || 260, phone, sheet: step.place === "sheet" }) : null;
 
   return (
-    <Overlay z={LAYER_Z} attr={LAYER_ATTR}>
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none" {...hooks}>
-        {/* แผ่นใสทับทั้งจอ รวมรูที่เจาะ — กด/ลากบนพื้นมืดไม่ถึงหน้าข้างหลัง (ลากแล้วไม่รีเฟรช ไม่เลื่อนหน้า) */}
-        <View
-          style={[StyleSheet.absoluteFill, styles.blocker]}
-          pointerEvents="auto"
-          onStartShouldSetResponder={() => true}
-          onMoveShouldSetResponder={() => true}
-        />
-        {hole ? (
-          <>
-            <View pointerEvents="none" style={[styles.dim, { left: 0, top: 0, width: vw, height: hole.y }]} />
-            <View pointerEvents="none" style={[styles.dim, { left: 0, top: hole.y + hole.h, width: vw, height: Math.max(0, vh - hole.y - hole.h) }]} />
-            <View pointerEvents="none" style={[styles.dim, { left: 0, top: hole.y, width: hole.x, height: hole.h }]} />
-            <View pointerEvents="none" style={[styles.dim, { left: hole.x + hole.w, top: hole.y, width: Math.max(0, vw - hole.x - hole.w), height: hole.h }]} />
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" {...hooks}>
+      <Dim hole={hole} vw={vw} vh={vh} ring={tryStep ? colors.warning : colors.primary} />
+      {tryStep && hole ? (
+        <>
+          {/* ปุ่มแทนขนาดเท่ารู — ทำสิ่งเดียวกับปุ่มสามขีด (เปิดเมนู) โดยหน้าจริงยังนิ่งทั้งหน้า */}
+          <TouchableOpacity
+            style={[styles.proxy, { left: hole.x, top: hole.y, width: hole.w, height: hole.h }]}
+            onPress={() => sideMenu.open()}
+            accessibilityLabel={tryStep.label}
+          />
+          {tryDone ? null : (
             <View
               pointerEvents="none"
-              style={[styles.ring, { left: hole.x, top: hole.y, width: hole.w, height: hole.h, borderColor: tryStep ? colors.warning : colors.primary }]}
-              // เทสต์เทียบกรอบนี้กับปุ่มจริง — "หาเจอ" อย่างเดียวไม่พอ ต้องล้อมปุ่มที่ขั้นนั้นพูดถึง
-              {...({ dataSet: { howtoRing: "1" } } as object)}
-            />
-          </>
-        ) : (
-          <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.dimAll]} />
-        )}
-        {tryStep && hole ? (
-          <>
-            {/* ปุ่มแทนขนาดเท่ารู — ทำสิ่งเดียวกับปุ่มสามขีด (เปิดเมนู) โดยหน้าจริงยังนิ่งทั้งหน้า */}
-            <TouchableOpacity
-              style={[styles.proxy, { left: hole.x, top: hole.y, width: hole.w, height: hole.h }]}
-              onPress={() => sideMenu.open()}
-              accessibilityLabel={tryStep.label}
-            />
-            {tryDone ? null : (
-              <View
-                pointerEvents="none"
-                style={[styles.tryPill, { left: Math.min(hole.x + hole.w + 8, vw - 120), top: hole.y + hole.h / 2 - 16 }]}
-              >
-                <Text style={styles.tryPillText}>ลองกดตรงนี้</Text>
-              </View>
-            )}
-          </>
-        ) : null}
-        {cur && pos ? (
-          <Animated.View
-            style={[
-              styles.boxWrap,
-              pos.mode === "sheet"
-                ? { left: 0, right: 0, bottom: 0 }
-                : { left: pos.left, top: pos.top, width: bw },
-              { opacity: op },
-            ]}
-            onLayout={(e) => setBoxH(Math.round(e.nativeEvent.layout.height))}
-          >
-            {hole && pos.mode !== "sheet" && pos.mode !== "center" ? <Nub mode={pos.mode} hole={hole} left={pos.left} top={pos.top} bw={bw} bh={boxH} /> : null}
-            <StepBox
-              run={run}
-              boxRef={boxRef}
-              sheet={pos.mode === "sheet"}
-              sample={!hole && step.sample === "jobCard"}
-              tryDone={tryDone}
-              maxHeight={vh - (pos.mode === "sheet" ? MARGIN : 2 * MARGIN)}
-              bottomPad={pos.mode === "sheet" ? insets.bottom : 0}
-            />
-          </Animated.View>
-        ) : null}
-      </View>
-    </Overlay>
+              style={[styles.tryPill, { left: Math.min(hole.x + hole.w + 8, vw - 120), top: hole.y + hole.h / 2 - 16 }]}
+            >
+              <Text style={styles.tryPillText}>ลองกดตรงนี้</Text>
+            </View>
+          )}
+        </>
+      ) : null}
+      {cur && pos ? (
+        <Animated.View
+          style={[
+            styles.boxWrap,
+            pos.mode === "sheet" ? { left: 0, right: 0, bottom: 0 } : { left: pos.left, top: pos.top, width: bw },
+            { opacity: op },
+          ]}
+          onLayout={(e) => setBoxH(Math.round(e.nativeEvent.layout.height))}
+        >
+          {hole && pos.mode !== "sheet" && pos.mode !== "center" ? <Nub mode={pos.mode} hole={hole} left={pos.left} top={pos.top} bw={bw} bh={boxH} /> : null}
+          <StepBox
+            run={run}
+            boxRef={boxRef}
+            sheet={pos.mode === "sheet"}
+            sample={!hole && step.sample === "jobCard"}
+            tryDone={tryDone}
+            maxHeight={vh - (pos.mode === "sheet" ? MARGIN : 2 * MARGIN)}
+            bottomPad={pos.mode === "sheet" ? insets.bottom : 0}
+          />
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * กล่องที่ขึ้นเองตอนเปิดแอป — พื้นมืดมีกรอบล้อมปุ่ม ? บนแถบหัว ให้คนใหม่เห็นว่า "ดูอีกครั้งได้ที่ปุ่ม ?" คือปุ่มไหน
+ * กล่องต้อนรับอยู่กลางจอ (ตัวอย่างที่ตกลงไว้ — ไม่มีลูกศร) · ข้อความแนะนำเป็นกล่องขั้นเดียวชี้ปุ่ม ?
+ * แอดมินจอแคบ: ปุ่มอยู่ในเมนูข้างที่ปิดอยู่ ไม่มีอะไรให้ล้อม — พื้นมืดไม่มีรู กล่องกลางจอ (ข้อความบอกว่าอยู่ในเมนู)
+ */
+function PromptLayer({ prompt, paused }: { prompt: HowToPrompt; paused: boolean }) {
+  const { user } = useAuth();
+  const { width: vw, height: vh } = useWindowDimensions();
+  const [boxH, setBoxH] = useState(0);
+  const boxRef = useRef<View>(null);
+  const welcome = prompt.kind === "welcome";
+  const helpInDrawer = user?.role === "ADMIN" && howtoLayout(vw) === "narrow";
+  // ไม่มีปุ่มบนแถบหัวให้หา — ไม่ต้องรอหา 1.5 วิ ขึ้นกลางจอเลย
+  const ids = useMemo(() => (helpInDrawer ? [] : ["app.help"]), [helpInDrawer]);
+  const seq = welcome ? 1 : 2;
+  const cur = useTarget(ids, seq, { onMissing: "center" });
+  const shownKey = cur ? `${seq}:${cur.rect ? "t" : "c"}` : "";
+  const op = useFadeIn(shownKey, paused, boxRef);
+
+  const hooks = {
+    dataSet: { howtoPrompt: prompt.kind, howtoTarget: cur ? (cur.rect ? "found" : "center") : "seek" },
+  } as object;
+
+  if (paused) return <View style={StyleSheet.absoluteFill} pointerEvents="none" {...hooks} />;
+
+  const phone = vw < 640;
+  const bw = phone ? vw - 2 * MARGIN : 420;
+  const hole = holeOf(cur?.rect, vw, vh);
+  const bh = boxH || (welcome ? 420 : 220);
+  const pos = !cur
+    ? null
+    : welcome
+      ? { mode: "center" as Mode, left: (vw - bw) / 2, top: Math.max(MARGIN, (vh - bh) / 2) }
+      : place(hole, { vw, vh, bw, bh, phone, sheet: false });
+  const where = whereIsHelp(user, vw);
+  const maxHeight = vh - 2 * MARGIN;
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" {...hooks}>
+      <Dim hole={hole} vw={vw} vh={vh} ring={colors.primary} round />
+      {cur && pos ? (
+        <Animated.View
+          style={[
+            styles.boxWrap,
+            pos.mode === "sheet" ? { left: 0, right: 0, bottom: 0 } : { left: pos.left, top: pos.top, width: bw },
+            { opacity: op },
+          ]}
+          onLayout={(e) => setBoxH(Math.round(e.nativeEvent.layout.height))}
+        >
+          {!welcome && hole && pos.mode !== "sheet" && pos.mode !== "center" ? (
+            <Nub mode={pos.mode} hole={hole} left={pos.left} top={pos.top} bw={bw} bh={boxH} />
+          ) : null}
+          {welcome ? (
+            <WelcomeBox prompt={prompt} boxRef={boxRef} where={where} maxHeight={maxHeight} />
+          ) : (
+            <NoticeBox boxRef={boxRef} where={where} sheet={pos.mode === "sheet"} maxHeight={maxHeight} />
+          )}
+        </Animated.View>
+      ) : null}
+    </View>
   );
 }
 
@@ -595,6 +714,101 @@ function NativeLayer({ run }: { run: HowToRun }) {
   );
 }
 
+type WelcomePrompt = Extract<HowToPrompt, { kind: "welcome" }>;
+
+/**
+ * ตัวกล่องต้อนรับ — ตามตัวอย่างที่ตกลงไว้: ภาพเล็ก · "ยินดีต้อนรับ {ชื่อ}" · "ดูวิธีใช้หน้า {หน้า} — {n} ขั้น ประมาณ 1 นาที"
+ * · เริ่มเลย / ไว้ทีหลัง · บรรทัดล่างบอกที่ดูซ้ำ (คนที่กดไว้ทีหลังต้องรู้ว่ากลับมาดูได้ที่ไหน — กล่องนี้ไม่ขึ้นอีกแล้ว)
+ */
+function WelcomeBox({ prompt, where, boxRef, maxHeight }: { prompt: WelcomePrompt; where: string; boxRef?: React.RefObject<View | null>; maxHeight?: number }) {
+  const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  const tour = tourById(prompt.tourId);
+  // นับขั้นตามจอที่เห็นอยู่ (มือถือมีขั้นลองกดปุ่มสามขีด คอมไม่มี) — ตรงกับที่หน้าสอนการใช้งานบอก
+  const n = tour ? stepsFor(tour, rolesOf(user), howtoLayout(width)).length : 0;
+  const first = user?.name?.trim().split(/\s+/)[0] ?? "";
+  return (
+    <View
+      ref={boxRef}
+      style={[styles.box, maxHeight ? { maxHeight } : null]}
+      role="dialog"
+      aria-modal
+      accessibilityLabel="ยินดีต้อนรับ"
+      tabIndex={-1}
+    >
+      <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={styles.welcomeScroll}>
+        <HowToWelcomePicture />
+        <Text style={[styles.welcomeTitle, headingFont]}>{first ? `ยินดีต้อนรับ ${first}` : "ยินดีต้อนรับ"}</Text>
+        <Text style={styles.welcomeBody}>{`ดูวิธีใช้หน้า ${prompt.page} — ${n} ขั้น ประมาณ 1 นาที`}</Text>
+      </ScrollView>
+      <TouchableOpacity
+        style={[styles.btn, styles.btnPrimary]}
+        onPress={() => answerWelcome(true)}
+        accessibilityLabel="เริ่มเลย"
+        {...({ dataSet: { howtoPrimary: "1" } } as object)}
+      >
+        <Text style={[styles.btnText, styles.btnPrimaryText]}>เริ่มเลย</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={[styles.btn, styles.btnLight]} onPress={() => answerWelcome(false)} accessibilityLabel="ไว้ทีหลัง">
+        <Text style={[styles.btnText, styles.btnLightText]}>ไว้ทีหลัง</Text>
+      </TouchableOpacity>
+      <Text style={styles.welcomeFoot}>{`ดูอีกครั้งได้ที่${where} หรือเมนู › เอกสารและบัญชี › สอนการใช้งาน`}</Text>
+    </View>
+  );
+}
+
+/** ตัวข้อความแนะนำ (พนักงานเดิม ครั้งเดียว) — กล่องขั้นเดียว ปุ่มเดียว "เข้าใจแล้ว" ไม่มีตัวนับขั้น */
+function NoticeBox({ where, boxRef, sheet, maxHeight }: { where: string; boxRef?: React.RefObject<View | null>; sheet?: boolean; maxHeight?: number }) {
+  return (
+    <View
+      ref={boxRef}
+      style={[styles.box, sheet && styles.sheet, maxHeight ? { maxHeight } : null]}
+      role="dialog"
+      aria-modal
+      accessibilityLabel="ใหม่: วิธีใช้หน้านี้"
+      tabIndex={-1}
+    >
+      <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={styles.boxScroll}>
+        <View style={styles.headRow}>
+          <View style={styles.iconCircle}>
+            <Ionicons name="help-circle-outline" size={22} color={colors.primaryInk} />
+          </View>
+          <Text style={[styles.title, headingFont]}>ใหม่: วิธีใช้หน้านี้</Text>
+        </View>
+        <Text style={styles.body}>
+          {`กด${where} เมื่อไม่แน่ใจว่าหน้านี้ใช้ยังไง — แอปจะชี้ทีละปุ่มให้ดู · ดูทั้งหมดได้ที่เมนู › เอกสารและบัญชี › สอนการใช้งาน`}
+        </Text>
+      </ScrollView>
+      <View style={styles.btnRow}>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity
+          style={[styles.btn, styles.btnPrimary]}
+          onPress={() => answerNotice()}
+          accessibilityLabel="เข้าใจแล้ว"
+          {...({ dataSet: { howtoPrimary: "1" } } as object)}
+        >
+          <Text style={[styles.btnText, styles.btnPrimaryText]}>เข้าใจแล้ว</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+/** แอปติดตั้ง: กล่องต้อนรับ/ข้อความแนะนำกลางจอใน Modal ไม่มีกรอบล้อมปุ่ม (D9) · ปุ่มย้อนกลับของเครื่อง = Esc */
+function NativePrompt({ prompt }: { prompt: HowToPrompt }) {
+  const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  useEffect(() => modalOpened(), []);
+  const where = whereIsHelp(user, width);
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={() => dismissHowTo()}>
+      <View style={[StyleSheet.absoluteFill, styles.dimAll, styles.nativeWrap]}>
+        {prompt.kind === "welcome" ? <WelcomeBox prompt={prompt} where={where} /> : <NoticeBox where={where} />}
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   blocker: { backgroundColor: "transparent", ...(Platform.OS === "web" ? ({ touchAction: "none", cursor: "default" } as object) : null) },
   dim: { position: "absolute", backgroundColor: DIM },
@@ -656,4 +870,9 @@ const styles = StyleSheet.create({
   btnPrimaryText: { color: "#fff" },
   btnOff: { opacity: 0.45 },
   nativeWrap: { justifyContent: "center", padding: spacing.lg },
+  // กล่องต้อนรับจัดกลางทั้งกล่องแบบตัวอย่าง — ปุ่มสองปุ่มเต็มความกว้าง (ยืดตามกล่องอยู่แล้ว) ซ้อนกัน
+  welcomeScroll: { gap: spacing.md, alignItems: "center" },
+  welcomeTitle: { fontSize: 22, lineHeight: 32, fontWeight: "800", color: colors.text, textAlign: "center" },
+  welcomeBody: { fontSize: 15, lineHeight: 24, color: colors.body, textAlign: "center" },
+  welcomeFoot: { fontSize: 15, lineHeight: 22, color: colors.textMuted, textAlign: "center" },
 });

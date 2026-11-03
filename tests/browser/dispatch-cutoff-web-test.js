@@ -165,6 +165,8 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       // ตั้งเขตเวลาให้ตรงกับ visitDay() (เวลาไทย) ไม่งั้นช่วง 00:00–07:00 ของไทยบอร์ดเปิดที่เมื่อวาน หาจุดของวันนี้ไม่เจอ
       const ctx = await browser.newContext({ viewport: { width, height }, timezoneId: "Asia/Bangkok" });
       const page = await ctx.newPage();
+      // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+      await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
       // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ — "ระบบหลังบ้าน" อยู่ในกลุ่มผู้ดูแลระบบ จึงกางทุกกลุ่มไว้ก่อน
       await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
       page.on("pageerror", (e) => errors.push(`${code}: ${e}`));

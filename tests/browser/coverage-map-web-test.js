@@ -42,6 +42,8 @@ const EXTRA = `ผังเพิ่ม${SUF}`;
   try {
     const open = async (code) => {
       const page = await browser.newPage({ viewport: { width: 1600, height: 1400 } });
+      // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+      await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
       page.on("pageerror", (e) => errors.push(String(e)));
       const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
       await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });

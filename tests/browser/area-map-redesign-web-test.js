@@ -70,6 +70,8 @@ const SUP = (a, s) => `ซุป${a}${s} ทดสอบผัง`;
     const session = async (user, viewport) => {
       const ctx = await browser.newContext({ viewport });
       const page = await ctx.newPage();
+      // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+      await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
       page.on("pageerror", (e) => errors.push(`${user}: ${String(e)}`));
       await page.goto("http://localhost:8081", { waitUntil: "networkidle", timeout: 180000 });
       await page.evaluate(() => localStorage.removeItem("areaMap.ui.v1"));

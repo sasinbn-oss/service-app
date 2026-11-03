@@ -39,6 +39,8 @@ function cleanup() {
     args: ["--no-sandbox"],
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+  await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
   await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
   const pass = (m) => console.log("PASS", m);
@@ -183,6 +185,8 @@ function cleanup() {
 
     // ════ Area — สามเมนูยังอยู่ครบ ════
     const ap = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await ap.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     await ap.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     const areaDenied = [];
     ap.on("response", (r) => { if (r.url().includes("/api/") && r.status() === 403) areaDenied.push(`${r.request().method()} ${r.url().replace(/^.*\/api/, "")}`); });

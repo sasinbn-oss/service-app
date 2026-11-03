@@ -7,18 +7,22 @@
  *
  * กติกาที่ต้องถูก (แผนงานข้อ 5.4): เปิดเมนูให้เองแล้วต้องปิดคืน · ย้อนกลับก่อนขั้นที่เปิดใบงานให้ = ปิดใบงานนั้น
  * · จบ/ข้ามแล้วใบงานที่เปิดให้ค้างไว้ (ข้อความแนะนำรอจนปิดใบ) · ดูในฐานะไม่บันทึกอะไรเลย · ระหว่างเล่นถือ modalOpened()
+ *
+ * กล่องที่ขึ้นเองมีสองแบบ ขึ้นครั้งเดียวต่อคน (จำที่บัญชี): กล่องต้อนรับ = บัญชีใหม่/แอดมินกด "ให้ดูวิธีใช้ใหม่"
+ * · ข้อความแนะนำสั้น ๆ = พนักงานเดิมที่ใช้แอปอยู่แล้ว (เจ้าของงานเลือก: คนเดิมไม่ต้องโดนบังคับดูทั้งเรื่อง แค่รู้ว่ามีปุ่ม ?)
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dimensions, Platform } from "react-native";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { api } from "../api/client";
 import { feedback } from "../components/Feedback";
+import { isImageViewerOpen } from "../components/ImageViewer";
 import { DOCK_MIN_WIDTH, peekGroup, sideMenu, sideMenuOpen, subscribeSideMenu } from "../components/SideMenu";
 import { navigationRef } from "../navigation/navigationRef";
 import type { User } from "../types";
 import type { Cutoff } from "./dispatchCutoff";
 import type { HowToCtx, HowToRole, HowToState, HowToStep, HowToTour } from "./howtoTypes";
-import { rolesOf, stepsFor, tourById } from "./howtoTours";
+import { rolesOf, stepsFor, tourById, tourForRoute, toursFor } from "./howtoTours";
 
 export { howtoTarget } from "./howtoTarget";
 
@@ -52,17 +56,29 @@ export interface HowToRun {
   readOnly: boolean;
 }
 
+/**
+ * กล่องที่ขึ้นเองตอนเปิดแอป — welcome = กล่องต้อนรับ (ชวนดูวิธีใช้ของหน้าแรก) · notice = ข้อความแนะนำว่ามีปุ่ม ?
+ * tourId / page / here ของกล่องต้อนรับคิดไว้ตอนตัดสินใจขึ้น: เรื่องที่ "เริ่มเลย" จะเล่น · ชื่อหน้าบนแถบหัว
+ * · here = เล่นในหน้าที่เปิดอยู่ได้เลย (ไม่ใช่ = ไปหน้าของเรื่องนั้นก่อน แบบเริ่มจากหน้าสอนการใช้งาน)
+ */
+export type HowToPrompt = { kind: "welcome"; tourId: string; page: string; here: boolean } | { kind: "notice" };
+
 interface Store {
   run: HowToRun | null;
+  prompt: HowToPrompt | null;
 }
 
-let store: Store = { run: null };
+let store: Store = { run: null, prompt: null };
 const listeners = new Set<() => void>();
 function emit() {
   listeners.forEach((l) => l());
 }
 function setRun(run: HowToRun | null) {
   store = { ...store, run };
+  emit();
+}
+function setPrompt(prompt: HowToPrompt | null) {
+  store = { ...store, prompt };
   emit();
 }
 function patchRun(p: Partial<HowToRun>) {
@@ -112,6 +128,19 @@ export function whereIsHelp(user: User | null | undefined, width = Dimensions.ge
   if (user?.role === "ADMIN" && !wide) return 'ปุ่ม "วิธีใช้หน้านี้" ในเมนู ข้างออกจากระบบ';
   if (wide && width >= 1200) return 'ปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช';
   return "ปุ่ม ? ข้างปุ่มรีเฟรช";
+}
+
+/**
+ * สวิตช์ปิดกล่องที่ขึ้นเอง (กล่องต้อนรับ/ข้อความแนะนำ) — สำหรับเทสต์ผ่านเบราว์เซอร์ที่สร้างผู้ใช้ใหม่เอง
+ * ผู้ใช้พวกนั้นยังไม่เคยตอบ กล่องจะบังทุกปุ่มที่เทสต์ต้องกด (tests/README) · ปุ่ม ? ที่กดเองยังเล่นได้ตามปกติ
+ * ที่เก็บของเบราว์เซอร์ถูกปิด/แอปติดตั้ง = ไม่ได้ปิด
+ */
+export function howtoAutoOff(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem("otteri-howto-auto") === "off";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -201,6 +230,124 @@ export async function markHowto(kind: { welcome: true } | { notice: true } | { t
   } catch {
     // ไม่บอกผู้ใช้ — การจดว่าดูแล้วพังไม่ใช่เรื่องที่เขาต้องทำอะไร (ครั้งหน้ากล่องก็แค่ขึ้นอีกรอบ)
   }
+}
+
+// ── กล่องที่ขึ้นเองตอนเปิดแอป (กล่องต้อนรับ / ข้อความแนะนำ) ──
+
+/** คนนี้ควรได้กล่องที่ขึ้นเองไหม — ยังไม่ดูว่าเคยตอบหรือยัง (นั่นคือ promptKind) */
+function promptAllowed(user: User): boolean {
+  // ดูในฐานะ: ผู้สอนกำลังดูจอของคนอื่น — ห้ามมีอะไรเด้งและห้ามตอบแทนเขา (เจ้าของงานกำหนด)
+  if (user.viewAs || howtoAutoOff()) return false;
+  // เซิร์ฟเวอร์รุ่นเก่ายังไม่ส่งค่านี้ — ไม่รู้ว่าเคยตอบไหม เด้งไปก่อนจะซ้ำทุกครั้งที่เปิดแอป
+  if (!user.howto) return false;
+  // ตำแหน่งที่ยังไม่มีวิธีใช้ (ทีม Area · Admin Spare Part รอบนี้) — ทั้งสองกล่องชวนไปดูเรื่องที่ยังไม่มี (D1)
+  return toursFor(rolesOf(user)).length > 0;
+}
+
+/** บัญชีใหม่ (หรือแอดมินกดให้ดูใหม่) = กล่องต้อนรับ · ยังไม่เคยตอบอะไรเลย (พนักงานเดิม) = ข้อความแนะนำ · ตอบแล้ว = ไม่มี */
+function promptKind(s: HowToState): "welcome" | "notice" | null {
+  if (s.pending) return "welcome";
+  if (!s.welcomeAt && !s.noticeAt) return "notice";
+  return null;
+}
+
+function currentRouteName(): string | null {
+  return navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name ?? null : null;
+}
+
+/**
+ * เรื่องที่กล่องต้อนรับชวนดู: วิธีใช้ของหน้าที่เปิดอยู่ (ปกติคือหน้าแรกหลังเข้าระบบ) · หน้านั้นไม่มี = เรื่องของหน้างานของฉัน
+ * ชื่อหน้าเอาจากแถบหัวจริงเมื่ออยู่หน้านั้น (ตัวอย่างที่ตกลงไว้: "ดูวิธีใช้หน้า งานของฉัน" — คำที่เห็นบนจอ
+ * ไม่ใช่ชื่อเรื่องในหน้าสอนการใช้งาน) · ยังไม่อยู่หน้านั้นใช้ชื่อที่เขียนไว้ในไฟล์ข้อความ
+ */
+function welcomeFor(user: User): HowToPrompt | null {
+  const roles = rolesOf(user);
+  const hereTour = tourForRoute(roles, currentRouteName());
+  const pages = toursFor(roles).filter((t) => !t.inForm);
+  const tour = hereTour ?? pages.find((t) => t.route === "MyJobs") ?? pages[0];
+  if (!tour) return null;
+  const title = hereTour ? (navigationRef.getCurrentOptions() as { title?: unknown } | undefined)?.title : undefined;
+  return { kind: "welcome", tourId: tour.id, here: !!hereTour, page: typeof title === "string" && title ? title : tour.page ?? tour.title };
+}
+
+/**
+ * ตัดสินใจขึ้นกล่องเองหนึ่งครั้งต่อการขึ้นจอของ MainNavigator (เข้าระบบ · เปิดแอปใหม่ · เปลี่ยนรหัสครั้งแรกเสร็จ)
+ * รอหน้าแรกพร้อมแล้วอีก 0.8 วิ — หน้าวาดเสร็จก่อน กรอบจะได้ล้อมปุ่ม ? ที่มีอยู่จริง
+ * แล้วถามเซิร์ฟเวอร์อีกรอบ: อีกเครื่องของคนเดียวกัน (มือถือ/คอม) อาจตอบไปแล้วหลังเครื่องนี้เข้าระบบ
+ * คืนตัวยกเลิก — ตัววาดหลุดจากจอ (ออกจากระบบ · สลับดูในฐานะ) ก่อนถึงเวลาแล้วต้องไม่ขึ้นให้คนถัดไป
+ */
+export function scheduleHowtoPrompt(): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const later = (ms: number, f: () => void) => {
+    timer = setTimeout(f, ms);
+  };
+  const check = async () => {
+    if (cancelled) return;
+    const user = session?.user;
+    if (!user?.howto || !promptAllowed(user)) return;
+    // ตัวดูรูปเต็มจอจับ Esc ของตัวเองแบบกินหมด (ช่วงจับก่อนใคร) — กล่องที่ขึ้นทับจะปิดด้วย Esc ไม่ได้ · รอจนปิดรูป
+    if (isImageViewerOpen()) return later(1000, () => void check());
+    // กด ? เองไปก่อนกล่องขึ้น — รู้แล้วว่าปุ่มอยู่ไหน ไม่ต้องขึ้นซ้อน (ตอบไม่ครบก็ขึ้นอีกครั้งตอนเปิดแอปรอบหน้า)
+    if (store.run || store.prompt) return;
+    let state: HowToState = user.howto;
+    try {
+      const { data } = await api.get<User>("/auth/me", { loadingText: false });
+      const now = session?.user;
+      if (cancelled || !now || now.id !== user.id || now.viewAs) return;
+      if (data?.id === user.id && data.howto) {
+        state = data.howto;
+        if (!store.run) session?.patchUser({ howto: data.howto });
+      }
+    } catch {
+      // ถามไม่ได้ (เน็ตหลุด) — ตัดสินจากค่าที่ได้ตอนเข้าระบบ
+    }
+    if (cancelled || store.run || store.prompt || isImageViewerOpen()) return;
+    const kind = promptKind(state);
+    const p: HowToPrompt | null = kind === "welcome" ? welcomeFor(user) : kind === "notice" ? { kind } : null;
+    if (p) setPrompt(p);
+  };
+  const wait = (tries: number) => {
+    if (cancelled) return;
+    if (!navigationRef.isReady()) {
+      if (tries < 100) later(100, () => wait(tries + 1));
+      return;
+    }
+    later(800, () => void check());
+  };
+  wait(0);
+  return () => {
+    cancelled = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
+/**
+ * กล่องต้อนรับ: เริ่มเลย = จดว่าตอบแล้ว + เล่นเรื่องที่ชวน · ไว้ทีหลัง/Esc = จดว่าตอบแล้วอย่างเดียว (ดูเองได้ที่ปุ่ม ?)
+ * ตอบแบบไหนก็ไม่ขึ้นอีก — คนที่กดไว้ทีหลังรู้แล้วว่าปุ่มอยู่ไหน (บรรทัดล่างของกล่องบอกไว้)
+ */
+export function answerWelcome(start: boolean) {
+  const p = store.prompt;
+  if (!p || p.kind !== "welcome") return;
+  void markHowto({ welcome: true });
+  // เริ่มก่อนล้างกล่อง — ขั้นแรกต่อจากกล่องต้อนรับทันที หน้าข้างหลังไม่หลุดจาก inert แม้แต่เฟรมเดียว
+  // หน้าที่เปิดอยู่ไม่มีเรื่องนี้ = ไปหน้าของเรื่องก่อน แบบเดียวกับกดเริ่มจากหน้าสอนการใช้งาน
+  if (start) void startHowTo(p.tourId, { fromHub: !p.here });
+  setPrompt(null);
+}
+
+/** ข้อความแนะนำ: เข้าใจแล้ว/Esc = จดว่าเห็นแล้ว ไม่ขึ้นอีก */
+export function answerNotice() {
+  if (store.prompt?.kind !== "notice") return;
+  void markHowto({ notice: true });
+  setPrompt(null);
+}
+
+/** Esc (และปุ่มย้อนกลับของเครื่อง): กำลังเล่น = ข้าม · กล่องต้อนรับ = ไว้ทีหลัง · ข้อความแนะนำ = เข้าใจแล้ว (D10) */
+export function dismissHowTo() {
+  if (store.run) return stopHowTo("skip");
+  if (store.prompt?.kind === "welcome") return answerWelcome(false);
+  if (store.prompt?.kind === "notice") return answerNotice();
 }
 
 // ── เริ่ม / ขยับ / จบ ──
@@ -334,7 +481,12 @@ export async function startHowTo(id: string, opts: { fromHub?: boolean } = {}) {
   const layout = howtoLayout();
   const steps = stepsFor(tour, roles, layout);
   if (!steps.length) return;
-  returnFocus = typeof document !== "undefined" ? document.activeElement : null;
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  // เริ่มจากปุ่ม "เริ่มเลย" ของกล่องต้อนรับ — ปุ่มนั้นหายไปพร้อมกล่อง · จบแล้วคืนโฟกัสให้ปุ่ม ? (ที่ที่ดูซ้ำได้) แทน
+  // (หน้าที่ซ้อนอยู่ข้างหลังก็มีปุ่มชื่อเดียวกัน — เอาตัวที่วาดอยู่บนจอ)
+  returnFocus = active?.closest?.("[data-otteri-howto]")
+    ? Array.from(document.querySelectorAll('[data-testid="howto-app.help"]')).find((el) => el.getClientRects().length > 0) ?? null
+    : active;
   const run: HowToRun = {
     tour,
     steps,
@@ -459,9 +611,13 @@ function holdToast(text: string, key: string) {
   });
 }
 
-/** ตัววาดหลุดจากจอ (ออกจากระบบ · สลับดูในฐานะ — MainNavigator ขึ้นใหม่) — ล้างทุกอย่างที่ค้าง ข้อความที่รออยู่ทิ้งไป */
+/**
+ * ตัววาดหลุดจากจอ (ออกจากระบบ · สลับดูในฐานะ — MainNavigator ขึ้นใหม่) — ล้างทุกอย่างที่ค้าง ข้อความที่รออยู่ทิ้งไป
+ * กล่องต้อนรับ/ข้อความแนะนำที่ยังไม่ตอบก็ทิ้ง (ไม่จดว่าตอบ) — คนเดิมเข้ามาใหม่ก็ขึ้นอีกครั้ง ส่วนคนใหม่ต้องไม่เห็นของคนเก่า
+ */
 export function resetHowTo() {
   stopHowTo("gone");
   navOff?.();
   navOff = null;
+  if (store.prompt) setPrompt(null);
 }

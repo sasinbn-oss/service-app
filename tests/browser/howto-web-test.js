@@ -16,10 +16,18 @@
 //   · "ดูอีกครั้ง" → ไปหน้างานของฉันแล้วเริ่มขั้น 1 · จอคอม: ปุ่มมีชื่อ · ชื่อหน้าตัวใหญ่ · 6 ขั้น
 //   · แอดมินจอแคบ: ไม่มี ? บนแถบหัว · แถว "วิธีใช้หน้านี้" ในเมนูข้าง (กดแล้วเมนูปิด)
 //   · ทีม Area (บัญชีใหม่ pending): ไม่มีกล่องขึ้นเอง · ปุ่ม ? และเมนูพาไปหน้า "ยังไม่มีวิธีใช้สำหรับตำแหน่งนี้" · ฐานข้อมูลไม่ถูกเขียน
-// ก้อนถัดไปเพิ่มในไฟล์นี้: กล่องต้อนรับ/ข้อความแนะนำ · ดูในฐานะ · จอคอมของแอดมิน · ให้ดูวิธีใช้ใหม่
+// กล่องที่ขึ้นเองตอนเปิดแอป (ก้อน 4):
+//   · บัญชีใหม่ (pending) มือถือ: กล่องต้อนรับ กรอบล้อมปุ่ม ? · "ยินดีต้อนรับ {ชื่อแรก}" · "ดูวิธีใช้หน้า งานของฉัน — 7 ขั้น ประมาณ 1 นาที"
+//     · ยังไม่ตอบ = ฐานข้อมูลไม่เปลี่ยน · Tab วนในกล่อง · "เริ่มเลย" → ขั้น 1/7 ต่อทันที + จด welcome (pending หาย)
+//     · Esc กลางทาง = ข้าม ไม่จดหน้า · โหลดใหม่ไม่ขึ้นซ้ำ · ตั้ง pending ใหม่ (แทนปุ่มให้ดูใหม่ของก้อน 7) → ขึ้นอีก · Esc = ไว้ทีหลัง
+//   · พนักงานเดิม (NULL) มือถือ: ข้อความแนะนำ (ไม่ใช่กล่องต้อนรับ) ใต้ปุ่ม ? · เข้าใจแล้ว → จด notice · โหลดใหม่ไม่ขึ้นซ้ำ
+//     · จอคอม: คำบอกที่อยู่ปุ่มเป็น "วิธีใช้หน้านี้" · Esc = เข้าใจแล้ว
+//   · ดูในฐานะ (A001 ดูบัญชีใหม่ pending): ไม่มีกล่องต้อนรับ · ปุ่ม ? เล่นจนจบได้ · ฐานข้อมูลไม่เปลี่ยน ไม่มีคำขอ POST /auth/howto
+// ก้อนถัดไปเพิ่มในไฟล์นี้: จอคอมของแอดมิน (เปิดใบงานให้ดู · Esc ไม่ปิดหน้าต่างใบงาน) · ให้ดูวิธีใช้ใหม่
 //
-// สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) · zzht.area (Area) ด้วย SQL + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว) แล้วลบทั้งหมดตอนจบ
-// หน้าในไฟล์นี้ปิดกล่องที่ขึ้นเอง (otteri-howto-auto=off) ยกเว้นส่วนที่ตรวจว่า "ไม่ขึ้น" (ทีม Area)
+// สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) · zzht.area (Area) · zzht.new (ช่างบัญชีใหม่) · zzht.old (ช่างพนักงานเดิม) ด้วย SQL
+// + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว) แล้วลบทั้งหมดตอนจบ
+// หน้าในไฟล์นี้ปิดกล่องที่ขึ้นเอง (otteri-howto-auto=off) ยกเว้นส่วนที่ตรวจว่ากล่อง "ขึ้น/ไม่ขึ้น" (auto: true)
 // ต้องมี DATABASE_URL · ยืนยันผลที่ฐานข้อมูล (CLAUDE.md)
 const { chromium } = require("playwright");
 const path = require("path");
@@ -444,6 +452,219 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       sql(`select coalesce("howtoSeen"::text,'NULL') from "User" where "employeeCode"='zzht.area'`) === '{"pending": true}'
         ? pass("ทีม Area: ฐานข้อมูลไม่ถูกเขียน (ยัง pending)") : fail("ทีม Area: howtoSeen เปลี่ยน");
       await rc.close();
+    }
+
+    // ══════════ ก้อน 4: กล่องที่ขึ้นเองตอนเปิดแอป (หน้าในส่วนนี้เปิดด้วย auto: true — ไม่ปิดกล่องที่ขึ้นเอง) ══════════
+    /** สถานะในฐานข้อมูลแบบอ่านง่าย: pending|welcome|notice|จำนวนหน้าที่ดูจบ (NULL = false|false|false|0) */
+    const flags = (code) =>
+      sql(`select coalesce(("howtoSeen" ? 'pending'),false)::text||'|'||coalesce(("howtoSeen" ? 'welcome'),false)::text||'|'||
+                  coalesce(("howtoSeen" ? 'notice'),false)::text||'|'||
+                  (select count(*) from jsonb_object_keys(coalesce("howtoSeen"->'tours','{}'::jsonb)))::text
+           from "User" where "employeeCode"='${code}'`);
+    /** การจดที่บัญชีส่งเบื้องหลัง (ไม่รอ) — รอให้ฐานข้อมูลเป็นค่าที่คาดได้ถึง 5 วิ แล้วคืนค่าล่าสุด */
+    const flagsBecome = async (p, code, want) => {
+      let v = flags(code);
+      for (let k = 0; k < 25 && v !== want; k++) {
+        await p.waitForTimeout(200);
+        v = flags(code);
+      }
+      return v;
+    };
+    /** กรอบในชั้นของกล่องล้อมปุ่มนี้ทั้งตัวไหม (ปุ่มที่มองเห็นตัวใดตัวหนึ่ง) */
+    const ringAround = async (p, id) => {
+      const ring = await p.locator("[data-howto-ring]").boundingBox().catch(() => null);
+      const els = p.locator(`[data-testid="howto-${id}"]`).locator("visible=true");
+      for (let k = 0; ring && k < (await els.count()); k++) {
+        const b = await els.nth(k).boundingBox();
+        if (b && b.x >= ring.x - 1 && b.y >= ring.y - 1 && b.x + b.width <= ring.x + ring.width + 1 && b.y + b.height <= ring.y + ring.height + 1) return true;
+      }
+      return false;
+    };
+    /** รอกล่องที่ขึ้นเอง (welcome / notice) วาดเสร็จ: หาปุ่ม ? แล้ว (found) หรือขึ้นกลางจอ (center) — ไม่ขึ้นภายในเวลา = null */
+    const waitPrompt = async (p, kind, ms = 12000) => {
+      const sel = `[data-howto-prompt="${kind}"]:not([data-howto-target="seek"])`;
+      const ok = await p.locator(sel).waitFor({ timeout: ms }).then(() => true, () => false);
+      if (!ok) return null;
+      await p.waitForTimeout(300); // จางเข้า 150 ms
+      return p.locator(sel).getAttribute("data-howto-target");
+    };
+    const layerText = (p) => p.evaluate(() => document.querySelector("[data-otteri-howto]")?.innerText ?? "");
+    const inertOf = (p) => p.evaluate(() => document.querySelectorAll("[inert]").length);
+
+    // ── บัญชีใหม่ (pending) มือถือ: กล่องต้อนรับ + กรอบรอบปุ่ม ? → เริ่มเลย = ขั้น 1/7 ──
+    sql(`insert into "User"("employeeCode",name,role,team,"passwordHash","howtoSeen")
+         select 'zzht.new','สมใจ ทดสอบต้อนรับ','EMPLOYEE','${team}',"passwordHash",'{"pending": true}'::jsonb from "User" where "employeeCode"='A001'`);
+    {
+      const { ctx: nc, page: np } = await open("zzht.new", { auto: true });
+      const welcome = np.locator('[data-otteri-howto] [role="dialog"][aria-label="ยินดีต้อนรับ"]');
+      const wt = await waitPrompt(np, "welcome");
+      wt === "found" && (await welcome.count()) === 1
+        ? pass("บัญชีใหม่เปิดแอป → กล่องต้อนรับขึ้นเอง (กรอบหาปุ่ม ? เจอ)") : fail(`กล่องต้อนรับ: ${wt} · กล่อง ${await welcome.count()}`);
+      (await ringAround(np, "app.help")) && (await np.locator('[aria-label="วิธีใช้หน้านี้"]').locator("visible=true").count()) === 1
+        ? pass("กรอบบนพื้นมืดล้อมปุ่ม ? (วิธีใช้หน้านี้) บนแถบหัวทั้งปุ่ม") : fail("กรอบไม่ล้อมปุ่ม ?");
+      const wtext = async (t) => (await welcome.getByText(t, { exact: true }).count()) === 1;
+      (await wtext("ยินดีต้อนรับ สมใจ")) &&
+      (await wtext("ดูวิธีใช้หน้า งานของฉัน — 7 ขั้น ประมาณ 1 นาที")) &&
+      (await wtext("ดูอีกครั้งได้ที่ปุ่ม ? ข้างปุ่มรีเฟรช หรือเมนู › เอกสารและบัญชี › สอนการใช้งาน")) &&
+      (await welcome.locator('[aria-label="เริ่มเลย"]').count()) === 1 &&
+      (await welcome.locator('[aria-label="ไว้ทีหลัง"]').count()) === 1
+        ? pass('ข้อความกล่องต้อนรับ: "ยินดีต้อนรับ สมใจ" · "ดูวิธีใช้หน้า งานของฉัน — 7 ขั้น ประมาณ 1 นาที" · เริ่มเลย / ไว้ทีหลัง · ดูอีกครั้งได้ที่…')
+        : fail(`ข้อความกล่องต้อนรับไม่ตรง: ${(await layerText(np)).replace(/\s+/g, " ").slice(0, 300)}`);
+      !(await layerText(np)).includes("ทัวร์") ? pass('กล่องต้อนรับไม่มีคำว่า "ทัวร์"') : fail('กล่องต้อนรับมีคำว่า "ทัวร์"');
+      flags("zzht.new") === "true|false|false|0" ? pass("ยังไม่ตอบ — ฐานข้อมูลยัง pending ไม่จดอะไร") : fail(`ก่อนตอบ: ${flags("zzht.new")}`);
+      (await inertOf(np)) > 0 ? pass("ระหว่างกล่องต้อนรับ หน้าข้างหลังถูกตั้ง inert") : fail("กล่องต้อนรับไม่มี inert");
+      let out = 0;
+      for (let k = 0; k < 6; k++) {
+        await np.keyboard.press(k < 4 ? "Tab" : "Shift+Tab");
+        if (!(await np.evaluate(() => !!document.activeElement?.closest("[data-otteri-howto]")))) out++;
+      }
+      out === 0 ? pass("Tab / Shift+Tab วนอยู่ในกล่องต้อนรับ") : fail(`โฟกัสหลุดจากกล่องต้อนรับ ${out} ครั้ง`);
+      await np.screenshot({ path: path.join(DIR, "howto-10-welcome.png") });
+
+      await welcome.locator('[aria-label="เริ่มเลย"]').click();
+      const first = await np
+        .locator('[data-howto-tour="tech.myday"][data-howto-step="1"][data-howto-target="found"]')
+        .waitFor({ timeout: 9000 })
+        .then(() => true, () => false);
+      await np.waitForTimeout(300);
+      first && (await np.locator("[data-howto-prompt]").count()) === 0 &&
+      (await np.locator('[data-otteri-howto] [role="dialog"]').getByText("1/7", { exact: true }).count()) === 1 && (await inertOf(np)) > 0
+        ? pass("เริ่มเลย → ขั้น 1/7 ของงานของฉันวันนี้ต่อทันที (กล่องต้อนรับหาย หน้าข้างหลังยัง inert)") : fail(`เริ่มเลย: ขั้น 1 ${first}`);
+      const afterStart = await flagsBecome(np, "zzht.new", "false|true|false|0");
+      afterStart === "false|true|false|0"
+        ? pass("ฐานข้อมูล: ตอบกล่องต้อนรับแล้ว (welcome) · pending หาย · ยังไม่จดหน้าที่ดูจบ") : fail(`หลังเริ่มเลย: ${afterStart}`);
+      await np.keyboard.press("Escape");
+      await np.waitForTimeout(900);
+      (await np.locator("[data-otteri-howto]").count()) === 0 &&
+      (await np.getByText("ข้ามแล้ว · ดูวิธีใช้อีกครั้ง กดปุ่ม ? ข้างปุ่มรีเฟรช", { exact: true }).locator("visible=true").count()) === 1
+        ? pass("Esc กลางทาง = ข้าม (แถบข้อความข้ามแล้ว)") : fail("Esc หลังเริ่มจากกล่องต้อนรับไม่ข้าม");
+      flags("zzht.new") === "false|true|false|0" ? pass("ข้ามแล้วไม่จดหน้าที่ดูจบ") : fail(`ข้ามแล้วฐานข้อมูล: ${flags("zzht.new")}`);
+
+      // โหลดหน้าใหม่ (เปิดแอปรอบสอง) — ตอบแล้วไม่ขึ้นอีก
+      await np.reload({ waitUntil: "networkidle", timeout: 180000 });
+      await np.waitForTimeout(6000);
+      (await np.locator("[data-otteri-howto]").count()) === 0 ? pass("เปิดแอปรอบสอง: ไม่มีกล่องต้อนรับซ้ำ") : fail("กล่องต้อนรับขึ้นซ้ำหลังตอบแล้ว");
+
+      // แอดมินกดให้ดูใหม่ (จำลองด้วย SQL — ปุ่มจริงมาก้อน 7) → ขึ้นอีกครั้ง · Esc = ไว้ทีหลัง: จดว่าตอบ ไม่เริ่ม ไม่มีแถบข้อความ
+      sql(`update "User" set "howtoSeen"='{"pending": true}'::jsonb where "employeeCode"='zzht.new'`);
+      await np.reload({ waitUntil: "networkidle", timeout: 180000 });
+      const again = await waitPrompt(np, "welcome");
+      await np.keyboard.press("Escape");
+      await np.waitForTimeout(900);
+      const later = await flagsBecome(np, "zzht.new", "false|true|false|0");
+      again === "found" && (await np.locator("[data-otteri-howto]").count()) === 0 && (await np.locator("[data-howto-tour]").count()) === 0 &&
+      (await np.getByText("ข้ามแล้ว", { exact: false }).locator("visible=true").count()) === 0 && later === "false|true|false|0" && (await inertOf(np)) === 0
+        ? pass("กล่องต้อนรับ + Esc = ไว้ทีหลัง: กล่องหาย ไม่เริ่มเล่น ไม่มีแถบข้อความ · ฐานข้อมูลจด welcome · ไม่เหลือ inert")
+        : fail(`Esc บนกล่องต้อนรับ: ขึ้น ${again} · ฐานข้อมูล ${later} · inert ${await inertOf(np)}`);
+      await nc.close();
+    }
+
+    // ── พนักงานเดิม (howtoSeen NULL) มือถือ: ข้อความแนะนำครั้งเดียว ชี้ปุ่ม ? → เข้าใจแล้ว ──
+    sql(`insert into "User"("employeeCode",name,role,team,"passwordHash")
+         select 'zzht.old','สมหมาย พนักงานเดิม','EMPLOYEE','${team}',"passwordHash" from "User" where "employeeCode"='A001'`);
+    const NOTICE_PHONE = "กดปุ่ม ? ข้างปุ่มรีเฟรช เมื่อไม่แน่ใจว่าหน้านี้ใช้ยังไง — แอปจะชี้ทีละปุ่มให้ดู · ดูทั้งหมดได้ที่เมนู › เอกสารและบัญชี › สอนการใช้งาน";
+    {
+      const { ctx: oc, page: op } = await open("zzht.old", { auto: true });
+      const notice = op.locator('[data-otteri-howto] [role="dialog"][aria-label="ใหม่: วิธีใช้หน้านี้"]');
+      const nt = await waitPrompt(op, "notice");
+      nt === "found" && (await ringAround(op, "app.help")) && (await op.locator("[data-howto-prompt=welcome]").count()) === 0
+        ? pass("พนักงานเดิมเปิดแอป → ข้อความแนะนำ (ไม่ใช่กล่องต้อนรับ) กรอบล้อมปุ่ม ?") : fail(`ข้อความแนะนำ: ${nt} · กรอบ ${await ringAround(op, "app.help")}`);
+      (await notice.getByText("ใหม่: วิธีใช้หน้านี้", { exact: true }).count()) === 1 &&
+      (await notice.getByText(NOTICE_PHONE, { exact: true }).count()) === 1 &&
+      (await notice.locator('[aria-label="ข้าม"], [aria-label="ย้อนกลับ"], [aria-label="ถัดไป"]').count()) === 0
+        ? pass('ข้อความแนะนำ: "ใหม่: วิธีใช้หน้านี้" · "กดปุ่ม ? ข้างปุ่มรีเฟรช เมื่อไม่แน่ใจ…" · ปุ่มเดียว เข้าใจแล้ว')
+        : fail(`ข้อความแนะนำไม่ตรง: ${(await layerText(op)).replace(/\s+/g, " ").slice(0, 300)}`);
+      const nBox = await notice.boundingBox();
+      const ring = await op.locator("[data-howto-ring]").boundingBox();
+      nBox && ring && nBox.y >= ring.y + ring.height
+        ? pass("ข้อความแนะนำอยู่ใต้ปุ่ม ? (ชี้ลงมาจากแถบหัว)") : fail(`ตำแหน่งข้อความแนะนำ ${JSON.stringify(nBox)} · กรอบ ${JSON.stringify(ring)}`);
+      flags("zzht.old") === "false|false|false|0" ? pass("ยังไม่ตอบ — ฐานข้อมูลยัง NULL") : fail(`ก่อนตอบ: ${flags("zzht.old")}`);
+      await op.screenshot({ path: path.join(DIR, "howto-11-notice.png") });
+      await notice.locator('[aria-label="เข้าใจแล้ว"]').click();
+      const nAfter = await flagsBecome(op, "zzht.old", "false|false|true|0");
+      await op.waitForTimeout(500);
+      (await op.locator("[data-otteri-howto]").count()) === 0 && (await inertOf(op)) === 0 && nAfter === "false|false|true|0"
+        ? pass("เข้าใจแล้ว → กล่องหาย ไม่เหลือ inert · ฐานข้อมูลจด notice (ไม่ใช่ welcome)") : fail(`หลังเข้าใจแล้ว: ${nAfter} · inert ${await inertOf(op)}`);
+      await op.reload({ waitUntil: "networkidle", timeout: 180000 });
+      await op.waitForTimeout(6000);
+      (await op.locator("[data-otteri-howto]").count()) === 0 ? pass("เปิดแอปรอบสอง: ข้อความแนะนำไม่ขึ้นซ้ำ") : fail("ข้อความแนะนำขึ้นซ้ำ");
+      await oc.close();
+    }
+
+    // ── พนักงานเดิม จอคอม 1366: คำบอกที่อยู่ปุ่มเป็น "วิธีใช้หน้านี้" · Esc = เข้าใจแล้ว ──
+    sql(`update "User" set "howtoSeen"=null where "employeeCode"='zzht.old'`);
+    {
+      const { ctx: wc2, page: wp2 } = await open("zzht.old", { width: 1366, height: 900, auto: true });
+      const notice = wp2.locator('[data-otteri-howto] [role="dialog"][aria-label="ใหม่: วิธีใช้หน้านี้"]');
+      const nt = await waitPrompt(wp2, "notice");
+      const wideText = 'กดปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช เมื่อไม่แน่ใจว่าหน้านี้ใช้ยังไง — แอปจะชี้ทีละปุ่มให้ดู · ดูทั้งหมดได้ที่เมนู › เอกสารและบัญชี › สอนการใช้งาน';
+      nt === "found" && (await ringAround(wp2, "app.help")) && (await notice.getByText(wideText, { exact: true }).count()) === 1
+        ? pass('จอคอม: ข้อความแนะนำบอก "ปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช" กรอบล้อมปุ่มที่มีชื่อ') : fail(`จอคอม ข้อความแนะนำ: ${nt} · ${(await layerText(wp2)).replace(/\s+/g, " ").slice(0, 200)}`);
+      await wp2.keyboard.press("Escape");
+      const wAfter = await flagsBecome(wp2, "zzht.old", "false|false|true|0");
+      await wp2.waitForTimeout(500);
+      (await wp2.locator("[data-otteri-howto]").count()) === 0 && wAfter === "false|false|true|0"
+        ? pass("จอคอม: Esc = เข้าใจแล้ว (กล่องหาย · ฐานข้อมูลจด notice)") : fail(`Esc บนข้อความแนะนำ: ${wAfter}`);
+      await wc2.close();
+    }
+
+    // ── ดูในฐานะ: แอดมินดูเป็นบัญชีใหม่ (pending) — ไม่มีกล่องขึ้นเอง · ปุ่ม ? เล่นได้จนจบ · ไม่บันทึกอะไรเลย ──
+    sql(`update "User" set "howtoSeen"='{"pending": true}'::jsonb where "employeeCode"='zzht.new'`);
+    {
+      const before = sql(`select "howtoSeen"::text from "User" where "employeeCode"='zzht.new'`);
+      const { ctx: vc, page: vp } = await open("A001", { width: 1366, height: 900, auto: true });
+      const writes = [];
+      vp.on("request", (r) => {
+        if (r.method() === "POST" && r.url().includes("/auth/howto")) writes.push(r.url());
+      });
+      const vl = (l) => vp.locator(`[aria-label="${l}"]`).locator("visible=true");
+      await vp.waitForTimeout(1500);
+      (await vp.locator("[data-otteri-howto]").count()) === 0 ? pass("A001 (ตอบแล้วจาก seed:test) ไม่มีกล่องขึ้นเอง") : fail("A001 มีกล่องขึ้นเอง — รัน seed:test แล้วหรือยัง");
+      await vl("ดูในฐานะผู้ใช้อื่น").first().click();
+      await vp.waitForTimeout(1500);
+      await vl("ค้นหาผู้ใช้ที่จะดู").fill("zzht.new");
+      await vp.waitForTimeout(800);
+      await vp.locator('[aria-label^="เลือก "]').locator("visible=true").first().click();
+      await vp.waitForTimeout(300);
+      await vl("ดูในฐานะคนนี้").click();
+      await vp.waitForTimeout(4000);
+      const viewing = (await vp.getByText("กำลังดูในฐานะ", { exact: false }).locator("visible=true").count()) > 0;
+      await vp.waitForTimeout(3000); // กล่องที่ขึ้นเองรอ 0.8 วิหลังหน้าพร้อม + ถามเซิร์ฟเวอร์ — ให้เวลาเกินพอ
+      viewing && (await vp.locator("[data-otteri-howto]").count()) === 0
+        ? pass("ดูในฐานะบัญชีใหม่ (pending): ไม่มีกล่องต้อนรับ") : fail(`ดูในฐานะ: แถบ ${viewing} · ชั้นกล่อง ${await vp.locator("[data-otteri-howto]").count()}`);
+      await vl("วิธีใช้หน้านี้").first().click();
+      let finished = false;
+      let steps = 0;
+      for (let k = 0; k < 12 && !finished; k++) {
+        await vp
+          .waitForFunction(() => {
+            const h = document.querySelector("[data-howto-tour]");
+            return !!h && h.getAttribute("data-howto-target") !== "seek" && !!document.querySelector('[data-otteri-howto] [role="dialog"]');
+          }, null, { timeout: 9000 })
+          .catch(() => {});
+        await vp.waitForTimeout(250);
+        if (!(await vp.locator("[data-howto-tour]").count())) break;
+        steps++;
+        const done = vp.locator('[data-otteri-howto] [aria-label="เข้าใจแล้ว"]');
+        if (await done.count()) {
+          await done.click();
+          finished = true;
+        } else await vp.locator('[data-otteri-howto] [aria-label="ถัดไป"]').click();
+      }
+      const doneToast = vp.getByText('ดูวิธีใช้อีกครั้ง กดปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช', { exact: true }).locator("visible=true");
+      await doneToast.waitFor({ timeout: 4000 }).catch(() => {});
+      finished && (await doneToast.count()) === 1
+        ? pass(`ดูในฐานะ: ปุ่ม ? เล่นงานของฉันวันนี้ได้จนจบ (${steps} ขั้น) · แถบข้อความหลังจบ`) : fail(`ดูในฐานะ: เล่นไม่จบ (${steps} ขั้น)`);
+      await vp.waitForTimeout(1500);
+      const after = sql(`select "howtoSeen"::text from "User" where "employeeCode"='zzht.new'`);
+      after === before && writes.length === 0
+        ? pass("ดูในฐานะ: ฐานข้อมูลของคนที่ถูกดูไม่เปลี่ยน (ยัง pending) · ไม่มีคำขอ POST /auth/howto เลย")
+        : fail(`ดูในฐานะบันทึก: ${before} → ${after} · คำขอ ${writes.length}`);
+      await vl("กลับเป็นตัวเอง").first().click();
+      await vp.waitForTimeout(4000);
+      (await vl("ดูในฐานะผู้ใช้อื่น").count()) > 0 && (await vp.locator("[data-otteri-howto]").count()) === 0 && writes.length === 0
+        ? pass("กลับเป็นตัวเอง: ไม่มีกล่องขึ้นเอง ไม่มีการจด") : fail("กลับเป็นตัวเองแล้วมีกล่อง/การจด");
+      await vc.close();
     }
 
     errors.length === 0 ? pass("ไม่มี error ในหน้าเว็บ") : fail(`error ในหน้าเว็บ: ${errors.slice(0, 3).join(" | ")}`);
