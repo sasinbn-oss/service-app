@@ -1,4 +1,6 @@
 // ทดสอบ: การใช้งานแอป — ปุ่มบนแถบบนข้างชื่อ (แอดมินเห็น ช่างไม่เห็น) · หน้าภาพรวม · ค้นหารายชื่อ · กดชื่อดูย้อนหลัง
+// · คอลัมน์ "ดูวิธีใช้แล้ว" (สอนการใช้งาน): ยังไม่ได้ดู → x/n · ยังขาด … → ✓ ครบ n/n ตามฐานข้อมูล · หัวการ์ด "ดูวิธีใช้ครบแล้ว k คน"
+//   · การ์ดมือถือมีบรรทัด "ดูวิธีใช้แล้ว …" บรรทัดเดียว หน้าไม่ล้นแนวนอน
 // ใส่ช่วงการใช้งานสมมุติให้ช่างทดสอบชั่วคราว แล้วลบทิ้งตอนจบ (ต้องมี DATABASE_URL)
 const { chromium } = require("playwright");
 const path = require("path");
@@ -6,6 +8,8 @@ const { execSync } = require("child_process");
 const DIR = __dirname;
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
 const U = "zz.usage.web";
+// รายชื่อเรื่องของช่างในแอป (mobile/src/utils/howtoTours.ts) — เพิ่มเรื่องของช่างเมื่อไรต้องเพิ่มที่นี่ด้วย
+const TECH_TOURS = ["tech.myday", "tech.orders", "tech.order", "tech.close"];
 
 function cleanup() {
   sql(`delete from "User" where "employeeCode"='${U}';`);
@@ -70,6 +74,33 @@ function cleanup() {
     const names = await page.locator('[aria-label^="การใช้งานของ "]').locator("visible=true").count();
     names === 1 ? pass("ค้นหารายชื่อแล้วเหลือคนเดียว") : fail(`ค้นหาแล้วเหลือ ${names} คน`);
     (await page.getByText("3 ชม. 00 น.").locator("visible=true").count()) > 0 ? pass("รวมเวลาวันนี้ 3 ชม. 00 น. (36 ช่วง × 5 นาที)") : fail("รวมเวลาไม่ตรง");
+
+    // คอลัมน์ "ดูวิธีใช้แล้ว" — ช่างทดสอบสร้างด้วย SQL (howtoSeen NULL = ยังไม่ได้ดูสักเรื่อง) แล้วจดทีละขั้นด้วย SQL
+    const rowText = async () =>
+      (await page.locator('[aria-label="การใช้งานของ ช่างทดสอบเวลาใช้งาน"]').locator("visible=true").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    const titleText = async () => (await page.getByText(/^รายคน · /).locator("visible=true").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    const research = async () => {
+      await box.fill("");
+      await page.waitForTimeout(800);
+      await box.fill("ทดสอบเวลา");
+      await page.waitForTimeout(2500);
+    };
+    (await page.getByText("ดูวิธีใช้แล้ว", { exact: true }).locator("visible=true").count()) >= 1
+      ? pass('จอกว้าง: หัวคอลัมน์ "ดูวิธีใช้แล้ว"') : fail("ไม่มีหัวคอลัมน์ ดูวิธีใช้แล้ว");
+    (await rowText()).includes("ยังไม่ได้ดู") && /^รายคน · 1 คน · ดูวิธีใช้ครบแล้ว 0 คน/.test(await titleText())
+      ? pass('ยังไม่เคยดู (ฐานข้อมูล NULL): "ยังไม่ได้ดู" · หัวการ์ด ดูวิธีใช้ครบแล้ว 0 คน') : fail(`ยังไม่ได้ดู: "${(await rowText()).slice(0, 160)}" · "${await titleText()}"`);
+    const iso = new Date().toISOString();
+    sql(`update "User" set "howtoSeen"='{"notice": "${iso}", "tours": {"${TECH_TOURS[0]}": "${iso}", "area.plan": "${iso}"}}'::jsonb where "employeeCode"='${U}';`);
+    await research();
+    // เรื่องของตำแหน่งอื่นที่จดไว้ (area.plan — เคยเป็นตำแหน่งอื่น) ไม่นับ: นับเทียบรายชื่อของตำแหน่งปัจจุบันเท่านั้น
+    const part = await rowText();
+    part.includes(`1/${TECH_TOURS.length} · ยังขาด ใบงานซ่อม`)
+      ? pass(`ดูไป 1 เรื่อง: "1/${TECH_TOURS.length} · ยังขาด …" (ไม่นับเรื่องของตำแหน่งอื่น)`) : fail(`ดูไปบางเรื่อง: "${part.slice(0, 200)}"`);
+    sql(`update "User" set "howtoSeen"=jsonb_build_object('notice','${iso}','tours',(select jsonb_object_agg(k,'${iso}') from unnest(array['${TECH_TOURS.join("','")}']) k)) where "employeeCode"='${U}';`);
+    await research();
+    (await rowText()).includes(`✓ ครบ ${TECH_TOURS.length}/${TECH_TOURS.length}`) && /^รายคน · 1 คน · ดูวิธีใช้ครบแล้ว 1 คน/.test(await titleText())
+      ? pass(`ดูครบทุกเรื่อง: "✓ ครบ ${TECH_TOURS.length}/${TECH_TOURS.length}" · หัวการ์ด ดูวิธีใช้ครบแล้ว 1 คน`) : fail(`ดูครบ: "${(await rowText()).slice(0, 200)}" · "${await titleText()}"`);
+    await page.screenshot({ path: path.join(DIR, "usage-2b-howto.png") });
     await page.locator('[aria-label="การใช้งานของ ช่างทดสอบเวลาใช้งาน"]').locator("visible=true").first().click();
     await page.waitForTimeout(3000);
     (await page.getByText("ใช้ 5 จาก 7 วัน", { exact: false }).locator("visible=true").count()) > 0 ? pass("ย้อนหลัง: ใช้ 5 จาก 7 วัน") : fail("ย้อนหลังไม่ตรง");
@@ -84,6 +115,10 @@ function cleanup() {
     await phone.waitForTimeout(3500);
     const sw = await phone.evaluate(() => document.documentElement.scrollWidth);
     sw <= 400 ? pass("จอมือถือ: หน้าไม่ล้นแนวนอน") : fail(`จอมือถือกว้าง ${sw}px`);
+    // การ์ดมือถือมีบรรทัดดูวิธีใช้แล้ว (ไม่มีหัวคอลัมน์บนจอแคบ) — บรรทัดเดียว ไม่ทำให้หน้าล้น (เช็คข้างบน)
+    (await phone.getByText(/^ดูวิธีใช้แล้ว /).locator("visible=true").count()) > 0 &&
+    (await phone.getByText("ดูวิธีใช้แล้ว", { exact: true }).locator("visible=true").count()) === 0
+      ? pass('จอมือถือ: การ์ดมีบรรทัด "ดูวิธีใช้แล้ว …" (ไม่มีหัวคอลัมน์)') : fail("จอมือถือ: ไม่มีบรรทัด ดูวิธีใช้แล้ว บนการ์ด");
     await phone.screenshot({ path: path.join(DIR, "usage-4-phone.png") });
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {

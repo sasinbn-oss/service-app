@@ -35,7 +35,12 @@
 //     · กรอบหัวกลุ่ม/ปุ่มของขั้นอยู่เฉพาะกลุ่มตามขั้น ไม่ใช่หัวข้อปัก
 //   · Super Admin (zzht.super จอคอม): งานของฉันวันนี้ 7 ขั้น · ขั้น 7 กางกลุ่ม ผู้ดูแลระบบ ชี้ สำรองข้อมูล (ไม่จดลงเครื่อง)
 //     · เข้าใจแล้ว → ฐานข้อมูลจด tours."admin.myday" · กลุ่มย่อกลับ
-// ก้อนถัดไปเพิ่มในไฟล์นี้: ให้ดูวิธีใช้ใหม่
+// ให้ดูวิธีใช้ใหม่ + คอลัมน์ "ดูวิธีใช้แล้ว" (ก้อน 7 · จอคอม A001):
+//   · การใช้งานแอป: แถวของ zzht.tech บอก "x/n · ยังขาด …" ตรงฐานข้อมูล · หัวคอลัมน์ "ดูวิธีใช้แล้ว" · หัวการ์ด "ดูวิธีใช้ครบแล้ว k คน"
+//   · สิทธิ์ผู้ใช้: ลิงก์ "ให้ดูวิธีใช้ใหม่" บนการ์ดช่าง (ไม่มีบนการ์ดทีม Area — ยังไม่มีวิธีใช้) · ยกเลิก = ฐานข้อมูลไม่เปลี่ยน
+//     · ยืนยัน → แถบเขียว "ตั้งให้ … ดูวิธีใช้ใหม่แล้ว" · ฐานข้อมูล pending + resetAt + resetBy = A001 ไม่มีหน้าที่ดูแล้ว
+//     · การใช้งานแอปกลับเป็น "ยังไม่ได้ดู" · zzht.tech เปิดแอปครั้งถัดไปได้กล่องต้อนรับ (Esc = ไว้ทีหลัง จด welcome)
+//   · Super Admin ดูในฐานะ A001: หน้าสิทธิ์ผู้ใช้ไม่มีลิงก์ "ให้ดูวิธีใช้ใหม่" บนการ์ดไหนเลย (การ์ดยังขึ้นครบ)
 //
 // สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) · zzht.area (Area) · zzht.new (ช่างบัญชีใหม่) · zzht.old (ช่างพนักงานเดิม)
 // · zzht.super (Super Admin ดูแล้ว — สร้างท้ายสุด) ด้วย SQL + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว)
@@ -1027,6 +1032,127 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
         ? pass(`เข้าใจแล้ว → ฐานข้อมูลจด tours."admin.myday" (${zAt}) · กลุ่ม ผู้ดูแลระบบ ย่อกลับ · ไม่เหลือ inert`)
         : fail(`Super Admin เข้าใจแล้ว: ฐานข้อมูล "${zAt}" · สำรองข้อมูลยังเห็น ${await zv('[data-testid="howto-menu.backup"]').count()}`);
       await zc.close();
+    }
+
+    // ══════════ ก้อน 7: ให้ดูวิธีใช้ใหม่ (สิทธิ์ผู้ใช้) + คอลัมน์ "ดูวิธีใช้แล้ว" (การใช้งานแอป) — จอคอม ══════════
+    {
+      // รายชื่อเรื่องของช่างในแอป (utils/howtoTours) — หน้าการใช้งานแอปนับเทียบรายชื่อนี้ ไม่ใช่จำนวนที่เซิร์ฟเวอร์รู้
+      const TECH_TOURS = ["tech.myday", "tech.orders", "tech.order", "tech.close"];
+      const techName = "ช่างทดสอบวิธีใช้";
+      const seenIds = () =>
+        sql(`select coalesce(string_agg(k, ',' order by k),'') from "User" u, jsonb_object_keys(coalesce(u."howtoSeen"->'tours','{}'::jsonb)) k where u."employeeCode"='${TECH}'`)
+          .split(",")
+          .filter((k) => TECH_TOURS.includes(k));
+      const { ctx: mc, page: mp } = await open("A001", { width: 1366, height: 900 });
+      const mv = (sel) => mp.locator(sel).locator("visible=true");
+      /** หน้าการใช้งานแอป ค้นชื่อช่างทดสอบ — คืนข้อความแถว (ไม่มีแถว = "") และหัวการ์ดรายคน */
+      const usageRow = async () => {
+        await mv('[aria-label^="การใช้งานแอป"]').first().click();
+        await mp.waitForTimeout(3500);
+        const box = mp.getByLabel("ค้นหารายชื่อ").locator("visible=true").first();
+        await box.fill("");
+        await box.fill(techName);
+        await mp.waitForTimeout(2500);
+        const row = (await mv(`[aria-label="การใช้งานของ ${techName}"]`).first().innerText().catch(() => "")).replace(/\s+/g, " ");
+        const title = (await mp.getByText(/^รายคน · /).locator("visible=true").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+        return { row, title };
+      };
+      const ids0 = seenIds();
+      const u1 = await usageRow();
+      const missing0 = TECH_TOURS.length - ids0.length;
+      (await mp.getByText("ดูวิธีใช้แล้ว", { exact: true }).locator("visible=true").count()) >= 1
+        ? pass('การใช้งานแอป (จอกว้าง): มีหัวคอลัมน์ "ดูวิธีใช้แล้ว"') : fail("ไม่มีหัวคอลัมน์ ดูวิธีใช้แล้ว");
+      ids0.length >= 1 && missing0 >= 1 && u1.row.includes(`${ids0.length}/${TECH_TOURS.length} · ยังขาด `)
+        ? pass(`แถว ${techName}: "${ids0.length}/${TECH_TOURS.length} · ยังขาด …" ตรงฐานข้อมูล (ดูแล้ว ${ids0.join(", ")})`)
+        : fail(`แถวการใช้งานก่อนตั้งใหม่: "${u1.row.slice(0, 200)}" · ฐานข้อมูล ${ids0.join(",") || "-"}`);
+      /^รายคน · 1 คน · ดูวิธีใช้ครบแล้ว 0 คน/.test(u1.title) ? pass(`หัวการ์ด: "${u1.title}"`) : fail(`หัวการ์ดรายคน: "${u1.title}"`);
+      await mp.screenshot({ path: path.join(DIR, "howto-16-usage-before.png") });
+
+      // สิทธิ์ผู้ใช้ (กลุ่ม ผู้ดูแลระบบ ย่ออยู่ตามค่าตั้งต้น)
+      if (!(await mv('[data-testid="howto-menu.users"]').count())) await mv('[aria-label="กางกลุ่ม ผู้ดูแลระบบ"]').first().click();
+      await mp.waitForTimeout(900);
+      await mv('[data-testid="howto-menu.users"]').first().click();
+      await mp.waitForTimeout(3000);
+      const search = mp.getByLabel("ค้นหาผู้ใช้").locator("visible=true").first();
+      await search.fill("zzht.area");
+      await mp.waitForTimeout(900);
+      const areaCards = await mp.getByText("ตั้งรหัสผ่านใหม่ให้", { exact: true }).locator("visible=true").count();
+      areaCards >= 1 && (await mv('[aria-label^="ให้ดูวิธีใช้ใหม่ "]').count()) === 0
+        ? pass('การ์ดทีม Area (ยังไม่มีวิธีใช้): ไม่มีลิงก์ "ให้ดูวิธีใช้ใหม่"') : fail(`การ์ดทีม Area: การ์ด ${areaCards} · ลิงก์ ${await mv('[aria-label^="ให้ดูวิธีใช้ใหม่ "]').count()}`);
+      await search.fill(TECH);
+      await mp.waitForTimeout(900);
+      const link = mv(`[aria-label="ให้ดูวิธีใช้ใหม่ ${techName}"]`);
+      (await link.count()) === 1 && (await link.first().innerText()).includes("ให้ดูวิธีใช้ใหม่")
+        ? pass(`การ์ด ${techName}: มีลิงก์ "ให้ดูวิธีใช้ใหม่"`) : fail(`ลิงก์ให้ดูวิธีใช้ใหม่: ${await link.count()}`);
+      const dbBefore = sql(`select coalesce("howtoSeen"::text,'NULL') from "User" where "employeeCode"='${TECH}'`);
+      const overlay = mp.locator("[data-otteri-overlay]");
+      // ยกเลิก = ไม่มีอะไรเปลี่ยน
+      await link.first().click();
+      const ask = overlay.getByText(`ให้ ${techName} ดูวิธีใช้ใหม่?`, { exact: true }).locator("visible=true");
+      const asked = await ask.waitFor({ timeout: 5000 }).then(() => true, () => false);
+      const why = (await overlay.getByText("วิธีใช้จะขึ้นเองตอนเปิดแอปครั้งถัดไป", { exact: false }).locator("visible=true").count()) === 1;
+      await overlay.getByText("ยกเลิก", { exact: true }).locator("visible=true").first().click();
+      await mp.waitForTimeout(1200);
+      asked && why && sql(`select coalesce("howtoSeen"::text,'NULL') from "User" where "employeeCode"='${TECH}'`) === dbBefore
+        ? pass(`กดลิงก์ → กล่องยืนยัน "ให้ ${techName} ดูวิธีใช้ใหม่?" บอกผล · ยกเลิก = ฐานข้อมูลไม่เปลี่ยน`) : fail(`กล่องยืนยัน: ขึ้น ${asked} · คำอธิบาย ${why}`);
+      // ยืนยัน → ฐานข้อมูล pending + resetAt + resetBy (A001) · ล้างหน้าที่ดูแล้ว
+      const a001 = sql(`select id from "User" where "employeeCode"='A001'`);
+      await link.first().click();
+      await ask.waitFor({ timeout: 5000 }).catch(() => {});
+      await overlay.getByText("ให้ดูวิธีใช้ใหม่", { exact: true }).locator("visible=true").last().click();
+      const done = overlay.getByText(`ตั้งให้ ${techName} ดูวิธีใช้ใหม่แล้ว`, { exact: true }).locator("visible=true");
+      const toasted = await done.waitFor({ timeout: 6000 }).then(() => true, () => false);
+      const reset = sql(`select ("howtoSeen"->>'pending')||'|'||coalesce("howtoSeen"->>'resetBy','')||'|'||(("howtoSeen" ? 'resetAt')::text)||'|'||(("howtoSeen" ? 'tours')::text)
+                         from "User" where "employeeCode"='${TECH}'`);
+      toasted && reset === `true|${a001}|true|false`
+        ? pass(`ยืนยัน → แถบ "ตั้งให้ ${techName} ดูวิธีใช้ใหม่แล้ว" · ฐานข้อมูล pending + resetAt + resetBy=A001 ไม่มีหน้าที่ดูแล้ว`)
+        : fail(`ให้ดูวิธีใช้ใหม่: แถบ ${toasted} · ฐานข้อมูล ${reset}`);
+      await mp.screenshot({ path: path.join(DIR, "howto-17-reshow.png") });
+
+      // การใช้งานแอปนับใหม่
+      const u2 = await usageRow();
+      u2.row.includes("ยังไม่ได้ดู") && !u2.row.includes("ยังขาด")
+        ? pass(`การใช้งานแอปหลังตั้งใหม่: แถว ${techName} "ยังไม่ได้ดู"`) : fail(`แถวการใช้งานหลังตั้งใหม่: "${u2.row.slice(0, 200)}"`);
+      sql(`select ("howtoSeen" ? 'pending')::text from "User" where "employeeCode"='A001'`) === "false"
+        ? pass("A001 กดให้คนอื่นดูใหม่ — ค่าของ A001 เองไม่ถูกแตะ") : fail("ค่า howtoSeen ของ A001 ถูกเปลี่ยน");
+      await mc.close();
+
+      // ครั้งถัดไปที่ zzht.tech เปิดแอป: กล่องต้อนรับขึ้นเอง · Esc = ไว้ทีหลัง (จด welcome · pending หาย)
+      const { ctx: tc, page: tp } = await open(TECH, { auto: true });
+      const welcomed = await waitPrompt(tp, "welcome");
+      await tp.keyboard.press("Escape");
+      const afterWelcome = await flagsBecome(tp, TECH, "false|true|false|0");
+      welcomed && afterWelcome === "false|true|false|0"
+        ? pass("zzht.tech เปิดแอปครั้งถัดไป → กล่องต้อนรับขึ้นเอง · Esc = ไว้ทีหลัง (ฐานข้อมูลจด welcome pending หาย)")
+        : fail(`หลังให้ดูใหม่: กล่องต้อนรับ ${welcomed} · ฐานข้อมูล ${afterWelcome}`);
+      await tc.close();
+
+      // Super Admin ดูในฐานะ A001 — หน้าสิทธิ์ผู้ใช้เปิดได้ แต่ไม่มีลิงก์ให้ดูวิธีใช้ใหม่บนการ์ดไหนเลย (ระหว่างดูแก้อะไรไม่ได้)
+      const { ctx: zc2, page: zp2 } = await open("zzht.super", { width: 1366, height: 900 });
+      const zv2 = (sel) => zp2.locator(sel).locator("visible=true");
+      await zv2('[aria-label="ดูในฐานะผู้ใช้อื่น"]').first().click();
+      await zp2.waitForTimeout(1500);
+      await zv2('[aria-label="ตำแหน่ง แอดมิน"]').first().click();
+      await zp2.waitForTimeout(400);
+      await zv2('[aria-label="ค้นหาผู้ใช้ที่จะดู"]').fill("A001");
+      await zp2.waitForTimeout(800);
+      await zp2.locator('[aria-label^="เลือก "]').locator("visible=true").first().click();
+      await zp2.waitForTimeout(300);
+      await zv2('[aria-label="ดูในฐานะคนนี้"]').click();
+      await zp2.waitForTimeout(4000);
+      const viewingA = (await zp2.getByText("กำลังดูในฐานะ", { exact: false }).locator("visible=true").count()) > 0;
+      if (!(await zv2('[data-testid="howto-menu.users"]').count())) await zv2('[aria-label="กางกลุ่ม ผู้ดูแลระบบ"]').first().click();
+      await zp2.waitForTimeout(900);
+      await zv2('[data-testid="howto-menu.users"]').first().click();
+      await zp2.waitForTimeout(3500);
+      const cards = await zp2.getByText("ตั้งรหัสผ่านใหม่ให้", { exact: true }).locator("visible=true").count();
+      const links = await zp2.locator('[aria-label^="ให้ดูวิธีใช้ใหม่ "]').count();
+      viewingA && cards >= 1 && links === 0
+        ? pass(`Super Admin ดูในฐานะ A001: สิทธิ์ผู้ใช้ ${cards} การ์ด ไม่มีลิงก์ "ให้ดูวิธีใช้ใหม่" เลย`) : fail(`ดูในฐานะ A001: แถบ ${viewingA} · การ์ด ${cards} · ลิงก์ ${links}`);
+      await zp2.screenshot({ path: path.join(DIR, "howto-18-viewas-users.png") });
+      await zv2('[aria-label="กลับเป็นตัวเอง"]').first().click().catch(() => {});
+      await zp2.waitForTimeout(1500);
+      await zc2.close();
     }
 
     errors.length === 0 ? pass("ไม่มี error ในหน้าเว็บ") : fail(`error ในหน้าเว็บ: ${errors.slice(0, 3).join(" | ")}`);

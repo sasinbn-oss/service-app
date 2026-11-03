@@ -15,6 +15,8 @@ import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage, resolveImageUrl } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
+import { rolesOfRaw, toursFor } from "../utils/howtoTours";
+import type { HowToState } from "../utils/howtoTypes";
 import { colors, headingFont, radius, spacing } from "../theme";
 
 type Range = "today" | "7d" | "30d" | "all";
@@ -29,6 +31,8 @@ interface Person {
   id: number;
   name: string;
   code: string;
+  /** ตำแหน่งดิบ (SENIOR_TECH · SUPER_ADMIN ฯลฯ) — นับว่าตำแหน่งนี้มีวิธีใช้กี่เรื่อง */
+  role?: string;
   roleLabel: string;
   team: string | null;
   lastSeen: string | null;
@@ -38,6 +42,8 @@ interface Person {
   activeDays: number;
   devices: string[];
   today: Bar[];
+  /** สอนการใช้งาน — เรื่องที่กด "เข้าใจแล้ว" ไปแล้ว · เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง */
+  howto?: HowToState;
 }
 interface Data {
   since: string | null;
@@ -86,6 +92,22 @@ const fullDate = (iso: string) => {
 const duration = (min: number) => (min >= 60 ? `${Math.floor(min / 60)} ชม. ${String(min % 60).padStart(2, "0")} น.` : `${min} น.`);
 
 /** "ตอนนี้" · "10 นาทีที่แล้ว" · "14:05" (วันนี้) · "เมื่อวาน 16:42" · "3 วันที่แล้ว" · "ยังไม่เคยเข้า" */
+/**
+ * คอลัมน์ "ดูวิธีใช้แล้ว" (สอนการใช้งาน · เจ้าของงานเลือก ต.ค. 69) — นับเทียบรายชื่อเรื่องของตำแหน่งปัจจุบันของคนนั้น
+ * เซิร์ฟเวอร์แค่จำว่าดูอะไรไปแล้ว รายชื่อเรื่องอยู่ในแอป (utils/howtoTours) · เปลี่ยนตำแหน่งแล้วนับตามตำแหน่งใหม่
+ * ตำแหน่งที่ยังไม่มีวิธีใช้ (ทีม Area · Admin Spare Part) = "—" ไม่ใช่ "ยังไม่ได้ดู" — ไม่มีอะไรให้ดู ไม่ใช่ไม่ยอมดู
+ */
+function howtoStatus(p: Person): { text: string; all: boolean; none: boolean } | null {
+  const tours = toursFor(rolesOfRaw(p.role ?? ""));
+  if (!tours.length) return null;
+  const seen = p.howto?.tours ?? {};
+  const missing = tours.filter((t) => !seen[t.id]);
+  const n = tours.length;
+  if (!missing.length) return { text: `✓ ครบ ${n}/${n}`, all: true, none: false };
+  if (missing.length === n) return { text: "ยังไม่ได้ดู", all: false, none: true };
+  return { text: `${n - missing.length}/${n} · ยังขาด ${missing.map((t) => t.title).join(" · ")}`, all: false, none: false };
+}
+
 function lastSeenText(p: Person) {
   if (!p.lastSeen) return "ยังไม่เคยเข้า";
   if (p.online) return "ตอนนี้";
@@ -294,7 +316,9 @@ export default function AppUsageScreen() {
 
           <View style={styles.card}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-              <Text style={[styles.cardTitle, { flex: 1 }]}>รายคน · {data.people.length} คน</Text>
+              <Text style={[styles.cardTitle, { flex: 1 }]}>
+                รายคน · {data.people.length} คน · ดูวิธีใช้ครบแล้ว {data.people.filter((p) => howtoStatus(p)?.all).length} คน
+              </Text>
               {loading ? <Spinner size="small" /> : null}
             </View>
             <View style={styles.legend}>
@@ -311,7 +335,8 @@ export default function AppUsageScreen() {
                 <Text style={[styles.th, { flex: 1.2 }]}>ใช้ล่าสุด</Text>
                 <Text style={[styles.th, { flex: 0.6 }]}>ครั้ง</Text>
                 <Text style={[styles.th, { flex: 1 }]}>รวม</Text>
-                <View style={{ flex: 4 }}>
+                <Text style={[styles.th, { flex: 1.4 }]}>ดูวิธีใช้แล้ว</Text>
+                <View style={{ flex: 3.4 }}>
                   <Axis />
                 </View>
               </View>
@@ -319,6 +344,8 @@ export default function AppUsageScreen() {
             {data.people.map((p) => {
               const last = lastSeenText(p);
               const lastStyle = p.online ? styles.live : !p.lastSeen ? styles.never : undefined;
+              const how = howtoStatus(p);
+              const howStyle = how?.all ? styles.howAll : how?.none ? styles.howNone : undefined;
               return wide ? (
                 <TouchableOpacity key={p.id} style={styles.pRow} onPress={() => setPicked(p)} accessibilityLabel={`การใช้งานของ ${p.name}`}>
                   <View style={{ flex: 2.2, minWidth: 0 }}>
@@ -333,7 +360,11 @@ export default function AppUsageScreen() {
                   <Text style={[styles.cell, { flex: 1.2 }, lastStyle]}>{p.online ? "● " : ""}{last}</Text>
                   <Text style={[styles.cell, { flex: 0.6 }]}>{p.sessions}</Text>
                   <Text style={[styles.cell, { flex: 1 }]}>{p.minutes ? duration(p.minutes) : "—"}</Text>
-                  <View style={{ flex: 4 }}>
+                  {/* บรรทัดเดียว — รายชื่อเรื่องที่ยังขาดยาวได้ ตัดท้ายแทนดันแถวให้สูง · ตัวเลข x/n อยู่หน้าข้อความเสมอ ตัดแล้วยังเห็น */}
+                  <Text style={[styles.cell, { flex: 1.4 }, howStyle]} numberOfLines={1}>
+                    {how?.text ?? "—"}
+                  </Text>
+                  <View style={{ flex: 3.4 }}>
                     <TimeBar bars={p.today} />
                   </View>
                 </TouchableOpacity>
@@ -356,6 +387,10 @@ export default function AppUsageScreen() {
                       </Text>
                     </View>
                   </View>
+                  {/* บรรทัดเดียว — การ์ดมือถือต้องไม่ล้นจอแนวนอน (usage-web-test) */}
+                  <Text style={[styles.meta, howStyle]} numberOfLines={1}>
+                    ดูวิธีใช้แล้ว {how?.text ?? "—"}
+                  </Text>
                   <TimeBar bars={p.today} height={12} />
                 </TouchableOpacity>
               );
@@ -495,6 +530,8 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12, color: colors.textMuted },
   cell: { fontSize: 13, color: colors.text },
   live: { color: colors.successInk, fontWeight: "700" },
+  howAll: { color: colors.successInk, fontWeight: "700" },
+  howNone: { color: colors.textMuted },
   never: { color: colors.dangerInk, fontWeight: "700" },
   bar: { position: "relative", backgroundColor: colors.background, borderRadius: 5, overflow: "hidden" },
   barSeg: { position: "absolute", top: 2, bottom: 2, borderRadius: 3, backgroundColor: colors.primary },
