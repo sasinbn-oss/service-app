@@ -61,7 +61,10 @@ const login = async (code) =>
     sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword") values ('ZCWP${suf}','แอดมินอะไหล่ทดสอบจอ','PARTS_ADMIN','${hash}',false)`);
     sql(`insert into "Branch"(name,code,region,zone,ownership,"openedAt") values ('สาขาทดสอบเคลมจอ','${bc}','ใต้','กระบี่','FRANCHISE',now()-interval '12 months')`);
     const bid = sql(`select id from "Branch" where code='${bc}'`);
-    sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'W1','WASHER','HB - Huebsch',now())`);
+    // ทะเบียนรุ่น HL055L ใส่ตรงในฐานข้อมูล ไม่ได้มาจาก model ตอนเปิดใบ — เครื่องนี้มียี่ห้อจากรายงานแล้ว (HB - Huebsch)
+    // ตั้งแต่ล็อกยี่ห้อ (เลือกอะไหล่ตามไฟล์ยี่ห้อ ก้อน 4) การเปิดใบเขียน model ให้เฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ ค่าที่ส่งข้างล่างจึงถูกข้าม
+    // ข้ออ่านป้ายข้างล่างต้องมีรุ่นในทะเบียนให้เทียบ ("ตัวต้นแก้ตามทะเบียน HL055L") ถ้าไม่ใส่ตรงนี้ OCR ไม่มีตัวเทียบแล้วเทสต์พังทั้งที่แอปไม่ได้ผิด
+    sql(`insert into "Machine"("branchId",code,type,brand,model,"updatedAt") values (${bid},'W1','WASHER','HB - Huebsch','HL055L',now())`);
     const wo = await call(A, "POST", "/work-orders", {
       branchCode: bc, jobType: "CM", priority: "NORMAL", contactName: "คุณสมหญิง", contactPhone: "081-234-5678",
       machines: [{ code: "W1", model: "HL055L", symptom: "ประตูล็อกไม่ลง" }],

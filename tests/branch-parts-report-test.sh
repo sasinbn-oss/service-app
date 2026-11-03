@@ -47,14 +47,18 @@ TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'"); TNAME=$(DB "s
 DB "insert into \"Branch\"(code,name,region,zone) values
   ('$BA','ร้านทดสอบ$SUF เอ','$R1','$T1'),('$BB','ร้านทดสอบ$SUF บี','$R1','$T2'),
   ('$BC','ร้านทดสอบ$SUF ซี','$R2','$T2'),('$BD','ร้านทดสอบช่วงวันที่ $SUF','$R3','$T3'),('$BE','ร้านทดสอบเคลมตีกลับ $SUF','$R3','$T3')"
-# อะไหล่ในสโตร์มียี่ห้อ Haier และเครื่อง W9 ของ O9 (ใบเดียวที่ส่งอะไหล่ผ่าน API) เปิดด้วยรุ่น Haier — กฎ "เลือกอะไหล่ได้เฉพาะ
-# ไฟล์ยี่ห้อเดียวกับเครื่อง" ปฏิเสธอะไหล่ไม่มียี่ห้อและเครื่องไม่รู้ยี่ห้อ ใบ O9 จะเตรียมไม่ขึ้นแล้วยอดของ O9 พังตามทั้งชุด
+# อะไหล่ในสโตร์อยู่ในไฟล์ Haier และเครื่อง W9 ของ O9 (ใบเดียวที่ส่งอะไหล่ผ่าน API) เปิดด้วยรุ่น Haier — กฎ "เลือกอะไหล่ได้เฉพาะ
+# ไฟล์ยี่ห้อของเครื่อง และของใช้ร่วม (ไฟล์ Other)" ปฏิเสธอะไหล่ที่ไม่อยู่ในไฟล์ไหนและเครื่องไม่รู้ยี่ห้อ ใบ O9 จะเตรียมไม่ขึ้นแล้วยอดของ O9 พังตามทั้งชุด
+# ไฟล์ของอะไหล่อ่านจากตาราง SparePartBrandFile ไม่ใช่ช่อง brand — ใส่ brand อย่างเดียวยังนับว่า "ไม่อยู่ในไฟล์ไหน" จึงใส่แถวไฟล์ด้วย
+# (ช่อง brand ใส่ไว้ให้ข้อความที่แสดง/ค้นตรงกับไฟล์ · แถวไฟล์ลบตามอะไหล่เองตอน cleanup)
 # ใช้ fx_part ไม่ได้เพราะรายงานนับอะไหล่ ZBP ของชุดนี้เอง · Haier เพราะได้ผลเหมือนไม่รู้ยี่ห้อทุกกฎที่มีตอนนี้ (tests/lib/fixture-parts.sh)
-# รายงานไม่ค้นและไม่ตรวจจากยี่ห้อ ตัวเลขทุกข้อจึงเท่าเดิม · ของนอกสโตร์ไม่ต้องมียี่ห้อ (กฎยอมให้ทุกเครื่อง)
+# รายงานไม่ค้นและไม่ตรวจจากยี่ห้อ ตัวเลขทุกข้อจึงเท่าเดิม · ของนอกสโตร์ไม่ต้องอยู่ในไฟล์ไหน (กฎยอมให้ทุกเครื่อง)
 DB "insert into \"SparePart\"(\"partCode\",name,brand,\"offCatalog\",\"updatedAt\") values
   ('ZBP-$SUF-P1','ตลับลูกปืนทดสอบ $SUF','Haier',false,now()),('ZBP-$SUF-P2','บอร์ดทดสอบ $SUF','Haier',false,now()),
   ('ZBP-$SUF-P3','วาล์วทดสอบ $SUF','Haier',false,now()),('ZBP-$SUF-DT','อะไหล่ทดสอบช่วงวันที่ $SUF','Haier',false,now()),
   ('[นอกสโตร์] สายพานร้านข้างนอก $SUF','สายพานร้านข้างนอก $SUF',null,true,now())"
+DB "insert into \"SparePartBrandFile\"(\"sparePartId\",file,source,\"updatedAt\")
+  select id,'Haier','MANUAL',now() from \"SparePart\" where \"partCode\" like 'ZBP-$SUF-%'"
 pid() { DB "select id from \"SparePart\" where \"partCode\"='$1'"; }
 P1=$(pid ZBP-$SUF-P1); P2=$(pid ZBP-$SUF-P2); P3=$(pid ZBP-$SUF-P3); DT=$(pid ZBP-$SUF-DT); OFF=$(pid "[นอกสโตร์] สายพานร้านข้างนอก $SUF")
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values

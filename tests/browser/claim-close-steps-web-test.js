@@ -86,7 +86,10 @@ const waitFor = async (fn, ms = 10000) => {
     const tid = Number(sql(`select id from "User" where "employeeCode"='${TECH}'`));
     sql(`insert into "Branch"(name,code,region,zone,ownership,"openedAt",latitude,longitude) values ('สาขาทดสอบปิดทีละขั้น','${bc}','ใต้','${team}','FRANCHISE',now()-interval '12 months',${LAT},${LNG})`);
     const bid = sql(`select id from "Branch" where code='${bc}'`);
-    sql(`insert into "Machine"("branchId",code,type,brand,"updatedAt") values (${bid},'W1','WASHER','HB - Huebsch',now()),(${bid},'W2','WASHER','Oasis',now())`);
+    // ทะเบียนรุ่น HL055L ของ W1 ใส่ตรงในฐานข้อมูล ไม่ได้มาจาก model ตอนเปิดใบ — W1 มียี่ห้อจากรายงานแล้ว (HB - Huebsch)
+    // ตั้งแต่ล็อกยี่ห้อ (เลือกอะไหล่ตามไฟล์ยี่ห้อ ก้อน 4) การเปิดใบเขียน model ให้เฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ ค่าที่ prepare ส่งจึงถูกข้าม
+    // ขั้นเครื่องต้องมีรุ่นในทะเบียนให้ OCR เทียบ (อ่าน HLOSSL… แล้วแก้ตัวต้นเป็น HL055L) ไม่งั้นเทสต์พังทั้งที่แอปไม่ได้ผิด
+    sql(`insert into "Machine"("branchId",code,type,brand,model,"updatedAt") values (${bid},'W1','WASHER','HB - Huebsch','HL055L',now()),(${bid},'W2','WASHER','Oasis',null,now())`);
 
     /** เปิดใบ ระบุอะไหล่ เบิก ปล่อยงาน (วันข้างหน้า · G10) แล้วย้ายวันนัดเป็นวันนี้ด้วย SQL */
     async function prepare(machine, model, symptom, kinds) {

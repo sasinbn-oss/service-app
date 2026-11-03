@@ -3,7 +3,11 @@
 #   · ดูตัวอย่างไม่บันทึก · หาคอลัมน์ได้แม้หัวสะกดผิด ("Pant No.") · รหัสเป็นตัวพิมพ์ใหญ่ · ช่องว่าง/ขึ้นบรรทัดในชื่อไม่นับว่าต่าง
 #   · เพิ่มใหม่ / แก้ไข / เหมือนเดิม · ช่องว่างในไฟล์ = คงค่าเดิม · รหัสซ้ำในไฟล์ใช้แถวหลัง · ไม่มีรหัส = ข้าม
 #   · รูป: เดิมไม่มี = ใส่ · ต่างจากเดิม = แทน (ค่าตั้งต้น) หรือเก็บเดิม · เหมือนเดิม = ไม่นับ — เช็คด้วย md5 ที่ฐานข้อมูล
-#   · อะไหล่ยี่ห้อเดียวกันที่ไม่อยู่ในไฟล์ไม่ถูกลบ · ประวัติรอบอัปเดต (หลายไฟล์ในรอบเดียว) · รายงาน Excel
+#   · อะไหล่ไฟล์ยี่ห้อเดียวกันที่ไม่อยู่ในไฟล์ไม่ถูกลบ · ประวัติรอบอัปเดต (หลายไฟล์ในรอบเดียว) · รายงาน Excel
+#   ไฟล์ยี่ห้อ (เจ้าของงานตอบ 31 ต.ค. 69): ชื่อไฟล์ของเทสต์นี้ (r1.xlsx …) ไม่บอกยี่ห้อ ทุกครั้งที่บันทึกจึงส่ง brandFile เอง
+#   (= แอดมินกดปุ่มยี่ห้อในหน้าตรวจ) — ชุด r* ใช้ Maytag ชุด m*/s*/x*/h*/p*/g* ใช้ Spinz · "ไม่อยู่ในไฟล์" นับตามไฟล์ยี่ห้อ
+#   ไม่ใช่ข้อความยี่ห้อ · ไฟล์ยี่ห้อจริงมีอะไหล่ของฐานทดสอบอยู่แล้ว (ตัวแฝด -MT/-SZ) ยอดจึงบวกจำนวนตั้งต้น (MT0/SZ0)
+#   กติกาเลือก/ห้ามเลือกไฟล์ยี่ห้อจากชื่อไฟล์อยู่ใน parts-pick-test.sh กลุ่ม A2
 #   · แอดมินอะไหล่ทำได้ · หัวหน้าภาค/ช่างทำไม่ได้ · ค้นหาด้วย Part No. · ล้าง Part No. ในฟอร์ม = null
 #   แก้จากตรวจโค้ด: หัวตารางสองชั้น/เซลล์ผสาน · แถวชื่อเรื่องเหนือหัวตาราง · ลิงก์ที่ข้อความจัดรูปแบบ · รูปเดิมเป็นลิงก์ภายนอก (เก็บรูปเดิมต้องไม่ทับ)
 #   · รูปเข้าแต่ลิงก์รูปหาย ซ่อมให้ · ยี่ห้อเดียวแยกสองไฟล์ในรอบเดียวไม่ฟ้อง "ไม่อยู่ในไฟล์" · แถวที่ข้ามไม่นับเป็นไม่อยู่ในไฟล์
@@ -41,7 +45,10 @@ PA=$(login ZPI$SUF)
 
 # อะไหล่ยี่ห้อเดียวกันที่มีอยู่แล้วแต่ไม่อยู่ในไฟล์ — ต้องไม่ถูกลบ
 curl -s -X POST localhost:4000/api/spare-parts -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"partCode\":\"${P}D\",\"name\":\"ฝาครอบทดสอบ\",\"brand\":\"$B\"}" >/dev/null
+  -d "{\"partCode\":\"${P}D\",\"name\":\"ฝาครอบทดสอบ\",\"brand\":\"$B\",\"brandFiles\":[\"Maytag\"]}" >/dev/null
+# อะไหล่อื่นที่อยู่ในไฟล์ยี่ห้อนี้อยู่แล้ว (ตัวแฝดของฐานทดสอบ) — ขึ้นใน "ไม่อยู่ในไฟล์" ด้วย ยอดที่คาดต้องบวกเข้าไป
+INFILE0() { DB "select count(*) from \"SparePartBrandFile\" b join \"SparePart\" p on p.id=b.\"sparePartId\" where b.file='$1' and not p.\"offCatalog\" and p.\"partCode\" not like '$P%'"; }
+MT0=$(INFILE0 Maytag); SZ0=$(INFILE0 Spinz)
 
 xlsx() { NODE_PATH=backend/node_modules node tests/fixtures-parts-xlsx.js "$DIR/$1" "$2"; }
 IMP() { local who=$1 file=$2; shift 2; curl -s -X POST localhost:4000/api/spare-parts/import -H "$(H $who)" -F "file=@$DIR/$file;filename=$file" "$@"; }
@@ -57,15 +64,15 @@ M1=$(xlsx r1.xlsx "{\"headers\":$HEAD,\"rows\":[
 ], \"images\":{\"B2\":\"a1-$SUF\",\"B3\":\"b1-$SUF\"}}")
 
 # ── รอบแรก: ดูตัวอย่าง ──
-R=$(IMP $A r1.xlsx)
-[ "$(echo "$R" | J 'JSON.stringify(d.summary)')" = '{"rows":3,"changed":3,"created":3,"updated":0,"images":2,"same":0,"skipped":1,"notInFile":1}' ] \
-  && pass "ดูตัวอย่าง: เพิ่ม 3 · รูป 2 · ข้าม 1 · ยี่ห้อเดียวกันไม่อยู่ในไฟล์ 1" || fail "สรุปตัวอย่าง: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
+R=$(IMP $A r1.xlsx -F brandFile=Maytag)
+[ "$(echo "$R" | J 'JSON.stringify(d.summary)')" = '{"rows":3,"changed":3,"created":3,"updated":0,"images":2,"same":0,"skipped":1,"notInFile":'$((MT0+1))',"joined":3,"confirmed":0}' ] \
+  && pass "ดูตัวอย่าง: เพิ่ม 3 · รูป 2 · ข้าม 1 · ไฟล์ยี่ห้อเดียวกันไม่อยู่ในไฟล์ 1 (+ตัวแฝด $MT0) · เข้าไฟล์ Maytag ใหม่ 3" || fail "สรุปตัวอย่าง: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
 [ "$(COUNT)" = "1" ] && pass "ดูตัวอย่างไม่บันทึกอะไรลงฐานข้อมูล" || fail "ดูตัวอย่างแล้วมีอะไหล่เพิ่ม ($(COUNT))"
 [ "$(echo "$R" | J '[d.columns.partCode,d.columns.name,d.columns.partNo,d.columns.image].join("|")')" = "รหัสสินค้า|ชื่อรวม (ไทย)|Pant No.|รูปภาพประกอบ" ] \
   && pass "หาคอลัมน์เจอ รวม \"Pant No.\" ที่สะกดผิดมาจากไฟล์จริง" || fail "คอลัมน์: $(echo "$R" | J 'JSON.stringify(d.columns)')"
 echo "$R" | J 'const a=d.items.find(i=>i.partCode==="'$P'A"); a&&a.name==="ปั๊ม น้ำทิ้ง (ทดสอบ)"&&a.partNo==="W111, W222"&&d.items.find(i=>i.partCode==="'$P'C").partNo==="70613801"?"ok":"bad"' | grep -q ok \
   && pass "รหัสเป็นตัวพิมพ์ใหญ่ · ช่องว่างซ้ำ/ขึ้นบรรทัดในชื่อถูกรวบ · Part No. จัดรูป · Part No. ที่เป็นตัวเลขอ่านได้" || fail "ค่าที่อ่าน: $(echo "$R" | J 'JSON.stringify(d.items)')"
-echo "$R" | J 'd.problems.length===1&&d.problems[0].line===5&&/ไม่มีรหัสสินค้า/.test(d.problems[0].note)&&d.notInFile[0].partCode==="'$P'D"&&d.notInFile[0].usedIn===0?"ok":"bad"' | grep -q ok \
+echo "$R" | J 'const g=d.notInFile.filter(x=>x.partCode.startsWith("'$P'")); d.problems.length===1&&d.problems[0].line===5&&/ไม่มีรหัสสินค้า/.test(d.problems[0].note)&&g.length===1&&g[0].partCode==="'$P'D"&&g[0].usedIn===0&&g[0].file==="Maytag"?"ok":"bad"' | grep -q ok \
   && pass "แถวไม่มีรหัสบอกเลขแถว · อะไหล่ที่ไม่อยู่ในไฟล์บอกว่ายังไม่เคยใช้ในใบงาน" || fail "problems/notInFile: $(echo "$R" | J 'JSON.stringify([d.problems,d.notInFile])')"
 echo "$R" | J 'Object.keys(d.thumbs).sort().join(",")==="'$P'A,'$P'B"&&/^data:image\/jpeg;base64,/.test(d.thumbs["'$P'A"])?"ok":"bad"' | grep -q ok \
   && pass "หน้าตรวจได้รูปย่อของแถวที่จะใส่รูป" || fail "thumbs: $(echo "$R" | J 'Object.keys(d.thumbs||{})')"
@@ -74,15 +81,16 @@ echo "$R" | J 'Object.keys(d.thumbs).sort().join(",")==="'$P'A,'$P'B"&&/^data:im
 [ "$(COUNT)" = "1" ] && pass "คำขอที่ไม่มีรหัสรอบไม่บันทึกอะไร" || fail "บันทึกทั้งที่ไม่มีรหัสรอบ"
 
 # ── รอบแรก: บันทึก ──
-R=$(IMP $A r1.xlsx -F apply=true -F batchId=$B1)
+R=$(IMP $A r1.xlsx -F apply=true -F batchId=$B1 -F brandFile=Maytag)
 [ "$(echo "$R" | J 'd.applied+"|"+d.summary.created+"|"+d.summary.images')" = "true|3|2" ] && pass "บันทึก: เพิ่ม 3 · รูป 2" || fail "บันทึก: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
 ROW=$(DB "select \"partCode\"||'|'||name||'|'||brand||'|'||category||'|'||\"partNo\"||'|'||(\"imageUrl\"='/api/spare-parts/'||id||'/image') from \"SparePart\" where upper(\"partCode\")='${P}A'")
 [ "$ROW" = "${P}A|ปั๊ม น้ำทิ้ง (ทดสอบ)|$B|ปั๊ม|W111, W222|true" ] && pass "ฐานข้อมูล: รหัส ชื่อ ยี่ห้อ หมวด Part No. ลิงก์รูป ครบ" || fail "แถว A: $ROW"
 [ "$(MD5 ${P}A)" = "$(echo "$M1" | J 'd.B2')" ] && [ "$(MD5 ${P}B)" = "$(echo "$M1" | J 'd.B3')" ] && [ -z "$(MD5 ${P}C)" ] \
   && pass "ฐานข้อมูล: รูปตรงกับไฟล์ทุกไบต์ (md5) · แถวไม่มีรูปไม่ได้รูป" || fail "md5: A=$(MD5 ${P}A) B=$(MD5 ${P}B) C=$(MD5 ${P}C)"
 [ "$(DB "select \"partNo\" from \"SparePart\" where \"partCode\"='${P}C'")" = "70613801" ] && pass "ฐานข้อมูล: Part No. ตัวเลขเก็บเป็นข้อความ" || fail "Part No. C"
-[ "$(DB "select count(*) from \"SparePartImport\" where \"batchId\"='$B1' and \"fileName\"='r1.xlsx' and \"byName\" is not null and (summary->>'created')::int=3")" = "1" ] \
-  && pass "ฐานข้อมูล: เก็บประวัติรอบอัปเดต (ไฟล์ · คนทำ · สรุป)" || fail "ไม่มีประวัติรอบ"
+[ "$(DB "select count(*) from \"SparePartImport\" where \"batchId\"='$B1' and \"fileName\"='r1.xlsx' and \"brandFile\"='Maytag' and \"byName\" is not null and (summary->>'created')::int=3")" = "1" ] \
+  && [ "$(DB "select string_agg(p.\"partCode\"||':'||b.file||':'||b.source, ',' order by p.\"partCode\") from \"SparePartBrandFile\" b join \"SparePart\" p on p.id=b.\"sparePartId\" where p.\"partCode\" in ('${P}A','${P}B','${P}C')")" = "${P}A:Maytag:IMPORT,${P}B:Maytag:IMPORT,${P}C:Maytag:IMPORT" ] \
+  && pass "ฐานข้อมูล: เก็บประวัติรอบอัปเดต (ไฟล์ · ไฟล์ยี่ห้อ · คนทำ · สรุป) · ทุกรหัสในไฟล์เข้าไฟล์ Maytag" || fail "ไม่มีประวัติรอบ / แถวไฟล์ยี่ห้อ: $(DB "select string_agg(p.\"partCode\"||':'||b.file, ',') from \"SparePartBrandFile\" b join \"SparePart\" p on p.id=b.\"sparePartId\" where p.\"partCode\" like '$P%'")"
 GET=$(curl -s -o /dev/null -w '%{http_code}|%{content_type}' "localhost:4000/api/spare-parts/$(DB "select id from \"SparePart\" where \"partCode\"='${P}A'")/image")
 [ "$GET" = "200|image/jpeg" ] && pass "รูปที่ใส่จากไฟล์เปิดได้จากลิงก์รูปอะไหล่" || fail "เปิดรูป: $GET"
 
@@ -95,9 +103,9 @@ M2=$(xlsx r2.xlsx "{\"headers\":$HEAD,\"rows\":[
   [4,null,\"${P}E\",\"ใบพัดทดสอบ\",\"$B\",\"ปั๊ม\",\"WP-9\"],
   [5,null,\"${P}C\",\"ลูกยางประตูทดสอบ (แถวหลัง)\",\"$B\",null,null]
 ], \"images\":{\"B2\":\"a2-$SUF\",\"B3\":\"b1-$SUF\",\"B5\":\"e1-$SUF\"}}")
-R=$(IMP $A r2.xlsx)
-[ "$(echo "$R" | J 'JSON.stringify(d.summary)')" = '{"rows":4,"changed":3,"created":1,"updated":2,"images":2,"same":1,"skipped":0,"notInFile":1}' ] \
-  && pass "ดูตัวอย่างรอบสอง: เพิ่ม 1 · แก้ไข 2 · รูป 2 (แทน 1 ใหม่ 1) · เหมือนเดิม 1" || fail "สรุปรอบสอง: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
+R=$(IMP $A r2.xlsx -F brandFile=Maytag)
+[ "$(echo "$R" | J 'JSON.stringify(d.summary)')" = '{"rows":4,"changed":3,"created":1,"updated":2,"images":2,"same":1,"skipped":0,"notInFile":'$((MT0+1))',"joined":1,"confirmed":0}' ] \
+  && pass "ดูตัวอย่างรอบสอง: เพิ่ม 1 · แก้ไข 2 · รูป 2 (แทน 1 ใหม่ 1) · เหมือนเดิม 1 · เข้าไฟล์ใหม่เฉพาะตัวใหม่ 1" || fail "สรุปรอบสอง: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
 echo "$R" | J 'const a=d.items.find(i=>i.partCode==="'$P'A"); a.image==="CHANGED"&&a.diffs.length===1&&a.diffs[0].label==="Part No."&&a.diffs[0].from==="W111, W222"&&a.diffs[0].to==="W111, W333"?"ok":"bad"' | grep -q ok \
   && pass "แก้ไข: บอกเฉพาะช่องที่ต่าง ค่าเดิม → ค่าใหม่ · ยี่ห้อ/หมวดที่เว้นว่างไม่นับว่าต่าง" || fail "diff A: $(echo "$R" | J 'JSON.stringify(d.items.find(i=>i.partCode==="'$P'A"))')"
 echo "$R" | J '!d.items.some(i=>i.partCode==="'$P'B")?"ok":"bad"' | grep -q ok \
@@ -108,7 +116,7 @@ K=$(IMP $A r2.xlsx -F replaceImages=false)
 [ "$(echo "$K" | J 'd.summary.images+"|"+d.items.find(i=>i.partCode==="'$P'A").image')" = "1|KEPT" ] \
   && pass "เลือกเก็บรูปเดิม: รูปที่ต่างไม่นับเป็นรูปที่จะเปลี่ยน" || fail "KEPT: $(echo "$K" | J 'JSON.stringify(d.summary)')"
 
-R=$(IMP $A r2.xlsx -F apply=true -F batchId=$B2 -F replaceImages=false)
+R=$(IMP $A r2.xlsx -F apply=true -F batchId=$B2 -F replaceImages=false -F brandFile=Maytag)
 [ "$(echo "$R" | J 'd.summary.created+"|"+d.summary.updated+"|"+d.summary.images')" = "1|2|1" ] && pass "บันทึกรอบสอง (เก็บรูปเดิม): เพิ่ม 1 · แก้ 2 · รูป 1" || fail "บันทึกรอบสอง: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
 ROW=$(DB "select name||'|'||brand||'|'||category||'|'||\"partNo\" from \"SparePart\" where \"partCode\"='${P}A'")
 [ "$ROW" = "ปั๊ม น้ำทิ้ง (ทดสอบ)|$B|ปั๊ม|W111, W333" ] && pass "ฐานข้อมูล: ช่องว่างในไฟล์คงค่าเดิม (ยี่ห้อ หมวด) · Part No. เปลี่ยน" || fail "A หลังรอบสอง: $ROW"
@@ -122,7 +130,7 @@ ROW=$(DB "select name||'|'||brand||'|'||category||'|'||\"partNo\" from \"SparePa
 # ไฟล์ที่สองในรอบเดียวกัน — แทนรูป (ค่าตั้งต้น)
 UPD_A=$(DB "select \"updatedAt\" from \"SparePart\" where \"partCode\"='${P}A'")
 xlsx r3.xlsx "{\"headers\":[\"รหัสสินค้า\",\"ชื่อสินค้า\",\"รูป\"],\"rows\":[[\"${P}A\",\"ปั๊ม น้ำทิ้ง (ทดสอบ)\",null]],\"images\":{\"C2\":\"a2-$SUF\"}}" >/dev/null
-R=$(IMP $PA r3.xlsx -F apply=true -F batchId=$B2)
+R=$(IMP $PA r3.xlsx -F apply=true -F batchId=$B2 -F brandFile=Maytag)
 [ "$(echo "$R" | J 'd.summary.images+"|"+d.summary.updated')" = "1|0" ] && pass "แอดมินอะไหล่อัปเดตได้ · แทนรูปเดิมเป็นค่าตั้งต้น" || fail "PA apply: $(echo "$R" | J 'JSON.stringify(d.summary)||d.error')"
 [ "$(MD5 ${P}A)" != "$(echo "$M1" | J 'd.B2')" ] && [ "$(DB "select \"updatedAt\" > '$UPD_A' from \"SparePart\" where \"partCode\"='${P}A'")" = "t" ] \
   && pass "ฐานข้อมูล: รูปถูกแทน และเวลาแก้ล่าสุดขยับ (รูปใหม่ไม่ติดแคช)" || fail "รูปไม่ถูกแทน"
@@ -142,9 +150,9 @@ REP=$(NODE_PATH=backend/node_modules node -e '
   const E=require("exceljs"); const wb=new E.Workbook();
   wb.xlsx.readFile(process.argv[1]).then(()=>{ const ws=wb.worksheets[0]; const out=[];
     ws.eachRow((r)=>out.push(r.values.slice(1).join("¦"))); console.log(out.join("\n")); });' "$DIR/report.xlsx")
-echo "$REP" | grep -q "^r2.xlsx¦2¦${P}A¦.*¦แก้ไข¦Part No.: W111, W222 → W111, W333" \
-  && echo "$REP" | grep -q "¦${P}D¦.*¦ไม่อยู่ในไฟล์ (ไม่ลบ)¦" \
-  && echo "$REP" | grep -q "^r3.xlsx¦2¦${P}A¦.*¦รูป¦แทนรูปเดิมด้วยรูปในไฟล์" \
+echo "$REP" | grep -q "^r2.xlsx¦Maytag¦2¦${P}A¦.*¦แก้ไข¦Part No.: W111, W222 → W111, W333" \
+  && echo "$REP" | grep -q "^(ทุกไฟล์ในรอบ)¦Maytag¦¦${P}D¦.*¦ไม่อยู่ในไฟล์ (ไม่ลบ)¦" \
+  && echo "$REP" | grep -q "^r3.xlsx¦Maytag¦2¦${P}A¦.*¦รูป¦แทนรูปเดิมด้วยรูปในไฟล์" \
   && pass "รายงาน Excel: แถวละอะไหล่ ค่าเดิม → ค่าใหม่ แยกไฟล์ ($(echo "$XL" | J 'd.filename'))" || fail "Excel: $(echo "$REP" | head -5)"
 
 # ── ไฟล์ผิดรูป / สิทธิ์ ──
@@ -178,14 +186,14 @@ M3=$(xlsx m1.xlsx "{\"title\":\"ข้อมูลรหัสสินค้า
     [2,null,{\"text\":{\"richText\":[{\"text\":\"${P}\"},{\"font\":{\"bold\":true},\"text\":\"M2\"}]},\"hyperlink\":\"https://example.com/p\"},\"ลิงก์ทดสอบ\",\"$BB\",null]],
   \"merges\":[\"A2:A3\",\"B2:B3\",\"C2:C3\",\"E2:E3\",\"F2:F3\",\"C4:C5\",\"D4:D5\"],
   \"images\":{\"B4\":\"m1-$SUF\"}}")
-R=$(IMP $A m1.xlsx)
+R=$(IMP $A m1.xlsx -F brandFile=Spinz)
 echo "$R" | J 'd.columns.partCode==="รหัสสินค้า"&&d.items.length===2&&!d.items.some(i=>/รหัสสินค้า|ไทย/.test(i.partCode+i.name))&&d.problems.length===0?"ok":"bad"' | grep -q ok \
   && pass "หัวตารางสองชั้น + แถวชื่อเรื่อง: ไม่มีอะไหล่ปลอมจากหัวตาราง ไม่มีรหัสซ้ำปลอม" || fail "หัวตารางผสาน: $(echo "$R" | J 'JSON.stringify([d.columns,d.items.map(i=>i.partCode+"|"+i.name),d.problems])||d.error')"
 echo "$R" | J 'const m=d.items.find(i=>i.partCode==="'$P'M1"); m&&m.line===4&&m.partNo==="MX-1"&&m.image==="NEW"?"ok":"bad"' | grep -q ok \
   && pass "อะไหล่ที่ผสานรหัสลงสองแถว: ใช้แถวจริง (รูป + Part No. ไม่หาย)" || fail "แถวผสาน: $(echo "$R" | J 'JSON.stringify(d.items)')"
 echo "$R" | J 'd.items.some(i=>i.partCode==="'$P'M2"&&i.name==="ลิงก์ทดสอบ")?"ok":"bad"' | grep -q ok \
   && pass "รหัสที่เป็นลิงก์ข้อความจัดรูปแบบอ่านได้" || fail "ลิงก์ rich text: $(echo "$R" | J 'JSON.stringify(d.items.map(i=>i.partCode))')"
-IMP $A m1.xlsx -F apply=true -F batchId=$B3ID >/dev/null
+IMP $A m1.xlsx -F apply=true -F batchId=$B3ID -F brandFile=Spinz >/dev/null
 [ "$(MD5 ${P}M1)" = "$(echo "$M3" | J 'd.B4')" ] && [ "$(DB "select count(*) from \"SparePart\" where name in ('ไทย','ชื่อรวม') and brand='$BB'")" = "0" ] \
   && pass "ฐานข้อมูล: รูปของแถวผสานเข้า · ไม่มีอะไหล่ชื่อหัวตาราง" || fail "ฐานข้อมูลหลังไฟล์ผสาน"
 [ "$(DB "select count(*) from \"SparePartImport\" where \"batchId\" in ('$B1','$B3ID') and summary ? 'incomplete'")" = "0" ] \
@@ -198,43 +206,44 @@ MX=$(xlsx x1.xlsx "{\"headers\":[\"รหัสสินค้า\",\"ชื่�
 [ "$(IMP $A x1.xlsx -F replaceImages=false | J 'd.items[0].image+"|"+d.summary.images')" = "KEPT|0" ] \
   && [ "$(IMP $A x1.xlsx | J 'd.items[0].image')" = "CHANGED" ] \
   && pass "รูปเดิมเป็นลิงก์ภายนอก = มีรูปแล้ว (เก็บ = KEPT · แทน = CHANGED) ไม่ใช่ 'เดิมไม่มีรูป'" || fail "ลิงก์ภายนอก: $(IMP $A x1.xlsx -F replaceImages=false | J 'JSON.stringify(d.items)')"
-IMP $A x1.xlsx -F replaceImages=false -F apply=true -F batchId=$B3ID >/dev/null
+IMP $A x1.xlsx -F replaceImages=false -F apply=true -F batchId=$B3ID -F brandFile=Spinz >/dev/null
 [ "$(DB "select \"imageUrl\" from \"SparePart\" where \"partCode\"='${P}X'")" = "https://example.com/zz.jpg" ] && [ -z "$(MD5 ${P}X)" ] \
   && pass "ฐานข้อมูล: เลือกเก็บรูปเดิม ลิงก์รูปภายนอกยังอยู่" || fail "ลิงก์ภายนอกถูกทับ"
-IMP $A x1.xlsx -F apply=true -F batchId=$B3ID >/dev/null
+IMP $A x1.xlsx -F apply=true -F batchId=$B3ID -F brandFile=Spinz >/dev/null
 XID=$(DB "select id from \"SparePart\" where \"partCode\"='${P}X'")
 [ "$(DB "select \"imageUrl\" from \"SparePart\" where id=$XID")" = "/api/spare-parts/$XID/image" ] && [ "$(MD5 ${P}X)" = "$(echo "$MX" | J 'd.C2')" ] \
   && pass "ฐานข้อมูล: เลือกแทนรูป ลิงก์ภายนอกถูกแทนด้วยรูปในไฟล์" || fail "แทนลิงก์ภายนอก"
 # อัปเดตรอบก่อนพังหลังเขียนรูปแต่ก่อนเขียนลิงก์รูป — ไบต์เท่าเดิมแต่ลิงก์หาย ต้องซ่อมให้ ไม่ใช่ "เหมือนเดิม" ตลอดไป
 DB "update \"SparePart\" set \"imageUrl\"=null where id=$XID" >/dev/null
-[ "$(IMP $A x1.xlsx | J 'd.items.length&&d.items[0].image')" = "NEW" ] && IMP $A x1.xlsx -F apply=true -F batchId=$B3ID >/dev/null \
+[ "$(IMP $A x1.xlsx | J 'd.items.length&&d.items[0].image')" = "NEW" ] && IMP $A x1.xlsx -F apply=true -F batchId=$B3ID -F brandFile=Spinz >/dev/null \
   && [ "$(DB "select \"imageUrl\" from \"SparePart\" where id=$XID")" = "/api/spare-parts/$XID/image" ] \
   && pass "รูปเข้าแล้วแต่ลิงก์รูปหาย: อัปเดตซ้ำแล้วลิงก์กลับมา" || fail "ซ่อมลิงก์รูป: $(DB "select coalesce(\"imageUrl\",'NULL') from \"SparePart\" where id=$XID")"
 
 # ยี่ห้อเดียวแยกสองไฟล์ในรอบเดียว (ไฟล์ใหญ่เกิน 50 MB) — "ไม่อยู่ในไฟล์" นับทั้งรอบ ตัวละครั้ง
 curl -s -X POST localhost:4000/api/spare-parts -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"partCode\":\"${P}Y\",\"name\":\"ไม่อยู่ทั้งสองไฟล์\",\"brand\":\"$BB\"}" >/dev/null
+  -d "{\"partCode\":\"${P}Y\",\"name\":\"ไม่อยู่ทั้งสองไฟล์\",\"brand\":\"$BB\",\"brandFiles\":[\"Spinz\"]}" >/dev/null
 xlsx s1.xlsx "{\"headers\":[\"รหัสสินค้า\",\"ชื่อสินค้า\",\"ยี่ห้อ\"],\"rows\":[[\"${P}M1\",\"มอเตอร์ทดสอบ\",\"$BB\"]]}" >/dev/null
 xlsx s2.xlsx "{\"headers\":[\"รหัสสินค้า\",\"ชื่อสินค้า\",\"ยี่ห้อ\"],\"rows\":[[\"${P}M2\",\"ลิงก์ทดสอบ (แก้)\",\"$BB\"],[\"${P}X\",\"รูปภายนอกทดสอบ\",\"$BB\"]]}" >/dev/null
-IMP $A s1.xlsx -F apply=true -F batchId=$B4ID >/dev/null
-IMP $A s2.xlsx -F apply=true -F batchId=$B4ID >/dev/null
+IMP $A s1.xlsx -F apply=true -F batchId=$B4ID -F brandFile=Spinz >/dev/null
+IMP $A s2.xlsx -F apply=true -F batchId=$B4ID -F brandFile=Spinz >/dev/null
 BT=$(curl -s localhost:4000/api/spare-parts/imports/batch/$B4ID -H "$(H $A)")
-[ "$(echo "$BT" | J 'd.totals.notInFile+"|"+d.notInFile.map(g=>g.partCode).join(",")')" = "1|${P}Y" ] \
+[ "$(echo "$BT" | J 'd.totals.notInFile+"|"+d.notInFile.filter(g=>g.partCode.startsWith("'$P'")).map(g=>g.partCode+":"+g.file).join(",")')" = "$((SZ0+1))|${P}Y:Spinz" ] \
   && pass "สองไฟล์ยี่ห้อเดียวกัน: ไม่อยู่ในไฟล์เหลือเฉพาะตัวที่ไม่อยู่ทั้งสองไฟล์ (นับครั้งเดียว)" || fail "notInFile รอบ: $(echo "$BT" | J 'JSON.stringify([d.totals,d.notInFile])')"
-[ "$(curl -s localhost:4000/api/spare-parts/imports/latest -H "$(H $A)" | J 'd.totals.notInFile+"|"+("notInFile" in d)')" = "1|false" ] \
+[ "$(curl -s localhost:4000/api/spare-parts/imports/latest -H "$(H $A)" | J 'd.totals.notInFile+"|"+("notInFile" in d)')" = "$((SZ0+1))|false" ] \
   && pass "แถบอัปเดตล่าสุด: นับไม่อยู่ในไฟล์แบบทั้งรอบ (ไม่ส่งรายการ)" || fail "latest notInFile"
 XP=$(curl -s localhost:4000/api/spare-parts/imports/batch/$B4ID/excel -H "$(H $A)" | J 'd.path')
 curl -s -o "$DIR/r4.xlsx" "localhost:4000$XP" -H "$(H $A)"
 REP=$(NODE_PATH=backend/node_modules node -e '
   const E=require("exceljs"); const wb=new E.Workbook();
   wb.xlsx.readFile(process.argv[1]).then(()=>{ const out=[]; wb.worksheets[0].eachRow((r)=>out.push(r.values.slice(1).join("¦"))); console.log(out.join("\n")); });' "$DIR/r4.xlsx")
-[ "$(echo "$REP" | grep -c "ไม่อยู่ในไฟล์ (ไม่ลบ)")" = "1" ] && echo "$REP" | grep -q "^(ทุกไฟล์ในรอบ)¦¦${P}Y¦" \
+[ "$(echo "$REP" | grep -c "ไม่อยู่ในไฟล์ (ไม่ลบ)")" = "$((SZ0+1))" ] && [ "$(echo "$REP" | grep "ไม่อยู่ในไฟล์ (ไม่ลบ)" | grep -c "¦${P}")" = "1" ] \
+  && echo "$REP" | grep -q "^(ทุกไฟล์ในรอบ)¦Spinz¦¦${P}Y¦" \
   && pass "รายงาน Excel: ไม่อยู่ในไฟล์แถวเดียว (ทั้งรอบ)" || fail "Excel notInFile: $(echo "$REP" | grep "ไม่อยู่ในไฟล์")"
 
 # แถวที่ข้าม (ไม่มีชื่อ) อยู่ในไฟล์ — ไม่ใช่ "ไม่อยู่ในไฟล์" ด้วย · Part No. ยาวเกินข้ามแถว
 LONG=$(printf 'W%.0s' $(seq 1 2001))
 xlsx s3.xlsx "{\"headers\":[\"รหัสสินค้า\",\"ชื่อสินค้า\",\"ยี่ห้อ\",\"Part No.\"],\"rows\":[[\"${P}M1\",\"มอเตอร์ทดสอบ\",\"$BB\",null],[\"${P}Y\",null,\"$BB\",null],[\"${P}L\",\"ยาวทดสอบ\",\"$BB\",\"$LONG\"]]}" >/dev/null
-R=$(IMP $A s3.xlsx)
+R=$(IMP $A s3.xlsx -F brandFile=Spinz)
 echo "$R" | J '!d.notInFile.some(g=>g.partCode==="'$P'Y")&&d.notInFile.some(g=>g.partCode==="'$P'M2")&&d.problems.some(p=>p.partCode==="'$P'Y"&&/ไม่มีชื่อ/.test(p.note))?"ok":"bad"' | grep -q ok \
   && pass "แถวที่ข้ามเพราะไม่มีชื่อ ไม่ขึ้นซ้ำว่าไม่อยู่ในไฟล์" || fail "problem+notInFile: $(echo "$R" | J 'JSON.stringify([d.notInFile.map(g=>g.partCode),d.problems])')"
 echo "$R" | J 'd.problems.some(p=>p.partCode==="'$P'L"&&p.note==="Part No. ยาวเกิน 2,000 ตัวอักษร — ข้ามแถวนี้")&&!d.items.some(i=>i.partCode==="'$P'L")?"ok":"bad"' | grep -q ok \
@@ -253,7 +262,7 @@ SHA_O=$(echo "$O" | J 'd._sha.C2')
 S1=$(xlsx h1.xlsx "{\"headers\":$HH,\"rows\":[[\"${P}H\",\"แฮชทดสอบ\",null]],\"images\":{\"C2\":\"shrunk1-$SUF\"}}")
 xlsx h2.xlsx "{\"headers\":$HH,\"rows\":[[\"${P}H\",\"แฮชทดสอบ\",null]],\"images\":{\"C2\":\"shrunk2-$SUF\"}}" >/dev/null
 HASHES="{\"xl/media/image1.jpeg\":\"$SHA_O\"}"
-IMP $A h1.xlsx -F "imageHashes=$HASHES" -F apply=true -F batchId=$B5ID >/dev/null
+IMP $A h1.xlsx -F "imageHashes=$HASHES" -F apply=true -F batchId=$B5ID -F brandFile=Spinz >/dev/null
 [ "$(DB "select i.\"sourceHash\"||'|'||md5(i.data) from \"SparePartImage\" i join \"SparePart\" p on p.id=i.\"sparePartId\" where p.\"partCode\"='${P}H'")" = "$SHA_O|$(echo "$S1" | J 'd.C2')" ] \
   && pass "ฐานข้อมูล: เก็บรูปที่ย่อแล้ว + ค่ารูปต้นฉบับ (sourceHash)" || fail "sourceHash: $(DB "select coalesce(i.\"sourceHash\",'NULL') from \"SparePartImage\" i join \"SparePart\" p on p.id=i.\"sparePartId\" where p.\"partCode\"='${P}H'")"
 [ "$(IMP $A h2.xlsx -F "imageHashes=$HASHES" | J 'd.items.length+"|"+d.summary.images+"|"+d.summary.same')" = "0|0|1" ] \
@@ -271,7 +280,7 @@ curl -s -X POST localhost:4000/api/spare-parts/$HID/image -H "$(H $A)" -F "image
 
 # เบราว์เซอร์แปลงรูป PNG (ก๊อปวาง) เป็น JPEG แต่คงชื่อ image1.png — เซิร์ฟเวอร์ต้องดูชนิดจากไบต์
 xlsx p1.xlsx "{\"headers\":$HH,\"rows\":[[\"${P}J\",\"ชนิดรูปทดสอบ\",null]],\"images\":{\"C2\":\"jpg-in-png-$SUF\"},\"imageExt\":\"png\"}" >/dev/null
-IMP $A p1.xlsx -F apply=true -F batchId=$B5ID >/dev/null
+IMP $A p1.xlsx -F apply=true -F batchId=$B5ID -F brandFile=Spinz >/dev/null
 JID=$(DB "select id from \"SparePart\" where \"partCode\"='${P}J'")
 [ "$(DB "select \"mimeType\" from \"SparePartImage\" where \"sparePartId\"=$JID")" = "image/jpeg" ] \
   && [ "$(curl -s -o /dev/null -w '%{content_type}' localhost:4000/api/spare-parts/$JID/image)" = "image/jpeg" ] \

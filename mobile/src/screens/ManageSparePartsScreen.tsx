@@ -17,12 +17,18 @@ import { api, apiErrorMessage, partImageUri } from "../api/client";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
 import SparePartImportModal, { Batch, ImportReportModal } from "../components/SparePartImportModal";
+import { BRAND_FILES } from "../utils/brandFile";
 
 const emptyForm = { partCode: "", name: "", brand: "", category: "", partNo: "", description: "" };
 type Form = typeof emptyForm;
 type PickedImage = { uri: string; name: string; type: string };
 
 const ALL = "ทั้งหมด";
+/**
+ * อะไหล่ที่ไม่อยู่ในไฟล์ยี่ห้อไหนเลย = ตัวที่ช่างเลือกไม่ได้บนใบที่มีเครื่อง (ข้อ 18) — แอดมินต้องหาเจอเร็วที่สุดตั้งแต่วันแรก
+ * ชื่อปุ่มใช้คำที่แอดมินคุ้น ("ไม่มียี่ห้อ") แต่ความหมายคือ "ไม่อยู่ในไฟล์ไหน" ไม่ใช่ช่องยี่ห้อสินค้าว่าง
+ */
+const NO_FILE = "ไม่มียี่ห้อ";
 
 // รูปอะไหล่เสิร์ฟจาก URL เดิมทุกครั้ง (/spare-parts/:id/image) — ต่อท้ายด้วยเวลาที่แก้ล่าสุด
 // ไม่งั้นเบราว์เซอร์โชว์รูปเก่าจากแคชหลังเปลี่ยนรูปจนกว่าจะรีเฟรชหน้า
@@ -81,6 +87,7 @@ export default function ManageSparePartsScreen() {
   const [parts, setParts, cached] = useCachedState<SparePart[]>("ManageSpareParts:parts", []);
   const [loading, setLoading] = useState(!cached);
   const [query, setQuery] = useState("");
+  // กรองตามไฟล์ยี่ห้อ (ไม่ใช่ข้อความช่องยี่ห้อสินค้า) — ไฟล์คือสิ่งที่ตัดสินว่าช่างเลือกได้กับเครื่องไหน (เจ้าของงาน 31 ต.ค. 69)
   const [brand, setBrand] = useState(ALL);
   // null = ป๊อปอัพปิด · "new" = เพิ่มใหม่ · อะไหล่ = แก้ไขตัวนั้น
   const [editing, setEditing] = useState<SparePart | "new" | null>(null);
@@ -113,9 +120,18 @@ export default function ManageSparePartsScreen() {
   );
   useRefreshHandler(loadParts);
 
-  const brands = useMemo(() => {
-    const set = new Set(parts.map((p) => p.brand?.trim()).filter((b): b is string => !!b));
-    return [ALL, ...[...set].sort((a, b) => a.localeCompare(b))];
+  /**
+   * ปุ่มกรอง = ไฟล์ทั้ง 6 + "ไม่มียี่ห้อ" พร้อมจำนวน — รหัสที่อยู่สองไฟล์นับทั้งสองปุ่ม (ช่างเลือกได้จากทั้งสองไฟล์จริง)
+   * อะไหล่จากเซิร์ฟเวอร์รุ่นก่อน (ไม่มี brandFiles) ไม่นับเข้าปุ่มไหน — ไม่รู้ ดีกว่านับว่า "ไม่มียี่ห้อ" ผิด ๆ
+   */
+  const fileChips = useMemo(() => {
+    const count = (f: string) =>
+      parts.filter((p) => (f === NO_FILE ? p.brandFiles?.length === 0 : !!p.brandFiles?.includes(f))).length;
+    return [
+      { key: ALL, n: parts.length },
+      ...BRAND_FILES.map((f) => ({ key: f as string, n: count(f) })),
+      { key: NO_FILE, n: count(NO_FILE) },
+    ];
   }, [parts]);
 
   const q = query.trim();
@@ -123,7 +139,8 @@ export default function ManageSparePartsScreen() {
     const needle = q.toLowerCase();
     return parts.filter(
       (p) =>
-        (brand === ALL || p.brand?.trim() === brand) &&
+        (brand === ALL ||
+          (brand === NO_FILE ? p.brandFiles?.length === 0 : !!p.brandFiles?.includes(brand))) &&
         (!needle ||
           [p.partCode, p.name, p.brand, p.category, p.partNo].some((v) => v?.toLowerCase().includes(needle)))
     );
@@ -220,19 +237,29 @@ export default function ManageSparePartsScreen() {
         ) : null}
       </View>
 
-      {brands.length > 2 ? (
+      {parts.length > 0 ? (
         <View style={styles.chips}>
-          {brands.map((b) => (
+          {fileChips.map(({ key, n }) => (
             <TouchableOpacity
-              key={b}
-              style={[styles.chip, brand === b && styles.chipOn]}
-              onPress={() => setBrand(b)}
-              accessibilityLabel={`ยี่ห้อ ${b}`}
+              key={key}
+              style={[styles.chip, brand === key && styles.chipOn, key === NO_FILE && n > 0 && brand !== key && styles.chipWarn]}
+              onPress={() => setBrand(key)}
+              accessibilityLabel={`กรอง ${key}`}
+              accessibilityState={{ selected: brand === key }}
+              // เว็บไม่แปลง accessibilityState เป็น aria-selected (เหมือน FilterBar) — ใส่เอง
+              aria-selected={brand === key}
             >
-              <Text style={[styles.chipText, brand === b && styles.chipTextOn]}>{b}</Text>
+              <Text style={[styles.chipText, brand === key && styles.chipTextOn]}>
+                {key} <Text style={styles.chipCount}>{n}</Text>
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
+      ) : null}
+      {brand === NO_FILE && shown.length > 0 ? (
+        <Text style={styles.noFileHint}>
+          อะไหล่ที่ไม่อยู่ในไฟล์ยี่ห้อไหน ช่างเลือกไม่ได้บนใบงานที่มีเครื่อง — กด “แก้ไข” แล้วเลือกไฟล์ หรืออัปโหลดไฟล์ Excel ที่มีรหัสนี้
+        </Text>
       ) : null}
 
       {loading ? (
@@ -273,6 +300,13 @@ export default function ManageSparePartsScreen() {
                     {item.partNo ? " · Part No. " : ""}
                     {item.partNo ? <Hl text={item.partNo} q={q} style={styles.meta} /> : null}
                   </Text>
+                  {item.brandFiles ? (
+                    item.brandFiles.length ? (
+                      <Text style={styles.fileMeta}>ไฟล์ {item.brandFiles.join(" · ")}</Text>
+                    ) : (
+                      <Text style={styles.fileMetaNone}>ไม่อยู่ในไฟล์ยี่ห้อไหน — ช่างเลือกไม่ได้</Text>
+                    )
+                  ) : null}
                   <View style={styles.actionRow}>
                     <TouchableOpacity onPress={() => handlePickImage(item)} disabled={uploadingId === item.id}>
                       {uploadingId === item.id ? (
@@ -345,14 +379,54 @@ function PartModal({
       : emptyForm
   );
   const [image, setImage] = useState<PickedImage | null>(null);
+  /**
+   * ไฟล์ยี่ห้อของอะไหล่ (§5.10) — null = เซิร์ฟเวอร์รุ่นก่อนไม่ได้บอก: ไม่ส่งไปเลยจนกว่าแอดมินจะแตะปุ่ม (ไม่งั้นล้างไฟล์ที่มีอยู่ทิ้ง)
+   * อะไหล่ใหม่เริ่มที่ไม่มีไฟล์ — สร้างไว้ใช้กับใบงานที่ไม่ระบุเครื่องได้ จึงเตือน ไม่บังคับ
+   */
+  const [files, setFiles] = useState<string[] | null>(part ? part.brandFiles ?? null : []);
+  /**
+   * แอดมินแตะปุ่มไฟล์แล้วหรือยัง — ไม่แตะ = ไม่ส่ง brandFiles (เซิร์ฟเวอร์คงไฟล์เดิม)
+   * รายการในฟอร์มมาจากหน้ารายการ ซึ่งอาจเก่ากว่าเซิร์ฟเวอร์ (เปิดจากแคช หรือมีคนอัปโหลดไฟล์ยี่ห้อระหว่างนั้น)
+   * ส่งรายการเก่าไปทั้งก้อน = ลบไฟล์ที่อัปโหลดเพิ่งเพิ่มทิ้งเงียบ ๆ ทั้งที่แอดมินแค่แก้ Part No. (D20: เอาออกได้ทางเดียวคือติ๊กออกเอง)
+   */
+  const [filesTouched, setFilesTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const set = (k: keyof Form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const toggleFile = (f: string) => {
+    setFilesTouched(true);
+    setFiles((cur) => {
+      const list = cur ?? [];
+      return list.includes(f) ? list.filter((x) => x !== f) : BRAND_FILES.filter((x) => x === f || list.includes(x));
+    });
+  };
+
+  /**
+   * ไฟล์ที่จะส่งตอนแก้อะไหล่เดิม — เอาเฉพาะที่แอดมินติ๊กเพิ่ม/ติ๊กออก ไปลงบนรายการล่าสุดของเซิร์ฟเวอร์
+   * ไม่ใช่ส่งรายการบนจอทั้งก้อน: ไฟล์อื่นที่อัปโหลดเพิ่มให้ระหว่างที่ฟอร์มเปิดอยู่ต้องอยู่ต่อ (D20)
+   */
+  async function filesToSend(id: number, start: string[], now: string[]): Promise<string[]> {
+    const added = now.filter((f) => !start.includes(f));
+    const removed = start.filter((f) => !now.includes(f));
+    let latest = start;
+    try {
+      latest = (await api.get<SparePart>(`/spare-parts/${id}`, { loadingText: false })).data.brandFiles ?? start;
+    } catch {
+      // อ่านล่าสุดไม่ได้ — ใช้รายการตอนเปิดฟอร์ม (บันทึกเองจะบอกข้อผิดพลาดถ้าเซิร์ฟเวอร์มีปัญหาจริง)
+    }
+    return BRAND_FILES.filter((f) => (latest.includes(f) || added.includes(f)) && !removed.includes(f));
+  }
   const ready = !!form.partCode.trim() && !!form.name.trim();
   const preview = image?.uri ?? (part ? thumbUri(part) : null);
 
   async function submit() {
     if (!ready) return;
     setSaving(true);
+    // อะไหล่ใหม่ส่งเสมอ (เริ่มที่ [] — ไม่มีไฟล์เดิมให้ลบ) · อะไหล่เดิมส่งเฉพาะเมื่อแตะปุ่มไฟล์
+    const brandFiles = !part
+      ? files ?? []
+      : filesTouched && files
+        ? await filesToSend(part.id, part.brandFiles ?? [], files)
+        : null;
     const payload = {
       partCode: form.partCode.trim(),
       name: form.name.trim(),
@@ -361,6 +435,8 @@ function PartModal({
       // ล้างช่องแล้วบันทึก = ลบ Part No. (ส่ง "" ไม่ใช่ไม่ส่ง ไม่งั้นค่าเดิมค้าง)
       partNo: part ? form.partNo.trim() : form.partNo.trim() || undefined,
       description: form.description.trim() || undefined,
+      // รายการนี้คือไฟล์ทั้งหมดของอะไหล่ตัวนี้ (เซิร์ฟเวอร์ทำให้ตรงเป๊ะ ไฟล์ที่ไม่อยู่ในรายการถูกเอาออก) — จึงส่งเฉพาะเมื่อแอดมินเปลี่ยน
+      ...(brandFiles ? { brandFiles } : {}),
     };
     let saved: SparePart;
     try {
@@ -472,6 +548,40 @@ function PartModal({
         placeholderTextColor={colors.textFaint}
         accessibilityLabel="หมวดหมู่"
       />
+      {/*
+        อยู่ในไฟล์ยี่ห้อ (เจ้าของงาน 31 ต.ค. 69) — ตัวนี้ตัดสินว่าช่างเลือกอะไหล่ได้กับเครื่องยี่ห้อไหน ไม่ใช่ช่อง "ยี่ห้อ" ด้านบน
+        เลือกได้หลายไฟล์ (รหัสเดียวอยู่หลายไฟล์ได้) · ปุ่มธรรมดาไม่ใช่ Dropdown (ฟอร์มนี้เป็น Modal อยู่แล้ว)
+        ที่นี่เป็นที่เดียวที่เอาไฟล์ออกได้ — อัปโหลด Excel เพิ่มไฟล์ให้อย่างเดียว ไม่เอาออก (ค่าตั้งต้น D20)
+        ของนอกสโตร์ไม่ขึ้นในหน้านี้อยู่แล้ว (GET /spare-parts ตัดออก) — ทุกตัวที่แก้ที่นี่เป็นของในสโตร์
+      */}
+      <Text style={styles.label}>อยู่ในไฟล์ยี่ห้อ</Text>
+      <View style={styles.chips}>
+        {BRAND_FILES.map((f) => {
+          const on = !!files?.includes(f);
+          return (
+            <TouchableOpacity
+              key={f}
+              style={[styles.fileChip, on && styles.chipOn]}
+              onPress={() => toggleFile(f)}
+              disabled={saving}
+              accessibilityLabel={`ไฟล์ ${f}`}
+              accessibilityState={{ selected: on }}
+              // เว็บไม่แปลง accessibilityState เป็น aria-selected (เหมือน FilterBar) — ใส่เอง
+              // ไม่งั้นแอดมินที่ใช้โปรแกรมอ่านจอ และเทสต์ ไม่รู้ว่าไฟล์ไหนติ๊กอยู่
+              aria-selected={on}
+            >
+              {on ? <Ionicons name="checkmark" size={15} color={colors.primaryInk} /> : null}
+              <Text style={[styles.chipText, on && styles.chipTextOn]}>{f}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.fileHint}>
+        ช่างเลือกอะไหล่ได้เฉพาะไฟล์ยี่ห้อของเครื่อง และของใช้ร่วม (ไฟล์ Other) · อัปโหลดไฟล์ Excel ครั้งหน้าเพิ่มไฟล์ให้เอง ไม่เอาออก
+      </Text>
+      {files && files.length === 0 ? (
+        <Text style={styles.fileWarn}>ยังไม่ได้เลือกไฟล์ — ช่างเลือกอะไหล่ตัวนี้ไม่ได้ (ยกเว้นใบงานที่ไม่ระบุเครื่อง)</Text>
+      ) : null}
       <Text style={styles.label}>
         รายละเอียด <Text style={styles.optional}>(ไม่บังคับ)</Text>
       </Text>
@@ -579,6 +689,34 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   chipText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   chipTextOn: { color: colors.primaryInk, fontWeight: "700" },
+  chipCount: { fontWeight: "700" },
+  // "ไม่มียี่ห้อ" ที่ยังมีของค้าง — ขอบเหลืองให้แอดมินเห็นว่ามีตัวที่ช่างเลือกไม่ได้รออยู่
+  chipWarn: { borderColor: colors.warningBorder, backgroundColor: colors.warningSoft },
+  noFileHint: { fontSize: 13, lineHeight: 20, color: colors.warningInk },
+  fileMeta: { fontSize: 12, lineHeight: 18, color: colors.primaryInk, marginTop: 2 },
+  fileMetaNone: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.dangerInk, marginTop: 2 },
+  fileChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    minHeight: 40,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+  },
+  fileHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: 4 },
+  fileWarn: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.warningInk,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginTop: 4,
+  },
   noMatch: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
   mark: { backgroundColor: colors.warningBorder },
   card: {

@@ -66,6 +66,8 @@ export default function InspectionSlots({
   onRemove,
   onChanged,
   compact = false,
+  partAddLabel,
+  titleCount = false,
 }: {
   workOrderId: number;
   /** ไฟล์แนบทั้งใบ — กรองเฉพาะไฟล์ตรวจของรอบนี้เอง */
@@ -79,6 +81,16 @@ export default function InspectionSlots({
   onChanged: () => void | Promise<void>;
   /** ในฟอร์มไม่ต้องมีคำอธิบายใต้ชื่อกรอบ พื้นที่น้อยกว่า */
   compact?: boolean;
+  /**
+   * ชื่อปุ่มถ่ายเพิ่มของกรอบรูปอะไหล่ที่เสีย (เมื่อมีรูปแล้ว) — ใบที่หัวหน้าภาคตีกลับรายการอะไหล่ใช้ "เพิ่มรูปอะไหล่ที่เสีย"
+   * รูปที่ชัดขึ้นคือทางยืนยันรายการเดิมทางหนึ่ง (ด่านส่งใหม่นับรูปที่เพิ่มหลังตีกลับ) — "ถ่ายเพิ่ม" เฉย ๆ ช่างไม่รู้ว่าทำแล้วได้อะไร
+   */
+  partAddLabel?: string;
+  /**
+   * ชื่อกรอบมีจำนวนไฟล์ต่อท้าย ("รูปหน้างาน · 2") — จอคอนเฟิร์มอะไหล่ของหัวหน้าภาค (ดูอย่างเดียว ไม่มีปุ่มถ่าย)
+   * คนดูอยากรู้ก่อนว่ามีให้ดูกี่รูป ป้าย "✓ 2 รูป" ด้านขวาเป็นภาษาของคนถ่าย (ครบแล้ว) ไม่ใช่ของคนตรวจ
+   */
+  titleCount?: boolean;
 }) {
   const [busy, setBusy] = useState<{ role: string; label: string } | null>(null);
   const mine = inspectionFilesOf(rows, since);
@@ -113,7 +125,7 @@ export default function InspectionSlots({
           <EvidenceStep
             key={slot.role}
             n={i + 1}
-            title={slot.label}
+            title={titleCount ? `${slot.label} · ${got.length}` : slot.label}
             hint={compact && got.length ? undefined : slot.hint}
             done={got.length > 0}
             doneText={`✓ ${got.length} ${noun}`}
@@ -121,7 +133,11 @@ export default function InspectionSlots({
             accessibilityLabel={`กรอบ${slot.label}`}
             busy={busy?.role === slot.role ? busy.label : null}
             primary={{
-              label: got.length ? `${slot.video ? "อัด" : "ถ่าย"}เพิ่ม` : slot.camera,
+              label: got.length
+                ? slot.role === "INSPECT_PART" && partAddLabel
+                  ? partAddLabel
+                  : `${slot.video ? "อัด" : "ถ่าย"}เพิ่ม`
+                : slot.camera,
               icon: slot.video ? "videocam" : slot.role === "INSPECT_PART" ? "scan" : "camera",
               onPress: () =>
                 add(slot.role, (stage) => (slot.video ? pickVideoAttachment(stage, true) : pickImageAttachment(true, stage))),

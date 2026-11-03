@@ -107,6 +107,9 @@ model User {
   vehicleMaintenance   VehicleMaintenance[]
   // แถวตั้งค่าที่คนนี้เปลี่ยน (เวลาปิดรับปล่อยงาน) — นับเป็นประวัติตอนลบผู้ใช้ ไม่งั้นถูกลบจริงแล้ว "ใครเปลี่ยน" หายไปเงียบ ๆ
   appSettingsChanged   AppSetting[]          @relation("AppSettingsChanged")
+  // รายการอะไหล่ที่ช่างส่ง/หัวหน้าภาคตัดสิน — นับเป็นประวัติตอนลบผู้ใช้ ไม่งั้นลบจริงแล้ว "ใครส่ง ใครตีกลับ" หายเงียบ ๆ
+  partsPicksSent       PartsPick[]           @relation("PartsPicksSent")
+  partsPicksReviewed   PartsPick[]           @relation("PartsPicksReviewed")
 }
 
 model Vehicle {
@@ -598,8 +601,8 @@ model TroubleshootImage {
 }
 
 model SparePart {
-  id             Int             @id @default(autoincrement())
-  partCode       String          @unique
+  id             Int                  @id @default(autoincrement())
+  partCode       String               @unique
   name           String
   brand          String?
   category       String?
@@ -613,12 +616,15 @@ model SparePart {
   // อะไหล่นอกสโตร์ (ไม่มี SKU) — หัวหน้าภาค/ช่างพิมพ์ชื่อเอง (เจ้าของงานขอ ต.ค. 69)
   // เก็บเป็นแถวในตารางนี้ให้ทุกขั้นของใบงาน (เช็ค แยกใบรออะไหล่ ปิดงาน) ใช้ทางเดียวกับของในสโตร์
   // partCode = "[นอกสโตร์] ชื่อ" ชื่อเดียวกันคือแถวเดียวกัน · ไม่ขึ้นในหน้ารายการอะไหล่/ค้นหา
-  offCatalog     Boolean         @default(false)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  offCatalog     Boolean              @default(false)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
   image          SparePartImage?
   outageParts    OutagePart[]
   workOrderParts WorkOrderPart[]
+  partsPickItems PartsPickItem[]
+  // ไฟล์ยี่ห้อที่อะไหล่นี้อยู่ (ล็อกยี่ห้อดูที่นี่ ไม่ใช่ช่อง brand ด้านบน) — ไม่มีแถวเลย = ไม่อยู่ในไฟล์ไหน ช่างเลือกไม่ได้
+  brandFiles     SparePartBrandFile[]
 }
 
 // Uploaded photos live in their own table so listing parts never has to
@@ -805,6 +811,7 @@ model WorkOrder {
   workers      WorkOrderWorker[]
   vehicleLogs  VehicleLog[]
   adminReviews AdminReview[]
+  partsPicks   PartsPick[]
 
   @@index([status, createdAt])
   // รายงานอะไหล่ที่ไปแต่ละสาขา: ตัวเลขบนลิงก์ในใบงาน (ถามทุกครั้งที่แอดมินเปิดใบงาน) และ Excel อ่านใบงานทีละสาขา — ไม่มี index
@@ -1247,9 +1254,86 @@ model SparePartImport {
   summary   Json
   // รายการที่เปลี่ยน/ข้าม (ไม่มีรูป) — ใช้ทำหน้ารายงานและไฟล์ Excel
   details   Json
+  // ไฟล์ยี่ห้อของการอัปโหลดครั้งนี้ (ตามชื่อไฟล์ หรือที่แอดมินเลือก) · ว่าง = อัปโหลดก่อนมีกติกานี้และชื่อไฟล์ไม่บอกยี่ห้อ
+  // หัวช่องเลือกอะไหล่ "อัปเดต {วันที่}" อ่านการอัปโหลดล่าสุดของไฟล์นั้นจากที่นี่
+  brandFile String?
 
   @@index([batchId])
   @@index([createdAt])
+  @@index([brandFile, createdAt])
+}
+
+// ช่างเลือกอะไหล่ตอนตรวจหน้างาน แล้วส่งให้หัวหน้าภาคคอนเฟิร์ม (เจ้าของงานขอ ต.ค. 69)
+// แยกจาก WorkOrderPart โดยตั้งใจ — ของที่ยังไม่คอนเฟิร์มต้องไม่ขึ้นกระดานติดตามเครื่องเสีย/รายงานอะไหล่ที่ต้องสั่ง
+// (ช่างเลือกผิดแล้วถูกตีกลับ คนสั่งของจะเห็นของผิด) · คอนเฟิร์มแล้วค่อยเขียนเป็น WorkOrderPart WAITING
+// แถวละหนึ่งรอบที่ส่ง — ตีกลับแล้วส่งใหม่เป็นแถวใหม่ หัวหน้าภาคเทียบกับรอบก่อนได้ ประวัติไม่ถูกเขียนทับ
+// รอบที่ยังเปิดอยู่ดูจากแถวล่าสุดของใบเท่านั้น — แถวเก่าที่ถูกตีกลับจะไม่กลับมาเปิดเองเมื่อรอบหลังถูกปิด
+model PartsPick {
+  id           Int             @id @default(autoincrement())
+  workOrderId  Int
+  workOrder    WorkOrder       @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  // ส่งรอบที่เท่าไรของรอบตรวจนี้ — ตีกลับแล้วส่งใหม่ +1
+  round        Int             @default(1)
+  // PENDING รอหัวหน้าภาค · CONFIRMED เขียนลง WorkOrderPart แล้ว · RETURNED ตีกลับให้ทีมที่ไปตรวจแก้
+  status       String          @default("PENDING")
+  // ไฟล์ยี่ห้อของเครื่องตอนส่ง (Haier · Huebsch · Maytag · Oasis · Spinz · Other) — ยี่ห้อเครื่องถูกแก้ทีหลังจะได้รู้ว่าเลือกจากไฟล์ไหน
+  brandFile    String?
+  // ทีมที่ไปตรวจตอนส่ง — ตีกลับแล้วกลับไปที่ทีมนี้ทั้งทีม ไม่ใช่ช่างคนเดียว
+  team         String?
+  // "ตรวจแล้วเจออะไร" ตอนส่ง — ส่งใหม่หลังตีกลับต้องแก้อะไรสักอย่าง เทียบกับค่านี้
+  note         String?
+  createdById  Int?
+  createdBy    User?           @relation("PartsPicksSent", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime        @default(now())
+  reviewedById Int?
+  reviewedBy   User?           @relation("PartsPicksReviewed", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  // เหตุผลที่ตีกลับ (บังคับ) — ทีมเห็นบนการ์ดแดงและกล่องแดงบนฟอร์ม ไม่ไปถึงร้าน
+  reason       String?
+  // รอบนี้จบโดยไม่ได้คอนเฟิร์ม/ตีกลับ (ส่งตรวจใหม่ · ย้อนขั้น · ยกเลิก · ปิดใบ · บันทึกแทนช่าง) — ไม่ถือว่ารอใครอยู่อีก
+  voidedAt     DateTime?
+  voidNote     String?
+  items        PartsPickItem[]
+
+  @@index([workOrderId, id])
+}
+
+// อะไหล่หนึ่งรายการที่ช่างเลือก — มี id ของตัวเองเพราะระบบสำรองข้อมูลไล่อ่านทีละหน้าตามคอลัมน์ id
+model PartsPickItem {
+  id          Int       @id @default(autoincrement())
+  pickId      Int
+  pick        PartsPick @relation(fields: [pickId], references: [id], onDelete: Cascade)
+  sparePartId Int
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  quantity    Int       @default(1)
+  // หัวหน้าภาคกด OK (ตรง) / NO (ไม่ตรง) — ตัวที่ NO ขึ้นป้ายแดงให้ช่างรู้ว่าต้องแก้ตัวไหน (บทเรียนจากเคลม)
+  mark        String?
+
+  @@unique([pickId, sparePartId])
+  @@index([sparePartId])
+}
+
+// อะไหล่อยู่ในไฟล์ยี่ห้อไหนบ้าง (เจ้าของงานตอบ 31 ต.ค. 69) — ไฟล์ = ชื่อไฟล์ Excel ที่อัปโหลด ไม่ใช่ช่อง "ยี่ห้อสินค้า"
+// รหัสเดียวอยู่ได้หลายไฟล์ (SPOT0081 อยู่ทั้งไฟล์ Haier และ Other) — เดิมเก็บยี่ห้อเดียวต่อรหัส ไฟล์ที่อัปทีหลังทับ
+// ตัวที่ใช้ร่วมจะหายจากอีกยี่ห้อทันทีที่ล็อกยี่ห้อ
+// แยกตาราง ไม่ใช่ช่อง array ใน SparePart: updatedAt ของ SparePart คือตัวกันแคชรูปอะไหล่ (?v=) — ใส่ไฟล์ทีละรหัสแล้วรูปโหลดใหม่ทั้งระบบ
+// และต้องรู้ว่าแถวไหนเจอในไฟล์จริง แถวไหนเดาจากช่องยี่ห้อตอนขึ้นระบบ (source)
+// อัปโหลดเพิ่มได้อย่างเดียว ไม่ลบ (กติกาเดียวกับอะไหล่ที่ไม่อยู่ในไฟล์) — เอาออกได้ที่ฟอร์มอะไหล่
+// มี id ของตัวเองเพราะระบบสำรองข้อมูลไล่อ่านทีละหน้าตามคอลัมน์ id
+model SparePartBrandFile {
+  id          Int       @id @default(autoincrement())
+  sparePartId Int
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  // Haier · Huebsch · Maytag · Oasis · Spinz · Other (BRAND_FILES ใน utils/brandFile.ts)
+  file        String
+  // SEED = เดาจากช่องยี่ห้อตอนขึ้นระบบ · IMPORT = เจอในไฟล์ที่อัปโหลด · MANUAL = แอดมินติ๊กในฟอร์มอะไหล่
+  // อัปโหลดครบ 6 ไฟล์แล้วยังเหลือ SEED = รหัสที่ไม่มีไฟล์ไหนยืนยัน
+  source      String    @default("IMPORT")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  @@unique([sparePartId, file])
+  @@index([file, sparePartId])
 }
 
 // ค่าตั้งค่าที่แอดมินเปลี่ยนได้ (ตอนนี้มี "dispatchCutoff" = เวลาปิดรับปล่อยงาน "HH:MM" · เจ้าของงานขอ ต.ค. 69)

@@ -13,6 +13,7 @@ import {
   WORK_ORDER_STATUS_LABELS,
   bangkokDayRange,
 } from "./constants";
+import { LATEST_PICK, openPickOf, statusLabelOf } from "./brandFile";
 
 export type TimelineRole = "ADMIN" | "SUPERVISOR" | "EMPLOYEE" | "SYSTEM";
 
@@ -70,6 +71,8 @@ export async function workOrderTimeline(id: number) {
       closedAt: true,
       branchId: true,
       branch: { select: { code: true, name: true } },
+      // ป้ายสถานะตอนนี้ให้ตรงกับหน้าใบงาน — ใบที่รอคอนเฟิร์มอะไหล่/ถูกตีกลับขึ้นคำของรอบเลือกอะไหล่ (statusLabelOf)
+      partsPicks: LATEST_PICK,
       workers: { select: { userId: true } },
       logs: {
         orderBy: { createdAt: "asc" },
@@ -212,7 +215,7 @@ export async function workOrderTimeline(id: number) {
       code: wo.code,
       title: wo.title,
       status: wo.status,
-      statusLabel: WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status,
+      statusLabel: statusLabelOf(wo.status, openPickOf(wo.status, wo.partsPicks)),
       jobType: wo.jobType,
       team: wo.assignedTeam,
       branch: wo.branch,

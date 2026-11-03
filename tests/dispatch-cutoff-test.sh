@@ -93,6 +93,9 @@ if [ -n "$PHONE_LEFT" ]; then
 fi
 
 MAXSET0=$(MAXSET)
+# W117 ไม่ใช่เครื่อง fixture: เปิดใบด้วยรหัสนี้แล้วระบบเพิ่มเครื่องให้สาขาเอง และชุดนี้ไม่ได้ลบเครื่อง
+# จึงค้างอยู่ในฐานหลังรันรอบแรกทุกเครื่อง — จดไว้ว่าก่อนรันมีหรือยัง แล้วลบตอนจบเฉพาะเมื่อรอบนี้ทำให้เกิด
+W117_PRE=$(DB "select count(*) from \"Machine\" m join \"Branch\" b on b.id=m.\"branchId\" where b.code='C0006' and m.code='W117'")
 cleanup() {
   # เก็บกวาดให้ครบทุกบรรทัด — ลบแถวตั้งค่าไม่สำเร็จต้องไม่ทำให้ข้ามการลบผู้ใช้ชั่วคราว
   set +e
@@ -104,6 +107,8 @@ cleanup() {
       curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null
     done
   fi
+  # ลบหลังใบงาน — ใบที่ยังอ้างเครื่องอยู่ทำให้ลบไม่ได้ · ฐานที่มี W117 อยู่ก่อนแล้วไม่แตะ
+  [ "${W117_PRE:-1}" = "0" ] && DB "delete from \"Machine\" where code='W117' and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
   # เวลาเริ่มใช้กฎที่ถอยไป 30 วันระหว่างรัน — ค้างไว้ = วันนี้ของทุกชุดที่รันต่อปิดนัดทั้งที่ฐานนี้เพิ่งเปิดกฎ
   # ลบแถวจดค่าเดิมในคำสั่งเดียวกับที่คืน — คืนไม่สำเร็จ แถวจดยังอยู่ให้รอบหน้าคืนให้
   [ -n "$SEED_AT" ] && DB "update \"AppSetting\" set \"createdAt\"='$SEED_AT' where id=$SEED_ID;

@@ -4,6 +4,10 @@
  * เลือกไฟล์ (ยี่ห้อละไฟล์ หลายไฟล์พร้อมกัน) → ตรวจก่อนอัปเดต (ยังไม่เปลี่ยนอะไร) → อัปเดต → รายงาน
  * ส่งเซิร์ฟเวอร์ทีละไฟล์ — ไฟล์ที่มีรูปในเซลล์ใหญ่ได้หลายสิบ MB รวมกันคำขอเดียวเซิร์ฟเวอร์หน่วยความจำไม่พอ
  * ตอนอัปเดตส่งไฟล์เดิมอีกรอบ เซิร์ฟเวอร์อ่านใหม่ ไม่เชื่อรายการบนจอ (แบบนำเข้าอื่น)
+ *
+ * ไฟล์ยี่ห้อของอะไหล่มาจากชื่อไฟล์ (เจ้าของงาน 31 ต.ค. 69: "อิงจากชื่อไฟล์แล้วไปแมพกับใบงาน") — ทุกรหัสในไฟล์
+ * เข้าไฟล์ยี่ห้อนั้น ช่างจึงเลือกได้กับเครื่องยี่ห้อนั้น ชื่อไฟล์ที่ไม่บอกยี่ห้อ/บอกหลายยี่ห้อต้องให้แอดมินเลือกที่หน้าตรวจ
+ * เพราะเดาผิดแล้วอะไหล่ไปโผล่ในเครื่องยี่ห้ออื่น · ชื่อที่ตรงยี่ห้อเดียวเปลี่ยนไม่ได้ ไฟล์เดิมอัปซ้ำจะได้ลงที่เดิมเสมอ
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Image, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -18,6 +22,7 @@ import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
 import { PickedFile, droppedFiles, pickFiles } from "../utils/filePicker";
 import { PreparedSheet, shrinkXlsx } from "../utils/shrinkXlsx";
+import { BRAND_FILES, BrandFile, SHARED_FILE } from "../utils/brandFile";
 import { colors, radius, spacing } from "../theme";
 
 type Action = "CREATE" | "UPDATE" | "SAME";
@@ -43,6 +48,8 @@ interface Gone {
   name: string;
   brand: string | null;
   usedIn: number;
+  /** ไฟล์ยี่ห้อที่อะไหล่ยังอยู่ (ประวัติก่อนมีไฟล์ยี่ห้อไม่มีค่านี้) */
+  file?: string | null;
 }
 interface Summary {
   /** อัปเดตหยุดกลางทาง — บางรายการอาจบันทึกไปแล้ว (เซิร์ฟเวอร์เขียนประวัติก่อนลงมือ) */
@@ -55,6 +62,10 @@ interface Summary {
   same: number;
   skipped: number;
   notInFile: number;
+  /** รหัสในไฟล์ที่ยังไม่อยู่ในไฟล์ยี่ห้อนี้ (รวมรหัสใหม่) — อัปเดตแล้วช่างเลือกได้ · 0 ตอนยังไม่รู้ยี่ห้อ */
+  joined?: number;
+  /** รหัสที่อยู่ในไฟล์ยี่ห้อนี้แล้วจากการเดาตอนขึ้นระบบ/ติ๊กเอง — อัปเดตแล้วนับว่าไฟล์จริงยืนยัน */
+  confirmed?: number;
 }
 interface FileResult {
   fileName: string;
@@ -63,7 +74,13 @@ interface FileResult {
   summary: Summary;
   items: Item[];
   problems: Problem[];
+  /** อะไหล่ที่อยู่ในไฟล์ยี่ห้อนี้ในระบบ แต่ไม่อยู่ในไฟล์ที่อัปโหลด — ยังไม่รู้ยี่ห้อ = [] */
   notInFile: Gone[];
+  /** ไฟล์ยี่ห้อของไฟล์นี้ · null = ชื่อไฟล์ไม่บอก/บอกหลายยี่ห้อ ยังไม่ได้เลือก */
+  brandFile?: BrandFile | null;
+  brandFileFrom?: "name" | "chosen" | null;
+  /** ยี่ห้อที่ชื่อไฟล์ตรง (มีค่าเฉพาะตอนตรงหลายยี่ห้อ) */
+  brandFileMatches?: BrandFile[];
   codes?: string[];
   thumbs?: Record<string, string>;
   /** ค่าทุกแถวของไฟล์ (หน้าตรวจเท่านั้น) — ใช้จำลองรหัสที่อยู่หลายไฟล์ */
@@ -89,10 +106,21 @@ export interface Batch {
   batchId: string;
   createdAt: string;
   byName: string | null;
-  totals: { changed: number; created: number; updated: number; images: number; same: number; skipped: number; notInFile: number; incomplete?: number };
+  totals: {
+    changed: number;
+    created: number;
+    updated: number;
+    images: number;
+    same: number;
+    skipped: number;
+    notInFile: number;
+    incomplete?: number;
+    /** รหัสที่เข้าไฟล์ยี่ห้อใหม่ รวมทุกไฟล์ของรอบ */
+    joined?: number;
+  };
   /** ไม่อยู่ในไฟล์ไหนเลยของรอบ (รายงานเต็มเท่านั้น) */
   notInFile?: Gone[];
-  files: { id: number; fileName: string; createdAt: string; summary: Summary; details?: FileResult }[];
+  files: { id: number; fileName: string; createdAt: string; summary: Summary; brandFile?: string | null; details?: FileResult }[];
 }
 
 const ACCEPT = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -114,7 +142,7 @@ const TABS: { id: Tab; label: string; hint: string; fg: string; bg: string }[] =
   { id: "img", label: "รูปใหม่ / เปลี่ยนรูป", hint: "รูปในไฟล์ต่างจากในระบบ", fg: colors.roleAdmin, bg: colors.roleAdminSoft },
   { id: "same", label: "เหมือนเดิม", hint: "ไม่ต้องทำอะไร", fg: colors.textMuted, bg: colors.background },
   { id: "bad", label: "มีปัญหา", hint: "ข้าม หรือใช้แถวหลัง", fg: colors.dangerInk, bg: colors.dangerSoft },
-  { id: "gone", label: "ไม่อยู่ในไฟล์", hint: "ยี่ห้อเดียวกัน · ไม่ลบ", fg: colors.warningInk, bg: colors.warningSoft },
+  { id: "gone", label: "ไม่อยู่ในไฟล์", hint: "อยู่ในไฟล์ยี่ห้อเดียวกัน · ไม่ลบ", fg: colors.warningInk, bg: colors.warningSoft },
 ];
 // รายการยาวเป็นร้อย — โชว์ทีละช่วง กดดูเพิ่มได้ หน้าต่างไม่หน่วง
 const PAGE = 40;
@@ -127,11 +155,17 @@ const IMAGE_NOTE: Record<"NEW" | "CHANGED" | "KEPT", string> = {
 
 const newBatchId = () => `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
-async function send(file: PickedFile, upload: PreparedSheet, opts: { apply: boolean; replaceImages: boolean; batchId: string }) {
+async function send(
+  file: PickedFile,
+  upload: PreparedSheet,
+  opts: { apply: boolean; replaceImages: boolean; batchId: string; brandFile?: BrandFile | null }
+) {
   const form = new FormData();
   form.append("file", upload.blob, file.name);
   if (upload.shrunk) form.append("imageHashes", JSON.stringify(upload.hashes));
   if (opts.apply) form.append("apply", "true");
+  // ส่งเฉพาะยี่ห้อที่แอดมินเลือกเอง — ชื่อไฟล์ที่บอกยี่ห้ออยู่แล้วเซิร์ฟเวอร์อ่านจากชื่อเอง (ส่งยี่ห้ออื่นไปจะโดนปฏิเสธ)
+  if (opts.brandFile) form.append("brandFile", opts.brandFile);
   form.append("replaceImages", opts.replaceImages ? "true" : "false");
   form.append("batchId", opts.batchId);
   return (
@@ -207,19 +241,42 @@ function plannedItems(results: FileResult[], replace: boolean): Planned[] {
 }
 
 /**
- * ไม่อยู่ในไฟล์ของทั้งรอบ — แต่ละไฟล์คิดเฉพาะรหัสของตัวเอง ไฟล์ยี่ห้อเดียวกันสองไฟล์ต่างคนต่างฟ้องว่าอีกครึ่งหาย
- * หักรหัสที่อยู่ในไฟล์ใดก็ได้ของรอบ แล้วนับตัวละครั้ง (เซิร์ฟเวอร์ทำแบบเดียวกันในรายงาน — notInBatch)
+ * ไม่อยู่ในไฟล์ของทั้งรอบ คิดแยกตามไฟล์ยี่ห้อ — แต่ละไฟล์ฟ้องอะไหล่ที่อยู่ในไฟล์ยี่ห้อนั้นในระบบแต่ไม่อยู่ในไฟล์ที่อัปโหลด
+ * ยี่ห้อเดียวกันแยกสองไฟล์ (Huebsch 1 + Huebsch 2) ต่างคนต่างฟ้องว่าอีกครึ่งหาย จึงหักรหัสของไฟล์ยี่ห้อเดียวกันในรอบ
+ * แต่ไม่หักรหัสของไฟล์ยี่ห้ออื่น: รหัสที่ยังอยู่ในไฟล์ Haier ไม่ได้แปลว่ายังอยู่ในไฟล์ Huebsch
+ * รหัสหนึ่งอยู่ได้หลายไฟล์ จึงนับต่อ (ไฟล์ยี่ห้อ, รหัส) · เซิร์ฟเวอร์ทำแบบเดียวกันในรายงาน (notInBatch)
+ * ไฟล์ที่ยังไม่รู้ยี่ห้อไม่มีรายการนี้ — เลือกยี่ห้อแล้วหน้าตรวจถามเซิร์ฟเวอร์ใหม่
  */
-function goneOf(results: FileResult[]) {
-  const inBatch = new Set<string>();
+type GoneRow = Gone & { file: BrandFile };
+function goneOf(results: FileResult[]): GoneRow[] {
+  const inBatch = new Map<BrandFile, Set<string>>();
   for (const r of results) {
-    for (const c of r.codes ?? []) inBatch.add(c.toUpperCase());
-    for (const p of r.problems) if (p.partCode) inBatch.add(p.partCode.toUpperCase());
+    if (!r.brandFile) continue;
+    const codes = inBatch.get(r.brandFile) ?? new Set<string>();
+    for (const c of r.codes ?? []) codes.add(c.toUpperCase());
+    for (const p of r.problems) if (p.partCode) codes.add(p.partCode.toUpperCase());
+    inBatch.set(r.brandFile, codes);
   }
-  const gone = new Map<string, Gone>();
-  for (const r of results) for (const g of r.notInFile) if (!inBatch.has(g.partCode.toUpperCase())) gone.set(g.partCode.toUpperCase(), g);
-  return [...gone.values()].sort((a, b) => a.partCode.localeCompare(b.partCode));
+  const gone = new Map<string, GoneRow>();
+  for (const r of results) {
+    const file = r.brandFile;
+    if (!file) continue;
+    for (const g of r.notInFile) {
+      const code = g.partCode.toUpperCase();
+      if (!inBatch.get(file)!.has(code)) gone.set(`${file}|${code}`, { ...g, file });
+    }
+  }
+  return [...gone.values()].sort((a, b) => a.partCode.localeCompare(b.partCode) || a.file.localeCompare(b.file));
 }
+
+/** รหัสที่จะเข้าไฟล์ยี่ห้อตอนอัปเดต รวมทุกไฟล์ที่รู้ยี่ห้อแล้ว — งานที่ต้องทำแม้ชื่อ/รูปไม่เปลี่ยนเลย (อัปไฟล์เดิมซ้ำครั้งแรกหลังเปิดใช้) */
+const joinedOf = (results: FileResult[]) => results.reduce((n, r) => n + (r.brandFile ? r.summary.joined ?? 0 : 0), 0);
+/**
+ * รหัสที่ไฟล์จะยืนยัน (แถวไฟล์ยี่ห้อที่ตั้งจากช่องยี่ห้อตอนขึ้นระบบหรือติ๊กเอง → IMPORT) — ก็เป็นงานเหมือนกัน
+ * ไฟล์ที่ข้อมูลตรงฐานข้อมูลทุกช่องและรหัสอยู่ในไฟล์ยี่ห้อนั้นจากการตั้งค่าตอนขึ้นระบบแล้ว (อัปครบ 6 ไฟล์ครั้งแรกหลังเปิดใช้)
+ * ถ้าไม่นับ ปุ่มขึ้น "ไม่มีอะไรต้องอัปเดต" กดไม่ได้ แถวที่เดาไว้ค้างเป็น SEED ทั้งที่ไฟล์จริงมีรหัสนั้น
+ */
+const confirmedOf = (results: FileResult[]) => results.reduce((n, r) => n + (r.brandFile ? r.summary.confirmed ?? 0 : 0), 0);
 
 /** ตัวเลขรวมทุกไฟล์ — รูปที่เลือกเก็บไว้ไม่นับเป็นงานที่ต้องทำ */
 function totalsOf(results: FileResult[], replace: boolean) {
@@ -249,6 +306,15 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
   const [applyError, setApplyError] = useState<string | null>(null);
   /** ไฟล์ที่ยังไม่ได้อัปเดตเพราะหยุดกลางทาง (ไฟล์ที่พัง + ไฟล์ถัดไป) — บอกในรายงานและกดตรวจต่อได้ */
   const [remaining, setRemaining] = useState<{ file: PickedFile; error: string }[]>([]);
+  /** ไฟล์ที่กดอัปเดตตอนยังไม่ได้เลือกยี่ห้อ — แถบเตือนปักใต้หัวหน้าต่าง (ปุ่มอยู่ล่าง ชิปอยู่บน มองไม่เห็นพร้อมกัน) */
+  const [needBrand, setNeedBrand] = useState<string[] | null>(null);
+  /**
+   * ยี่ห้อที่แอดมินเลือกให้ไฟล์ — ตรวจซ้ำหลังหยุดกลางทาง/เลือกไฟล์ใหม่ไม่ต้องเลือกอีก (ไฟล์เดิม = ผลเทียบชื่อเดิม)
+   * จำตามตัวไฟล์ที่เลือกมา ไม่ใช่ตามชื่อ: ไฟล์ชื่อกลาง ๆ อย่าง Book1.xlsx ของสองยี่ห้อ ลากตัวที่สองมาแทนตัวแรก
+   * ถ้าจำตามชื่อ ตัวที่สองจะได้ยี่ห้อของตัวแรกโดยไม่มีกล่องเหลืองถาม แล้วรหัสทั้งไฟล์เข้าไฟล์ยี่ห้อผิด (อัปโหลดไม่เคยเอาออก)
+   */
+  const choices = useRef(new WeakMap<PickedFile, BrandFile>());
+  const scrollRef = useRef<ScrollView>(null);
   const busy = progress !== null;
 
   function add(more: PickedFile[]) {
@@ -276,6 +342,7 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
     const out: Checked[] = [];
     const id = newBatchId();
     setApplyError(null);
+    setNeedBrand(null);
     setProgress(`กำลังเปิด ${list[0].name}…`);
     for (let k = 0; k < list.length; k++) {
       const f = list[k];
@@ -296,7 +363,8 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
           continue;
         }
         setProgress(`กำลังอ่าน ${at} — ไฟล์ที่มีรูปเยอะใช้เวลาสักครู่`);
-        out.push({ file: f, upload, result: await send(f, upload, { apply: false, replaceImages, batchId: id }), error: null });
+        const result = await send(f, upload, { apply: false, replaceImages, batchId: id, brandFile: choices.current.get(f) });
+        out.push({ file: f, upload, result, error: null });
       } catch (e) {
         // ข้อผิดพลาดที่ไม่ได้มาจากเซิร์ฟเวอร์ (ย่อรูปในเครื่องพัง) — apiErrorMessage ให้ข้อความภาษาอังกฤษ
         const error = axios.isAxiosError(e) ? apiErrorMessage(e) : "เปิดหรือย่อรูปในไฟล์ไม่สำเร็จ — ไฟล์อาจเสีย ลองเปิดใน Excel แล้วบันทึกใหม่";
@@ -312,8 +380,37 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
     setShown(PAGE);
   }
 
+  /**
+   * เลือกยี่ห้อให้ไฟล์ที่ชื่อไม่บอก → ถามหน้าตรวจของไฟล์นั้นใหม่พร้อมยี่ห้อ (ไฟล์ที่ย่อรูปแล้วยังอยู่ในเครื่อง ไม่ย่อใหม่)
+   * ต้องถามใหม่เพราะ "ไม่อยู่ในไฟล์" กับจำนวนรหัสที่จะเข้าไฟล์ขึ้นกับยี่ห้อ เซิร์ฟเวอร์เท่านั้นที่รู้ว่าไฟล์นั้นมีรหัสอะไรอยู่แล้ว
+   */
+  async function choose(name: string, brandFile: BrandFile) {
+    const c = checked?.find((x) => x.file.name === name);
+    if (!c?.upload || !c.result || running.current) return;
+    running.current = true;
+    setProgress(`กำลังตรวจ ${name} กับไฟล์ยี่ห้อ ${brandFile}…`);
+    try {
+      const result = await send(c.file, c.upload, { apply: false, replaceImages, batchId: newBatchId(), brandFile });
+      choices.current.set(c.file, brandFile);
+      setChecked((cur) => cur && cur.map((x) => (x.file.name === name ? { ...x, result } : x)));
+    } catch (e) {
+      showAlert("เลือกยี่ห้อของไฟล์ไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setProgress(null);
+      running.current = false;
+    }
+  }
+
   async function apply() {
     if (!checked || running.current) return;
+    // ไฟล์ที่ยังไม่รู้ยี่ห้อ เซิร์ฟเวอร์ปฏิเสธ — ถ้าส่งไฟล์อื่นไปก่อน รอบนี้จะค้างครึ่งทาง จึงไม่ส่งสักไฟล์
+    // ปุ่มยังกดได้ (ไม่จาง) เพื่อให้กดแล้วรู้ว่าติดอะไร ปุ่มจางเฉย ๆ ไม่บอกเหตุผล
+    const unchosen = checked.filter((c) => c.result && !c.result.brandFile).map((c) => c.file.name);
+    if (unchosen.length) {
+      setNeedBrand(unchosen);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+      return;
+    }
     running.current = true;
     try {
       await applyFiles(checked);
@@ -331,7 +428,8 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
     for (let k = 0; k < ok.length; k++) {
       setProgress(`กำลังอัปเดต ${ok[k].file.name} (${k + 1}/${ok.length})`);
       try {
-        await send(ok[k].file, ok[k].upload!, { apply: true, replaceImages, batchId: id });
+        const r = ok[k].result!;
+        await send(ok[k].file, ok[k].upload!, { apply: true, replaceImages, batchId: id, brandFile: r.brandFileFrom === "name" ? null : r.brandFile });
         done++;
       } catch (e) {
         stopped = { at: k, error: apiErrorMessage(e) };
@@ -390,12 +488,45 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
 
   const results = (checked ?? []).filter((c) => c.result).map((c) => c.result!);
   const totals = totalsOf(results, replaceImages);
+  const joined = joinedOf(results);
+  const confirmed = confirmedOf(results);
+  const unchosen = (checked ?? []).filter((c) => c.result && !c.result.brandFile).map((c) => c.file.name);
+  // เลือกยี่ห้อแล้วแถบเตือนหายเอง — เหลือเฉพาะไฟล์ที่ยังไม่ได้เลือก
+  const stillNeed = (needBrand ?? []).filter((n) => unchosen.includes(n));
+  // รหัสที่จะเข้าไฟล์ยี่ห้อ/ที่ไฟล์จะยืนยันก็เป็นงาน: อัปไฟล์เดิมซ้ำหลังเปิดใช้ ชื่อ/รูปเหมือนเดิมหมด
+  // แต่ช่างยังเลือกรหัสพวกนั้นไม่ได้ หรือแถวที่เดาไว้ตอนขึ้นระบบยังไม่มีไฟล์จริงยืนยัน
+  // ไฟล์ที่ยังไม่ได้เลือกยี่ห้อก็ให้กดได้ — กดแล้วบอกว่าต้องเลือกก่อน
+  const canApply = totals.work > 0 || joined > 0 || confirmed > 0 || unchosen.length > 0;
+  const fileWork =
+    joined && confirmed
+      ? `รหัสเข้าไฟล์ยี่ห้อ ${joined} · ยืนยัน ${confirmed} รายการ`
+      : joined
+        ? `รหัสเข้าไฟล์ยี่ห้อ ${joined} รายการ`
+        : confirmed
+          ? `ยืนยันรหัสในไฟล์ยี่ห้อ ${confirmed} รายการ`
+          : "";
+  const applyLabel = totals.work
+    ? `อัปเดต ${totals.work} รายการ (เพิ่ม ${totals.new} · แก้ไข ${totals.chg} · รูป ${totals.img})`
+    : fileWork
+      ? `อัปเดต — ${fileWork}`
+      : unchosen.length
+        ? "อัปเดต (เลือกยี่ห้อของไฟล์ก่อน)"
+        : "ไม่มีอะไรต้องอัปเดต";
   return (
     <AppModal
       visible
       onClose={onClose}
       busy={busy}
       width={980}
+      scrollRef={scrollRef}
+      banner={
+        checked && stillNeed.length ? (
+          <View style={styles.needBrand} accessibilityRole="alert">
+            <Ionicons name="alert-circle-outline" size={20} color={colors.warningInk} />
+            <Text style={styles.needBrandText}>เลือกยี่ห้อของไฟล์ {stillNeed.join(", ")} ก่อนกดอัปเดต</Text>
+          </View>
+        ) : undefined
+      }
       title={checked ? "ตรวจก่อนอัปเดต — ยังไม่เปลี่ยนอะไรในระบบ" : "อัปเดตข้อมูลอะไหล่จากไฟล์ Excel"}
       subtitle={
         checked
@@ -410,6 +541,7 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
               onPress={() => {
                 setChecked(null);
                 setApplyError(null);
+                setNeedBrand(null);
               }}
               disabled={busy}
               accessibilityLabel="เลือกไฟล์ใหม่"
@@ -423,18 +555,12 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
           )}
           {checked ? (
             <TouchableOpacity
-              style={[styles.primary, (busy || !totals.work) && styles.off]}
+              style={[styles.primary, (busy || !canApply) && styles.off]}
               onPress={apply}
-              disabled={busy || !totals.work}
+              disabled={busy || !canApply}
               accessibilityLabel="อัปเดตอะไหล่"
             >
-              {busy ? (
-                <Spinner color="#fff" size="small" />
-              ) : (
-                <Text style={styles.primaryText}>
-                  {totals.work ? `อัปเดต ${totals.work} รายการ (เพิ่ม ${totals.new} · แก้ไข ${totals.chg} · รูป ${totals.img})` : "ไม่มีอะไรต้องอัปเดต"}
-                </Text>
-              )}
+              {busy ? <Spinner color="#fff" size="small" /> : <Text style={styles.primaryText}>{applyLabel}</Text>}
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -472,6 +598,9 @@ export default function SparePartImportModal({ onClose, onDone }: { onClose: () 
           more={() => setShown((n) => n + PAGE)}
           replaceImages={replaceImages}
           setReplaceImages={setReplaceImages}
+          busy={busy}
+          needBrand={stillNeed}
+          onChoose={choose}
         />
       )}
     </AppModal>
@@ -496,7 +625,9 @@ function PickStep({
           <Ionicons name="cloud-upload-outline" size={30} color={colors.primaryInk} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.dropTitle}>ลากไฟล์มาวาง หรือกดเลือก — เลือกได้หลายไฟล์พร้อมกัน</Text>
-            <Text style={styles.muted}>.xlsx แยกตามยี่ห้อแบบที่มีอยู่ (Haier · Huebsch · Maytag · Oasis · Other) · รูปที่วางในเซลล์ดึงออกมาให้เอง</Text>
+            <Text style={styles.muted}>
+              .xlsx แยกตามยี่ห้อ ({BRAND_FILES.join(" · ")}) — ใส่ชื่อยี่ห้อไว้ในชื่อไฟล์ · รูปที่วางในเซลล์ดึงออกมาให้เอง
+            </Text>
           </View>
           <TouchableOpacity
             style={styles.pickBtn}
@@ -532,6 +663,10 @@ function PickStep({
           รหัสสินค้า (ตัวเทียบ) · ชื่อรวม (ไทย) · ยี่ห้อสินค้า · Category · Part No. · รูปภาพประกอบ (รูปที่วางในเซลล์) — ลำดับข้ามไป
         </Text>
         <Text style={styles.noteText}>หัวคอลัมน์สลับที่ได้ · ชีตแรกของแต่ละไฟล์ · รูปใหญ่ในไฟล์ย่อให้เองก่อนส่ง (ด้านยาว 1,600 px · ไฟล์ใหญ่มากย่อเพิ่มจนส่งได้) ไฟล์ 200 MB ก็ได้</Text>
+        <Text style={styles.noteText}>
+          ชื่อไฟล์บอกไฟล์ยี่ห้อ (มีคำว่า Haier · Huebsch หรือ HB · Maytag · Oasis · Spinz · Other) — ทุกรหัสในไฟล์เข้าไฟล์ยี่ห้อนั้น ช่างเลือกได้กับเครื่องยี่ห้อนั้น
+          (Other = ของใช้ร่วม ทุกเครื่องเลือกได้) · ชื่อไม่บอกยี่ห้อ หรือบอกหลายยี่ห้อ ให้เลือกที่หน้าตรวจ · ช่อง “ยี่ห้อสินค้า” ใช้แสดงและค้นหาเท่านั้น
+        </Text>
       </View>
     </View>
   );
@@ -549,6 +684,9 @@ function PreviewStep({
   more,
   replaceImages,
   setReplaceImages,
+  busy,
+  needBrand,
+  onChoose,
 }: {
   checked: Checked[];
   results: FileResult[];
@@ -559,12 +697,17 @@ function PreviewStep({
   more: () => void;
   replaceImages: boolean;
   setReplaceImages: (v: boolean) => void;
+  busy: boolean;
+  /** ไฟล์ที่กดอัปเดตตอนยังไม่ได้เลือกยี่ห้อ — กล่องเหลืองของไฟล์นั้นเด่นขึ้น */
+  needBrand: string[];
+  onChoose: (fileName: string, brandFile: BrandFile) => void;
 }) {
-  // รหัสเดียวกันอยู่หลายไฟล์ — ไฟล์ที่อัปเดตทีหลังทับไฟล์ก่อน บอกให้รู้ก่อนกด
+  // รหัสเดียวกันอยู่หลายไฟล์ — ไฟล์ยี่ห้อจำไว้ทุกไฟล์ (เจ้าของงาน 31 ต.ค. 69) แต่ชื่อ/Part No. ยังทับตามลำดับไฟล์
+  // บอกให้รู้ก่อนกด ไม่งั้นแอดมินเห็นชื่อในระบบเปลี่ยนเป็นของอีกไฟล์แล้วนึกว่าไฟล์หลังลบไฟล์แรก
   const dupes = useMemo(() => {
-    const seen = new Map<string, string[]>();
-    for (const r of results) for (const c of r.codes ?? []) seen.set(c, [...(seen.get(c) ?? []), r.fileName]);
-    return [...seen].filter(([, fs]) => fs.length > 1);
+    const seen = new Map<string, FileResult[]>();
+    for (const r of results) for (const c of r.codes ?? []) seen.set(c, [...(seen.get(c) ?? []), r]);
+    return [...seen].filter(([, rs]) => rs.length > 1);
   }, [results]);
 
   const rows: Row[] = useMemo(() => {
@@ -576,17 +719,20 @@ function PreviewStep({
       return [{ key: "same", file: files, title: `เหมือนเดิม ${totals.same} รายการ`, meta: `ทุกช่องและรูปตรงกับในระบบแล้ว ไม่ต้องทำอะไร · ${files}`, tag: t.label, fg: t.fg, bg: t.bg, lines: [] }];
     }
     if (tab === "gone") {
+      // อัปเดตไม่เอารหัสออกจากไฟล์ยี่ห้อ (D20) — Excel ที่แก้พลาดจะได้ไม่ทำให้ช่างหาอะไหล่ไม่เจอเงียบ ๆ
+      // จึงบอกชื่อไฟล์ยี่ห้อไว้ ถ้าเลิกใช้กับยี่ห้อนั้นจริง แอดมินเอาไฟล์ออกเองที่ฟอร์มแก้ไขอะไหล่
       return goneOf(results).map((g) => ({
-        key: `g${g.partCode}`,
+        key: `g${g.file}|${g.partCode}`,
         file: "",
         title: g.name,
-        meta: [g.partCode, g.brand, "อยู่ในระบบ ไม่อยู่ในไฟล์ที่เลือก"].filter(Boolean).join(" · "),
+        meta: [g.partCode, g.brand, `อยู่ในไฟล์ ${g.file} ในระบบ ไม่อยู่ในไฟล์ที่เลือก`].filter(Boolean).join(" · "),
         tag: "ไม่ลบ",
         fg: t.fg,
         bg: t.bg,
         lines: [
           <Text key="n" style={[styles.diff, { color: t.fg }]}>
             {g.usedIn ? `ไม่ลบ — ใบงานอ้างถึง ${g.usedIn} ใบ` : "ไม่ลบ — ยังไม่เคยใช้ในใบงาน ลบเองได้ที่หน้าจัดการข้อมูลอะไหล่"}
+            {` · ยังอยู่ในไฟล์ ${g.file} — เลิกใช้กับ ${g.file} แล้ว เอาไฟล์ออกที่ฟอร์มแก้ไขอะไหล่`}
           </Text>,
         ],
       }));
@@ -639,16 +785,22 @@ function PreviewStep({
       }
     }
     if (tab === "bad") {
-      for (const [code, fs] of dupes) {
+      // ไม่ใช่ปัญหาแล้ว (รหัสหนึ่งอยู่ได้หลายไฟล์ยี่ห้อ) แต่ยังอยู่แท็บนี้ เพราะชื่อ/Part No. ยังทับตามลำดับไฟล์ — ป้ายสีฟ้าแยกจากแถวที่ข้ามจริง
+      for (const [code, rs] of dupes) {
+        const files = rs.map((r) => (r.brandFile ? `${r.fileName} (${r.brandFile})` : r.fileName)).join(", ");
         out.push({
           key: `dup|${code}`,
-          file: fs.join(", "),
+          file: rs.map((r) => r.fileName).join(", "),
           title: code,
-          meta: `อยู่ในหลายไฟล์: ${fs.join(", ")}`,
-          tag: t.label,
-          fg: t.fg,
-          bg: t.bg,
-          lines: [<Text key="n" style={[styles.diff, { color: t.fg, fontWeight: "600" }]}>{`รหัสซ้ำข้ามไฟล์ — อัปเดตตามลำดับไฟล์ ช่องที่ไฟล์หลังเว้นว่างใช้ค่าจากไฟล์ก่อน (ผลรวมดูในกล่องเพิ่มใหม่/แก้ไข)`}</Text>],
+          meta: rs.map((r) => r.fileName).join(" → "),
+          tag: "หลายไฟล์",
+          fg: colors.primaryInk,
+          bg: colors.primarySoft,
+          lines: [
+            <Text key="n" style={[styles.diff, { color: colors.primaryInk, fontWeight: "600" }]}>
+              {`อยู่ในหลายไฟล์ (${files}) — จำไว้ทุกไฟล์ ช่างเลือกได้จากทุกไฟล์ที่มีรหัสนี้ · ชื่อ/Part No. ใช้ค่าจากไฟล์หลัง (ช่องว่างใช้ค่าจากไฟล์ก่อน)`}
+            </Text>,
+          ],
         });
       }
     }
@@ -678,6 +830,9 @@ function PreviewStep({
               ) : (
                 <Text style={styles.error}>{c.error}</Text>
               )}
+              {c.result ? (
+                <BrandFileBox name={c.file.name} result={c.result} busy={busy} nudged={needBrand.includes(c.file.name)} onChoose={onChoose} />
+              ) : null}
             </View>
           </View>
         ))}
@@ -730,9 +885,86 @@ function PreviewStep({
         </Text>
       </TouchableOpacity>
       <Text style={styles.muted}>
-        ช่องว่างในไฟล์ไม่ลบค่าเดิม (เช่น Part No. ว่าง = คง Part No. เดิมไว้) · อะไหล่ที่ไม่อยู่ในไฟล์ไม่ถูกลบ — ใบงานเก่ายังอ้างถึงอยู่
-        ถ้าเลิกใช้แล้วลบเองที่หน้าจัดการข้อมูลอะไหล่
+        ช่องว่างในไฟล์ไม่ลบค่าเดิม (เช่น Part No. ว่าง = คง Part No. เดิมไว้) · อะไหล่ที่ไม่อยู่ในไฟล์ไม่ถูกลบ และไม่ถูกเอาออกจากไฟล์ยี่ห้อ —
+        ใบงานเก่ายังอ้างถึงอยู่ ถ้าเลิกใช้แล้วลบเองที่หน้าจัดการข้อมูลอะไหล่
       </Text>
+    </View>
+  );
+}
+
+/**
+ * ไฟล์ยี่ห้อของไฟล์ที่อัปโหลด (ในแถวไฟล์ของหน้าตรวจ)
+ * ชื่อไฟล์บอกยี่ห้อเดียว → บอกเฉย ๆ ไม่มีชิปให้เปลี่ยน (D21: ไฟล์เดิมอัปซ้ำต้องลงที่เดิมเสมอ)
+ * ชื่อไม่บอก/บอกหลายยี่ห้อ → กล่องเหลือง + ชิป 6 ไฟล์กางในที่ (ไม่ใช่ Modal — ซ้อนในหน้าต่างนี้บนเว็บไม่น่าเชื่อถือ)
+ * เลือกแล้วยังเห็นชิป เผื่อกดพลาด เปลี่ยนได้ก่อนกดอัปเดต
+ */
+function BrandFileBox({
+  name,
+  result,
+  busy,
+  nudged,
+  onChoose,
+}: {
+  name: string;
+  result: FileResult;
+  busy: boolean;
+  nudged: boolean;
+  onChoose: (fileName: string, brandFile: BrandFile) => void;
+}) {
+  const file = result.brandFile ?? null;
+  const fromName = result.brandFileFrom === "name";
+  const joined = result.summary.joined ?? 0;
+  const confirmed = result.summary.confirmed ?? 0;
+  const chips = (
+    <View style={styles.brandChips}>
+      {BRAND_FILES.map((b) => {
+        const on = b === file;
+        return (
+          <TouchableOpacity
+            key={b}
+            style={[styles.brandChip, on && styles.brandChipOn]}
+            onPress={() => !on && onChoose(name, b)}
+            disabled={busy}
+            accessibilityLabel={`ไฟล์ยี่ห้อ ${b} ของ ${name}`}
+            // เว็บไม่แปลง accessibilityState เป็น aria-selected (แบบเดียวกับ FilterBar) — ชิปนี้เปลี่ยนตัวเลขทั้งแถว
+            // โปรแกรมอ่านจอ/เทสต์ต้องรู้ว่าไฟล์ยี่ห้อไหนติดอยู่ ไม่ใช่เดาจากสี
+            accessibilityState={{ selected: on, disabled: busy }}
+            aria-selected={on}
+          >
+            <Text style={[styles.brandChipText, on && styles.brandChipTextOn]}>{b}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+  if (!file) {
+    const matches = result.brandFileMatches ?? [];
+    return (
+      <View style={[styles.brandAsk, nudged && styles.brandAskNudged]}>
+        <Text style={styles.brandAskText}>
+          {matches.length > 1 ? `ชื่อไฟล์ตรงหลายยี่ห้อ (${matches.join(", ")}) — เลือกยี่ห้อของไฟล์นี้` : "ชื่อไฟล์ไม่บอกยี่ห้อ — เลือกยี่ห้อของไฟล์นี้"}
+        </Text>
+        {chips}
+      </View>
+    );
+  }
+  return (
+    <View style={{ gap: 4, paddingTop: 4 }}>
+      <Text style={styles.brandLine}>
+        ไฟล์ยี่ห้อ {file} ({fromName ? "จากชื่อไฟล์" : "เลือกเอง"})
+      </Text>
+      {joined > 0 ? (
+        <Text style={styles.brandJoined}>
+          รหัสที่ยังไม่อยู่ในไฟล์ {file}: {joined} รายการ —{" "}
+          {file === SHARED_FILE ? "อัปเดตแล้วทุกเครื่องเลือกได้ (ของใช้ร่วม)" : `อัปเดตแล้วช่างเลือกได้กับเครื่อง ${file}`}
+        </Text>
+      ) : null}
+      {confirmed > 0 ? (
+        <Text style={styles.brandJoined}>
+          รหัสที่ไฟล์นี้ยืนยันว่าอยู่ในไฟล์ {file}: {confirmed} รายการ (เดิมตั้งจากช่องยี่ห้อหรือติ๊กเอง)
+        </Text>
+      ) : null}
+      {fromName ? null : chips}
     </View>
   );
 }
@@ -777,6 +1009,9 @@ export function ImportReportModal({
   }
 
   const t = batch.totals;
+  // ประวัติก่อนมีไฟล์ยี่ห้อ (ไม่มี joined ใน summary) — migration เติม brandFile จากชื่อไฟล์ให้ แต่ไม่รู้ว่าตอนนั้นเข้าไฟล์ใหม่กี่ตัว
+  // ไม่ขึ้นช่อง/บรรทัด "เข้าไฟล์ … ใหม่" เลย ดีกว่าขึ้น 0 ที่ไม่จริง (ฟีเจอร์ยังไม่มีตอนนั้น)
+  const knowsJoined = batch.files.some((f) => typeof f.summary.joined === "number");
   const when = new Date(batch.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
     <AppModal
@@ -809,6 +1044,8 @@ export function ImportReportModal({
             [t.images, "รูปใหม่ / เปลี่ยนรูป", colors.roleAdmin, colors.roleAdminSoft],
             [t.skipped, "ข้าม / มีปัญหา", colors.dangerInk, colors.dangerSoft],
             [t.same, "เหมือนเดิม", colors.textMuted, colors.background],
+            // อัปไฟล์เดิมซ้ำครั้งแรกหลังเปิดใช้ ชื่อ/รูปไม่เปลี่ยนเลย หัวรายงานขึ้น "แล้ว 0 รายการ" — ช่องนี้บอกว่ามีอะไรเกิดขึ้นจริง
+            ...(knowsJoined ? ([[t.joined ?? 0, "เข้าไฟล์ยี่ห้อใหม่", colors.successInk, colors.successSoft]] as const) : []),
           ] as const
         ).map(([n, label, fg, bg]) => (
           <View key={label} style={[styles.tile, { backgroundColor: bg, minHeight: 0 }]}>
@@ -823,6 +1060,8 @@ export function ImportReportModal({
         const d = f.details!;
         const s = f.summary;
         const isOpen = open === f.id;
+        // ประวัติก่อนมีไฟล์ยี่ห้อมี brandFile (migration เติมจากชื่อไฟล์) แต่ไม่มี joined — ไม่ขึ้นบรรทัด (ดีกว่าขึ้น "เข้าไฟล์ ใหม่ 0" ที่ไม่จริง)
+        const brandFile = f.brandFile ?? d.brandFile ?? null;
         return (
           <View key={f.id} style={styles.fileBox}>
             <TouchableOpacity onPress={() => setOpen(isOpen ? null : f.id)} accessibilityLabel={`รายละเอียด ${f.fileName}`} style={styles.fileHead}>
@@ -831,6 +1070,17 @@ export function ImportReportModal({
                 {f.fileName} — เพิ่ม {s.created} · แก้ไข {s.updated} · รูป {s.images} · ข้าม {s.skipped}
               </Text>
             </TouchableOpacity>
+            {brandFile && typeof s.joined === "number" ? (
+              <Text style={styles.brandJoined}>
+                เข้าไฟล์ {brandFile} ใหม่ {s.joined} รายการ
+                {brandFile === SHARED_FILE ? " (ของใช้ร่วม ทุกเครื่องเลือกได้)" : ""}
+              </Text>
+            ) : null}
+            {brandFile && s.confirmed ? (
+              <Text style={styles.brandJoined}>
+                ยืนยันรหัสในไฟล์ {brandFile} {s.confirmed} รายการ (เดิมตั้งจากช่องยี่ห้อหรือติ๊กเอง)
+              </Text>
+            ) : null}
             {s.incomplete ? (
               <Text style={styles.error}>อัปเดตไม่ครบ — หยุดกลางทาง รายการข้างล่างบางส่วนอาจยังไม่ถูกบันทึก เลือกไฟล์นี้แล้วกดอัปเดตซ้ำได้</Text>
             ) : null}
@@ -859,7 +1109,11 @@ export function ImportReportModal({
       })}
       {full?.notInFile?.length ? (
         <Text style={[styles.reportLine, { color: colors.warningInk }]}>
-          ไม่อยู่ในไฟล์ไหนเลยของรอบนี้ (ไม่ลบ) {full.notInFile.length} รายการ: {full.notInFile.slice(0, 10).map((g) => g.partCode).join(", ")}
+          ไม่อยู่ในไฟล์ยี่ห้อเดียวกันของรอบนี้ (ไม่ลบ ไม่เอาออกจากไฟล์ยี่ห้อ) {full.notInFile.length} รายการ:{" "}
+          {full.notInFile
+            .slice(0, 10)
+            .map((g) => (g.file ? `${g.partCode} (${g.file})` : g.partCode))
+            .join(", ")}
           {full.notInFile.length > 10 ? ` และอีก ${full.notInFile.length - 10}` : ""}
         </Text>
       ) : null}
@@ -939,4 +1193,42 @@ const styles = StyleSheet.create({
   fileBox: { borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: spacing.sm, backgroundColor: colors.card },
   fileHead: { flexDirection: "row", alignItems: "center", gap: 6 },
   reportLine: { fontSize: 13, lineHeight: 20, color: colors.text },
+  needBrand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.warningTint,
+    borderBottomWidth: 1,
+    borderColor: colors.warningBorder,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  needBrandText: { flex: 1, fontSize: 14, lineHeight: 21, fontWeight: "700", color: colors.warningInk },
+  brandLine: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  brandJoined: { fontSize: 13, lineHeight: 20, color: colors.successInk },
+  brandAsk: {
+    marginTop: 6,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+  },
+  // กดอัปเดตตอนยังไม่เลือก — ขอบเข้มขึ้นให้เห็นว่ากล่องไหนที่ต้องแก้ เมื่อมีหลายไฟล์
+  brandAskNudged: { borderColor: colors.warning, borderWidth: 2 },
+  brandAskText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
+  brandChips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  brandChip: {
+    minHeight: 36,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+  },
+  brandChipOn: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  brandChipText: { fontSize: 13, lineHeight: 20, color: colors.text, fontWeight: "600" },
+  brandChipTextOn: { color: colors.primaryInk, fontWeight: "800" },
 });

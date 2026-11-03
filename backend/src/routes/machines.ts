@@ -33,6 +33,15 @@ import {
   outageScore,
   warrantyStatus,
 } from "../utils/constants";
+import {
+  Refusal,
+  brandProblem,
+  fileList,
+  machineBrandInput,
+  machineBrandRefusal,
+  rememberMachineBrand,
+  parseErrorBody,
+} from "../utils/brandFile";
 
 const router = Router();
 
@@ -64,7 +73,8 @@ function workStatusFilter(value?: string) {
 const noteInclude = {
   noteUpdatedBy: { select: { name: true } },
   parts: {
-    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true } } },
+    // brandFiles — ช่องเลือกอะไหล่ของกระดานติดป้าย "ไม่อยู่ในไฟล์ …" ให้แถวที่รออยู่ ด้วยกติกาเดียวกับใบงาน
+    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true, brandFiles: { select: { file: true } } } } },
     orderBy: { id: "asc" },
   },
 } as const;
@@ -85,7 +95,7 @@ interface NoteShape {
   noteUpdatedBy: { name: string } | null;
   parts: {
     quantity: number;
-    sparePart: { id: number; partCode: string; name: string; brand: string | null };
+    sparePart: { id: number; partCode: string; name: string; brand: string | null; brandFiles: { file: string }[] };
   }[];
 }
 
@@ -145,6 +155,7 @@ function noteFields(o: NoteShape) {
       partCode: p.sparePart.partCode,
       name: p.sparePart.name,
       brand: p.sparePart.brand,
+      brandFiles: fileList(p.sparePart.brandFiles),
       quantity: p.quantity,
     })),
   };
@@ -261,6 +272,8 @@ async function listMachineOff(query: z.infer<typeof listSchema>, area?: Prisma.B
     machineCode: o.machine?.code ?? "",
     machineType: o.machine?.type ?? "",
     machineBrand: o.machine?.brand ?? null,
+    // ยี่ห้อที่ใช้จริง (รายงานเครื่องก่อน แล้วยี่ห้อที่เลือกในแอป) — ช่องอะไหล่ที่รอบนกระดานล็อกตามไฟล์ของยี่ห้อนี้
+    machineMake: machineMake(o.machine),
     // ประกันคิดรายเครื่อง — สาขาเดียวกัน Oasis (2 ปี) หมดก่อน Huebsch (3 ปี) ได้
     ...(({ state, endsAt }) => ({ warranty: state, warrantyEndsAt: endsAt }))(
       warrantyStatus({
@@ -519,6 +532,8 @@ const noteSchema = z.object({
     )
     .max(20)
     .optional(),
+  // ชิปยี่ห้อเครื่องที่กดในช่องอะไหล่ที่รอ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) · จำไว้กับเครื่องตอนบันทึก
+  machineBrand: machineBrandInput,
 });
 
 /**
@@ -532,13 +547,15 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
   if (!Number.isInteger(id)) return res.status(400).json({ error: "id ไม่ถูกต้อง" });
 
   const parsed = noteSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: parseErrorBody(parsed.error) });
   const { symptom, workStatus, parts, scheduledVisitAt } = parsed.data;
+  const machineBrand = parsed.data.machineBrand?.trim() || null;
   if (
     symptom === undefined &&
     workStatus === undefined &&
     parts === undefined &&
-    scheduledVisitAt === undefined
+    scheduledVisitAt === undefined &&
+    !machineBrand
   ) {
     return res.status(400).json({ error: "ไม่มีอะไรให้บันทึก" });
   }
@@ -552,7 +569,10 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
     }
   }
 
-  const outage = await prisma.outage.findUnique({ where: { id }, select: { id: true } });
+  const outage = await prisma.outage.findUnique({
+    where: { id },
+    select: { id: true, machine: { select: { id: true, code: true, brand: true, model: true } } },
+  });
   if (!outage) return res.status(404).json({ error: "ไม่พบเคสนี้" });
 
   // อะไหล่ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error — ฟอร์มกันไว้แล้วแต่ API ต้องกันเองด้วย
@@ -572,43 +592,71 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
     }
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
-    // แทนที่ทั้งชุด ง่ายกว่าไล่หาว่าอันไหนเพิ่มอันไหนลบ และจำนวนแถวต่อเคสมีไม่กี่แถว
-    if (parts !== undefined) {
-      await tx.outagePart.deleteMany({ where: { outageId: id } });
-      if (wanted.size > 0) {
-        await tx.outagePart.createMany({
-          data: [...wanted].map(([sparePartId, quantity]) => ({ outageId: id, sparePartId, quantity })),
-        });
+  /**
+   * ล็อกยี่ห้อ (ข้อ 23) — "อะไหล่ที่รอ" บนกระดานถูกยกไปลงใบงานตอน "+ สร้างใบงาน" และเป็นรายการสั่งของ
+   * ของผิดยี่ห้อที่ค้างบนกระดาน = สั่งผิด และสร้างใบงานจากเคสนี้ไม่ได้ (D8) จึงกันตั้งแต่ตอนบันทึก
+   * ไม่มีแถวเดิมที่ปล่อยผ่าน: ส่งมาทั้งชุดคือรายการที่ "ต้องใช้" ตัวเก่าที่ผิดยี่ห้อต้องเอาออกก่อนบันทึก
+   * สัญญาณหายทั้งสาขาไม่มีเครื่อง ไม่ล็อก (ข้อ 22) · ยี่ห้อที่รู้แล้วเปลี่ยนจากที่นี่ไม่ได้ (แก้ได้ที่หน้าใบงาน)
+   */
+  const brandRefused =
+    machineBrandRefusal(outage.machine, machineBrand) ??
+    (await brandProblem({
+      machine: outage.machine,
+      machineBrand,
+      parts: [...wanted.keys()].map((sparePartId) => ({ sparePartId })),
+      mode: "other",
+    }));
+  if (brandRefused) return res.status(400).json({ error: brandRefused });
+
+  let updated: Prisma.OutageGetPayload<{ select: typeof noteSelect }>;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      // ยี่ห้อที่กดชิปมา จำไว้กับเครื่อง (Machine.model) — ไม่มีใบงานให้ลงประวัติ และประวัติเคสไม่มีช่องข้อความ
+      if (machineBrand && outage.machine) {
+        await rememberMachineBrand(tx, outage.machine, machineBrand, { how: "เลือกตอนบันทึกอะไหล่ที่รอบนกระดาน" });
       }
-    }
+      // แทนที่ทั้งชุด ง่ายกว่าไล่หาว่าอันไหนเพิ่มอันไหนลบ และจำนวนแถวต่อเคสมีไม่กี่แถว
+      if (parts !== undefined) {
+        await tx.outagePart.deleteMany({ where: { outageId: id } });
+        if (wanted.size > 0) {
+          await tx.outagePart.createMany({
+            data: [...wanted].map(([sparePartId, quantity]) => ({ outageId: id, sparePartId, quantity })),
+          });
+        }
+      }
 
-    const saved = await tx.outage.update({
-      where: { id },
-      data: {
-        ...(symptom !== undefined ? { symptom: symptom || null } : {}),
-        ...(workStatus !== undefined ? { workStatus } : {}),
-        ...(visitDate !== undefined ? { scheduledVisitAt: visitDate } : {}),
-        noteUpdatedAt: new Date(),
-        noteUpdatedById: req.auth!.userId,
-      },
-      select: noteSelect,
-    });
+      const saved = await tx.outage.update({
+        where: { id },
+        data: {
+          ...(symptom !== undefined ? { symptom: symptom || null } : {}),
+          ...(workStatus !== undefined ? { workStatus } : {}),
+          ...(visitDate !== undefined ? { scheduledVisitAt: visitDate } : {}),
+          noteUpdatedAt: new Date(),
+          noteUpdatedById: req.auth!.userId,
+        },
+        select: noteSelect,
+      });
 
-    // เก็บทุกครั้งที่กดบันทึก ไม่ใช่แค่คนล่าสุด จะได้ตามได้ว่าใครเคยกรอกอะไรไว้บ้าง
-    await tx.outageNoteLog.create({
-      data: {
-        outageId: id,
-        userId: req.auth!.userId,
-        symptom: saved.symptom,
-        workStatus: saved.workStatus,
-        scheduledVisitAt: saved.scheduledVisitAt,
-        partsSummary: partsSummary(saved.parts),
-      },
-    });
+      // เก็บทุกครั้งที่กดบันทึก ไม่ใช่แค่คนล่าสุด จะได้ตามได้ว่าใครเคยกรอกอะไรไว้บ้าง
+      await tx.outageNoteLog.create({
+        data: {
+          outageId: id,
+          userId: req.auth!.userId,
+          symptom: saved.symptom,
+          workStatus: saved.workStatus,
+          scheduledVisitAt: saved.scheduledVisitAt,
+          partsSummary: partsSummary(saved.parts),
+        },
+      });
 
-    return saved;
-  });
+      return saved;
+      // ฐานข้อมูลอยู่คนละภูมิภาค ทุกคำสั่งคือการเดินทางไปกลับจริง — เพดานตั้งต้น 5 วินาทีของ Prisma ไม่พอ (CLAUDE.md)
+    }, { timeout: 30_000, maxWait: 15_000 });
+  } catch (e) {
+    // อีกคนเพิ่งบันทึกยี่ห้อเครื่องเป็นยี่ห้ออื่นระหว่างกด — ทุกอย่างถูกยกเลิก
+    if (e instanceof Refusal) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
 
   res.json({ id, ...noteFields(updated) });
 });

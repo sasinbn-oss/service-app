@@ -65,6 +65,9 @@ const SHEET_TITLE: Record<string, string> = {
   BranchCheckIn: "รายงานตัวเข้าสาขา",
   WorkLog: "บันทึกการทำงาน",
   AppSetting: "ตั้งค่าระบบ",
+  PartsPick: "อะไหล่ที่ช่างเลือก",
+  PartsPickItem: "รายการอะไหล่ที่ช่างเลือก",
+  SparePartBrandFile: "อะไหล่อยู่ในไฟล์ยี่ห้อ",
 };
 
 const models = () => Prisma.dmmf.datamodel.models.filter((m) => !SKIP_MODELS.has(m.name));

@@ -161,7 +161,9 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword") values ('${PA}','แอดมินอะไหล่ทดสอบเวลาปิดนัด','PARTS_ADMIN','${hash}',false)`);
 
     const openAs = async (code, width, height = 1000) => {
-      const ctx = await browser.newContext({ viewport: { width, height } });
+      // เบราว์เซอร์ทดสอบอยู่เขตเวลา UTC แต่ผู้ใช้จริงอยู่ไทย: บอร์ดแผนงานเปิดที่ "วันนี้" ตามนาฬิกาเครื่อง
+      // ตั้งเขตเวลาให้ตรงกับ visitDay() (เวลาไทย) ไม่งั้นช่วง 00:00–07:00 ของไทยบอร์ดเปิดที่เมื่อวาน หาจุดของวันนี้ไม่เจอ
+      const ctx = await browser.newContext({ viewport: { width, height }, timezoneId: "Asia/Bangkok" });
       const page = await ctx.newPage();
       // เมนูข้างย่อกลุ่มที่ไม่ใช่ "งานซ่อม" ไว้ — "ระบบหลังบ้าน" อยู่ในกลุ่มผู้ดูแลระบบ จึงกางทุกกลุ่มไว้ก่อน
       await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));

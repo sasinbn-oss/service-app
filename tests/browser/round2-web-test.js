@@ -65,6 +65,9 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     // part = [รหัส, id] · ข้อที่ทดสอบ (ช่องจำนวน) ไม่ขึ้นกับว่าเป็นตัวไหน
     const pid = fxPart(P.id, "BOARD");
     const part = [sql(`select "partCode" from "SparePart" where id=${pid}`), String(pid)];
+    const partName = sql(`select name from "SparePart" where id=${pid}`);
+    // ไฟล์ยี่ห้อของตัวแฝด (seed:test ให้แต่ละตัวอยู่ไฟล์ของตัวเองไฟล์เดียว) = ไฟล์ของเครื่องใบ P — ช่องค้นบอกชื่อไฟล์นี้ (ก้อน 5)
+    const file = sql(`select string_agg(file, ',') from "SparePartBrandFile" where "sparePartId"=${pid}`);
 
     const page = await (await browser.newContext({ viewport: { width: 1300, height: 1000 } })).newPage();
     page.on("pageerror", (e) => errors.push(String(e)));
@@ -93,10 +96,16 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await vis("ระบุอะไหล่").first().click();
     await page.waitForTimeout(1200);
     await vis("ใช้อะไหล่").first().click();
-    await page.waitForTimeout(500);
-    await page.getByPlaceholder("ค้นหารหัส ชื่อ หรือ Part No.").locator("visible=true").first().fill(part[0]);
-    await page.waitForTimeout(1500);
-    await vis(part[0]).last().click();
+    await page.waitForTimeout(1200);
+    // ใบที่มีเครื่อง = ช่องเลือกล็อกตามไฟล์ยี่ห้อ (เลือกอะไหล่ตามไฟล์ยี่ห้อ ก้อน 5): หัวช่องบอกไฟล์ · ช่องค้นค้นในไฟล์นั้น
+    (await vis(`อะไหล่จากไฟล์ ${file}`, false).count()) > 0
+      ? pass(`ช่องอะไหล่บอกว่าเลือกจากไฟล์ ${file} (ยี่ห้อเครื่องของใบ)`)
+      : fail(`ไม่มีหัว "อะไหล่จากไฟล์ ${file}"`);
+    await page.getByPlaceholder(`ค้นหาในไฟล์ ${file}`).locator("visible=true").first().fill(part[0]);
+    await page.waitForTimeout(1800);
+    // กดแถวผลค้นด้วยป้าย "เพิ่ม {รหัส} {ชื่อ}" — กลุ่ม "ของใช้ร่วม (ไฟล์ Other)" มีตัวแฝด -OT ที่ชื่อขึ้นต้นเหมือนกัน
+    // หาด้วยชื่อหลวม ๆ จะได้ตัวผิด (§8 ก้อน 5)
+    await label(`เพิ่ม ${part[0]} ${partName}`).first().click();
     await page.waitForTimeout(600);
     const qty = label(`จำนวน ${part[0]}`);
     await qty.click();
