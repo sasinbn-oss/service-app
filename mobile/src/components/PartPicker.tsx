@@ -5,7 +5,9 @@
  * "อะไหล่ที่ใช้ไปจริง" จึงรับ label เข้ามา แต่วิธีค้นและวิธีนับจำนวนเหมือนกัน
  *
  * ใบที่มีเครื่อง = ล็อกตามไฟล์ยี่ห้อ (เจ้าของงาน ต.ค. 69: "เครื่อง Huebsch ก็สามารถเลือกอะไหล่ของเครื่อง Huebsch ได้เท่านั้น")
- * ค้นจาก /spare-parts/for-brand ซึ่งส่งมาสองกลุ่ม: ไฟล์ของเครื่อง แล้ว "ของใช้ร่วม (ไฟล์ Other)" ที่ทุกเครื่องเลือกได้ (R4)
+ * ค้นจาก /spare-parts/for-brand ซึ่งส่งมาสามกลุ่ม: ไฟล์ของเครื่อง แล้ว "ของใช้ร่วม (ไฟล์ Other)" ที่ทุกเครื่องเลือกได้ (R4)
+ * แล้วอะไหล่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อกดยืนยันทุกครั้ง (เจ้าของงานเลือก 3 พ.ย. 69 "แค่ให้ขึ้นเตือนว่าใช้อะไหล่ข้ามยี่ห้อ ให้กดยืนยัน")
+ * ไม่จำอะไรไว้: ยืนยันแล้วแถวนั้นติด crossBrand ส่งไปเป็น crossBrandOk กับคำขอนั้นคำขอเดียว
  * เครื่องที่ยังไม่รู้ยี่ห้อต้องกดยี่ห้อก่อน ช่องค้นถึงจะขึ้น — ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" (ข้อ 17: เดาผิดคือของผิดยี่ห้อไปถึงร้าน)
  * ใบที่ไม่มีเครื่อง (งานทั้งสาขา) ค้นทุกไฟล์จาก /spare-parts เหมือนเดิม — ที่เดียวที่ไม่ล็อก (ข้อ 22)
  * เซิร์ฟเวอร์ตรวจซ้ำทุกเส้นทาง (brandProblem) — ป้ายและการกันปุ่มที่นี่มีไว้ให้รู้ก่อนกด ไม่ใช่ตัวกันจริง
@@ -18,6 +20,7 @@ import Spinner from "./Spinner";
 import BrandChips, { isListedBrand } from "./BrandChips";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
+import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
 import { brandFileOf, fileAllows, shortThaiDate, SHARED_FILE, type PartsBrand } from "../utils/brandFile";
 
@@ -42,12 +45,19 @@ export interface PickedPart {
   issued?: boolean;
   requisitionNo?: string | null;
   partNo?: string | null;
+  /**
+   * true = กดยืนยัน "ใช้ข้ามยี่ห้อ" ตอนเลือกจากกลุ่มไฟล์ยี่ห้ออื่น — ส่งไปเป็น crossBrandOk (ดู crossBrandField)
+   * false = เลือกจากกลุ่มของเครื่อง/ของใช้ร่วมในช่องนี้ ไม่เคยยืนยัน (เปลี่ยนชิปยี่ห้อทีหลังจนหลุดไฟล์ = แดง ต้องเอาออก)
+   * ไม่มีค่า = แถวที่มาจากเซิร์ฟเวอร์ (อยู่ในใบ/รอบเลือก/กระดานอยู่แล้ว): นับว่ายืนยันแล้วเมื่อเครื่องรู้ยี่ห้อ — ถามใหม่ทุกครั้ง
+   * ที่บันทึกฟอร์มเดิมซ้ำไม่มีประโยชน์ กติการายครั้งคือตอนเลือก (ดู crossConfirmed)
+   */
+  crossBrand?: boolean;
 }
 
-/** ป้ายใต้ชื่ออะไหล่ — danger แดง (ต้องเอาออก) · warn เหลือง · success เขียว · info ฟ้า · muted เทา (แค่บอก) */
+/** ป้ายใต้ชื่ออะไหล่ — danger แดง (ต้องเอาออก) · warn เหลือง · success เขียว · info ฟ้า · muted เทา (แค่บอก) · cross ส้ม (ข้ามยี่ห้อ ยืนยันแล้ว) */
 export interface PartTag {
   text: string;
-  tone: "danger" | "warn" | "success" | "info" | "muted";
+  tone: "danger" | "warn" | "success" | "info" | "muted" | "cross";
 }
 
 interface SparePartOption {
@@ -59,12 +69,16 @@ interface SparePartOption {
   brandFiles?: string[];
 }
 
-/** คำตอบ GET /spare-parts/for-brand — rows = ไฟล์ของเครื่อง · shared = ของใช้ร่วม (Other) ที่ไม่อยู่ในไฟล์ของเครื่อง */
+/**
+ * คำตอบ GET /spare-parts/for-brand — rows = ไฟล์ของเครื่อง · shared = ของใช้ร่วม (Other) ที่ไม่อยู่ในไฟล์ของเครื่อง
+ * others = ไฟล์ยี่ห้ออื่น (ใช้ได้เมื่อยืนยัน) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง ถือว่าว่าง
+ */
 interface ForBrand {
   file: string;
   updatedAt: string | null;
   rows: SparePartOption[];
   shared: SparePartOption[];
+  others?: SparePartOption[];
   elsewhere: { file: string; exact: boolean }[];
 }
 
@@ -89,16 +103,33 @@ export function machineBrandToSend(brand: PartsBrand | null | undefined, chosen:
   return chosen?.trim() || null;
 }
 
-type RowState = { kind: "ok" } | { kind: "legacy"; text: string } | { kind: "remove"; text: string } | { kind: "needsBrand" };
+type RowState =
+  | { kind: "ok" }
+  | { kind: "legacy"; text: string }
+  | { kind: "remove"; text: string }
+  | { kind: "needsBrand" }
+  | { kind: "cross" };
+
+/**
+ * แถวข้ามยี่ห้อนี้นับว่ายืนยันแล้วไหม — กดยืนยันในช่องนี้ (crossBrand true) หรือเป็นแถวที่มาจากเซิร์ฟเวอร์ (ไม่มีค่า)
+ * บนเครื่องที่รู้ยี่ห้อ: ตอนนี้แถวนอกไฟล์จะไปอยู่ในใบได้ก็เพราะมีคนยืนยันไว้แล้ว ถามซ้ำทุกครั้งที่บันทึกฟอร์มเดิมแค่ทำให้รำคาญ
+ * ไม่นับ: แถวที่เลือกในช่องนี้จากไฟล์ของเครื่อง (false) แล้วเปลี่ยนชิปยี่ห้อจนหลุดไฟล์ · เครื่องที่ยังไม่รู้ยี่ห้อ
+ * — ไม่มีใครยืนยันว่าจะใช้ตัวนั้นข้ามยี่ห้อ
+ */
+function crossConfirmed(p: PickedPart, known: boolean): boolean {
+  return p.crossBrand === true || (p.crossBrand === undefined && known);
+}
 
 /**
  * สถานะของแถวหนึ่งในรายการ เทียบกับไฟล์ของเครื่อง — กติกาเดียวกับ brandProblem ฝั่งเซิร์ฟเวอร์ (§4.0)
  * legacy = แถวที่อยู่ในใบแล้วและเส้นทางนี้ปล่อยผ่าน (ของที่ใช้/เบิกไปจริง) — ป้ายเทาบอกเฉย ๆ ไม่ต้องเอาออก
+ * cross = อยู่ในไฟล์ยี่ห้ออื่นและยืนยันแล้ว — ส่งได้ (เซิร์ฟเวอร์ผ่านเพราะ crossBrandOk) · ไม่อยู่ในไฟล์ไหนยืนยันไม่ได้
+ * known = ไฟล์ของเครื่องมาจากเซิร์ฟเวอร์ (ไม่ใช่ชิปที่เพิ่งกด)
  */
 function rowState(
   p: PickedPart,
   file: string | null,
-  opts: { legacyIds?: ReadonlySet<number>; strict?: boolean; verb: string }
+  opts: { legacyIds?: ReadonlySet<number>; strict?: boolean; verb: string; known: boolean }
 ): RowState {
   if (p.offCatalog) {
     return opts.strict
@@ -114,9 +145,9 @@ function rowState(
       : { kind: "remove", text: `ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เอาออกก่อน${opts.verb}` };
   }
   if (fileAllows(file, p.brandFiles)) return { kind: "ok" };
-  return legacy
-    ? { kind: "legacy", text: `ไม่อยู่ในไฟล์ ${file}` }
-    : { kind: "remove", text: `ไม่อยู่ในไฟล์ ${file} — เอาออกก่อน${opts.verb}` };
+  if (legacy) return { kind: "legacy", text: `ไม่อยู่ในไฟล์ ${file}` };
+  if (crossConfirmed(p, opts.known)) return { kind: "cross" };
+  return { kind: "remove", text: `ไม่อยู่ในไฟล์ ${file} — เอาออกก่อน${opts.verb}` };
 }
 
 /**
@@ -131,11 +162,60 @@ export function brandBlockers(
 ): { remove: PickedPart[]; needsBrand: boolean } {
   if (!lockedByBrand(brand)) return { remove: [], needsBrand: false };
   const file = effectiveFile(brand, chosen);
-  const states = parts.map((p) => [p, rowState(p, file, { ...opts, verb: "ส่ง" })] as const);
+  const states = parts.map((p) => [p, rowState(p, file, { ...opts, verb: "ส่ง", known: !!brand?.file })] as const);
   return {
+    // แถวข้ามยี่ห้อที่ยืนยันแล้ว (cross) ไม่กันปุ่ม — ไปกับ crossBrandOk ของคำขอ
     remove: states.filter(([, s]) => s.kind === "remove").map(([p]) => p),
     needsBrand: states.some(([, s]) => s.kind === "needsBrand"),
   };
+}
+
+/**
+ * id ของแถวข้ามยี่ห้อที่ยืนยันแล้ว — กติกาเดียวกับป้าย "ข้ามยี่ห้อ" บนจอ (rowState) ไม่ใช่แค่แถวที่มี crossBrand
+ * แถวที่อยู่ในไฟล์ของเครื่อง/legacy ไม่อยู่ในนี้ (เซิร์ฟเวอร์ปล่อยผ่านอยู่แล้ว ใส่ไปก็แค่ทำให้ประวัติบอกผิดว่าข้ามยี่ห้อ)
+ */
+export function crossBrandOkOf(
+  parts: PickedPart[],
+  brand: PartsBrand | null | undefined,
+  chosen: string | null | undefined,
+  opts: { legacyIds?: ReadonlySet<number>; strict?: boolean } = {}
+): number[] {
+  if (!lockedByBrand(brand)) return [];
+  const file = effectiveFile(brand, chosen);
+  return parts
+    .filter((p) => rowState(p, file, { ...opts, verb: "ส่ง", known: !!brand?.file }).kind === "cross")
+    .map((p) => p.sparePartId);
+}
+
+/**
+ * ช่อง crossBrandOk ของคำขอ — ทุกฟอร์มที่ส่งรายการอะไหล่กระจายตัวนี้ลงในคำขอ (ที่เดียว ไม่ใช่สิบสำเนา)
+ * ไม่มีแถวข้ามยี่ห้อ = ไม่ส่งช่องนี้เลย คำขอเหมือนก่อนมีกติกานี้ทุกตัวอักษร
+ */
+export function crossBrandField(
+  parts: PickedPart[],
+  brand: PartsBrand | null | undefined,
+  chosen: string | null | undefined,
+  opts: { legacyIds?: ReadonlySet<number>; strict?: boolean } = {}
+): { crossBrandOk?: number[] } {
+  const ids = crossBrandOkOf(parts, brand, chosen, opts);
+  return ids.length ? { crossBrandOk: ids } : {};
+}
+
+/** ข้อความในกล่องยืนยันข้ามยี่ห้อ — ใช้ร่วมกับจอคอนเฟิร์มของหัวหน้าภาค (ข้อความเดียวกันทุกที่ที่ถาม) */
+export const CROSS_BRAND_TITLE = "ใช้อะไหล่ข้ามยี่ห้อ?";
+export const CROSS_BRAND_OK = "ใช้ข้ามยี่ห้อ";
+export function crossBrandMessage(
+  parts: { partCode: string; name: string; brandFiles?: string[] }[],
+  machine: { code: string; make: string | null; file: string | null }
+): string {
+  const list = parts
+    .map((p) => `${p.partCode} ${p.name}${p.brandFiles?.length ? ` (อยู่ในไฟล์ ${p.brandFiles.join(", ")})` : ""}`)
+    .join("\n");
+  const own = machine.file ? `ไฟล์ ${machine.file}` : "ไฟล์ของเครื่อง";
+  return (
+    `${list}\n\nเครื่อง ${machine.code}${machine.make ? ` ยี่ห้อ ${machine.make}` : ""} ใช้อะไหล่${own} — ` +
+    `ใช้ข้ามยี่ห้อได้เฉพาะครั้งนี้ ระบบไม่เพิ่มรหัสนี้เข้า${own} ครั้งหน้าต้องยืนยันอีก`
+  );
 }
 
 /** ข้อความเดียวของสิ่งที่กันการส่ง (ใต้ปุ่ม / ในรายการยังขาด) — null = ส่งได้ */
@@ -157,6 +237,8 @@ const TAG_COLORS: Record<PartTag["tone"], { fg: string; bg: string }> = {
   success: { fg: colors.successInk, bg: colors.successSoft },
   info: { fg: colors.primaryInk, bg: colors.primarySoft },
   muted: { fg: colors.textMuted, bg: colors.background },
+  // ส้ม (โทนเดียวกับย้อนขั้น) — ไม่ใช่แดงที่แปลว่า "ต้องเอาออก" และไม่ใช่เหลืองที่แปลว่า "ยังขาดอะไร": ส่งได้ แต่ไม่ใช่ของยี่ห้อนี้
+  cross: { fg: colors.rollbackInk, bg: colors.rollbackSoft },
 };
 
 export default function PartPicker({
@@ -215,11 +297,15 @@ export default function PartPicker({
   const [refused, setRefused] = useState<number | null>(null);
   const [results, setResults] = useState<SparePartOption[]>([]);
   const [shared, setShared] = useState<SparePartOption[]>([]);
+  const [others, setOthers] = useState<SparePartOption[]>([]);
   const [elsewhere, setElsewhere] = useState<ForBrand["elsewhere"]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
   const [head, setHead] = useState<{ make: string; file: string; updatedAt: string | null } | null>(null);
   const seq = useRef(0);
+  // รายการล่าสุดตอนกด "ใช้ข้ามยี่ห้อ" — กล่องยืนยันตอบทีหลัง ใช้ parts ตอนแตะแถวอาจเก่าไปแล้ว (แถวที่แก้ระหว่างนั้นจะหาย)
+  const latest = useRef(parts);
+  latest.current = parts;
 
   /**
    * หัวช่อง "อะไหล่จากไฟล์ X · อัปเดต {วันที่}" — ถามครั้งเดียวต่อยี่ห้อ (ไม่มีคำค้น = เซิร์ฟเวอร์ตอบวันอัปโหลดไฟล์นั้นล่าสุด)
@@ -250,6 +336,7 @@ export default function PartPicker({
     if (!keyword || (brandMode && !make)) {
       setResults([]);
       setShared([]);
+      setOthers([]);
       setElsewhere([]);
       setSearched(false);
       setSearching(false);
@@ -269,12 +356,14 @@ export default function PartPicker({
             if (mine !== seq.current) return;
             setResults(res.data.rows);
             setShared(res.data.shared);
+            setOthers(res.data.others ?? []);
             setElsewhere(res.data.elsewhere);
           })
           .catch(() => {
             if (mine !== seq.current) return;
             setResults([]);
             setShared([]);
+            setOthers([]);
             setElsewhere([]);
           })
           .finally(done);
@@ -289,9 +378,13 @@ export default function PartPicker({
     return () => clearTimeout(timer);
   }, [term, make, brandMode]);
 
-  function add(option: SparePartOption) {
-    setTerm("");
+  function add(option: SparePartOption, crossBrand = false) {
     const existing = parts.find((p) => p.sparePartId === option.id);
+    if (crossBrand && !existing) {
+      askCross(option);
+      return;
+    }
+    setTerm("");
     if (existing) {
       // ใบที่ล็อกยี่ห้อ: แถวผลค้นขึ้น "เลือกแล้ว" — กดซ้ำแค่ปิดผลค้น (ตามตัวอย่าง) จำนวนแก้ที่ช่องจำนวน
       // ใบไม่มีเครื่องคงแบบเดิม: เลือกตัวที่มีอยู่แล้วให้บวกจำนวน ไม่ใช่เพิ่มแถวซ้ำ
@@ -310,6 +403,39 @@ export default function PartPicker({
         quantity: 1,
         partNo: option.partNo ?? null,
         ...(option.brandFiles ? { brandFiles: option.brandFiles } : {}),
+        // เลือกจากไฟล์ของเครื่อง = ไม่ได้ยืนยันข้ามยี่ห้อ (ต่างจากแถวจากเซิร์ฟเวอร์ที่ไม่มีค่านี้ — ดู crossConfirmed)
+        ...(brandMode ? { crossBrand: false } : {}),
+      },
+    ]);
+  }
+
+  /**
+   * แถวจากกลุ่มไฟล์ยี่ห้ออื่น — ถามทุกครั้งที่เลือก (เจ้าของงาน: "ทุกคนที่เลือกอะไหล่ได้ ต้องกดยืนยัน" · รายครั้ง)
+   * showAlert ไม่ใช่ Alert — Alert ของ react-native-web เงียบ (CLAUDE.md) · ยกเลิก = ไม่เพิ่มอะไร คำค้นยังอยู่ให้เลือกตัวอื่น
+   */
+  function askCross(option: SparePartOption) {
+    showAlert(CROSS_BRAND_TITLE, crossBrandMessage([option], { code, make, file: shownFile ?? file }), [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: CROSS_BRAND_OK,
+        onPress: () => {
+          setTerm("");
+          const now = latest.current;
+          if (now.some((p) => p.sparePartId === option.id)) return;
+          onChange([
+            ...now,
+            {
+              sparePartId: option.id,
+              partCode: option.partCode,
+              name: option.name,
+              brand: option.brand,
+              quantity: 1,
+              partNo: option.partNo ?? null,
+              ...(option.brandFiles ? { brandFiles: option.brandFiles } : {}),
+              crossBrand: true,
+            },
+          ]);
+        },
       },
     ]);
   }
@@ -324,9 +450,10 @@ export default function PartPicker({
   function tagsOf(p: PickedPart): PartTag[] {
     const out: PartTag[] = [];
     if (brandMode) {
-      const s = rowState(p, file, { legacyIds, strict, verb });
+      const s = rowState(p, file, { legacyIds, strict, verb, known: !!knownFile });
       if (s.kind === "remove") out.push({ text: s.text, tone: "danger" });
       else if (s.kind === "legacy") out.push({ text: s.text, tone: "muted" });
+      else if (s.kind === "cross") out.push({ text: "ข้ามยี่ห้อ", tone: "cross" });
       else if (s.kind === "needsBrand") out.push({ text: "เลือกยี่ห้อเครื่องก่อน", tone: "warn" });
     }
     if (p.issued) out.push({ text: `เบิกแล้ว${p.requisitionNo ? ` · ใบเบิก ${p.requisitionNo}` : ""}`, tone: "info" });
@@ -488,9 +615,10 @@ export default function PartPicker({
   const ownFile = shownFile ?? file;
   const otherOnly = ownFile === SHARED_FILE;
   const sameName = make.trim().toLowerCase() === ownFile.toLowerCase();
+  // ไฟล์ยี่ห้ออื่นใช้ได้เมื่อยืนยัน (3 พ.ย. 69) — บรรทัดกติกาบอกข้อยกเว้นด้วย ไม่งั้นขัดกับกลุ่มที่สามที่ขึ้นข้างล่าง
   const ruleLine = otherOnly
-    ? `เครื่อง ${code} ยี่ห้อ ${make} ไม่มีไฟล์ยี่ห้อของตัวเอง — เลือกได้เฉพาะของใช้ร่วม (ไฟล์ Other)`
-    : `เครื่อง ${code} ยี่ห้อ ${make}${sameName ? "" : ` ใช้ไฟล์ ${ownFile}`} — เลือกได้เฉพาะอะไหล่ในไฟล์นี้`;
+    ? `เครื่อง ${code} ยี่ห้อ ${make} ไม่มีไฟล์ยี่ห้อของตัวเอง — เลือกจากของใช้ร่วม (ไฟล์ Other) · ไฟล์ยี่ห้ออื่นต้องกดยืนยันทุกครั้ง`
+    : `เครื่อง ${code} ยี่ห้อ ${make}${sameName ? "" : ` ใช้ไฟล์ ${ownFile}`} — เลือกจากไฟล์นี้ · ไฟล์ยี่ห้ออื่นต้องกดยืนยันทุกครั้ง`;
   const files = elsewhere.map((e) => e.file);
   const exact = elsewhere.some((e) => e.exact);
   const noResultTitle =
@@ -500,15 +628,26 @@ export default function PartPicker({
     "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? หัวหน้าภาคหรือแอดมินแก้ยี่ห้อเครื่องได้ที่หน้าใบงาน (แก้ยี่ห้อเครื่อง)",
   ];
 
-  const resultRow = (option: SparePartOption, i: number) => {
+  // ไม่เจอในไฟล์ของเครื่องและของใช้ร่วม แต่มีในไฟล์ยี่ห้ออื่น — กล่องเหลืองชี้ไปที่กลุ่มข้ามยี่ห้อ แทนที่จะบอกว่าเลือกไม่ได้
+  const ownEmpty = searched && !searching && results.length === 0 && shared.length === 0;
+  const crossOnly = ownEmpty && others.length > 0;
+
+  // cross = แถวของกลุ่มไฟล์ยี่ห้ออื่น: แตะแล้วถามยืนยันก่อนเพิ่ม · ป้ายที่อ่านออกเสียง/เทสต์หาได้บอกว่าเป็นการเพิ่มข้ามยี่ห้อ
+  const resultRow = (option: SparePartOption, i: number, cross = false) => {
     const already = parts.some((p) => p.sparePartId === option.id);
     return (
       <TouchableOpacity
         key={option.id}
         style={[styles.brandResult, i > 0 && styles.brandResultLine]}
-        onPress={() => add(option)}
+        onPress={() => add(option, cross)}
         activeOpacity={0.7}
-        accessibilityLabel={already ? `${option.partCode} เลือกแล้ว` : `เพิ่ม ${option.partCode} ${option.name}`}
+        accessibilityLabel={
+          already
+            ? `${option.partCode} เลือกแล้ว`
+            : cross
+              ? `เพิ่มข้ามยี่ห้อ ${option.partCode} ${option.name}`
+              : `เพิ่ม ${option.partCode} ${option.name}`
+        }
       >
         <View style={{ flex: 1, minWidth: 0 }}>
           {/* รหัสสินค้านำหน้า — ช่างค้น/เบิก/เคลมด้วยรหัสสินค้า (เจ้าของงาน 31 ต.ค. 69) */}
@@ -516,11 +655,15 @@ export default function PartPicker({
             <Text style={styles.resultCode}>{option.partCode}</Text> {option.name}
           </Text>
           {option.partNo ? <Text style={styles.resultSub}>Part No. {option.partNo}</Text> : null}
+          {/* กลุ่มข้ามยี่ห้อบอกไฟล์ทุกแถว — ไฟล์ของแต่ละตัวไม่เหมือนกัน และเป็นสิ่งที่คนต้องเทียบกับป้ายเครื่องก่อนกดยืนยัน */}
+          {cross && option.brandFiles?.length ? (
+            <Text style={styles.resultCross}>ไฟล์ {option.brandFiles.join(", ")}</Text>
+          ) : null}
         </View>
         {already ? (
           <Text style={styles.pickedBadge}>เลือกแล้ว</Text>
         ) : (
-          <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
+          <Ionicons name="add-circle-outline" size={22} color={cross ? colors.rollbackInk : colors.primary} />
         )}
       </TouchableOpacity>
     );
@@ -554,9 +697,26 @@ export default function PartPicker({
         {searching ? <Spinner size="small" color={colors.textFaint} /> : null}
       </View>
 
-      {results.length > 0 || shared.length > 0 ? (
+      {/* ไม่เจอในไฟล์ของเครื่อง: กล่องเหลืองขึ้นก่อนรายการ — บอกว่าที่เจออยู่ไฟล์ยี่ห้ออื่น และใช้ได้เมื่อยืนยัน (ไม่ใช่ "เลือกไม่ได้") */}
+      {ownEmpty ? (
+        <View style={styles.noResult} accessibilityLiveRegion="polite">
+          <Text style={styles.noResultTitle}>{noResultTitle}</Text>
+          <Text style={styles.noResultLine}>
+            {crossOnly
+              ? `ใช้ข้ามยี่ห้อได้ — แตะรายการในกลุ่ม “อยู่ในไฟล์ยี่ห้ออื่น” ข้างล่าง แล้วกดยืนยัน (ใช้ได้เฉพาะครั้งนี้ ไม่เพิ่มเข้าไฟล์ ${ownFile})`
+              : `เครื่องนี้ (${code} · ${make}) เลือกได้เฉพาะอะไหล่จากไฟล์ ${ownFile}${otherOnly ? "" : " และของใช้ร่วม (ไฟล์ Other)"}`}
+          </Text>
+          {hints.map((h) => (
+            <Text key={h} style={styles.noResultLine}>
+              {h}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {results.length > 0 || shared.length > 0 || others.length > 0 ? (
         <View style={styles.pickerResults}>
-          {results.map(resultRow)}
+          {results.map((o, i) => resultRow(o, i))}
           {/* กลุ่มที่สอง: ของใช้ร่วม (ไฟล์ Other) — ทุกเครื่องเลือกได้ (R4) แยกหัวให้เห็นว่าไม่ใช่ไฟล์ของเครื่อง */}
           {shared.length > 0 ? (
             <>
@@ -564,21 +724,18 @@ export default function PartPicker({
               {shared.map((o, i) => resultRow(o, i))}
             </>
           ) : null}
-        </View>
-      ) : null}
-
-      {searched && !searching && results.length === 0 && shared.length === 0 ? (
-        <View style={styles.noResult} accessibilityLiveRegion="polite">
-          <Text style={styles.noResultTitle}>{noResultTitle}</Text>
-          <Text style={styles.noResultLine}>
-            เครื่องนี้ ({code} · {make}) เลือกได้เฉพาะอะไหล่จากไฟล์ {ownFile}
-            {otherOnly ? "" : " และของใช้ร่วม (ไฟล์ Other)"}
-          </Text>
-          {hints.map((h) => (
-            <Text key={h} style={styles.noResultLine}>
-              {h}
-            </Text>
-          ))}
+          {/*
+            กลุ่มที่สาม: ไฟล์ยี่ห้ออื่น — อยู่ท้ายสุดเสมอ (ของยี่ห้อนี้ต้องมาก่อน) หัวสีส้มเดียวกับป้าย "ข้ามยี่ห้อ"
+            แตะแล้วถามยืนยันทุกครั้ง (เจ้าของงานเลือก 3 พ.ย. 69) · เซิร์ฟเวอร์รุ่นก่อนไม่ส่งกลุ่มนี้ = ไม่มีหัวนี้
+          */}
+          {others.length > 0 ? (
+            <>
+              <Text style={[styles.groupHead, styles.groupHeadCross, (results.length > 0 || shared.length > 0) && styles.brandResultLine]}>
+                อยู่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อยืนยัน
+              </Text>
+              {others.map((o, i) => resultRow(o, i, true))}
+            </>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -673,6 +830,7 @@ const styles = StyleSheet.create({
   resultCode: { fontWeight: "700" },
   resultSub: { fontSize: 12, lineHeight: 17, color: colors.textMuted },
   pickedBadge: { fontSize: 12, fontWeight: "700", color: colors.successInk },
+  resultCross: { fontSize: 12, lineHeight: 17, fontWeight: "600", color: colors.rollbackInk },
   groupHead: {
     fontSize: 12,
     lineHeight: 18,
@@ -682,6 +840,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 4,
   },
+  groupHeadCross: { color: colors.rollbackInk, backgroundColor: colors.rollbackSoft },
   fileHead: {
     flexDirection: "row",
     alignItems: "flex-start",

@@ -33,9 +33,20 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
-import PartPicker, { brandBlockers, brandBlockText, machineBrandToSend, PickedPart, type PartTag, type PartsBrand } from "../components/PartPicker";
+import PartPicker, {
+  brandBlockers,
+  brandBlockText,
+  crossBrandField,
+  crossBrandMessage,
+  CROSS_BRAND_OK,
+  CROSS_BRAND_TITLE,
+  machineBrandToSend,
+  PickedPart,
+  type PartTag,
+  type PartsBrand,
+} from "../components/PartPicker";
 import BrandChips, { rememberMachineModels } from "../components/BrandChips";
-import { brandFileOf } from "../utils/brandFile";
+import { brandFileOf, fileAllows } from "../utils/brandFile";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
 import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
@@ -698,6 +709,8 @@ const NOT_A_MOVE = [
   // หัวหน้าภาคแก้ยี่ห้อจากหน้าใบงานได้ทุกขั้น ถ้านับเป็นการเดินขั้น กล่อง "ช่างแจ้งปัญหา" / เหตุผลที่หัวหน้าภาคส่งกลับ
   // จะหายทั้งที่ยังไม่มีใครแก้
   "MACHINE_BRAND_SET",
+  // ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว) — บันทึกคู่กับแถวหลักของการบันทึกอะไหล่ ไม่ใช่การเดินขั้น (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  "CROSS_BRAND_PARTS",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
@@ -3709,6 +3722,8 @@ function RollbackModal({
         reason: reason.trim(),
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         ...(machineBrand ? { machineBrand } : {}),
+        // ตัวที่ยืนยันใช้ข้ามยี่ห้อ — กติกาเดียวกับป้ายบนจอ (เซิร์ฟเวอร์ไม่มีแถวเดิมที่ปล่อยผ่าน)
+        ...crossBrandField(parts, order.partsBrand, pickedBrand),
       });
       onDone();
     } catch (e) {
@@ -4006,6 +4021,7 @@ function FollowUpModal({
           parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
           note: note.trim() || undefined,
           ...(machineBrand ? { machineBrand } : {}),
+          ...crossBrandField(parts, order.partsBrand, pickedBrand, { legacyIds: legacy }),
         }
       );
       onDone(res.data.createdChild.code);
@@ -4590,6 +4606,17 @@ function pickDiff(prev: PickItem[], next: PickItem[]): string {
   return out.join(" · ");
 }
 
+/**
+ * รายการของช่างที่อยู่ในไฟล์ยี่ห้ออื่น (ช่างยืนยันข้ามยี่ห้อตอนเลือก) — เทียบกับไฟล์ "ตอนนี้" ของเครื่อง แบบเดียวกับเซิร์ฟเวอร์ตอนคอนเฟิร์ม
+ * คนคอนเฟิร์มต้องยืนยันเองอีกครั้ง (เจ้าของงาน: ทุกคนที่เลือกอะไหล่ได้ต้องกดยืนยัน · รายครั้ง) — คำยืนยันของช่างไม่ใช่ของคนที่เขียนลงใบ
+ * ตัวที่ไม่อยู่ในไฟล์ไหนไม่นับ: ยืนยันไม่ได้ เซิร์ฟเวอร์ตอบ 400 ให้ตีกลับตามเดิม
+ */
+function pickCrossItems(order: WorkOrder, pick: PartsPickInfo): PickItem[] {
+  const file = order.partsBrand?.file ?? pick.brandFile;
+  if (!file) return [];
+  return pick.items.filter((i) => i.brandFiles.length > 0 && !fileAllows(file, i.brandFiles));
+}
+
 /** เหตุผลที่ตีกลับบ่อย (ตัวอย่างที่อนุมัติ) — กดแล้วต่อท้ายช่องเหตุผล ไม่แทนที่ หัวหน้าภาคพิมพ์ต่อได้ว่าตัวไหน */
 const QUICK_REASONS = ["รหัสไม่ตรงกับรูปอะไหล่ที่เสีย", "จำนวนไม่ตรง", "ขาดอะไหล่ที่ต้องใช้", "ตัวนี้ยังไม่ต้องเปลี่ยน"];
 
@@ -4748,6 +4775,7 @@ function PickConfirmForm({
   const hasVideo = roundFiles.some((f) => f.role === "INSPECT_VIDEO");
   const extras = offPartsPayload(offParts).length + offPartsPayload(services).length;
   const note = order.inspectionNote ?? pick.note;
+  const crossIds = new Set(pickCrossItems(order, pick).map((i) => i.sparePartId));
 
   return (
     <View style={{ gap: spacing.sm }}>
@@ -4836,6 +4864,10 @@ function PickConfirmForm({
                   </Text>
                   {it.partNo ? <Text style={styles.cfMuted}>Part No. {it.partNo}</Text> : null}
                   {tag ? <Text style={styles.cfTag}>{tag}</Text> : null}
+                  {/* ช่างเลือกข้ามยี่ห้อ — ป้ายส้มเดียวกับช่องเลือกอะไหล่ บอกไฟล์ที่อะไหล่อยู่ (กดคอนเฟิร์มแล้วถามยืนยันอีกครั้ง) */}
+                  {crossIds.has(it.sparePartId) ? (
+                    <Text style={styles.cfCrossTag}>ข้ามยี่ห้อ · อยู่ในไฟล์ {it.brandFiles.join(", ")}</Text>
+                  ) : null}
                 </View>
                 <Text style={styles.cfQty}>× {it.quantity} ตัว</Text>
               </View>
@@ -5339,6 +5371,8 @@ function StageModal({
           parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
           removed: removedIds,
           ...(machineBrand ? { machineBrand } : {}),
+          // ตัวที่ยืนยันใช้ข้ามยี่ห้อ (ช่องของช่าง — strict เหมือนป้ายบนจอ) · หัวหน้าภาคยังต้องยืนยันอีกครั้งตอนคอนเฟิร์ม
+          ...crossBrandField(parts, order.partsBrand, pickedBrand, { strict: true }),
         });
         clearDraft(`inspect:${order.id}`);
         clearDraft(`inspectParts:${order.id}`);
@@ -5366,6 +5400,8 @@ function StageModal({
         const machineBrand = machineBrandToSend(order.partsBrand, pickedBrand);
         await api.post(`/work-orders/${order.id}/parts`, {
           ...(machineBrand ? { machineBrand } : {}),
+          // แถวที่เบิกแล้วจำนวนเดิมผ่านเป็น legacy อยู่แล้ว ไม่นับเป็นข้ามยี่ห้อ (กติกาเดียวกับป้ายบนจอ)
+          ...(needsParts ? crossBrandField(parts, order.partsBrand, pickedBrand, { legacyIds: partsLegacy }) : {}),
           services: offPartsPayload(services),
           needsParts,
           parts: needsParts
@@ -5540,13 +5576,37 @@ function StageModal({
       });
       return;
     }
-    void sendPick("pickConfirmed", "confirm", {
+    const body = {
       pickId: pending.id,
       offParts: offPartsPayload(offParts),
       services: offPartsPayload(services),
       note: note.trim() || undefined,
       marks: marksPayload(),
-    });
+    };
+    /**
+     * มีตัวที่ช่างเลือกข้ามยี่ห้อ — ถามครั้งเดียวทั้งชุด (กล่องเดียวกับช่องเลือกอะไหล่) แล้วส่ง crossBrandOk
+     * ยกเลิก = ไม่ส่งอะไร ฟอร์มอยู่เหมือนเดิม (ตีกลับได้ตามปกติ)
+     */
+    const cross = pickCrossItems(order, pending);
+    if (cross.length) {
+      showAlert(
+        CROSS_BRAND_TITLE,
+        crossBrandMessage(cross, {
+          code: order.partsBrand?.machineCode ?? order.machineCode ?? "",
+          make: order.partsBrand?.make ?? order.machineBrand ?? null,
+          file: order.partsBrand?.file ?? pending.brandFile,
+        }),
+        [
+          { text: "ยกเลิก", style: "cancel" },
+          {
+            text: CROSS_BRAND_OK,
+            onPress: () => void sendPick("pickConfirmed", "confirm", { ...body, crossBrandOk: cross.map((i) => i.sparePartId) }),
+          },
+        ]
+      );
+      return;
+    }
+    void sendPick("pickConfirmed", "confirm", body);
   }
 
   /**
@@ -8875,6 +8935,38 @@ function CloseModal({
     if (part !== undefined) setPartTab(part);
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }
+  /**
+   * แถบเลิกเคลมใต้แถบขั้น (เจ้าของงานเลือก 3 พ.ย. 69) — ติ๊ก "ส่งอะไหล่เก่าเคลม" แล้วฟอร์มกลายเป็นทีละขั้นที่ขั้น 1
+   * ปุ่ม "ไม่ส่งเคลมชิ้นนี้" อยู่ในขั้นเคลมอย่างเดียว ช่างที่ติ๊กผิดหาไม่เจอว่าจะถอยตรงไหน — แถบนี้ปักอยู่ทุกขั้น
+   * เฉพาะสาขาหมดประกัน/สาขาบริษัท: สาขาในประกันเปิดเคลมให้เอง (ไม่ใช่ติ๊กผิด) และไม่ส่งต้องมีเหตุผล — ปุ่มในขั้นเคลมถามให้
+   */
+  const quitBar = stepMode && !fixMode && !needsSkipReason && claimedParts.length > 0;
+  /** ชิ้นนี้กรอก/แนบอะไรของเคลมไปแล้วไหม — มีแล้วต้องถามก่อน เพราะเลิกเคลมลบไฟล์ของชิ้นนั้นทิ้ง (setClaimOn) */
+  function partHasClaimData(id: number) {
+    const d = draftFor(id);
+    return (
+      !!(d.brokenPartCode.trim() || d.symptom.trim() || d.checkNote.trim() || d.troubleshooting.length || d.errorChecked?.length) ||
+      Object.keys(uploads.slots).some((k) => k.startsWith(`${id}:`))
+    );
+  }
+  function quitClaim(p: PickedPart) {
+    const go = () => {
+      setClaimOn(p.sparePartId, false);
+      if (claimedParts.every((c) => c.sparePartId === p.sparePartId)) {
+        // ไม่เหลือชิ้นที่ส่งเคลม — กลับเป็นฟอร์มหน้าเดียวแบบก่อนติ๊ก
+        // (ต่างจากเลิกในขั้นเคลมที่ยังค้างฟอร์มทีละขั้นไว้: ตรงนั้นแท็บหายกลางทางจะงง ตรงนี้ช่างกดถอยเอง)
+        setStepMode(false);
+        setStep(0);
+        setPartTab(null);
+        scrollRef.current?.scrollTo({ y: 0, animated: false });
+      } else if (partTab === p.sparePartId) setPartTab(null);
+    };
+    if (!partHasClaimData(p.sparePartId)) return go();
+    showAlert(`เลิกเคลม ${partLabel(p)}?`, "รูปและข้อมูลเคลมของชิ้นนี้ที่กรอกในฟอร์มนี้จะถูกลบ", [
+      { text: "ยกเลิก", style: "cancel" },
+      { text: "เลิกเคลม", style: "destructive", onPress: go },
+    ]);
+  }
   /** ตัวนับใต้ชื่อขั้น (ตัวอย่าง tabs) */
   const stepInfos: StepInfo[] = [0, 1, 2, 3].map((i) => {
     const miss = missingList.filter((m) => m.step === i).length;
@@ -9165,6 +9257,7 @@ function CloseModal({
         await api.post(`/work-orders/${order.id}/follow-up`, {
           parts: missing.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
           ...(machineBrand ? { machineBrand } : {}),
+          ...crossBrandField(missing, order.partsBrand, pickedBrand, { legacyIds: onOrder }),
         });
       } catch (e) {
         showAlert(
@@ -9324,6 +9417,8 @@ function CloseModal({
         note: note.trim() || undefined,
         ...(machineBrand ? { machineBrand } : {}),
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
+        // อะไหล่ที่ใช้ไปที่ยืนยันข้ามยี่ห้อ — ของที่อยู่ในใบอยู่แล้ว (onOrder) ผ่านเป็น legacy ไม่ต้องยืนยัน
+        ...crossBrandField(parts, order.partsBrand, pickedBrand, { legacyIds: onOrder }),
         offParts: offPartsPayload(offParts),
         workerIds: isSub && !withStaff ? [] : workerIds,
         otherWorkers: otherWorkers.trim() || null,
@@ -10309,6 +10404,25 @@ function CloseModal({
                 onPick={(i) => openStep(i)}
               />
             ) : null}
+            {quitBar ? (
+              <View style={styles.quitBar}>
+                {claimedParts.map((p) => (
+                  <View key={p.sparePartId} style={styles.quitRow} accessibilityLabel={`แถบเลิกเคลม ${p.partCode}`}>
+                    <Text style={styles.quitText}>
+                      ส่งเคลม <Text style={{ fontWeight: "700" }}>{partLabel(p)}</Text> · ติ๊กผิด?
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.quitBtn}
+                      onPress={() => quitClaim(p)}
+                      activeOpacity={0.7}
+                      accessibilityLabel={`เลิกเคลม ${p.partCode}`}
+                    >
+                      <Text style={styles.quitBtnText}>เลิกเคลม</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             {sendError ? (
               <View style={styles.sendErr} accessibilityRole="alert">
                 <Ionicons
@@ -11276,6 +11390,27 @@ const styles = StyleSheet.create({
   },
   sendErrTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.dangerInk },
   sendErrText: { fontSize: 13, lineHeight: 19, color: colors.dangerInk },
+  // แถบเลิกเคลม — พื้นฟ้าอ่อนแบบกล่องแจ้งข้อมูล ไม่ใช่แดง: ส่งเคลมไม่ใช่ข้อผิดพลาด แค่บอกทางถอย
+  quitBar: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 6,
+    gap: 4,
+    backgroundColor: colors.primarySoft,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.primaryLine,
+  },
+  quitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  quitText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19, color: colors.text },
+  quitBtn: {
+    paddingHorizontal: 12,
+    minHeight: 36,
+    justifyContent: "center",
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.primaryLine,
+    backgroundColor: colors.card,
+  },
+  quitBtnText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   // ยังส่งไม่ได้ (ช่องที่ถูกชี้ยังเหมือนเดิม) — เหลืองเข้มบนพื้นเหลืองอ่อน: เป็นคำเตือนให้ทำต่อ ไม่ใช่ระบบพัง
   fixBlocked: {
     paddingHorizontal: spacing.lg,
@@ -11593,6 +11728,18 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.primaryInk,
     backgroundColor: colors.primarySoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    overflow: "hidden",
+  },
+  // ส้มเดียวกับป้าย "ข้ามยี่ห้อ" ในช่องเลือกอะไหล่ (PartPicker TAG_COLORS.cross)
+  cfCrossTag: {
+    alignSelf: "flex-start",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: colors.rollbackInk,
+    backgroundColor: colors.rollbackSoft,
     borderRadius: radius.pill,
     paddingHorizontal: 8,
     overflow: "hidden",

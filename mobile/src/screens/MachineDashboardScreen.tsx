@@ -26,7 +26,7 @@ import { openUrl } from "../utils/share";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
 import { HomeStackParamList } from "../navigation/types";
-import PartPicker, { brandBlockers, brandBlockText, machineBrandToSend } from "../components/PartPicker";
+import PartPicker, { brandBlockers, brandBlockText, crossBrandField, machineBrandToSend } from "../components/PartPicker";
 import { brandFileOf, type PartsBrand } from "../utils/brandFile";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
@@ -1306,6 +1306,8 @@ function NoteModal({
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         scheduledVisitAt: visitDate.trim() || null,
         ...(machineBrand ? { machineBrand } : {}),
+        // ตัวที่ยืนยันใช้ข้ามยี่ห้อ (รวมแถวเดิมบนกระดานที่ยืนยันไว้ตอนบันทึกครั้งก่อน — ไม่ถามซ้ำทุกครั้งที่แก้อาการ)
+        ...crossBrandField(parts, brand, pickedBrand),
       });
       // ยี่ห้อที่เพิ่งกดถูกจำไว้กับเครื่องแล้ว — แถวบนกระดานรู้ยี่ห้อตั้งแต่ตอนนี้ เปิดเคสนี้อีกครั้งไม่ต้องกดซ้ำ
       onSaved({ ...row, ...res.data, ...(machineBrand ? { machineMake: machineBrand } : {}) });

@@ -71,7 +71,11 @@ router.get("/", requireAuth, async (req, res) => {
  *   (พิมพ์ "Huebsch" แล้วได้ทุกตัวที่ช่องยี่ห้อเขียน Huebsch ทั้งที่ไม่อยู่ในไฟล์ Huebsch = ทำให้เข้าใจผิด)
  * เรียงรหัสที่ตรงทั้งคำก่อน แล้วรหัสที่ขึ้นต้นด้วยคำค้น แล้วตามชื่อ — ช่างค้น/เบิก/เคลมด้วยรหัสสินค้า (เจ้าของงาน 31 ต.ค. 69)
  *   ถ้าเรียงตามชื่ออย่างเดียว รหัสที่พิมพ์ครบแล้วอาจตกไปท้ายรายการเพราะชื่อเรียงทีหลัง
- * elsewhere = ไม่เจอเลยทั้งสองกลุ่ม → บอกว่าคำค้นนี้อยู่ไฟล์ไหน (ช่างรู้ว่าไม่ใช่พิมพ์ผิด แต่เป็นอะไหล่ยี่ห้ออื่น)
+ * others = กลุ่มที่สาม: อะไหล่ในไฟล์ยี่ห้ออื่น (ไม่อยู่ในไฟล์ของเครื่องและไม่อยู่ใน Other) — ใช้ได้เมื่อกดยืนยันรายครั้ง
+ *   (เจ้าของงานเลือก 3 พ.ย. 69 "แค่ให้ขึ้นเตือนว่าใช้อะไหล่ข้ามยี่ห้อ ให้กดยืนยัน") · ลำดับและเพดานเดียวกับสองกลุ่มแรก
+ *   ไม่อยู่ในไฟล์ไหน/นอกสโตร์ยังไม่ขึ้น (ยืนยันข้ามยี่ห้อได้เฉพาะตัวที่รู้ว่าเป็นของยี่ห้อไหน)
+ * elsewhere = ไม่เจอเลยทั้งสองกลุ่มแรก → บอกว่าคำค้นนี้อยู่ไฟล์ไหน (ช่างรู้ว่าไม่ใช่พิมพ์ผิด แต่เป็นอะไหล่ยี่ห้ออื่น)
+ *   คงไว้ให้แอปรุ่นก่อนที่ยังไม่รู้จัก others (ยังขึ้นกล่อง "ไม่พบ … รหัสนี้อยู่ในไฟล์ …" ตามเดิม)
  * อะไหล่ที่ไม่อยู่ในไฟล์ไหนและของนอกสโตร์ไม่ขึ้นที่ไหนเลย — ยังไม่รู้ว่าเป็นของยี่ห้อไหน ให้เลือกคือเดา
  * updatedAt = วันอัปโหลดไฟล์นี้ครั้งล่าสุด (หัวช่อง "อัปเดต {วันที่}") คิดเฉพาะตอนไม่มีคำค้น — หัวช่องโหลดครั้งเดียว
  *   ไม่เคยอัปโหลดไฟล์นี้เลย = null (หัวช่องไม่มีวันที่ ไม่เดาจากวันอื่น)
@@ -90,7 +94,7 @@ router.get("/for-brand", requireAuth, async (req, res) => {
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     });
-    return res.json({ file, updatedAt: last?.createdAt ?? null, rows: [], shared: [], elsewhere: [] });
+    return res.json({ file, updatedAt: last?.createdAt ?? null, rows: [], shared: [], others: [], elsewhere: [] });
   }
   // ILIKE ต้องหนี % _ \ ในคำค้นเอง (Prisma contains ทำให้ แต่ที่นี่ต้องเรียงด้วยนิพจน์ที่ Prisma เรียงให้ไม่ได้)
   const like = `%${search.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
@@ -105,9 +109,12 @@ router.get("/for-brand", requireAuth, async (req, res) => {
       upper(p."partCode") LIKE upper(${like.slice(1)}) DESC,
       p.name ASC, p."partCode" ASC
     LIMIT ${FOR_BRAND_LIMIT}`;
-  const [rows, shared] = await Promise.all([
+  // อยู่ในไฟล์ใดไฟล์หนึ่ง แต่ไม่ใช่ไฟล์ของเครื่องและไม่ใช่ Other — กลุ่ม "ข้ามยี่ห้อ" (ตัวที่ไม่อยู่ในไฟล์ไหนไม่ขึ้น)
+  const anyFile = Prisma.sql`EXISTS (SELECT 1 FROM "SparePartBrandFile" b WHERE b."sparePartId" = p.id)`;
+  const [rows, shared, others] = await Promise.all([
     group(inFile(file)),
     file === SHARED_FILE ? Promise.resolve([] as BrandRow[]) : group(Prisma.sql`${inFile(SHARED_FILE)} AND NOT ${inFile(file)}`),
+    group(Prisma.sql`${anyFile} AND NOT ${inFile(file)} AND NOT ${inFile(SHARED_FILE)}`),
   ]);
   const shape = (r: BrandRow) => ({ ...r, brandFiles: fileList(r.brandFiles.map((f) => ({ file: f }))) });
   let elsewhere: { file: string; exact: boolean }[] = [];
@@ -119,7 +126,7 @@ router.get("/for-brand", requireAuth, async (req, res) => {
       GROUP BY b.file`;
     elsewhere = hits.sort((a, b) => BRAND_FILES.indexOf(a.file as BrandFile) - BRAND_FILES.indexOf(b.file as BrandFile));
   }
-  res.json({ file, updatedAt: null, rows: rows.map(shape), shared: shared.map(shape), elsewhere });
+  res.json({ file, updatedAt: null, rows: rows.map(shape), shared: shared.map(shape), others: others.map(shape), elsewhere });
 });
 
 /**

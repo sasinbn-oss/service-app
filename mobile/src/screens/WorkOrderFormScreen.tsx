@@ -43,7 +43,16 @@ import { formatDate } from "./WorkOrderListScreen";
 import { HomeStackParamList } from "../navigation/types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
 import OpenOrdersWarning, { DuplicateConfirmModal, MachineOpenWarning, OpenOrder } from "../components/OpenOrdersWarning";
-import PartPicker, { type PickedPart, type PartsBrand, brandBlockText, brandBlockers } from "../components/PartPicker";
+import PartPicker, {
+  type PickedPart,
+  type PartsBrand,
+  brandBlockText,
+  brandBlockers,
+  crossBrandMessage,
+  crossBrandOkOf,
+  CROSS_BRAND_OK,
+  CROSS_BRAND_TITLE,
+} from "../components/PartPicker";
 import BrandChips from "../components/BrandChips";
 import { brandFileOf } from "../utils/brandFile";
 import { colors, radius, shadow, spacing } from "../theme";
@@ -251,6 +260,12 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   // ป๊อปอัพยืนยันเปิดซ้ำ — รายการใบค้างที่ดึงใหม่ตอนกดบันทึก · ยืนยันแล้วกดบันทึกรอบนั้นไม่ถามซ้ำ
   const [dupOrders, setDupOrders] = useState<OpenOrder[] | null>(null);
   const dupConfirmed = useRef(false);
+  /**
+   * "+ สร้างใบงาน" จากกระดาน: อะไหล่ที่รอบนกระดานที่อยู่ในไฟล์ยี่ห้ออื่น (บันทึกข้ามยี่ห้อไว้) — เซิร์ฟเวอร์ตอบ 400 พร้อมรายการ
+   * คนกดยืนยันในกล่องแล้วส่งใหม่พร้อม crossBrandOk (เจ้าของงาน: ทุกคนที่เลือกอะไหล่ได้ต้องกดยืนยัน · รายครั้ง)
+   * ฟอร์มนี้ไม่มีช่องอะไหล่ของกระดานให้ติดป้าย จึงถามตอนเซิร์ฟเวอร์บอก ไม่ใช่ตอนเลือก
+   */
+  const boardCrossOk = useRef<number[] | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
@@ -616,6 +631,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             // ยี่ห้อกับขนาดของเครื่องในเคส — เคสรู้แต่ว่าเครื่องไหน · ยี่ห้อที่รู้แล้ว (ปุ่มล็อก) ไม่ส่ง เซิร์ฟเวอร์ไม่เขียนทับอยู่แล้ว
             model: lockOf(rows[0]) ? null : resolvedModel(rows[0]) || null,
             capacityKg: resolvedCapacity(rows[0]),
+            ...(boardCrossOk.current ? { crossBrandOk: boardCrossOk.current } : {}),
           })
         : await api.post("/work-orders", {
             ...shared,
@@ -636,6 +652,16 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                       : {}),
                   }
             ),
+            /**
+             * อะไหล่ข้ามยี่ห้อที่ยืนยันในแถวเครื่องไหนก็ตาม — เซิร์ฟเวอร์รับช่องเดียวทั้งคำขอ ตัวที่ไม่ข้ามยี่ห้อกับเครื่องนั้นไม่มีผล
+             * (ตัวเดียวกันบนอีกเครื่องที่เป็นยี่ห้อของมันเองผ่านอยู่แล้ว · บนเครื่องยี่ห้ออื่นก็ถูกถามยืนยันตอนเลือกในแถวนั้นแล้ว)
+             */
+            ...(() => {
+              const ids = showParts && !noMachine
+                ? [...new Set(shownRows.flatMap((r) => (r.code.trim() ? crossBrandOkOf(r.parts, partsBrandOf(r), null, { strict: true }) : [])))]
+                : [];
+              return ids.length ? { crossBrandOk: ids } : {};
+            })(),
           });
 
       // ทางกระดานได้ใบเดียวและไม่มี orders ติดมา ทำให้เป็นรูปแบบเดียวกันก่อนใช้
@@ -688,6 +714,29 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       if (orders.length > 1) navigation.goBack();
       else navigation.replace("WorkOrderDetail", { id: orders[0].id });
     } catch (e) {
+      const cross = fromBoard ? boardCrossBrandOf(e) : null;
+      if (cross) {
+        showAlert(
+          CROSS_BRAND_TITLE,
+          crossBrandMessage(
+            cross.parts.map((p) => ({ partCode: p.partCode, name: p.name, brandFiles: p.files })),
+            { code: cross.machineCode, make: cross.make, file: brandFileOf(cross.make) }
+          ),
+          [
+            { text: "ยกเลิก", style: "cancel" },
+            {
+              text: CROSS_BRAND_OK,
+              onPress: () => {
+                boardCrossOk.current = cross.parts.map((p) => p.sparePartId);
+                // ถามใบค้างของสาขาไปแล้วรอบนี้ — ส่งใหม่ไม่ต้องถามซ้ำ
+                dupConfirmed.current = true;
+                void submit();
+              },
+            },
+          ]
+        );
+        return;
+      }
       setError(apiErrorMessage(e));
     } finally {
       submitting.current = false;
@@ -1600,6 +1649,18 @@ function MachineCard({
       ) : null}
     </View>
   );
+}
+
+/**
+ * รายการอะไหล่ข้ามยี่ห้อจากคำตอบ 400 ของ "+ สร้างใบงาน" — มีเฉพาะเมื่อทุกตัวที่ติดยืนยันได้ (อยู่ในไฟล์ยี่ห้ออื่น)
+ * ไม่มี = ข้อความ error ธรรมดา (ต้องแก้กระดานก่อน)
+ */
+function boardCrossBrandOf(
+  e: unknown
+): { machineCode: string; make: string | null; parts: { sparePartId: number; partCode: string; name: string; files: string[] }[] } | null {
+  const r = (e as { response?: { status?: number; data?: { crossBrand?: unknown } } } | null)?.response;
+  const c = r?.status === 400 ? (r.data?.crossBrand as ReturnType<typeof boardCrossBrandOf>) : null;
+  return c && Array.isArray(c.parts) && c.parts.length ? c : null;
 }
 
 /** หัวการ์ดขั้น: วงกลมเลขสีกรมท่า + ชื่อขั้น แบบ step-card ของ OTTERI */
