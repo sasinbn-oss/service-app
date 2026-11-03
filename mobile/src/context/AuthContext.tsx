@@ -18,6 +18,11 @@ interface AuthContextValue {
   startViewAs: (userId: number) => Promise<void>;
   /** เลิกดูในฐานะ กลับเป็น Super Admin ตัวเอง */
   stopViewAs: () => Promise<void>;
+  /**
+   * แก้ข้อมูลผู้ใช้ในเครื่องบางช่อง (สอนการใช้งานจดว่าดูแล้ว) — ไม่ใช่การสลับคน จึงไม่ล้างหน้าที่จำไว้/กล่องแจ้ง (clearFlash)
+   * id ไม่เปลี่ยน หน้าจอทั้งชุดจึงไม่ถูกสร้างใหม่ (MainNavigator key={user.id})
+   */
+  patchUser: (p: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -142,6 +147,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  function patchUser(p: Partial<User>) {
+    setUser((u) => (u ? { ...u, ...p } : u));
+  }
+
   async function logout() {
     await AsyncStorage.removeItem(SELF_TOKEN_KEY);
     await AsyncStorage.removeItem(TOKEN_KEY);
@@ -152,7 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, applyNewToken, startViewAs, stopViewAs }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, applyNewToken, startViewAs, stopViewAs, patchUser }}>
       {children}
     </AuthContext.Provider>
   );

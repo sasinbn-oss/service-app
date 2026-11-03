@@ -70,6 +70,8 @@ import ThemeToggle from "../components/ThemeToggle";
 import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/SideMenu";
 import { pageEnterLayout } from "../components/PageEnter";
 import AreaOnlyGate from "../components/AreaOnlyGate";
+import HowToButton from "../components/HowToButton";
+import HowToHost from "../components/HowToHost";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
 import {
   AdminStackParamList,
@@ -165,6 +167,8 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
       <UpdateButton compact />
       <ViewAsButton compact />
       <UsageButton compact />
+      {/* วิธีใช้หน้านี้ — ข้างปุ่มรีเฟรช (เจ้าของงานเลือก) · แถบของแอดมินเต็มแล้ว ปุ่มของแอดมินจอแคบไปอยู่ในเมนูข้าง */}
+      {user?.role === "ADMIN" ? null : <HowToButton compact />}
       <RefreshButton />
       <UserAvatar />
     </View>
@@ -343,6 +347,8 @@ function LogoutButton() {
   return (
     <View style={styles.headerRight}>
       <UserAvatar />
+      {/* จอคอม: "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช ทุกตำแหน่ง · แคบกว่า 1200 เหลือ ? */}
+      <HowToButton />
       <RefreshButton />
       <TouchableOpacity
         accessibilityLabel="ออกจากระบบ"
@@ -758,6 +764,8 @@ export default function MainNavigator() {
       {/* อยู่ในส่วนล่าง เมนูเลื่อนออกมาใต้แถบโลโก้ ไม่ทับโลโก้ ตามตัวอย่าง */}
       {docked ? null : <SideMenu />}
       </View>
+      {/* สอนการใช้งาน — วาดลงชั้นของตัวเองใน <body> (เว็บ) · ขึ้นใหม่พร้อม MainNavigator ตอนสลับคน ไม่มีอะไรค้าง */}
+      <HowToHost />
     </View>
   );
 }

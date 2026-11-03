@@ -1,3 +1,5 @@
+import type { HowToState } from "../utils/howtoTypes";
+
 export type Role =
   | "EMPLOYEE"
   | "SENIOR_TECH"
@@ -50,6 +52,11 @@ export interface User {
    * ทุกที่ที่เช็คว่า "เป็นช่าง" จึงใช้ได้เลย ป้ายชื่อตำแหน่งดูที่ธงนี้
    */
   seniorTech?: boolean;
+  /**
+   * สอนการใช้งาน — ตอบกล่องต้อนรับ/ข้อความแนะนำแล้วหรือยัง ดูวิธีใช้หน้าไหนจบแล้ว (ดูในฐานะ = ของคนที่ถูกดู)
+   * เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ไม่มีกล่องขึ้นเอง (ปุ่ม ? ยังใช้ได้)
+   */
+  howto?: HowToState;
 }
 
 export type VehicleStatus = "AVAILABLE" | "IN_USE" | "MAINTENANCE" | "INACTIVE";
