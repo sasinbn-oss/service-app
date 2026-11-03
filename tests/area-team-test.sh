@@ -89,6 +89,12 @@ W1=$(echo "$R" | J 'd.id')
   && pass "กรอกครบเปิดได้ · จ่ายช่าง/นัดวันที่ส่งมาไม่ถูกบันทึก (ฐานข้อมูล)" || fail "ใบงาน: $(DB "select status, \"assignedToId\", \"scheduledAt\" from \"WorkOrder\" where id=$W1")"
 R=$(NEW $S1 '{"branchCode":"C0001","jobType":"COIN_CHANGER","contactName":"คุณทดสอบ","contactPhone":"0811112222","machines":[{"symptom":"แลกแล้วเหรียญไม่ออกเลย"}]}')
 WE=$(echo "$R" | J 'd.id'); [ "$WE" -gt 0 ] 2>/dev/null && pass "ตู้แลกเหรียญไม่บังคับช่องเครื่อง" || fail "ตู้แลกเหรียญ: $R"
+# ความเร่งด่วน (เจ้าของงานขอ 3 พ.ย. 69): Supervisor (COCO) ไม่มีหัวข้อนี้ในฟอร์ม — แอปรุ่นที่เปิดค้างส่ง "ด่วน" มาก็ได้ "ปกติ" · Area ยังเลือกได้
+URG() { NEW $1 '{"branchCode":"C0001","jobType":"CM","priority":"URGENT","contactName":"คุณทดสอบ","contactPhone":"081-111-2222","machines":[{"code":"W3","symptom":"ทดสอบความเร่งด่วนจากร้าน"}]}' | J 'd.id'; }
+WS=$(URG $S1); WA=$(URG $AR)
+[ "$(DB "select string_agg(priority, '|' order by id) from \"WorkOrder\" where id in ($WS,$WA)")" = "NORMAL|URGENT" ] \
+  && pass "Supervisor (COCO) ส่ง \"ด่วน\" มา บันทึกเป็น \"ปกติ\" · Area เลือก \"ด่วน\" ได้ตามเดิม (ฐานข้อมูล)" \
+  || fail "ความเร่งด่วน: $(DB "select id, priority from \"WorkOrder\" where id in (${WS:-0},${WA:-0})")"
 W6=$(NEW $A '{"branchCode":"C0006","jobType":"CM","machines":[{"code":"W2","symptom":"ทดสอบ area team"}]}' | J 'd.id')
 WD=$(NEW $A '{"branchCode":"D0011","jobType":"CM","machines":[{"code":"W2","symptom":"ทดสอบ area team"}]}' | J 'd.id')
 

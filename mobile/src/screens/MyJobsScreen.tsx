@@ -28,6 +28,8 @@ import { dayLabel } from "../utils/customerMessage";
 import { loadCloseDraft, missingItems, type CloseDraft } from "../utils/closeDraft";
 import ClaimTrail, { dayTime, type TrailEvent } from "../components/claims/ClaimTrail";
 import PreRepairBox from "../components/claims/PreRepairBox";
+import DispatchPartsBox from "../components/DispatchPartsBox";
+import type { DispatchPart } from "../utils/dispatchParts";
 import { PHONE_TEXT, SITE_TEXT, cardReasonLines, wholeLabels } from "../utils/claimFlags";
 import { takeFlash, type JobsFlash } from "../utils/flash";
 import { HomeStackParamList } from "../navigation/types";
@@ -56,7 +58,8 @@ interface Job {
   longitude: number | null;
   machineCode: string | null;
   machineCapacityKg: number | null;
-  parts: { name: string; quantity: number; unit: string | null }[];
+  /** อะไหล่ที่ต้องเปลี่ยน — รหัส · เลขใบเบิก · คลังที่รับ (3 พ.ย. 69 · เซิร์ฟเวอร์รุ่นก่อนส่งแค่ชื่อ/จำนวน → pickupOf บอก "ยังไม่เช็คคลัง") */
+  parts: DispatchPart[];
   arrivedAt: string | null;
   /**
    * กล่อง "ถ่ายก่อนซ่อม" (เคลมก้อน 5) — warrantyUntil = วันหมดประกันเมื่อสาขายังอยู่ในประกัน (ว่าง = ไม่ขึ้นกล่อง)
@@ -759,8 +762,10 @@ function JobCard({
         {job.machineCode ? ` · เครื่อง ${machineTag(job.machineCode, job.machineCapacityKg)}` : " · ทั้งสาขา"}
         {job.symptom ? ` · ${job.symptom}` : ""}
       </Text>
-      {job.parts.length ? (
-        <Text style={styles.meta}>อะไหล่: {job.parts.map((p) => `${p.name} x${p.quantity}${p.unit ? ` ${p.unit}` : ""}`).join(", ")}</Text>
+      {/* อะไหล่ที่ต้องเปลี่ยน (ตัวอย่างที่เจ้าของงานเลือก 3 พ.ย. 69) — แทนบรรทัดเทาเดิมที่ไม่มีรหัสและคลัง */}
+      <DispatchPartsBox parts={job.parts.map((p) => ({ ...p, code: p.code ?? null, inStock: p.inStock ?? null, warehouse: p.warehouse ?? null, requisitionNo: p.requisitionNo ?? null }))} />
+      {job.inspect && !job.parts.length && !job.done ? (
+        <Text style={styles.inspectNote}>ตรวจหน้างาน — ยังไม่มีอะไหล่ (เลือกตอนส่งผลตรวจ)</Text>
       ) : null}
       {review ? <Text style={styles.reviewNote}>ยังไม่นับว่าปิดงาน จนกว่าจะอนุมัติ — อาจถูกตีกลับมาให้แก้</Text> : null}
 
@@ -925,6 +930,18 @@ const styles = StyleSheet.create({
   arrivedText: { fontSize: 12, lineHeight: 22, fontWeight: "700", color: colors.roleTech },
   branch: { fontSize: 15.5, lineHeight: 23, fontWeight: "700", color: colors.text },
   meta: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  inspectNote: {
+    marginTop: spacing.xs,
+    alignSelf: "flex-start",
+    fontSize: 12,
+    lineHeight: 18,
+    // สีกลาง ไม่ใช่ม่วง — ม่วงคือสีของแอดมินทั้งแอป (theme) งานตรวจไม่ใช่เรื่องของแอดมิน
+    color: colors.textMuted,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
   small: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap", marginTop: 2 },
   // สูง 48 — ช่างกดด้วยนิ้วโป้งตอนยืนหน้าร้าน (ตัวอย่างที่เจ้าของงานเลือก ต.ค. 69 ใช้ 48 ทุกปุ่ม)
   smallBtn: {

@@ -86,6 +86,11 @@ function cleanup() {
     await tap("เพิ่มใบงาน", false);
     await page.waitForTimeout(2500);
     (await seen("ยังบันทึกไม่ได้ — ขาด", false)) > 0 ? pass("ฟอร์มเปล่าบอกว่ายังบันทึกไม่ได้") : fail("ไม่มีแถบบอกช่องที่ขาด");
+    // เจ้าของงานขอเอาหัวข้อความเร่งด่วนออกจากฟอร์มของ Supervisor (COCO) · Maid (COCO) (3 พ.ย. 69) — ใบเป็น "ปกติ" เสมอ
+    // "ด่วน" ตัวเดียวยังมีบนหน้ารายการด้านหลัง (ชิปกรอง) — เช็คหัวข้อกับปุ่ม "ไม่เร่ง" ที่มีแต่ในหัวข้อนี้แทน
+    (await seen("ความเร่งด่วน", true)) === 0 && (await seen("ไม่เร่ง", true)) === 0 && (await seen("ผู้ติดต่อที่สาขา", false)) > 0
+      ? pass("ฟอร์มเปิดใบงานของ Supervisor (COCO) ไม่มีหัวข้อความเร่งด่วน (ปุ่ม ด่วน/ปกติ/ไม่เร่ง หายทั้งหัวข้อ)")
+      : fail(`ฟอร์มของ Supervisor (COCO) ยังมีหัวข้อความเร่งด่วน: หัวข้อ=${await seen("ความเร่งด่วน", true)} ไม่เร่ง=${await seen("ไม่เร่ง", true)}`);
     const search = page.getByPlaceholder("ค้นรหัสหรือชื่อสาขา").locator("visible=true").first();
     await search.click();
     await search.type("C0", { delay: 70 });

@@ -6,6 +6,7 @@
  */
 import { thaiDate } from "../components/DateField";
 import { machineTag } from "./machine";
+import { dispatchPartLines, type DispatchPart } from "./dispatchParts";
 
 /** ขั้นของงานตรวจหน้างาน — ข้อความใช้ "เข้าตรวจสอบ / ผลการตรวจสอบ" แทน "เข้าซ่อม / ผลการซ่อม" */
 const INSPECT_STAGES = ["INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING"];
@@ -69,6 +70,8 @@ export interface ConfirmedRow {
   longitude?: number | null;
   confirmedBy: string | null;
   confirmedAt: string | null;
+  /** อะไหล่ที่ต้องเปลี่ยน (3 พ.ย. 69) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ไม่มีช่วงอะไหล่ในข้อความ */
+  parts?: DispatchPart[];
   /**
    * ขั้นตอนของใบตอนนี้ — เซิร์ฟเวอร์ส่งมาตั้งแต่ก่อน (GET /work-orders/reports/confirmed) แต่ชนิดข้อมูลไม่มี จึงอ่านไม่ได้
    * ใช้บอกในข้อความว่าใบยังไม่ปล่อยงาน (ต.ค. 69) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ไม่มีบรรทัดนั้น
@@ -106,6 +109,8 @@ const LINE = "------------------------";
  * · เส้นคั่นระหว่างงาน · วันที่บอกครั้งเดียว (หลายวันขึ้นหัวข้อย่อยต่อวัน)
  * · ไม่มีเบอร์บอกตรง ๆ ว่าไม่มี ไม่ใช่หายไปเฉย ๆ · ไม่ใส่ชื่อแอดมิน (ช่างไม่ต้องใช้)
  * · ไม่ใส่อาการ (เจ้าของงานขอเอาออก) — ช่างเปิดดูในใบงานของตัวเองได้ ข้อความไลน์สั้นลงเหลือแค่ไปที่ไหน เมื่อไหร่
+ * · อะไหล่ที่ต้องเปลี่ยนของงานซ่อม (เจ้าของงานขอ 3 พ.ย. 69) — ช่างรู้ว่าต้องไปรับของที่ไหนก่อนออกเดินทาง ไม่ต้องเปิดแอป
+ *   งานตรวจหน้างานไม่มีช่วงนี้ (ยังไม่รู้ว่าเสียตรงไหน) · รูปแบบอยู่ที่ dispatchPartLines
  */
 export function teamDispatch(team: string, rows: ConfirmedRow[]) {
   const days = [...new Set(rows.map((r) => r.scheduledAt))];
@@ -129,6 +134,7 @@ export function teamDispatch(team: string, rows: ConfirmedRow[]) {
          */
         ...(r.status && UNRELEASED.includes(r.status) ? ["สถานะ: ยังไม่ปล่อยงาน"] : []),
         ...(r.machineCode ? [`เครื่อง: ${machineTag(r.machineCode, r.machineCapacityKg)}`] : []),
+        ...(r.kind === "INSPECT" ? [] : dispatchPartLines(r.parts ?? [])),
         `ผู้ติดต่อ: ${[r.contactName, r.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
         ...(r.latitude != null && r.longitude != null ? [`แผนที่: https://maps.google.com/?q=${r.latitude},${r.longitude}`] : [])
       );
@@ -161,7 +167,20 @@ export interface SubOrder {
   symptom: string | null;
   contactName: string | null;
   contactPhone: string | null;
-  parts: { name: string; quantity: number; unit?: string | null }[];
+  /**
+   * อะไหล่ที่ต้องเปลี่ยน = ของที่รอในใบ (waitingParts) — เดิมอ่าน parts ซึ่งคือของที่ใช้ตอนปิดงาน
+   * ตอนส่งงานให้ทีมยังว่างเสมอ ข้อความ SUB จึงไม่เคยมีอะไหล่จริง (แก้พร้อมรูปแบบเดียวกับทีมช่าง 3 พ.ย. 69)
+   */
+  waitingParts: {
+    name: string;
+    partCode: string;
+    quantity: number;
+    unit?: string | null;
+    offCatalog?: boolean;
+    inStock: boolean | null;
+    warehouse: string | null;
+    requisitionNo: string | null;
+  }[];
 }
 
 /**
@@ -182,7 +201,9 @@ export function subDispatch(o: SubOrder) {
     `สาขา: ${o.branchName}`,
     ...(o.machineCode ? [`เครื่อง: ${machineTag(o.machineCode, o.machineCapacityKg)}`] : []),
     ...(symptom ? [`อาการ: ${symptom}`] : []),
-    ...(o.parts.length ? ["อะไหล่:", ...o.parts.map((p) => `- ${p.name} x${p.quantity}${p.unit ? ` ${p.unit}` : ""}`)] : []),
+    ...dispatchPartLines(
+      o.waitingParts.map((p) => ({ ...p, code: p.offCatalog ? null : p.partCode }))
+    ),
     `ผู้ติดต่อ: ${[o.contactName, o.contactPhone].filter(Boolean).join(" ") || "ไม่มีในใบงาน"}`,
     ...(o.branchLatitude != null && o.branchLongitude != null
       ? [`แผนที่: https://maps.google.com/?q=${o.branchLatitude},${o.branchLongitude}`]
