@@ -846,6 +846,8 @@ interface Technician {
   team?: string | null;
   /** Senior ช่าง (เห็นหลายทีม) — ตัวเลือกบอกตำแหน่งแทนทีมแรก */
   senior?: boolean;
+  /** ทุกทีมที่สังกัด (Senior มีหลายทีม) — จัดกลุ่มตัวเลือกช่าง "ทีมของใบนี้ / ทีมที่คุณดูแล" */
+  teams?: string[];
 }
 
 /**
@@ -1814,6 +1816,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         order={order}
         technicians={technicians}
         subTeams={teams.filter((t) => t.outsource).map((t) => t.name)}
+        myTeams={teams.filter((t) => t.mine).map((t) => t.name)}
         onClose={() => setSupClosing(false)}
         onDone={async () => {
           setSupClosing(false);

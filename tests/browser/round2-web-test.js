@@ -32,6 +32,9 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
   const oldRegion = sql(`select coalesce(region,'') from "User" where "employeeCode"='S001'`);
   const team = sql(`select zone from "Branch" where code='C0006'`);
   const os = `ZZOS${Date.now() % 100000}`;
+  // ช่างคนที่สองของทีม C0006 (ฐานทดสอบมีช่างคนเดียว) — ช่องช่างที่เข้าซ่อมเลือกได้สามคน ต้องมีคนให้เลือกคนที่ 2
+  const T2 = `ZR2T${Date.now() % 100000}`;
+  const planDay = new Date(Date.now() + 7 * 3600e3 + 20 * 86400e3).toISOString().slice(0, 10);
   const today = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
   const ids = [];
   let mach = null, oldCap = null;
@@ -57,7 +60,16 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await call(S, "POST", `work-orders/${B.id}/parts`, { needsParts: false, assign: { team: os, scheduledAt: today } });
     await call(A, "POST", `work-orders/${B.id}/confirm-appointment`, {});
     await call(S, "POST", `work-orders/${B.id}/dispatch`, {});
-    const F = await mk(3); // ช่างแก้ไขเรียบร้อย
+    const F = await mk(3); // ช่างแก้ไขเรียบร้อย (ใบไม่มีแผนงาน — เลือกเองสองคน)
+    const G = await mk(4); // ช่างแก้ไขเรียบร้อย (มีแผนงาน — เติมสองคนให้เอง)
+    const hash = sql(`select "passwordHash" from "User" where "employeeCode"='T001'`);
+    sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword",team) values ('${T2}','ช่างทดสอบคนที่สอง ${T2}','EMPLOYEE','${hash}',false,'${team}')`);
+    const t1id = Number(sql(`select id from "User" where "employeeCode"='T001'`));
+    const t2id = Number(sql(`select id from "User" where "employeeCode"='${T2}'`));
+    // แผนงานวันนัดของใบ G: ทีมของสาขา วันข้างหน้า 20 วัน (ไม่ชนแผนจริงของวันนี้) — คนที่ 1 = ${T2} · คนที่ 2 = T001
+    sql(`update "WorkOrder" set "assignedTeam"='${team}', "scheduledAt"='${planDay}' where id=${G.id}`);
+    const planRes = await call(S, "PUT", "plans", { date: planDay, team, memberIds: [t2id, t1id] });
+    if (!planRes || planRes.error) throw new Error(`บันทึกแผนงานไม่สำเร็จ: ${JSON.stringify(planRes).slice(0, 200)}`);
     mach = sql(`select "machineId" from "WorkOrder" where id=${P.id}`);
     oldCap = sql(`select coalesce("capacityKg"::text,'null') from "Machine" where id=${mach}`);
     sql(`update "Machine" set "capacityKg"=25 where id=${mach}`);
@@ -140,10 +152,24 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await page.waitForTimeout(500);
     (await vis("ช่างเข้าซ่อมเสร็จแล้ว แต่ไม่ได้ปิดในระบบ · นับเป็นงานซ่อมเสร็จ").count())
       ? pass("เลือกช่างแก้ไขเรียบร้อย: หัวฟอร์มบอกว่านับเป็นงานซ่อมเสร็จ") : fail("หัวฟอร์มไม่เปลี่ยน");
-    await label("ช่างที่เข้าซ่อม").click();
-    await page.waitForTimeout(500);
+    // ใบไม่มีแผนงานวันนั้น — ไม่มีอะไรเติม · ช่องสามช่อง · รายชื่อเริ่มที่ทีมของใบนี้ (ทีมประจำสาขา)
+    await page.waitForTimeout(1500);
+    const slots = await Promise.all([1, 2, 3].map((n) => label(`ช่างที่เข้าซ่อมคนที่ ${n}`).count()));
+    slots.every((c) => c > 0) && (await vis("ใบนี้ไม่มีแผนงานวันนั้น — เลือกจากรายชื่อ (ทีมของใบนี้และทีมที่คุณดูแลอยู่บนสุด)").count()) > 0
+      ? pass("ช่างที่เข้าซ่อมมีสามช่อง (คนที่ 1–3) · ใบไม่มีแผนงานบอกให้เลือกจากรายชื่อ")
+      : fail(`ช่องช่าง: ${slots.join("/")}`);
     const tname = sql(`select name from "User" where "employeeCode"='T001'`);
+    const t2name = sql(`select name from "User" where "employeeCode"='${T2}'`);
+    await label("ช่างที่เข้าซ่อมคนที่ 1").click();
+    await page.waitForTimeout(500);
+    (await vis(`ทีม${team} (ทีมของใบนี้)`).count()) > 0
+      ? pass(`รายชื่อช่างขึ้นกลุ่ม "ทีม${team} (ทีมของใบนี้)" ก่อน`)
+      : fail("ไม่มีกลุ่มทีมของใบนี้ในรายชื่อ");
     await vis(tname).last().click();
+    await page.waitForTimeout(400);
+    await label("ช่างที่เข้าซ่อมคนที่ 2").click();
+    await page.waitForTimeout(500);
+    await vis(t2name).last().click();
     await page.waitForTimeout(400);
     await label("รายละเอียดที่ปิดใบงาน").fill("เปลี่ยนบอร์ดแล้ว ทดสอบปกติครบรอบ");
     const [chooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 15000 }), label("เลือกรูปหลังซ่อม").click()]);
@@ -153,14 +179,37 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
     await page.waitForTimeout(5000);
     const done = sql(`select status||'|'||"closeResult" from "WorkOrder" where id=${F.id}`);
     const after = sql(`select count(*) from "WorkOrderAttachment" where "workOrderId"=${F.id} and role='AFTER'`);
-    const worker = sql(`select count(*) from "WorkOrderWorker" w join "User" u on u.id=w."userId" where w."workOrderId"=${F.id} and u."employeeCode"='T001'`);
-    done === "DONE|FIXED" && after === "1" && worker === "1"
-      ? pass("ฐานข้อมูล: ปิดเป็นซ่อมเสร็จ (FIXED) มีรูปหลังซ่อม บันทึกช่าง T001") : fail(`ปิด: ${done} รูป ${after} ช่าง ${worker}`);
+    const worker = sql(`select string_agg(u."employeeCode", ',' order by u."employeeCode") from "WorkOrderWorker" w join "User" u on u.id=w."userId" where w."workOrderId"=${F.id}`);
+    done === "DONE|FIXED" && after === "1" && worker === ["T001", T2].sort().join(",")
+      ? pass("ฐานข้อมูล: ปิดเป็นซ่อมเสร็จ (FIXED) มีรูปหลังซ่อม บันทึกช่างสองคนที่เลือก (T001 + คนที่สอง)") : fail(`ปิด: ${done} รูป ${after} ช่าง ${worker}`);
+
+    // ── 4b) มีแผนงานวันนัด — เติมคนที่ 1–2 ตามแผนให้เอง ไม่ต้องพิมพ์ ──
+    await open(G.code);
+    await label("ปิดใบงาน").click();
+    await page.waitForTimeout(1000);
+    await label("เหตุผล ช่างเข้าดำเนินการแก้ไขเรียบร้อย").click();
+    await page.waitForTimeout(2000);
+    const s1 = ((await label("ช่างที่เข้าซ่อมคนที่ 1").first().textContent().catch(() => "")) ?? "");
+    const s2 = ((await label("ช่างที่เข้าซ่อมคนที่ 2").first().textContent().catch(() => "")) ?? "");
+    const s3 = ((await label("ช่างที่เข้าซ่อมคนที่ 3").first().textContent().catch(() => "")) ?? "");
+    s1.includes(t2name) && s2.includes(tname) && s3.includes("ไม่มี") &&
+      (await vis(`เติมจากแผนงานของทีม${team}วันนัดแล้ว — ตรวจว่าตรงคนที่ไปจริง แก้ได้`).count()) > 0
+      ? pass("ใบที่มีแผนงาน: คนที่ 1–2 เติมตามลำดับในแผนให้เอง คนที่ 3 ว่าง · บอกว่าเติมจากแผนงาน")
+      : fail(`เติมจากแผน: 1="${s1}" 2="${s2}" 3="${s3}"`);
+    await page.screenshot({ path: path.join(__dirname, "round2-4b-plan-crew.png") });
+    await label("ยกเลิก").last().click().catch(() => {});
+    sql(`select 1`) === "1" && sql(`select count(*) from "WorkOrderWorker" where "workOrderId"=${G.id}`) === "0"
+      ? pass("เปิดฟอร์มแล้วยกเลิก ไม่มีอะไรบันทึก (ฐานข้อมูลไม่มีช่างของใบ G)")
+      : fail("เปิดฟอร์มแล้วมีการบันทึกช่าง");
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
     for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
+    // แผนที่มีช่างคนที่สองอยู่ = แผนของเทสต์นี้เท่านั้น (ลบแผน สมาชิกหายตาม) — ต้องลบก่อนผู้ใช้ ไม่งั้นติด FK
+    sql(`delete from "TeamDayPlan" where id in (select "planId" from "TeamDayPlanMember" where "userId" in (select id from "User" where "employeeCode"='${T2}'));
+         delete from "User" where "employeeCode"='${T2}'`);
+    sql(`select count(*) from "User" where "employeeCode"='${T2}'`) === "0" ? pass("ลบช่างคนที่สองและแผนงานทดสอบแล้ว (ฐานข้อมูล)") : fail("ช่างทดสอบคนที่สองยังค้าง");
     sql(`delete from "OutsourceTeam" where name='${os}'`);
     if (mach) sql(`update "Machine" set "capacityKg"=${oldCap} where id=${mach}`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
