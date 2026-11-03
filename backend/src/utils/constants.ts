@@ -715,6 +715,8 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   PARTS_PICK_RETURNED: "ตีกลับอะไหล่ให้ช่างแก้",
   // ยี่ห้อเครื่องที่คนเลือกในช่องอะไหล่ / แก้จากหน้าใบงาน — ไม่เดินขั้น (ดู NON_STAGE_ACTIONS ใน routes/workOrders.ts)
   MACHINE_BRAND_SET: "บันทึกยี่ห้อเครื่อง",
+  // อะไหล่จากไฟล์ยี่ห้ออื่นที่คนกดยืนยันตอนบันทึก (เจ้าของงานเลือก 3 พ.ย. 69 — รายครั้ง ไม่จำ) — ไม่เดินขั้น (ดู NON_STAGE_ACTIONS)
+  CROSS_BRAND_PARTS: "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว)",
 };
 
 /**

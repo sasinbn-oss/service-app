@@ -30,6 +30,10 @@
 #      กระดานเครื่องดับ · เปิดใบงานพร้อมอะไหล่รายเครื่อง (ตรวจก่อนสร้างเครื่อง · ทั้งชุด · ยี่ห้อที่รู้แล้วไม่ถูกทับ · waitingParts เดิม)
 #   H2 "+ สร้างใบงาน" จากกระดาน (ยี่ห้อที่รู้แล้วไม่ถูกทับ · อะไหล่ที่รอผิดยี่ห้อบอกครบ · ไม่รู้ยี่ห้อ) · นำเข้าไฟล์ฟอร์ม COCO ไม่ทับยี่ห้อ
 #   I  แก้ยี่ห้อเครื่องจากหน้าใบงาน — สิทธิ์ (ช่าง · ต่างภาค · Area · แอดมินอะไหล่) · ประวัติ · ยี่ห้อจากรายงาน (fromReport) · ยี่ห้อเดิม
+#   K  ใช้อะไหล่ข้ามยี่ห้อเมื่อยืนยัน (เจ้าของงานเลือก 3 พ.ย. 69 — รายครั้ง ไม่จำ ลงประวัติ) · for-brand กลุ่ม others ·
+#      ไม่ส่ง crossBrandOk = 400 เหมือนเดิม · ส่งแล้วบันทึกได้ + ประวัติ CROSS_BRAND_PARTS ก่อนแถวหลัก (ระบุอะไหล่ · ตรวจหน้างาน ·
+#      บันทึกแทน · คอนเฟิร์มต้องยืนยันอีกรอบ · แจ้งปัญหาหน้างาน · อะไหล่ที่ยังขาด · ปิดงาน · หัวหน้าภาคปิดใบ · เปิดใบงาน · กระดาน ·
+#      "+ สร้างใบงาน") · ไม่อยู่ในไฟล์ไหน/นอกสโตร์ของช่างยืนยันไม่ได้ · ไฟล์ของอะไหล่ไม่เปลี่ยน ใบถัดไปต้องยืนยันใหม่
 #
 # อะไหล่ทดสอบสร้างทาง SQL และใส่ไฟล์เอง (source MANUAL) · ช่องยี่ห้อตั้งเป็นข้อความที่ไม่เกี่ยวโดยตั้งใจ —
 # พิสูจน์ว่าการค้นดูไฟล์ ไม่ได้ดูข้อความยี่ห้อ (NB1 มีข้อความ "HB - Huebsch" แต่ไม่อยู่ในไฟล์ไหน ต้องไม่ขึ้นที่ไหนเลย)
@@ -1133,6 +1137,139 @@ R=$(FIX $I2 Oasis $A)
 [ "$(FIXCODE $I1 $AR)|$(FIXCODE $I1 $PA)" = "403|403" ] && [ "$(echo "$(FIX $W5 Maytag $A)" | EMSG)" = "ใบงานนี้ไม่ได้ระบุเครื่อง" ] \
   && [ "$(MODEL $I1C)" = "-|Maytag" ] \
   && pass "Area 403 · แอดมินอะไหล่ 403 · ใบที่ไม่มีเครื่อง → 400" || fail "สิทธิ์แก้ยี่ห้อ: AR=$(FIXCODE $I1 $AR) PA=$(FIXCODE $I1 $PA)"
+
+echo
+echo "═══ K ใช้อะไหล่ข้ามยี่ห้อ — กดยืนยันรายครั้ง ไม่จำ ลงประวัติ (เจ้าของงานเลือก 3 พ.ย. 69)"
+# MT1 = ไฟล์ Maytag อย่างเดียว (ข้ามยี่ห้อบนเครื่อง Huebsch) · NB1 = ไม่อยู่ในไฟล์ไหน (ยืนยันไม่ได้) · OC = ของนอกสโตร์
+XLOGS() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='CROSS_BRAND_PARTS'"; }
+XNOTE() { echo "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): $L_MT1 — อยู่ในไฟล์ Maytag · เครื่อง $1 (${2:-Huebsch})${3:+ · $3}"; }
+MT1_FILES=$(FILES $K-MT1)
+R=$(FB $T Huebsch "$K-MT1")
+[ "$(echo "$R" | J 'd.rows.length+"|"+d.shared.length+"|"+d.others.map(r=>r.partCode.replace("'$K'-","")+":"+r.brandFiles.join("+")+":"+("name" in r)+("partNo" in r)).join(",")+"|"+JSON.stringify(d.elsewhere)')" = '0|0|MT1:Maytag:truetrue|[{"file":"Maytag","exact":true}]' ] \
+  && [ "$(FB $T Huebsch | J 'JSON.stringify(d.others)')" = "[]" ] \
+  && pass "for-brand: MT1 บนเครื่อง Huebsch ขึ้นในกลุ่มที่สาม others (ไฟล์ Maytag · ชื่อ · Part No.) ไม่อยู่ใน rows/shared · elsewhere ยังส่งให้แอปรุ่นก่อน · ไม่มีคำค้น others ว่าง" \
+  || fail "for-brand others: $(echo "$R" | head -c 300)"
+R=$(FB $T Huebsch "$K")
+echo "$R" | J 'const o=d.others.map(r=>r.partCode.replace("'$K'-","")), has=(c)=>o.includes(c); ["MT1","OA1","SZ1"].every(has)&&!["HB1","HB2","HB3","HM1","MO1","OT1","NB1"].some(has)&&d.others.length<=8&&d.others.every(r=>r.brandFiles.length&&!r.brandFiles.includes("Huebsch")&&!r.brandFiles.includes("Other"))?"ok":"bad "+o.join(",")' | grep -q ok \
+  && [ "$(FB $T Electrolux "$K-HB1" | J 'd.rows.length+"|"+d.others.map(r=>r.partCode.replace("'$K'-","")).join(",")')" = "0|HB1" ] \
+  && [ "$(FB $T Huebsch "$K-NB1" | J 'd.others.length')" = "0" ] \
+  && pass "others = ไฟล์ยี่ห้ออื่นเท่านั้น (MT1 OA1 SZ1) — ไม่มีตัวในไฟล์ Huebsch/Other (HM1 MO1 อยู่กลุ่มเดิม) · ไม่อยู่ในไฟล์ไหน (NB1) ไม่ขึ้น · เครื่อง Other ได้ตัวไฟล์ Huebsch" \
+  || fail "others ทั้งไฟล์: $(echo "$R" | J 'd.others.map(r=>r.partCode).join(",")' 2>&1)"
+
+newwo Huebsch "ข้ามยี่ห้อ ระบุอะไหล่"; X1=$WO; X1C=$NC
+R1=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1 $HB1:1)}")
+R2=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $NB1:1 $HB1:1),\"crossBrandOk\":[$NB1]}")
+R3=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $HB1:1),\"crossBrandOk\":[\"x\"]}")
+[ "$(echo "$R1" | EMSG)" = "$(MT_ON $X1C)" ] && [ "$(echo "$R2" | EMSG)" = "$NB_TEXT" ] \
+  && [ "$(echo "$R3" | EMSG)" = "รายการอะไหล่ข้ามยี่ห้อที่ยืนยันไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง" ] \
+  && [ "$(st $X1)|$(WAIT $X1)|$(XLOGS $X1)" = "NEW||0" ] \
+  && pass "ระบุอะไหล่: ไม่ส่ง crossBrandOk → 400 เหมือนเดิม · ยืนยัน NB1 (ไม่อยู่ในไฟล์ไหน) ยัง 400 · crossBrandOk ผิดรูป → 400 ภาษาไทย · ใบไม่ขยับ ไม่มีประวัติ" \
+  || fail "ข้ามยี่ห้อ /parts ปฏิเสธ: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG) / $(echo "$R3" | EMSG)"
+R=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1 $HB1:1),\"crossBrandOk\":[$MT1]}")
+[ "$(st $X1)|$(WAIT $X1)" = "PARTS_SOURCING|HB1x1,MT1x1" ] && [ "$(LASTACTS $X1)" = "CROSS_BRAND_PARTS,PARTS_REQUESTED" ] \
+  && [ "$(LASTNOTE $X1 CROSS_BRAND_PARTS)" = "$(XNOTE $X1C)" ] \
+  && [ "$(DB "select \"userId\"||'|'||status||'|'||(meta->>'machineFile')||'|'||(meta->'parts'->0->>'sparePartId') from \"WorkOrderLog\" where \"workOrderId\"=$X1 and action='CROSS_BRAND_PARTS'")" = "$SID|NEW|Huebsch|$MT1" ] \
+  && [ "$(DET $X1 | J 'd.logs.find(l=>l.action==="CROSS_BRAND_PARTS").actionLabel')" = "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว)" ] \
+  && pass "ระบุอะไหล่ + crossBrandOk [MT1] → บันทึก MT1 ลงใบ · ประวัติ \"ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): … — อยู่ในไฟล์ Maytag · เครื่อง … (Huebsch)\" ก่อนแถวระบุอะไหล่ (คนกด · meta)" \
+  || fail "ข้ามยี่ห้อ /parts: $(echo "$R" | EMSG) · $(st $X1) · $(WAIT $X1) · $(LASTACTS $X1) · $(LASTNOTE $X1 CROSS_BRAND_PARTS)"
+# ไม่จำ: ไฟล์ของ MT1 ไม่เปลี่ยน · ใบถัดไปของเครื่องเดียวกันต้องยืนยันอีก
+X1B=$(OPENWO CM "{\"code\":\"$X1C\",\"symptom\":\"ทดสอบล็อกยี่ห้อ ข้ามยี่ห้อใบที่สอง\"}"); ADDWO "$X1B"
+R=$(SPEC $X1B "{\"needsParts\":true,\"parts\":$(PL $MT1:1)}")
+[ "$(echo "$R" | EMSG)" = "$(MT_ON $X1C)" ] && [ "$(FILES $K-MT1)" = "$MT1_FILES" ] \
+  && pass "ไม่จำ: ไฟล์ยี่ห้อของ MT1 ไม่เปลี่ยน ($MT1_FILES) · ใบที่สองของเครื่องเดียวกันไม่ยืนยัน → 400" \
+  || fail "ข้ามยี่ห้อถูกจำ: $(echo "$R" | EMSG) · $(FILES $K-MT1)"
+
+newinsp Huebsch "ข้ามยี่ห้อ ตรวจหน้างาน"; X3=$WO; X3C=$NC
+R1=$(INS $X3 "{\"note\":\"มอเตอร์เสีย\",\"parts\":$(PL $MT1:1)}")
+R2=$(INS $X3 "{\"note\":\"มอเตอร์เสีย\",\"parts\":$(PL $OC:1),\"crossBrandOk\":[$OC]}")
+[ "$(echo "$R1" | EMSG)" = "$(MT_ON $X3C)" ] && [ "$(echo "$R2" | EMSG)" = "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" ] \
+  && [ "$(st $X3)|$(PICKS $X3)" = "INSPECTING|" ] \
+  && pass "ตรวจหน้างาน (ช่าง): MT1 ไม่ยืนยัน → 400 เหมือนเดิม · ของนอกสโตร์ยืนยันไม่ได้ → 400" \
+  || fail "ข้ามยี่ห้อ /inspection ปฏิเสธ: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
+R=$(INS $X3 "{\"note\":\"มอเตอร์เสีย\",\"parts\":$(PL $MT1:1 $HB1:1),\"crossBrandOk\":[$MT1]}")
+[ "$(st $X3)|$(PICKS $X3)|$(ITEMS $X3)|$(WAIT $X3)" = "NEW|PENDING:1:true|HB1x1:-,MT1x1:-|" ] \
+  && [ "$(LASTACTS $X3 3)" = "CROSS_BRAND_PARTS,INSPECTED,PARTS_PICKED" ] && [ "$(LASTNOTE $X3 CROSS_BRAND_PARTS)" = "$(XNOTE $X3C)" ] \
+  && [ "$(DB "select \"userId\" from \"WorkOrderLog\" where \"workOrderId\"=$X3 and action='CROSS_BRAND_PARTS'")" = "$TID" ] \
+  && pass "ตรวจหน้างาน (ช่าง) + crossBrandOk → รอบรอคอนเฟิร์มมี MT1 (ยังไม่ลงใบ) · ประวัติข้ามยี่ห้อของช่าง ก่อนแถวผลตรวจ" \
+  || fail "ข้ามยี่ห้อ /inspection: $(echo "$R" | EMSG) · $(PICKS $X3) · $(ITEMS $X3) · $(LASTACTS $X3 3)"
+PX=$(PICKID $X3)
+R=$(CONF $X3 "{\"pickId\":$PX}")
+[ "$(echo "$R" | EMSG)" = "ช่างเลือก $L_MT1 ข้ามยี่ห้อ (อยู่ในไฟล์ Maytag) — กดยืนยันใช้อะไหล่ข้ามยี่ห้อก่อนคอนเฟิร์ม หรือตีกลับให้ช่างเลือกใหม่" ] \
+  && [ "$(st $X3)|$(PICKS $X3)|$(WAIT $X3)|$(XLOGS $X3)" = "NEW|PENDING:1:true||1" ] \
+  && pass "คอนเฟิร์มรายการข้ามยี่ห้อของช่าง โดยหัวหน้าภาคไม่ยืนยันเอง → 400 บอกว่าช่างเลือกข้ามยี่ห้อ (ไม่ใช่ \"ยี่ห้อเครื่องเปลี่ยน\") · ไม่มีอะไรเปลี่ยน" \
+  || fail "คอนเฟิร์มไม่ยืนยัน: $(echo "$R" | EMSG) · $(PICKS $X3)"
+R=$(CONF $X3 "{\"pickId\":$PX,\"crossBrandOk\":[$MT1],\"marks\":[{\"sparePartId\":$MT1,\"mark\":\"OK\"},{\"sparePartId\":$HB1,\"mark\":\"OK\"}]}")
+[ "$(st $X3)|$(PICKS $X3)|$(WAIT $X3)" = "PARTS_SOURCING|CONFIRMED:1:true|HB1x1,MT1x1" ] && [ "$(LASTACTS $X3)" = "CROSS_BRAND_PARTS,PARTS_PICK_CONFIRMED" ] \
+  && [ "$(DB "select string_agg(\"userId\"::text, ',' order by id) from \"WorkOrderLog\" where \"workOrderId\"=$X3 and action='CROSS_BRAND_PARTS'")" = "$TID,$SID" ] \
+  && pass "หัวหน้าภาคยืนยันเองแล้วคอนเฟิร์ม → MT1 ลงใบ · ประวัติข้ามยี่ห้อสองแถว (ช่างตอนเลือก · หัวหน้าภาคตอนคอนเฟิร์ม) ก่อนแถวคอนเฟิร์ม" \
+  || fail "คอนเฟิร์มข้ามยี่ห้อ: $(echo "$R" | EMSG) · $(st $X3) · $(WAIT $X3) · $(LASTACTS $X3)"
+newinsp Huebsch "ข้ามยี่ห้อ บันทึกแทน"; X4=$WO
+R=$(INS $X4 "{\"note\":\"บันทึกแทน มอเตอร์เสีย\",\"parts\":$(PL $MT1:1),\"crossBrandOk\":[$MT1]}" $S)
+[ "$(st $X4)|$(PICKS $X4)|$(WAIT $X4)" = "NEW||MT1x1" ] && [ "$(LASTACTS $X4 3)" = "CROSS_BRAND_PARTS,INSPECTED,PARTS_PICKED_ON_BEHALF" ] \
+  && pass "หัวหน้าภาคบันทึกผลตรวจแทน + ยืนยันข้ามยี่ห้อ → MT1 ลงใบเลย + ประวัติข้ามยี่ห้อ" \
+  || fail "บันทึกแทนข้ามยี่ห้อ: $(echo "$R" | EMSG) · $(WAIT $X4) · $(LASTACTS $X4 3)"
+
+inprog Huebsch "ข้ามยี่ห้อ แจ้งปัญหาหน้างาน"; X5=$WO
+R=$(POST $T work-orders/$X5/reassess-parts "{\"reasonCode\":\"PARTS\",\"reason\":\"ต้องใช้มอเตอร์ตัวนี้\",\"parts\":$(PL $MT1:1),\"crossBrandOk\":[$MT1]}")
+inprog Huebsch "ข้ามยี่ห้อ อะไหล่ที่ยังขาด"; X6=$WO; X6C=$NC
+R2=$(POST $T work-orders/$X6/follow-up "{\"parts\":$(PL $MT1:1),\"crossBrandOk\":[$MT1]}")
+for c in $(KIDS $X6); do ADDWO "$c"; done
+CH=$(KIDS $X6)
+[ "$(st $X5)|$(WAIT $X5)" = "NEW|MT1x1" ] && [ "$(LASTACTS $X5)" = "CROSS_BRAND_PARTS,PARTS_ROLLBACK" ] \
+  && [ -n "$CH" ] && [ "$(WAIT $CH)" = "MT1x1" ] && [ "$(LASTACTS $X6)" = "CROSS_BRAND_PARTS,SPLIT" ] \
+  && [ "$(LASTNOTE $X6 CROSS_BRAND_PARTS)" = "$(XNOTE $X6C Huebsch "ลงใบ $(DB "select code from \"WorkOrder\" where id=${CH:-0}")")" ] \
+  && pass "แจ้งปัญหาหน้างาน / อะไหล่ที่ยังขาด + ยืนยัน → MT1 ลงใบ (ใบรออะไหล่) · ประวัติข้ามยี่ห้อก่อนแถวหลัก (อะไหล่ที่ยังขาดบอกเลขใบที่ของไปลง)" \
+  || fail "reassess/follow-up: $(echo "$R" | EMSG) / $(echo "$R2" | EMSG) · $(WAIT $X5) · $(LASTACTS $X5) · ลูก=$CH · $(LASTNOTE $X6 CROSS_BRAND_PARTS)"
+
+inprog Huebsch "ข้ามยี่ห้อ ปิดงาน"; X7=$WO; X7C=$NC
+for r in NAMEPLATE BEFORE AFTER REQUISITION; do UP $X7 "site-photo.png;type=image/png" $r; done
+R1=$(CLOSE $X7 "$(PL $MT1:1)")
+R=$(CLOSE $X7 "$(PL $MT1:1)" "\"crossBrandOk\":[$MT1]")
+[ "$(echo "$R1" | EMSG)" = "$(MT_ON $X7C)" ] && [ "$(st $X7)|$(USED $X7)" = "DONE|MT1x1" ] \
+  && [ "$(LASTACTS $X7)" = "CROSS_BRAND_PARTS,CLOSED" ] && [ "$(LASTNOTE $X7 CROSS_BRAND_PARTS)" = "$(XNOTE $X7C)" ] \
+  && pass "ปิดงาน: MT1 (ไม่อยู่ในใบ) ไม่ยืนยัน → 400 · ยืนยัน → ปิดได้ อะไหล่ที่ใช้ MT1 · ประวัติข้ามยี่ห้อก่อนแถวปิดงาน" \
+  || fail "ปิดงานข้ามยี่ห้อ: $(echo "$R1" | EMSG) / $(echo "$R" | EMSG) · $(st $X7) · $(USED $X7) · $(LASTACTS $X7)"
+inprog Huebsch "ข้ามยี่ห้อ หัวหน้าภาคปิดใบ"; X8=$WO; X8C=$NC
+UP $X8 "site-photo.png;type=image/png" AFTER
+R=$(SCLOSE $X8 "$(PL $MT1:1)" TECH_FIXED "\"crossBrandOk\":[$MT1]")
+[ "$(st $X8)|$(USED $X8)|$(XLOGS $X8)" = "DONE|MT1x1|1" ] && [ "$(LASTNOTE $X8 CROSS_BRAND_PARTS)" = "$(XNOTE $X8C)" ] \
+  && [ "$(LASTACTS $X8 1)" = "CLOSED" ] \
+  && pass "หัวหน้าภาคปิดใบ (ช่างเข้าซ่อมเสร็จแล้ว) + ยืนยัน → ปิดได้ · อะไหล่ที่ใช้ MT1 · ประวัติข้ามยี่ห้อ · ปิดงานยังเป็นแถวล่าสุด" \
+  || fail "หัวหน้าภาคปิดข้ามยี่ห้อ: $(echo "$R" | EMSG) · $(st $X8) · $(USED $X8) · $(LASTACTS $X8 3)"
+newwo Huebsch "ข้ามยี่ห้อ ปิดย้อนหลัง"; X10=$WO; X10C=$NC
+R=$(BCLOSE $X10 "$(PL $MT1:1)" "\"crossBrandOk\":[$MT1]")
+[ "$(st $X10)|$(USED $X10)|$(XLOGS $X10)" = "DONE|MT1x1|1" ] && [ "$(LASTACTS $X10 1)" = "BACKFILLED" ] \
+  && [ "$(DB "select (\"backfilledAt\" is null)||'|'||note from \"WorkOrderLog\" where \"workOrderId\"=$X10 and action='CROSS_BRAND_PARTS'")" = "true|$(XNOTE $X10C)" ] \
+  && pass "แอดมินปิดย้อนหลัง + ยืนยัน → ปิดได้ · อะไหล่ที่ใช้ MT1 · ประวัติข้ามยี่ห้อลงเวลาที่กดจริง (ไม่ติดป้ายกรอกย้อนหลัง) · \"ปิดย้อนหลัง\" ยังเป็นแถวล่าสุด" \
+  || fail "ปิดย้อนหลังข้ามยี่ห้อ: $(echo "$R" | EMSG) · $(st $X10) · $(USED $X10) · $(LASTACTS $X10 3)"
+
+newcode; X9C=$NC
+R=$(TOPEN "{\"code\":\"$X9C\",\"model\":\"Huebsch\",\"symptom\":\"ทดสอบข้ามยี่ห้อเปิดใบ $SUF\",\"parts\":$(PL $MT1:1)}" $T "\"crossBrandOk\":[$MT1]")
+X9=$(echo "$R" | OID); ADDWO "$X9"
+[ "$(WAIT ${X9//[!0-9]/0})|$(MODEL $X9C)" = "MT1x1|-|Huebsch" ] && [ "$(LASTACTS ${X9//[!0-9]/0})" = "CREATED,CROSS_BRAND_PARTS" ] \
+  && [ "$(LASTNOTE ${X9//[!0-9]/0} CROSS_BRAND_PARTS)" = "$(XNOTE $X9C)" ] \
+  && pass "ช่างเปิดใบพร้อม MT1 + ยืนยัน → 201 · อะไหล่ที่รอ MT1 · ประวัติข้ามยี่ห้อต่อจาก \"เปิดใบงาน\" (ไม่ยืนยันยัง 400 — ข้อ H)" \
+  || fail "เปิดใบข้ามยี่ห้อ: $X9 · $(echo "$R" | EMSG 2>/dev/null)"
+
+newoutage Huebsch; XO=$OUTG; XOC=$NC
+R1=$(NOTE $XO "{\"parts\":$(PL $MT1:1)}")
+R=$(NOTE $XO "{\"parts\":$(PL $MT1:1 $HB1:1),\"crossBrandOk\":[$MT1]}")
+[ "$(echo "$R1" | EMSG)" = "$(MT_ON $XOC)" ] && [ "$(OPARTS $XO)" = "HB1x1,MT1x1" ] \
+  && pass "กระดานเครื่องดับ: อะไหล่ที่รอ MT1 ไม่ยืนยัน → 400 · ยืนยัน → บันทึก (ไม่มีใบงาน จึงไม่มีประวัติ)" \
+  || fail "กระดานข้ามยี่ห้อ: $(echo "$R1" | EMSG) / $(echo "$R" | EMSG) · $(OPARTS $XO)"
+R=$(FROMOUT $XO "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบข้ามยี่ห้อจากกระดาน $SUF\"}" $A)
+[ "$(echo "$R" | EMSG)" = "อะไหล่ที่รอบนกระดานไม่ตรงยี่ห้อเครื่อง $XOC (Huebsch): $L_MT1 — แก้ “อะไหล่ที่รอ” บนกระดานก่อน แล้วค่อยกด “+ สร้างใบงาน”" ] \
+  && [ "$(echo "$R" | J 'const c=d.crossBrand; [c.machineCode,c.make,c.parts.map(p=>p.sparePartId+":"+p.partCode+":"+p.files.join("+")).join(",")].join("|")')" = "$XOC|Huebsch|$MT1:$K-MT1:Maytag" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" where \"outageId\"=$XO")" = "0" ] \
+  && [ "$(FROMOUT $OB "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบ $SUF\"}" $A | J 'String(d.crossBrand)')" = "undefined" ] \
+  && pass "\"+ สร้างใบงาน\" จากกระดานที่มี MT1 ไม่ยืนยัน → 400 ข้อความเดิม + crossBrand (ตัวที่ยืนยันได้ ให้แอปถาม) · ไม่เกิดใบ · มีตัวที่ไม่อยู่ในไฟล์ไหนปน → ไม่ส่ง crossBrand" \
+  || fail "from-outage ไม่ยืนยัน: $(echo "$R" | head -c 300)"
+R=$(FROMOUT $XO "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบข้ามยี่ห้อจากกระดาน $SUF\",\"crossBrandOk\":[$MT1]}" $A)
+W=$(echo "$R" | J 'String(d.id??"ERR "+JSON.stringify(d.error))'); ADDWO "$W"
+[ "$(WAIT ${W//[!0-9]/0})" = "HB1x1,MT1x1" ] && [ "$(LASTACTS ${W//[!0-9]/0})" = "CREATED,CROSS_BRAND_PARTS" ] \
+  && [ "$(LASTNOTE ${W//[!0-9]/0} CROSS_BRAND_PARTS)" = "$(XNOTE $XOC)" ] && [ "$(DB "select \"userId\" from \"WorkOrderLog\" where \"workOrderId\"=${W//[!0-9]/0} and action='CROSS_BRAND_PARTS'")" = "$AID" ] \
+  && pass "\"+ สร้างใบงาน\" + ยืนยัน → ใบเปิดพร้อม HB1 + MT1 · ประวัติข้ามยี่ห้อของคนกด ต่อจาก \"เปิดใบงาน\"" \
+  || fail "from-outage ยืนยัน: $W · $(WAIT ${W//[!0-9]/0}) · $(LASTACTS ${W//[!0-9]/0})"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

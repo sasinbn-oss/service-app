@@ -1,5 +1,7 @@
 // ทดสอบ: ขนาดเครื่องในฟอร์ม · เติมของเดิมให้ · เปิดจากกระดานแล้วผู้ติดต่อไม่หาย · ทางกระดานล็อกยี่ห้อที่รู้แล้ว
-// ต้องมี DATABASE_URL — ทางกระดานสร้างเคสเครื่องดับของ W55 เองแล้วลบตอนจบ
+//   · อะไหล่ที่รอบนกระดานอยู่ในไฟล์ยี่ห้ออื่น (บันทึกข้ามยี่ห้อไว้ — เจ้าของงานเลือก 3 พ.ย. 69) → กด "เปิดใบงาน" แล้วถาม
+//     "ใช้อะไหล่ข้ามยี่ห้อ?" → "ใช้ข้ามยี่ห้อ" → ใบเปิดพร้อมอะไหล่นั้น + ประวัติข้ามยี่ห้อ (ฐานข้อมูล)
+// ต้องมี DATABASE_URL — ทางกระดานสร้างเคสเครื่องดับของ W55 และอะไหล่ทดสอบ CAPX… เองแล้วลบตอนจบ
 const { chromium } = require("playwright");
 const { setup } = require("./fixture");
 const { confirmDuplicate } = require("./dup");
@@ -14,6 +16,8 @@ const DIR = __dirname;
   }
   const fx = await setup();
   let outageId = null;
+  // อะไหล่ข้ามยี่ห้อที่รอบนกระดาน (ใส่ทาง SQL) — ลบตอนจบหลังลบใบและเคส
+  const crossCode = `CAPX${process.pid}`;
   // ใช้ chromium ที่ติดตั้งไว้แล้วถ้ามี ไม่งั้นให้ playwright หาเอง
   // PLAYWRIGHT_CHROMIUM ตั้งเองได้ถ้าเครื่องเก็บไว้ที่อื่น
   const browser = await chromium.launch({
@@ -207,6 +211,12 @@ const DIR = __dirname;
     );
     outageId = Number(fx.sql(`select id from "Outage" where symptom='${boardTag}'`)) || null;
     if (!outageId) throw new Error("สร้างเคสเครื่องดับทดสอบไม่ได้");
+    // อะไหล่ที่รอบนกระดานจากไฟล์ยี่ห้ออื่นของ W55 (Spinz — หรือ Haier ถ้า W55 เป็น Spinz) — แบบที่กระดานบันทึกข้ามยี่ห้อไว้แล้ว
+    const w55Make = fx.sql(`select coalesce(nullif(brand,''), model, '') from "Machine" where id=${w55Id}`);
+    const crossFile = /spinz|สปิน/i.test(w55Make) ? "Haier" : "Spinz";
+    fx.sql(`insert into "SparePart"("partCode",name,"offCatalog","updatedAt") values ('${crossCode}','x ปั๊มข้ามยี่ห้อทดสอบกระดาน',false,now())`);
+    fx.sql(`insert into "SparePartBrandFile"("sparePartId",file,source) select id,'${crossFile}','MANUAL' from "SparePart" where "partCode"='${crossCode}'`);
+    fx.sql(`insert into "OutagePart"("outageId","sparePartId",quantity) select ${outageId}, id, 1 from "SparePart" where "partCode"='${crossCode}'`);
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle" });
     await page.waitForTimeout(3000);
     // แอดมินเปิดมาเจอบอร์ดแผนงาน — ไปกระดานผ่านเมนูสามขีดแทนการ์ดในหน้าหลัก
@@ -254,7 +264,21 @@ const DIR = __dirname;
       await page.waitForTimeout(400);
       await attachPhoto(page);
       await submitForm();
+      // อะไหล่ที่รอบนกระดานข้ามยี่ห้อ — เซิร์ฟเวอร์ตอบ 400 พร้อมรายการ แอปถามยืนยันครั้งเดียว แล้วส่งใหม่
+      const asked = await page
+        .getByText("ใช้อะไหล่ข้ามยี่ห้อ?", { exact: true })
+        .locator("visible=true")
+        .first()
+        .waitFor({ timeout: 10000 })
+        .then(() => true)
+        .catch(() => false);
+      const askedPart = (await seen(`${crossCode} x ปั๊มข้ามยี่ห้อทดสอบกระดาน (อยู่ในไฟล์ ${crossFile})`, false)) > 0;
+      const before = fx.sql(`select count(*) from "WorkOrder" where "outageId"=${outageId}`);
+      if (asked) await tap("ใช้ข้ามยี่ห้อ");
       await page.waitForTimeout(5500);
+      asked && askedPart && before === "0"
+        ? pass(`เปิดจากกระดานที่มีอะไหล่ข้ามยี่ห้อ (ไฟล์ ${crossFile}): ถาม "ใช้อะไหล่ข้ามยี่ห้อ?" พร้อมรหัสและไฟล์ ก่อนเปิดใบ (ยังไม่เกิดใบ)`)
+        : fail(`ไม่ถามยืนยันข้ามยี่ห้อตอนเปิดจากกระดาน: กล่อง=${asked} รหัส=${askedPart} ใบก่อนยืนยัน=${before}`);
       await page.screenshot({ path: path.join(DIR, "cap-6-board-detail.png") });
       (await seen("คุณทดสอบกระดาน", false)) > 0
         ? pass("ผู้ติดต่อที่กรอกจากกระดานไม่หาย")
@@ -272,6 +296,17 @@ const DIR = __dirname;
       fx.sql(`select count(*) from "WorkOrder" where "outageId"=${outageId}`) === "1"
         ? pass("ฐานข้อมูล: ใบงานผูกกับเคสเครื่องดับที่สร้างไว้")
         : fail("ฐานข้อมูล: ไม่มีใบงานผูกกับเคสที่สร้างไว้ (กดเคสผิดแถว หรือไม่ได้บันทึก)");
+      const crossWaiting = fx.sql(
+        `select count(*) from "WorkOrderPart" w join "WorkOrder" o on o.id=w."workOrderId" join "SparePart" p on p.id=w."sparePartId"
+         where o."outageId"=${outageId} and p."partCode"='${crossCode}' and w.kind='WAITING'`
+      );
+      const crossLog = fx.sql(
+        `select count(*) from "WorkOrderLog" l join "WorkOrder" o on o.id=l."workOrderId"
+         where o."outageId"=${outageId} and l.action='CROSS_BRAND_PARTS' and l.note like 'ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): ${crossCode} %'`
+      );
+      crossWaiting === "1" && crossLog === "1"
+        ? pass("ฐานข้อมูล: ใบจากกระดานได้อะไหล่ข้ามยี่ห้อเป็นอะไหล่ที่รอ + ประวัติ \"ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว)\"")
+        : fail(`ฐานข้อมูล: อะไหล่ข้ามยี่ห้อในใบ=${crossWaiting} ประวัติ=${crossLog}`);
       const w55After = fx.sql(`select coalesce(brand,'')||'/'||coalesce(model,'') from "Machine" where id=${w55Id}`);
       w55After === w55Brand
         ? pass("ฐานข้อมูล: เปิดจากกระดานแล้วยี่ห้อของ W55 ไม่ถูกเขียนทับ")
@@ -292,6 +327,11 @@ const DIR = __dirname;
       } catch (e) {
         fail(`ลบเคสทดสอบไม่ได้ (Outage id ${outageId}): ${e.message}`);
       }
+    }
+    try {
+      fx.sql(`delete from "SparePart" where "partCode"='${crossCode}'`);
+    } catch (e) {
+      fail(`ลบอะไหล่ทดสอบ ${crossCode} ไม่ได้: ${e.message}`);
     }
     await fx.cleanup();
     await browser.close();

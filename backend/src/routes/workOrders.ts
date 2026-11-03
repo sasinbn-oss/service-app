@@ -100,11 +100,13 @@ import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm
 import {
   MACHINE_BRAND_INVALID,
   Refusal,
-  brandIssue,
-  brandIssues,
+  brandIssuesAll,
   brandFileOf,
-  brandProblem,
+  brandVerdict,
+  crossBrandOkInput,
+  type CrossBrandUse,
   fileList,
+  logCrossBrand,
   machineBrandInput,
   machineBrandOf,
   machineBrandRefusal,
@@ -1218,6 +1220,8 @@ const NON_STAGE_ACTIONS = [
   "URGENT_REQUEST_ANSWERED",
   // บันทึก/แก้ยี่ห้อเครื่อง (ช่องเลือกอะไหล่ · หน้าใบงาน) — ใบอยู่ขั้นเดิม ไม่ใช่การเดินขั้น
   "MACHINE_BRAND_SET",
+  // ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว) — บันทึกคู่กับการบันทึกอะไหล่ แถวหลักของเส้นทางนั้นคือการเดินขั้น ไม่ใช่แถวนี้
+  "CROSS_BRAND_PARTS",
 ];
 
 /**
@@ -3519,6 +3523,8 @@ const createSchema = z.object({
     )
     .max(20)
     .optional(),
+  // อะไหล่ข้ามยี่ห้อที่คนเปิดใบกดยืนยัน (ใช้กับ machines[].parts และ waitingParts) — ไม่ส่ง = ล็อกเหมือนเดิม
+  crossBrandOk: crossBrandOkInput,
 });
 
 /**
@@ -3601,7 +3607,8 @@ function areaTeamMissing(body: z.infer<typeof createSchema>): string[] {
 
 router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = createSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  // crossBrandOk ผิดรูป = ข้อความไทย · ช่องอื่นคงรูปแบบเดิม (parseErrorBody)
+  if (!parsed.success) return res.status(400).json({ error: parseErrorBody(parsed.error) });
   const body = parsed.data;
 
   const branch = await prisma.branch.findUnique({
@@ -3698,16 +3705,19 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
    * อะไหล่รายเครื่องของช่าง = ช่องของช่าง (tech: ไม่รับของนอกสโตร์ · ไม่มีเครื่องเลือกไม่ได้)
    * waitingParts แบบเดิม (แอปเก่า/API) = ช่องของคนอื่น — ใบที่ไม่มีเครื่องไม่ล็อก (ข้อ 22)
    */
+  // crossBrandOk = อะไหล่ข้ามยี่ห้อที่คนเปิดใบกดยืนยัน — ผ่านเฉพาะตัวที่อยู่ในไฟล์ยี่ห้ออื่น และลงประวัติของใบที่ได้อะไหล่นั้น
+  const crossBrandOk = body.crossBrandOk ?? [];
   const brandChecks = wanted.map((entry) => {
     const code = entry.code?.trim() ? normaliseMachineCode(entry.code) : null;
     const machine = code ? machines.get(code) ?? { code, brand: null, model: null } : null;
     const machineBrand = entry.model?.trim() || null;
     // ตรวจชุดที่จะลงใบนี้จริง (ตรงกับที่ส่งให้ createWorkOrder ข้างล่าง)
     return entry.parts !== undefined
-      ? brandProblem({ machine, machineBrand, parts: entry.parts, mode: "tech", noMachineText: "ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้" })
-      : brandProblem({ machine, machineBrand, parts: body.waitingParts ?? [], mode: "other" });
+      ? brandVerdict({ machine, machineBrand, parts: entry.parts, mode: "tech", noMachineText: "ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้", crossBrandOk })
+      : brandVerdict({ machine, machineBrand, parts: body.waitingParts ?? [], mode: "other", crossBrandOk });
   });
-  const brandRefused = (await Promise.all(brandChecks)).find((t) => t);
+  const verdicts = await Promise.all(brandChecks);
+  const brandRefused = verdicts.find((v) => v.problem)?.problem;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
 
   /**
@@ -3748,38 +3758,43 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const created = await prisma.$transaction(
     async (tx) => {
       const ids: number[] = [];
-      for (const entry of wanted) {
+      for (const [i, entry] of wanted.entries()) {
         const code = entry.code?.trim() ? normaliseMachineCode(entry.code) : undefined;
         const machine = code ? machines.get(code)! : null;
 
         // ยี่ห้อกับขนาดเก็บที่ตัวเครื่อง ไม่ใช่ที่ใบงาน — กรอกครั้งนี้แล้วครั้งหน้าขึ้นให้เอง (ยี่ห้อที่รู้แล้วไม่ถูกทับ)
         if (machine) await rememberMachineSpec(tx, machine, entry);
 
-        ids.push(
-          await createWorkOrder(
-            tx,
-            {
-              branchId: branch.id,
-              machineId: machine?.id ?? null,
-              outageId: null,
-              source: "MANUAL",
-              jobType: body.jobType,
-              title,
-              detail: body.detail?.trim() || null,
-              priority: body.priority,
-              assignedToId: body.assignedToId ?? null,
-              scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-              symptom: entry.symptom?.trim() || null,
-              // เปิดใหม่อยู่ขั้นแรก — สถานะเดียวที่ยกมาได้คือที่คนตั้งเอง (รอลูกค้า) ที่เหลือระบบตั้งตามขั้น
-              workStatus: manualOrNull(body.workStatus),
-              contactName: body.contactName?.trim() || null,
-              contactPhone: body.contactPhone?.trim() || null,
-            },
-            // อะไหล่ที่ช่างเลือกให้เครื่องนี้ก่อน · ไม่ส่งช่องนี้มา = รายการเดิมของทั้งคำขอ (แอปเก่า/API)
-            entry.parts ?? body.waitingParts ?? [],
-            req.auth!.userId
-          )
+        const woId = await createWorkOrder(
+          tx,
+          {
+            branchId: branch.id,
+            machineId: machine?.id ?? null,
+            outageId: null,
+            source: "MANUAL",
+            jobType: body.jobType,
+            title,
+            detail: body.detail?.trim() || null,
+            priority: body.priority,
+            assignedToId: body.assignedToId ?? null,
+            scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
+            symptom: entry.symptom?.trim() || null,
+            // เปิดใหม่อยู่ขั้นแรก — สถานะเดียวที่ยกมาได้คือที่คนตั้งเอง (รอลูกค้า) ที่เหลือระบบตั้งตามขั้น
+            workStatus: manualOrNull(body.workStatus),
+            contactName: body.contactName?.trim() || null,
+            contactPhone: body.contactPhone?.trim() || null,
+          },
+          // อะไหล่ที่ช่างเลือกให้เครื่องนี้ก่อน · ไม่ส่งช่องนี้มา = รายการเดิมของทั้งคำขอ (แอปเก่า/API)
+          entry.parts ?? body.waitingParts ?? [],
+          req.auth!.userId
         );
+        /**
+         * อะไหล่ข้ามยี่ห้อที่ยืนยันมา — ลงประวัติของใบที่ได้อะไหล่นั้น ต่อจาก "เปิดใบงาน"
+         * (ไม่ใช่ก่อนแถวหลักแบบเส้นทางอื่น: ใบยังไม่มีอยู่ก่อนแถวเปิดใบ ประวัติที่ขึ้นก่อนการเปิดใบอ่านไม่รู้เรื่อง
+         * แถวนี้อยู่ใน NON_STAGE_ACTIONS ทุกอย่างที่อ่าน "ขั้นล่าสุด" จึงยังเห็นการเปิดใบ)
+         */
+        await logCrossBrand(tx, verdicts[i].cross, { workOrderId: woId, userId: req.auth!.userId, status: "NEW" });
+        ids.push(woId);
       }
       return ids;
     },
@@ -4169,6 +4184,8 @@ const fromOutageSchema = z.object({
     )
     .max(20)
     .optional(),
+  // อะไหล่ข้ามยี่ห้อที่คนกด "+ สร้างใบงาน" ยืนยัน (อะไหล่ที่รอบนกระดานที่ยกมา) — ไม่ส่ง = ล็อกเหมือนเดิม
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res) => {
@@ -4176,7 +4193,7 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
   if (!Number.isInteger(outageId)) return res.status(400).json({ error: "รหัสเคสไม่ถูกต้อง" });
 
   const parsed = fromOutageSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ error: parseErrorBody(parsed.error) });
   const body = parsed.data;
 
   const outage = await prisma.outage.findUnique({
@@ -4215,18 +4232,42 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
    * ยี่ห้อ = ที่เครื่องมีอยู่แล้ว · ยังไม่รู้ = ชิปยี่ห้อในฟอร์ม (ช่อง model) · สัญญาณหายทั้งสาขาไม่มีเครื่อง ไม่ล็อก
    */
   const copyParts = body.waitingParts ?? outage.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }));
+  let cross: CrossBrandUse | null = null;
   if (!isSignalLost && outage.machine && copyParts.length) {
-    const issues = await brandIssues({ machine: outage.machine, machineBrand: body.model, parts: copyParts, mode: "other" });
+    const checked = await brandIssuesAll({
+      machine: outage.machine,
+      machineBrand: body.model,
+      parts: copyParts,
+      mode: "other",
+      crossBrandOk: body.crossBrandOk,
+    });
+    const issues = checked.issues;
+    cross = checked.cross;
     const code = outage.machine.code;
     if (issues.some((i) => i.kind === "noMake")) {
       return res.status(400).json({ error: `เครื่อง ${code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อน (ใช้เทียบกับอะไหล่ที่รอบนกระดาน)` });
     }
     const wrong = issues.filter((i) => i.kind === "noFile" || i.kind === "otherFile");
     if (wrong.length) {
+      /**
+       * ทุกตัวที่ติดเป็นอะไหล่ยี่ห้ออื่นที่รู้ไฟล์ (otherFile) = ยืนยันใช้ข้ามยี่ห้อได้ — ส่งรายการให้แอปถามยืนยันแล้วส่งใหม่พร้อม crossBrandOk
+       * ทำไม: อะไหล่ที่รอบนกระดานอาจถูกบันทึกข้ามยี่ห้อ (ยืนยันแล้ว) — ถ้าไม่มีทางยืนยันอีกครั้ง เคสนั้นเปิดใบไม่ได้เลย
+       * นอกจากเอาอะไหล่ออกจากกระดาน · มีตัวที่ไม่อยู่ในไฟล์ไหนปนอยู่ = ยืนยันไม่ช่วย ไม่ส่งรายการ (ต้องแก้กระดานก่อนตามเดิม)
+       */
+      const confirmable = wrong.every((i) => i.kind === "otherFile" && i.sparePartId);
       return res.status(400).json({
         error: `อะไหล่ที่รอบนกระดานไม่ตรงยี่ห้อเครื่อง ${code} (${wrong[0].make}): ${wrong
           .map((i) => `${i.partCode} ${i.partName}`)
           .join(", ")} — แก้ “อะไหล่ที่รอ” บนกระดานก่อน แล้วค่อยกด “+ สร้างใบงาน”`,
+        ...(confirmable
+          ? {
+              crossBrand: {
+                machineCode: code,
+                make: wrong[0].make,
+                parts: wrong.map((i) => ({ sparePartId: i.sparePartId, partCode: i.partCode, name: i.partName, files: i.files })),
+              },
+            }
+          : {}),
       });
     }
     if (issues.length) return res.status(400).json({ error: issues[0].text });
@@ -4242,7 +4283,7 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
       if (!isSignalLost && outage.machine) {
         await rememberMachineSpec(tx, outage.machine, body);
       }
-      return createWorkOrder(
+      const woId = await createWorkOrder(
         tx,
         {
           branchId: outage.branch.id,
@@ -4271,6 +4312,9 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
         copyParts,
         req.auth!.userId
       );
+      // อะไหล่ที่รอบนกระดานที่ยืนยันใช้ข้ามยี่ห้อ — ต่อจาก "เปิดใบงาน" (เหตุผลเดียวกับเปิดใบงานเอง)
+      await logCrossBrand(tx, cross, { workOrderId: woId, userId: req.auth!.userId, status: "NEW" });
+      return woId;
     },
     { timeout: 30_000, maxWait: 15_000 }
   );
@@ -4696,6 +4740,8 @@ const partsSchema = z.object({
     .optional(),
   // ชิปยี่ห้อเครื่องที่หัวหน้าภาคกดในฟอร์มนี้ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) · จำไว้กับเครื่องตอนบันทึก
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่กดยืนยันในฟอร์มนี้ — ผ่านรายครั้งและลงประวัติ (เจ้าของงานเลือก 3 พ.ย. 69)
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
@@ -4763,10 +4809,10 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
    */
   const machineBrand = parsed.data.machineBrand?.trim() || null;
   const sentQty = mergeLines(parsed.data.parts ?? []);
-  const brandRefused =
-    machineBrandRefusal(wo.machine, machineBrand) ??
-    (needsParts
-      ? await brandProblem({
+  const shapeRefused = machineBrandRefusal(wo.machine, machineBrand);
+  const verdict =
+    !shapeRefused && needsParts
+      ? await brandVerdict({
           machine: wo.machine,
           machineBrand,
           parts: parsed.data.parts ?? [],
@@ -4774,8 +4820,10 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
           legacyIds: before
             .filter((b) => isIssued(b) && sentQty.get(b.sparePartId)?.quantity === b.quantity)
             .map((b) => b.sparePartId),
+          crossBrandOk: parsed.data.crossBrandOk,
         })
-      : null);
+      : null;
+  const brandRefused = shapeRefused ?? verdict?.problem ?? null;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
 
   // รวมเป็นรายการเดียวกันตั้งแต่ตรงนี้ — ข้างล่างไม่ต้องรู้ว่าตัวไหนมี SKU
@@ -4808,6 +4856,8 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
           at: new Date(Date.now() - 1),
         });
       }
+      // อะไหล่ข้ามยี่ห้อที่ยืนยัน — ก่อนแถวระบุอะไหล่เหมือนบันทึกยี่ห้อ (แถวระบุอะไหล่ยังเป็นแถวล่าสุดของใบ)
+      await logCrossBrand(tx, verdict?.cross ?? null, { workOrderId: id, userId: req.auth!.userId, status: "NEW", at: new Date(Date.now() - 1) });
       await saveParts(tx, id, parts, services);
       const partsNote =
         note ||
@@ -4953,6 +5003,11 @@ const pickConfirmSchema = z.object({
   services: listInput(serviceInput, "ค่าบริการใส่", 20).optional(),
   note: textInput("หมายเหตุ", 500).optional(),
   marks: listInput(pickMarkInput, "ป้ายตรง/ไม่ตรงส่ง", 40).optional(),
+  /**
+   * อะไหล่ข้ามยี่ห้อในรายการของช่างที่คนคอนเฟิร์มกดยืนยันอีกครั้ง — ช่างยืนยันตอนเลือกแล้ว แต่คนที่เขียนลงใบคือคนคอนเฟิร์ม
+   * (เจ้าของงาน: ทุกคนที่เลือกอะไหล่ได้ต้องกดยืนยัน · รายครั้ง) จึงไม่ถือคำยืนยันของช่างแทน
+   */
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/:id/parts-pick/confirm", requireAuth, async (req: AuthRequest, res) => {
@@ -4990,14 +5045,20 @@ router.post("/:id/parts-pick/confirm", requireAuth, async (req: AuthRequest, res
     return res.status(400).json({ error: "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม" });
   }
   // ของนอกสโตร์สร้างแถวอะไหล่ (upsert) — ทำหลังผ่านด่านแล้วเท่านั้น
-  const [issue, offLines] = await Promise.all([
-    brandIssue({ machine: wo.machine, parts: open.items, mode: "other" }),
+  const [{ issue, cross }, offLines] = await Promise.all([
+    brandVerdict({ machine: wo.machine, parts: open.items, mode: "other", crossBrandOk: parsed.data.crossBrandOk }),
     resolveOffParts(parsed.data.offParts),
   ]);
   if (issue) {
+    /**
+     * ไฟล์ของเครื่องยังเป็นไฟล์เดียวกับตอนช่างส่ง + อะไหล่อยู่ในไฟล์ยี่ห้ออื่น = ช่างเลือกข้ามยี่ห้อ (ยืนยันตอนเลือกแล้ว)
+     * ไม่ใช่ "ยี่ห้อเครื่องเปลี่ยน" — บอกให้คนคอนเฟิร์มยืนยันเองอีกครั้ง (แอปรุ่นที่ยังไม่ส่ง crossBrandOk ได้ข้อความนี้)
+     */
+    const crossPick = issue.kind === "otherFile" && !!issue.machineFile && open.brandFile === issue.machineFile;
     return res.status(400).json({
-      error:
-        (issue.kind === "noFile" || issue.kind === "otherFile") && issue.partCode && issue.machineFile
+      error: crossPick
+        ? `ช่างเลือก ${issue.partCode} ${issue.partName} ข้ามยี่ห้อ (อยู่ในไฟล์ ${(issue.files ?? []).join(", ")}) — กดยืนยันใช้อะไหล่ข้ามยี่ห้อก่อนคอนเฟิร์ม หรือตีกลับให้ช่างเลือกใหม่`
+        : (issue.kind === "noFile" || issue.kind === "otherFile") && issue.partCode && issue.machineFile
           ? `ยี่ห้อเครื่องเปลี่ยนหลังช่างส่ง — ${issue.partCode} ไม่อยู่ในไฟล์ ${issue.machineFile} หรือของใช้ร่วม ตีกลับให้ช่างเลือกใหม่`
           : issue.text,
     });
@@ -5041,6 +5102,8 @@ router.post("/:id/parts-pick/confirm", requireAuth, async (req: AuthRequest, res
       });
       if (done.count === 0) throw new Refusal(409, PICK_CHANGED);
       await tx.partsPickItem.updateMany({ where: { pickId: open.id }, data: { mark: "OK" } });
+      // ของข้ามยี่ห้อที่คนคอนเฟิร์มยืนยัน — ก่อนแถวคอนเฟิร์ม (แถวคอนเฟิร์มยังเป็นแถวล่าสุดของใบ)
+      await logCrossBrand(tx, cross, { workOrderId: id, userId: req.auth!.userId, status: "NEW", at: new Date(at.getTime() - 1) });
       await saveParts(tx, id, parts, services);
       // อยู่ใน SPEC_ACTIONS — ทุกกติกาของ "รอบระบุอะไหล่" (ผลเช็ครอบก่อน · จ่ายแล้วในใบเดิม · แถบขั้นตอน) นับการคอนเฟิร์มนี้ด้วย
       // meta: กล่องเขียวบนหน้าใบงานอ่านจำนวนและ "ต้องเสนอราคา" จากตรงนี้ ไม่ต้องแกะข้อความ
@@ -7266,6 +7329,8 @@ const inspectionSchema = z.object({
   parts: listInput(pickLineInput, "เลือกอะไหล่", 20).optional(),
   removed: listInput(idInput(PART_ID_TEXT), "เอาอะไหล่เดิมออก", 20).optional(),
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่ช่าง (หรือคนบันทึกแทน) กดยืนยันตอนเลือก — ช่างยืนยันแล้วหัวหน้าภาคยังต้องยืนยันอีกตอนคอนเฟิร์ม
+  crossBrandOk: crossBrandOkInput,
 });
 
 /** "{code} {name}" — ชื่อเรียกอะไหล่ในข้อความประวัติ/ข้อความปฏิเสธของรอบเลือกอะไหล่ (แบบเดียวกับตัวอย่างที่อนุมัติ) */
@@ -7384,14 +7449,15 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
     if ([...sum.values()].some((q) => q > 99)) return res.status(400).json({ error: PICK_QTY_TEXT });
     lines = [...sum].map(([sparePartId, quantity]) => ({ sparePartId, quantity }));
   }
-  const [problem, names] = lines?.length
+  const [verdict, names] = lines?.length
     ? await Promise.all([
-        // ช่องของช่าง (tech) ทุกคนที่กด — หัวหน้าภาคบันทึกแทนก็ต้องตามไฟล์ยี่ห้อเหมือนช่าง
-        brandProblem({ machine: wo.machine, machineBrand, parts: lines, mode: "tech" }),
+        // ช่องของช่าง (tech) ทุกคนที่กด — หัวหน้าภาคบันทึกแทนก็ต้องตามไฟล์ยี่ห้อเหมือนช่าง (ข้ามยี่ห้อได้เมื่อยืนยันเหมือนกัน)
+        brandVerdict({ machine: wo.machine, machineBrand, parts: lines, mode: "tech", crossBrandOk: parsed.data.crossBrandOk }),
         prisma.sparePart.findMany({ where: { id: { in: lines.map((l) => l.sparePartId) } }, select: { id: true, partCode: true, name: true } }),
       ])
     : [null, []];
-  if (problem) return res.status(400).json({ error: problem });
+  if (verdict?.problem) return res.status(400).json({ error: verdict.problem });
+  const cross = verdict?.cross ?? null;
   const nameOf = new Map(names.map((n) => [n.id, n]));
   const lineLabel = (l: { sparePartId: number }) => {
     const n = nameOf.get(l.sparePartId);
@@ -7474,6 +7540,8 @@ router.post("/:id/inspection", requireAuth, async (req: AuthRequest, res) => {
       const done = await tx.workOrder.updateMany({ where: { id, status: "INSPECTING" }, data: moved });
       if (done.count === 0) throw new Refusal(409, STAGE_MOVED_TEXT);
       if (machineBrand && wo.machine) await rememberMachineBrand(tx, wo.machine, machineBrand, brandCtx);
+      // อะไหล่ข้ามยี่ห้อที่ยืนยัน (ช่างเลือก · บันทึกแทน) — เวลาเดียวกับบันทึกยี่ห้อ (at − 1) ก่อนแถวผลตรวจ
+      await logCrossBrand(tx, cross, { workOrderId: id, userId, status: "INSPECTING", at: new Date(at - 1) });
 
       if (lines?.length && !onBehalf) {
         // ── ช่างเลือก → รอหัวหน้าภาคคอนเฟิร์ม · WorkOrderPart ไม่แตะ (ของที่ช่างเอาออกหายจากใบตอนคอนเฟิร์ม) ──
@@ -7654,6 +7722,8 @@ const followUpSchema = z.object({
   note: z.string().trim().max(500).optional(),
   // ชิปยี่ห้อเครื่องที่กดในช่อง "อะไหล่ที่ยังขาด" (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17)
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่กดยืนยันในช่อง "อะไหล่ที่ยังขาด"
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
@@ -7694,15 +7764,18 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
    * ปล่อยผ่านตัวที่อยู่ในใบนี้อยู่แล้ว (รอ/ใช้ไป): บันทึกของที่เบิก/ใช้กับงานนี้จริง ใบเก่าก่อนมีล็อกต้องปิดต่อได้ (D6)
    */
   const machineBrand = parsed.data.machineBrand?.trim() || null;
-  const brandRefused =
-    machineBrandRefusal(wo.machine, machineBrand) ??
-    (await brandProblem({
-      machine: wo.machine,
-      machineBrand,
-      parts: parsed.data.parts,
-      mode: "other",
-      legacyIds: wo.parts.map((p) => p.sparePartId),
-    }));
+  const shapeRefused = machineBrandRefusal(wo.machine, machineBrand);
+  const verdict = shapeRefused
+    ? null
+    : await brandVerdict({
+        machine: wo.machine,
+        machineBrand,
+        parts: parsed.data.parts,
+        mode: "other",
+        legacyIds: wo.parts.map((p) => p.sparePartId),
+        crossBrandOk: parsed.data.crossBrandOk,
+      });
+  const brandRefused = shapeRefused ?? verdict?.problem ?? null;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
 
   const codes = await partCodesText(parsed.data.parts);
@@ -7741,6 +7814,17 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
       // เริ่มที่เช็คอะไหล่ — เสนอราคาหรือไม่ตัดสินตอนเช็คครบ (afterSourcing ใช้กฎเดียวกับ quoteFirst ข้างบน)
       const made = await createFollowUp(tx, id, req.auth!.userId, quoteFirst ? `${note} · ต้องเสนอราคาก่อนนัด` : note);
       await replaceParts(tx, made.id, "WAITING", parsed.data.parts);
+      /**
+       * อะไหล่ข้ามยี่ห้อที่ยืนยัน — ลงที่ใบนี้ (คนกดยืนยันที่ใบนี้ แบบเดียวกับประวัติบันทึกยี่ห้อ) ก่อนแถวแยกใบ
+       * บอกเลขใบรออะไหล่ที่ของไปลง — คนเปิดประวัติใบนี้ตามไปถึงใบที่ใช้ของได้
+       */
+      await logCrossBrand(tx, verdict?.cross ?? null, {
+        workOrderId: id,
+        userId: req.auth!.userId,
+        status: wo.status,
+        at: new Date(Date.now() - 1),
+        tail: `ลงใบ ${made.code}`,
+      });
       await writeLog(tx, id, req.auth!.userId, "SPLIT", wo.status, `เปิด ${made.code} รออะไหล่ — ${note}`);
       return made;
     }, STAGE_TX);
@@ -8282,6 +8366,8 @@ const rollbackSchema = z.object({
     .optional(),
   // ชิปยี่ห้อเครื่องที่ช่างกดในฟอร์มนี้ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17)
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่ช่างกดยืนยันตอนขอเบิกเพิ่ม
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) => {
@@ -8319,9 +8405,17 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
    * ตัวที่ซ้ำกับของเดิมในใบก็คือ "เบิกใหม่" (ของเดิมใช้ไม่ได้) จึงต้องอยู่ในไฟล์ของเครื่องเหมือนกัน
    */
   const machineBrand = parsed.data.machineBrand?.trim() || null;
-  const brandRefused =
-    machineBrandRefusal(wo.machine, machineBrand) ??
-    (await brandProblem({ machine: wo.machine, machineBrand, parts: parsed.data.parts ?? [], mode: "other" }));
+  const shapeRefused = machineBrandRefusal(wo.machine, machineBrand);
+  const verdict = shapeRefused
+    ? null
+    : await brandVerdict({
+        machine: wo.machine,
+        machineBrand,
+        parts: parsed.data.parts ?? [],
+        mode: "other",
+        crossBrandOk: parsed.data.crossBrandOk,
+      });
+  const brandRefused = shapeRefused ?? verdict?.problem ?? null;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
 
   const requested = parsed.data.parts ?? [];
@@ -8373,6 +8467,13 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
           at: new Date(Date.now() - 1),
         });
       }
+      // อะไหล่ข้ามยี่ห้อที่ช่างยืนยัน — ก่อนแถวแจ้งปัญหาหน้างานเหมือนบันทึกยี่ห้อ
+      await logCrossBrand(tx, verdict?.cross ?? null, {
+        workOrderId: id,
+        userId: req.auth!.userId,
+        status: wo.status,
+        at: new Date(Date.now() - 1),
+      });
       await tx.workOrder.update({
         where: { id },
         data:
@@ -8583,6 +8684,8 @@ const closeSchema = z.object({
    * ใช้แค่ล็อกยี่ห้อกับจำไว้ที่เครื่อง — กติกาเคลม/ประกันของใบนี้ยังใช้ยี่ห้อตอนเปิดฟอร์ม (แผนรวม S16) มีผลจากใบถัดไป
    */
   machineBrand: machineBrandInput,
+  // อะไหล่ที่ใช้ไปที่อยู่ในไฟล์ยี่ห้ออื่นและช่างกดยืนยันตอนเลือก (ตัวที่อยู่ในใบอยู่แล้วผ่านโดยไม่ต้องยืนยัน — D6)
+  crossBrandOk: crossBrandOkInput,
 });
 
 /** ด่านกันส่งปิดซ้อนใน /close เจอว่าใบถูกปิดไปก่อนแล้ว — โยนออกจาก transaction ให้ทุกอย่างที่เขียนไปถูกยกเลิก */
@@ -8747,15 +8850,18 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * ชิ้นที่ผ่านเคลมแล้ว (ล็อก) อยู่ในอะไหล่ที่ใช้อยู่แล้ว จึงผ่านด้วยข้อเดียวกัน
    */
   const machineBrand = body.machineBrand?.trim() || null;
-  const brandRefused =
-    machineBrandRefusal(current.machine, machineBrand) ??
-    (await brandProblem({
-      machine: current.machine,
-      machineBrand,
-      parts: body.parts ?? [],
-      mode: "other",
-      legacyIds: current.parts.map((p) => p.sparePartId),
-    }));
+  const shapeRefused = machineBrandRefusal(current.machine, machineBrand);
+  const verdict = shapeRefused
+    ? null
+    : await brandVerdict({
+        machine: current.machine,
+        machineBrand,
+        parts: body.parts ?? [],
+        mode: "other",
+        legacyIds: current.parts.map((p) => p.sparePartId),
+        crossBrandOk: body.crossBrandOk,
+      });
+  const brandRefused = shapeRefused ?? verdict?.problem ?? null;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
 
   /**
@@ -9322,6 +9428,13 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
           at: new Date(now.getTime() - 1),
         });
       }
+      // อะไหล่ข้ามยี่ห้อที่ช่างยืนยัน — หลังด่านกันส่งซ้อนเหมือนกัน · ก่อนแถว "ไม่ส่งเคลม"/ปิดงาน
+      await logCrossBrand(tx, verdict?.cross ?? null, {
+        workOrderId: id,
+        userId: req.auth!.userId,
+        status: nextStatus,
+        at: new Date(now.getTime() - 1),
+      });
 
       // เขียนทับทั้งชุด ไม่ใช่ต่อท้าย เผื่อแอดมินมาแก้ทีหลังว่าใครไปจริง
       await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
@@ -10027,6 +10140,8 @@ const backfillSchema = z.object({
   noPhotoReason: z.string().trim().max(300).optional(),
   // ชิปยี่ห้อเครื่อง (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) · เคลม/ประกันของใบนี้ยังใช้ยี่ห้อที่อ่านก่อนเขียน (แผนรวม S16)
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่แอดมินยืนยัน (ฟอร์มส่งแต่ของในใบซึ่งผ่านอยู่แล้ว — รับไว้ให้ทุกเส้นทางที่รับอะไหล่ทำเหมือนกัน)
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -10064,15 +10179,18 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
    * ฟอร์มนี้ส่งแต่ของที่รู้จักอยู่แล้ว จึงแทบไม่ติด — ที่ติดคือของใหม่ที่ไม่อยู่ในไฟล์ของเครื่อง
    */
   const machineBrand = b.machineBrand?.trim() || null;
-  const brandRefused =
-    machineBrandRefusal(wo.machine, machineBrand) ??
-    (await brandProblem({
-      machine: wo.machine,
-      machineBrand,
-      parts: b.parts ?? [],
-      mode: "other",
-      legacyIds: wo.parts.map((p) => p.sparePartId),
-    }));
+  const shapeRefused = machineBrandRefusal(wo.machine, machineBrand);
+  const verdict = shapeRefused
+    ? null
+    : await brandVerdict({
+        machine: wo.machine,
+        machineBrand,
+        parts: b.parts ?? [],
+        mode: "other",
+        legacyIds: wo.parts.map((p) => p.sparePartId),
+        crossBrandOk: b.crossBrandOk,
+      });
+  const brandRefused = shapeRefused ?? verdict?.problem ?? null;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
   // ใบที่ถูกตีกลับแล้วมีชิ้นที่ผ่าน/ปิดเคลมไปแล้ว — ปิดย้อนหลังเขียนทับอะไหล่ที่ใช้ทั้งชุด ต้องไม่ทำให้ชิ้นนั้นหายจากรายการ
   {
@@ -10158,6 +10276,13 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
             at: new Date(stamp.getTime() - 1),
           });
         }
+        // อะไหล่ข้ามยี่ห้อที่ยืนยัน — เวลาที่กดจริง (ไม่ติด backfilledAt: ไม่ใช่ขั้นที่กรอกย้อนหลัง) ก่อนแถว "ปิดย้อนหลัง"
+        await logCrossBrand(tx, verdict?.cross ?? null, {
+          workOrderId: id,
+          userId: actor,
+          status: wo.status,
+          at: new Date(stamp.getTime() - 1),
+        });
         // ยังไม่ได้ระบุอะไหล่ — ใช้รายการที่ใช้จริงเป็นคำตอบของขั้นนั้น
         if (["NEW", "INSPECT_CONFIRM", "INSPECT_DISPATCH", "INSPECTING"].includes(wo.status)) {
           await log(
@@ -10292,6 +10417,8 @@ const supervisorCloseSchema = z.object({
   parts: z.array(z.object({ sparePartId: z.number().int(), quantity: z.number().int().min(1).max(999) })).max(30).optional(),
   // ชิปยี่ห้อเครื่อง (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) · ใช้แค่ล็อกยี่ห้อกับจำไว้ที่เครื่อง (แผนรวม S16)
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่หัวหน้าภาค/แอดมินยืนยันในช่องอะไหล่ที่ใช้ (เฉพาะ "ช่างเข้าซ่อมเสร็จแล้ว")
+  crossBrandOk: crossBrandOkInput,
 });
 
 router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) => {
@@ -10336,17 +10463,19 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
    * ก่อนกติกาเคลม (ชิ้นที่ล็อก) · ปล่อยผ่านตัวที่อยู่ในใบอยู่แล้ว (รอ/ใช้ไป) — ของที่เบิก/ใช้กับงานนี้จริง (D6)
    */
   const machineBrand = parsed.data.machineBrand?.trim() || null;
-  const brandRefused =
-    machineBrandRefusal(wo.machine, machineBrand) ??
-    (parsed.data.reason === "TECH_FIXED"
-      ? await brandProblem({
+  const shapeRefused = machineBrandRefusal(wo.machine, machineBrand);
+  const verdict =
+    !shapeRefused && parsed.data.reason === "TECH_FIXED"
+      ? await brandVerdict({
           machine: wo.machine,
           machineBrand,
           parts: parsed.data.parts ?? [],
           mode: "other",
           legacyIds: wo.parts.map((p) => p.sparePartId),
+          crossBrandOk: parsed.data.crossBrandOk,
         })
-      : null);
+      : null;
+  const brandRefused = shapeRefused ?? verdict?.problem ?? null;
   if (brandRefused) return res.status(400).json({ error: brandRefused });
   // ยี่ห้อที่กดชิปมา จำไว้กับเครื่อง — หลังปิดรอบของช่าง ลงเวลาก่อนแถวปิดงาน ให้ปิดงานยังเป็นแถวล่าสุดของใบ
   const closedAt = new Date();
@@ -10423,6 +10552,15 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
         // หัวหน้าภาคปิดได้ทุกขั้น — รายการของช่างที่ค้างรอคอนเฟิร์ม/ถูกตีกลับจบไปกับใบ (ไม่ลงประวัติ ลำดับประวัติปิดงานคงเดิม)
         await voidOpenPick(tx, id, "หัวหน้าภาคปิดใบงาน");
         await rememberBrand(tx);
+        // อะไหล่ข้ามยี่ห้อที่ยืนยัน — ก่อนแถวปิดงานเหมือนบันทึกยี่ห้อ (ปิดงานยังเป็นแถวล่าสุดของใบ)
+        if (d.parts) {
+          await logCrossBrand(tx, verdict?.cross ?? null, {
+            workOrderId: id,
+            userId: req.auth!.userId,
+            status: "DONE",
+            at: new Date(closedAt.getTime() - 1),
+          });
+        }
         await tx.workOrderWorker.deleteMany({ where: { workOrderId: id } });
         if (workerIds.length) {
           await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });

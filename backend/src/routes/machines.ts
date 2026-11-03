@@ -36,6 +36,7 @@ import {
 import {
   Refusal,
   brandProblem,
+  crossBrandOkInput,
   fileList,
   machineBrandInput,
   machineBrandRefusal,
@@ -534,6 +535,8 @@ const noteSchema = z.object({
     .optional(),
   // ชิปยี่ห้อเครื่องที่กดในช่องอะไหล่ที่รอ (เครื่องที่ยังไม่รู้ยี่ห้อ — ข้อ 17) · จำไว้กับเครื่องตอนบันทึก
   machineBrand: machineBrandInput,
+  // อะไหล่ข้ามยี่ห้อที่กดยืนยันในช่องอะไหล่ที่รอ — ผ่านรายครั้ง (เจ้าของงานเลือก 3 พ.ย. 69)
+  crossBrandOk: crossBrandOkInput,
 });
 
 /**
@@ -605,6 +608,11 @@ router.patch("/outages/:id/note", requireAuth, async (req: AuthRequest, res) => 
       machineBrand,
       parts: [...wanted.keys()].map((sparePartId) => ({ sparePartId })),
       mode: "other",
+      /**
+       * ข้ามยี่ห้อได้เมื่อกดยืนยัน — แต่ไม่ลงประวัติที่นี่: กระดานไม่มีใบงานให้เขียน และประวัติเคส (OutageNoteLog) ไม่มีช่องข้อความ
+       * (เหตุผลเดียวกับบันทึกยี่ห้อเครื่องจากกระดาน) · ตอน "+ สร้างใบงาน" ยกอะไหล่นี้ไปลงใบ ต้องยืนยันอีกครั้งและลงประวัติของใบนั้น
+       */
+      crossBrandOk: parsed.data.crossBrandOk,
     }));
   if (brandRefused) return res.status(400).json({ error: brandRefused });
 

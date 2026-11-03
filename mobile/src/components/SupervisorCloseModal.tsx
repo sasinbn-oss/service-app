@@ -14,7 +14,7 @@ import TouchableOpacity from "./Tap";
 import AppModal from "./AppModal";
 import Dropdown from "./Dropdown";
 import DateField, { todayBkk } from "./DateField";
-import PartPicker, { brandBlockers, brandBlockText, machineBrandToSend, PickedPart, type PartsBrand } from "./PartPicker";
+import PartPicker, { brandBlockers, brandBlockText, crossBrandField, machineBrandToSend, PickedPart, type PartsBrand } from "./PartPicker";
 import {
   PickedAttachment,
   asList,
@@ -169,6 +169,8 @@ export default function SupervisorCloseModal({
           subTeam: isSub ? subTeam : null,
           parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
           ...(machineBrand ? { machineBrand } : {}),
+          // ตัวที่ยืนยันใช้ข้ามยี่ห้อ — ของที่อยู่ในใบอยู่แล้ว (legacy) ผ่านโดยไม่ต้องยืนยัน
+          ...crossBrandField(parts, order.partsBrand, pickedBrand, { legacyIds: legacy }),
         });
       } else {
         await api.post(`/work-orders/${order.id}/supervisor-close`, { reason, note: note.trim() });

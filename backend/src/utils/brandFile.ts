@@ -6,7 +6,8 @@
  * ช่อง SparePart.brand ยังนำเข้าเหมือนเดิม แต่ใช้แสดง/ค้นหาเท่านั้น ไม่ได้ตัดสินว่าเลือกได้ไหม
  *
  * Other = ของใช้แทนกันได้/ของใช้ในสาขา → ทุกเครื่องเลือกได้ นอกจากไฟล์ยี่ห้อของเครื่องเอง
- * ไฟล์ยี่ห้อด้วยกันไม่ข้ามกัน (Huebsch ↔ Maytag …)
+ * ไฟล์ยี่ห้อด้วยกันไม่ข้ามกัน (Huebsch ↔ Maytag …) — ยกเว้นคนกดยืนยัน "ใช้ข้ามยี่ห้อ" ในการบันทึกครั้งนั้น
+ * (เจ้าของงานเลือก 3 พ.ย. 69 — รายครั้ง ไม่จำ ลงประวัติ: ดู crossBrandOk ใน BrandCheck และ logCrossBrand)
  *
  * กติกาจับคำอยู่ที่ไฟล์นี้ที่เดียว (+ SQL ตั้งต้นใน migration 20261211090000_parts_pick ที่รันครั้งเดียว)
  * tests/lib/fixture-parts.sh ทำ CASE แบบเดียวกับ brandFileOf ทุกบรรทัด และ mobile/src/utils/brandFile.ts มีสำเนาของ brandFileOf
@@ -149,9 +150,24 @@ export const machineBrandInput = z
  * ช่องอื่นของ schema เดิมคงรูปแบบเดิมไว้ ไม่เปลี่ยนพฤติกรรมเส้นทางเดิมเกินช่องที่ก้อนนี้เพิ่ม
  */
 export function parseErrorBody(err: z.ZodError): string | z.typeToFlattenedError<unknown> {
-  const brand = err.issues.find((i) => i.path[0] === "machineBrand");
+  const brand = err.issues.find((i) => i.path[0] === "machineBrand" || i.path[0] === "crossBrandOk");
   return brand ? brand.message : err.flatten();
 }
+
+/**
+ * อะไหล่ข้ามยี่ห้อที่คนกดยืนยันแล้ว (crossBrandOk = id อะไหล่) — เจ้าของงานเลือก 3 พ.ย. 69:
+ * "ทุกคนที่เลือกอะไหล่ได้ ต้องกดยืนยัน" · "เอาแบบเป็นรายครั้ง … แค่ให้ขึ้นเตือนว่าใช้อะไหล่ข้ามยี่ห้อ ให้กดยืนยัน"
+ * ช่องเดียวกันทุกเส้นทางที่รับอะไหล่ — ไม่ส่ง = ล็อกเหมือนเดิม (แอปรุ่นก่อนและเทสต์เดิมยังได้ 400 ตามเดิม)
+ * เพดาน 50 = มากกว่ารายการอะไหล่ที่ยาวที่สุดของทุกฟอร์ม (30) — เกินนั้นคือคำขอผิดรูป ไม่ใช่การยืนยันจริง
+ */
+export const CROSS_BRAND_INVALID = "รายการอะไหล่ข้ามยี่ห้อที่ยืนยันไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง";
+export const crossBrandOkInput = z
+  .array(
+    z.number({ invalid_type_error: CROSS_BRAND_INVALID }).int(CROSS_BRAND_INVALID).positive(CROSS_BRAND_INVALID),
+    { invalid_type_error: CROSS_BRAND_INVALID }
+  )
+  .max(50, CROSS_BRAND_INVALID)
+  .optional();
 
 // ── ปัญหาไฟล์ยี่ห้อของรายการอะไหล่ (brandProblem) ─────────────────────────
 
@@ -165,6 +181,9 @@ export type BrandIssue = {
   partCode?: string;
   /** ชื่ออะไหล่ (noFile/otherFile) — กระดานเครื่องดับต้องบอกรายการที่ไม่ตรงครบทุกตัวเป็น "{รหัส} {ชื่อ}" */
   partName?: string;
+  /** id + ไฟล์ที่อะไหล่อยู่ (otherFile) — ตัวที่ยืนยันใช้ข้ามยี่ห้อได้ ("+ สร้างใบงาน" ส่งให้แอปถามยืนยัน) */
+  sparePartId?: number;
+  files?: string[];
   machineFile?: BrandFile;
   /** ยี่ห้อที่ใช้ตัดสิน (ที่รู้แล้ว หรือชิปที่เพิ่งกด) — ข้อความรวมของกระดานเครื่องดับใส่ในวงเล็บ */
   make?: string;
@@ -182,7 +201,19 @@ export type BrandCheck = {
   legacyIds?: Iterable<number>;
   /** ข้อความแทนกรณีใบไม่มีเครื่อง (ฟอร์มเปิดใบงานพูดว่า "ใส่หมายเลขเครื่องก่อน") */
   noMachineText?: string;
+  /**
+   * id อะไหล่ที่คนกดยืนยัน "ใช้ข้ามยี่ห้อ" ในการบันทึกครั้งนี้ — ผ่านเฉพาะตัวที่อยู่ในไฟล์ยี่ห้ออื่น (otherFile)
+   * ตัวที่ไม่อยู่ในไฟล์ไหน ของนอกสโตร์ของช่าง เครื่องที่ไม่รู้ยี่ห้อ ใบไม่มีเครื่อง ยังถูกปฏิเสธเหมือนเดิม:
+   * ยืนยันได้เฉพาะ "อะไหล่ยี่ห้ออื่นที่รู้ว่าเป็นของยี่ห้อไหน" — ตัวที่ไม่มีไฟล์ยังไม่มีใครรู้ว่าเป็นของอะไร ให้ยืนยันคือให้เดา
+   * ไม่จำไว้ที่ไหน (ไม่เพิ่มอะไหล่เข้าไฟล์ของเครื่อง) — ครั้งหน้าต้องยืนยันอีก
+   */
+  crossBrandOk?: Iterable<number>;
 };
+
+/** อะไหล่ข้ามยี่ห้อหนึ่งตัวที่ผ่านเพราะยืนยัน — files = ไฟล์ที่อะไหล่อยู่จริง (ไม่มีไฟล์ของเครื่อง/Other) */
+export type CrossBrandPart = { sparePartId: number; partCode: string; name: string; files: string[] };
+/** การใช้อะไหล่ข้ามยี่ห้อของการบันทึกครั้งหนึ่ง — ใช้เขียนประวัติ (logCrossBrand) */
+export type CrossBrandUse = { machineCode: string; make: string; machineFile: BrandFile; parts: CrossBrandPart[] };
 
 /**
  * ตรวจว่ารายการอะไหล่เลือกได้กับเครื่องของใบไหม — ปัญหาแรกที่เจอชนะ (ตามลำดับรายการที่ส่งมา)
@@ -192,29 +223,66 @@ export type BrandCheck = {
  * อ่านอะไหล่ทุกตัวในคำสั่งเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ) · ส่งรายการว่างมา = ไม่มีอะไรให้ตรวจ
  */
 export async function brandIssue(opts: BrandCheck, db: Db = prisma): Promise<BrandIssue | null> {
-  return (await issuesOf(opts, db, true))[0] ?? null;
+  return (await checkParts(opts, db, true)).issues[0] ?? null;
 }
 
 /**
  * ทุกตัวที่ไม่ผ่าน (ไม่ใช่แค่ตัวแรก) — ใช้ที่ "+ สร้างใบงาน" จากกระดานเครื่องดับ ซึ่งต้องบอกครบทุกตัวที่ต้องแก้บนกระดาน
  * ไม่งั้นคนแก้ทีละตัวแล้วกดใหม่ทีละรอบ · ไม่รู้ยี่ห้อ/ไม่มีเครื่อง/ช่างใส่ของนอกสโตร์ = ปัญหาเดียวของทั้งรายการ ได้แถวเดียว
+ * cross = ตัวที่ผ่านเพราะยืนยันข้ามยี่ห้อ (ลงประวัติของใบที่เปิด) — อ่านรอบเดียวกับการตรวจ
  */
-export async function brandIssues(opts: BrandCheck, db: Db = prisma): Promise<BrandIssue[]> {
-  return issuesOf(opts, db, false);
+export async function brandIssuesAll(opts: BrandCheck, db: Db = prisma): Promise<{ issues: BrandIssue[]; cross: CrossBrandUse | null }> {
+  const r = await checkParts(opts, db, false);
+  return { issues: r.issues, cross: r.issues.length ? null : crossOf(opts, r) };
 }
 
-async function issuesOf(opts: BrandCheck, db: Db, firstOnly: boolean): Promise<BrandIssue[]> {
+/** ตัวที่ผ่านเพราะยืนยันข้ามยี่ห้อ → รูปที่ใช้เขียนประวัติ (ยี่ห้อ/ไฟล์ = ที่ใช้ตัดสินจริง) */
+function crossOf(
+  opts: BrandCheck,
+  r: { crossed: CrossBrandPart[]; make: string | null; machineFile: BrandFile | null }
+): CrossBrandUse | null {
+  return r.crossed.length && opts.machine && r.make && r.machineFile
+    ? { machineCode: opts.machine.code, make: r.make, machineFile: r.machineFile, parts: r.crossed }
+    : null;
+}
+
+/**
+ * brandProblem + อะไหล่ข้ามยี่ห้อที่ผ่านเพราะยืนยัน (cross) ในการอ่านฐานข้อมูลรอบเดียว — ฐานอยู่ไกล รอบละ ~0.23 วิ
+ * เส้นทางที่ต้องลงประวัติ "ใช้อะไหล่ข้ามยี่ห้อ" ใช้ตัวนี้แทน brandProblem จะได้ไม่อ่านอะไหล่ชุดเดิมซ้ำอีกรอบ
+ * cross = null เมื่อไม่ผ่าน หรือไม่มีตัวไหนผ่านเพราะยืนยัน (ไม่ส่ง crossBrandOk = ไม่มีทางมีค่า)
+ */
+export async function brandVerdict(
+  opts: BrandCheck,
+  db: Db = prisma
+): Promise<{ problem: string | null; issue: BrandIssue | null; cross: CrossBrandUse | null }> {
+  const r = await checkParts(opts, db, true);
+  const issue = r.issues[0] ?? null;
+  return { problem: issue?.text ?? null, issue, cross: issue ? null : crossOf(opts, r) };
+}
+
+/**
+ * ตรวจทุกตัวในรอบเดียว: issues = ตัวที่ไม่ผ่าน (firstOnly = หยุดที่ตัวแรก) · crossed = ตัวที่ผ่านเพราะยืนยันข้ามยี่ห้อ
+ * make/machineFile = ยี่ห้อ/ไฟล์ที่ใช้ตัดสิน (ข้อความประวัติต้องบอกยี่ห้อเดียวกับที่ตัดสิน)
+ */
+async function checkParts(
+  opts: BrandCheck,
+  db: Db,
+  firstOnly: boolean
+): Promise<{ issues: BrandIssue[]; crossed: CrossBrandPart[]; make: string | null; machineFile: BrandFile | null }> {
+  const none = (issues: BrandIssue[]) => ({ issues, crossed: [], make: null, machineFile: null });
   const ids = [...new Set(opts.parts.map((p) => p.sparePartId))];
-  if (ids.length === 0) return [];
+  if (ids.length === 0) return none([]);
   if (!opts.machine) {
-    return opts.mode === "tech"
-      ? [
-          {
-            kind: "noMachine",
-            text: opts.noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน",
-          },
-        ]
-      : [];
+    return none(
+      opts.mode === "tech"
+        ? [
+            {
+              kind: "noMachine",
+              text: opts.noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน",
+            },
+          ]
+        : []
+    );
   }
   const rows = await db.sparePart.findMany({
     where: { id: { in: ids } },
@@ -222,10 +290,12 @@ async function issuesOf(opts: BrandCheck, db: Db, firstOnly: boolean): Promise<B
   });
   const byId = new Map(rows.map((r) => [r.id, r]));
   const legacy = new Set(opts.legacyIds ?? []);
+  const confirmed = new Set(opts.crossBrandOk ?? []);
   // ยี่ห้อที่รู้แล้วชนะชิปเสมอ — ชิปมีไว้สำหรับเครื่องที่ยังไม่รู้ยี่ห้อเท่านั้น (ข้อ 17)
   const make = machineMake(opts.machine) ?? (opts.machineBrand?.trim() || null);
   const machineFile = brandFileOf(make);
   const out: BrandIssue[] = [];
+  const crossed: CrossBrandPart[] = [];
   for (const id of ids) {
     const p = byId.get(id);
     if (!p) {
@@ -236,12 +306,12 @@ async function issuesOf(opts: BrandCheck, db: Db, firstOnly: boolean): Promise<B
     if (p.offCatalog) {
       // ของนอกสโตร์ไม่มีไฟล์ยี่ห้อ ไม่ล็อก (ข้อ 21) — แต่ช่างใส่ตอนตรวจหน้างานไม่ได้ หัวหน้าภาคเป็นคนใส่
       if (opts.mode === "tech")
-        return [{ kind: "offCatalog", text: "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" }];
+        return none([{ kind: "offCatalog", text: "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" }]);
       continue;
     }
     if (legacy.has(id)) continue;
     if (!make || !machineFile) {
-      return [{ kind: "noMake", text: `เครื่อง ${opts.machine.code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่` }];
+      return none([{ kind: "noMake", text: `เครื่อง ${opts.machine.code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่` }]);
     }
     const files = fileList(p.brandFiles);
     if (files.length === 0) {
@@ -258,11 +328,18 @@ async function issuesOf(opts: BrandCheck, db: Db, firstOnly: boolean): Promise<B
     }
     const allowed = allowedFiles(machineFile) as string[];
     if (!files.some((f) => allowed.includes(f))) {
+      // ข้ามยี่ห้อที่คนกดยืนยันในการบันทึกครั้งนี้ — ผ่านรายครั้ง ไม่ได้เพิ่มเข้าไฟล์ (เส้นทางลงประวัติจาก crossed)
+      if (confirmed.has(id)) {
+        crossed.push({ sparePartId: id, partCode: p.partCode, name: p.name, files });
+        continue;
+      }
       const head = `${p.partCode} ${p.name} อยู่ในไฟล์ ${files.join(", ")} — เครื่อง ${opts.machine.code} (${make})`;
       out.push({
         kind: "otherFile",
         partCode: p.partCode,
         partName: p.name,
+        sparePartId: id,
+        files,
         machineFile,
         make,
         text:
@@ -273,12 +350,51 @@ async function issuesOf(opts: BrandCheck, db: Db, firstOnly: boolean): Promise<B
       if (firstOnly) break;
     }
   }
-  return out;
+  return { issues: out, crossed, make, machineFile };
 }
 
 /** brandIssue แบบข้อความอย่างเดียว — null = ผ่าน */
 export async function brandProblem(opts: BrandCheck, db: Db = prisma): Promise<string | null> {
   return (await brandIssue(opts, db))?.text ?? null;
+}
+
+// ── ประวัติ "ใช้อะไหล่ข้ามยี่ห้อ" ────────────────────────────────────────
+
+/** action ของประวัติ — ไม่เดินขั้น (อยู่ใน NON_STAGE_ACTIONS ของ routes/workOrders.ts และ NOT_A_MOVE ของแอป) */
+export const CROSS_BRAND_ACTION = "CROSS_BRAND_PARTS";
+
+/**
+ * "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): {รหัส} {ชื่อ} — อยู่ในไฟล์ {ไฟล์} · เครื่อง {รหัส} ({ยี่ห้อ})"
+ * หลายตัวคั่นด้วย " · " (แต่ละตัวบอกไฟล์ของตัวเอง — ไม่จำเป็นต้องเป็นไฟล์เดียวกัน) · tail = บอกเพิ่มเฉพาะเส้นทาง
+ */
+export function crossBrandNote(u: CrossBrandUse, tail?: string): string {
+  const list = u.parts.map((p) => `${p.partCode} ${p.name} — อยู่ในไฟล์ ${p.files.join(", ")}`).join(" · ");
+  return `ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): ${list} · เครื่อง ${u.machineCode} (${u.make})${tail ? ` · ${tail}` : ""}`;
+}
+
+/**
+ * ลงประวัติการใช้อะไหล่ข้ามยี่ห้อในทรานแซกชันเดียวกับการบันทึก — เจ้าของงานเลือกให้ยืนยันรายครั้งและไม่จำไว้ที่ไหน
+ * ประวัติจึงเป็นที่เดียวที่บอกย้อนหลังได้ว่าใครยอมให้ใช้ของยี่ห้ออื่นกับเครื่องไหน
+ * at = เวลาของแถว: ผู้เรียกส่งเวลาก่อนแถวหลักของเส้นทาง ให้แถวหลักยังเป็นแถวล่าสุดของใบ (แบบเดียวกับ MACHINE_BRAND_SET)
+ * meta = ให้โปรแกรมอ่าน (id อะไหล่ + ไฟล์ของเครื่องตอนนั้น) ไม่ต้องแกะข้อความ · u = null ไม่เขียนอะไร
+ */
+export async function logCrossBrand(
+  tx: Prisma.TransactionClient,
+  u: CrossBrandUse | null,
+  ctx: { workOrderId: number; userId?: number; status: string; at?: Date; tail?: string }
+): Promise<void> {
+  if (!u?.parts.length) return;
+  await tx.workOrderLog.create({
+    data: {
+      workOrderId: ctx.workOrderId,
+      userId: ctx.userId ?? null,
+      action: CROSS_BRAND_ACTION,
+      status: ctx.status,
+      note: crossBrandNote(u, ctx.tail),
+      meta: { machineFile: u.machineFile, parts: u.parts.map((p) => ({ sparePartId: p.sparePartId, files: p.files })) },
+      ...(ctx.at ? { createdAt: ctx.at } : {}),
+    },
+  });
 }
 
 // ── ยี่ห้อเครื่องที่คนเลือกในช่องอะไหล่ (rememberMachineBrand) ─────────────────

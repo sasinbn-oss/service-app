@@ -4,8 +4,12 @@
 //   2) หัวหน้าภาค · ระบุอะไหล่บนเครื่องที่ยังไม่รู้ยี่ห้อ: ต้องกดยี่ห้อก่อน (ไม่มีช่องค้น) → กด Huebsch → หัว "อะไหล่จากไฟล์ Huebsch" ·
 //      ค้นรหัส Maytag → "รหัสนี้อยู่ในไฟล์ Maytag" · ค้นของ Other → ขึ้นใต้ "ของใช้ร่วม (ไฟล์ Other)" · เพิ่มตัว Huebsch แล้วยืนยัน →
 //      ฐานข้อมูล: Machine.model = Huebsch + ประวัติบันทึกยี่ห้อเครื่อง + อะไหล่ที่รอ
-//   3) หัวหน้าภาค · เครื่อง Huebsch ที่มีอะไหล่ Maytag ค้างในใบ: ป้ายแดง "ไม่อยู่ในไฟล์ Huebsch — เอาออกก่อนส่ง" · ปุ่มยืนยันกดไม่ได้ ·
-//      เอาออกแล้วเพิ่มตัว Huebsch → บันทึกได้ (ฐานข้อมูล)
+//   3) หัวหน้าภาค · เครื่อง Huebsch ที่มีอะไหล่ Maytag (MT1) + อะไหล่ที่ไม่อยู่ในไฟล์ไหน (NB1) ค้างในใบ:
+//      MT1 ป้ายส้ม "ข้ามยี่ห้อ" (แถวจากเซิร์ฟเวอร์ = ยืนยันไว้แล้ว ไม่ถามซ้ำ) · NB1 ป้ายแดง "ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เอาออกก่อนส่ง"
+//      ปุ่มยืนยันกดไม่ได้ · เอา NB1 ออก → กดได้ · ข้ามยี่ห้อ (เจ้าของงานเลือก 3 พ.ย. 69): ค้นรหัส Maytag (MT2) → กล่องเหลือง
+//      ชี้ไปกลุ่มที่สาม "อยู่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อยืนยัน" → แตะ → กล่อง "ใช้อะไหล่ข้ามยี่ห้อ?" → ยกเลิก = ไม่เพิ่ม ·
+//      แตะอีกครั้ง → "ใช้ข้ามยี่ห้อ" → แถวขึ้นป้าย "ข้ามยี่ห้อ" · บันทึก → คำขอมี crossBrandOk [MT1, MT2] ·
+//      ฐานข้อมูล: อะไหล่ที่รอ HB2 + MT1 + MT2 · ประวัติ "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): …" 1 แถว · ไฟล์ของ MT2 ไม่เปลี่ยน
 //   4) หัวหน้าภาค · "แก้ยี่ห้อเครื่อง" บนหน้าใบงาน → ชีตแยก (ไม่ซ้อนในฟอร์ม) → บันทึก → ฐานข้อมูล Machine.model + ประวัติ "{เดิม} → {ใหม่}"
 //   5) ฟอร์มปิดงาน (จอ 420 · แอดมินปิดแทนแบบ before-after) บนเครื่องที่ยังไม่รู้ยี่ห้อ: ชิปยี่ห้อในช่อง "อะไหล่ที่ใช้ไป" ·
 //      กด Huebsch เพิ่มตัว Huebsch → ไม่ขาดอะไร · สลับเป็น Maytag → ป้ายแดง + "ยังขาด: เอา … ออกก่อนส่ง" + "ยังขาด 1 อย่าง — พาไป"
@@ -37,6 +41,8 @@ const PARTS = [
   [`${K}-HB1`, "a สายพานทดสอบหน้าจอไฟล์", "Huebsch"],
   [`${K}-HB2`, "b ลูกยางทดสอบหน้าจอไฟล์", "Huebsch"],
   [`${K}-MT1`, "m มอเตอร์ทดสอบหน้าจอไฟล์", "Maytag"],
+  // ข้ามยี่ห้อ (ข้อ 3) — ตัว Maytag ที่ไม่มีในใบ ค้นแล้วต้องขึ้นในกลุ่ม "อยู่ในไฟล์ยี่ห้ออื่น"
+  [`${K}-MT2`, "p ปั๊มน้ำทดสอบหน้าจอไฟล์", "Maytag"],
   [`${K}-OT1`, "o น้ำยาของใช้ร่วมทดสอบหน้าจอ", "Other"],
   // ข้อความยี่ห้อบอก Huebsch แต่ไม่อยู่ในไฟล์ไหน — ช่างต้องเลือกไม่ได้ และต้องขึ้นใต้ "ไม่มียี่ห้อ"
   [`${K}-NB1`, "n ไม่อยู่ในไฟล์ทดสอบหน้าจอ", null],
@@ -103,7 +109,8 @@ const nameOf = (code) => PARTS.find((p) => p[0] === code)[1];
     const KN = await open({ code: MK, model: "Huebsch" }); // เครื่อง Huebsch
     sql(`select coalesce(brand,'')||'|'||coalesce(model,'') from "Machine" where id=${U.mid}`) === "|"
       ? pass(`เตรียม: เครื่อง ${MU} ยังไม่รู้ยี่ห้อ`) : fail(`เครื่อง ${MU} มียี่ห้อแล้ว`);
-    // อะไหล่ Maytag ค้างในใบของเครื่อง Huebsch (ใส่ก่อนมีล็อกยี่ห้อ — ค่าตั้งต้น D6) · ยังไม่เบิก จึงต้องเอาออกก่อนส่ง
+    // อะไหล่ Maytag ค้างในใบของเครื่อง Huebsch — แถวที่อยู่ในใบแล้วนับว่ายืนยันข้ามยี่ห้อแล้ว (ป้ายส้ม ไม่ต้องเอาออก)
+    // NB1 (ใส่ในใบตอนข้อ 3 หลังข้อ 1 คืนเป็นไม่อยู่ในไฟล์ไหน) — ยืนยันข้ามยี่ห้อไม่ได้ ต้องเอาออกก่อนส่ง
     sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind) values (${KN.id},${PID(`${K}-MT1`)},1,'WAITING')`);
 
     // หน้าใหม่ (context ใหม่) ต่อผู้ใช้หนึ่งคน — ไม่ต้องหาปุ่มออกจากระบบ และไม่มีค่าของคนก่อนค้างในเครื่อง
@@ -229,7 +236,8 @@ const nameOf = (code) => PARTS.find((p) => p[0] === code)[1];
       ? pass(`ฐานข้อมูล: เครื่อง ${MU} จำยี่ห้อ Huebsch (Machine.model) + ประวัติบันทึกยี่ห้อเครื่อง + อะไหล่ที่รอ ${K}-HB1`)
       : fail(`หลังบันทึก: model=${model} log=${logs} waiting=${waiting}`);
 
-    // ── 3) เครื่อง Huebsch ที่มีอะไหล่ Maytag ค้างในใบ ──
+    // ── 3) เครื่อง Huebsch ที่มีอะไหล่ Maytag + อะไหล่ที่ไม่อยู่ในไฟล์ไหน ค้างในใบ · เลือกข้ามยี่ห้อ ──
+    sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind) values (${KN.id},${PID(`${K}-NB1`)},1,'WAITING')`);
     await openOrder(KN.code);
     await vis("ระบุอะไหล่").first().click();
     await page.waitForTimeout(1200);
@@ -237,23 +245,76 @@ const nameOf = (code) => PARTS.find((p) => p[0] === code)[1];
     await page.waitForTimeout(1200);
     const save = vis("ยืนยัน").last();
     const op = () => save.evaluate((n) => getComputedStyle(n.closest("[tabindex]") || n.parentElement).opacity);
-    (await vis("ไม่อยู่ในไฟล์ Huebsch — เอาออกก่อนส่ง").count()) > 0 &&
-    (await vis(`เอา ${K}-MT1 ออกก่อนส่ง — อยู่นอกไฟล์ที่เครื่องนี้เลือกได้`).count()) > 0 &&
+    (await vis("ข้ามยี่ห้อ").count()) === 1 &&
+    (await vis("ไม่อยู่ในไฟล์ Huebsch — เอาออกก่อนส่ง").count()) === 0 &&
+    (await vis("ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เอาออกก่อนส่ง").count()) > 0 &&
+    (await vis(`เอา ${K}-NB1 ออกก่อนส่ง — อยู่นอกไฟล์ที่เครื่องนี้เลือกได้`).count()) > 0 &&
     (await op()) !== "1"
-      ? pass("แถว Maytag ที่ค้างในใบ: ป้ายแดง \"ไม่อยู่ในไฟล์ Huebsch — เอาออกก่อนส่ง\" + บอกว่าต้องเอาตัวไหนออก · ปุ่มยืนยันกดไม่ได้")
-      : fail("แถวนอกไฟล์ไม่ติดป้ายแดง / ปุ่มยังกดได้");
+      ? pass("แถวที่ค้างในใบ: Maytag ป้ายส้ม \"ข้ามยี่ห้อ\" (ยืนยันไว้แล้ว ไม่ต้องเอาออก) · ตัวที่ไม่อยู่ในไฟล์ไหนป้ายแดง \"เอาออกก่อนส่ง\" · ปุ่มยืนยันกดไม่ได้")
+      : fail(`แถวที่ค้างในใบ: ข้ามยี่ห้อ=${await vis("ข้ามยี่ห้อ").count()} แดง Huebsch=${await vis("ไม่อยู่ในไฟล์ Huebsch — เอาออกก่อนส่ง").count()} แดง NB1=${await vis("ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เอาออกก่อนส่ง").count()} ปุ่ม=${await op()}`);
     await page.screenshot({ path: path.join(__dirname, "parts-brand-4-red.png") });
-    await label(`เอา ${K}-MT1 ออก`).click();
+    await label(`เอา ${K}-NB1 ออก`).click();
     await page.waitForTimeout(400);
+    (await op()) === "1" ? pass("เอาตัวที่ไม่อยู่ในไฟล์ไหนออกแล้ว ปุ่มยืนยันกดได้ (แถว Maytag ข้ามยี่ห้อไม่กันปุ่ม)") : fail("เอาออกแล้วปุ่มยังกดไม่ได้");
+    const searchK = page.getByPlaceholder("ค้นหาในไฟล์ Huebsch").locator("visible=true").first();
+    await searchK.fill(`${K}-MT2`);
+    await page.waitForTimeout(2000);
+    const crossRow = label(`เพิ่มข้ามยี่ห้อ ${K}-MT2 ${nameOf(`${K}-MT2`)}`);
+    (await vis(`ไม่พบ “${K}-MT2” ในไฟล์ Huebsch — รหัสนี้อยู่ในไฟล์ Maytag`).count()) > 0 &&
+    (await vis("อยู่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อยืนยัน").count()) > 0 &&
+    (await page.getByText(/^ใช้ข้ามยี่ห้อได้ — แตะรายการในกลุ่ม “อยู่ในไฟล์ยี่ห้ออื่น” ข้างล่าง/).locator("visible=true").count()) > 0 &&
+    (await vis(`เครื่องนี้ (${MK} · Huebsch) เลือกได้เฉพาะอะไหล่จากไฟล์ Huebsch และของใช้ร่วม (ไฟล์ Other)`).count()) === 0 &&
+    (await crossRow.count()) > 0 && (await vis("ไฟล์ Maytag").count()) > 0
+      ? pass("ค้นรหัส Maytag: กล่องเหลืองไม่บอกว่าเลือกไม่ได้ แต่ชี้ไปกลุ่มที่สาม \"อยู่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อยืนยัน\" (แถวบอก \"ไฟล์ Maytag\")")
+      : fail("ไม่มีกลุ่มข้ามยี่ห้อ / กล่องเหลืองยังบอกว่าเลือกไม่ได้");
+    await page.screenshot({ path: path.join(__dirname, "parts-brand-4b-cross-group.png") });
+    await crossRow.first().click();
+    await page.waitForTimeout(700);
+    const dialogUp = (await vis("ใช้อะไหล่ข้ามยี่ห้อ?").count()) > 0 && (await vis("ใช้ข้ามยี่ห้อ").count()) > 0;
+    await page.screenshot({ path: path.join(__dirname, "parts-brand-4c-cross-dialog.png") });
+    await vis("ยกเลิก").last().click();
+    await page.waitForTimeout(600);
+    dialogUp && (await label(`จำนวน ${K}-MT2`).count()) === 0 && (await vis("ใช้อะไหล่ข้ามยี่ห้อ?").count()) === 0
+      ? pass("แตะแถวข้ามยี่ห้อ → กล่อง \"ใช้อะไหล่ข้ามยี่ห้อ?\" (ปุ่ม ยกเลิก / ใช้ข้ามยี่ห้อ) · กดยกเลิก = ไม่เพิ่มอะไร")
+      : fail(`กล่องยืนยัน: ขึ้น=${dialogUp} · เพิ่มแล้ว=${await label(`จำนวน ${K}-MT2`).count()}`);
+    if ((await crossRow.count()) === 0) {
+      await searchK.fill(`${K}-MT2`);
+      await page.waitForTimeout(2000);
+    }
+    await crossRow.first().click();
+    await page.waitForTimeout(700);
+    await vis("ใช้ข้ามยี่ห้อ").last().click();
+    await page.waitForTimeout(700);
+    (await label(`จำนวน ${K}-MT2`).count()) > 0 && (await vis("ข้ามยี่ห้อ").count()) === 2 && (await op()) === "1"
+      ? pass("กด \"ใช้ข้ามยี่ห้อ\" → แถว MT2 เข้ารายการพร้อมป้าย \"ข้ามยี่ห้อ\" (ไม่ใช่ป้ายแดง) · ปุ่มยืนยันยังกดได้")
+      : fail(`หลังยืนยัน: แถว=${await label(`จำนวน ${K}-MT2`).count()} ป้าย=${await vis("ข้ามยี่ห้อ").count()} ปุ่ม=${await op()}`);
     await page.getByPlaceholder("ค้นหาในไฟล์ Huebsch").locator("visible=true").first().fill(`${K}-HB2`);
     await page.waitForTimeout(2000);
     await label(`เพิ่ม ${K}-HB2 ${nameOf(`${K}-HB2`)}`).first().click();
     await page.waitForTimeout(600);
-    (await op()) === "1" ? pass("เอาแถวนอกไฟล์ออกแล้ว ปุ่มยืนยันกดได้") : fail("เอาออกแล้วปุ่มยังกดไม่ได้");
+    await page.screenshot({ path: path.join(__dirname, "parts-brand-4d-cross-picked.png") });
+    const partsBodies = [];
+    const onReq = (r) => {
+      if (r.method() === "POST" && new RegExp(`/work-orders/${KN.id}/parts$`).test(r.url())) partsBodies.push(r.postDataJSON());
+    };
+    page.on("request", onReq);
     await save.click();
     await page.waitForTimeout(3500);
-    const waitingK = sql(`select coalesce(string_agg(p."partCode", ','),'') from "WorkOrderPart" w join "SparePart" p on p.id=w."sparePartId" where w."workOrderId"=${KN.id} and w.kind='WAITING'`);
-    waitingK === `${K}-HB2` ? pass(`ฐานข้อมูล: อะไหล่ที่รอเหลือ ${K}-HB2 (Maytag ออกจากใบ)`) : fail(`อะไหล่ที่รอ: ${waitingK}`);
+    page.off("request", onReq);
+    const ok = new Set((partsBodies[0]?.crossBrandOk ?? []).map(String));
+    const waitingK = sql(`select coalesce(string_agg(p."partCode", ',' order by p."partCode"),'') from "WorkOrderPart" w join "SparePart" p on p.id=w."sparePartId" where w."workOrderId"=${KN.id} and w.kind='WAITING'`);
+    const xLog = sql(`select count(*)||'|'||coalesce(max(note),'') from "WorkOrderLog" where "workOrderId"=${KN.id} and action='CROSS_BRAND_PARTS'`);
+    ok.size === 2 && ok.has(PID(`${K}-MT1`)) && ok.has(PID(`${K}-MT2`))
+      ? pass("คำขอบันทึกส่ง crossBrandOk = MT1 (แถวเดิม) + MT2 (เพิ่งยืนยัน) · ไม่มี HB2 (อยู่ในไฟล์ของเครื่อง)")
+      : fail(`crossBrandOk ที่ส่ง: ${JSON.stringify(partsBodies[0]?.crossBrandOk)}`);
+    waitingK === [`${K}-HB2`, `${K}-MT1`, `${K}-MT2`].sort().join(",") &&
+    xLog.startsWith("1|ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): ") &&
+    xLog.includes(`${K}-MT2 ${nameOf(`${K}-MT2`)} — อยู่ในไฟล์ Maytag`) &&
+    xLog.includes(`${K}-MT1 ${nameOf(`${K}-MT1`)} — อยู่ในไฟล์ Maytag`) &&
+    xLog.endsWith(` · เครื่อง ${MK} (Huebsch)`) &&
+    files(`${K}-MT2`) === "Maytag:MANUAL"
+      ? pass(`ฐานข้อมูล: อะไหล่ที่รอ ${waitingK} · ประวัติ "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว)" 1 แถว (MT1 + MT2 · เครื่อง ${MK}) · ไฟล์ของ MT2 ไม่เปลี่ยน (ไม่จำ)`)
+      : fail(`หลังบันทึก: waiting=${waitingK} log=${xLog} files=${files(`${K}-MT2`)}`);
 
     // ── 4) แก้ยี่ห้อเครื่องจากหน้าใบงาน ──
     await openOrder(KN.code);

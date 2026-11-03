@@ -26,6 +26,10 @@
 //      "เลือกยี่ห้อเครื่องก่อน" (ไม่มีช่องค้น) → ชิป Huebsch (aria-selected) เปิดช่องค้น + คำอธิบาย · เครื่องที่สองรู้ยี่ห้อจาก
 //      รายงานอย่างเดียว (brand "HB - Huebsch" · model ว่าง) → ปุ่มล็อก ไม่ถามยี่ห้อ · เปิดใบได้ทั้งสองเครื่อง → ฐานข้อมูล:
 //      model ของเครื่องใหม่ = Huebsch · เครื่องที่สอง model ยังว่าง · อะไหล่ที่เสนอลงเป็นอะไหล่ที่รอของแต่ละใบ
+//   8) ข้ามยี่ห้อ (เจ้าของงานเลือก 3 พ.ย. 69): ช่างเลือก MT1 (ไฟล์ Maytag) บนเครื่อง Huebsch แล้วยืนยัน (ผ่าน API) → จอคอนเฟิร์ม
+//      แถว MT1 ป้าย "ข้ามยี่ห้อ · อยู่ในไฟล์ Maytag" · "ตรงทุกรายการ" → "คอนเฟิร์มอะไหล่" → กล่อง "ใช้อะไหล่ข้ามยี่ห้อ?" →
+//      ยกเลิก = ไม่ส่งอะไร (ฐานข้อมูลยังรอคอนเฟิร์ม) · กดอีกครั้ง → "ใช้ข้ามยี่ห้อ" → ฐานข้อมูล: เช็คอะไหล่ · อะไหล่ที่รอมี MT1 ·
+//      ประวัติข้ามยี่ห้อสองแถว (ช่างตอนเลือก · หัวหน้าภาคตอนคอนเฟิร์ม)
 // หัวหน้าภาคระบุอะไหล่บนเครื่องที่ยังไม่รู้ยี่ห้อ (แผน §8 ข้อ 5) อยู่ใน parts-brand-web-test.js ข้อ 2 แล้ว — ไม่ทำซ้ำที่นี่
 // ผู้ใช้ของชุดนี้เอง (ช่าง ZPPT… ทีมของ C0006 · หัวหน้าภาค ZPPS… ภาคของ C0006) — ไม่ย้ายทีม T001 / ภาค S001:
 // รอบที่ถูกฆ่ากลางทางเคยทิ้ง T001 ไว้ทีมอื่น รอบถัดไปจำค่าผิดเป็น "ค่าเดิม" แล้วชุดอื่นที่ต้องการ T001 ทีมเดิมพังตาม
@@ -775,6 +779,66 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     waiting7(MW5) === `${K}-HB2x1`
       ? pass(`เปิดใบงาน (ฐานข้อมูล): 2 ใบ · ${MW4} Machine.model = Huebsch · ${MW5} model ยังว่าง (brand เดิม) · อะไหล่ที่รอ ${K}-HB1 / ${K}-HB2 ตามเครื่อง`)
       : fail(`เปิดใบงาน: blocked=${blocked} ใบ=${opened7} ${MW4}=${machine7(MW4)} ${MW5}=${machine7(MW5)} รอ=${waiting7(MW4)}/${waiting7(MW5)}`);
+
+    // ── 8) ข้ามยี่ห้อ: ช่างยืนยันตอนเลือกแล้ว หัวหน้าภาคต้องยืนยันเองอีกครั้งตอนคอนเฟิร์ม (รายครั้ง · ทุกคนที่เลือกอะไหล่ได้) ──
+    // ช่างส่งผ่าน API (ช่องเลือกอะไหล่ทดสอบใน parts-brand-web-test.js ข้อ 3) — ข้อนี้ดูจอคอนเฟิร์มของหัวหน้าภาคล้วน ๆ
+    let MW6 = freeCode(MW5);
+    while ([MW, MW2, MW3, MW4].includes(MW6)) MW6 = freeCode(MW5);
+    const o6 = await prep(MW6, "Huebsch", `${SYM}ข้ามยี่ห้อ ${SUF}`);
+    const { id: id6, code: code6 } = o6;
+    const sent6 = await call(T, "POST", `work-orders/${id6}/inspection`, {
+      note: "มอเตอร์ไหม้ ใช้ตัวของ Maytag แทนได้",
+      parts: [{ sparePartId: PID(`${K}-MT1`), quantity: 1 }, { sparePartId: PID(`${K}-HB1`), quantity: 1 }],
+      crossBrandOk: [PID(`${K}-MT1`)],
+    });
+    const pk6 = () => sql(`select coalesce(string_agg(status||':'||round, ',' order by id),'') from "PartsPick" where "workOrderId"=${id6}`);
+    const st6 = () => sql(`select status from "WorkOrder" where id=${id6}`);
+    const waiting6 = () =>
+      sql(`select coalesce(string_agg(p."partCode", ',' order by p."partCode"),'') from "WorkOrderPart" w
+           join "SparePart" p on p.id=w."sparePartId" where w."workOrderId"=${id6} and w.kind='WAITING'`);
+    const xlog6 = () =>
+      sql(`select coalesce(string_agg(u."employeeCode", ',' order by l.id),'') from "WorkOrderLog" l join "User" u on u.id=l."userId"
+           where l."workOrderId"=${id6} and l.action='CROSS_BRAND_PARTS'`);
+    sent6.status === 200 && st6() === "NEW" && pk6() === "PENDING:1" && xlog6() === TC
+      ? pass(`เตรียม ${code6}: ช่างเลือก ${K}-MT1 (ไฟล์ Maytag) + ${K}-HB1 บนเครื่อง Huebsch และยืนยันข้ามยี่ห้อ (ฐานข้อมูล: PENDING · ประวัติข้ามยี่ห้อของช่าง)`)
+      : fail(`เตรียม ${code6}: ${sent6.status} ${st6()} ${pk6()} ${xlog6()} ${JSON.stringify(sent6.data).slice(0, 150)}`);
+    await s.goto(APP, { waitUntil: "networkidle" });
+    await s.waitForTimeout(4000);
+    await label(s, `ทำขั้น คอนเฟิร์มอะไหล่ ${code6}`).first().click();
+    const form6 = await vis(s, "อะไหล่ที่ช่างเลือก · 2 รายการ").first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+    form6 && (await vis(s, "ข้ามยี่ห้อ · อยู่ในไฟล์ Maytag").count()) === 1
+      ? pass("จอคอนเฟิร์ม: แถว MT1 ป้ายส้ม \"ข้ามยี่ห้อ · อยู่ในไฟล์ Maytag\" (แถว HB1 ไม่มีป้าย)")
+      : fail(`จอคอนเฟิร์มไม่บอกว่าข้ามยี่ห้อ: form=${form6} ป้าย=${await vis(s, "ข้ามยี่ห้อ · อยู่ในไฟล์ Maytag").count()}`);
+    await clickTop(label(s, "ตรงทุกรายการ"));
+    await s.waitForTimeout(400);
+    const confirmPosts6 = [];
+    const onReq6 = (r) => {
+      if (r.method() === "POST" && new RegExp(`/work-orders/${id6}/parts-pick/confirm$`).test(r.url())) confirmPosts6.push(r.postDataJSON());
+    };
+    s.on("request", onReq6);
+    await clickTop(label(s, "คอนเฟิร์มอะไหล่"));
+    await s.waitForTimeout(800);
+    const ask6 = (await vis(s, "ใช้อะไหล่ข้ามยี่ห้อ?").count()) > 0 && (await vis(s, "ใช้ข้ามยี่ห้อ").count()) > 0;
+    await s.screenshot({ path: path.join(__dirname, "parts-pick-9-cross-confirm.png") });
+    await vis(s, "ยกเลิก").last().click();
+    await s.waitForTimeout(1200);
+    ask6 && confirmPosts6.length === 0 && st6() === "NEW" && pk6() === "PENDING:1" && waiting6() === ""
+      ? pass("กด \"คอนเฟิร์มอะไหล่\" → กล่อง \"ใช้อะไหล่ข้ามยี่ห้อ?\" ถามหัวหน้าภาคเอง · ยกเลิก = ไม่ส่งคำขอ (ฐานข้อมูลยังรอคอนเฟิร์ม)")
+      : fail(`กล่องยืนยันตอนคอนเฟิร์ม: ขึ้น=${ask6} คำขอ=${confirmPosts6.length} ${st6()} ${pk6()} ${waiting6()}`);
+    await clickTop(label(s, "คอนเฟิร์มอะไหล่"));
+    await s.waitForTimeout(800);
+    await vis(s, "ใช้ข้ามยี่ห้อ").last().click();
+    let done6 = "";
+    for (let i = 0; i < 40 && (done6 = st6()) === "NEW"; i++) await s.waitForTimeout(250);
+    s.off("request", onReq6);
+    const sentIds6 = (confirmPosts6[0]?.crossBrandOk ?? []).join(",");
+    done6 === "PARTS_SOURCING" &&
+    pk6() === "CONFIRMED:1" &&
+    waiting6() === [`${K}-HB1`, `${K}-MT1`].sort().join(",") &&
+    xlog6() === `${TC},${SC}` &&
+    sentIds6 === String(PID(`${K}-MT1`))
+      ? pass(`"ใช้ข้ามยี่ห้อ" → คำขอมี crossBrandOk [MT1] · ฐานข้อมูล: เช็คอะไหล่ · อะไหล่ที่รอ HB1 + MT1 · ประวัติข้ามยี่ห้อสองแถว (ช่าง → หัวหน้าภาค)`)
+      : fail(`คอนเฟิร์มข้ามยี่ห้อ: ${done6} ${pk6()} รอ=${waiting6()} ประวัติ=${xlog6()} ส่ง=${sentIds6}`);
   } catch (e) {
     fail(String(e).split("\n").slice(0, 2).join(" "));
     await page?.screenshot({ path: path.join(__dirname, "parts-pick-fail.png") }).catch(() => {});
