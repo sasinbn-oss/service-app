@@ -115,6 +115,21 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
       return true;
     };
+    /**
+     * กรอบที่วาดล้อมปุ่มของขั้นนี้จริงไหม — "หาเจอ" (data-howto-target=found) บอกแค่ว่าเจอชื่อ ไม่ได้บอกว่าวาดถูกที่
+     * เทียบกรอบ (data-howto-ring) กับปุ่มที่มองเห็นตัวแรกของชื่อนั้น: ปุ่มต้องอยู่ในกรอบทั้งตัว และอยู่ในจอ
+     */
+    const ringHolds = async (id) => {
+      const ring = await page.locator("[data-howto-ring]").boundingBox().catch(() => null);
+      const els = page.locator(`[data-testid="howto-${id}"]`).locator("visible=true");
+      const vp = page.viewportSize();
+      for (let k = 0; k < (await els.count()); k++) {
+        const b = await els.nth(k).boundingBox();
+        if (!ring || !b || b.y < 0 || b.y + b.height > vp.height) continue;
+        if (b.x >= ring.x - 1 && b.y >= ring.y - 1 && b.x + b.width <= ring.x + ring.width + 1 && b.y + b.height <= ring.y + ring.height + 1) return true;
+      }
+      return false;
+    };
     const inertCount = () => page.evaluate(() => document.querySelectorAll("[inert]").length);
     const seenAt = () => sql(`select coalesce("howtoSeen"->'tours'->>'tech.myday','') from "User" where "employeeCode"='${TECH}'`);
     const myDayReads = [];
@@ -129,8 +144,8 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
     await help.first().click();
     const t1 = await waitStep(1);
     const counter1 = await box.getByText("1/7", { exact: true }).count();
-    t1 === "found" && counter1 === 1 && (await attr("data-howto-total")) === "7" && (await attr("data-howto-tour")) === "tech.myday"
-      ? pass("กด ? → กล่องขั้น 1/7 ชี้แถบแท็บ (มือถือ 7 ขั้น)") : fail(`ขั้น 1: ${t1} · 1/7=${counter1} · total=${await attr("data-howto-total")}`);
+    t1 === "found" && counter1 === 1 && (await attr("data-howto-total")) === "7" && (await attr("data-howto-tour")) === "tech.myday" && (await ringHolds("myday.tabs"))
+      ? pass("กด ? → กล่องขั้น 1/7 กรอบล้อมแถบแท็บ (มือถือ 7 ขั้น)") : fail(`ขั้น 1: ${t1} · 1/7=${counter1} · total=${await attr("data-howto-total")} · กรอบล้อมแท็บ ${await ringHolds("myday.tabs")}`);
     (await box.getByText("งานของฉัน", { exact: true }).count()) === 1 ? pass('หัวข้อขั้น 1 "งานของฉัน"') : fail("หัวข้อขั้น 1 ไม่ตรง");
     seenAt() === "" ? pass("เริ่มดูยังไม่จดอะไรในฐานข้อมูล") : fail(`เริ่มแล้วจดทันที: ${seenAt()}`);
     // ชั้นของกล่อง: ลูกของ <body> เหนือ Modal ของ react-native-web (9999) ต่ำกว่าชั้นแจ้งผล/ยืนยัน
@@ -179,12 +194,15 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       ? pass("ลากลงบนพื้นมืด → ไม่รีเฟรช (ไม่มีคำขอ my-day · วงลากรีเฟรชไม่โผล่)") : fail(`ลากบนพื้นมืด: คำขอ my-day ${myDayReads.length - before} · วง ${ball}`);
 
     // ขั้น 2–4 มีของจริงให้ชี้ — ไม่ใช่การ์ดตัวอย่างกลางจอ
+    // ปุ่ม "ถึงหน้างาน" อยู่การ์ดใบที่สอง ใต้แถบเมนูล่างของมือถือ (จุดกลางอยู่ในจอแต่ถูกบัง) — ต้องเลื่อนหาให้ ไม่ใช่ขึ้นกลางจอ
     const real = [];
-    for (const n of [2, 3, 4]) {
+    for (const [n, id] of [[2, "myday.card"], [3, "myday.arrive"], [4, "myday.close"]]) {
       await inBox("ถัดไป").click();
-      real.push(`${n}:${await waitStep(n)}`);
+      real.push(`${n}:${await waitStep(n)}:${(await ringHolds(id)) ? "ล้อม" : "ไม่ล้อม"}`);
+      if (n === 3) await page.screenshot({ path: path.join(DIR, "howto-1b-arrive.png") });
     }
-    real.join(" ") === "2:found 3:found 4:found" ? pass("ขั้น 2–4 ชี้การ์ด · ถึงหน้างาน · ปิดงาน ของจริง") : fail(`ขั้น 2–4: ${real.join(" ")}`);
+    real.join(" ") === "2:found:ล้อม 3:found:ล้อม 4:found:ล้อม"
+      ? pass("ขั้น 2–4 กรอบล้อมการ์ด · ถึงหน้างาน (เลื่อนหาให้) · ปิดงาน ของจริง") : fail(`ขั้น 2–4: ${real.join(" ")}`);
     (await box.getByText("ตัวอย่าง", { exact: true }).count()) === 0 ? pass("มีงานจริงแล้วไม่วาดการ์ดตัวอย่าง") : fail("วาดการ์ดตัวอย่างทั้งที่มีงานจริง");
 
     // ขั้น 5 ลองกดปุ่มสามขีด — ถัดไปกดไม่ได้จนกว่าเมนูเปิด
@@ -219,8 +237,8 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
     const t6 = await waitStep(6);
     const sheet = await box.boundingBox();
     const vp = page.viewportSize();
-    sheet && t6 === "found" && Math.abs(sheet.y + sheet.height - vp.height) <= 1 && Math.abs(sheet.width - vp.width) <= 1 && sheet.x <= 1
-      ? pass("ขั้น 6 (กล่องงานของฉัน ในเมนู) เป็นแผ่นขอบล่าง: ล่างสุดชิดจอ กว้างเต็มจอ") : fail(`ขั้น 6: ${t6} · กล่อง ${JSON.stringify(sheet)}`);
+    sheet && t6 === "found" && Math.abs(sheet.y + sheet.height - vp.height) <= 1 && Math.abs(sheet.width - vp.width) <= 1 && sheet.x <= 1 && (await ringHolds("menu.inbox"))
+      ? pass("ขั้น 6 (กล่องงานของฉัน ในเมนู) เป็นแผ่นขอบล่าง: ล่างสุดชิดจอ กว้างเต็มจอ · กรอบล้อมรายการในเมนู") : fail(`ขั้น 6: ${t6} · กล่อง ${JSON.stringify(sheet)} · กรอบ ${await ringHolds("menu.inbox")}`);
     (await drawerOpen()) ? pass("ขั้นเมนูเปิดเมนูค้างไว้") : fail("ขั้น 6 เมนูไม่เปิด");
     await page.screenshot({ path: path.join(DIR, "howto-2-sheet.png") });
 
@@ -250,7 +268,9 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       ? pass("กลุ่มเมนูที่ย่อไว้กลับเป็นแบบเดิม (ค่าในเครื่องไม่ถูกแตะ)") : fail("ค่ากลุ่มเมนูในเครื่องเปลี่ยน");
 
     // Esc = ข้าม: ไม่จด · แถบข้อความข้ามแล้ว · ไม่เหลือ inert
-    await page.waitForTimeout(3500); // แถบข้อความเก่าหายก่อน
+    // แถบข้อความบนมือถืออยู่บนสุด ทับปุ่ม ? (แตะแถบ = ปิดแถบ) — รอให้หายเองก่อน ไม่งั้นการกดไปโดนแถบแทนปุ่ม
+    await toast.waitFor({ state: "hidden", timeout: 8000 }).catch(() => {});
+    (await toast.count()) === 0 ? pass("แถบข้อความหลังดูจบหายเอง") : fail("แถบข้อความหลังดูจบค้างไม่หาย");
     await help.first().click();
     const esc1 = await waitStep(1);
     await page.keyboard.press("Escape");
@@ -262,6 +282,42 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
     (await inertCount()) === 0 ? pass("ข้ามแล้วไม่เหลือ inert") : fail(`ข้ามแล้วเหลือ inert ${await inertCount()}`);
     await page.screenshot({ path: path.join(DIR, "howto-3-after-esc.png") });
     await ctx.close();
+
+    // โหมดมืด — กล่องใช้สีของธีม (ไม่ใช่กล่องขาวกลางจอมืด) และยังชี้ถูกปุ่ม · ภาพไว้ดูด้วยตา
+    {
+      const d = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+      const dp = await d.newPage();
+      await dp.addInitScript((seed) => {
+        try {
+          localStorage.setItem("otteri-side-groups", seed);
+          localStorage.setItem("otteri-howto-auto", "off");
+          localStorage.setItem("otteri-theme", "dark");
+        } catch {}
+      }, GROUPS_SEED);
+      dp.on("pageerror", (e) => errors.push(`dark: ${e}`));
+      await dp.goto(APP, { waitUntil: "networkidle", timeout: 180000 });
+      await dp.getByPlaceholder("รหัสพนักงาน").fill(TECH);
+      await dp.getByPlaceholder("รหัสผ่าน").fill("test1234");
+      await dp.getByText("เข้าสู่ระบบ", { exact: true }).locator("visible=true").last().click();
+      await dp.waitForTimeout(4000);
+      await dp.locator('[aria-label="วิธีใช้หน้านี้"]').locator("visible=true").first().click();
+      const dBox = dp.locator('[data-otteri-howto] [role="dialog"]');
+      await dBox.waitFor({ timeout: 9000 }).catch(() => {});
+      await dp.waitForTimeout(400);
+      const bg = await dBox.evaluate((el) => getComputedStyle(el).backgroundColor).catch(() => "");
+      await dp.screenshot({ path: path.join(DIR, "howto-4-dark-step1.png") });
+      for (let k = 0; k < 2; k++) {
+        await dBox.locator('[aria-label="ถัดไป"]').click();
+        await dp.waitForTimeout(1200);
+      }
+      const dStep = await dp.locator("[data-howto-tour]").getAttribute("data-howto-step").catch(() => null);
+      const dTarget = await dp.locator("[data-howto-tour]").getAttribute("data-howto-target").catch(() => null);
+      await dp.screenshot({ path: path.join(DIR, "howto-5-dark-arrive.png") });
+      bg && bg !== "rgb(255, 255, 255)" && dStep === "3" && dTarget === "found"
+        ? pass(`โหมดมืด: กล่องใช้สีธีมมืด (${bg}) · ขั้น 3 ชี้ปุ่มถึงหน้างานได้`) : fail(`โหมดมืด: พื้นกล่อง ${bg} · ขั้น ${dStep} ${dTarget}`);
+      await dp.keyboard.press("Escape");
+      await d.close();
+    }
 
     errors.length === 0 ? pass("ไม่มี error ในหน้าเว็บ") : fail(`error ในหน้าเว็บ: ${errors.slice(0, 3).join(" | ")}`);
   } catch (e) {

@@ -15,6 +15,8 @@
 #   · จำนวนแถวหลังกู้เท่าต้นฉบับ · ล็อกอินด้วยรหัสผ่านเดิมได้ · กู้ซ้ำลงฐานที่มีข้อมูลแล้วต้องปฏิเสธ
 #   · สอนการใช้งาน (User.howtoSeen) ตามมาทุกคน: NULL ยังเป็น NULL (= พนักงานเดิม ถ้ากลายเป็นค่าอื่น วิธีใช้เด้งทั้งบริษัท)
 #     และค่าที่เป็น JSON ตรงทุกตัวอักษร — ไม่แตะผู้ใช้ในฐานต้นฉบับ (A001/S001/T001 ต้องคง "ดูแล้ว" ไว้ให้เทสต์เบราว์เซอร์)
+#     ฐานทดสอบหลัง seed:test มีแต่สามคนนั้น (มีค่าทุกคน) — เทียบแล้วไม่มี NULL ให้ตรวจ จึงใส่ผู้ใช้ชั่วคราวสองคน
+#     (ว่าง · มีค่าพร้อมหน้าที่ดูแล้ว) ก่อนสำรอง แล้วลบตอนจบ แบบเดียวกับใบเลือกอะไหล่ชั่วคราว
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -29,6 +31,7 @@ DIR=$(mktemp -d)
 PICK_MARK='restore-test ใบชั่วคราว'
 cleanup() {
   PG -d serviceapp -qc "delete from \"PartsPick\" where note='$PICK_MARK'" >/dev/null 2>&1 || true   # รายการในใบลบตาม (cascade)
+  PG -d serviceapp -qc "delete from \"User\" where \"employeeCode\" like 'zz.restore.howto.%'" >/dev/null 2>&1 || true
   PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null 2>&1 || true; rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -51,6 +54,14 @@ INSERT INTO "PartsPickItem" ("pickId", "sparePartId", quantity, mark)
 SELECT p.id, s.id, 2, 'NO' FROM p, "SparePart" s WHERE s."partCode" = 'SP-BOARD';
 SQL
 SRC_PICKS=$(PG -d serviceapp -Atc "select count(*) from \"PartsPickItem\" i join \"PartsPick\" p on p.id=i.\"pickId\" where p.note='$PICK_MARK'" 2>/dev/null) || SRC_PICKS=0
+
+# ผู้ใช้ชั่วคราวสองคน (เหตุผลอยู่หัวไฟล์) — ไม่มีอะไรอ้างถึง ลบได้ตรง ๆ · ใส่ไม่สำเร็จให้ข้อ 3b รายงานเอง
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<'SQL' || true
+INSERT INTO "User" ("employeeCode", name, role, "passwordHash", "howtoSeen") VALUES
+  ('zz.restore.howto.old', 'พนักงานเดิม ทดสอบกู้คืน', 'EMPLOYEE', 'x', NULL),
+  ('zz.restore.howto.new', 'ดูวิธีใช้แล้ว ทดสอบกู้คืน', 'EMPLOYEE', 'x',
+   '{"notice": "2026-11-03T09:00:00.000Z", "tours": {"tech.myday": "2026-11-03T09:05:00.000Z", "tech.close": "2026-11-03T09:10:00.000Z"}}');
+SQL
 
 # ลายนิ้วมือของ howtoSeen ทุกคน (NULL | มีค่า | md5 ของรหัสผู้ใช้:md5 ค่า เรียงตามรหัส) — อ่านก่อนสำรอง
 # ไม่ใช้ set -e ตายเงียบ: คอลัมน์ยังไม่มี (ยังไม่ migrate) ให้ข้อ 3b รายงานเอง
@@ -99,7 +110,7 @@ DST_HASH=$(PG -d $TMPDB -Atc "select \"passwordHash\" from \"User\" where \"empl
 DST_HOWTO=$(PG -d $TMPDB -Atc "$HOWTO_SQL" 2>/dev/null) || DST_HOWTO=""
 SRC_NULLS=$(echo "$SRC_HOWTO" | cut -d'|' -f1); SRC_SET=$(echo "$SRC_HOWTO" | cut -d'|' -f2)
 if [ -z "$SRC_HOWTO" ] || [ "${SRC_NULLS:-0}" -lt 1 ] || [ "${SRC_SET:-0}" -lt 1 ]; then
-  fail "ต้นฉบับต้องมีผู้ใช้ที่ howtoSeen ว่างและมีค่าอย่างละคนขึ้นไป (ได้ [$SRC_HOWTO]) — migrate user_howto_seen แล้วรัน seed:test ก่อน"
+  fail "ต้นฉบับต้องมีผู้ใช้ที่ howtoSeen ว่างและมีค่าอย่างละคนขึ้นไป (ได้ [$SRC_HOWTO]) — ใส่ผู้ใช้ชั่วคราวไม่สำเร็จ หรือยังไม่ migrate user_howto_seen"
 elif [ "$SRC_HOWTO" = "$DST_HOWTO" ]; then
   pass "สอนการใช้งานตามมาครบ: ว่าง $SRC_NULLS คนยังว่าง (พนักงานเดิม) · มีค่า $SRC_SET คนตรงทุกตัวอักษร"
 else

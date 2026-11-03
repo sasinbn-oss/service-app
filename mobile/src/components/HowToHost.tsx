@@ -99,16 +99,40 @@ function inertPage(): () => void {
  * ปุ่มนี้เป็นตัวที่เห็นจริงไหม — หน้าที่ซ้อนอยู่ข้างหลัง/แท็บที่สลับออกยังอยู่ใน DOM (tests/README) ชื่อซ้ำกันได้
  * ถามเบราว์เซอร์ว่าจุดกลางปุ่มเป็นของใคร · ของที่ inert ไม่ถูกนับ จึงปลด inert ชั่วคราวแค่ช่วงถาม (ไม่มีเฟรมไหนเห็น)
  */
-function onTop(el: Element, r: DOMRect): boolean {
+function topAt(x: number, y: number): Element | null {
   inerted.forEach((n) => (n.inert = false));
   let hits: Element[] = [];
   try {
-    hits = document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    hits = document.elementsFromPoint(x, y);
   } finally {
     inerted.forEach((n) => (n.inert = true));
   }
-  const top = hits.find((h) => !h.closest(`[${LAYER_ATTR}],[data-otteri-overlay]`));
+  return hits.find((h) => !h.closest(`[${LAYER_ATTR}],[data-otteri-overlay]`)) ?? null;
+}
+
+function onTop(el: Element, r: DOMRect): boolean {
+  const top = topAt(r.left + r.width / 2, r.top + r.height / 2);
   return !!top && (top === el || el.contains(top));
+}
+
+/**
+ * เลื่อนหาปุ่มนี้ได้ไหม — อยู่ในกล่องเลื่อนของหน้าที่เห็นอยู่ ไม่ใช่หน้าที่ซ้อนอยู่ข้างหลัง
+ * ปุ่มที่จุดกลางอยู่ในจอแต่ถูกแถบเมนูล่าง/แถบหัวบังอยู่ (การ์ดใบที่สองบนมือถือ) ไม่ผ่าน onTop และไม่ได้อยู่นอกจอ
+ * เดิมจึงไม่ถูกเลื่อนหาเลย ขั้นนั้นขึ้นกลางจอทั้งที่มีปุ่มจริง · ถามจุดกลางของกล่องเลื่อนแทน: ของกล่องนั้นเอง = หน้าที่เห็นอยู่
+ * หน้าข้างหลังไม่ถูกเลื่อนเล่น (ตำแหน่งที่ผู้ใช้เลื่อนค้างไว้ในหน้าที่ซ้อนอยู่ไม่เปลี่ยน)
+ */
+function scrollable(el: Element): boolean {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY;
+    if ((oy !== "auto" && oy !== "scroll") || p.scrollHeight <= p.clientHeight + 1) continue;
+    const r = p.getBoundingClientRect();
+    const top = Math.max(0, r.top);
+    const bottom = Math.min(window.innerHeight, r.bottom);
+    if (bottom <= top) return false;
+    const hit = topAt(Math.max(0, r.left) + Math.min(r.width, window.innerWidth) / 2, (top + bottom) / 2);
+    return !!hit && p.contains(hit);
+  }
+  return false;
 }
 
 /** กรอบรวมของทุกชื่อที่หาเจอ (ขั้นที่ชี้หลายอย่าง เช่นหัวกลุ่ม "รถ" กับสองรายการใต้มัน) · ไม่เจอเลย = null */
@@ -127,15 +151,13 @@ function locate(ids: string[]): Rect | null {
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
       if (cx < 0 || cx > vw) continue; // เมนูที่กำลังเลื่อนออกมา — รอให้ถึงที่ ไม่เลื่อนหน้าไปหา
-      if (cy < 0 || cy > vh) {
-        away = away ?? el;
-        continue;
-      }
-      if (onTop(el, r)) {
+      if (cy >= 0 && cy <= vh && onTop(el, r)) {
         rects.push(r);
         hit = true;
         break;
       }
+      // นอกจอ หรือในจอแต่ถูกแถบบัง — เลื่อนหาได้เฉพาะตัวที่อยู่ในหน้าที่เห็นอยู่
+      if (!away && scrollable(el)) away = el;
     }
     // ชิ้นที่ยังอยู่นอกจอ (เช่นรายการใต้หัวกลุ่มในเมนูยาว) — เลื่อนหาให้ แม้ชิ้นอื่นของขั้นเดียวกันเจอแล้ว
     if (!hit && away) far = far ?? away;
@@ -396,6 +418,8 @@ function WebLayer({ run }: { run: HowToRun }) {
             <View
               pointerEvents="none"
               style={[styles.ring, { left: hole.x, top: hole.y, width: hole.w, height: hole.h, borderColor: tryStep ? colors.warning : colors.primary }]}
+              // เทสต์เทียบกรอบนี้กับปุ่มจริง — "หาเจอ" อย่างเดียวไม่พอ ต้องล้อมปุ่มที่ขั้นนั้นพูดถึง
+              {...({ dataSet: { howtoRing: "1" } } as object)}
             />
           </>
         ) : (
