@@ -35,14 +35,21 @@ async function main() {
     { employeeCode: "S001", name: "หัวหน้าภาคทดสอบ", role: "SUPERVISOR" },
     { employeeCode: "T001", name: "ช่างสมชาย", role: "EMPLOYEE" },
   ];
+  /**
+   * ผู้ใช้ทดสอบ "ตอบกล่องสอนการใช้งานแล้ว" ทั้งกล่องต้อนรับและข้อความสั้น — เทสต์เบราว์เซอร์ราว 55 ชุดล็อกอินเป็นสามคนนี้
+   * ถ้าไม่ตั้ง กล่องจะขึ้นทับหน้าจอ (พื้นมืดกดอะไรไม่ได้) แล้วทุกชุดพังด้วยเหตุที่ไม่เกี่ยว · ตั้งทับทุกครั้ง
+   * หน้าที่เทสต์ดูจบไว้ (tours) จึงถูกล้างทุกรอบ seed — เทสต์วิธีใช้เริ่มจาก "ยังไม่ได้ดู" เสมอ (ดู User.howtoSeen)
+   */
+  const seen = new Date().toISOString();
+  const howtoSeen = { welcome: seen, notice: seen };
   for (const u of users) {
     await prisma.user.upsert({
       where: { employeeCode: u.employeeCode },
       // ไม่ทับ region/team ที่เทสต์ตั้งเอง แต่คืนรหัสผ่านกับตำแหน่งให้ตรงเสมอ
       // ภาคที่เพิ่ม (extraRegions) ล้างทุกครั้ง — ไม่มีเทสต์ไหนพึ่งค่าค้าง และเทสต์หลายภาคที่ล้มกลางทางจะไม่ลาก
       // ภาคแถมไปให้ S001 ในชุดอื่นอีกเป็นพันข้อ (เห็นใบเกินมาแล้วผลเพี้ยนแบบหาสาเหตุยาก) · ทีมที่เพิ่ม (extraTeams) เหตุผลเดียวกัน
-      update: { passwordHash, role: u.role, mustChangePassword: false, extraRegions: [], extraTeams: [] },
-      create: { ...u, passwordHash, mustChangePassword: false },
+      update: { passwordHash, role: u.role, mustChangePassword: false, extraRegions: [], extraTeams: [], howtoSeen },
+      create: { ...u, passwordHash, mustChangePassword: false, howtoSeen },
     });
   }
 

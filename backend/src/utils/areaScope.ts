@@ -74,7 +74,8 @@ export const AREA_OUT_OF_SCOPE = "สาขานี้ไม่อยู่ใ�
  */
 export const AREA_TEAM_ALLOWED: RegExp[] = [
   /^GET \/api\/auth\/me$/,
-  /^POST \/api\/auth\/(change-password|view-as\/stop)$/,
+  // howto = จดว่าตัวเองดูวิธีใช้แล้ว — ทีม Area ต้องบันทึกได้ (เจ้าของงานกำหนด) แม้รอบนี้ยังไม่มีวิธีใช้ของตำแหน่งนี้
+  /^POST \/api\/auth\/(change-password|view-as\/stop|howto)$/,
   // ใบงานซ่อม · กล่องงานของฉัน · รายละเอียดใบงาน
   /^GET \/api\/work-orders\/?$/,
   /^GET \/api\/work-orders\/(version|inbox-count|options|locate)$/,

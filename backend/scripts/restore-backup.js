@@ -34,6 +34,7 @@ const SEEDED_BY_MIGRATION = new Set(["TeamGroup", "OutsourceTeam", "AppSetting",
 //   จนกว่าแอดมินจะอัปโหลดครบ 6 ไฟล์ และหัวช่องเลือกอะไหล่ไม่มีวันที่อัปเดต (SparePartImport.brandFile ว่างหมด)
 // อ่านคำสั่งจากไฟล์ migration ตรง ๆ ไม่ลอกมาไว้ที่นี่ — สองชุดวันหนึ่งจะไม่ตรงกัน (ไฟล์ migration ที่ขึ้นระบบแล้วแก้ไม่ได้อยู่แล้ว)
 // ระบุด้วยคำขึ้นต้นของคำสั่ง แล้วตัดถึง ; ตัวแรก — คำสั่งพวกนี้ไม่มี ; อยู่ข้างใน
+// 20261212090000_user_howto_seen ไม่อยู่ที่นี่โดยตั้งใจ: ไฟล์ก่อน migration นั้นต้องกู้เป็น NULL (= พนักงานเดิม) และส่วน pending อ่าน UsageSlot ซึ่งไม่อยู่ในไฟล์สำรอง
 const REPLAY_IF_DUMP_PREDATES = [
   {
     migration: "20261211090000_parts_pick",

@@ -52,6 +52,9 @@ R=$(curl -s -X POST localhost:4000/api/user-import/commit -H "$(H $A)" -H 'Conte
   && pass "สร้าง 6 อัปเดต 2 ยังไม่มีทีม 2 (OPL โรงซัก, ทีมเสริม)" || fail "ผลนำเข้า: $(echo $R|head -c 160)"
 [ "$(DB "select role||'|'||coalesce(team,'-')||'|'||\"mustChangePassword\" from \"User\" where \"employeeCode\"='990011'")" = "EMPLOYEE|กระบี่|true" ] \
   && pass "DB: ช่างใหม่ได้ทีมตามคู่ และต้องเปลี่ยนรหัสก่อนใช้" || fail "DB ช่างใหม่ไม่ถูก"
+# สอนการใช้งาน: คนใหม่จากไฟล์ = กล่องต้อนรับครั้งแรกที่เข้าแอป · บัญชีที่มีอยู่แล้วไม่ถูกแตะ (ยังเป็นพนักงานเดิม NULL)
+[ "$(DB "select string_agg(\"employeeCode\"||'='||coalesce(\"howtoSeen\"::text,'NULL'), ' ' order by \"employeeCode\") from \"User\" where \"employeeCode\" in ('990011','990013')")" = '990011={"pending": true} 990013=NULL' ] \
+  && pass "DB: คนใหม่จากไฟล์ขึ้นกล่องต้อนรับสอนการใช้งาน (pending) · บัญชีเดิมไม่ถูกแตะ" || fail "howtoSeen: $(DB "select \"employeeCode\", \"howtoSeen\" from \"User\" where \"employeeCode\" in ('990011','990013')")"
 [ "$(DB "select role||'|'||array_to_string(array(select unnest(\"supervisedTeams\") order by 1),',') from \"User\" where \"employeeCode\"='990001'")" = "SUPERVISOR|กระบี่,กรุงเทพ" ] \
   && pass "DB: หัวหน้าภาคดูแลทีมของช่างตัวเอง (กระบี่ + กรุงเทพ)" || fail "ทีมหัวหน้าภาค: $(DB "select array_to_string(\"supervisedTeams\",',') from \"User\" where \"employeeCode\"='990001'")"
 [ "$(DB "select name||'|'||coalesce(team,'-')||'|'||\"passwordHash\" from \"User\" where \"employeeCode\"='990013'")" = "ช่างสาม ทดสอบ (ซี)|กรุงเทพ|x" ] \

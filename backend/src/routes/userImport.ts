@@ -21,6 +21,7 @@ import { displayName, parseRoster, readRows, suggestTeam } from "../users/roster
 import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
 import { teamGroups, teamsOf } from "../utils/teamGroups";
 import { staleUsers } from "../utils/userGate";
+import { HOWTO_NEW } from "../utils/howto";
 
 const router = Router();
 
@@ -171,6 +172,8 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
               supervisedTeams: supTeams,
               passwordHash,
               mustChangePassword: true,
+              // บัญชีใหม่จากไฟล์ = ขึ้นกล่องต้อนรับ "สอนการใช้งาน" ครั้งแรกที่เข้าแอป · คนที่มีบัญชีอยู่แล้วไม่แตะ (ดู User.howtoSeen)
+              howtoSeen: HOWTO_NEW,
             },
           });
           created++;
@@ -343,6 +346,8 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
             role: p.role,
             passwordHash: hashes.get(p.login)!,
             mustChangePassword: true,
+            // ทีม Area ยังไม่มีวิธีใช้รอบนี้ — ตั้งไว้ก่อน วันที่วิธีใช้ของตำแหน่งนี้มา คนใหม่จะได้กล่องต้อนรับโดยไม่ต้องไล่แก้ทีละคน
+            howtoSeen: HOWTO_NEW,
           })),
         });
       }

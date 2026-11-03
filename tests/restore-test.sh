@@ -13,6 +13,8 @@
 #     แถวตั้งต้นจากช่องยี่ห้อจึงได้ 0 แถว สคริปต์กู้ต้องรันส่วนนั้นซ้ำหลังใส่อะไหล่ ไม่งั้นอะไหล่ทุกตัว "ไม่อยู่ในไฟล์ไหน"
 #     รอบกู้ปกติจับเรื่องนี้ไม่ได้ เพราะไฟล์สำรองรุ่นเดียวกับฐานมีตารางนี้อยู่แล้ว
 #   · จำนวนแถวหลังกู้เท่าต้นฉบับ · ล็อกอินด้วยรหัสผ่านเดิมได้ · กู้ซ้ำลงฐานที่มีข้อมูลแล้วต้องปฏิเสธ
+#   · สอนการใช้งาน (User.howtoSeen) ตามมาทุกคน: NULL ยังเป็น NULL (= พนักงานเดิม ถ้ากลายเป็นค่าอื่น วิธีใช้เด้งทั้งบริษัท)
+#     และค่าที่เป็น JSON ตรงทุกตัวอักษร — ไม่แตะผู้ใช้ในฐานต้นฉบับ (A001/S001/T001 ต้องคง "ดูแล้ว" ไว้ให้เทสต์เบราว์เซอร์)
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -50,6 +52,11 @@ SELECT p.id, s.id, 2, 'NO' FROM p, "SparePart" s WHERE s."partCode" = 'SP-BOARD'
 SQL
 SRC_PICKS=$(PG -d serviceapp -Atc "select count(*) from \"PartsPickItem\" i join \"PartsPick\" p on p.id=i.\"pickId\" where p.note='$PICK_MARK'" 2>/dev/null) || SRC_PICKS=0
 
+# ลายนิ้วมือของ howtoSeen ทุกคน (NULL | มีค่า | md5 ของรหัสผู้ใช้:md5 ค่า เรียงตามรหัส) — อ่านก่อนสำรอง
+# ไม่ใช้ set -e ตายเงียบ: คอลัมน์ยังไม่มี (ยังไม่ migrate) ให้ข้อ 3b รายงานเอง
+HOWTO_SQL='select count(*) filter (where "howtoSeen" is null)||$$|$$||count(*) filter (where "howtoSeen" is not null)||$$|$$||md5(string_agg("employeeCode"||$$:$$||coalesce(md5("howtoSeen"::text),$$NULL$$), $$,$$ order by "employeeCode")) from "User"'
+SRC_HOWTO=$(PG -d serviceapp -Atc "$HOWTO_SQL" 2>/dev/null) || SRC_HOWTO=""
+
 # 1) ไฟล์สำรองจากฐานข้อมูลที่ใช้เทสต์ — ฟังก์ชันเดียวกับปุ่มสำรองข้อมูล
 node_modules/.bin/ts-node --transpile-only -e "
   import { writeBackupFiles } from './src/backup/backup';
@@ -86,6 +93,18 @@ SRC_SINCE=$(PG -d serviceapp -Atc "$SINCE_SQL"); DST_SINCE=$(PG -d $TMPDB -Atc "
 SRC_HASH=$(PG -d serviceapp -Atc "select \"passwordHash\" from \"User\" where \"employeeCode\"='A001'")
 DST_HASH=$(PG -d $TMPDB -Atc "select \"passwordHash\" from \"User\" where \"employeeCode\"='A001'")
 [ -n "$SRC_HASH" ] && [ "$SRC_HASH" = "$DST_HASH" ] && pass "รหัสผ่านเดิมตามมา (A001)" || fail "รหัสผ่านไม่ตามมา"
+
+# 3b) สอนการใช้งาน — ต้นฉบับต้องมีทั้ง NULL และค่า JSON (ไม่งั้นเทียบแล้วผ่านโดยไม่ได้ตรวจอะไร: seed:test ตั้งค่าให้ A001/S001/T001
+#     ส่วนผู้ใช้ที่สร้างด้วย SQL เป็น NULL) · หลังกู้ต้องตรงทุกคน — NULL ไม่ถูกเติมค่าตั้งต้น และ JSON ไม่เพี้ยน
+DST_HOWTO=$(PG -d $TMPDB -Atc "$HOWTO_SQL" 2>/dev/null) || DST_HOWTO=""
+SRC_NULLS=$(echo "$SRC_HOWTO" | cut -d'|' -f1); SRC_SET=$(echo "$SRC_HOWTO" | cut -d'|' -f2)
+if [ -z "$SRC_HOWTO" ] || [ "${SRC_NULLS:-0}" -lt 1 ] || [ "${SRC_SET:-0}" -lt 1 ]; then
+  fail "ต้นฉบับต้องมีผู้ใช้ที่ howtoSeen ว่างและมีค่าอย่างละคนขึ้นไป (ได้ [$SRC_HOWTO]) — migrate user_howto_seen แล้วรัน seed:test ก่อน"
+elif [ "$SRC_HOWTO" = "$DST_HOWTO" ]; then
+  pass "สอนการใช้งานตามมาครบ: ว่าง $SRC_NULLS คนยังว่าง (พนักงานเดิม) · มีค่า $SRC_SET คนตรงทุกตัวอักษร"
+else
+  fail "howtoSeen หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_HOWTO] · หลังกู้ [$DST_HOWTO]"
+fi
 
 # 4) กู้ซ้ำลงฐานที่มีข้อมูลแล้ว ต้องปฏิเสธ ไม่เขียนทับ
 OUT=$(DATABASE_URL="$TMP_URL" node scripts/restore-backup.js "$DIR/backup.json.gz" --yes 2>&1) && fail "กู้ทับฐานที่มีข้อมูลได้" \
