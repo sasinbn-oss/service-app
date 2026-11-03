@@ -72,6 +72,7 @@ import { pageEnterLayout } from "../components/PageEnter";
 import AreaOnlyGate from "../components/AreaOnlyGate";
 import HowToButton from "../components/HowToButton";
 import HowToHost from "../components/HowToHost";
+import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
 import {
   AdminStackParamList,
@@ -104,6 +105,7 @@ const OWN_TITLE = new Set([
   "ManageSpareParts",
   "AdminMenu",
   "HistoryMenu",
+  "HowTo",
 ]);
 
 /**
@@ -508,6 +510,7 @@ function HomeStackNavigator() {
         component={ChangePasswordScreen}
         options={{ title: "เปลี่ยนรหัสผ่าน" }}
       />
+      <HomeStack.Screen name="HowTo" component={HowToScreen} options={{ title: "สอนการใช้งาน" }} />
     </HomeStack.Navigator>
   );
 }
@@ -762,7 +765,7 @@ export default function MainNavigator() {
         </Tab.Navigator>
       </View>
       {/* อยู่ในส่วนล่าง เมนูเลื่อนออกมาใต้แถบโลโก้ ไม่ทับโลโก้ ตามตัวอย่าง */}
-      {docked ? null : <SideMenu />}
+      {docked ? null : <SideMenu footer={isAdmin ? <HowToButton drawerRow /> : null} />}
       </View>
       {/* สอนการใช้งาน — วาดลงชั้นของตัวเองใน <body> (เว็บ) · ขึ้นใหม่พร้อม MainNavigator ตอนสลับคน ไม่มีอะไรค้าง */}
       <HowToHost />

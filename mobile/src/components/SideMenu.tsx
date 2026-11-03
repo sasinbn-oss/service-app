@@ -348,6 +348,11 @@ const GROUPS: Group[] = [
       { key: "consumable", label: "เบิกของใช้สิ้นเปลือง", labelEn: "Consumables", icon: "file-tray-full-outline", tab: "HomeTab", screen: "ConsumableRequest" },
       { key: "history", label: "ประวัติ", labelEn: "History", icon: "time-outline", tab: "HistoryTab", screen: "HistoryMenu" },
       { key: "password", label: "เปลี่ยนรหัสผ่าน", labelEn: "Change Password", icon: "key-outline", tab: "HomeTab", screen: "ChangePassword" },
+      /**
+       * สอนการใช้งาน (เจ้าของงานเลือก ต.ค. 69) — ทุกตำแหน่งเห็น ไม่กรองว่ามีวิธีใช้ไหม
+       * ตำแหน่งที่ยังไม่มี (ทีม Area · Admin Spare Part รอบนี้) เปิดแล้วเจอหน้าที่บอกว่ากำลังทำ ดีกว่าเมนูโผล่ ๆ หาย ๆ
+       */
+      { key: "howto", label: "สอนการใช้งาน", labelEn: "How to Use", icon: "help-circle-outline", tab: "HomeTab", screen: "HowTo" },
     ],
   },
   {
@@ -372,10 +377,11 @@ const GROUPS: Group[] = [
 /**
  * เมนูของ Area Team — ชุดเต็ม 6 เมนูของ Area ตามที่เจ้าของงานกำหนด (ต.ค. 69) ที่เหลือซ่อนทั้งหมด
  * เปลี่ยนรหัสผ่านอยู่ด้วย ไม่งั้นหลังเปลี่ยนรหัสครั้งแรกแล้วจะไม่มีทางเปลี่ยนเองอีก
+ * สอนการใช้งานอยู่ด้วย (เจ้าของงานเลือก) — รอบนี้ยังไม่มีวิธีใช้ของทีม Area แต่หน้าบอกว่ากำลังทำ และรอบหน้าไม่ต้องมาเปิดเมนูอีก
  * ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area — Supervisor (COCO) / Maid (COCO) ถูกกรองออกอีกชั้น
  * ด้วย canOpenScreen (utils/areaTeam.ts) ซึ่งเป็นกฎเดียวกับการ์ดหน้าหลักและประตูหน้าจอ ไม่ได้แยกชุดเมนูไว้ที่นี่
  */
-const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password"]);
+const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password", "howto"]);
 
 const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches"]);
 
@@ -689,7 +695,11 @@ export function DockedSideMenu() {
 
 const WIDTH = 300;
 
-export default function SideMenu() {
+/**
+ * footer = ของที่วางเหนือแถวโหมดมืด/ออกจากระบบ — แอดมินจอแคบได้ปุ่ม "วิธีใช้หน้านี้" ตรงนี้ (แถบหัวของแอดมินเต็มแล้ว)
+ * ส่งมาจาก MainNavigator แทนการ import ปุ่มที่นี่ — ปุ่มนั้นใช้ตัวเครื่องสอนการใช้งานซึ่ง import เมนูนี้อยู่ (วนกัน)
+ */
+export default function SideMenu({ footer }: { footer?: React.ReactNode } = {}) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [inbox, setInbox] = useState(0);
@@ -776,7 +786,7 @@ export default function SideMenu() {
       >
         <PanelHead />
         <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} onPick={go} />
-        <PanelTools onLeave={() => setOpen(false)} />
+        <PanelTools onLeave={() => setOpen(false)} footer={footer} />
       </Animated.View>
     </View>
     </>
@@ -808,10 +818,10 @@ function PanelHead() {
 }
 
 /** โหมดมืดกับออกจากระบบ (จอแคบ) — ย้ายมาจากแถบบน ใช้ไม่บ่อย ไม่ควรกินที่หัวจอทุกหน้า */
-function PanelTools({ onLeave }: { onLeave: () => void }) {
+function PanelTools({ onLeave, footer }: { onLeave: () => void; footer?: React.ReactNode }) {
   const { logout } = useAuth();
-  return (
-    <View style={styles.panelTools}>
+  const tools = (
+    <View style={[styles.panelTools, footer ? styles.panelToolsUnder : null]}>
       <ThemeToggle />
       <View style={{ flex: 1 }} />
       <TouchableOpacity
@@ -828,6 +838,14 @@ function PanelTools({ onLeave }: { onLeave: () => void }) {
         <Ionicons name="log-out-outline" size={18} color="#fff" />
         <Text style={styles.panelLogoutText}>ออกจากระบบ</Text>
       </TouchableOpacity>
+    </View>
+  );
+  if (!footer) return tools;
+  // แถวเต็มความกว้างของตัวเอง — โหมดมืด + ออกจากระบบ + ปุ่มนี้ในแถวเดียวไม่พอในเมนูกว้าง 300 px
+  return (
+    <View style={styles.panelFoot}>
+      {footer}
+      {tools}
     </View>
   );
 }
@@ -1021,6 +1039,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.sideLine,
   },
+  panelFoot: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.sideLine,
+  },
+  // ใต้แถว "วิธีใช้หน้านี้" — เส้นคั่นกับระยะขอบอยู่ที่ panelFoot แล้ว
+  panelToolsUnder: { borderTopWidth: 0, paddingHorizontal: 0, paddingTop: 0 },
   panelLogout: {
     flexDirection: "row",
     alignItems: "center",

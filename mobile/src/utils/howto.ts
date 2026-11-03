@@ -114,6 +114,15 @@ export function whereIsHelp(user: User | null | undefined, width = Dimensions.ge
   return "ปุ่ม ? ข้างปุ่มรีเฟรช";
 }
 
+/**
+ * เปิดหน้า "สอนการใช้งาน" — ปุ่ม ? ของหน้าที่ยังไม่มีวิธีใช้ (สำหรับตำแหน่งนี้) พามาที่นี่แทนการไม่ทำอะไร
+ * ซ้อนบนหน้าที่เปิดอยู่ (initial: false) — แถบหัว "‹ กลับ" พากลับหน้าเดิมเมื่ออยู่แท็บเดียวกัน
+ */
+export function openHowToHub() {
+  if (!navigationRef.isReady()) return;
+  (navigationRef.navigate as (tab: string, p: object) => void)("HomeTab", { screen: "HowTo", initial: false });
+}
+
 // ── คำสั่งที่หน้าจอลงทะเบียน (เปิดใบงานแรก · เปิดฟอร์มปิดงาน ฯลฯ) ──
 export type HowToActionResult = { ok: true; code?: string | null } | false | null | undefined;
 type HowToActionFn = () => HowToActionResult | Promise<HowToActionResult>;

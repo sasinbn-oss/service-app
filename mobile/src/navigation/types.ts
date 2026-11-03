@@ -62,6 +62,8 @@ export type HomeStackParamList = {
   VehicleCheckIn: undefined;
   ConsumableRequest: undefined;
   ChangePassword: undefined;
+  /** สอนการใช้งาน — รายชื่อวิธีใช้ของตำแหน่งนี้ ดูแล้วมีเครื่องหมายถูก (ปุ่ม ? ของหน้าที่ไม่มีวิธีใช้พามาที่นี่) */
+  HowTo: undefined;
   /** ผังผู้รับผิดชอบพื้นที่ — ทุกคนดูได้ แอดมินลากแก้ได้ */
   CoverageMap: undefined;
 };

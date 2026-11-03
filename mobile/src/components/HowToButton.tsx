@@ -4,7 +4,10 @@
  * จอแคบ: วงกลม ? ข้างปุ่มรีเฟรช (ช่าง · หัวหน้าภาค · ทีม Area) · จอคอม: ข้างปุ่มรีเฟรชบนแถบบน มีชื่อปุ่มเมื่อกว้าง 1200 ขึ้นไป
  * ชื่อสำหรับโปรแกรมอ่านจอเป็น "วิธีใช้หน้านี้" เสมอ (เทสต์และคนที่ใช้โปรแกรมอ่านจอหาปุ่มด้วยชื่อนี้)
  * ไม่มี tour = ตามหน้าที่เปิดอยู่ (ฟังการเปลี่ยนหน้าแบบเมนูข้าง) · tour = ปุ่มในฟอร์มที่เล่นเรื่องของฟอร์มนั้น
- * รอบนี้ปุ่มขึ้นเฉพาะหน้าที่มีวิธีใช้ — หน้าอื่นจะพาไปหน้า "สอนการใช้งาน" เมื่อมีหน้านั้นแล้ว (ก้อนถัดไป)
+ * ขึ้นทุกหน้า (เจ้าของงานเลือก "ปุ่ม ? บนแถบหัวของทุกหน้า"): หน้าที่มีวิธีใช้ของตำแหน่งนี้ = เล่นเลย
+ * หน้าอื่น = เปิดหน้า "สอนการใช้งาน" (บอกว่ามีเรื่องไหนให้ดูบ้าง) — กดแล้วไม่มีอะไรเกิดขึ้นเลยแย่กว่า
+ * ซ่อนเฉพาะในหน้า "สอนการใช้งาน" เอง (กดแล้วก็เปิดหน้าเดิมซ้ำ)
+ * แอดมินจอแคบ: แถบหัวเต็มแล้ว ปุ่มเป็นแถวเต็มความกว้างในเมนูข้าง เหนือออกจากระบบ (drawerRow)
  */
 import React, { useEffect, useState } from "react";
 import { StyleSheet, Text, useWindowDimensions } from "react-native";
@@ -12,8 +15,9 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import { useAuth } from "../context/AuthContext";
 import { navigationRef } from "../navigation/navigationRef";
+import { sideMenu } from "./SideMenu";
 import { rolesOf, tourById, tourForRoute } from "../utils/howtoTours";
-import { howtoTarget, startHowTo } from "../utils/howto";
+import { howtoTarget, openHowToHub, startHowTo } from "../utils/howto";
 import { colors } from "../theme";
 
 /** ชื่อหน้าที่เปิดอยู่ (หน้าบนสุดของแท็บที่เลือก) — ตัวนำทางอาจยังไม่พร้อมตอนปุ่มขึ้นจอครั้งแรก จึงลองซ้ำสั้น ๆ */
@@ -41,27 +45,50 @@ function useCurrentRouteName(): string | null {
 export default function HowToButton({
   compact,
   tour,
-  target = "app.help",
+  target,
+  drawerRow,
 }: {
   /** จอแคบ / ในหัวหน้าต่าง: วงกลม ? อย่างเดียว */
   compact?: boolean;
   /** เล่นเรื่องนี้เสมอ (ปุ่มในฟอร์ม) แทนการตามหน้าที่เปิดอยู่ */
   tour?: string;
-  /** ชื่อคงที่ของปุ่ม — แถบหัว = app.help · ในหน้าต่างใบงาน/ฟอร์มใช้ชื่อของตัวเอง */
+  /** ชื่อคงที่ของปุ่ม — แถบหัว = app.help · แถวในเมนูข้าง = menu.help · ในหน้าต่างใบงาน/ฟอร์มใช้ชื่อของตัวเอง */
   target?: string;
+  /** แถวเต็มความกว้างในเมนูข้าง (แอดมินจอแคบ) — กดแล้วปิดเมนูก่อน */
+  drawerRow?: boolean;
 }) {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
   const route = useCurrentRouteName();
+  if (!tour && route === "HowTo") return null;
   const found = tour ? tourById(tour) ?? null : tourForRoute(rolesOf(user), route);
-  if (!found) return null;
+  const press = () => {
+    if (drawerRow) {
+      sideMenu.close();
+      // รอเมนูเลื่อนออกก่อนเริ่ม — ขั้นแรกหาปุ่มในหน้าที่เมนูกำลังบังอยู่ไม่เจอแล้วข้ามไปเปล่า ๆ
+      if (found) setTimeout(() => void startHowTo(found.id), 260);
+      else openHowToHub();
+      return;
+    }
+    if (found) void startHowTo(found.id);
+    else openHowToHub();
+  };
+  const id = target ?? (drawerRow ? "menu.help" : "app.help");
+  if (drawerRow) {
+    return (
+      <TouchableOpacity accessibilityLabel="วิธีใช้หน้านี้" onPress={press} style={styles.row} {...howtoTarget(id)}>
+        <Ionicons name="help-circle-outline" size={20} color="#fff" />
+        <Text style={styles.rowText}>วิธีใช้หน้านี้</Text>
+      </TouchableOpacity>
+    );
+  }
   const labelled = !compact && width >= 1200;
   return (
     <TouchableOpacity
       accessibilityLabel="วิธีใช้หน้านี้"
-      onPress={() => void startHowTo(found.id)}
+      onPress={press}
       style={[styles.btn, labelled ? styles.btnWide : styles.btnRound]}
-      {...howtoTarget(target)}
+      {...howtoTarget(id)}
     >
       <Ionicons name="help-circle-outline" size={22} color={colors.primaryInk} />
       {labelled ? <Text style={styles.text}>วิธีใช้หน้านี้</Text> : null}
@@ -82,4 +109,15 @@ const styles = StyleSheet.create({
   btnRound: { width: 40, borderRadius: 20 },
   btnWide: { paddingHorizontal: 14, borderRadius: 999 },
   text: { fontSize: 14, lineHeight: 22, fontWeight: "700", color: colors.primaryInk },
+  // สีเดียวกับปุ่มออกจากระบบในเมนูข้าง (พื้นเมนูมืดทั้งสองโหมด)
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: colors.sideLine,
+  },
+  rowText: { color: "#fff", fontSize: 14, lineHeight: 20, fontWeight: "700" },
 });

@@ -10,10 +10,16 @@
 //   · เข้าใจแล้ว → เมนูปิด · แถบข้อความ "ดูวิธีใช้อีกครั้ง กดปุ่ม ? ข้างปุ่มรีเฟรช" · ฐานข้อมูลจด tours."tech.myday" · ไม่เหลือ inert
 //   · ชั้นของกล่องอยู่ใน <body> เหนือ Modal (9999) ใต้ชั้นแจ้งผล/ยืนยัน
 //   · เล่นใหม่แล้วกด Esc → กล่องหาย · แถบ "ข้ามแล้ว · …" · ฐานข้อมูลไม่เปลี่ยน · ไม่เหลือ inert
-// ก้อนถัดไปเพิ่มในไฟล์นี้: หน้า "สอนการใช้งาน" · กล่องต้อนรับ/ข้อความแนะนำ · ดูในฐานะ · จอคอมของแอดมิน · ให้ดูวิธีใช้ใหม่
+//   · กรอบที่วาดล้อมปุ่มจริงทุกขั้นที่ชี้ · โหมดมืดใช้สีธีม
+// หน้า "สอนการใช้งาน" (ก้อน 3):
+//   · ปุ่ม ? ของหน้าที่ไม่มีวิธีใช้ (ลงทะเบียนใช้รถ) → หน้าสอนการใช้งานซ้อนหน้าเดิม · "ดูแล้ว x จาก n" ตรงฐานข้อมูล · ไม่มี ? ในหน้านี้
+//   · "ดูอีกครั้ง" → ไปหน้างานของฉันแล้วเริ่มขั้น 1 · จอคอม: ปุ่มมีชื่อ · ชื่อหน้าตัวใหญ่ · 6 ขั้น
+//   · แอดมินจอแคบ: ไม่มี ? บนแถบหัว · แถว "วิธีใช้หน้านี้" ในเมนูข้าง (กดแล้วเมนูปิด)
+//   · ทีม Area (บัญชีใหม่ pending): ไม่มีกล่องขึ้นเอง · ปุ่ม ? และเมนูพาไปหน้า "ยังไม่มีวิธีใช้สำหรับตำแหน่งนี้" · ฐานข้อมูลไม่ถูกเขียน
+// ก้อนถัดไปเพิ่มในไฟล์นี้: กล่องต้อนรับ/ข้อความแนะนำ · ดูในฐานะ · จอคอมของแอดมิน · ให้ดูวิธีใช้ใหม่
 //
-// สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) ด้วย SQL + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว) แล้วลบทั้งหมดตอนจบ
-// หน้าในไฟล์นี้ปิดกล่องที่ขึ้นเอง (otteri-howto-auto=off) — ส่วนนี้เริ่มด้วยปุ่ม ? เท่านั้น
+// สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) · zzht.area (Area) ด้วย SQL + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว) แล้วลบทั้งหมดตอนจบ
+// หน้าในไฟล์นี้ปิดกล่องที่ขึ้นเอง (otteri-howto-auto=off) ยกเว้นส่วนที่ตรวจว่า "ไม่ขึ้น" (ทีม Area)
 // ต้องมี DATABASE_URL · ยืนยันผลที่ฐานข้อมูล (CLAUDE.md)
 const { chromium } = require("playwright");
 const path = require("path");
@@ -42,15 +48,17 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
              delete from "User" where id in (${users})`);
   }
 
-  async function open(code, { width = 390, height = 844 } = {}) {
-    const ctx = await browser.newContext({ viewport: { width, height }, hasTouch: true, isMobile: true });
+  /** auto = ไม่ปิดกล่องที่ขึ้นเอง (ส่วนที่ตรวจว่ากล่องต้อนรับ/ข้อความแนะนำ "ไม่ขึ้น") · จอกว้างไม่ใช่จอสัมผัส */
+  async function open(code, { width = 390, height = 844, auto = false } = {}) {
+    const touch = width < 640;
+    const ctx = await browser.newContext({ viewport: { width, height }, hasTouch: touch, isMobile: touch });
     const page = await ctx.newPage();
-    await page.addInitScript((seed) => {
+    await page.addInitScript(([seed, off]) => {
       try {
         localStorage.setItem("otteri-side-groups", seed);
-        localStorage.setItem("otteri-howto-auto", "off");
+        if (off) localStorage.setItem("otteri-howto-auto", "off");
       } catch {}
-    }, GROUPS_SEED);
+    }, [GROUPS_SEED, !auto]);
     page.on("pageerror", (e) => errors.push(`${code}: ${e}`));
     await page.goto(APP, { waitUntil: "networkidle", timeout: 180000 });
     await page.getByPlaceholder("รหัสพนักงาน").fill(code);
@@ -317,6 +325,125 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
         ? pass(`โหมดมืด: กล่องใช้สีธีมมืด (${bg}) · ขั้น 3 ชี้ปุ่มถึงหน้างานได้`) : fail(`โหมดมืด: พื้นกล่อง ${bg} · ขั้น ${dStep} ${dTarget}`);
       await dp.keyboard.press("Escape");
       await d.close();
+    }
+
+    // ── หน้า "สอนการใช้งาน" (ก้อน 3) — ช่าง มือถือ ──
+    // ปุ่ม ? ของหน้าที่ไม่มีวิธีใช้ → หน้าสอนการใช้งาน (ไม่ใช่กดแล้วเงียบ) · ดูแล้วกี่เรื่องตรงฐานข้อมูล · ? ซ่อนในหน้านี้ · เริ่มดูจากที่นี่
+    {
+      const { ctx: hc, page: hp } = await open(TECH);
+      const hv = (sel) => hp.locator(sel).locator("visible=true");
+      await hv('[aria-label="เปิดเมนู"]').first().click();
+      await hp.waitForTimeout(800);
+      await hv('[aria-label="กางกลุ่ม รถ"]').first().click();
+      await hp.waitForTimeout(800);
+      await hv('[aria-label="ลงทะเบียนใช้รถ"]').first().click();
+      await hp.waitForTimeout(2000);
+      const hHelp = hv('[aria-label="วิธีใช้หน้านี้"]');
+      (await hHelp.count()) === 1 ? pass('หน้า "ลงทะเบียนใช้รถ" (ไม่มีวิธีใช้) ก็มีปุ่ม ? บนแถบหัว') : fail(`ลงทะเบียนใช้รถ: ปุ่ม ? ${await hHelp.count()} ปุ่ม`);
+      await hHelp.first().click();
+      await hp.waitForTimeout(1800);
+      const rows = hv('[aria-label^="เริ่มดู "], [aria-label^="ดูอีกครั้ง "]');
+      const nRows = await rows.count();
+      (await hp.locator("[data-howto-tour]").count()) === 0 && nRows >= 1 && (await hv('[aria-label="กลับไปลงทะเบียนใช้รถ"]').count()) === 1
+        ? pass(`กด ? → เปิดหน้า "สอนการใช้งาน" ซ้อนบนหน้าเดิม (${nRows} เรื่อง · ‹ กลับไปลงทะเบียนใช้รถ) ไม่เริ่มวิธีใช้เอง`)
+        : fail(`? บนหน้าที่ไม่มีวิธีใช้: กล่อง ${await hp.locator("[data-howto-tour]").count()} · แถว ${nRows}`);
+      const dbSeen = Number(sql(`select count(*) from "User" u, jsonb_object_keys(coalesce(u."howtoSeen"->'tours','{}'::jsonb)) where u."employeeCode"='${TECH}'`));
+      (await hp.getByText(`ดูแล้ว ${dbSeen} จาก ${nRows}`, { exact: true }).locator("visible=true").count()) === 1 && dbSeen === 1
+        ? pass(`"ดูแล้ว ${dbSeen} จาก ${nRows}" ตรงฐานข้อมูล (tours ${dbSeen} หน้า)`) : fail(`จำนวนที่ดูแล้ว: ฐานข้อมูล ${dbSeen} · แถว ${nRows}`);
+      (await hv('[aria-label="ดูอีกครั้ง งานของฉันวันนี้"]').count()) === 1 &&
+      (await hp.getByText(/^7 ขั้น · ดูแล้ว \d{1,2} \S+ \d{2}:\d{2}$/).locator("visible=true").count()) === 1
+        ? pass('แถว "งานของฉันวันนี้": 7 ขั้น · ดูแล้ว วันเวลา · ปุ่ม "ดูอีกครั้ง"') : fail("แถวงานของฉันวันนี้ไม่ตรง (ควรดูแล้ว)");
+      (await hHelp.count()) === 0 ? pass("ในหน้าสอนการใช้งานไม่มีปุ่ม ? (กดแล้วก็เปิดหน้าเดิม)") : fail("หน้าสอนการใช้งานยังมีปุ่ม ?");
+      await hp.screenshot({ path: path.join(DIR, "howto-6-hub.png") });
+      await hv('[aria-label="ดูอีกครั้ง งานของฉันวันนี้"]').first().click();
+      const started = await hp
+        .locator('[data-howto-tour="tech.myday"][data-howto-step="1"][data-howto-target="found"]')
+        .waitFor({ timeout: 9000 })
+        .then(() => true, () => false);
+      started && (await hp.locator('[aria-label^="แท็บ วันนี้"]').locator("visible=true").count()) > 0
+        ? pass("ดูอีกครั้งจากหน้าสอนการใช้งาน → ไปหน้างานของฉันแล้วเริ่มขั้น 1 ชี้แถบแท็บ") : fail("เริ่มจากหน้าสอนการใช้งานไม่ได้");
+      await hp.waitForTimeout(300);
+      await hp.keyboard.press("Escape");
+      await hp.waitForTimeout(600);
+      seenAt() === seen ? pass("เริ่มจากหน้าสอนการใช้งานแล้วข้าม — ฐานข้อมูลไม่เปลี่ยน") : fail(`ฐานข้อมูลเปลี่ยน: ${seenAt()}`);
+      await hc.close();
+    }
+
+    // ── จอคอม 1366 (ช่าง): ปุ่มมีชื่อ "วิธีใช้หน้านี้" · หน้าสอนการใช้งานมีชื่อหน้าตัวใหญ่ · จำนวนขั้นตามจอ (คอมไม่มีขั้นลองกด = 6)
+    {
+      const { ctx: wc, page: wp } = await open(TECH, { width: 1366, height: 900 });
+      const wv = (sel) => wp.locator(sel).locator("visible=true");
+      (await wp.getByText("วิธีใช้หน้านี้", { exact: true }).locator("visible=true").count()) === 1
+        ? pass('จอคอม: ปุ่ม "วิธีใช้หน้านี้" มีชื่อบนแถบบน') : fail("จอคอม: ไม่เห็นชื่อปุ่ม วิธีใช้หน้านี้");
+      await wv('[aria-label="กางกลุ่ม เอกสารและบัญชี"]').first().click();
+      await wp.waitForTimeout(900);
+      await wv('[aria-label="สอนการใช้งาน"]').first().click();
+      await wp.waitForTimeout(1800);
+      (await wp.getByText("สอนการใช้งาน", { exact: true }).locator("visible=true").count()) >= 2 &&
+      (await wp.getByText(/^6 ขั้น · ดูแล้ว /).locator("visible=true").count()) === 1 &&
+      (await wv('[aria-label="วิธีใช้หน้านี้"]').count()) === 0
+        ? pass("จอคอม: เมนู สอนการใช้งาน → ชื่อหน้าตัวใหญ่ · งานของฉันวันนี้ 6 ขั้น (ไม่มีขั้นลองกด) · ไม่มีปุ่ม ?")
+        : fail(`จอคอมหน้าสอนการใช้งาน: ชื่อ ${await wp.getByText("สอนการใช้งาน", { exact: true }).locator("visible=true").count()} · ? ${await wv('[aria-label="วิธีใช้หน้านี้"]').count()}`);
+      await wp.screenshot({ path: path.join(DIR, "howto-8-hub-wide.png") });
+      await wc.close();
+    }
+
+    // ── แอดมินจอแคบ: ไม่มี ? บนแถบหัว (แถบเต็ม) — "วิธีใช้หน้านี้" เป็นแถวในเมนูข้าง กดแล้วเมนูปิด ──
+    // ไปหน้าที่ไม่มีวิธีใช้ก่อน (เปลี่ยนรหัสผ่าน) ให้ผลไม่ขึ้นกับว่าแอดมินมีวิธีใช้ของหน้างานของฉันหรือยัง
+    {
+      const { ctx: ac, page: ap } = await open("A001");
+      const av = (sel) => ap.locator(sel).locator("visible=true");
+      (await av('[aria-label="วิธีใช้หน้านี้"]').count()) === 0 ? pass("แอดมินจอแคบ: แถบหัวไม่มีปุ่ม ?") : fail("แอดมินจอแคบมีปุ่ม ? บนแถบหัว");
+      await av('[aria-label="เปิดเมนู"]').first().click();
+      await ap.waitForTimeout(800);
+      await av('[aria-label="กางกลุ่ม เอกสารและบัญชี"]').first().click();
+      await ap.waitForTimeout(800);
+      await av('[aria-label="เปลี่ยนรหัสผ่าน"]').first().click();
+      await ap.waitForTimeout(1500);
+      await av('[aria-label="เปิดเมนู"]').first().click();
+      await ap.waitForTimeout(900);
+      const row = av('[data-testid="howto-menu.help"]');
+      const rowOk = (await row.count()) === 1 && (await row.getAttribute("aria-label")) === "วิธีใช้หน้านี้";
+      await ap.screenshot({ path: path.join(DIR, "howto-7-admin-drawer.png") });
+      await row.first().click().catch(() => {});
+      await ap.waitForTimeout(1500);
+      const drawer = await ap.evaluate(() => !!document.getElementById("side-menu-backdrop"));
+      rowOk && !drawer && (await av('[aria-label="กลับไปเปลี่ยนรหัสผ่าน"]').count()) === 1 && (await ap.locator("[data-howto-tour]").count()) === 0
+        ? pass('แอดมินจอแคบ: แถว "วิธีใช้หน้านี้" ในเมนู → เมนูปิด · เปิดหน้าสอนการใช้งานซ้อนหน้าเดิม') : fail(`แถวในเมนูของแอดมิน: แถว ${rowOk} · เมนูค้าง ${drawer}`);
+      await ac.close();
+    }
+
+    // ── ทีม Area: เห็นเมนูและปุ่ม ? (เจ้าของงานเลือก) — รอบนี้ยังไม่มีวิธีใช้: หน้าที่บอกว่ากำลังทำ · ไม่มีกล่องขึ้นเอง ──
+    {
+      sql(`insert into "User"("employeeCode",name,role,"passwordHash","howtoSeen")
+           select 'zzht.area','Area ทดสอบวิธีใช้','AREA',"passwordHash",'{"pending": true}'::jsonb from "User" where "employeeCode"='A001'`);
+      const { ctx: rc, page: rp } = await open("zzht.area", { auto: true });
+      const rv = (sel) => rp.locator(sel).locator("visible=true");
+      await rp.waitForTimeout(2500); // กล่องที่ขึ้นเองรอ 800 ms หลังหน้าพร้อม — ให้เวลาเกินพอ
+      (await rp.locator("[data-otteri-howto]").count()) === 0 ? pass("ทีม Area (บัญชีใหม่ pending): ไม่มีกล่องสอนการใช้งานขึ้นเอง") : fail("ทีม Area มีกล่องขึ้นเอง");
+      const empty = async () =>
+        (await rp.getByText("ยังไม่มีวิธีใช้สำหรับตำแหน่งนี้", { exact: true }).locator("visible=true").count()) === 1 &&
+        (await rp.getByText("กำลังทำเพิ่ม — เปิดใช้แล้วจะขึ้นในหน้านี้", { exact: true }).locator("visible=true").count()) === 1;
+      const rHelp = rv('[aria-label="วิธีใช้หน้านี้"]');
+      const hadHelp = (await rHelp.count()) === 1;
+      if (hadHelp) await rHelp.first().click();
+      await rp.waitForTimeout(1500);
+      hadHelp && (await empty()) ? pass('ทีม Area: ปุ่ม ? บนแถบหัว → "ยังไม่มีวิธีใช้สำหรับตำแหน่งนี้"') : fail(`ทีม Area ปุ่ม ?: มีปุ่ม ${hadHelp}`);
+      await rp.screenshot({ path: path.join(DIR, "howto-9-area-empty.png") });
+      await rv('[aria-label^="กลับไป"]').first().click().catch(() => {});
+      await rp.waitForTimeout(1200);
+      await rv('[aria-label="เปิดเมนู"]').first().click();
+      await rp.waitForTimeout(800);
+      await rv('[aria-label="กางกลุ่ม เอกสารและบัญชี"]').first().click();
+      await rp.waitForTimeout(800);
+      const item = rv('[aria-label="สอนการใช้งาน"]');
+      const hadItem = (await item.count()) === 1;
+      if (hadItem) await item.first().click();
+      await rp.waitForTimeout(1500);
+      hadItem && (await empty()) ? pass('ทีม Area: เมนู "สอนการใช้งาน" → หน้าเดียวกัน (กำลังทำเพิ่ม)') : fail(`ทีม Area เมนู: มีเมนู ${hadItem}`);
+      sql(`select coalesce("howtoSeen"::text,'NULL') from "User" where "employeeCode"='zzht.area'`) === '{"pending": true}'
+        ? pass("ทีม Area: ฐานข้อมูลไม่ถูกเขียน (ยัง pending)") : fail("ทีม Area: howtoSeen เปลี่ยน");
+      await rc.close();
     }
 
     errors.length === 0 ? pass("ไม่มี error ในหน้าเว็บ") : fail(`error ในหน้าเว็บ: ${errors.slice(0, 3).join(" | ")}`);
