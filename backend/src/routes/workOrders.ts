@@ -3586,6 +3586,12 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     body.waitingParts = [];
     for (const m of body.machines ?? []) m.parts = undefined;
     body.workStatus = null;
+    /**
+     * Supervisor (COCO) · Maid (COCO) ไม่ระบุความเร่งด่วน — เจ้าของงานขอเอาหัวข้อนี้ออกจากฟอร์มของสองตำแหน่งนี้ (3 พ.ย. 69)
+     * บังคับที่นี่ด้วย ไม่ใช่แค่ซ่อนในฟอร์ม: จอที่เปิดค้างก่อนอัปเดตยังมีปุ่ม "ด่วน" อยู่ ส่งมาได้ทุกเมื่อ
+     * Area ยังเลือกได้ตามเดิม (เจ้าของงานเลือกเฉพาะสองตำแหน่งนี้)
+     */
+    if (req.auth!.role === "COCO_SUPERVISOR" || req.auth!.role === "COCO_MAID") body.priority = "NORMAL";
   }
 
   // รูปแบบเดิม (machineCode + symptom) กับรูปแบบใหม่ (machines[]) เป็นเรื่องเดียวกัน

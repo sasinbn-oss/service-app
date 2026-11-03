@@ -26,7 +26,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { useAuth } from "../context/AuthContext";
-import { isAreaTeam } from "../utils/areaTeam";
+import { isAreaTeam, isCocoStaff } from "../utils/areaTeam";
 import {
   MAX_ATTACHMENTS,
   PickedAttachment,
@@ -255,6 +255,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
   const strict = isAreaTeam(user) && !fromBoard;
+  // Supervisor (COCO) · Maid (COCO) ไม่ระบุความเร่งด่วน — เจ้าของงานขอเอาหัวข้อออก (3 พ.ย. 69) ใบเป็น "ปกติ" เสมอ
+  // เซิร์ฟเวอร์บังคับซ้ำ (จอที่เปิดค้างก่อนอัปเดตยังส่ง "ด่วน" มาได้) · Area ยังเลือกได้
+  const askPriority = !isCocoStaff(user);
   const missing: string[] = [];
   if (strict) {
     if (!branchCode.trim()) missing.push("สาขา");
@@ -925,24 +928,26 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
       </View>
 
-      <View style={styles.card}>
-        <StepHead n={5} title="ความเร่งด่วน" />
-        <View style={styles.options}>
-          {priorities.map((p) => (
-            <TouchableOpacity
-              key={p.value}
-              style={[styles.option, priority === p.value && styles.optionOn]}
-              onPress={() => setPriority(p.value)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.optionText, priority === p.value && styles.optionTextOn]}>
-                {p.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+      {askPriority ? (
+        <View style={styles.card}>
+          <StepHead n={5} title="ความเร่งด่วน" />
+          <View style={styles.options}>
+            {priorities.map((p) => (
+              <TouchableOpacity
+                key={p.value}
+                style={[styles.option, priority === p.value && styles.optionOn]}
+                onPress={() => setPriority(p.value)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.optionText, priority === p.value && styles.optionTextOn]}>
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
 
-      </View>
+        </View>
+      ) : null}
 
       <View>
         {/*

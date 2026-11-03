@@ -73,6 +73,10 @@ NEW() { SEND $1 POST work-orders "$2"; }
 BODY() { echo "{\"branchCode\":\"$1\",\"jobType\":\"CM\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-111-2222\",\"machines\":[{\"code\":\"W1\",\"symptom\":\"ทดสอบ maid\"}]}"; }
 W1=$(NEW $M1 "$(BODY C0001)" | J 'd.id')
 [ "$(DB "select b.code||'|'||w.status from \"WorkOrder\" w join \"Branch\" b on b.id=w.\"branchId\" where w.id=$W1")" = "C0001|NEW" ] && pass "เปิดใบงานสาขาที่ประจำได้ (ฐานข้อมูล)" || fail "เปิดใบงาน: $W1"
+# Maid (COCO) ไม่มีหัวข้อความเร่งด่วนในฟอร์ม (เจ้าของงานขอ 3 พ.ย. 69) — ส่ง "ด่วน" มาจากแอปรุ่นที่เปิดค้างก็ได้ "ปกติ"
+WU=$(NEW $M1 "$(BODY C0001 | sed 's/"jobType":"CM"/"jobType":"CM","priority":"URGENT"/')" | J 'd.id')
+[ "$(DB "select priority from \"WorkOrder\" where id=${WU:-0}")" = "NORMAL" ] \
+  && pass "Maid (COCO) ส่ง \"ด่วน\" มา บันทึกเป็น \"ปกติ\" (ฐานข้อมูล)" || fail "ความเร่งด่วนของ Maid: $(DB "select priority from \"WorkOrder\" where id=${WU:-0}")"
 R=$(NEW $M1 "$(BODY C0006)")
 echo "$R" | grep -q "ไม่อยู่ในความดูแล" && pass "เปิดใบสาขาอื่นไม่ได้" || fail "เปิดสาขาอื่นได้: $(echo $R | head -c 120)"
 W6=$(NEW $A "$(BODY C0006)" | J 'd.id')
