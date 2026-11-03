@@ -48,6 +48,8 @@ export interface SupervisorCloseOrder {
   code: string;
   scheduledAt: string | null;
   assignedTeam: string | null;
+  /** ทีมประจำสาขา — ใบที่ยังไม่ได้จ่ายทีม ใช้ทีมนี้เป็นกลุ่มแรกของรายชื่อช่าง */
+  zone?: string | null;
   /** ใบงาน SUB — "ช่างเข้าแก้ไขเรียบร้อย" เลือกทีม SUB แทนช่างบริษัท */
   assignedOutsource?: boolean;
   afterCount?: number;
@@ -56,7 +58,12 @@ export interface SupervisorCloseOrder {
   parts?: { sparePartId: number }[];
   /** ยี่ห้อเครื่อง → ไฟล์อะไหล่ (order.partsBrand) — ช่อง "อะไหล่ที่ใช้" ล็อกตามไฟล์นี้ (ข้อ 23) */
   partsBrand?: PartsBrand | null;
+  /** ประวัติใบ — ใบเก่าที่ไม่มีแผนงานวันนั้น เติมช่างจากคนที่กด "ถึงหน้างาน" */
+  logs?: { action: string; byName: string | null }[];
 }
+
+type Tech = { id: number; name: string; employeeCode: string; team?: string | null; teams?: string[]; senior?: boolean };
+const teamsOfTech = (t: Tech) => (t.teams && t.teams.length ? t.teams : t.team ? [t.team] : []);
 
 export function SupervisorCloseButton({ onPress }: { onPress: () => void }) {
   return (
@@ -72,12 +79,15 @@ export default function SupervisorCloseModal({
   order,
   technicians = [],
   subTeams = [],
+  myTeams = [],
   onClose,
   onDone,
 }: {
   order: SupervisorCloseOrder;
   /** ช่างในระบบ — เลือกคนที่เข้าซ่อม (ช่างเข้าแก้ไขเรียบร้อย) */
-  technicians?: { id: number; name: string; employeeCode: string; team?: string | null; senior?: boolean }[];
+  technicians?: Tech[];
+  /** ทีมที่หัวหน้าภาคคนนี้ดูแล — ช่างของทีมเหล่านี้ขึ้นเป็นกลุ่มที่สองในตัวเลือก (แอดมินไม่มี) */
+  myTeams?: string[];
   /** ทีม outsource — ใบงาน SUB เลือกทีมที่เข้าทำ */
   subTeams?: string[];
   onClose: () => void;
@@ -90,27 +100,67 @@ export default function SupervisorCloseModal({
   // ── เฉพาะ "ช่างเข้าดำเนินการแก้ไขเรียบร้อย" ──
   const fixed = reason === "TECH_FIXED";
   const isSub = !!order.assignedOutsource;
-  const [workerId, setWorkerId] = useState<string | null>(null);
+  const [workerIds, setWorkerIds] = useState<number[]>([]);
+  /** เติมมาจากไหน — บอกใต้ช่องให้หัวหน้าภาครู้ว่าต้องตรวจ ไม่ใช่ระบบเดาเงียบ ๆ */
+  const [filledFrom, setFilledFrom] = useState<"plan" | "arrived" | "none" | null>(null);
   /**
-   * ช่างที่เข้าซ่อม: เติมหัวหน้าทีมวันนั้นจากบอร์ดแผนงาน (ทีมที่รับงาน · วันนัด — เจ้าของงานขอ 3 พ.ย. 69) เปลี่ยนได้
-   * ฟอร์มนี้เลือกได้คนเดียว จึงเติมคนแรกของแผน (คนแรกที่จัด = หัวหน้าทีม) · ไม่มีแผน/ถามไม่ได้ = ว่างแบบเดิม
+   * ช่างที่เข้าซ่อม สามช่องเหมือนฟอร์มปิดงานของช่าง (เจ้าของงานขอ 3 พ.ย. 69 — เดิมช่องแรกเลือกได้ คนที่สองต้องพิมพ์เอง)
+   * เติมให้เอง: คนที่จัดไว้ในแผนงานของทีมที่รับงานวันนัด (เรียงตามแผน คนแรก = หัวหน้าทีม) ไม่เกินสามคน
+   * ใบเก่าที่วันนั้นไม่มีแผน: เติมคนที่กด "ถึงหน้างาน" ของใบนี้ (คนที่ไปจริง) · ไม่มีทั้งสองอย่าง = ว่าง ให้เลือกเอง
    * ไม่ทับค่าที่หัวหน้าภาคเลือกไปก่อนคำตอบมาถึง
    */
   useEffect(() => {
     if (isSub || !technicians.length) return;
     let gone = false;
+    const known = (id: number) => technicians.some((t) => t.id === id);
+    const fromArrival = () => {
+      const names = [...new Set((order.logs ?? []).filter((l) => l.action === "ARRIVED" && l.byName).map((l) => l.byName as string))];
+      return names
+        .map((n) => technicians.find((t) => t.name === n)?.id)
+        .filter((x): x is number => typeof x === "number")
+        .slice(0, 3);
+    };
+    const fill = (ids: number[], from: "plan" | "arrived" | "none") => {
+      if (gone) return;
+      setWorkerIds((cur) => (cur.length ? cur : ids));
+      setFilledFrom((cur) => cur ?? from);
+    };
     api
       .get<{ members: { id: number }[] }>(`/work-orders/${order.id}/plan-crew`, { loadingText: false })
       .then((r) => {
-        const lead = r.data.members.find((m) => technicians.some((t) => t.id === m.id));
-        if (!gone && lead) setWorkerId((cur) => cur ?? String(lead.id));
+        const plan = r.data.members.map((m) => m.id).filter(known).slice(0, 3);
+        if (plan.length) return fill(plan, "plan");
+        const arrived = fromArrival();
+        fill(arrived, arrived.length ? "arrived" : "none");
       })
-      .catch(() => {});
+      .catch(() => {
+        const arrived = fromArrival();
+        fill(arrived, arrived.length ? "arrived" : "none");
+      });
     return () => {
       gone = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [technicians.length]);
+  /**
+   * ตัวเลือกช่างเรียงเป็นกลุ่ม: ทีมของใบนี้ → ทีมที่คุณดูแล → ทีมอื่น
+   * รายชื่อช่างทั้งบริษัทยาวหลายสิบคน ใบเก่าที่ไม่มีแผนให้เติม หัวหน้าภาคต้องหาคนในทีมตัวเองเจอเร็ว
+   */
+  const techOptions = (() => {
+    const own = order.assignedTeam ?? order.zone ?? "";
+    const mine = new Set(myTeams);
+    const rank = (t: Tech) => {
+      const ts = teamsOfTech(t);
+      if (own && ts.includes(own)) return 0;
+      if (ts.some((x) => mine.has(x))) return 1;
+      return 2;
+    };
+    const label = [own ? `ทีม${own} (ทีมของใบนี้)` : "ทีมของใบนี้", "ทีมที่คุณดูแล", myTeams.length || own ? "ทีมอื่น" : "ช่างทั้งหมด"];
+    return technicians
+      .map((t) => ({ t, r: rank(t) }))
+      .sort((a, b) => a.r - b.r || a.t.name.localeCompare(b.t.name, "th"))
+      .map(({ t, r }) => ({ t, group: label[r] }));
+  })();
   const [others, setOthers] = useState("");
   const [subTeam, setSubTeam] = useState<string | null>(isSub ? order.assignedTeam : null);
   const [visitDate, setVisitDate] = useState(todayBkk());
@@ -123,7 +173,7 @@ export default function SupervisorCloseModal({
   const issued = order.waitingParts.filter((p) => p.inStock === true && p.requisitionNo);
   const futureVisit = order.scheduledAt && order.scheduledAt.slice(0, 10) >= new Date().toISOString().slice(0, 10);
   const len = note.trim().length;
-  const whoMissing = fixed && (isSub ? !subTeam : !workerId && !others.trim());
+  const whoMissing = fixed && (isSub ? !subTeam : !workerIds.length && !others.trim());
   const afterMissing = fixed && after.length === 0 && !order.afterCount;
   /**
    * ของที่อยู่ในใบแล้ว (รอ + ใช้) ปล่อยผ่านแม้อยู่นอกไฟล์ยี่ห้อ — ช่างใช้ไปจริงแล้ว (D6 · legacy ของ /supervisor-close)
@@ -164,7 +214,7 @@ export default function SupervisorCloseModal({
           reason,
           note: note.trim(),
           visitDate,
-          workerIds: !isSub && workerId ? [Number(workerId)] : [],
+          workerIds: isSub ? [] : workerIds,
           otherWorkers: others.trim() || null,
           subTeam: isSub ? subTeam : null,
           parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
@@ -256,25 +306,45 @@ export default function SupervisorCloseModal({
                 <Text style={styles.label}>
                   ช่างที่เข้าซ่อม <Text style={styles.req}>*</Text>
                 </Text>
-                <Dropdown
-                  value={workerId}
-                  onChange={setWorkerId}
-                  clearable
-                  placeholder="เลือกช่าง"
-                  accessibilityLabel="ช่างที่เข้าซ่อม"
-                  options={technicians.map((t) => ({
-                    value: String(t.id),
-                    label: t.name,
-                    hint: techPickHint(t),
-                  }))}
-                />
+                {/* คนที่เลือกแล้วถูกตัดออกจากช่องอื่น · เอาออกตรงกลางแล้วบีบให้ชิด — กติกาเดียวกับฟอร์มปิดงานของช่าง */}
+                {[0, 1, 2].map((slot) => (
+                  <View key={slot} style={styles.workerSlot}>
+                    <Text style={styles.workerSlotLabel}>คนที่ {slot + 1}</Text>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Dropdown
+                        value={workerIds[slot] != null ? String(workerIds[slot]) : null}
+                        clearable={slot > 0 || workerIds.length > 1}
+                        placeholder={slot === 0 ? "เลือกช่าง" : "ไม่มี"}
+                        accessibilityLabel={`ช่างที่เข้าซ่อมคนที่ ${slot + 1}`}
+                        onChange={(next) =>
+                          setWorkerIds((cur) => {
+                            const copy = [...cur];
+                            if (next === null) copy.splice(slot, 1);
+                            else copy[slot] = Number(next);
+                            return copy.filter((x) => x != null);
+                          })
+                        }
+                        options={techOptions
+                          .filter(({ t }) => !workerIds.includes(t.id) || workerIds[slot] === t.id)
+                          .map(({ t, group }) => ({ value: String(t.id), label: t.name, hint: techPickHint(t), group }))}
+                      />
+                    </View>
+                  </View>
+                ))}
+                {filledFrom === "plan" ? (
+                  <Text style={styles.fillHint}>เติมจากแผนงานของทีม{order.assignedTeam ?? ""}วันนัดแล้ว — ตรวจว่าตรงคนที่ไปจริง แก้ได้</Text>
+                ) : filledFrom === "arrived" ? (
+                  <Text style={styles.fillHint}>วันนั้นไม่มีแผนงาน — เติมคนที่กด "ถึงหน้างาน" ของใบนี้แล้ว ตรวจและเพิ่มคนที่ไปด้วยได้</Text>
+                ) : filledFrom === "none" ? (
+                  <Text style={styles.fillHint}>ใบนี้ไม่มีแผนงานวันนั้น — เลือกจากรายชื่อ (ทีมของใบนี้และทีมที่คุณดูแลอยู่บนสุด)</Text>
+                ) : null}
               </>
             )}
             <TextInput
               style={[styles.input, styles.inputLine]}
               value={others}
               onChangeText={setOthers}
-              placeholder={isSub ? "ชื่อช่างของทีม SUB (ไม่บังคับ)" : "คนอื่นที่ไปด้วย / ไม่มีบัญชีในระบบ"}
+              placeholder={isSub ? "ชื่อช่างของทีม SUB (ไม่บังคับ)" : "คนอื่นที่ไปด้วยแต่ไม่มีบัญชีในระบบ (ไม่บังคับ)"}
               placeholderTextColor={colors.textFaint}
               accessibilityLabel="ชื่อคนอื่นที่เข้าซ่อม"
             />
@@ -380,6 +450,10 @@ const styles = StyleSheet.create({
   ghost: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.borderStrong },
   ghostText: { color: colors.navy, fontWeight: "700" },
   label: { fontSize: 13.5, fontWeight: "700", color: colors.text },
+  // ป้าย "คนที่ n" ชิดบนแถว — รายการเลือกกางลงในที่ ป้ายจะไม่ลอยไปกลางรายการ
+  workerSlot: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  workerSlotLabel: { width: 52, paddingTop: 13, fontSize: 13, fontWeight: "600", color: colors.textMuted },
+  fillHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   req: { color: colors.danger },
   muted: { fontSize: 12.5, color: colors.textMuted },
   opt: {
