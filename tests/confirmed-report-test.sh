@@ -25,6 +25,7 @@ ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
 IDS=""
 cleanup() {
   for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  DB "delete from \"SparePart\" where \"partCode\"='[นอกสโตร์] ZCR สายน้ำเข้า ทดสอบ'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT
@@ -46,12 +47,22 @@ DB "update \"WorkOrderLog\" set \"createdAt\"=('$YDAY'::date + interval '3 hours
 POST $S "work-orders/$W4/inspect-request" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
 POST $A "work-orders/$W4/confirm-appointment" '{}' >/dev/null
 ROW() { echo "$1" | J 'const r=d.rows.find(x=>x.id==='$2');r?[r.kind,r.team,r.scheduledAt,r.scheduledTime??"-",r.machineCode,r.symptom,r.contactName,r.contactPhone,r.confirmedBy].join("|"):"none"'; }
+# อะไหล่ที่ต้องเปลี่ยน (ข้อความ LINE ใส่ — เจ้าของงานเลือก 3 พ.ย. 69): W1 ได้ของในสโตร์ที่เบิกแล้ว + ของนอกสโตร์ ใส่ทาง SQL
+DB "insert into \"WorkOrderPart\" (\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",warehouse,\"requisitionNo\") select $W1, id, 1, 'WAITING', true, 'คลังลาดพร้าว 94', 'RQ-CR1' from \"SparePart\" where not \"offCatalog\" order by id limit 1" >/dev/null
+# ของนอกสโตร์สร้างเองในชุดนี้ (ฐานทดสอบอาจไม่มีเลย) — ลบตอนจบหลังใบงาน (ใบที่ยังอ้างอยู่ทำให้ลบไม่ได้)
+OFFP=$(DB "insert into \"SparePart\" (\"partCode\",name,\"offCatalog\",\"updatedAt\") values ('[นอกสโตร์] ZCR สายน้ำเข้า ทดสอบ','ZCR สายน้ำเข้า ทดสอบ',true,now()) returning id" | head -1)
+DB "insert into \"WorkOrderPart\" (\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\") values ($W1, $OFFP, 1, 'WAITING', true)" >/dev/null
+PARTS() { echo "$1" | J 'const r=d.rows.find(x=>x.id==='$2');r?r.parts.map(p=>[p.code??"-",p.name,p.quantity,p.requisitionNo??"-",p.warehouse??"-",p.offCatalog].join("|")).join(","):"none"'; }
+PWANT=$(DB "select string_agg(case when p.\"offCatalog\" then '-' else p.\"partCode\" end||'|'||p.name||'|'||w.quantity||'|'||coalesce(w.\"requisitionNo\",'-')||'|'||coalesce(w.warehouse,'-')||'|'||p.\"offCatalog\", ',' order by w.id) from \"WorkOrderPart\" w join \"SparePart\" p on p.id=w.\"sparePartId\" where w.\"workOrderId\"=$W1 and w.kind='WAITING'")
 
 echo "═══ คอนเฟิร์มวันนี้"
 R=$(REP $A $TODAY)
 [ "$(ROW "$R" $W1)" = "REPAIR|$TEAM|$VISIT|09:00|W3|ไม่ปั่นหมาดทดสอบ|คุณทดสอบ|081-234-5678|$ANAME" ] \
   && pass "เคสที่คอนเฟิร์มวันนี้ขึ้น ครบ: ทีม วันเวลานัด เครื่อง อาการบรรทัดแรก ผู้ติดต่อ คนคอนเฟิร์ม" || fail "W1: $(ROW "$R" $W1)"
 [ "$(ROW "$R" $W4 | cut -d'|' -f1,4)" = "INSPECT|-" ] && pass "งานตรวจหน้างานขึ้นเป็น INSPECT · ไม่มีเวลา = ว่าง" || fail "W4: $(ROW "$R" $W4)"
+[ -n "$PWANT" ] && [ "$(PARTS "$R" $W1)" = "$PWANT" ] && [ "$(PARTS "$R" $W4)" = "" ] \
+  && pass "อะไหล่ที่ต้องเปลี่ยน: รหัส จำนวน ใบเบิก คลัง ตรงฐานข้อมูล · ของนอกสโตร์ไม่มีรหัส · งานตรวจหน้างานไม่มีอะไหล่" \
+  || fail "อะไหล่: '$(PARTS "$R" $W1)' ≠ '$PWANT' · W4='$(PARTS "$R" $W4)'"
 [ "$(ROW "$R" $W2)|$(ROW "$R" $W3)|$(ROW "$R" $W5)" = "none|none|none" ] \
   && pass "ไม่ขึ้น: ย้อนขั้นหลังคอนเฟิร์ม · คอนเฟิร์มเมื่อวาน · ใบทดสอบ" || fail "หลุด: W2=$(ROW "$R" $W2) W3=$(ROW "$R" $W3) W5=$(ROW "$R" $W5)"
 WANT=$(DB "select count(*) from \"WorkOrder\" w where not w.\"isTest\" and w.status<>'CANCELLED' and w.\"appointmentStatus\" in ('CONFIRMED','ADMIN_PICKED') and w.\"scheduledAt\" is not null

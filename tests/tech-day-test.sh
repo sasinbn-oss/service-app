@@ -74,6 +74,14 @@ POST $S work-orders/$W/dispatch '{}' >/dev/null
 DAY=$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)")
 [ "$(echo "$DAY" | J "const r=d.rows.find(x=>x.id===$W); r ? [r.scheduledAt, r.scheduledTime, r.arrivedAt, r.done].join('|') : 'missing'")" = "$TODAY|10:00||false" ] \
   && [ "$(echo "$DAY" | J 'd.today')" = "$TODAY" ] && pass "ปล่อยงานแล้วขึ้นในงานของฉัน วันนี้ 10:00 ยังไม่ถึงหน้างาน" || fail "my-day: $(echo "$DAY" | head -c 300)"
+# อะไหล่ที่ต้องเปลี่ยนบนการ์ด (เจ้าของงานเลือก 3 พ.ย. 69) — รหัส · ใบเบิก · คลัง มากับงานของฉัน เทียบกับแถวในฐานข้อมูล
+# ใส่แถวทาง SQL แล้วลบทิ้งหลังเช็ค — ขั้นที่เหลือของชุดนี้ (ถึงหน้างาน · ปิดงาน) ไม่ได้ทดสอบเรื่องอะไหล่
+DB "insert into \"WorkOrderPart\" (\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",warehouse,\"requisitionNo\") select $W, id, 2, 'WAITING', true, 'คลังลาดพร้าว 94', 'RQ-TD1' from \"SparePart\" where not \"offCatalog\" order by id limit 1" >/dev/null
+WANTP=$(DB "select p.\"partCode\"||'|'||p.name||'|2|คลังลาดพร้าว 94|RQ-TD1|false' from \"WorkOrderPart\" w join \"SparePart\" p on p.id=w.\"sparePartId\" where w.\"workOrderId\"=$W and w.kind='WAITING'")
+GOTP=$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)" | J "d.rows.find(x=>x.id===$W).parts.map(p=>[p.code,p.name,p.quantity,p.warehouse,p.requisitionNo,p.offCatalog].join('|')).join(',')")
+[ -n "$WANTP" ] && [ "$GOTP" = "$WANTP" ] \
+  && pass "งานของฉัน: อะไหล่ที่ต้องเปลี่ยนมีรหัส จำนวน คลัง เลขใบเบิก ตรงกับฐานข้อมูล" || fail "อะไหล่ในงานของฉัน: '$GOTP' ≠ '$WANTP'"
+DB "delete from \"WorkOrderPart\" where \"workOrderId\"=$W and \"requisitionNo\"='RQ-TD1'" >/dev/null
 LAT=$(DB "select latitude from \"Branch\" where code='C0006'"); LNG=$(DB "select longitude from \"Branch\" where code='C0006'")
 R=$(POST $T work-orders/$W/arrive "{\"latitude\":$LAT,\"longitude\":$LNG}")
 [ "$(echo "$R" | J 'd.withinRadius')" = "true" ] && [ "$(DB "select status from \"WorkOrder\" where id=$W")" = "IN_PROGRESS" ] \

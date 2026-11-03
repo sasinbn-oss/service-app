@@ -40,6 +40,9 @@ const { setup } = require("./fixture");
     // a: มีอาการ (ต้องไม่ติดไปในไลน์) · b: ไม่มีเบอร์ผู้ติดต่อ
     fx.sql(`update "WorkOrder" set symptom='${"ก".repeat(30)} ${"ข".repeat(40)} ท้ายสุดไม่ต้องอยู่ในไลน์' where id=${a.id}`);
     fx.sql(`update "WorkOrder" set "contactPhone"=null, "contactName"=null where id=${b.id}`);
+    // a มีอะไหล่ที่ต้องเปลี่ยน (เบิกแล้ว) — ข้อความ LINE ต้องมีช่วงอะไหล่ (เจ้าของงานเลือก 3 พ.ย. 69) · b ไม่มีอะไหล่ = ไม่มีช่วงนี้
+    const part = fx.sql(`select "partCode"||'|'||name from "SparePart" where not "offCatalog" order by id limit 1`).split("|");
+    fx.sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind,"inStock",warehouse,"requisitionNo") select ${a.id}, id, 2, 'WAITING', true, 'คลังลาดพร้าว 94', 'RQ-CRW1' from "SparePart" where "partCode"='${part[0]}'`);
 
     const openAs = async (code) => {
       const ctx = await browser.newContext({ viewport: { width: 1300, height: 950 }, permissions: ["clipboard-read", "clipboard-write"] });
@@ -99,6 +102,16 @@ const { setup } = require("./fixture");
       stAB === "ASSIGNED,IN_PROGRESS" && at > 0 && ba[at - 1].startsWith("สาขา: ") && bb.length > 0 && !bb.includes("สถานะ: ยังไม่ปล่อยงาน")
         ? pass("บรรทัด \"สถานะ: ยังไม่ปล่อยงาน\" ต่อจากบรรทัดสาขาเฉพาะใบที่ยังไม่ปล่อย (ฐานข้อมูล ASSIGNED) · ใบที่ปล่อยแล้ว (IN_PROGRESS) ไม่มี")
         : fail(`บรรทัดสถานะ: ใบรอปล่อย ${ba.join(" / ")} · ใบปล่อยแล้ว ${bb.join(" / ")} · ฐานข้อมูล ${stAB}`);
+      /**
+       * อะไหล่ที่ต้องเปลี่ยน: ช่วงนี้อยู่ในก้อนของใบ a ต่อจากบรรทัดเครื่อง/สาขา — "- ชื่อ x2" แล้วบรรทัดรหัส · ใบเบิก · คลัง
+       * ใบ b ไม่มีอะไหล่ = ไม่มีหัวช่วง · ค่าที่เทียบอ่านจากแถวในฐานข้อมูลที่ใส่ไว้ ไม่ใช่ข้อความตายตัว
+       */
+      const pi = ba.indexOf("อะไหล่ที่ต้องเปลี่ยน:");
+      const dbPart = fx.sql(`select w.quantity||'|'||w."requisitionNo"||'|'||w.warehouse from "WorkOrderPart" w where w."workOrderId"=${a.id} and w.kind='WAITING'`);
+      dbPart === "2|RQ-CRW1|คลังลาดพร้าว 94" && pi > 0 && ba[pi + 1] === `- ${part[1]} x2` && ba[pi + 2] === `(${part[0]} · RQ-CRW1 · คลังลาดพร้าว 94)` &&
+      !bb.includes("อะไหล่ที่ต้องเปลี่ยน:")
+        ? pass("ข้อความ LINE: ใบที่มีอะไหล่มีช่วง \"อะไหล่ที่ต้องเปลี่ยน:\" ชื่อ x จำนวน แล้วรหัส · ใบเบิก · คลัง (ตรงฐานข้อมูล) · ใบไม่มีอะไหล่ไม่มีช่วงนี้")
+        : fail(`ช่วงอะไหล่: ${ba.slice(Math.max(pi, 0), pi + 3).join(" / ")} · ฐานข้อมูล ${dbPart} · ใบ b ${bb.join(" / ")}`);
       // ปุ่มที่สอง = คัดลอกทีมแรก
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").nth(1).click();
       await page.waitForTimeout(500);

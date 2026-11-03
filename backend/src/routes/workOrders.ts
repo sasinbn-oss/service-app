@@ -1446,6 +1446,40 @@ function listShape(
   };
 }
 
+/**
+ * อะไหล่ที่ต้องเปลี่ยนของงานที่จ่ายให้ช่าง — การ์ด "งานของฉันวันนี้" และข้อความจ่ายงานทาง LINE (เจ้าของงานขอ 3 พ.ย. 69)
+ * ของที่รอในใบ (WAITING) รวมของนอกสโตร์ (บอกว่าหัวหน้าภาคจัดหา) ไม่รวมค่าบริการ — เป็นเรื่องเสนอราคาลูกค้า ไม่ใช่ของที่ต้องเปลี่ยน
+ * ส่งเลขใบเบิกกับคลังด้วย: ช่างต้องรู้ว่าไปรับของที่ไหนก่อนออกเดินทาง (เดิมการ์ดมีแค่ชื่อ ข้อความ LINE ไม่มีเลย)
+ */
+const DISPATCH_PART_SELECT = {
+  quantity: true,
+  unit: true,
+  inStock: true,
+  warehouse: true,
+  requisitionNo: true,
+  sparePart: { select: { name: true, partCode: true, offCatalog: true } },
+} as const;
+function dispatchPart(p: {
+  quantity: number;
+  unit: string | null;
+  inStock: boolean | null;
+  warehouse: string | null;
+  requisitionNo: string | null;
+  sparePart: { name: string; partCode: string; offCatalog: boolean };
+}) {
+  return {
+    name: p.sparePart.name,
+    // ของนอกสโตร์มีรหัสภายใน "[นอกสโตร์] ชื่อ" — ไม่ใช่รหัสที่ช่างใช้เบิก ไม่ส่ง
+    code: p.sparePart.offCatalog ? null : p.sparePart.partCode,
+    quantity: p.quantity,
+    unit: p.unit,
+    offCatalog: p.sparePart.offCatalog,
+    inStock: p.inStock,
+    warehouse: p.warehouse,
+    requisitionNo: p.requisitionNo,
+  };
+}
+
 function partShape(p: {
   quantity: number;
   inStock?: boolean | null;
@@ -2269,7 +2303,7 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
         select: { code: true, name: true, latitude: true, longitude: true, openedAt: true, warrantyExpiresAt: true },
       },
       machine: { select: { code: true, capacityKg: true, brand: true, model: true } },
-      parts: { where: { kind: "WAITING" }, select: { quantity: true, unit: true, sparePart: { select: { name: true } } } },
+      parts: { where: { kind: "WAITING" }, orderBy: { id: "asc" }, select: DISPATCH_PART_SELECT },
       // ปล่อยงานรอบล่าสุด + ถึงหน้างาน — ถึงแล้วคือมี ARRIVED หลังปล่อยงาน
       // + ส่งเคลม (แถบสถานะเคลมบนการ์ด: ใครส่ง เมื่อไหร่) — ไม่จำกัดจำนวนแถวแล้ว เพราะประวัติเคลมของงานซ่อมครั้งนี้ต้องมาครบ
       // + ปิดงาน/ไม่ส่งเคลม (ก้อน 5) — การ์ดที่ปิดแล้วขึ้น "ไม่ส่งเคลม: {ชิ้น} ({เหตุผล})" จาก meta ของการปิดครั้งล่าสุด
@@ -2391,7 +2425,7 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
           longitude: w.branch.longitude,
           machineCode: w.machine?.code ?? null,
           machineCapacityKg: w.machine?.capacityKg ?? null,
-          parts: w.parts.map((p) => ({ name: p.sparePart.name, quantity: p.quantity, unit: p.unit })),
+          parts: w.parts.map(dispatchPart),
           arrivedAt: arrived?.createdAt ?? null,
           /**
            * กล่อง "ถ่ายก่อนซ่อม" (ก้อน 5) — ขึ้นเฉพาะสาขาในประกัน: warrantyUntil = วันหมดประกันเมื่อยังไม่หมด (สาขาบริษัท/หมดแล้ว/ไม่รู้ = ว่าง)
@@ -2706,6 +2740,8 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
       symptom: true, contactName: true, contactPhone: true,
       branch: { select: { code: true, name: true, region: true, zone: true, latitude: true, longitude: true } },
       machine: { select: { code: true, capacityKg: true } },
+      // ข้อความจ่ายงาน LINE บอกอะไหล่ที่ต้องเปลี่ยน (เจ้าของงานขอ 3 พ.ย. 69 — dispatchPart)
+      parts: { where: { kind: "WAITING" }, orderBy: { id: "asc" }, select: DISPATCH_PART_SELECT },
     },
   });
   // คนคอนเฟิร์มล่าสุดของแต่ละใบ (และเวลา) — ไม่นับแถวที่ปิดงานย้อนหลังสร้าง (ดู APPOINTMENT_BY_ACTIONS)
@@ -2744,6 +2780,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
         symptom: (o.symptom ?? "").split("\n")[0].trim() || null,
         contactName: o.contactName,
         contactPhone: o.contactPhone,
+        parts: o.parts.map(dispatchPart),
         status: o.status,
         statusLabel: WORK_ORDER_STATUS_LABELS[o.status] ?? o.status,
         confirmedBy: c?.user?.name ?? null,
