@@ -3367,6 +3367,36 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   });
 });
 
+/**
+ * ช่างที่หัวหน้าภาคจัดไว้ในบอร์ดแผนงานของทีมที่รับงาน ในวันนัด — ฟอร์มปิดงานเติมเป็น "ผู้เข้าปฏิบัติงาน" ให้
+ * (เจ้าของงานขอ 3 พ.ย. 69 — ปิดงานต้องเลือกชื่อคนที่ไปใหม่ทุกครั้ง ทั้งที่จัดคนไว้แล้ว)
+ *
+ * ขั้นจ่ายงานเก็บแค่ทีม ชื่อคนที่จะไปจึงมีที่เดียวคือแผนของทีมวันนั้น (TeamDayPlan) · เรียงตามแผน คนแรกคือหัวหน้าทีมวันนั้น
+ * แยกจาก GET /:id เพราะใช้แค่ตอนเปิดฟอร์มปิดงาน — ไม่ให้ทุกการโหลดใบต้องถามฐานข้อมูลเพิ่มอีกรอบ (ฐานอยู่คนละ region)
+ * ไม่มีวันนัด / ไม่มีทีม / วันนั้นยังไม่จัดแผน = รายชื่อว่าง ฟอร์มทำแบบเดิม · คนที่ถูกลบบัญชีแล้วไม่ส่ง (เลือกในฟอร์มไม่ได้อยู่แล้ว)
+ */
+router.get("/:id/plan-crew", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { ...VIEW_SELECT, scheduledAt: true } });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, wo)) return;
+  if (!wo.scheduledAt || !wo.assignedTeam) return res.json({ members: [] });
+  // scheduledAt เก็บที่เที่ยงคืน UTC แบบเดียวกับ TeamDayPlan.date (บอร์ดแผนงานหาใบของวันด้วยค่าเท่ากันแบบนี้)
+  const plan = await prisma.teamDayPlan.findUnique({
+    where: { date_team: { date: wo.scheduledAt, team: wo.assignedTeam } },
+    select: {
+      members: {
+        orderBy: { position: "asc" },
+        select: { user: { select: { id: true, name: true, deletedAt: true } } },
+      },
+    },
+  });
+  res.json({
+    members: (plan?.members ?? []).filter((m) => !m.user.deletedAt).map((m) => ({ id: m.user.id, name: m.user.name })),
+  });
+});
+
 // ── เปิดใบงาน ──────────────────────────────────────────
 
 const createSchema = z.object({

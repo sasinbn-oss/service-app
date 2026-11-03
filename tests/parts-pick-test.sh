@@ -141,6 +141,12 @@ for b in "Huebsch (TC)" "HB" "HB - Huebsch" "hb_2026"; do OUT="$OUT$(FB $T "$b" 
 [ "$(FB $T Maytag "$K" | J "$GRPX")" = "file=Maytag rows=HM1,MO1,MT1 shared=OT1" ] \
   && pass "เครื่อง Maytag: HM1 MT1 MO1 อยู่กลุ่มไฟล์ Maytag · MO1 (Maytag+Other) ไม่ซ้ำในของใช้ร่วม" \
   || fail "Maytag: $(FB $T Maytag "$K" | J "$GRPX" 2>&1)"
+# ไฟล์รายงานเครื่องเขียนยี่ห้อเป็นไทยได้ — "เมแทค" ตกไป Other บนระบบจริงวันแรก (3 พ.ย. 69) ช่างเลือกอะไหล่ Maytag ไม่ได้
+OUT=""
+for b in "เมแทค" "เมย์แท็ก" "ไฮเออร์" "ฮิวบ์ช" "โอเอซิส" "สปินซ์"; do OUT="$OUT$(FB $T "$b" | J 'd.file')|"; done
+[ "$OUT" = "Maytag|Maytag|Haier|Huebsch|Oasis|Spinz|" ] && [ "$(FB $T "เมแทค" "$K" | J "$GRPX")" = "file=Maytag rows=HM1,MO1,MT1 shared=OT1" ] \
+  && pass "ยี่ห้อภาษาไทย (เมแทค · เมย์แท็ก · ไฮเออร์ · ฮิวบ์ช · โอเอซิส · สปินซ์) ได้ไฟล์ของยี่ห้อนั้น ไม่ตกไป Other" \
+  || fail "ยี่ห้อไทย: $OUT / เมแทค=$(FB $T "เมแทค" "$K" | J "$GRPX" 2>&1)"
 R=$(FB $T Huebsch "$K-MT1")
 [ "$(echo "$R" | J 'd.rows.length+"|"+d.shared.length+"|"+JSON.stringify(d.elsewhere)')" = '0|0|[{"file":"Maytag","exact":true}]' ] \
   && pass "รหัส MT1 บนเครื่อง Huebsch: ไม่ขึ้นในกลุ่มไหน · บอกว่าอยู่ไฟล์ Maytag (รหัสตรงทั้งคำ)" \
@@ -347,7 +353,8 @@ OG=$(curl -s -G localhost:4000/api/machines/outages -H "$(H $A)" --data-urlencod
 . tests/lib/fixture-parts.sh
 SYNC=""
 WORDS=("Huebsch (TC)" "HB" "HB - Huebsch" "hb_2026" "THB" "อะไหล่HB" "(HB)" "HBHB" "HB2" "Haier/Maytag" "Maytag Spinz" \
-  "OASIS" "Oasis(TC)" "haier" "MAYTAG" "Spinz" "Electrolux" "Speed Queen")
+  "OASIS" "Oasis(TC)" "haier" "MAYTAG" "Spinz" "Electrolux" "Speed Queen" \
+  "เมแทค" "เมย์แท็ก" "เครื่องอบ เมทแทค" "ไฮเออร์" "ฮิวบ์ช" "ฮูบช์" "โอเอซิส" "โอเอสิส" "สปินซ์" "เมฆ")
 MOB=$(cd backend && node_modules/.bin/ts-node -T -O '{"module":"commonjs"}' -e \
   'const f=require("../mobile/src/utils/brandFile").brandFileOf; console.log(process.argv.slice(1).map(b=>b+"\t"+f(b)).join("\n"))' \
   "${WORDS[@]}" 2>&1)
@@ -362,7 +369,7 @@ for b in "${WORDS[@]}"; do
 done
 DB "update \"Machine\" set brand='HB' where \"branchId\"=$BID and code='$MH'" >/dev/null
 [ -z "$SYNC" ] \
-  && pass "fixture-parts.sh และ brandFileOf ของแอป ให้ไฟล์เดียวกับ brandFileOf ของเซิร์ฟเวอร์ทั้ง 18 คำ (HB แบบเป็นคำ · THB · Haier/Maytag · ยี่ห้ออื่น = Other …)" \
+  && pass "fixture-parts.sh และ brandFileOf ของแอป ให้ไฟล์เดียวกับ brandFileOf ของเซิร์ฟเวอร์ทั้ง 28 คำ (HB แบบเป็นคำ · THB · Haier/Maytag · ชื่อไทย เมแทค/ไฮเออร์/ฮิวบ์ช/โอเอซิส/สปินซ์ · ยี่ห้ออื่น = Other …)" \
   || fail "fixture-parts.sh / แอป ไม่ตรงกับ brandFileOf:$SYNC $(printf '%s' "$MOB" | grep -iv $'\t' | head -c 300)"
 
 echo

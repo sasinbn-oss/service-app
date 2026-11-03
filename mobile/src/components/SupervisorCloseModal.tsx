@@ -7,7 +7,7 @@
  * ปุ่มยืนยันกดไม่ได้จนกว่าจะครบ และบอกตรง ๆ ว่ายังขาดอะไร (ปุ่มเทาเฉย ๆ คนไม่รู้ว่าต้องทำอะไรต่อ)
  * กฎฝั่งเซิร์ฟเวอร์อยู่ที่ POST /work-orders/:id/supervisor-close
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
@@ -91,6 +91,26 @@ export default function SupervisorCloseModal({
   const fixed = reason === "TECH_FIXED";
   const isSub = !!order.assignedOutsource;
   const [workerId, setWorkerId] = useState<string | null>(null);
+  /**
+   * ช่างที่เข้าซ่อม: เติมหัวหน้าทีมวันนั้นจากบอร์ดแผนงาน (ทีมที่รับงาน · วันนัด — เจ้าของงานขอ 3 พ.ย. 69) เปลี่ยนได้
+   * ฟอร์มนี้เลือกได้คนเดียว จึงเติมคนแรกของแผน (คนแรกที่จัด = หัวหน้าทีม) · ไม่มีแผน/ถามไม่ได้ = ว่างแบบเดิม
+   * ไม่ทับค่าที่หัวหน้าภาคเลือกไปก่อนคำตอบมาถึง
+   */
+  useEffect(() => {
+    if (isSub || !technicians.length) return;
+    let gone = false;
+    api
+      .get<{ members: { id: number }[] }>(`/work-orders/${order.id}/plan-crew`, { loadingText: false })
+      .then((r) => {
+        const lead = r.data.members.find((m) => technicians.some((t) => t.id === m.id));
+        if (!gone && lead) setWorkerId((cur) => cur ?? String(lead.id));
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [technicians.length]);
   const [others, setOthers] = useState("");
   const [subTeam, setSubTeam] = useState<string | null>(isSub ? order.assignedTeam : null);
   const [visitDate, setVisitDate] = useState(todayBkk());
