@@ -34,13 +34,19 @@ export const BRAND_FILE_INVALID = "ไฟล์ยี่ห้อไม่ถู
  */
 const HB_WORD = /(^|[^a-z])hb([^a-z]|$)/i;
 
-/** ชื่อเต็มที่มีอยู่ในข้อความ (ไม่สนตัวพิมพ์) — ไฟล์ Other ไม่อยู่ในนี้เพราะยี่ห้อเครื่องที่ไม่ตรงคำไหนตกไป Other เองอยู่แล้ว */
+/**
+ * ชื่อเต็มที่มีอยู่ในข้อความ (ไม่สนตัวพิมพ์) — ไฟล์ Other ไม่อยู่ในนี้เพราะยี่ห้อเครื่องที่ไม่ตรงคำไหนตกไป Other เองอยู่แล้ว
+ *
+ * รับชื่อภาษาไทยด้วย: ไฟล์รายงานเครื่องเขียนยี่ห้อเป็นไทยได้ ("เมแทค" — เจอบนระบบจริงวันแรกที่เปิดใช้ 3 พ.ย. 69)
+ * ถ้าจับแค่อังกฤษ เครื่อง Maytag ตัวนั้นตกไป Other ช่างเลือกได้แค่ของใช้ร่วม และเซิร์ฟเวอร์ปฏิเสธอะไหล่ Maytag ที่ใช้จริง
+ * ตัวสะกดไทยหลายแบบ (ย์ · ท · ็ก/ค) จึงจับเป็นรูปแบบ ไม่ใช่คำเดียว
+ */
 const MAKE_WORDS: { file: BrandFile; match: (s: string) => boolean }[] = [
-  { file: "Huebsch", match: (s) => /huebsch/i.test(s) || HB_WORD.test(s) },
-  { file: "Oasis", match: (s) => /oasis/i.test(s) },
-  { file: "Haier", match: (s) => /haier/i.test(s) },
-  { file: "Maytag", match: (s) => /maytag/i.test(s) },
-  { file: "Spinz", match: (s) => /spinz/i.test(s) },
+  { file: "Huebsch", match: (s) => /huebsch|ฮิวบ|ฮูบ/i.test(s) || HB_WORD.test(s) },
+  { file: "Oasis", match: (s) => /oasis|โอเอ[ซส]ิส|โอซิส/i.test(s) },
+  { file: "Haier", match: (s) => /haier|ไฮเออ/i.test(s) },
+  { file: "Maytag", match: (s) => /maytag|เม(ย์)?(ท)?แท(็)?[คก]/i.test(s) },
+  { file: "Spinz", match: (s) => /spinz|สปิน[ซส]/i.test(s) },
 ];
 
 /**

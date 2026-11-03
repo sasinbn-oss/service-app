@@ -187,6 +187,22 @@ curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: applicati
   && curl -s "localhost:4000/api/plans/day?date=$D2" -H "$(H $S)" | J "d.lanes.find(x=>x.team==='$TEAM').plan.startTime" | grep -q "08:30" \
   && pass "บันทึกเวลาเข้าหน้างาน 08:30 และบอร์ดส่งกลับมา" || fail "เวลาเข้าหน้างานไม่ถูกบันทึก"
 
+# ฟอร์มปิดงานเติม "ผู้เข้าปฏิบัติงาน" จากแผนของทีมวันนัด (เจ้าของงานขอ 3 พ.ย. 69) — เทียบกับแถวแผนในฐานข้อมูล ไม่ใช่เชื่อคำตอบอย่างเดียว
+CREW() { curl -s "localhost:4000/api/work-orders/$1/plan-crew" -H "$(H ${2:-$T})" | J 'd.members?d.members.map(m=>m.id+":"+m.name).join(","):"ERR "+d.error'; }
+PLANDB() { DB "select string_agg(u.id||':'||u.name, ',' order by m.position) from \"TeamDayPlanMember\" m join \"TeamDayPlan\" p on p.id=m.\"planId\" join \"User\" u on u.id=m.\"userId\" where p.team='$TEAM' and p.date='$D2'"; }
+[ "$(CREW $ID)" = "$(PLANDB)" ] && [ "$(CREW $ID)" = "$TID:$(DB "select name from \"User\" where id=$TID")" ] \
+  && pass "ช่างในทีมถามได้ว่าแผนวันนัดจัดใครไว้ — ได้คนในแผนพร้อมชื่อ ตรงกับฐานข้อมูล" || fail "รายชื่อจากแผน: $(CREW $ID) ≠ $(PLANDB)"
+curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
+  -d "{\"date\":\"$D2\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$SID,$TID],\"startTime\":\"08:30\"}" >/dev/null
+[ "$(CREW $ID $S)" = "$(PLANDB)" ] && [ "$(CREW $ID $S | cut -d: -f1)" = "$SID" ] \
+  && pass "เรียงตามแผน — คนแรกที่จัด (หัวหน้าทีมวันนั้น) มาก่อน" || fail "ลำดับไม่ตรงแผน: $(CREW $ID $S) ≠ $(PLANDB)"
+curl -s -X PUT localhost:4000/api/plans -H "$(H $S)" -H 'Content-Type: application/json' \
+  -d "{\"date\":\"$D2\",\"team\":\"$TEAM\",\"vehicleId\":${VID:-null},\"memberIds\":[$TID],\"startTime\":\"08:30\"}" >/dev/null
+NOAPPT=$(newwo CM); CREATED="$CREATED $NOAPPT"
+[ "$(DB "select (\"scheduledAt\" is null)::text from \"WorkOrder\" where id=$NOAPPT")" = "true" ] && [ "$(CREW $NOAPPT $A)" = "" ] \
+  && pass "ใบที่ยังไม่มีวันนัด — รายชื่อว่าง (ฟอร์มปิดงานทำแบบเดิม)" || fail "ใบไม่มีนัดได้รายชื่อ: $(CREW $NOAPPT $A)"
+[ "$(CREW 999999999 $A)" = "ERR ไม่พบใบงานนี้" ] && pass "เลขใบงานที่ไม่มี — บอกเป็นภาษาไทย" || fail "ใบที่ไม่มี: $(CREW 999999999 $A)"
+
 echo
 echo "═══ ย้อนขั้นตอน"
 R=$(POST $T "work-orders/$ID/rollback" '{"toStage":"PARTS_CHECKED","reason":"ลองย้อน"}')

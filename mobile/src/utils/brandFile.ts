@@ -38,11 +38,12 @@ const HB_WORD = /(^|[^a-z])hb([^a-z]|$)/i;
 export function brandFileOf(make: string | null | undefined): BrandFile | null {
   const s = make?.trim();
   if (!s) return null;
-  if (/huebsch/i.test(s) || HB_WORD.test(s)) return "Huebsch";
-  if (/oasis/i.test(s)) return "Oasis";
-  if (/haier/i.test(s)) return "Haier";
-  if (/maytag/i.test(s)) return "Maytag";
-  if (/spinz/i.test(s)) return "Spinz";
+  // ชื่อไทยด้วย ("เมแทค" จากไฟล์รายงานเครื่อง) — เหตุผลอยู่ที่ MAKE_WORDS ฝั่ง backend
+  if (/huebsch|ฮิวบ|ฮูบ/i.test(s) || HB_WORD.test(s)) return "Huebsch";
+  if (/oasis|โอเอ[ซส]ิส|โอซิส/i.test(s)) return "Oasis";
+  if (/haier|ไฮเออ/i.test(s)) return "Haier";
+  if (/maytag|เม(ย์)?(ท)?แท(็)?[คก]/i.test(s)) return "Maytag";
+  if (/spinz|สปิน[ซส]/i.test(s)) return "Spinz";
   return SHARED_FILE;
 }
 

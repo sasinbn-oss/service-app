@@ -2,6 +2,7 @@
 //        · แนบ "ก่อนซ่อม" ไว้ก่อนจากการ์ดไฟล์แนบ (ชิป "รูปนี้คือ") แล้วฟอร์มปิดงานขึ้นว่าแนบไว้แล้ว
 //        · ยังไม่มีหลังซ่อม ปุ่มล่าง "ยังขาด 1 อย่าง — พาไป" กดแล้วเลื่อนไปขั้นรูปหลังซ่อม ไม่ส่ง · แนบหลังซ่อมในฟอร์ม → "ยืนยันปิดงาน" ปิดได้
 //        · การ์ดผลการทำงานวางก่อน | หลัง คู่กัน — เช็คฐานข้อมูลทุกขั้น
+//        · ผู้เข้าปฏิบัติงานขึ้นให้เองจากบอร์ดแผนงานของทีมวันนัด (เจ้าของงานขอ 3 พ.ย. 69) ไม่ต้องเลือกใหม่
 const { chromium } = require("playwright");
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
@@ -40,6 +41,7 @@ const login = async (code) =>
   const A = await login("A001");
   const oldRegion = sql(`select coalesce(region,'') from "User" where "employeeCode"='S001'`);
   let id = null;
+  const VD = visitDay(12);
 
   try {
     // ── ใบงานไม่ใช้อะไหล่ เดินถึงขั้นเข้างาน + ป้ายรุ่น (ปิดงานบังคับอยู่แล้ว ไม่ใช่เรื่องที่ทดสอบ) ──
@@ -51,7 +53,7 @@ const login = async (code) =>
     });
     id = wo.orders ? wo.orders[0].id : wo.id;
     await call(S, "POST", `/work-orders/${id}/parts`, { needsParts: false });
-    await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: visitDay(12) });
+    await call(S, "POST", `/work-orders/${id}/assign`, { team: "กระบี่", scheduledAt: VD });
     await call(A, "POST", `/work-orders/${id}/confirm-appointment`, {});
     await call(S, "POST", `/work-orders/${id}/dispatch`, {});
     const np = new FormData();
@@ -59,6 +61,11 @@ const login = async (code) =>
     np.append("role", "NAMEPLATE");
     await call(A, "POST", `/work-orders/${id}/attachments`, np);
     const code = sql(`select code from "WorkOrder" where id=${id}`);
+    // หัวหน้าภาคจัดคนของทีมวันนัดไว้ในบอร์ดแผนงาน — ฟอร์มปิดงานต้องเติมคนนี้ให้เอง
+    const tid = sql(`select id from "User" where "employeeCode"='T001'`);
+    await call(A, "PUT", "/plans", { date: VD, team: "กระบี่", memberIds: [Number(tid)] });
+    if (sql(`select count(*) from "TeamDayPlanMember" m join "TeamDayPlan" p on p.id=m."planId" where p.team='กระบี่' and p.date='${VD}' and m."userId"=${tid}`) !== "1")
+      throw new Error("จัดแผนทีมวันนัดไม่สำเร็จ");
     if (sql(`select status from "WorkOrder" where id=${id}`) !== "IN_PROGRESS") throw new Error("เตรียมใบงานไม่ถึงขั้นเข้างาน");
 
     const page = await browser.newPage({ viewport: { width: 420, height: 860 } });
@@ -104,10 +111,13 @@ const login = async (code) =>
       ? pass("ฟอร์มปิดงาน: ก่อนซ่อมขึ้นว่าแนบไว้แล้ว เหลือเตือนแค่หลังซ่อม")
       : fail("ฟอร์มไม่รู้ว่าแนบรูปก่อนซ่อมไว้แล้ว");
     await page.getByPlaceholder("เช่น เปลี่ยนบอร์ดควบคุม ทดสอบแล้วปกติ").locator("visible=true").last().fill("เปลี่ยนปั๊มน้ำทิ้ง ทดสอบแล้วปกติ");
-    await label("ผู้เข้าปฏิบัติงานคนที่ 1").click();
-    await page.waitForTimeout(500);
-    await vis("ช่างสมชาย", false).last().click();
-    await page.waitForTimeout(500);
+    // ไม่แตะช่องคนที่ 1 เลย — ต้องขึ้นชื่อจากแผนเอง (คำตอบมาหลังฟอร์มเปิด รอได้ไม่เกิน 5 วินาที)
+    let slot1 = "";
+    for (let i = 0; i < 25 && !(slot1 = (await label("ผู้เข้าปฏิบัติงานคนที่ 1").textContent()) ?? "").includes("ช่างสมชาย"); i++)
+      await page.waitForTimeout(200);
+    slot1.includes("ช่างสมชาย") && !((await label("ผู้เข้าปฏิบัติงานคนที่ 2").textContent()) ?? "").includes("ช่าง")
+      ? pass("ผู้เข้าปฏิบัติงานคนที่ 1 ขึ้น \"ช่างสมชาย\" จากบอร์ดแผนงานวันนัดเอง · คนที่ 2 ว่าง (แผนมีคนเดียว)")
+      : fail(`ช่องคนที่ 1 ไม่ขึ้นชื่อจากแผน: "${slot1}"`);
     const save = vis("ยืนยันปิดงาน").last();
     /**
      * ปุ่มล่างไม่จางแล้ว (เคลมก้อน 1 · ใช้กับทุกการปิดงาน) — ยังขาดบอกจำนวน กดแล้วพาไปช่องแรกที่ขาด ไม่ส่ง
@@ -140,6 +150,9 @@ const login = async (code) =>
     sql(`select w.status||'|'||(select string_agg(role,',' order by role) from "WorkOrderAttachment" a where a."workOrderId"=w.id and role in ('BEFORE','AFTER')) from "WorkOrder" w where w.id=${id}`) === "DONE|AFTER,AFTER,BEFORE"
       ? pass("ปิดงานแล้ว มีรูปก่อนซ่อม 1 หลังซ่อม 2 (เลือกพร้อมกัน) ในฐานข้อมูล")
       : fail(`หลังปิด: ${sql(`select status from "WorkOrder" where id=${id}`)}`);
+    sql(`select string_agg(u."employeeCode", ',') from "WorkOrderWorker" w join "User" u on u.id=w."userId" where w."workOrderId"=${id}`) === "T001"
+      ? pass("ผู้เข้าปฏิบัติงานที่บันทึกตอนปิด = คนในแผน (T001) ในฐานข้อมูล")
+      : fail(`ผู้เข้าปฏิบัติงานในฐานข้อมูล: ${sql(`select count(*) from "WorkOrderWorker" where "workOrderId"=${id}`)} คน`);
 
     // ── การ์ดผลการทำงาน ──
     await page.waitForTimeout(1500);
@@ -152,6 +165,7 @@ const login = async (code) =>
     fail(String(e));
   } finally {
     if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    sql(`delete from "TeamDayPlan" where team='กระบี่' and date='${VD}'`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();

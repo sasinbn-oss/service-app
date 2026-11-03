@@ -117,11 +117,11 @@ WITH o AS (
 ), f AS (
   SELECT o.id, CASE                                                            -- = brandFileOf(make)
       WHEN o.make IS NULL THEN NULL
-      WHEN o.make ~* 'huebsch' OR o.make ~* '(^|[^a-z])hb([^a-z]|\$)' THEN 'Huebsch'  -- "HB" = Huebsch (เจ้าของงาน 31 ต.ค. 69)
-      WHEN o.make ~* 'oasis'  THEN 'Oasis'
-      WHEN o.make ~* 'haier'  THEN 'Haier'
-      WHEN o.make ~* 'maytag' THEN 'Maytag'
-      WHEN o.make ~* 'spinz'  THEN 'Spinz'
+      WHEN o.make ~* 'huebsch|ฮิวบ|ฮูบ' OR o.make ~* '(^|[^a-z])hb([^a-z]|\$)' THEN 'Huebsch'  -- "HB" = Huebsch (เจ้าของงาน 31 ต.ค. 69)
+      WHEN o.make ~* 'oasis|โอเอ[ซส]ิส|โอซิส'  THEN 'Oasis'      -- ชื่อไทยด้วย ("เมแทค" ในไฟล์รายงานเครื่อง 3 พ.ย. 69)
+      WHEN o.make ~* 'haier|ไฮเออ'  THEN 'Haier'
+      WHEN o.make ~* 'maytag|เม(ย์)?(ท)?แท(็)?[คก]' THEN 'Maytag'
+      WHEN o.make ~* 'spinz|สปิน[ซส]'  THEN 'Spinz'
       ELSE 'Other'
     END AS file
   FROM o

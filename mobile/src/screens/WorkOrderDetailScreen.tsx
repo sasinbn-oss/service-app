@@ -8810,10 +8810,31 @@ function CloseModal({
     }
     if (claimForm) setStepMode(true);
   }, [visible, claimForm]);
-  /** คนที่ไป: เติมช่างที่เข้าระบบอยู่ไว้ให้ (เอาออกได้) — ฟอร์มทีละขั้นของช่างที่ไปเอง ไม่ต้องหาชื่อตัวเองในรายชื่อทั้งบริษัท */
+  /**
+   * คนที่ไป: เติมช่างที่หัวหน้าภาคจัดไว้ในบอร์ดแผนงาน (ทีมที่รับงาน · วันนัด — เจ้าของงานขอ 3 พ.ย. 69) เปลี่ยนได้ทุกช่อง
+   * ขั้นจ่ายงานเก็บแค่ทีม ชื่อคนที่จะไปมีที่เดียวคือแผนวันนั้น · เรียงตามแผน (คนแรก = หัวหน้าทีมวันนั้น) ไม่เกินสามช่อง
+   * วันนั้นไม่ได้จัดแผน → ฟอร์มทีละขั้นของช่างเติมตัวเองแบบเดิม (ไม่ต้องหาชื่อตัวเองในรายชื่อทั้งบริษัท)
+   * เติมเฉพาะตอนช่องยังว่าง — ผู้ใช้เลือกไปก่อนคำตอบมาถึง หรือปิดซ้ำหลังถูกตีกลับ (ใช้คนเดิม) ไม่ถูกทับ
+   * คนในแผนที่ไม่อยู่ในรายชื่อช่างของฟอร์มไม่เติม — ช่องจะโชว์ค่าที่ไม่มีชื่อ
+   */
   useEffect(() => {
-    if (!visible || !stepMode || isSub || reclosing || workerIds.length || otherWorkers.trim()) return;
-    if (me && technicians.some((t) => t.id === me.id)) setWorkerIds([me.id]);
+    if (!visible || isSub || reclosing || !technicians.length || workerIds.length || otherWorkers.trim()) return;
+    let gone = false;
+    const known = (uid: number) => technicians.some((t) => t.id === uid);
+    api
+      .get<{ members: { id: number; name: string }[] }>(`/work-orders/${order.id}/plan-crew`, { loadingText: false })
+      .then((r) => r.data.members.map((m) => m.id).filter(known).slice(0, 3))
+      // ถามแผนไม่ได้ไม่ใช่เรื่องที่ต้องขัดจังหวะ — ฟอร์มยังเลือกคนเองได้
+      .catch(() => [] as number[])
+      .then((crew) => {
+        if (gone) return;
+        const fallback = stepMode && me && known(me.id) ? [me.id] : [];
+        const next = crew.length ? crew : fallback;
+        if (next.length) setWorkerIds((cur) => (cur.length ? cur : next));
+      });
+    return () => {
+      gone = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, stepMode, technicians]);
   const curPart = tabParts.some((p) => p.sparePartId === partTab) ? partTab : tabParts[0]?.sparePartId ?? null;
