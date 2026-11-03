@@ -23,10 +23,24 @@
 //   · พนักงานเดิม (NULL) มือถือ: ข้อความแนะนำ (ไม่ใช่กล่องต้อนรับ) ใต้ปุ่ม ? · เข้าใจแล้ว → จด notice · โหลดใหม่ไม่ขึ้นซ้ำ
 //     · จอคอม: คำบอกที่อยู่ปุ่มเป็น "วิธีใช้หน้านี้" · Esc = เข้าใจแล้ว
 //   · ดูในฐานะ (A001 ดูบัญชีใหม่ pending): ไม่มีกล่องต้อนรับ · ปุ่ม ? เล่นจนจบได้ · ฐานข้อมูลไม่เปลี่ยน ไม่มีคำขอ POST /auth/howto
-// ก้อนถัดไปเพิ่มในไฟล์นี้: จอคอมของแอดมิน (เปิดใบงานให้ดู · Esc ไม่ปิดหน้าต่างใบงาน) · ให้ดูวิธีใช้ใหม่
+// ใบงานซ่อม · งานของฉันวันนี้ของหัวหน้าภาค/แอดมิน · หน้าใบงาน (ก้อน 5):
+//   · จอคอม A001: งานของฉันวันนี้ 6 ขั้น · ใบงานซ่อม 7 ขั้น — ขั้น 6 แอปเปิดใบงานให้ (ใบที่ถึงคิวแอดมิน ไม่ใช่ใบรอตรวจเคลม — ยืนยันที่
+//     ฐานข้อมูล/API) กรอบล้อมแถบขั้นตอนในหน้าต่างใบงาน กล่องอยู่บนสุด · ขั้น 7 ชี้ปุ่มของขั้น · ย้อนกลับไปขั้น 5 = หน้าต่างปิด
+//     · ถัดไปอีกครั้งเปิดใบเดิม · Esc = กล่องหาย หน้าต่างใบงานยังเปิด ไม่มีแถบข้อความ · กด ✕ ปิดหน้าต่างแล้วแถบ "ข้ามแล้ว · …" ขึ้น
+//     · หน้าต่างใบงานมีปุ่ม ? ของตัวเอง · ฐานข้อมูลของ A001 ไม่ถูกจด
+//   · หลบหน้าโหลด: A001 ดูในฐานะ S001 → ใบงานซ่อม → ขั้น 5 เปิดใบงาน ซึ่งตอบ 401 viewAsEnded (ปลอมด้วย page.route) แอปกลับเป็นตัวเอง
+//     พร้อมหน้าโหลดเต็มจอ (ถือคำขอ view-as/stop ไว้ 3 วิ): ระหว่างนั้นไม่มีกล่อง ชั้นยังอยู่ inert ไม่หลุด · Esc ไม่ปิดหน้าต่างใบงาน
+//     · ปล่อยแล้วเป็น A001 ไม่มีวิธีใช้ค้าง ไม่เหลือ inert
+//   · หัวหน้าภาค (S001 จอคอม): ขั้น 7 "เวลาปิดนัดงานพรุ่งนี้" บอกเวลาที่แอดมินเพิ่งตั้ง (PUT ของจริง) · คืนค่าแล้วโหลดใหม่ บอกเวลาเดิม
+//     · กรอบหัวกลุ่ม/ปุ่มของขั้นอยู่เฉพาะกลุ่มตามขั้น ไม่ใช่หัวข้อปัก
+//   · Super Admin (zzht.super จอคอม): งานของฉันวันนี้ 7 ขั้น · ขั้น 7 กางกลุ่ม ผู้ดูแลระบบ ชี้ สำรองข้อมูล (ไม่จดลงเครื่อง)
+//     · เข้าใจแล้ว → ฐานข้อมูลจด tours."admin.myday" · กลุ่มย่อกลับ
+// ก้อนถัดไปเพิ่มในไฟล์นี้: ให้ดูวิธีใช้ใหม่
 //
-// สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) · zzht.area (Area) · zzht.new (ช่างบัญชีใหม่) · zzht.old (ช่างพนักงานเดิม) ด้วย SQL
-// + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว) แล้วลบทั้งหมดตอนจบ
+// สร้างผู้ใช้ zzht.tech (ช่างทีมของ C0006) · zzht.area (Area) · zzht.new (ช่างบัญชีใหม่) · zzht.old (ช่างพนักงานเดิม)
+// · zzht.super (Super Admin ดูแล้ว — สร้างท้ายสุด) ด้วย SQL + ใบงานสองใบของทีมนั้นวันนี้ (ใบหนึ่งถึงหน้างานแล้ว)
+// + ใบรอแอดมินเช็คอะไหล่หนึ่งใบ แล้วลบทั้งหมดตอนจบ · เวลาปิดนัดที่ตั้งเพิ่ม (แถวใน AppSetting) ลบคืนตอนจบ
+// · บันทึกดูในฐานะ S001 ที่เทสต์นี้สร้างลบตอนจบ
 // หน้าในไฟล์นี้ปิดกล่องที่ขึ้นเอง (otteri-howto-auto=off) ยกเว้นส่วนที่ตรวจว่ากล่อง "ขึ้น/ไม่ขึ้น" (auto: true)
 // ต้องมี DATABASE_URL · ยืนยันผลที่ฐานข้อมูล (CLAUDE.md)
 const { chromium } = require("playwright");
@@ -49,7 +63,26 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
   });
   let fx = null;
   const users = `select id from "User" where "employeeCode" like 'zzht.%'`;
+  /**
+   * เวลาปิดนัดที่เทสต์นี้ตั้ง (ก้อน 5) — จดแถวสูงสุดไว้เป็นแถว key อื่นก่อนตั้ง (readCutoff อ่านเฉพาะ key='dispatchCutoff')
+   * คืน = ลบแถวที่เพิ่มหลังแถวจด แล้วเรียก GET ให้เซิร์ฟเวอร์อ่านใหม่ · ถูกฆ่ากลางทาง รอบหน้าเจอแถวจดแล้วคืนให้ (โผล่เป็น FAIL)
+   * แถวเวลาปิดค้าง = ทั้งแอปใช้เวลาผิดเงียบ ๆ และเทสต์ที่ขึ้นกับเวลาปิด (dispatch-cutoff) ได้ผลผิด
+   */
+  const CUT_MARK = "howtoWebTestCutoffMax";
+  async function restoreCutoff() {
+    const mark = fx?.sql(`select value from "AppSetting" where key='${CUT_MARK}' order by id limit 1`);
+    if (!mark) return false;
+    fx.sql(`delete from "AppSetting" where key='dispatchCutoff' and id > ${Number(mark)}; delete from "AppSetting" where key='${CUT_MARK}'`);
+    await fx.call(fx.A, "GET", "/settings/dispatch-cutoff").catch(() => {});
+    return true;
+  }
+  /** บันทึกดูในฐานะ S001 ที่เทสต์นี้สร้าง (ก้อน 5) — แถวก่อนหน้านี้ไม่แตะ */
+  let viewLogMax = null;
   async function cleanup() {
+    await restoreCutoff().catch(() => {});
+    if (fx && viewLogMax !== null) {
+      fx.sql(`delete from "ViewAsLog" where id > ${viewLogMax} and "targetUserId"=(select id from "User" where "employeeCode"='S001')`);
+    }
     if (fx) await fx.cleanup().catch(() => {});
     fx?.sql(`delete from "BranchCheckIn" where "userId" in (${users});
              delete from "ViewAsLog" where "targetUserId" in (${users}) or "byUserId" in (${users});
@@ -80,6 +113,7 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
     fx = await setup();
     const { sql, call } = fx;
     cleanupStale(sql, users);
+    if (await restoreCutoff()) fail("เวลาปิดนัดที่เทสต์นี้รอบก่อนตั้งไว้ยังไม่ได้คืน (ถูกฆ่ากลางทาง) — คืนให้แล้ว รอบหน้าจะผ่าน");
     const team = sql(`select zone from "Branch" where code='C0006'`);
     sql(`insert into "User"("employeeCode",name,role,team,"passwordHash","howtoSeen")
          select '${TECH}','ช่างทดสอบวิธีใช้','EMPLOYEE','${team}',"passwordHash",'{"pending": true}'::jsonb from "User" where "employeeCode"='A001'`);
@@ -665,6 +699,334 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       (await vl("ดูในฐานะผู้ใช้อื่น").count()) > 0 && (await vp.locator("[data-otteri-howto]").count()) === 0 && writes.length === 0
         ? pass("กลับเป็นตัวเอง: ไม่มีกล่องขึ้นเอง ไม่มีการจด") : fail("กลับเป็นตัวเองแล้วมีกล่อง/การจด");
       await vc.close();
+    }
+
+    // ══════════ ก้อน 5: ใบงานซ่อม · งานของฉันวันนี้ของหัวหน้าภาค/แอดมิน · หน้าใบงาน (จอคอม 1366) ══════════
+    /** รอขั้น n ของวิธีใช้ในหน้า p ขึ้นจอ (หาเจอ/กลางจอ) — คืน found/center หรือข้อความบอกว่าค้างที่ไหน */
+    const stepOn = async (p, n, ms = 9000) => {
+      const h = p.locator("[data-howto-tour]");
+      const b = p.locator('[data-otteri-howto] [role="dialog"]');
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        const step = await h.getAttribute("data-howto-step").catch(() => null);
+        const target = await h.getAttribute("data-howto-target").catch(() => null);
+        if (step === String(n) && target && target !== "seek" && (await b.count())) {
+          await p.waitForTimeout(250); // จางเข้า 150 ms
+          return target;
+        }
+        await p.waitForTimeout(150);
+      }
+      return `ไม่ขึ้น (ขั้น ${await h.getAttribute("data-howto-step").catch(() => null)} · ${await h.getAttribute("data-howto-target").catch(() => null)})`;
+    };
+    const hostAttr = (p, name) => p.locator("[data-howto-tour]").getAttribute(name).catch(() => null);
+    const boxOf = (p) => p.locator('[data-otteri-howto] [role="dialog"]');
+    const pressIn = (p, label) => boxOf(p).locator(`[aria-label="${label}"]`).click();
+    /** กด "ถัดไป" จนถึงขั้นสุดท้าย — คืน "ขั้น:found|center" ของทุกขั้นที่ขึ้นจอ (ขั้นที่หาไม่เจอแล้วข้ามไม่อยู่ในรายการ) */
+    const walkOn = async (p, max = 9) => {
+      const seen = [];
+      for (let k = 0; k < max; k++) {
+        await p
+          .waitForFunction(() => {
+            const h = document.querySelector("[data-howto-tour]");
+            return !!h && h.getAttribute("data-howto-target") !== "seek" && !!document.querySelector('[data-otteri-howto] [role="dialog"]');
+          }, null, { timeout: 12000 })
+          .catch(() => {});
+        await p.waitForTimeout(250);
+        seen.push(`${await hostAttr(p, "data-howto-step")}:${await hostAttr(p, "data-howto-target")}`);
+        if (await boxOf(p).locator('[aria-label="เข้าใจแล้ว"]').count()) break;
+        await pressIn(p, "ถัดไป");
+      }
+      return seen;
+    };
+    /** หน้าต่างใบงานที่เปิดอยู่ (แถบขั้นตอนที่มองเห็น) — ใบงานที่วิธีใช้เปิดให้ยังเปิดอยู่ไหม */
+    const orderWindows = (p) => p.locator('[aria-label="ขั้นตอนงาน"]').locator("visible=true").count();
+
+    // ใบรอแอดมินเช็คอะไหล่ (ขั้นของแอดมิน) — รายการ "ที่ยังค้าง" ของ A001 มีใบที่ถึงคิวแอดมินแน่ ๆ ไม่ขึ้นกับข้อมูลในเครื่อง
+    const adminJob = await fx.workOrder("C0006", null);
+    await call(fx.supervisor(), "POST", `/work-orders/${adminJob.id}/parts`, {
+      needsParts: true,
+      parts: [{ sparePartId: fx.fxPart(adminJob.id, "BOARD"), quantity: 1 }],
+    });
+    const adminJobActor = (await call(fx.A, "GET", `/work-orders/${adminJob.id}`)).stageActor;
+    adminJobActor === "ADMIN"
+      ? pass(`เตรียม: ${adminJob.code} รอแอดมิน (${sql(`select status from "WorkOrder" where id=${adminJob.id}`)})`)
+      : fail(`เตรียมใบรอแอดมินไม่ได้: ขั้นของ ${adminJob.code} เป็นของ ${adminJobActor}`);
+
+    // ── A001 จอคอม: งานของฉันวันนี้ 6 ขั้น · ใบงานซ่อม 7 ขั้น เปิดใบงานให้ดู · ย้อนกลับ · Esc ไม่ปิดหน้าต่าง · แถบข้อความรอ ──
+    {
+      const aSeen = () => sql(`select coalesce("howtoSeen"->'tours'::text,'{}') from "User" where "employeeCode"='A001'`);
+      const aBefore = aSeen();
+      const { ctx: ac, page: ap } = await open("A001", { width: 1366, height: 900 });
+      const av = (sel) => ap.locator(sel).locator("visible=true");
+
+      // งานของฉันวันนี้ (MyQueue) ของแอดมินทั่วไป — 6 ขั้น (ขั้น 7 เป็นของ Super Admin เท่านั้น)
+      await av('[aria-label="วิธีใช้หน้านี้"]').first().click();
+      const m1 = await stepOn(ap, 1);
+      m1 === "center" && (await hostAttr(ap, "data-howto-tour")) === "admin.myday" && (await hostAttr(ap, "data-howto-total")) === "6"
+        ? pass("แอดมิน งานของฉันวันนี้: ? → 6 ขั้น ขั้น 1 กลางจอ (ไม่มีขั้น Super Admin)") : fail(`แอดมิน งานของฉันวันนี้: ขั้น 1 ${m1} · ${await hostAttr(ap, "data-howto-tour")} · ${await hostAttr(ap, "data-howto-total")} ขั้น`);
+      await ap.keyboard.press("Escape");
+      // แถบข้อความข้ามบนจอคอมอยู่กลางบน — รอให้หายเองก่อนกดเมนู
+      await ap.getByText(/^ข้ามแล้ว · /).locator("visible=true").waitFor({ state: "hidden", timeout: 8000 }).catch(() => {});
+
+      await av('[data-testid="howto-menu.wo"]').first().click();
+      await ap.waitForTimeout(2500);
+      (await ap.getByText("วิธีใช้หน้านี้", { exact: true }).locator("visible=true").count()) === 1
+        ? pass('ใบงานซ่อม จอคอม: ปุ่ม "วิธีใช้หน้านี้" มีชื่อ') : fail("ใบงานซ่อม: ไม่เห็นปุ่ม วิธีใช้หน้านี้");
+      await av('[aria-label="วิธีใช้หน้านี้"]').first().click();
+      const o1 = await stepOn(ap, 1);
+      // เมนูค้างสูงเต็มจอ — กรอบถูกตัดที่ขอบจอ เทียบทั้งตัวแบบปุ่มอื่นไม่ได้ ดูแค่ว่ากรอบชิดซ้าย
+      const sideRing = await ap.locator("[data-howto-ring]").boundingBox().catch(() => null);
+      o1 === "found" && (await hostAttr(ap, "data-howto-tour")) === "admin.orders" && (await hostAttr(ap, "data-howto-total")) === "7" && !!sideRing && sideRing.x <= 1
+        ? pass("ใบงานซ่อม (แอดมิน จอคอม): 7 ขั้น ขั้น 1 กรอบล้อมเมนูด้านซ้าย") : fail(`ใบงานซ่อม ขั้น 1: ${o1} · ${await hostAttr(ap, "data-howto-tour")} · ${await hostAttr(ap, "data-howto-total")} ขั้น`);
+      const list = [];
+      for (const [n, id] of [[2, "orders.tabs"], [3, "orders.quick"], [4, "orders.who"], [5, "orders.add"]]) {
+        await pressIn(ap, "ถัดไป");
+        list.push(`${n}:${await stepOn(ap, n)}:${(await ringAround(ap, id)) ? "ล้อม" : "ไม่ล้อม"}`);
+      }
+      list.join(" ") === "2:found:ล้อม 3:found:ล้อม 4:found:ล้อม 5:found:ล้อม"
+        ? pass("ขั้น 2–5 กรอบล้อมแถบแท็บ · ต้องรีบดู · ป้ายรอใคร · เพิ่มใบงาน") : fail(`ขั้น 2–5: ${list.join(" ")}`);
+      (await orderWindows(ap)) === 0 ? pass("ก่อนขั้น 6 ยังไม่มีหน้าต่างใบงาน") : fail("มีหน้าต่างใบงานเปิดก่อนขั้น 6");
+
+      // ขั้น 6: แอปเปิดใบงานให้เอง — ใบที่ถึงคิวแอดมิน ไม่ใช่ใบรอตรวจเคลม
+      await pressIn(ap, "ถัดไป");
+      const o6 = await stepOn(ap, 6, 15000);
+      const note = ((await layerText(ap)).match(/เปิดใบงาน (\S+) ให้ดูแล้ว — ไม่ต้องกด/) || [])[1] ?? "";
+      const openedRow = note ? sql(`select id||'|'||status from "WorkOrder" where code='${note}'`) : "";
+      const [openedId, openedStatus] = openedRow.split("|");
+      const openedActor = openedId ? (await call(fx.A, "GET", `/work-orders/${openedId}`)).stageActor : null;
+      o6 === "found" && (await ringAround(ap, "order.steps")) && (await orderWindows(ap)) >= 1 &&
+      (await ap.getByText(note, { exact: true }).locator("visible=true").count()) >= 1
+        ? pass(`ขั้น 6: แอปเปิดหน้าต่างใบงาน ${note} ให้ · กรอบล้อมแถบขั้นตอนในหน้าต่าง · กล่องเล็กบอกรหัสใบ`) : fail(`ขั้น 6: ${o6} · กล่องเล็ก "${note}" · หน้าต่าง ${await orderWindows(ap)}`);
+      openedActor === "ADMIN" && openedStatus && openedStatus !== "CLAIM_REVIEW"
+        ? pass(`ใบที่เปิดให้ถึงคิวแอดมิน (API stageActor ADMIN · ฐานข้อมูล ${openedStatus} ไม่ใช่ CLAIM_REVIEW)`) : fail(`ใบที่เปิดให้: ${note} · ${openedStatus} · ขั้นของ ${openedActor}`);
+      // กล่องอยู่เหนือหน้าต่างใบงาน — จุดกลางกล่องเป็นของชั้นวิธีใช้ ชั้นเป็นลูกของ <body> เหนือ Modal ใต้ชั้นแจ้งผล
+      const layering = await ap.evaluate(() => {
+        const box = document.querySelector('[data-otteri-howto] [role="dialog"]');
+        const layer = document.querySelector("[data-otteri-howto]");
+        if (!box || !layer) return null;
+        const r = box.getBoundingClientRect();
+        const el = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 40));
+        return { top: !!el?.closest("[data-otteri-howto]"), z: Number(getComputedStyle(layer).zIndex), body: layer.parentElement === document.body };
+      });
+      layering && layering.top && layering.body && layering.z > 9999 && layering.z < 2147483000
+        ? pass(`กล่องอยู่บนสุดเหนือหน้าต่างใบงาน (ชั้นใน <body> z ${layering.z})`) : fail(`ชั้นของกล่องตอนเปิดใบงาน: ${JSON.stringify(layering)}`);
+      await ap.screenshot({ path: path.join(DIR, "howto-12-admin-order.png") });
+
+      // ขั้น 7 ชี้ปุ่มของขั้นจริง (ใบถึงคิวแอดมิน) · ย้อนกลับไปขั้น 6 ใบยังเปิด · ย้อนกลับไปขั้น 5 ใบปิด
+      await pressIn(ap, "ถัดไป");
+      const o7 = await stepOn(ap, 7);
+      o7 === "found" && (await ringAround(ap, "order.action"))
+        ? pass("ขั้น 7 กรอบล้อมแถวปุ่มของขั้นในใบที่เปิดให้") : fail(`ขั้น 7: ${o7}`);
+      await pressIn(ap, "ย้อนกลับ");
+      const b6 = await stepOn(ap, 6);
+      b6 === "found" && (await orderWindows(ap)) >= 1 ? pass("ย้อนกลับไปขั้น 6 → ใบงานยังเปิดอยู่") : fail(`ย้อนกลับไปขั้น 6: ${b6} · หน้าต่าง ${await orderWindows(ap)}`);
+      await pressIn(ap, "ย้อนกลับ");
+      const b5 = await stepOn(ap, 5);
+      await ap.waitForTimeout(800);
+      b5 === "found" && (await orderWindows(ap)) === 0 && (await ringAround(ap, "orders.add"))
+        ? pass("ย้อนกลับไปขั้น 5 → หน้าต่างใบงานที่แอปเปิดให้ปิดคืน · กรอบกลับมาที่ปุ่มเพิ่มใบงาน") : fail(`ย้อนกลับไปขั้น 5: ${b5} · หน้าต่าง ${await orderWindows(ap)}`);
+      await pressIn(ap, "ถัดไป");
+      const a6 = await stepOn(ap, 6, 15000);
+      const note2 = ((await layerText(ap)).match(/เปิดใบงาน (\S+) ให้ดูแล้ว — ไม่ต้องกด/) || [])[1] ?? "";
+      a6 === "found" && (await orderWindows(ap)) >= 1 && note2 === note
+        ? pass(`ถัดไปอีกครั้ง → เปิดใบเดิม (${note2}) ให้อีกรอบ`) : fail(`ถัดไปอีกครั้ง: ${a6} · ${note2} · หน้าต่าง ${await orderWindows(ap)}`);
+
+      // Esc = ข้าม: กล่องหาย แต่หน้าต่างใบงานต้องไม่ปิด และแถบข้อความรอจนปิดหน้าต่าง (ไม่บังปุ่มที่เพิ่งชี้)
+      await ap.keyboard.press("Escape");
+      await ap.waitForTimeout(1500);
+      const skipText = 'ข้ามแล้ว · ดูวิธีใช้อีกครั้ง กดปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช';
+      const skipToast = ap.getByText(skipText, { exact: true }).locator("visible=true");
+      (await ap.locator("[data-otteri-howto]").count()) === 0 && (await orderWindows(ap)) >= 1 && (await inertOf(ap)) === 0
+        ? pass("Esc → กล่องหาย ไม่เหลือ inert · หน้าต่างใบงานยังเปิดอยู่") : fail(`Esc: ชั้น ${await ap.locator("[data-otteri-howto]").count()} · หน้าต่าง ${await orderWindows(ap)} · inert ${await inertOf(ap)}`);
+      (await skipToast.count()) === 0 ? pass("ระหว่างหน้าต่างใบงานยังเปิด ไม่มีแถบข้อความ (รอไว้)") : fail("แถบข้อความขึ้นทับหน้าต่างใบงานทันที");
+      (await av('[data-testid="howto-order.help"]').count()) === 1 && (await av('[data-testid="howto-order.help"]').getAttribute("aria-label")) === "วิธีใช้หน้านี้"
+        ? pass("หน้าต่างใบงานมีปุ่ม ? (วิธีใช้หน้านี้) ของตัวเอง") : fail(`ปุ่ม ? ในหน้าต่างใบงาน: ${await av('[data-testid="howto-order.help"]').count()}`);
+      // ปิดหน้าต่างด้วย ✕ ในหัวหน้าต่าง (แถวเดียวกับปุ่ม ?) → แถบข้อความที่รอไว้ขึ้น
+      await av('[data-testid="howto-order.help"]').first().locator("xpath=../..").locator('[aria-label="ปิด"]').first().click();
+      await skipToast.waitFor({ timeout: 5000 }).catch(() => {});
+      (await skipToast.count()) === 1 && (await orderWindows(ap)) === 0
+        ? pass(`ปิดหน้าต่างใบงาน → แถบ "${skipText}" ขึ้น`) : fail(`ปิดหน้าต่างแล้ว: แถบ ${await skipToast.count()} · หน้าต่าง ${await orderWindows(ap)}`);
+      aSeen() === aBefore ? pass("A001 ข้ามทุกรอบ — ฐานข้อมูลไม่ถูกจด") : fail(`A001 ถูกจด: ${aBefore} → ${aSeen()}`);
+      await ac.close();
+    }
+
+    // ── หลบหน้าโหลด: ดูในฐานะ S001 → ใบงานซ่อม → ขั้นที่เปิดใบงานเจอ 401 viewAsEnded → แอปกลับเป็นตัวเองพร้อมหน้าโหลดเต็มจอ ──
+    // (ทางจริงทางเดียวที่หน้าโหลด/กล่องยืนยันของแอปขึ้นระหว่างวิธีใช้ยังเล่นอยู่ — แผนงานข้อ 8.4 · การกลับมาหลังหน้าโหลดปิดตรวจด้วยการอ่านโค้ด)
+    {
+      viewLogMax = Number(sql(`select coalesce(max(id),0) from "ViewAsLog"`));
+      const { ctx: pc, page: pp } = await open("A001", { width: 1366, height: 900 });
+      const pv = (sel) => pp.locator(sel).locator("visible=true");
+      await pv('[aria-label="ดูในฐานะผู้ใช้อื่น"]').first().click();
+      await pp.waitForTimeout(1500);
+      await pv('[aria-label="ตำแหน่ง หัวหน้าภาค"]').first().click();
+      await pp.waitForTimeout(400);
+      await pv('[aria-label="ค้นหาผู้ใช้ที่จะดู"]').fill("S001");
+      await pp.waitForTimeout(800);
+      await pp.locator('[aria-label^="เลือก "]').locator("visible=true").first().click();
+      await pp.waitForTimeout(300);
+      await pv('[aria-label="ดูในฐานะคนนี้"]').click();
+      await pp.waitForTimeout(4000);
+      const viewing = (await pp.getByText("กำลังดูในฐานะ", { exact: false }).locator("visible=true").count()) > 0;
+      await pv('[data-testid="howto-menu.wo"]').first().click();
+      await pp.waitForTimeout(2500);
+      await pv('[aria-label="วิธีใช้หน้านี้"]').first().click();
+      const p1 = await stepOn(pp, 1);
+      viewing && p1 === "found" && (await hostAttr(pp, "data-howto-tour")) === "sup.orders" && (await hostAttr(pp, "data-howto-total")) === "6"
+        ? pass("ดูในฐานะ S001 · ใบงานซ่อม: ? → วิธีใช้ของหัวหน้าภาค 6 ขั้น") : fail(`ดูในฐานะ S001: แถบ ${viewing} · ขั้น 1 ${p1} · ${await hostAttr(pp, "data-howto-tour")}`);
+      const pList = [];
+      for (const n of [2, 3, 4]) {
+        await pressIn(pp, "ถัดไป");
+        pList.push(`${n}:${await stepOn(pp, n)}`);
+      }
+      // ขั้น 2 แท็บย่อยมีเฉพาะในกล่องงาน — เปิดจากเมนูใบงานซ่อม (ที่ยังค้าง) จึงขึ้นกลางจอ
+      pList.join(" ") === "2:center 3:found 4:found" ? pass("หัวหน้าภาค ขั้น 2 กลางจอ (ไม่ได้อยู่กล่องงาน) · ขั้น 3–4 ชี้ของจริง") : fail(`หัวหน้าภาค ขั้น 2–4: ${pList.join(" ")}`);
+
+      const detailGets = [];
+      const DETAIL = /\/api\/work-orders\/\d+(\?.*)?$/;
+      await pp.route(DETAIL, (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        detailGets.push(route.request().url());
+        return route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "หมดสิทธิ์ดูในฐานะผู้ใช้นี้แล้ว", viewAsEnded: true }),
+        });
+      });
+      let stops = 0;
+      await pp.route("**/api/auth/view-as/stop", async (route) => {
+        stops++;
+        await new Promise((r) => setTimeout(r, 3000));
+        await route.continue().catch(() => {});
+      });
+      await pressIn(pp, "ถัดไป");
+      const loader = pp.locator("[data-otteri-overlay]").getByText("กำลังบันทึก...", { exact: true }).locator("visible=true");
+      const loaderOn = await loader.waitFor({ timeout: 6000 }).then(() => true, () => false);
+      await pp.waitForTimeout(300);
+      const during = {
+        loader: await loader.count(),
+        boxes: await boxOf(pp).count(),
+        host: await pp.locator("[data-howto-tour]").count(),
+        inert: await inertOf(pp),
+        windows: await pp.locator('[aria-label="ปิดหน้าต่าง"]').count(),
+      };
+      loaderOn && detailGets.length >= 1 && during.boxes === 0 && during.host === 1 && during.inert > 0 && during.windows > 0
+        ? pass("หน้าโหลดเต็มจอขึ้นระหว่างเล่น → กล่องหลบ (ไม่วาด) แต่ชั้นยังอยู่ หน้าข้างหลังยัง inert · หน้าต่างใบงานเปิดอยู่")
+        : fail(`ระหว่างหน้าโหลด: ${JSON.stringify({ loaderOn, gets: detailGets.length, ...during })}`);
+      await pp.screenshot({ path: path.join(DIR, "howto-13-paused-loader.png") });
+      // Esc ระหว่างหลบ: ถูกกินเฉย ๆ — ไม่ข้าม ไม่ปิดหน้าต่างใบงานใต้หน้าโหลด (หน้าโหลด/กล่องยืนยันไม่มี Esc ของตัวเอง)
+      await pp.keyboard.press("Escape");
+      await pp.waitForTimeout(400);
+      const afterEsc = {
+        loader: await loader.count(),
+        host: await pp.locator("[data-howto-tour]").count(),
+        inert: await inertOf(pp),
+        windows: await pp.locator('[aria-label="ปิดหน้าต่าง"]').count(),
+      };
+      afterEsc.loader === 1 && afterEsc.host === 1 && afterEsc.inert === during.inert && afterEsc.windows === during.windows
+        ? pass("Esc ระหว่างหน้าโหลด: หน้าต่างใบงานไม่ปิด · วิธีใช้ไม่ข้าม · inert เท่าเดิม") : fail(`Esc ระหว่างหน้าโหลด: ${JSON.stringify({ during, afterEsc })}`);
+      // ปล่อยคำขอ → กลับเป็น A001 (MainNavigator ขึ้นใหม่) — ไม่มีวิธีใช้ค้าง ไม่เหลือ inert
+      await pp.waitForTimeout(5500);
+      (await pv('[aria-label="ดูในฐานะผู้ใช้อื่น"]').count()) > 0 && (await pp.getByText("กำลังดูในฐานะ", { exact: false }).locator("visible=true").count()) === 0 &&
+      (await pp.locator("[data-otteri-howto]").count()) === 0 && (await inertOf(pp)) === 0 && stops >= 1
+        ? pass("ปล่อยหน้าโหลดแล้วกลับเป็น A001 · ไม่มีวิธีใช้ค้าง ไม่เหลือ inert") : fail(`หลังปล่อย: ชั้น ${await pp.locator("[data-otteri-howto]").count()} · inert ${await inertOf(pp)} · คำขอ stop ${stops}`);
+      await pp.unroute(DETAIL);
+      await pp.unroute("**/api/auth/view-as/stop");
+      await pc.close();
+    }
+
+    // ── หัวหน้าภาค S001 จอคอม: ขั้น 7 "เวลาปิดนัดงานพรุ่งนี้" บอกเวลาที่แอดมินตั้งจริง (เจ้าของงานตอบ 4.2) ──
+    {
+      const was = (await call(fx.A, "GET", "/settings/dispatch-cutoff")).time;
+      const want = was === "15:30" ? "16:30" : "15:30";
+      const cutMax = Number(sql(`select coalesce(max(id),0) from "AppSetting" where key='dispatchCutoff'`));
+      sql(`insert into "AppSetting"(key,value) values ('${CUT_MARK}','${cutMax}')`);
+      const put = await call(fx.A, "PUT", "/settings/dispatch-cutoff", { time: want });
+      const latestCut = () => sql(`select coalesce((select value from "AppSetting" where key='dispatchCutoff' order by id desc limit 1),'16:00')`);
+      put.time === want && latestCut() === want
+        ? pass(`ตั้งเวลาปิดนัด ${was} → ${want} ผ่านหน้าตั้งค่าของแอดมิน (ฐานข้อมูลแถวล่าสุด ${want})`) : fail(`ตั้งเวลาปิดนัดไม่ได้: ${JSON.stringify(put)} · ฐานข้อมูล ${latestCut()}`);
+
+      const sSeen = () => sql(`select coalesce("howtoSeen"::text,'NULL') from "User" where "employeeCode"='S001'`);
+      const sBefore = sSeen();
+      const { ctx: uc, page: up } = await open("S001", { width: 1366, height: 900 });
+      const uv = (sel) => up.locator(sel).locator("visible=true");
+      /** เล่นงานของฉันวันนี้จนขั้นสุดท้าย — คืนข้อความในกล่องขั้นสุดท้าย (แล้วกด Esc ข้าม ไม่จด) */
+      const lastStepText = async () => {
+        await uv('[aria-label="วิธีใช้หน้านี้"]').first().click();
+        const seen = await walkOn(up);
+        const total = await hostAttr(up, "data-howto-total");
+        const tour = await hostAttr(up, "data-howto-tour");
+        const text = (await boxOf(up).innerText().catch(() => "")).replace(/\s+/g, " ");
+        return { seen, total, tour, text };
+      };
+      const r1 = await lastStepText();
+      const last1 = r1.seen[r1.seen.length - 1] ?? "";
+      r1.tour === "sup.myday" && r1.total === "7" && /^7:(found|center)$/.test(last1) && r1.text.includes("เวลาปิดนัดงานพรุ่งนี้")
+        ? pass(`หัวหน้าภาค งานของฉันวันนี้ 7 ขั้น (${r1.seen.join(" ")}) · ขั้น 7 "เวลาปิดนัดงานพรุ่งนี้"`) : fail(`หัวหน้าภาค: ${r1.tour} · ${r1.total} ขั้น · ${r1.seen.join(" ")}`);
+      r1.text.includes(`พรุ่งนี้นัดได้ถึง ${want} น.`) && !r1.text.includes("ปกติ 16:00")
+        ? pass(`ขั้น 7 บอกเวลาปิดที่ตั้งใหม่ "พรุ่งนี้นัดได้ถึง ${want} น." (ไม่ใช่ 16:00 ที่เขียนตาย)`) : fail(`ขั้น 7 ไม่บอกเวลาที่ตั้ง: ${r1.text.slice(0, 260)}`);
+      !r1.text.includes("ทัวร์") ? pass('กล่องไม่มีคำว่า "ทัวร์"') : fail('กล่องมีคำว่า "ทัวร์"');
+      // กรอบหัวกลุ่ม/ปุ่มของขั้นอยู่เฉพาะกลุ่มตามขั้น — หัวข้อปัก (แอดมินตอบแล้ว ฯลฯ) ไม่มีชื่อนี้
+      const pinned = await up.evaluate(() =>
+        [...document.querySelectorAll('[data-testid="howto-queue.group"]')].filter((el) => /แอดมินตอบแล้ว|หัวหน้าภาคส่งให้ตรวจสอบ|ขอนัดด่วน|เลยนัด/.test(el.textContent || "")).length,
+      );
+      pinned === 0 ? pass("หัวหน้าภาค: กรอบหัวกลุ่มไม่อยู่บนหัวข้อปัก") : fail(`หัวข้อปักมีชื่อ queue.group ${pinned} กลุ่ม`);
+      await up.screenshot({ path: path.join(DIR, "howto-14-sup-cutoff.png") });
+      await up.keyboard.press("Escape");
+      await up.waitForTimeout(600);
+
+      // คืนค่าเดิม (ลบแถวที่เทสต์เพิ่ม) แล้วเปิดแอปใหม่ — กล่องต้องบอกเวลาเดิม ไม่ใช่ค่าที่จำไว้ในเครื่อง
+      await restoreCutoff();
+      const leftRows = sql(`select count(*) from "AppSetting" where key='dispatchCutoff' and id > ${cutMax}`);
+      leftRows === "0" && latestCut() === was ? pass(`คืนเวลาปิดนัดเป็น ${was} (ฐานข้อมูลไม่เหลือแถวที่เทสต์เพิ่ม)`) : fail(`คืนเวลาปิดนัด: เหลือ ${leftRows} แถว · ล่าสุด ${latestCut()}`);
+      await up.reload({ waitUntil: "networkidle", timeout: 180000 });
+      await up.waitForTimeout(4000);
+      const r2 = await lastStepText();
+      r2.text.includes(`พรุ่งนี้นัดได้ถึง ${was} น.`) && !r2.text.includes(`ถึง ${want} น.`)
+        ? pass(`คืนค่าแล้วขั้น 7 บอก "พรุ่งนี้นัดได้ถึง ${was} น." ตามค่าจริง`) : fail(`หลังคืนค่า ขั้น 7: ${r2.text.slice(0, 260)}`);
+      await up.keyboard.press("Escape");
+      await up.waitForTimeout(600);
+      sSeen() === sBefore ? pass("S001 ข้ามทุกรอบ — ฐานข้อมูลไม่ถูกจด") : fail(`S001 ถูกจด: ${sBefore} → ${sSeen()}`);
+      await uc.close();
+    }
+
+    // ── Super Admin (บัญชีชั่วคราว ดูแล้ว) จอคอม: งานของฉันวันนี้ 7 ขั้น · ขั้น 7 กางกลุ่ม "ผู้ดูแลระบบ" ชี้ "สำรองข้อมูล" ──
+    // สร้างท้ายสุด: ระหว่างมี Super Admin เพิ่มอีกคน กติกาบางข้อของแอดมินทั่วไปเปลี่ยน (ตั้งรหัสใหม่ให้แอดมินคนอื่น ฯลฯ)
+    const seenIso = new Date().toISOString();
+    sql(`insert into "User"("employeeCode",name,role,"passwordHash","howtoSeen")
+         select 'zzht.super','ซุปเปอร์ ทดสอบวิธีใช้','SUPER_ADMIN',"passwordHash",
+                '{"welcome": "${seenIso}", "notice": "${seenIso}"}'::jsonb from "User" where "employeeCode"='A001'`);
+    {
+      const { ctx: zc, page: zp } = await open("zzht.super", { width: 1366, height: 900 });
+      const zv = (sel) => zp.locator(sel).locator("visible=true");
+      await zv('[aria-label="วิธีใช้หน้านี้"]').first().click();
+      const seen = await walkOn(zp);
+      const zText = (await boxOf(zp).innerText().catch(() => "")).replace(/\s+/g, " ");
+      (await hostAttr(zp, "data-howto-tour")) === "admin.myday" && (await hostAttr(zp, "data-howto-total")) === "7" && seen[seen.length - 1] === "7:found"
+        ? pass(`Super Admin งานของฉันวันนี้ 7 ขั้น (${seen.join(" ")})`) : fail(`Super Admin: ${await hostAttr(zp, "data-howto-tour")} · ${await hostAttr(zp, "data-howto-total")} ขั้น · ${seen.join(" ")}`);
+      zText.includes("เฉพาะ Super Admin") && zText.includes('"สำรองข้อมูล" อยู่เมนู ผู้ดูแลระบบ') && zText.includes('กางกลุ่ม "ผู้ดูแลระบบ" ให้แล้ว — ไม่ต้องกด') &&
+      (await zv('[data-testid="howto-menu.backup"]').count()) >= 1 && (await ringAround(zp, "menu.backup"))
+        ? pass('ขั้น 7 "เฉพาะ Super Admin": กางกลุ่ม ผู้ดูแลระบบ ให้ · กรอบล้อม สำรองข้อมูล') : fail(`Super Admin ขั้น 7: ${zText.slice(0, 220)}`);
+      (await zp.evaluate(() => localStorage.getItem("otteri-side-groups"))) === GROUPS_SEED
+        ? pass("กางกลุ่มให้ดูแต่ไม่เขียนลงเครื่อง") : fail("ค่ากลุ่มเมนูในเครื่องเปลี่ยนระหว่างกางให้ดู");
+      const queueMarks = await zp.evaluate(() => ({
+        pinnedHeads: [...document.querySelectorAll('[data-testid="howto-queue.group"]')].filter((el) => /ขอนัดด่วน|เลยนัด|หัวหน้าภาคส่งให้ตรวจสอบ/.test(el.textContent || "")).length,
+        urgentBtns: [...document.querySelectorAll('[data-testid="howto-queue.actions"]')].filter((el) => /แก้เป็นงานด่วน/.test(el.textContent || "")).length,
+      }));
+      queueMarks.pinnedHeads === 0 && queueMarks.urgentBtns === 0
+        ? pass("แอดมิน: กรอบหัวกลุ่ม/ปุ่มของขั้นไม่อยู่บนกรอบปัก (ขอนัดด่วน · เลยนัด)") : fail(`กรอบบนหัวข้อปัก: ${JSON.stringify(queueMarks)}`);
+      await zp.screenshot({ path: path.join(DIR, "howto-15-super-step7.png") });
+      await pressIn(zp, "เข้าใจแล้ว");
+      const zSeen = () => sql(`select coalesce("howtoSeen"->'tours'->>'admin.myday','') from "User" where "employeeCode"='zzht.super'`);
+      let zAt = zSeen();
+      for (let k = 0; k < 25 && !zAt; k++) {
+        await zp.waitForTimeout(200);
+        zAt = zSeen();
+      }
+      await zp.waitForTimeout(1200);
+      zAt && (await zv('[data-testid="howto-menu.backup"]').count()) === 0 && (await inertOf(zp)) === 0
+        ? pass(`เข้าใจแล้ว → ฐานข้อมูลจด tours."admin.myday" (${zAt}) · กลุ่ม ผู้ดูแลระบบ ย่อกลับ · ไม่เหลือ inert`)
+        : fail(`Super Admin เข้าใจแล้ว: ฐานข้อมูล "${zAt}" · สำรองข้อมูลยังเห็น ${await zv('[data-testid="howto-menu.backup"]').count()}`);
+      await zc.close();
     }
 
     errors.length === 0 ? pass("ไม่มี error ในหน้าเว็บ") : fail(`error ในหน้าเว็บ: ${errors.slice(0, 3).join(" | ")}`);

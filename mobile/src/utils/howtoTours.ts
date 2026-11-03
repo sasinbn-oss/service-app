@@ -3,14 +3,21 @@
  *
  * ข้อความอยู่ข้างไฟล์หน้าจอแต่ละไฟล์ (screens/*.howto.ts) — ที่นี่แค่รวมรายชื่อและตัดสินว่าบทบาทไหน/จอแบบไหนเห็นขั้นไหน
  * รอบแรก: ช่าง หัวหน้าภาค แอดมิน (หน้าที่ใช้ทุกวัน) · ทีม Area และ Admin Spare Part รอรอบหน้า (เห็นหน้าว่างที่บอกว่ากำลังทำ)
+ * บทบาทไหนมีอย่างน้อยหนึ่งเรื่องในรายการนี้ = ได้กล่องต้อนรับ/ข้อความแนะนำตอนเปิดแอป (utils/howto.ts promptAllowed)
  */
 import { Platform } from "react-native";
 import type { Role, User } from "../types";
 import type { HowToBody, HowToCtx, HowToRole, HowToStep, HowToTour } from "./howtoTypes";
 import { TECH_MYDAY } from "../screens/MyJobsScreen.howto";
+import { ADMIN_MYDAY, SUP_MYDAY } from "../screens/MyQueue.howto";
+import { ADMIN_ORDERS, SUP_ORDERS, TECH_ORDERS } from "../screens/WorkOrderListScreen.howto";
+import { TECH_ORDER } from "../screens/WorkOrderDetailScreen.howto";
 
-/** เรียงตามที่หน้า "สอนการใช้งาน" แสดง */
-export const TOURS: HowToTour[] = [TECH_MYDAY];
+/**
+ * เรียงตามที่หน้า "สอนการใช้งาน" แสดง — แต่ละบทบาทเห็นแค่เรื่องของตัวเอง ลำดับจึงเป็น งานของฉันวันนี้ → ใบงานซ่อม → ใบงาน
+ * (หน้าแรกก่อน แล้วไล่ตามทางที่กดเข้าไปจริง)
+ */
+export const TOURS: HowToTour[] = [TECH_MYDAY, SUP_MYDAY, ADMIN_MYDAY, TECH_ORDERS, SUP_ORDERS, ADMIN_ORDERS, TECH_ORDER];
 
 /**
  * บทบาทของผู้ใช้ที่ล็อกอินอยู่ (role ถูกแปลงใน AuthContext แล้ว — Super Admin/Admin Spare Part = ADMIN + ธง)

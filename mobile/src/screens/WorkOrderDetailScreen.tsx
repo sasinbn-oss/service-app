@@ -54,6 +54,8 @@ import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown, { DropdownOption } from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
+import HowToButton from "../components/HowToButton";
+import { howtoTarget, useHowToAction } from "../utils/howto";
 import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
@@ -1490,6 +1492,20 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     return o.stageActor === user.role;
   }
 
+  /**
+   * สอนการใช้งาน (หัวหน้าภาค "ระบุอะไหล่" เริ่มจากหน้าสอนการใช้งาน): เปิดฟอร์มระบุอะไหล่ของใบนี้ให้ — เปิดอย่างเดียว ไม่บันทึกอะไร
+   * งานของฉันวันนี้เปิดใบมาให้ก่อน (queue.openParts) แล้วคำสั่งนี้เปิดฟอร์มต่อ · ฟอร์มเปิดตอนโหลดเองเฉพาะใบตรวจหน้างาน/คอนเฟิร์มอะไหล่
+   * (openOnLoad) และไม่เปลี่ยนให้ — ปุ่มบนการ์ดของหัวหน้าภาคทุกคนต้องทำงานเหมือนเดิม
+   * เฉพาะใบระบุอะไหล่ที่ช่างยังไม่ได้เลือกอะไหล่มา (จอคอนเฟิร์มไม่มีสามทางเลือกที่วิธีใช้อธิบาย) และถึงคิวคนดูจริง
+   * ใบยังไม่โหลด = ยังไม่ตอบ (ตัวเครื่องลองซ้ำจนครบเวลา)
+   */
+  useHowToAction("order.openStage", () => {
+    if (!order) return null;
+    if (order.status !== "NEW" || pickPending(order) || !myTurn(order)) return false;
+    setStageOpen(true);
+    return { ok: true, code: order.code };
+  });
+
   if (loading) {
     return (
       <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
@@ -1783,6 +1799,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {user?.superAdmin ? (
             <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} />
           ) : null}
+          {/*
+            ปุ่ม ? ของหน้าต่างใบงาน — ทุกคน (หน้าต่างนี้คือหน้าหนึ่ง): ช่างเล่นวิธีใช้ "ใบงาน" · คนอื่นเปิดหน้าสอนการใช้งาน
+            (แอดมิน/หัวหน้าภาคเรียนหน้าใบงานในวิธีใช้ "ใบงานซ่อม" ของตัวเอง) · บนมือถือหน้าต่างเต็มจอ ปุ่ม ? บนแถบหัวถูกบัง
+          */}
+          <HowToButton compact target="order.help" />
         </View>
       }
     >
@@ -2046,7 +2067,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           const issueSub = path.rows.find((r) => r.key === "ISSUE")?.sub;
           return (
             // ชื่อของทั้งส่วน (รอบตรวจ + แถบ + ขั้นย่อย) — คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder · inspect-confirm) หาจากชื่อนี้
-            <View accessibilityLabel="ขั้นตอนงาน">
+            <View accessibilityLabel="ขั้นตอนงาน" {...howtoTarget("order.steps")}>
               {/*
                 รอบตรวจหน้างาน — เหนือแถบ ไม่นับเป็นขั้นหลัก (แบบที่ตกลง ต.ค. 69 รอบสอง)
                 เดิมเป็นสามขั้นต่อจากขั้น 1 และขั้น 1 ติ๊กว่าระบุอะไหล่แล้ว ทั้งที่เลือกส่งตรวจเพราะยังระบุไม่ได้
@@ -2304,7 +2325,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       ) : null}
 
 
-      <View style={[card, styles.nowCard]}>
+      <View style={[card, styles.nowCard]} {...howtoTarget("order.now")}>
         {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
         {urgent ? <UrgentGlow radius={radius.xl} /> : null}
         <View style={styles.nowHead}>
@@ -2722,7 +2743,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ) : !done ? (
           myTurn(order) ? (
             <>
-              <View style={styles.actions}>
+              <View style={styles.actions} {...howtoTarget("order.action")}>
   {/*
                   ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
                   ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
@@ -2974,20 +2995,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ปิดงานแล้วแนบเพิ่มไม่ได้ ใบที่ปิดแล้วคือบันทึกที่จบไปแล้ว
         ยกเว้นแอดมินที่ยังต้องเอาของที่ไม่ควรอยู่ในระบบออกได้
       */}
-      <WorkOrderAttachments
-        workOrderId={order.id}
-        canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
-        reloadKey={filesKey}
-        formLinks={formDetail.links}
-        onLoaded={filesLoaded}
-        onLoadFailed={filesFailed}
-        onAdded={load}
-        inspection={
-          order.status === "INSPECTING" || order.inspectedAt
-            ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
-            : undefined
-        }
-      />
+      {/* กรอบห่อให้วิธีใช้ชี้การ์ดรูปและไฟล์ (ชื่อคงที่) — การ์ดอยู่ในคอลัมน์ที่เว้นระยะด้วย gap ห่อแล้วระยะไม่เปลี่ยน */}
+      <View {...howtoTarget("order.files")}>
+        <WorkOrderAttachments
+          workOrderId={order.id}
+          canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
+          reloadKey={filesKey}
+          formLinks={formDetail.links}
+          onLoaded={filesLoaded}
+          onLoadFailed={filesFailed}
+          onAdded={load}
+          inspection={
+            order.status === "INSPECTING" || order.inspectedAt
+              ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
+              : undefined
+          }
+        />
+      </View>
 
       </View>
 
@@ -7674,7 +7698,7 @@ function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed
   const minor = ordered.filter((l) => MINOR_ACTIONS.has(l.action)).length;
   const shown = all ? ordered : ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
   return (
-    <View style={[styles.card, closed && styles.cardDone]}>
+    <View style={[styles.card, closed && styles.cardDone]} {...howtoTarget("order.history")}>
       <View style={styles.hHead}>
         <Ionicons name="time-outline" size={19} color={colors.primaryInk} />
         <Text style={[styles.infoTitle, headingFont]}>ประวัติ</Text>

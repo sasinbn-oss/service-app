@@ -57,12 +57,15 @@ export function ViewTabs({
   value,
   onPick,
   right,
+  testID,
 }: {
   /** dot = มีใบที่อัปเดตรอให้ดูในแท็บนั้น (ปุ่ม "อีก n ใบ" ของหน้ารายการใบงาน) */
   tabs: { value: string; label: string; n?: number; dot?: boolean }[];
   value: string;
   onPick: (v: string) => void;
   right?: React.ReactNode;
+  /** ชื่อคงที่ของแถบ — "สอนการใช้งาน" ชี้แถบแท็บด้วยชื่อนี้ (howtoTarget ของหน้าที่ใช้) */
+  testID?: string;
 }) {
   /**
    * แท็บที่เลือกต้องอยู่ในจอเสมอ — ปุ่ม "มีอัปเดต" พาไปแท็บท้าย ๆ (ปิดแล้ว · ทั้งหมด) ได้
@@ -75,7 +78,7 @@ export function ViewTabs({
     if (x !== undefined) scroller.current?.scrollTo({ x: Math.max(0, x - 16), animated: true });
   }, [value]);
   return (
-    <View style={styles.tabsWrap}>
+    <View style={styles.tabsWrap} testID={testID}>
       <ScrollView
         ref={scroller}
         horizontal
