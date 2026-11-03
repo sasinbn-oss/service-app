@@ -52,6 +52,12 @@
 - **`animationKeyframes` ต้องอยู่ใน `StyleSheet.create`** ส่งเป็น style ตรง ๆ ถูกทิ้งเงียบ ๆ และ `transform`
   ในคีย์เฟรมต้องเป็นข้อความ CSS (`"translateX(10px)"`) — แถบโหลดเคยค้างนิ่งเพราะเรื่องนี้ (ดู `Blink` ใน `WorkOrderListScreen.tsx`)
 
+### React Navigation 7
+
+- **`navigate` ไปหน้าที่อยู่ในชุดหน้าแล้ว = ซ้อนเพิ่มอีกใบ** ถ้าไม่ใช่หน้าบนสุด (ไม่ถอยกลับแบบรุ่น 6)
+  ต้องการถอยกลับให้ส่ง `pop: true` (หรือ `popTo`) · `initial: false` มีผลแค่ตอนแท็บถูกสร้างครั้งแรก
+  — เมนูข้างเคยงอกงานของฉันซ้อนกันหลายใบเพราะเรื่องนี้ (ดู `navigateTo` ใน `SideMenu.tsx`)
+
 ### การ deploy (Render + Supabase)
 
 - **Build Command กับ Start Command คนละหน้าใน Settings** (Build / Deploy)

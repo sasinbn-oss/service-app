@@ -14,6 +14,7 @@ import {
 import { EXIT_EASE, lockSelection, rubber, spring, timing } from "../utils/motion";
 import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { StackActions } from "@react-navigation/native";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { canOpenScreen, isAreaTeam } from "../utils/areaTeam";
@@ -348,13 +349,36 @@ function currentKey(): string | null {
   return null;
 }
 
+/** ชุดหน้าที่ซ้อนอยู่ในแท็บนั้นตอนนี้ — undefined = แท็บยังไม่เคยเปิด (ยังไม่มีชุดหน้าให้ล้าง) */
+function tabStack(tab: Tab) {
+  const st = navigationRef.getRootState()?.routes.find((r) => r.name === tab)?.state;
+  return st?.key && st.stale === false ? st : undefined;
+}
+
 function navigateTo(it: Item) {
   if (!navigationRef.isReady()) return;
-  // initial: false ให้ปุ่มย้อนกลับพากลับไปหน้าแรกของแท็บ ไม่ใช่หลุดออกจากแท็บ
-  const nested = TAB_ROOTS.has(it.screen)
-    ? { screen: it.screen, params: it.params }
-    : { screen: it.screen, params: it.params, initial: false };
-  (navigationRef.navigate as (tab: Tab, p: object) => void)(it.tab, nested);
+  const navigate = navigationRef.navigate as (tab: Tab, p: object) => void;
+  if (!TAB_ROOTS.has(it.screen)) {
+    // initial: false ให้ปุ่มย้อนกลับพากลับไปหน้าแรกของแท็บ ไม่ใช่หลุดออกจากแท็บ
+    navigate(it.tab, { screen: it.screen, params: it.params, initial: false });
+    return;
+  }
+  /*
+   * React Navigation 7 ไปหน้าที่มีอยู่ในชุดหน้าแล้วด้วย navigate เฉย ๆ = ซ้อนหน้านั้นเพิ่มอีกใบ (ยกเว้นเป็นหน้าบนสุดอยู่แล้ว)
+   * เดิมกด "งานของฉันวันนี้" จากหน้าอื่นได้งานของฉันใบที่สองทับบนหน้าเดิม มีทาง "‹ หน้าก่อน" ให้กด
+   * และทุกใบโหลดข้อมูล/ถามซ้ำของตัวเองค้างไว้ ยิ่งกดเมนูยิ่งงอก
+   * pop: true = ถอยกลับไปหน้าเดิมที่มีอยู่ (ล้างหน้าที่ซ้อนบนมัน) ใช้ตัวเดิม ไม่สร้างใหม่
+   * (initial ไม่ช่วย — มีผลแค่ตอนแท็บถูกสร้างครั้งแรก)
+   *
+   * หน้าหลัก · แผนงาน (ของแอดมิน/หัวหน้าภาค) ไม่ใช่หน้าแรกของชุดหน้า ถ้ายังไม่อยู่ในชุด pop: true หาไม่เจอแล้วซ้อนต่อบนสุด
+   * ทับหน้าที่ค้างอยู่ — ถอยแท็บนั้นกลับหน้าแรกก่อน ได้ "งานของฉัน › หน้าหลัก" แบบเดียวกับกดจากแอปที่เพิ่งเปิด
+   * ไม่ใช่ทางย้อนกลับไปหน้าที่ทิ้งไว้แล้ว · สั่งถึงชุดหน้านั้นตรง ๆ (target) เพราะตอนกดอาจยืนอยู่แท็บอื่น
+   */
+  const stack = tabStack(it.tab);
+  if (stack && stack.routes.length > 1 && !stack.routes.some((r) => r.name === it.screen)) {
+    navigationRef.dispatch({ ...StackActions.popToTop(), target: stack.key });
+  }
+  navigate(it.tab, { screen: it.screen, params: it.params, pop: true });
 }
 
 /** ป้าย "รอตรวจ n" ข้างเมนูประวัติเคลม — ตามตัวอย่างที่ตกลง (ไม่ใช่วงกลมแดงแบบกล่องงาน) */
