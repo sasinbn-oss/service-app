@@ -8935,6 +8935,38 @@ function CloseModal({
     if (part !== undefined) setPartTab(part);
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }
+  /**
+   * แถบเลิกเคลมใต้แถบขั้น (เจ้าของงานเลือก 3 พ.ย. 69) — ติ๊ก "ส่งอะไหล่เก่าเคลม" แล้วฟอร์มกลายเป็นทีละขั้นที่ขั้น 1
+   * ปุ่ม "ไม่ส่งเคลมชิ้นนี้" อยู่ในขั้นเคลมอย่างเดียว ช่างที่ติ๊กผิดหาไม่เจอว่าจะถอยตรงไหน — แถบนี้ปักอยู่ทุกขั้น
+   * เฉพาะสาขาหมดประกัน/สาขาบริษัท: สาขาในประกันเปิดเคลมให้เอง (ไม่ใช่ติ๊กผิด) และไม่ส่งต้องมีเหตุผล — ปุ่มในขั้นเคลมถามให้
+   */
+  const quitBar = stepMode && !fixMode && !needsSkipReason && claimedParts.length > 0;
+  /** ชิ้นนี้กรอก/แนบอะไรของเคลมไปแล้วไหม — มีแล้วต้องถามก่อน เพราะเลิกเคลมลบไฟล์ของชิ้นนั้นทิ้ง (setClaimOn) */
+  function partHasClaimData(id: number) {
+    const d = draftFor(id);
+    return (
+      !!(d.brokenPartCode.trim() || d.symptom.trim() || d.checkNote.trim() || d.troubleshooting.length || d.errorChecked?.length) ||
+      Object.keys(uploads.slots).some((k) => k.startsWith(`${id}:`))
+    );
+  }
+  function quitClaim(p: PickedPart) {
+    const go = () => {
+      setClaimOn(p.sparePartId, false);
+      if (claimedParts.every((c) => c.sparePartId === p.sparePartId)) {
+        // ไม่เหลือชิ้นที่ส่งเคลม — กลับเป็นฟอร์มหน้าเดียวแบบก่อนติ๊ก
+        // (ต่างจากเลิกในขั้นเคลมที่ยังค้างฟอร์มทีละขั้นไว้: ตรงนั้นแท็บหายกลางทางจะงง ตรงนี้ช่างกดถอยเอง)
+        setStepMode(false);
+        setStep(0);
+        setPartTab(null);
+        scrollRef.current?.scrollTo({ y: 0, animated: false });
+      } else if (partTab === p.sparePartId) setPartTab(null);
+    };
+    if (!partHasClaimData(p.sparePartId)) return go();
+    showAlert(`เลิกเคลม ${partLabel(p)}?`, "รูปและข้อมูลเคลมของชิ้นนี้ที่กรอกในฟอร์มนี้จะถูกลบ", [
+      { text: "ยกเลิก", style: "cancel" },
+      { text: "เลิกเคลม", style: "destructive", onPress: go },
+    ]);
+  }
   /** ตัวนับใต้ชื่อขั้น (ตัวอย่าง tabs) */
   const stepInfos: StepInfo[] = [0, 1, 2, 3].map((i) => {
     const miss = missingList.filter((m) => m.step === i).length;
@@ -10372,6 +10404,25 @@ function CloseModal({
                 onPick={(i) => openStep(i)}
               />
             ) : null}
+            {quitBar ? (
+              <View style={styles.quitBar}>
+                {claimedParts.map((p) => (
+                  <View key={p.sparePartId} style={styles.quitRow} accessibilityLabel={`แถบเลิกเคลม ${p.partCode}`}>
+                    <Text style={styles.quitText}>
+                      ส่งเคลม <Text style={{ fontWeight: "700" }}>{partLabel(p)}</Text> · ติ๊กผิด?
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.quitBtn}
+                      onPress={() => quitClaim(p)}
+                      activeOpacity={0.7}
+                      accessibilityLabel={`เลิกเคลม ${p.partCode}`}
+                    >
+                      <Text style={styles.quitBtnText}>เลิกเคลม</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             {sendError ? (
               <View style={styles.sendErr} accessibilityRole="alert">
                 <Ionicons
@@ -11339,6 +11390,27 @@ const styles = StyleSheet.create({
   },
   sendErrTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.dangerInk },
   sendErrText: { fontSize: 13, lineHeight: 19, color: colors.dangerInk },
+  // แถบเลิกเคลม — พื้นฟ้าอ่อนแบบกล่องแจ้งข้อมูล ไม่ใช่แดง: ส่งเคลมไม่ใช่ข้อผิดพลาด แค่บอกทางถอย
+  quitBar: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 6,
+    gap: 4,
+    backgroundColor: colors.primarySoft,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.primaryLine,
+  },
+  quitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  quitText: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19, color: colors.text },
+  quitBtn: {
+    paddingHorizontal: 12,
+    minHeight: 36,
+    justifyContent: "center",
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.primaryLine,
+    backgroundColor: colors.card,
+  },
+  quitBtnText: { fontSize: 13, fontWeight: "700", color: colors.primaryInk },
   // ยังส่งไม่ได้ (ช่องที่ถูกชี้ยังเหมือนเดิม) — เหลืองเข้มบนพื้นเหลืองอ่อน: เป็นคำเตือนให้ทำต่อ ไม่ใช่ระบบพัง
   fixBlocked: {
     paddingHorizontal: spacing.lg,
