@@ -11,13 +11,27 @@ import type { HowToBody, HowToCtx, HowToRole, HowToStep, HowToTour } from "./how
 import { TECH_MYDAY } from "../screens/MyJobsScreen.howto";
 import { ADMIN_MYDAY, SUP_MYDAY } from "../screens/MyQueue.howto";
 import { ADMIN_ORDERS, SUP_ORDERS, TECH_ORDERS } from "../screens/WorkOrderListScreen.howto";
-import { TECH_ORDER } from "../screens/WorkOrderDetailScreen.howto";
+import { SUP_PARTS, TECH_CLOSE, TECH_ORDER } from "../screens/WorkOrderDetailScreen.howto";
+import { ADMIN_NEW_ORDER, SUP_NEW_ORDER } from "../screens/WorkOrderFormScreen.howto";
 
 /**
  * เรียงตามที่หน้า "สอนการใช้งาน" แสดง — แต่ละบทบาทเห็นแค่เรื่องของตัวเอง ลำดับจึงเป็น งานของฉันวันนี้ → ใบงานซ่อม → ใบงาน
- * (หน้าแรกก่อน แล้วไล่ตามทางที่กดเข้าไปจริง)
+ * → ฟอร์มที่ใช้บ่อย (หน้าแรกก่อน แล้วไล่ตามทางที่กดเข้าไปจริง)
+ * ช่าง 4 เรื่อง (… ใบงาน · ปิดงาน) · หัวหน้าภาค 4 (… ระบุอะไหล่ · เปิดใบงานใหม่) · แอดมิน 3 (… เปิดใบงานใหม่) — ค่าที่เจ้าของงานรับ (D3)
  */
-export const TOURS: HowToTour[] = [TECH_MYDAY, SUP_MYDAY, ADMIN_MYDAY, TECH_ORDERS, SUP_ORDERS, ADMIN_ORDERS, TECH_ORDER];
+export const TOURS: HowToTour[] = [
+  TECH_MYDAY,
+  SUP_MYDAY,
+  ADMIN_MYDAY,
+  TECH_ORDERS,
+  SUP_ORDERS,
+  ADMIN_ORDERS,
+  TECH_ORDER,
+  TECH_CLOSE,
+  SUP_PARTS,
+  SUP_NEW_ORDER,
+  ADMIN_NEW_ORDER,
+];
 
 /**
  * บทบาทของผู้ใช้ที่ล็อกอินอยู่ (role ถูกแปลงใน AuthContext แล้ว — Super Admin/Admin Spare Part = ADMIN + ธง)

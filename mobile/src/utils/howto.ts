@@ -431,7 +431,10 @@ async function enterStep() {
   const seq = r0.seq;
   peekGroup(st.peek ?? null);
   if (!menuish(st)) closeOurMenu();
-  let slow = !!st.peek;
+  // ขั้นแรกหลังเริ่มจากหน้าสอนการใช้งาน (startHowTo ตั้ง slow ไว้) ได้เวลาหา 6 วินาทีต่อ — ใบงานที่เพิ่งสั่งเปิดยังโหลด
+  // แล้วฟอร์มค่อยเลื่อนเข้ามา (ฐานข้อมูลอยู่คนละภูมิภาค) ถ้าเหลือ 1.5 วินาที ขั้นแรกของฟอร์มจะขึ้นกลางจอทั้งที่ฟอร์มกำลังมา
+  // ขยับขั้นปกติ (move) ล้าง slow ก่อนเข้ามาที่นี่เสมอ ค่านี้จึงติดมาเฉพาะขั้นแรกของการเริ่ม
+  let slow = !!st.peek || r0.slow;
   if (st.menu && r0.layout === "narrow" && Platform.OS === "web" && !sideMenuOpen()) {
     sideMenu.open();
     patchRun({ menuByHowto: true });
@@ -518,6 +521,12 @@ export async function startHowTo(id: string, opts: { fromHub?: boolean } = {}) {
     (navigationRef.navigate as (tab: string, p: object) => void)("HomeTab", nested);
     let code: string | null = null;
     let opened: HowToRun["opened"] = null;
+    // หน้าต่างลอย (เปิดใบงานใหม่): จำไว้เหมือนใบงานที่เปิดให้ — จบแล้วค้างไว้ แถบข้อความรอจนปิดหน้าต่าง
+    if (tour.start.window) {
+      const key = await openedKeyAfter(prev);
+      if (liveSeq() !== 1) return;
+      if (key) opened = { key, step: -1 };
+    }
     const list = tour.start.action ? ([] as string[]).concat(tour.start.action) : [];
     for (const name of list) {
       const before = currentKey();

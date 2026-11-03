@@ -283,6 +283,26 @@ function TechJobs({ navigation }: Props) {
     open(job);
     return { ok: true, code: job.code };
   });
+  /**
+   * สอนการใช้งาน (ช่าง "ปิดงาน" เริ่มจากหน้าสอนการใช้งาน): เปิดฟอร์มปิดงานของงานแรกที่ถึงหน้างานแล้ว — ทางเดียวกับปุ่ม "ปิดงาน" บนการ์ด
+   * ฟอร์มเปิดเฉย ๆ ไม่บันทึกอะไร: ร่างฟอร์มเขียนเฉพาะหลังผู้ใช้แก้จริง (CloseModal draftKey) การ์ดจึงไม่ขึ้น "กรอกค้างไว้" หลังดูจบ
+   * ทุกแท็บ (วันนี้ก่อน · ค้าง · พรุ่งนี้) — งานที่ถึงหน้างานแล้วอาจเป็นงานค้างของเมื่อวาน
+   * ข้ามใบที่ไม่ใช่ฟอร์มปิดงานปกติ: ตรวจหน้างาน (ปุ่มเป็นบันทึกผลตรวจ) · เคลมถูกตีกลับ (ฟอร์มแก้เคลม) · อะไหล่ถูกตีกลับ (การ์ดแดง)
+   */
+  useHowToAction("myday.openClose", () => {
+    const job = [...groups.today, ...groups.late, ...groups.tomorrow].find(
+      (j) =>
+        !j.done &&
+        !j.inspect &&
+        !!j.arrivedAt &&
+        j.status === "IN_PROGRESS" &&
+        j.claim?.state !== "REJECTED" &&
+        !j.partsReturned,
+    );
+    if (!job) return false;
+    open(job, "close");
+    return { ok: true, code: job.code };
+  });
   const TABS: { value: Tab; label: string }[] = [
     { value: "today", label: "วันนี้" },
     { value: "tomorrow", label: "พรุ่งนี้" },

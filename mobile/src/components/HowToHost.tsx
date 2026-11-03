@@ -49,6 +49,7 @@ import {
   type HowToPrompt,
   type HowToRun,
 } from "../utils/howto";
+import type { HowToStep } from "../utils/howtoTypes";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
 /** ชั้นของกล่องสอน — เหนือ Modal ของ react-native-web (9999) และหน้าต่างใบงาน · ต่ำกว่าชั้นแจ้งผล/ยืนยัน (2147483000) */
@@ -314,6 +315,25 @@ function WebLayer({ run, prompt }: { run: HowToRun | null; prompt: HowToPrompt |
 
 type Found = { seq: number; rect: Rect | null };
 
+/** มีจุดชื่อนี้ที่วาดอยู่บนจอไหม (ไม่นับในชั้นของกล่องเอง) — ไม่สนว่าถูกบังหรืออยู่นอกจอ แค่ว่าส่วนนั้นของหน้าเปิดอยู่ */
+function shownAnywhere(id: string): boolean {
+  if (typeof document === "undefined") return false;
+  return Array.from(document.querySelectorAll(`[data-testid="howto-${id}"]`)).some(
+    (el) => !el.closest(`[${LAYER_ATTR}]`) && el.getClientRects().length > 0,
+  );
+}
+
+/**
+ * หาปุ่มของขั้นนี้ไม่เจอแล้วทำอะไร — skip (ค่าตั้งต้น) · center · center เว้นแต่ skipWhen อยู่บนจอ (ฟอร์มเปิดอยู่แต่ไม่มีช่องนี้)
+ * ตัวอย่าง: ฟอร์มปิดงานจากหน้าสอนการใช้งานตอนไม่มีงาน = อธิบายกลางจอทุกขั้น · ฟอร์มงาน PM ที่เปิดอยู่ = ข้ามขั้นป้ายรุ่น
+ */
+function missingRule(step: HowToStep): "center" | ((seq: number) => void | "center") {
+  if (step.whenMissing !== "center") return skipMissing;
+  const other = step.skipWhen;
+  if (!other) return "center";
+  return (seq) => (shownAnywhere(other) ? skipMissing(seq) : "center");
+}
+
 /**
  * หาปุ่มที่ต้องล้อม: ทุก 100 ms ถึง 1.5 วิ (6 วิหลังเปิดเมนู/หน้าใหม่) · เจอแล้ววัดซ้ำทุก 400 ms และตอนเลื่อน/ย่อขยายจอ
  * (แถบหัวของรายการบนมือถือหลบขึ้นลง ปุ่มขยับ) · หาไม่เจอ = ข้ามขั้น หรือกล่องกลางจอ (onMissing)
@@ -323,7 +343,7 @@ type Found = { seq: number; rect: Rect | null };
 function useTarget(
   ids: string[],
   seq: number,
-  o: { off?: boolean; slow?: boolean; onMissing: "center" | ((seq: number) => void) },
+  o: { off?: boolean; slow?: boolean; onMissing: "center" | ((seq: number) => void | "center") },
 ): Found | null {
   const [found, setFound] = useState<Found | null>(null);
   const opts = useRef(o);
@@ -353,8 +373,8 @@ function useTarget(
         apply(r);
       } else if (!got && Date.now() > deadline) {
         const miss = opts.current.onMissing;
-        if (miss === "center") setFound({ seq, rect: null });
-        else miss(seq);
+        // ฟังก์ชันตัดสินตอนหมดเวลาจริง (ไม่ใช่ตอนวาด) — ฟอร์มที่กำลังเลื่อนเข้ามาตอนเริ่มขั้นอาจมาถึงแล้ว
+        if (miss === "center" || miss(seq) === "center") setFound({ seq, rect: null });
         return;
       }
       t = setTimeout(tick, got ? 400 : 100);
@@ -457,7 +477,7 @@ function StepLayer({ run, paused }: { run: HowToRun; paused: boolean }) {
 
   const seq = run.seq;
   const waiting = run.waiting;
-  const found = useTarget(ids, seq, { off: waiting, slow: run.slow, onMissing: step.whenMissing === "center" ? "center" : skipMissing });
+  const found = useTarget(ids, seq, { off: waiting, slow: run.slow, onMissing: missingRule(step) });
   const cur = !waiting ? found : null;
   const shownKey = cur ? `${seq}:${cur.rect ? "t" : "c"}` : "";
   const op = useFadeIn(shownKey, paused, boxRef);

@@ -45,6 +45,7 @@ export default function AppModal({
   bodyStyle,
   banner,
   scrollRef,
+  headRight,
 }: {
   visible: boolean;
   title: React.ReactNode;
@@ -62,6 +63,11 @@ export default function AppModal({
   banner?: React.ReactNode;
   /** ให้ฟอร์มเลื่อนเนื้อหากลับขึ้นบนเองได้ (เช่น ส่งไม่สำเร็จแล้วพากลับไปดูแถบด้านบน) */
   scrollRef?: React.RefObject<ScrollView | null>;
+  /**
+   * ปุ่มเล็กในหัวหน้าต่าง หน้าปุ่มขยาย — ปุ่ม ? "วิธีใช้หน้านี้" ของฟอร์ม (สอนการใช้งาน)
+   * อยู่ในหัวฟอร์มเอง ไม่ใช่แถบหัวของแอป: บนมือถือฟอร์มเต็มจอบังแถบหัว และฟอร์มที่เลื่อนเข้ามาในหน้าต่างใบงานก็บังปุ่ม ? ของใบงาน
+   */
+  headRight?: React.ReactNode;
 }) {
   /*
     อยู่ในหน้าที่เป็นหน้าต่างลอยอยู่แล้ว (ใบงาน) → ไม่เปิดหน้าต่างซ้อน
@@ -85,6 +91,7 @@ export default function AppModal({
             <Text style={[styles.title, headingFont]}>{title}</Text>
             {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
           </View>
+          {headRight ?? null}
           {/* ฟอร์มที่เลื่อนเข้ามาในหน้าต่างใบงาน — ขยายคือขยายหน้าต่างใบงานทั้งบาน */}
           <PaneMaximizeButton />
           <TouchableOpacity style={styles.close} onPress={onClose} disabled={busy} accessibilityLabel="ปิด">
@@ -114,8 +121,8 @@ export default function AppModal({
     แต่ตอนนั้นหน้าที่เปิดมักล้างข้อมูลไปแล้ว (เช่น visible={!!editing} แล้ว editing = null)
     ถ้าวาด children ใหม่จะพังเพราะอ่านค่า null — จึงวาดเนื้อหาชุดสุดท้ายที่เปิดอยู่แทน
   */
-  const last = useRef({ title, subtitle, children, footer, banner });
-  if (visible) last.current = { title, subtitle, children, footer, banner };
+  const last = useRef({ title, subtitle, children, footer, banner, headRight });
+  if (visible) last.current = { title, subtitle, children, footer, banner, headRight };
   const shown = last.current;
 
   const [mounted, setMounted] = useState(visible);
@@ -260,6 +267,7 @@ export default function AppModal({
                 <Text style={[styles.title, headingFont]}>{shown.title}</Text>
                 {shown.subtitle ? <Text style={styles.subtitle}>{shown.subtitle}</Text> : null}
               </View>
+              {shown.headRight ?? null}
               <MaximizeButton on={max} onPress={toggleMax} />
               <TouchableOpacity style={styles.close} onPress={onClose} disabled={busy} accessibilityLabel="ปิด">
                 <Ionicons name="close" size={24} color={colors.primaryInk} />
