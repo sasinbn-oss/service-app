@@ -3,6 +3,7 @@
 #        คืนรถ + แจ้งซ่อมเข้าประวัติซ่อม · แอดมินคืนแทน/ภาพรวม/Excel · ทะเบียน & ซ่อมบำรุง · ภาคของรถ
 #
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md) · ต้องมี mock-s3 รันอยู่ (tests/README.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -26,6 +27,17 @@ echo "$R" | grep -q "อย่างน้อย 5 รูป" && pass "ไม่
 P=$(photos $T START)
 R=$(POST $T vehicle-logs/start "{\"vehicleId\":$V1,\"mileage\":47000,\"purpose\":\"เข้าซ่อมสาขา\",\"photoIds\":$P}")
 echo "$R" | grep -q "เกิน ±1,000" && pass "ไมล์ต่างจากล่าสุดเกิน 1,000 กม. ถูกปฏิเสธ" || fail "ไมล์เกินผ่าน: $(echo $R|head -c 120)"
+# ใบงานที่ผูกต้องยังอยู่ (ถังขยะใบงาน · 4 พ.ย. 69) — หน้าเลือกรถที่เปิดค้างไว้ก่อนแอดมินลบใบยังส่งเลขเดิมมาได้
+# เดิมรับเงียบ ๆ (รายการใช้รถผูกใบที่ไม่มีใครเห็น) · เลขที่ไม่มีจริงตก FK เป็น 500 — ตอนนี้ 400 ภาษาไทยเดียวกันทั้งคู่
+TW=$(POST $A work-orders '{"branchCode":"C0001","jobType":"CM","priority":"NORMAL","contactPhone":"089-111-2222","machines":[{"code":"W72","symptom":"ทดสอบรถผูกใบในถังขยะ"}]}' | J 'd.orders?d.orders[0].id:d.id')
+curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$TW" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"reason":"TEST"}'
+R1=$(curl -s -w ' %{http_code}' -X POST localhost:4000/api/vehicle-logs/start -H "$(H $T)" -H 'Content-Type: application/json' -d "{\"vehicleId\":$V1,\"mileage\":45010,\"purpose\":\"เข้าซ่อมสาขา\",\"workOrderId\":$TW,\"photoIds\":$P}")
+R2=$(curl -s -w ' %{http_code}' -X POST localhost:4000/api/vehicle-logs/start -H "$(H $T)" -H 'Content-Type: application/json' -d "{\"vehicleId\":$V1,\"mileage\":45010,\"purpose\":\"เข้าซ่อมสาขา\",\"workOrderId\":2147483000,\"photoIds\":$P}")
+[ "$(DB "select (\"deletedAt\" is not null)::text from \"WorkOrder\" where id=$TW")" = "true" ] && [ "${R1##* }" = "400" ] && [ "${R2##* }" = "400" ] \
+  && echo "$R1" | grep -q "ไม่พบใบงานที่เลือก" && [ "${R1% *}" = "${R2% *}" ] \
+  && [ "$(DB "select count(*) from \"VehicleLog\" where \"vehicleId\"=$V1")|$(DB "select status from \"Vehicle\" where id=$V1")|$(DB "select count(*) from \"VehicleLogPhoto\" where id in ($(echo "$P" | tr -d '[]')) and \"logId\" is null")" = "0|AVAILABLE|5" ] \
+  && pass "เบิกรถผูกใบในถังขยะ / เลขที่ไม่มีจริง → 400 ข้อความเดียวกัน · ไม่มีรายการ รถยังว่าง รูปยังใช้ได้" || fail "ผูกใบในถังขยะ: $R1 · ไม่มีจริง: $R2"
+purge_orders "$A" $TW
 R=$(POST $T vehicle-logs/start "{\"vehicleId\":$V1,\"mileage\":45010,\"purpose\":\"เข้าซ่อมสาขา\",\"destination\":\"C0001\",\"photoIds\":$P}")
 LOG=$(echo "$R" | J 'd.id')
 [ "$(DB "select v.status||'|'||v.\"currentMileage\"||'|'||l.\"mileageGap\"||'|'||(select count(*) from \"VehicleLogPhoto\" p where p.\"logId\"=l.id and p.phase='START') from \"VehicleLog\" l join \"Vehicle\" v on v.id=l.\"vehicleId\" where l.id=$LOG")" = "IN_USE|45010|10|5" ] \

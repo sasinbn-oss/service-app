@@ -3,6 +3,9 @@
 //      → กดเลิกทำ: ฐานข้อมูลกลับมาไม่อยู่ในถัง ขั้นเดิม ประวัติ "ย้ายไปถังขยะ" แล้ว "กู้คืนจากถังขยะ"
 //   B. หน้าถังขยะ (แอดมิน): เมนูข้าง "ถังขยะใบงาน" มีตัวเลขเท่าฐานข้อมูล · ค้นเลขใบงาน · แถวบอกขั้นก่อนลบ เหตุผล เหลือ 30 วัน
 //      · ใบที่ลบมา 25 วัน = "เหลือ 5 วัน" สีแดง · แอดมินไม่มีปุ่ม "ลบถาวรตอนนี้" · กด "กู้คืน" → ฐานข้อมูลกลับมา + แถบบอกขั้นเดิม
+//   D. ที่อยู่ของหน้าถังขยะ (#/admin/trash?q=…): ค้นแล้วที่อยู่ตามคำค้น · F5 ได้หน้าเดิมพร้อมคำค้นและแถวเดิม · วางลิงก์ในแท็บใหม่ได้หน้าเดิม
+//      · ลิงก์ใบงานที่อยู่ในถังขยะ (#/wo/WO-…): แอดมินเห็น "… อยู่ในถังขยะ" + ใครลบ/เหตุผล + ปุ่ม "เปิดถังขยะใบงาน" → ไปหน้าถังขยะ
+//        ที่ค้นรหัสนั้นไว้แล้ว · ช่าง (T001) เห็น "ไม่พบใบงาน …" เหมือนรหัสที่ไม่มี ไม่มีคำว่าถังขยะ (เซิร์ฟเวอร์ไม่บอก)
 //   C. Super Admin: มีปุ่ม "ลบถาวรตอนนี้" → กล่องยืนยันบอกว่ากู้คืนไม่ได้ → ลบแล้วแถวหายจากฐานข้อมูลจริง
 // สร้าง Super Admin ชั่วคราวเอง (ลบใน finally) · ใบงานของเทสต์ล้างด้วย purgeOrders · ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
@@ -34,8 +37,14 @@ const SA = `ZTW${SUF}`;
   });
   const ids = [];
   let A = null;
+  // เครื่อง W81–W84 ที่ C0001 — เปิดใบด้วยรหัสที่ไม่มีอยู่ = สร้างเครื่องใหม่ ซึ่งไม่หายไปกับใบ (รุ่นแรกทิ้งไว้ 4 เครื่องทุกรอบ)
+  // จำว่าเครื่องไหนมีอยู่ก่อน แล้วตอนจบลบเฉพาะที่ชุดนี้สร้าง (ฐานอื่นอาจมีเครื่องรหัสนี้จริง — ไม่แตะ)
+  const MACHINES = ["W81", "W82", "W83", "W84"];
+  let hadMachines = null;
   try {
     A = await login("A001");
+    hadMachines = sql(`select coalesce(string_agg(m.code, ','), '') from "Machine" m join "Branch" b on b.id=m."branchId"
+                       where b.code='C0001' and m.code in (${MACHINES.map((c) => `'${c}'`).join(",")})`).split(",").filter(Boolean);
     sql(`insert into "User"("employeeCode",name,role,"passwordHash","mustChangePassword")
          select '${SA}','ซุปเปอร์ทดสอบถังขยะ','SUPER_ADMIN',"passwordHash",false from "User" where "employeeCode"='A001'`);
     const open = async (n) => {
@@ -95,6 +104,11 @@ const SA = `ZTW${SUF}`;
     sql(`select coalesce("deleteReason",'-')||'|'||coalesce("deleteNote",'-') from "WorkOrder" where id=${o1.id}`) === "OTHER|ทดสอบเลิกทำ"
       ? pass("ย้ายไปถังขยะด้วย \"อื่น ๆ\" + ข้อความที่พิมพ์ (ฐานข้อมูล)") : fail(`ฐานข้อมูล: ${st(o1)}`);
     (await vis(`ย้าย ${o1.code} ไปถังขยะแล้ว · กู้คืนได้ถึง`, false).count()) > 0 ? pass("แถบแจ้งเตือน \"…กู้คืนได้ถึง …\"") : fail("ไม่มีแถบแจ้งเตือน");
+    // ตัวเช็ครุ่นที่ยิงตอนกล่องยืนยันปิดได้ 404 ของใบที่ตัวเองเพิ่งลบ — รุ่นแรกขึ้นแถบที่สอง "…ถูกย้ายไปถังขยะแล้ว…" แล้ว goBack ซ้ำ
+    // พาแอดมินหลุดจากรายการใบงานไป "งานของฉันวันนี้" (เจอตอนตรวจด้วยมือ 4 พ.ย. 69)
+    const hashNow = decodeURIComponent(new URL(page.url()).hash);
+    (await vis(`${o1.code} ถูกย้ายไปถังขยะแล้ว`, false).count()) === 0 && hashNow.startsWith("#/work-orders")
+      ? pass("ลบเองแล้วไม่มีแถบซ้ำ \"ถูกย้ายไปถังขยะแล้ว\" · กลับมาที่รายการใบงาน (ไม่ถอยเกิน)") : fail(`หลังลบเอง: ที่อยู่ ${hashNow} · แถบซ้ำ ${await vis(`${o1.code} ถูกย้ายไปถังขยะแล้ว`, false).count()}`);
     await page.screenshot({ path: path.join(DIR, "trash-1-toast.png") });
     await label("เลิกทำ").first().click();
     await page.waitForTimeout(3500);
@@ -136,6 +150,53 @@ const SA = `ZTW${SUF}`;
     (await vis("กลับไปขั้น", false).count()) > 0 ? pass("แถบแจ้งเตือนบอกว่ากลับไปขั้นเดิม") : fail("แถบไม่บอกขั้น");
     (await label(`แถวถังขยะ ${o2.code}`).count()) === 0 ? pass("ใบที่กู้แล้วหายจากหน้าถังขยะ") : fail("ใบที่กู้แล้วยังอยู่ในถัง");
 
+    // ── D. ที่อยู่ของหน้าถังขยะ + ลิงก์ใบงานที่อยู่ในถัง ──
+    const hash = (pg) => decodeURIComponent(new URL(pg.url()).hash);
+    const until = async (pg, fn, ms = 20000) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        if (await fn().catch(() => false)) return true;
+        await pg.waitForTimeout(250);
+      }
+      return false;
+    };
+    const searchBox = (pg) => pg.getByPlaceholder("ค้นเลขใบงาน รหัส/ชื่อสาขา หรือคนที่ลบ").locator("visible=true").first();
+    const rowOf = (pg, code) => pg.locator(`[aria-label="แถวถังขยะ ${code}"]`).locator("visible=true");
+    await openTrash(o4.code);
+    (await until(page, async () => hash(page) === `#/admin/trash?q=${o4.code}`))
+      ? pass(`ค้นในถังขยะแล้วที่อยู่ตามคำค้น (${hash(page)})`) : fail(`ที่อยู่หน้าถังขยะ: ${hash(page)}`);
+    await page.reload({ waitUntil: "networkidle" });
+    (await until(page, async () => (await rowOf(page, o4.code).count()) > 0 && (await searchBox(page).inputValue()) === o4.code && (await rowOf(page, o3.code).count()) === 0))
+      ? pass("F5 ที่หน้าถังขยะ → หน้าเดิม คำค้นเดิม แถวเดิม") : fail(`F5: ${hash(page)} · ช่องค้น "${await searchBox(page).inputValue().catch(() => "?")}"`);
+    const pasted = await ctx.newPage();
+    await pasted.goto(`http://127.0.0.1:8081/#/admin/trash?q=${o3.code}`, { waitUntil: "networkidle", timeout: 180000 });
+    (await until(pasted, async () => (await rowOf(pasted, o3.code).count()) > 0 && (await rowOf(pasted, o4.code).count()) === 0))
+      ? pass("วางลิงก์ #/admin/trash?q=… ในแท็บใหม่ → หน้าถังขยะค้นใบนั้นไว้") : fail(`วางลิงก์: ${hash(pasted)}`);
+    await pasted.screenshot({ path: path.join(DIR, "trash-4-pasted.png") });
+    // ลิงก์ใบงานที่อยู่ในถัง (ลิงก์เก่าในกลุ่มไลน์) — แอดมิน
+    await pasted.goto(`http://127.0.0.1:8081/?t=${Date.now()}#/wo/${o4.code}`, { waitUntil: "networkidle", timeout: 180000 });
+    const note = (pg) => pg.getByText(`${o4.code} อยู่ในถังขยะ`, { exact: true }).locator("visible=true");
+    (await until(pasted, async () => (await note(pasted).count()) > 0 && (await pasted.getByText("เหตุผล: เปิดซ้ำ", { exact: false }).locator("visible=true").count()) > 0))
+      ? pass("แอดมินเปิดลิงก์ใบในถังขยะ → \"… อยู่ในถังขยะ\" + เหตุผล") : fail("แอดมิน: ไม่ขึ้นว่าอยู่ในถังขยะ");
+    await pasted.screenshot({ path: path.join(DIR, "trash-5-link-admin.png") });
+    await pasted.getByText("เปิดถังขยะใบงาน", { exact: true }).locator("visible=true").first().click();
+    (await until(pasted, async () => hash(pasted) === `#/admin/trash?q=${o4.code}` && (await rowOf(pasted, o4.code).count()) > 0))
+      ? pass("กด \"เปิดถังขยะใบงาน\" → หน้าถังขยะค้นรหัสนี้ไว้ (ที่อยู่ + แถว)") : fail(`ปุ่มไปถังขยะ: ${hash(pasted)}`);
+    await pasted.close();
+    // ช่าง — ไม่รู้ว่าใบเคยมี
+    const tctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+    await tctx.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
+    const tp = await tctx.newPage();
+    await tp.goto(`http://127.0.0.1:8081/#/wo/${o4.code}`, { waitUntil: "networkidle", timeout: 180000 });
+    await tp.getByPlaceholder("รหัสพนักงาน").fill("T001");
+    await tp.getByPlaceholder("รหัสผ่าน").fill("test1234");
+    await tp.getByText("เข้าสู่ระบบ", { exact: true }).locator("visible=true").first().click();
+    (await until(tp, async () => (await tp.getByText(`ไม่พบใบงาน ${o4.code}`, { exact: true }).locator("visible=true").count()) > 0))
+      && (await tp.getByText("ถังขยะ", { exact: false }).locator("visible=true").count()) === 0
+      ? pass("ช่างเปิดลิงก์ใบในถังขยะ → \"ไม่พบใบงาน …\" เหมือนรหัสที่ไม่มี ไม่มีคำว่าถังขยะ") : fail(`ช่าง: ${hash(tp)}`);
+    await tp.screenshot({ path: path.join(DIR, "trash-6-link-tech.png") });
+    await tctx.close();
+
     // ── C. Super Admin ลบถาวรตอนนี้ ──
     await page.evaluate(() => localStorage.clear());
     await ctx.clearCookies();
@@ -155,6 +216,10 @@ const SA = `ZTW${SUF}`;
     fail(String(e).split("\n")[0].slice(0, 300));
   } finally {
     if (A) await purgeOrders(A, ids);
+    const made = hadMachines ? MACHINES.filter((c) => !hadMachines.includes(c)) : [];
+    if (made.length)
+      sql(`delete from "Machine" m using "Branch" b where b.id=m."branchId" and b.code='C0001' and m.code in (${made.map((c) => `'${c}'`).join(",")})
+           and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
     sql(`delete from "UsageSlot" where "userId" in (select id from "User" where "employeeCode"='${SA}');
          delete from "User" where "employeeCode"='${SA}'`);
     await browser.close();

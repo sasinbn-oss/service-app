@@ -7,7 +7,10 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const { execSync } = require("child_process");
-const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -Atc ${JSON.stringify(q)}`).toString().trim();
+// ส่งคำสั่งทาง stdin ไม่ใช่ -c — JSON.stringify ทำให้ขึ้นบรรทัดใหม่ในคำสั่งกลายเป็น \n ตัวอักษร psql ตก syntax error
+// (คำถามเช็คฐานข้อมูลหลังย้ายไปถังขยะเขียนหลายบรรทัด — รุ่นแรกของชุดนี้ไม่เคยได้รันจนถึงข้อนั้น)
+const sql = (q) =>
+  execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
 const { fxPart } = require("./fixture"); // อะไหล่ตรงยี่ห้อเครื่องของใบ
 const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const DIR = __dirname;

@@ -12,6 +12,8 @@
 #   · ลบถาวรตอนนี้: แอดมิน 403 (แถวยังอยู่) · ใบที่ยังไม่อยู่ในถัง 409 · Super Admin ลบได้ แถว ลูก และไฟล์ในที่เก็บไฟล์หายจริง
 #   · ครบ 30 วัน: ย้อนเวลาเป็น 31 วัน → เปิดถังขยะแล้วหายจริง (พร้อมไฟล์) · 29 วันยังอยู่ (เหลือ 1 วัน)
 #   · เลขใบงานไม่ถูกใช้ซ้ำ (ใบใหม่หลังลบจริงได้เลขใหม่)
+#   · อีกโปรเซสเปลี่ยนถังขยะ (SQL ตรง = deploy ซ้อน/Fly สองเครื่อง/กู้ไฟล์สำรอง): กู้คืนจากที่อื่น → เปิด/แก้ได้ทันที ไม่รอรอบโหลด
+#     60 วินาที · ย้ายไปถังจากที่อื่น → แก้ไม่ได้ทันที (ฐานข้อมูลไม่เปลี่ยน) · หน้าใบงาน /version ไฟล์แนบ 404 · ใช้รถผูกใบนั้นไม่ได้
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md) · ต้องมีที่เก็บไฟล์จำลอง (tests/mock-s3.js) แบบเทสต์ไฟล์แนบอื่น
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
@@ -40,21 +42,25 @@ MOCK="${STORAGE_ENDPOINT:-http://127.0.0.1:9100}/${STORAGE_BUCKET:-service-app}"
 SUF=$RANDOM
 
 A=$(login A001); S=$(login S001); T=$(login T001)
-HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='A001'")
-DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values
-  ('ZTS$SUF','ซุปเปอร์ทดสอบถังขยะ','SUPER_ADMIN','$HASH',false), ('ZTP$SUF','อะไหล่ทดสอบถังขยะ','PARTS_ADMIN','$HASH',false)" >/dev/null
-SA=$(login ZTS$SUF); PA=$(login ZTP$SUF)
-# สาขาที่ยังไม่มีใบค้างเลย — เตือนใบซ้ำนับได้ตรง ๆ (แบบ open-orders-test.sh)
-BR=$(DB "select b.code from \"Branch\" b where b.\"cancelledAt\" is null and b.zone is not null and not exists (select 1 from \"WorkOrder\" w where w.\"branchId\"=b.id and w.status not in ('DONE','CANCELLED')) order by b.code limit 1")
-[ -n "$BR" ] || { echo "FAIL ไม่มีสาขาว่างให้ทดสอบ"; exit 1; }
-ZONE=$(DB "select zone from \"Branch\" where code='$BR'")
+# สาขาของชุดนี้เอง ไม่มีใบค้าง — เตือนใบซ้ำนับได้ตรง ๆ · เครื่อง W7x ที่เปิดใบสร้างอยู่ในสาขานี้ ลบไปพร้อมสาขาตอนจบ
+# (รุ่นแรกหาสาขาที่ไม่มีใบค้างในฐาน — ฐานทดสอบที่ใช้กันอยู่ทุกสาขามีใบค้าง ชุดนี้จึงไม่เคยได้รันเลย และเครื่องที่สร้างค้างในสาขาจริง)
+# ภาค/ทีมยืมของ C0001 — ทีมต้องมีจริง (บอร์ดแผนงานจัดตามทีม)
+BR="ZTR$SUF"
+ZONE=$(DB "select zone from \"Branch\" where code='C0001'")
 IDS=""
 cleanup() {
   purge_orders "$A" $IDS
   DB "delete from \"UsageSlot\" where \"userId\" in (select id from \"User\" where \"employeeCode\" in ('ZTS$SUF','ZTP$SUF'));
-      delete from \"User\" where \"employeeCode\" in ('ZTS$SUF','ZTP$SUF')" >/dev/null
+      delete from \"User\" where \"employeeCode\" in ('ZTS$SUF','ZTP$SUF');
+      delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$BR');
+      delete from \"Branch\" where code='$BR'" >/dev/null
 }
 trap cleanup EXIT
+DB "insert into \"Branch\"(code,name,region,zone,\"pmTeam\",ownership) select '$BR','สาขาทดสอบถังขยะ',region,zone,\"pmTeam\",ownership from \"Branch\" where code='C0001'" >/dev/null
+HASH=$(DB "select \"passwordHash\" from \"User\" where \"employeeCode\"='A001'")
+DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values
+  ('ZTS$SUF','ซุปเปอร์ทดสอบถังขยะ','SUPER_ADMIN','$HASH',false), ('ZTP$SUF','อะไหล่ทดสอบถังขยะ','PARTS_ADMIN','$HASH',false)" >/dev/null
+SA=$(login ZTS$SUF); PA=$(login ZTP$SUF)
 newwo() {
   local id
   id=$(POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"$1\",\"model\":\"Oasis\",\"symptom\":\"ทดสอบถังขยะ $SUF $1\"}]}" | J 'd.orders?d.orders[0].id:d.id')
@@ -218,6 +224,31 @@ echo "═══ เลขใบงานไม่ถูกใช้ซ้ำ"
 W6=$(newwo W75); C6=$(codeof $W6)
 [ "$W6" -gt "$MAXID" ] && [ "$C6" != "$C4" ] && [ "$C6" != "$C1" ] && [ "$(DB "select count(*) from \"WorkOrder\" where code='$C6'")" = "1" ] \
   && pass "ใบใหม่หลังลบจริงได้เลขใหม่ ($C6) ไม่ใช่เลขของใบที่ลบ ($C1 · $C4)" || fail "เลขซ้ำ: $C6 (ลบไป $C1 $C4 · max $MAXID)"
+
+echo
+echo "═══ อีกโปรเซสเปลี่ยนถังขยะ (SQL ตรง — เซิร์ฟเวอร์นี้ไม่รู้ จนกว่าจะถามแถวจริง)"
+# เซิร์ฟเวอร์จำรายชื่อใบในถังไว้ (โหลดใหม่ทุก 60 วินาที) — อีกเครื่องที่ใช้ฐานเดียวกันย้าย/กู้ใบได้โดยที่เครื่องนี้ไม่รู้
+W7=$(newwo W76); W8=$(newwo W77)
+DEL $A $W7 '{"reason":"TEST"}' >/dev/null
+[ "$(CODEOF "localhost:4000/api/work-orders/$W7" -H "$(H $A)")$(CODEOF "localhost:4000/api/work-orders/$W8" -H "$(H $A)")" = "404200" ] || fail "เตรียม: เครื่องนี้ต้องรู้ว่า W7 อยู่ในถัง W8 ไม่อยู่"
+# กู้คืนจากที่อื่น (ล้างช่องถังขยะตรง ๆ) → ต้องเปิดและแก้ได้ทันที
+DB "update \"WorkOrder\" set \"deletedAt\"=null, \"deletedById\"=null, \"deleteReason\"=null, \"deleteNote\"=null where id=$W7" >/dev/null
+c1=$(CODEOF "localhost:4000/api/work-orders/$W7" -H "$(H $A)")
+c2=$(CODEOF -X PATCH "localhost:4000/api/work-orders/$W7" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"symptom":"แก้หลังกู้จากเครื่องอื่น"}')
+[ "$c1$c2" = "200200" ] && [ "$(DB "select symptom from \"WorkOrder\" where id=$W7")" = "แก้หลังกู้จากเครื่องอื่น" ] \
+  && pass "กู้คืนจากเครื่องอื่น → เปิด (200) และแก้ (200 · ฐานข้อมูลเปลี่ยน) ได้ทันที ไม่ติด \"อยู่ในถังขยะ\" อีกนาที" || fail "กู้จากที่อื่น: เปิด $c1 · แก้ $c2"
+# ย้ายไปถังจากที่อื่น → แก้ต้องไม่ได้ทันที
+SYM8=$(DB "select symptom from \"WorkOrder\" where id=$W8"); L8=$(logs $W8)
+DB "update \"WorkOrder\" set \"deletedAt\"=timezone('utc', now()), \"deletedById\"=$AID, \"deleteReason\"='WRONG' where id=$W8" >/dev/null
+R=$(curl -s -w '\n%{http_code}' -X PATCH "localhost:4000/api/work-orders/$W8" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"symptom":"แก้ใบที่เครื่องอื่นเพิ่งลบ"}')
+c3=$(CODEOF -X POST "localhost:4000/api/work-orders/$W8/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png")
+[ "$(echo "$R" | tail -1)" = "404" ] && echo "$R" | sed '$d' | J 'd.trashed===true?"ok":"bad"' | grep -q ok && [ "$c3" = "404" ] \
+  && [ "$(DB "select symptom from \"WorkOrder\" where id=$W8")|$(logs $W8)|$(DB "select count(*) from \"WorkOrderAttachment\" where \"workOrderId\"=$W8")" = "$SYM8|$L8|0" ] \
+  && pass "ย้ายไปถังจากเครื่องอื่น → แก้ไข · แนบไฟล์ ได้ 404 trashed ทันที · ฐานข้อมูลไม่เปลี่ยน" || fail "ย้ายจากที่อื่นแล้วยังแก้ได้: $(echo "$R" | tail -1) · แนบ $c3"
+c4=$(CODEOF "localhost:4000/api/work-orders/$W8" -H "$(H $A)"); c5=$(CODEOF "localhost:4000/api/work-orders/$W8/version" -H "$(H $A)")
+c6=$(CODEOF "localhost:4000/api/work-orders/$W8/attachments" -H "$(H $A)"); c7=$(CODEOF "localhost:4000/api/work-orders/$W8/attachments/links" -H "$(H $A)")
+[ "$c4$c5$c6$c7" = "404404404404" ] && pass "หน้าใบงาน · ตัวเช็ครุ่น (หน้าที่เปิดค้างปิดตัวเอง) · ไฟล์แนบ → 404 ทันที (อ่านแถวจริงมากับใบอยู่แล้ว)" \
+  || fail "อ่านใบที่เครื่องอื่นเพิ่งลบ: หน้าใบ $c4 · version $c5 · ไฟล์ $c6 · ลิงก์ไฟล์ $c7"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"
