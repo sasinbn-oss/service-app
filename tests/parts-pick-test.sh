@@ -706,7 +706,15 @@ R1=$(CONF $P "{\"pickId\":$PK}"); R2=$(CONF $P "{\"pickId\":$PK2,\"marks\":[{\"s
 [ "$(echo "$R1" | EMSG)" = "รายการอะไหล่เปลี่ยนไปแล้ว — โหลดใหม่ให้แล้ว ดูอีกครั้งก่อนกด" ] \
   && [ "$(echo "$R2" | EMSG)" = "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม" ] && [ "$(st $P)" = "NEW" ] \
   && pass "pickId ของรอบเก่า → 409 · มีตัวที่กด \"ไม่ตรง\" → 400 (ต้องตีกลับ)" || fail "คอนเฟิร์มผิด: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
-R=$(CONF $P "{\"pickId\":$PK2,\"offParts\":[{\"name\":\"$K ของนอก\",\"quantity\":2}],\"services\":[{\"name\":\"ค่าแรงทดสอบเลือกอะไหล่\",\"quantity\":1}],\"marks\":[{\"sparePartId\":$HB1,\"mark\":\"OK\"},{\"sparePartId\":$HB3,\"mark\":\"OK\"}]}")
+# ของนอกสโตร์ที่เติมตอนคอนเฟิร์มต้องบอกว่าหาได้ไหม จากที่ไหน (4 พ.ย. 69) — คนคอนเฟิร์มคือคนระบุ · ไม่ตอบ = 400 ใบไม่ขยับ
+R=$(CONF $P "{\"pickId\":$PK2,\"offParts\":[{\"name\":\"$K ของนอก\",\"quantity\":2}],\"marks\":[{\"sparePartId\":$HB1,\"mark\":\"OK\"},{\"sparePartId\":$HB3,\"mark\":\"OK\"}]}")
+[ "$(echo "$R" | EMSG)" = "อะไหล่นอกสโตร์ “$K ของนอก”: บอกด้วยว่าหาได้หรือหาไม่ได้ — ไม่เห็นช่องนี้ในฟอร์ม = แอปรุ่นเก่า กดปุ่ม “อัปเดต” บนแถบบนก่อน" ] \
+  && [ "$(st $P)|$(PICKS $P)" = "NEW|RETURNED:1:true,PENDING:2:true" ] \
+  && pass "คอนเฟิร์มพร้อมของนอกสโตร์ที่ไม่บอกว่าหาได้ไหม → 400 ภาษาไทย (บอกให้อัปเดตแอป) · ใบ/รอบไม่ขยับ" || fail "คอนเฟิร์มไม่มีคำตอบจัดหา: $(echo "$R" | EMSG) · $(st $P)"
+R=$(CONF $P "{\"pickId\":$PK2,\"offParts\":[{\"name\":\"$K ของนอก\",\"quantity\":2,\"offFound\":false,\"offKind\":\"ร้านแถวนี้ไม่มี\",\"offDetail\":\"ถามร้านแถวสาขาแล้ว 2 ร้าน\"}],\"services\":[{\"name\":\"ค่าแรงทดสอบเลือกอะไหล่\",\"quantity\":1}],\"marks\":[{\"sparePartId\":$HB1,\"mark\":\"OK\"},{\"sparePartId\":$HB3,\"mark\":\"OK\"}]}")
+[ "$(DB "select coalesce(\"offFound\"::text,'-')||'|'||coalesce(\"offKind\",'-')||'|'||coalesce(\"offDetail\",'-')||'|'||coalesce(\"offAnswerById\"::text,'-') from \"WorkOrderPart\" where \"workOrderId\"=$P and \"sparePartId\"=$OC and kind='WAITING'")" = "false|ร้านแถวนี้ไม่มี|ถามร้านแถวสาขาแล้ว 2 ร้าน|$SID" ] \
+  && pass "คอนเฟิร์ม: คำตอบจัดหาของนอกสโตร์ลงแถวเดิมในใบ (หาไม่ได้ · เหตุผล · รายละเอียด · คนตอบ = หัวหน้าภาค — ฐานข้อมูล)" \
+  || fail "คำตอบจัดหาตอนคอนเฟิร์ม: $(DB "select \"offFound\"||'|'||coalesce(\"offKind\",'-') from \"WorkOrderPart\" where \"workOrderId\"=$P and \"sparePartId\"=$OC")"
 [ "$(DB "select status||'|'||\"needsParts\" from \"WorkOrder\" where id=$P")" = "PARTS_SOURCING|true" ] && [ "$(WAIT $P)" = "HB1x2,HB3x1,OFFx2" ] \
   && pass "คอนเฟิร์ม + อะไหล่นอก + ค่าบริการ → แอดมินเช็คอะไหล่ (มี/หมด) · อะไหล่ที่รอ = รายการของช่าง + ของนอกสโตร์ (OT1 กับ MO1 ที่ช่างไม่เลือกออกจากใบ)" \
   || fail "คอนเฟิร์ม: $(echo "$R" | EMSG) · $(st $P) · $(WAIT $P)"
