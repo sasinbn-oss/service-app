@@ -8,6 +8,9 @@
  * Other = ของใช้แทนกันได้/ของใช้ในสาขา → ทุกเครื่องเลือกได้ นอกจากไฟล์ยี่ห้อของเครื่องเอง
  * ไฟล์ยี่ห้อด้วยกันไม่ข้ามกัน (Huebsch ↔ Maytag …) — ยกเว้นคนกดยืนยัน "ใช้ข้ามยี่ห้อ" ในการบันทึกครั้งนั้น
  * (เจ้าของงานเลือก 3 พ.ย. 69 — รายครั้ง ไม่จำ ลงประวัติ: ดู crossBrandOk ใน BrandCheck และ logCrossBrand)
+ * ของในสโตร์ที่ไม่อยู่ในไฟล์ไหนเลย = "อะไหล่นอกเครื่อง" (เจ้าของงานเลือก 4 พ.ย. 69 "จัดมาตามที่แนะนำ") — ของที่ใช้ได้กับทุกเครื่อง
+ * (power supply ตู้แลกเหรียญ · IOT gateway · สายน้ำเข้า …) ทุกคนเลือกได้ทุกช่อง ไม่ต้องยืนยัน ไม่ต้องมีเครื่อง ไม่ต้องรู้ยี่ห้อ
+ * ที่ไม่กลายเป็นช่องโหว่ เพราะฟอร์มอะไหล่บังคับเลือกไฟล์ยี่ห้อ หรือติ๊ก "อะไหล่นอกเครื่อง" อย่างใดอย่างหนึ่ง (routes/spareParts.ts)
  *
  * กติกาจับคำอยู่ที่ไฟล์นี้ที่เดียว (+ SQL ตั้งต้นใน migration 20261211090000_parts_pick ที่รันครั้งเดียว)
  * tests/lib/fixture-parts.sh ทำ CASE แบบเดียวกับ brandFileOf ทุกบรรทัด และ mobile/src/utils/brandFile.ts มีสำเนาของ brandFileOf
@@ -83,7 +86,7 @@ export function asBrandFile(v: unknown): BrandFile | null {
 
 /**
  * ไฟล์ยี่ห้อของอะไหล่หนึ่งตัว (แถว SparePartBrandFile) → ชื่อไฟล์เรียงตาม BRAND_FILES — ลำดับเดียวกับปุ่มบนหน้าจอ
- * ว่าง = ไม่อยู่ในไฟล์ไหน (ช่างเลือกไม่ได้บนใบที่มีเครื่อง)
+ * ว่าง = ไม่อยู่ในไฟล์ไหน = อะไหล่นอกเครื่อง (ของในสโตร์) ทุกเครื่องเลือกได้
  */
 export function fileList(rows: { file: string }[] | null | undefined): string[] {
   const rank = (f: string) => {
@@ -173,13 +176,14 @@ export const crossBrandOkInput = z
 
 export type BrandIssue = {
   /**
-   * noMachine = ช่างเลือกอะไหล่บนใบที่ไม่มีเครื่อง · offCatalog = ช่างใส่ของนอกสโตร์ · missing = id ไม่มีอยู่จริง
-   * noMake = เครื่องยังไม่รู้ยี่ห้อ · noFile = อะไหล่ไม่อยู่ในไฟล์ไหน · otherFile = อยู่แต่ไฟล์ที่เครื่องนี้เลือกไม่ได้
+   * noMachine = ช่างเลือกอะไหล่ของเครื่องบนใบที่ไม่มีเครื่อง · offCatalog = ช่างใส่ของนอกสโตร์ · missing = id ไม่มีอยู่จริง
+   * noMake = เครื่องยังไม่รู้ยี่ห้อแต่มีอะไหล่ของเครื่อง · otherFile = อยู่แต่ไฟล์ที่เครื่องนี้เลือกไม่ได้
+   * (ไม่มี "ไม่อยู่ในไฟล์ไหน" แล้ว — ตัวนั้นคืออะไหล่นอกเครื่อง ผ่านเสมอ · 4 พ.ย. 69)
    */
-  kind: "noMachine" | "offCatalog" | "missing" | "noMake" | "noFile" | "otherFile";
+  kind: "noMachine" | "offCatalog" | "missing" | "noMake" | "otherFile";
   text: string;
   partCode?: string;
-  /** ชื่ออะไหล่ (noFile/otherFile) — กระดานเครื่องดับต้องบอกรายการที่ไม่ตรงครบทุกตัวเป็น "{รหัส} {ชื่อ}" */
+  /** ชื่ออะไหล่ (otherFile) — กระดานเครื่องดับต้องบอกรายการที่ไม่ตรงครบทุกตัวเป็น "{รหัส} {ชื่อ}" */
   partName?: string;
   /** id + ไฟล์ที่อะไหล่อยู่ (otherFile) — ตัวที่ยืนยันใช้ข้ามยี่ห้อได้ ("+ สร้างใบงาน" ส่งให้แอปถามยืนยัน) */
   sparePartId?: number;
@@ -190,7 +194,10 @@ export type BrandIssue = {
 };
 
 export type BrandCheck = {
-  /** เครื่องของใบ (null = ใบงานทั้งสาขา ไม่ล็อก — ข้อ 22) */
+  /**
+   * เครื่องของใบ (null = ใบงานทั้งสาขา) — ช่องของคนอื่นไม่ล็อก (ข้อ 22) · ช่องของช่างเลือกได้เฉพาะอะไหล่นอกเครื่อง
+   * (อะไหล่ของเครื่องต้องรู้ว่าเครื่องไหน ยี่ห้ออะไร — ช่างเขียนในข้อ 4 ให้หัวหน้าภาคระบุแทนเหมือนเดิม)
+   */
   machine: { code: string; brand?: string | null; model?: string | null } | null;
   /** ยี่ห้อที่คนเพิ่งกดชิปมา — ใช้เฉพาะตอนเครื่องยังไม่รู้ยี่ห้อ (ยี่ห้อที่รู้แล้วเปลี่ยนจากฟอร์มไม่ได้) */
   machineBrand?: string | null;
@@ -203,8 +210,8 @@ export type BrandCheck = {
   noMachineText?: string;
   /**
    * id อะไหล่ที่คนกดยืนยัน "ใช้ข้ามยี่ห้อ" ในการบันทึกครั้งนี้ — ผ่านเฉพาะตัวที่อยู่ในไฟล์ยี่ห้ออื่น (otherFile)
-   * ตัวที่ไม่อยู่ในไฟล์ไหน ของนอกสโตร์ของช่าง เครื่องที่ไม่รู้ยี่ห้อ ใบไม่มีเครื่อง ยังถูกปฏิเสธเหมือนเดิม:
-   * ยืนยันได้เฉพาะ "อะไหล่ยี่ห้ออื่นที่รู้ว่าเป็นของยี่ห้อไหน" — ตัวที่ไม่มีไฟล์ยังไม่มีใครรู้ว่าเป็นของอะไร ให้ยืนยันคือให้เดา
+   * ของนอกสโตร์ของช่าง เครื่องที่ไม่รู้ยี่ห้อ ใบไม่มีเครื่อง ยังถูกปฏิเสธเหมือนเดิม (ยืนยันไม่ช่วย)
+   * อะไหล่นอกเครื่อง (ไม่อยู่ในไฟล์ไหน) ผ่านโดยไม่ต้องอยู่ในรายการนี้ — ส่งมาก็ไม่นับเป็นข้ามยี่ห้อ ไม่ลงประวัติ
    * ไม่จำไว้ที่ไหน (ไม่เพิ่มอะไหล่เข้าไฟล์ของเครื่อง) — ครั้งหน้าต้องยืนยันอีก
    */
   crossBrandOk?: Iterable<number>;
@@ -220,6 +227,7 @@ export type CrossBrandUse = { machineCode: string; make: string; machineFile: Br
  *
  * กฎเดียวที่ทุกเส้นทางใช้ (เจ้าของงาน: "เครื่อง Huebsch ก็สามารถเลือกอะไหล่ของเครื่อง Huebsch ได้เท่านั้น"):
  * ไฟล์ของอะไหล่ต้องมีไฟล์ของเครื่อง หรือ Other (ของใช้ร่วม) — อ่านจาก SparePartBrandFile ไม่ใช่ข้อความยี่ห้อ
+ * อะไหล่นอกเครื่อง (ไม่อยู่ในไฟล์ไหน) ผ่านทุกกรณี — ต้องมีเครื่อง/รู้ยี่ห้อเฉพาะเมื่อในรายการมีอะไหล่ของเครื่องอย่างน้อยหนึ่งตัว
  * อ่านอะไหล่ทุกตัวในคำสั่งเดียว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ) · ส่งรายการว่างมา = ไม่มีอะไรให้ตรวจ
  */
 export async function brandIssue(opts: BrandCheck, db: Db = prisma): Promise<BrandIssue | null> {
@@ -272,18 +280,8 @@ async function checkParts(
   const none = (issues: BrandIssue[]) => ({ issues, crossed: [], make: null, machineFile: null });
   const ids = [...new Set(opts.parts.map((p) => p.sparePartId))];
   if (ids.length === 0) return none([]);
-  if (!opts.machine) {
-    return none(
-      opts.mode === "tech"
-        ? [
-            {
-              kind: "noMachine",
-              text: opts.noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน",
-            },
-          ]
-        : []
-    );
-  }
+  // ใบทั้งสาขาในช่องของคนอื่นไม่ล็อกอะไรเลย (ข้อ 22) — ไม่ต้องอ่านอะไหล่ (ฐานข้อมูลอยู่ไกล) และคงคำตอบเดิมทุกกรณี
+  if (!opts.machine && opts.mode !== "tech") return none([]);
   const rows = await db.sparePart.findMany({
     where: { id: { in: ids } },
     select: { id: true, partCode: true, name: true, offCatalog: true, brandFiles: { select: { file: true } } },
@@ -292,7 +290,7 @@ async function checkParts(
   const legacy = new Set(opts.legacyIds ?? []);
   const confirmed = new Set(opts.crossBrandOk ?? []);
   // ยี่ห้อที่รู้แล้วชนะชิปเสมอ — ชิปมีไว้สำหรับเครื่องที่ยังไม่รู้ยี่ห้อเท่านั้น (ข้อ 17)
-  const make = machineMake(opts.machine) ?? (opts.machineBrand?.trim() || null);
+  const make = opts.machine ? machineMake(opts.machine) ?? (opts.machineBrand?.trim() || null) : null;
   const machineFile = brandFileOf(make);
   const out: BrandIssue[] = [];
   const crossed: CrossBrandPart[] = [];
@@ -310,21 +308,21 @@ async function checkParts(
       continue;
     }
     if (legacy.has(id)) continue;
+    const files = fileList(p.brandFiles);
+    // อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69) — ไม่ผูกกับยี่ห้อ จึงไม่ต้องมีเครื่อง ไม่ต้องรู้ยี่ห้อ ไม่ต้องยืนยัน
+    // ตรวจก่อนสองข้อข้างล่าง: ใบที่มีแต่ของพวกนี้ต้องไม่ถูกบอกให้ไปใส่เครื่อง/เลือกยี่ห้อ ทั้งที่ไม่มีอะไรให้เทียบ
+    if (files.length === 0) continue;
+    // เหลือแต่อะไหล่ของเครื่อง — ข้อความเดิมทุกตัวอักษร (แอปรุ่นก่อนและเทสต์เดิมพึ่งข้อความนี้)
+    if (!opts.machine) {
+      return none([
+        {
+          kind: "noMachine",
+          text: opts.noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน",
+        },
+      ]);
+    }
     if (!make || !machineFile) {
       return none([{ kind: "noMake", text: `เครื่อง ${opts.machine.code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่` }]);
-    }
-    const files = fileList(p.brandFiles);
-    if (files.length === 0) {
-      out.push({
-        kind: "noFile",
-        partCode: p.partCode,
-        partName: p.name,
-        machineFile,
-        make,
-        text: `${p.partCode} ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เลือกไม่ได้ (แอดมินอัปโหลดไฟล์ที่มีรหัสนี้ หรือติ๊กไฟล์ที่หน้าจัดการข้อมูลอะไหล่)`,
-      });
-      if (firstOnly) break;
-      continue;
     }
     const allowed = allowedFiles(machineFile) as string[];
     if (!files.some((f) => allowed.includes(f))) {
