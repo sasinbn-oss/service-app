@@ -71,6 +71,7 @@ import {
   type UrgentAsk,
 } from "../utils/dispatchCutoff";
 import { CutoffBanners, LiveScheduleChip } from "../components/DispatchCutoff";
+import { howtoTarget, useHowToAction } from "../utils/howto";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
@@ -782,6 +783,21 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     ];
   }, [shown]);
 
+  /**
+   * สอนการใช้งาน (หัวหน้าภาค/แอดมิน "ใบงานซ่อม"): เปิดใบงานให้ดูหนึ่งใบ — แค่เปิดดู ไม่บันทึกอะไร
+   * ใบที่ถึงคิวคนดูก่อน: ขั้นถัดไปชี้ "ปุ่มของขั้นตอนนี้" ซึ่งขึ้นเฉพาะคนที่มีสิทธิ์กด (ตัวอย่างที่ตกลงไว้เปิดใบที่รอแอดมิน
+   * ไม่ใช่แถวแรกที่รอช่าง) · ไม่มีใบถึงคิว = ใบแรกที่เห็น (ขั้นปุ่มขึ้นกลางจอแทน)
+   * ไม่เอาใบรอตรวจเคลม: ขั้นนั้นนับเป็นของแอดมิน แต่ Super Admin เปิดแล้วเป็นหน้าตรวจเคลมที่พับเนื้อใบไว้
+   * (ไม่มีแถบขั้นตอนให้ชี้) และแอดมินทั่วไปไม่มีปุ่มอะไรเลย — สองขั้นท้ายจะชี้ไม่เจอทั้งคู่
+   */
+  useHowToAction("orders.openFirst", () => {
+    const open = shown.filter((r) => r.status !== "CLAIM_REVIEW");
+    const row = open.find((r) => r.stageActor === user?.role) ?? open[0];
+    if (!row) return false;
+    navigation.navigate("WorkOrderDetail", { id: row.id });
+    return { ok: true, code: row.code };
+  });
+
   // นับรอบการโหลด — สลับชิปเร็ว ๆ คำตอบของชิปก่อนหน้าอาจมาถึงทีหลัง
   // ต้องทิ้งคำตอบเก่า ไม่งั้นชิป "ปิดแล้ว" อาจโชว์รายการของ "ที่ยังค้าง"
   const loadSeq = useRef(0);
@@ -1273,6 +1289,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               style={styles.addButton}
               onPress={() => navigation.navigate("WorkOrderForm")}
               activeOpacity={0.8}
+              {...howtoTarget("orders.add")}
             >
               <Ionicons name="add" size={18} color="#fff" />
               <Text style={styles.addButtonText}>เพิ่มใบงาน</Text>
@@ -1291,9 +1308,10 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         value={filter}
         onPick={(v) => chooseFilter(v as Filter)}
         right={compact || isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
+        testID={howtoTarget("orders.tabs").testID}
       />
       {supTabs && !loading && !error ? (
-        <View style={styles.supTabs}>
+        <View style={styles.supTabs} {...howtoTarget("orders.supTabs")}>
           {SUP_TABS.map((t) => {
             const on = prefs.supTab === t.value;
             return (
@@ -1322,7 +1340,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
       ) : null}
       <View style={styles.toolbar}>
-        <View style={styles.searchBox}>
+        <View style={styles.searchBox} {...howtoTarget("orders.search")}>
           <Ionicons name="search" size={16} color={colors.textFaint} />
           <TextInput
             style={styles.searchInput}
@@ -1353,7 +1371,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         )}
       </View>
       {!loading && !error && rows.length > 0 ? (
-        <View style={styles.quickWrap}>
+        <View style={styles.quickWrap} {...howtoTarget("orders.quick")}>
           <QuickChips items={quickItems} on={quick} toggle={toggleQuick} wrap={!compact} />
         </View>
       ) : null}
@@ -1824,7 +1842,7 @@ function WaitingOn({ row }: { row: WorkOrderRow }) {
         : null;
   const tone = OWNER_TONE[row.stageActor];
   return (
-    <View style={[styles.waitTag, { backgroundColor: tone.bg }]}>
+    <View style={[styles.waitTag, { backgroundColor: tone.bg }]} {...howtoTarget("orders.who")}>
       <Text style={[styles.waitText, { color: tone.fg }]} numberOfLines={1}>
         {ROLE_LABEL[row.stageActor]}
         {who ? <Text style={styles.waitWho}> · {who}</Text> : null}
@@ -1913,6 +1931,8 @@ function TableHead({
           sort={sort?.key === c.key ? sort.dir : null}
           onApply={(next) => onFilter(c.key, next)}
           onSort={(dir) => onSort(c.key, dir)}
+          // ตัวกรองรายทีมตัวเดียวที่มีจริง (Senior ช่างไม่มีช่องเลือกทีม) — วิธีใช้ "เห็นงานหลายทีม" ชี้ตรงนี้บนจอกว้าง
+          testID={c.key === "team" ? howtoTarget("orders.colTeam").testID : undefined}
         />
       ))}
       <View style={styles.colAction} />
@@ -2016,6 +2036,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       ]}
       onPress={onPress}
       activeOpacity={0.7}
+      {...howtoTarget("orders.row")}
     >
       {flash ? <Blink /> : null}
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
@@ -2128,6 +2149,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       ]}
       onPress={onPress}
       activeOpacity={0.8}
+      {...howtoTarget("orders.row")}
     >
       {isHot(row) ? <UrgentGlow radius={radius.md} /> : null}
       {flash ? <Blink radius={radius.md} /> : null}
@@ -2174,7 +2196,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       ) : null}
       <PartsEta row={row} />
 
-      <View style={styles.metaRow}>
+      <View style={styles.metaRow} {...howtoTarget("orders.rowTeam")}>
         <Ionicons name="people-outline" size={13} color={colors.textFaint} />
         <Text style={styles.meta}>
           {row.assignedToName ?? row.assignedTeam ?? "ยังไม่มอบหมายทีม"}

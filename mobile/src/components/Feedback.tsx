@@ -62,6 +62,23 @@ export function feedbackDialogOpen(): boolean {
   return !!state.dialog;
 }
 
+/**
+ * กล่องยืนยันหรือหน้าโหลดเต็มจอขึ้นอยู่ไหม — กล่องสอนการใช้งานหลบให้ (ไม่วาด แต่หน้าข้างหลังยังกดไม่ได้) จนกว่าจะปิด
+ * ไม่งั้นกล่องสอนบังปุ่ม "ตกลง" ของกล่องยืนยันที่ต้องกดก่อน (เจ้าของงานกำหนด: กล่องยืนยันของแอปอยู่บนสุดเสมอ)
+ */
+export function feedbackBusy(): boolean {
+  return !!state.dialog || !!state.loading;
+}
+
+/** ฟังว่ากล่องยืนยัน/หน้าโหลด/แถบข้อความเปลี่ยน — คืนตัวเลิกฟัง */
+export function subscribeFeedback(listener: () => void): () => void {
+  const l = () => listener();
+  listeners.add(l);
+  return () => {
+    listeners.delete(l);
+  };
+}
+
 export const feedback = {
   /** สำเร็จหายเองใน 3.5 วิ ผิดพลาดค้าง 6 วิ ให้มีเวลาอ่านวิธีแก้ */
   toast(kind: ToastKind, text: string) {

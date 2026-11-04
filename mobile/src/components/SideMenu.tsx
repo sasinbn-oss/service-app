@@ -26,7 +26,8 @@ import { MainTabParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import ThemeToggle from "./ThemeToggle";
 import { showAlert } from "../utils/alert";
-import { FadeSlot, RevealRow, Turn, useGroupBusy } from "./MenuReveal";
+import { FadeSlot, openRevealMs, RevealRow, Turn, useGroupBusy } from "./MenuReveal";
+import { howtoTarget } from "../utils/howtoTarget";
 
 /**
  * เมนูข้างแบบเลื่อนออกจากซ้าย (ปุ่มสามขีดบนแถบบน) ตามต้นแบบ OTTERI
@@ -41,6 +42,27 @@ export const sideMenu = {
   open: () => setOpenGlobal?.(true),
   close: () => setOpenGlobal?.(false),
 };
+
+/**
+ * เมนูเลื่อนออก (จอแคบ) เปิดอยู่ไหม — สอนการใช้งานต้องรู้: ขั้น "ลองกดปุ่มสามขีด" ไปต่อได้เมื่อเมนูเปิดแล้ว
+ * และเมนูที่วิธีใช้เปิดให้ต้องปิดคืนตอนออกจากขั้นเมนู (ไม่งั้นเมนูบังปุ่มที่ขั้นถัดไปชี้)
+ */
+let drawerOpen = false;
+const drawerListeners = new Set<(open: boolean) => void>();
+function setDrawerOpen(open: boolean) {
+  if (drawerOpen === open) return;
+  drawerOpen = open;
+  drawerListeners.forEach((l) => l(open));
+}
+export function sideMenuOpen() {
+  return drawerOpen;
+}
+export function subscribeSideMenu(listener: (open: boolean) => void): () => void {
+  drawerListeners.add(listener);
+  return () => {
+    drawerListeners.delete(listener);
+  };
+}
 
 /** จอกว้างเท่านี้ขึ้นไป (เว็บ) เมนูค้างไว้ด้านซ้ายแทนการเลื่อนออก ตามต้นแบบ */
 export const DOCK_MIN_WIDTH = 1100;
@@ -145,15 +167,39 @@ function toggleGroup(title: string) {
   }
   groupListeners.forEach((l) => l(next));
 }
+/**
+ * กลุ่มที่สอนการใช้งานกางให้ดูชั่วคราว (เช่น "รถ" ตอนชี้ "ลงทะเบียนใช้รถ") — อยู่ในหน่วยความจำเท่านั้น ไม่เขียนลงเครื่อง
+ * กลุ่มที่ผู้ใช้ย่อไว้เองต้องยังย่ออยู่หลังดูจบ · ผ่านตัวเดียวกับการกดหัวกลุ่ม แถวจึงทยอยโผล่แบบเดียวกัน (MenuReveal)
+ */
+let peeked: string | null = null;
+const peekListeners = new Set<(title: string | null) => void>();
+/** คืนเวลาที่กลุ่มใช้กางจนรายการสุดท้ายโผล่ครบ (ms) — 0 = ไม่มีอะไรต้องกาง (กางอยู่แล้ว/กางให้ดูอยู่แล้ว/ย่อคืน) */
+export function peekGroup(slug: string | null): number {
+  const group = slug ? GROUPS.find((g) => g.slug === slug) : undefined;
+  const title = group?.title ?? null;
+  if (title === peeked) return 0;
+  peeked = title;
+  peekListeners.forEach((l) => l(title));
+  // นับทุกรายการของกลุ่ม (ไม่ตัดตามสิทธิ์) — เกินจริงได้ไม่กี่สิบ ms แต่ไม่ขาด
+  return group && closedGroups.has(group.title) ? openRevealMs(group.items.length) : 0;
+}
 function useClosedGroups() {
   const [s, setS] = useState(closedGroups);
+  const [peek, setPeek] = useState(peeked);
   useEffect(() => {
     groupListeners.add(setS);
+    peekListeners.add(setPeek);
     return () => {
       groupListeners.delete(setS);
+      peekListeners.delete(setPeek);
     };
   }, []);
-  return s;
+  return useMemo(() => {
+    if (!peek || !s.has(peek)) return s;
+    const shown = new Set(s);
+    shown.delete(peek);
+    return shown;
+  }, [s, peek]);
 }
 
 type Tab = keyof MainTabParamList;
@@ -181,6 +227,8 @@ interface Item {
 
 interface Group {
   title: string;
+  /** ชื่อคงที่ของกลุ่ม — สอนการใช้งานชี้/กางกลุ่มด้วยชื่อนี้ (howto-menu.group.<slug>) ไม่ผูกกับชื่อไทยที่อาจเปลี่ยน */
+  slug: string;
   admin?: boolean;
   items: Item[];
 }
@@ -188,6 +236,7 @@ interface Group {
 const GROUPS: Group[] = [
   {
     title: "งานซ่อม",
+    slug: "work",
     items: [
       // หน้าแรกของทุกตำแหน่ง (เจ้าของงานเลือก ต.ค. 69) — งานที่ปล่อยแล้ว เรียงตามเวลานัด (แบบ Salesforce)
       {
@@ -242,6 +291,7 @@ const GROUPS: Group[] = [
    */
   {
     title: "อะไหล่",
+    slug: "parts",
     items: [
       { key: "parts", label: "รายการอะไหล่", labelEn: "Spare Parts", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
       /**
@@ -274,6 +324,7 @@ const GROUPS: Group[] = [
   },
   {
     title: "หน้างาน",
+    slug: "site",
     items: [
       { key: "flow", label: "วินิจฉัยอาการเสีย", labelEn: "Diagnose", icon: "git-branch-outline", tab: "HomeTab", screen: "FlowList" },
       { key: "checkin", label: "รายงานตัวเข้าสาขา", labelEn: "Branch Check-in", icon: "location-outline", tab: "HomeTab", screen: "BranchCheckIn" },
@@ -284,6 +335,7 @@ const GROUPS: Group[] = [
   {
     // ยกมาจาก OTTERI FLEET — รวมไว้กลุ่มเดียว ช่างเห็นสองรายการแรก แอดมินเห็นครบ
     title: "รถ",
+    slug: "vehicle",
     items: [
       { key: "vehicle", label: "ลงทะเบียนใช้รถ", labelEn: "Vehicle Use", icon: "car-outline", tab: "HomeTab", screen: "VehicleCheckIn" },
       { key: "vehicleMine", label: "ประวัติการใช้รถของฉัน", labelEn: "My Trips", icon: "time-outline", tab: "HistoryTab", screen: "VehicleHistory" },
@@ -294,15 +346,22 @@ const GROUPS: Group[] = [
   },
   {
     title: "เอกสารและบัญชี",
+    slug: "account",
     items: [
       { key: "transfer", label: "เอกสารขอโอนสินค้า", labelEn: "Transfer Request", icon: "swap-horizontal-outline", tab: "HomeTab", screen: "TransferDocument" },
       { key: "consumable", label: "เบิกของใช้สิ้นเปลือง", labelEn: "Consumables", icon: "file-tray-full-outline", tab: "HomeTab", screen: "ConsumableRequest" },
       { key: "history", label: "ประวัติ", labelEn: "History", icon: "time-outline", tab: "HistoryTab", screen: "HistoryMenu" },
       { key: "password", label: "เปลี่ยนรหัสผ่าน", labelEn: "Change Password", icon: "key-outline", tab: "HomeTab", screen: "ChangePassword" },
+      /**
+       * สอนการใช้งาน (เจ้าของงานเลือก ต.ค. 69) — ทุกตำแหน่งเห็น ไม่กรองว่ามีวิธีใช้ไหม
+       * ตำแหน่งที่ยังไม่มี (ทีม Area · Admin Spare Part รอบนี้) เปิดแล้วเจอหน้าที่บอกว่ากำลังทำ ดีกว่าเมนูโผล่ ๆ หาย ๆ
+       */
+      { key: "howto", label: "สอนการใช้งาน", labelEn: "How to Use", icon: "help-circle-outline", tab: "HomeTab", screen: "HowTo" },
     ],
   },
   {
     title: "ผู้ดูแลระบบ",
+    slug: "admin",
     admin: true,
     items: [
       { key: "admin", label: "ระบบหลังบ้าน", labelEn: "Admin", icon: "settings-outline", tab: "AdminTab", screen: "AdminMenu" },
@@ -322,10 +381,11 @@ const GROUPS: Group[] = [
 /**
  * เมนูของ Area Team — ชุดเต็ม 6 เมนูของ Area ตามที่เจ้าของงานกำหนด (ต.ค. 69) ที่เหลือซ่อนทั้งหมด
  * เปลี่ยนรหัสผ่านอยู่ด้วย ไม่งั้นหลังเปลี่ยนรหัสครั้งแรกแล้วจะไม่มีทางเปลี่ยนเองอีก
+ * สอนการใช้งานอยู่ด้วย (เจ้าของงานเลือก) — รอบนี้ยังไม่มีวิธีใช้ของทีม Area แต่หน้าบอกว่ากำลังทำ และรอบหน้าไม่ต้องมาเปิดเมนูอีก
  * ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area — Supervisor (COCO) / Maid (COCO) ถูกกรองออกอีกชั้น
  * ด้วย canOpenScreen (utils/areaTeam.ts) ซึ่งเป็นกฎเดียวกับการ์ดหน้าหลักและประตูหน้าจอ ไม่ได้แยกชุดเมนูไว้ที่นี่
  */
-const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password"]);
+const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password", "howto"]);
 
 const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches"]);
 
@@ -387,6 +447,7 @@ function QueuePill({ n }: { n: number }) {
  */
 function MenuGroup({
   title,
+  slug,
   items,
   closed,
   active,
@@ -397,6 +458,7 @@ function MenuGroup({
   rail,
 }: {
   title: string;
+  slug: string;
   items: Item[];
   closed: boolean;
   active: string | null;
@@ -429,6 +491,7 @@ function MenuGroup({
           activeOpacity={0.7}
           onPress={() => toggleGroup(title)}
           accessibilityLabel={`${shut ? "กาง" : "ย่อ"}กลุ่ม ${title}`}
+          {...howtoTarget(`menu.group.${slug}`)}
         >
           <View style={styles.groupDot} />
           <Text style={[styles.groupText, { flex: 1 }]}>{title}</Text>
@@ -461,6 +524,7 @@ function MenuGroup({
               activeOpacity={0.75}
               onPress={() => onPick(it)}
               accessibilityLabel={it.label}
+              {...howtoTarget(`menu.${it.key}`)}
               {...(rail && Platform.OS === "web" ? ({ title: it.label } as object) : null)}
             >
               <Ionicons name={it.icon} size={22} color={on ? "#fff" : colors.sideInk} />
@@ -533,6 +597,7 @@ function MenuContent({
               <MenuGroup
                 key={g.title}
                 title={g.title}
+                slug={g.slug}
                 items={items}
                 closed={closed.has(g.title)}
                 active={active}
@@ -622,7 +687,7 @@ export function DockedSideMenu() {
     return navigationRef.addListener("state", refresh);
   }, [reloadClaims, reloadQueue]);
   return (
-    <Animated.View style={[styles.docked, { width }]}>
+    <Animated.View style={[styles.docked, { width }]} {...howtoTarget("menu.side")}>
       <View style={[styles.dockHead, rail && styles.dockHeadRail]}>
         <MenuButton />
         {rail ? null : <Text style={styles.dockHeadText}>ย่อเมนู</Text>}
@@ -634,7 +699,11 @@ export function DockedSideMenu() {
 
 const WIDTH = 300;
 
-export default function SideMenu() {
+/**
+ * footer = ของที่วางเหนือแถวโหมดมืด/ออกจากระบบ — แอดมินจอแคบได้ปุ่ม "วิธีใช้หน้านี้" ตรงนี้ (แถบหัวของแอดมินเต็มแล้ว)
+ * ส่งมาจาก MainNavigator แทนการ import ปุ่มที่นี่ — ปุ่มนั้นใช้ตัวเครื่องสอนการใช้งานซึ่ง import เมนูนี้อยู่ (วนกัน)
+ */
+export default function SideMenu({ footer }: { footer?: React.ReactNode } = {}) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [inbox, setInbox] = useState(0);
@@ -669,10 +738,12 @@ export default function SideMenu() {
     setOpenGlobal = setOpen;
     return () => {
       setOpenGlobal = null;
+      setDrawerOpen(false);
     };
   }, []);
 
   useEffect(() => {
+    setDrawerOpen(open);
     if (open) {
       setMounted(true);
       setActive(currentKey());
@@ -719,7 +790,7 @@ export default function SideMenu() {
       >
         <PanelHead />
         <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} onPick={go} />
-        <PanelTools onLeave={() => setOpen(false)} />
+        <PanelTools onLeave={() => setOpen(false)} footer={footer} />
       </Animated.View>
     </View>
     </>
@@ -751,10 +822,10 @@ function PanelHead() {
 }
 
 /** โหมดมืดกับออกจากระบบ (จอแคบ) — ย้ายมาจากแถบบน ใช้ไม่บ่อย ไม่ควรกินที่หัวจอทุกหน้า */
-function PanelTools({ onLeave }: { onLeave: () => void }) {
+function PanelTools({ onLeave, footer }: { onLeave: () => void; footer?: React.ReactNode }) {
   const { logout } = useAuth();
-  return (
-    <View style={styles.panelTools}>
+  const tools = (
+    <View style={[styles.panelTools, footer ? styles.panelToolsUnder : null]}>
       <ThemeToggle />
       <View style={{ flex: 1 }} />
       <TouchableOpacity
@@ -771,6 +842,14 @@ function PanelTools({ onLeave }: { onLeave: () => void }) {
         <Ionicons name="log-out-outline" size={18} color="#fff" />
         <Text style={styles.panelLogoutText}>ออกจากระบบ</Text>
       </TouchableOpacity>
+    </View>
+  );
+  if (!footer) return tools;
+  // แถวเต็มความกว้างของตัวเอง — โหมดมืด + ออกจากระบบ + ปุ่มนี้ในแถวเดียวไม่พอในเมนูกว้าง 300 px
+  return (
+    <View style={styles.panelFoot}>
+      {footer}
+      {tools}
     </View>
   );
 }
@@ -820,6 +899,8 @@ export function MenuButton() {
   return (
     <TouchableOpacity
       style={[styles.menuBtn, canDock && styles.menuBtnDock]}
+      // จอคอมปุ่มเดียวกันนี้ย่อเมนู ไม่ใช่เปิดเมนู — สอนการใช้งานชี้เฉพาะปุ่มสามขีดของจอแคบ
+      {...(!canDock ? howtoTarget("app.menu") : null)}
       onPress={() => {
         if (!canDock) return sideMenu.open();
         // หน้าที่ขอแถบไอคอนอยู่ — กางให้เฉพาะรอบนี้ ไม่ทับค่าที่ผู้ใช้ตั้งไว้ (ออกจากหน้านั้นแล้วกลับเป็นแบบเดิม)
@@ -962,6 +1043,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.sideLine,
   },
+  panelFoot: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.sideLine,
+  },
+  // ใต้แถว "วิธีใช้หน้านี้" — เส้นคั่นกับระยะขอบอยู่ที่ panelFoot แล้ว
+  panelToolsUnder: { borderTopWidth: 0, paddingHorizontal: 0, paddingTop: 0 },
   panelLogout: {
     flexDirection: "row",
     alignItems: "center",

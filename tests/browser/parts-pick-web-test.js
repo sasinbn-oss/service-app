@@ -216,6 +216,8 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     const signIn = async (who, viewport) => {
       const ctx = await browser.newContext({ viewport });
       const p = await ctx.newPage();
+      // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+      await p.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
       p.on("pageerror", (e) => errors.push(`${who}: ${e}`));
       sessions.push(ctx);
       await p.goto(APP, { waitUntil: "networkidle", timeout: 180000 });

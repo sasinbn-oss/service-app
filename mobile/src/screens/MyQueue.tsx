@@ -40,6 +40,7 @@ import { RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
 import { CutoffBanners, ScheduleChip, UrgentAnswerModal, UrgentReleaseModal } from "../components/DispatchCutoff";
 import { dayTime } from "../components/claims/ClaimTrail";
 import { takeFlash, type QueueFlash } from "../utils/flash";
+import { howtoTarget, useHowToAction, useHowToContext } from "../utils/howto";
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
@@ -132,6 +133,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
    * ไม่ต้องถามรายการอื่นเพิ่ม: กฎอยู่ที่การนัดวัน ใบที่โดนคือใบรอนัดวันซึ่งอยู่ในกล่องนี้อยู่แล้ว
    */
   const [clock, setClock] = useState<{ serverNow?: string; cutoff?: Cutoff }>({});
+  // สอนการใช้งาน (หัวหน้าภาค ขั้น "เวลาปิดนัดงานพรุ่งนี้") บอกเวลาปิดที่แอดมินตั้งจริง — ค่าเดียวกับที่แถบ "รอนัดวัน" ใช้
+  useHowToContext({ cutoff: clock.cutoff ?? null });
   const [error, setError] = useState<string | null>(null);
   const [sendFor, setSendFor] = useState<WorkOrderRow | null>(null);
   const [replyFor, setReplyFor] = useState<WorkOrderRow | null>(null);
@@ -285,6 +288,22 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   );
   const found = shown.reduce((n, g) => n + g.list.length, 0);
 
+  /**
+   * สอนการใช้งาน (หัวหน้าภาค "ระบุอะไหล่" เริ่มจากหน้าสอนการใช้งาน): เปิดใบรอระบุอะไหล่ใบแรกให้ — แค่เปิดใบงาน ไม่บันทึกอะไร
+   * ฟอร์มเปิดต่อด้วยคำสั่งของหน้าใบงานเอง (order.openStage) ไม่ใช่ open:"stage" แบบปุ่มบนการ์ด — หน้าใบงานเปิดฟอร์มตอนโหลด
+   * ให้เฉพาะใบตรวจหน้างาน/ใบคอนเฟิร์มอะไหล่ จะเปลี่ยนให้ปุ่มบนการ์ดของหัวหน้าภาคทุกคนเพื่อวิธีใช้ไม่ได้
+   * ข้ามใบที่ช่างเลือกอะไหล่มาแล้ว (คอนเฟิร์มอะไหล่) — ฟอร์มนั้นไม่มีสามทางเลือกที่วิธีใช้อธิบาย · เฉพาะกลุ่มตามขั้น ไม่ใช่หัวข้อปัก
+   */
+  useHowToAction("queue.openParts", () => {
+    const row = shown
+      .filter((g) => g.kind === "stage")
+      .flatMap((g) => g.list)
+      .find((r) => r.status === "NEW" && !r.partsPick);
+    if (!row) return false;
+    onOpen(row.id);
+    return { ok: true, code: row.code };
+  });
+
   // จอคอม: กด / ที่ไหนก็ได้ไปที่ช่องค้นหา (ยกเว้นกำลังพิมพ์อยู่ในช่องอื่น)
   useEffect(() => {
     if (Platform.OS !== "web" || !focused) return;
@@ -310,7 +329,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
   const partsAdmin = !!user?.partsAdmin;
 
   const searchBox = (
-    <View style={[styles.search, docked && styles.searchDocked, !!q && styles.searchOn]}>
+    <View style={[styles.search, docked && styles.searchDocked, !!q && styles.searchOn]} {...howtoTarget("queue.search")}>
       <Ionicons name="search" size={17} color={q ? colors.navy : colors.textMuted} />
       <TextInput
         ref={searchRef}
@@ -350,7 +369,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
       </View>
 
       {rows ? (
-        <View style={styles.stats} accessibilityLabel="ตัวเลขสรุปงานที่รอ">
+        <View style={styles.stats} accessibilityLabel="ตัวเลขสรุปงานที่รอ" {...howtoTarget("queue.stats")}>
           <Stat n={all.length} label="รอทำทั้งหมด" />
           {partsAdmin ? null : <Stat n={urgent} label="ด่วน" tone={urgent ? "danger" : undefined} />}
           <Stat n={stale} label={`ค้างเกิน ${STALE_DAYS} วัน`} tone={stale ? "warning" : undefined} />
@@ -408,7 +427,12 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           </View>
         </TouchableOpacity>
       ) : null}
-      {rows && !error && banners.length ? <CutoffBanners groups={banners} /> : null}
+      {/* กรอบห่อให้วิธีใช้ชี้แถบเวลาปิดนัด (ชื่อคงที่) — ไม่ต้องแก้ตัวแถบเอง · ลูกตัวเดียวแทนลูกตัวเดียว ลำดับลูกไม่ขยับ */}
+      {rows && !error && banners.length ? (
+        <View {...howtoTarget("queue.cutoff")}>
+          <CutoffBanners groups={banners} />
+        </View>
+      ) : null}
       {/* Admin Spare Part ดูย้อนหลังได้จากหน้าแรกของตัวเอง (เจ้าของงานขอ ต.ค. 69) — ใบที่รอตรวจอยู่ในรายการด้านล่างแล้ว
           วางหลังแถวค้นหา: ลูกตัวที่ 3 ของหน้านี้ต้องเป็นแถวค้นหาที่ติดหัวจอ (stickyHeaderIndices)
           การ์ดกล่องงานตรวจเคลม (เคลมก้อน 6) อยู่ในช่องเดียวกัน (ห่อเป็นลูกตัวเดียว ลำดับลูกตัวถัดไปไม่ขยับ) */}
@@ -448,7 +472,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
             style={[styles.group, g.kind === "ask" && styles.groupAsk, g.kind === "past" && styles.groupCut]}
             accessibilityLabel={`กลุ่ม ${g.label}`}
           >
-            <View style={styles.groupHead}>
+            {/* วิธีใช้ "แบ่งกลุ่มตามขั้น" ชี้หัวกลุ่มตามขั้นเท่านั้น — หัวข้อปัก (ขอนัดด่วน · เลยนัด · คำขอตรวจสอบ) ไม่ใช่ชื่อขั้น */}
+            <View style={styles.groupHead} {...(g.kind === "stage" ? howtoTarget("queue.group") : null)}>
               {g.kind === "ask" ? <Ionicons name="hourglass-outline" size={18} color={colors.roleAdmin} /> : null}
               {g.kind === "past" ? <Ionicons name="calendar-outline" size={18} color={colors.dangerInk} /> : null}
               <Text
@@ -581,20 +606,26 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                   )}
                   {r.orphan && r.orphanReason ? <Text style={styles.note}>{r.orphanReason}</Text> : null}
                   {r.adminReview ? <AdminReviewBox review={r.adminReview} viewer={isAdmin ? "admin" : "supervisor"} /> : null}
-                  <CardActions
-                    row={r}
-                    kind={g.kind}
-                    // หัวข้อปัก (ขอนัดด่วน · เลยนัด) ไม่ใช่ชื่อขั้น — ปุ่ม/ป้ายบนการ์ดต้องบอกขั้นจริงของใบ
-                    stageLabel={g.kind === "stage" ? g.label : stageName(r.statusLabel)}
-                    isAdmin={isAdmin}
-                    wide={docked}
-                    onOpen={onOpen}
-                    onSend={() => setSendFor(r)}
-                    onReply={() => setReplyFor(r)}
-                    onUrgent={() => setUrgentFor(r)}
-                    onAnswerAsk={() => setAnswerFor(r)}
-                    onChanged={load}
-                  />
+                  {/*
+                    กรอบห่อให้วิธีใช้ชี้ "ปุ่มของขั้นนี้" — เฉพาะการ์ดในกลุ่มตามขั้น การ์ดปักมีปุ่มอื่น (แก้เป็นงานด่วน · ตอบกลับ)
+                    ที่ข้อความขั้นนั้นไม่ได้พูดถึง · ห่อที่นี่ที่เดียวแทนการใส่ชื่อในทุกทางที่ CardActions คืนค่า
+                  */}
+                  <View {...(g.kind === "stage" ? howtoTarget("queue.actions") : null)}>
+                    <CardActions
+                      row={r}
+                      kind={g.kind}
+                      // หัวข้อปัก (ขอนัดด่วน · เลยนัด) ไม่ใช่ชื่อขั้น — ปุ่ม/ป้ายบนการ์ดต้องบอกขั้นจริงของใบ
+                      stageLabel={g.kind === "stage" ? g.label : stageName(r.statusLabel)}
+                      isAdmin={isAdmin}
+                      wide={docked}
+                      onOpen={onOpen}
+                      onSend={() => setSendFor(r)}
+                      onReply={() => setReplyFor(r)}
+                      onUrgent={() => setUrgentFor(r)}
+                      onAnswerAsk={() => setAnswerFor(r)}
+                      onChanged={load}
+                    />
+                  </View>
                 </View>
               );
             })}

@@ -50,6 +50,8 @@ function cleanup() {
 
   async function open(code, width = 1400) {
     const page = await browser.newPage({ viewport: { width, height: 1100 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto("http://127.0.0.1:8081/", { waitUntil: "networkidle", timeout: 180000 });
@@ -144,11 +146,12 @@ function cleanup() {
     // หาเมนูด้วย aria-label (ชื่อเมนู) ปุ่มบนเว็บไม่ได้เป็น role=button
     const menuCount = (t) => m.locator(`[aria-label="${t}"]`).locator("visible=true").count();
     const mMissing = [];
-    for (const t of ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", "เปลี่ยนรหัสผ่าน"]) if ((await menuCount(t)) === 0) mMissing.push(t);
+    // สอนการใช้งาน: ทีม Area (รวม Maid) เห็นเมนูนี้ด้วย (เจ้าของงานเลือก) — กันเมนูหลุดจากชุดของทีม Area
+    for (const t of ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", "เปลี่ยนรหัสผ่าน", "สอนการใช้งาน"]) if ((await menuCount(t)) === 0) mMissing.push(t);
     const mLeaked = [];
     for (const t of ["ติดตามเครื่องเสีย", "รายงาน", "ผังผู้รับผิดชอบ", "งานของฉันวันนี้", "หน้าหลัก"]) if ((await menuCount(t)) > 0) mLeaked.push(t);
     !mMissing.length && !mLeaked.length
-      ? pass("Maid เห็น แผนงาน · กล่องงานของฉัน · ใบงานซ่อม · เปลี่ยนรหัสผ่าน — ไม่มี ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ")
+      ? pass("Maid เห็น แผนงาน · กล่องงานของฉัน · ใบงานซ่อม · เปลี่ยนรหัสผ่าน · สอนการใช้งาน — ไม่มี ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ")
       : fail(`เมนู Maid: หาย=[${mMissing}] เกิน=[${mLeaked}]`);
     // ป้ายขอบเขต "สาขาที่ประจำ" มีเฉพาะหน้าแผนงานของ Maid — หน้าแรกหลังเข้าระบบต้องเป็นแผนงาน
     (await mv("สาขาที่ประจำ").count()) > 0 ? pass("Maid เข้าระบบแล้วเปิดมาเจอแผนงาน (สาขาที่ประจำ)") : fail("หน้าแรกของ Maid ไม่ใช่แผนงาน");

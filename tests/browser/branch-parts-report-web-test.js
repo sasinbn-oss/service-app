@@ -100,6 +100,8 @@ const dbTiles = (where = "true") =>
     const open = async (code, width) => {
       const ctx = await browser.newContext({ viewport: { width, height: 1000 } });
       const page = await ctx.newPage();
+      // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+      await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
       await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
       page.on("pageerror", (e) => errors.push(String(e)));
       // ใครที่ไม่ควรเห็นต้องไม่ยิงคำขอรายงานนี้เลย (ซ่อนลิงก์แล้วแต่ยังยิงตัวเลข = 403 เงียบ ๆ ทุกครั้งที่เปิดใบงาน)

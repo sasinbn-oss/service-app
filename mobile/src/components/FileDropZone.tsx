@@ -40,6 +40,7 @@ export default function FileDropZone({
   style,
   children,
   label,
+  testID,
 }: {
   onFiles: (files: File[]) => void;
   /** บอกว่าที่นี่รับอะไร เช่น "รูป · วิดีโอ" — ขึ้นบนกรอบตอนลากไฟล์มา */
@@ -49,6 +50,8 @@ export default function FileDropZone({
   children: React.ReactNode;
   /** ชื่อกรอบสำหรับเทสต์/โปรแกรมอ่านหน้าจอ */
   label?: string;
+  /** ชื่อคงที่ให้ "สอนการใช้งาน" ชี้กรอบนี้ (howtoTarget) — ใส่ที่กรอบเองแทนห่ออีกชั้น ระยะห่างในการ์ดไม่เปลี่ยน */
+  testID?: string;
 }) {
   const ref = useRef<View>(null);
   const [over, setOver] = useState(false);
@@ -93,9 +96,9 @@ export default function FileDropZone({
     };
   }, []);
 
-  if (!isWeb) return <View style={style}>{children}</View>;
+  if (!isWeb) return <View style={style} testID={testID}>{children}</View>;
   return (
-    <View ref={ref} style={style} accessibilityLabel={label}>
+    <View ref={ref} style={style} accessibilityLabel={label} testID={testID}>
       {children}
       {over ? (
         <View style={styles.overlay} pointerEvents="none">

@@ -11,6 +11,7 @@ import { AREA_TEAM_LABELS } from "../utils/areaTeam";
 import { regionsOf, regionsText } from "../utils/regions";
 import { isTechRole, sessionRoleLabel } from "../utils/roles";
 import { teamsOf, teamsText } from "../utils/teams";
+import { howtoTarget } from "../utils/howtoTarget";
 import { colors, radius, spacing } from "../theme";
 
 /**
@@ -129,6 +130,8 @@ export function ViewAsButton({ compact }: { compact?: boolean }) {
         style={[styles.openBtn, compact && styles.openBtnCompact]}
         onPress={() => setOpen(true)}
         accessibilityLabel="ดูในฐานะผู้ใช้อื่น"
+        // สอนการใช้งาน (แอดมิน "งานของฉันวันนี้") ชี้ปุ่มนี้ — ชื่อคงที่ ปุ่มย้ายที่บนแถบหัวแล้ววิธีใช้ยังหาเจอ
+        {...howtoTarget("app.viewAs")}
       >
         <Ionicons name="eye-outline" size={18} color={colors.navy} />
         {compact ? null : <Text style={styles.openText}>ดูในฐานะ…</Text>}

@@ -22,6 +22,8 @@ import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import PopupScreen from "../components/PopupScreen";
+import HowToButton from "../components/HowToButton";
+import { howtoTarget } from "../utils/howto";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
@@ -747,7 +749,9 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
 
   return (
     // เปิดเป็นหน้าต่างลอยทับหน้าเดิม แบบเดียวกับใบงาน — ชื่อฟอร์มอยู่หัวหน้าต่าง
-    <PopupScreen title="เปิดใบงานใหม่" subtitle="ถามเฉพาะสิ่งที่ขั้นนี้รู้" width={860}>
+    // ปุ่ม ? ในหัวหน้าต่าง — ทุกคนที่เปิดหน้าต่างนี้ได้ (หัวหน้าภาค/แอดมินเล่นวิธีใช้ "เปิดใบงานใหม่" · คนอื่นเปิดหน้าสอนการใช้งาน)
+    // บนมือถือหน้าต่างเต็มจอบังปุ่ม ? บนแถบหัวของแอป
+    <PopupScreen title="เปิดใบงานใหม่" subtitle="ถามเฉพาะสิ่งที่ขั้นนี้รู้" width={860} right={<HowToButton compact target="newOrder.help" />}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/*
         แบ่งเป็นการ์ดขั้น 1–5 ตามต้นแบบ OTTERI — ฟอร์มยาวที่เป็นก้อนเดียวทำให้
@@ -1035,6 +1039,7 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
           onPress={submit}
           disabled={saving || missing.length > 0}
           activeOpacity={0.8}
+          {...howtoTarget("newOrder.submit")}
         >
           {saving ? (
             <>
@@ -1485,6 +1490,8 @@ function MachineCard({
         hint="รูป · วิดีโอ"
         disabled={!!busy}
         label={`วางรูปหน้างานของเครื่องที่ ${index + 1}`}
+        // วิธีใช้ "เปิดใบงานใหม่" ขั้นรูปหน้างานชี้ช่องของเครื่องแรก — ไม่ใช่ช่องรูปป้ายรุ่น (ไม่บังคับ) ที่อยู่เหนือขึ้นไป
+        testID={index === 0 ? howtoTarget("newOrder.photos").testID : undefined}
         onFiles={(files) => onAddFile((stage) => filesToAttachments(files, { image: true, video: true }, stage))}
       >
         {adminPhotoOptional ? (
@@ -1665,8 +1672,9 @@ function boardCrossBrandOf(
 
 /** หัวการ์ดขั้น: วงกลมเลขสีกรมท่า + ชื่อขั้น แบบ step-card ของ OTTERI */
 function StepHead({ n, title, optional }: { n: number; title: string; optional?: boolean }) {
+  // ชื่อคงที่ตามเลขขั้น (newOrder.step1–5) — วิธีใช้ "เปิดใบงานใหม่" ชี้หัวข้อขั้น ไม่ผูกกับชื่อขั้นที่อาจเปลี่ยนคำ
   return (
-    <View style={styles.stepHead}>
+    <View style={styles.stepHead} {...howtoTarget(`newOrder.step${n}`)}>
       <View style={styles.stepNum}>
         <Text style={styles.stepNumText}>{n}</Text>
       </View>

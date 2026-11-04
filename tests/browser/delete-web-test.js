@@ -68,6 +68,8 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
 
     // ── ช่างต้องไม่เห็นปุ่มลบ ──
     const t = await browser.newPage({ viewport: { width: 420, height: 1400 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await t.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     await signIn(t, "T001"); await openWO(t, o.code);
     (await t.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").count()) === 0
       ? pass("ช่างไม่เห็นปุ่มลบ") : fail("ช่างเห็นปุ่มลบ");
@@ -75,6 +77,8 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
 
     // ── หัวหน้าภาคต้องไม่เห็น ──
     const s2 = await browser.newPage({ viewport: { width: 420, height: 1400 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await s2.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     await signIn(s2, "S001"); await openWO(s2, o.code);
     (await s2.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").count()) === 0
       ? pass("หัวหน้าภาคไม่เห็นปุ่มลบ") : fail("หัวหน้าภาคเห็นปุ่มลบ");
@@ -82,6 +86,8 @@ const login = async (c) => (await call("/auth/login", null, "POST", { employeeCo
 
     // ── แอดมินเห็นและลบได้ ──
     const a = await browser.newPage({ viewport: { width: 420, height: 1400 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await a.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     const seen = (x, e=false) => a.getByText(x, { exact: e }).locator("visible=true").count();
     await signIn(a, "A001"); await openWO(a, o.code);
     (await a.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true").count()) > 0 ? pass("แอดมินเห็นปุ่มลบ") : fail("แอดมินไม่เห็นปุ่มลบ");

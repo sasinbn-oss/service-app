@@ -40,6 +40,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
   const before = Number(sql(`select coalesce(max(id),0) from "ViewAsLog"`));
   try {
     const page = await (await browser.newContext({ viewport: { width: 1300, height: 900 } })).newPage();
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     page.on("pageerror", (e) => errors.push(String(e)));
     const vis = (t, exact = true) => page.getByText(t, { exact }).locator("visible=true");
     const label = (l) => page.locator(`[aria-label="${l}"]`).locator("visible=true");

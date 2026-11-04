@@ -39,6 +39,8 @@ function cleanup() {
     args: ["--no-sandbox"],
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+  await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
   await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
   const pass = (m) => console.log("PASS", m);
@@ -62,10 +64,11 @@ function cleanup() {
     // ════ เมนู ════
     // เมนูข้างหาด้วย aria-label (ชื่อเมนู) — ปุ่มบนเว็บไม่ได้เป็น role=button (CLAUDE.md)
     const menuCount = (p, m) => p.locator(`[aria-label="${m}"]`).locator("visible=true").count();
-    const menu = ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", "เปลี่ยนรหัสผ่าน"];
+    // สอนการใช้งาน: ทีม Area เห็นด้วย (เจ้าของงานเลือก) — รอบนี้เปิดแล้วเจอหน้าที่บอกว่ากำลังทำ (howto-web-test ตรวจหน้า)
+    const menu = ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", "เปลี่ยนรหัสผ่าน", "สอนการใช้งาน"];
     const missingMenu = [];
     for (const m of menu) if ((await menuCount(page, m)) === 0) missingMenu.push(m);
-    missingMenu.length ? fail(`เมนูหาย: ${missingMenu}`) : pass("Supervisor (COCO) เห็น แผนงาน · กล่องงานของฉัน · ใบงานซ่อม · เปลี่ยนรหัสผ่าน");
+    missingMenu.length ? fail(`เมนูหาย: ${missingMenu}`) : pass("Supervisor (COCO) เห็น แผนงาน · กล่องงานของฉัน · ใบงานซ่อม · เปลี่ยนรหัสผ่าน · สอนการใช้งาน");
     const areaOnlyShown = [];
     for (const m of AREA_ONLY_MENU) if ((await menuCount(page, m)) > 0) areaOnlyShown.push(m);
     areaOnlyShown.length
@@ -182,6 +185,8 @@ function cleanup() {
 
     // ════ Area — สามเมนูยังอยู่ครบ ════
     const ap = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+    await ap.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
     await ap.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
     const areaDenied = [];
     ap.on("response", (r) => { if (r.url().includes("/api/") && r.status() === 403) areaDenied.push(`${r.request().method()} ${r.url().replace(/^.*\/api/, "")}`); });
@@ -192,8 +197,8 @@ function cleanup() {
     await ap.getByText("เข้าสู่ระบบ", { exact: true }).locator("visible=true").last().click();
     await ap.waitForTimeout(6000);
     const areaMissing = [];
-    for (const m of ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", ...AREA_ONLY_MENU]) if ((await menuCount(ap, m)) === 0) areaMissing.push(m);
-    areaMissing.length ? fail(`Area เมนูหาย: ${areaMissing}`) : pass("Area เห็นครบ 6 เมนู (รวม ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ)");
+    for (const m of ["แผนงาน", "กล่องงานของฉัน", "ใบงานซ่อม", ...AREA_ONLY_MENU, "สอนการใช้งาน"]) if ((await menuCount(ap, m)) === 0) areaMissing.push(m);
+    areaMissing.length ? fail(`Area เมนูหาย: ${areaMissing}`) : pass("Area เห็นครบ 6 เมนู (รวม ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ) + สอนการใช้งาน");
     (await aSeen("สาขา COCO ทั้งหมด", true)) > 0 ? pass("Area เข้าระบบแล้วเปิดมาเจอแผนงาน (สาขา COCO ทั้งหมด)") : fail("หน้าแรกของ Area ไม่ใช่แผนงาน");
     for (const m of ["ติดตามเครื่องเสีย", "ผังผู้รับผิดชอบ", "รายงาน", "กล่องงานของฉัน"]) {
       await ap.locator(`[aria-label="${m}"]`).locator("visible=true").last().click();

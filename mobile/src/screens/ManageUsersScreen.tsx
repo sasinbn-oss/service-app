@@ -32,6 +32,7 @@ import Dropdown from "../components/Dropdown";
 import { canPickFile } from "../utils/filePicker";
 import { regionsBody, regionsOf } from "../utils/regions";
 import { coveredTeams, teamsBody, teamsOf, teamsText } from "../utils/teams";
+import { rolesOfRaw } from "../utils/howtoTours";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 interface ManagedUser {
@@ -292,6 +293,28 @@ export default function ManageUsersScreen() {
       );
     }
     update(u.id, { role });
+  }
+
+  /**
+   * "ให้ดูวิธีใช้ใหม่" (สอนการใช้งาน · เจ้าของงานเลือก ต.ค. 69) — ล้างเครื่องหมายดูแล้วของคนนี้ แล้วกล่องต้อนรับขึ้นตอนเปิดแอปครั้งถัดไป
+   * ไม่ใช่เรื่องลับหรือสิทธิ์ แอดมินทุกคนกดได้ (รวมกับแอดมินคนอื่นและตัวเอง) · ถามก่อนเพราะเลขในหน้าการใช้งานแอปจะเริ่มนับใหม่
+   */
+  function reshowHowto(u: ManagedUser) {
+    showAlert(`ให้ ${u.name} ดูวิธีใช้ใหม่?`, "วิธีใช้จะขึ้นเองตอนเปิดแอปครั้งถัดไป · เครื่องหมาย ดูวิธีใช้แล้ว ในหน้าการใช้งานแอปจะเริ่มนับใหม่", [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: "ให้ดูวิธีใช้ใหม่",
+        onPress: async () => {
+          try {
+            await api.post(`/auth/users/${u.id}/howto-reset`, {}, { loadingText: "กำลังบันทึก..." });
+            // ลงท้าย "แล้ว" = แถบเขียว (showAlert ตัดสินจากหัวข้อ)
+            showAlert(`ตั้งให้ ${u.name} ดูวิธีใช้ใหม่แล้ว`);
+          } catch (e) {
+            showAlert("ตั้งไม่สำเร็จ", apiErrorMessage(e));
+          }
+        },
+      },
+    ]);
   }
 
   function remove(u: ManagedUser) {
@@ -670,6 +693,22 @@ export default function ManageUsersScreen() {
               <Ionicons name="refresh-outline" size={14} color={colors.primary} />
               <Text style={styles.resetLinkText}>ตั้งรหัสผ่านใหม่ให้</Text>
             </TouchableOpacity>
+            {/*
+              เฉพาะตำแหน่งที่มีวิธีใช้แล้ว (ช่าง · Senior ช่าง · หัวหน้าภาค · แอดมิน · Super Admin) — ทีม Area/Admin Spare Part
+              ยังไม่มีเรื่องให้ดู กดแล้วไม่มีอะไรขึ้น · ซ่อนระหว่างดูในฐานะ และสำหรับ Admin Spare Part (เซิร์ฟเวอร์ปฏิเสธอยู่แล้ว
+              หน้านี้ซ่อนปุ่มที่กดแล้วโดนปฏิเสธ แบบเดียวกับปุ่มลบผู้ใช้)
+            */}
+            {rolesOfRaw(u.role).length && !me?.partsAdmin && !me?.viewAs ? (
+              <TouchableOpacity
+                style={styles.resetLink}
+                onPress={() => reshowHowto(u)}
+                activeOpacity={0.7}
+                accessibilityLabel={`ให้ดูวิธีใช้ใหม่ ${u.name}`}
+              >
+                <Ionicons name="help-circle-outline" size={14} color={colors.primary} />
+                <Text style={styles.resetLinkText}>ให้ดูวิธีใช้ใหม่</Text>
+              </TouchableOpacity>
+            ) : null}
             {/* ลบได้เฉพาะ Super Admin (เซิร์ฟเวอร์กันซ้ำ) — แอดมินทั่วไปไม่เห็นปุ่มเลย จะได้ไม่กดแล้วโดนปฏิเสธ */}
             {me?.superAdmin && u.id !== me.id ? (
               <TouchableOpacity

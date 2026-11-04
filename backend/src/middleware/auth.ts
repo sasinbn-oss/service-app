@@ -140,7 +140,8 @@ const PARTS_ADMIN_WRITES = [
   // zip หลักฐานส่งผู้ขายหลังอนุมัติ (เคลมก้อน 6) — งานของ Admin Spare Part เอง: ส่งของให้ผู้ขาย
   /^POST \/api\/work-orders\/\d+\/claims\/evidence-link$/,
   /^\w+ \/api\/spare-parts(\/|$)/,
-  /^POST \/api\/auth\/(change-password|view-as\/stop)$/,
+  // howto = จดว่าตัวเองดูวิธีใช้แล้ว (สอนการใช้งาน) — งานส่วนตัวที่ทุกตำแหน่งทำได้ ไม่แตะข้อมูลงาน
+  /^POST \/api\/auth\/(change-password|view-as\/stop|howto)$/,
   // POST ที่ไม่ได้แก้ข้อมูล
   /^POST \/api\/machines\/export$/,
   /^POST \/api\/documents\/transfer-request$/,

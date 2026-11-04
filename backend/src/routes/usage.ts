@@ -17,6 +17,7 @@ import { ROLE_LABELS, TECH_ROLES } from "../utils/constants";
 import { SLOT_MS } from "../utils/usage";
 import { regionsOf } from "../utils/supervisorScope";
 import { teamsOf } from "../utils/teamGroups";
+import { howtoOf } from "../utils/howto";
 
 /** ทุกทีม (Senior ช่างถือได้หลายทีม) หรือภาคที่ดูแลทุกภาค (หัวหน้าภาคเลือกได้หลายภาค) — ช่อง "ทีม/ภาค" ในรายการและไฟล์ */
 function teamOrRegions(u: { role: string; team: string | null; extraTeams: string[]; region: string | null; extraRegions: string[] }) {
@@ -83,7 +84,7 @@ async function usersFor(role: string, q?: string) {
   const words = (q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const users = await prisma.user.findMany({
     where: { deletedAt: null, ...(role !== "ALL" ? { role: { in: ROLE_GROUPS[role] } } : {}) },
-    select: { id: true, name: true, employeeCode: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true },
+    select: { id: true, name: true, employeeCode: true, role: true, team: true, extraTeams: true, region: true, extraRegions: true, howtoSeen: true },
     orderBy: { name: "asc" },
   });
   // ทุกคำต้องเจอ แต่ไม่ต้องติดกัน — แบบเดียวกับค้นหาในหน้าสิทธิ์ผู้ใช้ ("ช่าง กระบี่")
@@ -179,6 +180,8 @@ router.get("/", requireAuth, requireUsageViewer, async (req: AuthRequest, res) =
         activeDays: p?.days.size ?? 0,
         devices: [...(p?.devices ?? [])],
         today: bars.map((b) => ({ from: new Date(b.from), to: new Date(b.to), device: b.device })),
+        // คอลัมน์ "ดูวิธีใช้แล้ว" — แอปนับเทียบรายชื่อหน้าของตำแหน่งนั้นเอง (role ดิบข้างบน) เซิร์ฟเวอร์ไม่รู้ว่ามีกี่หน้า
+        howto: howtoOf(u.howtoSeen),
       };
     })
     // ใช้ล่าสุดขึ้นก่อน คนที่ไม่เคยเข้าอยู่ท้าย

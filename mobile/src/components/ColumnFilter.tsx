@@ -21,9 +21,12 @@ export function HeadFilter({
   sort,
   onApply,
   onSort,
+  testID,
 }: {
   label: string;
   style?: object;
+  /** ชื่อคงที่ของหัวคอลัมน์ — "สอนการใช้งาน" ชี้หัวคอลัมน์ "ทีม" ด้วยชื่อนี้ (ตัวกรองรายทีมตัวเดียวที่มีจริง) */
+  testID?: string;
   /** ค่าทั้งหมดของคอลัมน์ (จากรายการที่ผ่านตัวกรองอื่น) พร้อมจำนวนใบ */
   values: { value: string; count: number }[];
   /** null = ไม่ได้กรอง */
@@ -72,7 +75,7 @@ export function HeadFilter({
   }
 
   return (
-    <View style={style}>
+    <View style={style} testID={testID}>
       <TouchableOpacity
         ref={anchor}
         style={[styles.head, (active || sort) && styles.headOn]}

@@ -32,6 +32,7 @@ import DispatchPartsBox from "../components/DispatchPartsBox";
 import type { DispatchPart } from "../utils/dispatchParts";
 import { PHONE_TEXT, SITE_TEXT, cardReasonLines, wholeLabels } from "../utils/claimFlags";
 import { takeFlash, type JobsFlash } from "../utils/flash";
+import { howtoTarget, useHowToAction } from "../utils/howto";
 import { HomeStackParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 
@@ -271,6 +272,37 @@ function TechJobs({ navigation }: Props) {
    */
   const returnedJobs = (jobs ?? []).filter((j) => !!j.partsReturned && !j.done);
   const list = groups[tab].filter((j) => !(j.partsReturned && !j.done));
+
+  /**
+   * สอนการใช้งาน: เปิดใบงานใบแรกที่ยังไม่ปิดให้ดู (วิธีใช้ "ใบงาน" ที่เริ่มจากหน้าสอนการใช้งาน) — แค่เปิดดู ไม่บันทึกอะไร
+   * ข้ามใบที่เคลมถูกตีกลับ (ปุ่มของใบนั้นพาไปฟอร์มแก้เคลม ไม่ใช่หน้าใบงานปกติ) · ใบอะไหล่ถูกตีกลับไม่อยู่ใน list อยู่แล้ว
+   */
+  useHowToAction("myday.openFirst", () => {
+    const job = list.find((j) => !j.done && j.claim?.state !== "REJECTED");
+    if (!job) return false;
+    open(job);
+    return { ok: true, code: job.code };
+  });
+  /**
+   * สอนการใช้งาน (ช่าง "ปิดงาน" เริ่มจากหน้าสอนการใช้งาน): เปิดฟอร์มปิดงานของงานแรกที่ถึงหน้างานแล้ว — ทางเดียวกับปุ่ม "ปิดงาน" บนการ์ด
+   * ฟอร์มเปิดเฉย ๆ ไม่บันทึกอะไร: ร่างฟอร์มเขียนเฉพาะหลังผู้ใช้แก้จริง (CloseModal draftKey) การ์ดจึงไม่ขึ้น "กรอกค้างไว้" หลังดูจบ
+   * ทุกแท็บ (วันนี้ก่อน · ค้าง · พรุ่งนี้) — งานที่ถึงหน้างานแล้วอาจเป็นงานค้างของเมื่อวาน
+   * ข้ามใบที่ไม่ใช่ฟอร์มปิดงานปกติ: ตรวจหน้างาน (ปุ่มเป็นบันทึกผลตรวจ) · เคลมถูกตีกลับ (ฟอร์มแก้เคลม) · อะไหล่ถูกตีกลับ (การ์ดแดง)
+   */
+  useHowToAction("myday.openClose", () => {
+    const job = [...groups.today, ...groups.late, ...groups.tomorrow].find(
+      (j) =>
+        !j.done &&
+        !j.inspect &&
+        !!j.arrivedAt &&
+        j.status === "IN_PROGRESS" &&
+        j.claim?.state !== "REJECTED" &&
+        !j.partsReturned,
+    );
+    if (!job) return false;
+    open(job, "close");
+    return { ok: true, code: job.code };
+  });
   const TABS: { value: Tab; label: string }[] = [
     { value: "today", label: "วันนี้" },
     { value: "tomorrow", label: "พรุ่งนี้" },
@@ -305,7 +337,7 @@ function TechJobs({ navigation }: Props) {
         />
       ))}
 
-      <View style={styles.seg}>
+      <View style={styles.seg} {...howtoTarget("myday.tabs")}>
         {TABS.map((t) => {
           const on = tab === t.value;
           const n = groups[t.value].filter((j) => !j.done).length;
@@ -316,6 +348,8 @@ function TechJobs({ navigation }: Props) {
               onPress={() => setTab(t.value)}
               accessibilityLabel={`แท็บ ${t.label} ${n} งาน`}
               accessibilityState={{ selected: on }}
+              // เว็บไม่แปลง accessibilityState เป็น aria-selected (CLAUDE.md) — เทสต์ต้องอ่านได้ว่าแท็บไหนเลือกอยู่
+              aria-selected={on}
             >
               <Text style={[styles.segText, on && styles.segTextOn, t.value === "late" && n > 0 && !on && { color: colors.danger }]}>
                 {t.label} {n}
@@ -731,6 +765,8 @@ function JobCard({
     <View
       style={[styles.card, arrived && !job.done && styles.cardNow, job.done && !review && styles.cardDone, review && styles.cardReview]}
       accessibilityLabel={`งาน ${job.code}`}
+      // การ์ดปกติเท่านั้น — การ์ดแดง/ตรวจเคลมจบ/รอตรวจเคลมหน้าตาคนละแบบ ไม่ใช่ "การ์ดงาน" ที่วิธีใช้อธิบาย
+      {...howtoTarget("myday.card")}
     >
       <View style={styles.cardTop}>
         <Text style={styles.time}>{job.scheduledTime ?? "ทั้งวัน"}</Text>
@@ -793,12 +829,19 @@ function JobCard({
               style={[styles.big, styles.bigClose]}
               onPress={() => onOpen(job.inspect ? "stage" : "close")}
               accessibilityLabel={job.inspect ? "บันทึกผลตรวจ" : "ปิดงาน"}
+              {...howtoTarget("myday.close")}
             >
               <Ionicons name="checkmark-done" size={20} color="#fff" />
               <Text style={styles.bigText}>{job.inspect ? "บันทึกผลตรวจ" : "ปิดงาน"}</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={[styles.big, busy && { opacity: 0.6 }]} onPress={onArrive} disabled={busy} accessibilityLabel="ถึงหน้างาน">
+            <TouchableOpacity
+              style={[styles.big, busy && { opacity: 0.6 }]}
+              onPress={onArrive}
+              disabled={busy}
+              accessibilityLabel="ถึงหน้างาน"
+              {...howtoTarget("myday.arrive")}
+            >
               {busy ? <Spinner color="#fff" size="small" /> : <Ionicons name="location" size={20} color="#fff" />}
               <Text style={styles.bigText}>{busy ? "กำลังเช็คพิกัด…" : "ถึงหน้างาน"}</Text>
             </TouchableOpacity>

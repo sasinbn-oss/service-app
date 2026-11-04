@@ -86,6 +86,8 @@ const { setup } = require("./fixture");
     const open = async (code, width, at) => {
       const ctx = await browser.newContext({ viewport: { width, height: 1000 } });
       const page = await ctx.newPage();
+      // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
+      await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
       // at = ตั้งนาฬิกาของหน้าเว็บ (ปุ่มช่วงวันที่คิดจากวันนี้) แล้วปล่อยเดินต่อ — หยุดเวลาไว้ (setFixedTime) แอนิเมชันค้าง เมนูไม่เลื่อนออก
       if (at) await page.clock.install({ time: at });
       await page.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));

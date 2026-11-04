@@ -56,6 +56,9 @@ echo "$R" | J '"  สร้าง "+d.created+" · รหัส "+d.passwordsIss
 ROWS=$(DB "select u.\"employeeCode\"||':'||u.role||':'||u.\"mustChangePassword\"||':'||coalesce(a.\"employeeCode\",'-') from \"User\" u left join \"User\" a on a.id=u.\"areaId\" where u.\"employeeCode\" in ($LOGINS) order by 1" | tr '\n' ' ')
 [ "$ROWS" = "zz.area:AREA:true:- zz.sup1:COCO_SUPERVISOR:true:zz.area zz.sup2:COCO_SUPERVISOR:true:zz.area " ] \
   && pass "ฐานข้อมูล: บัญชี 3 ตำแหน่งถูก · ต้องเปลี่ยนรหัส · Supervisor อยู่ใต้ Area" || fail "บัญชี: $ROWS"
+# สอนการใช้งาน: บัญชีใหม่จากไฟล์ตั้ง pending ไว้ก่อน — รอบนี้ทีม Area ยังไม่มีวิธีใช้ วันที่มีจะได้กล่องต้อนรับเองโดยไม่ต้องไล่แก้
+[ "$(DB "select string_agg(\"employeeCode\"||'='||coalesce(\"howtoSeen\"::text,'NULL'), ' ' order by \"employeeCode\") from \"User\" where \"employeeCode\" in ($LOGINS)")" = 'zz.area={"pending": true} zz.sup1={"pending": true} zz.sup2={"pending": true}' ] \
+  && pass "ฐานข้อมูล: บัญชีใหม่จากไฟล์ Area Team ได้ howtoSeen = pending" || fail "howtoSeen: $(DB "select \"employeeCode\", \"howtoSeen\" from \"User\" where \"employeeCode\" in ($LOGINS)")"
 [ "$(DB "select string_agg(b.code||'='||u.\"employeeCode\", ' ' order by b.code) from \"Branch\" b join \"User\" u on u.id=b.\"cocoSupervisorId\" where u.\"employeeCode\" in ($LOGINS)")" = "C0001=zz.sup1 C0006=zz.sup2 CNX=zz.area" ] \
   && pass "ฐานข้อมูล: สาขาผูกกับ Supervisor ที่ดูแล · สาขาที่ Area ดูแลเองผูกกับ Area (ไม่สร้างบัญชีซ้ำ)" || fail "สาขา: $(DB "select code, \"cocoSupervisorId\" from \"Branch\" where \"cocoSupervisorId\" is not null")"
 [ "$(DB "select count(distinct \"passwordHash\") from \"User\" where \"employeeCode\" in ($LOGINS)")" = "3" ] && pass "รหัสผ่านสุ่มแยกคน (ไม่ใช่รหัสเดียวทั้งไฟล์)" || fail "รหัสซ้ำกัน"

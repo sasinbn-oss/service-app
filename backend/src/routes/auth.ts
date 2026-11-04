@@ -15,6 +15,7 @@ import { coverageOfUser, teamGroups, teamsOf } from "../utils/teamGroups";
 import { documentPath, saveDocument } from "../documents/store";
 import ExcelJS from "exceljs";
 import { deleteObject } from "../storage/fileStore";
+import { HOWTO_NEW, HOWTO_TOUR_ID, howtoOf, markHowto } from "../utils/howto";
 
 const router = Router();
 
@@ -60,6 +61,8 @@ router.post("/register", async (req, res) => {
       passwordHash,
       // คนแรกของระบบเป็นเจ้าของระบบ — ไม่งั้นไม่มีใครตั้งแอดมินได้เลย
       role: isFirstUser ? "SUPER_ADMIN" : "EMPLOYEE",
+      // บัญชีใหม่ = ขึ้นกล่องต้อนรับ "สอนการใช้งาน" ครั้งแรกที่เข้าแอป (ดู User.howtoSeen)
+      howtoSeen: HOWTO_NEW,
     },
   });
 
@@ -123,6 +126,8 @@ router.post("/login", async (req, res) => {
       teamCoverage: await coverageOfUser(user),
       supervisedTeams: user.supervisedTeams,
       mustChangePassword: user.mustChangePassword,
+      // ต้องมาพร้อมล็อกอิน ไม่ใช่รอ /auth/me — แอปตัดสินจากตรงนี้ว่าจะขึ้นกล่องต้อนรับ/ข้อความสั้น (utils/howto.ts)
+      howto: howtoOf(user.howtoSeen),
     },
   });
 });
@@ -146,6 +151,8 @@ async function meOf(user: MeUser, auth?: AuthRequest["auth"]) {
     supervisedTeams: user.supervisedTeams,
     // ระหว่างดูในฐานะ ไม่บังคับเปลี่ยนรหัสแทนเจ้าของบัญชี — Super Admin แค่มาดูหน้าจอ
     mustChangePassword: viewAs ? false : user.mustChangePassword,
+    // ระหว่างดูในฐานะ = ของคนที่ถูกดู (ผู้สอนเห็นว่าเขาดูหน้าไหนแล้ว) — แอปไม่ขึ้นกล่องเองและไม่บันทึกเพราะมี viewAs
+    howto: howtoOf(user.howtoSeen),
     // แอปใช้แสดงแถบ "กำลังดูในฐานะ" ค้างไว้ด้านบนและนับเวลาที่เหลือ
     viewAs: viewAs
       ? { byName: by?.name ?? "แอดมิน", expiresAt: new Date((auth!.exp ?? 0) * 1000).toISOString() }
@@ -157,6 +164,28 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.auth!.userId } });
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json(await meOf(user, req.auth));
+});
+
+/**
+ * เจ้าของบัญชีจดว่าตอบกล่องต้อนรับ / ข้อความสั้นแล้ว หรือดูวิธีใช้หน้าไหนจบ — ส่งมาทีละอย่างเท่านั้น
+ *
+ * ทุกตำแหน่งเรียกได้ (Admin Spare Part และทีม Area อยู่ในรายการอนุญาตของตัวเองแล้ว) — วิธีใช้ของทุกตำแหน่งต้องจำได้
+ * ดูในฐานะถูกกันที่ requireAuth (ดูได้อย่างเดียว) ไม่ใส่ใน ALLOWED_WHILE_VIEWING โดยตั้งใจ:
+ * ผู้สอนเปิดวิธีใช้ในฐานะช่างเพื่อสอน ไม่ได้แปลว่าช่างคนนั้นดูแล้ว
+ * ยังไม่เปลี่ยนรหัสก็ไม่ได้ (423) — แอปยังไม่ขึ้นวิธีใช้ก่อนเปลี่ยนรหัสอยู่แล้ว
+ */
+const howtoSchema = z.union([
+  z.object({ welcome: z.literal(true) }).strict(),
+  z.object({ notice: z.literal(true) }).strict(),
+  z.object({ tour: z.string().regex(HOWTO_TOUR_ID) }).strict(),
+]);
+
+router.post("/howto", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = howtoSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "ข้อมูลวิธีใช้ไม่ถูกต้อง" });
+  const r = await markHowto(req.auth!.userId, parsed.data);
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.json({ howto: r.howto });
 });
 
 /**
@@ -543,6 +572,8 @@ router.post("/users", requireAuth, requireAdmin, async (req: AuthRequest, res) =
       ...teamData,
       passwordHash: await bcrypt.hash(body.password, 10),
       mustChangePassword: true,
+      // ขึ้นกล่องต้อนรับ "สอนการใช้งาน" ครั้งแรกที่เข้าแอป (หลังเปลี่ยนรหัส) — ดู User.howtoSeen
+      howtoSeen: HOWTO_NEW,
       ...(maidIds.length ? { maidBranches: { create: maidIds.map((branchId) => ({ branchId })) } } : {}),
     },
     select: MANAGED_USER_SELECT,
@@ -589,6 +620,24 @@ router.post("/users/:id/reset-password", requireAuth, requireAdmin, async (req: 
     },
   });
   passwordChanged(id, resetAt);
+  res.json({ ok: true });
+});
+
+/**
+ * แอดมินให้คนหนึ่งดูวิธีใช้ใหม่ (ลิงก์ "ให้ดูวิธีใช้ใหม่" ในหน้าสิทธิ์ผู้ใช้) — กล่องต้อนรับขึ้นตอนเปิดแอปครั้งถัดไป
+ * และล้างหน้าที่ดูแล้ว (คอลัมน์ "ดูวิธีใช้แล้ว" ในหน้าการใช้งานแอปเริ่มนับใหม่)
+ *
+ * แอดมินทุกคนกดได้ รวมกับแอดมินคนอื่น — ไม่ได้แตะสิทธิ์หรือรหัสผ่าน แค่ให้กล่องขึ้นอีกครั้ง
+ * Admin Spare Part / ทีม Area / ดูในฐานะ ถูกกันที่ requireAuth แล้ว · คำสั่งเดียว ไม่อ่านก่อนเขียน
+ */
+router.post("/users/:id/howto-reset", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสผู้ใช้ไม่ถูกต้อง" });
+  const { count } = await prisma.user.updateMany({
+    where: { id, deletedAt: null },
+    data: { howtoSeen: { ...HOWTO_NEW, resetAt: new Date().toISOString(), resetBy: req.auth!.userId } },
+  });
+  if (!count) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
   res.json({ ok: true });
 });
 

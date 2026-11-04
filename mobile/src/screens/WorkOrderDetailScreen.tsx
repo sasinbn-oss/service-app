@@ -54,6 +54,8 @@ import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown, { DropdownOption } from "../components/Dropdown";
 import TimelineModal, { TimelineButton } from "../components/TimelineModal";
+import HowToButton from "../components/HowToButton";
+import { howtoTarget, useHowToAction } from "../utils/howto";
 import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
@@ -1490,6 +1492,20 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     return o.stageActor === user.role;
   }
 
+  /**
+   * สอนการใช้งาน (หัวหน้าภาค "ระบุอะไหล่" เริ่มจากหน้าสอนการใช้งาน): เปิดฟอร์มระบุอะไหล่ของใบนี้ให้ — เปิดอย่างเดียว ไม่บันทึกอะไร
+   * งานของฉันวันนี้เปิดใบมาให้ก่อน (queue.openParts) แล้วคำสั่งนี้เปิดฟอร์มต่อ · ฟอร์มเปิดตอนโหลดเองเฉพาะใบตรวจหน้างาน/คอนเฟิร์มอะไหล่
+   * (openOnLoad) และไม่เปลี่ยนให้ — ปุ่มบนการ์ดของหัวหน้าภาคทุกคนต้องทำงานเหมือนเดิม
+   * เฉพาะใบระบุอะไหล่ที่ช่างยังไม่ได้เลือกอะไหล่มา (จอคอนเฟิร์มไม่มีสามทางเลือกที่วิธีใช้อธิบาย) และถึงคิวคนดูจริง
+   * ใบยังไม่โหลด = ยังไม่ตอบ (ตัวเครื่องลองซ้ำจนครบเวลา)
+   */
+  useHowToAction("order.openStage", () => {
+    if (!order) return null;
+    if (order.status !== "NEW" || pickPending(order) || !myTurn(order)) return false;
+    setStageOpen(true);
+    return { ok: true, code: order.code };
+  });
+
   if (loading) {
     return (
       <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
@@ -1783,6 +1799,11 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           {user?.superAdmin ? (
             <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} />
           ) : null}
+          {/*
+            ปุ่ม ? ของหน้าต่างใบงาน — ทุกคน (หน้าต่างนี้คือหน้าหนึ่ง): ช่างเล่นวิธีใช้ "ใบงาน" · คนอื่นเปิดหน้าสอนการใช้งาน
+            (แอดมิน/หัวหน้าภาคเรียนหน้าใบงานในวิธีใช้ "ใบงานซ่อม" ของตัวเอง) · บนมือถือหน้าต่างเต็มจอ ปุ่ม ? บนแถบหัวถูกบัง
+          */}
+          <HowToButton compact target="order.help" />
         </View>
       }
     >
@@ -2046,7 +2067,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           const issueSub = path.rows.find((r) => r.key === "ISSUE")?.sub;
           return (
             // ชื่อของทั้งส่วน (รอบตรวจ + แถบ + ขั้นย่อย) — คนใช้โปรแกรมอ่านจอกับเทสต์ (stageorder · inspect-confirm) หาจากชื่อนี้
-            <View accessibilityLabel="ขั้นตอนงาน">
+            <View accessibilityLabel="ขั้นตอนงาน" {...howtoTarget("order.steps")}>
               {/*
                 รอบตรวจหน้างาน — เหนือแถบ ไม่นับเป็นขั้นหลัก (แบบที่ตกลง ต.ค. 69 รอบสอง)
                 เดิมเป็นสามขั้นต่อจากขั้น 1 และขั้น 1 ติ๊กว่าระบุอะไหล่แล้ว ทั้งที่เลือกส่งตรวจเพราะยังระบุไม่ได้
@@ -2304,7 +2325,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       ) : null}
 
 
-      <View style={[card, styles.nowCard]}>
+      <View style={[card, styles.nowCard]} {...howtoTarget("order.now")}>
         {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
         {urgent ? <UrgentGlow radius={radius.xl} /> : null}
         <View style={styles.nowHead}>
@@ -2722,7 +2743,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ) : !done ? (
           myTurn(order) ? (
             <>
-              <View style={styles.actions}>
+              <View style={styles.actions} {...howtoTarget("order.action")}>
   {/*
                   ปุ่มเดียวต่อขั้น — ขั้นไหนก็ทำได้อย่างเดียวตามที่สายงานกำหนด
                   ขั้นนัดวันเป็นของหัวหน้าภาค ส่วนปิดงานเป็นของช่างหลังถึงหน้างานแล้ว
@@ -2974,20 +2995,23 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
         ปิดงานแล้วแนบเพิ่มไม่ได้ ใบที่ปิดแล้วคือบันทึกที่จบไปแล้ว
         ยกเว้นแอดมินที่ยังต้องเอาของที่ไม่ควรอยู่ในระบบออกได้
       */}
-      <WorkOrderAttachments
-        workOrderId={order.id}
-        canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
-        reloadKey={filesKey}
-        formLinks={formDetail.links}
-        onLoaded={filesLoaded}
-        onLoadFailed={filesFailed}
-        onAdded={load}
-        inspection={
-          order.status === "INSPECTING" || order.inspectedAt
-            ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
-            : undefined
-        }
-      />
+      {/* กรอบห่อให้วิธีใช้ชี้การ์ดรูปและไฟล์ (ชื่อคงที่) — การ์ดอยู่ในคอลัมน์ที่เว้นระยะด้วย gap ห่อแล้วระยะไม่เปลี่ยน */}
+      <View {...howtoTarget("order.files")}>
+        <WorkOrderAttachments
+          workOrderId={order.id}
+          canEdit={!viewOnly && (!done || user?.role === "ADMIN")}
+          reloadKey={filesKey}
+          formLinks={formDetail.links}
+          onLoaded={filesLoaded}
+          onLoadFailed={filesFailed}
+          onAdded={load}
+          inspection={
+            order.status === "INSPECTING" || order.inspectedAt
+              ? { since: order.inspectionStartedAt ?? null, active: order.status === "INSPECTING" }
+              : undefined
+          }
+        />
+      </View>
 
       </View>
 
@@ -6039,6 +6063,19 @@ function StageModal({
       busy={saving}
       // จอคอนเฟิร์มมีรูปขยายกับแถวตรง/ไม่ตรง — กว้างขึ้นบนจอคอม (มือถือเต็มจออยู่แล้ว)
       width={confirming ? 720 : undefined}
+      /*
+        ปุ่ม ? ของฟอร์มระบุอะไหล่ — หัวหน้าภาคเท่านั้น (ฟอร์มอื่นรอบนี้ไม่มี) · ใบที่ช่างเลือกอะไหล่มาแล้ว (จอคอนเฟิร์มอะไหล่
+        และฟอร์มส่งตรวจที่กดจากจอนั้น) ไม่มีสามทางเลือกที่วิธีใช้อธิบาย → เปิดหน้าสอนการใช้งานแทน (เจ้าของงานตอบ 6.3)
+      */
+      headRight={
+        user?.role === "SUPERVISOR" && order.status === "NEW" ? (
+          pickPending(order) ? (
+            <HowToButton compact hub target="parts.help" />
+          ) : (
+            <HowToButton compact tour="sup.parts" target="parts.help" />
+          )
+        ) : null
+      }
       title={<>
               {newDate
                 ? "คอนเฟิร์มวันใหม่"
@@ -6117,11 +6154,13 @@ function StageModal({
           <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
             <Text style={styles.modalCancelText}>ยกเลิก</Text>
           </TouchableOpacity>
+          {/* ปุ่มท้ายฟอร์มของทุกขั้น — วิธีใช้ "ระบุอะไหล่" ขั้น 5 ชี้ปุ่มนี้ (จอคอนเฟิร์มอะไหล่ใช้ปุ่มอีกชุด ไม่มีชื่อนี้) */}
           <TouchableOpacity
             style={[styles.modalSave, (saving || blocked) && styles.modalSaveOff]}
             onPress={submit}
             disabled={saving || blocked}
             activeOpacity={0.8}
+            {...howtoTarget("parts.submit")}
           >
             {saving ? (
               <Spinner color="#fff" size="small" />
@@ -6235,7 +6274,8 @@ function StageModal({
                 <Text style={styles.modalLabel}>
                   งานนี้ต้องใช้อะไหล่ไหม{prevUsed.includes("ใช้อะไหล่ไหม") ? <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text> : null}
                 </Text>
-                <View style={styles.options}>
+                {/* ชื่อคงที่ของวิธีใช้ "ระบุอะไหล่" — แถวสามทางเลือกและแต่ละปุ่ม (ขั้น 1–4) */}
+                <View style={styles.options} {...howtoTarget("parts.question")}>
                   <TouchableOpacity
                     style={[styles.option, !inspectFirst && needsParts === true && styles.optionOn]}
                     onPress={() => {
@@ -6243,6 +6283,7 @@ function StageModal({
                       setNeedsParts(true);
                     }}
                     activeOpacity={0.7}
+                    {...howtoTarget("parts.optParts")}
                   >
                     <Text
                       style={[styles.optionText, !inspectFirst && needsParts === true && styles.optionTextOn]}
@@ -6257,6 +6298,7 @@ function StageModal({
                       setNeedsParts(false);
                     }}
                     activeOpacity={0.7}
+                    {...howtoTarget("parts.optNone")}
                   >
                     <Text
                       style={[styles.optionText, !inspectFirst && needsParts === false && styles.optionTextOn]}
@@ -6272,6 +6314,7 @@ function StageModal({
                     style={[styles.option, inspectFirst && styles.optionOn]}
                     onPress={() => setInspectFirst(true)}
                     activeOpacity={0.7}
+                    {...howtoTarget("parts.optInspect")}
                   >
                     <Text style={[styles.optionText, inspectFirst && styles.optionTextOn]}>
                       ต้องเข้าตรวจสอบหน้างานก่อน
@@ -7674,7 +7717,7 @@ function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed
   const minor = ordered.filter((l) => MINOR_ACTIONS.has(l.action)).length;
   const shown = all ? ordered : ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
   return (
-    <View style={[styles.card, closed && styles.cardDone]}>
+    <View style={[styles.card, closed && styles.cardDone]} {...howtoTarget("order.history")}>
       <View style={styles.hHead}>
         <Ionicons name="time-outline" size={19} color={colors.primaryInk} />
         <Text style={[styles.infoTitle, headingFont]}>ประวัติ</Text>
@@ -9652,7 +9695,12 @@ function CloseModal({
             เฉพาะไฟล์จากกล่องนั้น (ไม่ผูกชิ้น) — รูปอาการที่แนบในข้อ ⑥ ตอนปิดงานถ่ายหลังซ่อมแล้ว ไม่ใช่สภาพก่อนซ่อม
           */}
           {!isPm && preCount > 0 ? (
-            <View style={styles.preUsed} {...(workCount("BEFORE") === 0 ? spot("BEFORE", "shots") : {})} accessibilityLabel="รูปก่อนซ่อมจากที่ถ่ายก่อนซ่อม">
+            <View
+              style={styles.preUsed}
+              {...(workCount("BEFORE") === 0 ? spot("BEFORE", "shots") : {})}
+              accessibilityLabel="รูปก่อนซ่อมจากที่ถ่ายก่อนซ่อม"
+              {...howtoTarget("close.before")}
+            >
               <Text style={styles.preUsedTitle}>✓ ใช้จากที่ถ่ายก่อนซ่อม ({preCount} ไฟล์)</Text>
               <Text style={styles.linkedText}>ไม่ต้องถ่ายซ้ำ — ไฟล์ชุดเดียวกันใช้เป็นหลักฐานเคลมด้วย</Text>
             </View>
@@ -9670,7 +9718,8 @@ function CloseModal({
             const count = workCount(role);
             const here = workSlots(role);
             return (
-              <View key={role} {...spot(role, "shots")}>
+              // ชื่อคงที่แยกก่อน/หลังซ่อม — วิธีใช้ "ปิดงาน" ขั้น 1 ล้อมสองช่องนี้ ไม่ใช่ทั้งกล่องรูป (ป้ายรุ่นมีขั้นของตัวเอง)
+              <View key={role} {...spot(role, "shots")} {...howtoTarget(role === "BEFORE" ? "close.before" : "close.after")}>
                 <EvidenceStep
                   n={i + 1}
                   title={`รูป / วิดีโอ${label}`}
@@ -9732,7 +9781,7 @@ function CloseModal({
             ตัวอ่านป้ายตั้งค่าไว้กับรูปกว้าง 1600 ลองรูปกว้าง 2400 แล้วอ่านรหัสรุ่นผิด (เทสต์ claim-web ต.ค. 69)
           */}
           {!isPm ? (
-            <View {...spot("NAMEPLATE", "shots")}>
+            <View {...spot("NAMEPLATE", "shots")} {...howtoTarget("close.nameplate")}>
               <EvidenceStep
                 n={3}
                 title="ป้ายรุ่นของเครื่อง"
@@ -9810,7 +9859,7 @@ function CloseModal({
         </View>
 
         {/* บังคับ (เจ้าของงานกำหนด) — "ซ่อมเสร็จ" อย่างเดียวไม่บอกว่ารอบนี้เปลี่ยนอะไรไป */}
-        <View {...spot("summary")}>
+        <View {...spot("summary")} {...howtoTarget("close.summary")}>
           <Text style={styles.modalLabel}>
             สรุปงานที่ทำ <Text style={{ color: colors.danger }}>*</Text>
           </Text>
@@ -9834,7 +9883,7 @@ function CloseModal({
           ใครไปจริง — งานถูกจ่ายให้ทีม ชื่อคนที่ไปจึงมีอยู่ที่เดียวคือตรงนี้
           ถ้าไม่ถามตอนปิด คำถามว่า "ใครไปสาขานี้" จะตอบไม่ได้เลย
         */}
-        <View {...spot("workers")}>
+        <View {...spot("workers")} {...howtoTarget("close.workers")}>
           {isSub ? (
             <>
               <Text style={styles.modalLabel}>
@@ -9931,7 +9980,7 @@ function CloseModal({
           แต่อยู่ก่อนใบรออะไหล่ — เคลมขึ้นทีละชิ้นตามรายการอะไหล่ที่ใช้ จึงต้องอยู่ติดรายการนั้น
           เดิมอยู่ท้ายฟอร์ม ช่างเลื่อนหาไม่เจอว่าต้องส่งเคลมตรงไหน (เจ้าของงานแจ้ง ต.ค. 69)
         */}
-        <View {...spot("parts")}>
+        <View {...spot("parts")} {...howtoTarget("close.parts")}>
           <PartPicker
             parts={parts}
             onChange={setParts}
@@ -10412,18 +10461,33 @@ function CloseModal({
         )
       }
       scrollRef={scrollRef}
+      /*
+        ปุ่ม ? ของฟอร์มปิดงาน — ช่าง/Senior ช่างเท่านั้น (หัวหน้าภาคบันทึกผลงาน SUB ไม่มี: วิธีใช้นี้สอนฟอร์มของช่าง)
+        ฟอร์มแก้เคลมและใบงาน SUB หน้าตาต่างจากที่วิธีใช้ "ปิดงาน" อธิบาย (ช่องส่วนใหญ่พับไว้/เป็นช่องทีม SUB)
+        จึงพาไปหน้าสอนการใช้งานแทน (เจ้าของงานตอบ 10.2) — ไม่ใช่วิธีใช้ที่ข้ามเกือบทุกขั้น
+      */
+      headRight={
+        me?.role !== "EMPLOYEE" ? null : !fixMode && !order.assignedOutsource ? (
+          <HowToButton compact tour="tech.close" target="close.help" />
+        ) : (
+          <HowToButton compact hub target="close.help" />
+        )
+      }
       banner={
         (stepMode && !fixMode) || sendError || rejectedRows.length || (fixBlocked && unresolved.length) ? (
           <>
             {/* แถบขั้นปักใต้หัวฟอร์ม — เลื่อนฟอร์มไปไหนก็ยังเห็นว่าอยู่ขั้นไหน และขั้นไหนยังขาด (ตัวอย่าง tabs) */}
+            {/* กรอบห่อให้วิธีใช้ "ปิดงาน" ชี้แถบสี่ขั้น (ชื่อคงที่) — ห่อที่นี่แทนการแก้ CloseStepper · มีเฉพาะฟอร์มทีละขั้น */}
             {stepMode && !fixMode ? (
-              <CloseStepper
-                step={step}
-                steps={stepInfos}
-                // บรรทัดสรุปนับทั้งขั้น (ทุกชิ้นในขั้นเคลม) ให้ตรงกับวงกลมด้านบน — กล่องใต้ชิ้นเท่านั้นที่บอกเฉพาะชิ้นที่เปิดอยู่
-                missingHere={step === 3 ? missingList.length : missingList.filter((m) => m.step === step).length}
-                onPick={(i) => openStep(i)}
-              />
+              <View {...howtoTarget("close.stepper")}>
+                <CloseStepper
+                  step={step}
+                  steps={stepInfos}
+                  // บรรทัดสรุปนับทั้งขั้น (ทุกชิ้นในขั้นเคลม) ให้ตรงกับวงกลมด้านบน — กล่องใต้ชิ้นเท่านั้นที่บอกเฉพาะชิ้นที่เปิดอยู่
+                  missingHere={step === 3 ? missingList.length : missingList.filter((m) => m.step === step).length}
+                  onPick={(i) => openStep(i)}
+                />
+              </View>
             ) : null}
             {quitBar ? (
               <View style={styles.quitBar}>
@@ -10499,6 +10563,7 @@ function CloseModal({
             disabled={saving}
             activeOpacity={0.8}
             accessibilityLabel={saving ? waitLabel ?? busy ?? "กำลังส่ง" : goLabel ?? submitLabel}
+            {...howtoTarget("close.submit")}
           >
             {saving ? (
               <>

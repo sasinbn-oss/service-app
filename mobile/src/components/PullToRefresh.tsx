@@ -179,6 +179,9 @@ export default function PullToRefresh() {
       // และรีเฟรชหน้าที่อยู่ข้างหลัง (เจ้าของงานเจอบนมือถือ ต.ค. 69) — เมนูเปิดก็นับเหมือนหน้าต่างเปิด
       if (document.getElementById("side-menu-backdrop")) return;
       if (e.target instanceof Element && e.target.closest("#side-menu")) return;
+      // นิ้วบนพื้นมืดของสอนการใช้งาน (ชั้นใน body ไม่มีกล่องเลื่อน) — ไม่งั้นลากบนพื้นมืดแล้วหน้าข้างใต้รีเฟรช
+      // ระหว่างสอนถือ modalOpened() ไว้ด้วย (anyModalOpen ข้างบน) — สองชั้นโดยตั้งใจ
+      if (e.target instanceof Element && e.target.closest("[data-otteri-howto]")) return;
       const { scroller, move } = boxesOf(e.target);
       if (scroller && scroller.scrollTop > 0) return;
       start = {
