@@ -32,6 +32,7 @@ import { PassThrough } from "stream";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../prisma";
+import { aliveSql } from "../utils/trash";
 import { WORK_ORDER_STATUS_LABELS } from "../utils/constants";
 import { bkkDayStart, thaiDateTime } from "./openerReport";
 
@@ -194,7 +195,9 @@ function baseCte(f: Filters, opts: { skipMachine?: boolean; branchIds?: number[]
   if (f.branchCode) arm.push(Prisma.sql`w."branchId" = (SELECT id FROM "Branch" WHERE code = ${f.branchCode})`);
   if (opts.branchIds) arm.push(Prisma.sql`w."branchId" = ANY(${opts.branchIds}::int[])`);
   if (f.machineId !== undefined && !opts.skipMachine) arm.push(Prisma.sql`w."machineId" = ${f.machineId}`);
-  const armAnd = arm.length ? Prisma.sql`AND ${Prisma.join(arm, " AND ")}` : Prisma.empty;
+  // ใบในถังขยะไม่นับทุกขา (ALIVE) — ตัวเลขบนลิงก์ในใบงาน หน้ารายงาน และ Excel มาจากชุดนี้ทั้งหมด
+  arm.push(aliveSql("w"));
+  const armAnd = Prisma.sql`AND ${Prisma.join(arm, " AND ")}`;
   const conds: Prisma.Sql[] = [];
   /**
    * คอลัมน์เวลาเก็บเป็น timestamp ไม่มีโซน (ค่า UTC) — ส่งขอบเป็นข้อความ ISO แล้ว ::timestamp ให้ตรงตัว
@@ -532,7 +535,7 @@ async function rawRows(f: Filters, where: Prisma.Sql, tail: Prisma.Sql, cte: { b
     JOIN "SparePart" s ON s.id = f."sparePartId"
     LEFT JOIN "Machine" m ON m.id = f."machineId"
     LEFT JOIN "User" cu ON cu.id = w."closedById"
-    LEFT JOIN "WorkOrder" pw ON pw.id = w."parentId"
+    LEFT JOIN "WorkOrder" pw ON pw.id = w."parentId" AND ${aliveSql("pw")}
     LEFT JOIN LATERAL (
       -- แถวล่าสุดของชิ้นนี้ในงานซ่อมครั้งนี้ (หลังเปิดใบใหม่ครั้งล่าสุด — กติกาเดียวกับใบงาน lockSince)
       -- เวลาเท่ากัน (ส่งพร้อมกัน) ให้ id ตัดสิน ไม่งั้นป้ายสลับระหว่างโหลด

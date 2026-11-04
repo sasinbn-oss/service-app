@@ -21,6 +21,7 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { supervisorScope, workOrderVisible } from "../utils/supervisorScope";
 import { documentPath, saveDocument } from "../documents/store";
@@ -45,8 +46,12 @@ const DAY_MS = 86_400_000;
  */
 async function claimScope(req: AuthRequest, res: Response): Promise<Prisma.WorkOrderWhereInput | undefined> {
   const role = req.auth!.role;
-  if (role === "ADMIN") return {};
-  if (role === "SUPERVISOR") return workOrderVisible(await supervisorScope(req.auth!.userId));
+  /**
+   * เคลมของใบในถังขยะไม่อยู่ในประวัติเคลม · ตัวเลขรอตรวจ · Excel · ตัวเลขบนลิงก์ในใบงาน (ALIVE ที่ขอบเขตที่เดียว)
+   * ใบเคลมไม่ถูกลบ — กู้คืนใบงานแล้วกลับมาครบ ครบ 30 วันหายไปพร้อมใบ (แบบเดียวกับลบใบงานก่อนมีถังขยะ)
+   */
+  if (role === "ADMIN") return ALIVE;
+  if (role === "SUPERVISOR") return { AND: [ALIVE, await workOrderVisible(await supervisorScope(req.auth!.userId))] };
   res.status(403).json({ error: "ประวัติเคลมดูได้เฉพาะ Admin Spare Part แอดมิน และหัวหน้าภาค" });
   return undefined;
 }
@@ -406,7 +411,8 @@ router.get("/pending-count", requireAuth, async (req: AuthRequest, res) => {
  * นับใบทดสอบด้วย ต่างจากประวัติเคลมกับ /pending-count: ใบทดสอบก็ต้องมีคนกดตรวจถึงจะจบ ถ้าซ่อนไว้มันค้างอยู่ในระบบเงียบ ๆ
  * (รายการติดป้าย "ใบทดสอบ" ให้เห็น)
  */
-const QUEUE_WHERE: Prisma.PartClaimWhereInput = { status: "PENDING", workOrder: { status: "CLAIM_REVIEW" } };
+// ใบในถังขยะไม่รอใครตรวจ — กู้คืนแล้วกลับเข้ากล่องเอง (ขั้นยังเป็นรอตรวจเคลม แถวเคลมยังรอตรวจ)
+const QUEUE_WHERE: Prisma.PartClaimWhereInput = { status: "PENDING", workOrder: { ...ALIVE, status: "CLAIM_REVIEW" } };
 const REVIEWERS_ONLY = "ตรวจเคลมได้เฉพาะ Admin Spare Part";
 
 /**

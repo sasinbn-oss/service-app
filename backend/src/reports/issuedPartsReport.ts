@@ -14,6 +14,7 @@
 import ExcelJS from "exceljs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { WORK_ORDER_STAGE_ORDER, WORK_ORDER_STATUS_LABELS } from "../utils/constants";
 import { sheetName, table, thaiDateTime, title } from "./openerReport";
 
@@ -94,7 +95,8 @@ export async function buildIssuedReport(opts: { scope: Prisma.WorkOrderWhereInpu
   const today = bkkDay(now);
   const orders = await prisma.workOrder.findMany({
     where: {
-      AND: [opts.scope ?? {}],
+      // ใบในถังขยะไม่อยู่ในรายงาน — ของที่เบิกไปแล้วของใบที่ลบกลับมาโผล่เองเมื่อกู้คืน
+      AND: [opts.scope ?? {}, ALIVE],
       isTest: false,
       status: { notIn: ["DONE", "CANCELLED"] },
       parts: {

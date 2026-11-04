@@ -12,6 +12,7 @@
 import ExcelJS from "exceljs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { regionsOf } from "../utils/supervisorScope";
 import {
   JOB_TYPE_LABELS,
@@ -116,6 +117,8 @@ export async function buildOpenerReport(opts: {
       { createdAt: { gte, lt } },
       // ใบทดสอบไม่ใช่งานจริง — นับรวมแล้วตัวเลขของแอดมินที่ลองระบบจะพองเกินจริง
       { isTest: false },
+      // ใบในถังขยะไม่นับ — ลบแล้วคือใบที่ไม่ควรมี (ทดสอบ เปิดซ้ำ เปิดผิด) นับรวมแล้วยอดเปิดใบของคนนั้นพองเกินจริง
+      ALIVE,
       ...(opts.scope ? [opts.scope] : []),
       ...(opts.openerId === undefined ? [] : [{ createdById: opts.openerId }]),
     ],

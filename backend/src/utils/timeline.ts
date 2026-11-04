@@ -6,6 +6,7 @@
  * และไม่ต้องให้ใครกรอกเพิ่ม เจ้าของระบบต้องการเห็นว่างานค้างอยู่ที่ใคร นานเท่าไร
  */
 import { prisma } from "../prisma";
+import { ALIVE } from "./trash";
 import {
   ROLE_LABELS,
   TECH_ROLES,
@@ -275,6 +276,8 @@ export async function teamDayTimeline(day: string, team: string) {
     prisma.workOrderLog.findMany({
       where: {
         createdAt: { gte: from, lt: to },
+        // ใบในถังขยะไม่ขึ้นในไทม์ไลน์ทีม — เหตุการณ์กดเปิดไปที่ใบแล้วได้ 404 · กู้คืนแล้วกลับมาเอง
+        workOrder: ALIVE,
         OR: [{ workOrder: { assignedTeam: team } }, { userId: { in: memberIds } }],
       },
       select: {

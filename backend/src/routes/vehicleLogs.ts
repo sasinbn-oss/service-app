@@ -17,6 +17,7 @@ import ExcelJS from "exceljs";
 import { TEAM_HOLDER_SELECT, coverageOfUser, teamsOf } from "../utils/teamGroups";
 import { z } from "zod";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { deleteObject, getDownloadUrl } from "../storage/fileStore";
 import { imageUpload, storeImage, thumbnailUrl } from "../storage/imageUpload";
@@ -38,7 +39,7 @@ const fmt = (n: number) => n.toLocaleString("th-TH");
 const logInclude = {
   vehicle: { select: { id: true, plateNumber: true, brand: true, model: true, type: true } },
   user: { select: { id: true, name: true, employeeCode: true, ...TEAM_HOLDER_SELECT } },
-  workOrder: { select: { id: true, code: true, title: true, branch: { select: { code: true, name: true } } } },
+  workOrder: { select: { id: true, code: true, title: true, deletedAt: true, branch: { select: { code: true, name: true } } } },
   returnedBy: { select: { name: true } },
   _count: { select: { photos: true } },
 } as const;
@@ -73,9 +74,12 @@ function logShape(l: LogRow) {
     repairNote: l.repairNote,
     startedAt: l.startedAt,
     endedAt: l.endedAt,
-    workOrder: l.workOrder
-      ? { id: l.workOrder.id, code: l.workOrder.code, title: l.workOrder.title, branch: `${l.workOrder.branch.code} ${l.workOrder.branch.name}` }
-      : null,
+    // ใบงานในถังขยะไม่ขึ้นเป็นลิงก์ (เปิดแล้วได้ 404) — การใช้รถเกิดขึ้นจริงจึงเก็บแถวไว้ แค่ไม่ชี้ไปหาใบที่ลบ
+    // ลิงก์ไม่ถูกลบ: กู้คืนใบงานแล้วกลับมาเอง · ครบ 30 วันฐานข้อมูลตั้งเป็นว่างให้ (onDelete: SetNull) แบบเดียวกับก่อนมีถังขยะ
+    workOrder:
+      l.workOrder && !l.workOrder.deletedAt
+        ? { id: l.workOrder.id, code: l.workOrder.code, title: l.workOrder.title, branch: `${l.workOrder.branch.code} ${l.workOrder.branch.name}` }
+        : null,
     // แอดมินคืนแทน — ไม่มีรูปตอนคืน และต้องเห็นว่าไม่ใช่เจ้าของรายการคืนเอง
     returnedByName: l.returnedBy?.name ?? null,
     photoCount: l._count.photos,
@@ -124,6 +128,7 @@ router.get("/status", requireAuth, async (req: AuthRequest, res) => {
   const workOrders = cov
     ? await prisma.workOrder.findMany({
         where: {
+          ...ALIVE,
           assignedTeam: cov.all ? { not: null } : { in: cov.teams },
           status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
         },

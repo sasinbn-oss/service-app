@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { cleanName } from "../utils/names";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { peekToken, signToken, signViewAsToken } from "../utils/jwt";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { canViewAs } from "../utils/viewAs";
@@ -910,6 +911,8 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
           // หน้าคอนเฟิร์มกับกล่องแดงของช่างจะไม่รู้ว่าใครส่ง ใครตีกลับ
           partsPicksSent: true,
           partsPicksReviewed: true,
+          // แอดมินที่เคยย้ายใบงานไปถังขยะ — ลบจริงแล้วหน้าถังขยะ "ลบโดย" ว่าง ไม่รู้ว่าใครลบ
+          trashedWorkOrders: true,
         },
       },
     },
@@ -917,7 +920,8 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
   if (!target || target.deletedAt) return res.status(404).json({ error: "ไม่พบผู้ใช้คนนี้" });
 
   const [openOrders, ongoingCar] = await Promise.all([
-    prisma.workOrder.count({ where: { assignedToId: id, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } }),
+    // ใบในถังขยะไม่กันการลบผู้ใช้ — ใบพวกนั้นมองไม่เห็นในรายการ จ่ายให้คนอื่นก่อนก็ทำไม่ได้
+    prisma.workOrder.count({ where: { ...ALIVE, assignedToId: id, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } }),
     prisma.vehicleLog.count({ where: { userId: id, status: "ONGOING" } }),
   ]);
   if (ongoingCar) {

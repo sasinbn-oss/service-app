@@ -13,6 +13,7 @@ import multer from "multer";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { areaBranchWhere, isAreaTeam } from "../utils/areaScope";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { applyImport, parseWorkbook, planImport, resolveSnapshot } from "../machines/import";
@@ -121,7 +122,8 @@ async function activeWorkOrdersFor(outageIds: number[]) {
   const byOutage = new Map<number, WorkOrderBadge>();
   if (outageIds.length === 0) return byOutage;
   const rows = await prisma.workOrder.findMany({
-    where: { outageId: { in: outageIds }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+    // ใบในถังขยะไม่ใช่ "มีใบงานแล้ว" — ลบใบที่เปิดผิดแล้วกระดานต้องขึ้นปุ่มสร้างใบงานให้เปิดใหม่ได้ทันที
+    where: { ...ALIVE, outageId: { in: outageIds }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
     select: {
       id: true,
       code: true,

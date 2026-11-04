@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { cleanName } from "../utils/names";
 import { prisma } from "../prisma";
+import { ALIVE, IN_TRASH } from "../utils/trash";
 import { AuthRequest, requireAuth, requireAdmin } from "../middleware/auth";
 import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { AREA_OUT_OF_SCOPE, areaBranchSelect, areaBranchWhere, areaCoversBranch, isAreaTeam } from "../utils/areaScope";
@@ -227,7 +228,7 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
   const openOrders = rows.length
     ? await prisma.workOrder.groupBy({
         by: ["branchId"],
-        where: { branchId: { in: rows.map((r) => r.id) }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, isTest: false },
+        where: { ...ALIVE, branchId: { in: rows.map((r) => r.id) }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, isTest: false },
         _count: true,
       })
     : [];
@@ -470,8 +471,10 @@ async function blockedForArea(req: AuthRequest, res: Response) {
 
 router.get("/:code/last-contact", requireAuth, async (req: AuthRequest, res) => {
   if (await blockedForArea(req, res)) return;
+  // ใบในถังขยะไม่เป็นต้นแบบผู้ติดต่อ — ใบทดสอบ/เปิดผิดสาขามักมีชื่อเบอร์ที่กรอกเล่น ๆ
   const last = await prisma.workOrder.findFirst({
     where: {
+      ...ALIVE,
       branch: { code: req.params.code },
       OR: [{ contactName: { not: null } }, { contactPhone: { not: null } }],
     },
@@ -505,7 +508,8 @@ router.get("/:code/open-work-orders", requireAuth, async (req: AuthRequest, res)
   const scope = role === "SUPERVISOR" ? workOrderInScope(await supervisorScope(req.auth!.userId)) : {};
   const rows = await prisma.workOrder.findMany({
     where: {
-      AND: [scope],
+      // ใบในถังขยะไม่ใช่ใบค้าง — ลบใบซ้ำแล้วกล่องเตือน/ป๊อปอัปยืนยันต้องไม่ขึ้นใบนั้นอีก
+      AND: [scope, ALIVE],
       branch: { code: req.params.code },
       status: { in: ACTIVE_WORK_ORDER_STATUSES.filter((st) => st !== "CLAIM_REVIEW") },
       isTest: false,
@@ -691,9 +695,14 @@ router.put("/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
 
 /** สิ่งที่ผูกกับสาขา — ลบสาขาแล้วฐานข้อมูลลบตามทั้งหมด (ใบงาน เครื่อง เคส ... onDelete: Cascade) */
 async function branchUsage(id: number) {
-  const [workOrders, openWorkOrders, machines, outages, checkIns, workLogs, snapshots, teamMoves] = await Promise.all([
+  const [workOrders, trashedWorkOrders, openWorkOrders, machines, outages, checkIns, workLogs, snapshots, teamMoves] = await Promise.all([
+    /**
+     * นับใบในถังขยะด้วย (ลบสาขา = ใบในถังขยะหายจริงไปด้วย กู้คืนไม่ได้อีก) แต่บอกแยก — แอดมินหาใบพวกนี้ในรายการไม่เจอ
+     * ถ้าขึ้นแค่ "มีใบงาน 2 ใบ" จะงงว่าใบไหน · งานค้าง (ปิดสาขาแล้วเหลือกี่ใบ) นับเฉพาะใบที่ยังใช้งาน
+     */
     prisma.workOrder.count({ where: { branchId: id } }),
-    prisma.workOrder.count({ where: { branchId: id, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } }),
+    prisma.workOrder.count({ where: { branchId: id, ...IN_TRASH } }),
+    prisma.workOrder.count({ where: { ...ALIVE, branchId: id, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } }),
     prisma.machine.count({ where: { branchId: id } }),
     prisma.outage.count({ where: { branchId: id } }),
     prisma.branchCheckIn.count({ where: { branchId: id } }),
@@ -701,7 +710,7 @@ async function branchUsage(id: number) {
     prisma.scoreSnapshot.count({ where: { branchId: id } }),
     prisma.branchTeamMove.count({ where: { branchId: id } }),
   ]);
-  return { workOrders, openWorkOrders, machines, outages, checkIns, workLogs, snapshots, teamMoves };
+  return { workOrders, trashedWorkOrders, openWorkOrders, machines, outages, checkIns, workLogs, snapshots, teamMoves };
 }
 
 /** ใช้บอกในหน้าจัดการสาขาว่าลบได้ไหม และถ้าปิดสาขาจะเหลืองานค้างกี่ใบ */
@@ -725,7 +734,7 @@ router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
   if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
   const u = await branchUsage(id);
   const linked = [
-    u.workOrders && `ใบงาน ${u.workOrders} ใบ`,
+    u.workOrders && `ใบงาน ${u.workOrders} ใบ${u.trashedWorkOrders ? ` (อยู่ในถังขยะ ${u.trashedWorkOrders} ใบ)` : ""}`,
     u.machines && `เครื่อง ${u.machines} เครื่อง`,
     u.outages && `เคสบนกระดาน ${u.outages} เคส`,
     u.checkIns && `รายงานตัว ${u.checkIns} ครั้ง`,

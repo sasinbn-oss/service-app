@@ -15,6 +15,7 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../prisma";
+import { ALIVE, IN_TRASH } from "../utils/trash";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { ACTIVE_WORK_ORDER_STATUSES, TECH_ROLES, bangkokDay } from "../utils/constants";
 import { forgetTeamGroups, teamGroups, teamsOf } from "../utils/teamGroups";
@@ -96,7 +97,7 @@ router.get("/", requireAuth, requireAdmin, async (_req, res) => {
     // Senior ช่างนับในทุกทีมที่ถือ ไม่ใช่แค่ทีมแรก — การ์ดทีมต้องบอกว่ามีใครเห็นงานทีมนี้บ้าง
     prisma.user.findMany({ where: { role: "SENIOR_TECH", deletedAt: null }, select: { role: true, team: true, extraTeams: true } }),
     prisma.user.findMany({ where: { deletedAt: null, supervisedTeams: { isEmpty: false } }, select: { supervisedTeams: true } }),
-    prisma.workOrder.groupBy({ by: ["assignedTeam"], where: { assignedTeam: { not: null }, status: { in: active } }, _count: true }),
+    prisma.workOrder.groupBy({ by: ["assignedTeam"], where: { ...ALIVE, assignedTeam: { not: null }, status: { in: active } }, _count: true }),
     prisma.teamRename.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
   ]);
   const groupRows = await prisma.teamGroup.findMany({ orderBy: { name: "asc" } });
@@ -188,6 +189,7 @@ router.get("/coverage-map", requireAuth, async (req: AuthRequest, res) => {
     prisma.workOrder.groupBy({
       by: ["assignedTeam"],
       where: {
+        ...ALIVE,
         assignedTeam: { not: null },
         status: { in: [...ACTIVE_WORK_ORDER_STATUSES] },
         ...(area ? { AND: [areaWorkOrderWhere(req.auth!)] } : {}),
@@ -300,7 +302,7 @@ router.get("/area-map", requireAuth, async (req: AuthRequest, res) => {
     }),
     prisma.workOrder.groupBy({
       by: ["branchId"],
-      where: { status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, branch: { cancelledAt: null, code: COCO_CODE } },
+      where: { ...ALIVE, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] }, branch: { cancelledAt: null, code: COCO_CODE } },
       _count: true,
     }),
     // Maid (COCO) ไม่ใช่ผู้ดูแลสาขา จึงไม่อยู่ใน people (ไม่มีที่ให้ลากวาง) — ส่งแยกไว้ให้หน้าจอวาดใต้คนที่ถือสาขาที่ Maid ประจำ
@@ -492,6 +494,7 @@ router.post("/rename", requireAuth, requireAdmin, async (req: AuthRequest, res) 
         UPDATE "User" SET "supervisedTeams" = ARRAY(
           SELECT DISTINCT unnest(array_replace("supervisedTeams", ${from}, ${to}))
         ) WHERE ${from} = ANY("supervisedTeams")`;
+      // ไม่กรองถังขยะโดยตั้งใจ — ใบในถังขยะต้องได้ชื่อใหม่ด้วย กู้คืนแล้วจะได้อยู่ในทีมที่มีอยู่จริง
       const orders = await tx.workOrder.updateMany({ where: { assignedTeam: from }, data: { assignedTeam: to } });
       // คะแนนย้อนหลังเก็บทีมตอนนั้นไว้เพื่อไม่ให้เปลี่ยนตามตอนสาขาย้ายทีม — แต่เปลี่ยนชื่อไม่ใช่ย้ายทีม
       // ถ้าไม่ตามไปด้วย รายงานจะแยกทีมเดียวกันเป็นสองแถว (ชื่อเก่า/ชื่อใหม่)
@@ -655,7 +658,8 @@ router.delete("/outsource/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const row = Number.isInteger(id) ? await prisma.outsourceTeam.findUnique({ where: { id } }) : null;
   if (!row) return res.status(404).json({ error: "ไม่พบทีมนี้" });
-  const open = await prisma.workOrder.count({ where: { assignedTeam: row.name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } });
+  // ใบในถังขยะไม่กันการลบทีม (แอดมินมองไม่เห็นใบพวกนั้นในรายการ จะจ่ายให้ทีมอื่นก็ทำไม่ได้)
+  const open = await prisma.workOrder.count({ where: { ...ALIVE, assignedTeam: row.name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } } });
   if (open) return res.status(409).json({ error: `${row.name} ยังมีใบงานค้าง ${open} ใบ — จ่ายให้ทีมอื่นก่อน` });
   await prisma.outsourceTeam.delete({ where: { id } });
   await refreshOutsource();
@@ -765,7 +769,7 @@ async function teamUsage(name: string) {
     prisma.branch.count({ where: { OR: [{ zone: name }, { pmTeam: name }] } }),
     holderSplit(prisma, name),
     prisma.user.count({ where: { supervisedTeams: { has: name }, deletedAt: null } }),
-    prisma.workOrder.count({ where: { assignedTeam: name, status: { in: active } } }),
+    prisma.workOrder.count({ where: { ...ALIVE, assignedTeam: name, status: { in: active } } }),
   ]);
   return {
     branches,
@@ -880,10 +884,16 @@ router.post("/delete", requireAuth, requireAdmin, async (req: AuthRequest, res) 
         await tx.branch.updateMany({ where: { pmTeam: name }, data: { pmTeam: moveTo } });
         orders = (
           await tx.workOrder.updateMany({
-            where: { assignedTeam: name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+            where: { ...ALIVE, assignedTeam: name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
             data: { assignedTeam: moveTo },
           })
         ).count;
+        // ใบในถังขยะย้ายตามด้วย แต่ไม่นับในตัวเลขที่บอกแอดมิน (นับเฉพาะใบที่เห็นได้ ตรงกับหน้ายืนยัน) —
+        // ไม่ย้ายแล้วกู้คืนทีหลังจะได้ใบที่จ่ายให้ทีมที่ไม่มีอยู่แล้ว
+        await tx.workOrder.updateMany({
+          where: { ...IN_TRASH, assignedTeam: name, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+          data: { assignedTeam: moveTo },
+        });
         await tx.branchTeamMove.updateMany({ where: { toTeam: name }, data: { toTeam: moveTo } });
         await tx.branchTeamMove.updateMany({ where: { fromTeam: name }, data: { fromTeam: moveTo } });
         // ทีมรวมที่เคยครอบคลุมทีมนี้ ครอบคลุมทีมที่รับสาขาไปแทน — ไม่งั้นเสียสาขาเหล่านั้นไปเงียบ ๆ
