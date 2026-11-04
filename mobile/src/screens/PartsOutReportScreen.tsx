@@ -18,6 +18,7 @@ import { openUrl } from "../utils/share";
 import { HomeStackParamList } from "../navigation/types";
 import { formatDateTime } from "./WorkOrderListScreen";
 import { colors, radius, shadow, spacing } from "../theme";
+import { offAnswerLine } from "../utils/offSource";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "PartsOutReport">;
 
@@ -43,6 +44,10 @@ interface Row {
   checkedBy: string | null;
   outDays: number | null;
   etaDays: number | null;
+  /** ของนอกสโตร์: หัวหน้าภาคแจ้งว่าหาได้ไหม จากที่ไหน (4 พ.ย. 69) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง */
+  offFound?: boolean | null;
+  offKind?: string | null;
+  offDetail?: string | null;
   note: string | null;
   noteBy: string | null;
   noteAt: string | null;
@@ -378,6 +383,8 @@ export default function PartsOutReportScreen({ navigation }: Props) {
                         {r.outDays !== null ? `หมดมาแล้ว ${r.outDays} วัน` : "ไม่ทราบวันที่เช็ค"}
                         {r.checkedBy ? ` · เช็คโดย ${r.checkedBy}` : ""}
                       </Text>
+                      {/* ของนอกสโตร์ที่ยังหาไม่ได้ — คนตามของต้องรู้ว่าถามที่ไหนไปแล้ว ต้องสั่งจากไหน ไม่ต้องเปิดใบทีละใบ */}
+                      {r.offCatalog ? <Text style={styles.offTold}>หัวหน้าภาคแจ้ง: {offAnswerLine(r)}</Text> : null}
                       <RowNote key={`${r.partRowId}-${r.noteAt}`} r={r} onSaved={setNote(r.partRowId)} />
                     </View>
                   ))}
@@ -421,6 +428,7 @@ export default function PartsOutReportScreen({ navigation }: Props) {
                         <Text style={styles.branchParts}>
                           {x.partName} × {qtyText(x)}
                         </Text>
+                        {x.offCatalog ? <Text style={styles.offTold}>หัวหน้าภาคแจ้ง: {offAnswerLine(x)}</Text> : null}
                         <RowNote key={`${x.partRowId}-${x.noteAt}`} r={x} onSaved={setNote(x.partRowId)} />
                       </View>
                     ))}
@@ -443,6 +451,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md, paddingBottom: 60 },
   sub: { fontSize: 13, color: colors.textMuted, lineHeight: 20 },
+  offTold: { fontSize: 12, lineHeight: 18, color: colors.body },
   tiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   tile: { flexGrow: 1, flexBasis: 130, backgroundColor: colors.card, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   tileRed: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },

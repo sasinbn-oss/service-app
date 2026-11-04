@@ -49,7 +49,18 @@ import BrandChips, { rememberMachineModels } from "../components/BrandChips";
 import { brandFileOf, fileAllows } from "../utils/brandFile";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
-import OffPartEditor, { OffPart, OffTag, offPartsIncomplete, offPartsPayload, partTitle, splitParts } from "../components/OffPartEditor";
+import OffPartEditor, {
+  OffPart,
+  OffSourceInfo,
+  OffTag,
+  offNameKey,
+  offPartsIncomplete,
+  offPartsMissing,
+  offPartsPayload,
+  partTitle,
+  splitParts,
+} from "../components/OffPartEditor";
+import { offAnswerLine } from "../utils/offSource";
 import DateField, { thaiDate, todayBkk } from "../components/DateField";
 import TimeField, { isTime } from "../components/TimeField";
 import Dropdown, { DropdownOption } from "../components/Dropdown";
@@ -2669,6 +2680,8 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                             {part.offCatalog ? <OffTag /> : null}
                           </View>
                           {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
+                          {/* หัวหน้าภาคแจ้งว่าหาได้ไหม จากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69) — แยกจากป้ายสถานะซึ่งเป็นผลเช็คของแอดมิน */}
+                          <OffSourceInfo part={part} when={formatDateTime} />
                         </View>
                         <Text style={[styles.ptCell, styles.ptQty]}>{qty}</Text>
                         <View style={styles.ptStock}>{chipView}</View>
@@ -2689,6 +2702,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                         </Text>
                         {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
                         {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
+                        <OffSourceInfo part={part} when={formatDateTime} />
                         {out ? <View style={styles.ptCardEta}>{eta}</View> : null}
                       </View>
                     );
@@ -2974,10 +2988,14 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
             <>
               <Text style={styles.sectionTitle}>อะไหล่ที่ใช้</Text>
               {order.parts.map((p) => (
-                <Text key={p.sparePartId} style={styles.partLine}>
-                  {p.offCatalog ? `${p.name} (นอกสโตร์)` : `${p.partCode} · ${p.name}`} × {p.quantity}
-                  {p.unit ? ` ${p.unit}` : ""}
-                </Text>
+                <View key={p.sparePartId}>
+                  <Text style={styles.partLine}>
+                    {p.offCatalog ? `${p.name} (นอกสโตร์)` : `${p.partCode} · ${p.name}`} × {p.quantity}
+                    {p.unit ? ` ${p.unit}` : ""}
+                  </Text>
+                  {/* ของที่ช่างซื้อเองหน้างาน — ซื้อจากที่ไหน (ของจากรายการที่หัวหน้าภาคระบุไม่มีบรรทัดนี้) */}
+                  <OffSourceInfo part={p} used when={formatDateTime} />
+                </View>
               ))}
             </>
           ) : null}
@@ -4771,6 +4789,8 @@ function PickConfirmForm({
   onZoom,
   offParts,
   onOffParts,
+  offBind,
+  offFlash,
   services,
   onServices,
   onInspectFirst,
@@ -4788,6 +4808,9 @@ function PickConfirmForm({
   onZoom: (row: Attachment | null) => void;
   offParts: OffPart[];
   onOffParts: (rows: OffPart[]) => void;
+  /** จุดที่ปุ่มคอนเฟิร์มเลื่อนมาหาเมื่ออะไหล่นอกยังขาด (useScrollTarget ของฟอร์มขั้นตอน) */
+  offBind: ReturnType<typeof useScrollTarget>["bind"];
+  offFlash: boolean;
   services: OffPart[];
   onServices: (rows: OffPart[]) => void;
   onInspectFirst: () => void;
@@ -4963,7 +4986,10 @@ function PickConfirmForm({
             ? "ใส่แล้ว — คอนเฟิร์มแล้วต้องเสนอราคาลูกค้าก่อนนัด (เหมือนฟอร์มระบุอะไหล่เดิม)"
             : "ใส่อย่างใดอย่างหนึ่ง = ต้องเสนอราคาลูกค้าก่อนนัด (เหมือนฟอร์มระบุอะไหล่เดิม)"}
         </Text>
-        <OffPartEditor rows={offParts} onChange={onOffParts} />
+        {/* คนคอนเฟิร์มคือคนระบุของนอกสโตร์ — ถามจัดหาได้ไหม/จากที่ไหนแบบเดียวกับฟอร์มระบุอะไหล่ */}
+        <View {...offBind}>
+          <OffPartEditor rows={offParts} onChange={onOffParts} ask="plan" highlight={offFlash} />
+        </View>
         <OffPartEditor
           rows={services}
           onChange={onServices}
@@ -5022,6 +5048,36 @@ function PickConfirmForm({
       ) : null}
     </View>
   );
+}
+
+/**
+ * เลื่อนฟอร์มในหน้าต่างไปหากล่องหนึ่ง (ปุ่ม "ยังขาด … — พาไป") — วิธีเดียวกับ spotY ของฟอร์มปิดงาน
+ * เว็บวัดจากกล่อง DOM ตอนกด: react-native-web ยิง onLayout เฉพาะตอนกล่องเปลี่ยนขนาด ไม่ยิงตอนถูกดันลง
+ * (เลือกอะไหล่/พิมพ์ผลตรวจด้านบนแล้วตำแหน่งที่จดไว้เก่า) · มือถือใช้ตำแหน่งจาก onLayout
+ */
+function useScrollTarget(scrollRef: React.RefObject<ScrollView | null>) {
+  const node = useRef<View | null>(null);
+  const y = useRef<number | null>(null);
+  const bind = {
+    ref: (n: View | null) => {
+      node.current = n;
+    },
+    onLayout: (e: { nativeEvent: { layout: { y: number } } }) => {
+      y.current = e.nativeEvent.layout.y;
+    },
+  };
+  const go = () => {
+    let top = y.current;
+    if (Platform.OS === "web") {
+      const el = node.current as unknown as HTMLElement | null;
+      const box = (scrollRef.current as unknown as { getScrollableNode?: () => HTMLElement | null } | null)?.getScrollableNode?.();
+      if (el && box && typeof el.getBoundingClientRect === "function") {
+        top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+      }
+    }
+    if (top !== null) scrollRef.current?.scrollTo({ y: Math.max(0, top - 16), animated: true });
+  };
+  return { bind, go };
 }
 
 function StageModal({
@@ -5180,9 +5236,17 @@ function StageModal({
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * กล่องอะไหล่นอก: กดปุ่ม "ยังขาด … — พาไป" แล้ว — ช่องที่ยังขาดขึ้นกรอบแดง (ไม่ขึ้นตั้งแต่เปิด คนยังไม่ได้ทำอะไรผิด)
+   * ฟอร์มยาว (ช่องค้นอะไหล่ · ผลตรวจ · ค่าบริการ) กล่องนี้อยู่นอกจอได้ ปุ่มจึงเลื่อนไปหาให้ด้วย
+   */
+  const [offFlash, setOffFlash] = useState(false);
+  const stageScroll = useRef<ScrollView>(null);
+  const offBox = useScrollTarget(stageScroll);
 
   useEffect(() => {
     if (!visible) return;
+    setOffFlash(false);
     /**
      * ย้อนขั้นแล้วข้อมูลไม่หาย (เจ้าของงานขอ ต.ค. 69) — ใบงานต้องว่างจริงตอนย้อน (ไม่งั้นโผล่บนบอร์ดทีมเดิม)
      * แต่ค่าที่ล้างไปเก็บไว้ในประวัติ เติมกลับให้เฉพาะช่องที่ตอนนี้ว่าง · ยังต้องกดยืนยันเหมือนเดิม
@@ -5243,7 +5307,13 @@ function StageModal({
         order.waitingParts.map((p) => {
           const old = p.inStock === null ? oldCheck.get(p.sparePartId) : undefined;
           const now = stale && !p.requisitionNo ? null : p.inStock;
-          return [p.sparePartId, { inStock: old?.inStock ?? now, warehouse: p.warehouse ?? old?.warehouse ?? null }];
+          /**
+           * ของนอกสโตร์ที่แอดมินยังไม่เคยเช็ค: ปุ่มติดให้ตามที่หัวหน้าภาคแจ้ง (เจ้าของงานเลือกข้อ 1) — แอดมินกดเปลี่ยนได้
+           * เฉพาะขั้นเช็คอะไหล่ (หาได้/ยังหาไม่ได้) · ขั้นเบิกถามคนละเรื่อง (ได้ของมาแล้วหรือยัง) ไม่ติดให้
+           * ผลเช็คเดิม/ค่าก่อนย้อนชนะเสมอ — นั่นคือคำตอบของแอดมินเอง
+           */
+          const told = order.status === "PARTS_SOURCING" && p.offCatalog && p.inStock === null ? p.offFound ?? null : null;
+          return [p.sparePartId, { inStock: old?.inStock ?? now ?? told, warehouse: p.warehouse ?? old?.warehouse ?? null }];
         })
       )
     );
@@ -5452,7 +5522,8 @@ function StageModal({
           parts: needsParts
             ? parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }))
             : [],
-          offParts: needsParts ? offPartsPayload(offParts) : [],
+          // พร้อมคำตอบจัดหา (หาได้ + แหล่ง · หาไม่ได้ + เหตุผล) — เซิร์ฟเวอร์ปฏิเสธถ้าขาด (offAnswerRefusal)
+          offParts: needsParts ? offPartsPayload(offParts, "plan") : [],
           assign: noPartsAssign ? { team, scheduledAt: visit, scheduledTime: visitTime || null, ...urgentFlag } : undefined,
           note: note.trim() || undefined,
         });
@@ -5621,9 +5692,17 @@ function StageModal({
       });
       return;
     }
+    // ของนอกสโตร์ที่เติม (รวมของเดิมในใบที่ฟอร์มเติมไว้ให้) ต้องตอบจัดหาเหมือนฟอร์มระบุอะไหล่ — บอกว่าขาดอะไรแล้วพาไปที่กล่อง
+    const offLeft = offPartsMissing(offParts, "plan");
+    if (offLeft.length) {
+      setPickMsg({ kind: "warn", text: `อะไหล่นอกยังขาด ${offLeft.length} อย่าง: ${offLeft.join(" · ")}` });
+      setOffFlash(true);
+      offBox.go();
+      return;
+    }
     const body = {
       pickId: pending.id,
-      offParts: offPartsPayload(offParts),
+      offParts: offPartsPayload(offParts, "plan"),
       services: offPartsPayload(services),
       note: note.trim() || undefined,
       marks: marksPayload(),
@@ -6009,7 +6088,6 @@ function StageModal({
         : needsParts === null ||
           (noPartsAssign && (!team || !validDate || !timeOk)) ||
           (needsParts && parts.length === 0 && offPartsPayload(offParts).length === 0) ||
-          (needsParts && offPartsIncomplete(offParts)) ||
           !!partsBrandBlock ||
           offPartsIncomplete(services))) ||
     (order.status === "INSPECTING" && (!finding.trim() || inspectMissing.length > 0 || !!inspectBrandBlock || inspectQtyBad)) ||
@@ -6030,6 +6108,18 @@ function StageModal({
     pickupBlocked ||
     transferBlocked ||
     (checkOut && expectedAt !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(expectedAt));
+  /**
+   * กล่องอะไหล่นอกยังไม่ครบ (ชื่อ · หาได้ไหม · แหล่ง/เหตุผล — เจ้าของงานขอ 4 พ.ย. 69) — ปุ่มบอก "ยังขาด n อย่าง — พาไป"
+   * แบบเดียวกับฟอร์มปิดงาน แทนปุ่มจางที่กดแล้วเงียบ (ตัวอย่างที่อนุมัติ) · กดแล้วเลื่อนไปที่กล่องและขึ้นกรอบแดงช่องที่ขาด
+   * นับเฉพาะเมื่อไม่มีอย่างอื่นกันปุ่มอยู่ — ตัวเลขบนปุ่มต้องเป็นทั้งหมดที่ขาดจริง ไม่ใช่แค่ของกล่องนี้
+   */
+  const offMissing =
+    order.status === "NEW" && !inspectFirst && !pending && needsParts === true ? offPartsMissing(offParts, "plan") : [];
+  const offGo = offMissing.length > 0 && !blocked;
+  function goOff() {
+    setOffFlash(true);
+    offBox.go();
+  }
 
   /** ช่องวัน/เวลาของ "ต้องเข้าตรวจสอบหน้างานก่อน" — ใช้ทั้งฟอร์มระบุอะไหล่และตอนกดลิงก์จากจอคอนเฟิร์ม (ชุดเดียว รวมกฎปิดนัด/วันย้อนหลัง) */
   const inspectFields = (
@@ -6054,13 +6144,16 @@ function StageModal({
   // ทุกตัว "ตรง" แล้ว — ปุ่มคอนเฟิร์มเป็นสีหลัก ก่อนหน้านั้นสีจาง แต่ยังกดได้ (กดแล้วบอกว่าขาดอะไร)
   const allOk = !!pending && pending.items.length > 0 && pending.items.every((i) => marks[i.sparePartId] === "OK");
   // อะไหล่นอก/ค่าบริการที่กรอกค้างครึ่งแถว — กล่องนั้นขึ้นบรรทัดแดงบอกเอง ปุ่มคอนเฟิร์มรอจนแก้ (เหมือนฟอร์มระบุอะไหล่เดิม)
-  const extrasBad = offPartsIncomplete(offParts) || offPartsIncomplete(services);
+  // ของนอกสโตร์ที่ยังขาด (ชื่อ · คำตอบจัดหา) บอกตอนกดคอนเฟิร์มแทน (confirmPick) — ปุ่มนี้กดได้เสมอตามตัวอย่างเดิม
+  const extrasBad = offPartsIncomplete(services);
 
   return (
     <AppModal
       visible={visible}
       onClose={onCancel}
       busy={saving}
+      // ปุ่ม "ยังขาด … — พาไป" / คอนเฟิร์มที่ยังขาดของนอกสโตร์ เลื่อนไปที่กล่องอะไหล่นอก (useScrollTarget)
+      scrollRef={stageScroll}
       // จอคอนเฟิร์มมีรูปขยายกับแถวตรง/ไม่ตรง — กว้างขึ้นบนจอคอม (มือถือเต็มจออยู่แล้ว)
       width={confirming ? 720 : undefined}
       /*
@@ -6156,8 +6249,9 @@ function StageModal({
           </TouchableOpacity>
           {/* ปุ่มท้ายฟอร์มของทุกขั้น — วิธีใช้ "ระบุอะไหล่" ขั้น 5 ชี้ปุ่มนี้ (จอคอนเฟิร์มอะไหล่ใช้ปุ่มอีกชุด ไม่มีชื่อนี้) */}
           <TouchableOpacity
-            style={[styles.modalSave, (saving || blocked) && styles.modalSaveOff]}
-            onPress={submit}
+            // ยังขาดในกล่องอะไหล่นอก = ปุ่มส้มแบบฟอร์มปิดงาน (closeGo) กดได้ กดแล้วพาไปช่องที่ขาด ไม่ส่งอะไร
+            style={[styles.modalSave, (saving || blocked) && styles.modalSaveOff, offGo && !saving && styles.closeGo]}
+            onPress={offGo ? goOff : submit}
             disabled={saving || blocked}
             activeOpacity={0.8}
             {...howtoTarget("parts.submit")}
@@ -6165,8 +6259,10 @@ function StageModal({
             {saving ? (
               <Spinner color="#fff" size="small" />
             ) : (
-              <Text style={styles.modalSaveText}>
-                {order.status === "PARTS_SOURCING"
+              <Text style={offGo ? styles.closeGoText : styles.modalSaveText}>
+                {offGo
+                  ? `ยังขาด ${offMissing.length} อย่าง — พาไป`
+                  : order.status === "PARTS_SOURCING"
                   ? sourcingOut.length && !sourcingSplit
                     ? "อะไหล่หมด — รอของเข้า"
                     : sourcingSplit
@@ -6248,6 +6344,8 @@ function StageModal({
                 onZoom={setZoom}
                 offParts={offParts}
                 onOffParts={setOffParts}
+                offBind={offBox.bind}
+                offFlash={offFlash}
                 services={services}
                 onServices={setServices}
                 onInspectFirst={() => {
@@ -6345,7 +6443,9 @@ function StageModal({
                       ]}
                     />
                     {partsBrandBlock ? <Text style={styles.warn}>{partsBrandBlock}</Text> : null}
-                    <OffPartEditor rows={offParts} onChange={setOffParts} />
+                    <View {...offBox.bind}>
+                      <OffPartEditor rows={offParts} onChange={setOffParts} ask="plan" highlight={offFlash} />
+                    </View>
                   </>
                 ) : noPartsAssign ? (
                   <>
@@ -6391,11 +6491,14 @@ function StageModal({
                       </Text>
                       {part.offCatalog ? <OffTag /> : null}
                       <Text style={styles.checkName}>{part.offCatalog ? part.note || "จัดหาเอง — ไม่ต้องใส่คลัง/เลขใบเบิก" : part.name}</Text>
+                      {part.offCatalog ? <OffTold part={part} /> : null}
                       <View style={styles.options}>
+                        {/* aria-pressed ใส่เอง (เว็บไม่แปลงสถานะปุ่ม) — เทสต์อ่านได้ว่าปุ่มติดตามคำตอบของหัวหน้าภาคจริง */}
                         <TouchableOpacity
                           style={[styles.option, c.inStock === true && styles.optionOn]}
                           onPress={() => set(true)}
                           activeOpacity={0.7}
+                          aria-pressed={c.inStock === true}
                           accessibilityLabel={`มีของ ${part.partCode}`}
                         >
                           <Text style={[styles.optionText, c.inStock === true && styles.optionTextOn]}>
@@ -6406,6 +6509,7 @@ function StageModal({
                           style={[styles.option, c.inStock === false && styles.optionOut]}
                           onPress={() => set(false)}
                           activeOpacity={0.7}
+                          aria-pressed={c.inStock === false}
                           accessibilityLabel={`หมด ${part.partCode}`}
                         >
                           <Text style={[styles.optionText, c.inStock === false && styles.optionTextOut]}>
@@ -6433,6 +6537,9 @@ function StageModal({
                     </View>
                   );
                 })}
+                {thisRound.some((p) => p.offCatalog && typeof p.offFound === "boolean") ? (
+                  <Text style={styles.linkedText}>ของนอกสโตร์: ปุ่มติดให้ตามที่หัวหน้าภาคแจ้ง — เช็คแล้วไม่ตรง กดเปลี่ยนได้</Text>
+                ) : null}
                 {sourcingMixed ? (
                   <TouchableOpacity
                     style={styles.skipRow}
@@ -6555,6 +6662,8 @@ function StageModal({
                       </Text>
                       {part.offCatalog ? <OffTag /> : null}
                       <Text style={styles.checkName}>{part.offCatalog ? part.note || "จัดหาเอง — ไม่ต้องใส่คลัง/เลขใบเบิก" : part.name}</Text>
+                      {/* ขั้นเบิกไม่ติดปุ่มให้ (ถามว่าได้ของมาแล้วหรือยัง) แต่บอกแหล่งไว้ — แอดมินรู้ว่าต้องตามของที่ไหน */}
+                      {part.offCatalog ? <OffTold part={part} /> : null}
                       <View style={styles.options}>
                         <TouchableOpacity
                           style={[styles.option, c.inStock === true && styles.optionOn]}
@@ -7025,12 +7134,16 @@ function StageModal({
                       {order.status === "AWAITING_QUOTE" ? "รายการที่ต้องใส่ในใบเสนอราคา" : "รายการในใบเสนอราคา"}
                     </Text>
                     {order.waitingParts.map((p) => (
-                      <Text key={`p${p.sparePartId}`} style={styles.issuedLine}>
-                        {p.offCatalog ? "อะไหล่นอก · " : ""}
-                        {p.offCatalog ? p.name : `${p.partCode} ${p.name}`} × {p.quantity}
-                        {p.unit ? ` ${p.unit}` : ""}
-                        {p.note ? ` · ${p.note}` : ""}
-                      </Text>
+                      <View key={`p${p.sparePartId}`}>
+                        <Text style={styles.issuedLine}>
+                          {p.offCatalog ? "อะไหล่นอก · " : ""}
+                          {p.offCatalog ? p.name : `${p.partCode} ${p.name}`} × {p.quantity}
+                          {p.unit ? ` ${p.unit}` : ""}
+                          {p.note ? ` · ${p.note}` : ""}
+                        </Text>
+                        {/* แหล่งที่หัวหน้าภาคแจ้ง — แอดมินทำใบเสนอราคาจากตรงนี้ (ร้านไหน ราคาเท่าไหร่) ไม่ต้องโทรถาม */}
+                        {p.offCatalog ? <Text style={styles.offSourceLine}>หัวหน้าภาคแจ้ง: {offAnswerLine(p)}</Text> : null}
+                      </View>
                     ))}
                     {order.services.map((v) => (
                       <Text key={`s${v.id}`} style={styles.issuedLine}>
@@ -7303,6 +7416,7 @@ function StageModal({
                 {order.waitingParts.map((p) => (
                   <Text key={p.sparePartId} style={styles.issuedLine}>
                     {p.offCatalog ? `${p.name} (นอกสโตร์)` : `${p.partCode} · ${p.name}`} × {p.quantity}
+                    {p.offCatalog ? ` · ${offAnswerLine(p)}` : ""}
                   </Text>
                 ))}
               </>
@@ -7800,6 +7914,20 @@ function QuoteRoute({ needsParts, off, services }: { needsParts: boolean | null;
  * (เคยบังคับนัดล่วงหน้า 7 วัน — เจ้าของงานยกเลิก ต.ค. 69)
  * แอดมินเห็นกล่องเดียวกันตอนจะโทรคอนเฟิร์ม — ปกติขึ้น "อะไหล่เบิกแล้ว" ทุกตัว ถ้ามีตัวยังไม่ถึงคือยังไม่ควรโทร
  */
+/**
+ * "หัวหน้าภาคแจ้ง: หาได้ · แหล่ง — รายละเอียด" ในขั้นเช็ค/เบิกของแอดมิน (ตัวอย่างที่อนุมัติ) — สีตามคำตอบ
+ * ใบเก่าที่ยังไม่มีคำตอบขึ้น "ยังไม่ระบุ" ให้แอดมินรู้ว่าต้องถามเอง ไม่ใช่ไม่มีบรรทัดแล้วนึกว่าระบบไม่ได้ถาม
+ */
+function OffTold({ part }: { part: PickedPart }) {
+  const tone =
+    part.offFound === true
+      ? { color: colors.successInk, backgroundColor: colors.successSoft }
+      : part.offFound === false
+        ? { color: colors.dangerInk, backgroundColor: colors.dangerSoft }
+        : { color: colors.textMuted, backgroundColor: colors.background };
+  return <Text style={[styles.offTold, tone]}>{part.offAnswerRole ?? "หัวหน้าภาค"}แจ้ง: {offAnswerLine(part)}</Text>;
+}
+
 function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: WorkOrder; adminWarehouse: string; viewer?: "supervisor" | "admin" }) {
   if (order.needsParts !== true || order.waitingParts.length === 0) return null;
   // หัวกล่องใช้กฎเดียวกับเซิร์ฟเวอร์ (issueLeftOf) — ของนอกสโตร์ไม่มีเลขใบเบิก นับว่าเบิกแล้วต่อเมื่อแอดมินผ่านขั้นเบิกรอบนี้
@@ -7826,7 +7954,7 @@ function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: W
             <Text style={styles.readyLine}>
               {partTitle(p)} × {p.quantity} —{" "}
               {p.offCatalog
-                ? "หาได้แล้ว (นอกสโตร์)"
+                ? `หาได้แล้ว (นอกสโตร์${p.offFound && p.offKind ? ` · ${p.offKind}` : ""})`
                 : p.requisitionNo
                   ? `เบิกแล้ว · ${p.warehouse ?? "-"} · ใบเบิก ${p.requisitionNo}`
                   : isFar
@@ -8316,9 +8444,20 @@ function CloseModal({
   // ของนอกสโตร์ที่แอดมินจัดหาให้ (หรือที่ช่างซื้อหน้างานเอง) อยู่ช่องของตัวเอง — ไม่ต้องมีใบเหลือง
   // มีชิ้นที่ล็อกแล้ว = ปิดงานรอบก่อนไปแล้ว อะไหล่ที่ใช้จริงอยู่ในใบ (ไม่ใช่รายการเบิก)
   const keepUsed = reclosing || lockedRows.size > 0;
+  /**
+   * ของนอกสโตร์ที่มาจากรายการรอ (หัวหน้าภาคจัดหา) ช่างไม่ต้องบอกว่าซื้อจากที่ไหน (เจ้าของงานเลือกข้อ 7) — ชื่อเดียวกับเซิร์ฟเวอร์ (offName)
+   * ค่าเติมจากรายการรอไม่เอาคำตอบของหัวหน้าภาคมาด้วย: "หาไม่ได้ · ร้านแถวนี้ไม่มี" ไม่ใช่คำตอบของ "ซื้อจากที่ไหน"
+   * ของที่ใช้ไปแล้ว (ปิดซ้ำหลังเคลมถูกตีกลับ) เก็บคำตอบเดิม — ของที่ช่างซื้อเองรอบก่อนไม่ต้องตอบใหม่
+   */
+  const waitingOffNames = useMemo(
+    () => new Set(order.waitingParts.filter((p) => p.offCatalog).map((p) => offNameKey(p.name))),
+    [order.waitingParts]
+  );
+  const fromList = (name: string) => waitingOffNames.has(offNameKey(name));
+  const listOff = (rows: OffPart[]) => rows.map((r) => ({ ...r, found: null, kind: "", detail: "" }));
   const initial = splitParts(keepUsed ? order.parts : requisitioned());
   const [parts, setParts] = useState<PickedPart[]>(initial.store);
-  const [offParts, setOffParts] = useState<OffPart[]>(initial.off);
+  const [offParts, setOffParts] = useState<OffPart[]>(keepUsed ? initial.off : listOff(initial.off));
   // ฟอร์มนี้ค้างอยู่ตลอด (ไม่ได้สร้างใหม่ทุกครั้งที่เปิด) — เปิดขึ้นมาแล้วยังว่างให้เติมอีกรอบ
   // เผื่อเบิกของหลังจากเปิดหน้าใบงานไว้แล้ว · ผูกกับรายการที่เบิก ไม่ใช่ตัวใบทั้งก้อน: ใบถูกโหลดใหม่ทุกครั้งที่ไฟล์เคลมขึ้นเสร็จ
   // ถ้าเติมทุกครั้งที่โหลด ช่างที่ลบอะไหล่ออกหมด (ไม่ได้ใช้) จะเห็นรายการเดิมโผล่กลับมาเอง
@@ -8329,7 +8468,7 @@ function CloseModal({
     if (!visible || keepUsed) return;
     const next = splitParts(requisitioned());
     setParts((cur) => (cur.length ? cur : next.store));
-    setOffParts((cur) => (cur.length ? cur : next.off));
+    setOffParts((cur) => (cur.length ? cur : listOff(next.off)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, requisitionKey]);
   const [drafts, setDrafts] = useState<Record<number, ClaimDraft>>({});
@@ -8857,7 +8996,8 @@ function CloseModal({
       // ล็อกยี่ห้อ (ข้อ 23 · §14): ปุ่มล่างไม่จาง แถวป้ายแดงจึงเป็นของที่ยังขาด ปุ่ม "พาไป" เลื่อนไปที่ช่องอะไหล่
       // นับเฉพาะตอนอยู่ในหน้านี้ — อะไหล่ที่เพิ่มเองไม่อยู่ในร่าง เปิดใหม่ก็หายไปพร้อมป้าย
       ...(!kept ? brandItems(parts, "parts", "") : []),
-      ...(offPartsIncomplete(offParts) ? [w("ชื่ออะไหล่นอกสโตร์", "offParts")] : []),
+      // ชื่อ + ซื้อจากที่ไหน ของที่ช่างซื้อเอง (เจ้าของงานเลือกข้อ 7) — ข้อละแถว ปุ่มพาไปที่กล่องอะไหล่นอก
+      ...offPartsMissing(offParts, "bought", fromList).map((t) => w(`อะไหล่นอก ${t}`, "offParts")),
       ...(slipShot ? [w("รูปใบเหลือง", "slip")] : []),
       ...machineGaps.map((g): MItem => ({ text: `ข้อมูลเครื่อง: ${g.text}`, key: g.key, step: 1 })),
       ...tabParts.flatMap((p): MItem[] => {
@@ -9483,7 +9623,8 @@ function CloseModal({
         parts: parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })),
         // อะไหล่ที่ใช้ไปที่ยืนยันข้ามยี่ห้อ — ของที่อยู่ในใบอยู่แล้ว (onOrder) ผ่านเป็น legacy ไม่ต้องยืนยัน
         ...crossBrandField(parts, order.partsBrand, pickedBrand, { legacyIds: onOrder }),
-        offParts: offPartsPayload(offParts),
+        // ของที่ซื้อเองบอกว่าซื้อจากที่ไหน · ของจากรายการรอไม่ส่งคำตอบ (หัวหน้าภาคตอบไว้แล้ว)
+        offParts: offPartsPayload(offParts, "bought", fromList),
         workerIds: isSub && !withStaff ? [] : workerIds,
         otherWorkers: otherWorkers.trim() || null,
         ...(isSub ? { subTeam } : {}),
@@ -10003,7 +10144,9 @@ function CloseModal({
             rows={offParts}
             onChange={setOffParts}
             title="อะไหล่นอกสโตร์ที่ใช้"
-            hint="ของที่หารหัสในสโตร์ไม่เจอ หรือซื้อหน้างานเอง · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง"
+            ask="bought"
+            exempt={fromList}
+            highlight={flash?.key === "offParts"}
           />
           {flashOn("offParts")}
         </View>
@@ -10959,6 +11102,9 @@ const styles = StyleSheet.create({
   dispatchText: { fontSize: 13, lineHeight: 21, fontWeight: "700" },
   issuedTitle: { fontSize: 12, lineHeight: 20, fontWeight: "700", color: colors.textMuted },
   issuedLine: { fontSize: 12, lineHeight: 20, color: colors.text },
+  // แหล่งของนอกสโตร์ที่หัวหน้าภาคแจ้ง — ใต้บรรทัดรายการ เยื้องเข้าให้อ่านว่าเป็นของแถวบน
+  offSourceLine: { fontSize: 11.5, lineHeight: 18, color: colors.textMuted, paddingLeft: spacing.sm },
+  offTold: { fontSize: 12.5, lineHeight: 19, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 5, overflow: "hidden" },
   issuedHint: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingTop: 3 },
   optionOut: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
   optionTextOut: { color: colors.danger },
