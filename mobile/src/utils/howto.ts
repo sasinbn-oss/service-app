@@ -11,7 +11,7 @@
  * กล่องที่ขึ้นเองมีสองแบบ ขึ้นครั้งเดียวต่อคน (จำที่บัญชี): กล่องต้อนรับ = บัญชีใหม่/แอดมินกด "ให้ดูวิธีใช้ใหม่"
  * · ข้อความแนะนำสั้น ๆ = พนักงานเดิมที่ใช้แอปอยู่แล้ว (เจ้าของงานเลือก: คนเดิมไม่ต้องโดนบังคับดูทั้งเรื่อง แค่รู้ว่ามีปุ่ม ?)
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { Dimensions, Platform } from "react-native";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { api } from "../api/client";
@@ -70,8 +70,20 @@ interface Store {
 
 let store: Store = { run: null, prompt: null };
 const listeners = new Set<() => void>();
+/**
+ * เลขรอบของการแจ้ง — ตัววาดเทียบเลขนี้ ไม่ใช่ตัว store: บางครั้งแจ้งให้วาดใหม่โดย store ไม่เปลี่ยน
+ * (เมนูข้างเปิด/ปิด → ป้าย "ลองกดตรงนี้" หาย) ถ้าเทียบ store ตัวเดียว การแจ้งแบบนั้นจะถูกทิ้งเงียบ ๆ
+ */
+let version = 0;
 function emit() {
+  version++;
   listeners.forEach((l) => l());
+}
+function subscribeStore(l: () => void) {
+  listeners.add(l);
+  return () => {
+    listeners.delete(l);
+  };
 }
 function setRun(run: HowToRun | null) {
   store = { ...store, run };
@@ -85,16 +97,15 @@ function patchRun(p: Partial<HowToRun>) {
   if (store.run) setRun({ ...store.run, ...p });
 }
 
-/** ตัววาดกล่องใช้ — วาดใหม่ทุกครั้งที่สถานะเปลี่ยน */
+/**
+ * ตัววาดกล่องใช้ — วาดใหม่ทุกครั้งที่สถานะเปลี่ยน
+ * useSyncExternalStore ไม่ใช่ useState + สมัครฟังใน useEffect: สลับคน (ดูในฐานะหมดเวลา · ออกจากระบบ) ตัววาดตัวใหม่
+ * วาดรอบแรกตอนวิธีใช้ของคนเก่ายังอยู่ แล้วตัวเก่าค่อยล้าง (resetHowTo ตอนถอดจากจอ) ก่อนตัวใหม่สมัครฟัง — การแจ้งนั้นไม่ถึงใคร
+ * ตัวใหม่จึงค้างวาดวิธีใช้ที่ไม่มีแล้ว: พื้นมืดทั้งจอ หน้าข้างหลัง inert กด Esc ก็ไม่หาย จนโหลดหน้าใหม่
+ * (เจอจริงในเทสต์หลบหน้าโหลด) · ตัวนี้เทียบเลขรอบอีกครั้งหลังสมัครฟัง เปลี่ยนไปแล้ววาดใหม่ทันที
+ */
 export function useHowToStore(): Store {
-  const [, bump] = useState(0);
-  useEffect(() => {
-    const l = () => bump((n) => n + 1);
-    listeners.add(l);
-    return () => {
-      listeners.delete(l);
-    };
-  }, []);
+  useSyncExternalStore(subscribeStore, () => version);
   return store;
 }
 
@@ -429,7 +440,7 @@ async function enterStep() {
   if (!r0) return;
   const st = r0.steps[r0.i];
   const seq = r0.seq;
-  peekGroup(st.peek ?? null);
+  const reveal = peekGroup(st.peek ?? null);
   if (!menuish(st)) closeOurMenu();
   // ขั้นแรกหลังเริ่มจากหน้าสอนการใช้งาน (startHowTo ตั้ง slow ไว้) ได้เวลาหา 6 วินาทีต่อ — ใบงานที่เพิ่งสั่งเปิดยังโหลด
   // แล้วฟอร์มค่อยเลื่อนเข้ามา (ฐานข้อมูลอยู่คนละภูมิภาค) ถ้าเหลือ 1.5 วินาที ขั้นแรกของฟอร์มจะขึ้นกลางจอทั้งที่ฟอร์มกำลังมา
@@ -446,6 +457,15 @@ async function enterStep() {
     if (currentKey() === op.key && navigationRef.canGoBack()) navigationRef.goBack();
     patchRun({ opened: null, code: null });
     slow = true;
+  }
+  // กลุ่มที่กางให้ดูกำลังทยอยโผล่ — รอจนแถวสุดท้ายถึงที่ก่อนวัด ไม่งั้นกรอบได้แค่หัวกลุ่มกับแถวบน ๆ
+  // กล่องขึ้นข้างกรอบครึ่งกลุ่ม แล้วกระโดดตามเมื่อเมนูเลื่อนลงไปหารายการล่าง (Super Admin ขั้น 7 "สำรองข้อมูล" อยู่ท้ายกลุ่ม
+  // ผู้ดูแลระบบ เลยขอบจอล่าง — กล่องเคยชี้ "ระบบหลังบ้าน" ทั้งที่ข้อความพูดถึงสำรองข้อมูล)
+  if (reveal > 0) {
+    patchRun({ waiting: true, slow: true });
+    await sleep(reveal);
+    if (liveSeq() !== seq) return;
+    patchRun({ waiting: false });
   }
   if (st.before && r0.dir === 1 && !(store.run?.opened && store.run.opened.step === r0.i)) {
     patchRun({ waiting: true, slow: true });

@@ -26,7 +26,7 @@ import { MainTabParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import ThemeToggle from "./ThemeToggle";
 import { showAlert } from "../utils/alert";
-import { FadeSlot, RevealRow, Turn, useGroupBusy } from "./MenuReveal";
+import { FadeSlot, openRevealMs, RevealRow, Turn, useGroupBusy } from "./MenuReveal";
 import { howtoTarget } from "../utils/howtoTarget";
 
 /**
@@ -173,11 +173,15 @@ function toggleGroup(title: string) {
  */
 let peeked: string | null = null;
 const peekListeners = new Set<(title: string | null) => void>();
-export function peekGroup(slug: string | null) {
-  const title = slug ? GROUPS.find((g) => g.slug === slug)?.title ?? null : null;
-  if (title === peeked) return;
+/** คืนเวลาที่กลุ่มใช้กางจนรายการสุดท้ายโผล่ครบ (ms) — 0 = ไม่มีอะไรต้องกาง (กางอยู่แล้ว/กางให้ดูอยู่แล้ว/ย่อคืน) */
+export function peekGroup(slug: string | null): number {
+  const group = slug ? GROUPS.find((g) => g.slug === slug) : undefined;
+  const title = group?.title ?? null;
+  if (title === peeked) return 0;
   peeked = title;
   peekListeners.forEach((l) => l(title));
+  // นับทุกรายการของกลุ่ม (ไม่ตัดตามสิทธิ์) — เกินจริงได้ไม่กี่สิบ ms แต่ไม่ขาด
+  return group && closedGroups.has(group.title) ? openRevealMs(group.items.length) : 0;
 }
 function useClosedGroups() {
   const [s, setS] = useState(closedGroups);

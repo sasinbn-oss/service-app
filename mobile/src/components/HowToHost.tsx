@@ -16,7 +16,7 @@
  *
  * ห้ามใช้ animationKeyframes ที่นี่ (CLAUDE.md) — กล่องจางเข้าด้วย Animated 150 ms เท่านั้น ข้ามเมื่อตั้งลดการเคลื่อนไหว
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Animated, Modal, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -150,12 +150,48 @@ function scrollable(el: Element): boolean {
   return false;
 }
 
-/** กรอบรวมของทุกชื่อที่หาเจอ (ขั้นที่ชี้หลายอย่าง เช่นหัวกลุ่ม "รถ" กับสองรายการใต้มัน) · ไม่เจอเลย = null */
-function locate(ids: string[]): Rect | null {
+type Box = { left: number; top: number; right: number; bottom: number };
+
+/**
+ * ส่วนของปุ่มที่มองเห็นจริง — ตัดด้วยทุกกล่องข้างบนที่ซ่อนส่วนเกิน (กล่องเลื่อนของฟอร์ม · แถวเลื่อนข้าง)
+ * ไม่ตัด = กรอบลากยาวลงไปใต้แถบปุ่มล่างของฟอร์ม แล้วล้อมปุ่ม "ยังขาด … — พาไป" ไปด้วย (ฟอร์มปิดงาน: ช่องที่อยู่ท้ายจอ
+ * เช่น ผู้เข้าปฏิบัติงาน ป้ายรุ่น — คนดูเข้าใจว่าขั้นนี้พูดถึงปุ่มนั้น)
+ * reveal = ชิ้นนี้ถูกกล่องเลื่อนที่ใกล้ที่สุดบังบางส่วน แต่ทั้งชิ้นสูงไม่เกินกล่อง — เลื่อนให้เห็นทั้งชิ้นได้
+ */
+function visiblePart(el: Element, r: DOMRect): { box: Box; reveal: boolean } {
+  const box: Box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+  let reveal = false;
+  let nearest = true;
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+    const pr = p.getBoundingClientRect();
+    if (nearest && (cs.overflowY === "auto" || cs.overflowY === "scroll") && p.scrollHeight > p.clientHeight + 1) {
+      nearest = false;
+      reveal = (r.top < pr.top - 1 || r.bottom > pr.bottom + 1) && r.height <= p.clientHeight;
+    }
+    if (cs.overflowY !== "visible") {
+      box.top = Math.max(box.top, pr.top);
+      box.bottom = Math.min(box.bottom, pr.bottom);
+    }
+    if (cs.overflowX !== "visible") {
+      box.left = Math.max(box.left, pr.left);
+      box.right = Math.min(box.right, pr.right);
+    }
+  }
+  return { box, reveal };
+}
+
+/**
+ * ปุ่มของทุกชื่อที่เห็นอยู่ในจอตอนนี้ (เฉพาะส่วนที่มองเห็น) + ชิ้นแรกที่อยู่นอกจอแต่เลื่อนหาได้ (far)
+ * + ชิ้นแรกที่เห็นแค่บางส่วนแต่เลื่อนให้เห็นทั้งชิ้นได้ (part)
+ */
+function measure(ids: string[]): { rects: Box[]; far: Element | null; part: Element | null } {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const rects: DOMRect[] = [];
+  const rects: Box[] = [];
   let far: Element | null = null;
+  let part: Element | null = null;
   for (const id of ids) {
     let hit = false;
     let away: Element | null = null;
@@ -167,7 +203,10 @@ function locate(ids: string[]): Rect | null {
       const cy = r.top + r.height / 2;
       if (cx < 0 || cx > vw) continue; // เมนูที่กำลังเลื่อนออกมา — รอให้ถึงที่ ไม่เลื่อนหน้าไปหา
       if (cy >= 0 && cy <= vh && onTop(el, r)) {
-        rects.push(r);
+        const v = visiblePart(el, r);
+        if (v.box.bottom - v.box.top < 1 || v.box.right - v.box.left < 1) continue;
+        rects.push(v.box);
+        if (v.reveal) part = part ?? el;
         hit = true;
         break;
       }
@@ -177,7 +216,18 @@ function locate(ids: string[]): Rect | null {
     // ชิ้นที่ยังอยู่นอกจอ (เช่นรายการใต้หัวกลุ่มในเมนูยาว) — เลื่อนหาให้ แม้ชิ้นอื่นของขั้นเดียวกันเจอแล้ว
     if (!hit && away) far = far ?? away;
   }
-  if (far) far.scrollIntoView({ block: rects.length ? "nearest" : "center", inline: "nearest" });
+  return { rects, far, part };
+}
+
+/** กรอบรวมของทุกชื่อที่หาเจอ (ขั้นที่ชี้หลายอย่าง เช่นหัวกลุ่ม "รถ" กับสองรายการใต้มัน) · ไม่เจอเลย = null */
+function locate(ids: string[]): Rect | null {
+  const first = measure(ids);
+  let rects = first.rects;
+  if (first.far) first.far.scrollIntoView({ block: rects.length ? "nearest" : "center", inline: "nearest" });
+  // เห็นแค่บางส่วน (ช่องท้ายฟอร์มที่แถบปุ่มล่างบังครึ่งล่าง) — เลื่อนพอให้เห็นทั้งชิ้น ไม่เลื่อนไปไกลกว่านั้น
+  else if (first.part) first.part.scrollIntoView({ block: "nearest", inline: "nearest" });
+  // วัดใหม่หลังเลื่อน — กรอบที่วัดก่อนเลื่อนคือตำแหน่งเก่าและขาดชิ้นที่เพิ่งเลื่อนเข้ามา กล่องจะขึ้นผิดที่หนึ่งเฟรมแล้วกระโดด
+  if ((first.far || first.part) && rects.length) rects = measure(ids).rects;
   if (rects.length) {
     const x = Math.min(...rects.map((r) => r.left));
     const y = Math.min(...rects.map((r) => r.top));
@@ -245,7 +295,10 @@ function place(hole: Rect | null, o: { vw: number; vh: number; bw: number; bh: n
  * อยู่ต่อเนื่องตอนกล่องต้อนรับส่งต่อให้ขั้นแรก ("เริ่มเลย") — inert ไม่ถูกปลดแล้วตั้งใหม่ระหว่างนั้น
  */
 function WebLayer({ run, prompt }: { run: HowToRun | null; prompt: HowToPrompt | null }) {
-  const [paused, setPaused] = useState(feedbackBusy());
+  // กล่องยืนยัน/หน้าโหลดของแอปขึ้น — หลบ (ไม่วาด) แต่หน้าข้างหลังยังกดไม่ได้ จนกว่ากล่องนั้นปิด
+  // อ่านแบบ useSyncExternalStore (ไม่ใช่ useState + ฟังใน useEffect) — หน้าโหลดปิดระหว่างวาดรอบแรกกับตอนเริ่มฟัง
+  // (ขึ้นจอตอนสลับคนพร้อมหน้าโหลด) จะค้าง "หลบ" ตลอด: ไม่มีกล่อง หน้าข้างหลัง inert และ Esc ถูกกินทิ้ง — เหตุเดียวกับ useHowToStore
+  const paused = useSyncExternalStore(subscribeFeedback, feedbackBusy);
   const live = useRef({ paused });
   live.current = { paused };
 
@@ -261,8 +314,6 @@ function WebLayer({ run, prompt }: { run: HowToRun | null; prompt: HowToPrompt |
     };
   }, []);
 
-  // กล่องยืนยัน/หน้าโหลดของแอปขึ้น — หลบ (ไม่วาด) แต่หน้าข้างหลังยังกดไม่ได้ จนกว่ากล่องนั้นปิด
-  useEffect(() => subscribeFeedback(() => setPaused(feedbackBusy())), []);
 
   /**
    * คีย์บอร์ด: ฟังที่ window ช่วงจับ (capture) ก่อนใครทั้งหมด

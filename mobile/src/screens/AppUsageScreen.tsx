@@ -91,7 +91,6 @@ const fullDate = (iso: string) => {
 };
 const duration = (min: number) => (min >= 60 ? `${Math.floor(min / 60)} ชม. ${String(min % 60).padStart(2, "0")} น.` : `${min} น.`);
 
-/** "ตอนนี้" · "10 นาทีที่แล้ว" · "14:05" (วันนี้) · "เมื่อวาน 16:42" · "3 วันที่แล้ว" · "ยังไม่เคยเข้า" */
 /**
  * คอลัมน์ "ดูวิธีใช้แล้ว" (สอนการใช้งาน · เจ้าของงานเลือก ต.ค. 69) — นับเทียบรายชื่อเรื่องของตำแหน่งปัจจุบันของคนนั้น
  * เซิร์ฟเวอร์แค่จำว่าดูอะไรไปแล้ว รายชื่อเรื่องอยู่ในแอป (utils/howtoTours) · เปลี่ยนตำแหน่งแล้วนับตามตำแหน่งใหม่
@@ -108,6 +107,7 @@ function howtoStatus(p: Person): { text: string; all: boolean; none: boolean } |
   return { text: `${n - missing.length}/${n} · ยังขาด ${missing.map((t) => t.title).join(" · ")}`, all: false, none: false };
 }
 
+/** "ตอนนี้" · "10 นาทีที่แล้ว" · "14:05" (วันนี้) · "เมื่อวาน 16:42" · "3 วันที่แล้ว" · "ยังไม่เคยเข้า" */
 function lastSeenText(p: Person) {
   if (!p.lastSeen) return "ยังไม่เคยเข้า";
   if (p.online) return "ตอนนี้";
