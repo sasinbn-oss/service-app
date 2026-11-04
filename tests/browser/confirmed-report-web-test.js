@@ -4,6 +4,8 @@
 //   · การ์ดในเมนูรายงาน: แอดมินเห็น · ช่างไม่เห็น
 //   · เคสที่คอนเฟิร์มวันนี้แยกตามทีม · คัดลอกทั้งหมดได้ทุกเคส + เบอร์ร้าน + ไม่มีชื่อแอดมิน
 //   · คัดลอกทีมนี้ได้เฉพาะทีมนั้น · สลับ "นัดเข้างานวันที่" ไปวันที่ไม่มีนัด = ว่าง
+//   · อะไหล่ที่ต้องเปลี่ยนของแต่ละเคส (4 พ.ย. 69): คอลัมน์ขวาเมื่อหน้ากว้าง · ลงใต้เคสเมื่อแคบ · "ไม่ใช้อะไหล่" · ตรวจหน้างาน
+//     · ป้าย "อะไหล่ยังไม่พร้อม n รายการ" ที่หัวทีม
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
@@ -23,6 +25,7 @@ const { setup } = require("./fixture");
     fx = await setup();
     const a = await fx.workOrder("C0006", null);
     const b = await fx.workOrder("C0006", null);
+    const c = await fx.workOrder("C0006", null);
     const teamA = fx.sql(`select zone from "Branch" where code='C0006'`);
     const teamB = fx.sql(`select zone from "Branch" where zone is not null and zone<>'${teamA}' order by zone limit 1`);
     const aid = fx.sql(`select id from "User" where "employeeCode"='A001'`);
@@ -37,6 +40,9 @@ const { setup } = require("./fixture");
       fx.sql(`update "WorkOrder" set status='${st}', "scheduledAt"='2026-12-10', "scheduledTime"='${t}', "appointmentStatus"='CONFIRMED', "assignedTeam"='${team}', "contactPhone"='081-111-222${wo.id % 10}' where id=${wo.id}`);
       fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note) values (${wo.id},${aid},'CONFIRMED','ASSIGNED','ทดสอบ')`);
     }
+    // c: งานตรวจหน้างานทีมเดียวกับ a — หน้าจอต้องบอกว่ายังไม่รู้อะไหล่ ไม่ใช่ "ไม่ใช้อะไหล่" (ไลน์ก็ไม่มีช่วงอะไหล่ของงานนี้)
+    fx.sql(`update "WorkOrder" set status='INSPECT_DISPATCH', "scheduledAt"='2026-12-10', "scheduledTime"='15:00', "appointmentStatus"='CONFIRMED', "assignedTeam"='${teamA}' where id=${c.id}`);
+    fx.sql(`insert into "WorkOrderLog"("workOrderId","userId",action,status,note) values (${c.id},${aid},'CONFIRMED','INSPECT_DISPATCH','ทดสอบ')`);
     // a: มีอาการ (ต้องไม่ติดไปในไลน์) · b: ไม่มีเบอร์ผู้ติดต่อ
     fx.sql(`update "WorkOrder" set symptom='${"ก".repeat(30)} ${"ข".repeat(40)} ท้ายสุดไม่ต้องอยู่ในไลน์' where id=${a.id}`);
     fx.sql(`update "WorkOrder" set "contactPhone"=null, "contactName"=null where id=${b.id}`);
@@ -44,6 +50,9 @@ const { setup } = require("./fixture");
     // b งานซ่อมไม่มีอะไหล่ = บรรทัด "อะไหล่: ไม่ใช้อะไหล่" (เจ้าของงานเลือก 3 พ.ย. 69 — ช่างแยกได้ว่าไม่ใช้ ไม่ใช่ลืมใส่)
     const part = fx.sql(`select "partCode"||'|'||name from "SparePart" where not "offCatalog" order by id limit 1`).split("|");
     fx.sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind,"inStock",warehouse,"requisitionNo") select ${a.id}, id, 2, 'WAITING', true, 'คลังลาดพร้าว 94', 'RQ-CRW1' from "SparePart" where "partCode"='${part[0]}'`);
+    // ชิ้นที่สองของ a มีของแต่ยังไม่เบิก = ยังไม่พร้อม 1 รายการ (ใส่ทีหลัง ลำดับตาม id ชิ้นที่เบิกแล้วจึงอยู่บน)
+    const part2 = fx.sql(`select "partCode"||'|'||name from "SparePart" where not "offCatalog" and "partCode"<>'${part[0]}' order by id limit 1`).split("|");
+    fx.sql(`insert into "WorkOrderPart"("workOrderId","sparePartId",quantity,kind,"inStock",warehouse) select ${a.id}, id, 1, 'WAITING', true, 'คลังลาดพร้าว 94' from "SparePart" where "partCode"='${part2[0]}'`);
 
     const openAs = async (code) => {
       const ctx = await browser.newContext({ viewport: { width: 1300, height: 950 }, permissions: ["clipboard-read", "clipboard-write"] });
@@ -73,11 +82,37 @@ const { setup } = require("./fixture");
       (await vis(a.code).count()) > 0 && (await vis(b.code).count()) > 0 && (await vis(`👷 ${teamA}`).count()) > 0 && (await vis(`👷 ${teamB}`).count()) > 0
         ? pass("เคสที่คอนเฟิร์มวันนี้ขึ้น แยกตามทีม") : fail("ไม่เห็นเคส/ทีม");
       await page.screenshot({ path: path.join(DIR, "confirmed-report.png"), fullPage: true });
+      /**
+       * อะไหล่ในแถวเคส (เจ้าของงานเลือก 4 พ.ย. 69) — คำบอกสถานะต้องเป็นคำเดียวกับการ์ดช่าง (pickupOf) ค่าในคำอ่านจากฐานข้อมูล
+       * ป้ายยังไม่พร้อมนับเฉพาะชิ้นที่ยังไม่เบิก/หมด — ทีมของ b (ไม่มีอะไหล่) ต้องไม่มีป้าย จึงต้องเห็นป้ายเดียวพอดี
+       */
+      const dbParts = fx.sql(`select string_agg(coalesce("requisitionNo",'-')||'/'||"inStock", ',' order by id) from "WorkOrderPart" where "workOrderId"=${a.id} and kind='WAITING'`);
+      const dbC = fx.sql(`select status||'/'||(select count(*) from "WorkOrderPart" where "workOrderId"=${c.id}) from "WorkOrder" where id=${c.id}`);
+      const okText = "เบิกแล้ว RQ-CRW1 · รับที่คลังลาดพร้าว 94";
+      const waitText = "มีของที่คลังลาดพร้าว 94 · ยังไม่เบิก";
+      dbParts === "RQ-CRW1/true,-/true" && dbC === "INSPECT_DISPATCH/0" &&
+      (await vis("อะไหล่ที่ต้องเปลี่ยน · 2 รายการ").count()) > 0 && (await vis(okText).count()) > 0 && (await vis(waitText).count()) > 0 &&
+      (await vis("อะไหล่: ไม่ใช้อะไหล่").count()) > 0 && (await vis("ตรวจหน้างาน — ยังไม่รู้อะไหล่").count()) > 0 &&
+      (await vis("อะไหล่ยังไม่พร้อม 1 รายการ").count()) === 1 && (await page.getByText(/อะไหล่ยังไม่พร้อม/).locator("visible=true").count()) === 1
+        ? pass("แถวเคสมีอะไหล่: เบิกแล้ว/ยังไม่เบิกตามฐานข้อมูล · งานซ่อมไม่มีอะไหล่ = \"ไม่ใช้อะไหล่\" · ตรวจหน้างาน = ยังไม่รู้อะไหล่ · ป้ายยังไม่พร้อม 1 รายการเฉพาะทีมที่มี")
+        : fail(`อะไหล่ในแถว: ฐานข้อมูล ${dbParts} · ${dbC} · ป้าย ${await page.getByText(/อะไหล่ยังไม่พร้อม/).locator("visible=true").allTextContents()}`);
+      // หน้ากว้าง = คอลัมน์ขวาแนวเดียวกับเลขใบงาน · หน้าแคบ = ลงไปใต้เคส ชิดซ้ายกว่าเลขใบงาน (เลขใบงานอยู่ถัดช่องวันเวลา)
+      const boxes = async () => [await vis(a.code).first().boundingBox(), await vis(okText).first().boundingBox()];
+      const [cw, pw] = await boxes();
+      await page.setViewportSize({ width: 600, height: 950 });
+      await page.waitForTimeout(1200);
+      const [cn, pn] = await boxes();
+      await page.screenshot({ path: path.join(DIR, "confirmed-report-narrow.png"), fullPage: true });
+      await page.setViewportSize({ width: 1300, height: 950 });
+      await page.waitForTimeout(1200);
+      cw && pw && cn && pn && pw.x > cw.x + 300 && Math.abs(pw.y - cw.y) < 100 && pn.y > cn.y + 40 && pn.x < cn.x
+        ? pass("หน้ากว้าง: อะไหล่เป็นคอลัมน์ขวาของแถว · หน้าแคบ: ลงไปใต้รายละเอียดเคส")
+        : fail(`ตำแหน่งอะไหล่: กว้าง ใบ ${JSON.stringify(cw)} อะไหล่ ${JSON.stringify(pw)} · แคบ ใบ ${JSON.stringify(cn)} อะไหล่ ${JSON.stringify(pn)}`);
       await page.locator('[aria-label="คัดลอกข้อความแจ้งลูกค้า"]').locator("visible=true").first().click();
       await page.waitForTimeout(500);
       const all = await clip(page);
       const lines = all.split("\n");
-      all.startsWith("คิวงานช่าง พฤ. 10 ธ.ค. 69") && lines.includes(`ทีม: ${teamA} (1 งาน)`) &&
+      all.startsWith("คิวงานช่าง พฤ. 10 ธ.ค. 69") && lines.includes(`ทีม: ${teamA} (2 งาน)`) &&
       lines.includes("1) 09:00 น. | ซ่อม") && lines.includes("------------------------") &&
       lines.includes(`เลขที่ใบงาน: ${a.code}`) && lines.includes(`เลขที่ใบงาน: ${b.code}`) && lines.includes("รหัสสาขา: C0006") &&
       lines.includes("ผู้ติดต่อ: ไม่มีในใบงาน") && lines.includes("แผนที่: https://maps.google.com/?q=13.7563,100.5018") &&
@@ -108,9 +143,10 @@ const { setup } = require("./fixture");
        * ใบ b (งานซ่อม) ไม่มีอะไหล่ = ไม่มีหัวช่วง แต่มี "อะไหล่: ไม่ใช้อะไหล่" ก่อนบรรทัดผู้ติดต่อ · ค่าที่เทียบอ่านจากแถวในฐานข้อมูลที่ใส่ไว้ ไม่ใช่ข้อความตายตัว
        */
       const pi = ba.indexOf("อะไหล่ที่ต้องเปลี่ยน:");
-      const dbPart = fx.sql(`select w.quantity||'|'||w."requisitionNo"||'|'||w.warehouse from "WorkOrderPart" w where w."workOrderId"=${a.id} and w.kind='WAITING'`);
+      const dbPart = fx.sql(`select w.quantity||'|'||w."requisitionNo"||'|'||w.warehouse from "WorkOrderPart" w where w."workOrderId"=${a.id} and w.kind='WAITING' and w."requisitionNo" is not null`);
+      const bc = blockOf(c.code) || [];
       dbPart === "2|RQ-CRW1|คลังลาดพร้าว 94" && pi > 0 && ba[pi + 1] === `- ${part[1]} x2` && ba[pi + 2] === `(${part[0]} · RQ-CRW1 · คลังลาดพร้าว 94)` &&
-      !bb.includes("อะไหล่ที่ต้องเปลี่ยน:") && !ba.includes("อะไหล่: ไม่ใช้อะไหล่") &&
+      !bb.includes("อะไหล่ที่ต้องเปลี่ยน:") && !ba.includes("อะไหล่: ไม่ใช้อะไหล่") && bc.length > 0 && !bc.some((l) => l.startsWith("อะไหล่")) &&
       bb.indexOf("อะไหล่: ไม่ใช้อะไหล่") > 0 && bb[bb.indexOf("อะไหล่: ไม่ใช้อะไหล่") + 1]?.startsWith("ผู้ติดต่อ:") &&
       fx.sql(`select count(*) from "WorkOrderPart" where "workOrderId"=${b.id}`) === "0"
         ? pass("ข้อความ LINE: ใบที่มีอะไหล่มีช่วง \"อะไหล่ที่ต้องเปลี่ยน:\" ชื่อ x จำนวน แล้วรหัส · ใบเบิก · คลัง (ตรงฐานข้อมูล) · งานซ่อมที่ไม่มีอะไหล่ (ฐานข้อมูล 0 แถว) ขึ้น \"อะไหล่: ไม่ใช้อะไหล่\" ก่อนผู้ติดต่อ")

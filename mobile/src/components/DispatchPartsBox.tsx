@@ -19,11 +19,15 @@ const TONE = {
   out: colors.dangerInk,
 } as const;
 
-export default function DispatchPartsBox({ parts }: { parts: DispatchPart[] }) {
+/**
+ * plain = ไม่มีกรอบฟ้า — หน้าสรุปคอนเฟิร์มลูกค้าวางเป็นคอลัมน์ขวาของแถวเคส (เจ้าของงานเลือกแบบ ก 4 พ.ย. 69)
+ * กรอบในแถวที่มีเส้นคั่นอยู่แล้วจะเป็นกล่องซ้อนกล่อง · เนื้อในใช้ตัวเดียวกัน คำบอกสถานะจึงตรงกับการ์ดช่าง
+ */
+export default function DispatchPartsBox({ parts, plain = false }: { parts: DispatchPart[]; plain?: boolean }) {
   if (!parts.length) return null;
   return (
-    <View style={styles.box} accessibilityLabel={`อะไหล่ที่ต้องเปลี่ยน ${parts.length} รายการ`}>
-      <Text style={styles.head}>อะไหล่ที่ต้องเปลี่ยน · {parts.length} รายการ</Text>
+    <View style={plain ? styles.plain : styles.box} accessibilityLabel={`อะไหล่ที่ต้องเปลี่ยน ${parts.length} รายการ`}>
+      <Text style={[styles.head, plain && styles.headPlain]}>อะไหล่ที่ต้องเปลี่ยน · {parts.length} รายการ</Text>
       {parts.map((p, i) => {
         const pick = pickupOf(p);
         return (
@@ -51,7 +55,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     gap: 6,
   },
+  plain: { gap: 6 },
   head: { fontSize: 12.5, fontWeight: "800", color: colors.primaryInk },
+  headPlain: { fontSize: 12 },
   row: { gap: 1 },
   name: { fontSize: 13, lineHeight: 19, color: colors.text },
   code: { fontWeight: "700", fontVariant: ["tabular-nums"] },
