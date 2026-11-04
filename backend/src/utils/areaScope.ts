@@ -80,6 +80,9 @@ export const AREA_TEAM_ALLOWED: RegExp[] = [
   /^GET \/api\/work-orders\/?$/,
   /^GET \/api\/work-orders\/(version|inbox-count|options|locate)$/,
   /^GET \/api\/work-orders\/\d+(\/(version|attachments|attachments\/links|attachments\/\d+\/(link|file)))?$/,
+  // ลิงก์หน้าเว็บของใบงาน (/#/wo/WO-00045) ถามเลขใบจากรหัสก่อนเปิด — ไม่อยู่ในรายการ = ทีม Area เปิดลิงก์ใบของสาขาตัวเอง
+  // แล้วเจอหน้ากุญแจ · route เช็คขอบเขตสาขาด้วยกฎเดียวกับเปิดใบ (blockedForViewer) ใบนอกสาขาจึงยัง 403
+  /^GET \/api\/work-orders\/by-code\/[^/]+$/,
   // เปิดใบงาน + แนบรูปหน้างาน (แนบได้เฉพาะใบที่ตัวเองเปิด — เช็คใน route)
   /^POST \/api\/work-orders\/?$/,
   /^POST \/api\/work-orders\/\d+\/attachments$/,

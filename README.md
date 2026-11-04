@@ -185,7 +185,8 @@ API: `POST /api/user-import/preview` (multipart `file`) → `POST /api/user-impo
     `GET /api/machines/(outages|signal-lost|overview|work-statuses)` · `GET /api/work-orders/reports/area-team` ·
     `GET /api/teams/(coverage-map|area-map)` · `POST /api/teams/area-map` · ทุกตัวมีไว้ให้สามหน้านี้เท่านั้น
     (ไล่ผู้เรียกในแอปทั้งหมดแล้ว หน้าอื่นของสองตำแหน่งนี้ไม่ได้เรียก) · **ดูในฐานะ** Supervisor/Maid เห็นเมนูและได้ 403 เท่าเจ้าตัว
-  · ยังใช้ได้เหมือนเดิม (`AREA_TEAM_ALLOWED`): ใบงาน (รายการ · กล่องงาน · รายละเอียด · ไฟล์แนบ · หาแท็บของใบ) ·
+  · ยังใช้ได้เหมือนเดิม (`AREA_TEAM_ALLOWED`): ใบงาน (รายการ · กล่องงาน · รายละเอียด · ไฟล์แนบ · หาแท็บของใบ ·
+    เลขใบจากรหัสในลิงก์หน้าเว็บ `by-code` — ดู "ที่อยู่ของแต่ละหน้าบนเว็บ") ·
     เปิดใบงาน + แนบรูป · ฟอร์มเปิดใบงาน (ค้นสาขา · เครื่องของสาขา · ใบที่ค้าง · ผู้ติดต่อล่าสุด) · แผนงาน · เปลี่ยนรหัส · `auth/me`
 - **กันที่เซิร์ฟเวอร์เป็นรายการอนุญาต** (`AREA_TEAM_ALLOWED` ทั้งทีม + `AREA_ONLY_ALLOWED` เฉพาะ Area ใน `utils/areaScope.ts`
   ตรวจใน `requireAuth` ผ่าน `areaTeamDenied`) ทั้งอ่านและเขียน — API อ่านอื่น ๆ (ผู้ใช้ รถ อะไหล่ รายงานอื่น) ไม่ได้กรองตามสาขา
@@ -4605,7 +4606,9 @@ npx ts-node scripts/diagnose-flowchart.ts "C:\path\DryerTroubleshoot.xlsx"
     และเฉพาะ GET นี้ (ปุ่มเปลี่ยนขั้นที่ส่ง `detailFor` กลับไม่มี) กติกาดู "หน้าตรวจเคลมหน้าเดียว"
   · `claimEvidence[]` = `{ id, sparePartId, role, createdAt, createdById }` ของรอบนี้ (ช่องไฟล์เคลมในฟอร์มใช้ `id` หารูปย่อ)
 - `GET /api/work-orders/by-code/:code` — `{ id, code }` จากรหัสที่คนเห็น (ลิงก์หน้าเว็บ `/#/wo/WO-00045` — ดู "ที่อยู่ของแต่ละหน้าบนเว็บ")
-  · ตัวพิมพ์เล็กก็รับ · 404 "ไม่พบใบงานนี้" · 403 กฎเดียวกับ `GET /:id` (`blockedForViewer` — นอกทีม/นอกพื้นที่ได้ข้อความเดียวกัน)
+  · ตัวพิมพ์เล็กก็รับ · 404 "ไม่พบใบงานนี้" · รูปผิด (นอก `A-Z 0-9 -`) 400 · 403 กฎเดียวกับ `GET /:id` (`blockedForViewer` — นอกทีม/นอกพื้นที่ได้ข้อความเดียวกันทุกตัวอักษร)
+  · ทีม Area เรียกได้ (`AREA_TEAM_ALLOWED`) — เดิมตกหล่น ทีม Area เปิดลิงก์ใบของสาขาตัวเองแล้วเจอหน้ากุญแจ · Area ทุกสาขา COCO · Supervisor/Maid (COCO) เฉพาะสาขาตัวเอง
+  · ดูในฐานะได้ผลเท่าคนที่ถูกดู · เทสต์ `tests/page-link-test.sh` เทียบสถานะกับ `GET /:id` ทุกตำแหน่ง
   · ไม่ตอบอะไรนอกจากเลขใบ — หน้าใบงานโหลดของจริงจาก `GET /:id` ตามปกติ
 - `POST /api/work-orders` — เปิดเอง ส่ง `{ branchCode, machineCode?, title, detail?, priority?, assignedToId?, scheduledAt?, symptom?, workStatus?, waitingParts? }`
   · `machines[].parts?: [{ sparePartId, quantity }]` (≤ 20) = อะไหล่ที่ช่างเสนอรายเครื่อง ลงเป็นอะไหล่ที่รอ (ล็อกยี่ห้อแบบช่องของช่าง ตรวจทุกเครื่องก่อนสร้างเครื่องใหม่ ·
