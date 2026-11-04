@@ -5,11 +5,14 @@
  * "อะไหล่ที่ใช้ไปจริง" จึงรับ label เข้ามา แต่วิธีค้นและวิธีนับจำนวนเหมือนกัน
  *
  * ใบที่มีเครื่อง = ล็อกตามไฟล์ยี่ห้อ (เจ้าของงาน ต.ค. 69: "เครื่อง Huebsch ก็สามารถเลือกอะไหล่ของเครื่อง Huebsch ได้เท่านั้น")
- * ค้นจาก /spare-parts/for-brand ซึ่งส่งมาสามกลุ่ม: ไฟล์ของเครื่อง แล้ว "ของใช้ร่วม (ไฟล์ Other)" ที่ทุกเครื่องเลือกได้ (R4)
+ * ค้นจาก /spare-parts/for-brand ซึ่งส่งมาสี่กลุ่ม: ไฟล์ของเครื่อง แล้ว "ของใช้ร่วม (ไฟล์ Other)" ที่ทุกเครื่องเลือกได้ (R4)
+ * แล้วอะไหล่นอกเครื่อง (ไม่อยู่ในไฟล์ไหน — เจ้าของงานเลือก 4 พ.ย. 69 ทุกเครื่องเลือกได้ ไม่ต้องยืนยัน)
  * แล้วอะไหล่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อกดยืนยันทุกครั้ง (เจ้าของงานเลือก 3 พ.ย. 69 "แค่ให้ขึ้นเตือนว่าใช้อะไหล่ข้ามยี่ห้อ ให้กดยืนยัน")
  * ไม่จำอะไรไว้: ยืนยันแล้วแถวนั้นติด crossBrand ส่งไปเป็น crossBrandOk กับคำขอนั้นคำขอเดียว
- * เครื่องที่ยังไม่รู้ยี่ห้อต้องกดยี่ห้อก่อน ช่องค้นถึงจะขึ้น — ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" (ข้อ 17: เดาผิดคือของผิดยี่ห้อไปถึงร้าน)
+ * เครื่องที่ยังไม่รู้ยี่ห้อต้องกดยี่ห้อก่อนถึงค้นอะไหล่ของเครื่องได้ — ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" (ข้อ 17: เดาผิดคือของผิดยี่ห้อไปถึงร้าน)
+ * ระหว่างนั้นช่องค้นได้แค่อะไหล่นอกเครื่อง (ไม่ผูกกับยี่ห้อ จึงไม่มีอะไรให้เดา)
  * ใบที่ไม่มีเครื่อง (งานทั้งสาขา) ค้นทุกไฟล์จาก /spare-parts เหมือนเดิม — ที่เดียวที่ไม่ล็อก (ข้อ 22)
+ * ยกเว้นช่องของช่าง (strict) ที่ค้นได้แค่อะไหล่นอกเครื่อง — อะไหล่ของเครื่องหัวหน้าภาคระบุแทนเหมือนเดิม
  * เซิร์ฟเวอร์ตรวจซ้ำทุกเส้นทาง (brandProblem) — ป้ายและการกันปุ่มที่นี่มีไว้ให้รู้ก่อนกด ไม่ใช่ตัวกันจริง
  */
 import React, { useEffect, useRef, useState } from "react";
@@ -22,7 +25,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
-import { brandFileOf, fileAllows, shortThaiDate, SHARED_FILE, type PartsBrand } from "../utils/brandFile";
+import { brandFileOf, fileAllows, isOutsidePart, shortThaiDate, SHARED_FILE, type PartsBrand } from "../utils/brandFile";
 import type { OffAnswerFields } from "../utils/offSource";
 
 export type { PartsBrand } from "../utils/brandFile";
@@ -39,7 +42,7 @@ export interface PickedPart extends OffAnswerFields {
   unit?: string | null;
   note?: string | null;
   /**
-   * ไฟล์ยี่ห้อที่อะไหล่อยู่ ([] = ไม่อยู่ในไฟล์ไหน) — มากับแถวจากเซิร์ฟเวอร์และผลค้นตามยี่ห้อ
+   * ไฟล์ยี่ห้อที่อะไหล่อยู่ ([] = อะไหล่นอกเครื่อง ทุกเครื่องเลือกได้) — มากับแถวจากเซิร์ฟเวอร์และผลค้นตามยี่ห้อ
    * ไม่มีค่า (แถวจากเซิร์ฟเวอร์รุ่นก่อน) = ไม่ติดป้าย ปล่อยให้เซิร์ฟเวอร์ตัดสิน ดีกว่าติดป้ายแดงผิด
    */
   brandFiles?: string[];
@@ -56,10 +59,13 @@ export interface PickedPart extends OffAnswerFields {
   crossBrand?: boolean;
 }
 
-/** ป้ายใต้ชื่ออะไหล่ — danger แดง (ต้องเอาออก) · warn เหลือง · success เขียว · info ฟ้า · muted เทา (แค่บอก) · cross ส้ม (ข้ามยี่ห้อ ยืนยันแล้ว) */
+/**
+ * ป้ายใต้ชื่ออะไหล่ — danger แดง (ต้องเอาออก) · warn เหลือง · success เขียว · info ฟ้า · muted เทา (แค่บอก) · cross ส้ม (ข้ามยี่ห้อ ยืนยันแล้ว)
+ * · outside เขียวอมฟ้า (อะไหล่นอกเครื่อง — ส่งได้ทุกเครื่อง)
+ */
 export interface PartTag {
   text: string;
-  tone: "danger" | "warn" | "success" | "info" | "muted" | "cross";
+  tone: "danger" | "warn" | "success" | "info" | "muted" | "cross" | "outside";
 }
 
 interface SparePartOption {
@@ -73,19 +79,27 @@ interface SparePartOption {
 
 /**
  * คำตอบ GET /spare-parts/for-brand — rows = ไฟล์ของเครื่อง · shared = ของใช้ร่วม (Other) ที่ไม่อยู่ในไฟล์ของเครื่อง
- * others = ไฟล์ยี่ห้ออื่น (ใช้ได้เมื่อยืนยัน) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง ถือว่าว่าง
+ * outside = อะไหล่นอกเครื่อง · others = ไฟล์ยี่ห้ออื่น (ใช้ได้เมื่อยืนยัน) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่งสองช่องนี้ ถือว่าว่าง
+ * ไม่ส่งยี่ห้อไป = ได้แค่ outside (file = null)
  */
 interface ForBrand {
-  file: string;
+  file: string | null;
   updatedAt: string | null;
   rows: SparePartOption[];
   shared: SparePartOption[];
+  outside?: SparePartOption[];
   others?: SparePartOption[];
   elsewhere: { file: string; exact: boolean }[];
 }
 
 /** ใบนี้ล็อกตามยี่ห้อเครื่องไหม — มีเครื่อง = ล็อก (ไม่รู้ยี่ห้อก็ล็อก ต้องกดยี่ห้อก่อน) */
 const lockedByBrand = (brand: PartsBrand | null | undefined): boolean => !!brand?.machine;
+/**
+ * ช่องของช่างบนใบที่ไม่มีเครื่อง — เลือกได้เฉพาะอะไหล่นอกเครื่อง (เซิร์ฟเวอร์ปฏิเสธอะไหล่ของเครื่องด้วยข้อความ noMachine)
+ * brand ไม่ส่ง (เซิร์ฟเวอร์รุ่นก่อน) ไม่นับ — ไม่รู้ว่าใบมีเครื่องไหม ปล่อยให้เซิร์ฟเวอร์ตัดสินเหมือนเดิม
+ */
+const techNoMachineOf = (brand: PartsBrand | null | undefined, strict: boolean | undefined): boolean =>
+  !!strict && !!brand && !brand.machine;
 
 /**
  * ไฟล์ที่ใช้ตัดสินตอนนี้ — ยี่ห้อที่เครื่องรู้แล้วชนะเสมอ (ยี่ห้อที่รู้แล้วเปลี่ยนจากฟอร์มไม่ได้ ข้อ 17)
@@ -110,7 +124,8 @@ type RowState =
   | { kind: "legacy"; text: string }
   | { kind: "remove"; text: string }
   | { kind: "needsBrand" }
-  | { kind: "cross" };
+  | { kind: "cross" }
+  | { kind: "outside" };
 
 /**
  * แถวข้ามยี่ห้อนี้นับว่ายืนยันแล้วไหม — กดยืนยันในช่องนี้ (crossBrand true) หรือเป็นแถวที่มาจากเซิร์ฟเวอร์ (ไม่มีค่า)
@@ -125,27 +140,29 @@ function crossConfirmed(p: PickedPart, known: boolean): boolean {
 /**
  * สถานะของแถวหนึ่งในรายการ เทียบกับไฟล์ของเครื่อง — กติกาเดียวกับ brandProblem ฝั่งเซิร์ฟเวอร์ (§4.0)
  * legacy = แถวที่อยู่ในใบแล้วและเส้นทางนี้ปล่อยผ่าน (ของที่ใช้/เบิกไปจริง) — ป้ายเทาบอกเฉย ๆ ไม่ต้องเอาออก
- * cross = อยู่ในไฟล์ยี่ห้ออื่นและยืนยันแล้ว — ส่งได้ (เซิร์ฟเวอร์ผ่านเพราะ crossBrandOk) · ไม่อยู่ในไฟล์ไหนยืนยันไม่ได้
- * known = ไฟล์ของเครื่องมาจากเซิร์ฟเวอร์ (ไม่ใช่ชิปที่เพิ่งกด)
+ * cross = อยู่ในไฟล์ยี่ห้ออื่นและยืนยันแล้ว — ส่งได้ (เซิร์ฟเวอร์ผ่านเพราะ crossBrandOk)
+ * outside = อะไหล่นอกเครื่อง — ส่งได้เสมอ ตรวจก่อนเรื่องเครื่อง/ยี่ห้อ (ไม่ต้องกดชิปยี่ห้อ ไม่ต้องมีเครื่อง)
+ * known = ไฟล์ของเครื่องมาจากเซิร์ฟเวอร์ (ไม่ใช่ชิปที่เพิ่งกด) · machine = ใบมีเครื่อง (ไม่มี = ช่องของช่างบนใบทั้งสาขา)
  */
 function rowState(
   p: PickedPart,
   file: string | null,
-  opts: { legacyIds?: ReadonlySet<number>; strict?: boolean; verb: string; known: boolean }
+  opts: { legacyIds?: ReadonlySet<number>; strict?: boolean; verb: string; known: boolean; machine: boolean }
 ): RowState {
   if (p.offCatalog) {
     return opts.strict
       ? { kind: "remove", text: `อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เอาออกก่อน${opts.verb}` }
       : { kind: "ok" };
   }
+  if (isOutsidePart(p)) return { kind: "outside" };
   const legacy = !!opts.legacyIds?.has(p.sparePartId);
+  if (!opts.machine) {
+    // ช่องของช่างบนใบทั้งสาขา: อะไหล่ของเครื่องต้องรู้ว่าเครื่องไหน — เซิร์ฟเวอร์ปฏิเสธ จึงแดงตั้งแต่บนจอ
+    if (!opts.strict || !p.brandFiles || legacy) return { kind: "ok" };
+    return { kind: "remove", text: `ใบนี้ไม่ได้ระบุเครื่อง เลือกได้เฉพาะอะไหล่นอกเครื่อง — เอาออกก่อน${opts.verb}` };
+  }
   if (!file) return legacy ? { kind: "ok" } : { kind: "needsBrand" };
   if (!p.brandFiles) return { kind: "ok" };
-  if (p.brandFiles.length === 0) {
-    return legacy
-      ? { kind: "legacy", text: "ยังไม่อยู่ในไฟล์ยี่ห้อไหน" }
-      : { kind: "remove", text: `ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เอาออกก่อน${opts.verb}` };
-  }
   if (fileAllows(file, p.brandFiles)) return { kind: "ok" };
   if (legacy) return { kind: "legacy", text: `ไม่อยู่ในไฟล์ ${file}` };
   if (crossConfirmed(p, opts.known)) return { kind: "cross" };
@@ -162,11 +179,12 @@ export function brandBlockers(
   chosen: string | null | undefined,
   opts: { legacyIds?: ReadonlySet<number>; strict?: boolean } = {}
 ): { remove: PickedPart[]; needsBrand: boolean } {
-  if (!lockedByBrand(brand)) return { remove: [], needsBrand: false };
+  const machine = lockedByBrand(brand);
+  if (!machine && !techNoMachineOf(brand, opts.strict)) return { remove: [], needsBrand: false };
   const file = effectiveFile(brand, chosen);
-  const states = parts.map((p) => [p, rowState(p, file, { ...opts, verb: "ส่ง", known: !!brand?.file })] as const);
+  const states = parts.map((p) => [p, rowState(p, file, { ...opts, verb: "ส่ง", known: !!brand?.file, machine })] as const);
   return {
-    // แถวข้ามยี่ห้อที่ยืนยันแล้ว (cross) ไม่กันปุ่ม — ไปกับ crossBrandOk ของคำขอ
+    // แถวข้ามยี่ห้อที่ยืนยันแล้ว (cross) และอะไหล่นอกเครื่อง (outside) ไม่กันปุ่ม และไม่ต้องรอชิปยี่ห้อ
     remove: states.filter(([, s]) => s.kind === "remove").map(([p]) => p),
     needsBrand: states.some(([, s]) => s.kind === "needsBrand"),
   };
@@ -185,7 +203,7 @@ export function crossBrandOkOf(
   if (!lockedByBrand(brand)) return [];
   const file = effectiveFile(brand, chosen);
   return parts
-    .filter((p) => rowState(p, file, { ...opts, verb: "ส่ง", known: !!brand?.file }).kind === "cross")
+    .filter((p) => rowState(p, file, { ...opts, verb: "ส่ง", known: !!brand?.file, machine: true }).kind === "cross")
     .map((p) => p.sparePartId);
 }
 
@@ -226,7 +244,10 @@ export function brandBlockText(
   brand: PartsBrand | null | undefined,
   verb = "ส่ง"
 ): string | null {
-  if (b.remove.length) return `เอา ${b.remove.map((p) => p.partCode).join(", ")} ออกก่อน${verb} — อยู่นอกไฟล์ที่เครื่องนี้เลือกได้`;
+  if (b.remove.length) {
+    const why = brand && !brand.machine ? "ใบนี้ไม่ได้ระบุเครื่อง เลือกได้เฉพาะอะไหล่นอกเครื่อง" : "อยู่นอกไฟล์ที่เครื่องนี้เลือกได้";
+    return `เอา ${b.remove.map((p) => p.partCode).join(", ")} ออกก่อน${verb} — ${why}`;
+  }
   // เว้นวรรคหลังรหัสเครื่อง — ติดกัน "W5ก่อน" อ่านเป็นคำเดียว (ข้อความอื่นในแอปเว้นหลังรหัสทุกที่)
   if (b.needsBrand) return `เลือกยี่ห้อเครื่อง${brand?.machineCode ? ` ${brand.machineCode}` : ""} ก่อน`;
   return null;
@@ -241,6 +262,8 @@ const TAG_COLORS: Record<PartTag["tone"], { fg: string; bg: string }> = {
   muted: { fg: colors.textMuted, bg: colors.background },
   // ส้ม (โทนเดียวกับย้อนขั้น) — ไม่ใช่แดงที่แปลว่า "ต้องเอาออก" และไม่ใช่เหลืองที่แปลว่า "ยังขาดอะไร": ส่งได้ แต่ไม่ใช่ของยี่ห้อนี้
   cross: { fg: colors.rollbackInk, bg: colors.rollbackSoft },
+  // เขียวอมฟ้า (ตัวอย่างที่เจ้าของงานอนุมัติ 4 พ.ย. 69 ใช้สีชุดเดียวกับกล่องค่าบริการ) — ไม่ใช่ส้มของนอกสโตร์: เป็นของในสโตร์ เบิก/ตัดสต็อกตามปกติ
+  outside: { fg: colors.service, bg: colors.serviceSoft },
 };
 
 export default function PartPicker({
@@ -285,20 +308,25 @@ export default function PartPicker({
   saveWhen?: string;
   /** บรรทัดใต้ "ไม่พบ …" ของช่องนี้ (ทางออกที่ฟอร์มนี้มีจริง) — ไม่ส่ง = ทางออกทั่วไป */
   noResultHints?: string[];
-  /** ช่องของช่างบนใบที่ไม่มีเครื่อง — เลือกไม่ได้ บอกเหตุผลแทนช่องค้น */
+  /** ช่องของช่างบนใบที่ไม่มีเครื่อง — บรรทัดบอกว่าเลือกได้เฉพาะอะไหล่นอกเครื่อง และอะไหล่ของเครื่องไปทางไหน */
   noMachineText?: string;
 }) {
   const brandMode = lockedByBrand(brand);
+  // ช่องของช่างบนใบทั้งสาขา — ค้นได้แค่อะไหล่นอกเครื่อง (4 พ.ย. 69 · เดิมเลือกอะไรไม่ได้เลย)
+  const techNoMachine = techNoMachineOf(brand, strict);
   const knownFile = brandMode ? brand!.file : null;
   const file = effectiveFile(brand, chosenBrand);
   // ข้อความที่ส่งไปค้น — ยี่ห้อที่เครื่องรู้ หรือปุ่มที่กด (เซิร์ฟเวอร์แปลงเป็นไฟล์ด้วย brandFileOf ตัวเดียวกัน)
   const make = brandMode ? (knownFile ? brand!.make : chosenBrand?.trim() || null) : null;
   const code = brandMode ? brand!.machineCode ?? "" : "";
+  // ค้นผ่าน for-brand (แถวผลค้นแบบกลุ่ม · แตะซ้ำ = "เลือกแล้ว") — ไม่มียี่ห้อให้ส่งเมื่อไหร่ เซิร์ฟเวอร์ตอบแค่อะไหล่นอกเครื่อง
+  const groupedSearch = brandMode || techNoMachine;
 
   const [term, setTerm] = useState("");
   const [refused, setRefused] = useState<number | null>(null);
   const [results, setResults] = useState<SparePartOption[]>([]);
   const [shared, setShared] = useState<SparePartOption[]>([]);
+  const [outside, setOutside] = useState<SparePartOption[]>([]);
   const [others, setOthers] = useState<SparePartOption[]>([]);
   const [elsewhere, setElsewhere] = useState<ForBrand["elsewhere"]>([]);
   const [searching, setSearching] = useState(false);
@@ -322,7 +350,8 @@ export default function PartPicker({
     const timer = setTimeout(() => {
       api
         .get<ForBrand>("/spare-parts/for-brand", { params: { brand: make }, loadingText: false })
-        .then((res) => !gone && setHead({ make, file: res.data.file, updatedAt: res.data.updatedAt }))
+        // ส่งยี่ห้อไปเสมอ file จึงมีค่า — ว่างได้แค่ตอนไม่ส่งยี่ห้อ (ค้นอะไหล่นอกเครื่องอย่างเดียว ไม่ใช่ที่นี่)
+        .then((res) => !gone && setHead(res.data.file ? { make, file: res.data.file, updatedAt: res.data.updatedAt } : null))
         .catch(() => !gone && setHead(null));
     }, 250);
     return () => {
@@ -332,14 +361,19 @@ export default function PartPicker({
   }, [make]);
 
   // หน่วงไว้ก่อนยิง ไม่งั้นพิมพ์รหัสเดียวยิงไปสิบครั้ง · เปลี่ยนยี่ห้อ = ผลเดิมใช้ไม่ได้แล้ว ล้างทิ้ง
+  // เครื่องที่ยังไม่รู้ยี่ห้อค้นได้ตั้งแต่ก่อนกดชิป แต่ไม่ส่งยี่ห้อ = ได้แค่อะไหล่นอกเครื่อง (กดชิปแล้วค้นคำเดิมใหม่ทั้งสี่กลุ่ม)
   useEffect(() => {
     const keyword = term.trim();
     const mine = ++seq.current;
-    if (!keyword || (brandMode && !make)) {
+    const clear = () => {
       setResults([]);
       setShared([]);
+      setOutside([]);
       setOthers([]);
       setElsewhere([]);
+    };
+    if (!keyword) {
+      clear();
       setSearched(false);
       setSearching(false);
       return;
@@ -351,22 +385,20 @@ export default function PartPicker({
         setSearching(false);
         setSearched(true);
       };
-      if (brandMode) {
+      if (groupedSearch) {
         api
-          .get<ForBrand>("/spare-parts/for-brand", { params: { brand: make, search: keyword } })
+          .get<ForBrand>("/spare-parts/for-brand", { params: { ...(make ? { brand: make } : {}), search: keyword } })
           .then((res) => {
             if (mine !== seq.current) return;
             setResults(res.data.rows);
             setShared(res.data.shared);
+            setOutside(res.data.outside ?? []);
             setOthers(res.data.others ?? []);
             setElsewhere(res.data.elsewhere);
           })
           .catch(() => {
             if (mine !== seq.current) return;
-            setResults([]);
-            setShared([]);
-            setOthers([]);
-            setElsewhere([]);
+            clear();
           })
           .finally(done);
       } else {
@@ -378,7 +410,7 @@ export default function PartPicker({
       }
     }, 350);
     return () => clearTimeout(timer);
-  }, [term, make, brandMode]);
+  }, [term, make, groupedSearch]);
 
   function add(option: SparePartOption, crossBrand = false) {
     const existing = parts.find((p) => p.sparePartId === option.id);
@@ -390,7 +422,7 @@ export default function PartPicker({
     if (existing) {
       // ใบที่ล็อกยี่ห้อ: แถวผลค้นขึ้น "เลือกแล้ว" — กดซ้ำแค่ปิดผลค้น (ตามตัวอย่าง) จำนวนแก้ที่ช่องจำนวน
       // ใบไม่มีเครื่องคงแบบเดิม: เลือกตัวที่มีอยู่แล้วให้บวกจำนวน ไม่ใช่เพิ่มแถวซ้ำ
-      if (!brandMode) {
+      if (!groupedSearch) {
         onChange(parts.map((p) => (p.sparePartId === option.id ? { ...p, quantity: p.quantity + 1 } : p)));
       }
       return;
@@ -451,12 +483,16 @@ export default function PartPicker({
 
   function tagsOf(p: PickedPart): PartTag[] {
     const out: PartTag[] = [];
-    if (brandMode) {
-      const s = rowState(p, file, { legacyIds, strict, verb, known: !!knownFile });
+    if (groupedSearch) {
+      const s = rowState(p, file, { legacyIds, strict, verb, known: !!knownFile, machine: brandMode });
       if (s.kind === "remove") out.push({ text: s.text, tone: "danger" });
       else if (s.kind === "legacy") out.push({ text: s.text, tone: "muted" });
       else if (s.kind === "cross") out.push({ text: "ข้ามยี่ห้อ", tone: "cross" });
       else if (s.kind === "needsBrand") out.push({ text: "เลือกยี่ห้อเครื่องก่อน", tone: "warn" });
+      else if (s.kind === "outside") out.push({ text: "นอกเครื่อง", tone: "outside" });
+    } else if (isOutsidePart(p)) {
+      // ใบที่ไม่ล็อก (ทั้งสาขา ช่องของคนอื่น) ก็บอกว่าเป็นอะไหล่นอกเครื่อง — คนอ่านรายการแยกได้ว่าไม่ใช่ของเครื่องไหน
+      out.push({ text: "นอกเครื่อง", tone: "outside" });
     }
     if (p.issued) out.push({ text: `เบิกแล้ว${p.requisitionNo ? ` · ใบเบิก ${p.requisitionNo}` : ""}`, tone: "info" });
     const extra = tags?.[p.sparePartId];
@@ -523,22 +559,8 @@ export default function PartPicker({
       </View>
     ) : null;
 
-  // ── ใบไม่มีเครื่อง: แบบเดิม (ค้นทุกไฟล์) — ยกเว้นช่องของช่างซึ่งเลือกไม่ได้เลย (ข้อ 22) ──
-  if (!brandMode) {
-    if (strict && brand && !brand.machine) {
-      return (
-        <View style={styles.picker}>
-          {label ? <Text style={styles.label}>{label}</Text> : null}
-          {pickedList}
-          <View style={styles.lockBox}>
-            <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
-            <Text style={[styles.lockText, { flex: 1 }]}>
-              {noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ หัวหน้าภาคระบุอะไหล่แทน"}
-            </Text>
-          </View>
-        </View>
-      );
-    }
+  // ── ใบไม่มีเครื่อง ช่องของคนอื่น: แบบเดิม (ค้นทุกไฟล์ ไม่ล็อก — ข้อ 22) ──
+  if (!groupedSearch) {
     return (
       <View style={styles.picker}>
         {label ? <Text style={styles.label}>{label}</Text> : null}
@@ -578,62 +600,6 @@ export default function PartPicker({
     );
   }
 
-  // ── ใบที่มีเครื่อง: ล็อกตามไฟล์ยี่ห้อ ──
-  const askBrand = !knownFile;
-  const chipsBlock = askBrand ? (
-    <View style={styles.askBox}>
-      {!file ? (
-        <View style={styles.lockRow}>
-          <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.lockTitle}>เลือกยี่ห้อเครื่องก่อน</Text>
-            <Text style={styles.lockText}>
-              ระบบใช้ยี่ห้อนี้หาไฟล์อะไหล่ และจำไว้กับเครื่อง {code} — ครั้งหน้าไม่ต้องเลือกอีก
-            </Text>
-          </View>
-        </View>
-      ) : null}
-      <BrandChips value={chosenBrand} onChange={(b) => onBrandChosen?.(b)} machineCode={code} />
-      {file && make ? (
-        <Text style={styles.willSave}>
-          {isListedBrand(make)
-            ? `จะบันทึกยี่ห้อ ${make} ให้เครื่อง ${code} ${saveWhen}`
-            : `จะบันทึกยี่ห้อที่พิมพ์ให้เครื่อง ${code} ${saveWhen}`}
-        </Text>
-      ) : null}
-    </View>
-  ) : null;
-
-  if (!file || !make) {
-    return (
-      <View style={styles.picker}>
-        {label ? <Text style={styles.label}>{label}</Text> : null}
-        {chipsBlock}
-        {pickedList}
-      </View>
-    );
-  }
-
-  const ownFile = shownFile ?? file;
-  const otherOnly = ownFile === SHARED_FILE;
-  const sameName = make.trim().toLowerCase() === ownFile.toLowerCase();
-  // ไฟล์ยี่ห้ออื่นใช้ได้เมื่อยืนยัน (3 พ.ย. 69) — บรรทัดกติกาบอกข้อยกเว้นด้วย ไม่งั้นขัดกับกลุ่มที่สามที่ขึ้นข้างล่าง
-  const ruleLine = otherOnly
-    ? `เครื่อง ${code} ยี่ห้อ ${make} ไม่มีไฟล์ยี่ห้อของตัวเอง — เลือกจากของใช้ร่วม (ไฟล์ Other) · ไฟล์ยี่ห้ออื่นต้องกดยืนยันทุกครั้ง`
-    : `เครื่อง ${code} ยี่ห้อ ${make}${sameName ? "" : ` ใช้ไฟล์ ${ownFile}`} — เลือกจากไฟล์นี้ · ไฟล์ยี่ห้ออื่นต้องกดยืนยันทุกครั้ง`;
-  const files = elsewhere.map((e) => e.file);
-  const exact = elsewhere.some((e) => e.exact);
-  const noResultTitle =
-    `ไม่พบ “${term.trim()}” ในไฟล์ ${ownFile}` +
-    (files.length ? (exact ? ` — รหัสนี้อยู่ในไฟล์ ${files.join(", ")}` : ` — มีในไฟล์ ${files.join(", ")} เท่านั้น`) : "");
-  const hints = noResultHints ?? [
-    "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? หัวหน้าภาคหรือแอดมินแก้ยี่ห้อเครื่องได้ที่หน้าใบงาน (แก้ยี่ห้อเครื่อง)",
-  ];
-
-  // ไม่เจอในไฟล์ของเครื่องและของใช้ร่วม แต่มีในไฟล์ยี่ห้ออื่น — กล่องเหลืองชี้ไปที่กลุ่มข้ามยี่ห้อ แทนที่จะบอกว่าเลือกไม่ได้
-  const ownEmpty = searched && !searching && results.length === 0 && shared.length === 0;
-  const crossOnly = ownEmpty && others.length > 0;
-
   // cross = แถวของกลุ่มไฟล์ยี่ห้ออื่น: แตะแล้วถามยืนยันก่อนเพิ่ม · ป้ายที่อ่านออกเสียง/เทสต์หาได้บอกว่าเป็นการเพิ่มข้ามยี่ห้อ
   const resultRow = (option: SparePartOption, i: number, cross = false) => {
     const already = parts.some((p) => p.sparePartId === option.id);
@@ -671,6 +637,131 @@ export default function PartPicker({
     );
   };
 
+  /**
+   * กลุ่มอะไหล่นอกเครื่อง (ตัวอย่างที่เจ้าของงานอนุมัติ 4 พ.ย. 69) — หลังของใช้ร่วม ก่อนไฟล์ยี่ห้ออื่น · หัวเขียวอมฟ้า
+   * แตะแล้วเพิ่มเลย ไม่ถามยืนยัน: ไม่ผูกกับยี่ห้อ จึงไม่มีอะไร "ข้าม" · line = มีกลุ่มอื่นอยู่ข้างบน ขีดเส้นคั่น
+   */
+  const outsideGroup = (line: boolean) =>
+    outside.length > 0 ? (
+      <>
+        <Text style={[styles.groupHead, styles.groupHeadOutside, line && styles.brandResultLine]}>
+          อะไหล่นอกเครื่อง — ใช้ได้ทุกเครื่อง ไม่ต้องยืนยัน
+        </Text>
+        {outside.map((o, i) => resultRow(o, i))}
+      </>
+    ) : null;
+
+  const searchBox = (placeholder: string, a11y: string) => (
+    <View style={styles.pickerSearch}>
+      <Ionicons name="search" size={15} color={colors.textFaint} />
+      <TextInput
+        style={styles.pickerInput}
+        value={term}
+        onChangeText={setTerm}
+        placeholder={placeholder}
+        placeholderTextColor={colors.textFaint}
+        accessibilityLabel={a11y}
+      />
+      {searching ? <Spinner size="small" color={colors.textFaint} /> : null}
+    </View>
+  );
+
+  /**
+   * ค้นได้แค่อะไหล่นอกเครื่อง — ใบทั้งสาขาในช่องของช่าง · เครื่องที่ยังไม่รู้ยี่ห้อก่อนกดชิป
+   * ไม่เจอ: บอกว่าค้นแค่อะไหล่นอกเครื่อง และอะไหล่ของเครื่องไปทางไหน (ไม่ใช่ "ระบบไม่มีของ")
+   */
+  const outsideOnly = (noMatchLine: string) => (
+    <>
+      {searchBox("ค้นหาอะไหล่นอกเครื่อง", "ค้นหารหัสสินค้า ชื่อ หรือ Part No. ในอะไหล่นอกเครื่อง")}
+      {searched && !searching && outside.length === 0 ? (
+        <View style={styles.noResult} accessibilityLiveRegion="polite">
+          <Text style={styles.noResultTitle}>ไม่พบ “{term.trim()}” ในอะไหล่นอกเครื่อง</Text>
+          <Text style={styles.noResultLine}>{noMatchLine}</Text>
+        </View>
+      ) : null}
+      {outside.length > 0 ? <View style={styles.pickerResults}>{outsideGroup(false)}</View> : null}
+    </>
+  );
+
+  // ── ใบไม่มีเครื่อง ช่องของช่าง: เลือกได้เฉพาะอะไหล่นอกเครื่อง (4 พ.ย. 69 — เดิมล็อกทั้งช่อง D15) ──
+  if (techNoMachine) {
+    return (
+      <View style={styles.picker}>
+        {label ? <Text style={styles.label}>{label}</Text> : null}
+        <View style={styles.banner}>
+          <Ionicons name="information-circle-outline" size={20} color={colors.textMuted} />
+          <Text style={[styles.bannerText, { flex: 1 }]}>
+            {noMachineText ?? "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกได้เฉพาะอะไหล่นอกเครื่อง · อะไหล่ของเครื่องหัวหน้าภาคระบุให้"}
+          </Text>
+        </View>
+        {pickedList}
+        {outsideOnly("ใบงานนี้ไม่ได้ระบุเครื่อง — อะไหล่ของเครื่องเลือกที่นี่ไม่ได้")}
+      </View>
+    );
+  }
+
+  // ── ใบที่มีเครื่อง: ล็อกตามไฟล์ยี่ห้อ ──
+  const askBrand = !knownFile;
+  const chipsBlock = askBrand ? (
+    <View style={styles.askBox}>
+      {!file ? (
+        <View style={styles.lockRow}>
+          <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.lockTitle}>เลือกยี่ห้อเครื่องก่อน</Text>
+            {/* ตัวอย่าง 4 พ.ย. 69 — ล็อกแค่อะไหล่ของเครื่อง อะไหล่นอกเครื่องค้นได้เลยจากช่องข้างล่าง */}
+            <Text style={styles.lockText}>
+              เครื่อง {code} ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อน จึงเลือกอะไหล่ของเครื่องได้ · อะไหล่นอกเครื่องเลือกได้เลย
+            </Text>
+            <Text style={styles.lockText}>
+              ระบบใช้ยี่ห้อนี้หาไฟล์อะไหล่ และจำไว้กับเครื่อง {code} — ครั้งหน้าไม่ต้องเลือกอีก
+            </Text>
+          </View>
+        </View>
+      ) : null}
+      <BrandChips value={chosenBrand} onChange={(b) => onBrandChosen?.(b)} machineCode={code} />
+      {file && make ? (
+        <Text style={styles.willSave}>
+          {isListedBrand(make)
+            ? `จะบันทึกยี่ห้อ ${make} ให้เครื่อง ${code} ${saveWhen}`
+            : `จะบันทึกยี่ห้อที่พิมพ์ให้เครื่อง ${code} ${saveWhen}`}
+        </Text>
+      ) : null}
+    </View>
+  ) : null;
+
+  if (!file || !make) {
+    return (
+      <View style={styles.picker}>
+        {label ? <Text style={styles.label}>{label}</Text> : null}
+        {chipsBlock}
+        {pickedList}
+        {outsideOnly(`อะไหล่ของเครื่อง: เลือกยี่ห้อเครื่อง ${code} ข้างบนก่อน แล้วค้นอีกครั้ง`)}
+      </View>
+    );
+  }
+
+  const ownFile = shownFile ?? file;
+  const otherOnly = ownFile === SHARED_FILE;
+  const sameName = make.trim().toLowerCase() === ownFile.toLowerCase();
+  // ไฟล์ยี่ห้ออื่นใช้ได้เมื่อยืนยัน (3 พ.ย. 69) — บรรทัดกติกาบอกข้อยกเว้นด้วย ไม่งั้นขัดกับกลุ่มที่สี่ที่ขึ้นข้างล่าง
+  // อะไหล่นอกเครื่องต่อท้าย (ตัวอย่าง 4 พ.ย. 69) — คนเลือกรู้ว่าของพวกนี้ไม่ต้องอยู่ในไฟล์ของเครื่อง
+  const ruleLine = otherOnly
+    ? `เครื่อง ${code} ยี่ห้อ ${make} ไม่มีไฟล์ยี่ห้อของตัวเอง — เลือกจากของใช้ร่วม (ไฟล์ Other) · ไฟล์ยี่ห้ออื่นต้องกดยืนยันทุกครั้ง · อะไหล่นอกเครื่องเลือกได้ทุกเครื่อง`
+    : `เครื่อง ${code} ยี่ห้อ ${make}${sameName ? "" : ` ใช้ไฟล์ ${ownFile}`} — เลือกจากไฟล์นี้ · ไฟล์ยี่ห้ออื่นต้องกดยืนยันทุกครั้ง · อะไหล่นอกเครื่องเลือกได้ทุกเครื่อง`;
+  const files = elsewhere.map((e) => e.file);
+  const exact = elsewhere.some((e) => e.exact);
+  const noResultTitle =
+    `ไม่พบ “${term.trim()}” ในไฟล์ ${ownFile}` +
+    (files.length ? (exact ? ` — รหัสนี้อยู่ในไฟล์ ${files.join(", ")}` : ` — มีในไฟล์ ${files.join(", ")} เท่านั้น`) : "");
+  const hints = noResultHints ?? [
+    "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? หัวหน้าภาคหรือแอดมินแก้ยี่ห้อเครื่องได้ที่หน้าใบงาน (แก้ยี่ห้อเครื่อง)",
+  ];
+
+  // ไม่เจอในไฟล์ของเครื่อง ของใช้ร่วม และอะไหล่นอกเครื่อง แต่มีในไฟล์ยี่ห้ออื่น — กล่องเหลืองชี้ไปที่กลุ่มข้ามยี่ห้อ แทนที่จะบอกว่าเลือกไม่ได้
+  const ownEmpty = searched && !searching && results.length === 0 && shared.length === 0 && outside.length === 0;
+  const crossOnly = ownEmpty && others.length > 0;
+
   return (
     <View style={styles.picker}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
@@ -686,18 +777,7 @@ export default function PartPicker({
         </View>
       </View>
       {pickedList}
-      <View style={styles.pickerSearch}>
-        <Ionicons name="search" size={15} color={colors.textFaint} />
-        <TextInput
-          style={styles.pickerInput}
-          value={term}
-          onChangeText={setTerm}
-          placeholder={`ค้นหาในไฟล์ ${ownFile}`}
-          placeholderTextColor={colors.textFaint}
-          accessibilityLabel={`ค้นหารหัสสินค้า ชื่อ หรือ Part No. ในไฟล์ ${ownFile}`}
-        />
-        {searching ? <Spinner size="small" color={colors.textFaint} /> : null}
-      </View>
+      {searchBox(`ค้นหาในไฟล์ ${ownFile}`, `ค้นหารหัสสินค้า ชื่อ หรือ Part No. ในไฟล์ ${ownFile}`)}
 
       {/* ไม่เจอในไฟล์ของเครื่อง: กล่องเหลืองขึ้นก่อนรายการ — บอกว่าที่เจออยู่ไฟล์ยี่ห้ออื่น และใช้ได้เมื่อยืนยัน (ไม่ใช่ "เลือกไม่ได้") */}
       {ownEmpty ? (
@@ -706,7 +786,7 @@ export default function PartPicker({
           <Text style={styles.noResultLine}>
             {crossOnly
               ? `ใช้ข้ามยี่ห้อได้ — แตะรายการในกลุ่ม “อยู่ในไฟล์ยี่ห้ออื่น” ข้างล่าง แล้วกดยืนยัน (ใช้ได้เฉพาะครั้งนี้ ไม่เพิ่มเข้าไฟล์ ${ownFile})`
-              : `เครื่องนี้ (${code} · ${make}) เลือกได้เฉพาะอะไหล่จากไฟล์ ${ownFile}${otherOnly ? "" : " และของใช้ร่วม (ไฟล์ Other)"}`}
+              : `เครื่องนี้ (${code} · ${make}) เลือกได้เฉพาะอะไหล่จากไฟล์ ${ownFile}${otherOnly ? "" : " ของใช้ร่วม (ไฟล์ Other)"} และอะไหล่นอกเครื่อง`}
           </Text>
           {hints.map((h) => (
             <Text key={h} style={styles.noResultLine}>
@@ -716,7 +796,7 @@ export default function PartPicker({
         </View>
       ) : null}
 
-      {results.length > 0 || shared.length > 0 || others.length > 0 ? (
+      {results.length > 0 || shared.length > 0 || outside.length > 0 || others.length > 0 ? (
         <View style={styles.pickerResults}>
           {results.map((o, i) => resultRow(o, i))}
           {/* กลุ่มที่สอง: ของใช้ร่วม (ไฟล์ Other) — ทุกเครื่องเลือกได้ (R4) แยกหัวให้เห็นว่าไม่ใช่ไฟล์ของเครื่อง */}
@@ -726,13 +806,21 @@ export default function PartPicker({
               {shared.map((o, i) => resultRow(o, i))}
             </>
           ) : null}
+          {/* กลุ่มที่สาม: อะไหล่นอกเครื่อง — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ไม่มีหัวนี้ */}
+          {outsideGroup(results.length > 0 || shared.length > 0)}
           {/*
-            กลุ่มที่สาม: ไฟล์ยี่ห้ออื่น — อยู่ท้ายสุดเสมอ (ของยี่ห้อนี้ต้องมาก่อน) หัวสีส้มเดียวกับป้าย "ข้ามยี่ห้อ"
+            กลุ่มที่สี่: ไฟล์ยี่ห้ออื่น — อยู่ท้ายสุดเสมอ (ของยี่ห้อนี้ต้องมาก่อน) หัวสีส้มเดียวกับป้าย "ข้ามยี่ห้อ"
             แตะแล้วถามยืนยันทุกครั้ง (เจ้าของงานเลือก 3 พ.ย. 69) · เซิร์ฟเวอร์รุ่นก่อนไม่ส่งกลุ่มนี้ = ไม่มีหัวนี้
           */}
           {others.length > 0 ? (
             <>
-              <Text style={[styles.groupHead, styles.groupHeadCross, (results.length > 0 || shared.length > 0) && styles.brandResultLine]}>
+              <Text
+                style={[
+                  styles.groupHead,
+                  styles.groupHeadCross,
+                  (results.length > 0 || shared.length > 0 || outside.length > 0) && styles.brandResultLine,
+                ]}
+              >
                 อยู่ในไฟล์ยี่ห้ออื่น — ใช้ได้เมื่อยืนยัน
               </Text>
               {others.map((o, i) => resultRow(o, i, true))}
@@ -843,6 +931,19 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   groupHeadCross: { color: colors.rollbackInk, backgroundColor: colors.rollbackSoft },
+  // อะไหล่นอกเครื่อง — สีชุดเดียวกับป้าย "นอกเครื่อง" (TAG_COLORS.outside)
+  groupHeadOutside: { color: colors.service, backgroundColor: colors.serviceSoft },
+  // บรรทัดบอกกติกาของช่องของช่างบนใบทั้งสาขา — พื้นเทาเรียบ (ตัวอย่าง 4 พ.ย. 69) ไม่ใช่เส้นประของ "ล็อก" เพราะช่องนี้ใช้ได้
+  banner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
+  bannerText: { fontSize: 13, lineHeight: 20, color: colors.body },
   fileHead: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -856,17 +957,6 @@ const styles = StyleSheet.create({
   fileHeadLine: { fontSize: 12, lineHeight: 18, color: colors.navy },
   askBox: { gap: spacing.sm },
   lockRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.sm,
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderStyle: "dashed",
-    borderColor: colors.borderStrong,
-    borderRadius: radius.md,
-    padding: spacing.md,
-  },
-  lockBox: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: spacing.sm,

@@ -305,9 +305,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
   /**
    * ช่อง "อะไหล่ที่ต้องใช้" ต่อเครื่อง — เฉพาะช่าง/Senior ช่าง (เจ้าของงานตอบข้อ 1 ต.ค. 69 · Senior เป็น EMPLOYEE ในแอป)
    * คนที่ยืนหน้าเครื่องตอนเปิดใบคือช่าง รู้อะไหล่ก่อนใคร · ทีม COCO/Area ไม่รู้ว่าต้องใช้ตัวไหน แอดมิน/หัวหน้าภาค
-   * ระบุอะไหล่ในขั้นของตัวเองอยู่แล้ว · งานทั้งร้าน (อุปกรณ์ร้าน/PM) และทางกระดานไม่มี (ค่าตั้งต้น D8)
+   * ระบุอะไหล่ในขั้นของตัวเองอยู่แล้ว · ทางกระดานไม่มี (ค่าตั้งต้น D8)
+   * งานทั้งร้าน (อุปกรณ์ร้าน/PM) มีแล้ว แต่เลือกได้เฉพาะอะไหล่นอกเครื่อง (4 พ.ย. 69) — power supply ตู้แลกเหรียญ · IOT gateway
+   * คือของของงานพวกนี้พอดี · อะไหล่ของเครื่องยังไม่มีทาง (ไม่รู้ว่าเครื่องไหน) หัวหน้าภาคระบุที่ขั้นถัดไปเหมือนเดิม
    */
-  const showParts = user?.role === "EMPLOYEE" && !fromBoard && !noMachine;
+  const showParts = user?.role === "EMPLOYEE" && !fromBoard;
+  /** ยี่ห้อของแถวที่ไม่มีเครื่อง (ไม่ใส่รหัส · งานทั้งร้าน) — ช่องของช่างเลือกได้เฉพาะอะไหล่นอกเครื่อง กติกาเดียวกับเซิร์ฟเวอร์ */
+  const NO_MACHINE_BRAND: PartsBrand = { machine: false, make: null, file: null, machineCode: null };
   /** รหัสเครื่องของแถว — ทางกระดานใช้รหัสที่ติดมากับเคส */
   const codeOf = (row: MachineRow) => (fromBoard ? route.params?.machineCode ?? "" : row.code).trim().toUpperCase();
   const lockOf = (row: MachineRow) => {
@@ -550,8 +554,13 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
     }
     if (!fromBoard && !branchCode.trim()) return "ต้องเลือกสาขา";
     if (fromBoard) return null;
-    // งานที่ไม่ระบุเครื่อง (อุปกรณ์ร้าน · PM ทั้งร้าน) — ใบเดียว ไม่ต้องตรวจหมายเลข/รุ่น
-    if (noMachine) return null;
+    // งานที่ไม่ระบุเครื่อง (อุปกรณ์ร้าน · PM ทั้งร้าน) — ใบเดียว ไม่ต้องตรวจหมายเลข/รุ่น · อะไหล่ได้แค่นอกเครื่อง
+    if (noMachine) {
+      const block = showParts
+        ? brandBlockText(brandBlockers(rows[0].parts, NO_MACHINE_BRAND, null, { strict: true }), NO_MACHINE_BRAND, "เปิดใบงาน")
+        : null;
+      return block;
+    }
 
     const codes = rows.map((r) => r.code.trim().toUpperCase());
     if (codes.some((c) => !c) && rows.length > 1) {
@@ -564,8 +573,11 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
       const code = codes[i];
       const picked = showParts ? row.parts : [];
       if (!code) {
-        // อะไหล่ที่เลือกไว้ก่อนลบรหัสเครื่อง — ไม่ทิ้งเงียบ ๆ ให้คนเลือกเองว่าจะใส่เครื่องหรือเอาออก (ข้อ 22)
-        if (picked.length) return `เครื่องที่ ${i + 1}: ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้ — หรือเอาอะไหล่ที่เลือกไว้ออก`;
+        // อะไหล่ของเครื่องที่เลือกไว้ก่อนลบรหัสเครื่อง — ไม่ทิ้งเงียบ ๆ ให้คนเลือกเองว่าจะใส่เครื่องหรือเอาออก (ข้อ 22)
+        // อะไหล่นอกเครื่องไม่ต้องมีเครื่อง (4 พ.ย. 69) ส่งไปกับใบทั้งสาขาได้
+        if (brandBlockers(picked, NO_MACHINE_BRAND, null, { strict: true }).remove.length) {
+          return `เครื่องที่ ${i + 1}: ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ของเครื่องได้ — หรือเอาอะไหล่ของเครื่องที่เลือกไว้ออก (อะไหล่นอกเครื่องไม่ต้องใส่)`;
+        }
         continue;
       }
       if (!MACHINE_CODE_PATTERN.test(code)) {
@@ -641,7 +653,15 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
             branchCode: branchCode.trim(),
             machines: shownRows.map((r) =>
               noMachine
-                ? { model: null, capacityKg: null, symptom: r.symptom.trim() || null }
+                ? {
+                    model: null,
+                    capacityKg: null,
+                    symptom: r.symptom.trim() || null,
+                    // อะไหล่นอกเครื่องของงานทั้งร้าน (ช่างเสนอ ลงเป็นอะไหล่ที่รอ) — ไม่เลือก = ไม่ส่งช่องนี้ คำขอเหมือนเดิม
+                    ...(showParts && r.parts.length
+                      ? { parts: r.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })) }
+                      : {}),
+                  }
                 : {
                     code: r.code.trim().toUpperCase() || undefined,
                     // ยี่ห้อที่รู้แล้วไม่ส่ง — ปุ่มล็อกไว้ เซิร์ฟเวอร์ก็ไม่เขียนทับยี่ห้อที่รู้แล้ว (ค่าตั้งต้น D7)
@@ -649,7 +669,8 @@ export default function WorkOrderFormScreen({ navigation, route }: Props) {
                     capacityKg: resolvedCapacity(r),
                     symptom: r.symptom.trim() || null,
                     // อะไหล่ของช่างแยกต่อเครื่อง (แต่ละเครื่องคนละไฟล์ยี่ห้อ) · ลงเป็นอะไหล่ที่รอ หัวหน้าภาคแก้ต่อได้
-                    ...(showParts && r.parts.length && r.code.trim()
+                    // ไม่ใส่รหัสเครื่อง = ใบทั้งสาขา ส่งได้เฉพาะอะไหล่นอกเครื่อง (validate กันตัวอื่นไว้แล้ว เซิร์ฟเวอร์ตรวจซ้ำ)
+                    ...(showParts && r.parts.length
                       ? { parts: r.parts.map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity })) }
                       : {}),
                   }
@@ -1584,36 +1605,30 @@ function MachineCard({
       {/*
         อะไหล่ที่ต้องใช้ (ช่าง/Senior ช่าง · ไม่บังคับ — เจ้าของงานตอบข้อ 1/4 ต.ค. 69) — ข้อเสนอ ลงเป็นอะไหล่ที่รอ
         หัวหน้าภาคแก้ต่อในฟอร์มระบุอะไหล่เดิม ไม่มีคอนเฟิร์ม/ตีกลับ (ตอนเปิดใบยังไม่มีทีมช่าง ตีกลับไปหาใครไม่ได้)
-        ล็อกตามไฟล์ยี่ห้อเหมือนข้อ 5 ของฟอร์มตรวจหน้างาน: ไม่มีรหัสเครื่อง = เลือกไม่ได้ (จอ ค · ข้อ 22) ·
-        ยังไม่รู้ยี่ห้อ = กดยี่ห้อด้านบนก่อน (จอ ข) · ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" (ข้อ 17)
+        ล็อกตามไฟล์ยี่ห้อเหมือนข้อ 5 ของฟอร์มตรวจหน้างาน: ไม่มีรหัสเครื่อง (รวมงานทั้งร้าน) = เลือกได้เฉพาะอะไหล่นอกเครื่อง
+        (4 พ.ย. 69 — เดิมล็อกทั้งช่อง จอ ค) · ยังไม่รู้ยี่ห้อ = กดยี่ห้อด้านบนก่อน (จอ ข — ฟอร์มนี้บังคับยี่ห้ออยู่แล้ว) ·
+        ไม่มีทาง "ค้นทุกไฟล์ไปก่อน" (ข้อ 17)
         อยู่ท้ายการ์ดหลังรูป — อาการกับรูปคือสิ่งที่หัวหน้าภาคใช้ตัดสินอะไหล่ ไม่แทรกกลางระหว่างสองอย่างนั้น
       */}
       {showParts ? (
         <View>
           <Text style={styles.subLabel}>อะไหล่ที่ต้องใช้ (ไม่บังคับ)</Text>
-          {!validCode ? (
-            row.parts.length ? (
-              // ลบรหัสเครื่องทั้งที่เลือกอะไหล่ไว้แล้ว — โชว์รายการให้เอาออกเองได้ ไม่ทิ้งเงียบ ๆ (validate กันปุ่มเปิดใบไว้)
-              <PartPicker
-                label={null}
-                parts={row.parts}
-                onChange={(parts) => onChange({ parts })}
-                brand={{ machine: false, make: null, file: null, machineCode: null }}
-                strict
-                noMachineText="ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้ — หรือเอาอะไหล่ที่เลือกไว้ออก"
-              />
-            ) : (
-              <View style={styles.partsLock}>
-                <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={styles.partsLockTitle}>ใส่หมายเลขเครื่องก่อน</Text>
-                  <Text style={styles.partsLockText}>อะไหล่ที่เลือกได้ขึ้นกับยี่ห้อของเครื่อง</Text>
-                  <Text style={styles.partsLockText}>
-                    งานทั้งสาขา (ไม่ใส่เครื่อง): หัวหน้าภาคระบุอะไหล่ที่ขั้นถัดไปเหมือนเดิม
-                  </Text>
-                </View>
-              </View>
-            )
+          {noMachine || !validCode ? (
+            // ไม่มีเครื่อง (ยังไม่ใส่รหัส · งานทั้งร้าน) — ช่องอะไหล่นอกเครื่อง · อะไหล่ของเครื่องที่เลือกไว้ก่อนลบรหัสขึ้นแดงให้เอาออกเอง
+            // (ไม่ทิ้งเงียบ ๆ · validate กันปุ่มเปิดใบไว้)
+            <PartPicker
+              label={null}
+              parts={row.parts}
+              onChange={(parts) => onChange({ parts })}
+              brand={{ machine: false, make: null, file: null, machineCode: null }}
+              strict
+              verb="เปิดใบงาน"
+              noMachineText={
+                noMachine
+                  ? "งานทั้งร้าน — เลือกได้เฉพาะอะไหล่นอกเครื่อง · อะไหล่ของเครื่องหัวหน้าภาคระบุที่ขั้นถัดไป"
+                  : "ยังไม่ได้ใส่หมายเลขเครื่อง — เลือกได้เฉพาะอะไหล่นอกเครื่อง · อะไหล่ของเครื่องใส่หมายเลขเครื่องก่อน (งานทั้งสาขา: หัวหน้าภาคระบุที่ขั้นถัดไป)"
+              }
+            />
           ) : !partsBrand.file || !partsMake ? (
             <View style={styles.partsLock}>
               <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} />

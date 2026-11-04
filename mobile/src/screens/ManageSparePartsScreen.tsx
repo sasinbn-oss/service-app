@@ -17,7 +17,7 @@ import { api, apiErrorMessage, partImageUri } from "../api/client";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
 import SparePartImportModal, { Batch, ImportReportModal } from "../components/SparePartImportModal";
-import { BRAND_FILES } from "../utils/brandFile";
+import { BRAND_FILES, OUTSIDE_PART } from "../utils/brandFile";
 
 const emptyForm = { partCode: "", name: "", brand: "", category: "", partNo: "", description: "" };
 type Form = typeof emptyForm;
@@ -25,10 +25,11 @@ type PickedImage = { uri: string; name: string; type: string };
 
 const ALL = "ทั้งหมด";
 /**
- * อะไหล่ที่ไม่อยู่ในไฟล์ยี่ห้อไหนเลย = ตัวที่ช่างเลือกไม่ได้บนใบที่มีเครื่อง (ข้อ 18) — แอดมินต้องหาเจอเร็วที่สุดตั้งแต่วันแรก
- * ชื่อปุ่มใช้คำที่แอดมินคุ้น ("ไม่มียี่ห้อ") แต่ความหมายคือ "ไม่อยู่ในไฟล์ไหน" ไม่ใช่ช่องยี่ห้อสินค้าว่าง
+ * อะไหล่ที่ไม่อยู่ในไฟล์ยี่ห้อไหนเลย = อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69 — เดิมปุ่มชื่อ "ไม่มียี่ห้อ" และแปลว่าช่างเลือกไม่ได้)
+ * ตอนนี้ทุกเครื่องเลือกได้ ปุ่มนี้จึงไม่ใช่ "ของค้างที่ต้องแก้" แล้ว — แค่ไว้ดูว่าตัวไหนเป็นของนอกเครื่อง หรือหาตัวที่ลืมติ๊กไฟล์
+ * ความหมายคือ "ไม่อยู่ในไฟล์ไหน" ไม่ใช่ช่องยี่ห้อสินค้าว่าง
  */
-const NO_FILE = "ไม่มียี่ห้อ";
+const OUTSIDE = OUTSIDE_PART;
 
 // รูปอะไหล่เสิร์ฟจาก URL เดิมทุกครั้ง (/spare-parts/:id/image) — ต่อท้ายด้วยเวลาที่แก้ล่าสุด
 // ไม่งั้นเบราว์เซอร์โชว์รูปเก่าจากแคชหลังเปลี่ยนรูปจนกว่าจะรีเฟรชหน้า
@@ -121,16 +122,16 @@ export default function ManageSparePartsScreen() {
   useRefreshHandler(loadParts);
 
   /**
-   * ปุ่มกรอง = ไฟล์ทั้ง 6 + "ไม่มียี่ห้อ" พร้อมจำนวน — รหัสที่อยู่สองไฟล์นับทั้งสองปุ่ม (ช่างเลือกได้จากทั้งสองไฟล์จริง)
-   * อะไหล่จากเซิร์ฟเวอร์รุ่นก่อน (ไม่มี brandFiles) ไม่นับเข้าปุ่มไหน — ไม่รู้ ดีกว่านับว่า "ไม่มียี่ห้อ" ผิด ๆ
+   * ปุ่มกรอง = ไฟล์ทั้ง 6 + "อะไหล่นอกเครื่อง" พร้อมจำนวน — รหัสที่อยู่สองไฟล์นับทั้งสองปุ่ม (ช่างเลือกได้จากทั้งสองไฟล์จริง)
+   * อะไหล่จากเซิร์ฟเวอร์รุ่นก่อน (ไม่มี brandFiles) ไม่นับเข้าปุ่มไหน — ไม่รู้ ดีกว่านับว่าเป็นอะไหล่นอกเครื่องผิด ๆ
    */
   const fileChips = useMemo(() => {
     const count = (f: string) =>
-      parts.filter((p) => (f === NO_FILE ? p.brandFiles?.length === 0 : !!p.brandFiles?.includes(f))).length;
+      parts.filter((p) => (f === OUTSIDE ? p.brandFiles?.length === 0 : !!p.brandFiles?.includes(f))).length;
     return [
       { key: ALL, n: parts.length },
       ...BRAND_FILES.map((f) => ({ key: f as string, n: count(f) })),
-      { key: NO_FILE, n: count(NO_FILE) },
+      { key: OUTSIDE, n: count(OUTSIDE) },
     ];
   }, [parts]);
 
@@ -140,7 +141,7 @@ export default function ManageSparePartsScreen() {
     return parts.filter(
       (p) =>
         (brand === ALL ||
-          (brand === NO_FILE ? p.brandFiles?.length === 0 : !!p.brandFiles?.includes(brand))) &&
+          (brand === OUTSIDE ? p.brandFiles?.length === 0 : !!p.brandFiles?.includes(brand))) &&
         (!needle ||
           [p.partCode, p.name, p.brand, p.category, p.partNo].some((v) => v?.toLowerCase().includes(needle)))
     );
@@ -242,7 +243,8 @@ export default function ManageSparePartsScreen() {
           {fileChips.map(({ key, n }) => (
             <TouchableOpacity
               key={key}
-              style={[styles.chip, brand === key && styles.chipOn, key === NO_FILE && n > 0 && brand !== key && styles.chipWarn]}
+              // ไม่มีขอบเหลืองแล้ว — อะไหล่นอกเครื่องไม่ใช่ของค้างที่ต้องแก้ (เจ้าของงานเลือก 4 พ.ย. 69)
+              style={[styles.chip, brand === key && styles.chipOn]}
               onPress={() => setBrand(key)}
               accessibilityLabel={`กรอง ${key}`}
               accessibilityState={{ selected: brand === key }}
@@ -256,9 +258,9 @@ export default function ManageSparePartsScreen() {
           ))}
         </View>
       ) : null}
-      {brand === NO_FILE && shown.length > 0 ? (
-        <Text style={styles.noFileHint}>
-          อะไหล่ที่ไม่อยู่ในไฟล์ยี่ห้อไหน ช่างเลือกไม่ได้บนใบงานที่มีเครื่อง — กด “แก้ไข” แล้วเลือกไฟล์ หรืออัปโหลดไฟล์ Excel ที่มีรหัสนี้
+      {brand === OUTSIDE && shown.length > 0 ? (
+        <Text style={styles.outsideHint}>
+          อะไหล่ที่ไม่อยู่ในไฟล์ยี่ห้อไหน = อะไหล่นอกเครื่อง ช่าง หัวหน้าภาค แอดมิน เลือกได้ทุกใบงาน · ถ้าเป็นอะไหล่ของยี่ห้อไหน กด “แก้ไข” แล้วติ๊กไฟล์
         </Text>
       ) : null}
 
@@ -304,7 +306,7 @@ export default function ManageSparePartsScreen() {
                     item.brandFiles.length ? (
                       <Text style={styles.fileMeta}>ไฟล์ {item.brandFiles.join(" · ")}</Text>
                     ) : (
-                      <Text style={styles.fileMetaNone}>ไม่อยู่ในไฟล์ยี่ห้อไหน — ช่างเลือกไม่ได้</Text>
+                      <Text style={styles.fileMetaOutside}>อะไหล่นอกเครื่อง · ทุกเครื่องเลือกได้</Text>
                     )
                   ) : null}
                   <View style={styles.actionRow}>
@@ -381,9 +383,15 @@ function PartModal({
   const [image, setImage] = useState<PickedImage | null>(null);
   /**
    * ไฟล์ยี่ห้อของอะไหล่ (§5.10) — null = เซิร์ฟเวอร์รุ่นก่อนไม่ได้บอก: ไม่ส่งไปเลยจนกว่าแอดมินจะแตะปุ่ม (ไม่งั้นล้างไฟล์ที่มีอยู่ทิ้ง)
-   * อะไหล่ใหม่เริ่มที่ไม่มีไฟล์ — สร้างไว้ใช้กับใบงานที่ไม่ระบุเครื่องได้ จึงเตือน ไม่บังคับ
+   * อะไหล่ใหม่เริ่มที่ไม่มีไฟล์ และยังไม่ได้เลือกอะไร — ต้องติ๊กไฟล์ หรือ "อะไหล่นอกเครื่อง" ก่อนบันทึก (ข้างล่าง)
    */
   const [files, setFiles] = useState<string[] | null>(part ? part.brandFiles ?? null : []);
+  /**
+   * "อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)" — เลือกคู่กับไฟล์ยี่ห้ออย่างใดอย่างหนึ่ง (เจ้าของงานเลือก 4 พ.ย. 69)
+   * ทำไมต้องกดเอง: ไม่มีไฟล์ = ทุกเครื่องเลือกได้ อะไหล่ Huebsch ที่ลืมติ๊กไฟล์จะหลุดไปให้เครื่อง Maytag เลือกเงียบ ๆ
+   * อะไหล่เดิมที่ไม่อยู่ในไฟล์ไหนติดไว้ตั้งแต่เปิดฟอร์ม (เป็นอะไหล่นอกเครื่องอยู่แล้ว) · อะไหล่ใหม่ยังไม่ติดอะไร
+   */
+  const [outside, setOutside] = useState(!!part && part.brandFiles?.length === 0);
   /**
    * แอดมินแตะปุ่มไฟล์แล้วหรือยัง — ไม่แตะ = ไม่ส่ง brandFiles (เซิร์ฟเวอร์คงไฟล์เดิม)
    * รายการในฟอร์มมาจากหน้ารายการ ซึ่งอาจเก่ากว่าเซิร์ฟเวอร์ (เปิดจากแคช หรือมีคนอัปโหลดไฟล์ยี่ห้อระหว่างนั้น)
@@ -394,11 +402,29 @@ function PartModal({
   const set = (k: keyof Form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
   const toggleFile = (f: string) => {
     setFilesTouched(true);
+    // ติ๊กไฟล์ยี่ห้อ = เป็นอะไหล่ของยี่ห้อนั้น — ช่องอะไหล่นอกเครื่องหลุดเอง (ตัวอย่างที่อนุมัติ)
+    setOutside(false);
     setFiles((cur) => {
       const list = cur ?? [];
       return list.includes(f) ? list.filter((x) => x !== f) : BRAND_FILES.filter((x) => x === f || list.includes(x));
     });
   };
+  // กลับกัน: เลือกอะไหล่นอกเครื่อง = ไม่อยู่ในไฟล์ไหน ไฟล์ที่ติ๊กไว้หลุดหมด
+  const toggleOutside = () => {
+    setFilesTouched(true);
+    const next = !outside;
+    setOutside(next);
+    if (next) setFiles([]);
+  };
+
+  /** ไฟล์ล่าสุดของอะไหล่จากเซิร์ฟเวอร์ — อ่านไม่ได้ใช้รายการตอนเปิดฟอร์ม (บันทึกเองจะบอกข้อผิดพลาดถ้าเซิร์ฟเวอร์มีปัญหาจริง) */
+  async function latestFiles(id: number, start: string[]): Promise<string[]> {
+    try {
+      return (await api.get<SparePart>(`/spare-parts/${id}`, { loadingText: false })).data.brandFiles ?? start;
+    } catch {
+      return start;
+    }
+  }
 
   /**
    * ไฟล์ที่จะส่งตอนแก้อะไหล่เดิม — เอาเฉพาะที่แอดมินติ๊กเพิ่ม/ติ๊กออก ไปลงบนรายการล่าสุดของเซิร์ฟเวอร์
@@ -407,26 +433,35 @@ function PartModal({
   async function filesToSend(id: number, start: string[], now: string[]): Promise<string[]> {
     const added = now.filter((f) => !start.includes(f));
     const removed = start.filter((f) => !now.includes(f));
-    let latest = start;
-    try {
-      latest = (await api.get<SparePart>(`/spare-parts/${id}`, { loadingText: false })).data.brandFiles ?? start;
-    } catch {
-      // อ่านล่าสุดไม่ได้ — ใช้รายการตอนเปิดฟอร์ม (บันทึกเองจะบอกข้อผิดพลาดถ้าเซิร์ฟเวอร์มีปัญหาจริง)
-    }
+    const latest = await latestFiles(id, start);
     return BRAND_FILES.filter((f) => (latest.includes(f) || added.includes(f)) && !removed.includes(f));
   }
-  const ready = !!form.partCode.trim() && !!form.name.trim();
+  // เลือกแล้วอย่างใดอย่างหนึ่ง — เซิร์ฟเวอร์รุ่นก่อนที่ไม่บอกไฟล์ (files = null) ไม่กัน เพราะฟอร์มไม่ส่งไฟล์อยู่แล้ว
+  const chosen = files === null || outside || files.length > 0;
+  const ready = !!form.partCode.trim() && !!form.name.trim() && chosen;
   const preview = image?.uri ?? (part ? thumbUri(part) : null);
 
   async function submit() {
     if (!ready) return;
     setSaving(true);
     // อะไหล่ใหม่ส่งเสมอ (เริ่มที่ [] — ไม่มีไฟล์เดิมให้ลบ) · อะไหล่เดิมส่งเฉพาะเมื่อแตะปุ่มไฟล์
-    const brandFiles = !part
-      ? files ?? []
-      : filesTouched && files
-        ? await filesToSend(part.id, part.brandFiles ?? [], files)
-        : null;
+    // ไม่มีไฟล์ต้องมาพร้อม outsideMachine — เซิร์ฟเวอร์ไม่รับอะไหล่ที่ไม่มีไฟล์โดยไม่บอกว่าตั้งใจ (กันลืมติ๊ก)
+    let brandFiles: string[] | null = null;
+    if (!part) brandFiles = outside ? [] : files ?? [];
+    else if (filesTouched && files && outside) {
+      // D20: เลือกนอกเครื่อง = ล้างไฟล์ทั้งหมด — ไฟล์ที่การอัปโหลดเพิ่งเพิ่มระหว่างที่ฟอร์มเปิดอยู่ แอดมินยังไม่เห็น ห้ามลบเงียบ ๆ
+      const start = part.brandFiles ?? [];
+      const fresh = (await latestFiles(part.id, start)).filter((f) => !start.includes(f));
+      if (fresh.length) {
+        setSaving(false);
+        showAlert(
+          "ไฟล์ยี่ห้อเพิ่งเปลี่ยน",
+          `${part.partCode} เพิ่งถูกเพิ่มเข้าไฟล์ ${fresh.join(", ")} (อัปโหลดไฟล์ Excel) ระหว่างที่ฟอร์มนี้เปิดอยู่ — ปิดฟอร์มแล้วเปิดใหม่ก่อนเปลี่ยนเป็นอะไหล่นอกเครื่อง`
+        );
+        return;
+      }
+      brandFiles = [];
+    } else if (filesTouched && files) brandFiles = await filesToSend(part.id, part.brandFiles ?? [], files);
     const payload = {
       partCode: form.partCode.trim(),
       name: form.name.trim(),
@@ -437,6 +472,7 @@ function PartModal({
       description: form.description.trim() || undefined,
       // รายการนี้คือไฟล์ทั้งหมดของอะไหล่ตัวนี้ (เซิร์ฟเวอร์ทำให้ตรงเป๊ะ ไฟล์ที่ไม่อยู่ในรายการถูกเอาออก) — จึงส่งเฉพาะเมื่อแอดมินเปลี่ยน
       ...(brandFiles ? { brandFiles } : {}),
+      ...(brandFiles && outside ? { outsideMachine: true } : {}),
     };
     let saved: SparePart;
     try {
@@ -554,7 +590,7 @@ function PartModal({
         ที่นี่เป็นที่เดียวที่เอาไฟล์ออกได้ — อัปโหลด Excel เพิ่มไฟล์ให้อย่างเดียว ไม่เอาออก (ค่าตั้งต้น D20)
         ของนอกสโตร์ไม่ขึ้นในหน้านี้อยู่แล้ว (GET /spare-parts ตัดออก) — ทุกตัวที่แก้ที่นี่เป็นของในสโตร์
       */}
-      <Text style={styles.label}>อยู่ในไฟล์ยี่ห้อ</Text>
+      <Text style={styles.label}>ไฟล์ยี่ห้อ *</Text>
       <View style={styles.chips}>
         {BRAND_FILES.map((f) => {
           const on = !!files?.includes(f);
@@ -575,12 +611,30 @@ function PartModal({
             </TouchableOpacity>
           );
         })}
+        <View style={styles.chipSep} />
+        <TouchableOpacity
+          style={[styles.fileChip, outside && styles.outsideChipOn]}
+          onPress={toggleOutside}
+          disabled={saving}
+          accessibilityLabel="อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)"
+          accessibilityState={{ selected: outside }}
+          // เว็บไม่แปลง accessibilityState เป็น aria-selected — ใส่เองเหมือนชิปไฟล์ (เทสต์อ่านว่าติดอยู่ไหม)
+          aria-selected={outside}
+        >
+          {outside ? <Ionicons name="checkmark" size={15} color="#fff" /> : null}
+          <Text style={[styles.chipText, outside && styles.outsideChipTextOn]}>อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)</Text>
+        </TouchableOpacity>
       </View>
       <Text style={styles.fileHint}>
-        ช่างเลือกอะไหล่ได้เฉพาะไฟล์ยี่ห้อของเครื่อง และของใช้ร่วม (ไฟล์ Other) · อัปโหลดไฟล์ Excel ครั้งหน้าเพิ่มไฟล์ให้เอง ไม่เอาออก
+        ต้องเลือกอย่างใดอย่างหนึ่ง — ติ๊กไฟล์ยี่ห้อ = เป็นอะไหล่ของยี่ห้อนั้น ช่องอะไหล่นอกเครื่องหลุดเอง · ไม่เลือกอะไรบันทึกไม่ได้
+        (กันอะไหล่ยี่ห้อที่ลืมติ๊กไฟล์ หลุดไปให้ทุกเครื่องเลือก)
       </Text>
-      {files && files.length === 0 ? (
-        <Text style={styles.fileWarn}>ยังไม่ได้เลือกไฟล์ — ช่างเลือกอะไหล่ตัวนี้ไม่ได้ (ยกเว้นใบงานที่ไม่ระบุเครื่อง)</Text>
+      <Text style={styles.fileHint}>
+        ช่างเลือกได้: ไฟล์ยี่ห้อของเครื่อง · ของใช้ร่วม (ไฟล์ Other) · อะไหล่นอกเครื่อง (ทุกเครื่อง ไม่ต้องยืนยัน) · อัปโหลดไฟล์ Excel
+        ยี่ห้อที่มีรหัสนี้ = เข้าไฟล์ยี่ห้อนั้น ไม่เป็นอะไหล่นอกเครื่องแล้ว (อัปโหลดเพิ่มไฟล์อย่างเดียว ไม่เอาออก)
+      </Text>
+      {!chosen ? (
+        <Text style={styles.fileWarn}>ยังไม่ได้เลือก — ติ๊กไฟล์ยี่ห้อ หรือ “อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)” ก่อนบันทึก</Text>
       ) : null}
       <Text style={styles.label}>
         รายละเอียด <Text style={styles.optional}>(ไม่บังคับ)</Text>
@@ -690,11 +744,10 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   chipTextOn: { color: colors.primaryInk, fontWeight: "700" },
   chipCount: { fontWeight: "700" },
-  // "ไม่มียี่ห้อ" ที่ยังมีของค้าง — ขอบเหลืองให้แอดมินเห็นว่ามีตัวที่ช่างเลือกไม่ได้รออยู่
-  chipWarn: { borderColor: colors.warningBorder, backgroundColor: colors.warningSoft },
-  noFileHint: { fontSize: 13, lineHeight: 20, color: colors.warningInk },
+  // อะไหล่นอกเครื่อง — เขียวอมฟ้าชุดเดียวกับป้าย "นอกเครื่อง" ในช่องเลือกอะไหล่ (ตัวอย่าง 4 พ.ย. 69) ไม่ใช่แดง/เหลือง: ไม่ใช่ปัญหา
+  outsideHint: { fontSize: 13, lineHeight: 20, color: colors.service },
   fileMeta: { fontSize: 12, lineHeight: 18, color: colors.primaryInk, marginTop: 2 },
-  fileMetaNone: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.dangerInk, marginTop: 2 },
+  fileMetaOutside: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.service, marginTop: 2 },
   fileChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -707,6 +760,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   fileHint: { fontSize: 12, lineHeight: 18, color: colors.textMuted, marginTop: 4 },
+  // เส้นคั่นไฟล์ยี่ห้อกับ "อะไหล่นอกเครื่อง" — สองฝั่งเลือกได้ฝั่งเดียว (ตัวอย่างที่อนุมัติ)
+  chipSep: { width: 1, height: 28, alignSelf: "center", backgroundColor: colors.borderStrong, marginHorizontal: 4 },
+  outsideChipOn: { backgroundColor: colors.service, borderColor: colors.service },
+  outsideChipTextOn: { color: "#fff", fontWeight: "700" },
   fileWarn: {
     fontSize: 12,
     lineHeight: 18,
