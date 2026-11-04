@@ -23,10 +23,17 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export type ToastKind = "success" | "error" | "warn" | "info";
 
+/** ปุ่มบนแถบแจ้งเตือน — "เลิกทำ" หลังย้ายใบงานไปถังขยะ · "เปิดใบงาน" หลังกู้คืน */
+export interface ToastAction {
+  label: string;
+  onPress: () => void;
+}
+
 interface ToastItem {
   id: number;
   kind: ToastKind;
   text: string;
+  action?: ToastAction;
   /** กำลังเลื่อนออก — ยังวาดอยู่จนเล่นจบ */
   leaving?: boolean;
 }
@@ -80,11 +87,16 @@ export function subscribeFeedback(listener: () => void): () => void {
 }
 
 export const feedback = {
-  /** สำเร็จหายเองใน 3.5 วิ ผิดพลาดค้าง 6 วิ ให้มีเวลาอ่านวิธีแก้ */
-  toast(kind: ToastKind, text: string) {
+  /**
+   * สำเร็จหายเองใน 3.5 วิ ผิดพลาดค้าง 6 วิ ให้มีเวลาอ่านวิธีแก้
+   * มีปุ่ม (action) ค้าง 10 วิ — 3.5 วิไม่ทันอ่านแล้วตัดสินใจกด "เลิกทำ" (ถังขยะใบงาน ตามตัวอย่างที่ตกลง 4 พ.ย. 69)
+   * คืน id ไว้ปิดเองได้ (dismissToast)
+   */
+  toast(kind: ToastKind, text: string, opts?: { action?: ToastAction }) {
     const id = nextId++;
-    set({ toasts: [...state.toasts, { id, kind, text }].slice(-3) });
-    setTimeout(() => feedback.dismissToast(id), kind === "error" ? 6000 : 3500);
+    set({ toasts: [...state.toasts, { id, kind, text, action: opts?.action }].slice(-3) });
+    setTimeout(() => feedback.dismissToast(id), opts?.action ? 10_000 : kind === "error" ? 6000 : 3500);
+    return id;
   },
   /** เลื่อนกลับขึ้นไปก่อนแล้วค่อยเอาออก — ToastView เรียก removeToast เองเมื่อเล่นจบ */
   dismissToast(id: number) {
@@ -141,6 +153,19 @@ function ToastView({ item }: { item: ToastItem }) {
           <Ionicons name={tone.icon} size={16} color={tone.fg} />
         </View>
         <Text style={styles.toastText}>{item.text}</Text>
+        {item.action ? (
+          <TouchableOpacity
+            style={styles.toastAction}
+            onPress={() => {
+              // ปิดแถบก่อน — กดซ้ำระหว่างรอเซิร์ฟเวอร์ (เลิกทำสองครั้ง) ไม่ได้ เพราะปุ่มหายไปแล้ว
+              feedback.dismissToast(item.id);
+              item.action!.onPress();
+            }}
+            accessibilityLabel={item.action.label}
+          >
+            <Text style={styles.toastActionText}>{item.action.label}</Text>
+          </TouchableOpacity>
+        ) : null}
       </Pressable>
     </Animated.View>
   );
@@ -267,6 +292,17 @@ const styles = StyleSheet.create({
   },
   toastIcon: { width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   toastText: { flex: 1, fontSize: 14, lineHeight: 22, color: colors.text },
+  toastAction: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+  },
+  toastActionText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
 
   backdrop: {
     ...StyleSheet.absoluteFillObject,

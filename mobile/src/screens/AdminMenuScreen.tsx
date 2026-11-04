@@ -135,6 +135,16 @@ export default function AdminMenuScreen({ navigation }: Props) {
       iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("ManageBranches"),
     },
+    {
+      key: "WorkOrderTrash",
+      label: "ถังขยะใบงาน",
+      labelEn: "Work Order Trash",
+      description: "ใบงานที่ลบ กู้คืนได้ภายใน 30 วัน",
+      icon: "trash",
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
+      onPress: () => navigation.navigate("WorkOrderTrash"),
+    },
     // ไฟล์สำรองคือข้อมูลทั้งบริษัทในก้อนเดียว — เซิร์ฟเวอร์ให้เฉพาะ Super Admin
     ...(user?.superAdmin
       ? [

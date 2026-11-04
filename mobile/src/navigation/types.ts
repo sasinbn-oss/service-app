@@ -101,6 +101,8 @@ export type AdminStackParamList = {
   ManageTeams: undefined;
   Backup: undefined;
   AppUsage: undefined;
+  /** ถังขยะใบงาน — แอดมินที่ลบใบงานได้ กู้คืนได้ 30 วัน (ลบถาวรตอนนี้: Super Admin) */
+  WorkOrderTrash: undefined;
 };
 
 export type MainTabParamList = {
