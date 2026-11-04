@@ -105,6 +105,7 @@ model User {
   adminReviewsAnswered AdminReview[]         @relation("AdminReviewsAnswered")
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
   partsOutNotes        WorkOrderPart[]       @relation("PartsOutNotes")
+  offPartAnswers       WorkOrderPart[]       @relation("OffPartAnswers")
   workOrderAttachments WorkOrderAttachment[]
   workedWorkOrders     WorkOrderWorker[]
   teamDayPlans         TeamDayPlan[]
@@ -895,6 +896,23 @@ model WorkOrderPart {
   outNoteAt     DateTime?
   outNoteById   Int?
   outNoteBy     User?     @relation("PartsOutNotes", fields: [outNoteById], references: [id], onDelete: SetNull)
+  // ── อะไหล่นอกสโตร์: จัดหาได้ไหม · จากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69 ตามตัวอย่างที่อนุมัติ) — ของในสโตร์ไม่ใช้ ──
+  //
+  // WAITING = หัวหน้าภาคตอบตอนระบุอะไหล่: true หาได้ (offKind = แหล่ง) · false หาไม่ได้ (offKind = เหตุผล)
+  // USED = ช่างซื้อเองหน้างานตอนปิดงาน: true เสมอ (offKind = ซื้อจากที่ไหน) · ว่าง = ของจากรายการที่หัวหน้าภาคระบุไว้
+  // ว่างทั้งแถว = ใบก่อนมีคำถามนี้ หน้าจอขึ้น "ยังไม่ระบุ" ไม่บังคับย้อนหลัง (เจ้าของงานเลือก) ใส่ตอนแก้รายการครั้งหน้า
+  //
+  // แยกจาก inStock โดยตั้งใจ: inStock คือผลเช็คของแอดมิน หัวหน้าภาคบอก "หาได้" แล้วแอดมินเช็คได้ "ยังหาไม่ได้" ก็มี
+  // ถ้าใช้ช่องเดียวกัน คำตอบของคนหนึ่งจะทับของอีกคน แล้วไม่มีใครรู้ว่าหัวหน้าภาคเคยบอกว่าหาได้จากที่ไหน
+  // offKind เป็นข้อความ ไม่ใช่ enum — ชุดคำอยู่ที่ OFF_SOURCE_KINDS / OFF_MISSING_REASONS (src/utils/constants.ts)
+  // เจ้าของงานเปลี่ยนชื่อชิปได้ (เปลี่ยนชิปแรกตอนอนุมัติ) โดยแถวเก่ายังอ่านออกและไม่ต้อง migrate
+  offFound      Boolean?
+  offKind       String?
+  offDetail     String?
+  // ใคร/เมื่อไรที่ตอบคำตอบนี้ — ส่งรายการเดิมซ้ำด้วยคำตอบเดิมไม่เปลี่ยนเวลา (หน้าใบงาน "หัวหน้าภาคแจ้ง · เวลา")
+  offAnswerAt   DateTime?
+  offAnswerById Int?
+  offAnswerBy   User?     @relation("OffPartAnswers", fields: [offAnswerById], references: [id], onDelete: SetNull)
 
   @@unique([workOrderId, sparePartId, kind])
 }

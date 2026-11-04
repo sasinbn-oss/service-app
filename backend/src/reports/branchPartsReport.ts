@@ -497,6 +497,9 @@ interface RawRow {
   partName: string;
   offCatalog: boolean;
   unit: string | null;
+  offFound: boolean | null;
+  offKind: string | null;
+  offDetail: string | null;
   closedAt: Date | null;
   closedBy: string | null;
   claimStatus: string | null;
@@ -518,7 +521,7 @@ async function rawRows(f: Filters, where: Prisma.Sql, tail: Prisma.Sql, cte: { b
     SELECT f.kind, f."partRowId", f.at, f.qty, f."workOrderId", f."branchId", w.code, w.status, pw.code AS "parentCode", w."closeSubTeam" AS "subTeam",
            b.code AS "branchCode", b.name AS "branchName", b.region, b.zone AS team,
            f."machineId", m.code AS "machineCode", m.type AS "machineType", m.brand AS "machineBrand", m."capacityKg" AS "machineCapacityKg",
-           f."sparePartId", s."partCode", s.name AS "partName", s."offCatalog", p.unit,
+           f."sparePartId", s."partCode", s.name AS "partName", s."offCatalog", p.unit, p."offFound", p."offKind", p."offDetail",
            w."closedAt", cu.name AS "closedBy", cl.status AS "claimStatus",
            p."inStock", p.warehouse, p."requisitionNo", p."transferFrom", p."transferReqNo", p."transferNo", p."transferredAt",
            (COUNT(*) OVER ())::int AS "rowCount"
@@ -548,6 +551,12 @@ const dayText = (d: Date | null) => (d ? thaiDateTime(d, false) : "—");
 /** "27 ต.ค. 69" — บรรทัดรายละเอียดอยู่ข้างคอลัมน์วันที่ที่หน้าจอเขียนปีสองหลัก ปีเต็มในแถวเดียวกันอ่านเหมือนคนละวัน */
 const shortDay = (d: Date | null) => (d ? thaiDateTime(d, false).replace(/(\d{2})(\d{2})$/, "$2") : "—");
 
+/** ตัดรายละเอียดที่พิมพ์เองยาว ๆ — แถวรายงานไม่กลายเป็นย่อหน้า (ชื่อร้าน/เบอร์มักอยู่ต้นข้อความ ตัวเต็มอยู่ในใบงาน) */
+const clip = (t: string, max = 60) => {
+  const chars = Array.from(t.replace(/\s+/g, " ").trim());
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("");
+};
+
 /** บรรทัดใต้ป้ายสถานะ — ทำที่เซิร์ฟเวอร์ หน้าจอกับไฟล์ Excel จึงเขียนเหมือนกัน */
 function detailText(r: RawRow, statusLabel: string): string {
   if (r.kind === "USED") {
@@ -573,7 +582,9 @@ function detailText(r: RawRow, statusLabel: string): string {
         : null;
     // วันที่จาก at (ไม่ใช่ closedAt) — ใบที่เคลมถูกตีกลับถูกล้างเวลาปิด at คือเวลาปิดรอบนั้นจากประวัติ
     // ไม่ใส่ "นอกสโตร์" — ทุกที่ที่โชว์บรรทัดนี้มีป้าย/คอลัมน์นอกสโตร์อยู่แล้ว ซ้ำสามรอบในแถวเดียว
-    return [`ปิดงาน ${shortDay(r.at)}`, r.closedBy, r.subTeam ? `ทีม SUB ${r.subTeam}` : null, claim]
+    // ของนอกสโตร์ที่ช่างซื้อเองตอนปิดงาน — บอกว่าซื้อจากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69) ตัวที่ใช้บ่อยจะเห็นว่าซื้อร้านไหนประจำ
+    const bought = r.offCatalog && r.offFound && r.offKind ? `ซื้อจาก ${r.offKind}${r.offDetail ? ` — ${clip(r.offDetail)}` : ""}` : null;
+    return [`ปิดงาน ${shortDay(r.at)}`, r.closedBy, r.subTeam ? `ทีม SUB ${r.subTeam}` : null, bought, claim]
       .filter(Boolean)
       .join(" · ");
   }

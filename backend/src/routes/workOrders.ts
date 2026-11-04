@@ -170,6 +170,8 @@ import {
   WORK_ORDER_STAGE_ACTOR,
   WORK_ORDER_STAGE_ORDER,
   OFF_CATALOG_PREFIX,
+  OFF_MISSING_REASONS,
+  OFF_SOURCE_KINDS,
   bangkokDay,
   bangkokDayRange,
   canActOnStage,
@@ -301,10 +303,12 @@ const detailInclude = {
   outage: { select: { id: true, kind: true, startedAt: true, endedAt: true } },
   parts: {
     // brandFiles = ไฟล์ยี่ห้อของอะไหล่ (ช่องเลือกอะไหล่ติดป้าย "ไม่อยู่ในไฟล์ …" ให้แถวที่ค้างอยู่ในใบ) — relationJoins ดึงมาในคำสั่งเดียว
+    // offAnswerBy = คนตอบจัดหาของนอกสโตร์ — หน้าใบงานขึ้น "หัวหน้าภาคแจ้ง · เวลา" (ชื่อบทบาท ไม่ใช่แค่ชื่อคน)
     include: {
       sparePart: {
         select: { id: true, partCode: true, name: true, brand: true, offCatalog: true, brandFiles: { select: { file: true } } },
       },
+      offAnswerBy: { select: { name: true, role: true } },
     },
     orderBy: { id: "asc" },
   },
@@ -431,18 +435,49 @@ async function syncOutageFromWorkOrder(
   });
 }
 
-/** อะไหล่หนึ่งรายการของใบงาน — unit/note มีเฉพาะของนอกสโตร์ */
-type PartLine = { sparePartId: number; quantity: number; unit?: string | null; note?: string | null };
+/**
+ * คำตอบ "จัดหาได้ไหม · จากที่ไหน" ของอะไหล่นอกสโตร์หนึ่งแถว (เจ้าของงานขอ 4 พ.ย. 69) — ช่องเดียวกับใน WorkOrderPart
+ * เวลา/คนตอบว่างได้เฉพาะแถวที่คัดลอกมาจากแถวอื่น (คนตอบถูกลบบัญชี) — คำตอบที่เพิ่งส่งมามีครบเสมอ
+ */
+type OffAnswer = {
+  offFound: boolean;
+  offKind: string;
+  offDetail: string;
+  offAnswerAt: Date | null;
+  offAnswerById: number | null;
+};
 
-/** ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error · หน่วย/หมายเหตุใช้ของแถวแรกที่ใส่มา */
+/**
+ * อะไหล่หนึ่งรายการของใบงาน — unit/note และคำตอบจัดหามีเฉพาะของนอกสโตร์
+ * ไม่มีคำตอบ = ไม่ใส่ช่องคำตอบเลย (ไม่ใช่ null) — mergeWaitingParts คงคำตอบเดิมของแถวไว้ ไม่ล้างทิ้งเพราะทางนั้นไม่ได้ถาม
+ */
+type PartLine = { sparePartId: number; quantity: number; unit?: string | null; note?: string | null } & Partial<OffAnswer>;
+
+/** คัดเฉพาะคำตอบที่ครบ — ค่าครึ่ง ๆ กลาง ๆ ไม่เขียนลงแถว (ผ่าน offAnswerRefusal มาแล้วจึงครบเสมอ) */
+function offAnswerOf(p: Partial<OffAnswer>): OffAnswer | null {
+  return typeof p.offFound === "boolean" && p.offKind && p.offDetail
+    ? { offFound: p.offFound, offKind: p.offKind, offDetail: p.offDetail, offAnswerAt: p.offAnswerAt ?? null, offAnswerById: p.offAnswerById ?? null }
+    : null;
+}
+
+/**
+ * คำตอบเดียวกับที่แถวมีอยู่ไหม — ส่งรายการเดิมซ้ำด้วยคำตอบเดิม (แก้รายการอื่นในฟอร์ม · คอนเฟิร์มรอบใหม่) ไม่ใช่การตอบใหม่
+ * เวลา/คนตอบต้องคงเดิม ไม่งั้นหน้าใบงานขึ้น "หัวหน้าภาคแจ้ง" เป็นเวลาที่แค่กดบันทึกฟอร์มซ้ำ
+ */
+const sameOffAnswer = (row: { offFound: boolean | null; offKind: string | null; offDetail: string | null }, a: OffAnswer) =>
+  row.offFound === a.offFound && row.offKind === a.offKind && row.offDetail === a.offDetail;
+
+/** ตัวเดิมส่งมาซ้ำให้รวมจำนวนกัน ไม่ใช่ error · หน่วย/หมายเหตุ/คำตอบจัดหาใช้ของแถวแรกที่ใส่มา */
 function mergeLines(parts: PartLine[]) {
-  const merged = new Map<number, { quantity: number; unit: string | null; note: string | null }>();
+  const merged = new Map<number, { quantity: number; unit: string | null; note: string | null } & Partial<OffAnswer>>();
   for (const p of parts) {
     const was = merged.get(p.sparePartId);
+    const answer = (was && offAnswerOf(was)) ?? offAnswerOf(p);
     merged.set(p.sparePartId, {
       quantity: (was?.quantity ?? 0) + p.quantity,
       unit: was?.unit ?? p.unit ?? null,
       note: was?.note ?? p.note ?? null,
+      ...(answer ?? {}),
     });
   }
   return merged;
@@ -469,16 +504,74 @@ const listInput = <T extends z.ZodTypeAny>(item: T, what: string, max: number) =
   z.array(item, { invalid_type_error: "ข้อมูลรายการไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง" }).max(max, `${what}ได้ไม่เกิน ${max} รายการ`);
 const PART_ID_TEXT = "รายการอะไหล่ไม่ถูกต้อง — โหลดหน้าใหม่แล้วเลือกอีกครั้ง";
 
+const OFF_ANSWER_INVALID = "คำตอบหาได้/หาไม่ได้ของอะไหล่นอกสโตร์ไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง";
 const offPartInput = z.object({
   name: z.string({ required_error: "อะไหล่นอกสโตร์ต้องมีชื่อ", invalid_type_error: "อะไหล่นอกสโตร์ต้องมีชื่อ" }).trim().min(1, "อะไหล่นอกสโตร์ต้องมีชื่อ").max(120, "ชื่ออะไหล่นอกสโตร์ยาวเกิน 120 ตัวอักษร"),
   quantity: qtyInput("จำนวนอะไหล่นอกสโตร์ต้องเป็น 1–999"),
   unit: textInput("หน่วยของอะไหล่นอกสโตร์", 20).nullable().optional(),
   note: textInput("หมายเหตุของอะไหล่นอกสโตร์", 300).nullable().optional(),
+  // จัดหาได้ไหม · หาได้จากที่ไหน / ทำไมหาไม่ได้ (เจ้าของงานขอ 4 พ.ย. 69) — บังคับตามทางที่ส่ง ดู offAnswerRefusal
+  offFound: z.boolean({ invalid_type_error: OFF_ANSWER_INVALID }).nullable().optional(),
+  offKind: textInput("แหล่ง/เหตุผลของอะไหล่นอกสโตร์", 40).nullable().optional(),
+  offDetail: textInput("รายละเอียดแหล่ง/เหตุผลของอะไหล่นอกสโตร์", 300).nullable().optional(),
 });
-async function resolveOffParts(items: z.infer<typeof offPartInput>[] | undefined): Promise<PartLine[]> {
-  const out: PartLine[] = [];
+type OffPartItem = z.infer<typeof offPartInput>;
+
+/** ชื่อที่ใช้จับคู่ของนอกสโตร์ — ชื่อเดียวกันคือของชิ้นเดียวกัน (partCode) ช่องว่างซ้อนไม่ทำให้กลายเป็นของคนละชิ้น */
+const offName = (name: string) => name.replace(/\s+/g, " ").trim();
+
+/**
+ * ใครเป็นคนระบุของนอกสโตร์ในคำขอนี้ — ถามคนละอย่าง (เจ้าของงานเลือก 4 พ.ย. 69)
+ * plan = หัวหน้าภาค/แอดมินระบุอะไหล่ (ฟอร์มระบุอะไหล่ · คอนเฟิร์มรายการของช่าง): หาได้ + แหล่ง หรือ หาไม่ได้ + เหตุผล
+ * bought = ช่างเพิ่มของที่ซื้อเองหน้างานตอนปิดงาน: ถามแค่ซื้อจากที่ไหน — ซื้อมาใช้แล้ว "หาไม่ได้" ไม่มีความหมาย
+ */
+type OffMode = "plan" | "bought";
+const OFF_ANSWER_OLD_APP = " — ไม่เห็นช่องนี้ในฟอร์ม = แอปรุ่นเก่า กดปุ่ม “อัปเดต” บนแถบบนก่อน";
+
+/**
+ * คำตอบจัดหาของอะไหล่นอกสโตร์ยังไม่ครบ → ข้อความไทยของแถวแรกที่ขาด · null = ครบ
+ *
+ * เช็คที่เซิร์ฟเวอร์ด้วย ไม่พึ่งปุ่มในแอปอย่างเดียว — หน้าจอรุ่นก่อนที่ยังเปิดค้างอยู่ไม่มีช่องนี้ ถ้ารับไว้ รายการจะเข้าใบ
+ * โดยไม่มีคำตอบเงียบ ๆ แล้วแอดมินไม่รู้ว่าจะทำใบเสนอราคาจากแหล่งไหน · ไม่ส่งช่องมาเลย = หน้าจอรุ่นก่อนแน่นอน บอกให้อัปเดต
+ * ใบเก่าที่ยังไม่มีคำตอบ ไม่ถูกบังคับจนกว่าจะมีคนส่งรายการนั้นมาใหม่ (เจ้าของงานเลือก — ใส่ตอนแก้รายการครั้งหน้า)
+ * exempt (เฉพาะ bought) = ชื่อของนอกสโตร์ที่อยู่ในรายการรอของใบนี้แล้ว — หัวหน้าภาคจัดหาไว้ ช่างไม่ได้ซื้อเอง ไม่ต้องตอบ
+ */
+function offAnswerRefusal(items: OffPartItem[] | undefined, mode: OffMode, exempt: Set<string> = new Set()): string | null {
+  const sources = OFF_SOURCE_KINDS as readonly string[];
+  const reasons = OFF_MISSING_REASONS as readonly string[];
   for (const it of items ?? []) {
-    const name = it.name.replace(/\s+/g, " ").trim();
+    const label = `อะไหล่นอกสโตร์ “${offName(it.name)}”`;
+    const old = it.offFound === undefined && it.offKind === undefined && it.offDetail === undefined ? OFF_ANSWER_OLD_APP : "";
+    const kind = it.offKind || null;
+    const detail = it.offDetail || null;
+    if (mode === "bought") {
+      if (!kind && !detail && exempt.has(offName(it.name))) continue;
+      if (!kind || !sources.includes(kind)) return `${label}: เลือกว่าซื้อจากที่ไหน (${OFF_SOURCE_KINDS.join(" · ")})${old}`;
+      if (!detail) return `${label}: ใส่รายละเอียดว่าซื้อจากที่ไหน — ชื่อร้าน · ที่ตั้ง/ลิงก์ · เบอร์`;
+      continue;
+    }
+    if (typeof it.offFound !== "boolean") return `${label}: บอกด้วยว่าหาได้หรือหาไม่ได้${old}`;
+    if (it.offFound) {
+      if (!kind || !sources.includes(kind)) return `${label}: เลือกว่าหาได้จากที่ไหน (${OFF_SOURCE_KINDS.join(" · ")})`;
+      if (!detail) return `${label}: ใส่รายละเอียดว่าหาได้จากที่ไหน — ชื่อร้าน · ที่ตั้ง/ลิงก์ · เบอร์`;
+    } else {
+      if (!kind || !reasons.includes(kind)) return `${label}: เลือกเหตุผลที่หาไม่ได้ (${OFF_MISSING_REASONS.join(" · ")})`;
+      if (!detail) return `${label}: ใส่รายละเอียดว่าทำไมหาไม่ได้ — ถามที่ไหนไปแล้ว · ต้องสั่งจากที่ไหน`;
+    }
+  }
+  return null;
+}
+
+/**
+ * by = คนที่ส่งรายการ + ทาง (plan/bought) — ไม่ส่งมา = ไม่เก็บคำตอบ (ทางที่ไม่ได้ถาม)
+ * คำตอบที่เก็บผ่าน offAnswerRefusal มาแล้ว · ช่างซื้อเอง = หาได้เสมอ · แถวที่ไม่ได้ตอบ (ของในรายการรอที่ช่างไม่ต้องตอบ)
+ * ไม่มีช่องคำตอบ — mergeWaitingParts/replaceParts ไม่ทับคำตอบเดิมด้วยค่าว่าง
+ */
+async function resolveOffParts(items: OffPartItem[] | undefined, by?: { userId: number; mode: OffMode }): Promise<PartLine[]> {
+  const out: PartLine[] = [];
+  const at = new Date();
+  for (const it of items ?? []) {
+    const name = offName(it.name);
     const partCode = `${OFF_CATALOG_PREFIX}${name}`;
     const sp = await prisma.sparePart.upsert({
       where: { partCode },
@@ -486,12 +579,17 @@ async function resolveOffParts(items: z.infer<typeof offPartInput>[] | undefined
       update: {},
       select: { id: true },
     });
-    out.push({ sparePartId: sp.id, quantity: it.quantity, unit: it.unit || null, note: it.note || null });
+    const found = by?.mode === "bought" ? true : it.offFound;
+    const answer =
+      by && typeof found === "boolean" && it.offKind && it.offDetail
+        ? { offFound: found, offKind: it.offKind, offDetail: it.offDetail, offAnswerAt: at, offAnswerById: by.userId }
+        : {};
+    out.push({ sparePartId: sp.id, quantity: it.quantity, unit: it.unit || null, note: it.note || null, ...answer });
   }
   return out;
 }
 
-/** แทนที่อะไหล่ของใบงานทั้งชุดเฉพาะประเภทที่ระบุ ไม่แตะอีกประเภท */
+/** แทนที่อะไหล่ของใบงานทั้งชุดเฉพาะประเภทที่ระบุ ไม่แตะอีกประเภท — คำตอบจัดหาเดิมผู้เรียกติดมาเอง (withOldAnswers) */
 async function replaceParts(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   workOrderId: number,
@@ -503,6 +601,33 @@ async function replaceParts(
   if (merged.size === 0) return;
   await tx.workOrderPart.createMany({
     data: [...merged].map(([sparePartId, p]) => ({ workOrderId, sparePartId, kind, ...p })),
+  });
+}
+
+/** แถวของใบที่ผู้เรียกอ่านไว้แล้ว — เฉพาะช่องคำตอบจัดหา (เลือกช่องพวกนี้เพิ่มในคำสั่งที่อ่านใบอยู่แล้ว ไม่อ่านแยก) */
+type OffAnswerRow = {
+  sparePartId: number;
+  offFound: boolean | null;
+  offKind: string | null;
+  offDetail: string | null;
+  offAnswerAt: Date | null;
+  offAnswerById: number | null;
+};
+const OFF_ANSWER_SELECT = { offFound: true, offKind: true, offDetail: true, offAnswerAt: true, offAnswerById: true } as const;
+
+/**
+ * ส่งรายการเดิมซ้ำแล้วคำตอบจัดหาไม่หาย — replaceParts ลบแล้วสร้างใหม่ทั้งชุด (ปิดงานซ้ำหลังเคลมถูกตีกลับ · ปิดงานย้อนหลัง)
+ * แถวที่ไม่มีคำตอบมา (ฟอร์มที่ไม่ได้ถาม · ส่งด้วยรหัส) ได้คำตอบเดิมของแถวนั้นไป · คำตอบเดิมที่ส่งกลับมาเหมือนเดิมได้เวลา/คนตอบเดิม
+ * (ไม่งั้นหน้าใบงานขึ้นว่าตอบตอนที่แค่กดปิดซ้ำ) · rows = แถวประเภทเดียวกันของใบ อ่านมาพร้อมกับตัวใบ ไม่เพิ่มรอบในทรานแซกชัน
+ */
+function withOldAnswers(lines: PartLine[], rows: OffAnswerRow[]): PartLine[] {
+  return lines.map((l) => {
+    const was = rows.find((r) => r.sparePartId === l.sparePartId);
+    const old = was ? offAnswerOf({ ...was, offFound: was.offFound ?? undefined, offKind: was.offKind ?? undefined, offDetail: was.offDetail ?? undefined }) : null;
+    if (!was || !old) return l;
+    const answer = offAnswerOf(l);
+    if (!answer) return { ...l, ...old };
+    return sameOffAnswer(was, answer) ? { ...l, offAnswerAt: old.offAnswerAt, offAnswerById: old.offAnswerById } : l;
   });
 }
 
@@ -530,14 +655,28 @@ async function mergeWaitingParts(
       await tx.workOrderPart.delete({ where: { id: row.id } });
     } else {
       kept.add(row.sparePartId);
+      // คำตอบจัดหาของนอกสโตร์: ตอบใหม่/เปลี่ยน = เขียนพร้อมเวลาและคนตอบ · เหมือนเดิม = ไม่แตะ (เวลาเดิมคือตอนที่ตอบจริง)
+      // ทางที่ไม่ได้ถาม (ไม่มีคำตอบมา) = คงของเดิม ไม่ล้าง — ใบที่ตอบไว้แล้วต้องไม่กลับเป็น "ยังไม่ระบุ" เพราะมีคนแก้รายการอื่น
+      const answer = offAnswerOf(want);
+      const off = answer && !sameOffAnswer(row, answer) ? answer : null;
       if (want.quantity !== row.quantity) {
         await tx.workOrderPart.update({
           where: { id: row.id },
-          data: { ...want, inStock: null, warehouse: null, requisitionNo: null, checkedAt: null, checkedById: null },
+          data: {
+            quantity: want.quantity,
+            unit: want.unit,
+            note: want.note,
+            ...(off ?? {}),
+            inStock: null,
+            warehouse: null,
+            requisitionNo: null,
+            checkedAt: null,
+            checkedById: null,
+          },
         });
-      } else if (want.unit !== row.unit || want.note !== row.note) {
-        // แก้แค่หน่วย/หมายเหตุ ไม่ใช่ของคนละชิ้น — ผลเช็คเดิมยังใช้ได้
-        await tx.workOrderPart.update({ where: { id: row.id }, data: { unit: want.unit, note: want.note } });
+      } else if (want.unit !== row.unit || want.note !== row.note || off) {
+        // แก้แค่หน่วย/หมายเหตุ/คำตอบจัดหา ไม่ใช่ของคนละชิ้น — ผลเช็คเดิมยังใช้ได้
+        await tx.workOrderPart.update({ where: { id: row.id }, data: { unit: want.unit, note: want.note, ...(off ?? {}) } });
       }
     }
   }
@@ -1461,6 +1600,9 @@ const DISPATCH_PART_SELECT = {
   inStock: true,
   warehouse: true,
   requisitionNo: true,
+  offFound: true,
+  offKind: true,
+  offDetail: true,
   sparePart: { select: { name: true, partCode: true, offCatalog: true } },
 } as const;
 function dispatchPart(p: {
@@ -1469,6 +1611,9 @@ function dispatchPart(p: {
   inStock: boolean | null;
   warehouse: string | null;
   requisitionNo: string | null;
+  offFound: boolean | null;
+  offKind: string | null;
+  offDetail: string | null;
   sparePart: { name: string; partCode: string; offCatalog: boolean };
 }) {
   return {
@@ -1481,6 +1626,10 @@ function dispatchPart(p: {
     inStock: p.inStock,
     warehouse: p.warehouse,
     requisitionNo: p.requisitionNo,
+    // หาได้จากที่ไหน — ข้อความ LINE/การ์ดช่างบอกแหล่งของนอกสโตร์ ช่างรู้ว่าไปรับของที่ไหน (เจ้าของงานเลือกข้อ 5)
+    offFound: p.offFound,
+    offKind: p.offKind,
+    offDetail: p.offDetail,
   };
 }
 
@@ -1495,6 +1644,11 @@ function partShape(p: {
   transferredAt?: Date | null;
   unit?: string | null;
   note?: string | null;
+  offFound?: boolean | null;
+  offKind?: string | null;
+  offDetail?: string | null;
+  offAnswerAt?: Date | null;
+  offAnswerBy?: { name: string; role: string } | null;
   sparePart: { id: number; partCode: string; name: string; brand: string | null; offCatalog?: boolean; brandFiles?: { file: string }[] };
 }) {
   return {
@@ -1511,6 +1665,17 @@ function partShape(p: {
     offCatalog: p.sparePart.offCatalog ?? false,
     unit: p.unit ?? null,
     note: p.note ?? null,
+    /**
+     * ของนอกสโตร์: จัดหาได้ไหม · จากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69) — offFound ว่าง = ใบก่อนมีคำถามนี้ ("ยังไม่ระบุ")
+     * offAnswerRole = ชื่อบทบาทของคนตอบ ("หัวหน้าภาค") — หน้าใบงานเขียน "{บทบาท}แจ้ง · เวลา" ตามตัวอย่างที่อนุมัติ
+     * แยกจาก inStock: นั่นคือผลเช็คของแอดมิน ขั้นเช็คอะไหล่ติดปุ่มให้ตามคำตอบนี้แต่แอดมินเปลี่ยนได้
+     */
+    offFound: p.offFound ?? null,
+    offKind: p.offKind ?? null,
+    offDetail: p.offDetail ?? null,
+    offAnswerAt: p.offAnswerAt ? p.offAnswerAt.toISOString() : null,
+    offAnswerRole: p.offAnswerBy ? ROLE_LABELS[p.offAnswerBy.role] ?? p.offAnswerBy.role : null,
+    offAnswerByName: p.offAnswerBy?.name ?? null,
     quantity: p.quantity,
     // ว่าง = ยังไม่มีใครเช็ค ต่างจาก false ที่แปลว่าเช็คแล้วและหมด
     inStock: p.inStock ?? null,
@@ -4773,6 +4938,9 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
   if (needsParts && !parsed.data.parts?.length && !parsed.data.offParts?.length) {
     return res.status(400).json({ error: "บอกว่าต้องใช้อะไหล่ ต้องระบุอย่างน้อยหนึ่งรายการ" });
   }
+  // ของนอกสโตร์ต้องบอกว่าหาได้ไหม จากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69) — ก่อน resolveOffParts สร้างแถวอะไหล่
+  const offRefused = needsParts ? offAnswerRefusal(parsed.data.offParts, "plan") : null;
+  if (offRefused) return res.status(400).json({ error: offRefused });
   const assign = parsed.data.assign;
   const pastAssign = assign ? pastVisitText(assign.scheduledAt) : null;
   if (pastAssign) return res.status(400).json({ error: pastAssign });
@@ -4781,7 +4949,7 @@ router.post("/:id/parts", requireAuth, async (req: AuthRequest, res) => {
    * รอบละ ~0.23 วิ เดิมห้ารอบต่อกัน (เจ้าของงานถามว่าทำไมบันทึกช้า ต.ค. 69) · ไม่มีตัวไหนขึ้นต่อกัน
    */
   const [offLines, wo, before, knownTeam, teamText, cfg] = await Promise.all([
-    needsParts ? resolveOffParts(parsed.data.offParts) : Promise.resolve([]),
+    needsParts ? resolveOffParts(parsed.data.offParts, { userId: req.auth!.userId, mode: "plan" }) : Promise.resolve([]),
     prisma.workOrder.findUniqueOrThrow({
       where: { id },
       select: {
@@ -5046,10 +5214,13 @@ router.post("/:id/parts-pick/confirm", requireAuth, async (req: AuthRequest, res
   if ((parsed.data.marks ?? []).some((m) => m.mark === "NO")) {
     return res.status(400).json({ error: "มีรายการที่กด ไม่ตรง — ตีกลับให้ช่างแก้ หรือเปลี่ยนเป็น ตรง ก่อนคอนเฟิร์ม" });
   }
+  // ของนอกสโตร์ที่เติม (รวมของเดิมที่ฟอร์มเติมไว้ให้) ต้องตอบจัดหาเหมือนฟอร์มระบุอะไหล่ — คนคอนเฟิร์มคือคนระบุของพวกนี้
+  const offRefused = offAnswerRefusal(parsed.data.offParts, "plan");
+  if (offRefused) return res.status(400).json({ error: offRefused });
   // ของนอกสโตร์สร้างแถวอะไหล่ (upsert) — ทำหลังผ่านด่านแล้วเท่านั้น
   const [{ issue, cross }, offLines] = await Promise.all([
     brandVerdict({ machine: wo.machine, parts: open.items, mode: "other", crossBrandOk: parsed.data.crossBrandOk }),
-    resolveOffParts(parsed.data.offParts),
+    resolveOffParts(parsed.data.offParts, { userId: req.auth!.userId, mode: "plan" }),
   ]);
   if (issue) {
     /**
@@ -5300,7 +5471,11 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
       .map((p) => {
         const r = result.get(p.sparePartId)!;
         const head = `${p.sparePart.partCode} ×${p.quantity}`;
-        if (p.sparePart.offCatalog) return `${head} — ${r.inStock ? "หาได้" : "ยังหาไม่ได้"}`;
+        if (p.sparePart.offCatalog) {
+          // แอดมินตอบไม่ตรงกับที่หัวหน้าภาคแจ้ง (ปุ่มติดให้ตามคำตอบนั้น) — ประวัติบอกไว้ว่าเปลี่ยนเพราะเช็คแล้ว ไม่ใช่กดตามไปเฉย ๆ
+          const differs = p.offFound !== null && p.offFound !== r.inStock;
+          return `${head} — ${r.inStock ? "หาได้" : "ยังหาไม่ได้"}${differs ? ` (หัวหน้าภาคแจ้งว่า${p.offFound ? "หาได้" : "หาไม่ได้"})` : ""}`;
+        }
         return r.inStock ? `${head} · มีที่${r.warehouse}` : `${head} — หมด`;
       });
     await writeLog(
@@ -7744,7 +7919,17 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
       machine: { select: { id: true, code: true, brand: true, model: true } },
       branch: { select: { region: true, zone: true, pmTeam: true, code: true, openedAt: true, warrantyExpiresAt: true } },
       // อะไหล่ที่รอ/ใช้ไปของใบนี้ — ตัวที่อยู่ในใบอยู่แล้วปล่อยผ่านล็อกยี่ห้อ (D6)
-      parts: { select: { sparePartId: true } },
+      // + หน่วย/หมายเหตุ/คำตอบจัดหาของนอกสโตร์ที่รออยู่ — ของที่ยังขาดเป็นตัวเดียวกัน ใบรออะไหล่ได้คำตอบเดิมไปด้วย
+      parts: {
+        select: {
+          sparePartId: true,
+          kind: true,
+          unit: true,
+          note: true,
+          ...OFF_ANSWER_SELECT,
+          sparePart: { select: { offCatalog: true } },
+        },
+      },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -7815,7 +8000,19 @@ router.post("/:id/follow-up", requireAuth, async (req: AuthRequest, res) => {
       }
       // เริ่มที่เช็คอะไหล่ — เสนอราคาหรือไม่ตัดสินตอนเช็คครบ (afterSourcing ใช้กฎเดียวกับ quoteFirst ข้างบน)
       const made = await createFollowUp(tx, id, req.auth!.userId, quoteFirst ? `${note} · ต้องเสนอราคาก่อนนัด` : note);
-      await replaceParts(tx, made.id, "WAITING", parsed.data.parts);
+      /**
+       * ของนอกสโตร์ที่ยังขาด (ตัวเดียวกับที่รอในใบนี้) ได้หน่วย/หมายเหตุ/คำตอบจัดหาเดิมไปด้วย
+       * ไม่งั้นใบรออะไหล่ขึ้น "ยังไม่ระบุ" ทั้งที่หัวหน้าภาคบอกไว้แล้วว่าหาได้จากที่ไหน — ช่องนี้ไม่ถามซ้ำ
+       */
+      const waitingOff = wo.parts.filter((x) => x.kind === "WAITING" && x.sparePart.offCatalog);
+      const lines = withOldAnswers(
+        parsed.data.parts.map((p) => {
+          const was = waitingOff.find((x) => x.sparePartId === p.sparePartId);
+          return was ? { ...p, unit: was.unit, note: was.note } : p;
+        }),
+        waitingOff
+      );
+      await replaceParts(tx, made.id, "WAITING", lines);
       /**
        * อะไหล่ข้ามยี่ห้อที่ยืนยัน — ลงที่ใบนี้ (คนกดยืนยันที่ใบนี้ แบบเดียวกับประวัติบันทึกยี่ห้อ) ก่อนแถวแยกใบ
        * บอกเลขใบรออะไหล่ที่ของไปลง — คนเปิดประวัติใบนี้ตามไปถึงใบที่ใช้ของได้
@@ -7993,6 +8190,12 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
           note: p.note,
           checkedAt: p.checkedAt,
           checkedById: p.checkedById,
+          // คำตอบจัดหาของนอกสโตร์ติดไปด้วย — ใบทดสอบต้องเห็นเหมือนใบจริง (ขั้นเช็คอะไหล่ติดปุ่มตามที่หัวหน้าภาคแจ้ง)
+          offFound: p.offFound,
+          offKind: p.offKind,
+          offDetail: p.offDetail,
+          offAnswerAt: p.offAnswerAt,
+          offAnswerById: p.offAnswerById,
         })),
       });
     }
@@ -8799,7 +9002,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       // ยี่ห้อตอนเปิดฟอร์ม — ทุกกติกาเคลม/ประกันใช้ยี่ห้อที่อ่านก่อนเขียนอะไร (แผนรวม S16)
       machine: { select: { id: true, code: true, brand: true, model: true } },
       // อะไหล่ที่รอ/ใช้ไปของใบนี้ — ตัวที่อยู่ในใบอยู่แล้วปล่อยผ่านล็อกยี่ห้อ (D6)
-      parts: { select: { sparePartId: true } },
+      // + ชื่อของนอกสโตร์ที่รออยู่ — ของที่หัวหน้าภาคจัดหาไว้ ช่างไม่ต้องตอบว่าซื้อจากที่ไหน (offAnswerRefusal)
+      // + คำตอบจัดหาของแถวที่ใช้ไปรอบก่อน — ปิดซ้ำแล้วคำตอบ "ซื้อจากที่ไหน" ไม่หาย (withOldAnswers)
+      parts: { select: { sparePartId: true, kind: true, ...OFF_ANSWER_SELECT, sparePart: { select: { offCatalog: true, name: true } } } },
     },
   });
   if (!current) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -8999,10 +9204,19 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
    * ตรวจที่เซิร์ฟเวอร์ ไม่ใช่แค่ที่หน้าจอ เพราะใบเหลืองคือหลักฐานว่าของที่หายไป
    * จากคลังไปอยู่ที่เครื่องไหนจริง
    */
+  /**
+   * ของนอกสโตร์ที่ช่างเพิ่มเอง (ซื้อหน้างาน) ต้องบอกว่าซื้อจากที่ไหน — ถามแค่นั้น ไม่มีหาไม่ได้ (เจ้าของงานเลือกข้อ 7)
+   * ของนอกสโตร์ที่อยู่ในรายการรอของใบนี้แล้ว (ฟอร์มเติมไว้ให้) ไม่ต้องตอบ — หัวหน้าภาคตอบไว้ตอนระบุแล้ว
+   */
+  const waitingOff = new Set(
+    current.parts.filter((p) => p.kind === "WAITING" && p.sparePart.offCatalog).map((p) => offName(p.sparePart.name))
+  );
+  const offRefused = offAnswerRefusal(body.offParts, "bought", waitingOff);
+  if (offRefused) return res.status(400).json({ error: offRefused });
   const usedLines: PartLine[] | undefined =
     body.parts === undefined && body.offParts === undefined
       ? undefined
-      : [...(body.parts ?? []), ...(await resolveOffParts(body.offParts))];
+      : [...(body.parts ?? []), ...(await resolveOffParts(body.offParts, { userId: req.auth!.userId, mode: "bought" }))];
   const offUsed = new Set(
     (
       await prisma.sparePart.findMany({
@@ -9011,6 +9225,13 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       })
     ).map((x) => x.id)
   );
+  /**
+   * ของนอกสโตร์ที่ส่งมาด้วยรหัส (ไม่ใช่ชื่อ) ต้องเป็นของที่อยู่ในใบอยู่แล้ว — ของใหม่ที่ซื้อเองต้องมาทางกล่องอะไหล่นอกสโตร์
+   * พร้อมบอกว่าซื้อจากที่ไหน ไม่งั้นทางนี้คือช่องข้ามคำถามข้างบน (แอปไม่เคยส่งแบบนี้ — กันไว้ที่เซิร์ฟเวอร์)
+   */
+  if ((body.parts ?? []).some((p) => offUsed.has(p.sparePartId) && !current.parts.some((c) => c.sparePartId === p.sparePartId))) {
+    return res.status(400).json({ error: "ของนอกสโตร์ที่ซื้อเองหน้างาน ใส่ในกล่องอะไหล่นอกสโตร์ พร้อมบอกว่าซื้อจากที่ไหน" });
+  }
   // ใบเหลืองคือเอกสารของที่ออกจากคลัง — ของนอกสโตร์ไม่ได้ออกจากคลัง ใช้แต่ของนอกสโตร์จึงไม่ต้องแนบ
   if ((usedLines ?? []).some((p) => !offUsed.has(p.sparePartId))) {
     if (!has("REQUISITION")) {
@@ -9448,7 +9669,9 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
       }
 
       // ของที่ใช้จริง ไม่ไปแตะรายการของที่รออยู่ ซึ่งเป็นคนละชุด
-      if (usedLines !== undefined) await replaceParts(tx, id, "USED", usedLines);
+      if (usedLines !== undefined) {
+        await replaceParts(tx, id, "USED", withOldAnswers(usedLines, current.parts.filter((p) => p.kind === "USED")));
+      }
 
       // ทุกแถวของการส่งครั้งนี้เวลาเดียวกันเป๊ะ — "รอบเดียวกัน" จึงเทียบเวลาได้ตรง ๆ (หลักฐานของแถว · แถบสถานะ · รอบที่เท่าไหร่)
       if (claimRows.length > 0) await tx.partClaim.createMany({ data: claimRows.map((r) => ({ ...r, createdAt: now })) });
@@ -10164,7 +10387,8 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
       appointmentStatus: true,
       // เบิกไปแล้วก่อนปิดย้อนหลัง (ใบที่เบิกตั้งแต่สายงานเดิม แล้วค้างที่นัดวัน) — ไม่เติมประวัติเบิกซ้ำ
       // อ่านทุกแถว (รอ + ใช้ไป) ในคำสั่งเดียว — แถวที่อยู่ในใบอยู่แล้วปล่อยผ่านล็อกยี่ห้อ (D6) · ประวัติเบิกดูเฉพาะแถวรอ
-      parts: { select: { kind: true, sparePartId: true, inStock: true, requisitionNo: true } },
+      // + คำตอบจัดหาของของนอกสโตร์ — ฟอร์มนี้ส่งแค่รหัส คำตอบเดิมของแถวที่ใช้ไปต้องไม่หาย (withOldAnswers)
+      parts: { select: { kind: true, sparePartId: true, inStock: true, requisitionNo: true, ...OFF_ANSWER_SELECT } },
       machine: { select: { id: true, code: true, brand: true, model: true } },
     },
   });
@@ -10382,7 +10606,7 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
         if (workerIds.length) {
           await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
         }
-        await replaceParts(tx, id, "USED", usedParts);
+        await replaceParts(tx, id, "USED", withOldAnswers(usedParts, wo.parts.filter((p) => p.kind === "USED")));
       },
       STAGE_TX
     );
@@ -10449,7 +10673,8 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
       branch: { select: { region: true, zone: true, pmTeam: true } },
       machine: { select: { id: true, code: true, brand: true, model: true } },
       // อะไหล่ที่รอ/ใช้ไปของใบนี้ — ตัวที่อยู่ในใบอยู่แล้วปล่อยผ่านล็อกยี่ห้อ (D6)
-      parts: { select: { sparePartId: true } },
+      // + คำตอบจัดหาของแถวที่ใช้ไป — ฟอร์มนี้ส่งแค่รหัส คำตอบ "ซื้อจากที่ไหน" เดิมต้องไม่หาย (withOldAnswers)
+      parts: { select: { sparePartId: true, kind: true, ...OFF_ANSWER_SELECT } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
@@ -10567,7 +10792,7 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
         if (workerIds.length) {
           await tx.workOrderWorker.createMany({ data: workerIds.map((userId) => ({ workOrderId: id, userId })), skipDuplicates: true });
         }
-        if (d.parts) await replaceParts(tx, id, "USED", d.parts);
+        if (d.parts) await replaceParts(tx, id, "USED", withOldAnswers(d.parts, wo.parts.filter((p) => p.kind === "USED")));
         // ก่อนแถวปิดงาน — ปิดงานยังเป็นประวัติล่าสุดของใบ (supervisor-close-test อ่านแถวล่าสุด) · ดู latestCloseSkips
         if (skipLog) await writeLog(tx, id, req.auth!.userId, "CLAIM_SKIPPED", "DONE", skipLog.note, skipLog.meta);
         await writeLog(tx, id, req.auth!.userId, "CLOSED", "DONE", fixedText);
