@@ -337,9 +337,9 @@ Admin Spare Part เปิดเจอหน้าตรวจเคลม (เ�
   ทุกหน้าที่ล็อกอินเป็นผู้ใช้แบบนั้นต้องใส่ก่อน `page.goto` แรก (ปิดเฉพาะกล่องที่ขึ้นเอง ปุ่ม ? ที่กดเองยังเล่นได้):
   `await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });`
   `A001`/`S001`/`T001` ไม่ต้อง (`seed:test` ตั้งว่าตอบแล้ว) · ทีม Area / Admin Spare Part ยังไม่มีกล่องรอบนี้ แต่ใส่ไว้ด้วย วันที่วิธีใช้ของตำแหน่งนั้นมาจะไม่พังทั้งชุด
-  ใส่แล้ว 29 ไฟล์ — ที่ `grep -lE 'insert into "User"|/auth/users' tests/browser/*-web-test.js` เจอ 28 ไฟล์ (3 พ.ย. 69 · รวม `howto`
+  ใส่แล้ว 30 ไฟล์ — ที่ `grep -lE 'insert into "User"|/auth/users' tests/browser/*-web-test.js` เจอ 29 ไฟล์ (3 พ.ย. 69 · รวม `howto`
   ที่ตั้งเองทุกหน้า ยกเว้นส่วนที่ตรวจว่ากล่องขึ้น/ไม่ขึ้น · `howto-anchors`) และ `coco-maid` (สร้าง Maid ผ่านฟอร์มสิทธิ์ผู้ใช้แล้วล็อกอิน — grep ไม่เจอ):
-  `admin-photo` · `area-map-redesign` · `area-map` · `area-team` · `backup` · `branch-parts-report` · `claim-close-steps` · `claim-fix` ·
+  `admin-photo` · `area-map-redesign` · `area-map` · `area-team` · `backup` · `branch-parts-report` · `claim-close-steps` · `claim-fix` · `close-stale` ·
   `claim-history` · `claim-quit` · `claim-review` · `claim` · `coco-maid` · `coverage-dock` · `coverage-map` · `cross-team` · `delete` ·
   `dispatch-cutoff` · `howto` · `howto-anchors` · `manage-users-regions` · `parts-pick` · `round2` · `senior-tech` · `super-admin-opener` · `team-rename` ·
   `usage` · `user-delete` · `view-as-admin` — **เทสต์ใหม่ที่ล็อกอินเป็นผู้ใช้ที่สร้างเองต้องใส่ด้วย**
