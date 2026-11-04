@@ -7,15 +7,17 @@
  * และเจ้าของงานไม่อยากแก้การตั้งค่า Render ให้ส่งทุกที่อยู่ไปที่ index.html · ส่วนหลัง # ไม่ถูกส่งไปเซิร์ฟเวอร์เลย
  * เซิร์ฟเวอร์เห็นแค่ `/` ทุกครั้ง จึงไม่ต้องตั้งอะไรเพิ่ม และกฎแคชของ `/` (README) ครอบทุกหน้าไปด้วย
  *
- * ใช้ตัวจัดการลิงก์ของ React Navigation เอง (useLinking ฝั่งเว็บ: push/replace/ย้อนกลับ) แต่มันอ่านเขียนแค่
- * pathname — v7 ไม่มีโหมด # และ getInitialURL/subscribe ไม่ทำงานบนเว็บ (ดูคอมเมนต์ใน LinkingOptions)
- * จึงแทนที่ getStateFromPath/getPathFromState ให้อ่านเขียนส่วนหลัง # แทน แล้วอุดสองจุดที่ใช้กับ # ไม่ได้ใน installHashLinks
+ * **ไม่ใช้ `linking` ของ React Navigation** — v7 อ่านเขียนแค่ pathname ไม่มีโหมด # และตัวตัดสินว่า "เพิ่มรายการ/ถอยกลับ"
+ * ของมันนับความยาวประวัติของแท็บ (backBehavior) ซึ่งบนเว็บผิด: กลับมาแท็บหน้าหลักถูกนับเป็น "ถอย" มันจึงถอยประวัติ
+ * เบราว์เซอร์แล้วเขียนทับรายการก่อนหน้า (ลองจริง 4 พ.ย. 69: กล่องงาน → รายงาน → หลังบ้าน → สิทธิ์ผู้ใช้ แล้วกดย้อนกลับ
+ * 3 ครั้งหลุดออกนอกแอป · ไปข้างหน้าค้างที่รายงาน) — จึงเขียนตัวผูกประวัติเองใน syncPageUrl/installHashLinks
+ * ใช้กฎแบบหน้าเว็บ: หน้าใหม่ = รายการใหม่ · ปิดหน้าต่าง = ถอย · สลับ navigator (เข้า/ออกระบบ · ดูในฐานะ) = แทนที่
  *
  * ชื่อในที่อยู่เป็นอังกฤษ — ภาษาไทยในลิงก์กลายเป็น %E0%B8... ตอนวางในไลน์ อ่านไม่ออกและดูเหมือนลิงก์เสีย
  * ใบงานใช้รหัสที่คนเห็นบนจอ (WO-00045) ไม่ใช่เลขภายใน · ค่าที่เป็นแค่ตัวช่วยหน้าจอ (ชื่อหัวหน้า · open=close
  * ที่เปิดฟอร์มให้เลย) ไม่ใส่ในที่อยู่ — เปิดลิงก์ของคนอื่นแล้วฟอร์มปิดงานเด้งขึ้นเองคงงง
  *
- * มือถือ (iOS/Android) ไม่มีที่อยู่ให้ก๊อบ — linking ปิดไว้ (enabled: false) และ installHashLinks ไม่ทำอะไร
+ * มือถือ (iOS/Android) ไม่มีที่อยู่ให้ก๊อบ — ทุกฟังก์ชันที่แตะที่อยู่/ประวัติไม่ทำอะไรนอกเว็บ (WEB)
  * ส่วนที่ใช้ทั้งสองแบบมีแค่ homeScreenFor (หน้าแรกตามตำแหน่ง)
  *
  * ตารางที่อยู่ทั้งหมดกับเหตุผลอยู่ใน README หัวข้อ "ที่อยู่ของแต่ละหน้าบนเว็บ" — เพิ่มหน้าใหม่ต้องเพิ่มแถวใน PAGES ด้วย
@@ -25,7 +27,6 @@ import { Platform } from "react-native";
 import type {
   DocumentTitleOptions,
   getStateFromPath as getStateFromPathDefault,
-  LinkingOptions,
   NavigationState,
   PartialState,
 } from "@react-navigation/native";
@@ -55,9 +56,15 @@ export function homeScreenFor(user: Pick<User, "role"> | null | undefined): "Pla
   return isAreaTeam(user) ? "PlanBoard" : "MyJobs";
 }
 let home: string = "MyJobs";
-/** ลิงก์ที่เปิดหน้าลึก ๆ ต้องมีหน้าแรกของคนนั้นรองอยู่ข้างใต้ (เหมือนกดมาจากเมนู) — App.tsx ตั้งทุกครั้งที่รู้ตัวผู้ใช้ */
-export function setLinkHome(screen: string) {
+/** ผู้ใช้ที่หน้าจอเป็นของ (ดูในฐานะ = คนที่ถูกดู) — รายการประวัติจดไว้ว่าเป็นของใคร ดู openEntry */
+let who = "";
+/**
+ * ลิงก์ที่เปิดหน้าลึก ๆ ต้องมีหน้าแรกของคนนั้นรองอยู่ข้างใต้ (เหมือนกดมาจากเมนู) — App.tsx ตั้งทุกครั้งที่รู้ตัวผู้ใช้
+ * userKey = เลขผู้ใช้ที่หน้าจอเป็นของ ("" = ยังไม่เข้าระบบ)
+ */
+export function setLinkHome(screen: string, userKey = "") {
   home = screen;
+  who = userKey;
 }
 const HOME = "@home";
 
@@ -179,6 +186,8 @@ const PAGES: Page[] = [
   { path: "vehicle", screen: "VehicleCheckIn", tab: "HomeTab" },
   { path: "consumables", screen: "ConsumableRequest", tab: "HomeTab" },
   { path: "change-password", screen: "ChangePassword", tab: "HomeTab" },
+  // สอนการใช้งาน — เพิ่มทีหลังตาราง (production 4 พ.ย. 69) · ไม่มีแถว = ที่อยู่ขึ้น /#/ ของหน้าแรก ก๊อบไปแล้วไม่ได้หน้านี้
+  { path: "how-to", screen: "HowTo", tab: "HomeTab" },
 
   // ── ประวัติ ──
   { path: "history", screen: "HistoryMenu", tab: "HistoryTab", under: [] },
@@ -280,8 +289,8 @@ export function stateFromPagePath(raw: string): LinkState | undefined {
   return undefined;
 }
 
-type AnyRoute = { name: string; params?: AnyParams; state?: AnyState };
-type AnyState = { index?: number; routes: AnyRoute[] };
+type AnyRoute = { key?: string; name: string; params?: AnyParams; state?: AnyState };
+type AnyState = { key?: string; type?: string; index?: number; routes: AnyRoute[] };
 
 const focused = (s: AnyState | undefined): AnyRoute | undefined =>
   s?.routes?.length ? s.routes[typeof s.index === "number" ? s.index : s.routes.length - 1] : undefined;
@@ -304,7 +313,7 @@ function pathOfScreen(screen: string, params: AnyParams): string | null {
 
 /**
  * สถานะของ navigator → ที่อยู่หน้า ("/wo/WO-00045")
- * รับสถานะไม่ครบได้ — แถบแท็บบนเว็บถามที่อยู่ของปุ่มแท็บที่ยังไม่เคยเปิด (ไม่มี state ข้างใน หรือมีแค่ params.screen)
+ * รับสถานะไม่ครบได้ — แท็บที่ยังไม่เคยเปิดไม่มี state ข้างใน (หรือมีแค่ params.screen ที่เมนูข้างส่งมา)
  */
 export function pagePathOf(state: AnyState): string {
   const top = focused(state);
@@ -324,42 +333,42 @@ function hashPath(): string {
   return !h ? "" : h.startsWith("/") ? h : `/${h}`;
 }
 
-export const linking: LinkingOptions<MainTabParamList> = {
-  enabled: WEB,
-  prefixes: [],
-  /**
-   * React Navigation บนเว็บส่ง pathname+search มาให้ (ไม่มีส่วนหลัง #) — ซึ่งเป็น "/" เสมอ (หรือ "/?v=…" หลังกดอัปเดต)
-   * หน้าที่ต้องการอยู่หลัง # จึงอ่านจากแถบที่อยู่เอง · ที่อยู่ที่มี # มาเลย (href ของปุ่มแท็บ) ใช้ส่วนหลัง # นั้น
-   */
-  getStateFromPath: (path) => {
-    const at = path.indexOf("#");
-    return stateFromPagePath(at >= 0 ? path.slice(at + 1) : WEB ? hashPath() : path);
-  },
-  // pathname เป็น "/" เสมอ — ไฟล์เดียวที่ Render มีคือหน้าแรก
-  getPathFromState: (state) => `/#${pagePathOf(state as AnyState)}`,
-};
+/**
+ * หน้าที่จะเปิดตอนโหลดแอปจากส่วนหลัง # — App.tsx ส่งเป็น initialState ของ NavigationContainer
+ * หน้าในแท็บใช้เมื่อเข้าระบบแล้ว · หน้าเข้าสู่ระบบ/ลงทะเบียนใช้เมื่อยังไม่เข้า · ไม่ตรงกัน = หน้าแรกของสิ่งที่ขึ้นจอ
+ * (ลิงก์หน้าในแท็บตอนยังไม่เข้าระบบจำไว้แยกใน noteBootLink แล้วพาไปหลังเข้าระบบ)
+ * ต้องเรียกหลัง setLinkHome — หน้าที่ซ้อนข้างใต้คือหน้าแรกของคนที่เปิด
+ */
+export function bootState(loggedIn: boolean): object | undefined {
+  if (!WEB) return undefined;
+  const st = bootPath ? stateFromPagePath(bootPath) : undefined;
+  if (!st) return undefined;
+  return !!TAB_HOME[st.routes[0]?.name as Tab] === loggedIn ? st : undefined;
+}
 
 /**
  * ชื่อแท็บเบราว์เซอร์ = ชื่อหน้า · ใบงานใช้รหัส (WO-00045) — เปิดหลายใบหลายแท็บแล้วแยกออก
  * React Navigation ตั้งชื่อแท็บให้อยู่แล้ว (ชื่อหน้าเปล่า ๆ หน้าเข้าสู่ระบบขึ้นเป็น "Login") — แค่จัดรูปให้
  */
 const AUTH_TITLES: Record<string, string> = { Login: "เข้าสู่ระบบ", Register: "ลงทะเบียนพนักงาน" };
-export const documentTitle: DocumentTitleOptions = {
-  formatter: (options, route) => {
-    const p = route?.params as { id?: unknown; code?: unknown } | undefined;
-    const title =
-      route?.name === "WorkOrderDetail"
-        ? typeof p?.code === "string"
-          ? p.code
-          : typeof p?.id === "number"
-            ? workOrderCode(p.id)
-            : "ใบงาน"
-        : typeof options?.title === "string"
-          ? options.title
-          : AUTH_TITLES[route?.name ?? ""];
-    return title ? `${title} · OTTERI` : "OTTERI Service";
-  },
-};
+type TitleArgs = Parameters<NonNullable<DocumentTitleOptions["formatter"]>>;
+function pageTitle(options: TitleArgs[0], route: TitleArgs[1]): string {
+  const p = route?.params as { id?: unknown; code?: unknown; inbox?: unknown } | undefined;
+  // กล่องงานกับใบงานซ่อมเป็นหน้าเดียวกัน (ชื่อหน้า "ใบงานซ่อม") — แท็บเบราว์เซอร์ของ /#/inbox ต้องบอกว่าเป็นกล่องงาน
+  if (route?.name === "WorkOrderList" && p?.inbox === true) return "กล่องงานของฉัน · OTTERI";
+  const title =
+    route?.name === "WorkOrderDetail"
+      ? typeof p?.code === "string"
+        ? p.code
+        : typeof p?.id === "number"
+          ? workOrderCode(p.id)
+          : "ใบงาน"
+      : typeof options?.title === "string"
+        ? options.title
+        : AUTH_TITLES[route?.name ?? ""];
+  return title ? `${title} · OTTERI` : "OTTERI Service";
+}
+export const documentTitle: DocumentTitleOptions = { formatter: pageTitle };
 
 // ── เปิดลิงก์ตอนยังไม่ได้เข้าระบบ → เข้าระบบแล้วไปหน้านั้น ──
 
@@ -428,50 +437,185 @@ export function openLinkAfterLogin(tries = 0) {
   navigationRef.resetRoot(state as PartialState<NavigationState>);
 }
 
-/** ตัด # ตัวที่สองเป็นต้นไปทิ้ง — ดูข้อ 1 ของ installHashLinks */
-function oneHash(url: string) {
-  const first = url.indexOf("#");
-  const second = first < 0 ? -1 : url.indexOf("#", first + 1);
-  return second < 0 ? url : url.slice(0, second);
+// ── ประวัติของเบราว์เซอร์ (ย้อนกลับ/ไปข้างหน้า) ──
+
+/**
+ * ที่จำไว้ต่อรายการประวัติ (คีย์ = otteri ใน history.state) — หน้า + สถานะ navigator ทั้งก้อน
+ * ย้อนกลับแล้วได้กองหน้าข้างใต้/params เดิมครบ ไม่ใช่แค่หน้าที่อ่านจากที่อยู่ · อยู่ในหน่วยความจำ: F5 แล้วหายเหลือแต่ที่อยู่
+ */
+const records = new Map<string, { path: string; state: NavigationState; who: string }>();
+/** ลำดับรายการที่รู้ในการโหลดรอบนี้ — ใช้ดูว่ารายการก่อนหน้าเป็นหน้าไหน (ปิดหน้าต่างแล้ว "ถอย" แทน "เพิ่ม") */
+let order: string[] = [];
+let lastState: NavigationState | undefined;
+/** แอปสั่ง history.back() เอง (ปิดหน้าต่างกลับหน้าที่อยู่ในรายการก่อนหน้า) — popstate ที่ตามมาแค่จด ไม่พาไปไหน */
+let ownBack: ReturnType<typeof setTimeout> | null = null;
+
+const idOf = (s: unknown): string | undefined => {
+  const v = s && typeof s === "object" ? (s as { otteri?: unknown }).otteri : undefined;
+  return typeof v === "string" ? v : undefined;
+};
+const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+// pathname เดิม (Render มีไฟล์เดียวคือหน้าแรก) · ?v= ของ UpdateGate / ?t= ของเทสต์หลุดไปตอนเขียนครั้งแรก เหมือนที่ UpdateGate ล้างเอง
+const urlOf = (path: string) => `${window.location.pathname}#${path}`;
+
+function write(kind: "push" | "replace", id: string, path: string, state: NavigationState) {
+  records.set(id, { path, state, who });
+  if (kind === "push") {
+    const cur = idOf(window.history.state);
+    const at = cur ? order.indexOf(cur) : -1;
+    // รายการหน้า (ไปข้างหน้า) ที่เคยมีหลังรายการนี้ถูกเบราว์เซอร์ทิ้งตอน pushState — ทิ้งตามกัน
+    order = at >= 0 ? [...order.slice(0, at + 1), id] : cur ? [cur, id] : [id];
+    window.history.pushState({ otteri: id }, "", urlOf(path));
+    return;
+  }
+  if (!order.includes(id)) order = [id];
+  if (idOf(window.history.state) !== id || hashPath() !== path) window.history.replaceState({ otteri: id }, "", urlOf(path));
 }
 
 /**
- * อุดสองจุดที่ตัวจัดการลิงก์ของ React Navigation (เขียนมาสำหรับ pathname) ใช้กับที่อยู่แบบ # ไม่ได้ — เรียกครั้งเดียวตอนโหลดแอป
- * ก่อน NavigationContainer ขึ้นจอ (ลำดับตัวฟังสำคัญ — ดูข้อ 2)
+ * เปลี่ยนหน้าแบบไหน — เดินลงตามหน้าที่เปิดอยู่จนเจอ navigator ที่เปลี่ยน
+ * แท็บ: สลับแท็บ = หน้าใหม่เสมอ (เมนูข้างพาข้ามแท็บตลอด ไม่ใช่การถอย) · สแต็ก: ยาวขึ้น = เพิ่ม · สั้นลง = ถอย · เท่าเดิมแต่หน้าเปลี่ยน
+ * (navigation.replace — เปิดใบงานเสร็จแล้วแทนฟอร์มด้วยใบงาน) = แทนที่ · navigator คนละตัว (เข้า/ออกระบบ · ดูในฐานะ) = แทนที่
+ */
+function changeOf(a: AnyState, b: AnyState): "push" | "pop" | "replace" {
+  for (;;) {
+    if (a.key !== b.key) return "replace";
+    const ia = typeof a.index === "number" ? a.index : a.routes.length - 1;
+    const ib = typeof b.index === "number" ? b.index : b.routes.length - 1;
+    const ra = a.routes[ia];
+    const rb = b.routes[ib];
+    if (!ra || !rb) return "replace";
+    if (a.type === "tab") {
+      if (ra.key !== rb.key) return "push";
+    } else if (ia !== ib) {
+      return ib > ia ? "push" : "pop";
+    } else if (ra.key !== rb.key) {
+      return "replace";
+    }
+    if (!ra.state || !rb.state) return "replace";
+    a = ra.state;
+    b = rb.state;
+  }
+}
+
+/**
+ * เขียนที่อยู่ตามหน้าที่เปิดอยู่ — App.tsx เรียกจาก onReady/onStateChange ของ NavigationContainer
+ * หน้าเดิม (params เปลี่ยนแต่ที่อยู่เท่าเดิม เช่นใบงานจากลิงก์ได้เลขใบ) แค่จดสถานะใหม่ ไม่เพิ่มรายการ
+ */
+export function syncPageUrl() {
+  if (!WEB || !navigationRef.isReady()) return;
+  const state = navigationRef.getRootState();
+  if (!state) return;
+  // ชื่อแท็บของ React Navigation เปลี่ยนเมื่อ options เปลี่ยนเท่านั้น — params ที่มาทีหลัง (เมนูกล่องงานส่ง inbox ตามหลังตอนเปิดแท็บ
+  // ใบงานครั้งแรก) ไม่ทำให้ชื่อเปลี่ยน แท็บเลยค้าง "ใบงานซ่อม" ทั้งที่ที่อยู่เป็น /#/inbox · ตั้งซ้ำตรงนี้ทุกครั้งที่หน้าเปลี่ยน
+  document.title = pageTitle(navigationRef.getCurrentOptions(), navigationRef.getCurrentRoute());
+  const prev = lastState;
+  lastState = state;
+  if (ownBack) return;
+  const path = pagePathOf(state as AnyState);
+  const id = idOf(window.history.state);
+  const rec = id ? records.get(id) : undefined;
+  // รายการที่ยังไม่ได้จด (เปิดแอปครั้งแรก · F5 · ย้อนไปรายการจากก่อนโหลดใหม่) — จดทับรายการนี้ ไม่เพิ่ม
+  // คนเปลี่ยน (เข้า/ออกระบบ · เริ่ม/เลิกดูในฐานะ) ก็แทนที่ — React Navigation เก็บสถานะ navigator ข้ามการเปลี่ยนคน
+  // (MainNavigator key ใหม่แต่สถานะเดิมของ container) จึงดูจากสถานะอย่างเดียวไม่ออก
+  if (!id || !rec || !prev || rec.who !== who) return write("replace", id ?? newId(), path, state);
+  if (rec.path === path) return write("replace", id, path, state);
+  const change = changeOf(prev as AnyState, state as AnyState);
+  if (change === "push") return write("push", newId(), path, state);
+  if (change === "pop") {
+    // ปิดหน้าต่างใบงานกลับรายการ ที่รายการก่อนหน้าในประวัติคือรายการนั้นพอดี — ถอยประวัติด้วย ไม่งั้นได้ [รายการ, ใบงาน, รายการ]
+    // กดย้อนกลับแล้วใบงานเด้งกลับมา
+    const at = order.indexOf(id);
+    const before = at > 0 ? records.get(order[at - 1]) : undefined;
+    if (before?.path === path) {
+      ownBack = setTimeout(() => {
+        ownBack = null;
+        syncPageUrl();
+      }, 1000);
+      window.history.back();
+      return;
+    }
+    // ถอยในสแต็กไปหน้าที่ไม่ใช่รายการก่อนหน้า (ใบงานเปิดอยู่แล้วกดเมนู "กล่องงานของฉัน" — หน้าเดียวกับรายการข้างใต้)
+    // คนกดถือเป็นไปหน้าใหม่ ย้อนกลับต้องได้ใบงานคืน = เพิ่มรายการ · ไม่รู้รายการก่อนหน้า (ใบที่เปิดจากลิงก์ตรง ๆ · หลัง F5) = แทนที่
+    if (before) return write("push", newId(), path, state);
+  }
+  write("replace", id, path, state);
+}
+
+/** หน้าแรกของ navigator ที่ขึ้นจออยู่ — รายการประวัติที่ใช้กับคนนี้ไม่ได้ */
+function homeOf(root: NavigationState): PartialState<NavigationState> {
+  return (
+    root.routeNames.includes("HomeTab")
+      ? { routes: [{ name: "HomeTab", state: { routes: [{ name: home }] } }] }
+      : { routes: [{ name: root.routeNames[0] }] }
+  ) as PartialState<NavigationState>;
+}
+
+/**
+ * ย้อนกลับ/ไปข้างหน้าของเบราว์เซอร์มาถึงรายการ id — คืนสถานะที่จดไว้
+ * สถานะที่จดไว้ใช้ได้เฉพาะคนเดียวกันบน navigator ตัวเดียวกัน — รายการจากก่อน F5 หรือของอีกคน (ก่อนเข้าระบบ · ก่อน/หลังดูในฐานะ)
+ * ใช้ที่อยู่ของรายการ แล้วเปิดเป็นของคนที่อยู่ตอนนี้ (หน้าที่คนนี้ไม่มี = หน้าแรก)
+ * (ดูในฐานะช่างแล้วกดย้อนไปรายการหน้าหลังบ้านของแอดมิน: แท็บนั้นไม่มีในแอปช่าง → หน้าแรกของช่าง ที่อยู่เปลี่ยนตาม
+ * ไม่คืนกองหน้าของแอดมิน — ลองจริงแล้วเดิมที่อยู่ค้าง #/admin/users ทั้งที่จอเป็นงานของฉันของช่าง)
+ */
+function openEntry(id: string) {
+  if (!navigationRef.isReady()) return;
+  const root = navigationRef.getRootState();
+  if (!root) return;
+  if (!order.includes(id)) order = [id];
+  const rec = records.get(id);
+  if (rec && rec.who === who && rec.state.key === root.key && rec.state.routeNames.join() === root.routeNames.join()) {
+    navigationRef.resetRoot(rec.state);
+    return;
+  }
+  records.delete(id);
+  const st = stateFromPagePath(hashPath());
+  const fits = !!st && st.routes.every((r) => root.routeNames.includes(r.name));
+  navigationRef.resetRoot(fits ? (st as PartialState<NavigationState>) : homeOf(root));
+}
+
+/**
+ * ผูกประวัติของเบราว์เซอร์ — เรียกครั้งเดียวตอนโหลดแอป ก่อน NavigationContainer ขึ้นจอ
  *
- * 1. หน้าเดิมแต่ params เปลี่ยน (setParams — ใบงานที่เปิดจากลิงก์ได้เลขใบแล้ว · ล้างตัวกรองประวัติเคลม) React Navigation
- *    ต่อ location.hash ท้ายที่อยู่ใหม่ เพื่อรักษา #anchor ของหน้าเว็บทั่วไป — ของเราหน้าอยู่ใน # อยู่แล้ว
- *    จึงได้ "/#/wo/WO-1#/wo/WO-1" ยาวขึ้นเรื่อย ๆ · ตัด # ตัวที่สองทิ้งทุกครั้งที่เขียนที่อยู่ (pushState/replaceState)
- * 2. วางลิงก์ในแถบที่อยู่ของแท็บที่เปิดแอปอยู่แล้ว (หรือแก้ส่วนหลัง # เอง) เบราว์เซอร์ไม่โหลดหน้าใหม่ แค่เปลี่ยน #
- *    รายการประวัติใหม่นี้ไม่มีข้อมูลของ React Navigation (state = null) มันจึงเดาว่าเป็นหน้าแรกของประวัติแล้วพากลับไปที่นั่น
- *    แทนหน้าในลิงก์ · ตัวฟังของเราลงทะเบียนก่อน จึงได้เห็นก่อนและหยุดไม่ให้ถึงมัน แล้วโหลดหน้าใหม่ที่ที่อยู่นั้น
- *    — ผลเดียวกับวางลิงก์ที่อยู่จริง (ซึ่งโหลดหน้าใหม่เสมอ) · ย้อนกลับ/ไปข้างหน้าระหว่างหน้าที่แอปเขียนเองมี state ผ่านไปตามปกติ
+ * ย้อนกลับ/ไปข้างหน้าระหว่างรายการที่แอปเขียนเอง (history.state มี otteri) → openEntry
+ * รายการที่ไม่มี otteri = คนวางลิงก์ในแถบที่อยู่ของแท็บที่เปิดแอปอยู่ (หรือแก้ส่วนหลัง # เอง) เบราว์เซอร์ไม่โหลดหน้าใหม่
+ * แค่เปลี่ยน # → โหลดหน้าใหม่ที่ที่อยู่นั้น ผลเดียวกับวางลิงก์ที่อยู่จริง (ซึ่งโหลดใหม่เสมอ) และผ่านด่านเข้าระบบ/ลิงก์ค้างตามปกติ
  */
 export function installHashLinks() {
   if (!WEB) return;
   bootPath = hashPath();
-  // ตอนพัฒนา (expo start) แก้ไฟล์แล้วโค้ดถูกโหลดซ้ำในหน้าเดิม — ห่อ history ซ้อนสองชั้นไม่เสีย แต่ไม่จำเป็น
-  const w = window as unknown as { __otteriHashLinks?: boolean };
-  if (w.__otteriHashLinks) return;
-  w.__otteriHashLinks = true;
-  for (const name of ["pushState", "replaceState"] as const) {
-    const original = window.history[name];
-    window.history[name] = function (this: History, data: unknown, unused: string, url?: string | URL | null) {
-      return original.call(this, data, unused, typeof url === "string" ? oneHash(url) : url);
-    };
-  }
+  // ตอนพัฒนา (expo start) แก้ไฟล์แล้วโค้ดถูกโหลดซ้ำในหน้าเดิม — ถอดตัวฟังของโค้ดรุ่นก่อนออกก่อน
+  // ไม่งั้นตัวฟังเก่ายังจับปุ่มย้อนกลับด้วยสิ่งที่จดไว้ชุดเก่า แล้วพาไปสองรอบ
+  const w = window as unknown as { __otteriHashLinks?: () => void };
+  w.__otteriHashLinks?.();
   let reloading = false;
   const reload = () => {
     reloading = true;
     window.location.reload();
   };
-  window.addEventListener("popstate", (e) => {
-    if (e.state != null) return;
-    e.stopImmediatePropagation();
-    if (!reloading) reload();
-  });
+  const onPop = (e: PopStateEvent) => {
+    const id = idOf(e.state);
+    if (!id) {
+      if (!reloading) reload();
+      return;
+    }
+    if (ownBack) {
+      clearTimeout(ownBack);
+      ownBack = null;
+      const st = navigationRef.isReady() ? navigationRef.getRootState() : undefined;
+      if (st) write("replace", id, pagePathOf(st as AnyState), st);
+      return;
+    }
+    openEntry(id);
+  };
   // บางเบราว์เซอร์ไม่ส่ง popstate ตอนแก้แค่ # — ดักซ้ำอีกทาง
-  window.addEventListener("hashchange", () => {
-    if (!reloading && window.history.state == null) reload();
-  });
+  const onHash = () => {
+    if (!reloading && !idOf(window.history.state)) reload();
+  };
+  window.addEventListener("popstate", onPop);
+  window.addEventListener("hashchange", onHash);
+  w.__otteriHashLinks = () => {
+    window.removeEventListener("popstate", onPop);
+    window.removeEventListener("hashchange", onHash);
+  };
 }

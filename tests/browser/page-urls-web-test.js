@@ -3,6 +3,10 @@
 //   1. A001 กดเมนูข้างทีละหน้า → ที่อยู่เปลี่ยนตามหน้า (#/inbox · #/work-orders · #/reports ...)
 //   2. เปิดใบงานจากรายการ → ที่อยู่มีรหัสใบงาน (อ่านรหัสจากฐานข้อมูล) · ชื่อแท็บเบราว์เซอร์เป็นรหัส · ปิดหน้าต่าง → กลับ #/work-orders
 //   3. ปุ่มย้อนกลับของเบราว์เซอร์ → หน้าก่อนหน้าในแอป (ใบงานปิด · รายการ → รายงาน → ย้อนกลับมารายการ) · ไปข้างหน้าได้
+//      3b. ข้ามแท็บหลายหน้า (กล่องงาน → รายงาน → หลังบ้าน → สิทธิ์ผู้ใช้) ย้อนกลับ 4 / ไปข้างหน้า 4 ได้ครบทุกหน้า หน้าจอตรงที่อยู่
+//          (รุ่นแรกที่ใช้ linking ของ React Navigation ย้อนครั้งที่ 3 หลุดนอกแอป — ข้อ 3 เดิมเช็คแค่ก้าวเดียวจึงผ่าน)
+//      3c. ปิดหน้าต่างใบงาน (X) แล้วกดย้อนกลับ → หน้าก่อนรายการ ไม่ใช่ใบงานเด้งกลับ · ทางลัด "รายงาน ›" แล้วย้อนกลับ
+//      3d. F5 กลางทางแล้วย้อน/ไปข้างหน้ายังตรง (สิ่งที่จดไว้หายไปกับ F5 เหลือแต่ที่อยู่)
 //   4. F5 ที่หน้าใบงาน → อยู่ใบเดิม (รหัสบนหัวหน้าต่างตรงฐานข้อมูล)
 //   5. ลิงก์ใบงานในบริบทใหม่ (ยังไม่เข้าระบบ) → หน้าเข้าสู่ระบบ (#/login) → เข้าระบบ → ใบงานนั้น (รหัสตรงฐานข้อมูล)
 //      + พิมพ์รหัสตัวเล็กก็เปิดได้ (ที่อยู่กลับเป็นตัวใหญ่)
@@ -10,7 +14,10 @@
 //   7. ที่อยู่ที่ไม่รู้จัก → หน้าแรก (#/my-jobs) ไม่มี error
 //   8. ออกจากระบบตอนอยู่หน้าใบงาน แล้วเข้าระบบใหม่ → หน้าแรก (ไม่พากลับหน้าที่คนก่อนเปิดค้าง)
 //   9. ช่าง T001 เปิดลิงก์หน้าแอดมิน → ไม่ได้ (ไปหน้าแรก — แท็บหลังบ้านไม่มีในแอปช่าง) · ลิงก์ใบงานทีมอื่น → หน้ากุญแจ
-//      (เซิร์ฟเวอร์: GET /work-orders/by-code ตอบ 403 กฎเดียวกับเปิดใบ · ไม่พบ 404 · แอดมินได้ id ตรงฐานข้อมูล)
+//      (เซิร์ฟเวอร์: GET /work-orders/by-code ตอบ 403 กฎเดียวกับเปิดใบ · ไม่พบ 404 · แอดมินได้ id ตรงฐานข้อมูล — ครบทุกตำแหน่งใน page-link-test.sh)
+//  10. ดูในฐานะช่างหลังเปิดหน้าหลังบ้าน: ที่อยู่ไม่เป็นหน้าหลังบ้าน · ย้อนกลับระหว่างดูไม่เปิดหน้าของแอดมิน และที่อยู่ตรงกับจอเสมอ
+//      (เคยค้าง #/admin/users ทั้งที่จอเป็นของช่าง) · ลบแถว ViewAsLog ที่สร้าง
+//  11. ลิงก์ใบงานที่ไม่มี (WO-99999999) → หน้าต่างบอก "ไม่พบใบงาน …" ไม่ใช่จอพัง · ผังวินิจฉัยที่ไม่มี → ข้อความไทย
 // สร้างใบงานหนึ่งใบที่สาขา C0006 ผ่าน fixture แล้วลบทิ้งตอนจบ (fx.cleanup คืนภาคของ S001 ด้วย)
 // ต้องมี DATABASE_URL · backend :4000 · expo web :8081
 const { chromium } = require("playwright");
@@ -28,8 +35,10 @@ const BASE = "http://localhost:8081";
     args: ["--no-sandbox"],
   });
   let fx = null;
+  let vaStart = null;
   try {
     fx = await setup();
+    vaStart = Number(fx.sql(`select coalesce(max(id),0) from "ViewAsLog"`));
     const wo = await fx.workOrder("C0006", null);
     // รหัสจากฐานข้อมูล ไม่ใช่จากที่แอปคิด — ที่อยู่ต้องตรงของจริง
     const CODE = fx.sql(`select code from "WorkOrder" where id=${wo.id}`);
@@ -102,6 +111,8 @@ const BASE = "http://localhost:8081";
       ["รายการอะไหล่", "#/spare-parts"],
       ["ระบบหลังบ้าน", "#/admin"],
       ["สิทธิ์ผู้ใช้", "#/admin/users"],
+      // สอนการใช้งานเพิ่มทีหลังตารางที่อยู่ — ไม่มีแถวแล้วที่อยู่ไม่เปลี่ยน
+      ["สอนการใช้งาน", "#/how-to"],
       ["งานของฉันวันนี้", "#/my-jobs"],
     ];
     const seen = [];
@@ -126,6 +137,15 @@ const BASE = "http://localhost:8081";
       : fail(`เปิดใบงาน: ที่อยู่ ${t.hash()}`);
     const title = await page.title();
     title.includes(CODE) ? pass(`ชื่อแท็บเบราว์เซอร์เป็นรหัสใบงาน (${title})`) : fail(`ชื่อแท็บ: ${title}`);
+    await t.menu("กล่องงานของฉัน");
+    (await t.until(async () => t.hash() === "#/inbox" && (await page.title()).startsWith("กล่องงานของฉัน")))
+      ? pass("ชื่อแท็บเบราว์เซอร์ของ #/inbox = กล่องงานของฉัน (ไม่ใช่ใบงานซ่อม)")
+      : fail(`ชื่อแท็บกล่องงาน: ${await page.title()}`);
+    // จากใบงานกดเมนูไปหน้าอื่นแล้วย้อนกลับ → ใบงานเดิมกลับมา
+    await page.goBack();
+    (await t.until(async () => t.hash() === `#/wo/${CODE}` && (await onOrder(t))))
+      ? pass("ใบงานเปิดอยู่ → กดเมนูกล่องงาน → ย้อนกลับ = ใบงานเดิม")
+      : fail(`ย้อนกลับจากกล่องงานไปใบงาน: ${t.hash()}`);
 
     // 4. F5 อยู่ใบเดิม
     await page.reload({ waitUntil: "networkidle" });
@@ -159,6 +179,78 @@ const BASE = "http://localhost:8081";
       ? pass("ไปข้างหน้า → กลับหน้ารายงาน")
       : fail(`ไปข้างหน้า: ${t.hash()}`);
 
+    // 3b. ข้ามแท็บหลายหน้า — หน้าจอต้องตรงที่อยู่ทุกก้าว ไม่ใช่แค่ที่อยู่ (ที่อยู่ถูกแต่จอค้างหน้าเดิมก็เคยเจอ)
+    // ชื่อแท็บเบราว์เซอร์มาจากหน้าที่ navigator เปิดอยู่จริง (ชื่อในเมนูข้างซ้ำกับหัวหน้า ใช้เทียบไม่ได้) + ของที่มีเฉพาะหน้านั้น
+    const titled = (name) => async () => (await page.title()).startsWith(`${name} ·`);
+    const screenOf = {
+      "#/my-jobs": titled("งานของฉัน"),
+      "#/inbox": titled("กล่องงานของฉัน"),
+      "#/reports": async () => (await titled("รายงาน")()) && (await t.vis("สรุปรายสัปดาห์").count()) > 0,
+      "#/admin": titled("ระบบหลังบ้าน"),
+      "#/admin/users": titled("สิทธิ์ผู้ใช้"),
+      "#/work-orders": async () =>
+        (await titled("ใบงานซ่อม")()) && (await page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").count()) > 0,
+    };
+    const walk = async (go, want) => {
+      const got = [];
+      for (const w of want) {
+        await go();
+        await t.until(async () => t.hash() === w && (await screenOf[w]()), 10000);
+        got.push(t.hash() === w && (await screenOf[w]()) ? w : `${t.hash()}(จอไม่ตรง)`);
+      }
+      return got.join(" → ");
+    };
+    await t.menu("งานของฉันวันนี้");
+    await t.until(async () => t.hash() === "#/my-jobs");
+    for (const l of ["กล่องงานของฉัน", "รายงาน", "ระบบหลังบ้าน", "สิทธิ์ผู้ใช้"]) {
+      await t.menu(l);
+      await page.waitForTimeout(700);
+    }
+    const backWant = ["#/admin", "#/reports", "#/inbox", "#/my-jobs"];
+    const back4 = await walk(() => page.goBack(), backWant);
+    back4 === backWant.join(" → ") ? pass(`ข้ามแท็บ 4 หน้าแล้วย้อนกลับ 4 ครั้ง: ${back4}`) : fail(`ย้อนกลับข้ามแท็บ: ${back4}`);
+    const fwdWant = ["#/inbox", "#/reports", "#/admin", "#/admin/users"];
+    const fwd4 = await walk(() => page.goForward(), fwdWant);
+    fwd4 === fwdWant.join(" → ") ? pass(`ไปข้างหน้า 4 ครั้ง: ${fwd4}`) : fail(`ไปข้างหน้าข้ามแท็บ: ${fwd4}`);
+
+    // 3c. ปิดหน้าต่างใบงานด้วย X แล้วย้อนกลับ — ต้องไปหน้าก่อนรายการ (สิทธิ์ผู้ใช้) ไม่ใช่ใบงานเด้งกลับมา
+    await t.menu("ใบงานซ่อม");
+    await t.until(async () => t.hash() === "#/work-orders");
+    await page.getByPlaceholder("ค้นรหัสใบงาน สาขา หรือเรื่อง").locator("visible=true").first().fill(CODE);
+    await t.until(async () => (await t.vis(CODE).count()) > 0);
+    await t.vis(CODE).last().click();
+    await t.until(async () => t.hash() === `#/wo/${CODE}` && (await onOrder(t)));
+    await page.locator('[aria-label="ปิด"]').locator("visible=true").last().click();
+    await t.until(async () => t.hash() === "#/work-orders" && (await t.vis("สาขาและเครื่อง").count()) === 0);
+    await page.goBack();
+    (await t.until(async () => t.hash() === "#/admin/users" && (await screenOf["#/admin/users"]()) && (await t.vis("สาขาและเครื่อง").count()) === 0, 10000))
+      ? pass("ปิดหน้าต่างใบงานแล้วย้อนกลับ → หน้าก่อนรายการ (#/admin/users) ใบงานไม่เด้งกลับ")
+      : fail(`ปิดใบงานแล้วย้อนกลับ: ${t.hash()} · เห็นใบ ${await onOrder(t)}`);
+    await page.goForward();
+    await t.until(async () => t.hash() === "#/work-orders");
+    // ทางลัด "รายงาน ›" ถอยในสแต็ก แล้วย้อนกลับต้องได้หน้าก่อนรายงาน ไม่ใช่รายงานรายสัปดาห์
+    await t.menu("รายงาน");
+    await t.until(async () => t.hash() === "#/reports");
+    await t.vis("สรุปรายสัปดาห์").first().click();
+    await t.until(async () => t.hash() === "#/reports/weekly");
+    await page.locator('[aria-label="กลับไปรายงาน"]').locator("visible=true").first().click();
+    await t.until(async () => t.hash() === "#/reports" && (await screenOf["#/reports"]()));
+    await page.goBack();
+    (await t.until(async () => t.hash() === "#/work-orders" && (await screenOf["#/work-orders"]()), 10000))
+      ? pass("รายงาน → รายสัปดาห์ → ทางลัด \"รายงาน ›\" → ย้อนกลับ = รายการใบงาน")
+      : fail(`ทางลัดแล้วย้อนกลับ: ${t.hash()}`);
+
+    // 3d. F5 กลางทาง — ย้อนกลับ/ไปข้างหน้ายังตรงที่อยู่และหน้าจอ
+    await t.menu("ระบบหลังบ้าน");
+    await t.until(async () => t.hash() === "#/admin");
+    await page.reload({ waitUntil: "networkidle" });
+    await t.until(async () => t.hash() === "#/admin" && (await screenOf["#/admin"]()));
+    const afterF5 = await walk(() => page.goBack(), ["#/work-orders"]);
+    const afterF5f = await walk(() => page.goForward(), ["#/admin"]);
+    afterF5 === "#/work-orders" && afterF5f === "#/admin"
+      ? pass("F5 กลางทางแล้วย้อนกลับ/ไปข้างหน้ายังตรง (#/admin ↔ #/work-orders)")
+      : fail(`หลัง F5: ${afterF5} / ${afterF5f}`);
+
     // 6. วางลิงก์ในแถบที่อยู่ของแท็บเดิม — เปลี่ยนแค่ # (เบราว์เซอร์ไม่โหลดเอง แอปต้องจับแล้วไปหน้านั้น)
     // Playwright ถือเป็นการเปลี่ยนในหน้าเดิม แล้วแอปโหลดหน้าใหม่ต่อ — goto อาจบอกว่าถูกขัด ไม่ใช่ความผิดของแอป
     await page.goto(`${BASE}/#/reports/confirmed`).catch(() => {});
@@ -186,6 +278,70 @@ const BASE = "http://localhost:8081";
       ? pass("ออกจากระบบที่หน้าใบงานแล้วเข้าใหม่ → หน้าแรก (ไม่จำหน้าของคนก่อน)")
       : fail(`เข้าระบบใหม่หลังออก: ${t.hash()}`);
     await ctx.close();
+
+    // ── 10: ดูในฐานะ — ที่อยู่ต้องตรงกับจอ และย้อนกลับไม่เปิดหน้าของแอดมิน ──
+    {
+      const c = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+      await c.addInitScript(() => localStorage.setItem("otteri-side-groups", "[]"));
+      const p = await newPage(c);
+      const tt = tools(p);
+      const label = (l) => p.locator(`[aria-label="${l}"]`).locator("visible=true");
+      const viewing = async () => (await tt.vis("กำลังดูในฐานะ", false).count()) > 0;
+      // ชื่อแท็บเบราว์เซอร์มาจากหน้าที่ navigator เปิดอยู่จริง — ใช้เทียบว่าที่อยู่กับจอเป็นหน้าเดียวกัน
+      const titleOf = { "#/my-jobs": "งานของฉัน", "#/inbox": "กล่องงานของฉัน", "#/reports": "รายงาน", "#/admin/users": "สิทธิ์ผู้ใช้" };
+      const agree = async () => !!titleOf[tt.hash()] && (await p.title()).startsWith(titleOf[tt.hash()] + " ·");
+      await p.goto(BASE, { waitUntil: "networkidle", timeout: 180000 });
+      await tt.until(async () => tt.hash() === "#/login");
+      await tt.signIn("A001");
+      await tt.until(async () => tt.hash() === "#/my-jobs");
+      for (const l of ["กล่องงานของฉัน", "รายงาน", "สิทธิ์ผู้ใช้"]) {
+        await tt.menu(l);
+        await p.waitForTimeout(700);
+      }
+      await tt.until(async () => tt.hash() === "#/admin/users");
+      await label("ดูในฐานะผู้ใช้อื่น").first().click();
+      await label("ค้นหาผู้ใช้ที่จะดู").fill("T001");
+      // ปุ่ม "เลือก …" ของหน้าสิทธิ์ผู้ใช้ข้างหลังก็ขึ้นต้นด้วย "เลือก " — ระบุชื่อคน
+      const tName = fx.sql(`select name from "User" where "employeeCode"='T001'`);
+      await tt.until(async () => (await label(`เลือก ${tName}`).count()) > 0);
+      await label(`เลือก ${tName}`).first().click();
+      await label("ดูในฐานะคนนี้").click();
+      await tt.until(async () => (await viewing()) && tt.hash() !== "#/admin/users", 15000);
+      await p.waitForTimeout(800);
+      tt.hash() !== "#/admin/users" && (await viewing()) && (await agree())
+        ? pass(`เริ่มดูในฐานะ T001 ที่หน้าสิทธิ์ผู้ใช้ → ที่อยู่ ${tt.hash()} ตรงกับจอ (ไม่ค้างที่อยู่หลังบ้าน)`)
+        : fail(`เริ่มดูในฐานะ: ${tt.hash()} · ${await p.title()}`);
+      const trail = [];
+      let ok = true;
+      for (let i = 0; i < 2; i++) {
+        await p.goBack();
+        await p.waitForTimeout(1200);
+        trail.push(`${tt.hash()}=${await p.title()}`);
+        if (!(await viewing()) || tt.hash().startsWith("#/admin") || !(await agree())) ok = false;
+      }
+      ok ? pass(`ย้อนกลับ 2 ครั้งระหว่างดูในฐานะ: ยังดูในฐานะ ไม่เปิดหน้าหลังบ้าน ที่อยู่ตรงจอ (${trail.join(" · ")})`) : fail(`ย้อนกลับระหว่างดูในฐานะ: ${trail.join(" · ")}`);
+      await label("กลับเป็นตัวเอง").first().click();
+      await tt.until(async () => (await label("ดูในฐานะผู้ใช้อื่น").count()) > 0, 15000);
+      await c.close();
+    }
+
+    // ── 11: ลิงก์ของที่ไม่มีแล้ว ──
+    {
+      const c = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+      const p = await newPage(c);
+      const tt = tools(p);
+      await p.goto(`${BASE}/#/wo/WO-99999999`, { waitUntil: "networkidle", timeout: 180000 });
+      await tt.until(async () => tt.hash() === "#/login");
+      await tt.signIn("A001");
+      (await tt.until(async () => tt.hash() === "#/wo/WO-99999999" && (await tt.vis("ไม่พบใบงาน WO-99999999").count()) > 0, 25000))
+        ? pass("ลิงก์ใบงานที่ไม่มี → หน้าต่างใบงานบอก \"ไม่พบใบงาน WO-99999999\"")
+        : fail(`ใบงานที่ไม่มี: ${tt.hash()}`);
+      await p.goto(`${BASE}/?t=${Date.now()}#/diagnose/999999`, { waitUntil: "networkidle" });
+      (await tt.until(async () => (await tt.vis("ไม่พบผังวินิจฉัยนี้ — อาจถูกลบไปแล้ว").count()) > 0, 20000))
+        ? pass("ลิงก์ผังวินิจฉัยที่ไม่มี → ข้อความไทย (เดิม \"Flow not found\")")
+        : fail("ผังวินิจฉัยที่ไม่มีไม่ขึ้นข้อความไทย");
+      await c.close();
+    }
 
     // ── 5: ลิงก์ในบริบทใหม่ (ยังไม่เข้าระบบ) ──
     {
@@ -247,6 +403,7 @@ const BASE = "http://localhost:8081";
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {
+    if (fx && vaStart !== null) fx.sql(`delete from "ViewAsLog" where id > ${vaStart}`);
     if (fx) await fx.cleanup().catch((e) => fail(`ลบข้อมูลทดสอบไม่สำเร็จ: ${e}`));
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();
