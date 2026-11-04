@@ -786,7 +786,8 @@ const styles = StyleSheet.create({
   nameCell: { flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 6 },
   nameText: { flexShrink: 1, color: colors.text },
   cardNameRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
-  tagEdited: { alignSelf: "center", color: colors.primary, backgroundColor: colors.primarySoft },
+  // flexShrink 0: ชื่อยาวในคอลัมน์ชื่อบีบป้ายจนตัดเป็นสองบรรทัด ("แก้ใน / แอป") แถวสูงไม่เท่าแถวอื่น — ให้ชื่อเป็นฝ่ายถูกตัด "…" แทน
+  tagEdited: { alignSelf: "center", flexShrink: 0, color: colors.primary, backgroundColor: colors.primarySoft },
   reportBox: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, gap: 4 },
   reportLine: { fontSize: 12.5, lineHeight: 19, color: colors.body },
   btnSmall: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 6 },
