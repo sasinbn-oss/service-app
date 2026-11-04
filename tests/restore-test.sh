@@ -17,6 +17,11 @@
 #     และค่าที่เป็น JSON ตรงทุกตัวอักษร — ไม่แตะผู้ใช้ในฐานต้นฉบับ (A001/S001/T001 ต้องคง "ดูแล้ว" ไว้ให้เทสต์เบราว์เซอร์)
 #     ฐานทดสอบหลัง seed:test มีแต่สามคนนั้น (มีค่าทุกคน) — เทียบแล้วไม่มี NULL ให้ตรวจ จึงใส่ผู้ใช้ชั่วคราวสองคน
 #     (ว่าง · มีค่าพร้อมหน้าที่ดูแล้ว) ก่อนสำรอง แล้วลบตอนจบ แบบเดียวกับใบเลือกอะไหล่ชั่วคราว
+#   · ประวัติสาขา (BranchLog) + ชื่อที่แก้ในแอป (BranchPin field='name') ตามมาครบ (พ.ย. 69) — ประวัติหาย = ตอบไม่ได้ว่าสาขา
+#     เคยชื่ออะไร ใครปิดเพราะอะไร · ชื่อที่จำไว้หาย = นำเข้ารายงานเครื่องรอบถัดไปเขียนชื่อในไฟล์ทับชื่อที่แก้ในแอปเงียบ ๆ
+#     ฐานทดสอบปกติไม่มีทั้งสองอย่าง (เทสต์สาขาลบของตัวเองตอนจบ) นับ 0 เทียบ 0 ผ่านได้แม้ตารางไม่ถูกสำรองเลย จึงใส่ชั่วคราว
+#     บนสาขาแรก: ประวัติสองแถว (แก้ชื่อมี meta + คนทำ · ปิดสาขาไม่มี meta + คนทำที่บัญชีถูกลบแล้ว — BranchLog ไม่ผูก User
+#     โดยตั้งใจ กู้ต้องไม่ล้มหรือทิ้งแถวเพราะหาผู้ใช้ไม่เจอ) กับชื่อที่จำไว้หนึ่งแถว (ค่าเท่าชื่อปัจจุบัน — ไม่ทำให้สาขาดูเหมือนถูกแก้)
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -29,9 +34,12 @@ case "$SRC_URL" in *@localhost:5432/*) ;; *) echo "FAIL DATABASE_URL ไม่�
 TMP_URL="${SRC_URL%%/serviceapp*}/$TMPDB"
 DIR=$(mktemp -d)
 PICK_MARK='restore-test ใบชั่วคราว'
+BRANCH_MARK='restore-test ประวัติชั่วคราว'
 cleanup() {
   PG -d serviceapp -qc "delete from \"PartsPick\" where note='$PICK_MARK'" >/dev/null 2>&1 || true   # รายการในใบลบตาม (cascade)
   PG -d serviceapp -qc "delete from \"User\" where \"employeeCode\" like 'zz.restore.howto.%'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"BranchLog\" where note like '$BRANCH_MARK%'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"BranchPin\" where field='name' and \"fromValue\"='$BRANCH_MARK'" >/dev/null 2>&1 || true
   PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null 2>&1 || true; rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -67,6 +75,23 @@ SQL
 # ไม่ใช้ set -e ตายเงียบ: คอลัมน์ยังไม่มี (ยังไม่ migrate) ให้ข้อ 3b รายงานเอง
 HOWTO_SQL='select count(*) filter (where "howtoSeen" is null)||$$|$$||count(*) filter (where "howtoSeen" is not null)||$$|$$||md5(string_agg("employeeCode"||$$:$$||coalesce(md5("howtoSeen"::text),$$NULL$$), $$,$$ order by "employeeCode")) from "User"'
 SRC_HOWTO=$(PG -d serviceapp -Atc "$HOWTO_SQL" 2>/dev/null) || SRC_HOWTO=""
+
+# ประวัติสาขา + ชื่อที่จำไว้ชั่วคราว (เหตุผลอยู่หัวไฟล์) · คนทำที่บัญชีถูกลบ = id ที่ไม่มีใน User แล้ว (ไม่มี FK ให้ขวาง)
+# ใส่ไม่สำเร็จ (ยังไม่ migrate branch_rename) ให้ข้อ 3c รายงานเอง
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<SQL || true
+WITH b AS (SELECT id, name FROM "Branch" ORDER BY id LIMIT 1), a AS (SELECT id, name FROM "User" WHERE "employeeCode"='A001')
+INSERT INTO "BranchLog" ("branchId", action, note, meta, "byUserId", "byName")
+SELECT b.id, 'RENAMED', '$BRANCH_MARK ชื่อสาขา: ' || b.name || ' → ' || b.name || ' ใหม่',
+       jsonb_build_object('from', b.name, 'to', b.name || ' ใหม่'), a.id, a.name FROM b, a
+UNION ALL
+SELECT b.id, 'CLOSED', '$BRANCH_MARK ปิดสาขา — ทดสอบกู้คืน', NULL, (SELECT max(id) + 1000 FROM "User"), 'บัญชีที่ถูกลบแล้ว' FROM b;
+INSERT INTO "BranchPin" ("branchId", field, "fromValue", value, "pinnedById")
+SELECT b.id, 'name', '$BRANCH_MARK', b.name, (SELECT id FROM "User" WHERE "employeeCode"='A001') FROM "Branch" b ORDER BY b.id LIMIT 1;
+SQL
+SRC_BRANCH_TMP=$(PG -d serviceapp -Atc "select (select count(*) from \"BranchLog\" where note like '$BRANCH_MARK%')||'+'||(select count(*) from \"BranchPin\" where field='name' and \"fromValue\"='$BRANCH_MARK')" 2>/dev/null) || SRC_BRANCH_TMP=""
+# ทุกช่องทุกแถวของสองตาราง (NULL เขียนเป็นคำ ไม่งั้น concat_ws ข้ามไปเงียบ ๆ แล้ว NULL กับค่าว่างดูเหมือนกัน) · id ต้องตรงด้วย
+BRANCH_SQL='select (select count(*) from "BranchLog")||$$|$$||(select count(*) from "BranchPin")||$$|$$||coalesce((select md5(string_agg(concat_ws($$~$$, id, "branchId", action, note, coalesce(meta::text,$$NULL$$), coalesce("byUserId"::text,$$NULL$$), coalesce("byName",$$NULL$$), to_char("createdAt",$$YYYY-MM-DD HH24:MI:SS.MS$$)), $$,$$ order by id)) from "BranchLog"),$$-$$)||$$|$$||coalesce((select md5(string_agg(concat_ws($$~$$, id, "branchId", field, coalesce("fromValue",$$NULL$$), value, coalesce("pinnedById"::text,$$NULL$$), to_char("createdAt",$$YYYY-MM-DD HH24:MI:SS.MS$$)), $$,$$ order by id)) from "BranchPin"),$$-$$)'
+SRC_BRANCH=$(PG -d serviceapp -Atc "$BRANCH_SQL" 2>/dev/null) || SRC_BRANCH=""
 
 # 1) ไฟล์สำรองจากฐานข้อมูลที่ใช้เทสต์ — ฟังก์ชันเดียวกับปุ่มสำรองข้อมูล
 node_modules/.bin/ts-node --transpile-only -e "
@@ -115,6 +140,16 @@ elif [ "$SRC_HOWTO" = "$DST_HOWTO" ]; then
   pass "สอนการใช้งานตามมาครบ: ว่าง $SRC_NULLS คนยังว่าง (พนักงานเดิม) · มีค่า $SRC_SET คนตรงทุกตัวอักษร"
 else
   fail "howtoSeen หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_HOWTO] · หลังกู้ [$DST_HOWTO]"
+fi
+
+# 3c) ประวัติสาขา + ชื่อที่แก้ในแอป — ต้นฉบับต้องมีแถวชั่วคราวครบ (2 ประวัติ + 1 ชื่อ) ไม่งั้นเทียบ 0 กับ 0 ไม่ได้ตรวจอะไร
+DST_BRANCH=$(PG -d $TMPDB -Atc "$BRANCH_SQL" 2>/dev/null) || DST_BRANCH=""
+if [ "$SRC_BRANCH_TMP" != "2+1" ]; then
+  fail "ใส่ประวัติสาขา/ชื่อที่จำไว้ชั่วคราวไม่สำเร็จ (ได้ [$SRC_BRANCH_TMP] ต้อง 2+1) — ยังไม่ migrate branch_rename หรือสาขาแรกมีชื่อที่จำไว้อยู่แล้ว"
+elif [ -n "$SRC_BRANCH" ] && [ "$SRC_BRANCH" = "$DST_BRANCH" ]; then
+  pass "ประวัติสาขา + ชื่อที่แก้ในแอปตามมาครบทุกช่อง (ประวัติ $(echo "$SRC_BRANCH" | cut -d'|' -f1) แถว รวม meta ว่าง/มีค่า และคนทำที่บัญชีถูกลบแล้ว · ชื่อที่จำไว้ $(echo "$SRC_BRANCH" | cut -d'|' -f2) แถว)"
+else
+  fail "ประวัติสาขา/ชื่อที่จำไว้หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_BRANCH] · หลังกู้ [$DST_BRANCH]"
 fi
 
 # 4) กู้ซ้ำลงฐานที่มีข้อมูลแล้ว ต้องปฏิเสธ ไม่เขียนทับ
