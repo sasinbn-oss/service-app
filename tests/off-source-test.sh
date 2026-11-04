@@ -10,39 +10,30 @@
 #   · ใบเก่าที่ไม่มีคำตอบ (ข้อ 6): หน้าใบงานได้ null ("ยังไม่ระบุ") · แอดมินเช็คต่อได้ ไม่บังคับย้อนหลัง · แก้รายการครั้งหน้าต้องตอบ
 #   · ปิดงาน ช่างซื้อเอง (ข้อ 7): ถามแค่ซื้อจากที่ไหน — ไม่ตอบ/ไม่มีรายละเอียด/ใช้เหตุผลหาไม่ได้ = 400 · ของจากรายการรอไม่ต้องตอบ
 #     · ของนอกสโตร์ใหม่ส่งด้วยรหัสไม่ได้ · ตอบครบ → แถวที่ใช้ไป: ซื้อเอง = หาได้+แหล่ง+คนปิด · ของจากรายการ = ว่าง (ฐานข้อมูล)
-#   · ใบรออะไหล่ที่แยกจากใบนี้ (อะไหล่ไม่ครบ) ได้คำตอบเดิมของของนอกสโตร์ตัวนั้นไปด้วย (คนตอบ/เวลาเดิม)
-set -e
-SP="$(dirname "$0")"
-. "$SP/lib/fixture-parts.sh"
-J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
-H() { echo "Authorization: Bearer $1"; }
-pass() { echo "PASS $1"; }
-fail() { echo "FAIL $1"; FAILED=1; }
-DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
-login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
-POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
-GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
+#   · ปิดซ้ำหลังเคลมถูกตีกลับ · หัวหน้าภาคปิดแทน · ปิดย้อนหลัง: คำตอบ "ซื้อจาก" ของของที่ช่างซื้อเองรอบก่อนไม่หาย
+#     คนตอบ/เวลาเดิม (ฐานข้อมูล) — สองทางหลังส่งแค่รหัสอะไหล่ ไม่มีช่องคำตอบ
+#
+# ชุดเตรียมของเทสต์เคลม (claim-setup.sh) ให้ตัวช่วย J/DB/POST… · ผู้ใช้/สาขาในประกันของชุดนี้เอง · เก็บกวาด · หยุดกลางทาง = FAIL
+# — ข้อปิดซ้ำหลังตีกลับต้องมีใบที่เคลมได้จริง ใช้ชุดเดียวกับเทสต์เคลมแทนการคัดลอกขั้นเตรียมมาเอง (เหตุผลอยู่หัวไฟล์นั้น)
+# เก็บกวาดของชุดนี้อยู่ใน claim_extra_cleanup (claim-setup ตั้ง trap EXIT ไว้แล้ว) · ห้ามตั้ง SUF/IDS/OLD_REGION ทับ:
+# claim-setup ใช้สามตัวนี้ตอนเก็บกวาด ตั้งใหม่แล้วผู้ใช้ทดสอบเคลมไม่ถูกลบ/ภาคของ S001 ถูกคืนเป็นค่าผิด
+SP="$(cd "$(dirname "$0")" && pwd)"
+. "$SP/claim-setup.sh"
 EMSG() { J 'd.error===undefined?"(ไม่มี error) "+JSON.stringify(d).slice(0,160):typeof d.error==="string"?d.error:JSON.stringify(d.error)'; }
-# วันนัดย้อนหลังไม่ได้แล้ว — ใช้วันข้างหน้าเสมอ
-day() { node -e "console.log(new Date(Date.now()+7*3600e3+$1*86400e3).toISOString().slice(0,10))"; }
-VISIT=$(day 23)
-A=$(login A001)
 AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
 SNAME=$(DB "select name from \"User\" where \"employeeCode\"='S001'")
-OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
-SUF=$RANDOM
 N1="ลูกบิดประตูทดสอบแหล่ง $SUF"      # หัวหน้าภาคบอกหาได้
 N2="ลูกปืนแกนถังทดสอบแหล่ง $SUF"     # หัวหน้าภาคบอกหาไม่ได้
 N3="สายน้ำเข้าใบเก่าทดสอบแหล่ง $SUF"  # ใบเก่า — ไม่มีคำตอบ
 N4="ปะเก็นซื้อหน้างานทดสอบแหล่ง $SUF" # ช่างซื้อเองตอนปิดงาน
-IDS=""
-cleanup() {
+N5="ฝาครอบซื้อก่อนตีกลับทดสอบแหล่ง $SUF" # ช่างซื้อเอง แล้วเคลมถูกตีกลับ (ปิดซ้ำ · ปิดแทน · ปิดย้อนหลัง)
+# ลบใบงานก่อนของนอกสโตร์ — แถวอะไหล่ของใบยังอ้างถึงอยู่ · ล้าง IDS ให้ claim-setup ไม่ลบซ้ำ
+claim_extra_cleanup() {
   for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  IDS=""
   DB "delete from \"SparePart\" where \"offCatalog\" and name like '%ทดสอบแหล่ง $SUF'" >/dev/null
-  DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
-trap cleanup EXIT
 # สาขาแฟรนไชส์หมดประกัน (ข้อจัดหา/ใบเก่า) กับสาขาบริษัท (ปิดงาน — ไม่มีเรื่องเคลมมาปน) — หัวหน้าภาคย้ายภาคตามสาขา
 DOLD=$(DB "select code from \"Branch\" where code like 'D%' and \"cancelledAt\" is null and \"openedAt\" < now() - interval '4 years' order by \"openedAt\" limit 1")
 COMP=$(DB "select code from \"Branch\" where code like 'C%' and \"cancelledAt\" is null and zone is not null order by code limit 1")
@@ -183,20 +174,21 @@ POST $A "work-orders/$W3/confirm-appointment" '{}' >/dev/null
 for r in NAMEPLATE BEFORE AFTER; do
   curl -s -X POST "localhost:4000/api/work-orders/$W3/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
 done
-CLOSE() { POST $A "work-orders/$W3/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนลูกบิดกับปะเก็น ทดสอบแหล่ง\",\"workerIds\":[$AID],$1}"; }
-C1=$(CLOSE "\"offParts\":[{\"name\":\"$N1\",\"quantity\":1},{\"name\":\"$N4\",\"quantity\":1}]")
-C2=$(CLOSE "\"offParts\":[{\"name\":\"$N1\",\"quantity\":1},{\"name\":\"$N4\",\"quantity\":1,\"offKind\":\"สั่งออนไลน์\"}]")
-C3=$(CLOSE "\"offParts\":[{\"name\":\"$N4\",\"quantity\":1,\"offFound\":false,\"offKind\":\"ร้านแถวนี้ไม่มี\",\"offDetail\":\"ซื้อร้านหน้าสาขา\"}]")
+# ชื่อไม่ใช่ CLOSE — นั่นคือตัวปิดงานของ claim-setup (ใบเคลม · ช่างของชุดเคลม) ที่ส่วนท้ายใช้ ตั้งชื่อซ้ำแล้วทับกัน
+CLOSE_W3() { POST $A "work-orders/$W3/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนลูกบิดกับปะเก็น ทดสอบแหล่ง\",\"workerIds\":[$AID],$1}"; }
+C1=$(CLOSE_W3 "\"offParts\":[{\"name\":\"$N1\",\"quantity\":1},{\"name\":\"$N4\",\"quantity\":1}]")
+C2=$(CLOSE_W3 "\"offParts\":[{\"name\":\"$N1\",\"quantity\":1},{\"name\":\"$N4\",\"quantity\":1,\"offKind\":\"สั่งออนไลน์\"}]")
+C3=$(CLOSE_W3 "\"offParts\":[{\"name\":\"$N4\",\"quantity\":1,\"offFound\":false,\"offKind\":\"ร้านแถวนี้ไม่มี\",\"offDetail\":\"ซื้อร้านหน้าสาขา\"}]")
 [ "$(echo "$C1" | EMSG)" = "อะไหล่นอกสโตร์ “$N4”: เลือกว่าซื้อจากที่ไหน ($SOURCES) — ไม่เห็นช่องนี้ในฟอร์ม = แอปรุ่นเก่า กดปุ่ม “อัปเดต” บนแถบบนก่อน" ] \
   && [ "$(echo "$C2" | EMSG)" = "อะไหล่นอกสโตร์ “$N4”: ใส่รายละเอียดว่าซื้อจากที่ไหน — ชื่อร้าน · ที่ตั้ง/ลิงก์ · เบอร์" ] \
   && [ "$(echo "$C3" | EMSG)" = "อะไหล่นอกสโตร์ “$N4”: เลือกว่าซื้อจากที่ไหน ($SOURCES)" ] \
   && [ "$(st $W3)" = "ASSIGNED" ] \
   && pass "ของที่ซื้อเองไม่บอกแหล่ง / ไม่มีรายละเอียด / ใช้เหตุผลหาไม่ได้ → 400 ภาษาไทย · ของจากรายการรอ ($N1) ไม่ถูกถาม · ใบยังไม่ปิด" \
   || fail "ปิดงานไม่ครบ: $(echo "$C1" | EMSG) / $(echo "$C2" | EMSG) / $(echo "$C3" | EMSG) · $(st $W3)"
-C4=$(CLOSE "\"parts\":[{\"sparePartId\":$P2,\"quantity\":1}],\"offParts\":[]")
+C4=$(CLOSE_W3 "\"parts\":[{\"sparePartId\":$P2,\"quantity\":1}],\"offParts\":[]")
 [ "$(echo "$C4" | EMSG)" = "ของนอกสโตร์ที่ซื้อเองหน้างาน ใส่ในกล่องอะไหล่นอกสโตร์ พร้อมบอกว่าซื้อจากที่ไหน" ] && [ "$(st $W3)" = "ASSIGNED" ] \
   && pass "ของนอกสโตร์ที่ไม่อยู่ในใบส่งด้วยรหัส (ข้ามคำถาม) → 400 · ใบยังไม่ปิด" || fail "ส่งด้วยรหัส: $(echo "$C4" | EMSG) · $(st $W3)"
-R=$(CLOSE "\"offParts\":[{\"name\":\"$N1\",\"quantity\":1},{\"name\":\"$N4\",\"quantity\":1,\"unit\":\"ชิ้น\",\"offKind\":\"ร้านหาของมาเอง\",\"offDetail\":\"ร้านหน้าสาขาทดสอบ 02-111-2222\"}]")
+R=$(CLOSE_W3 "\"offParts\":[{\"name\":\"$N1\",\"quantity\":1},{\"name\":\"$N4\",\"quantity\":1,\"unit\":\"ชิ้น\",\"offKind\":\"ร้านหาของมาเอง\",\"offDetail\":\"ร้านหน้าสาขาทดสอบ 02-111-2222\"}]")
 [ "$(st $W3)" = "DONE" ] && [ "$(ANS $W3 USED "$N4")" = "true|ร้านหาของมาเอง|ร้านหน้าสาขาทดสอบ 02-111-2222|$AID" ] \
   && [ "$(ANS $W3 USED "$N1")" = "-|-|-|-" ] && [ "$(ANS $W3 WAITING "$N1")" = "true|ร้านหาของมาเอง|$D1|$SID" ] \
   && pass "ปิดงานได้: ของที่ซื้อเอง = หาได้ · แหล่ง · รายละเอียด · คนปิด · ของจากรายการรอไม่มีคำตอบของตัวเอง · คำตอบหัวหน้าภาคในรายการรอยังอยู่ (ฐานข้อมูล)" \
@@ -213,4 +205,61 @@ CH=$(echo "$R" | J 'd.createdChild?d.createdChild.id:""'); [ -n "$CH" ] && IDS="
   && pass "แยกใบรออะไหล่: ของนอกสโตร์ตัวเดิมได้คำตอบ · คนตอบ · เวลาเดิมจากใบต้นทาง (ไม่ขึ้น \"ยังไม่ระบุ\") (ฐานข้อมูล)" \
   || fail "ใบรออะไหล่: $(echo "$R" | EMSG) · $( [ -n "$CH" ] && ANS $CH WAITING "$N1")"
 
-[ -z "$FAILED" ]
+echo
+echo "═══ ปิดซ้ำหลังเคลมถูกตีกลับ · หัวหน้าภาคปิดแทน · ปิดย้อนหลัง — คำตอบ \"ซื้อจาก\" เดิมไม่หาย (สาขาในประกัน $BC)"
+# replaceParts ลบแล้วสร้างแถวที่ใช้ไปใหม่ทั้งชุดทุกทางปิด — ถ้าไม่ติดคำตอบเดิมมา (withOldAnswers) แถวที่ช่างซื้อเองรอบก่อน
+# จะกลายเป็น "ยังไม่ระบุ" (ทางที่ส่งแค่รหัส) หรือได้เวลาตอบเป็นตอนที่แค่กดปิดซ้ำ (ทางที่ฟอร์มเติมคำตอบเดิมไว้ให้)
+as_region_of $BC
+D5="ร้านวัสดุทดสอบ หน้าตลาดกระบี่ 075-111-222"
+B5="{\"name\":\"$N5\",\"quantity\":1,\"offKind\":\"ร้านหาของมาเอง\",\"offDetail\":\"$D5\"}"
+TODAY=$(day 0)
+# ช่างปิดงานพร้อมเคลม + ของนอกสโตร์ที่ซื้อเอง — $1 ใบเคลม (JSON) · ใช้ CLOSE ของ claim-setup (ป้าย/เช็ค/เหตุผลตั้งต้น)
+CLOSE_OFF() { CLOSE "$1" "$PLATE" "$CHECK" "$(claim_skips "$1")" "\"offParts\":[$B5]"; }
+# ใบที่ช่างปิดพร้อมของซื้อเอง แล้ว Admin Spare Part ตีกลับ — เหลือแถวที่ใช้ไปพร้อมคำตอบรอบแรก ใบกลับมาที่ช่าง
+sent_back() {
+  claim_order 1
+  claim_files $PID
+  local r; r=$(CLOSE_OFF "[$(claim_json $PID)]")
+  [ "$(echo "$r" | J 'd.status')" = "CLAIM_REVIEW" ] || fail "เตรียม: ปิดงานพร้อมเคลมไม่ถึงรอตรวจเคลม ($(echo "$r" | EMSG))"
+  P5=$(pid "$N5")
+  AT5=$(AT $ID USED "$N5")
+  MS5=$(DB "select (extract(epoch from p.\"offAnswerAt\")*1000)::bigint from \"WorkOrderPart\" p where p.\"workOrderId\"=$ID and p.kind='USED' and p.\"sparePartId\"=$P5")
+  POST $PA "work-orders/$ID/claim-review" '{"approve":false,"reason":"รูปชิ้นส่วนไม่ชัด ถ่ายใหม่ ทดสอบแหล่ง"}' >/dev/null
+}
+
+sent_back
+FIRST="true|ร้านหาของมาเอง|$D5|$TID"
+[ "$(st $ID)|$(ANS $ID USED "$N5")|$(AT $ID USED "$N5")" = "IN_PROGRESS|$FIRST|$AT5" ] && [ "$AT5" != "-" ] \
+  && pass "ตีกลับ: ใบกลับมาที่ช่าง · แถวที่ใช้ไปยังมีคำตอบซื้อจากที่ไหน + คนตอบ (ช่าง) + เวลาของรอบแรก (ฐานข้อมูล)" \
+  || fail "หลังตีกลับ: $(st $ID) · $(ANS $ID USED "$N5") · $(AT $ID USED "$N5") vs $AT5"
+sleep 1
+C2="[$(claim_json $PID "ประตูล็อกไม่ลง ขึ้น Error dL ตอนกดเริ่ม ทดสอบแหล่ง")]"
+R=$(CLOSE_OFF "$C2")
+[ "$(st $ID)" = "CLAIM_REVIEW" ] && [ "$(ANS $ID USED "$N5")|$(AT $ID USED "$N5")" = "$FIRST|$AT5" ] \
+  && pass "ช่างปิดซ้ำหลังตีกลับ (ฟอร์มเติมคำตอบเดิมไว้ให้ ส่งกลับมาเหมือนเดิม): คำตอบ · คนตอบ · เวลาตอบของรอบแรก (ฐานข้อมูล)" \
+  || fail "ปิดซ้ำ: $(st $ID) · $(echo "$R" | EMSG) · $(ANS $ID USED "$N5") · $(AT $ID USED "$N5") vs $AT5"
+[ "$(GET $A "work-orders/$ID" | J 'const p=d.parts.find(x=>x.name==='"'$N5'"');p?[p.offFound,p.offKind,p.offDetail,new Date(p.offAnswerAt).getTime()].join("|"):"none"')" \
+    = "true|ร้านหาของมาเอง|$D5|$MS5" ] && [ -n "$MS5" ] \
+  && pass "หน้าใบงานหลังปิดซ้ำ: \"ซื้อจาก · ร้านหาของมาเอง\" + รายละเอียด + เวลาตอบของรอบแรก (ไม่ใช่เวลาที่กดปิดซ้ำ)" \
+  || fail "หน้าใบงานหลังปิดซ้ำ: $(GET $A "work-orders/$ID" | J 'JSON.stringify(d.parts)' | head -c 300)"
+
+POST $PA "work-orders/$ID/claim-review" '{"approve":false,"reason":"วิดีโอยังไม่เห็นมิเตอร์ ทดสอบแหล่ง"}' >/dev/null
+sleep 1
+R=$(POST $S "work-orders/$ID/supervisor-close" "{\"reason\":\"TECH_FIXED\",\"note\":\"ช่างเข้าซ่อมเสร็จแล้ว ทดสอบแหล่งปิดแทน\",\"workerIds\":[$TID],\"visitDate\":\"$TODAY\",\"parts\":[{\"sparePartId\":$PID,\"quantity\":1},{\"sparePartId\":$P5,\"quantity\":1}]}")
+[ "$(st $ID)" = "DONE" ] && [ "$(ANS $ID USED "$N5")|$(AT $ID USED "$N5")" = "$FIRST|$AT5" ] \
+  && pass "หัวหน้าภาคปิดแทน (ส่งแค่รหัส ไม่มีช่องคำตอบ): ของที่ช่างซื้อเองยังมีคำตอบ · คนตอบ · เวลาเดิม ไม่กลายเป็น \"ยังไม่ระบุ\" (ฐานข้อมูล)" \
+  || fail "ปิดแทน: $(st $ID) · $(echo "$R" | EMSG) · $(ANS $ID USED "$N5") · $(AT $ID USED "$N5") vs $AT5"
+
+sent_back
+[ "$(st $ID)|$(ANS $ID USED "$N5")" = "IN_PROGRESS|$FIRST" ] || fail "เตรียมปิดย้อนหลัง: $(st $ID) · $(ANS $ID USED "$N5")"
+sleep 1
+DONE_AT=$(node -e 'console.log(new Date(Date.now()-60e3).toISOString())')
+# วันเข้างาน = วันไทยของเวลาซ่อมเสร็จ — คร่อมเที่ยงคืนแล้ววันเข้างานต้องไม่หลังเวลาเสร็จ
+DONE_DAY=$(node -e 'console.log(new Date(Date.parse(process.argv[1])+7*3600e3).toISOString().slice(0,10))' "$DONE_AT")
+R=$(POST $A "work-orders/$ID/backfill-close" "{\"reason\":\"ช่างซ่อมเสร็จแล้วแต่ไม่ได้กดในแอป\",\"team\":\"กระบี่\",\"visitDate\":\"$DONE_DAY\",\"result\":\"FIXED\",\"closedAt\":\"$DONE_AT\",\"workerIds\":[$TID],\"note\":\"ทดสอบแหล่ง ปิดย้อนหลัง\",\"parts\":[{\"sparePartId\":$PID,\"quantity\":1},{\"sparePartId\":$P5,\"quantity\":1}]}")
+[ "$(st $ID)" = "DONE" ] && [ "$(ANS $ID USED "$N5")|$(AT $ID USED "$N5")" = "$FIRST|$AT5" ] \
+  && pass "แอดมินปิดย้อนหลัง (ส่งแค่รหัส): ของที่ช่างซื้อเองยังมีคำตอบ · คนตอบ · เวลาเดิม (ฐานข้อมูล)" \
+  || fail "ปิดย้อนหลัง: $(st $ID) · $(echo "$R" | EMSG) · $(ANS $ID USED "$N5") · $(AT $ID USED "$N5") vs $AT5"
+
+# ไม่ใช่ [ -z "$FAILED" ] เปล่า ๆ — claim-setup ตั้ง trap ERR ไว้ บรรทัดนั้นจะพิมพ์ FAIL "หยุดกลางทาง" ซ้ำอีกบรรทัด
+[ -z "${FAILED:-}" ] || exit 1
