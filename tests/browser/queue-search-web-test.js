@@ -75,8 +75,9 @@ const login = async (code) =>
       await page.screenshot({ path: path.join(DIR, "queue-search-1-desktop.png") });
       const totalTile = await vis("รอทำทั้งหมด").first().evaluate((n) => n.parentElement.innerText);
 
-      // กด / ที่ไหนก็ได้ แล้วพิมพ์ลงช่องค้นหา
-      await page.locator("body").click({ position: { x: 700, y: 20 } }).catch(() => {});
+      // กด / ที่ไหนก็ได้ แล้วพิมพ์ลงช่องค้นหา — คลิกที่ที่ไม่ใช่ปุ่มก่อน (ป้ายตัวเลขสรุป) ไม่ใช่พิกัดตายตัวบนแถบบน:
+      // ปุ่ม "วิธีใช้หน้านี้" ที่เพิ่มบนแถบบนดันปุ่ม "ดูในฐานะ" มาอยู่ที่ x 700 คลิกแล้วเปิดหน้าต่างดูในฐานะทับทั้งหน้า
+      await vis("รอทำทั้งหมด").first().click();
       await page.keyboard.press("/");
       await page.keyboard.type("ทดสอบค้นหางานของฉัน");
       await page.waitForTimeout(800);
