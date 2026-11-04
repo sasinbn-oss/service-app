@@ -10,6 +10,7 @@
 //     Senior ที่ถือทีมอื่นด้วยนับเป็น "ทีมอื่นที่เลือกไว้ยังอยู่"
 // ทีม/ทีมรวม/สาขาชั่วคราวชื่อไม่ซ้ำของจริง — ไม่แตะทีมที่เทสต์อื่นใช้ · สร้างผู้ใช้เองแล้วลบ (ต้องมี DATABASE_URL)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const path = require("path");
 const DIR = __dirname;
@@ -50,9 +51,7 @@ const users = `select id from "User" where "employeeCode" in ('${TECH}','${NEW}'
   const admin = (await call("POST", "/auth/login", null, { employeeCode: "A001", password: "test1234" })).token;
   const orders = [];
   async function cleanup() {
-    for (const id of sql(`select id from "WorkOrder" where "branchId" in (${branches}) order by id desc`).split("\n").filter(Boolean)) {
-      await call("DELETE", `/work-orders/${id}`, admin).catch(() => {});
-    }
+    await purgeOrders(admin, sql(`select id from "WorkOrder" where "branchId" in (${branches}) order by id desc`).split("\n"));
     sql(`delete from "BranchCheckIn" where "userId" in (${users});
          delete from "ViewAsLog" where "targetUserId" in (${users});
          delete from "UsageSlot" where "userId" in (${users});

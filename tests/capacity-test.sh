@@ -1,5 +1,6 @@
 #!/bin/bash
 # ทดสอบ: ขนาดเครื่องเก็บที่ตัวเครื่อง + ผู้ติดต่อตอนเปิดจากกระดาน
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -12,7 +13,7 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 # เก็บกวาด — ลบใบที่เทสต์สร้าง + เคสเครื่องดับ/เครื่องที่สร้างเอง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
 # trap ไม่ใช่บรรทัดท้ายไฟล์ — set -e หยุดกลางทางแล้วเคสที่สร้างเองจะค้างบนกระดานของชุดอื่น
 cleanup() {
-  for i in ${ID:-} ${ID1B:-} ${ID2:-} ${IDOUT:-}; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+  purge_orders "$A" ${ID:-} ${ID1B:-} ${ID2:-} ${IDOUT:-}
   if [ -n "${OID:-}" ]; then
     DB "delete from \"WorkOrder\" where \"outageId\"=$OID" >/dev/null 2>&1 || :
     DB "delete from \"Outage\" where id=$OID" >/dev/null 2>&1 || :
@@ -41,7 +42,7 @@ EQID=$(echo "$EQ" | J 'd.orders?d.orders[0].id:d.id')
 ROW=$(psql "${DATABASE_URL%%\?*}" -Atc "select \"jobType\"||'|'||title||'|'||coalesce(\"machineId\"::text,'-')||'|'||coalesce(symptom,'') from \"WorkOrder\" where id=$EQID" 2>/dev/null)
 [ "$ROW" = "COIN_CHANGER|ตู้แลกเหรียญ|-|แลก 100 ออก 3 เหรียญ" ] \
   && pass "เปิดใบตู้แลกเหรียญโดยไม่มีเครื่อง: หัวข้อตั้งให้เอง ไม่ผูกเครื่อง (ฐานข้อมูล)" || fail "ใบอุปกรณ์ร้าน: $ROW"
-curl -s -X DELETE "localhost:4000/api/work-orders/$EQID" -H "$(H $A)" >/dev/null
+purge_orders "$A" $EQID
 
 echo
 echo "═══ เปิดใบงานพร้อมขนาด"

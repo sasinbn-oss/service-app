@@ -3,6 +3,7 @@
 //          เปิดได้โดยไม่มีรูป ไม่ผูกเครื่อง (ฐานข้อมูล)
 //        · ฟอร์มปิดงานใบ PM: ไม่มีขั้นรูปก่อนซ่อมกับป้ายรุ่น เตือนแค่หลังซ่อม · แนบหลังซ่อมแล้วปิดได้ (ฐานข้อมูล)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { confirmDuplicate } = require("./dup");
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
@@ -156,7 +157,7 @@ const login = async (code) =>
   } catch (e) {
     fail(String(e));
   } finally {
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();

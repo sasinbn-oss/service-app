@@ -5,6 +5,7 @@
 #     (หัวหน้าภาคต้องรับทราบวันนั้นอีกรอบ)
 #   · GET /my-day: งานที่ปล่อยให้ทีมแล้ว · POST /arrive: บันทึกเวลา+พิกัด (ลงรายงานตัวเข้าสาขาด้วย) ไม่เดินขั้น
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -22,7 +23,7 @@ TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
 IDS=""
 CHECKIN0=$(DB "select coalesce(max(id),0) from \"BranchCheckIn\"")
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"BranchCheckIn\" where id>$CHECKIN0" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   DB "update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null

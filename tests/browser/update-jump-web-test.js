@@ -5,6 +5,7 @@
 //        · อยู่แท็บ "ที่ยังค้าง" (ใบเยอะ) แอดมินคอนเฟิร์มใบ C (ยังค้างอยู่) → ปุ่มบอก "ในแท็บนี้" กดแล้วเลื่อนไปหาใบ C
 //        · เช็คสถานะที่ฐานข้อมูลทุกขั้น (CLAUDE.md) · ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const path = require("path");
@@ -168,7 +169,7 @@ const login = async (code) =>
   } catch (e) {
     fail(String(e));
   } finally {
-    for (const id of ids) await call(A, "DELETE", `/work-orders/${id}`);
+    await purgeOrders(A, ids);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();

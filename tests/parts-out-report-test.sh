@@ -5,6 +5,7 @@
 #   · หัวหน้าภาคนอกพื้นที่ไม่เห็น · ช่าง 403 · ไฟล์ Excel มีเลขใบงานจริง
 #   · หมายเหตุทีละแถวสาขา+อะไหล่: บันทึก/ล้างได้ · ไม่อยู่ใน Excel · แถวที่ไม่อยู่ในรายงาน/นอกพื้นที่แก้ไม่ได้
 #     · เช็คว่าหมดซ้ำรอบใหม่ หมายเหตุรอบก่อนไม่ขึ้น
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -22,7 +23,7 @@ DB "update \"User\" set region=(select region from \"Branch\" where code='$BR') 
 S=$(login S001)
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

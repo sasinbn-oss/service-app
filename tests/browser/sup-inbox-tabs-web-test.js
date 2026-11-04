@@ -4,6 +4,7 @@
 //   · ช่องเลือกทีมตอนจ่ายงาน: หัวข้อ "ทีมช่าง" กับ "ทีม outsource" แยกกัน ชื่อทีมไม่มีป้ายต่อท้าย
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
@@ -136,7 +137,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
+    await purgeOrders(A, ids);
     sql(`delete from "OutsourceTeam" where name='${os}'`);
     const [r, t] = oldS.split("|");
     sql(`update "User" set region=nullif('${r}',''), "supervisedTeams"=string_to_array(nullif('${t}',''),',') where "employeeCode"='S001'`);

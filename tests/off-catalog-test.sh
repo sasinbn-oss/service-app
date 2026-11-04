@@ -8,6 +8,7 @@
 #   · ปิดงาน: ช่างเพิ่มของนอกสโตร์ได้ · ใช้แต่ของนอกสโตร์ไม่ต้องแนบใบเหลือง
 #   · มีของนอกสโตร์/ค่าบริการ = เสนอราคาเสมอ แม้สาขาบริษัท (เจ้าของงานเลือก ต.ค. 69)
 #   · ค่าบริการล้วน (ไม่ใช้อะไหล่): ตรงไปเสนอราคา → จ่ายเงิน → นัดวัน ไม่ค้างที่ขั้นเบิก — เช็คฐานข้อมูลทุกข้อ
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 . "$SP/lib/fixture-parts.sh"
@@ -31,7 +32,7 @@ IDS=""
 OUTS=""
 cleanup() {
   for o in $OUTS; do DB "delete from \"Outage\" where id=$o" >/dev/null; done
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"SparePart\" where \"offCatalog\" and name like '%ทดสอบ%'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }

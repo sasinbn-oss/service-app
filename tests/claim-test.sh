@@ -3,6 +3,7 @@
 #        ไปรอ Admin Spare Part ตรวจ · แอดมินทั่วไปตรวจไม่ได้และไม่เห็นในกล่องงาน · ตีกลับต้องมีเหตุผล ·
 #        ตีกลับแล้วกลับไปที่ช่าง · ส่งซ้ำโดยไม่แก้อะไรไม่ได้ · แนบวิดีโอใหม่ตามเหตุผลแล้วปิดใหม่ได้ ·
 #        อนุมัติแล้วปิดงาน · ใบเคลม PDF · ย้อนขั้นจากรอตรวจไม่ได้ · ป้ายรุ่นต้องกดยืนยันรุ่นกับ Serial ทีละช่อง (เคลมก้อน 5)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/lib/fixture-parts.sh"
@@ -22,7 +23,7 @@ SUF=$RANDOM
 BC="DZCL$SUF"
 ID=""
 cleanup() {
-  [ -n "$ID" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$ID" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$ID"
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$BC');
       delete from \"Branch\" where code='$BC';
       delete from \"User\" where \"employeeCode\" like 'ZCL%$SUF';

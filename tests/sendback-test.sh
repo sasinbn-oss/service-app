@@ -3,6 +3,7 @@
 #   · หมวดเหตุ · อะไหล่ที่เบิกแล้วไม่หาย · ไม่มีตัวใหม่ = ข้ามเช็คคลังไปนัดวัน · ตัวที่ขอซ้ำ = เช็ค → นัด → เบิกใหม่ → คอนเฟิร์ม
 #   · แก้ผู้ติดต่อ/เรื่อง/ความเร่งด่วนได้ · แก้รายการอะไหล่ไม่ล้างผลเช็คตัวที่ไม่เปลี่ยน
 #   · ใบเก่าที่ข้ามรอแอดมินเช็คอะไหล่ ย้อนกลับไปขั้นนั้นได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -136,5 +137,5 @@ else
 fi
 
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$OLDR\"}" >/dev/null
-for i in $ID ${ID2:-}; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+purge_orders "$A" $ID ${ID2:-}
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

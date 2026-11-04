@@ -4,6 +4,7 @@
 //   · กดเปิดใบงาน → ป๊อปอัพยืนยัน (ต.ค. 69): เครื่องเดียวกันขึ้นแดง ยังไม่บันทึก · ไม่ติ๊กกดยืนยันไม่ได้ · กลับไปแก้ฟอร์มอยู่
 //     ติ๊กแล้วยืนยัน = เปิดได้ · ดับเบิลคลิกปุ่มเปิดใบงาน = ได้ใบเดียว (ฐานข้อมูล)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { attachPhoto } = require("./photo");
 const { confirmDuplicate } = require("./dup");
 const path = require("path");
@@ -124,7 +125,7 @@ const { setup } = require("./fixture");
   } finally {
     if (fx) {
       const extra = fx.sql(`select coalesce(string_agg(id::text, ' '), '') from "WorkOrder" where id>${maxBefore} and symptom like 'อาการใหม่ทดสอบกดซ้ำ%'`);
-      for (const id of extra.split(" ").filter(Boolean)) await fx.call(fx.A, "DELETE", `/work-orders/${id}`);
+      await purgeOrders(fx.A, extra.split(" ").filter(Boolean));
       await fx.cleanup();
     }
     await browser.close();

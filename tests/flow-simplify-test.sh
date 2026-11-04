@@ -4,6 +4,7 @@
 #   · กล่องงานแอดมิน: ใบที่รอหัวหน้าภาคแต่ไม่มีใครดูแลภาคนั้น ("ไม่มีคนรับ") · ใบเลยนัดยังไม่คอนเฟิร์ม ("เลยนัด")
 #   · ชื่อขั้น "ใคร · ทำอะไร" + ชื่อเมื่อผ่านแล้ว ส่งให้แอป
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -22,7 +23,7 @@ OLD_TEAMS=$(DB "select array_to_string(\"supervisedTeams\",',') from \"User\" wh
 REGION=$(DB "select region from \"Branch\" where code='C0006'"); TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION',''), \"supervisedTeams\"=coalesce(string_to_array(nullif('$OLD_TEAMS',''),','),'{}') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

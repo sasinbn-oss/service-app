@@ -3,6 +3,7 @@
 #   · คนตั้งเองได้แค่ "รอลูกค้าแจ้งซ่อม" (ต้องมีเหตุผล) กับ "อัตโนมัติ" · ค่าที่ระบบตั้งแก้มือไม่ได้
 #   · ส่งค่าเดิมกลับมา (แอปเก่า) ไม่นับว่าแก้ · ประวัติบอกจาก → ถึง และเหตุผล
 #   · เปลี่ยนขั้นแล้ว "รอลูกค้า" หมดอายุ · ขั้นเสนอราคา = รอแอดมินส่งใบเสนอราคา · ช่างส่งกลับ = ล้าง
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -84,5 +85,5 @@ POST $A "work-orders/$ID/reassess-parts" '{"reasonCode":"PARTS","reason":"อะ
 [ "$(ws $ID)" = "-" ] && pass "ช่างส่งกลับ → ล้างสถานะ (ไม่ค้าง \"รอช่างเข้าแก้ไข\")" || fail "หลังส่งกลับ: $(ws $ID)"
 
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$OLDR\"}" >/dev/null
-for i in $ID0 $ID; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+purge_orders "$A" $ID0 $ID
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

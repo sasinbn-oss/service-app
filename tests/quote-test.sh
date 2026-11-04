@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: ประกันนับจากเปิดร้าน (3 ปี · Oasis 2 ปี) · รอแอดมินเช็คอะไหล่ (เช็คของก่อนเสนอราคา) ·
 #        เสนอราคาและรับเงินมาก่อนนัด · เบิกอะไหล่หลังลูกค้าคอนเฟิร์มวัน (นัดลูกค้าก่อนเบิก ต.ค. 69)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 . "$SP/lib/fixture-parts.sh"
@@ -217,7 +218,7 @@ curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrant
   && pass "ใบงานบอกที่มา (Oasis(TC) 2 ปี)" || fail "ที่มา: $(curl -s "localhost:4000/api/work-orders/$IDT" -H "$(H $A)" | J '[d.branchWarrantyYears,d.branchWarrantyBrand].join()')"
 IDT2=$(brandWo W4 "Huebsch")
 source_ok $IDT2 | J 'd.statusLabel' | grep -q "^หัวหน้าภาค · นัดวันเข้า" && pass "ไม่มียี่ห้อจากไฟล์ เลือกรุ่น Huebsch → 3 ปี ยังอยู่ในประกัน" || fail "Huebsch รุ่น: $(st $IDT2)"
-for i in $IDT $IDT2; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+purge_orders "$A" $IDT $IDT2
 echo
 echo "═══ ป้ายประกันในรายการ (ติดตามเครื่องเสีย · ใบงานซ่อม)"
 DB "insert into \"Outage\"(kind,\"branchId\",\"machineId\",\"startedAt\",\"lastSeenAt\") select 'MACHINE_OFF',$BID,id,now()-interval '2 hours',now() from \"Machine\" where \"branchId\"=$BID" >/dev/null
@@ -232,10 +233,10 @@ DB "update \"Branch\" set \"openedAt\"=null where id=$BID" >/dev/null
 [ "$(OUT)" = "W1:UNKNOWN W2:UNKNOWN W3:UNKNOWN W4:UNKNOWN" ] && [ "$(WOL)" = "UNKNOWN UNKNOWN" ] && pass "ไม่รู้วันเปิดร้าน → ป้าย \"ไม่ทราบ\" (ไม่ใช่หมดประกัน)" || fail "ไม่ทราบ: $(OUT) / $(WOL)"
 curl -s "localhost:4000/api/work-orders?status=ALL" -H "$(H $A)" | J 'const c=d.rows.filter(r=>r.branchType==="COCO"); String(c.length>0 && c.every(r=>r.warranty===null))' | grep -q true \
   && pass "สาขาบริษัท (COCO) ไม่มีป้ายประกัน" || fail "COCO มีป้ายประกัน"
-for i in $IDO $IDH; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+purge_orders "$A" $IDO $IDH
 DB "delete from \"Machine\" where \"branchId\"=$BID; delete from \"Branch\" where id=$BID" >/dev/null
 
 echo
 # เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
-for i in $ID1 $ID2 $ID3 $ID4 $ID5 $ID6; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+purge_orders "$A" $ID1 $ID2 $ID3 $ID4 $ID5 $ID6
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

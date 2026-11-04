@@ -5,6 +5,7 @@
 //   · หัวหน้าภาคบนมือถือ: ช่องค้นหา + "พบ N จาก M ใบ"
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const path = require("path");
 const DIR = __dirname;
@@ -131,7 +132,7 @@ const login = async (code) =>
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    for (const id of ids) await call(A, "DELETE", `/work-orders/${id}`);
+    await purgeOrders(A, ids);
     await browser.close();
   }
 })();

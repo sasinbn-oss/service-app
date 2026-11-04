@@ -3,6 +3,7 @@
 #        แยกใบงานรออะไหล่ (ตอนเช็คคลัง และหลังเข้าหน้างาน) · บอร์ดแผนงาน
 #
 # ทุกข้อยืนยันผลที่ฐานข้อมูลด้วย ไม่ใช่เชื่อแค่คำตอบของ API (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 . "$SP/lib/fixture-parts.sh"
@@ -283,7 +284,7 @@ CH2=$(echo "$R" | J 'd.createdChild?d.createdChild.id:""')
 
 echo
 # เก็บกวาด — ลบใบงานที่สร้าง แผนที่จัด และคืนค่าทีม/ภาคของผู้ใช้ทดสอบ
-for x in $CREATED; do curl -s -X DELETE "localhost:4000/api/work-orders/$x" -H "$(H $A)" >/dev/null; done
+purge_orders "$A" $CREATED
 DB "delete from \"TeamDayPlan\" where date='$D2' and team='$TEAM'" >/dev/null
 DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID; update \"User\" set team=nullif('$OLD_TEAM','') where id=$TID" >/dev/null
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

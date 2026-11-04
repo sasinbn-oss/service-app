@@ -42,6 +42,7 @@
 // ต้องมี DATABASE_URL · ไม่ขึ้นกับเวลาไทยของวันที่รัน: ส่งช่างตรวจด้วยวันนัด 12 วันข้างหน้า (G10 · ไม่ติดเวลาปิดนัดงานพรุ่งนี้)
 // แล้วค่อยย้ายวันนัดเป็นวันนี้ด้วย SQL หลังใบอยู่ในมือช่าง (SQL ไม่ผ่านกติกาเวลาปิดนัด · ใบอยู่ในมือช่างแล้ว) — การ์ดจึงขึ้นแท็บ "วันนี้"
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
@@ -130,7 +131,7 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
   const A = await login("A001");
   const cleanup = async () => {
     const mine = myMachines();
-    for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
+    await purgeOrders(A, ids);
     sweep();
     dropMachines(mine);
     if (fresh.length)

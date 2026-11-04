@@ -3,6 +3,7 @@
 //     "ใช้อะไหล่ข้ามยี่ห้อ?" → "ใช้ข้ามยี่ห้อ" → ใบเปิดพร้อมอะไหล่นั้น + ประวัติข้ามยี่ห้อ (ฐานข้อมูล)
 // ต้องมี DATABASE_URL — ทางกระดานสร้างเคสเครื่องดับของ W55 และอะไหล่ทดสอบ CAPX… เองแล้วลบตอนจบ
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { setup } = require("./fixture");
 const { confirmDuplicate } = require("./dup");
 const { attachPhoto } = require("./photo");
@@ -322,7 +323,7 @@ const DIR = __dirname;
     if (outageId) {
       try {
         const ids = fx.sql(`select id from "WorkOrder" where "outageId"=${outageId}`).split("\n").filter(Boolean);
-        for (const id of ids) await fx.call(fx.A, "DELETE", `/work-orders/${id}`);
+        await purgeOrders(fx.A, ids);
         fx.sql(`delete from "Outage" where id=${outageId}`);
       } catch (e) {
         fail(`ลบเคสทดสอบไม่ได้ (Outage id ${outageId}): ${e.message}`);

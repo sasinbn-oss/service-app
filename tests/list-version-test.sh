@@ -3,6 +3,7 @@
 #   · ไม่มีอะไรเปลี่ยน = ค่าเดิม · เปิดใบ / เดินขั้น / แนบรูป (ไม่แตะตัวใบ) / ลบ = ค่าเปลี่ยน
 #   · ตามตัวกรองเดียวกับรายการ · คำตอบเล็ก (ไม่กี่สิบไบต์) · ไม่ล็อกอิน = 401
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -15,7 +16,7 @@ IDS=""
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 # คืนภาคของ S001 ใน trap — สคริปต์จบกลางทาง (set -e) ก็ยังคืน
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT
@@ -41,7 +42,9 @@ curl -s -X POST "localhost:4000/api/work-orders/$W/attachments" -H "$(H $A)" -F 
   && pass "แนบรูป (ไม่แตะตัวใบ แต่มีประวัติ): ค่าเปลี่ยน" || fail "แนบรูปแล้วค่าไม่เปลี่ยน"
 VD=$(V DONE); curl -s -X POST localhost:4000/api/work-orders/$W/attachments -H "$(H $A)" -F "file=@$(dirname "$0")/site-photo.png;type=image/png" >/dev/null
 [ "$(V DONE)" = "$VD" ] && pass "ตามตัวกรอง: ใบที่ไม่อยู่ในรายการ \"ปิดแล้ว\" เปลี่ยน แต่ลายนิ้วมือของรายการนั้นไม่เปลี่ยน" || fail "ลายนิ้วมือไม่ตามตัวกรอง"
-V4=$(V); curl -s -X DELETE "localhost:4000/api/work-orders/$W" -H "$(H $A)" >/dev/null; IDS=""
-[ "$(DB "select count(*) from \"WorkOrder\" where id=$W")" = "0" ] && [ "$(V)" != "$V4" ] && pass "ลบใบ: ค่าเปลี่ยน" || fail "ลบแล้วค่าไม่เปลี่ยน"
+# ลบ = ย้ายไปถังขยะ (4 พ.ย. 69) — แถวยังอยู่ แต่ไม่อยู่ในรายการแล้ว ลายนิ้วมือต้องขยับ (cleanup ลบจริงทีหลัง)
+V4=$(V); curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$W" -H "$(H $A)" -H 'Content-Type: application/json' -d '{"reason":"TEST"}'
+[ "$(DB "select (\"deletedAt\" is not null)::text from \"WorkOrder\" where id=$W")" = "true" ] && [ "$(V)" != "$V4" ] \
+  && pass "ลบใบ (ย้ายไปถังขยะ — แถวยังอยู่): ค่าเปลี่ยน" || fail "ลบแล้วค่าไม่เปลี่ยน"
 
 [ -z "$FAILED" ]

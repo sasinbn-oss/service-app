@@ -13,6 +13,7 @@
 //     "ปิดเคลม ไม่ส่งผู้ขาย" · ไม่มีปุ่มใบเคลม PDF (ไม่มีใบเคลม)
 // ต้องมี DATABASE_URL — แถวเคลมใส่ด้วย SQL บนใบงานจริงที่เปิดผ่าน API (ทางปิดงานจริงอยู่ใน claim-test.sh)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const path = require("path");
 const DIR = __dirname;
 const { setup } = require("./fixture");
@@ -318,7 +319,7 @@ const { setup } = require("./fixture");
   } finally {
     if (fx) {
       await fx.cleanup();
-      if (outId) await fx.call(fx.A, "DELETE", `/work-orders/${outId}`);
+      if (outId) await purgeOrders(fx.A, [outId]);
       fx.sql(`delete from "User" where "employeeCode" in ('${pa}','${sa}')`);
     }
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");

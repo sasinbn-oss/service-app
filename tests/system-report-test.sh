@@ -4,6 +4,7 @@
 #   · ไฟล์มี 8 ชีตตามลำดับ · จำนวนแถวพนักงาน/สาขา/เครื่อง/ใบงานตรงกับฐานข้อมูล
 #   · ช่วงวันที่กรองชีตใบงาน (ใบที่เปิดวันนี้อยู่ ใบที่ย้อนไปเมื่อปีก่อนไม่อยู่) · ไม่นับใบทดสอบ
 #   · เบอร์โทรพนักงานมา · ไม่มีรหัสผ่าน (hash) หรือเลขบัตรเติมน้ำมันหลุดเข้าไฟล์
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -22,7 +23,7 @@ VID=$(DB "select id from \"Vehicle\" order by id limit 1")
 cleanup() {
   DB "update \"User\" set phone=nullif('$OLD_PHONE','') where \"employeeCode\"='T001'" >/dev/null
   [ -n "$VID" ] && DB "delete from \"VehicleCard\" where \"fleetCardNo\"='ZZFLEET998877'" >/dev/null
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   rm -f $XLSX
 }
 trap cleanup EXIT

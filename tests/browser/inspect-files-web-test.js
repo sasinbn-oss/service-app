@@ -3,6 +3,7 @@
 //        · ฟอร์มผลตรวจเห็นไฟล์ที่แนบจากการ์ด ปุ่มยืนยันกดไม่ได้จนครบ แนบที่เหลือในฟอร์มได้
 //        · ตรวจเสร็จแล้วกรอบเหลือไว้ให้ดู — เช็คฐานข้อมูลทุกขั้น
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const fs = require("fs");
@@ -139,7 +140,7 @@ const login = async (code) =>
   } catch (e) {
     fail(String(e));
   } finally {
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();

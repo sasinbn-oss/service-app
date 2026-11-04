@@ -5,6 +5,7 @@
 #   · หัวหน้าภาคปิดแบบช่างแก้ไขเรียบร้อย: ต้องมีใครเข้า วันที่ (ไม่เกินวันนี้) รูปหลังซ่อม → DONE + FIXED (ไม่ใช่ SUPERVISOR_CLOSED)
 #     บันทึกคนเข้า อะไหล่ที่ใช้ · เหตุผลอื่นยังเป็น SUPERVISOR_CLOSED
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -24,7 +25,7 @@ TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
 OS=ZZOS$RANDOM
 IDS=""; MACH=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"OutsourceTeam\" where name like 'ZZOS%'" >/dev/null
   [ -n "$MACH" ] && DB "update \"Machine\" set \"capacityKg\"=$OLD_CAP where id=$MACH" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null

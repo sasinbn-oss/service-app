@@ -10,6 +10,7 @@
 #
 # สร้างแถวเคลมด้วย psql บนใบงานจริงที่เปิดผ่าน API — ทางปิดงานจริงต้องเดินขั้นอะไหล่ทั้งสายและแนบหลักฐานครบ
 # (อยู่ใน claim-test.sh แล้ว) ที่นี่ต้องการเวลาส่งย้อนหลังหลายเดือนและหลายรอบที่คุมได้ ซึ่งทางจริงทำไม่ได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/lib/fixture-parts.sh"
@@ -29,7 +30,7 @@ BRA="ยี่ห้อทดสอบเคลม$SUF-ก"; BRB="ยี่ห�
 IDS=""
 XLSX=$(mktemp --suffix=.xlsx); PDF=$(mktemp --suffix=.pdf)
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code in ('$BC1','$BC2'));
       delete from \"Branch\" where code in ('$BC1','$BC2');
       delete from \"ViewAsLog\" where \"byUserId\" in (select id from \"User\" where \"employeeCode\" like 'ZCH_$SUF');

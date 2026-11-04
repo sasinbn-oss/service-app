@@ -6,6 +6,7 @@
 //   · แถบขั้นตอนของใบใหม่: ขั้นก่อนหน้าขึ้นว่า "ทำในใบเดิม WO-…" ไม่ใช่ ✓
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const fs = require("fs");
 const path = require("path");
 const DIR = __dirname;
@@ -113,7 +114,7 @@ const { setup } = require("./fixture");
     if (page) await page.screenshot({ path: path.join(DIR, "split-quote-error.png") }).catch(() => {});
   } finally {
     if (fx) {
-      for (const id of extra) await fx.call(fx.A, "DELETE", `/work-orders/${id}`);
+      await purgeOrders(fx.A, extra);
       await fx.cleanup();
     }
     errors.length ? fail(`page error: ${errors[0].slice(0, 200)}`) : pass("ไม่มี error ในหน้าเว็บ");

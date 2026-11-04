@@ -1,5 +1,6 @@
 #!/bin/bash
 # ทดสอบ: จ่ายงานเป็นทีม · ขอบเขตที่ช่างเห็น · ปิดงานต้องมีรูปและชื่อผู้เข้าปฏิบัติงาน
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -136,5 +137,5 @@ fi
 
 echo
 # เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
-for i in $ID $ID2; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+purge_orders "$A" $ID $ID2
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

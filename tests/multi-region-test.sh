@@ -15,6 +15,7 @@
 #   · รายงาน: คอนเฟิร์มลูกค้า (ส่งไลน์) มีภาคของสาขา ครบทั้งสองภาค · ผู้เปิดใบงาน/การใช้งาน/รายงานทั้งระบบโชว์ทุกภาค
 #   · เปลี่ยนเป็นช่าง/ลบบัญชี ล้างทุกภาค
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md) · คืน S001 เป็นค่าเดิม (ภาคใต้ ไม่มีภาคเพิ่ม ไม่มีทีม)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1" 2>/dev/null; }
 H() { echo "Authorization: Bearer $1"; }
@@ -56,7 +57,7 @@ SNAME=$(DB "select name from \"User\" where id=$SID")
 SNAP=$(DB "select coalesce(region,'')||'|'||array_to_string(\"extraRegions\",',')||'|'||array_to_string(\"supervisedTeams\",',') from \"User\" where id=$SID")
 VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 cleanup() {
-  for i in $(DB "select id from \"WorkOrder\" where symptom like '$SYMPTOM%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $(DB "select id from \"WorkOrder\" where symptom like '$SYMPTOM%'")
   DB "delete from \"TeamDayPlan\" where date='$VISIT' and \"plannedById\"=$SID" >/dev/null
   DB "delete from \"ViewAsLog\" where id>$VSTART and \"targetUserId\"=$SID" >/dev/null
   # % ท้าย — บัญชีที่ลบแบบเก็บประวัติถูกเปลี่ยนรหัสเป็น "<รหัส>~ลบ<id>" (ปล่อยรหัสเดิมให้ใช้ซ้ำได้)

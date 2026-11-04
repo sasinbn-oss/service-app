@@ -5,6 +5,7 @@
 #     จ่ายแล้ว → ไปนัดเลย (ไม่เสนอราคาซ้ำ จนกว่าจะระบุอะไหล่ใหม่) · ใบที่ไม่ต้องเสนอราคาไม่ถาม
 #   · แยกตอนเช็คอะไหล่ (ก่อนเสนอราคา) ไม่ถาม — ยังไม่มีใครจ่ายอะไร
 #   · อะไหล่ไม่ครบตอนปิดงาน (ของใหม่) ใช้กฎเสนอราคาเดียวกับระบุอะไหล่
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/lib/fixture-parts.sh"
@@ -28,7 +29,7 @@ cleanup() {
   local list=$(echo $IDS | tr ' ' ',')
   [ -z "$list" ] && list=0
   for id in $(DB "select id from \"WorkOrder\" where \"parentId\" in ($list)") $IDS; do
-    curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null
+    purge_orders "$A" $id
   done
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }

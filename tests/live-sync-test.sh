@@ -2,6 +2,7 @@
 # ทดสอบ: ข้อมูลไม่ค้างเมื่อหลายคนเปิดใบงานเดียวกัน (ต.ค. 69)
 #   · GET /work-orders/:id/version = เลขประวัติล่าสุด + ใครทำ · เปลี่ยนอะไรก็ขยับ
 #   · PATCH พร้อม expectedVersion: คนอื่นแก้ไปก่อน → 409 บอกชื่อ ไม่บันทึกทับ · ของตัวเองไม่นับ · ไม่ส่งมา = ไม่เช็ค
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -58,5 +59,5 @@ curl -s -X POST "localhost:4000/api/work-orders/$ID/parts" -H "$(H $S)" -H 'Cont
   && pass "ขั้นเดินไปแล้ว กดขั้นเดิมซ้ำ → 409 (แอปจับแล้วโหลดใหม่)" || fail "ไม่ได้ 409"
 
 curl -s -X PATCH "localhost:4000/api/auth/users/$SID" -H "$(H $A)" -H 'Content-Type: application/json' -d "{\"region\":\"$OLDR\"}" >/dev/null
-curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$ID" -H "$(H $A)"
+purge_orders "$A" $ID
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

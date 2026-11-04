@@ -4,6 +4,7 @@
 #   · ย้อนขั้นหลังคอนเฟิร์ม (นัดกลับเป็นรอ) ไม่ขึ้น · ใบทดสอบไม่ขึ้น · งานตรวจหน้างาน kind=INSPECT
 #   · คนคอนเฟิร์ม · เบอร์ผู้ติดต่อ · อาการบรรทัดแรก · by=visit = คิวนัดวันนั้น
 #   · ช่าง 403 · หัวหน้าภาคนอกพื้นที่ไม่เห็น · วันที่ผิด 400
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -24,7 +25,7 @@ TEAM=$(DB "select zone from \"Branch\" where code='$BR'")
 ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"SparePart\" where \"partCode\"='[นอกสโตร์] ZCR สายน้ำเข้า ทดสอบ'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }

@@ -4,6 +4,7 @@
 //        · การ์ดผลการทำงานวางก่อน | หลัง คู่กัน — เช็คฐานข้อมูลทุกขั้น
 //        · ผู้เข้าปฏิบัติงานขึ้นให้เองจากบอร์ดแผนงานของทีมวันนัด (เจ้าของงานขอ 3 พ.ย. 69) ไม่ต้องเลือกใหม่
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const fs = require("fs");
@@ -164,7 +165,7 @@ const login = async (code) =>
   } catch (e) {
     fail(String(e));
   } finally {
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     sql(`delete from "TeamDayPlan" where team='กระบี่' and date='${VD}'`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");

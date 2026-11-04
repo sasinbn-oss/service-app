@@ -7,6 +7,7 @@
 #   · เบิก/โอนไม่ได้ส่งกลับแอดมินพร้อมเหตุผล (ทั้งก่อนโอนและระหว่างรอของ) · ของคลัง 94 ทั้งหมดไม่ผ่านขั้นเหล่านี้
 #   · เบิกครบ (นัดวันแล้ว) → แอดมินคอนเฟิร์มลูกค้า (เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) · ใบเก่าที่ยังไม่มีวันนัด → หัวหน้าภาคนัดวัน
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -24,7 +25,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 REGION=$(DB "select region from \"Branch\" where code='C0006'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

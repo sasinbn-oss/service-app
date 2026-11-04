@@ -4,6 +4,7 @@
 //   · หัวหน้าภาคของทีมที่รับเปิดใบได้ แต่ไม่มีปุ่ม (ดูได้อย่างเดียว)
 //   · ช่างทีมประจำสาขาและทีมที่รับเห็นปุ่มปิดงานทั้งคู่
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง
 const path = require("path");
@@ -167,7 +168,7 @@ const login = async (code, password = "test1234") =>
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     if (made.length) sql(`delete from "User" where id in (${made.join(",")})`);
     await call(A, "PATCH", `/auth/users/${t1Id}`, { team: t1Team || null });
     await browser.close();

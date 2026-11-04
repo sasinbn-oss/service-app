@@ -11,6 +11,7 @@
 #   · ส่งปิดงานซ้ำ (รอตรวจเคลม / ปิดแล้ว) = 409 code CLOSE_ALREADY_SENT ฐานข้อมูลไม่เปลี่ยน — แอปนับเป็นส่งสำเร็จได้
 #   · ขั้นตรวจเคลมบอกว่ารอ "Admin Spare Part" (ไม่ใช่ "แอดมิน") · งานของฉันยังบอก done + status CLAIM_REVIEW
 #   · ปิดพร้อมเคลมแล้ว (รอตรวจเคลม) เปิดใบรออะไหล่ต่อได้ · ทะเบียนที่มีแค่ยี่ห้อ (isBrandOnly ของแอป) ครบทุกยี่ห้อ
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/claim-setup.sh"
 
@@ -22,7 +23,7 @@ TMP=$(mktemp -d)
 ABC="CZCS$SUF"
 AID=""
 claim_extra_cleanup() {
-  [ -n "$AID" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$AID" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$AID"
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$ABC');
       delete from \"Branch\" where code='$ABC'" >/dev/null
   rm -rf "${TMP:?}"

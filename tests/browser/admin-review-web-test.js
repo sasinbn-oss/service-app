@@ -5,6 +5,7 @@
 //   · หัวหน้าภาค: การ์ดโชว์คำตอบสีเขียว → รับทราบ (ฐานข้อมูล) → กล่องหาย ปุ่มส่งกลับมา
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const path = require("path");
 const DIR = __dirname;
@@ -149,7 +150,7 @@ const login = async (code) =>
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     await browser.close();
   }
 })();

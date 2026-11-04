@@ -13,6 +13,7 @@
 #   · claimGuide ของเครื่องซักไม่มี Error ของเครื่องอบ · "ไม่มี Error ขึ้น" อยู่บนสุด · คำอ่านไทยของข้อเช็ค ·
 #     claimApprovedModel จากเคลมที่อนุมัติของเครื่องเดียวกัน (เครื่องอื่นในสาขาไม่ได้) · GET …/attachments/:aid/file ส่งรูปป้ายรุ่น (ให้แอปอ่านป้าย) ·
 #     งานของฉัน warrantyUntil / plateFamily / preRepair (นับเฉพาะไฟล์ไม่ผูกชิ้น) · เครื่อง Oasis เรียก "วิดีโออาการตอนเครื่องเดิน"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/claim-setup.sh"
 
@@ -23,7 +24,7 @@ OLD_OPENED=""
 claim_extra_cleanup() {
   rm -rf "${TMP:?}"
   # ใบของสาขา COCO ต้องลบก่อนสาขา (ใบงานอ้างถึงสาขา/เครื่อง)
-  [ -n "$AID" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$AID" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$AID"
   # คืนวันเปิดร้านของสาขาทดสอบ (ข้อ "หมดประกัน" เลื่อนชั่วคราว) — สาขาถูกลบตามหลังอยู่แล้ว แต่ตายกลางทางก็ไม่ค้างค่าแปลก
   [ -n "$OLD_OPENED" ] && DB "update \"Branch\" set \"openedAt\"='$OLD_OPENED' where code='$BC'" >/dev/null
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$ABC');

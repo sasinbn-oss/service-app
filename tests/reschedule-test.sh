@@ -15,6 +15,7 @@
 #     ไม่เขียนอะไร · ตรง 200 · ไม่ส่ง = แบบเดิม · ใบผูกเคสก็กันแบบเดียวกัน
 #   · บันทึกส่งกลับ (ทีมไม่ว่าง) บอกเหตุตามจริง: แอดมินเลื่อน/ดึงคืน = "ไม่ว่างวันที่แอดมินเลื่อน" · ลูกค้าขอ = "ไม่ว่างวันที่ลูกค้าขอ"
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -61,7 +62,7 @@ CHECKIN0=$(DB "select coalesce(max(id),0) from \"BranchCheckIn\"")
 cleanup() {
   DB "delete from \"BranchCheckIn\" where id>$CHECKIN0 and \"userId\"=(select id from \"User\" where \"employeeCode\"='T001')" >/dev/null
   # ใบที่สร้างใน $(...) ตัวแปรไม่กลับมาที่เชลล์หลัก — หาจากอาการที่มีเลขสุ่มของรอบนี้
-  for i in $(DB "select id from \"WorkOrder\" where symptom='$SYMPTOM'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $(DB "select id from \"WorkOrder\" where symptom='$SYMPTOM'")
   [ -n "$OUT" ] && DB "delete from \"Outage\" where id=$OUT" >/dev/null
   DB "delete from \"User\" where \"employeeCode\"='ZRSP$SUF'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null

@@ -4,6 +4,7 @@
 # เคสจริง: ช่างที่เข้าระบบไว้แล้วถูกตั้งเป็นหัวหน้าภาค — แอปเห็นเป็นหัวหน้าภาค (อ่าน /auth/me สด)
 # เปิดหน้าจ่ายงานได้ แต่กดแล้วโดน "ขั้นนี้เป็นของหัวหน้าภาค ไม่ใช่ของคุณ" เพราะเซิร์ฟเวอร์เชื่อสิทธิ์ในโทเคน
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -19,7 +20,7 @@ VISIT=$(day 12)
 SUF=$RANDOM
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"User\" where \"employeeCode\"='ZR$SUF'" >/dev/null
 }
 trap cleanup EXIT

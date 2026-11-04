@@ -8,6 +8,7 @@
 //          → อนุมัติ (✓ ผ่าน → อนุมัติเคลม · ปิดงาน → ยืนยันอนุมัติ) → ปิดงาน (ตัดสินทีละชิ้น · เคลมก้อน 3)
 // ยืนยันผลที่ฐานข้อมูลทุกขั้น ไม่เชื่อข้อความบนจออย่างเดียว
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay, fxPart } = require("./fixture"); // วันนัดนับจากวันนี้ — เซิร์ฟเวอร์ไม่รับวันย้อนหลัง · fxPart = อะไหล่ตรงยี่ห้อเครื่อง
 const fs = require("fs");
@@ -346,7 +347,7 @@ const login = async (code) =>
     await page.waitForTimeout(800);
     const expanded = (await label(page, "ขั้นตอนงาน").count()) > 0;
     const gone = [];
-    for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ลบใบงานถาวร", "แก้ไขอาการ/สถานะ", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
+    for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ย้ายไปถังขยะ…", "แก้ไขอาการ/สถานะ", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
     expanded && gone.length === 0
       ? pass("Admin Spare Part: กางรายละเอียดใบงานแล้วก็ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน")
       : fail(expanded ? `Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}` : "กางรายละเอียดใบงานไม่ได้ — นับปุ่มแก้ใบงานไม่ได้");
@@ -457,9 +458,9 @@ const login = async (code) =>
       sql(`select status||'|'||"updatedAt" from "WorkOrder" where id=${orig}`) === before
         ? pass("ใบจริงไม่ถูกแตะตลอดการทดสอบ (ฐานข้อมูล)")
         : fail("ใบจริงเปลี่ยนระหว่างทดสอบ");
-      await call(A, "DELETE", `/work-orders/${orig}`);
+      await purgeOrders(A, [orig]);
     }
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     sql(`delete from "Machine" where "branchId" in (select id from "Branch" where code='${bc}');
          delete from "Branch" where code='${bc}';
          delete from "User" where "employeeCode"='ZCWP${suf}';

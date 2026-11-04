@@ -6,6 +6,7 @@
 #   · ย้าย Supervisor ไป Area อื่น · ย้ายสาขาระหว่าง Supervisor (เปลี่ยนว่าใครเห็นใบงาน) · ตรวจค่าที่ส่งมาทุกตัว
 #   · Maid (COCO): ส่งแยก (maids + branches[].maids) — ผังวาดใต้คนที่ถือสาขา · ไม่อยู่ใน people · ลบบัญชีแล้วไม่ขึ้น
 #   · คนลาออก: ย้ายสาขาทั้งหมดให้คนดูแลแทน (จำว่าเป็นของใคร) → คนใหม่มา ส่งต่อเฉพาะสาขาที่ดูแลแทน
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
@@ -20,7 +21,7 @@ CODE() { curl -s -o /dev/null -w "%{http_code}" -X POST "localhost:4000/api/$2" 
 LOGINS="'zm.area1','zm.area2','zm.sup1','zm.sup2','zm.sup3','zm.sup4','zm.parts'"
 T_PHONE=$(DB "select coalesce(phone,'') from \"User\" where \"employeeCode\"='T001'")
 cleanup() {
-  [ -n "$WID" ] && curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$WID" -H "$(H $A)"
+  purge_orders "$A" "$WID"
   DB "update \"Branch\" set \"cocoSupervisorId\"=null, \"coverForId\"=null, \"coverForName\"=null, \"coverSince\"=null where code in ('C0001','C0006','CNX')" >/dev/null
   DB "update \"User\" set \"areaId\"=null where \"employeeCode\" like 'zm.%'" >/dev/null
   DB "delete from \"User\" where \"employeeCode\" like 'zm.%'" >/dev/null

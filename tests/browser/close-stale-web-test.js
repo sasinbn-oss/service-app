@@ -8,6 +8,7 @@
 //   (เคลมเลิกก่อนส่ง — ปิดแบบไม่เคลม เทสต์นี้ดูแค่ลำดับคำตอบ ไม่ใช่กติกาเคลม)
 // รันกับแอปที่พอร์ตอื่นได้ด้วย APP_URL (ค่าเริ่ม http://localhost:8081) · ต้องมี DATABASE_URL · รีสตาร์ท Expo ก่อนรัน (เว็บไม่เฝ้าไฟล์)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay, fxPart } = require("./fixture");
 const fs = require("fs");
@@ -210,7 +211,7 @@ const waitFor = async (fn, ms = 10000) => {
   } catch (e) {
     fail(String(e).slice(0, 400));
   } finally {
-    if (id) await call(A, "DELETE", `/work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     // กดถึงหน้างานสร้างแถวเช็คอินผูกทั้งสาขาและช่าง — ไม่ลบก่อน ลบสาขา/ผู้ใช้ไม่ได้ (FK)
     sql(`delete from "BranchCheckIn" where "branchId" in (select id from "Branch" where code='${bc}') or "userId" in (select id from "User" where "employeeCode"='${TECH}');
          delete from "TeamDayPlan" where team='${team}' and date='${today ?? "1900-01-01"}';

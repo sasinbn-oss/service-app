@@ -5,6 +5,7 @@
 //   4) หัวหน้าภาค "ช่างเข้าดำเนินการแก้ไขเรียบร้อย": เลือกช่าง แนบรูปหลังซ่อม → ฐานข้อมูลปิดเป็นซ่อมเสร็จ (FIXED)
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const path = require("path");
 const { execSync } = require("child_process");
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
@@ -207,7 +208,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
+    await purgeOrders(A, ids);
     // แผนที่มีช่างคนที่สองอยู่ = แผนของเทสต์นี้เท่านั้น (ลบแผน สมาชิกหายตาม) — ต้องลบก่อนผู้ใช้ ไม่งั้นติด FK
     sql(`delete from "TeamDayPlan" where id in (select "planId" from "TeamDayPlanMember" where "userId" in (select id from "User" where "employeeCode"='${T2}'));
          delete from "User" where "employeeCode"='${T2}'`);

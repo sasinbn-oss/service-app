@@ -4,6 +4,7 @@
 #   · กลุ่มขั้น (bucket — รวม "รอคอนเฟิร์มลูกค้า" ของเบิกก่อนคอนเฟิร์ม) · ลูกค้าคอนเฟิร์ม · กำลังโอน (ต้นทาง ใบเบิก ใบโอน) · เลยวันนัด
 #   · ตัวที่ยังไม่เบิกในใบเดียวกัน (issued=false)
 #   · หัวหน้าภาคนอกพื้นที่ไม่เห็น · ช่าง 403 · Excel มีแถวละอะไหล่ที่เบิกแล้ว + ชีตรวมตามอะไหล่
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -24,7 +25,7 @@ S=$(login S001)
 TEAM=$(DB "select zone from \"Branch\" where code='$BR'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

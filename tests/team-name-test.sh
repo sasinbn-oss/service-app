@@ -3,6 +3,7 @@
 #   · ช่องว่าง/อักษรมองไม่เห็นในชื่อทีม ถูกล้างตอนบันทึก (สาขา · สิทธิ์ผู้ใช้) และตอนเทียบขอบเขต
 #   · สะกดสลับ ณ/น (พิษนุโลก ↔ พิษณุโลก) → ใบ "ไม่มีคนรับ" บอกชื่อหัวหน้าภาคกับชื่อที่สะกดไม่ตรง
 #   · รวมทีมที่หน้าทีมช่าง (เปลี่ยนชื่อ) แล้วใบเข้าหัวหน้าภาค · หัวหน้าภาคเห็นใบในรายการของตัวเอง
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
@@ -54,7 +55,7 @@ DB "update \"Branch\" set zone='พิษณุโลก '||chr(8203) where id=$
 ROW 'r.orphan===false ? "ok" : r.orphanReason' | grep -q '^ok$' && pass "ชื่อทีมในฐานข้อมูลมีอักษรซ่อน → ยังนับว่าหัวหน้าภาคดูแล" || fail "dirty: $(ROW 'r.orphanReason')"
 
 # เก็บกวาด
-curl -s -X DELETE "localhost:4000/api/work-orders/$(DB "select id from \"WorkOrder\" where code='$WO'")" -H "$(H $A)" >/dev/null
+purge_orders "$A" "$(DB "select id from \"WorkOrder\" where code='$WO'")"
 DB "delete from \"Machine\" where \"branchId\"=$BID; delete from \"Branch\" where id=$BID; delete from \"TeamRename\" where \"fromName\"='พิษนุโลก'" >/dev/null
 DB "update \"User\" set region=NULLIF('$OLD_REGION',''), \"supervisedTeams\"='$OLD_TEAMS' where id=$SID" >/dev/null
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

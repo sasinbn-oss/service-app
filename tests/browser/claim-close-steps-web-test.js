@@ -20,6 +20,7 @@
 // วันนัด 12 วันข้างหน้าตอนปล่อยงาน (G10) แล้วย้ายเป็นวันนี้ด้วย SQL หลังปล่อยงาน ให้การ์ดอยู่แท็บ "วันนี้"
 // ยืนยันผลที่ฐานข้อมูลทุกข้อที่เปลี่ยนข้อมูล · ต้องมี DATABASE_URL · รีสตาร์ท Expo ก่อนรัน (เว็บไม่เฝ้าไฟล์) · อ่านป้ายช้า ให้เวลานาน
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay, fxPart } = require("./fixture");
 const fs = require("fs");
@@ -495,7 +496,7 @@ const waitFor = async (fn, ms = 10000) => {
   } catch (e) {
     fail(String(e));
   } finally {
-    for (const i of ids) await call(A, "DELETE", `/work-orders/${i}`);
+    await purgeOrders(A, ids);
     // กดถึงหน้างานสร้างแถวเช็คอินผูกทั้งสาขาและช่าง — ไม่ลบก่อน ลบสาขา/ผู้ใช้ไม่ได้ (FK) และของทดสอบค้างฐาน
     sql(`delete from "BranchCheckIn" where "branchId" in (select id from "Branch" where code='${bc}') or "userId" in (select id from "User" where "employeeCode"='${TECH}');
          delete from "Machine" where "branchId" in (select id from "Branch" where code='${bc}');

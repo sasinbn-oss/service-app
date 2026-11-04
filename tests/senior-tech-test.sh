@@ -16,6 +16,7 @@
 #     และไม่ติดไปตอนตั้งเป็น Senior ด้วย role อย่างเดียว (ชิปบนการ์ด)
 #     โทเคนเดิมหมดสิทธิ์ทันที — ขอบเขตอ่านจากฐานข้อมูลทุกคำขอ ไม่อยู่ในโทเคน
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md) · สร้างสาขา/ทีม/ทีมรวม/ผู้ใช้ ZS… เองแล้วลบทั้งหมด · ไม่แตะ T001/S001
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 . tests/lib/fixture-parts.sh
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1" 2>/dev/null; }
@@ -52,7 +53,7 @@ USERS="select id from \"User\" where \"employeeCode\" like 'ZS%$SUF%' or \"emplo
 cleanup() {
   # ใบลูก (แจ้งปัญหา) id มากกว่าใบแม่ — ลบจากมากไปน้อย
   for i in $(DB "select id from \"WorkOrder\" where \"branchId\" in ($BRS) order by id desc"); do
-    curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"
+    purge_orders "$A" $i
   done
   DB "delete from \"TeamDayPlan\" where team like 'ZS%$SUF%'" >/dev/null
   DB "delete from \"BranchCheckIn\" where \"userId\" in ($USERS)" >/dev/null
