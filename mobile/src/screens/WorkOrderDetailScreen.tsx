@@ -962,7 +962,86 @@ function crossNote(t: Team | undefined, team: string, own: string | null | undef
   return `${close}\nทีมนอกความดูแล — ใบยังอยู่กับคุณ (คุณกดปล่อยงานเอง) · ${who} เห็นใบนี้แต่ดูได้อย่างเดียว`;
 }
 
-export default function WorkOrderDetailScreen({ route, navigation }: Props) {
+/**
+ * หน้าใบงานที่เปิดจากลิงก์บนเว็บ (/#/wo/WO-00045) — ที่อยู่มีแต่รหัสที่คนเห็น ยังไม่มีเลขใบ
+ * ถามเลขใบจากเซิร์ฟเวอร์ก่อน (กฎสิทธิ์เดียวกับเปิดใบ) แล้วใส่ id ให้หน้าเดิม — โค้ดทั้งหน้าใช้ id อยู่แล้ว ไม่ต้องรู้จักรหัส
+ * ไม่มีสิทธิ์ = หน้ากุญแจแบบเดียวกับเปิดใบจากรายการ · ไม่พบ = บอกรหัสที่หาไม่เจอ (ลิงก์พิมพ์ผิด/ใบถูกลบ)
+ */
+function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => void }) {
+  const code = (route.params as { code?: string }).code ?? "";
+  const { user: me } = useAuth();
+  const [fail, setFail] = useState<{ text: string; locked: boolean } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .get<{ id: number; code: string }>(`/work-orders/by-code/${encodeURIComponent(code)}`)
+      .then((res) => {
+        if (!alive) return;
+        onFound();
+        navigation.setParams({ id: res.data.id, code: res.data.code });
+      })
+      .catch((e) => {
+        if (!alive) return;
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        setFail({ text: status === 404 ? `ไม่พบใบงาน ${code}` : apiErrorMessage(e), locked: status === 403 });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [code, navigation, onFound]);
+  return (
+    <PopupScreen title={code || "ใบงาน"} subtitle="ใบงานซ่อม" startMaximized>
+      {fail?.locked ? (
+        <LockedOrder me={me} error={fail.text} onBack={() => navigation.goBack()} />
+      ) : fail ? (
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{fail.text}</Text>
+        </View>
+      ) : (
+        <View style={styles.centered}>
+          <Spinner color={colors.primary} />
+        </View>
+      )}
+    </PopupScreen>
+  );
+}
+
+/** เปิดใบที่ไม่ใช่ของทีม/พื้นที่ตัวเอง (403) — หน้ากุญแจแทนตัวหนังสือแดง เพราะไม่ใช่ข้อผิดพลาด แค่ไม่ใช่งานของคุณ */
+function LockedOrder({ me, error, onBack }: { me: { role: string } | null; error: string | null; onBack: () => void }) {
+  return (
+    <View style={styles.centered} accessibilityLabel="ไม่มีสิทธิ์ดูใบงานนี้">
+      <View style={styles.lockIcon}>
+        <Ionicons name="lock-closed" size={22} color={colors.textMuted} />
+      </View>
+      <Text style={styles.lockTitle}>
+        {me?.role === "SUPERVISOR" ? "ใบงานนี้อยู่นอกพื้นที่ที่คุณดูแล" : "ใบงานนี้ไม่ใช่ของทีมคุณ"}
+      </Text>
+      {/* ข้อความเซิร์ฟเวอร์ขึ้นต้นด้วยหัวข้อเดียวกัน — ตัดออก เหลือแค่คำแนะนำ */}
+      <Text style={styles.lockText}>{error?.replace(/^ใบงานนี้ไม่ใช่ของทีมคุณ — /, "")}</Text>
+      <TouchableOpacity style={styles.lockBtn} onPress={onBack} activeOpacity={0.7}>
+        <Text style={styles.lockBtnText}>กลับไปรายการใบงาน</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+/**
+ * ทางเข้าหน้าใบงาน — มี id (เปิดจากในแอป) เข้าหน้าใบงานเลย · มีแต่รหัส (ลิงก์) ถามเลขใบก่อน
+ * instant: หน้าต่างเด้งขึ้นแล้วตอนถามเลขใบ — หน้าใบงานที่มาแทนไม่ต้องเล่นท่าเปิดซ้ำ (ไม่งั้นเด้งสองรอบ)
+ */
+export default function WorkOrderDetailRoute(props: Props) {
+  const found = useRef(false);
+  const onFound = useCallback(() => {
+    found.current = true;
+  }, []);
+  return typeof (props.route.params as { id?: unknown }).id === "number" ? (
+    <WorkOrderDetailScreen {...props} instant={found.current} />
+  ) : (
+    <OpenByCode {...props} onFound={onFound} />
+  );
+}
+
+function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant?: boolean }) {
   const { id } = route.params;
   const { user: me } = useAuth();
   /**
@@ -1519,7 +1598,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   if (loading) {
     return (
-      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized instant={instant}>
         <View style={styles.centered}>
           <Spinner color={colors.primary} />
         </View>
@@ -1529,27 +1608,15 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
 
   if (locked) {
     return (
-      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
-        <View style={styles.centered} accessibilityLabel="ไม่มีสิทธิ์ดูใบงานนี้">
-          <View style={styles.lockIcon}>
-            <Ionicons name="lock-closed" size={22} color={colors.textMuted} />
-          </View>
-          <Text style={styles.lockTitle}>
-            {me?.role === "SUPERVISOR" ? "ใบงานนี้อยู่นอกพื้นที่ที่คุณดูแล" : "ใบงานนี้ไม่ใช่ของทีมคุณ"}
-          </Text>
-          {/* ข้อความเซิร์ฟเวอร์ขึ้นต้นด้วยหัวข้อเดียวกัน — ตัดออก เหลือแค่คำแนะนำ */}
-          <Text style={styles.lockText}>{error?.replace(/^ใบงานนี้ไม่ใช่ของทีมคุณ — /, "")}</Text>
-          <TouchableOpacity style={styles.lockBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-            <Text style={styles.lockBtnText}>กลับไปรายการใบงาน</Text>
-          </TouchableOpacity>
-        </View>
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized instant={instant}>
+        <LockedOrder me={me} error={error} onBack={() => navigation.goBack()} />
       </PopupScreen>
     );
   }
 
   if (error || !order) {
     return (
-      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized>
+      <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized instant={instant}>
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error ?? "ไม่พบใบงานนี้"}</Text>
         </View>
@@ -1805,6 +1872,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       subtitle="ใบงานซ่อม"
       backLabel={`ใบงาน ${order.code}`}
       startMaximized
+      instant={instant}
       right={
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           {user?.superAdmin ? (

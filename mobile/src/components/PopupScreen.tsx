@@ -77,6 +77,7 @@ export default function PopupScreen({
   backLabel,
   width = 1040,
   startMaximized = false,
+  instant = false,
   children,
 }: {
   title: React.ReactNode;
@@ -86,6 +87,11 @@ export default function PopupScreen({
   width?: number;
   /** เปิดมาขยายเต็มกรอบ (จอกว้างเท่านั้น) — ใบงานมีของให้อ่านเยอะ ขนาดปกติต้องเลื่อนตลอด */
   startMaximized?: boolean;
+  /**
+   * เปิดค้างอยู่แล้ว ไม่เล่นท่าเปิด — หน้าต่างอีกตัวของหน้าเดียวกันเพิ่งเด้งขึ้นไปก่อน
+   * (ใบงานจากลิงก์: หน้าต่าง "กำลังหาใบงาน" ถูกแทนด้วยหน้าใบงานจริง — เด้งซ้ำดูเหมือนเปิดสองใบ)
+   */
+  instant?: boolean;
   children: React.ReactNode;
 }) {
   const navigation = useNavigation();
@@ -165,9 +171,10 @@ export default function PopupScreen({
   host.current.backLabel = backLabel ?? "";
 
   // ── เปิด/ปิดหน้าต่าง ──
-  const appear = useRef(new Animated.Value(0)).current;
-  const fade = useRef(new Animated.Value(0)).current;
+  const appear = useRef(new Animated.Value(instant ? 1 : 0)).current;
+  const fade = useRef(new Animated.Value(instant ? 1 : 0)).current;
   useEffect(() => {
+    if (instant) return;
     Animated.parallel([
       timing(fade, 1, sheet ? 260 : 150, Easing.out(Easing.quad)),
       sheet ? timing(appear, 1, 500) : spring(appear, 1, "pop"),

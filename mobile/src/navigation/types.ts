@@ -14,7 +14,8 @@ export type HomeStackParamList = {
   MyJobs: undefined;
   HomeMenu: undefined;
   ReportsMenu: undefined;
-  Report: { kind: ReportKind; title: string };
+  /** title = ชื่อการ์ดที่กดมา · เปิดจากลิงก์ไม่มี (หัวหน้าใช้ reportTitle แทน) */
+  Report: { kind: ReportKind; title?: string };
   /** รายงานใบงานแยกตามผู้เปิด — เลือกช่วงวันที่เอง ไม่ได้ใช้หน้ารายงานทั่วไป */
   OpenerReport: undefined;
   /** รายงานทั้งระบบ — แอดมินเท่านั้น */
@@ -50,11 +51,16 @@ export type HomeStackParamList = {
   WorkOrderForm:
     | { outageId?: number; presetTitle?: string; branchCode?: string; machineCode?: string }
     | undefined;
-  /** open = เปิดฟอร์มให้เลยเมื่อโหลดเสร็จ (มาจากปุ่มบนการ์ดงานของฉัน) · reschedule = แอดมินเลื่อนวันนัด */
-  WorkOrderDetail: { id: number; open?: "close" | "stage" | "problem" | "reschedule" };
+  /**
+   * open = เปิดฟอร์มให้เลยเมื่อโหลดเสร็จ (มาจากปุ่มบนการ์ดงานของฉัน) · reschedule = แอดมินเลื่อนวันนัด
+   * code = รหัสใบงาน มากับลิงก์บนเว็บ (/#/wo/WO-00045) — ตอนนั้นยังไม่มี id (ถามเซิร์ฟเวอร์ก่อน — WorkOrderDetailScreen)
+   * ในแอปส่งแค่ id ได้ตามเดิม ที่อยู่คิดรหัสจาก id เอง (linking.ts)
+   */
+  WorkOrderDetail: { id: number; code?: string; open?: "close" | "stage" | "problem" | "reschedule" };
   TransferDocument: undefined;
   FlowList: undefined;
-  FlowRun: { id: number; title: string };
+  /** title = ชื่อผังจากรายการ · เปิดจากลิงก์ไม่มี หน้าวินิจฉัยใช้ชื่อจากผังที่โหลดมา */
+  FlowRun: { id: number; title?: string };
   SparePartList: undefined;
   SparePartDetail: { id: number };
   BranchCheckIn: undefined;
