@@ -27,6 +27,8 @@ import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import CancelOrderModal from "../components/CancelOrderModal";
 import TrashOrderModal from "../components/TrashOrderModal";
+import TrashedOrderNote, { trashedInfoOf, type TrashedInfo } from "../components/TrashedOrderNote";
+import { workOrderCode } from "../navigation/linking";
 import { isTrashedError, restoreFromTrash, trashDay } from "../utils/trash";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -971,12 +973,13 @@ function crossNote(t: Team | undefined, team: string, own: string | null | undef
 /**
  * หน้าใบงานที่เปิดจากลิงก์บนเว็บ (/#/wo/WO-00045) — ที่อยู่มีแต่รหัสที่คนเห็น ยังไม่มีเลขใบ
  * ถามเลขใบจากเซิร์ฟเวอร์ก่อน (กฎสิทธิ์เดียวกับเปิดใบ) แล้วใส่ id ให้หน้าเดิม — โค้ดทั้งหน้าใช้ id อยู่แล้ว ไม่ต้องรู้จักรหัส
- * ไม่มีสิทธิ์ = หน้ากุญแจแบบเดียวกับเปิดใบจากรายการ · ไม่พบ = บอกรหัสที่หาไม่เจอ (ลิงก์พิมพ์ผิด/ใบถูกลบ)
+ * ไม่มีสิทธิ์ = หน้ากุญแจแบบเดียวกับเปิดใบจากรายการ · ไม่พบ = บอกรหัสที่หาไม่เจอ (ลิงก์พิมพ์ผิด/ใบถูกลบจริงแล้ว)
+ * ใบที่อยู่ในถังขยะ: แอดมินเห็นว่าอยู่ในถัง + ปุ่มไปกู้ (TrashedOrderNote) · คนอื่นได้ "ไม่พบ" เหมือนรหัสที่ไม่มี (เซิร์ฟเวอร์ตัดสิน)
  */
 function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => void }) {
   const code = (route.params as { code?: string }).code ?? "";
   const { user: me } = useAuth();
-  const [fail, setFail] = useState<{ text: string; locked: boolean } | null>(null);
+  const [fail, setFail] = useState<{ text: string; locked: boolean; trashed?: TrashedInfo } | null>(null);
   useEffect(() => {
     let alive = true;
     api
@@ -989,7 +992,12 @@ function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => voi
       .catch((e) => {
         if (!alive) return;
         const status = (e as { response?: { status?: number } })?.response?.status;
-        setFail({ text: status === 404 ? `ไม่พบใบงาน ${code}` : apiErrorMessage(e), locked: status === 403 });
+        const trashed = trashedInfoOf(e);
+        setFail({
+          text: status === 404 ? `ไม่พบใบงาน ${code}` : apiErrorMessage(e),
+          locked: status === 403,
+          ...(trashed ? { trashed } : {}),
+        });
       });
     return () => {
       alive = false;
@@ -997,7 +1005,9 @@ function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => voi
   }, [code, navigation, onFound]);
   return (
     <PopupScreen title={code || "ใบงาน"} subtitle="ใบงานซ่อม" startMaximized>
-      {fail?.locked ? (
+      {fail?.trashed ? (
+        <TrashedOrderNote info={fail.trashed} onBack={() => navigation.goBack()} />
+      ) : fail?.locked ? (
         <LockedOrder me={me} error={fail.text} onBack={() => navigation.goBack()} />
       ) : fail ? (
         <View style={styles.centered}>
@@ -1192,10 +1202,18 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   const filesStatus = filesState === "ready" && unknownEvidence && unknownEvidence !== filesAskedFor ? "loading" : filesState;
   // หน้าต่าง "ย้ายใบงานนี้ไปถังขยะ?" (แอดมิน)
   const [trashing, setTrashing] = useState(false);
+  /**
+   * หน้านี้เองเพิ่งย้ายใบไปถังขยะ — ตัวเช็ครุ่นที่ยิงตอนกล่องยืนยันปิด (subscribeModals) ได้ 404 trashed ของใบที่ตัวเองลบ
+   * ถ้าไม่จำไว้: ขึ้นแถบที่สอง "…ถูกย้ายไปถังขยะแล้ว — แอดมินกู้คืนได้…" ทับแถบ "เลิกทำ" และ goBack ซ้ำอีกรอบ
+   * พาแอดมินหลุดจากรายการใบงานไปแท็บก่อนหน้า (ลองจริง 4 พ.ย. 69: ลบจากรายการแล้วไปโผล่ "งานของฉันวันนี้")
+   */
+  const trashedHere = useRef(false);
   // ขั้นที่ทำแล้วที่กดดูอยู่ (null = ไม่ได้ดู)
   const [stepInfo, setStepInfo] = useState<string | null>(null);
   // เปิดใบที่ไม่ใช่ของทีม/พื้นที่ตัวเอง (403) — หน้ากุญแจแทนตัวหนังสือแดง เพราะไม่ใช่ข้อผิดพลาด แค่ไม่ใช่งานของคุณ
   const [locked, setLocked] = useState(false);
+  // ใบนี้อยู่ในถังขยะ (404 trashed จากเซิร์ฟเวอร์) — แอดมินที่กู้คืนได้เห็นปุ่มไปหน้าถังขยะแทนตัวหนังสือแดง
+  const [inTrash, setInTrash] = useState(false);
   // การ์ดสาขา/การมอบหมายวางคู่กันเมื่อหน้าต่างกว้างพอ
   const [bodyWidth, setBodyWidth] = useState(0);
   const twoCol = bodyWidth >= 720;
@@ -1266,10 +1284,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
+      setInTrash(false);
       return got;
     } catch (e) {
       setError(apiErrorMessage(e));
       setLocked((e as { response?: { status?: number } })?.response?.status === 403);
+      setInTrash(isTrashedError(e));
       return null;
     } finally {
       setLoading(false);
@@ -1436,9 +1456,11 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       r = (await api.get(`/work-orders/${cur.id}/version`, { loadingText: false })).data;
     } catch (e) {
       // มีคนย้ายใบนี้ไปถังขยะระหว่างที่เปิดอยู่ — ปิดหน้าใบงานพร้อมบอก ไม่งั้นทุกปุ่มได้ "อยู่ในถังขยะ" จนกว่าจะรู้ตัวเอง
-      if (isTrashedError(e)) {
+      // หน้าที่ไม่ได้อยู่บนจอแล้ว (ปิดไปแล้ว/มีหน้าอื่นทับ) ไม่ goBack — ไม่งั้นพาหน้าที่อยู่บนจอถอยตามไปด้วย
+      if (isTrashedError(e) && !trashedHere.current) {
+        trashedHere.current = true;
         feedback.toast("warn", `${cur.code} ถูกย้ายไปถังขยะแล้ว — แอดมินกู้คืนได้ที่เมนู “ถังขยะใบงาน”`);
-        navigation.goBack();
+        if (navigation.isFocused()) navigation.goBack();
       }
       return; // เน็ตหลุด / เซิร์ฟเวอร์หลับ — รอบหน้าค่อยถาม
     }
@@ -1626,6 +1648,15 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     );
   }
 
+  // แอดมินที่ลบ/กู้ได้ (Admin Spare Part ไม่ได้) — คนอื่นเห็นข้อความของเซิร์ฟเวอร์ตามเดิม
+  if (inTrash && me?.role === "ADMIN" && !me.partsAdmin) {
+    return (
+      <PopupScreen title={workOrderCode(id)} subtitle="ใบงานซ่อม" startMaximized instant={instant}>
+        <TrashedOrderNote info={{ code: workOrderCode(id), canRestore: true }} onBack={() => navigation.goBack()} />
+      </PopupScreen>
+    );
+  }
+
   if (error || !order) {
     return (
       <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized instant={instant}>
@@ -1714,6 +1745,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
    * จำ id/code ไว้ก่อน goBack — หน้านี้ถูกถอดแล้ว ปุ่มบนแถบยังต้องรู้ว่ากู้ใบไหน
    */
   function trashed(r: { id: number; code: string; purgeAt: string }) {
+    trashedHere.current = true;
     setTrashing(false);
     navigation.goBack();
     feedback.toast("success", `ย้าย ${r.code} ไปถังขยะแล้ว · กู้คืนได้ถึง ${trashDay(r.purgeAt)}`, {

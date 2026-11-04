@@ -220,6 +220,17 @@ const PAGES: Page[] = [
   { path: "admin/teams", screen: "ManageTeams", tab: "AdminTab" },
   { path: "admin/backup", screen: "Backup", tab: "AdminTab" },
   { path: "admin/usage", screen: "AppUsage", tab: "AdminTab" },
+  /**
+   * ถังขยะใบงาน — q = คำค้นในช่องค้น (หน้าจอเขียนกลับเองทุกครั้งที่ค้น): F5/ก๊อบลิงก์ได้ผลค้นเดิม
+   * และลิงก์ใบงานที่อยู่ในถังขยะ (/#/wo/WO-…) พาแอดมินมาที่นี่พร้อมรหัสใบ ไม่ต้องหาเองในถัง
+   */
+  {
+    path: "admin/trash",
+    screen: "WorkOrderTrash",
+    tab: "AdminTab",
+    read: (_, q) => (q.q ? { q: q.q.slice(0, 100) } : undefined),
+    write: (p) => ({ q: { q: p?.q } }),
+  },
 ];
 
 /** หน้าแรกของแต่ละแท็บ (ข้างใต้ของหน้าที่ไม่ได้บอก under) และที่อยู่เมื่อยังไม่รู้ว่าอยู่หน้าไหนในแท็บ */

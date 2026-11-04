@@ -101,8 +101,11 @@ export type AdminStackParamList = {
   ManageTeams: undefined;
   Backup: undefined;
   AppUsage: undefined;
-  /** ถังขยะใบงาน — แอดมินที่ลบใบงานได้ กู้คืนได้ 30 วัน (ลบถาวรตอนนี้: Super Admin) */
-  WorkOrderTrash: undefined;
+  /**
+   * ถังขยะใบงาน — แอดมินที่ลบใบงานได้ กู้คืนได้ 30 วัน (ลบถาวรตอนนี้: Super Admin)
+   * q = คำค้นที่เปิดมาพร้อม (ลิงก์ใบงานที่อยู่ในถังขยะพามาที่นี่พร้อมรหัสใบ · /#/admin/trash?q=WO-…)
+   */
+  WorkOrderTrash: { q?: string } | undefined;
 };
 
 export type MainTabParamList = {

@@ -8,10 +8,12 @@
  * "ลบถาวรตอนนี้" เฉพาะ Super Admin (เจ้าของงานเลือก — ไว้ล้างใบทดสอบ ไม่ต้องรอ 30 วัน) · เซิร์ฟเวอร์กันอีกชั้น (403)
  * Admin Spare Part ไม่มีเมนูนี้ (ลบใบงานไม่ได้) · ดูในฐานะหัวหน้าภาค/ช่างไม่เห็นเมนูแอดมินอยู่แล้ว
  */
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { AdminStackParamList } from "../navigation/types";
 import { useRefreshHandler } from "../components/RefreshButton";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
@@ -82,15 +84,39 @@ function openOrder(id: number) {
   });
 }
 
-export default function WorkOrderTrashScreen() {
+type Props = NativeStackScreenProps<AdminStackParamList, "WorkOrderTrash">;
+
+export default function WorkOrderTrashScreen({ route, navigation }: Props) {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
   // ตารางห้าคอลัมน์ตามตัวอย่างบนจอกว้าง · จอแคบเรียงเป็นการ์ด (ตารางห้าคอลัมน์บนมือถืออ่านไม่ออก)
   const wide = width >= 900;
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [q, setQ] = useState("");
+  // เปิดมาพร้อมคำค้น (ลิงก์ใบงานที่อยู่ในถังขยะ · /#/admin/trash?q=…) — เริ่มที่ใบนั้นเลย
+  const [q, setQ] = useState(route.params?.q ?? "");
   const settled = useDebounced(q.trim());
+  /**
+   * คำค้นอยู่ในที่อยู่ของหน้า (/#/admin/trash?q=…) — F5 หรือก๊อบลิงก์ไปให้คนอื่นได้ผลค้นเดิม ไม่ใช่ถังทั้งถัง
+   * เทียบก่อนเขียน: เขียน params ทุกครั้ง = หน้าวาดใหม่ไม่รู้จบ · ที่อยู่ถูกแทนที่ ไม่เพิ่มรายการย้อนกลับ (linking.ts)
+   */
+  const wrote = useRef(route.params?.q ?? "");
+  useEffect(() => {
+    if ((route.params?.q ?? "") === settled) return;
+    wrote.current = settled;
+    navigation.setParams({ q: settled || undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- เขียนเมื่อคำค้นเปลี่ยนเท่านั้น (params ที่เปลี่ยนจากข้างนอกดูข้างล่าง)
+  }, [settled, navigation]);
+  /**
+   * หน้านี้เปิดค้างในแท็บหลังบ้านอยู่แล้ว แล้วกดลิงก์ใบงานที่อยู่ในถังขยะอีกใบ — params ใหม่มาแต่ช่องค้นยังเป็นคำเดิม
+   * รับเฉพาะค่าที่ไม่ได้มาจากช่องค้นเอง (wrote) ไม่งั้นค่าที่เพิ่งเขียนกลับมาทับตัวอักษรที่พิมพ์ต่อระหว่างนั้น
+   */
+  const fromRoute = route.params?.q ?? "";
+  useEffect(() => {
+    if (fromRoute === wrote.current) return;
+    wrote.current = fromRoute;
+    setQ(fromRoute);
+  }, [fromRoute]);
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(() => {
