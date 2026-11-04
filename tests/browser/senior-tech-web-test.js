@@ -63,7 +63,14 @@ const users = `select id from "User" where "employeeCode" in ('${TECH}','${NEW}'
   }
 
   async function open(who = "A001", pw = "test1234", width = 1400, height = 1100) {
-    const ctx = await browser.newContext({ viewport: { width, height }, geolocation: { latitude: LAT, longitude: LNG }, permissions: ["geolocation"] });
+    // เวลาไทย — บอร์ดแผนงานเปิดที่ "วันนี้" ตามนาฬิกาเครื่อง แต่แผนของเทสต์ตั้งวันตามเวลาไทย (SQL) · เครื่องรันเป็น UTC
+    // ช่วง 00:00–07:00 ของไทยสองวันนี้ต่างกัน บอร์ดเปิดที่เมื่อวานแล้วหาแถวทีม ก ไม่เจอ (ตก "แถวทีม ก" ตอนรันหลัง 17:00 UTC · tests/README)
+    const ctx = await browser.newContext({
+      viewport: { width, height },
+      geolocation: { latitude: LAT, longitude: LNG },
+      permissions: ["geolocation"],
+      timezoneId: "Asia/Bangkok",
+    });
     const page = await ctx.newPage();
     // ผู้ใช้ที่เทสต์นี้สร้างเองยังไม่เคยตอบกล่องสอนการใช้งาน — ปิดกล่องที่ขึ้นเอง ไม่งั้นพื้นมืดบังทุกปุ่ม (tests/README)
     await page.addInitScript(() => { try { localStorage.setItem("otteri-howto-auto", "off"); } catch {} });
