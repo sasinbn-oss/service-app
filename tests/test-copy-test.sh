@@ -59,7 +59,10 @@ echo
 echo "═══ คัดลอกใบที่กำลังเข้างาน"
 R=$(POST $A "work-orders/$ID/test-copy" '{}')
 C=$(echo "$R" | J 'd.id'); IDS="$C $IDS"
-echo "$R" | J 'd.code' | grep -qE '^WO-[0-9]{5}$' && pass "ได้ใบใหม่ $(echo "$R" | J 'd.code')" || fail "คัดลอก: $R"
+# รหัสตาม workOrderCode (เติมศูนย์ให้ครบ 5 หลัก ไม่ใช่ "5 หลักพอดี") — ฐานที่รันเทสต์บ่อยเลขใบเกิน 99999 แล้วได้ WO-100035
+# ซึ่งถูกต้อง เทียบกับเลขของใบเองจึงไม่พังเพราะเลขยาวขึ้น และจับได้ถ้ารหัสไม่ตรงกับใบ
+echo "$R" | J '/^\d+$/.test(String(d.id)) && d.code === "WO-" + String(d.id).padStart(5, "0")' | grep -qx true \
+  && pass "ได้ใบใหม่ $(echo "$R" | J 'd.code')" || fail "คัดลอก: $R"
 ROW=$(DB "select w.\"isTest\"||'|'||w.status||'|'||w.\"assignedTeam\"||'|'||w.priority||'|'||(w.\"branchId\"=o.\"branchId\")||'|'||(w.\"machineId\"=o.\"machineId\")||'|'||coalesce(w.\"outageId\"::text,'-')||'|'||left(w.title,7)||'|'||w.\"contactPhone\" from \"WorkOrder\" w, \"WorkOrder\" o where w.id=$C and o.id=$ID")
 [ "$ROW" = "true|IN_PROGRESS|กระบี่|URGENT|true|true|-|[ทดสอบ]|081-234-5678" ] && pass "ใบทดสอบ: ขั้น ทีม ความด่วน สาขา เครื่อง ผู้ติดต่อเดียวกัน ไม่ผูกเคส มีป้าย [ทดสอบ] (ฐานข้อมูล)" || fail "ใบทดสอบ: $ROW"
 [ "$(DB "select kind||'|'||quantity||'|'||\"inStock\"||'|'||\"requisitionNo\" from \"WorkOrderPart\" where \"workOrderId\"=$C")" = "WAITING|2|true|RQ-TC$SUF" ] \

@@ -58,7 +58,8 @@ const { chromium } = require("playwright");
   // เปิดใบงานด้วยรหัสที่เห็นอยู่บนจอ แล้วปิด — รายการข้างหลังต้องอยู่ที่เดิม
   const code = await page.evaluate((h) => {
     const el = [...document.querySelectorAll("div")].find((d) => {
-      if (!/^WO-\d{5}$/.test(d.innerText) || d.children.length) return false;
+      // 5 หลักขึ้นไป — workOrderCode เติมศูนย์ให้ครบ 5 หลัก ฐานที่รันเทสต์บ่อยเลขใบเกิน 99999 แล้ว (WO-100035)
+      if (!/^WO-\d{5,}$/.test(d.innerText) || d.children.length) return false;
       const r = d.getBoundingClientRect();
       return r.top > 150 && r.bottom < h - 100;
     });

@@ -38,7 +38,8 @@ const { chromium } = require("playwright");
       for (let i = 0, idle = 0; i < 400 && idle < 15; i++) {
         const now = await page.evaluate(() =>
           [...document.querySelectorAll("div")]
-            .filter((d) => /^WO-\d{5}$/.test(d.innerText) && d.children.length === 0)
+            // 5 หลักขึ้นไป — workOrderCode เติมศูนย์ให้ครบ 5 หลัก ฐานที่รันเทสต์บ่อยเลขใบเกิน 99999 แล้ว (WO-100035)
+            .filter((d) => /^WO-\d{5,}$/.test(d.innerText) && d.children.length === 0)
             .map((d) => d.innerText)
         );
         const before = codes.size;
