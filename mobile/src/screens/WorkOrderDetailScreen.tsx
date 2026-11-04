@@ -2672,20 +2672,30 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
                       <Text style={styles.ptEtaText}>—</Text>
                     );
                     return wide ? (
-                      <View key={part.sparePartId} style={[styles.ptRow, i > 0 && styles.ptRowLine, out && styles.ptRowOut]}>
-                        <Text style={[styles.ptCell, styles.ptCode, styles.ptStrong]}>{partTitle(part)}</Text>
-                        <View style={styles.ptName}>
-                          <View style={styles.ptNameRow}>
-                            <Text style={styles.ptCell}>{part.offCatalog ? part.note ?? "" : part.name}</Text>
-                            {part.offCatalog ? <OffTag /> : null}
+                      <View key={part.sparePartId} style={[i > 0 && styles.ptRowLine, out && styles.ptRowOut]}>
+                        <View style={styles.ptRow}>
+                          <Text style={[styles.ptCell, styles.ptCode, styles.ptStrong]}>{partTitle(part)}</Text>
+                          <View style={styles.ptName}>
+                            <View style={styles.ptNameRow}>
+                              <Text style={styles.ptCell}>{part.offCatalog ? part.note ?? "" : part.name}</Text>
+                              {part.offCatalog ? <OffTag /> : null}
+                            </View>
+                            {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
                           </View>
-                          {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
-                          {/* หัวหน้าภาคแจ้งว่าหาได้ไหม จากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69) — แยกจากป้ายสถานะซึ่งเป็นผลเช็คของแอดมิน */}
-                          <OffSourceInfo part={part} when={formatDateTime} />
+                          <Text style={[styles.ptCell, styles.ptQty]}>{qty}</Text>
+                          <View style={styles.ptStock}>{chipView}</View>
+                          <View style={styles.ptEta}>{eta}</View>
                         </View>
-                        <Text style={[styles.ptCell, styles.ptQty]}>{qty}</Text>
-                        <View style={styles.ptStock}>{chipView}</View>
-                        <View style={styles.ptEta}>{eta}</View>
+                        {/*
+                         * หัวหน้าภาคแจ้งว่าหาได้ไหม จากที่ไหน (เจ้าของงานขอ 4 พ.ย. 69) — แยกจากป้ายสถานะซึ่งเป็นผลเช็คของแอดมิน
+                         * บรรทัดของตัวเองใต้แถว ไม่ใช่ในช่องรายการ: จอคอม ~1300 px ตารางอยู่คอลัมน์ซ้ายของหน้าสองคอลัมน์ ช่องรายการเหลือ ~50 px
+                         * ป้าย/รายละเอียด/"หัวหน้าภาคแจ้ง · เวลา" ถูกหักทีละคำจนแถวสูงหลายร้อย px อ่านไม่ออก (เห็นจากภาพหน้าจอจริง)
+                         */}
+                        {part.offCatalog ? (
+                          <View style={styles.ptRowSource}>
+                            <OffSourceInfo part={part} when={formatDateTime} />
+                          </View>
+                        ) : null}
                       </View>
                     ) : (
                       <View key={part.sparePartId} style={[styles.ptCardRow, i > 0 && styles.ptRowLine, out && styles.ptRowOut]}>
@@ -11296,6 +11306,8 @@ const styles = StyleSheet.create({
   ptHeadRow: { backgroundColor: colors.background, paddingVertical: 8 },
   ptRowLine: { borderTopWidth: 1, borderTopColor: colors.border },
   ptRowOut: { backgroundColor: colors.dangerSoft },
+  // คำตอบจัดหาของนอกสโตร์ใต้แถว — เยื้องตรงคอลัมน์รายการ (ระยะขอบ md + ptCode 130 + ช่องห่าง sm) ให้อ่านว่าเป็นของแถวบน
+  ptRowSource: { paddingLeft: spacing.md + 130 + spacing.sm, paddingRight: spacing.md, paddingBottom: 12, marginTop: -6 },
   ptHead: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
   ptCell: { fontSize: 14, lineHeight: 21, color: colors.text },
   ptStrong: { fontWeight: "700" },
