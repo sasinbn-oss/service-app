@@ -4201,7 +4201,9 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
     include: {
       branch: { select: { id: true, code: true, name: true } },
       machine: { select: { id: true, code: true, brand: true, model: true, capacityKg: true } },
-      parts: { select: { sparePartId: true, quantity: true } },
+      // เรียงตามที่กระดานแสดง (machines.ts noteInclude) — ไม่เรียง Postgres คืนตามช่องในหน้าข้อมูล ซึ่งสลับได้หลัง vacuum
+      // คืนช่องของแถวที่ลบไป: ข้อความ "ไม่ตรงยี่ห้อ" กับลำดับอะไหล่ในใบที่เปิดจะไม่ตรงกับที่คนเห็นบนกระดาน (เทสต์ parts-pick เคยล้มเพราะนี้)
+      parts: { select: { sparePartId: true, quantity: true }, orderBy: { id: "asc" } },
     },
   });
   if (!outage) return res.status(404).json({ error: "ไม่พบเคสนี้" });
