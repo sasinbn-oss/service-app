@@ -37,6 +37,7 @@ import settingsRoutes from "./routes/settings";
 import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
 import { prisma } from "./prisma";
+import { startTrashPurge } from "./utils/trash";
 
 const app = express();
 
@@ -222,3 +223,5 @@ const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {
   console.log(`Service-app backend listening on port ${PORT}`);
 });
+// ใบงานในถังขยะที่ครบ 30 วัน — รอบเบา ๆ ทุกชั่วโมง (เหตุผลที่ไม่ทำทันทีตอนตื่นอยู่ที่ utils/trash.ts)
+startTrashPurge();

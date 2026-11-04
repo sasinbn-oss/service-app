@@ -100,6 +100,8 @@ model User {
   createdWorkOrders    WorkOrder[]           @relation("CreatedWorkOrders")
   assignedWorkOrders   WorkOrder[]           @relation("AssignedWorkOrders")
   closedWorkOrders     WorkOrder[]           @relation("ClosedWorkOrders")
+  // ใบงานที่คนนี้ย้ายไปถังขยะ — นับเป็นประวัติตอนลบผู้ใช้ ไม่งั้นลบจริงแล้วหน้าถังขยะไม่รู้ว่าใครลบ
+  trashedWorkOrders    WorkOrder[]           @relation("TrashedWorkOrders")
   workOrderLogs        WorkOrderLog[]
   adminReviewsSent     AdminReview[]         @relation("AdminReviewsSent")
   adminReviewsAnswered AdminReview[]         @relation("AdminReviewsAnswered")
@@ -813,6 +815,20 @@ model WorkOrder {
   // รายงานจะนับได้ว่าแต่ละทีม SUB ทำไปกี่งาน ถ้าเก็บเป็นข้อความรวมกับชื่อคนจะนับไม่ได้
   closeSubTeam      String?
 
+  // ── ถังขยะ (เจ้าของงานตัดสิน 4 พ.ย. 69) ──
+  //
+  // ลบใบงาน = ย้ายมาถังขยะ ไม่ใช่ลบแถว — แอดมินกู้คืนได้ 30 วันพร้อมอะไหล่ รูป ประวัติ แล้วระบบลบจริง (utils/trash.ts)
+  // เก็บเป็นช่องในตารางเดิม ไม่ย้ายไปตารางอื่น: ลูกทั้งหมด (อะไหล่ ประวัติ ไฟล์ เคลม) ชี้มาที่ id นี้อยู่แล้ว
+  // ย้ายตารางคือต้องย้ายลูกตามทุกตาราง และกู้คืนต้องย้ายกลับให้ครบ — ช่องเดียวกู้คืนคือล้างช่องนี้
+  // ราคาที่จ่าย: ทุกที่ที่อ่านใบงานต้องกรอง deletedAt = null (ALIVE ใน utils/trash.ts) — รายการที่กรองอยู่ใน README
+  // ขั้น (status) ไม่ถูกแตะตอนย้ายไปถังขยะ — กู้คืนแล้วใบอยู่ขั้นเดิมเป๊ะ ไม่ต้องจำแยก
+  deletedAt    DateTime?
+  deletedById  Int?
+  deletedBy    User?     @relation("TrashedWorkOrders", fields: [deletedById], references: [id], onDelete: SetNull)
+  // TRASH_REASONS ใน utils/constants.ts · deleteNote = ข้อความเพิ่ม (บังคับเมื่อเลือก "อื่น ๆ")
+  deleteReason String?
+  deleteNote   String?
+
   parts        WorkOrderPart[]
   services     WorkOrderService[]
   logs         WorkOrderLog[]
@@ -832,6 +848,11 @@ model WorkOrder {
   @@index([outageId])
   @@index([scheduledAt])
   @@index([parentId])
+  // หน้าถังขยะ/ลบครบ 30 วัน/รายชื่อใบในถังที่เซิร์ฟเวอร์จำไว้ อ่าน deletedAt IS NOT NULL ผ่านคอลัมน์แรก
+  // ส่วนรายการใบงาน (deletedAt IS NULL + ขั้น) ใช้ทั้งสองคอลัมน์ — แทบทุกแถวเป็น NULL ดัชนีคอลัมน์เดียวช่วยฝั่งนั้นไม่ได้
+  // ดัชนีบางส่วน (WHERE deletedAt IS NOT NULL) เล็กกว่า แต่ schema.prisma รุ่นนี้เขียนไม่ได้ — ใส่ใน SQL เองแล้ว
+  // migrate diff ที่ README ใช้เช็คจะเห็นเป็นของเกินทุกครั้ง
+  @@index([deletedAt, status])
 }
 
 // คนที่เข้าไปทำงานจริง บันทึกตอนปิดงาน

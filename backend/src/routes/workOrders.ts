@@ -35,6 +35,21 @@ import {
 import { cleanName } from "../utils/names";
 import { Coverage, TEAM_HOLDER_SELECT, coverageOfTeams, coverageOfUserId, covers, teamsOf } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
+import {
+  ALIVE,
+  IN_TRASH,
+  TRASHED_TEXT,
+  TRASH_KEEP_DAYS,
+  TRASH_REASONS,
+  aliveSql,
+  forgetTrashed,
+  hardDeleteWorkOrder,
+  purgeAtOf,
+  purgeExpired,
+  rememberTrashed,
+  trashGuard,
+  trashReasonText,
+} from "../utils/trash";
 import { requireAuth, requireAdmin, requireSuperAdmin, AuthRequest } from "../middleware/auth";
 import { ADMIN_WAREHOUSE, WAREHOUSES } from "../documents/warehouses";
 import { freshOutsource, isOutsourceTeam, outsourceList } from "../utils/outsource";
@@ -227,6 +242,12 @@ import {
 const router = Router();
 
 /**
+ * ใบในถังขยะ — ทุกเส้นทาง /:id ข้างล่าง (ดู แก้ แนบไฟล์ เคลม ลิงก์ไฟล์ ฯลฯ) ตอบ 404 "ใบงานนี้อยู่ในถังขยะ" ก่อนถึงตัวเส้นทาง
+ * ที่เดียวแทนการไล่ใส่ทีละเส้นทาง — เส้นทางใหม่ที่เพิ่มทีหลังได้ไปด้วยเอง · เส้นทางของถังขยะใช้ :trashedId (utils/trash.ts)
+ */
+router.param("id", trashGuard);
+
+/**
  * คำขอให้แอดมินตรวจสอบที่ยังค้าง — ยังไม่ตอบ หรือตอบแล้วแต่หัวหน้าภาคยังไม่รับทราบ (เอาแค่ล่าสุด)
  * การ์ดในกล่องงานกับหน้าใบงานโชว์กล่องม่วง (รอแอดมิน) หรือเขียว (แอดมินตอบแล้ว) จากตัวนี้
  */
@@ -330,8 +351,10 @@ const detailInclude = {
   workers: { include: { user: { select: { id: true, name: true, employeeCode: true } } } },
   // ใบงานที่ลิงก์กัน (แยกใบรออะไหล่) — ต้องเห็นจากทั้งสองฝั่ง
   // partsPicks แถวล่าสุด — ป้ายของใบที่ลิงก์ต้องตรงกับหน้าใบนั้น (statusLabelOf) ไม่งั้นใบที่รอคอนเฟิร์มอะไหล่ขึ้นว่า "ระบุอะไหล่"
-  parent: { select: { id: true, code: true, status: true, partsPicks: LATEST_PICK } },
-  children: { select: { id: true, code: true, status: true, partsPicks: LATEST_PICK }, orderBy: { id: "asc" } },
+  // ใบในถังขยะไม่ขึ้นเป็นลิงก์ (กดแล้วได้ 404) — ใบแม่อ่าน deletedAt มาแล้วซ่อนใน shape (ความสัมพันธ์แบบหนึ่งใส่ where ไม่ได้)
+  // ลิงก์ไม่ถูกลบ: กู้คืนใบไหนก็กลับมาเชื่อมกันเอง ไม่ต้องเขียนอะไรกลับ
+  parent: { select: { id: true, code: true, status: true, deletedAt: true, partsPicks: LATEST_PICK } },
+  children: { where: ALIVE, select: { id: true, code: true, status: true, partsPicks: LATEST_PICK }, orderBy: { id: "asc" } },
   /**
    * รายการอะไหล่ที่ช่างเลือกสองรอบล่าสุด (เจ้าของงานขอ ต.ค. 69) — รอบล่าสุดคือรอบที่อาจยังเปิด (openPickOf)
    * รอบก่อนหน้าให้หัวหน้าภาคเห็นว่าช่างแก้อะไรจากรอบที่ตีกลับ · relationJoins ดึงมาในคำสั่งเดียวกับตัวใบ
@@ -983,7 +1006,7 @@ function shape(
     // ผลตรวจหน้างาน — คนระบุอะไหล่รอบถัดไปอ่านจากตรงนี้
     inspectedAt: w.inspectedAt,
     inspectionNote: w.inspectionNote,
-    parent: w.parent
+    parent: w.parent && !w.parent.deletedAt
       ? {
           id: w.parent.id,
           code: w.parent.code,
@@ -1361,6 +1384,13 @@ const NON_STAGE_ACTIONS = [
   "MACHINE_BRAND_SET",
   // ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว) — บันทึกคู่กับการบันทึกอะไหล่ แถวหลักของเส้นทางนั้นคือการเดินขั้น ไม่ใช่แถวนี้
   "CROSS_BRAND_PARTS",
+  /**
+   * ย้ายไปถังขยะ / กู้คืน (เจ้าของงานตัดสิน 4 พ.ย. 69) — ขั้นไม่เปลี่ยนทั้งคู่ กู้คืนแล้วใบอยู่ขั้นเดิมเป๊ะ
+   * ถ้านับเป็นการเดินขั้น: "ค้างขั้นนี้มา N วัน" เริ่มนับใหม่ · คำขอนัดด่วนที่รอแอดมินจบเอง (ASK_SKIP) ·
+   * กล่องที่อ่านแถวล่าสุดของแอป (ช่างแจ้งปัญหา · ทีมไม่ว่างวันใหม่ — NOT_A_MOVE) หายทั้งที่ยังไม่มีใครแก้
+   */
+  "TRASHED",
+  "RESTORED",
 ];
 
 /**
@@ -1963,7 +1993,7 @@ async function computeOrphanSupervisorIds(): Promise<number[]> {
   const stages = WORK_ORDER_STAGE_ORDER.filter((st) => WORK_ORDER_STAGE_ACTOR[st] === "SUPERVISOR");
   const [rows, sups] = await Promise.all([
     prisma.workOrder.findMany({
-      where: { status: { in: stages } },
+      where: { ...ALIVE, status: { in: stages } },
       select: { id: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
     }),
     prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, extraRegions: true, supervisedTeams: true } }),
@@ -1993,7 +2023,7 @@ async function pendingAsks(today: string, ids?: number[]): Promise<Map<number, U
       WHERE "workOrderId" = w.id AND NOT (action = ANY(${ASK_SKIP}::text[]))
       ORDER BY "createdAt" DESC, id DESC LIMIT 1) l
     LEFT JOIN "User" u ON u.id = l."userId"
-    WHERE w.status = ANY(${SCHEDULE_STAGES}::text[]) AND NOT w."isTest"
+    WHERE w.status = ANY(${SCHEDULE_STAGES}::text[]) AND NOT w."isTest" AND ${aliveSql("w")}
       AND l.action = 'URGENT_REQUESTED' AND (l.meta->>'day') >= ${today}::text
       ${ids ? Prisma.sql`AND w.id = ANY(${ids}::int[])` : Prisma.empty}`;
   return new Map(
@@ -2047,6 +2077,14 @@ const listQuery = z.object({
  * แยกออกมาให้รายการ ตัวเลขกล่องงาน และการเช็คของใหม่ใช้ชุดเดียวกัน
  */
 async function scopeFor(req: AuthRequest, inbox = false): Promise<Prisma.WorkOrderWhereInput> {
+  /**
+   * ใบในถังขยะไม่อยู่ในขอบเขตของใคร — ใส่ที่นี่ที่เดียว รายการ ตัวเลขชิป กล่องงาน /version /locate งานวันนี้
+   * และตัวเลขกล่องงาน (inbox-count) ได้ไปพร้อมกันหมด เพราะทุกตัวสร้าง where จากขอบเขตนี้
+   */
+  return { AND: [ALIVE, await roleScope(req, inbox)] };
+}
+
+async function roleScope(req: AuthRequest, inbox: boolean): Promise<Prisma.WorkOrderWhereInput> {
   if (req.auth!.role === "ADMIN") return {};
   /**
    * กล่องงาน (inbox) = ใบที่ต้องทำเอง · รายการ = ใบที่เห็นได้ ซึ่งรวมใบที่จ่ายข้ามทีม (เจ้าของงานเลือก ต.ค. 69):
@@ -2663,10 +2701,18 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
     // ถามเวลาปิดนัดเฉพาะเมื่อใช้ — cutoffInboxFor ของคนอื่นคืน null โดยไม่รอ ถ้าถามไว้แล้วพังจะเป็น rejection ที่ไม่มีใครจับ
     inboxTakesOrphans(req.auth) ? cutoffInboxFor(req.auth, readCutoff(), new Date()) : Promise.resolve(null),
   ]);
-  const inbox = await prisma.workOrder.count({
-    where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource, cutoffInbox)] },
-  });
-  res.json({ inbox });
+  /**
+   * ตัวเลขข้างเมนู "ถังขยะใบงาน" (แอดมินที่ลบได้) — ถามพร้อมกับกล่องงานในรอบเดียว เมนูข้างโหลดตัวนี้ทุกครั้งที่เปลี่ยนหน้าอยู่แล้ว
+   * แยกเป็นคำขออีกเส้นคือคำขอเพิ่มทุกครั้งที่แอดมินเปลี่ยนหน้า เพื่อตัวเลขที่เปลี่ยนเดือนละไม่กี่ครั้ง
+   */
+  const trashKeeperAsks = req.auth!.role === "ADMIN" && !req.auth!.partsAdmin;
+  const [inbox, trash] = await Promise.all([
+    prisma.workOrder.count({
+      where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource, cutoffInbox)] },
+    }),
+    trashKeeperAsks ? prisma.workOrder.count({ where: IN_TRASH }) : Promise.resolve(null),
+  ]);
+  res.json(trash === null ? { inbox } : { inbox, trash });
 });
 
 /** ตัวเลือกที่หน้าจอต้องใช้ — สถานะ ความเร่งด่วน ผลงาน และรายชื่อช่าง */
@@ -2870,7 +2916,8 @@ router.put("/reports/parts-out/note", requireAuth, async (req: AuthRequest, res)
       id: parsed.data.partRowId,
       kind: "WAITING",
       inStock: false,
-      workOrder: { AND: [scope ?? {}], status: { in: PARTS_OUT_REPORT_STAGES } },
+      // ใบในถังขยะไม่อยู่ในรายงาน — แถวของมันจึงแก้หมายเหตุไม่ได้เหมือนแถวที่หลุดรายงานไปแล้ว
+      workOrder: { AND: [scope ?? {}, ALIVE], status: { in: PARTS_OUT_REPORT_STAGES } },
     },
     select: { id: true },
   });
@@ -2914,7 +2961,7 @@ router.get("/reports/confirmed", requireAuth, async (req: AuthRequest, res) => {
 
   const orders = await prisma.workOrder.findMany({
     where: {
-      AND: [scope],
+      AND: [scope, ALIVE],
       isTest: false,
       status: { not: "CANCELLED" },
       appointmentStatus: { in: APPOINTMENT_DONE },
@@ -3122,6 +3169,224 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
   });
 });
 
+// ── ถังขยะใบงาน (เจ้าของงานตัดสิน 4 พ.ย. 69 · utils/trash.ts) ──────────────────
+//
+// วางก่อน "/:id" ไม่งั้น Express จับ "trash" เป็นเลขใบงาน · ย้ายไปถังขยะ = DELETE /:id (ท้ายไฟล์)
+// กู้คืน/ลบถาวรใช้ :trashedId ไม่ใช่ :id — router.param("id") ตอบ 404 ให้ทุกใบในถังขยะ ซึ่งเส้นทางพวกนี้ต้องผ่าน
+
+/**
+ * ใครเปิดถังขยะได้ — คนเดียวกับที่ลบใบงานได้ (เจ้าของงานเลือก "แอดมินทุกคน"): แอดมิน · Super Admin
+ * Admin Spare Part ลบใบงานไม่ได้มาตั้งแต่ก่อนมีถังขยะ (ดูได้อย่างเดียว) จึงไม่มีถังขยะให้ดูด้วย
+ */
+function trashKeeper(req: AuthRequest, res: Response) {
+  if (req.auth!.role === "ADMIN" && !req.auth!.partsAdmin) return true;
+  res.status(403).json({ error: "ถังขยะใบงานสำหรับแอดมินเท่านั้น" });
+  return false;
+}
+
+/**
+ * หน้าถังขยะ — ?q= ค้นเลขใบงาน · รหัส/ชื่อสาขา · ชื่อคนลบ (ตามตัวอย่างที่ตกลง) · ใหม่สุดก่อน
+ *
+ * ลบใบที่ครบ 30 วันก่อนแล้วค่อยอ่าน (ไม่เกินทีละ PURGE_BATCH ใบ) — ระบบไม่มีรอบงานประจำที่เชื่อได้ (Render หลับ)
+ * ถ้าไม่ลบตรงนี้ แอดมินจะเห็นแถว "เหลือ 0 วัน" ค้างอยู่ทั้งที่ควรหายไปแล้ว · ส่วนใหญ่ไม่มีใบครบกำหนด = คำถามเดียวที่ได้ว่าง
+ * ไม่ส่งรูป/ไฟล์ — นับจำนวนอย่างเดียว ถังขยะคือรายการให้ตัดสินใจกู้หรือไม่กู้ ไม่ใช่ที่เปิดดูใบ
+ */
+router.get("/trash", requireAuth, async (req: AuthRequest, res) => {
+  if (!trashKeeper(req, res)) return;
+  // ลบไม่สำเร็จ (ฐานข้อมูลสะดุด) ไม่ทำให้หน้าถังขยะเปิดไม่ได้ — แถวที่ครบกำหนดขึ้น "เหลือ 0 วัน" แล้วรอบหน้าลองใหม่
+  await purgeExpired().catch((e) => console.error("[trash purge] ลบใบที่ครบกำหนดไม่สำเร็จ", e));
+  const q = String(req.query.q ?? "").trim().slice(0, 100);
+  const like = { contains: q, mode: "insensitive" as const };
+  const where: Prisma.WorkOrderWhereInput = {
+    ...IN_TRASH,
+    ...(q
+      ? {
+          OR: [
+            { code: like },
+            { branch: { code: like } },
+            { branch: { name: like } },
+            { deletedBy: { name: like } },
+          ],
+        }
+      : {}),
+  };
+  const [rows, total] = await Promise.all([
+    prisma.workOrder.findMany({
+      where,
+      orderBy: [{ deletedAt: "desc" }, { id: "desc" }],
+      // ถังขยะปกติมีไม่กี่สิบใบ — เพดานกันหน้าค้างถ้าวันหนึ่งมีคนลบใบทดสอบทีละร้อย (ค้นช่วยหาใบที่เกิน)
+      take: 300,
+      select: {
+        id: true,
+        code: true,
+        title: true,
+        jobType: true,
+        status: true,
+        isTest: true,
+        deletedAt: true,
+        deleteReason: true,
+        deleteNote: true,
+        deletedBy: { select: { name: true } },
+        branch: { select: { code: true, name: true } },
+        machine: { select: { code: true } },
+        partsPicks: LATEST_PICK,
+        _count: { select: { attachments: true, parts: true, logs: true } },
+      },
+    }),
+    prisma.workOrder.count({ where: IN_TRASH }),
+  ]);
+  const now = Date.now();
+  res.json({
+    keepDays: TRASH_KEEP_DAYS,
+    total,
+    // ลบถาวรตอนนี้ — Super Admin เท่านั้น (เจ้าของงานเลือก) หน้าจอซ่อนปุ่ม เซิร์ฟเวอร์กันอีกชั้นที่ DELETE /:trashedId/permanent
+    canPurgeNow: !!req.auth!.superAdmin,
+    rows: rows.map((w) => {
+      const purgeAt = purgeAtOf(w.deletedAt!);
+      return {
+        id: w.id,
+        code: w.code,
+        title: w.title,
+        jobType: w.jobType,
+        jobTypeLabel: JOB_TYPE_LABELS[w.jobType] ?? w.jobType,
+        isTest: w.isTest,
+        branchCode: w.branch.code,
+        branchName: w.branch.name,
+        machineCode: w.machine?.code ?? null,
+        // ขั้นตอนตอนลบ = ขั้นที่จะกลับไปตอนกู้คืน (ย้ายไปถังขยะไม่แตะขั้น) — ป้ายเดียวกับหน้าใบงาน
+        status: w.status,
+        statusLabel: statusLabelOf(w.status, openPickOf(w.status, w.partsPicks)),
+        files: w._count.attachments,
+        parts: w._count.parts,
+        logs: w._count.logs,
+        deletedAt: w.deletedAt,
+        deletedByName: w.deletedBy?.name ?? null,
+        reason: w.deleteReason,
+        reasonText: trashReasonText(w.deleteReason, w.deleteNote),
+        purgeAt,
+        // ปัดขึ้น — ลบไปครึ่งวันยังเหลือ 30 วัน ไม่ใช่ 29 · ครบกำหนดแล้วแต่ยังไม่ถูกลบ (เกินเพดานต่อรอบ) = 0
+        daysLeft: Math.max(0, Math.ceil((purgeAt.getTime() - now) / 86_400_000)),
+      };
+    }),
+  });
+});
+
+/**
+ * กู้คืน — ใบกลับไปขั้นเดิมเป๊ะ (ย้ายไปถังขยะไม่ได้แตะขั้น) พร้อมอะไหล่ รูป ประวัติ ที่ไม่เคยถูกลบ
+ * + ประวัติ "กู้คืนจากถังขยะ" (ไม่เดินขั้น — NON_STAGE_ACTIONS)
+ *
+ * ล้างช่องถังขยะ + ลงประวัติในคำสั่ง SQL เดียว (แบบ moveStage — ฐานข้อมูลอยู่ไกล ~0.23 วิ/รอบ) พร้อมกับอ่านสิ่งที่ต้องบอก
+ * คนกู้ — "เลิกทำ" บนแถบแจ้งเตือนต้องเร็วพอให้รู้สึกว่าเลิกทำจริง ไม่ใช่รอเป็นวินาที
+ *
+ * ไม่ปฏิเสธเพราะของรอบข้างเปลี่ยนไประหว่างอยู่ในถัง — คนกู้ตัดสินใจเองได้ถ้ารู้ (เจ้าของงานเลือก "กู้ได้ แต่บอก"):
+ * notes = เครื่อง/เคสเดียวกันมีใบงานค้างใบอื่นแล้ว · สาขาปิดไปแล้ว · เครื่องถูกลบจากทะเบียน · ใบต้นทาง/ใบที่แยกออกไปยังอยู่ในถังขยะ
+ * ชื่อสาขา/เครื่องที่เปลี่ยนระหว่างนั้นไม่ต้องทำอะไร — ใบงานอ้างถึงสาขา/เครื่องด้วย id ชื่อใหม่ขึ้นเอง
+ */
+router.post("/:trashedId/restore", requireAuth, async (req: AuthRequest, res) => {
+  if (!trashKeeper(req, res)) return;
+  const id = Number(req.params.trashedId);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const now = new Date().toISOString();
+  const userId = req.auth!.userId;
+  const [rows, around] = await Promise.all([
+    prisma.$queryRaw<{ id: number; code: string; status: string }[]>`
+      WITH moved AS (
+        UPDATE "WorkOrder"
+        SET "deletedAt" = NULL, "deletedById" = NULL, "deleteReason" = NULL, "deleteNote" = NULL,
+            "updatedAt" = CAST(${now} AS timestamp(3))
+        WHERE "id" = ${id} AND "deletedAt" IS NOT NULL
+        RETURNING "id", "code", "status"
+      ), logged AS (
+        INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
+        SELECT "id", CAST(${userId} AS integer), 'RESTORED', "status", NULL, CAST(${now} AS timestamp(3)) FROM moved
+        RETURNING "id"
+      )
+      SELECT "id", "code", "status" FROM moved`,
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: {
+        jobType: true,
+        outageId: true,
+        partsPicks: LATEST_PICK,
+        branch: { select: { code: true, cancelledAt: true } },
+        machine: {
+          select: {
+            code: true,
+            // ใบอื่นของเครื่องเดียวกันที่ยังค้าง — กติกาเดียวกับกล่องเตือนใบซ้ำ (ไม่นับรอตรวจเคลม · ใบทดสอบ)
+            workOrders: {
+              where: { ...ALIVE, id: { not: id }, isTest: false, status: { in: ACTIVE_WORK_ORDER_STATUSES.filter((st) => st !== "CLAIM_REVIEW") } },
+              select: { code: true },
+              orderBy: { id: "asc" },
+            },
+          },
+        },
+        outage: {
+          select: {
+            workOrders: {
+              where: { ...ALIVE, id: { not: id }, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+              select: { code: true },
+            },
+          },
+        },
+        parent: { select: { code: true, deletedAt: true } },
+        children: { where: IN_TRASH, select: { code: true }, orderBy: { id: "asc" } },
+      },
+    }),
+  ]);
+  const wo = rows[0];
+  if (!wo) {
+    return res.status(404).json({ error: "ไม่พบใบงานนี้ในถังขยะ — อาจมีคนกู้คืนไปแล้ว หรือครบ 30 วันระบบลบไปแล้ว" });
+  }
+  forgetTrashed(id);
+  // ใบกลับมา = ชุด "ไม่มีคนรับ" ของกล่องงานแอดมินอาจเปลี่ยน (แบบเดียวกับ writeLog)
+  orphanCache = null;
+
+  const notes: string[] = [];
+  if (around) {
+    const dup = [...new Set([...(around.machine?.workOrders ?? []), ...(around.outage?.workOrders ?? [])].map((w) => w.code))];
+    if (dup.length) {
+      notes.push(
+        `${around.machine ? `เครื่อง ${around.machine.code}` : "เคสนี้"}มีใบงานค้างอยู่แล้ว: ${dup.join(", ")} — ดูว่าซ้ำกันไหม ถ้าซ้ำให้ยกเลิกใบใดใบหนึ่ง`
+      );
+    }
+    if (around.branch.cancelledAt) notes.push(`สาขา ${around.branch.code} ถูกปิดไปแล้ว — ใบกลับมาแต่สาขาไม่รับใบใหม่`);
+    if (!around.machine && MACHINE_REQUIRED_JOBS.has(around.jobType)) {
+      notes.push("ใบนี้ไม่มีเครื่องแล้ว (เครื่องถูกลบจากทะเบียนระหว่างอยู่ในถังขยะ) — แก้เครื่องในใบก่อนทำต่อ");
+    }
+    if (around.parent?.deletedAt) notes.push(`ใบต้นทาง ${around.parent.code} ยังอยู่ในถังขยะ — ลิงก์จะกลับมาเมื่อกู้คืนใบนั้น`);
+    if (around.children.length) {
+      notes.push(`ใบที่แยกออกไป ${around.children.map((c) => c.code).join(", ")} ยังอยู่ในถังขยะ — กู้คืนแยกทีละใบ`);
+    }
+  }
+  console.warn(`[RESTORE work-order] ${wo.code} โดย userId=${userId} — กลับไปขั้น ${wo.status}`);
+  res.json({
+    ok: true,
+    id: wo.id,
+    code: wo.code,
+    status: wo.status,
+    statusLabel: statusLabelOf(wo.status, openPickOf(wo.status, around?.partsPicks ?? [])),
+    notes,
+  });
+});
+
+/**
+ * ลบถาวรตอนนี้ — Super Admin เท่านั้น (เจ้าของงานเลือก: ไว้ล้างใบทดสอบ ไม่ต้องรอ 30 วัน) · แอดมินทั่วไปได้ 403
+ * เฉพาะใบที่อยู่ในถังขยะแล้ว — ใบที่ยังใช้งานต้องผ่านถังขยะ (เลือกเหตุผล) ก่อนเสมอ ไม่มีทางลบตรง
+ * ใช้ขั้นตอนเดียวกับครบ 30 วัน (hardDeleteWorkOrder) — ลบแถวก่อน ไฟล์ทีหลัง · log บรรทัดเดิม · คำตอบรูปเดิมของปุ่มลบถาวร
+ */
+router.delete("/:trashedId/permanent", requireAuth, requireSuperAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.trashedId);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const done = await hardDeleteWorkOrder(id, { userId: req.auth!.userId, why: "PERMANENT" });
+  if (!done) {
+    const live = await prisma.workOrder.findUnique({ where: { id }, select: { code: true } });
+    return live
+      ? res.status(409).json({ error: `${live.code} ไม่ได้อยู่ในถังขยะ — ลบถาวรได้เฉพาะใบในถังขยะ (ลบใบงานก่อน)` })
+      : res.status(404).json({ error: "ไม่พบใบงานนี้ — อาจถูกลบไปแล้ว" });
+  }
+  res.json({ ok: true, ...done });
+});
+
 /**
  * รุ่นข้อมูลของใบงาน — หน้าใบงานถามทุก ~20 วินาทีว่ามีใครเปลี่ยนอะไรไหม (เจ้าของงานขอ ต.ค. 69)
  *
@@ -3204,7 +3469,7 @@ async function loadDetail(id: number) {
       CROSS JOIN LATERAL jsonb_array_elements(
         CASE WHEN jsonb_typeof(c.nameplate->'fields') = 'array' THEN c.nameplate->'fields' ELSE '[]'::jsonb END
       ) f
-      WHERE me.id = ${id} AND c.status = 'APPROVED' AND (me."isTest" OR NOT w."isTest")
+      WHERE me.id = ${id} AND c.status = 'APPROVED' AND (me."isTest" OR NOT w."isTest") AND ${aliveSql("w")}
         AND f->>'key' = 'model' AND btrim(coalesce(f->>'value', '')) <> ''
       ORDER BY c."createdAt" DESC, c.id DESC
       LIMIT 1`,
@@ -3580,6 +3845,8 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   const repeatsFor = req.auth!.role === "ADMIN" ? claimRepeatsFor(id) : Promise.resolve(null);
   const [d, viewer, repeats] = await Promise.all([loadDetail(id), viewerOf(req), repeatsFor]);
   if (!d) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  // อ่านจากแถวจริงอีกชั้น (ไม่เสียรอบเพิ่ม) — รายชื่อที่จำไว้ของ trashGuard ช้าได้ถึงนาทีเมื่อรันหลายเครื่องพร้อมกัน
+  if (d.row.deletedAt) return res.status(404).json({ error: TRASHED_TEXT, trashed: true });
   if (await blockedForViewer(req, res, d.row, viewer)) return;
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
   const body = detailBody(d, { phones: req.auth!.role === "ADMIN" });
@@ -4070,6 +4337,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   const codes = [...new Set(rows.map((r) => r.branchCode).filter(Boolean))];
   const [branches, imported] = await Promise.all([
     prisma.branch.findMany({ where: { code: { in: codes } }, select: { id: true, code: true, name: true, cancelledAt: true } }),
+    // ไม่กรองถังขยะโดยตั้งใจ — importKey ห้ามซ้ำ (unique) ใบในถังขยะยังถือแถวนั้นอยู่ เปิดใหม่ไม่ได้จนกว่าจะลบจริง
     prisma.workOrder.findMany({
       where: { importKey: { in: rows.map((r) => r.importKey) } },
       select: {
@@ -4077,6 +4345,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
         importKey: true,
         code: true,
         status: true,
+        deletedAt: true,
         _count: { select: { attachments: true } },
         attachments: { where: { fileName: { startsWith: FORM_PHOTO_PREFIX } }, select: { id: true }, take: 1 },
       },
@@ -4084,13 +4353,15 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   ]);
   const branchBy = new Map(branches.map((b) => [b.code, b]));
   const importedBy = new Map(imported.map((w) => [w.importKey!, w.code]));
+  // นำเข้าไปแล้วแต่ใบอยู่ในถังขยะ — บอกในแถวว่าอยู่ไหน (ไม่งั้นแอดมินหาใบนั้นในรายการไม่เจอ) · ไม่เติมรูปให้ใบในถัง
+  const importedTrashed = new Set(imported.filter((w) => w.deletedAt).map((w) => w.importKey!));
   /**
    * ใบที่นำเข้าไปแล้วแต่ยังไม่มีรูปจากฟอร์ม — ไฟล์รอบใหม่มีรูปฝังมา (หรือรอบแรกตัวนำเข้ายังอ่านรูปในเซลล์ไม่เป็น)
    * นำเข้าไฟล์เดิมอีกรอบแล้วเติมรูปให้ใบเดิมได้ ไม่ต้องลบใบเปิดใหม่ (เจ้าของงานเจอ 26 ต.ค. 69: อัปไฟล์แล้วรูปไม่มา)
    */
   const needsPhoto = new Map(
     imported
-      .filter((w) => w.attachments.length === 0 && w._count.attachments < MAX_ATTACHMENTS_PER_WORK_ORDER)
+      .filter((w) => !w.deletedAt && w.attachments.length === 0 && w._count.attachments < MAX_ATTACHMENTS_PER_WORK_ORDER)
       .map((w) => [w.importKey!, { id: w.id, code: w.code, status: w.status }])
   );
   /**
@@ -4101,6 +4372,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   const looseKey = (b: string, m: string | null, sym: string) => `${b}|${m ?? ""}|${sym.trim()}`;
   const formNoPhoto = await prisma.workOrder.findMany({
     where: {
+      ...ALIVE,
       source: "FORM",
       branchId: { in: branches.map((b) => b.id) },
       status: { not: "CANCELLED" },
@@ -4116,7 +4388,7 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   // แถว → ใบเดิมที่จะเติมรูปให้ (ตัดสินตอนวางแผน ใช้ตอนยืนยัน)
   const fillBy = new Map<number, { id: number; code: string; status: string }>();
   const open = await prisma.workOrder.findMany({
-    where: { branchId: { in: branches.map((b) => b.id) }, status: { notIn: ["DONE", "CANCELLED"] } },
+    where: { ...ALIVE, branchId: { in: branches.map((b) => b.id) }, status: { notIn: ["DONE", "CANCELLED"] } },
     select: {
       id: true,
       code: true,
@@ -4194,7 +4466,11 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
       return {
         ...base,
         status: "IMPORTED" as const,
-        reason: fill ? `นำเข้าไปแล้ว (${done}) · จะเติมรูปจากไฟล์ให้` : `นำเข้าไปแล้ว (${done})`,
+        reason: importedTrashed.has(r.importKey)
+          ? `นำเข้าไปแล้ว (${done} — อยู่ในถังขยะ กู้คืนได้ที่เมนู “ถังขยะใบงาน”)`
+          : fill
+            ? `นำเข้าไปแล้ว (${done}) · จะเติมรูปจากไฟล์ให้`
+            : `นำเข้าไปแล้ว (${done})`,
         existing: done,
         photoFill: !!fill,
       };
@@ -4391,8 +4667,9 @@ router.post("/from-outage/:outageId", requireAuth, async (req: AuthRequest, res)
   if (!outage) return res.status(404).json({ error: "ไม่พบเคสนี้" });
 
   // ใบงานซ้ำคือปัญหาจริง — ช่างสองคนขับไปสาขาเดียวกันเพราะต่างคนต่างเปิด
+  // ใบในถังขยะไม่นับเป็นใบค้าง — ลบใบที่เปิดผิดแล้วต้องเปิดใบใหม่จากเคสเดิมได้ทันที
   const existing = await prisma.workOrder.findFirst({
-    where: { outageId, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
+    where: { ...ALIVE, outageId, status: { in: [...ACTIVE_WORK_ORDER_STATUSES] } },
     include: detailInclude,
   });
   if (existing) {
@@ -4696,12 +4973,18 @@ async function guardStage(
         urgentReleaseFor: true,
         jobType: true,
         branch: { select: { region: true, zone: true, pmTeam: true } },
+        // ชั้นที่สองของ trashGuard (รายชื่อที่จำไว้ช้าได้ถึงนาทีเมื่อรันหลายเครื่อง) — อ่านมากับใบอยู่แล้ว ไม่เสียรอบเพิ่ม
+        deletedAt: true,
       },
     }),
     role === "SUPERVISOR" ? supervisorScope(req.auth!.userId) : null,
   ]);
   if (!wo) {
     res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+  if (wo.deletedAt) {
+    res.status(404).json({ error: TRASHED_TEXT, trashed: true });
     return null;
   }
 
@@ -4753,6 +5036,7 @@ async function guardStage(
  * เป็นทั้งหมดหรือไม่มีเลยอยู่แล้ว ไม่ต้องห่อทรานแซกชัน
  *
  * WHERE status = from — ถ้ามีคนกดขั้นนี้ไปก่อนเสี้ยววินาที จะไม่เขียนทับ คืน false ให้ตอบ 409
+ * deletedAt IS NULL — ใบที่เพิ่งถูกย้ายไปถังขยะ (เครื่องอื่นยังไม่รู้ — ดู trashGuard) ไม่ถูกเดินขั้นเงียบ ๆ ได้ 409 แทน
  * (เดิมเช็คสถานะแล้วค่อยเขียน มีช่องว่างตรงกลาง) · วันที่ส่งเป็นเวลา UTC แบบที่ Prisma เขียน
  * ไม่พึ่งเขตเวลาของเซิร์ฟเวอร์ฐานข้อมูล · ใบที่ผูกกับเคสเครื่องเสียยังใช้ทรานแซกชันเดิม (ต้องซิงก์เคสด้วย)
  */
@@ -4791,7 +5075,7 @@ async function moveStage(
     WITH moved AS (
       UPDATE "WorkOrder"
       SET ${Prisma.join(sets)}, "updatedAt" = CAST(${now} AS timestamp(3))
-      WHERE "id" = ${id} AND "status" = ${from}${same.length ? Prisma.join(same, "") : Prisma.empty}
+      WHERE "id" = ${id} AND "status" = ${from} AND "deletedAt" IS NULL${same.length ? Prisma.join(same, "") : Prisma.empty}
       RETURNING "id"
     )
     INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "meta", "createdAt")
@@ -10049,7 +10333,9 @@ router.post("/:id/claim-review", requireAuth, async (req: AuthRequest, res) => {
  */
 async function loadClaimDocs(id: number) {
   const [order, rows, files, logs, users] = await Promise.all([
-    prisma.workOrder.findUnique({ where: { id }, select: { code: true, isTest: true } }),
+    // deletedAt: ลิงก์ zip หลักฐานเคลมอายุ 2 ชั่วโมงไม่ผ่าน trashGuard (เส้นทางใช้ตั๋ว ไม่ใช่ :id) — ใบที่ถูกย้ายไปถังขยะ
+    // ระหว่างนั้นต้องโหลดไม่ได้เหมือนเส้นทางอื่นของใบ
+    prisma.workOrder.findUnique({ where: { id }, select: { code: true, isTest: true, deletedAt: true } }),
     prisma.partClaim.findMany({ where: { workOrderId: id } }),
     prisma.workOrderAttachment.findMany({
       where: { workOrderId: id, role: { in: [...CLAIM_EVIDENCE_ROLES, "NAMEPLATE"] } },
@@ -10073,7 +10359,7 @@ async function loadClaimDocs(id: number) {
       SELECT u.id, u.name FROM "User" u
       WHERE u.id IN (SELECT c."createdById" FROM "PartClaim" c WHERE c."workOrderId" = ${id})`,
   ]);
-  if (!order) return null;
+  if (!order || order.deletedAt) return null;
   return {
     id,
     code: order.code,
@@ -11045,58 +11331,102 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
   res.json(await detailFor(id));
 });
 
-/** เปิดใหม่ เผื่อปิดผิดใบ — แอดมินเท่านั้น เพราะเป็นการย้อนสิ่งที่บันทึกไปแล้ว */
 /**
- * ลบใบงานถาวร — แอดมินเท่านั้น
+ * ลบใบงาน = ย้ายไปถังขยะ (เจ้าของงานตัดสิน 4 พ.ย. 69 — เดิมลบแถวทิ้งทันที กู้คืนไม่ได้) — แอดมินเท่านั้น
  *
- * ต่างจากยกเลิก: ยกเลิกเก็บใบไว้พร้อมประวัติว่าใครยกเลิกเมื่อไหร่ ส่วนลบคือหายไปเลย
- * มีไว้สำหรับใบที่ไม่ควรมีอยู่ตั้งแต่แรก — เปิดผิดสาขา เปิดซ้ำ หรือใบที่ลองระบบ
- * ใบที่เปิดถูกแต่ไม่ได้ทำแล้ว ควรใช้ยกเลิก เพราะเป็นเรื่องที่เกิดขึ้นจริงและควรมีร่องรอย
+ * ต่างจากยกเลิก: ยกเลิกเก็บใบไว้ในรายการและรายงานพร้อมเหตุผล ส่วนลบคือหายจากทุกที่ (รายการ กล่องงาน รายงาน ค้นหา
+ * แผนงาน กระดานเครื่องเสีย) — มีไว้สำหรับใบที่ไม่ควรมีอยู่ตั้งแต่แรก: ใบทดสอบ เปิดซ้ำ เปิดผิดสาขา/ผิดเครื่อง
+ * ใบที่เปิดถูกแต่ไม่ได้ทำแล้วควรยกเลิก เพราะเป็นเรื่องที่เกิดขึ้นจริงและควรมีร่องรอย
  *
- * ของที่หายไปด้วย: อะไหล่ที่บันทึกไว้ ประวัติทั้งหมด คนที่เข้าปฏิบัติงาน
- * และไฟล์แนบทั้งถัง (ตารางลูกผูก onDelete: Cascade ไว้แล้ว ส่วนไฟล์ในถังลบตามให้)
+ * ไม่มีอะไรถูกลบจริงตอนนี้: อะไหล่ ประวัติ ผู้เข้าปฏิบัติงาน ไฟล์ในที่เก็บไฟล์อยู่ครบ · ขั้นไม่ถูกแตะ (กู้คืนแล้วอยู่ขั้นเดิม)
+ * ครบ 30 วันระบบลบจริงด้วยขั้นตอนเดิมของปุ่มลบถาวร (hardDeleteWorkOrder) — Super Admin ลบก่อนกำหนดได้ในหน้าถังขยะ
  *
- * ไม่แตะเคสบนกระดาน — อาการที่คนบันทึกไว้ยังเป็นอาการที่เจอจริง การลบใบงาน
- * ไม่ได้แปลว่าเครื่องไม่เคยเสีย พอไม่มีใบงานค้าง กระดานจะกลับมาขึ้นปุ่มสร้างใบงานเอง
+ * เหตุผลบังคับ (เจ้าของงานเลือก) — แอปรุ่นก่อนส่ง DELETE เปล่า ๆ: ได้ 400 พร้อมบอกให้กด "อัปเดต" แทนที่จะลบโดยไม่มีเหตุผล
+ * ไม่ห้ามใบที่รอตรวจเคลมหรือมีใบที่แยกออกไป (ก่อนมีถังขยะก็ไม่ห้าม): ใบเคลมหายจากกล่องตรวจเคลมไปพร้อมใบ กู้คืนแล้วกลับมารอตรวจ
+ * ใบแม่/ใบลูกอยู่ต่อตามเดิม ลิงก์ที่ชี้ไปใบในถังขยะถูกซ่อน (ไม่ถูกลบ — กู้คืนแล้วเชื่อมกันเอง)
+ *
+ * ไม่แตะเคสบนกระดานติดตามเครื่องเสีย — อาการที่คนบันทึกไว้ยังเป็นอาการที่เจอจริง พอไม่มีใบงานค้าง กระดานขึ้นปุ่มสร้างใบงานเอง
  */
+const TRASH_NEEDS_REASON =
+  "ลบใบงานตอนนี้ต้องเลือกเหตุผล (ใบงานไปอยู่ในถังขยะ กู้คืนได้ 30 วัน) — หน้าจอนี้ยังไม่มีช่องเหตุผล แปลว่าแอปเป็นรุ่นเก่า กดปุ่ม “อัปเดต”";
+const trashSchema = z.object({
+  reason: z.enum(TRASH_REASONS, { errorMap: () => ({ message: "เหตุผลที่ลบไม่ถูกต้อง — เลือกจากรายการ" }) }),
+  note: z
+    .string({ invalid_type_error: "เหตุผลต้องเป็นข้อความ" })
+    .trim()
+    .max(500, "เหตุผลยาวได้ไม่เกิน 500 ตัวอักษร")
+    .optional()
+    .nullable(),
+});
+
 router.delete("/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-
-  // อ่าน objectKey ไว้ก่อนลบ เพราะพอแถวหายแล้วจะไม่เหลืออะไรชี้ไปหาไฟล์ในถัง
-  const wo = await prisma.workOrder.findUnique({
-    where: { id },
-    select: {
-      code: true,
-      attachments: { select: { objectKey: true } },
-      _count: { select: { parts: true, logs: true, attachments: true, workers: true } },
-    },
-  });
-  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-
-  await prisma.workOrder.delete({ where: { id } });
-
-  // ลบไฟล์หลังลบแถว — ลบไฟล์ไม่ผ่านแล้วหยุดไว้แค่นั้น จะเหลือใบงานที่สั่งลบไปแล้ว
-  // ส่วนไฟล์ที่ค้างในถังไม่มีใครเปิดถึง เพราะไม่มีแถวชี้ไปหาแล้ว
-  let fileErrors = 0;
-  for (const a of wo.attachments) {
-    if (!a.objectKey) continue;
-    try {
-      await deleteObject(a.objectKey);
-    } catch (error) {
-      fileErrors += 1;
-      console.error("file delete failed", error);
-    }
+  if (req.body?.reason === undefined || req.body?.reason === null || req.body?.reason === "") {
+    return res.status(400).json({ error: TRASH_NEEDS_REASON, needsReason: true });
   }
+  const parsed = trashSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const reason = parsed.data.reason;
+  const note = parsed.data.note || null;
+  if (reason === "OTHER" && !note) return res.status(400).json({ error: "เลือก “อื่น ๆ” ต้องพิมพ์เหตุผลด้วย" });
 
+  const userId = req.auth!.userId;
+  const at = new Date();
+  const now = at.toISOString();
+  const text = trashReasonText(reason, note);
+  /**
+   * ตั้งช่องถังขยะ + ลงประวัติ "ย้ายไปถังขยะ: เหตุผล" ในคำสั่ง SQL เดียว (แบบ moveStage) — WHERE deletedAt IS NULL:
+   * กดซ้ำ/สองคนกดพร้อมกันได้แถวเดียว ไม่ทับเหตุผลของคนแรก · นับของที่ย้ายไปพร้อมกันพร้อมกันในรอบเดียว
+   * (สำหรับ log ของเซิร์ฟเวอร์และคำตอบ — กล่องยืนยันในแอปนับจากใบที่เปิดอยู่เอง)
+   */
+  const [rows, wo] = await Promise.all([
+    prisma.$queryRaw<{ id: number; code: string; status: string }[]>`
+      WITH moved AS (
+        UPDATE "WorkOrder"
+        SET "deletedAt" = CAST(${now} AS timestamp(3)), "deletedById" = CAST(${userId} AS integer),
+            "deleteReason" = CAST(${reason} AS text), "deleteNote" = CAST(${note} AS text),
+            "updatedAt" = CAST(${now} AS timestamp(3))
+        WHERE "id" = ${id} AND "deletedAt" IS NULL
+        RETURNING "id", "code", "status"
+      ), logged AS (
+        INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
+        SELECT "id", CAST(${userId} AS integer), 'TRASHED', "status", CAST(${text} AS text), CAST(${now} AS timestamp(3)) FROM moved
+        RETURNING "id"
+      )
+      SELECT "id", "code", "status" FROM moved`,
+    prisma.workOrder.findUnique({
+      where: { id },
+      select: { code: true, deletedAt: true, _count: { select: { parts: true, logs: true, attachments: true, workers: true } } },
+    }),
+  ]);
+  if (!rows[0]) {
+    if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return res.status(409).json({ error: `${wo.code} อยู่ในถังขยะแล้ว`, trashed: true });
+  }
+  rememberTrashed(id);
+  // ใบออกจากกล่องงาน = ชุด "ไม่มีคนรับ" ของแอดมินอาจเปลี่ยน (แบบเดียวกับ writeLog)
+  orphanCache = null;
+  // ใบยังอยู่ แต่คนอื่นในระบบมองไม่เห็นแล้ว — log บอกว่าใครย้ายใบไหนไปพร้อมอะไรบ้าง (แบบเดียวกับตอนลบจริง)
+  const removed = wo?._count ?? { parts: 0, logs: 0, attachments: 0, workers: 0 };
   console.warn(
-    `[DELETE work-order] ${wo.code} โดย userId=${req.auth!.userId} — ` +
-      `อะไหล่ ${wo._count.parts} · ประวัติ ${wo._count.logs} · ไฟล์ ${wo._count.attachments}`
+    `[TRASH work-order] ${rows[0].code} โดย userId=${userId} — ${text} · ` +
+      `อะไหล่ ${removed.parts} · ประวัติ ${removed.logs} · ไฟล์ ${removed.attachments}`
   );
-
-  res.json({ ok: true, code: wo.code, removed: wo._count, fileErrors });
+  res.json({
+    ok: true,
+    trashed: true,
+    id,
+    code: rows[0].code,
+    status: rows[0].status,
+    deletedAt: at,
+    purgeAt: purgeAtOf(at),
+    keepDays: TRASH_KEEP_DAYS,
+    removed,
+  });
 });
 
+/** เปิดใหม่ เผื่อปิดผิดใบ — แอดมินเท่านั้น เพราะเป็นการย้อนสิ่งที่บันทึกไปแล้ว */
 router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
