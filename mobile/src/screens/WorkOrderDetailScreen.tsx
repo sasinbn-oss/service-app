@@ -1102,6 +1102,24 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const twoCol = bodyWidth >= 720;
 
   const optionsLoaded = useRef(false);
+  /**
+   * ใบงานชุดใหม่สุดที่รับไว้ — คำตอบที่ออกไปก่อนแต่มาถึงทีหลังต้องไม่เขียนทับ (บั๊กปิดงานแล้วใบค้าง 4 พ.ย. 69)
+   *
+   * ฟอร์มปิดงานโหลดใบเงียบ ๆ ทุกครั้งที่ไฟล์ขึ้นเสร็จ (refreshQuiet) ถ้ากดส่งตอนคำถามนั้นยังไม่กลับ
+   * ปิดงานเสร็จใช้ก้อนที่เซิร์ฟเวอร์ส่งกลับทันที (ปิดแล้ว) แล้วคำตอบเก่าที่อ่านก่อนปิดมาถึงทีหลัง ทับกลับเป็นยังไม่ปิด
+   * จอขึ้น "ปิดงานแล้ว" แวบเดียวแล้วกลับเป็นปุ่มปิดงาน คนกดซ้ำ — เซิร์ฟเวอร์ตอบว่าส่งปิดไปแล้ว จึงดูเหมือน "ปิดรอบสองถึงได้"
+   * ฐานข้อมูลอยู่คนละ region และจำกัด connection ไว้ 5 คำถามจึงกลับไม่เรียงตามที่ส่ง
+   * ตัดสินด้วยเลขประวัติล่าสุด: ทุกการเปลี่ยนขั้นลงประวัติ และไม่มีที่ไหนลบประวัติ — เลขน้อยกว่า = อ่านมาก่อน
+   * เท่ากันยังรับ (ไฟล์แนบ/เคลมซ้ำเปลี่ยนได้โดยไม่ลงประวัติ)
+   */
+  const newest = useRef<WorkOrder | null>(null);
+  const accept = useCallback((next: WorkOrder): WorkOrder => {
+    const cur = newest.current;
+    if (cur && cur.id === next.id && latestLogId(next) < latestLogId(cur)) return cur;
+    newest.current = next;
+    setOrder(next);
+    return next;
+  }, []);
   const load = useCallback(async (): Promise<WorkOrder | null> => {
     // เพิ่งกดบันทึก — เซิร์ฟเวอร์ส่งใบงานทั้งก้อนกลับมาแล้ว ใช้เลย ไม่ต้องรอถามซ้ำ (utils/freshOrder.ts)
     // ตัวเลือกในฟอร์ม (ทีม ช่าง คลัง) ไม่ได้เปลี่ยนตามขั้น ใช้ชุดที่โหลดไว้ตอนเปิดหน้า
@@ -1109,12 +1127,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     if (fresh && optionsLoaded.current) {
       // ก้อนที่ปุ่มบันทึกส่งกลับมาคือ detailFor ซึ่งไม่มีเคลมซ้ำ (เซิร์ฟเวอร์ส่งเฉพาะ GET ใบงาน) — ใช้ของเดิมต่อ
       // ไม่งั้นแก้อาการจากหน้าตรวจเคลมแล้วคำเตือน "⚠ เครื่องนี้เคยเคลม" หายไปทั้งที่ใบยังรอตัดสินอยู่
-      setOrder((prev) =>
+      const prev = newest.current;
+      return accept(
         prev?.id === fresh.id && fresh.claimRepeats === undefined && prev.claimRepeats
           ? { ...fresh, claimRepeats: prev.claimRepeats }
           : fresh
       );
-      return fresh;
     }
     try {
       const [detail, options] = await Promise.all([
@@ -1133,7 +1151,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
           machineModels?: string[];
         }>("/work-orders/options"),
       ]);
-      setOrder(detail.data);
+      const got = accept(detail.data);
       setResults(options.data.results);
       setWorkStatuses(options.data.workStatuses);
       setSendBackReasons(options.data.sendBackReasons ?? []);
@@ -1149,7 +1167,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
-      return detail.data;
+      return got;
     } catch (e) {
       setError(apiErrorMessage(e));
       setLocked((e as { response?: { status?: number } })?.response?.status === 403);
@@ -1157,7 +1175,7 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, accept]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1173,12 +1191,12 @@ export default function WorkOrderDetailScreen({ route, navigation }: Props) {
   const refreshQuiet = useCallback(async () => {
     try {
       const res = await api.get<WorkOrder>(`/work-orders/${id}`, { loadingText: false });
-      setOrder(res.data);
+      accept(res.data);
     } catch {
       // ไม่ขัดจังหวะช่างที่กำลังกรอกฟอร์ม
     }
     setFilesKey((k) => k + 1);
-  }, [id]);
+  }, [id, accept]);
 
   // รายการไฟล์แนบเริ่มโหลดพร้อมตัวใบงาน — การ์ดไฟล์แนบขึ้นจอหลังใบงานมาถึงแล้วรับผลไปใช้เลย (utils/attachmentCache)
   useEffect(() => {
