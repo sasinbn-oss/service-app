@@ -648,7 +648,20 @@ router.put("/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: branchInputError(parsed.error) });
   // ชื่อวิ่งผ่าน renameBranch เหมือน PUT /:id/name — แก้ชื่อทางนี้ (แผงแก้ไขบันทึกทางนี้) ก็ต้องถูกจำไว้กันไฟล์ทับ
   // และลงประวัติ ไม่ใช่ทางลัดข้ามทั้งสองอย่าง
-  const { name, ...rest } = parsed.data;
+  const { name, code, ...rest } = parsed.data;
+  // รหัสสาขาแก้ไม่ได้ (เจ้าของงานตัดสิน 4 พ.ย. 69: "เปลี่ยนใหม่ คือข้อมูลใหม่ทั้งหมด เเต่ยังเก็บประวัติเก่าอยู่")
+  // ไฟล์รายงานเครื่อง/ทะเบียน/สาขายกเลิกจับคู่สาขาด้วยรหัส — แก้รหัสสาขาเดิมเป็นรหัสใหม่ ใบงาน เครื่อง เคสของรหัสเก่า
+  // ไปติดกับรหัสใหม่ แล้วไฟล์รอบหน้าที่ยังมีรหัสเก่าก็สร้างสาขาเก่าขึ้นมาใหม่เปล่า ๆ = รวมสาขาแบบเงียบ ๆ ที่เจ้าของงานไม่เอา
+  // ส่งรหัสเดิมมาด้วย (ส่งทั้งก้อน) ไม่ถือว่าเปลี่ยน · ไม่เขียนรหัสจากทางนี้เลยแม้ตรงกัน (ช่องว่างหัวท้ายต้องไม่หลุดลงฐาน)
+  if (code !== undefined) {
+    const current = await prisma.branch.findUnique({ where: { id }, select: { code: true } });
+    if (!current) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+    if (code.trim() !== current.code) {
+      return res.status(400).json({
+        error: `เปลี่ยนรหัสสาขา ${current.code} ไม่ได้ — รหัสใหม่คือสาขาใหม่ ให้กด “เพิ่มสาขา” ด้วยรหัสใหม่แทน · สาขาเดิมเก็บประวัติของตัวเองไว้ ถ้าเลิกใช้ให้ปิดสาขา`,
+      });
+    }
+  }
   let newName: string | null = null;
   if (name !== undefined) {
     const input = branchNameInput(name);
@@ -668,11 +681,9 @@ router.put("/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
     res.json(branch);
   } catch (e) {
-    // เดิมจับทุกข้อผิดพลาดเป็น "ไม่พบสาขานี้" — รหัสซ้ำหรือวันที่ผิดรูปแบบก็ขึ้นว่าไม่พบสาขา แอดมินไม่รู้ว่าต้องแก้อะไร
+    // เดิมจับทุกข้อผิดพลาดเป็น "ไม่พบสาขานี้" — วันที่ผิดรูปแบบก็ขึ้นว่าไม่พบสาขา แอดมินไม่รู้ว่าต้องแก้อะไร
+    // (รหัสซ้ำ P2002 เกิดไม่ได้แล้ว: ทางนี้ไม่เขียนรหัส — ดูข้างบน)
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") return res.status(404).json({ error: "ไม่พบสาขานี้" });
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      return res.status(409).json({ error: `มีสาขารหัส ${rest.code} อยู่แล้ว` });
-    }
     if (e instanceof Prisma.PrismaClientValidationError) return res.status(400).json({ error: "ข้อมูลสาขาไม่ถูกต้อง" });
     throw e;
   }
