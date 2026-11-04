@@ -3,18 +3,20 @@
 #   ไฟล์ของอะไหล่ = ชื่อไฟล์ Excel ที่อัปโหลด (Haier · Huebsch · Maytag · Oasis · Spinz · Other) เก็บใน SparePartBrandFile
 #   รหัสเดียวอยู่ได้หลายไฟล์ · Other = ของใช้ร่วม ทุกเครื่องเลือกได้ · ไฟล์ยี่ห้อด้วยกันไม่ข้ามกัน
 #   A1 ค้นอะไหล่ตามยี่ห้อเครื่อง GET /spare-parts/for-brand — กลุ่มไฟล์ของเครื่อง + กลุ่มของใช้ร่วม · "HB" = Huebsch
-#      · ยี่ห้ออื่น = Other · รหัสตรงทั้งคำขึ้นก่อน · ไม่เจอ → บอกว่าอยู่ไฟล์ไหน · ไม่อยู่ในไฟล์ไหน/นอกสโตร์ไม่ขึ้นเลย · สิทธิ์
+#      · ยี่ห้ออื่น = Other · รหัสตรงทั้งคำขึ้นก่อน · ไม่เจอ → บอกว่าอยู่ไฟล์ไหน · ไม่อยู่ในไฟล์ไหน = กลุ่ม outside (อะไหล่นอกเครื่อง)
+#      · นอกสโตร์ไม่ขึ้นเลย · ไม่ส่งยี่ห้อ = ค้นเฉพาะอะไหล่นอกเครื่อง · สิทธิ์
 #   A2 อัปโหลดตามชื่อไฟล์ — ชื่อบอกยี่ห้อ / ไม่บอก (ต้องเลือก) / บอกหลายยี่ห้อ · ชื่อที่ตรงยี่ห้อเดียวเปลี่ยนไม่ได้
 #      · ทุกรหัสในไฟล์เข้าไฟล์ยี่ห้อ เพิ่มอย่างเดียวไม่ลบ · "ไม่อยู่ในไฟล์" นับตามไฟล์ยี่ห้อ · หัวช่อง "อัปเดต {วันที่}"
 #      · อัปไฟล์เดิมที่ไม่มีอะไรเปลี่ยนซ้ำ: แถวที่เดาตอนขึ้นระบบ (SEED) ยังนับเป็นงาน (confirmed) และกลายเป็น IMPORT
 #   A3 หน้าจัดการข้อมูลอะไหล่ — brandFiles ในรายการ · ติ๊กไฟล์ในฟอร์ม (แถวที่ยังอยู่เก็บ source เดิม · ไม่แตะ updatedAt) · สิทธิ์
+#      · ล้างไฟล์จนว่างต้องส่ง outsideMachine (ไม่ส่ง/คู่กับไฟล์/ผิดรูป = 400)
 #      · อัปไฟล์ที่มีรหัสที่ติ๊กเอง (MANUAL) → IMPORT · รอบเดียวหลายยี่ห้อ: "ไม่อยู่ในไฟล์" หักเฉพาะไฟล์ยี่ห้อเดียวกัน
 #        (หายจาก Haier แต่ยังอยู่ใน Other = ยังฟ้อง Haier) · หายจากสองไฟล์ = สองแถว
 #   B  หน้าใบงาน — partsBrand (รู้ยี่ห้อ / ไม่รู้ / ไม่มีเครื่อง / ยี่ห้อจากรายงานชนะ / "HB") · อะไหล่ในใบมี brandFiles + issued
 #      · เครื่องของสาขา (ฟอร์มเปิดใบงาน) มี make + brandFile · กระดานเครื่องดับมี machineMake + brandFiles ของอะไหล่ที่รอ
 #      · ตัวเลือกยี่ห้อมี Spinz · CASE ใน tests/lib/fixture-parts.sh ให้ไฟล์เดียวกับ brandFileOf ของเซิร์ฟเวอร์ทุกคำทดสอบ
-#   C  ช่างเลือกอะไหล่ตอนตรวจหน้างาน → รอหัวหน้าภาคคอนเฟิร์ม (รายการยังไม่ลงใบ/กระดาน) · ล็อกไฟล์ยี่ห้อ (Maytag · ไม่อยู่ในไฟล์ไหน ·
-#      นอกสโตร์ · ไม่มีเครื่อง) · เครื่องไม่รู้ยี่ห้อต้องส่งยี่ห้อ (จำไว้ที่ Machine.model) · ยี่ห้อที่รู้แล้วเปลี่ยนไม่ได้ · ของใช้ร่วม/หลายไฟล์
+#   C  ช่างเลือกอะไหล่ตอนตรวจหน้างาน → รอหัวหน้าภาคคอนเฟิร์ม (รายการยังไม่ลงใบ/กระดาน) · ล็อกไฟล์ยี่ห้อ (Maytag ·
+#      นอกสโตร์ · ไม่มีเครื่อง + อะไหล่ของเครื่อง) · เครื่องไม่รู้ยี่ห้อต้องส่งยี่ห้อ (จำไว้ที่ Machine.model) · ยี่ห้อที่รู้แล้วเปลี่ยนไม่ได้ · ของใช้ร่วม/หลายไฟล์
 #      · ป้าย "หัวหน้าภาค · คอนเฟิร์มอะไหล่" ในหน้าใบงาน กล่องงาน version · หัวหน้าภาคระบุอะไหล่ทับไม่ได้ (409)
 #   C2 ไม่เลือกอะไหล่ — แถวเดิมที่เอาออกหายจากใบจริง ยกเว้นของที่เบิกแล้ว · แอปรุ่นเก่า (ไม่ส่ง parts) ไม่แตะรายการ
 #   D  ตีกลับ — สิทธิ์ · เหตุผลบังคับ · pickId · ใบกลับตรวจหน้างานทีมเดิม · การ์ดแดงใน my-day · ทีม Area ไม่เห็นเหตุผล ·
@@ -33,10 +35,15 @@
 #   K  ใช้อะไหล่ข้ามยี่ห้อเมื่อยืนยัน (เจ้าของงานเลือก 3 พ.ย. 69 — รายครั้ง ไม่จำ ลงประวัติ) · for-brand กลุ่ม others ·
 #      ไม่ส่ง crossBrandOk = 400 เหมือนเดิม · ส่งแล้วบันทึกได้ + ประวัติ CROSS_BRAND_PARTS ก่อนแถวหลัก (ระบุอะไหล่ · ตรวจหน้างาน ·
 #      บันทึกแทน · คอนเฟิร์มต้องยืนยันอีกรอบ · แจ้งปัญหาหน้างาน · อะไหล่ที่ยังขาด · ปิดงาน · หัวหน้าภาคปิดใบ · เปิดใบงาน · กระดาน ·
-#      "+ สร้างใบงาน") · ไม่อยู่ในไฟล์ไหน/นอกสโตร์ของช่างยืนยันไม่ได้ · ไฟล์ของอะไหล่ไม่เปลี่ยน ใบถัดไปต้องยืนยันใหม่
+#      "+ สร้างใบงาน") · นอกสโตร์ของช่างยืนยันไม่ได้ · ไฟล์ของอะไหล่ไม่เปลี่ยน ใบถัดไปต้องยืนยันใหม่
+#   L  อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69 — ของในสโตร์ที่ไม่อยู่ในไฟล์ไหน ทุกเครื่องเลือกได้ ไม่ต้องยืนยัน)
+#      · เพิ่มอะไหล่ไม่มีไฟล์ต้องส่ง outsideMachine · PUT outsideMachine อย่างเดียวล้างไฟล์ · PUT ที่ไม่ส่ง brandFiles ไม่แตะไฟล์
+#      · ช่างตรวจหน้างาน + คอนเฟิร์ม · ระบุอะไหล่ · ปิดงานทั้งสามทาง บนเครื่องที่รู้ยี่ห้อ (ไม่มีประวัติข้ามยี่ห้อ แม้ส่ง crossBrandOk)
+#      · ใบไม่มีเครื่อง: ช่างเลือกได้ · ปนอะไหล่ของเครื่อง = ข้อความ D15 เดิม · เปิดใบไม่ใส่รหัสเครื่อง / งานทั้งร้าน
+#      · เครื่องไม่รู้ยี่ห้อ ไม่ส่งชิป: ตรวจหน้างาน · ระบุอะไหล่ · กระดาน · "+ สร้างใบงาน" ผ่าน (ไม่บันทึกยี่ห้อ) · ปนอะไหล่ของเครื่อง = "เลือกยี่ห้อก่อน" เดิม
 #
 # อะไหล่ทดสอบสร้างทาง SQL และใส่ไฟล์เอง (source MANUAL) · ช่องยี่ห้อตั้งเป็นข้อความที่ไม่เกี่ยวโดยตั้งใจ —
-# พิสูจน์ว่าการค้นดูไฟล์ ไม่ได้ดูข้อความยี่ห้อ (NB1 มีข้อความ "HB - Huebsch" แต่ไม่อยู่ในไฟล์ไหน ต้องไม่ขึ้นที่ไหนเลย)
+# พิสูจน์ว่าการค้นดูไฟล์ ไม่ได้ดูข้อความยี่ห้อ (NB1 มีข้อความ "HB - Huebsch" แต่ไม่อยู่ในไฟล์ไหน = อะไหล่นอกเครื่อง ไม่ใช่ของไฟล์ Huebsch)
 # ทุกข้อที่เปลี่ยนข้อมูลยืนยันที่ฐานข้อมูล (CLAUDE.md) · ลบทุกอย่างที่สร้างตอนจบ (trap)
 #
 # หยุดกลางทาง = FAIL (run-all.sh นับแค่บรรทัด PASS/FAIL — set -e จบเงียบ ๆ ชุดนี้จะดูเหมือนผ่าน)
@@ -158,12 +165,15 @@ R=$(FB $T Huebsch "$K-MT1")
 [ "$(FB $T Huebsch "เมย์แท็กทดสอบ$SUF" | J 'JSON.stringify(d.elsewhere)')" = '[{"file":"Maytag","exact":false}]' ] \
   && pass "ค้นด้วยชื่อบางส่วน: บอกไฟล์ Maytag แต่ไม่นับว่ารหัสตรง (exact false)" \
   || fail "elsewhere ชื่อ: $(FB $T Huebsch "เมย์แท็กทดสอบ$SUF" | head -c 300)"
+# อะไหล่นอกเครื่อง (4 พ.ย. 69): ไม่อยู่ในไฟล์ไหน = กลุ่ม outside ของทุกยี่ห้อ ไม่ปนกลุ่มของเครื่อง/ของใช้ร่วม/ไฟล์อื่น
+NBX='d.rows.length+d.shared.length+(d.others||[]).length+d.elsewhere.length+"/"+d.outside.map(r=>r.partCode.replace("'$K'-","")+":"+r.brandFiles.length).join(",")'
 NB=""
-for b in Huebsch Maytag Other Electrolux; do NB="$NB$(FB $T "$b" "$K-NB1" | J 'd.rows.length+d.shared.length+d.elsewhere.length')"; done
-[ "$NB" = "0000" ] && [ "$(FB $T Huebsch "HB - Huebsch" | J 'd.rows.concat(d.shared).some(r=>r.partCode==="'$K'-NB1")')" = "false" ] \
-  && pass "อะไหล่ที่ไม่อยู่ในไฟล์ไหน (NB1) ไม่ขึ้นที่ไหนเลย — แม้ค้นด้วยข้อความยี่ห้อของมันเอง (\"HB - Huebsch\")" || fail "NB1 ขึ้น: $NB"
-[ "$(FB $T Huebsch "$K ของนอก" | J 'd.rows.length+d.shared.length+d.elsewhere.length')" = "0" ] \
-  && pass "ของนอกสโตร์ไม่ขึ้นในการค้น แม้มีแถวไฟล์ Huebsch (ใส่ทาง SQL)" || fail "ของนอกสโตร์ขึ้น"
+for b in Huebsch Maytag Other Electrolux; do NB="$NB$(FB $T "$b" "$K-NB1" | J "$NBX")|"; done
+[ "$NB" = "0/NB1:0|0/NB1:0|0/NB1:0|0/NB1:0|" ] && [ "$(FB $T Huebsch "HB - Huebsch" | J 'd.rows.concat(d.shared,d.outside).some(r=>r.partCode==="'$K'-NB1")')" = "false" ] \
+  && pass "อะไหล่ที่ไม่อยู่ในไฟล์ไหน (NB1) = อะไหล่นอกเครื่อง: ขึ้นกลุ่ม outside ทุกยี่ห้อ (brandFiles []) ไม่ปนกลุ่มอื่น · ข้อความยี่ห้อ \"HB - Huebsch\" ไม่ถูกค้น" \
+  || fail "NB1: $NB"
+[ "$(FB $T Huebsch "$K ของนอก" | J 'd.rows.length+d.shared.length+d.elsewhere.length+d.outside.length')" = "0" ] \
+  && pass "ของนอกสโตร์ไม่ขึ้นในการค้น (รวมกลุ่มอะไหล่นอกเครื่อง) แม้มีแถวไฟล์ Huebsch (ใส่ทาง SQL)" || fail "ของนอกสโตร์ขึ้น"
 [ "$(FB $T Huebsch "$K-HB2" | J 'd.rows.map(r=>r.partCode.replace("'$K'-","")).join(",")')" = "HB2,HB3" ] \
   && [ "$(FB $T Huebsch "$K-HB" | J 'd.rows.map(r=>r.partCode.replace("'$K'-","")).join(",")')" = "HB3,HB1,HB2,HM1" ] \
   && pass "เรียงรหัสตรงทั้งคำก่อน (HB2 ก่อน HB3 ทั้งที่ชื่อ HB2 เรียงทีหลัง) · แล้วรหัสขึ้นต้นด้วยคำค้น · ชื่อที่มีคำค้นอยู่ท้าย (HM1)" \
@@ -172,9 +182,14 @@ for b in Huebsch Maytag Other Electrolux; do NB="$NB$(FB $T "$b" "$K-NB1" | J 'd
   && [ "$(FB $T Huebsch "$K-H%" | J 'd.rows.length+d.shared.length+d.elsewhere.length')" = "0" ] \
   && pass "ค้นด้วย Part No. ได้ (ไม่สนตัวพิมพ์) · ไม่ค้นข้อความยี่ห้อ · % ในคำค้นไม่ใช่ wildcard" \
   || fail "ช่องที่ค้น: pn=$(FB $T Huebsch "pnz$SUF" | J 'd.rows.length') brand=$(FB $T Huebsch "ZZไม่เกี่ยว" | J 'd.rows.length')"
-[ "$(FB $T Huebsch | J 'd.file+"|"+d.rows.length+"|"+d.shared.length+"|"+("updatedAt" in d)')" = "Huebsch|0|0|true" ] \
-  && [ "$(curl -s -G localhost:4000/api/spare-parts/for-brand -H "$(H $T)" --data-urlencode "brand=  " | J 'd.error')" = "ต้องระบุยี่ห้อเครื่อง" ] \
-  && pass "ไม่มีคำค้น = หัวช่องอย่างเดียว (ไฟล์ + วันอัปเดต ไม่มีรายการ) · ไม่ส่งยี่ห้อ = 400 ภาษาไทย" || fail "หัวช่อง/400"
+[ "$(FB $T Huebsch | J 'd.file+"|"+d.rows.length+"|"+d.shared.length+"|"+d.outside.length+"|"+("updatedAt" in d)')" = "Huebsch|0|0|0|true" ] \
+  && pass "ไม่มีคำค้น = หัวช่องอย่างเดียว (ไฟล์ + วันอัปเดต ไม่มีรายการ)" || fail "หัวช่อง: $(FB $T Huebsch | head -c 200)"
+# ไม่ส่งยี่ห้อ (ใบไม่มีเครื่อง · เครื่องที่ยังไม่รู้ยี่ห้อก่อนกดชิป) = ค้นเฉพาะอะไหล่นอกเครื่อง — เดิมตอบ 400 "ต้องระบุยี่ห้อเครื่อง"
+NOB() { curl -s -G localhost:4000/api/spare-parts/for-brand -H "$(H $T)" --data-urlencode "brand=  " --data-urlencode "search=${1:-}"; }
+[ "$(NOB "$K" | J 'String(d.file)+"|"+d.rows.length+d.shared.length+d.others.length+d.elsewhere.length+"|"+d.outside.map(r=>r.partCode.replace("'$K'-","")).join(",")')" = "null|0000|NB1" ] \
+  && [ "$(NOB | J 'String(d.file)+"|"+d.outside.length+"|"+d.updatedAt')" = "null|0|null" ] \
+  && pass "ไม่ส่งยี่ห้อ → file null · ได้เฉพาะอะไหล่นอกเครื่อง (NB1 — ไม่มีตัวในไฟล์ไหน ไม่ค้นทุกไฟล์) · ไม่มีคำค้น = ว่าง" \
+  || fail "for-brand ไม่ส่งยี่ห้อ: $(NOB "$K" | head -c 300)"
 [ "$(FBCODE $AR Huebsch "$K")" = "403" ] \
   && [ "$(FBCODE $T Huebsch "$K")|$(FBCODE $S Huebsch "$K")|$(FBCODE $A Huebsch "$K")|$(FBCODE $PA Huebsch "$K")" = "200|200|200|200" ] \
   && pass "Area ค้นไม่ได้ (403) · ช่าง หัวหน้าภาค แอดมิน แอดมินอะไหล่ ค้นได้" || fail "สิทธิ์ for-brand: AR=$(FBCODE $AR Huebsch x)"
@@ -273,11 +288,21 @@ OC=$(DB "select id from \"SparePart\" where \"partCode\"='[นอกสโตร
   && [ "$(FILES $K-U1)" = "Haier:IMPORT,Other:MANUAL" ] \
   && pass "ไฟล์นอกรายการ (Speed Queen) / ซ้ำ → 400 ภาษาไทย · ของนอกสโตร์ใส่ไฟล์ไม่ได้ · ไฟล์เดิมไม่เปลี่ยน" || fail "PUT ผิด: $(FILES $K-U1)"
 MT1=$(PID $K-MT1)
-R=$(PUT $PA spare-parts/$MT1 '{"brandFiles":[],"name":"m มอเตอร์เมย์แท็กทดสอบ'$SUF' (แก้)"}')
+# ล้างไฟล์จนว่าง = เปลี่ยนเป็นอะไหล่นอกเครื่อง ต้องบอกตั้งใจ (4 พ.ย. 69) — ไม่งั้นอะไหล่ Maytag ที่เผลอติ๊กออกหลุดไปทุกเครื่อง
+R1=$(PUT $PA spare-parts/$MT1 '{"brandFiles":[],"name":"m มอเตอร์เมย์แท็กทดสอบ'$SUF' (แก้)"}')
+R2=$(PUT $PA spare-parts/$MT1 '{"brandFiles":["Maytag"],"outsideMachine":true}')
+R3=$(PUT $PA spare-parts/$MT1 '{"brandFiles":[],"outsideMachine":"yes"}')
+[ "$(echo "$R1" | J 'd.error')" = "เลือกไฟล์ยี่ห้ออย่างน้อย 1 ไฟล์ หรือเลือก “อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)” — กันอะไหล่ของยี่ห้อที่ลืมติ๊กไฟล์ หลุดไปให้ทุกเครื่องเลือก" ] \
+  && [ "$(echo "$R2" | J 'd.error')" = "อะไหล่นอกเครื่องอยู่ในไฟล์ยี่ห้อไม่ได้ — เลือกไฟล์ยี่ห้อ หรือ “อะไหล่นอกเครื่อง” อย่างใดอย่างหนึ่ง" ] \
+  && [ "$(echo "$R3" | J 'd.error')" = "ค่า “อะไหล่นอกเครื่อง” ไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง" ] \
+  && [ "$(FILES $K-MT1)|$(DB "select name from \"SparePart\" where id=$MT1")" = "Maytag:MANUAL|m มอเตอร์เมย์แท็กทดสอบ$SUF" ] \
+  && pass "ล้างไฟล์จนว่างไม่ส่ง outsideMachine → 400 · คู่กับไฟล์ยี่ห้อ → 400 · ค่าผิดรูป → 400 (ภาษาไทยทั้งสาม) · ไฟล์และชื่อไม่เปลี่ยน" \
+  || fail "ล้างไฟล์ไม่บอก: $(echo "$R1" | head -c 200) / $(echo "$R2" | head -c 200) / $(echo "$R3" | head -c 200) · $(FILES $K-MT1)"
+R=$(PUT $PA spare-parts/$MT1 '{"brandFiles":[],"outsideMachine":true,"name":"m มอเตอร์เมย์แท็กทดสอบ'$SUF' (แก้)"}')
 [ "$(echo "$R" | J 'd.brandFiles.length+"|"+d.name')" = "0|m มอเตอร์เมย์แท็กทดสอบ$SUF (แก้)" ] && [ "$(FILES $K-MT1)" = "" ] \
   && [ "$(CODE -X PUT localhost:4000/api/spare-parts/$MT1 -H "$(H $T)" -H 'Content-Type: application/json' -d '{"brandFiles":["Maytag"]}')" = "403" ] \
   && [ "$(FILES $K-MT1)" = "" ] \
-  && pass "แอดมินอะไหล่ติ๊กไฟล์ได้ (ส่ง [] = ไม่อยู่ในไฟล์ไหน พร้อมแก้ชื่อในคำขอเดียว) · ช่างแก้ไม่ได้ (403) ไฟล์ไม่เปลี่ยน" \
+  && pass "แอดมินอะไหล่ติ๊กไฟล์ได้ (ส่ง [] + outsideMachine = อะไหล่นอกเครื่อง พร้อมแก้ชื่อในคำขอเดียว) · ช่างแก้ไม่ได้ (403) ไฟล์ไม่เปลี่ยน" \
   || fail "PA/T PUT: $(echo "$R" | head -c 200) · $(FILES $K-MT1)"
 # รอบเดียวสองยี่ห้อ (แบบอัปครบ 6 ไฟล์ทีเดียว): Haier ไม่มี U2/U3 · Other มี U1 (ติ๊กเอง MANUAL) + U2
 #   U2 หายจาก Haier แต่อยู่ใน Other ของรอบเดียวกัน → ยังต้องฟ้อง Haier (รหัสในไฟล์ Other ไม่ได้แปลว่ายังอยู่ไฟล์ Haier)
@@ -467,11 +492,11 @@ R=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $MT1:1)}")
   && [ "$(st $P)" = "INSPECTING" ] && [ "$(PICKS $P)" = "" ] \
   && pass "ช่างเลือก MT1 (ไฟล์ Maytag) บนเครื่อง Huebsch → 400 บอกว่าอยู่ในไฟล์ Maytag · ใบยังรอตรวจหน้างาน · ไม่มีรอบเลือกอะไหล่" \
   || fail "MT1 บน Huebsch: $(echo "$R" | EMSG) · $(st $P)"
-R1=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $NB1:1)}"); R2=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $OC:1)}")
-[ "$(echo "$R1" | EMSG)" = "$K-NB1 ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เลือกไม่ได้ (แอดมินอัปโหลดไฟล์ที่มีรหัสนี้ หรือติ๊กไฟล์ที่หน้าจัดการข้อมูลอะไหล่)" ] \
-  && [ "$(echo "$R2" | EMSG)" = "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" ] && [ "$(st $P)" = "INSPECTING" ] \
-  && pass "อะไหล่ที่ไม่อยู่ในไฟล์ไหน (NB1 แม้ข้อความยี่ห้อเป็น HB) → 400 · ของนอกสโตร์ → 400 (หัวหน้าภาคใส่ให้)" \
-  || fail "NB1/นอกสโตร์: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG)"
+# NB1 (ไม่อยู่ในไฟล์ไหน) ไม่ถูกปฏิเสธแล้ว — อะไหล่นอกเครื่อง ทดสอบในกลุ่ม L (ส่งที่นี่ใบนี้จะเดินขั้นไป ข้อถัดไปพัง)
+R2=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $OC:1)}")
+[ "$(echo "$R2" | EMSG)" = "อะไหล่นอกสโตร์ใส่ตอนตรวจหน้างานไม่ได้ — เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะใส่ให้" ] && [ "$(st $P)" = "INSPECTING" ] \
+  && pass "ของนอกสโตร์ → 400 (หัวหน้าภาคใส่ให้) · ใบยังรอตรวจหน้างาน" \
+  || fail "นอกสโตร์: $(echo "$R2" | EMSG)"
 R1=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":[{\"sparePartId\":$HB1,\"quantity\":100}]}")
 R2=$(INS $P "{\"note\":\"$NOTE_P\",\"parts\":$(PL $HB1:60 $HB1:50)}")
 [ "$(echo "$R1" | EMSG)" = "ใส่จำนวนให้ครบทุกรายการ (1–99)" ] && [ "$(echo "$R2" | EMSG)" = "ใส่จำนวนให้ครบทุกรายการ (1–99)" ] && [ "$(PICKS $P)" = "" ] \
@@ -848,7 +873,6 @@ echo
 echo "═══ H ล็อกยี่ห้อเส้นทางเดิมทุกเส้น (ระบุอะไหล่ · แจ้งปัญหาหน้างาน · อะไหล่ที่ยังขาด · ปิดงาน · กระดานเครื่องดับ · เปิดใบงาน)"
 L_MT1="$K-MT1 $(DB "select name from \"SparePart\" where id=$MT1")"; L_NB1="$K-NB1 $(DB "select name from \"SparePart\" where id=$NB1")"
 OA1=$(PID $K-OA1); L_OA1="$K-OA1 $(DB "select name from \"SparePart\" where id=$OA1")"
-NB_TEXT="$K-NB1 ยังไม่อยู่ในไฟล์ยี่ห้อไหน — เลือกไม่ได้ (แอดมินอัปโหลดไฟล์ที่มีรหัสนี้ หรือติ๊กไฟล์ที่หน้าจัดการข้อมูลอะไหล่)"
 MT_ON() { echo "$L_MT1 อยู่ในไฟล์ Maytag — เครื่อง $1 (${2:-Huebsch}) เลือกได้เฉพาะอะไหล่ไฟล์ ${3:-Huebsch} และของใช้ร่วม (ไฟล์ Other)"; }
 MODEL() { DB "select coalesce(brand,'-')||'|'||coalesce(model,'-') from \"Machine\" where \"branchId\"=$BID and code='$1'"; }
 # ใบใหม่ที่ขั้นแรก (NEW) บนเครื่องรหัสใหม่ ยี่ห้อ $1 (ว่าง = ไม่รู้ยี่ห้อ) → $WO · $NC
@@ -862,10 +886,10 @@ inprog() { newwo "$1" "$2"; DB "update \"WorkOrder\" set status='IN_PROGRESS', \
 SPEC() { POST ${3:-$S} work-orders/$1/parts "$2"; }
 
 newwo Huebsch "ระบุอะไหล่"; H1=$WO; H1C=$NC
-R1=$(SPEC $H1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1)}"); R2=$(SPEC $H1 "{\"needsParts\":true,\"parts\":$(PL $NB1:1)}")
-[ "$(echo "$R1" | EMSG)" = "$(MT_ON $H1C)" ] && [ "$(echo "$R2" | EMSG)" = "$NB_TEXT" ] && [ "$(st $H1)|$(WAIT $H1)" = "NEW|" ] \
-  && pass "ระบุอะไหล่: MT1 (ไฟล์ Maytag) บนเครื่อง Huebsch → 400 · NB1 (ไม่อยู่ในไฟล์ไหน แม้ข้อความยี่ห้อเป็น HB) → 400 · ใบไม่ขยับ ไม่มีอะไหล่ลงใบ" \
-  || fail "ระบุอะไหล่ผิดยี่ห้อ: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG) · $(st $H1) · $(WAIT $H1)"
+R1=$(SPEC $H1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1)}")
+[ "$(echo "$R1" | EMSG)" = "$(MT_ON $H1C)" ] && [ "$(st $H1)|$(WAIT $H1)" = "NEW|" ] \
+  && pass "ระบุอะไหล่: MT1 (ไฟล์ Maytag) บนเครื่อง Huebsch → 400 · ใบไม่ขยับ ไม่มีอะไหล่ลงใบ (NB1 อะไหล่นอกเครื่อง → กลุ่ม L)" \
+  || fail "ระบุอะไหล่ผิดยี่ห้อ: $(echo "$R1" | EMSG) · $(st $H1) · $(WAIT $H1)"
 # แถวเดิมในใบ (ก่อนมีล็อก) ที่ผิดยี่ห้อ: ยังไม่เบิก = ต้องเอาออกก่อนส่ง · เบิกแล้ว (ของอยู่กับช่าง) = ส่งกลับมาได้ (D6)
 WAITROW $H1 $MT1
 R=$(SPEC $H1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1 $HB1:1)}")
@@ -1087,11 +1111,11 @@ R=$(FROMOUT $OK1 '{"jobType":"CM","model":"Maytag","symptom":"ทดสอบเ
 W=$(echo "$R" | J 'String(d.id??"ERR "+JSON.stringify(d.error))'); ADDWO "$W"
 [ "$(DB "select \"outageId\" from \"WorkOrder\" where id=${W//[!0-9]/0}")|$(MODEL $OK1C)" = "$OK1|-|Huebsch" ] \
   && pass "ช่าง \"+ สร้างใบงาน\" บนเครื่อง Huebsch ส่งยี่ห้อ Maytag → ใบเปิดได้ · Machine.model ยังเป็น Huebsch (D7)" || fail "from-outage ยี่ห้ออื่น: $W · $(MODEL $OK1C)"
-newoutage Huebsch $HB1:1 $MT1:1 $NB1:2; OB=$OUTG; OBC=$NC
+newoutage Huebsch $HB1:1 $MT1:1 $NB1:2 $OA1:1; OB=$OUTG; OBC=$NC
 R=$(FROMOUT $OB "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบเปิดจากกระดาน อะไหล่ผิดยี่ห้อ $SUF\"}" $A)
-[ "$(echo "$R" | EMSG)" = "อะไหล่ที่รอบนกระดานไม่ตรงยี่ห้อเครื่อง $OBC (Huebsch): $L_MT1, $L_NB1 — แก้ “อะไหล่ที่รอ” บนกระดานก่อน แล้วค่อยกด “+ สร้างใบงาน”" ] \
-  && [ "$(DB "select count(*) from \"WorkOrder\" where \"outageId\"=$OB")|$(OPARTS $OB)" = "0|HB1x1,MT1x1,NB1x2" ] \
-  && pass "\"+ สร้างใบงาน\" จากเคสที่อะไหล่ที่รอมี MT1 + NB1 → 400 บอกครบทุกตัวที่ต้องแก้ (ไม่รวม HB1) · ไม่เกิดใบ · กระดานไม่ถูกแตะ (D8)" \
+[ "$(echo "$R" | EMSG)" = "อะไหล่ที่รอบนกระดานไม่ตรงยี่ห้อเครื่อง $OBC (Huebsch): $L_MT1, $L_OA1 — แก้ “อะไหล่ที่รอ” บนกระดานก่อน แล้วค่อยกด “+ สร้างใบงาน”" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" where \"outageId\"=$OB")|$(OPARTS $OB)" = "0|HB1x1,MT1x1,NB1x2,OA1x1" ] \
+  && pass "\"+ สร้างใบงาน\" จากเคสที่อะไหล่ที่รอมี MT1 + OA1 → 400 บอกครบทุกตัวที่ต้องแก้ (ไม่รวม HB1 และ NB1 อะไหล่นอกเครื่อง) · ไม่เกิดใบ · กระดานไม่ถูกแตะ (D8)" \
   || fail "from-outage ผิดยี่ห้อ: $(echo "$R" | EMSG) · $(OPARTS $OB)"
 newoutage "" $HB1:1; OX=$OUTG; OXC=$NC
 R1=$(FROMOUT $OX "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบเปิดจากกระดาน ไม่รู้ยี่ห้อ $SUF\"}" $A)
@@ -1148,7 +1172,7 @@ R=$(FIX $I2 Oasis $A)
 
 echo
 echo "═══ K ใช้อะไหล่ข้ามยี่ห้อ — กดยืนยันรายครั้ง ไม่จำ ลงประวัติ (เจ้าของงานเลือก 3 พ.ย. 69)"
-# MT1 = ไฟล์ Maytag อย่างเดียว (ข้ามยี่ห้อบนเครื่อง Huebsch) · NB1 = ไม่อยู่ในไฟล์ไหน (ยืนยันไม่ได้) · OC = ของนอกสโตร์
+# MT1 = ไฟล์ Maytag อย่างเดียว (ข้ามยี่ห้อบนเครื่อง Huebsch) · NB1 = อะไหล่นอกเครื่อง (ไม่ต้องยืนยัน — กลุ่ม L) · OC = ของนอกสโตร์
 XLOGS() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='CROSS_BRAND_PARTS'"; }
 XNOTE() { echo "ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว): $L_MT1 — อยู่ในไฟล์ Maytag · เครื่อง $1 (${2:-Huebsch})${3:+ · $3}"; }
 MT1_FILES=$(FILES $K-MT1)
@@ -1161,18 +1185,17 @@ R=$(FB $T Huebsch "$K")
 echo "$R" | J 'const o=d.others.map(r=>r.partCode.replace("'$K'-","")), has=(c)=>o.includes(c); ["MT1","OA1","SZ1"].every(has)&&!["HB1","HB2","HB3","HM1","MO1","OT1","NB1"].some(has)&&d.others.length<=8&&d.others.every(r=>r.brandFiles.length&&!r.brandFiles.includes("Huebsch")&&!r.brandFiles.includes("Other"))?"ok":"bad "+o.join(",")' | grep -q ok \
   && [ "$(FB $T Electrolux "$K-HB1" | J 'd.rows.length+"|"+d.others.map(r=>r.partCode.replace("'$K'-","")).join(",")')" = "0|HB1" ] \
   && [ "$(FB $T Huebsch "$K-NB1" | J 'd.others.length')" = "0" ] \
-  && pass "others = ไฟล์ยี่ห้ออื่นเท่านั้น (MT1 OA1 SZ1) — ไม่มีตัวในไฟล์ Huebsch/Other (HM1 MO1 อยู่กลุ่มเดิม) · ไม่อยู่ในไฟล์ไหน (NB1) ไม่ขึ้น · เครื่อง Other ได้ตัวไฟล์ Huebsch" \
+  && pass "others = ไฟล์ยี่ห้ออื่นเท่านั้น (MT1 OA1 SZ1) — ไม่มีตัวในไฟล์ Huebsch/Other (HM1 MO1 อยู่กลุ่มเดิม) · อะไหล่นอกเครื่อง (NB1) ไม่อยู่กลุ่มนี้ · เครื่อง Other ได้ตัวไฟล์ Huebsch" \
   || fail "others ทั้งไฟล์: $(echo "$R" | J 'd.others.map(r=>r.partCode).join(",")' 2>&1)"
 
 newwo Huebsch "ข้ามยี่ห้อ ระบุอะไหล่"; X1=$WO; X1C=$NC
 R1=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1 $HB1:1)}")
-R2=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $NB1:1 $HB1:1),\"crossBrandOk\":[$NB1]}")
 R3=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $HB1:1),\"crossBrandOk\":[\"x\"]}")
-[ "$(echo "$R1" | EMSG)" = "$(MT_ON $X1C)" ] && [ "$(echo "$R2" | EMSG)" = "$NB_TEXT" ] \
+[ "$(echo "$R1" | EMSG)" = "$(MT_ON $X1C)" ] \
   && [ "$(echo "$R3" | EMSG)" = "รายการอะไหล่ข้ามยี่ห้อที่ยืนยันไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง" ] \
   && [ "$(st $X1)|$(WAIT $X1)|$(XLOGS $X1)" = "NEW||0" ] \
-  && pass "ระบุอะไหล่: ไม่ส่ง crossBrandOk → 400 เหมือนเดิม · ยืนยัน NB1 (ไม่อยู่ในไฟล์ไหน) ยัง 400 · crossBrandOk ผิดรูป → 400 ภาษาไทย · ใบไม่ขยับ ไม่มีประวัติ" \
-  || fail "ข้ามยี่ห้อ /parts ปฏิเสธ: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG) / $(echo "$R3" | EMSG)"
+  && pass "ระบุอะไหล่: ไม่ส่ง crossBrandOk → 400 เหมือนเดิม · crossBrandOk ผิดรูป → 400 ภาษาไทย · ใบไม่ขยับ ไม่มีประวัติ" \
+  || fail "ข้ามยี่ห้อ /parts ปฏิเสธ: $(echo "$R1" | EMSG) / $(echo "$R3" | EMSG)"
 R=$(SPEC $X1 "{\"needsParts\":true,\"parts\":$(PL $MT1:1 $HB1:1),\"crossBrandOk\":[$MT1]}")
 [ "$(st $X1)|$(WAIT $X1)" = "PARTS_SOURCING|HB1x1,MT1x1" ] && [ "$(LASTACTS $X1)" = "CROSS_BRAND_PARTS,PARTS_REQUESTED" ] \
   && [ "$(LASTNOTE $X1 CROSS_BRAND_PARTS)" = "$(XNOTE $X1C)" ] \
@@ -1269,8 +1292,8 @@ R=$(FROMOUT $XO "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบข้าม�
 [ "$(echo "$R" | EMSG)" = "อะไหล่ที่รอบนกระดานไม่ตรงยี่ห้อเครื่อง $XOC (Huebsch): $L_MT1 — แก้ “อะไหล่ที่รอ” บนกระดานก่อน แล้วค่อยกด “+ สร้างใบงาน”" ] \
   && [ "$(echo "$R" | J 'const c=d.crossBrand; [c.machineCode,c.make,c.parts.map(p=>p.sparePartId+":"+p.partCode+":"+p.files.join("+")).join(",")].join("|")')" = "$XOC|Huebsch|$MT1:$K-MT1:Maytag" ] \
   && [ "$(DB "select count(*) from \"WorkOrder\" where \"outageId\"=$XO")" = "0" ] \
-  && [ "$(FROMOUT $OB "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบ $SUF\"}" $A | J 'String(d.crossBrand)')" = "undefined" ] \
-  && pass "\"+ สร้างใบงาน\" จากกระดานที่มี MT1 ไม่ยืนยัน → 400 ข้อความเดิม + crossBrand (ตัวที่ยืนยันได้ ให้แอปถาม) · ไม่เกิดใบ · มีตัวที่ไม่อยู่ในไฟล์ไหนปน → ไม่ส่ง crossBrand" \
+  && [ "$(FROMOUT $OB "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบ $SUF\"}" $A | J 'd.crossBrand.parts.map(p=>p.partCode.replace("'$K'-","")).join(",")')" = "MT1,OA1" ] \
+  && pass "\"+ สร้างใบงาน\" จากกระดานที่มี MT1 ไม่ยืนยัน → 400 ข้อความเดิม + crossBrand (ตัวที่ยืนยันได้ ให้แอปถาม) · ไม่เกิดใบ · กระดานที่มีอะไหล่นอกเครื่องปน (NB1) crossBrand มีแค่ตัวไฟล์ยี่ห้ออื่น" \
   || fail "from-outage ไม่ยืนยัน: $(echo "$R" | head -c 300)"
 R=$(FROMOUT $XO "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบข้ามยี่ห้อจากกระดาน $SUF\",\"crossBrandOk\":[$MT1]}" $A)
 W=$(echo "$R" | J 'String(d.id??"ERR "+JSON.stringify(d.error))'); ADDWO "$W"
@@ -1278,6 +1301,133 @@ W=$(echo "$R" | J 'String(d.id??"ERR "+JSON.stringify(d.error))'); ADDWO "$W"
   && [ "$(LASTNOTE ${W//[!0-9]/0} CROSS_BRAND_PARTS)" = "$(XNOTE $XOC)" ] && [ "$(DB "select \"userId\" from \"WorkOrderLog\" where \"workOrderId\"=${W//[!0-9]/0} and action='CROSS_BRAND_PARTS'")" = "$AID" ] \
   && pass "\"+ สร้างใบงาน\" + ยืนยัน → ใบเปิดพร้อม HB1 + MT1 · ประวัติข้ามยี่ห้อของคนกด ต่อจาก \"เปิดใบงาน\"" \
   || fail "from-outage ยืนยัน: $W · $(WAIT ${W//[!0-9]/0}) · $(LASTACTS ${W//[!0-9]/0})"
+
+echo
+echo "═══ L อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69 — ไม่อยู่ในไฟล์ไหน = ทุกเครื่องเลือกได้ ไม่ต้องยืนยัน)"
+# NB1 = ของในสโตร์ที่ไม่อยู่ในไฟล์ไหน (ข้อความยี่ห้อ "HB - Huebsch" ไม่เกี่ยว) · HB1/MT1/OT1 = อะไหล่ของเครื่อง (มีไฟล์) ที่ยังล็อกเหมือนเดิม
+# ทุกข้อยืนยันที่ฐานข้อมูล: รอบเลือกอะไหล่ · อะไหล่ที่รอ/ที่ใช้ · ประวัติข้ามยี่ห้อ (ต้องไม่มี) · ยี่ห้อเครื่อง (ต้องไม่ถูกเขียน)
+OUT_REQ="เลือกไฟล์ยี่ห้ออย่างน้อย 1 ไฟล์ หรือเลือก “อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)” — กันอะไหล่ของยี่ห้อที่ลืมติ๊กไฟล์ หลุดไปให้ทุกเครื่องเลือก"
+OUT_BOTH="อะไหล่นอกเครื่องอยู่ในไฟล์ยี่ห้อไม่ได้ — เลือกไฟล์ยี่ห้อ หรือ “อะไหล่นอกเครื่อง” อย่างใดอย่างหนึ่ง"
+NO_MACHINE_TEXT="ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน"
+PCOUNT() { DB "select count(*) from \"SparePart\" where \"partCode\"='$1'"; }
+BRANDLOGS() { DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$1 and action='MACHINE_BRAND_SET'"; }
+NPNAME="q สายน้ำเข้านอกเครื่องทดสอบ$SUF"
+
+# ── ฟอร์มอะไหล่: ไม่มีไฟล์ต้องบอกว่าเป็นอะไหล่นอกเครื่อง (กันลืมติ๊กไฟล์แล้วหลุดไปทุกเครื่อง) ──
+R1=$(POST $A spare-parts "{\"partCode\":\"$K-NP1\",\"name\":\"$NPNAME\"}")
+R2=$(POST $A spare-parts "{\"partCode\":\"$K-NP1\",\"name\":\"$NPNAME\",\"brandFiles\":[]}")
+R3=$(POST $A spare-parts "{\"partCode\":\"$K-NP1\",\"name\":\"$NPNAME\",\"brandFiles\":[\"Huebsch\"],\"outsideMachine\":true}")
+[ "$(echo "$R1" | J 'd.error')" = "$OUT_REQ" ] && [ "$(echo "$R2" | J 'd.error')" = "$OUT_REQ" ] && [ "$(echo "$R3" | J 'd.error')" = "$OUT_BOTH" ] \
+  && [ "$(PCOUNT $K-NP1)" = "0" ] \
+  && pass "เพิ่มอะไหล่ไม่มีไฟล์ยี่ห้อ (ไม่ส่ง brandFiles / ส่ง []) โดยไม่ส่ง outsideMachine → 400 · คู่กับไฟล์ยี่ห้อ → 400 · ไม่เกิดอะไหล่ (ฐานข้อมูล)" \
+  || fail "POST ไม่มีไฟล์: $(echo "$R1" | head -c 200) / $(echo "$R2" | head -c 200) / $(echo "$R3" | head -c 200) · มี $(PCOUNT $K-NP1) ตัว"
+R=$(POST $PA spare-parts "{\"partCode\":\"$K-NP1\",\"name\":\"$NPNAME\",\"brandFiles\":[],\"outsideMachine\":true}")
+NP1=$(echo "$R" | J 'String(d.id??"")')
+R2=$(POST $A spare-parts "{\"partCode\":\"$K-NP2\",\"name\":\"r ปั๊มไฟล์ Huebsch ทดสอบ$SUF\",\"brandFiles\":[\"Huebsch\"]}")
+NP2=$(echo "$R2" | J 'String(d.id??"")')
+[ -n "$NP1" ] && [ "$(echo "$R" | J 'd.brandFiles.length')" = "0" ] && [ "$(PCOUNT $K-NP1)|$(FILES $K-NP1)" = "1|" ] \
+  && [ -n "$NP2" ] && [ "$(FILES $K-NP2)" = "Huebsch:MANUAL" ] \
+  && pass "outsideMachine: true → 201 อะไหล่ไม่มีไฟล์ (แอดมินอะไหล่ทำได้) · ติ๊กไฟล์ Huebsch ไม่ต้องส่ง outsideMachine → 201 Huebsch (MANUAL) — ฐานข้อมูล" \
+  || fail "POST อะไหล่นอกเครื่อง: $(echo "$R" | head -c 200) / $(echo "$R2" | head -c 200) · NP1=$(FILES $K-NP1)"
+R=$(PUT $A spare-parts/${NP2:-0} '{"outsideMachine":true}')
+R2=$(PUT $A spare-parts/${NP1:-0} "{\"name\":\"$NPNAME (แก้)\"}")
+[ "$(echo "$R" | J 'd.brandFiles.length')" = "0" ] && [ "$(FILES $K-NP2)" = "" ] \
+  && [ "$(DB "select name from \"SparePart\" where \"partCode\"='$K-NP1'")|$(FILES $K-NP1)" = "$NPNAME (แก้)|" ] \
+  && pass "PUT outsideMachine อย่างเดียว = เป็นอะไหล่นอกเครื่อง (ไฟล์ Huebsch ถูกเอาออก) · PUT ที่ไม่ส่ง brandFiles (แอปรุ่นก่อน) แก้ชื่อได้ ไฟล์ไม่แตะ ไม่ต้องส่ง outsideMachine" \
+  || fail "PUT อะไหล่นอกเครื่อง: $(echo "$R" | head -c 200) / $(echo "$R2" | head -c 200) · NP2=$(FILES $K-NP2)"
+[ "$(FB $T Maytag "นอกเครื่องทดสอบ$SUF" | J '""+d.rows.length+d.shared.length+d.others.length+"|"+d.outside.map(r=>r.partCode.replace("'$K'-","")).join(",")')" = "000|NP1" ] \
+  && pass "อะไหล่ที่เพิ่งเลือกเป็นอะไหล่นอกเครื่อง ขึ้นในกลุ่ม outside ของเครื่อง Maytag ทันที (ไม่อยู่กลุ่มของเครื่อง/ของใช้ร่วม/ไฟล์อื่น)" \
+  || fail "for-brand NP1: $(FB $T Maytag "นอกเครื่องทดสอบ$SUF" | head -c 300)"
+
+# ── เครื่องที่รู้ยี่ห้อ: ทุกช่องเลือกได้ ไม่ต้องยืนยัน ไม่ลงประวัติข้ามยี่ห้อ ──
+newinsp Huebsch "นอกเครื่อง ตรวจหน้างาน"; L1W=$WO
+R=$(INS $L1W "{\"note\":\"สายน้ำเข้ารั่ว\",\"parts\":$(PL $NB1:2 $HB1:1),\"crossBrandOk\":[$NB1]}")
+[ "$(st $L1W)|$(PICKS $L1W)|$(ITEMS $L1W)|$(XLOGS $L1W)" = "NEW|PENDING:1:true|HB1x1:-,NB1x2:-|0" ] \
+  && pass "ช่างเลือก NB1 (อะไหล่นอกเครื่อง) + HB1 บนเครื่อง Huebsch → รอคอนเฟิร์ม · ส่ง NB1 มาใน crossBrandOk ก็ไม่นับเป็นข้ามยี่ห้อ (ไม่มีประวัติ)" \
+  || fail "ตรวจหน้างาน + NB1: $(echo "$R" | EMSG) · $(st $L1W) · $(PICKS $L1W) · $(ITEMS $L1W) · ข้ามยี่ห้อ=$(XLOGS $L1W)"
+R=$(CONF $L1W "{\"pickId\":$(PICKID $L1W)}")
+[ "$(PICKS $L1W)|$(WAIT $L1W)|$(XLOGS $L1W)" = "CONFIRMED:1:true|HB1x1,NB1x2|0" ] && [ "$(st $L1W)" != "NEW" ] \
+  && pass "หัวหน้าภาคคอนเฟิร์มโดยไม่ยืนยันอะไรเพิ่ม → NB1 ลงใบเป็นอะไหล่ที่รอ · ใบเดินต่อ ($(st $L1W)) · ไม่มีประวัติข้ามยี่ห้อ" \
+  || fail "คอนเฟิร์ม NB1: $(echo "$R" | EMSG) · $(st $L1W) · $(PICKS $L1W) · $(WAIT $L1W)"
+newwo Maytag "นอกเครื่อง ระบุอะไหล่"; L2W=$WO
+R=$(SPEC $L2W "{\"needsParts\":true,\"parts\":$(PL $NB1:1 $MT1:1)}")
+[ "$(st $L2W)|$(WAIT $L2W)|$(XLOGS $L2W)" = "PARTS_SOURCING|MT1x1,NB1x1|0" ] \
+  && pass "หัวหน้าภาคระบุอะไหล่บนเครื่อง Maytag: NB1 + MT1 → เช็คอะไหล่ · ไม่ต้องยืนยัน ไม่มีประวัติข้ามยี่ห้อ" \
+  || fail "ระบุอะไหล่ NB1: $(echo "$R" | EMSG) · $(st $L2W) · $(WAIT $L2W)"
+inprog Huebsch "นอกเครื่อง ปิดงาน"; L3W=$WO
+for r in NAMEPLATE BEFORE AFTER REQUISITION; do UP $L3W "site-photo.png;type=image/png" $r; done
+R=$(CLOSE $L3W "$(PL $NB1:1)")
+[ "$(st $L3W)|$(USED $L3W)|$(XLOGS $L3W)" = "DONE|NB1x1|0" ] \
+  && pass "ช่างปิดงานใช้ NB1 (ไม่อยู่ในใบ) บนเครื่อง Huebsch → ปิดได้ · อะไหล่ที่ใช้ NB1 · ไม่มีประวัติข้ามยี่ห้อ" \
+  || fail "ปิดงาน NB1: $(echo "$R" | EMSG) · $(st $L3W) · $(USED $L3W)"
+inprog Huebsch "นอกเครื่อง หัวหน้าภาคปิดใบ"; L4W=$WO
+UP $L4W "site-photo.png;type=image/png" AFTER
+R=$(SCLOSE $L4W "$(PL $NB1:1 $HB1:1)")
+[ "$(st $L4W)|$(USED $L4W)|$(XLOGS $L4W)" = "DONE|HB1x1,NB1x1|0" ] \
+  && pass "หัวหน้าภาคปิดใบ (ช่างเข้าซ่อมเสร็จแล้ว) ใช้ NB1 + HB1 → ปิดได้ · อะไหล่ที่ใช้ทั้งสองตัว" \
+  || fail "หัวหน้าภาคปิด NB1: $(echo "$R" | EMSG) · $(st $L4W) · $(USED $L4W)"
+newwo Huebsch "นอกเครื่อง ปิดย้อนหลัง"; L5W=$WO
+R=$(BCLOSE $L5W "$(PL $NB1:1)")
+[ "$(st $L5W)|$(USED $L5W)|$(XLOGS $L5W)" = "DONE|NB1x1|0" ] \
+  && pass "แอดมินปิดย้อนหลังใช้ NB1 → ปิดได้ · อะไหล่ที่ใช้ NB1" \
+  || fail "ปิดย้อนหลัง NB1: $(echo "$R" | EMSG) · $(st $L5W) · $(USED $L5W)"
+
+# ── ใบไม่มีเครื่อง (งานทั้งสาขา): ช่างเลือกได้เฉพาะอะไหล่นอกเครื่อง — อะไหล่ของเครื่องยังได้ข้อความ D15 เดิม ──
+NM2=$(OPENWO COIN_CHANGER "{\"model\":null,\"symptom\":\"ทดสอบนอกเครื่อง ไม่มีเครื่อง $SUF\"}"); ADDWO "$NM2"; INSP "$NM2"
+R1=$(INS $NM2 "{\"note\":\"ตู้แลกเหรียญไม่จ่าย\",\"parts\":$(PL $NB1:1 $HB1:1)}")
+R2=$(INS $NM2 "{\"note\":\"ตู้แลกเหรียญไม่จ่าย\",\"parts\":$(PL $HB1:1 $NB1:1)}")
+[ "$(echo "$R1" | EMSG)" = "$NO_MACHINE_TEXT" ] && [ "$(echo "$R2" | EMSG)" = "$NO_MACHINE_TEXT" ] && [ "$(st $NM2)|$(PICKS $NM2)" = "INSPECTING|" ] \
+  && pass "ใบไม่มีเครื่อง: NB1 ปนอะไหล่ของเครื่อง (HB1) → 400 ข้อความ D15 เดิม ไม่ว่าอยู่ลำดับไหน · ไม่มีรอบเลือกอะไหล่" \
+  || fail "ไม่มีเครื่อง + HB1: $(echo "$R1" | EMSG) / $(echo "$R2" | EMSG) · $(st $NM2)"
+R=$(INS $NM2 "{\"note\":\"ตู้แลกเหรียญไม่จ่าย\",\"parts\":$(PL $NB1:1)}")
+[ "$(st $NM2)|$(PICKS $NM2)|$(ITEMS $NM2)" = "NEW|PENDING:1:true|NB1x1:-" ] \
+  && [ "$(DB "select coalesce(\"brandFile\",'-') from \"PartsPick\" where \"workOrderId\"=$NM2")" = "-" ] \
+  && pass "ใบไม่มีเครื่อง: ช่างเลือก NB1 (อะไหล่นอกเครื่อง) → รอหัวหน้าภาคคอนเฟิร์ม (เดิม 400 ทุกตัว) · รอบไม่มีไฟล์ยี่ห้อ" \
+  || fail "ไม่มีเครื่อง + NB1: $(echo "$R" | EMSG) · $(st $NM2) · $(PICKS $NM2) · $(ITEMS $NM2)"
+R=$(CONF $NM2 "{\"pickId\":$(PICKID $NM2)}")
+[ "$(PICKS $NM2)|$(WAIT $NM2)" = "CONFIRMED:1:true|NB1x1" ] \
+  && pass "คอนเฟิร์มรายการของช่างบนใบไม่มีเครื่อง → NB1 ลงใบเป็นอะไหล่ที่รอ" \
+  || fail "คอนเฟิร์มใบไม่มีเครื่อง: $(echo "$R" | EMSG) · $(PICKS $NM2) · $(WAIT $NM2)"
+B6=$(DB "select count(*) from \"WorkOrder\" where symptom like 'ทดสอบนอกเครื่อง%$SUF'")
+R=$(TOPEN "{\"symptom\":\"ทดสอบนอกเครื่องไม่ใส่เครื่อง $SUF\",\"parts\":$(PL $NB1:1)}")
+LO1=$(echo "$R" | OID); ADDWO "$LO1"
+[ "$(WAIT ${LO1//[!0-9]/0})|$(DB "select coalesce(\"machineId\"::text,'-') from \"WorkOrder\" where id=${LO1//[!0-9]/0}")" = "NB1x1|-" ] \
+  && pass "ช่างเปิดใบไม่ใส่รหัสเครื่อง + NB1 → ใบทั้งสาขา อะไหล่ที่รอ NB1 (อะไหล่ของเครื่องยัง 400 \"ใส่หมายเลขเครื่องก่อน\" — ข้อ H)" \
+  || fail "เปิดใบไม่มีเครื่อง + NB1: $LO1"
+COIN() { POST $T work-orders "{\"branchCode\":\"C0006\",\"jobType\":\"COIN_CHANGER\",\"priority\":\"NORMAL\",\"machines\":[{\"model\":null,\"symptom\":\"ทดสอบนอกเครื่องตู้แลกเหรียญ $SUF\",\"parts\":$1}]}"; }
+R2=$(COIN "$(PL $NB1:1 $HB1:1)")
+R=$(COIN "$(PL $NB1:1)")
+LO2=$(echo "$R" | OID); ADDWO "$LO2"
+[ "$(echo "$R2" | EMSG)" = "ใส่หมายเลขเครื่องก่อนจึงเลือกอะไหล่ได้" ] && [ "$(WAIT ${LO2//[!0-9]/0})" = "NB1x1" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" where symptom like 'ทดสอบนอกเครื่อง%$SUF'")" = "$((B6 + 2))" ] \
+  && pass "ช่างเปิดงานทั้งร้าน (ตู้แลกเหรียญ) + NB1 → อะไหล่ที่รอ NB1 · ปน HB1 → 400 ทั้งคำขอ ไม่เกิดใบ" \
+  || fail "งานทั้งร้าน + NB1: $(echo "$R2" | EMSG) · $LO2"
+
+# ── เครื่องที่ยังไม่รู้ยี่ห้อ ไม่กดชิป: อะไหล่นอกเครื่องผ่าน ยี่ห้อเครื่องไม่ถูกเขียน · ปนอะไหล่ของเครื่อง = ข้อความเดิม ──
+newinsp "" "นอกเครื่อง ไม่รู้ยี่ห้อ"; L6W=$WO; L6M=$NC
+R=$(INS $L6W "{\"note\":\"ไม่รู้ยี่ห้อ ใช้สายน้ำเข้า\",\"parts\":$(PL $NB1:1 $HB1:1)}")
+[ "$(echo "$R" | EMSG)" = "เครื่อง $L6M ยังไม่รู้ยี่ห้อ — เลือกยี่ห้อเครื่องก่อนเลือกอะไหล่" ] && [ "$(st $L6W)|$(PICKS $L6W)" = "INSPECTING|" ] \
+  && pass "เครื่องไม่รู้ยี่ห้อ ไม่ส่งชิป: NB1 + HB1 → 400 \"เลือกยี่ห้อเครื่องก่อน\" เดิม (มีอะไหล่ของเครื่อง)" \
+  || fail "ไม่รู้ยี่ห้อ NB1 + HB1: $(echo "$R" | EMSG) · $(st $L6W)"
+R=$(INS $L6W "{\"note\":\"ไม่รู้ยี่ห้อ ใช้สายน้ำเข้า\",\"parts\":$(PL $NB1:1)}")
+[ "$(st $L6W)|$(PICKS $L6W)|$(ITEMS $L6W)|$(MODEL $L6M)|$(BRANDLOGS $L6W)" = "NEW|PENDING:1:true|NB1x1:-|-|-|0" ] \
+  && pass "เครื่องไม่รู้ยี่ห้อ ไม่ส่งชิป: NB1 อย่างเดียว → รอคอนเฟิร์ม · ยี่ห้อเครื่องยังว่าง ไม่มีประวัติบันทึกยี่ห้อ" \
+  || fail "ไม่รู้ยี่ห้อ NB1: $(echo "$R" | EMSG) · $(st $L6W) · $(ITEMS $L6W) · $(MODEL $L6M)"
+newwo "" "นอกเครื่อง ระบุอะไหล่ไม่รู้ยี่ห้อ"; L7W=$WO; L7M=$NC
+R=$(SPEC $L7W "{\"needsParts\":true,\"parts\":$(PL $NB1:1 ${NP1:-0}:2)}")
+[ "$(st $L7W)|$(WAIT $L7W)|$(MODEL $L7M)|$(BRANDLOGS $L7W)" = "PARTS_SOURCING|NB1x1,NP1x2|-|-|0" ] \
+  && pass "หัวหน้าภาคระบุอะไหล่บนเครื่องไม่รู้ยี่ห้อ ไม่ส่งชิป: NB1 + NP1 (อะไหล่นอกเครื่องทั้งคู่) → เช็คอะไหล่ · ยี่ห้อเครื่องไม่ถูกเขียน" \
+  || fail "ระบุอะไหล่ไม่รู้ยี่ห้อ: $(echo "$R" | EMSG) · $(st $L7W) · $(WAIT $L7W) · $(MODEL $L7M)"
+newoutage ""; LO=$OUTG; LOC=$NC
+R=$(NOTE $LO "{\"parts\":$(PL $NB1:2)}")
+[ "$(OPARTS $LO)|$(MODEL $LOC)" = "NB1x2|-|-" ] \
+  && pass "กระดานเครื่องดับ · เครื่องไม่รู้ยี่ห้อ: อะไหล่ที่รอ NB1 บันทึกได้โดยไม่ต้องเลือกยี่ห้อ · ยี่ห้อเครื่องยังว่าง" \
+  || fail "กระดาน NB1: $(echo "$R" | EMSG) · $(OPARTS $LO) · $(MODEL $LOC)"
+R=$(FROMOUT $LO "{\"jobType\":\"CM\",\"symptom\":\"ทดสอบนอกเครื่องจากกระดาน $SUF\"}" $A)
+W=$(echo "$R" | J 'String(d.id??"ERR "+JSON.stringify(d.error))'); ADDWO "$W"
+[ "$(WAIT ${W//[!0-9]/0})|$(MODEL $LOC)" = "NB1x2|-|-" ] \
+  && pass "\"+ สร้างใบงาน\" จากเคสบนเครื่องไม่รู้ยี่ห้อที่อะไหล่ที่รอมีแต่ NB1 → เปิดได้ ไม่ถาม \"เลือกยี่ห้อเครื่องก่อน\" · อะไหล่ที่รอยกไปลงใบ" \
+  || fail "from-outage NB1: $W · $(WAIT ${W//[!0-9]/0}) · $(MODEL $LOC)"
 
 echo
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

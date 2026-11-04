@@ -37,7 +37,8 @@ echo
 echo "═══ ดูได้ทุกอย่าง แก้ได้เฉพาะเคลมกับข้อมูลอะไหล่"
 P=$(login ZPAP$SUF)
 curl -s localhost:4000/api/auth/me -H "$(H $P)" | J 'd.role' | grep -q "^PARTS_ADMIN$" && pass "/auth/me บอกตำแหน่งแอดมินอะไหล่" || fail "me"
-R=$(curl -s -X POST localhost:4000/api/spare-parts -H "$(H $P)" -H 'Content-Type: application/json' -d "{\"partCode\":\"ZPA$SUF\",\"name\":\"อะไหล่ทดสอบแอดมินอะไหล่\"}")
+# อะไหล่ที่ไม่มีไฟล์ยี่ห้อต้องบอกว่าเป็น "อะไหล่นอกเครื่อง" (4 พ.ย. 69 — ไม่ส่งได้ 400) · ข้อนี้ทดสอบสิทธิ์ ไม่ใช่ไฟล์ยี่ห้อ
+R=$(curl -s -X POST localhost:4000/api/spare-parts -H "$(H $P)" -H 'Content-Type: application/json' -d "{\"partCode\":\"ZPA$SUF\",\"name\":\"อะไหล่ทดสอบแอดมินอะไหล่\",\"outsideMachine\":true}")
 PART=$(echo "$R" | J 'd.id||""')
 [ -n "$PART" ] && [ "$(DB "select count(*) from \"SparePart\" where \"partCode\"='ZPA$SUF'")" = "1" ] \
   && pass "เพิ่มข้อมูลอะไหล่ได้ (ฐานข้อมูล)" || fail "เพิ่มอะไหล่: $R"
