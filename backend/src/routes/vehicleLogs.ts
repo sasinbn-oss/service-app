@@ -251,6 +251,21 @@ router.post("/start", requireAuth, async (req: AuthRequest, res) => {
   const p = parsed.data;
   const userId = req.auth!.userId;
 
+  /**
+   * ใบงานที่ผูกกับการใช้รถต้องยังอยู่ (ถังขยะใบงาน · เจ้าของงานตัดสิน 4 พ.ย. 69 — ใบในถังหายจากทุกที่)
+   * รายการให้เลือก (/status) ไม่มีใบในถังขยะแล้ว แต่หน้าที่เปิดค้างไว้ก่อนแอดมินลบยังส่งเลขเดิมมาได้ — เดิมรับเงียบ ๆ
+   * แล้วรายการใช้รถผูกกับใบที่ไม่มีใครเห็น (เลขที่ไม่มีจริงตก FK กลายเป็น 500) · ตอบแบบเดียวกันทั้งสองกรณี:
+   * ช่างไม่ต้องรู้ว่าใบถูกลบ แค่เลือกใหม่ · เช็คก่อนเปิดทรานแซกชัน — ไม่จองรถ ไม่ใช้รูปที่อัปไว้ ลองใหม่ได้ทันที
+   */
+  if (p.workOrderId) {
+    const wo = await prisma.workOrder.findFirst({ where: { id: p.workOrderId, ...ALIVE }, select: { id: true } });
+    if (!wo) {
+      return res
+        .status(400)
+        .json({ error: "ไม่พบใบงานที่เลือก — ใบงานอาจถูกลบไปแล้ว เลือกใบงานใหม่ หรือเบิกรถโดยไม่ผูกใบงาน" });
+    }
+  }
+
   try {
     const created = await prisma.$transaction(async (tx) => {
       const mine = await tx.vehicleLog.findFirst({

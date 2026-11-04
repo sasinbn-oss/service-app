@@ -2423,12 +2423,45 @@ router.get("/version", requireAuth, async (req: AuthRequest, res) => {
  * กฎสิทธิ์ชุดเดียวกับ GET /:id (blockedForViewer) — ลิงก์ที่ส่งต่อกันในกลุ่มต้องไม่เป็นทางลัดให้คนนอกทีม/พื้นที่
  * รู้ว่าใบนั้นมีอยู่จริงหรือเปิดได้ · ไม่ตอบรายละเอียดอะไรนอกจากเลขใบ ของจริงไปเอาที่ GET /:id ซึ่งเช็คซ้ำอีกรอบ
  * ตัวพิมพ์เล็กก็รับ (คนพิมพ์ลิงก์เอง) — รหัสในฐานข้อมูลเป็นตัวใหญ่เสมอ (workOrderCode)
+ *
+ * ใบในถังขยะ (เจ้าของงานตัดสิน 4 พ.ย. 69 — หายจากทุกที่) — เส้นทางนี้ใช้ :code ไม่ใช่ :id จึงไม่ผ่าน trashGuard ต้องเช็คเอง
+ * (รุ่นแรกของถังขยะลืมตรงนี้: ลิงก์ในกลุ่มไลน์เปิดใบในถังได้เลขใบ แล้วหน้าใบงานค่อยไปเจอ "อยู่ในถังขยะ")
+ * - ไม่ใช่แอดมิน: ตอบเหมือนรหัสที่ไม่มีจริงทุกตัวอักษร (404 "ไม่พบใบงานนี้") และก่อนเช็คสิทธิ์ — ใบนอกทีมที่อยู่ในถัง
+ *   ไม่ได้ 403 ที่บอกว่ามีใบนี้อยู่ · ลิงก์ที่ส่งต่อกันต้องไม่บอกว่าใบไหนเคยมีแล้วถูกลบ
+ * - แอดมิน: บอกว่าอยู่ในถังขยะ (trashed: true) พร้อมว่าใครลบ เมื่อไร เพราะอะไร กู้ได้ถึงวันไหน — แอปขึ้นปุ่มไปหน้าถังขยะ
+ *   ที่ค้นรหัสนี้ไว้ให้ · canRestore = เปิดถังขยะได้ (Admin Spare Part เห็นทุกใบแต่ลบ/กู้ไม่ได้ — บอกให้แอดมินกู้)
  */
 router.get("/by-code/:code", requireAuth, async (req: AuthRequest, res) => {
   const code = String(req.params.code ?? "").trim().toUpperCase();
   if (!/^[A-Z0-9-]{1,40}$/.test(code)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const wo = await prisma.workOrder.findUnique({ where: { code }, select: { ...VIEW_SELECT, code: true } });
+  const wo = await prisma.workOrder.findUnique({
+    where: { code },
+    select: {
+      ...VIEW_SELECT,
+      code: true,
+      deletedAt: true,
+      deleteReason: true,
+      deleteNote: true,
+      deletedBy: { select: { name: true } },
+    },
+  });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.deletedAt) {
+    if (req.auth!.role !== "ADMIN") return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    const canRestore = !req.auth!.partsAdmin;
+    return res.status(404).json({
+      error: canRestore
+        ? `${wo.code} อยู่ในถังขยะ — กู้คืนได้ที่เมนู “ถังขยะใบงาน”`
+        : `${wo.code} อยู่ในถังขยะ — ให้แอดมินกู้คืนจากเมนู “ถังขยะใบงาน”`,
+      trashed: true,
+      code: wo.code,
+      canRestore,
+      deletedAt: wo.deletedAt,
+      purgeAt: purgeAtOf(wo.deletedAt),
+      deletedByName: wo.deletedBy?.name ?? null,
+      reasonText: trashReasonText(wo.deleteReason, wo.deleteNote),
+    });
+  }
   if (await blockedForViewer(req, res, wo)) return;
   res.json({ id: wo.id, code: wo.code });
 });
@@ -3402,6 +3435,9 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
       where: { id },
       select: {
         status: true,
+        // ชั้นที่สองของ trashGuard (คำขออ่านเชื่อรายชื่อที่จำไว้ ซึ่งช้าได้ถึงนาทีเมื่อรันหลายเครื่อง) — อ่านมากับใบอยู่แล้ว ไม่เสียรอบ
+        // หน้าใบงานที่เปิดค้างไว้ปิดตัวเองภายใน 20 วินาทีหลังมีคนลบ ไม่ว่าคนลบจะกดที่เครื่องไหน
+        deletedAt: true,
         ...VIEW_SELECT,
         partsPicks: { orderBy: { id: "desc" }, take: 1, select: { status: true, voidedAt: true, reviewedAt: true } },
       },
@@ -3413,6 +3449,7 @@ router.get("/:id/version", requireAuth, async (req: AuthRequest, res) => {
     }),
   ]);
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.deletedAt) return res.status(404).json({ error: TRASHED_TEXT, trashed: true });
   if (await blockedForViewer(req, res, wo)) return;
   res.json({
     v: last?.id ?? 0,
@@ -3868,8 +3905,10 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
 router.get("/:id/plan-crew", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { ...VIEW_SELECT, scheduledAt: true } });
+  // deletedAt: ชั้นที่สองของ trashGuard (คำขออ่านเชื่อรายชื่อที่จำไว้) — อ่านมากับใบอยู่แล้ว
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { ...VIEW_SELECT, scheduledAt: true, deletedAt: true } });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.deletedAt) return res.status(404).json({ error: TRASHED_TEXT, trashed: true });
   if (await blockedForViewer(req, res, wo)) return;
   if (!wo.scheduledAt || !wo.assignedTeam) return res.json({ members: [] });
   // scheduledAt เก็บที่เที่ยงคืน UTC แบบเดียวกับ TeamDayPlan.date (บอร์ดแผนงานหาใบของวันด้วยค่าเท่ากันแบบนี้)
@@ -11520,11 +11559,17 @@ async function loadAttachableWorkOrder(
 ): Promise<{ id: number; code: string; status: string; createdById: number | null } | null> {
   // ใบงานกับข้อมูลคนถามอ่านพร้อมกัน — ไม่ต่อคิว (ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
   const [wo, viewer] = await Promise.all([
-    prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true, ...VIEW_SELECT } }),
+    // deletedAt: ชั้นที่สองของ trashGuard (คำขออ่านเชื่อรายชื่อที่จำไว้ ช้าได้ถึงนาทีเมื่อรันหลายเครื่อง) — ไฟล์แนบคือรูปในร้านลูกค้า
+    // ใบในถังต้องเปิดไฟล์ไม่ได้ไม่ว่าคำขอจะไปลงเครื่องไหน · อ่านมากับใบอยู่แล้ว ไม่เสียรอบเพิ่ม
+    prisma.workOrder.findUnique({ where: { id }, select: { code: true, status: true, deletedAt: true, ...VIEW_SELECT } }),
     viewerOf(req),
   ]);
   if (!wo) {
     res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+  if (wo.deletedAt) {
+    res.status(404).json({ error: TRASHED_TEXT, trashed: true });
     return null;
   }
   // กฎเดียวกับเปิดดูใบงาน — เดิมช่างเปิดรูปของใบที่ยังไม่จ่ายทีมได้ทุกภาค (ภาพในร้านลูกค้า)

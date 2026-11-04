@@ -825,7 +825,7 @@ model WorkOrder {
   deletedAt    DateTime?
   deletedById  Int?
   deletedBy    User?     @relation("TrashedWorkOrders", fields: [deletedById], references: [id], onDelete: SetNull)
-  // TRASH_REASONS ใน utils/constants.ts · deleteNote = ข้อความเพิ่ม (บังคับเมื่อเลือก "อื่น ๆ")
+  // TRASH_REASONS ใน utils/trash.ts · deleteNote = ข้อความเพิ่ม (บังคับเมื่อเลือก "อื่น ๆ")
   deleteReason String?
   deleteNote   String?
 
