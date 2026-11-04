@@ -1,5 +1,6 @@
 /**
  * สรุปเคสที่คอนเฟิร์มลูกค้าแล้ว — คัดลอกส่งกลุ่มไลน์ช่าง (เจ้าของงานขอ ต.ค. 69)
+ * แต่ละเคสบอกอะไหล่ที่ต้องเปลี่ยน + ป้ายอะไหล่ยังไม่พร้อมที่หัวทีม (เจ้าของงานเลือก 4 พ.ย. 69) — แอดมินเห็นก่อนกดส่งไลน์
  *
  * คำถามของหน้านี้: "วันนี้คอนเฟิร์มเคสไหนไปแล้วบ้าง" (ค่าเริ่มต้น) · สลับเป็น "คิวนัดเข้างานวันไหน" ได้
  * ข้อมูลจาก GET /work-orders/reports/confirmed — กฎว่าเคสไหนนับอยู่ฝั่งเซิร์ฟเวอร์ที่เดียว
@@ -12,9 +13,11 @@ import Spinner from "../components/Spinner";
 import DateField, { thaiDateLong, todayBkk } from "../components/DateField";
 import Dropdown from "../components/Dropdown";
 import { CopyButton } from "../components/CustomerMessage";
+import DispatchPartsBox from "../components/DispatchPartsBox";
 import { useRefreshHandler } from "../components/RefreshButton";
 import { api, apiErrorMessage } from "../api/client";
 import { allDispatch, byTeam, ConfirmedRow, dayLabel, teamDispatch } from "../utils/customerMessage";
+import { partNotReady } from "../utils/dispatchParts";
 import { formatDateTime } from "./WorkOrderListScreen";
 import { colors, radius, shadow, spacing } from "../theme";
 
@@ -30,6 +33,12 @@ export default function ConfirmedReportScreen() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const seq = useRef(0);
+  /**
+   * อะไหล่เป็นคอลัมน์ขวาเมื่อพื้นที่พอ ไม่งั้นลงไปใต้รายละเอียดเคสเต็มความกว้าง (เจ้าของงานเลือก 4 พ.ย. 69)
+   * วัดความกว้างของหน้าเอง ไม่ใช้ความกว้างจอ — เมนูข้างกางหรือหุบทำให้ที่เหลือต่างกันเกือบ 200px
+   */
+  const [pageW, setPageW] = useState(0);
+  const sideParts = pageW >= 760;
 
   const load = useCallback(async () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
@@ -73,7 +82,7 @@ export default function ConfirmedReportScreen() {
   const inspect = shownRows.filter((r) => r.kind === "INSPECT").length;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} onLayout={(e) => setPageW(e.nativeEvent.layout.width)}>
       <Text style={styles.sub}>เคสที่แอดมินคอนเฟิร์มลูกค้าแล้ว แยกตามทีม — กดคัดลอกแล้ววางในกลุ่มไลน์ช่างได้เลย</Text>
 
       <View style={styles.filters}>
@@ -150,45 +159,64 @@ export default function ConfirmedReportScreen() {
             <CopyButton text={allDispatch(shownRows)} label={shown.length > 1 ? "คัดลอกทุกทีม" : `คัดลอกให้${shown[0].team}`} />
           </View>
 
-          {shown.map((t) => (
-            <View key={t.team} style={styles.team}>
-              <View style={styles.teamHead}>
-                <Text style={styles.teamName}>👷 {t.team}</Text>
-                <Text style={styles.teamCount}>{t.rows.length} งาน</Text>
-                <View style={{ flex: 1 }} />
-                {shown.length > 1 ? <CopyButton text={teamDispatch(t.team, t.rows)} label={`คัดลอกให้${t.team}`} /> : null}
-              </View>
-              {t.rows.map((r) => (
-                <View key={r.id} style={styles.job}>
-                  <View style={styles.when}>
-                    <Text style={styles.whenDay}>{dayLabel(r.scheduledAt)}</Text>
-                    <Text style={styles.whenTime}>{r.scheduledTime ? `${r.scheduledTime} น.` : "ไม่ระบุเวลา"}</Text>
-                  </View>
-                  <View style={styles.what}>
-                    <View style={styles.codeRow}>
-                      <Text style={styles.code}>{r.code}</Text>
-                      <Text style={[styles.kind, r.kind === "INSPECT" ? styles.kindInspect : styles.kindRepair]}>
-                        {r.kind === "INSPECT" ? "ตรวจหน้างาน" : "ซ่อม"}
-                      </Text>
-                    </View>
-                    <Text style={styles.line}>
-                      {r.branchCode} {r.branchName}
-                      {r.machineCode ? ` · ${r.machineCode}` : ""}
-                    </Text>
-                    <Text style={styles.meta}>
-                      {[r.symptom, r.contactPhone ? `☎ ${r.contactPhone}` : null].filter(Boolean).join(" · ")}
-                    </Text>
-                    {r.confirmedBy ? (
-                      <Text style={styles.meta}>
-                        คอนเฟิร์มโดย <Text style={styles.by}>{r.confirmedBy}</Text>
-                        {r.confirmedAt ? ` · ${formatDateTime(r.confirmedAt)}` : ""}
-                      </Text>
-                    ) : null}
-                  </View>
+          {shown.map((t) => {
+            // งานตรวจหน้างานไม่นับ — ข้อความไลน์ก็ไม่มีช่วงอะไหล่ของงานนี้
+            const notReady = t.rows.reduce((n, r) => n + (r.kind === "INSPECT" ? 0 : (r.parts ?? []).filter(partNotReady).length), 0);
+            return (
+              <View key={t.team} style={styles.team}>
+                <View style={styles.teamHead}>
+                  <Text style={styles.teamName}>👷 {t.team}</Text>
+                  <Text style={styles.teamCount}>{t.rows.length} งาน</Text>
+                  {notReady ? <Text style={styles.notReady}>อะไหล่ยังไม่พร้อม {notReady} รายการ</Text> : null}
+                  <View style={{ flex: 1 }} />
+                  {shown.length > 1 ? <CopyButton text={teamDispatch(t.team, t.rows)} label={`คัดลอกให้${t.team}`} /> : null}
                 </View>
-              ))}
-            </View>
-          ))}
+                {t.rows.map((r) => (
+                  <View key={r.id} style={[styles.job, !sideParts && styles.jobStack]}>
+                    <View style={styles.jobMain}>
+                      <View style={styles.when}>
+                        <Text style={styles.whenDay}>{dayLabel(r.scheduledAt)}</Text>
+                        <Text style={styles.whenTime}>{r.scheduledTime ? `${r.scheduledTime} น.` : "ไม่ระบุเวลา"}</Text>
+                      </View>
+                      <View style={styles.what}>
+                        <View style={styles.codeRow}>
+                          <Text style={styles.code}>{r.code}</Text>
+                          <Text style={[styles.kind, r.kind === "INSPECT" ? styles.kindInspect : styles.kindRepair]}>
+                            {r.kind === "INSPECT" ? "ตรวจหน้างาน" : "ซ่อม"}
+                          </Text>
+                        </View>
+                        <Text style={styles.line}>
+                          {r.branchCode} {r.branchName}
+                          {r.machineCode ? ` · ${r.machineCode}` : ""}
+                        </Text>
+                        <Text style={styles.meta}>
+                          {[r.symptom, r.contactPhone ? `☎ ${r.contactPhone}` : null].filter(Boolean).join(" · ")}
+                        </Text>
+                        {r.confirmedBy ? (
+                          <Text style={styles.meta}>
+                            คอนเฟิร์มโดย <Text style={styles.by}>{r.confirmedBy}</Text>
+                            {r.confirmedAt ? ` · ${formatDateTime(r.confirmedAt)}` : ""}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                    <View style={sideParts ? styles.partsSide : styles.partsBelow}>
+                      {r.kind === "INSPECT" ? (
+                        <Text style={styles.partsNone}>ตรวจหน้างาน — ยังไม่รู้อะไหล่</Text>
+                      ) : r.parts?.length ? (
+                        <DispatchPartsBox parts={r.parts} plain />
+                      ) : (
+                        // คำเดียวกับข้อความไลน์ — แอดมินเห็นก่อนส่งว่าเคสไหนไม่มีอะไหล่ ถ้าลืมใส่จะได้แก้ทัน
+                        <Text style={styles.partsNone}>
+                          <Text style={styles.partsHead}>อะไหล่: </Text>ไม่ใช้อะไหล่
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            );
+          })}
 
           {/* กว้างประมาณจอมือถือ — เห็นการตัดบรรทัดใกล้กับที่ช่างเห็นในไลน์ */}
           <Text style={styles.label}>ตัวอย่างข้อความในไลน์ (ทีละทีม)</Text>
@@ -231,6 +259,24 @@ const styles = StyleSheet.create({
   teamName: { fontSize: 14, fontWeight: "800", color: colors.roleTech },
   teamCount: { fontSize: 12.5, color: colors.textMuted },
   job: { flexDirection: "row", gap: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
+  jobStack: { flexDirection: "column", gap: spacing.sm },
+  jobMain: { flex: 1, minWidth: 0, flexDirection: "row", gap: spacing.md },
+  partsSide: { width: 340, borderLeftWidth: 1, borderLeftColor: colors.border, paddingLeft: spacing.md, justifyContent: "flex-start" },
+  partsBelow: { borderTopWidth: 1, borderTopColor: colors.border, borderStyle: "dashed", paddingTop: 6 },
+  partsHead: { fontWeight: "800", color: colors.primaryInk },
+  partsNone: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  notReady: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.warningInk,
+    backgroundColor: colors.warningSoft,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 1,
+    overflow: "hidden",
+  },
   when: { width: 92 },
   whenDay: { fontSize: 13, fontWeight: "700", color: colors.text, fontVariant: ["tabular-nums"] },
   whenTime: { fontSize: 12, color: colors.textMuted, fontVariant: ["tabular-nums"] },
