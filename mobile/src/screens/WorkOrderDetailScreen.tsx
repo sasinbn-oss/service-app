@@ -4935,7 +4935,10 @@ function PickConfirmForm({
           <Text style={styles.cfMachine}>
             {["เครื่อง " + machineCode, kind, make ? "ยี่ห้อ " + make : null].filter(Boolean).join(" · ")}
           </Text>
-        ) : null}
+        ) : (
+          // ใบทั้งสาขามีรอบเลือกอะไหล่ได้ตั้งแต่ 4 พ.ย. 69 (อะไหล่นอกเครื่องเท่านั้น) — บอกว่าทำไมไม่มีเครื่อง/ไฟล์ยี่ห้อบนหัว
+          <Text style={styles.cfMachine}>ใบงานทั้งสาขา (ไม่ระบุเครื่อง) · ช่างเลือกได้เฉพาะอะไหล่นอกเครื่อง</Text>
+        )}
         {file ? (
           <View style={styles.cfFileChip}>
             <Ionicons name="lock-closed" size={12} color={colors.primaryInk} />
