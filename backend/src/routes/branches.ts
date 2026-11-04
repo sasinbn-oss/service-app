@@ -9,7 +9,15 @@ import { supervisorScope, workOrderInScope } from "../utils/supervisorScope";
 import { AREA_OUT_OF_SCOPE, areaBranchSelect, areaBranchWhere, areaCoversBranch, isAreaTeam } from "../utils/areaScope";
 import { resolveMapLink } from "../utils/mapLink";
 import { applyTeamAliases } from "../utils/teamAliases";
-import { applyBranchPins, pinBranchField, recordTeamMove } from "../utils/branchPins";
+import {
+  applyBranchPins,
+  branchActor,
+  logBranch,
+  pinBranchField,
+  recordTeamMove,
+  renameBranch,
+  restoreBranchName,
+} from "../utils/branchPins";
 import {
   applyBranchImport,
   parseBranchWorkbook,
@@ -208,7 +216,7 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
         id: true, code: true, name: true, address: true, region: true, zone: true, pmTeam: true, ownership: true,
         latitude: true, longitude: true, radiusMeters: true, cancelledAt: true, cancelledNote: true,
         teamMoves: { select: { field: true } },
-        pins: { select: { field: true } },
+        pins: { select: { field: true, fromValue: true } },
       },
     }),
     prisma.branch.count({ where: { cancelledAt: null } }),
@@ -230,8 +238,10 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
     rows: rows.map(({ teamMoves, pins, ...r }) => ({
       ...r,
       openWorkOrders: openOf.get(r.id) ?? 0,
-      // ช่องที่แก้ในแอป (นำเข้าไฟล์ไม่ทับ) — แผงแก้ไขติดป้ายให้รู้ว่าไม่ตรงกับไฟล์ทะเบียน
+      // ช่องที่แก้ในแอป (นำเข้าไฟล์ไม่ทับ) — แผงแก้ไขติดป้ายให้รู้ว่าไม่ตรงกับไฟล์ทะเบียน ("name" = ชื่อที่แก้ในแอป)
       editedInApp: [...teamMoves.map((m) => m.field), ...pins.map((p) => p.field)],
+      // ชื่อในรายงานเครื่องล่าสุด ของสาขาที่แก้ชื่อในแอป — แผงแก้ไขโชว์คู่กับปุ่ม "คืนตามรายงาน" · ไม่ได้แก้ = null
+      reportName: pins.find((p) => p.field === "name")?.fromValue ?? null,
     })),
   });
 });
@@ -310,6 +320,62 @@ router.put("/:id/registry", requireAuth, requireAdmin, async (req: AuthRequest, 
     { timeout: 30_000, maxWait: 15_000 }
   );
   res.json(await prisma.branch.findUniqueOrThrow({ where: { id } }));
+});
+
+/**
+ * แก้ชื่อสาขา (เจ้าของงานตัดสิน 4 พ.ย. 69: "แก้ชื่อในแอปได้ + นำเข้าไม่ทับ" — เดิมแก้ไม่ได้เพราะรายงานเครื่องเขียนชื่อทับทุกรอบ)
+ *
+ * ชื่อที่แก้ถูกจำไว้ (BranchPin field "name") ตัวนำเข้ารายงานเครื่องไม่ทับ · ใบงานเก่าขึ้นชื่อใหม่เอง (อ้างสาขาด้วย id)
+ * ลงประวัติสาขาทุกครั้ง · ใบเคลมที่ส่งไปแล้วไม่เปลี่ยน (เก็บชื่อ ณ ตอนส่ง — เป็นเอกสารที่ออกไปแล้ว)
+ * ไม่ใช่การรวมสาขา: สาขาที่ต้นทางเปลี่ยนรหัสคือสาขาใหม่ทั้งหมด สาขาเดิมเก็บประวัติของตัวเองไว้ (ปิดสาขาแทน)
+ */
+const BRANCH_NAME_MAX = 200;
+
+/** ชื่อจากแอป/API → ชื่อที่เก็บ หรือข้อความไทยที่ตอบ 400 (ใช้ทั้ง PUT /:id/name และ PUT /:id ที่ส่ง name มา) */
+function branchNameInput(raw: unknown): { name: string } | { error: string } {
+  const name = typeof raw === "string" ? cleanName(raw) : null;
+  if (!name) return { error: "ชื่อสาขาว่างไม่ได้" };
+  if (name.length > BRANCH_NAME_MAX) return { error: `ชื่อสาขายาวเกิน ${BRANCH_NAME_MAX} ตัวอักษร` };
+  return { name };
+}
+
+router.put("/:id/name", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const input = branchNameInput(req.body?.name);
+  if ("error" in input) return res.status(400).json({ error: input.error });
+  const actor = await branchActor(req.auth!.userId);
+  const out = await prisma.$transaction((tx) => renameBranch(tx, id, input.name, actor), { timeout: 30_000, maxWait: 15_000 });
+  if (!out) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+  const { changed: _changed, ...state } = out;
+  res.json(state);
+});
+
+router.post("/:id/name/restore", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const actor = await branchActor(req.auth!.userId);
+  const out = await prisma.$transaction((tx) => restoreBranchName(tx, id, actor), { timeout: 30_000, maxWait: 15_000 });
+  if (!out) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+  if (!out.changed) return res.status(400).json({ error: `${out.code} ใช้ชื่อตามรายงานอยู่แล้ว` });
+  const { changed: _changed, ...state } = out;
+  res.json(state);
+});
+
+/** ประวัติสาขา (แก้ชื่อ · คืนชื่อ · ปิด/เปิดสาขา) ใหม่ก่อนเก่า — แผงแก้ไขแสดงไม่กี่รายการล่าสุด */
+router.get("/:id/logs", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
+  const take = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+  res.json(
+    await prisma.branchLog.findMany({
+      where: { branchId: id },
+      // id ไม่ใช่ createdAt: สองรายการในวินาทีเดียวกัน (แก้ชื่อแล้วปิดทันที) ต้องเรียงตามที่ทำจริง
+      orderBy: { id: "desc" },
+      take,
+      select: { id: true, action: true, note: true, byName: true, createdAt: true },
+    })
+  );
 });
 
 /** วางลิงก์ Google Maps → พิกัด (ลิงก์สั้นต้องตามที่เซิร์ฟเวอร์ — ดู utils/mapLink.ts) */
@@ -575,19 +641,51 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
 
 const updateSchema = branchSchema.partial();
 
-router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
+router.put("/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: branchInputError(parsed.error) });
-
+  // ชื่อวิ่งผ่าน renameBranch เหมือน PUT /:id/name — แก้ชื่อทางนี้ (แผงแก้ไขบันทึกทางนี้) ก็ต้องถูกจำไว้กันไฟล์ทับ
+  // และลงประวัติ ไม่ใช่ทางลัดข้ามทั้งสองอย่าง
+  const { name, code, ...rest } = parsed.data;
+  // รหัสสาขาแก้ไม่ได้ (เจ้าของงานตัดสิน 4 พ.ย. 69: "เปลี่ยนใหม่ คือข้อมูลใหม่ทั้งหมด เเต่ยังเก็บประวัติเก่าอยู่")
+  // ไฟล์รายงานเครื่อง/ทะเบียน/สาขายกเลิกจับคู่สาขาด้วยรหัส — แก้รหัสสาขาเดิมเป็นรหัสใหม่ ใบงาน เครื่อง เคสของรหัสเก่า
+  // ไปติดกับรหัสใหม่ แล้วไฟล์รอบหน้าที่ยังมีรหัสเก่าก็สร้างสาขาเก่าขึ้นมาใหม่เปล่า ๆ = รวมสาขาแบบเงียบ ๆ ที่เจ้าของงานไม่เอา
+  // ส่งรหัสเดิมมาด้วย (ส่งทั้งก้อน) ไม่ถือว่าเปลี่ยน · ไม่เขียนรหัสจากทางนี้เลยแม้ตรงกัน (ช่องว่างหัวท้ายต้องไม่หลุดลงฐาน)
+  if (code !== undefined) {
+    const current = await prisma.branch.findUnique({ where: { id }, select: { code: true } });
+    if (!current) return res.status(404).json({ error: "ไม่พบสาขานี้" });
+    if (code.trim() !== current.code) {
+      return res.status(400).json({
+        error: `เปลี่ยนรหัสสาขา ${current.code} ไม่ได้ — รหัสใหม่คือสาขาใหม่ ให้กด “เพิ่มสาขา” ด้วยรหัสใหม่แทน · สาขาเดิมเก็บประวัติของตัวเองไว้ ถ้าเลิกใช้ให้ปิดสาขา`,
+      });
+    }
+  }
+  let newName: string | null = null;
+  if (name !== undefined) {
+    const input = branchNameInput(name);
+    if ("error" in input) return res.status(400).json({ error: input.error });
+    newName = input.name;
+  }
+  const actor = newName ? await branchActor(req.auth!.userId) : null;
   try {
-    const branch = await prisma.branch.update({
-      where: { id },
-      data: { ...parsed.data, ...branchDates(parsed.data) },
-    });
+    const branch = await prisma.$transaction(
+      async (tx) => {
+        if (Object.keys(rest).length) await tx.branch.update({ where: { id }, data: { ...rest, ...branchDates(rest) } });
+        if (newName && actor) await renameBranch(tx, id, newName, actor);
+        return tx.branch.findUnique({ where: { id } });
+      },
+      { timeout: 30_000, maxWait: 15_000 }
+    );
+    if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
     res.json(branch);
-  } catch {
-    res.status(404).json({ error: "ไม่พบสาขานี้" });
+  } catch (e) {
+    // เดิมจับทุกข้อผิดพลาดเป็น "ไม่พบสาขานี้" — วันที่ผิดรูปแบบก็ขึ้นว่าไม่พบสาขา แอดมินไม่รู้ว่าต้องแก้อะไร
+    // (รหัสซ้ำ P2002 เกิดไม่ได้แล้ว: ทางนี้ไม่เขียนรหัส — ดูข้างบน)
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") return res.status(404).json({ error: "ไม่พบสาขานี้" });
+    if (e instanceof Prisma.PrismaClientValidationError) return res.status(400).json({ error: "ข้อมูลสาขาไม่ถูกต้อง" });
+    throw e;
   }
 });
 
@@ -662,28 +760,43 @@ router.post("/:id/close", requireAuth, requireAdmin, async (req: AuthRequest, re
   const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, cancelledAt: true } });
   if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
   if (branch.cancelledAt) return res.status(400).json({ error: `${branch.code} ปิดไปแล้ว` });
-  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
+  const actor = await branchActor(req.auth!.userId);
   const now = new Date();
   await prisma.$transaction(
     async (tx) => {
       await tx.branch.update({
         where: { id },
-        data: { cancelledAt: now, cancelledNote: `ปิดในแอปโดย ${me?.name ?? "แอดมิน"} — ${parsed.data.note}` },
+        data: { cancelledAt: now, cancelledNote: `ปิดในแอปโดย ${actor.name ?? "แอดมิน"} — ${parsed.data.note}` },
       });
-      await tx.outage.updateMany({ where: { branchId: id, endedAt: null }, data: { endedAt: now, closeReason: "BRANCH_CANCELLED" } });
+      const closed = await tx.outage.updateMany({ where: { branchId: id, endedAt: null }, data: { endedAt: now, closeReason: "BRANCH_CANCELLED" } });
+      // ลงประวัติด้วย (เจ้าของงานขอ 4 พ.ย. 69) — cancelledNote ถูกล้างตอนเปิดคืน ถ้าไม่จดที่นี่ เหตุผลที่เคยปิดหายไปเลย
+      await logBranch(tx, id, "CLOSED", `ปิดสาขา — ${parsed.data.note}`, actor, { note: parsed.data.note, outagesClosed: closed.count });
     },
     { timeout: 30_000, maxWait: 15_000 }
   );
   res.json(await prisma.branch.findUniqueOrThrow({ where: { id } }));
 });
 
-router.post("/:id/reopen", requireAuth, requireAdmin, async (req, res) => {
+router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
-  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, cancelledAt: true } });
+  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, cancelledAt: true, cancelledNote: true } });
   if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
   if (!branch.cancelledAt) return res.status(400).json({ error: `${branch.code} ยังเปิดอยู่` });
-  res.json(await prisma.branch.update({ where: { id }, data: { cancelledAt: null, cancelledNote: null } }));
+  const actor = await branchActor(req.auth!.userId);
+  const reopened = await prisma.$transaction(
+    async (tx) => {
+      const b = await tx.branch.update({ where: { id }, data: { cancelledAt: null, cancelledNote: null } });
+      // เหตุผลที่เคยปิด (รวมที่ปิดจากไฟล์สาขายกเลิก ซึ่งไม่ได้ลงประวัติตอนปิด) เก็บไว้ใน meta ก่อนถูกล้าง
+      await logBranch(tx, id, "REOPENED", "เปิดสาขาอีกครั้ง", actor, {
+        closedAt: branch.cancelledAt!.toISOString(),
+        closedNote: branch.cancelledNote,
+      });
+      return b;
+    },
+    { timeout: 30_000, maxWait: 15_000 }
+  );
+  res.json(reopened);
 });
 
 export default router;

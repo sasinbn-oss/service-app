@@ -340,6 +340,7 @@ model Branch {
   workOrders        WorkOrder[]
   teamMoves         BranchTeamMove[]
   pins              BranchPin[]
+  logs              BranchLog[]
 
   @@index([cocoSupervisorId])
 }
@@ -1086,15 +1087,39 @@ model BranchPin {
   id         Int      @id @default(autoincrement())
   branchId   Int
   branch     Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  // "region" | "ownership"
+  // "region" | "ownership" | "name"
   field      String
   // ค่าก่อนแก้ครั้งแรก — แก้กลับเป็นค่านี้ = เลิกบังคับ
+  // ชื่อ (name · พ.ย. 69): ตัวนำเข้ารายงานเครื่องเขียนชื่อในไฟล์ล่าสุดทับให้ทุกรอบ — "คืนตามรายงาน" ต้องได้ชื่อที่ต้นทางใช้ตอนนี้
+  // ไม่ใช่ชื่อเมื่อหลายเดือนก่อนตอนแก้ครั้งแรก (ภาค/ประเภทไม่ทำแบบนี้ ไฟล์ทะเบียนอัปไม่บ่อยและไม่ได้มีทุกสาขา)
   fromValue  String?
   value      String
   pinnedById Int?
   createdAt  DateTime @default(now())
 
   @@unique([branchId, field])
+}
+
+// ประวัติของสาขา — แก้ชื่อ · คืนชื่อตามรายงาน · ปิดสาขา · เปิดสาขาอีกครั้ง (พ.ย. 69)
+//
+// ก่อนหน้านี้สาขาไม่มีประวัติ: BranchPin/BranchTeamMove เก็บแค่ค่าที่บังคับอยู่ตอนนี้ cancelledNote ถูกล้างตอนเปิดคืน
+// เจ้าของงานตัดสิน 4 พ.ย. 69 ว่าไม่รวมสาขา — สาขาที่เปลี่ยนคือข้อมูลใหม่ทั้งหมด สาขาเดิมเก็บประวัติของตัวเองไว้
+// จึงต้องตอบได้ว่าสาขานี้เคยชื่ออะไร ใครแก้ ใครปิด เพราะอะไร เมื่อไร
+// note เป็นข้อความสำเร็จรูปที่คนอ่าน (เขียนตอนนั้นเลย ชื่อคน/สาขาเปลี่ยนทีหลังได้) · meta เก็บค่าดิบไว้ตามย้อนหลัง
+// ไม่ผูก relation กับ User แบบเดียวกับ Backup — ชื่อคนทำเก็บไว้ตรง ๆ ประวัติต้องอ่านออกแม้บัญชีถูกลบ
+model BranchLog {
+  id        Int      @id @default(autoincrement())
+  branchId  Int
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // RENAMED | NAME_RESTORED | CLOSED | REOPENED
+  action    String
+  note      String
+  meta      Json?
+  byUserId  Int?
+  byName    String?
+  createdAt DateTime @default(now())
+
+  @@index([branchId, id])
 }
 
 // ทีมรวม — พื้นที่รับผิดชอบที่ครอบคลุมหลายทีมช่าง (เช่น "Senior บางน้ำจืด หลักสี่ ลาดพร้าว",

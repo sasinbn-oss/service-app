@@ -5,8 +5,11 @@
  * ซึ่งลบใบงาน/เครื่อง/เคสของสาขาไปด้วย · ตอนนี้: ตัวเลขสรุป (กดแล้วกรอง) ค้นหา กรอง โหลดทีละ 50
  * คลิกแถวเปิดแผงแก้ไข (จอกว้างอยู่ขวา · มือถือเปิดเป็นหน้าต่าง) · "ปิดสาขา" แทนการลบ
  *
- * แก้ได้ที่นี่: พิกัด รัศมี ที่อยู่ — ชื่อ ภาค ประเภท มาจากไฟล์ทะเบียน (แก้ที่นี่ นำเข้ารอบหน้าจะเขียนทับ)
- * ทีมย้ายที่ "ทีมช่าง → ย้ายสาขาเข้าทีม" ซึ่งนำเข้ารอบหน้าคงไว้ให้
+ * แก้ได้ที่นี่: ชื่อ พิกัด รัศมี ที่อยู่ ภาค ประเภท ทีม — นำเข้ารอบหน้าไม่ทับค่าที่แก้ในแอป
+ *
+ * ชื่อ (เจ้าของงานตัดสิน 4 พ.ย. 69: "แก้ชื่อในแอปได้ + นำเข้าไม่ทับ"): จำไว้เป็น BranchPin "name" · "คืนตามรายงาน"
+ * กลับไปใช้ชื่อในรายงานเครื่องเสียล่าสุด · ประวัติสาขา (แก้ชื่อ คืนชื่อ ปิด/เปิดสาขา) อยู่ใต้ปุ่มบันทึกในแผงแก้ไข
+ * ไม่มีการรวมสาขา (เจ้าของงานตัดสินวันเดียวกัน): ต้นทางเปลี่ยนรหัส = สาขาใหม่ทั้งหมด สาขาเดิมปิดไว้ เก็บประวัติของตัวเอง
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
@@ -36,8 +39,17 @@ interface Row {
   cancelledAt: string | null;
   cancelledNote: string | null;
   openWorkOrders: number;
-  /** ช่องที่แก้ในแอป — นำเข้าไฟล์รอบหน้าไม่ทับ */
+  /** ช่องที่แก้ในแอป — นำเข้าไฟล์รอบหน้าไม่ทับ ("name" = ชื่อที่แก้ในแอป) */
   editedInApp: string[];
+  /** ชื่อในรายงานเครื่องเสียล่าสุด ของสาขาที่แก้ชื่อในแอปไว้ — ไม่ได้แก้ = null */
+  reportName: string | null;
+}
+interface BranchLogRow {
+  id: number;
+  action: string;
+  note: string;
+  byName: string | null;
+  createdAt: string;
 }
 interface Options {
   regions: string[];
@@ -185,7 +197,10 @@ export default function ManageBranchesScreen() {
               accessibilityLabel={`สาขา ${r.code}`}
             >
               <Text style={[styles.td, COLS[0], styles.code]}>{r.code}</Text>
-              <Text style={[styles.td, COLS[1], { color: colors.text }]}>{r.name}</Text>
+              <View style={[COLS[1], styles.nameCell]}>
+                <Text style={[styles.td, styles.nameText]} numberOfLines={1}>{r.name}</Text>
+                <RenamedTag row={r} />
+              </View>
               <Text style={[styles.td, COLS[2]]}>{r.region ?? "—"}</Text>
               <Text style={[styles.td, COLS[3]]}>{r.zone ?? "—"}</Text>
               <Text style={[styles.td, COLS[4]]}>{r.pmTeam ?? "—"}</Text>
@@ -204,7 +219,10 @@ export default function ManageBranchesScreen() {
                 <CoordTag row={r} />
                 {r.openWorkOrders ? <Text style={styles.meta}>ใบค้าง {r.openWorkOrders}</Text> : null}
               </View>
-              <Text style={styles.cardName}>{r.name}</Text>
+              <View style={styles.cardNameRow}>
+                <Text style={styles.cardName}>{r.name}</Text>
+                <RenamedTag row={r} />
+              </View>
               <Text style={styles.meta}>
                 {[r.region, r.zone && `ทีม ${r.zone}`, r.ownership].filter(Boolean).join(" · ") || "—"}
               </Text>
@@ -234,7 +252,7 @@ export default function ManageBranchesScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.titleRow}>
-        <Text style={styles.sub}>สาขาส่วนใหญ่มาจากนำเข้าทะเบียน (หน้าติดตามเครื่องเสีย → นำเข้า) · กดที่สาขาเพื่อแก้พิกัด ภาค ประเภท ทีม — นำเข้ารอบหน้าไม่ทับค่าที่แก้ในแอป</Text>
+        <Text style={styles.sub}>สาขาส่วนใหญ่มาจากนำเข้าทะเบียน (หน้าติดตามเครื่องเสีย → นำเข้า) · กดที่สาขาเพื่อแก้ชื่อ พิกัด ภาค ประเภท ทีม — นำเข้ารอบหน้าไม่ทับค่าที่แก้ในแอป</Text>
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => setAdding(true)} accessibilityLabel="เพิ่มสาขา">
           <Ionicons name="add" size={16} color="#fff" />
@@ -324,6 +342,11 @@ export default function ManageBranchesScreen() {
   );
 }
 
+/** ป้ายข้างชื่อในรายการ — ชื่อนี้แก้ในแอป ไม่ตรงกับรายงานเครื่องเสีย (หาสาขาจากชื่อในรายงานไม่เจอจะได้รู้ว่าทำไม) */
+function RenamedTag({ row }: { row: Row }) {
+  return row.editedInApp.includes("name") ? <Text style={[styles.tag, styles.tagEdited]}>แก้ในแอป</Text> : null;
+}
+
 function CoordTag({ row }: { row: Pick<Row, "latitude" | "longitude" | "cancelledAt"> }) {
   if (row.cancelledAt) return <Text style={[styles.tag, styles.tagOff]}>ปิดแล้ว</Text>;
   return hasCoords(row) ? (
@@ -337,7 +360,7 @@ function CoordTag({ row }: { row: Pick<Row, "latitude" | "longitude" | "cancelle
 function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: () => void; onChanged: () => void | Promise<void> }) {
   const adding = row === null;
   const [code, setCode] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(row?.name ?? "");
   const [lat, setLat] = useState(row?.latitude != null ? String(row.latitude) : "");
   const [lng, setLng] = useState(row?.longitude != null ? String(row.longitude) : "");
   const [radiusM, setRadiusM] = useState(String(row?.radiusMeters ?? 200));
@@ -354,10 +377,31 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
     pmTeam: row?.pmTeam ?? null,
   });
   const [options, setOptions] = useState<Options | null>(null);
+  const [logs, setLogs] = useState<BranchLogRow[] | null>(null);
+  // ผลของการกดในแผงนี้ (บันทึก/คืนชื่อ) — อยู่ในแผงเอง ไม่ใช่ท้ายหน้า เพราะบนมือถือแผงนี้เป็นหน้าต่างที่บังหน้าอยู่
+  const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     api.get<Options>("/branches/manage/options").then((r) => setOptions(r.data)).catch(() => undefined);
   }, []);
+
+  // ชื่อเปลี่ยนจากที่อื่น (คืนตามรายงาน · โหลดใหม่หลังบันทึก) — ช่องชื่อตามค่าใหม่ ไม่ค้างค่าที่พิมพ์ก่อนบันทึก
+  useEffect(() => {
+    if (row) setName(row.name);
+  }, [row?.name, row?.reportName]);
+
+  const loadLogs = useCallback(async () => {
+    if (!row) return;
+    try {
+      const r = await api.get<BranchLogRow[]>(`/branches/${row.id}/logs`, { params: { limit: 5 } });
+      setLogs(r.data);
+    } catch {
+      setLogs([]);
+    }
+  }, [row?.id]);
+  useEffect(() => {
+    void loadLogs();
+  }, [loadLogs]);
 
   useEffect(() => {
     if (!row) return;
@@ -389,20 +433,54 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
     const r = Number(radiusM);
     if (!Number.isInteger(r) || r <= 0) return showAlert("รัศมีไม่ถูกต้อง", "ใส่เป็นเมตร เช่น 200");
     if (adding && (!code.trim() || !name.trim())) return showAlert("ข้อมูลไม่ครบ", "ต้องมีรหัสสาขาและชื่อสาขา");
+    if (!adding && !name.trim()) return showAlert("ชื่อสาขาว่างไม่ได้", "ใส่ชื่อสาขา หรือกด “คืนตามรายงาน”");
+    // ส่งชื่อเฉพาะเมื่อเปลี่ยน — ชื่อที่ส่งไปถูกจำว่า "แก้ในแอป" (รายงานเครื่องไม่ทับ) และลงประวัติทุกครั้ง
+    // แค่แก้พิกัดแล้วส่งชื่อเดิมไปด้วยไม่มีผล (เซิร์ฟเวอร์ข้ามเมื่อชื่อไม่เปลี่ยน) แต่ไม่ส่งเลยชัดกว่า
+    const newName = !adding && name.trim() !== row!.name ? name.trim() : null;
     setBusy("กำลังบันทึก");
+    setStatus(null);
     try {
       const body = { latitude: la, longitude: lo, radiusMeters: r, address: address.trim() || undefined };
       let id = row?.id;
       if (adding) {
         const res = await api.post<{ id: number }>("/branches", { ...body, code: code.trim().toUpperCase(), name: name.trim(), latitude: la ?? undefined, longitude: lo ?? undefined });
         id = res.data.id;
-      } else await api.put(`/branches/${row!.id}`, body);
+      } else await api.put(`/branches/${row!.id}`, newName ? { ...body, name: newName } : body);
       // ส่งเฉพาะช่องที่เปลี่ยน — ช่องที่ไม่ได้แตะต้องไม่ถูกจำว่า "แก้ในแอป" แล้วไปบังคับทับไฟล์รอบหน้า
       const changed = Object.fromEntries(REGISTRY.filter((f) => reg[f.key] && reg[f.key] !== (row?.[f.key] ?? null)).map((f) => [f.key, reg[f.key]]));
       if (Object.keys(changed).length) await api.put(`/branches/${id}/registry`, changed);
+      if (!adding) {
+        const reportName = row!.reportName ?? row!.name;
+        setStatus(
+          !newName
+            ? `บันทึก ${row!.code} แล้ว`
+            : newName === reportName
+              ? `บันทึกแล้ว — ชื่อตรงกับรายงานเครื่องเสีย นำเข้ารอบหน้าใช้ชื่อตามรายงานต่อ`
+              : `บันทึกชื่อแล้ว — ลงประวัติ “ชื่อสาขา: ${row!.name} → ${newName}” · นำเข้ารอบหน้าไม่ทับ`
+        );
+      }
       await onChanged();
+      if (newName) void loadLogs();
     } catch (e) {
       showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** คืนชื่อตามรายงาน — ยังไม่ได้บันทึก (แค่พิมพ์ค้างไว้) = ล้างที่พิมพ์ · แก้ไว้แล้ว = ให้เซิร์ฟเวอร์คืนชื่อและเลิกบังคับ */
+  async function restoreName() {
+    if (!row) return;
+    if (!row.reportName) return setName(row.name);
+    setBusy("กำลังคืนชื่อ");
+    setStatus(null);
+    try {
+      await api.post(`/branches/${row.id}/name/restore`);
+      setStatus(`คืนชื่อ ${row.code} ตามรายงานแล้ว — นำเข้ารอบหน้าใช้ชื่อตามรายงานต่อ`);
+      await onChanged();
+      void loadLogs();
+    } catch (e) {
+      showAlert("คืนชื่อไม่สำเร็จ", apiErrorMessage(e));
     } finally {
       setBusy(null);
     }
@@ -411,10 +489,13 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
   async function closeBranch() {
     if (!row || !closeNote.trim()) return;
     setBusy("กำลังปิดสาขา");
+    setStatus(null);
     try {
       await api.post(`/branches/${row.id}/close`, { note: closeNote.trim() });
       setClosing(false);
       await onChanged();
+      // แผงยังเปิดอยู่เมื่อดูแท็บ "ปิดแล้ว" — ประวัติต้องขึ้น "ปิดสาขา — เหตุผล" ทันที
+      void loadLogs();
     } catch (e) {
       showAlert("ปิดสาขาไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -425,9 +506,11 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
   async function reopen() {
     if (!row) return;
     setBusy("กำลังเปิดสาขา");
+    setStatus(null);
     try {
       await api.post(`/branches/${row.id}/reopen`);
       await onChanged();
+      void loadLogs();
     } catch (e) {
       showAlert("เปิดสาขาไม่สำเร็จ", apiErrorMessage(e));
     } finally {
@@ -473,10 +556,15 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
   return (
     <View style={styles.editor} accessibilityLabel={adding ? "แผงเพิ่มสาขา" : "แผงแก้ไขสาขา"}>
       {!adding ? (
-        <View style={styles.edHead}>
-          <Text style={styles.edCode}>{row!.code}</Text>
-          <Text style={styles.edName}>{row!.name}</Text>
-        </View>
+        <>
+          <View style={styles.edHead}>
+            <Text style={styles.edCode}>{row!.code}</Text>
+            <Text style={styles.edName}>
+              {[row!.region, row!.zone && `ทีม ${row!.zone}`, `ใบค้าง ${row!.openWorkOrders} ใบ`].filter(Boolean).join(" · ")}
+            </Text>
+          </View>
+          <NameField row={row!} name={name} setName={setName} onRestore={restoreName} busy={!!busy} />
+        </>
       ) : (
         <>
           <Field label="รหัสสาขา *">
@@ -566,6 +654,31 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
           {busy ? <Spinner size="small" color="#fff" /> : <Text style={[styles.btnText, { color: "#fff" }]}>{adding ? "เพิ่มสาขา" : "บันทึก"}</Text>}
         </TouchableOpacity>
       </View>
+      {status ? (
+        <View role="status" accessibilityLiveRegion="polite" accessibilityLabel="ผลการทำงาน" style={styles.status}>
+          <Text style={styles.statusText}>{status}</Text>
+        </View>
+      ) : null}
+
+      {!adding ? (
+        <View style={{ gap: 4 }} accessibilityLabel="ประวัติสาขา">
+          <Text style={styles.label}>ประวัติสาขา</Text>
+          {logs === null ? null : logs.length === 0 ? (
+            <Text style={styles.hint}>ยังไม่มีประวัติ — แก้ชื่อ คืนชื่อตามรายงาน ปิดหรือเปิดสาขา จะขึ้นที่นี่</Text>
+          ) : (
+            logs.map((l) => (
+              <Text key={l.id} style={styles.logLine}>
+                <Text style={styles.logAt}>
+                  {logTime(l.createdAt)}
+                  {l.byName ? ` · ${l.byName}` : ""}
+                </Text>
+                {"  "}
+                {l.note}
+              </Text>
+            ))
+          )}
+        </View>
+      ) : null}
 
       {!adding ? (
         <View style={styles.danger}>
@@ -619,6 +732,40 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
   );
 }
 
+/**
+ * ช่องชื่อสาขา (เจ้าของงานตัดสิน 4 พ.ย. 69) — ชื่อที่แก้ถูกจำไว้ รายงานเครื่องเสียไม่เขียนทับ
+ * กล่อง "ชื่อในรายงานเครื่องเสีย" ขึ้นเมื่อชื่อไม่ตรงกับรายงาน ทั้งตอนแก้ไว้แล้วและตอนกำลังพิมพ์ — เห็นก่อนกดบันทึก
+ * ว่ากำลังจะต่างจากชื่อที่ต้นทางใช้ · "คืนตามรายงาน" อยู่ในกล่องเดียวกัน
+ */
+function NameField({ row, name, setName, onRestore, busy }: { row: Row; name: string; setName: (v: string) => void; onRestore: () => void; busy: boolean }) {
+  const reportName = row.reportName ?? row.name;
+  const pinned = row.reportName !== null;
+  const differs = pinned || name.trim() !== reportName;
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={styles.regLabelRow}>
+        <Text style={styles.label}>ชื่อสาขา</Text>
+        {pinned ? <Text style={styles.editedTag}>แก้ในแอป</Text> : null}
+      </View>
+      <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="ชื่อสาขา" accessibilityLabel="ชื่อสาขา" />
+      {differs ? (
+        <View style={styles.reportBox} accessibilityLabel="ชื่อในรายงานเครื่องเสีย">
+          <Text style={styles.reportLine}>
+            ชื่อในรายงานเครื่องเสีย: <Text style={{ fontWeight: "700" }}>{reportName}</Text>
+          </Text>
+          <Text style={styles.hint}>นำเข้ารอบหน้าไม่เปลี่ยนชื่อที่แก้ที่นี่ · ใบงานเก่าก็ขึ้นชื่อใหม่</Text>
+          <TouchableOpacity style={[styles.btn, styles.btnSmall]} onPress={onRestore} disabled={busy} accessibilityLabel="คืนชื่อตามรายงาน">
+            <Text style={styles.btnText}>คืนตามรายงาน</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const logTime = (iso: string) =>
+  new Date(iso).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <View style={{ gap: 6 }}>
@@ -636,6 +783,18 @@ const styles = StyleSheet.create({
   regCell: { flexGrow: 1, flexBasis: 150, gap: 4 },
   regLabelRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   subLabel: { fontSize: 12, color: colors.textMuted },
+  nameCell: { flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 6 },
+  nameText: { flexShrink: 1, color: colors.text },
+  cardNameRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
+  // flexShrink 0: ชื่อยาวในคอลัมน์ชื่อบีบป้ายจนตัดเป็นสองบรรทัด ("แก้ใน / แอป") แถวสูงไม่เท่าแถวอื่น — ให้ชื่อเป็นฝ่ายถูกตัด "…" แทน
+  tagEdited: { alignSelf: "center", flexShrink: 0, color: colors.primary, backgroundColor: colors.primarySoft },
+  reportBox: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, gap: 4 },
+  reportLine: { fontSize: 12.5, lineHeight: 19, color: colors.body },
+  btnSmall: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 6 },
+  status: { backgroundColor: colors.successSoft, borderWidth: 1, borderColor: colors.successLine, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8 },
+  statusText: { fontSize: 13, lineHeight: 19, color: colors.successInk, fontWeight: "600" },
+  logLine: { fontSize: 12.5, lineHeight: 18, color: colors.body },
+  logAt: { color: colors.textMuted },
   editedTag: { fontSize: 11, color: colors.primary, backgroundColor: colors.primarySoft, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999, overflow: "hidden" },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.md, paddingBottom: 60 },

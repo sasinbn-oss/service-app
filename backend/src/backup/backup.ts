@@ -52,6 +52,7 @@ const SHEET_TITLE: Record<string, string> = {
   AdminReview: "คำขอให้แอดมินตรวจ",
   Branch: "สาขา",
   CocoMaidBranch: "สาขาที่ Maid ประจำ",
+  BranchLog: "ประวัติสาขา",
   Machine: "เครื่อง",
   Outage: "เคสเครื่องดับ",
   User: "ผู้ใช้",

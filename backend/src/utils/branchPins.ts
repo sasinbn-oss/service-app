@@ -3,8 +3,10 @@
  *
  * ทีม CM/PM → BranchTeamMove (หน้าทีมช่างแสดงเป็นรายการย้ายสาขา คืนตามไฟล์ได้) — ตัวนำเข้าใช้ผ่าน applyTeamAliases
  * ภาค/ประเภท → BranchPin — ตัวนำเข้าใช้ผ่าน applyBranchPins
+ * ชื่อสาขา → BranchPin field "name" (พ.ย. 69) — ตัวนำเข้ารายงานเครื่องเช็คใน SQL เอง (machines/import.ts writeReportBranches)
  *
  * ทั้งสองแบบเก็บ "ค่าก่อนแก้ครั้งแรก" ไว้ แก้กลับเป็นค่านั้น = เลิกบังคับ ให้ไฟล์เป็นคนบอกอีกครั้ง
+ * (ชื่อต่างออกไปนิดเดียว: ตัวนำเข้าอัปเดตค่านี้เป็นชื่อในรายงานล่าสุดทุกรอบ — ดู renameBranch)
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
@@ -85,4 +87,95 @@ export async function applyBranchPins(rows: { code?: string; branchCode?: string
     }
   }
   return changed;
+}
+
+/** ใครทำ — ประวัติสาขาเก็บชื่อไว้ตรง ๆ (BranchLog ไม่ผูก User · บัญชีถูกลบแล้วประวัติต้องยังอ่านออก) */
+export interface BranchActor {
+  id: number;
+  name: string | null;
+}
+
+export async function branchActor(userId: number): Promise<BranchActor> {
+  const me = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+  return { id: userId, name: me?.name ?? null };
+}
+
+export type BranchLogAction = "RENAMED" | "NAME_RESTORED" | "CLOSED" | "REOPENED";
+
+/**
+ * ลงประวัติสาขา — ต้องเรียกในทรานแซกชันเดียวกับที่แก้สาขา: แก้สำเร็จแต่ไม่มีประวัติ (หรือกลับกัน) คือประวัติที่โกหก
+ * note คือข้อความที่คนอ่าน เขียนสำเร็จรูปตอนนั้นเลย ไม่ประกอบใหม่ตอนแสดง (ชื่อคน/สาขาเปลี่ยนทีหลังได้)
+ */
+export async function logBranch(
+  tx: Tx,
+  branchId: number,
+  action: BranchLogAction,
+  note: string,
+  actor: BranchActor,
+  meta?: Prisma.InputJsonValue
+) {
+  await tx.branchLog.create({ data: { branchId, action, note, meta, byUserId: actor.id, byName: actor.name } });
+}
+
+/** ชื่อปัจจุบัน + ชื่อตามรายงาน (เฉพาะเมื่อแก้ชื่อในแอปอยู่ — ไม่ได้แก้ = null) ให้แผงแก้ไขใช้ต่อได้ทันที */
+export interface BranchNameState {
+  id: number;
+  code: string;
+  name: string;
+  reportName: string | null;
+}
+
+/**
+ * อ่านสาขาในทรานแซกชันเดียวกับที่เขียน ไม่ใช้ค่าที่ผู้เรียกอ่านไว้ก่อน — ระหว่างนั้นตัวนำเข้ารายงานเครื่อง
+ * (วันละสองรอบ) อาจเพิ่งอัปเดตชื่อตามรายงานหรือเลิกบังคับไปแล้ว ประวัติ "เดิม → ใหม่" ต้องเป็นชื่อเดิมจริง
+ */
+function namedBranch(tx: Tx, id: number) {
+  return tx.branch.findUnique({
+    where: { id },
+    select: { id: true, code: true, name: true, pins: { where: { field: "name" }, select: { fromValue: true } } },
+  });
+}
+
+/**
+ * แก้ชื่อสาขาในแอป (เจ้าของงานตัดสิน 4 พ.ย. 69) — จำไว้ให้ตัวนำเข้ารายงานเครื่อง และลงประวัติ "ชื่อสาขา: เดิม → ใหม่"
+ *
+ * รายงานเครื่องอัปวันละสองครั้งและเขียนชื่อทุกสาขาในไฟล์ ถ้าไม่จำ ชื่อที่แก้อยู่ได้ครึ่งวัน
+ * แก้กลับเป็นชื่อตามรายงาน = เลิกบังคับ (เหมือนภาค/ประเภท) · null = ไม่พบสาขา · changed=false = ชื่อเดิมอยู่แล้ว
+ */
+export async function renameBranch(tx: Tx, id: number, name: string, actor: BranchActor) {
+  const b = await namedBranch(tx, id);
+  if (!b) return null;
+  const pin = b.pins[0];
+  if (b.name === name) return { id, code: b.code, name, reportName: pin ? pin.fromValue : null, changed: false };
+  // ชื่อตามรายงาน = ชื่อก่อนแก้ครั้งแรก (แก้ซ้ำไม่ทับ ไม่งั้น "คืนตามรายงาน" ได้ชื่อที่แก้ในแอปครั้งก่อน)
+  const reportName = pin ? pin.fromValue : b.name;
+  await tx.branch.update({ where: { id }, data: { name } });
+  if (reportName === name) {
+    // deleteMany ไม่ใช่ delete: ตัวนำเข้าอาจเลิกบังคับไปแล้วระหว่างทาง — ไม่มีแถวให้ลบไม่ใช่ข้อผิดพลาด
+    await tx.branchPin.deleteMany({ where: { branchId: id, field: "name" } });
+  } else {
+    await tx.branchPin.upsert({
+      where: { branchId_field: { branchId: id, field: "name" } },
+      create: { branchId: id, field: "name", fromValue: reportName, value: name, pinnedById: actor.id },
+      update: { value: name, pinnedById: actor.id, createdAt: new Date() },
+    });
+  }
+  await logBranch(tx, id, "RENAMED", `ชื่อสาขา: ${b.name} → ${name}`, actor, { from: b.name, to: name });
+  return { id, code: b.code, name, reportName: reportName === name ? null : reportName, changed: true };
+}
+
+/**
+ * "คืนตามรายงาน" — กลับไปใช้ชื่อในรายงานเครื่องล่าสุด (fromValue ที่ตัวนำเข้าคอยอัปเดต) แล้วเลิกบังคับ
+ * null = ไม่พบสาขา · changed=false = สาขานี้ใช้ชื่อตามรายงานอยู่แล้ว (ไม่มีอะไรให้คืน)
+ */
+export async function restoreBranchName(tx: Tx, id: number, actor: BranchActor) {
+  const b = await namedBranch(tx, id);
+  if (!b) return null;
+  const pin = b.pins[0];
+  if (!pin) return { id, code: b.code, name: b.name, reportName: null, changed: false };
+  const name = pin.fromValue ?? b.name;
+  await tx.branchPin.deleteMany({ where: { branchId: id, field: "name" } });
+  if (name !== b.name) await tx.branch.update({ where: { id }, data: { name } });
+  await logBranch(tx, id, "NAME_RESTORED", `คืนชื่อตามรายงาน: ${b.name} → ${name}`, actor, { from: b.name, to: name });
+  return { id, code: b.code, name, reportName: null, changed: true };
 }

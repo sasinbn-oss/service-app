@@ -569,21 +569,15 @@ export async function planImport(
   };
 }
 
-export async function applyImport(
-  parsed: ParseResult,
-  snapshotAt: Date,
-  meta: { uploadedById?: number; fileName?: string; snapshotSource?: SnapshotSource }
-): Promise<ImportPlan> {
-  const plan = await planImport(parsed, snapshotAt, meta.snapshotSource ?? "uploadTime");
-  if (plan.errors.length > 0) return plan;
-
-  const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
-  const { offMachines, signalLostBranches } = split(
-    parsed.rows.filter((r) => !isSkipped(r, cancelled, removed))
-  );
-
+/**
+ * เขียนสาขาและเครื่องจากแถวในไฟล์ — ส่วนแรกของ applyImport (ก่อนกระทบยอดเคส)
+ *
+ * แยกออกมาให้เทสต์เรียกตรงกับแถวไม่กี่แถวได้ (tests/branch-rename-test.sh): อัปไฟล์เครื่องจริงผ่าน API
+ * = เคสของทุกสาขาที่ไม่อยู่ในไฟล์ถูกปิดทั้งระบบ เทสต์จึงไม่เคยอัปไฟล์นี้ — และตรงนี้คือที่เดียวที่เขียนชื่อสาขาจากไฟล์ทุกรอบ
+ * ชื่อที่แก้ในแอปรอดหรือไม่ตัดสินกันที่นี่
+ */
+export async function writeReportBranches(liveRows: SheetRow[]) {
   const seenBranches = new Map<string, SheetRow>();
-  const liveRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
   for (const row of liveRows) if (!seenBranches.has(row.branchCode)) seenBranches.set(row.branchCode, row);
 
   // เขียนสาขาทั้งหมดในคำสั่งเดียวด้วย unnest
@@ -594,6 +588,10 @@ export async function applyImport(
   //
   // COALESCE ทำหน้าที่เดียวกับที่เคยเขียนเป็นเงื่อนไขใน JS: ถ้าไฟล์ไม่ได้ส่งค่ามา
   // (เป็น null) ให้คงค่าเดิมในฐานข้อมูลไว้ ไม่เขียนทับด้วยค่าว่าง
+  //
+  // ชื่อ (เจ้าของงานตัดสิน 4 พ.ย. 69): คงชื่อเดิมเมื่อแอดมินแก้ชื่อในแอป (BranchPin field "name") — ไม่งั้นแก้แล้วอยู่ได้ครึ่งวัน
+  // และเมื่อไฟล์ไม่ได้ให้ชื่อมา: ไม่มีคอลัมน์ name หรือช่องว่าง parseWorkbook ใส่รหัสแทน (ชื่อ = รหัส)
+  // ซึ่งเดิมเขียนทับชื่อจริงของทุกสาขาในไฟล์เป็นรหัสไปเลย · สาขาใหม่ยังได้ชื่อ = รหัส (ไม่มีชื่ออื่นให้ใช้)
   const branchRows = [...seenBranches.values()];
   const upsertedBranches = await prisma.$queryRaw<{ id: number; code: string }[]>`
     INSERT INTO "Branch" ("code", "name", "ownership", "status", "region", "zone", "grade")
@@ -607,7 +605,12 @@ export async function applyImport(
       ${branchRows.map((r) => r.grade)}::text[]
     )
     ON CONFLICT ("code") DO UPDATE SET
-      "name"      = EXCLUDED."name",
+      "name"      = CASE
+                      WHEN EXCLUDED."name" = EXCLUDED."code"
+                        OR EXISTS (SELECT 1 FROM "BranchPin" p WHERE p."branchId" = "Branch"."id" AND p."field" = 'name')
+                      THEN "Branch"."name"
+                      ELSE EXCLUDED."name"
+                    END,
       "ownership" = COALESCE(EXCLUDED."ownership", "Branch"."ownership"),
       "status"    = COALESCE(EXCLUDED."status",    "Branch"."status"),
       "region"    = COALESCE(EXCLUDED."region",    "Branch"."region"),
@@ -616,6 +619,31 @@ export async function applyImport(
     RETURNING "id", "code"
   `;
   const branchIdByCode = new Map(upsertedBranches.map((b) => [b.code, b.id]));
+
+  /**
+   * สาขาที่แก้ชื่อในแอป: จดชื่อในไฟล์รอบนี้เป็น "ชื่อตามรายงาน" (fromValue) — ปุ่ม "คืนตามรายงาน" ต้องได้ชื่อที่ต้นทางใช้ตอนนี้
+   * และไฟล์ที่เขียนชื่อตรงกับที่แก้แล้ว (ต้นทางแก้ตาม) = เลิกบังคับ ให้ไฟล์เป็นคนบอกชื่อต่อ ไม่ค้างป้าย "แก้ในแอป" ตลอดไป
+   * คำสั่งเดียวไม่ว่าไฟล์มีกี่สาขา — CTE ลบก่อน แล้วอัปเดตเฉพาะแถวที่ไม่ถูกลบ (ทุกส่วนของคำสั่งเห็นข้อมูลชุดเดียวกัน
+   * ถ้าไม่ตัดแถวที่ลบออก UPDATE จะไปแตะแถวเดียวกับ DELETE ในคำสั่งเดียว ซึ่ง Postgres ไม่รับประกันผล)
+   */
+  const named = branchRows.filter((r) => r.branchName && r.branchName !== r.branchCode);
+  if (named.length) {
+    await prisma.$executeRaw`
+      WITH f AS (
+        SELECT * FROM unnest(${named.map((r) => r.branchCode)}::text[], ${named.map((r) => r.branchName)}::text[]) AS f(code, name)
+      ),
+      synced AS (
+        DELETE FROM "BranchPin" p USING "Branch" b, f
+        WHERE p."branchId" = b."id" AND b."code" = f.code AND p."field" = 'name' AND p."value" = f.name
+        RETURNING p."id"
+      )
+      UPDATE "BranchPin" p SET "fromValue" = f.name
+      FROM "Branch" b, f
+      WHERE p."branchId" = b."id" AND b."code" = f.code AND p."field" = 'name'
+        AND p."fromValue" IS DISTINCT FROM f.name
+        AND p."id" NOT IN (SELECT "id" FROM synced)
+    `;
+  }
 
   const machineRows = liveRows.map((row) => ({
     branchId: branchIdByCode.get(row.branchCode)!,
@@ -648,6 +676,21 @@ export async function applyImport(
   const machineIdByKey = new Map(
     upsertedMachines.map((m) => [`${codeByBranchId.get(m.branchId)}|${m.code}`, m.id])
   );
+  return { branchIdByCode, machineIdByKey, branchesTouched: seenBranches.size };
+}
+
+export async function applyImport(
+  parsed: ParseResult,
+  snapshotAt: Date,
+  meta: { uploadedById?: number; fileName?: string; snapshotSource?: SnapshotSource }
+): Promise<ImportPlan> {
+  const plan = await planImport(parsed, snapshotAt, meta.snapshotSource ?? "uploadTime");
+  if (plan.errors.length > 0) return plan;
+
+  const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
+  const liveRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
+  const { offMachines, signalLostBranches } = split(liveRows);
+  const { branchIdByCode, machineIdByKey, branchesTouched } = await writeReportBranches(liveRows);
 
   const openOutages = await prisma.outage.findMany({
     where: { endedAt: null },
@@ -776,7 +819,7 @@ export async function applyImport(
         snapshotAt,
         rowsInFile: plan.rowsInFile,
         duplicateRows: plan.duplicateRows,
-        branchesTouched: seenBranches.size,
+        branchesTouched,
         machinesOff: plan.machinesOff,
         branchesSignalLost: plan.branchesSignalLost,
         opened: opening.length,

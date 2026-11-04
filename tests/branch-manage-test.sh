@@ -25,8 +25,12 @@ WO_BEFORE=$(DB "select count(*) from \"WorkOrder\" where \"branchId\"=$BID")
 NEW=ZZT901
 PIN=ZZT902
 OUT=""
+# ปิด/เปิดคืนลงประวัติสาขา (BranchLog · พ.ย. 69) — สาขานี้เป็นสาขาจริงในฐานทดสอบ ไม่ถูกลบตอนจบ
+# ประวัติที่ชุดนี้ทำจึงต้องลบเอง ไม่งั้นทุกรอบที่รันทิ้ง "ปิดสาขา — ร้านย้ายที่" ไว้ในประวัติของ C0006
+LOG0=$(DB "select coalesce(max(id),0) from \"BranchLog\"")
 cleanup() {
   [ -n "$OUT" ] && DB "delete from \"Outage\" where id=$OUT" >/dev/null
+  DB "delete from \"BranchLog\" where \"branchId\"=$BID and id>$LOG0" >/dev/null
   DB "update \"Branch\" set \"cancelledAt\"=null, \"cancelledNote\"=null, latitude=nullif('$OLD_LAT','')::float, longitude=nullif('$OLD_LNG','')::float, \"radiusMeters\"=$OLD_RAD, address=nullif(\$q\$$OLD_ADDR\$q\$,'') where id=$BID" >/dev/null
   DB "delete from \"Branch\" where code in ('$NEW','$PIN')" >/dev/null
 }
