@@ -75,7 +75,10 @@ const noteInclude = {
   noteUpdatedBy: { select: { name: true } },
   parts: {
     // brandFiles — ช่องเลือกอะไหล่ของกระดานติดป้าย "ไม่อยู่ในไฟล์ …" ให้แถวที่รออยู่ ด้วยกติกาเดียวกับใบงาน
-    include: { sparePart: { select: { id: true, partCode: true, name: true, brand: true, brandFiles: { select: { file: true } } } } },
+    // offCatalog — ของนอกสโตร์ที่ยกมาจากใบ (syncOutageFromWorkOrder) ก็ไม่มีไฟล์ แอปต้องแยกจากอะไหล่นอกเครื่อง ไม่งั้นติดป้าย "นอกเครื่อง" ผิด
+    include: {
+      sparePart: { select: { id: true, partCode: true, name: true, brand: true, offCatalog: true, brandFiles: { select: { file: true } } } },
+    },
     orderBy: { id: "asc" },
   },
 } as const;
@@ -96,7 +99,7 @@ interface NoteShape {
   noteUpdatedBy: { name: string } | null;
   parts: {
     quantity: number;
-    sparePart: { id: number; partCode: string; name: string; brand: string | null; brandFiles: { file: string }[] };
+    sparePart: { id: number; partCode: string; name: string; brand: string | null; offCatalog: boolean; brandFiles: { file: string }[] };
   }[];
 }
 
@@ -156,6 +159,7 @@ function noteFields(o: NoteShape) {
       partCode: p.sparePart.partCode,
       name: p.sparePart.name,
       brand: p.sparePart.brand,
+      offCatalog: p.sparePart.offCatalog,
       brandFiles: fileList(p.sparePart.brandFiles),
       quantity: p.quantity,
     })),
