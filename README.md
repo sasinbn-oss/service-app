@@ -4604,6 +4604,9 @@ npx ts-node scripts/diagnose-flowchart.ts "C:\path\DryerTroubleshoot.xlsx"
   · `claimRepeats?: [{ workOrderId, code, partCode, partName, status, createdAt }]` ใหม่สุดก่อน — มีคีย์เฉพาะ `role === ADMIN`
     และเฉพาะ GET นี้ (ปุ่มเปลี่ยนขั้นที่ส่ง `detailFor` กลับไม่มี) กติกาดู "หน้าตรวจเคลมหน้าเดียว"
   · `claimEvidence[]` = `{ id, sparePartId, role, createdAt, createdById }` ของรอบนี้ (ช่องไฟล์เคลมในฟอร์มใช้ `id` หารูปย่อ)
+- `GET /api/work-orders/by-code/:code` — `{ id, code }` จากรหัสที่คนเห็น (ลิงก์หน้าเว็บ `/#/wo/WO-00045` — ดู "ที่อยู่ของแต่ละหน้าบนเว็บ")
+  · ตัวพิมพ์เล็กก็รับ · 404 "ไม่พบใบงานนี้" · 403 กฎเดียวกับ `GET /:id` (`blockedForViewer` — นอกทีม/นอกพื้นที่ได้ข้อความเดียวกัน)
+  · ไม่ตอบอะไรนอกจากเลขใบ — หน้าใบงานโหลดของจริงจาก `GET /:id` ตามปกติ
 - `POST /api/work-orders` — เปิดเอง ส่ง `{ branchCode, machineCode?, title, detail?, priority?, assignedToId?, scheduledAt?, symptom?, workStatus?, waitingParts? }`
   · `machines[].parts?: [{ sparePartId, quantity }]` (≤ 20) = อะไหล่ที่ช่างเสนอรายเครื่อง ลงเป็นอะไหล่ที่รอ (ล็อกยี่ห้อแบบช่องของช่าง ตรวจทุกเครื่องก่อนสร้างเครื่องใหม่ ·
   ทีม Area ถูกตัดช่องนี้ทิ้ง) · `machines[].model` เขียนเฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ — ดู "อะไหล่ตามยี่ห้อเครื่อง"

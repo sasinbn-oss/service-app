@@ -2379,6 +2379,23 @@ router.get("/version", requireAuth, async (req: AuthRequest, res) => {
 });
 
 /**
+ * เลขใบงานจากรหัสที่คนเห็น (WO-00045) — ลิงก์หน้าเว็บใช้รหัส (/#/wo/WO-00045 · เจ้าของงานขอ 4 พ.ย. 69 "ก๊อบ url แล้วอิงหน้านั้น")
+ * เพราะเป็นสิ่งที่อยู่บนจอและในกลุ่มไลน์ ส่วนหน้าใบงานกับทุก endpoint ใช้เลขใบ — แอปถามที่นี่ครั้งเดียวตอนเปิดลิงก์
+ *
+ * กฎสิทธิ์ชุดเดียวกับ GET /:id (blockedForViewer) — ลิงก์ที่ส่งต่อกันในกลุ่มต้องไม่เป็นทางลัดให้คนนอกทีม/พื้นที่
+ * รู้ว่าใบนั้นมีอยู่จริงหรือเปิดได้ · ไม่ตอบรายละเอียดอะไรนอกจากเลขใบ ของจริงไปเอาที่ GET /:id ซึ่งเช็คซ้ำอีกรอบ
+ * ตัวพิมพ์เล็กก็รับ (คนพิมพ์ลิงก์เอง) — รหัสในฐานข้อมูลเป็นตัวใหญ่เสมอ (workOrderCode)
+ */
+router.get("/by-code/:code", requireAuth, async (req: AuthRequest, res) => {
+  const code = String(req.params.code ?? "").trim().toUpperCase();
+  if (!/^[A-Z0-9-]{1,40}$/.test(code)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const wo = await prisma.workOrder.findUnique({ where: { code }, select: { ...VIEW_SELECT, code: true } });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, wo)) return;
+  res.json({ id: wo.id, code: wo.code });
+});
+
+/**
  * ใบงานเหล่านี้ตอนนี้อยู่แท็บไหนของหน้ารายการ — ปุ่ม "มีอัปเดต" ใช้พาไปแท็บที่ใบอยู่แล้วกระพริบใบนั้น
  * (เจ้าของงานขอ ต.ค. 69 · เดิมใบที่ย้ายออกจากแท็บที่เปิดอยู่หายไปเฉย ๆ ไม่รู้ไปอยู่ไหน)
  *
