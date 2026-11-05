@@ -106,6 +106,11 @@ export type AdminStackParamList = {
    * q = คำค้นที่เปิดมาพร้อม (ลิงก์ใบงานที่อยู่ในถังขยะพามาที่นี่พร้อมรหัสใบ · /#/admin/trash?q=WO-…)
    */
   WorkOrderTrash: { q?: string } | undefined;
+  /**
+   * ประวัติการนำเข้า (เจ้าของงานอนุมัติ 5 พ.ย. 69) — kind = ชิปชนิดที่กรองไว้ (ปุ่มข้างหน้านำเข้าแต่ละหน้าส่งชนิดของหน้านั้นมา)
+   * run = รอบที่เปิดอยู่ (r12 · m5 · p<batchId>) · ทั้งสองอยู่ในที่อยู่ /#/admin/imports?kind=&run=
+   */
+  ImportHistory: { kind?: string; run?: string } | undefined;
 };
 
 export type MainTabParamList = {

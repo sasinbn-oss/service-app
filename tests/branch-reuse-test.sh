@@ -15,6 +15,8 @@
 # ใช้สาขา ZZU… ของตัวเองทั้งหมด · ใบงานล้างด้วย purge_orders · สาขา (รวม "(เดิม)") ลบใน trap — เครื่อง ประวัติ เคลมหายตาม (cascade)
 # ถ้ายืนยันใช้รหัสซ้ำไม่สำเร็จ (โค้ดก่อนแก้) ข้อ ค ขึ้น FAIL แล้วตั้งสภาพเดียวกันด้วย SQL ให้ข้อ ง–ซ ยังตรวจตัวกันของตัวเองได้
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$@"; }  # $2… = process.argv[2]… (ข้อความไทยยาว ๆ ไม่ต้องหนีอัญประกาศ)
 H() { echo "Authorization: Bearer $1"; }
@@ -31,6 +33,7 @@ ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
 AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 IDS=""
 cleanup() {
+  ih_clean
   purge_orders "$A" $IDS
   DB "delete from \"Branch\" where code like 'ZZU%' or \"originalCode\" like 'ZZU%'" >/dev/null
   rm -rf "$TMP"

@@ -4,6 +4,9 @@
 #
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md) · ต้องมี mock-s3 รันอยู่ (tests/README.md)
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
+trap ih_clean EXIT
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }

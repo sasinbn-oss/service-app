@@ -4,6 +4,8 @@
 #        จัดแผนให้ทีมรวมได้ · นำเข้ารายชื่อจับคู่ชื่อทีมรวมได้ และไม่ล้างทีมอื่นของหัวหน้าภาค · รายงานไม่นับว่าไม่มีทีม
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -22,6 +24,7 @@ NS=$(printf "97%05d" $SUF); NT=$(printf "96%05d" $SUF)
 G1="กลุ่มทดสอบกระบี่$SUF"; G2="กลุ่มทดสอบกรุงเทพ$SUF"; GA="กลุ่มทดสอบทุกทีม$SUF"
 IDS=""
 cleanup() {
+  ih_clean
   purge_orders "$A" $IDS
   DB "delete from \"TeamDayPlan\" where team like 'กลุ่มทดสอบ%$SUF%'; delete from \"User\" where \"employeeCode\" like 'ZG%$SUF' or \"employeeCode\" in ('$NS','$NT'); delete from \"TeamGroup\" where name like 'กลุ่มทดสอบ%$SUF%'" >/dev/null
 }

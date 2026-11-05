@@ -4,6 +4,9 @@
 #   · สะกดสลับ ณ/น (พิษนุโลก ↔ พิษณุโลก) → ใบ "ไม่มีคนรับ" บอกชื่อหัวหน้าภาคกับชื่อที่สะกดไม่ตรง
 #   · รวมทีมที่หน้าทีมช่าง (เปลี่ยนชื่อ) แล้วใบเข้าหัวหน้าภาค · หัวหน้าภาคเห็นใบในรายการของตัวเอง
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
+trap ih_clean EXIT
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }

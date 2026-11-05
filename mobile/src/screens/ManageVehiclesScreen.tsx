@@ -27,6 +27,7 @@ import { fmtNum, openSigned, postImageForm } from "../utils/vehicles";
 import { colors, headingFont, radius, shadow } from "../theme";
 import { useDocked } from "../components/SideMenu";
 import VehicleImportModal from "../components/VehicleImportModal";
+import ImportHistoryButton from "../components/ImportHistoryButton";
 import { canPickFile } from "../utils/filePicker";
 
 type Level = "none" | "ok" | "soon" | "over";
@@ -378,6 +379,8 @@ export default function ManageVehiclesScreen() {
               <Text style={fs.btnGhostText}>นำเข้าจาก Excel</Text>
             </TouchableOpacity>
           ) : null}
+          {/* รอบที่นำเข้าไฟล์รถแล้ว — ประวัติการนำเข้ากรอง "รถ" ไว้ให้ */}
+          {canPickFile ? <ImportHistoryButton kind="vehicle" /> : null}
           <TouchableOpacity style={fs.btn} onPress={() => open("new")}>
             <Ionicons name="add" size={18} color="#fff" />
             <Text style={fs.btnText}>เพิ่มรถ</Text>

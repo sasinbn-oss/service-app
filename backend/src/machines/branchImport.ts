@@ -25,6 +25,8 @@ export interface BranchSheetRow {
   /** พิกัดจากคอลัมน์ GPS ("8.07475, 98.995222") — ว่างเมื่อไม่มีหรืออ่านไม่ออก */
   latitude: number | null;
   longitude: number | null;
+  /** เลขแถวใน Excel (แถวล่างสุดของรหัสที่ซ้ำ) — ประวัติการนำเข้าบอกได้ว่าแถวไหนในไฟล์ · ไม่ส่งมา = ไม่รู้ (ไม่ได้อ่านจากไฟล์) */
+  line?: number;
 }
 
 export interface BranchParseResult {
@@ -61,7 +63,7 @@ const HEADER_ALIASES = {
   warrantyExpiresAt: ["วันหมดประกัน", "หมดประกัน", "warranty_expires", "warranty_end", "warranty_expiry"],
   latitude: ["gps", "พิกัด", "lat_long", "latitude"],
   longitude: ["longitude", "ลองจิจูด"],
-} satisfies Record<keyof BranchSheetRow, string[]>;
+} satisfies Record<Exclude<keyof BranchSheetRow, "line">, string[]>;
 
 /**
  * อ่านพิกัดจากช่องเดียวที่เขียนติดกันเป็น "lat, long"
@@ -200,6 +202,7 @@ export async function parseBranchWorkbook(buffer: Buffer): Promise<BranchParseRe
       warrantyExpiresAt: readDate(row, "warrantyExpiresAt"),
       latitude: coords?.latitude ?? null,
       longitude: coords?.longitude ?? null,
+      line: r,
     };
 
     // รหัสเดียวกันมาสองครั้งแล้วภาค/ทีมไม่ตรงกัน แปลว่าต้นทางมีปัญหา
@@ -243,6 +246,11 @@ export interface BranchImportPlan {
   noPmTeamCount: number;
   errors: string[];
   warnings: string[];
+  /**
+   * แถวที่เปลี่ยน (สาขาใหม่ · ภาค/ทีมเปลี่ยน) ครบทุกแถว สำหรับประวัติการนำเข้า — หน้าสรุปใช้ตัวอย่างข้างบนพอ
+   * เส้นทางนำเข้าตัดออกก่อนตอบ (ไฟล์พันกว่าสาขาไม่ต้องส่งรายการเต็มกลับไปหน้าจอ)
+   */
+  history?: { line: number | null; result: "new" | "changed"; code: string; name: string | null; detail: string }[];
 }
 
 function describe(region: string | null, zone: string | null) {
@@ -298,7 +306,7 @@ export async function planBranchImport(input: BranchParseResult): Promise<Branch
   }
 
   const existing = await prisma.branch.findMany({
-    select: { code: true, region: true, zone: true, latitude: true },
+    select: { code: true, name: true, region: true, zone: true, latitude: true },
   });
   const byCode = new Map(existing.map((b) => [b.code, b]));
 
@@ -311,11 +319,13 @@ export async function planBranchImport(input: BranchParseResult): Promise<Branch
   let changedCount = 0;
   let unchangedCount = 0;
   const newBranches: string[] = [];
+  const history: NonNullable<BranchImportPlan["history"]> = [];
 
   for (const row of parsed.rows) {
     const current = byCode.get(row.code);
     if (!current) {
       newBranches.push(row.code);
+      history.push({ line: row.line ?? null, result: "new", code: row.code, name: row.name || null, detail: describe(row.region, row.zone) });
       continue;
     }
     const from = describe(current.region, current.zone);
@@ -324,6 +334,7 @@ export async function planBranchImport(input: BranchParseResult): Promise<Branch
     else {
       changedCount += 1;
       if (changedSample.length < 10) changedSample.push({ code: row.code, from, to });
+      history.push({ line: row.line ?? null, result: "changed", code: row.code, name: current.name, detail: `${from} → ${to}` });
     }
   }
 
@@ -358,6 +369,7 @@ export async function planBranchImport(input: BranchParseResult): Promise<Branch
     newCoordinateCount,
     errors: parsed.errors,
     warnings,
+    history,
   };
 }
 

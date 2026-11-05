@@ -23,6 +23,7 @@ import { teamGroups, teamsOf } from "../utils/teamGroups";
 import { staleUsers } from "../utils/userGate";
 import { HOWTO_NEW } from "../utils/howto";
 import { isRetiredCode } from "../utils/branchCodeReuse";
+import { HistoryRow, recordImport } from "../utils/importHistory";
 
 const router = Router();
 
@@ -101,6 +102,8 @@ router.post("/preview", requireAuth, requireAdmin, upload.single("file"), async 
 const commitSchema = z.object({
   // ต้องมีเฉพาะตอนมีคนใหม่ — นำเข้ารอบหลัง (ปรับทีม) ทุกคนมีบัญชีแล้ว ไม่ต้องตั้งรหัส
   password: z.string().optional(),
+  // ชื่อไฟล์ที่ดูตัวอย่าง (บันทึกไม่ได้ส่งไฟล์มาซ้ำ) — ใช้ในประวัติการนำเข้าเท่านั้น · แอปรุ่นก่อนไม่ส่ง
+  fileName: z.string().trim().max(200).optional(),
   teamMap: z.record(z.string(), z.string().nullable()),
   people: z
     .array(
@@ -121,6 +124,7 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
   const parsed = commitSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   const { password, teamMap, people } = parsed.data;
+  const fileName = parsed.data.fileName || "ไฟล์รายชื่อ (แอปรุ่นก่อนไม่ได้ส่งชื่อไฟล์)";
 
   const teams = new Set(await knownTeams());
   for (const t of Object.values(teamMap)) {
@@ -141,7 +145,7 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
     (
       await prisma.user.findMany({
         where: { employeeCode: { in: people.map((p) => p.code) }, deletedAt: null },
-        select: { id: true, employeeCode: true, role: true, team: true, extraTeams: true, supervisedTeams: true },
+        select: { id: true, employeeCode: true, name: true, role: true, team: true, extraTeams: true, supervisedTeams: true },
       })
     ).map((u) => [u.employeeCode, u])
   );
@@ -155,6 +159,13 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
   let created = 0;
   let updated = 0;
   let withoutTeam = 0;
+  /**
+   * ประวัติการนำเข้า: คนใหม่ · คนที่ตำแหน่ง/ทีม/ชื่อเปลี่ยน · ช่างที่ยังไม่มีทีม — คนที่ไม่เปลี่ยนนับยอดอย่างเดียว
+   * ไม่มีรหัสผ่านตั้งต้น (อยู่ใน body ของคำขอนี้ — ห้ามลงฐานข้อมูลที่ไหนนอกจาก hash ของบัญชี)
+   */
+  const history: HistoryRow[] = [];
+  let same = 0;
+  const startedAt = new Date();
   await prisma.$transaction(
     async (tx) => {
       for (const p of people) {
@@ -162,8 +173,17 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
         const name = displayName(p);
         const team = p.role === "EMPLOYEE" ? teamOf(p.area) : null;
         const supTeams = p.role === "SUPERVISOR" ? [...(supervised.get(p.code) ?? [])] : [];
-        if (p.role === "EMPLOYEE" && !team && !(u && teamsOf(u).length)) withoutTeam++;
+        const noTeam = p.role === "EMPLOYEE" && !team && !(u && teamsOf(u).length);
+        if (noTeam) withoutTeam++;
+        const noTeamNote = noTeam ? "ยังไม่มีทีม — ตั้งทีมเองที่หน้าสิทธิ์ผู้ใช้" : null;
         if (!u) {
+          history.push({
+            result: "new",
+            code: p.code,
+            name,
+            detail: [ROLE_LABELS[p.role], team ? `ทีม ${team}` : null, supTeams.length ? `ดูแล ${supTeams.join(", ")}` : null].filter(Boolean).join(" · "),
+            note: noTeamNote,
+          });
           await tx.user.create({
             data: {
               employeeCode: p.code,
@@ -189,10 +209,24 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
         if (!keepRole && u.role === "SENIOR_TECH" && p.role === "EMPLOYEE") {
           const held = teamsOf(u);
           const all = team && !held.includes(team) ? [...held, team] : held;
+          const diff = [u.name !== name ? `ชื่อ ${u.name} → ${name}` : null, all.length > held.length ? `เพิ่มทีม ${team}` : null].filter(Boolean);
+          if (diff.length || noTeamNote) history.push({ result: diff.length ? "changed" : "noTeam", code: p.code, name, detail: diff.join(" · ") || null, note: noTeamNote });
+          else same++;
           await tx.user.update({ where: { id: u.id }, data: { name, team: all[0] ?? null, extraTeams: all.slice(1) } });
           updated++;
           continue;
         }
+        const newRole = keepRole ? u.role : p.role;
+        const newTeam = keepRole ? u.team : p.role === "EMPLOYEE" ? team ?? u.team : null;
+        const addedSup = !keepRole && p.role === "SUPERVISOR" ? supTeams.filter((t) => !u.supervisedTeams.includes(t)) : [];
+        const diff = [
+          u.name !== name ? `ชื่อ ${u.name} → ${name}` : null,
+          newRole !== u.role ? `${ROLE_LABELS[u.role] ?? u.role} → ${ROLE_LABELS[newRole] ?? newRole}` : null,
+          (newTeam ?? null) !== (u.team ?? null) ? `ทีม ${u.team ?? "—"} → ${newTeam ?? "—"}` : null,
+          addedSup.length ? `ดูแลเพิ่ม ${addedSup.join(", ")}` : null,
+        ].filter(Boolean);
+        if (diff.length || noTeamNote) history.push({ result: diff.length ? "changed" : "noTeam", code: p.code, name, detail: diff.join(" · ") || null, note: noTeamNote });
+        else same++;
         await tx.user.update({
           where: { id: u.id },
           data: {
@@ -219,9 +253,32 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
     // นานกว่าที่อื่น (30 วิ) เพราะเขียนทีละคน — ฐานข้อมูลอยู่คนละ region ทุกคนคือการเดินทางไปกลับจริง
     // บันทึก 77 คนเกิน 30 วิได้ตอนเครือข่ายช้า แล้วจะล้มทั้งชุดทั้งที่ไม่มีอะไรผิด
     { timeout: 60_000, maxWait: 15_000 }
-  );
+  ).catch(async (e) => {
+    // ล้มทั้งชุด (ทำในทรานแซกชันเดียว) — ประวัติบอกว่าไม่มีใครถูกเพิ่ม/แก้ แล้วให้ตัวจับ error กลางตอบตามเดิม
+    await recordImport({
+      kind: "USER_ROSTER",
+      userId: req.auth!.userId,
+      fileName,
+      status: "FAILED",
+      rowsInFile: people.length,
+      summary: {},
+      error: "บันทึกรายชื่อไม่สำเร็จ — ไม่มีใครถูกเพิ่ม/แก้ (ทำทั้งไฟล์ในครั้งเดียว) ลองบันทึกใหม่",
+      startedAt,
+    });
+    throw e;
+  });
   // คนที่เข้าระบบไว้แล้วถูกตั้งเป็นหัวหน้าภาค ต้องใช้สิทธิ์ใหม่ได้ทันที ไม่ใช่หลังเข้าระบบใหม่
   staleUsers();
+  await recordImport({
+    kind: "USER_ROSTER",
+    userId: req.auth!.userId,
+    fileName,
+    status: "DONE",
+    rowsInFile: people.length,
+    summary: { created, changed: history.filter((h) => h.result === "changed").length, same, withoutTeam },
+    rows: history,
+    startedAt,
+  });
   res.json({ ok: true, created, updated, withoutTeam });
 });
 
@@ -340,6 +397,34 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
     hashes.set(p.login, await bcrypt.hash(pw, 10));
   }
   const now = new Date();
+  /**
+   * ประวัติการนำเข้า: บัญชีใหม่ · ตำแหน่งเปลี่ยน · ตั้งรหัสใหม่ · ชื่อผู้ใช้ชนตำแหน่งอื่น (ข้าม) · รหัสสาขาที่ไม่มี · แถวที่อ่านไม่ได้
+   * ไม่มีรหัสผ่าน (ออกในไฟล์ Excel ครั้งเดียว) และไม่มีเบอร์โทร — ตารางประวัติตามไปกับไฟล์สำรองทั้งบริษัท
+   */
+  const history: HistoryRow[] = [
+    ...people.flatMap((p): HistoryRow[] => {
+      const role = ROLE_LABELS[p.role] ?? p.role;
+      const where = p.role === "AREA" ? "COCO ทั้งหมด" : p.branches.length ? `${p.branches.length} สาขา` : "ไม่มีสาขา";
+      const bad: HistoryRow[] = p.unknownBranches.length
+        ? [{ result: "badBranch", code: p.login, name: p.name, detail: role, note: `รหัสสาขาที่ไม่มีในระบบ: ${p.unknownBranches.join(", ")}` }]
+        : [];
+      if (p.status === "TAKEN") {
+        return [{ result: "taken", code: p.login, name: p.name, detail: role, note: `ชื่อผู้ใช้นี้เป็น ${ROLE_LABELS[p.existingRole ?? ""] ?? p.existingRole} อยู่แล้ว — ไม่เปลี่ยนตำแหน่ง` }];
+      }
+      if (p.status === "NEW") return [{ result: "new", code: p.login, name: p.name, detail: `${role} · ${where}` }, ...bad];
+      const moved = p.existingRole && p.existingRole !== p.role ? `${ROLE_LABELS[p.existingRole] ?? p.existingRole} → ${role}` : null;
+      const reset = resetPending && p.pending ? "ตั้งรหัสผ่านใหม่ (รหัสอยู่ในไฟล์ที่ดาวน์โหลดตอนนำเข้าเท่านั้น)" : null;
+      return [...(moved || reset ? [{ result: reset && !moved ? "reset" : "changed", code: p.login, name: p.name, detail: [moved, reset].filter(Boolean).join(" · ") }] : []), ...bad];
+    }),
+    ...plan.problems.map((text) => ({ line: Number(text.match(/^แถว (\d+)/)?.[1]) || null, result: "problem", note: text })),
+  ];
+  const historyBase = {
+    kind: "USER_AREA" as const,
+    userId: req.auth!.userId,
+    fileName,
+    rowsInFile: people.length,
+    startedAt: now,
+  };
   await prisma.$transaction(
     async (tx) => {
       const created = wanted.filter((p) => p.status === "NEW");
@@ -412,9 +497,35 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
       }
     },
     { timeout: 60_000, maxWait: 15_000 }
-  );
+  ).catch(async (e) => {
+    // ทำทั้งไฟล์ในทรานแซกชันเดียว — ล้ม = ไม่มีบัญชีไหนเปลี่ยน (รหัสที่สุ่มไว้ก็ไม่ได้ใช้) ประวัติบอกแบบนั้น แล้วตอบตามเดิม
+    await recordImport({
+      ...historyBase,
+      status: "FAILED",
+      summary: {},
+      error: "บันทึกรายชื่อไม่สำเร็จ — ไม่มีบัญชีไหนถูกเพิ่ม/แก้ (ทำทั้งไฟล์ในครั้งเดียว) ลองนำเข้าใหม่",
+    });
+    throw e;
+  });
   // ตำแหน่งใหม่ต้องมีผลทันที (ตัวตรวจสิทธิ์จำ role ไว้) · คนที่ถูกตั้งรหัสใหม่ต้องหลุดจากเครื่องเดิม
   staleUsers();
+  await recordImport({
+    ...historyBase,
+    status: "DONE",
+    summary: {
+      areas: plan.areas.length,
+      supervisors: plan.supervisors.length,
+      maids: plan.maids.length,
+      created: wanted.filter((p) => p.status === "NEW").length,
+      updated: wanted.filter((p) => p.status === "UPDATE").length,
+      taken: taken.length,
+      passwords: passwords.size,
+      branches: wanted.reduce((n, p) => n + p.branches.length, 0),
+      badBranches: missingBranches.length,
+      problems: plan.problems.length,
+    },
+    rows: history,
+  });
 
   let credentials: { filename: string; path: string } | null = null;
   if (passwords.size) {

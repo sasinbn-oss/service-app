@@ -25,6 +25,9 @@
 #   · ใช้รหัสของสาขาที่ปิดแล้วซ้ำ (พ.ย. 69): originalCode / reusedFromId / reusedAt ของสาขาตามมาครบ — reusedFromId อ้างตาราง Branch เอง
 #     (สคริปต์กู้ใส่ว่างก่อนแล้วเติมทีหลัง แบบใบงานรออะไหล่ → ใบเดิม) หลุดแล้วไฟล์สาขายกเลิกรอบหน้าปิดสาขาใหม่ (ตัวกันอ่าน reusedAt)
 #     และสาขา "(เดิม)" ไม่รู้ว่ารหัสจริงคืออะไร · ฐานทดสอบปกติไม่มีคู่แบบนี้ จึงใส่คู่ชั่วคราว ZZRT01 / "ZZRT01 (เดิม)" แล้วลบตอนจบ
+#   · ประวัติการนำเข้า (ImportRun + ImportRunRow · 5 พ.ย. 69) ตามมาครบทุกช่อง — ตารางเปล่าจาก migration ไม่อยู่ใน SEEDED_BY_MIGRATION
+#     แถวผลอ้างรอบ (FK) สคริปต์กู้ต้องใส่รอบก่อน · ชุดอื่นล้างรอบของตัวเองตอนจบ ฐานทดสอบจึงว่าง ใส่รอบชั่วคราวหนึ่งรอบ (สองแถว ·
+#     แถวหนึ่งไม่มีเลขแถว) แล้วลบตอนจบ
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -38,12 +41,14 @@ TMP_URL="${SRC_URL%%/serviceapp*}/$TMPDB"
 DIR=$(mktemp -d)
 PICK_MARK='restore-test ใบชั่วคราว'
 BRANCH_MARK='restore-test ประวัติชั่วคราว'
+IMPORT_MARK='restore-test ประวัติการนำเข้าชั่วคราว.xlsx'
 cleanup() {
   PG -d serviceapp -qc "delete from \"PartsPick\" where note='$PICK_MARK'" >/dev/null 2>&1 || true   # รายการในใบลบตาม (cascade)
   PG -d serviceapp -qc "delete from \"User\" where \"employeeCode\" like 'zz.restore.howto.%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"BranchLog\" where note like '$BRANCH_MARK%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"BranchPin\" where field='name' and \"fromValue\"='$BRANCH_MARK'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"Branch\" where code like 'ZZRT01%'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"ImportRun\" where \"fileName\"='$IMPORT_MARK'" >/dev/null 2>&1 || true
   PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null 2>&1 || true; rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -106,6 +111,22 @@ WITH old AS (
 )
 INSERT INTO "Branch" (code, name, "reusedFromId", "reusedAt") SELECT 'ZZRT01', 'ร้านใหม่ ทดสอบกู้คืน', id, now() FROM old;
 SQL
+# รอบนำเข้าชั่วคราว (เหตุผลอยู่หัวไฟล์) · ใส่ไม่สำเร็จ (ยังไม่ migrate import_history) ให้ข้อ 3e รายงานเอง
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<SQL || true
+WITH r AS (
+  INSERT INTO "ImportRun" (kind, "runKey", "fileName", "fileHash", "byUserId", "byName", status, "startedAt", "lastAt", "finishedAt", "rowsInFile", summary, error)
+  VALUES ('REPAIR_FORM', 'restore-test:' || md5(random()::text), '$IMPORT_MARK', md5('x'), (SELECT id FROM "User" WHERE "employeeCode"='A001'), 'แอดมินทดสอบกู้คืน',
+          'STOPPED', timezone('utc', now()) - interval '1 hour', timezone('utc', now()) - interval '50 minutes', timezone('utc', now()) - interval '50 minutes',
+          2, '{"planned": 1}', 'กดหยุดเองระหว่างนำเข้า')
+  RETURNING id
+)
+INSERT INTO "ImportRunRow" ("runId", line, result, code, name, machine, detail, note, ref)
+SELECT id, 2, 'NEW', 'C0001', 'สาขาทดสอบ', 'W1', 'อาการทดสอบกู้คืน', NULL, 'WO-00001' FROM r
+UNION ALL SELECT id, NULL, 'PENDING', 'C0006', NULL, NULL, NULL, 'ยังไม่ได้เปิด', NULL FROM r;
+SQL
+IMPORT_SQL='select (select count(*) from "ImportRun")||$$|$$||(select count(*) from "ImportRunRow")||$$|$$||coalesce((select md5(string_agg(concat_ws($$~$$, u.id, u.kind, coalesce(u."runKey",$$NULL$$), u."fileName", coalesce(u."byUserId"::text,$$NULL$$), u.status, to_char(u."startedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$), coalesce(to_char(u."finishedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$), u."rowsInFile", u.summary::text, coalesce(u.error,$$NULL$$), (select string_agg(concat_ws($$~$$, r.id, coalesce(r.line::text,$$NULL$$), r.result, coalesce(r.code,$$NULL$$), coalesce(r.name,$$NULL$$), coalesce(r.machine,$$NULL$$), coalesce(r.detail,$$NULL$$), coalesce(r.note,$$NULL$$), coalesce(r.ref,$$NULL$$)), $$;$$ order by r.id) from "ImportRunRow" r where r."runId"=u.id)), $$,$$ order by u.id)) from "ImportRun" u),$$-$$)'
+SRC_IMPORT=$(PG -d serviceapp -Atc "$IMPORT_SQL" 2>/dev/null) || SRC_IMPORT=""
+
 REUSE_SQL='select count(*)||$$|$$||coalesce(md5(string_agg(concat_ws($$~$$, id, code, coalesce("originalCode",$$NULL$$), coalesce("reusedFromId"::text,$$NULL$$), coalesce(to_char("reusedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$)), $$,$$ order by id)),$$-$$) from "Branch" where "originalCode" is not null or "reusedFromId" is not null or "reusedAt" is not null'
 SRC_REUSE=$(PG -d serviceapp -Atc "$REUSE_SQL" 2>/dev/null) || SRC_REUSE=""
 
@@ -176,6 +197,16 @@ elif [ "$SRC_REUSE" = "$DST_REUSE" ] && [ "$(PG -d $TMPDB -Atc "select o.code fr
   pass "สาขาที่ใช้รหัสซ้ำตามมาครบ: originalCode · reusedAt · reusedFromId (อ้างตาราง Branch เอง) ชี้สาขาเดิมถูกแถว"
 else
   fail "สาขาที่ใช้รหัสซ้ำหลังกู้ไม่ตรง: ต้นฉบับ [$SRC_REUSE] · หลังกู้ [$DST_REUSE]"
+fi
+
+# 3e) ประวัติการนำเข้า — ต้นฉบับต้องมีรอบชั่วคราว (≥1 รอบ 2 แถว) ไม่งั้นเทียบ 0 กับ 0 ไม่ได้ตรวจอะไร · ทุกช่องของรอบและแถวตรงกัน
+DST_IMPORT=$(PG -d $TMPDB -Atc "$IMPORT_SQL" 2>/dev/null) || DST_IMPORT=""
+if [ -z "$SRC_IMPORT" ] || [ "$(echo "$SRC_IMPORT" | cut -d'|' -f2)" -lt 2 ]; then
+  fail "ใส่รอบนำเข้าชั่วคราวไม่สำเร็จ (ได้ [$SRC_IMPORT]) — ยังไม่ migrate import_history"
+elif [ "$SRC_IMPORT" = "$DST_IMPORT" ]; then
+  pass "ประวัติการนำเข้าตามมาครบทุกช่อง (รอบ $(echo "$SRC_IMPORT" | cut -d'|' -f1) · ผลทีละแถว $(echo "$SRC_IMPORT" | cut -d'|' -f2) แถว รวมแถวไม่มีเลขแถว — รอบใส่ก่อนแถวที่อ้างถึง)"
+else
+  fail "ประวัติการนำเข้าหลังกู้ไม่ตรง: ต้นฉบับ [$SRC_IMPORT] · หลังกู้ [$DST_IMPORT]"
 fi
 
 # 4) กู้ซ้ำลงฐานที่มีข้อมูลแล้ว ต้องปฏิเสธ ไม่เขียนทับ

@@ -128,6 +128,8 @@ export default function RosterImportModal({
         "/user-import/commit",
         {
           ...(created > 0 ? { password } : {}),
+          // บันทึกไม่ได้ส่งไฟล์ซ้ำ — ชื่อไฟล์ที่ดูตัวอย่างใช้ในประวัติการนำเข้าเท่านั้น
+          fileName: preview.fileName,
           teamMap,
           people: people.map((p) => ({
             code: p.code,

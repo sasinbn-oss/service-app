@@ -376,6 +376,10 @@ const GROUPS: Group[] = [
       { key: "branches", label: "จัดการข้อมูลสาขา", labelEn: "Branches", icon: "business-outline", tab: "AdminTab", screen: "ManageBranches" },
       // ถังขยะใบงาน (เจ้าของงานตัดสิน 4 พ.ย. 69) — แอดมินที่ลบใบงานได้ทุกคน · Admin Spare Part ไม่เห็น (PARTS_ADMIN_HIDDEN)
       { key: "trash", label: "ถังขยะใบงาน", labelEn: "Work Order Trash", icon: "trash-outline", tab: "AdminTab", screen: "WorkOrderTrash", trash: true },
+      // ประวัติการนำเข้า (เจ้าของงานอนุมัติ 5 พ.ย. 69) — ทุกไฟล์ที่นำเข้าระบบ · แอดมินทุกคนเห็นทุกรอบ
+      // Admin Spare Part เห็นด้วย (นำเข้าไฟล์อะไหล่ได้ = ดูประวัติได้ — กติกาเดียวกับเซิร์ฟเวอร์)
+      // params {} ล้างชนิด/รอบที่ค้างจากปุ่มข้างหน้านำเข้า (แบบประวัติเคลม) — เปิดจากเมนู = ทุกชนิด
+      { key: "imports", label: "ประวัติการนำเข้า", labelEn: "Import History", icon: "time-outline", tab: "AdminTab", screen: "ImportHistory", params: {} },
       { key: "backup", label: "สำรองข้อมูล", labelEn: "Backup", icon: "cloud-download-outline", tab: "AdminTab", screen: "Backup", superAdmin: true },
     ],
   },

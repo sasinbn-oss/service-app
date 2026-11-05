@@ -4,6 +4,8 @@
 #   · ปิดสาขา: ต้องมีเหตุผล ปิดเคสบนกระดานที่ค้าง ใบงาน/ประวัติอยู่ครบ · เปิดคืนได้
 #   · รายการแบบกรอง/แบ่งหน้า + ตัวเลขสรุป · ล้างพิกัดได้ · อ่านพิกัดจากลิงก์ Google Maps
 #   · ช่างใช้ไม่ได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -29,6 +31,7 @@ OUT=""
 # ประวัติที่ชุดนี้ทำจึงต้องลบเอง ไม่งั้นทุกรอบที่รันทิ้ง "ปิดสาขา — ร้านย้ายที่" ไว้ในประวัติของ C0006
 LOG0=$(DB "select coalesce(max(id),0) from \"BranchLog\"")
 cleanup() {
+  ih_clean
   [ -n "$OUT" ] && DB "delete from \"Outage\" where id=$OUT" >/dev/null
   DB "delete from \"BranchLog\" where \"branchId\"=$BID and id>$LOG0" >/dev/null
   DB "update \"Branch\" set \"cancelledAt\"=null, \"cancelledNote\"=null, latitude=nullif('$OLD_LAT','')::float, longitude=nullif('$OLD_LNG','')::float, \"radiusMeters\"=$OLD_RAD, address=nullif(\$q\$$OLD_ADDR\$q\$,'') where id=$BID" >/dev/null

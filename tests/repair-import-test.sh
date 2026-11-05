@@ -4,6 +4,8 @@
 #   · สาขาไม่มี = นำเข้าไม่ได้ · แถวส่งซ้ำ / เครื่องมีใบค้าง = ข้าม · บันทึกแล้วเช็คที่ฐานข้อมูล
 #   · นำเข้าไฟล์เดิมซ้ำไม่เกิดใบซ้ำ · ช่าง/หัวหน้าภาคนำเข้าไม่ได้
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
@@ -162,7 +164,7 @@ echo "$P2" | J 'const by=Object.fromEntries(d.rows.map(r=>[r.line,r])); [2,3,4].
 
 # แถวพังกลางทาง — trigger ชั่วคราวในฐานข้อมูลทดสอบให้แถว 9 สร้างไม่ได้ (_po_psql ปฏิเสธฐานข้อมูลบนคลาวด์) · ลบใน trap เสมอ
 drop_fail_trigger() { _po_psql 'drop trigger if exists test_import_fail on "WorkOrder"; drop function if exists test_import_fail()' >/dev/null 2>&1; }
-trap drop_fail_trigger EXIT
+trap 'drop_fail_trigger; ih_clean' EXIT
 _po_psql "create or replace function test_import_fail() returns trigger as \$\$ begin
   if new.symptom = 'ทดสอบนำเข้า ชุด พังแถวนี้' then raise exception 'ทดสอบ: แถวนี้ต้องพัง'; end if; return new; end \$\$ language plpgsql;
   create trigger test_import_fail before insert on \"WorkOrder\" for each row execute function test_import_fail()" >/dev/null

@@ -20,7 +20,8 @@ import {
   VEHICLE_STATUS_LABELS,
   bangkokDay,
 } from "../utils/constants";
-import { parseFleetWorkbook } from "../vehicles/fleetImport";
+import { FleetRow, parseFleetWorkbook } from "../vehicles/fleetImport";
+import { recordImport, uploadName } from "../utils/importHistory";
 
 const router = Router();
 const TX = { timeout: 30_000, maxWait: 15_000 } as const;
@@ -79,20 +80,42 @@ router.post("/import", requireAuth, requireAdmin, sheetUpload.single("file"), as
   });
 
   if (req.body?.apply === "true") {
-    await prisma.$transaction(async (tx) => {
-      for (const p of plan) {
-        const data = { brand: p.brand, type: p.type, owner: p.owner, insCompany: p.insCompany, note: p.note };
-        const card = { fleetCardNo: p.fleetCardNo, fleetCardLimit: p.fleetCardLimit, easyPassNo: p.easyPassNo };
-        if (p.action === "CREATE") {
-          await tx.vehicle.create({ data: { plateNumber: p.plateNumber, ...data, card: { create: card } } });
-        } else if (p.action === "UPDATE") {
-          await tx.vehicle.update({
-            where: { id: p.id! },
-            data: { ...data, card: { upsert: { create: card, update: card } } },
-          });
-        }
-      }
-    }, TX);
+    /**
+     * ประวัติการนำเข้า: ยอดสรุป + รถที่เพิ่ม/แก้ (ทะเบียน · ชื่อช่องที่เปลี่ยน) — ไม่เก็บค่าบัตรเติมน้ำมัน/Easy Pass
+     * (ไฟล์สำรองตั้งใจไม่มีเลขบัตร และตารางประวัติตามไปกับไฟล์สำรอง) · ไม่มีเลขแถวในแผนของไฟล์รถ
+     */
+    const history = {
+      kind: "VEHICLE" as const,
+      userId: req.auth!.userId,
+      fileName: uploadName(req.file),
+      rowsInFile: plan.length + parsed.skipped.length,
+      summary: {
+        created: plan.filter((p) => p.action === "CREATE").length,
+        updated: plan.filter((p) => p.action === "UPDATE").length,
+        same: plan.filter((p) => p.action === "SAME").length,
+        skipped: parsed.skipped.length,
+      },
+      rows: [
+        ...plan
+          .filter((p) => p.action !== "SAME")
+          .map((p) => ({
+            result: p.action === "CREATE" ? "created" : "updated",
+            code: p.plateNumber,
+            name: p.owner,
+            detail: p.action === "CREATE" ? [p.brand, p.type].filter(Boolean).join(" · ") || null : `แก้: ${p.changes.join(" · ")}`,
+          })),
+        // แถวที่ไฟล์มีแต่ไม่นำเข้า (รถส่วนตัวหัวหน้าภาค · ทะเบียนซ้ำ) — เหตุผลเดียวกับหน้าตัวอย่าง
+        ...parsed.skipped.map((k) => ({ result: "skipped", code: k.plateNumber, note: k.reason })),
+      ],
+    };
+    try {
+      await applyFleet(plan);
+    } catch (e) {
+      // บันทึกไม่สำเร็จก็อยู่ในประวัติ — ตอบเหมือนเดิม (ตัวจับ error กลาง) แค่จดไว้ก่อน
+      await recordImport({ ...history, status: "FAILED", rows: [], error: "บันทึกรถไม่สำเร็จ — ไม่มีรถคันไหนถูกเพิ่ม/แก้ (ทำทั้งไฟล์ในครั้งเดียว) ลองนำเข้าใหม่" });
+      throw e;
+    }
+    await recordImport({ ...history, status: "DONE" });
   }
   res.json({
     applied: req.body?.apply === "true",
@@ -103,6 +126,24 @@ router.post("/import", requireAuth, requireAdmin, sheetUpload.single("file"), as
     skipped: parsed.skipped,
   });
 });
+
+/** เขียนรถทั้งไฟล์ในทรานแซกชันเดียว — ล้มกลางทาง = ไม่มีคันไหนเปลี่ยน (ประวัติการนำเข้าบอกแบบนั้นได้ตรง ๆ) */
+async function applyFleet(plan: (FleetRow & { action: "CREATE" | "UPDATE" | "SAME"; id: number | null })[]) {
+  await prisma.$transaction(async (tx) => {
+    for (const p of plan) {
+      const data = { brand: p.brand, type: p.type, owner: p.owner, insCompany: p.insCompany, note: p.note };
+      const card = { fleetCardNo: p.fleetCardNo, fleetCardLimit: p.fleetCardLimit, easyPassNo: p.easyPassNo };
+      if (p.action === "CREATE") {
+        await tx.vehicle.create({ data: { plateNumber: p.plateNumber, ...data, card: { create: card } } });
+      } else if (p.action === "UPDATE") {
+        await tx.vehicle.update({
+          where: { id: p.id! },
+          data: { ...data, card: { upsert: { create: card, update: card } } },
+        });
+      }
+    }
+  }, TX);
+}
 
 /** รายการรถแบบย่อ — ใช้ในตัวเลือกรถ (บอร์ดแผนงาน ฯลฯ) */
 router.get("/", requireAuth, async (req, res) => {

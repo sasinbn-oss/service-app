@@ -4,6 +4,8 @@
 #   อัปไฟล์ทะเบียนสาขาที่ยังเขียนชื่อเดิม → ระบบแปลงเป็นชื่อใหม่ · รวมทีมต้องยืนยัน · แผนวันเดียวกันรวมคน
 #
 # ใช้สาขา/ผู้ใช้/ทีมทดสอบของตัวเองทั้งหมด (ชื่อมี $SUF) — ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -17,6 +19,7 @@ OLD="ทีมเก่า$SUF"; NEW="ทีมใหม่$SUF"; OTHER="ที�
 WO=$(DB "select id from \"WorkOrder\" order by id limit 1")
 WO_TEAM=$(DB "select coalesce(\"assignedTeam\",'') from \"WorkOrder\" where id=$WO")
 cleanup() {
+  ih_clean
   DB "update \"WorkOrder\" set \"assignedTeam\"=nullif('$WO_TEAM','') where id=$WO;
       delete from \"TeamDayPlan\" where team like '%$SUF';
       delete from \"TeamRename\" where \"fromName\" like '%$SUF' or \"toName\" like '%$SUF';

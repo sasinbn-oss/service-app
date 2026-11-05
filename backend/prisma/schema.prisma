@@ -1437,3 +1437,64 @@ model AppSetting {
 
   @@index([key, id])
 }
+
+// ประวัติการนำเข้าไฟล์ (เจ้าของงานอนุมัติตัวอย่าง 5 พ.ย. 69) — หนึ่งแถวต่อ "รอบ" ที่บันทึกจริง (ไม่นับการดูตัวอย่าง)
+// ใบแจ้งซ่อม · ทะเบียนสาขา · สาขาที่ยกเลิก · รถ · รายชื่อผู้ใช้ เก็บที่นี่ · อะไหล่ (SparePartImport) กับรายงานเครื่อง
+// (MachineImport) มีประวัติของตัวเองอยู่แล้ว หน้าประวัติอ่านจากตารางเดิมตรง ๆ ไม่ลอกมาซ้ำ — ที่นี่มีแค่รายงานเครื่องที่บันทึกไม่สำเร็จ
+// (MachineImport เขียนเฉพาะรอบที่สำเร็จ)
+// ไม่เก็บตัวไฟล์ (เจ้าของงานเลือก) — ไฟล์ฟอร์มแจ้งซ่อมมีชื่อ/เบอร์ผู้ติดต่อสาขาซึ่งอยู่ในใบงานแล้ว เก็บแค่ผลที่หน้าประวัติแสดง
+// byUserId ไม่ผูก FK แบบ SparePartImport — ลบผู้ใช้ถาวรแล้วประวัติต้องยังอยู่ (byName จำชื่อไว้)
+model ImportRun {
+  id         Int            @id @default(autoincrement())
+  // REPAIR_FORM · BRANCH · BRANCH_CANCELLED · VEHICLE · USER_ROSTER · USER_AREA · MACHINE (เฉพาะรอบที่ล้ม)
+  kind       String
+  // รหัสรอบที่แอปส่งมากับทุกชุดของการกดยืนยันครั้งเดียว (ใบแจ้งซ่อมยืนยันทีละ 10 แถว — ทุกชุดคือรอบเดียว)
+  // ว่าง = นำเข้าแบบคำขอเดียว (ไฟล์อื่นทุกชนิด)
+  runKey     String?        @unique
+  fileName   String
+  // sha256 ของไฟล์ (ไม่ใช่ตัวไฟล์) — แอปรุ่นก่อนที่ส่งทีละชุดแต่ไม่มีรหัสรอบ จัดชุดของไฟล์เดียวกันเข้ารอบเดียวด้วยค่านี้
+  fileHash   String?
+  byUserId   Int?
+  byName     String?
+  // RUNNING · DONE · STOPPED (คนกดหยุด / เวลาหมดแบบแอปรุ่นก่อน) · FAILED (เซิร์ฟเวอร์ทำไม่สำเร็จ)
+  // RUNNING ที่เงียบเกิน 5 นาที = แอปหายไปกลางทาง — หน้าประวัติตัดสินตอนอ่าน (ไม่มีงานเบื้องหลังมาแก้ค่า)
+  status     String
+  startedAt  DateTime       @default(now())
+  // ชุดล่าสุดที่เข้ามา — ใช้ตัดสินว่ารอบที่ค้าง RUNNING ยังเดินอยู่ไหม
+  lastAt     DateTime       @default(now())
+  finishedAt DateTime?
+  rowsInFile Int            @default(0)
+  // ยอดสรุปตามผล (ชนิดอื่นที่ไม่ใช่ใบแจ้งซ่อม) — ใบแจ้งซ่อมนับจากแถวตอนอ่าน (เก็บครบทุกแถวอยู่แล้ว)
+  summary    Json
+  // ข้อความภาษาไทยที่ผู้ใช้เห็นตอนล้ม/หยุด
+  error      String?
+  rows       ImportRunRow[]
+
+  @@index([startedAt])
+  @@index([kind, startedAt])
+  @@index([byUserId, fileHash])
+}
+
+// ผลทีละแถวของรอบนำเข้า — ใบแจ้งซ่อมเก็บทุกแถว · ชนิดอื่นเก็บเฉพาะแถวที่เปลี่ยนหรือมีปัญหา
+// ไม่มีชื่อ/เบอร์ผู้ติดต่อ · รหัสผ่าน · เลข Fleet Card / Easy Pass (ตารางนี้อยู่ในไฟล์สำรองด้วย)
+model ImportRunRow {
+  id      Int       @id @default(autoincrement())
+  runId   Int
+  run     ImportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // เลขแถวในไฟล์ · ว่าง = รายการที่ไม่ได้มาจากแถวเดียว (เช่นสาขาที่ยกเลิกทั้งสาขา)
+  line    Int?
+  // ใบแจ้งซ่อม: NEW · OPEN · IMPORTED · ERROR · SKIPPED · PENDING (ตั้งใจเปิดในรอบนี้แต่ยังไม่ได้เปิด) · ชนิดอื่นตามชนิด
+  result  String
+  // รหัสสาขา / ทะเบียนรถ / รหัสพนักงาน · ชื่อที่คู่กัน
+  code    String?
+  name    String?
+  machine String?
+  // อาการ (ใบแจ้งซ่อม) หรือสิ่งที่เปลี่ยน
+  detail  String?
+  // เหตุผลที่ข้าม/นำเข้าไม่ได้
+  note    String?
+  // รหัสใบงานที่เปิด/ที่ค้างอยู่ (WO-…)
+  ref     String?
+
+  @@index([runId, line])
+}

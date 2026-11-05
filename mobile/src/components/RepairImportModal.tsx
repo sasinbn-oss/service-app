@@ -7,7 +7,7 @@
  *
  * ยืนยันส่งทีละชุด (APPLY_BATCH แถว) ไม่ใช่ทั้งไฟล์ในคำขอเดียว — ดู commit()
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import axios from "axios";
 import { StyleSheet, Text, View } from "react-native";
 import TouchableOpacity from "./Tap";
@@ -20,6 +20,7 @@ import { feedback } from "./Feedback";
 import { showAlert } from "../utils/alert";
 import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
 import FileDropZone, { DropHint } from "./FileDropZone";
+import { newRunKey, openImportHistory, reportStop } from "../utils/importHistory";
 import { colors, radius, spacing } from "../theme";
 
 type Status = "NEW" | "IMPORTED" | "OPEN" | "ERROR" | "SKIPPED";
@@ -81,6 +82,8 @@ interface Result {
   pending?: number[];
   /** ยืนยันทีละชุด: แถวที่ขอให้เปิดแต่ไม่ใช่ใบใหม่แล้ว (นำเข้าไปแล้วระหว่างนี้) — ไม่ได้เปิด */
   stale?: number[];
+  /** รอบในประวัติการนำเข้า (r12) — ปุ่ม "ดูในประวัติการนำเข้า" เปิดรอบนี้เลย · เซิร์ฟเวอร์รุ่นก่อน/บันทึกประวัติไม่ได้ = ไม่มี */
+  runId?: string;
   rows: Row[];
 }
 
@@ -106,14 +109,18 @@ const ORDER: Record<Status, number> = { ERROR: 0, OPEN: 1, NEW: 2, SKIPPED: 2, I
 type Picks = { skip: number[]; force: number[] };
 const NO_PICKS: Picks = { skip: [], force: [] };
 
-/** only = เลขแถวที่ให้ลงมือในคำขอนี้ (ยืนยันทีละชุด) — เซิร์ฟเวอร์ยังวางแผนจากทั้งไฟล์ กันซ้ำ/skip/force ใช้ทั้งไฟล์เหมือนเดิม */
-async function send(file: PickedFile, apply: boolean, picks: Picks, only?: number[]) {
+/**
+ * only = เลขแถวที่ให้ลงมือในคำขอนี้ (ยืนยันทีละชุด) — เซิร์ฟเวอร์ยังวางแผนจากทั้งไฟล์ กันซ้ำ/skip/force ใช้ทั้งไฟล์เหมือนเดิม
+ * runKey = รหัสของการกดยืนยันครั้งนี้ ส่งเหมือนกันทุกชุด — ประวัติการนำเข้ารวมทุกชุดเป็นรอบเดียว
+ */
+async function send(file: PickedFile, apply: boolean, picks: Picks, only?: number[], runKey?: string) {
   const form = new FormData();
   form.append("file", file.blob, file.name);
   if (apply) form.append("apply", "true");
   if (picks.skip.length) form.append("skip", picks.skip.join(","));
   if (picks.force.length) form.append("force", picks.force.join(","));
   if (only) form.append("only", only.join(","));
+  if (runKey) form.append("runKey", runKey);
   return (
     await api.post<Result>("/work-orders/import-form", form, {
       headers: { "Content-Type": "multipart/form-data" },
@@ -130,6 +137,8 @@ interface Applied {
   photosFailed: number;
   photoFilled: number;
   stale: number;
+  /** รอบในประวัติการนำเข้า — ได้จากคำตอบชุดไหนก็ได้ (ทุกชุดของการกดครั้งนี้เป็นรอบเดียวกัน) */
+  runId: string | null;
 }
 
 /**
@@ -177,6 +186,10 @@ export default function RepairImportModal({
   /** แถวที่เอาออก / เลือกเปิดเพิ่ม — ส่งไปทั้งตอนดูตัวอย่างใหม่และตอนยืนยัน เซิร์ฟเวอร์คิดซ้ำ/ใบค้างใหม่ให้ */
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [refreshing, setRefreshing] = useState<number | null>(null);
+  /** รอบล่าสุดที่กดยืนยัน — ลิงก์ "ดูในประวัติการนำเข้า" ใต้ข้อความหยุดกลางทาง (undefined = ยังไม่ได้ยืนยัน · null = ไม่รู้เลขรอบ) */
+  const [lastRun, setLastRun] = useState<string | null | undefined>(undefined);
+  /** กด "หยุดหลังชุดนี้" บนหน้าโหลดแล้ว — ชุดที่กำลังเปิดอยู่ทำจนจบก่อน (ตัดกลางชุดไม่ได้: เซิร์ฟเวอร์ทำต่ออยู่ดี) */
+  const stopAsked = useRef(false);
   /**
    * กดกล่องตัวเลขด้านบน = ดูเฉพาะแถวหมวดนั้น (เจ้าของงานขอ ต.ค. 69) · กดซ้ำ = ดูทั้งหมด
    * แถวที่กดเปลี่ยนระหว่างกรองยังค้างอยู่บนจอ (stuck) — กด "เปิดเพิ่ม" ในหมวดมีใบค้างแล้วแถวหายไปทันที
@@ -192,6 +205,7 @@ export default function RepairImportModal({
   function close() {
     setFile(null);
     setPicks(NO_PICKS);
+    setLastRun(undefined);
     setPreview(null);
     setOnly(null);
     setStuck([]);
@@ -204,6 +218,7 @@ export default function RepairImportModal({
     const picked = given !== undefined ? given : await pickFile(ACCEPT);
     if (!picked) return;
     setFile(picked);
+    setLastRun(undefined);
     setPreview(null);
     setOnly(null);
     setStuck([]);
@@ -265,27 +280,44 @@ export default function RepairImportModal({
     newLines.sort((a, b) => a - b);
     const fillSet = new Set(fillLines);
     const queue = [...fillLines, ...newLines];
-    const got: Applied = { created: [], photosAttached: 0, photosFailed: 0, photoFilled: 0, stale: 0 };
+    const got: Applied = { created: [], photosAttached: 0, photosFailed: 0, photoFilled: 0, stale: 0, runId: null };
+    // กดยืนยันใหม่ = รอบใหม่ในประวัติ (แม้ไฟล์เดิม) · ทุกชุดของการกดครั้งนี้ส่งรหัสเดียวกัน
+    const runKey = newRunKey();
     let doneFill = 0;
     let doneNew = 0;
     let stalls = 0;
+    stopAsked.current = false;
+    /**
+     * หน้าโหลดมีปุ่ม "หยุดหลังชุดนี้" (ตัวอย่างที่อนุมัติ: "กดหยุดเองที่ 40/62") — หน้าโหลดบังทั้งจอ ปุ่มจึงอยู่บนหน้าโหลด
+     * กดแล้วชุดที่ส่งไปแล้วทำจนจบ (เซิร์ฟเวอร์ทำต่ออยู่ดีแม้แอปเลิกรอ) แล้วไม่ส่งชุดถัดไป
+     */
+    const progress = (text: string) =>
+      stopAsked.current
+        ? feedback.loading(`${text} — จะหยุดหลังชุดนี้`)
+        : feedback.loading(text, {
+            label: "หยุดหลังชุดนี้",
+            onPress: () => {
+              stopAsked.current = true;
+              progress(text);
+            },
+          });
     setBusy(true);
     setError(null);
     try {
       while (queue.length) {
-        feedback.loading(
-          doneFill < fillLines.length ? `กำลังเติมรูปใบเดิม ${doneFill}/${fillLines.length}` : `กำลังเปิดใบงาน ${doneNew}/${newLines.length}`
-        );
+        progress(doneFill < fillLines.length ? `กำลังเติมรูปใบเดิม ${doneFill}/${fillLines.length}` : `กำลังเปิดใบงาน ${doneNew}/${newLines.length}`);
         const batch = queue.slice(0, APPLY_BATCH);
         let r: Result;
         try {
-          r = await send(file, true, picks, batch);
+          r = await send(file, true, picks, batch, runKey);
         } catch (e) {
           // ชุดที่พังอาจเปิดไปแล้วบางใบ — เซิร์ฟเวอร์บอกรหัสที่เปิดมาด้วย นับรวมก่อนสรุป
-          const data = axios.isAxiosError(e) ? (e.response?.data as { created?: unknown } | undefined) : undefined;
+          const data = axios.isAxiosError(e) ? (e.response?.data as { created?: unknown; runId?: unknown } | undefined) : undefined;
           if (Array.isArray(data?.created)) got.created.push(...data!.created.map(String));
+          if (typeof data?.runId === "string") got.runId = data.runId;
           throw e;
         }
+        got.runId = r.runId ?? got.runId;
         got.created.push(...(r.created ?? []));
         got.photosAttached += r.summary.photosAttached ?? 0;
         got.photosFailed += r.summary.photosFailed ?? 0;
@@ -301,8 +333,11 @@ export default function RepairImportModal({
         stalls = pending.size === batch.length ? stalls + 1 : 0;
         if (stalls >= 2) throw new Error("stalled");
         queue.splice(0, batch.length, ...batch.filter((line) => pending.has(line)));
+        if (stopAsked.current && queue.length) throw new Error("user-stop");
       }
       feedback.loading(null);
+      const runId = got.runId;
+      // กล่องที่มีปุ่ม (ไม่ใช่แถบที่หายเอง) — ตัวอย่างที่อนุมัติ: ผลทีละแถวอยู่ในประวัติแล้ว กดไปดูต่อได้เลย
       showAlert(
         "นำเข้าใบแจ้งซ่อมแล้ว",
         `เปิดใบงานใหม่ ${got.created.length} ใบ — อยู่ขั้นแรก (หัวหน้าภาคระบุอะไหล่)` +
@@ -314,19 +349,41 @@ export default function RepairImportModal({
           (got.photosAttached ? ` · แนบรูปจากไฟล์ ${got.photosAttached} รูป` : "") +
           (got.photoFilled ? ` (เติมให้ใบเดิม ${got.photoFilled} ใบ)` : "") +
           // อัปรูปไม่ผ่านต้องบอก — เดิมเงียบ คนนำเข้าเห็นว่าสำเร็จแต่ใบไม่มีรูป (26 ต.ค. 69)
-          (got.photosFailed ? ` · แนบรูปไม่สำเร็จ ${got.photosFailed} รูป — นำเข้าไฟล์เดิมอีกรอบเพื่อลองใหม่` : "")
+          (got.photosFailed ? ` · แนบรูปไม่สำเร็จ ${got.photosFailed} รูป — นำเข้าไฟล์เดิมอีกรอบเพื่อลองใหม่` : "") +
+          "\n\nผลทีละแถวเก็บไว้ในประวัติการนำเข้าแล้ว ปิดหน้าต่างนี้ไปก็กลับมาดูได้ แอดมินคนอื่นก็เห็น",
+        [
+          { text: "ปิด", style: "cancel" },
+          { text: "ดูในประวัติการนำเข้า", onPress: () => openImportHistory("repair", runId) },
+        ]
       );
       onDone();
       close();
     } catch (e) {
       feedback.loading(null);
-      const msg =
-        e instanceof Error && e.message === "stalled"
+      const userStop = e instanceof Error && e.message === "user-stop";
+      const stalled = e instanceof Error && e.message === "stalled";
+      const left = newLines.length - got.created.length - got.stale;
+      const msg = userStop
+        ? `เปิดใบงานไปแล้ว ${got.created.length} จาก ${newLines.length} ใบ แล้วหยุดตามที่กด — อีก ${left} แถวยังไม่ได้เปิด\nกดยืนยันอีกครั้งเพื่อเปิดที่เหลือ — ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ`
+        : stalled
           ? `เปิดใบงานไปแล้ว ${got.created.length} จาก ${newLines.length} ใบ แล้วหยุด — เซิร์ฟเวอร์ช้าเกินกว่าจะเปิดต่อได้ตอนนี้\nลองกดยืนยันอีกครั้งภายหลัง — ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ`
           : stopMessage(e, got, newLines.length);
+      /**
+       * บอกเซิร์ฟเวอร์ว่ารอบนี้หยุดแล้ว (ประวัติขึ้น "หยุดกลางทาง" ทันที ไม่ต้องรอ 5 นาที) — ล้มที่เซิร์ฟเวอร์ (IMPORT_FAILED)
+       * เซิร์ฟเวอร์จดเองแล้ว · ไม่ได้คำตอบเลย (เน็ตหลุด) ก็ส่งไปเผื่อถึง
+       */
+      const data = axios.isAxiosError(e) ? (e.response?.data as { code?: string } | undefined) : undefined;
+      if (data?.code !== "IMPORT_FAILED") {
+        reportStop(runKey, userStop ? "user" : stalled ? "stalled" : axios.isAxiosError(e) && !e.response ? "network" : "error");
+      }
       setError(msg);
+      setLastRun(got.runId);
+      const runId = got.runId;
       // กล่องที่ต้องกดตกลง (ไม่ใช่แถบที่หายเอง) — ข้อความยาวและต้องอ่านให้จบก่อนตัดสินใจกดซ้ำ
-      showAlert("หยุดนำเข้ากลางทาง", msg);
+      showAlert("หยุดนำเข้ากลางทาง", msg, [
+        { text: "ตกลง", style: "cancel" },
+        { text: "ดูในประวัติการนำเข้า", onPress: () => openImportHistory("repair", runId) },
+      ]);
       if (got.created.length) onDone();
       // อ่านตัวอย่างใหม่: แถวที่เปิดแล้วขึ้น "นำเข้าแล้ว" ปุ่มยืนยันเหลือเฉพาะที่ยังไม่เปิด · อ่านไม่ได้ (เซิร์ฟเวอร์ยังล่ม) ก็ยังเห็นข้อความข้างบน
       try {
@@ -402,6 +459,12 @@ export default function RepairImportModal({
       </FileDropZone>
       {busy && !preview ? <Spinner color={colors.primary} style={{ marginTop: spacing.md }} /> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error && lastRun !== undefined ? (
+        // รอบที่หยุด/ล้มอยู่ในประวัติแล้ว — แอดมินอีกคนเห็นว่ารอบนี้เปิดไปกี่ใบ เหลือกี่แถว
+        <TouchableOpacity onPress={() => openImportHistory("repair", lastRun)} accessibilityLabel="ดูรอบนี้ในประวัติการนำเข้า">
+          <Text style={styles.historyLink}>ดูรอบนี้ในประวัติการนำเข้า ›</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {s ? (
         <>
@@ -604,6 +667,7 @@ function Stat({
 const styles = StyleSheet.create({
   lead: { fontSize: 13, lineHeight: 20, color: colors.textMuted, marginBottom: spacing.sm },
   error: { color: colors.danger, marginTop: spacing.sm },
+  historyLink: { fontSize: 13, fontWeight: "700", color: colors.navy, textDecorationLine: "underline", marginTop: spacing.xs },
   stats: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md, marginBottom: spacing.sm },
   stat: {
     flexGrow: 1,

@@ -34,6 +34,7 @@ import backupRoutes from "./routes/backups";
 import reportRoutes from "./routes/reports";
 import partClaimRoutes from "./routes/partClaims";
 import settingsRoutes from "./routes/settings";
+import importHistoryRoutes from "./routes/importHistory";
 import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
 import { prisma } from "./prisma";
@@ -201,6 +202,7 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/part-claims", partClaimRoutes);
 app.use("/api/usage", usageRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/import-history", importHistoryRoutes);
 
 /**
  * กันคำขอที่พังให้ตอบอะไรกลับไปเสมอ

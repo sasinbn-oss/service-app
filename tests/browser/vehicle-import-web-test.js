@@ -11,6 +11,8 @@ const sql = (q) =>
 const cleanup = () => sql(`delete from "Vehicle" where replace(replace("plateNumber",' ',''),'-','') like '9ทส100%'`);
 
 (async () => {
+  // ประวัติการนำเข้า (5 พ.ย. 69): การนำเข้าที่กดบันทึกเขียนรอบลง ImportRun — จำ id ล่าสุดไว้ แล้วลบรอบที่ชุดนี้ทำให้เกิดตอนจบ
+  const IH0 = sql(`select coalesce(max(id),0) from "ImportRun"`);
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
   const pass = (m) => console.log("PASS", m);
   const errors = [];
@@ -65,6 +67,11 @@ const cleanup = () => sql(`delete from "Vehicle" where replace(replace("plateNum
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {
+    try {
+      sql(`delete from "ImportRun" where id > ${IH0}`);
+    } catch {
+      // ไม่หยุดการเก็บกวาดส่วนอื่น
+    }
     cleanup();
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");
     await browser.close();
