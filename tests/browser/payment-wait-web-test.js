@@ -155,12 +155,43 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
     // ── กล่องงาน: หัวข้อรอลูกค้าจ่ายเงิน (แบบเดียวกับไม่มีคนรับ/เลยนัด) · ชิปรอจ่ายเกิน 3 วัน ──
     await page.goto("http://localhost:8081/#/inbox");
     await page.waitForTimeout(4500);
-    const head = page.locator('[aria-label="หัวข้อ รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1"]').locator("visible=true").first();
-    if ((await head.count()) === 0) fail("กล่องงานไม่มีหัวข้อ \"รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1\"");
+    // ปุ่มย่อ/ขยายหัวข้อ (เจ้าของงานขอ 5 พ.ย. 69 — หัวข้อยาวเต็มจอ): เปิด/รีเฟรชมาแล้วย่อไว้ก่อนเสมอ · กดขยายแล้วไปหน้าอื่นกลับมายังขยาย ·
+    // รีเฟรชแล้วกลับมาย่อ · ย่อแล้วเหลือชื่อหัวข้อกับจำนวน
+    const PAYT = "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1";
+    const head = page.locator(`[aria-label="หัวข้อ ${PAYT}"]`).locator("visible=true").first();
+    const toggle = (verb) => page.locator(`[aria-label="${verb}หัวข้อ ${PAYT}"]`).locator("visible=true").first();
+    if ((await head.count()) === 0) fail(`กล่องงานไม่มีหัวข้อ "${PAYT}"`);
     else {
+      const shut0 = await head.innerText();
+      !shut0.includes(a.code) && !shut0.includes(b.code) && shut0.includes("ขยาย") && (await toggle("ขยาย").count()) > 0 &&
+      (await toggle("ขยาย").getAttribute("aria-expanded")) === "false"
+        ? pass("เปิดกล่องงานมา หัวข้อย่อไว้ก่อน: เหลือชื่อกับจำนวน ปุ่ม \"ขยาย\" (aria-expanded=false)") : fail(`หัวข้อไม่ได้ย่อตั้งต้น: ${shut0}`);
+      await toggle("ขยาย").click();
+      await page.waitForTimeout(600);
       const h = await head.innerText();
-      h.indexOf(a.code) >= 0 && h.indexOf(b.code) > h.indexOf(a.code) && h.includes("รอมาแล้ว 5 วัน") && h.includes("ยังไม่เคยตาม") && /ตามล่าสุด .+ลูกค้าบอกโอนวันศุกร์/.test(h)
-        ? pass("กล่องงาน: หัวข้อ \"รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1\" เรียงรอนานสุดก่อน · รอมาแล้ว · ตามล่าสุด/ยังไม่เคยตาม") : fail(`หัวข้อกล่องงาน: ${h}`);
+      h.indexOf(a.code) >= 0 && h.indexOf(b.code) > h.indexOf(a.code) && h.includes("รอมาแล้ว 5 วัน") && h.includes("ยังไม่เคยตาม") && /ตามล่าสุด .+ลูกค้าบอกโอนวันศุกร์/.test(h) &&
+      (await toggle("ย่อ").count()) > 0
+        ? pass(`กดขยาย: หัวข้อ "${PAYT}" เรียงรอนานสุดก่อน · รอมาแล้ว · ตามล่าสุด/ยังไม่เคยตาม · ปุ่มเป็น "ย่อ"`) : fail(`หัวข้อกล่องงาน: ${h}`);
+      // ไปหน้าอื่นด้วยเมนูข้างในแอป — page.goto เปลี่ยน # แล้วหน้ารีโหลดทั้งหน้า (เท่ากับรีเฟรช) ซึ่งตั้งใจให้ย่อกลับ
+      await page.locator('[aria-label="งานของฉันวันนี้"]').locator("visible=true").first().click();
+      await page.waitForTimeout(2000);
+      await page.locator('[aria-label="กล่องงานของฉัน"]').locator("visible=true").first().click();
+      await page.waitForTimeout(3000);
+      const t2 = (await head.count()) ? await head.innerText() : "";
+      t2.includes(a.code) && (await toggle("ย่อ").count()) > 0
+        ? pass("ไปหน้าอื่นแล้วกลับมา (ไม่รีเฟรช) หัวข้อยังขยายอยู่") : fail(`กลับมาแล้วหัวข้อไม่ขยาย: ${t2}`);
+      await page.reload({ waitUntil: "networkidle" });
+      await page.waitForTimeout(5000);
+      const t3 = (await head.count()) ? await head.innerText() : "";
+      t3.includes(PAYT) && !t3.includes(a.code) && (await toggle("ขยาย").count()) > 0
+        ? pass("รีเฟรชแล้วกลับมาย่อ") : fail(`รีเฟรชแล้วไม่ย่อ: ${t3}`);
+      await toggle("ขยาย").click();
+      await page.waitForTimeout(600);
+      await toggle("ย่อ").click();
+      await page.waitForTimeout(600);
+      const t4 = await head.innerText();
+      !t4.includes(a.code) && t4.includes(PAYT) && (await toggle("ขยาย").count()) > 0
+        ? pass("กดย่อ: แถวหาย เหลือชื่อหัวข้อกับจำนวน") : fail(`ย่อหัวข้อ: ${t4}`);
     }
     const qchip = page.locator('[aria-label="ต้องรีบดู รอจ่ายเกิน 3 วัน 1"]').locator("visible=true").first();
     if ((await qchip.count()) === 0) fail("ไม่มีชิป \"รอจ่ายเกิน 3 วัน 1\" ในกล่องงาน");
