@@ -30,6 +30,10 @@
 //      แถว MT1 ป้าย "ข้ามยี่ห้อ · อยู่ในไฟล์ Maytag" · "ตรงทุกรายการ" → "คอนเฟิร์มอะไหล่" → กล่อง "ใช้อะไหล่ข้ามยี่ห้อ?" →
 //      ยกเลิก = ไม่ส่งอะไร (ฐานข้อมูลยังรอคอนเฟิร์ม) · กดอีกครั้ง → "ใช้ข้ามยี่ห้อ" → ฐานข้อมูล: เช็คอะไหล่ · อะไหล่ที่รอมี MT1 ·
 //      ประวัติข้ามยี่ห้อสองแถว (ช่างตอนเลือก · หัวหน้าภาคตอนคอนเฟิร์ม)
+//   9) อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69) บนใบไม่ระบุเครื่อง: ข้อ 5 ของช่าง (มือถือ) เดิมล็อกทั้งช่อง ตอนนี้บรรทัด
+//      "เลือกได้เฉพาะอะไหล่นอกเครื่อง …" + ช่องค้นอะไหล่นอกเครื่อง · อะไหล่ของเครื่องค้นไม่เจอ · NB1 ขึ้นใต้หัว
+//      "อะไหล่นอกเครื่อง — ใช้ได้ทุกเครื่อง ไม่ต้องยืนยัน" → แตะแล้วเพิ่มเลย ป้าย "นอกเครื่อง" → ส่ง → ฐานข้อมูล: รอบเลือกอะไหล่ PENDING (NB1) ·
+//      หัวหน้าภาค: จอคอนเฟิร์มแถว NB1 ป้าย "นอกเครื่อง" → คอนเฟิร์มโดยไม่มีกล่องข้ามยี่ห้อ → ฐานข้อมูล: อะไหล่ที่รอ NB1
 // หัวหน้าภาคระบุอะไหล่บนเครื่องที่ยังไม่รู้ยี่ห้อ (แผน §8 ข้อ 5) อยู่ใน parts-brand-web-test.js ข้อ 2 แล้ว — ไม่ทำซ้ำที่นี่
 // ผู้ใช้ของชุดนี้เอง (ช่าง ZPPT… ทีมของ C0006 · หัวหน้าภาค ZPPS… ภาคของ C0006) — ไม่ย้ายทีม T001 / ภาค S001:
 // รอบที่ถูกฆ่ากลางทางเคยทิ้ง T001 ไว้ทีมอื่น รอบถัดไปจำค่าผิดเป็น "ค่าเดิม" แล้วชุดอื่นที่ต้องการ T001 ทีมเดิมพังตาม
@@ -69,6 +73,8 @@ const PARTS = [
   [`${K}-HB3`, "c วาล์วทดสอบเลือกอะไหล่", "Huebsch"],
   [`${K}-MT1`, "m มอเตอร์ทดสอบเลือกอะไหล่", "Maytag"],
   [`${K}-OT1`, "o น้ำยาของใช้ร่วมทดสอบเลือกอะไหล่", "Other"],
+  // อะไหล่นอกเครื่อง (ข้อ 9) — ของในสโตร์ที่ไม่อยู่ในไฟล์ไหน (ไม่มีแถวไฟล์) · ชื่อไม่มีคำที่ข้ออื่นค้น
+  [`${K}-NB1`, "n สายน้ำเข้าทดสอบนอกเครื่อง", null],
 ];
 const nameOf = (code) => PARTS.find((p) => p[0] === code)[1];
 const tagOf = (code) => `${code} ${nameOf(code)}`;
@@ -147,7 +153,7 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
       ${PARTS.map(([c, n]) => `('${c}','${n}','ZZไม่เกี่ยว',false,now())`).join(",")};
       insert into "SparePartBrandFile"("sparePartId",file,source)
       select p.id, f.file, 'MANUAL' from "SparePart" p join (values
-        ${PARTS.map(([c, , f]) => `('${c}','${f}')`).join(",")}) as f(code,file) on f.code=p."partCode";`);
+        ${PARTS.filter((p) => p[2]).map(([c, , f]) => `('${c}','${f}')`).join(",")}) as f(code,file) on f.code=p."partCode";`);
     const PID = (code) => Number(sql(`select id from "SparePart" where "partCode"='${code}'`));
 
     const hash = sql(`select "passwordHash" from "User" where "employeeCode"='T001'`);
@@ -711,9 +717,13 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     await vis(t2, sql(`select name from "Branch" where code='C0006'`), false).last().click();
     await t2.waitForTimeout(2500);
     const searchBoxes = () => t2.getByPlaceholder("ค้นหาในไฟล์ Huebsch").locator("visible=true").count();
-    (await vis(t2, "อะไหล่ที่ต้องใช้ (ไม่บังคับ)").count()) > 0 && (await vis(t2, "ใส่หมายเลขเครื่องก่อน").count()) > 0
-      ? pass("ฟอร์มเปิดใบงาน (ช่าง): ช่อง \"อะไหล่ที่ต้องใช้ (ไม่บังคับ)\" ล็อก \"ใส่หมายเลขเครื่องก่อน\" จนกว่าจะใส่รหัสเครื่อง")
-      : fail("ฟอร์มเปิดใบงาน: ไม่มีช่องอะไหล่ของช่าง หรือไม่ล็อกตอนยังไม่มีรหัสเครื่อง");
+    // ยังไม่ใส่รหัสเครื่อง = ใบทั้งสาขา — เดิมล็อก "ใส่หมายเลขเครื่องก่อน" · ตอนนี้เลือกได้เฉพาะอะไหล่นอกเครื่อง (4 พ.ย. 69) ยังค้นในไฟล์ไม่ได้
+    (await vis(t2, "อะไหล่ที่ต้องใช้ (ไม่บังคับ)").count()) > 0 &&
+    (await vis(t2, "ยังไม่ได้ใส่หมายเลขเครื่อง — เลือกได้เฉพาะอะไหล่นอกเครื่อง · อะไหล่ของเครื่องใส่หมายเลขเครื่องก่อน (งานทั้งสาขา: หัวหน้าภาคระบุที่ขั้นถัดไป)").count()) > 0 &&
+    (await t2.getByPlaceholder("ค้นหาอะไหล่นอกเครื่อง").locator("visible=true").count()) > 0 &&
+    (await t2.getByPlaceholder(/^ค้นหาในไฟล์/).locator("visible=true").count()) === 0
+      ? pass("ฟอร์มเปิดใบงาน (ช่าง): ช่อง \"อะไหล่ที่ต้องใช้ (ไม่บังคับ)\" ก่อนใส่รหัสเครื่องเลือกได้เฉพาะอะไหล่นอกเครื่อง (ยังไม่มีช่องค้นในไฟล์)")
+      : fail("ฟอร์มเปิดใบงาน: ไม่มีช่องอะไหล่ของช่าง หรือก่อนใส่รหัสเครื่องไม่ใช่ช่องอะไหล่นอกเครื่อง");
 
     await t2.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").first().fill(MW4);
     await t2.waitForTimeout(2500);
@@ -841,6 +851,84 @@ const tagOf = (code) => `${code} ${nameOf(code)}`;
     sentIds6 === String(PID(`${K}-MT1`))
       ? pass(`"ใช้ข้ามยี่ห้อ" → คำขอมี crossBrandOk [MT1] · ฐานข้อมูล: เช็คอะไหล่ · อะไหล่ที่รอ HB1 + MT1 · ประวัติข้ามยี่ห้อสองแถว (ช่าง → หัวหน้าภาค)`)
       : fail(`คอนเฟิร์มข้ามยี่ห้อ: ${done6} ${pk6()} รอ=${waiting6()} ประวัติ=${xlog6()} ส่ง=${sentIds6}`);
+
+    // ── 9) อะไหล่นอกเครื่องบนใบไม่ระบุเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69) — ข้อ 5 ของช่างเดิมล็อกทั้งช่อง ──
+    // เลือกได้เฉพาะอะไหล่นอกเครื่อง (ไม่ผูกกับยี่ห้อ ไม่ต้องรู้ว่าเครื่องไหน) · อะไหล่ของเครื่องยังให้หัวหน้าภาคระบุเหมือนเดิม
+    const o9 = await prep("", null, `${SYM}ไม่มีเครื่อง ${SUF}`);
+    const { id: id9, code: code9 } = o9;
+    const nb1 = `${K}-NB1`;
+    const st9 = () => sql(`select status from "WorkOrder" where id=${id9}`);
+    const pk9 = () =>
+      sql(`select coalesce(string_agg(k.status||':'||p."partCode"||'x'||i.quantity, ',' order by i.id),'') from "PartsPick" k
+           join "PartsPickItem" i on i."pickId"=k.id join "SparePart" p on p.id=i."sparePartId" where k."workOrderId"=${id9}`);
+    const waiting9 = () =>
+      sql(`select coalesce(string_agg(p."partCode"||'x'||w.quantity, ',' order by p."partCode"),'') from "WorkOrderPart" w
+           join "SparePart" p on p.id=w."sparePartId" where w."workOrderId"=${id9} and w.kind='WAITING'`);
+    const xlog9 = () => sql(`select count(*) from "WorkOrderLog" where "workOrderId"=${id9} and action='CROSS_BRAND_PARTS'`);
+    o9.arrived === 200 && o9.files === "3" && sql(`select coalesce("machineId"::text,'-') from "WorkOrder" where id=${id9}`) === "-"
+      ? pass(`เตรียม ${code9}: ใบไม่ระบุเครื่อง · ช่างถึงหน้างาน · ไฟล์ตรวจครบ 3 อย่าง (ฐานข้อมูล)`)
+      : fail(`เตรียม ${code9}: arrive=${o9.arrived} files=${o9.files}`);
+    await t2.goto(APP, { waitUntil: "networkidle" });
+    await t2.waitForTimeout(4000);
+    await label(t2, `งาน ${code9}`).locator('[aria-label="บันทึกผลตรวจ"]').first().click();
+    await t2.waitForTimeout(3000);
+    const box9 = t2.getByPlaceholder("ค้นหาอะไหล่นอกเครื่อง").locator("visible=true");
+    (await vis(t2, "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกได้เฉพาะอะไหล่นอกเครื่อง · อะไหล่ของเครื่องเขียนในข้อ 4 หัวหน้าภาคระบุให้").count()) > 0 &&
+    (await box9.count()) > 0 &&
+    (await t2.getByPlaceholder(/^ค้นหาในไฟล์/).locator("visible=true").count()) === 0 &&
+    (await vis(t2, "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน").count()) === 0
+      ? pass("ข้อ 5 ของใบไม่ระบุเครื่อง: บรรทัด \"เลือกได้เฉพาะอะไหล่นอกเครื่อง …\" + ช่องค้นอะไหล่นอกเครื่อง (ไม่ใช่กล่องล็อกแบบเดิม · ไม่มีช่องค้นในไฟล์)")
+      : fail(`ข้อ 5 ใบไม่ระบุเครื่อง: ช่องค้น=${await box9.count()} ล็อกเดิม=${await vis(t2, "ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน").count()}`);
+    await box9.last().fill(`${K}-HB1`);
+    await t2.waitForTimeout(2000);
+    (await vis(t2, `ไม่พบ “${K}-HB1” ในอะไหล่นอกเครื่อง`).count()) > 0 && (await label(t2, `เพิ่ม ${tagOf(`${K}-HB1`)}`).count()) === 0
+      ? pass("ค้นอะไหล่ของเครื่อง (HB1) → \"ไม่พบ … ในอะไหล่นอกเครื่อง\" ไม่มีแถวให้เพิ่ม") : fail("ใบไม่ระบุเครื่องค้นเจออะไหล่ของเครื่อง");
+    await box9.last().fill(nb1);
+    await t2.waitForTimeout(2000);
+    (await vis(t2, "อะไหล่นอกเครื่อง — ใช้ได้ทุกเครื่อง ไม่ต้องยืนยัน").count()) > 0 && (await label(t2, `เพิ่ม ${tagOf(nb1)}`).count()) > 0
+      ? pass("ค้น NB1 → ขึ้นใต้หัว \"อะไหล่นอกเครื่อง — ใช้ได้ทุกเครื่อง ไม่ต้องยืนยัน\"") : fail("ไม่มีกลุ่มอะไหล่นอกเครื่อง");
+    await label(t2, `เพิ่ม ${tagOf(nb1)}`).first().click();
+    await t2.waitForTimeout(600);
+    (await label(t2, `จำนวน ${nb1}`).count()) > 0 && (await vis(t2, "นอกเครื่อง").count()) > 0 &&
+    (await vis(t2, "ใช้อะไหล่ข้ามยี่ห้อ?").count()) === 0 && (await vis(t2, "ส่งให้หัวหน้าภาคคอนเฟิร์ม").count()) > 0
+      ? pass("แตะแล้วเพิ่มเลย (ไม่มีกล่องยืนยัน) · แถวป้าย \"นอกเครื่อง\" · ปุ่มเป็น \"ส่งให้หัวหน้าภาคคอนเฟิร์ม\"")
+      : fail(`เพิ่ม NB1: แถว=${await label(t2, `จำนวน ${nb1}`).count()} ป้าย=${await vis(t2, "นอกเครื่อง").count()}`);
+    await t2.screenshot({ path: path.join(__dirname, "parts-pick-10-outside.png") });
+    await label(t2, "ผลตรวจหน้างาน").last().fill("สายน้ำเข้ารั่ว ต้องเปลี่ยนสาย");
+    const sent9 = [];
+    const onSend9 = (r) => {
+      if (r.method() === "POST" && new RegExp(`/work-orders/${id9}/inspection$`).test(r.url())) sent9.push(r.postDataJSON());
+    };
+    t2.on("request", onSend9);
+    await vis(t2, "ส่งให้หัวหน้าภาคคอนเฟิร์ม").last().click();
+    const back9 = await label(t2, "กล่องส่งผลตรวจแล้ว").first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+    t2.off("request", onSend9);
+    back9 &&
+    st9() === "NEW" &&
+    pk9() === `PENDING:${nb1}x1` &&
+    sent9.length === 1 &&
+    !("crossBrandOk" in sent9[0]) &&
+    !("machineBrand" in sent9[0])
+      ? pass("ส่งแล้ว: ฐานข้อมูลใบไป NEW · รอบเลือกอะไหล่ PENDING มี NB1 · คำขอไม่มี crossBrandOk/machineBrand")
+      : fail(`ส่งใบไม่ระบุเครื่อง: กลับ=${back9} ${st9()} ${pk9()} คำขอ=${JSON.stringify(sent9[0] ?? null).slice(0, 200)}`);
+    // หัวหน้าภาค: จอคอนเฟิร์มติดป้าย "นอกเครื่อง" · คอนเฟิร์มไม่มีกล่องข้ามยี่ห้อ
+    await s.goto(APP, { waitUntil: "networkidle" });
+    await s.waitForTimeout(4000);
+    await label(s, `ทำขั้น คอนเฟิร์มอะไหล่ ${code9}`).first().click();
+    const form9 = await vis(s, "อะไหล่ที่ช่างเลือก · 1 รายการ").first().waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+    form9 && (await vis(s, "นอกเครื่อง").count()) > 0 && (await vis(s, /^ข้ามยี่ห้อ · /).count()) === 0
+      ? pass("จอคอนเฟิร์ม: แถว NB1 ป้าย \"นอกเครื่อง\" (ไม่ใช่ป้ายข้ามยี่ห้อ)")
+      : fail(`จอคอนเฟิร์มใบไม่ระบุเครื่อง: form=${form9} ป้าย=${await vis(s, "นอกเครื่อง").count()}`);
+    await clickTop(label(s, "ตรงทุกรายการ"));
+    await s.waitForTimeout(400);
+    await clickTop(label(s, "คอนเฟิร์มอะไหล่"));
+    await s.waitForTimeout(800);
+    const asked9 = (await vis(s, "ใช้อะไหล่ข้ามยี่ห้อ?").count()) > 0;
+    let done9 = "";
+    for (let i = 0; i < 40 && (done9 = st9()) === "NEW"; i++) await s.waitForTimeout(250);
+    !asked9 && done9 !== "NEW" && pk9() === `CONFIRMED:${nb1}x1` && waiting9() === `${nb1}x1` && xlog9() === "0"
+      ? pass(`คอนเฟิร์มโดยไม่มีกล่องข้ามยี่ห้อ → ฐานข้อมูล: ใบไป ${done9} · อะไหล่ที่รอ NB1 · ไม่มีประวัติข้ามยี่ห้อ`)
+      : fail(`คอนเฟิร์มใบไม่ระบุเครื่อง: ถาม=${asked9} ${done9} ${pk9()} รอ=${waiting9()} ประวัติ=${xlog9()}`);
   } catch (e) {
     fail(String(e).split("\n").slice(0, 2).join(" "));
     await page?.screenshot({ path: path.join(__dirname, "parts-pick-fail.png") }).catch(() => {});

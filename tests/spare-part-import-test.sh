@@ -200,8 +200,9 @@ IMP $A m1.xlsx -F apply=true -F batchId=$B3ID -F brandFile=Spinz >/dev/null
   && pass "อัปเดตสำเร็จ: ประวัติไม่ติดป้ายอัปเดตไม่ครบ (เขียนประวัติก่อนลงมือแล้วแก้ทีหลัง)" || fail "ป้าย incomplete ค้าง"
 
 # รูปเดิมเป็นลิงก์ภายนอก (สคริปต์นำเข้าเก่า) — "เก็บรูปเดิม" ต้องไม่ทับ · แทนรูป = เปลี่ยน
+# เริ่มแบบไม่อยู่ในไฟล์ไหนเหมือนเดิม — ตั้งแต่ 4 พ.ย. 69 ต้องบอกว่าเป็น "อะไหล่นอกเครื่อง" (ไม่ส่ง = 400 อะไหล่ไม่เกิด ข้อข้างล่างพังทั้งชุด)
 curl -s -X POST localhost:4000/api/spare-parts -H "$(H $A)" -H 'Content-Type: application/json' \
-  -d "{\"partCode\":\"${P}X\",\"name\":\"รูปภายนอกทดสอบ\",\"brand\":\"$BB\",\"imageUrl\":\"https://example.com/zz.jpg\"}" >/dev/null
+  -d "{\"partCode\":\"${P}X\",\"name\":\"รูปภายนอกทดสอบ\",\"brand\":\"$BB\",\"imageUrl\":\"https://example.com/zz.jpg\",\"outsideMachine\":true}" >/dev/null
 MX=$(xlsx x1.xlsx "{\"headers\":[\"รหัสสินค้า\",\"ชื่อสินค้า\",\"รูป\"],\"rows\":[[\"${P}X\",\"รูปภายนอกทดสอบ\",null]],\"images\":{\"C2\":\"x1-$SUF\"}}")
 [ "$(IMP $A x1.xlsx -F replaceImages=false | J 'd.items[0].image+"|"+d.summary.images')" = "KEPT|0" ] \
   && [ "$(IMP $A x1.xlsx | J 'd.items[0].image')" = "CHANGED" ] \

@@ -55,7 +55,7 @@ router.get("/", requireAuth, async (req, res) => {
         : {}),
     },
     orderBy: { name: "asc" },
-    // ไฟล์ยี่ห้อของแต่ละตัว — หน้าจัดการกรอง "ไม่มียี่ห้อ" (= ไม่อยู่ในไฟล์ไหน ช่างเลือกไม่ได้) และแก้ไฟล์ในฟอร์ม
+    // ไฟล์ยี่ห้อของแต่ละตัว — หน้าจัดการกรอง "อะไหล่นอกเครื่อง" (= ไม่อยู่ในไฟล์ไหน ทุกเครื่องเลือกได้) และแก้ไฟล์ในฟอร์ม
     include: brandFilesInclude,
   });
   res.json(parts.map(withFiles));
@@ -71,12 +71,15 @@ router.get("/", requireAuth, async (req, res) => {
  *   (พิมพ์ "Huebsch" แล้วได้ทุกตัวที่ช่องยี่ห้อเขียน Huebsch ทั้งที่ไม่อยู่ในไฟล์ Huebsch = ทำให้เข้าใจผิด)
  * เรียงรหัสที่ตรงทั้งคำก่อน แล้วรหัสที่ขึ้นต้นด้วยคำค้น แล้วตามชื่อ — ช่างค้น/เบิก/เคลมด้วยรหัสสินค้า (เจ้าของงาน 31 ต.ค. 69)
  *   ถ้าเรียงตามชื่ออย่างเดียว รหัสที่พิมพ์ครบแล้วอาจตกไปท้ายรายการเพราะชื่อเรียงทีหลัง
- * others = กลุ่มที่สาม: อะไหล่ในไฟล์ยี่ห้ออื่น (ไม่อยู่ในไฟล์ของเครื่องและไม่อยู่ใน Other) — ใช้ได้เมื่อกดยืนยันรายครั้ง
- *   (เจ้าของงานเลือก 3 พ.ย. 69 "แค่ให้ขึ้นเตือนว่าใช้อะไหล่ข้ามยี่ห้อ ให้กดยืนยัน") · ลำดับและเพดานเดียวกับสองกลุ่มแรก
- *   ไม่อยู่ในไฟล์ไหน/นอกสโตร์ยังไม่ขึ้น (ยืนยันข้ามยี่ห้อได้เฉพาะตัวที่รู้ว่าเป็นของยี่ห้อไหน)
+ * outside = อะไหล่นอกเครื่อง (ของในสโตร์ที่ไม่อยู่ในไฟล์ไหน — เจ้าของงานเลือก 4 พ.ย. 69) ทุกเครื่องเลือกได้ ไม่ต้องยืนยัน
+ *   ขึ้นเป็นกลุ่มของตัวเองหลังของใช้ร่วม ไม่ปนกับ shared: คนเลือกต้องเห็นว่าไม่ใช่ของในไฟล์ Other · แอปรุ่นก่อนไม่รู้จักช่องนี้ = ไม่เห็นกลุ่มนี้
+ * others = กลุ่มที่สี่: อะไหล่ในไฟล์ยี่ห้ออื่น (ไม่อยู่ในไฟล์ของเครื่องและไม่อยู่ใน Other) — ใช้ได้เมื่อกดยืนยันรายครั้ง
+ *   (เจ้าของงานเลือก 3 พ.ย. 69 "แค่ให้ขึ้นเตือนว่าใช้อะไหล่ข้ามยี่ห้อ ให้กดยืนยัน") · ลำดับและเพดานเดียวกับกลุ่มอื่น
+ *   ของนอกสโตร์ไม่ขึ้นกลุ่มไหนเลย
  * elsewhere = ไม่เจอเลยทั้งสองกลุ่มแรก → บอกว่าคำค้นนี้อยู่ไฟล์ไหน (ช่างรู้ว่าไม่ใช่พิมพ์ผิด แต่เป็นอะไหล่ยี่ห้ออื่น)
  *   คงไว้ให้แอปรุ่นก่อนที่ยังไม่รู้จัก others (ยังขึ้นกล่อง "ไม่พบ … รหัสนี้อยู่ในไฟล์ …" ตามเดิม)
- * อะไหล่ที่ไม่อยู่ในไฟล์ไหนและของนอกสโตร์ไม่ขึ้นที่ไหนเลย — ยังไม่รู้ว่าเป็นของยี่ห้อไหน ให้เลือกคือเดา
+ * ไม่ส่งยี่ห้อ (ใบไม่มีเครื่อง · เครื่องที่ยังไม่รู้ยี่ห้อและยังไม่ได้กดชิป) = ค้นเฉพาะอะไหล่นอกเครื่อง file = null
+ *   — ไม่ใช่ค้นทุกไฟล์: ยังไม่รู้ยี่ห้อก็ยังไม่รู้ว่าอะไหล่ของเครื่องตัวไหนใช้ได้ (ข้อ 17)
  * updatedAt = วันอัปโหลดไฟล์นี้ครั้งล่าสุด (หัวช่อง "อัปเดต {วันที่}") คิดเฉพาะตอนไม่มีคำค้น — หัวช่องโหลดครั้งเดียว
  *   ไม่เคยอัปโหลดไฟล์นี้เลย = null (หัวช่องไม่มีวันที่ ไม่เดาจากวันอื่น)
  * ทุกตำแหน่งที่เลือกอะไหล่ได้อ่านได้ (รวม Admin Spare Part / ดูในฐานะ) · ทีม Area ถูกกันที่ requireAuth ทั้ง /api/spare-parts
@@ -87,14 +90,15 @@ router.get("/for-brand", requireAuth, async (req, res) => {
   const brand = typeof req.query.brand === "string" ? req.query.brand.trim() : "";
   const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
   const file = brandFileOf(brand);
-  if (!file) return res.status(400).json({ error: "ต้องระบุยี่ห้อเครื่อง" });
   if (!search) {
-    const last = await prisma.sparePartImport.findFirst({
-      where: { brandFile: file },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    });
-    return res.json({ file, updatedAt: last?.createdAt ?? null, rows: [], shared: [], others: [], elsewhere: [] });
+    const last = file
+      ? await prisma.sparePartImport.findFirst({
+          where: { brandFile: file },
+          orderBy: { createdAt: "desc" },
+          select: { createdAt: true },
+        })
+      : null;
+    return res.json({ file, updatedAt: last?.createdAt ?? null, rows: [], shared: [], outside: [], others: [], elsewhere: [] });
   }
   // ILIKE ต้องหนี % _ \ ในคำค้นเอง (Prisma contains ทำให้ แต่ที่นี่ต้องเรียงด้วยนิพจน์ที่ Prisma เรียงให้ไม่ได้)
   const like = `%${search.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
@@ -109,16 +113,19 @@ router.get("/for-brand", requireAuth, async (req, res) => {
       upper(p."partCode") LIKE upper(${like.slice(1)}) DESC,
       p.name ASC, p."partCode" ASC
     LIMIT ${FOR_BRAND_LIMIT}`;
-  // อยู่ในไฟล์ใดไฟล์หนึ่ง แต่ไม่ใช่ไฟล์ของเครื่องและไม่ใช่ Other — กลุ่ม "ข้ามยี่ห้อ" (ตัวที่ไม่อยู่ในไฟล์ไหนไม่ขึ้น)
+  // อยู่ในไฟล์ใดไฟล์หนึ่ง แต่ไม่ใช่ไฟล์ของเครื่องและไม่ใช่ Other — กลุ่ม "ข้ามยี่ห้อ" · ไม่อยู่ในไฟล์ไหนเลย = อะไหล่นอกเครื่อง
   const anyFile = Prisma.sql`EXISTS (SELECT 1 FROM "SparePartBrandFile" b WHERE b."sparePartId" = p.id)`;
-  const [rows, shared, others] = await Promise.all([
-    group(inFile(file)),
-    file === SHARED_FILE ? Promise.resolve([] as BrandRow[]) : group(Prisma.sql`${inFile(SHARED_FILE)} AND NOT ${inFile(file)}`),
-    group(Prisma.sql`${anyFile} AND NOT ${inFile(file)} AND NOT ${inFile(SHARED_FILE)}`),
+  const none = Promise.resolve([] as BrandRow[]);
+  const [rows, shared, outside, others] = await Promise.all([
+    file ? group(inFile(file)) : none,
+    !file || file === SHARED_FILE ? none : group(Prisma.sql`${inFile(SHARED_FILE)} AND NOT ${inFile(file)}`),
+    group(Prisma.sql`NOT ${anyFile}`),
+    file ? group(Prisma.sql`${anyFile} AND NOT ${inFile(file)} AND NOT ${inFile(SHARED_FILE)}`) : none,
   ]);
   const shape = (r: BrandRow) => ({ ...r, brandFiles: fileList(r.brandFiles.map((f) => ({ file: f }))) });
   let elsewhere: { file: string; exact: boolean }[] = [];
-  if (!rows.length && !shared.length) {
+  // ไม่นับกลุ่มอะไหล่นอกเครื่อง — แอปรุ่นก่อนไม่เห็นกลุ่มนั้น ยังต้องได้ "รหัสนี้อยู่ในไฟล์ …" แบบเดิม
+  if (file && !rows.length && !shared.length) {
     const hits = await prisma.$queryRaw<{ file: string; exact: boolean }[]>`
       SELECT b.file, bool_or(upper(p."partCode") = upper(${search})) AS exact
       FROM "SparePart" p JOIN "SparePartBrandFile" b ON b."sparePartId" = p.id
@@ -126,7 +133,15 @@ router.get("/for-brand", requireAuth, async (req, res) => {
       GROUP BY b.file`;
     elsewhere = hits.sort((a, b) => BRAND_FILES.indexOf(a.file as BrandFile) - BRAND_FILES.indexOf(b.file as BrandFile));
   }
-  res.json({ file, updatedAt: null, rows: rows.map(shape), shared: shared.map(shape), others: others.map(shape), elsewhere });
+  res.json({
+    file,
+    updatedAt: null,
+    rows: rows.map(shape),
+    shared: shared.map(shape),
+    outside: outside.map(shape),
+    others: others.map(shape),
+    elsewhere,
+  });
 });
 
 /**
@@ -435,7 +450,7 @@ const formError = (e: z.ZodError) =>
 
 /**
  * ไฟล์ยี่ห้อที่แอดมินติ๊กในฟอร์มอะไหล่ (หน้าจัดการข้อมูลอะไหล่) — ไม่ส่งมา = ไม่แตะ (แอปรุ่นเก่ายังแก้ชื่อ/รูปได้โดยไฟล์ไม่หาย)
- * ส่งมา = ไฟล์ของอะไหล่ตัวนี้เป็นตามรายการนี้พอดี · ส่ง [] = ไม่อยู่ในไฟล์ไหน (ช่างเลือกไม่ได้ ยกเว้นใบที่ไม่ระบุเครื่อง)
+ * ส่งมา = ไฟล์ของอะไหล่ตัวนี้เป็นตามรายการนี้พอดี · ไม่อยู่ในไฟล์ไหนต้องมาพร้อม outsideMachine (ดู filesChoice)
  * ไม่ผ่าน zod ของฟอร์ม: ข้อความต้องบอกว่าเลือกอะไรได้บ้าง ไม่ใช่แค่ "ไม่ถูกต้อง"
  */
 function brandFilesInput(v: unknown): { ok: true; files: BrandFile[] | undefined } | { ok: false } {
@@ -446,11 +461,38 @@ function brandFilesInput(v: unknown): { ok: true; files: BrandFile[] | undefined
   return { ok: true, files: files as BrandFile[] };
 }
 
+/**
+ * อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69) — ของในสโตร์ที่ไม่อยู่ในไฟล์ไหน ทุกเครื่องเลือกได้โดยไม่ต้องยืนยัน
+ * อะไหล่ที่ไม่มีไฟล์จึงต้องมาจากการเลือกจริง ไม่ใช่ลืมติ๊ก: อะไหล่ Huebsch ที่ลืมติ๊กไฟล์จะหลุดไปให้ทุกเครื่องเลือกเงียบ ๆ
+ * — บันทึกโดยไม่มีไฟล์ (เพิ่มใหม่ หรือแก้จนไฟล์ว่าง) ต้องส่ง outsideMachine: true · คู่กับไฟล์ยี่ห้อไม่ได้ (เลือกอย่างใดอย่างหนึ่ง)
+ * แอปรุ่นก่อนที่แก้อะไหล่โดยไม่ส่ง brandFiles ยังใช้ได้ (ไม่ส่ง = ไม่แตะไฟล์) · อัปโหลด Excel ไม่ผ่านที่นี่ (รหัสในไฟล์เข้าไฟล์ยี่ห้อนั้นเสมอ)
+ */
+const OUTSIDE_INVALID = "ค่า “อะไหล่นอกเครื่อง” ไม่ถูกต้อง — โหลดหน้าใหม่แล้วลองอีกครั้ง";
+const OUTSIDE_REQUIRED =
+  "เลือกไฟล์ยี่ห้ออย่างน้อย 1 ไฟล์ หรือเลือก “อะไหล่นอกเครื่อง (ไม่มียี่ห้อ)” — กันอะไหล่ของยี่ห้อที่ลืมติ๊กไฟล์ หลุดไปให้ทุกเครื่องเลือก";
+const OUTSIDE_CONFLICT = "อะไหล่นอกเครื่องอยู่ในไฟล์ยี่ห้อไม่ได้ — เลือกไฟล์ยี่ห้อ หรือ “อะไหล่นอกเครื่อง” อย่างใดอย่างหนึ่ง";
+/**
+ * ไฟล์ที่จะบันทึก จาก brandFiles + outsideMachine — undefined = ไม่แตะไฟล์ · error = ข้อความ 400
+ * outsideMachine อย่างเดียว (ไม่ส่ง brandFiles) = ให้เป็นอะไหล่นอกเครื่อง คือไม่อยู่ในไฟล์ไหน
+ */
+function filesChoice(body: unknown): { files: BrandFile[] | undefined } | { error: string } {
+  const b = (body ?? {}) as { brandFiles?: unknown; outsideMachine?: unknown };
+  const bf = brandFilesInput(b.brandFiles);
+  if (!bf.ok) return { error: BRAND_FILE_INVALID };
+  if (b.outsideMachine !== undefined && typeof b.outsideMachine !== "boolean") return { error: OUTSIDE_INVALID };
+  if (b.outsideMachine) return bf.files?.length ? { error: OUTSIDE_CONFLICT } : { files: [] };
+  if (bf.files && bf.files.length === 0) return { error: OUTSIDE_REQUIRED };
+  return { files: bf.files };
+}
+
 router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const parsed = sparePartSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: formError(parsed.error) });
-  const bf = brandFilesInput(req.body?.brandFiles);
-  if (!bf.ok) return res.status(400).json({ error: BRAND_FILE_INVALID });
+  const choice = filesChoice(req.body);
+  if ("error" in choice) return res.status(400).json({ error: choice.error });
+  // อะไหล่ใหม่ที่ไม่บอกอะไรเลย (API/แอปที่ไม่ส่ง brandFiles) ก็คือไม่มีไฟล์ — ต้องเลือกเหมือนกัน ไม่งั้นช่องโหว่เดิมเปิดทางนี้
+  if (!choice.files) return res.status(400).json({ error: OUTSIDE_REQUIRED });
+  const files = choice.files;
 
   const existing = await prisma.sparePart.findUnique({ where: { partCode: parsed.data.partCode } });
   if (existing) return res.status(409).json({ error: "รหัสสินค้านี้มีอยู่แล้ว" });
@@ -459,7 +501,7 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const part = await prisma.sparePart.create({
     data: {
       ...parsed.data,
-      ...(bf.files?.length ? { brandFiles: { create: bf.files.map((file) => ({ file, source: "MANUAL" })) } } : {}),
+      ...(files.length ? { brandFiles: { create: files.map((file) => ({ file, source: "MANUAL" })) } } : {}),
     },
     include: brandFilesInclude,
   });
@@ -470,19 +512,19 @@ router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const parsed = sparePartSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: formError(parsed.error) });
-  const bf = brandFilesInput(req.body?.brandFiles);
-  if (!bf.ok) return res.status(400).json({ error: BRAND_FILE_INVALID });
+  const choice = filesChoice(req.body);
+  if ("error" in choice) return res.status(400).json({ error: choice.error });
 
   try {
-    if (bf.files === undefined) {
+    if (choice.files === undefined) {
       const part = await prisma.sparePart.update({ where: { id }, data: parsed.data, include: brandFilesInclude });
       return res.json(withFiles(part));
     }
     const cur = await prisma.sparePart.findUnique({ where: { id }, select: { offCatalog: true } });
     if (!cur) return res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
     // ของนอกสโตร์คือชื่อที่คนพิมพ์เองในใบงาน ไม่ได้มาจากไฟล์ยี่ห้อไหน — ใส่ไฟล์แล้วจะไปโผล่ในช่องเลือกอะไหล่ของช่าง
-    if (cur.offCatalog && bf.files.length) return res.status(400).json({ error: "อะไหล่นอกสโตร์ไม่อยู่ในไฟล์ยี่ห้อ" });
-    const files = bf.files;
+    if (cur.offCatalog && choice.files.length) return res.status(400).json({ error: "อะไหล่นอกสโตร์ไม่อยู่ในไฟล์ยี่ห้อ" });
+    const files = choice.files;
     // คำสั่งชุด (ไม่ใช่ interactive) จึงไม่ติดเพดาน 5 วินาที · ไฟล์ที่ยังติ๊กอยู่เก็บ source เดิม (IMPORT = ไฟล์จริงยืนยันแล้ว)
     // แก้แค่ไฟล์ไม่แตะ SparePart (updatedAt คือตัวกันแคชรูป — ขยับแล้วรูปโหลดใหม่เปล่า ๆ) · อ่านแถวท้ายสุดให้ได้ไฟล์ชุดใหม่
     const [, , part] = await prisma.$transaction([

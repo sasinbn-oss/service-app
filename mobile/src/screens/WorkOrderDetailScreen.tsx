@@ -46,7 +46,7 @@ import PartPicker, {
   type PartsBrand,
 } from "../components/PartPicker";
 import BrandChips, { rememberMachineModels } from "../components/BrandChips";
-import { brandFileOf, fileAllows } from "../utils/brandFile";
+import { brandFileOf, fileAllows, isOutsidePart } from "../utils/brandFile";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
 import OffPartEditor, {
@@ -4657,7 +4657,7 @@ type StageDoneKind =
   | "pickReturned"
   | (string & {});
 
-/** ใบนี้มีเครื่องไหม (ข้อ 22: ใบทั้งสาขาไม่มีช่องอะไหล่ของช่าง) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง partsBrand ดูจากรหัสเครื่องแทน */
+/** ใบนี้มีเครื่องไหม (ใบทั้งสาขา: ช่องของช่างเลือกได้แค่อะไหล่นอกเครื่อง) — เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง partsBrand ดูจากรหัสเครื่องแทน */
 function inspectHasMachine(o: WorkOrder): boolean {
   return o.partsBrand ? o.partsBrand.machine : !!o.machineCode;
 }
@@ -4665,11 +4665,13 @@ function inspectHasMachine(o: WorkOrder): boolean {
 /**
  * รายการตั้งต้นของข้อ 5 "อะไหล่ที่ต้องใช้" (ข้อ 5 ของเจ้าของงาน) — ถูกตีกลับ = รายการที่ส่งไปรอบนั้น (ช่างแก้จากของเดิม)
  * ไม่งั้น = อะไหล่ในสโตร์ที่อยู่ในใบอยู่แล้ว (แก้/เอาออกได้ · ที่ช่างส่งไปแทนทั้งชุด)
- * ของนอกสโตร์ไม่เติม: ช่างใส่/เอาออกตอนตรวจไม่ได้ (ข้อ 21) หัวหน้าภาคจัดการที่หน้าคอนเฟิร์ม · ใบไม่มีเครื่อง = ว่าง (ช่องล็อก ข้อ 22)
+ * ของนอกสโตร์ไม่เติม: ช่างใส่/เอาออกตอนตรวจไม่ได้ (ข้อ 21) หัวหน้าภาคจัดการที่หน้าคอนเฟิร์ม
+ * ใบไม่มีเครื่อง = เฉพาะอะไหล่นอกเครื่อง (ตัวที่ช่างเลือก/เอาออกเองได้ — 4 พ.ย. 69) · อะไหล่ของเครื่องที่หัวหน้าภาคใส่ไว้ไม่เติม
+ *   เติมแล้วช่างต้องเอาออกก่อนส่ง (เซิร์ฟเวอร์ปฏิเสธอะไหล่ของเครื่องบนใบไม่มีเครื่อง) = บังคับให้ลบของหัวหน้าภาค
  * แถวที่เบิกแล้วติดป้าย "เบิกแล้ว · ใบเบิก …" — ของอยู่กับช่างแล้ว เอาออกจากรายการไม่ได้ทำให้ของหายจากใบ (ค่าตั้งต้น D1)
  */
 function inspectPrefill(o: WorkOrder): PickedPart[] {
-  if (!inspectHasMachine(o)) return [];
+  const machine = inspectHasMachine(o);
   const waiting = new Map(o.waitingParts.map((p) => [p.sparePartId, p]));
   const back = pickReturned(o);
   const rows: PickedPart[] = back
@@ -4687,7 +4689,7 @@ function inspectPrefill(o: WorkOrder): PickedPart[] {
         };
       })
     : o.waitingParts
-        .filter((p) => !p.offCatalog)
+        .filter((p) => !p.offCatalog && (machine || isOutsidePart(p)))
         .map((p) => ({
           sparePartId: p.sparePartId,
           partCode: p.partCode,
@@ -4750,7 +4752,7 @@ function pickDiff(prev: PickItem[], next: PickItem[]): string {
 /**
  * รายการของช่างที่อยู่ในไฟล์ยี่ห้ออื่น (ช่างยืนยันข้ามยี่ห้อตอนเลือก) — เทียบกับไฟล์ "ตอนนี้" ของเครื่อง แบบเดียวกับเซิร์ฟเวอร์ตอนคอนเฟิร์ม
  * คนคอนเฟิร์มต้องยืนยันเองอีกครั้ง (เจ้าของงาน: ทุกคนที่เลือกอะไหล่ได้ต้องกดยืนยัน · รายครั้ง) — คำยืนยันของช่างไม่ใช่ของคนที่เขียนลงใบ
- * ตัวที่ไม่อยู่ในไฟล์ไหนไม่นับ: ยืนยันไม่ได้ เซิร์ฟเวอร์ตอบ 400 ให้ตีกลับตามเดิม
+ * อะไหล่นอกเครื่อง (ไม่อยู่ในไฟล์ไหน) ไม่นับ: ทุกเครื่องเลือกได้ ไม่ต้องยืนยัน (4 พ.ย. 69)
  */
 function pickCrossItems(order: WorkOrder, pick: PartsPickInfo): PickItem[] {
   const file = order.partsBrand?.file ?? pick.brandFile;
@@ -4933,7 +4935,10 @@ function PickConfirmForm({
           <Text style={styles.cfMachine}>
             {["เครื่อง " + machineCode, kind, make ? "ยี่ห้อ " + make : null].filter(Boolean).join(" · ")}
           </Text>
-        ) : null}
+        ) : (
+          // ใบทั้งสาขามีรอบเลือกอะไหล่ได้ตั้งแต่ 4 พ.ย. 69 (อะไหล่นอกเครื่องเท่านั้น) — บอกว่าทำไมไม่มีเครื่อง/ไฟล์ยี่ห้อบนหัว
+          <Text style={styles.cfMachine}>ใบงานทั้งสาขา (ไม่ระบุเครื่อง) · ช่างเลือกได้เฉพาะอะไหล่นอกเครื่อง</Text>
+        )}
         {file ? (
           <View style={styles.cfFileChip}>
             <Ionicons name="lock-closed" size={12} color={colors.primaryInk} />
@@ -5014,6 +5019,8 @@ function PickConfirmForm({
                   {crossIds.has(it.sparePartId) ? (
                     <Text style={styles.cfCrossTag}>ข้ามยี่ห้อ · อยู่ในไฟล์ {it.brandFiles.join(", ")}</Text>
                   ) : null}
+                  {/* อะไหล่นอกเครื่อง — ไม่ต้องยืนยัน บอกให้รู้ว่าไม่ได้อยู่ในไฟล์ของเครื่องเพราะไม่ผูกกับยี่ห้อ ไม่ใช่เลือกผิด */}
+                  {isOutsidePart(it) ? <Text style={styles.cfOutsideTag}>นอกเครื่อง</Text> : null}
                 </View>
                 <Text style={styles.cfQty}>× {it.quantity} ตัว</Text>
               </View>
@@ -6108,8 +6115,15 @@ function StageModal({
   const techSend = user?.role === "EMPLOYEE";
   const backPick = inspecting ? pickReturned(order) : null;
   const inspectMachine = inspecting && inspectHasMachine(order);
-  const removedIds = inspectMachine
-    ? [...new Set(order.waitingParts.filter((p) => !p.offCatalog && !parts.some((x) => x.sparePartId === p.sparePartId)).map((p) => p.sparePartId))].slice(0, 20)
+  // ใบไม่มีเครื่อง: นับเฉพาะอะไหล่นอกเครื่อง — ตัวเดียวกับที่ข้อ 5 เติมให้ (inspectPrefill) อะไหล่ของเครื่องที่ช่างไม่เห็นต้องไม่หลุดจากใบ
+  const removedIds = inspecting
+    ? [
+        ...new Set(
+          order.waitingParts
+            .filter((p) => !p.offCatalog && (inspectMachine || isOutsidePart(p)) && !parts.some((x) => x.sparePartId === p.sparePartId))
+            .map((p) => p.sparePartId)
+        ),
+      ].slice(0, 20)
     : [];
   // ล็อกยี่ห้อแบบช่องของช่าง (strict: ของนอกสโตร์ก็ไม่ได้) — แถวแดง "เอาออกก่อนส่ง" กันปุ่ม กติกาเดียวกับเซิร์ฟเวอร์ (ไม่มีแถวที่ปล่อยผ่าน)
   const inspectBrandBlock = inspecting
@@ -7448,7 +7462,8 @@ function StageModal({
                 </TextStep>
                 {/*
                   ข้อ 5 อะไหล่ที่ต้องใช้ (เจ้าของงานขอ ต.ค. 69 · ตัวอย่าง step 5) — ไม่บังคับ: บอกไม่ได้ก็เว้น หัวหน้าภาคระบุแทนเหมือนเดิม
-                  ล็อกตามไฟล์ยี่ห้อของเครื่อง (+ ของใช้ร่วม Other) · เครื่องที่ยังไม่รู้ยี่ห้อกดยี่ห้อก่อน · ใบไม่มีเครื่องเลือกไม่ได้ (D15)
+                  ล็อกตามไฟล์ยี่ห้อของเครื่อง (+ ของใช้ร่วม Other + อะไหล่นอกเครื่อง) · เครื่องที่ยังไม่รู้ยี่ห้อกดยี่ห้อก่อน (อะไหล่นอกเครื่องเลือกได้เลย)
+                  ใบไม่มีเครื่องเลือกได้เฉพาะอะไหล่นอกเครื่อง (4 พ.ย. 69 — เดิมล็อกทั้งช่อง D15)
                   ไม่ใช่ Modal ซ้อน — ช่องค้นและปุ่มยี่ห้ออยู่ในฟอร์มนี้เลย
                 */}
                 <TextStep n={5} title="อะไหล่ที่ต้องใช้" optional done={parts.length > 0}>
@@ -7459,14 +7474,14 @@ function StageModal({
                     label={null}
                     parts={parts}
                     onChange={changeInspectParts}
-                    // เซิร์ฟเวอร์รุ่นก่อน (ไม่มี partsBrand): ใบมีเครื่องค้นแบบเดิม · ใบไม่มีเครื่องยังต้องล็อก (ข้อ 22)
+                    // เซิร์ฟเวอร์รุ่นก่อน (ไม่มี partsBrand): ใบมีเครื่องค้นแบบเดิม · ใบไม่มีเครื่องเป็นช่องอะไหล่นอกเครื่อง
                     brand={order.partsBrand ?? (inspectMachine ? null : { machine: false, make: null, file: null, machineCode: null })}
                     chosenBrand={pickedBrand}
                     onBrandChosen={changeInspectBrand}
                     strict
                     tags={inspectTags}
                     saveWhen="ตอนส่งผลตรวจ"
-                    noMachineText="ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกอะไหล่ไม่ได้ เขียนในข้อ 4 หัวหน้าภาคระบุอะไหล่แทน"
+                    noMachineText="ใบงานนี้ไม่ได้ระบุเครื่อง — เลือกได้เฉพาะอะไหล่นอกเครื่อง · อะไหล่ของเครื่องเขียนในข้อ 4 หัวหน้าภาคระบุให้"
                     noResultHints={[
                       "ตัวที่ต้องใช้ไม่มีในไฟล์นี้: เขียนชื่อไว้ในข้อ 4 หัวหน้าภาคจะตัดสินใจต่อ",
                       "ยี่ห้อในระบบไม่ตรงกับเครื่องจริง? ถ่ายป้ายเครื่องแล้วเขียนในข้อ 4 — หัวหน้าภาคแก้ยี่ห้อเครื่องให้",
@@ -12052,6 +12067,18 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.rollbackInk,
     backgroundColor: colors.rollbackSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    overflow: "hidden",
+  },
+  // สีเดียวกับป้าย "นอกเครื่อง" ในช่องเลือกอะไหล่ (PartPicker TAG_COLORS.outside)
+  cfOutsideTag: {
+    alignSelf: "flex-start",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: colors.service,
+    backgroundColor: colors.serviceSoft,
     borderRadius: radius.pill,
     paddingHorizontal: 8,
     overflow: "hidden",

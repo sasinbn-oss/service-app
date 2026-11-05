@@ -52,10 +52,21 @@ export function allowedFiles(machineFile: string): string[] {
   return machineFile === SHARED_FILE ? [SHARED_FILE] : [machineFile, SHARED_FILE];
 }
 
-/** อะไหล่ตัวนี้เลือกได้กับเครื่องไฟล์นี้ไหม — กติกาเดียวกับ brandProblem ขั้น 6 ฝั่งเซิร์ฟเวอร์ */
+/** อะไหล่ตัวนี้เลือกได้กับเครื่องไฟล์นี้ไหม — กติกาเดียวกับ brandProblem ข้อสุดท้ายฝั่งเซิร์ฟเวอร์ (ไม่มีไฟล์ = นอกเครื่อง ได้เสมอ) */
 export function fileAllows(machineFile: string, brandFiles: readonly string[]): boolean {
+  if (brandFiles.length === 0) return true;
   const ok = allowedFiles(machineFile);
   return brandFiles.some((f) => ok.includes(f));
+}
+
+/**
+ * อะไหล่นอกเครื่อง (เจ้าของงานเลือก 4 พ.ย. 69) = ของในสโตร์ที่ไม่อยู่ในไฟล์ยี่ห้อไหน — ทุกเครื่องเลือกได้ ไม่ต้องยืนยัน
+ * ไม่ต้องมีเครื่อง ไม่ต้องรู้ยี่ห้อ · คนละอย่างกับของนอกสโตร์ (offCatalog — ไม่มีรหัส หัวหน้าภาคจัดหาเอง)
+ * brandFiles ไม่มีค่า (เซิร์ฟเวอร์รุ่นก่อน) = ไม่รู้ ไม่นับเป็นนอกเครื่อง ปล่อยให้เซิร์ฟเวอร์ตัดสิน
+ */
+export const OUTSIDE_PART = "อะไหล่นอกเครื่อง";
+export function isOutsidePart(p: { offCatalog?: boolean | null; brandFiles?: readonly string[] | null }): boolean {
+  return !p.offCatalog && !!p.brandFiles && p.brandFiles.length === 0;
 }
 
 /** "อัปเดต 28 ต.ค. 69" — วันที่แบบเดียวกับตัวอย่างที่เจ้าของงานอนุมัติ (ปี พ.ศ. สองหลัก) */

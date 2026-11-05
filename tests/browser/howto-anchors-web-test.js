@@ -397,7 +397,18 @@ const WIDE = { width: 1366, height: 900 };
       await vis(p, '[data-testid="howto-order.action"] [aria-label="ระบุอะไหล่"]').first().waitFor({ timeout: 15000 }).catch(() => {});
       await vis(p, '[data-testid="howto-order.action"] [aria-label="ระบุอะไหล่"]').first().click();
       await pressHelp(p, "parts.help");
-      judge(`หัวหน้าภาค ${W} · ระบุอะไหล่ (${N1.code})`, await walk(p), "sup.parts", 5);
+      // ขั้น 2 "ใช้อะไหล่": ข้อความเดิมบอกว่า "ของที่ไม่มีในไฟล์ไหนเลย กด เพิ่มอะไหล่นอก" — ตั้งแต่ 4 พ.ย. 69 ของแบบนั้นคืออะไหล่นอกเครื่อง
+      // (มีรหัสในสโตร์ ค้นเจอ เลือกได้เลย) ทำตามข้อความเดิมได้ของนอกสโตร์ซ้ำกับรหัสในสโตร์ — อ่านข้อความจริงในกล่อง ไม่ใช่ไฟล์ .howto.ts
+      let useParts = "";
+      const readUseParts = async (n) => {
+        if (n === 2) useParts = await p.locator('[data-otteri-howto] [role="dialog"]').first().innerText().catch(() => "");
+      };
+      judge(`หัวหน้าภาค ${W} · ระบุอะไหล่ (${N1.code})`, await walk(p, { onStep: readUseParts }), "sup.parts", 5);
+      useParts.includes("อะไหล่นอกเครื่องเลือกได้ทุกเครื่อง ไม่ต้องยืนยัน") &&
+      useParts.includes("ของที่ไม่มีในสโตร์ (ค้นไม่เจอ) กด \"เพิ่มอะไหล่นอก\"") &&
+      !useParts.includes("ของที่ไม่มีในไฟล์ไหนเลย")
+        ? pass(`หัวหน้าภาค ${W} · ระบุอะไหล่ ขั้น "ใช้อะไหล่": บอกว่าอะไหล่นอกเครื่องเลือกได้เลย · "เพิ่มอะไหล่นอก" เฉพาะของที่ไม่มีในสโตร์`)
+        : fail(`หัวหน้าภาค ${W} · ระบุอะไหล่ ขั้น "ใช้อะไหล่" ยังให้ของที่ไม่อยู่ในไฟล์ไหนไปกดเพิ่มอะไหล่นอก: ${useParts.replace(/\s+/g, " ").slice(0, 300)}`);
 
       // ระบุอะไหล่จากหน้าสอนการใช้งาน — งานของฉันวันนี้เปิดใบรอระบุอะไหล่ใบแรกให้ แล้วหน้าใบงานเปิดฟอร์มต่อ: ไม่เขียนอะไรเลย
       await fresh(s);
