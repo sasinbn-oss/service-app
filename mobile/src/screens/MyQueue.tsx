@@ -41,6 +41,7 @@ import { CutoffBanners, ScheduleChip, UrgentAnswerModal, UrgentReleaseModal } fr
 import { dayTime } from "../components/claims/ClaimTrail";
 import { takeFlash, type QueueFlash } from "../utils/flash";
 import { howtoTarget, useHowToAction, useHowToContext } from "../utils/howto";
+import { PAY_GO_LABEL, PayFollowLine, payDaysText } from "../components/PaymentWait";
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
@@ -60,6 +61,11 @@ import {
 const STALE_DAYS = 3;
 
 const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+/**
+ * วันที่ค้างของการ์ด — ใบรอลูกค้าจ่ายเงินใช้ตัวเลขของเซิร์ฟเวอร์ (payWait.days · เจ้าของงานเลือก 5 พ.ย. 69)
+ * การ์ด ตัวเลข "ค้างเกิน 3 วัน" ด้านบน และลำดับในกลุ่มจะได้พูดตัวเลขเดียวกับป้าย "รอมาแล้ว N วัน" บนหน้าใบงาน
+ */
+const rowDays = (r: WorkOrderRow) => (r.payWait ? r.payWait.days : daysSince(r.stageSince));
 
 /** "แอดมิน · เบิกอะไหล่ (คลัง 94)" → "เบิกอะไหล่ (คลัง 94)" — ตำแหน่งรู้อยู่แล้วว่าเป็นของตัวเอง */
 const stageName = (label: string) => label.split(" · ").slice(1).join(" · ") || label;
@@ -230,7 +236,13 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         by.set(k, [...(by.get(k) ?? []), r]);
       }
     }
-    const score = (r: WorkOrderRow) => (r.priority === "URGENT" ? 1e6 : 0) + daysSince(r.stageSince);
+    const score = (r: WorkOrderRow) => (r.priority === "URGENT" ? 1e6 : 0) + rowDays(r);
+    /**
+     * กลุ่ม "รอลูกค้าจ่ายเงิน" เรียงตามวันที่รอ นานสุดก่อน ไม่ดูด่วน (ตัวอย่างกล่องงานที่ตกลง 5 พ.ย. 69) — ใบด่วนที่เพิ่งส่งราคา
+     * ไม่ได้ต้องตามก่อนใบที่ลูกค้าเงียบมาสัปดาห์หนึ่ง · เท่ากันใบที่เข้าขั้นก่อนขึ้นก่อน
+     */
+    const payGroup = (list: WorkOrderRow[]) => list.length > 0 && list.every((r) => r.payWait);
+    const byWait = (a: WorkOrderRow, b: WorkOrderRow) => b.payWait!.days - a.payWait!.days || a.payWait!.since.localeCompare(b.payWait!.since);
     // คำขอตรวจสอบเรียงส่งก่อนขึ้นก่อน — ไม่ใช่ตามวันค้างขั้น (ขั้นตอนไม่ได้เปลี่ยนตอนส่ง)
     const sent = (r: WorkOrderRow) => new Date(r.adminReview?.at ?? r.stageSince).getTime();
     /**
@@ -247,6 +259,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         .map(([label, g]) => ({
           label,
           kind: g.kind,
+          pay: false,
           hint: hintOf(g.kind),
           // คำขอนัดด่วนเรียงตามตัวสร้างหัวข้อ (วันที่ขอ → เวลาที่ขอ: ร้านที่รอวันนี้อยู่บนสุด) ไม่ใช่ลำดับที่รายการส่งมา
           // (เซิร์ฟเวอร์เรียงด่วน → เปิดก่อน ใบเก่าที่ขอพรุ่งนี้จะทับใบที่ขอวันนี้) · เลยนัดเรียงตามวันนัด (เลยมานานสุดก่อน)
@@ -263,7 +276,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           label,
           kind: "stage" as GroupKind,
           hint: undefined as string | undefined,
-          list: releaseGroup(list) ? list.sort(byAppt) : list.sort((a, b) => score(b) - score(a)),
+          list: payGroup(list) ? list.sort(byWait) : releaseGroup(list) ? list.sort(byAppt) : list.sort((a, b) => score(b) - score(a)),
+          pay: payGroup(list),
         }))
         .sort((a, b) => Math.max(...b.list.map(score)) - Math.max(...a.list.map(score))),
     ];
@@ -279,12 +293,20 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
 
   // ค้นในใบที่โหลดมาแล้ว — กลุ่มที่ไม่มีใบตรงซ่อน · total = จำนวนในกลุ่มก่อนค้น (บอก "2 จาก 75")
   const q = query.trim().toLowerCase();
+  /**
+   * กลุ่มรอลูกค้าจ่ายเงิน: ปุ่ม "เกิน 3 วัน n ใบ" ที่หัวกลุ่ม กดแล้วเหลือเฉพาะใบที่ควรตามลูกค้า (เจ้าของงานเลือก 5 พ.ย. 69)
+   * อยู่ที่หัวกลุ่มแบบช่องค้นหา (กรองในเครื่อง) ไม่ใช่หน้าใหม่ — ตัวเลขสรุปด้านบนยังนับทั้งหมด
+   */
+  const [payLateOnly, setPayLateOnly] = useState(false);
   const shown = useMemo(
     () =>
       groups
-        .map((g) => ({ ...g, total: g.list.length, list: q ? g.list.filter((r) => haystack(r).includes(q)) : g.list }))
-        .filter((g) => g.list.length > 0),
-    [groups, q]
+        .map((g) => {
+          const mine = g.pay && payLateOnly ? g.list.filter((r) => r.payWait?.over) : g.list;
+          return { ...g, total: g.list.length, late: g.pay ? g.list.filter((r) => r.payWait?.over).length : 0, list: q ? mine.filter((r) => haystack(r).includes(q)) : mine };
+        })
+        .filter((g) => g.list.length > 0 || (g.pay && payLateOnly && !q)),
+    [groups, q, payLateOnly]
   );
   const found = shown.reduce((n, g) => n + g.list.length, 0);
 
@@ -319,7 +341,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
 
   const all = rows ?? [];
   const urgent = all.filter((r) => r.priority === "URGENT").length;
-  const stale = all.filter((r) => daysSince(r.stageSince) > STALE_DAYS).length;
+  const stale = all.filter((r) => rowDays(r) > STALE_DAYS).length;
   const out = all.filter((r) => (r.partsOut ?? 0) > 0).length;
   const roleLabel = user?.role === "ADMIN" ? "แอดมิน" : "หัวหน้าภาค";
   /**
@@ -495,11 +517,31 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
               >
                 <Text style={styles.groupCountText}>{g.list.length}</Text>
               </View>
-              {q ? <Text style={styles.groupOf}>จาก {g.total}</Text> : null}
+              {q || (g.pay && payLateOnly) ? <Text style={styles.groupOf}>จาก {g.total}</Text> : null}
+              {/* ติดค้างอยู่แต่ไม่เหลือใบเกินเส้นแล้ว (เพิ่งแนบบิล/ยกเลิก) ยังต้องมีปุ่มให้กดกลับไปดูทั้งหมด */}
+              {g.pay && (g.late || payLateOnly) ? (
+                <TouchableOpacity
+                  style={[styles.lateChip, payLateOnly && styles.lateChipOn]}
+                  onPress={() => setPayLateOnly((v) => !v)}
+                  accessibilityLabel={`ดูเฉพาะรอจ่ายเกิน ${g.list[0]?.payWait?.alertDays ?? ""} วัน ${g.late} ใบ`}
+                  accessibilityState={{ selected: payLateOnly }}
+                  // เว็บไม่แปลง accessibilityState เป็น aria-selected (CLAUDE.md) — เทสต์อ่านว่าปุ่มนี้ติดอยู่ไหมจากตรงนี้
+                  aria-selected={payLateOnly}
+                >
+                  <Text style={[styles.lateChipText, payLateOnly && styles.lateChipTextOn]}>
+                    เกิน {(g.list[0] ?? groups.find((x) => x.pay)?.list[0])?.payWait?.alertDays} วัน {g.late} ใบ
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
             {g.hint ? <Text style={styles.groupHint}>{g.hint}</Text> : null}
+            {g.pay ? (
+              <Text style={styles.groupHint}>
+                {payLateOnly ? "เฉพาะใบที่รอเกินกำหนด — ควรตามลูกค้า · กดปุ่มแดงอีกครั้งเพื่อดูทั้งหมด" : "เรียงจากรอนานสุด · นับวันจากตอนส่งใบเสนอราคา"}
+              </Text>
+            ) : null}
             {g.list.map((r) => {
-              const d = daysSince(r.stageSince);
+              const d = rowDays(r);
               const hot = r.priority === "URGENT";
               /**
                * การ์ดในหัวข้อปักของแอดมิน: "ขอนัดด่วน" บอกใครขอ (+ เบอร์) เมื่อไร · วันที่ร้านต้องการ · ข้อความ — แอดมินตัดสินใจได้จากการ์ด
@@ -509,7 +551,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
               const askLines = cutKind === "ask" ? askRowLines(r, now) : null;
               const day = r.scheduledAt?.slice(0, 10);
               return (
-                <View key={r.id} style={[styles.card, hot && styles.cardHot]}>
+                <View key={r.id} style={[styles.card, hot && styles.cardHot, r.payWait?.over && styles.cardPayLate]}>
                   <View style={styles.cardTop}>
                     <Hi text={r.code} q={q} style={[styles.code, headingFont]} />
                     {hot ? (
@@ -534,8 +576,9 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
                     <AdminReviewTag review={r.adminReview} />
                     <View style={{ flex: 1 }} />
-                    <Text style={[styles.wait, d > STALE_DAYS && styles.waitLate]}>
-                      {d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}
+                    <Text style={[styles.wait, (r.payWait ? r.payWait.over : d > STALE_DAYS) && styles.waitLate]}>
+                      {/* รอลูกค้าจ่ายเงิน: "รอมาแล้ว N วัน" (ตัวเลขของเซิร์ฟเวอร์ · แดงเมื่อเกินเส้นของเซิร์ฟเวอร์) */}
+                      {r.payWait ? payDaysText(r.payWait) : d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`}
                       {/* รายการของช่างรอคอนเฟิร์ม — ส่งมาเมื่อไร (ตัวอย่าง si.sentAt) หัวหน้าภาคเรียงงานเองได้ */}
                       {r.partsPick ? ` · ส่งมา ${dayTime(r.partsPick.sentAt)}` : ""}
                     </Text>
@@ -605,6 +648,8 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
                     />
                   )}
                   {r.orphan && r.orphanReason ? <Text style={styles.note}>{r.orphanReason}</Text> : null}
+                  {/* ตามลูกค้าล่าสุด "4 พ.ย. · ลูกค้าบอกโอนวันศุกร์" หรือ "ยังไม่เคยตาม" สีแดง — รู้ว่าใบไหนต้องโทรโดยไม่ต้องเปิดใบ */}
+                  {r.payWait ? <PayFollowLine p={r.payWait} /> : null}
                   {r.adminReview ? <AdminReviewBox review={r.adminReview} viewer={isAdmin ? "admin" : "supervisor"} /> : null}
                   {/*
                     กรอบห่อให้วิธีใช้ชี้ "ปุ่มของขั้นนี้" — เฉพาะการ์ดในกลุ่มตามขั้น การ์ดปักมีปุ่มอื่น (แก้เป็นงานด่วน · ตอบกลับ)
@@ -814,15 +859,17 @@ function CardActions({
     );
   }
 
+  // รอลูกค้าจ่ายเงิน: ชื่อขั้นคือสิ่งที่รอ ไม่ใช่สิ่งที่กด — ปุ่มบอกว่ากดเมื่อไร (ชื่อเดียวกับปุ่มหลักในหน้าใบงาน)
+  const goLabel = r.status === "AWAITING_PAYMENT" ? PAY_GO_LABEL : stageLabel;
   const go = (
     <TouchableOpacity
       style={!wide && !isAdmin ? styles.goFull : styles.goBtn}
       onPress={() => onOpen(r.id, r.status === "IN_PROGRESS" ? "close" : "stage")}
-      accessibilityLabel={`ทำขั้น ${stageLabel} ${r.code}`}
+      accessibilityLabel={`ทำขั้น ${goLabel} ${r.code}`}
     >
       <Ionicons name="arrow-forward-circle" size={18} color="#fff" />
       <Text style={styles.goText} numberOfLines={1}>
-        {stageLabel}
+        {goLabel}
       </Text>
     </TouchableOpacity>
   );
@@ -1108,6 +1155,12 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   cardHot: { borderColor: colors.dangerLine },
+  // รอลูกค้าจ่ายเกินเส้น — การ์ดแดงจาง (ตัวอย่างกล่องงาน) ใบที่ควรตามลูกค้าเห็นจากสีโดยไม่ต้องอ่านเลข
+  cardPayLate: { borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft },
+  lateChip: { borderRadius: 999, paddingHorizontal: 10, minHeight: 28, justifyContent: "center", borderWidth: 1, borderColor: colors.dangerFill, backgroundColor: colors.card },
+  lateChipOn: { backgroundColor: colors.dangerFill },
+  lateChipText: { fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.dangerInk },
+  lateChipTextOn: { color: "#fff" },
   releaseChip: { marginTop: 2 },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   code: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.primaryInk },

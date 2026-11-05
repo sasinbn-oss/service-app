@@ -272,7 +272,13 @@ export const WORK_ORDER_STATUS_LABELS: Record<string, string> = {
   PARTS_PICKUP: "หัวหน้าภาค · เบิกอะไหล่ (คลังอื่น)",
   PARTS_SOURCING: "แอดมิน · เช็คอะไหล่ (มี/หมด)",
   AWAITING_QUOTE: "แอดมิน · ส่งใบเสนอราคา",
-  AWAITING_PAYMENT: "แอดมิน · แนบบิลรับเงิน",
+  /**
+   * ไม่ใช่ "ใคร · ทำอะไร" แบบขั้นอื่น โดยตั้งใจ (เจ้าของงานเลือก 5 พ.ย. 69) — ลูกบอลอยู่ที่ลูกค้า แอดมินแค่แนบบิลตอนเงินเข้า
+   * เดิม "แอดมิน · แนบบิลรับเงิน" อ่านแล้วเหมือนงานค้างของแอดมิน ไม่บอกว่าส่งใบเสนอราคาไปแล้วกำลังรอลูกค้า
+   * คนทำยังเป็นแอดมิน (WORK_ORDER_STAGE_ACTOR · ใบอยู่ในกล่องงานแอดมิน) — แถบขั้นตอนบอกที่ STAGE_ACTOR_LINE
+   * ไม่มี " · " ในป้าย ชื่อการกระทำ (WORK_ORDER_STAGE_ACTIONS) จึงเป็นคำเดียวกันทั้งก้อน
+   */
+  AWAITING_PAYMENT: "รอลูกค้าจ่ายเงิน",
   // นัดลูกค้าก่อนเบิก (ต.ค. 69) — ชื่อใหม่ตามแบบที่เจ้าของงานตกลง: หัวหน้าภาคเลือกทีม+วันเข้า
   PARTS_CHECKED: "หัวหน้าภาค · นัดวันเข้า",
   AWAITING_CONFIRM: "แอดมิน · คอนเฟิร์มลูกค้า",
@@ -309,6 +315,83 @@ export const WORK_ORDER_STAGE_DONE: Record<string, string> = {
   CLAIM_REVIEW: "ตรวจเคลมแล้ว",
   DONE: "ปิดงานแล้ว",
 };
+
+/**
+ * บรรทัดคนทำใต้ชื่อขั้นบนแถบขั้นตอน ที่ไม่ใช่ชื่อบทบาทเฉย ๆ (options.stages[].actorLabel)
+ * ขั้นรอลูกค้าจ่ายเงินรอลูกค้า แต่คนกดผ่านคือแอดมินตอนแนบบิล (ตัวอย่างที่เจ้าของงานตกลง 5 พ.ย. 69)
+ * ข้อความ 403 "ขั้นนี้เป็นของแอดมิน" ยังใช้ชื่อบทบาท (actorLabelFor) — ที่นี่แค่คำบนแถบ
+ */
+export const STAGE_ACTOR_LINE: Record<string, string> = {
+  AWAITING_PAYMENT: "ลูกค้า · แอดมินแนบบิล",
+};
+
+/**
+ * รอลูกค้าจ่ายเงินเกินกี่วันถึงขึ้นแดง "ควรตามลูกค้า" (เจ้าของงานเลือก 3 วัน — 5 พ.ย. 69)
+ * เลขนี้มีที่เดียว: รายการ/หน้าใบงานส่ง over + alertDays ไปกับใบ แอปไม่มีเลข 3 ของตัวเอง
+ */
+export const PAYMENT_WAIT_ALERT_DAYS = 3;
+
+/** วันเต็มตามเวลาไทยระหว่างสองเวลา — กติกาเดียวกับ "ค้าง N วัน" ในรายการ (stuckDays ของแอป) วันเดียวกัน = 0 */
+export function bangkokDaysBetween(from: Date, to: Date): number {
+  const day = (d: Date) => Math.floor((d.getTime() + 7 * 3600_000) / 86_400_000);
+  return day(to) - day(from);
+}
+
+/**
+ * รอลูกค้าจ่ายมากี่วัน — since = เข้าขั้นนี้เมื่อไร ตัวเดียวกับ "ค้างขั้นนี้มา N วัน" (stageSince: ประวัติล่าสุดที่เดินขั้น)
+ * ไม่นับจากประวัติ QUOTED ตรง ๆ: ใบที่ย้อนขั้นกลับมารอเงินต้องนับจากตอนกลับมา และสองตัวเลขบนจอต้องไม่ขัดกัน
+ */
+export function paymentWait(since: Date, now: Date = new Date()) {
+  const days = Math.max(0, bangkokDaysBetween(since, now));
+  return { since, days, over: days > PAYMENT_WAIT_ALERT_DAYS, alertDays: PAYMENT_WAIT_ALERT_DAYS };
+}
+
+/**
+ * เหตุผล "ลูกค้าไม่ซ่อม" ที่ขั้นรอลูกค้าจ่ายเงิน (ชิปตามตัวอย่างที่เจ้าของงานตกลง 5 พ.ย. 69) — "อื่น ๆ" ต้องพิมพ์เหตุผล
+ * เป็นรหัสไม่ใช่ข้อความ: รายงานนับแยกตามเหตุผลได้ (ข้อความที่พิมพ์เองนับรวมกันไม่ได้)
+ */
+export const QUOTE_DECLINE_REASONS: Record<string, string> = {
+  PRICE: "ราคาสูงไป",
+  SELF_FIX: "ซ่อมเอง / หาช่างอื่น",
+  RETIRED: "เลิกใช้เครื่องนี้",
+  UNREACHABLE: "ติดต่อลูกค้าไม่ได้",
+  OTHER: "อื่น ๆ",
+};
+
+/**
+ * เหตุผลยกเลิกใบงาน — เก็บเป็นรหัสใน meta ของประวัติ CANCELLED (reasonCode · declineReason) รายงานนับได้โดยไม่ต้องแกะข้อความ
+ * QUOTE_DECLINED มาจากปุ่ม "ลูกค้าไม่ซ่อม" ขั้นรอลูกค้าจ่ายเงินเท่านั้น — ปุ่ม "ยกเลิกใบงาน" เลือกรหัสนี้ไม่ได้ (MANUAL_CANCEL_REASONS)
+ * ไม่งั้นใบที่ยังไม่เคยเสนอราคาจะไปนับเป็น "เสนอราคาแล้วลูกค้าไม่ซ่อม"
+ * ประวัติก่อน 5 พ.ย. 69 ไม่มี meta — เหตุผลอยู่ในข้อความอย่างเดียว (cancelInfoOf คืน null)
+ */
+export const CANCEL_REASON_LABELS: Record<string, string> = {
+  DUPLICATE: "เปิดซ้ำ",
+  CUSTOMER: "ลูกค้ายกเลิก",
+  WRONG: "เปิดผิดสาขา/ผิดเครื่อง",
+  OTHER: "อื่น ๆ",
+  QUOTE_DECLINED: "เสนอราคาแล้วลูกค้าไม่ซ่อม",
+};
+export const MANUAL_CANCEL_REASONS = ["DUPLICATE", "CUSTOMER", "WRONG", "OTHER"] as const;
+
+/** ยกเลิกเพราะอะไร จาก meta ของประวัติ CANCELLED ล่าสุด — หน้าใบงาน รายงานตามผู้เปิด และรายงานทั้งระบบอ่านตัวเดียวกัน */
+export function cancelInfoOf(meta: unknown): { code: string; label: string; declineReason: string | null; declineLabel: string | null } | null {
+  const m = (meta ?? {}) as { reasonCode?: unknown; declineReason?: unknown };
+  if (typeof m.reasonCode !== "string" || !CANCEL_REASON_LABELS[m.reasonCode]) return null;
+  const decline = typeof m.declineReason === "string" && QUOTE_DECLINE_REASONS[m.declineReason] ? m.declineReason : null;
+  return {
+    code: m.reasonCode,
+    label: CANCEL_REASON_LABELS[m.reasonCode],
+    declineReason: decline,
+    declineLabel: decline ? QUOTE_DECLINE_REASONS[decline] : null,
+  };
+}
+
+/** "ยกเลิก · เสนอราคาแล้วลูกค้าไม่ซ่อม (ราคาสูงไป)" — ช่องสถานะของใบที่ยกเลิกในไฟล์รายงาน · ไม่รู้เหตุผล (ประวัติเก่า) = "ยกเลิก" */
+export function cancelStatusText(meta: unknown): string {
+  const c = cancelInfoOf(meta);
+  if (!c) return WORK_ORDER_STATUS_LABELS.CANCELLED;
+  return `${WORK_ORDER_STATUS_LABELS.CANCELLED} · ${c.label}${c.declineLabel ? ` (${c.declineLabel})` : ""}`;
+}
 
 /** ลำดับของขั้น ใช้ตัดสินว่าใบงานเดินหน้าหรือถอยหลัง */
 export const WORK_ORDER_STAGE_ORDER = [
@@ -650,6 +733,9 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   QUOTED: "ส่งใบเสนอราคาให้ลูกค้า",
   QUOTE_SKIPPED: "ข้ามขั้นเสนอราคา",
   PAID: "ลูกค้าจ่ายเงินแล้ว",
+  // แอดมินตามลูกค้าเรื่องจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — ไม่เดินขั้น (ดู NON_STAGE_ACTIONS และ NOT_A_MOVE ของแอป)
+  // ถ้านับเป็นการเดินขั้น "รอมาแล้ว N วัน" กับ "ค้างขั้นนี้มา N วัน" จะเริ่มนับใหม่ทุกครั้งที่ตาม ใบที่รอนานจะดูเหมือนเพิ่งเข้ามา
+  PAYMENT_FOLLOWUP: "ตามลูกค้าเรื่องจ่ายเงิน",
   ASSIGNED: "จ่ายงานให้ช่าง",
   // ประวัติเก่าก่อน ต.ค. 69 — ลำดับปัจจุบันไม่มีขั้นนัดแยกแล้ว (วันมากับการจ่ายงาน)
   SCHEDULED: "นัดลูกค้า",

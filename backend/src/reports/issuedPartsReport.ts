@@ -87,7 +87,11 @@ export interface IssuedReport {
   rows: IssuedRow[];
 }
 
-const openIssued = (p: { inStock: boolean | null; requisitionNo: string | null; transferReqNo: string | null }) =>
+/**
+ * ของชิ้นนี้ออกจากคลังแล้ว — ใช้ทั้งรายงานนี้และคำเตือนตอน "ลูกค้าไม่ซ่อม" (ยกเลิกใบที่มีของออกไปแล้ว = ต้องคืนคลัง)
+ * กติกาเดียว: รายงานไม่นับใบยกเลิก เพราะของต้องกลับคลัง · คำเตือนต้องเห็นชิ้นชุดเดียวกับที่รายงานจะหยุดนับ
+ */
+export const openIssued = (p: { inStock: boolean | null; requisitionNo: string | null; transferReqNo: string | null }) =>
   (p.inStock === true && !!p.requisitionNo) || !!p.transferReqNo;
 
 export async function buildIssuedReport(opts: { scope: Prisma.WorkOrderWhereInput | null; scopeLabel: string }): Promise<IssuedReport> {

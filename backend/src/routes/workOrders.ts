@@ -60,7 +60,7 @@ import { getZipTicket, saveZipTicket, zipTicketPath } from "../documents/claimZi
 import { bkkDayStart, buildOpenerReport, openerReportWorkbook } from "../reports/openerReport";
 import { areaTeamWorkbook } from "../reports/areaTeamReport";
 import { buildPartsOutReport, partsOutWorkbook, PARTS_OUT_REPORT_STAGES } from "../reports/partsOutReport";
-import { buildIssuedReport, issuedWorkbook } from "../reports/issuedPartsReport";
+import { buildIssuedReport, issuedWorkbook, openIssued } from "../reports/issuedPartsReport";
 import {
   BRANCH_PARTS_FORBIDDEN,
   buildBranchPartsCounts,
@@ -237,6 +237,11 @@ import {
   RESCHEDULE_STAY_STAGES,
   RESCHEDULE_RECALL_STAGES,
   TECH_ROLES,
+  STAGE_ACTOR_LINE,
+  paymentWait,
+  QUOTE_DECLINE_REASONS,
+  CANCEL_REASON_LABELS,
+  MANUAL_CANCEL_REASONS,
 } from "../utils/constants";
 
 const router = Router();
@@ -1403,6 +1408,12 @@ const NON_STAGE_ACTIONS = [
    */
   "TRASHED",
   "RESTORED",
+  /**
+   * แอดมินตามลูกค้าเรื่องจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — ใบยังรอลูกค้าอยู่ขั้นเดิม
+   * ถ้านับเป็นการเดินขั้น "รอมาแล้ว N วัน" เริ่มใหม่ทุกครั้งที่ตาม ใบที่ค้างนานสุดจะหล่นไปท้ายกลุ่มและหลุดจากแดง "เกิน 3 วัน"
+   * ทั้งที่ลูกค้ายังไม่จ่าย — การตามคือสิ่งที่ทำระหว่างรอ ไม่ใช่ความคืบหน้าของใบ
+   */
+  "PAYMENT_FOLLOWUP",
 ];
 
 /**
@@ -2253,6 +2264,24 @@ function inboxFilter(
  */
 const OVERDUE_SUPERVISOR_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"];
 
+/**
+ * แถวรอลูกค้าจ่ายเงินในรายการ — นับการตามเฉพาะรอบรอเงินนี้ (หลังเข้าขั้นครั้งล่าสุด) ใบที่ย้อนไปเสนอราคาใหม่แล้วกลับมา
+ * ไม่เอาการตามของรอบก่อนมาบอกว่า "ตามแล้ว" · follows = การตามของใบนี้ เรียงใหม่ก่อนเก่า
+ */
+type FollowRow = { createdAt: Date; note: string | null; user: { name: string } | null };
+function payFollowUps<T extends FollowRow>(since: Date, follows: T[]) {
+  return follows.filter((f) => f.createdAt >= since);
+}
+function payWaitRow(since: Date, follows: FollowRow[], now: Date) {
+  const mine = payFollowUps(since, follows);
+  const last = mine[0];
+  return {
+    ...paymentWait(since, now),
+    follows: mine.length,
+    last: last ? { at: last.createdAt, note: last.note, byName: last.user?.name ?? null } : null,
+  };
+}
+
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -2300,7 +2329,9 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     admin || req.auth!.role === "SUPERVISOR"
       ? rows.filter((r) => SCHEDULE_STAGES.includes(r.status) && !r.isTest).map((r) => r.id)
       : [];
-  const [lastMoves, confirms, rollbacks, settles, asks] = await Promise.all([
+  // ใบรอลูกค้าจ่ายเงิน — การตามลูกค้าของแต่ละใบ (การ์ดในกล่องงาน/รายการบอก "ตามล่าสุด" หรือ "ยังไม่เคยตาม")
+  const payIds = rows.filter((r) => r.status === "AWAITING_PAYMENT").map((r) => r.id);
+  const [lastMoves, confirms, rollbacks, settles, asks, follows] = await Promise.all([
     ids.length
       ? prisma.workOrderLog.groupBy({
           by: ["workOrderId"],
@@ -2340,6 +2371,13 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
         })
       : Promise.resolve([]),
     pendingAsks(bangkokDay(now), askIds),
+    payIds.length
+      ? prisma.workOrderLog.findMany({
+          where: { workOrderId: { in: payIds }, action: "PAYMENT_FOLLOWUP" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: { workOrderId: true, createdAt: true, note: true, user: { select: { name: true } } },
+        })
+      : Promise.resolve([]),
   ]);
   const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
   const lastSettle = new Map(settles.map((c) => [c.workOrderId, c.action]));
@@ -2380,6 +2418,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       rescheduled: isRescheduled(w.status, lastSettle.get(w.id)),
       // ขั้นที่ย้อนมา (ไม่ได้ย้อน = null) — รายการติดป้าย ↩ ย้อนขั้น
       rolledBackFrom: rolledBackFrom.get(w.id)?.fromLabel ?? null,
+      // รอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — รอมากี่วัน เกินเส้นไหม ตามล่าสุดเมื่อไร · ขั้นอื่น = null
+      payWait: w.status === "AWAITING_PAYMENT" ? payWaitRow(stageSince.get(w.id) ?? w.createdAt, follows.filter((f) => f.workOrderId === w.id), now) : null,
     })),
     counts: {
       ...byStatus,
@@ -3196,8 +3236,11 @@ router.get("/options", requireAuth, async (req: AuthRequest, res) => {
       action: WORK_ORDER_STAGE_ACTIONS[v] ?? WORK_ORDER_STATUS_LABELS[v],
       doneLabel: WORK_ORDER_STAGE_DONE[v] ?? WORK_ORDER_STATUS_LABELS[v],
       actor: WORK_ORDER_STAGE_ACTOR[v] ?? null,
-      actorLabel: actorLabelFor(v),
+      // ขั้นรอลูกค้าจ่ายเงิน: "ลูกค้า · แอดมินแนบบิล" (ตัวอย่างที่ตกลง 5 พ.ย. 69) — ขั้นอื่นชื่อบทบาทตามเดิม
+      actorLabel: STAGE_ACTOR_LINE[v] ?? actorLabelFor(v),
     })),
+    // เหตุผล "ลูกค้าไม่ซ่อม" (ขั้นรอลูกค้าจ่ายเงิน) — ชิปในการ์ดขั้น · ตัวสุดท้าย "อื่น ๆ" ต้องพิมพ์เหตุผลเอง
+    quoteDeclineReasons: Object.entries(QUOTE_DECLINE_REASONS).map(([value, label]) => ({ value, label })),
     // ขั้นที่แอดมินกด "เลื่อนวันนัด" ได้ — ตัดสินที่นี่ที่เดียว แอปเช็คบทบาท/วันนัดเองอีกชั้น (ดู RESCHEDULE_STAGES)
     rescheduleStages: RESCHEDULE_STAGES,
     // เหตุผล "ปิดเคลม ไม่ส่งผู้ขาย" ทีละชิ้น (หน้าตรวจเคลม) — ตัวสุดท้าย "อื่น ๆ" ต้องพิมพ์เหตุผลเอง
@@ -3817,6 +3860,7 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedMod
   const partsPick = partsPickShape(row, logs);
   return {
     ...base,
+    payWait: row.status === "AWAITING_PAYMENT" ? payWaitDetail(row, logs, now) : null,
     // ป้ายคิดซ้ำพร้อมประวัติ (ด่านที่สองของรอบที่เปิด) — shape() คิดจากแถวรอบอย่างเดียว
     statusLabel: statusLabelOf(row.status, partsPick),
     partsPick,
@@ -3865,6 +3909,32 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedMod
       byRole: l.user?.role ?? null,
       createdAt: l.createdAt,
     })),
+  };
+}
+
+/**
+ * การ์ดขั้นรอลูกค้าจ่ายเงินบนหน้าใบงาน (เจ้าของงานเลือก 5 พ.ย. 69) — คิดจากประวัติที่โหลดมาแล้ว ไม่ถามฐานข้อมูลเพิ่ม
+ * since = ประวัติล่าสุดที่เดินขั้น (logs เรียงใหม่ก่อนเก่า) กติกาเดียวกับ stageSince ของรายการ — รายการกับหน้าใบงานนับวันตรงกัน
+ * quoted = ส่งใบเสนอราคาครั้งล่าสุด (ใคร เมื่อไร) · issued = ของที่ออกจากคลังแล้ว (openIssued — กติกาเดียวกับรายงานเบิกแล้ว)
+ * ฟอร์ม "ลูกค้าไม่ซ่อม" เตือนว่าต้องคืนคลัง เพราะยกเลิกไม่ลบอะไหล่ออกจากใบ (เลขใบเบิกยังอยู่ให้คลังรับคืน)
+ */
+function payWaitDetail(row: Detail["row"], logs: Detail["logs"], now: Date) {
+  const since = logs.find((l) => !NON_STAGE_ACTIONS.includes(l.action))?.createdAt ?? row.createdAt;
+  const quoted = logs.find((l) => l.action === "QUOTED");
+  const follows = payFollowUps(
+    since,
+    logs.filter((l) => l.action === "PAYMENT_FOLLOWUP")
+  );
+  return {
+    ...paymentWait(since, now),
+    quoted: quoted ? { at: quoted.createdAt, byName: quoted.user?.name ?? null } : null,
+    followUps: follows.map((f) => ({ id: f.id, at: f.createdAt, note: f.note, byName: f.user?.name ?? null })),
+    issued: row.parts
+      .filter((p) => p.kind === "WAITING" && openIssued(p))
+      .map((p) => ({
+        name: p.sparePart.offCatalog ? p.sparePart.name : `${p.sparePart.partCode} ${p.sparePart.name}`,
+        ref: p.inStock === true && p.requisitionNo ? `ใบเบิก ${p.requisitionNo}` : `เบิกเพื่อโอน ${p.transferReqNo}`,
+      })),
   };
 }
 
@@ -11361,16 +11431,49 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
  * เดิมใครที่ล็อกอินก็ยกเลิกใบไหนก็ได้และไม่ต้องบอกเหตุผล (ตรวจระบบ ต.ค. 69) — ช่างคนเดียวยกเลิกได้ทั้งบริษัท
  * เหตุผลเป็นตัวเลือก + ข้อความ: ตัวเลือกให้นับได้ว่ายกเลิกเพราะอะไรบ่อย ข้อความให้รู้ว่าซ้ำกับใบไหน
  */
-const CANCEL_REASON_LABELS: Record<string, string> = {
-  DUPLICATE: "เปิดซ้ำ",
-  CUSTOMER: "ลูกค้ายกเลิก",
-  WRONG: "เปิดผิดสาขา/ผิดเครื่อง",
-  OTHER: "อื่น ๆ",
-};
 const cancelSchema = z.object({
-  reasonCode: z.enum(["DUPLICATE", "CUSTOMER", "WRONG", "OTHER"], { errorMap: () => ({ message: "ต้องเลือกเหตุผลที่ยกเลิก" }) }),
+  // QUOTE_DECLINED ไม่อยู่ในนี้ — มาจากปุ่ม "ลูกค้าไม่ซ่อม" ขั้นรอลูกค้าจ่ายเงินเท่านั้น (ดู CANCEL_REASON_LABELS)
+  reasonCode: z.enum(MANUAL_CANCEL_REASONS, { errorMap: () => ({ message: "ต้องเลือกเหตุผลที่ยกเลิก" }) }),
   note: z.string().trim().max(300).optional(),
 });
+
+/**
+ * ยกเลิกใบงาน — ทางเดียวของทุกปุ่มที่ยกเลิก ("ยกเลิกใบงาน" และ "ลูกค้าไม่ซ่อม" ขั้นรอลูกค้าจ่ายเงิน)
+ *
+ * ทำไมทางเดียว: ยกเลิกมีผลกับหลายที่ (กล่องงาน แผนงาน รายการเลือกอะไหล่ของช่าง รายงานเบิกแล้ว/อะไหล่ที่ไปแต่ละสาขา
+ * ที่ไม่นับใบยกเลิกเพราะของต้องกลับคลัง) — ปุ่มที่ยกเลิกเองอีกทางวันหนึ่งจะลืมสักเรื่อง
+ * ไม่แตะอะไหล่ในใบ: ของที่เบิก/โอนไปแล้วเลขใบเบิกยังอยู่ให้คลังรับคืน (หน้าจอเตือนให้คืน) แบบเดียวกับก่อนมีปุ่มลูกค้าไม่ซ่อม
+ * meta เก็บรหัสเหตุผล (reasonCode · declineReason) ให้รายงานนับได้ — note เป็นข้อความให้คนอ่าน
+ * from = ขั้นที่ต้องยังอยู่ตอนเขียน (ลูกค้าไม่ซ่อม: ต้องยังรอลูกค้าจ่าย — แอดมินอีกคนเพิ่งแนบบิลไปก่อน = false ไม่ยกเลิกทับ)
+ *        ไม่ส่ง = แบบเดิมของปุ่มยกเลิก (ผู้เรียกเช็คแล้วว่าใบยังไม่ปิด)
+ */
+async function cancelWorkOrder(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  id: number,
+  userId: number,
+  why: { reasonCode: string; note?: string | null; declineReason?: string | null },
+  from?: string
+): Promise<boolean> {
+  if (from) {
+    const moved = await tx.workOrder.updateMany({ where: { id, status: from, deletedAt: null }, data: { status: "CANCELLED" } });
+    if (moved.count === 0) return false;
+  } else {
+    await tx.workOrder.update({ where: { id }, data: { status: "CANCELLED" } });
+  }
+  // รายการอะไหล่ของช่างที่ค้างรอคอนเฟิร์ม/ถูกตีกลับจบไปกับใบ — ไม่ถือว่ารอใครอีก
+  await voidOpenPick(tx, id, "ยกเลิกใบงาน");
+  const reason = why.declineReason ? ` · ${QUOTE_DECLINE_REASONS[why.declineReason]}` : "";
+  await writeLog(
+    tx,
+    id,
+    userId,
+    "CANCELLED",
+    "CANCELLED",
+    `${CANCEL_REASON_LABELS[why.reasonCode]}${reason}${why.note ? ` — ${why.note}` : ""}`,
+    { reasonCode: why.reasonCode, ...(why.declineReason ? { declineReason: why.declineReason } : {}) }
+  );
+  return true;
+}
 
 
 // ── ส่งกลับให้แอดมินตรวจสอบ (เจ้าของงานขอ ต.ค. 69 · ตามตัวอย่างที่ตกลง) ─────────────
@@ -11534,19 +11637,59 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
   }
 
   await prisma.$transaction(async (tx) => {
-    await tx.workOrder.update({ where: { id }, data: { status: "CANCELLED" } });
-    // รายการอะไหล่ของช่างที่ค้างรอคอนเฟิร์ม/ถูกตีกลับจบไปกับใบ — ไม่ถือว่ารอใครอีก
-    await voidOpenPick(tx, id, "ยกเลิกใบงาน");
-    await writeLog(
-      tx,
-      id,
-      req.auth!.userId,
-      "CANCELLED",
-      "CANCELLED",
-      `${CANCEL_REASON_LABELS[reasonCode]}${note ? ` — ${note}` : ""}`
-    );
+    await cancelWorkOrder(tx, id, req.auth!.userId, { reasonCode, note });
   }, STAGE_TX);
 
+  res.json(await detailFor(id));
+});
+
+/**
+ * ตามลูกค้าเรื่องจ่ายเงินแล้ว (เจ้าของงานเลือก 5 พ.ย. 69) — จดว่าใคร เมื่อไร หมายเหตุ (ไม่บังคับ) ลงประวัติใบงาน
+ * ไม่เดินขั้น (NON_STAGE_ACTIONS) · แอดมินที่ทำขั้นนี้ได้เท่านั้น (guardStage — คนอื่น 403 · ขั้นอื่น 409)
+ * เขียนแบบมีเงื่อนไขในคำสั่งเดียว: แอดมินอีกคนแนบบิล/ยกเลิกไประหว่างนั้น ไม่มีแถว "ตามลูกค้า" ค้างในใบที่ไม่ได้รอเงินแล้ว
+ */
+const payFollowUpSchema = z.object({
+  note: z.string({ invalid_type_error: "หมายเหตุต้องเป็นข้อความ" }).trim().max(300, "หมายเหตุยาวได้ไม่เกิน 300 ตัวอักษร").optional().nullable(),
+});
+router.post("/:id/payment-followup", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = payFollowUpSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (!(await guardStage(req, res, id, "AWAITING_PAYMENT"))) return;
+  const at = new Date().toISOString();
+  const wrote = await prisma.$executeRaw`
+    INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
+    SELECT "id", ${req.auth!.userId}, 'PAYMENT_FOLLOWUP', 'AWAITING_PAYMENT', CAST(${parsed.data.note || null} AS text), CAST(${at} AS timestamp(3))
+    FROM "WorkOrder" WHERE "id" = ${id} AND "status" = 'AWAITING_PAYMENT' AND "deletedAt" IS NULL`;
+  if (wrote === 0) return stageMoved(res);
+  res.json(await detailFor(id));
+});
+
+/**
+ * ลูกค้าไม่ซ่อม (เจ้าของงานเลือก 5 พ.ย. 69) — เสนอราคาแล้วลูกค้าไม่เอา: ยกเลิกใบด้วยทางเดียวกับปุ่มยกเลิกใบงาน (cancelWorkOrder)
+ * ต้องเลือกเหตุผล (QUOTE_DECLINE_REASONS) · "อื่น ๆ" ต้องพิมพ์ · เก็บเป็นรหัสให้รายงานนับ "เสนอราคาแล้วลูกค้าไม่ซ่อม" ได้
+ * เฉพาะขั้นรอลูกค้าจ่ายเงิน และแอดมินที่ทำขั้นนี้ได้ (หัวหน้าภาค/ช่าง 403 — ขั้นอื่นใช้ "ยกเลิกใบงาน" ตามเดิม)
+ */
+const quoteDeclineSchema = z.object({
+  reason: z.enum(Object.keys(QUOTE_DECLINE_REASONS) as [string, ...string[]], {
+    errorMap: () => ({ message: "เลือกเหตุผลที่ลูกค้าไม่ซ่อม" }),
+  }),
+  note: z.string({ invalid_type_error: "เหตุผลต้องเป็นข้อความ" }).trim().max(300, "เหตุผลยาวได้ไม่เกิน 300 ตัวอักษร").optional().nullable(),
+});
+router.post("/:id/quote-declined", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = quoteDeclineSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const note = parsed.data.note || null;
+  if (parsed.data.reason === "OTHER" && !note) return res.status(400).json({ error: "เลือก “อื่น ๆ” ต้องพิมพ์เหตุผลด้วย" });
+  if (!(await guardStage(req, res, id, "AWAITING_PAYMENT"))) return;
+  const done = await prisma.$transaction(
+    (tx) => cancelWorkOrder(tx, id, req.auth!.userId, { reasonCode: "QUOTE_DECLINED", declineReason: parsed.data.reason, note }, "AWAITING_PAYMENT"),
+    STAGE_TX
+  );
+  if (!done) return stageMoved(res);
   res.json(await detailFor(id));
 });
 

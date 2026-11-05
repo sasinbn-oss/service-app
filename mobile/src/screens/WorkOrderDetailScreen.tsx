@@ -26,6 +26,7 @@ import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import CancelOrderModal from "../components/CancelOrderModal";
+import { PAY_GO_LABEL, PaymentWaitBox, PayWaitButtons, PayWaitForms, payChipText, type DeclineReason, type PayWaitDetail } from "../components/PaymentWait";
 import TrashOrderModal from "../components/TrashOrderModal";
 import TrashedOrderNote, { trashedInfoOf, type TrashedInfo } from "../components/TrashedOrderNote";
 import { workOrderCode } from "../navigation/linking";
@@ -340,6 +341,8 @@ interface WorkOrder {
   /** งานนี้ต้องเสนอราคาลูกค้าก่อนไหม (สาขาแฟรนไชส์ + ใช้อะไหล่ + หมดประกัน) */
   needsQuote: boolean;
   hasQuote: boolean;
+  /** ขั้นรอลูกค้าจ่ายเงิน — รอมากี่วัน ส่งใบเสนอราคาเมื่อไร การตามลูกค้า (เซิร์ฟเวอร์คิด) · ขั้นอื่น/เซิร์ฟเวอร์รุ่นเก่า = ว่าง */
+  payWait?: PayWaitDetail | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของที่หมดจะเข้า */
   partsExpectedAt?: string | null;
   hasReceipt: boolean;
@@ -626,7 +629,8 @@ const STAGE_BUTTON: Record<string, { label: string; icon: keyof typeof Ionicons.
   // ขั้นแรกของทุกใบที่ใช้อะไหล่ — เช็คว่ามีไหม อยู่คลังไหน ยังไม่เบิก · มีครบไปเสนอราคา/นัด หมดรอของเข้า
   PARTS_SOURCING: { label: "เช็คอะไหล่ (มี/หมด)", icon: "cube-outline" },
   AWAITING_QUOTE: { label: "ส่งใบเสนอราคา", icon: "document-text-outline" },
-  AWAITING_PAYMENT: { label: "แนบบิลรับเงิน", icon: "cash-outline" },
+  // เจ้าของงานเลือก 5 พ.ย. 69 — ปุ่มเดิม (เปิดฟอร์มแนบบิล) ชื่อบอกว่ากดเมื่อไร · ชื่อขั้นเป็น "รอลูกค้าจ่ายเงิน" (ลูกบอลอยู่ที่ลูกค้า)
+  AWAITING_PAYMENT: { label: PAY_GO_LABEL, icon: "cash-outline" },
   // นัดวันเข้า → แอดมินเบิก → [หัวหน้าภาคเบิก/โอน] → แอดมินคอนเฟิร์มลูกค้า (ของพร้อม) → ปล่อยงาน (ดู WORK_ORDER_STAGE_ORDER ฝั่ง backend)
   PARTS_CHECKED: { label: "นัดวันเข้า", icon: "calendar-outline" },
   AWAITING_CONFIRM: { label: "คอนเฟิร์มลูกค้า", icon: "call-outline" },
@@ -732,6 +736,9 @@ const NOT_A_MOVE = [
   // ไม่งั้นใบที่ช่างส่งกลับแล้วถูกลบผิดแล้วกู้คืน กล่อง "ช่างแจ้งปัญหา" / "ทีมไม่ว่างวันใหม่" หายทั้งที่ยังไม่มีใครแก้
   "TRASHED",
   "RESTORED",
+  // ตามลูกค้าเรื่องจ่ายเงิน (5 พ.ย. 69) — ใบรอลูกค้าอยู่ขั้นเดิม (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  // ใบที่ย้อนกลับมารอเงินแล้วแอดมินตาม กล่องย้อนขั้น/ช่างแจ้งปัญหาต้องไม่หายเพราะการตาม
+  "PAYMENT_FOLLOWUP",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
@@ -1114,6 +1121,10 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   const [answerOpen, setAnswerOpen] = useState(false);
   const [rescheduleStages, setRescheduleStages] = useState<string[]>(RESCHEDULE_STAGES);
   const [followUpOpen, setFollowUpOpen] = useState(false);
+  /** ขั้นรอลูกค้าจ่ายเงิน: ฟอร์มที่กางในการ์ด (ตามลูกค้าแล้ว · ลูกค้าไม่ซ่อม) — กางทีละอัน · ชิปเหตุผลจาก /options */
+  const [payPanel, setPayPanel] = useState<"follow" | "decline" | null>(null);
+  const [declineReasons, setDeclineReasons] = useState<DeclineReason[]>([]);
+  const [quoteViewing, setQuoteViewing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1266,6 +1277,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           teams: Team[];
           rescheduleStages?: string[];
           machineModels?: string[];
+          quoteDeclineReasons?: DeclineReason[];
         }>("/work-orders/options"),
       ]);
       const got = accept(detail.data);
@@ -1279,6 +1291,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       setTechnicians(options.data.technicians);
       setTeams(options.data.teams ?? []);
       if (options.data.rescheduleStages) setRescheduleStages(options.data.rescheduleStages);
+      setDeclineReasons(options.data.quoteDeclineReasons ?? []);
       // ปุ่มยี่ห้อเครื่องในช่องเลือกอะไหล่/ชีตแก้ยี่ห้อใช้รายการเดียวกับฟอร์มเปิดใบงาน (เซิร์ฟเวอร์เพิ่มยี่ห้อแล้วตามทัน)
       rememberMachineModels(options.data.machineModels);
       optionsLoaded.current = true;
@@ -1823,6 +1836,13 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
 
   const tone = statusTone(order.status);
   /**
+   * ขั้นรอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — รอมากี่วัน/เกินเส้นไหมมาจากเซิร์ฟเวอร์ (payWait) ไม่คิดเอง
+   * payLate = เกิน 3 วัน: ป้ายหัวใบ ขอบการ์ดขั้น และแถวในรายการเป็นแดงพร้อมกัน
+   */
+  const payNow = order.status === "AWAITING_PAYMENT" ? order.payWait ?? null : null;
+  const payLate = !!payNow?.over;
+  const quoteFiles = files.filter((f) => f.role === "QUOTE");
+  /**
    * อะไหล่หมด — ป้ายแดงบนแถบขั้นตอนและหัวใบงาน (เจ้าของงานขอ ต.ค. 69)
    *
    * สีของคนที่ใบรอ (ม่วงแอดมิน) บอกแค่ว่ารอใคร ไม่บอกว่าติดอยู่เพราะของไม่มี —
@@ -2050,9 +2070,13 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
               <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
             </View>
           ) : (
-            <View style={[styles.statusChip, { backgroundColor: closedOk ? colors.doneSoft : tone.bg }]}>
-              <View style={[styles.statusDot, { backgroundColor: tone.fg }]} />
-              <Text style={[styles.statusChipText, { color: tone.fg }]}>{order.statusLabel}</Text>
+            // รอลูกค้าจ่ายเงิน: ป้ายบอกจำนวนวันด้วย "รอลูกค้าจ่ายเงิน · 4 วัน" · เกินเส้นเป็นแดง (ตัวอย่างที่ตกลง 5 พ.ย. 69)
+            <View
+              style={[styles.statusChip, { backgroundColor: closedOk ? colors.doneSoft : payLate ? colors.dangerSoft : tone.bg }, payLate && styles.statusChipLate]}
+              accessibilityLabel={`ป้ายสถานะ ${payChipText(order.statusLabel, payNow)}`}
+            >
+              <View style={[styles.statusDot, { backgroundColor: payLate ? colors.dangerInk : tone.fg }]} />
+              <Text style={[styles.statusChipText, { color: payLate ? colors.dangerInk : tone.fg }]}>{payChipText(order.statusLabel, payNow)}</Text>
             </View>
           )}
           {urgent ? <UrgentBadge /> : null}
@@ -2434,13 +2458,14 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       ) : null}
 
 
-      <View style={[card, styles.nowCard]} {...howtoTarget("order.now")}>
+      <View style={[card, styles.nowCard, payNow && (payLate ? styles.nowCardPayLate : styles.nowCardPay)]} {...howtoTarget("order.now")}>
         {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
         {urgent ? <UrgentGlow radius={radius.xl} /> : null}
         <View style={styles.nowHead}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.nowEyebrow, { color: done ? colors.textMuted : tone.fg }]}>
-              {done ? "สถานะใบงาน" : `ขั้นปัจจุบัน · ${order.stageActorLabel ?? "—"}`}
+              {/* รอลูกค้าจ่ายเงิน: ลูกบอลอยู่ที่ลูกค้า (แอดมินแค่แนบบิลตอนเงินเข้า) — หัวการ์ดตามตัวอย่าง "ขั้นปัจจุบัน · รอลูกค้า" */}
+              {done ? "สถานะใบงาน" : payNow ? "ขั้นปัจจุบัน · รอลูกค้า" : `ขั้นปัจจุบัน · ${order.stageActorLabel ?? "—"}`}
               {/* ขั้นของหัวหน้าภาคบอกชื่อคนด้วย — เดิมขึ้นแค่บทบาท ไม่รู้ว่าต้องตามใคร (เจ้าของงานขอ ต.ค. 69) */}
               {!done && order.stageActor === "SUPERVISOR" && order.supervisors ? (
                 order.supervisors.length ? (
@@ -2468,6 +2493,21 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
             </TouchableOpacity>
           ) : null}
         </View>
+        {/*
+          ขั้นรอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — ส่งใบเสนอราคาเมื่อไร (เปิดใบเสนอราคาได้เลย) · รอมากี่วัน · การตามลูกค้า
+          ทุกคนที่เปิดใบเห็น (หัวหน้าภาคตอบร้านได้ว่าติดที่ลูกค้า) · ฟอร์มตาม/ลูกค้าไม่ซ่อมอยู่ชิดแถวปุ่มท้ายการ์ด (PayWaitForms)
+        */}
+        {payNow ? (
+          <PaymentWaitBox
+            p={payNow}
+            quoteCount={quoteFiles.length}
+            quoteLabel={quoteFiles.length === 1 ? quoteFiles[0].fileName : `ใบเสนอราคา ${quoteFiles.length} ไฟล์`}
+            onOpenQuote={() => setQuoteViewing(true)}
+          />
+        ) : null}
+        {quoteViewing && quoteFiles.length ? (
+          <ImageViewer workOrderId={order.id} items={quoteFiles} startIndex={0} onClose={() => setQuoteViewing(false)} />
+        ) : null}
         {/*
           ตีกลับเคลม — ช่างต้องเห็นเหตุผลก่อนกดปิดงานอีกรอบ ไม่งั้นแนบของเดิมกลับไปแล้วโดนตีกลับซ้ำ
           ทุกชิ้นที่ถูกตีกลับ (ใบเดียวสองชิ้นอาจถูกตีกลับคนละเหตุผล) · ใบชิ้นเดียวขึ้นแค่เหตุผลเหมือนเดิม
@@ -2839,6 +2879,19 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           />
         ) : null}
 
+        {/* ฟอร์มที่กางจากปุ่ม "ตามลูกค้าแล้ว" / "ลูกค้าไม่ซ่อม" — ชิดแถวปุ่ม กดแล้วเห็นทันทีแม้บนมือถือ · แอดมินที่ทำขั้นนี้ได้เท่านั้น */}
+        {payNow && user && myTurn(order) && !user.viewAs ? (
+          <PayWaitForms
+            orderId={order.id}
+            p={payNow}
+            panel={payPanel}
+            onPanel={setPayPanel}
+            reasons={declineReasons}
+            onFollowed={async () => void (await load())}
+            onDeclined={() => reloadWithNotice("ลูกค้าไม่ซ่อม · ยกเลิกใบงานแล้ว")}
+          />
+        ) : null}
+
         {/* ท้ายการ์ด: ใครทำอะไรล่าสุด + ปุ่มของขั้นนี้ (ปุ่มเดียว) — ตามแบบ ปุ่มอยู่มุมขวาล่างของการ์ด */}
         <View style={[styles.nowFoot, wide && styles.nowFootWide]}>
           {lastLog ? (
@@ -2902,13 +2955,21 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     <Text style={styles.actionPrimaryText}>{order.assignedOutsource ? "บันทึกผลงาน SUB" : "ปิดงาน"}</Text>
                   </TouchableOpacity>
                 ) : (
-                  <StagePrimaryButton
-                    order={order}
-                    partsOut={partsOut.length}
-                    busy={busy}
-                    tech={user?.role === "EMPLOYEE"}
-                    onStage={() => setStageOpen(true)}
-                  />
+                  <>
+                    {/*
+                      รอลูกค้าจ่ายเงิน: ลูกค้าไม่ซ่อม · ตามลูกค้าแล้ว — จอกว้างอยู่หน้าปุ่มหลัก (ตัวอย่างที่ตกลง) · จอแคบอยู่หลัง
+                      (ปุ่มขั้นต้องอยู่บนสุด ไม่ถูกปุ่มรองดันลงไป — แบบเดียวกับเลื่อนวันนัด) · ดูในฐานะไม่มี (เซิร์ฟเวอร์กันอีกชั้น)
+                    */}
+                    {wide && payNow && !user?.viewAs ? <PayWaitButtons panel={payPanel} onPanel={setPayPanel} disabled={busy} /> : null}
+                    <StagePrimaryButton
+                      order={order}
+                      partsOut={partsOut.length}
+                      busy={busy}
+                      tech={user?.role === "EMPLOYEE"}
+                      onStage={() => setStageOpen(true)}
+                    />
+                    {!wide && payNow && !user?.viewAs ? <PayWaitButtons panel={payPanel} onPanel={setPayPanel} disabled={busy} /> : null}
+                  </>
                 )}
                 {wide ? null : rescheduleBtn}
               </View>
@@ -2951,7 +3012,9 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
               <View style={[styles.waitingCard, styles.waitingInline, rescheduleBtn ? { flex: 1, minWidth: 220 } : null]}>
                 <Ionicons name="hourglass-outline" size={16} color={colors.textMuted} />
                 <Text style={styles.waitingText}>
-                  {viewOnly ? "ดูได้อย่างเดียว · " : ""}ขั้นนี้รอ{order.stageActorLabel ?? "คนอื่น"}
+                  {viewOnly ? "ดูได้อย่างเดียว · " : ""}
+                  {/* รอลูกค้าจ่ายเงิน: ลูกบอลอยู่ที่ลูกค้า ไม่ใช่ "รอแอดมิน" — แอดมินแนบบิลเมื่อลูกค้าจ่าย */}
+                  {payNow ? "ขั้นนี้รอลูกค้าจ่ายเงิน (แอดมินแนบบิลเมื่อลูกค้าจ่าย)" : `ขั้นนี้รอ${order.stageActorLabel ?? "คนอื่น"}`}
                   {order.stageActor === "EMPLOYEE" && (order.assignedToName ?? order.assignedTeam)
                     ? ` (${order.assignedToName ?? order.assignedTeam}${order.assignedOutsource ? " — หัวหน้าภาคปิดงานแทน" : ""})`
                     : ""}
@@ -6299,6 +6362,9 @@ function StageModal({
                 : // ฟอร์มนี้คือ "คอนเฟิร์มออกหน้างาน" (คำของเจ้าของงาน) — ปุ่มบนแถบ/การ์ดยังชื่อ "คอนเฟิร์มลูกค้า"
                   order.status === "AWAITING_CONFIRM" && !confirmToIssue
                   ? "คอนเฟิร์มออกหน้างาน"
+                  : // ฟอร์มแนบบิลเป็นงานของแอดมินจริง — ชื่อเดิม "แนบบิลรับเงิน" ปุ่มที่กดเข้ามาชื่อ "ลูกค้าจ่ายแล้ว · แนบบิล" (5 พ.ย. 69)
+                  order.status === "AWAITING_PAYMENT"
+                  ? "แนบบิลรับเงิน"
                   : // ชื่อเดียวกับปุ่มที่กดเข้ามา (รวม "คอนเฟิร์มอะไหล่" · "แก้รายการอะไหล่" ของรอบเลือกอะไหล่)
                     stageButtonLabel(order, { partsOut: 0, tech: techSend })}{" "}
               · {order.code}
@@ -11376,6 +11442,7 @@ const styles = StyleSheet.create({
   statusChip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
+  statusChipLate: { borderWidth: 1, borderColor: colors.dangerLine },
   tagLine: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.card },
   tagLineText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.body },
   supTag: { flexDirection: "row", alignItems: "center", gap: 4, borderColor: colors.primarySoft, backgroundColor: colors.primarySoft },
@@ -11403,6 +11470,9 @@ const styles = StyleSheet.create({
   recoveredBtn: { flexDirection: "row", alignItems: "center", gap: 6, height: 40, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.card },
   recoveredBtnText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.navy },
   nowCard: { gap: spacing.md },
+  // รอลูกค้าจ่ายเงิน — ขอบส้ม (รอคนนอก) · เกินเส้นขอบแดง (ตัวอย่างที่ตกลง 5 พ.ย. 69)
+  nowCardPay: { borderWidth: 2, borderColor: colors.warningBorder },
+  nowCardPayLate: { borderWidth: 2, borderColor: colors.dangerLine },
   nowHead: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
   nowWho: { fontWeight: "800" },
   nowEyebrow: { fontSize: 13, lineHeight: 20, fontWeight: "700" },

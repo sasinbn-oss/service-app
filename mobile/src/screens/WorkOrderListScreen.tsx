@@ -72,6 +72,7 @@ import {
 } from "../utils/dispatchCutoff";
 import { CutoffBanners, LiveScheduleChip } from "../components/DispatchCutoff";
 import { howtoTarget, useHowToAction } from "../utils/howto";
+import { PayFollowLine, payDaysText, type PayWaitRow } from "../components/PaymentWait";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
@@ -168,6 +169,11 @@ export interface WorkOrderRow {
   partsPick?: { round: number; count: number; line: string; sentAt: string; sentByName: string | null } | null;
   /** คำขอนัดด่วนของหัวหน้าภาคที่ยังรอแอดมิน (เฉพาะใบรอนัดวัน) — ป้ายม่วงบนแถว · หัวข้อ "ขอนัดด่วน" ของแอดมิน */
   urgentAsk?: UrgentAsk | null;
+  /**
+   * ขั้นรอลูกค้าจ่ายเงิน — รอมากี่วัน · เกินเส้น (แดง) · ตามล่าสุด (เจ้าของงานเลือก 5 พ.ย. 69) · ขั้นอื่น/เซิร์ฟเวอร์รุ่นเก่า = ว่าง
+   * วันมาจากเซิร์ฟเวอร์ นับจากจุดเดียวกับ stageSince — แถว "รอมาแล้ว" กับ "ค้าง" ไม่มีทางบอกคนละเลข
+   */
+  payWait?: PayWaitRow | null;
 }
 
 type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
@@ -274,7 +280,7 @@ function apptBucket(r: WorkOrderRow) {
  * — คนกดหลายอันเพราะอยากเห็นใบที่มีปัญหาทั้งหมด ไม่ใช่หาใบที่ซวยครบทุกเรื่อง
  * นับเฉพาะใบที่ยังค้าง: ใบปิดแล้วที่เคยด่วน/เคยเลยนัด ไม่ใช่เรื่องที่ต้องรีบดูวันนี้
  */
-type QuickKey = "urgent" | "partsOut" | "rolledBack" | "apptLate" | "stale" | "unassigned";
+type QuickKey = "urgent" | "partsOut" | "rolledBack" | "apptLate" | "stale" | "unassigned" | "payLate";
 const STALE_DAYS = 3;
 const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow) => boolean }[] = [
   { key: "urgent", label: "ด่วน", dot: colors.danger, test: isHot },
@@ -284,6 +290,11 @@ const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow
   // นับจากวันที่เข้าขั้นปัจจุบัน แบบเดียวกับ "ค้าง n วัน" ในรายการ — ใบเก่าที่เพิ่งขยับไม่ได้ถูกลืม
   { key: "stale", label: `ค้างขั้นเดิมเกิน ${STALE_DAYS} วัน`, dot: colors.textMuted, test: (r) => r.stageActor !== null && stuckDays(r.stageSince) > STALE_DAYS },
   { key: "unassigned", label: "ยังไม่มอบหมายช่าง", dot: colors.textFaint, test: (r) => r.stageActor !== null && !r.assignedTeam && !r.assignedToName },
+  /**
+   * รอลูกค้าจ่ายเงินเกินเส้น (เจ้าของงานเลือก 5 พ.ย. 69 — "ดูเฉพาะใบที่ควรตามลูกค้า") · เส้นมาจากเซิร์ฟเวอร์ (label ตั้งใน quickItems)
+   * ขึ้นเฉพาะรายการที่มีใบรอลูกค้าจ่ายเงิน — ช่าง/หัวหน้าภาคที่ไม่เคยมีใบขั้นนี้ไม่ต้องเห็นชิป 0 เพิ่มอีกอัน
+   */
+  { key: "payLate", label: "รอจ่ายเกินกำหนด", dot: colors.dangerInk, test: (r) => !!r.payWait?.over },
 ];
 
 const APPT_TONE: Record<string, { fg: string; bg: string; line: string }> = {
@@ -475,6 +486,18 @@ function statusText(r: { statusLabel: string; rescheduled?: boolean }) {
 
 /** "ค้าง n วัน" — ใบงาน SUB ที่ทีมเข้างานค้างเกินกำหนดขึ้นแดง ให้หัวหน้าภาคตามรูปมาบันทึกผล */
 function StuckText({ row, style }: { row: WorkOrderRow; style: object }) {
+  /**
+   * รอลูกค้าจ่ายเงิน: "รอมาแล้ว N วัน" จากเซิร์ฟเวอร์แทน "ค้าง N วัน" (นับจากจุดเดียวกัน) · เกินเส้นแดง
+   * บรรทัดตามล่าสุด/ยังไม่เคยตามอยู่ใต้กัน (PayFollowLine) — แอดมินรู้ว่าใบไหนต้องโทรโดยไม่ต้องเปิดใบ
+   */
+  if (row.payWait) {
+    return (
+      <Text style={[style, row.payWait.over && { color: colors.dangerInk, fontWeight: "700" }]}>
+        {payDaysText(row.payWait)}
+        {row.payWait.over ? ` · เกิน ${row.payWait.alertDays} วัน` : ""}
+      </Text>
+    );
+  }
   const late = outsourceLate(row);
   return (
     <Text style={[style, late && { color: colors.dangerInk, fontWeight: "700" }]}>
@@ -737,8 +760,14 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   /** ตัวเลขบนชิปต้องรีบดู — นับหลังตัวกรองอื่นทั้งหมด แต่ไม่รวมชิปด้วยกันเอง (กดเพิ่มแล้วได้เพิ่มเท่าตัวเลข) */
   const quickItems = useMemo(() => {
     const base = tabRows.filter((r) => byOwner(r) && byType(r) && byCols(r));
-    return QUICK.map((q) => ({ key: q.key, label: q.label, dot: q.dot, n: base.filter(q.test).length }));
-  }, [tabRows, byOwner, byType, byCols]);
+    const pay = rows.find((r) => r.payWait)?.payWait;
+    return QUICK.filter((q) => q.key !== "payLate" || !!pay || quick.has("payLate")).map((q) => ({
+      key: q.key,
+      label: q.key === "payLate" && pay ? `รอจ่ายเกิน ${pay.alertDays} วัน` : q.label,
+      dot: q.dot,
+      n: base.filter(q.test).length,
+    }));
+  }, [rows, tabRows, byOwner, byType, byCols, quick]);
   const shown = useMemo(() => {
     const list = rows.filter((r) => byOwner(r) && byType(r) && byCols(r) && byQuick(r) && (!supTabs || supTabOf(r) === prefs.supTab));
     const at = (iso: string) => new Date(iso).getTime();
@@ -2030,6 +2059,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         !last && styles.trLine,
         stripe && styles.trAlt,
         isHot(row) && styles.trUrgent,
+        row.payWait?.over && styles.trPayLate,
         closed && styles.trDone,
         mark && !flash && styles.flashRow,
         hover && styles.trHover,
@@ -2039,8 +2069,8 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       {...howtoTarget("orders.row")}
     >
       {flash ? <Blink /> : null}
-      {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย */}
-      <View style={[styles.rowBar, hover && styles.rowBarHover, { backgroundColor: tone.fg }]} />
+      {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย · รอลูกค้าจ่ายเกินเส้นเป็นแดง */}
+      <View style={[styles.rowBar, hover && styles.rowBarHover, { backgroundColor: row.payWait?.over ? colors.danger : tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
         <View style={styles.rowIcon}>
           <Ionicons name="clipboard-outline" size={18} color={colors.primaryInk} />
@@ -2088,6 +2118,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
         {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
         {row.stageActor ? <StuckText row={row} style={styles.td2} /> : null}
+        {row.payWait ? <PayFollowLine p={row.payWait} style={styles.td2} /> : null}
         <PartsEta row={row} />
       </View>
       <View style={styles.colWait}>
@@ -2143,7 +2174,8 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
       style={[
         styles.card,
         closed && styles.cardDone,
-        { borderLeftColor: tone.fg },
+        { borderLeftColor: row.payWait?.over ? colors.danger : tone.fg },
+        row.payWait?.over && styles.cardPayLate,
         (flash || mark) && styles.flashCard,
         hover && styles.cardHover,
       ]}
@@ -2194,6 +2226,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
           <StuckText row={row} style={styles.meta} />
         </View>
       ) : null}
+      {row.payWait ? <PayFollowLine p={row.payWait} style={{ marginBottom: 4 }} /> : null}
       <PartsEta row={row} />
 
       <View style={styles.metaRow} {...howtoTarget("orders.rowTeam")}>
@@ -2277,7 +2310,7 @@ function InboxAttention({
    * "เลยนัด" ของแอดมินอยู่ในหัวข้อเดิมข้างล่าง (overdue ของแถวที่เห็น) ไม่ซ้ำสองที่
    */
   const asks = adminCut && allRows ? adminGroups(allRows, now, cutoff).asks : null;
-  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
+  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad" | "pay"; items: WorkOrderRow[] }[] = [];
   /**
    * หัวหน้าภาค: "รอนัดวัน" (3 ชม. ก่อนปิดนัดพรุ่งนี้) · "ออกงานวันนี้" — ตัวสร้างเดียวกับงานของฉันวันนี้ นับตรงกันทุกตัวอักษร
    * "วันนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มือถือตั้งวันผิดต้องไม่บอกว่าออกงานวันนี้)
@@ -2305,6 +2338,25 @@ function InboxAttention({
         tone: "bad",
         items: overdue,
       });
+    /**
+     * รอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่างกล่องงานแอดมิน) — หัวข้อแบบเดียวกับ "ไม่มีคนรับ" / "เลยนัด"
+     * เรียงรอนานสุดก่อน แถวบอกรอมาแล้ว N วัน กับตามล่าสุด/ยังไม่เคยตาม · ชิป "รอจ่ายเกิน N วัน" ด้านบนกรองหัวข้อนี้ด้วย
+     * (rows คือใบที่ผ่านตัวกรองบนจอแล้ว) จึงเหลือเฉพาะใบที่ควรตามได้โดยไม่ต้องมีหน้าใหม่ · อยู่ท้ายหัวข้อปัญหา — รอลูกค้าไม่ใช่ของค้างของเรา
+     */
+    const pay = rows
+      .filter((r) => r.payWait)
+      .sort((a, b) => b.payWait!.days - a.payWait!.days || a.payWait!.since.localeCompare(b.payWait!.since));
+    if (pay.length) {
+      const alert = pay[0].payWait!.alertDays;
+      const late = pay.filter((r) => r.payWait!.over).length;
+      groups.push({
+        key: "pay",
+        title: `รอลูกค้าจ่ายเงิน ${pay.length}${late ? ` · เกิน ${alert} วัน ${late}` : ""}`,
+        hint: `เรียงจากรอนานสุด · แดง = รอเกิน ${alert} วัน ควรตามลูกค้า · กดชิป "รอจ่ายเกิน ${alert} วัน" ด้านบนเพื่อดูเฉพาะใบที่ควรตาม`,
+        tone: "pay",
+        items: pay,
+      });
+    }
   }
   if (!groups.length && !sup.length && !asks) return null;
   return (
@@ -2318,29 +2370,47 @@ function InboxAttention({
       {groups.map((g) => (
         <View
           key={g.key}
-          style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]}
+          style={[styles.attn, g.tone === "bad" ? styles.attnBad : g.tone === "pay" ? styles.attnPay : styles.attnSup]}
           accessibilityLabel={`หัวข้อ ${g.title}`}
         >
-          <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>{g.title}</Text>
+          <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : g.tone === "pay" ? styles.attnTitlePay : styles.attnTitleSup]}>
+            {g.title}
+          </Text>
           <Text style={styles.attnHint}>{g.hint}</Text>
-          {g.items.map((r) => (
-            <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`${g.title} ${r.code}`}>
-              <Text style={styles.attnCode}>{r.code}</Text>
-              {/* เหตุผลของ "ไม่มีคนรับ" ยาว — ให้ขึ้นบรรทัดใหม่ได้ ไม่ตัดทิ้ง */}
-              <Text style={styles.attnText} numberOfLines={g.key === "orphan" ? 2 : 1}>
-                {[
-                  r.branchCode,
-                  g.key === "orphan" ? r.orphanReason ?? r.statusLabel : r.assignedTeam && `ทีม${r.assignedTeam}`,
-                  g.key === "overdue" && r.scheduledAt ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}` : null,
-                  // เลยนัดได้หลายขั้นแล้ว (เบิก · โอน · คอนเฟิร์ม) — บอกว่าค้างที่ไหน จะได้รู้ว่าต้องตามใคร
-                  g.key === "overdue" ? r.statusLabel : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
-            </TouchableOpacity>
-          ))}
+          {g.key === "pay"
+            ? g.items.map((r) => (
+                <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`รอลูกค้าจ่ายเงิน ${r.code}`}>
+                  <Text style={styles.attnCode}>{r.code}</Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.attnText} numberOfLines={1}>
+                      {r.branchCode}
+                      {r.branchName ? ` ${r.branchName}` : ""}
+                      {" · "}
+                      <Text style={r.payWait!.over ? styles.attnPayLate : undefined}>{payDaysText(r.payWait!)}</Text>
+                    </Text>
+                    <PayFollowLine p={r.payWait!} style={styles.attnFollow} />
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+                </TouchableOpacity>
+              ))
+            : g.items.map((r) => (
+                <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`${g.title} ${r.code}`}>
+                  <Text style={styles.attnCode}>{r.code}</Text>
+                  {/* เหตุผลของ "ไม่มีคนรับ" ยาว — ให้ขึ้นบรรทัดใหม่ได้ ไม่ตัดทิ้ง */}
+                  <Text style={styles.attnText} numberOfLines={g.key === "orphan" ? 2 : 1}>
+                    {[
+                      r.branchCode,
+                      g.key === "orphan" ? r.orphanReason ?? r.statusLabel : r.assignedTeam && `ทีม${r.assignedTeam}`,
+                      g.key === "overdue" && r.scheduledAt ? `นัด ${thaiDate(r.scheduledAt.slice(0, 10))}` : null,
+                      // เลยนัดได้หลายขั้นแล้ว (เบิก · โอน · คอนเฟิร์ม) — บอกว่าค้างที่ไหน จะได้รู้ว่าต้องตามใคร
+                      g.key === "overdue" ? r.statusLabel : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+                </TouchableOpacity>
+              ))}
         </View>
       ))}
     </View>
@@ -2381,6 +2451,11 @@ const styles = StyleSheet.create({
   attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
   attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+  // รอลูกค้าจ่ายเงิน — ส้มแบบป้าย "รอคนนอก" (ไม่ใช่แดงของปัญหา) · แถวที่เกินเส้นแดงในตัว
+  attnPay: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
+  attnTitlePay: { color: colors.warningInk },
+  attnPayLate: { color: colors.dangerInk, fontWeight: "700" },
+  attnFollow: { fontSize: 12.5, lineHeight: 18 },
   attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
   attnTitleSup: { color: colors.primaryDark },
   attnTitleBad: { color: colors.danger },
@@ -2549,6 +2624,8 @@ const styles = StyleSheet.create({
   srcTagText: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
   // พื้นแดงจาง ๆ ทั้งแถว — ตารางตัดขอบ (overflow hidden) ออร่ารอบแถวจึงใช้ไม่ได้ เหลือป้ายที่เรืองแสงแทน
   trUrgent: { backgroundColor: colors.dangerSoft },
+  // รอลูกค้าจ่ายเกินเส้น — แถวแดงจางแบบใบด่วน (ตัวอย่างกล่องงานที่ตกลง 5 พ.ย. 69)
+  trPayLate: { backgroundColor: colors.dangerSoft },
   // ใบที่เพิ่งเปลี่ยนหลังรีเฟรช — เหลืองแบบเดียวกับตัวอย่างที่เจ้าของงานเลือก
   flashRow: { backgroundColor: colors.warningSoft },
   // กรอบเหลืองอย่างเดียว ไม่ใส่พื้น — พื้นเหลืองเป็นของ Blink ถ้าการ์ดเหลืองอยู่แล้วกระพริบจะไม่เห็น
@@ -2632,6 +2709,7 @@ const styles = StyleSheet.create({
   // ใบที่ปิดแล้วทั้งแถวเป็นเขียว (เจ้าของงานเลือก ต.ค. 69) — กวาดตาแล้วแยกงานจบออกจากงานค้างได้ทันที
   // ป้ายสถานะในแถวนี้จึงต้องเป็นพื้นขาว ไม่งั้นเขียวบนเขียวจนมองไม่เห็น
   cardDone: { backgroundColor: colors.doneSoft },
+  cardPayLate: { backgroundColor: colors.dangerSoft },
   trDone: { backgroundColor: colors.doneSoft },
   badgeDone: { borderWidth: 1, borderColor: colors.doneLine },
   cardTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
