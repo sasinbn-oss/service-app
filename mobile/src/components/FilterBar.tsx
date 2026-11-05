@@ -59,8 +59,11 @@ export function ViewTabs({
   right,
   testID,
 }: {
-  /** dot = มีใบที่อัปเดตรอให้ดูในแท็บนั้น (ปุ่ม "อีก n ใบ" ของหน้ารายการใบงาน) */
-  tabs: { value: string; label: string; n?: number; dot?: boolean }[];
+  /**
+   * dot = มีใบที่อัปเดตรอให้ดูในแท็บนั้น (ปุ่ม "อีก n ใบ" ของหน้ารายการใบงาน)
+   * alert = ป้ายแดงต่อท้ายตัวเลข เช่น "เกิน 3 วัน 47" ของแท็บรอลูกค้าจ่ายเงิน (ตัวอย่าง paytab) — เรื่องที่ต้องรีบเห็นได้จากแถบแท็บเลย
+   */
+  tabs: { value: string; label: string; n?: number; dot?: boolean; alert?: string }[];
   value: string;
   onPick: (v: string) => void;
   right?: React.ReactNode;
@@ -95,7 +98,7 @@ export function ViewTabs({
               style={[styles.tab, on && styles.tabOn]}
               onPress={() => onPick(t.value)}
               // ตัวเลขอยู่ในป้ายแยก — ชื่อปุ่มรวมไว้ให้โปรแกรมอ่านจออ่านต่อกัน ("ที่ยังค้าง 91 ใบ")
-              accessibilityLabel={t.n ? `${t.label} ${t.n} ใบ` : t.label}
+              accessibilityLabel={`${t.n ? `${t.label} ${t.n} ใบ` : t.label}${t.alert ? ` · ${t.alert}` : ""}`}
               // role=tab + aria-selected — โปรแกรมอ่านจอ/เทสต์รู้ว่าตอนนี้อยู่แท็บไหน (เว็บไม่แปลง accessibilityState เป็น aria-selected)
               accessibilityRole="tab"
               accessibilityState={{ selected: on }}
@@ -105,6 +108,11 @@ export function ViewTabs({
               {t.n ? (
                 <View style={[styles.tabN, on && styles.tabNOn]}>
                   <Text style={[styles.tabNText, on && styles.tabNTextOn]}>{t.n.toLocaleString("th-TH")}</Text>
+                </View>
+              ) : null}
+              {t.alert ? (
+                <View style={styles.tabAlert}>
+                  <Text style={styles.tabAlertText}>{t.alert}</Text>
                 </View>
               ) : null}
               {t.dot ? <View style={styles.tabDot} accessibilityLabel="มีใบที่อัปเดต" /> : null}
@@ -420,6 +428,9 @@ const styles = StyleSheet.create({
   tabNText: { fontSize: 11.5, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
   tabNTextOn: { color: "#fff" },
   tabDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, marginLeft: -2 },
+  // ป้ายแดงทึบ (ตัวอย่าง paytab "เกิน 3 วัน 47") — แดงแบบชิปเกินกำหนดของแท็บรอเงิน
+  tabAlert: { borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.dangerFill },
+  tabAlertText: { fontSize: 11.5, lineHeight: 18, fontWeight: "800", color: "#fff", fontVariant: ["tabular-nums"] },
   toggle: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 },
   track: { width: 38, height: 22, borderRadius: 11, backgroundColor: colors.borderStrong, padding: 3 },
   trackOn: { backgroundColor: colors.primary },

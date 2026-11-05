@@ -63,7 +63,7 @@ export function payChipText(label: string, p: PayWaitBase | null | undefined) {
   return p && p.days >= 1 ? `${label} · ${p.days} วัน` : label;
 }
 /** วันที่ของการตาม — วันนี้เขียนว่า "วันนี้" (ตัวอย่าง: "วันนี้ · โทรไม่รับ") ไม่งั้น "4 พ.ย." */
-function followDay(at: string) {
+export function followDay(at: string) {
   const bkk = (t: number) => new Date(t + 7 * 3600_000).toISOString().slice(0, 10);
   return bkk(Date.parse(at)) === bkk(Date.now()) ? "วันนี้" : shortDay(at);
 }
