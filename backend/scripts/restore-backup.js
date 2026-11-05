@@ -35,11 +35,18 @@ const SEEDED_BY_MIGRATION = new Set(["TeamGroup", "OutsourceTeam", "AppSetting",
 // อ่านคำสั่งจากไฟล์ migration ตรง ๆ ไม่ลอกมาไว้ที่นี่ — สองชุดวันหนึ่งจะไม่ตรงกัน (ไฟล์ migration ที่ขึ้นระบบแล้วแก้ไม่ได้อยู่แล้ว)
 // ระบุด้วยคำขึ้นต้นของคำสั่ง แล้วตัดถึง ; ตัวแรก — คำสั่งพวกนี้ไม่มี ; อยู่ข้างใน
 // 20261212090000_user_howto_seen ไม่อยู่ที่นี่โดยตั้งใจ: ไฟล์ก่อน migration นั้นต้องกู้เป็น NULL (= พนักงานเดิม) และส่วน pending อ่าน UsageSlot ซึ่งไม่อยู่ในไฟล์สำรอง
+// 20261217090000_attachment_file_names: ไฟล์สำรองที่ทำก่อนมีชื่อไฟล์แนบภาษาไทยเป็นอักษรเพี้ยน — ไม่ซ่อมซ้ำ = ชื่อที่ซ่อมไปแล้วกลับมาเพี้ยน
+//   ทั้งการ์ดไฟล์ ชื่อตอนโหลด และประวัติใบงาน โดยไม่มีอะไรบอกว่ากู้ไม่ครบ
 const REPLAY_IF_DUMP_PREDATES = [
   {
     migration: "20261211090000_parts_pick",
     statements: ['INSERT INTO "SparePartBrandFile"', 'UPDATE "SparePartImport"'],
     label: (n) => `SparePartBrandFile: เติมจากช่องยี่ห้อ ${n[0]} แถว · SparePartImport: ไฟล์ยี่ห้อจากชื่อไฟล์ ${n[1]} แถว`,
+  },
+  {
+    migration: "20261217090000_attachment_file_names",
+    statements: ['UPDATE "WorkOrderAttachment"', 'UPDATE "WorkOrderLog"'],
+    label: (n) => `ชื่อไฟล์แนบภาษาไทยที่เพี้ยน: ซ่อม ${n[0]} ไฟล์ · ประวัติแนบ/ลบไฟล์ ${n[1]} บรรทัด`,
   },
 ];
 

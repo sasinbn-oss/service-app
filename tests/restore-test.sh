@@ -25,6 +25,11 @@
 #   · ใช้รหัสของสาขาที่ปิดแล้วซ้ำ (พ.ย. 69): originalCode / reusedFromId / reusedAt ของสาขาตามมาครบ — reusedFromId อ้างตาราง Branch เอง
 #     (สคริปต์กู้ใส่ว่างก่อนแล้วเติมทีหลัง แบบใบงานรออะไหล่ → ใบเดิม) หลุดแล้วไฟล์สาขายกเลิกรอบหน้าปิดสาขาใหม่ (ตัวกันอ่าน reusedAt)
 #     และสาขา "(เดิม)" ไม่รู้ว่ารหัสจริงคืออะไร · ฐานทดสอบปกติไม่มีคู่แบบนี้ จึงใส่คู่ชั่วคราว ZZRT01 / "ZZRT01 (เดิม)" แล้วลบตอนจบ
+#   · ไฟล์สำรองที่ทำก่อน 20261217090000_attachment_file_names (ชื่อไฟล์แนบภาษาไทยเคยถูกเก็บเป็นอักษรเพี้ยน) — migrate ฐานใหม่
+#     ตอนตารางยังว่างจึงซ่อม 0 แถว สคริปต์กู้ต้องซ่อมซ้ำหลังใส่ข้อมูล ไม่งั้นชื่อที่ซ่อมไปแล้วกลับมาเพี้ยนทั้งการ์ดไฟล์และประวัติ
+#     ฐานทดสอบปกติไม่มีชื่อเพี้ยน (แอปอ่านชื่อเป็น UTF-8 แล้ว) จึงใส่ไฟล์แนบ 3 ไฟล์ + ประวัติ 4 บรรทัดชั่วคราวบนใบงานใบแรก
+#     (createdAt = 2001-02-03 04:05:06 เป็นตัวหาตอนลบ) ทั้งตัวที่ต้องซ่อมและตัวที่ต้องไม่ถูกแตะ: café.jpg (latin1 จริง) · ชื่อไทยที่ถูกอยู่แล้ว
+#     · ประวัติอย่างอื่น (EDITED) ที่บังเอิญมีข้อความหน้าตาเหมือนกัน — ไฟล์สำรองรุ่นปัจจุบันต้องกู้ตามที่เก็บไว้ ไม่ถูกแปลงซ้ำ
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -38,12 +43,17 @@ TMP_URL="${SRC_URL%%/serviceapp*}/$TMPDB"
 DIR=$(mktemp -d)
 PICK_MARK='restore-test ใบชั่วคราว'
 BRANCH_MARK='restore-test ประวัติชั่วคราว'
+NAME_AT='2001-02-03 04:05:06'
+# ชื่อเพี้ยนแบบที่ multer เคยเก็บ: ไบต์ UTF-8 ของชื่อจริงอ่านเป็นอักษร latin1 ทีละไบต์
+GARBLED="convert_from(convert_to('ใบเสนอราคา WO-01143.pdf', 'UTF8'), 'LATIN1')"
 cleanup() {
   PG -d serviceapp -qc "delete from \"PartsPick\" where note='$PICK_MARK'" >/dev/null 2>&1 || true   # รายการในใบลบตาม (cascade)
   PG -d serviceapp -qc "delete from \"User\" where \"employeeCode\" like 'zz.restore.howto.%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"BranchLog\" where note like '$BRANCH_MARK%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"BranchPin\" where field='name' and \"fromValue\"='$BRANCH_MARK'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"Branch\" where code like 'ZZRT01%'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"WorkOrderAttachment\" where \"createdAt\"='$NAME_AT'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"WorkOrderLog\" where \"createdAt\"='$NAME_AT'" >/dev/null 2>&1 || true
   PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null 2>&1 || true; rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -109,6 +119,23 @@ SQL
 REUSE_SQL='select count(*)||$$|$$||coalesce(md5(string_agg(concat_ws($$~$$, id, code, coalesce("originalCode",$$NULL$$), coalesce("reusedFromId"::text,$$NULL$$), coalesce(to_char("reusedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$)), $$,$$ order by id)),$$-$$) from "Branch" where "originalCode" is not null or "reusedFromId" is not null or "reusedAt" is not null'
 SRC_REUSE=$(PG -d serviceapp -Atc "$REUSE_SQL" 2>/dev/null) || SRC_REUSE=""
 
+# ชื่อไฟล์แนบเพี้ยนชั่วคราว (เหตุผลอยู่หัวไฟล์) — ใบงานใบแรกของฐาน ไม่แตะตัวใบงาน · ใส่ไม่สำเร็จให้ข้อ 6 รายงานเอง
+# ค่าที่อ่านแทนชื่อเพี้ยนด้วยคำว่า "เพี้ยน" ให้เทียบในเชลล์ได้ (อักษรควบคุม U+0080–U+009F ในชื่อเพี้ยนพิมพ์ออกจอไม่ได้)
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<SQL || true
+INSERT INTO "WorkOrderAttachment" ("workOrderId", kind, "fileName", "mimeType", "sizeBytes", "createdAt")
+SELECT (SELECT id FROM "WorkOrder" ORDER BY id LIMIT 1), 'DOCUMENT', n, 'application/pdf', 1, '$NAME_AT'
+FROM (VALUES ($GARBLED), ('café.jpg'), ('ฟอร์มแจ้งซ่อม-แถว3.jpg')) t(n);
+INSERT INTO "WorkOrderLog" ("workOrderId", action, status, note, "createdAt")
+SELECT (SELECT id FROM "WorkOrder" ORDER BY id LIMIT 1), a, 'NEW', n, '$NAME_AT'
+FROM (VALUES ('ATTACHED', 'เอกสาร PDF: ' || $GARBLED), ('ATTACHMENT_REMOVED', 'รูป: ' || $GARBLED),
+             ('ATTACHED', 'รูป: café.jpg'), ('EDITED', 'แก้ไข: ' || $GARBLED)) t(a, n);
+SQL
+NAMES_SQL="select coalesce((select string_agg(replace(\"fileName\", $GARBLED, 'เพี้ยน'), '|' order by id) from \"WorkOrderAttachment\" where \"createdAt\"='$NAME_AT'), '-')
+  || ' / ' || coalesce((select string_agg(action || '=' || replace(note, $GARBLED, 'เพี้ยน'), '|' order by id) from \"WorkOrderLog\" where \"createdAt\"='$NAME_AT'), '-')"
+NAMES_BEFORE='เพี้ยน|café.jpg|ฟอร์มแจ้งซ่อม-แถว3.jpg / ATTACHED=เอกสาร PDF: เพี้ยน|ATTACHMENT_REMOVED=รูป: เพี้ยน|ATTACHED=รูป: café.jpg|EDITED=แก้ไข: เพี้ยน'
+NAMES_AFTER='ใบเสนอราคา WO-01143.pdf|café.jpg|ฟอร์มแจ้งซ่อม-แถว3.jpg / ATTACHED=เอกสาร PDF: ใบเสนอราคา WO-01143.pdf|ATTACHMENT_REMOVED=รูป: ใบเสนอราคา WO-01143.pdf|ATTACHED=รูป: café.jpg|EDITED=แก้ไข: เพี้ยน'
+SRC_NAMES=$(PG -d serviceapp -Atc "$NAMES_SQL" 2>/dev/null) || SRC_NAMES=""
+
 # 1) ไฟล์สำรองจากฐานข้อมูลที่ใช้เทสต์ — ฟังก์ชันเดียวกับปุ่มสำรองข้อมูล
 node_modules/.bin/ts-node --transpile-only -e "
   import { writeBackupFiles } from './src/backup/backup';
@@ -126,6 +153,7 @@ PG -d postgres -qc "CREATE DATABASE $TMPDB" >/dev/null
 DATABASE_URL="$TMP_URL" DIRECT_URL="$TMP_URL" node_modules/.bin/prisma migrate deploy >/dev/null 2>&1
 OUT=$(DATABASE_URL="$TMP_URL" node scripts/restore-backup.js "$DIR/backup.json.gz" --yes 2>&1) || true
 DST=$(PG -d $TMPDB -Atc "$COUNT_SQL")
+DST_NAMES=$(PG -d $TMPDB -Atc "$NAMES_SQL" 2>/dev/null) || DST_NAMES=""
 if [ "${SRC_PICKS:-0}" != 1 ]; then
   fail "ใส่ใบเลือกอะไหล่ชั่วคราวไม่สำเร็จ (ได้ ${SRC_PICKS:-0} รายการ — ต้องมี SP-BOARD จาก seed:test) นับ 0 เทียบ 0 ไม่ได้ตรวจอะไร"
 elif [ "$SRC" = "$DST" ]; then
@@ -201,5 +229,26 @@ SRC_TWINS=$(PG -d serviceapp -Atc "$TWIN_SQL"); OLD_TWINS=$(PG -d $TMPDB -Atc "$
 [ "$(echo "$SRC_TWINS" | wc -w)" = 12 ] && [ "$SRC_TWINS" = "$OLD_TWINS" ] \
   && pass "กู้ไฟล์สำรองที่ทำก่อนมีตารางไฟล์ยี่ห้อ อะไหล่กลับมาอยู่ในไฟล์ตามช่องยี่ห้อ (ตัวแฝดทดสอบ 12 ตัวตรงไฟล์ของตัวเอง)" \
   || fail "กู้ไฟล์สำรองรุ่นก่อนแล้วไฟล์ยี่ห้อไม่ตรง: ต้นฉบับ [$SRC_TWINS] · หลังกู้ [$OLD_TWINS] · $(echo "$OUT" | tail -2 | tr '\n' ' ' | head -c 200)"
+
+# 6) ไฟล์สำรองที่ทำก่อน 20261217090000_attachment_file_names → ชื่อไฟล์แนบภาษาไทยที่เพี้ยนถูกซ่อมหลังกู้
+#    migration นั้นไม่เพิ่มตาราง/ช่อง ไฟล์ "รุ่นก่อน" จึงต่างจากไฟล์เมื่อกี้แค่ไม่มีชื่อ migration ในรายการ
+node -e '
+  const fs = require("fs"), { gzipSync, gunzipSync } = require("zlib");
+  const d = JSON.parse(gunzipSync(fs.readFileSync(process.argv[1])).toString("utf8"));
+  d.migrations = d.migrations.filter((m) => m !== "20261217090000_attachment_file_names");
+  fs.writeFileSync(process.argv[2], gzipSync(JSON.stringify(d)));' "$DIR/backup.json.gz" "$DIR/old-names.json.gz"
+PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null; PG -d postgres -qc "CREATE DATABASE $TMPDB" >/dev/null
+DATABASE_URL="$TMP_URL" DIRECT_URL="$TMP_URL" node_modules/.bin/prisma migrate deploy >/dev/null 2>&1
+OUT=$(DATABASE_URL="$TMP_URL" node scripts/restore-backup.js "$DIR/old-names.json.gz" --yes 2>&1) || true
+OLD_NAMES=$(PG -d $TMPDB -Atc "$NAMES_SQL" 2>/dev/null) || OLD_NAMES=""
+if [ "$SRC_NAMES" != "$NAMES_BEFORE" ]; then
+  fail "ใส่ชื่อไฟล์เพี้ยนชั่วคราวไม่สำเร็จ (ได้ [$SRC_NAMES]) — ฐานไม่มีใบงานให้ผูกแถวชั่วคราว (ใช้ใบแรก)"
+elif [ "$DST_NAMES" != "$NAMES_BEFORE" ]; then
+  fail "ไฟล์สำรองรุ่นปัจจุบันกู้แล้วชื่อไฟล์แนบไม่ตรงกับที่เก็บไว้: [$DST_NAMES]"
+elif [ "$OLD_NAMES" = "$NAMES_AFTER" ]; then
+  pass "กู้ไฟล์สำรองที่ทำก่อนซ่อมชื่อไฟล์แนบ: ชื่อไทยที่เพี้ยนถูกซ่อมทั้งไฟล์แนบและประวัติแนบ/ลบไฟล์ · café.jpg ชื่อไทยเดิม และประวัติอย่างอื่นไม่ถูกแตะ · ไฟล์รุ่นปัจจุบันกู้ตามที่เก็บไว้"
+else
+  fail "กู้ไฟล์สำรองรุ่นก่อนแล้วชื่อไฟล์แนบไม่ตรง: ได้ [$OLD_NAMES] · ต้อง [$NAMES_AFTER] · $(echo "$OUT" | tail -2 | tr '\n' ' ' | head -c 200)"
+fi
 
 [ -z "$FAILED" ]

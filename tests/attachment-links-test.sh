@@ -4,6 +4,7 @@
 #   · GET /:id/attachments?have= — รูปย่อที่แอปจำไว้แล้วไม่ส่งซ้ำ (hasThumbnail ยังบอกว่ามี)
 #   · GET /:id/attachments ส่งลิงก์เปิดไฟล์มาด้วย (รอบสอง ต.ค. 69 — ไม่ต้องขอ /links แยก) · เปิดลิงก์ได้ไฟล์ตรงกับที่อัป
 #   · GET /:id/attachments/:aid/file — ทางสำรองของตัวแสดง PDF: ได้ไฟล์ PDF เดิมทุกไบต์ · รูปขอทางนี้ไม่ได้
+#   · ชื่อไฟล์ภาษาไทยเก็บตรงตัวอักษรทั้งแถวไฟล์ ประวัติ และชื่อตอนโหลด · key ในถังเป็น ASCII (พ.ย. 69 — เคยเก็บเป็นอักษรเพี้ยน)
 #   · หัวหน้าภาคนอกขอบเขตขอลิงก์/ไฟล์ไม่ได้ (403)
 # ยืนยันกับฐานข้อมูลและไฟล์จริง (CLAUDE.md)
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
@@ -63,6 +64,31 @@ echo "═══ ทางสำรองของตัวแสดง PDF"
   && cmp -s "$TMP/f.pdf" "$SP/quote-2pages.pdf" && pass "PDF ผ่านเซิร์ฟเวอร์ได้ไฟล์เดิมทุกไบต์ (application/pdf)" || fail "file proxy"
 [ "$(CODE "localhost:4000/api/work-orders/$W/attachments/$I1/file" -H "$(H $A)")" = "400" ] && pass "รูปขอทางนี้ไม่ได้ (400)" || fail "รูปผ่านทาง file ได้"
 [ "$(CODE "localhost:4000/api/work-orders/$W/attachments/$P1/file")" = "401" ] && pass "ไม่ล็อกอินขอไฟล์ไม่ได้ (401)" || fail "ไม่ล็อกอินก็ได้ไฟล์"
+
+echo "═══ ชื่อไฟล์ภาษาไทย"
+# multer อ่านชื่อไฟล์ในคำขอเป็น latin1 ตามค่าตั้งต้น ใบเสนอราคาที่แนบจากเว็บเคยถูกเก็บเป็น "à¹\u0083à¸…" (พ.ย. 69)
+# ดูที่ฐานข้อมูล ไม่ใช่แค่ JSON ที่ตอบกลับ — ชื่อเดียวกันไปอยู่สามที่: แถวไฟล์ · ประวัติใบงาน · ชื่อตอนโหลด
+THAI="ใบเสนอราคา WO-01143.pdf"
+T1=$(UP -F "file=@$SP/quote-2pages.pdf;filename=$THAI;type=application/pdf" -F "role=QUOTE")
+[ "$(DB "select \"fileName\" from \"WorkOrderAttachment\" where id=${T1:-0}")" = "$THAI" ] \
+  && [ "$(DB "select note from \"WorkOrderLog\" where \"workOrderId\"=$W and action='ATTACHED' order by id desc limit 1")" = "เอกสาร PDF: $THAI" ] \
+  && pass "ชื่อไฟล์ไทยเก็บตรงตัวอักษร (ฐานข้อมูล: แถวไฟล์ + ประวัติ \"เอกสาร PDF: $THAI\")" \
+  || fail "ชื่อไฟล์ไทยเพี้ยน: [$(DB "select \"fileName\" from \"WorkOrderAttachment\" where id=${T1:-0}")]"
+# key ในถังต้องเป็น ASCII (Supabase ไม่รับอักษรไทย) — ส่วนที่เป็นอังกฤษของชื่อยังอยู่ให้ไล่ดูในถังได้
+[[ "$(DB "select \"objectKey\" from \"WorkOrderAttachment\" where id=${T1:-0}")" =~ ^work-orders/[A-Za-z0-9-]+/[0-9]+-WO-01143\.pdf$ ]] \
+  && pass "key ในถังเป็น ASCII ล้วน (…-WO-01143.pdf)" || fail "objectKey: $(DB "select \"objectKey\" from \"WorkOrderAttachment\" where id=${T1:-0}")"
+CD=$(curl -s -D - -o /dev/null "$(curl -s "localhost:4000/api/work-orders/$W/attachments/${T1:-0}/link" -H "$(H $A)" | J 'd.url')" | tr -d '\r' | grep -i '^content-disposition:')
+[ "$CD" = "Content-Disposition: inline; filename*=UTF-8''$(node -pe 'encodeURIComponent(process.argv[1])' "$THAI")" ] \
+  && pass "เปิดลิงก์แล้วชื่อไฟล์ที่ได้เป็นชื่อไทยเดิม" || fail "Content-Disposition: $CD"
+# ชื่อแบบ RFC 5987 (filename*=UTF-8''…) busboy ถอดเป็น UTF-8 เองอยู่แล้ว — ถ้าวันหนึ่งเปลี่ยนไปแปลงซ้ำด้วย
+# Buffer.from(ชื่อ, "latin1") แบบเส้นทางนำเข้า Excel ชื่อแบบนี้จะเพี้ยนแทน จึงใช้ defParamCharset ของ multer และตรวจไว้ตรงนี้
+B=thai-name-boundary
+{ printf -- "--$B\r\nContent-Disposition: form-data; name=\"file\"; filename*=UTF-8''%s\r\nContent-Type: image/png\r\n\r\n" \
+    "$(node -pe 'encodeURIComponent("รูปหน้าร้าน.png")')"; cat "$SP/site-photo.png"; printf -- "\r\n--$B--\r\n"; } > "$TMP/rfc5987.body"
+T2=$(UP -H "Content-Type: multipart/form-data; boundary=$B" --data-binary "@$TMP/rfc5987.body")
+[ "$(DB "select \"fileName\" from \"WorkOrderAttachment\" where id=${T2:-0}")" = "รูปหน้าร้าน.png" ] \
+  && pass "ชื่อแบบ filename*=UTF-8'' ก็ได้ชื่อไทยเดิม (ไม่ถูกแปลงซ้ำ)" \
+  || fail "filename*: [$(DB "select \"fileName\" from \"WorkOrderAttachment\" where id=${T2:-0}")]"
 
 echo "═══ ขอบเขต"
 DB "update \"User\" set region='ภาคที่ไม่มีจริง' where \"employeeCode\"='S001'" >/dev/null

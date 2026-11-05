@@ -11696,6 +11696,11 @@ const attachmentUploadFields = multer({
   // multer รู้จักแค่เพดานเดียว จึงตั้งไว้ที่ค่าสูงสุด (วิดีโอ) แล้วค่อยเช็ค
   // เพดานของรูปอีกทีหลังรู้ชนิดไฟล์ ไม่งั้นรูป 50 MB จะผ่านเข้ามาได้
   limits: { fileSize: MAX_ATTACHMENT_VIDEO_BYTES, files: 2 },
+  // เบราว์เซอร์ส่งชื่อไฟล์เป็นไบต์ UTF-8 แต่ multer อ่านเป็น latin1 ตามค่าตั้งต้น — "ใบเสนอราคา.pdf" เคยถูกเก็บเป็น
+  // "à¹\u0083à¸…" ทั้งการ์ดไฟล์ ชื่อตอนโหลด และประวัติ (พ.ย. 69 · แถวเก่าซ่อมด้วย migration …attachment_file_names)
+  // ถอดที่นี่ ไม่ใช่ Buffer.from(ชื่อ, "latin1") ทีหลังแบบนำเข้า Excel เพราะชื่อแบบ filename*=UTF-8'' busboy ถอดถูกอยู่แล้ว
+  // แปลงซ้ำแล้วกลับเพี้ยน
+  defParamCharset: "utf8",
 }).fields([
   { name: "file", maxCount: 1 },
   { name: "thumbnail", maxCount: 1 },
@@ -12048,7 +12053,9 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   const thumbnail =
     thumb && thumb.size > 0 && thumb.size <= MAX_ATTACHMENT_THUMBNAIL_BYTES ? thumb.buffer : null;
 
-  const objectKey = buildObjectKey(wo.code, file.originalname || `${kind.toLowerCase()}.bin`);
+  // ชื่อเดียวกันไปทั้ง key ในถัง แถวไฟล์ และประวัติ — ถ้าแต่ละที่หยิบ originalname เอง วันหนึ่งจะมีที่ไหนลืมค่าสำรองไป
+  const fileName = file.originalname || `${kind.toLowerCase()}.bin`;
+  const objectKey = buildObjectKey(wo.code, fileName);
 
   /**
    * อัปไฟล์ก่อน แล้วค่อยบันทึกลงฐานข้อมูล
@@ -12069,7 +12076,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       data: {
         workOrderId: id,
         kind,
-        fileName: file.originalname || `${kind.toLowerCase()}.bin`,
+        fileName,
         mimeType: file.mimetype,
         sizeBytes: file.size,
         objectKey,
@@ -12087,7 +12094,7 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
       req.auth!.userId,
       "ATTACHED",
       wo.status,
-      `${ATTACHMENT_KIND_LABELS[kind] ?? kind}: ${row.fileName}`
+      `${ATTACHMENT_KIND_LABELS[kind] ?? kind}: ${fileName}`
     );
     return row;
   }, STAGE_TX);
