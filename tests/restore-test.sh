@@ -22,6 +22,9 @@
 #     ฐานทดสอบปกติไม่มีทั้งสองอย่าง (เทสต์สาขาลบของตัวเองตอนจบ) นับ 0 เทียบ 0 ผ่านได้แม้ตารางไม่ถูกสำรองเลย จึงใส่ชั่วคราว
 #     บนสาขาแรก: ประวัติสองแถว (แก้ชื่อมี meta + คนทำ · ปิดสาขาไม่มี meta + คนทำที่บัญชีถูกลบแล้ว — BranchLog ไม่ผูก User
 #     โดยตั้งใจ กู้ต้องไม่ล้มหรือทิ้งแถวเพราะหาผู้ใช้ไม่เจอ) กับชื่อที่จำไว้หนึ่งแถว (ค่าเท่าชื่อปัจจุบัน — ไม่ทำให้สาขาดูเหมือนถูกแก้)
+#   · ใช้รหัสของสาขาที่ปิดแล้วซ้ำ (พ.ย. 69): originalCode / reusedFromId / reusedAt ของสาขาตามมาครบ — reusedFromId อ้างตาราง Branch เอง
+#     (สคริปต์กู้ใส่ว่างก่อนแล้วเติมทีหลัง แบบใบงานรออะไหล่ → ใบเดิม) หลุดแล้วไฟล์สาขายกเลิกรอบหน้าปิดสาขาใหม่ (ตัวกันอ่าน reusedAt)
+#     และสาขา "(เดิม)" ไม่รู้ว่ารหัสจริงคืออะไร · ฐานทดสอบปกติไม่มีคู่แบบนี้ จึงใส่คู่ชั่วคราว ZZRT01 / "ZZRT01 (เดิม)" แล้วลบตอนจบ
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -40,6 +43,7 @@ cleanup() {
   PG -d serviceapp -qc "delete from \"User\" where \"employeeCode\" like 'zz.restore.howto.%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"BranchLog\" where note like '$BRANCH_MARK%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"BranchPin\" where field='name' and \"fromValue\"='$BRANCH_MARK'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"Branch\" where code like 'ZZRT01%'" >/dev/null 2>&1 || true
   PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null 2>&1 || true; rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -92,6 +96,18 @@ SRC_BRANCH_TMP=$(PG -d serviceapp -Atc "select (select count(*) from \"BranchLog
 # ทุกช่องทุกแถวของสองตาราง (NULL เขียนเป็นคำ ไม่งั้น concat_ws ข้ามไปเงียบ ๆ แล้ว NULL กับค่าว่างดูเหมือนกัน) · id ต้องตรงด้วย
 BRANCH_SQL='select (select count(*) from "BranchLog")||$$|$$||(select count(*) from "BranchPin")||$$|$$||coalesce((select md5(string_agg(concat_ws($$~$$, id, "branchId", action, note, coalesce(meta::text,$$NULL$$), coalesce("byUserId"::text,$$NULL$$), coalesce("byName",$$NULL$$), to_char("createdAt",$$YYYY-MM-DD HH24:MI:SS.MS$$)), $$,$$ order by id)) from "BranchLog"),$$-$$)||$$|$$||coalesce((select md5(string_agg(concat_ws($$~$$, id, "branchId", field, coalesce("fromValue",$$NULL$$), value, coalesce("pinnedById"::text,$$NULL$$), to_char("createdAt",$$YYYY-MM-DD HH24:MI:SS.MS$$)), $$,$$ order by id)) from "BranchPin"),$$-$$)'
 SRC_BRANCH=$(PG -d serviceapp -Atc "$BRANCH_SQL" 2>/dev/null) || SRC_BRANCH=""
+
+# คู่สาขาที่ใช้รหัสซ้ำชั่วคราว (เหตุผลอยู่หัวไฟล์) — สาขาใหม่อ้างสาขาเดิม · ใส่ไม่สำเร็จ (ยังไม่ migrate branch_code_reuse) ให้ข้อ 3d รายงานเอง
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<'SQL' || true
+WITH old AS (
+  INSERT INTO "Branch" (code, name, "originalCode", "cancelledAt", "cancelledNote")
+  VALUES ('ZZRT01 (เดิม)', 'ร้านเดิม ทดสอบกู้คืน', 'ZZRT01', now() - interval '1 day', 'restore-test')
+  RETURNING id
+)
+INSERT INTO "Branch" (code, name, "reusedFromId", "reusedAt") SELECT 'ZZRT01', 'ร้านใหม่ ทดสอบกู้คืน', id, now() FROM old;
+SQL
+REUSE_SQL='select count(*)||$$|$$||coalesce(md5(string_agg(concat_ws($$~$$, id, code, coalesce("originalCode",$$NULL$$), coalesce("reusedFromId"::text,$$NULL$$), coalesce(to_char("reusedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$)), $$,$$ order by id)),$$-$$) from "Branch" where "originalCode" is not null or "reusedFromId" is not null or "reusedAt" is not null'
+SRC_REUSE=$(PG -d serviceapp -Atc "$REUSE_SQL" 2>/dev/null) || SRC_REUSE=""
 
 # 1) ไฟล์สำรองจากฐานข้อมูลที่ใช้เทสต์ — ฟังก์ชันเดียวกับปุ่มสำรองข้อมูล
 node_modules/.bin/ts-node --transpile-only -e "
@@ -150,6 +166,16 @@ elif [ -n "$SRC_BRANCH" ] && [ "$SRC_BRANCH" = "$DST_BRANCH" ]; then
   pass "ประวัติสาขา + ชื่อที่แก้ในแอปตามมาครบทุกช่อง (ประวัติ $(echo "$SRC_BRANCH" | cut -d'|' -f1) แถว รวม meta ว่าง/มีค่า และคนทำที่บัญชีถูกลบแล้ว · ชื่อที่จำไว้ $(echo "$SRC_BRANCH" | cut -d'|' -f2) แถว)"
 else
   fail "ประวัติสาขา/ชื่อที่จำไว้หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_BRANCH] · หลังกู้ [$DST_BRANCH]"
+fi
+
+# 3d) สาขาที่ใช้รหัสซ้ำ — ต้นฉบับต้องมีคู่ชั่วคราวครบ (2 แถว) ไม่งั้นเทียบ 0 กับ 0 ไม่ได้ตรวจอะไร · reusedFromId ต้องชี้ id เดิม
+DST_REUSE=$(PG -d $TMPDB -Atc "$REUSE_SQL" 2>/dev/null) || DST_REUSE=""
+if [ "$(echo "$SRC_REUSE" | cut -d'|' -f1)" != "2" ]; then
+  fail "ใส่คู่สาขาใช้รหัสซ้ำชั่วคราวไม่สำเร็จ (ได้ [$SRC_REUSE] ต้อง 2 แถว) — ยังไม่ migrate branch_code_reuse หรือมี ZZRT01 ค้างอยู่"
+elif [ "$SRC_REUSE" = "$DST_REUSE" ] && [ "$(PG -d $TMPDB -Atc "select o.code from \"Branch\" n join \"Branch\" o on o.id = n.\"reusedFromId\" where n.code='ZZRT01'")" = "ZZRT01 (เดิม)" ]; then
+  pass "สาขาที่ใช้รหัสซ้ำตามมาครบ: originalCode · reusedAt · reusedFromId (อ้างตาราง Branch เอง) ชี้สาขาเดิมถูกแถว"
+else
+  fail "สาขาที่ใช้รหัสซ้ำหลังกู้ไม่ตรง: ต้นฉบับ [$SRC_REUSE] · หลังกู้ [$DST_REUSE]"
 fi
 
 # 4) กู้ซ้ำลงฐานที่มีข้อมูลแล้ว ต้องปฏิเสธ ไม่เขียนทับ
