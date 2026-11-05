@@ -9,6 +9,7 @@
 import { cleanName } from "../utils/names";
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
+import { isRetiredCode, retiredRowsNote } from "../utils/branchCodeReuse";
 
 export interface BranchSheetRow {
   code: string;
@@ -248,8 +249,19 @@ function describe(region: string | null, zone: string | null) {
   return `${region ?? "—"} / ${zone ?? "—"}`;
 }
 
-export async function planBranchImport(parsed: BranchParseResult): Promise<BranchImportPlan> {
+/**
+ * แถวรหัส "(เดิม)" ไม่ใช่รหัสในทะเบียน — ระบบตั้งให้สาขาที่ยกรหัสให้สาขาใหม่ (utils/branchCodeReuse.ts)
+ * ไฟล์ที่มีรหัสแบบนี้ (ส่งออกจากแอปแล้วอัปกลับ) จะสร้างสาขา "(เดิม)" ใหม่หรือแก้ทะเบียนของสาขาเก่า — ตัดออกก่อนทั้งหน้าสรุปและตอนบันทึก
+ */
+function withoutRetired(parsed: BranchParseResult) {
+  const retired = parsed.rows.filter((r) => isRetiredCode(r.code)).map((r) => r.code);
+  return { parsed: { ...parsed, rows: parsed.rows.filter((r) => !isRetiredCode(r.code)) }, retired };
+}
+
+export async function planBranchImport(input: BranchParseResult): Promise<BranchImportPlan> {
+  const { parsed, retired } = withoutRetired(input);
   const warnings: string[] = [];
+  if (retired.length > 0) warnings.push(retiredRowsNote(retired));
   if (parsed.duplicateRows > 0) {
     warnings.push(`ไฟล์มีรหัสสาขาซ้ำ ${parsed.duplicateRows} แถว ระบบใช้แถวล่างสุดของแต่ละรหัส`);
   }
@@ -353,7 +365,7 @@ export async function applyBranchImport(parsed: BranchParseResult): Promise<Bran
   const plan = await planBranchImport(parsed);
   if (plan.errors.length > 0) return plan;
 
-  const rows = parsed.rows;
+  const rows = withoutRetired(parsed).parsed.rows;
 
   // เขียนทั้งหมดในคำสั่งเดียวเหมือนการนำเข้ารายงานเครื่อง เพราะไฟล์นี้มีกว่าพันสาขา
   //

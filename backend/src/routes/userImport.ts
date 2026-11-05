@@ -22,6 +22,7 @@ import { resolveTeam, teamAliasMap } from "../utils/teamAliases";
 import { teamGroups, teamsOf } from "../utils/teamGroups";
 import { staleUsers } from "../utils/userGate";
 import { HOWTO_NEW } from "../utils/howto";
+import { isRetiredCode } from "../utils/branchCodeReuse";
 
 const router = Router();
 
@@ -281,7 +282,12 @@ router.post("/area-team", requireAuth, requireAdmin, areaUpload.single("file"), 
       where: { employeeCode: { in: logins }, deletedAt: null },
       select: { id: true, employeeCode: true, name: true, role: true, mustChangePassword: true },
     }),
-    prisma.branch.findMany({ where: { code: { in: codes } }, select: { id: true, code: true, cancelledAt: true } }),
+    // รหัส "(เดิม)" ไม่ใช่รหัสในทะเบียน (สาขาที่ยกรหัสให้สาขาใหม่ — utils/branchCodeReuse.ts) ไม่ผูก Supervisor/Maid ให้
+    // ขึ้นเป็นรหัสที่ไม่พบแทน · รหัสจริง (C0546) ได้สาขาที่ถือรหัสตอนนี้ คือสาขาใหม่
+    prisma.branch.findMany({
+      where: { code: { in: codes.filter((c) => !isRetiredCode(c)) } },
+      select: { id: true, code: true, cancelledAt: true },
+    }),
   ]);
   const byLogin = new Map(existing.map((u) => [u.employeeCode, u]));
   const knownBranch = new Map(branches.map((b) => [b.code, b]));

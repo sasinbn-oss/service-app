@@ -100,7 +100,8 @@ export async function branchActor(userId: number): Promise<BranchActor> {
   return { id: userId, name: me?.name ?? null };
 }
 
-export type BranchLogAction = "RENAMED" | "NAME_RESTORED" | "CLOSED" | "REOPENED";
+// CODE_RETIRED / CODE_REUSED = ใช้รหัสของสาขาที่ปิดแล้วกับสาขาใหม่ (utils/branchCodeReuse.ts) — สองแถวคู่กัน แถวละสาขา
+export type BranchLogAction = "RENAMED" | "NAME_RESTORED" | "CLOSED" | "REOPENED" | "CODE_RETIRED" | "CODE_REUSED";
 
 /**
  * ลงประวัติสาขา — ต้องเรียกในทรานแซกชันเดียวกับที่แก้สาขา: แก้สำเร็จแต่ไม่มีประวัติ (หรือกลับกัน) คือประวัติที่โกหก

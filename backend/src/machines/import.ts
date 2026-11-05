@@ -14,6 +14,7 @@
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
 import { outageScore } from "../utils/constants";
+import { isRetiredCode, retiredRowsNote } from "../utils/branchCodeReuse";
 
 /** ต้องตรงกับ SLA_HOURS ใน routes/machines.ts — ใช้ตัดสินว่าเคสไหนเลยกำหนดตอน snapshot */
 const SLA_HOURS = Number(process.env.MACHINE_SLA_HOURS) || 72;
@@ -420,6 +421,15 @@ async function removedMachineKeys(): Promise<Set<string>> {
   return new Set(rows.map((r) => `${r.branch.code}|${r.code}`));
 }
 
+/**
+ * แถวที่รหัสเป็นแบบ "C0546 (เดิม)" — ระบบตั้งให้สาขาที่ยกรหัสให้สาขาใหม่ (utils/branchCodeReuse.ts) ไม่มีในรายงานจริง
+ * ถ้าหลุดมา (เช่นเอาไฟล์ที่ส่งออกจากแอปมาอัปกลับ) ตัวนำเข้าจะเขียนเครื่อง/เคสลงสาขาเก่า หรือสร้างสาขาชื่อ "(เดิม)" ใหม่ — ข้ามเสมอ
+ * แถว C0546 ธรรมดาไปลงสาขาใหม่เองอยู่แล้ว (ON CONFLICT ("code") ของสาขาที่ถือรหัสตอนนี้)
+ */
+function splitRetired(rows: SheetRow[]) {
+  return { rows: rows.filter((r) => !isRetiredCode(r.branchCode)), retired: rows.filter((r) => isRetiredCode(r.branchCode)) };
+}
+
 /** แถวที่ต้องข้าม เพราะสาขายกเลิกหรือเครื่องถูกถอดออกไปแล้ว */
 function isSkipped(row: SheetRow, cancelled: Set<string>, removed: Set<string>) {
   return cancelled.has(row.branchCode) || removed.has(`${row.branchCode}|${row.machineCode}`);
@@ -431,8 +441,9 @@ export async function planImport(
   snapshotSource: SnapshotSource = "uploadTime"
 ): Promise<ImportPlan> {
   const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
-  const usableRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
-  const skippedRows = parsed.rows.filter((r) => isSkipped(r, cancelled, removed));
+  const { rows: fileRows, retired } = splitRetired(parsed.rows);
+  const usableRows = fileRows.filter((r) => !isSkipped(r, cancelled, removed));
+  const skippedRows = fileRows.filter((r) => isSkipped(r, cancelled, removed));
   const skippedCancelled = skippedRows.length;
   const skippedCancelledBranches = new Set(
     skippedRows.filter((r) => cancelled.has(r.branchCode)).map((r) => r.branchCode)
@@ -470,6 +481,8 @@ export async function planImport(
     warnings.push(`ข้าม ${skippedCancelled} แถว — ${parts.join(" และ ")}`);
   }
 
+  if (retired.length > 0) warnings.push(retiredRowsNote(retired.map((r) => r.branchCode)));
+
   if (reclassified.length > 0) {
     const sample = reclassified
       .slice(0, 3)
@@ -493,7 +506,7 @@ export async function planImport(
     );
   }
 
-  const branchCodes = [...new Set(parsed.rows.map((r) => r.branchCode))];
+  const branchCodes = [...new Set(fileRows.map((r) => r.branchCode))];
   const existingBranches = await prisma.branch.findMany({
     where: { code: { in: branchCodes } },
     select: { id: true, code: true, machines: { select: { code: true } } },
@@ -502,7 +515,7 @@ export async function planImport(
   const newBranches = branchCodes.filter((code) => !branchByCode.has(code));
 
   let newMachines = 0;
-  for (const row of parsed.rows) {
+  for (const row of fileRows) {
     const branch = branchByCode.get(row.branchCode);
     if (!branch || !branch.machines.some((m) => m.code === row.machineCode)) newMachines += 1;
   }
@@ -576,7 +589,9 @@ export async function planImport(
  * = เคสของทุกสาขาที่ไม่อยู่ในไฟล์ถูกปิดทั้งระบบ เทสต์จึงไม่เคยอัปไฟล์นี้ — และตรงนี้คือที่เดียวที่เขียนชื่อสาขาจากไฟล์ทุกรอบ
  * ชื่อที่แก้ในแอปรอดหรือไม่ตัดสินกันที่นี่
  */
-export async function writeReportBranches(liveRows: SheetRow[]) {
+export async function writeReportBranches(rows: SheetRow[]) {
+  // ผู้เรียกกรองมาแล้ว (applyImport) — กันซ้ำที่นี่เพราะนี่คือคำสั่งที่สร้าง/แก้สาขาจริง ("(เดิม)" ต้องไม่ถูกสร้างหรือแตะจากไฟล์)
+  const liveRows = splitRetired(rows).rows;
   const seenBranches = new Map<string, SheetRow>();
   for (const row of liveRows) if (!seenBranches.has(row.branchCode)) seenBranches.set(row.branchCode, row);
 
@@ -688,7 +703,7 @@ export async function applyImport(
   if (plan.errors.length > 0) return plan;
 
   const [cancelled, removed] = await Promise.all([cancelledBranchCodes(), removedMachineKeys()]);
-  const liveRows = parsed.rows.filter((r) => !isSkipped(r, cancelled, removed));
+  const liveRows = splitRetired(parsed.rows).rows.filter((r) => !isSkipped(r, cancelled, removed));
   const { offMachines, signalLostBranches } = split(liveRows);
   const { branchIdByCode, machineIdByKey, branchesTouched } = await writeReportBranches(liveRows);
 
