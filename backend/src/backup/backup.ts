@@ -69,6 +69,9 @@ const SHEET_TITLE: Record<string, string> = {
   PartsPick: "อะไหล่ที่ช่างเลือก",
   PartsPickItem: "รายการอะไหล่ที่ช่างเลือก",
   SparePartBrandFile: "อะไหล่อยู่ในไฟล์ยี่ห้อ",
+  // ประวัติการนำเข้า — ไม่มีชื่อ/เบอร์ผู้ติดต่อ รหัสผ่าน หรือเลขบัตร (ไม่ได้เก็บตั้งแต่ต้น) จึงใส่ทั้งสองไฟล์ได้เหมือนตารางอื่น
+  ImportRun: "ประวัติการนำเข้า",
+  ImportRunRow: "ผลนำเข้าทีละแถว",
 };
 
 const models = () => Prisma.dmmf.datamodel.models.filter((m) => !SKIP_MODELS.has(m.name));

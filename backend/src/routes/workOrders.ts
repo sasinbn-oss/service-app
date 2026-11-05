@@ -11,6 +11,7 @@
 import { AREA_BRANCH_SELECT, AREA_ONLY_MESSAGE, AREA_OUT_OF_SCOPE, areaBranchSelect, areaCoversBranch, areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { Router, Response } from "express";
 import multer from "multer";
+import crypto from "crypto";
 import JSZip from "jszip";
 import { Readable } from "stream";
 import { z } from "zod";
@@ -112,6 +113,7 @@ import {
   vendorRows,
 } from "../utils/claimRules";
 import { FormImage, NO_MACHINE_JOB_TYPES, formDetail, formTitle, parseRepairForm } from "../utils/repairFormImport";
+import { closeRepairBatch, failRepairRun, legacyRepairRunKey, openRepairRun, recordImport, repairRunKey, RowChange, uploadName } from "../utils/importHistory";
 import {
   MACHINE_BRAND_INVALID,
   Refusal,
@@ -4461,6 +4463,13 @@ interface FormImportRun {
   photosFailed: number;
   /** แถวที่กำลังทำตอนพัง — null = พังก่อน/หลังวนแถว (อ่านไฟล์ · วางแผน) */
   line: number | null;
+  /**
+   * รอบในประวัติการนำเข้า (utils/importHistory.ts) — null = บันทึกประวัติไม่ได้ (การนำเข้ายังทำต่อตามเดิม)
+   * ตัวจับ error ท้ายเส้นทางปิดชุดด้วยแถวที่เปิดไปแล้ว + ข้อความที่ผู้ใช้เห็น — รอบที่ล้มต้องอยู่ในประวัติด้วย
+   */
+  history: number | null;
+  /** สิ่งที่ชุดนี้ทำกับแต่ละแถว (เปิดแล้ว · ถูกนำเข้าไปแล้วระหว่างนี้ · เติมรูป) — เขียนลงประวัติครั้งเดียวตอนจบชุด */
+  changes: RowChange[];
 }
 
 /**
@@ -4479,7 +4488,7 @@ function importFailureReason(e: unknown): string {
 }
 
 router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file"), async (req: AuthRequest, res) => {
-  const run: FormImportRun = { created: [], photosAttached: 0, photosFailed: 0, line: null };
+  const run: FormImportRun = { created: [], photosAttached: 0, photosFailed: 0, line: null, history: null, changes: [] };
   try {
     await importRepairForm(req, res, run);
   } catch (e) {
@@ -4493,17 +4502,22 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
     );
     const reason = importFailureReason(e);
     const n = run.created.length;
+    const error =
+      `เปิดใบงานไม่ครบ — ${reason}${run.line ? ` ตอนเปิดแถว ${run.line}` : ""} · ` +
+      (n ? `รอบนี้เปิดไปแล้ว ${n} ใบ (${run.created[0]}–${run.created[n - 1]})` : "รอบนี้ยังไม่ได้เปิดใบไหน") +
+      " · นำเข้าไฟล์เดิมอีกครั้งเพื่อเปิดที่เหลือ ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ";
+    // ล้มกลางทางก็อยู่ในประวัติ (เจ้าของงานเลือก) — ใบที่เปิดไปแล้วในชุดนี้ + ข้อความเดียวกับที่แอดมินเห็น
+    if (run.history) await closeRepairBatch(run.history, run.changes, { status: "FAILED", error });
+    else if (req.file) run.history = await failRepairRun(req.auth!.userId, req.body?.runKey, uploadName(req.file), error);
     res.status(500).json({
-      error:
-        `เปิดใบงานไม่ครบ — ${reason}${run.line ? ` ตอนเปิดแถว ${run.line}` : ""} · ` +
-        (n ? `รอบนี้เปิดไปแล้ว ${n} ใบ (${run.created[0]}–${run.created[n - 1]})` : "รอบนี้ยังไม่ได้เปิดใบไหน") +
-        " · นำเข้าไฟล์เดิมอีกครั้งเพื่อเปิดที่เหลือ ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ",
+      error,
       code: "IMPORT_FAILED",
       reason,
       line: run.line,
       created: run.created,
       photosAttached: run.photosAttached,
       photosFailed: run.photosFailed,
+      ...(run.history ? { runId: `r${run.history}` } : {}),
     });
   }
 });
@@ -4518,13 +4532,23 @@ const FORM_IMPORT_BUDGET_MS = 40_000;
 async function importRepairForm(req: AuthRequest, res: Response, run: FormImportRun) {
   const startedAt = Date.now();
   if (!req.file) return res.status(400).json({ error: "ต้องแนบไฟล์ฟอร์มแจ้งซ่อม (.xlsx)" });
+  const file = req.file;
+  /**
+   * ตอนยืนยันแล้วอ่านไฟล์ไม่ได้ — รอบนี้ไม่มีใบไหนเข้า ต้องอยู่ในประวัติด้วย (ดูตัวอย่างอ่านไม่ได้ไม่นับ: ยังไม่ได้เริ่มรอบ)
+   */
+  const refuse = async (error: string) => {
+    if (req.body?.apply === "true") {
+      await recordImport({ kind: "REPAIR_FORM", userId: req.auth!.userId, fileName: uploadName(file), status: "FAILED", rowsInFile: 0, summary: {}, error });
+    }
+    return res.status(400).json({ error });
+  };
   let rows: Awaited<ReturnType<typeof parseRepairForm>>;
   try {
-    rows = await parseRepairForm(req.file.buffer);
+    rows = await parseRepairForm(file.buffer);
   } catch (e) {
-    return res.status(400).json({ error: e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้" });
+    return refuse(e instanceof Error ? e.message : "อ่านไฟล์ไม่ได้");
   }
-  if (rows.length === 0) return res.status(400).json({ error: "ไฟล์ไม่มีรายการแจ้งซ่อม" });
+  if (rows.length === 0) return refuse("ไฟล์ไม่มีรายการแจ้งซ่อม");
 
   // ถามทีเดียวทั้งไฟล์ — สาขา · แถวที่เคยนำเข้า · ใบที่ยังค้างของเครื่องในไฟล์
   const codes = [...new Set(rows.map((r) => r.branchCode).filter(Boolean))];
@@ -4728,6 +4752,44 @@ async function importRepairForm(req: AuthRequest, res: Response, run: FormImport
   // แถวที่ไม่ได้เริ่มเพราะเวลาของคำขอนี้หมด — แอปส่งมาใหม่ในชุดถัดไป
   const pending: number[] = [];
   const outOfTime = () => Date.now() - startedAt > FORM_IMPORT_BUDGET_MS;
+
+  /**
+   * ประวัติการนำเข้า — ทุกชุดของการกดยืนยันครั้งเดียวคือรอบเดียว (แอปส่ง runKey เดียวกันทุกชุด)
+   * ชุดแรกเขียนทุกแถวของไฟล์: แถวที่จะเปิดเป็น "ยังไม่ได้เปิด" (PENDING) จนกว่าชุดของมันเปิดจริง · ไม่เก็บชื่อ/เบอร์ผู้ติดต่อ
+   * แอปรุ่นก่อนไม่ส่ง runKey — จัดชุดเข้ารอบด้วย sha256 ของไฟล์ (legacyRepairRunKey) · บันทึกไม่ได้ = นำเข้าต่อตามเดิม
+   */
+  const woCode = (s: string | null | undefined) => (s && /^WO-\d+$/.test(s) ? s : null);
+  const fileHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
+  const runKey = repairRunKey(req.auth!.userId, req.body?.runKey) ?? (await legacyRepairRunKey(req.auth!.userId, fileHash, only !== null));
+  const hist = await openRepairRun({
+    runKey,
+    userId: req.auth!.userId,
+    fileName: uploadName(file),
+    fileHash,
+    rowsInFile: rows.length,
+    rows: plan.map((p) => ({
+      line: p.line,
+      result: p.status === "NEW" ? "PENDING" : p.status,
+      code: p.branchCode,
+      name: p.branchName,
+      machine: p.machineCode ?? p.machineNote,
+      detail: p.symptom,
+      note: p.reason,
+      ref: woCode(p.existing),
+    })),
+  });
+  run.history = hist?.id ?? null;
+  const planOf = new Map(plan.map((p) => [p.line, p]));
+  /** แถวที่ขอให้เปิดแต่ไม่ใช่ใบใหม่แล้ว — ในประวัติเปลี่ยนจาก "ยังไม่ได้เปิด" เป็นนำเข้าแล้ว (ถ้ายังรออยู่) */
+  const staleChange = (line: number): RowChange => ({
+    line,
+    result: "IMPORTED",
+    ref: woCode(planOf.get(line)?.existing),
+    note: "ถูกนำเข้าไปแล้วระหว่างรอบนี้ (อีกหน้าจอ/คำขอก่อนหน้า) — ไม่เปิดซ้ำ",
+    pendingOnly: true,
+  });
+  run.changes.push(...stale.map(staleChange));
+
   // ใบเดิมที่ยังไม่มีรูปจากฟอร์ม — แถวเดียวกันในไฟล์อาจซ้ำหลายแถว (ส่งฟอร์มซ้ำ) เติมครั้งเดียว
   for (const p of fills) {
     if (outOfTime()) {
@@ -4738,10 +4800,15 @@ async function importRepairForm(req: AuthRequest, res: Response, run: FormImport
     const img = imageOf.get(p.line);
     if (!wo || !img || filled.includes(wo.code)) continue;
     run.line = p.line;
+    const fillNote = (p.reason ?? "").replace(/ · จะเติมรูปจากไฟล์ให้$/, "");
     if (await attachFormPhoto(wo.id, wo.code, wo.status, img, p.line, req.auth!.userId)) {
       filled.push(wo.code);
       run.photosAttached++;
-    } else run.photosFailed++;
+      run.changes.push({ line: p.line, ref: wo.code, note: `${fillNote || `ใบเดิม ${wo.code}`} · เติมรูปจากไฟล์แล้ว` });
+    } else {
+      run.photosFailed++;
+      run.changes.push({ line: p.line, ref: wo.code, note: `${fillNote || `ใบเดิม ${wo.code}`} · แนบรูปจากไฟล์ไม่สำเร็จ — นำเข้าไฟล์เดิมอีกรอบเพื่อลองใหม่` });
+    }
   }
 
   /**
@@ -4772,10 +4839,14 @@ async function importRepairForm(req: AuthRequest, res: Response, run: FormImport
    * attachFormPhoto ไม่โยน error (นับเป็นแนบไม่สำเร็จ) สายรูปจึงไม่ขาดกลางทาง
    */
   let photoQueue: Promise<void> = Promise.resolve();
-  const queuePhoto = (id: number, code: string, img: FormImage, line: number) => {
+  const queuePhoto = (id: number, code: string, img: FormImage, line: number, change: RowChange) => {
     photoQueue = photoQueue.then(async () => {
       if (await attachFormPhoto(id, code, "NEW", img, line, req.auth!.userId)) run.photosAttached++;
-      else run.photosFailed++;
+      else {
+        run.photosFailed++;
+        // ใบเปิดแล้วแต่รูปไม่เข้า — แถวในประวัติบอกให้นำเข้าไฟล์เดิมซ้ำเพื่อเติมรูป (ไม่งั้นเห็นแค่ "เปิดใบใหม่" แล้วไม่รู้ว่ารูปหาย)
+        change.note = "เปิดใบแล้ว แต่แนบรูปจากไฟล์ไม่สำเร็จ — นำเข้าไฟล์เดิมอีกรอบเพื่อเติมรูป";
+      }
     });
   };
   try {
@@ -4853,13 +4924,16 @@ async function importRepairForm(req: AuthRequest, res: Response, run: FormImport
       }
       if (!made) {
         stale.push(r.line);
+        run.changes.push(staleChange(r.line));
         continue;
       }
       if (key && made.machine) machines.set(key, made.machine);
       const code = workOrderCode(made.id);
       run.created.push(code);
+      const change: RowChange = { line: r.line, result: "NEW", ref: code };
+      run.changes.push(change);
       const img = imageOf.get(r.line);
-      if (img) queuePhoto(made.id, code, img, r.line);
+      if (img) queuePhoto(made.id, code, img, r.line, change);
     }
   } finally {
     // แถวที่ล้มก็ต้องรอรูปของแถวก่อนหน้าให้จบ — ไม่งั้นคำตอบนับรูปไม่ครบ และยังมีงานวิ่งอยู่หลังตอบไปแล้ว
@@ -4882,15 +4956,16 @@ async function importRepairForm(req: AuthRequest, res: Response, run: FormImport
    */
   if (!only && pending.length) {
     const n = run.created.length;
-    return res.status(409).json({
-      ...result,
-      error:
-        `ไฟล์นี้ใหญ่เกินกว่าจะเปิดในครั้งเดียว — รอบนี้เปิดไปแล้ว ${n} ใบ เหลืออีก ${pending.length} แถว · ` +
-        "รีเฟรชหน้าเว็บ (ให้ได้แอปรุ่นที่เปิดทีละชุด) แล้วนำเข้าไฟล์เดิมอีกครั้ง ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ",
-      code: "IMPORT_PARTIAL",
-    });
+    const error =
+      `ไฟล์นี้ใหญ่เกินกว่าจะเปิดในครั้งเดียว — รอบนี้เปิดไปแล้ว ${n} ใบ เหลืออีก ${pending.length} แถว · ` +
+      "รีเฟรชหน้าเว็บ (ให้ได้แอปรุ่นที่เปิดทีละชุด) แล้วนำเข้าไฟล์เดิมอีกครั้ง ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ";
+    // แอปรุ่นนี้จะไม่ส่งชุดต่อ — รอบจบตรงนี้ (หยุดกลางทาง) ไม่ต้องรอ 5 นาทีให้หน้าประวัติตัดสินเอง
+    if (run.history) await closeRepairBatch(run.history, run.changes, { status: "STOPPED", error });
+    return res.status(409).json({ ...result, error, code: "IMPORT_PARTIAL", ...(run.history ? { runId: `r${run.history}` } : {}) });
   }
-  res.json(result);
+  // ไม่เหลือแถวที่ยังไม่ได้เปิด = รอบจบ (closeRepairBatch ตัดสินเอง) · ยังเหลือ = รอชุดถัดไปจากแอป
+  if (run.history) await closeRepairBatch(run.history, run.changes, { status: "RUNNING" });
+  res.json({ ...result, ...(run.history ? { runId: `r${run.history}` } : {}) });
 }
 
 const fromOutageSchema = z.object({

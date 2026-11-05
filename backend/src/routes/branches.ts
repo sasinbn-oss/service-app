@@ -37,6 +37,7 @@ import {
   warrantyYearsFor,
 } from "../utils/constants";
 import { brandFileOf, openPickOf, statusLabelOf } from "../utils/brandFile";
+import { HistoryRow, recordImport, uploadName } from "../utils/importHistory";
 
 const router = Router();
 
@@ -51,28 +52,82 @@ const upload = multer({
  * ค่าเริ่มต้นคือโหมดตรวจสอบ ต้องส่ง mode=commit ถึงจะบันทึกจริง
  * ไฟล์นี้แตะเฉพาะข้อมูลสาขา ไม่ยุ่งกับสถานะเครื่องหรือเคสที่เปิดค้างอยู่
  */
-router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (req, res) => {
+router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (req: AuthRequest, res) => {
   if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });
 
   const commit = req.body?.mode === "commit";
+  const file = req.file;
+  // กดบันทึกแล้วไม่สำเร็จ = รอบที่ล้ม อยู่ในประวัติการนำเข้า (โหมดตรวจสอบไม่นับ — ยังไม่ได้เริ่มอะไร)
+  const refuse = async (error: string) => {
+    if (commit) await recordImport({ kind: "BRANCH", userId: req.auth!.userId, fileName: uploadName(file), status: "FAILED", rowsInFile: 0, summary: {}, error });
+    return res.status(400).json({ error });
+  };
   try {
-    const parsed = await parseBranchWorkbook(req.file.buffer);
-    if (parsed.errors.length > 0) return res.status(400).json({ error: parsed.errors.join(" / ") });
-    if (parsed.rows.length === 0) return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
+    const parsed = await parseBranchWorkbook(file.buffer);
+    if (parsed.errors.length > 0) return refuse(parsed.errors.join(" / "));
+    if (parsed.rows.length === 0) return refuse("ไม่พบข้อมูลในไฟล์");
     // ไฟล์ยังเขียนชื่อทีมที่แอดมินเปลี่ยนไปแล้ว — แปลงก่อน ไม่งั้นชื่อเดิมถูกเขียนกลับลงสาขา
     await applyTeamAliases(parsed.rows);
     // ภาค/ประเภทที่แก้ในหน้าจัดการสาขา — ไฟล์ยังเขียนค่าเดิมจนกว่าจะมีคนแก้ต้นฉบับ
     await applyBranchPins(parsed.rows);
 
-    const plan = commit ? await applyBranchImport(parsed) : await planBranchImport(parsed);
+    const { history, ...plan } = commit ? await applyBranchImport(parsed) : await planBranchImport(parsed);
+    if (commit) {
+      // ประวัติการนำเข้า: ยอดสรุป + สาขาใหม่/ภาค-ทีมเปลี่ยน ครบทุกสาขา (หน้าสรุปมีแค่ตัวอย่าง 10 สาขา)
+      await recordImport({
+        kind: "BRANCH",
+        userId: req.auth!.userId,
+        fileName: uploadName(file),
+        status: plan.errors.length ? "FAILED" : "DONE",
+        rowsInFile: plan.rowsInFile,
+        summary: {
+          new: plan.newBranchCount,
+          changed: plan.changedCount,
+          same: plan.unchangedCount,
+          dup: plan.duplicateRows,
+          coords: plan.newCoordinateCount,
+          notInFile: plan.notInFileCount,
+        },
+        rows: history,
+        error: plan.errors.length ? plan.errors.join(" / ") : null,
+      });
+    }
     res.json({ committed: commit, plan });
   } catch (err) {
     console.error("Branch import failed:", err);
-    res.status(400).json({
-      error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
-    });
+    await refuse(`อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`);
   }
 });
+
+/** ผลของไฟล์สาขาที่ยกเลิก → แถวในประวัติการนำเข้า (ไฟล์นี้ไม่มีเลขแถวในแผน — รายการเป็นรายสาขา/รายเครื่อง) */
+function cancelledHistory(plan: Awaited<ReturnType<typeof planCancelledImport>>): HistoryRow[] {
+  return [
+    ...plan.toCancel.map((b) => ({ result: "closed", code: b.code, name: b.name, detail: `ปิดทั้งสาขา${b.openCases ? ` · ปิดเคสค้าง ${b.openCases}` : ""}` })),
+    ...plan.machinesToRemove.map((m) => ({
+      result: "removed",
+      code: m.code,
+      name: m.name,
+      machine: m.machineCode,
+      detail: `ถอดเครื่อง ${m.machineCode}${m.openCases ? ` · ปิดเคสค้าง ${m.openCases}` : ""}`,
+    })),
+    ...plan.toRestore.map((r) => ({
+      result: "restored",
+      code: r.code,
+      name: r.name,
+      machine: r.machineCode,
+      detail: r.machineCode ? `เอาเครื่อง ${r.machineCode} กลับมาใช้` : "เอาสาขากลับมาใช้",
+    })),
+    ...plan.skippedReused.map((r) => ({
+      result: "reused",
+      code: r.code,
+      name: r.name,
+      detail: `ข้าม ${r.rows} แถว`,
+      note: "รหัสนี้ใช้กับสาขาใหม่แล้ว — แถวในไฟล์คือการปิดสาขาเดิม",
+    })),
+    ...plan.skippedRetired.map((code) => ({ result: "retired", code, note: "รหัสแบบ (เดิม) ไม่ใช่รหัสในทะเบียน — ข้าม" })),
+    ...plan.notFound.map((code) => ({ result: "notFound", code, note: "ไม่มีในระบบ — ข้าม" })),
+  ];
+}
 
 /**
  * รายชื่อสาขาหรือเครื่องที่ยกเลิกแล้ว
@@ -80,22 +135,47 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
  * แยกจากทะเบียนสาขาเพราะเป็นคนละเรื่องและคนละจังหวะ ทะเบียนบอกว่าใครดูแลสาขาไหน
  * ไฟล์นี้บอกว่าอะไรไม่มีอยู่แล้ว ซึ่งกระทบถึงการปิดเคสที่ค้างอยู่
  */
-router.post("/cancelled-import", requireAuth, requireAdmin, upload.single("file"), async (req, res) => {
+router.post("/cancelled-import", requireAuth, requireAdmin, upload.single("file"), async (req: AuthRequest, res) => {
   if (!req.file) return res.status(400).json({ error: "กรุณาแนบไฟล์ Excel" });
 
   const commit = req.body?.mode === "commit";
+  const file = req.file;
+  const refuse = async (error: string) => {
+    if (commit) {
+      await recordImport({ kind: "BRANCH_CANCELLED", userId: req.auth!.userId, fileName: uploadName(file), status: "FAILED", rowsInFile: 0, summary: {}, error });
+    }
+    return res.status(400).json({ error });
+  };
   try {
-    const parsed = await parseCancelledWorkbook(req.file.buffer);
-    if (parsed.errors.length > 0) return res.status(400).json({ error: parsed.errors.join(" / ") });
-    if (parsed.rows.length === 0) return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
+    const parsed = await parseCancelledWorkbook(file.buffer);
+    if (parsed.errors.length > 0) return refuse(parsed.errors.join(" / "));
+    if (parsed.rows.length === 0) return refuse("ไม่พบข้อมูลในไฟล์");
 
     const plan = commit ? await applyCancelledImport(parsed) : await planCancelledImport(parsed);
+    if (commit) {
+      await recordImport({
+        kind: "BRANCH_CANCELLED",
+        userId: req.auth!.userId,
+        fileName: uploadName(file),
+        status: "DONE",
+        rowsInFile: plan.rowsInFile,
+        summary: {
+          closed: plan.toCancel.length,
+          removed: plan.machinesToRemove.length,
+          restored: plan.toRestore.length,
+          already: plan.alreadyCancelled,
+          reused: plan.skippedReused.length,
+          retired: plan.skippedRetired.length,
+          notFound: plan.notFound.length,
+          cases: plan.openCasesToClose,
+        },
+        rows: cancelledHistory(plan),
+      });
+    }
     res.json({ committed: commit, plan });
   } catch (err) {
     console.error("Cancelled branch import failed:", err);
-    res.status(400).json({
-      error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
-    });
+    await refuse(`อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`);
   }
 });
 

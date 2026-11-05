@@ -10,6 +10,7 @@
  */
 import { Router } from "express";
 import multer from "multer";
+import { recordImport, uploadName } from "../utils/importHistory";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
@@ -983,14 +984,16 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
     return res.status(400).json({ error: "รูปแบบเวลา snapshot ไม่ถูกต้อง" });
   }
 
+  const file = req.file;
+  // กดยืนยันแล้วไม่สำเร็จ = รอบที่ล้ม อยู่ในประวัติการนำเข้า (ตรวจสอบ/ดูตัวอย่างไม่นับ — ยังไม่ได้เริ่มอะไร)
+  const refuse = async (error: string) => {
+    if (commit) await recordImport({ kind: "MACHINE", userId: req.auth!.userId, fileName: uploadName(file), status: "FAILED", rowsInFile: 0, summary: {}, error });
+    return res.status(400).json({ error });
+  };
   try {
-    const parsed = await parseWorkbook(req.file.buffer);
-    if (parsed.errors.length > 0) {
-      return res.status(400).json({ error: parsed.errors.join(" / ") });
-    }
-    if (parsed.rows.length === 0) {
-      return res.status(400).json({ error: "ไม่พบข้อมูลในไฟล์" });
-    }
+    const parsed = await parseWorkbook(file.buffer);
+    if (parsed.errors.length > 0) return refuse(parsed.errors.join(" / "));
+    if (parsed.rows.length === 0) return refuse("ไม่พบข้อมูลในไฟล์");
     // คอลัมน์ zone ในไฟล์เครื่องเขียนลงสาขาด้วย — แปลงชื่อทีมที่เปลี่ยนในแอปแล้วแบบเดียวกับทะเบียนสาขา
     await applyTeamAliases(parsed.rows);
     // ภาค/ประเภทที่แก้ในหน้าจัดการสาขา — ไฟล์เครื่องเขียนสองค่านี้ลงสาขาทุกรอบ
@@ -998,12 +1001,13 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
 
     // เวลาอ้างอิงมาจากตัวไฟล์ ไม่ใช่เวลาที่กดอัปโหลด อัปโหลดช้าไปสองวัน
     // SLA ก็ยังต้องนับจากเวลาที่ export ไม่ใช่เวลาที่เพิ่งนึกได้ว่ายังไม่ได้อัป
-    const { snapshotAt, source } = resolveSnapshot(parsed, req.file.originalname, manual);
+    const { snapshotAt, source } = resolveSnapshot(parsed, file.originalname, manual);
 
     const plan = commit
       ? await applyImport(parsed, snapshotAt, {
           uploadedById: req.auth!.userId,
-          fileName: req.file.originalname,
+          // ชื่อไฟล์ภาษาไทยมาเป็น latin1 จาก multer — เดิมเก็บตรง ๆ หน้าประวัติการนำเข้าเลยเห็นตัวอักษรเพี้ยน (แถวเก่าแปลงตอนอ่าน)
+          fileName: uploadName(file),
           snapshotSource: source,
         })
       : await planImport(parsed, snapshotAt, source);
@@ -1011,9 +1015,8 @@ router.post("/import", requireAuth, requireAdmin, upload.single("file"), async (
     res.json({ committed: commit, plan });
   } catch (err) {
     console.error("Machine import failed:", err);
-    res.status(400).json({
-      error: `อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`,
-    });
+    // รอบที่บันทึกสำเร็จอยู่ใน MachineImport อยู่แล้ว (หน้าประวัติอ่านจากที่นั่น) — ที่นี่เก็บเฉพาะรอบยืนยันที่ล้ม
+    await refuse(`อ่านไฟล์ไม่สำเร็จ: ${err instanceof Error ? err.message : "ไฟล์อาจไม่ใช่ .xlsx"}`);
   }
 });
 
