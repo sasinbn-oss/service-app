@@ -17,6 +17,7 @@ import { api, apiErrorMessage, partImageUri } from "../api/client";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import { SparePart } from "../types";
 import SparePartImportModal, { Batch, ImportReportModal } from "../components/SparePartImportModal";
+import ImportHistoryButton from "../components/ImportHistoryButton";
 import { BRAND_FILES, OUTSIDE_PART } from "../utils/brandFile";
 
 const emptyForm = { partCode: "", name: "", brand: "", category: "", partNo: "", description: "" };
@@ -196,6 +197,8 @@ export default function ManageSparePartsScreen() {
           <Ionicons name="cloud-upload-outline" size={18} color={colors.navy} />
           <Text style={styles.importButtonText}>อัปเดตจากไฟล์ Excel</Text>
         </TouchableOpacity>
+        {/* ทุกรอบที่อัปเดตจากไฟล์ (ย้อนหลังถึงรอบแรก) อยู่ในประวัติการนำเข้า — แถบข้างล่างบอกแค่รอบล่าสุด */}
+        <ImportHistoryButton kind="parts" />
         <TouchableOpacity style={styles.addButton} onPress={() => setEditing("new")} activeOpacity={0.8}>
           <Ionicons name="add" size={18} color="#fff" />
           <Text style={styles.addButtonText}>เพิ่มอะไหล่ใหม่</Text>

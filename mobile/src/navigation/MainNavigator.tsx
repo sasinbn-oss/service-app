@@ -53,6 +53,7 @@ import ManageConsumablesScreen from "../screens/ManageConsumablesScreen";
 import ManageVehiclesScreen from "../screens/ManageVehiclesScreen";
 import BackupScreen from "../screens/BackupScreen";
 import WorkOrderTrashScreen from "../screens/WorkOrderTrashScreen";
+import ImportHistoryScreen from "../screens/ImportHistoryScreen";
 import CoverageMapScreen from "../screens/CoverageMapScreen";
 import ManageTeamsScreen from "../screens/ManageTeamsScreen";
 import FleetDashboardScreen from "../screens/FleetDashboardScreen";
@@ -106,6 +107,8 @@ const OWN_TITLE = new Set([
   "Backup",
   // ถังขยะใบงาน: หัวของตัวเองมีคำอธิบาย 30 วันกับจำนวนใบ — แถบชื่อหน้าซ้ำกินที่แถวแรกของตาราง
   "WorkOrderTrash",
+  // ประวัติการนำเข้า: หัวของตัวเองมีชิปชนิดกับช่วงเวลา — แถบชื่อหน้าซ้ำกินที่ของรายการรอบ
+  "ImportHistory",
   "ManageSpareParts",
   "AdminMenu",
   "HistoryMenu",
@@ -669,6 +672,7 @@ function AdminStackNavigator() {
       <AdminStack.Screen name="Backup" component={BackupScreen} options={{ title: "สำรองข้อมูล" }} />
       <AdminStack.Screen name="AppUsage" component={AppUsageScreen} options={{ title: "การใช้งานแอป" }} />
       <AdminStack.Screen name="WorkOrderTrash" component={WorkOrderTrashScreen} options={{ title: "ถังขยะใบงาน" }} />
+      <AdminStack.Screen name="ImportHistory" component={ImportHistoryScreen} options={{ title: "ประวัติการนำเข้า" }} />
     </AdminStack.Navigator>
   );
 }

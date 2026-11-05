@@ -40,6 +40,7 @@ import {
   pickedLabel,
 } from "../components/FilterBar";
 import RepairImportModal from "../components/RepairImportModal";
+import ImportHistoryButton from "../components/ImportHistoryButton";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
@@ -1318,6 +1319,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               {compact ? null : <Text style={styles.importButtonText}>นำเข้าจากไฟล์</Text>}
             </TouchableOpacity>
           ) : null}
+          {/* ประวัติการนำเข้า (ตัวอย่างที่อนุมัติ 5 พ.ย. 69) — ข้างปุ่มนำเข้า เปิดหน้าประวัติที่กรอง "ใบแจ้งซ่อม" ไว้ให้ */}
+          {user?.role === "ADMIN" && !user.partsAdmin && Platform.OS === "web" ? <ImportHistoryButton kind="repair" compact={compact} /> : null}
           {/* Admin Spare Part ดูใบงานได้อย่างเดียว — เปิดใบงานไม่ได้ */}
           {user?.partsAdmin ? null : (
             <TouchableOpacity

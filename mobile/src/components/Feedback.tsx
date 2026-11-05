@@ -48,11 +48,16 @@ interface State {
   toasts: ToastItem[];
   dialog: DialogState | null;
   loading: string | null;
+  /**
+   * ปุ่มใต้ข้อความหน้าโหลด — "หยุดหลังชุดนี้" ตอนนำเข้าใบแจ้งซ่อมทีละชุด (ประวัติการนำเข้า 5 พ.ย. 69)
+   * หน้าโหลดบังทั้งจอ ปุ่มในหน้าต่างนำเข้ากดไม่ได้ระหว่างนั้น จึงต้องอยู่บนหน้าโหลดเอง · ไม่มี = หน้าโหลดแบบเดิม
+   */
+  loadingAction: ToastAction | null;
   /** หลอดใต้เครื่องซักผ้าตอนส่งไฟล์ (ดู uploadAttachment) — null = ไม่ใช่การส่งไฟล์ */
   progress: UploadProgressValue | null;
 }
 
-let state: State = { toasts: [], dialog: null, loading: null, progress: null };
+let state: State = { toasts: [], dialog: null, loading: null, loadingAction: null, progress: null };
 let nextId = 1;
 const listeners = new Set<(s: State) => void>();
 
@@ -110,9 +115,10 @@ export const feedback = {
     set({ dialog: d });
   },
   /** ใช้เฉพาะตอนผู้ใช้กดบันทึกหรือส่งข้อมูล — ส่งข้อความว่ากำลังทำอะไร หรือ null เพื่อปิด */
-  loading(text: string | null) {
+  loading(text: string | null, action?: ToastAction) {
     // หน้าโหลดปิดแล้วหลอดต้องหายตาม — ไม่งั้นคำขอถัดไปที่ไม่ใช่ไฟล์ขึ้นหลอดค้างของเก่า
-    set(text ? { loading: text } : { loading: null, progress: null });
+    // ปุ่มบนหน้าโหลดเป็นของผู้เรียกครั้งนั้นเท่านั้น — เรียกครั้งถัดไปโดยไม่ส่งปุ่ม = ปุ่มหาย (หน้าโหลดของคำขออื่นไม่มีปุ่มหยุดค้าง)
+    set(text ? { loading: text, loadingAction: action ?? null } : { loading: null, loadingAction: null, progress: null });
   },
   progress(p: UploadProgressValue | null) {
     set({ progress: p });
@@ -226,12 +232,25 @@ function Dialog({ d }: { d: DialogState }) {
 }
 
 /** หน้าโหลดเต็มจอ — เครื่องซักผ้าตัวเดียวกับที่ใช้ทั้งแอป (components/Spinner) */
-export function WasherLoader({ text, progress }: { text: string; progress?: UploadProgressValue | null }) {
+export function WasherLoader({
+  text,
+  progress,
+  action,
+}: {
+  text: string;
+  progress?: UploadProgressValue | null;
+  action?: ToastAction | null;
+}) {
   return (
     <View style={styles.loaderBox}>
       <WasherIcon size={92} />
       <Text style={styles.loaderText}>{text}</Text>
       {progress ? <UploadProgress {...progress} /> : null}
+      {action ? (
+        <TouchableOpacity style={[styles.btn, styles.btn_light, styles.loaderAction]} onPress={action.onPress} accessibilityLabel={action.label}>
+          <Text style={[styles.btnText, styles.btnText_light]}>{action.label}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -250,7 +269,7 @@ export function FeedbackHost() {
     <Overlay>
       {s.loading ? (
         <View style={styles.loader} pointerEvents="auto">
-          <WasherLoader text={s.loading} progress={s.progress} />
+          <WasherLoader text={s.loading} progress={s.progress} action={s.loadingAction} />
         </View>
       ) : null}
       {s.dialog ? <Dialog d={s.dialog} /> : null}
@@ -370,4 +389,5 @@ const styles = StyleSheet.create({
   },
   loaderBox: { alignItems: "center", gap: 14 },
   loaderText: { fontSize: 15, lineHeight: 24, fontWeight: "600", color: colors.navy },
+  loaderAction: { borderWidth: 1, borderColor: colors.borderStrong },
 });

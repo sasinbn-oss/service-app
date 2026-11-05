@@ -145,6 +145,17 @@ export default function AdminMenuScreen({ navigation }: Props) {
       iconColor: colors.primaryInk,
       onPress: () => navigation.navigate("WorkOrderTrash"),
     },
+    {
+      key: "ImportHistory",
+      label: "ประวัติการนำเข้า",
+      labelEn: "Import History",
+      description: "ทุกไฟล์ที่นำเข้า ใคร เมื่อไร ได้ผลอะไร",
+      icon: "time",
+      tint: colors.primarySoft,
+      iconColor: colors.primaryInk,
+      // เปิดจากเมนูส่ง {} — ล้างชนิด/รอบที่ค้างจากปุ่มข้างหน้านำเข้า (แบบประวัติเคลม)
+      onPress: () => navigation.navigate("ImportHistory", {}),
+    },
     // ไฟล์สำรองคือข้อมูลทั้งบริษัทในก้อนเดียว — เซิร์ฟเวอร์ให้เฉพาะ Super Admin
     ...(user?.superAdmin
       ? [
@@ -168,7 +179,7 @@ export default function AdminMenuScreen({ navigation }: Props) {
       subtitle="จัดการข้อมูลของทั้งระบบ"
       note="การแก้ไขในหน้านี้มีผลกับผู้ใช้ทุกคน"
       // เมนูของ Admin Spare Part เหลือแค่ข้อมูลอะไหล่ (เจ้าของงานกำหนด ต.ค. 69) — หน้าอื่นเซิร์ฟเวอร์ไม่ให้แก้อยู่แล้ว · การ์ดเวลาปิดนัดข้างล่างไม่ใช่เมนู
-      entries={user?.partsAdmin ? entries.filter((e) => e.key === "ManageSpareParts") : entries}
+      entries={user?.partsAdmin ? entries.filter((e) => e.key === "ManageSpareParts" || e.key === "ImportHistory") : entries}
       // เวลาปิดนัดงานพรุ่งนี้ (ต.ค. 69 · ย้ายมาที่การนัดวัน 2 พ.ย. 69): Admin Spare Part ก็เห็นการ์ดนี้แต่กดไม่ได้ — เจ้าของงานตอบว่า "ดูอย่างเดียว"
       // ไม่ใช่ซ่อน ต้องรู้ว่านัดพรุ่งนี้ได้ถึงกี่โมงเวลาตอบหัวหน้าภาคที่โทรมาถาม (ด่านแก้ไขจริงอยู่ที่เซิร์ฟเวอร์)
       footer={<DispatchCutoffCard />}

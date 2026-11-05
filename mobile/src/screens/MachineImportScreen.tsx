@@ -12,6 +12,7 @@ import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { canPickFile, droppedFile, pickFile, PickedFile } from "../utils/filePicker";
 import FileDropZone, { DropHint } from "../components/FileDropZone";
+import ImportHistoryButton from "../components/ImportHistoryButton";
 import { colors, radius, shadow, spacing } from "../theme";
 
 type Kind = "machines" | "branches" | "cancelled";
@@ -223,6 +224,8 @@ export default function MachineImportScreen() {
             <Text style={styles.fileName}>{file.name}</Text>
           </View>
         ) : null}
+        {/* รอบที่อัปโหลดแล้ว (รายงานเครื่องย้อนหลังถึงรอบแรก) — ประวัติการนำเข้ากรองชนิดของแท็บนี้ไว้ให้ */}
+        <ImportHistoryButton kind={kind === "machines" ? "machine" : "branch"} style={{ alignSelf: "flex-start", marginTop: spacing.sm }} />
       </View>
 
       {checking ? (

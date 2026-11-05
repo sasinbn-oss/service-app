@@ -231,6 +231,21 @@ const PAGES: Page[] = [
     read: (_, q) => (q.q ? { q: q.q.slice(0, 100) } : undefined),
     write: (p) => ({ q: { q: p?.q } }),
   },
+  /**
+   * ประวัติการนำเข้า — kind = ชิปชนิด · run = รอบที่เปิดอยู่ (ก๊อบลิงก์ส่งให้แอดมินอีกคนได้รอบเดิม)
+   * ค่าที่ไม่ใช่รูปแบบที่รู้จักทิ้ง (เปิดหน้าตามปกติ) · ช่วงเวลา/ตัวกรองแถวไม่อยู่ในที่อยู่ (ตัวช่วยหน้าจอ)
+   */
+  {
+    path: "admin/imports",
+    screen: "ImportHistory",
+    tab: "AdminTab",
+    read: (_, q) => {
+      const kind = /^(repair|parts|machine|branch|users|vehicle)$/.test(q.kind ?? "") ? q.kind : undefined;
+      const run = /^(r\d{1,9}|m\d{1,9}|p[A-Za-z0-9_-]{6,64})$/.test(q.run ?? "") ? q.run : undefined;
+      return kind || run ? { kind, run } : undefined;
+    },
+    write: (p) => ({ q: { kind: p?.kind, run: p?.run } }),
+  },
 ];
 
 /** หน้าแรกของแต่ละแท็บ (ข้างใต้ของหน้าที่ไม่ได้บอก under) และที่อยู่เมื่อยังไม่รู้ว่าอยู่หน้าไหนในแท็บ */

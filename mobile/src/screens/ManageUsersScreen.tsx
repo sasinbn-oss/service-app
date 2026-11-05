@@ -28,6 +28,7 @@ import { Role } from "../types";
 import FieldHint, { invalidInput } from "../components/FieldHint";
 import RosterImportModal from "../components/RosterImportModal";
 import AreaTeamImportModal from "../components/AreaTeamImportModal";
+import ImportHistoryButton from "../components/ImportHistoryButton";
 import Dropdown from "../components/Dropdown";
 import { canPickFile } from "../utils/filePicker";
 import { regionsBody, regionsOf } from "../utils/regions";
@@ -390,6 +391,8 @@ export default function ManageUsersScreen() {
             <Text style={[styles.addButtonText, { color: colors.navy }]}>นำเข้า Area Team</Text>
           </TouchableOpacity>
         ) : null}
+        {/* รอบที่นำเข้ารายชื่อ/Area Team แล้ว (ไม่มีรหัสผ่านในประวัติ) — ประวัติการนำเข้ากรอง "รายชื่อผู้ใช้" ไว้ให้ */}
+        {canPickFile ? <ImportHistoryButton kind="users" /> : null}
         <TouchableOpacity style={styles.addButton} onPress={() => setCreating(true)} activeOpacity={0.8}>
           <Ionicons name="person-add-outline" size={18} color="#fff" />
           <Text style={styles.addButtonText}>เพิ่มบัญชีผู้ใช้</Text>
