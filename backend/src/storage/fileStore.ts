@@ -133,6 +133,11 @@ export async function uploadObject(params: {
   key: string;
   body: Buffer;
   contentType: string;
+  /**
+   * เลิกรอเมื่อเกินเท่านี้ (ไม่ใส่ = รอจนกว่าที่เก็บไฟล์ตอบ) — นำเข้าไฟล์ฟอร์มอัปรูปเป็นร้อยรูปในคำขอที่มีเพดานเวลา
+   * รูปเดียวค้างไม่ควรพาทั้งคำขอไปชนเพดานของ Render · รูปที่หมดเวลานับเป็น "แนบรูปไม่สำเร็จ" แล้วนำเข้าซ้ำเติมให้ได้
+   */
+  timeoutMs?: number;
 }): Promise<void> {
   const { client, bucket } = getClient();
   await client.send(
@@ -141,7 +146,8 @@ export async function uploadObject(params: {
       Key: params.key,
       Body: params.body,
       ContentType: params.contentType,
-    })
+    }),
+    params.timeoutMs ? { abortSignal: AbortSignal.timeout(params.timeoutMs) } : {}
   );
 }
 
