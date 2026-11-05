@@ -22,6 +22,7 @@ import {
   WORK_ORDER_STATUS_LABELS,
   WORK_STATUS_LABELS,
   TECH_ROLES,
+  cancelStatusText,
   isCompanyBranch,
   machineMake,
   warrantyStatus,
@@ -293,6 +294,8 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
         branch: { select: { code: true, name: true, region: true, zone: true } },
         machine: { select: { code: true } },
         createdBy: { select: { name: true } },
+        // ยกเลิกเพราะอะไร (meta ของประวัติ CANCELLED ล่าสุด) — ช่องสถานะของใบที่ยกเลิก
+        logs: { where: { action: "CANCELLED" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1, select: { meta: true } },
         parts: {
           orderBy: { id: "asc" },
           select: {
@@ -303,10 +306,16 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
       },
     });
     for (const w of page) {
+      /**
+       * ใบที่ยกเลิก: ช่องสถานะบอกว่ายกเลิกเพราะอะไร ("ยกเลิก · เสนอราคาแล้วลูกค้าไม่ซ่อม (ราคาสูงไป)") แทนสถานะย่อย
+       * ที่ค้างค่าตอนยกเลิก — ใบที่ลูกค้าไม่ซ่อมยังมี workStatus "รอลูกค้าจ่ายเงิน" ค้างอยู่ ถ้าไม่แทนจะอ่านว่ายังรอเงิน
+       * ประวัติก่อนมีรหัสเหตุผล (ก่อน 5 พ.ย. 69) ขึ้น "ยกเลิก" เฉย ๆ
+       */
+      const cancelText = w.status === "CANCELLED" ? cancelStatusText(w.logs[0]?.meta) : null;
       const row = woSheet.addRow([
         thaiDateTime(w.createdAt), w.code, w.createdBy?.name ?? "ระบบ (ไม่มีผู้เปิด)", w.title, JOB_TYPE_LABELS[w.jobType] ?? w.jobType,
         w.branch.code, w.branch.name, w.symptom ?? "",
-        w.workStatus ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus : WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+        cancelText ?? (w.workStatus ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus : WORK_ORDER_STATUS_LABELS[w.status] ?? w.status),
         w.branch.region ?? "", w.assignedTeam ?? w.branch.zone ?? "", w.machine?.code ?? "",
         WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority, w.source === "OUTAGE" ? "จากกระดาน" : w.source === "FORM" ? "ฟอร์มแจ้งซ่อม" : "เปิดเอง",
         WORK_ORDER_STATUS_LABELS[w.status] ?? w.status, w.status === "DONE" ? thaiDateTime(w.closedAt) : "",

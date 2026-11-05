@@ -16,7 +16,10 @@ import { ALIVE } from "../utils/trash";
 import { regionsOf } from "../utils/supervisorScope";
 import {
   JOB_TYPE_LABELS,
+  QUOTE_DECLINE_REASONS,
   WORK_STATUS_LABELS,
+  cancelInfoOf,
+  cancelStatusText,
   WORK_ORDER_PRIORITY_LABELS,
   WORK_ORDER_RESULT_LABELS,
   WORK_ORDER_STATUS_LABELS,
@@ -65,6 +68,18 @@ export interface OpenerSummary {
   open: number;
   done: number;
   cancelled: number;
+  /**
+   * ในจำนวนที่ยกเลิก — เสนอราคาแล้วลูกค้าไม่ซ่อม (ปุ่ม "ลูกค้าไม่ซ่อม" ขั้นรอลูกค้าจ่ายเงิน · เจ้าของงานเลือก 5 พ.ย. 69)
+   * อยู่ในรายงานนี้เพราะเป็นที่เดียวที่แยกยอดยกเลิกอยู่แล้ว — ไม่ทำรายงานใหม่ · เป็นส่วนหนึ่งของ cancelled ไม่ใช่ยอดแยก
+   */
+  quoteDeclined: number;
+}
+
+/** เสนอราคาแล้วลูกค้าไม่ซ่อม แยกตามเหตุผล — ทุกเหตุผลขึ้นเสมอ (0 ก็ขึ้น) คนอ่านจะได้เทียบได้ว่าเหตุผลไหนไม่มีเลย */
+export interface DeclineCount {
+  reason: string;
+  label: string;
+  count: number;
 }
 
 export interface OpenerReport {
@@ -76,6 +91,7 @@ export interface OpenerReport {
   openerLabel: string;
   summary: OpenerSummary[];
   totals: Omit<OpenerSummary, "userId" | "name" | "employeeCode" | "role" | "region">;
+  quoteDeclines: DeclineCount[];
   rows: Row[];
 }
 
@@ -142,8 +158,11 @@ export async function buildOpenerReport(opts: {
       branch: { select: { code: true, name: true, region: true, zone: true } },
       machine: { select: { code: true } },
       createdBy: { select: { id: true, name: true, employeeCode: true, role: true, region: true, extraRegions: true } },
+      // ยกเลิกเพราะอะไร — รหัสอยู่ใน meta ของประวัติ CANCELLED ล่าสุด (ใบที่ยังไม่ยกเลิกไม่ได้ใช้ · เปิดใหม่แล้วสถานะไม่ใช่ CANCELLED)
+      logs: { where: { action: "CANCELLED" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1, select: { meta: true } },
     },
   });
+  const declines = new Map<string, number>(Object.keys(QUOTE_DECLINE_REASONS).map((k) => [k, 0]));
 
   const byUser = new Map<string, OpenerSummary>();
   const rows: Row[] = [];
@@ -166,6 +185,7 @@ export async function buildOpenerReport(opts: {
         open: 0,
         done: 0,
         cancelled: 0,
+        quoteDeclined: 0,
       };
       byUser.set(key, s);
     }
@@ -174,6 +194,13 @@ export async function buildOpenerReport(opts: {
     else s.manual += 1;
     if (w.priority === "URGENT") s.urgent += 1;
     s[bucketOf(w.status)] += 1;
+    const cancel = w.status === "CANCELLED" ? cancelInfoOf(w.logs[0]?.meta) : null;
+    if (cancel?.code === "QUOTE_DECLINED") {
+      s.quoteDeclined += 1;
+      if (cancel.declineReason) declines.set(cancel.declineReason, (declines.get(cancel.declineReason) ?? 0) + 1);
+    }
+    // ใบที่ยกเลิก: สถานะย่อย (workStatus) ค้างค่าตอนยกเลิกได้ ("รอลูกค้าจ่ายเงิน") — บอกว่ายกเลิกเพราะอะไรแทน ไม่ให้อ่านว่ายังรออยู่
+    const cancelText = w.status === "CANCELLED" ? cancelStatusText(w.logs[0]?.meta) : null;
     rows.push({
       openerKey: key,
       opener: s.name,
@@ -186,15 +213,15 @@ export async function buildOpenerReport(opts: {
       branchName: w.branch.name,
       symptom: w.symptom ?? "",
       // กฎเดียวกับหน้าใบงาน (WorkOrderDetailScreen) — ไฟล์กับหน้าจอต้องพูดเหมือนกัน
-      workStatus: w.workStatus
-        ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus
-        : WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+      workStatus:
+        cancelText ??
+        (w.workStatus ? WORK_STATUS_LABELS[w.workStatus] ?? w.workStatus : WORK_ORDER_STATUS_LABELS[w.status] ?? w.status),
       region: w.branch.region ?? "",
       team: w.assignedTeam ?? w.branch.zone ?? "",
       machine: w.machine?.code ?? "",
       priority: WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority,
       source: w.source === "OUTAGE" ? "จากกระดาน" : w.source === "FORM" ? "ฟอร์มแจ้งซ่อม" : "เปิดเอง",
-      status: WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
+      status: cancelText ?? WORK_ORDER_STATUS_LABELS[w.status] ?? w.status,
       closedAt: w.status === "DONE" ? w.closedAt : null,
       result: w.status === "DONE" && w.closeResult ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult : "",
     });
@@ -221,7 +248,9 @@ export async function buildOpenerReport(opts: {
       open: sum("open"),
       done: sum("done"),
       cancelled: sum("cancelled"),
+      quoteDeclined: sum("quoteDeclined"),
     },
+    quoteDeclines: [...declines.entries()].map(([reason, count]) => ({ reason, label: QUOTE_DECLINE_REASONS[reason], count })),
     rows: rows.sort((a, b) => a.opener.localeCompare(b.opener, "th") || a.createdAt.getTime() - b.createdAt.getTime()),
   };
 }
@@ -287,14 +316,15 @@ export async function openerReportWorkbook(r: OpenerReport): Promise<Buffer> {
   title(s1, "รายงานใบงานแยกตามผู้เปิด", sub);
   table(
     s1,
-    ["ผู้เปิด", "รหัสพนักงาน", "บทบาท", "ภาคที่ดูแล", "เปิดทั้งหมด", "จากกระดาน", "เปิดเอง", "ด่วน", "ยังค้าง", "ปิดแล้ว", "ยกเลิก"],
+    // คอลัมน์ใหม่ต่อท้าย ไม่แทรกกลาง — สูตร/ตัวกรองที่คนทำไว้กับไฟล์รอบก่อนยังชี้ช่องเดิม
+    ["ผู้เปิด", "รหัสพนักงาน", "บทบาท", "ภาคที่ดูแล", "เปิดทั้งหมด", "จากกระดาน", "เปิดเอง", "ด่วน", "ยังค้าง", "ปิดแล้ว", "ยกเลิก", "ในนั้น: เสนอราคาแล้วลูกค้าไม่ซ่อม"],
     r.summary.map((s) => [
-      s.name, s.employeeCode ?? "—", s.role, s.region ?? "—", s.total, s.fromBoard, s.manual, s.urgent, s.open, s.done, s.cancelled,
+      s.name, s.employeeCode ?? "—", s.role, s.region ?? "—", s.total, s.fromBoard, s.manual, s.urgent, s.open, s.done, s.cancelled, s.quoteDeclined,
     ]),
     false
   );
   const t = r.totals;
-  const total = s1.addRow(["รวม", "", "", "", t.total, t.fromBoard, t.manual, t.urgent, t.open, t.done, t.cancelled]);
+  const total = s1.addRow(["รวม", "", "", "", t.total, t.fromBoard, t.manual, t.urgent, t.open, t.done, t.cancelled, t.quoteDeclined]);
   total.font = { bold: true };
   total.eachCell((c) => (c.fill = TOTAL_FILL));
   s1.getColumn(1).width = Math.max(s1.getColumn(1).width ?? 0, 28);
@@ -304,6 +334,16 @@ export async function openerReportWorkbook(r: OpenerReport): Promise<Buffer> {
     color: { argb: "FF888888" },
   };
   if (!r.rows.length) s1.addRow(["ไม่มีใบงานที่เปิดในช่วงวันที่นี้"]);
+  // เสนอราคาแล้วลูกค้าไม่ซ่อม แยกตามเหตุผล — ทุกเหตุผลขึ้นเสมอ ยอดรวมเท่ากับคอลัมน์ "ในนั้น: เสนอราคาแล้วลูกค้าไม่ซ่อม"
+  s1.addRow([]);
+  s1.addRow(["เสนอราคาแล้วลูกค้าไม่ซ่อม — แยกตามเหตุผล"]).font = { bold: true };
+  const dh = s1.addRow(["เหตุผล", "จำนวน"]);
+  dh.font = { bold: true };
+  dh.eachCell((c) => (c.fill = HEAD_FILL));
+  for (const d of r.quoteDeclines) s1.addRow([d.label, d.count]);
+  const dt = s1.addRow(["รวม", r.totals.quoteDeclined]);
+  dt.font = { bold: true };
+  dt.eachCell((c) => (c.fill = TOTAL_FILL));
 
   const s2 = wb.addWorksheet(sheetName("รายการใบงานทั้งหมด", used));
   title(s2, "ใบงานทั้งหมดในช่วงที่เลือก (เรียงตามผู้เปิด แล้ววันที่เปิด)", sub);
