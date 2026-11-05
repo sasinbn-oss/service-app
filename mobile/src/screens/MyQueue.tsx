@@ -924,9 +924,12 @@ function AdminTopics(p: AdminTopicsProps) {
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text style={[ad.firstTitle, headingFont, !first.rows.length && { color: colors.text }]}>ต้องทำก่อนวันนี้ {first.rows.length} ใบ</Text>
         <Text style={ad.firstSub}>
-          {first.rows.length
-            ? `ร้านขอนัดด่วน ${n0[0] ?? 0} ใบ (รอคำตอบวันนี้/พรุ่งนี้) · เลยวันนัดแล้ว ${n0[1] ?? 0} ใบ`
-            : "ไม่มีร้านขอนัดด่วนหรือใบที่เลยวันนัด"}
+          {!first.rows.length
+            ? "ไม่มีร้านขอนัดด่วนหรือใบที่เลยวันนัด"
+            : docked
+              ? `ร้านขอนัดด่วน ${n0[0] ?? 0} ใบ (รอคำตอบวันนี้/พรุ่งนี้) · เลยวันนัดแล้ว ${n0[1] ?? 0} ใบ`
+              : // มือถือ: บรรทัดเดียวสั้น ๆ แบบตัวอย่าง (จอแคบ ประโยคเต็มตกสองบรรทัด)
+                `ขอนัดด่วน ${n0[0] ?? 0} · เลยนัด ${n0[1] ?? 0}`}
         </Text>
       </View>
       {first.rows.length ? (
@@ -1379,7 +1382,8 @@ function TopicRow({
       >
         {info.main}
       </Text>
-      {info.sub ? (
+      {/* "ค้าง N วัน" อยู่มุมขวาบนของการ์ดแล้ว — ไม่ขึ้นซ้ำ */}
+      {info.sub && info.sub !== stuckText(r) ? (
         <Text style={ad.sub} accessibilityLabel={info.tone === "ask" ? info.sub : undefined}>
           {info.sub}
         </Text>
