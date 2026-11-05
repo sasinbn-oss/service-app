@@ -3,6 +3,7 @@
 #   · ตัวเลขตรงกับฐานข้อมูล (นับวันตามเวลาไทย · ไม่นับใบทดสอบ) · รวมทุกคน = จำนวนแถว
 #   · กรองผู้เปิดคนเดียว · ใบไม่มีผู้เปิดรวมเป็น "ระบบ" · หัวหน้าภาคเห็นเฉพาะภาคที่ดูแล · ช่างไม่ได้
 #   · ช่วงวันที่ผิด/ยาวเกินปฏิเสธ · ไฟล์ Excel มีชีตสรุป รายการทั้งหมด และ 1 ชีตต่อคน ตัวเลขในไฟล์ตรงกัน
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -17,7 +18,7 @@ AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   rm -f /tmp/opener-report-test.xlsx
 }

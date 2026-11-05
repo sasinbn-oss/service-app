@@ -13,6 +13,7 @@
 #   · detail.issueLeft = กฎเดียวกับที่ /assign · /confirm-appointment ใช้ส่งใบต่อ (ของในสโตร์ · ของนอกสโตร์อย่างเดียว ·
 #     ของนอกสโตร์ที่เพิ่มหลังเบิกของในสโตร์แล้ว · ย้อนมานัดใหม่หลังเบิก) — เทียบกับขั้นที่ใบไปจริงในฐานข้อมูล
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -44,7 +45,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 SYMPTOM="ทดสอบเบิกก่อนคอนเฟิร์ม $SUF"
 OUT=""
 cleanup() {
-  for i in $(DB "select id from \"WorkOrder\" where symptom='$SYMPTOM'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $(DB "select id from \"WorkOrder\" where symptom='$SYMPTOM'")
   [ -n "$OUT" ] && DB "delete from \"Outage\" where id=$OUT" >/dev/null
   DB "delete from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null

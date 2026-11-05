@@ -5,6 +5,7 @@
 #   · หัวหน้าภาคนอกพื้นที่ไม่ได้ ในพื้นที่ยกเลิกได้ต้องมีเหตุผล · รอตรวจเคลมยกเลิกไม่ได้
 #   · กล่องเตือนใบซ้ำ: ช่างได้แบบย่อ หัวหน้าภาคนอกพื้นที่ไม่เห็น
 #   · เปลี่ยน/รีเซ็ตรหัสผ่านแล้วโทเคนเก่าใช้ไม่ได้ เครื่องที่เปลี่ยนเองได้โทเคนใหม่
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -26,7 +27,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 OLD_HASH=$(DB "select \"passwordHash\" from \"User\" where id=$TID")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   # รหัสผ่าน T001 ต้องกลับเป็นเดิมเสมอ ไม่งั้นเทสต์อื่นทั้งชุดล็อกอินไม่ได้
   PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -At -v ON_ERROR_STOP=1 >/dev/null <<SQL

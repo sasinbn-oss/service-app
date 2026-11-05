@@ -6,6 +6,7 @@
 #   · รายงาน Excel ปุ่มเดียว · นำเข้าซ้ำย้ายสาขาได้โดยไม่แตะรหัสผ่าน · ล็อกอินตัวใหญ่ปนได้
 #   · ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69): Supervisor (COCO) 403 ข้อความไทยทุก endpoint
 #     · Area ยัง 200 · Supervisor (COCO) ยัง 200 ทุก endpoint ที่หน้าใบงาน/ฟอร์มเปิดใบงาน/แผนงานใช้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -24,7 +25,7 @@ VISIT=$(day 33)
 LOGINS="'zz.area','zz.sup1','zz.sup2'"
 cleanup() {
   # ใบที่แอดมินเปิดไว้เทียบขอบเขต (สาขาคนอื่น · แฟรนไชส์) — ไม่ได้สร้างโดยบัญชีทดสอบ ต้องลบเอง ไม่งั้นค้างสะสม
-  for w in ${W6:-} ${WD:-}; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$w" -H "$(H $A)"; done
+  purge_orders "$A" ${W6:-} ${WD:-}
   DB "delete from \"WorkOrder\" where \"createdById\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null
   DB "update \"Branch\" set \"cocoSupervisorId\"=null where \"cocoSupervisorId\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null
   DB "update \"User\" set \"areaId\"=null where \"employeeCode\" in ($LOGINS)" >/dev/null

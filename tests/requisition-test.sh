@@ -1,5 +1,6 @@
 #!/bin/bash
 # ทดสอบ: เลขใบเบิกอะไหล่ตอนแอดมินเบิก (หลังนัดวัน ก่อนคอนเฟิร์มลูกค้า — ต.ค. 69 รอบสอง) + รูปใบเหลืองตอนปิดงาน
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 . "$SP/lib/fixture-parts.sh"
@@ -22,7 +23,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where \"employeeCode\"='T001'")
 ID=""; ID2=""
 cleanup() {
-  for i in $ID $ID2; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $ID $ID2
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'; update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null
 }
 trap cleanup EXIT

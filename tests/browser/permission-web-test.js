@@ -1,7 +1,7 @@
 // ทดสอบ: สิทธิ์ใบงานบนหน้าจอ (ตรวจระบบ ต.ค. 69)
 //   · ช่าง: ใบทีมตัวเองไม่มีปุ่มยกเลิก · ใบถูกย้ายไปทีมอื่นระหว่างดูรายการ → เปิดแล้วขึ้นหน้ากุญแจ ไม่เห็นเบอร์ลูกค้า
 //   · ช่าง: ฟอร์มเปิดใบงาน กล่องเตือนใบซ้ำแบบย่อ (ไม่มีอาการ ไม่มีปุ่มเปิดดู)
-//   · แอดมิน: ปุ่มยกเลิกใบงานท้ายหน้า (เหนือลบถาวร) เลือกเหตุผล → ฐานข้อมูลยกเลิก · หน้าใบงานบอกเหตุผล
+//   · แอดมิน: ปุ่มยกเลิกใบงานท้ายหน้า (เหนือลบใบงาน — ย้ายไปถังขยะ) เลือกเหตุผล → ฐานข้อมูลยกเลิก · หน้าใบงานบอกเหตุผล
 const { chromium } = require("playwright");
 const path = require("path");
 const DIR = __dirname;
@@ -87,13 +87,13 @@ const { setup } = require("./fixture");
       await search(page, dup.code);
       await vis(dup.code).last().click();
       await page.waitForTimeout(3000);
-      // ปุ่มยกเลิกอยู่ท้ายหน้าคู่กับลบถาวร ไม่ใช่หัวใบงาน (เจ้าของงานขอ ต.ค. 69)
+      // ปุ่มยกเลิกอยู่ท้ายหน้าคู่กับลบใบงาน (ย้ายไปถังขยะ) ไม่ใช่หัวใบงาน (เจ้าของงานขอ ต.ค. 69)
       const yOf = async (loc) => (await loc.first().boundingBox())?.y ?? -1;
       // ยกเลิกใบงานเป็นชิปเครื่องมือท้ายหน้า ใต้ปุ่มปิดใบงาน (ต.ค. 69)
       const cancelY = await yOf(page.locator('[aria-label="ยกเลิกใบงาน"]').locator("visible=true"));
-      const deleteY = await yOf(page.locator('[aria-label="ลบใบงานนี้ถาวร"]').locator("visible=true"));
+      const deleteY = await yOf(page.locator('[aria-label="ลบใบงานนี้ (ย้ายไปถังขยะ)"]').locator("visible=true"));
       const branchY = await yOf(page.getByText("สาขาและเครื่อง", { exact: true }).locator("visible=true"));
-      cancelY > branchY && deleteY > cancelY ? pass("ปุ่มยกเลิกใบงานอยู่ท้ายหน้า เหนือ ลบใบงานนี้ถาวร") : fail(`ตำแหน่งปุ่ม: ยกเลิก ${cancelY} สาขา ${branchY} ลบ ${deleteY}`);
+      cancelY > branchY && deleteY > cancelY ? pass("ปุ่มยกเลิกใบงานอยู่ท้ายหน้า เหนือ ลบใบงาน (ย้ายไปถังขยะ)") : fail(`ตำแหน่งปุ่ม: ยกเลิก ${cancelY} สาขา ${branchY} ลบ ${deleteY}`);
       await page.waitForTimeout(800);
       await page.locator('[aria-label="ยกเลิกใบงาน"]').locator("visible=true").last().click();
       await page.waitForTimeout(800);

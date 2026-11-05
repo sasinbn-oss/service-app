@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: ตำแหน่งแอดมินอะไหล่ (PARTS_ADMIN) — ดูได้ทุกอย่าง แก้ได้เฉพาะเคลม/ข้อมูลอะไหล่/งานส่วนตัว · ตั้ง/ถอดได้เฉพาะ Super Admin ·
 #        Super Admin ดูในฐานะแอดมินอะไหล่ได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -12,7 +13,7 @@ SUF=$RANDOM
 WO=""
 PART=""
 cleanup() {
-  [ -n "$WO" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$WO" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$WO"
   [ -n "$PART" ] && curl -s -X DELETE "localhost:4000/api/spare-parts/$PART" -H "$(H $A)" >/dev/null
   DB "delete from \"ViewAsLog\" where \"byUserId\" in (select id from \"User\" where \"employeeCode\" like 'ZPA%$SUF');
       delete from \"User\" where \"employeeCode\" like 'ZPA%$SUF'" >/dev/null

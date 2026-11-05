@@ -1,6 +1,7 @@
 // ทดสอบ: หัวใบงานด่วน (เจ้าของงานขอ ต.ค. 69) — ไม่มีแถบ "งานด่วน — ทำก่อนใบปกติ" แล้ว เหลือป้าย "ด่วน" ข้างเลขใบงาน
 // ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
 const API = "http://localhost:4000/api";
@@ -54,7 +55,7 @@ const call = async (token, method, path, body) => {
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    if (id) await call(A, "DELETE", `work-orders/${id}`);
+    if (id) await purgeOrders(A, [id]);
     await browser.close();
   }
 })();

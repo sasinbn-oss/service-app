@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: อะไหล่หมด — วันคาดว่าของเข้า · ป้ายแดงในรายการ (partsOut) · แอดมินเลื่อนวัน · ของครบแล้วล้าง
 #        ของหมดรู้ตั้งแต่ขั้นเช็คอะไหล่ (ก่อนนัด) — นัดลูกค้าก่อนเบิก ต.ค. 69
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -84,5 +85,5 @@ POST $A "work-orders/$ID3/rollback" '{"toStage":"NEW","reason":"ทดสอบ"
 [ "$(eta $ID3)" = "-" ] && pass "ย้อนขั้นแล้ววันคาดว่าเข้าถูกล้าง" || fail "วันค้าง: $(eta $ID3)"
 
 # เก็บกวาด — ลบใบที่เทสต์สร้าง ไม่ให้ค้างสะสมในสาขาทดสอบ (CLAUDE.md)
-for i in $CH $ID $ID2 $ID3; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+purge_orders "$A" $CH $ID $ID2 $ID3
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

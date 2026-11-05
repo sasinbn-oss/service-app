@@ -5,6 +5,7 @@
 #     (รันไฟล์ SQL จริงในทรานแซกชันแล้ว ROLLBACK — ใบอื่นในฐานข้อมูลไม่โดน)
 #   · ใบที่เบิกไปแล้วก่อนเปลี่ยนสายงาน เดินต่อโดยไม่เบิกซ้ำ: เบิกครบแล้วไปนัด · คอนเฟิร์มแล้วไปปล่อยงานเลย
 #   · หัวหน้าภาคไม่ว่างวันที่ลูกค้าขอ → แอดมินคอนเฟิร์มใหม่ → ปล่อยงาน (ไม่วนกลับไปเบิก)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -28,7 +29,7 @@ S=$(login S001)
 TEAM=$(DB "select zone from \"Branch\" where code='$BR'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

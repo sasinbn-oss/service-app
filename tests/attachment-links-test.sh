@@ -6,6 +6,7 @@
 #   · GET /:id/attachments/:aid/file — ทางสำรองของตัวแสดง PDF: ได้ไฟล์ PDF เดิมทุกไบต์ · รูปขอทางนี้ไม่ได้
 #   · หัวหน้าภาคนอกขอบเขตขอลิงก์/ไฟล์ไม่ได้ (403)
 # ยืนยันกับฐานข้อมูลและไฟล์จริง (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -20,7 +21,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 TMP=$(mktemp -d)
 W=""
 cleanup() {
-  [ -n "$W" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$W" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$W"
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   rm -rf "$TMP"
 }

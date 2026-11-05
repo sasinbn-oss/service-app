@@ -47,6 +47,7 @@
 # ทุกข้อที่เปลี่ยนข้อมูลยืนยันที่ฐานข้อมูล (CLAUDE.md) · ลบทุกอย่างที่สร้างตอนจบ (trap)
 #
 # หยุดกลางทาง = FAIL (run-all.sh นับแค่บรรทัด PASS/FAIL — set -e จบเงียบ ๆ ชุดนี้จะดูเหมือนผ่าน)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -eE
 _pp_died() {
   if [ "${BASH_SUBSHELL:-0}" -eq 0 ]; then echo "FAIL สคริปต์หยุดกลางทาง (บรรทัด $1): $2"; fi
@@ -77,7 +78,7 @@ OUTAGES=""
 # จะย้อนการลบทุกอย่าง ทิ้งผู้ใช้ PARTS_ADMIN/AREA รหัสผ่าน test1234 และอะไหล่ในไฟล์ Other ที่ไปโผล่ในช่องของใช้ร่วมของชุดอื่น
 # และเกิดตอนที่ชุดนี้พังอยู่แล้วพอดี · || : กัน set -e ตัดการลบที่เหลือ
 cleanup() {
-  for w in $ORDERS; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$w" -H "$(H $A)"; done
+  purge_orders "$A" $ORDERS
   local codes ids outs; codes=$(for c in $MCODES; do printf "'%s'," "$c"; done); ids=$(echo $ORDERS | tr ' ' ','); outs=$(echo $OUTAGES | tr ' ' ',')
   DB "delete from \"WorkOrder\" where id in (${ids:-0})" >/dev/null 2>&1 || :
   # ข้อที่คาดว่าถูกปฏิเสธไม่ได้เก็บ id — ถ้าล็อกพังใบหลุดเกิดขึ้นจริง ตามด้วยอาการที่ลงท้าย $SUF ก่อนลบเครื่อง
@@ -865,7 +866,7 @@ COPY=$(echo "$R" | J 'd.id??"ERR"'); ADDWO "$COPY"
 [ "$(PICKS $COPY)|$(ITEMS $COPY)|$(st $COPY)" = "PENDING:2:true|HB1x1:-|NEW" ] \
   && [ "$(DET $COPY $S | J 'd.statusLabel+"|"+d.partsPick.round')" = "$STAGE_LABEL|2" ] \
   && pass "ใบทดสอบของใบที่รอคอนเฟิร์ม: รอบที่ 2 PENDING รายการเดียวกัน · ป้าย \"$STAGE_LABEL\"" || fail "test-copy: $(echo "$R" | head -c 200) · $(PICKS $COPY)"
-curl -s -o /dev/null -X DELETE localhost:4000/api/work-orders/$COPY -H "$(H $A)"
+purge_orders "$A" $COPY  # ลบจริง = ถังขยะ → ครบ 30 วัน (DELETE เปล่า ๆ ได้ 400 แล้ว)
 [ "$(DB "select count(*) from \"PartsPick\" where \"workOrderId\"=$COPY")|$(DB "select count(*) from \"WorkOrder\" where id=$COPY")" = "0|0" ] \
   && pass "ลบใบทดสอบ → รอบเลือกอะไหล่ของใบนั้นหายตาม (cascade)" || fail "ลบใบทดสอบแล้วรอบค้าง"
 

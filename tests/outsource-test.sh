@@ -4,6 +4,7 @@
 #   · ขึ้นในตัวเลือกจ่ายงานพร้อมป้าย outsource · จ่ายงานให้ได้แม้ไม่มีสาขา
 #   · หัวหน้าภาคในพื้นที่ปิดงานแทนได้ · หัวหน้าภาคนอกพื้นที่/ช่างทีมอื่นไม่ได้ · ใบที่เข้างานอยู่เข้ากล่องหัวหน้าภาค
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -23,7 +24,7 @@ REGION=$(DB "select region from \"Branch\" where code='C0006'"); BTEAM=$(DB "sel
 OS=ZZOS$RANDOM
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"OutsourceTeam\" where name like 'ZZOS%' or name='$BTEAM'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }

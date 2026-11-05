@@ -1,5 +1,6 @@
 #!/bin/bash
 # ทดสอบ: ข้อมูลที่ตัวกรองหน้ารายการใบงานใช้ — รอใคร (บทบาท · หัวหน้าภาครายคน · ทีม) · DODO/COCO · ค้างขั้นนี้ตั้งแต่เมื่อไร
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -17,7 +18,7 @@ SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

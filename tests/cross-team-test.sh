@@ -4,6 +4,7 @@
 #   · จ่ายได้ทุกทีม · ช่องทีมแยกทีมของตัวเองกับทีมของคนอื่น (บอกชื่อคนดูแล)
 #   · ใบยังเป็นของคนจ่าย (กล่องงาน · ปล่อยงาน) · หัวหน้าภาคของทีมที่รับเห็นใบแต่ดูอย่างเดียว
 #   · ช่างปิดงานได้ทั้งทีมที่รับและทีมประจำสาขา · ทีมประจำสาขาไม่ได้งานนี้เข้ากล่องงาน/งานวันนี้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -40,7 +41,7 @@ NID=$(mkuser "XN$SUF" "ช่างไม่มีทีมทดสอบข้
 PATCH $A "auth/users/$T1ID" '{"team":"กระบี่"}' >/dev/null
 Z=$(login "XR$SUF" temp12345); K=$(login "XK$SUF" temp12345); N=$(login "XN$SUF" temp12345); T=$(login T001)
 cleanup() {
-  for w in $W1 $W2; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$w" -H "$(H $A)"; done
+  purge_orders "$A" $W1 $W2
   DB "delete from \"User\" where id in ($ZID,$KID,$NID)" >/dev/null
   PATCH $A "auth/users/$T1ID" "{\"team\":$( [ -n "$T1TEAM" ] && echo "\"$T1TEAM\"" || echo null )}" >/dev/null
 }

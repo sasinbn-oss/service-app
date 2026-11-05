@@ -2,6 +2,7 @@
 //        สาขาแฟรนไชส์ชั่วคราวเปิดมา 35 เดือน: Oasis (2 ปี) หมดประกัน · Huebsch (3 ปี) ใกล้หมด
 //        สร้างสาขา/เครื่อง/เคสเครื่องดับเอง แล้วลบทิ้งตอนจบ (ต้องมี DATABASE_URL)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const path = require("path");
 const DIR = __dirname;
 const { setup } = require("./fixture");
@@ -73,7 +74,7 @@ const { setup } = require("./fixture");
   } catch (e) {
     fail(String(e).slice(0, 300));
   } finally {
-    if (woId) await fx.call(fx.A, "DELETE", `/work-orders/${woId}`);
+    if (woId) await purgeOrders(fx.A, [woId]);
     if (bid) fx.sql(`delete from "Outage" where "branchId"=${bid}; delete from "Machine" where "branchId"=${bid}; delete from "Branch" where id=${bid}`);
     await fx.cleanup();
     errors.length ? fail(`error บนหน้า: ${errors[0]}`) : pass("ไม่มี error บนหน้า");

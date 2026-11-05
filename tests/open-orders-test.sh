@@ -2,6 +2,7 @@
 # ทดสอบ: ใบงานเปิดค้างของสาขา (GET /branches/:code/open-work-orders) — ฟอร์มเปิดใบงานใช้เตือนก่อนเปิดซ้ำ
 #   · ใบที่เพิ่งเปิดขึ้น ใหม่ก่อนเก่า · ชื่อขั้น · รหัสเครื่อง · อาการบรรทัดแรก · คนเปิด
 #   · ใบที่ปิด/ยกเลิกแล้วไม่ขึ้น · ใบรอตรวจเคลม (ช่างปิดงานแล้ว) ไม่ขึ้น (ต.ค. 69) · ใบทดสอบไม่ขึ้น · สาขาอื่นไม่ปน · ไม่ล็อกอิน 401
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -17,7 +18,7 @@ BR=$(DB "select b.code from \"Branch\" b where not exists (select 1 from \"WorkO
 [ -n "$BR" ] || { echo "FAIL ไม่มีสาขาว่างให้ทดสอบ"; exit 1; }
 OTHER=$(DB "select code from \"Branch\" where code<>'$BR' order by code limit 1")
 IDS=""
-cleanup() { for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done; }
+cleanup() { purge_orders "$A" $IDS; }
 trap cleanup EXIT
 newwo() { POST $A work-orders "{\"branchCode\":\"$1\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"$2\",\"symptom\":\"$3\"}]}" | J 'd.orders?d.orders[0].id:d.id'; }
 

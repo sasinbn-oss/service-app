@@ -4,6 +4,7 @@
 #   · ช่อง "ทีมที่จะรับงาน" ของหัวหน้าภาค = ทุกทีม ติดธงทีมของตัวเอง (จ่ายข้ามทีมได้ ต.ค. 69 — ดู cross-team-test.sh)
 #     จ่ายข้ามไปแล้วใบยังเป็นของคนจ่าย ไม่ตามทีมที่รับ
 #   · คนดูแลทีมหมดสิทธิ์ → ใบกลับเข้าคนดูแลภาค
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -52,6 +53,6 @@ PATCH $A "auth/users/$ZID" '{"role":"EMPLOYEE"}' >/dev/null
 [ "$(seen $S)" = "true" ] && pass "คนดูแลทีมเปลี่ยนเป็นช่าง → ใบกลับเข้าคนดูแลภาคใต้" || fail "S001 ยังไม่เห็นใบ"
 
 # เก็บกวาด
-curl -s -X DELETE "localhost:4000/api/work-orders/$WO" -H "$(H $A)" >/dev/null
+purge_orders "$A" $WO
 DB "delete from \"User\" where id=$ZID" >/dev/null
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

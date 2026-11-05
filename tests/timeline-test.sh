@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: ไทม์ไลน์ (Super Admin เท่านั้น) — ใบงาน: ทุกขั้นพร้อมบทบาทคนกด · รับ/คืนรถที่ผูกกับใบงาน ·
 #        รายงานตัว GPS ที่สาขา · แผนรายวัน · เวลาแต่ละช่วง · ทีมทั้งวัน · แอดมิน/หัวหน้าภาค/ช่างดูไม่ได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -15,7 +16,7 @@ VISIT=$(day 12)
 SUF=$RANDOM
 ID=""
 cleanup() {
-  [ -n "$ID" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$ID" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$ID"
   DB "delete from \"VehicleLog\" where purpose='ทดสอบไทม์ไลน์$SUF'; delete from \"BranchCheckIn\" where note='ทดสอบไทม์ไลน์$SUF';
       delete from \"TeamDayPlan\" where team='กระบี่' and date=current_date+50; delete from \"User\" where \"employeeCode\" like 'ZT%$SUF'" >/dev/null
 }

@@ -5,6 +5,7 @@
 #   · นอกขอบเขต/ไม่มีจริง/รหัสเพี้ยน ไม่อยู่ในคำตอบ · ทีม Area เช็คใน area-team-test
 #   · กล่องงาน + คำค้น ได้เฉพาะใบในกล่องงาน (เดิมคำค้นทับเงื่อนไขกล่องงาน)
 # สถานะตั้งต้นของแต่ละข้อยืนยันที่ฐานข้อมูล (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -24,7 +25,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: นัดวันเป็นของหัวหน้าภาค · สถานะอัปเดตตามขั้น · ใบเหลืองรายรอบ ·
 #        ปิดงานได้เฉพาะงานที่จบ · เทียบผลกับกระดานติดตาม
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 . "$SP/lib/fixture-parts.sh"
@@ -26,7 +27,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
 OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where id=$TID")
 ID=""
 cleanup() {
-  [ -n "$ID" ] && curl -s -X DELETE "localhost:4000/api/work-orders/$ID" -H "$(H $A)" >/dev/null
+  purge_orders "$A" "$ID"
   DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID; update \"User\" set team=nullif('$OLD_TEAM','') where id=$TID" >/dev/null
 }
 trap cleanup EXIT

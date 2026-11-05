@@ -24,6 +24,7 @@
 # ค่าที่เทสต์อยู่หายไปจนอ่าน .actorLabel ของ undefined) จบสคริปต์ทันทีโดยไม่มีบรรทัด FAIL — run-all.sh นับแค่บรรทัด
 # PASS/FAIL ไม่ดู exit code ชุดที่ตายหลังผ่านไป 3 ข้อจึงขึ้นว่า "3 ผ่าน" และทั้งรอบจบว่าผ่านทั้งหมด ทั้งที่แอปพัง
 # -E ให้ trap ERR ทำงานในฟังก์ชันด้วย (claim_order ฯลฯ) · พิมพ์เฉพาะเชลล์หลัก ไม่งั้น $(…) ที่พังพิมพ์ซ้ำ/หลุดเข้าตัวแปร
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -eE
 _cs_died() {
   if [ "${BASH_SUBSHELL:-0}" -eq 0 ]; then echo "FAIL สคริปต์หยุดกลางทาง (บรรทัด $1): $2"; fi
@@ -60,7 +61,7 @@ cleanup() {
   set +e
   trap - ERR
   if declare -F claim_extra_cleanup >/dev/null; then claim_extra_cleanup || true; fi
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$BC');
       delete from \"Branch\" where code='$BC';
       delete from \"User\" where \"employeeCode\" like 'ZCS%$SUF';

@@ -2,6 +2,7 @@
 # ทดสอบ: ปิดงานย้อนหลัง (แอดมิน) — กรอกขั้นที่เหลือครั้งเดียวแล้วปิดงาน · ประวัติลงวันเวลาจริง + ติดป้ายบันทึกย้อนหลัง
 #        ไม่มีรูปต้องใส่เหตุผล (ไม่บังคับรูป) · วันเวลาต้องเรียงและไม่เกินวันนี้ · หัวหน้าภาค/ช่างทำไม่ได้
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -14,7 +15,7 @@ POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: 
 SUF=$RANDOM
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"User\" where \"employeeCode\"='ZBS$SUF'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }

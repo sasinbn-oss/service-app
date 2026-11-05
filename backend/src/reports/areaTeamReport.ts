@@ -10,6 +10,7 @@
 import ExcelJS from "exceljs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import {
   JOB_TYPE_LABELS,
   ROLE_LABELS,
@@ -30,7 +31,8 @@ export async function areaTeamWorkbook(opts: {
   const start = bkkDayStart(opts.from);
   const end = new Date(bkkDayStart(opts.to).getTime() + DAY_MS);
   const rows = await prisma.workOrder.findMany({
-    where: { AND: [opts.scope], isTest: false, createdAt: { gte: start, lt: end } },
+    // ใบในถังขยะ (ALIVE) ไม่อยู่ในรายงาน — ลบแล้วคือไม่ควรมีตั้งแต่แรก (ใบทดสอบ เปิดซ้ำ เปิดผิด) ไม่ใช่งานที่เกิดขึ้น
+    where: { AND: [opts.scope, ALIVE], isTest: false, createdAt: { gte: start, lt: end } },
     orderBy: { createdAt: "asc" },
     select: {
       code: true,

@@ -2,6 +2,7 @@
 # ทดสอบ: ของหมด = ใบค้างที่แอดมินขั้นเช็คอะไหล่จนของเข้าครบ แล้วค่อยส่งหัวหน้าภาคนัด (นัดก่อนเบิก ต.ค. 69)
 #        ของไม่พอตอนเบิก (นัดแล้ว ยังไม่คอนเฟิร์มลูกค้า — เบิกก่อนคอนเฟิร์ม ต.ค. 69 รอบสอง) → กลับไปเช็คอะไหล่ วันนัดล้าง
 #        · วันนัดตั้งแต่วันนี้ (ของคลังอื่นไม่ต้องล่วงหน้า 7 วันแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(dirname "$0")"
 . "$SP/lib/fixture-parts.sh"
@@ -22,7 +23,7 @@ SID=$(curl -s localhost:4000/api/auth/users -H "$(H $A)" | J 'd.find(u=>u.employ
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
 ID=""; ID3=""; ID4=""
 cleanup() {
-  for i in $ID $ID3 $ID4; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $ID $ID3 $ID4
   DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID" >/dev/null
 }
 trap cleanup EXIT

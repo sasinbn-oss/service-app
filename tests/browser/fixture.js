@@ -2,6 +2,7 @@
 // (WO-00656 ฯลฯ) ซึ่งไม่มีในเครื่องอื่น เทสต์จึง "พัง" ทั้งที่แอปไม่ได้ผิด
 // ต้องมี DATABASE_URL (โหลดจาก backend/.env) เพราะต้องหาสาขาตามวันเปิดร้าน และคืนค่าภาคของ S001
 const { execSync, execFileSync } = require("child_process");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const path = require("path");
 const API = "http://localhost:4000/api";
 
@@ -116,7 +117,7 @@ async function setup() {
     return call(A, "POST", `/work-orders/${id}/confirm-appointment`, body);
   }
   async function cleanup() {
-    for (const id of created) await call(A, "DELETE", `/work-orders/${id}`);
+    await purgeOrders(A, created);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);
   }
   return { A, sql, call, login, part, fxPart, workOrder, source, schedule, issue, confirm, supervisor: () => S, cleanup };

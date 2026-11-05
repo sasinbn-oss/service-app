@@ -4,6 +4,7 @@
 #   · rolledBack (หน้าใบงาน) + rolledBackFrom (รายการ) บอกขั้นเดิม เหตุผล คนย้อน
 #   · แนบไฟล์/แก้รายละเอียดหลังย้อน ป้ายยังอยู่ · กดผ่านขั้นที่ย้อนไป ป้ายหาย แต่ค่าเดิมยังเติมให้ขั้นถัดไป
 #   · ผ่านขั้นเดิมไปแล้ว ค่าเดิมเลิกเติม · ประวัติเก่าที่ไม่มี meta ยังอ่านชื่อขั้นเดิมได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -21,7 +22,7 @@ DB "update \"User\" set region=(select region from \"Branch\" where code='$BR') 
 S=$(login S001)
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

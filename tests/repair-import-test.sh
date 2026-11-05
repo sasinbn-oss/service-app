@@ -3,6 +3,7 @@
 #   · ดูตัวอย่างไม่บันทึก · ประเภทงานในฟอร์มแปลงเป็นรหัสของระบบ · ช่องเครื่องที่ไม่ใช่ W/D ไม่ทำให้แถวตก
 #   · สาขาไม่มี = นำเข้าไม่ได้ · แถวส่งซ้ำ / เครื่องมีใบค้าง = ข้าม · บันทึกแล้วเช็คที่ฐานข้อมูล
 #   · นำเข้าไฟล์เดิมซ้ำไม่เกิดใบซ้ำ · ช่าง/หัวหน้าภาคนำเข้าไม่ได้
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
@@ -123,7 +124,7 @@ curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file
 rm -f "$X4"
 
 # เก็บกวาด
-for id in $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'"); do curl -s -X DELETE "localhost:4000/api/work-orders/$id" -H "$(H $A)" >/dev/null; done
+purge_orders "$A" $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'")
 DB "delete from \"Machine\" where code in ('W$N','W$M2') and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
 rm -f "$X"
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

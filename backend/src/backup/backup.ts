@@ -153,6 +153,11 @@ export async function writeBackupFiles(dir: string, migrations: string[]) {
   ];
   index.addRow({ sheet: `สำรองเมื่อ ${new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}` }).commit();
   index.addRow({ sheet: "ไม่มีรหัสผ่าน รูป/วิดีโอ และเลข Fleet Card / Easy Pass" }).commit();
+  /**
+   * ใบงานในถังขยะอยู่ในไฟล์ด้วย (กู้คืนทั้งระบบแล้วต้องยังอยู่ในถังขยะ กู้ทีละใบได้ตามเดิม) — คนเปิด Excel นับใบงาน
+   * จากชีตตรง ๆ จะได้เกินจำนวนในแอป ถ้าไม่บอกว่าแถวไหนลบไปแล้ว
+   */
+  index.addRow({ sheet: "ชีตใบงาน: แถวที่มี deletedAt = อยู่ในถังขยะ (ลบแล้ว กู้คืนได้ภายใน 30 วัน) — ไม่ขึ้นในแอป" }).commit();
   index.addRow({}).commit();
   const used = new Set<string>(["อ่านก่อน"]);
   const sheetName = new Map<string, string>();

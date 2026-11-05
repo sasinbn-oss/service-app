@@ -11,6 +11,7 @@
 import ExcelJS from "exceljs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { WORK_ORDER_STATUS_LABELS } from "../utils/constants";
 import { sheetName, table, thaiDateTime, title } from "./openerReport";
 
@@ -82,7 +83,8 @@ export async function buildPartsOutReport(opts: {
       kind: "WAITING",
       inStock: false,
       workOrder: {
-        AND: [opts.scope ?? {}],
+        // ใบในถังขยะไม่อยู่ในรายงาน — ของที่ "หมด" ของใบที่ลบแล้วไม่มีใครต้องตาม
+        AND: [opts.scope ?? {}, ALIVE],
         isTest: false,
         status: { in: PARTS_OUT_REPORT_STAGES },
       },

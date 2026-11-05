@@ -26,6 +26,10 @@ import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import CancelOrderModal from "../components/CancelOrderModal";
+import TrashOrderModal from "../components/TrashOrderModal";
+import TrashedOrderNote, { trashedInfoOf, type TrashedInfo } from "../components/TrashedOrderNote";
+import { workOrderCode } from "../navigation/linking";
+import { isTrashedError, restoreFromTrash, trashDay } from "../utils/trash";
 import PopupScreen from "../components/PopupScreen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -724,6 +728,10 @@ const NOT_A_MOVE = [
   "MACHINE_BRAND_SET",
   // ใช้อะไหล่ข้ามยี่ห้อ (ยืนยันแล้ว) — บันทึกคู่กับแถวหลักของการบันทึกอะไหล่ ไม่ใช่การเดินขั้น (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
   "CROSS_BRAND_PARTS",
+  // ย้ายไปถังขยะ / กู้คืน (4 พ.ย. 69) — ขั้นไม่เปลี่ยนทั้งคู่ (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  // ไม่งั้นใบที่ช่างส่งกลับแล้วถูกลบผิดแล้วกู้คืน กล่อง "ช่างแจ้งปัญหา" / "ทีมไม่ว่างวันใหม่" หายทั้งที่ยังไม่มีใครแก้
+  "TRASHED",
+  "RESTORED",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
@@ -965,12 +973,13 @@ function crossNote(t: Team | undefined, team: string, own: string | null | undef
 /**
  * หน้าใบงานที่เปิดจากลิงก์บนเว็บ (/#/wo/WO-00045) — ที่อยู่มีแต่รหัสที่คนเห็น ยังไม่มีเลขใบ
  * ถามเลขใบจากเซิร์ฟเวอร์ก่อน (กฎสิทธิ์เดียวกับเปิดใบ) แล้วใส่ id ให้หน้าเดิม — โค้ดทั้งหน้าใช้ id อยู่แล้ว ไม่ต้องรู้จักรหัส
- * ไม่มีสิทธิ์ = หน้ากุญแจแบบเดียวกับเปิดใบจากรายการ · ไม่พบ = บอกรหัสที่หาไม่เจอ (ลิงก์พิมพ์ผิด/ใบถูกลบ)
+ * ไม่มีสิทธิ์ = หน้ากุญแจแบบเดียวกับเปิดใบจากรายการ · ไม่พบ = บอกรหัสที่หาไม่เจอ (ลิงก์พิมพ์ผิด/ใบถูกลบจริงแล้ว)
+ * ใบที่อยู่ในถังขยะ: แอดมินเห็นว่าอยู่ในถัง + ปุ่มไปกู้ (TrashedOrderNote) · คนอื่นได้ "ไม่พบ" เหมือนรหัสที่ไม่มี (เซิร์ฟเวอร์ตัดสิน)
  */
 function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => void }) {
   const code = (route.params as { code?: string }).code ?? "";
   const { user: me } = useAuth();
-  const [fail, setFail] = useState<{ text: string; locked: boolean } | null>(null);
+  const [fail, setFail] = useState<{ text: string; locked: boolean; trashed?: TrashedInfo } | null>(null);
   useEffect(() => {
     let alive = true;
     api
@@ -983,7 +992,12 @@ function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => voi
       .catch((e) => {
         if (!alive) return;
         const status = (e as { response?: { status?: number } })?.response?.status;
-        setFail({ text: status === 404 ? `ไม่พบใบงาน ${code}` : apiErrorMessage(e), locked: status === 403 });
+        const trashed = trashedInfoOf(e);
+        setFail({
+          text: status === 404 ? `ไม่พบใบงาน ${code}` : apiErrorMessage(e),
+          locked: status === 403,
+          ...(trashed ? { trashed } : {}),
+        });
       });
     return () => {
       alive = false;
@@ -991,7 +1005,9 @@ function OpenByCode({ route, navigation, onFound }: Props & { onFound: () => voi
   }, [code, navigation, onFound]);
   return (
     <PopupScreen title={code || "ใบงาน"} subtitle="ใบงานซ่อม" startMaximized>
-      {fail?.locked ? (
+      {fail?.trashed ? (
+        <TrashedOrderNote info={fail.trashed} onBack={() => navigation.goBack()} />
+      ) : fail?.locked ? (
         <LockedOrder me={me} error={fail.text} onBack={() => navigation.goBack()} />
       ) : fail ? (
         <View style={styles.centered}>
@@ -1184,11 +1200,20 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   }, [filesState, unknownEvidence, filesAskedFor, reloadFiles]);
   // ระหว่างรอรอบขอใหม่ข้างบน นับเป็นกำลังโหลด — ไม่ขึ้น "ไม่มี…" แวบหนึ่งก่อนไฟล์มา
   const filesStatus = filesState === "ready" && unknownEvidence && unknownEvidence !== filesAskedFor ? "loading" : filesState;
-  const [deleting, setDeleting] = useState(false);
+  // หน้าต่าง "ย้ายใบงานนี้ไปถังขยะ?" (แอดมิน)
+  const [trashing, setTrashing] = useState(false);
+  /**
+   * หน้านี้เองเพิ่งย้ายใบไปถังขยะ — ตัวเช็ครุ่นที่ยิงตอนกล่องยืนยันปิด (subscribeModals) ได้ 404 trashed ของใบที่ตัวเองลบ
+   * ถ้าไม่จำไว้: ขึ้นแถบที่สอง "…ถูกย้ายไปถังขยะแล้ว — แอดมินกู้คืนได้…" ทับแถบ "เลิกทำ" และ goBack ซ้ำอีกรอบ
+   * พาแอดมินหลุดจากรายการใบงานไปแท็บก่อนหน้า (ลองจริง 4 พ.ย. 69: ลบจากรายการแล้วไปโผล่ "งานของฉันวันนี้")
+   */
+  const trashedHere = useRef(false);
   // ขั้นที่ทำแล้วที่กดดูอยู่ (null = ไม่ได้ดู)
   const [stepInfo, setStepInfo] = useState<string | null>(null);
   // เปิดใบที่ไม่ใช่ของทีม/พื้นที่ตัวเอง (403) — หน้ากุญแจแทนตัวหนังสือแดง เพราะไม่ใช่ข้อผิดพลาด แค่ไม่ใช่งานของคุณ
   const [locked, setLocked] = useState(false);
+  // ใบนี้อยู่ในถังขยะ (404 trashed จากเซิร์ฟเวอร์) — แอดมินที่กู้คืนได้เห็นปุ่มไปหน้าถังขยะแทนตัวหนังสือแดง
+  const [inTrash, setInTrash] = useState(false);
   // การ์ดสาขา/การมอบหมายวางคู่กันเมื่อหน้าต่างกว้างพอ
   const [bodyWidth, setBodyWidth] = useState(0);
   const twoCol = bodyWidth >= 720;
@@ -1259,10 +1284,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       optionsLoaded.current = true;
       setError(null);
       setLocked(false);
+      setInTrash(false);
       return got;
     } catch (e) {
       setError(apiErrorMessage(e));
       setLocked((e as { response?: { status?: number } })?.response?.status === 403);
+      setInTrash(isTrashedError(e));
       return null;
     } finally {
       setLoading(false);
@@ -1427,7 +1454,14 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     let r: { v: number; byId: number | null; byName: string | null; actionLabel: string | null; at: string | null; statusLabel: string };
     try {
       r = (await api.get(`/work-orders/${cur.id}/version`, { loadingText: false })).data;
-    } catch {
+    } catch (e) {
+      // มีคนย้ายใบนี้ไปถังขยะระหว่างที่เปิดอยู่ — ปิดหน้าใบงานพร้อมบอก ไม่งั้นทุกปุ่มได้ "อยู่ในถังขยะ" จนกว่าจะรู้ตัวเอง
+      // หน้าที่ไม่ได้อยู่บนจอแล้ว (ปิดไปแล้ว/มีหน้าอื่นทับ) ไม่ goBack — ไม่งั้นพาหน้าที่อยู่บนจอถอยตามไปด้วย
+      if (isTrashedError(e) && !trashedHere.current) {
+        trashedHere.current = true;
+        feedback.toast("warn", `${cur.code} ถูกย้ายไปถังขยะแล้ว — แอดมินกู้คืนได้ที่เมนู “ถังขยะใบงาน”`);
+        if (navigation.isFocused()) navigation.goBack();
+      }
       return; // เน็ตหลุด / เซิร์ฟเวอร์หลับ — รอบหน้าค่อยถาม
     }
     if (r.v <= Math.max(latestLogId(cur), known.current)) return;
@@ -1491,7 +1525,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     await reload();
     setStaleNote(null);
     if (who) feedback.toast("info", `${who} อัปเดตใบงานนี้ — ${r.statusLabel}`);
-  }, [user?.id, reload]);
+  }, [user?.id, reload, navigation]);
   /**
    * ถามทีละรอบ — รอบเวลา · กลับมาที่แท็บ · ปิดฟอร์ม ยิงพร้อมกันได้ รอบที่ซ้อนกันโหลดใบซ้ำและเด้งข้อความซ้ำ
    * (เจอตอนปิดฟอร์มเพราะวันนัดถูกเลื่อน: ขึ้นทั้ง "แอดมินเพิ่งเลื่อนวันนัด" และ "…อัปเดตใบงานนี้") · ระหว่างถามมีคนเรียกอีก = ถามซ้ำอีกรอบหลังจบ
@@ -1614,6 +1648,15 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     );
   }
 
+  // แอดมินที่ลบ/กู้ได้ (Admin Spare Part ไม่ได้) — คนอื่นเห็นข้อความของเซิร์ฟเวอร์ตามเดิม
+  if (inTrash && me?.role === "ADMIN" && !me.partsAdmin) {
+    return (
+      <PopupScreen title={workOrderCode(id)} subtitle="ใบงานซ่อม" startMaximized instant={instant}>
+        <TrashedOrderNote info={{ code: workOrderCode(id), canRestore: true }} onBack={() => navigation.goBack()} />
+      </PopupScreen>
+    );
+  }
+
   if (error || !order) {
     return (
       <PopupScreen title="ใบงาน" subtitle="ใบงานซ่อม" startMaximized instant={instant}>
@@ -1673,41 +1716,6 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   const otherShots = closeFiles.filter((f) => f.role !== "BEFORE" && f.role !== "AFTER");
   const closeShown = [...beforeShots, ...afterShots, ...otherShots];
 
-  /**
-   * ลบถาวร — บอกให้ครบก่อนว่าอะไรจะหายไปด้วย
-   *
-   * ของที่หายไปพร้อมใบงานไม่ได้มีแค่ตัวใบ ปุ่มที่ถามแค่ "แน่ใจไหม" โดยไม่บอกว่า
-   * จะเสียอะไร คือปุ่มที่คนกดยืนยันโดยไม่รู้ว่ากำลังยืนยันอะไร
-   */
-  function confirmDelete() {
-    const o = order!;
-    const parts = [
-      o.waitingParts.length + o.parts.length > 0
-        ? `อะไหล่ ${o.waitingParts.length + o.parts.length} รายการ`
-        : null,
-      files.length > 0 ? `ไฟล์แนบ ${files.length} ไฟล์` : null,
-      o.logs.length > 0 ? `ประวัติ ${o.logs.length} รายการ` : null,
-      o.workers.length > 0 ? `ผู้เข้าปฏิบัติงาน ${o.workers.length} คน` : null,
-    ].filter(Boolean);
-
-    showAlert(
-      `ลบ ${o.code} ถาวร`,
-      [
-        "ใบงานนี้จะหายไปทั้งใบ กู้คืนไม่ได้",
-        parts.length > 0 ? `หายไปด้วย: ${parts.join(" · ")}` : null,
-        o.closedAt
-          ? "ใบนี้ปิดงานไปแล้ว — ถ้าแค่ต้องการเอาออกจากรายการ ควรเก็บไว้เป็นหลักฐานมากกว่า"
-          : "ถ้าใบนี้เปิดถูกแต่ไม่ได้ทำแล้ว ใช้ยกเลิกแทน จะได้เหลือร่องรอยว่าใครยกเลิกเมื่อไหร่",
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      [
-        { text: "ไม่ลบ", style: "cancel" },
-        { text: "ลบถาวร", style: "destructive", onPress: doDelete },
-      ]
-    );
-  }
-
   /** คัดลอกเป็นใบทดสอบ — ลองเดินขั้นที่เหลือ (เช่นเคลมอะไหล่) โดยไม่แตะใบจริง */
   function confirmTestCopy() {
     const o = order!;
@@ -1731,16 +1739,18 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     );
   }
 
-  async function doDelete() {
-    setDeleting(true);
-    try {
-      await api.delete(`/work-orders/${id}`);
-      navigation.goBack();
-    } catch (e) {
-      showAlert("ลบไม่สำเร็จ", apiErrorMessage(e));
-    } finally {
-      setDeleting(false);
-    }
+  /**
+   * ย้ายไปถังขยะสำเร็จ — กลับไปหน้าก่อน แล้วบอกบนแถบแจ้งเตือนว่ากู้คืนได้ถึงวันไหน พร้อม "เลิกทำ" (ตัวอย่างที่ตกลง)
+   * เลิกทำ = กู้คืน (ใบกลับไปขั้นเดิม) แล้วรีเฟรชหน้าที่เปิดอยู่ให้ใบกลับมาโผล่ในรายการ
+   * จำ id/code ไว้ก่อน goBack — หน้านี้ถูกถอดแล้ว ปุ่มบนแถบยังต้องรู้ว่ากู้ใบไหน
+   */
+  function trashed(r: { id: number; code: string; purgeAt: string }) {
+    trashedHere.current = true;
+    setTrashing(false);
+    navigation.goBack();
+    feedback.toast("success", `ย้าย ${r.code} ไปถังขยะแล้ว · กู้คืนได้ถึง ${trashDay(r.purgeAt)}`, {
+      action: { label: "เลิกทำ", onPress: () => void restoreFromTrash(r.id) },
+    });
   }
 
   /** แถบขั้นตอน — เฉพาะขั้นที่ใบนี้ต้องผ่าน เรียงตามลำดับที่ใบนี้เดินจริง (utils/stepPath) */
@@ -1901,6 +1911,26 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           setBackfilling(false);
           await reloadWithNotice();
         }}
+      />
+    ) : null}
+    {trashing ? (
+      <TrashOrderModal
+        order={{
+          id: order.id,
+          code: order.code,
+          branchCode: order.branchCode,
+          jobTypeLabel: order.jobTypeLabel,
+          machineCode: order.machineCode,
+          closedAt: order.closedAt,
+          counts: {
+            parts: order.waitingParts.length + order.parts.length,
+            files: files.length,
+            logs: order.logs.length,
+            workers: order.workers.length,
+          },
+        }}
+        onClose={() => setTrashing(false)}
+        onDone={trashed}
       />
     ) : null}
     {cancelling ? (
@@ -3261,10 +3291,11 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       <History logs={order.logs} closed={closedOk} onTimeline={user?.superAdmin ? () => setTimelineOpen(true) : undefined} />
 
       {/*
-        เครื่องมือเพิ่มเติม — ปิดใบงาน · เปิดใบรออะไหล่ต่อ · คัดลอกเป็นใบทดสอบ · ปิดงานย้อนหลัง · ยกเลิก · ลบถาวร
+        เครื่องมือเพิ่มเติม — ปิดใบงาน · เปิดใบรออะไหล่ต่อ · คัดลอกเป็นใบทดสอบ · ปิดงานย้อนหลัง · ยกเลิก · ลบ (ย้ายไปถังขยะ)
         อยู่คอลัมน์ขวาตามแบบ เพราะไม่ใช่ขั้นตอนปกติของใบงาน ปุ่มของขั้นจริงอยู่ในการ์ดขั้นปัจจุบันแล้ว
         "ปิดใบงาน" ชื่อนี้ ไม่ใช่ "ปิดงาน" เพราะขั้นเข้างานมีปุ่ม "ปิดงาน" ของช่าง (แนบรูป) อยู่แล้ว
-        ลบถาวร (แอดมิน) อยู่ท้ายสุดโดยตั้งใจ: ยกเลิกเก็บใบไว้พร้อมประวัติ ส่วนลบคือหายทั้งใบ
+        ลบ (แอดมิน) อยู่ท้ายสุดโดยตั้งใจ: ยกเลิกเก็บใบไว้ในรายงานพร้อมเหตุผล ส่วนลบคือหายจากทุกที่ (ถังขยะ 30 วันแล้วลบจริง)
+        Admin Spare Part ไม่เห็น — ลบใบงานไม่ได้ (ดูได้อย่างเดียว) ปุ่มที่กดแล้วได้ 403 คือปุ่มที่ไม่ควรมี
       */}
       {canFollowUp || canEnd || user?.role === "ADMIN" ? (
         <View style={[card, styles.toolsCard]}>
@@ -3309,19 +3340,20 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
               <Text style={styles.toolItemText}>ยกเลิกใบงาน</Text>
             </TouchableOpacity>
           ) : null}
-          {user?.role === "ADMIN" ? (
+          {user?.role === "ADMIN" && !user.partsAdmin ? (
             <View style={styles.dangerZone}>
-              <Text style={styles.dangerTitle}>ลบใบงานถาวร</Text>
-              <Text style={styles.dangerHint}>หายทั้งใบพร้อมประวัติ กู้คืนไม่ได้ · ใช้กับใบที่ไม่ควรมีตั้งแต่แรก ถ้าแค่ไม่ทำแล้วให้ "ยกเลิก"</Text>
+              <Text style={styles.dangerTitle}>ลบใบงาน</Text>
+              <Text style={styles.dangerHint}>
+                ย้ายไปถังขยะ กู้คืนได้ 30 วัน แล้วระบบลบจริงพร้อมรูป · ใช้กับใบที่ไม่ควรมีตั้งแต่แรก ถ้าแค่ไม่ทำแล้วให้ "ยกเลิก"
+              </Text>
               <TouchableOpacity
                 style={styles.dangerBtn}
-                onPress={confirmDelete}
-                disabled={deleting}
+                onPress={() => setTrashing(true)}
                 activeOpacity={0.7}
-                accessibilityLabel="ลบใบงานนี้ถาวร"
+                accessibilityLabel="ลบใบงานนี้ (ย้ายไปถังขยะ)"
               >
-                {deleting ? <Spinner color={colors.danger} size="small" /> : <Ionicons name="trash-outline" size={15} color={colors.danger} />}
-                <Text style={styles.deleteText}>ลบถาวร…</Text>
+                <Ionicons name="trash-outline" size={15} color={colors.danger} />
+                <Text style={styles.deleteText}>ย้ายไปถังขยะ…</Text>
               </TouchableOpacity>
             </View>
           ) : null}

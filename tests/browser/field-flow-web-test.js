@@ -4,6 +4,7 @@
 //   3) ใบงาน SUB: กล่องอธิบาย + ปุ่มคัดลอกข้อมูลส่งทีม · ปุ่ม "บันทึกผลงาน SUB" เปิดฟอร์มชื่อเดียวกัน · แอดมินกรองชิป ใบงาน SUB ได้
 // ยืนยันผลที่ฐานข้อมูล · ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay } = require("./fixture"); // วันนัดนับจากวันนี้ (เวลาไทย)
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -At -v ON_ERROR_STOP=1`, { input: q }).toString().trim();
@@ -174,7 +175,7 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
   } catch (e) {
     fail(e.stack || String(e));
   } finally {
-    for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
+    await purgeOrders(A, ids);
     sql(`delete from "OutsourceTeam" where name='${os}'`);
     sql(`delete from "BranchCheckIn" where id>${checkin0}`);
     sql(`update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001'`);

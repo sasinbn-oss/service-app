@@ -8,6 +8,10 @@
 #   · ทีม Area: Area ทุกสาขา COCO 200 แฟรนไชส์ 403 · Supervisor (COCO) / Maid (COCO) เฉพาะสาขาตัวเอง
 #     (เคยหลุด: เส้นทางนี้ไม่อยู่ในรายการอนุญาตของทีม Area → 403 ทุกใบ แม้ใบของสาขาตัวเอง)
 #   · ดูในฐานะช่าง: เห็นเท่าช่าง (403 ใบทีมอื่น) — ลิงก์ไม่ทำให้ดูในฐานะเห็นเกินคนที่ถูกดู
+#   · ใบในถังขยะ (เจ้าของงานตัดสิน 4 พ.ย. 69 — หายจากทุกที่): ช่าง · หัวหน้าภาค · ทีม Area · ดูในฐานะ ได้คำตอบเดียวกับรหัสที่ไม่มีจริง
+#     ทุกตัวอักษร (ใบนอกทีมก็ไม่ได้ 403 ที่บอกว่ามีใบนี้) · แอดมินได้ trashed + ใครลบ/เหตุผล/กู้ได้ถึง + canRestore
+#     (Admin Spare Part = false) · กู้คืนแล้วลิงก์เปิดได้ทันที
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -24,14 +28,14 @@ codeOf() { DB "select code from \"WorkOrder\" where id=$1"; }
 # สถานะของ by-code ต้องเท่ากับของ GET /:id เสมอ — ต่างกันเมื่อไรลิงก์กลายเป็นทางลัด (หรือเปิดไม่ได้ทั้งที่เปิดใบได้)
 SAME() { local a b; a=$(CODE $1 "work-orders/by-code/$(codeOf $2)"); b=$(CODE $1 "work-orders/$2"); [ "$a" = "$b" ] && echo "$a" || echo "by-code=$a ต่างจาก /:id=$b"; }
 
-LOGINS="'ZPL.AREA','ZPL.SUP','ZPL.MAID'"
+LOGINS="'ZPL.AREA','ZPL.SUP','ZPL.MAID','ZPL.PA'"
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 SUP_C0001=$(DB "select coalesce(\"cocoSupervisorId\"::text,'') from \"Branch\" where code='C0001'")
 START=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 A=$(login A001); T=$(login T001)
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)"; done
+  purge_orders "$A" $IDS  # ถังขยะ → ครบ 30 วัน (DELETE เปล่าแบบเดิมได้ 400 — ใบของชุดนี้เคยค้างทุกรอบ)
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001';
       update \"Branch\" set \"cocoSupervisorId\"=nullif('$SUP_C0001','')::int where code='C0001';
       delete from \"ViewAsLog\" where id > $START;
@@ -99,5 +103,37 @@ AV=$(POST $A auth/view-as "{\"userId\":$TID}" | J 'd.token||""')
 [ -n "$AV" ] && [ "$(SAME $AV $W1)" = "403" ] && [ "$(SAME $AV $W2)" = "200" ] \
   && pass "แอดมินดูในฐานะช่าง: ใบทีมอื่น 403 · ใบที่ช่างเปิดเอง 200 (เท่าช่างจริง)" || fail "ดูในฐานะ: $(SAME $AV $W1)/$(SAME $AV $W2)"
 POST $AV auth/view-as/stop '{}' >/dev/null
+
+echo "═══ ใบในถังขยะ (ลิงก์ที่ค้างอยู่ในกลุ่มไลน์)"
+# รหัสที่ไม่มีจริงของแต่ละคน — ใบในถังต้องได้คำตอบนี้ทุกตัวอักษร (สถานะ + เนื้อ) คนที่ไม่ใช่แอดมินแยกไม่ออกว่าใบเคยมี
+MISS() { curl -s -w ' %{http_code}' "localhost:4000/api/work-orders/by-code/WO-99999999" -H "$(H $1)"; }
+BYC() { curl -s -w ' %{http_code}' "localhost:4000/api/work-orders/by-code/$(codeOf $2)" -H "$(H $1)"; }
+TRASH() { curl -s -o /dev/null -w '%{http_code}' -X DELETE "localhost:4000/api/work-orders/$1" -H "$(H $A)" -H 'Content-Type: application/json' -d "$2"; }
+# W1 (C0006 ช่างทีมอื่น 403 · หัวหน้าภาคในพื้นที่) · W2 (ช่างเปิดเอง 200) · W3 (C0001 ของ Area/Supervisor/Maid)
+[ "$(TRASH $W1 '{"reason":"DUPLICATE"}')$(TRASH $W2 '{"reason":"TEST"}')$(TRASH $W3 '{"reason":"OTHER","note":"ลิงก์ทดสอบ"}')" = "200200200" ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" where id in ($W1,$W2,$W3) and \"deletedAt\" is not null")" = "3" ] || fail "เตรียมข้อมูล: ย้ายใบไปถังขยะไม่ได้"
+AV=$(POST $A auth/view-as "{\"userId\":$TID}" | J 'd.token||""')
+SAMEMISS=""
+for who in "ช่าง:$T:$W1" "ช่าง(ใบที่เปิดเอง):$T:$W2" "หัวหน้าภาค:$S:$W1" "Area:$AR:$W3" "Supervisor(COCO):$SU:$W3" "Maid(COCO):$MA:$W3" "ดูในฐานะช่าง:$AV:$W2"; do
+  n=${who%%:*}; rest=${who#*:}; tok=${rest%%:*}; w=${rest#*:}
+  [ "$(BYC $tok $w)" = "$(MISS $tok)" ] || SAMEMISS="$SAMEMISS $n=$(BYC $tok $w)"
+done
+[ -z "$SAMEMISS" ] && [ "$(MISS $T)" = '{"error":"ไม่พบใบงานนี้"} 404' ] \
+  && pass "ไม่ใช่แอดมิน (ช่าง · หัวหน้าภาค · Area · Supervisor/Maid (COCO) · ดูในฐานะ): ใบในถัง = รหัสที่ไม่มีจริงทุกตัวอักษร · ใบนอกทีมไม่ได้ 403" \
+  || fail "ใบในถังหลุดให้คนที่ไม่ใช่แอดมิน:$SAMEMISS"
+POST $AV auth/view-as/stop '{}' >/dev/null
+ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
+R=$(BYC $A $W1)
+[ "${R##* }" = "404" ] && [ "$(echo "${R% *}" | J "d.trashed===true&&d.code==='$C1'&&d.canRestore===true&&d.reasonText==='เปิดซ้ำ'&&d.deletedByName==='$ANAME'&&Math.round((Date.parse(d.purgeAt)-Date.parse(d.deletedAt))/864e5)===30&&d.error.includes('ถังขยะใบงาน')&&d.id===undefined")" = "true" ] \
+  && pass "แอดมิน: 404 trashed บอกรหัส · คนลบ · เหตุผล · กู้ได้ถึง (30 วัน) · canRestore — ไม่ส่งเลขใบ (ไม่พาไปหน้าใบงาน)" || fail "แอดมิน: $R"
+DB "insert into \"User\"(\"employeeCode\",name,role,\"passwordHash\",\"mustChangePassword\") values ('ZPL.PA','อะไหล่ทดสอบลิงก์','PARTS_ADMIN','$HASH',false)" >/dev/null
+PA=$(login ZPL.PA)
+R=$(BYC $PA $W3)
+[ "${R##* }" = "404" ] && [ "$(echo "${R% *}" | J "d.trashed===true&&d.canRestore===false&&d.error.includes('ให้แอดมินกู้คืน')")" = "true" ] \
+  && pass "Admin Spare Part: รู้ว่าอยู่ในถัง (เห็นทุกใบอยู่แล้ว) แต่ canRestore=false + บอกให้แอดมินกู้" || fail "Admin Spare Part: $R"
+[ "$(CODE $A "work-orders/$W1")" = "404" ] || fail "เปิดใบในถังด้วยเลขใบควรได้ 404"
+POST $A "work-orders/$W2/restore" '{}' >/dev/null
+[ "$(DB "select (\"deletedAt\" is null)::text from \"WorkOrder\" where id=$W2")" = "true" ] && [ "$(SAME $T $W2)" = "200" ] \
+  && pass "กู้คืนแล้ว: ลิงก์ของช่าง (ใบที่เปิดเอง) เปิดได้ทันที ทั้ง by-code และเลขใบ" || fail "หลังกู้คืน: $(SAME $T $W2)"
 
 [ -z "$FAILED" ]

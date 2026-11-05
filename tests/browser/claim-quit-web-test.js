@@ -9,6 +9,7 @@
 //   สาขาในประกันไม่มีแถบนี้ (เปิดเคลมให้เอง ไม่ใช่ติ๊กผิด · ไม่ส่งต้องเลือกเหตุผลในขั้นเคลม) — claim-close-steps-web-test.js ตรวจว่าไม่มีแถบ
 // วันนัด 12 วันข้างหน้าตอนปล่อยงาน แล้วย้ายเป็นวันนี้ด้วย SQL · ต้องมี DATABASE_URL · รีสตาร์ท Expo ก่อนรัน (เว็บไม่เฝ้าไฟล์)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay, fxPart } = require("./fixture");
 const path = require("path");
@@ -208,7 +209,7 @@ const waitFor = async (fn, ms = 10000) => {
   } catch (e) {
     fail(String(e));
   } finally {
-    for (const i of ids) await call(A, "DELETE", `/work-orders/${i}`);
+    await purgeOrders(A, ids);
     // กดถึงหน้างานสร้างแถวเช็คอินผูกทั้งสาขาและช่าง — ไม่ลบก่อน ลบสาขา/ผู้ใช้ไม่ได้ (FK)
     sql(`delete from "BranchCheckIn" where "branchId" in (select id from "Branch" where code='${bc}') or "userId" in (select id from "User" where "employeeCode"='${TECH}');
          delete from "Machine" where "branchId" in (select id from "Branch" where code='${bc}');

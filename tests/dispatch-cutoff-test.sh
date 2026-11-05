@@ -24,6 +24,7 @@
 # ถ้า set -e จบสคริปต์เงียบ ๆ (curl ต่อไม่ติดตอน ts-node-dev รีสตาร์ต · ไม่มีตาราง AppSetting เพราะลืม migrate ·
 # เซิร์ฟเวอร์ตอบ HTML แล้ว J อ่านไม่ออก) ชุดนี้จะขึ้น "14 ผ่าน" หรือ "0 ผ่าน" และทั้งรอบจบว่าผ่านทั้งหมด ทั้งที่แอปพัง
 # -E ให้ trap ERR ทำงานในฟังก์ชันด้วย (SETCUT ฯลฯ) · พิมพ์เฉพาะเชลล์หลัก ไม่งั้น $(…) ที่พังพิมพ์ซ้ำ/หลุดเข้าตัวแปร
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -eE
 _dc_died() {
   if [ "${BASH_SUBSHELL:-0}" -eq 0 ]; then echo "FAIL สคริปต์หยุดกลางทาง (บรรทัด $1): $2"; fi
@@ -104,7 +105,7 @@ cleanup() {
   # ลบก่อนผู้ใช้ชั่วคราว: ประวัติที่ผู้ใช้เหล่านั้นเขียนหายไปกับใบ
   if [ -n "$A" ]; then
     for i in $(DB "select id from \"WorkOrder\" where symptom='ทดสอบเวลาปิดนัด $SUF'"); do
-      curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null
+      purge_orders "$A" $i
     done
   fi
   # ลบหลังใบงาน — ใบที่ยังอ้างเครื่องอยู่ทำให้ลบไม่ได้ · ฐานที่มี W117 อยู่ก่อนแล้วไม่แตะ

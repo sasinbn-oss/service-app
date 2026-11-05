@@ -10,6 +10,7 @@
  * คำสั่งเดียวหาสาขา/เครื่องจากใบเอง ถามได้ทีละหลายใบ (กล่องงานตรวจเคลมทั้งกล่องในรอบเดียว — ฐานข้อมูลอยู่ไกล รอบละ ~0.23 วิ)
  */
 import { prisma } from "../prisma";
+import { aliveSql } from "./trash";
 
 export interface ClaimRepeat {
   workOrderId: number;
@@ -34,6 +35,8 @@ export async function claimRepeatsOf(ids: number[]): Promise<Map<number, ClaimRe
     JOIN "WorkOrder" w ON w.id = c."workOrderId"
     WHERE me.id = ANY(${ids}::int[])
       AND (me."isTest" OR NOT w."isTest")
+      -- เคลมของใบในถังขยะไม่นับเป็น "เครื่องนี้เคยเคลม" — ใบที่ลบคือใบที่ไม่ควรมี (ทดสอบ · เปิดซ้ำ · เปิดผิดเครื่อง)
+      AND ${aliveSql("w")}
       AND NOT (c."workOrderId" = me.id AND c."createdAt" >= COALESCE(
         (SELECT max(l."createdAt") FROM "WorkOrderLog" l WHERE l."workOrderId" = me.id AND l.action = 'REOPENED'),
         '-infinity'::timestamp))

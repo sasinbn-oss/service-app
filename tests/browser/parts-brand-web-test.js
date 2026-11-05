@@ -21,6 +21,7 @@
 //      ปิดงาน → ฐานข้อมูล: ใบปิดแล้ว · Machine.model = Huebsch · ประวัติบันทึกยี่ห้อเครื่อง 1 แถว · อะไหล่ที่ใช้ = ตัว Huebsch
 // ต้องมี DATABASE_URL · ไม่ขึ้นกับเวลาไทยของวันที่รัน — ข้อ 5 ปล่อยงานด้วยวันนัด 12 วันข้างหน้า (G10 · ไม่ติดเวลาปิดนัดงานพรุ่งนี้)
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
@@ -79,7 +80,7 @@ const nameOf = (code) => PARTS.find((p) => p[0] === code)[1];
   const ids = [];
   const A = await login("A001");
   const cleanup = async () => {
-    for (const id of ids) await call(A, "DELETE", `work-orders/${id}`);
+    await purgeOrders(A, ids);
     sql(`delete from "WorkOrder" where "branchId"=${BID} and symptom like 'ทดสอบไฟล์ยี่ห้อหน้าจอ%${SUF}'`);
     sql(`delete from "Machine" where "branchId"=${BID} and code in ('${MU}','${MK}','${MC}')`);
     sql(`delete from "SparePart" where "partCode" like '${K}-%'`);

@@ -50,6 +50,7 @@
 //   · แถวที่เพิ่มลบทั้งหมดตอนจบ · ถูกฆ่ากลางทาง รอบหน้าเจอแถวจด → FAIL แล้วลบ/คืนให้ ไม่ปล่อยให้แอปใช้เวลาผิดเงียบ ๆ
 // ยืนยันที่ฐานข้อมูลทุกข้อ ไม่เชื่อหน้าจออย่างเดียว (CLAUDE.md) · ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const path = require("path");
 const { setup, visitDay } = require("./fixture");
 
@@ -1378,7 +1379,7 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       await refresh().catch(() => {});
     }
     await fx.cleanup().catch((e) => fail(`ลบข้อมูลทดสอบไม่สำเร็จ: ${e}`));
-    for (const id of extraOrders) await call(A, "DELETE", `/work-orders/${id}`).catch((e) => fail(`ลบใบ ${id} ไม่สำเร็จ: ${e}`));
+    await purgeOrders(A, extraOrders);
     sql(`delete from "User" where "employeeCode"='${PA}'`);
     await browser.close();
   }

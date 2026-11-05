@@ -4,6 +4,7 @@
 #   · ระหว่างรอ หัวหน้าภาคเดินขั้นต่อได้ · คำขอเข้ากล่องงานแอดมิน (ตัวเลขตรงกับรายการ)
 #   · ยกเลิกได้ก่อนแอดมินตอบ · แอดมินตอบต้องพิมพ์ · ตอบแล้วเข้ากล่องหัวหน้าภาคจนกดรับทราบ (แม้ใบอยู่ขั้นแอดมิน)
 #   · ใบที่ถูกยกเลิกไม่ค้างในกล่องแอดมิน · ประวัติบันทึกทั้งส่ง/ยกเลิก/ตอบ ที่ขั้นเดิม
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -28,7 +29,7 @@ DB "update \"User\" set \"mustChangePassword\"=false where id=$ZID" >/dev/null
 Z=$(login "RV$SUF" temp12345)
 W=""; W2=""
 cleanup() {
-  for w in $W $W2; do curl -s -o /dev/null -X DELETE "localhost:4000/api/work-orders/$w" -H "$(H $A)"; done
+  purge_orders "$A" $W $W2
   DB "delete from \"User\" where id=$ZID" >/dev/null
 }
 trap cleanup EXIT

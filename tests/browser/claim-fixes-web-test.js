@@ -10,6 +10,7 @@
 // ใบที่ปิดวันนี้ขึ้นในแท็บวันนี้ของงานของฉันเองไม่ว่าวันนัดเป็นวันไหน จึงไม่ต้องย้ายวันนัด
 // ยืนยันผลที่ฐานข้อมูลทุกข้อที่เปลี่ยนข้อมูล ไม่เชื่อข้อความบนจออย่างเดียว · ต้องมี DATABASE_URL
 const { chromium } = require("playwright");
+const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
 const { visitDay, fxPart } = require("./fixture");
 const fs = require("fs");
@@ -287,7 +288,7 @@ const login = async (code) =>
   } catch (e) {
     fail(String(e));
   } finally {
-    for (const id of ids) await call(A, "DELETE", `/work-orders/${id}`);
+    await purgeOrders(A, ids);
     sql(`delete from "Machine" where "branchId" in (select id from "Branch" where code='${bc}');
          delete from "Branch" where code='${bc}';
          update "User" set region=nullif('${oldRegion}','') where "employeeCode"='S001';

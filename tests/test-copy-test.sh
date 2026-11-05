@@ -1,6 +1,7 @@
 #!/bin/bash
 # ทดสอบ: คัดลอกเป็นใบทดสอบ — ใบใหม่ขั้น/ทีม/อะไหล่เดียวกัน ไม่มีไฟล์และไม่ผูกเคส · ใบต้นทางไม่ถูกแตะ ·
 #        แอดมินเท่านั้น (หัวหน้าภาค/Admin Spare Part ไม่ได้) · ใบที่ปิดแล้วคัดลอกได้ เริ่มที่รอช่างเข้างาน · ลบใบทดสอบแล้วใบจริงยังอยู่
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 SP="$(cd "$(dirname "$0")" && pwd)"
 . "$SP/lib/fixture-parts.sh"
@@ -18,7 +19,7 @@ SUF=$RANDOM
 BC="DZTC$SUF"
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code='$BC');
       delete from \"Branch\" where code='$BC';
       delete from \"SparePart\" where \"offCatalog\" and name='${OFFNAME:-__ไม่มี__}';
@@ -121,7 +122,7 @@ C2=$(POST $A "work-orders/$ID/test-copy" '{}' | J 'd.id'); IDS="$C2 $IDS"
 
 echo
 echo "═══ ลบใบทดสอบ"
-curl -s -X DELETE "localhost:4000/api/work-orders/$C" -H "$(H $A)" >/dev/null
+purge_orders "$A" $C
 [ "$(DB "select count(*) from \"WorkOrder\" where id=$C")|$(DB "select count(*) from \"WorkOrder\" where id=$ID")" = "0|1" ] \
   && pass "ลบใบทดสอบแล้ว ใบจริงยังอยู่" || fail "ลบใบทดสอบ"
 

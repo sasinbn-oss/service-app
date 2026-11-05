@@ -4,6 +4,7 @@
 #        ปิดได้ทุกขั้นที่ยังไม่ปิด (รวมรอช่างปิดงาน · เบิกอะไหล่แล้วก็ได้) แต่ไม่ใช่รอตรวจเคลม · ผล SUPERVISOR_CLOSED + ประวัติ
 #
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 . "$(dirname "$0")/lib/fixture-parts.sh"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -18,7 +19,7 @@ SUF=$RANDOM
 BS="DZSS$SUF"; BN="DZSN$SUF"
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "delete from \"Machine\" where \"branchId\" in (select id from \"Branch\" where code in ('$BS','$BN'));
       delete from \"Branch\" where code in ('$BS','$BN');
       delete from \"User\" where \"employeeCode\"='ZSCP$SUF';

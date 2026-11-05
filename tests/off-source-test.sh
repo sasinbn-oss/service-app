@@ -18,7 +18,7 @@
 # เก็บกวาดของชุดนี้อยู่ใน claim_extra_cleanup (claim-setup ตั้ง trap EXIT ไว้แล้ว) · ห้ามตั้ง SUF/IDS/OLD_REGION ทับ:
 # claim-setup ใช้สามตัวนี้ตอนเก็บกวาด ตั้งใหม่แล้วผู้ใช้ทดสอบเคลมไม่ถูกลบ/ภาคของ S001 ถูกคืนเป็นค่าผิด
 SP="$(cd "$(dirname "$0")" && pwd)"
-. "$SP/claim-setup.sh"
+. "$SP/claim-setup.sh"   # source purge-orders.sh ให้แล้ว (purge_orders)
 EMSG() { J 'd.error===undefined?"(ไม่มี error) "+JSON.stringify(d).slice(0,160):typeof d.error==="string"?d.error:JSON.stringify(d.error)'; }
 AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
@@ -30,7 +30,8 @@ N4="ปะเก็นซื้อหน้างานทดสอบแหล�
 N5="ฝาครอบซื้อก่อนตีกลับทดสอบแหล่ง $SUF" # ช่างซื้อเอง แล้วเคลมถูกตีกลับ (ปิดซ้ำ · ปิดแทน · ปิดย้อนหลัง)
 # ลบใบงานก่อนของนอกสโตร์ — แถวอะไหล่ของใบยังอ้างถึงอยู่ · ล้าง IDS ให้ claim-setup ไม่ลบซ้ำ
 claim_extra_cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  # purge_orders (ถังขยะ → ครบ 30 วัน) — DELETE เปล่าแบบเดิมได้ 400 ตั้งแต่มีถังขยะ ใบของชุดนี้เคยค้างฐานทุกรอบ (4 ใบ/รอบ)
+  purge_orders "$A" $IDS
   IDS=""
   DB "delete from \"SparePart\" where \"offCatalog\" and name like '%ทดสอบแหล่ง $SUF'" >/dev/null
 }

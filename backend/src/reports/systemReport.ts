@@ -13,6 +13,7 @@ import ExcelJS from "exceljs";
 import { PassThrough } from "stream";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import {
   JOB_TYPE_LABELS,
   VEHICLE_STATUS_LABELS,
@@ -50,7 +51,9 @@ type Cell = string | number;
 type Sheet = ExcelJS.Worksheet;
 
 export async function buildSystemReport(opts: { from?: string; to?: string }): Promise<Buffer> {
+  // ใบในถังขยะไม่อยู่ในรายงานทั้งระบบ (ALIVE ทุกคำสั่งข้างล่าง) — ลบแล้วคือใบที่ไม่ควรมี ไม่ใช่งานที่เกิดขึ้น
   const woRange: Prisma.WorkOrderWhereInput = {
+    ...ALIVE,
     isTest: false,
     ...(opts.from && opts.to
       ? { createdAt: { gte: bkkDayStart(opts.from), lt: new Date(bkkDayStart(opts.to).getTime() + 86_400_000) } }
@@ -83,12 +86,12 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
     prisma.outage.findMany({ where: { kind: "MACHINE_OFF", endedAt: null, machineId: { not: null } }, select: { machineId: true } }),
     prisma.workOrder.groupBy({
       by: ["machineId", "status"],
-      where: { isTest: false, machineId: { not: null } },
+      where: { ...ALIVE, isTest: false, machineId: { not: null } },
       _count: { _all: true },
       _max: { closedAt: true },
     }),
     prisma.workOrder.findMany({
-      where: { isTest: false, status: { notIn: CLOSED } },
+      where: { ...ALIVE, isTest: false, status: { notIn: CLOSED } },
       select: { assignedTeam: true, branch: { select: { id: true, zone: true } } },
     }),
     prisma.workOrder.groupBy({ by: ["status"], where: woRange, _count: { _all: true } }),
@@ -317,10 +320,10 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
       orderBy: [{ offCatalog: "asc" }, { partCode: "asc" }],
       select: { id: true, partCode: true, name: true, brand: true, category: true, offCatalog: true },
     }),
-    prisma.workOrderPart.groupBy({ by: ["sparePartId"], where: { kind: "USED", workOrder: { isTest: false } }, _sum: { quantity: true } }),
+    prisma.workOrderPart.groupBy({ by: ["sparePartId"], where: { kind: "USED", workOrder: { ...ALIVE, isTest: false } }, _sum: { quantity: true } }),
     prisma.workOrderPart.groupBy({
       by: ["sparePartId"],
-      where: { kind: "WAITING", workOrder: { isTest: false, status: { notIn: CLOSED } } },
+      where: { kind: "WAITING", workOrder: { ...ALIVE, isTest: false, status: { notIn: CLOSED } } },
       _sum: { quantity: true },
     }),
   ]);

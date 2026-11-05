@@ -6,6 +6,7 @@
 #   · ใบ CM ยังต้องมีรูปก่อนซ่อมกับป้ายรุ่นเหมือนเดิม
 # ตอนเปิดใบงาน รูปบังคับที่ฟอร์มเท่านั้น (เซิร์ฟเวอร์ไม่ได้เช็ค) — ข้อยกเว้น PM ของฟอร์มอยู่ในเทสต์เบราว์เซอร์ pm-photo
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -23,7 +24,7 @@ OLD_TEAM=$(DB "select coalesce(team,'') from \"User\" where \"employeeCode\"='T0
 TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   DB "update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null
 }

@@ -204,6 +204,9 @@ function useClosedGroups() {
 
 type Tab = keyof MainTabParamList;
 
+/** GET /work-orders/inbox-count — trash มาเฉพาะแอดมินที่ลบใบงานได้ (เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ไม่ขึ้นป้าย) */
+type InboxCount = { inbox: number; trash?: number };
+
 interface Item {
   key: string;
   label: string;
@@ -217,6 +220,8 @@ interface Item {
   claims?: boolean;
   /** ใบที่รอตรวจเคลม (ป้าย "{x} ใบ" ของเมนูตรวจเคลม · เคลมก้อน 6) */
   queue?: boolean;
+  /** ใบในถังขยะ (ป้ายเทา "{x} ใบ" ของเมนูถังขยะใบงาน) — ไม่ใช่งานที่รอใคร จึงไม่ใช้วงกลมแดงแบบกล่องงาน */
+  trash?: boolean;
   /** เห็นเฉพาะผู้ตรวจเคลม — Admin Spare Part และ Super Admin */
   reviewer?: boolean;
   /** เห็นเฉพาะบทบาทเหล่านี้ — ไม่ใส่ = ทุกคน */
@@ -369,6 +374,8 @@ const GROUPS: Group[] = [
       { key: "users", label: "สิทธิ์ผู้ใช้", labelEn: "Users & Access", icon: "people-outline", tab: "AdminTab", screen: "ManageUsers" },
       { key: "teams", label: "ทีมช่าง", labelEn: "Teams", icon: "people-circle-outline", tab: "AdminTab", screen: "ManageTeams" },
       { key: "branches", label: "จัดการข้อมูลสาขา", labelEn: "Branches", icon: "business-outline", tab: "AdminTab", screen: "ManageBranches" },
+      // ถังขยะใบงาน (เจ้าของงานตัดสิน 4 พ.ย. 69) — แอดมินที่ลบใบงานได้ทุกคน · Admin Spare Part ไม่เห็น (PARTS_ADMIN_HIDDEN)
+      { key: "trash", label: "ถังขยะใบงาน", labelEn: "Work Order Trash", icon: "trash-outline", tab: "AdminTab", screen: "WorkOrderTrash", trash: true },
       { key: "backup", label: "สำรองข้อมูล", labelEn: "Backup", icon: "cloud-download-outline", tab: "AdminTab", screen: "Backup", superAdmin: true },
     ],
   },
@@ -387,7 +394,7 @@ const GROUPS: Group[] = [
  */
 const AREA_TEAM_MENU = new Set(["plan", "inbox", "wo", "dash", "coverage", "reports", "password", "howto"]);
 
-const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches"]);
+const PARTS_ADMIN_HIDDEN = new Set(["fleetDash", "vehicleLogs", "vehicles", "review", "users", "teams", "branches", "trash"]);
 
 /** หน้าแรกของแต่ละแท็บ — ไปหน้าพวกนี้ต้องล้างหน้าที่ซ้อนอยู่ ไม่ใช่ซ้อนเพิ่ม */
 const TAB_ROOTS = new Set(["PlanBoard", "MyJobs", "HomeMenu", "WorkOrderList", "HistoryMenu", "AdminMenu"]);
@@ -438,6 +445,15 @@ function QueuePill({ n }: { n: number }) {
   );
 }
 
+/** ป้ายเทา "{x} ใบ" ข้างเมนูถังขยะใบงาน — บอกว่ามีของรอให้ตัดสินใจกู้/ปล่อย ไม่ใช่งานค้าง (ไม่ใช้แดงแบบกล่องงาน) */
+function TrashPill({ n }: { n: number }) {
+  return (
+    <View style={styles.trashPill} accessibilityLabel={`ถังขยะ ${n} ใบ`}>
+      <Text style={styles.trashPillText}>{n} ใบ</Text>
+    </View>
+  );
+}
+
 /**
  * กลุ่มเดียวในเมนูข้าง — แยกเป็นคอมโพเนนต์เพราะแต่ละกลุ่มต้องจำจังหวะกาง/ย่อของตัวเอง (useGroupBusy)
  * ถ้าใช้ hook ในลูปของ MenuContent จำนวนกลุ่มเปลี่ยนตามตำแหน่ง (สลับดูในฐานะ) แล้วแอปพัง
@@ -454,6 +470,7 @@ function MenuGroup({
   inbox,
   claims,
   queue,
+  trash,
   onPick,
   rail,
 }: {
@@ -466,6 +483,8 @@ function MenuGroup({
   claims: number;
   /** ใบที่รอตรวจเคลม — ป้ายข้างเมนูตรวจเคลม */
   queue: number;
+  /** ใบในถังขยะ — ป้ายข้างเมนูถังขยะใบงาน */
+  trash: number;
   onPick: (it: Item) => void;
   rail?: boolean;
 }) {
@@ -517,6 +536,7 @@ function MenuGroup({
         const n = it.badge ? inbox : 0;
         const waiting = it.claims ? claims : 0;
         const queued = it.queue ? queue : 0;
+        const trashed = it.trash ? trash : 0;
         return (
           <RevealRow key={it.key} open={!shut} busy={busy && !on} order={on ? 0 : hidden.indexOf(it)}>
             <TouchableOpacity
@@ -551,6 +571,7 @@ function MenuGroup({
                   ) : null}
                   {waiting ? <ClaimPill n={waiting} /> : null}
                   {queued ? <QueuePill n={queued} /> : null}
+                  {trashed ? <TrashPill n={trashed} /> : null}
                 </>
               )}
             </TouchableOpacity>
@@ -566,11 +587,14 @@ function MenuContent({
   inbox,
   claims = 0,
   queue = 0,
+  trash = 0,
   onPick,
   rail,
 }: {
   active: string | null;
   inbox: number;
+  /** ใบในถังขยะ — ป้ายข้างเมนูถังขยะใบงาน (แอดมินเท่านั้น — เซิร์ฟเวอร์ส่งมากับตัวเลขกล่องงาน) */
+  trash?: number;
   /** เคลมที่ยังรอตรวจ — ป้ายข้างเมนูประวัติเคลม */
   claims?: number;
   /** ใบที่รอตรวจเคลม — ป้ายข้างเมนูตรวจเคลม (ผู้ตรวจเท่านั้น) */
@@ -604,6 +628,7 @@ function MenuContent({
                 inbox={inbox}
                 claims={claims}
                 queue={queue}
+                trash={trash}
                 onPick={onPick}
                 rail={rail}
               />
@@ -664,6 +689,7 @@ export function DockedSideMenu() {
   const { collapsed: rail } = useDocked();
   const [active, setActive] = useState<string | null>(currentKey());
   const [inbox, setInbox] = useState(0);
+  const [trash, setTrash] = useState(0);
   const [claims, reloadClaims] = useClaimsWaiting();
   const { user } = useAuth();
   const [queue, reloadQueue] = useClaimQueueCount(user);
@@ -676,8 +702,11 @@ export function DockedSideMenu() {
     const refresh = () => {
       setActive(currentKey());
       api
-        .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
-        .then((r) => setInbox(r.data.inbox))
+        .get<InboxCount>("/work-orders/inbox-count", { loadingText: false })
+        .then((r) => {
+          setInbox(r.data.inbox);
+          setTrash(r.data.trash ?? 0);
+        })
         .catch(() => undefined);
       // ตรวจเคลมเสร็จแล้วกลับมา ตัวเลขรอตรวจต้องลดทันทีแบบเดียวกับกล่องงาน
       reloadClaims();
@@ -692,7 +721,7 @@ export function DockedSideMenu() {
         <MenuButton />
         {rail ? null : <Text style={styles.dockHeadText}>ย่อเมนู</Text>}
       </View>
-      <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} onPick={navigateTo} rail={rail} />
+      <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} trash={trash} onPick={navigateTo} rail={rail} />
     </Animated.View>
   );
 }
@@ -707,6 +736,7 @@ export default function SideMenu({ footer }: { footer?: React.ReactNode } = {}) 
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [inbox, setInbox] = useState(0);
+  const [trash, setTrash] = useState(0);
   const [claims, reloadClaims] = useClaimsWaiting();
   const { user } = useAuth();
   const [queue, reloadQueue] = useClaimQueueCount(user);
@@ -749,8 +779,11 @@ export default function SideMenu({ footer }: { footer?: React.ReactNode } = {}) 
       setActive(currentKey());
       // ตัวเลขบนกล่องงานโหลดตอนเปิดเมนู ไม่ใช่ค้างค่าเก่าจากตอนเข้าแอป
       api
-        .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
-        .then((r) => setInbox(r.data.inbox))
+        .get<InboxCount>("/work-orders/inbox-count", { loadingText: false })
+        .then((r) => {
+          setInbox(r.data.inbox);
+          setTrash(r.data.trash ?? 0);
+        })
         .catch(() => undefined);
       reloadClaims();
       reloadQueue();
@@ -789,7 +822,7 @@ export default function SideMenu({ footer }: { footer?: React.ReactNode } = {}) 
         style={[styles.panel, { paddingTop: spacing.sm, transform: [{ translateX: x }] }]}
       >
         <PanelHead />
-        <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} onPick={go} />
+        <MenuContent active={active} inbox={inbox} claims={claims} queue={queue?.orders ?? 0} trash={trash} onPick={go} />
         <PanelTools onLeave={() => setOpen(false)} footer={footer} />
       </Animated.View>
     </View>
@@ -1003,6 +1036,8 @@ const styles = StyleSheet.create({
   claimText: { color: colors.warningInk },
   claimPill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
   claimPillText: { fontSize: 11.5, lineHeight: 16, fontWeight: "700", color: colors.warningInk },
+  trashPill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.sideLine },
+  trashPillText: { fontSize: 11.5, lineHeight: 16, fontWeight: "700", color: colors.sideInk },
   badgeText: { color: "#fff", fontSize: 12, lineHeight: 18, fontWeight: "700" },
   badgeTextOn: { color: colors.danger },
   foot: { marginTop: spacing.lg, padding: 14, borderRadius: 14, backgroundColor: colors.sideLine },

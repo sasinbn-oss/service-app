@@ -7,6 +7,7 @@
 #   · ไม่ใช้อะไหล่ + จ่ายงาน: ประวัติสองแถวเรียงถูก (ไม่ใช้อะไหล่ ก่อน จ่ายงาน)
 #   · ช่างกดขั้นของหัวหน้าภาคยังโดนปฏิเสธ (สิทธิ์เช็คครบเหมือนเดิม)
 # ยืนยันที่ฐานข้อมูลทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -21,7 +22,7 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
 IDS=""
 cleanup() {
-  for i in $IDS; do curl -s -X DELETE "localhost:4000/api/work-orders/$i" -H "$(H $A)" >/dev/null; done
+  purge_orders "$A" $IDS
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
 }
 trap cleanup EXIT

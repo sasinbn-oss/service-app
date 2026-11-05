@@ -11,6 +11,7 @@ import { Router, Response, NextFunction } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { ALIVE } from "../utils/trash";
 import { supervisorScope, teamsForSupervisor, workOrderVisible } from "../utils/supervisorScope";
 import { areaWorkOrderWhere, isAreaTeam } from "../utils/areaScope";
 import { teamGroups } from "../utils/teamGroups";
@@ -67,18 +68,20 @@ function dayStart(date: string) {
  * teams คือทีมที่ดูแลสาขาในทุกภาคที่ดูแลรวมกับทีมที่ตั้งให้ดูแลตรง ๆ ใช้กรองแผนของทีมที่ยังไม่มีงาน
  * ในวันนั้น (จัดคนไว้ก่อนแล้วค่อยนัดงาน) ซึ่งกรองจากใบงานไม่ได้เพราะยังไม่มีใบ
  */
-async function scopeFor(req: AuthRequest) {
-  if (req.auth!.role === "ADMIN") {
-    return { where: null as Prisma.WorkOrderWhereInput | null, teams: null as Set<string> | null };
-  }
+/**
+ * where มี ALIVE เสมอ (แอดมินด้วย) — ใบในถังขยะไม่ขึ้นบนบอร์ด ปฏิทิน หรือรายการรอจัดแผนของใคร
+ * ใส่ที่ขอบเขตที่เดียว ทุกคำถามของบอร์ดได้ไปด้วย (แบบเดียวกับ scopeFor ของ routes/workOrders.ts)
+ */
+async function scopeFor(req: AuthRequest): Promise<{ where: Prisma.WorkOrderWhereInput; teams: Set<string> | null }> {
+  if (req.auth!.role === "ADMIN") return { where: ALIVE, teams: null };
   // teams ว่าง = ไม่มีทีมให้จัดแผน · แผนของทีมที่ไม่มีงานในสาขาตัวเองวันนั้นไม่ขึ้น
-  if (isAreaTeam(req.auth)) return { where: areaWorkOrderWhere(req.auth!), teams: new Set<string>() };
+  if (isAreaTeam(req.auth)) return { where: { AND: [ALIVE, areaWorkOrderWhere(req.auth!)] }, teams: new Set<string>() };
   const s = await supervisorScope(req.auth!.userId);
   // ตัวเดียวกับช่องจ่ายงาน (ทีมมาก่อนภาค · ทุกภาคที่ดูแล) — เดิมคัดลอกตรรกะภาคมาไว้ที่นี่
   // พอหัวหน้าภาคเลือกได้หลายภาค สำเนานี้ยังดูแค่ภาคแรก ทีมของภาคที่เพิ่มจัดแผนไม่ได้ทั้งที่จ่ายงานได้
   const teams = await teamsForSupervisor(s);
   // ใบที่จ่ายข้ามทีมมาให้ทีมของตัวเองขึ้นบนแผนด้วย — เป็นคิวของทีมนี้จริง แม้ใบจะเป็นของหัวหน้าภาคอื่น
-  return { where: await workOrderVisible(s), teams };
+  return { where: { AND: [ALIVE, await workOrderVisible(s)] }, teams };
 }
 
 /** ไทม์ไลน์ทั้งวันของทีม (Super Admin) — รับรถ รายงานตัว ทุกการกดในใบงานของทีม คืนรถ */
@@ -313,7 +316,8 @@ router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res
       priority: true,
       branch: { select: { code: true, name: true } },
       machine: { select: { code: true } },
-      parent: { select: { code: true } },
+      // ใบต้นทางที่อยู่ในถังขยะไม่ขึ้นเป็น "ต่อจาก …" (กดเปิดแล้วได้ 404) — ซ่อนตอนส่งออก
+      parent: { select: { code: true, deletedAt: true } },
     },
     // priority เก็บเป็นข้อความ — เรียงจากมากไปน้อยได้ URGENT → NORMAL → LOW พอดี
     // (เดิมเรียงน้อยไปมาก ใบด่วนจึงไปอยู่ท้ายสุด ทั้งที่คอมเมนต์บอกว่า "ด่วนขึ้นก่อน")
@@ -332,7 +336,7 @@ router.get("/pending", requireAuth, requirePlanner, async (req: AuthRequest, res
       branchCode: r.branch.code,
       branchName: r.branch.name,
       machineCode: r.machine?.code ?? null,
-      parentCode: r.parent?.code ?? null,
+      parentCode: r.parent && !r.parent.deletedAt ? r.parent.code : null,
     }))
   );
 });
