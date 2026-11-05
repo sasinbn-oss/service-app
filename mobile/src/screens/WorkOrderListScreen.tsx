@@ -316,6 +316,12 @@ interface ListPrefs {
   kind: "" | "normal" | "sub";
   /** ใบงานเคลม (เจ้าของงานขอ ต.ค. 69) — "any" = ทุกใบที่แจ้งเคลม หรือเจาะสถานะเคลม */
   claim?: "" | "any" | "PENDING" | "APPROVED" | "REJECTED" | "DECLINED";
+  /**
+   * หัวข้อบนสุดของกล่องงานที่ย่อไว้ (เลยนัด · รอลูกค้าจ่ายเงิน · ไม่มีคนรับ) — เจ้าของงานขอ 5 พ.ย. 69
+   * หัวข้อละหลายสิบใบดันรายการจริงลงไปพ้นจอ · จำไว้ในเครื่องแบบตัวกรองอื่น เปิดหน้าใหม่ยังย่ออยู่
+   * ไม่ล้างตอน "ล้างตัวกรอง" — นี่คือหน้าตาที่คนเลือก ไม่ใช่ตัวกรอง
+   */
+  folded?: string[];
 }
 const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair", kind: "", claim: "" };
 
@@ -1418,6 +1424,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           role={user?.role ?? null}
           adminCut={adminCut}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
+          folded={prefs.folded ?? []}
+          onFold={(key) =>
+            setPrefs((p) => {
+              const f = p.folded ?? [];
+              return { ...p, folded: f.includes(key) ? f.filter((k) => k !== key) : [...f, key] };
+            })
+          }
         />
       ) : null}
     </View>
@@ -2290,6 +2303,8 @@ function InboxAttention({
   role,
   adminCut,
   onOpen,
+  folded,
+  onFold,
 }: {
   /** ใบที่เห็นอยู่ในแท็บ/ตัวกรองนี้ — หัวข้อของแอดมิน (ไม่มีคนรับ · เลยนัด) */
   rows: WorkOrderRow[];
@@ -2301,6 +2316,9 @@ function InboxAttention({
   /** แอดมินที่ไม่ใช่ Admin Spare Part ในกล่องงาน — หัวข้อ "ขอนัดด่วน" ของแอดมิน */
   adminCut: boolean;
   onOpen: (id: number) => void;
+  /** key ของหัวข้อที่ย่อไว้ (จำในเครื่อง) — ย่อแล้วเหลือแค่ชื่อหัวข้อกับจำนวน */
+  folded: string[];
+  onFold: (key: string) => void;
 }) {
   // นาฬิกาเซิร์ฟเวอร์ของแถบนี้เอง — แถบ "รอนัดวัน" ขึ้น/หายตามเวลาโดยไม่ต้องวาดรายการทั้งหน้าใหม่
   const now = useServerClock(serverNow, cutoff?.time, (role === "SUPERVISOR" || adminCut) && !!allRows);
@@ -2367,17 +2385,31 @@ function InboxAttention({
         ไม่มีคำขอ = ไม่มีหัวข้อ (ไม่วาดกล่องเปล่า)
       */}
       {asks ? <CutoffBanners groups={[asks]} withRows onOpen={onOpen} /> : null}
-      {groups.map((g) => (
+      {groups.map((g) => {
+        const shut = folded.includes(g.key);
+        return (
         <View
           key={g.key}
           style={[styles.attn, g.tone === "bad" ? styles.attnBad : g.tone === "pay" ? styles.attnPay : styles.attnSup]}
           accessibilityLabel={`หัวข้อ ${g.title}`}
         >
-          <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : g.tone === "pay" ? styles.attnTitlePay : styles.attnTitleSup]}>
-            {g.title}
-          </Text>
-          <Text style={styles.attnHint}>{g.hint}</Text>
-          {g.key === "pay"
+          {/* ทั้งแถบหัวกดย่อ/ขยายได้ ไม่ใช่แค่ปุ่มเล็กมุมขวา — มือถือกดโดนง่าย */}
+          <TouchableOpacity
+            style={styles.attnHead}
+            onPress={() => onFold(g.key)}
+            accessibilityLabel={`${shut ? "ขยาย" : "ย่อ"}หัวข้อ ${g.title}`}
+            aria-expanded={!shut}
+          >
+            <Text style={[styles.attnTitle, styles.attnTitleFlex, g.tone === "bad" ? styles.attnTitleBad : g.tone === "pay" ? styles.attnTitlePay : styles.attnTitleSup]}>
+              {g.title}
+            </Text>
+            <View style={styles.attnFold}>
+              <Text style={styles.attnFoldText}>{shut ? "ขยาย" : "ย่อ"}</Text>
+              <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.textMuted} />
+            </View>
+          </TouchableOpacity>
+          {shut ? null : <Text style={styles.attnHint}>{g.hint}</Text>}
+          {shut ? null : g.key === "pay"
             ? g.items.map((r) => (
                 <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`รอลูกค้าจ่ายเงิน ${r.code}`}>
                   <Text style={styles.attnCode}>{r.code}</Text>
@@ -2412,7 +2444,8 @@ function InboxAttention({
                 </TouchableOpacity>
               ))}
         </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -2457,6 +2490,20 @@ const styles = StyleSheet.create({
   attnPayLate: { color: colors.dangerInk, fontWeight: "700" },
   attnFollow: { fontSize: 12.5, lineHeight: 18 },
   attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
+  attnTitleFlex: { flex: 1, minWidth: 0 },
+  attnHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 36 },
+  attnFold: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  attnFoldText: { fontSize: 13, fontWeight: "700", color: colors.textMuted },
   attnTitleSup: { color: colors.primaryDark },
   attnTitleBad: { color: colors.danger },
   claimBadge: { flexDirection: "row", alignItems: "center", gap: 3, borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.roleAdminSoft, borderWidth: 1, borderColor: colors.roleAdminLine },

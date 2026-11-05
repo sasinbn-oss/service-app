@@ -161,6 +161,32 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
       const h = await head.innerText();
       h.indexOf(a.code) >= 0 && h.indexOf(b.code) > h.indexOf(a.code) && h.includes("รอมาแล้ว 5 วัน") && h.includes("ยังไม่เคยตาม") && /ตามล่าสุด .+ลูกค้าบอกโอนวันศุกร์/.test(h)
         ? pass("กล่องงาน: หัวข้อ \"รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1\" เรียงรอนานสุดก่อน · รอมาแล้ว · ตามล่าสุด/ยังไม่เคยตาม") : fail(`หัวข้อกล่องงาน: ${h}`);
+      // ปุ่มย่อหัวข้อ (เจ้าของงานขอ 5 พ.ย. 69 — หัวข้อยาวเต็มจอ): ย่อแล้วเหลือชื่อกับจำนวน · เปิดหน้าใหม่ยังย่ออยู่ · กดอีกครั้งแถวกลับมา
+      const PAYT = "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1";
+      const fold = page.locator(`[aria-label="ย่อหัวข้อ ${PAYT}"]`).locator("visible=true").first();
+      if ((await fold.count()) === 0) fail(`ไม่มีปุ่มย่อหัวข้อ ${PAYT}`);
+      else {
+        await fold.click();
+        await page.waitForTimeout(600);
+        const shut = await head.innerText();
+        const unfold = page.locator(`[aria-label="ขยายหัวข้อ ${PAYT}"]`).locator("visible=true").first();
+        !shut.includes(a.code) && !shut.includes(b.code) && shut.includes(PAYT) && shut.includes("ขยาย") &&
+        (await unfold.count()) > 0 && (await unfold.getAttribute("aria-expanded")) === "false"
+          ? pass("กดย่อ: หัวข้อเหลือชื่อกับจำนวน แถวหาย ปุ่มเป็น \"ขยาย\" (aria-expanded=false)") : fail(`ย่อหัวข้อ: ${shut}`);
+        await page.goto("http://localhost:8081/#/my-jobs");
+        await page.waitForTimeout(1500);
+        await page.goto("http://localhost:8081/#/inbox");
+        await page.waitForTimeout(4500);
+        const again = page.locator(`[aria-label="หัวข้อ ${PAYT}"]`).locator("visible=true").first();
+        const t2 = (await again.count()) ? await again.innerText() : "";
+        t2.includes(PAYT) && !t2.includes(a.code) && (await page.locator(`[aria-label="ขยายหัวข้อ ${PAYT}"]`).locator("visible=true").count()) > 0
+          ? pass("ออกไปหน้าอื่นแล้วกลับมา หัวข้อยังย่ออยู่ (จำในเครื่อง)") : fail(`จำการย่อไม่ได้: ${t2}`);
+        await page.locator(`[aria-label="ขยายหัวข้อ ${PAYT}"]`).locator("visible=true").first().click();
+        await page.waitForTimeout(600);
+        const open2 = await again.innerText();
+        open2.includes(a.code) && open2.includes(b.code) && (await page.locator(`[aria-label="ย่อหัวข้อ ${PAYT}"]`).locator("visible=true").count()) > 0
+          ? pass("กดขยาย: แถวกลับมาครบ ปุ่มกลับเป็น \"ย่อ\"") : fail(`ขยายหัวข้อ: ${open2}`);
+      }
     }
     const qchip = page.locator('[aria-label="ต้องรีบดู รอจ่ายเกิน 3 วัน 1"]').locator("visible=true").first();
     if ((await qchip.count()) === 0) fail("ไม่มีชิป \"รอจ่ายเกิน 3 วัน 1\" ในกล่องงาน");
