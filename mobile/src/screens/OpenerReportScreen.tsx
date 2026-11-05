@@ -40,6 +40,8 @@ interface Summary {
   open: number;
   done: number;
   cancelled: number;
+  /** ในจำนวนที่ยกเลิก — เสนอราคาแล้วลูกค้าไม่ซ่อม (ปุ่ม "ลูกค้าไม่ซ่อม" 5 พ.ย. 69) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  quoteDeclined?: number;
 }
 interface Report {
   from: string;
@@ -48,6 +50,8 @@ interface Report {
   openerLabel: string;
   summary: Summary[];
   totals: Omit<Summary, "userId" | "name" | "employeeCode" | "role" | "region" | "regions">;
+  /** เสนอราคาแล้วลูกค้าไม่ซ่อม แยกตามเหตุผล (ทุกเหตุผล 0 ก็มา) */
+  quoteDeclines?: { reason: string; label: string; count: number }[];
   count: number;
 }
 
@@ -59,6 +63,8 @@ const COLS: { key: keyof Report["totals"]; label: string }[] = [
   { key: "open", label: "ยังค้าง" },
   { key: "done", label: "ปิดแล้ว" },
   { key: "cancelled", label: "ยกเลิก" },
+  // ส่วนหนึ่งของยกเลิก ไม่ใช่ยอดแยก — ชื่อเต็มอยู่ในไฟล์ Excel ("ในนั้น: เสนอราคาแล้วลูกค้าไม่ซ่อม") หัวตารางบนจอสั้นกว่า
+  { key: "quoteDeclined", label: "ลูกค้าไม่ซ่อม" },
 ];
 
 /** วันแรกของเดือนนี้ตามเวลาไทย — คำถามที่พบบ่อยที่สุดคือ "เดือนนี้ใครเปิดไปเท่าไร" */
@@ -201,7 +207,7 @@ export default function OpenerReportScreen() {
                 </View>
                 {COLS.map((c) => (
                   <Text key={c.key} style={[styles.td, styles.cNum, c.key === "total" && styles.strong]}>
-                    {s[c.key]}
+                    {s[c.key] ?? 0}
                   </Text>
                 ))}
               </View>
@@ -211,13 +217,23 @@ export default function OpenerReportScreen() {
                 <Text style={[styles.name, styles.cName]}>รวม</Text>
                 {COLS.map((c) => (
                   <Text key={c.key} style={[styles.td, styles.cNum, styles.strong]}>
-                    {data.totals[c.key]}
+                    {data.totals[c.key] ?? 0}
                   </Text>
                 ))}
               </View>
             ) : null}
           </View>
         </ScrollView>
+      ) : null}
+      {/*
+        เสนอราคาแล้วลูกค้าไม่ซ่อม แยกตามเหตุผล (5 พ.ย. 69) — บรรทัดเดียวใต้ตาราง ไม่ใช่ตารางใหม่ · ไม่มีใบลูกค้าไม่ซ่อมในช่วงนี้ = ไม่ขึ้น
+        ตารางเต็มทุกเหตุผลอยู่ในไฟล์ Excel ชีตสรุป
+      */}
+      {data && data.totals.quoteDeclined ? (
+        <Text style={styles.meta} accessibilityLabel="เสนอราคาแล้วลูกค้าไม่ซ่อม แยกตามเหตุผล">
+          เสนอราคาแล้วลูกค้าไม่ซ่อม {data.totals.quoteDeclined} ใบ:{" "}
+          {(data.quoteDeclines ?? []).filter((d) => d.count > 0).map((d) => `${d.label} ${d.count}`).join(" · ")}
+        </Text>
       ) : null}
     </ScrollView>
   );
